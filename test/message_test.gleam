@@ -1,4 +1,5 @@
 import gleam/option.{Some}
+import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message.{RelayClosed, RelayEose, RelayNotice, RelayOk}
 
@@ -51,4 +52,20 @@ pub fn encode_req_test() {
 pub fn encode_close_test() {
   assert message.encode_client_message(message.Close("sub1"))
     == "[\"CLOSE\",\"sub1\"]"
+}
+
+pub fn encode_publish_test() {
+  let event =
+    Event(
+      id: "abc",
+      pubkey: "def",
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: [],
+      content: "hi",
+      sig: "00",
+    )
+  assert message.encode_client_message(message.Publish(event))
+    == "[\"EVENT\",{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
+    <> "\"kind\":1,\"tags\":[],\"content\":\"hi\",\"sig\":\"00\"}]"
 }

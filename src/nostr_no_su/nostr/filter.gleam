@@ -8,19 +8,21 @@ pub type Filter {
   Filter(
     authors: Option(List(String)),
     kinds: Option(List(Int)),
+    p_tags: Option(List(String)),
     since: Option(Int),
     limit: Option(Int),
   )
 }
 
 pub fn new() -> Filter {
-  Filter(authors: None, kinds: None, since: None, limit: None)
+  Filter(authors: None, kinds: None, p_tags: None, since: None, limit: None)
 }
 
 pub fn to_json(filter: Filter) -> Json {
   [
     #("authors", option.map(filter.authors, json.array(_, of: json.string))),
     #("kinds", option.map(filter.kinds, json.array(_, of: json.int))),
+    #("#p", option.map(filter.p_tags, json.array(_, of: json.string))),
     #("since", option.map(filter.since, json.int)),
     #("limit", option.map(filter.limit, json.int)),
   ]

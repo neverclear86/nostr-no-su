@@ -7,6 +7,7 @@ import nostr_no_su/nostr/filter.{type Filter}
 pub type ClientMessage {
   Req(subscription_id: String, filter: Filter)
   Close(subscription_id: String)
+  Publish(event: Event)
 }
 
 /// Messages sent from a relay to this client (NIP-01).
@@ -31,6 +32,8 @@ pub fn encode_client_message(client_message: ClientMessage) -> String {
         json.string("CLOSE"),
         json.string(subscription_id),
       ])
+    Publish(event) ->
+      json.preprocessed_array([json.string("EVENT"), event.to_json(event)])
   }
   |> json.to_string
 }

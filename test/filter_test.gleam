@@ -13,6 +13,13 @@ pub fn unset_fields_are_omitted_test() {
     == "{\"kinds\":[1,7],\"since\":123}"
 }
 
+pub fn p_tags_encode_test() {
+  let query =
+    Filter(..filter.new(), kinds: Some([24_133]), p_tags: Some(["abc", "def"]))
+  assert filter.to_json(query) |> json.to_string
+    == "{\"kinds\":[24133],\"#p\":[\"abc\",\"def\"]}"
+}
+
 pub fn parse_pubkeys_test() {
   assert config.parse_pubkeys("") == []
   assert config.parse_pubkeys("a,b") == ["a", "b"]
