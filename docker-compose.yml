@@ -1,0 +1,7 @@
+services:
+  nostr-no-su:
+    build: .
+    environment:
+      RELAY_URL: ${RELAY_URL:-wss://relay.damus.io}
+      PUBKEYS: ${PUBKEYS:-}
+    restart: unless-stopped

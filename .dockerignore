@@ -1,0 +1,6 @@
+build
+.git
+.github
+*.md
+docker-compose.yml
+Dockerfile
