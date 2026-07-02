@@ -1,4 +1,7 @@
+import gleam/bit_array
 import gleam/json
+import gleam/string
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
 
@@ -72,6 +75,31 @@ pub fn escaping_test() {
 /// A real event captured verbatim from wss://relay.damus.io. Its id was
 /// computed by an independent implementation, so this pins our canonical
 /// serialization (escapes, UTF-8, field order) against the ecosystem.
+pub fn finalize_and_verify_test() {
+  let assert Ok(privkey) =
+    bit_array.base16_decode(string.uppercase(
+      "0000000000000000000000000000000000000000000000000000000000000042",
+    ))
+  let assert Ok(pubkey_bytes) = secp256k1.xonly_pubkey(privkey)
+  let pubkey = string.lowercase(bit_array.base16_encode(pubkey_bytes))
+  let draft =
+    Event(
+      id: "",
+      pubkey: pubkey,
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: [["t", "test"]],
+      content: "signed by the bunker",
+      sig: "",
+    )
+  let assert Ok(signed) = event.finalize(draft, privkey)
+  // id matches content, signature verifies, both are lowercase hex.
+  assert signed.id == event.compute_id(draft)
+  assert event.verify_signature(signed)
+  // tampering breaks verification.
+  assert !event.verify_signature(Event(..signed, content: "tampered"))
+}
+
 pub fn compute_id_real_event_test() {
   let raw =
     ""

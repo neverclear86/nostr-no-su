@@ -1,5 +1,5 @@
 import gleam/json
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import nostr_no_su/config
 import nostr_no_su/nostr/filter.{Filter}
 
@@ -26,13 +26,31 @@ pub fn parse_pubkeys_test() {
   assert config.parse_pubkeys(" a , b ,") == ["a", "b"]
 }
 
+fn test_config(pubkeys: List(String)) -> config.Config {
+  config.Config(
+    relay_url: "wss://example.com",
+    pubkeys: pubkeys,
+    account_keys: [],
+    bunker_secret: None,
+  )
+}
+
 pub fn to_filter_without_pubkeys_test() {
-  let loaded = config.Config(relay_url: "wss://example.com", pubkeys: [])
-  assert config.to_filter(loaded) == Filter(..filter.new(), limit: Some(20))
+  assert config.to_filter(test_config([]))
+    == Filter(..filter.new(), limit: Some(20))
 }
 
 pub fn to_filter_with_pubkeys_test() {
-  let loaded = config.Config(relay_url: "wss://example.com", pubkeys: ["a"])
-  assert config.to_filter(loaded)
+  assert config.to_filter(test_config(["a"]))
     == Filter(..filter.new(), authors: Some(["a"]))
+}
+
+pub fn bunker_filter_test() {
+  assert config.bunker_filter(["pk1", "pk2"], 1000)
+    == Filter(
+      ..filter.new(),
+      kinds: Some([24_133]),
+      p_tags: Some(["pk1", "pk2"]),
+      since: Some(1000),
+    )
 }

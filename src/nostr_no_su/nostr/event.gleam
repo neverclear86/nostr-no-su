@@ -2,7 +2,9 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic/decode
 import gleam/json.{type Json}
+import gleam/result
 import gleam/string
+import nostr_no_su/crypto/bip340
 
 /// A Nostr event as defined by NIP-01.
 pub type Event {
@@ -54,14 +56,44 @@ pub fn serialize_for_id(event: Event) -> String {
   |> json.to_string
 }
 
-/// Compute the event id: lowercase hex sha256 of the canonical serialization.
-pub fn compute_id(event: Event) -> String {
+/// The 32-byte sha256 of the canonical serialization, signed by BIP-340.
+pub fn hash_for_signing(event: Event) -> BitArray {
   serialize_for_id(event)
   |> bit_array.from_string
   |> crypto.hash(crypto.Sha256, _)
+}
+
+/// Compute the event id: lowercase hex sha256 of the canonical serialization.
+pub fn compute_id(event: Event) -> String {
+  hash_for_signing(event)
   |> bit_array.base16_encode
   |> string.lowercase
 }
-// TODO(v1): verify the BIP-340 schnorr signature in `sig`. There is currently
-// no maintained secp256k1 schnorr library for the BEAM, so v0 only checks
-// that `id` matches the event content.
+
+/// Fill `id` and `sig` on a draft whose other fields are set. `privkey` must
+/// correspond to `event.pubkey`.
+pub fn finalize(event: Event, privkey: BitArray) -> Result(Event, Nil) {
+  let hash = hash_for_signing(event)
+  use signature <- result.try(
+    bip340.sign(privkey, hash) |> result.replace_error(Nil),
+  )
+  Ok(
+    Event(
+      ..event,
+      id: string.lowercase(bit_array.base16_encode(hash)),
+      sig: string.lowercase(bit_array.base16_encode(signature)),
+    ),
+  )
+}
+
+/// Verify the event's BIP-340 signature against its pubkey and content.
+pub fn verify_signature(event: Event) -> Bool {
+  case
+    bit_array.base16_decode(string.uppercase(event.pubkey)),
+    bit_array.base16_decode(string.uppercase(event.sig))
+  {
+    Ok(pubkey), Ok(signature) ->
+      bip340.verify(signature, hash_for_signing(event), pubkey)
+    _, _ -> False
+  }
+}
