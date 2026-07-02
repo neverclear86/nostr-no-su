@@ -4,4 +4,10 @@ services:
     environment:
       RELAY_URL: ${RELAY_URL:-wss://relay.damus.io}
       PUBKEYS: ${PUBKEYS:-}
+      # Comma-separated 64-hex private keys. Empty = bunker disabled.
+      # Prefer an untracked .env file over inline values.
+      ACCOUNT_KEYS: ${ACCOUNT_KEYS:-}
+      # Optional. When unset, a random secret is generated per boot and the
+      # bunker:// URIs are printed to the log.
+      BUNKER_SECRET: ${BUNKER_SECRET:-}
     restart: unless-stopped

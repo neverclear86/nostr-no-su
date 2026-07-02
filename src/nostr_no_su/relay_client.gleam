@@ -1,18 +1,24 @@
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/io
+import gleam/list
 import gleam/result
 import gleam/string
-import nostr_no_su/config.{type Config, to_filter}
+import nostr_no_su/config.{type Config}
 import nostr_no_su/nostr/event
+import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
 import stratus
 
 pub type Msg {
   Subscribe
+  Publish(event: event.Event)
 }
 
-const subscription_id = "nostr-no-su"
+/// A thunk producing the subscriptions to open. It is re-evaluated on every
+/// (re)connection so time-relative filters (e.g. `since`) stay current.
+pub type Subscriptions =
+  fn() -> List(#(String, Filter))
 
 /// Convert a relay URL to the http(s) request stratus expects: gleam_http
 /// only parses http(s) schemes, and stratus maps Https to wss/TLS.
@@ -23,11 +29,12 @@ pub fn to_request(url: String) -> Result(Request(String), Nil) {
   |> request.to
 }
 
-/// Connect to the configured relay and subscribe. Verified events are passed
-/// to `handle_event`. Returns the subject of the connection actor; the caller
-/// is responsible for monitoring it and reconnecting.
+/// Connect to the configured relay, open the given subscriptions, and pass
+/// verified events to `handle_event`. Returns the connection subject; the
+/// caller monitors it and reconnects.
 pub fn start(
   config: Config,
+  subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
 ) -> Result(Subject(stratus.InternalMessage(Msg)), String) {
   use req <- result.try(
@@ -39,12 +46,19 @@ pub fn start(
     |> stratus.on_message(fn(state, msg, conn) {
       case msg {
         stratus.User(Subscribe) -> {
-          let req_text =
-            message.encode_client_message(message.Req(
-              subscription_id,
-              to_filter(config),
-            ))
-          let _ = stratus.send_text_message(conn, req_text)
+          list.each(subscriptions(), fn(subscription) {
+            let text =
+              message.encode_client_message(message.Req(
+                subscription.0,
+                subscription.1,
+              ))
+            let _ = stratus.send_text_message(conn, text)
+          })
+          stratus.continue(state)
+        }
+        stratus.User(Publish(published)) -> {
+          let text = message.encode_client_message(message.Publish(published))
+          let _ = stratus.send_text_message(conn, text)
           stratus.continue(state)
         }
         stratus.Text(text) -> {
@@ -77,6 +91,8 @@ fn handle_text(text: String, handle_event: fn(event.Event) -> Nil) -> Nil {
       }
     Ok(message.RelayEose(subscription)) ->
       io.println("[relay] end of stored events for " <> subscription)
+    Ok(message.RelayOk(id, False, reason)) ->
+      io.println("[relay] rejected event " <> id <> ": " <> reason)
     Ok(other) -> io.println("[relay] " <> string.inspect(other))
     Error(_) ->
       io.println("[relay] unrecognised message: " <> string.slice(text, 0, 120))
