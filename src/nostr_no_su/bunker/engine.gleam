@@ -3,7 +3,6 @@
 //// ループバックテストによる単体検証ができる。`bunker.gleam` がこれをアクターで
 //// 包む。
 
-import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/json
@@ -16,6 +15,7 @@ import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
+import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, Event}
 
 /// クライアントの時刻ずれを許容するため、現在時刻から前後この秒数以内の
@@ -323,7 +323,7 @@ fn client_conversation_key(
   client_pk_hex: String,
 ) -> Result(BitArray, String) {
   use client_pk <- result.try(
-    decode_hex(client_pk_hex) |> result.replace_error("invalid client pubkey"),
+    hex.decode(client_pk_hex) |> result.replace_error("invalid client pubkey"),
   )
   nip44.conversation_key(account.privkey, client_pk)
   |> result.replace_error("cannot derive conversation key")
@@ -495,7 +495,7 @@ fn nip44_op(
 ) -> rpc.Response {
   case request.params {
     [third_party_hex, text, ..] ->
-      case decode_hex(third_party_hex) {
+      case hex.decode(third_party_hex) {
         Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
         Ok(third_party) ->
           case nip44.conversation_key(account.privkey, third_party) {
@@ -543,9 +543,4 @@ fn build_reply(
       }
     }
   }
-}
-
-/// 16 進文字列をデコードする。大文字・小文字のどちらも受け付ける。
-fn decode_hex(hex: String) -> Result(BitArray, Nil) {
-  bit_array.base16_decode(string.uppercase(hex))
 }

@@ -1,41 +1,38 @@
-import gleam/bit_array
-import gleam/string
 import nostr_no_su/crypto/nip44
+import nostr_no_su/hex
 
-fn hex(s: String) -> BitArray {
-  let assert Ok(bytes) = bit_array.base16_decode(string.uppercase(s))
-  bytes
-}
-
-fn hexstr(b: BitArray) -> String {
-  bit_array.base16_encode(b) |> string.lowercase
+/// テストベクターの 16 進文字列をバイト列にする。ベクターは正しい前提なので、
+/// デコードできないのはテスト自体の誤りとして扱う。
+fn bytes(text: String) -> BitArray {
+  let assert Ok(decoded) = hex.decode(text)
+  decoded
 }
 
 pub fn conversation_key_vector1_test() {
   let assert Ok(key) =
     nip44.conversation_key(
-      hex("315e59ff51cb9209768cf7da80791ddcaae56ac9775eb25b6dee1234bc5d2268"),
-      hex("c2f9d9948dc8c7c38321e4b85c8558872eafa0641cd269db76848a6073e69133"),
+      bytes("315e59ff51cb9209768cf7da80791ddcaae56ac9775eb25b6dee1234bc5d2268"),
+      bytes("c2f9d9948dc8c7c38321e4b85c8558872eafa0641cd269db76848a6073e69133"),
     )
-  assert hexstr(key)
+  assert hex.encode(key)
     == "3dfef0ce2a4d80a25e7a328accf73448ef67096f65f79588e358d9a0eb9013f1"
 }
 
 pub fn conversation_key_vector2_test() {
   let assert Ok(key) =
     nip44.conversation_key(
-      hex("a1e37752c9fdc1273be53f68c5f74be7c8905728e8de75800b94262f9497c86e"),
-      hex("03bb7947065dde12ba991ea045132581d0954f042c84e06d8c00066e23c1a800"),
+      bytes("a1e37752c9fdc1273be53f68c5f74be7c8905728e8de75800b94262f9497c86e"),
+      bytes("03bb7947065dde12ba991ea045132581d0954f042c84e06d8c00066e23c1a800"),
     )
-  assert hexstr(key)
+  assert hex.encode(key)
     == "4d14f36e81b8452128da64fe6f1eae873baae2f444b02c950b90e43553f2178b"
 }
 
 pub fn conversation_key_rejects_seckey_over_n_test() {
   let assert Error(_) =
     nip44.conversation_key(
-      hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-      hex("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+      bytes("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+      bytes("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
     )
 }
 
@@ -45,8 +42,8 @@ pub fn encrypt_vector1_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
       "a",
-      hex(conv_key_1),
-      hex("0000000000000000000000000000000000000000000000000000000000000001"),
+      bytes(conv_key_1),
+      bytes("0000000000000000000000000000000000000000000000000000000000000001"),
     )
   assert payload
     == "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb"
@@ -56,7 +53,7 @@ pub fn decrypt_vector1_test() {
   let assert Ok(text) =
     nip44.decrypt(
       "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb",
-      hex(conv_key_1),
+      bytes(conv_key_1),
     )
   assert text == "a"
 }
@@ -65,8 +62,8 @@ pub fn encrypt_vector2_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
       "🍕🫃",
-      hex(conv_key_1),
-      hex("f00000000000000000000000000000f00000000000000000000000000000000f"),
+      bytes(conv_key_1),
+      bytes("f00000000000000000000000000000f00000000000000000000000000000000f"),
     )
   assert payload
     == "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj"
@@ -76,7 +73,7 @@ pub fn decrypt_vector2_test() {
   let assert Ok(text) =
     nip44.decrypt(
       "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj",
-      hex(conv_key_1),
+      bytes(conv_key_1),
     )
   assert text == "🍕🫃"
 }
@@ -91,14 +88,14 @@ pub fn encrypt_vector3_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
       plaintext_3,
-      hex(conv_key_3),
-      hex("b635236c42db20f021bb8d1cdff5ca75dd1a0cc72ea742ad750f33010b24f73b"),
+      bytes(conv_key_3),
+      bytes("b635236c42db20f021bb8d1cdff5ca75dd1a0cc72ea742ad750f33010b24f73b"),
     )
   assert payload == payload_3
 }
 
 pub fn decrypt_vector3_test() {
-  let assert Ok(text) = nip44.decrypt(payload_3, hex(conv_key_3))
+  let assert Ok(text) = nip44.decrypt(payload_3, bytes(conv_key_3))
   assert text == plaintext_3
 }
 
@@ -144,7 +141,7 @@ pub fn decrypt_rejects_hash_prefix_test() {
   let assert Error(nip44.UnsupportedVersion) =
     nip44.decrypt(
       "#Atqupco0WyaOW2IGDKcshwxI9xO8HgD/P8Ddt46CbxDbrhdG8VmJdU0MIDf06CUvEvdnr1cp1fiMtlM/GrE92xAc1K5odTpCzUB+mjXgbaqtntBUbTToSUoT0ovrlPwzGjyp",
-      hex("ca2527a037347b91bea0c8a30fc8d9600ffd81ec00038671e3a0f0cb0fc9f642"),
+      bytes("ca2527a037347b91bea0c8a30fc8d9600ffd81ec00038671e3a0f0cb0fc9f642"),
     )
 }
 
@@ -152,7 +149,7 @@ pub fn decrypt_rejects_version_zero_test() {
   let assert Error(nip44.UnsupportedVersion) =
     nip44.decrypt(
       "AK1AjUvoYW3IS7C/BGRUoqEC7ayTfDUgnEPNeWTF/reBZFaha6EAIRueE9D1B1RuoiuFScC0Q94yjIuxZD3JStQtE8JMNacWFs9rlYP+ZydtHhRucp+lxfdvFlaGV/sQlqZz",
-      hex("36f04e558af246352dcf73b692fbd3646a2207bd8abd4b1cd26b234db84d9481"),
+      bytes("36f04e558af246352dcf73b692fbd3646a2207bd8abd4b1cd26b234db84d9481"),
     )
 }
 
@@ -161,7 +158,7 @@ pub fn decrypt_rejects_tampered_mac_test() {
   let assert Error(_) =
     nip44.decrypt(
       "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsc",
-      hex(conv_key_1),
+      bytes(conv_key_1),
     )
 }
 
@@ -169,13 +166,13 @@ pub fn encrypt_rejects_empty_plaintext_test() {
   let assert Error(nip44.InvalidPlaintextLength) =
     nip44.encrypt_with_nonce(
       "",
-      hex(conv_key_1),
-      hex("0000000000000000000000000000000000000000000000000000000000000001"),
+      bytes(conv_key_1),
+      bytes("0000000000000000000000000000000000000000000000000000000000000001"),
     )
 }
 
 pub fn encrypt_decrypt_roundtrip_test() {
-  let assert Ok(payload) = nip44.encrypt("hello nostr", hex(conv_key_1))
-  let assert Ok(text) = nip44.decrypt(payload, hex(conv_key_1))
+  let assert Ok(payload) = nip44.encrypt("hello nostr", bytes(conv_key_1))
+  let assert Ok(text) = nip44.decrypt(payload, bytes(conv_key_1))
   assert text == "hello nostr"
 }

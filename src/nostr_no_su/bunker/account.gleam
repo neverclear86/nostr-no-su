@@ -8,15 +8,16 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
+import nostr_no_su/hex
 
 pub type Account {
   Account(privkey: BitArray, pubkey: BitArray, pubkey_hex: String)
 }
 
 /// 64 文字の 16 進秘密鍵からアカウントを構築する。
-pub fn from_hex(hex: String) -> Result(Account, String) {
+pub fn from_hex(raw: String) -> Result(Account, String) {
   use privkey <- result.try(
-    bit_array.base16_decode(string.uppercase(string.trim(hex)))
+    hex.decode(string.trim(raw))
     |> result.replace_error("invalid hex private key"),
   )
   case bit_array.byte_size(privkey) {
@@ -26,7 +27,7 @@ pub fn from_hex(hex: String) -> Result(Account, String) {
           Ok(Account(
             privkey: privkey,
             pubkey: pubkey,
-            pubkey_hex: string.lowercase(bit_array.base16_encode(pubkey)),
+            pubkey_hex: hex.encode(pubkey),
           ))
         Error(_) -> Error("private key not in valid range")
       }

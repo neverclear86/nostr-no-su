@@ -1,7 +1,6 @@
-import gleam/bit_array
 import gleam/json
-import gleam/string
 import nostr_no_su/crypto/secp256k1
+import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
 
@@ -76,11 +75,11 @@ pub fn escaping_test() {
 /// 検出することを確認する。
 pub fn finalize_and_verify_test() {
   let assert Ok(privkey) =
-    bit_array.base16_decode(string.uppercase(
+    hex.decode(
       "0000000000000000000000000000000000000000000000000000000000000042",
-    ))
+    )
   let assert Ok(pubkey_bytes) = secp256k1.xonly_pubkey(privkey)
-  let pubkey = string.lowercase(bit_array.base16_encode(pubkey_bytes))
+  let pubkey = hex.encode(pubkey_bytes)
   let draft =
     Event(
       id: "",

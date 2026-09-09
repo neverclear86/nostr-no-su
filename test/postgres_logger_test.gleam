@@ -1,6 +1,4 @@
 import envoy
-import gleam/bit_array
-import gleam/crypto
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/io
@@ -9,6 +7,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugins/postgres_logger
+import nostr_no_su/random
 import pog
 
 /// 変換のテストに使うイベント。タグは入れ子配列で、jsonb 列へ渡す形を確かめる。
@@ -152,9 +151,7 @@ fn connect(database_url: String) -> pog.Connection {
 
 /// 実行のたびに違うイベント id。テストを繰り返しても前回の行と衝突しない。
 fn random_id() -> String {
-  crypto.strong_random_bytes(32)
-  |> bit_array.base16_encode
-  |> string.lowercase
+  random.hex(32)
 }
 
 /// `events` に張られているインデックスの名前（主キーを含む）。
