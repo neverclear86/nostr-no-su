@@ -125,7 +125,7 @@ fn start_monitors(loaded: Config) -> Nil {
               url,
               subscriptions,
               fn(incoming) {
-                process.send(dispatcher, dedup.Dispatch(incoming))
+                process.send(dispatcher, dedup.Incoming(incoming))
               },
               fn(_client) { Nil },
             )
