@@ -66,6 +66,8 @@ secret を持たない `bunker://` URI（ダッシュボードの「Connection U
 
 承認ページの URL は `ADMIN_BASE_URL` を土台に `<base>/approve/<token>` として組み立てる（既定は `http://localhost:<ADMIN_PORT>`）。クライアントのブラウザーから開ける URL である必要があるため、リバースプロキシの背後に置くときや別のホストから使うときは公開 URL を設定すること。管理 UI を無効（`ADMIN_PORT=`）にすると承認フローも無効になり、secret の一致しない `connect` は従来どおり `invalid secret` で拒否する。
 
+承認される前にクライアントが再読み込みして `connect` を送り直した場合、承認待ちは最新の要求に置き換わる（同じクライアントの保留が並ばないようにするため）。先に受け取った `auth_url` のページは 404 になるので、新しく開かれた方の承認ページを使う。
+
 承認待ちはダッシュボードの「Pending connections」からも承認・拒否でき、10 分で失効する。一度承認したクライアントは、以後 secret 無しで `connect` し直しても承認を求められない（取り消すには「Approved sessions」の Revoke を使う）。
 
 状態を変えるリクエスト（`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`）は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシを置く場合は **`Host` ヘッダーをそのまま転送すること**。書き換えるとブラウザーからの POST が 400 になる。

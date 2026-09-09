@@ -40,6 +40,9 @@ import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
 import pog
 
+/// バンカーが無効なときの、承認・拒否の結果。
+const disabled: Result(Nil, String) = Error("bunker is disabled")
+
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
 /// ネットワークなしでもツリー全体を動かせるようにする。
 pub type Open =
@@ -210,10 +213,10 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
         })
       },
       approve: fn(token) {
-        with_bunker(spec.bunker, disabled(), bunker.approve(_, token))
+        with_bunker(spec.bunker, disabled, bunker.approve(_, token))
       },
       deny: fn(token) {
-        with_bunker(spec.bunker, disabled(), bunker.deny(_, token))
+        with_bunker(spec.bunker, disabled, bunker.deny(_, token))
       },
     ),
   )
@@ -264,11 +267,6 @@ fn with_bunker(
     None -> default
     Some(config) -> ask(config.name)
   }
-}
-
-/// バンカーが無効なときの、承認・拒否の結果。
-fn disabled() -> Result(Nil, String) {
-  Error("bunker is disabled")
 }
 
 /// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。
