@@ -34,38 +34,76 @@ pub fn pick_bunker_relays_defaults_when_nothing_configured_test() {
   assert config.pick_bunker_relays([], []) == ["wss://relay.damus.io"]
 }
 
+/// 環境変数を一時的に設定して `run` を実行し、終了後に元の値へ戻す。設定と復元を
+/// 1 か所にまとめることで、テストごとに散らばる後始末と、その書き忘れを防ぐ。
+fn with_env(name: String, value: String, run: fn() -> a) -> a {
+  let restore = envoy.get(name)
+  envoy.set(name, value)
+  let result = run()
+  case restore {
+    Ok(previous) -> envoy.set(name, previous)
+    Error(Nil) -> envoy.unset(name)
+  }
+  result
+}
+
+/// 環境変数を一時的に未設定にして `run` を実行し、終了後に元の値へ戻す。
+fn without_env(name: String, run: fn() -> a) -> a {
+  let restore = envoy.get(name)
+  envoy.unset(name)
+  let result = run()
+  case restore {
+    Ok(previous) -> envoy.set(name, previous)
+    Error(Nil) -> Nil
+  }
+  result
+}
+
+/// 指定した環境変数をすべて設定して読み込んだ設定。読み込みを終えた時点で環境
+/// 変数は元に戻るため、assert が失敗しても後続のテストに影響しない。
+fn config_with(vars: List(#(String, String))) -> config.Config {
+  case vars {
+    [] -> config.load()
+    [#(name, value), ..rest] -> {
+      use <- with_env(name, value)
+      config_with(rest)
+    }
+  }
+}
+
+/// 指定した環境変数を未設定にして読み込んだ設定。
+fn config_without(name: String) -> config.Config {
+  use <- without_env(name)
+  config.load()
+}
+
 /// 空文字列の環境変数は未設定として扱う。docker compose は未設定の変数を空文字列
 /// として渡すため、`DATABASE_URL=` で保存を無効にできる必要がある。
 pub fn empty_environment_variables_are_unset_test() {
-  envoy.set("DATABASE_URL", "")
-  assert config.load().database_url == None
+  assert config_with([#("DATABASE_URL", "")]).database_url == None
+  assert config_with([#("DATABASE_URL", "postgres://user@host:5432/db")]).database_url
+    == Some("postgres://user@host:5432/db")
+  assert config_without("DATABASE_URL").database_url == None
 
-  envoy.set("DATABASE_URL", "postgres://user@host:5432/db")
-  assert config.load().database_url == Some("postgres://user@host:5432/db")
-
-  envoy.unset("DATABASE_URL")
-  assert config.load().database_url == None
+  // `BUNKER_SECRET=` も同じく未設定として扱う。空文字列をシークレットとして
+  // 受け付けると、secret 無しで接続したクライアントが素通りしてしまう。
+  assert config_with([#("BUNKER_SECRET", "")]).bunker_secret == None
+  assert config_with([#("BUNKER_SECRET", "s3cret")]).bunker_secret
+    == Some("s3cret")
+  assert config_without("BUNKER_SECRET").bunker_secret == None
 }
 
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_port_test() {
-  envoy.unset("ADMIN_PORT")
-  assert config.load().admin_port == config.Listen(8080)
-
-  envoy.set("ADMIN_PORT", "9000")
-  assert config.load().admin_port == config.Listen(9000)
-
-  envoy.set("ADMIN_PORT", " 9000 ")
-  assert config.load().admin_port == config.Listen(9000)
-
+  assert config_without("ADMIN_PORT").admin_port == config.Listen(8080)
+  assert config_with([#("ADMIN_PORT", "9000")]).admin_port
+    == config.Listen(9000)
+  assert config_with([#("ADMIN_PORT", " 9000 ")]).admin_port
+    == config.Listen(9000)
   // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
-  envoy.set("ADMIN_PORT", "65535")
-  assert config.load().admin_port == config.Listen(65_535)
-
-  envoy.set("ADMIN_PORT", "")
-  assert config.load().admin_port == config.Disabled
-
-  envoy.unset("ADMIN_PORT")
+  assert config_with([#("ADMIN_PORT", "65535")]).admin_port
+    == config.Listen(65_535)
+  assert config_with([#("ADMIN_PORT", "")]).admin_port == config.Disabled
 }
 
 /// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
@@ -75,66 +113,50 @@ pub fn admin_port_rejects_invalid_values_test() {
   let assert config.Invalid(_) = admin_port_for("0")
   let assert config.Invalid(_) = admin_port_for("-1")
   let assert config.Invalid(_) = admin_port_for("65536")
-  envoy.unset("ADMIN_PORT")
 }
 
 /// 指定した `ADMIN_PORT` を設定して読み込んだ結果。
 fn admin_port_for(raw: String) -> config.AdminPort {
-  envoy.set("ADMIN_PORT", raw)
-  config.load().admin_port
+  config_with([#("ADMIN_PORT", raw)]).admin_port
 }
 
 /// `ADMIN_BIND` は未設定ならループバックのみ。ページに secret が載るため、外部へ
 /// 出すのは明示的な設定にする。
 pub fn admin_bind_test() {
-  envoy.unset("ADMIN_BIND")
-  assert config.load().admin_bind == "127.0.0.1"
-
-  envoy.set("ADMIN_BIND", "0.0.0.0")
-  assert config.load().admin_bind == "0.0.0.0"
-
-  envoy.set("ADMIN_BIND", "")
-  assert config.load().admin_bind == "127.0.0.1"
-
-  envoy.unset("ADMIN_BIND")
+  assert config_without("ADMIN_BIND").admin_bind == "127.0.0.1"
+  assert config_with([#("ADMIN_BIND", "0.0.0.0")]).admin_bind == "0.0.0.0"
+  assert config_with([#("ADMIN_BIND", "")]).admin_bind == "127.0.0.1"
 }
 
 /// `ADMIN_BASE_URL` は未設定なら None。末尾のスラッシュは、承認ページのパスと
 /// 重ならないよう取り除く。
 pub fn admin_base_url_test() {
-  envoy.unset("ADMIN_BASE_URL")
-  assert config.load().admin_base_url == None
-
-  envoy.set("ADMIN_BASE_URL", "https://bunker.example")
-  assert config.load().admin_base_url == Some("https://bunker.example")
-
-  envoy.set("ADMIN_BASE_URL", "https://bunker.example//")
-  assert config.load().admin_base_url == Some("https://bunker.example")
-
-  envoy.set("ADMIN_BASE_URL", "")
-  assert config.load().admin_base_url == None
-
-  envoy.unset("ADMIN_BASE_URL")
+  assert config_without("ADMIN_BASE_URL").admin_base_url == None
+  assert config_with([#("ADMIN_BASE_URL", "https://bunker.example")]).admin_base_url
+    == Some("https://bunker.example")
+  assert config_with([#("ADMIN_BASE_URL", "https://bunker.example//")]).admin_base_url
+    == Some("https://bunker.example")
+  assert config_with([#("ADMIN_BASE_URL", "")]).admin_base_url == None
 }
 
 /// 承認ページの URL の土台。`ADMIN_BASE_URL` が優先され、未設定なら待ち受け
 /// ポートから既定値を組み立てる。管理 UI が無効なら承認フローも無効。
 pub fn auth_url_base_test() {
-  envoy.unset("ADMIN_BASE_URL")
-  envoy.set("ADMIN_PORT", "9000")
-  assert config.auth_url_base(config.load()) == Some("http://localhost:9000")
+  // 空文字列は未設定として扱われるため、`ADMIN_BASE_URL` を明示的に外せる。
+  let from_port =
+    config_with([#("ADMIN_PORT", "9000"), #("ADMIN_BASE_URL", "")])
+  assert config.auth_url_base(from_port) == Some("http://localhost:9000")
 
-  envoy.set("ADMIN_BASE_URL", "https://bunker.example")
-  assert config.auth_url_base(config.load()) == Some("https://bunker.example")
+  let from_base_url =
+    config_with([
+      #("ADMIN_PORT", "9000"),
+      #("ADMIN_BASE_URL", "https://bunker.example"),
+    ])
+  assert config.auth_url_base(from_base_url) == Some("https://bunker.example")
 
-  envoy.set("ADMIN_PORT", "")
-  assert config.auth_url_base(config.load()) == None
-
-  envoy.set("ADMIN_PORT", "not-a-port")
-  assert config.auth_url_base(config.load()) == None
-
-  envoy.unset("ADMIN_PORT")
-  envoy.unset("ADMIN_BASE_URL")
+  assert config.auth_url_base(config_with([#("ADMIN_PORT", "")])) == None
+  assert config.auth_url_base(config_with([#("ADMIN_PORT", "not-a-port")]))
+    == None
 }
 
 /// 監視対象の pubkey だけが異なる設定。

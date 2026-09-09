@@ -708,6 +708,72 @@ pub fn unknown_token_cannot_be_decided_test() {
   let assert Error(_) = engine.approve(state, token, 1001)
 }
 
+/// 古いクライアントが送る `[secret]` だけの params でも接続できる。
+pub fn connect_with_a_bare_secret_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body =
+    "{\"id\":\"c1\",\"method\":\"connect\",\"params\":[\"" <> secret <> "\"]}"
+  let #(_state, outcome) =
+    handle(new_engine(), request_event(client, signer, body, 1000), 1000)
+  let assert Reply(response) = outcome
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// NIP-04 のペイロード（`?iv=` を含む）は形式で見分けがつくため、未対応である
+/// ことが分かる理由を添えて無視する。
+pub fn nip04_payload_is_reported_as_unsupported_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let unsigned =
+    Event(
+      id: "",
+      pubkey: client.pubkey_hex,
+      created_at: 1000,
+      kind: event.nip46_kind,
+      tags: [["p", signer.pubkey_hex]],
+      content: "3v0dEBmi5FI=?iv=Xk7z3RQ0ZQ4vJn1p2sTgHQ==",
+      sig: "",
+    )
+  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Ignore(reason) = outcome
+  assert string.contains(reason, "nip-04")
+}
+
+/// JSON として読めないドラフトは、クラッシュではなくエラー応答で返す。
+pub fn sign_event_rejects_an_invalid_draft_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let body =
+    "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"not json\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "invalid event draft",
+  )
+}
+
+/// 16 進として読めない相手 pubkey には、エラー応答を返す。
+pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let body =
+    "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\"zz\",\"hi\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "invalid third-party pubkey",
+  )
+}
+
 // --- ヘルパー ---
 
 /// 末尾 1 文字だけを変えた同じ 16 進文字列。
