@@ -29,7 +29,9 @@ pub type Socket {
 }
 
 /// ソケットの開き方。再接続ロジックを WebSocket なしでテストできるよう注入する。
-pub type Connect =
+/// 型の名前を `Msg` のバリアント `Connect` と分けておくと、注釈だけを見たときに
+/// 関数型かメッセージかを迷わない。
+pub type Connector =
   fn() -> Result(Socket, String)
 
 /// 外から見た接続の状態。生きたソケットを保持していれば `Connected`。
@@ -45,7 +47,7 @@ pub type Settings {
   Settings(
     name: Name(Msg),
     relay: String,
-    connect: Connect,
+    connect: Connector,
     on_connect: fn(Socket) -> Nil,
     on_disconnect: fn() -> Nil,
     reconnect_delay_ms: Int,

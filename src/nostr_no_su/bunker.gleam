@@ -38,7 +38,9 @@ pub type Msg {
   /// あれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
   /// 1 本のリレー接続の送信手段を取り下げる。接続アクターが `on_disconnect` から
-  /// 送るため、死んだソケットへ応答を渡し続けることがない。
+  /// 送るため、死んだソケットへ応答を渡し続けることがない。接続アクター自身が
+  /// クラッシュした場合は `on_disconnect` を経ないため、再起動した接続が
+  /// `SetPublisher` で上書きするまでは古い送信手段が残る。
   RemovePublisher(relay_url: String)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))

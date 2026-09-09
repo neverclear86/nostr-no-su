@@ -31,6 +31,13 @@ pub fn parse_list_test() {
   assert config.parse_list(" a , b ,") == ["a", "b"]
 }
 
+/// 重複した要素は最初の 1 つだけ残る。同じリレー URL を 2 度書くと接続が 2 本
+/// 開き、バンカーが URL で持つ送信手段のキーが衝突するため。
+pub fn parse_list_drops_duplicates_test() {
+  assert config.parse_list("wss://a, wss://b, wss://a")
+    == ["wss://a", "wss://b"]
+}
+
 /// `BUNKER_RELAY_URL` が設定されていれば、監視用リレーより優先される。
 pub fn pick_bunker_relays_prefers_override_test() {
   assert config.pick_bunker_relays(["wss://x"], ["wss://a", "wss://b"])

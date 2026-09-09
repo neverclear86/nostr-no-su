@@ -127,7 +127,8 @@ src/nostr_no_su/app.gleam                     -- スーパービジョンツリ�
 src/nostr_no_su/admin.gleam                   -- 管理 UI の HTTP サーバー（wisp / mist）とルーティング
 src/nostr_no_su/admin/dashboard.gleam         -- ダッシュボードの描画（スナップショット → HTML の純粋関数）
 src/nostr_no_su/config.gleam                  -- 環境変数からの設定読み込み
-src/nostr_no_su/dedup.gleam                   -- リレー横断のイベント重複排除
+src/nostr_no_su/dedup.gleam                   -- リレー横断のイベント重複排除ディスパッチャー（actor）
+src/nostr_no_su/dedup/window.gleam            -- 直近のイベント id のスライディングウィンドウ（純粋）
 src/nostr_no_su/hex.gleam                     -- 16 進文字列とバイト列の相互変換
 src/nostr_no_su/log.gleam                     -- ログ 1 行の組み立て（接頭辞付き）
 src/nostr_no_su/named.gleam                   -- 名前付きアクターへの安全な送信・問い合わせ

@@ -140,12 +140,15 @@ pub fn pick_bunker_relays(
 }
 
 /// カンマ区切りのリスト（pubkey、鍵、リレー URL）をパースする。前後の空白は
-/// 無視し、空の要素は除外する。
+/// 無視し、空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度
+/// 書くと接続が 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、
+/// 重複はここで落とす。
 pub fn parse_list(raw: String) -> List(String) {
   raw
   |> string.split(",")
   |> list.map(string.trim)
   |> list.filter(fn(entry) { entry != "" })
+  |> list.unique
 }
 
 /// 設定されたアカウントを購読する。pubkey が未設定なら直近イベントを少数だけ

@@ -183,11 +183,12 @@ fn persist(state: State, incoming: Event) -> Availability {
             True -> suspend(state, error, 1)
             // それ以外はこのイベント固有の問題なので、保存は続ける。
             False -> {
-              log(
+              log.println(
+                log_prefix,
                 "insert failed for event "
-                <> incoming.id
-                <> ": "
-                <> string.inspect(error),
+                  <> incoming.id
+                  <> ": "
+                  <> string.inspect(error),
               )
               Ready
             }
@@ -200,12 +201,13 @@ fn persist(state: State, incoming: Event) -> Availability {
 fn resume(availability: Availability) -> Availability {
   case availability {
     Unavailable(dropped:, ..) if dropped > 0 ->
-      log(
+      log.println(
+        log_prefix,
         "database is back; dropped "
-        <> int.to_string(dropped)
-        <> " events while it was unavailable",
+          <> int.to_string(dropped)
+          <> " events while it was unavailable",
       )
-    _ -> log("schema ready")
+    _ -> log.println(log_prefix, "schema ready")
   }
   Ready
 }
@@ -216,7 +218,7 @@ fn resume(availability: Availability) -> Availability {
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
   case suspension_message(error, was_reported(state.availability), dropped) {
-    Some(line) -> log(line)
+    Some(line) -> log.println(log_prefix, line)
     None -> Nil
   }
   Unavailable(dropped: dropped, reported: unreachable(error))
@@ -319,9 +321,4 @@ pub fn to_row(incoming: Event) -> Row {
     content: incoming.content,
     sig: incoming.sig,
   )
-}
-
-/// プラグインのログ行。
-fn log(message: String) -> Nil {
-  log.println(log_prefix, message)
 }

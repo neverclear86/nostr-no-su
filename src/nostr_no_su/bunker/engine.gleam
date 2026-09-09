@@ -16,7 +16,7 @@ import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
-import nostr_no_su/dedup
+import nostr_no_su/dedup/window
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, Event}
 
@@ -53,7 +53,7 @@ pub type Engine {
     // #(署名者 pubkey hex, クライアント pubkey hex)
     sessions: Set(#(String, String)),
     // リプレイ防止用: 処理済みのリクエストイベント id
-    seen: dedup.Window,
+    seen: window.Window,
     // 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
     // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
@@ -113,7 +113,7 @@ pub fn new(
   Engine(
     accounts: account_dict,
     sessions: set.new(),
-    seen: dedup.new(seen_capacity),
+    seen: window.new(seen_capacity),
     pending: dict.new(),
     auth_url: auth_url,
   )
@@ -265,7 +265,7 @@ fn accept(
     Error(Ignore("invalid signature")),
   )
   use seen <- result.map(
-    dedup.insert(engine.seen, incoming.id) |> result.replace_error(Duplicate),
+    window.insert(engine.seen, incoming.id) |> result.replace_error(Duplicate),
   )
   #(Engine(..engine, seen: seen), account, secret)
 }
