@@ -273,6 +273,73 @@ pub fn tampered_signature_ignored_test() {
   assert string.contains(reason, "signature")
 }
 
+/// 署名の検証は重複排除より先に行う。署名の壊れたイベントは `seen` に残らない
+/// ため、同じ id を持つ正当なリクエストが後から届いても処理される。
+pub fn an_invalid_signature_is_not_recorded_as_seen_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request =
+    request_event(client, signer, connect_body(signer, secret, "c1"), 1000)
+  // 署名だけを壊す。id は content から決まるので変わらない。
+  let tampered = Event(..request, sig: flip_last_hex(request.sig))
+  let #(state, ignored) = handle(new_engine(), tampered, 1000)
+  let assert Ignore(_) = ignored
+  let #(_state, outcome) = handle(state, request, 1000)
+  let assert Reply(_) = outcome
+}
+
+/// p タグが複数あっても、既知のアカウントに一致するものへルーティングする。
+/// 先頭が別人宛でも、自分宛のタグがあれば処理する。
+pub fn routes_to_the_matching_p_tag_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let stranger = account_for(other_client_key)
+  let assert Ok(conversation_key) =
+    nip44.conversation_key(client.privkey, signer.pubkey)
+  let assert Ok(content) =
+    nip44.encrypt(connect_body(signer, secret, "c1"), conversation_key)
+  let unsigned =
+    Event(
+      id: "",
+      pubkey: client.pubkey_hex,
+      created_at: 1000,
+      kind: event.nip46_kind,
+      tags: [["p", stranger.pubkey_hex], ["p", signer.pubkey_hex]],
+      content: content,
+      sig: "",
+    )
+  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Reply(response) = outcome
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// どの p タグも既知のアカウントに一致しなければ、理由を添えて無視する。
+pub fn unknown_p_tags_are_ignored_test() {
+  let client = account_for(client_key)
+  let stranger = account_for(other_client_key)
+  let assert Ok(conversation_key) =
+    nip44.conversation_key(client.privkey, stranger.pubkey)
+  let assert Ok(content) =
+    nip44.encrypt(connect_body(stranger, secret, "c1"), conversation_key)
+  let unsigned =
+    Event(
+      id: "",
+      pubkey: client.pubkey_hex,
+      created_at: 1000,
+      kind: event.nip46_kind,
+      tags: [["p", stranger.pubkey_hex]],
+      content: content,
+      sig: "",
+    )
+  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Ignore(reason) = outcome
+  assert string.contains(reason, "no matching account")
+  assert string.contains(reason, stranger.pubkey_hex)
+}
+
 /// 別の署名者宛に暗号化された content は読めないため無視される。
 pub fn undecryptable_content_ignored_test() {
   let signer = account_for(signer_key)
