@@ -19,6 +19,7 @@ pub type RelayMessage {
   RelayClosed(subscription_id: String, message: String)
 }
 
+/// クライアントメッセージを、リレーへ送る JSON 配列の文字列にする。
 pub fn encode_client_message(client_message: ClientMessage) -> String {
   case client_message {
     Req(subscription_id, query) ->
@@ -72,6 +73,8 @@ pub fn relay_message_decoder() -> decode.Decoder(RelayMessage) {
   }
 }
 
+/// リレーから届いた 1 行をデコードする。未知のタグや配列でない JSON は
+/// エラーになる。
 pub fn decode_relay_message(
   text: String,
 ) -> Result(RelayMessage, json.DecodeError) {

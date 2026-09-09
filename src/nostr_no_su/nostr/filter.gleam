@@ -14,10 +14,13 @@ pub type Filter {
   )
 }
 
+/// 何も絞り込まない空のフィルター。ここから必要なフィールドだけを設定する。
 pub fn new() -> Filter {
   Filter(authors: None, kinds: None, p_tags: None, since: None, limit: None)
 }
 
+/// フィルターを REQ に載せる JSON オブジェクトにする。未設定のフィールドは
+/// キーごと省く。
 pub fn to_json(filter: Filter) -> Json {
   [
     #("authors", option.map(filter.authors, json.array(_, of: json.string))),
