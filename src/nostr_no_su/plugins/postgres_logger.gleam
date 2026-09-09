@@ -14,6 +14,7 @@ import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
@@ -171,19 +172,21 @@ fn persist(state: State, incoming: Event) -> Availability {
     Ready ->
       case insert(state.db, incoming) {
         Ok(_inserted) -> Ready
-        // 到達できないなら、このイベントを 1 件目として保存を止める。
-        Error(pog.ConnectionUnavailable as error)
-        | Error(pog.QueryTimeout as error) -> suspend(state, error, 1)
-        // それ以外はこのイベント固有の問題なので、保存は続ける。
-        Error(error) -> {
-          log(
-            "insert failed for event "
-            <> incoming.id
-            <> ": "
-            <> string.inspect(error),
-          )
-          Ready
-        }
+        Error(error) ->
+          case unreachable(error) {
+            // 到達できないなら、このイベントを 1 件目として保存を止める。
+            True -> suspend(state, error, 1)
+            // それ以外はこのイベント固有の問題なので、保存は続ける。
+            False -> {
+              log(
+                "insert failed for event "
+                <> incoming.id
+                <> ": "
+                <> string.inspect(error),
+              )
+              Ready
+            }
+          }
       }
   }
 }
@@ -202,24 +205,64 @@ fn resume(availability: Availability) -> Availability {
   Ready
 }
 
-/// 保存を止めて再試行を予約する。理由は復帰するまでに 1 回だけ報告し、以降の
-/// 再試行では同じ行を並べない。
+/// 保存を止めて再試行を予約する。ログに出すかどうかは `suspension` が決める。
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
-  let reported = case state.availability {
-    Unavailable(reported: True, ..) -> True
-    _ -> {
-      log(
-        "database unavailable: "
-        <> string.inspect(error)
-        <> "; retrying every "
-        <> int.to_string(schema_retry_delay_ms)
-        <> "ms",
-      )
-      True
-    }
+  let Suspension(message:, reported:) =
+    suspension(error, was_reported(state.availability))
+  case message {
+    Some(line) -> log(line)
+    None -> Nil
   }
   Unavailable(dropped: dropped, reported: reported)
+}
+
+/// 停止したときのログの扱い。`message` があればその行を出す。`reported` は次に
+/// 持ち越す「報告済み」。
+pub type Suspension {
+  Suspension(message: Option(String), reported: Bool)
+}
+
+/// 停止の理由をどう報告するかを決める。DB に到達できないことによる停止は、
+/// 復帰すれば `resume` が件数とあわせて報告するので、理由は復帰するまでに 1 回
+/// だけ出す。それ以外の失敗（権限不足のような設定の不備）は待っても直らず復帰の
+/// 報告も出ないため、再試行のたびに出して黙り込まないようにする。
+pub fn suspension(error: pog.QueryError, reported: Bool) -> Suspension {
+  let delay = int.to_string(schema_retry_delay_ms)
+  case unreachable(error), reported {
+    True, True -> Suspension(message: None, reported: True)
+    True, False ->
+      Suspension(
+        message: Some(
+          "database unavailable: "
+          <> string.inspect(error)
+          <> "; retrying every "
+          <> delay
+          <> "ms",
+        ),
+        reported: True,
+      )
+    False, _ ->
+      Suspension(
+        message: Some(
+          "schema setup failed: "
+          <> string.inspect(error)
+          <> "; retrying in "
+          <> delay
+          <> "ms",
+        ),
+        reported: False,
+      )
+  }
+}
+
+/// DB に到達できないことを示すエラーか。これらは待てば直る見込みがあり、次の
+/// イベントでも同じだけ待たされるため、保存を止めて再試行に切り替える。
+fn unreachable(error: pog.QueryError) -> Bool {
+  case error {
+    pog.ConnectionUnavailable | pog.QueryTimeout -> True
+    _ -> False
+  }
 }
 
 /// 保存を止めてから捨てたイベント数。
@@ -227,6 +270,14 @@ fn dropped(availability: Availability) -> Int {
   case availability {
     Ready -> 0
     Unavailable(dropped:, ..) -> dropped
+  }
+}
+
+/// 停止の理由をすでに報告しているか。
+fn was_reported(availability: Availability) -> Bool {
+  case availability {
+    Ready -> False
+    Unavailable(reported:, ..) -> reported
   }
 }
 

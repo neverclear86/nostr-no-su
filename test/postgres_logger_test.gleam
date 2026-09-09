@@ -5,6 +5,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/io
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugins/postgres_logger
@@ -67,6 +68,43 @@ pub fn inserts_ignore_duplicate_ids_test() {
     postgres_logger.insert_sql,
     "ON CONFLICT (id) DO NOTHING",
   )
+}
+
+/// 権限不足のような自然に直らないエラーの例。
+fn insufficient_privilege() -> pog.QueryError {
+  pog.PostgresqlError(
+    code: "42501",
+    name: "insufficient_privilege",
+    message: "permission denied for schema public",
+  )
+}
+
+/// DB に到達できないことによる停止は、復帰するまでに 1 回だけ報告する。復帰時に
+/// `resume` が破棄件数とあわせて報告するため、再試行のたびには出さない。
+pub fn unreachable_databases_are_reported_once_test() {
+  let first = postgres_logger.suspension(pog.ConnectionUnavailable, False)
+  assert first.reported == True
+  assert first.message
+    == Some(
+      "database unavailable: ConnectionUnavailable; retrying every 5000ms",
+    )
+
+  let retried = postgres_logger.suspension(pog.QueryTimeout, True)
+  assert retried == postgres_logger.Suspension(message: None, reported: True)
+}
+
+/// 到達性と無関係な失敗（設定の不備など）は復帰の報告が出ないため、再試行の
+/// たびに理由を出して黙り込まない。
+pub fn other_schema_failures_are_reported_every_time_test() {
+  let expected =
+    Some(
+      "schema setup failed: PostgresqlError(\"42501\", \"insufficient_privilege\", \"permission denied for schema public\"); retrying in 5000ms",
+    )
+  assert postgres_logger.suspension(insufficient_privilege(), False)
+    == postgres_logger.Suspension(message: expected, reported: False)
+  // すでに報告済みでも抑止されない。
+  assert postgres_logger.suspension(insufficient_privilege(), True)
+    == postgres_logger.Suspension(message: expected, reported: False)
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
