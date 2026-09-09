@@ -61,6 +61,23 @@ pub fn empty_environment_variables_are_unset_test() {
   assert config.load().database_url == None
 }
 
+/// `ADMIN_PORT` は未設定なら既定ポート、空文字列や数値でない値なら管理 UI 無効。
+pub fn admin_port_test() {
+  envoy.unset("ADMIN_PORT")
+  assert config.load().admin_port == Some(8080)
+
+  envoy.set("ADMIN_PORT", "9000")
+  assert config.load().admin_port == Some(9000)
+
+  envoy.set("ADMIN_PORT", "")
+  assert config.load().admin_port == None
+
+  envoy.set("ADMIN_PORT", "not-a-port")
+  assert config.load().admin_port == None
+
+  envoy.unset("ADMIN_PORT")
+}
+
 /// 監視対象の pubkey だけが異なる設定。
 fn test_config(pubkeys: List(String)) -> config.Config {
   config.Config(
@@ -70,6 +87,8 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     account_keys: [],
     bunker_secret: None,
     database_url: None,
+    admin_port: None,
+    admin_password: None,
   )
 }
 

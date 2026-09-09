@@ -1,4 +1,5 @@
 import envoy
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -6,6 +7,9 @@ import gleam/string
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 
 const default_relay_url = "wss://relay.damus.io"
+
+/// 管理 UI が待ち受けるポート。`ADMIN_PORT` で上書きする。
+const default_admin_port = 8080
 
 pub type Config {
   Config(
@@ -15,6 +19,8 @@ pub type Config {
     account_keys: List(String),
     bunker_secret: Option(String),
     database_url: Option(String),
+    admin_port: Option(Int),
+    admin_password: Option(String),
   )
 }
 
@@ -36,6 +42,8 @@ pub fn load() -> Config {
       |> parse_list,
     bunker_secret: optional("BUNKER_SECRET"),
     database_url: optional("DATABASE_URL"),
+    admin_port: admin_port(),
+    admin_password: optional("ADMIN_PASSWORD"),
   )
 }
 
@@ -45,6 +53,16 @@ fn optional(name: String) -> Option(String) {
   case envoy.get(name) {
     Ok("") | Error(Nil) -> None
     Ok(value) -> Some(value)
+  }
+}
+
+/// 管理 UI の待ち受けポート。未設定なら既定ポートを使い、空文字列や数値でない
+/// 値なら UI を無効にする。他の任意設定と違い未設定と空文字列で意味が分かれる
+/// のは、既定で有効な設定を明示的に切れるようにするため。
+fn admin_port() -> Option(Int) {
+  case envoy.get("ADMIN_PORT") {
+    Error(Nil) -> Some(default_admin_port)
+    Ok(raw) -> raw |> string.trim |> int.parse |> option.from_result
   }
 }
 

@@ -50,6 +50,11 @@ fn start_tree(spec: app.Spec) -> Pid {
   started.pid
 }
 
+/// 偽リレー 1 本ぶんの仕様。URL は `fake_open` が無視するのでラベルでしかない。
+fn test_relay() -> app.Relay {
+  app.Relay(name: process.new_name("test_relay"), url: "ws://relay.test")
+}
+
 /// 偽リレー 1 本の上でバンカーだけを動かすツリー。
 fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
   start_tree(app.Spec(
@@ -58,11 +63,12 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
       app.Bunker(
         name: name,
         engine: engine.new([#(account_for(signer_key), secret)]),
-        relay_urls: ["ws://relay.test"],
+        relays: [test_relay()],
         subscriptions: fn() { [] },
       ),
     ),
     storage: None,
+    admin: None,
     open: fake_open(reports),
     reconnect_delay_ms: 100,
   ))
@@ -239,6 +245,31 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
+/// 管理 UI が使う経路。`connect` 済みのクライアントはセッション一覧に現れ、
+/// 取り消すと消え、以降のリクエストは再び認可を求められる。
+pub fn sessions_can_be_listed_and_revoked_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  assert bunker.sessions(name) == []
+
+  deliver(connect_request("c1"))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  assert bunker.sessions(name)
+    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+
+  bunker.revoke(name, signer.pubkey_hex, client.pubkey_hex)
+  assert bunker.sessions(name) == []
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
+  assert string.contains(response_body(denied), "unauthorized")
+  stop_tree(tree)
+}
+
 /// DB に到達できなくても監視は動き続ける。到達不能なプール設定で保存サブツリーを
 /// 動かし、ツリーが起動すること、イベントが他のプラグインに届くこと、保存アクター
 /// が生きていることを確かめる。root は one_for_one なので、保存側の不調は監視側の
@@ -257,7 +288,7 @@ pub fn monitoring_survives_an_unreachable_database_test() {
             postgres_logger.new(logger),
           ],
           dedup_capacity: 8,
-          relay_urls: ["ws://relay.test"],
+          relays: [test_relay()],
           subscriptions: fn() { [] },
         ),
       ),
@@ -268,6 +299,7 @@ pub fn monitoring_survives_an_unreachable_database_test() {
         pool_config: pog.default_config(process.new_name("test_pool"))
           |> pog.port(1),
       )),
+      admin: None,
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))
@@ -293,12 +325,13 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
             plugin.Plugin(name: "test", handle: process.send(seen, _)),
           ],
           dedup_capacity: 8,
-          relay_urls: ["ws://relay.test"],
+          relays: [test_relay()],
           subscriptions: fn() { [] },
         ),
       ),
       bunker: None,
       storage: None,
+      admin: None,
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))

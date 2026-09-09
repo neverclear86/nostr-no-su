@@ -13,6 +13,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構、コンソールロガー
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
 - **Postgres ロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
+- **管理 UI**: `http://localhost:8080/` でアカウントの接続 URI、リレーの接続状態、承認済みセッション（取り消し可）、有効なプラグインを確認できる。HTTP Basic 認証（ユーザー名 `admin`）
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
 ## 使い方
@@ -43,6 +44,20 @@ gleam run
 
 kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）。NIP-04 のみの古いクライアントは非対応（受信するとログに記録して無視）。ephemeral イベントなので、AUTH やレート制限のあるリレーだと転送されないことがある（例: `relay.damus.io` は連続リクエストで応答イベントを rate-limit で拒否することがある）。`BUNKER_RELAY_URL` には `wss://relay.nsec.app` などバンカー向けリレーを推奨。
 
+### 管理 UI
+
+起動すると `http://localhost:8080/` で管理 UI が開く。ダッシュボードにはアカウント（署名者 pubkey と `bunker://` 接続 URI）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインと Postgres 保存の有効／無効が並ぶ。
+
+認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する。未設定なら起動ごとにランダム生成してログに出力する:
+
+```
+[admin] generated password for user "admin": <password>
+```
+
+`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返すので、コンテナーの healthcheck に使える。
+
+> ⚠️ **平文 HTTP である**: Basic 認証の資格情報は暗号化されずに送られ、ページには secret 入りの `bunker://` URI が表示される。localhost か Docker ネットワーク内での利用を前提とし、外部に公開するときは必ずリバースプロキシで TLS を終端すること。サーバーはコンテナー外へポートを公開できるよう全インターフェース（`0.0.0.0`）で待ち受けるため、ホストのファイアウォールでも保護すること。
+
 ### 監視のみ（バンカー無効）
 
 `ACCOUNT_KEYS` を空にすると監視のみモードで動く:
@@ -54,6 +69,8 @@ docker compose up --build
 ### docker compose
 
 compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたイベントは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+
+管理 UI のポート `8080` はホストに公開する。`ADMIN_PORT` を変えるときは `ports` の記述も合わせること。
 
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `DATABASE_URL` の両方を合わせること。`DATABASE_URL=` を空にすると Postgres への保存だけを無効化できる。
 
@@ -67,6 +84,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
 | `DATABASE_URL` | （空） | イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。空なら保存しない。docker compose では同梱の Postgres を指す |
+| `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート。空文字列や数値でない値なら管理 UI を無効にする |
+| `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
 
 ### ローカル開発 (Gleam 1.17+ / Erlang OTP 27+)
 
@@ -89,9 +108,11 @@ docker rm -f nns-pg-test
 ```
 src/nostr_no_su.gleam                         -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
 src/nostr_no_su/app.gleam                     -- スーパービジョンツリーの構成
+src/nostr_no_su/admin.gleam                   -- 管理 UI の HTTP サーバー（wisp / mist）とルーティング
+src/nostr_no_su/admin/dashboard.gleam         -- ダッシュボードの描画（スナップショット → HTML の純粋関数）
 src/nostr_no_su/config.gleam                  -- 環境変数からの設定読み込み
 src/nostr_no_su/dedup.gleam                   -- リレー横断のイベント重複排除
-src/nostr_no_su/named.gleam                   -- 名前付きアクターへの安全な送信
+src/nostr_no_su/named.gleam                   -- 名前付きアクターへの安全な送信・問い合わせ
 src/nostr_no_su/time.gleam                    -- 現在時刻 (FFI)
 src/nostr_no_su/crypto/secp256k1.gleam        -- 点演算・鍵導出・ECDH
 src/nostr_no_su/crypto/bip340.gleam           -- BIP-340 Schnorr 署名 / 検証
@@ -118,6 +139,7 @@ vendor/stratus/                               -- パッチ済み stratus（下�
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
 - **イベント保存は独立したサブツリー**: pog の接続プールと保存 actor は監視サブツリーとは別の子として root（one_for_one）にぶら下げる。DB が落ちて再起動が起きてもリレーの購読を巻き込まないため。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
+- **管理 UI は root 直下の独立した子**: mist（HTTP サーバー）は監視・バンカー・保存のどれにも依存しないため、root（one_for_one）に並べる。表示する状態はハンドラーが直接触らず、Context に注入された関数から `process.call` で取る。リレー接続 actor とバンカー actor は名前付きなので、再起動をまたいでも同じ宛先に問い合わせられる。描画は「状態のスナップショット → HTML 文字列」の純粋関数で、テンプレートエンジンも JS フレームワークも使わない
 - **監視の重複排除は世代式スライディングウィンドウ**: 複数リレーが同じイベントを配送するため、直近のイベント id（上限 4096〜8192 件）を覚えてプラグインには 1 回だけ渡す。再接続時のストアドイベント再配送もこれで吸収する
 - **サイナー鍵 = ユーザー鍵**: 仕様で許可されている。別鍵にすると再起動で URI が無効化されるため v0 では同一にしている
 - **secret は再利用可**: 仕様は single-use だが、セッションがインメモリのため再起動でオンボーディングが壊れないよう、正しい secret を知るクライアントの接続を許可する
@@ -138,4 +160,4 @@ stratus 3.0.0 はハンドシェイクで `permessage-deflate` を必ずオフ�
 - [x] スーパービジョンツリー
 - [ ] 管理 UI での接続承認（auth_url フロー）
 - [x] Postgres へイベントを保存するロガープラグイン
-- [ ] 管理 UI（Gleam / wisp）
+- [x] 管理 UI（Gleam / wisp）

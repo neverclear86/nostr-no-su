@@ -4,7 +4,8 @@
 //// root (one_for_one)
 //// |-- monitor (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// |-- bunker  (rest_for_one): バンカーアクター、        次にリレーごとの接続
-//// `-- storage (rest_for_one): Postgres の接続プール、   次にロガーアクター
+//// |-- storage (rest_for_one): Postgres の接続プール、   次にロガーアクター
+//// `-- admin   (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
 //// 各サブツリーを `rest_for_one` にしているのは、先頭のアクターが再起動した際に
@@ -13,15 +14,22 @@
 //// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
 //// subject を握り続けることがない。保存サブツリーも同じ形で、接続プールが
 //// 再起動するとロガーアクターも作り直され、スキーマの確認からやり直す。
+////
+//// 管理 UI は他のどれにも依存しないのでルート直下に置く。状態は名前付きアクター
+//// への問い合わせで読むため、UI が再起動しても、問い合わせ先が再起動しても、
+//// 互いの配線をやり直す必要がない。
 
 import gleam/erlang/process.{type Name}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/otp/static_supervisor.{type Builder} as supervisor
+import gleam/otp/static_supervisor.{type Builder, type Supervisor} as supervisor
+import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
+import nostr_no_su/admin
+import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
-import nostr_no_su/bunker/engine.{type Engine}
+import nostr_no_su/bunker/engine.{type Engine, type Session}
 import nostr_no_su/dedup
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -36,6 +44,12 @@ import pog
 pub type Open =
   fn(String, Subscriptions, fn(Event) -> Nil) -> Result(Socket, String)
 
+/// リレー接続 1 本ぶんの識別情報。名前を付けておくと、管理 UI が接続アクターに
+/// 状態を問い合わせられる。
+pub type Relay {
+  Relay(name: Name(relay_connection.Msg), url: String)
+}
+
 /// 監視サブツリー。プラグインを動かす重複排除ディスパッチャーと、そこへイベントを
 /// 流し込むリレー群からなる。
 pub type Monitor {
@@ -43,7 +57,7 @@ pub type Monitor {
     name: Name(dedup.Msg),
     plugins: List(Plugin),
     dedup_capacity: Int,
-    relay_urls: List(String),
+    relays: List(Relay),
     subscriptions: Subscriptions,
   )
 }
@@ -53,9 +67,15 @@ pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
     engine: Engine,
-    relay_urls: List(String),
+    relays: List(Relay),
     subscriptions: Subscriptions,
   )
+}
+
+/// 管理 UI。設定から決まるもの（ポート、パスワード、認証済みページにだけ出す
+/// 接続 URI）だけを持ち、表示するその他の状態はツリーの他の仕様から導く。
+pub type Admin {
+  Admin(port: Int, password: String, accounts: List(dashboard.Account))
 }
 
 /// イベント保存サブツリー。Postgres の接続プールと、そこへ書き込むロガー
@@ -65,29 +85,37 @@ pub type Storage {
   Storage(name: Name(postgres_logger.Msg), pool_config: pog.Config)
 }
 
-/// 監視・バンカー・イベント保存のどれを動かすか、接続をどう開くか、接続が
-/// 再接続までどれだけ待つか。
+/// 監視・バンカー・イベント保存・管理 UI のどれを動かすか、接続をどう開くか、
+/// 接続が再接続までどれだけ待つか。
 pub type Spec {
   Spec(
     monitor: Option(Monitor),
     bunker: Option(Bunker),
     storage: Option(Storage),
+    admin: Option(Admin),
     open: Open,
     reconnect_delay_ms: Int,
   )
 }
 
-/// ツリーを起動する。サブツリーは互いに独立しているためルートは `one_for_one`。
+/// ツリーを起動する。子は互いに独立しているためルートは `one_for_one`。
 /// バンカーや DB が壊れても監視を止めてはならず、その逆も同様。
-pub fn start(spec: Spec) -> actor.StartResult(supervisor.Supervisor) {
+pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   supervisor.new(supervisor.OneForOne)
   // サブツリーより意図的に厳しく、期間も長く取る。再起動を諦め続けるサブツリー
   // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナーの
   // 再起動ポリシーに委ねる。
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
-  |> add_subtree(spec.monitor, fn(config) { monitor_tree(spec, config) })
-  |> add_subtree(spec.bunker, fn(config) { bunker_tree(spec, config) })
-  |> add_subtree(spec.storage, storage_tree)
+  |> add_child(spec.monitor, fn(config) {
+    supervisor.supervised(monitor_tree(spec, config))
+  })
+  |> add_child(spec.bunker, fn(config) {
+    supervisor.supervised(bunker_tree(spec, config))
+  })
+  |> add_child(spec.storage, fn(config) {
+    supervisor.supervised(storage_tree(config))
+  })
+  |> add_child(spec.admin, fn(config) { admin_child(spec, config) })
   |> supervisor.start
 }
 
@@ -108,15 +136,15 @@ pub fn open_websocket(
   Ok(Socket(pid: pid, publish: relay_client.publish(connection, _)))
 }
 
-/// アプリのその半分が設定されている場合にサブツリーのスーパーバイザーを追加する。
-fn add_subtree(
+/// アプリのその部分が設定されている場合にルートの子を追加する。
+fn add_child(
   builder: Builder,
   configured: Option(config),
-  tree: fn(config) -> Builder,
+  child: fn(config) -> ChildSpecification(Supervisor),
 ) -> Builder {
   case configured {
     None -> builder
-    Some(config) -> supervisor.add(builder, supervisor.supervised(tree(config)))
+    Some(config) -> supervisor.add(builder, child(config))
   }
 }
 
@@ -130,7 +158,7 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   ))
   |> add_connections(
     spec,
-    config.relay_urls,
+    config.relays,
     config.subscriptions,
     fn(incoming) { named.send(config.name, dedup.Incoming(incoming)) },
     fn(_relay_url, _socket) { Nil },
@@ -144,13 +172,84 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   |> supervisor.add(bunker.supervised(config.name, config.engine))
   |> add_connections(
     spec,
-    config.relay_urls,
+    config.relays,
     config.subscriptions,
     fn(incoming) { named.send(config.name, bunker.Incoming(incoming)) },
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
   )
+}
+
+/// 管理 UI。表示する状態は、ツリーの他の仕様から名前を引いて問い合わせる関数
+/// として Context に渡す。
+fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
+  admin.supervised(
+    config.port,
+    admin.Context(
+      password: config.password,
+      accounts: config.accounts,
+      plugins: plugin_names(spec.monitor),
+      storage_enabled: option.is_some(spec.storage),
+      relays: fn() { relay_statuses(spec) },
+      sessions: fn() { bunker_sessions(spec.bunker) },
+      revoke: fn(signer, client) { revoke_session(spec.bunker, signer, client) },
+    ),
+  )
+}
+
+/// 監視サブツリーで有効なプラグインの名前。監視が無効なら空。
+fn plugin_names(monitor: Option(Monitor)) -> List(String) {
+  case monitor {
+    None -> []
+    Some(monitor) -> list.map(monitor.plugins, fn(item) { item.name })
+  }
+}
+
+/// 監視・バンカー両サブツリーのリレー接続の現在の状態。
+fn relay_statuses(spec: Spec) -> List(dashboard.Relay) {
+  let monitor = case spec.monitor {
+    None -> []
+    Some(monitor) -> statuses(dashboard.Monitor, monitor.relays)
+  }
+  let bunker = case spec.bunker {
+    None -> []
+    Some(bunker) -> statuses(dashboard.Bunker, bunker.relays)
+  }
+  list.append(monitor, bunker)
+}
+
+/// 指定した用途のリレーそれぞれについて、接続アクターに状態を問い合わせる。
+fn statuses(
+  role: dashboard.Role,
+  relays: List(Relay),
+) -> List(dashboard.Relay) {
+  use relay <- list.map(relays)
+  dashboard.Relay(
+    role: role,
+    url: relay.url,
+    status: relay_connection.status(relay.name),
+  )
+}
+
+/// バンカーが保持する承認済みセッション。バンカーが無効なら空。
+fn bunker_sessions(config: Option(Bunker)) -> List(Session) {
+  case config {
+    None -> []
+    Some(config) -> bunker.sessions(config.name)
+  }
+}
+
+/// セッションを 1 件取り消す。バンカーが無効なら何もしない。
+fn revoke_session(
+  config: Option(Bunker),
+  signer: String,
+  client: String,
+) -> Nil {
+  case config {
+    None -> Nil
+    Some(config) -> bunker.revoke(config.name, signer, client)
+  }
 }
 
 /// イベント保存サブツリー。プールを先に起動し、ロガーアクターがその名前を宛先に
@@ -172,23 +271,24 @@ fn subtree() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// リレー URL ごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラー
-/// はサブツリー内で共有する。
+/// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラーは
+/// サブツリー内で共有する。
 fn add_connections(
   builder: Builder,
   spec: Spec,
-  relay_urls: List(String),
+  relays: List(Relay),
   subscriptions: Subscriptions,
   handle_event: fn(Event) -> Nil,
   on_connect: fn(String, Socket) -> Nil,
 ) -> Builder {
-  use builder, relay_url <- list.fold(relay_urls, builder)
+  use builder, relay <- list.fold(relays, builder)
   supervisor.add(
     builder,
     relay_connection.supervised(relay_connection.Config(
-      relay: relay_client.label(relay_url),
-      connect: fn() { spec.open(relay_url, subscriptions, handle_event) },
-      on_connect: on_connect(relay_url, _),
+      name: relay.name,
+      relay: relay_client.label(relay.url),
+      connect: fn() { spec.open(relay.url, subscriptions, handle_event) },
+      on_connect: on_connect(relay.url, _),
       reconnect_delay_ms: spec.reconnect_delay_ms,
     )),
   )
