@@ -25,8 +25,8 @@ type Report {
   /// watches, and the handler that feeds events into the subtree the way a
   /// real socket would.
   Opened(connection: Pid, socket: Pid, deliver: fn(Event) -> Nil)
-  /// An event was published on the socket.
-  Published(event: Event)
+  /// An event was published, on the socket it went out through.
+  Published(socket: Pid, event: Event)
 }
 
 /// A fake relay: it reports every connection, hands the tree an idle process
@@ -37,7 +37,7 @@ fn fake_open(reports: Subject(Report)) -> app.Open {
     process.send(reports, Opened(process.self(), socket, handle_event))
     Ok(
       relay_connection.Socket(pid: socket, publish: fn(published) {
-        process.send(reports, Published(published))
+        process.send(reports, Published(socket, published))
       }),
     )
   }
@@ -162,9 +162,11 @@ fn event_with_id(id: String) -> Event {
 pub fn bunker_replies_on_its_connection_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_connection, socket, deliver) = await_connection(reports)
   deliver(connect_request("c1"))
-  let assert Ok(Published(response)) = process.receive(reports, 2000)
+  let assert Ok(Published(answered_on, response)) =
+    process.receive(reports, 2000)
+  assert answered_on == socket
   assert string.contains(response_body(response), "\"result\":\"ack\"")
   stop_tree(tree)
 }
@@ -180,11 +182,13 @@ pub fn bunker_survives_being_killed_test() {
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
 
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_connection, socket, deliver) = await_connection(reports)
   let assert Ok(restarted) = process.named(name)
   assert restarted != killed
   deliver(connect_request("c2"))
-  let assert Ok(Published(response)) = process.receive(reports, 2000)
+  let assert Ok(Published(answered_on, response)) =
+    process.receive(reports, 2000)
+  assert answered_on == socket
   assert string.contains(response_body(response), "\"result\":\"ack\"")
   stop_tree(tree)
 }
@@ -218,14 +222,19 @@ pub fn session_survives_a_reconnect_test() {
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
   let assert Opened(_connection, socket, deliver) = await_connection(reports)
   deliver(connect_request("c1"))
-  let assert Ok(Published(ack)) = process.receive(reports, 2000)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
 
   process.kill(socket)
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
-  // No second `connect`: only an authorized client is answered with a pong.
+  let assert Opened(_connection, reconnected, deliver) =
+    await_connection(reports)
+  assert reconnected != socket
+  // No second `connect`: only an authorized client is answered with a pong,
+  // and it goes out on the socket that replaced the dead one.
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(pong)) = process.receive(reports, 2000)
+  let assert Ok(Published(pong_on, pong)) = process.receive(reports, 2000)
+  assert pong_on == reconnected
   assert string.contains(response_body(pong), "\"result\":\"pong\"")
   stop_tree(tree)
 }

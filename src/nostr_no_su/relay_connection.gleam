@@ -155,9 +155,15 @@ fn shutdown(
 }
 
 /// Take the socket down for the exit reasons that will not do it themselves.
+/// The link is dropped first: exits are no longer trapped by this point, so
+/// the kill would otherwise travel back along it and decide how the actor
+/// terminates.
 fn stop_socket(state: State) -> Nil {
   case state.socket {
-    Some(socket) -> process.kill(socket)
+    Some(socket) -> {
+      process.unlink(socket)
+      process.kill(socket)
+    }
     None -> Nil
   }
 }
