@@ -92,13 +92,13 @@ fn decide(
 }
 
 /// 状態を変える操作を報告する Context。
-fn revoking_context(reports: Subject(Report)) -> admin.Context {
+fn reporting_context(reports: Subject(Report)) -> admin.Context {
   test_context(reports, "wss://relay.example")
 }
 
 /// 報告を捨てる Context。操作を観測しないテスト向け。
 fn context() -> admin.Context {
-  revoking_context(process.new_subject())
+  reporting_context(process.new_subject())
 }
 
 /// 認証済みの POST リクエストを 1 件処理する。本文は空で、承認・拒否はパスの
@@ -240,7 +240,7 @@ pub fn revoke_calls_the_context_and_redirects_test() {
     simulate.request(http.Post, "/sessions/revoke")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(revoking_context(revoked), _)
+    |> admin.handle_request(reporting_context(revoked), _)
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(revoked, 1000)
@@ -254,7 +254,7 @@ pub fn revoke_without_fields_is_a_bad_request_test() {
     simulate.request(http.Post, "/sessions/revoke")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer)])
-    |> admin.handle_request(revoking_context(revoked), _)
+    |> admin.handle_request(reporting_context(revoked), _)
   assert response.status == 400
   assert process.receive(revoked, 100) == Error(Nil)
 }
@@ -274,7 +274,7 @@ pub fn cross_origin_revoke_is_rejected_test() {
     |> request.set_header("origin", "http://evil.example")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(revoking_context(revoked), _)
+    |> admin.handle_request(reporting_context(revoked), _)
   assert response.status == 400
   assert process.receive(revoked, 100) == Error(Nil)
 }
@@ -286,7 +286,7 @@ pub fn same_origin_revoke_is_accepted_test() {
     simulate.browser_request(http.Post, "/sessions/revoke")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(revoking_context(revoked), _)
+    |> admin.handle_request(reporting_context(revoked), _)
   assert response.status == 303
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: client))
@@ -319,7 +319,7 @@ pub fn approval_page_for_an_unknown_token_is_not_found_test() {
 /// 承認は Context の `approve` を呼び、閉じてよいことを伝える。
 pub fn approve_calls_the_context_test() {
   let reports = process.new_subject()
-  let response = post(revoking_context(reports), "/approve/" <> token)
+  let response = post(reporting_context(reports), "/approve/" <> token)
   assert response.status == 200
   assert string.contains(simulate.read_body(response), "Approved")
   assert process.receive(reports, 1000) == Ok(Approved(token))
@@ -328,7 +328,7 @@ pub fn approve_calls_the_context_test() {
 /// 拒否は Context の `deny` を呼ぶ。
 pub fn deny_calls_the_context_test() {
   let reports = process.new_subject()
-  let response = post(revoking_context(reports), "/deny/" <> token)
+  let response = post(reporting_context(reports), "/deny/" <> token)
   assert response.status == 200
   assert string.contains(simulate.read_body(response), "Denied")
   assert process.receive(reports, 1000) == Ok(Denied(token))
@@ -345,7 +345,7 @@ pub fn approve_requires_credentials_test() {
   let reports = process.new_subject()
   let response =
     simulate.request(http.Post, "/approve/" <> token)
-    |> admin.handle_request(revoking_context(reports), _)
+    |> admin.handle_request(reporting_context(reports), _)
   assert response.status == 401
   assert process.receive(reports, 100) == Error(Nil)
 }

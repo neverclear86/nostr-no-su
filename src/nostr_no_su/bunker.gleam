@@ -110,8 +110,9 @@ pub fn start(
   |> actor.start
 }
 
-/// publisher の登録、セッションの照会と取り消し、あるいは受信イベント 1 件を
-/// エンジンに通して生成された応答を全接続へ送信する。
+/// publisher の登録、セッションと承認待ちの照会、セッションの取り消し、承認待ちの
+/// 承認と拒否、あるいは受信イベント 1 件をエンジンに通して生成された応答を全接続
+/// へ送信する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     GetPending(reply) -> {
