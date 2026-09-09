@@ -3,10 +3,10 @@
 //// session state cannot live there). All decision logic stays in `engine`.
 
 import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Name, type Subject}
 import gleam/io
 import gleam/otp/actor
-import gleam/result
+import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/bunker/engine
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/time
@@ -27,12 +27,25 @@ type State {
   State(engine: engine.Engine, publishers: Dict(String, fn(Event) -> Nil))
 }
 
-/// Start the bunker actor with the given engine state.
-pub fn start(initial: engine.Engine) -> Result(Subject(Msg), actor.StartError) {
+/// A child specification for the supervision tree.
+pub fn supervised(
+  name: Name(Msg),
+  initial: engine.Engine,
+) -> ChildSpecification(Subject(Msg)) {
+  supervision.worker(fn() { start(name, initial) })
+}
+
+/// Start the bunker actor with the given engine state. It is registered
+/// under `name` so the connections reach whichever process currently holds
+/// it, rather than the one alive when they started.
+pub fn start(
+  name: Name(Msg),
+  initial: engine.Engine,
+) -> actor.StartResult(Subject(Msg)) {
   actor.new(State(engine: initial, publishers: dict.new()))
+  |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
-  |> result.map(fn(started) { started.data })
 }
 
 /// Register a publisher, or run one incoming event through the engine and

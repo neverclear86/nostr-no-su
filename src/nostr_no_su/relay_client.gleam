@@ -1,4 +1,4 @@
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/io
 import gleam/list
@@ -15,7 +15,7 @@ pub type Msg {
 }
 
 /// A started connection. It is driven through `publish` and the process
-/// behind it is what the caller's reconnect loop waits on.
+/// behind it is what `relay_connection` watches for disconnects.
 pub type Connection =
   Subject(stratus.InternalMessage(Msg))
 
@@ -23,6 +23,14 @@ pub type Connection =
 /// (re)connection so time-relative filters (e.g. `since`) stay current.
 pub type Subscriptions =
   fn() -> List(#(String, Filter))
+
+/// How long the handshake may take. `start` blocks its caller for at most
+/// this (plus the 100ms stratus adds on top of it), and that caller is a
+/// supervised actor which cannot answer its supervisor's shutdown while it
+/// blocks: the value has to stay below the worker shutdown timeout of 5000ms
+/// (see `relay_connection.supervised`), or shutting down a connection that is
+/// waiting on an unresponsive relay ends in a brutal kill.
+const connect_timeout_ms = 3000
 
 /// Convert a relay URL to the http(s) request stratus expects: gleam_http
 /// only parses http(s) schemes, and stratus maps Https to wss/TLS.
@@ -45,7 +53,8 @@ pub fn label(url: String) -> String {
 
 /// Connect to the given relay, open the given subscriptions, and pass
 /// verified events to `handle_event`. The connection actor is linked to the
-/// caller, which reconnects once `wait_until_dead` returns.
+/// caller, so it dies with it and its death reaches a caller that traps
+/// exits as a message.
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
@@ -58,6 +67,7 @@ pub fn start(
   let relay = label(url)
   let builder =
     stratus.new(req, Nil)
+    |> stratus.with_connect_timeout(connect_timeout_ms)
     |> stratus.on_message(fn(state, msg, conn) {
       case msg {
         stratus.User(Subscribe) -> {
@@ -101,23 +111,6 @@ pub fn start(
 /// Ask the connection to publish an event on its socket.
 pub fn publish(connection: Connection, published: event.Event) -> Nil {
   process.send(connection, stratus.to_user_message(Publish(published)))
-}
-
-/// Block until the connection process exits. `start` links the connection
-/// actor to its caller, so a caller that traps exits receives exactly one
-/// EXIT per death, normal or abnormal. EXIT messages left behind by earlier
-/// failed starts name a different process and are skipped, so they cannot be
-/// mistaken for the death of the live connection.
-pub fn wait_until_dead(pid: Pid) -> Nil {
-  let exits =
-    process.new_selector()
-    |> process.select_trapped_exits(fn(exit) { exit })
-  let process.ExitMessage(from, _reason) =
-    process.selector_receive_forever(exits)
-  case from == pid {
-    True -> Nil
-    False -> wait_until_dead(pid)
-  }
 }
 
 /// Decode one relay message: verified events go to `handle_event`,

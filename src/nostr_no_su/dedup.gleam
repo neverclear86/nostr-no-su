@@ -9,9 +9,9 @@
 //// a fresh one is started, so between `capacity` and `2 * capacity` recent
 //// ids are remembered at any time.
 
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Name, type Subject}
 import gleam/otp/actor
-import gleam/result
+import gleam/otp/supervision.{type ChildSpecification}
 import gleam/set.{type Set}
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
@@ -51,16 +51,27 @@ type State {
   State(plugins: List(Plugin), window: Window)
 }
 
-/// Start the dispatcher for the given plugins, remembering at least
-/// `capacity` recent event ids.
-pub fn start(
+/// A child specification for the supervision tree.
+pub fn supervised(
+  name: Name(Msg),
   plugins: List(Plugin),
   capacity: Int,
-) -> Result(Subject(Msg), actor.StartError) {
+) -> ChildSpecification(Subject(Msg)) {
+  supervision.worker(fn() { start(name, plugins, capacity) })
+}
+
+/// Start the dispatcher for the given plugins, remembering at least
+/// `capacity` recent event ids. It is registered under `name` so the
+/// connections keep reaching it after a restart.
+pub fn start(
+  name: Name(Msg),
+  plugins: List(Plugin),
+  capacity: Int,
+) -> actor.StartResult(Subject(Msg)) {
   actor.new(State(plugins: plugins, window: new(capacity)))
+  |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
-  |> result.map(fn(started) { started.data })
 }
 
 /// Run the plugins for events the window has not seen, drop the rest.
