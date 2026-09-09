@@ -1,6 +1,6 @@
 import envoy
 import gleam/list
-import gleam/option.{type Option, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import nostr_no_su/nostr/filter.{type Filter, Filter}
@@ -14,6 +14,7 @@ pub type Config {
     pubkeys: List(String),
     account_keys: List(String),
     bunker_secret: Option(String),
+    database_url: Option(String),
   )
 }
 
@@ -33,8 +34,18 @@ pub fn load() -> Config {
     account_keys: envoy.get("ACCOUNT_KEYS")
       |> result.unwrap("")
       |> parse_list,
-    bunker_secret: envoy.get("BUNKER_SECRET") |> option.from_result,
+    bunker_secret: optional("BUNKER_SECRET"),
+    database_url: optional("DATABASE_URL"),
   )
+}
+
+/// 任意の環境変数を読む。docker compose は未設定の変数を空文字列として渡す
+/// ため、空文字列も未設定として扱う。
+fn optional(name: String) -> Option(String) {
+  case envoy.get(name) {
+    Ok("") | Error(Nil) -> None
+    Ok(value) -> Some(value)
+  }
 }
 
 /// バンカーが待ち受け・応答するリレー。明示的な上書きが空でなければそれを、

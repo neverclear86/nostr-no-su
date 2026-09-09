@@ -19,6 +19,7 @@ pub type Event {
   )
 }
 
+/// リレーから届く JSON オブジェクトのデコーダー。
 pub fn decoder() -> decode.Decoder(Event) {
   use id <- decode.field("id", decode.string)
   use pubkey <- decode.field("pubkey", decode.string)
@@ -30,16 +31,23 @@ pub fn decoder() -> decode.Decoder(Event) {
   decode.success(Event(id:, pubkey:, created_at:, kind:, tags:, content:, sig:))
 }
 
+/// リレーへ送る JSON オブジェクト。
 pub fn to_json(event: Event) -> Json {
   json.object([
     #("id", json.string(event.id)),
     #("pubkey", json.string(event.pubkey)),
     #("created_at", json.int(event.created_at)),
     #("kind", json.int(event.kind)),
-    #("tags", json.array(event.tags, of: json.array(_, of: json.string))),
+    #("tags", tags_json(event)),
     #("content", json.string(event.content)),
     #("sig", json.string(event.sig)),
   ])
+}
+
+/// タグの JSON 表現。NIP-01 では文字列配列の配列で、正規シリアライズでも
+/// イベント本体でも同じ形を使う。
+pub fn tags_json(event: Event) -> Json {
+  json.array(event.tags, of: json.array(_, of: json.string))
 }
 
 /// イベント id の計算に使う NIP-01 の正規シリアライズ。
@@ -50,7 +58,7 @@ pub fn serialize_for_id(event: Event) -> String {
     json.string(event.pubkey),
     json.int(event.created_at),
     json.int(event.kind),
-    json.array(event.tags, of: json.array(_, of: json.string)),
+    tags_json(event),
     json.string(event.content),
   ])
   |> json.to_string

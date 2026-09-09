@@ -10,8 +10,10 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
+import nostr_no_su/plugins/postgres_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
+import pog
 
 const secret = "s3cr3t-token"
 
@@ -60,6 +62,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
         subscriptions: fn() { [] },
       ),
     ),
+    storage: None,
     open: fake_open(reports),
     reconnect_delay_ms: 100,
   ))
@@ -236,6 +239,45 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
+/// DB に到達できなくても監視は動き続ける。到達不能なプール設定で保存サブツリーを
+/// 動かし、ツリーが起動すること、イベントが他のプラグインに届くこと、保存アクター
+/// が生きていることを確かめる。root は one_for_one なので、保存側の不調は監視側の
+/// 再起動にならない。
+pub fn monitoring_survives_an_unreachable_database_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let logger = process.new_name("test_postgres_logger")
+  let tree =
+    start_tree(app.Spec(
+      monitor: Some(
+        app.Monitor(
+          name: process.new_name("test_dedup"),
+          plugins: [
+            plugin.Plugin(name: "test", handle: process.send(seen, _)),
+            postgres_logger.new(logger),
+          ],
+          dedup_capacity: 8,
+          relay_urls: ["ws://relay.test"],
+          subscriptions: fn() { [] },
+        ),
+      ),
+      bunker: None,
+      storage: Some(app.Storage(
+        name: logger,
+        // 待ち受けのないポート。プールは起動するが接続はできない。
+        pool_config: pog.default_config(process.new_name("test_pool"))
+          |> pog.port(1),
+      )),
+      open: fake_open(reports),
+      reconnect_delay_ms: 100,
+    ))
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  deliver(event_with_id("first"))
+  assert process.receive(seen, 2000) == Ok(event_with_id("first"))
+  let assert Ok(_logger_pid) = process.named(logger)
+  stop_tree(tree)
+}
+
 /// 監視接続で受信したイベントはプラグインに届き、経由するディスパッチャーを kill
 /// した後も届き続ける。
 pub fn monitor_dispatcher_survives_being_killed_test() {
@@ -256,6 +298,7 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
         ),
       ),
       bunker: None,
+      storage: None,
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))
