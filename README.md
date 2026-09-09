@@ -54,7 +54,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 [admin] generated password for user "admin": <password>
 ```
 
-`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返すので、コンテナーの healthcheck に使える。
+`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。ただし `ADMIN_PORT=` で管理 UI を無効にすると待ち受けが無くなり healthcheck は必ず失敗するので、その構成では compose 側で `healthcheck: { disable: true }` を指定するか、`unhealthy` の表示を許容すること。
 
 待ち受けアドレスの既定は `127.0.0.1`（ループバックのみ）で、`ADMIN_BIND` で変更する。コンテナーの外へポートを公開するには `ADMIN_BIND=0.0.0.0` が必要になるが、その場合は公開範囲を別途絞ること（同梱の compose はホスト側のループバックにだけ公開する）。
 
@@ -103,12 +103,14 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 
-### ローカル開発 (Gleam 1.17+ / Erlang OTP 27+)
+### ローカル開発 (Gleam 1.17.0 / Erlang OTP 29 で検証)
 
 ```sh
 gleam run   # 実行
 gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーのループバック）
 ```
+
+CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
 Postgres ロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
 

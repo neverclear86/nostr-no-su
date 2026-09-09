@@ -2,38 +2,39 @@ services:
   nostr-no-su:
     build: .
     environment:
-      # Comma-separated relay URLs to monitor. Empty = monitoring disabled.
+      # 監視するリレー URL（カンマ区切り）。空にすると監視を無効にする。
       RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
-      # Comma-separated relays the bunker subscribes and replies on. Defaults
-      # to RELAY_URL; NIP-46-only relays (e.g. relay.nsec.app) work here.
+      # バンカーが購読・応答に使うリレー（カンマ区切り）。既定は RELAY_URL と
+      # 同じ。NIP-46 専用リレー（relay.nsec.app など）もここには指定できる。
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
       PUBKEYS: ${PUBKEYS:-}
-      # Comma-separated 64-hex private keys. Empty = bunker disabled.
-      # Prefer an untracked .env file over inline values.
+      # 64 文字の 16 進秘密鍵（カンマ区切り）。空にするとバンカーを無効にする。
+      # 値を直接書かず、追跡しない .env ファイルに置くことを推奨する。
       ACCOUNT_KEYS: ${ACCOUNT_KEYS:-}
-      # Optional. When unset, a random secret is generated per boot and the
-      # bunker:// URIs are printed to the log.
+      # 任意。未設定なら起動ごとに乱数で生成し、bunker:// URI をログに出す。
       BUNKER_SECRET: ${BUNKER_SECRET:-}
-      # Where monitored events are stored. Empty = the plugin is disabled.
-      # Must match the credentials of the postgres service below.
+      # 監視したイベントの保存先。空にするとプラグインを無効にする。下の
+      # postgres サービスの資格情報と一致させること。
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
-      # Port the admin UI listens on. Empty = the admin UI is disabled.
+      # 管理 UI の待ち受けポート。空にすると管理 UI を無効にする。その場合は
+      # イメージの HEALTHCHECK（/healthz を叩く）が必ず失敗するため、
+      # healthcheck: { disable: true } を足すか unhealthy を許容すること。
       ADMIN_PORT: ${ADMIN_PORT-8080}
-      # Inside the container the admin UI must listen on all interfaces,
-      # otherwise the published port below cannot reach it. Exposure is limited
-      # by binding the published port to the host's loopback instead.
+      # コンテナー内では全インターフェースで待ち受ける必要がある。そうしないと
+      # 下で公開したポートから届かない。露出はホスト側のループバックに限定する
+      # ことで抑える。
       ADMIN_BIND: 0.0.0.0
-      # Optional. When unset, a random password is generated per boot and
-      # printed to the log. The user name is always "admin".
+      # 任意。未設定なら起動ごとに乱数で生成してログに出す。ユーザー名は常に
+      # "admin"。
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      # Public URL of the admin UI, used to build the approval page URL sent to
-      # clients as auth_url. Defaults to http://localhost:<ADMIN_PORT>; set it
-      # when clients reach the admin UI through another host or a proxy.
+      # 管理 UI の公開 URL。クライアントへ auth_url として渡す承認ページの URL を
+      # 組み立てるのに使う。既定は http://localhost:<ADMIN_PORT>。別のホストや
+      # プロキシー越しに管理 UI へ到達する構成では明示的に設定する。
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
     ports:
-      # Published on the host's loopback only: the admin UI speaks plain HTTP
-      # and shows bunker:// URIs that contain the connection secret. To reach it
-      # from elsewhere, put a TLS-terminating reverse proxy in front of it.
+      # ホストのループバックにだけ公開する。管理 UI は平文 HTTP で、接続
+      # シークレットを含む bunker:// URI を表示するため。外部から到達させるときは
+      # TLS を終端するリバースプロキシーを前に置くこと。
       - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
     depends_on:
       postgres:
@@ -46,8 +47,8 @@ services:
       POSTGRES_USER: nostr
       POSTGRES_PASSWORD: nostr
       POSTGRES_DB: nostr_no_su
-    # The port is deliberately not published: only the app needs the database,
-    # and it reaches it over the compose network.
+    # ポートは意図的に公開しない。DB を使うのはアプリだけで、compose の
+    # ネットワーク越しに到達できる。
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
