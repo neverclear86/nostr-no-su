@@ -5,11 +5,17 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/io
+import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
-import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/engine.{type Session}
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/time
+
+/// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
+/// これを超えるのはアクターが詰まっているときだけ。
+const call_timeout_ms = 5000
 
 pub type Msg {
   /// バンカー接続のいずれかで受信した kind 24133 イベント。
@@ -21,6 +27,24 @@ pub type Msg {
   /// 側の責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
   /// あれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
+  /// 承認済みセッションの一覧を問い合わせる。
+  GetSessions(reply: Subject(List(Session)))
+  /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
+  /// 読まないよう、完了を待てるように応答する。
+  Revoke(signer: String, client: String, reply: Subject(Nil))
+}
+
+/// バンカーが保持する承認済みセッションの一覧。アクターが動いていなければ空。
+pub fn sessions(name: Name(Msg)) -> List(Session) {
+  named.call(name, call_timeout_ms, GetSessions)
+  |> option.unwrap([])
+}
+
+/// セッションを 1 件取り消し、反映されるまで待つ。アクターが動いていなければ
+/// 何もしない。
+pub fn revoke(name: Name(Msg), signer: String, client: String) -> Nil {
+  named.call(name, call_timeout_ms, Revoke(signer, client, _))
+  |> option.unwrap(Nil)
 }
 
 type State {
@@ -48,10 +72,19 @@ pub fn start(
   |> actor.start
 }
 
-/// publisher を登録するか、受信イベント 1 件をエンジンに通し、生成された応答を
-/// 全接続へ送信する。
+/// publisher の登録、セッションの照会と取り消し、あるいは受信イベント 1 件を
+/// エンジンに通して生成された応答を全接続へ送信する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
+    GetSessions(reply) -> {
+      process.send(reply, engine.sessions(state.engine))
+      actor.continue(state)
+    }
+    Revoke(signer, client, reply) -> {
+      let engine = engine.revoke(state.engine, signer, client)
+      process.send(reply, Nil)
+      actor.continue(State(..state, engine: engine))
+    }
     SetPublisher(relay_url, publish) ->
       actor.continue(
         State(

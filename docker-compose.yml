@@ -17,6 +17,20 @@ services:
       # Where monitored events are stored. Empty = the plugin is disabled.
       # Must match the credentials of the postgres service below.
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+      # Port the admin UI listens on. Empty = the admin UI is disabled.
+      ADMIN_PORT: ${ADMIN_PORT-8080}
+      # Inside the container the admin UI must listen on all interfaces,
+      # otherwise the published port below cannot reach it. Exposure is limited
+      # by binding the published port to the host's loopback instead.
+      ADMIN_BIND: 0.0.0.0
+      # Optional. When unset, a random password is generated per boot and
+      # printed to the log. The user name is always "admin".
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ports:
+      # Published on the host's loopback only: the admin UI speaks plain HTTP
+      # and shows bunker:// URIs that contain the connection secret. To reach it
+      # from elsewhere, put a TLS-terminating reverse proxy in front of it.
+      - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
     depends_on:
       postgres:
         condition: service_healthy

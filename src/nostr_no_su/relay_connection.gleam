@@ -6,16 +6,21 @@
 //// その結果、ツリー停止時にスーパーバイザーが送る exit シグナルもメッセージとして
 //// 届くようになる。`handle` は pid で両者を区別し、後者は再送出する。
 
-import gleam/erlang/process.{type ExitMessage, type Pid, type Subject}
+import gleam/erlang/process.{type ExitMessage, type Name, type Pid, type Subject}
 import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 
 /// 接続が切れた、あるいは拒否された後、再接続するまでの待ち時間。
 pub const default_reconnect_delay_ms = 5000
+
+/// 状態の問い合わせを待つ時間。接続試行はアクターのループをブロックするため、
+/// `relay_client` の connect タイムアウト（3 秒）より長く取る。
+const status_timeout_ms = 5000
 
 /// 生きている接続。切断検知のために監視するプロセスと、そこからイベントを
 /// 送信する手段を持つ。
@@ -27,10 +32,18 @@ pub type Socket {
 pub type Open =
   fn() -> Result(Socket, String)
 
-/// 接続 1 本に必要なものすべて。ログ行に付けるラベル、ソケットの開き方、新しい
-/// ソケットごとに行う処理、再接続までの待ち時間。
+/// 外から見た接続の状態。生きたソケットを保持していれば `Connected`。
+pub type Status {
+  Connected
+  Disconnected
+}
+
+/// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
+/// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、再接続までの
+/// 待ち時間。
 pub type Config {
   Config(
+    name: Name(Msg),
     relay: String,
     connect: Open,
     on_connect: fn(Socket) -> Nil,
@@ -44,6 +57,15 @@ pub type Msg {
   /// リンクしたプロセスが終了した。ソケットか、このアクターを停止させようと
   /// しているスーパーバイザーのいずれか。
   Exited(exit: ExitMessage)
+  /// 現在の接続状態を問い合わせる。管理 UI が使う。
+  GetStatus(reply: Subject(Status))
+}
+
+/// 接続アクターに現在の状態を問い合わせる。名前を保持するプロセスがない
+/// （再起動中など）、あるいは応答が返らないときは接続していないものとして扱う。
+pub fn status(name: Name(Msg)) -> Status {
+  named.call(name, status_timeout_ms, GetStatus)
+  |> option.unwrap(Disconnected)
 }
 
 type State {
@@ -59,12 +81,14 @@ pub fn supervised(config: Config) -> ChildSpecification(Subject(Msg)) {
 }
 
 /// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、URL が
-/// 1 つ不正でもサブツリー全体の起動が失敗することはない。
+/// 1 つ不正でもサブツリー全体の起動が失敗することはない。`name` で登録するため、
+/// 管理 UI は再起動をまたいで同じ宛先に状態を問い合わせられる。
 pub fn start(config: Config) -> actor.StartResult(Subject(Msg)) {
   // `start` はアクターをリンクするプロセス上で動く。スーパーバイザー配下では
   // それはスーパーバイザー自身であり、そこからの exit は停止要求を意味する。
   let parent = process.self()
   actor.new_with_initialiser(1000, fn(self) { initialise(config, parent, self) })
+  |> actor.named(config.name)
   |> actor.on_message(handle)
   |> actor.start
 }
@@ -89,10 +113,14 @@ fn initialise(
   |> Ok
 }
 
-/// ソケットを開くか、リンクしたプロセスの死に対応する。
+/// ソケットを開くか、状態を報告するか、リンクしたプロセスの死に対応する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Connect -> open(state)
+    GetStatus(reply) -> {
+      process.send(reply, current_status(state))
+      actor.continue(state)
+    }
     Exited(exit) ->
       case exit.pid == state.parent, Some(exit.pid) == state.socket {
         True, _ -> shutdown(state, exit.reason)
@@ -102,6 +130,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         // ものではない。
         False, False -> actor.continue(state)
       }
+  }
+}
+
+/// 生きたソケットを保持しているかどうか。再接続待ちの間は `Disconnected`。
+fn current_status(state: State) -> Status {
+  case state.socket {
+    Some(_pid) -> Connected
+    None -> Disconnected
   }
 }
 

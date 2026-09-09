@@ -61,6 +61,58 @@ pub fn empty_environment_variables_are_unset_test() {
   assert config.load().database_url == None
 }
 
+/// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
+pub fn admin_port_test() {
+  envoy.unset("ADMIN_PORT")
+  assert config.load().admin_port == config.Listen(8080)
+
+  envoy.set("ADMIN_PORT", "9000")
+  assert config.load().admin_port == config.Listen(9000)
+
+  envoy.set("ADMIN_PORT", " 9000 ")
+  assert config.load().admin_port == config.Listen(9000)
+
+  // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
+  envoy.set("ADMIN_PORT", "65535")
+  assert config.load().admin_port == config.Listen(65_535)
+
+  envoy.set("ADMIN_PORT", "")
+  assert config.load().admin_port == config.Disabled
+
+  envoy.unset("ADMIN_PORT")
+}
+
+/// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
+/// 検証しないと待ち受け開始時に badarg でクラッシュする。
+pub fn admin_port_rejects_invalid_values_test() {
+  let assert config.Invalid(_) = admin_port_for("not-a-port")
+  let assert config.Invalid(_) = admin_port_for("0")
+  let assert config.Invalid(_) = admin_port_for("-1")
+  let assert config.Invalid(_) = admin_port_for("65536")
+  envoy.unset("ADMIN_PORT")
+}
+
+/// 指定した `ADMIN_PORT` を設定して読み込んだ結果。
+fn admin_port_for(raw: String) -> config.AdminPort {
+  envoy.set("ADMIN_PORT", raw)
+  config.load().admin_port
+}
+
+/// `ADMIN_BIND` は未設定ならループバックのみ。ページに secret が載るため、外部へ
+/// 出すのは明示的な設定にする。
+pub fn admin_bind_test() {
+  envoy.unset("ADMIN_BIND")
+  assert config.load().admin_bind == "127.0.0.1"
+
+  envoy.set("ADMIN_BIND", "0.0.0.0")
+  assert config.load().admin_bind == "0.0.0.0"
+
+  envoy.set("ADMIN_BIND", "")
+  assert config.load().admin_bind == "127.0.0.1"
+
+  envoy.unset("ADMIN_BIND")
+}
+
 /// 監視対象の pubkey だけが異なる設定。
 fn test_config(pubkeys: List(String)) -> config.Config {
   config.Config(
@@ -70,6 +122,9 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     account_keys: [],
     bunker_secret: None,
     database_url: None,
+    admin_port: config.Disabled,
+    admin_bind: "127.0.0.1",
+    admin_password: None,
   )
 }
 

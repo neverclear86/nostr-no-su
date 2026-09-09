@@ -1,4 +1,4 @@
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process.{type Name, type Pid, type Subject}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 
 /// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
@@ -41,8 +41,18 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Open {
 
 /// 指定した connect 関数で接続アクターを起動し、再配線のたびに報告する。
 fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
+  start_named(process.new_name("test_relay"), reports, connect)
+}
+
+/// 指定した名前で接続アクターを起動する。状態の問い合わせには名前が要る。
+fn start_named(
+  name: Name(relay_connection.Msg),
+  reports: Subject(Report),
+  connect: relay_connection.Open,
+) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Config(
+      name: name,
       relay: "relay.test",
       connect: connect,
       on_connect: fn(_socket) { process.send(reports, Rewired) },
@@ -142,6 +152,40 @@ pub fn a_normal_exit_stops_the_socket_test() {
   process.send_exit(actor)
   assert died_within(actor, 1000)
   assert died_within(socket, 1000)
+}
+
+/// 管理 UI が見る接続状態は、ソケットを持っているかどうかを反映する。ソケットを
+/// kill しても、再接続が完了すれば再び `Connected` を返す。
+pub fn status_follows_the_socket_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, connects(reports))
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  assert relay_connection.status(name) == relay_connection.Connected
+
+  process.kill(socket)
+  let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  assert relay_connection.status(name) == relay_connection.Connected
+  stop(actor)
+}
+
+/// リレーに拒否されて再接続を待っている間は `Disconnected`。
+pub fn status_is_disconnected_while_retrying_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, refuses(reports))
+  assert process.receive(reports, 1000) == Ok(Refused)
+  assert relay_connection.status(name) == relay_connection.Disconnected
+  stop(actor)
+}
+
+/// 名前を保持するプロセスがなければ、接続していないものとして扱う。アクターの
+/// 再起動中に管理 UI がクラッシュしないことを保証する。
+pub fn status_of_an_unregistered_name_is_disconnected_test() {
+  let name = process.new_name("test_relay")
+  assert relay_connection.status(name) == relay_connection.Disconnected
 }
 
 /// アクターはリンク先のプロセスが終了すると自身も終了するため、スーパーバイザー

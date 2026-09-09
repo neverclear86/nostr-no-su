@@ -1,4 +1,5 @@
 import envoy
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -6,6 +7,24 @@ import gleam/string
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 
 const default_relay_url = "wss://relay.damus.io"
+
+/// 管理 UI が待ち受けるポート。`ADMIN_PORT` で上書きする。
+const default_admin_port = 8080
+
+/// 管理 UI が bind するアドレス。既定はループバックのみ。ページには secret 入りの
+/// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
+const default_admin_bind = "127.0.0.1"
+
+/// `ADMIN_PORT` の解釈結果。無効化には「明示的に空にした」と「値が不正だった」の
+/// 2 通りがあり、後者だけ起動時に理由を報告する。
+pub type AdminPort {
+  /// このポートで管理 UI を待ち受ける。
+  Listen(port: Int)
+  /// 空文字列で明示的に無効化された。
+  Disabled
+  /// 値が不正なので無効にする。理由は呼び出し側が報告する。
+  Invalid(reason: String)
+}
 
 pub type Config {
   Config(
@@ -15,6 +34,9 @@ pub type Config {
     account_keys: List(String),
     bunker_secret: Option(String),
     database_url: Option(String),
+    admin_port: AdminPort,
+    admin_bind: String,
+    admin_password: Option(String),
   )
 }
 
@@ -36,6 +58,9 @@ pub fn load() -> Config {
       |> parse_list,
     bunker_secret: optional("BUNKER_SECRET"),
     database_url: optional("DATABASE_URL"),
+    admin_port: admin_port(),
+    admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
+    admin_password: optional("ADMIN_PASSWORD"),
   )
 }
 
@@ -45,6 +70,30 @@ fn optional(name: String) -> Option(String) {
   case envoy.get(name) {
     Ok("") | Error(Nil) -> None
     Ok(value) -> Some(value)
+  }
+}
+
+/// 管理 UI の待ち受けポート。未設定なら既定ポートを使う。他の任意設定と違い未設定
+/// と空文字列で意味が分かれるのは、既定で有効な設定を明示的に切れるようにする
+/// ため。範囲外の値をそのまま渡すと待ち受け開始時に badarg でクラッシュするので、
+/// ここで弾く。
+fn admin_port() -> AdminPort {
+  case envoy.get("ADMIN_PORT") {
+    Error(Nil) -> Listen(default_admin_port)
+    Ok(raw) ->
+      case string.trim(raw) {
+        "" -> Disabled
+        trimmed ->
+          case int.parse(trimmed) {
+            Ok(port) if port >= 1 && port <= 65_535 -> Listen(port)
+            _ ->
+              Invalid(
+                "ADMIN_PORT must be an integer between 1 and 65535, got \""
+                <> trimmed
+                <> "\"",
+              )
+          }
+      }
   }
 }
 

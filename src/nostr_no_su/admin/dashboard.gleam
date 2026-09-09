@@ -1,0 +1,213 @@
+//// 管理 UI の描画。状態のスナップショット（純粋なデータ）から HTML 文字列を
+//// 組み立てるだけで、プロセスにも IO にも触れない。
+////
+//// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey）
+//// ため、`escape` を通してから連結する。
+
+import gleam/list
+import gleam/string
+import nostr_no_su/bunker/engine.{type Session}
+import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
+import wisp
+
+/// ページ全体のスタイル。外部ファイルを読ませないよう最小限を埋め込む。
+const style = "body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:64rem;padding:0 1rem;line-height:1.5}
+h1{font-size:1.4rem}
+h2{font-size:1.1rem;margin-top:2rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;font-size:.9rem;vertical-align:top}
+th{background:#f4f4f4}
+code{word-break:break-all;font-size:.85rem}"
+
+/// リレーの用途。同じ URL を監視とバンカーの両方に使う構成があるため、行を
+/// 区別できるようにする。
+pub type Role {
+  Monitor
+  Bunker
+}
+
+/// リレー接続 1 本の表示内容。接続の仕様を表す `app.Relay` とは別物なので、
+/// 表の行であることを名前に出す。
+pub type RelayRow {
+  RelayRow(role: Role, url: String, status: Status)
+}
+
+/// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
+/// 出してはならない。
+pub type Account {
+  Account(signer: String, uri: String)
+}
+
+/// ダッシュボードが表示する状態の一式。
+pub type Snapshot {
+  Snapshot(
+    accounts: List(Account),
+    relays: List(RelayRow),
+    sessions: List(Session),
+    plugins: List(String),
+    storage_enabled: Bool,
+  )
+}
+
+/// スナップショットをダッシュボードのページに描画する。
+pub fn render(snapshot: Snapshot) -> String {
+  page("Dashboard", [
+    accounts_section(snapshot.accounts),
+    relays_section(snapshot.relays),
+    sessions_section(snapshot.sessions),
+    plugins_section(snapshot.plugins),
+    storage_section(snapshot.storage_enabled),
+  ])
+}
+
+/// 管理 UI 共通のページ枠。本文は組み立て済みの HTML を順に並べる。
+pub fn page(title: String, body: List(String)) -> String {
+  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+  <> "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+  <> "<title>nostr-no-su — "
+  <> escape(title)
+  <> "</title><style>"
+  <> style
+  <> "</style></head><body><h1>nostr-no-su</h1>"
+  <> string.concat(body)
+  <> "</body></html>"
+}
+
+/// アカウントと、その `bunker://` 接続 URI。
+fn accounts_section(accounts: List(Account)) -> String {
+  section(
+    "Accounts",
+    ["Signer pubkey", "Connection URI"],
+    list.map(accounts, fn(account) { [code(account.signer), code(account.uri)] }),
+    "No accounts configured.",
+  )
+}
+
+/// リレーごとの接続状態。
+fn relays_section(relays: List(RelayRow)) -> String {
+  section(
+    "Relays",
+    ["Role", "URL", "State"],
+    list.map(relays, fn(relay) {
+      [
+        escape(role_label(relay.role)),
+        code(relay.url),
+        escape(status_label(relay.status)),
+      ]
+    }),
+    "No relays configured.",
+  )
+}
+
+/// 承認済みセッションと、その取り消しボタン。
+fn sessions_section(sessions: List(Session)) -> String {
+  section(
+    "Approved sessions",
+    ["Signer", "Client", "Action"],
+    list.map(sessions, fn(session) {
+      [code(session.signer), code(session.client), revoke_form(session)]
+    }),
+    "No approved sessions.",
+  )
+}
+
+/// 監視イベントを処理するプラグイン。
+fn plugins_section(plugins: List(String)) -> String {
+  section(
+    "Plugins",
+    ["Name"],
+    list.map(plugins, fn(plugin) { [escape(plugin)] }),
+    "No plugins enabled.",
+  )
+}
+
+/// Postgres へのイベント保存が有効かどうか。
+fn storage_section(enabled: Bool) -> String {
+  "<h2>Event storage</h2><p>Postgres logger: "
+  <> escape(enabled_label(enabled))
+  <> "</p>"
+}
+
+/// 見出しと表からなる 1 節。行が無いときは表の代わりに一言を出す。セルは
+/// 組み立て済みの HTML として受け取る。
+fn section(
+  title: String,
+  headers: List(String),
+  rows: List(List(String)),
+  empty: String,
+) -> String {
+  let body = case rows {
+    [] -> "<p>" <> escape(empty) <> "</p>"
+    rows -> table(headers, rows)
+  }
+  "<h2>" <> escape(title) <> "</h2>" <> body
+}
+
+/// 見出し行付きの表。
+fn table(headers: List(String), rows: List(List(String))) -> String {
+  let head = row("th", list.map(headers, escape))
+  let body = rows |> list.map(row("td", _)) |> string.concat
+  "<table><thead>" <> head <> "</thead><tbody>" <> body <> "</tbody></table>"
+}
+
+/// 指定したセル要素（`th` / `td`）で組み立てた 1 行。
+fn row(cell: String, cells: List(String)) -> String {
+  let cells =
+    cells
+    |> list.map(fn(content) {
+      "<" <> cell <> ">" <> content <> "</" <> cell <> ">"
+    })
+    |> string.concat
+  "<tr>" <> cells <> "</tr>"
+}
+
+/// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。
+fn revoke_form(session: Session) -> String {
+  "<form method=\"post\" action=\"/sessions/revoke\">"
+  <> hidden("signer", session.signer)
+  <> hidden("client", session.client)
+  <> "<button type=\"submit\">Revoke</button></form>"
+}
+
+/// フォームで送る隠しフィールド。
+fn hidden(name: String, value: String) -> String {
+  "<input type=\"hidden\" name=\""
+  <> escape(name)
+  <> "\" value=\""
+  <> escape(value)
+  <> "\">"
+}
+
+/// 鍵や URI のように等幅で見せたい値のセル。
+fn code(value: String) -> String {
+  "<code>" <> escape(value) <> "</code>"
+}
+
+/// HTML に埋め込める形に値をエスケープする。
+fn escape(value: String) -> String {
+  wisp.escape_html(value)
+}
+
+/// リレーの用途の表示名。
+fn role_label(role: Role) -> String {
+  case role {
+    Monitor -> "monitor"
+    Bunker -> "bunker"
+  }
+}
+
+/// 接続状態の表示名。
+fn status_label(status: Status) -> String {
+  case status {
+    Connected -> "connected"
+    Disconnected -> "disconnected"
+  }
+}
+
+/// 有効・無効の表示名。
+fn enabled_label(enabled: Bool) -> String {
+  case enabled {
+    True -> "enabled"
+    False -> "disabled"
+  }
+}

@@ -7,6 +7,7 @@ import gleam/dict.{type Dict}
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/set.{type Set}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
@@ -29,6 +30,12 @@ pub type Engine {
   )
 }
 
+/// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
+/// クライアント）の組で、取り消されるまで署名を代理できる。
+pub type Session {
+  Session(signer: String, client: String)
+}
+
 pub type Outcome {
   /// クライアントへ送り返す応答イベント。
   Reply(response: Event)
@@ -46,6 +53,24 @@ pub fn new(accounts: List(#(Account, String))) -> Engine {
     |> list.map(fn(pair) { #({ pair.0 }.pubkey_hex, pair) })
     |> dict.from_list
   Engine(accounts: account_dict, authorized: set.new(), seen: dict.new())
+}
+
+/// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定
+/// するよう署名者・クライアントの順に並べる。
+pub fn sessions(engine: Engine) -> List(Session) {
+  engine.authorized
+  |> set.to_list
+  |> list.sort(fn(left, right) {
+    string.compare(left.0, right.0)
+    |> order.break_tie(string.compare(left.1, right.1))
+  })
+  |> list.map(fn(pair) { Session(signer: pair.0, client: pair.1) })
+}
+
+/// セッションの承認を取り消す。そのクライアントは再び `connect` を求められる。
+/// 承認されていない組を渡しても何も起きない。
+pub fn revoke(engine: Engine, signer: String, client: String) -> Engine {
+  Engine(..engine, authorized: set.delete(engine.authorized, #(signer, client)))
 }
 
 /// 受信イベント 1 件を処理する。検証・重複排除・ルーティングを行い、送信すべき
@@ -197,10 +222,7 @@ fn execute(
         False -> #(engine, rpc.error(request.id, "invalid secret"))
       }
     "logout" -> #(
-      Engine(
-        ..engine,
-        authorized: set.delete(engine.authorized, #(signer, client_pk_hex)),
-      ),
+      revoke(engine, signer, client_pk_hex),
       rpc.ok(request.id, "ack"),
     )
     _ ->

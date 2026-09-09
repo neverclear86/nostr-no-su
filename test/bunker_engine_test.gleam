@@ -1,5 +1,6 @@
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
@@ -395,6 +396,63 @@ pub fn logout_test() {
     decrypt_response(client, signer, response),
     "unauthorized",
   )
+}
+
+/// `connect` に成功したクライアントはセッション一覧に現れる。まだ誰も接続して
+/// いなければ一覧は空。
+pub fn sessions_lists_connected_clients_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  assert engine.sessions(new_engine()) == []
+
+  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  assert engine.sessions(engine)
+    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+}
+
+/// 一覧は署名者・クライアントの順に並ぶため、集合の走査順に左右されない。
+pub fn sessions_are_sorted_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_client_key)
+  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(engine, _) = connect(engine, other, signer, secret, 1001)
+  let sorted =
+    [client.pubkey_hex, other.pubkey_hex]
+    |> list.sort(string.compare)
+    |> list.map(fn(client) {
+      engine.Session(signer: signer.pubkey_hex, client: client)
+    })
+  assert engine.sessions(engine) == sorted
+}
+
+/// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。
+pub fn revoke_removes_the_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let engine = engine.revoke(engine, signer.pubkey_hex, client.pubkey_hex)
+  assert engine.sessions(engine) == []
+
+  let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"{}\"]}"
+  let #(_engine, outcome) =
+    engine.handle_event(engine, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "unauthorized",
+  )
+}
+
+/// 承認されていない組の取り消しは、他のセッションに影響しない。
+pub fn revoke_of_an_unknown_session_is_harmless_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_client_key)
+  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let engine = engine.revoke(engine, signer.pubkey_hex, other.pubkey_hex)
+  assert engine.sessions(engine)
+    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
 }
 
 // --- ヘルパー ---
