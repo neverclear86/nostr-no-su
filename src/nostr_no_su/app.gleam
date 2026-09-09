@@ -237,28 +237,44 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
   )
 }
 
+/// 設定されているサブツリーにだけ問い合わせ、無効なら既定値を返す。管理 UI は
+/// 一部が無効でも表示できなければならないため、無効は欠損ではなく既定値にする。
+fn if_enabled(
+  configured: Option(subtree),
+  default: answer,
+  ask: fn(subtree) -> answer,
+) -> answer {
+  configured
+  |> option.map(ask)
+  |> option.unwrap(default)
+}
+
 /// 監視サブツリーで有効なプラグインの名前。監視が無効なら空。
 fn plugin_names(monitor: Option(Monitor)) -> List(String) {
-  case monitor {
-    None -> []
-    Some(monitor) -> list.map(monitor.plugins, fn(item) { item.name })
-  }
+  use monitor <- if_enabled(monitor, [])
+  list.map(monitor.plugins, fn(item) { item.name })
 }
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。
 fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
-  let monitor = case spec.monitor {
-    None -> []
-    Some(monitor) -> statuses(dashboard.MonitorRelay, monitor.relays)
+  let monitor_rows = {
+    use monitor <- if_enabled(spec.monitor, [])
+    statuses(dashboard.MonitorRelay, monitor.relays)
   }
-  let bunker = case spec.bunker {
-    None -> []
-    Some(bunker) -> statuses(dashboard.BunkerRelay, bunker.relays)
+  let bunker_rows = {
+    use configured <- if_enabled(spec.bunker, [])
+    statuses(dashboard.BunkerRelay, configured.relays)
   }
-  list.append(monitor, bunker)
+  list.append(monitor_rows, bunker_rows)
 }
 
 /// 指定した用途のリレーそれぞれについて、接続アクターに状態を問い合わせる。
+/// 逐次に問い合わせるため待ち時間はリレー数ぶん積み上がるが、接続アクターが
+/// ループをブロックするのは `connect` の実行中だけで、その上限は `relay_client`
+/// の connect タイムアウト（3 秒）である。`relay_connection` の問い合わせ
+/// タイムアウト（5 秒）はそれを包む安全網であって通常の待ち時間ではない。数本の
+/// リレーが同時にハンドシェイク中でも管理 UI の表示が数秒遅れるだけなので、
+/// 並列化して部分的な結果を扱う複雑さは引き合わない。
 fn statuses(
   role: dashboard.Role,
   relays: List(Relay),
@@ -278,10 +294,8 @@ fn with_bunker(
   default: answer,
   ask: fn(Name(bunker.Msg)) -> answer,
 ) -> answer {
-  case config {
-    None -> default
-    Some(config) -> ask(config.name)
-  }
+  use config <- if_enabled(config, default)
+  ask(config.name)
 }
 
 /// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。

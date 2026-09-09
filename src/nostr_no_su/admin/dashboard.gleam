@@ -70,7 +70,7 @@ pub fn render(snapshot: Snapshot) -> String {
 }
 
 /// 管理 UI 共通のページ枠。本文は組み立て済みの HTML を順に並べる。
-pub fn page(title: String, body: List(String)) -> String {
+fn page(title: String, body: List(String)) -> String {
   "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
   <> "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
   <> "<title>nostr-no-su — "
@@ -218,8 +218,17 @@ pub fn approve_path(token: String) -> String {
 }
 
 /// 拒否のパス。承認ページと違い、POST でしか使わない。
-pub fn deny_path(token: String) -> String {
+fn deny_path(token: String) -> String {
   "/deny/" <> token
+}
+
+/// セッション取り消しの POST 先のパスセグメント。ルーティング（`admin`）と
+/// フォームの action が同じ定義を見るよう、パスの知識はここにだけ置く。
+pub const revoke_segments = ["sessions", "revoke"]
+
+/// セッション取り消しの POST 先。
+fn revoke_path() -> String {
+  "/" <> string.join(revoke_segments, "/")
 }
 
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。
@@ -239,7 +248,9 @@ fn decision_form(action: String, label: String) -> String {
 
 /// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。
 fn revoke_form(session: Session) -> String {
-  "<form method=\"post\" action=\"/sessions/revoke\">"
+  "<form method=\"post\" action=\""
+  <> escape(revoke_path())
+  <> "\">"
   <> hidden("signer", session.signer)
   <> hidden("client", session.client)
   <> "<button type=\"submit\">Revoke</button></form>"

@@ -110,9 +110,10 @@ fn route(
 ) -> Response {
   case segments {
     [] -> show_dashboard(context, request)
-    ["sessions", "revoke"] -> revoke_session(context, request)
     ["approve", token] -> approve_connection(context, request, token)
     ["deny", token] -> deny_connection(context, request, token)
+    segments if segments == dashboard.revoke_segments ->
+      revoke_session(context, request)
     _ -> wisp.not_found()
   }
 }

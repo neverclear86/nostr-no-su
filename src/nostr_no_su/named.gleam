@@ -8,6 +8,12 @@ import gleam/option.{type Option, None}
 /// 再起動中に送信したリレー接続（`on_connect` 内。サブツリーの再起動を 1 回
 /// 消費する）や stratus プロセス（イベントハンドラー内。接続がソケットを失う）
 /// が巻き添えで落ちてしまう。
+///
+/// 名前の確認から送信までの間に宛先が終了する窓は残る。これを閉じるには
+/// `erlang:send/2` を FFI で呼んで `badarg` を握り潰すしかなく、gleam_erlang が
+/// 名前付き subject に使う封筒の形（`#(name, message)`）へ依存することになる。
+/// 窓に当たって失われるのはその瞬間のメッセージ 1 件で、送信元はいずれも再接続
+/// または再送で回復するため、内部表現への依存を増やさずこの実装を選んでいる。
 pub fn send(name: Name(msg), message: msg) -> Nil {
   case process.named(name) {
     Ok(_pid) -> process.send(process.named_subject(name), message)

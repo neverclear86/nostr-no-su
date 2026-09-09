@@ -62,11 +62,10 @@ fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
     crypto.hmac(<<t1:bits, nonce:bits, 2>>, crypto.Sha256, conversation_key)
   let t3 =
     crypto.hmac(<<t2:bits, nonce:bits, 3>>, crypto.Sha256, conversation_key)
-  let full = <<t1:bits, t2:bits, t3:bits>>
-  case bit_array.slice(full, 0, 76) {
-    Ok(keys) -> keys
-    Error(_) -> full
-  }
+  // HMAC-SHA256 を 3 回連結した 96 バイトから、先頭 76 バイトを取る。
+  let assert <<keys:bytes-size(76), _rest:bits>> = <<t1:bits, t2:bits, t3:bits>>
+    as "hkdf-expand output must be 96 bytes"
+  keys
 }
 
 /// 新たに生成したランダムな nonce で暗号化する。
