@@ -45,67 +45,64 @@ pub fn events_without_tags_become_an_empty_json_array_test() {
 
 /// DDL はすべて `IF NOT EXISTS` 付きで、起動のたびに実行してよい。
 pub fn schema_statements_are_idempotent_test() {
-  assert list.length(postgres_logger.schema) == 3
   assert list.all(postgres_logger.schema, string.contains(_, "IF NOT EXISTS"))
 }
 
-/// テーブルは id を主キーに、tags を jsonb で持つ。
-pub fn the_events_table_is_keyed_by_event_id_test() {
+/// 挿入する列とプレースホルダーが、`insert` がパラメーターを積む順序と対応して
+/// いる。`tags` だけが jsonb へのキャストを伴う。
+pub fn the_insert_lists_columns_in_parameter_order_test() {
   assert string.contains(
-    postgres_logger.create_events_table,
-    "id text PRIMARY KEY",
+    postgres_logger.insert_sql,
+    "(id, pubkey, created_at, kind, tags, content, sig)",
   )
   assert string.contains(
-    postgres_logger.create_events_table,
-    "tags jsonb NOT NULL",
+    postgres_logger.insert_sql,
+    "VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)",
   )
 }
 
-/// インデックスは pubkey の時系列と kind に張る。
-pub fn indexes_cover_pubkey_timelines_and_kinds_test() {
-  assert string.contains(
-    postgres_logger.create_pubkey_index,
-    "ON events (pubkey, created_at)",
-  )
-  assert string.contains(postgres_logger.create_kind_index, "ON events (kind)")
-}
-
-/// 挿入は重複した id を黙って読み飛ばし、tags は jsonb にキャストする。
+/// 挿入は重複した id を黙って読み飛ばす。
 pub fn inserts_ignore_duplicate_ids_test() {
   assert string.contains(
     postgres_logger.insert_sql,
     "ON CONFLICT (id) DO NOTHING",
   )
-  assert string.contains(postgres_logger.insert_sql, "$5::jsonb")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。
-pub fn events_are_stored_once_per_id_test() {
+/// ときだけ実行する。スキーマ作成の冪等性・挿入・重複無視・jsonb としての
+/// 読み戻し・インデックスの作成を一巡して確かめる。
+///
+/// 同じ DB に対して `gleam test` を並行実行することは想定していない
+/// （`CREATE TABLE IF NOT EXISTS` 同士が競合しうる）。CI は専用の service を
+/// 使い、ローカルでも使い捨てのコンテナーを使うこと。
+pub fn postgres_round_trip_test() {
   case envoy.get("TEST_DATABASE_URL") {
     Ok("") | Error(Nil) ->
       io.println(
         "[postgres_logger] TEST_DATABASE_URL is not set; skipping the integration test",
       )
-    Ok(database_url) -> store_and_read_back(database_url)
+    Ok(database_url) -> round_trip(database_url)
   }
 }
 
 /// スキーマ作成・挿入・重複挿入・後片付けを一巡させる。
-fn store_and_read_back(database_url: String) -> Nil {
+fn round_trip(database_url: String) -> Nil {
   let db = connect(database_url)
   // 2 回続けて実行しても失敗しない。
   let assert Ok(Nil) = postgres_logger.ensure_schema(db)
   let assert Ok(Nil) = postgres_logger.ensure_schema(db)
+  assert index_names(db)
+    == ["events_kind", "events_pkey", "events_pubkey_created_at"]
 
   let stored = sample_event(random_id())
-  assert postgres_logger.store(db, stored) == Ok(1)
+  assert postgres_logger.insert(db, stored) == Ok(1)
   assert count_rows(db, stored.id) == 1
   // タグが jsonb として保存されていれば、Postgres 側から要素を取り出せる。
-  assert first_tag_names(db, stored.id) == ["p"]
+  assert first_tag_name(db, stored.id) == Ok("p")
 
   // 同じイベントを別のリレーから受け直しても行は増えない。
-  assert postgres_logger.store(db, stored) == Ok(0)
+  assert postgres_logger.insert(db, stored) == Ok(0)
   assert count_rows(db, stored.id) == 1
 
   delete_row(db, stored.id)
@@ -128,6 +125,21 @@ fn random_id() -> String {
   |> string.lowercase
 }
 
+/// `events` に張られているインデックスの名前（主キーを含む）。
+fn index_names(db: pog.Connection) -> List(String) {
+  let decoder = {
+    use name <- decode.field(0, decode.string)
+    decode.success(name)
+  }
+  let assert Ok(returned) =
+    pog.query(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'events' ORDER BY indexname",
+    )
+    |> pog.returning(decoder)
+    |> pog.execute(on: db)
+  returned.rows
+}
+
 /// 指定した id で保存されている行数。
 fn count_rows(db: pog.Connection, id: String) -> Int {
   let assert Ok(returned) =
@@ -138,7 +150,7 @@ fn count_rows(db: pog.Connection, id: String) -> Int {
 }
 
 /// 保存された tags の 1 つ目のタグ名。jsonb 列として問い合わせる。
-fn first_tag_names(db: pog.Connection, id: String) -> List(String) {
+fn first_tag_name(db: pog.Connection, id: String) -> Result(String, Nil) {
   let decoder = {
     use name <- decode.field(0, decode.string)
     decode.success(name)
@@ -148,7 +160,10 @@ fn first_tag_names(db: pog.Connection, id: String) -> List(String) {
     |> pog.parameter(pog.text(id))
     |> pog.returning(decoder)
     |> pog.execute(on: db)
-  returned.rows
+  case returned.rows {
+    [name] -> Ok(name)
+    _ -> Error(Nil)
+  }
 }
 
 /// テストが入れた行を消す。

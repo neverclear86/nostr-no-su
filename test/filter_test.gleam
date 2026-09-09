@@ -1,3 +1,4 @@
+import envoy
 import gleam/json
 import gleam/option.{None, Some}
 import nostr_no_su/config
@@ -45,6 +46,19 @@ pub fn pick_bunker_relays_falls_back_to_monitor_relays_test() {
 /// どちらのリストも未設定なら、バンカーは既定のリレーを使う。
 pub fn pick_bunker_relays_defaults_when_nothing_configured_test() {
   assert config.pick_bunker_relays([], []) == ["wss://relay.damus.io"]
+}
+
+/// 空文字列の環境変数は未設定として扱う。docker compose は未設定の変数を空文字列
+/// として渡すため、`DATABASE_URL=` で保存を無効にできる必要がある。
+pub fn empty_environment_variables_are_unset_test() {
+  envoy.set("DATABASE_URL", "")
+  assert config.load().database_url == None
+
+  envoy.set("DATABASE_URL", "postgres://user@host:5432/db")
+  assert config.load().database_url == Some("postgres://user@host:5432/db")
+
+  envoy.unset("DATABASE_URL")
+  assert config.load().database_url == None
 }
 
 /// 監視対象の pubkey だけが異なる設定。

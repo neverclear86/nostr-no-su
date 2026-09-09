@@ -62,7 +62,7 @@ pub type Bunker {
 /// アクターからなる。監視サブツリーとは別にしているのは、DB が落ちて再起動が
 /// 起きてもリレーの購読を巻き込まないため。
 pub type Storage {
-  Storage(name: Name(postgres_logger.Msg), pool: pog.Config)
+  Storage(name: Name(postgres_logger.Msg), pool_config: pog.Config)
 }
 
 /// 監視・バンカー・イベント保存のどれを動かすか、接続をどう開くか、接続が
@@ -157,10 +157,10 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
 /// する。プールが再起動するとロガーも再起動し、スキーマの確認からやり直す。
 fn storage_tree(config: Storage) -> Builder {
   subtree()
-  |> supervisor.add(pog.supervised(config.pool))
+  |> supervisor.add(pog.supervised(config.pool_config))
   |> supervisor.add(postgres_logger.supervised(
     config.name,
-    config.pool.pool_name,
+    config.pool_config.pool_name,
   ))
 }
 

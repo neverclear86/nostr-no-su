@@ -57,22 +57,31 @@ fn spec(loaded: Config) -> app.Spec {
 fn storage_spec(loaded: Config) -> Option(app.Storage) {
   case loaded.database_url {
     None -> {
-      io.println("[postgres] no DATABASE_URL set; event storage disabled")
+      io.println(
+        "[postgres_logger] no DATABASE_URL set; event storage disabled",
+      )
       None
     }
     Some(database_url) ->
-      case pog.url_config(process.new_name("nostr_no_su_pool"), database_url) {
+      case
+        pog.url_config(
+          process.new_name("nostr_no_su_postgres_logger_pool"),
+          database_url,
+        )
+      {
         Error(Nil) -> {
           io.println(
-            "[postgres] DATABASE_URL is not a valid postgres URL;"
+            "[postgres_logger] DATABASE_URL is not a valid postgres URL;"
             <> " event storage disabled",
           )
           None
         }
-        Ok(pool) ->
+        Ok(pool_config) ->
           Some(app.Storage(
             name: process.new_name("nostr_no_su_postgres_logger"),
-            pool: pool,
+            // 書き込むのは保存アクター 1 つだけで逐次実行なので、接続は少なく
+            // 保つ。既定の 10 本は DB 側の接続枠と idle ping を無駄に使う。
+            pool_config: pog.pool_size(pool_config, 2),
           ))
       }
   }

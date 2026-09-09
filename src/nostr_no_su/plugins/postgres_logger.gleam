@@ -4,10 +4,13 @@
 //// そこからは DB を触らず専用のアクターへ `Store` を送るだけにする。ディスパッ
 //// チャーは DB の応答を待たず、他のプラグインの処理も止まらない。
 ////
-//// 挿入の失敗はログに出して捨てる。リレー監視を巻き込んで落とさないためであり、
-//// 接続の復旧は pog のプールに任せる。
+//// DB に到達できない間は保存を止め、届いたイベントは数えて捨てる。リレー監視を
+//// 巻き込んで落とさないためであり、接続の復旧は pog のプールに任せる。挿入を
+//// 試み続けると 1 件ごとにチェックアウト待ちでアクターがブロックし、メール
+//// ボックスが際限なく伸びてしまう。
 
 import gleam/erlang/process.{type Name, type Subject}
+import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
@@ -20,9 +23,15 @@ import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
 import pog
 
-/// スキーマ作成に失敗してから作り直すまでの待ち時間。アプリが DB より先に立ち
-/// 上がった場合に備える。
+/// 保存を止めてから作り直しを試みるまでの待ち時間。DDL は `IF NOT EXISTS` 付き
+/// なので、再試行がそのまま疎通確認を兼ねる。
 const schema_retry_delay_ms = 5000
+
+/// DDL のタイムアウト。既存のテーブルへインデックスを張る場合、既定の 5 秒では
+/// 足りないことがある。DB に到達できないときはこの時間だけチェックアウトを待つ
+/// が、待つのは再試行 1 回につき 1 度で、その間に届いたイベントは未準備の経路で
+/// 捨てられる。
+const schema_timeout_ms = 30_000
 
 /// イベントを保存するテーブル。`received_at` は取り込んだ時刻で、イベント自身の
 /// `created_at`（リレーが配送する Unix 秒）とは別に持つ。
@@ -69,12 +78,23 @@ pub type Row {
 pub type Msg {
   /// 保存するイベント。
   Store(event: Event)
-  /// スキーマ作成を試みる。初期化時と、失敗後の再試行タイマーから送られる。
+  /// スキーマ作成を試みる。初期化時と、保存を止めたあとの再試行タイマーから
+  /// 送られる。
   EnsureSchema
 }
 
+/// 保存できる状態かどうか。
+type Availability {
+  /// 保存できる。
+  Ready
+  /// DB に到達できない。`dropped` はこの間に捨てたイベント数で、復帰したときに
+  /// まとめて報告する。`reported` は理由をすでにログへ出したかどうかで、再試行
+  /// のたびに同じ行を並べないために持つ。
+  Unavailable(dropped: Int, reported: Bool)
+}
+
 type State {
-  State(db: pog.Connection, self: Subject(Msg), ready: Bool)
+  State(db: pog.Connection, self: Subject(Msg), availability: Availability)
 }
 
 /// イベントを保存アクターへ転送するプラグイン。アクターは名前で参照するため、
@@ -113,69 +133,114 @@ fn initialise(
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   process.send(self, EnsureSchema)
-  State(db: pog.named_connection(pool), self: self, ready: False)
+  State(
+    db: pog.named_connection(pool),
+    self: self,
+    availability: Unavailable(dropped: 0, reported: False),
+  )
   |> actor.initialised
   |> actor.returning(self)
   |> Ok
 }
 
-/// スキーマを用意するか、イベントを 1 件保存する。
+/// スキーマを用意するか、イベントを 1 件保存する。どちらも次の可用性を返す。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
-  case msg {
-    EnsureSchema -> actor.continue(State(..state, ready: prepare(state)))
-    Store(incoming) -> {
-      persist(state, incoming)
-      actor.continue(state)
-    }
+  let availability = case msg {
+    EnsureSchema -> prepare(state)
+    Store(incoming) -> persist(state, incoming)
   }
+  actor.continue(State(..state, availability: availability))
 }
 
-/// テーブルとインデックスを作成し、保存を始められるかどうかを返す。失敗しても
-/// クラッシュせず、再試行を予約する。DB がアプリより後に立ち上がる、あるいは
-/// 一時的に落ちている状況が普通にあるため。
-fn prepare(state: State) -> Bool {
+/// テーブルとインデックスを作成する。失敗してもクラッシュせず、保存を止めた
+/// まま再試行を予約する。DB がアプリより後に立ち上がる、あるいは一時的に落ちて
+/// いる状況が普通にあるため。
+fn prepare(state: State) -> Availability {
   case ensure_schema(state.db) {
-    Ok(Nil) -> {
-      log("schema ready")
-      True
-    }
-    Error(error) -> {
-      log("schema setup failed: " <> string.inspect(error) <> "; retrying")
-      let _ =
-        process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
-      False
-    }
+    Ok(Nil) -> resume(state.availability)
+    Error(error) -> suspend(state, error, dropped(state.availability))
   }
 }
 
-/// イベント 1 件を保存する。まだスキーマを作れていない場合と挿入に失敗した場合
-/// はログに出して捨てる。監視を止めるより取りこぼす方がましだという判断。
-fn persist(state: State, incoming: Event) -> Nil {
-  case state.ready {
-    False -> log("schema not ready; dropped event " <> incoming.id)
-    True ->
-      case store(state.db, incoming) {
-        Ok(_inserted) -> Nil
-        Error(error) ->
+/// イベント 1 件を保存する。保存を止めている間は数えて捨てるだけにして、DB の
+/// チェックアウト待ちでアクターをブロックしない。
+fn persist(state: State, incoming: Event) -> Availability {
+  case state.availability {
+    Unavailable(dropped:, reported:) ->
+      Unavailable(dropped: dropped + 1, reported:)
+    Ready ->
+      case insert(state.db, incoming) {
+        Ok(_inserted) -> Ready
+        // 到達できないなら、このイベントを 1 件目として保存を止める。
+        Error(pog.ConnectionUnavailable as error)
+        | Error(pog.QueryTimeout as error) -> suspend(state, error, 1)
+        // それ以外はこのイベント固有の問題なので、保存は続ける。
+        Error(error) -> {
           log(
             "insert failed for event "
             <> incoming.id
             <> ": "
             <> string.inspect(error),
           )
+          Ready
+        }
       }
+  }
+}
+
+/// 保存を再開する。止まっている間に捨てた件数があれば、まとめて報告する。
+fn resume(availability: Availability) -> Availability {
+  case availability {
+    Unavailable(dropped:, ..) if dropped > 0 ->
+      log(
+        "database is back; dropped "
+        <> int.to_string(dropped)
+        <> " events while it was unavailable",
+      )
+    _ -> log("schema ready")
+  }
+  Ready
+}
+
+/// 保存を止めて再試行を予約する。理由は復帰するまでに 1 回だけ報告し、以降の
+/// 再試行では同じ行を並べない。
+fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
+  let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
+  let reported = case state.availability {
+    Unavailable(reported: True, ..) -> True
+    _ -> {
+      log(
+        "database unavailable: "
+        <> string.inspect(error)
+        <> "; retrying every "
+        <> int.to_string(schema_retry_delay_ms)
+        <> "ms",
+      )
+      True
+    }
+  }
+  Unavailable(dropped: dropped, reported: reported)
+}
+
+/// 保存を止めてから捨てたイベント数。
+fn dropped(availability: Availability) -> Int {
+  case availability {
+    Ready -> 0
+    Unavailable(dropped:, ..) -> dropped
   }
 }
 
 /// テーブルとインデックスを作成する。すでにあれば何もしない。
 pub fn ensure_schema(db: pog.Connection) -> Result(Nil, pog.QueryError) {
   use statement <- list.try_each(schema)
-  pog.query(statement) |> pog.execute(on: db)
+  pog.query(statement)
+  |> pog.timeout(schema_timeout_ms)
+  |> pog.execute(on: db)
 }
 
 /// イベントを 1 行挿入し、実際に挿入された行数を返す。すでに保存済みの id
 /// なら 0 になる。
-pub fn store(
+pub fn insert(
   db: pog.Connection,
   incoming: Event,
 ) -> Result(Int, pog.QueryError) {
@@ -208,5 +273,5 @@ pub fn to_row(incoming: Event) -> Row {
 
 /// プラグインのログ行。
 fn log(message: String) -> Nil {
-  io.println("[postgres] " <> message)
+  io.println("[postgres_logger] " <> message)
 }
