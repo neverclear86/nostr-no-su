@@ -9,10 +9,10 @@ NIP-46 で鍵を管理するバンカーであり、自分のアカウントの�
 NIP-46 リモート署名バンカーが動作する。クライアント（nsec.app / noStrudel 等）が `bunker://` URI で接続し、暗号化されたリクエスト経由で署名を委任できる。あわせて、設定したアカウントのイベントを監視してプラグインで処理する。
 
 - **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる
-- **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクタに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
+- **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構、コンソールロガー
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
-- **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
+- **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
 ## 使い方
 
@@ -64,7 +64,7 @@ docker compose up --build
 
 ```sh
 gleam run   # 実行
-gleam test  # テスト（BIP-340 / NIP-44 公式ベクタ + バンカーのループバック）
+gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーのループバック）
 ```
 
 ## 構成
@@ -79,7 +79,7 @@ src/nostr_no_su/crypto/secp256k1.gleam       -- 点演算・鍵導出・ECDH
 src/nostr_no_su/crypto/bip340.gleam          -- BIP-340 Schnorr 署名 / 検証
 src/nostr_no_su/crypto/nip44.gleam           -- NIP-44 v2 暗号化
 src/nostr_no_su/nostr/event.gleam            -- Event 型・コーデック・ID 計算・署名
-src/nostr_no_su/nostr/filter.gleam           -- 購読フィルタ
+src/nostr_no_su/nostr/filter.gleam           -- 購読フィルター
 src/nostr_no_su/nostr/message.gleam          -- クライアント⇄リレーのメッセージ
 src/nostr_no_su/relay_client.gleam           -- WebSocket クライアント (stratus)
 src/nostr_no_su/relay_connection.gleam       -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
@@ -95,7 +95,7 @@ vendor/stratus/                              -- パッチ済み stratus（下記
 
 ## 設計上の判断・既知の制約
 
-- **スーパービジョンツリー**: root（one_for_one）の下に監視サブツリーとバンカーサブツリーを置き、各サブツリーは rest_for_one。先頭の actor（重複排除ディスパッチャ / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
+- **スーパービジョンツリー**: root（one_for_one）の下に監視サブツリーとバンカーサブツリーを置き、各サブツリーは rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
 - **監視の重複排除は世代式スライディングウィンドウ**: 複数リレーが同じイベントを配送するため、直近のイベント id（上限 4096〜8192 件）を覚えてプラグインには 1 回だけ渡す。再接続時のストアドイベント再配送もこれで吸収する
