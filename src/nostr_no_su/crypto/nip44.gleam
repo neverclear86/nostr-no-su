@@ -82,7 +82,7 @@ pub fn encrypt(
 }
 
 /// 決定的に暗号化するための差し込み口。`nonce` は 32 バイトの nonce。テスト
-/// ベクタは nonce を固定するため、テストはこちらを直接呼ぶ。
+/// ベクターは nonce を固定するため、テストはこちらを直接呼ぶ。
 pub fn encrypt_with_nonce(
   plaintext: String,
   conversation_key: BitArray,

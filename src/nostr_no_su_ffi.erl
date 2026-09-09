@@ -44,7 +44,7 @@ ecdh_x(CompressedPub, Priv) ->
 mod_pow(Base, Exp, Mod) ->
     binary:decode_unsigned(crypto:mod_pow(Base, Exp, Mod)).
 
-%% ブロックカウンタ 0 と 12 バイト nonce による RFC 8439 の ChaCha20。OTP の IV
+%% ブロックカウンター 0 と 12 バイト nonce による RFC 8439 の ChaCha20。OTP の IV
 %% レイアウトは <<Counter:32/little, Nonce:12/binary>>。XOR ストリーム暗号なので
 %% 同じ呼び出しで暗号化と復号の両方を行える。
 chacha20(Key, Nonce12, Data) ->

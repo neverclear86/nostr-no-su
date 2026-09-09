@@ -2,7 +2,7 @@ import gleam/list
 import nostr_no_su/nostr/event.{type Event}
 
 /// プラグインは監視対象アカウントから受信したすべてのイベントを処理する。
-/// 状態を持つプラグインは、`handle` クロージャの中で自前のアクターへの
+/// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
 /// `Subject` を捕捉できる。
 pub type Plugin {
   Plugin(name: String, handle: fn(Event) -> Nil)

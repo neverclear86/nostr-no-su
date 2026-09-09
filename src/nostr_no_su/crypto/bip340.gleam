@@ -28,7 +28,7 @@ pub fn sign(
 }
 
 /// 決定的に署名するための差し込み口。`aux` は 32 バイトの補助乱数。BIP-340 の
-/// 公式テストベクタは `aux` を固定するため、テストはこちらを直接呼ぶ。
+/// 公式テストベクターは `aux` を固定するため、テストはこちらを直接呼ぶ。
 pub fn sign_with_aux(
   privkey: BitArray,
   message: BitArray,

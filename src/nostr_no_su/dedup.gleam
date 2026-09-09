@@ -59,7 +59,7 @@ pub fn supervised(
   supervision.worker(fn() { start(name, plugins, capacity) })
 }
 
-/// 指定したプラグイン向けのディスパッチャを起動し、直近のイベント id を少なく
+/// 指定したプラグイン向けのディスパッチャーを起動し、直近のイベント id を少なく
 /// とも `capacity` 件記憶する。`name` で登録するため、再起動後も接続から到達
 /// できる。
 pub fn start(
@@ -73,7 +73,8 @@ pub fn start(
   |> actor.start
 }
 
-/// ウィンドウが未受理のイベントについてプラグインを実行し、それ以外は破棄する。
+/// ウィンドウがまだ見ていないイベントについてプラグインを実行し、それ以外は
+/// 破棄する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   let Incoming(incoming) = msg
   case insert(state.window, incoming.id) {

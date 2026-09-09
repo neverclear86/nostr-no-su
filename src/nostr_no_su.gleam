@@ -13,7 +13,7 @@ import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 
-/// 監視ディスパッチャがリレー間の重複排除のために記憶する直近イベント id の
+/// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
 /// 件数（正確な上限は `dedup` を参照）。
 const dedup_capacity = 4096
 
@@ -30,7 +30,7 @@ pub fn main() -> Nil {
     "nostr-no-su — monitor relays: " <> describe_relays(loaded.relay_urls),
   )
   // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
-  // クラッシュさせる。コンテナに再起動を促すのは終了コードである。
+  // クラッシュさせる。コンテナーに再起動を促すのは終了コードである。
   let assert Ok(_started) = app.start(spec(loaded))
     as "supervision tree failed to start"
   process.sleep_forever()

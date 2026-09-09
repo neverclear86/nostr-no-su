@@ -22,7 +22,7 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 /// 偽リレーがテストへ報告する内容。
 type Report {
   /// 接続が開かれた。所有するアクター、監視対象のソケットプロセス、そして実際の
-  /// ソケットと同じようにサブツリーへイベントを流し込むハンドラを伴う。
+  /// ソケットと同じようにサブツリーへイベントを流し込むハンドラーを伴う。
   Opened(connection: Pid, socket: Pid, deliver: fn(Event) -> Nil)
   /// イベントが送信された。送信に使われたソケットを伴う。
   Published(socket: Pid, event: Event)
@@ -143,7 +143,7 @@ fn response_body(response: Event) -> String {
   text
 }
 
-/// 指定した id を持つ最小限のイベント。ディスパッチャは id しか見ない。
+/// 指定した id を持つ最小限のイベント。ディスパッチャーは id しか見ない。
 fn event_with_id(id: String) -> Event {
   Event(
     id: id,
@@ -236,7 +236,7 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
-/// 監視接続で受信したイベントはプラグインに届き、経由するディスパッチャを kill
+/// 監視接続で受信したイベントはプラグインに届き、経由するディスパッチャーを kill
 /// した後も届き続ける。
 pub fn monitor_dispatcher_survives_being_killed_test() {
   let reports = process.new_subject()

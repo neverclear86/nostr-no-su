@@ -39,8 +39,7 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Open {
   }
 }
 
-/// 指定した connect 関数で接続アクターを起動する。再配線のたびに報告し、テスト
-/// 終了時には停止させる。
+/// 指定した connect 関数で接続アクターを起動し、再配線のたびに報告する。
 fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Config(
@@ -132,7 +131,7 @@ pub fn exit_from_an_unrelated_process_is_ignored_test() {
   stop(actor)
 }
 
-/// Normal な exit はリンク越しにソケットへ伝播しないため、アクターは終了時に
+/// normal な exit はリンク越しにソケットへ伝播しないため、アクターは終了時に
 /// 自分でソケットを停止する。
 pub fn a_normal_exit_stops_the_socket_test() {
   let reports = process.new_subject()

@@ -3,7 +3,7 @@ import gleam/option.{None, Some}
 import nostr_no_su/config
 import nostr_no_su/nostr/filter.{Filter}
 
-/// フィールドを何も設定しないフィルタは空の JSON オブジェクトになる。
+/// フィールドを何も設定しないフィルターは空の JSON オブジェクトになる。
 pub fn empty_filter_encodes_to_empty_object_test() {
   assert filter.new() |> filter.to_json |> json.to_string == "{}"
 }
@@ -70,7 +70,7 @@ pub fn to_filter_with_pubkeys_test() {
     == Filter(..filter.new(), authors: Some(["a"]))
 }
 
-/// バンカーのフィルタは、署名者宛の直近の kind 24133 イベントを選択する。
+/// バンカーのフィルターは、署名者宛の直近の kind 24133 イベントを選択する。
 pub fn bunker_filter_test() {
   assert config.bunker_filter(["pk1", "pk2"], 1000)
     == Filter(

@@ -72,9 +72,8 @@ pub fn escaping_test() {
     == "8e84a9f722b367f45b2240f00937a466c000123deb6d1d999b2f7bbcaf12a57f"
 }
 
-/// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した
-/// ものなので、このテストは本実装の正規シリアライズ（エスケープ、UTF-8、
-/// フィールド順）をエコシステムに対して固定する。
+/// `finalize` が `id` と `sig` を埋め、`verify_signature` がそれを受理し、改竄を
+/// 検出することを確認する。
 pub fn finalize_and_verify_test() {
   let assert Ok(privkey) =
     bit_array.base16_decode(string.uppercase(
@@ -100,6 +99,9 @@ pub fn finalize_and_verify_test() {
   assert !event.verify_signature(Event(..signed, content: "tampered"))
 }
 
+/// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した
+/// ものなので、このテストは本実装の正規シリアライズ（エスケープ、UTF-8、
+/// フィールド順）をエコシステムに対して固定する。
 pub fn compute_id_real_event_test() {
   let raw =
     ""

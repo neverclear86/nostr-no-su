@@ -2,7 +2,7 @@
 ////
 //// ```
 //// root (one_for_one)
-//// |-- monitor (rest_for_one): 重複排除ディスパッチャ、次にリレーごとの接続
+//// |-- monitor (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// `-- bunker  (rest_for_one): バンカーアクター、    次にリレーごとの接続
 //// ```
 ////
@@ -31,7 +31,7 @@ import nostr_no_su/relay_connection.{type Socket, Socket}
 pub type Open =
   fn(String, Subscriptions, fn(Event) -> Nil) -> Result(Socket, String)
 
-/// 監視サブツリー。プラグインを動かす重複排除ディスパッチャと、そこへイベントを
+/// 監視サブツリー。プラグインを動かす重複排除ディスパッチャーと、そこへイベントを
 /// 流し込むリレー群からなる。
 pub type Monitor {
   Monitor(
@@ -53,8 +53,8 @@ pub type Bunker {
   )
 }
 
-/// アプリの 2 つの半分のうちどれを動かすか、接続をどう開くか、接続が再接続まで
-/// どれだけ待つか。
+/// 監視とバンカーのどちらを（あるいは両方を）動かすか、接続をどう開くか、接続が
+/// 再接続までどれだけ待つか。
 pub type Spec {
   Spec(
     monitor: Option(Monitor),
@@ -69,7 +69,7 @@ pub type Spec {
 pub fn start(spec: Spec) -> actor.StartResult(supervisor.Supervisor) {
   supervisor.new(supervisor.OneForOne)
   // サブツリーより意図的に厳しく、期間も長く取る。再起動を諦め続けるサブツリー
-  // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナの
+  // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナーの
   // 再起動ポリシーに委ねる。
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
   |> add_subtree(spec.monitor, fn(config) { monitor_tree(spec, config) })
@@ -106,7 +106,7 @@ fn add_subtree(
   }
 }
 
-/// 監視サブツリー。ディスパッチャと、そこへイベントを流し込む接続群。
+/// 監視サブツリー。ディスパッチャーと、そこへイベントを流し込む接続群。
 fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   subtree()
   |> supervisor.add(dedup.supervised(
@@ -147,8 +147,8 @@ fn subtree() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// リレー URL ごとに監視下の接続を 1 つ追加する。購読とハンドラはサブツリー内で
-/// 共有する。
+/// リレー URL ごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラー
+/// はサブツリー内で共有する。
 fn add_connections(
   builder: Builder,
   spec: Spec,
@@ -172,7 +172,7 @@ fn add_connections(
 /// 名前付きアクターへ送信する。名前を保持するプロセスがなければメッセージを
 /// 捨てる。その状況で名前付き subject を使うと panic し、サブツリーの再起動中に
 /// 起きた panic は接続アクター（`on_connect` 内。サブツリーの再起動を 1 回
-/// 消費する）か stratus プロセス（イベントハンドラ内。接続がソケットを失う）に
+/// 消費する）か stratus プロセス（イベントハンドラー内。接続がソケットを失う）に
 /// 波及する。
 fn send_named(name: Name(msg), message: msg) -> Nil {
   case process.named(name) {
