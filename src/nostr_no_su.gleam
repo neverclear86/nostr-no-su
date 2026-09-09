@@ -156,9 +156,9 @@ fn load_accounts(loaded: Config) -> List(#(Account, String)) {
 fn dashboard_accounts(
   loaded: Config,
   accounts: List(#(Account, String)),
-) -> List(dashboard.Account) {
+) -> List(dashboard.AccountRow) {
   use pair <- list.map(accounts)
-  dashboard.Account(
+  dashboard.AccountRow(
     signer: { pair.0 }.pubkey_hex,
     uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, Some(pair.1)),
     auth_uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, None),
@@ -208,7 +208,7 @@ fn bunker_spec(
 /// 報告してから無効にする。
 fn admin_spec(
   loaded: Config,
-  accounts: List(dashboard.Account),
+  accounts: List(dashboard.AccountRow),
 ) -> Option(app.Admin) {
   case loaded.admin_port {
     config.Disabled -> {

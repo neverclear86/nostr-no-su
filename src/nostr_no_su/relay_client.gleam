@@ -14,9 +14,9 @@ pub type Msg {
   Publish(event: event.Event)
 }
 
-/// 起動済みの接続。操作は `publish` を通じて行い、その背後のプロセスを
-/// `relay_connection` が切断検知のために監視する。
-pub type Connection =
+/// 起動済みのリレークライアント。イベントの送信は `publish` を通じて行い、
+/// その背後のプロセスを `relay_connection` が切断検知のために監視する。
+pub type Client =
   Subject(stratus.InternalMessage(Msg))
 
 /// 開くべき購読を生成するサンク。接続・再接続のたびに再評価するため、時刻に
@@ -58,7 +58,7 @@ pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-) -> Result(Connection, String) {
+) -> Result(Client, String) {
   use req <- result.try(
     to_request(url)
     |> result.replace_error("invalid relay url: " <> url),
@@ -108,8 +108,8 @@ pub fn start(
 }
 
 /// 接続に対し、そのソケットからイベントを送信するよう依頼する。
-pub fn publish(connection: Connection, published: event.Event) -> Nil {
-  process.send(connection, stratus.to_user_message(Publish(published)))
+pub fn publish(client: Client, published: event.Event) -> Nil {
+  process.send(client, stratus.to_user_message(Publish(published)))
 }
 
 /// リレーメッセージを 1 件デコードする。検証済みイベントは `handle_event` へ

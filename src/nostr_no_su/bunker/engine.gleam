@@ -1,5 +1,5 @@
 //// NIP-46 リクエスト処理の純粋なコア。プロセスも時計も乱数も IO も持たず、現在
-//// 時刻と承認トークンは引数（`Context`）で受け取るため、すべての経路が決定的で
+//// 時刻と承認トークンは引数（`Inputs`）で受け取るため、すべての経路が決定的で
 //// ループバックテストによる単体検証ができる。`bunker.gleam` がこれをアクターで
 //// 包む。
 
@@ -31,7 +31,7 @@ pub type Engine {
     // 署名者 pubkey hex -> #(account, secret)
     accounts: Dict(String, #(Account, String)),
     // #(署名者 pubkey hex, クライアント pubkey hex)
-    authorized: Set(#(String, String)),
+    sessions: Set(#(String, String)),
     // リプレイ防止用: リクエストイベント id -> created_at
     seen: Dict(String, Int),
     // 承認待ちの接続要求: token -> Pending
@@ -44,8 +44,8 @@ pub type Engine {
 /// リクエストを 1 件処理する間だけ使う、外から注入する値。時刻も乱数もエンジンの
 /// 外で決めることで、エンジンは純粋なまま保たれる。`token` は承認待ちを作るとき
 /// だけ使う。
-pub type Context {
-  Context(now: Int, token: String)
+pub type Inputs {
+  Inputs(now: Int, token: String)
 }
 
 /// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
@@ -91,7 +91,7 @@ pub fn new(
     |> dict.from_list
   Engine(
     accounts: account_dict,
-    authorized: set.new(),
+    sessions: set.new(),
     seen: dict.new(),
     pending: dict.new(),
     auth_url: auth_url,
@@ -101,7 +101,7 @@ pub fn new(
 /// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定
 /// するよう署名者・クライアントの順に並べる。
 pub fn sessions(engine: Engine) -> List(Session) {
-  engine.authorized
+  engine.sessions
   |> set.to_list
   |> list.sort(fn(left, right) {
     string.compare(left.0, right.0)
@@ -113,7 +113,7 @@ pub fn sessions(engine: Engine) -> List(Session) {
 /// セッションの承認を取り消す。そのクライアントは再び `connect` を求められる。
 /// 承認されていない組を渡しても何も起きない。
 pub fn revoke(engine: Engine, signer: String, client: String) -> Engine {
-  Engine(..engine, authorized: set.delete(engine.authorized, #(signer, client)))
+  Engine(..engine, sessions: set.delete(engine.sessions, #(signer, client)))
 }
 
 /// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。失効した要求
@@ -137,7 +137,7 @@ pub fn approve(
   now: Int,
 ) -> Result(#(Engine, Event), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  let engine = authorize(engine, #(entry.signer, entry.client))
+  let engine = open_session(engine, #(entry.signer, entry.client))
   respond(engine, entry, rpc.ok(entry.request_id, "ack"), now)
 }
 
@@ -210,12 +210,12 @@ fn respond(
 pub fn handle_event(
   engine: Engine,
   incoming: Event,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, Outcome) {
   case incoming.kind == 24_133 {
     False -> #(engine, Ignore("not a nip-46 request"))
     True ->
-      case fresh(incoming.created_at, context.now) {
+      case fresh(incoming.created_at, inputs.now) {
         False -> #(engine, Ignore("stale or future event"))
         True ->
           case route(engine, incoming.tags) {
@@ -224,11 +224,11 @@ pub fn handle_event(
               case dict.has_key(engine.seen, incoming.id) {
                 True -> #(engine, Duplicate)
                 False -> {
-                  let engine = record_seen(engine, incoming, context.now)
+                  let engine = record_seen(engine, incoming, inputs.now)
                   case event.verify_signature(incoming) {
                     False -> #(engine, Ignore("invalid signature"))
                     True ->
-                      handle_request(engine, account, secret, incoming, context)
+                      handle_request(engine, account, secret, incoming, inputs)
                   }
                 }
               }
@@ -284,7 +284,7 @@ fn handle_request(
   account: Account,
   secret: String,
   incoming: Event,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, Outcome) {
   let client_pk_hex = incoming.pubkey
   case client_conversation_key(account, client_pk_hex) {
@@ -301,21 +301,14 @@ fn handle_request(
             Error(_) -> #(engine, Ignore("malformed request payload"))
             Ok(request) -> {
               let #(engine, response) =
-                execute(
-                  engine,
-                  account,
-                  secret,
-                  client_pk_hex,
-                  request,
-                  context,
-                )
+                execute(engine, account, secret, client_pk_hex, request, inputs)
               let reply =
                 build_reply(
                   account,
                   conversation_key,
                   client_pk_hex,
                   response,
-                  context.now,
+                  inputs.now,
                 )
               #(engine, outcome(reply))
             }
@@ -352,23 +345,22 @@ fn execute(
   secret: String,
   client_pk_hex: String,
   request: rpc.Request,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
   let signer = account.pubkey_hex
   case request.method {
-    "connect" ->
-      connect(engine, signer, secret, client_pk_hex, request, context)
+    "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
     "logout" -> #(
       revoke(engine, signer, client_pk_hex),
       rpc.ok(request.id, "ack"),
     )
     _ ->
-      case set.contains(engine.authorized, #(signer, client_pk_hex)) {
+      case set.contains(engine.sessions, #(signer, client_pk_hex)) {
         False -> #(
           engine,
           rpc.error(request.id, "unauthorized: send connect first"),
         )
-        True -> #(engine, execute_authorized(account, request, context.now))
+        True -> #(engine, execute_in_session(account, request, inputs.now))
       }
   }
 }
@@ -383,14 +375,14 @@ fn connect(
   secret: String,
   client_pk_hex: String,
   request: rpc.Request,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
   let pair = #(signer, client_pk_hex)
   case
     connect_secret(request.params) == Some(secret),
-    set.contains(engine.authorized, pair)
+    set.contains(engine.sessions, pair)
   {
-    True, _ -> #(authorize(engine, pair), rpc.ok(request.id, "ack"))
+    True, _ -> #(open_session(engine, pair), rpc.ok(request.id, "ack"))
     _, True -> #(engine, rpc.ok(request.id, "ack"))
     False, False ->
       case engine.auth_url {
@@ -399,22 +391,22 @@ fn connect(
           record_pending(
             engine,
             Pending(
-              token: context.token,
+              token: inputs.token,
               signer: signer,
               client: client_pk_hex,
               request_id: request.id,
-              created_at: context.now,
+              created_at: inputs.now,
             ),
           ),
-          rpc.auth_url(request.id, auth_url(context.token)),
+          rpc.auth_url(request.id, auth_url(inputs.token)),
         )
       }
   }
 }
 
 /// （署名者, クライアント）の組を承認済みにする。
-fn authorize(engine: Engine, pair: #(String, String)) -> Engine {
-  Engine(..engine, authorized: set.insert(engine.authorized, pair))
+fn open_session(engine: Engine, pair: #(String, String)) -> Engine {
+  Engine(..engine, sessions: set.insert(engine.sessions, pair))
 }
 
 /// 承認待ちを 1 件登録する。同じ（署名者, クライアント）の古い要求と、失効した
@@ -432,7 +424,7 @@ fn record_pending(engine: Engine, entry: Pending) -> Engine {
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。
-fn execute_authorized(
+fn execute_in_session(
   account: Account,
   request: rpc.Request,
   now: Int,

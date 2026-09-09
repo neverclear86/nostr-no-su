@@ -29,7 +29,7 @@ pub type Socket {
 }
 
 /// ソケットの開き方。再接続ロジックを WebSocket なしでテストできるよう注入する。
-pub type Open =
+pub type Connect =
   fn() -> Result(Socket, String)
 
 /// 外から見た接続の状態。生きたソケットを保持していれば `Connected`。
@@ -41,11 +41,11 @@ pub type Status {
 /// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
 /// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、再接続までの
 /// 待ち時間。
-pub type Config {
-  Config(
+pub type Settings {
+  Settings(
     name: Name(Msg),
     relay: String,
-    connect: Open,
+    connect: Connect,
     on_connect: fn(Socket) -> Nil,
     reconnect_delay_ms: Int,
   )
@@ -69,26 +69,33 @@ pub fn status(name: Name(Msg)) -> Status {
 }
 
 type State {
-  State(config: Config, parent: Pid, self: Subject(Msg), socket: Option(Pid))
+  State(
+    settings: Settings,
+    parent: Pid,
+    self: Subject(Msg),
+    socket: Option(Pid),
+  )
 }
 
 /// スーパービジョンツリー用の子仕様。ワーカーの既定の停止タイムアウト 5000ms が
 /// 適用される。`connect` の実行中はアクターがブロックされるため、それより長く
 /// ブロックしうる `connect` を注入すると、正常に停止できずハンドシェイクの
 /// 途中で kill される。
-pub fn supervised(config: Config) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(config) })
+pub fn supervised(settings: Settings) -> ChildSpecification(Subject(Msg)) {
+  supervision.worker(fn() { start(settings) })
 }
 
 /// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、URL が
 /// 1 つ不正でもサブツリー全体の起動が失敗することはない。`name` で登録するため、
 /// 管理 UI は再起動をまたいで同じ宛先に状態を問い合わせられる。
-pub fn start(config: Config) -> actor.StartResult(Subject(Msg)) {
+pub fn start(settings: Settings) -> actor.StartResult(Subject(Msg)) {
   // `start` はアクターをリンクするプロセス上で動く。スーパーバイザー配下では
   // それはスーパーバイザー自身であり、そこからの exit は停止要求を意味する。
   let parent = process.self()
-  actor.new_with_initialiser(1000, fn(self) { initialise(config, parent, self) })
-  |> actor.named(config.name)
+  actor.new_with_initialiser(1000, fn(self) {
+    initialise(settings, parent, self)
+  })
+  |> actor.named(settings.name)
   |> actor.on_message(handle)
   |> actor.start
 }
@@ -96,7 +103,7 @@ pub fn start(config: Config) -> actor.StartResult(Subject(Msg)) {
 /// ソケットの死をメッセージとして受け取れるよう exit を trap し、最初の接続試行を
 /// キューに積む。ここで接続するとスーパーバイザーの起動をブロックしてしまう。
 fn initialise(
-  config: Config,
+  settings: Settings,
   parent: Pid,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
@@ -106,7 +113,7 @@ fn initialise(
     process.new_selector()
     |> process.select(self)
     |> process.select_trapped_exits(Exited)
-  State(config: config, parent: parent, self: self, socket: None)
+  State(settings: settings, parent: parent, self: self, socket: None)
   |> actor.initialised
   |> actor.selecting(selector)
   |> actor.returning(self)
@@ -144,9 +151,9 @@ fn current_status(state: State) -> Status {
 /// ソケットを開き、新しいソケットを `on_connect` に渡す。リレーに到達できない
 /// ときは再試行を予約する。
 fn open(state: State) -> actor.Next(State, Msg) {
-  case state.config.connect() {
+  case state.settings.connect() {
     Ok(socket) -> {
-      state.config.on_connect(socket)
+      state.settings.on_connect(socket)
       actor.continue(State(..state, socket: Some(socket.pid)))
     }
     Error(reason) -> reconnect(state, "failed to connect: " <> reason)
@@ -155,10 +162,10 @@ fn open(state: State) -> actor.Next(State, Msg) {
 
 /// ソケットが失われた理由をログ出力し、次の試行を予約する。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
-  let delay = state.config.reconnect_delay_ms
+  let delay = state.settings.reconnect_delay_ms
   io.println(
     "[relay "
-    <> state.config.relay
+    <> state.settings.relay
     <> "] "
     <> reason
     <> "; reconnecting in "

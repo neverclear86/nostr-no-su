@@ -23,8 +23,8 @@ code{word-break:break-all;font-size:.85rem}"
 /// リレーの用途。同じ URL を監視とバンカーの両方に使う構成があるため、行を
 /// 区別できるようにする。
 pub type Role {
-  Monitor
-  Bunker
+  MonitorRelay
+  BunkerRelay
 }
 
 /// リレー接続 1 本の表示内容。接続の仕様を表す `app.Relay` とは別物なので、
@@ -36,8 +36,8 @@ pub type RelayRow {
 /// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
 /// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
 /// クライアントは管理 UI での承認を経てから署名を委任できる。
-pub type Account {
-  Account(signer: String, uri: String, auth_uri: String)
+pub type AccountRow {
+  AccountRow(signer: String, uri: String, auth_uri: String)
 }
 
 /// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
@@ -48,7 +48,7 @@ pub type PendingRow {
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
-    accounts: List(Account),
+    accounts: List(AccountRow),
     pending: List(PendingRow),
     relays: List(RelayRow),
     sessions: List(Session),
@@ -83,7 +83,7 @@ pub fn page(title: String, body: List(String)) -> String {
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）。
-fn accounts_section(accounts: List(Account)) -> String {
+fn accounts_section(accounts: List(AccountRow)) -> String {
   section(
     "Accounts",
     ["Signer pubkey", "Connection URI", "Connection URI (approval)"],
@@ -267,8 +267,8 @@ fn escape(value: String) -> String {
 /// リレーの用途の表示名。
 fn role_label(role: Role) -> String {
   case role {
-    Monitor -> "monitor"
-    Bunker -> "bunker"
+    MonitorRelay -> "monitor"
+    BunkerRelay -> "bunker"
   }
 }
 

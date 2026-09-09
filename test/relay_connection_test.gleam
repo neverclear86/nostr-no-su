@@ -23,7 +23,7 @@ fn spawn_socket() -> Socket {
 }
 
 /// 常に新しいソケットを返し、それを報告する connect 関数。
-fn connects(reports: Subject(Report)) -> relay_connection.Open {
+fn connects(reports: Subject(Report)) -> relay_connection.Connect {
   fn() {
     let socket = spawn_socket()
     process.send(reports, Connected(socket.pid))
@@ -32,7 +32,7 @@ fn connects(reports: Subject(Report)) -> relay_connection.Open {
 }
 
 /// 到達できないリレーを模した connect 関数。
-fn refuses(reports: Subject(Report)) -> relay_connection.Open {
+fn refuses(reports: Subject(Report)) -> relay_connection.Connect {
   fn() {
     process.send(reports, Refused)
     Error("connection refused")
@@ -40,7 +40,7 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Open {
 }
 
 /// 指定した connect 関数で接続アクターを起動し、再配線のたびに報告する。
-fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
+fn start(reports: Subject(Report), connect: relay_connection.Connect) -> Pid {
   start_named(process.new_name("test_relay"), reports, connect)
 }
 
@@ -48,10 +48,10 @@ fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
 fn start_named(
   name: Name(relay_connection.Msg),
   reports: Subject(Report),
-  connect: relay_connection.Open,
+  connect: relay_connection.Connect,
 ) -> Pid {
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Config(
+    relay_connection.start(relay_connection.Settings(
       name: name,
       relay: "relay.test",
       connect: connect,

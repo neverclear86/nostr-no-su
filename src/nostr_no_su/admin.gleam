@@ -34,7 +34,7 @@ const realm = "nostr-no-su"
 pub type Context {
   Context(
     password: String,
-    accounts: List(dashboard.Account),
+    accounts: List(dashboard.AccountRow),
     plugins: List(String),
     storage_enabled: Bool,
     relays: fn() -> List(dashboard.RelayRow),

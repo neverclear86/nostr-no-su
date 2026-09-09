@@ -84,7 +84,7 @@ pub type Admin {
     bind: String,
     port: Int,
     password: String,
-    accounts: List(dashboard.Account),
+    accounts: List(dashboard.AccountRow),
   )
 }
 
@@ -234,11 +234,11 @@ fn plugin_names(monitor: Option(Monitor)) -> List(String) {
 fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
   let monitor = case spec.monitor {
     None -> []
-    Some(monitor) -> statuses(dashboard.Monitor, monitor.relays)
+    Some(monitor) -> statuses(dashboard.MonitorRelay, monitor.relays)
   }
   let bunker = case spec.bunker {
     None -> []
-    Some(bunker) -> statuses(dashboard.Bunker, bunker.relays)
+    Some(bunker) -> statuses(dashboard.BunkerRelay, bunker.relays)
   }
   list.append(monitor, bunker)
 }
@@ -313,7 +313,7 @@ fn add_connections(
   use builder, relay <- list.fold(relays, builder)
   supervisor.add(
     builder,
-    relay_connection.supervised(relay_connection.Config(
+    relay_connection.supervised(relay_connection.Settings(
       name: relay.name,
       relay: relay_client.label(relay.url),
       connect: fn() { spec.open(relay.url, subscriptions, handle_event) },

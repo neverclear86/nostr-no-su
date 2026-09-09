@@ -129,9 +129,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     Revoke(signer, client, reply) -> {
-      let engine = engine.revoke(state.engine, signer, client)
+      let next = engine.revoke(state.engine, signer, client)
       process.send(reply, Nil)
-      actor.continue(State(..state, engine: engine))
+      actor.continue(State(..state, engine: next))
     }
     SetPublisher(relay_url, publish) ->
       actor.continue(
@@ -143,10 +143,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Incoming(incoming) -> {
       // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
       // することでエンジンは乱数を持たずに済む。
-      let context =
-        engine.Context(now: time.now_seconds(), token: random.hex(token_bytes))
-      let #(next, outcome) =
-        engine.handle_event(state.engine, incoming, context)
+      let inputs =
+        engine.Inputs(now: time.now_seconds(), token: random.hex(token_bytes))
+      let #(next, outcome) = engine.handle_event(state.engine, incoming, inputs)
       case outcome {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> Nil
