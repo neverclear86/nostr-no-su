@@ -4,7 +4,6 @@ import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
-import nostr_no_su/config.{type Config}
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
@@ -29,18 +28,27 @@ pub fn to_request(url: String) -> Result(Request(String), Nil) {
   |> request.to
 }
 
-/// Connect to the configured relay, open the given subscriptions, and pass
+/// The relay URL without its scheme, used to attribute log lines to a relay
+/// when several connections are open.
+pub fn label(url: String) -> String {
+  url
+  |> string.replace("wss://", "")
+  |> string.replace("ws://", "")
+}
+
+/// Connect to the given relay, open the given subscriptions, and pass
 /// verified events to `handle_event`. Returns the connection subject; the
 /// caller monitors it and reconnects.
 pub fn start(
-  config: Config,
+  url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
 ) -> Result(Subject(stratus.InternalMessage(Msg)), String) {
   use req <- result.try(
-    to_request(config.relay_url)
-    |> result.replace_error("invalid relay url: " <> config.relay_url),
+    to_request(url)
+    |> result.replace_error("invalid relay url: " <> url),
   )
+  let relay = label(url)
   let builder =
     stratus.new(req, Nil)
     |> stratus.on_message(fn(state, msg, conn) {
@@ -62,14 +70,16 @@ pub fn start(
           stratus.continue(state)
         }
         stratus.Text(text) -> {
-          handle_text(text, handle_event)
+          handle_text(relay, text, handle_event)
           stratus.continue(state)
         }
         stratus.Binary(_) -> stratus.continue(state)
       }
     })
     |> stratus.on_close(fn(_state, reason) {
-      io.println("[relay] connection closed: " <> string.inspect(reason))
+      io.println(
+        "[relay " <> relay <> "] connection closed: " <> string.inspect(reason),
+      )
     })
 
   case stratus.start(builder) {
@@ -81,20 +91,40 @@ pub fn start(
   }
 }
 
-fn handle_text(text: String, handle_event: fn(event.Event) -> Nil) -> Nil {
+/// Decode one relay message: verified events go to `handle_event`,
+/// everything else is logged under the relay it came from.
+fn handle_text(
+  relay: String,
+  text: String,
+  handle_event: fn(event.Event) -> Nil,
+) -> Nil {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
       case event.compute_id(received) == received.id {
         True -> handle_event(received)
         False ->
-          io.println("[relay] dropped event with invalid id: " <> received.id)
+          io.println(
+            "[relay "
+            <> relay
+            <> "] dropped event with invalid id: "
+            <> received.id,
+          )
       }
     Ok(message.RelayEose(subscription)) ->
-      io.println("[relay] end of stored events for " <> subscription)
+      io.println(
+        "[relay " <> relay <> "] end of stored events for " <> subscription,
+      )
     Ok(message.RelayOk(id, False, reason)) ->
-      io.println("[relay] rejected event " <> id <> ": " <> reason)
-    Ok(other) -> io.println("[relay] " <> string.inspect(other))
+      io.println(
+        "[relay " <> relay <> "] rejected event " <> id <> ": " <> reason,
+      )
+    Ok(other) -> io.println("[relay " <> relay <> "] " <> string.inspect(other))
     Error(_) ->
-      io.println("[relay] unrecognised message: " <> string.slice(text, 0, 120))
+      io.println(
+        "[relay "
+        <> relay
+        <> "] unrecognised message: "
+        <> string.slice(text, 0, 120),
+      )
   }
 }
