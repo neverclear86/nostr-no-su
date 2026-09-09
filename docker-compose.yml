@@ -14,4 +14,30 @@ services:
       # Optional. When unset, a random secret is generated per boot and the
       # bunker:// URIs are printed to the log.
       BUNKER_SECRET: ${BUNKER_SECRET:-}
+      # Where monitored events are stored. Empty = the plugin is disabled.
+      # Must match the credentials of the postgres service below.
+      DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nostr
+      POSTGRES_PASSWORD: nostr
+      POSTGRES_DB: nostr_no_su
+    # The port is deliberately not published: only the app needs the database,
+    # and it reaches it over the compose network.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nostr -d nostr_no_su"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

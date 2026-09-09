@@ -12,6 +12,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構、コンソールロガー
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
+- **Postgres ロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
 ## 使い方
@@ -44,11 +45,17 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 ### 監視のみ（バンカー無効）
 
-`ACCOUNT_KEYS` を空にすると v0 と同じ監視のみモードで動く:
+`ACCOUNT_KEYS` を空にすると監視のみモードで動く:
 
 ```sh
 docker compose up --build
 ```
+
+### docker compose
+
+compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたイベントは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+
+資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `DATABASE_URL` の両方を合わせること。`DATABASE_URL=` を空にすると Postgres への保存だけを無効化できる。
 
 ### 環境変数
 
@@ -59,6 +66,7 @@ docker compose up --build
 | `ACCOUNT_KEYS` | （空） | バンカーが署名するアカウントの hex 秘密鍵（カンマ区切り）。空ならバンカー無効 |
 | `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
+| `DATABASE_URL` | （空） | イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。空なら保存しない。docker compose では同梱の Postgres を指す |
 
 ### ローカル開発 (Gleam 1.17+ / Erlang OTP 27+)
 
@@ -67,37 +75,49 @@ gleam run   # 実行
 gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーのループバック）
 ```
 
+Postgres ロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
+
+```sh
+docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test gleam test
+docker rm -f nns-pg-test
+```
+
 ## 構成
 
 ```
-src/nostr_no_su.gleam                        -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
-src/nostr_no_su/app.gleam                    -- スーパービジョンツリーの構成
-src/nostr_no_su/config.gleam                 -- 環境変数からの設定読み込み
-src/nostr_no_su/dedup.gleam                  -- リレー横断のイベント重複排除
-src/nostr_no_su/time.gleam                   -- 現在時刻 (FFI)
-src/nostr_no_su/crypto/secp256k1.gleam       -- 点演算・鍵導出・ECDH
-src/nostr_no_su/crypto/bip340.gleam          -- BIP-340 Schnorr 署名 / 検証
-src/nostr_no_su/crypto/nip44.gleam           -- NIP-44 v2 暗号化
-src/nostr_no_su/nostr/event.gleam            -- Event 型・コーデック・ID 計算・署名
-src/nostr_no_su/nostr/filter.gleam           -- 購読フィルター
-src/nostr_no_su/nostr/message.gleam          -- クライアント⇄リレーのメッセージ
-src/nostr_no_su/relay_client.gleam           -- WebSocket クライアント (stratus)
-src/nostr_no_su/relay_connection.gleam       -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
-src/nostr_no_su/bunker.gleam                 -- バンカーの actor（セッション状態を保持）
-src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の純粋コア
-src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
-src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
-src/nostr_no_su/plugin.gleam                 -- プラグイン機構
-src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
-src/nostr_no_su_ffi.erl                      -- OTP crypto への FFI
-vendor/stratus/                              -- パッチ済み stratus（下記参照）
+src/nostr_no_su.gleam                         -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
+src/nostr_no_su/app.gleam                     -- スーパービジョンツリーの構成
+src/nostr_no_su/config.gleam                  -- 環境変数からの設定読み込み
+src/nostr_no_su/dedup.gleam                   -- リレー横断のイベント重複排除
+src/nostr_no_su/named.gleam                   -- 名前付きアクターへの安全な送信
+src/nostr_no_su/time.gleam                    -- 現在時刻 (FFI)
+src/nostr_no_su/crypto/secp256k1.gleam        -- 点演算・鍵導出・ECDH
+src/nostr_no_su/crypto/bip340.gleam           -- BIP-340 Schnorr 署名 / 検証
+src/nostr_no_su/crypto/nip44.gleam            -- NIP-44 v2 暗号化
+src/nostr_no_su/nostr/event.gleam             -- Event 型・コーデック・ID 計算・署名
+src/nostr_no_su/nostr/filter.gleam            -- 購読フィルター
+src/nostr_no_su/nostr/message.gleam           -- クライアント⇄リレーのメッセージ
+src/nostr_no_su/relay_client.gleam            -- WebSocket クライアント (stratus)
+src/nostr_no_su/relay_connection.gleam        -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
+src/nostr_no_su/bunker.gleam                  -- バンカーの actor（セッション状態を保持）
+src/nostr_no_su/bunker/engine.gleam           -- NIP-46 リクエスト処理の純粋コア
+src/nostr_no_su/bunker/rpc.gleam              -- JSON-RPC コーデック
+src/nostr_no_su/bunker/account.gleam          -- 鍵材料と bunker:// URI
+src/nostr_no_su/plugin.gleam                  -- プラグイン機構
+src/nostr_no_su/plugins/console_logger.gleam  -- コンソールロガープラグイン
+src/nostr_no_su/plugins/postgres_logger.gleam -- Postgres ロガープラグイン（保存 actor + スキーマ）
+src/nostr_no_su_ffi.erl                       -- OTP crypto への FFI
+vendor/stratus/                               -- パッチ済み stratus（下記参照）
 ```
 
 ## 設計上の判断・既知の制約
 
-- **スーパービジョンツリー**: root（one_for_one）の下に監視サブツリーとバンカーサブツリーを置き、各サブツリーは rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
+- **スーパービジョンツリー**: root（one_for_one）の下に監視・バンカー・イベント保存のサブツリーを置き、各サブツリーは rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
+- **イベント保存は独立したサブツリー**: pog の接続プールと保存 actor は監視サブツリーとは別の子として root（one_for_one）にぶら下げる。DB が落ちて再起動が起きてもリレーの購読を巻き込まないため。挿入の失敗はログに出して捨て、接続の復旧は pog のプールに任せる
 - **監視の重複排除は世代式スライディングウィンドウ**: 複数リレーが同じイベントを配送するため、直近のイベント id（上限 4096〜8192 件）を覚えてプラグインには 1 回だけ渡す。再接続時のストアドイベント再配送もこれで吸収する
 - **サイナー鍵 = ユーザー鍵**: 仕様で許可されている。別鍵にすると再起動で URI が無効化されるため v0 では同一にしている
 - **secret は再利用可**: 仕様は single-use だが、セッションがインメモリのため再起動でオンボーディングが壊れないよう、正しい secret を知るクライアントの接続を許可する
@@ -117,5 +137,5 @@ stratus 3.0.0 はハンドシェイクで `permessage-deflate` を必ずオフ�
 - [x] バンカーのマルチリレー対応（URI に複数 `relay=`、応答は全リレーへ発行）
 - [x] スーパービジョンツリー
 - [ ] 管理 UI での接続承認（auth_url フロー）
-- [ ] Postgres へイベントを保存するロガープラグイン
+- [x] Postgres へイベントを保存するロガープラグイン
 - [ ] 管理 UI（Gleam / wisp）

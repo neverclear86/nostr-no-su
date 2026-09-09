@@ -55,6 +55,7 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     pubkeys: pubkeys,
     account_keys: [],
     bunker_secret: None,
+    database_url: None,
   )
 }
 

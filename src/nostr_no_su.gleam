@@ -9,9 +9,12 @@ import nostr_no_su/app
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/config.{type Config}
+import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugins/console_logger
+import nostr_no_su/plugins/postgres_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
+import pog
 
 /// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
 /// 件数（正確な上限は `dedup` を参照）。
@@ -39,16 +42,47 @@ pub fn main() -> Nil {
 /// 読み込んだ設定に対して動かすツリー。プロセス名はここで一度だけ生成して下へ
 /// 渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 fn spec(loaded: Config) -> app.Spec {
+  let storage = storage_spec(loaded)
   app.Spec(
-    monitor: monitor_spec(loaded),
+    monitor: monitor_spec(loaded, storage),
     bunker: bunker_spec(loaded),
+    storage: storage,
     open: app.open_websocket,
     reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
   )
 }
 
+/// イベント保存サブツリーの仕様。`DATABASE_URL` が未設定、あるいは解釈できない
+/// ときは保存を無効にし、監視は従来どおり動かす。
+fn storage_spec(loaded: Config) -> Option(app.Storage) {
+  case loaded.database_url {
+    None -> {
+      io.println("[postgres] no DATABASE_URL set; event storage disabled")
+      None
+    }
+    Some(database_url) ->
+      case pog.url_config(process.new_name("nostr_no_su_pool"), database_url) {
+        Error(Nil) -> {
+          io.println(
+            "[postgres] DATABASE_URL is not a valid postgres URL;"
+            <> " event storage disabled",
+          )
+          None
+        }
+        Ok(pool) ->
+          Some(app.Storage(
+            name: process.new_name("nostr_no_su_postgres_logger"),
+            pool: pool,
+          ))
+      }
+  }
+}
+
 /// 設定されたリレーの監視サブツリー。監視対象がなければ None。
-fn monitor_spec(loaded: Config) -> Option(app.Monitor) {
+fn monitor_spec(
+  loaded: Config,
+  storage: Option(app.Storage),
+) -> Option(app.Monitor) {
   case loaded.relay_urls {
     [] -> {
       io.println("[main] no monitor relays configured; monitoring disabled")
@@ -58,12 +92,21 @@ fn monitor_spec(loaded: Config) -> Option(app.Monitor) {
       Some(
         app.Monitor(
           name: process.new_name("nostr_no_su_dedup"),
-          plugins: [console_logger.new()],
+          plugins: plugins(storage),
           dedup_capacity: dedup_capacity,
           relay_urls: relay_urls,
           subscriptions: fn() { [#("nostr-no-su", config.to_filter(loaded))] },
         ),
       )
+  }
+}
+
+/// 監視イベントを処理するプラグイン。保存が有効なときだけ Postgres ロガーを
+/// 足す。ロガーはアクターを名前で参照するので、アクターより先に組み立ててよい。
+fn plugins(storage: Option(app.Storage)) -> List(Plugin) {
+  case storage {
+    None -> [console_logger.new()]
+    Some(storage) -> [console_logger.new(), postgres_logger.new(storage.name)]
   }
 }
 

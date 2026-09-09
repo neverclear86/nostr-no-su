@@ -60,6 +60,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
         subscriptions: fn() { [] },
       ),
     ),
+    storage: None,
     open: fake_open(reports),
     reconnect_delay_ms: 100,
   ))
@@ -256,6 +257,7 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
         ),
       ),
       bunker: None,
+      storage: None,
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))
