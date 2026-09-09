@@ -1,18 +1,16 @@
 import gleam/bit_array
 import gleam/crypto
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import nostr_no_su/bunker
+import nostr_no_su/app
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/config.{type Config}
-import nostr_no_su/dedup
-import nostr_no_su/nostr/event
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/relay_client
+import nostr_no_su/relay_connection
 import nostr_no_su/time
 
 /// How many recent event ids the monitor dispatcher remembers for
@@ -23,52 +21,67 @@ const dedup_capacity = 4096
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
 fn ensure_ssl_started() -> Nil
 
-/// Start the bunker, then one connection per monitor and bunker relay, and
-/// idle: each connection runs its own reconnect loop in a separate process.
+/// Start the supervision tree for the configured relays and accounts, then
+/// idle: from here on every process is supervised, restarted and rewired by
+/// the tree rather than by this one.
 pub fn main() -> Nil {
   ensure_ssl_started()
   let loaded = config.load()
   io.println(
     "nostr-no-su — monitor relays: " <> describe_relays(loaded.relay_urls),
   )
-  let bunker = setup_bunker(loaded)
-  start_monitors(loaded)
-  case bunker.subject {
-    Some(subject) ->
-      start_bunker_connections(loaded, bunker.signer_pubkeys, subject)
-    None -> Nil
-  }
+  // A tree that will not start means a bug or a broken configuration, so
+  // crash rather than idle in a half-started process: the exit code is what
+  // tells the container to restart.
+  let assert Ok(_started) = app.start(spec(loaded))
+    as "supervision tree failed to start"
   process.sleep_forever()
 }
 
-/// Render a relay list for the startup log.
-fn describe_relays(relay_urls: List(String)) -> String {
-  case relay_urls {
-    [] -> "(none)"
-    urls -> string.join(urls, ", ")
-  }
-}
-
-/// The bunker parts of the running system: the actor subject to rewire on
-/// reconnect, and the signer pubkeys to subscribe for.
-type BunkerSetup {
-  BunkerSetup(
-    subject: Option(Subject(bunker.Msg)),
-    signer_pubkeys: List(String),
+/// The tree to run for the loaded configuration. The process names are
+/// created here once and passed down, so a restarted actor re-registers the
+/// name its connections send to.
+fn spec(loaded: Config) -> app.Spec {
+  app.Spec(
+    monitor: monitor_spec(loaded),
+    bunker: bunker_spec(loaded),
+    open: app.open_websocket,
+    reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
   )
 }
 
-/// Start the bunker actor for the configured accounts and log one connection
-/// URI per account. Any failure downgrades to monitor-only mode.
-fn setup_bunker(loaded: Config) -> BunkerSetup {
+/// The monitoring subtree for the configured relays, or nothing when there
+/// are none to watch.
+fn monitor_spec(loaded: Config) -> Option(app.Monitor) {
+  case loaded.relay_urls {
+    [] -> {
+      io.println("[main] no monitor relays configured; monitoring disabled")
+      None
+    }
+    relay_urls ->
+      Some(
+        app.Monitor(
+          name: process.new_name("nostr_no_su_dedup"),
+          plugins: [console_logger.new()],
+          dedup_capacity: dedup_capacity,
+          relay_urls: relay_urls,
+          subscriptions: fn() { [#("nostr-no-su", config.to_filter(loaded))] },
+        ),
+      )
+  }
+}
+
+/// The bunker subtree for the configured accounts, logging one connection URI
+/// per account. Without usable accounts the app runs monitor-only.
+fn bunker_spec(loaded: Config) -> Option(app.Bunker) {
   case account.load_all(loaded.account_keys) {
     Error(reason) -> {
       io.println("[bunker] disabled: " <> reason)
-      BunkerSetup(None, [])
+      None
     }
     Ok([]) -> {
       io.println("[bunker] no ACCOUNT_KEYS set; monitor-only mode")
-      BunkerSetup(None, [])
+      None
     }
     Ok(accounts) -> {
       let with_secrets =
@@ -79,19 +92,23 @@ fn setup_bunker(loaded: Config) -> BunkerSetup {
           <> account.bunker_uri(pair.0, loaded.bunker_relay_urls, pair.1),
         )
       })
-      case bunker.start(engine.new(with_secrets)) {
-        Ok(subject) ->
-          BunkerSetup(
-            subject: Some(subject),
-            signer_pubkeys: list.map(accounts, fn(account) {
-              account.pubkey_hex
-            }),
-          )
-        Error(_) -> {
-          io.println("[bunker] failed to start; monitor-only mode")
-          BunkerSetup(None, [])
-        }
-      }
+      let signer_pubkeys =
+        list.map(accounts, fn(account) { account.pubkey_hex })
+      Some(
+        app.Bunker(
+          name: process.new_name("nostr_no_su_bunker"),
+          engine: engine.new(with_secrets),
+          relay_urls: loaded.bunker_relay_urls,
+          subscriptions: fn() {
+            [
+              #(
+                "bunker",
+                config.bunker_filter(signer_pubkeys, time.now_seconds() - 60),
+              ),
+            ]
+          },
+        ),
+      )
     }
   }
 }
@@ -107,109 +124,10 @@ fn secret_for(loaded: Config) -> String {
   }
 }
 
-/// Open one monitor connection per configured relay. All connections feed the
-/// dedup dispatcher, so plugins see each event once no matter how many relays
-/// deliver it.
-fn start_monitors(loaded: Config) -> Nil {
-  case loaded.relay_urls {
-    [] -> io.println("[main] no monitor relays configured; monitoring disabled")
-    urls ->
-      case dedup.start([console_logger.new()], dedup_capacity) {
-        Ok(dispatcher) -> {
-          let subscriptions = fn() {
-            [#("nostr-no-su", config.to_filter(loaded))]
-          }
-          list.each(urls, fn(url) {
-            spawn_relay_loop(
-              url,
-              subscriptions,
-              fn(incoming) {
-                process.send(dispatcher, dedup.Incoming(incoming))
-              },
-              fn(_connection) { Nil },
-            )
-          })
-        }
-        Error(_) ->
-          io.println("[main] failed to start dispatcher; monitoring disabled")
-      }
+/// Render a relay list for the startup log.
+fn describe_relays(relay_urls: List(String)) -> String {
+  case relay_urls {
+    [] -> "(none)"
+    urls -> string.join(urls, ", ")
   }
-}
-
-/// The bunker's own connections, one per bunker relay: only the NIP-46
-/// subscription runs on them, so bunker-only relays (e.g. relay.nsec.app)
-/// that reject other subscriptions stay usable. See `bunker.SetPublisher`
-/// for how responses are published back.
-fn start_bunker_connections(
-  loaded: Config,
-  signer_pubkeys: List(String),
-  subject: Subject(bunker.Msg),
-) -> Nil {
-  let subscriptions = fn() {
-    [#("bunker", config.bunker_filter(signer_pubkeys, time.now_seconds() - 60))]
-  }
-  list.each(loaded.bunker_relay_urls, fn(url) {
-    spawn_relay_loop(
-      url,
-      subscriptions,
-      fn(incoming) { process.send(subject, bunker.Incoming(incoming)) },
-      fn(connection) { rewire_publisher(subject, url, connection) },
-    )
-  })
-}
-
-/// Run a reconnect loop in its own process. The websocket actor is linked to
-/// the loop process and exits abnormally on abrupt socket loss (e.g.
-/// `SocketClosed` when a relay is killed); trapping exits turns that into a
-/// message so the loop reconnects instead of taking the whole app down.
-fn spawn_relay_loop(
-  url: String,
-  subscriptions: relay_client.Subscriptions,
-  handle_event: fn(event.Event) -> Nil,
-  on_connect: fn(relay_client.Connection) -> Nil,
-) -> Nil {
-  process.spawn(fn() {
-    process.trap_exits(True)
-    relay_loop(url, subscriptions, handle_event, on_connect)
-  })
-  Nil
-}
-
-/// Connect, run `on_connect` on the live socket (e.g. to rewire the bunker's
-/// publisher), then block until the connection dies and reconnect after a
-/// short pause.
-fn relay_loop(
-  url: String,
-  subscriptions: relay_client.Subscriptions,
-  handle_event: fn(event.Event) -> Nil,
-  on_connect: fn(relay_client.Connection) -> Nil,
-) -> Nil {
-  let relay = relay_client.label(url)
-  case relay_client.start(url, subscriptions, handle_event) {
-    Ok(connection) -> {
-      let assert Ok(pid) = process.subject_owner(connection)
-      on_connect(connection)
-      relay_client.wait_until_dead(pid)
-    }
-    Error(reason) ->
-      io.println("[main " <> relay <> "] failed to connect: " <> reason)
-  }
-  io.println("[main " <> relay <> "] reconnecting in 5s...")
-  process.sleep(5000)
-  relay_loop(url, subscriptions, handle_event, on_connect)
-}
-
-/// Point the bunker's publisher for this relay at the freshly connected
-/// socket, replacing the one installed before the last disconnect.
-fn rewire_publisher(
-  subject: Subject(bunker.Msg),
-  relay_url: String,
-  connection: relay_client.Connection,
-) -> Nil {
-  process.send(
-    subject,
-    bunker.SetPublisher(relay_url, fn(response) {
-      relay_client.publish(connection, response)
-    }),
-  )
 }
