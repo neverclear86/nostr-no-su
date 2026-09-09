@@ -54,23 +54,23 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 [admin] generated password for user "admin": <password>
 ```
 
-`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返すので、コンテナーの healthcheck に使える。
+`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
 待ち受けアドレスの既定は `127.0.0.1`（ループバックのみ）で、`ADMIN_BIND` で変更する。コンテナーの外へポートを公開するには `ADMIN_BIND=0.0.0.0` が必要になるが、その場合は公開範囲を別途絞ること（同梱の compose はホスト側のループバックにだけ公開する）。
 
-> ⚠️ **平文 HTTP である**: Basic 認証の資格情報は暗号化されずに送られ、ページには署名権限そのものである secret 入りの `bunker://` URI が表示される。localhost か Docker ネットワーク内での利用を前提とし、外部に公開するときは必ずリバースプロキシで TLS を終端すること。
+> ⚠️ **平文 HTTP である**: Basic 認証の資格情報は暗号化されずに送られ、ページには署名権限そのものである secret 入りの `bunker://` URI が表示される。localhost か Docker ネットワーク内での利用を前提とし、外部に公開するときは必ずリバースプロキシーで TLS を終端すること。
 
 #### 接続の承認（auth_url フロー）
 
 secret を持たない `bunker://` URI（ダッシュボードの「Connection URI (approval)」の列）で接続すると、バンカーはその場では承認せず、NIP-46 の `auth_url` 応答で承認ページの URL をクライアントへ返す。クライアントはその URL をブラウザーで開き、管理 UI にログインして内容（署名者・クライアント pubkey・経過時間）を確認したうえで承認または拒否する。承認するとバンカーは元のリクエストと同じ id で `ack` を返し、待っていたクライアントの接続が完了する。拒否するとエラーを返す。
 
-承認ページの URL は `ADMIN_BASE_URL` を土台に `<base>/approve/<token>` として組み立てる（既定は `http://localhost:<ADMIN_PORT>`）。クライアントのブラウザーから開ける URL である必要があるため、リバースプロキシの背後に置くときや別のホストから使うときは公開 URL を設定すること。管理 UI を無効（`ADMIN_PORT=`）にすると承認フローも無効になり、secret の一致しない `connect` は従来どおり `invalid secret` で拒否する。
+承認ページの URL は `ADMIN_BASE_URL` を土台に `<base>/approve/<token>` として組み立てる（既定は `http://localhost:<ADMIN_PORT>`）。クライアントのブラウザーから開ける URL である必要があるため、リバースプロキシーの背後に置くときや別のホストから使うときは公開 URL を設定すること。管理 UI を無効（`ADMIN_PORT=`）にすると承認フローも無効になり、secret の一致しない `connect` は従来どおり `invalid secret` で拒否する。
 
 承認される前にクライアントが再読み込みして `connect` を送り直した場合、承認待ちは最新の要求に置き換わる（同じクライアントの保留が並ばないようにするため）。先に受け取った `auth_url` のページは 404 になるので、新しく開かれた方の承認ページを使う。
 
 承認待ちはダッシュボードの「Pending connections」からも承認・拒否でき、10 分で失効する。一度承認したクライアントは、以後 secret 無しで `connect` し直しても承認を求められない（取り消すには「Approved sessions」の Revoke を使う）。
 
-状態を変えるリクエスト（`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`）は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシを置く場合は **`Host` ヘッダーをそのまま転送すること**。書き換えるとブラウザーからの POST が 400 になる。
+状態を変えるリクエスト（`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`）は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシーを置く場合は **`Host` ヘッダーをそのまま転送すること**。書き換えるとブラウザーからの POST が 400 になる。
 
 ### 監視のみ（バンカー無効）
 
@@ -103,12 +103,14 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 
-### ローカル開発 (Gleam 1.17+ / Erlang OTP 27+)
+### ローカル開発 (Gleam 1.17.0 / Erlang OTP 29 で検証)
 
 ```sh
 gleam run   # 実行
 gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーのループバック）
 ```
+
+CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
 Postgres ロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
 

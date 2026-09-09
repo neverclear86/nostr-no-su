@@ -8,6 +8,7 @@ pub type Plugin {
   Plugin(name: String, handle: fn(Event) -> Nil)
 }
 
+/// イベント 1 件をすべてのプラグインに渡す。プラグインは登録順に実行する。
 pub fn dispatch(plugins: List(Plugin), event: Event) -> Nil {
   list.each(plugins, fn(plugin) { plugin.handle(event) })
 }

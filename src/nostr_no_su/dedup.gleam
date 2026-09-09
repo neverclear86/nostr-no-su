@@ -52,9 +52,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   let Incoming(incoming) = msg
   case window.insert(state.window, incoming.id) {
     Error(Nil) -> actor.continue(state)
-    Ok(window) -> {
+    Ok(next) -> {
       plugin.dispatch(state.plugins, incoming)
-      actor.continue(State(..state, window: window))
+      actor.continue(State(..state, window: next))
     }
   }
 }

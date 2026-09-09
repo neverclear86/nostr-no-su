@@ -15,6 +15,7 @@ ensure_ssl_started() ->
     {ok, _} = application:ensure_all_started(ssl),
     nil.
 
+%% 現在時刻の Unix タイムスタンプ（秒）。
 now_seconds() ->
     erlang:system_time(second).
 
@@ -50,5 +51,6 @@ mod_pow(Base, Exp, Mod) ->
 chacha20(Key, Nonce12, Data) ->
     crypto:crypto_one_time(chacha20, Key, <<0:32, Nonce12/binary>>, Data, true).
 
+%% バイト列を符号なしビッグエンディアンの整数として読む。
 int_from_bytes(Bin) ->
     binary:decode_unsigned(Bin).

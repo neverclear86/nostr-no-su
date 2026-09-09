@@ -1,13 +1,7 @@
 import nostr_no_su/crypto/bip340
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
-
-/// テストベクターの 16 進文字列をバイト列にする。ベクターは正しい前提なので、
-/// デコードできないのはテスト自体の誤りとして扱う。
-fn bytes(text: String) -> BitArray {
-  let assert Ok(decoded) = hex.decode(text)
-  decoded
-}
+import support/vector.{bytes}
 
 /// BIP-340 の公式ベクター 0 の秘密鍵から、同じ x-only 公開鍵を導く。
 pub fn xonly_pubkey_vector0_test() {

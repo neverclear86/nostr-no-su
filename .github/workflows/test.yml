@@ -3,7 +3,6 @@ name: test
 on:
   push:
     branches:
-      - master
       - main
   pull_request:
 
@@ -11,6 +10,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
+      # 統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が設定されている
+      # ときだけ postgres_logger のテストが実行される。
       postgres:
         image: postgres:17-alpine
         env:
@@ -31,8 +32,8 @@ jobs:
           otp-version: "29"
           gleam-version: "1.17.0"
           rebar3-version: "3"
-          # elixir-version: "1"
       - run: gleam deps download
+      - run: gleam build --warnings-as-errors
       - run: gleam test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test

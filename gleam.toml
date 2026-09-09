@@ -1,25 +1,19 @@
 name = "nostr_no_su"
 version = "1.0.0"
+description = "Nostr bunker (NIP-46) and utility server on the BEAM"
+repository = { type = "github", user = "neverclear86", repo = "nostr-no-su" }
 
-# Fill out these fields if you intend to generate HTML documentation or publish
-# your project to the Hex package manager.
-#
-# description = ""
-# licences = ["Apache-2.0"]
-# repository = { type = "github", user = "", repo = "" }
-# links = [{ title = "Website", href = "" }]
-#
-# For a full reference of all the available options, you can have a look at
-# https://gleam.run/writing-gleam/gleam-toml/.
+# Hex には公開しないアプリケーションなので、公開のときだけ必要になる licences と
+# links は設定していない。
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
 gleam_http = ">= 4.3.0 and < 5.0.0"
-# Vendored with a one-line patch: the permessage-deflate offer is removed
-# because gramps 6.0.1 crashes on fragmented compressed messages.
-# See vendor/stratus/src/stratus.gleam.
+# 1 行だけ修正した stratus を vendor している。permessage-deflate のオファーを
+# 削除したもので、gramps 6.0.1 が分割された圧縮メッセージでクラッシュするのを
+# 避けるため。vendor/stratus/src/stratus.gleam を参照。
 stratus = { path = "./vendor/stratus" }
 envoy = ">= 1.2.0 and < 2.0.0"
 gleam_crypto = ">= 1.6.0 and < 2.0.0"
