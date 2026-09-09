@@ -9,8 +9,11 @@ import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
 import stratus
 
+/// リレー接続に対する指示。stratus のユーザーメッセージとして送る。
 pub type Msg {
+  /// 設定された購読をすべて開き直す。接続直後に送る。
   Subscribe
+  /// イベントを 1 件このソケットから発行する。
   Publish(event: event.Event)
 }
 

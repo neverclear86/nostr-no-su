@@ -11,6 +11,7 @@ import gleam/int
 import gleam/string
 import nostr_no_su/crypto/secp256k1
 
+/// 暗号化・復号を拒否した理由。
 pub type Nip44Error {
   InvalidKey
   InvalidPlaintextLength
@@ -19,6 +20,8 @@ pub type Nip44Error {
   MacVerificationFailed
 }
 
+/// ブロックカウンター 0、12 バイト nonce の ChaCha20。ストリーム暗号なので
+/// 暗号化と復号のどちらにも同じ呼び出しを使う。
 @external(erlang, "nostr_no_su_ffi", "chacha20")
 fn ffi_chacha20(key: BitArray, nonce: BitArray, data: BitArray) -> BitArray
 
@@ -47,6 +50,7 @@ pub fn calc_padded_len(unpadded_len: Int) -> Int {
   }
 }
 
+/// 正の整数を表すのに必要なビット数。0 以下は 0。
 fn bit_length(x: Int) -> Int {
   case x <= 0 {
     True -> 0
@@ -117,6 +121,8 @@ pub fn encrypt_with_nonce(
   }
 }
 
+/// base64 のペイロードを復号する。先頭が `#` のものは NIP-44 v0 の予約表現で、
+/// 対応しないバージョンとして拒否する。
 pub fn decrypt(
   payload: String,
   conversation_key: BitArray,
@@ -131,6 +137,8 @@ pub fn decrypt(
   }
 }
 
+/// 復号したバイト列を `version || nonce || ciphertext || mac` として読む。
+/// 長さが仕様の範囲外のものはここで弾く。
 fn decrypt_bytes(
   decoded: BitArray,
   conversation_key: BitArray,
@@ -160,6 +168,7 @@ fn decrypt_bytes(
   }
 }
 
+/// MAC を検証してから本文を復号する。MAC が一致しないものは復号しない。
 fn decrypt_verified(
   conversation_key: BitArray,
   nonce: BitArray,
@@ -183,6 +192,8 @@ fn decrypt_verified(
   }
 }
 
+/// 長さプレフィックス付きのパディングを外す。宣言された長さと、パディング後の
+/// 全長が仕様どおりであることを確かめる。
 fn unpad(padded: BitArray) -> Result(String, Nip44Error) {
   case padded {
     <<unpadded_len:size(16), rest:bits>> -> {

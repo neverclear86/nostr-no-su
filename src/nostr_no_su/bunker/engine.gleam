@@ -78,6 +78,7 @@ pub type Session {
   Session(signer: String, client: String)
 }
 
+/// 受信イベント 1 件を処理した結果。
 pub type Outcome {
   /// クライアントへ送り返す応答イベント。
   Reply(response: Event)

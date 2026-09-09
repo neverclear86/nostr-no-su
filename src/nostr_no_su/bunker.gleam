@@ -26,6 +26,7 @@ const call_timeout_ms = 5000
 /// 取り違えないよう推測できない長さにする。
 const token_bytes = 16
 
+/// バンカーアクターが受け取るメッセージ。
 pub type Msg {
   /// バンカー接続のいずれかで受信した kind 24133 イベント。
   Incoming(event: Event)
@@ -92,6 +93,8 @@ fn call_decision(
   |> option.unwrap(Error("bunker is not running"))
 }
 
+/// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と
+/// 生きた接続の送信手段だけを持つ。
 type State {
   State(engine: engine.Engine, publishers: Dict(String, fn(Event) -> Nil))
 }

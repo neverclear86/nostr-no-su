@@ -79,6 +79,7 @@ pub type Row {
   )
 }
 
+/// 保存アクターが受け取るメッセージ。
 pub type Msg {
   /// 保存するイベント。
   Store(event: Event)
@@ -97,6 +98,7 @@ type Availability {
   Unavailable(dropped: Int, reported: Bool)
 }
 
+/// 保存アクターが保持する状態。
 type State {
   State(db: pog.Connection, self: Subject(Msg), availability: Availability)
 }

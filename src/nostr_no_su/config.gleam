@@ -27,6 +27,7 @@ pub type AdminPort {
   Invalid(reason: String)
 }
 
+/// 環境変数から読み込んだ設定の全体。
 pub type Config {
   Config(
     relay_urls: List(String),

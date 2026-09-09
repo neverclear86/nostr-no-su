@@ -10,6 +10,8 @@ import gleam/uri
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 
+/// バンカーが代理で署名する 1 つのアイデンティティ。x-only 公開鍵は署名にも
+/// ルーティングにも使うため、バイト列と 16 進表現の両方を持つ。
 pub type Account {
   Account(privkey: BitArray, pubkey: BitArray, pubkey_hex: String)
 }

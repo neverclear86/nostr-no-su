@@ -9,6 +9,7 @@ fn bytes(text: String) -> BitArray {
   decoded
 }
 
+/// BIP-340 の公式ベクター 0 の秘密鍵から、同じ x-only 公開鍵を導く。
 pub fn xonly_pubkey_vector0_test() {
   let assert Ok(pk) =
     secp256k1.xonly_pubkey(bytes(
@@ -18,6 +19,7 @@ pub fn xonly_pubkey_vector0_test() {
     == "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 }
 
+/// BIP-340 の公式ベクター 1 の秘密鍵から、同じ x-only 公開鍵を導く。
 pub fn xonly_pubkey_vector1_test() {
   let assert Ok(pk) =
     secp256k1.xonly_pubkey(bytes(
@@ -27,6 +29,7 @@ pub fn xonly_pubkey_vector1_test() {
     == "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"
 }
 
+/// 0 は有効なスカラーではないため、公開鍵を導けない。
 pub fn xonly_pubkey_rejects_zero_test() {
   let assert Error(_) =
     secp256k1.xonly_pubkey(bytes(
@@ -34,6 +37,7 @@ pub fn xonly_pubkey_rejects_zero_test() {
     ))
 }
 
+/// 位数 n も範囲外なので、公開鍵を導けない。
 pub fn xonly_pubkey_rejects_order_test() {
   // n そのものは範囲外（有効なスカラーは 1..n-1）。
   let assert Error(_) =
@@ -42,6 +46,7 @@ pub fn xonly_pubkey_rejects_order_test() {
     ))
 }
 
+/// 公式ベクター 0 の署名を、同じ補助乱数で再現する。
 pub fn sign_vector0_test() {
   let assert Ok(sig) =
     bip340.sign_with_aux(
@@ -53,6 +58,7 @@ pub fn sign_vector0_test() {
     == "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca821525f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0"
 }
 
+/// 公式ベクター 1 の署名を、同じ補助乱数で再現する。
 pub fn sign_vector1_test() {
   let assert Ok(sig) =
     bip340.sign_with_aux(
@@ -64,6 +70,7 @@ pub fn sign_vector1_test() {
     == "6896bd60eeae296db48a229ff71dfe071bde413e6d43f917dc8dcf8c78de33418906d11ac976abccb20b091292bff4ea897efcb639ea871cfa95f6de339e4b0a"
 }
 
+/// 公式ベクター 2 の署名を、同じ補助乱数で再現する。
 pub fn sign_vector2_test() {
   let assert Ok(sig) =
     bip340.sign_with_aux(
@@ -75,10 +82,12 @@ pub fn sign_vector2_test() {
     == "5831aaeed7b44bb74e5eab94ba9d4294c49bcf2a60728d8b4c200f50dd313c1bab745879a5ad954a72c45a91c3a51d3c7adea98d82f8481e0e1e03674a6f3fb7"
 }
 
+/// 16 進で与えた公開鍵・メッセージ・署名で検証する。
 fn verify_vector(pk: String, msg: String, sig: String) -> Bool {
   bip340.verify(bytes(sig), bytes(msg), bytes(pk))
 }
 
+/// 公式ベクター 0 の署名を受理する。
 pub fn verify_vector0_test() {
   assert verify_vector(
     "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
@@ -87,6 +96,7 @@ pub fn verify_vector0_test() {
   )
 }
 
+/// 公式ベクター 1 の署名を受理する。
 pub fn verify_vector1_test() {
   assert verify_vector(
     "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
@@ -95,6 +105,7 @@ pub fn verify_vector1_test() {
   )
 }
 
+/// 公式ベクター 2 の署名を受理する。
 pub fn verify_vector2_test() {
   assert verify_vector(
     "dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
@@ -103,6 +114,7 @@ pub fn verify_vector2_test() {
   )
 }
 
+/// 曲線上にない公開鍵を使った公式ベクター 5 は拒否する。
 pub fn verify_vector5_offcurve_pubkey_test() {
   assert !verify_vector(
     "eefdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34",
@@ -111,6 +123,7 @@ pub fn verify_vector5_offcurve_pubkey_test() {
   )
 }
 
+/// R の y 座標が奇数になる公式ベクター 6 は拒否する。
 pub fn verify_vector6_odd_r_test() {
   assert !verify_vector(
     "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
@@ -119,6 +132,7 @@ pub fn verify_vector6_odd_r_test() {
   )
 }
 
+/// 乱数の補助値で署名しても、自分で検証できる署名になる。
 pub fn sign_random_roundtrip_test() {
   let privkey =
     bytes("0000000000000000000000000000000000000000000000000000000000000042")

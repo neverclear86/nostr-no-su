@@ -52,6 +52,7 @@ pub type Settings {
   )
 }
 
+/// 接続アクターが受け取るメッセージ。
 pub type Msg {
   /// ソケットを開く。初期化処理と再接続タイマーから送られる。
   Connect
@@ -69,6 +70,8 @@ pub fn status(name: Name(Msg)) -> Status {
   |> option.unwrap(Disconnected)
 }
 
+/// 接続アクターが保持する状態。生きたソケットを持つかどうかが、外から見た
+/// 接続状態そのものになる。
 type State {
   State(
     settings: Settings,

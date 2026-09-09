@@ -8,6 +8,7 @@ fn bytes(text: String) -> BitArray {
   decoded
 }
 
+/// NIP-44 の公式ベクター 1 の conversation key を導く。
 pub fn conversation_key_vector1_test() {
   let assert Ok(key) =
     nip44.conversation_key(
@@ -18,6 +19,7 @@ pub fn conversation_key_vector1_test() {
     == "3dfef0ce2a4d80a25e7a328accf73448ef67096f65f79588e358d9a0eb9013f1"
 }
 
+/// NIP-44 の公式ベクター 2 の conversation key を導く。
 pub fn conversation_key_vector2_test() {
   let assert Ok(key) =
     nip44.conversation_key(
@@ -28,6 +30,7 @@ pub fn conversation_key_vector2_test() {
     == "4d14f36e81b8452128da64fe6f1eae873baae2f444b02c950b90e43553f2178b"
 }
 
+/// 位数を超える秘密鍵からは conversation key を導けない。
 pub fn conversation_key_rejects_seckey_over_n_test() {
   let assert Error(_) =
     nip44.conversation_key(
@@ -38,6 +41,7 @@ pub fn conversation_key_rejects_seckey_over_n_test() {
 
 const conv_key_1 = "c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d"
 
+/// 公式ベクター 1 のペイロードを、同じ nonce で再現する。
 pub fn encrypt_vector1_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
@@ -49,6 +53,7 @@ pub fn encrypt_vector1_test() {
     == "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb"
 }
 
+/// 公式ベクター 1 のペイロードを復号する。
 pub fn decrypt_vector1_test() {
   let assert Ok(text) =
     nip44.decrypt(
@@ -58,6 +63,7 @@ pub fn decrypt_vector1_test() {
   assert text == "a"
 }
 
+/// 公式ベクター 2 のペイロードを、同じ nonce で再現する。
 pub fn encrypt_vector2_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
@@ -69,6 +75,7 @@ pub fn encrypt_vector2_test() {
     == "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj"
 }
 
+/// 公式ベクター 2 のペイロードを復号する。
 pub fn decrypt_vector2_test() {
   let assert Ok(text) =
     nip44.decrypt(
@@ -84,6 +91,7 @@ const plaintext_3 = "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀"
 
 const payload_3 = "ArY1I2xC2yDwIbuNHN/1ynXdGgzHLqdCrXUPMwELJPc7s7JqlCMJBAIIjfkpHReBPXeoMCyuClwgbT419jUWU1PwaNl4FEQYKCDKVJz+97Mp3K+Q2YGa77B6gpxB/lr1QgoqpDf7wDVrDmOqGoiPjWDqy8KzLueKDcm9BVP8xeTJIxs="
 
+/// 公式ベクター 3 のペイロードを、同じ nonce で再現する。
 pub fn encrypt_vector3_test() {
   let assert Ok(payload) =
     nip44.encrypt_with_nonce(
@@ -94,11 +102,13 @@ pub fn encrypt_vector3_test() {
   assert payload == payload_3
 }
 
+/// 公式ベクター 3 のペイロードを復号する。
 pub fn decrypt_vector3_test() {
   let assert Ok(text) = nip44.decrypt(payload_3, bytes(conv_key_3))
   assert text == plaintext_3
 }
 
+/// パディング後の長さが、仕様の表と一致する。
 pub fn calc_padded_len_table_test() {
   let cases = [
     #(1, 32),
@@ -129,6 +139,7 @@ pub fn calc_padded_len_table_test() {
   assert list_all_padded(cases)
 }
 
+/// 表の各行について、期待するパディング長になっているかを確かめる。
 fn list_all_padded(cases: List(#(Int, Int))) -> Bool {
   case cases {
     [] -> True
@@ -137,6 +148,7 @@ fn list_all_padded(cases: List(#(Int, Int))) -> Bool {
   }
 }
 
+/// 先頭が `#` のペイロードは、未対応のバージョンとして拒否する。
 pub fn decrypt_rejects_hash_prefix_test() {
   let assert Error(nip44.UnsupportedVersion) =
     nip44.decrypt(
@@ -145,6 +157,7 @@ pub fn decrypt_rejects_hash_prefix_test() {
     )
 }
 
+/// バージョン 0 のペイロードは拒否する。
 pub fn decrypt_rejects_version_zero_test() {
   let assert Error(nip44.UnsupportedVersion) =
     nip44.decrypt(
@@ -153,6 +166,7 @@ pub fn decrypt_rejects_version_zero_test() {
     )
 }
 
+/// MAC を書き換えたペイロードは復号しない。
 pub fn decrypt_rejects_tampered_mac_test() {
   // ベクター 1 のペイロードの末尾付近（MAC 領域）を 1 文字書き換えたもの。
   let assert Error(_) =
@@ -162,6 +176,7 @@ pub fn decrypt_rejects_tampered_mac_test() {
     )
 }
 
+/// 空の平文は仕様上の下限を下回るため暗号化しない。
 pub fn encrypt_rejects_empty_plaintext_test() {
   let assert Error(nip44.InvalidPlaintextLength) =
     nip44.encrypt_with_nonce(
@@ -171,6 +186,7 @@ pub fn encrypt_rejects_empty_plaintext_test() {
     )
 }
 
+/// 暗号化して復号すると元の平文に戻る。
 pub fn encrypt_decrypt_roundtrip_test() {
   let assert Ok(payload) = nip44.encrypt("hello nostr", bytes(conv_key_1))
   let assert Ok(text) = nip44.decrypt(payload, bytes(conv_key_1))
