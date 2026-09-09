@@ -32,20 +32,19 @@ pub fn parse_list_test() {
 
 /// `BUNKER_RELAY_URL` wins over the monitor relays when it is set.
 pub fn pick_bunker_relays_prefers_override_test() {
-  assert config.pick_bunker_relays("wss://x, wss://y", ["wss://a", "wss://b"])
-    == ["wss://x", "wss://y"]
+  assert config.pick_bunker_relays(["wss://x"], ["wss://a", "wss://b"])
+    == ["wss://x"]
 }
 
 /// A blank override falls back to the monitor relays.
 pub fn pick_bunker_relays_falls_back_to_monitor_relays_test() {
-  assert config.pick_bunker_relays("", ["wss://a", "wss://b"])
+  assert config.pick_bunker_relays([], ["wss://a", "wss://b"])
     == ["wss://a", "wss://b"]
-  assert config.pick_bunker_relays("  ", ["wss://a"]) == ["wss://a"]
 }
 
 /// With neither list configured the bunker uses the default relay.
 pub fn pick_bunker_relays_defaults_when_nothing_configured_test() {
-  assert config.pick_bunker_relays("", []) == ["wss://relay.damus.io"]
+  assert config.pick_bunker_relays([], []) == ["wss://relay.damus.io"]
 }
 
 /// A config that differs only in the pubkeys being monitored.

@@ -2,7 +2,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/engine.{Ignore, Reply}
+import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 
@@ -198,6 +198,8 @@ pub fn stale_event_ignored_test() {
   let assert Ignore(_) = outcome
 }
 
+/// The same request delivered twice is handled once and reported as a
+/// duplicate, which is what a second bunker relay produces.
 pub fn replay_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -215,8 +217,7 @@ pub fn replay_ignored_test() {
   let #(engine, first) = engine.handle_event(new_engine(), request, 1000)
   let assert Reply(_) = first
   let #(_engine, second) = engine.handle_event(engine, request, 1000)
-  let assert Ignore(reason) = second
-  assert string.contains(reason, "duplicate")
+  let assert Duplicate = second
 }
 
 pub fn tampered_signature_ignored_test() {

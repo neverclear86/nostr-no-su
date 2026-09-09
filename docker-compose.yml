@@ -3,7 +3,7 @@ services:
     build: .
     environment:
       # Comma-separated relay URLs to monitor. Empty = monitoring disabled.
-      RELAY_URL: ${RELAY_URL:-wss://relay.damus.io}
+      RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
       # Comma-separated relays the bunker subscribes and replies on. Defaults
       # to RELAY_URL; NIP-46-only relays (e.g. relay.nsec.app) work here.
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}

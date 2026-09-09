@@ -26,7 +26,7 @@ pub fn load() -> Config {
   Config(
     relay_urls: relay_urls,
     bunker_relay_urls: pick_bunker_relays(
-      envoy.get("BUNKER_RELAY_URL") |> result.unwrap(""),
+      envoy.get("BUNKER_RELAY_URL") |> result.unwrap("") |> parse_list,
       relay_urls,
     ),
     pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
@@ -38,12 +38,12 @@ pub fn load() -> Config {
 }
 
 /// The relays the bunker listens and replies on: the explicit override when
-/// set, otherwise the monitor relays, otherwise the default relay.
+/// non-empty, otherwise the monitor relays, otherwise the default relay.
 pub fn pick_bunker_relays(
-  override: String,
+  override: List(String),
   relay_urls: List(String),
 ) -> List(String) {
-  case parse_list(override), relay_urls {
+  case override, relay_urls {
     [], [] -> [default_relay_url]
     [], urls -> urls
     urls, _ -> urls

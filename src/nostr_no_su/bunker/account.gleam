@@ -32,7 +32,7 @@ pub fn from_hex(hex: String) -> Result(Account, String) {
   }
 }
 
-/// Parse a comma-separated list of hex private keys.
+/// Build an account per hex private key, failing on the first bad one.
 pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
   list.try_map(raw_keys, from_hex)
 }

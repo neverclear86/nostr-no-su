@@ -54,6 +54,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           dict.each(state.publishers, fn(_relay_url, publish) {
             publish(response)
           })
+        engine.Duplicate -> Nil
         engine.Ignore(reason) -> io.println("[bunker] ignored: " <> reason)
       }
       actor.continue(State(..state, engine: next))

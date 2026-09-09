@@ -30,10 +30,16 @@ pub type Engine {
 }
 
 pub type Outcome {
+  /// The response event to publish back to the client.
   Reply(response: Event)
+  /// A request already handled, e.g. the same one delivered by a second
+  /// bunker relay. Expected in a multi-relay setup, so callers stay quiet.
+  Duplicate
+  /// The request was dropped, with the reason for the log.
   Ignore(reason: String)
 }
 
+/// An engine serving the given accounts, each with its connect secret.
 pub fn new(accounts: List(#(Account, String))) -> Engine {
   let account_dict =
     accounts
@@ -42,6 +48,8 @@ pub fn new(accounts: List(#(Account, String))) -> Engine {
   Engine(accounts: account_dict, authorized: set.new(), seen: dict.new())
 }
 
+/// Handle one received event: validate, deduplicate and route it, then
+/// produce the response to publish, if any.
 pub fn handle_event(
   engine: Engine,
   incoming: Event,
@@ -57,7 +65,7 @@ pub fn handle_event(
             Error(reason) -> #(engine, Ignore(reason))
             Ok(#(account, secret)) ->
               case dict.has_key(engine.seen, incoming.id) {
-                True -> #(engine, Ignore("duplicate request"))
+                True -> #(engine, Duplicate)
                 False -> {
                   let engine = record_seen(engine, incoming, now)
                   case event.verify_signature(incoming) {
@@ -72,6 +80,7 @@ pub fn handle_event(
   }
 }
 
+/// Whether the timestamp is inside the acceptance window around now.
 fn fresh(created_at: Int, now: Int) -> Bool {
   created_at >= now - window_seconds && created_at <= now + window_seconds
 }
@@ -91,6 +100,7 @@ fn route(
   }
 }
 
+/// The pubkey of the first ["p", pubkey] tag, if there is one.
 fn first_p_tag(tags: List(List(String))) -> Option(String) {
   case tags {
     [] -> None
@@ -99,6 +109,8 @@ fn first_p_tag(tags: List(List(String))) -> Option(String) {
   }
 }
 
+/// Remember the request id for replay protection, forgetting the ids
+/// that can no longer be replayed.
 fn record_seen(engine: Engine, incoming: Event, now: Int) -> Engine {
   let seen =
     engine.seen
@@ -109,6 +121,7 @@ fn record_seen(engine: Engine, incoming: Event, now: Int) -> Engine {
   Engine(..engine, seen: seen)
 }
 
+/// Decrypt and decode the request, then build the encrypted reply.
 fn handle_request(
   engine: Engine,
   account: Account,
@@ -159,6 +172,8 @@ fn handle_request(
   }
 }
 
+/// Run one request, gating everything but `connect` and `logout` on the
+/// client having connected first.
 fn execute(
   engine: Engine,
   account: Account,
@@ -199,6 +214,7 @@ fn execute(
   }
 }
 
+/// Run one request from a client that has already connected.
 fn execute_authorized(
   account: Account,
   request: rpc.Request,
@@ -226,6 +242,7 @@ fn connect_secret(params: List(String)) -> Option(String) {
   }
 }
 
+/// Sign the event draft in the request with the account key.
 fn sign_event(
   account: Account,
   request: rpc.Request,
@@ -257,6 +274,7 @@ fn sign_event(
   }
 }
 
+/// Encrypt or decrypt text for a third party with the account key.
 fn nip44_op(
   account: Account,
   request: rpc.Request,
@@ -285,6 +303,7 @@ fn nip44_op(
   }
 }
 
+/// Encrypt the response to the client and sign it as a kind 24133 event.
 fn build_reply(
   account: Account,
   conversation_key: BitArray,
@@ -313,6 +332,7 @@ fn build_reply(
   }
 }
 
+/// Decode a hex string, accepting either case.
 fn decode_hex(hex: String) -> Result(BitArray, Nil) {
   bit_array.base16_decode(string.uppercase(hex))
 }
