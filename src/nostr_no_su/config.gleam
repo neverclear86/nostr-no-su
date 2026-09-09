@@ -17,7 +17,7 @@ pub type Config {
   )
 }
 
-/// Read the whole configuration from the environment.
+/// 環境変数から設定全体を読み込む。
 pub fn load() -> Config {
   let relay_urls =
     envoy.get("RELAY_URL")
@@ -37,8 +37,8 @@ pub fn load() -> Config {
   )
 }
 
-/// The relays the bunker listens and replies on: the explicit override when
-/// non-empty, otherwise the monitor relays, otherwise the default relay.
+/// バンカーが待ち受け・応答するリレー。明示的な上書きが空でなければそれを、
+/// 無ければ監視用リレーを、それも無ければ既定のリレーを使う。
 pub fn pick_bunker_relays(
   override: List(String),
   relay_urls: List(String),
@@ -50,8 +50,8 @@ pub fn pick_bunker_relays(
   }
 }
 
-/// Parse a comma-separated list (pubkeys, keys, relay urls), ignoring
-/// surrounding whitespace and empty entries.
+/// カンマ区切りのリスト（pubkey、鍵、リレー URL）をパースする。前後の空白は
+/// 無視し、空の要素は除外する。
 pub fn parse_list(raw: String) -> List(String) {
   raw
   |> string.split(",")
@@ -59,8 +59,8 @@ pub fn parse_list(raw: String) -> List(String) {
   |> list.filter(fn(entry) { entry != "" })
 }
 
-/// Subscribe to the configured accounts, or to a small sample of recent
-/// events when no pubkeys are configured.
+/// 設定されたアカウントを購読する。pubkey が未設定なら直近イベントを少数だけ
+/// 購読する。
 pub fn to_filter(config: Config) -> Filter {
   case config.pubkeys {
     [] -> Filter(..filter.new(), limit: Some(20))
@@ -68,7 +68,7 @@ pub fn to_filter(config: Config) -> Filter {
   }
 }
 
-/// Subscribe to NIP-46 requests addressed to the given signer pubkeys.
+/// 指定した署名者 pubkey 宛の NIP-46 リクエストを購読する。
 pub fn bunker_filter(signer_pubkeys: List(String), since: Int) -> Filter {
   Filter(
     ..filter.new(),

@@ -2,8 +2,8 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
-/// A NIP-01 subscription filter. Unset fields are omitted from the JSON
-/// entirely: relays reject `null` values.
+/// NIP-01 の購読フィルタ。未設定のフィールドは JSON から完全に省く。リレーは
+/// `null` 値を拒否するため。
 pub type Filter {
   Filter(
     authors: Option(List(String)),

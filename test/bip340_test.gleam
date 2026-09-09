@@ -38,7 +38,7 @@ pub fn xonly_pubkey_rejects_zero_test() {
 }
 
 pub fn xonly_pubkey_rejects_order_test() {
-  // n itself is out of range (valid scalars are 1..n-1).
+  // n そのものは範囲外（有効なスカラーは 1..n-1）。
   let assert Error(_) =
     secp256k1.xonly_pubkey(hex(
       "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",

@@ -1,8 +1,8 @@
-//// BIP-340 Schnorr signatures over secp256k1.
+//// secp256k1 上の BIP-340 Schnorr 署名。
 ////
-//// Signing performs no arbitrary-point arithmetic: both `d*G` and the nonce
-//// point `k*G` are computed natively (see `secp256k1.mul_g`). Verification is
-//// the only path that needs `secp256k1`'s affine point math, for `s*G - e*P`.
+//// 署名では任意点の演算を行わない。`d*G` も nonce 点 `k*G` もネイティブに計算
+//// する（`secp256k1.mul_g` を参照）。`secp256k1` のアフィン座標演算が必要なのは、
+//// `s*G - e*P` を求める検証経路だけ。
 
 import gleam/crypto
 import gleam/int
@@ -13,13 +13,13 @@ pub type SignError {
   SigningFailed
 }
 
-/// BIP-340 tagged hash: sha256(sha256(tag) || sha256(tag) || data).
+/// BIP-340 の tagged hash: sha256(sha256(tag) || sha256(tag) || data)。
 pub fn tagged_hash(tag: String, data: BitArray) -> BitArray {
   let tag_hash = crypto.hash(crypto.Sha256, <<tag:utf8>>)
   crypto.hash(crypto.Sha256, <<tag_hash:bits, tag_hash:bits, data:bits>>)
 }
 
-/// Sign a 32-byte message with fresh auxiliary randomness.
+/// 32 バイトのメッセージを、新たに生成した補助乱数で署名する。
 pub fn sign(
   privkey: BitArray,
   message: BitArray,
@@ -27,8 +27,8 @@ pub fn sign(
   sign_with_aux(privkey, message, crypto.strong_random_bytes(32))
 }
 
-/// Deterministic signing seam: `aux` is the 32-byte auxiliary randomness. The
-/// official BIP-340 test vectors fix `aux`, so tests call this directly.
+/// 決定的に署名するための差し込み口。`aux` は 32 バイトの補助乱数。BIP-340 の
+/// 公式テストベクタは `aux` を固定するため、テストはこちらを直接呼ぶ。
 pub fn sign_with_aux(
   privkey: BitArray,
   message: BitArray,
@@ -43,7 +43,7 @@ pub fn sign_with_aux(
         Ok(secp256k1.Infinity) -> Error(SigningFailed)
         Ok(Point(px, py)) -> {
           let px_bytes = secp256k1.int_to_bytes32(px)
-          // BIP-340 uses the even-y variant of the key, negating d if needed.
+          // BIP-340 は y が偶数となる側の鍵を使うため、必要なら d を反転する。
           let d = case py % 2 == 0 {
             True -> d0
             False -> secp256k1.n - d0
@@ -84,7 +84,7 @@ pub fn sign_with_aux(
                     % secp256k1.n
                   let s = { k + e * d } % secp256k1.n
                   let sig = <<rx_bytes:bits, secp256k1.int_to_bytes32(s):bits>>
-                  // BIP-340 recommends verifying before returning.
+                  // BIP-340 は返す前に検証することを推奨している。
                   case verify(sig, message, px_bytes) {
                     True -> Ok(sig)
                     False -> Error(SigningFailed)
@@ -97,7 +97,7 @@ pub fn sign_with_aux(
   }
 }
 
-/// Verify a 64-byte BIP-340 signature against a 32-byte message and x-only key.
+/// 64 バイトの BIP-340 署名を、32 バイトのメッセージと x-only 鍵で検証する。
 pub fn verify(sig: BitArray, message: BitArray, pubkey: BitArray) -> Bool {
   case sig {
     <<rx_bytes:bytes-size(32), s_bytes:bytes-size(32)>> ->

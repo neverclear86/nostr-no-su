@@ -6,7 +6,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/crypto/bip340
 
-/// A Nostr event as defined by NIP-01.
+/// NIP-01 で定義される Nostr イベント。
 pub type Event {
   Event(
     id: String,
@@ -42,8 +42,8 @@ pub fn to_json(event: Event) -> Json {
   ])
 }
 
-/// The canonical NIP-01 serialization used to compute the event id:
-/// `[0, pubkey, created_at, kind, tags, content]` with no whitespace.
+/// イベント id の計算に使う NIP-01 の正規シリアライズ。
+/// `[0, pubkey, created_at, kind, tags, content]` を空白なしで出力する。
 pub fn serialize_for_id(event: Event) -> String {
   json.preprocessed_array([
     json.int(0),
@@ -56,22 +56,22 @@ pub fn serialize_for_id(event: Event) -> String {
   |> json.to_string
 }
 
-/// The 32-byte sha256 of the canonical serialization, signed by BIP-340.
+/// 正規シリアライズの 32 バイト sha256。BIP-340 で署名する対象。
 pub fn hash_for_signing(event: Event) -> BitArray {
   serialize_for_id(event)
   |> bit_array.from_string
   |> crypto.hash(crypto.Sha256, _)
 }
 
-/// Compute the event id: lowercase hex sha256 of the canonical serialization.
+/// イベント id を計算する。正規シリアライズの sha256 を小文字 16 進で表したもの。
 pub fn compute_id(event: Event) -> String {
   hash_for_signing(event)
   |> bit_array.base16_encode
   |> string.lowercase
 }
 
-/// Fill `id` and `sig` on a draft whose other fields are set. `privkey` must
-/// correspond to `event.pubkey`.
+/// 他のフィールドが設定済みのドラフトに `id` と `sig` を埋める。`privkey` は
+/// `event.pubkey` に対応している必要がある。
 pub fn finalize(event: Event, privkey: BitArray) -> Result(Event, Nil) {
   let hash = hash_for_signing(event)
   use signature <- result.try(
@@ -86,7 +86,7 @@ pub fn finalize(event: Event, privkey: BitArray) -> Result(Event, Nil) {
   )
 }
 
-/// Verify the event's BIP-340 signature against its pubkey and content.
+/// イベントの BIP-340 署名を、その pubkey と内容に対して検証する。
 pub fn verify_signature(event: Event) -> Bool {
   case
     bit_array.base16_decode(string.uppercase(event.pubkey)),

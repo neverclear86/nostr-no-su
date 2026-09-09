@@ -1,6 +1,6 @@
-//// The pure NIP-46 request-handling core. No processes, no clock, no IO: the
-//// current time is passed in, so every path is deterministic and unit-tested
-//// through the loopback test. `bunker.gleam` wraps this in an actor.
+//// NIP-46 リクエスト処理の純粋なコア。プロセスも時計も IO も持たず、現在時刻は
+//// 引数で受け取るため、すべての経路が決定的でループバックテストによる単体検証が
+//// できる。`bunker.gleam` がこれをアクターで包む。
 
 import gleam/bit_array
 import gleam/dict.{type Dict}
@@ -14,32 +14,32 @@ import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 
-/// Accept requests within this many seconds of now, in either direction, to
-/// tolerate client clock skew.
+/// クライアントの時刻ずれを許容するため、現在時刻から前後この秒数以内の
+/// リクエストを受け付ける。
 const window_seconds = 600
 
 pub type Engine {
   Engine(
-    // signer pubkey hex -> #(account, secret)
+    // 署名者 pubkey hex -> #(account, secret)
     accounts: Dict(String, #(Account, String)),
-    // #(signer pubkey hex, client pubkey hex)
+    // #(署名者 pubkey hex, クライアント pubkey hex)
     authorized: Set(#(String, String)),
-    // request event id -> created_at, for replay protection
+    // リプレイ防止用: リクエストイベント id -> created_at
     seen: Dict(String, Int),
   )
 }
 
 pub type Outcome {
-  /// The response event to publish back to the client.
+  /// クライアントへ送り返す応答イベント。
   Reply(response: Event)
-  /// A request already handled, e.g. the same one delivered by a second
-  /// bunker relay. Expected in a multi-relay setup, so callers stay quiet.
+  /// 処理済みのリクエスト。2 つ目のバンカーリレーから同じものが届いた場合など。
+  /// 複数リレー構成では想定内なので、呼び出し側はログを出さない。
   Duplicate
-  /// The request was dropped, with the reason for the log.
+  /// リクエストを破棄した。ログに出す理由を伴う。
   Ignore(reason: String)
 }
 
-/// An engine serving the given accounts, each with its connect secret.
+/// 指定したアカウント群（それぞれの接続シークレット付き）を扱うエンジン。
 pub fn new(accounts: List(#(Account, String))) -> Engine {
   let account_dict =
     accounts
@@ -48,8 +48,8 @@ pub fn new(accounts: List(#(Account, String))) -> Engine {
   Engine(accounts: account_dict, authorized: set.new(), seen: dict.new())
 }
 
-/// Handle one received event: validate, deduplicate and route it, then
-/// produce the response to publish, if any.
+/// 受信イベント 1 件を処理する。検証・重複排除・ルーティングを行い、送信すべき
+/// 応答があれば生成する。
 pub fn handle_event(
   engine: Engine,
   incoming: Event,
@@ -80,12 +80,12 @@ pub fn handle_event(
   }
 }
 
-/// Whether the timestamp is inside the acceptance window around now.
+/// タイムスタンプが現在時刻を中心とした受付ウィンドウ内かどうか。
 fn fresh(created_at: Int, now: Int) -> Bool {
   created_at >= now - window_seconds && created_at <= now + window_seconds
 }
 
-/// Route on the first ["p", pubkey] tag that names a known account.
+/// 最初の ["p", pubkey] タグを見て、既知のアカウントへルーティングする。
 fn route(
   engine: Engine,
   tags: List(List(String)),
@@ -100,7 +100,7 @@ fn route(
   }
 }
 
-/// The pubkey of the first ["p", pubkey] tag, if there is one.
+/// 最初の ["p", pubkey] タグの pubkey。存在しなければ None。
 fn first_p_tag(tags: List(List(String))) -> Option(String) {
   case tags {
     [] -> None
@@ -109,19 +109,19 @@ fn first_p_tag(tags: List(List(String))) -> Option(String) {
   }
 }
 
-/// Remember the request id for replay protection, forgetting the ids
-/// that can no longer be replayed.
+/// リプレイ防止のためリクエスト id を記録し、もはやリプレイされ得ない id は
+/// 忘れる。
 fn record_seen(engine: Engine, incoming: Event, now: Int) -> Engine {
   let seen =
     engine.seen
     |> dict.insert(incoming.id, incoming.created_at)
-    // Drop entries older than the acceptance window: they can never be
-    // replayed anyway, which keeps the set bounded.
+    // 受付ウィンドウより古いエントリを削除する。どのみちリプレイされないため、
+    // これで集合のサイズが有界に保たれる。
     |> dict.filter(fn(_id, created_at) { created_at >= now - window_seconds })
   Engine(..engine, seen: seen)
 }
 
-/// Decrypt and decode the request, then build the encrypted reply.
+/// リクエストを復号・デコードし、暗号化した応答を組み立てる。
 fn handle_request(
   engine: Engine,
   account: Account,
@@ -172,8 +172,8 @@ fn handle_request(
   }
 }
 
-/// Run one request, gating everything but `connect` and `logout` on the
-/// client having connected first.
+/// リクエストを 1 件実行する。`connect` と `logout` 以外は、クライアントが先に
+/// 接続済みであることを条件とする。
 fn execute(
   engine: Engine,
   account: Account,
@@ -214,7 +214,7 @@ fn execute(
   }
 }
 
-/// Run one request from a client that has already connected.
+/// 接続済みクライアントからのリクエストを 1 件実行する。
 fn execute_authorized(
   account: Account,
   request: rpc.Request,
@@ -232,8 +232,8 @@ fn execute_authorized(
   }
 }
 
-/// The secret from a connect request. Clients send [signer_pk, secret, perms]
-/// but some older ones send just [secret].
+/// connect リクエストのシークレット。クライアントは [signer_pk, secret, perms]
+/// を送るが、古い実装には [secret] だけを送るものもある。
 fn connect_secret(params: List(String)) -> Option(String) {
   case params {
     [_signer, secret, ..] -> Some(secret)
@@ -242,7 +242,7 @@ fn connect_secret(params: List(String)) -> Option(String) {
   }
 }
 
-/// Sign the event draft in the request with the account key.
+/// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。
 fn sign_event(
   account: Account,
   request: rpc.Request,
@@ -274,7 +274,7 @@ fn sign_event(
   }
 }
 
-/// Encrypt or decrypt text for a third party with the account key.
+/// 第三者宛のテキストをアカウントの鍵で暗号化または復号する。
 fn nip44_op(
   account: Account,
   request: rpc.Request,
@@ -303,7 +303,7 @@ fn nip44_op(
   }
 }
 
-/// Encrypt the response to the client and sign it as a kind 24133 event.
+/// 応答をクライアント宛に暗号化し、kind 24133 イベントとして署名する。
 fn build_reply(
   account: Account,
   conversation_key: BitArray,
@@ -332,7 +332,7 @@ fn build_reply(
   }
 }
 
-/// Decode a hex string, accepting either case.
+/// 16 進文字列をデコードする。大文字・小文字のどちらも受け付ける。
 fn decode_hex(hex: String) -> Result(BitArray, Nil) {
   bit_array.base16_decode(string.uppercase(hex))
 }

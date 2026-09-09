@@ -1,22 +1,22 @@
-//// The NIP-46 JSON-RPC message layer carried inside the (encrypted) content
-//// of kind-24133 events. No crypto here — this is pure serialization.
+//// kind 24133 イベントの（暗号化された）content に載る NIP-46 JSON-RPC の
+//// メッセージ層。暗号処理はここには無く、シリアライズのみを担う。
 
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None, Some}
 
-/// A request from a connected client.
+/// 接続済みクライアントからのリクエスト。
 pub type Request {
   Request(id: String, method: String, params: List(String))
 }
 
-/// A response back to a client. On error, `result` is empty and `error` holds
-/// the message; on success, `error` is None.
+/// クライアントへ返す応答。エラー時は `result` が空で `error` にメッセージが
+/// 入り、成功時は `error` が None になる。
 pub type Response {
   Response(id: String, result: String, error: Option(String))
 }
 
-/// The unsigned event draft carried as a JSON string in sign_event params[0].
+/// sign_event の params[0] に JSON 文字列として載る未署名イベントのドラフト。
 pub type EventDraft {
   EventDraft(
     kind: Int,
@@ -45,8 +45,8 @@ pub fn decode_request(text: String) -> Result(Request, json.DecodeError) {
   json.parse(text, request_decoder())
 }
 
-/// Encode a response. `error` is omitted entirely on success: some client
-/// parsers treat any present `error` key as a failure.
+/// 応答をエンコードする。成功時は `error` キー自体を出力しない。`error` キーが
+/// 存在するだけで失敗とみなすクライアント実装があるため。
 pub fn encode_response(response: Response) -> String {
   let fields = case response.error {
     Some(message) -> [

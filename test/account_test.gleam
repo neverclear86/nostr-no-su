@@ -2,7 +2,7 @@ import nostr_no_su/bunker/account
 
 const key = "0000000000000000000000000000000000000000000000000000000000000042"
 
-/// Every configured relay becomes its own percent-encoded `relay=` hint.
+/// 設定したリレーはそれぞれパーセントエンコードされた `relay=` ヒントになる。
 pub fn bunker_uri_lists_every_relay_test() {
   let assert Ok(signer) = account.from_hex(key)
   let uri =

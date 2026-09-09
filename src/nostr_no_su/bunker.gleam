@@ -1,6 +1,6 @@
-//// A thin actor around the pure `engine`. It holds the session state across
-//// relay reconnections (the relay client is restarted on every disconnect, so
-//// session state cannot live there). All decision logic stays in `engine`.
+//// 純粋な `engine` を包む薄いアクター。リレーの再接続をまたいでセッション状態を
+//// 保持する（リレークライアントは切断のたびに再起動されるため、そこにセッション
+//// 状態を置けない）。判断ロジックはすべて `engine` 側に残す。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
@@ -12,14 +12,14 @@ import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/time
 
 pub type Msg {
-  /// A kind 24133 event received on one of the bunker connections.
+  /// バンカー接続のいずれかで受信した kind 24133 イベント。
   Incoming(event: Event)
-  /// Install the function used to publish response events on one relay
-  /// connection. Each bunker relay loop re-sends this after reconnecting so
-  /// responses go out on its live socket. Responses are published on every
-  /// bunker relay: the client listens on all `relay=` hints of the URI, and
-  /// duplicate deliveries are its problem to dedupe (as ours are the
-  /// engine's), so any live relay is enough for the round-trip.
+  /// 1 本のリレー接続で応答イベントを送信するための関数を登録する。各バンカー
+  /// リレーのループは再接続のたびにこれを送り直すため、応答は生きたソケットから
+  /// 出ていく。応答はすべてのバンカーリレーへ送信する。クライアントは URI の
+  /// `relay=` ヒントすべてを待ち受けており、重複配信の排除はクライアント側の
+  /// 責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
+  /// あれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
 }
 
@@ -27,7 +27,7 @@ type State {
   State(engine: engine.Engine, publishers: Dict(String, fn(Event) -> Nil))
 }
 
-/// A child specification for the supervision tree.
+/// スーパービジョンツリー用の子仕様。
 pub fn supervised(
   name: Name(Msg),
   initial: engine.Engine,
@@ -35,9 +35,9 @@ pub fn supervised(
   supervision.worker(fn() { start(name, initial) })
 }
 
-/// Start the bunker actor with the given engine state. It is registered
-/// under `name` so the connections reach whichever process currently holds
-/// it, rather than the one alive when they started.
+/// 指定したエンジン状態でバンカーアクターを起動する。`name` で登録するため、
+/// 接続は起動時に生きていたプロセスではなく、現在その名前を保持しているプロセス
+/// に到達する。
 pub fn start(
   name: Name(Msg),
   initial: engine.Engine,
@@ -48,8 +48,8 @@ pub fn start(
   |> actor.start
 }
 
-/// Register a publisher, or run one incoming event through the engine and
-/// broadcast the response it produced.
+/// publisher を登録するか、受信イベント 1 件をエンジンに通し、生成された応答を
+/// 全接続へ送信する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     SetPublisher(relay_url, publish) ->

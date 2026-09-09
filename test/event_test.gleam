@@ -47,7 +47,7 @@ pub fn serialize_for_id_test() {
 }
 
 pub fn compute_id_synthetic_vector_test() {
-  // Expected value computed independently in a shell:
+  // 期待値はシェルで独立に計算したもの:
   // printf '%s' '[0,"3bf0…59d",1700000000,1,[],"hello nostr"]' | sha256sum
   assert event.compute_id(sample_event())
     == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
@@ -64,17 +64,17 @@ pub fn escaping_test() {
       content: "line1\nline2 \"quoted\" \\ 日本語",
       sig: "",
     )
-  // NIP-01 requires \n, \", \\ as two-character escapes and UTF-8 verbatim.
+  // NIP-01 は \n, \", \\ を 2 文字のエスケープとし、UTF-8 はそのまま出力する。
   assert event.serialize_for_id(escaped)
     == "[0,\"3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d\",1700000001,1,[[\"t\",\"test\"]],\"line1\\nline2 \\\"quoted\\\" \\\\ 日本語\"]"
-  // printf '%s' '<the canonical string above>' | sha256sum
+  // printf '%s' '<上記の正規シリアライズ文字列>' | sha256sum
   assert event.compute_id(escaped)
     == "8e84a9f722b367f45b2240f00937a466c000123deb6d1d999b2f7bbcaf12a57f"
 }
 
-/// A real event captured verbatim from wss://relay.damus.io. Its id was
-/// computed by an independent implementation, so this pins our canonical
-/// serialization (escapes, UTF-8, field order) against the ecosystem.
+/// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した
+/// ものなので、このテストは本実装の正規シリアライズ（エスケープ、UTF-8、
+/// フィールド順）をエコシステムに対して固定する。
 pub fn finalize_and_verify_test() {
   let assert Ok(privkey) =
     bit_array.base16_decode(string.uppercase(
@@ -93,10 +93,10 @@ pub fn finalize_and_verify_test() {
       sig: "",
     )
   let assert Ok(signed) = event.finalize(draft, privkey)
-  // id matches content, signature verifies, both are lowercase hex.
+  // id は内容と一致し、署名は検証でき、どちらも小文字 16 進である。
   assert signed.id == event.compute_id(draft)
   assert event.verify_signature(signed)
-  // tampering breaks verification.
+  // 改竄すると検証は失敗する。
   assert !event.verify_signature(Event(..signed, content: "tampered"))
 }
 

@@ -157,7 +157,7 @@ pub fn decrypt_rejects_version_zero_test() {
 }
 
 pub fn decrypt_rejects_tampered_mac_test() {
-  // vector 1 payload with a flipped character near the end (the MAC region).
+  // ベクタ 1 のペイロードの末尾付近（MAC 領域）を 1 文字書き換えたもの。
   let assert Error(_) =
     nip44.decrypt(
       "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsc",
