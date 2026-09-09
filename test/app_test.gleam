@@ -27,9 +27,15 @@ const auth_base = "http://admin.test"
 
 /// 偽リレーがテストへ報告する内容。
 type Report {
-  /// 接続が開かれた。所有するアクター、監視対象のソケットプロセス、そして実際の
-  /// ソケットと同じようにサブツリーへイベントを流し込むハンドラーを伴う。
-  Opened(connection: Pid, socket: Pid, deliver: fn(Event) -> Nil)
+  /// 接続が開かれた。どのリレーの接続か、所有するアクター、監視対象のソケット
+  /// プロセス、そして実際のソケットと同じようにサブツリーへイベントを流し込む
+  /// ハンドラーを伴う。
+  Opened(
+    relay_url: String,
+    connection: Pid,
+    socket: Pid,
+    deliver: fn(Event) -> Nil,
+  )
   /// イベントが送信された。送信に使われたソケットを伴う。
   Published(socket: Pid, event: Event)
 }
@@ -37,9 +43,12 @@ type Report {
 /// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
 /// ツリーへ渡し、送信されたイベントをテストへ転送する。
 fn fake_open(reports: Subject(Report)) -> app.Open {
-  fn(_relay_url, _subscriptions, handle_event) {
+  fn(relay_url, _subscriptions, handle_event) {
     let socket = process.spawn(fn() { process.sleep_forever() })
-    process.send(reports, Opened(process.self(), socket, handle_event))
+    process.send(
+      reports,
+      Opened(relay_url, process.self(), socket, handle_event),
+    )
     Ok(
       relay_connection.Socket(pid: socket, publish: fn(published) {
         process.send(reports, Published(socket, published))
@@ -111,10 +120,10 @@ fn stop_tree(tree: Pid) -> Nil {
 /// ツリーが次に開く接続を待ち、そのアクターが落ち着くのを待つ。システム
 /// メッセージに応答した時点で、サブツリー先頭のアクターへの配線は完了している。
 fn await_connection(reports: Subject(Report)) -> Report {
-  let assert Ok(Opened(connection, socket, deliver)) =
+  let assert Ok(Opened(relay_url, connection, socket, deliver)) =
     process.receive(reports, 2000)
   let _state = system.get_state(connection)
-  Opened(connection, socket, deliver)
+  Opened(relay_url, connection, socket, deliver)
 }
 
 /// 監視中のプロセスが停止するのを待つ。
@@ -203,7 +212,8 @@ fn event_with_kind(id: String, kind: Int) -> Event {
 pub fn bunker_replies_on_its_connection_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
-  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
   deliver(connect_request("c1", secret))
   let assert Ok(Published(answered_on, response)) =
     process.receive(reports, 2000)
@@ -219,11 +229,13 @@ pub fn bunker_survives_being_killed_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(_connection, _socket, _deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
 
-  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
   let assert Ok(restarted) = process.named(name)
   assert restarted != killed
   deliver(connect_request("c2", secret))
@@ -241,7 +253,8 @@ pub fn connections_shut_down_when_the_bunker_restarts_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(connection, socket, _deliver) = await_connection(reports)
+  let assert Opened(_relay_url, connection, socket, _deliver) =
+    await_connection(reports)
   let connection_monitor = process.monitor(connection)
   let socket_monitor = process.monitor(socket)
   let assert Ok(killed) = process.named(name)
@@ -260,14 +273,15 @@ pub fn connections_shut_down_when_the_bunker_restarts_test() {
 pub fn session_survives_a_reconnect_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
-  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
   deliver(connect_request("c1", secret))
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
 
   process.kill(socket)
-  let assert Opened(_connection, reconnected, deliver) =
+  let assert Opened(_relay_url, _connection, reconnected, deliver) =
     await_connection(reports)
   assert reconnected != socket
   // 2 度目の `connect` は送らない。pong が返るのは認可済みクライアントだけで、
@@ -285,7 +299,8 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
   assert bunker.sessions(name) == []
 
   deliver(connect_request("c1", secret))
@@ -310,7 +325,8 @@ pub fn pending_connections_can_be_approved_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
@@ -355,10 +371,16 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay_ms: 60_000,
     ))
-  let assert Opened(_connection_a, socket_a, deliver) =
+  // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
+  // どちらのリレーの報告かを決める。
+  let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
     await_connection(reports)
-  let assert Opened(_connection_b, socket_b, _deliver_b) =
+  let assert Opened(_second_url, _connection_2, socket_2, deliver_2) =
     await_connection(reports)
+  let #(socket_a, socket_b, deliver) = case first_url == relay_a.url {
+    True -> #(socket_1, socket_2, deliver_1)
+    False -> #(socket_2, socket_1, deliver_2)
+  }
 
   // 2 本とも生きている間は、応答が両方のソケットから出ていく。
   deliver(connect_request("c1", secret))
@@ -410,7 +432,8 @@ pub fn monitoring_survives_an_unreachable_database_test() {
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
   deliver(event_with_id("first"))
   assert process.receive(seen, 2000) == Ok(event_with_id("first"))
   let assert Ok(_logger_pid) = process.named(logger)
@@ -448,7 +471,8 @@ pub fn monitor_drops_nip46_events_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
   let tree = start_monitor_tree(reports, seen, process.new_name("test_dedup"))
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
   deliver(event_with_kind("nip46", event.nip46_kind))
   deliver(event_with_id("normal"))
   // 送信順に処理されるため、最初に届くのが通常イベントであれば kind 24133 は
@@ -464,13 +488,15 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
   let seen = process.new_subject()
   let name = process.new_name("test_dedup")
   let tree = start_monitor_tree(reports, seen, name)
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
   deliver(event_with_id("first"))
   assert process.receive(seen, 2000) == Ok(event_with_id("first"))
 
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
-  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
   deliver(event_with_id("second"))
   assert process.receive(seen, 2000) == Ok(event_with_id("second"))
   stop_tree(tree)

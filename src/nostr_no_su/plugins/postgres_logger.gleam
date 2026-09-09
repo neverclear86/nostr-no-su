@@ -56,10 +56,10 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 /// 起動時に実行する DDL。すべて `IF NOT EXISTS` なので何度実行してもよい。
 pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
 
-/// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// このプラグインが出すログ行の接頭辞。
 pub const log_prefix = "postgres_logger"
 
+/// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
 pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
