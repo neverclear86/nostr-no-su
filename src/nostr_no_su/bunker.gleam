@@ -4,15 +4,18 @@
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
-import gleam/io
 import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/time
+
+/// バンカーが出すログ行の接頭辞。
+pub const log_prefix = "bunker"
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。
@@ -156,7 +159,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case outcome {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> Nil
-        engine.Ignore(reason) -> io.println("[bunker] ignored: " <> reason)
+        engine.Ignore(reason) -> log.println(log_prefix, "ignored: " <> reason)
       }
       actor.continue(State(..state, engine: next))
     }
@@ -188,7 +191,8 @@ fn apply_decision(
 /// あとの再送で回復する）。
 fn publish(state: State, response: Event) -> Nil {
   case dict.is_empty(state.publishers) {
-    True -> io.println("[bunker] no live relay connection; response dropped")
+    True ->
+      log.println(log_prefix, "no live relay connection; response dropped")
     False ->
       dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
   }

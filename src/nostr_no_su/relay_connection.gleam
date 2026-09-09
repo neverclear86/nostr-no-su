@@ -8,10 +8,10 @@
 
 import gleam/erlang/process.{type ExitMessage, type Name, type Pid, type Subject}
 import gleam/int
-import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 
@@ -167,14 +167,9 @@ fn open(state: State) -> actor.Next(State, Msg) {
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
   let delay = state.settings.reconnect_delay_ms
-  io.println(
-    "[relay "
-    <> state.settings.relay
-    <> "] "
-    <> reason
-    <> "; reconnecting in "
-    <> int.to_string(delay)
-    <> "ms",
+  log.println(
+    log.relay_prefix(state.settings.relay),
+    reason <> "; reconnecting in " <> int.to_string(delay) <> "ms",
   )
   let _ = process.send_after(state.self, delay, Connect)
   actor.continue(State(..state, socket: None))

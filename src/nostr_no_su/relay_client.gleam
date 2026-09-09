@@ -1,9 +1,9 @@
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
-import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
@@ -63,7 +63,7 @@ pub fn start(
     to_request(url)
     |> result.replace_error("invalid relay url: " <> url),
   )
-  let relay = label(url)
+  let prefix = log.relay_prefix(label(url))
   let builder =
     stratus.new(req, Nil)
     |> stratus.with_connect_timeout(connect_timeout_ms)
@@ -73,27 +73,25 @@ pub fn start(
           list.each(subscriptions(), fn(subscription) {
             message.Req(subscription.0, subscription.1)
             |> message.encode_client_message
-            |> send_text(conn, relay, "subscription " <> subscription.0, _)
+            |> send_text(conn, prefix, "subscription " <> subscription.0, _)
           })
           stratus.continue(state)
         }
         stratus.User(Publish(published)) -> {
           message.Publish(published)
           |> message.encode_client_message
-          |> send_text(conn, relay, "event " <> published.id, _)
+          |> send_text(conn, prefix, "event " <> published.id, _)
           stratus.continue(state)
         }
         stratus.Text(text) -> {
-          handle_text(relay, text, handle_event)
+          handle_text(prefix, text, handle_event)
           stratus.continue(state)
         }
         stratus.Binary(_) -> stratus.continue(state)
       }
     })
     |> stratus.on_close(fn(_state, reason) {
-      io.println(
-        "[relay " <> relay <> "] connection closed: " <> string.inspect(reason),
-      )
+      log.println(prefix, "connection closed: " <> string.inspect(reason))
     })
 
   case stratus.start(builder) {
@@ -115,20 +113,16 @@ pub fn publish(client: Client, published: event.Event) -> Nil {
 /// ログに残す。
 fn send_text(
   connection: stratus.Connection,
-  relay: String,
+  prefix: String,
   what: String,
   text: String,
 ) -> Nil {
   case stratus.send_text_message(connection, text) {
     Ok(Nil) -> Nil
     Error(reason) ->
-      io.println(
-        "[relay "
-        <> relay
-        <> "] failed to send "
-        <> what
-        <> ": "
-        <> string.inspect(reason),
+      log.println(
+        prefix,
+        "failed to send " <> what <> ": " <> string.inspect(reason),
       )
   }
 }
@@ -136,7 +130,7 @@ fn send_text(
 /// リレーメッセージを 1 件デコードする。検証済みイベントは `handle_event` へ
 /// 渡し、それ以外は送信元のリレー名を添えてログ出力する。
 fn handle_text(
-  relay: String,
+  prefix: String,
   text: String,
   handle_event: fn(event.Event) -> Nil,
 ) -> Nil {
@@ -145,40 +139,24 @@ fn handle_text(
       case event.compute_id(received) == received.id {
         True -> handle_event(received)
         False ->
-          io.println(
-            "[relay "
-            <> relay
-            <> "] dropped event with invalid id: "
-            <> received.id,
-          )
+          log.println(prefix, "dropped event with invalid id: " <> received.id)
       }
     Ok(message.RelayEose(subscription)) ->
-      io.println(
-        "[relay " <> relay <> "] end of stored events for " <> subscription,
-      )
+      log.println(prefix, "end of stored events for " <> subscription)
     Ok(message.RelayOk(id, False, reason)) ->
-      io.println(
-        "[relay " <> relay <> "] rejected event " <> id <> ": " <> reason,
-      )
+      log.println(prefix, "rejected event " <> id <> ": " <> reason)
     // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
     Ok(message.RelayOk(_id, True, _message)) -> Nil
-    Ok(message.RelayNotice(text)) ->
-      io.println("[relay " <> relay <> "] notice: " <> text)
+    Ok(message.RelayNotice(text)) -> log.println(prefix, "notice: " <> text)
     Ok(message.RelayClosed(subscription, reason)) ->
-      io.println(
-        "[relay "
-        <> relay
-        <> "] subscription "
-        <> subscription
-        <> " closed: "
-        <> reason,
+      log.println(
+        prefix,
+        "subscription " <> subscription <> " closed: " <> reason,
       )
     Error(_) ->
-      io.println(
-        "[relay "
-        <> relay
-        <> "] unrecognised message: "
-        <> string.slice(text, 0, 120),
+      log.println(
+        prefix,
+        "unrecognised message: " <> string.slice(text, 0, 120),
       )
   }
 }

@@ -11,7 +11,6 @@
 
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -19,6 +18,7 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
@@ -57,6 +57,9 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
 
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
+/// このプラグインが出すログ行の接頭辞。
+pub const log_prefix = "postgres_logger"
+
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
 pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
@@ -318,5 +321,5 @@ pub fn to_row(incoming: Event) -> Row {
 
 /// プラグインのログ行。
 fn log(message: String) -> Nil {
-  io.println("[postgres_logger] " <> message)
+  log.println(log_prefix, message)
 }
