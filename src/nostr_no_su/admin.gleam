@@ -1,11 +1,12 @@
 //// 管理 UI の HTTP サーバー（wisp / mist）。
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
-//// おかげでルートはアクターを起動せずにテストでき、描画は「スナップショット →
+//// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
 //// HTML」の純粋関数（`admin/dashboard`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
-//// ときはリバースプロキシで TLS を終端すること。
+//// ときはリバースプロキシで TLS を終端すること。資格情報はブラウザーが自動で
+//// 送るため、状態を変えるルートは CSRF から守る必要がある。
 
 import gleam/bit_array
 import gleam/crypto
@@ -15,6 +16,7 @@ import gleam/io
 import gleam/list
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/otp/supervision.{type ChildSpecification}
+import gleam/string
 import mist
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker/engine.{type Session}
@@ -27,11 +29,7 @@ const username = "admin"
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
-/// すべてのインターフェースで待ち受ける。mist の既定は `localhost` で、それだと
-/// コンテナーの外へポートを公開しても届かない。
-const interface = "0.0.0.0"
-
-/// ハンドラーが必要とするものすべて。動かないもの（アカウント、プラグイン名）は
+/// ハンドラーが必要とするものすべて。変化しないもの（アカウント、プラグイン名）は
 /// 値で、アクターに問い合わせるものは関数で受け取る。
 pub type Context {
   Context(
@@ -39,7 +37,7 @@ pub type Context {
     accounts: List(dashboard.Account),
     plugins: List(String),
     storage_enabled: Bool,
-    relays: fn() -> List(dashboard.Relay),
+    relays: fn() -> List(dashboard.RelayRow),
     sessions: fn() -> List(Session),
     revoke: fn(String, String) -> Nil,
   )
@@ -48,28 +46,37 @@ pub type Context {
 /// スーパービジョンツリー用の子仕様。mist 自身がスーパーバイザーなので、
 /// サブツリーとしてそのままぶら下げる。
 pub fn supervised(
+  bind: String,
   port: Int,
   context: Context,
 ) -> ChildSpecification(Supervisor) {
-  mist.supervised(server(port, context))
+  mist.supervised(server(bind, port, context))
 }
 
-/// 指定ポートで待ち受ける mist の設定。secret_key_base は wisp が要求するが、
-/// cookie の署名も暗号化も使わないため起動ごとの乱数でよい。
+/// 指定のアドレスとポートで待ち受ける mist の設定。secret_key_base は wisp が
+/// 要求するが、cookie の署名も暗号化も使わないため起動ごとの乱数でよい。
 fn server(
+  bind: String,
   port: Int,
   context: Context,
 ) -> mist.Builder(mist.Connection, mist.ResponseData) {
   handle_request(context, _)
   |> wisp_mist.handler(wisp.random_string(64))
   |> mist.new
-  |> mist.bind(interface)
+  |> mist.bind(bind)
   |> mist.port(port)
-  |> mist.after_start(fn(port, _scheme, _address) {
-    io.println(
-      "[admin] listening on http://" <> interface <> ":" <> int.to_string(port),
-    )
+  |> mist.after_start(fn(port, _scheme, address) {
+    io.println("[admin] listening on " <> listening_url(address, port))
   })
+}
+
+/// 実際に待ち受けているアドレスの表示。IPv6 アドレスは URL 内で角括弧に入れる。
+fn listening_url(address: mist.IpAddress, port: Int) -> String {
+  let host = case address {
+    mist.IpV6(..) -> "[" <> mist.ip_address_to_string(address) <> "]"
+    mist.IpV4(..) -> mist.ip_address_to_string(address)
+  }
+  "http://" <> host <> ":" <> int.to_string(port)
 }
 
 /// リクエストを 1 件処理する。`/healthz` だけ認証なしで通し、それ以外は Basic
@@ -77,6 +84,9 @@ fn server(
 pub fn handle_request(context: Context, request: Request) -> Response {
   use <- wisp.rescue_crashes
   use request <- wisp.handle_head(request)
+  // Basic 認証の資格情報はブラウザーが自動送信するため、別オリジンのフォームから
+  // の POST を弾く。`Origin` も `Referer` も無いリクエスト（curl 等）は通る。
+  use request <- wisp.csrf_known_header_protection(request)
   case wisp.path_segments(request) {
     ["healthz"] -> healthz(request)
     segments -> {
@@ -117,6 +127,8 @@ fn show_dashboard(context: Context, request: Request) -> Response {
   )
   |> dashboard.render
   |> wisp.html_response(200)
+  // secret 入りの `bunker://` URI を含むため、どこにも保存させない。
+  |> wisp.set_header("cache-control", "no-store")
 }
 
 /// セッションを 1 件取り消してダッシュボードへ戻す。再読み込みで取り消しが
@@ -150,28 +162,40 @@ fn require_password(
 
 /// リクエストが正しい Basic 認証の資格情報を持つかどうか。デコードした
 /// `user:password` を期待値と丸ごと比べ、一致した文字数が応答時間に現れない
-/// よう定数時間比較を使う。
+/// よう定数時間比較を使う。認証スキームの照合は RFC 7235 に従い大文字小文字を
+/// 区別しない。
 fn authenticated(password: String, request: Request) -> Bool {
   case list.key_find(request.headers, "authorization") {
-    Ok("Basic " <> offered) ->
-      case bit_array.base64_decode(offered) {
-        Ok(credentials) ->
-          crypto.secure_compare(
-            credentials,
-            bit_array.from_string(username <> ":" <> password),
-          )
+    Ok(header) ->
+      case string.split_once(header, " ") {
+        Ok(#(scheme, offered)) ->
+          string.lowercase(scheme) == "basic"
+          && matches_password(offered, password)
         Error(Nil) -> False
       }
-    _ -> False
+    Error(Nil) -> False
   }
 }
 
-/// 401。ブラウザに資格情報の入力を促すため `WWW-Authenticate` を付ける。
+/// base64 で符号化された資格情報が `admin:<password>` と一致するかどうか。
+fn matches_password(offered: String, password: String) -> Bool {
+  case bit_array.base64_decode(offered) {
+    Ok(credentials) ->
+      crypto.secure_compare(
+        credentials,
+        bit_array.from_string(username <> ":" <> password),
+      )
+    Error(Nil) -> False
+  }
+}
+
+/// 401。ブラウザーに資格情報の入力を促すため `WWW-Authenticate` を付ける。
 fn unauthorized() -> Response {
   wisp.response(401)
   |> wisp.set_header(
     "www-authenticate",
     "Basic realm=\"" <> realm <> "\", charset=\"UTF-8\"",
   )
+  |> wisp.set_header("content-type", "text/plain")
   |> wisp.string_body("Unauthorized")
 }

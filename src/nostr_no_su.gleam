@@ -45,13 +45,15 @@ pub fn main() -> Nil {
 fn spec(loaded: Config) -> app.Spec {
   let storage = storage_spec(loaded)
   let accounts = load_accounts(loaded)
-  let connections = connection_uris(loaded, accounts)
-  list.each(connections, fn(account) { io.println("[bunker] " <> account.uri) })
+  let admin_accounts = dashboard_accounts(loaded, accounts)
+  list.each(admin_accounts, fn(account) {
+    io.println("[bunker] " <> account.uri)
+  })
   app.Spec(
     monitor: monitor_spec(loaded, storage),
     bunker: bunker_spec(loaded, accounts),
     storage: storage,
-    admin: admin_spec(loaded, connections),
+    admin: admin_spec(loaded, admin_accounts),
     open: app.open_websocket,
     reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
   )
@@ -147,9 +149,9 @@ fn load_accounts(loaded: Config) -> List(#(Account, String)) {
   }
 }
 
-/// アカウントごとの `bunker://` 接続 URI。secret を含むため、起動ログと認証済み
-/// ページ以外に出してはならない。
-fn connection_uris(
+/// 管理 UI に出すアカウント一覧。`bunker://` URI は secret を含むため、起動ログと
+/// 認証済みページ以外に出してはならない。
+fn dashboard_accounts(
   loaded: Config,
   accounts: List(#(Account, String)),
 ) -> List(dashboard.Account) {
@@ -190,18 +192,24 @@ fn bunker_spec(
   }
 }
 
-/// 管理 UI の仕様。`ADMIN_PORT` が空か数値でなければ UI を無効にする。
+/// 管理 UI の仕様。`ADMIN_PORT` が空なら黙って無効にし、値が不正なときは理由を
+/// 報告してから無効にする。
 fn admin_spec(
   loaded: Config,
   accounts: List(dashboard.Account),
 ) -> Option(app.Admin) {
   case loaded.admin_port {
-    None -> {
-      io.println("[admin] no usable ADMIN_PORT; admin UI disabled")
+    config.Disabled -> {
+      io.println("[admin] ADMIN_PORT is empty; admin UI disabled")
       None
     }
-    Some(port) ->
+    config.Invalid(reason) -> {
+      io.println("[admin] " <> reason <> "; admin UI disabled")
+      None
+    }
+    config.Listen(port) ->
       Some(app.Admin(
+        bind: loaded.admin_bind,
         port: port,
         password: admin_password(loaded),
         accounts: accounts,

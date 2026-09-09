@@ -62,12 +62,10 @@ pub type Msg {
 }
 
 /// 接続アクターに現在の状態を問い合わせる。名前を保持するプロセスがない
-/// （再起動中など）ときは接続していないものとして扱う。
+/// （再起動中など）、あるいは応答が返らないときは接続していないものとして扱う。
 pub fn status(name: Name(Msg)) -> Status {
-  case named.call(name, status_timeout_ms, GetStatus) {
-    Some(status) -> status
-    None -> Disconnected
-  }
+  named.call(name, status_timeout_ms, GetStatus)
+  |> option.unwrap(Disconnected)
 }
 
 type State {

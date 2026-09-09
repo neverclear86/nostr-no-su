@@ -72,10 +72,16 @@ pub type Bunker {
   )
 }
 
-/// 管理 UI。設定から決まるもの（ポート、パスワード、認証済みページにだけ出す
-/// 接続 URI）だけを持ち、表示するその他の状態はツリーの他の仕様から導く。
+/// 管理 UI。設定から決まるもの（bind アドレス、ポート、パスワード、認証済み
+/// ページにだけ出す接続 URI）だけを持ち、表示するその他の状態はツリーの他の
+/// 仕様から導く。
 pub type Admin {
-  Admin(port: Int, password: String, accounts: List(dashboard.Account))
+  Admin(
+    bind: String,
+    port: Int,
+    password: String,
+    accounts: List(dashboard.Account),
+  )
 }
 
 /// イベント保存サブツリー。Postgres の接続プールと、そこへ書き込むロガー
@@ -115,7 +121,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> add_child(spec.storage, fn(config) {
     supervisor.supervised(storage_tree(config))
   })
-  |> add_child(spec.admin, fn(config) { admin_child(spec, config) })
+  |> add_child(spec.admin, admin_child(spec, _))
   |> supervisor.start
 }
 
@@ -185,6 +191,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
 /// として Context に渡す。
 fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
   admin.supervised(
+    config.bind,
     config.port,
     admin.Context(
       password: config.password,
@@ -207,7 +214,7 @@ fn plugin_names(monitor: Option(Monitor)) -> List(String) {
 }
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。
-fn relay_statuses(spec: Spec) -> List(dashboard.Relay) {
+fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
   let monitor = case spec.monitor {
     None -> []
     Some(monitor) -> statuses(dashboard.Monitor, monitor.relays)
@@ -223,9 +230,9 @@ fn relay_statuses(spec: Spec) -> List(dashboard.Relay) {
 fn statuses(
   role: dashboard.Role,
   relays: List(Relay),
-) -> List(dashboard.Relay) {
+) -> List(dashboard.RelayRow) {
   use relay <- list.map(relays)
-  dashboard.Relay(
+  dashboard.RelayRow(
     role: role,
     url: relay.url,
     status: relay_connection.status(relay.name),

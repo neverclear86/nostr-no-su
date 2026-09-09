@@ -155,7 +155,7 @@ pub fn a_normal_exit_stops_the_socket_test() {
 }
 
 /// 管理 UI が見る接続状態は、ソケットを持っているかどうかを反映する。ソケットを
-/// kill してから再接続するまでの間は `Disconnected` になる。
+/// kill しても、再接続が完了すれば再び `Connected` を返す。
 pub fn status_follows_the_socket_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_relay")

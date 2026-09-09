@@ -24,7 +24,11 @@ type Revoked {
 }
 
 /// 状態をすべて即値で持つ Context。アクターを起動せずにルートを検証できる。
-fn test_context(revoked: Subject(Revoked)) -> admin.Context {
+/// 監視リレーの URL だけはエスケープの検証のために差し替えられる。
+fn test_context(
+  revoked: Subject(Revoked),
+  monitor_relay_url: String,
+) -> admin.Context {
   admin.Context(
     password: password,
     accounts: [
@@ -37,12 +41,12 @@ fn test_context(revoked: Subject(Revoked)) -> admin.Context {
     storage_enabled: True,
     relays: fn() {
       [
-        dashboard.Relay(
+        dashboard.RelayRow(
           role: dashboard.Monitor,
-          url: "wss://relay.example",
+          url: monitor_relay_url,
           status: relay_connection.Connected,
         ),
-        dashboard.Relay(
+        dashboard.RelayRow(
           role: dashboard.Bunker,
           url: "wss://bunker.example",
           status: relay_connection.Disconnected,
@@ -56,9 +60,14 @@ fn test_context(revoked: Subject(Revoked)) -> admin.Context {
   )
 }
 
+/// 取り消しを報告する Context。
+fn revoking_context(revoked: Subject(Revoked)) -> admin.Context {
+  test_context(revoked, "wss://relay.example")
+}
+
 /// 報告を捨てる Context。取り消しを観測しないテスト向け。
 fn context() -> admin.Context {
-  test_context(process.new_subject())
+  revoking_context(process.new_subject())
 }
 
 /// Basic 認証のヘッダーを付けたリクエスト。
@@ -86,13 +95,31 @@ fn header(response: Response(wisp.Body), name: String) -> String {
   value
 }
 
-/// 資格情報のないリクエストは 401 になり、ブラウザに入力を促すヘッダーが付く。
+/// 資格情報のないリクエストは 401 になり、ブラウザーに入力を促すヘッダーが付く。
 pub fn dashboard_requires_credentials_test() {
   let response =
     simulate.request(http.Get, "/")
     |> admin.handle_request(context(), _)
   assert response.status == 401
   assert string.starts_with(header(response, "www-authenticate"), "Basic ")
+  assert header(response, "content-type") == "text/plain"
+}
+
+/// 認証スキームの大文字小文字は区別しない（RFC 7235）。
+pub fn authentication_scheme_is_case_insensitive_test() {
+  let response =
+    simulate.request(http.Get, "/")
+    |> with_credentials("admin", password)
+    |> lowercase_scheme
+    |> admin.handle_request(context(), _)
+  assert response.status == 200
+}
+
+/// `Authorization` ヘッダーのスキームを小文字にしたリクエスト。
+fn lowercase_scheme(request: wisp.Request) -> wisp.Request {
+  let assert Ok("Basic " <> credentials) =
+    list.key_find(request.headers, "authorization")
+  request.set_header(request, "authorization", "basic " <> credentials)
 }
 
 /// パスワードが違えば 401。ユーザー名が違う場合も同じ。
@@ -130,10 +157,31 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "bunker://" <> signer)
   assert string.contains(body, "wss://relay.example")
   assert string.contains(body, "wss://bunker.example")
-  assert string.contains(body, "connected")
-  assert string.contains(body, "disconnected")
-  assert string.contains(body, "console_logger")
-  assert string.contains(body, "enabled")
+  // セル単位で見る。"connected" だけでは "disconnected" にも一致してしまう。
+  assert string.contains(body, "<td>monitor</td>")
+  assert string.contains(body, "<td>connected</td>")
+  assert string.contains(body, "<td>bunker</td>")
+  assert string.contains(body, "<td>disconnected</td>")
+  assert string.contains(body, "<td>console_logger</td>")
+  assert string.contains(body, "Postgres logger: enabled")
+}
+
+/// 状態に含まれる HTML は、そのまま出さずにエスケープする。リレー URL も
+/// クライアント pubkey も外から来た文字列になりうる。
+pub fn dashboard_escapes_html_test() {
+  let context = test_context(process.new_subject(), "ws://evil/\"><b>xss</b>")
+  let response =
+    simulate.request(http.Get, "/")
+    |> with_credentials("admin", password)
+    |> admin.handle_request(context, _)
+  let body = simulate.read_body(response)
+  assert string.contains(body, "&quot;&gt;&lt;b&gt;xss&lt;/b&gt;")
+  assert !string.contains(body, "<b>xss</b>")
+}
+
+/// secret 入りの URI を含むダッシュボードは、どこにも保存させない。
+pub fn dashboard_is_not_cached_test() {
+  assert header(get(context(), "/"), "cache-control") == "no-store"
 }
 
 /// `/healthz` は認証なしで 200 を返す。コンテナーの healthcheck 用。
@@ -153,7 +201,7 @@ pub fn revoke_calls_the_context_and_redirects_test() {
     simulate.request(http.Post, "/sessions/revoke")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(test_context(revoked), _)
+    |> admin.handle_request(revoking_context(revoked), _)
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(revoked, 1000)
@@ -167,7 +215,7 @@ pub fn revoke_without_fields_is_a_bad_request_test() {
     simulate.request(http.Post, "/sessions/revoke")
     |> with_credentials("admin", password)
     |> simulate.form_body([#("signer", signer)])
-    |> admin.handle_request(test_context(revoked), _)
+    |> admin.handle_request(revoking_context(revoked), _)
   assert response.status == 400
   assert process.receive(revoked, 100) == Error(Nil)
 }
@@ -176,6 +224,33 @@ pub fn revoke_without_fields_is_a_bad_request_test() {
 pub fn revoke_rejects_other_methods_test() {
   let response = get(context(), "/sessions/revoke")
   assert response.status == 405
+}
+
+/// 別オリジンのフォームから送られた POST は 400 で弾く。Basic 認証の資格情報は
+/// ブラウザーが自動送信するため、認証だけでは CSRF を防げない。
+pub fn cross_origin_revoke_is_rejected_test() {
+  let revoked = process.new_subject()
+  let response =
+    simulate.browser_request(http.Post, "/sessions/revoke")
+    |> request.set_header("origin", "http://evil.example")
+    |> with_credentials("admin", password)
+    |> simulate.form_body([#("signer", signer), #("client", client)])
+    |> admin.handle_request(revoking_context(revoked), _)
+  assert response.status == 400
+  assert process.receive(revoked, 100) == Error(Nil)
+}
+
+/// 同じオリジンからのフォーム送信は通る。ブラウザーからも取り消せること。
+pub fn same_origin_revoke_is_accepted_test() {
+  let revoked = process.new_subject()
+  let response =
+    simulate.browser_request(http.Post, "/sessions/revoke")
+    |> with_credentials("admin", password)
+    |> simulate.form_body([#("signer", signer), #("client", client)])
+    |> admin.handle_request(revoking_context(revoked), _)
+  assert response.status == 303
+  assert process.receive(revoked, 1000)
+    == Ok(Revoked(signer: signer, client: client))
 }
 
 /// 知らないパスは 404。認証は先に通っている。

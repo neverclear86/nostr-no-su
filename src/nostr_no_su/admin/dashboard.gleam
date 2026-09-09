@@ -26,9 +26,10 @@ pub type Role {
   Bunker
 }
 
-/// リレー接続 1 本の表示内容。
-pub type Relay {
-  Relay(role: Role, url: String, status: Status)
+/// リレー接続 1 本の表示内容。接続の仕様を表す `app.Relay` とは別物なので、
+/// 表の行であることを名前に出す。
+pub type RelayRow {
+  RelayRow(role: Role, url: String, status: Status)
 }
 
 /// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
@@ -41,7 +42,7 @@ pub type Account {
 pub type Snapshot {
   Snapshot(
     accounts: List(Account),
-    relays: List(Relay),
+    relays: List(RelayRow),
     sessions: List(Session),
     plugins: List(String),
     storage_enabled: Bool,
@@ -83,15 +84,15 @@ fn accounts_section(accounts: List(Account)) -> String {
 }
 
 /// リレーごとの接続状態。
-fn relays_section(relays: List(Relay)) -> String {
+fn relays_section(relays: List(RelayRow)) -> String {
   section(
     "Relays",
     ["Role", "URL", "State"],
     list.map(relays, fn(relay) {
       [
-        text(role_label(relay.role)),
+        escape(role_label(relay.role)),
         code(relay.url),
-        text(status_label(relay.status)),
+        escape(status_label(relay.status)),
       ]
     }),
     "No relays configured.",
@@ -115,7 +116,7 @@ fn plugins_section(plugins: List(String)) -> String {
   section(
     "Plugins",
     ["Name"],
-    list.map(plugins, fn(plugin) { [text(plugin)] }),
+    list.map(plugins, fn(plugin) { [escape(plugin)] }),
     "No plugins enabled.",
   )
 }
@@ -123,7 +124,7 @@ fn plugins_section(plugins: List(String)) -> String {
 /// Postgres へのイベント保存が有効かどうか。
 fn storage_section(enabled: Bool) -> String {
   "<h2>Event storage</h2><p>Postgres logger: "
-  <> text(enabled_label(enabled))
+  <> escape(enabled_label(enabled))
   <> "</p>"
 }
 
@@ -175,11 +176,6 @@ fn hidden(name: String, value: String) -> String {
   <> "\" value=\""
   <> escape(value)
   <> "\">"
-}
-
-/// 平文をそのまま表示するセル。
-fn text(value: String) -> String {
-  escape(value)
 }
 
 /// 鍵や URI のように等幅で見せたい値のセル。
