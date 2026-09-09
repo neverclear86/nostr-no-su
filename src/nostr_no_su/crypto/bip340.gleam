@@ -8,6 +8,7 @@ import gleam/crypto
 import gleam/int
 import nostr_no_su/crypto/secp256k1.{Point}
 
+/// 署名できなかった理由。
 pub type SignError {
   InvalidSecretKey
   SigningFailed
@@ -35,7 +36,7 @@ pub fn sign_with_aux(
   aux: BitArray,
 ) -> Result(BitArray, SignError) {
   let d0 = secp256k1.int_from_bytes(privkey)
-  case d0 >= 1 && d0 < secp256k1.n {
+  case secp256k1.valid_scalar(d0) {
     False -> Error(InvalidSecretKey)
     True ->
       case secp256k1.pubkey_point(privkey) {

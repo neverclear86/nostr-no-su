@@ -18,25 +18,31 @@ pub const p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 /// ベースポイント G の位数。
 pub const n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
+/// 曲線上の点。無限遠点は加算の単位元として扱う。
 pub type Point {
   Point(x: Int, y: Int)
   Infinity
 }
 
+/// 鍵素材を受け付けられなかった理由。
 pub type KeyError {
   InvalidPrivateKey
   InvalidPublicKey
 }
 
+/// 整数の冪剰余（OpenSSL）。
 @external(erlang, "nostr_no_su_ffi", "mod_pow")
 fn ffi_mod_pow(base: Int, exp: Int, mod: Int) -> Int
 
+/// `d*G` の非圧縮座標（OpenSSL）。呼び出し側が事前にスカラーの範囲を検査する。
 @external(erlang, "nostr_no_su_ffi", "ec_point_from_priv")
 fn ffi_ec_point_from_priv(priv: BitArray) -> Result(#(BitArray, BitArray), Nil)
 
+/// 圧縮点に対する ECDH の x 座標（OpenSSL）。
 @external(erlang, "nostr_no_su_ffi", "ecdh_x")
 fn ffi_ecdh_x(compressed_pub: BitArray, priv: BitArray) -> Result(BitArray, Nil)
 
+/// バイト列を符号なしビッグエンディアンの整数として読む。
 @external(erlang, "nostr_no_su_ffi", "int_from_bytes")
 pub fn int_from_bytes(bytes: BitArray) -> Int
 
@@ -45,6 +51,7 @@ pub fn int_to_bytes32(value: Int) -> BitArray {
   <<value:size(256)>>
 }
 
+/// 有限体への還元。Gleam の剰余は被除数の符号を引き継ぐため、負の値を戻す。
 fn mod_p(a: Int) -> Int {
   let r = a % p
   case r < 0 {
@@ -58,6 +65,7 @@ fn mod_inv(a: Int) -> Int {
   ffi_mod_pow(mod_p(a), p - 2, p)
 }
 
+/// 点の反転。x 座標はそのままに y 座標を反転する。
 pub fn point_negate(point: Point) -> Point {
   case point {
     Infinity -> Infinity
@@ -65,6 +73,7 @@ pub fn point_negate(point: Point) -> Point {
   }
 }
 
+/// 点の 2 倍算。
 pub fn point_double(point: Point) -> Point {
   case point {
     Infinity -> Infinity
@@ -78,6 +87,7 @@ pub fn point_double(point: Point) -> Point {
   }
 }
 
+/// 点の加算。同じ x 座標を持つ 2 点は、2 倍算か無限遠点のいずれかになる。
 pub fn point_add(a: Point, b: Point) -> Point {
   case a, b {
     Infinity, _ -> b
@@ -104,6 +114,8 @@ pub fn point_mul(point: Point, scalar: Int) -> Point {
   point_mul_loop(point, scalar, Infinity)
 }
 
+/// スカラー倍算のループ。スカラーを 1 ビットずつ見て、立っているビットの
+/// ぶんだけ倍加した点を足し込む。
 fn point_mul_loop(point: Point, scalar: Int, acc: Point) -> Point {
   case scalar {
     0 -> acc
@@ -141,36 +153,14 @@ pub fn lift_x(xonly: BitArray) -> Result(Point, KeyError) {
   }
 }
 
-fn valid_scalar(value: Int) -> Bool {
+/// スカラーが 1 <= value < n の範囲にあるかどうか。`ffi_ec_point_from_priv` は
+/// 範囲外の値でも例外にならず退化した点を返すため、点を導く前に必ず通す。
+pub fn valid_scalar(value: Int) -> Bool {
   value >= 1 && value < n
 }
 
-/// `d*G` の完全な点（y 座標を含む）をネイティブに計算する。
-pub fn pubkey_point(privkey: BitArray) -> Result(Point, KeyError) {
-  case valid_scalar(int_from_bytes(privkey)) {
-    False -> Error(InvalidPrivateKey)
-    True ->
-      case ffi_ec_point_from_priv(privkey) {
-        Ok(#(x, y)) -> Ok(Point(int_from_bytes(x), int_from_bytes(y)))
-        Error(_) -> Error(InvalidPrivateKey)
-      }
-  }
-}
-
-/// 秘密鍵に対応する x-only 公開鍵（32 バイト）。
-pub fn xonly_pubkey(privkey: BitArray) -> Result(BitArray, KeyError) {
-  case valid_scalar(int_from_bytes(privkey)) {
-    False -> Error(InvalidPrivateKey)
-    True ->
-      case ffi_ec_point_from_priv(privkey) {
-        Ok(#(x, _)) -> Ok(x)
-        Error(_) -> Error(InvalidPrivateKey)
-      }
-  }
-}
-
-/// `scalar*G` をネイティブに計算する。`scalar` は 1 <= scalar < n を満たす
-/// 必要がある。
+/// `scalar*G` をネイティブに計算する。秘密鍵から公開鍵を導く経路はすべてこれを
+/// 通るため、スカラーの範囲検査もここ 1 か所で行う。
 pub fn mul_g(scalar: Int) -> Result(Point, KeyError) {
   case valid_scalar(scalar) {
     False -> Error(InvalidPrivateKey)
@@ -179,6 +169,21 @@ pub fn mul_g(scalar: Int) -> Result(Point, KeyError) {
         Ok(#(x, y)) -> Ok(Point(int_from_bytes(x), int_from_bytes(y)))
         Error(_) -> Error(InvalidPrivateKey)
       }
+  }
+}
+
+/// 秘密鍵に対応する `d*G` の完全な点（y 座標を含む）。
+pub fn pubkey_point(privkey: BitArray) -> Result(Point, KeyError) {
+  mul_g(int_from_bytes(privkey))
+}
+
+/// 秘密鍵に対応する x-only 公開鍵（32 バイト）。
+pub fn xonly_pubkey(privkey: BitArray) -> Result(BitArray, KeyError) {
+  case pubkey_point(privkey) {
+    Ok(Point(x, _y)) -> Ok(int_to_bytes32(x))
+    // 範囲内のスカラーから無限遠点は出ないが、`Point` 型の上では起こりうる。
+    Ok(Infinity) -> Error(InvalidPrivateKey)
+    Error(error) -> Error(error)
   }
 }
 
