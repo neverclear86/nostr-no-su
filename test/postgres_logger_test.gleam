@@ -82,29 +82,23 @@ fn insufficient_privilege() -> pog.QueryError {
 /// DB に到達できないことによる停止は、復帰するまでに 1 回だけ報告する。復帰時に
 /// `resume` が破棄件数とあわせて報告するため、再試行のたびには出さない。
 pub fn unreachable_databases_are_reported_once_test() {
-  let first = postgres_logger.suspension(pog.ConnectionUnavailable, False)
-  assert first.reported == True
-  assert first.message
+  assert postgres_logger.suspension_message(pog.ConnectionUnavailable, False, 0)
     == Some(
       "database unavailable: ConnectionUnavailable; retrying every 5000ms",
     )
-
-  let retried = postgres_logger.suspension(pog.QueryTimeout, True)
-  assert retried == postgres_logger.Suspension(message: None, reported: True)
+  assert postgres_logger.suspension_message(pog.QueryTimeout, True, 3) == None
 }
 
 /// 到達性と無関係な失敗（設定の不備など）は復帰の報告が出ないため、再試行の
-/// たびに理由を出して黙り込まない。
+/// たびに理由と、そこまでに捨てた件数を出して黙り込まない。
 pub fn other_schema_failures_are_reported_every_time_test() {
-  let expected =
-    Some(
-      "schema setup failed: PostgresqlError(\"42501\", \"insufficient_privilege\", \"permission denied for schema public\"); retrying in 5000ms",
-    )
-  assert postgres_logger.suspension(insufficient_privilege(), False)
-    == postgres_logger.Suspension(message: expected, reported: False)
-  // すでに報告済みでも抑止されない。
-  assert postgres_logger.suspension(insufficient_privilege(), True)
-    == postgres_logger.Suspension(message: expected, reported: False)
+  let reason =
+    "schema setup failed: PostgresqlError(\"42501\", \"insufficient_privilege\", \"permission denied for schema public\"); retrying in 5000ms"
+  assert postgres_logger.suspension_message(insufficient_privilege(), False, 0)
+    == Some(reason <> " (dropped 0 events so far)")
+  // すでに報告済みでも抑止されず、捨てた件数が増えていく。
+  assert postgres_logger.suspension_message(insufficient_privilege(), True, 7)
+    == Some(reason <> " (dropped 7 events so far)")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている

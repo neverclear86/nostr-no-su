@@ -205,53 +205,47 @@ fn resume(availability: Availability) -> Availability {
   Ready
 }
 
-/// 保存を止めて再試行を予約する。ログに出すかどうかは `suspension` が決める。
+/// 保存を止めて再試行を予約する。出すべきログ行は `suspension_message` が
+/// 決める。理由の抑止が効くのは到達できないことによる停止だけなので、次に
+/// 持ち越す「報告済み」もそこから導ける。
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
-  let Suspension(message:, reported:) =
-    suspension(error, was_reported(state.availability))
-  case message {
+  case suspension_message(error, was_reported(state.availability), dropped) {
     Some(line) -> log(line)
     None -> Nil
   }
-  Unavailable(dropped: dropped, reported: reported)
+  Unavailable(dropped: dropped, reported: unreachable(error))
 }
 
-/// 停止したときのログの扱い。`message` があればその行を出す。`reported` は次に
-/// 持ち越す「報告済み」。
-pub type Suspension {
-  Suspension(message: Option(String), reported: Bool)
-}
-
-/// 停止の理由をどう報告するかを決める。DB に到達できないことによる停止は、
-/// 復帰すれば `resume` が件数とあわせて報告するので、理由は復帰するまでに 1 回
-/// だけ出す。それ以外の失敗（権限不足のような設定の不備）は待っても直らず復帰の
-/// 報告も出ないため、再試行のたびに出して黙り込まないようにする。
-pub fn suspension(error: pog.QueryError, reported: Bool) -> Suspension {
+/// 停止の理由として出すログ行。`None` なら黙る。DB に到達できないことによる
+/// 停止は、復帰すれば `resume` が件数とあわせて報告するので、理由は復帰する
+/// までに 1 回だけ出す。それ以外の失敗（権限不足のような設定の不備）は待っても
+/// 直らず復帰の報告も出ないため、再試行のたびに破棄件数を添えて出す。
+pub fn suspension_message(
+  error: pog.QueryError,
+  reported: Bool,
+  dropped: Int,
+) -> Option(String) {
   let delay = int.to_string(schema_retry_delay_ms)
   case unreachable(error), reported {
-    True, True -> Suspension(message: None, reported: True)
+    True, True -> None
     True, False ->
-      Suspension(
-        message: Some(
-          "database unavailable: "
-          <> string.inspect(error)
-          <> "; retrying every "
-          <> delay
-          <> "ms",
-        ),
-        reported: True,
+      Some(
+        "database unavailable: "
+        <> string.inspect(error)
+        <> "; retrying every "
+        <> delay
+        <> "ms",
       )
     False, _ ->
-      Suspension(
-        message: Some(
-          "schema setup failed: "
-          <> string.inspect(error)
-          <> "; retrying in "
-          <> delay
-          <> "ms",
-        ),
-        reported: False,
+      Some(
+        "schema setup failed: "
+        <> string.inspect(error)
+        <> "; retrying in "
+        <> delay
+        <> "ms (dropped "
+        <> int.to_string(dropped)
+        <> " events so far)",
       )
   }
 }
