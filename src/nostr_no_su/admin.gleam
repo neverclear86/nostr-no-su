@@ -108,7 +108,7 @@ fn route(
   case segments {
     [] -> show_dashboard(context, request)
     ["sessions", "revoke"] -> revoke_session(context, request)
-    ["approve", token] -> approval(context, request, token)
+    ["approve", token] -> approve_connection(context, request, token)
     ["deny", token] -> deny_connection(context, request, token)
     _ -> wisp.not_found()
   }
@@ -139,10 +139,14 @@ fn show_dashboard(context: Context, request: Request) -> Response {
 
 /// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは
 /// `auth_url` として渡されたこの URL を開く。
-fn approval(context: Context, request: Request, token: String) -> Response {
+fn approve_connection(
+  context: Context,
+  request: Request,
+  token: String,
+) -> Response {
   case request.method {
     http.Get -> show_approval(context, token)
-    http.Post -> decide(context.approve(token), "Approved")
+    http.Post -> decision_response(context.approve(token), "Approved")
     _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post])
   }
 }
@@ -154,7 +158,7 @@ fn deny_connection(
   token: String,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
-  decide(context.deny(token), "Denied")
+  decision_response(context.deny(token), "Denied")
 }
 
 /// 承認待ち 1 件の確認画面。処理済み、あるいは失効した token は 404。
@@ -166,13 +170,15 @@ fn show_approval(context: Context, token: String) -> Response {
 }
 
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
-/// 終わったことだけを伝える。処理できなかった token は 404。
-fn decide(outcome: Result(Nil, String), done: String) -> Response {
+/// 終わったことだけを伝える。処理できなかった要求（不明・失効・処理済み、あるいは
+/// バンカーが動いていない）は、区別せず理由を添えた 404 にする。
+fn decision_response(outcome: Result(Nil, String), done: String) -> Response {
   case outcome {
-    Error(_reason) -> wisp.not_found()
     Ok(Nil) ->
       dashboard.notice_page(done, done <> ". You can close this window.")
       |> wisp.html_response(200)
+    Error(reason) ->
+      dashboard.notice_page("Not found", reason) |> wisp.html_response(404)
   }
 }
 

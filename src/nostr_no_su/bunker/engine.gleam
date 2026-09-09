@@ -22,9 +22,9 @@ import nostr_no_su/nostr/event.{type Event, Event}
 /// リクエストを受け付ける。
 const window_seconds = 600
 
-/// 承認ページのパス。`admin` のルーターと対になっているため、片方だけ変えると
-/// クライアントに渡す `auth_url` がどこにも当たらなくなる。
-const approve_path = "/approve/"
+/// 承認待ちの有効期間。承認も拒否もされないまま放置された要求は、これを過ぎたら
+/// 無かったものとして扱う。
+const pending_ttl_seconds = 600
 
 pub type Engine {
   Engine(
@@ -36,8 +36,8 @@ pub type Engine {
     seen: Dict(String, Int),
     // 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
-    // 承認ページを載せる管理 UI の公開 URL。None なら承認フローを使わない。
-    auth_url_base: Option(String),
+    // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
+    auth_url: Option(fn(String) -> String),
   )
 }
 
@@ -78,11 +78,12 @@ pub type Outcome {
 }
 
 /// 指定したアカウント群（それぞれの接続シークレット付き）を扱うエンジン。
-/// `auth_url_base` は承認ページを載せる管理 UI の公開 URL で、`None`（管理 UI が
-/// 無効）なら承認フローも無効になる。
+/// `auth_url` は承認待ちの token から承認ページの URL を組み立てる関数で、
+/// `None`（管理 UI が無効）なら承認フローも無効になる。URL の形を知っているのは
+/// 呼び出し側だけなので、エンジンは管理 UI のルート構造に依存しない。
 pub fn new(
   accounts: List(#(Account, String)),
-  auth_url_base: Option(String),
+  auth_url: Option(fn(String) -> String),
 ) -> Engine {
   let account_dict =
     accounts
@@ -93,7 +94,7 @@ pub fn new(
     authorized: set.new(),
     seen: dict.new(),
     pending: dict.new(),
-    auth_url_base: auth_url_base,
+    auth_url: auth_url,
   )
 }
 
@@ -115,11 +116,12 @@ pub fn revoke(engine: Engine, signer: String, client: String) -> Engine {
   Engine(..engine, authorized: set.delete(engine.authorized, #(signer, client)))
 }
 
-/// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。
+/// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。失効した要求
+/// は状態からすぐに消えるわけではないが、この一覧にも `approve` / `deny` にも
+/// 現れず、次の登録か成功した承認・拒否のときにまとめて捨てられる。
 pub fn pending(engine: Engine, now: Int) -> List(Pending) {
-  engine.pending
+  live_pending(engine, now)
   |> dict.values
-  |> list.filter(fn(entry) { fresh(entry.created_at, now) })
   |> list.sort(fn(left, right) {
     int.compare(left.created_at, right.created_at)
     |> order.break_tie(string.compare(left.token, right.token))
@@ -150,22 +152,31 @@ pub fn deny(
   respond(engine, entry, rpc.error(entry.request_id, "connection denied"), now)
 }
 
-/// 承認待ちを 1 件取り出し、失効したものは捨てる。承認も拒否も 1 度きりなので、
-/// 取り出したものは状態から削除する。
+/// 承認待ちを 1 件取り出す。承認も拒否も 1 度きりなので取り出したものは状態から
+/// 削除し、ついでに失効した要求もまとめて捨てる。
 fn take_pending(
   engine: Engine,
   token: String,
   now: Int,
 ) -> Result(#(Engine, Pending), String) {
-  let live =
-    dict.filter(engine.pending, fn(_token, entry) {
-      fresh(entry.created_at, now)
-    })
+  let live = live_pending(engine, now)
   case dict.get(live, token) {
     Error(_) -> Error("unknown or expired approval request")
     Ok(entry) ->
       Ok(#(Engine(..engine, pending: dict.delete(live, token)), entry))
   }
+}
+
+/// 失効していない承認待ちだけを残した辞書。表示・承認・登録のどこから見ても、
+/// 失効した要求は存在しないものとして扱う。
+fn live_pending(engine: Engine, now: Int) -> Dict(String, Pending) {
+  dict.filter(engine.pending, fn(_token, entry) { !expired(entry, now) })
+}
+
+/// 承認待ちが有効期間を過ぎているかどうか。リクエストの受付ウィンドウと違い、
+/// 経過した時間だけを見る片側の判定。
+fn expired(entry: Pending, now: Int) -> Bool {
+  entry.created_at < now - pending_ttl_seconds
 }
 
 /// 承認・拒否の結果を、待たせているクライアント宛の応答イベントにする。会話鍵は
@@ -382,9 +393,9 @@ fn connect(
     True, _ -> #(authorize(engine, pair), rpc.ok(request.id, "ack"))
     _, True -> #(engine, rpc.ok(request.id, "ack"))
     False, False ->
-      case engine.auth_url_base {
+      case engine.auth_url {
         None -> #(engine, rpc.error(request.id, "invalid secret"))
-        Some(base) -> #(
+        Some(auth_url) -> #(
           record_pending(
             engine,
             Pending(
@@ -395,7 +406,7 @@ fn connect(
               created_at: context.now,
             ),
           ),
-          rpc.auth_url(request.id, base <> approve_path <> context.token),
+          rpc.auth_url(request.id, auth_url(context.token)),
         )
       }
   }
@@ -406,17 +417,18 @@ fn authorize(engine: Engine, pair: #(String, String)) -> Engine {
   Engine(..engine, authorized: set.insert(engine.authorized, pair))
 }
 
-/// 承認待ちを 1 件登録する。誰も承認しないまま失効したものは同時に捨てるので、
-/// 保留の件数は接続の試行回数ではなく受付ウィンドウの長さで決まる。
+/// 承認待ちを 1 件登録する。同じ（署名者, クライアント）の古い要求と、失効した
+/// 要求は同時に捨てる。承認前にクライアントが再読み込みすると `connect` が届き
+/// 直すため、最新の要求だけを残さないと、承認の応答が誰も待っていないリクエスト
+/// id で送られてしまう。失効の基準になる現在時刻は、いま作った要求の作成時刻が
+/// そのまま使える。
 fn record_pending(engine: Engine, entry: Pending) -> Engine {
-  let pending =
-    engine.pending
-    |> dict.insert(entry.token, entry)
-    // 新しい保留の作成時刻が現在時刻なので、それを基準に失効を判定する。
+  let kept =
+    live_pending(engine, entry.created_at)
     |> dict.filter(fn(_token, existing) {
-      fresh(existing.created_at, entry.created_at)
+      existing.signer != entry.signer || existing.client != entry.client
     })
-  Engine(..engine, pending: pending)
+  Engine(..engine, pending: dict.insert(kept, entry.token, entry))
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。

@@ -34,9 +34,15 @@ fn new_engine() -> engine.Engine {
   engine.new([#(account_for(signer_key), secret)], None)
 }
 
-/// 承認フロー（auth_url）を有効にしたエンジン。
+/// 承認フロー（auth_url）を有効にしたエンジン。承認ページの URL の組み立ては
+/// 本番と同じく外から注入する。
 fn auth_engine() -> engine.Engine {
-  engine.new([#(account_for(signer_key), secret)], Some(auth_base))
+  engine.new([#(account_for(signer_key), secret)], Some(approval_url))
+}
+
+/// 承認待ちの token に対応する承認ページの URL。
+fn approval_url(token: String) -> String {
+  auth_base <> "/approve/" <> token
 }
 
 /// 受信イベントを 1 件処理する。トークンは固定なので、承認ページの URL も
@@ -94,13 +100,19 @@ fn connect(
   secret_arg: String,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  let body =
-    "{\"id\":\"c1\",\"method\":\"connect\",\"params\":[\""
-    <> signer.pubkey_hex
-    <> "\",\""
-    <> secret_arg
-    <> "\"]}"
+  let body = connect_body(signer, secret_arg, "c1")
   handle(engine, request_event(client, signer, body, now), now)
+}
+
+/// `connect` リクエストの JSON-RPC 本文。
+fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
+  "{\"id\":\""
+  <> id
+  <> "\",\"method\":\"connect\",\"params\":[\""
+  <> signer.pubkey_hex
+  <> "\",\""
+  <> secret_arg
+  <> "\"]}"
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -468,9 +480,7 @@ pub fn connect_without_secret_asks_for_approval_test() {
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"c1\",\"result\":\"auth_url\",\"error\":\""
-    <> auth_base
-    <> "/approve/"
-    <> token
+    <> approval_url(token)
     <> "\"}"
   assert engine.pending(state, 1000)
     == [
@@ -582,6 +592,30 @@ pub fn approved_client_can_reconnect_without_a_secret_test() {
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
+  assert engine.pending(state, 1002) == []
+}
+
+/// 承認前にクライアントが `connect` を送り直しても、承認待ちは 1 件のままで、
+/// 承認は最新のリクエスト id に応答する。古い id に応答すると、再読み込み後の
+/// クライアントは応答を受け取れない。
+pub fn reconnecting_before_approval_replaces_the_request_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  let #(state, outcome) =
+    engine.handle_event(
+      state,
+      request_event(client, signer, connect_body(signer, "", "c2"), 1001),
+      engine.Context(now: 1001, token: "tok-2"),
+    )
+  let assert Reply(_) = outcome
+  let assert [entry] = engine.pending(state, 1001)
+  assert entry.token == "tok-2"
+
+  let assert Error(_) = engine.approve(state, token, 1001)
+  let assert Ok(#(state, ack)) = engine.approve(state, "tok-2", 1002)
+  assert decrypt_response(client, signer, ack)
+    == "{\"id\":\"c2\",\"result\":\"ack\"}"
   assert engine.pending(state, 1002) == []
 }
 

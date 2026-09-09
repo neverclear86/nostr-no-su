@@ -211,10 +211,21 @@ fn row(cell: String, cells: List(String)) -> String {
   "<tr>" <> cells <> "</tr>"
 }
 
+/// 承認ページのパス。`auth_url` としてクライアントへ渡す URL も、このパスに
+/// 公開 URL を前置して組み立てる。
+pub fn approve_path(token: String) -> String {
+  "/approve/" <> token
+}
+
+/// 拒否のパス。承認ページと違い、POST でしか使わない。
+pub fn deny_path(token: String) -> String {
+  "/deny/" <> token
+}
+
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。
 fn decision_forms(token: String) -> String {
-  decision_form("/approve/" <> token, "Approve")
-  <> decision_form("/deny/" <> token, "Deny")
+  decision_form(approve_path(token), "Approve")
+  <> decision_form(deny_path(token), "Deny")
 }
 
 /// 指定した宛先へ送るボタン 1 つだけのフォーム。

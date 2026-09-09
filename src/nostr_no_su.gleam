@@ -1,5 +1,4 @@
 import gleam/erlang/process
-import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -52,12 +51,11 @@ fn spec(loaded: Config) -> app.Spec {
   list.each(admin_accounts, fn(account) {
     io.println("[bunker] " <> account.uri)
   })
-  let admin = admin_spec(loaded, admin_accounts)
   app.Spec(
     monitor: monitor_spec(loaded, storage),
-    bunker: bunker_spec(loaded, accounts, auth_url_base(loaded, admin)),
+    bunker: bunker_spec(loaded, accounts, auth_url(loaded)),
     storage: storage,
-    admin: admin,
+    admin: admin_spec(loaded, admin_accounts),
     open: app.open_websocket,
     reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
   )
@@ -167,14 +165,12 @@ fn dashboard_accounts(
   )
 }
 
-/// クライアントに渡す `auth_url` の土台になる、管理 UI の公開 URL。承認は管理 UI
-/// の上で行うため、管理 UI が無効なら承認フローも無効にする。
-fn auth_url_base(loaded: Config, admin: Option(app.Admin)) -> Option(String) {
-  use admin <- option.map(admin)
-  option.unwrap(
-    loaded.admin_base_url,
-    "http://localhost:" <> int.to_string(admin.port),
-  )
+/// 承認待ちの token から、クライアントへ渡す承認ページの URL を組み立てる関数。
+/// 管理 UI の公開 URL に承認ページのパスを繋ぐだけで、パスの形を知っているのは
+/// 管理 UI 側（`dashboard`）だけになる。管理 UI が無効なら承認フローも無効。
+fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
+  use base <- option.map(config.auth_url_base(loaded))
+  fn(token) { base <> dashboard.approve_path(token) }
 }
 
 /// 設定されたアカウントのバンカーサブツリー。利用できるアカウントがなければ
@@ -182,7 +178,7 @@ fn auth_url_base(loaded: Config, admin: Option(app.Admin)) -> Option(String) {
 fn bunker_spec(
   loaded: Config,
   accounts: List(#(Account, String)),
-  auth_url_base: Option(String),
+  auth_url: Option(fn(String) -> String),
 ) -> Option(app.Bunker) {
   case accounts {
     [] -> None
@@ -192,7 +188,7 @@ fn bunker_spec(
       Some(
         app.Bunker(
           name: process.new_name("nostr_no_su_bunker"),
-          engine: engine.new(accounts, auth_url_base),
+          engine: engine.new(accounts, auth_url),
           relays: relays(loaded.bunker_relay_urls),
           subscriptions: fn() {
             [

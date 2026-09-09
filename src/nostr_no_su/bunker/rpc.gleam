@@ -36,7 +36,6 @@ pub fn error(id: String, message: String) -> Response {
   Response(id: id, result: "", error: Some(message))
 }
 
-/// リクエスト用のデコーダー。`params` は省略されることがある。
 /// 承認が必要なリクエストへの応答。`result` を "auth_url"、`error` を承認ページの
 /// URL とする NIP-46 の取り決めで、クライアントはこの URL を開いたうえで、同じ
 /// id に対する本来の応答を待ち続ける。
@@ -44,6 +43,7 @@ pub fn auth_url(id: String, url: String) -> Response {
   Response(id: id, result: "auth_url", error: Some(url))
 }
 
+/// リクエスト用のデコーダー。`params` は省略されることがある。
 fn request_decoder() -> decode.Decoder(Request) {
   use id <- decode.field("id", decode.string)
   use method <- decode.field("method", decode.string)

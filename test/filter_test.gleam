@@ -122,12 +122,32 @@ pub fn admin_base_url_test() {
   envoy.set("ADMIN_BASE_URL", "https://bunker.example")
   assert config.load().admin_base_url == Some("https://bunker.example")
 
-  envoy.set("ADMIN_BASE_URL", "https://bunker.example/")
+  envoy.set("ADMIN_BASE_URL", "https://bunker.example//")
   assert config.load().admin_base_url == Some("https://bunker.example")
 
   envoy.set("ADMIN_BASE_URL", "")
   assert config.load().admin_base_url == None
 
+  envoy.unset("ADMIN_BASE_URL")
+}
+
+/// 承認ページの URL の土台。`ADMIN_BASE_URL` が優先され、未設定なら待ち受け
+/// ポートから既定値を組み立てる。管理 UI が無効なら承認フローも無効。
+pub fn auth_url_base_test() {
+  envoy.unset("ADMIN_BASE_URL")
+  envoy.set("ADMIN_PORT", "9000")
+  assert config.auth_url_base(config.load()) == Some("http://localhost:9000")
+
+  envoy.set("ADMIN_BASE_URL", "https://bunker.example")
+  assert config.auth_url_base(config.load()) == Some("https://bunker.example")
+
+  envoy.set("ADMIN_PORT", "")
+  assert config.auth_url_base(config.load()) == None
+
+  envoy.set("ADMIN_PORT", "not-a-port")
+  assert config.auth_url_base(config.load()) == None
+
+  envoy.unset("ADMIN_PORT")
   envoy.unset("ADMIN_BASE_URL")
 }
 

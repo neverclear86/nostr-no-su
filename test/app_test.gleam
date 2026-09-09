@@ -67,7 +67,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
         name: name,
         engine: engine.new(
           [#(account_for(signer_key), secret)],
-          Some(auth_base),
+          Some(fn(token) { auth_base <> "/approve/" <> token }),
         ),
         relays: [test_relay()],
         subscriptions: fn() { [] },

@@ -72,14 +72,16 @@ fn test_context(
         ),
       ]
     },
-    approve: fn(decided) { decide(reports, Approved(decided), decided) },
-    deny: fn(decided) { decide(reports, Denied(decided), decided) },
+    approve: fn(decided) {
+      record_decision(reports, Approved(decided), decided)
+    },
+    deny: fn(decided) { record_decision(reports, Denied(decided), decided) },
   )
 }
 
 /// 承認・拒否のフェイク。テストへ報告したうえで、知っているトークンだけを成功と
 /// して扱う。
-fn decide(
+fn record_decision(
   reports: Subject(Report),
   report: Report,
   decided: String,
@@ -347,6 +349,19 @@ pub fn approve_requires_credentials_test() {
     simulate.request(http.Post, "/approve/" <> token)
     |> admin.handle_request(reporting_context(reports), _)
   assert response.status == 401
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 別オリジンのフォームから送られた承認は 400 で弾く。本文を読まずパスだけで
+/// 承認できる設計なので、CSRF 対策はこの経路にも効いている必要がある。
+pub fn cross_origin_approve_is_rejected_test() {
+  let reports = process.new_subject()
+  let response =
+    simulate.browser_request(http.Post, "/approve/" <> token)
+    |> request.set_header("origin", "http://evil.example")
+    |> with_credentials("admin", password)
+    |> admin.handle_request(reporting_context(reports), _)
+  assert response.status == 400
   assert process.receive(reports, 100) == Error(Nil)
 }
 

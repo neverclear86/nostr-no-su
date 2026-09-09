@@ -18,8 +18,9 @@ import nostr_no_su/time
 /// これを超えるのはアクターが詰まっているときだけ。
 const call_timeout_ms = 5000
 
-/// 承認ページの URL に入るトークンのバイト数。承認できるのは URL を受け取った
-/// クライアントの持ち主だけなので、推測できない長さにする。
+/// 承認ページの URL に入るトークンのバイト数。承認・拒否そのものは管理 UI の
+/// 認証が守るが、トークンは保留の識別子なので、認証を通った管理者が別の要求を
+/// 取り違えないよう推測できない長さにする。
 const token_bytes = 16
 
 pub type Msg {
@@ -39,8 +40,8 @@ pub type Msg {
   Revoke(signer: String, client: String, reply: Subject(Nil))
   /// 承認待ちの接続要求の一覧を問い合わせる。
   GetPending(reply: Subject(List(Pending)))
-  /// 承認待ちの接続要求を承認する。待たせているクライアントへ応答イベントが出て
-  /// いったかどうかを返す。
+  /// 承認待ちの接続要求を承認する。承認を状態に反映し、登録済みの接続へ応答
+  /// イベントを送る。要求が見つからなければ理由を返す。
   Approve(token: String, reply: Subject(Result(Nil, String)))
   /// 承認待ちの接続要求を拒否する。
   Deny(token: String, reply: Subject(Result(Nil, String)))
@@ -65,12 +66,12 @@ pub fn pending(name: Name(Msg)) -> List(Pending) {
   |> option.unwrap([])
 }
 
-/// 接続要求を 1 件承認し、応答イベントが発行されるまで待つ。
+/// 接続要求を 1 件承認し、応答イベントを送り出すまで待つ。
 pub fn approve(name: Name(Msg), token: String) -> Result(Nil, String) {
   call_decision(name, Approve(token, _))
 }
 
-/// 接続要求を 1 件拒否し、応答イベントが発行されるまで待つ。
+/// 接続要求を 1 件拒否し、応答イベントを送り出すまで待つ。
 pub fn deny(name: Name(Msg), token: String) -> Result(Nil, String) {
   call_decision(name, Deny(token, _))
 }
@@ -120,9 +121,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     Approve(token, reply) ->
-      decide(state, reply, engine.approve(state.engine, token, _))
+      apply_decision(state, reply, engine.approve(state.engine, token, _))
     Deny(token, reply) ->
-      decide(state, reply, engine.deny(state.engine, token, _))
+      apply_decision(state, reply, engine.deny(state.engine, token, _))
     GetSessions(reply) -> {
       process.send(reply, engine.sessions(state.engine))
       actor.continue(state)
@@ -158,7 +159,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
 /// 承認・拒否の結果を状態に反映し、待たせているクライアントへ応答イベントを
 /// 発行する。token が不明・失効していれば状態は変えずに理由を返す。
-fn decide(
+fn apply_decision(
   state: State,
   reply: Subject(Result(Nil, String)),
   decision: fn(Int) -> Result(#(engine.Engine, Event), String),
@@ -176,7 +177,13 @@ fn decide(
   }
 }
 
-/// 応答イベントを全バンカーリレーへ発行する。
+/// 応答イベントを全バンカーリレーへ発行する。接続が 1 本も生きていなければ送る
+/// 先が無いので、応答を落としたことをログに残す（クライアントは接続が戻った
+/// あとの再送で回復する）。
 fn publish(state: State, response: Event) -> Nil {
-  dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
+  case dict.is_empty(state.publishers) {
+    True -> io.println("[bunker] no live relay connection; response dropped")
+    False ->
+      dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
+  }
 }

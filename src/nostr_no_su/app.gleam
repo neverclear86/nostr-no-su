@@ -29,7 +29,7 @@ import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
-import nostr_no_su/bunker/engine.{type Engine, type Session}
+import nostr_no_su/bunker/engine.{type Engine, type Pending}
 import nostr_no_su/dedup
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -200,11 +200,21 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       plugins: plugin_names(spec.monitor),
       storage_enabled: option.is_some(spec.storage),
       relays: fn() { relay_statuses(spec) },
-      sessions: fn() { bunker_sessions(spec.bunker) },
-      revoke: fn(signer, client) { revoke_session(spec.bunker, signer, client) },
-      pending: fn() { bunker_pending(spec.bunker) },
-      approve: fn(token) { decide(spec.bunker, bunker.approve(_, token)) },
-      deny: fn(token) { decide(spec.bunker, bunker.deny(_, token)) },
+      sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
+      revoke: fn(signer, client) {
+        with_bunker(spec.bunker, Nil, bunker.revoke(_, signer, client))
+      },
+      pending: fn() {
+        with_bunker(spec.bunker, [], fn(name) {
+          pending_rows(bunker.pending(name))
+        })
+      },
+      approve: fn(token) {
+        with_bunker(spec.bunker, disabled(), bunker.approve(_, token))
+      },
+      deny: fn(token) {
+        with_bunker(spec.bunker, disabled(), bunker.deny(_, token))
+      },
     ),
   )
 }
@@ -243,53 +253,34 @@ fn statuses(
   )
 }
 
-/// バンカーが保持する承認済みセッション。バンカーが無効なら空。
-fn bunker_sessions(config: Option(Bunker)) -> List(Session) {
-  case config {
-    None -> []
-    Some(config) -> bunker.sessions(config.name)
-  }
-}
-
-/// セッションを 1 件取り消す。バンカーが無効なら何もしない。
-fn revoke_session(
+/// バンカーアクターの名前を使って問い合わせる。バンカーが無効なら、問い合わせず
+/// 既定値を返す。
+fn with_bunker(
   config: Option(Bunker),
-  signer: String,
-  client: String,
-) -> Nil {
+  default: answer,
+  ask: fn(Name(bunker.Msg)) -> answer,
+) -> answer {
   case config {
-    None -> Nil
-    Some(config) -> bunker.revoke(config.name, signer, client)
+    None -> default
+    Some(config) -> ask(config.name)
   }
 }
 
-/// バンカーが持つ承認待ちの接続要求。経過時間は問い合わせた時点で求める。
-/// バンカーが無効なら空。
-fn bunker_pending(config: Option(Bunker)) -> List(dashboard.PendingRow) {
-  case config {
-    None -> []
-    Some(config) -> {
-      let now = time.now_seconds()
-      use entry <- list.map(bunker.pending(config.name))
-      dashboard.PendingRow(
-        token: entry.token,
-        signer: entry.signer,
-        client: entry.client,
-        age_seconds: now - entry.created_at,
-      )
-    }
-  }
+/// バンカーが無効なときの、承認・拒否の結果。
+fn disabled() -> Result(Nil, String) {
+  Error("bunker is disabled")
 }
 
-/// 承認待ちへの判断をバンカーへ伝える。バンカーが無効なら伝える先がない。
-fn decide(
-  config: Option(Bunker),
-  decision: fn(Name(bunker.Msg)) -> Result(Nil, String),
-) -> Result(Nil, String) {
-  case config {
-    None -> Error("bunker is disabled")
-    Some(config) -> decision(config.name)
-  }
+/// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。
+fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
+  let now = time.now_seconds()
+  use entry <- list.map(pending)
+  dashboard.PendingRow(
+    token: entry.token,
+    signer: entry.signer,
+    client: entry.client,
+    age_seconds: now - entry.created_at,
+  )
 }
 
 /// イベント保存サブツリー。プールを先に起動し、ロガーアクターがその名前を宛先に
