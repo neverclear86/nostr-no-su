@@ -14,11 +14,13 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 
 const other_client_key = "0000000000000000000000000000000000000000000000000000000000000005"
 
+/// The account for one of the hex test keys.
 fn account_for(key_hex: String) -> Account {
   let assert Ok(account) = account.from_hex(key_hex)
   account
 }
 
+/// An engine serving the single test signer with the test secret.
 fn new_engine() -> engine.Engine {
   engine.new([#(account_for(signer_key), secret)])
 }
@@ -48,6 +50,7 @@ fn request_event(
   signed
 }
 
+/// Decrypt a response event back into its JSON-RPC body.
 fn decrypt_response(
   client: Account,
   signer: Account,
@@ -59,6 +62,7 @@ fn decrypt_response(
   text
 }
 
+/// Send a `connect` request for the given signer and secret.
 fn connect(
   engine: engine.Engine,
   client: Account,
@@ -75,6 +79,7 @@ fn connect(
   engine.handle_event(engine, request_event(client, signer, body, now), now)
 }
 
+/// The right secret is acked with a signed reply addressed to the client.
 pub fn connect_ack_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -89,6 +94,7 @@ pub fn connect_ack_test() {
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
 }
 
+/// A wrong secret is rejected and leaves the client unauthorized.
 pub fn connect_wrong_secret_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -106,6 +112,7 @@ pub fn connect_wrong_secret_test() {
   assert string.contains(decrypt_response(client, signer, r2), "unauthorized")
 }
 
+/// Requests sent before `connect` are refused as unauthorized.
 pub fn get_public_key_requires_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -123,6 +130,7 @@ pub fn get_public_key_requires_connect_test() {
   )
 }
 
+/// Once connected, `get_public_key` returns the signer pubkey.
 pub fn get_public_key_after_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -135,6 +143,7 @@ pub fn get_public_key_after_connect_test() {
     == "{\"id\":\"g1\",\"result\":\"" <> signer.pubkey_hex <> "\"}"
 }
 
+/// `ping` is answered with "pong".
 pub fn ping_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -147,6 +156,7 @@ pub fn ping_test() {
     == "{\"id\":\"p1\",\"result\":\"pong\"}"
 }
 
+/// `sign_event` returns an event with a valid id and signature.
 pub fn sign_event_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -169,6 +179,7 @@ pub fn sign_event_test() {
   assert event.verify_signature(signed)
 }
 
+/// A draft without `created_at` is stamped with the current time.
 pub fn sign_event_fills_created_at_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -184,6 +195,7 @@ pub fn sign_event_fills_created_at_test() {
   assert signed.created_at == 2000
 }
 
+/// Requests outside the acceptance window are ignored.
 pub fn stale_event_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -220,6 +232,7 @@ pub fn replay_ignored_test() {
   let assert Duplicate = second
 }
 
+/// A request whose signature does not verify is ignored.
 pub fn tampered_signature_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -231,6 +244,7 @@ pub fn tampered_signature_ignored_test() {
   assert string.contains(reason, "signature")
 }
 
+/// Content encrypted to another signer cannot be read and is ignored.
 pub fn undecryptable_content_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -254,6 +268,7 @@ pub fn undecryptable_content_ignored_test() {
   let assert Ignore(_) = outcome
 }
 
+/// An unknown method is answered with an error rather than a crash.
 pub fn unknown_method_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -268,6 +283,7 @@ pub fn unknown_method_test() {
   )
 }
 
+/// NIP-04 methods are answered with an explicit "not supported" error.
 pub fn nip04_stubbed_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -283,6 +299,8 @@ pub fn nip04_stubbed_test() {
   )
 }
 
+/// `nip44_encrypt` and `nip44_decrypt` round-trip, and the third party
+/// can decrypt the payload with its own key.
 pub fn nip44_roundtrip_via_engine_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -324,6 +342,7 @@ pub fn nip44_roundtrip_via_engine_test() {
     == "secret msg"
 }
 
+/// Authorization and secrets are per signer, never shared between them.
 pub fn multi_account_isolation_test() {
   let signer_a = account_for(signer_key)
   let signer_b = account_for(other_client_key)
@@ -351,6 +370,7 @@ pub fn multi_account_isolation_test() {
   )
 }
 
+/// `logout` drops the authorization, so later requests are refused.
 pub fn logout_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -378,6 +398,7 @@ pub fn logout_test() {
 
 // --- helpers ---
 
+/// The same hex string with its last digit changed.
 fn flip_last_hex(hex: String) -> String {
   let head = string.drop_end(hex, 1)
   let last = string.slice(hex, string.length(hex) - 1, 1)
@@ -388,6 +409,7 @@ fn flip_last_hex(hex: String) -> String {
   head <> replacement
 }
 
+/// Decoder for the "result" field of a JSON-RPC response.
 fn result_decoder() -> decode.Decoder(String) {
   use result <- decode.field("result", decode.string)
   decode.success(result)
@@ -399,6 +421,7 @@ fn extract_result(response_json: String) -> String {
   value
 }
 
+/// Parse the event that `sign_event` returns as a JSON string.
 fn parse_result_event(response_json: String) -> Result(Event, Nil) {
   case json.parse(response_json, result_decoder()) {
     Ok(event_json) ->

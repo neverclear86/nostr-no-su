@@ -153,7 +153,7 @@ fn start_bunker_connections(
       url,
       subscriptions,
       fn(incoming) { process.send(subject, bunker.Incoming(incoming)) },
-      fn(client) { rewire_publisher(subject, url, client) },
+      fn(connection) { rewire_publisher(subject, url, connection) },
     )
   })
 }
