@@ -26,7 +26,7 @@ pub type Socket {
 
 /// How the socket is opened. Injected so the reconnect logic can be tested
 /// without a websocket.
-pub type Connect =
+pub type Open =
   fn() -> Result(Socket, String)
 
 /// Everything one connection needs: a label for its log lines, how to open
@@ -34,7 +34,7 @@ pub type Connect =
 pub type Config {
   Config(
     relay: String,
-    connect: Connect,
+    connect: Open,
     on_connect: fn(Socket) -> Nil,
     reconnect_delay_ms: Int,
   )
@@ -51,7 +51,10 @@ type State {
   State(config: Config, parent: Pid, self: Subject(Msg), socket: Option(Pid))
 }
 
-/// A child specification for the supervision tree.
+/// A child specification for the supervision tree. The default worker
+/// shutdown timeout of 5000ms applies: `connect` blocks the actor while it
+/// runs, so an injected one that can block for longer than that would be
+/// killed mid-handshake instead of shutting down cleanly.
 pub fn supervised(config: Config) -> ChildSpecification(Subject(Msg)) {
   supervision.worker(fn() { start(config) })
 }
@@ -90,10 +93,10 @@ fn initialise(
 /// Open the socket, or react to the death of a linked process.
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Connect -> attempt(state)
+    Connect -> open(state)
     Exited(exit) ->
       case exit.pid == state.parent, Some(exit.pid) == state.socket {
-        True, _ -> shutdown(exit.reason)
+        True, _ -> shutdown(state, exit.reason)
         _, True -> reconnect(state, "disconnected")
         // Neither: a failed handshake leaves an exit from the stratus child
         // that never became our socket, which is not a reason to react.
@@ -104,7 +107,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
 /// Try to open the socket, handing the fresh one to `on_connect`, and
 /// schedule a retry when the relay is unreachable.
-fn attempt(state: State) -> actor.Next(State, Msg) {
+fn open(state: State) -> actor.Next(State, Msg) {
   case state.config.connect() {
     Ok(socket) -> {
       state.config.on_connect(socket)
@@ -134,13 +137,27 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
 /// trapped exit as an ordinary message, so the signal has to be re-raised
 /// untrapped to exit with the reason the supervisor waits for; the socket
 /// then dies with us through its link.
-fn shutdown(reason: process.ExitReason) -> actor.Next(State, Msg) {
+fn shutdown(
+  state: State,
+  reason: process.ExitReason,
+) -> actor.Next(State, Msg) {
   process.trap_exits(False)
   case reason {
-    process.Normal -> Nil
+    // A normal exit is not passed along a link, so the socket would outlive
+    // the actor. Supervisors ask with `shutdown` or `kill`, so this is only
+    // reached when something else stops the actor.
+    process.Normal -> stop_socket(state)
     process.Killed -> process.kill(process.self())
     process.Abnormal(reason) ->
       process.send_abnormal_exit(process.self(), reason)
   }
   actor.stop()
+}
+
+/// Take the socket down for the exit reasons that will not do it themselves.
+fn stop_socket(state: State) -> Nil {
+  case state.socket {
+    Some(socket) -> process.kill(socket)
+    None -> Nil
+  }
 }

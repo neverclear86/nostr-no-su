@@ -23,7 +23,7 @@ fn spawn_socket() -> Socket {
 }
 
 /// A connect function that always hands back a fresh socket and reports it.
-fn connects(reports: Subject(Report)) -> relay_connection.Connect {
+fn connects(reports: Subject(Report)) -> relay_connection.Open {
   fn() {
     let socket = spawn_socket()
     process.send(reports, Connected(socket.pid))
@@ -32,7 +32,7 @@ fn connects(reports: Subject(Report)) -> relay_connection.Connect {
 }
 
 /// A connect function standing in for an unreachable relay.
-fn refuses(reports: Subject(Report)) -> relay_connection.Connect {
+fn refuses(reports: Subject(Report)) -> relay_connection.Open {
   fn() {
     process.send(reports, Refused)
     Error("connection refused")
@@ -41,7 +41,7 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Connect {
 
 /// Start a connection actor with the given connect function, reporting each
 /// rewiring, and stop it when the test ends.
-fn start(reports: Subject(Report), connect: relay_connection.Connect) -> Pid {
+fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Config(
       relay: "relay.test",
@@ -123,12 +123,26 @@ pub fn exit_from_an_unrelated_process_is_ignored_test() {
   let actor = start(reports, connect)
   let assert Ok(Connected(socket)) = process.receive(reports, 1000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
-  // Still connected and still watching the right process: killing the socket
-  // is what makes it reconnect.
+  // Nothing reconnects: the exit was not read as the socket dying.
+  assert process.receive(reports, delay_ms * 2) == Error(Nil)
+  // Still watching the right process, so killing the socket does reconnect.
   assert process.is_alive(actor)
   process.kill(socket)
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   stop(actor)
+}
+
+/// A normal exit is not passed along the link to the socket, so the actor
+/// stops it by hand on the way out.
+pub fn a_normal_exit_stops_the_socket_test() {
+  let reports = process.new_subject()
+  let actor = start(reports, connects(reports))
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  // A normal exit signal from the process the actor is linked to: this test.
+  process.send_exit(actor)
+  assert died_within(actor, 1000)
+  assert died_within(socket, 1000)
 }
 
 /// The actor terminates when the process it is linked to does, so a

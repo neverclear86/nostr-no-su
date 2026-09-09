@@ -90,10 +90,8 @@ pub fn open_websocket(
     subscriptions,
     handle_event,
   ))
-  use pid <- result.try(
-    process.subject_owner(connection)
-    |> result.replace_error("connection has no owner process"),
-  )
+  // A connection subject is never a named one, so it always has an owner.
+  let assert Ok(pid) = process.subject_owner(connection)
   Ok(Socket(pid: pid, publish: relay_client.publish(connection, _)))
 }
 
@@ -175,8 +173,10 @@ fn add_connections(
 }
 
 /// Send to a named actor, dropping the message when nothing holds the name.
-/// A named subject panics in that case, which would take a connection down
-/// during the window in which its subtree is restarting.
+/// A named subject panics in that case, and during the window in which a
+/// subtree restarts that panic would land either on the connection actor (in
+/// `on_connect`, costing the subtree a restart) or on the stratus process (in
+/// the event handler, costing the connection its socket).
 fn send_named(name: Name(msg), message: msg) -> Nil {
   case process.named(name) {
     Ok(_pid) -> process.send(process.named_subject(name), message)

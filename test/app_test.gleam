@@ -1,5 +1,5 @@
 import gleam/erlang/atom
-import gleam/erlang/process.{type Name, type Pid, type Subject}
+import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
 import gleam/option.{None, Some}
 import gleam/otp/system
 import gleam/string
@@ -21,9 +21,10 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 
 /// What the fake relay reports back to the test.
 type Report {
-  /// A connection was opened: the actor that owns it, and the handler that
-  /// feeds events into the subtree the way a real socket would.
-  Opened(connection: Pid, deliver: fn(Event) -> Nil)
+  /// A connection was opened: the actor that owns it, the socket process it
+  /// watches, and the handler that feeds events into the subtree the way a
+  /// real socket would.
+  Opened(connection: Pid, socket: Pid, deliver: fn(Event) -> Nil)
   /// An event was published on the socket.
   Published(event: Event)
 }
@@ -33,7 +34,7 @@ type Report {
 fn fake_open(reports: Subject(Report)) -> app.Open {
   fn(_relay_url, _subscriptions, handle_event) {
     let socket = process.spawn(fn() { process.sleep_forever() })
-    process.send(reports, Opened(process.self(), handle_event))
+    process.send(reports, Opened(process.self(), socket, handle_event))
     Ok(
       relay_connection.Socket(pid: socket, publish: fn(published) {
         process.send(reports, Published(published))
@@ -77,9 +78,17 @@ fn stop_tree(tree: Pid) -> Nil {
 /// once it answers a system message it has finished wiring itself to the
 /// actor at the head of its subtree.
 fn await_connection(reports: Subject(Report)) -> Report {
-  let assert Ok(Opened(connection, deliver)) = process.receive(reports, 2000)
+  let assert Ok(Opened(connection, socket, deliver)) =
+    process.receive(reports, 2000)
   let _state = system.get_state(connection)
-  Opened(connection, deliver)
+  Opened(connection, socket, deliver)
+}
+
+/// Wait for a monitored process to go down.
+fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Result(Down, Nil) {
+  process.new_selector()
+  |> process.select_specific_monitor(monitor, fn(down) { down })
+  |> process.selector_receive(timeout_ms)
 }
 
 /// The account for one of the hex test keys.
@@ -91,15 +100,26 @@ fn account_for(key_hex: String) -> Account {
 /// A `connect` request, encrypted and signed exactly as a client sends it.
 fn connect_request(id: String) -> Event {
   let signer = account_for(signer_key)
+  request(
+    id,
+    "connect",
+    "[\"" <> signer.pubkey_hex <> "\",\"" <> secret <> "\"]",
+  )
+}
+
+/// A JSON-RPC request with the given params, encrypted to the signer and
+/// signed by the client, exactly as a client sends it.
+fn request(id: String, method: String, params_json: String) -> Event {
+  let signer = account_for(signer_key)
   let client = account_for(client_key)
   let body =
     "{\"id\":\""
     <> id
-    <> "\",\"method\":\"connect\",\"params\":[\""
-    <> signer.pubkey_hex
-    <> "\",\""
-    <> secret
-    <> "\"]}"
+    <> "\",\"method\":\""
+    <> method
+    <> "\",\"params\":"
+    <> params_json
+    <> "}"
   let assert Ok(key) = nip44.conversation_key(client.privkey, signer.pubkey)
   let assert Ok(content) = nip44.encrypt(body, key)
   let unsigned =
@@ -142,7 +162,7 @@ fn event_with_id(id: String) -> Event {
 pub fn bunker_replies_on_its_connection_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
-  let assert Opened(_connection, deliver) = await_connection(reports)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   deliver(connect_request("c1"))
   let assert Ok(Published(response)) = process.receive(reports, 2000)
   assert string.contains(response_body(response), "\"result\":\"ack\"")
@@ -156,11 +176,11 @@ pub fn bunker_survives_being_killed_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(_connection, _deliver) = await_connection(reports)
+  let assert Opened(_connection, _socket, _deliver) = await_connection(reports)
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
 
-  let assert Opened(_connection, deliver) = await_connection(reports)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   let assert Ok(restarted) = process.named(name)
   assert restarted != killed
   deliver(connect_request("c2"))
@@ -176,17 +196,37 @@ pub fn connections_shut_down_when_the_bunker_restarts_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let tree = start_bunker_tree(reports, name)
-  let assert Opened(connection, _deliver) = await_connection(reports)
-  let monitor = process.monitor(connection)
+  let assert Opened(connection, socket, _deliver) = await_connection(reports)
+  let connection_monitor = process.monitor(connection)
+  let socket_monitor = process.monitor(socket)
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
 
-  let down =
-    process.new_selector()
-    |> process.select_specific_monitor(monitor, fn(down) { down })
-    |> process.selector_receive(1000)
-  let assert Ok(process.ProcessDown(reason: reason, ..)) = down
+  let assert Ok(process.ProcessDown(reason: reason, ..)) =
+    await_down(connection_monitor, 1000)
   assert reason == process.Abnormal(atom.to_dynamic(atom.create("shutdown")))
+  // The socket goes with it, through the link the connection actor keeps.
+  let assert Ok(_socket_down) = await_down(socket_monitor, 1000)
+  stop_tree(tree)
+}
+
+/// Session state lives in the bunker actor, not in the connection, so it
+/// survives a reconnect: the client stays authorized without connecting
+/// again.
+pub fn session_survives_a_reconnect_test() {
+  let reports = process.new_subject()
+  let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
+  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  deliver(connect_request("c1"))
+  let assert Ok(Published(ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+
+  process.kill(socket)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  // No second `connect`: only an authorized client is answered with a pong.
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(pong)) = process.receive(reports, 2000)
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
   stop_tree(tree)
 }
 
@@ -213,13 +253,13 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
       open: fake_open(reports),
       reconnect_delay_ms: 100,
     ))
-  let assert Opened(_connection, deliver) = await_connection(reports)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   deliver(event_with_id("first"))
   assert process.receive(seen, 2000) == Ok(event_with_id("first"))
 
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
-  let assert Opened(_connection, deliver) = await_connection(reports)
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   deliver(event_with_id("second"))
   assert process.receive(seen, 2000) == Ok(event_with_id("second"))
   stop_tree(tree)

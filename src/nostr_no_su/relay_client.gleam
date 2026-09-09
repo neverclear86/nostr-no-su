@@ -24,6 +24,14 @@ pub type Connection =
 pub type Subscriptions =
   fn() -> List(#(String, Filter))
 
+/// How long the handshake may take. `start` blocks its caller for at most
+/// this (plus the 100ms stratus adds on top of it), and that caller is a
+/// supervised actor which cannot answer its supervisor's shutdown while it
+/// blocks: the value has to stay below the worker shutdown timeout of 5000ms
+/// (see `relay_connection.supervised`), or shutting down a connection that is
+/// waiting on an unresponsive relay ends in a brutal kill.
+const connect_timeout_ms = 3000
+
 /// Convert a relay URL to the http(s) request stratus expects: gleam_http
 /// only parses http(s) schemes, and stratus maps Https to wss/TLS.
 pub fn to_request(url: String) -> Result(Request(String), Nil) {
@@ -59,6 +67,7 @@ pub fn start(
   let relay = label(url)
   let builder =
     stratus.new(req, Nil)
+    |> stratus.with_connect_timeout(connect_timeout_ms)
     |> stratus.on_message(fn(state, msg, conn) {
       case msg {
         stratus.User(Subscribe) -> {
