@@ -37,6 +37,7 @@ pub type Config {
     admin_port: AdminPort,
     admin_bind: String,
     admin_password: Option(String),
+    admin_base_url: Option(String),
   )
 }
 
@@ -61,7 +62,33 @@ pub fn load() -> Config {
     admin_port: admin_port(),
     admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
     admin_password: optional("ADMIN_PASSWORD"),
+    admin_base_url: optional("ADMIN_BASE_URL")
+      |> option.map(strip_trailing_slashes),
   )
+}
+
+/// 承認ページ（`auth_url`）の URL の土台。`ADMIN_BASE_URL` があればそれを、
+/// 無ければ待ち受けポートから既定値を組み立てる。承認は管理 UI の上で行うため、
+/// 管理 UI が無効なら承認フローも無効として `None` を返す。
+pub fn auth_url_base(config: Config) -> Option(String) {
+  case config.admin_port {
+    Disabled | Invalid(_) -> None
+    Listen(port) ->
+      Some(option.unwrap(
+        config.admin_base_url,
+        "http://localhost:" <> int.to_string(port),
+      ))
+  }
+}
+
+/// 末尾のスラッシュを取り除く。`ADMIN_BASE_URL` にはパスを足して承認ページの URL
+/// を組み立てるため、`http://host:8080/` と書かれてもスラッシュが重ならないように
+/// する。
+fn strip_trailing_slashes(url: String) -> String {
+  case string.ends_with(url, "/") {
+    True -> strip_trailing_slashes(string.drop_end(url, 1))
+    False -> url
+  }
 }
 
 /// 任意の環境変数を読む。docker compose は未設定の変数を空文字列として渡す

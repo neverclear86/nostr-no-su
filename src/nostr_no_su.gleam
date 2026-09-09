@@ -1,5 +1,3 @@
-import gleam/bit_array
-import gleam/crypto
 import gleam/erlang/process
 import gleam/io
 import gleam/list
@@ -13,6 +11,7 @@ import nostr_no_su/config.{type Config}
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/plugins/postgres_logger
+import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
@@ -20,6 +19,9 @@ import pog
 /// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
 /// 件数（正確な上限は `dedup` を参照）。
 const dedup_capacity = 4096
+
+/// 生成する接続シークレットと管理 UI パスワードのバイト数。
+const random_bytes = 16
 
 /// `wss://` 接続が依存する `ssl` アプリケーションを起動する。
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
@@ -51,7 +53,7 @@ fn spec(loaded: Config) -> app.Spec {
   })
   app.Spec(
     monitor: monitor_spec(loaded, storage),
-    bunker: bunker_spec(loaded, accounts),
+    bunker: bunker_spec(loaded, accounts, auth_url(loaded)),
     storage: storage,
     admin: admin_spec(loaded, admin_accounts),
     open: app.open_websocket,
@@ -158,8 +160,17 @@ fn dashboard_accounts(
   use pair <- list.map(accounts)
   dashboard.Account(
     signer: { pair.0 }.pubkey_hex,
-    uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, pair.1),
+    uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, Some(pair.1)),
+    auth_uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, None),
   )
+}
+
+/// 承認待ちの token から、クライアントへ渡す承認ページの URL を組み立てる関数。
+/// 管理 UI の公開 URL に承認ページのパスを繋ぐだけで、パスの形を知っているのは
+/// 管理 UI 側（`dashboard`）だけになる。管理 UI が無効なら承認フローも無効。
+fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
+  use base <- option.map(config.auth_url_base(loaded))
+  fn(token) { base <> dashboard.approve_path(token) }
 }
 
 /// 設定されたアカウントのバンカーサブツリー。利用できるアカウントがなければ
@@ -167,6 +178,7 @@ fn dashboard_accounts(
 fn bunker_spec(
   loaded: Config,
   accounts: List(#(Account, String)),
+  auth_url: Option(fn(String) -> String),
 ) -> Option(app.Bunker) {
   case accounts {
     [] -> None
@@ -176,7 +188,7 @@ fn bunker_spec(
       Some(
         app.Bunker(
           name: process.new_name("nostr_no_su_bunker"),
-          engine: engine.new(accounts),
+          engine: engine.new(accounts, auth_url),
           relays: relays(loaded.bunker_relay_urls),
           subscriptions: fn() {
             [
@@ -222,7 +234,7 @@ fn admin_password(loaded: Config) -> String {
   case loaded.admin_password {
     Some(password) -> password
     None -> {
-      let generated = random_hex()
+      let generated = random.hex(random_bytes)
       io.println("[admin] generated password for user \"admin\": " <> generated)
       generated
     }
@@ -233,16 +245,8 @@ fn admin_password(loaded: Config) -> String {
 fn secret_for(loaded: Config) -> String {
   case loaded.bunker_secret {
     Some(secret) -> secret
-    None -> random_hex()
+    None -> random.hex(random_bytes)
   }
-}
-
-/// 16 バイトの乱数を 16 進で表した文字列。接続シークレットと管理 UI の
-/// パスワードに使う。
-fn random_hex() -> String {
-  crypto.strong_random_bytes(16)
-  |> bit_array.base16_encode
-  |> string.lowercase
 }
 
 /// 起動ログ用にリレー一覧を文字列化する。
