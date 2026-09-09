@@ -17,8 +17,7 @@ services:
       # postgres サービスの資格情報と一致させること。
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
       # 管理 UI の待ち受けポート。空にすると管理 UI を無効にする。その場合は
-      # イメージの HEALTHCHECK（/healthz を叩く）が必ず失敗するため、
-      # healthcheck: { disable: true } を足すか unhealthy を許容すること。
+      # イメージの HEALTHCHECK（/healthz を叩く）もチェックを省略する。
       ADMIN_PORT: ${ADMIN_PORT-8080}
       # コンテナー内では全インターフェースで待ち受ける必要がある。そうしないと
       # 下で公開したポートから届かない。露出はホスト側のループバックに限定する

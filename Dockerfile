@@ -18,8 +18,11 @@ COPY --from=build --chown=nostr:nostr /app /app
 # 秘密鍵を環境変数で受け取るプロセスなので、root では動かさない。
 USER nostr
 # 管理 UI の /healthz は認証なしで応答する。`ADMIN_PORT=` として管理 UI を無効に
-# した構成では待ち受けが無く、この healthcheck は必ず失敗する（README を参照）。
+# した構成では待ち受けが無いため、チェック自体を省略して成功扱いにする。空文字列を
+# 無効の指定として扱うのは `config.admin_port` と同じ意味論で、`-` の既定値展開に
+# しているのは「未設定なら 8080」を再現するため。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -q -O /dev/null "http://127.0.0.1:${ADMIN_PORT:-8080}/healthz"
+  CMD sh -c 'port="${ADMIN_PORT-8080}"; [ -z "$port" ] \
+    || wget -q -O /dev/null "http://127.0.0.1:$port/healthz"'
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["run"]
