@@ -72,6 +72,10 @@ pub fn admin_port_test() {
   envoy.set("ADMIN_PORT", " 9000 ")
   assert config.load().admin_port == config.Listen(9000)
 
+  // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
+  envoy.set("ADMIN_PORT", "65535")
+  assert config.load().admin_port == config.Listen(65_535)
+
   envoy.set("ADMIN_PORT", "")
   assert config.load().admin_port == config.Disabled
 
@@ -81,15 +85,15 @@ pub fn admin_port_test() {
 /// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
 /// 検証しないと待ち受け開始時に badarg でクラッシュする。
 pub fn admin_port_rejects_invalid_values_test() {
-  let assert config.Invalid(_) = invalid_admin_port("not-a-port")
-  let assert config.Invalid(_) = invalid_admin_port("0")
-  let assert config.Invalid(_) = invalid_admin_port("-1")
-  let assert config.Invalid(_) = invalid_admin_port("65536")
+  let assert config.Invalid(_) = admin_port_for("not-a-port")
+  let assert config.Invalid(_) = admin_port_for("0")
+  let assert config.Invalid(_) = admin_port_for("-1")
+  let assert config.Invalid(_) = admin_port_for("65536")
   envoy.unset("ADMIN_PORT")
 }
 
-/// 指定した `ADMIN_PORT` を読み込んだ結果。
-fn invalid_admin_port(raw: String) -> config.AdminPort {
+/// 指定した `ADMIN_PORT` を設定して読み込んだ結果。
+fn admin_port_for(raw: String) -> config.AdminPort {
   envoy.set("ADMIN_PORT", raw)
   config.load().admin_port
 }
