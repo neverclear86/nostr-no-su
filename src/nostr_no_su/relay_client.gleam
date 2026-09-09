@@ -1,10 +1,9 @@
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http/request.{type Request}
 import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
-import nostr_no_su/config.{type Config}
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
@@ -15,6 +14,11 @@ pub type Msg {
   Publish(event: event.Event)
 }
 
+/// A started connection. It is driven through `publish` and the process
+/// behind it is what the caller's reconnect loop waits on.
+pub type Connection =
+  Subject(stratus.InternalMessage(Msg))
+
 /// A thunk producing the subscriptions to open. It is re-evaluated on every
 /// (re)connection so time-relative filters (e.g. `since`) stay current.
 pub type Subscriptions =
@@ -23,24 +27,35 @@ pub type Subscriptions =
 /// Convert a relay URL to the http(s) request stratus expects: gleam_http
 /// only parses http(s) schemes, and stratus maps Https to wss/TLS.
 pub fn to_request(url: String) -> Result(Request(String), Nil) {
-  url
-  |> string.replace("wss://", "https://")
-  |> string.replace("ws://", "http://")
-  |> request.to
+  case string.split_once(url, "://") {
+    Ok(#("wss", rest)) -> request.to("https://" <> rest)
+    Ok(#("ws", rest)) -> request.to("http://" <> rest)
+    _ -> request.to(url)
+  }
 }
 
-/// Connect to the configured relay, open the given subscriptions, and pass
-/// verified events to `handle_event`. Returns the connection subject; the
-/// caller monitors it and reconnects.
+/// The relay URL without its scheme, used to attribute log lines to a relay
+/// when several connections are open.
+pub fn label(url: String) -> String {
+  case string.split_once(url, "://") {
+    Ok(#(_scheme, rest)) -> rest
+    Error(_) -> url
+  }
+}
+
+/// Connect to the given relay, open the given subscriptions, and pass
+/// verified events to `handle_event`. The connection actor is linked to the
+/// caller, which reconnects once `wait_until_dead` returns.
 pub fn start(
-  config: Config,
+  url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-) -> Result(Subject(stratus.InternalMessage(Msg)), String) {
+) -> Result(Connection, String) {
   use req <- result.try(
-    to_request(config.relay_url)
-    |> result.replace_error("invalid relay url: " <> config.relay_url),
+    to_request(url)
+    |> result.replace_error("invalid relay url: " <> url),
   )
+  let relay = label(url)
   let builder =
     stratus.new(req, Nil)
     |> stratus.on_message(fn(state, msg, conn) {
@@ -62,14 +77,16 @@ pub fn start(
           stratus.continue(state)
         }
         stratus.Text(text) -> {
-          handle_text(text, handle_event)
+          handle_text(relay, text, handle_event)
           stratus.continue(state)
         }
         stratus.Binary(_) -> stratus.continue(state)
       }
     })
     |> stratus.on_close(fn(_state, reason) {
-      io.println("[relay] connection closed: " <> string.inspect(reason))
+      io.println(
+        "[relay " <> relay <> "] connection closed: " <> string.inspect(reason),
+      )
     })
 
   case stratus.start(builder) {
@@ -81,20 +98,62 @@ pub fn start(
   }
 }
 
-fn handle_text(text: String, handle_event: fn(event.Event) -> Nil) -> Nil {
+/// Ask the connection to publish an event on its socket.
+pub fn publish(connection: Connection, published: event.Event) -> Nil {
+  process.send(connection, stratus.to_user_message(Publish(published)))
+}
+
+/// Block until the connection process exits. `start` links the connection
+/// actor to its caller, so a caller that traps exits receives exactly one
+/// EXIT per death, normal or abnormal. EXIT messages left behind by earlier
+/// failed starts name a different process and are skipped, so they cannot be
+/// mistaken for the death of the live connection.
+pub fn wait_until_dead(pid: Pid) -> Nil {
+  let exits =
+    process.new_selector()
+    |> process.select_trapped_exits(fn(exit) { exit })
+  let process.ExitMessage(from, _reason) =
+    process.selector_receive_forever(exits)
+  case from == pid {
+    True -> Nil
+    False -> wait_until_dead(pid)
+  }
+}
+
+/// Decode one relay message: verified events go to `handle_event`,
+/// everything else is logged under the relay it came from.
+fn handle_text(
+  relay: String,
+  text: String,
+  handle_event: fn(event.Event) -> Nil,
+) -> Nil {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
       case event.compute_id(received) == received.id {
         True -> handle_event(received)
         False ->
-          io.println("[relay] dropped event with invalid id: " <> received.id)
+          io.println(
+            "[relay "
+            <> relay
+            <> "] dropped event with invalid id: "
+            <> received.id,
+          )
       }
     Ok(message.RelayEose(subscription)) ->
-      io.println("[relay] end of stored events for " <> subscription)
+      io.println(
+        "[relay " <> relay <> "] end of stored events for " <> subscription,
+      )
     Ok(message.RelayOk(id, False, reason)) ->
-      io.println("[relay] rejected event " <> id <> ": " <> reason)
-    Ok(other) -> io.println("[relay] " <> string.inspect(other))
+      io.println(
+        "[relay " <> relay <> "] rejected event " <> id <> ": " <> reason,
+      )
+    Ok(other) -> io.println("[relay " <> relay <> "] " <> string.inspect(other))
     Error(_) ->
-      io.println("[relay] unrecognised message: " <> string.slice(text, 0, 120))
+      io.println(
+        "[relay "
+        <> relay
+        <> "] unrecognised message: "
+        <> string.slice(text, 0, 120),
+      )
   }
 }

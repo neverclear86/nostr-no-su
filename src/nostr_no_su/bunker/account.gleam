@@ -32,21 +32,27 @@ pub fn from_hex(hex: String) -> Result(Account, String) {
   }
 }
 
-/// Parse a comma-separated list of hex private keys.
+/// Build an account per hex private key, failing on the first bad one.
 pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
   list.try_map(raw_keys, from_hex)
 }
 
 /// The `bunker://` connection URI a client pastes to reach this account.
+/// NIP-46 allows several `relay=` hints; the client connects to all of them,
+/// so any live one is enough to reach the bunker.
 pub fn bunker_uri(
   account: Account,
-  relay_url: String,
+  relay_urls: List(String),
   secret: String,
 ) -> String {
+  let relay_params =
+    relay_urls
+    |> list.map(fn(url) { "relay=" <> uri.percent_encode(url) })
+    |> string.join("&")
   "bunker://"
   <> account.pubkey_hex
-  <> "?relay="
-  <> uri.percent_encode(relay_url)
+  <> "?"
+  <> relay_params
   <> "&secret="
   <> secret
 }
