@@ -139,7 +139,19 @@ fn handle_text(
       io.println(
         "[relay " <> relay <> "] rejected event " <> id <> ": " <> reason,
       )
-    Ok(other) -> io.println("[relay " <> relay <> "] " <> string.inspect(other))
+    // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
+    Ok(message.RelayOk(_id, True, _message)) -> Nil
+    Ok(message.RelayNotice(text)) ->
+      io.println("[relay " <> relay <> "] notice: " <> text)
+    Ok(message.RelayClosed(subscription, reason)) ->
+      io.println(
+        "[relay "
+        <> relay
+        <> "] subscription "
+        <> subscription
+        <> " closed: "
+        <> reason,
+      )
     Error(_) ->
       io.println(
         "[relay "

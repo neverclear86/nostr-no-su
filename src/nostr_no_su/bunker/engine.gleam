@@ -212,7 +212,7 @@ pub fn handle_event(
   incoming: Event,
   inputs: Inputs,
 ) -> #(Engine, Outcome) {
-  case incoming.kind == 24_133 {
+  case incoming.kind == event.nip46_kind {
     False -> #(engine, Ignore("not a nip-46 request"))
     True ->
       case fresh(incoming.created_at, inputs.now) {
@@ -532,7 +532,7 @@ fn build_reply(
           id: "",
           pubkey: account.pubkey_hex,
           created_at: now,
-          kind: 24_133,
+          kind: event.nip46_kind,
           tags: [["p", client_pk_hex]],
           content: content,
           sig: "",

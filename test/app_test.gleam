@@ -8,6 +8,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
 import nostr_no_su/crypto/nip44
+import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugins/postgres_logger
@@ -142,7 +143,7 @@ fn request(id: String, method: String, params_json: String) -> Event {
       id: "",
       pubkey: client.pubkey_hex,
       created_at: time.now_seconds(),
-      kind: 24_133,
+      kind: event.nip46_kind,
       tags: [["p", signer.pubkey_hex]],
       content: content,
       sig: "",
@@ -160,13 +161,19 @@ fn response_body(response: Event) -> String {
   text
 }
 
-/// 指定した id を持つ最小限のイベント。ディスパッチャーは id しか見ない。
+/// 指定した id を持つ最小限の kind 1 イベント。ディスパッチャーは id しか
+/// 見ない。
 fn event_with_id(id: String) -> Event {
+  event_with_kind(id, 1)
+}
+
+/// 指定した id と kind を持つ最小限のイベント。
+fn event_with_kind(id: String, kind: Int) -> Event {
   Event(
     id: id,
     pubkey: "",
     created_at: 0,
-    kind: 1,
+    kind: kind,
     tags: [],
     content: "",
     sig: "",
@@ -346,31 +353,53 @@ pub fn monitoring_survives_an_unreachable_database_test() {
   stop_tree(tree)
 }
 
+/// 偽リレー 1 本の上で監視だけを動かすツリー。受信したイベントは `seen` に
+/// 転送するプラグインへ渡る。
+fn start_monitor_tree(
+  reports: Subject(Report),
+  seen: Subject(Event),
+  name: Name(dedup.Msg),
+) -> Pid {
+  start_tree(app.Spec(
+    monitor: Some(
+      app.Monitor(
+        name: name,
+        plugins: [plugin.Plugin(name: "test", handle: process.send(seen, _))],
+        dedup_capacity: 8,
+        relays: [test_relay()],
+        subscriptions: fn() { [] },
+      ),
+    ),
+    bunker: None,
+    storage: None,
+    admin: None,
+    open: fake_open(reports),
+    reconnect_delay_ms: 100,
+  ))
+}
+
+/// バンカー自身の NIP-46 通信は監視の対象外。同じ購読で kind 24133 が届いても
+/// プラグインには渡さず、後続の通常イベントだけが渡る。
+pub fn monitor_drops_nip46_events_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let tree = start_monitor_tree(reports, seen, process.new_name("test_dedup"))
+  let assert Opened(_connection, _socket, deliver) = await_connection(reports)
+  deliver(event_with_kind("nip46", event.nip46_kind))
+  deliver(event_with_id("normal"))
+  // 送信順に処理されるため、最初に届くのが通常イベントであれば kind 24133 は
+  // どのプラグインにも渡っていない。
+  assert process.receive(seen, 2000) == Ok(event_with_id("normal"))
+  stop_tree(tree)
+}
+
 /// 監視接続で受信したイベントはプラグインに届き、経由するディスパッチャーを kill
 /// した後も届き続ける。
 pub fn monitor_dispatcher_survives_being_killed_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
   let name = process.new_name("test_dedup")
-  let tree =
-    start_tree(app.Spec(
-      monitor: Some(
-        app.Monitor(
-          name: name,
-          plugins: [
-            plugin.Plugin(name: "test", handle: process.send(seen, _)),
-          ],
-          dedup_capacity: 8,
-          relays: [test_relay()],
-          subscriptions: fn() { [] },
-        ),
-      ),
-      bunker: None,
-      storage: None,
-      admin: None,
-      open: fake_open(reports),
-      reconnect_delay_ms: 100,
-    ))
+  let tree = start_monitor_tree(reports, seen, name)
   let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   deliver(event_with_id("first"))
   assert process.receive(seen, 2000) == Ok(event_with_id("first"))

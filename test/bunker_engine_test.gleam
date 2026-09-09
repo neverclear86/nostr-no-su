@@ -71,7 +71,7 @@ fn request_event(
       id: "",
       pubkey: client.pubkey_hex,
       created_at: created_at,
-      kind: 24_133,
+      kind: event.nip46_kind,
       tags: [["p", signer.pubkey_hex]],
       content: content,
       sig: "",
@@ -122,7 +122,7 @@ pub fn connect_ack_test() {
   let #(_state, outcome) = connect(new_engine(), client, signer, secret, 1000)
   let assert Reply(response) = outcome
   // 応答はクライアント宛であり、それ自体が正当なイベントである
-  assert response.kind == 24_133
+  assert response.kind == event.nip46_kind
   assert response.tags == [["p", client.pubkey_hex]]
   assert response.pubkey == signer.pubkey_hex
   assert event.verify_signature(response)
@@ -287,7 +287,7 @@ pub fn undecryptable_content_ignored_test() {
       id: "",
       pubkey: client.pubkey_hex,
       created_at: 1000,
-      kind: 24_133,
+      kind: event.nip46_kind,
       tags: [["p", signer.pubkey_hex]],
       content: content,
       sig: "",
@@ -538,7 +538,7 @@ pub fn approve_answers_the_original_request_test() {
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
   let assert Ok(#(state, ack)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
-  assert ack.kind == 24_133
+  assert ack.kind == event.nip46_kind
   assert ack.tags == [["p", client.pubkey_hex]]
   assert ack.pubkey == signer.pubkey_hex
   assert event.verify_signature(ack)

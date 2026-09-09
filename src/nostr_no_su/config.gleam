@@ -4,6 +4,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 
 const default_relay_url = "wss://relay.damus.io"
@@ -159,7 +160,7 @@ pub fn to_filter(config: Config) -> Filter {
 pub fn bunker_filter(signer_pubkeys: List(String), since: Int) -> Filter {
   Filter(
     ..filter.new(),
-    kinds: Some([24_133]),
+    kinds: Some([event.nip46_kind]),
     p_tags: Some(signer_pubkeys),
     since: Some(since),
   )

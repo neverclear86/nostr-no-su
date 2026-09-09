@@ -170,9 +170,22 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     spec,
     config.relays,
     config.subscriptions,
-    fn(incoming) { named.send(config.name, dedup.Incoming(incoming)) },
+    monitor_handler(config.name),
     fn(_relay_url, _socket) { Nil },
   )
+}
+
+/// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。バンカー自身の
+/// NIP-46 通信はここで落とす。NIP-01 のフィルターに kind の否定は無く、`PUBKEYS`
+/// に署名者を含む標準的な構成では自分の応答イベントが監視購読にも届くため、
+/// 除外は受信側で行うほかない。
+fn monitor_handler(name: Name(dedup.Msg)) -> fn(Event) -> Nil {
+  fn(incoming: Event) {
+    case incoming.kind == event.nip46_kind {
+      True -> Nil
+      False -> named.send(name, dedup.Incoming(incoming))
+    }
+  }
 }
 
 /// バンカーサブツリー。アクターと、それが応答に使う接続群。各接続はアクターに

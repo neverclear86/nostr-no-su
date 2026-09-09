@@ -6,6 +6,10 @@ import gleam/result
 import nostr_no_su/crypto/bip340
 import nostr_no_su/hex
 
+/// NIP-46 のリクエストと応答を運ぶイベントの kind。ephemeral（20000 以上
+/// 30000 未満）なので、リレーは保存せず接続中のクライアントにだけ転送する。
+pub const nip46_kind = 24_133
+
 /// NIP-01 で定義される Nostr イベント。
 pub type Event {
   Event(
