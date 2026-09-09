@@ -52,7 +52,7 @@ fn handle(
   incoming: Event,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(state, incoming, engine.Context(now: now, token: token))
+  engine.handle_event(state, incoming, engine.Inputs(now: now, token: token))
 }
 
 /// 実際のクライアントと同じ手順でリクエストイベントを組み立てる。JSON-RPC 本文
@@ -71,7 +71,7 @@ fn request_event(
       id: "",
       pubkey: client.pubkey_hex,
       created_at: created_at,
-      kind: 24_133,
+      kind: event.nip46_kind,
       tags: [["p", signer.pubkey_hex]],
       content: content,
       sig: "",
@@ -94,14 +94,14 @@ fn decrypt_response(
 
 /// 指定した署名者とシークレットで `connect` リクエストを送る。
 fn connect(
-  engine: engine.Engine,
+  state: engine.Engine,
   client: Account,
   signer: Account,
   secret_arg: String,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
   let body = connect_body(signer, secret_arg, "c1")
-  handle(engine, request_event(client, signer, body, now), now)
+  handle(state, request_event(client, signer, body, now), now)
 }
 
 /// `connect` リクエストの JSON-RPC 本文。
@@ -119,10 +119,10 @@ fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
 pub fn connect_ack_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(_engine, outcome) = connect(new_engine(), client, signer, secret, 1000)
+  let #(_state, outcome) = connect(new_engine(), client, signer, secret, 1000)
   let assert Reply(response) = outcome
   // 応答はクライアント宛であり、それ自体が正当なイベントである
-  assert response.kind == 24_133
+  assert response.kind == event.nip46_kind
   assert response.tags == [["p", client.pubkey_hex]]
   assert response.pubkey == signer.pubkey_hex
   assert event.verify_signature(response)
@@ -134,7 +134,7 @@ pub fn connect_ack_test() {
 pub fn connect_wrong_secret_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, outcome) = connect(new_engine(), client, signer, "wrong", 1000)
+  let #(state, outcome) = connect(new_engine(), client, signer, "wrong", 1000)
   let assert Reply(response) = outcome
   assert string.contains(
     decrypt_response(client, signer, response),
@@ -142,8 +142,8 @@ pub fn connect_wrong_secret_test() {
   )
   // その後も未認可のまま
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
-  let #(_engine, outcome2) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome2) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(r2) = outcome2
   assert string.contains(decrypt_response(client, signer, r2), "unauthorized")
 }
@@ -153,7 +153,7 @@ pub fn get_public_key_requires_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
-  let #(_engine, outcome) =
+  let #(_state, outcome) =
     handle(new_engine(), request_event(client, signer, body, 1000), 1000)
   let assert Reply(response) = outcome
   assert string.contains(
@@ -166,10 +166,10 @@ pub fn get_public_key_requires_connect_test() {
 pub fn get_public_key_after_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"g1\",\"result\":\"" <> signer.pubkey_hex <> "\"}"
@@ -179,10 +179,10 @@ pub fn get_public_key_after_connect_test() {
 pub fn ping_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let body = "{\"id\":\"p1\",\"method\":\"ping\"}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"p1\",\"result\":\"pong\"}"
@@ -192,13 +192,13 @@ pub fn ping_test() {
 pub fn sign_event_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let draft =
     "{\\\"kind\\\":1,\\\"content\\\":\\\"hello\\\",\\\"tags\\\":[],\\\"created_at\\\":1700000123}"
   let body =
     "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   let result = decrypt_response(client, signer, response)
   // result フィールドは JSON 文字列として符号化された署名済みイベントなので、
@@ -216,12 +216,12 @@ pub fn sign_event_test() {
 pub fn sign_event_fills_created_at_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
   let body =
     "{\"id\":\"s2\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 2000), 2000)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 2000), 2000)
   let assert Reply(response) = outcome
   let assert Ok(signed) =
     parse_result_event(decrypt_response(client, signer, response))
@@ -234,7 +234,7 @@ pub fn stale_event_ignored_test() {
   let client = account_for(client_key)
   let body = "{\"id\":\"x\",\"method\":\"ping\"}"
   // "now" の 1 時間前に作られたイベント
-  let #(_engine, outcome) =
+  let #(_state, outcome) =
     handle(new_engine(), request_event(client, signer, body, 1000), 4600)
   let assert Ignore(_) = outcome
 }
@@ -255,9 +255,9 @@ pub fn replay_ignored_test() {
         <> "\"]}",
       1000,
     )
-  let #(engine, first) = handle(new_engine(), request, 1000)
+  let #(state, first) = handle(new_engine(), request, 1000)
   let assert Reply(_) = first
-  let #(_engine, second) = handle(engine, request, 1000)
+  let #(_state, second) = handle(state, request, 1000)
   let assert Duplicate = second
 }
 
@@ -268,9 +268,76 @@ pub fn tampered_signature_ignored_test() {
   let request =
     request_event(client, signer, "{\"id\":\"x\",\"method\":\"ping\"}", 1000)
   let tampered = Event(..request, sig: flip_last_hex(request.sig))
-  let #(_engine, outcome) = handle(new_engine(), tampered, 1000)
+  let #(_state, outcome) = handle(new_engine(), tampered, 1000)
   let assert Ignore(reason) = outcome
   assert string.contains(reason, "signature")
+}
+
+/// 署名の検証は重複排除より先に行う。署名の壊れたイベントは `seen` に残らない
+/// ため、同じ id を持つ正当なリクエストが後から届いても処理される。
+pub fn an_invalid_signature_is_not_recorded_as_seen_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request =
+    request_event(client, signer, connect_body(signer, secret, "c1"), 1000)
+  // 署名だけを壊す。id は content から決まるので変わらない。
+  let tampered = Event(..request, sig: flip_last_hex(request.sig))
+  let #(state, ignored) = handle(new_engine(), tampered, 1000)
+  let assert Ignore(_) = ignored
+  let #(_state, outcome) = handle(state, request, 1000)
+  let assert Reply(_) = outcome
+}
+
+/// p タグが複数あっても、既知のアカウントに一致するものへルーティングする。
+/// 先頭が別人宛でも、自分宛のタグがあれば処理する。
+pub fn routes_to_the_matching_p_tag_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let stranger = account_for(other_client_key)
+  let assert Ok(conversation_key) =
+    nip44.conversation_key(client.privkey, signer.pubkey)
+  let assert Ok(content) =
+    nip44.encrypt(connect_body(signer, secret, "c1"), conversation_key)
+  let unsigned =
+    Event(
+      id: "",
+      pubkey: client.pubkey_hex,
+      created_at: 1000,
+      kind: event.nip46_kind,
+      tags: [["p", stranger.pubkey_hex], ["p", signer.pubkey_hex]],
+      content: content,
+      sig: "",
+    )
+  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Reply(response) = outcome
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// どの p タグも既知のアカウントに一致しなければ、理由を添えて無視する。
+pub fn unknown_p_tags_are_ignored_test() {
+  let client = account_for(client_key)
+  let stranger = account_for(other_client_key)
+  let assert Ok(conversation_key) =
+    nip44.conversation_key(client.privkey, stranger.pubkey)
+  let assert Ok(content) =
+    nip44.encrypt(connect_body(stranger, secret, "c1"), conversation_key)
+  let unsigned =
+    Event(
+      id: "",
+      pubkey: client.pubkey_hex,
+      created_at: 1000,
+      kind: event.nip46_kind,
+      tags: [["p", stranger.pubkey_hex]],
+      content: content,
+      sig: "",
+    )
+  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Ignore(reason) = outcome
+  assert string.contains(reason, "no matching account")
+  assert string.contains(reason, stranger.pubkey_hex)
 }
 
 /// 別の署名者宛に暗号化された content は読めないため無視される。
@@ -287,13 +354,13 @@ pub fn undecryptable_content_ignored_test() {
       id: "",
       pubkey: client.pubkey_hex,
       created_at: 1000,
-      kind: 24_133,
+      kind: event.nip46_kind,
       tags: [["p", signer.pubkey_hex]],
       content: content,
       sig: "",
     )
   let assert Ok(request) = event.finalize(unsigned, client.privkey)
-  let #(_engine, outcome) = handle(new_engine(), request, 1000)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(_) = outcome
 }
 
@@ -301,10 +368,10 @@ pub fn undecryptable_content_ignored_test() {
 pub fn unknown_method_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let body = "{\"id\":\"u1\",\"method\":\"do_the_thing\"}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert string.contains(
     decrypt_response(client, signer, response),
@@ -316,11 +383,11 @@ pub fn unknown_method_test() {
 pub fn nip04_stubbed_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let body =
     "{\"id\":\"n1\",\"method\":\"nip04_encrypt\",\"params\":[\"pk\",\"text\"]}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert string.contains(
     decrypt_response(client, signer, response),
@@ -334,14 +401,14 @@ pub fn nip44_roundtrip_via_engine_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let third_party = account_for(other_client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   // 署名者を介して "secret msg" を third_party 宛に暗号化する
   let enc_body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\""
     <> third_party.pubkey_hex
     <> "\",\"secret msg\"]}"
-  let #(engine, enc_outcome) =
-    handle(engine, request_event(client, signer, enc_body, 1001), 1001)
+  let #(state, enc_outcome) =
+    handle(state, request_event(client, signer, enc_body, 1001), 1001)
   let assert Reply(enc_response) = enc_outcome
   let payload = extract_result(decrypt_response(client, signer, enc_response))
   // 相互運用性を確認するため third_party が直接復号する
@@ -356,8 +423,8 @@ pub fn nip44_roundtrip_via_engine_test() {
     <> "\",\""
     <> payload
     <> "\"]}"
-  let #(_engine, dec_outcome) =
-    handle(engine, request_event(client, signer, dec_body, 1002), 1002)
+  let #(_state, dec_outcome) =
+    handle(state, request_event(client, signer, dec_body, 1002), 1002)
   let assert Reply(dec_response) = dec_outcome
   assert extract_result(decrypt_response(client, signer, dec_response))
     == "secret msg"
@@ -368,19 +435,18 @@ pub fn multi_account_isolation_test() {
   let signer_a = account_for(signer_key)
   let signer_b = account_for(other_client_key)
   let client = account_for(client_key)
-  let engine =
+  let state =
     engine.new([#(signer_a, "secret-a"), #(signer_b, "secret-b")], None)
   // A で認可を得る
-  let #(engine, _) = connect(engine, client, signer_a, "secret-a", 1000)
+  let #(state, _) = connect(state, client, signer_a, "secret-a", 1000)
   // B へのリクエストは未認可（認可は署名者ごと）
   let body = "{\"id\":\"g\",\"method\":\"get_public_key\"}"
-  let #(engine, outcome_b) =
-    handle(engine, request_event(client, signer_b, body, 1001), 1001)
+  let #(state, outcome_b) =
+    handle(state, request_event(client, signer_b, body, 1001), 1001)
   let assert Reply(rb) = outcome_b
   assert string.contains(decrypt_response(client, signer_b, rb), "unauthorized")
   // B への接続には A ではなく B のシークレットが必要
-  let #(_engine, outcome_bc) =
-    connect(engine, client, signer_b, "secret-a", 1002)
+  let #(_state, outcome_bc) = connect(state, client, signer_b, "secret-a", 1002)
   let assert Reply(rbc) = outcome_bc
   assert string.contains(
     decrypt_response(client, signer_b, rbc),
@@ -392,10 +458,10 @@ pub fn multi_account_isolation_test() {
 pub fn logout_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(engine, _) =
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
     handle(
-      engine,
+      state,
       request_event(
         client,
         signer,
@@ -405,8 +471,8 @@ pub fn logout_test() {
       1001,
     )
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1002), 1002)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1002), 1002)
   let assert Reply(response) = outcome
   assert string.contains(
     decrypt_response(client, signer, response),
@@ -421,8 +487,8 @@ pub fn sessions_lists_connected_clients_test() {
   let client = account_for(client_key)
   assert engine.sessions(new_engine()) == []
 
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  assert engine.sessions(engine)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  assert engine.sessions(state)
     == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
 }
 
@@ -431,28 +497,28 @@ pub fn sessions_are_sorted_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let other = account_for(other_client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(engine, _) = connect(engine, other, signer, secret, 1001)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) = connect(state, other, signer, secret, 1001)
   let sorted =
     [client.pubkey_hex, other.pubkey_hex]
     |> list.sort(string.compare)
     |> list.map(fn(client) {
       engine.Session(signer: signer.pubkey_hex, client: client)
     })
-  assert engine.sessions(engine) == sorted
+  assert engine.sessions(state) == sorted
 }
 
 /// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。
 pub fn revoke_removes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  let engine = engine.revoke(engine, signer.pubkey_hex, client.pubkey_hex)
-  assert engine.sessions(engine) == []
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let state = engine.revoke(state, signer.pubkey_hex, client.pubkey_hex)
+  assert engine.sessions(state) == []
 
   let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"{}\"]}"
-  let #(_engine, outcome) =
-    handle(engine, request_event(client, signer, body, 1001), 1001)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert string.contains(
     decrypt_response(client, signer, response),
@@ -465,9 +531,9 @@ pub fn revoke_of_an_unknown_session_is_harmless_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let other = account_for(other_client_key)
-  let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  let engine = engine.revoke(engine, signer.pubkey_hex, other.pubkey_hex)
-  assert engine.sessions(engine)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let state = engine.revoke(state, signer.pubkey_hex, other.pubkey_hex)
+  assert engine.sessions(state)
     == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
 }
 
@@ -539,7 +605,7 @@ pub fn approve_answers_the_original_request_test() {
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
   let assert Ok(#(state, ack)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
-  assert ack.kind == 24_133
+  assert ack.kind == event.nip46_kind
   assert ack.tags == [["p", client.pubkey_hex]]
   assert ack.pubkey == signer.pubkey_hex
   assert event.verify_signature(ack)
@@ -606,7 +672,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
     engine.handle_event(
       state,
       request_event(client, signer, connect_body(signer, "", "c2"), 1001),
-      engine.Context(now: 1001, token: "tok-2"),
+      engine.Inputs(now: 1001, token: "tok-2"),
     )
   let assert Reply(_) = outcome
   let assert [entry] = engine.pending(state, 1001)

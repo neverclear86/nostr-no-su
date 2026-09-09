@@ -1,9 +1,9 @@
 //// NIP-46 リクエスト処理の純粋なコア。プロセスも時計も乱数も IO も持たず、現在
-//// 時刻と承認トークンは引数（`Context`）で受け取るため、すべての経路が決定的で
+//// 時刻と承認トークンは引数（`Inputs`）で受け取るため、すべての経路が決定的で
 //// ループバックテストによる単体検証ができる。`bunker.gleam` がこれをアクターで
 //// 包む。
 
-import gleam/bit_array
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/json
@@ -16,6 +16,8 @@ import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
+import nostr_no_su/dedup/window
+import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, Event}
 
 /// クライアントの時刻ずれを許容するため、現在時刻から前後この秒数以内の
@@ -26,14 +28,32 @@ const window_seconds = 600
 /// 無かったものとして扱う。
 const pending_ttl_seconds = 600
 
+/// リプレイ防止のために記憶するリクエスト id の件数。
+///
+/// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
+/// 署名しただけの kind 24133 であれば、未認可のクライアントからでも 1 件を占める。
+/// つまり流入量は運用者の負荷ではなく送信者が決められるもので、署名検証 1 件が
+/// ミリ秒単位である以上、受付ウィンドウ（`window_seconds`）の間に容量を超える
+/// 件数を送り込むことは攻撃者にとって現実的である。
+///
+/// 押し出された id のリプレイが通ったときに起こりうることは限られる。応答は元の
+/// クライアント宛に NIP-44 で暗号化されるため攻撃者は読めず、`logout` の再送で
+/// セッションが切れる、secret 無しの `connect` の再送で承認待ちが再登録される
+/// （承認しても認可されるのは元のクライアント）といった範囲にとどまり、鍵や署名が
+/// 漏れる経路は無い。この範囲を受容したうえで、記憶領域を確実に有界にすることを
+/// 優先して件数のみで区切っている。
+const seen_capacity = 16_384
+
+/// バンカーが持つ状態のすべて。プロセスも時計も持たない純粋な値で、`bunker` の
+/// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
   Engine(
     // 署名者 pubkey hex -> #(account, secret)
     accounts: Dict(String, #(Account, String)),
     // #(署名者 pubkey hex, クライアント pubkey hex)
-    authorized: Set(#(String, String)),
-    // リプレイ防止用: リクエストイベント id -> created_at
-    seen: Dict(String, Int),
+    sessions: Set(#(String, String)),
+    // リプレイ防止用: 処理済みのリクエストイベント id
+    seen: window.Window,
     // 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
     // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
@@ -44,8 +64,8 @@ pub type Engine {
 /// リクエストを 1 件処理する間だけ使う、外から注入する値。時刻も乱数もエンジンの
 /// 外で決めることで、エンジンは純粋なまま保たれる。`token` は承認待ちを作るとき
 /// だけ使う。
-pub type Context {
-  Context(now: Int, token: String)
+pub type Inputs {
+  Inputs(now: Int, token: String)
 }
 
 /// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
@@ -67,6 +87,7 @@ pub type Session {
   Session(signer: String, client: String)
 }
 
+/// 受信イベント 1 件を処理した結果。
 pub type Outcome {
   /// クライアントへ送り返す応答イベント。
   Reply(response: Event)
@@ -91,8 +112,8 @@ pub fn new(
     |> dict.from_list
   Engine(
     accounts: account_dict,
-    authorized: set.new(),
-    seen: dict.new(),
+    sessions: set.new(),
+    seen: window.new(seen_capacity),
     pending: dict.new(),
     auth_url: auth_url,
   )
@@ -101,7 +122,7 @@ pub fn new(
 /// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定
 /// するよう署名者・クライアントの順に並べる。
 pub fn sessions(engine: Engine) -> List(Session) {
-  engine.authorized
+  engine.sessions
   |> set.to_list
   |> list.sort(fn(left, right) {
     string.compare(left.0, right.0)
@@ -113,7 +134,7 @@ pub fn sessions(engine: Engine) -> List(Session) {
 /// セッションの承認を取り消す。そのクライアントは再び `connect` を求められる。
 /// 承認されていない組を渡しても何も起きない。
 pub fn revoke(engine: Engine, signer: String, client: String) -> Engine {
-  Engine(..engine, authorized: set.delete(engine.authorized, #(signer, client)))
+  Engine(..engine, sessions: set.delete(engine.sessions, #(signer, client)))
 }
 
 /// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。失効した要求
@@ -137,7 +158,7 @@ pub fn approve(
   now: Int,
 ) -> Result(#(Engine, Event), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  let engine = authorize(engine, #(entry.signer, entry.client))
+  let engine = open_session(engine, #(entry.signer, entry.client))
   respond(engine, entry, rpc.ok(entry.request_id, "ack"), now)
 }
 
@@ -210,31 +231,43 @@ fn respond(
 pub fn handle_event(
   engine: Engine,
   incoming: Event,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, Outcome) {
-  case incoming.kind == 24_133 {
-    False -> #(engine, Ignore("not a nip-46 request"))
-    True ->
-      case fresh(incoming.created_at, context.now) {
-        False -> #(engine, Ignore("stale or future event"))
-        True ->
-          case route(engine, incoming.tags) {
-            Error(reason) -> #(engine, Ignore(reason))
-            Ok(#(account, secret)) ->
-              case dict.has_key(engine.seen, incoming.id) {
-                True -> #(engine, Duplicate)
-                False -> {
-                  let engine = record_seen(engine, incoming, context.now)
-                  case event.verify_signature(incoming) {
-                    False -> #(engine, Ignore("invalid signature"))
-                    True ->
-                      handle_request(engine, account, secret, incoming, context)
-                  }
-                }
-              }
-          }
-      }
+  case accept(engine, incoming, inputs.now) {
+    Error(outcome) -> #(engine, outcome)
+    Ok(#(engine, account, secret)) ->
+      handle_request(engine, account, secret, incoming, inputs)
   }
+}
+
+/// 受信イベントを受理するかどうかを、kind・受付ウィンドウ・ルーティング・署名・
+/// 重複の順に判定する。署名の検証を重複排除より先に置くのは、`seen` に残るのを
+/// 正当なリクエストだけに限るため。誰でも作れる署名なしのイベントで記憶領域を
+/// 埋められてはならない。受理したイベントの id は記録して返す。
+fn accept(
+  engine: Engine,
+  incoming: Event,
+  now: Int,
+) -> Result(#(Engine, Account, String), Outcome) {
+  use <- bool.guard(
+    incoming.kind != event.nip46_kind,
+    Error(Ignore("not a nip-46 request")),
+  )
+  use <- bool.guard(
+    !fresh(incoming.created_at, now),
+    Error(Ignore("stale or future event")),
+  )
+  use #(account, secret) <- result.try(
+    route(engine, incoming.tags) |> result.map_error(Ignore),
+  )
+  use <- bool.guard(
+    !event.verify_signature(incoming),
+    Error(Ignore("invalid signature")),
+  )
+  use seen <- result.map(
+    window.insert(engine.seen, incoming.id) |> result.replace_error(Duplicate),
+  )
+  #(Engine(..engine, seen: seen), account, secret)
 }
 
 /// タイムスタンプが現在時刻を中心とした受付ウィンドウ内かどうか。
@@ -242,40 +275,29 @@ fn fresh(created_at: Int, now: Int) -> Bool {
   created_at >= now - window_seconds && created_at <= now + window_seconds
 }
 
-/// 最初の ["p", pubkey] タグを見て、既知のアカウントへルーティングする。
+/// 既知のアカウントに一致する ["p", pubkey] タグへルーティングする。NIP-46 の
+/// リクエストが持つ p タグは通常 1 つだが、複数あっても自分宛のものを選ぶ。
 fn route(
   engine: Engine,
   tags: List(List(String)),
 ) -> Result(#(Account, String), String) {
-  case first_p_tag(tags) {
-    None -> Error("no p tag")
-    Some(pubkey) ->
-      case dict.get(engine.accounts, pubkey) {
-        Ok(pair) -> Ok(pair)
-        Error(_) -> Error("no matching account for " <> pubkey)
-      }
+  case p_tag_pubkeys(tags) {
+    [] -> Error("no p tag")
+    pubkeys ->
+      list.find_map(pubkeys, dict.get(engine.accounts, _))
+      |> result.replace_error(
+        "no matching account for " <> string.join(pubkeys, ", "),
+      )
   }
 }
 
-/// 最初の ["p", pubkey] タグの pubkey。存在しなければ None。
-fn first_p_tag(tags: List(List(String))) -> Option(String) {
-  case tags {
-    [] -> None
-    [["p", pubkey, ..], ..] -> Some(pubkey)
-    [_, ..rest] -> first_p_tag(rest)
+/// ["p", pubkey] タグの pubkey を、現れた順に取り出す。
+fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
+  use tag <- list.filter_map(tags)
+  case tag {
+    ["p", pubkey, ..] -> Ok(pubkey)
+    _ -> Error(Nil)
   }
-}
-
-/// リプレイ防止のためリクエスト id を記録し、もはやリプレイされ得ない id は
-/// 忘れる。
-fn record_seen(engine: Engine, incoming: Event, now: Int) -> Engine {
-  let seen =
-    engine.seen
-    |> dict.insert(incoming.id, incoming.created_at)
-    // 受付ウィンドウより古いエントリを削除する。どのみちリプレイされないため、
-    // これで集合のサイズが有界に保たれる。
-    |> dict.filter(fn(_id, created_at) { created_at >= now - window_seconds })
-  Engine(..engine, seen: seen)
 }
 
 /// リクエストを復号・デコードし、暗号化した応答を組み立てる。
@@ -284,43 +306,54 @@ fn handle_request(
   account: Account,
   secret: String,
   incoming: Event,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, Outcome) {
   let client_pk_hex = incoming.pubkey
-  case client_conversation_key(account, client_pk_hex) {
+  case decode_request(account, incoming) {
     Error(reason) -> #(engine, Ignore(reason))
-    Ok(conversation_key) ->
-      case nip44.decrypt(incoming.content, conversation_key) {
-        Error(_) ->
-          case string.contains(incoming.content, "?iv=") {
-            True -> #(engine, Ignore("nip-04 request (unsupported)"))
-            False -> #(engine, Ignore("undecryptable content"))
-          }
-        Ok(plaintext) ->
-          case rpc.decode_request(plaintext) {
-            Error(_) -> #(engine, Ignore("malformed request payload"))
-            Ok(request) -> {
-              let #(engine, response) =
-                execute(
-                  engine,
-                  account,
-                  secret,
-                  client_pk_hex,
-                  request,
-                  context,
-                )
-              let reply =
-                build_reply(
-                  account,
-                  conversation_key,
-                  client_pk_hex,
-                  response,
-                  context.now,
-                )
-              #(engine, outcome(reply))
-            }
-          }
-      }
+    Ok(#(conversation_key, request)) -> {
+      let #(engine, response) =
+        execute(engine, account, secret, client_pk_hex, request, inputs)
+      let reply =
+        build_reply(
+          account,
+          conversation_key,
+          client_pk_hex,
+          response,
+          inputs.now,
+        )
+      #(engine, outcome(reply))
+    }
+  }
+}
+
+/// リクエストの content を復号し、JSON-RPC としてデコードする。同じ会話鍵で応答を
+/// 暗号化するため、鍵も一緒に返す。
+fn decode_request(
+  account: Account,
+  incoming: Event,
+) -> Result(#(BitArray, rpc.Request), String) {
+  use conversation_key <- result.try(client_conversation_key(
+    account,
+    incoming.pubkey,
+  ))
+  use plaintext <- result.try(
+    nip44.decrypt(incoming.content, conversation_key)
+    |> result.replace_error(undecryptable(incoming.content)),
+  )
+  use request <- result.map(
+    rpc.decode_request(plaintext)
+    |> result.replace_error("malformed request payload"),
+  )
+  #(conversation_key, request)
+}
+
+/// 復号できなかった content を破棄する理由。NIP-04 のペイロードは形式で見分けが
+/// つくため、未対応であることが分かる理由にする。
+fn undecryptable(content: String) -> String {
+  case string.contains(content, "?iv=") {
+    True -> "nip-04 request (unsupported)"
+    False -> "undecryptable content"
   }
 }
 
@@ -330,7 +363,7 @@ fn client_conversation_key(
   client_pk_hex: String,
 ) -> Result(BitArray, String) {
   use client_pk <- result.try(
-    decode_hex(client_pk_hex) |> result.replace_error("invalid client pubkey"),
+    hex.decode(client_pk_hex) |> result.replace_error("invalid client pubkey"),
   )
   nip44.conversation_key(account.privkey, client_pk)
   |> result.replace_error("cannot derive conversation key")
@@ -352,23 +385,22 @@ fn execute(
   secret: String,
   client_pk_hex: String,
   request: rpc.Request,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
   let signer = account.pubkey_hex
   case request.method {
-    "connect" ->
-      connect(engine, signer, secret, client_pk_hex, request, context)
+    "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
     "logout" -> #(
       revoke(engine, signer, client_pk_hex),
       rpc.ok(request.id, "ack"),
     )
     _ ->
-      case set.contains(engine.authorized, #(signer, client_pk_hex)) {
+      case set.contains(engine.sessions, #(signer, client_pk_hex)) {
         False -> #(
           engine,
           rpc.error(request.id, "unauthorized: send connect first"),
         )
-        True -> #(engine, execute_authorized(account, request, context.now))
+        True -> #(engine, execute_in_session(account, request, inputs.now))
       }
   }
 }
@@ -383,14 +415,14 @@ fn connect(
   secret: String,
   client_pk_hex: String,
   request: rpc.Request,
-  context: Context,
+  inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
   let pair = #(signer, client_pk_hex)
   case
     connect_secret(request.params) == Some(secret),
-    set.contains(engine.authorized, pair)
+    set.contains(engine.sessions, pair)
   {
-    True, _ -> #(authorize(engine, pair), rpc.ok(request.id, "ack"))
+    True, _ -> #(open_session(engine, pair), rpc.ok(request.id, "ack"))
     _, True -> #(engine, rpc.ok(request.id, "ack"))
     False, False ->
       case engine.auth_url {
@@ -399,22 +431,22 @@ fn connect(
           record_pending(
             engine,
             Pending(
-              token: context.token,
+              token: inputs.token,
               signer: signer,
               client: client_pk_hex,
               request_id: request.id,
-              created_at: context.now,
+              created_at: inputs.now,
             ),
           ),
-          rpc.auth_url(request.id, auth_url(context.token)),
+          rpc.auth_url(request.id, auth_url(inputs.token)),
         )
       }
   }
 }
 
 /// （署名者, クライアント）の組を承認済みにする。
-fn authorize(engine: Engine, pair: #(String, String)) -> Engine {
-  Engine(..engine, authorized: set.insert(engine.authorized, pair))
+fn open_session(engine: Engine, pair: #(String, String)) -> Engine {
+  Engine(..engine, sessions: set.insert(engine.sessions, pair))
 }
 
 /// 承認待ちを 1 件登録する。同じ（署名者, クライアント）の古い要求と、失効した
@@ -432,7 +464,7 @@ fn record_pending(engine: Engine, entry: Pending) -> Engine {
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。
-fn execute_authorized(
+fn execute_in_session(
   account: Account,
   request: rpc.Request,
   now: Int,
@@ -503,7 +535,7 @@ fn nip44_op(
 ) -> rpc.Response {
   case request.params {
     [third_party_hex, text, ..] ->
-      case decode_hex(third_party_hex) {
+      case hex.decode(third_party_hex) {
         Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
         Ok(third_party) ->
           case nip44.conversation_key(account.privkey, third_party) {
@@ -540,7 +572,7 @@ fn build_reply(
           id: "",
           pubkey: account.pubkey_hex,
           created_at: now,
-          kind: 24_133,
+          kind: event.nip46_kind,
           tags: [["p", client_pk_hex]],
           content: content,
           sig: "",
@@ -551,9 +583,4 @@ fn build_reply(
       }
     }
   }
-}
-
-/// 16 進文字列をデコードする。大文字・小文字のどちらも受け付ける。
-fn decode_hex(hex: String) -> Result(BitArray, Nil) {
-  bit_array.base16_decode(string.uppercase(hex))
 }

@@ -41,18 +41,20 @@ fn test_context(
 ) -> admin.Context {
   admin.Context(
     password: password,
-    accounts: [dashboard.Account(signer: signer, uri: uri, auth_uri: auth_uri)],
+    accounts: [
+      dashboard.AccountRow(signer: signer, uri: uri, auth_uri: auth_uri),
+    ],
     plugins: ["console_logger"],
     storage_enabled: True,
     relays: fn() {
       [
         dashboard.RelayRow(
-          role: dashboard.Monitor,
+          role: dashboard.MonitorRelay,
           url: monitor_relay_url,
           status: relay_connection.Connected,
         ),
         dashboard.RelayRow(
-          role: dashboard.Bunker,
+          role: dashboard.BunkerRelay,
           url: "wss://bunker.example",
           status: relay_connection.Disconnected,
         ),

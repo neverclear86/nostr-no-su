@@ -4,15 +4,18 @@
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
-import gleam/io
 import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/time
+
+/// バンカーが出すログ行の接頭辞。
+pub const log_prefix = "bunker"
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。
@@ -23,6 +26,7 @@ const call_timeout_ms = 5000
 /// 取り違えないよう推測できない長さにする。
 const token_bytes = 16
 
+/// バンカーアクターが受け取るメッセージ。
 pub type Msg {
   /// バンカー接続のいずれかで受信した kind 24133 イベント。
   Incoming(event: Event)
@@ -33,6 +37,11 @@ pub type Msg {
   /// 側の責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
   /// あれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
+  /// 1 本のリレー接続の送信手段を取り下げる。接続アクターが `on_disconnect` から
+  /// 送るため、死んだソケットへ応答を渡し続けることがない。接続アクター自身が
+  /// クラッシュした場合は `on_disconnect` を経ないため、再起動した接続が
+  /// `SetPublisher` で上書きするまでは古い送信手段が残る。
+  RemovePublisher(relay_url: String)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))
   /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
@@ -86,6 +95,8 @@ fn call_decision(
   |> option.unwrap(Error("bunker is not running"))
 }
 
+/// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と
+/// 生きた接続の送信手段だけを持つ。
 type State {
   State(engine: engine.Engine, publishers: Dict(String, fn(Event) -> Nil))
 }
@@ -129,9 +140,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     Revoke(signer, client, reply) -> {
-      let engine = engine.revoke(state.engine, signer, client)
+      let next = engine.revoke(state.engine, signer, client)
       process.send(reply, Nil)
-      actor.continue(State(..state, engine: engine))
+      actor.continue(State(..state, engine: next))
     }
     SetPublisher(relay_url, publish) ->
       actor.continue(
@@ -140,17 +151,20 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           publishers: dict.insert(state.publishers, relay_url, publish),
         ),
       )
+    RemovePublisher(relay_url) ->
+      actor.continue(
+        State(..state, publishers: dict.delete(state.publishers, relay_url)),
+      )
     Incoming(incoming) -> {
       // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
       // することでエンジンは乱数を持たずに済む。
-      let context =
-        engine.Context(now: time.now_seconds(), token: random.hex(token_bytes))
-      let #(next, outcome) =
-        engine.handle_event(state.engine, incoming, context)
+      let inputs =
+        engine.Inputs(now: time.now_seconds(), token: random.hex(token_bytes))
+      let #(next, outcome) = engine.handle_event(state.engine, incoming, inputs)
       case outcome {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> Nil
-        engine.Ignore(reason) -> io.println("[bunker] ignored: " <> reason)
+        engine.Ignore(reason) -> log.println(log_prefix, "ignored: " <> reason)
       }
       actor.continue(State(..state, engine: next))
     }
@@ -182,7 +196,8 @@ fn apply_decision(
 /// あとの再送で回復する）。
 fn publish(state: State, response: Event) -> Nil {
   case dict.is_empty(state.publishers) {
-    True -> io.println("[bunker] no live relay connection; response dropped")
+    True ->
+      log.println(log_prefix, "no live relay connection; response dropped")
     False ->
       dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
   }

@@ -84,7 +84,7 @@ pub type Admin {
     bind: String,
     port: Int,
     password: String,
-    accounts: List(dashboard.Account),
+    accounts: List(dashboard.AccountRow),
   )
 }
 
@@ -170,9 +170,23 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     spec,
     config.relays,
     config.subscriptions,
-    fn(incoming) { named.send(config.name, dedup.Incoming(incoming)) },
+    monitor_handler(config.name),
     fn(_relay_url, _socket) { Nil },
+    fn(_relay_url) { Nil },
   )
+}
+
+/// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。バンカー自身の
+/// NIP-46 通信はここで落とす。NIP-01 のフィルターに kind の否定は無く、`PUBKEYS`
+/// に署名者を含む標準的な構成では自分の応答イベントが監視購読にも届くため、
+/// 除外は受信側で行うほかない。
+fn monitor_handler(name: Name(dedup.Msg)) -> fn(Event) -> Nil {
+  fn(incoming: Event) {
+    case incoming.kind == event.nip46_kind {
+      True -> Nil
+      False -> named.send(name, dedup.Incoming(incoming))
+    }
+  }
 }
 
 /// バンカーサブツリー。アクターと、それが応答に使う接続群。各接続はアクターに
@@ -188,6 +202,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
+    fn(relay_url) { named.send(config.name, bunker.RemovePublisher(relay_url)) },
   )
 }
 
@@ -222,28 +237,44 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
   )
 }
 
+/// 設定されているサブツリーにだけ問い合わせ、無効なら既定値を返す。管理 UI は
+/// 一部が無効でも表示できなければならないため、無効は欠損ではなく既定値にする。
+fn if_enabled(
+  configured: Option(subtree),
+  default: answer,
+  ask: fn(subtree) -> answer,
+) -> answer {
+  configured
+  |> option.map(ask)
+  |> option.unwrap(default)
+}
+
 /// 監視サブツリーで有効なプラグインの名前。監視が無効なら空。
 fn plugin_names(monitor: Option(Monitor)) -> List(String) {
-  case monitor {
-    None -> []
-    Some(monitor) -> list.map(monitor.plugins, fn(item) { item.name })
-  }
+  use monitor <- if_enabled(monitor, [])
+  list.map(monitor.plugins, fn(item) { item.name })
 }
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。
 fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
-  let monitor = case spec.monitor {
-    None -> []
-    Some(monitor) -> statuses(dashboard.Monitor, monitor.relays)
+  let monitor_rows = {
+    use monitor <- if_enabled(spec.monitor, [])
+    statuses(dashboard.MonitorRelay, monitor.relays)
   }
-  let bunker = case spec.bunker {
-    None -> []
-    Some(bunker) -> statuses(dashboard.Bunker, bunker.relays)
+  let bunker_rows = {
+    use configured <- if_enabled(spec.bunker, [])
+    statuses(dashboard.BunkerRelay, configured.relays)
   }
-  list.append(monitor, bunker)
+  list.append(monitor_rows, bunker_rows)
 }
 
 /// 指定した用途のリレーそれぞれについて、接続アクターに状態を問い合わせる。
+/// 逐次に問い合わせるため待ち時間はリレー数ぶん積み上がるが、接続アクターが
+/// ループをブロックするのは `connect` の実行中だけで、その上限は `relay_client`
+/// の connect タイムアウト（3 秒）である。`relay_connection` の問い合わせ
+/// タイムアウト（5 秒）はそれを包む安全網であって通常の待ち時間ではない。数本の
+/// リレーが同時にハンドシェイク中でも管理 UI の表示が数秒遅れるだけなので、
+/// 並列化して部分的な結果を扱う複雑さは引き合わない。
 fn statuses(
   role: dashboard.Role,
   relays: List(Relay),
@@ -263,10 +294,8 @@ fn with_bunker(
   default: answer,
   ask: fn(Name(bunker.Msg)) -> answer,
 ) -> answer {
-  case config {
-    None -> default
-    Some(config) -> ask(config.name)
-  }
+  use config <- if_enabled(config, default)
+  ask(config.name)
 }
 
 /// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。
@@ -301,7 +330,7 @@ fn subtree() -> Builder {
 }
 
 /// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラーは
-/// サブツリー内で共有する。
+/// サブツリー内で共有し、接続・切断の通知にはそのリレーの URL を添える。
 fn add_connections(
   builder: Builder,
   spec: Spec,
@@ -309,15 +338,17 @@ fn add_connections(
   subscriptions: Subscriptions,
   handle_event: fn(Event) -> Nil,
   on_connect: fn(String, Socket) -> Nil,
+  on_disconnect: fn(String) -> Nil,
 ) -> Builder {
   use builder, relay <- list.fold(relays, builder)
   supervisor.add(
     builder,
-    relay_connection.supervised(relay_connection.Config(
+    relay_connection.supervised(relay_connection.Settings(
       name: relay.name,
       relay: relay_client.label(relay.url),
       connect: fn() { spec.open(relay.url, subscriptions, handle_event) },
       on_connect: on_connect(relay.url, _),
+      on_disconnect: fn() { on_disconnect(relay.url) },
       reconnect_delay_ms: spec.reconnect_delay_ms,
     )),
   )

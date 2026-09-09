@@ -4,6 +4,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 
 const default_relay_url = "wss://relay.damus.io"
@@ -26,6 +27,7 @@ pub type AdminPort {
   Invalid(reason: String)
 }
 
+/// 環境変数から読み込んだ設定の全体。
 pub type Config {
   Config(
     relay_urls: List(String),
@@ -138,12 +140,15 @@ pub fn pick_bunker_relays(
 }
 
 /// カンマ区切りのリスト（pubkey、鍵、リレー URL）をパースする。前後の空白は
-/// 無視し、空の要素は除外する。
+/// 無視し、空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度
+/// 書くと接続が 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、
+/// 重複はここで落とす。
 pub fn parse_list(raw: String) -> List(String) {
   raw
   |> string.split(",")
   |> list.map(string.trim)
   |> list.filter(fn(entry) { entry != "" })
+  |> list.unique
 }
 
 /// 設定されたアカウントを購読する。pubkey が未設定なら直近イベントを少数だけ
@@ -159,7 +164,7 @@ pub fn to_filter(config: Config) -> Filter {
 pub fn bunker_filter(signer_pubkeys: List(String), since: Int) -> Filter {
   Filter(
     ..filter.new(),
-    kinds: Some([24_133]),
+    kinds: Some([event.nip46_kind]),
     p_tags: Some(signer_pubkeys),
     since: Some(since),
   )

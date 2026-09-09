@@ -1,22 +1,25 @@
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
-import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/nostr/message
 import stratus
 
+/// リレー接続に対する指示。stratus のユーザーメッセージとして送る。
 pub type Msg {
+  /// 設定された購読をすべて開き直す。接続直後に送る。
   Subscribe
+  /// イベントを 1 件このソケットから発行する。
   Publish(event: event.Event)
 }
 
-/// 起動済みの接続。操作は `publish` を通じて行い、その背後のプロセスを
-/// `relay_connection` が切断検知のために監視する。
-pub type Connection =
+/// 起動済みのリレークライアント。イベントの送信は `publish` を通じて行い、
+/// その背後のプロセスを `relay_connection` が切断検知のために監視する。
+pub type Client =
   Subject(stratus.InternalMessage(Msg))
 
 /// 開くべき購読を生成するサンク。接続・再接続のたびに再評価するため、時刻に
@@ -58,12 +61,12 @@ pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-) -> Result(Connection, String) {
+) -> Result(Client, String) {
   use req <- result.try(
     to_request(url)
     |> result.replace_error("invalid relay url: " <> url),
   )
-  let relay = label(url)
+  let prefix = log.relay_prefix(label(url))
   let builder =
     stratus.new(req, Nil)
     |> stratus.with_connect_timeout(connect_timeout_ms)
@@ -71,31 +74,27 @@ pub fn start(
       case msg {
         stratus.User(Subscribe) -> {
           list.each(subscriptions(), fn(subscription) {
-            let text =
-              message.encode_client_message(message.Req(
-                subscription.0,
-                subscription.1,
-              ))
-            let _ = stratus.send_text_message(conn, text)
+            message.Req(subscription.0, subscription.1)
+            |> message.encode_client_message
+            |> send_text(conn, prefix, "subscription " <> subscription.0, _)
           })
           stratus.continue(state)
         }
         stratus.User(Publish(published)) -> {
-          let text = message.encode_client_message(message.Publish(published))
-          let _ = stratus.send_text_message(conn, text)
+          message.Publish(published)
+          |> message.encode_client_message
+          |> send_text(conn, prefix, "event " <> published.id, _)
           stratus.continue(state)
         }
         stratus.Text(text) -> {
-          handle_text(relay, text, handle_event)
+          handle_text(prefix, text, handle_event)
           stratus.continue(state)
         }
         stratus.Binary(_) -> stratus.continue(state)
       }
     })
     |> stratus.on_close(fn(_state, reason) {
-      io.println(
-        "[relay " <> relay <> "] connection closed: " <> string.inspect(reason),
-      )
+      log.println(prefix, "connection closed: " <> string.inspect(reason))
     })
 
   case stratus.start(builder) {
@@ -108,14 +107,33 @@ pub fn start(
 }
 
 /// 接続に対し、そのソケットからイベントを送信するよう依頼する。
-pub fn publish(connection: Connection, published: event.Event) -> Nil {
-  process.send(connection, stratus.to_user_message(Publish(published)))
+pub fn publish(client: Client, published: event.Event) -> Nil {
+  process.send(client, stratus.to_user_message(Publish(published)))
+}
+
+/// ソケットへ 1 件書き込む。書けなかった購読や応答はリレーから見れば存在しない
+/// のと同じで、黙って捨てると原因を追えないため、何を送ろうとしたかを添えて
+/// ログに残す。
+fn send_text(
+  connection: stratus.Connection,
+  prefix: String,
+  what: String,
+  text: String,
+) -> Nil {
+  case stratus.send_text_message(connection, text) {
+    Ok(Nil) -> Nil
+    Error(reason) ->
+      log.println(
+        prefix,
+        "failed to send " <> what <> ": " <> string.inspect(reason),
+      )
+  }
 }
 
 /// リレーメッセージを 1 件デコードする。検証済みイベントは `handle_event` へ
 /// 渡し、それ以外は送信元のリレー名を添えてログ出力する。
 fn handle_text(
-  relay: String,
+  prefix: String,
   text: String,
   handle_event: fn(event.Event) -> Nil,
 ) -> Nil {
@@ -124,28 +142,24 @@ fn handle_text(
       case event.compute_id(received) == received.id {
         True -> handle_event(received)
         False ->
-          io.println(
-            "[relay "
-            <> relay
-            <> "] dropped event with invalid id: "
-            <> received.id,
-          )
+          log.println(prefix, "dropped event with invalid id: " <> received.id)
       }
     Ok(message.RelayEose(subscription)) ->
-      io.println(
-        "[relay " <> relay <> "] end of stored events for " <> subscription,
-      )
+      log.println(prefix, "end of stored events for " <> subscription)
     Ok(message.RelayOk(id, False, reason)) ->
-      io.println(
-        "[relay " <> relay <> "] rejected event " <> id <> ": " <> reason,
+      log.println(prefix, "rejected event " <> id <> ": " <> reason)
+    // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
+    Ok(message.RelayOk(_id, True, _message)) -> Nil
+    Ok(message.RelayNotice(text)) -> log.println(prefix, "notice: " <> text)
+    Ok(message.RelayClosed(subscription, reason)) ->
+      log.println(
+        prefix,
+        "subscription " <> subscription <> " closed: " <> reason,
       )
-    Ok(other) -> io.println("[relay " <> relay <> "] " <> string.inspect(other))
     Error(_) ->
-      io.println(
-        "[relay "
-        <> relay
-        <> "] unrecognised message: "
-        <> string.slice(text, 0, 120),
+      log.println(
+        prefix,
+        "unrecognised message: " <> string.slice(text, 0, 120),
       )
   }
 }

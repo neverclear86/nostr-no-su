@@ -1,10 +1,10 @@
-import gleam/bit_array
 import gleam/json
-import gleam/string
 import nostr_no_su/crypto/secp256k1
+import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
 
+/// デコード・エンコードの確認に使う NIP-01 のイベント。
 fn sample_event() -> event.Event {
   Event(
     id: "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385",
@@ -17,6 +17,7 @@ fn sample_event() -> event.Event {
   )
 }
 
+/// リレーから届く JSON オブジェクトを Event にデコードする。
 pub fn decode_test() {
   let raw =
     "{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
@@ -34,6 +35,7 @@ pub fn decode_test() {
     )
 }
 
+/// エンコードしてデコードすると元のイベントに戻る。
 pub fn encode_decode_roundtrip_test() {
   let original = sample_event()
   let encoded = event.to_json(original) |> json.to_string
@@ -41,11 +43,13 @@ pub fn encode_decode_roundtrip_test() {
   assert decoded == original
 }
 
+/// id 計算用の正規シリアライズは NIP-01 の配列表現になる。
 pub fn serialize_for_id_test() {
   assert event.serialize_for_id(sample_event())
     == "[0,\"3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d\",1700000000,1,[],\"hello nostr\"]"
 }
 
+/// 正規シリアライズの sha256 が、手で計算した id と一致する。
 pub fn compute_id_synthetic_vector_test() {
   // 期待値はシェルで独立に計算したもの:
   // printf '%s' '[0,"3bf0…59d",1700000000,1,[],"hello nostr"]' | sha256sum
@@ -53,6 +57,7 @@ pub fn compute_id_synthetic_vector_test() {
     == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
 }
 
+/// 制御文字や引用符を含む content でも、id は正規シリアライズと一致する。
 pub fn escaping_test() {
   let escaped =
     Event(
@@ -76,11 +81,11 @@ pub fn escaping_test() {
 /// 検出することを確認する。
 pub fn finalize_and_verify_test() {
   let assert Ok(privkey) =
-    bit_array.base16_decode(string.uppercase(
+    hex.decode(
       "0000000000000000000000000000000000000000000000000000000000000042",
-    ))
+    )
   let assert Ok(pubkey_bytes) = secp256k1.xonly_pubkey(privkey)
-  let pubkey = string.lowercase(bit_array.base16_encode(pubkey_bytes))
+  let pubkey = hex.encode(pubkey_bytes)
   let draft =
     Event(
       id: "",

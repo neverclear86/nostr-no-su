@@ -3,8 +3,12 @@ import gleam/crypto
 import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/result
-import gleam/string
 import nostr_no_su/crypto/bip340
+import nostr_no_su/hex
+
+/// NIP-46 のリクエストと応答を運ぶイベントの kind。ephemeral（20000 以上
+/// 30000 未満）なので、リレーは保存せず接続中のクライアントにだけ転送する。
+pub const nip46_kind = 24_133
 
 /// NIP-01 で定義される Nostr イベント。
 pub type Event {
@@ -74,8 +78,7 @@ pub fn hash_for_signing(event: Event) -> BitArray {
 /// イベント id を計算する。正規シリアライズの sha256 を小文字 16 進で表したもの。
 pub fn compute_id(event: Event) -> String {
   hash_for_signing(event)
-  |> bit_array.base16_encode
-  |> string.lowercase
+  |> hex.encode
 }
 
 /// 他のフィールドが設定済みのドラフトに `id` と `sig` を埋める。`privkey` は
@@ -85,21 +88,12 @@ pub fn finalize(event: Event, privkey: BitArray) -> Result(Event, Nil) {
   use signature <- result.try(
     bip340.sign(privkey, hash) |> result.replace_error(Nil),
   )
-  Ok(
-    Event(
-      ..event,
-      id: string.lowercase(bit_array.base16_encode(hash)),
-      sig: string.lowercase(bit_array.base16_encode(signature)),
-    ),
-  )
+  Ok(Event(..event, id: hex.encode(hash), sig: hex.encode(signature)))
 }
 
 /// イベントの BIP-340 署名を、その pubkey と内容に対して検証する。
 pub fn verify_signature(event: Event) -> Bool {
-  case
-    bit_array.base16_decode(string.uppercase(event.pubkey)),
-    bit_array.base16_decode(string.uppercase(event.sig))
-  {
+  case hex.decode(event.pubkey), hex.decode(event.sig) {
     Ok(pubkey), Ok(signature) ->
       bip340.verify(signature, hash_for_signing(event), pubkey)
     _, _ -> False

@@ -13,6 +13,8 @@ type Report {
   Refused
   /// 新しいソケットに対して `on_connect` が実行された。
   Rewired
+  /// ソケットを失って `on_disconnect` が実行された。
+  Unwired
 }
 
 /// 偽ソケット。stratus プロセスと同じく、接続アクターにリンクした待機プロセス。
@@ -23,7 +25,7 @@ fn spawn_socket() -> Socket {
 }
 
 /// 常に新しいソケットを返し、それを報告する connect 関数。
-fn connects(reports: Subject(Report)) -> relay_connection.Open {
+fn connects(reports: Subject(Report)) -> relay_connection.Connector {
   fn() {
     let socket = spawn_socket()
     process.send(reports, Connected(socket.pid))
@@ -32,7 +34,7 @@ fn connects(reports: Subject(Report)) -> relay_connection.Open {
 }
 
 /// 到達できないリレーを模した connect 関数。
-fn refuses(reports: Subject(Report)) -> relay_connection.Open {
+fn refuses(reports: Subject(Report)) -> relay_connection.Connector {
   fn() {
     process.send(reports, Refused)
     Error("connection refused")
@@ -40,7 +42,7 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Open {
 }
 
 /// 指定した connect 関数で接続アクターを起動し、再配線のたびに報告する。
-fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
+fn start(reports: Subject(Report), connect: relay_connection.Connector) -> Pid {
   start_named(process.new_name("test_relay"), reports, connect)
 }
 
@@ -48,14 +50,15 @@ fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
 fn start_named(
   name: Name(relay_connection.Msg),
   reports: Subject(Report),
-  connect: relay_connection.Open,
+  connect: relay_connection.Connector,
 ) -> Pid {
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Config(
+    relay_connection.start(relay_connection.Settings(
       name: name,
       relay: "relay.test",
       connect: connect,
       on_connect: fn(_socket) { process.send(reports, Rewired) },
+      on_disconnect: fn() { process.send(reports, Unwired) },
       reconnect_delay_ms: delay_ms,
     ))
   started.pid
@@ -97,7 +100,8 @@ pub fn reconnects_after_the_socket_dies_test() {
   let assert Ok(Connected(socket)) = process.receive(reports, 1000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
   process.kill(socket)
-  // 遅延が経過するまでは何も起きない...
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  // 遅延が経過するまでは接続し直さない...
   assert process.receive(reports, delay_ms / 3) == Error(Nil)
   // ...その後、2 本目の接続が張られ再配線される。
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
@@ -106,13 +110,29 @@ pub fn reconnects_after_the_socket_dies_test() {
   stop(actor)
 }
 
+/// ソケットを失ったら `on_disconnect` を実行する。バンカーはこれを受けて、死んだ
+/// ソケットへ向いた送信手段を取り下げる。
+pub fn calls_on_disconnect_when_the_socket_dies_test() {
+  let reports = process.new_subject()
+  let actor = start(reports, connects(reports))
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  process.kill(socket)
+  assert process.receive(reports, 2000) == Ok(Unwired)
+  // 再接続すれば、新しいソケットで配線し直される。
+  let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
+  assert process.receive(reports, 1000) == Ok(Rewired)
+  stop(actor)
+}
+
 /// 接続を拒否するリレーには、諦めずに再試行する。
 pub fn keeps_retrying_after_a_failed_connect_test() {
   let reports = process.new_subject()
   let actor = start(reports, refuses(reports))
   assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
   assert process.receive(reports, 2000) == Ok(Refused)
-  assert process.receive(reports, 2000) == Ok(Refused)
+  assert process.receive(reports, 2000) == Ok(Unwired)
   assert process.is_alive(actor)
   stop(actor)
 }
@@ -137,6 +157,7 @@ pub fn exit_from_an_unrelated_process_is_ignored_test() {
   // 監視対象は正しいままなので、ソケットを kill すれば再接続する。
   assert process.is_alive(actor)
   process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 2000)
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   stop(actor)
 }
@@ -165,6 +186,7 @@ pub fn status_follows_the_socket_test() {
   assert relay_connection.status(name) == relay_connection.Connected
 
   process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 2000)
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
   assert relay_connection.status(name) == relay_connection.Connected
@@ -177,6 +199,7 @@ pub fn status_is_disconnected_while_retrying_test() {
   let name = process.new_name("test_relay")
   let actor = start_named(name, reports, refuses(reports))
   assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
   assert relay_connection.status(name) == relay_connection.Disconnected
   stop(actor)
 }

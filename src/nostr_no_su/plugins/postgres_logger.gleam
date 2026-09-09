@@ -11,7 +11,6 @@
 
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -19,6 +18,7 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
@@ -56,6 +56,9 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 /// 起動時に実行する DDL。すべて `IF NOT EXISTS` なので何度実行してもよい。
 pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
 
+/// このプラグインが出すログ行の接頭辞。
+pub const log_prefix = "postgres_logger"
+
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
 pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
@@ -76,6 +79,7 @@ pub type Row {
   )
 }
 
+/// 保存アクターが受け取るメッセージ。
 pub type Msg {
   /// 保存するイベント。
   Store(event: Event)
@@ -94,6 +98,7 @@ type Availability {
   Unavailable(dropped: Int, reported: Bool)
 }
 
+/// 保存アクターが保持する状態。
 type State {
   State(db: pog.Connection, self: Subject(Msg), availability: Availability)
 }
@@ -178,11 +183,12 @@ fn persist(state: State, incoming: Event) -> Availability {
             True -> suspend(state, error, 1)
             // それ以外はこのイベント固有の問題なので、保存は続ける。
             False -> {
-              log(
+              log.println(
+                log_prefix,
                 "insert failed for event "
-                <> incoming.id
-                <> ": "
-                <> string.inspect(error),
+                  <> incoming.id
+                  <> ": "
+                  <> string.inspect(error),
               )
               Ready
             }
@@ -195,12 +201,13 @@ fn persist(state: State, incoming: Event) -> Availability {
 fn resume(availability: Availability) -> Availability {
   case availability {
     Unavailable(dropped:, ..) if dropped > 0 ->
-      log(
+      log.println(
+        log_prefix,
         "database is back; dropped "
-        <> int.to_string(dropped)
-        <> " events while it was unavailable",
+          <> int.to_string(dropped)
+          <> " events while it was unavailable",
       )
-    _ -> log("schema ready")
+    _ -> log.println(log_prefix, "schema ready")
   }
   Ready
 }
@@ -211,7 +218,7 @@ fn resume(availability: Availability) -> Availability {
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
   case suspension_message(error, was_reported(state.availability), dropped) {
-    Some(line) -> log(line)
+    Some(line) -> log.println(log_prefix, line)
     None -> Nil
   }
   Unavailable(dropped: dropped, reported: unreachable(error))
@@ -314,9 +321,4 @@ pub fn to_row(incoming: Event) -> Row {
     content: incoming.content,
     sig: incoming.sig,
   )
-}
-
-/// プラグインのログ行。
-fn log(message: String) -> Nil {
-  io.println("[postgres_logger] " <> message)
 }

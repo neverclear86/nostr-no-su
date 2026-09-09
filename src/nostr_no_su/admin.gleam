@@ -12,7 +12,6 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/http
 import gleam/int
-import gleam/io
 import gleam/list
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/otp/supervision.{type ChildSpecification}
@@ -20,8 +19,12 @@ import gleam/string
 import mist
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker/engine.{type Session}
+import nostr_no_su/log
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
+
+/// 管理 UI が出すログ行の接頭辞。
+pub const log_prefix = "admin"
 
 /// Basic 認証のユーザー名。設定するのはパスワードだけにする。
 const username = "admin"
@@ -34,7 +37,7 @@ const realm = "nostr-no-su"
 pub type Context {
   Context(
     password: String,
-    accounts: List(dashboard.Account),
+    accounts: List(dashboard.AccountRow),
     plugins: List(String),
     storage_enabled: Bool,
     relays: fn() -> List(dashboard.RelayRow),
@@ -69,7 +72,7 @@ fn server(
   |> mist.bind(bind)
   |> mist.port(port)
   |> mist.after_start(fn(port, _scheme, address) {
-    io.println("[admin] listening on " <> listening_url(address, port))
+    log.println(log_prefix, "listening on " <> listening_url(address, port))
   })
 }
 
@@ -107,9 +110,10 @@ fn route(
 ) -> Response {
   case segments {
     [] -> show_dashboard(context, request)
-    ["sessions", "revoke"] -> revoke_session(context, request)
     ["approve", token] -> approve_connection(context, request, token)
     ["deny", token] -> deny_connection(context, request, token)
+    segments if segments == dashboard.revoke_segments ->
+      revoke_session(context, request)
     _ -> wisp.not_found()
   }
 }
