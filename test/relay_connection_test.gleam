@@ -1,28 +1,28 @@
 import gleam/erlang/process.{type Pid, type Subject}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 
-/// A short delay keeps the reconnect tests quick while staying long enough
-/// to tell "scheduled" apart from "immediate".
+/// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
+/// 程度には長い遅延。
 const delay_ms = 300
 
-/// What the fake connect function and `on_connect` report to the test.
+/// 偽の connect 関数と `on_connect` がテストへ報告する内容。
 type Report {
-  /// A connection attempt that produced a live fake socket.
+  /// 生きた偽ソケットが得られた接続試行。
   Connected(socket: Pid)
-  /// A connection attempt that the relay refused.
+  /// リレーに拒否された接続試行。
   Refused
-  /// `on_connect` ran for a fresh socket.
+  /// 新しいソケットに対して `on_connect` が実行された。
   Rewired
 }
 
-/// A fake socket: an idle process linked to the connection actor, as the
-/// stratus process would be. Killing it looks exactly like a disconnect.
+/// 偽ソケット。stratus プロセスと同じく、接続アクターにリンクした待機プロセス。
+/// これを kill すると切断とまったく同じに見える。
 fn spawn_socket() -> Socket {
   let pid = process.spawn(fn() { process.sleep_forever() })
   Socket(pid: pid, publish: fn(_event) { Nil })
 }
 
-/// A connect function that always hands back a fresh socket and reports it.
+/// 常に新しいソケットを返し、それを報告する connect 関数。
 fn connects(reports: Subject(Report)) -> relay_connection.Open {
   fn() {
     let socket = spawn_socket()
@@ -31,7 +31,7 @@ fn connects(reports: Subject(Report)) -> relay_connection.Open {
   }
 }
 
-/// A connect function standing in for an unreachable relay.
+/// 到達できないリレーを模した connect 関数。
 fn refuses(reports: Subject(Report)) -> relay_connection.Open {
   fn() {
     process.send(reports, Refused)
@@ -39,8 +39,7 @@ fn refuses(reports: Subject(Report)) -> relay_connection.Open {
   }
 }
 
-/// Start a connection actor with the given connect function, reporting each
-/// rewiring, and stop it when the test ends.
+/// 指定した connect 関数で接続アクターを起動し、再配線のたびに報告する。
 fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Config(
@@ -52,14 +51,14 @@ fn start(reports: Subject(Report), connect: relay_connection.Open) -> Pid {
   started.pid
 }
 
-/// Stop a connection actor. It is linked to the test process, so the exit
-/// has to be unlinked before it kills the test along with the actor.
+/// 接続アクターを停止する。テストプロセスにリンクしているため、先にリンクを
+/// 解除しないとアクターと一緒にテストも落ちる。
 fn stop(actor: Pid) -> Nil {
   process.unlink(actor)
   process.kill(actor)
 }
 
-/// Whether the process is gone within the given number of milliseconds.
+/// 指定したミリ秒以内にプロセスが消えるかどうか。
 fn died_within(pid: Pid, timeout_ms: Int) -> Bool {
   case process.is_alive(pid), timeout_ms <= 0 {
     False, _ -> True
@@ -71,7 +70,7 @@ fn died_within(pid: Pid, timeout_ms: Int) -> Bool {
   }
 }
 
-/// The actor connects on start, without being asked to.
+/// アクターは指示されなくても起動時に接続する。
 pub fn connects_on_start_test() {
   let reports = process.new_subject()
   let actor = start(reports, connects(reports))
@@ -80,24 +79,24 @@ pub fn connects_on_start_test() {
   stop(actor)
 }
 
-/// A dead socket does not take the actor with it: it reconnects after the
-/// configured delay, and rewires the caller onto the new socket.
+/// ソケットが死んでもアクターは道連れにならない。設定した遅延の後に再接続し、
+/// 呼び出し側を新しいソケットへ再配線する。
 pub fn reconnects_after_the_socket_dies_test() {
   let reports = process.new_subject()
   let actor = start(reports, connects(reports))
   let assert Ok(Connected(socket)) = process.receive(reports, 1000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
   process.kill(socket)
-  // Nothing happens before the delay has passed...
+  // 遅延が経過するまでは何も起きない...
   assert process.receive(reports, delay_ms / 3) == Error(Nil)
-  // ...and then a second connection is made and rewired.
+  // ...その後、2 本目の接続が張られ再配線される。
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   assert process.receive(reports, 1000) == Ok(Rewired)
   assert process.is_alive(actor)
   stop(actor)
 }
 
-/// A relay that refuses the connection is retried, not given up on.
+/// 接続を拒否するリレーには、諦めずに再試行する。
 pub fn keeps_retrying_after_a_failed_connect_test() {
   let reports = process.new_subject()
   let actor = start(reports, refuses(reports))
@@ -108,13 +107,13 @@ pub fn keeps_retrying_after_a_failed_connect_test() {
   stop(actor)
 }
 
-/// A failed handshake leaves an exit from the stratus child that never
-/// became the socket. It must be ignored rather than read as a disconnect or
-/// as the supervisor shutting the actor down.
+/// ハンドシェイクに失敗すると、ソケットにならなかった stratus の子プロセスから
+/// exit が届く。これは切断とも、スーパーバイザーによる停止要求とも解釈せず、
+/// 無視しなければならない。
 pub fn exit_from_an_unrelated_process_is_ignored_test() {
   let reports = process.new_subject()
   let connect = fn() {
-    // A linked process that dies before the socket is handed over.
+    // ソケットが引き渡される前に死ぬ、リンク済みのプロセス。
     process.kill(process.spawn(fn() { process.sleep_forever() }))
     let socket = spawn_socket()
     process.send(reports, Connected(socket.pid))
@@ -123,30 +122,30 @@ pub fn exit_from_an_unrelated_process_is_ignored_test() {
   let actor = start(reports, connect)
   let assert Ok(Connected(socket)) = process.receive(reports, 1000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
-  // Nothing reconnects: the exit was not read as the socket dying.
+  // 再接続は起きない。この exit はソケットの死とは解釈されていない。
   assert process.receive(reports, delay_ms * 2) == Error(Nil)
-  // Still watching the right process, so killing the socket does reconnect.
+  // 監視対象は正しいままなので、ソケットを kill すれば再接続する。
   assert process.is_alive(actor)
   process.kill(socket)
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   stop(actor)
 }
 
-/// A normal exit is not passed along the link to the socket, so the actor
-/// stops it by hand on the way out.
+/// normal な exit はリンク越しにソケットへ伝播しないため、アクターは終了時に
+/// 自分でソケットを停止する。
 pub fn a_normal_exit_stops_the_socket_test() {
   let reports = process.new_subject()
   let actor = start(reports, connects(reports))
   let assert Ok(Connected(socket)) = process.receive(reports, 1000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
-  // A normal exit signal from the process the actor is linked to: this test.
+  // アクターのリンク先プロセス（このテスト）からの normal な exit シグナル。
   process.send_exit(actor)
   assert died_within(actor, 1000)
   assert died_within(socket, 1000)
 }
 
-/// The actor terminates when the process it is linked to does, so a
-/// supervisor's shutdown is not something it can sit through.
+/// アクターはリンク先のプロセスが終了すると自身も終了するため、スーパーバイザー
+/// による停止をやり過ごすことはできない。
 pub fn stops_when_its_parent_exits_test() {
   let started = process.new_subject()
   let parent =

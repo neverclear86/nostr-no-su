@@ -1,9 +1,9 @@
 import gleam/list
 import nostr_no_su/nostr/event.{type Event}
 
-/// A plugin processes every event received from the monitored accounts.
-/// Stateful plugins can capture a `Subject` to their own actor inside the
-/// `handle` closure.
+/// プラグインは監視対象アカウントから受信したすべてのイベントを処理する。
+/// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
+/// `Subject` を捕捉できる。
 pub type Plugin {
   Plugin(name: String, handle: fn(Event) -> Nil)
 }

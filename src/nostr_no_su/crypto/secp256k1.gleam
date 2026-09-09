@@ -1,22 +1,21 @@
-//// Minimal secp256k1 field and point arithmetic for BIP-340 / NIP-44.
+//// BIP-340 / NIP-44 のための最小限の secp256k1 有限体・点演算。
 ////
-//// Primitives that OpenSSL exposes through OTP's `crypto` module are used
-//// directly via FFI: `d*G` (public-key and nonce-point derivation) through
-//// `crypto:generate_key`, x-only ECDH through `crypto:compute_key`, and
-//// modular exponentiation through `crypto:mod_pow`. Only the arbitrary-point
-//// arithmetic that BIP-340 verification needs (`e*P`) is implemented here, in
-//// plain affine coordinates with Fermat modular inversion.
+//// OpenSSL が OTP の `crypto` モジュール経由で公開しているプリミティブは FFI で
+//// 直接使う。`d*G`（公開鍵と nonce 点の導出）は `crypto:generate_key`、x-only の
+//// ECDH は `crypto:compute_key`、冪剰余は `crypto:mod_pow`。ここで実装するのは
+//// BIP-340 の検証に必要な任意点の演算（`e*P`）だけで、素朴なアフィン座標と
+//// フェルマーの小定理によるモジュラー逆元で行う。
 ////
-//// Note: this affine arithmetic is variable-time. That is acceptable for a
-//// self-hosted bunker — signing nonces are BIP-340 hash-derived with fresh
-//// aux randomness, and verification operates on public data.
+//// 注意: このアフィン演算の実行時間は入力に依存する。セルフホストのバンカーでは
+//// これを許容できる。署名 nonce は毎回新しい補助乱数から BIP-340 のハッシュで
+//// 導出され、検証は公開データのみを扱うため。
 
 import gleam/int
 
-/// Field prime.
+/// 有限体の法となる素数。
 pub const p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 
-/// Order of the base point G.
+/// ベースポイント G の位数。
 pub const n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 pub type Point {
@@ -41,7 +40,7 @@ fn ffi_ecdh_x(compressed_pub: BitArray, priv: BitArray) -> Result(BitArray, Nil)
 @external(erlang, "nostr_no_su_ffi", "int_from_bytes")
 pub fn int_from_bytes(bytes: BitArray) -> Int
 
-/// A 32-byte big-endian encoding of a field/scalar value.
+/// 体の元またはスカラーを 32 バイトのビッグエンディアンで表現する。
 pub fn int_to_bytes32(value: Int) -> BitArray {
   <<value:size(256)>>
 }
@@ -54,7 +53,7 @@ fn mod_p(a: Int) -> Int {
   }
 }
 
-/// Modular inverse via Fermat's little theorem: a^(p-2) mod p.
+/// フェルマーの小定理によるモジュラー逆元: a^(p-2) mod p。
 fn mod_inv(a: Int) -> Int {
   ffi_mod_pow(mod_p(a), p - 2, p)
 }
@@ -100,7 +99,7 @@ pub fn point_add(a: Point, b: Point) -> Point {
   }
 }
 
-/// Scalar multiplication by plain LSB-first double-and-add.
+/// 素朴な LSB 先行の double-and-add によるスカラー倍算。
 pub fn point_mul(point: Point, scalar: Int) -> Point {
   point_mul_loop(point, scalar, Infinity)
 }
@@ -122,7 +121,7 @@ fn point_mul_loop(point: Point, scalar: Int, acc: Point) -> Point {
   }
 }
 
-/// BIP-340 lift_x: recover the even-y point for a given x-only key.
+/// BIP-340 の lift_x。与えられた x-only 鍵から y が偶数となる点を復元する。
 pub fn lift_x(xonly: BitArray) -> Result(Point, KeyError) {
   let x = int_from_bytes(xonly)
   case x >= p || x == 0 {
@@ -146,7 +145,7 @@ fn valid_scalar(value: Int) -> Bool {
   value >= 1 && value < n
 }
 
-/// The full `d*G` point (with y), computed natively.
+/// `d*G` の完全な点（y 座標を含む）をネイティブに計算する。
 pub fn pubkey_point(privkey: BitArray) -> Result(Point, KeyError) {
   case valid_scalar(int_from_bytes(privkey)) {
     False -> Error(InvalidPrivateKey)
@@ -158,7 +157,7 @@ pub fn pubkey_point(privkey: BitArray) -> Result(Point, KeyError) {
   }
 }
 
-/// The x-only public key (32 bytes) for a private key.
+/// 秘密鍵に対応する x-only 公開鍵（32 バイト）。
 pub fn xonly_pubkey(privkey: BitArray) -> Result(BitArray, KeyError) {
   case valid_scalar(int_from_bytes(privkey)) {
     False -> Error(InvalidPrivateKey)
@@ -170,7 +169,8 @@ pub fn xonly_pubkey(privkey: BitArray) -> Result(BitArray, KeyError) {
   }
 }
 
-/// `scalar*G` computed natively. `scalar` must satisfy 1 <= scalar < n.
+/// `scalar*G` をネイティブに計算する。`scalar` は 1 <= scalar < n を満たす
+/// 必要がある。
 pub fn mul_g(scalar: Int) -> Result(Point, KeyError) {
   case valid_scalar(scalar) {
     False -> Error(InvalidPrivateKey)
@@ -182,8 +182,8 @@ pub fn mul_g(scalar: Int) -> Result(Point, KeyError) {
   }
 }
 
-/// x-coordinate of `privkey * lift_x(pubkey)`, the NIP-44 ECDH shared secret.
-/// The 0x02 prefix takes the even-y lift of the peer key, per NIP-44.
+/// `privkey * lift_x(pubkey)` の x 座標。NIP-44 の ECDH 共有秘密にあたる。
+/// 先頭の 0x02 は、NIP-44 に従い相手鍵の y が偶数となる側の点を選ぶ指定。
 pub fn ecdh_x(
   privkey: BitArray,
   pubkey_xonly: BitArray,

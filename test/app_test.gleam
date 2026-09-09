@@ -19,18 +19,17 @@ const signer_key = "000000000000000000000000000000000000000000000000000000000000
 
 const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
 
-/// What the fake relay reports back to the test.
+/// 偽リレーがテストへ報告する内容。
 type Report {
-  /// A connection was opened: the actor that owns it, the socket process it
-  /// watches, and the handler that feeds events into the subtree the way a
-  /// real socket would.
+  /// 接続が開かれた。所有するアクター、監視対象のソケットプロセス、そして実際の
+  /// ソケットと同じようにサブツリーへイベントを流し込むハンドラーを伴う。
   Opened(connection: Pid, socket: Pid, deliver: fn(Event) -> Nil)
-  /// An event was published, on the socket it went out through.
+  /// イベントが送信された。送信に使われたソケットを伴う。
   Published(socket: Pid, event: Event)
 }
 
-/// A fake relay: it reports every connection, hands the tree an idle process
-/// to watch instead of a websocket, and forwards published events back.
+/// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
+/// ツリーへ渡し、送信されたイベントをテストへ転送する。
 fn fake_open(reports: Subject(Report)) -> app.Open {
   fn(_relay_url, _subscriptions, handle_event) {
     let socket = process.spawn(fn() { process.sleep_forever() })
@@ -43,13 +42,13 @@ fn fake_open(reports: Subject(Report)) -> app.Open {
   }
 }
 
-/// Start a tree, failing the test if it does not come up.
+/// ツリーを起動する。起動できなければテストを失敗させる。
 fn start_tree(spec: app.Spec) -> Pid {
   let assert Ok(started) = app.start(spec)
   started.pid
 }
 
-/// A tree running only the bunker, on one fake relay.
+/// 偽リレー 1 本の上でバンカーだけを動かすツリー。
 fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
   start_tree(app.Spec(
     monitor: None,
@@ -66,17 +65,16 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
   ))
 }
 
-/// Stop a tree the way its parent would: an exit signal the root supervisor
-/// turns into an orderly shutdown of the whole tree. The link is dropped
-/// first so a failure to shut down cannot fail the test process with it.
+/// 親プロセスと同じ方法でツリーを停止する。ルートスーパーバイザーは exit
+/// シグナルをツリー全体の順序立った停止に変換する。先にリンクを解除するのは、
+/// 停止に失敗してもテストプロセスを巻き込まないようにするため。
 fn stop_tree(tree: Pid) -> Nil {
   process.unlink(tree)
   process.send_exit(tree)
 }
 
-/// Wait for the next connection the tree opens, then let its actor settle:
-/// once it answers a system message it has finished wiring itself to the
-/// actor at the head of its subtree.
+/// ツリーが次に開く接続を待ち、そのアクターが落ち着くのを待つ。システム
+/// メッセージに応答した時点で、サブツリー先頭のアクターへの配線は完了している。
 fn await_connection(reports: Subject(Report)) -> Report {
   let assert Ok(Opened(connection, socket, deliver)) =
     process.receive(reports, 2000)
@@ -84,20 +82,20 @@ fn await_connection(reports: Subject(Report)) -> Report {
   Opened(connection, socket, deliver)
 }
 
-/// Wait for a monitored process to go down.
+/// 監視中のプロセスが停止するのを待つ。
 fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Result(Down, Nil) {
   process.new_selector()
   |> process.select_specific_monitor(monitor, fn(down) { down })
   |> process.selector_receive(timeout_ms)
 }
 
-/// The account for one of the hex test keys.
+/// テスト用 16 進鍵に対応するアカウント。
 fn account_for(key_hex: String) -> Account {
   let assert Ok(account) = account.from_hex(key_hex)
   account
 }
 
-/// A `connect` request, encrypted and signed exactly as a client sends it.
+/// 実際のクライアントと同じ手順で暗号化・署名した `connect` リクエスト。
 fn connect_request(id: String) -> Event {
   let signer = account_for(signer_key)
   request(
@@ -107,8 +105,8 @@ fn connect_request(id: String) -> Event {
   )
 }
 
-/// A JSON-RPC request with the given params, encrypted to the signer and
-/// signed by the client, exactly as a client sends it.
+/// 指定した params を持つ JSON-RPC リクエスト。実際のクライアントと同じく
+/// 署名者宛に暗号化し、クライアントの鍵で署名する。
 fn request(id: String, method: String, params_json: String) -> Event {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -136,7 +134,7 @@ fn request(id: String, method: String, params_json: String) -> Event {
   signed
 }
 
-/// The JSON-RPC body of a response event, as the client would read it.
+/// 応答イベントの JSON-RPC 本文。クライアントが読むのと同じ形で取り出す。
 fn response_body(response: Event) -> String {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -145,7 +143,7 @@ fn response_body(response: Event) -> String {
   text
 }
 
-/// A minimal event with the given id: the dispatcher only looks at the id.
+/// 指定した id を持つ最小限のイベント。ディスパッチャーは id しか見ない。
 fn event_with_id(id: String) -> Event {
   Event(
     id: id,
@@ -158,7 +156,7 @@ fn event_with_id(id: String) -> Event {
   )
 }
 
-/// A request delivered on a connection is answered on it.
+/// ある接続で届いたリクエストには、その接続で応答する。
 pub fn bunker_replies_on_its_connection_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
@@ -171,9 +169,9 @@ pub fn bunker_replies_on_its_connection_test() {
   stop_tree(tree)
 }
 
-/// Killing the bunker actor is survivable: the supervisor starts a
-/// replacement under the same name, and the connection restarted behind it
-/// re-installs its publisher, so the round trip works again.
+/// バンカーアクターを kill しても復帰できる。スーパーバイザーが同じ名前で代替を
+/// 起動し、その後ろで再起動した接続が publisher を登録し直すため、往復が再び
+/// 成立する。
 pub fn bunker_survives_being_killed_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -193,9 +191,9 @@ pub fn bunker_survives_being_killed_test() {
   stop_tree(tree)
 }
 
-/// The connections restarted behind the bunker exit with the reason the
-/// supervisor asks for. Trapping exits without acting on them would instead
-/// leave them running until the supervisor's shutdown timeout kills them.
+/// バンカーの後ろで再起動する接続は、スーパーバイザーが要求した理由で終了する。
+/// exit を trap したまま何もしないと、スーパーバイザーの停止タイムアウトで kill
+/// されるまで動き続けてしまう。
 pub fn connections_shut_down_when_the_bunker_restarts_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -209,14 +207,13 @@ pub fn connections_shut_down_when_the_bunker_restarts_test() {
   let assert Ok(process.ProcessDown(reason: reason, ..)) =
     await_down(connection_monitor, 1000)
   assert reason == process.Abnormal(atom.to_dynamic(atom.create("shutdown")))
-  // The socket goes with it, through the link the connection actor keeps.
+  // ソケットは接続アクターが保持するリンクを通じて一緒に落ちる。
   let assert Ok(_socket_down) = await_down(socket_monitor, 1000)
   stop_tree(tree)
 }
 
-/// Session state lives in the bunker actor, not in the connection, so it
-/// survives a reconnect: the client stays authorized without connecting
-/// again.
+/// セッション状態は接続ではなくバンカーアクターが保持するため、再接続後も残る。
+/// クライアントは再度 connect しなくても認可されたままになる。
 pub fn session_survives_a_reconnect_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
@@ -230,8 +227,8 @@ pub fn session_survives_a_reconnect_test() {
   let assert Opened(_connection, reconnected, deliver) =
     await_connection(reports)
   assert reconnected != socket
-  // No second `connect`: only an authorized client is answered with a pong,
-  // and it goes out on the socket that replaced the dead one.
+  // 2 度目の `connect` は送らない。pong が返るのは認可済みクライアントだけで、
+  // 応答は死んだソケットを置き換えた新しいソケットから出ていく。
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(pong_on, pong)) = process.receive(reports, 2000)
   assert pong_on == reconnected
@@ -239,8 +236,8 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
-/// Events received on a monitor connection reach the plugins, and keep doing
-/// so after the dispatcher they pass through has been killed.
+/// 監視接続で受信したイベントはプラグインに届き、経由するディスパッチャーを kill
+/// した後も届き続ける。
 pub fn monitor_dispatcher_survives_being_killed_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()

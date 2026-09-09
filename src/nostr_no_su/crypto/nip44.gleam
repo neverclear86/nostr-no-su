@@ -1,9 +1,9 @@
-//// NIP-44 v2 payload encryption.
+//// NIP-44 v2 のペイロード暗号化。
 ////
-//// The cryptographic primitives come from OTP/OpenSSL: ECDH via
-//// `secp256k1.ecdh_x`, SHA-256/HMAC via `gleam_crypto`, and ChaCha20 via the
-//// FFI wrapper. This module only assembles the spec's HKDF key schedule,
-//// padding, and payload framing on top of them.
+//// 暗号プリミティブは OTP/OpenSSL 由来のものを使う。ECDH は `secp256k1.ecdh_x`、
+//// SHA-256/HMAC は `gleam_crypto`、ChaCha20 は FFI ラッパー経由。本モジュールは
+//// その上に、仕様が定める HKDF の鍵導出・パディング・ペイロード構造を組み立てる
+//// だけ。
 
 import gleam/bit_array
 import gleam/crypto
@@ -22,20 +22,20 @@ pub type Nip44Error {
 @external(erlang, "nostr_no_su_ffi", "chacha20")
 fn ffi_chacha20(key: BitArray, nonce: BitArray, data: BitArray) -> BitArray
 
-/// Derive the long-lived conversation key shared by two parties.
+/// 2 者間で共有する長期の conversation key を導出する。
 pub fn conversation_key(
   privkey: BitArray,
   pubkey_xonly: BitArray,
 ) -> Result(BitArray, Nip44Error) {
   case secp256k1.ecdh_x(privkey, pubkey_xonly) {
     Error(_) -> Error(InvalidKey)
-    // hkdf-extract: the salt "nip44-v2" is the HMAC key, the ECDH x the data.
+    // hkdf-extract: ソルト "nip44-v2" を HMAC 鍵、ECDH の x をデータとして使う。
     Ok(shared_x) ->
       Ok(crypto.hmac(shared_x, crypto.Sha256, <<"nip44-v2":utf8>>))
   }
 }
 
-/// Number of bytes of padded plaintext (excluding the 2-byte length prefix).
+/// パディング後の平文のバイト数（先頭 2 バイトの長さプレフィックスを除く）。
 pub fn calc_padded_len(unpadded_len: Int) -> Int {
   case unpadded_len <= 32 {
     True -> 32
@@ -54,8 +54,8 @@ fn bit_length(x: Int) -> Int {
   }
 }
 
-/// HKDF-expand to the 76 message-key bytes: chacha_key(32) || nonce(12) ||
-/// hmac_key(32).
+/// HKDF-expand で 76 バイトの message key を導出する:
+/// chacha_key(32) || nonce(12) || hmac_key(32)。
 fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
   let t1 = crypto.hmac(<<nonce:bits, 1>>, crypto.Sha256, conversation_key)
   let t2 =
@@ -69,7 +69,7 @@ fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
   }
 }
 
-/// Encrypt with fresh random nonce.
+/// 新たに生成したランダムな nonce で暗号化する。
 pub fn encrypt(
   plaintext: String,
   conversation_key: BitArray,
@@ -81,8 +81,8 @@ pub fn encrypt(
   )
 }
 
-/// Deterministic encryption seam: `nonce` is the 32-byte nonce. Test vectors
-/// fix the nonce, so tests call this directly.
+/// 決定的に暗号化するための差し込み口。`nonce` は 32 バイトの nonce。テスト
+/// ベクターは nonce を固定するため、テストはこちらを直接呼ぶ。
 pub fn encrypt_with_nonce(
   plaintext: String,
   conversation_key: BitArray,

@@ -3,14 +3,14 @@ import gleam/json
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter.{type Filter}
 
-/// Messages sent from this client to a relay (NIP-01).
+/// 本クライアントからリレーへ送るメッセージ（NIP-01）。
 pub type ClientMessage {
   Req(subscription_id: String, filter: Filter)
   Close(subscription_id: String)
   Publish(event: Event)
 }
 
-/// Messages sent from a relay to this client (NIP-01).
+/// リレーから本クライアントへ送られるメッセージ（NIP-01）。
 pub type RelayMessage {
   RelayEvent(subscription_id: String, event: Event)
   RelayEose(subscription_id: String)
@@ -38,9 +38,9 @@ pub fn encode_client_message(client_message: ClientMessage) -> String {
   |> json.to_string
 }
 
-/// Relay messages are heterogeneous JSON arrays tagged by their first
-/// element, e.g. `["EVENT", subscription_id, {...}]`. Integer keys index
-/// into the decoded list.
+/// リレーメッセージは先頭要素をタグとする異種混在の JSON 配列で、たとえば
+/// `["EVENT", subscription_id, {...}]` の形をとる。整数キーはデコード後の
+/// リストの添字を指す。
 pub fn relay_message_decoder() -> decode.Decoder(RelayMessage) {
   use tag <- decode.field(0, decode.string)
   case tag {

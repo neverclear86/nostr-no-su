@@ -14,19 +14,19 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 
 const other_client_key = "0000000000000000000000000000000000000000000000000000000000000005"
 
-/// The account for one of the hex test keys.
+/// テスト用 16 進鍵に対応するアカウント。
 fn account_for(key_hex: String) -> Account {
   let assert Ok(account) = account.from_hex(key_hex)
   account
 }
 
-/// An engine serving the single test signer with the test secret.
+/// テスト用の署名者 1 件とテスト用シークレットを扱うエンジン。
 fn new_engine() -> engine.Engine {
   engine.new([#(account_for(signer_key), secret)])
 }
 
-/// Build a request event exactly as a real client would: NIP-44 encrypt the
-/// JSON-RPC body to the signer, then sign the kind-24133 event.
+/// 実際のクライアントと同じ手順でリクエストイベントを組み立てる。JSON-RPC 本文
+/// を署名者宛に NIP-44 で暗号化し、kind 24133 イベントとして署名する。
 fn request_event(
   client: Account,
   signer: Account,
@@ -50,7 +50,7 @@ fn request_event(
   signed
 }
 
-/// Decrypt a response event back into its JSON-RPC body.
+/// 応答イベントを復号して JSON-RPC 本文に戻す。
 fn decrypt_response(
   client: Account,
   signer: Account,
@@ -62,7 +62,7 @@ fn decrypt_response(
   text
 }
 
-/// Send a `connect` request for the given signer and secret.
+/// 指定した署名者とシークレットで `connect` リクエストを送る。
 fn connect(
   engine: engine.Engine,
   client: Account,
@@ -79,13 +79,13 @@ fn connect(
   engine.handle_event(engine, request_event(client, signer, body, now), now)
 }
 
-/// The right secret is acked with a signed reply addressed to the client.
+/// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
 pub fn connect_ack_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(_engine, outcome) = connect(new_engine(), client, signer, secret, 1000)
   let assert Reply(response) = outcome
-  // response is addressed back to the client and is itself a valid event
+  // 応答はクライアント宛であり、それ自体が正当なイベントである
   assert response.kind == 24_133
   assert response.tags == [["p", client.pubkey_hex]]
   assert response.pubkey == signer.pubkey_hex
@@ -94,7 +94,7 @@ pub fn connect_ack_test() {
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
 }
 
-/// A wrong secret is rejected and leaves the client unauthorized.
+/// 誤ったシークレットは拒否され、クライアントは未認可のままになる。
 pub fn connect_wrong_secret_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -104,7 +104,7 @@ pub fn connect_wrong_secret_test() {
     decrypt_response(client, signer, response),
     "invalid secret",
   )
-  // still unauthorized afterwards
+  // その後も未認可のまま
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
   let #(_engine, outcome2) =
     engine.handle_event(engine, request_event(client, signer, body, 1001), 1001)
@@ -112,7 +112,7 @@ pub fn connect_wrong_secret_test() {
   assert string.contains(decrypt_response(client, signer, r2), "unauthorized")
 }
 
-/// Requests sent before `connect` are refused as unauthorized.
+/// `connect` より前に送られたリクエストは未認可として拒否される。
 pub fn get_public_key_requires_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -130,7 +130,7 @@ pub fn get_public_key_requires_connect_test() {
   )
 }
 
-/// Once connected, `get_public_key` returns the signer pubkey.
+/// 接続後は `get_public_key` が署名者の pubkey を返す。
 pub fn get_public_key_after_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -143,7 +143,7 @@ pub fn get_public_key_after_connect_test() {
     == "{\"id\":\"g1\",\"result\":\"" <> signer.pubkey_hex <> "\"}"
 }
 
-/// `ping` is answered with "pong".
+/// `ping` には "pong" を返す。
 pub fn ping_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -156,7 +156,7 @@ pub fn ping_test() {
     == "{\"id\":\"p1\",\"result\":\"pong\"}"
 }
 
-/// `sign_event` returns an event with a valid id and signature.
+/// `sign_event` は正しい id と署名を持つイベントを返す。
 pub fn sign_event_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -169,7 +169,8 @@ pub fn sign_event_test() {
     engine.handle_event(engine, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   let result = decrypt_response(client, signer, response)
-  // The result field is a JSON-string-encoded signed event. Extract and parse.
+  // result フィールドは JSON 文字列として符号化された署名済みイベントなので、
+  // 取り出してパースする。
   let assert Ok(signed) = parse_result_event(result)
   assert signed.pubkey == signer.pubkey_hex
   assert signed.kind == 1
@@ -179,7 +180,7 @@ pub fn sign_event_test() {
   assert event.verify_signature(signed)
 }
 
-/// A draft without `created_at` is stamped with the current time.
+/// `created_at` を持たないドラフトには現在時刻が入る。
 pub fn sign_event_fills_created_at_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -195,12 +196,12 @@ pub fn sign_event_fills_created_at_test() {
   assert signed.created_at == 2000
 }
 
-/// Requests outside the acceptance window are ignored.
+/// 受付ウィンドウの外にあるリクエストは無視される。
 pub fn stale_event_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let body = "{\"id\":\"x\",\"method\":\"ping\"}"
-  // event created an hour before "now"
+  // "now" の 1 時間前に作られたイベント
   let #(_engine, outcome) =
     engine.handle_event(
       new_engine(),
@@ -210,8 +211,8 @@ pub fn stale_event_ignored_test() {
   let assert Ignore(_) = outcome
 }
 
-/// The same request delivered twice is handled once and reported as a
-/// duplicate, which is what a second bunker relay produces.
+/// 同じリクエストが 2 度届いても処理は 1 度きりで、2 度目は重複として報告される。
+/// 2 つ目のバンカーリレーがあると実際にこの状況が起きる。
 pub fn replay_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -232,7 +233,7 @@ pub fn replay_ignored_test() {
   let assert Duplicate = second
 }
 
-/// A request whose signature does not verify is ignored.
+/// 署名の検証に失敗したリクエストは無視される。
 pub fn tampered_signature_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -244,11 +245,11 @@ pub fn tampered_signature_ignored_test() {
   assert string.contains(reason, "signature")
 }
 
-/// Content encrypted to another signer cannot be read and is ignored.
+/// 別の署名者宛に暗号化された content は読めないため無視される。
 pub fn undecryptable_content_ignored_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  // content encrypted to a DIFFERENT signer than the one we route to
+  // ルーティング先とは異なる署名者宛に暗号化した content
   let wrong_signer = account_for(other_client_key)
   let assert Ok(conversation_key) =
     nip44.conversation_key(client.privkey, wrong_signer.pubkey)
@@ -268,7 +269,7 @@ pub fn undecryptable_content_ignored_test() {
   let assert Ignore(_) = outcome
 }
 
-/// An unknown method is answered with an error rather than a crash.
+/// 未知のメソッドはクラッシュではなくエラー応答で返す。
 pub fn unknown_method_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -283,7 +284,7 @@ pub fn unknown_method_test() {
   )
 }
 
-/// NIP-04 methods are answered with an explicit "not supported" error.
+/// NIP-04 のメソッドには「未対応」という明示的なエラーを返す。
 pub fn nip04_stubbed_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -299,14 +300,14 @@ pub fn nip04_stubbed_test() {
   )
 }
 
-/// `nip44_encrypt` and `nip44_decrypt` round-trip, and the third party
-/// can decrypt the payload with its own key.
+/// `nip44_encrypt` と `nip44_decrypt` が往復し、第三者は自身の鍵でペイロードを
+/// 復号できる。
 pub fn nip44_roundtrip_via_engine_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let third_party = account_for(other_client_key)
   let #(engine, _) = connect(new_engine(), client, signer, secret, 1000)
-  // encrypt "secret msg" to third_party via the signer
+  // 署名者を介して "secret msg" を third_party 宛に暗号化する
   let enc_body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\""
     <> third_party.pubkey_hex
@@ -319,12 +320,12 @@ pub fn nip44_roundtrip_via_engine_test() {
     )
   let assert Reply(enc_response) = enc_outcome
   let payload = extract_result(decrypt_response(client, signer, enc_response))
-  // third_party decrypts it directly to confirm interop
+  // 相互運用性を確認するため third_party が直接復号する
   let assert Ok(tp_key) =
     nip44.conversation_key(third_party.privkey, signer.pubkey)
   let assert Ok(plain) = nip44.decrypt(payload, tp_key)
   assert plain == "secret msg"
-  // and the engine can decrypt it back
+  // エンジン側でも復号して元に戻せる
   let dec_body =
     "{\"id\":\"d1\",\"method\":\"nip44_decrypt\",\"params\":[\""
     <> third_party.pubkey_hex
@@ -342,15 +343,15 @@ pub fn nip44_roundtrip_via_engine_test() {
     == "secret msg"
 }
 
-/// Authorization and secrets are per signer, never shared between them.
+/// 認可とシークレットは署名者ごとに独立し、署名者間で共有されない。
 pub fn multi_account_isolation_test() {
   let signer_a = account_for(signer_key)
   let signer_b = account_for(other_client_key)
   let client = account_for(client_key)
   let engine = engine.new([#(signer_a, "secret-a"), #(signer_b, "secret-b")])
-  // authorize on A
+  // A で認可を得る
   let #(engine, _) = connect(engine, client, signer_a, "secret-a", 1000)
-  // request to B is unauthorized (auth is per-signer)
+  // B へのリクエストは未認可（認可は署名者ごと）
   let body = "{\"id\":\"g\",\"method\":\"get_public_key\"}"
   let #(engine, outcome_b) =
     engine.handle_event(
@@ -360,7 +361,7 @@ pub fn multi_account_isolation_test() {
     )
   let assert Reply(rb) = outcome_b
   assert string.contains(decrypt_response(client, signer_b, rb), "unauthorized")
-  // connecting to B needs B's secret, not A's
+  // B への接続には A ではなく B のシークレットが必要
   let #(_engine, outcome_bc) =
     connect(engine, client, signer_b, "secret-a", 1002)
   let assert Reply(rbc) = outcome_bc
@@ -370,7 +371,7 @@ pub fn multi_account_isolation_test() {
   )
 }
 
-/// `logout` drops the authorization, so later requests are refused.
+/// `logout` は認可を破棄するため、以降のリクエストは拒否される。
 pub fn logout_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -396,9 +397,9 @@ pub fn logout_test() {
   )
 }
 
-// --- helpers ---
+// --- ヘルパー ---
 
-/// The same hex string with its last digit changed.
+/// 末尾 1 文字だけを変えた同じ 16 進文字列。
 fn flip_last_hex(hex: String) -> String {
   let head = string.drop_end(hex, 1)
   let last = string.slice(hex, string.length(hex) - 1, 1)
@@ -409,19 +410,19 @@ fn flip_last_hex(hex: String) -> String {
   head <> replacement
 }
 
-/// Decoder for the "result" field of a JSON-RPC response.
+/// JSON-RPC 応答の "result" フィールド用のデコーダー。
 fn result_decoder() -> decode.Decoder(String) {
   use result <- decode.field("result", decode.string)
   decode.success(result)
 }
 
-/// Pull the string value of the "result" field out of a response JSON.
+/// 応答 JSON から "result" フィールドの文字列値を取り出す。
 fn extract_result(response_json: String) -> String {
   let assert Ok(value) = json.parse(response_json, result_decoder())
   value
 }
 
-/// Parse the event that `sign_event` returns as a JSON string.
+/// `sign_event` が JSON 文字列として返すイベントをパースする。
 fn parse_result_event(response_json: String) -> Result(Event, Nil) {
   case json.parse(response_json, result_decoder()) {
     Ok(event_json) ->

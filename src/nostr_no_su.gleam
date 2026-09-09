@@ -13,34 +13,31 @@ import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 
-/// How many recent event ids the monitor dispatcher remembers for
-/// cross-relay de-duplication (see `dedup` for the exact bound).
+/// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
+/// 件数（正確な上限は `dedup` を参照）。
 const dedup_capacity = 4096
 
-/// Start the `ssl` application, which `wss://` connections depend on.
+/// `wss://` 接続が依存する `ssl` アプリケーションを起動する。
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
 fn ensure_ssl_started() -> Nil
 
-/// Start the supervision tree for the configured relays and accounts, then
-/// idle: from here on every process is supervised, restarted and rewired by
-/// the tree rather than by this one.
+/// 設定されたリレーとアカウントのスーパービジョンツリーを起動し、以降は待機
+/// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
 pub fn main() -> Nil {
   ensure_ssl_started()
   let loaded = config.load()
   io.println(
     "nostr-no-su — monitor relays: " <> describe_relays(loaded.relay_urls),
   )
-  // A tree that will not start means a bug or a broken configuration, so
-  // crash rather than idle in a half-started process: the exit code is what
-  // tells the container to restart.
+  // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
+  // クラッシュさせる。コンテナーに再起動を促すのは終了コードである。
   let assert Ok(_started) = app.start(spec(loaded))
     as "supervision tree failed to start"
   process.sleep_forever()
 }
 
-/// The tree to run for the loaded configuration. The process names are
-/// created here once and passed down, so a restarted actor re-registers the
-/// name its connections send to.
+/// 読み込んだ設定に対して動かすツリー。プロセス名はここで一度だけ生成して下へ
+/// 渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 fn spec(loaded: Config) -> app.Spec {
   app.Spec(
     monitor: monitor_spec(loaded),
@@ -50,8 +47,7 @@ fn spec(loaded: Config) -> app.Spec {
   )
 }
 
-/// The monitoring subtree for the configured relays, or nothing when there
-/// are none to watch.
+/// 設定されたリレーの監視サブツリー。監視対象がなければ None。
 fn monitor_spec(loaded: Config) -> Option(app.Monitor) {
   case loaded.relay_urls {
     [] -> {
@@ -71,8 +67,8 @@ fn monitor_spec(loaded: Config) -> Option(app.Monitor) {
   }
 }
 
-/// The bunker subtree for the configured accounts, logging one connection URI
-/// per account. Without usable accounts the app runs monitor-only.
+/// 設定されたアカウントのバンカーサブツリー。アカウントごとに接続 URI を 1 件
+/// ログ出力する。利用できるアカウントがなければ監視のみで動作する。
 fn bunker_spec(loaded: Config) -> Option(app.Bunker) {
   case account.load_all(loaded.account_keys) {
     Error(reason) -> {
@@ -113,7 +109,7 @@ fn bunker_spec(loaded: Config) -> Option(app.Bunker) {
   }
 }
 
-/// The configured connection secret, or a fresh random one per account.
+/// 設定された接続シークレット。未設定ならアカウントごとに乱数で生成する。
 fn secret_for(loaded: Config) -> String {
   case loaded.bunker_secret {
     Some(secret) -> secret
@@ -124,7 +120,7 @@ fn secret_for(loaded: Config) -> String {
   }
 }
 
-/// Render a relay list for the startup log.
+/// 起動ログ用にリレー一覧を文字列化する。
 fn describe_relays(relay_urls: List(String)) -> String {
   case relay_urls {
     [] -> "(none)"

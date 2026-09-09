@@ -1,16 +1,16 @@
-//// The supervision tree.
+//// スーパービジョンツリー。
 ////
 //// ```
 //// root (one_for_one)
-//// |-- monitor (rest_for_one): dedup dispatcher, then one connection per relay
-//// `-- bunker  (rest_for_one): bunker actor,     then one connection per relay
+//// |-- monitor (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
+//// `-- bunker  (rest_for_one): バンカーアクター、    次にリレーごとの接続
 //// ```
 ////
-//// Each subtree is `rest_for_one` so that a restart of the actor at its head
-//// takes the connections behind it down too: they re-subscribe and re-install
-//// their publisher on the way back up, which is how a restarted bunker gets
-//// wired to live sockets again. The actors are named, so the connections
-//// address them by name and never hold a subject for a dead process.
+//// 各サブツリーを `rest_for_one` にしているのは、先頭のアクターが再起動した際に
+//// 後続の接続もまとめて落とすため。接続は復帰の過程で購読を張り直し publisher を
+//// 登録し直すので、再起動したバンカーが再び生きたソケットに配線される。アクター
+//// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
+//// subject を握り続けることがない。
 
 import gleam/erlang/process.{type Name}
 import gleam/list
@@ -26,13 +26,13 @@ import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/relay_client.{type Subscriptions}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 
-/// How a relay connection is opened: `open_websocket` in production, a fake
-/// socket in tests, so the whole tree can run without a network.
+/// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
+/// ネットワークなしでもツリー全体を動かせるようにする。
 pub type Open =
   fn(String, Subscriptions, fn(Event) -> Nil) -> Result(Socket, String)
 
-/// The monitoring subtree: the de-duplicating dispatcher the plugins run
-/// behind, and the relays whose events feed it.
+/// 監視サブツリー。プラグインを動かす重複排除ディスパッチャーと、そこへイベントを
+/// 流し込むリレー群からなる。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
@@ -43,8 +43,7 @@ pub type Monitor {
   )
 }
 
-/// The bunker subtree: the NIP-46 actor and the relays it listens and
-/// replies on.
+/// バンカーサブツリー。NIP-46 アクターと、それが待ち受け・応答するリレー群。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
@@ -54,8 +53,8 @@ pub type Bunker {
   )
 }
 
-/// Which halves of the app to run, how to open their connections, and how
-/// long a connection waits before reconnecting.
+/// 監視とバンカーのどちらを（あるいは両方を）動かすか、接続をどう開くか、接続が
+/// 再接続までどれだけ待つか。
 pub type Spec {
   Spec(
     monitor: Option(Monitor),
@@ -65,21 +64,21 @@ pub type Spec {
   )
 }
 
-/// Start the tree. The root is `one_for_one` because the two subtrees are
-/// independent: a broken bunker must not stop monitoring, and vice versa.
+/// ツリーを起動する。2 つのサブツリーは独立しているためルートは `one_for_one`。
+/// バンカーが壊れても監視を止めてはならず、その逆も同様。
 pub fn start(spec: Spec) -> actor.StartResult(supervisor.Supervisor) {
   supervisor.new(supervisor.OneForOne)
-  // Deliberately tighter than the subtrees and over a longer window: a
-  // subtree that keeps giving up is broken for good, and exiting hands the
-  // restart to the container's restart policy instead of looping here.
+  // サブツリーより意図的に厳しく、期間も長く取る。再起動を諦め続けるサブツリー
+  // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナーの
+  // 再起動ポリシーに委ねる。
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
   |> add_subtree(spec.monitor, fn(config) { monitor_tree(spec, config) })
   |> add_subtree(spec.bunker, fn(config) { bunker_tree(spec, config) })
   |> supervisor.start
 }
 
-/// Open a real websocket connection to the relay and describe it as the
-/// socket a connection actor watches and publishes on.
+/// リレーへの実際の WebSocket 接続を開き、接続アクターが監視と送信に使う
+/// ソケットとして表現する。
 pub fn open_websocket(
   url: String,
   subscriptions: Subscriptions,
@@ -90,12 +89,12 @@ pub fn open_websocket(
     subscriptions,
     handle_event,
   ))
-  // A connection subject is never a named one, so it always has an owner.
+  // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)
   Ok(Socket(pid: pid, publish: relay_client.publish(connection, _)))
 }
 
-/// Add a subtree supervisor when that half of the app is configured.
+/// アプリのその半分が設定されている場合にサブツリーのスーパーバイザーを追加する。
 fn add_subtree(
   builder: Builder,
   configured: Option(config),
@@ -107,7 +106,7 @@ fn add_subtree(
   }
 }
 
-/// The monitoring subtree: the dispatcher, then the connections feeding it.
+/// 監視サブツリー。ディスパッチャーと、そこへイベントを流し込む接続群。
 fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   subtree()
   |> supervisor.add(dedup.supervised(
@@ -124,9 +123,8 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   )
 }
 
-/// The bunker subtree: the actor, then the connections it answers on. Each
-/// connection installs its publisher on the actor, which is why they restart
-/// together with it.
+/// バンカーサブツリー。アクターと、それが応答に使う接続群。各接続はアクターに
+/// publisher を登録するため、アクターと一緒に再起動する必要がある。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
   |> supervisor.add(bunker.supervised(config.name, config.engine))
@@ -141,17 +139,16 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   )
 }
 
-/// A subtree supervisor. The burst it tolerates is generous because one bad
-/// event can take out the actor at the head and, with it, every connection
-/// behind it; a relay going down is not a restart at all, as the connection
-/// actor handles that itself.
+/// サブツリーのスーパーバイザー。不正なイベント 1 件で先頭のアクターと後続の
+/// 接続がまとめて落ちうるため、許容する再起動の頻度は多めに取ってある。リレーの
+/// 停止は接続アクター自身が処理するので、そもそも再起動にはならない。
 fn subtree() -> Builder {
   supervisor.new(supervisor.RestForOne)
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// Add one supervised connection per relay url, all sharing the
-/// subscriptions and handlers of their subtree.
+/// リレー URL ごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラー
+/// はサブツリー内で共有する。
 fn add_connections(
   builder: Builder,
   spec: Spec,
@@ -172,11 +169,11 @@ fn add_connections(
   )
 }
 
-/// Send to a named actor, dropping the message when nothing holds the name.
-/// A named subject panics in that case, and during the window in which a
-/// subtree restarts that panic would land either on the connection actor (in
-/// `on_connect`, costing the subtree a restart) or on the stratus process (in
-/// the event handler, costing the connection its socket).
+/// 名前付きアクターへ送信する。名前を保持するプロセスがなければメッセージを
+/// 捨てる。その状況で名前付き subject を使うと panic し、サブツリーの再起動中に
+/// 起きた panic は接続アクター（`on_connect` 内。サブツリーの再起動を 1 回
+/// 消費する）か stratus プロセス（イベントハンドラー内。接続がソケットを失う）に
+/// 波及する。
 fn send_named(name: Name(msg), message: msg) -> Nil {
   case process.named(name) {
     Ok(_pid) -> process.send(process.named_subject(name), message)

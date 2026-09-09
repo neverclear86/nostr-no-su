@@ -1,11 +1,10 @@
-//// One supervised connection to a relay.
+//// リレーへのスーパーバイザー配下の接続 1 本。
 ////
-//// The actor owns the socket process: it opens the connection from its own
-//// loop and, when the socket dies, schedules a reconnect instead of dying
-//// with it, so a flapping relay never consumes the supervisor's restart
-//// intensity. That requires trapping exits, which also turns the exit signal
-//// a supervisor sends when shutting the tree down into a message: `handle`
-//// tells the two apart by pid and re-raises the latter.
+//// アクターがソケットプロセスを所有する。自身のループから接続を開き、ソケットが
+//// 死んだときは道連れにならず再接続を予約するため、不安定なリレーがスーパー
+//// バイザーの再起動許容回数を消費することがない。これには exit の trap が必要で、
+//// その結果、ツリー停止時にスーパーバイザーが送る exit シグナルもメッセージとして
+//// 届くようになる。`handle` は pid で両者を区別し、後者は再送出する。
 
 import gleam/erlang/process.{type ExitMessage, type Pid, type Subject}
 import gleam/int
@@ -15,22 +14,21 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/nostr/event.{type Event}
 
-/// How long to wait before reconnecting after a lost or refused connection.
+/// 接続が切れた、あるいは拒否された後、再接続するまでの待ち時間。
 pub const default_reconnect_delay_ms = 5000
 
-/// A live connection: the process to watch for disconnects, and the way to
-/// send events out on it.
+/// 生きている接続。切断検知のために監視するプロセスと、そこからイベントを
+/// 送信する手段を持つ。
 pub type Socket {
   Socket(pid: Pid, publish: fn(Event) -> Nil)
 }
 
-/// How the socket is opened. Injected so the reconnect logic can be tested
-/// without a websocket.
+/// ソケットの開き方。再接続ロジックを WebSocket なしでテストできるよう注入する。
 pub type Open =
   fn() -> Result(Socket, String)
 
-/// Everything one connection needs: a label for its log lines, how to open
-/// the socket, what to do with each fresh one, and how long to back off.
+/// 接続 1 本に必要なものすべて。ログ行に付けるラベル、ソケットの開き方、新しい
+/// ソケットごとに行う処理、再接続までの待ち時間。
 pub type Config {
   Config(
     relay: String,
@@ -41,9 +39,10 @@ pub type Config {
 }
 
 pub type Msg {
-  /// Open the socket. Sent by the initialiser and by the reconnect timer.
+  /// ソケットを開く。初期化処理と再接続タイマーから送られる。
   Connect
-  /// A linked process exited: the socket, or the supervisor shutting us down.
+  /// リンクしたプロセスが終了した。ソケットか、このアクターを停止させようと
+  /// しているスーパーバイザーのいずれか。
   Exited(exit: ExitMessage)
 }
 
@@ -51,27 +50,27 @@ type State {
   State(config: Config, parent: Pid, self: Subject(Msg), socket: Option(Pid))
 }
 
-/// A child specification for the supervision tree. The default worker
-/// shutdown timeout of 5000ms applies: `connect` blocks the actor while it
-/// runs, so an injected one that can block for longer than that would be
-/// killed mid-handshake instead of shutting down cleanly.
+/// スーパービジョンツリー用の子仕様。ワーカーの既定の停止タイムアウト 5000ms が
+/// 適用される。`connect` の実行中はアクターがブロックされるため、それより長く
+/// ブロックしうる `connect` を注入すると、正常に停止できずハンドシェイクの
+/// 途中で kill される。
 pub fn supervised(config: Config) -> ChildSpecification(Subject(Msg)) {
   supervision.worker(fn() { start(config) })
 }
 
-/// Start the connection actor. It starts even when the relay is unreachable,
-/// so one bad URL cannot fail the whole subtree.
+/// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、URL が
+/// 1 つ不正でもサブツリー全体の起動が失敗することはない。
 pub fn start(config: Config) -> actor.StartResult(Subject(Msg)) {
-  // `start` runs in the process that links the actor, which under a
-  // supervisor is the supervisor itself: exits from it mean "shut down".
+  // `start` はアクターをリンクするプロセス上で動く。スーパーバイザー配下では
+  // それはスーパーバイザー自身であり、そこからの exit は停止要求を意味する。
   let parent = process.self()
   actor.new_with_initialiser(1000, fn(self) { initialise(config, parent, self) })
   |> actor.on_message(handle)
   |> actor.start
 }
 
-/// Trap exits so a dying socket arrives as a message, and queue the first
-/// connection attempt: connecting here would block the supervisor's start.
+/// ソケットの死をメッセージとして受け取れるよう exit を trap し、最初の接続試行を
+/// キューに積む。ここで接続するとスーパーバイザーの起動をブロックしてしまう。
 fn initialise(
   config: Config,
   parent: Pid,
@@ -90,7 +89,7 @@ fn initialise(
   |> Ok
 }
 
-/// Open the socket, or react to the death of a linked process.
+/// ソケットを開くか、リンクしたプロセスの死に対応する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Connect -> open(state)
@@ -98,15 +97,16 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case exit.pid == state.parent, Some(exit.pid) == state.socket {
         True, _ -> shutdown(state, exit.reason)
         _, True -> reconnect(state, "disconnected")
-        // Neither: a failed handshake leaves an exit from the stratus child
-        // that never became our socket, which is not a reason to react.
+        // どちらでもない場合。ハンドシェイクに失敗すると、ソケットにならな
+        // かった stratus の子プロセスからの exit が残るが、これは反応すべき
+        // ものではない。
         False, False -> actor.continue(state)
       }
   }
 }
 
-/// Try to open the socket, handing the fresh one to `on_connect`, and
-/// schedule a retry when the relay is unreachable.
+/// ソケットを開き、新しいソケットを `on_connect` に渡す。リレーに到達できない
+/// ときは再試行を予約する。
 fn open(state: State) -> actor.Next(State, Msg) {
   case state.config.connect() {
     Ok(socket) -> {
@@ -117,7 +117,7 @@ fn open(state: State) -> actor.Next(State, Msg) {
   }
 }
 
-/// Log why the socket is gone and schedule the next attempt.
+/// ソケットが失われた理由をログ出力し、次の試行を予約する。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   let delay = state.config.reconnect_delay_ms
   io.println(
@@ -133,19 +133,19 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   actor.continue(State(..state, socket: None))
 }
 
-/// Terminate on the exit signal that asked us to. The actor loop treats a
-/// trapped exit as an ordinary message, so the signal has to be re-raised
-/// untrapped to exit with the reason the supervisor waits for; the socket
-/// then dies with us through its link.
+/// 停止を要求する exit シグナルを受けて終了する。アクターのループは trap した
+/// exit を通常のメッセージとして扱うため、スーパーバイザーが待っている理由で
+/// 終了するには、trap を解除してシグナルを送り直す必要がある。ソケットはリンクを
+/// 通じて一緒に死ぬ。
 fn shutdown(
   state: State,
   reason: process.ExitReason,
 ) -> actor.Next(State, Msg) {
   process.trap_exits(False)
   case reason {
-    // A normal exit is not passed along a link, so the socket would outlive
-    // the actor. Supervisors ask with `shutdown` or `kill`, so this is only
-    // reached when something else stops the actor.
+    // `Normal` な exit はリンク越しに伝播しないため、ソケットがアクターより長く
+    // 生き残ってしまう。スーパーバイザーは `shutdown` か `kill` で停止を求める
+    // ので、ここに来るのはそれ以外の要因でアクターが停止した場合だけ。
     process.Normal -> stop_socket(state)
     process.Killed -> process.kill(process.self())
     process.Abnormal(reason) ->
@@ -154,10 +154,9 @@ fn shutdown(
   actor.stop()
 }
 
-/// Take the socket down for the exit reasons that will not do it themselves.
-/// The link is dropped first: exits are no longer trapped by this point, so
-/// the kill would otherwise travel back along it and decide how the actor
-/// terminates.
+/// ソケットが自動では落ちない終了理由のときに、ソケットを落とす。先にリンクを
+/// 解除するのは、この時点では exit を trap していないため、kill がリンクを
+/// 逆流してアクターの終了のしかたを左右してしまうから。
 fn stop_socket(state: State) -> Nil {
   case state.socket {
     Some(socket) -> {

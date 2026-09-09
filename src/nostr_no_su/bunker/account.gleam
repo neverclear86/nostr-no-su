@@ -1,4 +1,5 @@
-//// A bunker account: the key material for one identity the bunker signs for.
+//// バンカーアカウント。バンカーが代理で署名する 1 つのアイデンティティ
+//// （鍵ペア）の鍵素材。
 
 import gleam/bit_array
 import gleam/list
@@ -11,7 +12,7 @@ pub type Account {
   Account(privkey: BitArray, pubkey: BitArray, pubkey_hex: String)
 }
 
-/// Build an account from a 64-char hex private key.
+/// 64 文字の 16 進秘密鍵からアカウントを構築する。
 pub fn from_hex(hex: String) -> Result(Account, String) {
   use privkey <- result.try(
     bit_array.base16_decode(string.uppercase(string.trim(hex)))
@@ -32,14 +33,14 @@ pub fn from_hex(hex: String) -> Result(Account, String) {
   }
 }
 
-/// Build an account per hex private key, failing on the first bad one.
+/// 16 進秘密鍵ごとにアカウントを構築し、最初の不正な鍵で失敗する。
 pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
   list.try_map(raw_keys, from_hex)
 }
 
-/// The `bunker://` connection URI a client pastes to reach this account.
-/// NIP-46 allows several `relay=` hints; the client connects to all of them,
-/// so any live one is enough to reach the bunker.
+/// このアカウントへ接続するためにクライアントへ貼り付ける `bunker://` URI。
+/// NIP-46 は複数の `relay=` ヒントを許容し、クライアントはそのすべてに接続する
+/// ため、生きているリレーが 1 つあればバンカーに到達できる。
 pub fn bunker_uri(
   account: Account,
   relay_urls: List(String),
