@@ -1,4 +1,4 @@
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http/request.{type Request}
 import gleam/io
 import gleam/list
@@ -14,6 +14,11 @@ pub type Msg {
   Publish(event: event.Event)
 }
 
+/// A started connection. It is driven through `publish` and the process
+/// behind it is what the caller's reconnect loop waits on.
+pub type Connection =
+  Subject(stratus.InternalMessage(Msg))
+
 /// A thunk producing the subscriptions to open. It is re-evaluated on every
 /// (re)connection so time-relative filters (e.g. `since`) stay current.
 pub type Subscriptions =
@@ -22,28 +27,30 @@ pub type Subscriptions =
 /// Convert a relay URL to the http(s) request stratus expects: gleam_http
 /// only parses http(s) schemes, and stratus maps Https to wss/TLS.
 pub fn to_request(url: String) -> Result(Request(String), Nil) {
-  url
-  |> string.replace("wss://", "https://")
-  |> string.replace("ws://", "http://")
-  |> request.to
+  case string.split_once(url, "://") {
+    Ok(#("wss", rest)) -> request.to("https://" <> rest)
+    Ok(#("ws", rest)) -> request.to("http://" <> rest)
+    _ -> request.to(url)
+  }
 }
 
 /// The relay URL without its scheme, used to attribute log lines to a relay
 /// when several connections are open.
 pub fn label(url: String) -> String {
-  url
-  |> string.replace("wss://", "")
-  |> string.replace("ws://", "")
+  case string.split_once(url, "://") {
+    Ok(#(_scheme, rest)) -> rest
+    Error(_) -> url
+  }
 }
 
 /// Connect to the given relay, open the given subscriptions, and pass
-/// verified events to `handle_event`. Returns the connection subject; the
-/// caller monitors it and reconnects.
+/// verified events to `handle_event`. The connection actor is linked to the
+/// caller, which reconnects once `wait_until_dead` returns.
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-) -> Result(Subject(stratus.InternalMessage(Msg)), String) {
+) -> Result(Connection, String) {
   use req <- result.try(
     to_request(url)
     |> result.replace_error("invalid relay url: " <> url),
@@ -88,6 +95,28 @@ pub fn start(
       Ok(started.data)
     }
     Error(error) -> Error(string.inspect(error))
+  }
+}
+
+/// Ask the connection to publish an event on its socket.
+pub fn publish(connection: Connection, published: event.Event) -> Nil {
+  process.send(connection, stratus.to_user_message(Publish(published)))
+}
+
+/// Block until the connection process exits. `start` links the connection
+/// actor to its caller, so a caller that traps exits receives exactly one
+/// EXIT per death, normal or abnormal. EXIT messages left behind by earlier
+/// failed starts name a different process and are skipped, so they cannot be
+/// mistaken for the death of the live connection.
+pub fn wait_until_dead(pid: Pid) -> Nil {
+  let exits =
+    process.new_selector()
+    |> process.select_trapped_exits(fn(exit) { exit })
+  let process.ExitMessage(from, _reason) =
+    process.selector_receive_forever(exits)
+  case from == pid {
+    True -> Nil
+    False -> wait_until_dead(pid)
   }
 }
 

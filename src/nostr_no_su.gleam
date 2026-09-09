@@ -14,7 +14,6 @@ import nostr_no_su/nostr/event
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_client
 import nostr_no_su/time
-import stratus
 
 /// How many recent event ids the monitor dispatcher remembers for
 /// cross-relay de-duplication (see `dedup` for the exact bound).
@@ -127,7 +126,7 @@ fn start_monitors(loaded: Config) -> Nil {
               fn(incoming) {
                 process.send(dispatcher, dedup.Incoming(incoming))
               },
-              fn(_client) { Nil },
+              fn(_connection) { Nil },
             )
           })
         }
@@ -137,11 +136,10 @@ fn start_monitors(loaded: Config) -> Nil {
   }
 }
 
-/// The bunker's own connections: only the NIP-46 subscription runs on them,
-/// so bunker-only relays (e.g. relay.nsec.app) that reject other
-/// subscriptions stay usable. One connection per bunker relay; any live one
-/// keeps signing working (requests are deduped by the engine, responses are
-/// published on every bunker relay).
+/// The bunker's own connections, one per bunker relay: only the NIP-46
+/// subscription runs on them, so bunker-only relays (e.g. relay.nsec.app)
+/// that reject other subscriptions stay usable. See `bunker.SetPublisher`
+/// for how responses are published back.
 fn start_bunker_connections(
   loaded: Config,
   signer_pubkeys: List(String),
@@ -168,7 +166,7 @@ fn spawn_relay_loop(
   url: String,
   subscriptions: relay_client.Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-  on_connect: fn(Subject(stratus.InternalMessage(relay_client.Msg))) -> Nil,
+  on_connect: fn(relay_client.Connection) -> Nil,
 ) -> Nil {
   process.spawn(fn() {
     process.trap_exits(True)
@@ -184,13 +182,14 @@ fn relay_loop(
   url: String,
   subscriptions: relay_client.Subscriptions,
   handle_event: fn(event.Event) -> Nil,
-  on_connect: fn(Subject(stratus.InternalMessage(relay_client.Msg))) -> Nil,
+  on_connect: fn(relay_client.Connection) -> Nil,
 ) -> Nil {
   let relay = relay_client.label(url)
   case relay_client.start(url, subscriptions, handle_event) {
-    Ok(client) -> {
-      on_connect(client)
-      wait_until_dead(client)
+    Ok(connection) -> {
+      let assert Ok(pid) = process.subject_owner(connection)
+      on_connect(connection)
+      relay_client.wait_until_dead(pid)
     }
     Error(reason) ->
       io.println("[main " <> relay <> "] failed to connect: " <> reason)
@@ -205,32 +204,12 @@ fn relay_loop(
 fn rewire_publisher(
   subject: Subject(bunker.Msg),
   relay_url: String,
-  client: Subject(stratus.InternalMessage(relay_client.Msg)),
+  connection: relay_client.Connection,
 ) -> Nil {
   process.send(
     subject,
     bunker.SetPublisher(relay_url, fn(response) {
-      process.send(
-        client,
-        stratus.to_user_message(relay_client.Publish(response)),
-      )
+      relay_client.publish(connection, response)
     }),
   )
-}
-
-/// Block until the connection process dies, whether gracefully (monitor DOWN)
-/// or abnormally (trapped EXIT via the actor link). A death produces both
-/// signals, so after the first one, drain the sibling — a stale signal left in
-/// the mailbox would instantly wake the next wait and stack up connections.
-fn wait_until_dead(
-  client: Subject(stratus.InternalMessage(relay_client.Msg)),
-) -> Nil {
-  let assert Ok(pid) = process.subject_owner(client)
-  let death =
-    process.new_selector()
-    |> process.select_specific_monitor(process.monitor(pid), fn(_) { Nil })
-    |> process.select_trapped_exits(fn(_) { Nil })
-  process.selector_receive_forever(death)
-  let _ = process.selector_receive(death, 100)
-  Nil
 }
