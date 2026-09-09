@@ -1,12 +1,6 @@
 import nostr_no_su/crypto/nip44
 import nostr_no_su/hex
-
-/// テストベクターの 16 進文字列をバイト列にする。ベクターは正しい前提なので、
-/// デコードできないのはテスト自体の誤りとして扱う。
-fn bytes(text: String) -> BitArray {
-  let assert Ok(decoded) = hex.decode(text)
-  decoded
-}
+import support/vector.{bytes}
 
 /// NIP-44 の公式ベクター 1 の conversation key を導く。
 pub fn conversation_key_vector1_test() {

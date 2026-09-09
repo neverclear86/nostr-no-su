@@ -5,9 +5,7 @@ import gleam/otp/system
 import gleam/string
 import nostr_no_su/app
 import nostr_no_su/bunker
-import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
-import nostr_no_su/crypto/nip44
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
@@ -15,6 +13,7 @@ import nostr_no_su/plugins/postgres_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
+import support/nip46_client.{account_for}
 
 const secret = "s3cr3t-token"
 
@@ -133,60 +132,37 @@ fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Result(Down, Nil) {
   |> process.selector_receive(timeout_ms)
 }
 
-/// テスト用 16 進鍵に対応するアカウント。
-fn account_for(key_hex: String) -> Account {
-  let assert Ok(account) = account.from_hex(key_hex)
-  account
-}
-
-/// 実際のクライアントと同じ手順で暗号化・署名した `connect` リクエスト。
+/// テスト用の署名者とクライアントで組み立てた `connect` リクエスト。
 /// `secret_arg` が空文字列なら、シークレット無しで接続するクライアントと同じ形に
 /// なる（nostr-tools はそのように送る）。
 fn connect_request(id: String, secret_arg: String) -> Event {
   let signer = account_for(signer_key)
-  request(
-    id,
-    "connect",
-    "[\"" <> signer.pubkey_hex <> "\",\"" <> secret_arg <> "\"]",
-  )
+  signed_request(nip46_client.connect_body(signer, secret_arg, id))
 }
 
-/// 指定した params を持つ JSON-RPC リクエスト。実際のクライアントと同じく
-/// 署名者宛に暗号化し、クライアントの鍵で署名する。
+/// 指定した params を持つ JSON-RPC リクエスト。
 fn request(id: String, method: String, params_json: String) -> Event {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let body =
-    "{\"id\":\""
-    <> id
-    <> "\",\"method\":\""
-    <> method
-    <> "\",\"params\":"
-    <> params_json
-    <> "}"
-  let assert Ok(key) = nip44.conversation_key(client.privkey, signer.pubkey)
-  let assert Ok(content) = nip44.encrypt(body, key)
-  let unsigned =
-    Event(
-      id: "",
-      pubkey: client.pubkey_hex,
-      created_at: time.now_seconds(),
-      kind: event.nip46_kind,
-      tags: [["p", signer.pubkey_hex]],
-      content: content,
-      sig: "",
-    )
-  let assert Ok(signed) = event.finalize(unsigned, client.privkey)
-  signed
+  signed_request(nip46_client.request_body(id, method, params_json))
+}
+
+/// 指定した本文を、テスト用のクライアントから署名者宛のリクエストイベントに
+/// する。ツリーは受付ウィンドウを実時間で見るため、作成時刻は現在時刻にする。
+fn signed_request(body: String) -> Event {
+  nip46_client.request_event(
+    account_for(client_key),
+    account_for(signer_key),
+    body,
+    time.now_seconds(),
+  )
 }
 
 /// 応答イベントの JSON-RPC 本文。クライアントが読むのと同じ形で取り出す。
 fn response_body(response: Event) -> String {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let assert Ok(key) = nip44.conversation_key(client.privkey, signer.pubkey)
-  let assert Ok(text) = nip44.decrypt(response.content, key)
-  text
+  nip46_client.decrypt_response(
+    account_for(client_key),
+    account_for(signer_key),
+    response,
+  )
 }
 
 /// 指定した id を持つ最小限の kind 1 イベント。ディスパッチャーは id しか

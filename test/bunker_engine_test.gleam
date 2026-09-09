@@ -7,6 +7,9 @@ import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
+import support/nip46_client.{
+  account_for, connect_body, decrypt_response, request_event,
+}
 
 const secret = "s3cr3t-token"
 
@@ -21,12 +24,6 @@ const auth_base = "http://admin.test"
 
 /// 承認待ちのトークン。アクターが引く乱数の代わりにテストから注入する。
 const token = "tok-1"
-
-/// テスト用 16 進鍵に対応するアカウント。
-fn account_for(key_hex: String) -> Account {
-  let assert Ok(account) = account.from_hex(key_hex)
-  account
-}
 
 /// テスト用の署名者 1 件とテスト用シークレットを扱うエンジン。管理 UI が無効な
 /// 構成なので、シークレットの一致しない `connect` は拒否される。
@@ -55,43 +52,6 @@ fn handle(
   engine.handle_event(state, incoming, engine.Inputs(now: now, token: token))
 }
 
-/// 実際のクライアントと同じ手順でリクエストイベントを組み立てる。JSON-RPC 本文
-/// を署名者宛に NIP-44 で暗号化し、kind 24133 イベントとして署名する。
-fn request_event(
-  client: Account,
-  signer: Account,
-  rpc_json: String,
-  created_at: Int,
-) -> Event {
-  let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, signer.pubkey)
-  let assert Ok(content) = nip44.encrypt(rpc_json, conversation_key)
-  let unsigned =
-    Event(
-      id: "",
-      pubkey: client.pubkey_hex,
-      created_at: created_at,
-      kind: event.nip46_kind,
-      tags: [["p", signer.pubkey_hex]],
-      content: content,
-      sig: "",
-    )
-  let assert Ok(signed) = event.finalize(unsigned, client.privkey)
-  signed
-}
-
-/// 応答イベントを復号して JSON-RPC 本文に戻す。
-fn decrypt_response(
-  client: Account,
-  signer: Account,
-  response: Event,
-) -> String {
-  let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, signer.pubkey)
-  let assert Ok(text) = nip44.decrypt(response.content, conversation_key)
-  text
-}
-
 /// 指定した署名者とシークレットで `connect` リクエストを送る。
 fn connect(
   state: engine.Engine,
@@ -102,17 +62,6 @@ fn connect(
 ) -> #(engine.Engine, engine.Outcome) {
   let body = connect_body(signer, secret_arg, "c1")
   handle(state, request_event(client, signer, body, now), now)
-}
-
-/// `connect` リクエストの JSON-RPC 本文。
-fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
-  "{\"id\":\""
-  <> id
-  <> "\",\"method\":\"connect\",\"params\":[\""
-  <> signer.pubkey_hex
-  <> "\",\""
-  <> secret_arg
-  <> "\"]}"
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -294,21 +243,14 @@ pub fn routes_to_the_matching_p_tag_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let stranger = account_for(other_client_key)
-  let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, signer.pubkey)
-  let assert Ok(content) =
-    nip44.encrypt(connect_body(signer, secret, "c1"), conversation_key)
-  let unsigned =
-    Event(
-      id: "",
-      pubkey: client.pubkey_hex,
-      created_at: 1000,
-      kind: event.nip46_kind,
-      tags: [["p", stranger.pubkey_hex], ["p", signer.pubkey_hex]],
-      content: content,
-      sig: "",
+  let request =
+    nip46_client.request_event_with_tags(
+      client,
+      signer,
+      connect_body(signer, secret, "c1"),
+      [["p", stranger.pubkey_hex], ["p", signer.pubkey_hex]],
+      1000,
     )
-  let assert Ok(request) = event.finalize(unsigned, client.privkey)
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
@@ -319,21 +261,14 @@ pub fn routes_to_the_matching_p_tag_test() {
 pub fn unknown_p_tags_are_ignored_test() {
   let client = account_for(client_key)
   let stranger = account_for(other_client_key)
-  let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, stranger.pubkey)
-  let assert Ok(content) =
-    nip44.encrypt(connect_body(stranger, secret, "c1"), conversation_key)
-  let unsigned =
-    Event(
-      id: "",
-      pubkey: client.pubkey_hex,
-      created_at: 1000,
-      kind: event.nip46_kind,
-      tags: [["p", stranger.pubkey_hex]],
-      content: content,
-      sig: "",
+  let request =
+    nip46_client.request_event_with_tags(
+      client,
+      stranger,
+      connect_body(stranger, secret, "c1"),
+      [["p", stranger.pubkey_hex]],
+      1000,
     )
-  let assert Ok(request) = event.finalize(unsigned, client.privkey)
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(reason) = outcome
   assert string.contains(reason, "no matching account")
@@ -346,20 +281,14 @@ pub fn undecryptable_content_ignored_test() {
   let client = account_for(client_key)
   // ルーティング先とは異なる署名者宛に暗号化した content
   let wrong_signer = account_for(other_client_key)
-  let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, wrong_signer.pubkey)
-  let assert Ok(content) = nip44.encrypt("{\"id\":\"x\"}", conversation_key)
-  let unsigned =
-    Event(
-      id: "",
-      pubkey: client.pubkey_hex,
-      created_at: 1000,
-      kind: event.nip46_kind,
-      tags: [["p", signer.pubkey_hex]],
-      content: content,
-      sig: "",
+  let request =
+    nip46_client.request_event_with_tags(
+      client,
+      wrong_signer,
+      "{\"id\":\"x\"}",
+      [["p", signer.pubkey_hex]],
+      1000,
     )
-  let assert Ok(request) = event.finalize(unsigned, client.privkey)
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(_) = outcome
 }
