@@ -113,6 +113,24 @@ pub fn admin_bind_test() {
   envoy.unset("ADMIN_BIND")
 }
 
+/// `ADMIN_BASE_URL` は未設定なら None。末尾のスラッシュは、承認ページのパスと
+/// 重ならないよう取り除く。
+pub fn admin_base_url_test() {
+  envoy.unset("ADMIN_BASE_URL")
+  assert config.load().admin_base_url == None
+
+  envoy.set("ADMIN_BASE_URL", "https://bunker.example")
+  assert config.load().admin_base_url == Some("https://bunker.example")
+
+  envoy.set("ADMIN_BASE_URL", "https://bunker.example/")
+  assert config.load().admin_base_url == Some("https://bunker.example")
+
+  envoy.set("ADMIN_BASE_URL", "")
+  assert config.load().admin_base_url == None
+
+  envoy.unset("ADMIN_BASE_URL")
+}
+
 /// 監視対象の pubkey だけが異なる設定。
 fn test_config(pubkeys: List(String)) -> config.Config {
   config.Config(
@@ -125,6 +143,7 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     admin_port: config.Disabled,
     admin_bind: "127.0.0.1",
     admin_password: None,
+    admin_base_url: None,
   )
 }
 

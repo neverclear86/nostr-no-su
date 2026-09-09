@@ -18,25 +18,30 @@ const signer = "aaaa1111"
 
 const client = "bbbb2222"
 
-/// フェイクの `revoke` がテストへ報告する内容。
-type Revoked {
+/// 承認待ちのトークン。フェイクの承認・拒否はこれだけを知っている。
+const token = "tok-1"
+
+/// アカウントの接続 URI（secret 入りと、承認を経るもの）。
+const uri = "bunker://aaaa1111?relay=x&secret=s"
+
+const auth_uri = "bunker://aaaa1111?relay=x"
+
+/// フェイクのハンドラーがテストへ報告する内容。
+type Report {
   Revoked(signer: String, client: String)
+  Approved(token: String)
+  Denied(token: String)
 }
 
 /// 状態をすべて即値で持つ Context。アクターを起動せずにルートを検証できる。
 /// 監視リレーの URL だけはエスケープの検証のために差し替えられる。
 fn test_context(
-  revoked: Subject(Revoked),
+  reports: Subject(Report),
   monitor_relay_url: String,
 ) -> admin.Context {
   admin.Context(
     password: password,
-    accounts: [
-      dashboard.Account(
-        signer: signer,
-        uri: "bunker://" <> signer <> "?secret=x",
-      ),
-    ],
+    accounts: [dashboard.Account(signer: signer, uri: uri, auth_uri: auth_uri)],
     plugins: ["console_logger"],
     storage_enabled: True,
     relays: fn() {
@@ -55,19 +60,53 @@ fn test_context(
     },
     sessions: fn() { [engine.Session(signer: signer, client: client)] },
     revoke: fn(signer, client) {
-      process.send(revoked, Revoked(signer: signer, client: client))
+      process.send(reports, Revoked(signer: signer, client: client))
     },
+    pending: fn() {
+      [
+        dashboard.PendingRow(
+          token: token,
+          signer: signer,
+          client: client,
+          age_seconds: 12,
+        ),
+      ]
+    },
+    approve: fn(decided) { decide(reports, Approved(decided), decided) },
+    deny: fn(decided) { decide(reports, Denied(decided), decided) },
   )
 }
 
-/// 取り消しを報告する Context。
-fn revoking_context(revoked: Subject(Revoked)) -> admin.Context {
-  test_context(revoked, "wss://relay.example")
+/// 承認・拒否のフェイク。テストへ報告したうえで、知っているトークンだけを成功と
+/// して扱う。
+fn decide(
+  reports: Subject(Report),
+  report: Report,
+  decided: String,
+) -> Result(Nil, String) {
+  process.send(reports, report)
+  case decided == token {
+    True -> Ok(Nil)
+    False -> Error("unknown or expired approval request")
+  }
 }
 
-/// 報告を捨てる Context。取り消しを観測しないテスト向け。
+/// 状態を変える操作を報告する Context。
+fn revoking_context(reports: Subject(Report)) -> admin.Context {
+  test_context(reports, "wss://relay.example")
+}
+
+/// 報告を捨てる Context。操作を観測しないテスト向け。
 fn context() -> admin.Context {
   revoking_context(process.new_subject())
+}
+
+/// 認証済みの POST リクエストを 1 件処理する。本文は空で、承認・拒否はパスの
+/// トークンだけで決まる。
+fn post(context: admin.Context, path: String) -> Response(wisp.Body) {
+  simulate.request(http.Post, path)
+  |> with_credentials("admin", password)
+  |> admin.handle_request(context, _)
 }
 
 /// Basic 認証のヘッダーを付けたリクエスト。
@@ -251,6 +290,69 @@ pub fn same_origin_revoke_is_accepted_test() {
   assert response.status == 303
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: client))
+}
+
+/// ダッシュボードには承認待ちと、承認を経る接続 URI も出る。
+pub fn dashboard_shows_pending_connections_test() {
+  let body = simulate.read_body(get(context(), "/"))
+  assert string.contains(body, "<code>" <> auth_uri <> "</code>")
+  assert string.contains(body, "action=\"/approve/" <> token <> "\"")
+  assert string.contains(body, "action=\"/deny/" <> token <> "\"")
+  assert string.contains(body, "<td>12s</td>")
+}
+
+/// 承認ページには、誰が誰に接続しようとしているかが出る。
+pub fn approval_page_shows_the_request_test() {
+  let response = get(context(), "/approve/" <> token)
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, signer)
+  assert string.contains(body, client)
+  assert string.contains(body, "<td>12s</td>")
+}
+
+/// 知らない、あるいは失効したトークンの承認ページは 404。
+pub fn approval_page_for_an_unknown_token_is_not_found_test() {
+  assert get(context(), "/approve/other-token").status == 404
+}
+
+/// 承認は Context の `approve` を呼び、閉じてよいことを伝える。
+pub fn approve_calls_the_context_test() {
+  let reports = process.new_subject()
+  let response = post(revoking_context(reports), "/approve/" <> token)
+  assert response.status == 200
+  assert string.contains(simulate.read_body(response), "Approved")
+  assert process.receive(reports, 1000) == Ok(Approved(token))
+}
+
+/// 拒否は Context の `deny` を呼ぶ。
+pub fn deny_calls_the_context_test() {
+  let reports = process.new_subject()
+  let response = post(revoking_context(reports), "/deny/" <> token)
+  assert response.status == 200
+  assert string.contains(simulate.read_body(response), "Denied")
+  assert process.receive(reports, 1000) == Ok(Denied(token))
+}
+
+/// 処理できなかった承認・拒否は 404。承認待ちはすでに無い。
+pub fn deciding_an_unknown_token_is_not_found_test() {
+  assert post(context(), "/approve/other-token").status == 404
+  assert post(context(), "/deny/other-token").status == 404
+}
+
+/// 資格情報のない承認は 401 で、Context には届かない。
+pub fn approve_requires_credentials_test() {
+  let reports = process.new_subject()
+  let response =
+    simulate.request(http.Post, "/approve/" <> token)
+    |> admin.handle_request(revoking_context(reports), _)
+  assert response.status == 401
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 拒否は POST でしか受け付けない。
+pub fn deny_rejects_other_methods_test() {
+  assert get(context(), "/deny/" <> token).status == 405
 }
 
 /// 知らないパスは 404。認証は先に通っている。

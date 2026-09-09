@@ -3,6 +3,7 @@
 
 import gleam/bit_array
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/uri
@@ -40,20 +41,20 @@ pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
 
 /// このアカウントへ接続するためにクライアントへ貼り付ける `bunker://` URI。
 /// NIP-46 は複数の `relay=` ヒントを許容し、クライアントはそのすべてに接続する
-/// ため、生きているリレーが 1 つあればバンカーに到達できる。
+/// ため、生きているリレーが 1 つあればバンカーに到達できる。`secret` が `None`
+/// の URI はその場では接続できず、管理 UI での承認（auth_url フロー）を経る。
 pub fn bunker_uri(
   account: Account,
   relay_urls: List(String),
-  secret: String,
+  secret: Option(String),
 ) -> String {
   let relay_params =
     relay_urls
     |> list.map(fn(url) { "relay=" <> uri.percent_encode(url) })
     |> string.join("&")
-  "bunker://"
-  <> account.pubkey_hex
-  <> "?"
-  <> relay_params
-  <> "&secret="
-  <> secret
+  let secret_param = case secret {
+    None -> ""
+    Some(secret) -> "&secret=" <> secret
+  }
+  "bunker://" <> account.pubkey_hex <> "?" <> relay_params <> secret_param
 }

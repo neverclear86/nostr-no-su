@@ -4,6 +4,7 @@
 //// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey）
 //// ため、`escape` を通してから連結する。
 
+import gleam/int
 import gleam/list
 import gleam/string
 import nostr_no_su/bunker/engine.{type Session}
@@ -33,15 +34,22 @@ pub type RelayRow {
 }
 
 /// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
-/// 出してはならない。
+/// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
+/// クライアントは管理 UI での承認を経てから署名を委任できる。
 pub type Account {
-  Account(signer: String, uri: String)
+  Account(signer: String, uri: String, auth_uri: String)
+}
+
+/// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
+pub type PendingRow {
+  PendingRow(token: String, signer: String, client: String, age_seconds: Int)
 }
 
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
     accounts: List(Account),
+    pending: List(PendingRow),
     relays: List(RelayRow),
     sessions: List(Session),
     plugins: List(String),
@@ -53,6 +61,7 @@ pub type Snapshot {
 pub fn render(snapshot: Snapshot) -> String {
   page("Dashboard", [
     accounts_section(snapshot.accounts),
+    pending_section(snapshot.pending),
     relays_section(snapshot.relays),
     sessions_section(snapshot.sessions),
     plugins_section(snapshot.plugins),
@@ -73,14 +82,55 @@ pub fn page(title: String, body: List(String)) -> String {
   <> "</body></html>"
 }
 
-/// アカウントと、その `bunker://` 接続 URI。
+/// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）。
 fn accounts_section(accounts: List(Account)) -> String {
   section(
     "Accounts",
-    ["Signer pubkey", "Connection URI"],
-    list.map(accounts, fn(account) { [code(account.signer), code(account.uri)] }),
+    ["Signer pubkey", "Connection URI", "Connection URI (approval)"],
+    list.map(accounts, fn(account) {
+      [code(account.signer), code(account.uri), code(account.auth_uri)]
+    }),
     "No accounts configured.",
   )
+}
+
+/// 承認待ちの接続要求と、その承認・拒否ボタン。
+fn pending_section(pending: List(PendingRow)) -> String {
+  section(
+    "Pending connections",
+    ["Signer", "Client", "Age", "Action"],
+    list.map(pending, fn(entry) {
+      list.append(pending_cells(entry), [decision_forms(entry.token)])
+    }),
+    "No pending connections.",
+  )
+}
+
+/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。
+pub fn approval_page(pending: PendingRow) -> String {
+  page("Approve connection", [
+    "<h2>Approve connection</h2>",
+    table(["Signer", "Client", "Age"], [pending_cells(pending)]),
+    decision_forms(pending.token),
+  ])
+}
+
+/// 承認・拒否を終えたことを伝えるページ。承認ページはクライアントが別ウィンドウ
+/// で開くため、閉じてよいことを伝える。
+pub fn notice_page(title: String, message: String) -> String {
+  page(title, [
+    "<h2>" <> escape(title) <> "</h2><p>" <> escape(message) <> "</p>",
+    "<p><a href=\"/\">Back to dashboard</a></p>",
+  ])
+}
+
+/// 承認待ち 1 件を表す、署名者・クライアント・経過時間のセル。
+fn pending_cells(pending: PendingRow) -> List(String) {
+  [
+    code(pending.signer),
+    code(pending.client),
+    escape(int.to_string(pending.age_seconds) <> "s"),
+  ]
 }
 
 /// リレーごとの接続状態。
@@ -159,6 +209,21 @@ fn row(cell: String, cells: List(String)) -> String {
     })
     |> string.concat
   "<tr>" <> cells <> "</tr>"
+}
+
+/// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。
+fn decision_forms(token: String) -> String {
+  decision_form("/approve/" <> token, "Approve")
+  <> decision_form("/deny/" <> token, "Deny")
+}
+
+/// 指定した宛先へ送るボタン 1 つだけのフォーム。
+fn decision_form(action: String, label: String) -> String {
+  "<form method=\"post\" action=\""
+  <> escape(action)
+  <> "\"><button type=\"submit\">"
+  <> escape(label)
+  <> "</button></form>"
 }
 
 /// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。

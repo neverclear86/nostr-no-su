@@ -37,6 +37,7 @@ import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugins/postgres_logger
 import nostr_no_su/relay_client.{type Subscriptions}
 import nostr_no_su/relay_connection.{type Socket, Socket}
+import nostr_no_su/time
 import pog
 
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
@@ -201,6 +202,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { bunker_sessions(spec.bunker) },
       revoke: fn(signer, client) { revoke_session(spec.bunker, signer, client) },
+      pending: fn() { bunker_pending(spec.bunker) },
+      approve: fn(token) { decide(spec.bunker, bunker.approve(_, token)) },
+      deny: fn(token) { decide(spec.bunker, bunker.deny(_, token)) },
     ),
   )
 }
@@ -256,6 +260,35 @@ fn revoke_session(
   case config {
     None -> Nil
     Some(config) -> bunker.revoke(config.name, signer, client)
+  }
+}
+
+/// バンカーが持つ承認待ちの接続要求。経過時間は問い合わせた時点で求める。
+/// バンカーが無効なら空。
+fn bunker_pending(config: Option(Bunker)) -> List(dashboard.PendingRow) {
+  case config {
+    None -> []
+    Some(config) -> {
+      let now = time.now_seconds()
+      use entry <- list.map(bunker.pending(config.name))
+      dashboard.PendingRow(
+        token: entry.token,
+        signer: entry.signer,
+        client: entry.client,
+        age_seconds: now - entry.created_at,
+      )
+    }
+  }
+}
+
+/// 承認待ちへの判断をバンカーへ伝える。バンカーが無効なら伝える先がない。
+fn decide(
+  config: Option(Bunker),
+  decision: fn(Name(bunker.Msg)) -> Result(Nil, String),
+) -> Result(Nil, String) {
+  case config {
+    None -> Error("bunker is disabled")
+    Some(config) -> decision(config.name)
   }
 }
 

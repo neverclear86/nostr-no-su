@@ -21,6 +21,9 @@ const signer_key = "000000000000000000000000000000000000000000000000000000000000
 
 const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
 
+/// 承認ページを載せる管理 UI の公開 URL。承認フローを有効にするために渡す。
+const auth_base = "http://admin.test"
+
 /// 偽リレーがテストへ報告する内容。
 type Report {
   /// 接続が開かれた。所有するアクター、監視対象のソケットプロセス、そして実際の
@@ -62,7 +65,10 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
     bunker: Some(
       app.Bunker(
         name: name,
-        engine: engine.new([#(account_for(signer_key), secret)]),
+        engine: engine.new(
+          [#(account_for(signer_key), secret)],
+          Some(auth_base),
+        ),
         relays: [test_relay()],
         subscriptions: fn() { [] },
       ),
@@ -105,12 +111,14 @@ fn account_for(key_hex: String) -> Account {
 }
 
 /// 実際のクライアントと同じ手順で暗号化・署名した `connect` リクエスト。
-fn connect_request(id: String) -> Event {
+/// `secret_arg` が空文字列なら、シークレット無しで接続するクライアントと同じ形に
+/// なる（nostr-tools はそのように送る）。
+fn connect_request(id: String, secret_arg: String) -> Event {
   let signer = account_for(signer_key)
   request(
     id,
     "connect",
-    "[\"" <> signer.pubkey_hex <> "\",\"" <> secret <> "\"]",
+    "[\"" <> signer.pubkey_hex <> "\",\"" <> secret_arg <> "\"]",
   )
 }
 
@@ -170,7 +178,7 @@ pub fn bunker_replies_on_its_connection_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
   let assert Opened(_connection, socket, deliver) = await_connection(reports)
-  deliver(connect_request("c1"))
+  deliver(connect_request("c1", secret))
   let assert Ok(Published(answered_on, response)) =
     process.receive(reports, 2000)
   assert answered_on == socket
@@ -192,7 +200,7 @@ pub fn bunker_survives_being_killed_test() {
   let assert Opened(_connection, socket, deliver) = await_connection(reports)
   let assert Ok(restarted) = process.named(name)
   assert restarted != killed
-  deliver(connect_request("c2"))
+  deliver(connect_request("c2", secret))
   let assert Ok(Published(answered_on, response)) =
     process.receive(reports, 2000)
   assert answered_on == socket
@@ -227,7 +235,7 @@ pub fn session_survives_a_reconnect_test() {
   let reports = process.new_subject()
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
   let assert Opened(_connection, socket, deliver) = await_connection(reports)
-  deliver(connect_request("c1"))
+  deliver(connect_request("c1", secret))
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
@@ -254,7 +262,7 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let assert Opened(_connection, _socket, deliver) = await_connection(reports)
   assert bunker.sessions(name) == []
 
-  deliver(connect_request("c1"))
+  deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
   let signer = account_for(signer_key)
@@ -267,6 +275,34 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
   assert string.contains(response_body(denied), "unauthorized")
+  stop_tree(tree)
+}
+
+/// 管理 UI が使う経路。シークレット無しの `connect` は承認待ちになり、承認すると
+/// 元のリクエストと同じ id の ack が接続から出ていく。
+pub fn pending_connections_can_be_approved_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_connection, socket, deliver) = await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+
+  let client = account_for(client_key)
+  let assert [entry] = bunker.pending(name)
+  assert entry.client == client.pubkey_hex
+  let assert Error(_) = bunker.approve(name, "other-token")
+
+  assert bunker.approve(name, entry.token) == Ok(Nil)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"id\":\"c1\"")
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert bunker.pending(name) == []
+  let signer = account_for(signer_key)
+  assert bunker.sessions(name)
+    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
   stop_tree(tree)
 }
 

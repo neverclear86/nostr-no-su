@@ -26,6 +26,10 @@ services:
       # Optional. When unset, a random password is generated per boot and
       # printed to the log. The user name is always "admin".
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Public URL of the admin UI, used to build the approval page URL sent to
+      # clients as auth_url. Defaults to http://localhost:<ADMIN_PORT>; set it
+      # when clients reach the admin UI through another host or a proxy.
+      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
     ports:
       # Published on the host's loopback only: the admin UI speaks plain HTTP
       # and shows bunker:// URIs that contain the connection secret. To reach it

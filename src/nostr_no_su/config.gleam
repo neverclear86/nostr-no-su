@@ -37,6 +37,7 @@ pub type Config {
     admin_port: AdminPort,
     admin_bind: String,
     admin_password: Option(String),
+    admin_base_url: Option(String),
   )
 }
 
@@ -61,7 +62,19 @@ pub fn load() -> Config {
     admin_port: admin_port(),
     admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
     admin_password: optional("ADMIN_PASSWORD"),
+    admin_base_url: optional("ADMIN_BASE_URL")
+      |> option.map(strip_trailing_slash),
   )
+}
+
+/// 末尾のスラッシュを取り除く。`ADMIN_BASE_URL` にはパスを足して承認ページの URL
+/// を組み立てるため、`http://host:8080/` と書かれてもスラッシュが重ならないように
+/// する。
+fn strip_trailing_slash(url: String) -> String {
+  case string.ends_with(url, "/") {
+    True -> string.drop_end(url, 1)
+    False -> url
+  }
 }
 
 /// 任意の環境変数を読む。docker compose は未設定の変数を空文字列として渡す
