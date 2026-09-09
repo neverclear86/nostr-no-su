@@ -39,14 +39,15 @@ pub type Status {
 }
 
 /// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
-/// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、再接続までの
-/// 待ち時間。
+/// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、ソケットを
+/// 失ったときに行う処理、再接続までの待ち時間。
 pub type Settings {
   Settings(
     name: Name(Msg),
     relay: String,
     connect: Connect,
     on_connect: fn(Socket) -> Nil,
+    on_disconnect: fn() -> Nil,
     reconnect_delay_ms: Int,
   )
 }
@@ -160,8 +161,11 @@ fn open(state: State) -> actor.Next(State, Msg) {
   }
 }
 
-/// ソケットが失われた理由をログ出力し、次の試行を予約する。
+/// ソケットが失われた理由をログ出力し、`on_connect` で配った送信手段を撤回して
+/// もらったうえで、次の試行を予約する。接続そのものに失敗した場合も通るが、
+/// 配っていない送信手段の撤回は何も起こさないため区別しない。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
+  state.settings.on_disconnect()
   let delay = state.settings.reconnect_delay_ms
   io.println(
     "[relay "

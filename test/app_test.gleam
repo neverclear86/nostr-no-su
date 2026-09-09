@@ -56,7 +56,26 @@ fn start_tree(spec: app.Spec) -> Pid {
 
 /// 偽リレー 1 本ぶんの仕様。URL は `fake_open` が無視するのでラベルでしかない。
 fn test_relay() -> app.Relay {
-  app.Relay(name: process.new_name("test_relay"), url: "ws://relay.test")
+  named_relay("ws://relay.test")
+}
+
+/// 指定した URL の偽リレー 1 本ぶんの仕様。バンカーは publisher を URL で
+/// 区別するため、複数本を張るテストは別々の URL を渡す。
+fn named_relay(url: String) -> app.Relay {
+  app.Relay(name: process.new_name("test_relay"), url: url)
+}
+
+/// 接続が切断状態になるまで待つ。切断を観測できた時点で、接続アクターは
+/// `on_disconnect` を実行し終えている。
+fn await_disconnect(name: Name(relay_connection.Msg), timeout_ms: Int) -> Bool {
+  case relay_connection.status(name), timeout_ms <= 0 {
+    relay_connection.Disconnected, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_disconnect(name, timeout_ms - 10)
+    }
+  }
 }
 
 /// 偽リレー 1 本の上でバンカーだけを動かすツリー。
@@ -310,6 +329,51 @@ pub fn pending_connections_can_be_approved_test() {
   let signer = account_for(signer_key)
   assert bunker.sessions(name)
     == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+  stop_tree(tree)
+}
+
+/// ソケットを失った接続の送信手段は取り下げられる。バンカーリレーを 2 本張り、
+/// 片方のソケットを kill すると、以降の応答は生きている側からだけ出ていく。
+pub fn a_lost_socket_stops_receiving_responses_test() {
+  let reports = process.new_subject()
+  let relay_a = named_relay("ws://relay.one")
+  let relay_b = named_relay("ws://relay.two")
+  let tree =
+    start_tree(app.Spec(
+      monitor: None,
+      bunker: Some(
+        app.Bunker(
+          name: process.new_name("test_bunker"),
+          engine: engine.new([#(account_for(signer_key), secret)], None),
+          relays: [relay_a, relay_b],
+          subscriptions: fn() { [] },
+        ),
+      ),
+      storage: None,
+      admin: None,
+      open: fake_open(reports),
+      // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
+      reconnect_delay_ms: 60_000,
+    ))
+  let assert Opened(_connection_a, socket_a, deliver) =
+    await_connection(reports)
+  let assert Opened(_connection_b, socket_b, _deliver_b) =
+    await_connection(reports)
+
+  // 2 本とも生きている間は、応答が両方のソケットから出ていく。
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(first, _ack)) = process.receive(reports, 2000)
+  let assert Ok(Published(second, _same_ack)) = process.receive(reports, 2000)
+  assert first != second
+
+  process.kill(socket_a)
+  assert await_disconnect(relay_a.name, 2000)
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(answered_on, pong)) = process.receive(reports, 2000)
+  assert answered_on == socket_b
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  // 死んだソケットには送られない。生きているのは 1 本だけになっている。
+  assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
 }
 

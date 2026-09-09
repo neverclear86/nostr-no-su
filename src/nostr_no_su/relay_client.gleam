@@ -71,18 +71,16 @@ pub fn start(
       case msg {
         stratus.User(Subscribe) -> {
           list.each(subscriptions(), fn(subscription) {
-            let text =
-              message.encode_client_message(message.Req(
-                subscription.0,
-                subscription.1,
-              ))
-            let _ = stratus.send_text_message(conn, text)
+            message.Req(subscription.0, subscription.1)
+            |> message.encode_client_message
+            |> send_text(conn, relay, "subscription " <> subscription.0, _)
           })
           stratus.continue(state)
         }
         stratus.User(Publish(published)) -> {
-          let text = message.encode_client_message(message.Publish(published))
-          let _ = stratus.send_text_message(conn, text)
+          message.Publish(published)
+          |> message.encode_client_message
+          |> send_text(conn, relay, "event " <> published.id, _)
           stratus.continue(state)
         }
         stratus.Text(text) -> {
@@ -110,6 +108,29 @@ pub fn start(
 /// 接続に対し、そのソケットからイベントを送信するよう依頼する。
 pub fn publish(client: Client, published: event.Event) -> Nil {
   process.send(client, stratus.to_user_message(Publish(published)))
+}
+
+/// ソケットへ 1 件書き込む。書けなかった購読や応答はリレーから見れば存在しない
+/// のと同じで、黙って捨てると原因を追えないため、何を送ろうとしたかを添えて
+/// ログに残す。
+fn send_text(
+  connection: stratus.Connection,
+  relay: String,
+  what: String,
+  text: String,
+) -> Nil {
+  case stratus.send_text_message(connection, text) {
+    Ok(Nil) -> Nil
+    Error(reason) ->
+      io.println(
+        "[relay "
+        <> relay
+        <> "] failed to send "
+        <> what
+        <> ": "
+        <> string.inspect(reason),
+      )
+  }
 }
 
 /// リレーメッセージを 1 件デコードする。検証済みイベントは `handle_event` へ

@@ -33,6 +33,9 @@ pub type Msg {
   /// 側の責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
   /// あれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
+  /// 1 本のリレー接続の送信手段を取り下げる。接続アクターが `on_disconnect` から
+  /// 送るため、死んだソケットへ応答を渡し続けることがない。
+  RemovePublisher(relay_url: String)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))
   /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
@@ -139,6 +142,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           ..state,
           publishers: dict.insert(state.publishers, relay_url, publish),
         ),
+      )
+    RemovePublisher(relay_url) ->
+      actor.continue(
+        State(..state, publishers: dict.delete(state.publishers, relay_url)),
       )
     Incoming(incoming) -> {
       // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう

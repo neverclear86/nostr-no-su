@@ -172,6 +172,7 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     config.subscriptions,
     monitor_handler(config.name),
     fn(_relay_url, _socket) { Nil },
+    fn(_relay_url) { Nil },
   )
 }
 
@@ -201,6 +202,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
+    fn(relay_url) { named.send(config.name, bunker.RemovePublisher(relay_url)) },
   )
 }
 
@@ -314,7 +316,7 @@ fn subtree() -> Builder {
 }
 
 /// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラーは
-/// サブツリー内で共有する。
+/// サブツリー内で共有し、接続・切断の通知にはそのリレーの URL を添える。
 fn add_connections(
   builder: Builder,
   spec: Spec,
@@ -322,6 +324,7 @@ fn add_connections(
   subscriptions: Subscriptions,
   handle_event: fn(Event) -> Nil,
   on_connect: fn(String, Socket) -> Nil,
+  on_disconnect: fn(String) -> Nil,
 ) -> Builder {
   use builder, relay <- list.fold(relays, builder)
   supervisor.add(
@@ -331,6 +334,7 @@ fn add_connections(
       relay: relay_client.label(relay.url),
       connect: fn() { spec.open(relay.url, subscriptions, handle_event) },
       on_connect: on_connect(relay.url, _),
+      on_disconnect: fn() { on_disconnect(relay.url) },
       reconnect_delay_ms: spec.reconnect_delay_ms,
     )),
   )
