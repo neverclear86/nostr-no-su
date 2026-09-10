@@ -95,10 +95,17 @@ fn call_decision(
   |> option.unwrap(Error("bunker is not running"))
 }
 
-/// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と
-/// 生きた接続の送信手段だけを持つ。
+/// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
+/// 生きた接続の送信手段と、自分が起動した時刻だけを持つ。`not_before` は
+/// エンジンではなくここに置く。エンジンはスーパービジョンツリーの仕様に載った
+/// 初期値から再起動のたびに作り直されるため、そちらに刻むと起動時刻が更新されず、
+/// 再起動を検出できない。
 type State {
-  State(engine: engine.Engine, publishers: Dict(String, fn(Event) -> Nil))
+  State(
+    engine: engine.Engine,
+    publishers: Dict(String, fn(Event) -> Nil),
+    not_before: Int,
+  )
 }
 
 /// スーパービジョンツリー用の子仕様。
@@ -112,11 +119,20 @@ pub fn supervised(
 /// 指定したエンジン状態でバンカーアクターを起動する。`name` で登録するため、
 /// 接続は起動時に生きていたプロセスではなく、現在その名前を保持しているプロセス
 /// に到達する。
+///
+/// スーパーバイザーは再起動のたびに同じ初期エンジンでこれを呼ぶため、アクターは
+/// 承認済みセッションもリプレイ防止の `seen` も引き継がない。記憶していない
+/// リクエストを再実行しないよう、ここで起動時刻を刻み、それより古いリクエストは
+/// エンジンが受け付けない。
 pub fn start(
   name: Name(Msg),
   initial: engine.Engine,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new(State(engine: initial, publishers: dict.new()))
+  actor.new(State(
+    engine: initial,
+    publishers: dict.new(),
+    not_before: time.now_seconds(),
+  ))
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
@@ -159,7 +175,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
       // することでエンジンは乱数を持たずに済む。
       let inputs =
-        engine.Inputs(now: time.now_seconds(), token: random.hex(token_bytes))
+        engine.Inputs(
+          now: time.now_seconds(),
+          token: random.hex(token_bytes),
+          not_before: state.not_before,
+        )
       let #(next, outcome) = engine.handle_event(state.engine, incoming, inputs)
       case outcome {
         engine.Reply(response) -> publish(state, response)

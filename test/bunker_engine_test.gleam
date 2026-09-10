@@ -43,13 +43,43 @@ fn approval_url(token: String) -> String {
 }
 
 /// 受信イベントを 1 件処理する。トークンは固定なので、承認ページの URL も
-/// テストから予測できる。
+/// テストから予測できる。アクターの起点は、起点そのものを見るテスト以外では
+/// 判定に効かないよう 0 にする。
 fn handle(
   state: engine.Engine,
   incoming: Event,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(state, incoming, engine.Inputs(now: now, token: token))
+  handle_after(state, incoming, now, 0)
+}
+
+/// 指定した起点のアクターが受信イベントを 1 件処理する。
+fn handle_after(
+  state: engine.Engine,
+  incoming: Event,
+  now: Int,
+  not_before: Int,
+) -> #(engine.Engine, engine.Outcome) {
+  engine.handle_event(
+    state,
+    incoming,
+    engine.Inputs(now: now, token: token, not_before: not_before),
+  )
+}
+
+/// 指定したクライアントから署名者宛の `connect` リクエストイベント。
+fn connect_event(
+  client: Account,
+  signer: Account,
+  secret_arg: String,
+  created_at: Int,
+) -> Event {
+  request_event(
+    client,
+    signer,
+    connect_body(signer, secret_arg, "c1"),
+    created_at,
+  )
 }
 
 /// 指定した署名者とシークレットで `connect` リクエストを送る。
@@ -60,8 +90,7 @@ fn connect(
   secret_arg: String,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  let body = connect_body(signer, secret_arg, "c1")
-  handle(state, request_event(client, signer, body, now), now)
+  handle(state, connect_event(client, signer, secret_arg, now), now)
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -601,7 +630,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
     engine.handle_event(
       state,
       request_event(client, signer, connect_body(signer, "", "c2"), 1001),
-      engine.Inputs(now: 1001, token: "tok-2"),
+      engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
   let assert Reply(_) = outcome
   let assert [entry] = engine.pending(state, 1001)
@@ -738,4 +767,38 @@ fn parse_result_event(response_json: String) -> Result(Event, Nil) {
       }
     Error(_) -> Error(Nil)
   }
+}
+
+/// アクターの起点より古いリクエストは実行しない。アクターが再起動すると `seen`
+/// が空になるため、記憶していない処理済みのリクエストを新規として実行しないよう
+/// に落とす。
+pub fn requests_before_the_actor_started_are_ignored_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 999)
+  let #(state, outcome) = handle_after(new_engine(), request, 1000, 1000)
+  assert outcome == Ignore("request predates this bunker instance")
+  assert engine.sessions(state) == []
+}
+
+/// 起点と同じ秒のリクエストは実行する。判定は秒単位なので、起動直後に届いた正当な
+/// リクエストまで落とすと、クライアントは応答を待ったまま失敗する。
+pub fn requests_at_the_actor_start_are_handled_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1000)
+  let #(state, outcome) = handle_after(new_engine(), request, 1000, 1000)
+  let assert Reply(_) = outcome
+  assert engine.sessions(state) != []
+}
+
+/// 起点より後のリクエストは、現在時刻から離れていても実行する。切断していた間に
+/// 届いたリクエストは、再接続後にこの経路で処理される。
+pub fn requests_after_the_actor_started_are_handled_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1001)
+  let #(state, outcome) = handle_after(new_engine(), request, 1030, 1000)
+  let assert Reply(_) = outcome
+  assert engine.sessions(state) != []
 }
