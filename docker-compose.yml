@@ -30,6 +30,14 @@ services:
       # 組み立てるのに使う。既定は http://localhost:<ADMIN_PORT>。別のホストや
       # プロキシー越しに管理 UI へ到達する構成では明示的に設定する。
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
+      # 外部プラグインを探すディレクトリー。空にすると読み込みを無効にする。
+      # ここに置いた BEAM は本体と同じ VM で動く。信頼できるものだけを置くこと。
+      PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
+    volumes:
+      # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
+      # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない
+      # ので読み取り専用でマウントする。
+      - ./plugins:/plugins:ro
     ports:
       # ホストのループバックにだけ公開する。管理 UI は平文 HTTP で、接続
       # シークレットを含む bunker:// URI を表示するため。外部から到達させるときは

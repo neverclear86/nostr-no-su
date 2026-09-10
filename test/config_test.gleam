@@ -93,6 +93,15 @@ pub fn empty_environment_variables_are_unset_test() {
   assert config_without("BUNKER_SECRET").bunker_secret == None
 }
 
+/// `PLUGIN_DIR` は未設定・空文字列なら None（外部プラグインの読み込みを無効に
+/// する）。値があればそのまま走査対象のディレクトリーになる。
+pub fn plugin_dir_test() {
+  assert config_without("PLUGIN_DIR").plugin_dir == None
+  assert config_with([#("PLUGIN_DIR", "")]).plugin_dir == None
+  assert config_with([#("PLUGIN_DIR", "/plugins")]).plugin_dir
+    == Some("/plugins")
+}
+
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_port_test() {
   assert config_without("ADMIN_PORT").admin_port == config.Listen(8080)
@@ -168,6 +177,7 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     account_keys: [],
     bunker_secret: None,
     database_url: None,
+    plugin_dir: None,
     admin_port: config.Disabled,
     admin_bind: "127.0.0.1",
     admin_password: None,

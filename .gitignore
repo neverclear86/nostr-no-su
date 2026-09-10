@@ -3,3 +3,7 @@
 /build
 erl_crash.dump
 .env
+
+# 外部プラグインの置き場所。中身は環境ごとに違うので追跡しない。
+plugins/*
+!plugins/.gitkeep

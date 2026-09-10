@@ -6,3 +6,5 @@ build
 docker-compose.yml
 Dockerfile
 .env
+plugins
+examples

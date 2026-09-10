@@ -10,7 +10,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 
 - **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
-- **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、コンソールロガー
+- **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
 - **イベントロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントの接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインを確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
@@ -86,6 +86,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。
 
+外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 6 章、動作確認用の例は `examples/plugins/file_logger/` を参照。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
+
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `DATABASE_URL` の両方を合わせること。`DATABASE_URL=` を空にすると Postgres への保存だけを無効化できる。
 
 ### 環境変数
@@ -98,6 +100,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
 | `DATABASE_URL` | （空） | イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。空なら保存しない。docker compose では同梱の Postgres を指す |
+| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
@@ -149,10 +152,12 @@ src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の�
 src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
 src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
 src/nostr_no_su/plugin.gleam                 -- プラグイン機構（プラグイン API v1 の検証と読み込み）
+src/nostr_no_su/plugin_loader.gleam          -- 外部プラグインの走査とコードパスへの追加
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
 src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
-src/nostr_no_su_ffi.erl                      -- OTP crypto への FFI
+src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
+examples/plugins/file_logger/                -- 外部プラグインの例（ローダーの動作確認用の Erlang 1 ファイル）
 docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
 ```
 
