@@ -1,4 +1,5 @@
-import gleam/erlang/atom
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -11,6 +12,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
+import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/event_logger
 import nostr_no_su/relay_connection
@@ -119,7 +121,11 @@ fn forwarding_spec(
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(name: "forwarding", handle: process.send(seen, _)),
+    plugin: plugin.Plugin(
+      name: "forwarding",
+      children: [],
+      handle: process.send(seen, _),
+    ),
     limits: plugin_runner.default_limits,
   )
 }
@@ -571,7 +577,7 @@ fn crashing_spec(
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(name: "crashing", handle: fn(_incoming) {
+    plugin: plugin.Plugin(name: "crashing", children: [], handle: fn(_incoming) {
       panic as "boom"
     }),
     limits: limits,
@@ -586,7 +592,7 @@ fn hanging_spec(
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(name: "hanging", handle: fn(_incoming) {
+    plugin: plugin.Plugin(name: "hanging", children: [], handle: fn(_incoming) {
       process.sleep_forever()
     }),
     limits: limits,
@@ -762,3 +768,271 @@ pub fn plugin_runner_is_restarted_when_killed_test() {
   deliver_and_expect(deliver, seen, ["after"], 2000)
   stop_tree(tree)
 }
+
+/// 子仕様を持つプラグインのテストで使う一意な登録名。BEAM の登録名は VM 全体で
+/// 共有なので、テストごとに作り直す。
+fn unique_store() -> Atom {
+  atom.create(
+    "app_test_store_"
+    <> int.to_string(unique_integer([atom.create("positive")])),
+  )
+}
+
+/// fixture の子仕様を本番と同じ経路（`plugin_children.from_dynamic`）で変換する。
+fn resolved_children(kinds: List(#(String, Atom))) -> List(Dynamic) {
+  use pair <- list.map(kinds)
+  child_spec_map(atom.create(pair.0), pair.1)
+}
+
+/// 子仕様を申告し、イベントごとに store を 1 つ数え上げるプラグインの仕様。
+/// **`!` で送るのは、store が居ないことをランナーに失敗として観測させるため。**
+/// `gen_server:cast` 相当だと宛先が居なくても成功し、障害が黙って消える。
+fn counting_spec(
+  name: Name(plugin_runner.Msg),
+  store: Atom,
+  kinds: List(#(String, Atom)),
+) -> app.PluginSpec {
+  let assert Ok(children) =
+    plugin_children.from_dynamic(
+      dynamic.list(resolved_children(kinds)),
+      "counting",
+    )
+  app.PluginSpec(
+    name: name,
+    plugin: plugin.Plugin(
+      name: "counting",
+      children: children,
+      handle: fn(_incoming) {
+        store_bump(store)
+        Nil
+      },
+    ),
+    limits: plugin_runner.default_limits,
+  )
+}
+
+/// 登録名が使われる（あるいは解放される）まで待つ。
+fn await_registered(store: Atom, registered: Bool, remaining: Int) -> Bool {
+  case is_registered(store) == registered, remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_registered(store, registered, remaining - 10)
+    }
+  }
+}
+
+/// store が数えた件数が期待どおりになるまで待つ。
+fn await_count(store: Atom, expected: Int, remaining: Int) -> Bool {
+  case is_registered(store) && store_count(store) == expected, remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_count(store, expected, remaining - 10)
+    }
+  }
+}
+
+/// 子仕様を申告したプラグインの子はツリーに載り、`handle_event/1` から名前で
+/// 到達できる。状態は呼び出しをまたいで残る。
+pub fn stateful_plugin_children_run_in_the_tree_test() {
+  let reports = process.new_subject()
+  let store = unique_store()
+  let tree =
+    start_plugins_tree(reports, process.new_name("test_dedup"), [
+      counting_spec(process.new_name("test_plugin_counting"), store, [
+        #("store", store),
+      ]),
+    ])
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  assert is_registered(store)
+
+  list.each(event_ids("counted", 3), fn(id) { deliver(event_with_id(id)) })
+  assert await_count(store, 3, 2000)
+  stop_tree(tree)
+}
+
+/// 子を kill すると専用のスーパーバイザーが作り直し、プラグインは同じ名前で
+/// 到達し続ける。作り直された子は状態を失うので 0 から数え直す。監視サブツリーは
+/// 巻き添えにならない。
+pub fn killed_plugin_child_is_restarted_and_the_plugin_recovers_test() {
+  let reports = process.new_subject()
+  let store = unique_store()
+  let dedup_name = process.new_name("test_dedup")
+  let tree =
+    start_plugins_tree(reports, dedup_name, [
+      counting_spec(process.new_name("test_plugin_counting"), store, [
+        #("store", store),
+      ]),
+    ])
+  let assert Opened(_relay_url, connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(dedup_before) = process.named(dedup_name)
+  let before = whereis_name(store)
+
+  kill_registered(store)
+  assert await_restarted(store, before, 2000)
+  deliver(event_with_id("after_kill"))
+  assert await_count(store, 1, 2000)
+
+  assert process.named(dedup_name) == Ok(dedup_before)
+  assert process.is_alive(connection)
+  // 監視接続が張り直されていない（`rest_for_one` が発火していない）。
+  assert process.receive(reports, 300) == Error(Nil)
+  assert process.is_alive(tree)
+  stop_tree(tree)
+}
+
+/// クラッシュループする子はプラグイン専用のスーパーバイザーの中で完結する。
+/// 許容回数を超えると**そのプラグインの子だけ**がまとめて諦められ、親は再起動も
+/// 許容回数の消費もしない。ランナーは生き続け、宛先を失った `handle_event/1` が
+/// 連続失敗して `disabled` になる。他のプラグインと監視は影響を受けない。
+///
+/// このテストは BEAM の `=CRASH REPORT=` / `=SUPERVISOR REPORT=` を出す。
+/// **検証したい振る舞いそのもの**なので抑制しない。
+pub fn crash_looping_plugin_child_does_not_take_down_the_app_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let store = unique_store()
+  let counting = process.new_name("test_plugin_counting")
+  let dedup_name = process.new_name("test_dedup")
+  let tree =
+    start_plugins_tree(reports, dedup_name, [
+      counting_spec(counting, store, [
+        #("store", store),
+        #("flaky", unique_store()),
+      ]),
+      forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+    ])
+  let assert Opened(_relay_url, connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(counting)
+  let assert Ok(dedup_before) = process.named(dedup_name)
+
+  // 専用のスーパーバイザーが諦めると、store も一緒に落ちて名前が解放される。
+  assert await_registered(store, False, 5000)
+  assert process.is_alive(tree)
+  assert process.named(dedup_name) == Ok(dedup_before)
+  assert process.is_alive(connection)
+  assert process.named(counting) == Ok(runner_before)
+
+  // 宛先を失ったプラグインは連続失敗で無効化され、他のプラグインには届き続ける。
+  deliver_and_expect(deliver, seen, event_ids("orphan", 5), 2000)
+  let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(counting)
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// プラグイン専用のスーパーバイザーを外から繰り返し強制終了しても、親は再起動を
+/// 消費しない。**`Temporary` を選んだ根拠 (b) の回帰テスト**（`app.gleam` 冒頭の
+/// doc を参照）。
+///
+/// Temporary の子は決して再起動されないので、1 度目の kill でその子仕様ごと消え、
+/// 以後は kill する対象すら残らない。`Transient` にすると kill のたびに再起動が
+/// 起き、その再起動が `plugins`（5/10）の許容回数を消費して、やがてサブツリーが
+/// 落ちてランナーが作り直される。下の「ランナーの pid が不変」がその差を捉える。
+pub fn killed_plugin_children_supervisor_is_not_restarted_test() {
+  let reports = process.new_subject()
+  let store = unique_store()
+  let counting = process.new_name("test_plugin_counting")
+  let dedup_name = process.new_name("test_dedup")
+  let tree =
+    start_plugins_tree(reports, dedup_name, [
+      counting_spec(counting, store, [#("store", store)]),
+    ])
+  let assert Opened(_relay_url, connection, _socket, _deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(counting)
+  let assert Ok(dedup_before) = process.named(dedup_name)
+
+  kill_children_supervisor(store, 8)
+
+  assert process.is_alive(tree)
+  assert process.named(counting) == Ok(runner_before)
+  assert process.named(dedup_name) == Ok(dedup_before)
+  assert process.is_alive(connection)
+  // 監視接続が張り直されていない（サブツリーが再起動していない）。
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// store のスーパーバイザーを、生きているあいだ繰り返し強制終了する。Temporary
+/// なら 1 度目で対象が消えるので、残りの回は空振りして待つだけになる。
+fn kill_children_supervisor(store: Atom, remaining: Int) -> Nil {
+  case remaining <= 0 {
+    True -> Nil
+    False -> {
+      case is_registered(store) {
+        True -> process.kill(supervisor_of(store))
+        False -> Nil
+      }
+      process.sleep(20)
+      kill_children_supervisor(store, remaining - 1)
+    }
+  }
+}
+
+/// 子の起動に失敗してもアプリの起動は止まらない。理由は 1 行ログに出て、
+/// プラグインは子なしで動き続ける（ダッシュボードにも出る）。
+pub fn plugin_children_that_fail_to_start_do_not_stop_the_tree_test() {
+  let reports = process.new_subject()
+  let store = unique_store()
+  let counting = process.new_name("test_plugin_counting")
+  let tree =
+    start_plugins_tree(reports, process.new_name("test_dedup"), [
+      counting_spec(counting, store, [#("failing", store)]),
+    ])
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert process.is_alive(tree)
+  let assert Ok(_runner) = process.named(counting)
+  let assert Some(plugin_runner.Running) = plugin_runner.status(counting)
+  stop_tree(tree)
+}
+
+/// 登録名が別のプロセスに付け替わるまで待つ。
+fn await_restarted(store: Atom, previous: Dynamic, remaining: Int) -> Bool {
+  case is_registered(store) && whereis_name(store) != previous, remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_restarted(store, previous, remaining - 10)
+    }
+  }
+}
+
+/// 検証を通る子仕様。
+@external(erlang, "child_fixture", "spec")
+fn child_spec_map(kind: Atom, name: Atom) -> Dynamic
+
+/// 登録名が使われているか。
+@external(erlang, "child_fixture", "is_registered")
+fn is_registered(name: Atom) -> Bool
+
+/// 登録名が指すプロセス（未登録なら atom の `undefined`）。
+@external(erlang, "child_fixture", "whereis_name")
+fn whereis_name(name: Atom) -> Dynamic
+
+/// store の現在の件数。宛先が居なければ落ちる。
+@external(erlang, "child_fixture", "count")
+fn store_count(name: Atom) -> Int
+
+/// store を 1 つ数え上げる。宛先が居なければ落ちる。
+@external(erlang, "child_fixture", "bump")
+fn store_bump(name: Atom) -> Dynamic
+
+/// store を監視しているプラグイン専用のスーパーバイザー。
+@external(erlang, "child_fixture", "supervisor_of")
+fn supervisor_of(name: Atom) -> Pid
+
+/// 登録名が指すプロセスを強制終了する。
+@external(erlang, "child_fixture", "kill_registered")
+fn kill_registered(name: Atom) -> Nil
+
+/// テストごとに一意な整数。
+@external(erlang, "erlang", "unique_integer")
+fn unique_integer(options: List(Atom)) -> Int

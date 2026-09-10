@@ -7,6 +7,13 @@
 ////   すべて任意で、あっても無くても読み込み判定に影響しない。
 //// - `handle_event/1` が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
+//// - 任意エクスポート `plugin_children/0` があれば、そのプラグインが自分で
+////   起こしたいプロセスの子仕様（OTP の map）を申告できる。検証と変換は
+////   `plugin_children` が行い、結果は `Plugin.children` に載る。検証の順序は
+////   `plugin_api_version` → `plugin_name` → `plugin_children` で、最初に失敗した
+////   ところで止まる。プラグイン固有の設定を渡す必要が出たら、任意エクスポート
+////   `plugin_children/1` を足して存在すればそちらを優先する（必須エクスポートの
+////   集合は変わらないので API バージョンは上げない）。
 //// - `handle_event/1` はイベント 1 件ごとに作られる使い捨てのプロセスで動く
 ////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
 ////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
@@ -23,10 +30,13 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
+import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/plugin_children
 
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
@@ -45,7 +55,12 @@ pub const api_version: Int = 1
 /// ない」という約束はプラグインモジュールのエクスポート仕様に対するもので、
 /// 本体内部のこのレコードは自由に拡張してよい。
 pub type Plugin {
-  Plugin(name: String, handle: fn(Event) -> Nil)
+  Plugin(
+    name: String,
+    /// 起動時に 1 度だけ解決した子プロセスの仕様。内蔵プラグインは空。
+    children: List(ChildSpecification(Pid)),
+    handle: fn(Event) -> Nil,
+  )
 }
 
 /// モジュールが指定した名前・アリティの関数をエクスポートしているか。任意
@@ -74,10 +89,11 @@ pub fn load(module: Atom) -> Result(Plugin, String) {
   use _ <- result.try(require_exports(module, name))
   use _ <- result.try(check_api_version(module, name))
   use plugin_name <- result.try(read_plugin_name(module, name))
+  use children <- result.try(read_children(module, name, plugin_name))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
   let handle_event = atom.create("handle_event")
   Ok(
-    Plugin(name: plugin_name, handle: fn(incoming) {
+    Plugin(name: plugin_name, children: children, handle: fn(incoming) {
       // 戻り値はプラグインが自由に決めてよいので捨てる。例外はここで捕まえず、
       // ワーカープロセス側（`plugin_runner`）が短い理由に整えて観測する。
       let _ = apply(module, handle_event, [event.to_map(incoming)])
@@ -144,6 +160,24 @@ fn read_plugin_name(module: Atom, name: String) -> Result(String, String) {
   case plugin_name {
     "" -> Error(prefix(name, "plugin_name/0 must not be empty"))
     _ -> Ok(plugin_name)
+  }
+}
+
+/// 任意エクスポート `plugin_children/0` があれば呼び、子仕様を検証する。
+/// エクスポートが無いプラグインは子を持たない（エラーにしない）。API に合わない
+/// 子仕様は、必須エクスポートの不備と同じく**そのプラグインを読み込まない**理由に
+/// なる。子だけ捨てて読み込むと、ランナーが起動して宛先を失った `handle_event/1`
+/// が 5 件後に `disabled` になり、運用者が見る症状が真の原因から離れる。
+fn read_children(
+  module: Atom,
+  name: String,
+  plugin_name: String,
+) -> Result(List(ChildSpecification(Pid)), String) {
+  case has_export(module, plugin_children.export_name, 0) {
+    False -> Ok([])
+    True ->
+      plugin_children.from_export(module, plugin_name)
+      |> result.map_error(prefix(name, _))
   }
 }
 

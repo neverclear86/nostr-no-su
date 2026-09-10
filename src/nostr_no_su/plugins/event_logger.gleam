@@ -108,7 +108,7 @@ type State {
 /// イベントを保存アクターへ転送するプラグイン。アクターは名前で参照するため、
 /// 再起動しても同じプラグインがそのまま新しいプロセスへ届く。
 pub fn new(name: Name(Msg)) -> Plugin {
-  Plugin(name: "event_logger", handle: fn(incoming) {
+  Plugin(name: "event_logger", children: [], handle: fn(incoming) {
     named.send(name, Store(incoming))
   })
 }

@@ -51,9 +51,11 @@ const shadow_sample_size = 3
 /// `reserved` には内蔵プラグインの名前を渡す。プラグイン名はダッシュボードと
 /// ログの識別子なので、内蔵と衝突する外部プラグインもここで弾く。
 ///
-/// 読み込み後にモジュール atom は失われる（`Plugin` は `name` と `handle` しか
-/// 持たない）。任意エクスポートを問い合わせる機能を入れるときは、ここで
-/// モジュール atom も返すよう作り直すことになる。
+/// `Plugin` は任意エクスポート `plugin_children/0` から解決した子仕様
+/// （`children`）を持って返る。モジュール atom は `Plugin` に載せない（任意
+/// エクスポートの問い合わせは、atom がまだ手元にある `plugin.load` の中で
+/// 済ませる）。子仕様が API に合わないモジュールは `plugin.load` が弾くので、
+/// ここでの扱いは他の検証失敗と同じ 1 行の報告になる。
 pub fn load_all(
   plugin_dir: Option(String),
   reserved: List(String),
