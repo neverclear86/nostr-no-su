@@ -50,11 +50,7 @@ fn handle(
   incoming: Event,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(
-    state,
-    incoming,
-    engine.Inputs(now: now, token: token, not_before: 0),
-  )
+  handle_after(state, incoming, now, 0)
 }
 
 /// 指定した起点のアクターが受信イベントを 1 件処理する。
@@ -71,13 +67,17 @@ fn handle_after(
   )
 }
 
-/// テスト用のクライアントから署名者へ送る `connect` リクエスト。
-fn connect_event(created_at: Int) -> Event {
-  let signer = account_for(signer_key)
+/// 指定したクライアントから署名者宛の `connect` リクエストイベント。
+fn connect_event(
+  client: Account,
+  signer: Account,
+  secret_arg: String,
+  created_at: Int,
+) -> Event {
   request_event(
-    account_for(client_key),
+    client,
     signer,
-    connect_body(signer, secret, "c1"),
+    connect_body(signer, secret_arg, "c1"),
     created_at,
   )
 }
@@ -90,8 +90,7 @@ fn connect(
   secret_arg: String,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  let body = connect_body(signer, secret_arg, "c1")
-  handle(state, request_event(client, signer, body, now), now)
+  handle(state, connect_event(client, signer, secret_arg, now), now)
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -774,8 +773,10 @@ fn parse_result_event(response_json: String) -> Result(Event, Nil) {
 /// が空になるため、記憶していない処理済みのリクエストを新規として実行しないよう
 /// に落とす。
 pub fn requests_before_the_actor_started_are_ignored_test() {
-  let #(state, outcome) =
-    handle_after(new_engine(), connect_event(999), 1000, 1000)
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 999)
+  let #(state, outcome) = handle_after(new_engine(), request, 1000, 1000)
   assert outcome == Ignore("request predates this bunker instance")
   assert engine.sessions(state) == []
 }
@@ -783,8 +784,10 @@ pub fn requests_before_the_actor_started_are_ignored_test() {
 /// 起点と同じ秒のリクエストは実行する。判定は秒単位なので、起動直後に届いた正当な
 /// リクエストまで落とすと、クライアントは応答を待ったまま失敗する。
 pub fn requests_at_the_actor_start_are_handled_test() {
-  let #(state, outcome) =
-    handle_after(new_engine(), connect_event(1000), 1000, 1000)
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1000)
+  let #(state, outcome) = handle_after(new_engine(), request, 1000, 1000)
   let assert Reply(_) = outcome
   assert engine.sessions(state) != []
 }
@@ -792,8 +795,10 @@ pub fn requests_at_the_actor_start_are_handled_test() {
 /// 起点より後のリクエストは、現在時刻から離れていても実行する。切断していた間に
 /// 届いたリクエストは、再接続後にこの経路で処理される。
 pub fn requests_after_the_actor_started_are_handled_test() {
-  let #(state, outcome) =
-    handle_after(new_engine(), connect_event(1001), 1030, 1000)
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1001)
+  let #(state, outcome) = handle_after(new_engine(), request, 1030, 1000)
   let assert Reply(_) = outcome
   assert engine.sessions(state) != []
 }
