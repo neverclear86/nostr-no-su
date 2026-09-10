@@ -146,6 +146,16 @@ pub fn missing_start_is_rejected_test() {
   assert !string.contains(reason, "<Atom>")
 }
 
+/// 素の `{Module, Function, Args}` の短縮形は、map でないことを名指しで拒否する。
+/// 「`id` が無い」と報告すると、作者が原因にたどり着けない。
+pub fn bare_mfa_is_rejected_test() {
+  let reason = rejected("bare_mfa")
+  assert string.contains(
+    reason,
+    "child #0: must be a child specification map, got Array",
+  )
+}
+
 /// `start` が 3 要素タプルでなければ拒否する。
 pub fn bad_start_is_rejected_test() {
   let reason = rejected("bad_start")
@@ -226,8 +236,10 @@ pub fn start_gleam_style_return_is_rejected_test() {
 /// OTP に任せればよい。ここを失敗にすると、本来は再起動されるクラッシュが
 /// 起動失敗に化けて、そのプラグインの子が丸ごと諦められる。
 ///
-/// 子はテストプロセスにリンクされたまま死ぬので、**先に exit を trap して**
-/// 届く `{'EXIT', ..}` を捨てる。trap しないとテストプロセスが巻き添えで死ぬ。
+/// 子はテストプロセスにリンクされたまま死ぬので、**先に exit を trap する。**
+/// trap しないとテストプロセスが巻き添えで死ぬ。メールボックスに残る
+/// `{'EXIT', ..}` は読まないが、gleeunit がテストごとに別プロセスを起こすため、
+/// テストの終了とともに捨てられる。
 pub fn start_of_a_child_that_died_is_not_a_link_failure_test() {
   process.trap_exits(True)
   let assert Ok(started) = child("dying", unique_name("store")).start()

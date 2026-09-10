@@ -926,6 +926,55 @@ pub fn crash_looping_plugin_child_does_not_take_down_the_app_test() {
   stop_tree(tree)
 }
 
+/// プラグイン専用のスーパーバイザーを外から繰り返し強制終了しても、親は再起動を
+/// 消費しない。**`Temporary` を選んだ根拠 (b) の回帰テスト**（`app.gleam` 冒頭の
+/// doc を参照）。
+///
+/// Temporary の子は決して再起動されないので、1 度目の kill でその子仕様ごと消え、
+/// 以後は kill する対象すら残らない。`Transient` にすると kill のたびに再起動が
+/// 起き、その再起動が `plugins`（5/10）の許容回数を消費して、やがてサブツリーが
+/// 落ちてランナーが作り直される。下の「ランナーの pid が不変」がその差を捉える。
+pub fn killed_plugin_children_supervisor_is_not_restarted_test() {
+  let reports = process.new_subject()
+  let store = unique_store()
+  let counting = process.new_name("test_plugin_counting")
+  let dedup_name = process.new_name("test_dedup")
+  let tree =
+    start_plugins_tree(reports, dedup_name, [
+      counting_spec(counting, store, [#("store", store)]),
+    ])
+  let assert Opened(_relay_url, connection, _socket, _deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(counting)
+  let assert Ok(dedup_before) = process.named(dedup_name)
+
+  kill_children_supervisor(store, 8)
+
+  assert process.is_alive(tree)
+  assert process.named(counting) == Ok(runner_before)
+  assert process.named(dedup_name) == Ok(dedup_before)
+  assert process.is_alive(connection)
+  // 監視接続が張り直されていない（サブツリーが再起動していない）。
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// store のスーパーバイザーを、生きているあいだ繰り返し強制終了する。Temporary
+/// なら 1 度目で対象が消えるので、残りの回は空振りして待つだけになる。
+fn kill_children_supervisor(store: Atom, remaining: Int) -> Nil {
+  case remaining <= 0 {
+    True -> Nil
+    False -> {
+      case is_registered(store) {
+        True -> process.kill(supervisor_of(store))
+        False -> Nil
+      }
+      process.sleep(20)
+      kill_children_supervisor(store, remaining - 1)
+    }
+  }
+}
+
 /// 子の起動に失敗してもアプリの起動は止まらない。理由は 1 行ログに出て、
 /// プラグインは子なしで動き続ける（ダッシュボードにも出る）。
 pub fn plugin_children_that_fail_to_start_do_not_stop_the_tree_test() {
@@ -975,6 +1024,10 @@ fn store_count(name: Atom) -> Int
 /// store を 1 つ数え上げる。宛先が居なければ落ちる。
 @external(erlang, "child_fixture", "bump")
 fn store_bump(name: Atom) -> Dynamic
+
+/// store を監視しているプラグイン専用のスーパーバイザー。
+@external(erlang, "child_fixture", "supervisor_of")
+fn supervisor_of(name: Atom) -> Pid
 
 /// 登録名が指すプロセスを強制終了する。
 @external(erlang, "child_fixture", "kill_registered")

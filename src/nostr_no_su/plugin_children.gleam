@@ -142,6 +142,7 @@ pub fn from_dynamic(
 /// `child #0` になる（`list.index_map` と同じ 0 起点）。理由の先頭に必ず付ける。
 fn spec(raw: Dynamic, index: Int) -> Result(Spec, String) {
   let unlabelled = "child #" <> int.to_string(index)
+  use _ <- result.try(check_map(raw, unlabelled))
   use id <- result.try(required(
     raw,
     "id",
@@ -162,6 +163,18 @@ fn spec(raw: Dynamic, index: Int) -> Result(Spec, String) {
   use kind <- result.try(read_kind(raw, label))
   use _ <- result.try(check_supervisor_shutdown(kind, shutdown, label))
   Ok(Spec(id:, start:, restart:, shutdown:, kind:))
+}
+
+/// 子仕様が map であることを先に確かめる。素の `{Module, Function, Args}` の
+/// 短縮形を渡されたとき、キーが 1 つも読めないことを「`id` が無い」と報告すると
+/// 作者が原因にたどり着けない。形そのものの誤りとして報告する。
+/// `dynamic.classify` は map を `Dict`、タプルを `Array` と呼ぶ。
+fn check_map(raw: Dynamic, label: String) -> Result(Nil, String) {
+  case dynamic.classify(raw) {
+    "Dict" -> Ok(Nil)
+    other ->
+      Error(label <> ": must be a child specification map, got " <> other)
+  }
 }
 
 /// map から任意のキーを取り出す。無ければ（map ですらなければ）`None`。

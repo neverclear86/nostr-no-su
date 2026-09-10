@@ -20,6 +20,7 @@
     count/1,
     whereis_name/1,
     is_registered/1,
+    supervisor_of/1,
     kill_registered/1,
     childspec/2
 ]).
@@ -75,6 +76,9 @@ spec(crashing, Name) ->
 %% 検証で弾かれる子仕様。
 bad_spec(no_id) ->
     #{start => {?MODULE, start_link_failing, []}};
+%% 素の {Module, Function, Args} の短縮形。map ではないので弾かれる。
+bad_spec(bare_mfa) ->
+    {?MODULE, start_link_failing, []};
 bad_spec(no_start) ->
     #{id => store};
 bad_spec(bad_start) ->
@@ -181,6 +185,13 @@ request(Name, Tag) ->
         {Ref, Reply} -> Reply
     after 2000 -> erlang:error(timeout)
     end.
+
+%% 登録名が指すプロセスのリンク先。store は自分のスーパーバイザーから spawn_link
+%% されるだけなので、リンクは 1 本だけで、それがプラグイン専用のスーパーバイザー
+%% になる。テストがその 1 段を外から強制終了するために使う。
+supervisor_of(Name) ->
+    {links, [Pid]} = erlang:process_info(erlang:whereis(Name), links),
+    Pid.
 
 %% 登録名が指すプロセスを強制終了する。テストが子の再起動を観測するために使う。
 kill_registered(Name) ->

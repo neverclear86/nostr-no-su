@@ -116,7 +116,7 @@ plugin_children() -> [child_spec()].
 
 受け付けない形が 3 つある。いずれも読み込み時に理由を 1 行出して、**そのプラグインを読み込まない**。
 
-- **素の `{Module, Function, Args}` の短縮形。** `restart` も `shutdown` も `type` も表現できない。
+- **素の `{Module, Function, Args}` の短縮形。** `restart` も `shutdown` も `type` も表現できない。子仕様が map でないことは `child #0: must be a child specification map, got Array` として報告する。
 - **`shutdown => brutal_kill`。** 本体が使う Gleam の子仕様が表現できない。`0` ミリ秒に丸めると意味が変わってしまう。
 - **`type => supervisor` かつ `shutdown` が `infinity` 以外。** 本体側でスーパーバイザーの `shutdown` は `infinity` に固定されるため、書いた値が黙って別の意味になる。`shutdown => infinity` に直せば通る。
 
@@ -298,6 +298,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 | `<mod>: plugin_name/0 must not be empty` | 名前が空文字列 |
 | `<mod>: plugin_children/0 crashed (error:badarg)` | 子仕様の問い合わせが例外を投げた |
 | `<mod>: plugin_children/0 must return a list of child specification maps, got Dict` | 戻り値がリストでない（`dynamic.classify` は map を `Dict`、タプルを `Array` と呼ぶ） |
+| `<mod>: plugin_children/0: child #0: must be a child specification map, got Array` | 子仕様が map でない。素の `{Module, Function, Args}` の短縮形はここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
 | `<mod>: plugin_children/0: child #0: missing id` | `id` が無い。番号は 0 起点のリストの位置 |
 | `<mod>: plugin_children/0: child "store": missing start` | `start` が無い。`id` が読めた子はその値で名指しされる |
 | `<mod>: plugin_children/0: child "store": unsupported shutdown (brutal_kill); use a number of milliseconds or infinity` | 表現できない `shutdown` |
