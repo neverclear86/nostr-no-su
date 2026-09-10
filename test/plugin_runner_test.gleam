@@ -1,7 +1,8 @@
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
-import gleam/erlang/process.{type Name}
+import gleam/erlang/process.{type Monitor, type Name, type Pid}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
@@ -46,6 +47,20 @@ fn deliver(name: Name(plugin_runner.Msg), count: Int) -> Nil {
   use _unit <- list.each(list.repeat(Nil, count))
   plugin_runner.dispatch([name], test_event())
 }
+
+/// `handle_event/1` を監視付きの使い捨てプロセスで動かす FFI。`plugin_runner` の
+/// 内部と同じものを、スタックトレースの整形を直接見るために呼ぶ。
+@external(erlang, "nostr_no_su_ffi", "run_isolated")
+fn run_isolated(run: fn() -> Nil) -> #(Pid, Monitor)
+
+/// 異常終了の理由を、1 行の理由と（あれば）スタックトレースに分ける FFI。
+@external(erlang, "nostr_no_su_ffi", "describe_exit")
+fn describe_exit(reason: Dynamic) -> #(String, Option(String))
+
+/// 存在しないモジュールへの `erlang:apply/3`。本体が `handle_event/1` を呼ぶのと
+/// 同じ形で、`undef` を起こす。
+@external(erlang, "erlang", "apply")
+fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 
 /// `erlang:error/1` をそのまま呼ぶ。Gleam の `panic` は理由そのものに `file` と
 /// `line` を含むため、終了理由の短さを見る回帰テストには使えない。
@@ -206,4 +221,66 @@ pub fn fast_plugin_never_reports_a_failure_test() {
 pub fn runner_answers_status_while_healthy_test() {
   let name = start_runner(fn(_incoming) { Nil }, plugin_runner.default_limits)
   assert plugin_runner.status(name) == Some(Running)
+}
+
+/// 打ち切ったワーカーの DOWN はメールボックスへ残さない。`process.kill` の後に
+/// `demonitor_process`（`[flush]` 付き）を呼んでいないと、残留 DOWN が次の
+/// イベントの時点でキュー長 1 として観測される。`max_queue_len` を 0 にして
+/// おくと、その 1 件がそのまま切り捨ての判定に現れるので検出できる。
+pub fn a_timed_out_worker_leaves_no_stray_down_test() {
+  let name =
+    start_runner(
+      fn(_incoming) { process.sleep_forever() },
+      Limits(handle_timeout_ms: 300, max_queue_len: 0, max_failures: 2),
+    )
+  // 1 件目の実行が始まってから 2 件目を積む。こうすると 1 件目の判定はキューが
+  // 空の状態で行われ、2 件目の判定だけが残留 DOWN の有無で変わる。
+  deliver(name, 1)
+  process.sleep(100)
+  deliver(name, 1)
+  // 2 件目の打ち切りが終わるまで待ってから問い合わせる。実行中に問い合わせると
+  // `GetStatus` 自身がキューに積まれ、残留 DOWN と区別が付かなくなる。
+  process.sleep(700)
+  // 2 件とも打ち切られて無効化される。残留 DOWN があると 2 件目は切り捨てられ、
+  // 状態は `Overloaded` になる。
+  assert plugin_runner.status(name)
+    == Some(Disabled(reason: "timed out after 300ms", dropped: 0))
+}
+
+/// 呼び出しそのもので起きた例外（`undef` / `function_clause` / BIF の `badarg`）
+/// では、スタックトレースの第 3 要素が実引数のリストになる。`handle_event/1` は
+/// `erlang:apply/3` で呼ぶため、アリティへ正規化していないと最上位フレームに
+/// イベント map が丸ごと入ってしまう。ログに残るのがスタックトレースであって
+/// イベントの部分ダンプではないことを確かめる。
+pub fn a_failed_call_does_not_leak_the_event_into_the_stacktrace_test() {
+  let incoming =
+    Event(
+      id: "arity-regression-id",
+      pubkey: "",
+      created_at: 0,
+      kind: 1,
+      tags: [],
+      content: "arity-regression-content",
+      sig: "",
+    )
+  let missing = atom.create("nostr_no_su_missing_plugin")
+  let #(_worker, watch) =
+    run_isolated(fn() {
+      let _ =
+        apply(missing, atom.create("handle_event"), [
+          event.to_map(incoming),
+        ])
+      Nil
+    })
+  let assert Ok(process.ProcessDown(reason: process.Abnormal(reason), ..)) =
+    process.new_selector()
+    |> process.select_specific_monitor(watch, fn(down) { down })
+    |> process.selector_receive(2000)
+
+  let #(text, detail) = describe_exit(reason)
+  assert text == "error:undef"
+  let assert Some(stack) = detail
+  assert string.contains(stack, "{nostr_no_su_missing_plugin,handle_event,1}")
+  assert !string.contains(stack, "arity-regression-id")
+  assert !string.contains(stack, "arity-regression-content")
 }

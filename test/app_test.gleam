@@ -716,6 +716,9 @@ pub fn disabled_plugin_keeps_the_others_running_test() {
 
 /// 決して戻らないプラグインがいても、他のプラグインは待たされない。遅い側は
 /// 自分のランナーの中で打ち切られる。
+///
+/// 打ち切りまでの時間（5000ms）は受信窓（1000ms）より意図的に長く取る。こうする
+/// と、ランナーごとに打ち切りを同期で待つ実装ではこのテストが通らない。
 pub fn slow_plugin_does_not_block_other_plugins_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
@@ -724,7 +727,7 @@ pub fn slow_plugin_does_not_block_other_plugins_test() {
       hanging_spec(
         process.new_name("test_plugin_hanging"),
         plugin_runner.Limits(
-          handle_timeout_ms: 200,
+          handle_timeout_ms: 5000,
           max_queue_len: 1000,
           max_failures: 5,
         ),

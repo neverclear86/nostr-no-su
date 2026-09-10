@@ -156,7 +156,7 @@ src/nostr_no_su/plugin_loader.gleam          -- 外部プラグインの走査�
 src/nostr_no_su/plugin_runner.gleam          -- プラグイン 1 つぶんの実行プロセス（隔離・時間制限・無効化）
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
 src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
-src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file）
+src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file / process: 監視付きワーカーの生成と終了理由の整形）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
 examples/plugins/file_logger/                -- 外部プラグインの例（ローダーの動作確認用の Erlang 1 ファイル）
 docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
