@@ -10,7 +10,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 
 - **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
-- **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構、コンソールロガー
+- **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、コンソールロガー
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
 - **イベントロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントの接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインを確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
@@ -148,11 +148,12 @@ src/nostr_no_su/bunker.gleam                 -- バンカーの actor（セッ�
 src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の純粋コア
 src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
 src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
-src/nostr_no_su/plugin.gleam                 -- プラグイン機構
+src/nostr_no_su/plugin.gleam                 -- プラグイン機構（プラグイン API v1 の検証と読み込み）
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
 src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
 src/nostr_no_su_ffi.erl                      -- OTP crypto への FFI
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
+docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
 ```
 
 ## 設計上の判断・既知の制約

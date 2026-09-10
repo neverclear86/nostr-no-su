@@ -1,4 +1,10 @@
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/json
+import gleam/list
+import gleam/result
+import gleam/string
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
@@ -128,4 +134,86 @@ pub fn compute_id_real_event_test() {
   assert event.compute_id(received) == received.id
   assert received.id
     == "c7597860ffd1dffc12dcdd304ede1e998b6e9f73896f98ac225444b017b176dd"
+}
+
+/// binary キーのイベント map をキーと値の組から組み立てる。
+fn binary_key_map(entries: List(#(String, Dynamic))) -> Dynamic {
+  dynamic.properties(
+    entries |> list.map(fn(entry) { #(dynamic.string(entry.0), entry.1) }),
+  )
+}
+
+/// `to_map` の各キーを含む、正常なイベント map の材料。
+fn valid_map_entries() -> List(#(String, Dynamic)) {
+  [
+    #("id", dynamic.string("abc")),
+    #("pubkey", dynamic.string("def")),
+    #("created_at", dynamic.int(1_700_000_000)),
+    #("kind", dynamic.int(1)),
+    #("tags", dynamic.list([])),
+    #("content", dynamic.string("hi")),
+    #("sig", dynamic.string("00")),
+  ]
+}
+
+/// map に変換して戻すと元のイベントに戻る。タグの有無と非 ASCII の content を
+/// 含めて確認する。
+pub fn map_roundtrip_test() {
+  let without_tags = Event(..sample_event(), content: "こんにちは Nostr")
+  let assert Ok(decoded) = event.from_map(event.to_map(without_tags))
+  assert decoded == without_tags
+
+  let with_tags =
+    Event(..sample_event(), tags: [["e", "xyz"], ["p", "abc", "wss://relay"]])
+  let assert Ok(decoded_with_tags) = event.from_map(event.to_map(with_tags))
+  assert decoded_with_tags == with_tags
+}
+
+/// `to_map` は binary キーの map を返す。キーを直接引いて固定する。
+pub fn to_map_uses_binary_keys_test() {
+  let map = event.to_map(sample_event())
+  let assert Ok(1) = decode.run(map, decode.at(["kind"], decode.int))
+  let assert Ok("hello nostr") =
+    decode.run(map, decode.at(["content"], decode.string))
+}
+
+/// atom キーの map は受け付けない。Elixir の `%{id: ...}` をそのまま渡しても
+/// 通らないことを固定する。
+pub fn from_map_rejects_atom_keys_test() {
+  let atom_keyed =
+    dynamic.properties(
+      valid_map_entries()
+      |> list.map(fn(entry) {
+        #(atom.to_dynamic(atom.create(entry.0)), entry.1)
+      }),
+    )
+  assert event.from_map(atom_keyed) |> result.is_error
+}
+
+/// キーが欠けているときの失敗メッセージは、欠損であることとキー名の両方を含む。
+pub fn from_map_missing_key_message_test() {
+  let without_kind =
+    binary_key_map(
+      valid_map_entries() |> list.filter(fn(entry) { entry.0 != "kind" }),
+    )
+  let assert Error(reason) = event.from_map(without_kind)
+  assert string.contains(reason, "missing field")
+  assert string.contains(reason, "kind")
+}
+
+/// 値の型が違うときの失敗メッセージは、期待した型とキー名の両方を含む。
+pub fn from_map_wrong_type_message_test() {
+  let wrong_kind =
+    binary_key_map(
+      valid_map_entries()
+      |> list.map(fn(entry) {
+        case entry.0 {
+          "kind" -> #("kind", dynamic.string("1"))
+          _ -> entry
+        }
+      }),
+    )
+  let assert Error(reason) = event.from_map(wrong_kind)
+  assert string.contains(reason, "expected")
+  assert string.contains(reason, "kind")
 }
