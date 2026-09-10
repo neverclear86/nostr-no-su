@@ -1,4 +1,4 @@
-//// `handle_event/1` を欠くプラグイン fixture。
+//// `handle_event` をどちらのアリティでも欠くプラグイン fixture。
 
 /// 対応するプラグイン API のバージョン。
 pub fn plugin_api_version() -> Int {

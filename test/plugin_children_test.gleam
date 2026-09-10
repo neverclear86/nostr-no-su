@@ -210,6 +210,14 @@ pub fn error_tuple_with_non_binary_reason_test() {
   assert reason == "plugin_children/1: error reason must be a String, got Atom"
 }
 
+/// 理由が無い 1 要素の `{error}` も、設定の拒否ではなく戻り値の形の誤りになる。
+pub fn error_tuple_without_reason_test() {
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(tuple([atom.to_dynamic(atom.create("error"))]), plugin_name, 1)
+  assert reason
+    == "plugin_children/1: error reason must be a String, got nothing"
+}
+
 /// 判別子は「要素 0 が atom の `error`」だけである。`{ok, 1}` は設定の拒否とは
 /// 見なさず、子仕様のリストとして検証されて弾かれる。
 pub fn ok_tuple_is_not_a_config_rejection_test() {

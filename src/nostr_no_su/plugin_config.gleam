@@ -60,6 +60,10 @@ fn normalize(plugin_name: String) -> String {
 /// 「残りが空でない」条件が弾くのは `PLUGIN_FILE_LOGGER_=x` のような**キーが空の
 /// 変数**である。空のキーは環境変数名としては書けてしまうが、プラグインからは
 /// `<<"">>` としてしか読めず意味を持たない。
+///
+/// キーを小文字にするため、**大文字小文字だけが違う変数は衝突する**
+/// （`PLUGIN_X_PATH` と `PLUGIN_X_Path` はどちらも `path` になり、どちらが残るかは
+/// `dict.fold` の走査順で決まる）。片方だけを設定するという運用に委ねる。
 pub fn for_plugin(env: Dict(String, String), plugin_name: String) -> Config {
   let prefix = prefix(plugin_name)
   let prefix_length = string.length(prefix)
