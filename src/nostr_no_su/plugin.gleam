@@ -7,9 +7,12 @@
 ////   すべて任意で、あっても無くても読み込み判定に影響しない。
 //// - `handle_event/1` が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
-//// - `handle_event/1` の例外は握り潰さずディスパッチャーへ伝播する。障害の隔離
-////   は専用プロセスを導入する別の変更で行う。ここで捕まえると、隔離が働いている
-////   かどうかを検証できなくなる。
+//// - `handle_event/1` はイベント 1 件ごとに作られる使い捨てのプロセスで動く
+////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
+////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
+////   なく終了理由を短い 1 行に整えることである。隔離そのものはプロセスの境界が
+////   担っており、失敗の観測とその後の方針（連続失敗による無効化など）の判断は
+////   すべてランナーが行う。
 ////
 //// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` にある。
 ////
@@ -33,6 +36,9 @@ pub const api_version: Int = 1
 /// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
 /// `Subject` を捕捉できる。
 ///
+/// `handle` はプラグインごとのランナーが起こす使い捨てのプロセス上で呼ばれる。
+/// 呼び出し側のプロセスに載らないため、時間のかかる処理でも本体は止まらない。
+///
 /// `Plugin` は本体内蔵のプラグイン（`plugins/console_logger` など）と外部
 /// プラグイン（`load` が組み立てるもの）の両方を表す。外部プラグインの `handle`
 /// は `erlang:apply/3` を包んだクロージャーである。なお「API バージョンを上げ
@@ -40,11 +46,6 @@ pub const api_version: Int = 1
 /// 本体内部のこのレコードは自由に拡張してよい。
 pub type Plugin {
   Plugin(name: String, handle: fn(Event) -> Nil)
-}
-
-/// イベント 1 件をすべてのプラグインに渡す。プラグインは登録順に実行する。
-pub fn dispatch(plugins: List(Plugin), event: Event) -> Nil {
-  list.each(plugins, fn(plugin) { plugin.handle(event) })
 }
 
 /// モジュールが指定した名前・アリティの関数をエクスポートしているか。任意
@@ -77,7 +78,8 @@ pub fn load(module: Atom) -> Result(Plugin, String) {
   let handle_event = atom.create("handle_event")
   Ok(
     Plugin(name: plugin_name, handle: fn(incoming) {
-      // 戻り値はプラグインが自由に決めてよいので捨てる。例外は捕まえない。
+      // 戻り値はプラグインが自由に決めてよいので捨てる。例外はここで捕まえず、
+      // ワーカープロセス側（`plugin_runner`）が短い理由に整えて観測する。
       let _ = apply(module, handle_event, [event.to_map(incoming)])
       Nil
     }),

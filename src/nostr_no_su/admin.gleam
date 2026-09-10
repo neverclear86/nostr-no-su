@@ -32,15 +32,16 @@ const username = "admin"
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
-/// ハンドラーが必要とするものすべて。変化しないもの（アカウント、プラグイン名）は
-/// 値で、アクターに問い合わせるものは関数で受け取る。
+/// ハンドラーが必要とするものすべて。変化しないもの（アカウント）は値で、
+/// アクターに問い合わせるもの（リレー、プラグイン、セッション、承認待ち）は
+/// 関数で受け取る。
 pub type Context {
   Context(
     password: String,
     accounts: List(dashboard.AccountRow),
-    plugins: List(String),
     event_logger_enabled: Bool,
     relays: fn() -> List(dashboard.RelayRow),
+    plugins: fn() -> List(dashboard.PluginRow),
     sessions: fn() -> List(Session),
     revoke: fn(String, String) -> Nil,
     pending: fn() -> List(dashboard.PendingRow),
@@ -132,7 +133,7 @@ fn show_dashboard(context: Context, request: Request) -> Response {
     pending: context.pending(),
     relays: context.relays(),
     sessions: context.sessions(),
-    plugins: context.plugins,
+    plugins: context.plugins(),
     event_logger_enabled: context.event_logger_enabled,
   )
   |> dashboard.render

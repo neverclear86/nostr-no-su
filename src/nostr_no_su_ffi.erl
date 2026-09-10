@@ -13,7 +13,10 @@
     is_directory/1,
     absolute_path/1,
     add_code_path/1,
-    is_on_code_path/1
+    is_on_code_path/1,
+    message_queue_len/0,
+    run_isolated/1,
+    describe_exit/1
 ]).
 
 %% ssl アプリケーションは `gleam run` や erlang-shipment のエントリポイントでは
@@ -84,7 +87,7 @@ call_export(Module, Function, Args) ->
         Value -> {ok, Value}
     catch
         Class:Reason ->
-            {error, list_to_binary(io_lib:format("~0p:~0p", [Class, Reason]))}
+            {error, format_line("~0p:~0p", [Class, Reason])}
     end.
 
 %% ディレクトリーの中身。file:list_dir/1 は binary のパス（Gleam の String）を
@@ -126,3 +129,62 @@ add_code_path(Path) ->
 %% だけである。
 is_on_code_path(Module) ->
     code:which(Module) =/= non_existing.
+
+%% 自プロセスの未処理メッセージ数。プラグインのランナーが、遅いプラグインの
+%% メールボックスが際限なく伸びるのを止めるために見る。self() に対する
+%% process_info/2 は undefined を返さないため、パターンマッチで取り出す。
+message_queue_len() ->
+    {message_queue_len, Len} = erlang:process_info(self(), message_queue_len),
+    Len.
+
+%% プラグインの handle_event/1 を使い捨てのプロセスで動かし、{Pid, MonitorRef}
+%% を返す。spawn と monitor を分けてはならない。ワーカーが monitor の前に終わる
+%% と erlang:monitor/2 が即座に理由 noproc の DOWN を送り、正常な実行を失敗と
+%% 誤判定する（10,000 回に 1 回程度発生する）。spawn_monitor/1 はこれを不可分に
+%% 行う。
+%%
+%% ワーカーの中で例外を捕まえるのは、隔離のためではなく終了理由を短くするため
+%% である。DOWN の理由は既定では {Reason, Stacktrace} で、そのまま文字列にすると
+%% 数百文字になり、ログ 1 行にもダッシュボードのセルにも収まらない。さらに DOWN
+%% の理由からは例外クラスが失われる（error と exit を区別できない）。ここで
+%% クラスと理由を call_export/3 と同じ ~0p の 1 行にし、スタックトレースは別枠で
+%% 渡す。捕捉を外しても隔離は成立する（プロセスが分かれていることが隔離の本体）。
+%%
+%% 捕捉するので BEAM の標準 error report は出ない。スタックトレースは本体側が
+%% 長さを切って 1 行ログに出す。
+%%
+%% スタックトレースは MFA だけに落とす。フレームには {file, 絶対パス} が付いて
+%% おり、1 フレームで 200 文字近くを食うため、そのまま整形すると上限のほとんどが
+%% パスで埋まる。失敗箇所の特定には MFA で足りる。第 3 要素は arity/1 でアリティ
+%% に正規化する（下記）。
+run_isolated(Fun) ->
+    erlang:spawn_monitor(fun() ->
+        try Fun() of
+            _ -> ok
+        catch
+            Class:Reason:Stack ->
+                exit(
+                    {nostr_no_su_plugin_failure, format_line("~0p:~0p", [Class, Reason]),
+                        format_line("~0p", [[{M, F, arity(A)} || {M, F, A, _} <- Stack]])}
+                )
+        end
+    end).
+
+%% DOWN の理由を、短い 1 行の理由と（あれば）スタックトレースに分ける。
+%% run_isolated/1 が付けた形だけを特別扱いし、それ以外（外部からの exit など）は
+%% そのまま 1 行にする。戻り値は Gleam の #(String, Option(String))。
+describe_exit({nostr_no_su_plugin_failure, Reason, Stack}) -> {Reason, {some, Stack}};
+describe_exit(Reason) -> {format_line("~0p", [Reason]), none}.
+
+%% スタックトレースの第 3 要素はアリティとは限らず、例外が呼び出しそのもので
+%% 起きたとき（undef / function_clause / BIF の badarg）は引数リストになる。
+%% handle_event/1 は erlang:apply/3 で呼ぶため、そのままだと最上位フレームに
+%% イベント map が丸ごと入る（実測 594 バイト。アリティに落とせば 88 バイト）。
+%% 非 ASCII の content は生のバイト列に展開されるのでさらに膨らむ。
+arity(A) when is_list(A) -> length(A);
+arity(A) -> A.
+
+%% 改行を入れずに 1 行へ整形する。characters_to_binary/1 は 255 を超える
+%% コードポイントを含む整形結果でも落ちない。
+format_line(Format, Args) ->
+    unicode:characters_to_binary(io_lib:format(Format, Args)).

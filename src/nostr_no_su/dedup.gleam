@@ -1,16 +1,18 @@
 //// リレーをまたいだイベントの重複排除ディスパッチャー。
 ////
-//// `dedup/window` が新規として受理した id についてだけプラグインを実行する薄い
-//// アクター。リレーは同じイベントを繰り返し配信する（複数のリレーが同じイベント
-//// を持つ、再接続時に保存済みイベントが再送される）ため、プラグインが同じ id を
-//// 2 度見てはならない。
+//// `dedup/window` が新規として受理した id についてだけイベントを `deliver` へ
+//// 渡す薄いアクター。渡した先はプラグインごとの専用プロセス（`plugin_runner`）で、
+//// この呼び出しは送信で終わるため、プラグインの実行時間はここに載らない。
+////
+//// リレーは同じイベントを繰り返し配信する（複数のリレーが同じイベントを持つ、
+//// 再接続時に保存済みイベントが再送される）ため、プラグインが同じ id を 2 度
+//// 見てはならない。
 
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/plugin.{type Plugin}
 
 /// ディスパッチャーが受け取るメッセージ。
 pub type Msg {
@@ -20,40 +22,39 @@ pub type Msg {
 
 /// ディスパッチャーが保持する状態。
 type State {
-  State(plugins: List(Plugin), window: Window)
+  State(deliver: fn(Event) -> Nil, window: Window)
 }
 
 /// スーパービジョンツリー用の子仕様。
 pub fn supervised(
   name: Name(Msg),
-  plugins: List(Plugin),
+  deliver: fn(Event) -> Nil,
   capacity: Int,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, plugins, capacity) })
+  supervision.worker(fn() { start(name, deliver, capacity) })
 }
 
-/// 指定したプラグイン向けのディスパッチャーを起動し、直近のイベント id を少なく
-/// とも `capacity` 件記憶する。`name` で登録するため、再起動後も接続から到達
-/// できる。
+/// 新規と判定したイベントを `deliver` へ渡すディスパッチャーを起動し、直近の
+/// イベント id を少なくとも `capacity` 件記憶する。`name` で登録するため、
+/// 再起動後も接続から到達できる。
 pub fn start(
   name: Name(Msg),
-  plugins: List(Plugin),
+  deliver: fn(Event) -> Nil,
   capacity: Int,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new(State(plugins: plugins, window: window.new(capacity)))
+  actor.new(State(deliver: deliver, window: window.new(capacity)))
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
 }
 
-/// ウィンドウがまだ見ていないイベントについてプラグインを実行し、それ以外は
-/// 破棄する。
+/// ウィンドウがまだ見ていないイベントを `deliver` へ渡し、それ以外は破棄する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   let Incoming(incoming) = msg
   case window.insert(state.window, incoming.id) {
     Error(Nil) -> actor.continue(state)
     Ok(next) -> {
-      plugin.dispatch(state.plugins, incoming)
+      state.deliver(incoming)
       actor.continue(State(..state, window: next))
     }
   }
