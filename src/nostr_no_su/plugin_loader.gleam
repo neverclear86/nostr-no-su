@@ -181,6 +181,9 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(String), String) {
     False -> Error(shadowed_entry_note(name))
   })
   use ebins <- result.try(ebin_dirs(dir, name))
+  // ebin が複数あるバンドルで 2 つめ以降の追加が失敗すると、先に足した ebin は
+  // コードパスに残ったままバンドルだけが捨てられる。`is_directory` で存在を
+  // 確かめた直後に消えるといった競合でしか起きないため、巻き戻しは持たない。
   use shadows <- result.map(
     list.try_fold(ebins, [], fn(shadows, ebin) {
       // 影の集計は `add_code_path` の**前に**行う。足した後では自分自身の
@@ -220,8 +223,9 @@ fn ebin_dirs(dir: String, name: String) -> Result(List(String), String) {
   use nested <- result.try(case list_dir(base), direct {
     Ok(subs), _ -> Ok(nested_ebins(base, subs))
     // `<name>/ebin` が直接見つかっているなら、読めなかったのは入れ子の探索だけ
-    // なのでそのまま続行する。実際には `<name>` を読めないなら `<name>/ebin` の
-    // 判定も偽になるため、この枝に入るのは稀である。
+    // なのでそのまま続行する。「辿れるが列挙できない」権限（`chmod 0111` など）
+    // では実際にこの組み合わせになり、`file:list_dir/1` は `eacces` を返すのに
+    // `filelib:is_dir/1` は真を返す。
     Error(_), [_, ..] -> Ok([])
     Error(reason), [] ->
       Error(log.line(

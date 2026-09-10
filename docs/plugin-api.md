@@ -144,6 +144,8 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 | `<dir>: cannot read directory (enoent); external plugins disabled` | `PLUGIN_DIR` が読めない（`enotdir` / `eacces` も同じ形） |
 | `<name>: cannot read directory (eacces); skipped` | プラグインのディレクトリーが読めない |
 | `<name>: no ebin directory found (expected <name>/ebin or <name>/*/ebin)` | ディレクトリーはあるが ebin が見つからない |
+| `<dir>: cannot add to code path (bad_directory); skipped` | `PLUGIN_DIR` 自身をコードパスへ足せなかった（ルート直下の `.beam` が対象） |
+| `<name>: cannot add <ebin> to code path (bad_directory); skipped` | プラグインの ebin をコードパスへ足せなかった |
 | `<name>: module <name> is already provided by the host or another plugin; skipped` | エントリーモジュール名が本体か他のプラグインと重なる |
 | `<name>: N module(s) already provided by the host or another plugin are ignored (...)` | 同梱した依存が影に入った（読み込みは続行する） |
 | `<mod>: duplicate plugin name "<name>"; keeping the first` | `plugin_name/0` の値が重複した |

@@ -117,6 +117,12 @@ pub fn write(path: String, content: String) -> Nil {
   Nil
 }
 
+/// モジュールがコードパス上にあるか。エントリーモジュール規則の検証で、飛ばした
+/// バンドルの ebin がコードパスへ入っていないことを確かめるのに使う。
+pub fn on_code_path(module: String) -> Bool {
+  is_on_code_path(atom.create(module))
+}
+
 /// テストごとに一意な整数。`[positive]` で常に正の値になる。
 @external(erlang, "erlang", "unique_integer")
 fn unique_integer(options: List(Atom)) -> Int
@@ -137,3 +143,7 @@ fn ensure_path(path: String) -> Dynamic
 /// `handle_event/1` が呼ばれていないというテストの失敗そのものである。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic
+
+/// ローダーが使うものと同じ判定。テストからも同じ問い合わせを行う。
+@external(erlang, "nostr_no_su_ffi", "is_on_code_path")
+fn is_on_code_path(module: Atom) -> Bool

@@ -212,6 +212,10 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
   )
   assert !has_note(notes, "missing export")
   assert has_note(notes, "(1 skipped)")
+  // コードパスに何も足していないこと。飛ばす判断を `add_code_path` の後に置く
+  // 実装（足してから捨てる形）では、同梱した無関係なモジュールがコードパスへ
+  // 残ってしまい、ここが真になる。
+  assert !beam_fixture.on_code_path(unrelated)
 }
 
 /// ルート直下の `.beam` でも同じ規則が働く。読み込みを試す前に飛ばすので、
