@@ -187,26 +187,6 @@ pub fn to_filter_with_pubkeys_test() {
     == Filter(..filter.new(), authors: Some(["a"]))
 }
 
-/// 起動直後の購読は、起動時刻より前に遡らない。再起動でリプレイ防止の `seen`
-/// ウィンドウが空になるため、起動より前にリレーへ保存されたリクエストを拾うと
-/// 再処理してしまう。
-pub fn bunker_since_does_not_precede_startup_test() {
-  assert config.bunker_since(started_at: 1000, now: 1000) == 1000
-  assert config.bunker_since(started_at: 1000, now: 1059) == 1000
-}
-
-/// 起動からちょうど猶予（60 秒）が経った時点では、どちらの起点も一致する。
-pub fn bunker_since_at_lookback_boundary_test() {
-  assert config.bunker_since(started_at: 1000, now: 1060) == 1000
-}
-
-/// 猶予を超えて経過したあとの再接続は、現在時刻から 60 秒遡る。切断していた間に
-/// 届いたリクエストを取りこぼさないため。
-pub fn bunker_since_after_lookback_test() {
-  assert config.bunker_since(started_at: 1000, now: 1061) == 1001
-  assert config.bunker_since(started_at: 1000, now: 1100) == 1040
-}
-
 /// バンカーのフィルターは、署名者宛の直近の kind 24133 イベントを選択する。
 pub fn bunker_filter_test() {
   assert config.bunker_filter(["pk1", "pk2"], 1000)

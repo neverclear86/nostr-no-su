@@ -125,6 +125,18 @@ fn await_connection(reports: Subject(Report)) -> Report {
   Opened(relay_url, connection, socket, deliver)
 }
 
+/// 指定した秒より時計が進むまで待つ。バンカーアクターの起点の判定は秒単位なので、
+/// 秒をまたいでおかないと、再起動の前に作られたリクエストと起動時刻が並んでしまう。
+fn await_next_second(from: Int) -> Nil {
+  case time.now_seconds() > from {
+    True -> Nil
+    False -> {
+      process.sleep(50)
+      await_next_second(from)
+    }
+  }
+}
+
 /// 監視中のプロセスが停止するのを待つ。
 fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Result(Down, Nil) {
   process.new_selector()
@@ -241,6 +253,58 @@ pub fn connections_shut_down_when_the_bunker_restarts_test() {
   assert reason == process.Abnormal(atom.to_dynamic(atom.create("shutdown")))
   // ソケットは接続アクターが保持するリンクを通じて一緒に落ちる。
   let assert Ok(_socket_down) = await_down(socket_monitor, 1000)
+  stop_tree(tree)
+}
+
+/// バンカーアクターが再起動したあとは、リレーが再配送した処理済みのリクエストを
+/// 実行しない。アクターが変わるとリプレイ防止の `seen` は空になるため、実行して
+/// しまうと応答が再発行され、取り消したはずのセッションまで復活する。
+pub fn restarted_bunker_ignores_requests_from_before_it_started_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let request = connect_request("c1", secret)
+  deliver(request)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  // 同じアクターが生きている間は、再配送を `seen` が落とす。
+  deliver(request)
+  let assert Error(Nil) = process.receive(reports, 200)
+
+  await_next_second(request.created_at)
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(request)
+  let assert Error(Nil) = process.receive(reports, 500)
+  assert bunker.sessions(name) == []
+  stop_tree(tree)
+}
+
+/// 切断していた間に届いたリクエストは、再接続後に実行する。アクターが生き続けて
+/// いる限り起点は動かないため、購読が現在時刻から遡って拾い直したリクエストは、
+/// 秒をまたいでいても処理される。
+pub fn reconnected_bunker_handles_requests_from_the_outage_test() {
+  let reports = process.new_subject()
+  let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
+  let assert Opened(_relay_url, _connection, socket, _deliver) =
+    await_connection(reports)
+  // アクターの起点より後に作られたリクエストにするため、秒が進むのを待つ。
+  await_next_second(time.now_seconds() - 1)
+  let request = connect_request("c1", secret)
+
+  process.kill(socket)
+  let assert Opened(_relay_url, _connection, reconnected, deliver) =
+    await_connection(reports)
+  assert reconnected != socket
+  deliver(request)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == reconnected
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
   stop_tree(tree)
 }
 

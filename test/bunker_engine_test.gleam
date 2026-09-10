@@ -43,13 +43,43 @@ fn approval_url(token: String) -> String {
 }
 
 /// 受信イベントを 1 件処理する。トークンは固定なので、承認ページの URL も
-/// テストから予測できる。
+/// テストから予測できる。アクターの起点は、起点そのものを見るテスト以外では
+/// 判定に効かないよう 0 にする。
 fn handle(
   state: engine.Engine,
   incoming: Event,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(state, incoming, engine.Inputs(now: now, token: token))
+  engine.handle_event(
+    state,
+    incoming,
+    engine.Inputs(now: now, token: token, not_before: 0),
+  )
+}
+
+/// 指定した起点のアクターが受信イベントを 1 件処理する。
+fn handle_after(
+  state: engine.Engine,
+  incoming: Event,
+  now: Int,
+  not_before: Int,
+) -> #(engine.Engine, engine.Outcome) {
+  engine.handle_event(
+    state,
+    incoming,
+    engine.Inputs(now: now, token: token, not_before: not_before),
+  )
+}
+
+/// テスト用のクライアントから署名者へ送る `connect` リクエスト。
+fn connect_event(created_at: Int) -> Event {
+  let signer = account_for(signer_key)
+  request_event(
+    account_for(client_key),
+    signer,
+    connect_body(signer, secret, "c1"),
+    created_at,
+  )
 }
 
 /// 指定した署名者とシークレットで `connect` リクエストを送る。
@@ -601,7 +631,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
     engine.handle_event(
       state,
       request_event(client, signer, connect_body(signer, "", "c2"), 1001),
-      engine.Inputs(now: 1001, token: "tok-2"),
+      engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
   let assert Reply(_) = outcome
   let assert [entry] = engine.pending(state, 1001)
@@ -738,4 +768,32 @@ fn parse_result_event(response_json: String) -> Result(Event, Nil) {
       }
     Error(_) -> Error(Nil)
   }
+}
+
+/// アクターの起点より古いリクエストは実行しない。アクターが再起動すると `seen`
+/// が空になるため、記憶していない処理済みのリクエストを新規として実行しないよう
+/// に落とす。
+pub fn requests_before_the_actor_started_are_ignored_test() {
+  let #(state, outcome) =
+    handle_after(new_engine(), connect_event(999), 1000, 1000)
+  assert outcome == Ignore("request predates this bunker instance")
+  assert engine.sessions(state) == []
+}
+
+/// 起点と同じ秒のリクエストは実行する。判定は秒単位なので、起動直後に届いた正当な
+/// リクエストまで落とすと、クライアントは応答を待ったまま失敗する。
+pub fn requests_at_the_actor_start_are_handled_test() {
+  let #(state, outcome) =
+    handle_after(new_engine(), connect_event(1000), 1000, 1000)
+  let assert Reply(_) = outcome
+  assert engine.sessions(state) != []
+}
+
+/// 起点より後のリクエストは、現在時刻から離れていても実行する。切断していた間に
+/// 届いたリクエストは、再接続後にこの経路で処理される。
+pub fn requests_after_the_actor_started_are_handled_test() {
+  let #(state, outcome) =
+    handle_after(new_engine(), connect_event(1001), 1030, 1000)
+  let assert Reply(_) = outcome
+  assert engine.sessions(state) != []
 }

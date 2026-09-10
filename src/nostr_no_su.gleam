@@ -29,6 +29,12 @@ const dedup_capacity = 4096
 /// 生成する接続シークレットと管理 UI パスワードのバイト数。
 const random_bytes = 16
 
+/// バンカーの購読が現在時刻からどれだけ遡るか。切断していた間に届いたリクエストを
+/// 取りこぼさないための猶予。クライアントは数十秒で応答を諦めるため、これより古い
+/// リクエストには待っている相手がいない。長く取っても、バンカーアクターが起動時刻
+/// より古いとして捨てるイベントをリレーに再配送させるだけである。
+const bunker_since_lookback_seconds = 60
+
 /// `wss://` 接続が依存する `ssl` アプリケーションを起動する。
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
 fn ensure_ssl_started() -> Nil
@@ -43,9 +49,7 @@ type Startup {
 /// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
 pub fn main() -> Nil {
   ensure_ssl_started()
-  // 起動時刻はここで 1 度だけ取る。バンカーの購読はこれより前に遡らない
-  // （`config.bunker_since`）。
-  let started = startup(config.load(), time.now_seconds())
+  let started = startup(config.load())
   list.each(started.notes, io.println)
   // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
   // クラッシュさせる。コンテナーに再起動を促すのは終了コードである。
@@ -56,15 +60,13 @@ pub fn main() -> Nil {
 
 /// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
-/// 起動時刻も同じく 1 度だけ受け取り、バンカーの購読へ渡す。出力は行わず、報告
-/// する内容は文字列として返す。
-fn startup(loaded: Config, started_at: Int) -> Startup {
+/// 出力は行わず、報告する内容は文字列として返す。
+fn startup(loaded: Config) -> Startup {
   let #(storage, storage_notes) = storage_spec(loaded)
   let #(monitor, monitor_notes) = monitor_spec(loaded, storage)
   let #(accounts, account_notes) = load_accounts(loaded)
   let admin_accounts = dashboard_accounts(loaded, accounts)
-  let #(bunker, bunker_notes) =
-    bunker_spec(loaded, accounts, auth_url(loaded), started_at)
+  let #(bunker, bunker_notes) = bunker_spec(loaded, accounts, auth_url(loaded))
   let #(admin, admin_notes) = admin_spec(loaded, admin_accounts)
   Startup(
     spec: app.Spec(
@@ -208,12 +210,11 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
 
 /// 設定されたアカウントのバンカーサブツリー。利用できるアカウントがなければ
 /// 監視のみで動作する。購読は接続のたびに組み立て直すため、`since` は接続時点の
-/// 現在時刻と起動時刻から決まる。
+/// 現在時刻から決まる。
 fn bunker_spec(
   loaded: Config,
   accounts: List(#(Account, String)),
   auth_url: Option(fn(String) -> String),
-  started_at: Int,
 ) -> #(Option(app.Bunker), List(String)) {
   case accounts {
     // 無効にした理由は `load_accounts` が報告済み。
@@ -233,10 +234,7 @@ fn bunker_spec(
                   "bunker",
                   config.bunker_filter(
                     signer_pubkeys,
-                    config.bunker_since(
-                      started_at: started_at,
-                      now: time.now_seconds(),
-                    ),
+                    time.now_seconds() - bunker_since_lookback_seconds,
                   ),
                 ),
               ]

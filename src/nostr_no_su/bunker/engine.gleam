@@ -61,11 +61,24 @@ pub type Engine {
   )
 }
 
-/// リクエストを 1 件処理する間だけ使う、外から注入する値。時刻も乱数もエンジンの
-/// 外で決めることで、エンジンは純粋なまま保たれる。`token` は承認待ちを作るとき
-/// だけ使う。
+/// 受信イベント 1 件を処理する間に、外から注入する値。時刻も乱数もエンジンの外で
+/// 決めることで、エンジンは純粋なまま保たれる。`token` は承認待ちを作るときだけ
+/// 使う。
+///
+/// `not_before` はこのバンカーを動かしているアクターが起動した時刻で、これより
+/// 古いリクエストは受け付けない。リプレイ防止の `seen` はアクターの寿命に閉じて
+/// いるため、アクターが再起動すると、それ以前に処理したリクエストを新規として
+/// 実行してしまう（kind 24133 を保存するリレーは再購読で再配送する）。起点を
+/// 設けることで、記憶していないリクエストは実行せずに捨てる。
+///
+/// `created_at` は秒までしか持たないため、判定は起動した秒より前かどうかで行い、
+/// 起動と同じ秒のリクエストは通す。起動直後に届いた正当なリクエストを落とすと、
+/// クライアントは応答を待ったまま失敗する。再起動が同じ秒に収まった場合に限り、
+/// その秒のリクエストが再実行されうるのは、この判定の粒度による残りである。
+/// 副作用として、時計が遅れているクライアントのリクエストは、アクターの起動直後、
+/// そのずれの秒数ぶんだけ弾かれうる。
 pub type Inputs {
-  Inputs(now: Int, token: String)
+  Inputs(now: Int, token: String, not_before: Int)
 }
 
 /// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
@@ -233,29 +246,34 @@ pub fn handle_event(
   incoming: Event,
   inputs: Inputs,
 ) -> #(Engine, Outcome) {
-  case accept(engine, incoming, inputs.now) {
+  case accept(engine, incoming, inputs) {
     Error(outcome) -> #(engine, outcome)
     Ok(#(engine, account, secret)) ->
       handle_request(engine, account, secret, incoming, inputs)
   }
 }
 
-/// 受信イベントを受理するかどうかを、kind・受付ウィンドウ・ルーティング・署名・
-/// 重複の順に判定する。署名の検証を重複排除より先に置くのは、`seen` に残るのを
-/// 正当なリクエストだけに限るため。誰でも作れる署名なしのイベントで記憶領域を
-/// 埋められてはならない。受理したイベントの id は記録して返す。
+/// 受信イベントを受理するかどうかを、kind・受付ウィンドウ・アクターの起点・
+/// ルーティング・署名・重複の順に判定する。署名の検証を重複排除より先に置くのは、
+/// `seen` に残るのを正当なリクエストだけに限るため。誰でも作れる署名なしの
+/// イベントで記憶領域を埋められてはならない。受理したイベントの id は記録して
+/// 返す。
 fn accept(
   engine: Engine,
   incoming: Event,
-  now: Int,
+  inputs: Inputs,
 ) -> Result(#(Engine, Account, String), Outcome) {
   use <- bool.guard(
     incoming.kind != event.nip46_kind,
     Error(Ignore("not a nip-46 request")),
   )
   use <- bool.guard(
-    !fresh(incoming.created_at, now),
+    !fresh(incoming.created_at, inputs.now),
     Error(Ignore("stale or future event")),
+  )
+  use <- bool.guard(
+    incoming.created_at < inputs.not_before,
+    Error(Ignore("request predates this bunker instance")),
   )
   use #(account, secret) <- result.try(
     route(engine, incoming.tags) |> result.map_error(Ignore),
