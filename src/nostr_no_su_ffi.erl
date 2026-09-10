@@ -6,7 +6,9 @@
     ecdh_x/2,
     mod_pow/3,
     chacha20/3,
-    int_from_bytes/1
+    int_from_bytes/1,
+    ensure_module_loaded/1,
+    call_export/3
 ]).
 
 %% ssl アプリケーションは `gleam run` や erlang-shipment のエントリポイントでは
@@ -54,3 +56,28 @@ chacha20(Key, Nonce12, Data) ->
 %% バイト列を符号なしビッグエンディアンの整数として読む。
 int_from_bytes(Bin) ->
     binary:decode_unsigned(Bin).
+
+%% モジュールをコードパスから読み込む。`erlang:function_exported/3` は未読み込み
+%% のモジュールに対して常に false を返すため、エクスポートの検証はこれを通した
+%% 後に行う必要がある。失敗理由（nofile / badfile / embedded など）は atom なの
+%% で、そのまま人が読める文字列にする。
+%% -> {ok, nil} | {error, ReasonBinary}
+ensure_module_loaded(Module) ->
+    case code:ensure_loaded(Module) of
+        {module, _} -> {ok, nil};
+        {error, Reason} -> {error, atom_to_binary(Reason)}
+    end.
+
+%% プラグインのメタデータ取得（plugin_api_version/0 と plugin_name/0）専用の
+%% 呼び出し。壊れたモジュールが本体の起動を止めないよう、例外を捕捉して文字列
+%% にする。イベントの配送（handle_event/1）には使わない。障害の隔離は専用プロ
+%% セスの導入で行う方針で、ここで握り潰すとクラッシュが黙って消えるため。
+%% 理由はログの 1 行に収めたいので、改行を入れない ~0p で整形する。
+%% -> {ok, Value} | {error, ReasonBinary}
+call_export(Module, Function, Args) ->
+    try erlang:apply(Module, Function, Args) of
+        Value -> {ok, Value}
+    catch
+        Class:Reason ->
+            {error, list_to_binary(io_lib:format("~0p:~0p", [Class, Reason]))}
+    end.

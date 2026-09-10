@@ -1,8 +1,11 @@
 import gleam/bit_array
 import gleam/crypto
+import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json.{type Json}
+import gleam/list
 import gleam/result
+import gleam/string
 import nostr_no_su/crypto/bip340
 import nostr_no_su/hex
 
@@ -23,7 +26,9 @@ pub type Event {
   )
 }
 
-/// リレーから届く JSON オブジェクトのデコーダー。
+/// リレーから届く JSON オブジェクト、または binary キーの map のデコーダー。
+/// `decode.field` はキーを完全一致で引くため、同じデコーダーがプラグイン境界の
+/// map（`to_map` が作る形）にもそのまま使える。
 pub fn decoder() -> decode.Decoder(Event) {
   use id <- decode.field("id", decode.string)
   use pubkey <- decode.field("pubkey", decode.string)
@@ -46,6 +51,56 @@ pub fn to_json(event: Event) -> Json {
     #("content", json.string(event.content)),
     #("sig", json.string(event.sig)),
   ])
+}
+
+/// プラグインへ渡すイベントの表現。**Erlang の map（キーは binary）** を
+/// `Dynamic` として返す。`Dict` ではなく、キーは atom でもないことに注意。
+///
+/// この map の形はプラグイン API v1 の一部であり、キーの変更は破壊的変更に
+/// あたる（`nostr_no_su/plugin` を参照）。`to_json` とフィールド一覧が重複する
+/// が、`from_map` が `decoder()` を再利用するため、片方だけ直すとラウンド
+/// トリップテストが落ちる。
+pub fn to_map(event: Event) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("id"), dynamic.string(event.id)),
+    #(dynamic.string("pubkey"), dynamic.string(event.pubkey)),
+    #(dynamic.string("created_at"), dynamic.int(event.created_at)),
+    #(dynamic.string("kind"), dynamic.int(event.kind)),
+    #(dynamic.string("tags"), tags_dynamic(event)),
+    #(dynamic.string("content"), dynamic.string(event.content)),
+    #(dynamic.string("sig"), dynamic.string(event.sig)),
+  ])
+}
+
+/// タグの map 表現。`tags_json` と対になる、文字列リストのリスト。
+fn tags_dynamic(event: Event) -> Dynamic {
+  dynamic.list(
+    list.map(event.tags, fn(tag) { dynamic.list(list.map(tag, dynamic.string)) }),
+  )
+}
+
+/// プラグイン境界の map（`to_map` の形）を `Event` に戻す。
+///
+/// 失敗側を `String` にしているのは、プラグインローダーがこの文字列をそのまま
+/// ログの 1 行に出せるようにするため。JSON のデコードを扱う他の 3 か所は
+/// `json.DecodeError` を型のまま伝播しているが、ここだけ方針が違う。
+pub fn from_map(value: Dynamic) -> Result(Event, String) {
+  decode.run(value, decoder())
+  |> result.map_error(fn(errors) {
+    list.map(errors, describe_error) |> string.join("; ")
+  })
+}
+
+/// デコードエラー 1 件を人が読める 1 行にする。欠損キーは
+/// `DecodeError("Field", "Nothing", ["kind"])` になるため、`expected` と `found`
+/// をそのまま差し込むと意味の通らない行になる。専用の分岐で振り分ける。
+fn describe_error(error: decode.DecodeError) -> String {
+  let decode.DecodeError(expected:, found:, path:) = error
+  let key = "\"" <> string.join(path, ".") <> "\""
+  case expected, found {
+    "Field", "Nothing" -> "missing field " <> key
+    _, _ -> "field " <> key <> ": expected " <> expected <> ", found " <> found
+  }
 }
 
 /// タグの JSON 表現。NIP-01 では文字列配列の配列で、正規シリアライズでも
