@@ -290,6 +290,62 @@ pub fn load_all_example_plugin_test() {
   assert loaded.name == "file_logger"
 }
 
+/// 同梱の例（`examples/plugins/counter`）が読み込め、申告した子仕様が解決される
+/// ことを確かめる。文書 §5 が引用している実物がそのまま通ることの裏付けになる。
+/// `plugin_children/0` は評価するだけで子は起こさないので、`counter_store` は
+/// 登録されない。`file_logger` と同じくモジュール名は固定なので、テスト実行中に
+/// 1 度しか読み込めない。
+pub fn load_all_counter_example_test() {
+  let fixture = beam_fixture.new("counter_example")
+  beam_fixture.compile_file(
+    "examples/plugins/counter/src/counter.erl",
+    fixture.root,
+  )
+  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let assert [loaded] = plugins
+  assert loaded.name == "counter"
+  assert list.length(loaded.children) == 1
+}
+
+/// 子仕様を申告するプラグインは、子仕様を解決した状態で読み込まれる。
+pub fn load_all_plugin_with_children_test() {
+  let fixture = beam_fixture.new("children")
+  beam_fixture.compile(
+    beam_fixture.children_source(
+      fixture.module,
+      "children_plugin",
+      beam_fixture.name(fixture, "children_store"),
+    ),
+    fixture.module,
+    ebin_in(fixture, [fixture.module]),
+  )
+  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let assert [loaded] = plugins
+  assert list.length(loaded.children) == 1
+}
+
+/// 子仕様が壊れたプラグインは読み込まれず、理由が 1 行出る。同じディレクトリーの
+/// 正しいプラグインは読み込まれ、集計行に飛ばした件数が出る。
+pub fn load_all_bad_children_test() {
+  let fixture = beam_fixture.new("bad_children")
+  let good = beam_fixture.name(fixture, "good_children")
+  beam_fixture.compile(
+    beam_fixture.bad_children_source(fixture.module, "bad_children_plugin"),
+    fixture.module,
+    ebin_in(fixture, [fixture.module]),
+  )
+  beam_fixture.compile(
+    beam_fixture.plugin_source(good, 1, "good_children_plugin"),
+    good,
+    ebin_in(fixture, [good]),
+  )
+  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let assert [loaded] = plugins
+  assert loaded.name == "good_children_plugin"
+  assert has_note(notes, "plugin_children/0: child #0: missing id")
+  assert has_note(notes, "(1 skipped)")
+}
+
 /// 影に入ったモジュールを実際に呼ぶために使う。戻り値の型はモジュール次第なので
 /// `Dynamic` のまま受ける。
 @external(erlang, "erlang", "apply")

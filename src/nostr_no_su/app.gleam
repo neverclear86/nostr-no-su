@@ -3,6 +3,8 @@
 //// ```
 //// root (one_for_one)
 //// |-- plugins      (one_for_one): プラグインごとのランナー
+//// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
+//// |   `-- runner(<plugin>)   (worker  / Permanent)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// |-- bunker       (rest_for_one): バンカーアクター、        次にリレーごとの接続
 //// |-- event_logger (rest_for_one): Postgres の接続プール、   次にロガーアクター
@@ -34,13 +36,40 @@
 //// クラッシュするプラグインに対して有限の再起動許容回数は原理的に成立しないため、
 //// この構造で保証している。
 ////
-//// **申し送り**: この主張が成り立つのは、このサブツリーの子がランナーだけである
-//// 間に限る。プラグインが申告する子プロセス（DB プールなど）をここに載せると、
-//// その子は普通にクラッシュループしうるので前提が崩れる。そのときはプラグイン
-//// ごとにスーパーバイザーを 1 段挟んで許容回数を分けるか、`event_logger` の
-//// `Unavailable` に相当する歯止めを子の側に持たせる必要がある。
+//// **プラグインが申告した子プロセス**（任意エクスポート `plugin_children/0`）は
+//// 普通にクラッシュループしうるため、ランナーと同じ扱いでは上の主張が崩れる。
+//// 歯止めは段を増やすことではなく**再起動の型**で作る。プラグイン 1 つぶんの子を
+//// 専用のスーパーバイザーにまとめ、その子仕様を **`Temporary`** にする。
+////
+//// - **段を挟むだけでは足りない。** クラッシュループはどの階層の有限な
+////   `intensity` も必ず超えるので、段を増やしても親に到達するまでの時間が
+////   延びるだけである。
+//// - 子スーパーバイザーが自分の許容回数を超えると、**理由 `shutdown`** で終了
+////   する。親でこれが当たるのは理由ベースの `do_restart(shutdown, ...)`
+////   （stdlib-8.0.1 / OTP 29.0.2、`supervisor.erl:1432-1434`）で、この節は
+////   `del_child/2` を呼んで終わり **`add_restart/1`（:2260-2281）を通らない**。
+////   ゆえに親の許容回数は消費されない。**これは Temporary でも Transient でも
+////   同じ**である。
+//// - **Temporary を選ぶ理由は 2 つ。** (a) `del_child/2`（:1825-1836）が子の仕様
+////   ごと削除するのは `temporary` のときだけで、Transient は `pid = undefined` の
+////   まま `which_children` に残り続ける。(b) 許容回数超過**以外**の理由（外からの
+////   `exit(Pid, kill)` など）で子スーパーバイザーが落ちたとき、Transient は再起動
+////   され、その再起動が `add_restart/1` を通って親の許容回数を消費する。ループ
+////   すれば親を道連れにする。**Temporary にはこの経路が無い。**
+//// - **捨てたもの**: Transient なら仕様が `pid=undefined` で残るため、将来
+////   `supervisor:restart_child/2` の FFI を足せば実行時に子を復帰させる道が残る。
+////   Temporary はその道を捨てて (b) の耐性を買っている。
+//// - **代償**: 一度あきらめた子は仕様ごと消えるため、**ランナーを kill しても子は
+////   戻らない**。復帰は本体の再起動のみである（`static_supervisor` には
+////   `start_child` 相当の公開 API が無く、`Supervisor` も opaque）。子を失った
+////   プラグインはランナーが生き続け、`handle_event/1` の連続失敗で
+////   `disabled: <理由>` になってダッシュボードに残る。**素直に劣化する。**
+//// - **起動時の失敗はアプリを止めない。** `Temporary` が効くのは再起動のときだけ
+////   なので、初回起動の失敗は空のスーパーバイザーで吸収する
+////   （`start_plugin_children`）。失敗の理由は `plugin_children` が子ごとに出す
+////   1 行に出る。
 
-import gleam/erlang/process.{type Name}
+import gleam/erlang/process.{type Name, type Pid}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -52,6 +81,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/engine.{type Engine, type Pending}
 import nostr_no_su/dedup
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
@@ -80,7 +110,8 @@ pub type Relay {
 /// 歯止め。名前は起動時に 1 度だけ作り、ディスパッチャーの宛先と管理 UI の
 /// 問い合わせ先の両方になる。`limits` を仕様に持たせているのは、テストが短い
 /// タイムアウトと小さい失敗上限でツリーごと動かせるようにするためで、プラグイン
-/// 固有の設定から与えるときの受け口にもなる。
+/// 固有の設定から与えるときの受け口にもなる。子プロセスの仕様はここには持たせず、
+/// プラグイン自身（`plugin.children`）が持つ。
 pub type PluginSpec {
   PluginSpec(
     name: Name(plugin_runner.Msg),
@@ -213,10 +244,69 @@ fn add_plugins(builder: Builder, specs: List(PluginSpec)) -> Builder {
 /// 参照）。
 fn plugins_tree(specs: List(PluginSpec)) -> Builder {
   use builder, spec <- list.fold(specs, plugins_supervisor())
-  supervisor.add(
-    builder,
-    plugin_runner.supervised(spec.name, spec.plugin, spec.limits),
-  )
+  builder
+  |> add_plugin_children(spec.plugin)
+  |> supervisor.add(plugin_runner.supervised(
+    spec.name,
+    spec.plugin,
+    spec.limits,
+  ))
+}
+
+/// 子仕様を持つプラグインにだけ専用のスーパーバイザーを足す。**ランナーより先に
+/// 置く。** 順序が意味を持つのは起動順だけだが、子が先に居ないと起動直後の
+/// イベントが未登録の宛先に当たって失敗として数えられる。
+fn add_plugin_children(builder: Builder, plugin: Plugin) -> Builder {
+  case plugin.children {
+    [] -> builder
+    children ->
+      supervisor.add(builder, plugin_children_tree(plugin.name, children))
+  }
+}
+
+/// プラグイン 1 つぶんの子プロセス。**`Temporary` にすることが歯止めそのもの**
+/// で、子がクラッシュループしてこのスーパーバイザーが諦めても、親は再起動せず
+/// 許容回数も消費しない。外から kill されたときに再起動されないことも Temporary
+/// が担っている（冒頭の doc を参照）。
+fn plugin_children_tree(
+  name: String,
+  children: List(ChildSpecification(Pid)),
+) -> ChildSpecification(Supervisor) {
+  let builder =
+    list.fold(children, plugin_children_supervisor(), supervisor.add)
+  supervision.supervisor(fn() { start_plugin_children(name, builder) })
+  |> supervision.restart(supervision.Temporary)
+}
+
+/// プラグインの子プロセスのスーパーバイザー。子同士は独立なので `one_for_one`。
+fn plugin_children_supervisor() -> Builder {
+  supervisor.new(supervisor.OneForOne)
+  |> supervisor.restart_tolerance(intensity: 5, period: 10)
+}
+
+/// 子の起動に失敗しても本体の起動は止めない。理由を 1 行出し、空のスーパー
+/// バイザーで代替する。ここで Error を返すと `plugins` の起動が失敗し、ルート
+/// まで伝播してアプリが起動しなくなる（Temporary は初回起動には効かない）。
+///
+/// **`StartError` は整形しない。** `gleam_otp_external` が
+/// `{shutdown, {failed_to_start_child, Id, Reason}}` を `InitFailed("shutdown")`
+/// に潰すため、ここには理由が届かない。真の理由は `plugin_children` が子ごとに
+/// 出す 1 行と、BEAM の `=SUPERVISOR REPORT=` にある。
+fn start_plugin_children(
+  name: String,
+  builder: Builder,
+) -> actor.StartResult(Supervisor) {
+  case supervisor.start(builder) {
+    Ok(started) -> Ok(started)
+    Error(_reason) -> {
+      log.println(
+        log.plugin_prefix(name),
+        "children failed to start; the reason is in the child line above, "
+          <> "or in the =SUPERVISOR REPORT=; running without them",
+      )
+      supervisor.start(plugin_children_supervisor())
+    }
+  }
 }
 
 /// プラグインのサブツリーのスーパーバイザー。

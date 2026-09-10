@@ -36,7 +36,7 @@ fn start_runner(
   let assert Ok(_started) =
     plugin_runner.start(
       name,
-      plugin.Plugin(name: "runner_test", handle: handle),
+      plugin.Plugin(name: "runner_test", children: [], handle: handle),
       limits,
     )
   name

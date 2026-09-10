@@ -44,11 +44,6 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
 
-/// このランナーが出すログ行の接頭辞。プラグインごとに分けるので関数にする。
-pub fn log_prefix(name: String) -> String {
-  "plugin " <> name
-}
-
 /// 実行時の歯止め。テストから小さい値を渡せるよう注入する。プラグイン固有の
 /// 設定から与えられるようにする余地もここにある。
 pub type Limits {
@@ -171,7 +166,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 fn report(name: String, note: Option(String)) -> Nil {
   case note {
     None -> Nil
-    Some(line) -> log.println(log_prefix(name), line)
+    Some(line) -> log.println(log.plugin_prefix(name), line)
   }
 }
 

@@ -21,3 +21,9 @@ pub fn println(prefix: String, message: String) -> Nil {
 pub fn relay_prefix(relay: String) -> String {
   "relay " <> relay
 }
+
+/// プラグインに関するログ行の接頭辞。ランナーも、子プロセスの起動失敗の報告も
+/// これを使う。プラグインごとに分かれるので関数にする。
+pub fn plugin_prefix(name: String) -> String {
+  "plugin " <> name
+}

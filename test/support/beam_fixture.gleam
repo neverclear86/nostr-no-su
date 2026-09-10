@@ -65,6 +65,44 @@ handle_event(Event) ->
 "
 }
 
+/// 任意エクスポート `plugin_children/0` を持つプラグインの Erlang ソース。
+/// `store` は子プロセスが自分で登録する名前で、**テストごとに一意にすること**
+/// （BEAM の登録名は VM 全体で共有）。`-export` は関数定義より前に置く必要が
+/// あるため、`plugin_source` に継ぎ足さずソース全体をここで組み立てる。
+pub fn children_source(module: String, name: String, store: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_children/0, handle_event/1]).
+-export([start_link/0]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_children() ->
+    [#{id => " <> store <> ",
+       start => {?MODULE, start_link, []},
+       restart => permanent,
+       shutdown => 5000,
+       type => worker}].
+start_link() ->
+    Pid = spawn_link(fun() -> receive stop -> ok end end),
+    register(" <> store <> ", Pid),
+    {ok, Pid}.
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
+/// `plugin_children/0` が API に合わない子仕様（`id` 無し）を返すプラグインの
+/// Erlang ソース。
+pub fn bad_children_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_children/0, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_children() -> [#{start => {?MODULE, handle_event, [ignored]}}].
+handle_event(_Event) -> ok.
+"
+}
+
 /// 定数を返す関数 1 つだけを持つモジュールの Erlang ソース。プラグインが同梱する
 /// 依存を模したもので、影（モジュール名前空間の衝突）の検証に使う。
 pub fn value_source(module: String, value: Int) -> String {

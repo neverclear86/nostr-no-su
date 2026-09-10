@@ -86,7 +86,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。
 
-外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 6 章、動作確認用の例は `examples/plugins/file_logger/` を参照。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
+外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 7 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）を参照。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
 
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `DATABASE_URL` の両方を合わせること。`DATABASE_URL=` を空にすると Postgres への保存だけを無効化できる。
 
@@ -100,7 +100,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
 | `DATABASE_URL` | （空） | イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。空なら保存しない。docker compose では同梱の Postgres を指す |
-| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
+| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 7 章） |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
@@ -152,13 +152,15 @@ src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の�
 src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
 src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
 src/nostr_no_su/plugin.gleam                 -- プラグイン機構（プラグイン API v1 の検証と読み込み）
+src/nostr_no_su/plugin_children.gleam        -- 任意エクスポート plugin_children/0 の検証と子仕様への変換
 src/nostr_no_su/plugin_loader.gleam          -- 外部プラグインの走査とコードパスへの追加
 src/nostr_no_su/plugin_runner.gleam          -- プラグイン 1 つぶんの実行プロセス（隔離・時間制限・無効化）
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
 src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
 src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file / process: 監視付きワーカーの生成と終了理由の整形）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
-examples/plugins/file_logger/                -- 外部プラグインの例（ローダーの動作確認用の Erlang 1 ファイル）
+examples/plugins/file_logger/                -- 外部プラグインの例（状態を持たない Erlang 1 ファイル）
+examples/plugins/counter/                    -- 外部プラグインの例（plugin_children/0 で子プロセスを申告する）
 docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
 ```
 
@@ -166,6 +168,7 @@ docs/plugin-api.md                           -- プラグイン API v1 の仕様
 
 - **スーパービジョンツリー**: root（one_for_one）の下にプラグイン・監視・バンカー・イベント保存のサブツリーを置き、プラグインのサブツリーは one_for_one、他は rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
 - **プラグインは専用プロセスで動かす**: プラグイン 1 つにつきランナーを 1 つ、root（one_for_one）直下の `plugins` サブツリーに置く。ディスパッチャーはイベントを送るだけで戻るので、遅いプラグインが他のプラグインや監視を止めない。`handle_event/1` はイベントごとに使い捨てのプロセス（`erlang:spawn_monitor/1`。**リンクは張らない**）で動かすため、プラグインの例外・異常終了・ハングはランナーの死にならない。**プラグインの不調で supervisor の再起動が起きない**ということであり、root の `restart_tolerance(3, 60)` を消費してアプリ全体を落とすことがない。1 件あたり 30 秒で打ち切り、連続 5 回失敗したプラグインは無効化してログに出し、以後はイベントを捨てて件数を数える（管理 UI には `disabled` として残る。再有効化は本体の再起動か、ランナーの強制終了）。未処理のイベントが 1000 件を超えたプラグインは、キューが空になるまで捨てて復帰時に件数を報告する（イベントロガーが DB 到達不能時に行うのと同じ形。捨てるのは超過分だけでなくバックログ全体なので、配信は best-effort である）。ワーカーの終了理由は FFI 側で `error:badarg` の形の 1 行に整えている。DOWN の理由は既定ではスタックトレース込みで数百文字になり、ログにもダッシュボードにも収まらないため
+- **プラグインが申告した子プロセスは Temporary で載せる**: 任意エクスポート `plugin_children/0` を持つプラグインの子は、プラグインごとの専用スーパーバイザー（one_for_one、10 秒に 5 回）にまとめ、その子仕様を **Temporary** にする。段を挟むだけではクラッシュループを止められないので、歯止めは再起動の型で作る。子スーパーバイザーが諦めると理由 `shutdown` で終了し、親は再起動もせず許容回数も消費しない（`supervisor.erl` の `do_restart(shutdown, ...)` は `add_restart/1` を通らない）。Transient ではなく Temporary にするのは、仕様ごと削除されることと、外部からの kill のような別の理由で落ちたときにも再起動されないためである。代償として、一度諦めた子は本体を再起動するまで戻らない。起動時の失敗は空のスーパーバイザーで吸収してアプリの起動を止めず、理由は子ごとの 1 行ログに出す
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
 - **イベント保存は独立したサブツリー**: pog の接続プールと保存 actor は監視サブツリーとは別の子として root（one_for_one）にぶら下げる。DB が落ちて再起動が起きてもリレーの購読を巻き込まないため。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる

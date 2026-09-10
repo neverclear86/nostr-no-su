@@ -189,6 +189,8 @@ fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
 /// ロガーはアクターを名前で参照するので、アクターより先に組み立ててよい。
 /// 外部プラグインはローダーが返し、このリストの後ろに繋がれる。並び順が決めるのは
 /// 読み込みと表示の順序だけで、実行はプラグインごとの独立したランナーが行う。
+/// 内蔵プラグインは子仕様を持たない（`children: []`）。イベント保存の接続プール
+/// はプラグインの子ではなく、ルート直下の専用サブツリーで動く。
 fn builtin_plugins(logger: Option(app.EventLogger)) -> List(Plugin) {
   case logger {
     None -> [console_logger.new()]

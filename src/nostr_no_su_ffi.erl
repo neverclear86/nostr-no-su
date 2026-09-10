@@ -16,7 +16,9 @@
     is_on_code_path/1,
     message_queue_len/0,
     run_isolated/1,
-    describe_exit/1
+    describe_exit/1,
+    start_child/3,
+    describe_term/1
 ]).
 
 %% ssl アプリケーションは `gleam run` や erlang-shipment のエントリポイントでは
@@ -76,10 +78,14 @@ ensure_module_loaded(Module) ->
         {error, Reason} -> {error, atom_to_binary(Reason)}
     end.
 
-%% プラグインのメタデータ取得（plugin_api_version/0 と plugin_name/0）専用の
-%% 呼び出し。壊れたモジュールが本体の起動を止めないよう、例外を捕捉して文字列
-%% にする。イベントの配送（handle_event/1）には使わない。障害の隔離は専用プロ
-%% セスの導入で行う方針で、ここで握り潰すとクラッシュが黙って消えるため。
+%% プラグインのメタデータ取得（plugin_api_version/0 と plugin_name/0）と、
+%% 子仕様の start（plugin_children/0 が申告した MFA）の呼び出しに使う。壊れた
+%% モジュールが本体の起動を止めないよう、例外を捕捉して文字列にする。
+%% 子仕様の start は起動時（plugin_children/0 の解決時）とスーパーバイザーに
+%% よる再起動時に呼ばれる。どちらの場合も例外を捕まえるのは隔離のためではなく、
+%% 理由を 1 行に整えるためである。
+%% イベントの配送（handle_event/1）には使わない。障害の隔離は専用プロセスの
+%% 導入で行う方針で、ここで握り潰すとクラッシュが黙って消えるため。
 %% 理由はログの 1 行に収めたいので、改行を入れない ~0p で整形する。
 %% -> {ok, Value} | {error, ReasonBinary}
 call_export(Module, Function, Args) ->
@@ -89,6 +95,66 @@ call_export(Module, Function, Args) ->
         Class:Reason ->
             {error, format_line("~0p:~0p", [Class, Reason])}
     end.
+
+%% プラグインが申告した子仕様の start（MFA）を呼ぶ。例外の捕捉と理由の整形は
+%% call_export/3 に任せ、ここは戻り値の形の検査だけを行う。
+%%
+%% スーパーバイザーのプロセス上で実行されるため、MFA は必ずリンクを張る関数
+%% （*_start_link）でなければならない。リンクを張らない子は監視されず、落ちても
+%% 誰も気付かないまま登録名だけを握り続ける。黙った監視漏れにしないため、
+%% リンク集合を確かめて、入っていなければその場で kill して失敗にする。
+%%
+%% ignore は Gleam 側が Pid を要求するため未対応。Gleam で書いたプラグインが
+%% 返しがちな {ok, {started, Pid, Data}}（Gleam の Result のランタイム表現）も
+%% ここで弾かれる。
+%% -> {ok, Pid} | {error, ReasonBinary}
+start_child(Module, Function, Args) ->
+    case call_export(Module, Function, Args) of
+        {ok, {ok, Pid}} when is_pid(Pid) -> check_linked(Pid);
+        {ok, {ok, Pid, _Info}} when is_pid(Pid) -> check_linked(Pid);
+        {ok, {error, Reason}} -> {error, format_line("~0p", [Reason])};
+        {ok, Other} -> {error, format_line("unexpected start return ~0p", [Other])};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% 起動した子が自分（スーパーバイザー）にリンクしているか。していなければ孤児に
+%% なるので kill してから失敗を返す。
+%%
+%% **「リンクに居ない」だけで失敗にしてはならない。** 子が死ぬとリンクは解除され
+%% るので、init は通ったが直後に落ちた子（handle_continue で DB へ繋げず落ちる、
+%% など）は、正しく *_start_link を使っていてもリンク集合から消えている。そう
+%% 扱うと (1) 理由の文字列が嘘になり、(2) 本来は再起動される普通のクラッシュが
+%% 起動失敗に化けて、そのプラグインの子が丸ごと諦められる（本体の再起動まで
+%% 戻らない）。一時的な起動順の問題が恒久的な劣化に変わってしまう。
+%%
+%% そこで **生きていて、かつリンクに居ない**ときだけ失敗にする。既に死んでいる
+%% 子は EXIT がスーパーバイザーのメールボックスに届いているので、通常の再起動
+%% 経路に任せる。
+%%
+%% 残る穴: リンクを張らずに既に死んでいる子は素通りする。OTP が死んだ Pid を
+%% 握ったままになるが、EXIT が来ないだけで害は限定的であり、稀である。
+check_linked(Pid) ->
+    {links, Links} = erlang:process_info(self(), links),
+    case lists:member(Pid, Links) of
+        true ->
+            {ok, Pid};
+        false ->
+            case is_process_alive(Pid) of
+                %% リンクを張らずに生きている = 本当の監視漏れ。
+                true ->
+                    exit(Pid, kill),
+                    {error, <<"start function did not link the child (use a *_start_link function)">>};
+                %% リンクは張られたが既に死んだ。再起動は OTP に任せる。
+                false ->
+                    {ok, Pid}
+            end
+    end.
+
+%% 任意の項を 1 行の文字列にする。子仕様の理由の文字列で、受け取った値をそのまま
+%% 見せるために使う（dynamic.classify では brutal_kill と permanent の区別が
+%% 付かず、作者の役に立たない）。
+describe_term(Term) ->
+    format_line("~0p", [Term]).
 
 %% ディレクトリーの中身。file:list_dir/1 は binary のパス（Gleam の String）を
 %% そのまま受け付け、charlist のリストを返す。非 UTF-8 のファイル名は

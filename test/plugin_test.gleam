@@ -1,5 +1,6 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
+import gleam/list
 import gleam/string
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
@@ -111,6 +112,35 @@ pub fn load_non_integer_version_test() {
 pub fn load_erlang_minimal_plugin_test() {
   let assert Ok(loaded) = plugin.load(atom.create("minimal_plugin"))
   assert loaded.name == "minimal_plugin"
+}
+
+/// 任意エクスポート `plugin_children/0` を持つモジュールは、子仕様を解決した
+/// 状態で読み込まれる。
+pub fn load_resolves_children_test() {
+  let assert Ok(loaded) =
+    plugin.load(atom.create("support@plugin_with_children"))
+  assert list.length(loaded.children) == 1
+}
+
+/// `plugin_children/0` を持たないモジュールは子を持たない。
+pub fn load_without_children_export_test() {
+  let assert Ok(loaded) = plugin.load(atom.create("support@plugin_valid"))
+  assert loaded.children == []
+}
+
+/// API に合わない子仕様は、必須エクスポートの不備と同じくそのプラグインを
+/// 読み込まない理由になる。子だけ捨てて読み込むと、症状が真の原因から離れる。
+pub fn load_bad_children_test() {
+  let reason = load_error("support@plugin_bad_children")
+  assert string.contains(reason, "plugin_children/0: child #0: missing id")
+}
+
+/// `plugin_children/0` の例外は本体の起動を止めず、理由の文字列になる。
+pub fn load_crashing_children_test() {
+  assert string.contains(
+    load_error("support@plugin_crashing_children"),
+    "plugin_children/0 crashed",
+  )
 }
 
 /// fixture が退避した値を読む。キーが無ければ例外になる。
