@@ -15,11 +15,9 @@ import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/plugins/event_logger
 import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/time
-import pog
 
 /// 起動処理そのものが出すログ行の接頭辞。
 const log_prefix = "main"
@@ -67,8 +65,7 @@ pub fn main() -> Nil {
 /// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
 /// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Startup {
-  let #(logger, logger_notes) = event_logger_spec(loaded)
-  let builtin = builtin_plugins(logger)
+  let builtin = builtin_plugins()
   let #(external, plugin_notes) =
     plugin_loader.load_all(
       loaded.plugin_dir,
@@ -86,7 +83,6 @@ fn startup(loaded: Config) -> Startup {
       plugins: specs,
       monitor: monitor,
       bunker: bunker,
-      event_logger: logger,
       admin: admin,
       open: app.open_websocket,
       reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
@@ -94,7 +90,6 @@ fn startup(loaded: Config) -> Startup {
     notes: list.flatten([
       monitor_notes,
       plugin_notes,
-      logger_notes,
       account_notes,
       bunker_notes,
       uri_notes(admin_accounts),
@@ -114,44 +109,6 @@ fn uri_notes(accounts: List(dashboard.AccountRow)) -> List(String) {
 fn relays(relay_urls: List(String)) -> List(app.Relay) {
   use url <- list.map(relay_urls)
   app.Relay(name: process.new_name("nostr_no_su_relay"), url: url)
-}
-
-/// イベント保存サブツリーの仕様。`DATABASE_URL` が未設定、あるいは解釈できない
-/// ときは保存を無効にし、監視は従来どおり動かす。
-fn event_logger_spec(
-  loaded: Config,
-) -> #(Option(app.EventLogger), List(String)) {
-  case loaded.database_url {
-    None -> #(None, [
-      log.line(
-        event_logger.log_prefix,
-        "no DATABASE_URL set; event storage disabled",
-      ),
-    ])
-    Some(database_url) ->
-      case
-        pog.url_config(
-          process.new_name("nostr_no_su_event_logger_pool"),
-          database_url,
-        )
-      {
-        Error(Nil) -> #(None, [
-          log.line(
-            event_logger.log_prefix,
-            "DATABASE_URL is not a valid postgres URL; event storage disabled",
-          ),
-        ])
-        Ok(pool_config) -> #(
-          Some(app.EventLogger(
-            name: process.new_name("nostr_no_su_event_logger"),
-            // 書き込むのは保存アクター 1 つだけで逐次実行なので、接続は少なく
-            // 保つ。既定の 10 本は DB 側の接続枠と idle ping を無駄に使う。
-            pool_config: pog.pool_size(pool_config, 2),
-          )),
-          [],
-        )
-      }
-  }
 }
 
 /// プラグインごとにランナープロセスの名前を作る。名前はここで 1 度だけ作り、
@@ -186,20 +143,16 @@ fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
   }
 }
 
-/// 本体に内蔵されたプラグイン。保存が有効なときだけイベントロガーを足す。
-/// ロガーはアクターを名前で参照するので、アクターより先に組み立ててよい。
-/// 外部プラグインはローダーが返し、このリストの後ろに繋がれる。並び順が決めるのは
-/// 読み込みと表示の順序だけで、実行はプラグインごとの独立したランナーが行う。
-/// 内蔵プラグインは子仕様を持たない（`children: []`）。イベント保存の接続プール
-/// はプラグインの子ではなく、ルート直下の専用サブツリーで動く。
+/// 本体に内蔵されたプラグイン。外部プラグインはローダーが返し、このリストの
+/// 後ろに繋がれる。並び順が決めるのは読み込みと表示の順序だけで、実行は
+/// プラグインごとの独立したランナーが行う。内蔵プラグインは子仕様を持たない
+/// （`children: []`）。イベント保存は外部プラグイン `event_logger` の仕事に
+/// なったので、ここには含まれない。
 /// **内蔵プラグインは `plugin.load` を通らないので設定 map を受け取らない。**
 /// その設定は従来どおり `config.gleam` が持つため、`PLUGIN_CONSOLE_LOGGER_*` の
 /// ような変数を書いても誰も読まない。
-fn builtin_plugins(logger: Option(app.EventLogger)) -> List(Plugin) {
-  case logger {
-    None -> [console_logger.new()]
-    Some(logger) -> [console_logger.new(), event_logger.new(logger.name)]
-  }
+fn builtin_plugins() -> List(Plugin) {
+  [console_logger.new()]
 }
 
 /// 設定されたアカウントと、それぞれの接続シークレット。鍵を読めないときは理由を

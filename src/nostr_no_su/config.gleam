@@ -37,7 +37,6 @@ pub type Config {
     pubkeys: List(String),
     account_keys: List(String),
     bunker_secret: Option(String),
-    database_url: Option(String),
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
     /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
@@ -67,7 +66,6 @@ pub fn load() -> Config {
       |> result.unwrap("")
       |> parse_list,
     bunker_secret: optional("BUNKER_SECRET"),
-    database_url: optional("DATABASE_URL"),
     plugin_dir: optional("PLUGIN_DIR"),
     plugin_env: plugin_env(),
     admin_port: admin_port(),

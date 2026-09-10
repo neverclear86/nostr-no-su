@@ -61,7 +61,6 @@ pub type Snapshot {
     relays: List(RelayRow),
     sessions: List(Session),
     plugins: List(PluginRow),
-    event_logger_enabled: Bool,
   )
 }
 
@@ -73,7 +72,6 @@ pub fn render(snapshot: Snapshot) -> String {
     relays_section(snapshot.relays),
     sessions_section(snapshot.sessions),
     plugins_section(snapshot.plugins),
-    event_logger_section(snapshot.event_logger_enabled),
   ])
 }
 
@@ -195,13 +193,6 @@ fn plugin_state_label(status: Option(plugin_runner.Status)) -> String {
   }
 }
 
-/// イベントロガーによる保存が有効かどうか。
-fn event_logger_section(enabled: Bool) -> String {
-  "<h2>Event storage</h2><p>Event logger: "
-  <> escape(enabled_label(enabled))
-  <> "</p>"
-}
-
 /// 見出しと表からなる 1 節。行が無いときは表の代わりに一言を出す。セルは
 /// 組み立て済みの HTML として受け取る。
 fn section(
@@ -312,13 +303,5 @@ fn status_label(status: Status) -> String {
   case status {
     Connected -> "connected"
     Disconnected -> "disconnected"
-  }
-}
-
-/// 有効・無効の表示名。
-fn enabled_label(enabled: Bool) -> String {
-  case enabled {
-    True -> "enabled"
-    False -> "disabled"
   }
 }

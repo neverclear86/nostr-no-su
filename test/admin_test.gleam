@@ -50,7 +50,6 @@ fn test_context(
     accounts: [
       dashboard.AccountRow(signer: signer, uri: uri, auth_uri: auth_uri),
     ],
-    event_logger_enabled: True,
     relays: fn() {
       [
         dashboard.RelayRow(
@@ -228,7 +227,6 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "<td>disconnected</td>")
   assert string.contains(body, "<td>console_logger</td>")
   assert string.contains(body, "<td>running</td>")
-  assert string.contains(body, "Event logger: enabled")
 }
 
 /// 状態に含まれる HTML は、そのまま出さずにエスケープする。リレー URL も

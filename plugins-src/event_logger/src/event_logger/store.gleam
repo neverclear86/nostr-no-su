@@ -1,29 +1,29 @@
-//// 受信したイベントを Postgres の `events` テーブルへ保存するプラグイン。
+//// 受信したイベントを Postgres の `events` テーブルへ保存するアクター。
 ////
-//// プラグインの `handle` はイベントごとの使い捨てプロセスで動く（`plugin_runner`）
-//// ため、そこからは DB を触らず専用のアクターへ `Store` を送るだけにする。使い
-//// 捨てプロセスから DB を触ると、接続のチェックアウト待ちが 1 件あたりの実行時間
-//// の上限に当たり、DB が落ちている間にこのプラグインが無効化されてしまう。送る
+//// プラグインのイベント処理関数はイベントごとの使い捨てプロセスで動くため、
+//// そこからは DB を触らず、このアクターへ `Store` を送るだけにする。使い捨て
+//// プロセスから DB を触ると、接続のチェックアウト待ちが 1 件あたりの実行時間の
+//// 上限に当たり、DB が落ちている間にこのプラグインが無効化されてしまう。送る
 //// だけなら実行は即座に終わり、保存の遅れも失敗もアクター側に閉じる。
 ////
 //// DB に到達できない間は保存を止め、届いたイベントは数えて捨てる。リレー監視を
 //// 巻き込んで落とさないためであり、接続の復旧は pog のプールに任せる。挿入を
 //// 試み続けると 1 件ごとにチェックアウト待ちでアクターがブロックし、メール
-//// ボックスが際限なく伸びてしまう。
+//// ボックスが際限なく伸びてしまう。落ちずに数えて捨てる形は、諦められた子が
+//// 本体の再起動まで戻らないプラグインの失敗モデル（`docs/plugin-api.md`
+//// 第 5.4 節）に対する正しい振る舞いでもある。
 
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
+import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
-import nostr_no_su/log
-import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/plugin.{type Plugin, Plugin}
 import pog
 
 /// 保存を止めてから作り直しを試みるまでの待ち時間。DDL は `IF NOT EXISTS` 付き
@@ -35,6 +35,10 @@ const schema_retry_delay_ms = 5000
 /// が、待つのは再試行 1 回につき 1 度で、その間に届いたイベントは未準備の経路で
 /// 捨てられる。
 const schema_timeout_ms = 30_000
+
+/// このプラグインが自分で出すログ行の接頭辞。本体が出す行の接頭辞
+/// （`[plugin event_logger]`）とは別物である。
+const log_prefix = "[event_logger] "
 
 /// イベントを保存するテーブル。`received_at` は取り込んだ時刻で、イベント自身の
 /// `created_at`（リレーが配送する Unix 秒）とは別に持つ。
@@ -58,16 +62,13 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 /// 起動時に実行する DDL。すべて `IF NOT EXISTS` なので何度実行してもよい。
 pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
 
-/// このプラグインが出すログ行の接頭辞。
-pub const log_prefix = "event_logger"
-
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
 pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
 
-/// `events` テーブルの 1 行。イベントから純粋に導出できるため、DB なしで
+/// `events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
 /// テストできる。
 pub type Row {
   Row(
@@ -83,8 +84,9 @@ pub type Row {
 
 /// 保存アクターが受け取るメッセージ。
 pub type Msg {
-  /// 保存するイベント。
-  Store(event: Event)
+  /// 保存する 1 行。イベント map からの変換は送り手（使い捨てプロセス）が
+  /// 済ませ、アクターには DB の仕事だけを残す。
+  Store(row: Row)
   /// スキーマ作成を試みる。初期化時と、保存を止めたあとの再試行タイマーから
   /// 送られる。
   EnsureSchema
@@ -105,24 +107,8 @@ type State {
   State(db: pog.Connection, self: Subject(Msg), availability: Availability)
 }
 
-/// イベントを保存アクターへ転送するプラグイン。アクターは名前で参照するため、
-/// 再起動しても同じプラグインがそのまま新しいプロセスへ届く。
-pub fn new(name: Name(Msg)) -> Plugin {
-  Plugin(name: "event_logger", children: [], handle: fn(incoming) {
-    named.send(name, Store(incoming))
-  })
-}
-
-/// スーパービジョンツリー用の子仕様。
-pub fn supervised(
-  name: Name(Msg),
-  pool: Name(pog.Message),
-) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, pool) })
-}
-
-/// 保存アクターを起動する。`pool` は同じツリーにいる pog のプールの名前で、
-/// プールが再起動しても同じ名前を指し続ける。
+/// 保存アクターを起動する。`pool` は同じプラグインの子として動く pog のプールの
+/// 名前で、プールが再起動しても同じ名前を指し続ける。
 pub fn start(
   name: Name(Msg),
   pool: Name(pog.Message),
@@ -155,7 +141,7 @@ fn initialise(
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   let availability = case msg {
     EnsureSchema -> prepare(state)
-    Store(incoming) -> persist(state, incoming)
+    Store(row:) -> persist(state, row)
   }
   actor.continue(State(..state, availability: availability))
 }
@@ -170,14 +156,14 @@ fn prepare(state: State) -> Availability {
   }
 }
 
-/// イベント 1 件を保存する。保存を止めている間は数えて捨てるだけにして、DB の
+/// 1 行を保存する。保存を止めている間は数えて捨てるだけにして、DB の
 /// チェックアウト待ちでアクターをブロックしない。
-fn persist(state: State, incoming: Event) -> Availability {
+fn persist(state: State, row: Row) -> Availability {
   case state.availability {
     Unavailable(dropped:, reported:) ->
       Unavailable(dropped: dropped + 1, reported:)
     Ready ->
-      case insert(state.db, incoming) {
+      case insert(state.db, row) {
         Ok(_inserted) -> Ready
         Error(error) ->
           case unreachable(error) {
@@ -185,12 +171,11 @@ fn persist(state: State, incoming: Event) -> Availability {
             True -> suspend(state, error, 1)
             // それ以外はこのイベント固有の問題なので、保存は続ける。
             False -> {
-              log.println(
-                log_prefix,
+              println(
                 "insert failed for event "
-                  <> incoming.id
-                  <> ": "
-                  <> string.inspect(error),
+                <> row.id
+                <> ": "
+                <> string.inspect(error),
               )
               Ready
             }
@@ -203,13 +188,12 @@ fn persist(state: State, incoming: Event) -> Availability {
 fn resume(availability: Availability) -> Availability {
   case availability {
     Unavailable(dropped:, ..) if dropped > 0 ->
-      log.println(
-        log_prefix,
+      println(
         "database is back; dropped "
-          <> int.to_string(dropped)
-          <> " events while it was unavailable",
+        <> int.to_string(dropped)
+        <> " events while it was unavailable",
       )
-    _ -> log.println(log_prefix, "schema ready")
+    _ -> println("schema ready")
   }
   Ready
 }
@@ -220,7 +204,7 @@ fn resume(availability: Availability) -> Availability {
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
   case suspension_message(error, was_reported(state.availability), dropped) {
-    Some(line) -> log.println(log_prefix, line)
+    Some(line) -> println(line)
     None -> Nil
   }
   Unavailable(dropped: dropped, reported: unreachable(error))
@@ -292,13 +276,8 @@ pub fn ensure_schema(db: pog.Connection) -> Result(Nil, pog.QueryError) {
   |> pog.execute(on: db)
 }
 
-/// イベントを 1 行挿入し、実際に挿入された行数を返す。すでに保存済みの id
-/// なら 0 になる。
-pub fn insert(
-  db: pog.Connection,
-  incoming: Event,
-) -> Result(Int, pog.QueryError) {
-  let row = to_row(incoming)
+/// 1 行を挿入し、実際に挿入された行数を返す。すでに保存済みの id なら 0 になる。
+pub fn insert(db: pog.Connection, row: Row) -> Result(Int, pog.QueryError) {
   pog.query(insert_sql)
   |> pog.parameter(pog.text(row.id))
   |> pog.parameter(pog.text(row.pubkey))
@@ -311,16 +290,36 @@ pub fn insert(
   |> result.map(fn(returned) { returned.count })
 }
 
-/// イベントを挿入する 1 行に変換する。`tags` は NIP-01 と同じ入れ子配列を
-/// JSON 文字列にしたもので、jsonb 列にはこれをキャストして渡す。
-pub fn to_row(incoming: Event) -> Row {
-  Row(
-    id: incoming.id,
-    pubkey: incoming.pubkey,
-    created_at: incoming.created_at,
-    kind: incoming.kind,
-    tags: json.to_string(event.tags_json(incoming)),
-    content: incoming.content,
-    sig: incoming.sig,
-  )
+/// プラグイン境界のイベント map（binary キーの Erlang map）を挿入する 1 行に
+/// 変換する。`tags` は NIP-01 と同じ入れ子配列を JSON 文字列にしたもので、jsonb
+/// 列にはこれをキャストして渡す。**知らないキーは無視する**
+/// （`docs/plugin-api.md` 第 3 章）。
+pub fn to_row(event: Dynamic) -> Result(Row, String) {
+  decode.run(event, row_decoder())
+  |> result.map_error(string.inspect)
+}
+
+/// イベント map から 1 行を読むデコーダー。
+fn row_decoder() -> decode.Decoder(Row) {
+  use id <- decode.field("id", decode.string)
+  use pubkey <- decode.field("pubkey", decode.string)
+  use created_at <- decode.field("created_at", decode.int)
+  use kind <- decode.field("kind", decode.int)
+  use tags <- decode.field("tags", decode.list(decode.list(decode.string)))
+  use content <- decode.field("content", decode.string)
+  use sig <- decode.field("sig", decode.string)
+  decode.success(Row(
+    id: id,
+    pubkey: pubkey,
+    created_at: created_at,
+    kind: kind,
+    tags: json.to_string(json.array(tags, of: json.array(_, of: json.string))),
+    content: content,
+    sig: sig,
+  ))
+}
+
+/// このプラグインのログ行を 1 行出す。
+fn println(line: String) -> Nil {
+  io.println(log_prefix <> line)
 }

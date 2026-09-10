@@ -18,7 +18,6 @@ stratus = { path = "./vendor/stratus" }
 envoy = ">= 1.2.0 and < 2.0.0"
 gleam_crypto = ">= 1.6.0 and < 2.0.0"
 gleam_otp = ">= 1.2.0 and < 2.0.0"
-pog = ">= 4.1.0 and < 5.0.0"
 wisp = ">= 2.2.2 and < 3.0.0"
 mist = ">= 6.0.3 and < 7.0.0"
 

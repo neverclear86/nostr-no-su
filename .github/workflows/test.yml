@@ -9,9 +9,26 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      - run: gleam deps download
+      - run: gleam build --warnings-as-errors
+      - run: gleam test
+      - run: gleam format --check src test
+
+  plugin-event-logger:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins-src/event_logger
     services:
       # 統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が設定されている
-      # ときだけ event_logger のテストが実行される。
+      # ときだけ統合テストが実行される。
       postgres:
         image: postgres:17-alpine
         env:
@@ -33,8 +50,23 @@ jobs:
           gleam-version: "1.17.0"
           rebar3-version: "3"
       - run: gleam deps download
+      # 影に入る側は本体の版で実行されるため、版がずれると読み込み時には何も
+      # 起きず、実行時に undef で壊れる。ここで止めるのが唯一の自動検出点。
+      - name: 共有パッケージの版が本体と一致することを確かめる
+        working-directory: .
+        run: |
+          set -e
+          for pkg in gleam_stdlib gleam_erlang gleam_otp gleam_json exception; do
+            host=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" manifest.toml)
+            plugin=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" plugins-src/event_logger/manifest.toml)
+            [ -n "$host" ] && [ -n "$plugin" ] || { echo "$pkg が manifest に無い"; exit 1; }
+            [ "$host" = "$plugin" ] || { echo "版がずれている: $host / $plugin"; exit 1; }
+          done
       - run: gleam build --warnings-as-errors
       - run: gleam test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
       - run: gleam format --check src test
+      # 成果物が組めることまで見る。plugins/ に置く成果物はここではなく、
+      # 本体と同じ docker イメージの中で作る（plugins-src/event_logger/README.md）。
+      - run: gleam export erlang-shipment

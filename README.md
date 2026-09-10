@@ -12,7 +12,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
-- **イベントロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
+- **イベントロガー**: 外部プラグイン `event_logger` を `PLUGIN_DIR` に置き、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。ソースとビルド手順は `plugins-src/event_logger/`
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントの接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態を確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
@@ -86,11 +86,15 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。
 
-外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）を参照。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
+**`PLUGIN_DIR` に置いた BEAM は本体と同じ VM・同じ権限で動く。サンドボックスは無く、秘密鍵を持つプロセスにも到達できる（`sys:get_state/1`）。信頼できるものだけを置くこと。** 第三者から受け取ったプラグインはソースを読んでから置く。
+
+外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）を参照。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
 
 プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml` に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
 
-資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `DATABASE_URL` の両方を合わせること。`DATABASE_URL=` を空にすると Postgres への保存だけを無効化できる。
+資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の両方を合わせること。
+
+**`DATABASE_URL` は廃止した。** イベント保存は本体の機能ではなく外部プラグイン `event_logger` になり、設定も `PLUGIN_EVENT_LOGGER_DATABASE_URL` へ移った（`PLUGIN_<NAME>_<KEY>` の規則）。**空文字列の意味も変わっている。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は空値が落ちてプラグインにはキーごと届かないため、設定不足として拒否され起動のたびに 1 行出る。**保存を無効にする正しいやり方は、プラグインを置かないことである。**
 
 ### 環境変数
 
@@ -101,7 +105,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `ACCOUNT_KEYS` | （空） | バンカーが署名するアカウントの hex 秘密鍵（カンマ区切り）。空ならバンカー無効 |
 | `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
-| `DATABASE_URL` | （空） | イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。空なら保存しない。docker compose では同梱の Postgres を指す |
+| `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にしても無効化にはならない（保存をやめるならプラグインを置かない）。docker compose では同梱の Postgres を指す |
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
@@ -118,11 +122,12 @@ gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーの�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-イベントロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
+`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
+cd plugins-src/event_logger
 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test gleam test
 docker rm -f nns-pg-test
 ```
@@ -160,23 +165,23 @@ src/nostr_no_su/plugin_config.gleam          -- プラグイン固有の設定�
 src/nostr_no_su/plugin_loader.gleam          -- 外部プラグインの走査とコードパスへの追加
 src/nostr_no_su/plugin_runner.gleam          -- プラグイン 1 つぶんの実行プロセス（隔離・時間制限・無効化）
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
-src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
 src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file / process: 監視付きワーカーの生成と終了理由の整形）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
 examples/plugins/file_logger/                -- 外部プラグインの例（状態を持たず、設定を受け取る Erlang 1 ファイル）
 examples/plugins/counter/                    -- 外部プラグインの例（plugin_children/0 で子プロセスを申告する）
+plugins-src/event_logger/                    -- 同梱の外部プラグイン（Postgres へ保存する。独自の依存と設定を持つ Gleam プロジェクト）
 docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
 ```
 
 ## 設計上の判断・既知の制約
 
-- **スーパービジョンツリー**: root（one_for_one）の下にプラグイン・監視・バンカー・イベント保存のサブツリーを置き、プラグインのサブツリーは one_for_one、他は rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
-- **プラグインは専用プロセスで動かす**: プラグイン 1 つにつきランナーを 1 つ、root（one_for_one）直下の `plugins` サブツリーに置く。ディスパッチャーはイベントを送るだけで戻るので、遅いプラグインが他のプラグインや監視を止めない。プラグインのイベント処理関数はイベントごとに使い捨てのプロセス（`erlang:spawn_monitor/1`。**リンクは張らない**）で動かすため、プラグインの例外・異常終了・ハングはランナーの死にならない。**プラグインの不調で supervisor の再起動が起きない**ということであり、root の `restart_tolerance(3, 60)` を消費してアプリ全体を落とすことがない。1 件あたり 30 秒で打ち切り、連続 5 回失敗したプラグインは無効化してログに出し、以後はイベントを捨てて件数を数える（管理 UI には `disabled` として残る。再有効化は本体の再起動か、ランナーの強制終了）。未処理のイベントが 1000 件を超えたプラグインは、キューが空になるまで捨てて復帰時に件数を報告する（イベントロガーが DB 到達不能時に行うのと同じ形。捨てるのは超過分だけでなくバックログ全体なので、配信は best-effort である）。ワーカーの終了理由は FFI 側で `error:badarg` の形の 1 行に整えている。DOWN の理由は既定ではスタックトレース込みで数百文字になり、ログにもダッシュボードにも収まらないため
+- **スーパービジョンツリー**: root（one_for_one）の下にプラグイン・監視・バンカーのサブツリーを置き、プラグインのサブツリーは one_for_one、他は rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
+- **プラグインは専用プロセスで動かす**: プラグイン 1 つにつきランナーを 1 つ、root（one_for_one）直下の `plugins` サブツリーに置く。ディスパッチャーはイベントを送るだけで戻るので、遅いプラグインが他のプラグインや監視を止めない。プラグインのイベント処理関数はイベントごとに使い捨てのプロセス（`erlang:spawn_monitor/1`。**リンクは張らない**）で動かすため、プラグインの例外・異常終了・ハングはランナーの死にならない。**プラグインの不調で supervisor の再起動が起きない**ということであり、root の `restart_tolerance(3, 60)` を消費してアプリ全体を落とすことがない。1 件あたり 30 秒で打ち切り、連続 5 回失敗したプラグインは無効化してログに出し、以後はイベントを捨てて件数を数える（管理 UI には `disabled` として残る。再有効化は本体の再起動か、ランナーの強制終了）。未処理のイベントが 1000 件を超えたプラグインは、キューが空になるまで捨てて復帰時に件数を報告する（`event_logger` プラグインが DB 到達不能時に行うのと同じ形。捨てるのは超過分だけでなくバックログ全体なので、配信は best-effort である）。ワーカーの終了理由は FFI 側で `error:badarg` の形の 1 行に整えている。DOWN の理由は既定ではスタックトレース込みで数百文字になり、ログにもダッシュボードにも収まらないため
 - **プラグインが申告した子プロセスは Temporary で載せる**: 任意エクスポート `plugin_children/0` を持つプラグインの子は、プラグインごとの専用スーパーバイザー（one_for_one、10 秒に 5 回）にまとめ、その子仕様を **Temporary** にする。段を挟むだけではクラッシュループを止められないので、歯止めは再起動の型で作る。子スーパーバイザーが諦めると理由 `shutdown` で終了し、親は再起動もせず許容回数も消費しない（`supervisor.erl` の `do_restart(shutdown, ...)` は `add_restart/1` を通らない）。Transient ではなく Temporary にするのは、仕様ごと削除されることと、外部からの kill のような別の理由で落ちたときにも再起動されないためである。代償として、一度諦めた子は本体を再起動するまで戻らない。起動時の失敗は空のスーパーバイザーで吸収してアプリの起動を止めず、理由は子ごとの 1 行ログに出す
 - **設定を受け取る口はアリティ +1 の任意エクスポートで足す**: プラグイン固有の設定は環境変数 `PLUGIN_<NAME>_<KEY>` から切り出し、binary キーの map として `plugin_children/1` と `handle_event/2` に渡す。既存の `plugin_children/0` / `handle_event/1` を持つプラグインは無変更で動くので、**API バージョンは 1 のまま**である（`handle_event` だけは必須側のアリティが `/1` または `/2` の 2 通りになるが、既存のプラグインは 1 つも落ちないため破壊的変更にあたらない）。設定不足の申告を宣言的な必須キー一覧ではなく `plugin_children/1` の `{error, Reason}` にしたのは、**値の妥当性まで検査できる**のがプラグイン側だけだからである。キーの存在と、その値が Postgres の URL として解釈できることは別で、後者を読み込み時に検査できないと不正な値が「子の起動失敗 → 連続失敗 → `disabled`」という遠回りな症状に化ける
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
-- **イベント保存は独立したサブツリー**: pog の接続プールと保存 actor は監視サブツリーとは別の子として root（one_for_one）にぶら下げる。DB が落ちて再起動が起きてもリレーの購読を巻き込まないため。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
+- **イベント保存は外部プラグイン**: pog の接続プールと保存 actor は本体ではなくプラグインが `plugin_children/1` で申告し、`plugins` サブツリーの下（one_for_one）で動く。プラグインごとのサブスーパーバイザーが Temporary なので、DB 由来のクラッシュループが本体を巻き込むことはない。保存 actor はプールを名前で参照するため、rest_for_one でなくても再起動をまたいで配線が保たれる。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
 - **管理 UI は root 直下の独立した子**: mist（HTTP サーバー）は監視・バンカー・保存のどれにも依存しないため、root（one_for_one）に並べる。表示する状態はハンドラーが直接触らず、Context に注入された関数から名前付き actor へ問い合わせて取る。問い合わせが失敗しても（再起動中、タイムアウト）ページ全体を失敗させず、その項目だけ「未接続」「該当なし」として描画する。描画は「状態のスナップショット → HTML 文字列」の純粋関数で、テンプレートエンジンも JS フレームワークも使わない
 - **管理 UI は既定でループバックのみ**: ダッシュボードには secret 入りの `bunker://` URI が載るため、既定 (`ADMIN_BIND=127.0.0.1`) では LAN に露出しない。Docker はホストの iptables を直接操作するので、ポートを公開したうえでファイアウォールに頼る形は避け、compose 側でホストのループバックにだけ公開している
 - **監視はバンカー自身の NIP-46 通信を処理しない**: NIP-01 のフィルターには kind の否定が無いため、`PUBKEYS` に署名者を含めて `RELAY_URL` と `BUNKER_RELAY_URL` を同じリレーにすると、バンカーの応答（kind 24133）が監視の購読にも届く。これはプラグインに渡す前に落とすので、コンソールにも `events` テーブルにも NIP-46 の往復は現れない（kind 24133 は NIP-01 上リレーが保存しない想定のイベントで、保存する意味も無い）
