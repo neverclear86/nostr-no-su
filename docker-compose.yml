@@ -16,6 +16,10 @@ services:
       # 監視したイベントの保存先。空にするとプラグインを無効にする。下の
       # postgres サービスの資格情報と一致させること。
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+      # プラグイン固有の設定は PLUGIN_<NAME>_<KEY> で渡す。compose の
+      # environment: は明示的な列挙なので、自分のプラグインの分はここに足すこと。
+      # file_logger の出力先。/plugins は読み取り専用なのでそこには書けない。
+      PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
       # 管理 UI の待ち受けポート。空にすると管理 UI を無効にする。その場合は
       # イメージの HEALTHCHECK（/healthz を叩く）もチェックを省略する。
       ADMIN_PORT: ${ADMIN_PORT-8080}

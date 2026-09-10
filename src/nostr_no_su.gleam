@@ -73,6 +73,7 @@ fn startup(loaded: Config) -> Startup {
     plugin_loader.load_all(
       loaded.plugin_dir,
       list.map(builtin, fn(item) { item.name }),
+      loaded.plugin_env,
     )
   let specs = plugin_specs(list.append(builtin, external))
   let #(monitor, monitor_notes) = monitor_spec(loaded)
@@ -191,6 +192,9 @@ fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
 /// 読み込みと表示の順序だけで、実行はプラグインごとの独立したランナーが行う。
 /// 内蔵プラグインは子仕様を持たない（`children: []`）。イベント保存の接続プール
 /// はプラグインの子ではなく、ルート直下の専用サブツリーで動く。
+/// **内蔵プラグインは `plugin.load` を通らないので設定 map を受け取らない。**
+/// その設定は従来どおり `config.gleam` が持つため、`PLUGIN_CONSOLE_LOGGER_*` の
+/// ような変数を書いても誰も読まない。
 fn builtin_plugins(logger: Option(app.EventLogger)) -> List(Plugin) {
   case logger {
     None -> [console_logger.new()]

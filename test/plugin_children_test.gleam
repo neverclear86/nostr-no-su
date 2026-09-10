@@ -19,7 +19,9 @@ import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/string
-import nostr_no_su/plugin_children.{from_dynamic}
+import nostr_no_su/plugin_children.{
+  type Rejection, ConfigRejected, InvalidSpec, from_dynamic,
+}
 
 /// 子の起動失敗のログ行に出るプラグイン名。
 const plugin_name = "children_test"
@@ -31,11 +33,12 @@ fn unique_name(label: String) -> Atom {
   )
 }
 
-/// fixture の子仕様 1 件を本番と同じ経路で変換する。
+/// fixture の子仕様 1 件を本番と同じ経路で変換する。アリティ 0 で呼ばれた
+/// ことにするので、理由の文字列は従来どおり `plugin_children/0: ...` になる。
 fn convert(
   specs: List(Dynamic),
-) -> Result(List(ChildSpecification(Pid)), String) {
-  from_dynamic(dynamic.list(specs), plugin_name)
+) -> Result(List(ChildSpecification(Pid)), Rejection) {
+  from_dynamic(dynamic.list(specs), plugin_name, 0)
 }
 
 /// 検証を通る子仕様 1 件を変換して取り出す。
@@ -46,7 +49,7 @@ fn child(kind: String, name: Atom) -> ChildSpecification(Pid) {
 
 /// 検証で弾かれる子仕様の理由。
 fn rejected(kind: String) -> String {
-  let assert Error(reason) = convert([bad_spec(atom.create(kind))])
+  let assert Error(InvalidSpec(reason)) = convert([bad_spec(atom.create(kind))])
   reason
 }
 
@@ -166,13 +169,84 @@ pub fn bad_start_is_rejected_test() {
 
 /// リストでない値を返すプラグインは、その場で拒否する。
 pub fn non_list_is_rejected_test() {
-  let assert Error(reason) =
-    from_dynamic(atom.to_dynamic(atom.create("nope")), plugin_name)
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(atom.to_dynamic(atom.create("nope")), plugin_name, 0)
   assert string.contains(
     reason,
     "plugin_children/0 must return a list of child specification maps",
   )
 }
+
+/// アリティ 1 で呼ばれた場合、理由の文字列も `plugin_children/1` になる。
+pub fn reason_names_the_called_arity_test() {
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(atom.to_dynamic(atom.create("nope")), plugin_name, 1)
+  assert string.contains(
+    reason,
+    "plugin_children/1 must return a list of child specification maps",
+  )
+}
+
+/// `{error, Reason}` は設定の拒否として受理する。**リストのデコードより先に
+/// 判定する**ため、2 要素タプルが「長さ 2 のリスト」として解釈されることはない。
+pub fn error_tuple_is_a_config_rejection_test() {
+  assert from_dynamic(
+      error_tuple(dynamic.string("path is required")),
+      plugin_name,
+      1,
+    )
+    == Error(ConfigRejected("path is required"))
+}
+
+/// 理由が binary でない `{error, Reason}` は、設定の拒否ではなく戻り値の形の
+/// 誤りとして報告する。
+pub fn error_tuple_with_non_binary_reason_test() {
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(
+      error_tuple(atom.to_dynamic(atom.create("nope"))),
+      plugin_name,
+      1,
+    )
+  assert reason == "plugin_children/1: error reason must be a String, got Atom"
+}
+
+/// 理由が無い 1 要素の `{error}` も、設定の拒否ではなく戻り値の形の誤りになる。
+pub fn error_tuple_without_reason_test() {
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(tuple([atom.to_dynamic(atom.create("error"))]), plugin_name, 1)
+  assert reason
+    == "plugin_children/1: error reason must be a String, got nothing"
+}
+
+/// 判別子は「要素 0 が atom の `error`」だけである。`{ok, 1}` は設定の拒否とは
+/// 見なさず、子仕様のリストとして検証されて弾かれる。
+pub fn ok_tuple_is_not_a_config_rejection_test() {
+  let assert Error(InvalidSpec(reason)) =
+    from_dynamic(
+      tuple([atom.to_dynamic(atom.create("ok")), dynamic.int(1)]),
+      plugin_name,
+      1,
+    )
+  assert string.contains(
+    reason,
+    "child #0: must be a child specification map, got Atom",
+  )
+}
+
+/// 正しい子仕様のリストも設定の拒否と誤判定されない。
+pub fn child_list_is_not_a_config_rejection_test() {
+  let assert Ok([_]) =
+    convert([spec(atom.create("minimal"), unique_name("store"))])
+}
+
+/// `{error, Reason}` を組み立てる。
+fn error_tuple(reason: Dynamic) -> Dynamic {
+  tuple([atom.to_dynamic(atom.create("error")), reason])
+}
+
+/// 任意の項からタプルを作る。Gleam にはタプルを動的に組み立てる手段が無い。
+@external(erlang, "erlang", "list_to_tuple")
+fn tuple(elements: List(Dynamic)) -> Dynamic
 
 /// 壊れている箇所が複数あっても、報告するのは最初に検査したキーの 1 件だけ。
 pub fn only_the_first_error_is_reported_test() {

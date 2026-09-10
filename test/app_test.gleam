@@ -796,6 +796,7 @@ fn counting_spec(
     plugin_children.from_dynamic(
       dynamic.list(resolved_children(kinds)),
       "counting",
+      0,
     )
   app.PluginSpec(
     name: name,

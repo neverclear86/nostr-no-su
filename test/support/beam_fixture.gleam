@@ -11,7 +11,7 @@
 //// 2. `examples/plugins/file_logger` だけはモジュール名が `file_logger` で
 ////    固定なので一意化できず、テスト実行中に 1 度しか読み込めない（2 度目以降は
 ////    最初に読み込まれた BEAM が使われる）。
-//// 3. `file_logger.handle_event/1` は `/tmp` にファイルを書くため、読み込みの
+//// 3. `file_logger.handle_event/2` は `/tmp` にファイルを書くため、読み込みの
 ////    確認だけに使い、配信は行わない。
 
 import gleam/dynamic.{type Dynamic}
@@ -91,6 +91,23 @@ handle_event(Event) ->
 "
 }
 
+/// プラグイン固有の設定を受け取るプラグインの Erlang ソース。`plugin_children/1`
+/// は `path` が無ければ `{error, Reason}` で設定を拒否し、揃っていれば受け取った
+/// 設定 map を `persistent_term` へ退避して空のリストを返す。**`handle_event/1`
+/// はエクスポートしない**（`examples/plugins/file_logger` と同じ形）。
+pub fn config_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_children/1, handle_event/2]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_children(Config = #{<<\"path\">> := _}) ->
+    persistent_term:put(?MODULE, Config),
+    [];
+plugin_children(_Config) -> {error, <<\"path is required\">>}.
+handle_event(_Event, _Config) -> ok.
+"
+}
+
 /// `plugin_children/0` が API に合わない子仕様（`id` 無し）を返すプラグインの
 /// Erlang ソース。
 pub fn bad_children_source(module: String, name: String) -> String {
@@ -114,6 +131,16 @@ value() -> " <> int.to_string(value) <> ".
 
 /// `handle_event/1` が退避したイベント map を読み出す。
 pub fn last_event(module: String) -> Dynamic {
+  saved(module)
+}
+
+/// `plugin_children/1` が退避した設定 map を読み出す。
+pub fn last_config(module: String) -> Dynamic {
+  saved(module)
+}
+
+/// fixture がモジュール名の atom をキーに退避した値。
+fn saved(module: String) -> Dynamic {
   persistent_term_get(atom.create(module))
 }
 

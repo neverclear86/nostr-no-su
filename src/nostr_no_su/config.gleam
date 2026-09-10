@@ -1,4 +1,5 @@
 import envoy
+import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -6,6 +7,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
+import nostr_no_su/plugin_config
 
 const default_relay_url = "wss://relay.damus.io"
 
@@ -37,6 +39,10 @@ pub type Config {
     bunker_secret: Option(String),
     database_url: Option(String),
     plugin_dir: Option(String),
+    /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
+    /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
+    /// 絞り込んだままの形で持つ。
+    plugin_env: Dict(String, String),
     admin_port: AdminPort,
     admin_bind: String,
     admin_password: Option(String),
@@ -63,6 +69,7 @@ pub fn load() -> Config {
     bunker_secret: optional("BUNKER_SECRET"),
     database_url: optional("DATABASE_URL"),
     plugin_dir: optional("PLUGIN_DIR"),
+    plugin_env: plugin_env(),
     admin_port: admin_port(),
     admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
     admin_password: optional("ADMIN_PASSWORD"),
@@ -102,6 +109,17 @@ fn optional(name: String) -> Option(String) {
     Ok("") | Error(Nil) -> None
     Ok(value) -> Some(value)
   }
+}
+
+/// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。切り出しは
+/// `plugin_config.for_plugin` が行うので、ここでは接頭辞での絞り込みと、
+/// 空文字列の除去だけを行う。空文字列を落とすのは `optional/1` と同じ理由で、
+/// docker compose が未設定の変数を空文字列として渡すためである。
+fn plugin_env() -> Dict(String, String) {
+  envoy.all()
+  |> dict.filter(fn(name, value) {
+    string.starts_with(name, plugin_config.env_prefix) && value != ""
+  })
 }
 
 /// 管理 UI の待ち受けポート。未設定なら既定ポートを使う。他の任意設定と違い未設定
