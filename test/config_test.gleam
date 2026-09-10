@@ -1,4 +1,5 @@
 import envoy
+import gleam/dict
 import gleam/option.{None, Some}
 import nostr_no_su/config
 import nostr_no_su/nostr/filter.{Filter}
@@ -102,6 +103,28 @@ pub fn plugin_dir_test() {
     == Some("/plugins")
 }
 
+/// `PLUGIN_*` の環境変数だけが `plugin_env` に集まる。プラグインごとの切り出しは
+/// `plugin_config.for_plugin` の仕事なので、ここでは接頭辞での絞り込みしか行わない
+/// （`PLUGIN_DIR` もこの時点では残る）。
+pub fn plugin_env_test() {
+  let loaded =
+    config_with([
+      #("PLUGIN_FILE_LOGGER_PATH", "/tmp/events.log"),
+      #("RELAY_URL", "wss://example.com"),
+    ])
+  assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH")
+    == Ok("/tmp/events.log")
+  assert dict.get(loaded.plugin_env, "RELAY_URL") == Error(Nil)
+}
+
+/// 空文字列の `PLUGIN_*` は落とす。`optional/1` と同じ規則で、docker compose が
+/// 未設定の変数を空文字列として渡すため。これを通すと、設定の必須チェックが
+/// 空文字列を「設定されている」と読んでしまう。
+pub fn plugin_env_drops_empty_values_test() {
+  let loaded = config_with([#("PLUGIN_FILE_LOGGER_PATH", "")])
+  assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH") == Error(Nil)
+}
+
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_port_test() {
   assert config_without("ADMIN_PORT").admin_port == config.Listen(8080)
@@ -178,6 +201,7 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     bunker_secret: None,
     database_url: None,
     plugin_dir: None,
+    plugin_env: dict.new(),
     admin_port: config.Disabled,
     admin_bind: "127.0.0.1",
     admin_password: None,

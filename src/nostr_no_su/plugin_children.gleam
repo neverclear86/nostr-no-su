@@ -1,13 +1,31 @@
-//// 任意エクスポート `plugin_children/0` の検証と、スーパービジョンツリーの
-//// 子仕様への変換。
+//// 任意エクスポート `plugin_children/0` `plugin_children/1` の検証と、
+//// スーパービジョンツリーの子仕様への変換。
 ////
-//// **`plugin_children/0` は任意エクスポートであり、API バージョンは上げない。**
-//// 持たないプラグインは従来どおり子を持たないものとして読み込まれる。呼び出しは
+//// **どちらも任意エクスポートであり、API バージョンは上げない。** 持たない
+//// プラグインは従来どおり子を持たないものとして読み込まれる。呼び出しは
 //// `plugin.load` の中で起動時に 1 度だけ行う。返るのは MFA を含む純粋なデータで
 //// あってプロセスではないため、再起動のたびに問い合わせ直す必要がなく、ツリーを
-//// 起動時に組み立てる `static_supervisor` の前提と噛み合う。プラグイン固有の
-//// 設定を渡す必要が出たら、任意エクスポート `plugin_children/1` を足して存在
-//// すればそちらを優先する（必須エクスポートの集合は v1 のまま変わらない）。
+//// 起動時に組み立てる `static_supervisor` の前提と噛み合う。
+////
+//// **アリティの選び方。** `plugin_children/1` があればそちらを呼び、プラグイン
+//// 固有の設定 map（`plugin_config.to_map` の形）を渡す。無ければ
+//// `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない。判定は
+//// `plugin.gleam` が行い、このモジュールへは引数のリストとして渡ってくる
+//// （アリティはその長さから決まる）。
+////
+//// **`{error, Reason}` で設定を拒否できる。** 子仕様のリストの代わりに
+//// `{error, Reason :: binary()}` を返すと、「設定が足りない・不正なのでこの
+//// プラグインを読み込まないでほしい」という申告になる。判別子は**要素 0 が
+//// atom の `error` であること**だけで、要素数は見ない。**この判定はリストの
+//// デコードより先に行う**（Erlang の 2 要素タプルは `decode.list` で長さ 2 の
+//// リストとしてデコードされるため、後に回すと無関係な理由が出る）。
+////
+//// 子プロセスを持たないプラグインも、設定の検査だけのために
+//// `plugin_children/1` をエクスポートし、設定が揃っていれば `[]` を返してよい。
+//// その場合も本体が出す 1 行は
+//// `plugin_children/1 rejected the configuration (...)` になる。関数名が
+//// 「子仕様」と言っているのに設定の検査結果を報告する形になるが、これは設定が
+//// 子仕様を組み立てるために要るという設計判断の裏面である。
 ////
 //// **境界に置くのは OTP の `supervisor:child_spec()` の map であって、Gleam の
 //// レコードではない。** Gleam のレコードはランタイムではタグ付きタプルであり、
@@ -47,7 +65,8 @@
 ////   `InitFailed("shutdown")` に潰す）ため、id と生の理由を両方持っている
 ////   子ごとの start クロージャーだけが理由を運用者に届けられる。
 ////
-//// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` の第 5 章にある。
+//// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` の第 5 章と第 6 章に
+//// ある。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -63,6 +82,20 @@ import nostr_no_su/log
 
 /// 本体が問い合わせる任意エクスポートの名前。
 pub const export_name = "plugin_children"
+
+/// 子仕様が採れなかった理由。本体はこの 2 つを別々の 1 行に整える。
+pub type Rejection {
+  /// 戻り値の形が API に合わない（従来からの検証失敗）。
+  InvalidSpec(reason: String)
+  /// プラグイン自身が設定を受け付けなかった（`{error, Reason}`）。
+  ConfigRejected(reason: String)
+}
+
+/// 理由の文字列とログ行に出す `plugin_children/<アリティ>` という表記。本体側も
+/// 同じ表記を組み立てるため、1 か所にまとめて公開している。
+pub fn export_label(arity: Int) -> String {
+  export_name <> "/" <> int.to_string(arity)
+}
 
 /// worker の既定の shutdown（OTP と同じ）。
 const default_shutdown_ms = 5000
@@ -101,39 +134,91 @@ type Kind {
   Supervisor
 }
 
-/// モジュールの `plugin_children/0` を呼び、子仕様を検証して変換する。
+/// モジュールの `plugin_children/<アリティ>` を呼び、子仕様を検証して変換する。
 /// **`plugin.load` の必須エクスポート検証を通った後にだけ呼ぶこと。**
 /// `name` は `plugin_name/0` の値で、子の起動失敗を報告するログの接頭辞に使う。
+/// `args` は呼び出しの引数で、アリティはその長さから決まる（設定を渡す形なら
+/// 設定 map 1 つ、渡さない形なら空）。
 pub fn from_export(
   module: Atom,
   name: String,
-) -> Result(List(ChildSpecification(Pid)), String) {
-  case call_export(module, atom.create(export_name), []) {
-    Error(reason) -> Error(export_name <> "/0 crashed (" <> reason <> ")")
-    Ok(value) -> from_dynamic(value, name)
+  args: List(Dynamic),
+) -> Result(List(ChildSpecification(Pid)), Rejection) {
+  let arity = list.length(args)
+  case call_export(module, atom.create(export_name), args) {
+    Error(reason) ->
+      Error(InvalidSpec(export_label(arity) <> " crashed (" <> reason <> ")"))
+    Ok(value) -> from_dynamic(value, name, arity)
   }
 }
 
 /// 子仕様のリスト（Dynamic）を検証して変換する。最初に失敗したところで止め、
 /// その 1 行を返す。呼び出しを伴わない単体テストと、ツリー全体のテストが本番と
 /// 同じ経路を通るために公開している。
+///
+/// **`{error, Reason}` の判定はリストのデコードより先に行う。** Erlang の
+/// 2 要素タプルは `decode.list` で長さ 2 のリストとしてデコードされるため、
+/// 順序を逆にすると設定の拒否が「子仕様の形が違う」という無関係な理由になる。
 pub fn from_dynamic(
   value: Dynamic,
   name: String,
-) -> Result(List(ChildSpecification(Pid)), String) {
+  arity: Int,
+) -> Result(List(ChildSpecification(Pid)), Rejection) {
+  let label = export_label(arity)
+  case is_error_tuple(value) {
+    True -> Error(config_rejection(value, label))
+    False -> children(value, name, label)
+  }
+}
+
+/// 戻り値が設定の拒否（`{error, Reason}`）かどうか。**判別子は要素 0 が atom の
+/// `error` であることだけ**で、要素数は見ない。要素数を条件に入れると
+/// `{error, A, B}` の扱いを別途決めることになる。
+fn is_error_tuple(value: Dynamic) -> Bool {
+  case decode.run(value, decode.at([0], atom.decoder())) {
+    Ok(tag) -> atom.to_string(tag) == "error"
+    Error(_) -> False
+  }
+}
+
+/// `{error, Reason}` の理由を取り出す。理由が binary でなければ、設定の拒否では
+/// なく戻り値の形の誤りとして報告する。
+fn config_rejection(value: Dynamic, label: String) -> Rejection {
+  case decode.run(value, decode.at([1], decode.dynamic)) {
+    Error(_) ->
+      InvalidSpec(label <> ": error reason must be a String, got nothing")
+    Ok(reason) ->
+      case decode.run(reason, decode.string) {
+        Ok(text) -> ConfigRejected(text)
+        Error(_) ->
+          InvalidSpec(
+            label
+            <> ": error reason must be a String, got "
+            <> dynamic.classify(reason),
+          )
+      }
+  }
+}
+
+/// 子仕様のリストを検証して変換する。
+fn children(
+  value: Dynamic,
+  name: String,
+  label: String,
+) -> Result(List(ChildSpecification(Pid)), Rejection) {
   use raw <- result.try(
     decode.run(value, decode.list(decode.dynamic))
-    |> result.replace_error(
-      export_name
-      <> "/0 must return a list of child specification maps, got "
+    |> result.replace_error(InvalidSpec(
+      label
+      <> " must return a list of child specification maps, got "
       <> dynamic.classify(value),
-    ),
+    )),
   )
   raw
   |> list.index_map(fn(child, index) { #(child, index) })
   |> list.try_map(fn(pair) {
     spec(pair.0, pair.1)
-    |> result.map_error(fn(reason) { export_name <> "/0: " <> reason })
+    |> result.map_error(fn(reason) { InvalidSpec(label <> ": " <> reason) })
   })
   |> result.map(list.map(_, to_child(_, name)))
 }

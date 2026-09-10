@@ -7,6 +7,7 @@
 //// 壊れた BEAM を読ませるテストは error_logger の行を出す。これは検証したい
 //// 振る舞いそのものなので、そのまま出している。
 
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
@@ -14,6 +15,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import support/beam_fixture.{type Fixture}
 
@@ -58,7 +60,7 @@ fn put_plugin(module: String, name: String, outdir: String) -> Nil {
 
 /// `PLUGIN_DIR` が未設定なら、プラグインは 0 件で「無効」の行だけが出る。
 pub fn load_all_without_plugin_dir_test() {
-  let #(plugins, notes) = plugin_loader.load_all(None, [])
+  let #(plugins, notes) = plugin_loader.load_all(None, [], dict.new())
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "no PLUGIN_DIR set")
@@ -68,7 +70,7 @@ pub fn load_all_without_plugin_dir_test() {
 pub fn load_all_missing_directory_test() {
   let fixture = beam_fixture.new("missing")
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root <> "/nope"), [])
+    plugin_loader.load_all(Some(fixture.root <> "/nope"), [], dict.new())
   assert plugins == []
   assert has_note(notes, "cannot read directory (enoent)")
   assert has_note(notes, "external plugins disabled")
@@ -79,7 +81,7 @@ pub fn load_all_not_a_directory_test() {
   let fixture = beam_fixture.new("not_a_dir")
   let path = fixture.root <> "/file.txt"
   beam_fixture.write(path, "not a directory")
-  let #(plugins, notes) = plugin_loader.load_all(Some(path), [])
+  let #(plugins, notes) = plugin_loader.load_all(Some(path), [], dict.new())
   assert plugins == []
   assert has_note(notes, "cannot read directory (enotdir)")
 }
@@ -88,7 +90,8 @@ pub fn load_all_not_a_directory_test() {
 pub fn load_all_flat_beam_test() {
   let fixture = beam_fixture.new("flat")
   put_plugin(fixture.module, "flat_plugin", fixture.root)
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "flat_plugin"
   assert has_note(notes, "loaded 1 plugin(s) from")
@@ -102,7 +105,8 @@ pub fn load_all_bundle_ebin_test() {
     "bundle_plugin",
     ebin_in(fixture, [fixture.module]),
   )
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "bundle_plugin"
 }
@@ -113,7 +117,8 @@ pub fn load_all_shipment_layout_test() {
   let fixture = beam_fixture.new("shipment")
   let ebin = ebin_in(fixture, [fixture.module, "some_app"])
   put_plugin(fixture.module, "shipment_plugin", ebin)
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "shipment_plugin"
 }
@@ -126,7 +131,8 @@ pub fn load_all_broken_beam_test() {
   let good = beam_fixture.name(fixture, "bbb")
   beam_fixture.write_garbage(fixture.root <> "/" <> broken <> ".beam")
   put_plugin(good, "survivor_plugin", fixture.root)
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "cannot load module (badfile)")
@@ -141,7 +147,8 @@ pub fn load_all_api_mismatch_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert plugins == []
   assert has_note(notes, "unsupported api version 2")
 }
@@ -151,7 +158,8 @@ pub fn load_all_directory_without_ebin_test() {
   let fixture = beam_fixture.new("no_ebin")
   let bundle = beam_fixture.name(fixture, "empty")
   beam_fixture.mkdir(fixture.root <> "/" <> bundle)
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert plugins == []
   assert has_note(notes, "no ebin directory found")
   assert has_note(notes, bundle <> "/ebin or " <> bundle <> "/*/ebin")
@@ -163,7 +171,8 @@ pub fn load_all_ignores_non_plugin_entries_test() {
   let fixture = beam_fixture.new("junk")
   beam_fixture.write(fixture.root <> "/.gitkeep", "")
   beam_fixture.write(fixture.root <> "/README.md", "# plugins")
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "loaded no plugins from")
@@ -177,7 +186,8 @@ pub fn load_all_duplicate_name_test() {
   let second = beam_fixture.name(fixture, "bbb")
   put_plugin(first, "same_name", fixture.root)
   put_plugin(second, "same_name", fixture.root)
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "same_name"
   assert has_note(notes, second <> ": duplicate plugin name \"same_name\"")
@@ -190,7 +200,7 @@ pub fn load_all_rejects_reserved_name_test() {
   let fixture = beam_fixture.new("reserved")
   put_plugin(fixture.module, "console_logger", fixture.root)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), ["console_logger"])
+    plugin_loader.load_all(Some(fixture.root), ["console_logger"], dict.new())
   assert plugins == []
   assert has_note(notes, "duplicate plugin name \"console_logger\"")
 }
@@ -204,7 +214,8 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
   let ebin = ebin_in(fixture, ["minimal_plugin"])
   let unrelated = beam_fixture.name(fixture, "unrelated")
   beam_fixture.compile(beam_fixture.value_source(unrelated, 1), unrelated, ebin)
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert plugins == []
   assert has_note(
     notes,
@@ -223,7 +234,8 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
 pub fn load_all_skips_shadowed_entry_module_flat_test() {
   let fixture = beam_fixture.new("shadow_flat")
   beam_fixture.write_garbage(fixture.root <> "/minimal_plugin.beam")
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert plugins == []
   assert has_note(
     notes,
@@ -251,7 +263,8 @@ pub fn load_all_reports_shadowed_modules_test() {
     second_ebin,
   )
 
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   assert list.map(plugins, fn(item) { item.name })
     == ["first_plugin", "second_plugin"]
   assert has_note(notes, second <> ": 1 module(s) already provided")
@@ -269,25 +282,100 @@ pub fn load_all_reports_shadowed_modules_test() {
 pub fn load_all_dispatches_event_test() {
   let fixture = beam_fixture.new("dispatch")
   put_plugin(fixture.module, "dispatch_plugin", fixture.root)
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   loaded.handle(sample_event())
   assert event.from_map(beam_fixture.last_event(fixture.module))
     == Ok(sample_event())
 }
 
-/// 同梱の例（`examples/plugins/file_logger`）が読み込めることを確かめる。
-/// gleam のビルド対象外であること（コードパスを足さなければ読めないこと）も
-/// 同時に示している。`handle_event/1` は `/tmp` にファイルを書くため呼ばない。
+/// 同梱の例（`examples/plugins/file_logger`）が、設定を与えれば読み込めること
+/// を確かめる。gleam のビルド対象外であること（コードパスを足さなければ読めない
+/// こと）も同時に示している。`handle_event/2` は `/tmp` にファイルを書くため
+/// 呼ばない。
+///
+/// 設定が足りない場合の検証も**このテストの中で**行う。`file_logger` は
+/// モジュール名が固定で一意化できず、2 回目の `load_all` はエントリーが影に
+/// 入って「already provided by the host or another plugin」で飛ばされるため、
+/// 2 回目は `plugin.load` を直接呼ぶ。
 pub fn load_all_example_plugin_test() {
   let fixture = beam_fixture.new("example")
   beam_fixture.compile_file(
     "examples/plugins/file_logger/src/file_logger.erl",
     fixture.root,
   )
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.from_list([
+        #("PLUGIN_FILE_LOGGER_PATH", "/tmp/nostr-no-su-events.log"),
+      ]),
+    )
   let assert [loaded] = plugins
   assert loaded.name == "file_logger"
+
+  let assert Error(reason) = plugin.load(atom.create("file_logger"), dict.new())
+  assert string.contains(
+    reason,
+    "plugin_children/1 rejected the configuration (path is required); "
+      <> "設定は PLUGIN_FILE_LOGGER_* で渡す",
+  )
+}
+
+/// プラグイン固有の設定は `plugin.load` まで届き、接頭辞を取り除いた小文字の
+/// キーになる。他のプラグイン向けの変数と `PLUGIN_DIR` は混ざらない。
+pub fn load_all_passes_config_test() {
+  let fixture = beam_fixture.new("config")
+  beam_fixture.compile(
+    beam_fixture.config_source(fixture.module, "config_plugin"),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.from_list([
+        #("PLUGIN_CONFIG_PLUGIN_PATH", "/tmp/events.log"),
+        #("PLUGIN_OTHER_PLUGIN_PATH", "/tmp/other.log"),
+        #("PLUGIN_DIR", fixture.root),
+      ]),
+    )
+  let assert [_loaded] = plugins
+  assert decode.run(
+      beam_fixture.last_config(fixture.module),
+      decode.dict(decode.string, decode.string),
+    )
+    == Ok(dict.from_list([#("path", "/tmp/events.log")]))
+}
+
+/// 設定が足りないプラグインは読み込まれず、理由が 1 行出る。同じディレクトリーの
+/// 他のプラグインは読み込まれ、集計行に飛ばした件数が出る。
+pub fn load_all_rejected_config_test() {
+  let fixture = beam_fixture.new("rejected_config")
+  let good = beam_fixture.name(fixture, "good_config")
+  beam_fixture.compile(
+    beam_fixture.config_source(fixture.module, "rejected_config_plugin"),
+    fixture.module,
+    ebin_in(fixture, [fixture.module]),
+  )
+  beam_fixture.compile(
+    beam_fixture.plugin_source(good, 1, "good_config_plugin"),
+    good,
+    ebin_in(fixture, [good]),
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+  let assert [loaded] = plugins
+  assert loaded.name == "good_config_plugin"
+  assert has_note(
+    notes,
+    "plugin_children/1 rejected the configuration (path is required); "
+      <> "設定は PLUGIN_REJECTED_CONFIG_PLUGIN_* で渡す",
+  )
+  assert has_note(notes, "(1 skipped)")
 }
 
 /// 同梱の例（`examples/plugins/counter`）が読み込め、申告した子仕様が解決される
@@ -301,7 +389,8 @@ pub fn load_all_counter_example_test() {
     "examples/plugins/counter/src/counter.erl",
     fixture.root,
   )
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "counter"
   assert list.length(loaded.children) == 1
@@ -319,7 +408,8 @@ pub fn load_all_plugin_with_children_test() {
     fixture.module,
     ebin_in(fixture, [fixture.module]),
   )
-  let #(plugins, _notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, _notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert list.length(loaded.children) == 1
 }
@@ -339,7 +429,8 @@ pub fn load_all_bad_children_test() {
     good,
     ebin_in(fixture, [good]),
   )
-  let #(plugins, notes) = plugin_loader.load_all(Some(fixture.root), [])
+  let #(plugins, notes) =
+    plugin_loader.load_all(Some(fixture.root), [], dict.new())
   let assert [loaded] = plugins
   assert loaded.name == "good_children_plugin"
   assert has_note(notes, "plugin_children/0: child #0: missing id")

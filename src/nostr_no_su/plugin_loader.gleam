@@ -22,13 +22,18 @@
 ////
 //// **順序。** 読み込みはモジュール名の昇順で行い、`file:list_dir/1` の不定な
 //// 順序に依存しない。ただしコードパスへ足す順序だけは別で、ルート直下の
-//// `.beam` が名前順に関係なく常にバンドルより先に入る。なお `handle_event/1` の
+//// `.beam` が名前順に関係なく常にバンドルより先に入る。なおイベント処理関数の
 //// 実行順はこれとは無関係である。プラグインはそれぞれ独立したランナープロセスで
 //// 動くため、プラグイン間の実行順序は保証されない（`plugin_runner`）。
+////
+//// **プラグイン固有の設定はここでは切り出さない。** ローダーは `PLUGIN_*` の
+//// 環境変数をそのまま `plugin.load` へ渡すだけで、接頭辞の規則を知らない。
+//// 切り出しはプラグイン名が確定した後（`plugin.load` の中）で行われる。
 ////
 //// **読み込みの失敗で起動を止めない。** 理由を 1 行ログに出して、そのプラグイン
 //// だけを無効にする。
 
+import gleam/dict.{type Dict}
 import gleam/erlang/atom.{type Atom}
 import gleam/int
 import gleam/list
@@ -51,26 +56,34 @@ const shadow_sample_size = 3
 /// `reserved` には内蔵プラグインの名前を渡す。プラグイン名はダッシュボードと
 /// ログの識別子なので、内蔵と衝突する外部プラグインもここで弾く。
 ///
-/// `Plugin` は任意エクスポート `plugin_children/0` から解決した子仕様
-/// （`children`）を持って返る。モジュール atom は `Plugin` に載せない（任意
+/// `plugin_env` には `PLUGIN_*` の環境変数（`config.plugin_env`）を渡す。走査・
+/// コードパス・影の判定には一切関与せず、`plugin.load` へそのまま渡すだけである。
+///
+/// `Plugin` は任意エクスポート `plugin_children/0` `plugin_children/1` から
+/// 解決した子仕様（`children`）を持って返る。モジュール atom は `Plugin` に載せない（任意
 /// エクスポートの問い合わせは、atom がまだ手元にある `plugin.load` の中で
 /// 済ませる）。子仕様が API に合わないモジュールは `plugin.load` が弾くので、
 /// ここでの扱いは他の検証失敗と同じ 1 行の報告になる。
 pub fn load_all(
   plugin_dir: Option(String),
   reserved: List(String),
+  plugin_env: Dict(String, String),
 ) -> #(List(Plugin), List(String)) {
   case plugin_dir {
     None -> #([], [
       log.line(log_prefix, "no PLUGIN_DIR set; external plugins disabled"),
     ])
-    Some(raw) -> scan(absolute_path(raw), reserved)
+    Some(raw) -> scan(absolute_path(raw), reserved, plugin_env)
   }
 }
 
 /// 正規化済みのディレクトリーを走査して読み込む。ディレクトリーそのものが読め
 /// なければ、理由を 1 行報告して読み込みを無効にする（起動は続く）。
-fn scan(dir: String, reserved: List(String)) -> #(List(Plugin), List(String)) {
+fn scan(
+  dir: String,
+  reserved: List(String),
+  plugin_env: Dict(String, String),
+) -> #(List(Plugin), List(String)) {
   case list_dir(dir) {
     Error(reason) -> #([], [
       log.line(
@@ -90,7 +103,8 @@ fn scan(dir: String, reserved: List(String)) -> #(List(Plugin), List(String)) {
         list.append(flat_modules, bundle_modules)
         |> list.sort(string.compare)
         |> list.unique
-      let #(plugins, load_notes) = load_candidates(modules, reserved)
+      let #(plugins, load_notes) =
+        load_candidates(modules, reserved, plugin_env)
       #(
         plugins,
         list.flatten([
@@ -328,6 +342,7 @@ fn entry_available(module: String) -> Bool {
 fn load_candidates(
   modules: List(String),
   reserved: List(String),
+  plugin_env: Dict(String, String),
 ) -> #(List(Plugin), List(String)) {
   let #(plugins, notes) =
     list.fold(
@@ -335,7 +350,7 @@ fn load_candidates(
       #([], []),
       fn(acc: #(List(Plugin), List(String)), module) {
         let #(plugins, notes) = acc
-        case plugin.load(atom.create(module)) {
+        case plugin.load(atom.create(module), plugin_env) {
           Error(reason) -> #(plugins, [log.line(log_prefix, reason), ..notes])
           Ok(loaded) -> {
             let taken =

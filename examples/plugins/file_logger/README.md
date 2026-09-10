@@ -1,6 +1,6 @@
 # file_logger
 
-プラグインローダーの動作確認に使う最小のプラグイン。受信したイベントを 1 件 1 行でファイルへ追記する。
+プラグインローダーの動作確認に使う最小のプラグイン。受信したイベントを 1 件 1 行でファイルへ追記する。プラグイン固有の設定を受け取る例でもある。
 
 Gleam プロジェクトにせず Erlang 1 ファイルにしているのは、ネストしたビルドディレクトリーと依存管理を本体のリポジトリーへ持ち込まないためである。`examples/` に置いてあるので、`gleam build` / `gleam test` のコンパイル対象にもならない。
 
@@ -36,9 +36,21 @@ plugins/file_logger/ebin/file_logger.beam
 [plugin_loader] loaded 1 plugin(s) from /plugins: file_logger
 ```
 
-## 出力
+## 設定
 
-既定の出力先は `/tmp/nostr-no-su-events.log`（プラグインディレクトリーは読み取り専用なのでそこには書けない）。`FILE_LOGGER_PATH` で変更できる。
+出力先は **`PLUGIN_FILE_LOGGER_PATH` で必ず指定する**（[プラグイン API v1](../../../docs/plugin-api.md) の第 6 章）。プラグイン側に既定値は持たせず、同梱の `docker-compose.yml` が `/tmp/nostr-no-su-events.log` を渡している。**プラグインディレクトリーは読み取り専用でマウントされるので、そこには書けない。** コンテナーの `/tmp` は実行ユーザー（uid 1000）が書ける。
+
+設定が無いとこのプラグインだけが無効になり、理由が 1 行出る。本体の起動と他のプラグインには影響しない。
+
+```
+[plugin_loader] file_logger: plugin_children/1 rejected the configuration (path is required); 設定は PLUGIN_FILE_LOGGER_* で渡す
+```
+
+エクスポートしているのは `handle_event/2` だけで、`handle_event/1` は持たない。設定が必須のプラグインは、設定を受け取らない `handle_event/1` を正しく書けないためである（既定値に落とすか、落ちるだけの死んだ節を書くしかない）。その代わり、**このプラグインは `handle_event/2` に対応した本体でしか読み込めない。**
+
+子プロセスは持たないが、設定の検査のために `plugin_children/1` をエクスポートし、設定が揃っていれば空のリストを返している。
+
+## 出力
 
 ```sh
 docker compose exec nostr-no-su cat /tmp/nostr-no-su-events.log

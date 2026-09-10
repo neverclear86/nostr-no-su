@@ -2,19 +2,36 @@
 ////
 //// v1 の要点:
 ////
-//// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`・
-////   `handle_event/1` の 3 つを必ずエクスポートする。それ以外のエクスポートは
-////   すべて任意で、あっても無くても読み込み判定に影響しない。
-//// - `handle_event/1` が受け取るイベントは **binary キーの Erlang map**
+//// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`
+////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
+////   エクスポートする。それ以外のエクスポートはすべて任意で、あっても無くても
+////   読み込み判定に影響しない。
+//// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
-//// - 任意エクスポート `plugin_children/0` があれば、そのプラグインが自分で
-////   起こしたいプロセスの子仕様（OTP の map）を申告できる。検証と変換は
-////   `plugin_children` が行い、結果は `Plugin.children` に載る。検証の順序は
-////   `plugin_api_version` → `plugin_name` → `plugin_children` で、最初に失敗した
-////   ところで止まる。プラグイン固有の設定を渡す必要が出たら、任意エクスポート
-////   `plugin_children/1` を足して存在すればそちらを優先する（必須エクスポートの
-////   集合は変わらないので API バージョンは上げない）。
-//// - `handle_event/1` はイベント 1 件ごとに作られる使い捨てのプロセスで動く
+//// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
+////   いう 1 つの規則で足す。** 設定は環境変数 `PLUGIN_<NAME>_<KEY>` から
+////   `plugin_config` が切り出した binary キーの map で、`plugin_children/1` と
+////   `handle_event/2` が第 1・第 2 引数として受け取る。どちらも `/0` `/1` が
+////   あればそちらでも動くので、既存のプラグインは無変更で読み込まれる。
+//// - **`handle_event` だけは必須側のアリティが 2 通りになる。** 設定が必須の
+////   プラグインは `handle_event/1` を正しく書けない（設定が無いのだから既定値に
+////   落とすか、落ちるだけの死んだ節を書くしかない）ため、`/1` または `/2` の
+////   どちらか一方があればよいことにしている。**これは破壊的変更にあたらない。**
+////   `handle_event/1` を持つ既存プラグインは 1 つも落ちず、必須エクスポートの
+////   削除でもアリティの変更でもないので、**API バージョンは 1 のまま**である。
+////   両方あれば `/2` を優先する。判定は**読み込み時に 1 度だけ**行い、設定 map
+////   ごとクロージャーに捕捉するので、イベントごとのコストは増えない。
+//// - 任意エクスポート `plugin_children/0` `plugin_children/1` があれば、その
+////   プラグインが自分で起こしたいプロセスの子仕様（OTP の map）を申告できる。
+////   `/1` があればそちらを優先し、設定 map を渡す。検証と変換は
+////   `plugin_children` が行い、結果は `Plugin.children` に載る。子仕様の代わりに
+////   `{error, Reason}` を返すと「設定が足りないので読み込まないでほしい」という
+////   申告になり、そのプラグインだけが無効になる。
+//// - 検証の順序は `plugin_api_version` → `plugin_name` → 設定の切り出し →
+////   `plugin_children` で、最初に失敗したところで止まる。**設定の切り出しは
+////   `plugin_name/0` の後にしかできない**（環境変数の接頭辞がプラグイン名から
+////   決まるため）。
+//// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
 ////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
 ////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
 ////   なく終了理由を短い 1 行に整えることである。隔離そのものはプロセスの境界が
@@ -27,6 +44,7 @@
 //// モジュールの担当ではない。ここが持つのは「モジュール 1 つを検証して `Plugin`
 //// にする」ところまでで、`code:ensure_loaded/1` は検証と不可分なのでここに含める。
 
+import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
@@ -37,10 +55,14 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
+import nostr_no_su/plugin_config
 
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
 pub const api_version: Int = 1
+
+/// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
+const handle_event_name = "handle_event"
 
 /// プラグインは監視対象アカウントから受信したすべてのイベントを処理する。
 /// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
@@ -78,7 +100,11 @@ pub fn has_export(module: Atom, name: String, arity: Int) -> Bool {
 
 /// モジュールを読み込み、プラグイン API v1 を満たすことを検証して `Plugin` に
 /// する。失敗理由は先頭にモジュール名を付けた 1 行で、そのままログに出せる。
-pub fn load(module: Atom) -> Result(Plugin, String) {
+///
+/// `env` は `PLUGIN_*` の環境変数全体（`config.plugin_env`）で、プラグイン名が
+/// 決まった時点でそのプラグインぶんだけを切り出す。切り出し済みの map を渡せない
+/// のは、接頭辞の元になるプラグイン名がこの関数の中でしか分からないためである。
+pub fn load(module: Atom, env: Dict(String, String)) -> Result(Plugin, String) {
   let name = atom.to_string(module)
   use _ <- result.try(
     ensure_module_loaded(module)
@@ -86,40 +112,70 @@ pub fn load(module: Atom) -> Result(Plugin, String) {
       prefix(name, "cannot load module (" <> reason <> ")")
     }),
   )
-  use _ <- result.try(require_exports(module, name))
+  // `has_export` はイベントごとではなく読み込み時に 1 度だけ呼ぶ。必須エクスポート
+  // の判定と、下のクロージャーが渡す引数の決定の両方でこの値を使う。
+  let takes_config = has_export(module, handle_event_name, 2)
+  use _ <- result.try(require_exports(module, name, takes_config))
   use _ <- result.try(check_api_version(module, name))
   use plugin_name <- result.try(read_plugin_name(module, name))
-  use children <- result.try(read_children(module, name, plugin_name))
+  let config_map =
+    plugin_config.to_map(plugin_config.for_plugin(env, plugin_name))
+  use children <- result.try(read_children(
+    module,
+    name,
+    plugin_name,
+    config_map,
+  ))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
-  let handle_event = atom.create("handle_event")
+  let handle_event = atom.create(handle_event_name)
+  let args = case takes_config {
+    True -> fn(event_map) { [event_map, config_map] }
+    False -> fn(event_map) { [event_map] }
+  }
   Ok(
     Plugin(name: plugin_name, children: children, handle: fn(incoming) {
       // 戻り値はプラグインが自由に決めてよいので捨てる。例外はここで捕まえず、
       // ワーカープロセス側（`plugin_runner`）が短い理由に整えて観測する。
-      let _ = apply(module, handle_event, [event.to_map(incoming)])
+      let _ = apply(module, handle_event, args(event.to_map(incoming)))
       Nil
     }),
   )
 }
 
 /// 必須エクスポートの存在を宣言順に確かめ、最初に欠けたものを報告する。
-fn require_exports(module: Atom, name: String) -> Result(Nil, String) {
-  let required = [
-    #("plugin_api_version", 0),
-    #("plugin_name", 0),
-    #("handle_event", 1),
-  ]
-  list.try_each(required, fn(export) {
-    let #(function, arity) = export
-    case has_export(module, function, arity) {
-      True -> Ok(Nil)
-      False ->
-        Error(prefix(
-          name,
-          "missing export " <> function <> "/" <> int.to_string(arity),
-        ))
-    }
-  })
+/// イベント処理関数だけは `handle_event/1` **または** `handle_event/2` の
+/// どちらか一方があればよい（`takes_config` は `/2` の有無）。
+fn require_exports(
+  module: Atom,
+  name: String,
+  takes_config: Bool,
+) -> Result(Nil, String) {
+  let required = [#("plugin_api_version", 0), #("plugin_name", 0)]
+  use _ <- result.try(
+    list.try_each(required, fn(export) {
+      let #(function, arity) = export
+      case has_export(module, function, arity) {
+        True -> Ok(Nil)
+        False ->
+          Error(prefix(
+            name,
+            "missing export " <> function <> "/" <> int.to_string(arity),
+          ))
+      }
+    }),
+  )
+  case takes_config || has_export(module, handle_event_name, 1) {
+    True -> Ok(Nil)
+    False ->
+      Error(prefix(
+        name,
+        "missing export "
+          <> handle_event_name
+          <> "/1 or "
+          <> handle_event_name
+          <> "/2",
+      ))
+  }
 }
 
 /// `plugin_api_version/0` を呼び、Int であることと `api_version` と一致すること
@@ -163,22 +219,52 @@ fn read_plugin_name(module: Atom, name: String) -> Result(String, String) {
   }
 }
 
-/// 任意エクスポート `plugin_children/0` があれば呼び、子仕様を検証する。
-/// エクスポートが無いプラグインは子を持たない（エラーにしない）。API に合わない
-/// 子仕様は、必須エクスポートの不備と同じく**そのプラグインを読み込まない**理由に
-/// なる。子だけ捨てて読み込むと、ランナーが起動して宛先を失った `handle_event/1`
-/// が 5 件後に `disabled` になり、運用者が見る症状が真の原因から離れる。
+/// 任意エクスポート `plugin_children/1` か `plugin_children/0` があれば呼び、
+/// 子仕様を検証する。**`/1` を優先し、設定 map を渡す。** エクスポートが無い
+/// プラグインは子を持たない（エラーにしない）。API に合わない子仕様は、必須
+/// エクスポートの不備と同じく**そのプラグインを読み込まない**理由になる。子だけ
+/// 捨てて読み込むと、ランナーが起動して宛先を失ったイベント処理関数が 5 件後に
+/// `disabled` になり、運用者が見る症状が真の原因から離れる。
 fn read_children(
   module: Atom,
   name: String,
   plugin_name: String,
+  config_map: Dynamic,
 ) -> Result(List(ChildSpecification(Pid)), String) {
-  case has_export(module, plugin_children.export_name, 0) {
-    False -> Ok([])
-    True ->
-      plugin_children.from_export(module, plugin_name)
-      |> result.map_error(prefix(name, _))
+  let export = plugin_children.export_name
+  case has_export(module, export, 1), has_export(module, export, 0) {
+    // 任意エクスポートを 1 つも持たないプラグインは子を持たない。ここで
+    // 問い合わせると `call_export` が `undef` になる。
+    False, False -> Ok([])
+    True, _ -> children(module, name, plugin_name, [config_map])
+    False, True -> children(module, name, plugin_name, [])
   }
+}
+
+/// `plugin_children` を呼び、失敗を 1 行の理由に整える。設定の拒否のときだけ、
+/// 運用者がそのまま `grep` や compose の編集に使えるよう環境変数の接頭辞を添える。
+fn children(
+  module: Atom,
+  name: String,
+  plugin_name: String,
+  args: List(Dynamic),
+) -> Result(List(ChildSpecification(Pid)), String) {
+  plugin_children.from_export(module, plugin_name, args)
+  |> result.map_error(fn(rejection) {
+    case rejection {
+      plugin_children.InvalidSpec(reason) -> prefix(name, reason)
+      plugin_children.ConfigRejected(reason) ->
+        prefix(
+          name,
+          plugin_children.export_label(list.length(args))
+            <> " rejected the configuration ("
+            <> reason
+            <> "); 設定は "
+            <> plugin_config.prefix(plugin_name)
+            <> "* で渡す",
+        )
+    }
+  })
 }
 
 /// メタデータ用のエクスポートを引数なしで呼ぶ。壊れたモジュールが本体の起動を
