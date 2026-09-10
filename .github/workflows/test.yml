@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       # 統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が設定されている
-      # ときだけ postgres_logger のテストが実行される。
+      # ときだけ event_logger のテストが実行される。
       postgres:
         image: postgres:17-alpine
         env:

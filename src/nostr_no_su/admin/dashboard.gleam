@@ -53,7 +53,7 @@ pub type Snapshot {
     relays: List(RelayRow),
     sessions: List(Session),
     plugins: List(String),
-    storage_enabled: Bool,
+    event_logger_enabled: Bool,
   )
 }
 
@@ -65,7 +65,7 @@ pub fn render(snapshot: Snapshot) -> String {
     relays_section(snapshot.relays),
     sessions_section(snapshot.sessions),
     plugins_section(snapshot.plugins),
-    storage_section(snapshot.storage_enabled),
+    event_logger_section(snapshot.event_logger_enabled),
   ])
 }
 
@@ -171,9 +171,9 @@ fn plugins_section(plugins: List(String)) -> String {
   )
 }
 
-/// Postgres へのイベント保存が有効かどうか。
-fn storage_section(enabled: Bool) -> String {
-  "<h2>Event storage</h2><p>Postgres logger: "
+/// イベントロガーによる保存が有効かどうか。
+fn event_logger_section(enabled: Bool) -> String {
+  "<h2>Event storage</h2><p>Event logger: "
   <> escape(enabled_label(enabled))
   <> "</p>"
 }

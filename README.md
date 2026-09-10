@@ -12,7 +12,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構、コンソールロガー
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
-- **Postgres ロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
+- **イベントロガー**: `DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントの接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインを確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
@@ -46,7 +46,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 ### 管理 UI
 
-起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードにはアカウント（署名者 pubkey と `bunker://` 接続 URI: secret 入りのものと、承認を経るもの）、承認待ちの接続要求（承認・拒否ボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインと Postgres 保存の有効／無効が並ぶ。
+起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードにはアカウント（署名者 pubkey と `bunker://` 接続 URI: secret 入りのものと、承認を経るもの）、承認待ちの接続要求（承認・拒否ボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインとイベントロガーの有効／無効が並ぶ。
 
 認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する。未設定なら起動ごとにランダム生成してログに出力する:
 
@@ -112,7 +112,7 @@ gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーの�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-Postgres ロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
+イベントロガーの統合テストは `TEST_DATABASE_URL` が設定されているときだけ実行される（未設定ならスキップして 1 行ログを出す）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -124,35 +124,35 @@ docker rm -f nns-pg-test
 ## 構成
 
 ```
-src/nostr_no_su.gleam                         -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
-src/nostr_no_su/app.gleam                     -- スーパービジョンツリーの構成
-src/nostr_no_su/admin.gleam                   -- 管理 UI の HTTP サーバー（wisp / mist）とルーティング
-src/nostr_no_su/admin/dashboard.gleam         -- ダッシュボードの描画（スナップショット → HTML の純粋関数）
-src/nostr_no_su/config.gleam                  -- 環境変数からの設定読み込み
-src/nostr_no_su/dedup.gleam                   -- リレー横断のイベント重複排除ディスパッチャー（actor）
-src/nostr_no_su/dedup/window.gleam            -- 直近のイベント id のスライディングウィンドウ（純粋）
-src/nostr_no_su/hex.gleam                     -- 16 進文字列とバイト列の相互変換
-src/nostr_no_su/log.gleam                     -- ログ 1 行の組み立て（接頭辞付き）
-src/nostr_no_su/named.gleam                   -- 名前付きアクターへの安全な送信・問い合わせ
-src/nostr_no_su/random.gleam                  -- 推測されては困る値のための乱数
-src/nostr_no_su/time.gleam                    -- 現在時刻 (FFI)
-src/nostr_no_su/crypto/secp256k1.gleam        -- 点演算・鍵導出・ECDH
-src/nostr_no_su/crypto/bip340.gleam           -- BIP-340 Schnorr 署名 / 検証
-src/nostr_no_su/crypto/nip44.gleam            -- NIP-44 v2 暗号化
-src/nostr_no_su/nostr/event.gleam             -- Event 型・コーデック・ID 計算・署名
-src/nostr_no_su/nostr/filter.gleam            -- 購読フィルター
-src/nostr_no_su/nostr/message.gleam           -- クライアント⇄リレーのメッセージ
-src/nostr_no_su/relay_client.gleam            -- WebSocket クライアント (stratus)
-src/nostr_no_su/relay_connection.gleam        -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
-src/nostr_no_su/bunker.gleam                  -- バンカーの actor（セッション状態を保持）
-src/nostr_no_su/bunker/engine.gleam           -- NIP-46 リクエスト処理の純粋コア
-src/nostr_no_su/bunker/rpc.gleam              -- JSON-RPC コーデック
-src/nostr_no_su/bunker/account.gleam          -- 鍵材料と bunker:// URI
-src/nostr_no_su/plugin.gleam                  -- プラグイン機構
-src/nostr_no_su/plugins/console_logger.gleam  -- コンソールロガープラグイン
-src/nostr_no_su/plugins/postgres_logger.gleam -- Postgres ロガープラグイン（保存 actor + スキーマ）
-src/nostr_no_su_ffi.erl                       -- OTP crypto への FFI
-vendor/stratus/                               -- パッチ済み stratus（下記参照）
+src/nostr_no_su.gleam                        -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
+src/nostr_no_su/app.gleam                    -- スーパービジョンツリーの構成
+src/nostr_no_su/admin.gleam                  -- 管理 UI の HTTP サーバー（wisp / mist）とルーティング
+src/nostr_no_su/admin/dashboard.gleam        -- ダッシュボードの描画（スナップショット → HTML の純粋関数）
+src/nostr_no_su/config.gleam                 -- 環境変数からの設定読み込み
+src/nostr_no_su/dedup.gleam                  -- リレー横断のイベント重複排除ディスパッチャー（actor）
+src/nostr_no_su/dedup/window.gleam           -- 直近のイベント id のスライディングウィンドウ（純粋）
+src/nostr_no_su/hex.gleam                    -- 16 進文字列とバイト列の相互変換
+src/nostr_no_su/log.gleam                    -- ログ 1 行の組み立て（接頭辞付き）
+src/nostr_no_su/named.gleam                  -- 名前付きアクターへの安全な送信・問い合わせ
+src/nostr_no_su/random.gleam                 -- 推測されては困る値のための乱数
+src/nostr_no_su/time.gleam                   -- 現在時刻 (FFI)
+src/nostr_no_su/crypto/secp256k1.gleam       -- 点演算・鍵導出・ECDH
+src/nostr_no_su/crypto/bip340.gleam          -- BIP-340 Schnorr 署名 / 検証
+src/nostr_no_su/crypto/nip44.gleam           -- NIP-44 v2 暗号化
+src/nostr_no_su/nostr/event.gleam            -- Event 型・コーデック・ID 計算・署名
+src/nostr_no_su/nostr/filter.gleam           -- 購読フィルター
+src/nostr_no_su/nostr/message.gleam          -- クライアント⇄リレーのメッセージ
+src/nostr_no_su/relay_client.gleam           -- WebSocket クライアント (stratus)
+src/nostr_no_su/relay_connection.gleam       -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
+src/nostr_no_su/bunker.gleam                 -- バンカーの actor（セッション状態を保持）
+src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の純粋コア
+src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
+src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
+src/nostr_no_su/plugin.gleam                 -- プラグイン機構
+src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
+src/nostr_no_su/plugins/event_logger.gleam   -- イベントロガープラグイン（Postgres へ保存する actor + スキーマ）
+src/nostr_no_su_ffi.erl                      -- OTP crypto への FFI
+vendor/stratus/                              -- パッチ済み stratus（下記参照）
 ```
 
 ## 設計上の判断・既知の制約
@@ -185,5 +185,5 @@ stratus 3.0.0 はハンドシェイクで `permessage-deflate` を必ずオフ�
 - [x] バンカーのマルチリレー対応（URI に複数 `relay=`、応答は全リレーへ発行）
 - [x] スーパービジョンツリー
 - [x] 管理 UI での接続承認（auth_url フロー）
-- [x] Postgres へイベントを保存するロガープラグイン
+- [x] イベントロガープラグイン（Postgres へ保存）
 - [x] 管理 UI（Gleam / wisp）

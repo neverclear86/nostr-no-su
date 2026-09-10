@@ -39,7 +39,7 @@ pub type Context {
     password: String,
     accounts: List(dashboard.AccountRow),
     plugins: List(String),
-    storage_enabled: Bool,
+    event_logger_enabled: Bool,
     relays: fn() -> List(dashboard.RelayRow),
     sessions: fn() -> List(Session),
     revoke: fn(String, String) -> Nil,
@@ -133,7 +133,7 @@ fn show_dashboard(context: Context, request: Request) -> Response {
     relays: context.relays(),
     sessions: context.sessions(),
     plugins: context.plugins,
-    storage_enabled: context.storage_enabled,
+    event_logger_enabled: context.event_logger_enabled,
   )
   |> dashboard.render
   |> wisp.html_response(200)

@@ -9,7 +9,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
-import nostr_no_su/plugins/postgres_logger
+import nostr_no_su/plugins/event_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
@@ -101,7 +101,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
         subscriptions: fn() { [] },
       ),
     ),
-    storage: None,
+    event_logger: None,
     admin: None,
     open: fake_open(reports),
     reconnect_delay_ms: 100,
@@ -406,7 +406,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
           subscriptions: fn() { [] },
         ),
       ),
-      storage: None,
+      event_logger: None,
       admin: None,
       open: fake_open(reports),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
@@ -447,7 +447,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
 pub fn monitoring_survives_an_unreachable_database_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
-  let logger = process.new_name("test_postgres_logger")
+  let logger = process.new_name("test_event_logger")
   let tree =
     start_tree(app.Spec(
       monitor: Some(
@@ -455,7 +455,7 @@ pub fn monitoring_survives_an_unreachable_database_test() {
           name: process.new_name("test_dedup"),
           plugins: [
             plugin.Plugin(name: "test", handle: process.send(seen, _)),
-            postgres_logger.new(logger),
+            event_logger.new(logger),
           ],
           dedup_capacity: 8,
           relays: [test_relay()],
@@ -463,7 +463,7 @@ pub fn monitoring_survives_an_unreachable_database_test() {
         ),
       ),
       bunker: None,
-      storage: Some(app.Storage(
+      event_logger: Some(app.EventLogger(
         name: logger,
         // 待ち受けのないポート。プールは起動するが接続はできない。
         pool_config: pog.default_config(process.new_name("test_pool"))
@@ -499,7 +499,7 @@ fn start_monitor_tree(
       ),
     ),
     bunker: None,
-    storage: None,
+    event_logger: None,
     admin: None,
     open: fake_open(reports),
     reconnect_delay_ms: 100,

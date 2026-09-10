@@ -13,7 +13,7 @@ import nostr_no_su/config.{type Config}
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/plugins/postgres_logger
+import nostr_no_su/plugins/event_logger
 import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/time
@@ -61,8 +61,8 @@ pub fn main() -> Nil {
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
 fn startup(loaded: Config) -> Startup {
-  let #(storage, storage_notes) = storage_spec(loaded)
-  let #(monitor, monitor_notes) = monitor_spec(loaded, storage)
+  let #(logger, logger_notes) = event_logger_spec(loaded)
+  let #(monitor, monitor_notes) = monitor_spec(loaded, logger)
   let #(accounts, account_notes) = load_accounts(loaded)
   let admin_accounts = dashboard_accounts(loaded, accounts)
   let #(bunker, bunker_notes) = bunker_spec(loaded, accounts, auth_url(loaded))
@@ -71,14 +71,14 @@ fn startup(loaded: Config) -> Startup {
     spec: app.Spec(
       monitor: monitor,
       bunker: bunker,
-      storage: storage,
+      event_logger: logger,
       admin: admin,
       open: app.open_websocket,
       reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
     ),
     notes: list.flatten([
       monitor_notes,
-      storage_notes,
+      logger_notes,
       account_notes,
       bunker_notes,
       uri_notes(admin_accounts),
@@ -102,30 +102,32 @@ fn relays(relay_urls: List(String)) -> List(app.Relay) {
 
 /// イベント保存サブツリーの仕様。`DATABASE_URL` が未設定、あるいは解釈できない
 /// ときは保存を無効にし、監視は従来どおり動かす。
-fn storage_spec(loaded: Config) -> #(Option(app.Storage), List(String)) {
+fn event_logger_spec(
+  loaded: Config,
+) -> #(Option(app.EventLogger), List(String)) {
   case loaded.database_url {
     None -> #(None, [
       log.line(
-        postgres_logger.log_prefix,
+        event_logger.log_prefix,
         "no DATABASE_URL set; event storage disabled",
       ),
     ])
     Some(database_url) ->
       case
         pog.url_config(
-          process.new_name("nostr_no_su_postgres_logger_pool"),
+          process.new_name("nostr_no_su_event_logger_pool"),
           database_url,
         )
       {
         Error(Nil) -> #(None, [
           log.line(
-            postgres_logger.log_prefix,
+            event_logger.log_prefix,
             "DATABASE_URL is not a valid postgres URL; event storage disabled",
           ),
         ])
         Ok(pool_config) -> #(
-          Some(app.Storage(
-            name: process.new_name("nostr_no_su_postgres_logger"),
+          Some(app.EventLogger(
+            name: process.new_name("nostr_no_su_event_logger"),
             // 書き込むのは保存アクター 1 つだけで逐次実行なので、接続は少なく
             // 保つ。既定の 10 本は DB 側の接続枠と idle ping を無駄に使う。
             pool_config: pog.pool_size(pool_config, 2),
@@ -139,7 +141,7 @@ fn storage_spec(loaded: Config) -> #(Option(app.Storage), List(String)) {
 /// 設定されたリレーの監視サブツリー。監視対象がなければ None。
 fn monitor_spec(
   loaded: Config,
-  storage: Option(app.Storage),
+  logger: Option(app.EventLogger),
 ) -> #(Option(app.Monitor), List(String)) {
   case loaded.relay_urls {
     [] -> #(None, [
@@ -149,7 +151,7 @@ fn monitor_spec(
       Some(
         app.Monitor(
           name: process.new_name("nostr_no_su_dedup"),
-          plugins: plugins(storage),
+          plugins: plugins(logger),
           dedup_capacity: dedup_capacity,
           relays: relays(relay_urls),
           subscriptions: fn() { [#("nostr-no-su", config.to_filter(loaded))] },
@@ -160,12 +162,12 @@ fn monitor_spec(
   }
 }
 
-/// 監視イベントを処理するプラグイン。保存が有効なときだけ Postgres ロガーを
+/// 監視イベントを処理するプラグイン。保存が有効なときだけイベントロガーを
 /// 足す。ロガーはアクターを名前で参照するので、アクターより先に組み立ててよい。
-fn plugins(storage: Option(app.Storage)) -> List(Plugin) {
-  case storage {
+fn plugins(logger: Option(app.EventLogger)) -> List(Plugin) {
+  case logger {
     None -> [console_logger.new()]
-    Some(storage) -> [console_logger.new(), postgres_logger.new(storage.name)]
+    Some(logger) -> [console_logger.new(), event_logger.new(logger.name)]
   }
 }
 
