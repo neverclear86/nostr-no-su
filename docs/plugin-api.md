@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、監視対象アカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）と `src/nostr_no_su/nostr/event.gleam`（イベント map の変換）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）にある。
 
 ## 1. 目的と信頼モデル
 
@@ -89,13 +89,82 @@ Nostr-no-Su は、監視対象アカウントのイベントを受け取るプ�
 
 イベント map への**キーの追加**は破壊的変更としない（第 3 章のとおり、知らないキーは無視すること）。
 
-## 6. 読み込まれない条件と理由の文字列
+## 6. 配置と読み込み
+
+本体は起動時に `PLUGIN_DIR` を 1 度だけ走査し、見つけたプラグインをコードパスへ足して読み込む。`PLUGIN_DIR` が未設定（空文字列を含む）なら外部プラグインの読み込みは行わない。
+
+### 6.1 受け付けるレイアウト
+
+置き方は次の 3 つである。`<name>` はプラグインの名前で、**エントリーモジュール名と一致させる**（次節）。
+
+```
+<PLUGIN_DIR>/<name>.beam            -- 単一モジュール
+<PLUGIN_DIR>/<name>/ebin/           -- ebin 1 つ
+<PLUGIN_DIR>/<name>/<app>/ebin/     -- アプリごとに ebin が分かれる形
+```
+
+3 つめは `gleam export erlang-shipment` の出力そのままの形である。**shipment を flatten せずそのまま置ける。** アプリごとのディレクトリー構造を崩すと `.app` ファイルとの対応が壊れるためで、同梱アプリケーションの起動（`application:ensure_all_started/1`）は今後の変更で入る。
+
+探索は 2 段までで、再帰はしない。`.gitkeep` や `README.md`、shipment の `entrypoint.sh` のようにプラグインでないエントリーは黙って無視する。
+
+### 6.2 エントリーモジュール規則
+
+読み込みを試すのは **ディレクトリー名（ルート直下なら拡張子を除いたファイル名）と同じ名前のモジュールだけ**である。ebin に入っている BEAM を総当たりはしない。同梱した依存が勝手にプラグインとして読み込まれるのを防ぐためで、プラグイン作者から見れば「エントリーの名前は置き場所の名前と一致させる」という 1 つの規約になる。
+
+- **Gleam**: プロジェクト名と同じトップレベルモジュール（`my_plugin/src/my_plugin.gleam`）をエントリーにし、ディレクトリー名も `my_plugin` にする。
+- **Elixir**: `defmodule MyPlugin` は BEAM 上では `Elixir.MyPlugin` になる。**ディレクトリー名を `Elixir.MyPlugin` にすること。**
+- **Erlang**: `-module(my_plugin)` なら `my_plugin`。
+
+エントリーモジュール名が本体や先に読み込まれたプラグインと重なる場合、その候補はコードパスに何も足さずに丸ごと飛ばされる（次節）。
+
+### 6.3 読み込み順
+
+プラグインは**モジュール名の昇順**に読み込まれ、`handle_event/1` もその順で呼ばれる。`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`、`event_logger`）は常に外部プラグインより先に実行される。
+
+`plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。
+
+### 6.4 コードパスと影（モジュール名前空間の衝突）
+
+BEAM のモジュール名前空間はグローバルで、同じ名前のモジュールは VM 全体で 1 つしか存在できない。本体はプラグインの ebin を `code:add_pathz/1`（**末尾追加**）でコードパスへ足すため、次のようになる。
+
+- **本体と本体の依存が常に優先される。** プラグインが新しい `gleam_stdlib` を同梱しても、使われるのは本体の版である。
+- プラグイン同士では、名前順で先に読み込まれた側が勝つ。
+
+食い違いは**読み込み時ではなく `handle_event/1` の実行時に `undef` として現れる。** 本体の版に無い関数を呼んだ時点で初めて失敗するので、`plugin.load` の検証では検出できない。したがって **プラグインは Dockerfile と同じ Gleam / OTP でビルドすること。** OTP が違う BEAM は `badfile` で拒否される。
+
+影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。
+
+### 6.5 読み込みの失敗
+
+**読み込みの失敗で本体の起動は止まらない。** 理由を 1 行出して、そのプラグインだけを無効にする。走査の最後には必ず集計行が出る。
+
+| 行 | 意味 |
+| --- | --- |
+| `no PLUGIN_DIR set; external plugins disabled` | `PLUGIN_DIR` が未設定（または空文字列） |
+| `<dir>: cannot read directory (enoent); external plugins disabled` | `PLUGIN_DIR` が読めない（`enotdir` / `eacces` も同じ形） |
+| `<name>: cannot read directory (eacces); skipped` | プラグインのディレクトリーが読めない |
+| `<name>: no ebin directory found (expected <name>/ebin or <name>/*/ebin)` | ディレクトリーはあるが ebin が見つからない |
+| `<name>: module <name> is already provided by the host or another plugin; skipped` | エントリーモジュール名が本体か他のプラグインと重なる |
+| `<name>: N module(s) already provided by the host or another plugin are ignored (...)` | 同梱した依存が影に入った（読み込みは続行する） |
+| `<mod>: duplicate plugin name "<name>"; keeping the first` | `plugin_name/0` の値が重複した |
+| `loaded 2 plugin(s) from /plugins: file_logger, my_plugin (3 skipped)` | 集計。`skipped` は候補だったが読み込めなかったものの件数 |
+
+モジュール自体の検証で失敗した場合の理由は第 7 章の表を参照すること。
+
+### 6.6 同梱の例
+
+`examples/plugins/file_logger/` は、受信したイベントを 1 件 1 行でファイルへ追記するだけの Erlang 1 ファイルのプラグインである。ビルド方法と置き方は同ディレクトリーの README を参照すること。
+
+第 8 章に載せる `test/support/minimal_plugin.erl` とは役割が違う。あちらは仕様の最小実装例で、本体の ebin に混ぜてコンパイルされるため最初からコードパス上にある（コードパスを足さなくても読めるので、ローダーの検証には使えない）。`file_logger` は「外から持ち込む」側の例である。
+
+## 7. 読み込まれない条件と理由の文字列
 
 読み込みに失敗すると、次の形の 1 行がログに出る。先頭は BEAM のモジュール名である。自分のプラグインが読み込まれないときは、この文字列を手がかりにする。
 
 | 理由の文字列 | 意味 |
 | --- | --- |
 | `<mod>: cannot load module (nofile)` | モジュールがコードパスに無い。ファイル名とモジュール名の不一致、置き場所の誤り |
+| `<mod>: cannot load module (badfile)` | BEAM として読めない。壊れたファイル、または本体と違う OTP でビルドしたもの |
 | `<mod>: missing export plugin_api_version/0` | 必須エクスポートが無い。`plugin_name/0` と `handle_event/1` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由` |
 | `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
@@ -106,7 +175,7 @@ Nostr-no-Su は、監視対象アカウントのイベントを受け取るプ�
 
 検証は上の表の順で進み、最初に失敗したところで止まる。
 
-## 7. Erlang での最小実装例
+## 8. Erlang での最小実装例
 
 次のモジュールがそのまま動く最小のプラグインである（このファイルは `test/support/minimal_plugin.erl` としてテストにも使っており、読み込めることを検証している）。
 
@@ -123,7 +192,7 @@ handle_event(Event) ->
     ok.
 ```
 
-## 8. Gleam で書くときの注意
+## 9. Gleam で書くときの注意
 
 - Gleam の公開関数は、名前とアリティがそのまま BEAM のエクスポートになる。`pub fn handle_event(event: Dynamic) -> Nil` と書けば `handle_event/1` になる。
 - **モジュールはプロジェクトのトップレベルに置くこと。** サブディレクトリに置くと BEAM のモジュール名が `dir@name` になる（例: `src/plugins/foo.gleam` → `plugins@foo`）。
@@ -137,9 +206,9 @@ handle_event(Event) ->
 
   この `Event` は本体のレコードなので、プラグイン側にも同じフィールドを同じ順で持つ型を宣言しておく（Gleam のレコードは実行時にはタグ付きタプルなので、コンストラクター名（`Event`）とフィールドの並びが一致していれば読める。フィールド名は実行時には残らない）。本体の型に追随する手間を避けたい場合は、`gleam/dynamic/decode` で map を直接読むほうが簡単である。
 
-## 9. Elixir で書くときの注意
+## 10. Elixir で書くときの注意
 
-- Elixir の `defmodule MyPlugin` は、BEAM 上では `Elixir.MyPlugin` という atom のモジュール名になる。設定にモジュール名を書くときはこの完全な名前を使う。
+- Elixir の `defmodule MyPlugin` は、BEAM 上では `Elixir.MyPlugin` という atom のモジュール名になる。**プラグインを置くディレクトリー名にはこの完全な名前を使うこと**（第 6 章のエントリーモジュール規則）。
 - 関数は `def` で定義したものだけがエクスポートされる（`defp` は対象外）。
 - 文字列リテラル `"minimal_plugin"` は binary なので、`plugin_name/0` の戻り値としてそのまま使える。
 - イベント map のキーは binary である。`%{"kind" => kind}` でマッチすること。`%{kind: kind}` は atom キーになるためマッチしない。

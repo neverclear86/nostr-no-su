@@ -8,7 +8,12 @@
     chacha20/3,
     int_from_bytes/1,
     ensure_module_loaded/1,
-    call_export/3
+    call_export/3,
+    list_dir/1,
+    is_directory/1,
+    absolute_path/1,
+    add_code_path/1,
+    is_on_code_path/1
 ]).
 
 %% ssl アプリケーションは `gleam run` や erlang-shipment のエントリポイントでは
@@ -81,3 +86,43 @@ call_export(Module, Function, Args) ->
         Class:Reason ->
             {error, list_to_binary(io_lib:format("~0p:~0p", [Class, Reason]))}
     end.
+
+%% ディレクトリーの中身。file:list_dir/1 は binary のパス（Gleam の String）を
+%% そのまま受け付け、charlist のリストを返す。非 UTF-8 のファイル名は
+%% list_dir/1 自身が落とすので（list_dir_all/1 を使わない限り）、ここで濾す
+%% 必要はない。
+%% -> {ok, [BinaryName]} | {error, ReasonBinary}
+list_dir(Path) ->
+    case file:list_dir(Path) of
+        {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
+        {error, Reason} -> {error, atom_to_binary(Reason)}
+    end.
+
+%% パスがディレクトリーかどうか。binary をそのまま渡せる。
+is_directory(Path) ->
+    filelib:is_dir(Path).
+
+%% 相対パスを絶対パスにする。プラグインディレクトリーを最初に 1 度だけ正規化し、
+%% ログ行とコードパスへ登録する内容が相対・絶対で食い違わないようにするために
+%% 使う。binary を渡せば binary が返るので変換は要らない。
+absolute_path(Path) ->
+    filename:absname(Path).
+
+%% ディレクトリーをコードパスの末尾に足す。末尾に足すのは、本体と先に読み込まれた
+%% プラグインが常に優先されるようにするため。code:add_pathz/1 は charlist しか
+%% 受け付けず、binary を渡すと function_clause で落ちる。native な名前
+%% エンコーディングは utf8 なので、変換には binary_to_list/1 ではなく
+%% unicode:characters_to_list/1 を使う（前者は非 ASCII のパスを壊す）。
+%% -> {ok, nil} | {error, ReasonBinary}
+add_code_path(Path) ->
+    case code:add_pathz(unicode:characters_to_list(Path)) of
+        true -> {ok, nil};
+        {error, Reason} -> {error, atom_to_binary(Reason)}
+    end.
+
+%% モジュールが既にコードパス上にあるか。code:which/1 は non_existing のほかに
+%% preloaded / cover_compiled といった atom も返しうるため、パスは返さず真偽だけ
+%% を返す。呼び出し側が知りたいのは「本体か先のプラグインが既に提供しているか」
+%% だけである。
+is_on_code_path(Module) ->
+    code:which(Module) =/= non_existing.
