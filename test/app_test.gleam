@@ -293,9 +293,10 @@ pub fn reconnected_bunker_handles_requests_from_the_outage_test() {
   let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
   let assert Opened(_relay_url, _connection, socket, _deliver) =
     await_connection(reports)
-  // アクターの起点より後に作られたリクエストにするため、秒が進むのを待つ。
-  await_next_second(time.now_seconds() - 1)
   let request = connect_request("c1", secret)
+  // 秒をまたいでから接続を落とす。起点が再接続で更新されていれば、このリクエストは
+  // 起点より古いものとして落ちる。
+  await_next_second(request.created_at)
 
   process.kill(socket)
   let assert Opened(_relay_url, _connection, reconnected, deliver) =
