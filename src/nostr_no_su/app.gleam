@@ -2,6 +2,7 @@
 ////
 //// ```
 //// root (one_for_one)
+//// |-- plugins      (one_for_one): プラグインごとのランナー
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// |-- bunker       (rest_for_one): バンカーアクター、        次にリレーごとの接続
 //// |-- event_logger (rest_for_one): Postgres の接続プール、   次にロガーアクター
@@ -18,6 +19,26 @@
 //// 管理 UI は他のどれにも依存しないのでルート直下に置く。状態は名前付きアクター
 //// への問い合わせで読むため、UI が再起動しても、問い合わせ先が再起動しても、
 //// 互いの配線をやり直す必要がない。
+////
+//// プラグインのランナーは監視サブツリーの中ではなくルート直下に置く。監視が
+//// 無効な構成でも、読み込んだプラグインをツリーに載せて管理 UI に状態を見せ
+//// られるようにするためで、ディスパッチャーが再起動してもランナーは巻き添えに
+//// ならない。プラグイン同士は独立なのでこのサブツリーは `one_for_one` にする。
+//// **ルートの子は `plugins` を `monitor` より先に追加すること。** 逆順だと
+//// ディスパッチャーが未登録のランナー名へ送り、起動直後のイベントを取りこぼす。
+////
+//// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
+//// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
+//// 死にならない**（`plugin_runner` を参照）ため、プラグインの不調では再起動が
+//// 起きず、ルートの `restart_tolerance(3, 60)` に到達しようがない。毎イベントで
+//// クラッシュするプラグインに対して有限の再起動許容回数は原理的に成立しないため、
+//// この構造で保証している。
+////
+//// **申し送り**: この主張が成り立つのは、このサブツリーの子がランナーだけである
+//// 間に限る。プラグインが申告する子プロセス（DB プールなど）をここに載せると、
+//// その子は普通にクラッシュループしうるので前提が崩れる。そのときはプラグイン
+//// ごとにスーパーバイザーを 1 段挟んで許容回数を分けるか、`event_logger` の
+//// `Unavailable` に相当する歯止めを子の側に持たせる必要がある。
 
 import gleam/erlang/process.{type Name}
 import gleam/list
@@ -34,6 +55,7 @@ import nostr_no_su/dedup
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/event_logger
 import nostr_no_su/relay_client.{type Subscriptions}
 import nostr_no_su/relay_connection.{type Socket, Socket}
@@ -54,12 +76,24 @@ pub type Relay {
   Relay(name: Name(relay_connection.Msg), url: String)
 }
 
-/// 監視サブツリー。プラグインを動かす重複排除ディスパッチャーと、そこへイベントを
-/// 流し込むリレー群からなる。
+/// プラグイン 1 つぶんの仕様。ランナープロセスの名前、プラグイン本体、実行時の
+/// 歯止め。名前は起動時に 1 度だけ作り、ディスパッチャーの宛先と管理 UI の
+/// 問い合わせ先の両方になる。`limits` を仕様に持たせているのは、テストが短い
+/// タイムアウトと小さい失敗上限でツリーごと動かせるようにするためで、プラグイン
+/// 固有の設定から与えるときの受け口にもなる。
+pub type PluginSpec {
+  PluginSpec(
+    name: Name(plugin_runner.Msg),
+    plugin: Plugin,
+    limits: plugin_runner.Limits,
+  )
+}
+
+/// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
+/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
-    plugins: List(Plugin),
     dedup_capacity: Int,
     relays: List(Relay),
     subscriptions: Subscriptions,
@@ -99,6 +133,7 @@ pub type EventLogger {
 /// 接続が再接続までどれだけ待つか。
 pub type Spec {
   Spec(
+    plugins: List(PluginSpec),
     monitor: Option(Monitor),
     bunker: Option(Bunker),
     event_logger: Option(EventLogger),
@@ -116,6 +151,9 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナーの
   // 再起動ポリシーに委ねる。
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
+  // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
+  // 未登録の名前へ送られて黙って消える。
+  |> add_plugins(spec.plugins)
   |> add_child(spec.monitor, fn(config) {
     supervisor.supervised(monitor_tree(spec, config))
   })
@@ -158,12 +196,47 @@ fn add_child(
   }
 }
 
+/// プラグインが 1 つも無ければサブツリーごと置かない。空のスーパーバイザーを
+/// 足しても害は無いが、ツリーの形が構成を素直に映すほうがよい。
+fn add_plugins(builder: Builder, specs: List(PluginSpec)) -> Builder {
+  case specs {
+    [] -> builder
+    specs -> supervisor.add(builder, supervisor.supervised(plugins_tree(specs)))
+  }
+}
+
+/// プラグインのサブツリー。プラグイン同士は独立なので `one_for_one`。ここの
+/// 許容回数は安全網であって、設計の拠りどころではない。プラグインの例外・異常
+/// 終了・ハングはランナーの中で完結して**プロセスの死にならない**ため、この
+/// 回数はプラグインの不調では消費されない。消費されるのは外部からの強制終了の
+/// ような、イベントストリームでは誘発できない事象だけである（冒頭の doc も
+/// 参照）。
+fn plugins_tree(specs: List(PluginSpec)) -> Builder {
+  use builder, spec <- list.fold(specs, plugins_supervisor())
+  supervisor.add(
+    builder,
+    plugin_runner.supervised(spec.name, spec.plugin, spec.limits),
+  )
+}
+
+/// プラグインのサブツリーのスーパーバイザー。
+fn plugins_supervisor() -> Builder {
+  supervisor.new(supervisor.OneForOne)
+  |> supervisor.restart_tolerance(intensity: 5, period: 10)
+}
+
+/// ディスパッチャーが送る宛先。名前はツリーの起動をまたいで変わらないので、
+/// ここで 1 度だけ取り出してクロージャーに捕捉させる。
+fn plugin_targets(specs: List(PluginSpec)) -> List(Name(plugin_runner.Msg)) {
+  list.map(specs, fn(spec) { spec.name })
+}
+
 /// 監視サブツリー。ディスパッチャーと、そこへイベントを流し込む接続群。
 fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   subtree()
   |> supervisor.add(dedup.supervised(
     config.name,
-    config.plugins,
+    plugin_runner.dispatch(plugin_targets(spec.plugins), _),
     config.dedup_capacity,
   ))
   |> add_connections(
@@ -215,7 +288,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     admin.Context(
       password: config.password,
       accounts: config.accounts,
-      plugins: plugin_names(spec.monitor),
+      plugins: fn() { plugin_rows(spec.plugins) },
       event_logger_enabled: option.is_some(spec.event_logger),
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
@@ -249,10 +322,13 @@ fn if_enabled(
   |> option.unwrap(default)
 }
 
-/// 監視サブツリーで有効なプラグインの名前。監視が無効なら空。
-fn plugin_names(monitor: Option(Monitor)) -> List(String) {
-  use monitor <- if_enabled(monitor, [])
-  list.map(monitor.plugins, fn(item) { item.name })
+/// プラグインごとの表示行。状態は各ランナーへ問い合わせて取る。
+fn plugin_rows(specs: List(PluginSpec)) -> List(dashboard.PluginRow) {
+  use spec <- list.map(specs)
+  dashboard.PluginRow(
+    name: spec.plugin.name,
+    status: plugin_runner.status(spec.name),
+  )
 }
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。

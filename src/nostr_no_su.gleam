@@ -13,6 +13,7 @@ import nostr_no_su/config.{type Config}
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
+import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/plugins/event_logger
 import nostr_no_su/random
@@ -62,10 +63,9 @@ pub fn main() -> Nil {
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
 ///
-/// 外部プラグインの読み込みは監視の有無に関わらず行う。監視が無効な構成
-/// （`RELAY_URL` が空）でも「何を読んだか」の行は出したいためで、その場合
-/// 読み込んだ外部プラグインには配信先が無く、`app.plugin_names` が `Monitor`
-/// 経由なのでダッシュボードにも出ない（読んで捨てる形になる）。
+/// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
+/// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
+/// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Startup {
   let #(logger, logger_notes) = event_logger_spec(loaded)
   let builtin = builtin_plugins(logger)
@@ -74,14 +74,15 @@ fn startup(loaded: Config) -> Startup {
       loaded.plugin_dir,
       list.map(builtin, fn(item) { item.name }),
     )
-  let #(monitor, monitor_notes) =
-    monitor_spec(loaded, list.append(builtin, external))
+  let specs = plugin_specs(list.append(builtin, external))
+  let #(monitor, monitor_notes) = monitor_spec(loaded)
   let #(accounts, account_notes) = load_accounts(loaded)
   let admin_accounts = dashboard_accounts(loaded, accounts)
   let #(bunker, bunker_notes) = bunker_spec(loaded, accounts, auth_url(loaded))
   let #(admin, admin_notes) = admin_spec(loaded, admin_accounts)
   Startup(
     spec: app.Spec(
+      plugins: specs,
       monitor: monitor,
       bunker: bunker,
       event_logger: logger,
@@ -152,11 +153,20 @@ fn event_logger_spec(
   }
 }
 
+/// プラグインごとにランナープロセスの名前を作る。名前はここで 1 度だけ作り、
+/// ディスパッチャーの宛先と管理 UI の問い合わせ先に共用する。再起動したランナー
+/// は同じ名前を登録し直すので、どちらの配線もやり直す必要がない。
+fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
+  use item <- list.map(plugins)
+  app.PluginSpec(
+    name: process.new_name("nostr_no_su_plugin"),
+    plugin: item,
+    limits: plugin_runner.default_limits,
+  )
+}
+
 /// 設定されたリレーの監視サブツリー。監視対象がなければ None。
-fn monitor_spec(
-  loaded: Config,
-  plugins: List(Plugin),
-) -> #(Option(app.Monitor), List(String)) {
+fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
   case loaded.relay_urls {
     [] -> #(None, [
       log.line(log_prefix, "no monitor relays configured; monitoring disabled"),
@@ -165,7 +175,6 @@ fn monitor_spec(
       Some(
         app.Monitor(
           name: process.new_name("nostr_no_su_dedup"),
-          plugins: plugins,
           dedup_capacity: dedup_capacity,
           relays: relays(relay_urls),
           subscriptions: fn() { [#("nostr-no-su", config.to_filter(loaded))] },
@@ -178,8 +187,8 @@ fn monitor_spec(
 
 /// 本体に内蔵されたプラグイン。保存が有効なときだけイベントロガーを足す。
 /// ロガーはアクターを名前で参照するので、アクターより先に組み立ててよい。
-/// 外部プラグインはローダーが返し、このリストの後ろに繋がれる。プラグインは
-/// 登録順に実行されるため、内蔵が常に先になる。
+/// 外部プラグインはローダーが返し、このリストの後ろに繋がれる。並び順が決めるのは
+/// 読み込みと表示の順序だけで、実行はプラグインごとの独立したランナーが行う。
 fn builtin_plugins(logger: Option(app.EventLogger)) -> List(Plugin) {
   case logger {
     None -> [console_logger.new()]

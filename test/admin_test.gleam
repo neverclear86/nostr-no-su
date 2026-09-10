@@ -4,10 +4,12 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker/engine
+import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import wisp
 import wisp/simulate
@@ -17,6 +19,10 @@ const password = "s3cr3t-password"
 const signer = "aaaa1111"
 
 const client = "bbbb2222"
+
+/// 無効化されたプラグインの理由。プラグイン由来の文字列なので HTML への埋め込み
+/// でエスケープされなければならない。
+const disabled_reason = "error:<script>alert(1)</script>"
 
 /// 承認待ちのトークン。フェイクの承認・拒否はこれだけを知っている。
 const token = "tok-1"
@@ -44,7 +50,6 @@ fn test_context(
     accounts: [
       dashboard.AccountRow(signer: signer, uri: uri, auth_uri: auth_uri),
     ],
-    plugins: ["console_logger"],
     event_logger_enabled: True,
     relays: fn() {
       [
@@ -57,6 +62,22 @@ fn test_context(
           role: dashboard.BunkerRelay,
           url: "wss://bunker.example",
           status: relay_connection.Disconnected,
+        ),
+      ]
+    },
+    plugins: fn() {
+      [
+        dashboard.PluginRow(
+          name: "console_logger",
+          status: Some(plugin_runner.Running),
+        ),
+        // 無効化の理由はプラグイン由来の文字列なので、素のまま出てはならない。
+        dashboard.PluginRow(
+          name: "broken",
+          status: Some(plugin_runner.Disabled(
+            reason: disabled_reason,
+            dropped: 3,
+          )),
         ),
       ]
     },
@@ -206,6 +227,7 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "<td>bunker</td>")
   assert string.contains(body, "<td>disconnected</td>")
   assert string.contains(body, "<td>console_logger</td>")
+  assert string.contains(body, "<td>running</td>")
   assert string.contains(body, "Event logger: enabled")
 }
 
@@ -220,6 +242,15 @@ pub fn dashboard_escapes_html_test() {
   let body = simulate.read_body(response)
   assert string.contains(body, "&quot;&gt;&lt;b&gt;xss&lt;/b&gt;")
   assert !string.contains(body, "<b>xss</b>")
+}
+
+/// 無効化されたプラグインの理由はプラグイン由来の文字列なので、素の HTML として
+/// 出してはならない。
+pub fn dashboard_escapes_a_plugin_failure_reason_test() {
+  let body = simulate.read_body(get(context(), "/"))
+  assert string.contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;")
+  assert !string.contains(body, "<script>alert(1)</script>")
+  assert string.contains(body, "(dropped 3)")
 }
 
 /// secret 入りの URI を含むダッシュボードは、どこにも保存させない。

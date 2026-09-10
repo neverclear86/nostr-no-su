@@ -6,8 +6,10 @@
 
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/bunker/engine.{type Session}
+import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 import wisp
 
@@ -40,6 +42,12 @@ pub type AccountRow {
   AccountRow(signer: String, uri: String, auth_uri: String)
 }
 
+/// プラグイン 1 つの表示内容。`status` が `None` なのは、ランナーが再起動中か、
+/// 遅いプラグインの実行中で問い合わせに応答しなかったことを意味する。
+pub type PluginRow {
+  PluginRow(name: String, status: Option(plugin_runner.Status))
+}
+
 /// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
 pub type PendingRow {
   PendingRow(token: String, signer: String, client: String, age_seconds: Int)
@@ -52,7 +60,7 @@ pub type Snapshot {
     pending: List(PendingRow),
     relays: List(RelayRow),
     sessions: List(Session),
-    plugins: List(String),
+    plugins: List(PluginRow),
     event_logger_enabled: Bool,
   )
 }
@@ -161,14 +169,30 @@ fn sessions_section(sessions: List(Session)) -> String {
   )
 }
 
-/// 監視イベントを処理するプラグイン。
-fn plugins_section(plugins: List(String)) -> String {
+/// 監視イベントを処理するプラグインと、その現在の状態。
+fn plugins_section(plugins: List(PluginRow)) -> String {
   section(
     "Plugins",
-    ["Name"],
-    list.map(plugins, fn(plugin) { [escape(plugin)] }),
+    ["Name", "State"],
+    list.map(plugins, fn(plugin) {
+      [escape(plugin.name), escape(plugin_state_label(plugin.status))]
+    }),
     "No plugins enabled.",
   )
+}
+
+/// プラグインの状態を 1 行の説明にする。`Disabled` の理由はプラグイン由来の
+/// 文字列なので、呼び出し側で必ず `escape` を通すこと（長さは `plugin_runner`
+/// 側で切ってあるので、ここでは切らない）。
+fn plugin_state_label(status: Option(plugin_runner.Status)) -> String {
+  case status {
+    None -> "unavailable"
+    Some(plugin_runner.Running) -> "running"
+    Some(plugin_runner.Overloaded(dropped:)) ->
+      "overloaded (dropped " <> int.to_string(dropped) <> ")"
+    Some(plugin_runner.Disabled(reason:, dropped:)) ->
+      "disabled: " <> reason <> " (dropped " <> int.to_string(dropped) <> ")"
+  }
 }
 
 /// イベントロガーによる保存が有効かどうか。

@@ -1,5 +1,7 @@
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
+import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/system
 import gleam/string
@@ -9,6 +11,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
+import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/event_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/time
@@ -89,6 +92,7 @@ fn await_disconnect(name: Name(relay_connection.Msg), timeout_ms: Int) -> Bool {
 /// 偽リレー 1 本の上でバンカーだけを動かすツリー。
 fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
   start_tree(app.Spec(
+    plugins: [],
     monitor: None,
     bunker: Some(
       app.Bunker(
@@ -106,6 +110,18 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
     open: fake_open(reports),
     reconnect_delay_ms: 100,
   ))
+}
+
+/// 受け取ったイベントをテストへ転送するプラグインの仕様。歯止めは既定のまま。
+fn forwarding_spec(
+  name: Name(plugin_runner.Msg),
+  seen: Subject(Event),
+) -> app.PluginSpec {
+  app.PluginSpec(
+    name: name,
+    plugin: plugin.Plugin(name: "forwarding", handle: process.send(seen, _)),
+    limits: plugin_runner.default_limits,
+  )
 }
 
 /// 親プロセスと同じ方法でツリーを停止する。ルートスーパーバイザーは exit
@@ -397,6 +413,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   let relay_b = named_relay("ws://relay.two")
   let tree =
     start_tree(app.Spec(
+      plugins: [],
       monitor: None,
       bunker: Some(
         app.Bunker(
@@ -450,13 +467,17 @@ pub fn monitoring_survives_an_unreachable_database_test() {
   let logger = process.new_name("test_event_logger")
   let tree =
     start_tree(app.Spec(
+      plugins: [
+        forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+        app.PluginSpec(
+          name: process.new_name("test_plugin_event_logger"),
+          plugin: event_logger.new(logger),
+          limits: plugin_runner.default_limits,
+        ),
+      ],
       monitor: Some(
         app.Monitor(
           name: process.new_name("test_dedup"),
-          plugins: [
-            plugin.Plugin(name: "test", handle: process.send(seen, _)),
-            event_logger.new(logger),
-          ],
           dedup_capacity: 8,
           relays: [test_relay()],
           subscriptions: fn() { [] },
@@ -489,10 +510,10 @@ fn start_monitor_tree(
   name: Name(dedup.Msg),
 ) -> Pid {
   start_tree(app.Spec(
+    plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
     monitor: Some(
       app.Monitor(
         name: name,
-        plugins: [plugin.Plugin(name: "test", handle: process.send(seen, _))],
         dedup_capacity: 8,
         relays: [test_relay()],
         subscriptions: fn() { [] },
@@ -540,5 +561,201 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
     await_connection(reports)
   deliver(event_with_id("second"))
   assert process.receive(seen, 2000) == Ok(event_with_id("second"))
+  stop_tree(tree)
+}
+
+/// 常にクラッシュするプラグインの仕様。
+fn crashing_spec(
+  name: Name(plugin_runner.Msg),
+  limits: plugin_runner.Limits,
+) -> app.PluginSpec {
+  app.PluginSpec(
+    name: name,
+    plugin: plugin.Plugin(name: "crashing", handle: fn(_incoming) {
+      panic as "boom"
+    }),
+    limits: limits,
+  )
+}
+
+/// 決して戻らないプラグインの仕様。1 件目の実行が打ち切られるまでランナーは
+/// 次のイベントを読まない。
+fn hanging_spec(
+  name: Name(plugin_runner.Msg),
+  limits: plugin_runner.Limits,
+) -> app.PluginSpec {
+  app.PluginSpec(
+    name: name,
+    plugin: plugin.Plugin(name: "hanging", handle: fn(_incoming) {
+      process.sleep_forever()
+    }),
+    limits: limits,
+  )
+}
+
+/// プラグインを載せた監視ツリー。イベントは偽リレー経由で流し込む。
+fn start_plugins_tree(
+  reports: Subject(Report),
+  dedup_name: Name(dedup.Msg),
+  plugins: List(app.PluginSpec),
+) -> Pid {
+  start_tree(app.Spec(
+    plugins: plugins,
+    monitor: Some(
+      app.Monitor(
+        name: dedup_name,
+        dedup_capacity: 64,
+        relays: [test_relay()],
+        subscriptions: fn() { [] },
+      ),
+    ),
+    bunker: None,
+    event_logger: None,
+    admin: None,
+    open: fake_open(reports),
+    reconnect_delay_ms: 100,
+  ))
+}
+
+/// 連番のイベント id。
+fn event_ids(prefix: String, count: Int) -> List(String) {
+  use _unit, index <- list.index_map(list.repeat(Nil, count))
+  prefix <> int.to_string(index)
+}
+
+/// 指定した id のイベントを配信し、転送プラグインが全件を順に受け取ることを
+/// 確かめる。
+fn deliver_and_expect(
+  deliver: fn(Event) -> Nil,
+  seen: Subject(Event),
+  ids: List(String),
+  timeout_ms: Int,
+) -> Nil {
+  list.each(ids, fn(id) { deliver(event_with_id(id)) })
+  use id <- list.each(ids)
+  assert process.receive(seen, timeout_ms) == Ok(event_with_id(id))
+}
+
+/// 名前が新しいプロセスへ再登録されるのを待つ。`named.send` は名前が未登録の
+/// あいだメッセージを捨てるため、再登録を待たずに配信すると取りこぼす。
+fn await_restart(
+  name: Name(plugin_runner.Msg),
+  previous: Pid,
+  remaining: Int,
+) -> Pid {
+  case process.named(name), remaining {
+    Ok(pid), _ if pid != previous -> pid
+    _, 0 -> panic as "the plugin runner was not restarted"
+    _, _ -> {
+      process.sleep(20)
+      await_restart(name, previous, remaining - 1)
+    }
+  }
+}
+
+/// クラッシュし続けるプラグインは監視を巻き添えにしない。ランナーは死なないので
+/// スーパーバイザーの再起動が起きず、無効化されるまで自分のプロセスの中で完結
+/// する。ディスパッチャーも監視接続も他のプラグインも影響を受けない。
+///
+/// ワーカーが自分で例外を捕まえて短い理由で exit するため、**このテストでも
+/// BEAM の `=ERROR REPORT=` は出ない**。代わりにランナーが 1 行ログ
+/// （`handle_event failed (...); n/5`）を最大 5 行出す。
+pub fn crashing_plugin_does_not_take_down_the_monitor_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let crashing = process.new_name("test_plugin_crashing")
+  let dedup_name = process.new_name("test_dedup")
+  let tree =
+    start_plugins_tree(reports, dedup_name, [
+      crashing_spec(crashing, plugin_runner.default_limits),
+      forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+    ])
+  let assert Opened(_relay_url, connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(crashing)
+  let assert Ok(dedup_before) = process.named(dedup_name)
+
+  deliver_and_expect(deliver, seen, event_ids("crash", 20), 2000)
+
+  // ランナーの pid が不変であることが、「スーパーバイザーの再起動が 1 度も
+  // 起きていない」という主張そのものである。ワーカーとリンクを張る実装では
+  // ここで pid が変わる。
+  assert process.named(crashing) == Ok(runner_before)
+  // 連続失敗が数え上がって無効化まで到達している。リンクを張る実装ではランナー
+  // ごと再起動するため、状態は `Running` に戻ってしまう。
+  let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(crashing)
+  assert process.named(dedup_name) == Ok(dedup_before)
+  assert process.is_alive(connection)
+  // 接続が張り直されていない（`rest_for_one` が発火していない）。
+  assert process.receive(reports, 300) == Error(Nil)
+  assert process.is_alive(tree)
+  stop_tree(tree)
+}
+
+/// 無効化されたプラグインがいても、他のプラグインにはイベントが届き続ける。
+pub fn disabled_plugin_keeps_the_others_running_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let crashing = process.new_name("test_plugin_crashing")
+  let tree =
+    start_plugins_tree(reports, process.new_name("test_dedup"), [
+      crashing_spec(crashing, plugin_runner.default_limits),
+      forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+    ])
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(crashing)
+
+  deliver_and_expect(deliver, seen, event_ids("crash", 20), 2000)
+  let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(crashing)
+
+  deliver_and_expect(deliver, seen, event_ids("after", 5), 2000)
+  assert process.named(crashing) == Ok(runner_before)
+  stop_tree(tree)
+}
+
+/// 決して戻らないプラグインがいても、他のプラグインは待たされない。遅い側は
+/// 自分のランナーの中で打ち切られる。
+pub fn slow_plugin_does_not_block_other_plugins_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let tree =
+    start_plugins_tree(reports, process.new_name("test_dedup"), [
+      hanging_spec(
+        process.new_name("test_plugin_hanging"),
+        plugin_runner.Limits(
+          handle_timeout_ms: 200,
+          max_queue_len: 1000,
+          max_failures: 5,
+        ),
+      ),
+      forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+    ])
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver_and_expect(deliver, seen, event_ids("slow", 3), 1000)
+  stop_tree(tree)
+}
+
+/// ランナーを強制終了するとスーパーバイザーが作り直し、次のイベントから配信が
+/// 再開する。安全網の確認であり、無効化されたプラグインを再有効化する唯一の
+/// 運用手段の確認でもある。
+pub fn plugin_runner_is_restarted_when_killed_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let forwarding = process.new_name("test_plugin_forwarding")
+  let tree =
+    start_plugins_tree(reports, process.new_name("test_dedup"), [
+      forwarding_spec(forwarding, seen),
+    ])
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver_and_expect(deliver, seen, ["before"], 2000)
+
+  let assert Ok(killed) = process.named(forwarding)
+  process.kill(killed)
+  let restarted = await_restart(forwarding, killed, 100)
+  assert restarted != killed
+  deliver_and_expect(deliver, seen, ["after"], 2000)
   stop_tree(tree)
 }
