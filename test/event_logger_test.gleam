@@ -6,7 +6,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
-import nostr_no_su/plugins/postgres_logger
+import nostr_no_su/plugins/event_logger
 import nostr_no_su/random
 import pog
 
@@ -25,8 +25,8 @@ fn sample_event(id: String) -> Event {
 
 /// イベントは列ごとの値へそのまま移り、タグだけが JSON 文字列になる。
 pub fn event_becomes_a_row_test() {
-  assert postgres_logger.to_row(sample_event("a1"))
-    == postgres_logger.Row(
+  assert event_logger.to_row(sample_event("a1"))
+    == event_logger.Row(
       id: "a1",
       pubkey: "0f1e2d",
       created_at: 1_700_000_000,
@@ -40,33 +40,30 @@ pub fn event_becomes_a_row_test() {
 /// タグが無いイベントでも jsonb として妥当な空配列になる。
 pub fn events_without_tags_become_an_empty_json_array_test() {
   let without_tags = Event(..sample_event("a2"), tags: [])
-  assert postgres_logger.to_row(without_tags).tags == "[]"
+  assert event_logger.to_row(without_tags).tags == "[]"
 }
 
 /// DDL はすべて `IF NOT EXISTS` 付きで、起動のたびに実行してよい。
 pub fn schema_statements_are_idempotent_test() {
-  assert list.all(postgres_logger.schema, string.contains(_, "IF NOT EXISTS"))
+  assert list.all(event_logger.schema, string.contains(_, "IF NOT EXISTS"))
 }
 
 /// 挿入する列とプレースホルダーが、`insert` がパラメーターを積む順序と対応して
 /// いる。`tags` だけが jsonb へのキャストを伴う。
 pub fn the_insert_lists_columns_in_parameter_order_test() {
   assert string.contains(
-    postgres_logger.insert_sql,
+    event_logger.insert_sql,
     "(id, pubkey, created_at, kind, tags, content, sig)",
   )
   assert string.contains(
-    postgres_logger.insert_sql,
+    event_logger.insert_sql,
     "VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)",
   )
 }
 
 /// 挿入は重複した id を黙って読み飛ばす。
 pub fn inserts_ignore_duplicate_ids_test() {
-  assert string.contains(
-    postgres_logger.insert_sql,
-    "ON CONFLICT (id) DO NOTHING",
-  )
+  assert string.contains(event_logger.insert_sql, "ON CONFLICT (id) DO NOTHING")
 }
 
 /// 権限不足のような自然に直らないエラーの例。
@@ -81,11 +78,11 @@ fn insufficient_privilege() -> pog.QueryError {
 /// DB に到達できないことによる停止は、復帰するまでに 1 回だけ報告する。復帰時に
 /// `resume` が破棄件数とあわせて報告するため、再試行のたびには出さない。
 pub fn unreachable_databases_are_reported_once_test() {
-  assert postgres_logger.suspension_message(pog.ConnectionUnavailable, False, 0)
+  assert event_logger.suspension_message(pog.ConnectionUnavailable, False, 0)
     == Some(
       "database unavailable: ConnectionUnavailable; retrying every 5000ms",
     )
-  assert postgres_logger.suspension_message(pog.QueryTimeout, True, 3) == None
+  assert event_logger.suspension_message(pog.QueryTimeout, True, 3) == None
 }
 
 /// 到達性と無関係な失敗（設定の不備など）は復帰の報告が出ないため、再試行の
@@ -93,10 +90,10 @@ pub fn unreachable_databases_are_reported_once_test() {
 pub fn other_schema_failures_are_reported_every_time_test() {
   let reason =
     "schema setup failed: PostgresqlError(\"42501\", \"insufficient_privilege\", \"permission denied for schema public\"); retrying in 5000ms"
-  assert postgres_logger.suspension_message(insufficient_privilege(), False, 0)
+  assert event_logger.suspension_message(insufficient_privilege(), False, 0)
     == Some(reason <> " (dropped 0 events so far)")
   // すでに報告済みでも抑止されず、捨てた件数が増えていく。
-  assert postgres_logger.suspension_message(insufficient_privilege(), True, 7)
+  assert event_logger.suspension_message(insufficient_privilege(), True, 7)
     == Some(reason <> " (dropped 7 events so far)")
 }
 
@@ -111,7 +108,7 @@ pub fn postgres_round_trip_test() {
   case envoy.get("TEST_DATABASE_URL") {
     Ok("") | Error(Nil) ->
       io.println(
-        "[postgres_logger] TEST_DATABASE_URL is not set; skipping the integration test",
+        "[event_logger] TEST_DATABASE_URL is not set; skipping the integration test",
       )
     Ok(database_url) -> round_trip(database_url)
   }
@@ -121,19 +118,19 @@ pub fn postgres_round_trip_test() {
 fn round_trip(database_url: String) -> Nil {
   let db = connect(database_url)
   // 2 回続けて実行しても失敗しない。
-  let assert Ok(Nil) = postgres_logger.ensure_schema(db)
-  let assert Ok(Nil) = postgres_logger.ensure_schema(db)
+  let assert Ok(Nil) = event_logger.ensure_schema(db)
+  let assert Ok(Nil) = event_logger.ensure_schema(db)
   assert index_names(db)
     == ["events_kind", "events_pkey", "events_pubkey_created_at"]
 
   let stored = sample_event(random_id())
-  assert postgres_logger.insert(db, stored) == Ok(1)
+  assert event_logger.insert(db, stored) == Ok(1)
   assert count_rows(db, stored.id) == 1
   // タグが jsonb として保存されていれば、Postgres 側から要素を取り出せる。
   assert first_tag_name(db, stored.id) == Ok("p")
 
   // 同じイベントを別のリレーから受け直しても行は増えない。
-  assert postgres_logger.insert(db, stored) == Ok(0)
+  assert event_logger.insert(db, stored) == Ok(0)
   assert count_rows(db, stored.id) == 1
 
   delete_row(db, stored.id)
@@ -144,7 +141,7 @@ fn round_trip(database_url: String) -> Nil {
 /// テストが終われば一緒に停止する。
 fn connect(database_url: String) -> pog.Connection {
   let assert Ok(config) =
-    pog.url_config(process.new_name("test_postgres_logger_pool"), database_url)
+    pog.url_config(process.new_name("test_event_logger_pool"), database_url)
   let assert Ok(started) = pog.start(config)
   started.data
 }

@@ -57,7 +57,7 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
 
 /// このプラグインが出すログ行の接頭辞。
-pub const log_prefix = "postgres_logger"
+pub const log_prefix = "event_logger"
 
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
@@ -106,7 +106,7 @@ type State {
 /// イベントを保存アクターへ転送するプラグイン。アクターは名前で参照するため、
 /// 再起動しても同じプラグインがそのまま新しいプロセスへ届く。
 pub fn new(name: Name(Msg)) -> Plugin {
-  Plugin(name: "postgres_logger", handle: fn(incoming) {
+  Plugin(name: "event_logger", handle: fn(incoming) {
     named.send(name, Store(incoming))
   })
 }
