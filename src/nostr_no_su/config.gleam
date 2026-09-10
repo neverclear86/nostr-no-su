@@ -16,6 +16,11 @@ const default_admin_port = 8080
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
 const default_admin_bind = "127.0.0.1"
 
+/// バンカーの購読が現在時刻からどれだけ遡るか。切断していた間に届いたリクエストを
+/// 取りこぼさないための猶予で、エンジンの受付ウィンドウの外に出たものはどのみち
+/// 捨てられるため、長く取っても得るものはない。
+const bunker_since_lookback_seconds = 60
+
 /// `ADMIN_PORT` の解釈結果。無効化には「明示的に空にした」と「値が不正だった」の
 /// 2 通りがあり、後者だけ起動時に理由を報告する。
 pub type AdminPort {
@@ -158,6 +163,16 @@ pub fn to_filter(config: Config) -> Filter {
     [] -> Filter(..filter.new(), limit: Some(20))
     pubkeys -> Filter(..filter.new(), authors: Some(pubkeys))
   }
+}
+
+/// バンカーの購読が使う `since`。切断していた間のリクエストを拾うために現在時刻
+/// から遡るが、プロセスの起動時刻より前には遡らない。リプレイ防止の `seen`
+/// ウィンドウはプロセス内にしかなく再起動で空になるため、起動より前にリレーへ
+/// 保存されたリクエストを拾うと、処理済みのものを新規として再実行してしまう。
+/// NIP-01 では kind 24133 は ephemeral でリレーが保存しない想定だが、実際には
+/// 保存するリレー（strfry など）がある。
+pub fn bunker_since(started_at started_at: Int, now now: Int) -> Int {
+  int.max(started_at, now - bunker_since_lookback_seconds)
 }
 
 /// 指定した署名者 pubkey 宛の NIP-46 リクエストを購読する。
