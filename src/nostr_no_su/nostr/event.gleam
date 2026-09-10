@@ -87,20 +87,32 @@ fn tags_dynamic(event: Event) -> Dynamic {
 pub fn from_map(value: Dynamic) -> Result(Event, String) {
   decode.run(value, decoder())
   |> result.map_error(fn(errors) {
-    list.map(errors, describe_error) |> string.join("; ")
+    // map でない値は 7 フィールドすべてで同じエラーになるので重複を落とす。
+    list.map(errors, describe_error) |> list.unique |> string.join("; ")
   })
 }
 
 /// デコードエラー 1 件を人が読める 1 行にする。欠損キーは
 /// `DecodeError("Field", "Nothing", ["kind"])` になるため、`expected` と `found`
 /// をそのまま差し込むと意味の通らない行になる。専用の分岐で振り分ける。
+///
+/// `path` が空になるのは値そのものが map でないときで、この場合はキー名を書か
+/// ない（同じ行がフィールドの数だけ繰り返されるのを避けるため、`from_map` 側で
+/// 重複を落とす）。
 fn describe_error(error: decode.DecodeError) -> String {
   let decode.DecodeError(expected:, found:, path:) = error
-  let key = "\"" <> string.join(path, ".") <> "\""
-  case expected, found {
-    "Field", "Nothing" -> "missing field " <> key
-    _, _ -> "field " <> key <> ": expected " <> expected <> ", found " <> found
+  let mismatch = "expected " <> expected <> ", found " <> found
+  case expected, found, path {
+    _, _, [] -> mismatch
+    "Field", "Nothing", _ -> "missing field " <> quoted_path(path)
+    _, _, _ -> "field " <> quoted_path(path) <> ": " <> mismatch
   }
+}
+
+/// エラーの位置を示すキー。`tags` の内側のように複数要素になるときは `.` で
+/// 連結する。
+fn quoted_path(path: List(String)) -> String {
+  "\"" <> string.join(path, ".") <> "\""
 }
 
 /// タグの JSON 表現。NIP-01 では文字列配列の配列で、正規シリアライズでも

@@ -68,7 +68,8 @@ Nostr-no-Su は、監視対象アカウントのイベントを受け取るプ�
 
 - `handle_event/1` は重複排除ディスパッチャーから**同期的に**呼ばれる。登録されたプラグインは登録順に実行される。
 - **戻り値は無視される。** Erlang / Elixir なら `ok`、Gleam なら `Nil` を返すのが自然で、どちらでもよい。
-- 同じイベント（同じ `id`）が複数のリレーから届いても、`handle_event/1` は 1 回だけ呼ばれる。
+- 同じイベント（同じ `id`）が複数のリレーから届いても、**通常は** `handle_event/1` は 1 回しか呼ばれない。ただし重複排除は有界なウィンドウ（直近の id を一定件数だけ記憶する）で行うため、容量を超えて古い id が押し出された後に同じイベントが再配信されると 2 回目が呼ばれる。ディスパッチャーが再起動したときもウィンドウは空になり、あわせて監視のリレー接続も張り直されるため、リレーが保存済みイベントを再送すれば同じイベントがもう一度届く。
+- したがって **`handle_event/1` は冪等に書くこと。** 同じイベントを 2 回処理しても結果が変わらないようにする（保存するなら `id` を一意キーにする、通知するなら送信済みの `id` を記録する、など）。この仕組みが保証するのは at-least-once であって exactly-once ではない。
 - 処理は短く保つこと。時間のかかる処理は、プラグインが自分でプロセスを起こしてそちらへ渡す。ディスパッチャーを長く占有すると、後続のプラグインとイベントの処理が遅れる。
 - **例外は現時点ではディスパッチャーへ伝播する。** プラグインがクラッシュすると、ディスパッチャーが再起動して重複排除のウィンドウが失われる。プラグインごとの専用プロセスによる隔離は今後の変更で入る予定である。
 
@@ -97,6 +98,7 @@ Nostr-no-Su は、監視対象アカウントのイベントを受け取るプ�
 | `<mod>: cannot load module (nofile)` | モジュールがコードパスに無い。ファイル名とモジュール名の不一致、置き場所の誤り |
 | `<mod>: missing export plugin_api_version/0` | 必須エクスポートが無い。`plugin_name/0` と `handle_event/1` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由` |
+| `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
 | `<mod>: plugin_api_version/0 must return an Int, got Float` | 戻り値が整数でない |
 | `<mod>: unsupported api version 2 (expected 1)` | 本体が対応していないバージョン |
 | `<mod>: plugin_name/0 must return a String, got Int` | 名前が文字列（binary）でない |
@@ -126,7 +128,14 @@ handle_event(Event) ->
 - Gleam の公開関数は、名前とアリティがそのまま BEAM のエクスポートになる。`pub fn handle_event(event: Dynamic) -> Nil` と書けば `handle_event/1` になる。
 - **モジュールはプロジェクトのトップレベルに置くこと。** サブディレクトリに置くと BEAM のモジュール名が `dir@name` になる（例: `src/plugins/foo.gleam` → `plugins@foo`）。
 - Gleam の `String` は binary、`Nil` は atom の `nil` である。イベント map は `Dynamic` として受け取り、`gleam/dynamic/decode` でデコードする。
-- 本体と同じ `Event` 型を使いたい場合は、`nostr_no_su/nostr/event` の `from_map/1` がイベント map を `Event` に戻す。
+- 本体と同じ `Event` 型を使いたい場合は、`nostr_no_su/nostr/event` の `from_map/1` がイベント map を `Event` に戻す。ただしプラグインは本体とは別のプロジェクトとしてビルドするため、`nostr_no_su` をコンパイル時の依存に持てず `import` はできない。実行時に外部関数として呼ぶ。
+
+  ```gleam
+  @external(erlang, "nostr_no_su@nostr@event", "from_map")
+  fn from_map(value: Dynamic) -> Result(Event, String)
+  ```
+
+  この `Event` は本体のレコードなので、プラグイン側にも同じフィールドを同じ順で持つ型を宣言しておく（Gleam のレコードは実行時にはタグ付きタプルなので、コンストラクター名（`Event`）とフィールドの並びが一致していれば読める。フィールド名は実行時には残らない）。本体の型に追随する手間を避けたい場合は、`gleam/dynamic/decode` で map を直接読むほうが簡単である。
 
 ## 9. Elixir で書くときの注意
 

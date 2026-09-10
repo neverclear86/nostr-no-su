@@ -99,6 +99,14 @@ pub fn has_export_test() {
   assert !plugin.has_export(module, "no_such_function", 0)
 }
 
+/// `plugin_api_version/0` が整数以外を返すモジュールは拒否する。
+pub fn load_non_integer_version_test() {
+  assert string.contains(
+    load_error("float_version"),
+    "must return an Int, got Float",
+  )
+}
+
 /// 仕様書に載せている Erlang の最小実装が、実際に読み込めること。
 pub fn load_erlang_minimal_plugin_test() {
   let assert Ok(loaded) = plugin.load(atom.create("minimal_plugin"))

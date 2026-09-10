@@ -73,11 +73,12 @@ pub fn load(module: Atom) -> Result(Plugin, String) {
   use _ <- result.try(require_exports(module, name))
   use _ <- result.try(check_api_version(module, name))
   use plugin_name <- result.try(read_plugin_name(module, name))
+  // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
+  let handle_event = atom.create("handle_event")
   Ok(
     Plugin(name: plugin_name, handle: fn(incoming) {
       // 戻り値はプラグインが自由に決めてよいので捨てる。例外は捕まえない。
-      let _ =
-        apply(module, atom.create("handle_event"), [event.to_map(incoming)])
+      let _ = apply(module, handle_event, [event.to_map(incoming)])
       Nil
     }),
   )
