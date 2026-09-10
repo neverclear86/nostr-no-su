@@ -3,7 +3,8 @@ version = "1.0.0"
 description = "Nostr-no-Su event logger plugin (stores monitored events into Postgres)"
 
 # 本体（nostr_no_su）の VM に読み込まれて動くプラグインなので、Hex には公開しない。
-# 共有パッケージ（gleam_stdlib / gleam_erlang / gleam_otp / gleam_json）の制約は
+# 共有パッケージ（gleam_stdlib / gleam_erlang / gleam_otp / gleam_json と、pog
+# 経由で入る exception）の制約は
 # 本体の gleam.toml と一致させること。影に入る側は本体の版で実行されるため、版が
 # ずれると読み込み時には何も起きず、実行時に undef で壊れる。
 # 制約を揃えるだけでは版の一致は保証されないので、manifest.toml をコミットし、

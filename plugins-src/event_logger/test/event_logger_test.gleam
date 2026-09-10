@@ -4,7 +4,7 @@ import event_logger/store
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
-import gleam/erlang/process
+import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/io
 import gleam/list
@@ -222,6 +222,17 @@ pub fn valid_configuration_declares_a_pool_and_a_store_test() {
 /// 到達できない DB でも保存アクターは落ちない。DB が落ちている間に落ち続ける
 /// 子は、専用スーパーバイザーの歯止めを使い切って本体の再起動まで戻らなくなる
 /// （`docs/plugin-api.md` 第 5.4 節）。イベントは数えて捨てるだけにする。
+///
+/// **数百 ms 待つだけでは足りない。** 初期化で送る `EnsureSchema` が接続の
+/// チェックアウト待ちでブロックするため、`Unavailable` へ遷移するまでアクターは
+/// メッセージを 1 件も処理しない。到達できないポートに対する実測では、500ms と
+/// 1500ms の時点でメールボックスに `Store` が残ったままで、遷移が済んで空になる
+/// のは 5.5 秒あたりである。ブロック中のプロセスも生きてはいるので、その時点の
+/// `is_alive` は `Unavailable` の分岐が正しいことを何も示さない。
+///
+/// そこで**メールボックスが空になるまで待って**遷移を確認し、**そのうえで
+/// さらに `Store` を送る。** 2 度目の送信は必ず `Unavailable` の「数えて捨てる」
+/// 分岐（`store.persist/2`）を通るので、そこで落ちる実装ならこのテストが落ちる。
 pub fn the_store_survives_an_unreachable_database_test() {
   // 待ち受けの無いポートを指すプール。プロセスとしては生きているので、
   // クエリーは ConnectionUnavailable として値で返る。
@@ -233,12 +244,61 @@ pub fn the_store_survives_an_unreachable_database_test() {
   let store_name = process.new_name("test_unreachable_store")
   let assert Ok(started) = store.start(store_name, pool_name)
   let assert Ok(row) = store.to_row(sample_event("a4"))
-  list.each([row, row, row], fn(row) {
-    process.send(started.data, store.Store(row))
-  })
-  process.sleep(500)
+  let send_three = fn() {
+    list.each([row, row, row], fn(row) {
+      process.send(started.data, store.Store(row))
+    })
+  }
+
+  // 1 度目。遷移が済むまでは処理されない。
+  send_three()
+  assert await_drained(started.pid, unavailable_transition_timeout_ms)
+
+  // 2 度目。ここは必ず Unavailable の破棄分岐を通る。
+  send_three()
+  assert await_drained(started.pid, drop_timeout_ms)
   assert process.is_alive(started.pid)
 }
+
+/// `Unavailable` への遷移を待つ上限。実測では 5.5 秒あたりで遷移するので、
+/// 揺らぎを見込んで少し多く取る。
+const unavailable_transition_timeout_ms = 10_000
+
+/// 遷移後に送ったイベントが捨てられるのを待つ上限。DB を触らないので即座に
+/// 終わるが、テストがハングしないように上限を置く。
+const drop_timeout_ms = 1000
+
+/// メールボックスが空になるまで待つ。プロセスが死んだら即座に `False` を返す
+/// （落ちない性質を見るテストなので、待ち続けても意味がない）。
+fn await_drained(pid: Pid, remaining: Int) -> Bool {
+  case message_queue_len(pid) {
+    Error(Nil) -> False
+    Ok(0) -> True
+    Ok(_pending) ->
+      case remaining <= 0 {
+        True -> False
+        False -> {
+          process.sleep(50)
+          await_drained(pid, remaining - 50)
+        }
+      }
+  }
+}
+
+/// 未処理メッセージの件数。プロセスが死んでいれば `Error(Nil)`。
+/// `erlang:process_info/2` は生きていれば `{message_queue_len, N}`、死んでいれば
+/// `undefined` を返すので、タプルの 2 要素目を読めるかどうかで振り分ける。
+fn message_queue_len(pid: Pid) -> Result(Int, Nil) {
+  decode.run(process_info(pid, atom.create("message_queue_len")), {
+    use length <- decode.field(1, decode.int)
+    decode.success(length)
+  })
+  |> result.replace_error(Nil)
+}
+
+/// プロセスの情報を 1 項目だけ問い合わせる。テストからしか使わない。
+@external(erlang, "erlang", "process_info")
+fn process_info(pid: Pid, key: Atom) -> Dynamic
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
 /// ときだけ実行する。スキーマ作成の冪等性・挿入・重複無視・jsonb としての

@@ -31,6 +31,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid}
+import gleam/otp/actor
 import gleam/string
 import pog
 
@@ -89,8 +90,11 @@ pub fn handle_event(event: Dynamic) -> Nil {
   let name = store_name()
   let assert Ok(_pid) = process.named(name)
     as "event_logger store is not running"
-  let assert Ok(row) = store.to_row(event) as "event is not a valid event map"
-  process.send(process.named_subject(name), store.Store(row))
+  case store.to_row(event) {
+    Ok(row) -> process.send(process.named_subject(name), store.Store(row))
+    // 理由を捨てると、どのキーで落ちたのかがランナーの 1 行に残らない。
+    Error(reason) -> panic as { "event is not a valid event map: " <> reason }
+  }
 }
 
 /// 接続プールを起動する起動シム。**`pgo` のアプリケーションもここで起動する**
@@ -98,16 +102,21 @@ pub fn handle_event(event: Dynamic) -> Nil {
 /// 本体が受け取れる `{ok, Pid}` に潰す。
 pub fn start_pool(config: pog.Config) -> Result(Pid, String) {
   ensure_pgo_started()
-  case pog.start(config) {
-    Ok(started) -> Ok(started.pid)
-    Error(reason) -> Error(string.inspect(reason))
-  }
+  started_pid(pog.start(config))
 }
 
 /// 保存アクターを起動する起動シム。登録名は固定で、`handle_event/1` の宛先に
 /// なる。`pool` は `plugin_children/1` が作ったプールの名前である。
 pub fn start_store(pool: Name(pog.Message)) -> Result(Pid, String) {
-  case store.start(store_name(), pool) {
+  started_pid(store.start(store_name(), pool))
+}
+
+/// アクターの起動結果を、本体の `start_child` が受け取れる `{ok, Pid}` /
+/// `{error, Reason}` に潰す。
+fn started_pid(
+  result: Result(actor.Started(data), actor.StartError),
+) -> Result(Pid, String) {
+  case result {
     Ok(started) -> Ok(started.pid)
     Error(reason) -> Error(string.inspect(reason))
   }

@@ -19,12 +19,12 @@ docker run --rm \
   -v "$PWD/plugins-src/event_logger:/src:ro" \
   -v "$PWD/plugins/event_logger:/out" \
   ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
-  sh -c 'cp -r /src /work && cd /work && gleam deps download \
+  sh -c 'cp -r /src /work && rm -rf /work/build && cd /work && gleam deps download \
          && gleam export erlang-shipment && cp -r build/erlang-shipment/. /out/'
 chmod -R a+rX plugins
 ```
 
-`/src` は読み取り専用でマウントするので、一度 `/work` へ複写してからビルドする。ローカルの `gleam export erlang-shipment` はスモークテストであって、その出力を `plugins/` に置いてはならない。
+`/src` は読み取り専用でマウントするので、一度 `/work` へ複写してからビルドする。**複写したあとに `build/` を消すのを忘れないこと。** ローカルで一度ビルドしていると、Elixir 一式を含むホスト側の成果物がそのままコンテナーへ持ち込まれる。ローカルの `gleam export erlang-shipment` はスモークテストであって、その出力を `plugins/` に置いてはならない。
 
 ## 置き方
 
