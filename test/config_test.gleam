@@ -79,14 +79,9 @@ fn config_without(name: String) -> config.Config {
 }
 
 /// 空文字列の環境変数は未設定として扱う。docker compose は未設定の変数を空文字列
-/// として渡すため、`DATABASE_URL=` で保存を無効にできる必要がある。
+/// として渡すため、値のある変数と区別できなければならない。
 pub fn empty_environment_variables_are_unset_test() {
-  assert config_with([#("DATABASE_URL", "")]).database_url == None
-  assert config_with([#("DATABASE_URL", "postgres://user@host:5432/db")]).database_url
-    == Some("postgres://user@host:5432/db")
-  assert config_without("DATABASE_URL").database_url == None
-
-  // `BUNKER_SECRET=` も同じく未設定として扱う。空文字列をシークレットとして
+  // `BUNKER_SECRET=` は未設定として扱う。空文字列をシークレットとして
   // 受け付けると、secret 無しで接続したクライアントが素通りしてしまう。
   assert config_with([#("BUNKER_SECRET", "")]).bunker_secret == None
   assert config_with([#("BUNKER_SECRET", "s3cret")]).bunker_secret
@@ -199,7 +194,6 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     pubkeys: pubkeys,
     account_keys: [],
     bunker_secret: None,
-    database_url: None,
     plugin_dir: None,
     plugin_env: dict.new(),
     admin_port: config.Disabled,

@@ -1,0 +1,22 @@
+name = "event_logger"
+version = "1.0.0"
+description = "Nostr-no-Su event logger plugin (stores monitored events into Postgres)"
+
+# 本体（nostr_no_su）の VM に読み込まれて動くプラグインなので、Hex には公開しない。
+# 共有パッケージ（gleam_stdlib / gleam_erlang / gleam_otp / gleam_json と、pog
+# 経由で入る exception）の制約は
+# 本体の gleam.toml と一致させること。影に入る側は本体の版で実行されるため、版が
+# ずれると読み込み時には何も起きず、実行時に undef で壊れる。
+# 制約を揃えるだけでは版の一致は保証されないので、manifest.toml をコミットし、
+# 本体との一致を CI で検査している。
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_otp = ">= 1.2.0 and < 2.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+pog = ">= 4.1.0 and < 5.0.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
+envoy = ">= 1.2.0 and < 2.0.0"

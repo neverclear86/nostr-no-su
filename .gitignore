@@ -4,6 +4,10 @@
 erl_crash.dump
 .env
 
+# 外部プラグインのソース側のビルド成果物。*.beam は上の行が拾うが、.app や
+# erlang-shipment の中身は拾えない。
+plugins-src/*/build
+
 # 外部プラグインの置き場所。中身は環境ごとに違うので追跡しない。
 plugins/*
 !plugins/.gitkeep

@@ -39,7 +39,6 @@ pub type Context {
   Context(
     password: String,
     accounts: List(dashboard.AccountRow),
-    event_logger_enabled: Bool,
     relays: fn() -> List(dashboard.RelayRow),
     plugins: fn() -> List(dashboard.PluginRow),
     sessions: fn() -> List(Session),
@@ -134,7 +133,6 @@ fn show_dashboard(context: Context, request: Request) -> Response {
     relays: context.relays(),
     sessions: context.sessions(),
     plugins: context.plugins(),
-    event_logger_enabled: context.event_logger_enabled,
   )
   |> dashboard.render
   |> wisp.html_response(200)

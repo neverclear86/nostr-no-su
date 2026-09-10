@@ -7,7 +7,6 @@
 //// |   `-- runner(<plugin>)   (worker  / Permanent)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// |-- bunker       (rest_for_one): バンカーアクター、        次にリレーごとの接続
-//// |-- event_logger (rest_for_one): Postgres の接続プール、   次にロガーアクター
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
@@ -15,8 +14,10 @@
 //// 後続の接続もまとめて落とすため。接続は復帰の過程で購読を張り直し publisher を
 //// 登録し直すので、再起動したバンカーが再び生きたソケットに配線される。アクター
 //// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
-//// subject を握り続けることがない。保存サブツリーも同じ形で、接続プールが
-//// 再起動するとロガーアクターも作り直され、スキーマの確認からやり直す。
+//// subject を握り続けることがない。
+////
+//// **イベント保存はこのツリーには無い。** 外部プラグイン `event_logger` が
+//// `plugin_children/1` で申告する子として `plugins` サブツリーの下で動く。
 ////
 //// 管理 UI は他のどれにも依存しないのでルート直下に置く。状態は名前付きアクター
 //// への問い合わせで読むため、UI が再起動しても、問い合わせ先が再起動しても、
@@ -86,11 +87,9 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_runner
-import nostr_no_su/plugins/event_logger
 import nostr_no_su/relay_client.{type Subscriptions}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
-import pog
 
 /// バンカーが無効なときの、承認・拒否の結果。
 const disabled: Result(Nil, String) = Error("bunker is disabled")
@@ -153,21 +152,13 @@ pub type Admin {
   )
 }
 
-/// イベント保存サブツリー。Postgres の接続プールと、そこへ書き込むロガー
-/// アクターからなる。監視サブツリーとは別にしているのは、DB が落ちて再起動が
-/// 起きてもリレーの購読を巻き込まないため。
-pub type EventLogger {
-  EventLogger(name: Name(event_logger.Msg), pool_config: pog.Config)
-}
-
-/// 監視・バンカー・イベント保存・管理 UI のどれを動かすか、接続をどう開くか、
-/// 接続が再接続までどれだけ待つか。
+/// 監視・バンカー・管理 UI のどれを動かすか、接続をどう開くか、接続が再接続
+/// までどれだけ待つか。
 pub type Spec {
   Spec(
     plugins: List(PluginSpec),
     monitor: Option(Monitor),
     bunker: Option(Bunker),
-    event_logger: Option(EventLogger),
     admin: Option(Admin),
     open: Open,
     reconnect_delay_ms: Int,
@@ -190,9 +181,6 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   })
   |> add_child(spec.bunker, fn(config) {
     supervisor.supervised(bunker_tree(spec, config))
-  })
-  |> add_child(spec.event_logger, fn(config) {
-    supervisor.supervised(event_logger_tree(config))
   })
   |> add_child(spec.admin, admin_child(spec, _))
   |> supervisor.start
@@ -379,7 +367,6 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       password: config.password,
       accounts: config.accounts,
       plugins: fn() { plugin_rows(spec.plugins) },
-      event_logger_enabled: option.is_some(spec.event_logger),
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
       revoke: fn(signer, client) {
@@ -474,17 +461,6 @@ fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     client: entry.client,
     age_seconds: now - entry.created_at,
   )
-}
-
-/// イベント保存サブツリー。プールを先に起動し、ロガーアクターがその名前を宛先に
-/// する。プールが再起動するとロガーも再起動し、スキーマの確認からやり直す。
-fn event_logger_tree(config: EventLogger) -> Builder {
-  subtree()
-  |> supervisor.add(pog.supervised(config.pool_config))
-  |> supervisor.add(event_logger.supervised(
-    config.name,
-    config.pool_config.pool_name,
-  ))
 }
 
 /// サブツリーのスーパーバイザー。不正なイベント 1 件で先頭のアクターと後続の
