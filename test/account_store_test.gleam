@@ -83,6 +83,15 @@ pub fn constraint_details_are_not_described_test() {
   assert !string.contains(described, "message-marker")
 }
 
+/// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
+pub fn deleted_or_absent_treats_a_missing_row_as_deleted_test() {
+  assert account_store.deleted_or_absent(Error(account_store.NotRegistered))
+    == Ok(Nil)
+  assert account_store.deleted_or_absent(Error(account_store.Unavailable))
+    == Error(account_store.Unavailable)
+  assert account_store.deleted_or_absent(Ok(Nil)) == Ok(Nil)
+}
+
 /// 到達できないプールへの読み込みは、例外にならず `Unavailable` を返す。
 pub fn loading_from_an_unreachable_database_is_a_value_test() {
   let name = process.new_name("account_store_test_unreachable")

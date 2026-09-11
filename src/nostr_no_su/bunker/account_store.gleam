@@ -30,6 +30,13 @@ const pool_size = 2
 /// 設定で決まる）。
 const load_timeout_ms = 2000
 
+/// 書き込みの経路のクエリーのタイムアウト。書き込みはバンカーアクターの中で行う
+/// ので、この間は NIP-46 の処理が待たされる。主キーで 1 行を書く操作は通常ミリ秒の
+/// 単位で終わる。DB に到達できて遅いときの待ちをこの値で打ち切り、書き込みが積まれて
+/// も後ろの署名者の問い合わせ（5000ms）が収まるようにする。DB に到達できないときの
+/// 失敗はこの値に依らず 2〜3 秒で返る。
+const write_timeout_ms = 1000
+
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
 const primary_key_constraint = "bunker_accounts_pkey"
 
@@ -132,6 +139,7 @@ pub fn insert(
   |> pog.parameter(pog.text(row.label))
   |> pog.parameter(pog.bytea(row.encrypted_privkey))
   |> pog.parameter(pog.bytea(row.encrypted_secret))
+  |> pog.timeout(write_timeout_ms)
   |> pog.execute(on: db)
   |> result.map_error(from_query_error)
   |> result.replace(Nil)
@@ -183,6 +191,18 @@ pub fn update_label(
   |> execute_on_one_row(db)
 }
 
+/// 削除の結果で、行が無かったこと（`NotRegistered`）を成功に写す。削除は行が無い
+/// 状態にすることが目的なので、タイムアウトした削除がサーバー側でコミットされて
+/// いた場合や、DB の外で行を消した場合にも、呼び出し側が削除を完了できるようにする。
+pub fn deleted_or_absent(
+  result: Result(Nil, StoreError),
+) -> Result(Nil, StoreError) {
+  case result {
+    Error(NotRegistered) -> Ok(Nil)
+    other -> other
+  }
+}
+
 /// ログと画面に出す説明。pgo は認証の失敗や存在しないデータベース名も接続の
 /// 失敗に畳むので、`Unavailable` の説明はそれらも含む言い方にする。
 pub fn describe(error: StoreError) -> String {
@@ -218,7 +238,10 @@ fn execute_on_one_row(
   db: pog.Connection,
 ) -> Result(Nil, StoreError) {
   use returned <- result.try(
-    pog.execute(query, on: db) |> result.map_error(from_query_error),
+    query
+    |> pog.timeout(write_timeout_ms)
+    |> pog.execute(on: db)
+    |> result.map_error(from_query_error),
   )
   case returned.count {
     0 -> Error(NotRegistered)
