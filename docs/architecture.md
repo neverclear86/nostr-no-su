@@ -24,7 +24,7 @@ flowchart LR
         monitor["監視<br/>受信したイベントを<br/>重複排除してプラグインへ"]
         bunker["バンカー<br/>NIP-46 の署名要求を<br/>検証して応答"]
         plugins["プラグイン<br/>プラグインごとの<br/>実行プロセス"]
-        admin["管理 UI<br/>状態の表示と<br/>接続の承認"]
+        admin["管理 UI<br/>状態の表示、接続の承認、<br/>アカウントの管理"]
     end
 
     subgraph ext_plugins["外部プラグイン（PLUGIN_DIR）"]
@@ -311,6 +311,111 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 `GetSigners` に応答が無いときは定義を得られなかったものとして、開いている購読を変えずに再試行を 1 つだけ予約する。
 応答が無いことを署名者 0 件と区別しないと、アクターが遅い書き込みで詰まっている間に、全署名者の購読を CLOSE してしまうからである。
 
+管理 UI は、変更の結果を型 `bunker.ChangeFailure` で受け取り、状態コードに写す。
+文言は本文に出すだけで、分岐には使わない。
+
+| 結果 | アクターのどの分岐から来るか | 管理 UI の応答 |
+| --- | --- | --- |
+| `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ（nsec 入力による登録は 200 の完了ページ） |
+| `NotApplied` | 登録済み・未登録の検査（`require_unregistered` / `require_registered`）、`NotWritten`、`AlreadyStored` | 409 でフォームに理由を出す |
+| `NotReady` | 読み込みか読み直しの前（`Loading`）、バンカーが無効 | 503 の通知ページ |
+| `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ |
+
+`MaybeApplied` を 409 にしないのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
+`NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
+
+## アカウントの登録と秘密鍵の再表示
+
+管理 UI は秘密鍵をサーバーに保持しない。
+鍵はブラウザーとの間を POST の本文とその応答の本文だけで往復し、クエリー文字列にもリダイレクト先にも載らない。
+書き込み、状態の変更、購読の張り直し、結果が曖昧なときの読み直しは、前節の「アカウントの変更」と同じ経路を通る。
+
+```mermaid
+sequenceDiagram
+    participant browser as ブラウザー
+    participant ui as 管理 UI
+    participant bk as bunker
+
+    alt 鍵を生成する
+        browser->>ui: POST /accounts/generate
+        Note over ui: 鍵を生成するだけで<br/>登録しない
+        ui-->>browser: 確認ページ（nsec を表示し、<br/>隠しフィールドに持つ）
+        browser->>ui: POST /accounts/register-generated（nsec、ラベル）
+    else nsec を貼り付ける
+        browser->>ui: POST /accounts/import（nsec、ラベル）
+    end
+    Note over ui: nsec とラベルを検査
+    ui->>bk: AddAccount(account, label)
+    bk-->>ui: Ok / ChangeFailure
+    alt 生成した鍵の登録に成功
+        ui-->>browser: 303 でダッシュボードへ（nsec を描画しない）
+    else nsec 入力による登録に成功
+        ui-->>browser: 完了ページ（nsec を 1 回表示）
+    else 失敗
+        ui-->>browser: 409 / 503 / 202（nsec を描画しない）
+    end
+```
+
+生成と登録を分けるのは、確認ページの再読み込みで POST が再送されても何も登録されないようにするためである。
+1 回の POST で生成と登録を行うと、再送のたびに別の鍵のアカウントが登録される。
+
+```mermaid
+sequenceDiagram
+    participant browser as ブラウザー
+    participant ui as 管理 UI
+    participant bk as bunker
+
+    browser->>ui: GET /accounts/{signer}/private-key
+    ui->>bk: GetAccounts
+    bk-->>ui: 一覧（署名者が無ければ 404）
+    ui-->>browser: パスワードの入力フォーム
+    browser->>ui: POST /accounts/{signer}/private-key（password）
+    ui->>bk: GetAccounts
+    bk-->>ui: 一覧の行（npub）
+    Note over ui: 管理パスワードと<br/>定数時間で照合
+    alt 一致しない
+        Note over ui: ログ: rejected a private key reveal
+        ui-->>browser: 403
+    else 一致する
+        ui->>bk: GetNsec(signer)
+        bk-->>ui: nsec の文字列（Account は渡さない）
+        Note over ui: ログ: revealed the private key of {npub}
+        ui-->>browser: 表示ページ
+    end
+```
+
+`GetNsec` の応答が `Account` ではなく nsec の文字列なのは、管理 UI のプロセスが署名や復号に使える値を持たないようにするためである。
+要求は公開鍵と返信先しか持たず、応答は alias の問い合わせで受けるので、タイムアウトの後に届いた nsec はランタイムが捨てる。
+アクターは読み込みか読み直しの前（`Loading`）には答えない。
+ログに出すのは一覧の行の npub だけで、パスワードも nsec も出さない。
+
+## 管理 UI のルート
+
+`/healthz` 以外はすべて Basic 認証を要する。
+状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
+認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じるヘッダーを付ける。
+パスの定義は `admin/dashboard.gleam` にだけ置き、ルーティングとフォームの `action` が同じ定義を見る。
+
+| メソッド | パス | 役割 |
+| --- | --- | --- |
+| GET | `/healthz` | 認証なしで `ok` を返す |
+| GET | `/` | ダッシュボード |
+| GET / POST | `/approve/<token>` | 承認ページ / 承認 |
+| POST | `/deny/<token>` | 拒否 |
+| POST | `/sessions/revoke` | セッションの取り消し |
+| GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
+| POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
+| POST | `/accounts/import` | nsec 入力による登録。完了ページで nsec を 1 回表示する |
+| POST | `/accounts/register-generated` | 生成した鍵の登録。303 でダッシュボードへ戻す |
+| GET / POST | `/accounts/<signer>/label` | ラベルの編集フォーム / 差し替え |
+| GET / POST | `/accounts/<signer>/rotate` | secret の作り直しの確認 / 実行 |
+| GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
+| GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
+
+`<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
+アカウント 1 件の操作は GET でも POST でも先にバンカーの一覧を引き、一覧に無い署名者は 404 にする。
+以降のログとバンカーへの呼び出しには、パスの値ではなく一覧の行の値を使う。
+
 ## プラグインが読み込まれるまで
 
 起動時に `PLUGIN_DIR` を 1 度だけ走査する。
@@ -362,7 +467,7 @@ nostr-no-su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
-│       ├── admin/dashboard.gleam ダッシュボードの描画（スナップショット → HTML の純粋関数）
+│       ├── admin/dashboard.gleam ダッシュボードとアカウントのページの描画（純粋関数）とパスの定義
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
