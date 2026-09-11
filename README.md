@@ -134,6 +134,8 @@ docker rm -f nns-pg-test
 
 ## 構成
 
+本体の内部構造は [システム構成](docs/architecture.md) に図で示してある。
+
 ```
 src/nostr_no_su.gleam                        -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
 src/nostr_no_su/app.gleam                    -- スーパービジョンツリーの構成
@@ -171,6 +173,7 @@ examples/plugins/file_logger/                -- 外部プラグインの例（�
 examples/plugins/counter/                    -- 外部プラグインの例（plugin_children/0 で子プロセスを申告する）
 plugins-src/event_logger/                    -- 同梱の外部プラグイン（Postgres へ保存する。独自の依存と設定を持つ Gleam プロジェクト）
 docs/plugin-api.md                           -- プラグイン API v1 の仕様（プラグイン作者向け）
+docs/architecture.md                         -- システム構成（プロセス・経路・読み込み・配置・設定の図解）
 ```
 
 ## 設計上の判断・既知の制約
