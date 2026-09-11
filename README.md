@@ -8,37 +8,40 @@ NIP-46 で鍵を管理するバンカーであり、自分のアカウントの�
 
 NIP-46 リモート署名バンカーが動作する。クライアント（nsec.app / noStrudel 等）が `bunker://` URI で接続し、暗号化されたリクエスト経由で署名を委任できる。あわせて、設定したアカウントのイベントを監視してプラグインで処理する。
 
-- **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する
+- **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する。アカウントの秘密鍵と接続 secret は、マスターキー（`ACCOUNT_MASTER_KEY`）で AES-256-GCM により暗号化して Postgres に保存する
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベント ID の検証、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
 - 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
 - **イベントロガー**: 外部プラグイン `event_logger` を `PLUGIN_DIR` に置き、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。ソースとビルド手順は `plugins-src/event_logger/`
-- **管理 UI**: `http://127.0.0.1:8080/` でアカウントの接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態を確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
+- **管理 UI**: `http://127.0.0.1:8080/` でリレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態を確認できる。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
 ## 使い方
 
 ### バンカーとして使う
 
-秘密鍵を用意して `ACCOUNT_KEYS` に設定して起動する:
+アカウント（秘密鍵と接続 secret）は Postgres に暗号化して保存する。バンカーを有効にするには、保存先の `DATABASE_URL` と、暗号化に使うマスターキー `ACCOUNT_MASTER_KEY` の 2 つを設定する。マスターキーは 32 バイトの乱数を 16 進にしたもので、次のように作る:
 
 ```sh
-ACCOUNT_KEYS=<64桁hexの秘密鍵> \
+openssl rand -hex 32
+```
+
+```sh
+DATABASE_URL=postgres://nostr:nostr@127.0.0.1:5432/nostr_no_su \
+ACCOUNT_MASTER_KEY=<openssl rand -hex 32 の出力> \
 BUNKER_RELAY_URL=wss://relay.nsec.app,wss://relay.nostr.band \
 gleam run
 ```
 
+起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
+
+どちらかが未設定なら、バンカーは `[bunker] disabled: <理由>` を 1 行出して無効になり、監視・プラグイン・管理 UI だけで動く。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: ...` を 1 行出して 5 秒ごとに読み込みを再試行し、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
+
 バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数指定すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。`BUNKER_RELAY_URL` を省略すると `RELAY_URL` と同じリレーを使う（`RELAY_URL` も空なら `wss://relay.damus.io`）。
 
-起動すると各アカウントの接続 URI がログに出力される:
+> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ホストの権限も絞ること。
 
-```
-[bunker] bunker://<signer-pubkey>?relay=wss%3A%2F%2Frelay.nsec.app&secret=<secret>
-```
-
-この `bunker://...` をクライアントの「Nostr Connect / リモート署名」に貼り付けると接続できる。以降、そのクライアントからの署名要求をバンカーが処理する。
-
-> ⚠️ **秘密鍵とログの扱い**: `ACCOUNT_KEYS` は本物の秘密鍵。バージョン管理に含めず `.env` などで渡すこと。また起動ログの `bunker://` URI には secret が含まれるため、`docker logs` の共有には注意。
+> ⚠️ **`ACCOUNT_KEYS` と `BUNKER_SECRET` は廃止した**: 設定されていても値は読まず、`[main] ACCOUNT_KEYS is no longer supported and is ignored; ...` を 1 行出すだけである。
 
 #### 対応クライアントと相互運用
 
@@ -46,7 +49,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 ### 管理 UI
 
-起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードにはアカウント（署名者 pubkey と `bunker://` 接続 URI: secret 入りのものと、承認を経るもの）、承認待ちの接続要求（承認・拒否ボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインとその状態（`running` / `overloaded` / `disabled`）、イベントロガーの有効／無効が並ぶ。
+起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードには承認待ちの接続要求（承認・拒否ボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインとその状態（`running` / `overloaded` / `disabled`）が並ぶ。アカウントの節は、読み込んだアカウントを管理 UI に反映する変更（#39）が入るまで常に空（`No accounts configured.`）である。以下の `bunker://` 接続 URI の表示に関する記述は、その変更が入ってから当てはまる。
 
 認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する。未設定なら起動ごとにランダム生成してログに出力する:
 
@@ -74,7 +77,7 @@ secret を持たない `bunker://` URI（ダッシュボードの「Connection U
 
 ### 監視のみ（バンカー無効）
 
-`ACCOUNT_KEYS` を空にすると監視のみモードで動く:
+`DATABASE_URL` か `ACCOUNT_MASTER_KEY` が無ければ監視のみモードで動く。同梱の compose は `DATABASE_URL` を同梱の Postgres に向けているので、`ACCOUNT_MASTER_KEY` を設定しなければ監視のみになる:
 
 ```sh
 docker compose up --build
@@ -82,7 +85,7 @@ docker compose up --build
 
 ### docker compose
 
-compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたイベントは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。
 
@@ -92,9 +95,9 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml` に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
 
-資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の両方を合わせること。
+資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*`、`DATABASE_URL`、`PLUGIN_EVENT_LOGGER_DATABASE_URL` の 3 か所を合わせること。
 
-**`DATABASE_URL` は廃止した。** イベント保存は本体の機能ではなく外部プラグイン `event_logger` になり、設定も `PLUGIN_EVENT_LOGGER_DATABASE_URL` へ移った（`PLUGIN_<NAME>_<KEY>` の規則）。**空文字列の意味も変わっている。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は空値が落ちてプラグインにはキーごと届かないため、設定不足として拒否され起動のたびに 1 行出る。**保存を無効にする正しいやり方は、プラグインを置かないことである。**
+**`DATABASE_URL` は意味を変えて復活した。** PR #34 より前はイベント保存の設定だったが、イベント保存は外部プラグイン `event_logger` になり、設定も `PLUGIN_EVENT_LOGGER_DATABASE_URL` へ移った（`PLUGIN_<NAME>_<KEY>` の規則）。現在の `DATABASE_URL` は **本体のバンカーがアカウントを保存する先** である。旧構成の `.env` をそのまま使うと、イベント保存用だった URL がアカウントストアの接続先として読まれ、同じ DB に `bunker_accounts` テーブルが作られる（害は無いが、意図と違うなら値を見直すこと）。**`PLUGIN_EVENT_LOGGER_DATABASE_URL` の空文字列の意味も旧 `DATABASE_URL` と違う。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は空値が落ちてプラグインにはキーごと届かないため、設定不足として拒否され起動のたびに 1 行出る。**イベント保存を無効にする正しいやり方は、プラグインを置かないことである。**
 
 ### 環境変数
 
@@ -102,8 +105,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | --- | --- | --- |
 | `RELAY_URL` | `wss://relay.damus.io` | 監視先リレーの URL（カンマ区切りで複数可）。空にすると監視無効（バンカーのみ） |
 | `BUNKER_RELAY_URL` | `RELAY_URL` と同じ | バンカーが購読・応答するリレーの URL（カンマ区切りで複数可）。`RELAY_URL` も空なら `wss://relay.damus.io` |
-| `ACCOUNT_KEYS` | （空） | バンカーが署名するアカウントの hex 秘密鍵（カンマ区切り）。空ならバンカー無効 |
-| `BUNKER_SECRET` | （空） | 接続 secret。未設定なら起動ごとにランダム生成し、URI をログに出力 |
+| `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。空ならバンカー無効。docker compose では同梱の Postgres を指す（注 1） |
+| `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。空か不正ならバンカー無効。自動生成はしない |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にしても無効化にはならない（保存をやめるならプラグインを置かない）。docker compose では同梱の Postgres を指す |
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
@@ -113,6 +116,10 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 
+注 1: `DATABASE_URL` の userinfo はパーセントデコードされない。`:` を含むパスワードや、データベース名の無い URL は解釈できず、起動ログに `[bunker] disabled: DATABASE_URL is not a valid postgres URL` が出る（URL そのものはログに出さない）。
+
+`ACCOUNT_KEYS` と `BUNKER_SECRET` は廃止した。設定されていれば名前だけを起動ログに出し、値は読まない。
+
 ### ローカル開発 (Gleam 1.17.0 / Erlang OTP 29 で検証)
 
 ```sh
@@ -121,6 +128,17 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 ```
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
+
+本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
+
+```sh
+docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test gleam test
+docker rm -f nns-pg-test
+```
+
+本体も `pog` 経由で `opentelemetry_api`（`build_tools = ["rebar3", "mix"]`）に依存するため、ホストに elixir があると、ホストで作った erlang-shipment には Elixir 一式が混ざる。配布する成果物は Dockerfile の中で作ること。
 
 `event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
 
@@ -152,6 +170,7 @@ src/nostr_no_su/time.gleam                   -- 現在時刻 (FFI)
 src/nostr_no_su/crypto/secp256k1.gleam       -- 点演算・鍵導出・ECDH
 src/nostr_no_su/crypto/bip340.gleam          -- BIP-340 Schnorr 署名 / 検証
 src/nostr_no_su/crypto/nip44.gleam           -- NIP-44 v2 暗号化
+src/nostr_no_su/crypto/aes_gcm.gleam         -- AES-256-GCM の箱（nonce || 暗号文 || タグ）
 src/nostr_no_su/nostr/event.gleam            -- Event 型・コーデック・ID 計算・署名
 src/nostr_no_su/nostr/filter.gleam           -- 購読フィルター
 src/nostr_no_su/nostr/message.gleam          -- クライアント⇄リレーのメッセージ
@@ -162,6 +181,8 @@ src/nostr_no_su/bunker.gleam                 -- バンカーの actor（セッ�
 src/nostr_no_su/bunker/engine.gleam          -- NIP-46 リクエスト処理の純粋コア
 src/nostr_no_su/bunker/rpc.gleam             -- JSON-RPC コーデック
 src/nostr_no_su/bunker/account.gleam         -- 鍵材料と bunker:// URI
+src/nostr_no_su/bunker/vault.gleam           -- マスターキーと、アカウントの暗号化形式・行の検証（純粋）
+src/nostr_no_su/bunker/account_store.gleam   -- アカウントを Postgres に保存するストア（pog）
 src/nostr_no_su/plugin.gleam                 -- プラグイン機構（プラグイン API v1 の検証と読み込み）
 src/nostr_no_su/plugin_children.gleam        -- 任意エクスポート plugin_children/0・/1 の検証と子仕様への変換
 src/nostr_no_su/plugin_config.gleam          -- プラグイン固有の設定（PLUGIN_<NAME>_<KEY>）の切り出しと map への変換
@@ -179,19 +200,23 @@ docs/architecture.md                         -- システム構成（プロセ�
 
 ## 設計上の判断・既知の制約
 
-- **スーパービジョンツリー**: root（one_for_one）の下にプラグイン・監視・バンカーのサブツリーを置き、プラグインのサブツリーは one_for_one、他は rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く
+- **スーパービジョンツリー**: root（one_for_one）の下にプラグイン・監視・バンカーのサブツリーを置き、プラグインのサブツリーは one_for_one、他は rest_for_one。先頭の actor（重複排除ディスパッチャー / バンカー actor）が再起動すると後続のリレー接続も再起動し、購読と publisher の再設定が自然に行われる。actor は名前付きプロセスなので、リレー接続は名前宛てに送信すれば再起動後のプロセスにそのまま届く。バンカーのサブツリーだけは、actor の前にアカウントストアの接続プール（pog）を置く。pgo はプール名が未登録のままクエリーを受けると呼び出し側を `noproc` で exit させるため、プールを先頭に置いて actor がプールの登録後にしか動かないようにしている
+- **秘密鍵と接続 secret は暗号化して保存する**: 形式は AES-256-GCM の「nonce（12 バイト）|| 暗号文 || タグ（16 バイト）」で、暗号化ごとに乱数の nonce を使う。AAD は用途ラベル（`nostr-no-su:bunker-account:privkey:v1` / `...:secret:v1`）、NUL 1 バイト、x-only 公開鍵の 32 バイトの連結で、ある行の暗号文を別の列や別の行へ移す改ざんはタグの検証で失敗する。ラベル末尾の `v1` は形式の版である。マスターキーは自動生成しない。生成して DB と同じ場所に保存すれば暗号化の意味が無く、起動ごとに作れば再起動でアカウントを失うためである。復号できない行（マスターキー違い、改ざん、公開鍵との不一致など）はその行だけを飛ばして `[bunker] skipped account <pubkey>: <理由>` を出し、完了行を `loaded 2 of 3 account(s)` の形にする。マスターキーと復号した秘密鍵はプロセスの状態に関数として閉じ込め、`string.inspect` やクラッシュレポートに値が出ないようにしている（VM 内のコードから取り出す道は残る。プラグインの信頼モデルの範囲である）
+- **DB の障害はバンカーのアカウント読み込みに閉じ込める**: DB の停止はプロセスの死にならない（pgo が再接続を内部で扱い、クエリーは値で失敗する）。バンカー actor はストアの失敗で落ちず、再試行を予約してログを 1 行出すだけである。起動時にも DB を待たず、読み込みは actor が自分宛に積むメッセージで行う。したがって DB が落ちていても root の `restart_tolerance(3, 60)` は消費されず、監視とプラグインは動き続ける。再試行のタイマーは actor ごとの名前なしの subject に予約するので、actor が再起動しても古いタイマーは取り消され、再試行が重複しない
+- **DB が起動時に落ちていた場合、署名は次の再接続まで通らない（#38 の時点の制約）**: バンカーの購読は接続（再接続）の時点の署名者から作る。DB に到達できないまま接続すると署名者が 0 件なので購読を開かず、あとで読み込みが成功してもリレーへの REQ は次の再接続まで開かない。compose の `restart: unless-stopped` ではホストの再起動で本体が Postgres より先に立ち上がりうる。実行中の署名者の変化を購読へ反映する変更（#39）で解消する
+- **pgo のクラッシュレポートには DB のパスワードが出うる**: pgo のプロセス（`pgo_pool`、`pgo_pool_sup`、`pgo_connection` など）は接続設定を状態や起動引数に持ち、`format_status` を定義していない。これは `event_logger` でも同じで、pgo を改変しない限り塞げない。本体は `DATABASE_URL` を理由の文字列やログに入れず、解釈も 1 か所（`account_store.pool_config`）に限っている。マスターキーは pgo に渡さないので影響を受けない
 - **プラグインは専用プロセスで動かす**: プラグイン 1 つにつきランナーを 1 つ、root（one_for_one）直下の `plugins` サブツリーに置く。ディスパッチャーはイベントを送るだけで戻るので、遅いプラグインが他のプラグインや監視を止めない。プラグインのイベント処理関数はイベントごとに使い捨てのプロセス（`erlang:spawn_monitor/1`。**リンクは張らない**）で動かすため、プラグインの例外・異常終了・ハングはランナーの死にならない。**プラグインの不調で supervisor の再起動が起きない**ということであり、root の `restart_tolerance(3, 60)` を消費してアプリ全体を落とすことがない。1 件あたり 30 秒で打ち切り、連続 5 回失敗したプラグインは無効化してログに出し、以後はイベントを捨てて件数を数える（管理 UI には `disabled` として残る。再有効化は本体の再起動か、ランナーの強制終了）。未処理のイベントが 1000 件を超えたプラグインは、キューが空になるまで捨てて復帰時に件数を報告する（`event_logger` プラグインが DB 到達不能時に行うのと同じ形。捨てるのは超過分だけでなくバックログ全体なので、配信は best-effort である）。ワーカーの終了理由は FFI 側で `error:badarg` の形の 1 行に整えている。DOWN の理由は既定ではスタックトレース込みで数百文字になり、ログにもダッシュボードにも収まらないため
 - **プラグインが申告した子プロセスは Temporary で載せる**: 任意エクスポート `plugin_children/0` を持つプラグインの子は、プラグインごとの専用スーパーバイザー（one_for_one、10 秒に 5 回）にまとめ、その子仕様を **Temporary** にする。段を挟むだけではクラッシュループを止められないので、歯止めは再起動の型で作る。子スーパーバイザーが諦めると理由 `shutdown` で終了し、親は再起動もせず許容回数も消費しない（`supervisor.erl` の `do_restart(shutdown, ...)` は `add_restart/1` を通らない）。Transient ではなく Temporary にするのは、仕様ごと削除されることと、外部からの kill のような別の理由で落ちたときにも再起動されないためである。代償として、一度諦めた子は本体を再起動するまで戻らない。起動時の失敗は空のスーパーバイザーで吸収してアプリの起動を止めず、理由は子ごとの 1 行ログに出す
 - **設定を受け取る口はアリティ +1 の任意エクスポートで足す**: プラグイン固有の設定は環境変数 `PLUGIN_<NAME>_<KEY>` から切り出し、binary キーの map として `plugin_children/1` と `handle_event/2` に渡す。既存の `plugin_children/0` / `handle_event/1` を持つプラグインは無変更で動くので、**API バージョンは 1 のまま**である（`handle_event` だけは必須側のアリティが `/1` または `/2` の 2 通りになるが、既存のプラグインは 1 つも落ちないため破壊的変更にあたらない）。設定不足の申告を宣言的な必須キー一覧ではなく `plugin_children/1` の `{error, Reason}` にしたのは、**値の妥当性まで検査できる**のがプラグイン側だけだからである。キーの存在と、その値が Postgres の URL として解釈できることは別で、後者を読み込み時に検査できないと不正な値が「子の起動失敗 → 連続失敗 → `disabled`」という遠回りな症状に化ける
 - **リレー接続 actor は exit を trap する**: stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
-- **イベント保存は外部プラグイン**: pog の接続プールと保存 actor は本体ではなくプラグインが `plugin_children/1` で申告し、`plugins` サブツリーの下（one_for_one）で動く。プラグインごとのサブスーパーバイザーが Temporary なので、DB 由来のクラッシュループが本体を巻き込むことはない。保存 actor はプールを名前で参照するため、rest_for_one でなくても再起動をまたいで配線が保たれる。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
+- **イベント保存は外部プラグイン**: イベント保存用の pog の接続プールと保存 actor は本体ではなくプラグインが `plugin_children/1` で申告し（本体のプールはバンカーのアカウント専用である）、`plugins` サブツリーの下（one_for_one）で動く。プラグインごとのサブスーパーバイザーが Temporary なので、DB 由来のクラッシュループが本体を巻き込むことはない。保存 actor はプールを名前で参照するため、rest_for_one でなくても再起動をまたいで配線が保たれる。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
 - **管理 UI は root 直下の独立した子**: mist（HTTP サーバー）は監視・バンカー・保存のどれにも依存しないため、root（one_for_one）に並べる。表示する状態はハンドラーが直接触らず、Context に注入された関数から名前付き actor へ問い合わせて取る。問い合わせが失敗しても（再起動中、タイムアウト）ページ全体を失敗させず、その項目だけ「未接続」「該当なし」として描画する。描画は「状態のスナップショット → HTML 文字列」の純粋関数で、テンプレートエンジンも JS フレームワークも使わない
 - **管理 UI は既定でループバックのみ**: ダッシュボードには secret 入りの `bunker://` URI が載るため、既定 (`ADMIN_BIND=127.0.0.1`) では LAN に露出しない。Docker はホストの iptables を直接操作するので、ポートを公開したうえでファイアウォールに頼る形は避け、compose 側でホストのループバックにだけ公開している
 - **監視はバンカー自身の NIP-46 通信を処理しない**: NIP-01 のフィルターには kind の否定が無いため、`PUBKEYS` に署名者を含めて `RELAY_URL` と `BUNKER_RELAY_URL` を同じリレーにすると、バンカーの応答（kind 24133）が監視の購読にも届く。これはプラグインに渡す前に落とすので、コンソールにも `events` テーブルにも NIP-46 の往復は現れない（kind 24133 は NIP-01 上リレーが保存しない想定のイベントで、保存する意味も無い）
 - **監視の重複排除は世代式スライディングウィンドウ**: 複数リレーが同じイベントを配送するため、直近のイベント id（上限 4096〜8192 件）を覚えてプラグインには 1 回だけ渡す。再接続時のストアドイベント再配送もこれで吸収する
 - **サイナー鍵 = ユーザー鍵**: 仕様で許可されている。別鍵にすると再起動で URI が無効化されるため v0 では同一にしている
-- **secret は再利用可**: 仕様は single-use だが、セッションがインメモリのため再起動でオンボーディングが壊れないよう、正しい secret を知るクライアントの接続を許可する
+- **secret は再利用可**: 仕様は single-use だが、セッションがインメモリのため再起動でオンボーディングが壊れないよう、正しい secret を知るクライアントの接続を許可する。secret はアカウントごとに暗号化して保存するので、再起動しても接続 URI は変わらない
 - **接続の承認は auth_url フロー**: secret の一致しない `connect` は、管理 UI が有効なら承認待ちにして `auth_url` 応答（`result` が `"auth_url"`、`error` が承認ページの URL）を返し、承認された時点で元のリクエストと同じ id で本来の応答を送る。判断も応答イベントの組み立ても純粋なエンジンに置き、承認トークンの乱数と現在時刻は actor が注入する。管理 UI が無効なら承認する手段が無いので、従来どおり `invalid secret` で拒否する
 - **セッションと承認待ちはインメモリ**: 再起動するとクライアントは再 `connect` が必要（secret 再利用可なので実害は小）。承認待ちも同じく永続化せず、10 分で失効する。承認済みのクライアントは secret 無しで `connect` し直しても承認を求められないが、再起動後は改めて承認が要る
 - **バンカー actor は起動時刻より古いリクエストを処理しない**: リプレイ防止の `seen` ウィンドウはバンカー actor の中にしかなく、プロセスの再起動でも actor の再起動でも空になる。kind 24133 を保存するリレー（NIP-01 上は保存しない想定だが strfry などは保存する）が再購読で処理済みのリクエストを再配送すると、記憶していないため新規として実行し、`sign_event` をやり直して応答を再発行したり、取り消したはずのセッションを復活させたりしてしまう。そこで actor は起動時刻を刻み、`created_at` がそれより古いリクエストをエンジンが落とす。この起点は actor が生きているあいだ動かないので、切断していた間に届いたリクエストを購読の猶予（`since = 現在時刻 - 60 秒`）で拾い直す動きは従来どおり働く。`created_at` は秒までしか持たないため判定は秒単位で、起動と同じ秒のリクエストは通す（起動直後に届いた正当なリクエストを落とすと、クライアントは応答を待ったまま失敗するため）。停止から再起動までが同じ秒に収まった場合、その秒のリクエストは再実行されうる。さらに、判定に使うのはクライアントが自己申告する `created_at` なので、時計が進んでいるクライアントには保護が効かない。ずれが D 秒なら、リレーが再配送しうる `D + 60` 秒のうち `D` 秒ぶんの再起動では再実行が起きる（上限は受付ウィンドウの ±10 分）。副作用として、時計が遅れているクライアントのリクエストは、actor の起動直後、そのずれの秒数ぶんだけ弾かれうる

@@ -129,7 +129,7 @@ plugin_children() -> [child_spec()].
 - **必ずリンクを張る関数であること**（`gen_server:start_link/4` など）。本体は起動直後に、子が自分のリンク集合に入ったかを確かめる。生きているのに入っていない子は、その場で kill して起動失敗にする。リンクを張らない子は誰にも監視されず、落ちても気付かれないまま登録名だけを握り続けるからである。
 - **`{ok, Pid}` または `{ok, Pid, Info}` を返すこと。** Gleam で書くときは注意が要る。`pog.start/1` の実際の戻り値は `{ok, {started, Pid, Conn}}` であって `{ok, Pid}` ではないため、本体が弾く。**Gleam のプラグインは `{ok, Pid}` を返す薄いシムを 1 つ書くこと。**
 - **戻ること。** OTP のスーパーバイザーは子の起動にタイムアウトを持たない。`start` が戻らないとツリーの起動そのものが止まる。
-- **同梱したアプリケーションはプラグインが自分で起動すること。** 本体はコードパスを足すだけで、同梱したアプリケーションを起動しない（第 8.1 節）。必要なら `start` の MFA の中で `application:ensure_all_started/1` を呼ぶ。冪等なので、子が再起動するたびに呼ばれても害はない。実例が `plugins-src/event_logger/` である。`pgo` を起動しないと `pg_types` のアプリが立たず、`pgo_type_server` が `pg_types:update_map/3` の `application:get_key/2` で `badmatch` して即死し、接続プールごと落ちる。
+- **同梱したアプリケーションはプラグインが自分で起動すること。** 本体はコードパスを足すだけで、同梱したアプリケーションを起動しない（第 8.1 節）。必要なら `start` の MFA の中で `application:ensure_all_started/1` を呼ぶ。冪等なので、子が再起動するたびに呼ばれても害はない。**本体がたまたま同じアプリケーションを起動していても、それに依存しないこと。** 本体の依存は予告なく変わりうるし、本体を持たない環境でプラグインをテストすることもある（本体は現在アカウントストアのために `pgo` を起動しているが、`event_logger` は自分でも起動する）。実例が `plugins-src/event_logger/` である。`pgo` を起動しないと `pg_types` のアプリが立たず、`pgo_type_server` が `pg_types:update_map/3` の `application:get_key/2` で `badmatch` して即死し、接続プールごと落ちる。
 
 ### 5.3 登録名はプラグインの責任
 
@@ -343,7 +343,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 
 食い違いは**読み込み時ではなくイベント処理関数の実行時に `undef` として現れる。** 本体の版に無い関数を呼んだ時点で初めて失敗するので、`plugin.load` の検証では検出できない。したがって **プラグインは Dockerfile と同じ Gleam / OTP でビルドすること。** OTP が違う BEAM は `badfile` で拒否される。
 
-影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。同梱の `event_logger` の場合は 40 モジュール（`gleam_stdlib` / `gleam_erlang` / `gleam_otp` / `exception` / `gleam_json`）が影に入り、起動ログに出るのはその 1 行だけである。
+影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。同梱の `event_logger` の場合は 120 モジュール（`gleam_stdlib` / `gleam_erlang` / `gleam_otp` / `gleam_json` / `exception` / `pog` / `pgo` / `pg_types` / `backoff` / `opentelemetry_api` / `gleam_time`。本体もアカウントストアのために `pog` に依存するため）が影に入り、起動ログに出るのはその 1 行だけである（Dockerfile と同じイメージでビルドしたときの値）。
 
 ### 8.5 読み込みの失敗
 
@@ -371,7 +371,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 - `examples/plugins/file_logger/` は受信したイベントを 1 件 1 行でファイルへ追記する。**状態を持たない例**で、処理は `handle_event/2` の中で完結する。同時に**プラグイン固有の設定を受け取る例**でもあり、出力先を `PLUGIN_FILE_LOGGER_PATH` から受け取る。設定が必須なので `handle_event/1` はエクスポートせず、`plugin_children/1` で設定の有無だけを検査する（第 6 章）。
 - `examples/plugins/counter/` は受信件数を gen_server で数える。**状態を持つ例**で、その gen_server を `plugin_children/0` で申告する（第 5 章）。設定を必要としないのでアリティ 0 のままであり、**既存のプラグインが無変更で動くことの実例**にもなっている。
 
-- `plugins-src/event_logger/` は監視で受信したイベントを Postgres へ保存する。例示ではなく**第一級の同梱プラグイン**で、Gleam プロジェクトを `gleam export erlang-shipment` の出力として置く実例である。状態（保存アクター）を持ち、**独自の依存を同梱する**（`pog` / `pgo` ほか。共有パッケージ 40 モジュールが影に入る）実例でもあり、**同梱アプリケーションを自分で起動する**（第 5.2 節）唯一の例でもある。
+- `plugins-src/event_logger/` は監視で受信したイベントを Postgres へ保存する。例示ではなく**第一級の同梱プラグイン**で、Gleam プロジェクトを `gleam export erlang-shipment` の出力として置く実例である。状態（保存アクター）を持ち、**独自の依存を同梱する**（`pog` / `pgo` ほか。本体も `pog` に依存するので、共有パッケージ 120 モジュールが影に入る）実例でもあり、**同梱アプリケーションを自分で起動する**（第 5.2 節）唯一の例でもある。
 
 上の 2 つが Erlang 1 ファイルなのは、ネストしたビルドディレクトリーと依存管理を `examples/` へ持ち込まないためである。`event_logger` は独自の依存を持つので、`plugins-src/` に独立した Gleam プロジェクトとして置いてある。
 

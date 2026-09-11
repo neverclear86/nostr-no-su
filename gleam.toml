@@ -20,6 +20,11 @@ gleam_crypto = ">= 1.6.0 and < 2.0.0"
 gleam_otp = ">= 1.2.0 and < 2.0.0"
 wisp = ">= 2.2.2 and < 3.0.0"
 mist = ">= 6.0.3 and < 7.0.0"
+# バンカーのアカウントストア（Postgres）。同梱プラグイン event_logger も pog を
+# 同梱しており、プラグイン側の同名パッケージは本体の版の影に入る。制約は
+# plugins-src/event_logger/gleam.toml と一致させ、manifest.toml の版の一致は CI で
+# 検査している。
+pog = ">= 4.1.0 and < 5.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

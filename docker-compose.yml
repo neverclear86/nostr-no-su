@@ -8,11 +8,15 @@ services:
       # 同じ。NIP-46 専用リレー（relay.nsec.app など）もここには指定できる。
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
       PUBKEYS: ${PUBKEYS:-}
-      # 64 文字の 16 進秘密鍵（カンマ区切り）。空にするとバンカーを無効にする。
-      # 値を直接書かず、追跡しない .env ファイルに置くことを推奨する。
-      ACCOUNT_KEYS: ${ACCOUNT_KEYS:-}
-      # 任意。未設定なら起動ごとに乱数で生成し、bunker:// URI をログに出す。
-      BUNKER_SECRET: ${BUNKER_SECRET:-}
+      # バンカーのアカウント（暗号化した秘密鍵と接続 secret）の保存先。既定は
+      # 下の同梱 postgres サービスを指す。イベント保存の
+      # PLUGIN_EVENT_LOGGER_DATABASE_URL とは別の設定である。
+      DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+      # 秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト）。
+      # `openssl rand -hex 32` で作り、値を直接書かず追跡しない .env ファイルに
+      # 置くこと。**失うと保存した全アカウントの鍵を失う。** 空ならバンカーを
+      # 無効にする。
+      ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
       # プラグイン固有の設定は PLUGIN_<NAME>_<KEY> で渡す。compose の
       # environment: は明示的な列挙なので、自分のプラグインの分はここに足すこと。
       # 監視したイベントの保存先。**DATABASE_URL は廃止し、外部プラグイン
@@ -20,7 +24,8 @@ services:
       # plugins/event_logger へ置いて初めて保存が有効になる。置き方は
       # plugins-src/event_logger/README.md を参照。空にしても無効化にはならず
       # （キーごと届かないため）設定不足として拒否されるので、保存をやめるなら
-      # プラグインを置かないこと。下の postgres サービスの資格情報と一致させる。
+      # プラグインを置かないこと。下の postgres サービスの資格情報と一致させる
+      # （DATABASE_URL も同じ）。
       PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
       # file_logger の出力先。/plugins は読み取り専用なのでそこには書けない。
       PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
@@ -51,8 +56,9 @@ services:
       # シークレットを含む bunker:// URI を表示するため。外部から到達させるときは
       # TLS を終端するリバースプロキシーを前に置くこと。
       - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
-    # 既定の構成は event_logger を置く前提で組んである。プラグインを置かない
-    # 構成でも Postgres が動いているだけで害はない。
+    # 本体のバンカーはアカウントを Postgres に保存し、event_logger を置けば
+    # イベントも同じ Postgres に保存する。Postgres が落ちていても本体は起動し、
+    # バンカーはアカウントの読み込みを再試行し続ける（監視とプラグインは動く）。
     depends_on:
       postgres:
         condition: service_healthy

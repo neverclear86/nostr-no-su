@@ -6,7 +6,8 @@
 //// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
 //// |   `-- runner(<plugin>)   (worker  / Permanent)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
-//// |-- bunker       (rest_for_one): バンカーアクター、        次にリレーごとの接続
+//// |-- bunker       (rest_for_one): アカウントストアの接続プール、バンカーアクター、
+//// |                                次にリレーごとの接続
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
@@ -15,6 +16,21 @@
 //// 登録し直すので、再起動したバンカーが再び生きたソケットに配線される。アクター
 //// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
 //// subject を握り続けることがない。
+////
+//// **アカウントストアの接続プールはバンカーのサブツリーの先頭に置く。** pgo は
+//// チェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で
+//// exit させる。プールを先頭に置けば、バンカーアクターはプールが登録された後に
+//// しか起動せず、プールが落ちればアクターも止められてから起動し直すので、未登録の
+//// プールを叩く状況が構造上生じない。代償はプールの再起動がバンカーアクターの
+//// 再起動（インメモリのセッションの消失）を伴うことだが、DB の停止や再起動では
+//// プールのプロセスは死なない（pgo が再接続を内部に閉じ込め、クエリーは値で
+//// 失敗する）ので、これが起きるのはプール自体のバグか外部からの kill に限られる。
+////
+//// DB の障害がルートの `restart_tolerance(3, 60)` を消費しないのは、DB の停止が
+//// プロセスの死にならず、バンカーアクターがストアの失敗で落ちず（再試行を予約して
+//// ログを 1 行出すだけ）、起動時に DB を待たない（読み込みは initialiser が積む
+//// メッセージで行う）からである。監視とプラグインはバンカーのサブツリーと兄弟
+//// なので、DB の障害に巻き込まれない。
 ////
 //// **イベント保存はこのツリーには無い。** 外部プラグイン `event_logger` が
 //// `plugin_children/1` で申告する子として `plugins` サブツリーの下で動く。
@@ -80,7 +96,7 @@ import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
-import nostr_no_su/bunker/engine.{type Engine, type Pending}
+import nostr_no_su/bunker/engine.{type Pending}
 import nostr_no_su/dedup
 import nostr_no_su/log
 import nostr_no_su/named
@@ -90,6 +106,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{type Subscriptions}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
+import pog
 
 /// バンカーが無効なときの、承認・拒否の結果。
 const disabled: Result(Nil, String) = Error("bunker is disabled")
@@ -130,26 +147,23 @@ pub type Monitor {
   )
 }
 
-/// バンカーサブツリー。NIP-46 アクターと、それが待ち受け・応答するリレー群。
+/// バンカーサブツリー。アカウントストアの接続プールと、NIP-46 アクターと、それが
+/// 待ち受け・応答するリレー群。`pool` はパスワードを含みうるので、表示やログに
+/// 入れないこと。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
-    engine: Engine,
+    pool: pog.Config,
+    settings: bunker.Settings,
     relays: List(Relay),
     subscriptions: Subscriptions,
   )
 }
 
-/// 管理 UI。設定から決まるもの（bind アドレス、ポート、パスワード、認証済み
-/// ページにだけ出す接続 URI）だけを持ち、表示するその他の状態はツリーの他の
-/// 仕様から導く。
+/// 管理 UI。設定から決まるもの（bind アドレス、ポート、パスワード）だけを持ち、
+/// 表示する状態はツリーの他の仕様から導く。
 pub type Admin {
-  Admin(
-    bind: String,
-    port: Int,
-    password: String,
-    accounts: List(dashboard.AccountRow),
-  )
+  Admin(bind: String, port: Int, password: String)
 }
 
 /// 監視・バンカー・管理 UI のどれを動かすか、接続をどう開くか、接続が再接続
@@ -340,11 +354,13 @@ fn monitor_handler(name: Name(dedup.Msg)) -> fn(Event) -> Nil {
   }
 }
 
-/// バンカーサブツリー。アクターと、それが応答に使う接続群。各接続はアクターに
-/// publisher を登録するため、アクターと一緒に再起動する必要がある。
+/// バンカーサブツリー。接続プール、アクター、それが応答に使う接続群の順に置く。
+/// アクターはプールが登録された後に起動する必要があり（冒頭の doc を参照）、各接続は
+/// アクターに publisher を登録するため、アクターと一緒に再起動する必要がある。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
-  |> supervisor.add(bunker.supervised(config.name, config.engine))
+  |> supervisor.add(pog.supervised(config.pool))
+  |> supervisor.add(bunker.supervised(config.name, config.settings))
   |> add_connections(
     spec,
     config.relays,
@@ -365,7 +381,8 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     config.port,
     admin.Context(
       password: config.password,
-      accounts: config.accounts,
+      // アカウントはストアにあり、管理 UI から問い合わせる経路はまだ無い。
+      accounts: [],
       plugins: fn() { plugin_rows(spec.plugins) },
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },

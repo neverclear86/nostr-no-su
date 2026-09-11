@@ -4,7 +4,6 @@
 import gleam/bit_array
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
@@ -12,15 +11,14 @@ import nostr_no_su/hex
 
 /// バンカーが代理で署名する 1 つのアイデンティティ。x-only 公開鍵は署名にも
 /// ルーティングにも使うため、バイト列と 16 進表現の両方を持つ。
-pub type Account {
-  Account(privkey: BitArray, pubkey: BitArray, pubkey_hex: String)
-}
-
-/// 64 文字の 16 進秘密鍵からアカウントを構築する。
-pub fn from_hex(raw: String) -> Result(Account, String) {
-  hex.decode(string.trim(raw))
-  |> result.replace_error("invalid hex private key")
-  |> result.try(from_privkey)
+///
+/// 構築の経路は `from_privkey` だけなので、秘密鍵と公開鍵が食い違う値は作れない。
+/// 秘密鍵は関数に閉じ込めて持つ。opaque 型も実行時にはただのタプルなので、
+/// バイト列を直接持たせると `string.inspect`、`sys:get_state/1`、クラッシュ
+/// レポートにそのまま出てしまうためである。代償として、**同じ秘密鍵から作った
+/// 値同士でも `==` は `False` になる。** 比べるときは `pubkey_hex` を比べること。
+pub opaque type Account {
+  Account(privkey: fn() -> BitArray, pubkey: BitArray, pubkey_hex: String)
 }
 
 /// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
@@ -30,7 +28,7 @@ pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
       case secp256k1.xonly_pubkey(privkey) {
         Ok(pubkey) ->
           Ok(Account(
-            privkey: privkey,
+            privkey: fn() { privkey },
             pubkey: pubkey,
             pubkey_hex: hex.encode(pubkey),
           ))
@@ -40,9 +38,19 @@ pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
   }
 }
 
-/// 16 進秘密鍵ごとにアカウントを構築し、最初の不正な鍵で失敗する。
-pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
-  list.try_map(raw_keys, from_hex)
+/// 署名と会話鍵の導出に使う 32 バイトの秘密鍵。
+pub fn privkey(account: Account) -> BitArray {
+  account.privkey()
+}
+
+/// x-only 公開鍵の 32 バイト。
+pub fn pubkey(account: Account) -> BitArray {
+  account.pubkey
+}
+
+/// x-only 公開鍵の小文字 16 進。署名者の識別子とルーティングに使う。
+pub fn pubkey_hex(account: Account) -> String {
+  account.pubkey_hex
 }
 
 /// このアカウントへ接続するためにクライアントへ貼り付ける `bunker://` URI。
