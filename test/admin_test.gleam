@@ -32,6 +32,9 @@ const uri = "bunker://aaaa1111?relay=x&secret=s"
 
 const auth_uri = "bunker://aaaa1111?relay=x"
 
+/// アカウントのラベル。
+const label = "main account"
+
 /// フェイクのハンドラーがテストへ報告する内容。
 type Report {
   Revoked(signer: String, client: String)
@@ -47,9 +50,16 @@ fn test_context(
 ) -> admin.Context {
   admin.Context(
     password: password,
-    accounts: [
-      dashboard.AccountRow(signer: signer, uri: uri, auth_uri: auth_uri),
-    ],
+    accounts: fn() {
+      Ok([
+        dashboard.AccountRow(
+          signer: signer,
+          label: label,
+          uri: uri,
+          auth_uri: auth_uri,
+        ),
+      ])
+    },
     relays: fn() {
       [
         dashboard.RelayRow(
@@ -399,6 +409,54 @@ pub fn cross_origin_approve_is_rejected_test() {
 /// 拒否は POST でしか受け付けない。
 pub fn deny_rejects_other_methods_test() {
   assert get(context(), "/deny/" <> token).status == 405
+}
+
+/// 指定したアカウントの一覧を返す Context。
+fn with_accounts(
+  accounts: Result(List(dashboard.AccountRow), String),
+) -> admin.Context {
+  admin.Context(..context(), accounts: fn() { accounts })
+}
+
+/// ダッシュボードのアカウントの節には、ラベルの列が出る。
+pub fn dashboard_shows_account_labels_test() {
+  let body = simulate.read_body(get(context(), "/"))
+  assert string.contains(body, "<th>Label</th>")
+  assert string.contains(body, "<td>" <> label <> "</td>")
+}
+
+/// バンカーが無効なら、アカウントの節にその理由が出る。
+pub fn dashboard_shows_why_the_bunker_is_disabled_test() {
+  let reason = "bunker is disabled: DATABASE_URL is not set"
+  let body = simulate.read_body(get(with_accounts(Error(reason)), "/"))
+  assert string.contains(body, "<p>" <> reason <> "</p>")
+}
+
+/// アカウントの節の理由とラベルは、どちらもエスケープする。ラベルは利用者の入力で、
+/// 理由には外から来た文字列が混ざりうる。
+pub fn dashboard_escapes_account_labels_and_reasons_test() {
+  let script = "<script>alert(1)</script>"
+  let escaped = "&lt;script&gt;alert(1)&lt;/script&gt;"
+  let row =
+    dashboard.AccountRow(
+      signer: signer,
+      label: script,
+      uri: uri,
+      auth_uri: auth_uri,
+    )
+  let labelled = simulate.read_body(get(with_accounts(Ok([row])), "/"))
+  assert string.contains(labelled, "<td>" <> escaped <> "</td>")
+  assert !string.contains(labelled, script)
+
+  let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
+  assert string.contains(failing, "<p>" <> escaped <> "</p>")
+  assert !string.contains(failing, script)
+}
+
+/// アカウントが 1 件も無ければ、その旨を出す。
+pub fn dashboard_shows_that_no_accounts_are_registered_test() {
+  let body = simulate.read_body(get(with_accounts(Ok([])), "/"))
+  assert string.contains(body, "No accounts registered.")
 }
 
 /// 知らないパスは 404。認証は先に通っている。

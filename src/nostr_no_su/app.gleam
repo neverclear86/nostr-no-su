@@ -17,6 +17,12 @@
 //// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
 //// subject を握り続けることがない。
 ////
+//// **アカウントの変更はバンカーアクターを再起動しない。** 再起動すると
+//// `rest_for_one` で接続も落ち、インメモリのセッションが消えるためである。署名者の
+//// 集合が変わったら、アクターは接続アクターを名前で呼んで購読の張り直しを依頼し、
+//// 接続アクターが生きたソケットへ転送する。接続アクターを経由するので、接続の
+//// 途中や再接続を待っている間の依頼も、変更後の署名者で購読することになる。
+////
 //// **アカウントストアの接続プールはバンカーのサブツリーの先頭に置く。** pgo は
 //// チェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で
 //// exit させる。プールを先頭に置けば、バンカーアクターはプールが登録された後に
@@ -96,6 +102,7 @@ import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
+import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine.{type Pending}
 import nostr_no_su/dedup
 import nostr_no_su/log
@@ -172,7 +179,9 @@ pub type Spec {
   Spec(
     plugins: List(PluginSpec),
     monitor: Option(Monitor),
-    bunker: Option(Bunker),
+    /// バンカーのサブツリー。`Error` はバンカーを無効にした理由（値を含まない固定の
+    /// 文言）で、起動ログとダッシュボードが同じ理由を出す。
+    bunker: Result(Bunker, String),
     admin: Option(Admin),
     open: Open,
     reconnect_delay_ms: Int,
@@ -193,7 +202,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> add_child(spec.monitor, fn(config) {
     supervisor.supervised(monitor_tree(spec, config))
   })
-  |> add_child(spec.bunker, fn(config) {
+  |> add_child(option.from_result(spec.bunker), fn(config) {
     supervisor.supervised(bunker_tree(spec, config))
   })
   |> add_child(spec.admin, admin_child(spec, _))
@@ -364,10 +373,17 @@ fn monitor_handler(name: Name(dedup.Msg)) -> fn(Event) -> Nil {
 /// バンカーサブツリー。接続プール、アクター、それが応答に使う接続群の順に置く。
 /// アクターはプールが登録された後に起動する必要があり（冒頭の doc を参照）、各接続は
 /// アクターに publisher を登録するため、アクターと一緒に再起動する必要がある。
+/// アクターが署名者の変化で依頼する購読の張り直しは、各接続アクターへ名前で送る。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
   |> supervisor.add(pog.supervised(config.pool))
-  |> supervisor.add(bunker.supervised(config.name, config.settings))
+  |> supervisor.add(
+    bunker.supervised(config.name, config.settings, fn() {
+      list.each(config.relays, fn(relay) {
+        relay_connection.resubscribe(relay.name)
+      })
+    }),
+  )
   |> add_connections(
     spec,
     config.relays,
@@ -388,8 +404,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     config.port,
     admin.Context(
       password: config.password,
-      // アカウントはストアにあり、管理 UI から問い合わせる経路はまだ無い。
-      accounts: [],
+      accounts: fn() { account_rows(spec.bunker) },
       plugins: fn() { plugin_rows(spec.plugins) },
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
@@ -439,7 +454,7 @@ fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
     statuses(dashboard.MonitorRelay, monitor.relays)
   }
   let bunker_rows = {
-    use configured <- if_enabled(spec.bunker, [])
+    use configured <- if_enabled(option.from_result(spec.bunker), [])
     statuses(dashboard.BunkerRelay, configured.relays)
   }
   list.append(monitor_rows, bunker_rows)
@@ -467,12 +482,39 @@ fn statuses(
 /// バンカーアクターの名前を使って問い合わせる。バンカーが無効なら、問い合わせず
 /// 既定値を返す。
 fn with_bunker(
-  config: Option(Bunker),
+  config: Result(Bunker, String),
   default: answer,
   ask: fn(Name(bunker.Msg)) -> answer,
 ) -> answer {
-  use config <- if_enabled(config, default)
+  use config <- if_enabled(option.from_result(config), default)
   ask(config.name)
+}
+
+/// Accounts 節の行。バンカーが無効ならその理由を、アカウントを得られなければ
+/// バンカーの理由を返す。
+fn account_rows(
+  config: Result(Bunker, String),
+) -> Result(List(dashboard.AccountRow), String) {
+  case config {
+    Error(reason) -> Error("bunker is disabled: " <> reason)
+    Ok(config) ->
+      bunker.accounts(config.name)
+      |> result.map(list.map(_, account_row(config.relays, _)))
+  }
+}
+
+/// アカウント 1 件の表示行。接続 URI はバンカーリレーの URL から組み立てる。
+fn account_row(
+  relays: List(Relay),
+  listing: bunker.Listing,
+) -> dashboard.AccountRow {
+  let relay_urls = list.map(relays, fn(relay) { relay.url })
+  dashboard.AccountRow(
+    signer: listing.signer,
+    label: listing.label,
+    uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
+    auth_uri: account.bunker_uri(listing.signer, relay_urls, None),
+  )
 }
 
 /// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。

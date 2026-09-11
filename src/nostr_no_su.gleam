@@ -1,4 +1,4 @@
-import gleam/erlang/process
+import gleam/erlang/process.{type Name}
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -168,37 +168,37 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
 }
 
 /// バンカーサブツリー。アカウントストアの設定が揃わなければ理由を報告して無効に
-/// し、監視とプラグインと管理 UI だけで動かす。アカウントはアクターが起動後に
-/// ストアから読むので、ここではアカウントの件数を知らず、0 件でも起動する。
+/// し、監視とプラグインと管理 UI だけで動かす。無効の理由はツリーの仕様にも載せ、
+/// ダッシュボードが同じ理由を出す。アカウントはアクターが起動後にストアから読むので、
+/// ここではアカウントの件数を知らず、0 件でも起動する。
 ///
-/// マスターキーは `load` のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
-/// 管理 UI には渡らない。購読は接続のたびに現在の署名者から組み立て直すため、
-/// `since` も接続時点の現在時刻から決まる。
-fn bunker_spec(loaded: Config) -> #(Option(app.Bunker), List(String)) {
+/// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
+/// 管理 UI には渡らない。購読は接続と張り直しのたびに現在の署名者から組み立て直す
+/// ため、`since` もその時点の現在時刻から決まる。署名者を問い合わせられなければ
+/// 定義を得られなかったことにし、開いている購読を閉じない。
+fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
   case bunker_store(loaded) {
-    Error(reason) -> #(None, [
+    Error(reason) -> #(Error(reason), [
       log.line(bunker.log_prefix, "disabled: " <> reason),
     ])
     Ok(#(pool, master_key)) -> {
       let name = process.new_name("nostr_no_su_bunker")
-      let db = pog.named_connection(pool.pool_name)
       #(
-        Some(
+        Ok(
           app.Bunker(
             name: name,
             pool: pool,
             settings: bunker.Settings(
-              load: fn() {
-                account_store.load(db, master_key)
-                |> result.map_error(account_store.describe)
-              },
+              store: account_store_operations(pool.pool_name, master_key),
               auth_url: auth_url(loaded),
               retry_delay_ms: bunker.default_retry_delay_ms,
             ),
             relays: relays(loaded.bunker_relay_urls),
             subscriptions: fn() {
-              Ok(config.bunker_subscriptions(
-                bunker.signers(name),
+              bunker.signers(name)
+              |> option.to_result(Nil)
+              |> result.map(config.bunker_subscriptions(
+                _,
                 time.now_seconds() - bunker_since_lookback_seconds,
               ))
             },
@@ -213,6 +213,38 @@ fn bunker_spec(loaded: Config) -> #(Option(app.Bunker), List(String)) {
       )
     }
   }
+}
+
+/// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ
+/// 捕捉される。失敗は値を含まない説明に写す。削除は行が無いことを成功として扱う。
+fn account_store_operations(
+  pool: Name(pog.Message),
+  master_key: vault.MasterKey,
+) -> bunker.Store {
+  let db = pog.named_connection(pool)
+  bunker.Store(
+    load: fn() {
+      account_store.load(db, master_key)
+      |> result.map_error(account_store.describe)
+    },
+    insert: fn(entry) {
+      account_store.insert(db, master_key, entry)
+      |> result.map_error(account_store.describe)
+    },
+    delete: fn(signer) {
+      account_store.delete(db, signer)
+      |> account_store.deleted_or_absent
+      |> result.map_error(account_store.describe)
+    },
+    update_secret: fn(signer, secret) {
+      account_store.update_secret(db, master_key, signer, secret)
+      |> result.map_error(account_store.describe)
+    },
+    update_label: fn(signer, label) {
+      account_store.update_label(db, signer, label)
+      |> result.map_error(account_store.describe)
+    },
+  )
 }
 
 /// アカウントストアの接続プールの設定とマスターキー。設定が揃わない、あるいは

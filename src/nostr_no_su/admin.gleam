@@ -32,13 +32,15 @@ const username = "admin"
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
-/// ハンドラーが必要とするものすべて。変化しないもの（アカウント）は値で、
-/// アクターに問い合わせるもの（リレー、プラグイン、セッション、承認待ち）は
-/// 関数で受け取る。
+/// ハンドラーが必要とするものすべて。パスワード以外の状態（アカウント、リレー、
+/// プラグイン、セッション、承認待ち）はアクターに問い合わせる関数で受け取り、
+/// 表示のたびに現在の値を読む。
 pub type Context {
   Context(
     password: String,
-    accounts: List(dashboard.AccountRow),
+    /// アカウントの一覧。バンカーが無効、読み込み中、応答なしのときは表示する
+    /// 理由を返す。
+    accounts: fn() -> Result(List(dashboard.AccountRow), String),
     relays: fn() -> List(dashboard.RelayRow),
     plugins: fn() -> List(dashboard.PluginRow),
     sessions: fn() -> List(Session),
@@ -128,7 +130,7 @@ fn healthz(request: Request) -> Response {
 fn show_dashboard(context: Context, request: Request) -> Response {
   use <- wisp.require_method(request, http.Get)
   dashboard.Snapshot(
-    accounts: context.accounts,
+    accounts: context.accounts(),
     pending: context.pending(),
     relays: context.relays(),
     sessions: context.sessions(),
