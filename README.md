@@ -59,14 +59,14 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 ### 管理 UI
 
-起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードにはアカウント（ラベル、署名者 pubkey、secret 入りの `bunker://` 接続 URI と承認を経る URI）、承認待ちの接続要求（承認・拒否ボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、承認済みのクライアントセッション（取り消しボタン付き）、有効なプラグインとその状態（`running` / `overloaded` / `disabled`）が並ぶ。アカウントの節は表示のたびにバンカーへ問い合わせるので、実行中に追加・削除したアカウントもそのまま反映される。バンカーが無効なとき（`bunker is disabled: DATABASE_URL is not set` など）と、読み込み中や DB の障害でアカウントを得られないとき（`account store unavailable: ...` など）は、この節に表の代わりにその理由が出る。
+起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードには承認待ちの接続要求（承認・拒否ボタン付き）、アカウント（ラベル、署名者 pubkey、secret 入りの `bunker://` 接続 URI と承認を経る URI）、承認済みのクライアントセッション（取り消しボタン付き）、リレーの接続状態（監視用 / バンカー用の別）、有効なプラグインとその状態（`running` / `overloaded` / `disabled`）が並ぶ。広い画面では、承認待ち・アカウント・セッションを左の列に、リレーとプラグインを右の列に置いた 2 列で、狭い画面ではこの順に 1 列で並ぶ。リレーとプラグインの状態は、状態の語を色の付いたバッジで示す。アカウントの節は表示のたびにバンカーへ問い合わせるので、実行中に追加・削除したアカウントもそのまま反映される。バンカーが無効なとき（`bunker is disabled: DATABASE_URL is not set` など）と、読み込み中や DB の障害でアカウントを得られないとき（`account store unavailable: ...` など）は、この節に一覧の代わりにその理由が出る。
 
-アカウントの行の `Actions` から次の操作を行う。どれも確認のページを経て POST で実行する。
+アカウントごとに並ぶ次のボタンから操作する。どれも確認のページを経て POST で実行する。
 
 - **Edit label**: ラベルを差し替える。ラベルは前後の空白を除いて 100 符号位置以内で、制御文字（Unicode の Cc）を含められない
+- **Show private key**: 管理パスワードを再入力すると nsec を表示する。Basic 認証の資格情報を覚えたブラウザーの前にいる者が、操作 1 回で秘密鍵を表示できないようにするための再入力である
 - **Rotate secret**: 接続 secret を作り直す。古い URI での新しい `connect` は承認なしには通らなくなるが、承認済みのセッションは残る。クライアントには新しい URI を貼り直す
 - **Delete account**: バンカーと DB から鍵を消す。その署名者のセッションと承認待ちも消える
-- **Show private key**: 管理パスワードを再入力すると nsec を表示する。Basic 認証の資格情報を覚えたブラウザーの前にいる者が、操作 1 回で秘密鍵を表示できないようにするための再入力である
 
 変更の結果は次のように見える。
 
@@ -98,13 +98,15 @@ nsec 入力による登録の完了ページを再読み込みすると、同じ
 
 `ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
+ページのスタイルは、ビルドした CSS（`/static/admin.css`）を管理 UI 自身が配信する。CDN などの外部のファイルは読まないので、外部に到達できない環境でも表示できる。CSS もページと同じく Basic 認証の後にある。
+
 待ち受けアドレスの既定は `127.0.0.1`（ループバックのみ）で、`ADMIN_BIND` で変更する。コンテナーの外へポートを公開するには `ADMIN_BIND=0.0.0.0` が必要になるが、その場合は公開範囲を別途絞ること（同梱の compose はホスト側のループバックにだけ公開する）。
 
 > ⚠️ **平文 HTTP である**: Basic 認証の資格情報は暗号化されずに送られ、ページには署名権限そのものである secret 入りの `bunker://` URI が表示される。localhost か Docker ネットワーク内での利用を前提とし、外部に公開するときは必ずリバースプロキシーで TLS を終端すること。
 
 #### 接続の承認（auth_url フロー）
 
-secret を持たない `bunker://` URI（ダッシュボードの「Connection URI (approval)」の列）で接続すると、バンカーはその場では承認せず、NIP-46 の `auth_url` 応答で承認ページの URL をクライアントへ返す。クライアントはその URL をブラウザーで開き、管理 UI にログインして内容（署名者・クライアント pubkey・経過時間）を確認したうえで承認または拒否する。承認するとバンカーは元のリクエストと同じ id で `ack` を返し、待っていたクライアントの接続が完了する。拒否するとエラーを返す。承認ページは枠（iframe）の中では開けないので、クライアントは新しいウィンドウかブラウザーで開く必要がある。
+secret を持たない `bunker://` URI（ダッシュボードの「Connection URI (approval)」の欄）で接続すると、バンカーはその場では承認せず、NIP-46 の `auth_url` 応答で承認ページの URL をクライアントへ返す。クライアントはその URL をブラウザーで開き、管理 UI にログインして内容（署名者・クライアント pubkey・経過時間）を確認したうえで承認または拒否する。承認するとバンカーは元のリクエストと同じ id で `ack` を返し、待っていたクライアントの接続が完了する。拒否するとエラーを返す。承認ページは枠（iframe）の中では開けないので、クライアントは新しいウィンドウかブラウザーで開く必要がある。
 
 承認ページの URL は `ADMIN_BASE_URL` を土台に `<base>/approve/<token>` として組み立てる（既定は `http://localhost:<ADMIN_PORT>`）。クライアントのブラウザーから開ける URL である必要があるため、リバースプロキシーの背後に置くときや別のホストから使うときは公開 URL を設定すること。管理 UI を無効（`ADMIN_PORT=`）にすると承認フローも無効になり、secret の一致しない `connect` は従来どおり `invalid secret` で拒否する。
 
@@ -181,6 +183,20 @@ docker rm -f nns-pg-test
 
 本体も `pog` 経由で `opentelemetry_api`（`build_tools = ["rebar3", "mix"]`）に依存するため、ホストに elixir があると、ホストで作った erlang-shipment には Elixir 一式が混ざる。配布する成果物は Dockerfile の中で作ること。
 
+管理 UI の CSS（`priv/static/admin.css`）は、ビルドした生成物をリポジトリに含めているので、`gleam run` と `docker compose up --build` に Node.js は要らない。描画のモジュール（`src/nostr_no_su/admin/`）のクラスか `assets/admin.css` を変えたときは、ビルドし直して一緒にコミットする（CI が差分を検査する）。Node.js 24 で検証している:
+
+```sh
+npm ci             # Tailwind CSS、daisyUI、playwright-core を package-lock.json の版で入れる
+npm run build:css  # assets/admin.css から priv/static/admin.css を作る
+```
+
+管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 3 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である:
+
+```sh
+PREVIEW_PORT=18461 gleam run -m admin_preview
+PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots   # 26 画面を 1280px と 375px、ライトとダークで撮る
+```
+
 `event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
 
 ```sh
@@ -201,7 +217,7 @@ src/nostr_no_su/app.gleam                    -- スーパービジョンツリ�
 src/nostr_no_su/admin.gleam                  -- 管理 UI の HTTP サーバー（wisp / mist）とルーティング
 src/nostr_no_su/admin/dashboard.gleam        -- 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 src/nostr_no_su/admin/account_pages.gleam    -- アカウントの登録、生成の確認、登録の完了、操作、秘密鍵の表示のページの描画
-src/nostr_no_su/admin/view.gleam             -- 管理 UI のページ枠と、本体の他のモジュールに依存しない部品（lustre の要素ツリーを HTML 文字列にする）
+src/nostr_no_su/admin/view.gleam             -- 管理 UI のページ枠と、本体の他のモジュールに依存しない部品（lustre の要素ツリーを HTML 文字列にする。見た目は daisyUI のクラスで付ける）
 src/nostr_no_su/config.gleam                 -- 環境変数からの設定読み込み
 src/nostr_no_su/dedup.gleam                  -- リレー横断のイベント重複排除ディスパッチャー（actor）
 src/nostr_no_su/dedup/window.gleam           -- 直近のイベント id のスライディングウィンドウ（純粋）
@@ -233,6 +249,11 @@ src/nostr_no_su/plugin_loader.gleam          -- 外部プラグインの走査�
 src/nostr_no_su/plugin_runner.gleam          -- プラグイン 1 つぶんの実行プロセス（隔離・時間制限・無効化）
 src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラグイン
 src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file / process: 監視付きワーカーの生成と終了理由の整形）
+assets/admin.css                             -- 管理 UI の CSS の入力（Tailwind CSS / daisyUI。npm run build:css でビルドする）
+priv/static/admin.css                        -- ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
+dev/admin_preview.gleam                      -- 管理 UI を固定の状態で起動する撮影用のサーバー（成果物には入らない）
+dev/screenshots.mjs                          -- 撮影用のサーバーから全ページを撮るスクリプト（playwright-core）
+package.json                                 -- CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
 examples/plugins/file_logger/                -- 外部プラグインの例（状態を持たず、設定を受け取る Erlang 1 ファイル）
 examples/plugins/counter/                    -- 外部プラグインの例（plugin_children/0 で子プロセスを申告する）
@@ -259,7 +280,8 @@ docs/architecture.md                         -- システム構成（プロセ�
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
 - **イベント保存は外部プラグイン**: イベント保存用の pog の接続プールと保存 actor は本体ではなくプラグインが `plugin_children/1` で申告し（本体のプールはバンカーのアカウント専用である）、`plugins` サブツリーの下（one_for_one）で動く。プラグインごとのサブスーパーバイザーが Temporary なので、DB 由来のクラッシュループが本体を巻き込むことはない。保存 actor はプールを名前で参照するため、rest_for_one でなくても再起動をまたいで配線が保たれる。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
 - **管理 UI は root 直下の独立した子**: mist（HTTP サーバー）は監視・バンカー・保存のどれにも依存しないため、root（one_for_one）に並べる。表示する状態はハンドラーが直接触らず、Context に注入された関数から名前付き actor へ問い合わせて取る。問い合わせが失敗しても（再起動中、タイムアウト）ページ全体を失敗させず、その項目だけ「未接続」「該当なし」として描画する。描画は「状態のスナップショット → HTML 文字列」の純粋関数である（次項）
-- **管理 UI はサーバー側で描画する**: ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を HTML やスクリプトとしてそのまま解釈させる経路は、定数だけを渡す `<style>` と `onclick` と、パスの定義から作る `href` と `action` に限る。lustre は URL を検査しないので、`href` と `action` にはパスの定義の関数が `/` から組み立てた値だけを渡す）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS はコピーのボタンの `onclick` だけで、フォームの送信と画面の遷移は JS なしで動く
+- **管理 UI はサーバー側で描画する**: ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を HTML やスクリプトとしてそのまま解釈させる経路は、定数だけを渡す `onclick` と、パスの定義から作る `href` と `action` に限る。lustre は URL を検査しないので、`href` と `action` にはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS はコピーのボタンの `onclick` だけで、フォームの送信と画面の遷移は JS なしで動く
+- **管理 UI の CSS はビルドしてリポジトリに含め、自前で配信する**: Tailwind CSS 4 と daisyUI 5 の CSS を `npm run build:css` でビルドし、生成物の `priv/static/admin.css` をコミットしている。実行時に CDN などの外部のファイルを読まず、Docker のビルドにも Node.js やツールの取得が要らない。版は `package-lock.json` で固定し、CI でビルドし直した結果がコミットと一致することを検査する（同じ入力から、Node.js 24 と 25、glibc と musl、standalone CLI のどれでもバイト単位で同じ CSS ができることを確かめた）。Tailwind はソースに完全な文字列で書かれたクラスしか出力しないので、クラス名を連結で組み立てず、描画しうるクラスがすべて CSS に定義されていることをテストで検査する。フォーカスできるボタン（`btn`）の文字列には `focus-visible:outline-base-content` を、入力欄（`input`）の文字列には `border-base-content/60` を付ける（daisyUI の既定では、注意と破壊のボタンのフォーカスの輪郭と入力欄の枠が、隣接する背景に対して 3:1 に届かないため）。ボタンのフォーカスの輪郭と入力欄の枠のクラスの付け忘れも、同じテストで検査する。CSS はページと同じく Basic 認証の後に置き、`no-store` で返す。更新しても古い CSS が残らない代わりに、ページを開くたびに約 50 KB を読み直す。テーマは OS の設定（`prefers-color-scheme`）に従う
 - **管理 UI は既定でループバックのみ**: ダッシュボードには secret 入りの `bunker://` URI が載るため、既定 (`ADMIN_BIND=127.0.0.1`) では LAN に露出しない。Docker はホストの iptables を直接操作するので、ポートを公開したうえでファイアウォールに頼る形は避け、compose 側でホストのループバックにだけ公開している
 - **秘密鍵は POST の応答でだけ表示する**: 鍵の生成は登録と分けた 2 段で、サーバーは生成した鍵を一時的にも保持しない。鍵はブラウザーとの間を POST の本文と、その応答の本文だけで往復し、クエリー文字列にもリダイレクト先にもログにも載らない。再表示は管理パスワードを再入力した POST だけで、GET で秘密鍵を返す経路は無い。再入力の照合は Basic 認証と同じ定数時間の比較で、ログには npub だけを出す
 - **登録時の表示は手続きの中で 1 回**: 「登録の直後に 1 回」という方針を「登録の手続きの中で 1 回、POST の応答でだけ」と読んでいる。nsec を貼り付けた登録では登録の後の完了ページで、生成では登録の前の確認ページで表示し、生成した鍵の登録の後には表示しない。反映されたか分からない応答（202）でも表示しない。生成と登録を 1 回の POST にしないのは、再読み込みの再送で別の鍵のアカウントが登録されるのを防ぐためである

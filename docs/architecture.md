@@ -397,13 +397,15 @@ sequenceDiagram
 `/healthz` 以外はすべて Basic 認証を要する。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じるヘッダーを付ける。
-パスの定義は `admin/dashboard.gleam` にだけ置き、ルーティングと、`admin/dashboard.gleam` と `admin/account_pages.gleam` のフォームの `action` が同じ定義を見る。
+ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシートのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
+見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
 
 | メソッド | パス | 役割 |
 | --- | --- | --- |
 | GET | `/healthz` | 認証なしで `ok` を返す |
 | GET | `/` | ダッシュボード |
+| GET | `/static/admin.css` | ビルドした CSS（`priv/static/admin.css`） |
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
@@ -508,6 +510,10 @@ nostr-no-su/
 ├── test/                         本体のテスト（gleeunit）
 │   └── support/                  テスト用の fixture
 │
+├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
+├── priv/static/                  ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト（成果物には入らない）
+│
 ├── plugins-src/                  同梱プラグインのソース
 │   └── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
 │       ├── gleam.toml            本体とは独立した Gleam プロジェクト
@@ -530,6 +536,7 @@ nostr-no-su/
 │
 ├── vendor/stratus/               パッチ済み stratus（README を参照）
 ├── gleam.toml
+├── package.json                  CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 ├── Dockerfile
 └── docker-compose.yml
 ```

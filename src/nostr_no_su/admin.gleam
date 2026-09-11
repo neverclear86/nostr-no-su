@@ -27,6 +27,7 @@ import gleam/string
 import mist
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Session}
@@ -147,6 +148,7 @@ fn route(
 ) -> Response {
   case segments {
     [] -> show_dashboard(context, request)
+    segments if segments == view.stylesheet_segments -> stylesheet(request)
     ["approve", token] -> approve_connection(context, request, token)
     ["deny", token] -> deny_connection(context, request, token)
     segments if segments == dashboard.revoke_segments ->
@@ -184,6 +186,17 @@ fn healthz(request: Request) -> Response {
   wisp.ok() |> wisp.string_body("ok")
 }
 
+/// ビルドした管理 UI のスタイルシート（`priv/static/admin.css`）。ページと同じく認証の後に
+/// 置くので、`protect` のヘッダーが付き、ブラウザーは保存しない（更新しても古い CSS が
+/// 残らない）。パスが `view.stylesheet_segments` に一致したときだけ届き、`serve_static` は
+/// 要求のパスを `priv` からの相対パスとしてファイルを引く。
+fn stylesheet(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Get)
+  let assert Ok(priv) = wisp.priv_directory("nostr_no_su")
+  use <- wisp.serve_static(request, under: "", from: priv)
+  wisp.not_found()
+}
+
 /// ダッシュボード。表示に必要な状態をここで集め、描画は純粋関数へ渡す。
 fn show_dashboard(context: Context, request: Request) -> Response {
   use <- wisp.require_method(request, http.Get)
@@ -207,7 +220,8 @@ fn approve_connection(
 ) -> Response {
   case request.method {
     http.Get -> show_approval(context, token)
-    http.Post -> decision_response(context.approve(token), "Approved")
+    http.Post ->
+      decision_response(context.approve(token), "Approved", view.Success)
     _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post])
   }
 }
@@ -219,7 +233,7 @@ fn deny_connection(
   token: String,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
-  decision_response(context.deny(token), "Denied")
+  decision_response(context.deny(token), "Denied", view.Neutral)
 }
 
 /// 承認待ち 1 件の確認画面。処理済み、あるいは失効した token は 404。
@@ -232,14 +246,20 @@ fn show_approval(context: Context, token: String) -> Response {
 
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
 /// 終わったことだけを伝える。処理できなかった要求（不明・失効・処理済み、あるいは
-/// バンカーが動いていない）は、区別せず理由を添えた 404 にする。
-fn decision_response(outcome: Result(Nil, String), done: String) -> Response {
+/// バンカーが動いていない）は、区別せず理由を添えた 404 にする。承認と拒否はどちらも
+/// 200 なので、処理できたときの通知の色（`tone`）は呼び出し側が渡す。
+fn decision_response(
+  outcome: Result(Nil, String),
+  done: String,
+  tone: view.Tone,
+) -> Response {
   case outcome {
     Ok(Nil) ->
-      dashboard.notice_page(done, done <> ". You can close this window.")
+      dashboard.notice_page(done, done <> ". You can close this window.", tone)
       |> wisp.html_response(200)
     Error(reason) ->
-      dashboard.notice_page("Not found", reason) |> wisp.html_response(404)
+      dashboard.notice_page("Not found", reason, view.Failure)
+      |> wisp.html_response(404)
   }
 }
 
@@ -464,7 +484,7 @@ fn change_failure_response(
     bunker.NotApplied(reason) -> render(reason) |> wisp.html_response(409)
     bunker.NotReady(reason) -> accounts_unavailable(reason)
     bunker.MaybeApplied(reason) ->
-      dashboard.notice_page(change_unconfirmed_title, reason)
+      dashboard.notice_page(change_unconfirmed_title, reason, view.Warning)
       |> wisp.html_response(202)
   }
 }
@@ -472,7 +492,7 @@ fn change_failure_response(
 /// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け
 /// られない、nsec の問い合わせが失敗した場合に共通で使う。
 fn accounts_unavailable(reason: String) -> Response {
-  dashboard.notice_page(accounts_unavailable_title, reason)
+  dashboard.notice_page(accounts_unavailable_title, reason, view.Warning)
   |> wisp.html_response(503)
 }
 
