@@ -2,7 +2,7 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard`）に閉じ込められる。
+//// HTML」の純粋関数（`admin/dashboard` と `admin/account_pages`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
@@ -25,6 +25,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import mist
+import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker.{type ChangeFailure}
 import nostr_no_su/bunker/account.{type Account}
@@ -262,7 +263,7 @@ fn revoke_session(context: Context, request: Request) -> Response {
 /// アカウントの登録画面。
 fn show_new_account(request: Request) -> Response {
   use <- wisp.require_method(request, http.Get)
-  dashboard.new_account_page(None) |> wisp.html_response(200)
+  account_pages.new_account_page(None) |> wisp.html_response(200)
 }
 
 /// 鍵を生成し、確認ページで nsec を 1 回だけ表示する。ここでは登録しないので、
@@ -272,17 +273,21 @@ fn generate_account(request: Request) -> Response {
   use <- wisp.require_method(request, http.Post)
   account.generate(crypto.strong_random_bytes)
   |> account.nsec
-  |> dashboard.generated_key_page(None)
+  |> account_pages.generated_key_page(None)
   |> wisp.html_response(200)
 }
 
 /// nsec 入力によるアカウントの登録。完了ページで nsec を 1 回だけ表示する。
 fn import_account(context: Context, request: Request) -> Response {
   let reject_label = fn(_account, reason) {
-    dashboard.new_account_page(Some(reason))
+    account_pages.new_account_page(Some(reason))
   }
   use account, label <- register(context, request, reject_label)
-  dashboard.registered_page(account.npub(account), label, account.nsec(account))
+  account_pages.registered_page(
+    account.npub(account),
+    label,
+    account.nsec(account),
+  )
   |> wisp.html_response(200)
 }
 
@@ -291,7 +296,7 @@ fn import_account(context: Context, request: Request) -> Response {
 /// よう、送られた nsec の確認ページを理由付きで返す（この POST の応答の本文だけに出る）。
 fn register_generated_account(context: Context, request: Request) -> Response {
   let reject_label = fn(generated, reason) {
-    dashboard.generated_key_page(account.nsec(generated), Some(reason))
+    account_pages.generated_key_page(account.nsec(generated), Some(reason))
   }
   use _account, _label <- register(context, request, reject_label)
   wisp.redirect(to: "/")
@@ -311,7 +316,7 @@ fn register(
   use form <- wisp.require_form(request)
   case parse_private_key(form) {
     Error(reason) ->
-      dashboard.new_account_page(Some(reason)) |> wisp.html_response(400)
+      account_pages.new_account_page(Some(reason)) |> wisp.html_response(400)
     Ok(account) ->
       case parse_label(form_value(form, dashboard.label_field)) {
         Error(reason) ->
@@ -321,7 +326,7 @@ fn register(
             Ok(Nil) -> on_success(account, label)
             Error(failure) ->
               change_failure_response(failure, fn(reason) {
-                dashboard.new_account_page(Some(reason))
+                account_pages.new_account_page(Some(reason))
               })
           }
       }
@@ -380,7 +385,7 @@ fn account_action(
   use row <- with_account(context, signer)
   case request.method, action {
     http.Get, _ ->
-      dashboard.account_action_page(row, action, None)
+      account_pages.account_action_page(row, action, None)
       |> wisp.html_response(200)
     http.Post, dashboard.EditLabel -> update_label(context, request, row)
     http.Post, dashboard.RotateSecret ->
@@ -420,7 +425,7 @@ fn update_label(
   use form <- wisp.require_form(request)
   case parse_label(form_value(form, dashboard.label_field)) {
     Error(reason) ->
-      dashboard.account_action_page(row, dashboard.EditLabel, Some(reason))
+      account_pages.account_action_page(row, dashboard.EditLabel, Some(reason))
       |> wisp.html_response(400)
     Ok(label) ->
       apply_account_change(
@@ -442,7 +447,7 @@ fn apply_account_change(
     Ok(Nil) -> wisp.redirect(to: "/")
     Error(failure) ->
       change_failure_response(failure, fn(reason) {
-        dashboard.account_action_page(row, action, Some(reason))
+        account_pages.account_action_page(row, action, Some(reason))
       })
   }
 }
@@ -493,7 +498,7 @@ fn reveal_private_key(
           <> ": "
           <> incorrect_password,
       )
-      dashboard.account_action_page(
+      account_pages.account_action_page(
         row,
         dashboard.RevealPrivateKey,
         Some(incorrect_password),
@@ -504,7 +509,7 @@ fn reveal_private_key(
       case context.nsec(row.signer) {
         Ok(nsec) -> {
           log.println(log_prefix, "revealed the private key of " <> row.npub)
-          dashboard.private_key_page(row, nsec) |> wisp.html_response(200)
+          account_pages.private_key_page(row, nsec) |> wisp.html_response(200)
         }
         Error(reason) -> accounts_unavailable(reason)
       }
