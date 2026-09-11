@@ -497,18 +497,20 @@ fn account_rows(
 ) -> Result(List(dashboard.AccountRow), String) {
   case config {
     Error(reason) -> Error("bunker is disabled: " <> reason)
-    Ok(config) ->
+    Ok(config) -> {
+      let relay_urls = list.map(config.relays, fn(relay) { relay.url })
       bunker.accounts(config.name)
-      |> result.map(list.map(_, account_row(config.relays, _)))
+      |> result.map(list.map(_, account_row(relay_urls, _)))
+    }
   }
 }
 
-/// アカウント 1 件の表示行。接続 URI はバンカーリレーの URL から組み立てる。
+/// アカウント 1 件の表示行。接続 URI は、全行に共通のバンカーリレーの URL から
+/// 組み立てる。
 fn account_row(
-  relays: List(Relay),
+  relay_urls: List(String),
   listing: bunker.Listing,
 ) -> dashboard.AccountRow {
-  let relay_urls = list.map(relays, fn(relay) { relay.url })
   dashboard.AccountRow(
     signer: listing.signer,
     label: listing.label,
