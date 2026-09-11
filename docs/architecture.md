@@ -4,8 +4,9 @@
 読み手として想定するのは、この本体のコードに手を入れる開発者である。
 プラグインを書くだけなら [プラグイン API v1 の仕様](plugin-api.md) を読めばよく、この文書は要らない。
 
-扱うのは、プロセスの構造、イベントとリクエストが通る経路、ディレクトリの配置の 3 つである。
-個々の判断の理由は各モジュールの doc コメントに書いてあるので、ここでは配置と関係だけを示す。
+扱うのは、プロセスの構造、イベントとリクエストが通る経路、プラグインの読み込み、ディレクトリの配置、設定の読み手である。
+判断の理由は、その判断が他の部分の形を決めている場合にだけ添える。
+それ以外の理由は各モジュールの doc コメントにあるので、そちらへ譲る。
 
 ## 全体像
 
@@ -53,8 +54,12 @@ flowchart LR
 
 ## スーパービジョンツリー
 
-全プロセスを `static_supervisor` の下に置く。
+常駐するプロセスはすべて `static_supervisor` の下に置く。
 ツリーは起動時に 1 度だけ組み、実行中に子を足すことはしない。
+
+ツリーの外で動くプロセスが 2 種類ある。
+プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスである。
+どちらも所有者が監視していて、死んでもスーパーバイザーの再起動許容回数を消費しない。
 
 ```
 root (one_for_one, 3/60)
@@ -89,7 +94,10 @@ root (one_for_one, 3/60)
 - プラグインのイベント処理関数は、イベント 1 件ごとの使い捨てプロセスで動かす。
   ランナーはそのワーカーとリンクを張らず監視だけを張るので、例外も異常終了もランナーには伝播しない。
 - プラグインが申告した子プロセスは普通にクラッシュループしうるので、プラグイン 1 つぶんの子を専用のスーパーバイザーにまとめ、その子仕様を `Temporary` にする。
-  子スーパーバイザーが自分の許容回数を超えて終了しても、親は再起動せず許容回数も消費しない。
+
+子スーパーバイザーが自分の許容回数を超えたときに親の許容回数が減らないのは、`Temporary` だからではない。
+そのとき子は理由 `shutdown` で終了し、親では理由ベースの分岐に当たって再起動の記録そのものが行われないからで、これは `Transient` でも同じである。
+`Temporary` を選ぶ理由は別にあって、諦めた子の仕様が親から削除されること（`Transient` は死んだまま一覧に残る）と、許容回数超過以外の理由で落ちたときに再起動されないことの 2 つである。
 
 詳しくは `src/nostr_no_su/app.gleam` と `src/nostr_no_su/plugin_runner.gleam` の doc コメントに、OTP のどの節がそう振る舞うかの出典つきで書いてある。
 
@@ -125,8 +133,7 @@ sequenceDiagram
 ソケットを所有して切断を検知し再接続を予約するのがその役目で、イベントそのものは `relay_client` がハンドラーへ直接渡す。
 不安定なリレーがスーパーバイザーの再起動許容回数を消費しないよう、接続が死んでも道連れにならない作りにしてある。
 
-ディスパッチャーはランナーへ送るだけで戻る。
-プラグインの実行時間がディスパッチャーに載らないので、遅いプラグインが他のプラグインへの配信を止めることがない。
+遅いプラグインが他のプラグインへの配信を止めないのは、ディスパッチャーがランナーへ送った時点で戻り、プラグインの実行時間がそこに載らないからである。
 
 重複排除は有界なスライディングウィンドウで行う。
 複数のリレーが同じイベントを配信し、再接続のたびに保存済みイベントが再送されるため、同じ id を 2 度プラグインへ渡さないようにしている。
@@ -145,26 +152,37 @@ sequenceDiagram
     participant client as クライアント
     participant relay as バンカーリレー
     participant rc as relay_client
-    participant actor as bunker
-    participant engine as engine（純粋）
+    participant bk as bunker
+    participant eng as engine（純粋）
     participant browser as 管理 UI
 
     client->>relay: kind 24133（NIP-44 で暗号化）
     relay->>rc: EVENT
-    rc->>actor: Incoming(event)
-    actor->>engine: リクエストと現在時刻・乱数
-    Note over engine: 起動時刻より古いもの、<br/>署名が不正なもの、<br/>処理済みの id を落とす
-    alt secret が一致する
-        engine-->>actor: 応答イベント
-        actor->>relay: 全バンカーリレーへ発行
-        relay->>client: 応答
-    else secret が無い、または一致しない
-        engine-->>actor: auth_url 応答と承認待ち
-        actor->>relay: 承認ページの URL を返す
-        client->>browser: 承認ページを開く
-        browser->>actor: 承認 / 拒否
-        actor->>relay: 元のリクエストと同じ id で応答
+    rc->>bk: Incoming(event)
+    bk->>eng: リクエストと現在時刻、乱数
+    Note over eng: kind、受付ウィンドウ、<br/>起動時刻、宛先、署名、<br/>処理済みの id を検査
+    alt method が connect
+        Note over eng: secret 一致、または<br/>承認済みの組なら ack
+        opt どちらでもない
+            alt 管理 UI が有効
+                eng-->>bk: auth_url 応答と承認待ち
+                bk->>rc: 承認ページの URL
+                rc->>relay: 発行
+                relay->>client: auth_url
+                client->>browser: 承認ページを開く
+                browser->>bk: 承認 / 拒否
+                bk->>rc: 元のリクエストと同じ id で応答
+            else 管理 UI が無効
+                eng-->>bk: invalid secret
+            end
+        end
+    else その他の method
+        Note over eng: 承認済みのセッションが<br/>無ければ unauthorized
+        eng-->>bk: 応答イベント
     end
+    bk->>rc: 応答（全バンカーリレーへ）
+    rc->>relay: 発行
+    relay->>client: 応答
 ```
 
 判断はすべて `engine` に置いてある。
@@ -182,8 +200,9 @@ sequenceDiagram
 flowchart TD
     start["起動"] --> scan{"PLUGIN_DIR は<br/>設定されているか"}
     scan -->|"いいえ"| skip["外部プラグインなしで続行"]
-    scan -->|"はい"| list["ディレクトリを走査"]
-    list --> shadow{"エントリーモジュール名が<br/>すでにコードパス上にあるか"}
+    scan -->|"はい"| list{"ディレクトリを<br/>読めるか"}
+    list -->|"いいえ"| abort["理由を 1 行出して<br/>読み込みを諦める"]
+    list -->|"はい"| shadow{"エントリーモジュール名が<br/>すでにコードパス上にあるか"}
     shadow -->|"はい"| reject1["1 行の理由を出して飛ばす"]
     shadow -->|"いいえ"| addpath["コードパスへ追加"]
     addpath --> validate{"API v1 を<br/>満たすか"}
@@ -191,19 +210,26 @@ flowchart TD
     validate -->|"はい"| config["設定を切り出して<br/>plugin_children を呼ぶ"]
     config --> accepted{"子仕様を<br/>組み立てられたか"}
     accepted -->|"いいえ"| reject3["1 行の理由を出して飛ばす"]
-    accepted -->|"はい"| tree["ランナーと子仕様を<br/>ツリーに載せる"]
+    accepted -->|"はい"| dup{"プラグイン名が<br/>すでに使われているか"}
+    dup -->|"はい"| reject4["1 行の理由を出して飛ばす<br/>（先に読んだ側が残る）"]
+    dup -->|"いいえ"| tree["ランナーと子仕様を<br/>ツリーに載せる"]
     reject1 --> summary["集計行を 1 行出す"]
     reject2 --> summary
     reject3 --> summary
+    reject4 --> summary
     tree --> summary
 ```
 
 読み込みの失敗で起動は止まらない。
-理由を 1 行ログに出してそのプラグインだけを無効にし、最後に何を読んで何を弾いたかの集計行を出す。
+弾かれるのは 1 つのプラグインだけで、監視もバンカーも他のプラグインも影響を受けない。
+`PLUGIN_DIR` 自体が読めないときだけは走査に入れないので、集計行も出ない。
 
 設定は `PLUGIN_<NAME>_<KEY>` の環境変数を集め、プラグイン名が確定した時点で接頭辞に一致するものだけを切り出して渡す。
-設定が足りないときはプラグイン自身が `{error, Reason}` を返して読み込みを拒否できる。
+設定が足りないときは、プラグインの `plugin_children/0` または `/1` が `{error, Reason}` を返して読み込みを拒否できる。
 値の妥当性（接続文字列として解釈できるか、など）は本体には判断できないので、そこをプラグインに委ねている。
+
+読み込んだ BEAM は本体と同じ VM で同じ権限で動く。
+サンドボックスは無く、秘密鍵を持つアクターの状態にも到達できるので、信頼できるものだけを置くことになる（[プラグイン API v1](plugin-api.md) の第 1 章）。
 
 ## ディレクトリ構造
 
@@ -280,7 +306,7 @@ nostr-no-su/
 `plugins-src/` や `examples/` のソースを本体と同じ docker イメージの中でビルドし、その成果物をここへ置く。
 ホスト環境でビルドすると同梱物が変わってしまうので、ビルド手順は各プラグインの README に従う。
 
-## 設定
+## 環境変数と読み手
 
 環境変数はすべて `config.gleam` の 1 か所で読む。
 
@@ -290,7 +316,7 @@ nostr-no-su/
 | `BUNKER_RELAY_URL` | バンカー | `RELAY_URL` と同じリレーを使う |
 | `PUBKEYS` | 監視 | 直近のイベントを購読する |
 | `ACCOUNT_KEYS` | バンカー | バンカーを無効にする |
-| `BUNKER_SECRET` | バンカー | 起動ごとに乱数で生成する |
+| `BUNKER_SECRET` | バンカー | 起動ごとにアカウントごとの乱数を生成する |
 | `PLUGIN_DIR` | プラグインローダー | 外部プラグインを読み込まない |
 | `PLUGIN_<NAME>_<KEY>` | 各プラグイン | プラグインが判断する |
 | `ADMIN_PORT` | 管理 UI | `8080` で待ち受ける |
@@ -300,14 +326,6 @@ nostr-no-su/
 
 プラグイン固有の設定だけは本体が中身を解釈しない。
 接頭辞に一致する変数を集めて map で渡すだけで、キーの必須性も値の形式もプラグインが決める。
-
-## 信頼モデル
-
-`PLUGIN_DIR` に置いた BEAM は本体と同じ VM で同じ権限で動く。
-サンドボックスは無く、`sys:get_state/1` で秘密鍵を持つアクターの状態にも到達できる。
-信頼できるものだけを置くこと。
-
-この制約があるのは、信頼できないコードの実行には別ノードへの分離が必要で、規模が変わるためである。
 
 ## 関連文書
 

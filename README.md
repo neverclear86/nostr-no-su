@@ -134,7 +134,7 @@ docker rm -f nns-pg-test
 
 ## 構成
 
-プロセスの構造、イベントとリクエストが通る経路、ディレクトリの配置は [システム構成](docs/architecture.md) に図で示してある。
+本体の内部構造は [システム構成](docs/architecture.md) に図で示してある。
 
 ```
 src/nostr_no_su.gleam                        -- エントリポイント（設定の読み込みとツリー仕様の組み立て）
