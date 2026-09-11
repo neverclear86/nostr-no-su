@@ -7,16 +7,24 @@
 //// 任せる。エスケープでは防げない経路には決まった値だけを渡す。`html.style`、
 //// `html.script`、`element.unsafe_raw_html` は使わない。イベント属性には定数の
 //// `copy_script` だけを渡す。`href` と `action` には、`admin/dashboard` のパスの関数が
-//// `/` から組み立てた値か、`"/"` か、`stylesheet_segments` から組み立てた値だけを渡す
-//// （lustre は URL を検査しない）。
+//// `/` から組み立てた値か、`"/"` か、`stylesheet_segments` と `language_segments` から
+//// 組み立てた値だけを渡す（lustre は URL を検査しない）。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
 ////
+//// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
+//// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
+//// `admin/account_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した英語の
+//// 文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま出すのは製品名
+//// （`nostr-no-su`）だけである。
+////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
-//// を読ませる。Tailwind は `admin/` の `.gleam` の文字列からクラス名を拾うので、クラス名は
-//// 文字列の連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。
-//// 80 桁を超えても、クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
+//// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
+//// （文字列、識別子、コメント）からクラス名の候補を拾う。クラスを変えなくても、語を変えると
+//// CSS が変わることがあるので、これらのファイルを変えたらビルドし直す。クラス名は文字列の
+//// 連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。80 桁を超えても、
+//// クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
 //// `focus-visible:outline-base-content`、`input` の文字列には `border-base-content/60` を
 //// 付ける（デザイン方針 6 節。`stylesheet_test` が検査する）。
 
@@ -26,6 +34,7 @@ import gleam/string
 import lustre/attribute.{type Attribute}
 import lustre/element.{type Element}
 import lustre/element/html
+import nostr_no_su/admin/i18n.{type Language}
 
 /// ビルドした管理 UI のスタイルシートの URL のパスセグメント。ルーティング（`admin`）と
 /// ページ枠の `link` が同じ定義を見る。配信する `wisp.serve_static` はこの定数ではなく要求の
@@ -33,6 +42,16 @@ import lustre/element/html
 /// （`priv/static/admin.css`）、`package.json` の `build:css` の出力先、`stylesheet_test` が
 /// 読むパスと一致させる。
 pub const stylesheet_segments = ["static", "admin.css"]
+
+/// 言語の切り替えの POST 先のパスセグメント。ルーティング（`admin`）とナビゲーション
+/// バーのフォームが同じ定義を見る。
+pub const language_segments = ["language"]
+
+/// 言語の切り替えで、選んだ言語のコードを送る欄の名前。
+pub const language_field = "language"
+
+/// 言語の切り替えで、切り替えた後に開くパスを送る欄の名前。
+pub const return_field = "return"
 
 /// コピーのボタンの処理。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたとき
 /// だけコピーの欄の囲み（ボタンの親の親）に `data-copied` を 2 秒付ける。値はスクリプトに
@@ -45,6 +64,15 @@ pub type Layout {
   Wide
   /// フォームと説明を 1 列で読む、ダッシュボード以外のページ。
   Narrow
+}
+
+/// ナビゲーションバーに言語の切り替えを出すかどうか。
+pub type LanguageSwitch {
+  /// 切り替えを出す。切り替えた後は `return_to`（GET で開けるページのパス）を開く。
+  SwitchReturningTo(return_to: String)
+  /// 切り替えを出さない。秘密鍵を出すページは同じ内容を GET で開き直せず、切り替えで
+  /// ページを離れると表示が失われるため。
+  NoSwitch
 }
 
 /// 操作の重さ。ボタンの色を決める。
@@ -90,10 +118,17 @@ pub type Value {
   Account(npub: String, hex: Option(String))
 }
 
-/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。ナビゲーションバーと、`title` を
-/// 見出し（h1）にした本文を出す。
-pub fn page(title: String, layout: Layout, body: List(Element(msg))) -> String {
-  html.html([attribute.lang("en")], [
+/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
+/// ナビゲーションバーと、`title` を見出し（h1）にした本文を出す。
+pub fn page(
+  language: Language,
+  title: i18n.Message,
+  layout: Layout,
+  switch: LanguageSwitch,
+  body: List(Element(msg)),
+) -> String {
+  let title = i18n.text(language, title)
+  html.html([attribute.lang(i18n.code(language))], [
     html.head([], [
       html.meta([attribute.charset("utf-8")]),
       html.meta([
@@ -103,11 +138,11 @@ pub fn page(title: String, layout: Layout, body: List(Element(msg))) -> String {
       html.title([], "nostr-no-su — " <> title),
       html.link([
         attribute.rel("stylesheet"),
-        attribute.href("/" <> string.join(stylesheet_segments, "/")),
+        attribute.href(segments_path(stylesheet_segments)),
       ]),
     ]),
     html.body([attribute.class("min-h-screen bg-base-200 text-base-content")], [
-      navbar(),
+      navbar(language, switch),
       html.main([attribute.class(main_class(layout))], [
         html.h1([attribute.class("text-2xl font-bold")], [html.text(title)]),
         ..body
@@ -117,9 +152,20 @@ pub fn page(title: String, layout: Layout, body: List(Element(msg))) -> String {
   |> element.to_document_string
 }
 
-/// 全ページ共通のナビゲーションバー。サイト名はダッシュボードへのリンクにする。右端
-/// （`navbar-end`）は言語の切り替え（#50）の置き場所で、今は空にしておく。
-fn navbar() -> Element(msg) {
+/// パスセグメントを `/` から連結したパス。ルーティング（`admin`）が照合するのと同じ
+/// セグメントの定義から、リンク、フォームの宛先、スタイルシートの `href` のパスを
+/// 組み立てる。
+pub fn segments_path(segments: List(String)) -> String {
+  "/" <> string.join(segments, "/")
+}
+
+/// 全ページ共通のナビゲーションバー。サイト名はダッシュボードへのリンクにし、右端
+/// （`navbar-end`）に言語の切り替えを置く。切り替えを出さないページでも右端の枠は残す。
+fn navbar(language: Language, switch: LanguageSwitch) -> Element(msg) {
+  let end = case switch {
+    SwitchReturningTo(return_to:) -> [language_switch(language, return_to)]
+    NoSwitch -> []
+  }
   html.header(
     [
       attribute.class(
@@ -138,9 +184,65 @@ fn navbar() -> Element(msg) {
           [html.text("nostr-no-su")],
         ),
       ]),
-      html.div([attribute.class("navbar-end")], []),
+      html.div([attribute.class("navbar-end")], end),
     ],
   )
+}
+
+/// 言語の切り替え。対応する言語を `i18n.languages` の順に並べ、表示している言語は押せない
+/// 項目に、それ以外の言語はその言語を POST で送るボタンにする。JS なしで動く。
+fn language_switch(current: Language, return_to: String) -> Element(msg) {
+  html.form(
+    [
+      attribute.method("post"),
+      attribute.action(segments_path(language_segments)),
+    ],
+    [
+      hidden_input(return_field, return_to),
+      html.div(
+        [
+          attribute.role("group"),
+          attribute.aria_label(i18n.text(current, i18n.LanguageSwitchLabel)),
+          attribute.class("join"),
+        ],
+        list.map(i18n.languages, language_option(current, _)),
+      ),
+    ],
+  )
+}
+
+/// 切り替えの項目 1 つ。言語名はその言語自身で書き、読み上げと字形がその言語になるよう
+/// `lang` を付ける。表示している言語の項目はフォーカスできない `span` なので、ボタンと
+/// 違ってフォーカスの輪郭のクラスを付けない。
+fn language_option(current: Language, language: Language) -> Element(msg) {
+  let code = i18n.code(language)
+  let name = [html.text(i18n.native_name(language))]
+  case language == current {
+    True ->
+      html.span(
+        [
+          attribute.lang(code),
+          attribute.aria_current("true"),
+          attribute.class(
+            "btn btn-sm join-item cursor-default border-base-content bg-base-content text-base-100",
+          ),
+        ],
+        name,
+      )
+    False ->
+      html.button(
+        [
+          attribute.type_("submit"),
+          attribute.name(language_field),
+          attribute.value(code),
+          attribute.lang(code),
+          attribute.class(
+            "btn btn-sm join-item focus-visible:outline-base-content",
+          ),
+        ],
+        name,
+      )
+  }
 }
 
 /// ページの本文（`main`）のクラス。
@@ -324,8 +426,14 @@ pub fn hidden_input(name: String, value: String) -> Element(msg) {
 /// 見出しを付けた読み取り専用の欄と、その値をコピーするボタン。値はスクリプトに埋め込まず、
 /// ボタンが DOM から読む。欄に name を付けない（送信にも入力履歴にも含めないため）。
 /// `copy_script` が囲みをボタンの親の親として読むので、囲みを 1 つの要素として返す。
-/// ボタンの名前は常に Copy のままにし、完了は囲みの直下の `role="status"` で伝える。
-pub fn copyable_field(caption: String, value: String) -> Element(msg) {
+/// ボタンの名前は常に「コピー」の文言のままにし、完了は囲みの直下の `role="status"` で
+/// 伝える。
+pub fn copyable_field(
+  language: Language,
+  caption: String,
+  value: String,
+) -> Element(msg) {
+  let copied = i18n.text(language, i18n.Copied)
   html.div([attribute.class("fieldset group")], [
     html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
     html.div([attribute.class("join w-full")], [
@@ -354,7 +462,7 @@ pub fn copyable_field(caption: String, value: String) -> Element(msg) {
                   "col-start-1 row-start-1 group-data-copied:opacity-0",
                 ),
               ],
-              [html.text("Copy")],
+              [html.text(i18n.text(language, i18n.Copy))],
             ),
             html.span(
               [
@@ -363,7 +471,7 @@ pub fn copyable_field(caption: String, value: String) -> Element(msg) {
                   "invisible col-start-1 row-start-1 group-data-copied:visible",
                 ),
               ],
-              [html.text("Copied")],
+              [html.text(copied)],
             ),
           ]),
         ],
@@ -371,29 +479,55 @@ pub fn copyable_field(caption: String, value: String) -> Element(msg) {
     ]),
     html.span([attribute.role("status"), attribute.class("sr-only")], [
       html.span([attribute.class("hidden group-data-copied:inline")], [
-        html.text("Copied"),
+        html.text(copied),
       ]),
     ]),
   ])
 }
 
 /// 通知や理由を、トーンの色の囲みで出す。
-pub fn alert(tone: Tone, message: String) -> Element(msg) {
-  html.div([attribute.class(alert_class(tone))], [
-    html.span([], [html.text(message)]),
-  ])
+pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
+  html.div([attribute.class(alert_class(tone))], [html.span([], content)])
 }
 
-/// フォームの上に出す失敗の理由。無ければ何も出さない。
-pub fn error_message(error: Option(String)) -> Element(msg) {
+/// フォームの上に出す失敗の理由。無ければ何も出さない。`lead` は、英語のまま届いた理由の
+/// 前に置く前置き。
+pub fn error_message(
+  language: Language,
+  lead: Option(i18n.Lead),
+  error: Option(i18n.Reason),
+) -> Element(msg) {
   case error {
     None -> element.none()
     Some(reason) ->
       html.div(
         [attribute.role("alert"), attribute.class(alert_class(Failure))],
-        [html.span([], [html.text(reason)])],
+        [html.span([], reason_content(language, lead, reason))],
       )
   }
+}
+
+/// 理由の中身。訳す理由は表示の言語の文字列にする。英語のまま届いた理由は `lang="en"` を
+/// 付けて出し、表示の言語に `lead` の前置きがあればその後に続ける。
+pub fn reason_content(
+  language: Language,
+  lead: Option(i18n.Lead),
+  reason: i18n.Reason,
+) -> List(Element(msg)) {
+  case reason {
+    i18n.Translated(message) -> [html.text(i18n.text(language, message))]
+    i18n.Untranslated(detail) ->
+      case option.then(lead, i18n.lead(language, _)) {
+        Some(prefix) -> [html.text(prefix), untranslated(detail)]
+        None -> [untranslated(detail)]
+      }
+  }
+}
+
+/// 訳さずに英語のまま出す文字列（`i18n.Untranslated` の中身）。どの言語のページでも
+/// `lang="en"` の `span` で出す。
+pub fn untranslated(text: String) -> Element(msg) {
+  html.span([attribute.lang("en")], [html.text(text)])
 }
 
 /// 秘密鍵を表示するページの、読み飛ばされては困る注意。
@@ -412,10 +546,10 @@ fn alert_class(tone: Tone) -> String {
 }
 
 /// ダッシュボードへ戻るリンクの段落。
-pub fn back_link() -> Element(msg) {
+pub fn back_link(language: Language) -> Element(msg) {
   html.p([], [
     html.a([attribute.href("/"), attribute.class("link")], [
-      html.text("Back to dashboard"),
+      html.text(i18n.text(language, i18n.BackToDashboard)),
     ]),
   ])
 }

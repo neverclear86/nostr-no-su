@@ -5,6 +5,8 @@ import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
+import nostr_no_su/nostr/nip19
 import support/account_actions
 
 /// HTML として解釈されうるラベル。
@@ -34,9 +36,15 @@ fn onclick(page: String) -> String {
 /// ラベルは、完了ページ、再表示のページ、操作のページのどれでもエスケープして出す。
 pub fn account_pages_escape_the_label_test() {
   let pages = [
-    account_pages.registered_page("npub1example", hostile, "nsec1example"),
-    account_pages.private_key_page(row(hostile), "nsec1example"),
+    account_pages.registered_page(
+      i18n.English,
+      "npub1example",
+      hostile,
+      "nsec1example",
+    ),
+    account_pages.private_key_page(i18n.English, row(hostile), "nsec1example"),
     ..list.map(account_actions.all, account_pages.account_action_page(
+      i18n.English,
       row(hostile),
       _,
       None,
@@ -47,22 +55,25 @@ pub fn account_pages_escape_the_label_test() {
   assert !string.contains(page, hostile)
 }
 
-/// フォームの上に出す理由はエスケープして出す。
+/// フォームの上に出す理由はエスケープして出す。英語のまま届いた理由には `lang="en"` を
+/// 付ける。
 pub fn error_reasons_are_escaped_test() {
+  let reason = Some(i18n.Untranslated(hostile))
   let pages = [
-    account_pages.new_account_page(Some(hostile)),
+    account_pages.new_account_page(i18n.English, reason),
     account_pages.account_action_page(
+      i18n.English,
       row("main"),
       dashboard.EditLabel,
-      Some(hostile),
+      reason,
     ),
   ]
   use page <- list.each(pages)
   assert string.contains(
     page,
-    "<div class=\"alert alert-error\" role=\"alert\"><span>"
+    "<div class=\"alert alert-error\" role=\"alert\"><span><span lang=\"en\">"
       <> escaped
-      <> "</span></div>",
+      <> "</span></span></div>",
   )
   assert !string.contains(page, hostile)
 }
@@ -72,8 +83,10 @@ pub fn error_reasons_are_escaped_test() {
 /// 囲みはボタンの親の親、`role="status"` は囲みの直下）で出す。形が崩れてもコピーはできて
 /// しまい、完了の表示と読み上げだけが消えるので、欄全体を照合する。
 pub fn copy_button_reads_the_value_from_the_page_test() {
-  let first = account_pages.private_key_page(row("main"), "nsec1first\"")
-  let second = account_pages.private_key_page(row("main"), "nsec1second")
+  let first =
+    account_pages.private_key_page(i18n.English, row("main"), "nsec1first\"")
+  let second =
+    account_pages.private_key_page(i18n.English, row("main"), "nsec1second")
   assert onclick(first) == onclick(second)
   assert !string.contains(onclick(first), "nsec1")
   assert string.contains(
@@ -86,4 +99,116 @@ pub fn copy_button_reads_the_value_from_the_page_test() {
     first,
     "</button></div><span class=\"sr-only\" role=\"status\"><span class=\"hidden group-data-copied:inline\">Copied</span></span></div>",
   )
+}
+
+/// どのページも表示の言語を `<html lang>` に出す。言語の切り替えを出さないのは、秘密鍵を
+/// 描画する 3 つのページだけで、そのページでもナビゲーションバーの右端の枠は残す。
+pub fn only_pages_with_a_private_key_hide_the_language_switch_test() {
+  use language <- list.each(i18n.languages)
+  let html_lang = "<html lang=\"" <> i18n.code(language) <> "\">"
+  let hidden = [
+    account_pages.generated_key_page(language, "nsec1example", None),
+    account_pages.registered_page(
+      language,
+      "npub1example",
+      "main",
+      "nsec1example",
+    ),
+    account_pages.private_key_page(language, row("main"), "nsec1example"),
+  ]
+  let shown = [
+    account_pages.new_account_page(language, None),
+    ..list.map(account_actions.all, account_pages.account_action_page(
+      language,
+      row("main"),
+      _,
+      None,
+    ))
+  ]
+  list.each(hidden, fn(page) {
+    assert string.contains(page, html_lang)
+    assert string.contains(page, "<div class=\"navbar-end\"></div>")
+    assert !string.contains(page, "action=\"/language\"")
+  })
+  list.each(shown, fn(page) {
+    assert string.contains(page, html_lang)
+    assert string.contains(page, "action=\"/language\"")
+  })
+}
+
+/// 言語を切り替えた後は、登録画面と操作のページを GET で開き直す。失敗の理由を出した
+/// POST の応答でも同じである。
+pub fn language_switch_returns_to_the_page_test() {
+  let reason = Some(i18n.Untranslated("account is not registered"))
+  assert string.contains(
+    account_pages.new_account_page(i18n.English, reason),
+    "<input name=\"return\" type=\"hidden\" value=\"/accounts/new\">",
+  )
+  list.each(account_actions.all, fn(action) {
+    assert string.contains(
+      account_pages.account_action_page(
+        i18n.English,
+        row("main"),
+        action,
+        reason,
+      ),
+      "<input name=\"return\" type=\"hidden\" value=\""
+        <> dashboard.account_action_path("abcd", action)
+        <> "\">",
+    )
+  })
+}
+
+/// 日本語のページでは、管理 UI が訳す理由を日本語で出し、英語のまま届いた理由は前置きの
+/// 後に `lang="en"` で出す。英語のページには前置きを置かない。
+pub fn japanese_pages_translate_reasons_test() {
+  let invalid =
+    account_pages.new_account_page(
+      i18n.Japanese,
+      Some(i18n.Translated(i18n.InvalidNsec(nip19.InvalidChecksum))),
+    )
+  assert string.contains(invalid, "<span>bech32 のチェックサムが一致しません。</span>")
+  let registered = Some(i18n.Untranslated("account is already registered"))
+  assert string.contains(
+    account_pages.new_account_page(i18n.Japanese, registered),
+    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+  )
+  assert string.contains(
+    account_pages.new_account_page(i18n.English, registered),
+    "<span><span lang=\"en\">account is already registered</span></span>",
+  )
+  assert string.contains(
+    account_pages.account_action_page(
+      i18n.Japanese,
+      row("main"),
+      dashboard.RevealPrivateKey,
+      Some(i18n.Translated(i18n.IncorrectPassword)),
+    ),
+    "<span>管理パスワードが違います。</span>",
+  )
+}
+
+/// 強調した文と続く文の間は、英語では空白で区切り、日本語では区切らない。操作の見出しと
+/// 送信のボタンの文言は、日本語では別の文言になる。
+pub fn japanese_pages_follow_the_japanese_style_test() {
+  assert string.contains(
+    account_pages.generated_key_page(i18n.English, "nsec1example", None),
+    "<strong>Back up this private key now.</strong> The account is not registered",
+  )
+  assert string.contains(
+    account_pages.generated_key_page(i18n.Japanese, "nsec1example", None),
+    "<strong>この秘密鍵を今すぐバックアップしてください。</strong>「この鍵を登録する」を押すまで",
+  )
+  let delete =
+    account_pages.account_action_page(
+      i18n.Japanese,
+      row("main"),
+      dashboard.DeleteAccount,
+      None,
+    )
+  assert string.contains(
+    delete,
+    "<h1 class=\"text-2xl font-bold\">アカウントを削除</h1>",
+  )
+  assert string.contains(delete, ">アカウントを削除する</button>")
 }

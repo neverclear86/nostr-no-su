@@ -4,19 +4,21 @@
 ////
 //// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey、
 //// アカウントのラベル、表示する理由）ため、テキストか属性値として lustre に渡し、
-//// エスケープを文字列化に任せる（`admin/view` の規則に従う）。
+//// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
+//// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`）が同じ定義を見るようここにだけ置く。
+//// `admin/account_pages`）が同じ定義を見るようここに置く。ページ枠が使う定義
+//// （スタイルシートと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
+//// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
 
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
+import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/plugin_runner
@@ -123,17 +125,17 @@ pub const max_label_code_points = 100
 /// スナップショットをダッシュボードのページに描画する。広い画面では、判断を待つ承認待ちと
 /// アカウントとセッションを左の列に、リレーとプラグインの状態を右の列に置く。狭い画面では
 /// この順に 1 列に並ぶ。
-pub fn render(snapshot: Snapshot) -> String {
-  view.page("Dashboard", view.Wide, [
+pub fn render(language: Language, snapshot: Snapshot) -> String {
+  view.page(language, i18n.Dashboard, view.Wide, view.SwitchReturningTo("/"), [
     html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
       html.div([attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")], [
-        pending_section(snapshot.pending),
-        accounts_section(snapshot.accounts),
-        sessions_section(snapshot.sessions),
+        pending_section(language, snapshot.pending),
+        accounts_section(language, snapshot.accounts),
+        sessions_section(language, snapshot.sessions),
       ]),
       html.div([attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-2")], [
-        relays_section(snapshot.relays),
-        plugins_section(snapshot.plugins),
+        relays_section(language, snapshot.relays),
+        plugins_section(language, snapshot.plugins),
       ]),
     ]),
   ])
@@ -142,37 +144,54 @@ pub fn render(snapshot: Snapshot) -> String {
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。
 /// 一覧を得られないときは、一覧の代わりにその理由を出し、登録のリンクも出さない。
 fn accounts_section(
+  language: Language,
   accounts: Result(List(AccountRow), String),
 ) -> Element(msg) {
+  let text = i18n.text(language, _)
   let #(add_link, body) = case accounts {
     Ok(rows) -> #(
       view.button_link(
-        segments_path(new_account_segments),
-        "Add account",
+        view.segments_path(new_account_segments),
+        text(i18n.AddAccount),
         view.Primary,
       ),
-      section_body(rows, "No accounts registered.", fn(rows) {
-        item_list(list.map(rows, account_item))
+      section_body(rows, text(i18n.NoAccounts), fn(rows) {
+        item_list(list.map(rows, account_item(language, _)))
       }),
     )
-    Error(reason) -> #(element.none(), view.alert(view.Neutral, reason))
+    Error(reason) -> #(
+      element.none(),
+      view.alert(
+        view.Neutral,
+        view.reason_content(
+          language,
+          Some(i18n.CouldNotListAccounts),
+          i18n.Untranslated(reason),
+        ),
+      ),
+    )
   }
   view.card([
     html.div(
       [attribute.class("flex flex-wrap items-center justify-between gap-2")],
-      [view.heading("Accounts"), add_link],
+      [view.heading(text(i18n.Accounts)), add_link],
     ),
     body,
   ])
 }
 
 /// アカウント 1 件。識別、2 つの接続 URI、操作のリンクを縦に並べる。
-fn account_item(account: AccountRow) -> Element(msg) {
+fn account_item(language: Language, account: AccountRow) -> Element(msg) {
+  let text = i18n.text(language, _)
   html.li([attribute.class("flex flex-col gap-3 py-4 first:pt-0 last:pb-0")], [
     account_identity(account),
-    view.copyable_field("Connection URI", account.uri),
-    view.copyable_field("Connection URI (approval)", account.auth_uri),
-    account_action_links(account.signer),
+    view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
+    view.copyable_field(
+      language,
+      text(i18n.ConnectionUriForApproval),
+      account.auth_uri,
+    ),
+    account_action_links(language, account.signer),
   ])
 }
 
@@ -195,13 +214,13 @@ fn account_identity(account: AccountRow) -> Element(msg) {
 }
 
 /// アカウント 1 件への操作のページへのリンク。
-fn account_action_links(signer: String) -> Element(msg) {
+fn account_action_links(language: Language, signer: String) -> Element(msg) {
   html.div(
     [attribute.class("flex flex-wrap gap-2")],
     list.map(account_actions, fn(action) {
       view.button_link(
         account_action_path(signer, action),
-        account_action_title(action),
+        i18n.text(language, account_action_title(action)),
         account_action_link_weight(action),
       )
     }),
@@ -220,37 +239,58 @@ fn account_action_link_weight(action: AccountAction) -> view.Weight {
 }
 
 /// 承認待ちの接続要求と、その承認・拒否ボタン。
-fn pending_section(pending: List(PendingRow)) -> Element(msg) {
-  use rows <- section("Pending connections", pending, "No pending connections.")
-  item_list(list.map(rows, fn(entry) { entry_item(pending_content(entry)) }))
+fn pending_section(
+  language: Language,
+  pending: List(PendingRow),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  use rows <- section(
+    text(i18n.PendingConnections),
+    pending,
+    text(i18n.NoPendingConnections),
+  )
+  item_list(
+    list.map(rows, fn(entry) { entry_item(pending_content(language, entry)) }),
+  )
 }
 
-/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。
-pub fn approval_page(pending: PendingRow) -> String {
-  view.page("Approve connection", view.Narrow, [
-    view.card(pending_content(pending)),
-  ])
+/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。言語を
+/// 切り替えた後は同じ承認ページを開き直す。
+pub fn approval_page(language: Language, pending: PendingRow) -> String {
+  view.page(
+    language,
+    i18n.ApproveConnection,
+    view.Narrow,
+    view.SwitchReturningTo(approve_path(pending.token)),
+    [view.card(pending_content(language, pending))],
+  )
 }
 
 /// 見出しと理由だけを伝えるページ。承認・拒否の結果と、アカウントを扱えないときや
 /// 変更が反映されたか分からないときに使う。`tone` は理由の囲みの色で、呼び出し側が
 /// 結果に応じて決める。理由はほかのページと同じくカードに入れる（中立の囲みはページの
 /// 背景と同じ色なので、カードの外では見えない）。ダッシュボードで状態を確かめられるよう
-/// リンクを置く。
-pub fn notice_page(title: String, message: String, tone: view.Tone) -> String {
-  view.page(title, view.Narrow, [
-    view.card([view.alert(tone, message)]),
-    view.back_link(),
+/// リンクを置く。POST の応答か、開き直すと内容が変わるページなので、言語を切り替えた後は
+/// ダッシュボードを開く。
+pub fn notice_page(
+  language: Language,
+  title: i18n.Message,
+  message: i18n.Reason,
+  tone: view.Tone,
+) -> String {
+  view.page(language, title, view.Narrow, view.SwitchReturningTo("/"), [
+    view.card([view.alert(tone, view.reason_content(language, None, message))]),
+    view.back_link(language),
   ])
 }
 
 /// 操作の見出しと、ダッシュボードのリンクの文言。
-pub fn account_action_title(action: AccountAction) -> String {
+pub fn account_action_title(action: AccountAction) -> i18n.Message {
   case action {
-    EditLabel -> "Edit label"
-    RotateSecret -> "Rotate secret"
-    DeleteAccount -> "Delete account"
-    RevealPrivateKey -> "Show private key"
+    EditLabel -> i18n.EditLabel
+    RotateSecret -> i18n.RotateSecret
+    DeleteAccount -> i18n.DeleteAccount
+    RevealPrivateKey -> i18n.ShowPrivateKey
   }
 }
 
@@ -266,7 +306,7 @@ fn account_action_segment(action: AccountAction) -> String {
 
 /// 操作のパス（`/accounts/<signer>/<segment>`）。
 pub fn account_action_path(signer: String, action: AccountAction) -> String {
-  segments_path([accounts_segment, signer, account_action_segment(action)])
+  view.segments_path([accounts_segment, signer, account_action_segment(action)])
 }
 
 /// パスセグメントから、アカウント 1 件への操作の署名者と操作を引く。操作のパスで
@@ -285,61 +325,78 @@ pub fn parse_account_action_path(
 
 /// 承認待ち 1 件の、署名者・クライアント・経過時間と、承認・拒否ボタン。ダッシュボードの
 /// 行と承認ページが使う。
-fn pending_content(pending: PendingRow) -> List(Element(msg)) {
+fn pending_content(
+  language: Language,
+  pending: PendingRow,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
   [
     view.summary_list([
-      #("Signer", view.Code(pending.signer)),
-      #("Client", view.Code(pending.client)),
-      #("Age", view.Plain(int.to_string(pending.age_seconds) <> "s")),
+      #(text(i18n.Signer), view.Code(pending.signer)),
+      #(text(i18n.Client), view.Code(pending.client)),
+      #(text(i18n.Age), view.Plain(text(i18n.AgeSeconds(pending.age_seconds)))),
     ]),
-    button_row(decision_forms(pending.token)),
+    button_row(decision_forms(language, pending.token)),
   ]
 }
 
 /// リレーごとの接続状態。
-fn relays_section(relays: List(RelayRow)) -> Element(msg) {
-  use rows <- section("Relays", relays, "No relays configured.")
+fn relays_section(language: Language, relays: List(RelayRow)) -> Element(msg) {
+  let text = i18n.text(language, _)
+  use rows <- section(text(i18n.Relays), relays, text(i18n.NoRelays))
   view.table(
-    ["Role", "URL", "State"],
+    [text(i18n.RoleColumn), text(i18n.UrlColumn), text(i18n.StateColumn)],
     list.map(rows, fn(relay) {
       [
         html.td([attribute.class("whitespace-nowrap")], [
-          html.text(role_label(relay.role)),
+          html.text(text(role_label(relay.role))),
         ]),
         html.td([attribute.class("font-mono text-xs break-all")], [
           html.text(relay.url),
         ]),
-        html.td([], [relay_status(relay.status)]),
+        html.td([], [relay_status(language, relay.status)]),
       ]
     }),
   )
 }
 
 /// 承認済みセッションと、その取り消しボタン。
-fn sessions_section(sessions: List(Session)) -> Element(msg) {
-  use rows <- section("Approved sessions", sessions, "No approved sessions.")
+fn sessions_section(
+  language: Language,
+  sessions: List(Session),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  use rows <- section(
+    text(i18n.ApprovedSessions),
+    sessions,
+    text(i18n.NoApprovedSessions),
+  )
   item_list(
     list.map(rows, fn(session) {
       entry_item([
         view.summary_list([
-          #("Signer", view.Code(session.signer)),
-          #("Client", view.Code(session.client)),
+          #(text(i18n.Signer), view.Code(session.signer)),
+          #(text(i18n.Client), view.Code(session.client)),
         ]),
-        button_row([revoke_form(session)]),
+        button_row([revoke_form(language, session)]),
       ])
     }),
   )
 }
 
 /// 監視イベントを処理するプラグインと、その現在の状態。
-fn plugins_section(plugins: List(PluginRow)) -> Element(msg) {
-  use rows <- section("Plugins", plugins, "No plugins enabled.")
+fn plugins_section(
+  language: Language,
+  plugins: List(PluginRow),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  use rows <- section(text(i18n.Plugins), plugins, text(i18n.NoPlugins))
   view.table(
-    ["Name", "State"],
+    [text(i18n.NameColumn), text(i18n.StateColumn)],
     list.map(rows, fn(plugin) {
       [
         html.td([attribute.class("break-words")], [html.text(plugin.name)]),
-        html.td([], [plugin_state(plugin.status)]),
+        html.td([], [plugin_state(language, plugin.status)]),
       ]
     }),
   )
@@ -401,47 +458,60 @@ fn deny_path(token: String) -> String {
   "/deny/" <> token
 }
 
-/// パスセグメントを連結したパス。
-pub fn segments_path(segments: List(String)) -> String {
-  "/" <> string.join(segments, "/")
-}
-
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。承認が
 /// この画面の主な操作で、拒否してもクライアントは接続し直せるので通常の重さにする。
-fn decision_forms(token: String) -> List(Element(msg)) {
+fn decision_forms(language: Language, token: String) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
   [
-    view.post_form(approve_path(token), [], "Approve", view.Primary, view.InRow),
-    view.post_form(deny_path(token), [], "Deny", view.Normal, view.InRow),
+    view.post_form(
+      approve_path(token),
+      [],
+      text(i18n.Approve),
+      view.Primary,
+      view.InRow,
+    ),
+    view.post_form(
+      deny_path(token),
+      [],
+      text(i18n.Deny),
+      view.Normal,
+      view.InRow,
+    ),
   ]
 }
 
 /// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。確認のページを
 /// 経ずに接続中のクライアントに影響するが、クライアントは接続し直せるので注意の重さにする。
-fn revoke_form(session: Session) -> Element(msg) {
+fn revoke_form(language: Language, session: Session) -> Element(msg) {
   view.post_form(
-    segments_path(revoke_segments),
+    view.segments_path(revoke_segments),
     [
       view.hidden_input("signer", session.signer),
       view.hidden_input("client", session.client),
     ],
-    "Revoke",
+    i18n.text(language, i18n.Revoke),
     view.Caution,
     view.InRow,
   )
 }
 
 /// リレーの接続状態のバッジ。
-fn relay_status(status: Status) -> Element(msg) {
+fn relay_status(language: Language, status: Status) -> Element(msg) {
   let class = case status {
     Connected -> "badge badge-sm badge-success whitespace-nowrap"
     Disconnected -> "badge badge-sm badge-error whitespace-nowrap"
   }
-  html.span([attribute.class(class)], [html.text(status_label(status))])
+  html.span([attribute.class(class)], [
+    html.text(i18n.text(language, status_label(status))),
+  ])
 }
 
 /// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
 /// 一時的な状態なので、異常の色にしない。
-fn plugin_state(status: Option(plugin_runner.Status)) -> Element(msg) {
+fn plugin_state(
+  language: Language,
+  status: Option(plugin_runner.Status),
+) -> Element(msg) {
   let class = case status {
     None -> "badge badge-sm badge-ghost whitespace-nowrap"
     Some(plugin_runner.Running) ->
@@ -451,50 +521,55 @@ fn plugin_state(status: Option(plugin_runner.Status)) -> Element(msg) {
     Some(plugin_runner.Disabled(..)) ->
       "badge badge-sm badge-error whitespace-nowrap"
   }
-  let #(word, detail) = plugin_state_label(status)
+  let #(word, detail) = plugin_state_label(language, status)
   let badge = html.span([attribute.class(class)], [html.text(word)])
   case detail {
     None -> badge
     Some(detail) ->
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
-        html.span([attribute.class("text-xs break-words")], [html.text(detail)]),
+        html.span([attribute.class("text-xs break-words")], detail),
       ])
   }
 }
 
-/// プラグインの状態の語と、あれば詳細の文。`Disabled` の理由はプラグイン由来の
-/// 文字列なので、呼び出し側でテキストとして描画すること（長さは `plugin_runner`
-/// 側で切ってあるので、ここでは切らない）。
+/// プラグインの状態の語と、あれば詳細。`Disabled` の理由はプラグイン由来の英語の文字列
+/// なので、訳さずにテキストとして描画する（長さは `plugin_runner` 側で切ってあるので、
+/// ここでは切らない）。
 fn plugin_state_label(
+  language: Language,
   status: Option(plugin_runner.Status),
-) -> #(String, Option(String)) {
+) -> #(String, Option(List(Element(msg)))) {
+  let text = i18n.text(language, _)
   case status {
-    None -> #("unavailable", None)
-    Some(plugin_runner.Running) -> #("running", None)
+    None -> #(text(i18n.PluginUnavailable), None)
+    Some(plugin_runner.Running) -> #(text(i18n.PluginRunning), None)
     Some(plugin_runner.Overloaded(dropped:)) -> #(
-      "overloaded",
-      Some("(dropped " <> int.to_string(dropped) <> ")"),
+      text(i18n.PluginOverloaded),
+      Some([html.text(text(i18n.Dropped(dropped)))]),
     )
     Some(plugin_runner.Disabled(reason:, dropped:)) -> #(
-      "disabled",
-      Some(reason <> " (dropped " <> int.to_string(dropped) <> ")"),
+      text(i18n.PluginDisabled),
+      Some([
+        view.untranslated(reason),
+        html.text(text(i18n.DroppedAfterReason(dropped))),
+      ]),
     )
   }
 }
 
 /// リレーの用途の表示名。
-fn role_label(role: Role) -> String {
+fn role_label(role: Role) -> i18n.Message {
   case role {
-    MonitorRelay -> "monitor"
-    BunkerRelay -> "bunker"
+    MonitorRelay -> i18n.MonitorRole
+    BunkerRelay -> i18n.BunkerRole
   }
 }
 
 /// 接続状態の表示名。
-fn status_label(status: Status) -> String {
+fn status_label(status: Status) -> i18n.Message {
   case status {
-    Connected -> "connected"
-    Disconnected -> "disconnected"
+    Connected -> i18n.RelayConnected
+    Disconnected -> i18n.RelayDisconnected
   }
 }

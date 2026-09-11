@@ -4,6 +4,9 @@
  * - source(none) で自動検出を止め、クラス名を拾う場所を描画のモジュールのディレクトリーに
  *   限る（build/ や node_modules/ を走査させない）。admin.gleam はその外にあるので、
  *   クラス名を書かない。
+ * - 文言のモジュール（i18n.gleam）は走査しない。英語の文言の語（tab、range など）が
+ *   daisyUI の部品の名前として拾われ、使わない部品の CSS が出力されるため。クラス名を
+ *   書かない。
  * - ライトは daisyUI の組み込み light をそのまま使う。
  * - ダークは組み込み dark を継承し、primary だけを上書きする。組み込みの primary は
  *   primary-content との比が 4.14:1 で、btn-primary の文字が AA に届かないため。
@@ -13,6 +16,7 @@
  */
 @import "tailwindcss" source(none);
 @source "../src/nostr_no_su/admin";
+@source not "../src/nostr_no_su/admin/i18n.gleam";
 
 @plugin "daisyui" {
   themes: light --default;
