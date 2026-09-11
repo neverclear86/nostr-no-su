@@ -20,7 +20,8 @@
     run_isolated/1,
     describe_exit/1,
     start_child/3,
-    describe_term/1
+    describe_term/1,
+    reply_alias/1
 ]).
 
 %% stratus は wss:// 接続に ssl アプリケーションを必要とする。本体の依存
@@ -282,6 +283,16 @@ describe_exit(Reason) -> {format_line("~0p", [Reason]), none}.
 %% 非 ASCII の content は生のバイト列に展開されるのでさらに膨らむ。
 arity(A) when is_list(A) -> length(A);
 arity(A) -> A.
+
+%% named.call の返信先。宛先を監視する monitor を alias として作り、その参照を
+%% owner と tag に持つ subject を返す。gen:do_call と同じ仕組みで、demonitor の後や
+%% DOWN の後に alias へ届いた応答はランタイムが捨てる。reply_demonitor により、
+%% 応答を 1 件受け取った時点で監視も alias も外れる。
+%% subject は gleam_erlang の公開関数で作り、Subject の実行時表現に依存しない。
+%% -> {Monitor, Subject}
+reply_alias(Pid) ->
+    Alias = erlang:monitor(process, Pid, [{alias, reply_demonitor}]),
+    {Alias, 'gleam@erlang@process':unsafely_create_subject(Alias, Alias)}.
 
 %% 改行を入れずに 1 行へ整形する。characters_to_binary/1 は 255 を超える
 %% コードポイントを含む整形結果でも落ちない。
