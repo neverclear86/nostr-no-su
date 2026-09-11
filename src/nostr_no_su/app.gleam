@@ -115,8 +115,20 @@ import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
 import pog
 
+/// バンカーが無効なときの理由。
+const disabled_reason = "bunker is disabled"
+
 /// バンカーが無効なときの、承認・拒否の結果。
-const disabled: Result(Nil, String) = Error("bunker is disabled")
+const disabled: Result(Nil, String) = Error(disabled_reason)
+
+/// バンカーが無効なときの、アカウントの変更の結果。一覧も理由を返すので、変更も
+/// 受け付けられない状態として揃える。
+const change_disabled: Result(Nil, bunker.ChangeFailure) = Error(
+  bunker.NotReady(disabled_reason),
+)
+
+/// バンカーが無効なときの、秘密鍵の問い合わせの結果。
+const nsec_disabled: Result(String, String) = Error(disabled_reason)
 
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
 /// ネットワークなしでもツリー全体を動かせるようにする。
@@ -405,6 +417,35 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     admin.Context(
       password: config.password,
       accounts: fn() { account_rows(spec.bunker) },
+      add_account: fn(added, label) {
+        with_bunker(spec.bunker, change_disabled, bunker.add_account(
+          _,
+          added,
+          label,
+        ))
+      },
+      remove_account: fn(signer) {
+        with_bunker(spec.bunker, change_disabled, bunker.remove_account(
+          _,
+          signer,
+        ))
+      },
+      rotate_secret: fn(signer) {
+        with_bunker(spec.bunker, change_disabled, bunker.rotate_secret(
+          _,
+          signer,
+        ))
+      },
+      update_label: fn(signer, label) {
+        with_bunker(spec.bunker, change_disabled, bunker.update_label(
+          _,
+          signer,
+          label,
+        ))
+      },
+      nsec: fn(signer) {
+        with_bunker(spec.bunker, nsec_disabled, bunker.nsec(_, signer))
+      },
       plugins: fn() { plugin_rows(spec.plugins) },
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
@@ -496,7 +537,7 @@ fn account_rows(
   config: Result(Bunker, String),
 ) -> Result(List(dashboard.AccountRow), String) {
   case config {
-    Error(reason) -> Error("bunker is disabled: " <> reason)
+    Error(reason) -> Error(disabled_reason <> ": " <> reason)
     Ok(config) -> {
       let relay_urls = list.map(config.relays, fn(relay) { relay.url })
       bunker.accounts(config.name)
@@ -513,6 +554,7 @@ fn account_row(
 ) -> dashboard.AccountRow {
   dashboard.AccountRow(
     signer: listing.signer,
+    npub: listing.npub,
     label: listing.label,
     uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
     auth_uri: account.bunker_uri(listing.signer, relay_urls, None),

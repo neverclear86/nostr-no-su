@@ -1,3 +1,6 @@
+//// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
+//// 応答を確かめる。
+
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}
 import gleam/http
@@ -8,15 +11,32 @@ import gleam/option.{Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/bunker
+import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
+import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import support/nip46_client.{account_for}
 import wisp
 import wisp/simulate
 
 const password = "s3cr3t-password"
 
-const signer = "aaaa1111"
+/// 登録済みのアカウントの署名者。BIP-340 の公式ベクター 0 の公開鍵。
+const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+
+/// 登録済みのアカウントの npub。
+const signer_npub = "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+
+/// 登録済みのアカウントの nsec（BIP-340 の公式ベクター 0 の秘密鍵）。
+const signer_nsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
+
+/// 未登録のアカウントとして登録に使う、NIP-19 の仕様の nsec。
+const spec_nsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
+
+/// `spec_nsec` の秘密鍵の 16 進。
+const spec_key = "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa"
 
 const client = "bbbb2222"
 
@@ -28,37 +48,72 @@ const disabled_reason = "error:<script>alert(1)</script>"
 const token = "tok-1"
 
 /// アカウントの接続 URI（secret 入りと、承認を経るもの）。
-const uri = "bunker://aaaa1111?relay=x&secret=s"
+const uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
 
-const auth_uri = "bunker://aaaa1111?relay=x"
+const auth_uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
 /// アカウントのラベル。
 const label = "main account"
+
+/// DB の障害でアカウントの一覧を得られないときの理由。本物の一覧の文言に合わせる。
+const unavailable = "account store unavailable: database is unreachable or rejected the connection"
 
 /// フェイクのハンドラーがテストへ報告する内容。
 type Report {
   Revoked(signer: String, client: String)
   Approved(token: String)
   Denied(token: String)
+  Added(signer: String, label: String)
+  Removed(signer: String)
+  Rotated(signer: String)
+  Relabeled(signer: String, label: String)
+  NsecRequested(signer: String)
+}
+
+/// 指定したラベルを持つ、登録済みのアカウントの行。
+fn account_row(row_label: String) -> dashboard.AccountRow {
+  dashboard.AccountRow(
+    signer: signer,
+    npub: signer_npub,
+    label: row_label,
+    uri: uri,
+    auth_uri: auth_uri,
+  )
 }
 
 /// 状態をすべて即値で持つ Context。アクターを起動せずにルートを検証できる。
-/// 監視リレーの URL だけはエスケープの検証のために差し替えられる。
+/// 監視リレーの URL だけはエスケープの検証のために差し替えられる。アカウントの変更は
+/// 報告したうえで成功し、登録済みの公開鍵の追加だけを拒否する。
 fn test_context(
   reports: Subject(Report),
   monitor_relay_url: String,
 ) -> admin.Context {
   admin.Context(
     password: password,
-    accounts: fn() {
-      Ok([
-        dashboard.AccountRow(
-          signer: signer,
-          label: label,
-          uri: uri,
-          auth_uri: auth_uri,
-        ),
-      ])
+    accounts: fn() { Ok([account_row(label)]) },
+    add_account: fn(added, added_label) {
+      let added_signer = account.pubkey_hex(added)
+      process.send(reports, Added(added_signer, added_label))
+      case added_signer == signer {
+        True -> Error(bunker.NotApplied("account is already registered"))
+        False -> Ok(Nil)
+      }
+    },
+    remove_account: fn(removed) {
+      process.send(reports, Removed(removed))
+      Ok(Nil)
+    },
+    rotate_secret: fn(rotated) {
+      process.send(reports, Rotated(rotated))
+      Ok(Nil)
+    },
+    update_label: fn(relabeled, new_label) {
+      process.send(reports, Relabeled(relabeled, new_label))
+      Ok(Nil)
+    },
+    nsec: fn(requested) {
+      process.send(reports, NsecRequested(requested))
+      Ok(signer_nsec)
     },
     relays: fn() {
       [
@@ -135,11 +190,34 @@ fn context() -> admin.Context {
   reporting_context(process.new_subject())
 }
 
+/// アカウントの変更がすべて指定した失敗を返す Context。
+fn failing_context(failure: bunker.ChangeFailure) -> admin.Context {
+  admin.Context(
+    ..context(),
+    add_account: fn(_added, _label) { Error(failure) },
+    remove_account: fn(_signer) { Error(failure) },
+    rotate_secret: fn(_signer) { Error(failure) },
+    update_label: fn(_signer, _label) { Error(failure) },
+  )
+}
+
 /// 認証済みの POST リクエストを 1 件処理する。本文は空で、承認・拒否はパスの
 /// トークンだけで決まる。
 fn post(context: admin.Context, path: String) -> Response(wisp.Body) {
   simulate.request(http.Post, path)
-  |> with_credentials("admin", password)
+  |> with_credentials("admin", context.password)
+  |> admin.handle_request(context, _)
+}
+
+/// 認証済みのフォームの POST リクエストを 1 件処理する。
+fn post_form(
+  context: admin.Context,
+  path: String,
+  fields: List(#(String, String)),
+) -> Response(wisp.Body) {
+  simulate.request(http.Post, path)
+  |> with_credentials("admin", context.password)
+  |> simulate.form_body(fields)
   |> admin.handle_request(context, _)
 }
 
@@ -158,7 +236,7 @@ fn with_credentials(
 /// 認証済みの GET リクエストを 1 件処理する。
 fn get(context: admin.Context, path: String) -> Response(wisp.Body) {
   simulate.request(http.Get, path)
-  |> with_credentials("admin", password)
+  |> with_credentials("admin", context.password)
   |> admin.handle_request(context, _)
 }
 
@@ -166,6 +244,36 @@ fn get(context: admin.Context, path: String) -> Response(wisp.Body) {
 fn header(response: Response(wisp.Body), name: String) -> String {
   let assert Ok(value) = list.key_find(response.headers, name)
   value
+}
+
+/// 登録済みのアカウントへの操作のパス。
+fn action_path(action: dashboard.AccountAction) -> String {
+  dashboard.account_action_path(signer, action)
+}
+
+/// アカウント 1 件への操作のすべて。
+fn all_actions() -> List(dashboard.AccountAction) {
+  [
+    dashboard.EditLabel,
+    dashboard.RotateSecret,
+    dashboard.DeleteAccount,
+    dashboard.RevealPrivateKey,
+  ]
+}
+
+/// 生成の確認ページの隠しフィールドの nsec。
+fn hidden_nsec(body: String) -> String {
+  let assert Ok(#(_before, rest)) =
+    string.split_once(body, "name=\"nsec\" value=\"")
+  let assert Ok(#(nsec, _after)) = string.split_once(rest, "\"")
+  nsec
+}
+
+/// nsec から作ったアカウントの公開鍵の 16 進。
+fn nsec_signer(nsec: String) -> String {
+  let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
+  let assert Ok(decoded) = account.from_privkey(privkey)
+  account.pubkey_hex(decoded)
 }
 
 /// 資格情報のないリクエストは 401 になり、ブラウザーに入力を促すヘッダーが付く。
@@ -243,11 +351,7 @@ pub fn dashboard_shows_the_current_state_test() {
 /// クライアント pubkey も外から来た文字列になりうる。
 pub fn dashboard_escapes_html_test() {
   let context = test_context(process.new_subject(), "ws://evil/\"><b>xss</b>")
-  let response =
-    simulate.request(http.Get, "/")
-    |> with_credentials("admin", password)
-    |> admin.handle_request(context, _)
-  let body = simulate.read_body(response)
+  let body = simulate.read_body(get(context, "/"))
   assert string.contains(body, "&quot;&gt;&lt;b&gt;xss&lt;/b&gt;")
   assert !string.contains(body, "<b>xss</b>")
 }
@@ -280,10 +384,10 @@ pub fn healthz_needs_no_credentials_test() {
 pub fn revoke_calls_the_context_and_redirects_test() {
   let revoked = process.new_subject()
   let response =
-    simulate.request(http.Post, "/sessions/revoke")
-    |> with_credentials("admin", password)
-    |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(reporting_context(revoked), _)
+    post_form(reporting_context(revoked), "/sessions/revoke", [
+      #("signer", signer),
+      #("client", client),
+    ])
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(revoked, 1000)
@@ -294,10 +398,9 @@ pub fn revoke_calls_the_context_and_redirects_test() {
 pub fn revoke_without_fields_is_a_bad_request_test() {
   let revoked = process.new_subject()
   let response =
-    simulate.request(http.Post, "/sessions/revoke")
-    |> with_credentials("admin", password)
-    |> simulate.form_body([#("signer", signer)])
-    |> admin.handle_request(reporting_context(revoked), _)
+    post_form(reporting_context(revoked), "/sessions/revoke", [
+      #("signer", signer),
+    ])
   assert response.status == 400
   assert process.receive(revoked, 100) == Error(Nil)
 }
@@ -338,7 +441,7 @@ pub fn same_origin_revoke_is_accepted_test() {
 /// ダッシュボードには承認待ちと、承認を経る接続 URI も出る。
 pub fn dashboard_shows_pending_connections_test() {
   let body = simulate.read_body(get(context(), "/"))
-  assert string.contains(body, "<code>" <> auth_uri <> "</code>")
+  assert string.contains(body, "value=\"" <> auth_uri <> "\"")
   assert string.contains(body, "action=\"/approve/" <> token <> "\"")
   assert string.contains(body, "action=\"/deny/" <> token <> "\"")
   assert string.contains(body, "<td>12s</td>")
@@ -437,14 +540,8 @@ pub fn dashboard_shows_why_the_bunker_is_disabled_test() {
 pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let script = "<script>alert(1)</script>"
   let escaped = "&lt;script&gt;alert(1)&lt;/script&gt;"
-  let row =
-    dashboard.AccountRow(
-      signer: signer,
-      label: script,
-      uri: uri,
-      auth_uri: auth_uri,
-    )
-  let labelled = simulate.read_body(get(with_accounts(Ok([row])), "/"))
+  let labelled =
+    simulate.read_body(get(with_accounts(Ok([account_row(script)])), "/"))
   assert string.contains(labelled, "<td>" <> escaped <> "</td>")
   assert !string.contains(labelled, script)
 
@@ -462,4 +559,633 @@ pub fn dashboard_shows_that_no_accounts_are_registered_test() {
 /// 知らないパスは 404。認証は先に通っている。
 pub fn unknown_paths_are_not_found_test() {
   assert get(context(), "/nope").status == 404
+}
+
+// --- アカウントの登録 ---
+
+/// nsec とラベルの POST で登録し、完了ページに正規の nsec と npub を 1 回出す。
+/// ラベルは前後の空白を除いて渡す。
+pub fn import_registers_an_account_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/accounts/import", [
+      #("nsec", spec_nsec),
+      #("label", " work "),
+    ])
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  let registered = account_for(spec_key)
+  assert string.contains(body, spec_nsec)
+  assert string.contains(body, account.npub(registered))
+  assert process.receive(reports, 1000)
+    == Ok(Added(account.pubkey_hex(registered), "work"))
+}
+
+/// 前後に空白を付けて大文字にした nsec でも、完了ページの nsec は小文字の正規の表記。
+pub fn import_normalizes_the_nsec_test() {
+  let sent = " " <> string.uppercase(spec_nsec) <> "\n"
+  let body =
+    simulate.read_body(
+      post_form(context(), "/accounts/import", [#("nsec", sent)]),
+    )
+  assert string.contains(body, spec_nsec)
+  assert !string.contains(body, string.uppercase(spec_nsec))
+}
+
+/// チェックサムの壊れた nsec は 400 で、送った文字列を応答に含めず、登録しない。
+pub fn import_rejects_an_invalid_nsec_test() {
+  let reports = process.new_subject()
+  let broken = string.drop_end(spec_nsec, 1) <> "4"
+  let response =
+    post_form(reporting_context(reports), "/accounts/import", [
+      #("nsec", broken),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, "invalid bech32 checksum")
+  assert !string.contains(body, broken)
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// npub は nsec として受け付けない。
+pub fn import_rejects_an_npub_test() {
+  let response =
+    post_form(context(), "/accounts/import", [#("nsec", signer_npub)])
+  assert response.status == 400
+  assert string.contains(simulate.read_body(response), "expected nsec prefix")
+}
+
+/// 範囲外の秘密鍵（0）の nsec は 400。
+pub fn import_rejects_an_out_of_range_key_test() {
+  let zero = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqwkhnav"
+  let response = post_form(context(), "/accounts/import", [#("nsec", zero)])
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    "private key not in valid range",
+  )
+}
+
+/// 登録済みの鍵は 409 で、理由と、別のマスターキーの行についての案内と、
+/// ダッシュボードへのリンクを出す。nsec は出さない。
+pub fn import_rejects_a_registered_account_test() {
+  let response =
+    post_form(context(), "/accounts/import", [#("nsec", signer_nsec)])
+  assert response.status == 409
+  let body = simulate.read_body(response)
+  assert string.contains(body, "account is already registered")
+  assert string.contains(body, "different master key")
+  assert string.contains(body, "href=\"/\"")
+  assert !string.contains(body, signer_nsec)
+}
+
+/// 反映されたか分からない登録は 202 の通知ページで、nsec を出さない。
+pub fn import_that_may_have_been_applied_is_accepted_test() {
+  let response =
+    post_form(
+      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      "/accounts/import",
+      [#("nsec", spec_nsec)],
+    )
+  assert response.status == 202
+  let body = simulate.read_body(response)
+  assert string.contains(body, bunker.change_may_have_been_applied)
+  assert string.contains(body, "Back to dashboard")
+  assert !string.contains(body, spec_nsec)
+}
+
+/// 変更を受け付けられないときの登録は 503 で、nsec を出さない。
+pub fn import_while_accounts_are_not_ready_is_unavailable_test() {
+  let response =
+    post_form(
+      failing_context(bunker.NotReady("accounts are not loaded yet")),
+      "/accounts/import",
+      [#("nsec", spec_nsec)],
+    )
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "accounts are not loaded yet")
+  assert !string.contains(body, spec_nsec)
+}
+
+/// 符号位置が 100 を超えるラベルと、制御文字を含むラベルは 400 で、登録しない。
+/// 結合文字を続けたラベルは書記素クラスターでは 1 だが、符号位置で数えて拒否する。
+pub fn import_rejects_a_label_over_the_code_point_limit_test() {
+  let reports = process.new_subject()
+  let labels = [
+    #(string.repeat("a", 101), "label must be at most 100 characters"),
+    #(
+      "e" <> string.repeat("\u{0301}", 100),
+      "label must be at most 100 characters",
+    ),
+    #("a\nb", "label must not contain control characters"),
+    #("a\u{009B}b", "label must not contain control characters"),
+  ]
+  list.each(labels, fn(entry) {
+    let #(sent, reason) = entry
+    let response =
+      post_form(reporting_context(reports), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", sent),
+      ])
+    assert response.status == 400
+    assert string.contains(simulate.read_body(response), reason)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 前後に空白を付けた 100 符号位置のラベルは通り、空白を除いた値で登録する。
+pub fn import_accepts_a_label_at_the_code_point_limit_test() {
+  let reports = process.new_subject()
+  let limit = string.repeat("a", 100)
+  let response =
+    post_form(reporting_context(reports), "/accounts/import", [
+      #("nsec", spec_nsec),
+      #("label", "  " <> limit <> " "),
+    ])
+  assert response.status == 200
+  assert process.receive(reports, 1000)
+    == Ok(Added(nsec_signer(spec_nsec), limit))
+}
+
+/// 欄の無いフォームは 400、フォームの本文が無い POST は 415 で、どちらも登録しない。
+pub fn import_without_fields_is_rejected_test() {
+  let reports = process.new_subject()
+  let empty = post_form(reporting_context(reports), "/accounts/import", [])
+  assert empty.status == 400
+  assert string.contains(simulate.read_body(empty), "missing bech32 separator")
+  assert post(reporting_context(reports), "/accounts/import").status == 415
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 完了ページのラベルはエスケープして出す。
+pub fn registered_page_escapes_the_label_test() {
+  let body =
+    simulate.read_body(
+      post_form(context(), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", "<script>x</script>"),
+      ]),
+    )
+  assert string.contains(body, "&lt;script&gt;x&lt;/script&gt;")
+  assert !string.contains(body, "<script>x</script>")
+}
+
+/// 鍵の生成は登録せず、確認ページの隠しフィールドに有効な nsec を入れて、生成した鍵の
+/// 登録へ送るフォームを返す。生成のたびに違う鍵になる。本文の無い POST も受け付ける。
+pub fn generate_does_not_register_test() {
+  let reports = process.new_subject()
+  let response = post(reporting_context(reports), "/accounts/generate")
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, "action=\"/accounts/register-generated\"")
+  let generated = hidden_nsec(body)
+  let assert Ok(privkey) = nip19.decode(generated, nip19.Nsec)
+  let assert Ok(_account) = account.from_privkey(privkey)
+  let again =
+    simulate.read_body(post(reporting_context(reports), "/accounts/generate"))
+  assert hidden_nsec(again) != generated
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 確認ページの nsec とラベルで生成した鍵を登録すると、nsec を描画せずに
+/// ダッシュボードへ 303 で戻る。
+pub fn generated_key_can_be_registered_test() {
+  let reports = process.new_subject()
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let response =
+    post_form(reporting_context(reports), "/accounts/register-generated", [
+      #("nsec", generated),
+      #("label", "fresh"),
+    ])
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert !string.contains(simulate.read_body(response), generated)
+  assert process.receive(reports, 1000)
+    == Ok(Added(nsec_signer(generated), "fresh"))
+}
+
+/// 生成した鍵の登録は、nsec 入力による登録と同じ失敗の経路を通り、どの本文にも nsec を
+/// 出さない。
+pub fn register_generated_shares_the_failure_paths_test() {
+  let path = "/accounts/register-generated"
+  let spec = [#("nsec", spec_nsec)]
+  let responses = [
+    #(post_form(context(), path, [#("nsec", "nsec1invalid")]), 400),
+    #(post_form(context(), path, [#("nsec", signer_nsec)]), 409),
+    #(
+      post_form(
+        failing_context(bunker.NotReady("accounts are not loaded yet")),
+        path,
+        spec,
+      ),
+      503,
+    ),
+    #(
+      post_form(
+        failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+        path,
+        spec,
+      ),
+      202,
+    ),
+  ]
+  list.each(responses, fn(entry) {
+    let #(response, status) = entry
+    assert response.status == status
+    let body = simulate.read_body(response)
+    assert !string.contains(body, spec_nsec)
+    assert !string.contains(body, signer_nsec)
+  })
+}
+
+/// 登録の POST のルートは GET を受け付けない。
+pub fn registration_routes_reject_other_methods_test() {
+  let paths = [
+    "/accounts/import", "/accounts/generate", "/accounts/register-generated",
+  ]
+  list.each(paths, fn(path) {
+    assert get(context(), path).status == 405
+  })
+}
+
+/// 登録画面の nsec の欄は伏せ字で、自動入力を求めない。
+pub fn new_account_page_has_secret_inputs_test() {
+  let response = get(context(), "/accounts/new")
+  assert response.status == 200
+  assert string.contains(
+    simulate.read_body(response),
+    "type=\"password\" name=\"nsec\" autocomplete=\"off\"",
+  )
+}
+
+// --- 秘密鍵の再表示 ---
+
+/// 再表示のページはパスワードを求めるだけで、nsec を問い合わせない。
+pub fn reveal_page_asks_for_the_password_test() {
+  let reports = process.new_subject()
+  let response =
+    get(reporting_context(reports), action_path(dashboard.RevealPrivateKey))
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "type=\"password\" name=\"password\" autocomplete=\"off\"",
+  )
+  assert !string.contains(body, signer_nsec)
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// パスワードが違えば 403 で、nsec もパスワードも出さず、nsec を問い合わせない。
+/// Basic 認証の入力を促すヘッダーも付けない。
+pub fn reveal_with_a_wrong_password_is_forbidden_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      action_path(dashboard.RevealPrivateKey),
+      [#("password", "wrong-guess")],
+    )
+  assert response.status == 403
+  let body = simulate.read_body(response)
+  assert string.contains(body, "incorrect password")
+  assert !string.contains(body, signer_nsec)
+  assert !string.contains(body, "wrong-guess")
+  assert list.key_find(response.headers, "www-authenticate") == Error(Nil)
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 正しいパスワードなら、一覧の署名者の nsec を問い合わせて表示する。
+pub fn reveal_with_the_password_shows_the_nsec_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      action_path(dashboard.RevealPrivateKey),
+      [#("password", password)],
+    )
+  assert response.status == 200
+  assert string.contains(simulate.read_body(response), signer_nsec)
+  assert process.receive(reports, 1000) == Ok(NsecRequested(signer))
+}
+
+/// nsec の問い合わせが失敗したら 503 の通知ページにする。
+pub fn reveal_failure_is_unavailable_test() {
+  let failing =
+    admin.Context(..context(), nsec: fn(_signer) {
+      Error("accounts are not loaded yet")
+    })
+  let response =
+    post_form(failing, action_path(dashboard.RevealPrivateKey), [
+      #("password", password),
+    ])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "accounts are not loaded yet")
+  assert string.contains(body, "Back to dashboard")
+}
+
+/// 一覧に無い署名者は GET も POST も 404 で、パスの値を応答に含めず、何も呼ばない。
+pub fn reveal_for_an_unknown_signer_is_not_found_test() {
+  let reports = process.new_subject()
+  let path = "/accounts/%3Cscript%3Eunknown/private-key"
+  let responses = [
+    get(reporting_context(reports), path),
+    post_form(reporting_context(reports), path, [#("password", password)]),
+  ]
+  list.each(responses, fn(response) {
+    assert response.status == 404
+    assert !string.contains(simulate.read_body(response), "%3Cscript%3Eunknown")
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// `:` を含む管理パスワードでも、Basic 認証と再表示のどちらも通る。
+pub fn password_containing_a_colon_is_accepted_test() {
+  let colon = admin.Context(..context(), password: "pa:ss")
+  assert get(colon, "/").status == 200
+  let response =
+    post_form(colon, action_path(dashboard.RevealPrivateKey), [
+      #("password", "pa:ss"),
+    ])
+  assert response.status == 200
+}
+
+// --- 削除、secret の作り直し、ラベル ---
+
+/// 削除のページは、鍵を失うことを伝え、エスケープしたラベルと npub を出す。
+pub fn delete_page_warns_about_losing_the_key_test() {
+  let labelled = with_accounts(Ok([account_row("<b>x</b>")]))
+  let body =
+    simulate.read_body(get(labelled, action_path(dashboard.DeleteAccount)))
+  assert string.contains(body, signer_npub)
+  assert string.contains(body, "&lt;b&gt;x&lt;/b&gt;")
+  assert string.contains(body, "the account is lost")
+  assert string.contains(body, "action=\"/accounts/" <> signer <> "/delete\"")
+}
+
+/// 削除の POST は Context を呼び、ダッシュボードへ 303 で戻す。
+pub fn delete_calls_the_context_and_redirects_test() {
+  let reports = process.new_subject()
+  let response =
+    post(reporting_context(reports), action_path(dashboard.DeleteAccount))
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000) == Ok(Removed(signer))
+}
+
+/// secret の作り直しのページは、古い URI での新規の接続が拒否され、承認済みの
+/// セッションが残ることを伝える。
+pub fn rotate_page_explains_the_effect_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.RotateSecret)))
+  assert string.contains(
+    body,
+    "old connection URI are no longer accepted without approval",
+  )
+  assert string.contains(body, "sessions that are already approved remain")
+}
+
+/// secret の作り直しの POST は Context を呼び、ダッシュボードへ 303 で戻す。
+pub fn rotate_calls_the_context_and_redirects_test() {
+  let reports = process.new_subject()
+  let response =
+    post(reporting_context(reports), action_path(dashboard.RotateSecret))
+  assert response.status == 303
+  assert process.receive(reports, 1000) == Ok(Rotated(signer))
+}
+
+/// ラベルの POST は Context を呼び、ダッシュボードへ 303 で戻す。
+pub fn label_update_calls_the_context_and_redirects_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), action_path(dashboard.EditLabel), [
+      #("label", "new"),
+    ])
+  assert response.status == 303
+  assert process.receive(reports, 1000) == Ok(Relabeled(signer, "new"))
+}
+
+/// 規則に反するラベルは 400 で、編集の欄には保存済みのラベルを入れ、Context を
+/// 呼ばない。
+pub fn label_update_rejects_an_invalid_label_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), action_path(dashboard.EditLabel), [
+      #("label", "a\nb"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, "label must not contain control characters")
+  assert string.contains(body, "value=\"" <> label <> "\"")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// ラベルの編集の欄には `maxlength` を付けず、新しいアカウントの欄には付ける。
+pub fn label_edit_form_has_no_maxlength_test() {
+  let edit =
+    simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
+  assert string.contains(
+    edit,
+    "name=\"label\" autocomplete=\"off\" value=\"" <> label <> "\"",
+  )
+  assert !string.contains(edit, "maxlength")
+  let new = simulate.read_body(get(context(), "/accounts/new"))
+  assert string.contains(new, "name=\"label\" maxlength=\"100\"")
+}
+
+/// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ 409、
+/// 受け付けられなければ 503、反映されたか分からなければ 202 になり、理由と
+/// ダッシュボードへのリンクを出す。
+pub fn account_change_failures_map_to_status_codes_test() {
+  let failures = [
+    #(bunker.NotApplied("account is not registered"), 409),
+    #(bunker.NotReady("accounts are not loaded yet"), 503),
+    #(bunker.MaybeApplied(bunker.change_may_have_been_applied), 202),
+  ]
+  let changes = [
+    #(dashboard.DeleteAccount, []),
+    #(dashboard.RotateSecret, []),
+    #(dashboard.EditLabel, [#("label", "new")]),
+  ]
+  use #(failure, status) <- list.each(failures)
+  use #(action, fields) <- list.each(changes)
+  let response =
+    post_form(failing_context(failure), action_path(action), fields)
+  assert #(action, response.status) == #(action, status)
+  let body = simulate.read_body(response)
+  assert string.contains(body, failure.reason)
+  assert string.contains(body, "href=\"/\"")
+}
+
+/// 知らない操作のセグメントは 404。
+pub fn unknown_account_action_is_not_found_test() {
+  assert get(context(), "/accounts/" <> signer <> "/nope").status == 404
+  assert post(context(), "/accounts/" <> signer <> "/nope").status == 404
+}
+
+/// アカウントの一覧を得られなければ、操作の GET と POST は 503 で理由を出す。
+pub fn account_pages_need_the_account_list_test() {
+  let failing = with_accounts(Error(unavailable))
+  let responses =
+    list.append(
+      list.map(all_actions(), fn(action) { get(failing, action_path(action)) }),
+      [post(failing, action_path(dashboard.DeleteAccount))],
+    )
+  list.each(responses, fn(response) {
+    assert response.status == 503
+    let body = simulate.read_body(response)
+    assert string.contains(body, unavailable)
+    assert string.contains(body, "Back to dashboard")
+  })
+}
+
+// --- 横断 ---
+
+/// 別オリジンから送られた、アカウントを扱う POST はすべて 400 で弾き、何も呼ばない。
+pub fn cross_origin_account_changes_are_rejected_test() {
+  let reports = process.new_subject()
+  let paths = [
+    "/accounts/generate",
+    "/accounts/import",
+    "/accounts/register-generated",
+    ..list.map(all_actions(), action_path)
+  ]
+  list.each(paths, fn(path) {
+    let response =
+      simulate.browser_request(http.Post, path)
+      |> request.set_header("origin", "http://evil.example")
+      |> with_credentials("admin", password)
+      |> simulate.form_body([
+        #("nsec", spec_nsec),
+        #("label", "x"),
+        #("password", password),
+      ])
+      |> admin.handle_request(reporting_context(reports), _)
+    assert #(path, response.status) == #(path, 400)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 同じオリジンからの削除の POST は通る。
+pub fn same_origin_account_change_is_accepted_test() {
+  let reports = process.new_subject()
+  let response =
+    simulate.browser_request(http.Post, action_path(dashboard.DeleteAccount))
+    |> with_credentials("admin", password)
+    |> simulate.form_body([])
+    |> admin.handle_request(reporting_context(reports), _)
+  assert response.status == 303
+  assert process.receive(reports, 1000) == Ok(Removed(signer))
+}
+
+/// 認証済みの応答はどれも保存させず、枠への埋め込みを禁じる。
+pub fn authenticated_responses_are_not_stored_test() {
+  let context = context()
+  let reveal = action_path(dashboard.RevealPrivateKey)
+  let with_password = [#("password", password)]
+  let spec = [#("nsec", spec_nsec)]
+  let responses = [
+    get(context, "/"),
+    get(context, "/approve/" <> token),
+    get(context, "/accounts/new"),
+    post(context, "/accounts/generate"),
+    post_form(context, "/accounts/import", spec),
+    post_form(context, "/accounts/import", [#("nsec", "nope")]),
+    post_form(context, "/accounts/import", [#("nsec", signer_nsec)]),
+    post_form(
+      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      "/accounts/import",
+      spec,
+    ),
+    post_form(
+      failing_context(bunker.NotReady("accounts are not loaded yet")),
+      "/accounts/import",
+      spec,
+    ),
+    post_form(context, "/accounts/register-generated", spec),
+    ..list.append(
+      list.map(all_actions(), fn(action) { get(context, action_path(action)) }),
+      [
+        post_form(context, reveal, with_password),
+        post_form(context, reveal, [#("password", "wrong")]),
+        post_form(
+          admin.Context(..context, nsec: fn(_signer) {
+            Error("bunker is not responding")
+          }),
+          reveal,
+          with_password,
+        ),
+        post(context, action_path(dashboard.DeleteAccount)),
+        get(context, "/nope"),
+      ],
+    )
+  ]
+  assert list.map(responses, fn(response) { response.status })
+    == [
+      200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 200, 200, 200, 200, 200,
+      403, 503, 303, 404,
+    ]
+  list.each(responses, fn(response) {
+    assert header(response, "cache-control") == "no-store"
+    assert header(response, "x-frame-options") == "DENY"
+    assert header(response, "content-security-policy")
+      == "frame-ancestors 'none'"
+  })
+}
+
+/// 資格情報の無い登録と再表示の POST は 401 で、何も呼ばない。
+pub fn account_management_requires_credentials_test() {
+  let reports = process.new_subject()
+  let requests = [
+    #("/accounts/import", [#("nsec", spec_nsec)]),
+    #(action_path(dashboard.RevealPrivateKey), [#("password", password)]),
+  ]
+  list.each(requests, fn(entry) {
+    let #(path, fields) = entry
+    let response =
+      simulate.request(http.Post, path)
+      |> simulate.form_body(fields)
+      |> admin.handle_request(reporting_context(reports), _)
+    assert response.status == 401
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+// --- ダッシュボードのアカウントの節 ---
+
+/// アカウントの節には、npub、読み取り専用の欄の URI、4 つの操作のリンク、登録の
+/// リンクが出る。
+pub fn dashboard_lists_account_actions_test() {
+  let body = simulate.read_body(get(context(), "/"))
+  assert string.contains(body, signer_npub)
+  assert string.contains(
+    body,
+    "readonly size=\"64\" value=\"" <> wisp.escape_html(uri) <> "\"",
+  )
+  assert string.contains(body, "href=\"/accounts/new\"")
+  list.each(all_actions(), fn(action) {
+    assert string.contains(body, "href=\"" <> action_path(action) <> "\"")
+  })
+}
+
+/// URI に `"` が含まれても、`value` の属性値の外に出ない。
+pub fn dashboard_escapes_a_uri_attribute_test() {
+  let row =
+    dashboard.AccountRow(..account_row(label), uri: "bunker://x?\"><b>xss</b>")
+  let body = simulate.read_body(get(with_accounts(Ok([row])), "/"))
+  assert string.contains(
+    body,
+    "value=\"bunker://x?&quot;&gt;&lt;b&gt;xss&lt;/b&gt;\"",
+  )
+  assert !string.contains(body, "<b>xss</b>")
+}
+
+/// 一覧を得られないときは登録のリンクを出さない。
+pub fn dashboard_hides_add_account_without_accounts_test() {
+  let failing = simulate.read_body(get(with_accounts(Error(unavailable)), "/"))
+  assert !string.contains(failing, "Add account")
+  let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
+  assert string.contains(empty, "Add account")
 }

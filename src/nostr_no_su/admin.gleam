@@ -7,19 +7,30 @@
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
 //// 送るため、状態を変えるルートは CSRF から守る必要がある。
+////
+//// アカウントの登録、削除、secret の作り直し、ラベルの編集、秘密鍵の再表示もここで
+//// 扱う。秘密鍵（nsec）はクエリー文字列にもリダイレクト先にもログにも載せず、POST の
+//// 本文と、その応答の本文だけで運ぶ。サーバーは生成した鍵を保持しない。認証済みの
+//// 応答はどれも secret か秘密鍵を含みうるので、`protect` で保存と枠への埋め込みを
+//// 禁じる。
 
 import gleam/bit_array
 import gleam/crypto
 import gleam/http
 import gleam/int
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/otp/supervision.{type ChildSpecification}
+import gleam/result
 import gleam/string
 import mist
 import nostr_no_su/admin/dashboard
+import nostr_no_su/bunker.{type ChangeFailure}
+import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/log
+import nostr_no_su/nostr/nip19
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
@@ -32,6 +43,18 @@ const username = "admin"
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
+/// 秘密鍵の再表示で、再入力したパスワードが違うときの理由。
+const incorrect_password = "incorrect password"
+
+/// ラベルが制御文字を含むときの理由。
+const label_has_control_characters = "label must not contain control characters"
+
+/// 変更が反映されたか分からないときのページの見出し。
+const change_unconfirmed_title = "Change not confirmed"
+
+/// アカウントを扱えないときのページの見出し。
+const accounts_unavailable_title = "Accounts are not available"
+
 /// ハンドラーが必要とするものすべて。パスワード以外の状態（アカウント、リレー、
 /// プラグイン、セッション、承認待ち）はアクターに問い合わせる関数で受け取り、
 /// 表示のたびに現在の値を読む。
@@ -41,6 +64,17 @@ pub type Context {
     /// アカウントの一覧。バンカーが無効、読み込み中、応答なしのときは表示する
     /// 理由を返す。
     accounts: fn() -> Result(List(dashboard.AccountRow), String),
+    /// アカウントを登録する。secret はバンカーが生成する。
+    add_account: fn(Account, String) -> Result(Nil, ChangeFailure),
+    /// アカウントを削除する。
+    remove_account: fn(String) -> Result(Nil, ChangeFailure),
+    /// 接続 secret を作り直す。
+    rotate_secret: fn(String) -> Result(Nil, ChangeFailure),
+    /// ラベルを差し替える。
+    update_label: fn(String, String) -> Result(Nil, ChangeFailure),
+    /// 再表示のために、署名者の秘密鍵を nsec の文字列で問い合わせる。`Ok` の値は
+    /// 秘密鍵そのもの。
+    nsec: fn(String) -> Result(String, String),
     relays: fn() -> List(dashboard.RelayRow),
     plugins: fn() -> List(dashboard.PluginRow),
     sessions: fn() -> List(Session),
@@ -99,7 +133,7 @@ pub fn handle_request(context: Context, request: Request) -> Response {
     ["healthz"] -> healthz(request)
     segments -> {
       use <- require_password(context, request)
-      route(context, request, segments)
+      route(context, request, segments) |> protect
     }
   }
 }
@@ -116,8 +150,31 @@ fn route(
     ["deny", token] -> deny_connection(context, request, token)
     segments if segments == dashboard.revoke_segments ->
       revoke_session(context, request)
-    _ -> wisp.not_found()
+    segments if segments == dashboard.new_account_segments ->
+      show_new_account(request)
+    segments if segments == dashboard.generate_account_segments ->
+      generate_account(request)
+    segments if segments == dashboard.import_account_segments ->
+      import_account(context, request)
+    segments if segments == dashboard.register_generated_segments ->
+      register_generated_account(context, request)
+    segments ->
+      case dashboard.parse_account_action_path(segments) {
+        Ok(#(signer, action)) ->
+          account_action(context, request, signer, action)
+        Error(Nil) -> wisp.not_found()
+      }
   }
+}
+
+/// 認証済みの応答すべてに付けるヘッダー。どのページも secret か秘密鍵を含みうるので
+/// 保存させず、状態を変えるボタンを他のサイトの枠に埋め込ませない。枠の中の POST は
+/// 管理 UI と同じオリジンから送られるので、CSRF の検査では防げない。
+fn protect(response: Response) -> Response {
+  response
+  |> wisp.set_header("cache-control", "no-store")
+  |> wisp.set_header("x-frame-options", "DENY")
+  |> wisp.set_header("content-security-policy", "frame-ancestors 'none'")
 }
 
 /// コンテナーの healthcheck 用。認証なしで到達できるため、状態は一切返さない。
@@ -138,8 +195,6 @@ fn show_dashboard(context: Context, request: Request) -> Response {
   )
   |> dashboard.render
   |> wisp.html_response(200)
-  // secret 入りの `bunker://` URI を含むため、どこにも保存させない。
-  |> wisp.set_header("cache-control", "no-store")
 }
 
 /// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは
@@ -204,6 +259,251 @@ fn revoke_session(context: Context, request: Request) -> Response {
   }
 }
 
+/// アカウントの登録画面。
+fn show_new_account(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Get)
+  dashboard.new_account_page(None) |> wisp.html_response(200)
+}
+
+/// 鍵を生成し、確認ページで nsec を 1 回だけ表示する。ここでは登録しないので、
+/// 再読み込みで再送されても別の鍵の確認ページが出るだけで、何も登録されない。
+/// 本文を読まないので、フォームの本文が無い POST も受け付ける。
+fn generate_account(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Post)
+  account.generate(crypto.strong_random_bytes)
+  |> account.nsec
+  |> dashboard.generated_key_page
+  |> wisp.html_response(200)
+}
+
+/// nsec 入力によるアカウントの登録。完了ページで nsec を 1 回だけ表示する。
+fn import_account(context: Context, request: Request) -> Response {
+  use account, label <- register(context, request)
+  dashboard.registered_page(account.npub(account), label, account.nsec(account))
+  |> wisp.html_response(200)
+}
+
+/// 生成の確認ページから送られた鍵の登録。nsec は確認ページで表示済みなので描画せず、
+/// ダッシュボードへ 303 で戻す。
+fn register_generated_account(context: Context, request: Request) -> Response {
+  use _account, _label <- register(context, request)
+  wisp.redirect(to: "/")
+}
+
+/// 登録の 2 つのルートが共有する検査と失敗の経路。入力が不正なら 400 で登録画面を
+/// 返し、バンカーの失敗は `change_failure_response` に渡す。登録できたときだけ
+/// `on_success` を呼ぶので、反映されたか分からないときに nsec を描画する経路は無い。
+fn register(
+  context: Context,
+  request: Request,
+  on_success: fn(Account, String) -> Response,
+) -> Response {
+  use <- wisp.require_method(request, http.Post)
+  use form <- wisp.require_form(request)
+  case parse_registration(form) {
+    Error(reason) ->
+      dashboard.new_account_page(Some(reason)) |> wisp.html_response(400)
+    Ok(#(account, label)) ->
+      case context.add_account(account, label) {
+        Ok(Nil) -> on_success(account, label)
+        Error(failure) ->
+          change_failure_response(failure, fn(reason) {
+            dashboard.new_account_page(Some(reason))
+          })
+      }
+  }
+}
+
+/// フォームの nsec とラベルを検査し、登録するアカウントとラベルにする。理由は入力を
+/// 含まない固定の文言。
+fn parse_registration(
+  form: wisp.FormData,
+) -> Result(#(Account, String), String) {
+  use privkey <- result.try(
+    form_value(form, dashboard.nsec_field)
+    |> nip19.decode(nip19.Nsec)
+    |> result.map_error(nip19.describe),
+  )
+  use account <- result.try(account.from_privkey(privkey))
+  use label <- result.map(parse_label(form_value(form, dashboard.label_field)))
+  #(account, label)
+}
+
+/// フォームの値。欄が無ければ空文字列として扱い、以降の検査で拒否させる。
+fn form_value(form: wisp.FormData, name: String) -> String {
+  list.key_find(form.values, name) |> result.unwrap("")
+}
+
+/// ラベルを検査する。前後の空白を除き、符号位置が多すぎるものと制御文字（Unicode の
+/// Cc）を含むものを拒否する。長さを書記素クラスターで数えないのは、結合文字を続けた
+/// 文字列が長さ 1 のまま任意のバイト数になり、上限にならないからである。
+fn parse_label(raw: String) -> Result(String, String) {
+  let label = string.trim(raw)
+  let code_points = string.to_utf_codepoints(label)
+  case
+    list.length(code_points) > dashboard.max_label_code_points,
+    list.any(code_points, is_control_character)
+  {
+    True, _ ->
+      Error(
+        "label must be at most "
+        <> int.to_string(dashboard.max_label_code_points)
+        <> " characters",
+      )
+    False, True -> Error(label_has_control_characters)
+    False, False -> Ok(label)
+  }
+}
+
+/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は途中の C1 を
+/// 残すので、明示的に拒否するために使う。
+fn is_control_character(code_point: UtfCodepoint) -> Bool {
+  let code = string.utf_codepoint_to_int(code_point)
+  code <= 0x1f || { code >= 0x7f && code <= 0x9f }
+}
+
+/// アカウント 1 件への操作。一覧から行を引いてから、GET は操作のページを、POST は
+/// 操作を実行する。
+fn account_action(
+  context: Context,
+  request: Request,
+  signer: String,
+  action: dashboard.AccountAction,
+) -> Response {
+  use row <- with_account(context, signer)
+  case request.method, action {
+    http.Get, _ ->
+      dashboard.account_action_page(row, action, None)
+      |> wisp.html_response(200)
+    http.Post, dashboard.EditLabel -> update_label(context, request, row)
+    http.Post, dashboard.RotateSecret ->
+      apply_account_change(row, action, context.rotate_secret(row.signer))
+    http.Post, dashboard.DeleteAccount ->
+      apply_account_change(row, action, context.remove_account(row.signer))
+    http.Post, dashboard.RevealPrivateKey ->
+      reveal_private_key(context, request, row)
+    _, _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post])
+  }
+}
+
+/// 一覧から署名者の行を引く。一覧を得られなければ 503、無ければ 404。どちらも
+/// `signer` を応答に含めない。以降のログとバンカーへの呼び出しには、呼び出し側が
+/// 渡した文字列ではなく、一覧の行の値を使う。
+fn with_account(
+  context: Context,
+  signer: String,
+  next: fn(dashboard.AccountRow) -> Response,
+) -> Response {
+  case context.accounts() {
+    Error(reason) -> accounts_unavailable(reason)
+    Ok(rows) ->
+      case list.find(rows, fn(row) { row.signer == signer }) {
+        Ok(row) -> next(row)
+        Error(Nil) -> wisp.not_found()
+      }
+  }
+}
+
+/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。
+fn update_label(
+  context: Context,
+  request: Request,
+  row: dashboard.AccountRow,
+) -> Response {
+  use form <- wisp.require_form(request)
+  case parse_label(form_value(form, dashboard.label_field)) {
+    Error(reason) ->
+      dashboard.account_action_page(row, dashboard.EditLabel, Some(reason))
+      |> wisp.html_response(400)
+    Ok(label) ->
+      apply_account_change(
+        row,
+        dashboard.EditLabel,
+        context.update_label(row.signer, label),
+      )
+  }
+}
+
+/// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
+/// 失敗なら `change_failure_response` に渡す。
+fn apply_account_change(
+  row: dashboard.AccountRow,
+  action: dashboard.AccountAction,
+  outcome: Result(Nil, ChangeFailure),
+) -> Response {
+  case outcome {
+    Ok(Nil) -> wisp.redirect(to: "/")
+    Error(failure) ->
+      change_failure_response(failure, fn(reason) {
+        dashboard.account_action_page(row, action, Some(reason))
+      })
+  }
+}
+
+/// 変更の失敗の応答。反映されなかったなら `render` で操作の画面を 409 で返し、
+/// 受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
+/// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が
+/// 同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
+fn change_failure_response(
+  failure: ChangeFailure,
+  render: fn(String) -> String,
+) -> Response {
+  case failure {
+    bunker.NotApplied(reason) -> render(reason) |> wisp.html_response(409)
+    bunker.NotReady(reason) -> accounts_unavailable(reason)
+    bunker.MaybeApplied(reason) ->
+      dashboard.notice_page(change_unconfirmed_title, reason)
+      |> wisp.html_response(202)
+  }
+}
+
+/// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け
+/// られない、nsec の問い合わせが失敗した場合に共通で使う。
+fn accounts_unavailable(reason: String) -> Response {
+  dashboard.notice_page(accounts_unavailable_title, reason)
+  |> wisp.html_response(503)
+}
+
+/// 管理パスワードの再入力を照合し、一致したときだけ nsec を問い合わせて表示する。
+/// ログに出すのは一覧の行の npub だけで、パスワードも nsec も出さない。
+fn reveal_private_key(
+  context: Context,
+  request: Request,
+  row: dashboard.AccountRow,
+) -> Response {
+  use form <- wisp.require_form(request)
+  case
+    is_admin_password(
+      form_value(form, dashboard.password_field),
+      context.password,
+    )
+  {
+    False -> {
+      log.println(
+        log_prefix,
+        "rejected a private key reveal for "
+          <> row.npub
+          <> ": "
+          <> incorrect_password,
+      )
+      dashboard.account_action_page(
+        row,
+        dashboard.RevealPrivateKey,
+        Some(incorrect_password),
+      )
+      |> wisp.html_response(403)
+    }
+    True ->
+      case context.nsec(row.signer) {
+        Ok(nsec) -> {
+          log.println(log_prefix, "revealed the private key of " <> row.npub)
+          dashboard.private_key_page(row, nsec) |> wisp.html_response(200)
+        }
+        Error(reason) -> accounts_unavailable(reason)
+      }
+  }
+}
+
 /// Basic 認証を要求する。資格情報が無い、あるいは一致しないときは 401 を返す。
 fn require_password(
   context: Context,
@@ -216,10 +516,8 @@ fn require_password(
   }
 }
 
-/// リクエストが正しい Basic 認証の資格情報を持つかどうか。デコードした
-/// `user:password` を期待値と丸ごと比べ、一致した文字数が応答時間に現れない
-/// よう定数時間比較を使う。認証スキームの照合は RFC 7235 に従い大文字小文字を
-/// 区別しない。
+/// リクエストが正しい Basic 認証の資格情報を持つかどうか。認証スキームの照合は
+/// RFC 7235 に従い大文字小文字を区別しない。
 fn authenticated(password: String, request: Request) -> Bool {
   case list.key_find(request.headers, "authorization") {
     Ok(header) ->
@@ -233,16 +531,28 @@ fn authenticated(password: String, request: Request) -> Bool {
   }
 }
 
-/// base64 で符号化された資格情報が `admin:<password>` と一致するかどうか。
+/// base64 で符号化された資格情報が `admin:<password>` と一致するかどうか。RFC 7617
+/// に従い最初の `:` で分ける（ユーザー名は `:` を含めない）ので、パスワードは `:` を
+/// 含んでよい。ユーザー名は公開された固定値なので定数時間では比べない。
 fn matches_password(offered: String, password: String) -> Bool {
-  case bit_array.base64_decode(offered) {
+  case bit_array.base64_decode(offered) |> result.try(bit_array.to_string) {
     Ok(credentials) ->
-      crypto.secure_compare(
-        credentials,
-        bit_array.from_string(username <> ":" <> password),
-      )
+      case string.split_once(credentials, ":") {
+        Ok(#(user, offered_password)) ->
+          user == username && is_admin_password(offered_password, password)
+        Error(Nil) -> False
+      }
     Error(Nil) -> False
   }
+}
+
+/// 入力されたパスワードが管理パスワードと一致するか。一致した文字数が応答時間に
+/// 現れないよう定数時間で比べる。Basic 認証と秘密鍵の再表示の両方が使う。
+fn is_admin_password(offered: String, password: String) -> Bool {
+  crypto.secure_compare(
+    bit_array.from_string(offered),
+    bit_array.from_string(password),
+  )
 }
 
 /// 401。ブラウザーに資格情報の入力を促すため `WWW-Authenticate` を付ける。
