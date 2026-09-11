@@ -67,7 +67,8 @@ const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $
 
 /// ストア操作の失敗。説明は値（鍵、secret、ラベル、暗号文）を含まない。
 pub type StoreError {
-  /// DB に到達できない、あるいはタイムアウトした。待てば直る見込みがある。
+  /// DB に到達できない、接続を拒否された（認証の失敗や存在しないデータベース名を
+  /// 含む）、あるいはタイムアウトした。
   Unavailable
   /// 同じ pubkey がすでに登録されている。
   AlreadyRegistered
@@ -182,10 +183,12 @@ pub fn update_label(
   |> execute_on_one_row(db)
 }
 
-/// ログと画面に出す説明。
+/// ログと画面に出す説明。pgo は認証の失敗や存在しないデータベース名も接続の
+/// 失敗に畳むので、`Unavailable` の説明はそれらも含む言い方にする。
 pub fn describe(error: StoreError) -> String {
   case error {
-    Unavailable -> "database is unreachable or timed out"
+    Unavailable ->
+      "database is unreachable, rejected the connection, or timed out"
     AlreadyRegistered -> "account is already registered"
     NotRegistered -> "account is not registered"
     QueryFailed(reason) -> reason

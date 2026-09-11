@@ -14,6 +14,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
 import nostr_no_su/dedup
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/plugin
@@ -1327,7 +1328,9 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
 
   deliver_and_expect(deliver, seen, event_ids("while-failing", 3), 2000)
   let asked_at = monotonic_ms()
-  assert bunker.sessions(bunker_name) == []
+  // `bunker.sessions` はタイムアウトしても `[]` を返すので、応答したことは
+  // `named.call` の `Some` で確かめる。
+  assert named.call(bunker_name, 5000, bunker.GetSessions) == Some([])
   assert monotonic_ms() - asked_at < 5000
   assert process.named(bunker_name) == Ok(bunker_before)
   assert process.is_alive(tree)
