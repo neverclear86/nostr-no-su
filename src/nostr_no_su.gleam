@@ -216,7 +216,8 @@ fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
 }
 
 /// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ
-/// 捕捉される。失敗は値を含まない説明に写す。削除は行が無いことを成功として扱う。
+/// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
+/// あるかどうかを区別する。削除は行が無いことを成功として扱う。
 fn account_store_operations(
   pool: Name(pog.Message),
   master_key: vault.MasterKey,
@@ -229,22 +230,32 @@ fn account_store_operations(
     },
     insert: fn(entry) {
       account_store.insert(db, master_key, entry)
-      |> result.map_error(account_store.describe)
+      |> result.map_error(write_failure)
     },
     delete: fn(signer) {
       account_store.delete(db, signer)
       |> account_store.deleted_or_absent
-      |> result.map_error(account_store.describe)
+      |> result.map_error(write_failure)
     },
     update_secret: fn(signer, secret) {
       account_store.update_secret(db, master_key, signer, secret)
-      |> result.map_error(account_store.describe)
+      |> result.map_error(write_failure)
     },
     update_label: fn(signer, label) {
       account_store.update_label(db, signer, label)
-      |> result.map_error(account_store.describe)
+      |> result.map_error(write_failure)
     },
   )
+}
+
+/// 書き込みの失敗を、書き込まれていることがあるかどうかの区別つきでバンカーへ渡す形に
+/// 写す。
+fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
+  let reason = account_store.describe(error)
+  case account_store.may_have_been_written(error) {
+    True -> bunker.MaybeWritten(reason)
+    False -> bunker.NotWritten(reason)
+  }
 }
 
 /// アカウントストアの接続プールの設定とマスターキー。設定が揃わない、あるいは

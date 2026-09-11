@@ -53,13 +53,13 @@ pub fn pool_config_rejects_invalid_urls_without_echoing_them_test() {
   assert !string.contains(reason, "pw-marker")
 }
 
-/// 到達できないことを表すエラーは `Unavailable`、主キーの制約違反は
+/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、主キーの制約違反は
 /// `AlreadyRegistered` になる。
 pub fn query_errors_map_to_store_errors_test() {
   assert account_store.from_query_error(pog.ConnectionUnavailable)
     == account_store.Unavailable
   assert account_store.from_query_error(pog.QueryTimeout)
-    == account_store.Unavailable
+    == account_store.TimedOut
   assert account_store.from_query_error(pog.ConstraintViolated(
       message: "duplicate key value violates unique constraint",
       constraint: "bunker_accounts_pkey",
@@ -81,6 +81,15 @@ pub fn constraint_details_are_not_described_test() {
     == "constraint violated: bunker_accounts_encrypted_secret_check"
   assert !string.contains(described, "detail-marker")
   assert !string.contains(described, "message-marker")
+}
+
+/// 書き込まれていることがある失敗は期限切れだけで、他の失敗は書き込まれていない。
+pub fn only_a_timeout_may_have_been_written_test() {
+  assert account_store.may_have_been_written(account_store.TimedOut)
+  assert !account_store.may_have_been_written(account_store.Unavailable)
+  assert !account_store.may_have_been_written(account_store.AlreadyRegistered)
+  assert !account_store.may_have_been_written(account_store.NotRegistered)
+  assert !account_store.may_have_been_written(account_store.QueryFailed("x"))
 }
 
 /// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
@@ -188,10 +197,15 @@ fn round_trip(db: pog.Connection) -> Nil {
 }
 
 /// テスト用の接続プールを起動する。プールはテストプロセスにリンクされる。
+///
+/// 接続は 1 本にする。書き込みの期限（1000ms）はチェックアウトの待ちを含むので、
+/// 複数本のプールでは、最初のクエリーが確立した接続とは別の、まだ確立中の接続を
+/// 書き込みが待ち、負荷の高い環境で期限を過ぎることがある。1 本なら、最初の
+/// `ensure_schema` が確立した接続を以後の書き込みがそのまま使う。
 fn connect(database_url: String) -> pog.Connection {
   let assert Ok(config) =
     pog.url_config(process.new_name("account_store_test_db"), database_url)
-  let assert Ok(started) = pog.start(config)
+  let assert Ok(started) = pog.start(pog.pool_size(config, 1))
   started.data
 }
 

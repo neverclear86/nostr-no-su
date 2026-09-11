@@ -276,7 +276,7 @@ fn memory_store(
   let written = fn(call) {
     process.send(calls, call)
     case failing {
-      True -> Error(store_failure)
+      True -> Error(bunker.NotWritten(store_failure))
       False -> Ok(Nil)
     }
   }
@@ -1807,7 +1807,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
       case account.pubkey_hex(entry.account) == slow {
         True -> {
           process.sleep(5500)
-          Error(store_failure)
+          Error(bunker.NotWritten(store_failure))
         }
         False -> {
           process.sleep(200)
@@ -1860,8 +1860,268 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
     )
   assert !list.any(before_request, closes)
   let assert Ok(_request) = requested
-  assert process.receive(results, 0) == Ok(Ok(Nil))
-  assert process.receive(results, 0) == Ok(Error(store_failure))
+  // 呼び出し側のプロセスが結果を転送するのは偽ソケットの報告とは別の送信なので、
+  // 届く順序は決まらない。十分に待つ。
+  assert process.receive(results, 1000) == Ok(Ok(Nil))
+  assert process.receive(results, 1000) == Ok(Error(store_failure))
   assert process.receive(reports, 0) == Error(Nil)
+  stop_tree(tree)
+}
+
+// --- 結果が曖昧な書き込みの後の読み直し ---
+
+/// 偽のデータベースへの操作。
+type DatabaseMsg {
+  /// 現在の行を読む。読み込みを失敗させている間は `Error`。
+  ReadRows(reply: Subject(Result(List(vault.StoredAccount), Nil)))
+  /// 行を書き換える。
+  WriteRows(
+    change: fn(List(vault.StoredAccount)) -> List(vault.StoredAccount),
+    reply: Subject(Nil),
+  )
+  /// 読み込みを失敗させるかどうかを切り替える。
+  FailReads(failing: Bool)
+}
+
+/// 偽のデータベースの状態。行と、読み込みを失敗させているかどうか。
+type Database {
+  Database(rows: List(vault.StoredAccount), failing_reads: Bool)
+}
+
+/// 行を持つ偽のデータベースを起動する。
+fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
+  let assert Ok(started) =
+    actor.new(Database(rows: rows, failing_reads: False))
+    |> actor.on_message(fn(database, msg) {
+      case msg {
+        ReadRows(reply) -> {
+          process.send(reply, case database.failing_reads {
+            True -> Error(Nil)
+            False -> Ok(database.rows)
+          })
+          actor.continue(database)
+        }
+        WriteRows(change, reply) -> {
+          process.send(reply, Nil)
+          actor.continue(Database(..database, rows: change(database.rows)))
+        }
+        FailReads(failing) ->
+          actor.continue(Database(..database, failing_reads: failing))
+      }
+    })
+    |> actor.start
+  started.data
+}
+
+/// 偽のデータベースの行を、バンカーの一覧と同じ形（署名者の昇順）にする。
+fn database_listings(database: Subject(DatabaseMsg)) -> List(bunker.Listing) {
+  let assert Ok(rows) = process.call(database, 1000, ReadRows)
+  rows
+  |> list.map(fn(row) {
+    bunker.Listing(
+      signer: account.pubkey_hex(row.account),
+      label: row.label,
+      secret: row.secret,
+    )
+  })
+  |> list.sort(fn(left, right) { string.compare(left.signer, right.signer) })
+}
+
+/// 偽のデータベースに書き込んだうえで、結果が曖昧な失敗を返すストア。サーバー側で
+/// コミットされたのに、クライアント側の期限を過ぎた書き込みを模す。読み込みは
+/// 偽のデータベースの現在の行を返す。
+fn committed_but_timed_out_store(
+  database: Subject(DatabaseMsg),
+) -> bunker.Store {
+  let write = fn(change) {
+    process.call(database, 1000, WriteRows(change, _))
+    Error(bunker.MaybeWritten(
+      "database did not answer in time or the connection was lost",
+    ))
+  }
+  let modify = fn(signer, update) {
+    write(
+      list.map(_, fn(row: vault.StoredAccount) {
+        case account.pubkey_hex(row.account) == signer {
+          True -> update(row)
+          False -> row
+        }
+      }),
+    )
+  }
+  bunker.Store(
+    load: fn() {
+      case process.call(database, 1000, ReadRows) {
+        Ok(rows) -> Ok(Loaded(accounts: rows, skipped: []))
+        Error(Nil) -> Error(store_failure)
+      }
+    },
+    insert: fn(entry) { write(list.append(_, [entry])) },
+    delete: fn(signer) {
+      write(
+        list.filter(_, fn(row: vault.StoredAccount) {
+          account.pubkey_hex(row.account) != signer
+        }),
+      )
+    },
+    update_secret: fn(signer, secret) {
+      modify(signer, fn(row) { StoredAccount(..row, secret: secret) })
+    },
+    update_label: fn(signer, label) {
+      modify(signer, fn(row) { StoredAccount(..row, label: label) })
+    },
+  )
+}
+
+/// バンカーの一覧が期待どおりになるまで待つ。
+fn await_accounts(
+  name: Name(bunker.Msg),
+  expected: List(bunker.Listing),
+  remaining: Int,
+) -> Bool {
+  case bunker.accounts(name) == Ok(expected), remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(20)
+      await_accounts(name, expected, remaining - 20)
+    }
+  }
+}
+
+/// 結果が曖昧な追加がコミットされていたら、読み直してメモリを DB に合わせる。追加した
+/// 署名者は購読に入り、既存の署名者のセッションは残る。合わせた後は、登録済みとしての
+/// 拒否、削除、追加し直しがそれぞれ DB と一致したまま動く。
+pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let other = account.pubkey_hex(account_for(other_signer_key))
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      Some(subscribed),
+      name,
+      committed_but_timed_out_store(database),
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  let assert Ok(before) = process.named(name)
+
+  assert bunker.add_account(name, account_for(other_signer_key), "other")
+    == Error(bunker.change_may_have_been_applied)
+  let stored = database_listings(database)
+  assert list.map(stored, fn(listing) { listing.signer })
+    == list.sort([signer, other], string.compare)
+  assert bunker.accounts(name) == Ok(stored)
+  let #(_skipped, resubscribed) =
+    receive_until(
+      subscribed,
+      subscribes(_, list.sort([signer, other], string.compare)),
+      2000,
+    )
+  let assert Ok(_request) = resubscribed
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+
+  assert bunker.add_account(name, account_for(other_signer_key), "again")
+    == Error("account is already registered")
+  assert bunker.remove_account(name, other)
+    == Error(bunker.change_may_have_been_applied)
+  assert list.map(database_listings(database), fn(listing) { listing.signer })
+    == [signer]
+  assert bunker.accounts(name) == Ok(database_listings(database))
+  assert bunker.add_account(name, account_for(other_signer_key), "back")
+    == Error(bunker.change_may_have_been_applied)
+  assert list.length(database_listings(database)) == 2
+  assert bunker.accounts(name) == Ok(database_listings(database))
+  assert process.named(name) == Ok(before)
+  stop_tree(tree)
+}
+
+/// 結果が曖昧な secret の作り直しがコミットされていたら、読み直して新しい secret を
+/// メモリに反映する。セッションは残り、新しい secret で接続できる。
+pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      committed_but_timed_out_store(database),
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+
+  assert bunker.rotate_secret(name, signer)
+    == Error(bunker.change_may_have_been_applied)
+  let assert [bunker.Listing(secret: rotated, ..)] = database_listings(database)
+  assert rotated != secret
+  assert bunker.accounts(name) == Ok(database_listings(database))
+
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  deliver(connect_request_from(other_client_key, "c2", rotated))
+  let assert Ok(Published(_socket, joined)) = process.receive(reports, 2000)
+  let body =
+    nip46_client.decrypt_response(
+      account_for(other_client_key),
+      account_for(signer_key),
+      joined,
+    )
+  assert string.contains(body, "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
+/// 読み直しに失敗したら、メモリのアカウントのまま NIP-46 に応答し続け、変更を拒否し、
+/// 一覧は理由を返す。読み込めるようになったら、再試行で DB と一致する。
+pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      committed_but_timed_out_store(database),
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert bunker.accounts(name) == Ok(database_listings(database))
+
+  process.send(database, FailReads(True))
+  assert bunker.add_account(name, account_for(other_signer_key), "")
+    == Error(bunker.change_may_have_been_applied)
+  assert bunker.accounts(name)
+    == Error("account store unavailable: " <> store_failure)
+  assert bunker.add_account(name, account_for(slow_signer_key), "")
+    == Error("accounts are not loaded yet")
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+
+  process.send(database, FailReads(False))
+  assert await_accounts(name, database_listings(database), 2000)
+  assert list.length(database_listings(database)) == 2
   stop_tree(tree)
 }

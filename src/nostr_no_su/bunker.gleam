@@ -14,15 +14,25 @@
 //// 処理される。DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読
 //// する。**`LoadAccounts` の最初の送信を initialiser 以外へ移さないこと。**
 ////
-//// 読み込みの前はエンジンにアカウントが 1 件も無いので、どのリクエストもルーティング
-//// で破棄され、リプレイ防止の `seen` への記録も承認待ちもセッションも生じない。
-//// アカウントの変更も読み込みの前は拒否する。そのため、読み込めたアカウントは
-//// 空のエンジンにそのまま足せばよい。
+//// 読み込んだアカウントは、メモリの署名者と突き合わせて合わせる（`reconcile`）。
+//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換えるので、ストアに
+//// 残っている署名者のセッションと承認待ちは残る。起動時の読み込みではメモリが空なので、
+//// 読み込んだアカウントをそのまま足すことになる。
 ////
 //// **アカウントの変更**（追加、削除、secret の作り直し、ラベルの差し替え）は、
 //// アクターの中でストアへ書き込み、書き込みが成功したときだけメモリの状態を変える。
-//// 書き込みと状態の変更が 1 つの処理の中で逐次に起きるので、DB とメモリの間に途中の
-//// 状態が生じない。書き込みの間は NIP-46 の処理が待たされるが、待ちはストアの
+//// 書き込まれていないことが確定した失敗では、メモリを変えずに理由を返す。書き込みが
+//// 期限を過ぎたときや途中で接続が切れたときは、サーバー側でコミットされていることが
+//// あるので、メモリを変えずにストアから読み直して合わせ、呼び出し側には反映された
+//// かもしれない旨を返す（`change_may_have_been_applied`）。読み直しは起動時の読み込み
+//// と同じ `LoadAccounts` の経路で行い、失敗すれば同じく名前なしの subject へ再試行を
+//// 予約する。読み直しが成功するまでの間はメモリが DB と食い違っていることがあり、
+//// その間の変更は起動時の読み込みの前と同じく `accounts are not loaded yet` で拒否し、
+//// 一覧は理由を返す。NIP-46 の処理はその間もメモリのアカウントで続ける。
+////
+//// したがって保証するのは「メモリは、成功した書き込みと、最後に成功した読み込みの
+//// 結果だけで変わる。結果が曖昧な書き込みの後は、読み直しに成功した時点で DB と一致
+//// する」ことである。書き込みの間は NIP-46 の処理が待たされるが、待ちはストアの
 //// タイムアウトで数秒に抑えられ、届いたリクエストはメールボックスに積まれて捨て
 //// られない。変更でアクターは再起動しないので、承認済みセッションは残る。
 ////
@@ -81,6 +91,19 @@ const connection_secret_bytes = 16
 /// 書き込みを終えて反映することがあるので、確かめ直すよう促す。
 const change_not_answered = "the bunker did not respond; reload to check whether the change was applied"
 
+/// 書き込みの結果が曖昧だった変更の理由。コミットされていることがあるので、単なる
+/// 失敗としては見せず、ストアから読み直した一覧で確かめるよう促す。管理 UI はこの
+/// 文言をそのまま表示してよい。
+pub const change_may_have_been_applied = "the store did not confirm the change; it may have been applied, so reload the dashboard to check"
+
+/// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
+pub type WriteFailure {
+  /// 書き込まれていないことが確定している（接続を得られない、制約違反など）。
+  NotWritten(reason: String)
+  /// 書き込まれたかどうか分からない（期限切れ、途中の切断）。
+  MaybeWritten(reason: String)
+}
+
 /// アカウントストアの操作。起動処理がプールとマスターキーを閉じ込めて渡すので、
 /// アクターの状態を表示してもキーが出ず、テストは DB なしで偽の操作を渡せる。
 /// 失敗の理由は値（鍵、secret、ラベル）を含まない固定の文言。
@@ -89,14 +112,14 @@ pub type Store {
     /// アカウントを読み込む。
     load: fn() -> Result(vault.Loaded, String),
     /// アカウントを 1 件追加する。
-    insert: fn(vault.StoredAccount) -> Result(Nil, String),
+    insert: fn(vault.StoredAccount) -> Result(Nil, WriteFailure),
     /// 署名者を削除する。登録されていなければ成功として `Ok(Nil)` を返す（削除は
     /// 行が無い状態にすることが目的のため）。
-    delete: fn(String) -> Result(Nil, String),
+    delete: fn(String) -> Result(Nil, WriteFailure),
     /// 署名者の接続 secret を差し替える。
-    update_secret: fn(String, String) -> Result(Nil, String),
+    update_secret: fn(String, String) -> Result(Nil, WriteFailure),
     /// 署名者のラベルを差し替える。
-    update_label: fn(String, String) -> Result(Nil, String),
+    update_label: fn(String, String) -> Result(Nil, WriteFailure),
   )
 }
 
@@ -262,9 +285,11 @@ fn call_change(
   |> option.unwrap(Error(change_not_answered))
 }
 
-/// アカウントを読み込めているかどうか。
+/// メモリがストアの内容を反映しているかどうか。
 type Accounts {
-  /// まだ読み込めていない。`failure` は最後の失敗の理由（まだ失敗していなければ
+  /// ストアの内容を読み込めていない。起動直後の読み込みの前か、結果が曖昧な書き込みの
+  /// 後の読み直しの前。`LoadAccounts` の送信か再試行のタイマーが、常にちょうど 1 つ
+  /// 未処理で残っている。`failure` は最後の失敗の理由（まだ失敗していなければ
   /// `None`）。
   Loading(failure: Option(String))
   /// 読み込めた。
@@ -487,10 +512,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// ストアからアカウントを読み込む。成功したらアカウントを足して読み込み済みに
-/// 移り、失敗したら再試行を予約する。読み込み済みなら何もしない（再試行は失敗した
-/// ときにしか予約せず、読み込み用の subject はこのプロセスの外に出ないので、通常は
-/// 起きない）。
+/// ストアからアカウントを読み込む。成功したらメモリを読み込んだ内容に合わせて
+/// 読み込み済みに移り、失敗したら再試行を予約する。読み込み済みなら何もしない
+/// （`LoadAccounts` を積むのは読み込めていない状態に移るときだけで、読み込み用の
+/// subject はこのプロセスの外に出ないので、通常は起きない）。
 fn load_accounts(state: State) -> State {
   case state.accounts {
     Ready -> state
@@ -500,11 +525,7 @@ fn load_accounts(state: State) -> State {
       |> list.each(log.println(log_prefix, _))
       case outcome {
         Ok(loaded) ->
-          list.fold(
-            loaded.accounts,
-            State(..state, accounts: Ready),
-            with_account,
-          )
+          reconcile(State(..state, accounts: Ready), loaded)
           |> transition(state, _)
         Error(reason) -> {
           let _ =
@@ -588,6 +609,18 @@ fn listings(state: State) -> Result(List(Listing), String) {
   }
 }
 
+/// ストアから読み込んだアカウントにメモリを合わせる。ストアに無い署名者を取り除き、
+/// 読み込んだアカウントを足す（登録済みの署名者なら鍵・secret・ラベルを置き換える）。
+/// エンジンを作り直さないので、ストアに残っている署名者のセッションと承認待ちは残る。
+fn reconcile(state: State, loaded: vault.Loaded) -> State {
+  let stored =
+    list.map(loaded.accounts, fn(entry) { account.pubkey_hex(entry.account) })
+  engine.signers(state.engine)
+  |> list.filter(fn(signer) { !list.contains(stored, signer) })
+  |> list.fold(state, without_account)
+  |> list.fold(loaded.accounts, _, with_account)
+}
+
 /// 読み込みか追加で得たアカウントを、エンジンとラベルの両方に入れる。
 fn with_account(state: State, stored: vault.StoredAccount) -> State {
   State(
@@ -628,7 +661,14 @@ fn require_registered(state: State, signer: String) -> Result(Nil, String) {
 }
 
 /// 読み込み済みで、かつ `check` が `Ok` のときだけストアへ書き込み、成功したら
-/// 状態を変えてから応答する。拒否や失敗のときは状態を変えずに理由を返す。
+/// 状態を変えてから応答する。拒否や、書き込まれていないことが確定した失敗のときは、
+/// 状態を変えずに理由を返す。
+///
+/// 書き込まれたかどうか分からない失敗のときは、メモリを変えずに読み込めていない状態へ
+/// 移り、読み直しの `LoadAccounts` を積んでから応答する。応答を受けた管理 UI が続けて
+/// 送る問い合わせは読み直しの後に処理されるので、読み直しに成功していれば DB と一致
+/// した一覧を読む。読み込み済みの状態には未処理の読み込みも再試行のタイマーも無い
+/// ので、読み込みの系列は 1 本のままである。
 ///
 /// ログはストアを呼んだときだけ出す。`check` を通った署名者はメモリの一覧にある
 /// 公開鍵なので、ログに出るのはその値だけになる。
@@ -638,7 +678,7 @@ fn apply_change(
   change: Change,
   signer: String,
   check: Result(Nil, String),
-  write: fn() -> Result(Nil, String),
+  write: fn() -> Result(Nil, WriteFailure),
   update: fn(State) -> State,
 ) -> actor.Next(State, Msg) {
   let #(next, outcome) = case state.accounts, check {
@@ -648,8 +688,15 @@ fn apply_change(
       let written = write()
       log.println(log_prefix, change_line(change, signer, written))
       case written {
-        Ok(Nil) -> #(transition(state, update(state)), written)
-        Error(_) -> #(state, written)
+        Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
+        Error(NotWritten(reason)) -> #(state, Error(reason))
+        Error(MaybeWritten(_reason)) -> {
+          process.send(state.retry, LoadAccounts)
+          #(
+            State(..state, accounts: Loading(failure: None)),
+            Error(change_may_have_been_applied),
+          )
+        }
       }
     }
   }
@@ -662,7 +709,7 @@ fn apply_change(
 fn change_line(
   change: Change,
   signer: String,
-  written: Result(Nil, String),
+  written: Result(Nil, WriteFailure),
 ) -> String {
   let #(done, attempted) = case change {
     Added -> #("added account", "add account")
@@ -673,10 +720,14 @@ fn change_line(
     )
     LabelUpdated -> #("updated the label of", "update the label of")
   }
+  let failed = "failed to " <> attempted <> " " <> signer <> ": "
   case written {
     Ok(Nil) -> done <> " " <> signer
-    Error(reason) ->
-      "failed to " <> attempted <> " " <> signer <> ": " <> reason
+    Error(NotWritten(reason)) -> failed <> reason
+    Error(MaybeWritten(reason)) ->
+      failed
+      <> reason
+      <> "; the change may have been applied, reloading the accounts from the store"
   }
 }
 

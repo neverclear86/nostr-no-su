@@ -35,6 +35,12 @@ const load_timeout_ms = 2000
 /// 単位で終わる。DB に到達できて遅いときの待ちをこの値で打ち切り、書き込みが積まれて
 /// も後ろの署名者の問い合わせ（5000ms）が収まるようにする。DB に到達できないときの
 /// 失敗はこの値に依らず 2〜3 秒で返る。
+///
+/// 期限はチェックアウトを要求した時点から数えるので、プールの接続を待つ時間（期限
+/// 切れで閉じた接続の再接続を含む）もこの値に含まれる。期限を過ぎたとき、クエリーが
+/// すでにサーバーに届いていれば、サーバーはクライアントの切断を検出せずに文を実行し
+/// 終えてコミットしうる。そのため書き込みの `TimedOut` は「書き込まれたかどうか
+/// 分からない」を意味する（`may_have_been_written`）。
 const write_timeout_ms = 1000
 
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
@@ -74,9 +80,12 @@ const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $
 
 /// ストア操作の失敗。説明は値（鍵、secret、ラベル、暗号文）を含まない。
 pub type StoreError {
-  /// DB に到達できない、接続を拒否された（認証の失敗や存在しないデータベース名を
-  /// 含む）、あるいはタイムアウトした。
+  /// DB に到達できない、あるいは接続を拒否された（認証の失敗や存在しないデータベース
+  /// 名を含む）。プールから接続を得られなかったので、クエリーは送られていない。
   Unavailable
+  /// 期限までに応答が無かった、あるいはクエリーの途中で接続が切れた。クエリーが
+  /// サーバーに届いていれば、書き込みはコミットされていることがある。
+  TimedOut
   /// 同じ pubkey がすでに登録されている。
   AlreadyRegistered
   /// 指定した pubkey が登録されていない。
@@ -203,12 +212,19 @@ pub fn deleted_or_absent(
   }
 }
 
+/// 書き込みの失敗のうち、実際には書き込まれていることがあるものか。期限切れと途中の
+/// 切断だけが該当し、それ以外（接続を得られない、制約違反、クエリーの失敗）は書き
+/// 込まれていないことが確定している。
+pub fn may_have_been_written(error: StoreError) -> Bool {
+  error == TimedOut
+}
+
 /// ログと画面に出す説明。pgo は認証の失敗や存在しないデータベース名も接続の
 /// 失敗に畳むので、`Unavailable` の説明はそれらも含む言い方にする。
 pub fn describe(error: StoreError) -> String {
   case error {
-    Unavailable ->
-      "database is unreachable, rejected the connection, or timed out"
+    Unavailable -> "database is unreachable or rejected the connection"
+    TimedOut -> "database did not answer in time or the connection was lost"
     AlreadyRegistered -> "account is already registered"
     NotRegistered -> "account is not registered"
     QueryFailed(reason) -> reason
@@ -219,7 +235,8 @@ pub fn describe(error: StoreError) -> String {
 /// 値を含みうるので捨て、制約名やエラー名のような識別子だけを残す。
 pub fn from_query_error(error: pog.QueryError) -> StoreError {
   case error {
-    pog.ConnectionUnavailable | pog.QueryTimeout -> Unavailable
+    pog.ConnectionUnavailable -> Unavailable
+    pog.QueryTimeout -> TimedOut
     pog.ConstraintViolated(constraint:, ..)
       if constraint == primary_key_constraint
     -> AlreadyRegistered
