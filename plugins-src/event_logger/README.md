@@ -11,7 +11,7 @@
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
 
 - **OTP が違う BEAM はローダーが `badfile` で拒否する。**
-- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 514 モジュール。docker ビルドは 124）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
+- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 514 モジュール。docker ビルドは 124。この数は本体の影に入る前の同梱物の総数である）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
 
 ```sh
 mkdir -p plugins/event_logger
@@ -61,6 +61,8 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 **空文字列の意味が変わった。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は本体が空値を落とすため、プラグインには**キーごと届かない**。結果は「設定が足りない」であり、起動のたびに上の 1 行が出る。保存をやめるなら `plugins/event_logger` を置かないこと。
 
+**`DATABASE_URL` は本体の設定として別の意味で復活している。** 現在の `DATABASE_URL` はバンカーがアカウント（暗号化した秘密鍵と接続 secret）を保存する先で、イベント保存とは関係しない。旧構成の `.env` をそのまま使うと、イベント保存用だった URL がアカウントストアの接続先として読まれる。
+
 管理 UI の「Event storage」欄も無くなった。代わりに Plugins 欄の `event_logger` 行が、置いていなければ出ず、動いていれば `running`、子を諦めていれば `disabled: …` を示す。真偽 2 値だった旧欄より情報量は増えている。
 
 ## `pgo` のアプリケーションを自分で起動していること
@@ -91,7 +93,7 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test g
 docker rm -f nns-pg
 ```
 
-**`manifest.toml` はコミットする。** 本体と共有するパッケージ（`gleam_stdlib` / `gleam_erlang` / `gleam_otp` / `gleam_json` / `exception`）は、影に入る側なので**本体の版で実行される**。版がずれても読み込み時には何も起きず、実行時に `undef` で壊れる。`gleam.toml` の制約を揃えるだけでは一致しない（`gleam deps download` は本体と独立に解決する）ため、一致は CI が必須チェックとして検査する。**版を上げるときは本体と同時に上げること。**
+**`manifest.toml` はコミットする。** 本体と共有するパッケージ（`gleam_stdlib` / `gleam_erlang` / `gleam_otp` / `gleam_json` / `exception` / `pog` / `pgo` / `pg_types` / `backoff` / `opentelemetry_api` / `gleam_time`。本体もアカウントストアのために `pog` に依存する）は、影に入る側なので**本体の版で実行される**。版がずれても読み込み時には何も起きず、実行時に `undef` で壊れる。`gleam.toml` の制約を揃えるだけでは一致しない（`gleam deps download` は本体と独立に解決する）ため、一致は CI が必須チェックとして検査する。**版を上げるときは本体と同時に上げること。**
 
 ## 確認
 
@@ -100,7 +102,7 @@ docker compose logs nostr-no-su | grep plugin_loader
 ```
 
 ```
-[plugin_loader] event_logger: 40 module(s) already provided by the host or another plugin are ignored (exception, gleam@bit_array, ...)
+[plugin_loader] event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff, exception, exception_ffi, ...)
 [plugin_loader] loaded 1 plugin(s) from /plugins: event_logger
 ```
 

@@ -43,6 +43,7 @@ flowchart LR
     admin -.->|"名前で問い合わせ"| bunker
     admin -.->|"名前で問い合わせ"| plugins
     event_logger --> postgres[("Postgres")]
+    bunker -->|"暗号化したアカウント"| postgres
 ```
 
 監視とバンカーはリレーへの接続を共有しない。
@@ -71,7 +72,8 @@ root (one_for_one, 3/60)
 ├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、次にリレーごとの接続
 │   ├── dedup
 │   └── relay_connection × 監視リレーの数
-├── bunker       (rest_for_one, 5/10)  バンカーアクター、次にリレーごとの接続
+├── bunker       (rest_for_one, 5/10)  DATABASE_URL と ACCOUNT_MASTER_KEY が揃ったときだけ
+│   ├── account_pool   (pog, supervisor)  アカウントストアの接続プール
 │   ├── bunker
 │   └── relay_connection × バンカーリレーの数
 └── admin        (mist)                管理 UI の HTTP サーバー
@@ -79,6 +81,11 @@ root (one_for_one, 3/60)
 
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
 接続は復帰の過程で購読を張り直し publisher を登録し直すので、再起動したアクターが再び生きたソケットに配線される。
+
+バンカーのサブツリーだけは、アクターの前に接続プールを置く。
+pgo はチェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で exit させる。
+プールを先頭に置けば、アクターはプールの登録後にしか起動せず、プールが落ちればアクターも止められてから起動し直すので、未登録のプールを叩く状況が構造上生じない。
+DB の停止や再起動ではプールのプロセスは死なない（pgo が再接続を内部で扱い、クエリーは値で失敗する）ので、プールの再起動に伴ってアクターのセッションが消えるのは、プール自体のバグか外部からの kill のときに限られる。
 
 `plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視が無効な構成でも状態を見せたいからである。
 ルートの子は `plugins` を `monitor` より先に追加する。
@@ -102,6 +109,10 @@ root (one_for_one, 3/60)
 `Temporary` を選ぶ理由は別にあって、諦めた子の仕様が親から削除されること（`Transient` は死んだまま一覧に残る）と、許容回数超過以外の理由で落ちたときに再起動されないことの 2 つである。
 
 詳しくは `src/nostr_no_su/app.gleam` と `src/nostr_no_su/plugin_runner.gleam` の doc コメントに、OTP のどの節がそう振る舞うかの出典つきで書いてある。
+
+DB の障害も同じ考え方で、プロセスの死にしない。
+DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
+したがって DB が落ちていてもルートの許容回数は消費されず、兄弟の監視とプラグインは動き続ける。
 
 ## イベントが流れる経路
 
@@ -144,6 +155,48 @@ sequenceDiagram
 プラグインが受け取るのは Gleam のレコードではなく binary キーの Erlang map である。
 レコードはランタイムではタプルなので、フィールドを 1 つ足すだけで既存のプラグインが黙って壊れる。
 map なら Erlang や Elixir で書いたプラグインも載せられる。
+
+## アカウントの読み込み
+
+バンカーアクターは起動したあとで、アカウントを Postgres から読み込む。
+
+```mermaid
+sequenceDiagram
+    participant sup as bunker サブツリー
+    participant bk as bunker
+    participant store as account_store
+    participant db as Postgres
+    participant conn as relay_connection
+    participant sock as ソケット（stratus）
+
+    sup->>bk: 起動
+    Note over bk: initialiser は自分用の<br/>名前なしの subject に<br/>LoadAccounts を積むだけ
+    sup->>conn: 起動（アクターの後）
+    bk->>store: load
+    store->>db: CREATE TABLE IF NOT EXISTS / SELECT
+    alt 読み込めた
+        db-->>store: 行
+        Note over store: 行ごとに復号して検証し、<br/>読めない行は飛ばす
+        store-->>bk: アカウント
+        Note over bk: エンジンを作り直す
+    else 到達できない・失敗した
+        store-->>bk: 理由
+        Note over bk: 理由をログに出し、<br/>名前なしの subject へ<br/>再試行を予約する
+    end
+    conn->>sock: 接続
+    sock->>bk: GetSigners（購読を作るため）
+    bk-->>sock: 署名者の pubkey
+    Note over sock: 署名者がいれば #p に入れて REQ、<br/>いなければ購読しない
+```
+
+`LoadAccounts` は initialiser が積むのでアクターのメールボックスの先頭になり、接続はアクターの後に起動するので、`GetSigners` は必ず読み込みの後に処理される。
+DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読する。
+
+再試行を名前なしの subject へ予約するのは、名前付き subject へのタイマーが名前宛てになり、再起動した後の同じ名前のアクターに届いて再試行が重複するためである。
+名前なしの subject は pid 宛てなので、アクターが終了するとランタイムがタイマーを取り消す。
+
+DB が起動時に到達できなかった場合は、読み込みが後から成功しても、次の再接続まで購読は開かない。
+実行中の署名者の変化を購読へ反映する変更（#39）で解消する。
 
 ## NIP-46 リクエストが流れる経路
 
@@ -259,6 +312,8 @@ nostr-no-su/
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
 │       ├── bunker/rpc.gleam      JSON-RPC コーデック
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
+│       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
+│       ├── bunker/account_store.gleam アカウントを Postgres に保存するストア
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
@@ -268,6 +323,7 @@ nostr-no-su/
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH
 │       ├── crypto/bip340.gleam   BIP-340 Schnorr 署名と検証
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
+│       ├── crypto/aes_gcm.gleam  AES-256-GCM の箱（nonce、暗号文、タグ）
 │       ├── hex.gleam             16 進文字列とバイト列の相互変換
 │       ├── log.gleam             ログ 1 行の組み立て
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
@@ -304,7 +360,8 @@ nostr-no-su/
 ```
 
 `src/` と `plugins-src/` は別々の Gleam プロジェクトである。
-本体は `pog` に依存せず、Postgres への保存に必要な依存は `event_logger` が自分で持つ。
+本体はバンカーのアカウントストアのために `pog` に依存し、`event_logger` もイベント保存のために `pog` を同梱する。
+同じ名前のモジュールは本体の版が優先される（プラグイン側は影に入る）ので、共有するパッケージの版は両方の `manifest.toml` で揃え、CI で一致を検査している。
 
 `plugins/` は追跡しない。
 `plugins-src/` や `examples/` のソースを本体と同じ docker イメージの中でビルドし、その成果物をここへ置く。
@@ -319,8 +376,8 @@ nostr-no-su/
 | `RELAY_URL` | 監視 | `wss://relay.damus.io` を使う |
 | `BUNKER_RELAY_URL` | バンカー | `RELAY_URL` と同じリレーを使う |
 | `PUBKEYS` | 監視 | 直近のイベントを購読する |
-| `ACCOUNT_KEYS` | バンカー | バンカーを無効にする |
-| `BUNKER_SECRET` | バンカー | 起動ごとにアカウントごとの乱数を生成する |
+| `DATABASE_URL` | バンカー（アカウントストア） | バンカーを無効にする |
+| `ACCOUNT_MASTER_KEY` | バンカー（アカウントの暗号化） | バンカーを無効にする |
 | `PLUGIN_DIR` | プラグインローダー | 外部プラグインを読み込まない |
 | `PLUGIN_<NAME>_<KEY>` | 各プラグイン | プラグインが判断する |
 | `ADMIN_PORT` | 管理 UI | `8080` で待ち受ける |
