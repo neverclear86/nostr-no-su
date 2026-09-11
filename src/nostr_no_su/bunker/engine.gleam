@@ -124,17 +124,85 @@ pub fn new(
   accounts: List(#(Account, String)),
   auth_url: Option(fn(String) -> String),
 ) -> Engine {
-  let account_dict =
-    accounts
-    |> list.map(fn(pair) { #(pubkey_hex(pair.0), pair) })
-    |> dict.from_list
+  let empty =
+    Engine(
+      accounts: dict.new(),
+      sessions: set.new(),
+      seen: window.new(seen_capacity),
+      pending: dict.new(),
+      auth_url: auth_url,
+    )
+  use engine, pair <- list.fold(accounts, empty)
+  add_account(engine, pair.0, pair.1)
+}
+
+/// アカウントを 1 件足す。同じ署名者がすでにあれば、鍵と secret を置き換え、
+/// セッションと承認待ちは残す。
+///
+/// この関数と下の `remove_account` / `replace_secret` は全域にしてある。アクターは
+/// DB への書き込みが成功したときだけこれらを呼ぶので、不在や重複を失敗として返しても
+/// 到達しない分岐になる（`revoke` と同じ作法）。
+pub fn add_account(engine: Engine, account: Account, secret: String) -> Engine {
   Engine(
-    accounts: account_dict,
-    sessions: set.new(),
-    seen: window.new(seen_capacity),
-    pending: dict.new(),
-    auth_url: auth_url,
+    ..engine,
+    accounts: dict.insert(engine.accounts, pubkey_hex(account), #(
+      account,
+      secret,
+    )),
   )
+}
+
+/// アカウントを 1 件取り除き、その署名者の承認済みセッションと承認待ちも（失効の
+/// 有無に関わらず）捨てる。登録されていない署名者なら何もしない。
+///
+/// 処理済みのリクエスト id（`seen`）は残す。リレーは購読の張り直しで直近の
+/// リクエストを再配送するので、削除してすぐ戻したときに `seen` が空だと、実行済みの
+/// リクエストを再実行してしまう。削除されていた間に届いたリクエストはルーティングで
+/// 破棄されて `seen` に記録されないので、戻した後に届けば初めて実行される。
+pub fn remove_account(engine: Engine, signer: String) -> Engine {
+  Engine(
+    ..engine,
+    accounts: dict.delete(engine.accounts, signer),
+    sessions: set.filter(engine.sessions, fn(pair) { pair.0 != signer }),
+    pending: dict.filter(engine.pending, fn(_token, entry) {
+      entry.signer != signer
+    }),
+  )
+}
+
+/// 接続 secret を差し替える。承認済みセッションは残る（取り消しは `revoke` で
+/// 行う）。承認待ちは secret を持たない `connect` から作られ secret と無関係なので、
+/// これも残す。登録されていない署名者なら何もしない。
+pub fn replace_secret(
+  engine: Engine,
+  signer: String,
+  secret: String,
+) -> Engine {
+  case dict.get(engine.accounts, signer) {
+    Ok(#(account, _previous)) -> add_account(engine, account, secret)
+    Error(Nil) -> engine
+  }
+}
+
+/// 署名者として登録されているか。変更の前の所属の検査に使う。
+pub fn has_account(engine: Engine, signer: String) -> Bool {
+  dict.has_key(engine.accounts, signer)
+}
+
+/// 署名者の公開鍵の一覧（昇順）。購読の #p と、署名者の集合の比較に使う。
+pub fn signers(engine: Engine) -> List(String) {
+  dict.keys(engine.accounts)
+  |> list.sort(string.compare)
+}
+
+/// 署名者ごとの接続 secret（署名者の昇順）。管理 UI への一覧に使う。
+pub fn connection_secrets(engine: Engine) -> List(#(String, String)) {
+  dict.to_list(engine.accounts)
+  |> list.map(fn(entry) {
+    let #(signer, #(_account, secret)) = entry
+    #(signer, secret)
+  })
+  |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
 }
 
 /// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定

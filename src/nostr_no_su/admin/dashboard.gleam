@@ -1,8 +1,8 @@
 //// 管理 UI の描画。状態のスナップショット（純粋なデータ）から HTML 文字列を
 //// 組み立てるだけで、プロセスにも IO にも触れない。
 ////
-//// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey）
-//// ため、`escape` を通してから連結する。
+//// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey、
+//// アカウントのラベル、表示する理由）ため、`escape` を通してから連結する。
 
 import gleam/int
 import gleam/list
@@ -39,7 +39,7 @@ pub type RelayRow {
 /// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
 /// クライアントは管理 UI での承認を経てから署名を委任できる。
 pub type AccountRow {
-  AccountRow(signer: String, uri: String, auth_uri: String)
+  AccountRow(signer: String, label: String, uri: String, auth_uri: String)
 }
 
 /// プラグイン 1 つの表示内容。`status` が `None` なのは、ランナーが再起動中か、
@@ -56,7 +56,9 @@ pub type PendingRow {
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
-    accounts: List(AccountRow),
+    /// アカウントの一覧。得られないとき（バンカーが無効、読み込み中、応答なし）は
+    /// 表示する理由。
+    accounts: Result(List(AccountRow), String),
     pending: List(PendingRow),
     relays: List(RelayRow),
     sessions: List(Session),
@@ -89,14 +91,24 @@ fn page(title: String, body: List(String)) -> String {
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）。
-fn accounts_section(accounts: List(AccountRow)) -> String {
+/// 一覧を得られないときは、表の代わりにその理由を出す。
+fn accounts_section(accounts: Result(List(AccountRow), String)) -> String {
+  let #(rows, empty) = case accounts {
+    Ok(rows) -> #(rows, "No accounts registered.")
+    Error(reason) -> #([], reason)
+  }
   section(
     "Accounts",
-    ["Signer pubkey", "Connection URI", "Connection URI (approval)"],
-    list.map(accounts, fn(account) {
-      [code(account.signer), code(account.uri), code(account.auth_uri)]
+    ["Label", "Signer pubkey", "Connection URI", "Connection URI (approval)"],
+    list.map(rows, fn(account) {
+      [
+        escape(account.label),
+        code(account.signer),
+        code(account.uri),
+        code(account.auth_uri),
+      ]
     }),
-    "No accounts configured.",
+    empty,
   )
 }
 

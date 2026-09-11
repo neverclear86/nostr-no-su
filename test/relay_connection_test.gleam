@@ -15,19 +15,23 @@ type Report {
   Rewired
   /// ソケットを失って `on_disconnect` が実行された。
   Unwired
+  /// 生きた偽ソケットが購読の張り直しを依頼された。
+  Resubscribed
 }
 
 /// 偽ソケット。stratus プロセスと同じく、接続アクターにリンクした待機プロセス。
-/// これを kill すると切断とまったく同じに見える。
-fn spawn_socket() -> Socket {
+/// これを kill すると切断とまったく同じに見える。張り直しの依頼はテストへ報告する。
+fn spawn_socket(reports: Subject(Report)) -> Socket {
   let pid = process.spawn(fn() { process.sleep_forever() })
-  Socket(pid: pid, publish: fn(_event) { Nil })
+  Socket(pid: pid, publish: fn(_event) { Nil }, resubscribe: fn() {
+    process.send(reports, Resubscribed)
+  })
 }
 
 /// 常に新しいソケットを返し、それを報告する connect 関数。
 fn connects(reports: Subject(Report)) -> relay_connection.Connector {
   fn() {
-    let socket = spawn_socket()
+    let socket = spawn_socket(reports)
     process.send(reports, Connected(socket.pid))
     Ok(socket)
   }
@@ -145,7 +149,7 @@ pub fn exit_from_an_unrelated_process_is_ignored_test() {
   let connect = fn() {
     // ソケットが引き渡される前に死ぬ、リンク済みのプロセス。
     process.kill(process.spawn(fn() { process.sleep_forever() }))
-    let socket = spawn_socket()
+    let socket = spawn_socket(reports)
     process.send(reports, Connected(socket.pid))
     Ok(socket)
   }
@@ -209,6 +213,42 @@ pub fn status_is_disconnected_while_retrying_test() {
 pub fn status_of_an_unregistered_name_is_disconnected_test() {
   let name = process.new_name("test_relay")
   assert relay_connection.status(name) == relay_connection.Disconnected
+}
+
+/// 接続中に張り直しを依頼すると、生きたソケットに 1 回だけ転送する。
+pub fn resubscribe_is_forwarded_to_the_live_socket_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, connects(reports))
+  let assert Ok(Connected(_socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+
+  relay_connection.resubscribe(name)
+  assert process.receive(reports, 1000) == Ok(Resubscribed)
+  assert process.receive(reports, 200) == Error(Nil)
+  stop(actor)
+}
+
+/// 再接続を待っている間の依頼は何もしない。アクターは落ちず、状態の問い合わせにも
+/// 応答し続ける（次の接続が購読を評価し直す）。
+pub fn resubscribe_while_retrying_is_ignored_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, refuses(reports))
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+
+  relay_connection.resubscribe(name)
+  // 依頼の後に送った問い合わせへの応答は、依頼を処理し終えたことを示す。
+  assert relay_connection.status(name) == relay_connection.Disconnected
+  assert process.is_alive(actor)
+  stop(actor)
+}
+
+/// 名前を保持するプロセスがなければ、依頼は何もせずに捨てる。
+pub fn resubscribe_of_an_unregistered_name_is_dropped_test() {
+  let name = process.new_name("test_relay")
+  assert relay_connection.resubscribe(name) == Nil
 }
 
 /// アクターはリンク先のプロセスが終了すると自身も終了するため、スーパーバイザー

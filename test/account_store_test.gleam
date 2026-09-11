@@ -9,7 +9,7 @@ import envoy
 import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic/decode
-import gleam/erlang/process
+import gleam/erlang/process.{type Name}
 import gleam/io
 import gleam/list
 import gleam/result
@@ -53,13 +53,13 @@ pub fn pool_config_rejects_invalid_urls_without_echoing_them_test() {
   assert !string.contains(reason, "pw-marker")
 }
 
-/// 到達できないことを表すエラーは `Unavailable`、主キーの制約違反は
+/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、主キーの制約違反は
 /// `AlreadyRegistered` になる。
 pub fn query_errors_map_to_store_errors_test() {
   assert account_store.from_query_error(pog.ConnectionUnavailable)
     == account_store.Unavailable
   assert account_store.from_query_error(pog.QueryTimeout)
-    == account_store.Unavailable
+    == account_store.TimedOut
   assert account_store.from_query_error(pog.ConstraintViolated(
       message: "duplicate key value violates unique constraint",
       constraint: "bunker_accounts_pkey",
@@ -83,6 +83,24 @@ pub fn constraint_details_are_not_described_test() {
   assert !string.contains(described, "message-marker")
 }
 
+/// 書き込まれていることがある失敗は期限切れだけで、他の失敗は書き込まれていない。
+pub fn only_a_timeout_may_have_been_written_test() {
+  assert account_store.may_have_been_written(account_store.TimedOut)
+  assert !account_store.may_have_been_written(account_store.Unavailable)
+  assert !account_store.may_have_been_written(account_store.AlreadyRegistered)
+  assert !account_store.may_have_been_written(account_store.NotRegistered)
+  assert !account_store.may_have_been_written(account_store.QueryFailed("x"))
+}
+
+/// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
+pub fn deleted_or_absent_treats_a_missing_row_as_deleted_test() {
+  assert account_store.deleted_or_absent(Error(account_store.NotRegistered))
+    == Ok(Nil)
+  assert account_store.deleted_or_absent(Error(account_store.Unavailable))
+    == Error(account_store.Unavailable)
+  assert account_store.deleted_or_absent(Ok(Nil)) == Ok(Nil)
+}
+
 /// 到達できないプールへの読み込みは、例外にならず `Unavailable` を返す。
 pub fn loading_from_an_unreachable_database_is_a_value_test() {
   let name = process.new_name("account_store_test_unreachable")
@@ -90,7 +108,11 @@ pub fn loading_from_an_unreachable_database_is_a_value_test() {
     pog.default_config(name)
     |> pog.port(1)
     |> pog.start
-  assert account_store.load(pog.named_connection(name), random_master_key())
+  assert account_store.load(
+      name,
+      random_master_key(),
+      account_store.default_timeouts,
+    )
     |> result.replace(Nil)
     == Error(account_store.Unavailable)
 }
@@ -109,22 +131,23 @@ pub fn postgres_round_trip_test() {
 }
 
 /// 追加、読み込み、更新、改ざん、削除を一巡させ、最後に自分が入れた行を消す。
-fn round_trip(db: pog.Connection) -> Nil {
+fn round_trip(pool: Name(pog.Message)) -> Nil {
+  let db = pog.named_connection(pool)
   let key = random_master_key()
-  let assert Ok(Nil) = account_store.ensure_schema(db)
-  let assert Ok(Nil) = account_store.ensure_schema(db)
+  let assert Ok(Nil) = account_store.ensure_schema(db, generous)
+  let assert Ok(Nil) = account_store.ensure_schema(db, generous)
 
   let first = random_entry("first")
   let second = random_entry("second")
   let first_pubkey = account.pubkey_hex(first.account)
   let second_pubkey = account.pubkey_hex(second.account)
-  let assert Ok(Nil) = account_store.insert(db, key, first)
-  let assert Ok(Nil) = account_store.insert(db, key, second)
-  assert account_store.insert(db, key, first)
+  let assert Ok(Nil) = account_store.insert(db, key, first, generous)
+  let assert Ok(Nil) = account_store.insert(db, key, second, generous)
+  assert account_store.insert(db, key, first, generous)
     == Error(account_store.AlreadyRegistered)
 
   // 入れた行が同じ内容で戻る。
-  let assert Ok(loaded) = account_store.load(db, key)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert_same_entry(loaded, first)
   assert_same_entry(loaded, second)
 
@@ -135,23 +158,30 @@ fn round_trip(db: pog.Connection) -> Nil {
 
   // secret とラベルを差し替えると、次の読み込みに反映される。
   let assert Ok(Nil) =
-    account_store.update_secret(db, key, second_pubkey, "rotated-secret")
-  let assert Ok(Nil) = account_store.update_label(db, second_pubkey, "renamed")
-  let assert Ok(loaded) = account_store.load(db, key)
+    account_store.update_secret(
+      db,
+      key,
+      second_pubkey,
+      "rotated-secret",
+      generous,
+    )
+  let assert Ok(Nil) =
+    account_store.update_label(db, second_pubkey, "renamed", generous)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert_same_entry(
     loaded,
     StoredAccount(..second, secret: "rotated-secret", label: "renamed"),
   )
   let unknown = account.pubkey_hex(random_entry("unknown").account)
-  assert account_store.update_secret(db, key, unknown, "x")
+  assert account_store.update_secret(db, key, unknown, "x", generous)
     == Error(account_store.NotRegistered)
-  assert account_store.update_secret(db, key, "not-hex", "x")
+  assert account_store.update_secret(db, key, "not-hex", "x", generous)
     == Error(account_store.NotRegistered)
-  assert account_store.update_label(db, unknown, "x")
+  assert account_store.update_label(db, unknown, "x", generous)
     == Error(account_store.NotRegistered)
 
   // 別のマスターキーでは、自分が入れた行はすべて飛ばされる。
-  let assert Ok(other) = account_store.load(db, random_master_key())
+  let assert Ok(other) = account_store.load(pool, random_master_key(), generous)
   assert skipped_reasons(other, [first_pubkey, second_pubkey])
     == [
       #(first_pubkey, vault.UndecryptablePrivateKey),
@@ -160,30 +190,35 @@ fn round_trip(db: pog.Connection) -> Nil {
 
   // 暗号文の 1 バイトを書き換えた行だけが飛ばされ、他の行は読み込まれる。
   flip_privkey_byte(db, first_pubkey)
-  let assert Ok(loaded) = account_store.load(db, key)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert skipped_reasons(loaded, [first_pubkey, second_pubkey])
     == [#(first_pubkey, vault.UndecryptablePrivateKey)]
   assert loaded_pubkeys(loaded, [first_pubkey, second_pubkey])
     == [second_pubkey]
 
   // 削除した行は現れず、2 回目の削除は `NotRegistered`。
-  let assert Ok(Nil) = account_store.delete(db, second_pubkey)
-  assert account_store.delete(db, second_pubkey)
+  let assert Ok(Nil) = account_store.delete(db, second_pubkey, generous)
+  assert account_store.delete(db, second_pubkey, generous)
     == Error(account_store.NotRegistered)
-  let assert Ok(loaded) = account_store.load(db, key)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded_pubkeys(loaded, [second_pubkey]) == []
   assert skipped_reasons(loaded, [second_pubkey]) == []
 
-  let assert Ok(Nil) = account_store.delete(db, first_pubkey)
+  let assert Ok(Nil) = account_store.delete(db, first_pubkey, generous)
   Nil
 }
 
-/// テスト用の接続プールを起動する。プールはテストプロセスにリンクされる。
-fn connect(database_url: String) -> pog.Connection {
-  let assert Ok(config) =
-    pog.url_config(process.new_name("account_store_test_db"), database_url)
-  let assert Ok(started) = pog.start(config)
-  started.data
+/// 統合テストの期限。実際の DB との往復は負荷の高い環境で本番の期限（書き込み
+/// 1000ms）を超えうるので、テストが期限の長さに依存しないよう長く取る。
+const generous = account_store.Timeouts(load_ms: 30_000, write_ms: 30_000)
+
+/// テスト用の接続プールを起動し、その名前を返す。プールはテストプロセスにリンク
+/// される。
+fn connect(database_url: String) -> Name(pog.Message) {
+  let name = process.new_name("account_store_test_db")
+  let assert Ok(config) = pog.url_config(name, database_url)
+  let assert Ok(_started) = pog.start(config)
+  name
 }
 
 /// 実行のたびに違うマスターキー。

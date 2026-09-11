@@ -41,7 +41,8 @@ pub fn skipped_rows_are_reported_test() {
     == ["loaded 1 of 2 account(s)", vault.describe_skipped(skipped)]
 }
 
-/// 失敗から復帰したときは、その旨と、購読が次の再接続まで開かないことを出す。
+/// 失敗から復帰したときは、その旨を出す。購読はアクターが張り直すので、再接続を
+/// 待つ旨の行は出さない。
 pub fn recovery_is_reported_test() {
   let skipped = one_skipped()
   assert bunker.load_report(
@@ -51,7 +52,6 @@ pub fn recovery_is_reported_test() {
     )
     == [
       "account store is back; loaded 0 of 1 account(s)",
-      "bunker relays will subscribe on the next reconnect",
       vault.describe_skipped(skipped),
     ]
 }

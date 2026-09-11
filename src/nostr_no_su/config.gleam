@@ -216,8 +216,9 @@ pub fn to_filter(config: Config) -> Filter {
   }
 }
 
-/// 署名者宛の NIP-46 リクエストの購読。署名者がいなければ購読を開かない。空の
-/// `#p` の扱いはリレーによって異なるため、REQ 自体を送らない。
+/// 署名者宛の NIP-46 リクエストの購読。署名者がいなければ購読を定義しない。空の
+/// `#p` の扱いはリレーによって異なるため REQ を送らず、開いている購読は照合で
+/// CLOSE になる（`relay_client.sync`）。
 pub fn bunker_subscriptions(
   signer_pubkeys: List(String),
   since: Int,

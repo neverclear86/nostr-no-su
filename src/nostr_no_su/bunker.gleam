@@ -14,9 +14,46 @@
 //// 処理される。DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読
 //// する。**`LoadAccounts` の最初の送信を initialiser 以外へ移さないこと。**
 ////
-//// 読み込みの前はエンジンにアカウントが 1 件も無いので、どのリクエストもルーティング
-//// で破棄され、リプレイ防止の `seen` への記録も承認待ちもセッションも生じない。
-//// そのため、読み込みが成功した時点でエンジンを作り直しても失われる状態は無い。
+//// 読み込んだアカウントは、メモリの署名者と突き合わせて合わせる（`reconcile`）。
+//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換えるので、ストアに
+//// 残っている署名者のセッションと承認待ちは残る。起動時の読み込みではメモリが空なので、
+//// 読み込んだアカウントをそのまま足すことになる。
+////
+//// **アカウントの変更**（追加、削除、secret の作り直し、ラベルの差し替え）は、
+//// アクターの中でストアへ書き込み、書き込みが成功したときだけメモリの状態を変える。
+//// 書き込まれていないことが確定した失敗では、メモリを変えずに理由を返す。書き込みが
+//// 期限を過ぎたときや途中で接続が切れたときは、サーバー側でまだ実行中か、すでに
+//// コミットされていることがあるので、メモリを変えずにストアから読み直して合わせ、
+//// 呼び出し側には反映されたかもしれない旨を返す（`change_may_have_been_applied`）。
+//// ストアの読み込みは、実行中の書き込みの終了をテーブルのロックで待ってから読む
+//// （`account_store.load`）。読み直しは起動時の読み込みと同じ `LoadAccounts` の経路で
+//// 行い、失敗すれば同じく名前なしの subject へ再試行を予約する。読み直しが成功する
+//// までの間はメモリが DB と食い違っていることがあり、その間の変更は起動時の読み込みの
+//// 前と同じく `accounts are not loaded yet` で拒否し、一覧は理由を返す。NIP-46 の処理は
+//// その間もメモリのアカウントで続ける。
+////
+//// 保証するのは次のことである。メモリは、成功した書き込みと成功した読み込みの結果
+//// だけで変わる。結果が曖昧な書き込みの後は、読み直しに成功した時点で、その書き込みの
+//// 結果を含めて DB と一致する。例外は、書き込みの文がサーバーに届いてテーブルのロックを
+//// 取るより先に読み直しがロックを取った場合（`account_store.load` の「残る窓」）で、その
+//// 書き込みは読み直しに見えず、メモリは次の読み込みまで DB より遅れる。この場合も、
+//// 追加はもう一度追加すれば、ストアが登録済みを返したときに応答の前に読み直すので
+//// 一致し、secret の作り直しはもう一度作り直せば一致する。読み込みで飛ばされる行
+//// （別のマスターキーで暗号化されているなど）の公開鍵の追加は、読み直してもメモリに
+//// 入らず、登録済みとして拒否される。その行は DB から直接消す必要がある。
+////
+//// **待ち**：書き込みと読み込みの間は NIP-46 の処理が待たされる（届いたリクエストは
+//// メールボックスに積まれて捨てられない）。書き込み 1 件は最長で約 3 秒（DB に到達
+//// できないときのチェックアウトの失敗）、読み込み 1 回は読み込みの期限の 3 秒で打ち
+//// 切る。DB を一時停止した測定では、読み込みは 3000ms、2950ms、2000ms で失敗して返った。
+//// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行の間隔（5 秒）ごとに最長
+//// 3 秒ずつ待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
+//// 承認済みセッションは残る。
+////
+//// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
+//// 張り直しを依頼する。追加と削除のほか、読み込みの失敗からの復帰でも張り直しが
+//// 起き、secret やラベルの差し替えでは起きない。メモリはこのアクター経由の変更
+//// だけで変わるので、DB の行を外から直接変えた場合は次の起動まで反映されない。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
@@ -25,7 +62,8 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
-import gleam/string
+import gleam/result
+import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
@@ -42,8 +80,18 @@ pub const default_retry_delay_ms = 5000
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。アカウントの読み込みは最長で
-/// 約 4 秒ループを止めうる（`account_store` のタイムアウト）が、この値に収まる。
+/// 3 秒ループを止めうる（`account_store.default_timeouts`）が、この値に収まる。
 const call_timeout_ms = 5000
+
+/// アカウントの変更の応答を待つ時間。書き込み 1 件がループを止めるのは最長で約
+/// 3 秒（DB に到達できないときのチェックアウトの失敗）で、読み込み 1 回は期限の
+/// 3 秒で打ち切られる。結果が曖昧な変更の後は読み直し（最長 3 秒）が続き、その間に
+/// 届いた変更は読み直しの後にストアを呼ばずに拒否される。登録済みの行への追加は、
+/// 書き込みの失敗の後に続けて読み直す（最長で約 3 + 3 秒）。したがって、先に積まれた
+/// 変更 1 件の書き込みと読み直し（約 6 秒）の後に自分の変更が拒否される場合も、先に
+/// 積まれた書き込み 1 件（約 3 秒）の後に自分の変更が書き込みと読み直しを行う場合
+/// （約 9 秒）も、この値に収まる。
+const change_timeout_ms = 10_000
 
 /// 初期化に許す時間。initialiser は DB に触らないので短くてよい。
 const init_timeout_ms = 1000
@@ -53,18 +101,68 @@ const init_timeout_ms = 1000
 /// 取り違えないよう推測できない長さにする。
 const token_bytes = 16
 
-/// バンカーアクターの設定。マスターキーや接続プールは直接持たず、`load` の
-/// クロージャーの環境に閉じ込める。アクターの状態を表示してもキーが出ず、テストは
-/// DB なしで偽の読み込み関数を渡せる。
+/// 接続 secret のバイト数。secret は `bunker://` URI で署名を委任する資格なので、
+/// 推測できない長さにする。
+const connection_secret_bytes = 16
+
+/// 変更がアクターの応答を得られなかったときの理由。タイムアウトした後にアクターが
+/// 書き込みを終えて反映することがあるので、確かめ直すよう促す。
+const change_not_answered = "the bunker did not respond; reload to check whether the change was applied"
+
+/// 書き込みの結果が曖昧だった変更の理由。コミットされていることがあるので、単なる
+/// 失敗としては見せず、ストアから読み直した一覧で確かめるよう促す。管理 UI はこの
+/// 文言をそのまま表示してよい。
+pub const change_may_have_been_applied = "the store did not confirm the change; it may have been applied, so reload the dashboard to check"
+
+/// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
+pub type WriteFailure {
+  /// 書き込まれていないことが確定している（接続を得られない、制約違反など）。
+  NotWritten(reason: String)
+  /// 追加しようとした公開鍵の行が、すでに DB にある。バンカーはメモリに無い公開鍵
+  /// にだけ追加を書き込むので、DB がメモリより先行している（読み直しに見えなかった
+  /// 書き込みがある）か、読み込みで飛ばされた行（別のマスターキーで暗号化されている
+  /// など）がある。この追加は書き込まれていない。
+  AlreadyStored(reason: String)
+  /// 書き込まれたかどうか分からない（期限切れ、途中の切断）。
+  MaybeWritten(reason: String)
+}
+
+/// アカウントストアの操作。起動処理がプールとマスターキーを閉じ込めて渡すので、
+/// アクターの状態を表示してもキーが出ず、テストは DB なしで偽の操作を渡せる。
+/// 失敗の理由は値（鍵、secret、ラベル）を含まない固定の文言。
+pub type Store {
+  Store(
+    /// アカウントを読み込む。
+    load: fn() -> Result(vault.Loaded, String),
+    /// アカウントを 1 件追加する。
+    insert: fn(vault.StoredAccount) -> Result(Nil, WriteFailure),
+    /// 署名者を削除する。登録されていなければ成功として `Ok(Nil)` を返す（削除は
+    /// 行が無い状態にすることが目的のため）。
+    delete: fn(String) -> Result(Nil, WriteFailure),
+    /// 署名者の接続 secret を差し替える。
+    update_secret: fn(String, String) -> Result(Nil, WriteFailure),
+    /// 署名者のラベルを差し替える。
+    update_label: fn(String, String) -> Result(Nil, WriteFailure),
+  )
+}
+
+/// バンカーアクターの設定。設定から決まるものだけを持つ。購読の張り直しの宛先は
+/// ツリーを組む側しか知らないので、ここには入れず `start` の引数で受け取る。
 pub type Settings {
   Settings(
-    /// アカウントを読み込む関数。失敗の理由はログに出すだけなので文字列で返す。
-    load: fn() -> Result(vault.Loaded, String),
+    /// アカウントストアの操作。
+    store: Store,
     /// 承認ページの URL を組み立てる関数。`None` なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
     /// 読み込みに失敗したとき、次に試すまでの待ち時間。
     retry_delay_ms: Int,
   )
+}
+
+/// 管理 UI に渡すアカウント 1 件。秘密鍵（`Account`）を持たない。secret を含むので
+/// 認証済みページ以外に出さない。
+pub type Listing {
+  Listing(signer: String, label: String, secret: String)
 }
 
 /// バンカーアクターが受け取るメッセージ。
@@ -100,6 +198,24 @@ pub type Msg {
   LoadAccounts
   /// 現在の署名者 pubkey の一覧を問い合わせる。バンカーリレーの購読が使う。
   GetSigners(reply: Subject(List(String)))
+  /// アカウントを追加する。secret はアクターが生成する。
+  AddAccount(
+    account: Account,
+    label: String,
+    reply: Subject(Result(Nil, String)),
+  )
+  /// アカウントを削除する。その署名者のセッションと承認待ちも消える。
+  RemoveAccount(signer: String, reply: Subject(Result(Nil, String)))
+  /// 接続 secret を作り直す。承認済みセッションは残る。
+  RotateSecret(signer: String, reply: Subject(Result(Nil, String)))
+  /// ラベルを差し替える。
+  UpdateLabel(
+    signer: String,
+    label: String,
+    reply: Subject(Result(Nil, String)),
+  )
+  /// 管理 UI に出すアカウントの一覧を問い合わせる。
+  GetAccounts(reply: Subject(Result(List(Listing), String)))
 }
 
 /// バンカーが保持する承認済みセッションの一覧。アクターが動いていなければ空。
@@ -131,11 +247,46 @@ pub fn deny(name: Name(Msg), token: String) -> Result(Nil, String) {
   call_decision(name, Deny(token, _))
 }
 
-/// 現在の署名者 pubkey の一覧。読み込みの前、あるいはアクターが動いていなければ
-/// 空。
-pub fn signers(name: Name(Msg)) -> List(String) {
+/// 現在の署名者 pubkey の一覧。読み込みの前は空。アクターが応答しなければ
+/// `None` を返し、署名者が 0 件であることと区別する（購読は応答が無いときに開いて
+/// いる購読を閉じてはならない）。
+pub fn signers(name: Name(Msg)) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSigners)
-  |> option.unwrap([])
+}
+
+/// アカウントを追加し、反映されるまで待つ。
+pub fn add_account(
+  name: Name(Msg),
+  account: Account,
+  label: String,
+) -> Result(Nil, String) {
+  call_change(name, AddAccount(account, label, _))
+}
+
+/// アカウントを削除し、反映されるまで待つ。
+pub fn remove_account(name: Name(Msg), signer: String) -> Result(Nil, String) {
+  call_change(name, RemoveAccount(signer, _))
+}
+
+/// 接続 secret を作り直し、反映されるまで待つ。
+pub fn rotate_secret(name: Name(Msg), signer: String) -> Result(Nil, String) {
+  call_change(name, RotateSecret(signer, _))
+}
+
+/// ラベルを差し替え、反映されるまで待つ。
+pub fn update_label(
+  name: Name(Msg),
+  signer: String,
+  label: String,
+) -> Result(Nil, String) {
+  call_change(name, UpdateLabel(signer, label, _))
+}
+
+/// アカウントの一覧。読み込めていない、あるいはアクターが応答しないときは理由を
+/// 返す。
+pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
+  named.call(name, call_timeout_ms, GetAccounts)
+  |> option.unwrap(Error("bunker is not responding"))
 }
 
 /// 承認・拒否をアクターへ送って結果を待つ。アクターが動いていなければエラーに
@@ -148,37 +299,64 @@ fn call_decision(
   |> option.unwrap(Error("bunker is not running"))
 }
 
-/// アカウントを読み込めているかどうか。
+/// アカウントの変更をアクターへ送って結果を待つ。
+fn call_change(
+  name: Name(Msg),
+  request: fn(Subject(Result(Nil, String))) -> Msg,
+) -> Result(Nil, String) {
+  named.call(name, change_timeout_ms, request)
+  |> option.unwrap(Error(change_not_answered))
+}
+
+/// メモリがストアの内容を反映しているかどうか。
 type Accounts {
-  /// まだ読み込めていない。`failure` は最後の失敗の理由（まだ失敗していなければ
+  /// ストアの内容を読み込めていない。起動直後の読み込みの前か、結果が曖昧な書き込みの
+  /// 後の読み直しの前。`LoadAccounts` の送信か再試行のタイマーが、常にちょうど 1 つ
+  /// 未処理で残っている。`failure` は最後の失敗の理由（まだ失敗していなければ
   /// `None`）。
   Loading(failure: Option(String))
   /// 読み込めた。
   Ready
 }
 
+/// アカウントの変更の種類。ログ行の言い回しを決める。
+type Change {
+  Added
+  Removed
+  SecretRotated
+  LabelUpdated
+}
+
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
-/// 生きた接続の送信手段と、自分が起動した時刻と、読み込みの進み具合だけを持つ。
-/// `not_before` はエンジンではなくここに置く。エンジンは読み込みのたびに作り直す
-/// ため、そちらに刻むと起動時刻ではなく読み込みの時刻になってしまう。
+/// 署名者ごとのラベルと、生きた接続の送信手段と、自分が起動した時刻と、読み込みの
+/// 進み具合だけを持つ。`not_before` はエンジンではなくここに置き、アクターの起動
+/// 時刻を刻む。
 type State {
   State(
     engine: engine.Engine,
+    /// 署名者ごとのラベル。鍵はエンジンのアカウントと同じ集合に保つ。ラベルは
+    /// NIP-46 のどの判断にも使わないのでエンジンに入れない。2 つを同じ集合に保つ
+    /// 責任は `with_account` と `without_account` だけが負う。
+    labels: Dict(String, String),
     publishers: Dict(String, fn(Event) -> Nil),
     not_before: Int,
     settings: Settings,
     /// このアクターのプロセスだけが持つ、読み込み用の名前なしの subject。
     retry: Subject(Msg),
     accounts: Accounts,
+    /// バンカーリレーの購読の張り直しを依頼する関数。送るだけで待たない。
+    resubscribe: fn() -> Nil,
   )
 }
 
-/// スーパービジョンツリー用の子仕様。
+/// スーパービジョンツリー用の子仕様。`resubscribe` は署名者の集合が変わったときに
+/// 呼ぶ関数で、ツリーを組む側がバンカーリレーの接続へ配線する。
 pub fn supervised(
   name: Name(Msg),
   settings: Settings,
+  resubscribe: fn() -> Nil,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, settings) })
+  supervision.worker(fn() { start(name, settings, resubscribe) })
 }
 
 /// バンカーアクターを起動する。`name` で登録するため、接続は起動時に生きていた
@@ -191,9 +369,10 @@ pub fn supervised(
 pub fn start(
   name: Name(Msg),
   settings: Settings,
+  resubscribe: fn() -> Nil,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(init_timeout_ms, fn(self) {
-    initialise(settings, self)
+    initialise(settings, resubscribe, self)
   })
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -210,6 +389,7 @@ pub fn start(
 /// ランタイムがタイマーを取り消す。
 fn initialise(
   settings: Settings,
+  resubscribe: fn() -> Nil,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   let retry = process.new_subject()
@@ -222,11 +402,13 @@ fn initialise(
     |> process.select(retry)
   State(
     engine: engine.new([], settings.auth_url),
+    labels: dict.new(),
     publishers: dict.new(),
     not_before: time.now_seconds(),
     settings: settings,
     retry: retry,
     accounts: Loading(failure: None),
+    resubscribe: resubscribe,
   )
   |> actor.initialised
   |> actor.selecting(selector)
@@ -234,16 +416,77 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込み、publisher の登録、署名者・セッション・承認待ちの照会、
-/// セッションの取り消し、承認待ちの承認と拒否、あるいは受信イベント 1 件をエンジンに
-/// 通して生成された応答を全接続へ送信する。
+/// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・セッション・
+/// 承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、あるいは受信イベント
+/// 1 件をエンジンに通して生成された応答を全接続へ送信する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
     GetSigners(reply) -> {
-      process.send(reply, current_signers(state.engine))
+      process.send(reply, engine.signers(state.engine))
       actor.continue(state)
     }
+    GetAccounts(reply) -> {
+      process.send(reply, listings(state))
+      actor.continue(state)
+    }
+    AddAccount(account: added, label:, reply:) -> {
+      let signer = account.pubkey_hex(added)
+      let stored =
+        vault.StoredAccount(
+          account: added,
+          secret: random.hex(connection_secret_bytes),
+          label: label,
+        )
+      apply_change(
+        state,
+        reply,
+        Added,
+        signer,
+        require_unregistered(state, signer),
+        fn() { state.settings.store.insert(stored) },
+        with_account(_, stored),
+      )
+    }
+    RemoveAccount(signer:, reply:) ->
+      apply_change(
+        state,
+        reply,
+        Removed,
+        signer,
+        require_registered(state, signer),
+        fn() { state.settings.store.delete(signer) },
+        without_account(_, signer),
+      )
+    RotateSecret(signer:, reply:) -> {
+      let secret = random.hex(connection_secret_bytes)
+      apply_change(
+        state,
+        reply,
+        SecretRotated,
+        signer,
+        require_registered(state, signer),
+        fn() { state.settings.store.update_secret(signer, secret) },
+        fn(current) {
+          State(
+            ..current,
+            engine: engine.replace_secret(current.engine, signer, secret),
+          )
+        },
+      )
+    }
+    UpdateLabel(signer:, label:, reply:) ->
+      apply_change(
+        state,
+        reply,
+        LabelUpdated,
+        signer,
+        require_registered(state, signer),
+        fn() { state.settings.store.update_label(signer, label) },
+        fn(current) {
+          State(..current, labels: dict.insert(current.labels, signer, label))
+        },
+      )
     GetPending(reply) -> {
       process.send(reply, engine.pending(state.engine, time.now_seconds()))
       actor.continue(state)
@@ -292,28 +535,21 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// ストアからアカウントを読み込む。成功したらエンジンを作り直し、失敗したら
-/// 再試行を予約する。読み込み済みなら何もしない（再試行は失敗したときにしか予約
-/// せず、読み込み用の subject はこのプロセスの外に出ないので、通常は起きない）。
+/// ストアからアカウントを読み込む。成功したらメモリを読み込んだ内容に合わせて
+/// 読み込み済みに移り、失敗したら再試行を予約する。読み込み済みなら何もしない
+/// （`LoadAccounts` を積むのは読み込めていない状態に移るときだけで、読み込み用の
+/// subject はこのプロセスの外に出ないので、通常は起きない）。
 fn load_accounts(state: State) -> State {
   case state.accounts {
     Ready -> state
     Loading(failure:) -> {
-      let outcome = state.settings.load()
+      let outcome = state.settings.store.load()
       load_report(failure, outcome, state.settings.retry_delay_ms)
       |> list.each(log.println(log_prefix, _))
       case outcome {
         Ok(loaded) ->
-          State(
-            ..state,
-            engine: engine.new(
-              list.map(loaded.accounts, fn(entry) {
-                #(entry.account, entry.secret)
-              }),
-              state.settings.auth_url,
-            ),
-            accounts: Ready,
-          )
+          reconcile(State(..state, accounts: Ready), loaded)
+          |> transition(state, _)
         Error(reason) -> {
           let _ =
             process.send_after(
@@ -332,7 +568,7 @@ fn load_accounts(state: State) -> State {
 /// （まだ失敗していなければ `None`）、`retry_delay_ms` は次の再試行までの待ち時間。
 ///
 /// 失敗は始まったときと理由が変わったときだけ報告し、同じ理由の再試行では黙る。
-/// 復帰したときは、その旨と、購読が次の再接続まで開かないことを報告する。
+/// 復帰したときはその旨を報告する。
 pub fn load_report(
   previous_failure: Option(String),
   outcome: Result(vault.Loaded, String),
@@ -342,7 +578,6 @@ pub fn load_report(
     Ok(loaded), None -> [loaded_line(loaded), ..skipped_lines(loaded)]
     Ok(loaded), Some(_) -> [
       "account store is back; " <> loaded_line(loaded),
-      "bunker relays will subscribe on the next reconnect",
       ..skipped_lines(loaded)
     ]
     Error(reason), Some(previous) if reason == previous -> []
@@ -376,10 +611,168 @@ fn skipped_lines(loaded: vault.Loaded) -> List(String) {
   list.map(loaded.skipped, vault.describe_skipped)
 }
 
-/// エンジンが扱っている署名者の pubkey。表示とテストが安定するよう並べる。
-fn current_signers(engine: engine.Engine) -> List(String) {
-  dict.keys(engine.accounts)
-  |> list.sort(string.compare)
+/// 管理 UI に出すアカウントの一覧。並びは署名者の昇順。ラベルが無ければ空文字列
+/// （DB の列の既定値と同じ）にする。読み込めていなければ理由を返す。
+fn listings(state: State) -> Result(List(Listing), String) {
+  case state.accounts {
+    Ready ->
+      engine.connection_secrets(state.engine)
+      |> list.map(fn(entry) {
+        let #(signer, secret) = entry
+        Listing(
+          signer: signer,
+          label: dict.get(state.labels, signer) |> result.unwrap(""),
+          secret: secret,
+        )
+      })
+      |> Ok
+    Loading(failure: None) -> Error("accounts are being loaded")
+    Loading(failure: Some(reason)) ->
+      Error("account store unavailable: " <> reason)
+  }
+}
+
+/// ストアから読み込んだアカウントにメモリを合わせる。ストアに無い署名者を取り除き、
+/// 読み込んだアカウントを足す（登録済みの署名者なら鍵・secret・ラベルを置き換える）。
+/// エンジンを作り直さないので、ストアに残っている署名者のセッションと承認待ちは残る。
+fn reconcile(state: State, loaded: vault.Loaded) -> State {
+  let stored =
+    list.map(loaded.accounts, fn(entry) { account.pubkey_hex(entry.account) })
+  engine.signers(state.engine)
+  |> list.filter(fn(signer) { !list.contains(stored, signer) })
+  |> list.fold(state, without_account)
+  |> list.fold(loaded.accounts, _, with_account)
+}
+
+/// 読み込みか追加で得たアカウントを、エンジンとラベルの両方に入れる。
+fn with_account(state: State, stored: vault.StoredAccount) -> State {
+  State(
+    ..state,
+    engine: engine.add_account(state.engine, stored.account, stored.secret),
+    labels: dict.insert(
+      state.labels,
+      account.pubkey_hex(stored.account),
+      stored.label,
+    ),
+  )
+}
+
+/// 署名者を、エンジンとラベルの両方から取り除く。
+fn without_account(state: State, signer: String) -> State {
+  State(
+    ..state,
+    engine: engine.remove_account(state.engine, signer),
+    labels: dict.delete(state.labels, signer),
+  )
+}
+
+/// 追加の前の検査。登録済みの公開鍵ならストアへの往復を省いて拒否する。
+fn require_unregistered(state: State, signer: String) -> Result(Nil, String) {
+  case engine.has_account(state.engine, signer) {
+    True -> Error("account is already registered")
+    False -> Ok(Nil)
+  }
+}
+
+/// 削除・secret の作り直し・ラベルの差し替えの前の検査。署名者は呼び出し側が渡す
+/// 文字列なので、メモリに無い署名者はストアにもログにも渡さずに拒否する。
+fn require_registered(state: State, signer: String) -> Result(Nil, String) {
+  case engine.has_account(state.engine, signer) {
+    True -> Ok(Nil)
+    False -> Error("account is not registered")
+  }
+}
+
+/// 読み込み済みで、かつ `check` が `Ok` のときだけストアへ書き込み、成功したら
+/// 状態を変えてから応答する。拒否や、書き込まれていないことが確定した失敗のときは、
+/// 状態を変えずに理由を返す。
+///
+/// 書き込まれたかどうか分からない失敗のときは、メモリを変えずに読み込めていない状態へ
+/// 移り、読み直しの `LoadAccounts` を積んでから応答する。応答を受けた管理 UI が続けて
+/// 送る問い合わせは読み直しの後に処理されるので、読み直しに成功していれば DB と一致
+/// した一覧を読む。読み込み済みの状態には未処理の読み込みも再試行のタイマーも無い
+/// ので、読み込みの系列は 1 本のままである。
+///
+/// ログはストアを呼んだときだけ出す。`check` を通った署名者はメモリの一覧にある
+/// 公開鍵なので、ログに出るのはその値だけになる。
+fn apply_change(
+  state: State,
+  reply: Subject(Result(Nil, String)),
+  change: Change,
+  signer: String,
+  check: Result(Nil, String),
+  write: fn() -> Result(Nil, WriteFailure),
+  update: fn(State) -> State,
+) -> actor.Next(State, Msg) {
+  let #(next, outcome) = case state.accounts, check {
+    Loading(_), _ -> #(state, Error("accounts are not loaded yet"))
+    Ready, Error(reason) -> #(state, Error(reason))
+    Ready, Ok(Nil) -> {
+      let written = write()
+      log.println(log_prefix, change_line(change, signer, written))
+      case written {
+        Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
+        Error(NotWritten(reason)) -> #(state, Error(reason))
+        // 読み直しに見えなかった書き込みがあればメモリに入る。読み込みで飛ばされる
+        // 行ならメモリには入らないが、どちらでも行が DB にあることは確かなので、
+        // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
+        // 管理 UI は読み直した後の一覧を読む。
+        Error(AlreadyStored(reason)) -> #(
+          load_accounts(State(..state, accounts: Loading(failure: None))),
+          Error(reason),
+        )
+        Error(MaybeWritten(_reason)) -> {
+          process.send(state.retry, LoadAccounts)
+          #(
+            State(..state, accounts: Loading(failure: None)),
+            Error(change_may_have_been_applied),
+          )
+        }
+      }
+    }
+  }
+  process.send(reply, outcome)
+  actor.continue(next)
+}
+
+/// 変更 1 件のログ行。値は公開鍵と固定の文言の理由だけで、ラベル（利用者の入力で、
+/// 改行を含みうる）も secret も含めない。
+fn change_line(
+  change: Change,
+  signer: String,
+  written: Result(Nil, WriteFailure),
+) -> String {
+  let #(done, attempted) = case change {
+    Added -> #("added account", "add account")
+    Removed -> #("removed account", "remove account")
+    SecretRotated -> #(
+      "rotated the connection secret of",
+      "rotate the connection secret of",
+    )
+    LabelUpdated -> #("updated the label of", "update the label of")
+  }
+  let failed = "failed to " <> attempted <> " " <> signer <> ": "
+  case written {
+    Ok(Nil) -> done <> " " <> signer
+    Error(NotWritten(reason)) -> failed <> reason
+    Error(AlreadyStored(reason)) ->
+      failed <> reason <> "; reloading the accounts from the store"
+    Error(MaybeWritten(reason)) ->
+      failed
+      <> reason
+      <> "; the change may have been applied, reloading the accounts from the store"
+  }
+}
+
+/// 次の状態に移る。署名者の集合が変わっていれば購読の張り直しを依頼する。依頼は
+/// 接続アクターへ送るだけで待たないので、接続が張り直しで送る `GetSigners` は
+/// この処理が返った後に処理され、変更後の署名者を読む。
+fn transition(from: State, to: State) -> State {
+  case engine.signers(from.engine) == engine.signers(to.engine) {
+    True -> Nil
+    False -> to.resubscribe()
+  }
+  to
 }
 
 /// 承認・拒否の結果を状態に反映し、待たせているクライアントへ応答イベントを
