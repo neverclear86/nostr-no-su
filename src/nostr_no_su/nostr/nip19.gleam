@@ -72,14 +72,15 @@ pub fn decode(text: String, prefix: Prefix) -> Result(BitArray, Nip19Error) {
   let text = string.trim(text)
   use <- bool.guard(string.byte_size(text) > max_length, Error(TooLong))
   use <- bool.guard(
-    !list.all(string.to_utf_codepoints(text), is_printable_ascii),
+    !list.all(string.to_utf_codepoints(text), is_visible_ascii),
     Error(InvalidCharacter),
   )
+  let lower = string.lowercase(text)
   use <- bool.guard(
-    string.lowercase(text) != text && string.uppercase(text) != text,
+    lower != text && string.uppercase(text) != text,
     Error(MixedCase),
   )
-  use #(hrp, data) <- result.try(split_at_separator(string.lowercase(text)))
+  use #(hrp, data) <- result.try(split_at_separator(lower))
   use <- bool.guard(hrp == "", Error(EmptyPrefix))
   use <- bool.guard(string.length(data) < checksum_length, Error(TooShort))
   use values <- result.try(list.try_map(
@@ -104,7 +105,7 @@ pub fn decode(text: String, prefix: Prefix) -> Result(BitArray, Nip19Error) {
 /// エラーの理由を、画面やログに出せる固定の英文にする。
 pub fn describe(error: Nip19Error) -> String {
   case error {
-    TooLong -> "bech32 string exceeds 90 characters"
+    TooLong -> "bech32 string is too long"
     InvalidCharacter -> "invalid bech32 character"
     MixedCase -> "bech32 string mixes upper and lower case"
     MissingSeparator -> "missing bech32 separator"
@@ -127,7 +128,7 @@ fn prefix_text(prefix: Prefix) -> String {
 }
 
 /// US-ASCII の 33〜126（BIP-173 が HRP に許す範囲）の文字かどうか。
-fn is_printable_ascii(codepoint: UtfCodepoint) -> Bool {
+fn is_visible_ascii(codepoint: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(codepoint)
   code >= 33 && code <= 126
 }

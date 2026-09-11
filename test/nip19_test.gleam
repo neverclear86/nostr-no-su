@@ -1,3 +1,5 @@
+//// NIP-19 の npub / nsec の符号化と復号のテスト。
+
 import gleam/list
 import nostr_no_su/nostr/nip19.{
   EmptyPrefix, InvalidCharacter, InvalidChecksum, InvalidLength, InvalidPadding,
@@ -182,6 +184,7 @@ pub fn describe_returns_fixed_text_test() {
   assert nip19.describe(error) == "invalid bech32 checksum"
   assert nip19.describe(PrefixMismatch(expected: Nsec))
     == "expected nsec prefix"
+  assert nip19.describe(TooLong) == "bech32 string is too long"
 }
 
 /// BIP-173 の有効な文字列はチェックサムの検証を通り、接頭辞の検査まで進む。
