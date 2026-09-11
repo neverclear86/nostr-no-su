@@ -9,6 +9,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # アカウントストアの統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が
+      # 設定されているときだけ統合テストが実行される。
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nostr_no_su_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nostr_no_su_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - uses: erlef/setup-beam@v1
@@ -19,6 +35,8 @@ jobs:
       - run: gleam deps download
       - run: gleam build --warnings-as-errors
       - run: gleam test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
       - run: gleam format --check src test
 
   plugin-event-logger:
@@ -56,7 +74,8 @@ jobs:
         working-directory: .
         run: |
           set -e
-          for pkg in gleam_stdlib gleam_erlang gleam_otp gleam_json exception; do
+          for pkg in gleam_stdlib gleam_erlang gleam_otp gleam_json exception \
+            pog pgo pg_types backoff opentelemetry_api gleam_time; do
             host=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" manifest.toml)
             plugin=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" plugins-src/event_logger/manifest.toml)
             [ -n "$host" ] && [ -n "$plugin" ] || { echo "$pkg が manifest に無い"; exit 1; }
