@@ -21,7 +21,8 @@
     describe_exit/1,
     start_child/3,
     describe_term/1,
-    reply_alias/1
+    reply_alias/1,
+    pool_transaction/3
 ]).
 
 %% stratus は wss:// 接続に ssl アプリケーションを必要とする。本体の依存
@@ -293,6 +294,26 @@ arity(A) -> A.
 reply_alias(Pid) ->
     Alias = erlang:monitor(process, Pid, [{alias, reply_demonitor}]),
     {Alias, 'gleam@erlang@process':unsafely_create_subject(Alias, Alias)}.
+
+%% プール Pool の接続 1 本で Fun をトランザクションとして実行する。Fun の中で同じ
+%% プールへ送るクエリーは、pgo がプロセス辞書に置いたこの接続で実行される。
+%%
+%% 期限 TimeoutMs はチェックアウトの要求から数える。pgo のプールは期限を過ぎた
+%% チェックアウトの接続を閉じるので、トランザクションの中のすべてのクエリーと COMMIT が
+%% この期限で打ち切られる。pog.transaction は期限を指定できず（pgo の既定の 5000ms に
+%% なる）、中のクエリーには pog.timeout も効かないため、ここで指定する。
+%%
+%% 打ち切られた COMMIT などの例外は捕まえて値にする。理由の項は捨て、クエリーの引数や
+%% 結果がクラッシュレポートに出ないようにする。
+%% -> {ok, Result} | {error, checkout_failed} | {error, interrupted}
+pool_transaction(Pool, TimeoutMs, Fun) ->
+    try pgo:transaction(Pool, fun() -> {nostr_no_su_completed, Fun()} end,
+                        #{pool_options => [{timeout, TimeoutMs}]}) of
+        {nostr_no_su_completed, Result} -> {ok, Result};
+        {error, _Reason} -> {error, checkout_failed}
+    catch
+        _:_ -> {error, interrupted}
+    end.
 
 %% 改行を入れずに 1 行へ整形する。characters_to_binary/1 は 255 を超える
 %% コードポイントを含む整形結果でも落ちない。

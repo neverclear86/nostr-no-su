@@ -189,7 +189,11 @@ fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
             name: name,
             pool: pool,
             settings: bunker.Settings(
-              store: account_store_operations(pool.pool_name, master_key),
+              store: account_store_operations(
+                pool.pool_name,
+                master_key,
+                account_store.default_timeouts,
+              ),
               auth_url: auth_url(loaded),
               retry_delay_ms: bunker.default_retry_delay_ms,
             ),
@@ -218,31 +222,46 @@ fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
 /// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ
 /// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
 /// あるかどうかを区別する。削除は行が無いことを成功として扱う。
-fn account_store_operations(
+///
+/// 追加の `AlreadyRegistered` も「書き込まれていることがある」として扱う。バンカーは
+/// メモリに無い公開鍵にだけ追加を書き込むので、DB に行があるのは DB がメモリより
+/// 先行している（読み直しに見えなかった書き込みがある）ことを意味し、読み直せば
+/// 合わせられるからである。
+///
+/// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
+/// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
+pub fn account_store_operations(
   pool: Name(pog.Message),
   master_key: vault.MasterKey,
+  timeouts: account_store.Timeouts,
 ) -> bunker.Store {
   let db = pog.named_connection(pool)
   bunker.Store(
     load: fn() {
-      account_store.load(db, master_key)
+      account_store.load(pool, master_key, timeouts)
       |> result.map_error(account_store.describe)
     },
     insert: fn(entry) {
-      account_store.insert(db, master_key, entry)
-      |> result.map_error(write_failure)
+      account_store.insert(db, master_key, entry, timeouts)
+      |> result.map_error(fn(error) {
+        case error {
+          account_store.AlreadyRegistered ->
+            bunker.MaybeWritten(account_store.describe(error))
+          _ -> write_failure(error)
+        }
+      })
     },
     delete: fn(signer) {
-      account_store.delete(db, signer)
+      account_store.delete(db, signer, timeouts)
       |> account_store.deleted_or_absent
       |> result.map_error(write_failure)
     },
     update_secret: fn(signer, secret) {
-      account_store.update_secret(db, master_key, signer, secret)
+      account_store.update_secret(db, master_key, signer, secret, timeouts)
       |> result.map_error(write_failure)
     },
     update_label: fn(signer, label) {
-      account_store.update_label(db, signer, label)
+      account_store.update_label(db, signer, label, timeouts)
       |> result.map_error(write_failure)
     },
   )

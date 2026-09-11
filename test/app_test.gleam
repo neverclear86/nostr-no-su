@@ -11,6 +11,7 @@ import gleam/string
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
@@ -42,14 +43,16 @@ const other_client_key = "000000000000000000000000000000000000000000000000000000
 /// 書き込みが遅いストアで、書き込みの途中に積まれる追加の対象になる署名者の鍵。
 const slow_signer_key = "0000000000000000000000000000000000000000000000000000000000000055"
 
+/// 偽のストアの書き込みと読み込みが失敗したときの理由。本物のストアの文言を使う。
+fn store_failure() -> String {
+  account_store.describe(account_store.Unavailable)
+}
+
 /// 偽リレーの URL。`fake_open` が報告に添えるだけで、接続先としては使わない。
 const test_relay_url = "ws://relay.test"
 
 /// バンカーを動かさないツリーの、無効の理由。
 const disabled_reason = "DATABASE_URL is not set"
-
-/// 偽のストアの書き込みが失敗したときの理由。
-const store_failure = "database is unreachable, rejected the connection, or timed out"
 
 /// 承認ページを載せる管理 UI の公開 URL。承認フローを有効にするために渡す。
 const auth_base = "http://admin.test"
@@ -276,7 +279,7 @@ fn memory_store(
   let written = fn(call) {
     process.send(calls, call)
     case failing {
-      True -> Error(bunker.NotWritten(store_failure))
+      True -> Error(bunker.NotWritten(store_failure()))
       False -> Ok(Nil)
     }
   }
@@ -1678,11 +1681,11 @@ pub fn a_failed_write_changes_nothing_test() {
   assert bunker.accounts(name) == listed
 
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(store_failure)
+    == Error(store_failure())
   assert bunker.accounts(name) == listed
   assert process.receive(subscribed, 300) == Error(Nil)
 
-  assert bunker.remove_account(name, signer) == Error(store_failure)
+  assert bunker.remove_account(name, signer) == Error(store_failure())
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
@@ -1696,7 +1699,7 @@ pub fn changes_before_loading_do_not_reach_the_store_test() {
   let name = process.new_name("test_bunker")
   let store =
     bunker.Store(..memory_store(calls, [], False), load: fn() {
-      Error(store_failure)
+      Error(store_failure())
     })
   let tree =
     start_loading_bunker_tree(
@@ -1713,7 +1716,7 @@ pub fn changes_before_loading_do_not_reach_the_store_test() {
     == Error("accounts are not loaded yet")
   assert process.receive(calls, 100) == Error(Nil)
   assert bunker.accounts(name)
-    == Error("account store unavailable: " <> store_failure)
+    == Error("account store unavailable: " <> store_failure())
   stop_tree(tree)
 }
 
@@ -1789,30 +1792,34 @@ pub fn labels_and_registration_checks_test() {
 }
 
 /// 署名者の問い合わせがタイムアウトしても、開いている購読を閉じない。X の追加で
-/// 張り直しが起きたとき、その問い合わせは Y の遅い書き込みの後ろで 5000ms を超える。
+/// 張り直しが起きたとき、その問い合わせは Y の書き込みの後ろに積まれて 5000ms を超える。
 /// 購読は変わらずに再試行が予約され、Y の失敗の後の再試行で A と X の REQ になる。
 /// 問い合わせの失敗を署名者 0 件として扱う実装では、ここで CLOSE が届いて落ちる。
+///
+/// 順序は時間の余裕ではなく、偽の書き込みを止める門で作る。X の書き込みを止めている
+/// 間に Y の追加がアクターのメールボックスに積まれたことを確かめてから X を通し、Y の
+/// 書き込みは再試行の予約を確かめるまで止めておく。
 pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
   let results = process.new_subject()
+  let gates = process.new_subject()
   let name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let fast = account.pubkey_hex(account_for(other_signer_key))
   let slow = account.pubkey_hex(account_for(slow_signer_key))
   let store =
     memory_store(process.new_subject(), [stored_signer(signer_key)], False)
-  let delayed =
+  let gated =
     bunker.Store(..store, insert: fn(entry: vault.StoredAccount) {
-      case account.pubkey_hex(entry.account) == slow {
-        True -> {
-          process.sleep(5500)
-          Error(bunker.NotWritten(store_failure))
-        }
-        False -> {
-          process.sleep(200)
-          store.insert(entry)
-        }
+      let written = account.pubkey_hex(entry.account)
+      // 門はアクターのプロセスで作るので、アクターの中で受信できる。
+      let gate = process.new_subject()
+      process.send(gates, #(written, gate))
+      process.receive_forever(gate)
+      case written == slow {
+        True -> Error(bunker.NotWritten(store_failure()))
+        False -> store.insert(entry)
       }
     })
   let tree =
@@ -1820,7 +1827,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
       reports,
       Some(subscribed),
       name,
-      delayed,
+      gated,
       default_retry_delay_ms,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
@@ -1828,6 +1835,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
   let assert Ok(Subscribed(_relay_url, [message.Req(..)])) =
     process.receive(subscribed, 2000)
   drain_subscriptions(subscribed, 200)
+  let assert Ok(actor) = process.named(name)
 
   process.spawn(fn() {
     process.send(
@@ -1835,14 +1843,19 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
       bunker.add_account(name, account_for(other_signer_key), ""),
     )
   })
-  // X の書き込みの 200ms の間に、Y の追加をメールボックスに積む。
-  process.sleep(100)
+  let assert Ok(#(blocked_first, release_first)) = process.receive(gates, 2000)
+  assert blocked_first == fast
   process.spawn(fn() {
     process.send(
       results,
       bunker.add_account(name, account_for(slow_signer_key), ""),
     )
   })
+  assert await_queued(actor, 2000)
+  process.send(release_first, Nil)
+  let assert Ok(#(blocked_second, release_second)) =
+    process.receive(gates, 2000)
+  assert blocked_second == slow
 
   let #(before_retry, retrying) =
     receive_until(
@@ -1852,6 +1865,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
     )
   assert retrying == Ok(Retrying(test_relay_url))
   assert !list.any(before_retry, closes)
+  process.send(release_second, Nil)
   let #(before_request, requested) =
     receive_until(
       subscribed,
@@ -1863,10 +1877,27 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
   // 呼び出し側のプロセスが結果を転送するのは偽ソケットの報告とは別の送信なので、
   // 届く順序は決まらない。十分に待つ。
   assert process.receive(results, 1000) == Ok(Ok(Nil))
-  assert process.receive(results, 1000) == Ok(Error(store_failure))
+  assert process.receive(results, 1000) == Ok(Error(store_failure()))
   assert process.receive(reports, 0) == Error(Nil)
   stop_tree(tree)
 }
+
+/// アクターのメールボックスにメッセージが積まれるまで待つ。
+fn await_queued(actor: Pid, remaining: Int) -> Bool {
+  let #(_item, queued) = process_info(actor, atom.create("message_queue_len"))
+  case queued > 0, remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_queued(actor, remaining - 10)
+    }
+  }
+}
+
+/// プロセスの情報 1 項目。
+@external(erlang, "erlang", "process_info")
+fn process_info(pid: Pid, item: Atom) -> #(Atom, Int)
 
 // --- 結果が曖昧な書き込みの後の読み直し ---
 
@@ -1953,7 +1984,7 @@ fn committed_but_timed_out_store(
     load: fn() {
       case process.call(database, 1000, ReadRows) {
         Ok(rows) -> Ok(Loaded(accounts: rows, skipped: []))
-        Error(Nil) -> Error(store_failure)
+        Error(Nil) -> Error(store_failure())
       }
     },
     insert: fn(entry) { write(list.append(_, [entry])) },
@@ -2113,7 +2144,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
   assert bunker.add_account(name, account_for(other_signer_key), "")
     == Error(bunker.change_may_have_been_applied)
   assert bunker.accounts(name)
-    == Error("account store unavailable: " <> store_failure)
+    == Error("account store unavailable: " <> store_failure())
   assert bunker.add_account(name, account_for(slow_signer_key), "")
     == Error("accounts are not loaded yet")
   deliver(request("p1", "ping", "[]"))
