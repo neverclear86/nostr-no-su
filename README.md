@@ -117,7 +117,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 ```sh
 gleam run   # 実行
-gleam test  # テスト（BIP-340 / NIP-44 公式ベクター + バンカーのループバック）
+gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バンカーのループバック）
 ```
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
@@ -155,6 +155,7 @@ src/nostr_no_su/crypto/nip44.gleam           -- NIP-44 v2 暗号化
 src/nostr_no_su/nostr/event.gleam            -- Event 型・コーデック・ID 計算・署名
 src/nostr_no_su/nostr/filter.gleam           -- 購読フィルター
 src/nostr_no_su/nostr/message.gleam          -- クライアント⇄リレーのメッセージ
+src/nostr_no_su/nostr/nip19.gleam            -- NIP-19 の npub / nsec（bech32）の符号化と復号
 src/nostr_no_su/relay_client.gleam           -- WebSocket クライアント (stratus)
 src/nostr_no_su/relay_connection.gleam       -- リレー 1 本ぶんの接続を保つ actor（切断検知と再接続）
 src/nostr_no_su/bunker.gleam                 -- バンカーの actor（セッション状態を保持）
