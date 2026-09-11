@@ -2,13 +2,14 @@ import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/app
 import nostr_no_su/bunker
-import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
@@ -18,6 +19,7 @@ import nostr_no_su/plugins/console_logger
 import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/time
+import pog
 
 /// 起動処理そのものが出すログ行の接頭辞。
 const log_prefix = "main"
@@ -26,8 +28,8 @@ const log_prefix = "main"
 /// 件数（正確な上限は `dedup` を参照）。
 const dedup_capacity = 4096
 
-/// 生成する接続シークレットと管理 UI パスワードのバイト数。
-const random_bytes = 16
+/// 生成する管理 UI パスワードのバイト数。
+const admin_password_bytes = 16
 
 /// バンカーの購読が現在時刻からどれだけ遡るか。切断していた間に届いたリクエストを
 /// 取りこぼさないための猶予。クライアントは数十秒で応答を諦めるため、これより古い
@@ -74,10 +76,8 @@ fn startup(loaded: Config) -> Startup {
     )
   let specs = plugin_specs(list.append(builtin, external))
   let #(monitor, monitor_notes) = monitor_spec(loaded)
-  let #(accounts, account_notes) = load_accounts(loaded)
-  let admin_accounts = dashboard_accounts(loaded, accounts)
-  let #(bunker, bunker_notes) = bunker_spec(loaded, accounts, auth_url(loaded))
-  let #(admin, admin_notes) = admin_spec(loaded, admin_accounts)
+  let #(bunker, bunker_notes) = bunker_spec(loaded)
+  let #(admin, admin_notes) = admin_spec(loaded)
   Startup(
     spec: app.Spec(
       plugins: specs,
@@ -88,21 +88,23 @@ fn startup(loaded: Config) -> Startup {
       reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
     ),
     notes: list.flatten([
+      deprecation_notes(loaded),
       monitor_notes,
       plugin_notes,
-      account_notes,
       bunker_notes,
-      uri_notes(admin_accounts),
       admin_notes,
     ]),
   )
 }
 
-/// 接続 URI の報告。`bunker://` URI は secret を含むため、起動ログと認証済み
-/// ページ以外に出してはならない。
-fn uri_notes(accounts: List(dashboard.AccountRow)) -> List(String) {
-  use account <- list.map(accounts)
-  log.line(bunker.log_prefix, account.uri)
+/// 設定されていた廃止済みの環境変数の報告。値は読まず、名前だけを出す。
+fn deprecation_notes(loaded: Config) -> List(String) {
+  use name <- list.map(loaded.deprecated_variables)
+  log.line(
+    log_prefix,
+    name
+      <> " is no longer supported and is ignored; accounts are stored in the database (DATABASE_URL, ACCOUNT_MASTER_KEY)",
+  )
 }
 
 /// リレー URL ごとに接続 1 本ぶんの仕様を作る。
@@ -155,36 +157,6 @@ fn builtin_plugins() -> List(Plugin) {
   [console_logger.new()]
 }
 
-/// 設定されたアカウントと、それぞれの接続シークレット。鍵を読めないときは理由を
-/// 報告して空を返し、バンカーなしの監視のみで動かす。
-fn load_accounts(loaded: Config) -> #(List(#(Account, String)), List(String)) {
-  case account.load_all(loaded.account_keys) {
-    Error(reason) -> #([], [
-      log.line(bunker.log_prefix, "disabled: " <> reason),
-    ])
-    Ok([]) -> #([], [
-      log.line(bunker.log_prefix, "no ACCOUNT_KEYS set; monitor-only mode"),
-    ])
-    Ok(accounts) -> #(
-      list.map(accounts, fn(account) { #(account, secret_for(loaded)) }),
-      [],
-    )
-  }
-}
-
-/// 管理 UI に出すアカウント一覧。
-fn dashboard_accounts(
-  loaded: Config,
-  accounts: List(#(Account, String)),
-) -> List(dashboard.AccountRow) {
-  use pair <- list.map(accounts)
-  dashboard.AccountRow(
-    signer: account.pubkey_hex(pair.0),
-    uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, Some(pair.1)),
-    auth_uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, None),
-  )
-}
-
 /// 承認待ちの token から、クライアントへ渡す承認ページの URL を組み立てる関数。
 /// 管理 UI の公開 URL に承認ページのパスを繋ぐだけで、パスの形を知っているのは
 /// 管理 UI 側（`dashboard`）だけになる。管理 UI が無効なら承認フローも無効。
@@ -193,36 +165,40 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   fn(token) { base <> dashboard.approve_path(token) }
 }
 
-/// 設定されたアカウントのバンカーサブツリー。利用できるアカウントがなければ
-/// 監視のみで動作する。購読は接続のたびに組み立て直すため、`since` は接続時点の
-/// 現在時刻から決まる。
-fn bunker_spec(
-  loaded: Config,
-  accounts: List(#(Account, String)),
-  auth_url: Option(fn(String) -> String),
-) -> #(Option(app.Bunker), List(String)) {
-  case accounts {
-    // 無効にした理由は `load_accounts` が報告済み。
-    [] -> #(None, [])
-    accounts -> {
-      let signer_pubkeys =
-        list.map(accounts, fn(pair) { account.pubkey_hex(pair.0) })
+/// バンカーサブツリー。アカウントストアの設定が揃わなければ理由を報告して無効に
+/// し、監視とプラグインと管理 UI だけで動かす。アカウントはアクターが起動後に
+/// ストアから読むので、ここではアカウントの件数を知らず、0 件でも起動する。
+///
+/// マスターキーは `load` のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
+/// 管理 UI には渡らない。購読は接続のたびに現在の署名者から組み立て直すため、
+/// `since` も接続時点の現在時刻から決まる。
+fn bunker_spec(loaded: Config) -> #(Option(app.Bunker), List(String)) {
+  case bunker_store(loaded) {
+    Error(reason) -> #(None, [
+      log.line(bunker.log_prefix, "disabled: " <> reason),
+    ])
+    Ok(#(pool, master_key)) -> {
+      let name = process.new_name("nostr_no_su_bunker")
+      let db = pog.named_connection(pool.pool_name)
       #(
         Some(
           app.Bunker(
-            name: process.new_name("nostr_no_su_bunker"),
-            engine: engine.new(accounts, auth_url),
+            name: name,
+            pool: pool,
+            settings: bunker.Settings(
+              load: fn() {
+                account_store.load(db, master_key)
+                |> result.map_error(account_store.describe)
+              },
+              auth_url: auth_url(loaded),
+              retry_delay_ms: bunker.default_retry_delay_ms,
+            ),
             relays: relays(loaded.bunker_relay_urls),
             subscriptions: fn() {
-              [
-                #(
-                  "bunker",
-                  config.bunker_filter(
-                    signer_pubkeys,
-                    time.now_seconds() - bunker_since_lookback_seconds,
-                  ),
-                ),
-              ]
+              config.bunker_subscriptions(
+                bunker.signers(name),
+                time.now_seconds() - bunker_since_lookback_seconds,
+              )
             },
           ),
         ),
@@ -237,12 +213,25 @@ fn bunker_spec(
   }
 }
 
+/// アカウントストアの接続プールの設定とマスターキー。設定が揃わない、あるいは
+/// `DATABASE_URL` を解釈できなければ理由を返す。理由は値を含まない。
+fn bunker_store(
+  loaded: Config,
+) -> Result(#(pog.Config, vault.MasterKey), String) {
+  case loaded.account_store {
+    config.AccountStoreUnavailable(reason) -> Error(reason)
+    config.AccountStore(database_url:, master_key:) ->
+      account_store.pool_config(
+        process.new_name("nostr_no_su_account_pool"),
+        database_url,
+      )
+      |> result.map(fn(pool) { #(pool, master_key) })
+  }
+}
+
 /// 管理 UI の仕様。`ADMIN_PORT` が空なら黙って無効にし、値が不正なときは理由を
 /// 報告してから無効にする。
-fn admin_spec(
-  loaded: Config,
-  accounts: List(dashboard.AccountRow),
-) -> #(Option(app.Admin), List(String)) {
+fn admin_spec(loaded: Config) -> #(Option(app.Admin), List(String)) {
   case loaded.admin_port {
     config.Disabled -> #(None, [
       log.line(admin.log_prefix, "ADMIN_PORT is empty; admin UI disabled"),
@@ -253,12 +242,7 @@ fn admin_spec(
     config.Listen(port) -> {
       let #(password, notes) = admin_password(loaded)
       #(
-        Some(app.Admin(
-          bind: loaded.admin_bind,
-          port: port,
-          password: password,
-          accounts: accounts,
-        )),
+        Some(app.Admin(bind: loaded.admin_bind, port: port, password: password)),
         notes,
       )
     }
@@ -270,7 +254,7 @@ fn admin_password(loaded: Config) -> #(String, List(String)) {
   case loaded.admin_password {
     Some(password) -> #(password, [])
     None -> {
-      let generated = random.hex(random_bytes)
+      let generated = random.hex(admin_password_bytes)
       #(generated, [
         log.line(
           admin.log_prefix,
@@ -278,14 +262,6 @@ fn admin_password(loaded: Config) -> #(String, List(String)) {
         ),
       ])
     }
-  }
-}
-
-/// 設定された接続シークレット。未設定ならアカウントごとに乱数で生成する。
-fn secret_for(loaded: Config) -> String {
-  case loaded.bunker_secret {
-    Some(secret) -> secret
-    None -> random.hex(random_bytes)
   }
 }
 

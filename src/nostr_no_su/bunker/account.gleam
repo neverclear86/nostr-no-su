@@ -4,7 +4,6 @@
 import gleam/bit_array
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
@@ -22,13 +21,6 @@ pub opaque type Account {
   Account(privkey: fn() -> BitArray, pubkey: BitArray, pubkey_hex: String)
 }
 
-/// 64 文字の 16 進秘密鍵からアカウントを構築する。
-pub fn from_hex(raw: String) -> Result(Account, String) {
-  hex.decode(string.trim(raw))
-  |> result.replace_error("invalid hex private key")
-  |> result.try(from_privkey)
-}
-
 /// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
 pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
   case bit_array.byte_size(privkey) {
@@ -44,11 +36,6 @@ pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
       }
     _ -> Error("private key must be 32 bytes")
   }
-}
-
-/// 16 進秘密鍵ごとにアカウントを構築し、最初の不正な鍵で失敗する。
-pub fn load_all(raw_keys: List(String)) -> Result(List(Account), String) {
-  list.try_map(raw_keys, from_hex)
 }
 
 /// 署名と会話鍵の導出に使う 32 バイトの秘密鍵。

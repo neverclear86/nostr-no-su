@@ -1,6 +1,7 @@
 import envoy
 import gleam/dict
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
+import gleam/string
 import nostr_no_su/config
 import nostr_no_su/nostr/filter.{Filter}
 
@@ -78,15 +79,79 @@ fn config_without(name: String) -> config.Config {
   config.load()
 }
 
-/// 空文字列の環境変数は未設定として扱う。docker compose は未設定の変数を空文字列
-/// として渡すため、値のある変数と区別できなければならない。
-pub fn empty_environment_variables_are_unset_test() {
-  // `BUNKER_SECRET=` は未設定として扱う。空文字列をシークレットとして
-  // 受け付けると、secret 無しで接続したクライアントが素通りしてしまう。
-  assert config_with([#("BUNKER_SECRET", "")]).bunker_secret == None
-  assert config_with([#("BUNKER_SECRET", "s3cret")]).bunker_secret
-    == Some("s3cret")
-  assert config_without("BUNKER_SECRET").bunker_secret == None
+/// 環境変数を値があれば設定し、`None` なら未設定にして `run` を実行する。
+fn with_optional_env(name: String, value: Option(String), run: fn() -> a) -> a {
+  case value {
+    Some(value) -> with_env(name, value, run)
+    None -> without_env(name, run)
+  }
+}
+
+/// テスト用のマスターキー（16 進）。
+const master_key_hex = "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
+
+/// テスト用の `DATABASE_URL`。パスワードに目印を入れ、理由の文字列に URL が
+/// 混ざらないことを確かめられるようにする。
+const database_url = "postgres://nostr:pw-marker@db.test:5432/nostr_no_su"
+
+/// 指定した `DATABASE_URL` と `ACCOUNT_MASTER_KEY` で読み込んだストアの設定。
+/// `None` の変数は未設定にする。
+fn account_store_for(
+  url: Option(String),
+  master_key: Option(String),
+) -> config.AccountStore {
+  use <- with_optional_env("DATABASE_URL", url)
+  use <- with_optional_env("ACCOUNT_MASTER_KEY", master_key)
+  config.load().account_store
+}
+
+/// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃えばストアが有効になる。マスター
+/// キーは `==` で比べられないので、パターンで取り出して URL だけを比べる。
+pub fn account_store_is_configured_with_both_variables_test() {
+  let assert config.AccountStore(database_url: url, ..) =
+    account_store_for(Some(database_url), Some(master_key_hex))
+  assert url == database_url
+}
+
+/// どちらかが無ければ、何が足りないかを入力値を含めずに報告する。
+pub fn account_store_reports_missing_variables_test() {
+  assert account_store_for(None, None)
+    == config.AccountStoreUnavailable(
+      "DATABASE_URL and ACCOUNT_MASTER_KEY are not set",
+    )
+  assert account_store_for(None, Some(master_key_hex))
+    == config.AccountStoreUnavailable("DATABASE_URL is not set")
+  assert account_store_for(Some(database_url), None)
+    == config.AccountStoreUnavailable(
+      "ACCOUNT_MASTER_KEY is not set (generate one with: openssl rand -hex 32)",
+    )
+}
+
+/// 空文字列は未設定として扱う。docker compose は未設定の変数を空文字列として
+/// 渡すため。
+pub fn empty_account_store_variables_are_unset_test() {
+  assert account_store_for(Some(""), Some(""))
+    == config.AccountStoreUnavailable(
+      "DATABASE_URL and ACCOUNT_MASTER_KEY are not set",
+    )
+}
+
+/// 不正なマスターキーは理由付きで無効にし、理由にマスターキーも URL も含めない。
+pub fn an_invalid_master_key_disables_the_store_test() {
+  let assert config.AccountStoreUnavailable(reason) =
+    account_store_for(Some(database_url), Some("zz-key-marker"))
+  assert reason == "ACCOUNT_MASTER_KEY must be 64 hex characters (32 bytes)"
+  assert !string.contains(reason, "key-marker")
+  assert !string.contains(reason, "pw-marker")
+}
+
+/// 廃止した `ACCOUNT_KEYS` と `BUNKER_SECRET` は、設定されていれば名前だけが
+/// 報告される。空文字列は未設定として扱う。
+pub fn deprecated_variables_are_reported_by_name_test() {
+  assert config_with([#("ACCOUNT_KEYS", "x"), #("BUNKER_SECRET", "y")]).deprecated_variables
+    == ["ACCOUNT_KEYS", "BUNKER_SECRET"]
+  assert config_with([#("ACCOUNT_KEYS", ""), #("BUNKER_SECRET", "")]).deprecated_variables
+    == []
 }
 
 /// `PLUGIN_DIR` は未設定・空文字列なら None（外部プラグインの読み込みを無効に
@@ -192,8 +257,8 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     relay_urls: ["wss://example.com"],
     bunker_relay_urls: ["wss://example.com"],
     pubkeys: pubkeys,
-    account_keys: [],
-    bunker_secret: None,
+    account_store: config.AccountStoreUnavailable("DATABASE_URL is not set"),
+    deprecated_variables: [],
     plugin_dir: None,
     plugin_env: dict.new(),
     admin_port: config.Disabled,
@@ -213,6 +278,13 @@ pub fn to_filter_without_pubkeys_test() {
 pub fn to_filter_with_pubkeys_test() {
   assert config.to_filter(test_config(["a"]))
     == Filter(..filter.new(), authors: Some(["a"]))
+}
+
+/// 署名者がいれば `#p` に入れて購読し、いなければ購読そのものを開かない。
+pub fn bunker_subscriptions_test() {
+  assert config.bunker_subscriptions([], 1000) == []
+  assert config.bunker_subscriptions(["pk1"], 1000)
+    == [#("bunker", config.bunker_filter(["pk1"], 1000))]
 }
 
 /// バンカーのフィルターは、署名者宛の直近の kind 24133 イベントを選択する。

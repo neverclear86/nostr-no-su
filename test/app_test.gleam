@@ -3,25 +3,33 @@ import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
+import gleam/otp/actor
 import gleam/otp/system
 import gleam/string
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
+import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/nostr/filter.{type Filter}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/time
+import pog
 import support/nip46_client.{account_for}
 
 const secret = "s3cr3t-token"
 
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
+
+/// ストアの最新の内容が変わったことを表す、2 人目の署名者の鍵。
+const other_signer_key = "0000000000000000000000000000000000000000000000000000000000000077"
 
 const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
 
@@ -43,11 +51,31 @@ type Report {
   Published(socket: Pid, event: Event)
 }
 
+/// 偽ソケットのプロセスが評価した購読の報告。`Report` とは別の subject へ送る。
+/// ソケットのプロセスと接続アクターは別々に送るので、同じ subject に混ぜると届く
+/// 順序が決まらず、`reports` を直接受信する既存のテストが不安定になる。
+type Subscribed {
+  Subscribed(relay_url: String, subscriptions: List(#(String, Filter)))
+}
+
 /// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
-/// ツリーへ渡し、送信されたイベントをテストへ転送する。
-fn fake_open(reports: Subject(Report)) -> app.Open {
-  fn(relay_url, _subscriptions, handle_event) {
-    let socket = process.spawn(fn() { process.sleep_forever() })
+/// ツリーへ渡し、送信されたイベントをテストへ転送する。`subscribed` があれば、
+/// 本番の `relay_client` と同じく接続アクターとは別のプロセス（ソケット）の中で
+/// 購読を評価して報告する。
+fn fake_open(
+  reports: Subject(Report),
+  subscribed: Option(Subject(Subscribed)),
+) -> app.Open {
+  fn(relay_url, subscriptions, handle_event) {
+    let socket =
+      process.spawn(fn() {
+        case subscribed {
+          Some(target) ->
+            process.send(target, Subscribed(relay_url, subscriptions()))
+          None -> Nil
+        }
+        process.sleep_forever()
+      })
     process.send(
       reports,
       Opened(relay_url, process.self(), socket, handle_event),
@@ -90,26 +118,72 @@ fn await_disconnect(name: Name(relay_connection.Msg), timeout_ms: Int) -> Bool {
   }
 }
 
-/// 偽リレー 1 本の上でバンカーだけを動かすツリー。
+/// 偽リレー 1 本の上でバンカーだけを動かすツリー。アカウントの読み込みは
+/// 署名者 1 件ですぐに成功する。
 fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
+  start_loading_bunker_tree(
+    reports,
+    None,
+    name,
+    fn() { load_signer(signer_key) },
+    default_retry_delay_ms,
+  )
+}
+
+/// 偽リレー 1 本の上で、指定した読み込み関数を持つバンカーだけを動かすツリー。
+fn start_loading_bunker_tree(
+  reports: Subject(Report),
+  subscribed: Option(Subject(Subscribed)),
+  name: Name(bunker.Msg),
+  load: fn() -> Result(vault.Loaded, String),
+  retry_delay_ms: Int,
+) -> Pid {
   start_tree(app.Spec(
     plugins: [],
     monitor: None,
-    bunker: Some(
-      app.Bunker(
-        name: name,
-        engine: engine.new(
-          [#(account_for(signer_key), secret)],
-          Some(fn(token) { auth_base <> "/approve/" <> token }),
-        ),
-        relays: [test_relay()],
-        subscriptions: fn() { [] },
-      ),
-    ),
+    bunker: Some(bunker_spec(name, load, [test_relay()], retry_delay_ms)),
     admin: None,
-    open: fake_open(reports),
+    open: fake_open(reports, subscribed),
     reconnect_delay_ms: 100,
   ))
+}
+
+/// テストの読み込みの再試行間隔の既定値。
+const default_retry_delay_ms = 100
+
+/// バンカーサブツリーの仕様。接続プールは到達できないポートを指し、偽の `load` を
+/// 使うテストでもサブツリーの形（プール、アクター、接続の順）は本番と同じにする。
+/// 購読は本番と同じく、接続のたびに現在の署名者から組み立てる。
+fn bunker_spec(
+  name: Name(bunker.Msg),
+  load: fn() -> Result(vault.Loaded, String),
+  relays: List(app.Relay),
+  retry_delay_ms: Int,
+) -> app.Bunker {
+  app.Bunker(
+    name: name,
+    pool: pog.default_config(process.new_name("test_account_pool"))
+      |> pog.port(1),
+    settings: bunker.Settings(
+      load: load,
+      auth_url: Some(fn(token) { auth_base <> "/approve/" <> token }),
+      retry_delay_ms: retry_delay_ms,
+    ),
+    relays: relays,
+    subscriptions: fn() { config.bunker_subscriptions(bunker.signers(name), 0) },
+  )
+}
+
+/// 指定した秘密鍵の署名者 1 件を、テストの secret 付きで読み込んだ結果。
+fn load_signer(key_hex: String) -> Result(vault.Loaded, String) {
+  Ok(
+    Loaded(
+      accounts: [
+        StoredAccount(account: account_for(key_hex), secret: secret, label: ""),
+      ],
+      skipped: [],
+    ),
+  )
 }
 
 /// 受け取ったイベントをテストへ転送するプラグインの仕様。歯止めは既定のまま。
@@ -429,16 +503,14 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
     start_tree(app.Spec(
       plugins: [],
       monitor: None,
-      bunker: Some(
-        app.Bunker(
-          name: process.new_name("test_bunker"),
-          engine: engine.new([#(account_for(signer_key), secret)], None),
-          relays: [relay_a, relay_b],
-          subscriptions: fn() { [] },
-        ),
-      ),
+      bunker: Some(bunker_spec(
+        process.new_name("test_bunker"),
+        fn() { load_signer(signer_key) },
+        [relay_a, relay_b],
+        default_retry_delay_ms,
+      )),
       admin: None,
-      open: fake_open(reports),
+      open: fake_open(reports, None),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay_ms: 60_000,
     ))
@@ -489,7 +561,7 @@ fn start_monitor_tree(
     ),
     bunker: None,
     admin: None,
-    open: fake_open(reports),
+    open: fake_open(reports, None),
     reconnect_delay_ms: 100,
   ))
 }
@@ -578,7 +650,7 @@ fn start_plugins_tree(
     ),
     bunker: None,
     admin: None,
-    open: fake_open(reports),
+    open: fake_open(reports, None),
     reconnect_delay_ms: 100,
   ))
 }
@@ -997,3 +1069,267 @@ fn kill_registered(name: Atom) -> Nil
 /// テストごとに一意な整数。
 @external(erlang, "erlang", "unique_integer")
 fn unique_integer(options: List(Atom)) -> Int
+
+/// 単調増加する時計の現在値。
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time(unit: Atom) -> Int
+
+/// 単調増加する時計の現在値（ミリ秒）。
+fn monotonic_ms() -> Int {
+  monotonic_time(atom.create("millisecond"))
+}
+
+/// 呼ぶたびに 0, 1, 2, ... を返す関数。`load` はバンカーアクターの中で呼ばれ、
+/// Gleam には可変の変数が無いので、回数は別のアクターで数える。
+fn call_counter() -> fn() -> Int {
+  let assert Ok(counter) =
+    actor.new(0)
+    |> actor.on_message(fn(count, reply: Subject(Int)) {
+      process.send(reply, count)
+      actor.continue(count + 1)
+    })
+    |> actor.start
+  fn() { process.call(counter.data, 1000, fn(reply) { reply }) }
+}
+
+/// `duration_ms` の間に届いたメッセージの件数。
+fn count_within(subject: Subject(Nil), duration_ms: Int) -> Int {
+  count_until(subject, monotonic_ms() + duration_ms, 0)
+}
+
+/// 期限までに届いたメッセージを数える。
+fn count_until(subject: Subject(Nil), deadline: Int, count: Int) -> Int {
+  let remaining = deadline - monotonic_ms()
+  case remaining > 0 && process.receive(subject, remaining) == Ok(Nil) {
+    True -> count_until(subject, deadline, count + 1)
+    False -> count
+  }
+}
+
+/// すでに届いているメッセージを捨てる。
+fn drain(subject: Subject(Nil)) -> Nil {
+  case process.receive(subject, 0) {
+    Ok(Nil) -> drain(subject)
+    Error(Nil) -> Nil
+  }
+}
+
+/// バンカーが指定した署名者を持つまで待つ。
+fn await_signers(
+  name: Name(bunker.Msg),
+  expected: List(String),
+  remaining: Int,
+) -> Bool {
+  case bunker.signers(name) == expected, remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(20)
+      await_signers(name, expected, remaining - 20)
+    }
+  }
+}
+
+/// テスト用のクライアントから、指定した署名者宛に secret 付きで送る `connect`。
+fn connect_request_to(signer_key_hex: String, id: String) -> Event {
+  let signer = account_for(signer_key_hex)
+  nip46_client.request_event(
+    account_for(client_key),
+    signer,
+    nip46_client.connect_body(signer, secret, id),
+    time.now_seconds(),
+  )
+}
+
+/// 読み込みが遅くても、接続が最初に開く購読には読み込んだ署名者が入る。
+/// `LoadAccounts` を initialiser が送るので、接続が送る `GetSigners` は必ず読み込みの
+/// 後に処理される。送信を initialiser 以外へ移すと、最初の購読が空になって落ちる。
+pub fn the_first_subscription_includes_the_loaded_signers_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      Some(subscribed),
+      process.new_name("test_bunker"),
+      fn() {
+        process.sleep(300)
+        load_signer(signer_key)
+      },
+      default_retry_delay_ms,
+    )
+  let assert Ok(Subscribed(_relay_url, [#(_id, filter)])) =
+    process.receive(subscribed, 3000)
+  assert filter.p_tags == Some([account.pubkey_hex(account_for(signer_key))])
+  stop_tree(tree)
+}
+
+/// ストアに到達できない間はリクエストに応答せず、読み込みが成功した後に応答する。
+/// 起動時に開いた購読は空のままで、次の再接続で署名者が入る（#39 で購読の
+/// 張り直しを入れるまでの制約）。
+pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_call = call_counter()
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      Some(subscribed),
+      name,
+      fn() {
+        case next_call() < 2 {
+          True -> Error("database is unreachable or timed out")
+          False -> load_signer(signer_key)
+        }
+      },
+      // 失敗の間にリクエストを確実に届けられるよう、再試行を遅めにする。
+      500,
+    )
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Subscribed(_relay_url, [])) = process.receive(subscribed, 2000)
+  deliver(connect_request("c1", secret))
+  assert process.receive(reports, 200) == Error(Nil)
+
+  assert await_signers(name, [signer], 3000)
+  deliver(connect_request("c2", secret))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+
+  process.kill(socket)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  let assert Ok(Subscribed(_relay_url, [#(_id, filter)])) =
+    process.receive(subscribed, 2000)
+  assert filter.p_tags == Some([signer])
+  stop_tree(tree)
+}
+
+/// 読み込みに失敗し続けるバンカーを kill しても、再試行の系列は増えない。再試行を
+/// 名前付き subject へ予約すると、古いタイマーが再起動後のアクターに届いて系列が
+/// 再起動のたびに 1 本ずつ増え、再起動後の回数が約 2 倍になる。
+pub fn retries_do_not_multiply_across_restarts_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      fn() {
+        process.send(calls, Nil)
+        Error("database is unreachable or timed out")
+      },
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  let before = count_within(calls, 1000)
+  assert before >= 5
+
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  drain(calls)
+  let after = count_within(calls, 1000)
+  assert after * 2 <= before * 3
+  stop_tree(tree)
+}
+
+/// 再起動したバンカーは、起動時の仕様ではなくストアの最新からアカウントを読み直す。
+pub fn a_restarted_bunker_reloads_the_accounts_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_call = call_counter()
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      fn() {
+        case next_call() {
+          0 -> load_signer(signer_key)
+          _ -> load_signer(other_signer_key)
+        }
+      },
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert bunker.signers(name) == [account.pubkey_hex(account_for(signer_key))]
+
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  assert bunker.signers(name)
+    == [account.pubkey_hex(account_for(other_signer_key))]
+  deliver(connect_request_to(other_signer_key, "c1"))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let body =
+    nip46_client.decrypt_response(
+      account_for(client_key),
+      account_for(other_signer_key),
+      ack,
+    )
+  assert string.contains(body, "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
+/// ストアの読み込みに失敗し続けても、監視のプラグインにはイベントが届き続け、
+/// バンカーもルートも再起動しない。読み込みでアクターのループが止まっていても、
+/// 問い合わせは `named.call` のタイムアウトより前に応答する。
+pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let monitor_relay = test_relay()
+  let tree =
+    start_tree(app.Spec(
+      plugins: [
+        forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+      ],
+      monitor: Some(
+        app.Monitor(
+          name: process.new_name("test_dedup"),
+          dedup_capacity: 8,
+          relays: [monitor_relay],
+          subscriptions: fn() { [] },
+        ),
+      ),
+      bunker: Some(bunker_spec(
+        bunker_name,
+        fn() {
+          // 到達できない DB に対するチェックアウト待ちを模す。
+          process.sleep(1500)
+          Error("database is unreachable or timed out")
+        },
+        [named_relay("ws://bunker.test")],
+        default_retry_delay_ms,
+      )),
+      admin: None,
+      open: fake_open(reports, None),
+      reconnect_delay_ms: 100,
+    ))
+  let assert Opened(first_url, _connection_1, _socket_1, deliver_1) =
+    await_connection(reports)
+  let assert Opened(_second_url, _connection_2, _socket_2, deliver_2) =
+    await_connection(reports)
+  let deliver = case first_url == monitor_relay.url {
+    True -> deliver_1
+    False -> deliver_2
+  }
+  let assert Ok(bunker_before) = process.named(bunker_name)
+
+  deliver_and_expect(deliver, seen, event_ids("while-failing", 3), 2000)
+  let asked_at = monotonic_ms()
+  assert bunker.sessions(bunker_name) == []
+  assert monotonic_ms() - asked_at < 5000
+  assert process.named(bunker_name) == Ok(bunker_before)
+  assert process.is_alive(tree)
+  stop_tree(tree)
+}

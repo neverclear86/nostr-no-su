@@ -23,8 +23,10 @@
     describe_term/1
 ]).
 
-%% ssl アプリケーションは `gleam run` や erlang-shipment のエントリポイントでは
-%% 自動起動されないが、stratus は wss:// 接続にこれを必要とする。
+%% stratus は wss:// 接続に ssl アプリケーションを必要とする。本体の依存
+%% アプリケーション（pog）から推移的に起動されうるが、それに任せると依存の変化で
+%% 症状の遠い wss:// の接続失敗として壊れるので、stratus が必要とする前提をここで
+%% 明示する。冪等なので二重に起動されても害は無い。
 ensure_ssl_started() ->
     {ok, _} = application:ensure_all_started(ssl),
     nil.

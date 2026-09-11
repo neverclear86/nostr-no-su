@@ -34,38 +34,6 @@ pub fn bunker_uri_without_a_secret_test() {
     <> "?relay=wss%3A%2F%2Frelay.one"
 }
 
-/// 16 進として読めない鍵は理由付きで拒否する。
-pub fn from_hex_rejects_non_hex_test() {
-  let assert Error(reason) = account.from_hex("zz")
-  assert reason == "invalid hex private key"
-}
-
-/// 32 バイトでない鍵は理由付きで拒否する。
-pub fn from_hex_rejects_wrong_length_test() {
-  let assert Error(reason) = account.from_hex("00112233")
-  assert reason == "private key must be 32 bytes"
-}
-
-/// 範囲外のスカラー（0 と位数 n）は公開鍵を導けないため拒否する。
-pub fn from_hex_rejects_out_of_range_test() {
-  let assert Error(reason) =
-    account.from_hex(
-      "0000000000000000000000000000000000000000000000000000000000000000",
-    )
-  assert reason == "private key not in valid range"
-  let assert Error(_) =
-    account.from_hex(
-      "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
-    )
-}
-
-/// 前後の空白は取り除いてから読む。カンマ区切りの設定をそのまま渡せる。
-pub fn from_hex_trims_whitespace_test() {
-  let assert Ok(signer) = account.from_hex("  " <> key <> "\t")
-  let assert Ok(same) = account.from_hex(key)
-  assert account.pubkey_hex(signer) == account.pubkey_hex(same)
-}
-
 /// BIP-340 の公式ベクター 0 の秘密鍵から、同じベクターの公開鍵を導く。閉じ込めた
 /// 秘密鍵はアクセサーでそのまま取り出せる。
 pub fn from_privkey_bip340_vector0_test() {
@@ -110,15 +78,4 @@ pub fn from_privkey_rejects_out_of_range_nsec_test() {
   let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
   assert account.from_privkey(privkey)
     == Error("private key not in valid range")
-}
-
-/// 鍵をすべて読み込む。1 つでも不正なら、そこで失敗して理由を返す。
-pub fn load_all_fails_on_the_first_invalid_key_test() {
-  let assert Ok(accounts) = account.load_all([key, key])
-  assert list.length(accounts) == 2
-
-  let assert Error(reason) = account.load_all([key, "not-hex"])
-  assert reason == "invalid hex private key"
-
-  assert account.load_all([]) == Ok([])
 }

@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 import nostr_no_su/plugin_config
@@ -18,6 +19,9 @@ const default_admin_port = 8080
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
 const default_admin_bind = "127.0.0.1"
 
+/// 廃止した環境変数。設定されていれば、値を読まずに名前だけを報告する。
+const deprecated_variable_names = ["ACCOUNT_KEYS", "BUNKER_SECRET"]
+
 /// `ADMIN_PORT` の解釈結果。無効化には「明示的に空にした」と「値が不正だった」の
 /// 2 通りがあり、後者だけ起動時に理由を報告する。
 pub type AdminPort {
@@ -29,14 +33,28 @@ pub type AdminPort {
   Invalid(reason: String)
 }
 
-/// 環境変数から読み込んだ設定の全体。
+/// バンカーのアカウントストアの設定。揃っていなければバンカーを無効にする。
+///
+/// マスターキーは読み込みの時点で `MasterKey`（関数に閉じた値）にし、生の 16 進
+/// 文字列を持たない。`MasterKey` を含むので `==` では比べられない。
+/// `database_url` はパスワードを含みうるので、表示やログに入れないこと。
+pub type AccountStore {
+  /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃っている。
+  AccountStore(database_url: String, master_key: vault.MasterKey)
+  /// どちらかが未設定か不正。理由は値を含まない。
+  AccountStoreUnavailable(reason: String)
+}
+
+/// 環境変数から読み込んだ設定の全体。秘密（マスターキー、`DATABASE_URL` の
+/// パスワード）を含むので、表示やログに入れないこと。
 pub type Config {
   Config(
     relay_urls: List(String),
     bunker_relay_urls: List(String),
     pubkeys: List(String),
-    account_keys: List(String),
-    bunker_secret: Option(String),
+    account_store: AccountStore,
+    /// 設定されていた廃止済みの環境変数の名前。値は持たない。
+    deprecated_variables: List(String),
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
     /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
@@ -62,10 +80,10 @@ pub fn load() -> Config {
       relay_urls,
     ),
     pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
-    account_keys: envoy.get("ACCOUNT_KEYS")
-      |> result.unwrap("")
-      |> parse_list,
-    bunker_secret: optional("BUNKER_SECRET"),
+    account_store: account_store(),
+    deprecated_variables: list.filter(deprecated_variable_names, fn(name) {
+      option.is_some(optional(name))
+    }),
     plugin_dir: optional("PLUGIN_DIR"),
     plugin_env: plugin_env(),
     admin_port: admin_port(),
@@ -106,6 +124,26 @@ fn optional(name: String) -> Option(String) {
   case envoy.get(name) {
     Ok("") | Error(Nil) -> None
     Ok(value) -> Some(value)
+  }
+}
+
+/// バンカーのアカウントストアの設定。理由の文字列は固定の文言にし、入力値を
+/// 含めない。`DATABASE_URL` の URL としての妥当性は、プール名が要るため起動処理
+/// （`account_store.pool_config`）で検査する。マスターキーは自動生成しない。
+fn account_store() -> AccountStore {
+  case optional("DATABASE_URL"), optional("ACCOUNT_MASTER_KEY") {
+    None, None ->
+      AccountStoreUnavailable("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
+    None, Some(_) -> AccountStoreUnavailable("DATABASE_URL is not set")
+    Some(_), None ->
+      AccountStoreUnavailable(
+        "ACCOUNT_MASTER_KEY is not set (generate one with: openssl rand -hex 32)",
+      )
+    Some(database_url), Some(raw_master_key) ->
+      case vault.master_key_from_hex(raw_master_key) {
+        Ok(master_key) -> AccountStore(database_url:, master_key:)
+        Error(reason) -> AccountStoreUnavailable(reason)
+      }
   }
 }
 
@@ -157,10 +195,10 @@ pub fn pick_bunker_relays(
   }
 }
 
-/// カンマ区切りのリスト（pubkey、鍵、リレー URL）をパースする。前後の空白は
-/// 無視し、空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度
-/// 書くと接続が 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、
-/// 重複はここで落とす。
+/// カンマ区切りのリスト（pubkey、リレー URL）をパースする。前後の空白は無視し、
+/// 空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度書くと接続が
+/// 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、重複はここで
+/// 落とす。
 pub fn parse_list(raw: String) -> List(String) {
   raw
   |> string.split(",")
@@ -175,6 +213,18 @@ pub fn to_filter(config: Config) -> Filter {
   case config.pubkeys {
     [] -> Filter(..filter.new(), limit: Some(20))
     pubkeys -> Filter(..filter.new(), authors: Some(pubkeys))
+  }
+}
+
+/// 署名者宛の NIP-46 リクエストの購読。署名者がいなければ購読を開かない。空の
+/// `#p` の扱いはリレーによって異なるため、REQ 自体を送らない。
+pub fn bunker_subscriptions(
+  signer_pubkeys: List(String),
+  since: Int,
+) -> List(#(String, Filter)) {
+  case signer_pubkeys {
+    [] -> []
+    signer_pubkeys -> [#("bunker", bunker_filter(signer_pubkeys, since))]
   }
 }
 
