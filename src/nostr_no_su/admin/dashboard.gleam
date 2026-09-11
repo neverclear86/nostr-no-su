@@ -265,10 +265,12 @@ pub fn new_account_page(error: Option(String)) -> String {
 }
 
 /// 生成した鍵の確認ページ。生成した nsec を表示する唯一のページで、ここではまだ
-/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。
-pub fn generated_key_page(nsec: String) -> String {
+/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`error` は、生成した鍵の
+/// 登録でラベルが規則に反したときに再描画する理由。
+pub fn generated_key_page(nsec: String, error: Option(String)) -> String {
   page("Generated key", [
     "<h2>Generated key</h2>",
+    error_message(error),
     "<p><strong>Back up this private key now.</strong> The account is not "
       <> "registered until you press \"Register this key\". After "
       <> "registration, the key is shown only when you re-enter the admin "

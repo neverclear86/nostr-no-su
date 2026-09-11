@@ -800,6 +800,56 @@ pub fn register_generated_shares_the_failure_paths_test() {
   })
 }
 
+/// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた
+/// nsec の確認ページを理由付きで 400 で返す。登録はしない。
+pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
+  let reports = process.new_subject()
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let response =
+    post_form(reporting_context(reports), "/accounts/register-generated", [
+      #("nsec", generated),
+      #("label", "a\tb"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert hidden_nsec(body) == generated
+  assert string.contains(body, "action=\"/accounts/register-generated\"")
+  assert string.contains(
+    body,
+    "<p role=\"alert\">label must not contain control characters</p>",
+  )
+  assert !string.contains(body, "a\tb")
+  assert header(response, "cache-control") == "no-store"
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 生成した鍵の登録で nsec が不正なら、ラベルの不正を問わず登録画面を 400 で返す。
+pub fn register_generated_with_an_invalid_nsec_returns_to_the_registration_page_test() {
+  let response =
+    post_form(context(), "/accounts/register-generated", [
+      #("nsec", "nsec1invalid"),
+      #("label", "a\tb"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, "action=\"/accounts/import\"")
+  assert !string.contains(body, "action=\"/accounts/register-generated\"")
+}
+
+/// nsec 入力による登録でラベルが規則に反すると、登録画面を返し、nsec を出さない。
+pub fn import_with_an_invalid_label_does_not_echo_the_nsec_test() {
+  let response =
+    post_form(context(), "/accounts/import", [
+      #("nsec", spec_nsec),
+      #("label", "a\tb"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, "action=\"/accounts/import\"")
+  assert !string.contains(body, spec_nsec)
+}
+
 /// 登録の POST のルートは GET を受け付けない。
 pub fn registration_routes_reject_other_methods_test() {
   let paths = [
@@ -1019,6 +1069,25 @@ pub fn account_change_failures_map_to_status_codes_test() {
   assert string.contains(body, "href=\"/\"")
 }
 
+/// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 で、
+/// Context の変更を呼ばない。反映済みの削除を再送した場合もこの経路になる。
+pub fn changes_to_an_unlisted_signer_are_not_found_test() {
+  let reports = process.new_subject()
+  let emptied =
+    admin.Context(..reporting_context(reports), accounts: fn() { Ok([]) })
+  let changes = [
+    #(dashboard.DeleteAccount, []),
+    #(dashboard.RotateSecret, []),
+    #(dashboard.EditLabel, [#("label", "new")]),
+  ]
+  list.each(changes, fn(entry) {
+    let #(action, fields) = entry
+    let response = post_form(emptied, action_path(action), fields)
+    assert #(action, response.status) == #(action, 404)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
 /// 知らない操作のセグメントは 404。
 pub fn unknown_account_action_is_not_found_test() {
   assert get(context(), "/accounts/" <> signer <> "/nope").status == 404
@@ -1105,6 +1174,11 @@ pub fn authenticated_responses_are_not_stored_test() {
       spec,
     ),
     post_form(context, "/accounts/register-generated", spec),
+    get(context, "/accounts/generate"),
+    post_form(context, "/accounts/register-generated", [
+      #("nsec", spec_nsec),
+      #("label", "a\tb"),
+    ]),
     ..list.append(
       list.map(all_actions(), fn(action) { get(context, action_path(action)) }),
       [
@@ -1124,8 +1198,8 @@ pub fn authenticated_responses_are_not_stored_test() {
   ]
   assert list.map(responses, fn(response) { response.status })
     == [
-      200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 200, 200, 200, 200, 200,
-      403, 503, 303, 404,
+      200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200, 200, 200,
+      200, 200, 403, 503, 303, 404,
     ]
   list.each(responses, fn(response) {
     assert header(response, "cache-control") == "no-store"

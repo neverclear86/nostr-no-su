@@ -272,61 +272,68 @@ fn generate_account(request: Request) -> Response {
   use <- wisp.require_method(request, http.Post)
   account.generate(crypto.strong_random_bytes)
   |> account.nsec
-  |> dashboard.generated_key_page
+  |> dashboard.generated_key_page(None)
   |> wisp.html_response(200)
 }
 
 /// nsec 入力によるアカウントの登録。完了ページで nsec を 1 回だけ表示する。
 fn import_account(context: Context, request: Request) -> Response {
-  use account, label <- register(context, request)
+  let reject_label = fn(_account, reason) {
+    dashboard.new_account_page(Some(reason))
+  }
+  use account, label <- register(context, request, reject_label)
   dashboard.registered_page(account.npub(account), label, account.nsec(account))
   |> wisp.html_response(200)
 }
 
 /// 生成の確認ページから送られた鍵の登録。nsec は確認ページで表示済みなので描画せず、
-/// ダッシュボードへ 303 で戻す。
+/// ダッシュボードへ 303 で戻す。ラベルだけが規則に反するときは、生成した鍵を失わない
+/// よう、送られた nsec の確認ページを理由付きで返す（この POST の応答の本文だけに出る）。
 fn register_generated_account(context: Context, request: Request) -> Response {
-  use _account, _label <- register(context, request)
+  let reject_label = fn(generated, reason) {
+    dashboard.generated_key_page(account.nsec(generated), Some(reason))
+  }
+  use _account, _label <- register(context, request, reject_label)
   wisp.redirect(to: "/")
 }
 
-/// 登録の 2 つのルートが共有する検査と失敗の経路。入力が不正なら 400 で登録画面を
-/// 返し、バンカーの失敗は `change_failure_response` に渡す。登録できたときだけ
-/// `on_success` を呼ぶので、反映されたか分からないときに nsec を描画する経路は無い。
+/// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 で登録画面を
+/// 返し、ラベルだけが不正なら 400 で `reject_label` が描画するページを返す。バンカーの
+/// 失敗は `change_failure_response` に渡す。登録できたときだけ `on_success` を呼ぶので、
+/// 反映されたか分からないときに nsec を描画する経路は無い。
 fn register(
   context: Context,
   request: Request,
+  reject_label: fn(Account, String) -> String,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
   use form <- wisp.require_form(request)
-  case parse_registration(form) {
+  case parse_private_key(form) {
     Error(reason) ->
       dashboard.new_account_page(Some(reason)) |> wisp.html_response(400)
-    Ok(#(account, label)) ->
-      case context.add_account(account, label) {
-        Ok(Nil) -> on_success(account, label)
-        Error(failure) ->
-          change_failure_response(failure, fn(reason) {
-            dashboard.new_account_page(Some(reason))
-          })
+    Ok(account) ->
+      case parse_label(form_value(form, dashboard.label_field)) {
+        Error(reason) ->
+          reject_label(account, reason) |> wisp.html_response(400)
+        Ok(label) ->
+          case context.add_account(account, label) {
+            Ok(Nil) -> on_success(account, label)
+            Error(failure) ->
+              change_failure_response(failure, fn(reason) {
+                dashboard.new_account_page(Some(reason))
+              })
+          }
       }
   }
 }
 
-/// フォームの nsec とラベルを検査し、登録するアカウントとラベルにする。理由は入力を
-/// 含まない固定の文言。
-fn parse_registration(
-  form: wisp.FormData,
-) -> Result(#(Account, String), String) {
-  use privkey <- result.try(
-    form_value(form, dashboard.nsec_field)
-    |> nip19.decode(nip19.Nsec)
-    |> result.map_error(nip19.describe),
-  )
-  use account <- result.try(account.from_privkey(privkey))
-  use label <- result.map(parse_label(form_value(form, dashboard.label_field)))
-  #(account, label)
+/// フォームの nsec を検査し、登録するアカウントにする。理由は入力を含まない固定の文言。
+fn parse_private_key(form: wisp.FormData) -> Result(Account, String) {
+  form_value(form, dashboard.nsec_field)
+  |> nip19.decode(nip19.Nsec)
+  |> result.map_error(nip19.describe)
+  |> result.try(account.from_privkey)
 }
 
 /// フォームの値。欄が無ければ空文字列として扱い、以降の検査で拒否させる。
