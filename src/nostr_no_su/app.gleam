@@ -211,10 +211,17 @@ pub fn open_websocket(
     url,
     subscriptions,
     handle_event,
+    relay_client.subscription_retry_delay_ms,
   ))
   // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)
-  Ok(Socket(pid: pid, publish: relay_client.publish(connection, _)))
+  Ok(
+    Socket(
+      pid: pid,
+      publish: relay_client.publish(connection, _),
+      resubscribe: fn() { relay_client.resubscribe(connection) },
+    ),
+  )
 }
 
 /// アプリのその部分が設定されている場合にルートの子を追加する。

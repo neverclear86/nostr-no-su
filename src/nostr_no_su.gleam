@@ -137,7 +137,9 @@ fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
           name: process.new_name("nostr_no_su_dedup"),
           dedup_capacity: dedup_capacity,
           relays: relays(relay_urls),
-          subscriptions: fn() { [#("nostr-no-su", config.to_filter(loaded))] },
+          subscriptions: fn() {
+            Ok([#("nostr-no-su", config.to_filter(loaded))])
+          },
         ),
       ),
       [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
@@ -195,10 +197,10 @@ fn bunker_spec(loaded: Config) -> #(Option(app.Bunker), List(String)) {
             ),
             relays: relays(loaded.bunker_relay_urls),
             subscriptions: fn() {
-              config.bunker_subscriptions(
+              Ok(config.bunker_subscriptions(
                 bunker.signers(name),
                 time.now_seconds() - bunker_since_lookback_seconds,
-              )
+              ))
             },
           ),
         ),

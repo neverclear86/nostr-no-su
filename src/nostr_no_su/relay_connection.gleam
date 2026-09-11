@@ -23,9 +23,9 @@ pub const default_reconnect_delay_ms = 5000
 const status_timeout_ms = 5000
 
 /// 生きている接続。切断検知のために監視するプロセスと、そこからイベントを
-/// 送信する手段を持つ。
+/// 送信する手段と、購読を現在の定義へ合わせ直させる手段を持つ。
 pub type Socket {
-  Socket(pid: Pid, publish: fn(Event) -> Nil)
+  Socket(pid: Pid, publish: fn(Event) -> Nil, resubscribe: fn() -> Nil)
 }
 
 /// ソケットの開き方。再接続ロジックを WebSocket なしでテストできるよう注入する。
@@ -63,6 +63,9 @@ pub type Msg {
   Exited(exit: ExitMessage)
   /// 現在の接続状態を問い合わせる。管理 UI が使う。
   GetStatus(reply: Subject(Status))
+  /// 生きたソケットに購読を合わせ直させる。接続していなければ何もしない
+  /// （次の接続が購読を評価し直すため）。
+  Resubscribe
 }
 
 /// 接続アクターに現在の状態を問い合わせる。名前を保持するプロセスがない
@@ -72,6 +75,14 @@ pub fn status(name: Name(Msg)) -> Status {
   |> option.unwrap(Disconnected)
 }
 
+/// 接続アクターに購読の張り直しを依頼する。名前を保持するプロセスがなければ
+/// 何もしない。依頼は接続アクターのメールボックスを通るので、接続の途中に届いた
+/// 依頼は新しいソケットを保持した後に転送され、再接続を待っている間の依頼は次の
+/// 接続が購読を評価し直すことで満たされる。
+pub fn resubscribe(name: Name(Msg)) -> Nil {
+  named.send(name, Resubscribe)
+}
+
 /// 接続アクターが保持する状態。生きたソケットを持つかどうかが、外から見た
 /// 接続状態そのものになる。
 type State {
@@ -79,7 +90,7 @@ type State {
     settings: Settings,
     parent: Pid,
     self: Subject(Msg),
-    socket: Option(Pid),
+    socket: Option(Socket),
   )
 }
 
@@ -126,7 +137,8 @@ fn initialise(
   |> Ok
 }
 
-/// ソケットを開くか、状態を報告するか、リンクしたプロセスの死に対応する。
+/// ソケットを開くか、状態を報告するか、購読の張り直しを転送するか、リンクした
+/// プロセスの死に対応する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Connect -> open(state)
@@ -134,8 +146,15 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, current_status(state))
       actor.continue(state)
     }
+    Resubscribe -> {
+      case state.socket {
+        Some(socket) -> socket.resubscribe()
+        None -> Nil
+      }
+      actor.continue(state)
+    }
     Exited(exit) ->
-      case exit.pid == state.parent, Some(exit.pid) == state.socket {
+      case exit.pid == state.parent, Some(exit.pid) == socket_pid(state) {
         True, _ -> shutdown(state, exit.reason)
         _, True -> reconnect(state, "disconnected")
         // どちらでもない場合。ハンドシェイクに失敗すると、ソケットにならな
@@ -149,9 +168,15 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 /// 生きたソケットを保持しているかどうか。再接続待ちの間は `Disconnected`。
 fn current_status(state: State) -> Status {
   case state.socket {
-    Some(_pid) -> Connected
+    Some(_socket) -> Connected
     None -> Disconnected
   }
+}
+
+/// 保持しているソケットのプロセス。`Socket` は関数を持ち `==` で比べられない
+/// ため、終了したプロセスとの照合はこの pid で行う。
+fn socket_pid(state: State) -> Option(Pid) {
+  option.map(state.socket, fn(socket) { socket.pid })
 }
 
 /// ソケットを開き、新しいソケットを `on_connect` に渡す。リレーに到達できない
@@ -160,7 +185,7 @@ fn open(state: State) -> actor.Next(State, Msg) {
   case state.settings.connect() {
     Ok(socket) -> {
       state.settings.on_connect(socket)
-      actor.continue(State(..state, socket: Some(socket.pid)))
+      actor.continue(State(..state, socket: Some(socket)))
     }
     Error(reason) -> reconnect(state, "failed to connect: " <> reason)
   }
@@ -207,8 +232,8 @@ fn shutdown(
 fn stop_socket(state: State) -> Nil {
   case state.socket {
     Some(socket) -> {
-      process.unlink(socket)
-      process.kill(socket)
+      process.unlink(socket.pid)
+      process.kill(socket.pid)
     }
     None -> Nil
   }

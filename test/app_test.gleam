@@ -16,10 +16,11 @@ import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
-import nostr_no_su/nostr/filter.{type Filter}
+import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
+import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
@@ -52,41 +53,90 @@ type Report {
   Published(socket: Pid, event: Event)
 }
 
-/// 偽ソケットのプロセスが評価した購読の報告。`Report` とは別の subject へ送る。
-/// ソケットのプロセスと接続アクターは別々に送るので、同じ subject に混ぜると届く
-/// 順序が決まらず、`reports` を直接受信する既存のテストが不安定になる。
-type Subscribed {
-  Subscribed(relay_url: String, subscriptions: List(#(String, Filter)))
+/// 偽ソケットのプロセスが行った購読の照合の報告。`Report` とは別の subject へ
+/// 送る。ソケットのプロセスと接続アクターは別々に送るので、同じ subject に混ぜると
+/// 届く順序が決まらず、`reports` を直接受信する既存のテストが不安定になる。
+type SubscriptionReport {
+  /// 照合で送るはずの REQ と CLOSE。予約した再試行のタイマーが古くて評価しな
+  /// かったときも、空の列で報告する。
+  Subscribed(relay_url: String, messages: List(message.ClientMessage))
+  /// 定義を得られず、再試行を予約した。
+  Retrying(relay_url: String)
 }
+
+/// 偽ソケットが自分宛てに予約する再試行の間隔。
+const fake_retry_delay_ms = 100
 
 /// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
 /// ツリーへ渡し、送信されたイベントをテストへ転送する。`subscribed` があれば、
-/// 本番の `relay_client` と同じく接続アクターとは別のプロセス（ソケット）の中で
-/// 購読を評価して報告する。
+/// 本番の `relay_client` と同じく接続アクターとは別のプロセス（ソケット）の中で、
+/// 接続直後と張り直しの依頼のたびに `relay_client.sync` で購読を照合して報告する。
 fn fake_open(
   reports: Subject(Report),
-  subscribed: Option(Subject(Subscribed)),
+  subscribed: Option(Subject(SubscriptionReport)),
 ) -> app.Open {
   fn(relay_url, subscriptions, handle_event) {
+    let ready = process.new_subject()
     let socket =
       process.spawn(fn() {
+        let triggers = process.new_subject()
+        process.send(ready, triggers)
         case subscribed {
-          Some(target) ->
-            process.send(target, Subscribed(relay_url, subscriptions()))
-          None -> Nil
+          Some(target) -> {
+            process.send(triggers, relay_client.Requested)
+            fake_socket_loop(
+              target,
+              relay_url,
+              subscriptions,
+              triggers,
+              relay_client.new_subscription_state(),
+            )
+          }
+          None -> process.sleep_forever()
         }
-        process.sleep_forever()
       })
+    let assert Ok(triggers) = process.receive(ready, 1000)
     process.send(
       reports,
       Opened(relay_url, process.self(), socket, handle_event),
     )
     Ok(
-      relay_connection.Socket(pid: socket, publish: fn(published) {
-        process.send(reports, Published(socket, published))
-      }),
+      relay_connection.Socket(
+        pid: socket,
+        publish: fn(published) {
+          process.send(reports, Published(socket, published))
+        },
+        resubscribe: fn() { process.send(triggers, relay_client.Requested) },
+      ),
     )
   }
+}
+
+/// 偽ソケットの照合のループ。判断は本番と同じ `relay_client.sync` が行い、ここは
+/// 結果を報告し、予約の世代を載せた再試行を自分へ送り、状態を置き換えるだけである。
+fn fake_socket_loop(
+  target: Subject(SubscriptionReport),
+  relay_url: String,
+  subscriptions: relay_client.Subscriptions,
+  triggers: Subject(relay_client.Trigger),
+  state: relay_client.SubscriptionState,
+) -> Nil {
+  let trigger = process.receive_forever(triggers)
+  let synced = relay_client.sync(state, trigger, subscriptions)
+  case synced.schedule_retry {
+    Some(generation) -> {
+      process.send(target, Retrying(relay_url))
+      let _ =
+        process.send_after(
+          triggers,
+          fake_retry_delay_ms,
+          relay_client.Retried(generation),
+        )
+      Nil
+    }
+    None -> process.send(target, Subscribed(relay_url, synced.messages))
+  }
+  fake_socket_loop(target, relay_url, subscriptions, triggers, synced.state)
 }
 
 /// ツリーを起動する。起動できなければテストを失敗させる。
@@ -134,7 +184,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
 /// 偽リレー 1 本の上で、指定した読み込み関数を持つバンカーだけを動かすツリー。
 fn start_loading_bunker_tree(
   reports: Subject(Report),
-  subscribed: Option(Subject(Subscribed)),
+  subscribed: Option(Subject(SubscriptionReport)),
   name: Name(bunker.Msg),
   load: fn() -> Result(vault.Loaded, String),
   retry_delay_ms: Int,
@@ -171,7 +221,9 @@ fn bunker_spec(
       retry_delay_ms: retry_delay_ms,
     ),
     relays: relays,
-    subscriptions: fn() { config.bunker_subscriptions(bunker.signers(name), 0) },
+    subscriptions: fn() {
+      Ok(config.bunker_subscriptions(bunker.signers(name), 0))
+    },
   )
 }
 
@@ -557,7 +609,7 @@ fn start_monitor_tree(
         name: name,
         dedup_capacity: 8,
         relays: [test_relay()],
-        subscriptions: fn() { [] },
+        subscriptions: fn() { Ok([]) },
       ),
     ),
     bunker: None,
@@ -646,7 +698,7 @@ fn start_plugins_tree(
         name: dedup_name,
         dedup_capacity: 64,
         relays: [test_relay()],
-        subscriptions: fn() { [] },
+        subscriptions: fn() { Ok([]) },
       ),
     ),
     bunker: None,
@@ -1159,7 +1211,7 @@ pub fn the_first_subscription_includes_the_loaded_signers_test() {
       },
       default_retry_delay_ms,
     )
-  let assert Ok(Subscribed(_relay_url, [#(_id, filter)])) =
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, filter)])) =
     process.receive(subscribed, 3000)
   assert filter.p_tags == Some([account.pubkey_hex(account_for(signer_key))])
   stop_tree(tree)
@@ -1202,7 +1254,7 @@ pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
   process.kill(socket)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
-  let assert Ok(Subscribed(_relay_url, [#(_id, filter)])) =
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, filter)])) =
     process.receive(subscribed, 2000)
   assert filter.p_tags == Some([signer])
   stop_tree(tree)
@@ -1299,7 +1351,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
           name: process.new_name("test_dedup"),
           dedup_capacity: 8,
           relays: [monitor_relay],
-          subscriptions: fn() { [] },
+          subscriptions: fn() { Ok([]) },
         ),
       ),
       bunker: Some(bunker_spec(
