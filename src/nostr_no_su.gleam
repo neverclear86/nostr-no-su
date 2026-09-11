@@ -223,10 +223,9 @@ fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
 /// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
 /// あるかどうかを区別する。削除は行が無いことを成功として扱う。
 ///
-/// 追加の `AlreadyRegistered` も「書き込まれていることがある」として扱う。バンカーは
-/// メモリに無い公開鍵にだけ追加を書き込むので、DB に行があるのは DB がメモリより
-/// 先行している（読み直しに見えなかった書き込みがある）ことを意味し、読み直せば
-/// 合わせられるからである。
+/// 追加の `AlreadyRegistered` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
+/// 公開鍵にだけ追加を書き込むので、DB に行があるのは、DB がメモリより先行しているか、
+/// 読み込みで飛ばされた行があることを意味し、バンカーはそれを読み直して確かめる。
 ///
 /// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
 /// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
@@ -246,7 +245,7 @@ pub fn account_store_operations(
       |> result.map_error(fn(error) {
         case error {
           account_store.AlreadyRegistered ->
-            bunker.MaybeWritten(account_store.describe(error))
+            bunker.AlreadyStored(account_store.describe(error))
           _ -> write_failure(error)
         }
       })

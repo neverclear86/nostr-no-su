@@ -37,8 +37,10 @@
 //// 結果を含めて DB と一致する。例外は、書き込みの文がサーバーに届いてテーブルのロックを
 //// 取るより先に読み直しがロックを取った場合（`account_store.load` の「残る窓」）で、その
 //// 書き込みは読み直しに見えず、メモリは次の読み込みまで DB より遅れる。この場合も、
-//// 追加はもう一度追加すれば登録済みとして読み直しが起き、secret の作り直しはもう一度
-//// 作り直せば一致する。
+//// 追加はもう一度追加すれば、ストアが登録済みを返したときに応答の前に読み直すので
+//// 一致し、secret の作り直しはもう一度作り直せば一致する。読み込みで飛ばされる行
+//// （別のマスターキーで暗号化されているなど）の公開鍵の追加は、読み直してもメモリに
+//// 入らず、登録済みとして拒否される。その行は DB から直接消す必要がある。
 ////
 //// **待ち**：書き込みと読み込みの間は NIP-46 の処理が待たされる（届いたリクエストは
 //// メールボックスに積まれて捨てられない）。書き込み 1 件は最長で約 3 秒（DB に到達
@@ -82,9 +84,13 @@ pub const default_retry_delay_ms = 5000
 const call_timeout_ms = 5000
 
 /// アカウントの変更の応答を待つ時間。書き込み 1 件がループを止めるのは最長で約
-/// 3 秒（DB に到達できないときのチェックアウトの失敗）なので、先に積まれた変更
-/// 2 件と自分の変更までを待てる。読み込みの途中に届いた変更も、読み込み 1 回の後に
-/// 拒否されるので収まる。
+/// 3 秒（DB に到達できないときのチェックアウトの失敗）で、読み込み 1 回は期限の
+/// 3 秒で打ち切られる。結果が曖昧な変更の後は読み直し（最長 3 秒）が続き、その間に
+/// 届いた変更は読み直しの後にストアを呼ばずに拒否される。登録済みの行への追加は、
+/// 書き込みの失敗の後に続けて読み直す（最長で約 3 + 3 秒）。したがって、先に積まれた
+/// 変更 1 件の書き込みと読み直し（約 6 秒）の後に自分の変更が拒否される場合も、先に
+/// 積まれた書き込み 1 件（約 3 秒）の後に自分の変更が書き込みと読み直しを行う場合
+/// （約 9 秒）も、この値に収まる。
 const change_timeout_ms = 10_000
 
 /// 初期化に許す時間。initialiser は DB に触らないので短くてよい。
@@ -112,6 +118,11 @@ pub const change_may_have_been_applied = "the store did not confirm the change; 
 pub type WriteFailure {
   /// 書き込まれていないことが確定している（接続を得られない、制約違反など）。
   NotWritten(reason: String)
+  /// 追加しようとした公開鍵の行が、すでに DB にある。バンカーはメモリに無い公開鍵
+  /// にだけ追加を書き込むので、DB がメモリより先行している（読み直しに見えなかった
+  /// 書き込みがある）か、読み込みで飛ばされた行（別のマスターキーで暗号化されている
+  /// など）がある。この追加は書き込まれていない。
+  AlreadyStored(reason: String)
   /// 書き込まれたかどうか分からない（期限切れ、途中の切断）。
   MaybeWritten(reason: String)
 }
@@ -702,6 +713,14 @@ fn apply_change(
       case written {
         Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
         Error(NotWritten(reason)) -> #(state, Error(reason))
+        // 読み直しに見えなかった書き込みがあればメモリに入る。読み込みで飛ばされる
+        // 行ならメモリには入らないが、どちらでも行が DB にあることは確かなので、
+        // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
+        // 管理 UI は読み直した後の一覧を読む。
+        Error(AlreadyStored(reason)) -> #(
+          load_accounts(State(..state, accounts: Loading(failure: None))),
+          Error(reason),
+        )
         Error(MaybeWritten(_reason)) -> {
           process.send(state.retry, LoadAccounts)
           #(
@@ -736,6 +755,8 @@ fn change_line(
   case written {
     Ok(Nil) -> done <> " " <> signer
     Error(NotWritten(reason)) -> failed <> reason
+    Error(AlreadyStored(reason)) ->
+      failed <> reason <> "; reloading the accounts from the store"
     Error(MaybeWritten(reason)) ->
       failed
       <> reason

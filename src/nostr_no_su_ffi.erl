@@ -303,16 +303,21 @@ reply_alias(Pid) ->
 %% この期限で打ち切られる。pog.transaction は期限を指定できず（pgo の既定の 5000ms に
 %% なる）、中のクエリーには pog.timeout も効かないため、ここで指定する。
 %%
-%% 打ち切られた COMMIT などの例外は捕まえて値にする。理由の項は捨て、クエリーの引数や
-%% 結果がクラッシュレポートに出ないようにする。
-%% -> {ok, Result} | {error, checkout_failed} | {error, interrupted}
+%% 接続が閉じられた後の BEGIN の badmatch と COMMIT の case_clause（どちらも
+%% {error, closed}）は、期限による打ち切りか途中の切断として interrupted にする。
+%% それ以外の例外（プールが無いときの exit(noproc)、Fun の中の panic など）は failed に
+%% する。どちらも理由の項は捨て、クエリーの引数や結果がクラッシュレポートにもログにも
+%% 出ないようにする。
+%% -> {ok, Result} | {error, checkout_failed} | {error, interrupted} | {error, failed}
 pool_transaction(Pool, TimeoutMs, Fun) ->
     try pgo:transaction(Pool, fun() -> {nostr_no_su_completed, Fun()} end,
                         #{pool_options => [{timeout, TimeoutMs}]}) of
         {nostr_no_su_completed, Result} -> {ok, Result};
         {error, _Reason} -> {error, checkout_failed}
     catch
-        _:_ -> {error, interrupted}
+        error:{badmatch, {error, closed}} -> {error, interrupted};
+        error:{case_clause, {error, closed}} -> {error, interrupted};
+        _:_ -> {error, failed}
     end.
 
 %% 改行を入れずに 1 行へ整形する。characters_to_binary/1 は 255 を超える

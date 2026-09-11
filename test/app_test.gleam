@@ -2156,3 +2156,89 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
   assert list.length(database_listings(database)) == 2
   stop_tree(tree)
 }
+
+/// ストアが登録済みを返す追加の失敗。
+fn already_stored() -> Result(Nil, bunker.WriteFailure) {
+  Error(
+    bunker.AlreadyStored(account_store.describe(account_store.AlreadyRegistered)),
+  )
+}
+
+/// DB にだけある行の公開鍵を追加すると、応答の前に読み直してメモリに入れ、登録済み
+/// として応答する。
+pub fn adding_a_row_that_only_the_store_has_reads_it_back_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let store =
+    bunker.Store(..committed_but_timed_out_store(database), insert: fn(_entry) {
+      already_stored()
+    })
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store,
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert bunker.accounts(name) == Ok(database_listings(database))
+
+  // 読み直しに見えなかった書き込みで、DB だけが先行している状態を作る。
+  process.call(database, 1000, WriteRows(
+    list.append(_, [stored_signer(other_signer_key)]),
+    _,
+  ))
+  assert bunker.add_account(name, account_for(other_signer_key), "")
+    == Error("account is already registered")
+  let stored = database_listings(database)
+  assert list.length(stored) == 2
+  assert bunker.accounts(name) == Ok(stored)
+  stop_tree(tree)
+}
+
+/// 読み込みで飛ばされる行の公開鍵を追加すると、読み直してもメモリに入らないので、
+/// 何度追加しても「反映されたかもしれない」ではなく登録済みとして拒否する。
+pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let skipped = account.pubkey_hex(account_for(other_signer_key))
+  let store =
+    bunker.Store(
+      ..store_with_load(fn() {
+        process.send(loads, Nil)
+        Ok(
+          Loaded(accounts: [], skipped: [
+            vault.Skipped(
+              pubkey: skipped,
+              reason: vault.UndecryptablePrivateKey,
+            ),
+          ]),
+        )
+      }),
+      insert: fn(_entry) { already_stored() },
+    )
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store,
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert process.receive(loads, 1000) == Ok(Nil)
+
+  list.each([1, 2], fn(_attempt) {
+    assert bunker.add_account(name, account_for(other_signer_key), "")
+      == Error("account is already registered")
+    // 追加のたびに読み直している。
+    assert process.receive(loads, 0) == Ok(Nil)
+    assert bunker.accounts(name) == Ok([])
+  })
+  stop_tree(tree)
+}

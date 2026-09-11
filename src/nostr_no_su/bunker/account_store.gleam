@@ -116,8 +116,10 @@ pub type StoreError {
 type TransactionFailure {
   /// プールから接続を得られなかった。
   CheckoutFailed
-  /// 期限で接続が閉じられた、あるいは COMMIT などが失敗した。
+  /// 期限で接続が閉じられた、あるいは途中で接続が切れた。
   Interrupted
+  /// それ以外の例外（プールが無い、読み込みの中の panic など）。
+  Failed
 }
 
 /// `DATABASE_URL` から接続プールの設定を作る。理由の文字列は URL（パスワードを
@@ -189,6 +191,7 @@ pub fn load(
     case failure {
       CheckoutFailed -> Unavailable
       Interrupted -> TimedOut
+      Failed -> QueryFailed("the load transaction failed")
     }
   })
   |> result.flatten
