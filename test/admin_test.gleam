@@ -536,7 +536,9 @@ pub fn dashboard_shows_why_the_bunker_is_disabled_test() {
   let body = simulate.read_body(get(with_accounts(Error(reason)), "/"))
   assert string.contains(
     body,
-    "<div class=\"alert\"><span>" <> reason <> "</span></div>",
+    "<div class=\"alert\"><span><span lang=\"en\">"
+      <> reason
+      <> "</span></span></div>",
   )
 }
 
@@ -556,7 +558,9 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
   assert string.contains(
     failing,
-    "<div class=\"alert\"><span>" <> escaped <> "</span></div>",
+    "<div class=\"alert\"><span><span lang=\"en\">"
+      <> escaped
+      <> "</span></span></div>",
   )
   assert !string.contains(failing, script)
 }
@@ -1179,6 +1183,7 @@ pub fn authenticated_responses_are_not_stored_test() {
   let responses = [
     get(context, "/"),
     get(context, "/static/admin.css"),
+    post_form(context, "/language", [#("language", "ja"), #("return", "/")]),
     get(context, "/approve/" <> token),
     get(context, "/accounts/new"),
     post(context, "/accounts/generate"),
@@ -1222,8 +1227,8 @@ pub fn authenticated_responses_are_not_stored_test() {
   ]
   assert list.map(responses, fn(response) { response.status })
     == [
-      200, 200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200, 200,
-      200, 200, 200, 403, 503, 303, 404,
+      200, 200, 303, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200,
+      200, 200, 200, 200, 403, 503, 303, 404,
     ]
   list.each(responses, fn(response) {
     assert header(response, "cache-control") == "no-store"
@@ -1348,4 +1353,274 @@ pub fn notices_are_colored_by_outcome_test() {
         <> "\"><span>",
     )
   })
+}
+
+// --- 表示の言語 ---
+
+/// 応答のページの `<html lang>` の値。
+fn page_language(response: Response(wisp.Body)) -> String {
+  let assert Ok(#(_before, rest)) =
+    string.split_once(simulate.read_body(response), "<html lang=\"")
+  let assert Ok(#(language, _after)) = string.split_once(rest, "\"")
+  language
+}
+
+/// `Accept-Language` で日本語を求めるリクエスト。
+fn in_japanese(request: wisp.Request) -> wisp.Request {
+  request.set_header(request, "accept-language", "ja")
+}
+
+/// 言語の切り替えの POST を、同じオリジンのブラウザーから送ったリクエスト。
+fn language_switch_request(fields: List(#(String, String))) -> wisp.Request {
+  simulate.browser_request(http.Post, "/language")
+  |> with_credentials("admin", password)
+  |> simulate.form_body(fields)
+}
+
+/// 表示の言語は、切り替えで保存した cookie、`Accept-Language`、英語の順に決める。対応して
+/// いない cookie の値は無視する。
+pub fn language_follows_the_cookie_then_accept_language_test() {
+  let cases = [
+    #([], "en"),
+    #([#("accept-language", "ja,en-US;q=0.9,en;q=0.8")], "ja"),
+    #([#("accept-language", "fr, de")], "en"),
+    #([#("cookie", "nostr_no_su_language=ja")], "ja"),
+    #([#("cookie", "other=1; nostr_no_su_language=ja")], "ja"),
+    #(
+      [#("cookie", "nostr_no_su_language=en"), #("accept-language", "ja")],
+      "en",
+    ),
+    #(
+      [#("cookie", "nostr_no_su_language=fr"), #("accept-language", "ja")],
+      "ja",
+    ),
+  ]
+  use #(headers, language) <- list.each(cases)
+  let response =
+    list.fold(
+      headers,
+      simulate.request(http.Get, "/") |> with_credentials("admin", password),
+      fn(request, header) { request.set_header(request, header.0, header.1) },
+    )
+    |> admin.handle_request(context(), _)
+  assert #(headers, page_language(response)) == #(headers, language)
+}
+
+/// 言語の切り替えは、選んだ言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す。
+pub fn language_switch_saves_the_language_and_returns_test() {
+  let response =
+    language_switch_request([#("language", "ja"), #("return", "/accounts/new")])
+    |> admin.handle_request(context(), _)
+  assert response.status == 303
+  assert header(response, "location") == "/accounts/new"
+  assert header(response, "set-cookie")
+    == "nostr_no_su_language=ja; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax"
+  assert header(response, "cache-control") == "no-store"
+}
+
+/// 戻り先は、同じサイトのパスとして組み立て直す。別のオリジンを指す値は、このサイトの
+/// パスかダッシュボードになる。
+pub fn language_switch_returns_only_within_the_site_test() {
+  let cases = [
+    #("/", "/"),
+    #(action_path(dashboard.EditLabel), action_path(dashboard.EditLabel)),
+    #("/approve/" <> token, "/approve/" <> token),
+    #("//evil.example/x", "/evil.example/x"),
+    #("/\\evil.example", "/%5Cevil.example"),
+    #(
+      "/approve/tok-1?next=//evil.example",
+      "/approve/tok-1%3Fnext%3D/evil.example",
+    ),
+    #(
+      "/accounts/new\r\nSet-Cookie: x=1",
+      "/accounts/new%0D%0ASet-Cookie%3A%20x%3D1",
+    ),
+    #("https://evil.example/", "/"),
+    #("evil.example", "/"),
+    #("", "/"),
+  ]
+  use #(sent, location) <- list.each(cases)
+  let response =
+    language_switch_request([#("language", "en"), #("return", sent)])
+    |> admin.handle_request(context(), _)
+  assert #(sent, header(response, "location")) == #(sent, location)
+}
+
+/// 対応していない言語、GET、別のオリジンからの切り替え、資格情報の無い切り替えは受け付けず、
+/// cookie を保存しない。
+pub fn language_switch_rejects_invalid_requests_test() {
+  let rejected = [
+    #(
+      language_switch_request([#("language", "fr"), #("return", "/")])
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(
+      language_switch_request([#("return", "/")])
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(get(context(), "/language"), 405),
+    #(
+      language_switch_request([#("language", "ja"), #("return", "/")])
+        |> request.set_header("origin", "http://evil.example")
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(
+      simulate.browser_request(http.Post, "/language")
+        |> simulate.form_body([#("language", "ja"), #("return", "/")])
+        |> admin.handle_request(context(), _),
+      401,
+    ),
+  ]
+  use #(response, status) <- list.each(rejected)
+  assert response.status == status
+  assert list.key_find(response.headers, "set-cookie") == Error(Nil)
+}
+
+/// 切り替えた言語は、GET のページにも、ブラウザーから送った POST の応答のページにも保たれる。
+pub fn switched_language_carries_across_pages_test() {
+  let switch = language_switch_request([#("language", "ja"), #("return", "/")])
+  let switched = admin.handle_request(context(), switch)
+  let new_account =
+    simulate.browser_request(http.Get, "/accounts/new")
+    |> with_credentials("admin", password)
+    |> simulate.session(switch, switched)
+    |> admin.handle_request(context(), _)
+  assert page_language(new_account) == "ja"
+  let rejected =
+    simulate.browser_request(http.Post, "/accounts/import")
+    |> with_credentials("admin", password)
+    |> simulate.session(switch, switched)
+    |> simulate.form_body([#("nsec", string.drop_end(spec_nsec, 1) <> "4")])
+    |> admin.handle_request(context(), _)
+  assert rejected.status == 400
+  assert string.contains(
+    simulate.read_body(rejected),
+    "<span>bech32 のチェックサムが一致しません。</span>",
+  )
+}
+
+/// `Origin` も `Referer` も無い POST は、CSRF の検査が cookie を取り除くので、
+/// `Accept-Language` で言語が決まる。
+pub fn posts_without_origin_ignore_the_language_cookie_test() {
+  let import_broken_nsec = fn(request) {
+    request
+    |> with_credentials("admin", password)
+    |> simulate.form_body([#("nsec", string.drop_end(spec_nsec, 1) <> "4")])
+    |> admin.handle_request(context(), _)
+    |> simulate.read_body
+  }
+  assert simulate.request(http.Post, "/accounts/import")
+    |> request.set_header("cookie", "nostr_no_su_language=ja")
+    |> import_broken_nsec
+    |> string.contains("invalid bech32 checksum")
+  assert simulate.request(http.Post, "/accounts/import")
+    |> in_japanese
+    |> import_broken_nsec
+    |> string.contains("bech32 のチェックサムが一致しません。")
+}
+
+/// 秘密鍵を描画するページには言語の切り替えを出さず、ほかのページには出す。
+pub fn pages_with_a_private_key_have_no_language_switch_test() {
+  let hidden = [
+    post(context(), "/accounts/generate"),
+    post_form(context(), "/accounts/import", [#("nsec", spec_nsec)]),
+    post_form(context(), "/accounts/register-generated", [
+      #("nsec", spec_nsec),
+      #("label", "a\tb"),
+    ]),
+    post_form(context(), action_path(dashboard.RevealPrivateKey), [
+      #("password", password),
+    ]),
+  ]
+  list.each(hidden, fn(response) {
+    assert response.status == 200 || response.status == 400
+    let body = simulate.read_body(response)
+    assert string.contains(body, "<div class=\"navbar-end\"></div>")
+    assert !string.contains(body, "action=\"/language\"")
+  })
+  let shown = [
+    get(context(), "/"),
+    get(context(), "/accounts/new"),
+    get(context(), "/approve/" <> token),
+    post(context(), "/approve/" <> token),
+    post_form(
+      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      action_path(dashboard.RotateSecret),
+      [],
+    ),
+    ..list.map(account_actions.all, fn(action) {
+      get(context(), action_path(action))
+    })
+  ]
+  list.each(shown, fn(response) {
+    assert string.contains(simulate.read_body(response), "action=\"/language\"")
+  })
+}
+
+/// 日本語のページでも、バンカーから届く理由は英語のまま `lang="en"` で出す。フォームの上と
+/// アカウントの節では、何ができなかったかを日本語で前に置き、通知ページは見出しが前置きを
+/// 兼ねる。
+pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
+  let registered =
+    simulate.request(http.Post, "/accounts/import")
+    |> with_credentials("admin", password)
+    |> in_japanese
+    |> simulate.form_body([#("nsec", signer_nsec)])
+    |> admin.handle_request(context(), _)
+  assert registered.status == 409
+  assert string.contains(
+    simulate.read_body(registered),
+    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+  )
+  let unavailable_body =
+    simulate.request(http.Get, "/")
+    |> with_credentials("admin", password)
+    |> in_japanese
+    |> admin.handle_request(with_accounts(Error(unavailable)), _)
+    |> simulate.read_body
+  assert string.contains(
+    unavailable_body,
+    "<span>アカウントの一覧を表示できません。<span lang=\"en\">"
+      <> unavailable
+      <> "</span></span>",
+  )
+  let unconfirmed =
+    simulate.request(http.Post, action_path(dashboard.RotateSecret))
+    |> with_credentials("admin", password)
+    |> in_japanese
+    |> admin.handle_request(
+      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      _,
+    )
+    |> simulate.read_body
+  assert string.contains(
+    unconfirmed,
+    "<h1 class=\"text-2xl font-bold\">変更を確認できませんでした</h1>",
+  )
+  assert string.contains(
+    unconfirmed,
+    "<span><span lang=\"en\">"
+      <> bunker.change_may_have_been_applied
+      <> "</span></span>",
+  )
+}
+
+/// 通知ページで言語を切り替えた後はダッシュボードを開く。一覧を得られない 503 でも、パスの
+/// 署名者を戻り先に含めない。
+pub fn notice_pages_return_to_the_dashboard_test() {
+  let response =
+    get(
+      with_accounts(Error(unavailable)),
+      "/accounts/%3Cscript%3Eunknown/label",
+    )
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "<input name=\"return\" type=\"hidden\" value=\"/\">",
+  )
+  assert !string.contains(body, "unknown")
 }

@@ -8,6 +8,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/plugin_runner
@@ -57,8 +58,9 @@ pub fn buttons_and_inputs_follow_the_color_rules_test() {
   assert violations == []
 }
 
-/// 状態ごとに違うクラスがすべて現れるよう、描画のどの分岐も通したページ。描画に状態の
-/// 分岐を足したら、ここにもその状態のページを足す。
+/// 状態ごとに違うクラスがすべて現れるよう、描画のどの分岐も通したページ。言語ごとに描画し、
+/// 言語の切り替えの項目（表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを
+/// 通す。描画に状態の分岐を足したら、ここにもその状態のページを足す。
 fn pages() -> List(String) {
   let row =
     dashboard.AccountRow(
@@ -113,25 +115,40 @@ fn pages() -> List(String) {
         dashboard.PluginRow("unavailable", None),
       ],
     )
+  use language <- list.flat_map(i18n.languages)
+  let reason = i18n.Untranslated("reason")
   list.flatten([
     [
-      dashboard.render(full),
-      dashboard.render(empty),
-      dashboard.render(dashboard.Snapshot(..empty, accounts: Error("reason"))),
-      dashboard.approval_page(pending),
-      account_pages.new_account_page(Some("reason")),
-      account_pages.generated_key_page("nsec1example", Some("reason")),
-      account_pages.registered_page("npub1example", "main", "nsec1example"),
-      account_pages.private_key_page(row, "nsec1example"),
+      dashboard.render(language, full),
+      dashboard.render(language, empty),
+      dashboard.render(
+        language,
+        dashboard.Snapshot(..empty, accounts: Error("reason")),
+      ),
+      dashboard.approval_page(language, pending),
+      account_pages.new_account_page(language, Some(reason)),
+      account_pages.generated_key_page(
+        language,
+        "nsec1example",
+        Some(i18n.LabelHasControlCharacters),
+      ),
+      account_pages.registered_page(
+        language,
+        "npub1example",
+        "main",
+        "nsec1example",
+      ),
+      account_pages.private_key_page(language, row, "nsec1example"),
     ],
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure],
-      dashboard.notice_page("Notice", "reason", _),
+      dashboard.notice_page(language, i18n.NotFound, reason, _),
     ),
     list.map(account_actions.all, account_pages.account_action_page(
+      language,
       row,
       _,
-      Some("reason"),
+      Some(reason),
     )),
   ])
 }

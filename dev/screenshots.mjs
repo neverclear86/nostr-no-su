@@ -1,15 +1,20 @@
 // 管理 UI の全ページを、固定状態のサーバー（dev/admin_preview.gleam）から撮る。
 // 広い画面（1280px）と狭い画面（375px、2 倍の解像度）の、ライトとダーク
 // （prefers-color-scheme のエミュレーション）で、ページ全体を撮る。
-// 使い方: PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots
+// 使い方: PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots [locale]
+// 撮影用のサーバー（PREVIEW_PORT=18461 gleam run -m admin_preview）は終了しないので、別の端末で先に起動しておく。
+// 初回は npx playwright-core install chromium で、playwright-core の版が使う chromium を入れる。
+// locale（ja-JP など）を渡すと、ブラウザーがその言語の Accept-Language を送り、管理 UI はその言語で出す。
+// 渡さなければ Accept-Language を送らず、管理 UI は既定の英語で出す。
 // 出力先をリポジトリの中にするときは、.gitignore と .dockerignore が除く build/ の下にする。
 // CHROMIUM に chromium の実行ファイルを渡すと、playwright-core が既定で探すものの代わりに使う。
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
 const out = process.argv[2];
+const locale = process.argv[3];
 if (!out) {
-  console.error("usage: node dev/screenshots.mjs <output directory>");
+  console.error("usage: node dev/screenshots.mjs <output directory> [locale]");
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -110,6 +115,7 @@ try {
         viewport: { width: viewport.width, height: viewport.height },
         deviceScaleFactor: viewport.deviceScaleFactor,
         colorScheme,
+        locale,
         // コピーのボタンが navigator.clipboard に書けるようにする。
         permissions: ["clipboard-read", "clipboard-write"],
       });
