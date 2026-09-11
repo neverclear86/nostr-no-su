@@ -17,6 +17,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import support/account_actions
 import support/nip46_client.{account_for}
 import wisp
 import wisp/simulate
@@ -251,20 +252,10 @@ fn action_path(action: dashboard.AccountAction) -> String {
   dashboard.account_action_path(signer, action)
 }
 
-/// アカウント 1 件への操作のすべて。
-fn all_actions() -> List(dashboard.AccountAction) {
-  [
-    dashboard.EditLabel,
-    dashboard.RotateSecret,
-    dashboard.DeleteAccount,
-    dashboard.RevealPrivateKey,
-  ]
-}
-
 /// 生成の確認ページの隠しフィールドの nsec。
 fn hidden_nsec(body: String) -> String {
   let assert Ok(#(_before, rest)) =
-    string.split_once(body, "name=\"nsec\" value=\"")
+    string.split_once(body, "name=\"nsec\" type=\"hidden\" value=\"")
   let assert Ok(#(nsec, _after)) = string.split_once(rest, "\"")
   nsec
 }
@@ -866,7 +857,7 @@ pub fn new_account_page_has_secret_inputs_test() {
   assert response.status == 200
   assert string.contains(
     simulate.read_body(response),
-    "type=\"password\" name=\"nsec\" autocomplete=\"off\"",
+    "<input autocomplete=\"off\" name=\"nsec\" required type=\"password\">",
   )
 }
 
@@ -881,7 +872,7 @@ pub fn reveal_page_asks_for_the_password_test() {
   let body = simulate.read_body(response)
   assert string.contains(
     body,
-    "type=\"password\" name=\"password\" autocomplete=\"off\"",
+    "<input autocomplete=\"off\" name=\"password\" required type=\"password\">",
   )
   assert !string.contains(body, signer_nsec)
   assert process.receive(reports, 100) == Error(Nil)
@@ -1038,11 +1029,13 @@ pub fn label_edit_form_has_no_maxlength_test() {
     simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
   assert string.contains(
     edit,
-    "name=\"label\" autocomplete=\"off\" value=\"" <> label <> "\"",
+    "autocomplete=\"off\" name=\"label\" type=\"text\" value=\""
+      <> label
+      <> "\"",
   )
   assert !string.contains(edit, "maxlength")
   let new = simulate.read_body(get(context(), "/accounts/new"))
-  assert string.contains(new, "name=\"label\" maxlength=\"100\"")
+  assert string.contains(new, "maxlength=\"100\" name=\"label\"")
 }
 
 /// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ 409、
@@ -1099,7 +1092,9 @@ pub fn account_pages_need_the_account_list_test() {
   let failing = with_accounts(Error(unavailable))
   let responses =
     list.append(
-      list.map(all_actions(), fn(action) { get(failing, action_path(action)) }),
+      list.map(account_actions.all, fn(action) {
+        get(failing, action_path(action))
+      }),
       [post(failing, action_path(dashboard.DeleteAccount))],
     )
   list.each(responses, fn(response) {
@@ -1119,7 +1114,7 @@ pub fn cross_origin_account_changes_are_rejected_test() {
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
-    ..list.map(all_actions(), action_path)
+    ..list.map(account_actions.all, action_path)
   ]
   list.each(paths, fn(path) {
     let response =
@@ -1180,7 +1175,9 @@ pub fn authenticated_responses_are_not_stored_test() {
       #("label", "a\tb"),
     ]),
     ..list.append(
-      list.map(all_actions(), fn(action) { get(context, action_path(action)) }),
+      list.map(account_actions.all, fn(action) {
+        get(context, action_path(action))
+      }),
       [
         post_form(context, reveal, with_password),
         post_form(context, reveal, [#("password", "wrong")]),
@@ -1236,10 +1233,12 @@ pub fn dashboard_lists_account_actions_test() {
   assert string.contains(body, signer_npub)
   assert string.contains(
     body,
-    "readonly size=\"64\" value=\"" <> wisp.escape_html(uri) <> "\"",
+    "readonly size=\"64\" type=\"text\" value=\""
+      <> wisp.escape_html(uri)
+      <> "\"",
   )
   assert string.contains(body, "href=\"/accounts/new\"")
-  list.each(all_actions(), fn(action) {
+  list.each(account_actions.all, fn(action) {
     assert string.contains(body, "href=\"" <> action_path(action) <> "\"")
   })
 }

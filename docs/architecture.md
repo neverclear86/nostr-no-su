@@ -397,7 +397,8 @@ sequenceDiagram
 `/healthz` 以外はすべて Basic 認証を要する。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じるヘッダーを付ける。
-パスの定義は `admin/dashboard.gleam` にだけ置き、ルーティングとフォームの `action` が同じ定義を見る。
+パスの定義は `admin/dashboard.gleam` にだけ置き、ルーティングと、`admin/dashboard.gleam` と `admin/account_pages.gleam` のフォームの `action` が同じ定義を見る。
+ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 
 | メソッド | パス | 役割 |
 | --- | --- | --- |
@@ -470,7 +471,9 @@ nostr-no-su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
-│       ├── admin/dashboard.gleam ダッシュボードとアカウントのページの描画（純粋関数）とパスの定義
+│       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
+│       ├── admin/account_pages.gleam アカウントのページの描画
+│       ├── admin/view.gleam      ページ枠と、本体の他のモジュールに依存しない部品（lustre）
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
