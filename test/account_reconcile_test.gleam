@@ -88,13 +88,13 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
   let other = random_entry()
   let other_pubkey = account.pubkey_hex(other.account)
   assert bunker.add_account(name, other.account, "other")
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   let added = database_listings(pool, key)
   assert list.length(added) == 2
   assert bunker.accounts(name) == Ok(added)
 
   assert bunker.rotate_secret(name, first_pubkey)
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   let rotated = database_listings(pool, key)
   let assert Ok(first_listing) =
     list.find(rotated, fn(listing) { listing.signer == first_pubkey })
@@ -102,7 +102,7 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
   assert bunker.accounts(name) == Ok(rotated)
 
   assert bunker.add_account(name, other.account, "again")
-    == Error("account is already registered")
+    == Error(bunker.NotApplied("account is already registered"))
   // 削除にはトリガーが無いので、期限の内に終わる。
   assert bunker.remove_account(name, other_pubkey) == Ok(Nil)
   let removed = database_listings(pool, key)
@@ -150,6 +150,7 @@ fn database_listings(
   |> list.map(fn(entry) {
     bunker.Listing(
       signer: account.pubkey_hex(entry.account),
+      npub: account.npub(entry.account),
       label: entry.label,
       secret: entry.secret,
     )

@@ -1,3 +1,5 @@
+import gleam/crypto
+import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -82,4 +84,43 @@ pub fn from_privkey_rejects_out_of_range_nsec_test() {
   let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
   assert account.from_privkey(privkey)
     == Error("private key not in valid range")
+}
+
+/// BIP-340 の公式ベクター 0 の鍵から、NIP-19 の nsec と npub を作る。
+pub fn npub_and_nsec_test() {
+  let assert Ok(signer) =
+    account.from_privkey(bytes(
+      "0000000000000000000000000000000000000000000000000000000000000003",
+    ))
+  assert account.nsec(signer)
+    == "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
+  assert account.npub(signer)
+    == "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+}
+
+/// 範囲外の鍵を引いたら乱数を引き直す。1 回目に 0、2 回目にベクター 0 の鍵を返す偽の
+/// 乱数では、2 回目の鍵のアカウントになる。
+pub fn generate_retries_an_out_of_range_key_test() {
+  let draws = process.new_subject()
+  process.send(draws, <<0:size(256)>>)
+  process.send(
+    draws,
+    bytes("0000000000000000000000000000000000000000000000000000000000000003"),
+  )
+  let generated =
+    account.generate(fn(size) {
+      let assert Ok(drawn) = process.receive(draws, 0)
+      assert size == 32
+      drawn
+    })
+  assert account.pubkey_hex(generated)
+    == "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+  assert process.receive(draws, 0) == Error(Nil)
+}
+
+/// 本番の乱数で生成したアカウントは、生成のたびに違う鍵になる。
+pub fn generate_produces_distinct_accounts_test() {
+  let first = account.generate(crypto.strong_random_bytes)
+  let second = account.generate(crypto.strong_random_bytes)
+  assert account.pubkey_hex(first) != account.pubkey_hex(second)
 }

@@ -195,14 +195,17 @@ pub fn signers(engine: Engine) -> List(String) {
   |> list.sort(string.compare)
 }
 
-/// 署名者ごとの接続 secret（署名者の昇順）。管理 UI への一覧に使う。
-pub fn connection_secrets(engine: Engine) -> List(#(String, String)) {
+/// 登録済みのアカウントと接続 secret（署名者の昇順）。管理 UI への一覧に使う。
+pub fn registered_accounts(engine: Engine) -> List(#(Account, String)) {
   dict.to_list(engine.accounts)
-  |> list.map(fn(entry) {
-    let #(signer, #(_account, secret)) = entry
-    #(signer, secret)
-  })
   |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
+  |> list.map(fn(entry) { entry.1 })
+}
+
+/// 署名者のアカウント。登録されていなければ `Error(Nil)`。秘密鍵の再表示に使う。
+pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
+  dict.get(engine.accounts, signer)
+  |> result.map(fn(entry) { entry.0 })
 }
 
 /// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定

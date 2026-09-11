@@ -8,6 +8,10 @@ import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
+import nostr_no_su/nostr/nip19
+
+/// 秘密鍵のバイト数。
+const privkey_bytes = 32
 
 /// バンカーが代理で署名する 1 つのアイデンティティ。x-only 公開鍵は署名にも
 /// ルーティングにも使うため、バイト列と 16 進表現の両方を持つ。
@@ -24,7 +28,7 @@ pub opaque type Account {
 /// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
 pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
   case bit_array.byte_size(privkey) {
-    32 ->
+    size if size == privkey_bytes ->
       case secp256k1.xonly_pubkey(privkey) {
         Ok(pubkey) ->
           Ok(Account(
@@ -35,6 +39,16 @@ pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
         Error(_) -> Error("private key not in valid range")
       }
     _ -> Error("private key must be 32 bytes")
+  }
+}
+
+/// 乱数から秘密鍵を作り、アカウントを構築する。範囲外のスカラーを引いたら引き直す。
+/// `random_bytes` は指定したバイト数の乱数を返す関数で、本番では
+/// `crypto.strong_random_bytes` を渡す。32 バイト以外を返し続ける関数を渡すと終わらない。
+pub fn generate(random_bytes: fn(Int) -> BitArray) -> Account {
+  case from_privkey(random_bytes(privkey_bytes)) {
+    Ok(generated) -> generated
+    Error(_) -> generate(random_bytes)
   }
 }
 
@@ -51,6 +65,24 @@ pub fn pubkey(account: Account) -> BitArray {
 /// x-only 公開鍵の小文字 16 進。署名者の識別子とルーティングに使う。
 pub fn pubkey_hex(account: Account) -> String {
   account.pubkey_hex
+}
+
+/// 表示用の npub 文字列。
+pub fn npub(account: Account) -> String {
+  // 構築の経路は `from_privkey` だけで、公開鍵は常に 32 バイトなので失敗しない。
+  // 失敗の値は `Error(InvalidLength)` で、鍵を含まない。
+  let assert Ok(text) = nip19.encode(account.pubkey, nip19.Npub)
+    as "an Account always holds a 32-byte public key"
+  text
+}
+
+/// 秘密鍵を表示するための nsec 文字列。登録の手続きと、管理パスワードを再入力した
+/// 再表示にだけ使う。
+pub fn nsec(account: Account) -> String {
+  // `from_privkey` が 32 バイトであることを検査しているので失敗しない。
+  let assert Ok(text) = nip19.encode(account.privkey(), nip19.Nsec)
+    as "an Account always holds a 32-byte private key"
+  text
 }
 
 /// 署名者 `signer`（x-only 公開鍵の小文字 16 進）へ接続するためにクライアントへ
