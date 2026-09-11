@@ -7,13 +7,15 @@
 
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/nip44
+import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, Event}
 
 /// テスト用 16 進鍵に対応するアカウント。テストの鍵は正しい前提なので、読めない
 /// のはテスト自体の誤りとして扱う。
 pub fn account_for(key_hex: String) -> Account {
-  let assert Ok(account) = account.from_hex(key_hex)
-  account
+  let assert Ok(privkey) = hex.decode(key_hex)
+  let assert Ok(signer) = account.from_privkey(privkey)
+  signer
 }
 
 /// 指定した params を持つ JSON-RPC リクエストの本文。
@@ -33,7 +35,7 @@ pub fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
   request_body(
     id,
     "connect",
-    "[\"" <> signer.pubkey_hex <> "\",\"" <> secret_arg <> "\"]",
+    "[\"" <> account.pubkey_hex(signer) <> "\",\"" <> secret_arg <> "\"]",
   )
 }
 
@@ -49,7 +51,7 @@ pub fn request_event(
     client,
     signer,
     body,
-    [["p", signer.pubkey_hex]],
+    [["p", account.pubkey_hex(signer)]],
     created_at,
   )
 }
@@ -65,19 +67,19 @@ pub fn request_event_with_tags(
   created_at: Int,
 ) -> Event {
   let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, encrypt_to.pubkey)
+    nip44.conversation_key(account.privkey(client), account.pubkey(encrypt_to))
   let assert Ok(content) = nip44.encrypt(body, conversation_key)
   let unsigned =
     Event(
       id: "",
-      pubkey: client.pubkey_hex,
+      pubkey: account.pubkey_hex(client),
       created_at: created_at,
       kind: event.nip46_kind,
       tags: tags,
       content: content,
       sig: "",
     )
-  let assert Ok(signed) = event.finalize(unsigned, client.privkey)
+  let assert Ok(signed) = event.finalize(unsigned, account.privkey(client))
   signed
 }
 
@@ -89,7 +91,7 @@ pub fn decrypt_response(
   response: Event,
 ) -> String {
   let assert Ok(conversation_key) =
-    nip44.conversation_key(client.privkey, signer.pubkey)
+    nip44.conversation_key(account.privkey(client), account.pubkey(signer))
   let assert Ok(text) = nip44.decrypt(response.content, conversation_key)
   text
 }

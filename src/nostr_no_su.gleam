@@ -179,7 +179,7 @@ fn dashboard_accounts(
 ) -> List(dashboard.AccountRow) {
   use pair <- list.map(accounts)
   dashboard.AccountRow(
-    signer: { pair.0 }.pubkey_hex,
+    signer: account.pubkey_hex(pair.0),
     uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, Some(pair.1)),
     auth_uri: account.bunker_uri(pair.0, loaded.bunker_relay_urls, None),
   )
@@ -206,7 +206,7 @@ fn bunker_spec(
     [] -> #(None, [])
     accounts -> {
       let signer_pubkeys =
-        list.map(accounts, fn(pair) { { pair.0 }.pubkey_hex })
+        list.map(accounts, fn(pair) { account.pubkey_hex(pair.0) })
       #(
         Some(
           app.Bunker(

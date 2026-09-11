@@ -8,6 +8,7 @@ import gleam/otp/system
 import gleam/string
 import nostr_no_su/app
 import nostr_no_su/bunker
+import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event, Event}
@@ -369,9 +370,14 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   assert bunker.sessions(name)
-    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
 
-  bunker.revoke(name, signer.pubkey_hex, client.pubkey_hex)
+  bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
   assert bunker.sessions(name) == []
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
@@ -393,7 +399,7 @@ pub fn pending_connections_can_be_approved_test() {
 
   let client = account_for(client_key)
   let assert [entry] = bunker.pending(name)
-  assert entry.client == client.pubkey_hex
+  assert entry.client == account.pubkey_hex(client)
   let assert Error(_) = bunker.approve(name, "other-token")
 
   assert bunker.approve(name, entry.token) == Ok(Nil)
@@ -404,7 +410,12 @@ pub fn pending_connections_can_be_approved_test() {
   assert bunker.pending(name) == []
   let signer = account_for(signer_key)
   assert bunker.sessions(name)
-    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
   stop_tree(tree)
 }
 

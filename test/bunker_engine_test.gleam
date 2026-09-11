@@ -101,8 +101,8 @@ pub fn connect_ack_test() {
   let assert Reply(response) = outcome
   // 応答はクライアント宛であり、それ自体が正当なイベントである
   assert response.kind == event.nip46_kind
-  assert response.tags == [["p", client.pubkey_hex]]
-  assert response.pubkey == signer.pubkey_hex
+  assert response.tags == [["p", account.pubkey_hex(client)]]
+  assert response.pubkey == account.pubkey_hex(signer)
   assert event.verify_signature(response)
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
@@ -150,7 +150,7 @@ pub fn get_public_key_after_connect_test() {
     handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
-    == "{\"id\":\"g1\",\"result\":\"" <> signer.pubkey_hex <> "\"}"
+    == "{\"id\":\"g1\",\"result\":\"" <> account.pubkey_hex(signer) <> "\"}"
 }
 
 /// `ping` には "pong" を返す。
@@ -182,7 +182,7 @@ pub fn sign_event_test() {
   // result フィールドは JSON 文字列として符号化された署名済みイベントなので、
   // 取り出してパースする。
   let assert Ok(signed) = parse_result_event(result)
-  assert signed.pubkey == signer.pubkey_hex
+  assert signed.pubkey == account.pubkey_hex(signer)
   assert signed.kind == 1
   assert signed.content == "hello"
   assert signed.created_at == 1_700_000_123
@@ -227,7 +227,7 @@ pub fn replay_ignored_test() {
       client,
       signer,
       "{\"id\":\"c1\",\"method\":\"connect\",\"params\":[\""
-        <> signer.pubkey_hex
+        <> account.pubkey_hex(signer)
         <> "\",\""
         <> secret
         <> "\"]}",
@@ -277,7 +277,7 @@ pub fn routes_to_the_matching_p_tag_test() {
       client,
       signer,
       connect_body(signer, secret, "c1"),
-      [["p", stranger.pubkey_hex], ["p", signer.pubkey_hex]],
+      [["p", account.pubkey_hex(stranger)], ["p", account.pubkey_hex(signer)]],
       1000,
     )
   let #(_state, outcome) = handle(new_engine(), request, 1000)
@@ -295,13 +295,13 @@ pub fn unknown_p_tags_are_ignored_test() {
       client,
       stranger,
       connect_body(stranger, secret, "c1"),
-      [["p", stranger.pubkey_hex]],
+      [["p", account.pubkey_hex(stranger)]],
       1000,
     )
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(reason) = outcome
   assert string.contains(reason, "no matching account")
-  assert string.contains(reason, stranger.pubkey_hex)
+  assert string.contains(reason, account.pubkey_hex(stranger))
 }
 
 /// 別の署名者宛に暗号化された content は読めないため無視される。
@@ -315,7 +315,7 @@ pub fn undecryptable_content_ignored_test() {
       client,
       wrong_signer,
       "{\"id\":\"x\"}",
-      [["p", signer.pubkey_hex]],
+      [["p", account.pubkey_hex(signer)]],
       1000,
     )
   let #(_state, outcome) = handle(new_engine(), request, 1000)
@@ -363,7 +363,7 @@ pub fn nip44_roundtrip_via_engine_test() {
   // 署名者を介して "secret msg" を third_party 宛に暗号化する
   let enc_body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\""
-    <> third_party.pubkey_hex
+    <> account.pubkey_hex(third_party)
     <> "\",\"secret msg\"]}"
   let #(state, enc_outcome) =
     handle(state, request_event(client, signer, enc_body, 1001), 1001)
@@ -371,13 +371,13 @@ pub fn nip44_roundtrip_via_engine_test() {
   let payload = extract_result(decrypt_response(client, signer, enc_response))
   // 相互運用性を確認するため third_party が直接復号する
   let assert Ok(tp_key) =
-    nip44.conversation_key(third_party.privkey, signer.pubkey)
+    nip44.conversation_key(account.privkey(third_party), account.pubkey(signer))
   let assert Ok(plain) = nip44.decrypt(payload, tp_key)
   assert plain == "secret msg"
   // エンジン側でも復号して元に戻せる
   let dec_body =
     "{\"id\":\"d1\",\"method\":\"nip44_decrypt\",\"params\":[\""
-    <> third_party.pubkey_hex
+    <> account.pubkey_hex(third_party)
     <> "\",\""
     <> payload
     <> "\"]}"
@@ -447,7 +447,12 @@ pub fn sessions_lists_connected_clients_test() {
 
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   assert engine.sessions(state)
-    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
 }
 
 /// 一覧は署名者・クライアントの順に並ぶため、集合の走査順に左右されない。
@@ -458,10 +463,10 @@ pub fn sessions_are_sorted_test() {
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let #(state, _) = connect(state, other, signer, secret, 1001)
   let sorted =
-    [client.pubkey_hex, other.pubkey_hex]
+    [account.pubkey_hex(client), account.pubkey_hex(other)]
     |> list.sort(string.compare)
     |> list.map(fn(client) {
-      engine.Session(signer: signer.pubkey_hex, client: client)
+      engine.Session(signer: account.pubkey_hex(signer), client: client)
     })
   assert engine.sessions(state) == sorted
 }
@@ -471,7 +476,8 @@ pub fn revoke_removes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let state = engine.revoke(state, signer.pubkey_hex, client.pubkey_hex)
+  let state =
+    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
   assert engine.sessions(state) == []
 
   let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"{}\"]}"
@@ -490,9 +496,15 @@ pub fn revoke_of_an_unknown_session_is_harmless_test() {
   let client = account_for(client_key)
   let other = account_for(other_client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let state = engine.revoke(state, signer.pubkey_hex, other.pubkey_hex)
+  let state =
+    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(other))
   assert engine.sessions(state)
-    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
 }
 
 /// シークレット無しの `connect`（nostr-tools は空文字列を送る）には、承認ページ
@@ -510,8 +522,8 @@ pub fn connect_without_secret_asks_for_approval_test() {
     == [
       engine.Pending(
         token: token,
-        signer: signer.pubkey_hex,
-        client: client.pubkey_hex,
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
         request_id: "c1",
         created_at: 1000,
       ),
@@ -564,13 +576,18 @@ pub fn approve_answers_the_original_request_test() {
   let assert Ok(#(state, ack)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
   assert ack.kind == event.nip46_kind
-  assert ack.tags == [["p", client.pubkey_hex]]
-  assert ack.pubkey == signer.pubkey_hex
+  assert ack.tags == [["p", account.pubkey_hex(client)]]
+  assert ack.pubkey == account.pubkey_hex(signer)
   assert event.verify_signature(ack)
   assert decrypt_response(client, signer, ack)
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
   assert engine.sessions(state)
-    == [engine.Session(signer: signer.pubkey_hex, client: client.pubkey_hex)]
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
   assert engine.pending(state, 1001) == []
 
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
@@ -581,7 +598,7 @@ pub fn approve_answers_the_original_request_test() {
   let assert Reply(response) = outcome
   let assert Ok(signed) =
     parse_result_event(decrypt_response(client, signer, response))
-  assert signed.pubkey == signer.pubkey_hex
+  assert signed.pubkey == account.pubkey_hex(signer)
 }
 
 /// 拒否すると、元の `connect` と同じ id でエラーを返し、認可はされない。
@@ -687,14 +704,14 @@ pub fn nip04_payload_is_reported_as_unsupported_test() {
   let unsigned =
     Event(
       id: "",
-      pubkey: client.pubkey_hex,
+      pubkey: account.pubkey_hex(client),
       created_at: 1000,
       kind: event.nip46_kind,
-      tags: [["p", signer.pubkey_hex]],
+      tags: [["p", account.pubkey_hex(signer)]],
       content: "3v0dEBmi5FI=?iv=Xk7z3RQ0ZQ4vJn1p2sTgHQ==",
       sig: "",
     )
-  let assert Ok(request) = event.finalize(unsigned, client.privkey)
+  let assert Ok(request) = event.finalize(unsigned, account.privkey(client))
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(reason) = outcome
   assert string.contains(reason, "nip-04")

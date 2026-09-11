@@ -13,7 +13,7 @@ import gleam/order
 import gleam/result
 import gleam/set.{type Set}
 import gleam/string
-import nostr_no_su/bunker/account.{type Account}
+import nostr_no_su/bunker/account.{type Account, privkey, pubkey_hex}
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/dedup/window
@@ -126,7 +126,7 @@ pub fn new(
 ) -> Engine {
   let account_dict =
     accounts
-    |> list.map(fn(pair) { #({ pair.0 }.pubkey_hex, pair) })
+    |> list.map(fn(pair) { #(pubkey_hex(pair.0), pair) })
     |> dict.from_list
   Engine(
     accounts: account_dict,
@@ -388,7 +388,7 @@ fn client_conversation_key(
   use client_pk <- result.try(
     hex.decode(client_pk_hex) |> result.replace_error("invalid client pubkey"),
   )
-  nip44.conversation_key(account.privkey, client_pk)
+  nip44.conversation_key(privkey(account), client_pk)
   |> result.replace_error("cannot derive conversation key")
 }
 
@@ -410,7 +410,7 @@ fn execute(
   request: rpc.Request,
   inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
-  let signer = account.pubkey_hex
+  let signer = pubkey_hex(account)
   case request.method {
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
     "logout" -> #(
@@ -493,7 +493,7 @@ fn execute_in_session(
   now: Int,
 ) -> rpc.Response {
   case request.method {
-    "get_public_key" -> rpc.ok(request.id, account.pubkey_hex)
+    "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
     "ping" -> rpc.ok(request.id, "pong")
     "sign_event" -> sign_event(account, request, now)
     "nip44_encrypt" -> nip44_op(account, request, True)
@@ -532,14 +532,14 @@ fn sign_event(
           let unsigned =
             Event(
               id: "",
-              pubkey: account.pubkey_hex,
+              pubkey: pubkey_hex(account),
               created_at: option.unwrap(draft.created_at, now),
               kind: draft.kind,
               tags: draft.tags,
               content: draft.content,
               sig: "",
             )
-          case event.finalize(unsigned, account.privkey) {
+          case event.finalize(unsigned, privkey(account)) {
             Ok(signed) ->
               rpc.ok(request.id, json.to_string(event.to_json(signed)))
             Error(_) -> rpc.error(request.id, "failed to sign event")
@@ -561,7 +561,7 @@ fn nip44_op(
       case hex.decode(third_party_hex) {
         Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
         Ok(third_party) ->
-          case nip44.conversation_key(account.privkey, third_party) {
+          case nip44.conversation_key(privkey(account), third_party) {
             Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
             Ok(key) -> {
               let outcome = case encrypting {
@@ -593,14 +593,14 @@ fn build_reply(
       let unsigned =
         Event(
           id: "",
-          pubkey: account.pubkey_hex,
+          pubkey: pubkey_hex(account),
           created_at: now,
           kind: event.nip46_kind,
           tags: [["p", client_pk_hex]],
           content: content,
           sig: "",
         )
-      case event.finalize(unsigned, account.privkey) {
+      case event.finalize(unsigned, privkey(account)) {
         Ok(signed) -> Ok(signed)
         Error(_) -> Error("failed to sign response")
       }
