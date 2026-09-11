@@ -51,7 +51,7 @@ flowchart LR
 
 管理 UI は他のどの部分にも依存しない。
 表示する状態は名前付きアクターへの問い合わせで取るので、UI が再起動しても問い合わせ先が再起動しても、配線をやり直す必要がない。
-問い合わせが失敗したときはその項目だけを「unavailable」として描画し、ページ全体は失敗させない。
+問い合わせが失敗したときはその項目だけを、リレーは「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）、承認待ちとセッションは空の一覧として描画し、ページ全体は失敗させない。
 問い合わせの返信先は OTP の `gen_server:call` と同じく monitor の alias なので、タイムアウトの後に届いた応答（接続 secret を含みうる）はランタイムが捨て、UI のハンドラーのメールボックスにもログにも残らない。
 
 ## スーパービジョンツリー
@@ -397,15 +397,17 @@ sequenceDiagram
 `/healthz` 以外はすべて Basic 認証を要する。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じるヘッダーを付ける。
-ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシートのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` が同じ定義を見る。
+ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシートと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
+ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。
 
 | メソッド | パス | 役割 |
 | --- | --- | --- |
 | GET | `/healthz` | 認証なしで `ok` を返す |
 | GET | `/` | ダッシュボード |
 | GET | `/static/admin.css` | ビルドした CSS（`priv/static/admin.css`） |
+| POST | `/language` | 表示の言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す |
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
@@ -476,6 +478,7 @@ nostr-no-su/
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/view.gleam      ページ枠と、本体の他のモジュールに依存しない部品（lustre）
+│       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み

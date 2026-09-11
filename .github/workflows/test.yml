@@ -48,8 +48,10 @@ jobs:
           node-version: "24"
       - run: npm ci
       - run: npm run build:css
-      # 生成物をリポジトリに含めているので、描画のモジュールのクラスを変えたら
-      # ビルドし直してコミットする。忘れるとここで差分が出る。
+      # 生成物をリポジトリに含めているので、描画のモジュール（src/nostr_no_su/admin/ の
+      # .gleam。文言の i18n.gleam を除く）か assets/admin.css を変えたら、ビルドし直して
+      # コミットする。クラスを変えなくても、文字列、識別子、コメントの語がクラスの候補に
+      # なって CSS が変わることがある。忘れるとここで差分が出る。
       - name: ビルドした CSS がコミットされたものと一致することを確かめる
         run: git diff --exit-code -- priv/static/admin.css
 
