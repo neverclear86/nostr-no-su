@@ -19,6 +19,9 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 
 const other_client_key = "0000000000000000000000000000000000000000000000000000000000000005"
 
+/// 2 人目の署名者の鍵。
+const other_signer_key = "0000000000000000000000000000000000000000000000000000000000000077"
+
 /// 承認ページを載せる管理 UI の公開 URL。
 const auth_base = "http://admin.test"
 
@@ -818,4 +821,196 @@ pub fn requests_after_the_actor_started_are_handled_test() {
   let #(state, outcome) = handle_after(new_engine(), request, 1030, 1000)
   let assert Reply(_) = outcome
   assert engine.sessions(state) != []
+}
+
+// --- アカウントの追加・削除・secret の差し替え ---
+
+/// 指定したトークンで承認待ちを作る、secret 無しの `connect` を処理する。
+fn connect_for_approval(
+  state: engine.Engine,
+  client: Account,
+  signer: Account,
+  approval_token: String,
+  now: Int,
+) -> engine.Engine {
+  let #(state, outcome) =
+    engine.handle_event(
+      state,
+      connect_event(client, signer, "", now),
+      engine.Inputs(now: now, token: approval_token, not_before: 0),
+    )
+  let assert Reply(_) = outcome
+  state
+}
+
+/// 署名者宛の `ping` リクエスト。
+fn ping_event(client: Account, signer: Account, now: Int) -> Event {
+  request_event(client, signer, "{\"id\":\"p1\",\"method\":\"ping\"}", now)
+}
+
+/// 追加した署名者宛の `connect` には応答し、追加の前は破棄する。
+pub fn add_account_makes_the_signer_answer_test() {
+  let signer = account_for(other_signer_key)
+  let client = account_for(client_key)
+  let #(_state, before) =
+    connect(new_engine(), client, signer, "secret-b", 1000)
+  let assert Ignore(_) = before
+
+  let state = engine.add_account(new_engine(), signer, "secret-b")
+  let #(_state, after) = connect(state, client, signer, "secret-b", 1000)
+  let assert Reply(response) = after
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// 削除すると、その署名者のセッションと承認待ちだけが消え、もう片方の署名者の
+/// ものは残る。削除した署名者宛のリクエストは破棄する。
+pub fn remove_account_drops_only_its_sessions_and_pending_test() {
+  let signer_a = account_for(signer_key)
+  let signer_b = account_for(other_signer_key)
+  let client = account_for(client_key)
+  let waiting = account_for(other_client_key)
+  let state =
+    engine.new([#(signer_a, secret), #(signer_b, secret)], Some(approval_url))
+  let #(state, _) = connect(state, client, signer_a, secret, 1000)
+  let #(state, _) = connect(state, client, signer_b, secret, 1000)
+  let state = connect_for_approval(state, waiting, signer_a, "tok-a", 1000)
+  let state = connect_for_approval(state, waiting, signer_b, "tok-b", 1000)
+
+  let state = engine.remove_account(state, account.pubkey_hex(signer_a))
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer_b),
+        client: account.pubkey_hex(client),
+      ),
+    ]
+  let assert [remaining] = engine.pending(state, 1000)
+  assert remaining.token == "tok-b"
+  let #(_state, outcome) =
+    handle(state, ping_event(client, signer_a, 1001), 1001)
+  let assert Ignore(_) = outcome
+}
+
+/// 削除して戻しても、削除の前に処理したリクエストの再配送は重複として扱う。
+pub fn remove_and_add_keeps_the_seen_requests_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1000)
+  let #(state, first) = handle(new_engine(), request, 1000)
+  let assert Reply(_) = first
+
+  let state =
+    engine.remove_account(state, account.pubkey_hex(signer))
+    |> engine.add_account(signer, "new-secret")
+  let #(_state, replayed) = handle(state, request, 1000)
+  assert replayed == Duplicate
+}
+
+/// secret を差し替えると、古い secret の `connect` は拒否され、新しい secret の
+/// `connect` が通る。差し替えの前に成立したセッションは残る。
+pub fn replace_secret_rejects_the_old_secret_and_keeps_sessions_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let newcomer = account_for(other_client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let state =
+    engine.replace_secret(state, account.pubkey_hex(signer), "rotated")
+
+  let #(state, old) = connect(state, newcomer, signer, secret, 1001)
+  let assert Reply(old_response) = old
+  assert string.contains(
+    decrypt_response(newcomer, signer, old_response),
+    "invalid secret",
+  )
+  let #(state, new) = connect(state, newcomer, signer, "rotated", 1002)
+  let assert Reply(new_response) = new
+  assert decrypt_response(newcomer, signer, new_response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+  let #(_state, ping) = handle(state, ping_event(client, signer, 1003), 1003)
+  let assert Reply(pong) = ping
+  assert decrypt_response(client, signer, pong)
+    == "{\"id\":\"p1\",\"result\":\"pong\"}"
+}
+
+/// secret を差し替えても承認待ちは残る。承認待ちは secret と無関係に作られる。
+pub fn replace_secret_keeps_pending_connections_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state = connect_for_approval(auth_engine(), client, signer, token, 1000)
+  let before = engine.pending(state, 1000)
+  let state =
+    engine.replace_secret(state, account.pubkey_hex(signer), "rotated")
+  assert before != []
+  assert engine.pending(state, 1000) == before
+}
+
+/// 登録されていない署名者の削除と差し替えは、何も変えない。
+pub fn changes_to_an_unregistered_signer_are_harmless_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let stranger = account.pubkey_hex(account_for(other_signer_key))
+  let #(state, _) = connect(auth_engine(), client, signer, secret, 1000)
+  let state =
+    connect_for_approval(
+      state,
+      account_for(other_client_key),
+      signer,
+      token,
+      1000,
+    )
+  let unchanged = fn(changed: engine.Engine) {
+    engine.sessions(changed) == engine.sessions(state)
+    && engine.pending(changed, 1000) == engine.pending(state, 1000)
+    && engine.connection_secrets(changed) == engine.connection_secrets(state)
+  }
+  assert unchanged(engine.remove_account(state, stranger))
+  assert unchanged(engine.replace_secret(state, stranger, "rotated"))
+}
+
+/// 登録済みの署名者を足し直すと secret が置き換わり、セッションは残る。
+pub fn adding_a_registered_signer_replaces_its_secret_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let state = engine.add_account(state, signer, "replaced")
+  assert engine.connection_secrets(state)
+    == [#(account.pubkey_hex(signer), "replaced")]
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
+}
+
+/// 署名者の一覧と secret の一覧は、登録の順ではなく署名者の昇順に並ぶ。
+pub fn signers_and_connection_secrets_are_sorted_test() {
+  let keys = [other_signer_key, signer_key, other_client_key]
+  let state =
+    engine.new(
+      list.map(keys, fn(key) { #(account_for(key), "secret-" <> key) }),
+      None,
+    )
+  let expected =
+    keys
+    |> list.map(fn(key) {
+      #(account.pubkey_hex(account_for(key)), "secret-" <> key)
+    })
+    |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
+  assert engine.connection_secrets(state) == expected
+  assert engine.signers(state) == list.map(expected, fn(entry) { entry.0 })
+}
+
+/// 所属の検査は、登録済みの署名者だけを真にする。
+pub fn has_account_reflects_the_registered_signers_test() {
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let stranger = account.pubkey_hex(account_for(other_signer_key))
+  assert engine.has_account(new_engine(), signer)
+  assert !engine.has_account(new_engine(), stranger)
+  assert !engine.has_account(
+    engine.remove_account(new_engine(), signer),
+    signer,
+  )
 }
