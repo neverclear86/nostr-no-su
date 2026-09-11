@@ -12,7 +12,7 @@ pub fn bunker_uri_lists_every_relay_test() {
   let assert Ok(signer) = account.from_privkey(bytes(key))
   let uri =
     account.bunker_uri(
-      signer,
+      account.pubkey_hex(signer),
       ["wss://relay.one", "ws://127.0.0.1:7777"],
       Some("s3cret"),
     )
@@ -28,7 +28,11 @@ pub fn bunker_uri_lists_every_relay_test() {
 /// は管理 UI での承認を経る。
 pub fn bunker_uri_without_a_secret_test() {
   let assert Ok(signer) = account.from_privkey(bytes(key))
-  assert account.bunker_uri(signer, ["wss://relay.one"], None)
+  assert account.bunker_uri(
+      account.pubkey_hex(signer),
+      ["wss://relay.one"],
+      None,
+    )
     == "bunker://"
     <> account.pubkey_hex(signer)
     <> "?relay=wss%3A%2F%2Frelay.one"

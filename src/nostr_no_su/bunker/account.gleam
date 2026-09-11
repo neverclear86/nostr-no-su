@@ -53,12 +53,14 @@ pub fn pubkey_hex(account: Account) -> String {
   account.pubkey_hex
 }
 
-/// このアカウントへ接続するためにクライアントへ貼り付ける `bunker://` URI。
-/// NIP-46 は複数の `relay=` ヒントを許容し、クライアントはそのすべてに接続する
-/// ため、生きているリレーが 1 つあればバンカーに到達できる。`secret` が `None`
-/// の URI はその場では接続できず、管理 UI での承認（auth_url フロー）を経る。
+/// 署名者 `signer`（x-only 公開鍵の小文字 16 進）へ接続するためにクライアントへ
+/// 貼り付ける `bunker://` URI。URI に入るのは公開鍵だけなので、秘密鍵を持つ
+/// `Account` を受け取らない。NIP-46 は複数の `relay=` ヒントを許容し、クライアント
+/// はそのすべてに接続するため、生きているリレーが 1 つあればバンカーに到達できる。
+/// `secret` が `None` の URI はその場では接続できず、管理 UI での承認（auth_url
+/// フロー）を経る。
 pub fn bunker_uri(
-  account: Account,
+  signer: String,
   relay_urls: List(String),
   secret: Option(String),
 ) -> String {
@@ -70,5 +72,5 @@ pub fn bunker_uri(
     None -> ""
     Some(secret) -> "&secret=" <> secret
   }
-  "bunker://" <> account.pubkey_hex <> "?" <> relay_params <> secret_param
+  "bunker://" <> signer <> "?" <> relay_params <> secret_param
 }
