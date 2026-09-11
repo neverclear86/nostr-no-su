@@ -1,6 +1,8 @@
 import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/bunker/account
+import nostr_no_su/nostr/nip19
+import support/vector.{bytes}
 
 const key = "0000000000000000000000000000000000000000000000000000000000000042"
 
@@ -59,6 +61,35 @@ pub fn from_hex_trims_whitespace_test() {
   let assert Ok(signer) = account.from_hex("  " <> key <> "\t")
   let assert Ok(same) = account.from_hex(key)
   assert signer.pubkey_hex == same.pubkey_hex
+}
+
+/// BIP-340 の公式ベクター 0 の秘密鍵から、同じベクターの公開鍵を導く。
+pub fn from_privkey_bip340_vector0_test() {
+  let assert Ok(signer) =
+    account.from_privkey(bytes(
+      "0000000000000000000000000000000000000000000000000000000000000003",
+    ))
+  assert signer.pubkey_hex
+    == "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+}
+
+/// 32 バイトでない秘密鍵は理由付きで拒否する。
+pub fn from_privkey_rejects_wrong_length_test() {
+  let assert Error(reason) = account.from_privkey(<<0, 17, 34, 51>>)
+  assert reason == "private key must be 32 bytes"
+}
+
+/// 範囲外のスカラー（0 と位数 n）の nsec は NIP-19 としては復号できるが、
+/// 範囲の検査はアカウントの構築で行い、ここで拒否する。
+pub fn from_privkey_rejects_out_of_range_nsec_test() {
+  let nsecs = [
+    "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqwkhnav",
+    "nsec1lllllllllllllllllllllllll6a2ah8x4ay2qwal6f0ge5pkg9qstu3zum",
+  ]
+  use nsec <- list.each(nsecs)
+  let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
+  assert account.from_privkey(privkey)
+    == Error("private key not in valid range")
 }
 
 /// 鍵をすべて読み込む。1 つでも不正なら、そこで失敗して理由を返す。

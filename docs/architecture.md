@@ -262,6 +262,7 @@ nostr-no-su/
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
+│       ├── nostr/nip19.gleam     NIP-19 の npub / nsec の符号化と復号
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH

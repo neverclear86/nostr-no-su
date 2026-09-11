@@ -18,10 +18,13 @@ pub type Account {
 
 /// 64 文字の 16 進秘密鍵からアカウントを構築する。
 pub fn from_hex(raw: String) -> Result(Account, String) {
-  use privkey <- result.try(
-    hex.decode(string.trim(raw))
-    |> result.replace_error("invalid hex private key"),
-  )
+  hex.decode(string.trim(raw))
+  |> result.replace_error("invalid hex private key")
+  |> result.try(from_privkey)
+}
+
+/// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
+pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
   case bit_array.byte_size(privkey) {
     32 ->
       case secp256k1.xonly_pubkey(privkey) {
