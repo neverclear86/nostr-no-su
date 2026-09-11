@@ -1,0 +1,27 @@
+/*
+ * 管理 UI のスタイルの入力。`npm run build:css` で priv/static/admin.css にビルドする。
+ *
+ * - source(none) で自動検出を止め、クラス名を拾う場所を描画のモジュールのディレクトリーに
+ *   限る（build/ や node_modules/ を走査させない）。admin.gleam はその外にあるので、
+ *   クラス名を書かない。
+ * - ライトは daisyUI の組み込み light をそのまま使う。
+ * - ダークは組み込み dark を継承し、primary だけを上書きする。組み込みの primary は
+ *   primary-content との比が 4.14:1 で、btn-primary の文字が AA に届かないため。
+ *   themes の一覧に dark を入れない（入れると組み込みの値と上書きの値が同じセレクターで
+ *   二重に出力され、どちらが効くかが出力の順に依存する）。上書きのブロックの
+ *   prefersdark: true は必須（無いと @media (prefers-color-scheme: dark) に入らない）。
+ */
+@import "tailwindcss" source(none);
+@source "../src/nostr_no_su/admin";
+
+@plugin "daisyui" {
+  themes: light --default;
+  logs: false;
+}
+
+@plugin "daisyui/theme" {
+  name: "dark";
+  prefersdark: true;
+  --color-primary: oklch(72% 0.14 277);
+  --color-primary-content: oklch(20% 0.05 277);
+}

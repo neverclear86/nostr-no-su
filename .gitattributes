@@ -1,0 +1,2 @@
+# npm run build:css の生成物。差分は assets/admin.css と描画のモジュールで読む。
+priv/static/admin.css linguist-generated=true

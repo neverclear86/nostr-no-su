@@ -9,3 +9,4 @@ Dockerfile
 plugins
 plugins-src
 examples
+node_modules

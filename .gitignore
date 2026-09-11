@@ -1,6 +1,8 @@
 *.beam
 *.ez
 /build
+# 管理 UI の CSS のビルドと撮影に使う npm のパッケージ。
+node_modules
 erl_crash.dump
 .env
 

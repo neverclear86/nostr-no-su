@@ -329,13 +329,22 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "bunker://" <> signer)
   assert string.contains(body, "wss://relay.example")
   assert string.contains(body, "wss://bunker.example")
-  // セル単位で見る。"connected" だけでは "disconnected" にも一致してしまう。
-  assert string.contains(body, "<td>monitor</td>")
-  assert string.contains(body, "<td>connected</td>")
-  assert string.contains(body, "<td>bunker</td>")
-  assert string.contains(body, "<td>disconnected</td>")
-  assert string.contains(body, "<td>console_logger</td>")
-  assert string.contains(body, "<td>running</td>")
+  // 要素単位で見る。"connected" だけでは "disconnected" にも一致してしまう。
+  assert string.contains(body, "<td class=\"whitespace-nowrap\">monitor</td>")
+  assert string.contains(
+    body,
+    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
+  )
+  assert string.contains(body, "<td class=\"whitespace-nowrap\">bunker</td>")
+  assert string.contains(
+    body,
+    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span>",
+  )
+  assert string.contains(body, "<td class=\"break-words\">console_logger</td>")
+  assert string.contains(
+    body,
+    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">running</span>",
+  )
 }
 
 /// 状態に含まれる HTML は、そのまま出さずにエスケープする。リレー URL も
@@ -435,7 +444,7 @@ pub fn dashboard_shows_pending_connections_test() {
   assert string.contains(body, "value=\"" <> auth_uri <> "\"")
   assert string.contains(body, "action=\"/approve/" <> token <> "\"")
   assert string.contains(body, "action=\"/deny/" <> token <> "\"")
-  assert string.contains(body, "<td>12s</td>")
+  assert string.contains(body, "<dd class=\"break-words\">12s</dd>")
 }
 
 /// 承認ページには、誰が誰に接続しようとしているかが出る。
@@ -445,7 +454,7 @@ pub fn approval_page_shows_the_request_test() {
   let body = simulate.read_body(response)
   assert string.contains(body, signer)
   assert string.contains(body, client)
-  assert string.contains(body, "<td>12s</td>")
+  assert string.contains(body, "<dd class=\"break-words\">12s</dd>")
 }
 
 /// 知らない、あるいは失効したトークンの承認ページは 404。
@@ -512,18 +521,23 @@ fn with_accounts(
   admin.Context(..context(), accounts: fn() { accounts })
 }
 
-/// ダッシュボードのアカウントの節には、ラベルの列が出る。
+/// ダッシュボードのアカウントの節には、ラベルが出る。
 pub fn dashboard_shows_account_labels_test() {
   let body = simulate.read_body(get(context(), "/"))
-  assert string.contains(body, "<th>Label</th>")
-  assert string.contains(body, "<td>" <> label <> "</td>")
+  assert string.contains(
+    body,
+    "<p class=\"font-semibold break-words\">" <> label <> "</p>",
+  )
 }
 
 /// バンカーが無効なら、アカウントの節にその理由が出る。
 pub fn dashboard_shows_why_the_bunker_is_disabled_test() {
   let reason = "bunker is disabled: DATABASE_URL is not set"
   let body = simulate.read_body(get(with_accounts(Error(reason)), "/"))
-  assert string.contains(body, "<p>" <> reason <> "</p>")
+  assert string.contains(
+    body,
+    "<div class=\"alert\"><span>" <> reason <> "</span></div>",
+  )
 }
 
 /// アカウントの節の理由とラベルは、どちらもエスケープする。ラベルは利用者の入力で、
@@ -533,11 +547,17 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let escaped = "&lt;script&gt;alert(1)&lt;/script&gt;"
   let labelled =
     simulate.read_body(get(with_accounts(Ok([account_row(script)])), "/"))
-  assert string.contains(labelled, "<td>" <> escaped <> "</td>")
+  assert string.contains(
+    labelled,
+    "<p class=\"font-semibold break-words\">" <> escaped <> "</p>",
+  )
   assert !string.contains(labelled, script)
 
   let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
-  assert string.contains(failing, "<p>" <> escaped <> "</p>")
+  assert string.contains(
+    failing,
+    "<div class=\"alert\"><span>" <> escaped <> "</span></div>",
+  )
   assert !string.contains(failing, script)
 }
 
@@ -626,7 +646,10 @@ pub fn import_rejects_a_registered_account_test() {
   let body = simulate.read_body(response)
   assert string.contains(body, "account is already registered")
   assert string.contains(body, "different master key")
-  assert string.contains(body, "href=\"/\"")
+  assert string.contains(
+    body,
+    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+  )
   assert !string.contains(body, signer_nsec)
 }
 
@@ -808,7 +831,7 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   assert string.contains(body, "action=\"/accounts/register-generated\"")
   assert string.contains(
     body,
-    "<p role=\"alert\">label must not contain control characters</p>",
+    "<div class=\"alert alert-error\" role=\"alert\"><span>label must not contain control characters</span></div>",
   )
   assert !string.contains(body, "a\tb")
   assert header(response, "cache-control") == "no-store"
@@ -857,7 +880,7 @@ pub fn new_account_page_has_secret_inputs_test() {
   assert response.status == 200
   assert string.contains(
     simulate.read_body(response),
-    "<input autocomplete=\"off\" name=\"nsec\" required type=\"password\">",
+    "<input autocomplete=\"off\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
   )
 }
 
@@ -872,7 +895,7 @@ pub fn reveal_page_asks_for_the_password_test() {
   let body = simulate.read_body(response)
   assert string.contains(
     body,
-    "<input autocomplete=\"off\" name=\"password\" required type=\"password\">",
+    "<input autocomplete=\"off\" class=\"input w-full font-mono border-base-content/60\" name=\"password\" required type=\"password\">",
   )
   assert !string.contains(body, signer_nsec)
   assert process.receive(reports, 100) == Error(Nil)
@@ -1029,7 +1052,7 @@ pub fn label_edit_form_has_no_maxlength_test() {
     simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
   assert string.contains(
     edit,
-    "autocomplete=\"off\" name=\"label\" type=\"text\" value=\""
+    "autocomplete=\"off\" class=\"input w-full border-base-content/60\" name=\"label\" type=\"text\" value=\""
       <> label
       <> "\"",
   )
@@ -1059,7 +1082,10 @@ pub fn account_change_failures_map_to_status_codes_test() {
   assert #(action, response.status) == #(action, status)
   let body = simulate.read_body(response)
   assert string.contains(body, failure.reason)
-  assert string.contains(body, "href=\"/\"")
+  assert string.contains(
+    body,
+    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+  )
 }
 
 /// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 で、
@@ -1152,6 +1178,7 @@ pub fn authenticated_responses_are_not_stored_test() {
   let spec = [#("nsec", spec_nsec)]
   let responses = [
     get(context, "/"),
+    get(context, "/static/admin.css"),
     get(context, "/approve/" <> token),
     get(context, "/accounts/new"),
     post(context, "/accounts/generate"),
@@ -1195,8 +1222,8 @@ pub fn authenticated_responses_are_not_stored_test() {
   ]
   assert list.map(responses, fn(response) { response.status })
     == [
-      200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200, 200, 200,
-      200, 200, 403, 503, 303, 404,
+      200, 200, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200, 200,
+      200, 200, 200, 403, 503, 303, 404,
     ]
   list.each(responses, fn(response) {
     assert header(response, "cache-control") == "no-store"
@@ -1233,9 +1260,9 @@ pub fn dashboard_lists_account_actions_test() {
   assert string.contains(body, signer_npub)
   assert string.contains(
     body,
-    "readonly size=\"64\" type=\"text\" value=\""
+    "<input aria-label=\"Connection URI\" class=\"input join-item w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
       <> wisp.escape_html(uri)
-      <> "\"",
+      <> "\">",
   )
   assert string.contains(body, "href=\"/accounts/new\"")
   list.each(account_actions.all, fn(action) {
@@ -1261,4 +1288,64 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
   assert !string.contains(failing, "Add account")
   let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
   assert string.contains(empty, "Add account")
+}
+
+// --- スタイルシートと通知の色 ---
+
+/// ページはビルドした CSS を読む。CSS は認証の後に置き、`text/css` で返す。
+pub fn stylesheet_is_served_behind_authentication_test() {
+  let page = simulate.read_body(get(context(), "/"))
+  assert string.contains(
+    page,
+    "<link href=\"/static/admin.css\" rel=\"stylesheet\">",
+  )
+  let response = get(context(), "/static/admin.css")
+  assert response.status == 200
+  assert header(response, "content-type") == "text/css; charset=utf-8"
+  assert string.contains(simulate.read_body(response), ".btn{")
+  let anonymous =
+    simulate.request(http.Get, "/static/admin.css")
+    |> admin.handle_request(context(), _)
+  assert anonymous.status == 401
+}
+
+/// 配信するのはスタイルシートだけで、GET 以外は受け付けない。
+pub fn only_the_stylesheet_is_served_test() {
+  assert get(context(), "/static/other.css").status == 404
+  assert get(context(), "/static").status == 404
+  assert post(context(), "/static/admin.css").status == 405
+}
+
+/// 通知ページの理由の囲みは、カードの中に結果ごとの色で出す。承認と拒否はどちらも 200
+/// なので、状態コードではなく経路で色が決まる。
+pub fn notices_are_colored_by_outcome_test() {
+  let rotate = action_path(dashboard.RotateSecret)
+  let notices = [
+    #(post(context(), "/approve/" <> token), "alert alert-success"),
+    #(post(context(), "/deny/" <> token), "alert"),
+    #(post(context(), "/approve/other-token"), "alert alert-error"),
+    #(
+      post(
+        failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+        rotate,
+      ),
+      "alert alert-warning",
+    ),
+    #(
+      post(
+        failing_context(bunker.NotReady("accounts are not loaded yet")),
+        rotate,
+      ),
+      "alert alert-warning",
+    ),
+  ]
+  list.each(notices, fn(entry) {
+    let #(response, class) = entry
+    assert string.contains(
+      simulate.read_body(response),
+      "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\""
+        <> class
+        <> "\"><span>",
+    )
+  })
 }

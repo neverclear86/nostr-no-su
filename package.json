@@ -1,0 +1,14 @@
+{
+  "name": "nostr-no-su-dev-tools",
+  "private": true,
+  "description": "Build tools for the admin UI stylesheet and screenshots. Not needed to build or run the server.",
+  "scripts": {
+    "build:css": "tailwindcss --input assets/admin.css --output priv/static/admin.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "daisyui": "5.7.36",
+    "playwright-core": "1.50.1",
+    "tailwindcss": "4.3.3"
+  }
+}

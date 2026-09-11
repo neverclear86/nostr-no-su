@@ -2,6 +2,9 @@
 //// 秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を `admin/view` の部品で
 //// HTML 文字列にするだけで、プロセスにも IO にも触れない。
 ////
+//// 埋め込む値（ラベル、表示する理由、nsec）はテキストか属性値として lustre に渡し、
+//// エスケープを文字列化に任せる（`admin/view` の規則に従う）。
+////
 //// 秘密鍵（nsec）を描画するのは `generated_key_page`、`registered_page`、
 //// `private_key_page` の 3 つだけである。
 
@@ -17,42 +20,47 @@ const skipped_row_note = "If registration reports \"account is already registere
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
 pub fn new_account_page(error: Option(String)) -> String {
-  view.page("Add account", [
-    view.heading("Add account"),
+  view.page("Add account", view.Narrow, [
     view.error_message(error),
-    html.h3([], [html.text("Import a private key")]),
-    html.p([], [
-      html.text(
+    view.card([
+      view.heading("Import a private key"),
+      form_description(
         "Paste the private key (nsec) of the account. It is shown once after "
         <> "registration, and afterwards only when you re-enter the admin "
         <> "password.",
       ),
+      view.post_form(
+        dashboard.segments_path(dashboard.import_account_segments),
+        [
+          view.labelled(
+            "Private key (nsec)",
+            view.secret_input(dashboard.nsec_field),
+          ),
+          view.labelled(
+            "Label",
+            label_input("", Some(dashboard.max_label_code_points)),
+          ),
+        ],
+        "Register",
+        view.Primary,
+        view.InForm,
+      ),
     ]),
-    view.post_form(
-      dashboard.segments_path(dashboard.import_account_segments),
-      [
-        view.labelled("Private key (nsec)", [
-          view.secret_input(dashboard.nsec_field),
-        ]),
-        view.labelled("Label", [
-          label_input("", Some(dashboard.max_label_code_points)),
-        ]),
-      ],
-      "Register",
-    ),
-    html.h3([], [html.text("Generate a new key")]),
-    html.p([], [
-      html.text(
+    view.card([
+      view.heading("Generate a new key"),
+      form_description(
         "Generate a new private key on the server. It is shown for backup "
         <> "before it is registered.",
       ),
+      view.post_form(
+        dashboard.segments_path(dashboard.generate_account_segments),
+        [],
+        "Generate",
+        view.Primary,
+        view.InForm,
+      ),
     ]),
-    view.post_form(
-      dashboard.segments_path(dashboard.generate_account_segments),
-      [],
-      "Generate",
-    ),
-    html.p([], [html.text(skipped_row_note)]),
+    view.hint(skipped_row_note),
     view.back_link(),
   ])
 }
@@ -61,29 +69,32 @@ pub fn new_account_page(error: Option(String)) -> String {
 /// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`error` は、生成した鍵の
 /// 登録でラベルが規則に反したときに再描画する理由。
 pub fn generated_key_page(nsec: String, error: Option(String)) -> String {
-  view.page("Generated key", [
-    view.heading("Generated key"),
+  view.page("Generated key", view.Narrow, [
     view.error_message(error),
-    html.p([], [
-      html.strong([], [html.text("Back up this private key now.")]),
-      html.text(
-        " The account is not "
-        <> "registered until you press \"Register this key\". After "
-        <> "registration, the key is shown only when you re-enter the admin "
-        <> "password.",
+    view.card([
+      view.warning([
+        html.strong([], [html.text("Back up this private key now.")]),
+        html.text(
+          " The account is not registered until you press "
+          <> "\"Register this key\". After registration, the key is shown "
+          <> "only when you re-enter the admin password.",
+        ),
+      ]),
+      view.copyable_field("Private key (nsec)", nsec),
+      view.post_form(
+        dashboard.segments_path(dashboard.register_generated_segments),
+        [
+          view.hidden_input(dashboard.nsec_field, nsec),
+          view.labelled(
+            "Label",
+            label_input("", Some(dashboard.max_label_code_points)),
+          ),
+        ],
+        "Register this key",
+        view.Primary,
+        view.InForm,
       ),
     ]),
-    view.labelled("Private key (nsec)", view.copyable_field(nsec)),
-    view.post_form(
-      dashboard.segments_path(dashboard.register_generated_segments),
-      [
-        view.hidden_input(dashboard.nsec_field, nsec),
-        view.labelled("Label", [
-          label_input("", Some(dashboard.max_label_code_points)),
-        ]),
-      ],
-      "Register this key",
-    ),
     view.back_link(),
   ])
 }
@@ -91,25 +102,31 @@ pub fn generated_key_page(nsec: String, error: Option(String)) -> String {
 /// nsec の入力による登録の完了ページ。入力された鍵の nsec をここで 1 回だけ表示する。
 /// 接続 URI はダッシュボードで取得する。
 pub fn registered_page(npub: String, label: String, nsec: String) -> String {
-  view.page("Account registered", [
-    view.heading("Account registered"),
-    view.table(["Label", "Account"], [[[html.text(label)], [view.code(npub)]]]),
-    html.p([], [
-      html.strong([], [
-        html.text("Back up this private key if you have not already."),
+  view.page("Account registered", view.Narrow, [
+    view.card([
+      view.summary_list([
+        #("Label", view.Plain(label)),
+        #("Account", view.Account(npub:, hex: None)),
       ]),
-      html.text(
-        " It is shown again only when you re-enter the admin password. The "
-        <> "connection URI is on the dashboard.",
-      ),
+      view.warning([
+        html.strong([], [
+          html.text("Back up this private key if you have not already."),
+        ]),
+        html.text(
+          " It is shown again only when you re-enter the admin password. The "
+          <> "connection URI is on the dashboard.",
+        ),
+      ]),
+      view.copyable_field("Private key (nsec)", nsec),
     ]),
-    view.labelled("Private key (nsec)", view.copyable_field(nsec)),
     view.back_link(),
   ])
 }
 
 /// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
 /// ラベルの編集フォームには、利用者の入力ではなく一覧から得た保存済みのラベルを入れる。
+/// 送信のボタンの重さは操作ごとに決める（ラベルの保存は主操作、secret の作り直しと
+/// 秘密鍵の表示は注意、削除は破壊）。
 pub fn account_action_page(
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
@@ -122,8 +139,10 @@ pub fn account_action_page(
       element.none(),
       view.post_form(
         path,
-        [view.labelled("Label", [label_input(row.label, None)])],
+        [view.labelled("Label", label_input(row.label, None))],
         "Save",
+        view.Primary,
+        view.InForm,
       ),
     )
     dashboard.RotateSecret -> #(
@@ -135,7 +154,7 @@ pub fn account_action_page(
           <> "connection URI from the dashboard into your clients.",
         ),
       ]),
-      view.post_form(path, [], title),
+      view.post_form(path, [], title, view.Caution, view.InForm),
     )
     dashboard.DeleteAccount -> #(
       html.p([], [
@@ -144,15 +163,13 @@ pub fn account_action_page(
         ),
         html.strong([], [
           html.text(
-            "If you have not saved this key anywhere else, the account "
-            <> "is lost.",
+            "If you have not saved this key anywhere else, the account is "
+            <> "lost.",
           ),
         ]),
-        html.text(
-          " Its sessions and pending connections are removed " <> "as well.",
-        ),
+        html.text(" Its sessions and pending connections are removed as well."),
       ]),
-      view.post_form(path, [], title),
+      view.post_form(path, [], title, view.Destructive, view.InForm),
     )
     dashboard.RevealPrivateKey -> #(
       html.p([], [
@@ -164,47 +181,58 @@ pub fn account_action_page(
       view.post_form(
         path,
         [
-          view.labelled("Admin password", [
+          view.labelled(
+            "Admin password",
             view.secret_input(dashboard.password_field),
-          ]),
+          ),
         ],
         title,
+        view.Caution,
+        view.InForm,
       ),
     )
   }
-  view.page(title, [
-    view.heading(title),
-    account_summary(row),
-    view.error_message(error),
-    description,
-    form,
+  view.page(title, view.Narrow, [
+    view.card([
+      account_summary(row),
+      view.error_message(error),
+      description,
+      form,
+    ]),
     view.back_link(),
   ])
 }
 
 /// 管理パスワードを再入力した後の秘密鍵の表示ページ。
 pub fn private_key_page(row: dashboard.AccountRow, nsec: String) -> String {
-  view.page("Private key", [
-    view.heading("Private key"),
-    account_summary(row),
-    view.labelled("Private key (nsec)", view.copyable_field(nsec)),
-    html.p([], [
-      html.strong([], [html.text("Close this tab after copying the key.")]),
-      html.text(
-        " Reloading this "
-        <> "page or coming back to it with the back button can resend the form, "
-        <> "which shows the key again and logs it again.",
-      ),
+  view.page("Private key", view.Narrow, [
+    view.card([
+      account_summary(row),
+      view.copyable_field("Private key (nsec)", nsec),
+      view.warning([
+        html.strong([], [html.text("Close this tab after copying the key.")]),
+        html.text(
+          " Reloading this page or coming back to it with the back button "
+          <> "can resend the form, which shows the key again and logs it "
+          <> "again.",
+        ),
+      ]),
     ]),
     view.back_link(),
   ])
 }
 
-/// 操作の対象のアカウントを示す表。
+/// 操作の対象のアカウント（ラベルと、npub と 16 進の公開鍵）。
 fn account_summary(row: dashboard.AccountRow) -> Element(msg) {
-  view.table(["Label", "Account"], [
-    [[html.text(row.label)], dashboard.account_cell(row)],
+  view.summary_list([
+    #("Label", view.Plain(row.label)),
+    #("Account", view.Account(npub: row.npub, hex: Some(row.signer))),
   ])
+}
+
+/// カードの見出しの下に置く、フォームの説明。
+fn form_description(text: String) -> Element(msg) {
+  html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
 /// ラベルの入力欄。`maxlength` は新しく入力する欄にだけ付ける。保存済みのラベルは
@@ -219,6 +247,7 @@ fn label_input(value: String, maxlength: Option(Int)) -> Element(msg) {
     attribute.name(dashboard.label_field),
     attribute.autocomplete("off"),
     attribute.default_value(value),
+    attribute.class("input w-full border-base-content/60"),
     ..limit
   ])
 }

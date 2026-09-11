@@ -58,12 +58,19 @@ pub fn error_reasons_are_escaped_test() {
     ),
   ]
   use page <- list.each(pages)
-  assert string.contains(page, "<p role=\"alert\">" <> escaped <> "</p>")
+  assert string.contains(
+    page,
+    "<div class=\"alert alert-error\" role=\"alert\"><span>"
+      <> escaped
+      <> "</span></div>",
+  )
   assert !string.contains(page, hostile)
 }
 
 /// コピーのボタンの処理は値によらず同じで、値を含まない。値は `name` の無い読み取り
-/// 専用の欄に、エスケープして入る。
+/// 専用の欄に、エスケープして入る。コピーの欄は、処理が頼る形（欄はボタンの直前の兄弟、
+/// 囲みはボタンの親の親、`role="status"` は囲みの直下）で出す。形が崩れてもコピーはできて
+/// しまい、完了の表示と読み上げだけが消えるので、欄全体を照合する。
 pub fn copy_button_reads_the_value_from_the_page_test() {
   let first = account_pages.private_key_page(row("main"), "nsec1first\"")
   let second = account_pages.private_key_page(row("main"), "nsec1second")
@@ -71,6 +78,12 @@ pub fn copy_button_reads_the_value_from_the_page_test() {
   assert !string.contains(onclick(first), "nsec1")
   assert string.contains(
     first,
-    "<input readonly size=\"64\" type=\"text\" value=\"nsec1first&quot;\">",
+    "<div class=\"fieldset group\"><span class=\"fieldset-legend\">Private key (nsec)</span><div class=\"join w-full\"><input aria-label=\"Private key (nsec)\" class=\"input join-item w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\"nsec1first&quot;\"><button class=\"btn join-item group-data-copied:btn-success focus-visible:outline-base-content\" onclick=\""
+      <> onclick(first)
+      <> "\" type=\"button\">",
+  )
+  assert string.contains(
+    first,
+    "</button></div><span class=\"sr-only\" role=\"status\"><span class=\"hidden group-data-copied:inline\">Copied</span></span></div>",
   )
 }
