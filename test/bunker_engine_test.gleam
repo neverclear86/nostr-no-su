@@ -962,7 +962,7 @@ pub fn changes_to_an_unregistered_signer_are_harmless_test() {
   let unchanged = fn(changed: engine.Engine) {
     engine.sessions(changed) == engine.sessions(state)
     && engine.pending(changed, 1000) == engine.pending(state, 1000)
-    && engine.connection_secrets(changed) == engine.connection_secrets(state)
+    && secrets_by_signer(changed) == secrets_by_signer(state)
   }
   assert unchanged(engine.remove_account(state, stranger))
   assert unchanged(engine.replace_secret(state, stranger, "rotated"))
@@ -974,8 +974,7 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let state = engine.add_account(state, signer, "replaced")
-  assert engine.connection_secrets(state)
-    == [#(account.pubkey_hex(signer), "replaced")]
+  assert secrets_by_signer(state) == [#(account.pubkey_hex(signer), "replaced")]
   assert engine.sessions(state)
     == [
       engine.Session(
@@ -985,8 +984,15 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
     ]
 }
 
-/// 署名者の一覧と secret の一覧は、登録の順ではなく署名者の昇順に並ぶ。
-pub fn signers_and_connection_secrets_are_sorted_test() {
+/// 登録済みのアカウントを、比べられる形（署名者の公開鍵と secret の組）にする。
+/// `Account` は同じ鍵から作った値同士でも `==` が成り立たないため。
+fn secrets_by_signer(state: engine.Engine) -> List(#(String, String)) {
+  engine.registered_accounts(state)
+  |> list.map(fn(entry) { #(account.pubkey_hex(entry.0), entry.1) })
+}
+
+/// 署名者の一覧と登録済みのアカウントの一覧は、登録の順ではなく署名者の昇順に並ぶ。
+pub fn signers_and_registered_accounts_are_sorted_test() {
   let keys = [other_signer_key, signer_key, other_client_key]
   let state =
     engine.new(
@@ -999,8 +1005,22 @@ pub fn signers_and_connection_secrets_are_sorted_test() {
       #(account.pubkey_hex(account_for(key)), "secret-" <> key)
     })
     |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
-  assert engine.connection_secrets(state) == expected
+  assert secrets_by_signer(state) == expected
   assert engine.signers(state) == list.map(expected, fn(entry) { entry.0 })
+}
+
+/// 署名者のアカウントは、登録済みなら見つかり、未登録と削除の後は見つからない。
+pub fn find_account_reflects_the_registered_signers_test() {
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let stranger = account.pubkey_hex(account_for(other_signer_key))
+  let assert Ok(found) = engine.find_account(new_engine(), signer)
+  assert account.pubkey_hex(found) == signer
+  assert engine.find_account(new_engine(), stranger) == Error(Nil)
+  assert engine.find_account(
+      engine.remove_account(new_engine(), signer),
+      signer,
+    )
+    == Error(Nil)
 }
 
 /// 所属の検査は、登録済みの署名者だけを真にする。

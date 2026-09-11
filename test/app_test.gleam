@@ -1563,7 +1563,12 @@ pub fn an_account_added_at_runtime_answers_test() {
   assert inserted_signer == signer
   assert bunker.accounts(name)
     == Ok([
-      bunker.Listing(signer: signer, label: "main", secret: inserted_secret),
+      bunker.Listing(
+        signer: signer,
+        npub: account.npub(account_for(signer_key)),
+        label: "main",
+        secret: inserted_secret,
+      ),
     ])
 
   deliver(connect_request("c1", inserted_secret))
@@ -1636,7 +1641,7 @@ pub fn account_changes_keep_the_bunker_and_its_sessions_test() {
   assert bunker.update_label(name, signer, "renamed") == Ok(Nil)
   assert process.named(name) == Ok(before)
   let assert Ok([
-    bunker.Listing(signer: listed, label: "renamed", secret: rotated),
+    bunker.Listing(signer: listed, label: "renamed", secret: rotated, ..),
   ]) = bunker.accounts(name)
   assert listed == signer
   assert rotated != secret
@@ -1677,15 +1682,24 @@ pub fn a_failed_write_changes_nothing_test() {
   let assert Ok(Subscribed(_relay_url, [message.Req(..)])) =
     process.receive(subscribed, 2000)
   drain_subscriptions(subscribed, 200)
-  let listed = Ok([bunker.Listing(signer: signer, label: "", secret: secret)])
+  let listed =
+    Ok([
+      bunker.Listing(
+        signer: signer,
+        npub: account.npub(account_for(signer_key)),
+        label: "",
+        secret: secret,
+      ),
+    ])
   assert bunker.accounts(name) == listed
 
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(store_failure())
+    == Error(bunker.NotApplied(store_failure()))
   assert bunker.accounts(name) == listed
   assert process.receive(subscribed, 300) == Error(Nil)
 
-  assert bunker.remove_account(name, signer) == Error(store_failure())
+  assert bunker.remove_account(name, signer)
+    == Error(bunker.NotApplied(store_failure()))
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
@@ -1713,7 +1727,7 @@ pub fn changes_before_loading_do_not_reach_the_store_test() {
     await_connection(reports)
 
   assert bunker.add_account(name, account_for(signer_key), "")
-    == Error("accounts are not loaded yet")
+    == Error(bunker.NotReady("accounts are not loaded yet"))
   assert process.receive(calls, 100) == Error(Nil)
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
@@ -1779,14 +1793,21 @@ pub fn labels_and_registration_checks_test() {
   assert bunker.update_label(name, signer, "renamed") == Ok(Nil)
   assert process.receive(calls, 1000) == Ok(LabelUpdated(signer, "renamed"))
   assert bunker.accounts(name)
-    == Ok([bunker.Listing(signer: signer, label: "renamed", secret: secret)])
+    == Ok([
+      bunker.Listing(
+        signer: signer,
+        npub: account.npub(account_for(signer_key)),
+        label: "renamed",
+        secret: secret,
+      ),
+    ])
 
-  let not_registered = Error("account is not registered")
+  let not_registered = Error(bunker.NotApplied("account is not registered"))
   assert bunker.update_label(name, stranger, "x") == not_registered
   assert bunker.rotate_secret(name, stranger) == not_registered
   assert bunker.remove_account(name, stranger) == not_registered
   assert bunker.add_account(name, account_for(signer_key), "again")
-    == Error("account is already registered")
+    == Error(bunker.NotApplied("account is already registered"))
   assert process.receive(calls, 100) == Error(Nil)
   stop_tree(tree)
 }
@@ -1877,7 +1898,8 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
   // 呼び出し側のプロセスが結果を転送するのは偽ソケットの報告とは別の送信なので、
   // 届く順序は決まらない。十分に待つ。
   assert process.receive(results, 1000) == Ok(Ok(Nil))
-  assert process.receive(results, 1000) == Ok(Error(store_failure()))
+  assert process.receive(results, 1000)
+    == Ok(Error(bunker.NotApplied(store_failure())))
   assert process.receive(reports, 0) == Error(Nil)
   stop_tree(tree)
 }
@@ -1951,6 +1973,7 @@ fn database_listings(database: Subject(DatabaseMsg)) -> List(bunker.Listing) {
   |> list.map(fn(row) {
     bunker.Listing(
       signer: account.pubkey_hex(row.account),
+      npub: account.npub(row.account),
       label: row.label,
       secret: row.secret,
     )
@@ -2046,7 +2069,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   let assert Ok(before) = process.named(name)
 
   assert bunker.add_account(name, account_for(other_signer_key), "other")
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   let stored = database_listings(database)
   assert list.map(stored, fn(listing) { listing.signer })
     == list.sort([signer, other], string.compare)
@@ -2063,14 +2086,14 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   assert string.contains(response_body(pong), "\"result\":\"pong\"")
 
   assert bunker.add_account(name, account_for(other_signer_key), "again")
-    == Error("account is already registered")
+    == Error(bunker.NotApplied("account is already registered"))
   assert bunker.remove_account(name, other)
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   assert list.map(database_listings(database), fn(listing) { listing.signer })
     == [signer]
   assert bunker.accounts(name) == Ok(database_listings(database))
   assert bunker.add_account(name, account_for(other_signer_key), "back")
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   assert list.length(database_listings(database)) == 2
   assert bunker.accounts(name) == Ok(database_listings(database))
   assert process.named(name) == Ok(before)
@@ -2099,7 +2122,7 @@ pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
 
   assert bunker.rotate_secret(name, signer)
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   let assert [bunker.Listing(secret: rotated, ..)] = database_listings(database)
   assert rotated != secret
   assert bunker.accounts(name) == Ok(database_listings(database))
@@ -2142,11 +2165,11 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
 
   process.send(database, FailReads(True))
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(bunker.change_may_have_been_applied)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
   assert bunker.add_account(name, account_for(slow_signer_key), "")
-    == Error("accounts are not loaded yet")
+    == Error(bunker.NotReady("accounts are not loaded yet"))
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
   assert string.contains(response_body(pong), "\"result\":\"pong\"")
@@ -2192,7 +2215,7 @@ pub fn adding_a_row_that_only_the_store_has_reads_it_back_test() {
     _,
   ))
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error("account is already registered")
+    == Error(bunker.NotApplied("account is already registered"))
   let stored = database_listings(database)
   assert list.length(stored) == 2
   assert bunker.accounts(name) == Ok(stored)
@@ -2235,10 +2258,95 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
 
   list.each([1, 2], fn(_attempt) {
     assert bunker.add_account(name, account_for(other_signer_key), "")
-      == Error("account is already registered")
+      == Error(bunker.NotApplied("account is already registered"))
     // 追加のたびに読み直している。
     assert process.receive(loads, 0) == Ok(Nil)
     assert bunker.accounts(name) == Ok([])
   })
+  stop_tree(tree)
+}
+
+// --- 秘密鍵の再表示の問い合わせ ---
+
+/// 読み込みの前は、秘密鍵の問い合わせを拒否し、ストアを呼ばない。
+pub fn nsec_is_refused_before_the_accounts_are_loaded_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store =
+    bunker.Store(..memory_store(calls, [], False), load: fn() {
+      Error(store_failure())
+    })
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store,
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+
+  assert bunker.nsec(name, account.pubkey_hex(account_for(signer_key)))
+    == Error("accounts are not loaded yet")
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 読み込んだ後は、登録済みの署名者に nsec を返し、未登録の署名者は拒否する。どちらも
+/// ストアを呼ばない。一覧の npub は `account.npub` と一致する。
+pub fn nsec_answers_for_a_registered_signer_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let registered = account_for(signer_key)
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      memory_store(calls, [stored_signer(signer_key)], False),
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+
+  let assert Ok([listing]) = bunker.accounts(name)
+  assert listing.npub == account.npub(registered)
+  assert bunker.nsec(name, account.pubkey_hex(account_for(other_signer_key)))
+    == Error("account is not registered")
+  assert bunker.nsec(name, account.pubkey_hex(registered))
+    == Ok(account.nsec(registered))
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 結果が曖昧な書き込みの後、読み直しが成功するまでは秘密鍵の問い合わせを拒否する。
+pub fn nsec_is_refused_until_an_ambiguous_write_is_reloaded_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      committed_but_timed_out_store(database),
+      default_retry_delay_ms,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert bunker.nsec(name, signer) == Ok(account.nsec(account_for(signer_key)))
+
+  process.send(database, FailReads(True))
+  assert bunker.add_account(name, account_for(other_signer_key), "")
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+  assert bunker.nsec(name, signer) == Error("accounts are not loaded yet")
+
+  process.send(database, FailReads(False))
+  assert await_accounts(name, database_listings(database), 2000)
+  assert bunker.nsec(name, signer) == Ok(account.nsec(account_for(signer_key)))
   stop_tree(tree)
 }

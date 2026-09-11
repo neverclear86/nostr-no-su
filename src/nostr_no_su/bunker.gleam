@@ -106,13 +106,41 @@ const token_bytes = 16
 const connection_secret_bytes = 16
 
 /// 変更がアクターの応答を得られなかったときの理由。タイムアウトした後にアクターが
-/// 書き込みを終えて反映することがあるので、確かめ直すよう促す。
-const change_not_answered = "the bunker did not respond; reload to check whether the change was applied"
+/// 書き込みを終えて反映することがあるので、確かめ直すよう促す。変更の失敗のページは
+/// POST の応答で、再読み込みは変更の再送になるため、ダッシュボードで確かめるよう促す。
+const change_not_answered = "the bunker did not respond; check the dashboard to see whether the change was applied"
 
 /// 書き込みの結果が曖昧だった変更の理由。コミットされていることがあるので、単なる
 /// 失敗としては見せず、ストアから読み直した一覧で確かめるよう促す。管理 UI はこの
-/// 文言をそのまま表示してよい。
-pub const change_may_have_been_applied = "the store did not confirm the change; it may have been applied, so reload the dashboard to check"
+/// 文言をそのまま表示してよい。POST の応答のページに出るので、再読み込み（変更の
+/// 再送）ではなくダッシュボードを開くよう促す。
+pub const change_may_have_been_applied = "the store did not confirm the change; it may have been applied, so open the dashboard to check"
+
+/// 読み込みか読み直しが終わっていないときの理由。
+const accounts_not_loaded = "accounts are not loaded yet"
+
+/// 署名者がメモリに無いときの理由。
+const account_not_registered = "account is not registered"
+
+/// 公開鍵がすでに登録されているときの理由。
+const account_already_registered = "account is already registered"
+
+/// 問い合わせに応答が無いときの理由。
+const query_not_answered = "bunker is not responding"
+
+/// アカウントの変更が成功しなかった理由。理由は値（鍵、secret、ラベル）を含まない
+/// 固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+pub type ChangeFailure {
+  /// 変更は反映されていない（登録済み、未登録、書き込まれていないことが確定した
+  /// ストアの失敗）。
+  NotApplied(reason: String)
+  /// 変更を受け付けられる状態に無い（読み込み前、結果が曖昧な書き込みの後の読み直しの
+  /// 前、バンカーが無効）。時間をおけば同じ変更を受け付けうる。
+  NotReady(reason: String)
+  /// 反映されたかどうか分からない（書き込みの期限切れや途中の切断、アクターが期限内に
+  /// 応答しない）。
+  MaybeApplied(reason: String)
+}
 
 /// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
 pub type WriteFailure {
@@ -160,9 +188,9 @@ pub type Settings {
 }
 
 /// 管理 UI に渡すアカウント 1 件。秘密鍵（`Account`）を持たない。secret を含むので
-/// 認証済みページ以外に出さない。
+/// 認証済みページ以外に出さない。`npub` は画面でアカウントを識別するための表記。
 pub type Listing {
-  Listing(signer: String, label: String, secret: String)
+  Listing(signer: String, npub: String, label: String, secret: String)
 }
 
 /// バンカーアクターが受け取るメッセージ。
@@ -202,20 +230,24 @@ pub type Msg {
   AddAccount(
     account: Account,
     label: String,
-    reply: Subject(Result(Nil, String)),
+    reply: Subject(Result(Nil, ChangeFailure)),
   )
   /// アカウントを削除する。その署名者のセッションと承認待ちも消える。
-  RemoveAccount(signer: String, reply: Subject(Result(Nil, String)))
+  RemoveAccount(signer: String, reply: Subject(Result(Nil, ChangeFailure)))
   /// 接続 secret を作り直す。承認済みセッションは残る。
-  RotateSecret(signer: String, reply: Subject(Result(Nil, String)))
+  RotateSecret(signer: String, reply: Subject(Result(Nil, ChangeFailure)))
   /// ラベルを差し替える。
   UpdateLabel(
     signer: String,
     label: String,
-    reply: Subject(Result(Nil, String)),
+    reply: Subject(Result(Nil, ChangeFailure)),
   )
   /// 管理 UI に出すアカウントの一覧を問い合わせる。
   GetAccounts(reply: Subject(Result(List(Listing), String)))
+  /// 署名者の秘密鍵を nsec の文字列で問い合わせる。管理 UI の再表示だけが使う。
+  /// 要求は公開鍵と返信先しか持たないので、処理の途中で落ちてもクラッシュレポートに
+  /// 秘密は出ない。
+  GetNsec(signer: String, reply: Subject(Result(String, String)))
 }
 
 /// バンカーが保持する承認済みセッションの一覧。アクターが動いていなければ空。
@@ -259,17 +291,23 @@ pub fn add_account(
   name: Name(Msg),
   account: Account,
   label: String,
-) -> Result(Nil, String) {
+) -> Result(Nil, ChangeFailure) {
   call_change(name, AddAccount(account, label, _))
 }
 
 /// アカウントを削除し、反映されるまで待つ。
-pub fn remove_account(name: Name(Msg), signer: String) -> Result(Nil, String) {
+pub fn remove_account(
+  name: Name(Msg),
+  signer: String,
+) -> Result(Nil, ChangeFailure) {
   call_change(name, RemoveAccount(signer, _))
 }
 
 /// 接続 secret を作り直し、反映されるまで待つ。
-pub fn rotate_secret(name: Name(Msg), signer: String) -> Result(Nil, String) {
+pub fn rotate_secret(
+  name: Name(Msg),
+  signer: String,
+) -> Result(Nil, ChangeFailure) {
   call_change(name, RotateSecret(signer, _))
 }
 
@@ -278,7 +316,7 @@ pub fn update_label(
   name: Name(Msg),
   signer: String,
   label: String,
-) -> Result(Nil, String) {
+) -> Result(Nil, ChangeFailure) {
   call_change(name, UpdateLabel(signer, label, _))
 }
 
@@ -286,7 +324,19 @@ pub fn update_label(
 /// 返す。
 pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
   named.call(name, call_timeout_ms, GetAccounts)
-  |> option.unwrap(Error("bunker is not responding"))
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// 署名者の秘密鍵の nsec。読み込み前、読み直しの前、未登録、アクターが応答しない
+/// ときは理由を返す。
+///
+/// **`Ok` の値は秘密鍵そのものである。** 成功も失敗も `String` なので型では取り違えを
+/// 検出できない。結果を丸ごと `string.inspect` やログに渡さず、`Ok` と `Error` を
+/// 分けてから使うこと。応答は alias の `named.call` で受けるので、タイムアウトの後に
+/// 届いた nsec はランタイムが捨てる。
+pub fn nsec(name: Name(Msg), signer: String) -> Result(String, String) {
+  named.call(name, call_timeout_ms, GetNsec(signer, _))
+  |> option.unwrap(Error(query_not_answered))
 }
 
 /// 承認・拒否をアクターへ送って結果を待つ。アクターが動いていなければエラーに
@@ -302,10 +352,10 @@ fn call_decision(
 /// アカウントの変更をアクターへ送って結果を待つ。
 fn call_change(
   name: Name(Msg),
-  request: fn(Subject(Result(Nil, String))) -> Msg,
-) -> Result(Nil, String) {
+  request: fn(Subject(Result(Nil, ChangeFailure))) -> Msg,
+) -> Result(Nil, ChangeFailure) {
   named.call(name, change_timeout_ms, request)
-  |> option.unwrap(Error(change_not_answered))
+  |> option.unwrap(Error(MaybeApplied(change_not_answered)))
 }
 
 /// メモリがストアの内容を反映しているかどうか。
@@ -428,6 +478,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     GetAccounts(reply) -> {
       process.send(reply, listings(state))
+      actor.continue(state)
+    }
+    GetNsec(signer:, reply:) -> {
+      process.send(reply, private_key_nsec(state, signer))
       actor.continue(state)
     }
     AddAccount(account: added, label:, reply:) -> {
@@ -612,15 +666,18 @@ fn skipped_lines(loaded: vault.Loaded) -> List(String) {
 }
 
 /// 管理 UI に出すアカウントの一覧。並びは署名者の昇順。ラベルが無ければ空文字列
-/// （DB の列の既定値と同じ）にする。読み込めていなければ理由を返す。
+/// （DB の列の既定値と同じ）にする。読み込めていなければ理由を返す。npub はメモリの
+/// `Account` から作るので、`account.npub` の前提（32 バイトの公開鍵）が型で保たれる。
 fn listings(state: State) -> Result(List(Listing), String) {
   case state.accounts {
     Ready ->
-      engine.connection_secrets(state.engine)
+      engine.registered_accounts(state.engine)
       |> list.map(fn(entry) {
-        let #(signer, secret) = entry
+        let #(registered, secret) = entry
+        let signer = account.pubkey_hex(registered)
         Listing(
           signer: signer,
+          npub: account.npub(registered),
           label: dict.get(state.labels, signer) |> result.unwrap(""),
           secret: secret,
         )
@@ -629,6 +686,19 @@ fn listings(state: State) -> Result(List(Listing), String) {
     Loading(failure: None) -> Error("accounts are being loaded")
     Loading(failure: Some(reason)) ->
       Error("account store unavailable: " <> reason)
+  }
+}
+
+/// 秘密鍵の再表示の問い合わせへの応答。状態を変えず、ストアもログも使わない。読み直しの
+/// 前も拒否するのは、その間メモリが DB と食い違っていることがあるからで、変更と一覧の
+/// 扱いに合わせる。
+fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
+  case state.accounts {
+    Loading(_) -> Error(accounts_not_loaded)
+    Ready ->
+      engine.find_account(state.engine, signer)
+      |> result.map(account.nsec)
+      |> result.replace_error(account_not_registered)
   }
 }
 
@@ -667,28 +737,34 @@ fn without_account(state: State, signer: String) -> State {
 }
 
 /// 追加の前の検査。登録済みの公開鍵ならストアへの往復を省いて拒否する。
-fn require_unregistered(state: State, signer: String) -> Result(Nil, String) {
+fn require_unregistered(
+  state: State,
+  signer: String,
+) -> Result(Nil, ChangeFailure) {
   case engine.has_account(state.engine, signer) {
-    True -> Error("account is already registered")
+    True -> Error(NotApplied(account_already_registered))
     False -> Ok(Nil)
   }
 }
 
 /// 削除・secret の作り直し・ラベルの差し替えの前の検査。署名者は呼び出し側が渡す
 /// 文字列なので、メモリに無い署名者はストアにもログにも渡さずに拒否する。
-fn require_registered(state: State, signer: String) -> Result(Nil, String) {
+fn require_registered(
+  state: State,
+  signer: String,
+) -> Result(Nil, ChangeFailure) {
   case engine.has_account(state.engine, signer) {
     True -> Ok(Nil)
-    False -> Error("account is not registered")
+    False -> Error(NotApplied(account_not_registered))
   }
 }
 
 /// 読み込み済みで、かつ `check` が `Ok` のときだけストアへ書き込み、成功したら
-/// 状態を変えてから応答する。拒否や、書き込まれていないことが確定した失敗のときは、
-/// 状態を変えずに理由を返す。
+/// 状態を変えてから応答する。読み込みの前は `NotReady`、拒否や、書き込まれていない
+/// ことが確定した失敗のときは `NotApplied` で、状態を変えずに理由を返す。
 ///
 /// 書き込まれたかどうか分からない失敗のときは、メモリを変えずに読み込めていない状態へ
-/// 移り、読み直しの `LoadAccounts` を積んでから応答する。応答を受けた管理 UI が続けて
+/// 移り、読み直しの `LoadAccounts` を積んでから `MaybeApplied` で応答する。応答を受けた管理 UI が続けて
 /// 送る問い合わせは読み直しの後に処理されるので、読み直しに成功していれば DB と一致
 /// した一覧を読む。読み込み済みの状態には未処理の読み込みも再試行のタイマーも無い
 /// ので、読み込みの系列は 1 本のままである。
@@ -697,35 +773,35 @@ fn require_registered(state: State, signer: String) -> Result(Nil, String) {
 /// 公開鍵なので、ログに出るのはその値だけになる。
 fn apply_change(
   state: State,
-  reply: Subject(Result(Nil, String)),
+  reply: Subject(Result(Nil, ChangeFailure)),
   change: Change,
   signer: String,
-  check: Result(Nil, String),
+  check: Result(Nil, ChangeFailure),
   write: fn() -> Result(Nil, WriteFailure),
   update: fn(State) -> State,
 ) -> actor.Next(State, Msg) {
   let #(next, outcome) = case state.accounts, check {
-    Loading(_), _ -> #(state, Error("accounts are not loaded yet"))
-    Ready, Error(reason) -> #(state, Error(reason))
+    Loading(_), _ -> #(state, Error(NotReady(accounts_not_loaded)))
+    Ready, Error(failure) -> #(state, Error(failure))
     Ready, Ok(Nil) -> {
       let written = write()
       log.println(log_prefix, change_line(change, signer, written))
       case written {
         Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
-        Error(NotWritten(reason)) -> #(state, Error(reason))
+        Error(NotWritten(reason)) -> #(state, Error(NotApplied(reason)))
         // 読み直しに見えなかった書き込みがあればメモリに入る。読み込みで飛ばされる
         // 行ならメモリには入らないが、どちらでも行が DB にあることは確かなので、
         // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
         // 管理 UI は読み直した後の一覧を読む。
         Error(AlreadyStored(reason)) -> #(
           load_accounts(State(..state, accounts: Loading(failure: None))),
-          Error(reason),
+          Error(NotApplied(reason)),
         )
         Error(MaybeWritten(_reason)) -> {
           process.send(state.retry, LoadAccounts)
           #(
             State(..state, accounts: Loading(failure: None)),
-            Error(change_may_have_been_applied),
+            Error(MaybeApplied(change_may_have_been_applied)),
           )
         }
       }
