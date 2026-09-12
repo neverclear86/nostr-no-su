@@ -117,6 +117,25 @@ nsec 入力による登録の完了ページを再読み込みすると、同じ
 
 > ⚠️ **平文 HTTP である**: Basic 認証の資格情報は暗号化されずに送られ、ページには署名権限そのものである secret 入りの `bunker://` URI が表示される。localhost か Docker ネットワーク内での利用を前提とし、外部に公開するときは必ずリバースプロキシーで TLS を終端すること。
 
+#### リバースプロキシーの設定
+
+前段のリバースプロキシーは、`Host` ヘッダーをブラウザーが送った値のまま（公開ホスト名と、既定以外のポートならそのポートを含めて）管理 UI へ渡すこと。状態を変える POST は `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでおり（`X-Forwarded-Host` は見ない）、`Host` が上流のアドレス（`127.0.0.1:8080` など）に書き換わっているか、既定以外のポートで公開していてポートが落ちていると、承認、登録、削除を含むブラウザーからの POST がすべて 400（本文は `Bad request: Invalid origin`、ログには `Origin-host mismatch: <Host> <Origin>`）になる。nginx は既定で `Host` を `proxy_pass` の宛先に書き換え、`$host` はポートを含まないので、`$http_host` を渡す:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name admin.example;
+    # ssl_certificate と ssl_certificate_key は省略
+
+    location / {
+        proxy_set_header Host $http_host;
+        proxy_pass http://127.0.0.1:8080;
+    }
+}
+```
+
+承認ページの URL の土台にする公開 URL（上の例なら `https://admin.example`）は、`ADMIN_BASE_URL` に設定する（「接続の承認（auth_url フロー）」）。
+
 #### 接続の承認（auth_url フロー）
 
 secret を持たない `bunker://` URI（ダッシュボードの「接続 URI（要承認）」（`Connection URI (approval)`）の欄）で接続すると、バンカーはその場では承認せず、NIP-46 の `auth_url` 応答で承認ページの URL をクライアントへ返す。クライアントはその URL をブラウザーで開き、管理 UI にログインして内容（署名者・クライアント pubkey・経過時間）を確認したうえで承認または拒否する。承認するとバンカーは元のリクエストと同じ id で `ack` を返し、待っていたクライアントの接続が完了する。拒否するとエラーを返す。承認ページは枠（iframe）の中では開けないので、クライアントは新しいウィンドウかブラウザーで開く必要がある。
@@ -127,7 +146,7 @@ secret を持たない `bunker://` URI（ダッシュボードの「接続 URI�
 
 承認待ちはダッシュボードの「承認待ちの接続」（`Pending connections`）からも承認・拒否でき、10 分で失効する。一度承認したクライアントは、以後 secret 無しで `connect` し直しても承認を求められない（取り消すには「承認済みのセッション」（`Approved sessions`）の「承認を取り消す」（`Revoke`）を使う）。
 
-状態を変える POST すべて（アカウントの登録・生成・削除・secret の作り直し・ラベルの編集・秘密鍵の再表示、`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`、言語の切り替え（`POST /language`））は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシーを置く場合は **`Host` ヘッダーをそのまま転送すること**。書き換えるとブラウザーからの POST が 400 になる。
+状態を変える POST すべて（アカウントの登録・生成・削除・secret の作り直し・ラベルの編集・秘密鍵の再表示、`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`、言語の切り替え（`POST /language`））は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシーを置くときの `Host` の渡し方は「リバースプロキシーの設定」にある。
 
 認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じる `x-frame-options: DENY` / `content-security-policy: frame-ancestors 'none'` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。
 
