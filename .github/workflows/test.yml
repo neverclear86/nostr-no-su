@@ -55,6 +55,14 @@ jobs:
       - name: ビルドした CSS がコミットされたものと一致することを確かめる
         run: git diff --exit-code -- priv/static/admin.css
 
+  vendor-stratus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # vendor/stratus が、hex の上流の tar に vendor/stratus/patches/ のパッチを当てたものと
+      # 一致することを確かめる。パッチを足す手順は vendor/stratus/PATCH.md にある。
+      - run: sh dev/check_vendor_stratus.sh
+
   plugin-event-logger:
     runs-on: ubuntu-latest
     defaults:
