@@ -1,0 +1,10 @@
+nostr-no-su
+Copyright (c) 2026 LinaTsukusu
+
+This repository includes a modified copy of stratus in vendor/stratus/.
+
+stratus
+A Gleam WebSocket client by Alex Manning (rawhat)
+https://github.com/rawhat/stratus
+Licensed under the Apache License, Version 2.0. See vendor/stratus/LICENSE.
+The modifications are recorded in vendor/stratus/PATCH.md.

@@ -1,0 +1,19 @@
+diff --git a/src/stratus.gleam b/src/stratus.gleam
+index e92ea3e..a67da56 100644
+--- a/src/stratus.gleam
++++ b/src/stratus.gleam
+@@ -813,9 +813,11 @@ fn make_upgrade(req: Request(String)) -> BytesTree {
+     "sec-websocket-key: " <> websocket.make_client_key() <> "\r\n",
+   )
+   |> bytes_tree.append_string("sec-websocket-version: 13\r\n")
+-  |> bytes_tree.append_string(
+-    "sec-websocket-extensions: permessage-deflate\r\n",
+-  )
++  // VENDORED PATCH (nostr-no-su): do not offer permessage-deflate. gramps
++  // 6.0.1 inflates each fragment of a fragmented message individually, which
++  // crashes with a zlib data_error on multi-frame compressed messages (as
++  // sent by strfry-based Nostr relays). Not offering the extension makes the
++  // server send uncompressed frames, which are reassembled correctly.
+   |> bytes_tree.append_string(user_headers)
+   |> bytes_tree.append_string("\r\n")
+ }
