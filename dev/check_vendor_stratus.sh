@@ -41,7 +41,8 @@ tar -xzf "$tmp/contents.tar.gz" -C "$tmp/a"
 
 for patch_file in "$vendor"/patches/*.patch; do
   # 行の位置がずれて当たったときに .orig のバックアップを作らせない（作ると差分に出る）。
-  patch --quiet --strip=1 --fuzz=0 --no-backup-if-mismatch --directory="$tmp/a" --input="$patch_file"
+  # patch はハンクの失敗を標準出力に出すので、パッチのファイルへの出力に混ざらないよう標準エラーへ向ける。
+  patch --quiet --strip=1 --fuzz=0 --no-backup-if-mismatch --directory="$tmp/a" --input="$patch_file" 1>&2
 done
 
 cp -R "$vendor" "$tmp/b"
