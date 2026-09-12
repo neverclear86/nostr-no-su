@@ -541,7 +541,8 @@ nostr-no-su/
 ├── gleam.toml
 ├── package.json                  CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── .env.example                  docker compose で使う .env の雛形
 ```
 
 `src/` と `plugins-src/` は別々の Gleam プロジェクトである。

@@ -1,6 +1,10 @@
 services:
   nostr-no-su:
     build: .
+    # ${...} の値は .env（.env.example を複製して作る）で変える。変数の意味は
+    # README の「環境変数」にある。秘密（ACCOUNT_MASTER_KEY と ADMIN_PASSWORD）の
+    # 値はこのファイルに書かないこと。${...} の変数を足す、消す、既定値を変える
+    # ときは、.env.example の行も合わせること。
     environment:
       # 監視するリレー URL（カンマ区切り）。空にすると監視を無効にする。
       RELAY_URL: ${RELAY_URL-wss://relay.damus.io}

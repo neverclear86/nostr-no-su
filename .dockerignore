@@ -5,7 +5,7 @@ build
 *.md
 docker-compose.yml
 Dockerfile
-.env
+.env*
 plugins
 plugins-src
 examples
