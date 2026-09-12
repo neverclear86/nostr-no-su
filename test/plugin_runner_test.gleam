@@ -1,6 +1,6 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
-import gleam/erlang/process.{type Monitor, type Name, type Pid}
+import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -55,6 +55,15 @@ fn test_target() -> plugin_runner.Target {
   plugin_runner.target("runner_test", process.new_name("test_plugin_runner"))
 }
 
+/// `last` の id を受け取るまで、プラグインが転送した id を数える。
+fn count_until(handled: Subject(String), last: String, count: Int) -> Int {
+  let assert Ok(id) = process.receive(handled, 5000)
+  case id == last {
+    True -> count + 1
+    False -> count_until(handled, last, count + 1)
+  }
+}
+
 /// `handle_event/1` を監視付きの使い捨てプロセスで動かす FFI。`plugin_runner` の
 /// 内部と同じものを、スタックトレースの整形を直接見るために呼ぶ。
 @external(erlang, "nostr_no_su_ffi", "run_isolated")
@@ -89,16 +98,16 @@ pub fn admit_sheds_when_the_queue_grows_test() {
     == "too slow: 11 events queued (limit 10); dropping until it catches up"
 }
 
-/// キューが残っている間は捨て続け、件数を数える。
-pub fn admit_keeps_shedding_until_the_queue_drains_test() {
-  assert plugin_runner.admit(Overloaded(dropped: 4), 1, limits)
+/// キューが上限の半分を超えている間は捨て続け、件数を数える。
+pub fn admit_keeps_shedding_above_half_the_limit_test() {
+  assert plugin_runner.admit(Overloaded(dropped: 4), 6, limits)
     == #(Overloaded(dropped: 5), False, None)
 }
 
-/// キューが空になったら配信を再開し、捨てた件数を報告する。
-pub fn admit_resumes_on_an_empty_queue_test() {
+/// キューが上限の半分まで減ったら配信を再開し、捨てた件数を報告する。
+pub fn admit_resumes_at_half_the_limit_test() {
   let #(status, should_run, note) =
-    plugin_runner.admit(Overloaded(dropped: 7), 0, limits)
+    plugin_runner.admit(Overloaded(dropped: 7), 5, limits)
   assert status == Running
   assert should_run == True
   assert note == Some("caught up; dropped 7 events while overloaded")
@@ -255,6 +264,42 @@ pub fn fast_plugin_never_reports_a_failure_test() {
   let name = start_runner(fn(_incoming) { Nil }, plugin_runner.default_limits)
   deliver(name, 500)
   assert plugin_runner.status(name) == Some(Running)
+}
+
+/// 上限を 1 件超えたバーストで捨てるのは、積まれたイベントの半分である。
+///
+/// 1 件目の実行を止めている間に上限 + 2 件（1002 件）を積む。ランナーがキュー長
+/// を見るのはメッセージを 1 件取り出した後なので、止めを外した直後の判定は
+/// 1001 件で、上限を超えて捨て始める。キュー長 1001 から 501 までの 501 件を
+/// 捨て、500 件になった 1 件から再開し、残りを全部実行する。復帰条件が
+/// `queue_len == 0` だった版では、実行されるのは最後の 1 件だけだった。
+pub fn a_burst_just_over_the_limit_loses_half_test() {
+  let gates = process.new_subject()
+  let handled = process.new_subject()
+  let name =
+    start_runner(
+      fn(incoming: Event) {
+        case incoming.id {
+          "gate" -> {
+            let release = process.new_subject()
+            process.send(gates, release)
+            let _ = process.receive(release, 5000)
+            Nil
+          }
+          id -> process.send(handled, id)
+        }
+      },
+      plugin_runner.default_limits,
+    )
+  let targets = [plugin_runner.target("runner_test", name)]
+  plugin_runner.dispatch(targets, test_event("gate"))
+  let assert Ok(release) = process.receive(gates, 1000)
+  let burst = plugin_runner.default_limits.max_queue_len + 2
+  deliver(name, burst - 1)
+  plugin_runner.dispatch(targets, test_event("last"))
+  process.send(release, Nil)
+  let lost = burst - count_until(handled, "last", 0)
+  assert lost == burst / 2
 }
 
 /// ランナーが居ない間に送ったイベントは宛先ごとに数え、届くようになったら 0 に
