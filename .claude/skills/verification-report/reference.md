@@ -247,7 +247,7 @@ docker unpause nns-verify-postgres-1
 while IFS=$'\t' read -r name value; do
   for f in "$V"/log-*.txt "$V"/pgdump*.sql; do
     n=$(grep -F -c -- "$value" "$f" || true)
-    [ "$n" -gt 0 ] && echo "HIT $name $f $n"
+    if [ "$n" -gt 0 ]; then echo "HIT $name $f $n"; fi
   done
 done < "$V/targets.txt"
 
@@ -255,7 +255,7 @@ done < "$V/targets.txt"
 # secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。件数は一致したファイルの数を出す。
 grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
   n=$(grep -F -l -- "$value" "$V"/bodies/* | wc -l || true)
-  [ "$n" -gt 0 ] && echo "HIT $name bodies $n"
+  if [ "$n" -gt 0 ]; then echo "HIT $name bodies $n"; fi
 done
 
 # 記録漏れの保険（secret は 32 文字の 16 進）
