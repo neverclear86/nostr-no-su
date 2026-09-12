@@ -28,7 +28,7 @@ chmod -R a+rX plugins
 
 `/src` は読み取り専用でマウントするので、一度 `/tmp/work` へ複写してからビルドする。**複写したあとに `build/` を消すのを忘れないこと。** ローカルで一度ビルドしていると、Elixir 一式を含むホスト側の成果物がそのままコンテナーへ持ち込まれる。ローカルの `gleam export erlang-shipment` はスモークテストであって、その出力を `plugins/` に置いてはならない。
 
-コンテナーは `--user` でホストの利用者として動かす。root で動かすと成果物が root 所有になり、非 root の利用者が続く `chmod` を実行すると EPERM で止まる。この手順は、コンテナーの uid がホストの uid と一致する構成（rootful の docker、Docker Desktop）を前提にする。この利用者はイメージの `/` に書けない（`HOME` も `/` になる）ので、複写先と、`gleam deps download` がキャッシュを置く `HOME` を、誰でも書ける `/tmp` の下にする。
+コンテナーは `--user` でホストの利用者として動かす。root で動かすと成果物が root 所有になり、非 root の利用者が続く `chmod` を実行すると EPERM で止まる。この手順は、コンテナーの uid がホストの uid と一致する構成（rootful の docker、Docker Desktop）を前提にする。この利用者はイメージの `/` に書けない（`HOME` も `/` になる）ので、複写先を誰でも書ける `/tmp` の下（`/tmp/work`）に置き、`gleam deps download` がキャッシュを置く `HOME` を `/tmp` にする。
 
 ## 置き方
 
