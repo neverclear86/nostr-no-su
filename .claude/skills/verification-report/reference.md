@@ -6,9 +6,13 @@
 
 ## 環境
 
-### worktree とラッパー
+### 開始時の記録、worktree とラッパー
 
 ```sh
+# ユーザーのコンテナーの状態。後片付けで同じ状態か比べる（Status の Up の時間が続いていれば再起動されていない）
+# name フィルターは部分一致で nns-verify-nostr-no-su-1 にも当たるので、grep で先頭を合わせる
+docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' > "$V/baseline-docker-ps.txt"
+
 git -C /home/lina/workspace/projects/nostr-no-su fetch origin
 git -C /home/lina/workspace/projects/nostr-no-su worktree add "$W" origin/main
 ```
@@ -54,6 +58,15 @@ services:
 
 `$V` は実際のパスに展開して書く。
 
+### テスト
+
+```sh
+docker run -d --name nns-verify-testpg -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
+cd "$W" && TEST_DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5433/nostr_no_su_test gleam test
+docker rm -f nns-verify-testpg
+```
+
 ### event_logger のビルドと起動
 
 ```sh
@@ -86,7 +99,8 @@ T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # 操作の前に記録する
 
 ## ブラウザー（Playwright）
 
-スクラッチパッドで `bun add nostr-tools@2.23.9 playwright-core@1.49.1` を実行し、スクリプトは node で動かす。
+スクラッチパッドで `bun add nostr-tools@2.23.9 playwright-core@1.50.1` を実行し、スクリプトは node で動かす。
+playwright-core はリポジトリの `package.json` と同じ版にする。
 ブラウザーはキャッシュ済みの chromium を直接指定する。
 
 ```js
@@ -99,24 +113,59 @@ const browser = await chromium.launch({
 const context = await browser.newContext({
   httpCredentials: { username: "admin", password: process.env.ADMIN_PASSWORD },
   viewport: { width: 1280, height: 900 },
+  // 渡さないと Accept-Language が en-US になり、英語の画面になる
+  locale: "ja-JP",
   permissions: ["clipboard-read", "clipboard-write"],
 });
 const page = await context.newPage();
 
-// POST の状態コードは page.goto の戻り値に載らないので、クリックと同時に待つ
+// 管理 UI の外への要求が無いことを、最後に hosts で確かめる
+const hosts = new Set();
+page.on("request", (r) => hosts.add(new URL(r.url()).host));
+
+// POST の状態コードは page.goto の戻り値に載らないので、クリックと同時に待つ。
+// 遷移も待たないと、page.content() が送信の前のページを返す。
+// ナビゲーションバーの言語の切り替えもフォームなので、送信先で選ぶ
 const [response] = await Promise.all([
   page.waitForResponse((r) => r.request().method() === "POST"),
-  page.click("form button"),
+  page.waitForNavigation({ waitUntil: "load" }),
+  page.click('form[action="/accounts/import"] button'),
 ]);
 console.log(response.status());
 
-await page.screenshot({ path: "04-dashboard-accounts.png", fullPage: true });
+await page.screenshot({ path: "04-dashboard-accounts.png", fullPage: true, animations: "disabled" });
 ```
 
-- 制御文字を含むラベルは、ソースに生の文字を埋め込まず `"\u0085"` のようにエスケープで書く
-- `maxlength` を超える値は `page.evaluate` で入力欄に直接入れる
-- コピーのボタンは、押した後に `navigator.clipboard.readText()` で読み、隣の入力欄の値と比べる
+- 制御文字を含むラベルは `String.fromCharCode` で組み立て、`evaluate` の引数で渡す（`locator(...).evaluate((el, value) => { el.value = value; }, "生成" + String.fromCharCode(0x85) + "C")`）
+- `maxlength` を超える値も、`evaluate` で入力欄に直接入れる
+- コピーのボタンは、押した直後に `[data-copied]` を `waitFor({ timeout: 1000 })` で待ち（2 秒で消える）、`navigator.clipboard.readText()` の値を隣の入力欄の値と比べる
+- 狭い画面は `viewport: { width: 375, height: 812 }`、ダークは `colorScheme: "dark"`、JS 無効は `javaScriptEnabled: false` のコンテキストを別に作る。横のはみ出しは `page.evaluate(() => document.documentElement.scrollWidth)` が画面の幅以下であることで確かめる
 - 一括の確認と、1 操作ずつ呼べるスクリプト（登録、ローテーション、削除、ラベル、URI の一覧、承認、拒否、取り消し）を分けておくと、シェルのシナリオから組み合わせやすい。URI の一覧は JSON で出し、変更の前に毎回ファイルへ追記する
+
+## 管理 UI の表示（curl）
+
+```sh
+AUTH="admin:$ADMIN_PASSWORD"; BASE=http://127.0.0.1:8095
+lang() { curl -s -u "$AUTH" "$@" | grep -o '<html lang="[a-z]*"'; }
+lang "$BASE/"                                                      # en
+lang -H 'Accept-Language: ja' "$BASE/"                             # ja
+lang -H 'Accept-Language: ja' -b nostr_no_su_language=en "$BASE/"  # en（cookie が優先）
+
+# 言語の切り替え。戻り先はサーバーが / から組み立て直す
+curl -s -D - -o /dev/null -u "$AUTH" -H "Origin: $BASE" -d language=ja \
+  --data-urlencode 'return=//evil.example/x' "$BASE/language"
+# 303、location: /evil.example/x
+# set-cookie: nostr_no_su_language=ja; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax
+
+# Origin の無い POST では cookie が使われない（CSRF の検査が取り除く）
+curl -s -u "$AUTH" -b nostr_no_su_language=ja -d nsec=nsec1invalid -d label=x "$BASE/accounts/import" \
+  | grep -o '<html lang="[a-z]*"'                                  # en
+
+# CSS は worktree の生成物と同じ
+curl -s -u "$AUTH" "$BASE/static/admin.css" | sha256sum
+sha256sum < "$W/priv/static/admin.css"
+curl -s -o /dev/null -w '%{http_code}\n' -u "$AUTH" --path-as-is "$BASE/static/../gleam.toml"   # 404
+```
 
 ## NIP-46 クライアント（bun + nostr-tools）
 
@@ -190,13 +239,19 @@ docker unpause nns-verify-postgres-1
 値そのものを出力せず、対象の名前と件数だけを出す。
 
 ```sh
-# targets.txt は「名前<TAB>値」の行。nsec と 16 進の秘密鍵、各時点の secret、マスターキー、管理パスワード、DB のパスワード
+# targets.txt は「名前<TAB>値」の行。nsec と 16 進の秘密鍵、各時点の secret（名前を secret_ で始める）、
+# マスターキー、管理パスワード、DB のパスワード
 while IFS=$'\t' read -r name value; do
-  for f in "$V"/log-*.txt "$V/pgdump.sql" "$V"/bodies/*.html; do
+  for f in "$V"/log-*.txt "$V"/pgdump*.sql; do
     n=$(grep -F -c -- "$value" "$f" || true)
     [ "$n" -gt 0 ] && echo "HIT $name $f $n"
   done
 done < "$V/targets.txt"
+
+# 応答本文。鍵を表示するページは除き、ダッシュボードは secret 入りの URI を表示するので secret は探さない
+grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
+  grep -F -l -- "$value" "$V"/bodies/* && echo "HIT $name"
+done
 
 # 記録漏れの保険（secret は 32 文字の 16 進）
 grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head
@@ -204,11 +259,13 @@ grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head
 
 ## ローカル実行とアクターの kill
 
+テスト用の Postgres（5433）と重ならないポートにする。
+
 ```sh
-docker run -d --name nns-verify-localpg -p 127.0.0.1:5433:5432 \
+docker run -d --name nns-verify-localpg -p 127.0.0.1:5434:5432 \
   -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su postgres:17-alpine
 
-cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5433/nostr_no_su \
+cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5434/nostr_no_su \
   ACCOUNT_MASTER_KEY=<使い捨て> RELAY_URL= BUNKER_RELAY_URL=ws://127.0.0.1:7801 \
   ADMIN_PORT=8096 ADMIN_PASSWORD=<使い捨て> ADMIN_BASE_URL=http://127.0.0.1:8096 PLUGIN_DIR= \
   ERL_FLAGS="-sname nnsverify -setcookie nnsverifycookie" gleam run > "$V/log-local-run.txt" 2>&1 &
@@ -220,7 +277,7 @@ cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5433/no
 erl -sname probe$$ -setcookie nnsverifycookie -noshell -eval '
   {ok, H} = inet:gethostname(), N = list_to_atom("nnsverify@" ++ H), pong = net_adm:ping(N),
   Find = fun() -> [{X, rpc:call(N, erlang, whereis, [X])} || X <- rpc:call(N, erlang, registered, []),
-                   lists:prefix("nostr_no_su_bunker", atom_to_list(X))] end,
+                   lists:prefix("nostr_no_su_bunker$", atom_to_list(X))] end,
   B = Find(), io:format("BUNKER-BEFORE ~p~n", [B]),
   [rpc:call(N, erlang, exit, [P, kill]) || {_, P} <- B],
   timer:sleep(3000), io:format("BUNKER-AFTER  ~p~n", [Find()]), halt().'
@@ -265,8 +322,10 @@ done
 
 ```sh
 ./dc.sh down -v --rmi local
+docker images --format '{{.Repository}}:{{.Tag}}' | grep nns-verify   # 残っていれば docker rmi で消す
 docker run --rm -v "$W/plugins:/p" --entrypoint sh ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
   -c 'rm -rf /p/event_logger'
 git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force "$W"
-docker ps --format '{{.Names}} {{.Status}}' | grep nostr-no-su-
+cat "$V/baseline-docker-ps.txt"
+docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-'
 ```
