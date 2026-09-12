@@ -66,7 +66,7 @@ README のテストの手順（5433）と重ならないポートにする。
 ```sh
 docker run -d --name nns-verify-testpg -p 127.0.0.1:5533:5432 \
     -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine \
-  && until docker exec nns-verify-testpg pg_isready -U postgres -d nostr_no_su_test; do sleep 1; done \
+  && until docker exec nns-verify-testpg pg_isready -h 127.0.0.1 -U postgres -d nostr_no_su_test; do sleep 1; done \
   && (cd "$W" && TEST_DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5533/nostr_no_su_test gleam test)
 docker rm -f nns-verify-testpg
 ```
@@ -252,9 +252,9 @@ while IFS=$'\t' read -r name value; do
 done < "$V/targets.txt"
 
 # 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
-# secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）
+# secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。件数は一致したファイルの数を出す。
 grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
-  n=$(cat "$V"/bodies/* | grep -F -c -- "$value" || true)
+  n=$(grep -F -l -- "$value" "$V"/bodies/* | wc -l)
   [ "$n" -gt 0 ] && echo "HIT $name bodies $n"
 done
 
