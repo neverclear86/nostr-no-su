@@ -50,6 +50,27 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 [plugin_loader] event_logger: plugin_children/1 rejected the configuration (PLUGIN_EVENT_LOGGER_DATABASE_URL is required); 設定は PLUGIN_EVENT_LOGGER_* で渡す
 ```
 
+## 保存が追いつかないとき
+
+保存アクターは受け取ったイベントを 1 件ずつ Postgres へ挿入する。DB に到達できても挿入が遅いと、未処理のイベントがメールボックスに積まれていく。未処理が 1000 件を超えたら、500 件以下に減るまで届いたイベントを数えて捨て、保存を再開するときに捨てた件数を報告する。
+
+```
+[event_logger] too slow: 1001 events queued (limit 1000); dropping until it catches up
+[event_logger] caught up; dropped 501 events while overloaded
+```
+
+件数を見るのはイベントを取り出すときなので、1 件の挿入の間に届いた分だけは 1000 件を超えうる。挿入は 5 秒で打ち切られ、打ち切られると DB に到達できないときと同じく保存を止める（「確認」の節の最後の 2 行）。
+
+## 保存できないイベント
+
+`content` かタグの値に NUL（U+0000）を含むイベントは保存されない。NIP-01 の JSON 文字列としては妥当だが、Postgres の `text` は NUL を持てず、`jsonb` は `\u0000` を受け付けない。挿入はそのイベントだけが失敗し、次の 1 行を出して保存を続ける。
+
+```
+[event_logger] insert failed for event <id>: PostgresqlError("22021", "character_not_in_repertoire", "invalid byte sequence for encoding \"UTF8\": 0x00")
+```
+
+タグの値に NUL があるときは `PostgresqlError("22P05", "untranslatable_character", "unsupported Unicode escape sequence")` になる。NUL を取り除いて保存しないのは、イベントの id と署名が元の `content` と `tags` から計算されており、書き換えた行は元のイベントとして検証できなくなるためである。
+
 ## `DATABASE_URL` からの移行
 
 イベント保存はかつて本体に内蔵され、`DATABASE_URL` で設定していた。
