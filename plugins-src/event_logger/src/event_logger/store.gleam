@@ -319,8 +319,9 @@ fn unreachable(error: pog.QueryError) -> Bool {
 /// 保存を止めてから捨てたイベント数。
 fn dropped(availability: Availability) -> Int {
   case availability {
-    // 件数を持つのは Unavailable だけで、Overloaded の件数は再開時に報告する。
-    // EnsureSchema は Unavailable の間しか届かないので、この枝は網羅のためにある。
+    // 呼び出し元の prepare は EnsureSchema を受けたときだけ動き、EnsureSchema は
+    // Unavailable の間しか届かないので、この枝は網羅のためにある。Overloaded の
+    // 件数は保存を止めて捨てた数ではなく、再開するときに persist が報告する。
     Ready | Overloaded(..) -> 0
     Unavailable(dropped:, ..) -> dropped
   }
@@ -329,7 +330,8 @@ fn dropped(availability: Availability) -> Int {
 /// 停止の理由をすでに報告しているか。
 fn was_reported(availability: Availability) -> Bool {
   case availability {
-    // EnsureSchema は Unavailable の間しか届かないので、この枝は網羅のためにある。
+    // 保存している間に挿入が到達できずに失敗すると、write から suspend を経て
+    // ここを通る。まだ停止していないので、停止の理由も報告していない。
     Ready | Overloaded(..) -> False
     Unavailable(reported:, ..) -> reported
   }
