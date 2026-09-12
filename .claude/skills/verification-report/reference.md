@@ -242,27 +242,46 @@ docker unpause nns-verify-postgres-1
 
 ## 秘密の grep
 
-値そのものを出力せず、対象の名前と件数だけを出す。
+値そのものも一致した行も出力せず、対象の名前、ファイル、件数（一致した行の数）だけを出す。
+grep の終了状態は、一致ありが 0、一致なしが 1、ファイルを読めないとき（グロブが何にも一致しないときを含む）が 2 である。
+`count_hits` は 1 を一致なしとして進め、2 のときは `ERROR` の行を出して 2 を返すので、`set -e` のスクリプトはそこで止まる。
+`ERROR` の行を出した呼び出しは、ほかのファイルで一致していても `HIT` の行を出さない。
+確かめるのは、`HIT` と `ERROR` の行が 1 つも出ないことである。
+Claude Code の Bash ツールでは `grep` が `-I` 付きで ugrep を呼ぶ関数になっており、NUL を含むファイルを数えずに飛ばすので、`-a` を付ける。
 
 ```sh
+# count_hits <名前> <grep のオプション> -- <パターン> <ファイル...>
+# 一致が 1 件以上のファイルごとに「HIT 名前 ファイル:件数」を出す。grep の失敗（終了状態 2）は ERROR を出して返す
+count_hits() {
+  local name=$1 rc=0 counts
+  shift
+  counts=$(grep -a -c -H "$@") || rc=$?
+  if [ "$rc" -gt 1 ]; then echo "ERROR $name grep exited $rc"; return "$rc"; fi
+  printf '%s\n' "$counts" | awk -F: -v name="$name" '$NF > 0 { print "HIT", name, $0 }'
+}
+
 # targets.txt は「名前<TAB>値」の行。nsec と 16 進の秘密鍵、各時点の secret（名前を secret_ で始める）、
 # マスターキー、管理パスワード、DB のパスワード
 while IFS=$'\t' read -r name value; do
-  for f in "$V"/log-*.txt "$V"/pgdump*.sql; do
-    n=$(grep -F -c -- "$value" "$f" || true)
-    if [ "$n" -gt 0 ]; then echo "HIT $name $f $n"; fi
-  done
+  count_hits "$name" -F -- "$value" "$V"/log-*.txt "$V"/pgdump*.sql
 done < "$V/targets.txt"
 
 # 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
-# secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。件数は一致したファイルの数を出す。
+# secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。
 grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
-  n=$(grep -F -l -- "$value" "$V"/bodies/* | wc -l || true)
-  if [ "$n" -gt 0 ]; then echo "HIT $name bodies $n"; fi
+  count_hits "$name" -F -- "$value" "$V"/bodies/*
 done
 
 # 記録漏れの保険（secret は 32 文字の 16 進）
-grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head || true
+count_hits hex32 -w -- '[0-9a-f]\{32\}' "$V"/log-*.txt
+```
+
+`hex32` の `HIT` が出たときは、16 進の並びを伏せて、その行が何のログかを見る。
+32 文字以上の並びをすべて伏せるので、公開鍵とイベント id も伏せる。
+nsec やパスワードは伏せないので、同じファイルに `hex32` 以外の `HIT` があるときは実行せず、先にその `HIT` を調べる。
+
+```sh
+grep -a -n -w -- '[0-9a-f]\{32\}' <HIT のファイル> | sed 's/[0-9a-f]\{32,\}/<hex>/g'
 ```
 
 ## ローカル実行とアクターの kill
