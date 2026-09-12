@@ -35,6 +35,13 @@ import gleam/otp/actor
 import gleam/string
 import pog
 
+/// 保存アクターが再起動している間、登録名が戻るのを待つ上限。本体のランナーが
+/// 1 件を打ち切る 30 秒より十分短くする。
+const store_wait_ms = 1000
+
+/// 保存アクターの登録名を問い合わせ直す間隔。
+const store_poll_ms = 10
+
 /// このプラグインが実装するプラグイン API のバージョン。
 pub fn plugin_api_version() -> Int {
   1
@@ -82,18 +89,37 @@ fn pool_children(database_url: String) -> Dynamic {
 
 /// イベント 1 件を保存アクターへ転送する。設定は使わないのでアリティは 1。
 ///
-/// 宛先が居なければ **panic させる。** 子を諦めた状態（`docs/plugin-api.md`
-/// 第 5.4 節）を、ランナーの連続失敗を経てダッシュボードの `disabled` として
-/// 可視化するためである。イベント map の変換もここで済ませ、アクターには DB の
-/// 仕事だけを残す。変換に失敗したイベントも同じく失敗として数えられる。
+/// 宛先が居なければ `store_poll_ms` ごとに最大 `store_wait_ms` 待ち、それでも
+/// 居なければ **panic させる。** 待つのは、保存アクターの再起動の間に届いた
+/// イベントを失敗として数えないためである（連続 5 件の失敗でプラグインごと
+/// 無効になる）。待っても戻らない状態は子を諦めた状態（`docs/plugin-api.md`
+/// 第 5.4 節）であり、ランナーの連続失敗を経てダッシュボードの `disabled` として
+/// 可視化する。イベント map の変換もここで済ませ、アクターには DB の仕事だけを
+/// 残す。変換に失敗したイベントも同じく失敗として数えられる。
 pub fn handle_event(event: Dynamic) -> Nil {
   let name = store_name()
-  let assert Ok(_pid) = process.named(name)
+  let assert Ok(_pid) = await_registered(name, store_wait_ms)
     as "event_logger store is not running"
   case store.to_row(event) {
     Ok(row) -> process.send(process.named_subject(name), store.Store(row))
     // 理由を捨てると、どのキーで落ちたのかがランナーの 1 行に残らない。
     Error(reason) -> panic as { "event is not a valid event map: " <> reason }
+  }
+}
+
+/// 名前が登録されるまで `store_poll_ms` ごとに問い合わせる。`remaining_ms` を
+/// 使い切っても登録されていなければ `Error(Nil)` を返す。
+fn await_registered(
+  name: Name(message),
+  remaining_ms: Int,
+) -> Result(Pid, Nil) {
+  case process.named(name), remaining_ms > 0 {
+    Ok(pid), _ -> Ok(pid)
+    Error(Nil), True -> {
+      process.sleep(store_poll_ms)
+      await_registered(name, remaining_ms - store_poll_ms)
+    }
+    Error(Nil), False -> Error(Nil)
   }
 }
 
@@ -108,7 +134,11 @@ pub fn start_pool(config: pog.Config) -> Result(Pid, String) {
 /// 保存アクターを起動する起動シム。登録名は固定で、`handle_event/1` の宛先に
 /// なる。`pool` は `plugin_children/1` が作ったプールの名前である。
 pub fn start_store(pool: Name(pog.Message)) -> Result(Pid, String) {
-  started_pid(store.start(store_name(), pool))
+  started_pid(store.start(
+    store_name(),
+    store.postgres(pool),
+    store.default_max_queue_len,
+  ))
 }
 
 /// アクターの起動結果を、本体の `start_child` が受け取れる `{ok, Pid}` /
@@ -124,8 +154,9 @@ fn started_pid(
 
 /// 保存アクターの登録名。VM 全体で一意にするためプラグイン名を接頭辞にする
 /// （`docs/plugin-api.md` 第 5.3 節）。再起動をまたいで同じでなければならない
-/// ので、`process.new_name` ではなく固定の atom から作る。
-fn store_name() -> Name(store.Msg) {
+/// ので、`process.new_name` ではなく固定の atom から作る。`handle_event/1` の
+/// テストもこの名前で宛先を立てる。
+pub fn store_name() -> Name(store.Msg) {
   coerce_name(atom.create("event_logger_store"))
 }
 

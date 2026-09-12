@@ -4,7 +4,7 @@ import event_logger/store
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
-import gleam/erlang/process.{type Pid}
+import gleam/erlang/process.{type Monitor, type Pid}
 import gleam/int
 import gleam/io
 import gleam/list
@@ -171,6 +171,12 @@ pub fn invalid_urls_are_rejected_test() {
     == Ok("PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL")
 }
 
+/// map でない設定も、子仕様を組み立てずに拒否する。
+pub fn configuration_that_is_not_a_map_is_rejected_test() {
+  assert rejection(event_logger.plugin_children(dynamic.string("postgres://")))
+    == Ok("configuration must be a map of strings")
+}
+
 /// 子仕様の `shutdown`。有限のミリ秒か、`infinity` のような atom。
 type Shutdown {
   Milliseconds(Int)
@@ -232,7 +238,7 @@ pub fn valid_configuration_declares_a_pool_and_a_store_test() {
 ///
 /// そこで**メールボックスが空になるまで待って**遷移を確認し、**そのうえで
 /// さらに `Store` を送る。** 2 度目の送信は必ず `Unavailable` の「数えて捨てる」
-/// 分岐（`store.persist/2`）を通るので、そこで落ちる実装ならこのテストが落ちる。
+/// 分岐（`store.persist/3`）を通るので、そこで落ちる実装ならこのテストが落ちる。
 pub fn the_store_survives_an_unreachable_database_test() {
   // 待ち受けの無いポートを指すプール。プロセスとしては生きているので、
   // クエリーは ConnectionUnavailable として値で返る。
@@ -242,7 +248,12 @@ pub fn the_store_survives_an_unreachable_database_test() {
     |> pog.port(1)
     |> pog.start
   let store_name = process.new_name("test_unreachable_store")
-  let assert Ok(started) = store.start(store_name, pool_name)
+  let assert Ok(started) =
+    store.start(
+      store_name,
+      store.postgres(pool_name),
+      store.default_max_queue_len,
+    )
   let assert Ok(row) = store.to_row(sample_event("a4"))
   let send_three = fn() {
     list.each([row, row, row], fn(row) {
@@ -300,9 +311,223 @@ fn message_queue_len(pid: Pid) -> Result(Int, Nil) {
 @external(erlang, "erlang", "process_info")
 fn process_info(pid: Pid, key: Atom) -> Dynamic
 
+/// 到達性と無関係な挿入エラーは、そのイベントだけの問題として保存を続ける。
+/// 保存を止める実装なら、2 件目は捨てられて挿入が試みられない。
+pub fn insert_failures_unrelated_to_reachability_keep_storing_test() {
+  let attempts = process.new_subject()
+  let assert Ok(started) =
+    store.start(
+      process.new_name("test_rejecting_store"),
+      rejecting_database(attempts),
+      store.default_max_queue_len,
+    )
+  let assert Ok(rejected) = store.to_row(sample_event("rejected"))
+  let assert Ok(accepted) = store.to_row(sample_event("accepted"))
+  process.send(started.data, store.Store(rejected))
+  process.send(started.data, store.Store(accepted))
+  assert await_inserted(attempts, "rejected", insert_timeout_ms)
+  assert await_inserted(attempts, "accepted", insert_timeout_ms)
+}
+
+/// 挿入が遅い DB でも、保存アクターのメールボックスは上限の近くで頭打ちになる。
+///
+/// 上限 20 のときの最大は実測で 23 か 24（上限に、1 件の挿入の間に届く数件を
+/// 足した数）で、上限の判定を外すと 245 になる。閾値を上限の 3 倍にするのは、
+/// CI の共有ランナーでアクターが数十 ms 止まり、その間に送信側だけが進んで最大値が
+/// 跳ねる揺れを見込むためである。3 倍でも、判定の無い実装は検出できる。
+///
+/// 最後に送ったイベントは、取り出した時点で残りが 0 件なので必ず保存される。
+pub fn a_slow_database_keeps_the_mailbox_bounded_test() {
+  let inserted = process.new_subject()
+  let assert Ok(started) =
+    store.start(
+      process.new_name("test_slow_store"),
+      slow_database(inserted),
+      slow_queue_limit,
+    )
+  let assert Ok(row) = store.to_row(sample_event("0"))
+  let longest =
+    int.range(from: 1, to: flood_len + 1, with: 0, run: fn(longest, n) {
+      process.send(
+        started.data,
+        store.Store(store.Row(..row, id: int.to_string(n))),
+      )
+      let assert Ok(queued) = message_queue_len(started.pid)
+      process.sleep(flood_interval_ms)
+      int.max(longest, queued)
+    })
+  assert longest <= slow_queue_limit * 3
+  assert await_inserted(inserted, int.to_string(flood_len), insert_timeout_ms)
+}
+
+/// 遅い DB のテストで保存アクターに渡す上限。
+const slow_queue_limit = 20
+
+/// 遅い DB が 1 行の挿入にかける時間。
+const slow_insert_ms = 10
+
+/// 遅い DB のテストでイベントを送る間隔。
+const flood_interval_ms = 1
+
+/// 遅い DB のテストで送るイベント数。
+const flood_len = 300
+
+/// 偽の DB へ次の挿入が届くのを待つ上限。
+const insert_timeout_ms = 1000
+
+/// 挿入を試みた行の id を `attempts` へ知らせ、id が `rejected` の行だけを権限
+/// 不足で拒否する DB。
+fn rejecting_database(attempts: process.Subject(String)) -> store.Database {
+  store.Database(ensure_schema: fn() { Ok(Nil) }, insert: fn(row: store.Row) {
+    process.send(attempts, row.id)
+    case row.id {
+      "rejected" -> Error(insufficient_privilege())
+      _ -> Ok(1)
+    }
+  })
+}
+
+/// 1 行の挿入に `slow_insert_ms` かけ、挿入した行の id を `inserted` へ知らせる
+/// DB。
+fn slow_database(inserted: process.Subject(String)) -> store.Database {
+  store.Database(ensure_schema: fn() { Ok(Nil) }, insert: fn(row: store.Row) {
+    process.sleep(slow_insert_ms)
+    process.send(inserted, row.id)
+    Ok(1)
+  })
+}
+
+/// `id` が届くまで `inserted` を読み進める。次の id が `timeout_ms` の間に
+/// 届かなければ `False` を返す。
+fn await_inserted(
+  inserted: process.Subject(String),
+  id: String,
+  timeout_ms: Int,
+) -> Bool {
+  case process.receive(inserted, timeout_ms) {
+    Ok(received) if received == id -> True
+    Ok(_other) -> await_inserted(inserted, id, timeout_ms)
+    Error(Nil) -> False
+  }
+}
+
+/// イベントは行に変換されて保存アクターの登録名へ届き、転送した使い捨ての
+/// プロセスは正常に終わる。
+pub fn events_are_forwarded_to_the_store_test() {
+  let #(exit, forwarded) =
+    as_store(fn() {
+      spawn_handle_event(sample_event("f1"))
+      |> await_forwarded(exit_timeout_ms)
+    })
+  assert exit == Ok(process.Normal)
+  let assert Ok(store.Store(row)) = forwarded
+  assert row.id == "f1"
+}
+
+/// 保存アクターの再起動の間に届いたイベントは、登録名が戻るのを待って転送する。
+/// 即座に失敗させると、再起動の間の数件でプラグインごと無効になる。
+pub fn events_wait_for_a_restarting_store_test() {
+  assert process.named(event_logger.store_name()) == Error(Nil)
+  let monitor = spawn_handle_event(sample_event("f2"))
+  process.sleep(100)
+  let #(exit, forwarded) =
+    as_store(fn() { await_forwarded(monitor, exit_timeout_ms) })
+  assert exit == Ok(process.Normal)
+  let assert Ok(store.Store(row)) = forwarded
+  assert row.id == "f2"
+}
+
+/// 待っても保存アクターが戻らなければ失敗させる。子を諦めた状態は、ランナーの
+/// 連続失敗を経て `disabled` として見える（`docs/plugin-api.md` 第 5.4 節）。
+pub fn events_fail_when_the_store_stays_away_test() {
+  assert process.named(event_logger.store_name()) == Error(Nil)
+  let assert Ok(process.Abnormal(reason)) =
+    spawn_handle_event(sample_event("f3"))
+    |> await_exit(exit_timeout_ms)
+  assert string.contains(
+    string.inspect(reason),
+    "event_logger store is not running",
+  )
+}
+
+/// イベント map として読めない値は、宛先が居ても失敗させる。
+pub fn values_that_are_not_event_maps_fail_test() {
+  let exit =
+    as_store(fn() {
+      spawn_handle_event(dynamic.string("not an event"))
+      |> await_exit(exit_timeout_ms)
+    })
+  let assert Ok(process.Abnormal(reason)) = exit
+  assert string.contains(
+    string.inspect(reason),
+    "event is not a valid event map",
+  )
+}
+
+/// 使い捨てのプロセスの終了を待つ上限。`handle_event/1` が保存アクターを待つ
+/// 1 秒より十分長く取る。
+const exit_timeout_ms = 3000
+
+/// `handle_event/1` を使い捨てのプロセスで動かし、その監視を返す。生成と監視を
+/// 不可分にするため `erlang:spawn_monitor/1` を使う（先に終わると `noproc` の
+/// DOWN になり、終了の理由を読めない）。
+fn spawn_handle_event(event: Dynamic) -> Monitor {
+  spawn_monitor(fn() { event_logger.handle_event(event) }).1
+}
+
+/// プロセスを生成し、同時に監視する。
+@external(erlang, "erlang", "spawn_monitor")
+fn spawn_monitor(run: fn() -> Nil) -> #(Pid, Monitor)
+
+/// 監視しているプロセスの終了の理由を待つ。`timeout_ms` の間に終わらなければ
+/// `Error(Nil)` を返す。
+fn await_exit(
+  monitor: Monitor,
+  timeout_ms: Int,
+) -> Result(process.ExitReason, Nil) {
+  process.new_selector()
+  |> process.select_specific_monitor(monitor, fn(down) { down.reason })
+  |> process.selector_receive(timeout_ms)
+}
+
+/// 使い捨てのプロセスの終了を待ってから、保存アクターの登録名に届いた
+/// メッセージを受け取る。終了を先に待つので、送られていれば取りこぼさない。
+fn await_forwarded(
+  monitor: Monitor,
+  timeout_ms: Int,
+) -> #(Result(process.ExitReason, Nil), Result(store.Msg, Nil)) {
+  let exit = await_exit(monitor, timeout_ms)
+  #(exit, process.receive(process.named_subject(event_logger.store_name()), 0))
+}
+
+/// テストプロセスを保存アクターの登録名で登録して `run` を実行し、解除してから
+/// `run` の結果を返す。同じモジュールのテストは同じプロセスで動くので、名前を
+/// 次のテストへ持ち越さない。解除を飛ばさないよう、検査は `run` の中ではなく
+/// 戻り値に対して行う。
+fn as_store(run: fn() -> a) -> a {
+  let name = event_logger.store_name()
+  let assert Ok(Nil) = process.register(process.self(), name)
+  let result = run()
+  let assert Ok(Nil) = process.unregister(name)
+  result
+}
+
+/// プールの起動シムは起動結果を `{ok, Pid}` に潰し、起動に失敗すれば
+/// `{error, Reason}` を返す（`started_pid/1` の両分岐）。`pgo` を止めてから起動し
+/// 直すことは確かめない（README の `pgo` の節）。
+pub fn the_pool_shim_flattens_the_start_result_test() {
+  let config =
+    pog.default_config(process.new_name("test_shim_pool"))
+    |> pog.port(1)
+  let assert Ok(pid) = event_logger.start_pool(config)
+  assert process.is_alive(pid)
+  let assert Error(reason) = event_logger.start_pool(config)
+  assert string.contains(reason, "AlreadyStarted")
+}
+
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
 /// ときだけ実行する。スキーマ作成の冪等性・挿入・重複無視・jsonb としての
-/// 読み戻し・インデックスの作成を一巡して確かめる。
+/// 読み戻し・インデックスの作成・NUL を含む行の拒否を一巡して確かめる。
 ///
 /// 同じ DB に対して `gleam test` を並行実行することは想定していない
 /// （`CREATE TABLE IF NOT EXISTS` 同士が競合しうる）。CI は専用の service を
@@ -317,7 +542,7 @@ pub fn postgres_round_trip_test() {
   }
 }
 
-/// スキーマ作成・挿入・重複挿入・後片付けを一巡させる。
+/// スキーマ作成・挿入・重複挿入・後片付け・NUL を含む行の拒否を一巡させる。
 fn round_trip(database_url: String) -> Nil {
   let db = connect(database_url)
   // 2 回続けて実行しても失敗しない。
@@ -337,6 +562,15 @@ fn round_trip(database_url: String) -> Nil {
   assert count_rows(db, stored.id) == 1
 
   delete_row(db, stored.id)
+  assert count_rows(db, stored.id) == 0
+
+  // Postgres の text は NUL を持てず、jsonb は \u0000 を受け付けない。
+  let assert Error(pog.PostgresqlError(code: "22021", ..)) =
+    store.insert(db, store.Row(..stored, content: "a\u{0000}b"))
+  let assert Ok(nul_tag) =
+    store.to_row(event_map(random_id(), [["t", "a\u{0000}b"]]))
+  let assert Error(pog.PostgresqlError(code: "22P05", ..)) =
+    store.insert(db, nul_tag)
   assert count_rows(db, stored.id) == 0
 }
 
