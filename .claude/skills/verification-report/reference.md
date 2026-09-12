@@ -11,7 +11,7 @@
 ```sh
 # ユーザーのコンテナーの状態。後片付けで同じ状態か比べる（Status の Up の時間が続いていれば再起動されていない）
 # docker ps --filter name=nostr-no-su- は部分一致で nns-verify-nostr-no-su-1 にも当たるので、grep で先頭を合わせる
-docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' > "$V/baseline-docker-ps.txt"
+docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' > "$V/baseline-docker-ps.txt" || true
 
 git -C /home/lina/workspace/projects/nostr-no-su fetch origin
 git -C /home/lina/workspace/projects/nostr-no-su worktree add "$W" origin/main
@@ -254,7 +254,7 @@ done < "$V/targets.txt"
 # 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
 # secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。件数は一致したファイルの数を出す。
 grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
-  n=$(grep -F -l -- "$value" "$V"/bodies/* | wc -l)
+  n=$(grep -F -l -- "$value" "$V"/bodies/* | wc -l || true)
   [ "$n" -gt 0 ] && echo "HIT $name bodies $n"
 done
 
