@@ -1,10 +1,12 @@
 //// NIP-19 の npub / nsec の符号化と復号のテスト。
 
 import gleam/list
+import gleam/string
 import nostr_no_su/nostr/nip19.{
   EmptyPrefix, InvalidCharacter, InvalidChecksum, InvalidLength, InvalidPadding,
   MissingSeparator, MixedCase, Npub, Nsec, PrefixMismatch, TooLong, TooShort,
 }
+import qcheck
 import support/vector.{bytes}
 
 const spec_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
@@ -81,6 +83,20 @@ pub fn round_trip_test() {
   use prefix <- list.each([Npub, Nsec])
   let assert Ok(text) = nip19.encode(key, prefix)
   assert nip19.decode(text, prefix) == Ok(key)
+}
+
+/// 任意の 32 バイトの鍵は、どちらの接頭辞でも、符号化して復号すると元の鍵に戻る。
+/// 符号化した文字列をすべて大文字にしても同じ鍵になる。
+pub fn round_trip_property_test() {
+  let generator =
+    qcheck.tuple2(
+      qcheck.fixed_size_byte_aligned_bit_array(32),
+      qcheck.from_generators(qcheck.return(Npub), [qcheck.return(Nsec)]),
+    )
+  use #(key, prefix) <- qcheck.given(generator)
+  let assert Ok(text) = nip19.encode(key, prefix)
+  assert nip19.decode(text, prefix) == Ok(key)
+  assert nip19.decode(string.uppercase(text), prefix) == Ok(key)
 }
 
 /// 正しい bech32 でも、期待と違う接頭辞なら拒否する。
