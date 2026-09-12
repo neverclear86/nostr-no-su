@@ -65,7 +65,8 @@ pub fn main() -> Nil {
     Ok(started) -> {
       list.each(started.notes, io.println)
       // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
-      // クラッシュさせる。コンテナーに再起動を促すのは終了コードである。
+      // クラッシュさせる。コンテナーの再起動はプロセスの終了で起き、終了コードは
+      // 失敗を示す。
       let assert Ok(_started) = app.start(started.spec)
         as "supervision tree failed to start"
       process.sleep_forever()
