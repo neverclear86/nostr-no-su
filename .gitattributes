@@ -1,2 +1,8 @@
 # npm run build:css の生成物。差分は assets/admin.css と描画のモジュールで読む。
 priv/static/admin.css linguist-generated=true
+
+# 公式のテストベクター。取得元とバイト単位で同じに保つため、改行を変換しない
+# （BIP-340 の CSV は CRLF。core.autocrlf=input でも LF に変わらないようにする）。
+# git の属性は後の行が優先されるので、この行は `*` に対する行（text=auto など）
+# より後に置く。SHA-256 の照合は test/support/vector.gleam の read で行う。
+test/vectors/** -text
