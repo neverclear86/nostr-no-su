@@ -18,17 +18,21 @@ Gleam プロジェクトにせず Erlang 1 ファイルにしているのは、�
 
 ## ビルド
 
+<!-- この節の最初の sh ブロックは、CI（.github/workflows/test.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
+
 **本体と同じイメージでビルドすること。** OTP が違うとローダーが `badfile` で拒否する。
 
 ```sh
 mkdir -p plugins/counter/ebin
-docker run --rm \
+docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/examples/plugins/counter:/src:ro" \
   -v "$PWD/plugins/counter/ebin:/out" \
   ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
   erlc -o /out /src/src/counter.erl
 chmod -R a+rX plugins
 ```
+
+コンテナーは `--user` でホストの利用者として動かす。root で動かすと `.beam` が root 所有になり、非 root の利用者が続く `chmod` を実行すると EPERM で止まる。この手順は、コンテナーの uid がホストの uid と一致する構成（rootful の docker、Docker Desktop）を前提にする。
 
 ## 置き方
 
