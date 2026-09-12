@@ -333,3 +333,8 @@ CI の `vendor-stratus` ジョブが、上流の tar にパッチを当てた結
 - [x] 管理 UI での接続承認（auth_url フロー）
 - [x] イベントロガープラグイン（Postgres へ保存）
 - [x] 管理 UI（Gleam / wisp）
+
+## ライセンス
+
+このリポジトリのライセンスは [MIT License](LICENSE) である。
+`vendor/stratus/` は Apache License 2.0 の stratus を改変したもので、帰属は [NOTICE](NOTICE)、改変の記録は [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md) にある。
