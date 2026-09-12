@@ -37,11 +37,12 @@ docker compose では `DATABASE_URL` が同梱の Postgres を指しているの
 
 ```sh
 [ -e .env ] || cp .env.example .env
+chmod 600 .env
 # .env の ACCOUNT_MASTER_KEY= の後に、上の openssl rand -hex 32 の出力を書く
 docker compose up --build
 ```
 
-すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントを復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。ほかの変数の既定値と書き方は `.env.example` のコメントにある。
+すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーを書く `.env` をホストのほかのユーザーから読めないようにする。ほかの変数の既定値と書き方は `.env.example` のコメントにある。
 
 起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
 
