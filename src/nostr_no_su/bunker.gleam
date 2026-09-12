@@ -6,7 +6,9 @@
 //// 積むメッセージ（`LoadAccounts`）で行い、initialiser 自身は DB に触らない。DB が
 //// 応答しなくても初期化のタイムアウトに当たらず、サブツリーの起動は失敗しない。
 //// 読み込みに失敗したら理由をログに出して再試行を予約するだけで、アクターは
-//// 落ちない。
+//// 落ちない。再試行の待ち時間は失敗のたびに倍にし、上限で頭打ちにする
+//// （`RetryDelay`）。待ち時間は読み込めていない状態（`Loading`）だけが持つので、
+//// 読み込みに成功した後の失敗は初期値から数え直す。
 ////
 //// **読み込みの順序に関する不変条件**：`LoadAccounts` は initialiser が送るので、
 //// アクターのメールボックスで必ず最初のメッセージになる。接続は `rest_for_one` で
@@ -46,8 +48,8 @@
 //// メールボックスに積まれて捨てられない）。書き込み 1 件は最長で約 3 秒（DB に到達
 //// できないときのチェックアウトの失敗）、読み込み 1 回は読み込みの期限の 3 秒で打ち
 //// 切る。DB を一時停止した測定では、読み込みは 3000ms、2950ms、2000ms で失敗して返った。
-//// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行の間隔（5 秒）ごとに最長
-//// 3 秒ずつ待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
+//// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行のたびに最長 3 秒ずつ
+//// 待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
 //// 承認済みセッションは残る。
 ////
 //// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
@@ -75,8 +77,10 @@ import nostr_no_su/time
 /// バンカーが出すログ行の接頭辞。
 pub const log_prefix = "bunker"
 
-/// 読み込みに失敗したとき、次に試すまでの既定の待ち時間。
-pub const default_retry_delay_ms = 5000
+/// 本番の読み込みの再試行の待ち時間。5 秒から倍に延ばし、2 分で頭打ちにする。読み込み
+/// 1 回は DB に到達できないとき最長 3 秒ループを止めるので、DB が長く止まっている間の
+/// 試行の回数を抑える。
+pub const default_retry_delay = RetryDelay(initial_ms: 5000, max_ms: 120_000)
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。アカウントの読み込みは最長で
@@ -135,7 +139,7 @@ pub type ChangeFailure {
   /// ストアの失敗）。
   NotApplied(reason: String)
   /// 変更を受け付けられる状態に無い（読み込み前、結果が曖昧な書き込みの後の読み直しの
-  /// 前、バンカーが無効）。時間をおけば同じ変更を受け付けうる。
+  /// 前）。時間をおけば同じ変更を受け付けうる。
   NotReady(reason: String)
   /// 反映されたかどうか分からない（書き込みの期限切れや途中の切断、DB のクライアントの
   /// 例外、アクターが期限内に応答しない）。
@@ -174,6 +178,12 @@ pub type Store {
   )
 }
 
+/// 読み込みに失敗したときの再試行の待ち時間。最初の失敗の後は `initial_ms` 待ち、
+/// 失敗が続くたびに倍にして `max_ms` で頭打ちにする。
+pub type RetryDelay {
+  RetryDelay(initial_ms: Int, max_ms: Int)
+}
+
 /// バンカーアクターの設定。設定から決まるものだけを持つ。購読の張り直しの宛先は
 /// ツリーを組む側しか知らないので、ここには入れず `start` の引数で受け取る。
 pub type Settings {
@@ -182,8 +192,8 @@ pub type Settings {
     store: Store,
     /// 承認ページの URL を組み立てる関数。`None` なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
-    /// 読み込みに失敗したとき、次に試すまでの待ち時間。
-    retry_delay_ms: Int,
+    /// 読み込みに失敗したときの再試行の待ち時間。
+    retry_delay: RetryDelay,
   )
 }
 
@@ -364,8 +374,9 @@ type Accounts {
   /// ストアの内容を読み込めていない。起動直後の読み込みの前か、結果が曖昧な書き込みの
   /// 後の読み直しの前。`LoadAccounts` の送信か再試行のタイマーが、常にちょうど 1 つ
   /// 未処理で残っている。`failure` は最後の失敗の理由（まだ失敗していなければ
-  /// `None`）。
-  Loading(failure: Option(String))
+  /// `None`）、`retry_delay_ms` はこの状態での読み込みが失敗したときの、次の再試行
+  /// までの待ち時間。
+  Loading(failure: Option(String), retry_delay_ms: Int)
   /// 読み込めた。
   Ready
 }
@@ -458,7 +469,7 @@ fn initialise(
     not_before: time.now_seconds(),
     settings: settings,
     retry: retry,
-    accounts: Loading(failure: None),
+    accounts: loading(settings),
     resubscribe: resubscribe,
   )
   |> actor.initialised
@@ -591,32 +602,47 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 }
 
 /// ストアからアカウントを読み込む。成功したらメモリを読み込んだ内容に合わせて
-/// 読み込み済みに移り、失敗したら再試行を予約する。読み込み済みなら何もしない
-/// （`LoadAccounts` を積むのは読み込めていない状態に移るときだけで、読み込み用の
-/// subject はこのプロセスの外に出ないので、通常は起きない）。
+/// 読み込み済みに移り、失敗したら再試行を予約して次の待ち時間を延ばす。読み込み
+/// 済みなら何もしない（`LoadAccounts` を積むのは読み込めていない状態に移るときだけ
+/// で、読み込み用の subject はこのプロセスの外に出ないので、通常は起きない）。
 fn load_accounts(state: State) -> State {
   case state.accounts {
     Ready -> state
-    Loading(failure:) -> {
+    Loading(failure:, retry_delay_ms:) -> {
       let outcome = state.settings.store.load()
-      load_report(failure, outcome, state.settings.retry_delay_ms)
+      load_report(failure, outcome, retry_delay_ms)
       |> list.each(log.println(log_prefix, _))
       case outcome {
         Ok(loaded) ->
           reconcile(State(..state, accounts: Ready), loaded)
           |> transition(state, _)
         Error(reason) -> {
-          let _ =
-            process.send_after(
-              state.retry,
-              state.settings.retry_delay_ms,
-              LoadAccounts,
-            )
-          State(..state, accounts: Loading(failure: Some(reason)))
+          let _ = process.send_after(state.retry, retry_delay_ms, LoadAccounts)
+          State(
+            ..state,
+            accounts: Loading(
+              failure: Some(reason),
+              retry_delay_ms: next_retry_delay(
+                state.settings.retry_delay,
+                retry_delay_ms,
+              ),
+            ),
+          )
         }
       }
     }
   }
+}
+
+/// 読み込めていない状態の始まり。待ち時間は初期値から数える。
+fn loading(settings: Settings) -> Accounts {
+  Loading(failure: None, retry_delay_ms: settings.retry_delay.initial_ms)
+}
+
+/// `delay_ms` 待った後の読み込みも失敗したときの、次の待ち時間。倍にして上限で
+/// 頭打ちにする。
+pub fn next_retry_delay(retry: RetryDelay, delay_ms: Int) -> Int {
+  int.min(delay_ms * 2, retry.max_ms)
 }
 
 /// 読み込みの結果に対して出すログ行。`previous_failure` は直前の失敗の理由
@@ -639,7 +665,7 @@ pub fn load_report(
     Error(reason), _ -> [
       "account store unavailable: "
       <> reason
-      <> "; retrying every "
+      <> "; retrying in "
       <> int.to_string(retry_delay_ms)
       <> "ms",
     ]
@@ -684,8 +710,8 @@ fn listings(state: State) -> Result(List(Listing), String) {
         )
       })
       |> Ok
-    Loading(failure: None) -> Error("accounts are being loaded")
-    Loading(failure: Some(reason)) ->
+    Loading(failure: None, ..) -> Error("accounts are being loaded")
+    Loading(failure: Some(reason), ..) ->
       Error("account store unavailable: " <> reason)
   }
 }
@@ -695,7 +721,7 @@ fn listings(state: State) -> Result(List(Listing), String) {
 /// 扱いに合わせる。
 fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
   case state.accounts {
-    Loading(_) -> Error(accounts_not_loaded)
+    Loading(..) -> Error(accounts_not_loaded)
     Ready ->
       engine.find_account(state.engine, signer)
       |> result.map(account.nsec)
@@ -782,7 +808,7 @@ fn apply_change(
   update: fn(State) -> State,
 ) -> actor.Next(State, Msg) {
   let #(next, outcome) = case state.accounts, check {
-    Loading(_), _ -> #(state, Error(NotReady(accounts_not_loaded)))
+    Loading(..), _ -> #(state, Error(NotReady(accounts_not_loaded)))
     Ready, Error(failure) -> #(state, Error(failure))
     Ready, Ok(Nil) -> {
       let written = write()
@@ -795,13 +821,13 @@ fn apply_change(
         // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
         // 管理 UI は読み直した後の一覧を読む。
         Error(AlreadyStored(reason)) -> #(
-          load_accounts(State(..state, accounts: Loading(failure: None))),
+          load_accounts(State(..state, accounts: loading(state.settings))),
           Error(NotApplied(reason)),
         )
         Error(MaybeWritten(_reason)) -> {
           process.send(state.retry, LoadAccounts)
           #(
-            State(..state, accounts: Loading(failure: None)),
+            State(..state, accounts: loading(state.settings)),
             Error(MaybeApplied(change_may_have_been_applied)),
           )
         }

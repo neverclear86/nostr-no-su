@@ -19,9 +19,6 @@ const default_admin_port = 8080
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
 const default_admin_bind = "127.0.0.1"
 
-/// 廃止した環境変数。設定されていれば、値を読まずに名前だけを報告する。
-const deprecated_variable_names = ["ACCOUNT_KEYS", "BUNKER_SECRET"]
-
 /// `ADMIN_PORT` の解釈結果。無効化には「明示的に空にした」と「値が不正だった」の
 /// 2 通りがあり、後者だけ起動時に理由を報告する。
 pub type AdminPort {
@@ -33,7 +30,7 @@ pub type AdminPort {
   Invalid(reason: String)
 }
 
-/// バンカーのアカウントストアの設定。揃っていなければバンカーを無効にする。
+/// バンカーのアカウントストアの設定。揃っていなければ起動を中止する。
 ///
 /// マスターキーは読み込みの時点で `MasterKey`（関数に閉じた値）にし、生の 16 進
 /// 文字列を持たない。`MasterKey` を含むので `==` では比べられない。
@@ -53,8 +50,6 @@ pub type Config {
     bunker_relay_urls: List(String),
     pubkeys: List(String),
     account_store: AccountStore,
-    /// 設定されていた廃止済みの環境変数の名前。値は持たない。
-    deprecated_variables: List(String),
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
     /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
@@ -81,9 +76,6 @@ pub fn load() -> Config {
     ),
     pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
     account_store: account_store(),
-    deprecated_variables: list.filter(deprecated_variable_names, fn(name) {
-      option.is_some(optional(name))
-    }),
     plugin_dir: optional("PLUGIN_DIR"),
     plugin_env: plugin_env(),
     admin_port: admin_port(),

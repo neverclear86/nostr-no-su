@@ -530,18 +530,6 @@ pub fn dashboard_shows_account_labels_test() {
   )
 }
 
-/// バンカーが無効なら、アカウントの節にその理由が出る。
-pub fn dashboard_shows_why_the_bunker_is_disabled_test() {
-  let reason = "bunker is disabled: DATABASE_URL is not set"
-  let body = simulate.read_body(get(with_accounts(Error(reason)), "/"))
-  assert string.contains(
-    body,
-    "<div class=\"alert\"><span><span lang=\"en\">"
-      <> reason
-      <> "</span></span></div>",
-  )
-}
-
 /// アカウントの節の理由とラベルは、どちらもエスケープする。ラベルは利用者の入力で、
 /// 理由には外から来た文字列が混ざりうる。
 pub fn dashboard_escapes_account_labels_and_reasons_test() {

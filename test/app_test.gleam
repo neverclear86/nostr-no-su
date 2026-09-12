@@ -52,9 +52,6 @@ fn store_failure() -> String {
 /// 偽リレーの URL。`fake_open` が報告に添えるだけで、接続先としては使わない。
 const test_relay_url = "ws://relay.test"
 
-/// バンカーを動かさないツリーの、無効の理由。
-const disabled_reason = "DATABASE_URL is not set"
-
 /// 承認ページを載せる管理 UI の公開 URL。承認フローを有効にするために渡す。
 const auth_base = "http://admin.test"
 
@@ -200,7 +197,7 @@ fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
     None,
     name,
     store_with_load(fn() { load_signer(signer_key) }),
-    default_retry_delay_ms,
+    fixed_retry_delay,
   )
 }
 
@@ -210,20 +207,21 @@ fn start_loading_bunker_tree(
   subscribed: Option(Subject(SubscriptionReport)),
   name: Name(bunker.Msg),
   store: bunker.Store,
-  retry_delay_ms: Int,
+  retry_delay: bunker.RetryDelay,
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [],
     monitor: None,
-    bunker: Ok(bunker_spec(name, store, [test_relay()], retry_delay_ms)),
+    bunker: bunker_spec(name, store, [test_relay()], retry_delay),
     admin: None,
     open: fake_open(reports, subscribed),
     reconnect_delay_ms: 100,
   ))
 }
 
-/// テストの読み込みの再試行間隔の既定値。
-const default_retry_delay_ms = 100
+/// テストの読み込みの再試行の待ち時間。初期値と上限を同じにして延ばさない。既存の
+/// テストは一定の間隔を前提に、読み込みの回数と待ち時間を数える。
+const fixed_retry_delay = bunker.RetryDelay(initial_ms: 100, max_ms: 100)
 
 /// バンカーサブツリーの仕様。接続プールは到達できないポートを指し、偽のストアを
 /// 使うテストでもサブツリーの形（プール、アクター、接続の順）は本番と同じにする。
@@ -233,7 +231,7 @@ fn bunker_spec(
   name: Name(bunker.Msg),
   store: bunker.Store,
   relays: List(app.Relay),
-  retry_delay_ms: Int,
+  retry_delay: bunker.RetryDelay,
 ) -> app.Bunker {
   app.Bunker(
     name: name,
@@ -242,7 +240,7 @@ fn bunker_spec(
     settings: bunker.Settings(
       store: store,
       auth_url: Some(fn(token) { auth_base <> "/approve/" <> token }),
-      retry_delay_ms: retry_delay_ms,
+      retry_delay: retry_delay,
     ),
     relays: relays,
     subscriptions: fn() {
@@ -250,6 +248,19 @@ fn bunker_spec(
       |> option.to_result(Nil)
       |> result.map(config.bunker_subscriptions(_, 0))
     },
+  )
+}
+
+/// 監視とプラグインのテストのツリーに載せる、リレーを持たないバンカー。ツリーは常に
+/// バンカーを含むので載せるが、テストはバンカーを使わない。リレーを持たせないのは、
+/// バンカーの接続が同じ `reports` へ `Opened` を送り、監視の接続の報告と区別できなく
+/// なるためである。
+fn idle_bunker() -> app.Bunker {
+  bunker_spec(
+    process.new_name("test_bunker"),
+    store_with_load(fn() { Ok(Loaded(accounts: [], skipped: [])) }),
+    [],
+    fixed_retry_delay,
   )
 }
 
@@ -616,12 +627,12 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
     start_tree(app.Spec(
       plugins: [],
       monitor: None,
-      bunker: Ok(bunker_spec(
+      bunker: bunker_spec(
         process.new_name("test_bunker"),
         store_with_load(fn() { load_signer(signer_key) }),
         [relay_a, relay_b],
-        default_retry_delay_ms,
-      )),
+        fixed_retry_delay,
+      ),
       admin: None,
       open: fake_open(reports, None),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
@@ -672,7 +683,7 @@ fn start_monitor_tree(
         subscriptions: fn() { Ok([]) },
       ),
     ),
-    bunker: Error(disabled_reason),
+    bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
     reconnect_delay_ms: 100,
@@ -764,7 +775,7 @@ fn start_plugins_tree(
         subscriptions: fn() { Ok([]) },
       ),
     ),
-    bunker: Error(disabled_reason),
+    bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
     reconnect_delay_ms: 100,
@@ -1273,7 +1284,7 @@ pub fn the_first_subscription_includes_the_loaded_signers_test() {
         process.sleep(300)
         load_signer(signer_key)
       }),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Ok(Subscribed(_relay_url, [message.Req(_id, filter)])) =
     process.receive(subscribed, 3000)
@@ -1302,7 +1313,7 @@ pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
         }
       }),
       // 失敗の間にリクエストを確実に届けられるよう、再試行を遅めにする。
-      500,
+      bunker.RetryDelay(initial_ms: 500, max_ms: 500),
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1337,7 +1348,7 @@ pub fn retries_do_not_multiply_across_restarts_test() {
         process.send(calls, Nil)
         Error("database is unreachable or timed out")
       }),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
@@ -1351,6 +1362,58 @@ pub fn retries_do_not_multiply_across_restarts_test() {
   drain(calls)
   let after = count_within(calls, 1000)
   assert after * 2 <= before * 3
+  stop_tree(tree)
+}
+
+/// 読み込みの再試行の待ち時間は失敗のたびに倍に延び、読み込みに成功した後の失敗では
+/// 初期値から数え直す。タイマーは予約した時間より早く鳴らないので、延びたことは次の
+/// 読み込みが待ち時間より前に来ないことで確かめる。
+pub fn load_retries_back_off_and_start_over_after_a_success_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_call = call_counter()
+  let store =
+    bunker.Store(
+      ..store_with_load(fn() {
+        process.send(calls, Nil)
+        case next_call() {
+          4 -> load_signer(signer_key)
+          _ -> Error("database is unreachable or timed out")
+        }
+      }),
+      insert: fn(_entry) { Error(bunker.MaybeWritten(store_failure())) },
+    )
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store,
+      bunker.RetryDelay(initial_ms: 50, max_ms: 3200),
+    )
+  // 1 回目と 2 回目の失敗の間は 50ms。以後は 100、200、400ms と延びる。窓は延びた後の
+  // 待ち時間より短く、延びる前の待ち時間の 1.5 倍にする。
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  assert process.receive(calls, 75) == Error(Nil)
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  assert process.receive(calls, 150) == Error(Nil)
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  assert process.receive(calls, 300) == Error(Nil)
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  assert await_signers(
+    name,
+    [account.pubkey_hex(account_for(signer_key))],
+    2000,
+  )
+
+  // 結果が曖昧な書き込みの後の読み直しはすぐに行われて失敗する。待ち時間が初期値に
+  // 戻っていれば次は 50ms 後で、延びたままなら 800ms 後になる。
+  assert bunker.add_account(name, account_for(other_signer_key), "")
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+  let assert Ok(Nil) = process.receive(calls, 2000)
+  let assert Ok(Nil) = process.receive(calls, 700)
   stop_tree(tree)
 }
 
@@ -1370,7 +1433,7 @@ pub fn a_restarted_bunker_reloads_the_accounts_test() {
           _ -> load_signer(other_signer_key)
         }
       }),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
@@ -1416,7 +1479,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
           subscriptions: fn() { Ok([]) },
         ),
       ),
-      bunker: Ok(bunker_spec(
+      bunker: bunker_spec(
         bunker_name,
         store_with_load(fn() {
           // 到達できない DB に対するチェックアウト待ちを模す。
@@ -1424,8 +1487,8 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
           Error("database is unreachable or timed out")
         }),
         [named_relay("ws://bunker.test")],
-        default_retry_delay_ms,
-      )),
+        fixed_retry_delay,
+      ),
       admin: None,
       open: fake_open(reports, None),
       reconnect_delay_ms: 100,
@@ -1542,7 +1605,7 @@ pub fn an_account_added_at_runtime_answers_test() {
       Some(subscribed),
       name,
       memory_store(calls, [], False),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1587,7 +1650,7 @@ pub fn a_removed_account_stops_answering_test() {
       Some(subscribed),
       name,
       memory_store(calls, [stored_signer(signer_key)], False),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1620,7 +1683,7 @@ pub fn account_changes_keep_the_bunker_and_its_sessions_test() {
       None,
       name,
       memory_store(process.new_subject(), [stored_signer(signer_key)], False),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1670,7 +1733,7 @@ pub fn a_failed_write_changes_nothing_test() {
       Some(subscribed),
       name,
       memory_store(process.new_subject(), [stored_signer(signer_key)], True),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1711,13 +1774,7 @@ pub fn changes_before_loading_do_not_reach_the_store_test() {
       Error(store_failure())
     })
   let tree =
-    start_loading_bunker_tree(
-      reports,
-      None,
-      name,
-      store,
-      default_retry_delay_ms,
-    )
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
 
@@ -1743,7 +1800,7 @@ pub fn requests_during_a_slow_write_are_not_dropped_test() {
       written
     })
   let tree =
-    start_loading_bunker_tree(reports, None, name, slow, default_retry_delay_ms)
+    start_loading_bunker_tree(reports, None, name, slow, fixed_retry_delay)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
@@ -1780,7 +1837,7 @@ pub fn labels_and_registration_checks_test() {
       None,
       name,
       memory_store(calls, [stored_signer(signer_key)], False),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
@@ -1844,7 +1901,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
       Some(subscribed),
       name,
       gated,
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
@@ -2054,7 +2111,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
       Some(subscribed),
       name,
       committed_but_timed_out_store(database),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -2108,7 +2165,7 @@ pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
       None,
       name,
       committed_but_timed_out_store(database),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -2149,7 +2206,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
       None,
       name,
       committed_but_timed_out_store(database),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -2193,13 +2250,7 @@ pub fn adding_a_row_that_only_the_store_has_reads_it_back_test() {
       already_stored()
     })
   let tree =
-    start_loading_bunker_tree(
-      reports,
-      None,
-      name,
-      store,
-      default_retry_delay_ms,
-    )
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
   assert bunker.accounts(name) == Ok(database_listings(database))
@@ -2240,13 +2291,7 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
       insert: fn(_entry) { already_stored() },
     )
   let tree =
-    start_loading_bunker_tree(
-      reports,
-      None,
-      name,
-      store,
-      default_retry_delay_ms,
-    )
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
   assert process.receive(loads, 1000) == Ok(Nil)
@@ -2273,13 +2318,7 @@ pub fn nsec_is_refused_before_the_accounts_are_loaded_test() {
       Error(store_failure())
     })
   let tree =
-    start_loading_bunker_tree(
-      reports,
-      None,
-      name,
-      store,
-      default_retry_delay_ms,
-    )
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
 
@@ -2302,7 +2341,7 @@ pub fn nsec_answers_for_a_registered_signer_test() {
       None,
       name,
       memory_store(calls, [stored_signer(signer_key)], False),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
@@ -2329,7 +2368,7 @@ pub fn nsec_is_refused_until_an_ambiguous_write_is_reloaded_test() {
       None,
       name,
       committed_but_timed_out_store(database),
-      default_retry_delay_ms,
+      fixed_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)

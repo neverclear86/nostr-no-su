@@ -79,7 +79,7 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
       bunker.Settings(
         store: nostr_no_su.account_store_operations(pool, key, actor_timeouts),
         auth_url: None,
-        retry_delay_ms: 100,
+        retry_delay: bunker.RetryDelay(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },
     )

@@ -138,22 +138,13 @@ pub fn empty_account_store_variables_are_unset_test() {
     )
 }
 
-/// 不正なマスターキーは理由付きで無効にし、理由にマスターキーも URL も含めない。
-pub fn an_invalid_master_key_disables_the_store_test() {
+/// 不正なマスターキーは理由を報告し、理由にマスターキーも URL も含めない。
+pub fn an_invalid_master_key_is_reported_without_its_value_test() {
   let assert config.AccountStoreUnavailable(reason) =
     account_store_for(Some(database_url), Some("zz-key-marker"))
   assert reason == "ACCOUNT_MASTER_KEY must be 64 hex characters (32 bytes)"
   assert !string.contains(reason, "key-marker")
   assert !string.contains(reason, "pw-marker")
-}
-
-/// 廃止した `ACCOUNT_KEYS` と `BUNKER_SECRET` は、設定されていれば名前だけが
-/// 報告される。空文字列は未設定として扱う。
-pub fn deprecated_variables_are_reported_by_name_test() {
-  assert config_with([#("ACCOUNT_KEYS", "x"), #("BUNKER_SECRET", "y")]).deprecated_variables
-    == ["ACCOUNT_KEYS", "BUNKER_SECRET"]
-  assert config_with([#("ACCOUNT_KEYS", ""), #("BUNKER_SECRET", "")]).deprecated_variables
-    == []
 }
 
 /// `PLUGIN_DIR` は未設定・空文字列なら None（外部プラグインの読み込みを無効に
@@ -260,7 +251,6 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     bunker_relay_urls: ["wss://example.com"],
     pubkeys: pubkeys,
     account_store: config.AccountStoreUnavailable("DATABASE_URL is not set"),
-    deprecated_variables: [],
     plugin_dir: None,
     plugin_env: dict.new(),
     admin_port: config.Disabled,
