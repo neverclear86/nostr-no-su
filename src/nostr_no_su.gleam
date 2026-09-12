@@ -40,6 +40,12 @@ const bunker_since_lookback_seconds = 60
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
 fn ensure_ssl_started() -> Nil
 
+/// 終了コード `status` で VM を直ちに止める。それまでに標準出力へ書いた行は書き出して
+/// から止まる。`main` が返ると、生成されたエントリーポイントが終了コード 0 で止める
+/// ので、失敗として終了するときはこれを使う。
+@external(erlang, "erlang", "halt")
+fn halt(status: Int) -> Nil
+
 /// 起動時に組み立てたツリーの仕様と、その報告行。組み立てから出力を分けることで、
 /// 何をどう報告するかが `main` の 1 か所に集まる。
 type Startup {
@@ -48,25 +54,36 @@ type Startup {
 
 /// 設定されたリレーとアカウントのスーパービジョンツリーを起動し、以降は待機
 /// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
+/// バンカーを起動できない設定なら、理由を 1 行出して終了コード 1 で終了する。
 pub fn main() -> Nil {
   ensure_ssl_started()
-  let started = startup(config.load())
-  list.each(started.notes, io.println)
-  // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
-  // クラッシュさせる。コンテナーに再起動を促すのは終了コードである。
-  let assert Ok(_started) = app.start(started.spec)
-    as "supervision tree failed to start"
-  process.sleep_forever()
+  case startup(config.load()) {
+    Error(reason) -> {
+      log.println(log_prefix, "cannot start: " <> reason)
+      halt(1)
+    }
+    Ok(started) -> {
+      list.each(started.notes, io.println)
+      // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
+      // クラッシュさせる。コンテナーの再起動はプロセスの終了で起き、終了コードは
+      // 失敗を示す。
+      let assert Ok(_started) = app.start(started.spec)
+        as "supervision tree failed to start"
+      process.sleep_forever()
+    }
+  }
 }
 
 /// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
+/// バンカーを起動できない設定なら、プラグインの読み込みより前にその理由を返す。
 ///
 /// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
 /// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
 /// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
-fn startup(loaded: Config) -> Startup {
+fn startup(loaded: Config) -> Result(Startup, String) {
+  use #(bunker, bunker_notes) <- result.map(bunker_spec(loaded))
   let builtin = builtin_plugins()
   let #(external, plugin_notes) =
     plugin_loader.load_all(
@@ -76,7 +93,6 @@ fn startup(loaded: Config) -> Startup {
     )
   let specs = plugin_specs(list.append(builtin, external))
   let #(monitor, monitor_notes) = monitor_spec(loaded)
-  let #(bunker, bunker_notes) = bunker_spec(loaded)
   let #(admin, admin_notes) = admin_spec(loaded)
   Startup(
     spec: app.Spec(
@@ -88,22 +104,11 @@ fn startup(loaded: Config) -> Startup {
       reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
     ),
     notes: list.flatten([
-      deprecation_notes(loaded),
       monitor_notes,
       plugin_notes,
       bunker_notes,
       admin_notes,
     ]),
-  )
-}
-
-/// 設定されていた廃止済みの環境変数の報告。値は読まず、名前だけを出す。
-fn deprecation_notes(loaded: Config) -> List(String) {
-  use name <- list.map(loaded.deprecated_variables)
-  log.line(
-    log_prefix,
-    name
-      <> " is no longer supported and is ignored; accounts are stored in the database (DATABASE_URL, ACCOUNT_MASTER_KEY)",
   )
 }
 
@@ -167,56 +172,47 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   fn(token) { base <> dashboard.approve_path(token) }
 }
 
-/// バンカーサブツリー。アカウントストアの設定が揃わなければ理由を報告して無効に
-/// し、監視とプラグインと管理 UI だけで動かす。無効の理由はツリーの仕様にも載せ、
-/// ダッシュボードが同じ理由を出す。アカウントはアクターが起動後にストアから読むので、
-/// ここではアカウントの件数を知らず、0 件でも起動する。
+/// バンカーサブツリーと、その報告行。アカウントストアの設定が揃わないか不正なら、
+/// その理由を返す。アカウントはアクターが起動後にストアから読むので、ここでは
+/// アカウントの件数を知らず、0 件でも起動する。
 ///
 /// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
 /// 管理 UI には渡らない。購読は接続と張り直しのたびに現在の署名者から組み立て直す
 /// ため、`since` もその時点の現在時刻から決まる。署名者を問い合わせられなければ
 /// 定義を得られなかったことにし、開いている購読を閉じない。
-fn bunker_spec(loaded: Config) -> #(Result(app.Bunker, String), List(String)) {
-  case bunker_store(loaded) {
-    Error(reason) -> #(Error(reason), [
-      log.line(bunker.log_prefix, "disabled: " <> reason),
-    ])
-    Ok(#(pool, master_key)) -> {
-      let name = process.new_name("nostr_no_su_bunker")
-      #(
-        Ok(
-          app.Bunker(
-            name: name,
-            pool: pool,
-            settings: bunker.Settings(
-              store: account_store_operations(
-                pool.pool_name,
-                master_key,
-                account_store.default_timeouts,
-              ),
-              auth_url: auth_url(loaded),
-              retry_delay_ms: bunker.default_retry_delay_ms,
-            ),
-            relays: relays(loaded.bunker_relay_urls),
-            subscriptions: fn() {
-              bunker.signers(name)
-              |> option.to_result(Nil)
-              |> result.map(config.bunker_subscriptions(
-                _,
-                time.now_seconds() - bunker_since_lookback_seconds,
-              ))
-            },
-          ),
+fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
+  use #(pool, master_key) <- result.map(bunker_store(loaded))
+  let name = process.new_name("nostr_no_su_bunker")
+  #(
+    app.Bunker(
+      name: name,
+      pool: pool,
+      settings: bunker.Settings(
+        store: account_store_operations(
+          pool.pool_name,
+          master_key,
+          account_store.default_timeouts,
         ),
-        [
-          log.line(
-            log_prefix,
-            "bunker relays: " <> describe(loaded.bunker_relay_urls),
-          ),
-        ],
-      )
-    }
-  }
+        auth_url: auth_url(loaded),
+        retry_delay: bunker.default_retry_delay,
+      ),
+      relays: relays(loaded.bunker_relay_urls),
+      subscriptions: fn() {
+        bunker.signers(name)
+        |> option.to_result(Nil)
+        |> result.map(config.bunker_subscriptions(
+          _,
+          time.now_seconds() - bunker_since_lookback_seconds,
+        ))
+      },
+    ),
+    [
+      log.line(
+        log_prefix,
+        "bunker relays: " <> describe(loaded.bunker_relay_urls),
+      ),
+    ],
+  )
 }
 
 /// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ

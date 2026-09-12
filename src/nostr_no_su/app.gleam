@@ -115,21 +115,6 @@ import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
 import pog
 
-/// バンカーが無効なときの理由。
-const disabled_reason = "bunker is disabled"
-
-/// バンカーが無効なときの、承認・拒否の結果。
-const disabled: Result(Nil, String) = Error(disabled_reason)
-
-/// バンカーが無効なときの、アカウントの変更の結果。一覧も理由を返すので、変更も
-/// 受け付けられない状態として揃える。
-const change_disabled: Result(Nil, bunker.ChangeFailure) = Error(
-  bunker.NotReady(disabled_reason),
-)
-
-/// バンカーが無効なときの、秘密鍵の問い合わせの結果。
-const nsec_disabled: Result(String, String) = Error(disabled_reason)
-
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
 /// ネットワークなしでもツリー全体を動かせるようにする。ハンドラーが受け取るのは
 /// 接続のプロセスで id と署名を確かめたイベントである。
@@ -186,15 +171,13 @@ pub type Admin {
   Admin(bind: String, port: Int, password: String)
 }
 
-/// 監視・バンカー・管理 UI のどれを動かすか、接続をどう開くか、接続が再接続
-/// までどれだけ待つか。
+/// 動かすプラグインとバンカー、監視と管理 UI を動かすかどうか、接続をどう開くか、
+/// 接続が再接続までどれだけ待つか。
 pub type Spec {
   Spec(
     plugins: List(PluginSpec),
     monitor: Option(Monitor),
-    /// バンカーのサブツリー。`Error` はバンカーを無効にした理由（値を含まない固定の
-    /// 文言）で、起動ログとダッシュボードが同じ理由を出す。
-    bunker: Result(Bunker, String),
+    bunker: Bunker,
     admin: Option(Admin),
     open: Open,
     reconnect_delay_ms: Int,
@@ -215,9 +198,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> add_child(spec.monitor, fn(config) {
     supervisor.supervised(monitor_tree(spec, config))
   })
-  |> add_child(option.from_result(spec.bunker), fn(config) {
-    supervisor.supervised(bunker_tree(spec, config))
-  })
+  |> supervisor.add(supervisor.supervised(bunker_tree(spec, spec.bunker)))
   |> add_child(spec.admin, admin_child(spec, _))
   |> supervisor.start
 }
@@ -413,6 +394,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
 /// 管理 UI。表示する状態は、ツリーの他の仕様から名前を引いて問い合わせる関数
 /// として Context に渡す。
 fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
+  let bunker_name = spec.bunker.name
   admin.supervised(
     config.bind,
     config.port,
@@ -420,51 +402,21 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       password: config.password,
       accounts: fn() { account_rows(spec.bunker) },
       add_account: fn(added, label) {
-        with_bunker(spec.bunker, change_disabled, bunker.add_account(
-          _,
-          added,
-          label,
-        ))
+        bunker.add_account(bunker_name, added, label)
       },
-      remove_account: fn(signer) {
-        with_bunker(spec.bunker, change_disabled, bunker.remove_account(
-          _,
-          signer,
-        ))
-      },
-      rotate_secret: fn(signer) {
-        with_bunker(spec.bunker, change_disabled, bunker.rotate_secret(
-          _,
-          signer,
-        ))
-      },
+      remove_account: bunker.remove_account(bunker_name, _),
+      rotate_secret: bunker.rotate_secret(bunker_name, _),
       update_label: fn(signer, label) {
-        with_bunker(spec.bunker, change_disabled, bunker.update_label(
-          _,
-          signer,
-          label,
-        ))
+        bunker.update_label(bunker_name, signer, label)
       },
-      nsec: fn(signer) {
-        with_bunker(spec.bunker, nsec_disabled, bunker.nsec(_, signer))
-      },
+      nsec: bunker.nsec(bunker_name, _),
       plugins: fn() { plugin_rows(spec.plugins) },
       relays: fn() { relay_statuses(spec) },
-      sessions: fn() { with_bunker(spec.bunker, [], bunker.sessions) },
-      revoke: fn(signer, client) {
-        with_bunker(spec.bunker, Nil, bunker.revoke(_, signer, client))
-      },
-      pending: fn() {
-        with_bunker(spec.bunker, [], fn(name) {
-          pending_rows(bunker.pending(name))
-        })
-      },
-      approve: fn(token) {
-        with_bunker(spec.bunker, disabled, bunker.approve(_, token))
-      },
-      deny: fn(token) {
-        with_bunker(spec.bunker, disabled, bunker.deny(_, token))
-      },
+      sessions: fn() { bunker.sessions(bunker_name) },
+      revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
+      pending: fn() { pending_rows(bunker.pending(bunker_name)) },
+      approve: bunker.approve(bunker_name, _),
+      deny: bunker.deny(bunker_name, _),
     ),
   )
 }
@@ -496,11 +448,7 @@ fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
     use monitor <- if_enabled(spec.monitor, [])
     statuses(dashboard.MonitorRelay, monitor.relays)
   }
-  let bunker_rows = {
-    use configured <- if_enabled(option.from_result(spec.bunker), [])
-    statuses(dashboard.BunkerRelay, configured.relays)
-  }
-  list.append(monitor_rows, bunker_rows)
+  list.append(monitor_rows, statuses(dashboard.BunkerRelay, spec.bunker.relays))
 }
 
 /// 指定した用途のリレーそれぞれについて、接続アクターに状態を問い合わせる。
@@ -522,30 +470,11 @@ fn statuses(
   )
 }
 
-/// バンカーアクターの名前を使って問い合わせる。バンカーが無効なら、問い合わせず
-/// 既定値を返す。
-fn with_bunker(
-  config: Result(Bunker, String),
-  default: answer,
-  ask: fn(Name(bunker.Msg)) -> answer,
-) -> answer {
-  use config <- if_enabled(option.from_result(config), default)
-  ask(config.name)
-}
-
-/// Accounts 節の行。バンカーが無効ならその理由を、アカウントを得られなければ
-/// バンカーの理由を返す。
-fn account_rows(
-  config: Result(Bunker, String),
-) -> Result(List(dashboard.AccountRow), String) {
-  case config {
-    Error(reason) -> Error(disabled_reason <> ": " <> reason)
-    Ok(config) -> {
-      let relay_urls = list.map(config.relays, fn(relay) { relay.url })
-      bunker.accounts(config.name)
-      |> result.map(list.map(_, account_row(relay_urls, _)))
-    }
-  }
+/// Accounts 節の行。アカウントを得られなければバンカーの理由を返す。
+fn account_rows(config: Bunker) -> Result(List(dashboard.AccountRow), String) {
+  let relay_urls = list.map(config.relays, fn(relay) { relay.url })
+  bunker.accounts(config.name)
+  |> result.map(list.map(_, account_row(relay_urls, _)))
 }
 
 /// アカウント 1 件の表示行。接続 URI は、全行に共通のバンカーリレーの URL から

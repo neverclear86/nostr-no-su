@@ -1,5 +1,5 @@
-//// `bunker.load_report` のテスト。読み込みの結果に対して、どのログ行を出すかを
-//// 確かめる。
+//// `bunker.load_report` と `bunker.next_retry_delay` のテスト。読み込みの結果に
+//// 対して、どのログ行を出すかと、再試行の待ち時間の延び方を確かめる。
 
 import gleam/option.{None, Some}
 import nostr_no_su/bunker
@@ -56,11 +56,11 @@ pub fn recovery_is_reported_test() {
     ]
 }
 
-/// 最初の失敗は理由と再試行の間隔を出す。間隔は設定の値から作る。
+/// 最初の失敗は理由と次の再試行までの待ち時間を出す。待ち時間は引数の値から作る。
 pub fn first_failure_is_reported_test() {
   assert bunker.load_report(None, Error("database is unreachable"), 250)
     == [
-      "account store unavailable: database is unreachable; retrying every 250ms",
+      "account store unavailable: database is unreachable; retrying in 250ms",
     ]
 }
 
@@ -82,6 +82,19 @@ pub fn a_changed_failure_is_reported_test() {
       5000,
     )
     == [
-      "account store unavailable: postgres error: insufficient_privilege; retrying every 5000ms",
+      "account store unavailable: postgres error: insufficient_privilege; retrying in 5000ms",
     ]
+}
+
+/// 既定の待ち時間は 5 秒から倍に延び、2 分で頭打ちになる。
+pub fn default_retry_delay_doubles_up_to_two_minutes_test() {
+  let retry = bunker.default_retry_delay
+  let next = bunker.next_retry_delay(retry, _)
+  assert retry.initial_ms == 5000
+  assert next(5000) == 10_000
+  assert next(10_000) == 20_000
+  assert next(20_000) == 40_000
+  assert next(40_000) == 80_000
+  assert next(80_000) == 120_000
+  assert next(120_000) == 120_000
 }

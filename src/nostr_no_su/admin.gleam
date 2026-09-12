@@ -89,8 +89,7 @@ const language_cookie_attributes = cookie.Attributes(
 pub type Context {
   Context(
     password: String,
-    /// アカウントの一覧。バンカーが無効、読み込み中、応答なしのときは表示する
-    /// 理由を返す。
+    /// アカウントの一覧。読み込み中、応答なしのときは表示する理由を返す。
     accounts: fn() -> Result(List(dashboard.AccountRow), String),
     /// アカウントを登録する。secret はバンカーが生成する。
     add_account: fn(Account, String) -> Result(Nil, ChangeFailure),

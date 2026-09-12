@@ -383,7 +383,11 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
   let assert Ok(started) =
     bunker.start(
       name,
-      bunker.Settings(store:, auth_url: None, retry_delay_ms: 100),
+      bunker.Settings(
+        store:,
+        auth_url: None,
+        retry_delay: bunker.RetryDelay(initial_ms: 100, max_ms: 100),
+      ),
       fn() { Nil },
     )
   #(name, started.pid)

@@ -65,8 +65,7 @@ pub type PendingRow {
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
-    /// アカウントの一覧。得られないとき（バンカーが無効、読み込み中、応答なし）は
-    /// 表示する理由。
+    /// アカウントの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
     accounts: Result(List(AccountRow), String),
     pending: List(PendingRow),
     relays: List(RelayRow),
