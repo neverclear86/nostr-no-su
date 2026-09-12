@@ -210,7 +210,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   // 再起動ポリシーに委ねる。
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
   // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
-  // 未登録の名前へ送られて黙って消える。
+  // 未登録の名前へ送られて届かない（件数はディスパッチャーがログに出す）。
   |> add_plugins(spec.plugins)
   |> add_child(spec.monitor, fn(config) {
     supervisor.supervised(monitor_tree(spec, config))
@@ -346,10 +346,11 @@ fn plugins_supervisor() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// ディスパッチャーが送る宛先。名前はツリーの起動をまたいで変わらないので、
-/// ここで 1 度だけ取り出してクロージャーに捕捉させる。
-fn plugin_targets(specs: List(PluginSpec)) -> List(Name(plugin_runner.Msg)) {
-  list.map(specs, fn(spec) { spec.name })
+/// ディスパッチャーが送る宛先の初期値。名前はツリーの起動をまたいで変わらない
+/// ので、ディスパッチャーが再起動してもこの値から始めればよい。
+fn plugin_targets(specs: List(PluginSpec)) -> List(plugin_runner.Target) {
+  use spec <- list.map(specs)
+  plugin_runner.target(spec.plugin.name, spec.name)
 }
 
 /// 監視サブツリー。ディスパッチャーと、そこへイベントを流し込む接続群。
@@ -357,7 +358,8 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   subtree()
   |> supervisor.add(dedup.supervised(
     config.name,
-    plugin_runner.dispatch(plugin_targets(spec.plugins), _),
+    plugin_targets(spec.plugins),
+    plugin_runner.dispatch,
     config.dedup_capacity,
   ))
   |> add_connections(

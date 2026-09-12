@@ -148,3 +148,18 @@ pub fn send_to_an_unregistered_name_is_dropped_test() {
   let name = process.new_name("test_named")
   assert named.send(name, Answer(process.new_subject())) == Nil
 }
+
+/// 名前を保持するプロセスが無ければ、`try_send` は捨てたことを `Error` で返す。
+pub fn try_send_to_an_unregistered_name_is_an_error_test() {
+  let name = process.new_name("test_named")
+  assert named.try_send(name, Answer(process.new_subject())) == Error(Nil)
+}
+
+/// 名前を保持するプロセスが居れば、`try_send` は送って `Ok` を返す。
+pub fn try_send_to_a_registered_name_is_delivered_test() {
+  let name = process.new_name("test_named")
+  spawn_named(name)
+  let reply = process.new_subject()
+  assert named.try_send(name, Answer(reply)) == Ok(Nil)
+  assert process.receive(reply, 1000) == Ok("pong")
+}

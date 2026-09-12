@@ -7,16 +7,17 @@ import gleam/string
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner.{
-  Completed, Disabled, Failed, Limits, Overloaded, Running,
+  Completed, Disabled, Failed, Limits, Overloaded, Running, Target,
 }
 
 /// 遷移の検証に使う歯止め。実時間に依存しないよう小さく取る。
 const limits = Limits(handle_timeout_ms: 50, max_queue_len: 10, max_failures: 3)
 
-/// 配信するイベント。ランナーは中身を見ずにプラグインへ渡すだけなので最小限。
-fn test_event() -> Event {
+/// 配信するイベント。ランナーは中身を見ずにプラグインへ渡すだけなので、区別に
+/// 使う `id` 以外は最小限。
+fn test_event(id: String) -> Event {
   Event(
-    id: "e1",
+    id: id,
     pubkey: "",
     created_at: 0,
     kind: 1,
@@ -44,8 +45,14 @@ fn start_runner(
 
 /// イベントを指定した件数だけランナーへ送る。
 fn deliver(name: Name(plugin_runner.Msg), count: Int) -> Nil {
+  let targets = [plugin_runner.target("runner_test", name)]
   use _unit <- list.each(list.repeat(Nil, count))
-  plugin_runner.dispatch([name], test_event())
+  plugin_runner.dispatch(targets, test_event("e1"))
+}
+
+/// 取りこぼしの集計を確かめる宛先。名前にプロセスは居なくてよい。
+fn test_target() -> plugin_runner.Target {
+  plugin_runner.target("runner_test", process.new_name("test_plugin_runner"))
 }
 
 /// `handle_event/1` を監視付きの使い捨てプロセスで動かす FFI。`plugin_runner` の
@@ -105,6 +112,39 @@ pub fn admit_drops_while_disabled_test() {
       limits,
     )
     == #(Disabled(reason: "error:badarg", dropped: 3), False, None)
+}
+
+/// 届いている間は宛先も変えず、何も出さない。
+pub fn record_delivery_is_silent_while_delivered_test() {
+  let target = test_target()
+  assert plugin_runner.record_delivery(target, True) == #(target, None)
+}
+
+/// 取りこぼしの 1 件目で数え始め、1 行報告する。
+pub fn record_delivery_reports_the_first_miss_test() {
+  let target = test_target()
+  assert plugin_runner.record_delivery(target, False)
+    == #(
+      Target(..target, undelivered: 1),
+      Some("runner is unavailable; dropping events until it is back"),
+    )
+}
+
+/// 2 件目以降の取りこぼしは数えるだけで、何も出さない。
+pub fn record_delivery_counts_later_misses_silently_test() {
+  let target = Target(..test_target(), undelivered: 3)
+  assert plugin_runner.record_delivery(target, False)
+    == #(Target(..target, undelivered: 4), None)
+}
+
+/// ランナーに再び届いたら件数を 0 に戻し、取りこぼした件数を報告する。
+pub fn record_delivery_reports_the_count_when_the_runner_is_back_test() {
+  let target = Target(..test_target(), undelivered: 4)
+  assert plugin_runner.record_delivery(target, True)
+    == #(
+      Target(..target, undelivered: 0),
+      Some("runner is back; dropped 4 events while it was unavailable"),
+    )
 }
 
 /// 成功したら連続失敗数は 0 に戻り、状態も報告も変わらない。
@@ -215,6 +255,29 @@ pub fn fast_plugin_never_reports_a_failure_test() {
   let name = start_runner(fn(_incoming) { Nil }, plugin_runner.default_limits)
   deliver(name, 500)
   assert plugin_runner.status(name) == Some(Running)
+}
+
+/// ランナーが居ない間に送ったイベントは宛先ごとに数え、届くようになったら 0 に
+/// 戻す。
+pub fn dispatch_counts_events_while_the_runner_is_missing_test() {
+  let handled = process.new_subject()
+  let name = process.new_name("test_plugin_runner")
+  let missing = [plugin_runner.target("runner_test", name)]
+  let missing = plugin_runner.dispatch(missing, test_event("missed"))
+  let missing = plugin_runner.dispatch(missing, test_event("missed"))
+  assert missing == [Target(plugin: "runner_test", name: name, undelivered: 2)]
+
+  let assert Ok(_started) =
+    plugin_runner.start(
+      name,
+      plugin.Plugin(name: "runner_test", children: [], handle: fn(incoming) {
+        process.send(handled, incoming.id)
+      }),
+      limits,
+    )
+  assert plugin_runner.dispatch(missing, test_event("delivered"))
+    == [plugin_runner.target("runner_test", name)]
+  assert process.receive(handled, 1000) == Ok("delivered")
 }
 
 /// 正常なプラグインのランナーは `Running` を返す。

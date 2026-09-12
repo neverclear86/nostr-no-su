@@ -21,6 +21,9 @@
 ////   件数だけ数え、**プロセスは生かしたまま**にするので、名前は登録されたままで
 ////   管理 UI から状態を問い合わせられる。復帰の手段は本体の再起動か、ランナー
 ////   プロセスの強制終了（スーパーバイザーが作り直す）の 2 つである。
+//// - **ランナーが居ない間（再起動中）に送られたイベントは届かない。** ディス
+////   パッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
+////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。
 ////
 //// ワーカーの中では例外を捕まえるが、目的は隔離ではなく**終了理由を短い 1 行に
 //// 整えること**である。隔離そのものはプロセスの境界が担っており、捕捉を外しても
@@ -40,6 +43,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import gleam/result
 import gleam/string
 import nostr_no_su/log
 import nostr_no_su/named
@@ -95,6 +99,13 @@ pub type Msg {
   GetStatus(reply: Subject(Status))
 }
 
+/// ディスパッチャーがイベントを送る宛先 1 つ。`plugin` はログの接頭辞に使う
+/// プラグイン名、`undelivered` はランナーが居なくて届けられなかった件数で、
+/// 届いた時点で 0 に戻る。
+pub type Target {
+  Target(plugin: String, name: Name(Msg), undelivered: Int)
+}
+
 /// ランナーが保持する状態。`failures` は連続失敗数で、成功すると 0 に戻る。
 type State {
   State(plugin: Plugin, limits: Limits, status: Status, failures: Int)
@@ -122,12 +133,21 @@ pub fn start(
   |> actor.start
 }
 
-/// イベント 1 件を全ランナーへ送る。送るだけで戻るので、ディスパッチャーは
-/// プラグインの実行時間の影響を受けない。名前の宛先が居なければ `named.send`
-/// がそのメッセージを捨てる（ランナーの再起動中）。
-pub fn dispatch(targets: List(Name(Msg)), incoming: Event) -> Nil {
-  use target <- list.each(targets)
-  named.send(target, Handle(incoming))
+/// まだ 1 件も取りこぼしていない宛先を作る。
+pub fn target(plugin: String, name: Name(Msg)) -> Target {
+  Target(plugin: plugin, name: name, undelivered: 0)
+}
+
+/// イベント 1 件を全ランナーへ送り、取りこぼしを数えた宛先を返す。送るだけで
+/// 戻るので、ディスパッチャーはプラグインの実行時間の影響を受けない。名前の
+/// 宛先が居なければ（ランナーの再起動中）そのイベントは届かず、
+/// `record_delivery` が数える。
+pub fn dispatch(targets: List(Target), incoming: Event) -> List(Target) {
+  use target <- list.map(targets)
+  let delivered = result.is_ok(named.try_send(target.name, Handle(incoming)))
+  let #(target, note) = record_delivery(target, delivered)
+  report(target.plugin, note)
+  target
 }
 
 /// ランナーへ現在の状態を問い合わせる。再起動中や、遅いプラグインを待っている
@@ -260,6 +280,36 @@ pub fn record(
         )
       }
     }
+  }
+}
+
+/// 送信の成否を宛先へ反映する。返すのは次の宛先と出すログ行。
+///
+/// 行を出すのは取りこぼしの 1 件目と、ランナーが戻って最初に届いたときだけで、
+/// その間は数えるだけにする。1 件ごとに出すと、ランナーが戻らない間のログの
+/// 行数が流入量に比例する。
+pub fn record_delivery(
+  target: Target,
+  delivered: Bool,
+) -> #(Target, Option(String)) {
+  case delivered, target.undelivered {
+    True, 0 -> #(target, None)
+    True, undelivered -> #(
+      Target(..target, undelivered: 0),
+      Some(
+        "runner is back; dropped "
+        <> int.to_string(undelivered)
+        <> " events while it was unavailable",
+      ),
+    )
+    False, 0 -> #(
+      Target(..target, undelivered: 1),
+      Some("runner is unavailable; dropping events until it is back"),
+    )
+    False, undelivered -> #(
+      Target(..target, undelivered: undelivered + 1),
+      None,
+    )
   }
 }
 
