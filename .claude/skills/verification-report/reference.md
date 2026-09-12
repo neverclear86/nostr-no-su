@@ -247,7 +247,7 @@ grep の終了状態は、一致ありが 0、一致なしが 1、ファイル�
 `count_hits` は 1 を一致なしとして進め、2 のときは `ERROR` の行を出して 2 を返すので、`set -e` のスクリプトはそこで止まる。
 `ERROR` の行を出した呼び出しは、ほかのファイルで一致していても `HIT` の行を出さない。
 `targets.txt` が無い、読めない、空のいずれかのときは `ERROR targets.txt unreadable or empty` を出し、2 つのループを実行しない。
-行が「名前<TAB>値」の形でないときも、値を出さないよう行番号だけを `ERROR targets.txt line <行番号>` として出し、2 つのループを実行しない。
+行が「名前<TAB>値」の形でないとき（名前か値の先頭か末尾に空白があるときを含む）も、値を出さないよう行番号だけを `ERROR targets.txt line <行番号>` として出し、2 つのループを実行しない。
 これらの確かめは `if` の条件なので、`set -e` のスクリプトもそこでは止まらず、`ERROR` の行で知らせる。
 32 文字の 16 進の保険は `targets.txt` を使わないので、このときも実行する。
 確かめるのは、`HIT` と `ERROR` の行が 1 つも出ないことである。
@@ -269,14 +269,14 @@ count_hits() {
 # targets.txt が読めて空でないこと、各行が「名前<TAB>値」であることを確かめる。値を出さないよう、崩れた行は行番号だけを出す
 if [ ! -s "$V/targets.txt" ] || [ ! -r "$V/targets.txt" ]; then
   echo "ERROR targets.txt unreadable or empty"
-elif awk -F'\t' 'NF < 2 || $1 == "" || $2 == "" || /\r/ { print "ERROR targets.txt line", NR; bad = 2 } END { exit bad }' "$V/targets.txt"; then
+elif awk -F'\t' 'NF < 2 || $1 == "" || $2 == "" || /\r/ || /(^|\t) | (\t|$)/ { print "ERROR targets.txt line", NR; bad = 2 } END { exit bad }' "$V/targets.txt"; then
   while IFS=$'\t' read -r name value || [ -n "$name" ]; do
     count_hits "$name" -F -- "$value" "$V"/log-*.txt "$V"/pgdump*.sql
   done < "$V/targets.txt"
 
   # 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
   # secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。
-  grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
+  awk '!/^secret_/' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
     count_hits "$name" -F -- "$value" "$V"/bodies/*
   done
 fi
