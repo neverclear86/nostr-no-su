@@ -12,6 +12,11 @@
 //// ボックスが際限なく伸びてしまう。落ちずに数えて捨てる形は、諦められた子が
 //// 本体の再起動まで戻らないプラグインの失敗モデル（`docs/plugin-api.md`
 //// 第 5.4 節）に対する正しい振る舞いでもある。
+////
+//// DB に到達できても 1 件の挿入が遅いと、未処理の `Store` がメールボックスに
+//// 積まれ続ける。そこで `Store` を取り出すたびに残りの件数を見て、上限を超えたら
+//// 上限の半分に減るまで数えて捨てる。取り出すときに見るので、1 件の挿入の間に
+//// 届いた分だけは上限を超えうる。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -39,6 +44,9 @@ const schema_timeout_ms = 30_000
 /// このプラグインが自分で出すログ行の接頭辞。本体が出す行の接頭辞
 /// （`[plugin event_logger]`）とは別物である。
 const log_prefix = "[event_logger] "
+
+/// 保存を待つ `Store` の上限の既定値。本体のランナーの上限と同じ件数にする。
+pub const default_max_queue_len = 1000
 
 /// イベントを保存するテーブル。`received_at` は取り込んだ時刻で、イベント自身の
 /// `created_at`（リレーが配送する Unix 秒）とは別に持つ。
@@ -92,10 +100,22 @@ pub type Msg {
   EnsureSchema
 }
 
+/// 保存アクターが DB に対して行う 2 つの操作。本番は `postgres/1` が pog の
+/// プールから作り、テストは遅い DB や失敗する DB を模した関数を渡す。
+pub type Database {
+  Database(
+    ensure_schema: fn() -> Result(Nil, pog.QueryError),
+    insert: fn(Row) -> Result(Int, pog.QueryError),
+  )
+}
+
 /// 保存できる状態かどうか。
 type Availability {
   /// 保存できる。
   Ready
+  /// 保存が追いつかず、未処理のメッセージが上限を超えた。`dropped` はこの間に
+  /// 捨てたイベント数で、上限の半分まで減って保存を再開するときに報告する。
+  Overloaded(dropped: Int)
   /// DB に到達できない。`dropped` はこの間に捨てたイベント数で、復帰したときに
   /// まとめて報告する。`reported` は理由をすでにログへ出したかどうかで、再試行
   /// のたびに同じ行を並べないために持つ。
@@ -104,16 +124,31 @@ type Availability {
 
 /// 保存アクターが保持する状態。
 type State {
-  State(db: pog.Connection, self: Subject(Msg), availability: Availability)
+  State(
+    database: Database,
+    self: Subject(Msg),
+    max_queue_len: Int,
+    availability: Availability,
+  )
 }
 
-/// 保存アクターを起動する。`pool` は同じプラグインの子として動く pog のプールの
-/// 名前で、プールが再起動しても同じ名前を指し続ける。
+/// 名前で登録された pog のプールに対する `Database`。プールが再起動しても同じ
+/// 名前を指し続ける。
+pub fn postgres(pool: Name(pog.Message)) -> Database {
+  let db = pog.named_connection(pool)
+  Database(ensure_schema: fn() { ensure_schema(db) }, insert: insert(db, _))
+}
+
+/// 保存アクターを起動する。`max_queue_len` は保存を待つメッセージの上限で、
+/// 本番は `default_max_queue_len` を渡す。
 pub fn start(
   name: Name(Msg),
-  pool: Name(pog.Message),
+  database: Database,
+  max_queue_len: Int,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new_with_initialiser(1000, fn(self) { initialise(pool, self) })
+  actor.new_with_initialiser(1000, fn(self) {
+    initialise(database, max_queue_len, self)
+  })
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
@@ -123,13 +158,15 @@ pub fn start(
 /// スーパーバイザーの起動をブロックし、初期化のタイムアウトでツリーごと起動に
 /// 失敗してしまう。
 fn initialise(
-  pool: Name(pog.Message),
+  database: Database,
+  max_queue_len: Int,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   process.send(self, EnsureSchema)
   State(
-    db: pog.named_connection(pool),
+    database: database,
     self: self,
+    max_queue_len: max_queue_len,
     availability: Unavailable(dropped: 0, reported: False),
   )
   |> actor.initialised
@@ -141,7 +178,7 @@ fn initialise(
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   let availability = case msg {
     EnsureSchema -> prepare(state)
-    Store(row:) -> persist(state, row)
+    Store(row:) -> persist(state, row, message_queue_len())
   }
   actor.continue(State(..state, availability: availability))
 }
@@ -150,36 +187,63 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 /// まま再試行を予約する。DB がアプリより後に立ち上がる、あるいは一時的に落ちて
 /// いる状況が普通にあるため。
 fn prepare(state: State) -> Availability {
-  case ensure_schema(state.db) {
+  case state.database.ensure_schema() {
     Ok(Nil) -> resume(state.availability)
     Error(error) -> suspend(state, error, dropped(state.availability))
   }
 }
 
-/// 1 行を保存する。保存を止めている間は数えて捨てるだけにして、DB の
-/// チェックアウト待ちでアクターをブロックしない。
-fn persist(state: State, row: Row) -> Availability {
+/// 1 行を保存する。`queue_len` はこの行を取り出したあとに残っている未処理の
+/// メッセージ数である。保存を止めている間と、積まれすぎている間は数えて捨てる
+/// だけにして、DB を待たずにメールボックスを減らす。
+fn persist(state: State, row: Row, queue_len: Int) -> Availability {
   case state.availability {
     Unavailable(dropped:, reported:) ->
       Unavailable(dropped: dropped + 1, reported:)
-    Ready ->
-      case insert(state.db, row) {
-        Ok(_inserted) -> Ready
-        Error(error) ->
-          case unreachable(error) {
-            // 到達できないなら、このイベントを 1 件目として保存を止める。
-            True -> suspend(state, error, 1)
-            // それ以外はこのイベント固有の問題なので、保存は続ける。
-            False -> {
-              println(
-                "insert failed for event "
-                <> row.id
-                <> ": "
-                <> string.inspect(error),
-              )
-              Ready
-            }
-          }
+    // 上限の半分まで減るまで捨て続ける。上限そのものを復帰条件にすると、
+    // 境界で捨て始めと再開のログが 1 件ごとに交互に出る。
+    Overloaded(dropped:) if queue_len > state.max_queue_len / 2 ->
+      Overloaded(dropped: dropped + 1)
+    Overloaded(dropped:) -> {
+      println(
+        "caught up; dropped "
+        <> int.to_string(dropped)
+        <> " events while overloaded",
+      )
+      write(state, row)
+    }
+    Ready if queue_len > state.max_queue_len -> {
+      println(
+        "too slow: "
+        <> int.to_string(queue_len)
+        <> " events queued (limit "
+        <> int.to_string(state.max_queue_len)
+        <> "); dropping until it catches up",
+      )
+      Overloaded(dropped: 1)
+    }
+    Ready -> write(state, row)
+  }
+}
+
+/// 1 行を挿入し、結果から次の可用性を決める。
+fn write(state: State, row: Row) -> Availability {
+  case state.database.insert(row) {
+    Ok(_inserted) -> Ready
+    Error(error) ->
+      case unreachable(error) {
+        // 到達できないなら、このイベントを 1 件目として保存を止める。
+        True -> suspend(state, error, 1)
+        // それ以外はこのイベント固有の問題なので、保存は続ける。
+        False -> {
+          println(
+            "insert failed for event "
+            <> row.id
+            <> ": "
+            <> string.inspect(error),
+          )
+          Ready
+        }
       }
   }
 }
@@ -255,7 +319,10 @@ fn unreachable(error: pog.QueryError) -> Bool {
 /// 保存を止めてから捨てたイベント数。
 fn dropped(availability: Availability) -> Int {
   case availability {
-    Ready -> 0
+    // 呼び出し元の prepare は EnsureSchema を受けたときだけ動き、EnsureSchema は
+    // Unavailable の間しか届かないので、この枝は網羅のためにある。Overloaded の
+    // 件数は保存を止めて捨てた数ではなく、再開するときに persist が報告する。
+    Ready | Overloaded(..) -> 0
     Unavailable(dropped:, ..) -> dropped
   }
 }
@@ -263,7 +330,9 @@ fn dropped(availability: Availability) -> Int {
 /// 停止の理由をすでに報告しているか。
 fn was_reported(availability: Availability) -> Bool {
   case availability {
-    Ready -> False
+    // 保存している間に挿入が到達できずに失敗すると、write から suspend を経て
+    // ここを通る。まだ停止していないので、停止の理由も報告していない。
+    Ready | Overloaded(..) -> False
     Unavailable(reported:, ..) -> reported
   }
 }
@@ -323,3 +392,7 @@ fn row_decoder() -> decode.Decoder(Row) {
 fn println(line: String) -> Nil {
   io.println(log_prefix <> line)
 }
+
+/// 自プロセスの未処理メッセージ数。
+@external(erlang, "event_logger_ffi", "message_queue_len")
+fn message_queue_len() -> Int

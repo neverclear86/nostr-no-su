@@ -1,9 +1,11 @@
-%% 本体の境界へ渡す OTP の子仕様 map と、Gleam から組み立てられない項。
+%% 本体の境界へ渡す OTP の子仕様 map と、Gleam から組み立てられない項と、
+%% gleam_erlang が公開していないプロセスの情報。
 %%
 %% 子仕様のキーは atom でなければならない（本体の plugin_children が
 %% atom:create/1 で引く）ため、map の組み立てはこちらに置く。
 -module(event_logger_ffi).
--export([child_specs/2, error_tuple/1, identity/1, ensure_pgo_started/0]).
+-export([child_specs/2, error_tuple/1, identity/1, ensure_pgo_started/0,
+         message_queue_len/0]).
 
 %% 接続プールと保存アクターの子仕様。プール名と Config は呼び出し側が 1 度だけ
 %% 作ったものを引数に焼き込む（再起動でも同じ引数で呼ばれるので名前が安定する）。
@@ -40,3 +42,8 @@ identity(Term) -> Term.
 ensure_pgo_started() ->
     {ok, _Started} = application:ensure_all_started(pgo),
     nil.
+
+%% 自プロセスの未処理メッセージ数。保存アクターが積まれすぎを判定するのに使う。
+message_queue_len() ->
+    {message_queue_len, Len} = erlang:process_info(self(), message_queue_len),
+    Len.
