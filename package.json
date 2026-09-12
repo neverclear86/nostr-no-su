@@ -8,7 +8,7 @@
   "devDependencies": {
     "@tailwindcss/cli": "4.3.3",
     "daisyui": "5.7.36",
-    "playwright-core": "1.50.1",
+    "playwright-core": "1.63.0",
     "tailwindcss": "4.3.3"
   }
 }
