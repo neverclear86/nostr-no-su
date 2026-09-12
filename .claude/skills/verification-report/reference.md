@@ -98,15 +98,16 @@ T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # 操作の前に記録する
 
 ## ブラウザー（Playwright）
 
-スクラッチパッドで `bun add nostr-tools@2.23.9 playwright-core@1.50.1` を実行し、スクリプトは node で動かす。
+スクラッチパッドで `bun add nostr-tools@2.23.9 playwright-core@1.63.0` を実行し、スクリプトは node で動かす。
 playwright-core はリポジトリの `package.json` と同じ版にする。
 ブラウザーはキャッシュ済みの chromium を直接指定する。
+キャッシュ（`~/.cache/ms-playwright`）に無ければ、スクラッチパッドで `env -u PLAYWRIGHT_BROWSERS_PATH npx playwright-core install chromium` を実行して、その版の chromium をキャッシュに入れる（`PLAYWRIGHT_BROWSERS_PATH` があると、その場所に入る）。
 
 ```js
 import { chromium } from "playwright-core";
 
 const browser = await chromium.launch({
-  executablePath: `${process.env.HOME}/.cache/ms-playwright/chromium-1155/chrome-linux/chrome`,
+  executablePath: `${process.env.HOME}/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome`,
   headless: true,
 });
 const context = await browser.newContext({
@@ -122,11 +123,12 @@ const hosts = new Set();
 page.on("request", (r) => hosts.add(new URL(r.url()).host));
 
 // POST の状態コードは page.goto の戻り値に載らないので、クリックと同時に待つ。
-// 遷移も待たないと、page.content() が送信の前のページを返す。
+// 送信で開いた文書の load も待たないと、page.content() が送信の前のページを返す
+// （waitForURL は、今の URL と同じ URL へ送るときは遷移を待たずに解決する）。
 // ナビゲーションバーの言語の切り替えもフォームなので、送信先で選ぶ。
 const [response] = await Promise.all([
   page.waitForResponse((r) => r.request().method() === "POST"),
-  page.waitForNavigation({ waitUntil: "load" }),
+  page.waitForEvent("load"),
   page.click('form[action="/accounts/import"] button'),
 ]);
 console.log(response.status());

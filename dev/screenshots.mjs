@@ -8,6 +8,8 @@
 // 渡さなければ Accept-Language を送らず、管理 UI は既定の英語で出す。
 // 出力先をリポジトリの中にするときは、.gitignore と .dockerignore が除く build/ の下にする。
 // CHROMIUM に chromium の実行ファイルを渡すと、playwright-core が既定で探すものの代わりに使う。
+// 応答の状態コードが画面ごとの期待値と違うか、応答が HTML でない画面があれば、撮り終えた後にその一覧を出して
+// 終了コード 1 で終える。
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
@@ -35,8 +37,8 @@ const viewports = [
 ];
 const colorSchemes = ["light", "dark"];
 
-// 撮る画面。form を持つものは POST で開く。mask は乱数で変わる値を伏せる。copy を持つものは、
-// 開いた後に最初のコピーのボタンを押してから撮る。
+// 撮る画面。form を持つものは POST で開く。status は応答の状態コードの期待値で、無ければ 200。
+// mask は乱数で変わる値を伏せる。copy を持つものは、開いた後に最初のコピーのボタンを押してから撮る。
 const shots = [
   { name: "01-dashboard", url: `${base}/` },
   { name: "02-dashboard-empty", url: `${empty}/` },
@@ -44,36 +46,38 @@ const shots = [
   { name: "04-approve-page", url: `${base}/approve/tok-1` },
   { name: "05-approved", url: `${base}/approve/tok-1`, form: {} },
   { name: "06-denied", url: `${base}/deny/tok-1`, form: {} },
-  { name: "07-decision-not-found", url: `${base}/approve/unknown`, form: {} },
+  { name: "07-decision-not-found", url: `${base}/approve/unknown`, form: {}, status: 404 },
   { name: "08-new-account", url: `${base}/accounts/new` },
-  { name: "09-import-invalid-nsec", url: `${base}/accounts/import`, form: { nsec: "nsec1invalid", label: "x" } },
-  { name: "10-import-duplicate", url: `${base}/accounts/import`, form: { nsec: signerNsec, label: "dup" } },
+  { name: "09-import-invalid-nsec", url: `${base}/accounts/import`, form: { nsec: "nsec1invalid", label: "x" }, status: 400 },
+  { name: "10-import-duplicate", url: `${base}/accounts/import`, form: { nsec: signerNsec, label: "dup" }, status: 409 },
   { name: "11-registered", url: `${base}/accounts/import`, form: { nsec: specNsec, label: "<i>imported</i>" } },
   { name: "12-generated", url: `${base}/accounts/generate`, form: {}, mask: "input[readonly]" },
-  { name: "13-generated-invalid-label", url: `${base}/accounts/register-generated`, form: { nsec: specNsec, label: "a\tb" } },
+  { name: "13-generated-invalid-label", url: `${base}/accounts/register-generated`, form: { nsec: specNsec, label: "a\tb" }, status: 400 },
   { name: "14-edit-label", url: account("label") },
-  { name: "15-edit-label-invalid", url: account("label"), form: { label: "a\nb" } },
-  { name: "16-edit-label-not-applied", url: account("label"), form: { label: "not-applied" } },
-  { name: "17-change-not-confirmed", url: account("label"), form: { label: "maybe" } },
-  { name: "18-accounts-not-ready", url: account("label"), form: { label: "not-ready" } },
+  { name: "15-edit-label-invalid", url: account("label"), form: { label: "a\nb" }, status: 400 },
+  { name: "16-edit-label-not-applied", url: account("label"), form: { label: "not-applied" }, status: 409 },
+  { name: "17-change-not-confirmed", url: account("label"), form: { label: "maybe" }, status: 202 },
+  { name: "18-accounts-not-ready", url: account("label"), form: { label: "not-ready" }, status: 503 },
   { name: "19-rotate-confirm", url: account("rotate") },
   { name: "20-delete-confirm", url: account("delete") },
   { name: "21-private-key-form", url: account("private-key") },
-  { name: "22-private-key-wrong-password", url: account("private-key"), form: { password: "wrong" } },
+  { name: "22-private-key-wrong-password", url: account("private-key"), form: { password: "wrong" }, status: 403 },
   { name: "23-private-key", url: account("private-key"), form: { password } },
-  { name: "24-account-page-unavailable", url: `${unavailable}/accounts/${signer}/label` },
-  { name: "25-delete-not-applied", url: account("delete"), form: {} },
+  { name: "24-account-page-unavailable", url: `${unavailable}/accounts/${signer}/label`, status: 503 },
+  { name: "25-delete-not-applied", url: account("delete"), form: {}, status: 409 },
   { name: "26-dashboard-copied", url: `${base}/`, copy: true },
 ];
 
-// 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送る
-// （CSRF の検査を通り、ブラウザーの実際の遷移で表示される）。
+// 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
+// （CSRF の検査を通り、ブラウザーの実際の遷移で表示される）、POST の応答と、送信で開いた文書の
+// load を待つ。waitForURL は今の URL と同じ URL への送信では遷移を待たずに解決するので使わない。
 async function open(page, shot) {
   if (!shot.form) return page.goto(shot.url);
   const origin = new URL(shot.url).origin;
   if (!page.url().startsWith(origin)) await page.goto(`${origin}/`);
   const [response] = await Promise.all([
-    page.waitForNavigation(),
+    page.waitForResponse((r) => r.request().method() === "POST"),
+    page.waitForEvent("load"),
     page.evaluate(
       ({ url, fields }) => {
         const form = document.createElement("form");
@@ -106,6 +110,10 @@ async function copy(page) {
     .then(() => true, () => false);
 }
 
+// 画面の応答の content-type が始まるべき値。
+const htmlType = "text/html";
+// 期待と違った画面の、最後に stderr へ出す行。
+const unexpected = [];
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM, headless: true });
 try {
   for (const viewport of viewports) {
@@ -127,11 +135,25 @@ try {
         const mask = shot.mask ? [page.locator(shot.mask)] : [];
         // animations: "disabled" は、ボタンの色の遷移を終わった状態にしてから撮る。
         await page.screenshot({ path: file, fullPage: true, mask, animations: "disabled" });
-        console.log(`${response.status()} ${file}${copied}`);
+        const status = response.status();
+        const type = response.headers()["content-type"] ?? "";
+        const expected = shot.status ?? 200;
+        console.log(`${status} ${file}${copied}`);
+        // ルートに当たらないパスの 404 は wisp の text/plain なので、HTML であることも比べて
+        // 画面の 404 と区別する。
+        if (status !== expected || !type.startsWith(htmlType)) {
+          unexpected.push(`${status} ${type} (expected ${expected} ${htmlType}) ${file}`);
+        }
       }
       await context.close();
     }
   }
 } finally {
   await browser.close();
+}
+// 期待と違う応答は、パスの変更などで意図と違う画面を撮った可能性がある。process.exit は
+// パイプへの書き込みを終える前にプロセスを終えることがあるので、終了コードだけを決めて自然に終える。
+if (unexpected.length > 0) {
+  console.error(`unexpected response:\n${unexpected.join("\n")}`);
+  process.exitCode = 1;
 }

@@ -9,7 +9,7 @@ import nostr_no_su/nostr/nip19
 /// 先に書かれた言語を選ぶ。
 pub fn accept_language_picks_the_preferred_supported_language_test() {
   let cases = [
-    // Playwright 1.50.1 の Chromium に locale を渡したときに送られた値。
+    // Playwright 1.63.0 の Chromium に locale を渡したときに送られた値。
     #("ja-JP", i18n.Japanese),
     #("en-US", i18n.English),
     #("ja,en-US;q=0.9,en;q=0.8", i18n.Japanese),
