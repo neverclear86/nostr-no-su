@@ -315,7 +315,7 @@ EOF
 
 ```sh
 gh api repos/neverclear86/nostr-no-su/issues/comments/<コメントの id> --jq .body > posted.md
-grep -c '](./' posted.md
+grep -c '](./' posted.md || true
 grep -o '!\[[^]]*\](https://github.com/user-attachments/assets/[^)]*)' posted.md | wc -l
 TOKEN=$(gh auth token)
 grep -o 'https://github.com/user-attachments/assets/[^)]*' posted.md | while read -r u; do
@@ -327,7 +327,7 @@ done
 
 ```sh
 ./dc.sh down -v --rmi local
-docker images --format '{{.Repository}}:{{.Tag}}' | grep nns-verify   # 残っていれば docker rmi で消す
+docker images --format '{{.Repository}}:{{.Tag}}' | grep nns-verify || true   # 残っていれば docker rmi で消す
 docker run --rm -v "$W/plugins:/p" --entrypoint sh ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
   -c 'rm -rf /p/event_logger'
 git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force "$W"
