@@ -1174,6 +1174,63 @@ pub fn same_origin_account_change_is_accepted_test() {
   assert process.receive(reports, 1000) == Ok(Removed(signer))
 }
 
+/// `Origin`（無ければ `Referer`）がある POST は、そのホストとポートが `Host` と一致するときだけ
+/// 通す。リバースプロキシーが `Host` を上流のアドレスに書き換えるか、ポートを落とすと 400 になり、
+/// 公開ホスト名とポートのまま渡せば通る（README のリバースプロキシーの節の根拠）。検査は
+/// ルーティングの前にあるので、Context の関数を呼ばない言語の切り替えで確かめる。
+pub fn posts_need_a_host_that_matches_the_origin_test() {
+  let cases = [
+    // Host を上流のアドレスに書き換えたプロキシー（nginx の既定）
+    #(
+      [#("host", "127.0.0.1:8080"), #("origin", "https://admin.example")],
+      False,
+    ),
+    // ポートを落としたプロキシー（nginx の `$host`）
+    #(
+      [#("host", "admin.example"), #("origin", "https://admin.example:8443")],
+      False,
+    ),
+    // `Origin` が無ければ `Referer` と突き合わせる
+    #(
+      [#("host", "127.0.0.1:8080"), #("referer", "https://admin.example/")],
+      False,
+    ),
+    // Host をそのまま渡したプロキシー
+    #([#("host", "admin.example"), #("origin", "https://admin.example")], True),
+    #(
+      [
+        #("host", "admin.example:8443"),
+        #("origin", "https://admin.example:8443"),
+      ],
+      True,
+    ),
+    #(
+      [#("host", "admin.example"), #("referer", "https://admin.example/")],
+      True,
+    ),
+  ]
+  use #(headers, accepted) <- list.each(cases)
+  let response =
+    list.fold(
+      headers,
+      simulate.request(http.Post, "/language")
+        |> with_credentials("admin", password)
+        |> simulate.form_body([#("language", "ja"), #("return", "/")]),
+      fn(request, header) { request.set_header(request, header.0, header.1) },
+    )
+    |> admin.handle_request(context(), _)
+  let saved = list.key_find(response.headers, "set-cookie") != Error(Nil)
+  case accepted {
+    True -> {
+      assert #(headers, response.status, saved) == #(headers, 303, True)
+    }
+    False -> {
+      assert #(headers, response.status, saved) == #(headers, 400, False)
+      assert simulate.read_body(response) == "Bad request: Invalid origin"
+    }
+  }
+}
+
 /// 認証済みの応答はどれも保存させず、枠への埋め込みを禁じる。
 pub fn authenticated_responses_are_not_stored_test() {
   let context = context()
