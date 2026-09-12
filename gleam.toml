@@ -29,3 +29,4 @@ pog = ">= 4.1.0 and < 5.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+exception = ">= 2.1.1 and < 3.0.0"
