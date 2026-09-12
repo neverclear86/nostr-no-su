@@ -30,3 +30,5 @@ pog = ">= 4.1.0 and < 5.0.0"
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
 exception = ">= 2.1.1 and < 3.0.0"
+# hex / nip19 / nip44 の往復と、楕円曲線の恒等式のプロパティテスト。
+qcheck = ">= 1.0.5 and < 2.0.0"

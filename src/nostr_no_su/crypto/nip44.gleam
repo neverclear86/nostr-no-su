@@ -59,8 +59,9 @@ fn bit_length(x: Int) -> Int {
 }
 
 /// HKDF-expand で 76 バイトの message key を導出する:
-/// chacha_key(32) || nonce(12) || hmac_key(32)。
-fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
+/// chacha_key(32) || nonce(12) || hmac_key(32)。テストが公式ベクターの
+/// `valid.get_message_keys` と照合するため公開する。
+pub fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
   let t1 = crypto.hmac(<<nonce:bits, 1>>, crypto.Sha256, conversation_key)
   let t2 =
     crypto.hmac(<<t1:bits, nonce:bits, 2>>, crypto.Sha256, conversation_key)

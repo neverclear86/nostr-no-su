@@ -20,7 +20,8 @@ pub fn tagged_hash(tag: String, data: BitArray) -> BitArray {
   crypto.hash(crypto.Sha256, <<tag_hash:bits, tag_hash:bits, data:bits>>)
 }
 
-/// 32 バイトのメッセージを、新たに生成した補助乱数で署名する。
+/// メッセージを、新たに生成した補助乱数で署名する。BIP-340 はメッセージの長さを
+/// 問わない（Nostr が署名するのは 32 バイトのイベント id）。
 pub fn sign(
   privkey: BitArray,
   message: BitArray,
@@ -98,7 +99,7 @@ pub fn sign_with_aux(
   }
 }
 
-/// 64 バイトの BIP-340 署名を、32 バイトのメッセージと x-only 鍵で検証する。
+/// 64 バイトの BIP-340 署名を、任意の長さのメッセージと x-only 鍵で検証する。
 pub fn verify(sig: BitArray, message: BitArray, pubkey: BitArray) -> Bool {
   case sig {
     <<rx_bytes:bytes-size(32), s_bytes:bytes-size(32)>> ->

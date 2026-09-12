@@ -1,188 +1,212 @@
+//// NIP-44 v2 のペイロード暗号化のテスト。
+////
+//// 公式のテストベクターは `test/vectors/nip44.vectors.json` に置き、全区分の全要素を
+//// 回す。取得元は paulmillr/nip44 の commit 1f8dba1707d065b39329b75012a13a6d1d8124f5 の
+//// `nip44.vectors.json`（このファイルを最後に変えた commit）で、NIP-44 の「Tests and
+//// code」の節が掲げる SHA-256 と一致する。
+//// https://raw.githubusercontent.com/paulmillr/nip44/1f8dba1707d065b39329b75012a13a6d1d8124f5/nip44.vectors.json
+
+import gleam/bit_array
+import gleam/crypto
+import gleam/dynamic/decode
+import gleam/json
+import gleam/list
+import gleam/string
 import nostr_no_su/crypto/nip44
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
+import qcheck
 import support/vector.{bytes}
 
-/// NIP-44 の公式ベクター 1 の conversation key を導く。
-pub fn conversation_key_vector1_test() {
-  let assert Ok(key) =
-    nip44.conversation_key(
-      bytes("315e59ff51cb9209768cf7da80791ddcaae56ac9775eb25b6dee1234bc5d2268"),
-      bytes("c2f9d9948dc8c7c38321e4b85c8558872eafa0641cd269db76848a6073e69133"),
+/// 取得元のファイルの SHA-256。NIP-44 の本文に載っている値と同じ。
+const vectors_sha256 = "269ed0f69e4c192512cc779e78c555090cebc7c785b609e338a62afc3ce25040"
+
+/// ベクターのファイルから、`v2` の下の 1 区分を読む。
+fn section(path: List(String), decoder: decode.Decoder(a)) -> a {
+  let text = vector.read("nip44.vectors.json", vectors_sha256)
+  let assert Ok(value) = json.parse(text, decode.at(["v2", ..path], decoder))
+  value
+}
+
+/// 16 進の文字列をバイト列として読むデコーダー。
+fn hex_bytes() -> decode.Decoder(BitArray) {
+  decode.map(decode.string, bytes)
+}
+
+/// 文字列の UTF-8 表現の SHA-256 を 16 進にする。
+fn sha256_hex(text: String) -> String {
+  hex.encode(crypto.hash(crypto.Sha256, bit_array.from_string(text)))
+}
+
+/// valid.get_conversation_key: 秘密鍵と公開鍵から同じ conversation key を導く。
+pub fn conversation_key_vectors_test() {
+  let vectors =
+    section(
+      ["valid", "get_conversation_key"],
+      decode.list({
+        use sec1 <- decode.field("sec1", hex_bytes())
+        use pub2 <- decode.field("pub2", hex_bytes())
+        use key <- decode.field("conversation_key", hex_bytes())
+        decode.success(#(sec1, pub2, key))
+      }),
     )
-  assert hex.encode(key)
-    == "3dfef0ce2a4d80a25e7a328accf73448ef67096f65f79588e358d9a0eb9013f1"
+  use #(sec1, pub2, key) <- list.each(vectors)
+  assert #(pub2, nip44.conversation_key(sec1, pub2)) == #(pub2, Ok(key))
 }
 
-/// NIP-44 の公式ベクター 2 の conversation key を導く。
-pub fn conversation_key_vector2_test() {
-  let assert Ok(key) =
-    nip44.conversation_key(
-      bytes("a1e37752c9fdc1273be53f68c5f74be7c8905728e8de75800b94262f9497c86e"),
-      bytes("03bb7947065dde12ba991ea045132581d0954f042c84e06d8c00066e23c1a800"),
+/// valid.get_message_keys: conversation key と nonce から、ChaCha20 の鍵と nonce、
+/// HMAC の鍵を導く。
+pub fn message_keys_vectors_test() {
+  let key =
+    section(["valid", "get_message_keys", "conversation_key"], hex_bytes())
+  let vectors =
+    section(
+      ["valid", "get_message_keys", "keys"],
+      decode.list({
+        use nonce <- decode.field("nonce", hex_bytes())
+        use chacha_key <- decode.field("chacha_key", hex_bytes())
+        use chacha_nonce <- decode.field("chacha_nonce", hex_bytes())
+        use hmac_key <- decode.field("hmac_key", hex_bytes())
+        let keys = <<chacha_key:bits, chacha_nonce:bits, hmac_key:bits>>
+        decode.success(#(nonce, keys))
+      }),
     )
-  assert hex.encode(key)
-    == "4d14f36e81b8452128da64fe6f1eae873baae2f444b02c950b90e43553f2178b"
+  use #(nonce, keys) <- list.each(vectors)
+  assert #(nonce, nip44.message_keys(key, nonce)) == #(nonce, keys)
 }
 
-/// 位数を超える秘密鍵からは conversation key を導けない。
-pub fn conversation_key_rejects_seckey_over_n_test() {
-  let assert Error(_) =
-    nip44.conversation_key(
-      bytes("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-      bytes("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+/// valid.calc_padded_len: パディング後の長さが表と一致する。
+pub fn calc_padded_len_vectors_test() {
+  let vectors =
+    section(["valid", "calc_padded_len"], decode.list(decode.list(decode.int)))
+  use pair <- list.each(vectors)
+  let assert [unpadded, padded] = pair
+  assert #(unpadded, nip44.calc_padded_len(unpadded)) == #(unpadded, padded)
+}
+
+/// valid.encrypt_decrypt: 仕様の手順どおり、双方の鍵から同じ conversation key を
+/// 導き、同じ nonce でペイロードを再現し、復号で平文に戻す。
+pub fn encrypt_decrypt_vectors_test() {
+  let vectors =
+    section(
+      ["valid", "encrypt_decrypt"],
+      decode.list({
+        use sec1 <- decode.field("sec1", hex_bytes())
+        use sec2 <- decode.field("sec2", hex_bytes())
+        use key <- decode.field("conversation_key", hex_bytes())
+        use nonce <- decode.field("nonce", hex_bytes())
+        use plaintext <- decode.field("plaintext", decode.string)
+        use payload <- decode.field("payload", decode.string)
+        decode.success(#(sec1, sec2, key, nonce, plaintext, payload))
+      }),
     )
+  use #(sec1, sec2, key, nonce, plaintext, payload) <- list.each(vectors)
+  let assert Ok(pub1) = secp256k1.xonly_pubkey(sec1)
+  let assert Ok(pub2) = secp256k1.xonly_pubkey(sec2)
+  assert #(payload, nip44.conversation_key(sec1, pub2)) == #(payload, Ok(key))
+  assert #(payload, nip44.conversation_key(sec2, pub1)) == #(payload, Ok(key))
+  assert #(payload, nip44.encrypt_with_nonce(plaintext, key, nonce))
+    == #(payload, Ok(payload))
+  assert #(payload, nip44.decrypt(payload, key)) == #(payload, Ok(plaintext))
 }
 
-const conv_key_1 = "c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d"
-
-/// 公式ベクター 1 のペイロードを、同じ nonce で再現する。
-pub fn encrypt_vector1_test() {
-  let assert Ok(payload) =
-    nip44.encrypt_with_nonce(
-      "a",
-      bytes(conv_key_1),
-      bytes("0000000000000000000000000000000000000000000000000000000000000001"),
+/// valid.encrypt_decrypt_long_msg: 長い平文でも、平文とペイロードの SHA-256 が
+/// ベクターと一致し、復号で平文に戻る。
+pub fn encrypt_decrypt_long_msg_vectors_test() {
+  let vectors =
+    section(
+      ["valid", "encrypt_decrypt_long_msg"],
+      decode.list({
+        use key <- decode.field("conversation_key", hex_bytes())
+        use nonce <- decode.field("nonce", hex_bytes())
+        use pattern <- decode.field("pattern", decode.string)
+        use repeat <- decode.field("repeat", decode.int)
+        use plaintext_sha256 <- decode.field("plaintext_sha256", decode.string)
+        use payload_sha256 <- decode.field("payload_sha256", decode.string)
+        decode.success(#(
+          key,
+          nonce,
+          string.repeat(pattern, repeat),
+          plaintext_sha256,
+          payload_sha256,
+        ))
+      }),
     )
-  assert payload
-    == "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb"
+  use #(key, nonce, plaintext, plaintext_sha256, payload_sha256) <- list.each(
+    vectors,
+  )
+  assert sha256_hex(plaintext) == plaintext_sha256
+  let assert Ok(payload) = nip44.encrypt_with_nonce(plaintext, key, nonce)
+  assert sha256_hex(payload) == payload_sha256
+  assert nip44.decrypt(payload, key) == Ok(plaintext)
 }
 
-/// 公式ベクター 1 のペイロードを復号する。
-pub fn decrypt_vector1_test() {
-  let assert Ok(text) =
-    nip44.decrypt(
-      "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb",
-      bytes(conv_key_1),
+/// invalid.encrypt_msg_lengths: 1〜65535 バイトの範囲外の平文は暗号化しない。
+pub fn encrypt_rejects_invalid_length_vectors_test() {
+  let lengths =
+    section(["invalid", "encrypt_msg_lengths"], decode.list(decode.int))
+  use length <- list.each(lengths)
+  let result =
+    nip44.encrypt_with_nonce(string.repeat("a", length), <<1:256>>, <<1:256>>)
+  assert #(length, result) == #(length, Error(nip44.InvalidPlaintextLength))
+}
+
+/// invalid.get_conversation_key: 範囲外の秘密鍵や、曲線上に無い公開鍵からは
+/// conversation key を導かない。
+pub fn conversation_key_rejects_invalid_vectors_test() {
+  let vectors =
+    section(
+      ["invalid", "get_conversation_key"],
+      decode.list({
+        use sec1 <- decode.field("sec1", hex_bytes())
+        use pub2 <- decode.field("pub2", hex_bytes())
+        use note <- decode.field("note", decode.string)
+        decode.success(#(sec1, pub2, note))
+      }),
     )
-  assert text == "a"
+  use #(sec1, pub2, note) <- list.each(vectors)
+  assert #(note, nip44.conversation_key(sec1, pub2))
+    == #(note, Error(nip44.InvalidKey))
 }
 
-/// 公式ベクター 2 のペイロードを、同じ nonce で再現する。
-pub fn encrypt_vector2_test() {
-  let assert Ok(payload) =
-    nip44.encrypt_with_nonce(
-      "🍕🫃",
-      bytes(conv_key_1),
-      bytes("f00000000000000000000000000000f00000000000000000000000000000000f"),
+/// invalid.decrypt: 不正なペイロードを、ベクターの note が示す理由で拒否する。
+pub fn decrypt_rejects_invalid_vectors_test() {
+  let vectors =
+    section(
+      ["invalid", "decrypt"],
+      decode.list({
+        use key <- decode.field("conversation_key", hex_bytes())
+        use payload <- decode.field("payload", decode.string)
+        use note <- decode.field("note", decode.string)
+        decode.success(#(key, payload, note))
+      }),
     )
-  assert payload
-    == "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj"
+  use #(key, payload, note) <- list.each(vectors)
+  assert #(note, nip44.decrypt(payload, key))
+    == #(note, Error(expected_decrypt_error(note)))
 }
 
-/// 公式ベクター 2 のペイロードを復号する。
-pub fn decrypt_vector2_test() {
-  let assert Ok(text) =
-    nip44.decrypt(
-      "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj",
-      bytes(conv_key_1),
-    )
-  assert text == "🍕🫃"
-}
-
-const conv_key_3 = "3e2b52a63be47d34fe0a80e34e73d436d6963bc8f39827f327057a9986c20a45"
-
-const plaintext_3 = "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀"
-
-const payload_3 = "ArY1I2xC2yDwIbuNHN/1ynXdGgzHLqdCrXUPMwELJPc7s7JqlCMJBAIIjfkpHReBPXeoMCyuClwgbT419jUWU1PwaNl4FEQYKCDKVJz+97Mp3K+Q2YGa77B6gpxB/lr1QgoqpDf7wDVrDmOqGoiPjWDqy8KzLueKDcm9BVP8xeTJIxs="
-
-/// 公式ベクター 3 のペイロードを、同じ nonce で再現する。
-pub fn encrypt_vector3_test() {
-  let assert Ok(payload) =
-    nip44.encrypt_with_nonce(
-      plaintext_3,
-      bytes(conv_key_3),
-      bytes("b635236c42db20f021bb8d1cdff5ca75dd1a0cc72ea742ad750f33010b24f73b"),
-    )
-  assert payload == payload_3
-}
-
-/// 公式ベクター 3 のペイロードを復号する。
-pub fn decrypt_vector3_test() {
-  let assert Ok(text) = nip44.decrypt(payload_3, bytes(conv_key_3))
-  assert text == plaintext_3
-}
-
-/// パディング後の長さが、仕様の表と一致する。
-pub fn calc_padded_len_table_test() {
-  let cases = [
-    #(1, 32),
-    #(32, 32),
-    #(33, 64),
-    #(37, 64),
-    #(45, 64),
-    #(49, 64),
-    #(64, 64),
-    #(65, 96),
-    #(100, 128),
-    #(111, 128),
-    #(200, 224),
-    #(250, 256),
-    #(320, 320),
-    #(383, 384),
-    #(384, 384),
-    #(400, 448),
-    #(500, 512),
-    #(512, 512),
-    #(515, 640),
-    #(700, 768),
-    #(800, 896),
-    #(900, 1024),
-    #(1020, 1024),
-    #(65_536, 65_536),
-  ]
-  assert list_all_padded(cases)
-}
-
-/// 表の各行について、期待するパディング長になっているかを確かめる。
-fn list_all_padded(cases: List(#(Int, Int))) -> Bool {
-  case cases {
-    [] -> True
-    [#(input, expected), ..rest] ->
-      nip44.calc_padded_len(input) == expected && list_all_padded(rest)
+/// invalid.decrypt の note を、`nip44.decrypt` が返すエラーに対応づける。
+/// ファイルは SHA-256 で固定しているので、知らない note はテストの誤りとして扱う。
+fn expected_decrypt_error(note: String) -> nip44.Nip44Error {
+  case note {
+    "unknown encryption version" <> _ -> nip44.UnsupportedVersion
+    "invalid MAC" -> nip44.MacVerificationFailed
+    "invalid base64" | "invalid padding" | "invalid payload length: " <> _ ->
+      nip44.InvalidPayload
+    _ -> panic as { "unknown invalid.decrypt note: " <> note }
   }
 }
 
-/// 先頭が `#` のペイロードは、未対応のバージョンとして拒否する。
-pub fn decrypt_rejects_hash_prefix_test() {
-  let assert Error(nip44.UnsupportedVersion) =
-    nip44.decrypt(
-      "#Atqupco0WyaOW2IGDKcshwxI9xO8HgD/P8Ddt46CbxDbrhdG8VmJdU0MIDf06CUvEvdnr1cp1fiMtlM/GrE92xAc1K5odTpCzUB+mjXgbaqtntBUbTToSUoT0ovrlPwzGjyp",
-      bytes("ca2527a037347b91bea0c8a30fc8d9600ffd81ec00038671e3a0f0cb0fc9f642"),
+/// 任意の平文（1 文字以上）と conversation key で、乱数の nonce で暗号化したものを
+/// 復号すると元の平文に戻る。
+pub fn encrypt_decrypt_round_trip_property_test() {
+  let generator =
+    qcheck.tuple2(
+      qcheck.non_empty_string(),
+      qcheck.fixed_size_byte_aligned_bit_array(32),
     )
-}
-
-/// バージョン 0 のペイロードは拒否する。
-pub fn decrypt_rejects_version_zero_test() {
-  let assert Error(nip44.UnsupportedVersion) =
-    nip44.decrypt(
-      "AK1AjUvoYW3IS7C/BGRUoqEC7ayTfDUgnEPNeWTF/reBZFaha6EAIRueE9D1B1RuoiuFScC0Q94yjIuxZD3JStQtE8JMNacWFs9rlYP+ZydtHhRucp+lxfdvFlaGV/sQlqZz",
-      bytes("36f04e558af246352dcf73b692fbd3646a2207bd8abd4b1cd26b234db84d9481"),
-    )
-}
-
-/// MAC を書き換えたペイロードは復号しない。
-pub fn decrypt_rejects_tampered_mac_test() {
-  // ベクター 1 のペイロードの末尾付近（MAC 領域）を 1 文字書き換えたもの。
-  let assert Error(_) =
-    nip44.decrypt(
-      "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsc",
-      bytes(conv_key_1),
-    )
-}
-
-/// 空の平文は仕様上の下限を下回るため暗号化しない。
-pub fn encrypt_rejects_empty_plaintext_test() {
-  let assert Error(nip44.InvalidPlaintextLength) =
-    nip44.encrypt_with_nonce(
-      "",
-      bytes(conv_key_1),
-      bytes("0000000000000000000000000000000000000000000000000000000000000001"),
-    )
-}
-
-/// 暗号化して復号すると元の平文に戻る。
-pub fn encrypt_decrypt_roundtrip_test() {
-  let assert Ok(payload) = nip44.encrypt("hello nostr", bytes(conv_key_1))
-  let assert Ok(text) = nip44.decrypt(payload, bytes(conv_key_1))
-  assert text == "hello nostr"
+  use #(plaintext, key) <- qcheck.given(generator)
+  let assert Ok(payload) = nip44.encrypt(plaintext, key)
+  assert nip44.decrypt(payload, key) == Ok(plaintext)
 }
