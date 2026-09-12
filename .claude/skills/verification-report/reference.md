@@ -262,7 +262,7 @@ count_hits() {
 
 # targets.txt は「名前<TAB>値」の行。nsec と 16 進の秘密鍵、各時点の secret（名前を secret_ で始める）、
 # マスターキー、管理パスワード、DB のパスワード
-while IFS=$'\t' read -r name value; do
+while IFS=$'\t' read -r name value || [ -n "$name" ]; do
   count_hits "$name" -F -- "$value" "$V"/log-*.txt "$V"/pgdump*.sql
 done < "$V/targets.txt"
 
