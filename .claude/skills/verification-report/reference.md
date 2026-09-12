@@ -246,8 +246,10 @@ docker unpause nns-verify-postgres-1
 grep の終了状態は、一致ありが 0、一致なしが 1、ファイルを読めないとき（グロブが何にも一致しないときを含む）が 2 である。
 `count_hits` は 1 を一致なしとして進め、2 のときは `ERROR` の行を出して 2 を返すので、`set -e` のスクリプトはそこで止まる。
 `ERROR` の行を出した呼び出しは、ほかのファイルで一致していても `HIT` の行を出さない。
-`targets.txt` の行が「名前<TAB>値」の形でないときは、値を出さないよう行番号だけを `ERROR targets.txt line <行番号>` として出し、2 つのループを実行しない。
-この確かめは `if` の条件なので、`set -e` のスクリプトもそこでは止まらず、`ERROR` の行で知らせる。
+`targets.txt` が無い、読めない、空のいずれかのときは `ERROR targets.txt unreadable or empty` を出し、2 つのループを実行しない。
+行が「名前<TAB>値」の形でないときも、値を出さないよう行番号だけを `ERROR targets.txt line <行番号>` として出し、2 つのループを実行しない。
+これらの確かめは `if` の条件なので、`set -e` のスクリプトもそこでは止まらず、`ERROR` の行で知らせる。
+32 文字の 16 進の保険は `targets.txt` を使わないので、このときも実行する。
 確かめるのは、`HIT` と `ERROR` の行が 1 つも出ないことである。
 Claude Code の Bash ツールでは `grep` が `-I` 付きで ugrep を呼ぶ関数になっており、NUL を含むファイルを数えずに飛ばすので、`-a` を付ける。
 
@@ -264,8 +266,10 @@ count_hits() {
 
 # targets.txt は「名前<TAB>値」の行。nsec と 16 進の秘密鍵、各時点の secret（名前を secret_ で始める）、
 # マスターキー、管理パスワード、DB のパスワード
-# 各行が「名前<TAB>値」であることを確かめる。値を出さないよう、崩れた行は行番号だけを出す
-if awk -F'\t' 'NF < 2 || $1 == "" || $2 == "" || /\r/ { print "ERROR targets.txt line", NR; bad = 2 } END { exit bad }' "$V/targets.txt"; then
+# targets.txt が読めて空でないこと、各行が「名前<TAB>値」であることを確かめる。値を出さないよう、崩れた行は行番号だけを出す
+if [ ! -s "$V/targets.txt" ] || [ ! -r "$V/targets.txt" ]; then
+  echo "ERROR targets.txt unreadable or empty"
+elif awk -F'\t' 'NF < 2 || $1 == "" || $2 == "" || /\r/ { print "ERROR targets.txt line", NR; bad = 2 } END { exit bad }' "$V/targets.txt"; then
   while IFS=$'\t' read -r name value || [ -n "$name" ]; do
     count_hits "$name" -F -- "$value" "$V"/log-*.txt "$V"/pgdump*.sql
   done < "$V/targets.txt"
