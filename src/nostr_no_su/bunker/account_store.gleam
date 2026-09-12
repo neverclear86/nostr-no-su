@@ -5,6 +5,7 @@
 //// 出ない。
 ////
 //// 失敗はすべて `StoreError` の値で返し、呼び出し側のプロセスを落とさない。
+//// pog と pgo が投げる例外も、クエリーの実行の入口（`execute`）で値に写す。
 //// エラーの説明は値（鍵、secret、ラベル、暗号文）を含まない。Postgres の制約違反の
 //// `detail` は `Failing row contains (...)` の形で行の全列を含むので、写すときに
 //// 捨てる。
@@ -98,11 +99,17 @@ const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $
 /// ストア操作の失敗。説明は値（鍵、secret、ラベル、暗号文）を含まない。
 pub type StoreError {
   /// DB に到達できない、あるいは接続を拒否された（認証の失敗や存在しないデータベース
-  /// 名を含む）。プールから接続を得られなかったので、クエリーは送られていない。
+  /// 名、プールのプロセスが無いことを含む）。プールから接続を得られなかったので、
+  /// クエリーは送られていない。
   Unavailable
   /// 期限までに応答が無かった、あるいはクエリーの途中で接続が切れた。クエリーが
   /// サーバーに届いていれば、書き込みはコミットされていることがある。
   TimedOut
+  /// `pog.execute` が例外を投げた（pog が写せないエラーの項や、pgo の中の例外）。
+  /// `exception` は例外のクラスと発生箇所（例: `error in pog_ffi:convert_error/1`）
+  /// だけで、理由の項（値を含みうる）は含まない。クエリーを送った後にも起きうるので、
+  /// 書き込みはコミットされていることがある。
+  Raised(exception: String)
   /// 同じ pubkey がすでに登録されている。
   AlreadyRegistered
   /// 指定した pubkey が登録されていない。
@@ -141,8 +148,7 @@ pub fn ensure_schema(
   use statement <- list.try_each(schema)
   pog.query(statement)
   |> pog.timeout(timeouts.load_ms)
-  |> pog.execute(on: db)
-  |> result.map_error(from_query_error)
+  |> execute(db)
 }
 
 /// スキーマを用意してから全行を読み込み、復号できた行と飛ばした行に分ける。
@@ -285,10 +291,13 @@ pub fn deleted_or_absent(
 }
 
 /// 書き込みの失敗のうち、実際には書き込まれていることがあるものか。期限切れと途中の
-/// 切断だけが該当し、それ以外（接続を得られない、制約違反、クエリーの失敗）は書き
-/// 込まれていないことが確定している。
+/// 切断（`TimedOut`）と例外（`Raised`）が該当し、それ以外（接続を得られない、制約違反、
+/// クエリーの失敗）は書き込まれていないことが確定している。
 pub fn may_have_been_written(error: StoreError) -> Bool {
-  error == TimedOut
+  case error {
+    TimedOut | Raised(_) -> True
+    Unavailable | AlreadyRegistered | NotRegistered | QueryFailed(_) -> False
+  }
 }
 
 /// ログと画面に出す説明。pgo は認証の失敗や存在しないデータベース名も接続の
@@ -297,6 +306,8 @@ pub fn describe(error: StoreError) -> String {
   case error {
     Unavailable -> "database is unreachable or rejected the connection"
     TimedOut -> "database did not answer in time or the connection was lost"
+    Raised(exception) ->
+      "the database client raised an exception: " <> exception
     AlreadyRegistered -> "account is already registered"
     NotRegistered -> "account is not registered"
     QueryFailed(reason) -> reason
@@ -321,14 +332,25 @@ pub fn from_query_error(error: pog.QueryError) -> StoreError {
   }
 }
 
-/// クエリーを実行し、失敗を `StoreError` に写す。
+/// クエリーを実行し、失敗を `StoreError` に写す。このモジュールのクエリーはすべて
+/// ここを通す。`pog.execute` が例外を投げたときも値で返す（`execute_catching`）。
 fn execute(
   query: pog.Query(row),
   db: pog.Connection,
 ) -> Result(pog.Returned(row), StoreError) {
-  pog.execute(query, on: db)
-  |> result.map_error(from_query_error)
+  use executed <- result.try(execute_catching(query, db))
+  result.map_error(executed, from_query_error)
 }
+
+/// `pog.execute` を実行し、例外を値に写す。プールから接続を得る前の例外（プールの
+/// プロセスが無いなど）は `Unavailable`、それ以外の例外は `Raised` にする。`Raised` には
+/// 送る前に起きた例外（pgo_pool のチェックアウトが返す文字列の理由を pog が写せない
+/// 場合）も含まれ、送った後の例外と区別しない。
+@external(erlang, "nostr_no_su_ffi", "execute_catching")
+fn execute_catching(
+  query: pog.Query(row),
+  db: pog.Connection,
+) -> Result(Result(pog.Returned(row), pog.QueryError), StoreError)
 
 /// 1 行を対象にする書き込みを実行する。対象の行が無ければ `NotRegistered`。
 fn execute_on_one_row(
