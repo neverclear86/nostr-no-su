@@ -259,7 +259,7 @@ grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
 done
 
 # 記録漏れの保険（secret は 32 文字の 16 進）
-grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head
+grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head || true
 ```
 
 ## ローカル実行とアクターの kill
@@ -332,5 +332,5 @@ docker run --rm -v "$W/plugins:/p" --entrypoint sh ghcr.io/gleam-lang/gleam:v1.1
   -c 'rm -rf /p/event_logger'
 git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force "$W"
 cat "$V/baseline-docker-ps.txt"
-docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-'
+docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' || true
 ```
