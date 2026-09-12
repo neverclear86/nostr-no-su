@@ -15,12 +15,15 @@
 ////   `nostr_no_su_ffi:run_isolated/1`）。分けると、ワーカーが監視より先に終わった
 ////   ときに `noproc` の DOWN が届き、正常な実行を失敗と誤判定する。
 //// - **歯止めは 2 つ。** 1 件あたりの実行時間の上限（超えたらワーカーを kill）と、
-////   メールボックス長による切り捨て。切り捨ては超過分ではなく**そのとき積まれて
-////   いたバックログ全体**を捨てて追いつく。
+////   メールボックス長による切り捨て。切り捨ては上限を超えた時点で始め、超過分では
+////   なく**キューが上限の半分以下に減るまで**続ける。
 //// - **連続失敗が上限に達したプラグインは無効化する。** 以後イベントを捨てて
 ////   件数だけ数え、**プロセスは生かしたまま**にするので、名前は登録されたままで
 ////   管理 UI から状態を問い合わせられる。復帰の手段は本体の再起動か、ランナー
 ////   プロセスの強制終了（スーパーバイザーが作り直す）の 2 つである。
+//// - **ランナーが居ない間（再起動中）に送られたイベントは届かない。** ディス
+////   パッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
+////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。
 ////
 //// ワーカーの中では例外を捕まえるが、目的は隔離ではなく**終了理由を短い 1 行に
 //// 整えること**である。隔離そのものはプロセスの境界が担っており、捕捉を外しても
@@ -40,6 +43,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import gleam/result
 import gleam/string
 import nostr_no_su/log
 import nostr_no_su/named
@@ -74,7 +78,7 @@ const status_timeout_ms = 1000
 pub type Status {
   /// イベントを受け取って実行している。
   Running
-  /// 未処理のイベントが多すぎるため、キューが空になるまで捨てている。
+  /// 未処理のイベントが多すぎるため、キューが上限の半分以下に減るまで捨てている。
   Overloaded(dropped: Int)
   /// 連続失敗の上限に達したので無効化した。以後イベントは捨てて数えるだけ。
   Disabled(reason: String, dropped: Int)
@@ -93,6 +97,13 @@ pub type Msg {
   Handle(event: Event)
   /// 管理 UI からの状態の問い合わせ。
   GetStatus(reply: Subject(Status))
+}
+
+/// ディスパッチャーがイベントを送る宛先 1 つ。`plugin` はログの接頭辞に使う
+/// プラグイン名、`undelivered` はランナーが居なくて届けられなかった件数で、
+/// 届いた時点で 0 に戻る。
+pub type Target {
+  Target(plugin: String, name: Name(Msg), undelivered: Int)
 }
 
 /// ランナーが保持する状態。`failures` は連続失敗数で、成功すると 0 に戻る。
@@ -122,12 +133,21 @@ pub fn start(
   |> actor.start
 }
 
-/// イベント 1 件を全ランナーへ送る。送るだけで戻るので、ディスパッチャーは
-/// プラグインの実行時間の影響を受けない。名前の宛先が居なければ `named.send`
-/// がそのメッセージを捨てる（ランナーの再起動中）。
-pub fn dispatch(targets: List(Name(Msg)), incoming: Event) -> Nil {
-  use target <- list.each(targets)
-  named.send(target, Handle(incoming))
+/// まだ 1 件も取りこぼしていない宛先を作る。
+pub fn target(plugin: String, name: Name(Msg)) -> Target {
+  Target(plugin: plugin, name: name, undelivered: 0)
+}
+
+/// イベント 1 件を全ランナーへ送り、取りこぼしを数えた宛先を返す。送るだけで
+/// 戻るので、ディスパッチャーはプラグインの実行時間の影響を受けない。名前の
+/// 宛先が居なければ（ランナーの再起動中）そのイベントは届かず、
+/// `record_delivery` が数える。
+pub fn dispatch(targets: List(Target), incoming: Event) -> List(Target) {
+  use target <- list.map(targets)
+  let delivered = result.is_ok(named.try_send(target.name, Handle(incoming)))
+  let #(target, note) = record_delivery(target, delivered)
+  report(target.plugin, note)
+  target
 }
 
 /// ランナーへ現在の状態を問い合わせる。再起動中や、遅いプラグインを待っている
@@ -176,9 +196,10 @@ fn report(name: String, note: Option(String)) -> Nil {
 /// 出すログ行。
 ///
 /// 無効化されているあいだは何もせず数える。`Running` でキューが上限を超えて
-/// いれば切り捨てに移り、`Overloaded` はキューが空になった時点で復帰する。
-/// 復帰条件が `queue_len == 0` なので、切り捨ては超過分だけでなくそのとき
-/// 積まれていたバックログ全体に及ぶ。
+/// いれば切り捨てに移り、`Overloaded` はキューが上限の半分以下に減った時点で
+/// 復帰する。空になるまで待つと、上限を 1 件超えただけのバーストでもバック
+/// ログ全体を捨てる。上限まで減った時点で復帰すると、上限の前後で流入が続く
+/// 間は切り捨ての開始と復帰の行が 1 件ごとに交互に出る。
 pub fn admit(
   status: Status,
   queue_len: Int,
@@ -202,7 +223,7 @@ pub fn admit(
       ),
     )
     Running -> #(Running, True, None)
-    Overloaded(dropped:) if queue_len > 0 -> #(
+    Overloaded(dropped:) if queue_len > limits.max_queue_len / 2 -> #(
       Overloaded(dropped: dropped + 1),
       False,
       None,
@@ -260,6 +281,36 @@ pub fn record(
         )
       }
     }
+  }
+}
+
+/// 送信の成否を宛先へ反映する。返すのは次の宛先と出すログ行。
+///
+/// 行を出すのは取りこぼしの 1 件目と、ランナーが戻って最初に届いたときだけで、
+/// その間は数えるだけにする。1 件ごとに出すと、ランナーが戻らない間のログの
+/// 行数が流入量に比例する。
+pub fn record_delivery(
+  target: Target,
+  delivered: Bool,
+) -> #(Target, Option(String)) {
+  case delivered, target.undelivered {
+    True, 0 -> #(target, None)
+    True, undelivered -> #(
+      Target(..target, undelivered: 0),
+      Some(
+        "runner is back; dropped "
+        <> int.to_string(undelivered)
+        <> " events while it was unavailable",
+      ),
+    )
+    False, 0 -> #(
+      Target(..target, undelivered: 1),
+      Some("runner is unavailable; dropping events until it is back"),
+    )
+    False, undelivered -> #(
+      Target(..target, undelivered: undelivered + 1),
+      None,
+    )
   }
 }
 

@@ -15,9 +15,19 @@ import gleam/option.{type Option, None, Some}
 /// 窓に当たって失われるのはその瞬間のメッセージ 1 件で、送信元はいずれも再接続
 /// または再送で回復するため、内部表現への依存を増やさずこの実装を選んでいる。
 pub fn send(name: Name(msg), message: msg) -> Nil {
+  let _ = try_send(name, message)
+  Nil
+}
+
+/// `send` と同じく送信し、名前を保持するプロセスが無くて捨てたときは `Error(Nil)`
+/// を返す。捨てた件数を数える呼び出し側（`plugin_runner.dispatch`）のためにある。
+/// 名前の確認から送信までの窓は `send` と同じで、そこで宛先が消えると送信側が
+/// panic するか、消えた pid へ黙って送られて `Ok(Nil)` になる。どちらの 1 件も
+/// 数えない（`send` の doc を参照）。
+pub fn try_send(name: Name(msg), message: msg) -> Result(Nil, Nil) {
   case process.named(name) {
-    Ok(_pid) -> process.send(process.named_subject(name), message)
-    Error(Nil) -> Nil
+    Ok(_pid) -> Ok(process.send(process.named_subject(name), message))
+    Error(Nil) -> Error(Nil)
   }
 }
 
