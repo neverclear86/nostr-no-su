@@ -11,9 +11,8 @@ gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
 gleam_http = ">= 4.3.0 and < 5.0.0"
-# 1 行だけ修正した stratus を vendor している。permessage-deflate のオファーを
-# 削除したもので、gramps 6.0.1 が分割された圧縮メッセージでクラッシュするのを
-# 避けるため。vendor/stratus/src/stratus.gleam を参照。
+# 上流から改変した stratus を vendor している。改変の内容と理由、戻す条件は
+# vendor/stratus/PATCH.md を参照。
 stratus = { path = "./vendor/stratus" }
 envoy = ">= 1.2.0 and < 2.0.0"
 gleam_crypto = ">= 1.6.0 and < 2.0.0"

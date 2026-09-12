@@ -271,6 +271,7 @@ assets/admin.css                             -- 管理 UI の CSS の入力（Ta
 priv/static/admin.css                        -- ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
 dev/admin_preview.gleam                      -- 管理 UI を固定の状態で起動する撮影用のサーバー（成果物には入らない）
 dev/screenshots.mjs                          -- 撮影用のサーバーから全ページを撮るスクリプト（playwright-core）
+dev/check_vendor_stratus.sh                  -- vendor/stratus が上流の tar とパッチから再現できるかの検査（CI でも実行する）
 package.json                                 -- CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 vendor/stratus/                              -- パッチ済み stratus（下記参照）
 examples/plugins/file_logger/                -- 外部プラグインの例（状態を持たず、設定を受け取る Erlang 1 ファイル）
@@ -318,7 +319,9 @@ docs/architecture.md                         -- システム構成（プロセ�
 
 ### vendor/stratus について
 
-stratus 3.0.0 はハンドシェイクで `permessage-deflate` を必ずオファーするが、依存先の gramps 6.0.1 は分割された圧縮メッセージをフレーム単位で inflate するため、strfry 系リレーが送る複数フレームの圧縮メッセージで zlib の `data_error` によりクラッシュする。回避のため、圧縮のオファーを削除した stratus を vendor している（パッチは 1 行、`vendor/stratus/src/stratus.gleam` 参照）。上流で修正されたら hex 版に戻す。
+WebSocket クライアントの stratus は、hex で公開された版を改変して `vendor/stratus/` に同梱している。
+改変の内容と理由、上流の版と tar の SHA-256、hex 版に戻す条件は `vendor/stratus/PATCH.md` にある。
+CI の `vendor-stratus` ジョブが、上流の tar にパッチを当てた結果と `vendor/stratus/` が一致することを確かめる。
 
 ## ロードマップ
 

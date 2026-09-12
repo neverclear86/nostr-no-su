@@ -515,7 +515,7 @@ nostr-no-su/
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
 ├── priv/static/                  ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
-├── dev/                          管理 UI の撮影用のサーバーとスクリプト（成果物には入らない）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus の検査（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
 │   └── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
@@ -537,7 +537,7 @@ nostr-no-su/
 │   ├── plugin-api.md             プラグイン API v1 の仕様（プラグイン作者向け）
 │   └── architecture.md           この文書
 │
-├── vendor/stratus/               パッチ済み stratus（README を参照）
+├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
 ├── gleam.toml
 ├── package.json                  CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 ├── Dockerfile

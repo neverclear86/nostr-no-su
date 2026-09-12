@@ -1,3 +1,7 @@
+> nostr-no-su が stratus 3.0.0 を改変して同梱したものである。
+> 上流との違い（パッチ）と戻す条件は [PATCH.md](PATCH.md) にある。
+> 以下は上流の README のままで、導入の手順と機能の一覧は hex 版についての記述である。
+
 # stratus
 
 A Gleam WebSocket client (and possibly more).
