@@ -10,7 +10,7 @@
 
 ```sh
 # ユーザーのコンテナーの状態。後片付けで同じ状態か比べる（Status の Up の時間が続いていれば再起動されていない）
-# name フィルターは部分一致で nns-verify-nostr-no-su-1 にも当たるので、grep で先頭を合わせる
+# docker ps --filter name=nostr-no-su- は部分一致で nns-verify-nostr-no-su-1 にも当たるので、grep で先頭を合わせる
 docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' > "$V/baseline-docker-ps.txt"
 
 git -C /home/lina/workspace/projects/nostr-no-su fetch origin
@@ -60,10 +60,14 @@ services:
 
 ### テスト
 
+README のテストの手順（5433）と重ならないポートにする。
+`docker run` が失敗したときに別の Postgres へつながないよう、`&&` でつなぐ。
+
 ```sh
-docker run -d --name nns-verify-testpg -p 127.0.0.1:5433:5432 \
-  -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
-cd "$W" && TEST_DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5433/nostr_no_su_test gleam test
+docker run -d --name nns-verify-testpg -p 127.0.0.1:5533:5432 \
+    -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine \
+  && until docker exec nns-verify-testpg pg_isready -U postgres -d nostr_no_su_test; do sleep 1; done \
+  && (cd "$W" && TEST_DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5533/nostr_no_su_test gleam test)
 docker rm -f nns-verify-testpg
 ```
 
@@ -113,19 +117,18 @@ const browser = await chromium.launch({
 const context = await browser.newContext({
   httpCredentials: { username: "admin", password: process.env.ADMIN_PASSWORD },
   viewport: { width: 1280, height: 900 },
-  // 渡さないと Accept-Language が en-US になり、英語の画面になる
   locale: "ja-JP",
   permissions: ["clipboard-read", "clipboard-write"],
 });
 const page = await context.newPage();
 
-// 管理 UI の外への要求が無いことを、最後に hosts で確かめる
+// 管理 UI の外への要求が無いことを、最後に hosts で確かめる。
 const hosts = new Set();
 page.on("request", (r) => hosts.add(new URL(r.url()).host));
 
 // POST の状態コードは page.goto の戻り値に載らないので、クリックと同時に待つ。
 // 遷移も待たないと、page.content() が送信の前のページを返す。
-// ナビゲーションバーの言語の切り替えもフォームなので、送信先で選ぶ
+// ナビゲーションバーの言語の切り替えもフォームなので、送信先で選ぶ。
 const [response] = await Promise.all([
   page.waitForResponse((r) => r.request().method() === "POST"),
   page.waitForNavigation({ waitUntil: "load" }),
@@ -133,7 +136,7 @@ const [response] = await Promise.all([
 ]);
 console.log(response.status());
 
-await page.screenshot({ path: "04-dashboard-accounts.png", fullPage: true, animations: "disabled" });
+await page.screenshot({ path: "06-registered.png", fullPage: true, animations: "disabled" });
 ```
 
 - 制御文字を含むラベルは `String.fromCharCode` で組み立て、`evaluate` の引数で渡す（`locator(...).evaluate((el, value) => { el.value = value; }, "生成" + String.fromCharCode(0x85) + "C")`）
@@ -157,9 +160,9 @@ curl -s -D - -o /dev/null -u "$AUTH" -H "Origin: $BASE" -d language=ja \
 # 303、location: /evil.example/x
 # set-cookie: nostr_no_su_language=ja; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax
 
-# Origin の無い POST では cookie が使われない（CSRF の検査が取り除く）
-curl -s -u "$AUTH" -b nostr_no_su_language=ja -d nsec=nsec1invalid -d label=x "$BASE/accounts/import" \
-  | grep -o '<html lang="[a-z]*"'                                  # en
+# Origin も Referer も無い POST では cookie が使われない。同じ要求に Origin を付けると使われる
+lang -b nostr_no_su_language=ja -d nsec=nsec1invalid -d label=x "$BASE/accounts/import"                     # en
+lang -b nostr_no_su_language=ja -H "Origin: $BASE" -d nsec=nsec1invalid -d label=x "$BASE/accounts/import"  # ja
 
 # CSS は worktree の生成物と同じ
 curl -s -u "$AUTH" "$BASE/static/admin.css" | sha256sum
@@ -248,9 +251,11 @@ while IFS=$'\t' read -r name value; do
   done
 done < "$V/targets.txt"
 
-# 応答本文。鍵を表示するページは除き、ダッシュボードは secret 入りの URI を表示するので secret は探さない
+# 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
+# secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）
 grep -v '^secret_' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
-  grep -F -l -- "$value" "$V"/bodies/* && echo "HIT $name"
+  n=$(cat "$V"/bodies/* | grep -F -c -- "$value" || true)
+  [ "$n" -gt 0 ] && echo "HIT $name bodies $n"
 done
 
 # 記録漏れの保険（secret は 32 文字の 16 進）
@@ -259,13 +264,13 @@ grep -o -w '[0-9a-f]\{32\}' "$V"/log-*.txt | head
 
 ## ローカル実行とアクターの kill
 
-テスト用の Postgres（5433）と重ならないポートにする。
+テスト用の Postgres（5533）と重ならないポートにする。
 
 ```sh
-docker run -d --name nns-verify-localpg -p 127.0.0.1:5434:5432 \
+docker run -d --name nns-verify-localpg -p 127.0.0.1:5534:5432 \
   -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su postgres:17-alpine
 
-cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5434/nostr_no_su \
+cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5534/nostr_no_su \
   ACCOUNT_MASTER_KEY=<使い捨て> RELAY_URL= BUNKER_RELAY_URL=ws://127.0.0.1:7801 \
   ADMIN_PORT=8096 ADMIN_PASSWORD=<使い捨て> ADMIN_BASE_URL=http://127.0.0.1:8096 PLUGIN_DIR= \
   ERL_FLAGS="-sname nnsverify -setcookie nnsverifycookie" gleam run > "$V/log-local-run.txt" 2>&1 &
