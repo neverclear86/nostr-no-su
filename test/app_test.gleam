@@ -17,7 +17,7 @@ import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
@@ -27,6 +27,7 @@ import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
+import support/signed_event
 
 const secret = "s3cr3t-token"
 
@@ -61,7 +62,8 @@ const auth_base = "http://admin.test"
 type Report {
   /// 接続が開かれた。どのリレーの接続か、所有するアクター、監視対象のソケット
   /// プロセス、そして実際のソケットと同じようにサブツリーへイベントを流し込む
-  /// ハンドラーを伴う。
+  /// ハンドラーを伴う。ハンドラーは本番の `relay_client` と同じく検証を通した
+  /// イベントだけを渡し、検証に通らないイベントを渡すとテストが落ちる。
   Opened(
     relay_url: String,
     connection: Pid,
@@ -117,7 +119,9 @@ fn fake_open(
     let assert Ok(triggers) = process.receive(ready, 1000)
     process.send(
       reports,
-      Opened(relay_url, process.self(), socket, handle_event),
+      Opened(relay_url, process.self(), socket, fn(sent) {
+        handle_event(signed_event.verified(sent))
+      }),
     )
     Ok(
       relay_connection.Socket(
@@ -393,23 +397,10 @@ fn response_body(response: Event) -> String {
   )
 }
 
-/// 指定した id を持つ最小限の kind 1 イベント。ディスパッチャーは id しか
-/// 見ない。
-fn event_with_id(id: String) -> Event {
-  event_with_kind(id, 1)
-}
-
-/// 指定した id と kind を持つ最小限のイベント。
-fn event_with_kind(id: String, kind: Int) -> Event {
-  Event(
-    id: id,
-    pubkey: "",
-    created_at: 0,
-    kind: kind,
-    tags: [],
-    content: "",
-    sig: "",
-  )
+/// 監視に流す kind 1 の署名済みイベント。`label` を content に入れるので、label が
+/// 違えば id も違う（ディスパッチャーは id しか見ない）。
+fn note(label: String) -> Event {
+  signed_event.new(1, label)
 }
 
 /// ある接続で届いたリクエストには、その接続で応答する。
@@ -696,11 +687,12 @@ pub fn monitor_drops_nip46_events_test() {
   let tree = start_monitor_tree(reports, seen, process.new_name("test_dedup"))
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  deliver(event_with_kind("nip46", event.nip46_kind))
-  deliver(event_with_id("normal"))
+  let normal = note("normal")
+  deliver(signed_event.new(event.nip46_kind, "nip46"))
+  deliver(normal)
   // 送信順に処理されるため、最初に届くのが通常イベントであれば kind 24133 は
   // どのプラグインにも渡っていない。
-  assert process.receive(seen, 2000) == Ok(event_with_id("normal"))
+  assert process.receive(seen, 2000) == Ok(normal)
   stop_tree(tree)
 }
 
@@ -713,15 +705,17 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
   let tree = start_monitor_tree(reports, seen, name)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  deliver(event_with_id("first"))
-  assert process.receive(seen, 2000) == Ok(event_with_id("first"))
+  let first = note("first")
+  deliver(first)
+  assert process.receive(seen, 2000) == Ok(first)
 
   let assert Ok(killed) = process.named(name)
   process.kill(killed)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  deliver(event_with_id("second"))
-  assert process.receive(seen, 2000) == Ok(event_with_id("second"))
+  let second = note("second")
+  deliver(second)
+  assert process.receive(seen, 2000) == Ok(second)
   stop_tree(tree)
 }
 
@@ -777,23 +771,24 @@ fn start_plugins_tree(
   ))
 }
 
-/// 連番のイベント id。
-fn event_ids(prefix: String, count: Int) -> List(String) {
+/// 連番のイベントの label。
+fn event_labels(prefix: String, count: Int) -> List(String) {
   use _unit, index <- list.index_map(list.repeat(Nil, count))
   prefix <> int.to_string(index)
 }
 
-/// 指定した id のイベントを配信し、転送プラグインが全件を順に受け取ることを
+/// 指定した label のイベントを配信し、転送プラグインが全件を順に受け取ることを
 /// 確かめる。
 fn deliver_and_expect(
   deliver: fn(Event) -> Nil,
   seen: Subject(Event),
-  ids: List(String),
+  labels: List(String),
   timeout_ms: Int,
 ) -> Nil {
-  list.each(ids, fn(id) { deliver(event_with_id(id)) })
-  use id <- list.each(ids)
-  assert process.receive(seen, timeout_ms) == Ok(event_with_id(id))
+  let events = list.map(labels, note)
+  list.each(events, deliver)
+  use sent <- list.each(events)
+  assert process.receive(seen, timeout_ms) == Ok(sent)
 }
 
 /// 名前が新しいプロセスへ再登録されるのを待つ。`named.send` は名前が未登録の
@@ -835,7 +830,7 @@ pub fn crashing_plugin_does_not_take_down_the_monitor_test() {
   let assert Ok(runner_before) = process.named(crashing)
   let assert Ok(dedup_before) = process.named(dedup_name)
 
-  deliver_and_expect(deliver, seen, event_ids("crash", 20), 2000)
+  deliver_and_expect(deliver, seen, event_labels("crash", 20), 2000)
 
   // ランナーの pid が不変であることが、「スーパーバイザーの再起動が 1 度も
   // 起きていない」という主張そのものである。ワーカーとリンクを張る実装では
@@ -866,10 +861,10 @@ pub fn disabled_plugin_keeps_the_others_running_test() {
     await_connection(reports)
   let assert Ok(runner_before) = process.named(crashing)
 
-  deliver_and_expect(deliver, seen, event_ids("crash", 20), 2000)
+  deliver_and_expect(deliver, seen, event_labels("crash", 20), 2000)
   let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(crashing)
 
-  deliver_and_expect(deliver, seen, event_ids("after", 5), 2000)
+  deliver_and_expect(deliver, seen, event_labels("after", 5), 2000)
   assert process.named(crashing) == Ok(runner_before)
   stop_tree(tree)
 }
@@ -896,7 +891,7 @@ pub fn slow_plugin_does_not_block_other_plugins_test() {
     ])
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  deliver_and_expect(deliver, seen, event_ids("slow", 3), 1000)
+  deliver_and_expect(deliver, seen, event_labels("slow", 3), 1000)
   stop_tree(tree)
 }
 
@@ -1005,7 +1000,7 @@ pub fn stateful_plugin_children_run_in_the_tree_test() {
     await_connection(reports)
   assert is_registered(store)
 
-  list.each(event_ids("counted", 3), fn(id) { deliver(event_with_id(id)) })
+  list.each(event_labels("counted", 3), fn(label) { deliver(note(label)) })
   assert await_count(store, 3, 2000)
   stop_tree(tree)
 }
@@ -1030,7 +1025,7 @@ pub fn killed_plugin_child_is_restarted_and_the_plugin_recovers_test() {
 
   kill_registered(store)
   assert await_restarted(store, before, 2000)
-  deliver(event_with_id("after_kill"))
+  deliver(note("after_kill"))
   assert await_count(store, 1, 2000)
 
   assert process.named(dedup_name) == Ok(dedup_before)
@@ -1075,7 +1070,7 @@ pub fn crash_looping_plugin_child_does_not_take_down_the_app_test() {
   assert process.named(counting) == Ok(runner_before)
 
   // 宛先を失ったプラグインは連続失敗で無効化され、他のプラグインには届き続ける。
-  deliver_and_expect(deliver, seen, event_ids("orphan", 5), 2000)
+  deliver_and_expect(deliver, seen, event_labels("orphan", 5), 2000)
   let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(counting)
   assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
@@ -1445,7 +1440,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   }
   let assert Ok(bunker_before) = process.named(bunker_name)
 
-  deliver_and_expect(deliver, seen, event_ids("while-failing", 3), 2000)
+  deliver_and_expect(deliver, seen, event_labels("while-failing", 3), 2000)
   let asked_at = monotonic_ms()
   // `bunker.sessions` はタイムアウトしても `[]` を返すので、応答したことは
   // `named.call` の `Some` で確かめる。

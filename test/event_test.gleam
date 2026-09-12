@@ -9,6 +9,7 @@ import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
+import support/signed_event
 
 /// デコード・エンコードの確認に使う NIP-01 のイベント。
 fn sample_event() -> event.Event {
@@ -108,6 +109,21 @@ pub fn finalize_and_verify_test() {
   assert event.verify_signature(signed)
   // 改竄すると検証は失敗する。
   assert !event.verify_signature(Event(..signed, content: "tampered"))
+}
+
+/// 署名したイベントは `verify` を通る。id が内容と合わなければ `InvalidId`、署名
+/// だけが合わなければ `InvalidSignature` で落ちる。内容を改竄すると id も署名も
+/// 合わなくなるが、署名を確かめる前に `InvalidId` で落ちる。
+pub fn verify_test() {
+  let signed = signed_event.new(1, "verified")
+  let other = signed_event.new(1, "other")
+  let assert Ok(verified) = event.verify(signed)
+  assert event.verified_event(verified) == signed
+  assert event.verify(Event(..signed, id: other.id)) == Error(event.InvalidId)
+  assert event.verify(Event(..signed, sig: other.sig))
+    == Error(event.InvalidSignature)
+  assert event.verify(Event(..signed, content: "tampered"))
+    == Error(event.InvalidId)
 }
 
 /// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した

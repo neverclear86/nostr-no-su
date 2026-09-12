@@ -107,7 +107,7 @@ import nostr_no_su/bunker/engine.{type Pending}
 import nostr_no_su/dedup
 import nostr_no_su/log
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/nostr/event.{type Verified}
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{type Subscriptions}
@@ -131,9 +131,10 @@ const change_disabled: Result(Nil, bunker.ChangeFailure) = Error(
 const nsec_disabled: Result(String, String) = Error(disabled_reason)
 
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
-/// ネットワークなしでもツリー全体を動かせるようにする。
+/// ネットワークなしでもツリー全体を動かせるようにする。ハンドラーが受け取るのは
+/// 接続のプロセスで id と署名を確かめたイベントである。
 pub type Open =
-  fn(String, Subscriptions, fn(Event) -> Nil) -> Result(Socket, String)
+  fn(String, Subscriptions, fn(Verified) -> Nil) -> Result(Socket, String)
 
 /// リレー接続 1 本ぶんの識別情報。名前を付けておくと、管理 UI が接続アクターに
 /// 状態を問い合わせられる。
@@ -226,7 +227,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
 pub fn open_websocket(
   url: String,
   subscriptions: Subscriptions,
-  handle_event: fn(Event) -> Nil,
+  handle_event: fn(Verified) -> Nil,
 ) -> Result(Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
@@ -373,8 +374,9 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
 /// NIP-46 通信はここで落とす。NIP-01 のフィルターに kind の否定は無く、`PUBKEYS`
 /// に署名者を含む標準的な構成では自分の応答イベントが監視購読にも届くため、
 /// 除外は受信側で行うほかない。
-fn monitor_handler(name: Name(dedup.Msg)) -> fn(Event) -> Nil {
-  fn(incoming: Event) {
+fn monitor_handler(name: Name(dedup.Msg)) -> fn(Verified) -> Nil {
+  fn(verified: Verified) {
+    let incoming = event.verified_event(verified)
     case incoming.kind == event.nip46_kind {
       True -> Nil
       False -> named.send(name, dedup.Incoming(incoming))
@@ -588,7 +590,7 @@ fn add_connections(
   spec: Spec,
   relays: List(Relay),
   subscriptions: Subscriptions,
-  handle_event: fn(Event) -> Nil,
+  handle_event: fn(Verified) -> Nil,
   on_connect: fn(String, Socket) -> Nil,
   on_disconnect: fn(String) -> Nil,
 ) -> Builder {

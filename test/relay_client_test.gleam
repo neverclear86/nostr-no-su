@@ -5,16 +5,19 @@
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http
 import gleam/int
+import gleam/json
 import gleam/option.{None, Some}
 import gleam/set
 import gleam/string
 import mist
+import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
   type SubscriptionState, type Subscriptions, Requested, Retried,
   SubscriptionState, Sync,
 }
+import support/signed_event
 
 /// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
 pub fn label_strips_only_the_scheme_test() {
@@ -45,6 +48,34 @@ pub fn to_request_leaves_other_schemes_alone_test() {
   let assert Ok(req) = relay_client.to_request("https://relay.example")
   assert req.scheme == http.Https
   assert req.host == "relay.example"
+}
+
+// --- handle_text の単体テスト ---
+
+/// リレーが購読 `sub` に配信する EVENT メッセージ。
+fn event_frame(sent: Event) -> String {
+  json.preprocessed_array([
+    json.string("EVENT"),
+    json.string("sub"),
+    event.to_json(sent),
+  ])
+  |> json.to_string
+}
+
+/// 署名の合わないイベントは `handle_event` に渡さず、正しいイベントは渡す。署名は
+/// 別のイベントのものに差し替えるので、形式と id は正しいまま署名だけが合わない。
+pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
+  let delivered = process.new_subject()
+  let deliver = process.send(delivered, _)
+  let genuine = signed_event.new(1, "genuine")
+  let forged = Event(..genuine, sig: signed_event.new(1, "other").sig)
+
+  relay_client.handle_text("test", event_frame(forged), deliver)
+  assert process.receive(delivered, 0) == Error(Nil)
+
+  relay_client.handle_text("test", event_frame(genuine), deliver)
+  let assert Ok(verified) = process.receive(delivered, 0)
+  assert event.verified_event(verified) == genuine
 }
 
 // --- sync の単体テスト ---

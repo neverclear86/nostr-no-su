@@ -1,4 +1,5 @@
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -165,4 +166,32 @@ pub fn verify_signature(event: Event) -> Bool {
       bip340.verify(signature, hash_for_signing(event), pubkey)
     _, _ -> False
   }
+}
+
+/// 受信したイベントを `verify` が落とした理由。
+pub type VerifyError {
+  /// `id` が内容から計算した値と一致しない。
+  InvalidId
+  /// 署名が `pubkey` と内容に対して検証できない。
+  InvalidSignature
+}
+
+/// `verify` を通ったイベント。`id` が内容と一致し、署名が `pubkey` で検証できる
+/// ことを表す。値を作れるのは `verify` だけである。
+pub opaque type Verified {
+  Verified(event: Event)
+}
+
+/// 受信したイベントの `id` と署名を確かめる。`id` の照合（sha256 1 回）を署名の
+/// 検証（1 件あたりミリ秒単位）より先に置き、`id` の合わないイベントには署名の
+/// 検証を払わない。
+pub fn verify(event: Event) -> Result(Verified, VerifyError) {
+  use <- bool.guard(compute_id(event) != event.id, Error(InvalidId))
+  use <- bool.guard(!verify_signature(event), Error(InvalidSignature))
+  Ok(Verified(event))
+}
+
+/// 検証済みのイベントの中身。
+pub fn verified_event(verified: Verified) -> Event {
+  verified.event
 }
