@@ -18,8 +18,8 @@ services:
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
       # 秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト）。
       # `openssl rand -hex 32` で作り、値を直接書かず追跡しない .env ファイルに
-      # 置くこと。**失うと保存した全アカウントの鍵を失う。** 空ならバンカーを
-      # 無効にする。
+      # 置くこと。**失うと保存した全アカウントの鍵を失う。** 空なら理由を
+      # 1 行出して終了する（下の restart を参照）。
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
       # プラグイン固有の設定は PLUGIN_<NAME>_<KEY> で渡す。compose の
       # environment: は明示的な列挙なので、自分のプラグインの分はここに足すこと。
@@ -62,10 +62,14 @@ services:
       - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
     # 本体のバンカーはアカウントを Postgres に保存し、event_logger を置けば
     # イベントも同じ Postgres に保存する。Postgres が落ちていても本体は起動し、
-    # バンカーはアカウントの読み込みを再試行し続ける（監視とプラグインは動く）。
+    # バンカーは間隔を 5 秒から 2 分まで延ばしながらアカウントの読み込みを再試行する
+    # （監視とプラグインは動く）。
     depends_on:
       postgres:
         condition: service_healthy
+    # 終了コードによらず再起動する。設定の不備（ACCOUNT_MASTER_KEY が空など）で
+    # 終了したときは、docker が間隔を延ばしながら再起動を繰り返し、そのたびに
+    # 理由の 1 行が出る。
     restart: unless-stopped
 
   postgres:
