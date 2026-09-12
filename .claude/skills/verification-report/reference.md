@@ -85,11 +85,6 @@ docker run --rm -v "$W/plugins-src/event_logger:/src:ro" -v "$W/plugins/event_lo
 ### 起動時の確認
 
 ```sh
-# 廃止した変数（env-file ではコンテナーに届かない）
-./dc.sh run -d --no-deps --name nns-verify-deprecated -e ACCOUNT_KEYS=deprecated-marker \
-  -e BUNKER_SECRET=deprecated-marker -e ADMIN_PORT= nostr-no-su
-sleep 12; docker logs nns-verify-deprecated > log-deprecated.txt; docker rm -f nns-verify-deprecated
-
 # DATABASE_URL はパスワードを伏せて表示する
 docker exec nns-verify-nostr-no-su-1 printenv DATABASE_URL | sed -E 's#//([^:]+):[^@]+@#//\1:***@#'
 
@@ -303,9 +298,9 @@ gh issue create -R neverclear86/nostr-no-su --title "動作確認レポート: .
 ...
 EOF
 gh issue comment <番号> -R neverclear86/nostr-no-su --body-file - \
-  --attach ./01-disabled-nokey.png --attach ./04-dashboard-accounts.png <<'EOF'
+  --attach ./03-dashboard-empty.png --attach ./04-dashboard-accounts.png <<'EOF'
 ...
-![マスターキーが無いときのダッシュボード](./01-disabled-nokey.png)
+![アカウント 0 件のダッシュボード](./03-dashboard-empty.png)
 ...
 EOF
 ```
