@@ -106,7 +106,7 @@ T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # 操作の前に記録する
 スクラッチパッドで `bun add nostr-tools@2.23.9 playwright-core@1.63.0` を実行し、スクリプトは node で動かす。
 playwright-core はリポジトリの `package.json` と同じ版にする。
 ブラウザーはキャッシュ済みの chromium を直接指定する。
-キャッシュ（`~/.cache/ms-playwright`）に無ければ、スクラッチパッドで `npx playwright-core install chromium` を実行して、その版の chromium をキャッシュに入れる。
+キャッシュ（`~/.cache/ms-playwright`）に無ければ、スクラッチパッドで `env -u PLAYWRIGHT_BROWSERS_PATH npx playwright-core install chromium` を実行して、その版の chromium をキャッシュに入れる（`PLAYWRIGHT_BROWSERS_PATH` があると、その場所に入る）。
 
 ```js
 import { chromium } from "playwright-core";

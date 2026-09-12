@@ -110,6 +110,8 @@ async function copy(page) {
     .then(() => true, () => false);
 }
 
+// 画面の応答の content-type が始まるべき値。
+const htmlType = "text/html";
 // 期待と違った画面の、最後に stderr へ出す行。
 const unexpected = [];
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM, headless: true });
@@ -139,8 +141,8 @@ try {
         console.log(`${status} ${file}${copied}`);
         // ルートに当たらないパスの 404 は wisp の text/plain なので、HTML であることも比べて
         // 画面の 404 と区別する。
-        if (status !== expected || !type.startsWith("text/html")) {
-          unexpected.push(`${status} ${type} (expected ${expected} text/html) ${file}`);
+        if (status !== expected || !type.startsWith(htmlType)) {
+          unexpected.push(`${status} ${type} (expected ${expected} ${htmlType}) ${file}`);
         }
       }
       await context.close();
