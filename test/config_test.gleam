@@ -1,4 +1,5 @@
 import envoy
+import exception
 import gleam/dict
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -36,29 +37,30 @@ pub fn pick_bunker_relays_defaults_when_nothing_configured_test() {
   assert config.pick_bunker_relays([], []) == ["wss://relay.damus.io"]
 }
 
-/// 環境変数を一時的に設定して `run` を実行し、終了後に元の値へ戻す。設定と復元を
-/// 1 か所にまとめることで、テストごとに散らばる後始末と、その書き忘れを防ぐ。
+/// 環境変数を一時的に設定して `run` を実行し、終了後に元の値へ戻す。`run` が
+/// assert の失敗などでクラッシュしても、戻してからそのクラッシュを伝える。設定と
+/// 復元を 1 か所にまとめることで、テストごとに散らばる後始末と、その書き忘れを防ぐ。
 fn with_env(name: String, value: String, run: fn() -> a) -> a {
-  let restore = envoy.get(name)
+  let previous = envoy.get(name)
   envoy.set(name, value)
-  let result = run()
-  case restore {
-    Ok(previous) -> envoy.set(name, previous)
-    Error(Nil) -> envoy.unset(name)
-  }
-  result
+  exception.defer(fn() { restore_env(name, previous) }, run)
 }
 
-/// 環境変数を一時的に未設定にして `run` を実行し、終了後に元の値へ戻す。
+/// 環境変数を一時的に未設定にして `run` を実行し、終了後に元の値へ戻す。`run` が
+/// クラッシュしても戻す。
 fn without_env(name: String, run: fn() -> a) -> a {
-  let restore = envoy.get(name)
+  let previous = envoy.get(name)
   envoy.unset(name)
-  let result = run()
-  case restore {
-    Ok(previous) -> envoy.set(name, previous)
-    Error(Nil) -> Nil
+  exception.defer(fn() { restore_env(name, previous) }, run)
+}
+
+/// 環境変数を、`envoy.get` で読んだ時点の状態に戻す。値があれば設定し、無ければ
+/// 未設定にする。
+fn restore_env(name: String, previous: Result(String, Nil)) -> Nil {
+  case previous {
+    Ok(value) -> envoy.set(name, value)
+    Error(Nil) -> envoy.unset(name)
   }
-  result
 }
 
 /// 指定した環境変数をすべて設定して読み込んだ設定。読み込みを終えた時点で環境
@@ -296,4 +298,40 @@ pub fn bunker_filter_test() {
       p_tags: Some(["pk1", "pk2"]),
       since: Some(1000),
     )
+}
+
+/// 復元の検査に使う、他のテストが読まない環境変数の名前。
+const scratch_env = "NOSTR_NO_SU_TEST_SCRATCH"
+
+/// `scratch_env` を `initial` の状態にしてから、`wrap` の中で assert をわざと
+/// 失敗させ、その後の `scratch_env` の値を返す。検査の後は未設定に戻す。
+fn scratch_env_after_failed_assert(
+  initial: Option(String),
+  wrap: fn(fn() -> Nil) -> Nil,
+) -> Result(String, Nil) {
+  case initial {
+    Some(value) -> envoy.set(scratch_env, value)
+    None -> envoy.unset(scratch_env)
+  }
+  let assert Error(_) =
+    exception.rescue(fn() {
+      use <- wrap
+      assert envoy.get(scratch_env) == Ok("unreachable")
+    })
+  let after = envoy.get(scratch_env)
+  envoy.unset(scratch_env)
+  after
+}
+
+/// `with_env` の中で assert が失敗しても、環境変数は設定前の状態に戻る。
+pub fn with_env_restores_after_a_failed_assert_test() {
+  let wrap = with_env(scratch_env, "during", _)
+  assert scratch_env_after_failed_assert(Some("before"), wrap) == Ok("before")
+  assert scratch_env_after_failed_assert(None, wrap) == Error(Nil)
+}
+
+/// `without_env` の中で assert が失敗しても、環境変数は元の値に戻る。
+pub fn without_env_restores_after_a_failed_assert_test() {
+  let wrap = without_env(scratch_env, _)
+  assert scratch_env_after_failed_assert(Some("before"), wrap) == Ok("before")
 }
