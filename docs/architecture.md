@@ -132,7 +132,7 @@ sequenceDiagram
     participant plugin as プラグイン
 
     relay->>client: EVENT（WebSocket）
-    Note over client: id を計算し直して<br/>一致しないものは捨てる
+    Note over client: id と署名を確かめて<br/>合わないものは捨てる
     client->>handler: 検証済みイベント
     Note over handler: kind 24133 は<br/>ここで落とす
     handler->>dedup: Incoming(event)
@@ -217,9 +217,10 @@ sequenceDiagram
 
     client->>relay: kind 24133（NIP-44 で暗号化）
     relay->>rc: EVENT
+    Note over rc: id と署名を確かめて<br/>合わないものは捨てる
     rc->>bk: Incoming(event)
     bk->>eng: リクエストと現在時刻、乱数
-    Note over eng: kind、受付ウィンドウ、<br/>起動時刻、宛先、署名、<br/>処理済みの id を検査
+    Note over eng: kind、受付ウィンドウ、<br/>起動時刻、宛先、<br/>処理済みの id を検査
     alt method が connect
         Note over eng: secret 一致、または<br/>承認済みの組なら ack
         opt どちらでもない
@@ -244,7 +245,9 @@ sequenceDiagram
     relay->>client: 応答
 ```
 
-判断はすべて `engine` に置いてある。
+イベントの id と署名は、受信した接続のプロセス（`relay_client`）が確かめる。
+署名の検証は 1 件あたりミリ秒単位で、バンカーのアクターの中で行うと、署名の無いイベントを送り続けるだけで承認や一覧を含むすべての処理が止まるためである。
+`engine` が受け取る `event.Verified` は `event.verify` でしか作れず、それ以外の判断はすべて `engine` に置いてある。
 アクターが持つのはセッション状態と、乱数や現在時刻のような外界からの入力だけである。
 リレークライアントは切断のたびに再起動されるため、セッション状態をそこに置けない。
 
