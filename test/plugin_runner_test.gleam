@@ -34,13 +34,24 @@ fn start_runner(
   limits: plugin_runner.Limits,
 ) -> Name(plugin_runner.Msg) {
   let name = process.new_name("test_plugin_runner")
+  start_named_runner(name, handle, limits)
+  name
+}
+
+/// 指定した `handle` を持つプラグインのランナーを、呼び出し側が作った名前で
+/// 起動する。ランナーより先に名前へ送るテストが使う。
+fn start_named_runner(
+  name: Name(plugin_runner.Msg),
+  handle: fn(Event) -> Nil,
+  limits: plugin_runner.Limits,
+) -> Nil {
   let assert Ok(_started) =
     plugin_runner.start(
       name,
       plugin.Plugin(name: "runner_test", children: [], handle: handle),
       limits,
     )
-  name
+  Nil
 }
 
 /// イベントを指定した件数だけランナーへ送る。
@@ -312,14 +323,11 @@ pub fn dispatch_counts_events_while_the_runner_is_missing_test() {
   let missing = plugin_runner.dispatch(missing, test_event("missed"))
   assert missing == [Target(plugin: "runner_test", name: name, undelivered: 2)]
 
-  let assert Ok(_started) =
-    plugin_runner.start(
-      name,
-      plugin.Plugin(name: "runner_test", children: [], handle: fn(incoming) {
-        process.send(handled, incoming.id)
-      }),
-      limits,
-    )
+  start_named_runner(
+    name,
+    fn(incoming) { process.send(handled, incoming.id) },
+    limits,
+  )
   assert plugin_runner.dispatch(missing, test_event("delivered"))
     == [plugin_runner.target("runner_test", name)]
   assert process.receive(handled, 1000) == Ok("delivered")
