@@ -9,11 +9,14 @@ import envoy
 import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic/decode
-import gleam/erlang/process.{type Name}
+import gleam/erlang/process.{type Name, type Pid}
 import gleam/io
 import gleam/list
+import gleam/option.{None}
 import gleam/result
 import gleam/string
+import nostr_no_su
+import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/vault.{
@@ -83,9 +86,10 @@ pub fn constraint_details_are_not_described_test() {
   assert !string.contains(described, "message-marker")
 }
 
-/// 書き込まれていることがある失敗は期限切れだけで、他の失敗は書き込まれていない。
-pub fn only_a_timeout_may_have_been_written_test() {
+/// 書き込まれていることがある失敗は期限切れと例外だけで、他の失敗は書き込まれていない。
+pub fn only_a_timeout_or_an_exception_may_have_been_written_test() {
   assert account_store.may_have_been_written(account_store.TimedOut)
+  assert account_store.may_have_been_written(account_store.Raised("x"))
   assert !account_store.may_have_been_written(account_store.Unavailable)
   assert !account_store.may_have_been_written(account_store.AlreadyRegistered)
   assert !account_store.may_have_been_written(account_store.NotRegistered)
@@ -115,6 +119,70 @@ pub fn loading_from_an_unreachable_database_is_a_value_test() {
     )
     |> result.replace(Nil)
     == Error(account_store.Unavailable)
+}
+
+/// プールのプロセスが無いときのスキーマの用意と書き込みは、例外にならず
+/// `Unavailable` を返す。pgo はチェックアウトで呼び出し側を exit させるので、
+/// クエリーは送られていない。
+pub fn schema_and_writes_on_a_missing_pool_are_unavailable_test() {
+  let db = pog.named_connection(process.new_name("account_store_test_missing"))
+  let key = random_master_key()
+  let entry = random_entry("missing")
+  let pubkey = account.pubkey_hex(entry.account)
+  let timeouts = account_store.default_timeouts
+  assert account_store.ensure_schema(db, timeouts)
+    == Error(account_store.Unavailable)
+  assert account_store.insert(db, key, entry, timeouts)
+    == Error(account_store.Unavailable)
+  assert account_store.delete(db, pubkey, timeouts)
+    == Error(account_store.Unavailable)
+  assert account_store.update_secret(db, key, pubkey, "x", timeouts)
+    == Error(account_store.Unavailable)
+  assert account_store.update_label(db, pubkey, "x", timeouts)
+    == Error(account_store.Unavailable)
+}
+
+/// pog が写せないエラーで `pog.execute` が例外を投げた書き込みは、例外にならず、
+/// 例外のクラスと発生箇所だけを持つ `Raised` を返す。
+pub fn an_unmapped_pog_error_is_reported_with_its_location_test() {
+  let db = pog.named_connection(start_resetting_pool())
+  let key = random_master_key()
+  let entry = random_entry("resetting")
+  let pubkey = account.pubkey_hex(entry.account)
+  let timeouts = account_store.default_timeouts
+  let raised = account_store.Raised("error in pog_ffi:convert_error/1")
+  assert account_store.insert(db, key, entry, timeouts) == Error(raised)
+  assert account_store.delete(db, pubkey, timeouts) == Error(raised)
+  assert account_store.update_secret(db, key, pubkey, "x", timeouts)
+    == Error(raised)
+  assert account_store.update_label(db, pubkey, "x", timeouts) == Error(raised)
+  assert account_store.describe(raised)
+    == "the database client raised an exception: error in pog_ffi:convert_error/1"
+}
+
+/// プールのプロセスが無いときの追加では、`pog.execute` が例外を投げてもバンカー
+/// アクターは落ちず、`NotApplied` を返して続く問い合わせに応答する。
+pub fn a_write_to_a_missing_pool_is_not_applied_test() {
+  let #(name, pid) =
+    start_bunker(process.new_name("account_store_test_missing"))
+  let entry = random_entry("missing")
+  assert bunker.add_account(name, entry.account, entry.label)
+    == Error(
+      bunker.NotApplied(account_store.describe(account_store.Unavailable)),
+    )
+  assert bunker.accounts(name) == Ok([])
+  stop(pid)
+}
+
+/// pog が写せないエラーで `pog.execute` が例外を投げた追加では、バンカーアクターは
+/// 落ちず、`MaybeApplied` を返し、読み直してから続く問い合わせに応答する。
+pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
+  let #(name, pid) = start_bunker(start_resetting_pool())
+  let entry = random_entry("resetting")
+  assert bunker.add_account(name, entry.account, entry.label)
+    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+  assert bunker.accounts(name) == Ok([])
+  stop(pid)
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
@@ -297,3 +365,46 @@ WHERE pubkey = $1",
 fn contains_bytes(haystack: BitArray, needle: BitArray) -> Bool {
   string.contains(hex.encode(haystack), hex.encode(needle))
 }
+
+/// 書き込みを `pool` への実際のストアの操作で行い、読み込みは常に空を返す
+/// バンカーアクターを起動し、その名前と pid を返す。アクターはテストプロセスに
+/// リンクされるので、アクターが落ちればテストも落ちる。
+fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
+  let name = process.new_name("account_store_test_bunker")
+  let store =
+    bunker.Store(
+      ..nostr_no_su.account_store_operations(
+        pool,
+        random_master_key(),
+        account_store.default_timeouts,
+      ),
+      load: fn() { Ok(vault.Loaded(accounts: [], skipped: [])) },
+    )
+  let assert Ok(started) =
+    bunker.start(
+      name,
+      bunker.Settings(store:, auth_url: None, retry_delay_ms: 100),
+      fn() { Nil },
+    )
+  #(name, started.pid)
+}
+
+/// テストで起動したアクターを、テストプロセスを巻き込まずに止める。
+fn stop(pid: Pid) -> Nil {
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// チェックアウトの要求に `{error, econnreset}` で答える偽のプールを起動し、その
+/// 名前を返す。このプールへの `pog.execute` は `function_clause` を投げる
+/// （`test/support/resetting_pool.erl`）。状態を持たず、名前はテストごとに一意なので
+/// 止めない。
+fn start_resetting_pool() -> Name(pog.Message) {
+  let name = process.new_name("account_store_test_resetting")
+  let _pool = resetting_pool_start(name)
+  name
+}
+
+/// `test/support/resetting_pool.erl` の `start/1`。
+@external(erlang, "resetting_pool", "start")
+fn resetting_pool_start(name: Name(pog.Message)) -> Pid
