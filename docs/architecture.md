@@ -510,8 +510,9 @@ nostr-no-su/
 │       ├── random.gleam          推測されては困る値のための乱数
 │       └── time.gleam            現在時刻（FFI）
 │
-├── test/                         本体のテスト（gleeunit）
-│   └── support/                  テスト用の fixture
+├── test/                         本体のテスト（gleeunit と qcheck）
+│   ├── support/                  テスト用の fixture
+│   └── vectors/                  BIP-340 と NIP-44 の公式テストベクター（取得元のまま）
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
 ├── priv/static/                  ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
