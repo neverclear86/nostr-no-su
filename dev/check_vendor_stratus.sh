@@ -40,7 +40,8 @@ tar -xzf "$tmp/contents.tar.gz" -C "$tmp/a"
 (cd "$tmp/a" && rm -r include src/stratus.app.src src/stratus.erl src/stratus@*.erl)
 
 for patch_file in "$vendor"/patches/*.patch; do
-  patch --quiet --strip=1 --fuzz=0 --directory="$tmp/a" --input="$patch_file"
+  # 行の位置がずれて当たったときに .orig のバックアップを作らせない（作ると差分に出る）。
+  patch --quiet --strip=1 --fuzz=0 --no-backup-if-mismatch --directory="$tmp/a" --input="$patch_file"
 done
 
 cp -R "$vendor" "$tmp/b"
