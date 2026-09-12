@@ -113,3 +113,39 @@ jobs:
       # 成果物が組めることまで見る。plugins/ に置く成果物はここではなく、
       # 本体と同じ docker イメージの中で作る（plugins-src/event_logger/README.md）。
       - run: gleam export erlang-shipment
+
+  # プラグインの README のビルド手順が、非 root の利用者が貼ったとおりに最後まで通ることと、
+  # event_logger の成果物にビルド環境の違いが混ざらないことを確かめる。ビルドは本体と同じ
+  # gleam のイメージの中で行うので、ランナーに elixir があるかどうかに左右されない。
+  plugin-readme-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # 各 README の「## ビルド」の最初の sh ブロックを、リポジトリーのルートでそのまま
+      # 実行する。書き写さないのは README と CI の手順をずらさないため。ランナーは非 root
+      # なので、成果物を root 所有にする手順は続く chmod が EPERM で落ちる。
+      - name: プラグインの README のビルド手順を実行する
+        run: |
+          set -eu
+          for readme in plugins-src/event_logger/README.md \
+            examples/plugins/file_logger/README.md examples/plugins/counter/README.md; do
+            awk '/^## / { in_section = /^## ビルド$/ }
+                 in_section && /^```sh$/ { in_block = 1; next }
+                 in_block && /^```$/ { exit }
+                 in_block' "$readme" > "$RUNNER_TEMP/build.sh"
+            [ -s "$RUNNER_TEMP/build.sh" ] || { echo "$readme の「## ビルド」に sh ブロックが無い"; exit 1; }
+            sh -eu "$RUNNER_TEMP/build.sh"
+          done
+      # ホストに elixir があると、manifest.toml に無い elixir、mix、logger、eex が同梱される
+      # （plugins-src/event_logger/README.md の「ビルド」）。.beam の数は共有パッケージの版を
+      # 上げるたびに変わるので、同梱したアプリの名前を manifest.toml と突き合わせる。
+      # manifest.toml には同梱されない dev の依存（gleeunit、envoy）も載るので、包含で比べる。
+      - name: event_logger の成果物に manifest.toml に無いアプリが無いことを確かめる
+        run: |
+          set -eu
+          export LC_ALL=C
+          test -f plugins/event_logger/event_logger/ebin/event_logger.beam
+          allowed=$( { echo event_logger; grep -o '^  { name = "[^"]*"' plugins-src/event_logger/manifest.toml | cut -d '"' -f 2; } | sort)
+          bundled=$(find plugins/event_logger -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+          extra=$(comm -13 <(echo "$allowed") <(echo "$bundled"))
+          [ -z "$extra" ] || { echo "manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }

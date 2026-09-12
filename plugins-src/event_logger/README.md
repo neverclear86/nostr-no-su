@@ -8,6 +8,8 @@
 
 ## ビルド
 
+<!-- この節の最初の sh ブロックは、CI（.github/workflows/test.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
+
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
 
 - **OTP が違う BEAM はローダーが `badfile` で拒否する。**
@@ -15,16 +17,18 @@
 
 ```sh
 mkdir -p plugins/event_logger
-docker run --rm \
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD/plugins-src/event_logger:/src:ro" \
   -v "$PWD/plugins/event_logger:/out" \
   ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
-  sh -c 'cp -r /src /work && rm -rf /work/build && cd /work && gleam deps download \
+  sh -c 'cp -r /src /tmp/work && rm -rf /tmp/work/build && cd /tmp/work && gleam deps download \
          && gleam export erlang-shipment && cp -r build/erlang-shipment/. /out/'
 chmod -R a+rX plugins
 ```
 
-`/src` は読み取り専用でマウントするので、一度 `/work` へ複写してからビルドする。**複写したあとに `build/` を消すのを忘れないこと。** ローカルで一度ビルドしていると、Elixir 一式を含むホスト側の成果物がそのままコンテナーへ持ち込まれる。ローカルの `gleam export erlang-shipment` はスモークテストであって、その出力を `plugins/` に置いてはならない。
+`/src` は読み取り専用でマウントするので、一度 `/tmp/work` へ複写してからビルドする。**複写したあとに `build/` を消すのを忘れないこと。** ローカルで一度ビルドしていると、Elixir 一式を含むホスト側の成果物がそのままコンテナーへ持ち込まれる。ローカルの `gleam export erlang-shipment` はスモークテストであって、その出力を `plugins/` に置いてはならない。
+
+コンテナーは `--user` でホストの利用者として動かす。root で動かすと成果物が root 所有になり、非 root の利用者が続く `chmod` を実行すると EPERM で止まる。この手順は、コンテナーの uid がホストの uid と一致する構成（rootful の docker、Docker Desktop）を前提にする。この利用者はイメージの `/` に書けない（`HOME` も `/` になる）ので、複写先を誰でも書ける `/tmp` の下（`/tmp/work`）に置き、`gleam deps download` がキャッシュを置く `HOME` を `/tmp` にする。
 
 ## 置き方
 
