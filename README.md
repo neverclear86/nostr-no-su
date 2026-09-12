@@ -33,6 +33,17 @@ BUNKER_RELAY_URL=wss://relay.nsec.app,wss://relay.nostr.band \
 gleam run
 ```
 
+docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーだけである:
+
+```sh
+[ -e .env ] || cp .env.example .env
+chmod 600 .env
+# .env の ACCOUNT_MASTER_KEY= の後に、上の openssl rand -hex 32 の出力を書く
+docker compose up --build
+```
+
+すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。ほかの変数の既定値と書き方は `.env.example` のコメントにある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーを書く `.env` をホストのほかのユーザーから読めないようにする。
+
 起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
 
 アカウントは管理 UI（次節）から登録する。
@@ -145,6 +156,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 **`DATABASE_URL` は意味を変えて復活した。** PR #34 より前はイベント保存の設定だったが、イベント保存は外部プラグイン `event_logger` になり、設定も `PLUGIN_EVENT_LOGGER_DATABASE_URL` へ移った（`PLUGIN_<NAME>_<KEY>` の規則）。現在の `DATABASE_URL` は **本体のバンカーがアカウントを保存する先** である。旧構成の `.env` をそのまま使うと、イベント保存用だった URL がアカウントストアの接続先として読まれ、同じ DB に `bunker_accounts` テーブルが作られる（害は無いが、意図と違うなら値を見直すこと）。**`PLUGIN_EVENT_LOGGER_DATABASE_URL` の空文字列の意味も旧 `DATABASE_URL` と違う。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は空値が落ちてプラグインにはキーごと届かないため、設定不足として拒否され起動のたびに 1 行出る。**イベント保存を無効にする正しいやり方は、プラグインを置かないことである。**
 
 ### 環境変数
+
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`.env` で変える変数の既定値と書き方は `.env.example` にある。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
