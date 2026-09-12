@@ -172,8 +172,10 @@ pub fn ensure_schema(
 /// 全体を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で打ち切る（期限は
 /// pgo のプールが接続を閉じることで効くので、DB が応答しなくなっても待ちはこの値に
 /// 収まる）。ロックの待ちもサーバー側で同じ値に抑える。期限で打ち切られたら
-/// `TimedOut`、接続を得られなければ `Unavailable` を返す。`pool` を名前で受け取るのは、
-/// 期限つきのトランザクションをプールの名前で開くためである。
+/// `TimedOut`、接続を得られなければ `Unavailable` を返す。トランザクションの中の
+/// クエリーで `pog.execute` が例外を投げたら、発生箇所を持つ `Raised` を返す
+/// （`execute`）。`pool` を名前で受け取るのは、期限つきのトランザクションをプールの
+/// 名前で開くためである。
 pub fn load(
   pool: Name(pog.Message),
   key: MasterKey,
