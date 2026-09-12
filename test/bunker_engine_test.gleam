@@ -10,6 +10,7 @@ import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
   account_for, connect_body, decrypt_response, request_event,
 }
+import support/signed_event
 
 const secret = "s3cr3t-token"
 
@@ -65,7 +66,7 @@ fn handle_after(
 ) -> #(engine.Engine, engine.Outcome) {
   engine.handle_event(
     state,
-    incoming,
+    signed_event.verified(incoming),
     engine.Inputs(now: now, token: token, not_before: not_before),
   )
 }
@@ -240,33 +241,6 @@ pub fn replay_ignored_test() {
   let assert Reply(_) = first
   let #(_state, second) = handle(state, request, 1000)
   let assert Duplicate = second
-}
-
-/// 署名の検証に失敗したリクエストは無視される。
-pub fn tampered_signature_ignored_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let request =
-    request_event(client, signer, "{\"id\":\"x\",\"method\":\"ping\"}", 1000)
-  let tampered = Event(..request, sig: flip_last_hex(request.sig))
-  let #(_state, outcome) = handle(new_engine(), tampered, 1000)
-  let assert Ignore(reason) = outcome
-  assert string.contains(reason, "signature")
-}
-
-/// 署名の検証は重複排除より先に行う。署名の壊れたイベントは `seen` に残らない
-/// ため、同じ id を持つ正当なリクエストが後から届いても処理される。
-pub fn an_invalid_signature_is_not_recorded_as_seen_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let request =
-    request_event(client, signer, connect_body(signer, secret, "c1"), 1000)
-  // 署名だけを壊す。id は content から決まるので変わらない。
-  let tampered = Event(..request, sig: flip_last_hex(request.sig))
-  let #(state, ignored) = handle(new_engine(), tampered, 1000)
-  let assert Ignore(_) = ignored
-  let #(_state, outcome) = handle(state, request, 1000)
-  let assert Reply(_) = outcome
 }
 
 /// p タグが複数あっても、既知のアカウントに一致するものへルーティングする。
@@ -649,7 +623,12 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
   let #(state, outcome) =
     engine.handle_event(
       state,
-      request_event(client, signer, connect_body(signer, "", "c2"), 1001),
+      signed_event.verified(request_event(
+        client,
+        signer,
+        connect_body(signer, "", "c2"),
+        1001,
+      )),
       engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
   let assert Reply(_) = outcome
@@ -754,17 +733,6 @@ pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
 
 // --- ヘルパー ---
 
-/// 末尾 1 文字だけを変えた同じ 16 進文字列。
-fn flip_last_hex(hex: String) -> String {
-  let head = string.drop_end(hex, 1)
-  let last = string.slice(hex, string.length(hex) - 1, 1)
-  let replacement = case last {
-    "0" -> "1"
-    _ -> "0"
-  }
-  head <> replacement
-}
-
 /// JSON-RPC 応答の "result" フィールド用のデコーダー。
 fn result_decoder() -> decode.Decoder(String) {
   use result <- decode.field("result", decode.string)
@@ -836,7 +804,7 @@ fn connect_for_approval(
   let #(state, outcome) =
     engine.handle_event(
       state,
-      connect_event(client, signer, "", now),
+      signed_event.verified(connect_event(client, signer, "", now)),
       engine.Inputs(now: now, token: approval_token, not_before: 0),
     )
   let assert Reply(_) = outcome

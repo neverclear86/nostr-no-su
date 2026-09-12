@@ -18,7 +18,7 @@ import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/dedup/window
 import nostr_no_su/hex
-import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/nostr/event.{type Event, type Verified, Event}
 
 /// クライアントの時刻ずれを許容するため、現在時刻から前後この秒数以内の
 /// リクエストを受け付ける。
@@ -315,13 +315,15 @@ fn respond(
   #(engine, reply)
 }
 
-/// 受信イベント 1 件を処理する。検証・重複排除・ルーティングを行い、送信すべき
-/// 応答があれば生成する。
+/// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
+/// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
+/// `event.verify` で確かめてあり、エンジンは検証しない。
 pub fn handle_event(
   engine: Engine,
-  incoming: Event,
+  verified: Verified,
   inputs: Inputs,
 ) -> #(Engine, Outcome) {
+  let incoming = event.verified_event(verified)
   case accept(engine, incoming, inputs) {
     Error(outcome) -> #(engine, outcome)
     Ok(#(engine, account, secret)) ->
@@ -330,10 +332,9 @@ pub fn handle_event(
 }
 
 /// 受信イベントを受理するかどうかを、kind・受付ウィンドウ・アクターの起点・
-/// ルーティング・署名・重複の順に判定する。署名の検証を重複排除より先に置くのは、
-/// `seen` に残るのを正当なリクエストだけに限るため。誰でも作れる署名なしの
-/// イベントで記憶領域を埋められてはならない。受理したイベントの id は記録して
-/// 返す。
+/// ルーティング・重複の順に判定する。署名は接続のプロセスで確かめてあるので、
+/// `seen` に残るのは署名の正しいイベントの id だけである。受理したイベントの id
+/// は記録して返す。
 fn accept(
   engine: Engine,
   incoming: Event,
@@ -353,10 +354,6 @@ fn accept(
   )
   use #(account, secret) <- result.try(
     route(engine, incoming.tags) |> result.map_error(Ignore),
-  )
-  use <- bool.guard(
-    !event.verify_signature(incoming),
-    Error(Ignore("invalid signature")),
   )
   use seen <- result.map(
     window.insert(engine.seen, incoming.id) |> result.replace_error(Duplicate),

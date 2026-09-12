@@ -68,7 +68,7 @@ import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/nostr/event.{type Event, type Verified}
 import nostr_no_su/random
 import nostr_no_su/time
 
@@ -195,8 +195,9 @@ pub type Listing {
 
 /// バンカーアクターが受け取るメッセージ。
 pub type Msg {
-  /// バンカー接続のいずれかで受信した kind 24133 イベント。
-  Incoming(event: Event)
+  /// バンカー接続のいずれかで受信したイベント。id と署名は接続のプロセスで
+  /// 確かめてある。
+  Incoming(event: Verified)
   /// 1 本のリレー接続で応答イベントを送信するための関数を登録する。各接続
   /// アクターは再接続のたびに `on_connect` からこれを送り直すため、応答は生きた
   /// ソケットから出ていく。応答はすべてのバンカーリレーへ送信する。クライアント

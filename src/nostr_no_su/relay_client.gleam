@@ -123,14 +123,15 @@ pub fn new_subscription_state() -> SubscriptionState {
   SubscriptionState(open: set.new(), retry: None, next_generation: 1)
 }
 
-/// 指定のリレーに接続し、指定の購読を開き、検証済みイベントを `handle_event`
-/// へ渡す。`retry_delay_ms` は購読の定義を得られなかったときの再試行の間隔。
-/// 接続アクターは呼び出し元にリンクされるため呼び出し元と一緒に死に、exit を
-/// trap している呼び出し元にはその死がメッセージとして届く。
+/// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
+/// `handle_event` へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay_ms`
+/// は購読の定義を得られなかったときの再試行の間隔。接続アクターは呼び出し元に
+/// リンクされるため呼び出し元と一緒に死に、exit を trap している呼び出し元には
+/// その死がメッセージとして届く。
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
-  handle_event: fn(event.Event) -> Nil,
+  handle_event: fn(event.Verified) -> Nil,
   retry_delay_ms: Int,
 ) -> Result(Client, String) {
   use req <- result.try(
@@ -331,19 +332,27 @@ fn describe_outgoing(outgoing: message.ClientMessage) -> String {
   }
 }
 
-/// リレーメッセージを 1 件デコードする。検証済みイベントは `handle_event` へ
-/// 渡し、それ以外は送信元のリレー名を添えてログ出力する。
-fn handle_text(
+/// リレーメッセージを 1 件デコードする。EVENT は `event.verify` で id と署名を
+/// 確かめ、通ったものだけを `handle_event` へ渡す。落としたイベントとそれ以外の
+/// メッセージは、送信元のリレー名を添えてログ出力する。`start` の受信ループが
+/// 呼ぶほか、テストが直接呼ぶ。
+pub fn handle_text(
   prefix: String,
   text: String,
-  handle_event: fn(event.Event) -> Nil,
+  handle_event: fn(event.Verified) -> Nil,
 ) -> Nil {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
-      case event.compute_id(received) == received.id {
-        True -> handle_event(received)
-        False ->
-          log.println(prefix, "dropped event with invalid id: " <> received.id)
+      case event.verify(received) {
+        Ok(verified) -> handle_event(verified)
+        Error(error) ->
+          log.println(
+            prefix,
+            "dropped event with "
+              <> describe_verify_error(error)
+              <> ": "
+              <> received.id,
+          )
       }
     Ok(message.RelayEose(subscription)) ->
       log.println(prefix, "end of stored events for " <> subscription)
@@ -362,5 +371,13 @@ fn handle_text(
         prefix,
         "unrecognised message: " <> string.slice(text, 0, 120),
       )
+  }
+}
+
+/// 検証で落としたイベントのログに出す理由。
+fn describe_verify_error(error: event.VerifyError) -> String {
+  case error {
+    event.InvalidId -> "invalid id"
+    event.InvalidSignature -> "invalid signature"
   }
 }
