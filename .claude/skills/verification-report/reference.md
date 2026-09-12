@@ -62,13 +62,16 @@ services:
 
 README のテストの手順（5433）と重ならないポートにする。
 `docker run` が失敗したときに別の Postgres へつながないよう、`&&` でつなぐ。
+コンテナーが止まっていると `docker exec` が失敗し続け、`until` が終わらない。
+待つ時間は `timeout` で 60 秒までにする。
+イメージの `/var/lib/postgresql/data` は名前の無い volume になるので、`docker rm` に `-v` を付けて一緒に消す。
 
 ```sh
 docker run -d --name nns-verify-testpg -p 127.0.0.1:5533:5432 \
     -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine \
-  && until docker exec nns-verify-testpg pg_isready -h 127.0.0.1 -U postgres -d nostr_no_su_test; do sleep 1; done \
+  && timeout 60 sh -c 'until docker exec nns-verify-testpg pg_isready -h 127.0.0.1 -U postgres -d nostr_no_su_test; do sleep 1; done' \
   && (cd "$W" && TEST_DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5533/nostr_no_su_test gleam test)
-docker rm -f nns-verify-testpg
+docker rm -f -v nns-verify-testpg
 ```
 
 ### event_logger のビルドと起動
