@@ -8,7 +8,8 @@
 | 対象 | 中身 | 失ったとき |
 | --- | --- | --- |
 | `bunker_accounts` | 公開鍵、ラベル、暗号化した秘密鍵と接続 secret | 全アカウントを登録し直す必要があり、`bunker://` URI の secret も変わる |
-| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
+| `monitor_resume` | 監視の購読の再開点（リレーごとの `since`） | 失うと次の購読が保存済みのイベントをすべて求め、`dedup` のウィンドウを超える分がプラグインへもう一度届く |
+| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
 | `events` | `event_logger` が保存したイベント（このプラグインを置いたときだけ存在する） | プラグインが保存した履歴が失われる |
 | `event_logger_schema_version` | `event_logger` の移行の版 | `events` と対で戻す必要がある |
 | マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（README の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できない |
