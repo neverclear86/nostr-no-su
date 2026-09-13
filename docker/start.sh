@@ -4,8 +4,8 @@
 # `start.sh remsh` で本体の BEAM ノードに入る（docker compose exec から使う）。
 #
 # ノード名を `nostr_no_su@localhost` に固定しているのは、ホスト名（コンテナー
-# ID）だと remsh が Could not connect になるため。/etc/hosts のコンテナー ID
-# は 172.17.0.2 を指すが、分散は 127.0.0.1 にしか bind していない。
+# ID）だと remsh が Could not connect になるため。/etc/hosts のコンテナー ID は
+# コンテナーのネットワークのアドレスを指すが、分散は 127.0.0.1 にしか bind していない。
 #
 # cookie を ~/.erlang.cookie に置かないのは、HOME=/home/nostr が存在せず
 # /home は root 所有、かつルートが read_only で書けないため。/tmp の下に

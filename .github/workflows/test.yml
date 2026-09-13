@@ -253,18 +253,15 @@ jobs:
             echo "ADMIN_PORT 未設定でも healthcheck が待ち受けを叩かずに成功してしまった"
             exit 1
           fi
-      # 以下 3 つは remsh の口（#211）を確かめる。到達できない DATABASE_URL でも
-      # 本体は起動しバンカーのアクターは登録されるので、Postgres は要らない。
       - name: remsh の検査に共通の docker run 引数を用意する
         run: |
           echo "COMMON_ARGS=--read-only --tmpfs /tmp --cap-drop ALL -e DATABASE_URL=postgres://u:p@127.0.0.1:1/db -e ACCOUNT_MASTER_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e RELAY_URL= -e BUNKER_RELAY_URL=ws://127.0.0.1:1 -e ADMIN_PORT= -e PLUGIN_DIR=" >> "$GITHUB_ENV"
+      # 以下 3 つは remsh の口（#211）を確かめる。到達できない DATABASE_URL でも
+      # 本体は起動しバンカーのアクターは登録されるので、Postgres は要らない。
       - name: REMSH_ENABLED が true / false 以外なら起動しないことを確かめる
         run: |
           set -eu
-          set +e
-          out=$(docker run --rm $COMMON_ARGS -e REMSH_ENABLED=yes nostr-no-su:ci 2>&1)
-          code=$?
-          set -e
+          out=$(docker run --rm $COMMON_ARGS -e REMSH_ENABLED=yes nostr-no-su:ci 2>&1) && code=0 || code=$?
           echo "$out"
           [ "$code" -eq 1 ]
           echo "$out" | grep -q 'REMSH_ENABLED must be true or false'
