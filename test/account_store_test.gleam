@@ -20,13 +20,18 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{
   type MasterKey, type StoredAccount, StoredAccount,
 }
 import nostr_no_su/dedup/resume_store
 import nostr_no_su/hex
+import nostr_no_su/named
+import nostr_no_su/nostr/event
 import nostr_no_su/random
+import nostr_no_su/time
 import pog
+import support/nip46_client
 import support/postgres
 
 /// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
@@ -642,6 +647,190 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// テストのクライアントから署名者宛の `connect`（secret 無し）を検証済みイベント
+/// にする。`bunker.Incoming` の入力に使う。
+fn connect_event(
+  client: account.Account,
+  signer: account.Account,
+  id: String,
+) -> event.Verified {
+  let assert Ok(verified) =
+    event.verify(nip46_client.request_event(
+      client,
+      signer,
+      nip46_client.connect_body(signer, "", id),
+      time.now_seconds(),
+    ))
+  verified
+}
+
+/// `bunker.pending` の 1 件を、対応する DB の行として直接書き込む。#220 の間は
+/// `Incoming` の書き込みが DB に届かないので、承認・拒否の前にこれで補う
+/// （実装プランの決めたこと 4）。
+fn insert_pending_row(db: pog.Connection, entry: engine.Pending) -> Nil {
+  let assert Ok(Nil) =
+    account_store.insert_pending(
+      db,
+      account_store.StoredPending(
+        token: entry.token,
+        signer: entry.signer,
+        client: entry.client,
+        request_id: entry.request_id,
+        perms: entry.perms,
+        secret_mismatch: entry.secret_mismatch,
+        created_at: entry.created_at,
+      ),
+      generous,
+    )
+  Nil
+}
+
+/// `StoredSession` から作成・最終利用時刻を除いた組。行の内容だけを比べるために
+/// 使う。
+fn session_tuple(
+  session: account_store.StoredSession,
+) -> #(String, String, String) {
+  #(session.signer, session.client, session.perms)
+}
+
+/// 実際の Postgres に対する統合テスト。承認・拒否・取り消しが成功したときだけ
+/// `account_store` の行が書かれる（`start_bunker` の経路）。`TEST_DATABASE_URL`
+/// があるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_bunker_session_writes_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  bunker_session_writes(database_url)
+}
+
+fn bunker_session_writes(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  // 移行してから、書き込みが実際のストアの操作を使うアクターを起動する。
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+  let #(name, pid) = start_bunker(pool)
+
+  let entry = random_entry("writes")
+  let signer = entry.account
+  let signer_hex = account.pubkey_hex(signer)
+  assert bunker.add_account(name, signer, entry.label) == Ok(Nil)
+
+  // クライアント 1: 承認。
+  let assert Ok(client1) = account.from_privkey(crypto.strong_random_bytes(32))
+  let client1_hex = account.pubkey_hex(client1)
+  named.send(name, bunker.Incoming(connect_event(client1, signer, "c1")))
+  let assert [pending1] = bunker.pending(name)
+  insert_pending_row(db, pending1)
+  assert bunker.approve(name, pending1.token) == Ok(Nil)
+
+  let assert Ok(after_approve) = account_store.load(pool, key, generous)
+  assert after_approve.pending == []
+  assert list.map(after_approve.sessions, session_tuple)
+    == [#(signer_hex, client1_hex, "")]
+
+  // クライアント 2: 拒否。
+  let assert Ok(client2) = account.from_privkey(crypto.strong_random_bytes(32))
+  named.send(name, bunker.Incoming(connect_event(client2, signer, "c2")))
+  let assert [pending2] = bunker.pending(name)
+  insert_pending_row(db, pending2)
+  assert bunker.deny(name, pending2.token) == Ok(Nil)
+
+  let assert Ok(after_deny) = account_store.load(pool, key, generous)
+  assert after_deny.pending == []
+  assert list.map(after_deny.sessions, session_tuple)
+    == [#(signer_hex, client1_hex, "")]
+
+  // 取り消し。
+  assert bunker.revoke(name, signer_hex, client1_hex) == Ok(Nil)
+  let assert Ok(after_revoke) = account_store.load(pool, key, generous)
+  assert after_revoke.sessions == []
+
+  stop(pid)
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 実際の Postgres に対する統合テスト。`InsertPending` の写しは、`replaced` の
+/// 削除と挿入を 1 トランザクションで行う。`TEST_DATABASE_URL` があるときだけ
+/// 実行する。CI では未設定なら失敗する。
+pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  replacing_a_pending_request_is_one_transaction(database_url)
+}
+
+fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("replacing")
+  let signer_hex = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_replacing_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  insert_pending_row(
+    db,
+    engine.Pending(
+      token: "old",
+      signer: signer_hex,
+      client: "client",
+      request_id: "req-old",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 1,
+    ),
+  )
+  let new_pending =
+    engine.Pending(
+      token: "new",
+      signer: signer_hex,
+      client: "client",
+      request_id: "req-new",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 2,
+    )
+  assert write(engine.InsertPending(pending: new_pending, replaced: ["old"]))
+    == Ok(Nil)
+  let assert Ok(after_replace) = account_store.load(pool, key, generous)
+  assert list.map(after_replace.pending, fn(row) { row.token }) == ["new"]
+
+  // 未登録の署名者への差し替えは外部キー違反で失敗し、削除だけが残らない
+  // （1 トランザクション）。
+  let unregistered_pending =
+    engine.Pending(
+      token: "unregistered",
+      signer: account.pubkey_hex(random_entry("unregistered").account),
+      client: "client",
+      request_id: "req-unregistered",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 3,
+    )
+  let assert Error(bunker.NotWritten(_reason)) =
+    write(
+      engine.InsertPending(pending: unregistered_pending, replaced: ["new"]),
+    )
+
+  let assert Ok(after_failed_replace) = account_store.load(pool, key, generous)
+  assert list.map(after_failed_replace.pending, fn(row) { row.token })
+    == ["new"]
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// セッション A がロックを取り（再入で 2 回とも成功）、セッション B は取れない。
 /// A がロックを手放すと B が取れる。番号は乱数にし、他の統合テストが取る本番の
 /// 番号（`account_store.instance_lock_key`）と衝突しないようにする。A、B は
@@ -844,7 +1033,8 @@ fn contains_bytes(haystack: BitArray, needle: BitArray) -> Bool {
 
 /// 書き込みを `pool` への実際のストアの操作で行い、読み込みは常に空を返す
 /// バンカーアクターを起動し、その名前と pid を返す。アクターはテストプロセスに
-/// リンクされるので、アクターが落ちればテストも落ちる。
+/// リンクされるので、アクターが落ちればテストも落ちる。承認フローを使う
+/// （`auth_url` を `Some` にする）。
 fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
   let name = process.new_name("account_store_test_bunker")
   let store =
@@ -862,7 +1052,7 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
       name,
       bunker.Settings(
         store:,
-        auth_url: None,
+        auth_url: Some(fn(token) { "http://admin.test/approve/" <> token }),
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },

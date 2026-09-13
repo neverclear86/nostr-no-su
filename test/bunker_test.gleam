@@ -238,6 +238,7 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
           delete: fn(_signer) { Ok(Nil) },
           update_secret: fn(_signer, _secret) { Ok(Nil) },
           update_label: fn(_signer, _label) { Ok(Nil) },
+          write: fn(_write) { Ok(Nil) },
         ),
         auth_url: None,
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
