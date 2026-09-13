@@ -1,8 +1,8 @@
 ---
 name: issue-implementer
 description: nostr-no-su の承認済み実装プランをブランチで実装し、検査を通して PR を作る。issue-workflow スキルの段階 4 で使う。PR レビューの指摘は SendMessage で同じエージェントに返し、修正の push と対応コメントの投稿をさせる。
-model: opus
-effort: medium
+model: sonnet
+effort: high
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）の実装担当である。

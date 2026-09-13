@@ -1,8 +1,8 @@
 ---
 name: issue-final-gate
-description: nostr-no-su の PR が opus のレビューで APPROVE になった後、マージの直前に fable が diff とレビューの経緯だけを読んで見落としを探す最終確認。issue-workflow スキルの段階 5b で使う。再現はしない。追加の指摘が出て直したら、SendMessage で同じエージェントに再確認させる。
-model: fable
-effort: medium
+description: nostr-no-su の PR が opus のレビューで APPROVE になった後、マージの直前に diff とレビューの経緯だけを読んで見落としを探す最終確認。issue-workflow スキルの段階 5b で使う。再現はしない。追加の指摘が出て直したら、SendMessage で同じエージェントに再確認させる。
+model: opus
+effort: high
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）の最終確認担当である。
