@@ -32,7 +32,8 @@
 //// 行い、失敗すれば同じく名前なしの subject へ再試行を予約する。読み直しが成功する
 //// までの間はメモリが DB と食い違っていることがあり、その間の変更は起動時の読み込みの
 //// 前と同じく `accounts are not loaded yet` で拒否し、一覧は理由を返す。NIP-46 の処理は
-//// その間もメモリのアカウントで続ける。
+//// その間もメモリのアカウントで続け、`connect` と `logout` の書き込みも行う
+//// （読み直しは積み増さない）。
 ////
 //// 保証するのは次のことである。メモリは、成功した書き込みと成功した読み込みの結果
 //// だけで変わる。結果が曖昧な書き込みの後は、読み直しに成功した時点で、その書き込みの
@@ -58,8 +59,11 @@
 //// の読み直しに移るが、承認待ちとセッションは読み直しでは戻らない（#215）ので
 //// メモリに残ったままになり、利用者はダッシュボードに残った行からやり直せる。
 //// 承認の `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（行はまだ
-//// メモリにあるので、同じトークンで承認し直せる）。NIP-46 の受信イベント自体の
-//// 書き込みはまだ捨てている（#221）。
+//// メモリにあるので、同じトークンで承認し直せる）。NIP-46 の `connect` と `logout` も、
+//// 書き込みが成功したときだけ状態に反映し、応答を発行する。書き込みが失敗したときは
+//// メモリを変えず、`connect` には `connection_not_saved` のエラーを返し、`logout` には
+//// クライアントの後始末を止めないため `ack` を返す。結果が曖昧な書き込みの後は同じ
+//// 読み直しに移る。
 ////
 //// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
 //// 張り直しを依頼する。追加と削除のほか、読み込みの失敗からの復帰でも張り直しが
@@ -465,13 +469,17 @@ type Change {
   LabelUpdated
 }
 
-/// 承認・拒否・取り消しの種類。失敗のログ行の言い回しを決める。
-/// `admin.SessionChange`（`admin.gleam:620-624`）と同じ区分だが、`bunker` は
-/// 管理 UI に依存できないので別に持つ。
+/// 承認・拒否・取り消しと、NIP-46 の `connect`（セッションを開く、承認待ちを
+/// 登録する）と `logout` の書き込みの種類。失敗のログ行の言い回しを決める。前の
+/// 3 つは `admin.SessionChange`（`admin.gleam:620-624`）と同じ区分だが、`bunker`
+/// は管理 UI に依存できないので別に持つ。
 type SessionChange {
   Approval
   Denial
   Revocation
+  SessionOpening
+  PendingRecording
+  SessionClosing
 }
 
 /// OK を待っている応答の一覧。キーは応答 id。
@@ -811,11 +819,16 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         engine.handle_event(state.engine, incoming, inputs)
       let #(published, next) = case outcome {
         engine.Reply(response) -> #(publish(state, response), accepted)
-        // 書き込みはまだ通さず、書けたものとして反映する（#225 で書き込む）
-        engine.Persist(next:, response:, ..) -> #(
-          publish(state, response),
-          next,
-        )
+        engine.Persist(write:, next:, response:, on_failure:) -> {
+          let #(change, target) = incoming_write_change(write)
+          case write_session_change(state, change, target, write) {
+            #(written, Ok(Nil)) -> #(publish(written, response), next)
+            #(written, Error(_failure)) -> #(
+              publish(written, on_failure),
+              accepted,
+            )
+          }
+        }
         engine.Duplicate -> #(state, accepted)
         engine.Ignore(reason) -> {
           log.write(
@@ -1125,8 +1138,9 @@ fn change_line(
 }
 
 /// 読み直しの `LoadAccounts` を積み、読み込めていない状態に移る。読み込み済みの
-/// 状態からだけ呼ぶ想定で、読み込みの系列は 1 本のままになる。`apply_change` の
-/// `MaybeWritten` の枝もこれを使う。
+/// 状態からだけ呼ぶ（`write_session_change` は `Loading` の間は呼ばない）。
+/// 読み込みの系列は 1 本のままになる。`apply_change` の `MaybeWritten` の枝も
+/// これを使う。
 fn reload(state: State) -> State {
   process.send(state.retry, LoadAccounts)
   State(..state, accounts: loading(state.settings))
@@ -1181,6 +1195,9 @@ fn session_failure_line(
     Approval -> "approve the connection of"
     Denial -> "deny the connection of"
     Revocation -> "revoke the session of"
+    SessionOpening -> "open the session of"
+    PendingRecording -> "record the pending connection of"
+    SessionClosing -> "close the session of"
   }
   "failed to "
   <> verb
@@ -1211,8 +1228,10 @@ fn log_session_failure(
 }
 
 /// セッションと承認待ちの書き込み 1 件を行い、失敗ならログを出す。`MaybeWritten`
-/// なら読み直しに移った状態を返す。成功ではログを出さない（成功の行は管理 UI が
-/// 出す）。
+/// なら、読み込み済みのときは読み直しに移った状態を、読み込めていないときは状態を
+/// そのまま返す（`Loading` で届くのは NIP-46 の書き込みだけで、未処理の読み込みが
+/// 同じ保証を持つ）。成功ではログを出さない（管理 UI の変更の成功の行は管理 UI が
+/// 出し、NIP-46 の書き込みの成功は行を出さない）。
 fn write_session_change(
   state: State,
   change: SessionChange,
@@ -1233,8 +1252,40 @@ fn write_session_change(
         target,
         reason <> reloading_after_unconfirmed_write,
       )
-      #(reload(state), written)
+      case state.accounts {
+        Ready -> #(reload(state), written)
+        Loading(..) -> #(state, written)
+      }
     }
+  }
+}
+
+/// `handle_event` の `Persist` の書き込みの種類と、失敗のログに出す
+/// （署名者, クライアント）。組は `Write` の値から取る（`connect` の書き込みの前は
+/// 組がメモリに無いので `session_target` で引かない）。`handle_event` が載せるのは
+/// `InsertSession`、`InsertPending`、`DeleteSession` だけで、残りは管理 UI と同じ
+/// 区分に写す。承認待ちの token は返さない。
+fn incoming_write_change(
+  write: engine.Write,
+) -> #(SessionChange, Option(#(String, String))) {
+  case write {
+    engine.InsertSession(session:) -> #(
+      SessionOpening,
+      Some(#(session.signer, session.client)),
+    )
+    engine.InsertPending(pending:, ..) -> #(
+      PendingRecording,
+      Some(#(pending.signer, pending.client)),
+    )
+    engine.DeleteSession(signer:, client:) -> #(
+      SessionClosing,
+      Some(#(signer, client)),
+    )
+    engine.ApprovePending(session:, ..) -> #(
+      Approval,
+      Some(#(session.signer, session.client)),
+    )
+    engine.DeletePending(..) -> #(Denial, None)
   }
 }
 
