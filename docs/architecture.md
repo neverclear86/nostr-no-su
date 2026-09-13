@@ -568,6 +568,7 @@ nostr-no-su/
 │   ├── architecture.md           この文書
 │   ├── design-decisions.md       設計上の判断と既知の制約
 │   ├── admin-ui.md               管理 UI の画面と操作
+│   ├── operations.md             バックアップと復旧
 │   └── development.md            ローカルでの実行とテスト、CSS のビルドと画面の撮影
 │
 ├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
@@ -614,6 +615,7 @@ nostr-no-su/
 - [プラグイン API v1 の仕様](plugin-api.md)：プラグインを書く人向け。必須エクスポート、イベント map、実行モデル、設定、配置と読み込み
 - [設計上の判断と既知の制約](design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [管理 UI](admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認
+- [バックアップと復旧](operations.md)：DB のダンプと復元、マスターキーの保管、復旧後の確認
 - [開発](development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
 - [README](../README.md)：導入、docker compose、環境変数
 - `plugins-src/event_logger/README.md`：同梱プラグインのビルドと配置

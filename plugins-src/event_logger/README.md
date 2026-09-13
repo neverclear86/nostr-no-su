@@ -102,7 +102,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 `events` とインデックスは版つきの移行で作り、適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
 
-記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある。
+記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある（取り方と戻し方は [バックアップと復旧](../../docs/operations.md) にある）。
 
 ```
 [event_logger] database schema version 2 is newer than this plugin supports (up to version 1); stopping the store
