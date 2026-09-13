@@ -642,6 +642,7 @@ pub fn approval_page_for_an_unknown_token_is_not_found_test() {
   let response = get(context(), "/approve/other-token")
   assert response.status == 404
   let body = simulate.read_body(response)
+  assert header(response, "content-type") == "text/html; charset=utf-8"
   assert string.contains(body, "unknown or expired approval request")
   assert !string.contains(body, "other-token")
 }
@@ -1352,6 +1353,7 @@ pub fn unlisted_signer_is_not_found_page_test() {
   let response = get(with_accounts(Ok([])), action_path(dashboard.EditLabel))
   assert response.status == 404
   let body = simulate.read_body(response)
+  assert header(response, "content-type") == "text/html; charset=utf-8"
   assert string.contains(body, i18n.text(i18n.English, i18n.AccountNotFound))
   assert !string.contains(body, signer)
 }

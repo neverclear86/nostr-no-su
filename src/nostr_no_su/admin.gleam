@@ -26,7 +26,7 @@
 //// - `wisp.rescue_crashes` の 500（不具合でしか起きず、詳細はログにある）
 ////
 //// CSRF の検査で弾いた 400 は認証の前で返るが、言語とテーマは cookie と
-//// `Accept-Language` から決められるので、これらは通知ページの HTML にする
+//// `Accept-Language` から決められるので、通知ページの HTML にする
 //// （`require_same_origin`）。
 ////
 //// 認証に失敗した要求（401）は、理由だけを `[admin]` の 1 行でログに出し、資格情報、
@@ -68,8 +68,9 @@ import wisp/wisp_mist
 /// 管理 UI が出すログ行の接頭辞。
 pub const log_prefix = "admin"
 
-/// 通知ページから切り替えた後に開くパス。404 / 405 / 400 と、承認・拒否や変更の結果の
-/// 通知ページはすべてここへ戻す。
+/// 通知ページから切り替えた後に開くパス。404 / 405 / フォームの値の 400 と、承認・拒否や
+/// 変更の結果の通知ページはすべてここへ戻す（Origin の不一致の 400 は `view.NoSwitch` で
+/// 切り替えを出さない）。
 const return_to_dashboard = view.SwitchReturningTo("/")
 
 /// Basic 認証のユーザー名。設定するのはパスワードだけにする。
@@ -300,17 +301,23 @@ fn protect(response: Response) -> Response {
   |> wisp.set_header("referrer-policy", "same-origin")
 }
 
-/// 処理できなかった要求の通知ページの HTML。トーンは `view.Failure` にし、
-/// 切り替えを出すか切り替えた後にどこを開くかは呼び出し側が決める。状態コードと
-/// ヘッダーは呼び出し側が付ける。
+/// 処理できなかった要求の通知ページの HTML。トーンは `view.Failure` にし、切り替えた
+/// 後はダッシュボードを開く（`return_to_dashboard`）。状態コードとヘッダーは呼び出し側が
+/// 付ける。
 fn failure_page(
   language: Language,
   theme: view.Theme,
-  switch: view.NavbarSwitch,
   title: i18n.Message,
   message: i18n.Reason,
 ) -> String {
-  dashboard.notice_page(language, theme, switch, title, message, view.Failure)
+  dashboard.notice_page(
+    language,
+    theme,
+    return_to_dashboard,
+    title,
+    message,
+    view.Failure,
+  )
 }
 
 /// 見出し `NotFound` の 404 の通知ページ。本文は呼び出し側が決め、パスや署名者を
@@ -320,7 +327,7 @@ fn not_found_notice(
   theme: view.Theme,
   message: i18n.Reason,
 ) -> Response {
-  failure_page(language, theme, return_to_dashboard, i18n.NotFound, message)
+  failure_page(language, theme, i18n.NotFound, message)
   |> wisp.html_response(404)
 }
 
@@ -335,7 +342,6 @@ fn method_not_allowed(
   |> wisp.html_body(failure_page(
     language,
     theme,
-    return_to_dashboard,
     i18n.MethodNotAllowed,
     i18n.Translated(i18n.MethodNotAllowedDetail),
   ))
@@ -361,7 +367,6 @@ fn bad_request(language: Language, theme: view.Theme) -> Response {
   failure_page(
     language,
     theme,
-    return_to_dashboard,
     i18n.BadRequest,
     i18n.Translated(i18n.FormNotReadable),
   )
@@ -379,8 +384,8 @@ fn healthz(request: Request) -> Response {
 /// ブラウザーは保存しない（更新しても古いファイルが残らない）。パスが
 /// `view.stylesheet_segments` か `view.script_segments` に一致したときだけ届き、
 /// `serve_static` は要求のパスを `priv` からの相対パスとしてファイルを引く。無いファイルは
-/// 404 の通知ページ、GET 以外は `text/plain` の 405（方針 2 節、CSS と JS への GET 以外は
-/// 管理 UI から送られない）にする。
+/// 404 の通知ページ、GET 以外は `text/plain` の 405（CSS と JS への GET 以外は管理 UI
+/// から送られない）にする。
 fn static_file(
   request: Request,
   language: Language,
