@@ -1,10 +1,12 @@
 //// リレーへの WebSocket 接続 1 本（stratus）。
 ////
-//// 購読は「現在の定義に合わせる」照合で開く。接続直後と張り直しの依頼のたびに
-//// 定義を評価し、定義にある購読には REQ（同じ id は NIP-01 で置き換え）を、開いて
-//// いて定義から消えた購読には CLOSE を送る。定義を得られなかったときは開いている
-//// 購読を変えずに再試行を 1 つだけ予約する。判断は純粋関数 `sync` にあり、stratus の
-//// ループはその結果を送信と予約に移すだけである。
+//// 購読は「現在の定義に合わせる」照合で開く。契機は接続直後、張り直しの依頼、
+//// リレーの CLOSED である。接続直後と張り直しの依頼では定義を評価し、定義にある
+//// 購読には REQ（同じ id は NIP-01 で置き換え）を、開いていて定義から消えた購読には
+//// CLOSE を送る。定義を得られなかったときは開いている購読を変えずに再試行を 1 つ
+//// だけ予約する。CLOSED を受けたら、その id を開いている購読から外し、再試行を
+//// 予約して張り直す。判断は純粋関数 `sync` にあり、stratus のループはその結果を
+//// 送信と予約に移すだけである。
 //// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 
@@ -31,8 +33,8 @@ pub type Msg {
   /// になる）、開いていて定義から消えた購読には CLOSE を送る。接続直後と、張り直しの
   /// 依頼で送る。
   Subscribe
-  /// 定義を得られなかった照合をやり直す。relay_client が自分宛てに予約する。
-  /// generation は予約の世代。
+  /// 定義を得られなかった照合か、リレーが閉じた購読の張り直しをやり直す。
+  /// relay_client が自分宛てに予約する。generation は予約の世代。
   RetrySubscribe(generation: Int)
   /// イベントを 1 件このソケットから発行する。
   Publish(event: event.Event)
@@ -58,6 +60,9 @@ pub type Trigger {
   Requested
   /// 予約した再試行のタイマー。generation はそのタイマーを予約したときの世代。
   Retried(generation: Int)
+  /// リレーが購読を閉じた（CLOSED）。定義は評価せず、開いている id なら再照合を
+  /// 予約する。
+  Closed(subscription_id: String)
 }
 
 /// 購読の照合の状態。stratus のプロセスが持つ。
@@ -69,8 +74,12 @@ pub type SubscriptionState {
     retry: Option(Int),
     /// 次に予約するときに使う世代。予約するたびに 1 つ進める。
     next_generation: Int,
-    /// 次に予約するときの、ジッターを掛ける前の待ち時間。
+    /// 定義を得られなかったときに予約する、ジッターを掛ける前の待ち時間。定義を
+    /// 得るたびに初期値に戻す。
     delay_ms: Int,
+    /// リレーが購読を閉じたときに予約する、ジッターを掛ける前の待ち時間。張り直しの
+    /// 依頼で定義を得たときだけ初期値に戻す。
+    closed_delay_ms: Int,
   )
 }
 
@@ -105,7 +114,8 @@ type Session {
   )
 }
 
-/// 購読の定義を得られなかったときの本番の再試行の待ち時間。
+/// 購読の定義を得られなかったとき、およびリレーが購読を閉じたときの本番の
+/// 再試行の待ち時間。2 つの原因は待ちを別々に数える。
 ///
 /// 待ちは評価が終わってから数える（`synchronise` が `sync` の後に
 /// `process.send_after` で予約する）。評価 1 回の待ちは、監視の購読ではバンカーの
@@ -118,6 +128,8 @@ type Session {
 /// 上限の 2 分はバンカーの読み込みの再試行の上限と同じにする。定義を得られない主な
 /// 原因は、バンカーのアクターが DB で止まることと、DB の再開点を読めないことで、
 /// どちらも DB の復帰を待つので、復帰の後に購読が追いつくまでの時間をそろえる。
+/// CLOSED にも同じ初期値と上限を使う。閉じた理由が一時か恒久かを区別できないので、
+/// 上限まで延ばして恒久的に断るリレーへの REQ を抑える。
 pub const subscription_retry_delay = backoff.Backoff(
   initial_ms: 5000,
   max_ms: 120_000,
@@ -168,13 +180,15 @@ pub fn new_subscription_state(
     retry: None,
     next_generation: 1,
     delay_ms: retry_delay.initial_ms,
+    closed_delay_ms: retry_delay.initial_ms,
   )
 }
 
 /// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
 /// `handle_event` へ渡す。発行したイベントへの OK は受理・拒否とも `handle_ok`
 /// へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は購読の定義を
-/// 得られなかったときの再試行の待ち時間。`interval_ms` は生存確認の刻みの間隔で、
+/// 得られなかったとき、およびリレーが購読を閉じたときの再試行の待ち時間。
+/// `interval_ms` は生存確認の刻みの間隔で、
 /// 本番は `keepalive_interval_ms` を渡す。接続アクターは呼び出し元にリンクされる
 /// ため呼び出し元と一緒に死に、exit を trap している呼び出し元にはその死が
 /// メッセージとして届く。
@@ -234,10 +248,20 @@ pub fn start(
         }
         stratus.User(KeepaliveTick) ->
           check_keepalive(session, conn, prefix, interval_ms)
-        stratus.Text(text) -> {
-          handle_text(prefix, text, handle_event, handle_ok)
-          stratus.continue(session)
-        }
+        stratus.Text(text) ->
+          case handle_text(prefix, text, handle_event, handle_ok) {
+            Some(trigger) ->
+              synchronise(
+                session,
+                trigger,
+                subscriptions,
+                conn,
+                prefix,
+                retry_delay,
+              )
+              |> stratus.continue
+            None -> stratus.continue(session)
+          }
         stratus.Binary(_) -> stratus.continue(session)
         stratus.Pong(_) -> stratus.continue(session)
       }
@@ -281,10 +305,20 @@ pub fn publish(client: Client, published: event.Event) -> Nil {
   process.send(client, stratus.to_user_message(Publish(published)))
 }
 
+/// 再試行を予約する原因。原因ごとに待ち時間を別に数える。
+type Cause {
+  /// 定義を得られなかった。
+  Unavailable
+  /// リレーが購読を閉じた。
+  ClosedByRelay
+}
+
 /// 照合 1 回ぶんの判断。現在の予約と世代が一致しない再試行は定義を評価せずに
-/// 捨てる。それ以外は定義を評価し、得られれば REQ と CLOSE を作って予約を解き、
-/// 得られなければ何も送らず、予約が無ければ新しい世代で予約する。定義を得られたら
-/// 待ち時間を初期値に戻し、新しく予約するたびに待ち時間を延ばす。
+/// 捨てる。CLOSED は定義を評価せず、開いている id だけ外して再試行を予約する
+/// （`forget_closed`）。それ以外は定義を評価し、得られれば REQ と CLOSE を作って
+/// 予約を解き、得られなければ何も送らず、予約が無ければ新しい世代で予約する。
+/// 定義を得られたら定義失敗の待ち時間を初期値に戻し、張り直しの依頼で得たときは
+/// CLOSED の待ち時間も戻し、新しく予約するたびにその原因の待ち時間を延ばす。
 ///
 /// 定義をサンクで受け取るのは、捨てる再試行で定義を評価しない（バンカーへの
 /// 問い合わせを送らない）ためである。
@@ -295,28 +329,34 @@ pub fn sync(
   retry_delay: backoff.Backoff,
 ) -> Sync {
   case trigger, state.retry {
-    Requested, _ -> evaluate(state, subscriptions, retry_delay)
+    Requested, _ ->
+      evaluate(state, subscriptions, retry_delay, retry_delay.initial_ms)
     // 現在の予約のタイマーは予約を消費する。
     Retried(generation), Some(reserved) if generation == reserved ->
       evaluate(
         SubscriptionState(..state, retry: None),
         subscriptions,
         retry_delay,
+        state.closed_delay_ms,
       )
     // 解いた予約や置き換わった予約の、遅れて届いたタイマー。
     Retried(_), _ -> Sync(state: state, messages: [], schedule_retry: None)
+    Closed(subscription_id), _ ->
+      forget_closed(state, subscription_id, retry_delay)
   }
 }
 
 /// 定義を評価して照合する。得られなかったとき、予約が残っていればそれに任せ、
-/// 無ければ新しい世代で予約する。
+/// 無ければ新しい世代で予約する。定義を得られたときの CLOSED の次の待ちは
+/// `closed_delay_after_success`。
 fn evaluate(
   state: SubscriptionState,
   subscriptions: Subscriptions,
   retry_delay: backoff.Backoff,
+  closed_delay_after_success: Int,
 ) -> Sync {
-  case subscriptions(), state.retry {
-    Ok(wanted), _ -> {
+  case subscriptions() {
+    Ok(wanted) -> {
       let wanted_ids = set.from_list(list.map(wanted, fn(entry) { entry.0 }))
       Sync(
         state: SubscriptionState(
@@ -324,26 +364,70 @@ fn evaluate(
           open: wanted_ids,
           retry: None,
           delay_ms: retry_delay.initial_ms,
+          closed_delay_ms: closed_delay_after_success,
         ),
         messages: reconcile(state.open, wanted, wanted_ids),
         schedule_retry: None,
       )
     }
-    Error(Nil), Some(_reserved) ->
-      Sync(state: state, messages: [], schedule_retry: None)
-    Error(Nil), None ->
-      Sync(
-        state: SubscriptionState(
+    Error(Nil) -> reserve(state, Unavailable, retry_delay)
+  }
+}
+
+/// 予約が無ければ新しい世代で再試行を 1 つ予約し、原因の待ち時間で予約してその
+/// 待ちを延ばす。予約が残っていれば原因にかかわらず何もしない。
+fn reserve(
+  state: SubscriptionState,
+  cause: Cause,
+  retry_delay: backoff.Backoff,
+) -> Sync {
+  case state.retry {
+    Some(_reserved) -> Sync(state: state, messages: [], schedule_retry: None)
+    None -> {
+      let delay = case cause {
+        Unavailable -> state.delay_ms
+        ClosedByRelay -> state.closed_delay_ms
+      }
+      let grown = backoff.next(retry_delay, delay)
+      let reserved =
+        SubscriptionState(
           ..state,
           retry: Some(state.next_generation),
           next_generation: state.next_generation + 1,
-          delay_ms: backoff.next(retry_delay, state.delay_ms),
-        ),
+        )
+      Sync(
+        state: case cause {
+          Unavailable -> SubscriptionState(..reserved, delay_ms: grown)
+          ClosedByRelay -> SubscriptionState(..reserved, closed_delay_ms: grown)
+        },
         messages: [],
         schedule_retry: Some(Reservation(
           generation: state.next_generation,
-          delay_ms: state.delay_ms,
+          delay_ms: delay,
         )),
+      )
+    }
+  }
+}
+
+/// リレーが閉じた購読を開いている購読から外し、再照合を予約する。CLOSE は送らない。
+/// 開いていない id（こちらが CLOSE した購読への応答など）は無視する。予約が残って
+/// いればそれに任せる。
+fn forget_closed(
+  state: SubscriptionState,
+  subscription_id: String,
+  retry_delay: backoff.Backoff,
+) -> Sync {
+  case set.contains(state.open, subscription_id) {
+    False -> Sync(state: state, messages: [], schedule_retry: None)
+    True ->
+      reserve(
+        SubscriptionState(
+          ..state,
+          open: set.delete(state.open, subscription_id),
+        ),
+        ClosedByRelay,
+        retry_delay,
       )
   }
 }
@@ -379,13 +463,7 @@ fn synchronise(
     None -> Nil
     Some(reservation) -> {
       let delay = backoff.jittered(reservation.delay_ms)
-      log.write(
-        log.Warning,
-        prefix,
-        "could not evaluate subscriptions; keeping the current ones and retrying in "
-          <> int.to_string(delay)
-          <> "ms",
-      )
+      log.write(log.Warning, prefix, describe_reservation(trigger, delay))
       let _ =
         process.send_after(
           session.inbox,
@@ -396,6 +474,23 @@ fn synchronise(
     }
   }
   Session(..session, subscriptions: synced.state)
+}
+
+/// 再試行を予約したときのログ行の本文。CLOSED による予約と、定義を得られなかった
+/// 予約を分けて書く。CLOSED の理由は `handle_text` が先に出す。
+fn describe_reservation(trigger: Trigger, delay: Int) -> String {
+  case trigger {
+    Closed(subscription_id) ->
+      "subscription "
+      <> log.sanitize_external(subscription_id)
+      <> " was closed by the relay; resubscribing in "
+      <> int.to_string(delay)
+      <> "ms"
+    Requested | Retried(_) ->
+      "could not evaluate subscriptions; keeping the current ones and retrying in "
+      <> int.to_string(delay)
+      <> "ms"
+  }
 }
 
 /// リレーから何かを受信したら生存確認の状態に記録する。自分宛てのメッセージは
@@ -496,17 +591,21 @@ pub type Acknowledgement {
 
 /// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベント、
 /// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Acknowledge` は
-/// 発行したイベントへの OK（受理・拒否とも）。
+/// 発行したイベントへの OK（受理・拒否とも）、`Synchronise` は購読の状態を変える
+/// 応答（CLOSED）で、ログ行の本文と照合の契機を持つ。契機の id は照合に使うため
+/// 正規化しない。ログ行の本文は正規化済み。
 pub type Interpretation {
   Deliver(event.Verified)
   Report(String)
   Acknowledge(Acknowledgement)
+  Synchronise(trigger: Trigger, line: String)
 }
 
 /// リレーメッセージ 1 件を解釈する。EVENT は `event.verify` で id と署名を
 /// 確かめ、通ったものを配送に回す。OK は受理・拒否とも `Acknowledge` にする。
-/// それ以外のメッセージと落としたイベントは、外部由来の値を
-/// `log.sanitize_external` で 1 行に収めたログ行の本文にする。
+/// CLOSED は購読の状態を変えるため `Synchronise` にする。それ以外のメッセージと
+/// 落としたイベントは、外部由来の値を `log.sanitize_external` で 1 行に収めた
+/// ログ行の本文にする。
 pub fn interpret(text: String) -> Interpretation {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
@@ -531,11 +630,12 @@ pub fn interpret(text: String) -> Interpretation {
     Ok(message.RelayNotice(text)) ->
       Report("notice: " <> log.sanitize_external(text))
     Ok(message.RelayClosed(subscription, reason)) ->
-      Report(
+      Synchronise(
+        Closed(subscription),
         "subscription "
-        <> log.sanitize_external(subscription)
-        <> " closed: "
-        <> log.sanitize_external(reason),
+          <> log.sanitize_external(subscription)
+          <> " closed: "
+          <> log.sanitize_external(reason),
       )
     Error(_) -> Report("unrecognised message: " <> log.sanitize_external(text))
   }
@@ -544,16 +644,23 @@ pub fn interpret(text: String) -> Interpretation {
 /// リレーメッセージを 1 件処理する。解釈は `interpret` にあり、ここはその
 /// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。`start` の
 /// 受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否とも `handle_ok` に
-/// 渡し、拒否だけそのリレーのログ行も出す。
+/// 渡し、拒否だけそのリレーのログ行も出す。購読の状態を変える応答は契機を返し、
+/// ループが照合に渡す。
 pub fn handle_text(
   prefix: String,
   text: String,
   handle_event: fn(event.Verified) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
-) -> Nil {
+) -> Option(Trigger) {
   case interpret(text) {
-    Deliver(verified) -> handle_event(verified)
-    Report(line) -> log.write(log.Notice, prefix, line)
+    Deliver(verified) -> {
+      handle_event(verified)
+      None
+    }
+    Report(line) -> {
+      log.write(log.Notice, prefix, line)
+      None
+    }
     Acknowledge(ack) -> {
       case ack.accepted {
         False ->
@@ -566,6 +673,11 @@ pub fn handle_text(
         True -> Nil
       }
       handle_ok(ack)
+      None
+    }
+    Synchronise(trigger, line) -> {
+      log.write(log.Notice, prefix, line)
+      Some(trigger)
     }
   }
 }
