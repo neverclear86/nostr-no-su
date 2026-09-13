@@ -286,6 +286,13 @@ pub type Msg {
   /// 要求は公開鍵と返信先しか持たないので、処理の途中で落ちてもクラッシュレポートに
   /// 秘密は出ない。
   GetNsec(signer: String, reply: Subject(Result(String, String)))
+  /// リレーの AUTH（NIP-42）に返す、登録アカウントごとの署名済みイベントを
+  /// 問い合わせる。バンカーリレーの接続が challenge を受けたときに使う。
+  Authenticate(
+    relay_url: String,
+    challenge: String,
+    reply: Subject(Result(List(Event), String)),
+  )
 }
 
 /// バンカーが保持する承認済みセッションの一覧。アクターが動いていなければ空。
@@ -378,6 +385,17 @@ pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
 /// 届いた nsec はランタイムが捨てる。
 pub fn nsec(name: Name(Msg), signer: String) -> Result(String, String) {
   named.call(name, call_timeout_ms, GetNsec(signer, _))
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// リレーの AUTH に返す、登録アカウントごとに署名した kind 22242。アクターが
+/// 応答しないときは理由を返す。`relay_client.Authenticator` として接続に渡す。
+pub fn authenticate(
+  name: Name(Msg),
+  relay_url: String,
+  challenge: String,
+) -> Result(List(Event), String) {
+  named.call(name, call_timeout_ms, Authenticate(relay_url, challenge, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -630,8 +648,8 @@ fn initialise(
 
 /// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・セッション・
 /// 承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件を
-/// エンジンに通して生成された応答の全接続への送信、あるいは発行した応答への OK の
-/// 反映を行う。
+/// エンジンに通して生成された応答の全接続への送信、発行した応答への OK の反映、
+/// リレーの AUTH に返す認証イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -645,6 +663,21 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     GetNsec(signer:, reply:) -> {
       process.send(reply, private_key_nsec(state, signer))
+      actor.continue(state)
+    }
+    Authenticate(relay_url:, challenge:, reply:) -> {
+      let accounts =
+        engine.signers(state.engine)
+        |> list.filter_map(engine.find_account(state.engine, _))
+      process.send(
+        reply,
+        authentication_events(
+          accounts,
+          relay_url,
+          challenge,
+          time.now_seconds(),
+        ),
+      )
       actor.continue(state)
     }
     AddAccount(account: added, label:, reply:) -> {
@@ -813,6 +846,28 @@ fn load_accounts(state: State) -> State {
 /// 読み込めていない状態の始まり。待ち時間は初期値から数える。
 fn loading(settings: Settings) -> Accounts {
   Loading(failure: None, retry_delay_ms: settings.retry_delay.initial_ms)
+}
+
+/// アカウントごとに、リレーの AUTH に返す kind 22242 を組み立てて署名する。
+/// 署名に失敗したアカウントがあれば理由を返す。
+pub fn authentication_events(
+  accounts: List(Account),
+  relay_url: String,
+  challenge: String,
+  now: Int,
+) -> Result(List(Event), String) {
+  use signer <- list.try_map(accounts)
+  event.Event(
+    id: "",
+    pubkey: account.pubkey_hex(signer),
+    created_at: now,
+    kind: event.auth_kind,
+    tags: [["relay", relay_url], ["challenge", challenge]],
+    content: "",
+    sig: "",
+  )
+  |> event.finalize(account.privkey(signer))
+  |> result.replace_error("failed to sign authentication event")
 }
 
 /// 読み込みの結果に対して出すログ行。`previous_failure` は直前の失敗の理由

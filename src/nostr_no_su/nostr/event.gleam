@@ -14,6 +14,9 @@ import nostr_no_su/hex
 /// kind なので、リレーは保存せず接続中のクライアントにだけ転送する。
 pub const nip46_kind = 24_133
 
+/// リレーの AUTH（NIP-42）に返す認証イベントの kind。
+pub const auth_kind = 22_242
+
 /// NIP-01 の ephemeral イベントの kind（20000 以上 30000 未満）か。リレーは
 /// 保存せず、接続中のクライアントにだけ転送する。
 pub fn is_ephemeral(kind: Int) -> Bool {

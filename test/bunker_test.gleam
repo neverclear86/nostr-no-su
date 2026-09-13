@@ -5,6 +5,7 @@
 //// どう組み立てるかを確かめる。
 
 import gleam/erlang/process
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/system
 import gleam/string
@@ -253,4 +254,36 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
   assert !string.contains(shown, stored.secret)
   process.unlink(pid)
   process.kill(pid)
+}
+
+/// AUTH に返すイベントは、アカウントごとに 1 件、その鍵で署名した kind 22242 で、
+/// リレー URL と challenge をタグに持つ。
+pub fn authentication_events_are_signed_by_each_account_test() {
+  let first =
+    account_for(
+      "0000000000000000000000000000000000000000000000000000000000000042",
+    )
+  let second =
+    account_for(
+      "0000000000000000000000000000000000000000000000000000000000000077",
+    )
+  let assert Ok(events) =
+    bunker.authentication_events(
+      [first, second],
+      "wss://relay.test",
+      "challenge-1",
+      1_700_000_000,
+    )
+  let assert [a, b] = events
+  assert a.pubkey == account.pubkey_hex(first)
+  assert b.pubkey == account.pubkey_hex(second)
+  list.each(events, fn(e) {
+    assert e.kind == event.auth_kind
+    assert e.created_at == 1_700_000_000
+    assert e.content == ""
+    assert e.tags
+      == [["relay", "wss://relay.test"], ["challenge", "challenge-1"]]
+    let assert Ok(_verified) = event.verify(e)
+    Nil
+  })
 }

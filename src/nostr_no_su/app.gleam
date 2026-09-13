@@ -424,7 +424,8 @@ fn monitor_relays(spec: Spec) -> List(Relay) {
 /// 再起動する必要がある。アクターが署名者の変化で依頼する購読の張り直しは、監視と
 /// バンカーの各接続アクターへ名前で送る。監視の購読も署名者から組み立てるためで
 /// ある。`rest_for_one` なので、ロックのプールが再起動するとアクターと接続も
-/// 再起動し、アクターの読み込みが advisory lock を取り直す。
+/// 再起動し、アクターの読み込みが advisory lock を取り直す。接続が受けた AUTH は
+/// アクターへの問い合わせで応答する。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
   |> supervisor.add(pog.supervised(config.pool))
@@ -446,7 +447,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
     fn(relay_url, ack) {
       named.send(config.name, bunker.Acknowledged(relay_url, ack))
     },
-    fn(_relay_url) { None },
+    fn(relay_url) { Some(bunker.authenticate(config.name, relay_url, _)) },
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
