@@ -8,6 +8,7 @@ import gleam/otp/actor
 import gleam/otp/system
 import gleam/result
 import gleam/string
+import nostr_no_su
 import nostr_no_su/admin
 import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
@@ -326,6 +327,18 @@ fn stored_signer(key_hex: String) -> vault.StoredAccount {
 /// 指定した秘密鍵の署名者 1 件を、テストの secret 付きで読み込んだ結果。
 fn load_signer(key_hex: String) -> Result(vault.Loaded, String) {
   Ok(Loaded(accounts: [stored_signer(key_hex)], skipped: []))
+}
+
+/// どのリレーにも `stored` を返す、再開点の読み込みの操作。
+fn fixed_resume_point(
+  stored: Result(Option(Int), String),
+) -> fn(String) -> Result(Option(Int), String) {
+  fn(_relay_url) { stored }
+}
+
+/// 何もせず成功する、再開点の保存の操作。
+fn discard_resume_points(_points: List(#(String, Int))) -> Result(Nil, String) {
+  Ok(Nil)
 }
 
 /// 受け取ったイベントをテストへ転送するプラグインの仕様。歯止めは既定のまま。
@@ -694,14 +707,13 @@ fn start_monitor_tree(
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
-    monitor: Some(
-      app.Monitor(
-        name: name,
-        dedup_capacity: 8,
-        relays: [test_relay()],
-        subscriptions: fn() { Ok([]) },
-      ),
-    ),
+    monitor: Some(app.Monitor(
+      name: name,
+      dedup_capacity: 8,
+      relays: [test_relay()],
+      subscriptions: fn(_relay_url) { fn() { Ok([]) } },
+      save_resume: discard_resume_points,
+    )),
     bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
@@ -786,14 +798,13 @@ fn start_plugins_tree(
 ) -> Pid {
   start_tree(app.Spec(
     plugins: plugins,
-    monitor: Some(
-      app.Monitor(
-        name: dedup_name,
-        dedup_capacity: 64,
-        relays: [test_relay()],
-        subscriptions: fn() { Ok([]) },
-      ),
-    ),
+    monitor: Some(app.Monitor(
+      name: dedup_name,
+      dedup_capacity: 64,
+      relays: [test_relay()],
+      subscriptions: fn(_relay_url) { fn() { Ok([]) } },
+      save_resume: discard_resume_points,
+    )),
     bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
@@ -1525,14 +1536,13 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
       plugins: [
         forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
       ],
-      monitor: Some(
-        app.Monitor(
-          name: process.new_name("test_dedup"),
-          dedup_capacity: 8,
-          relays: [monitor_relay],
-          subscriptions: fn() { Ok([]) },
-        ),
-      ),
+      monitor: Some(app.Monitor(
+        name: process.new_name("test_dedup"),
+        dedup_capacity: 8,
+        relays: [monitor_relay],
+        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
+        save_resume: discard_resume_points,
+      )),
       bunker: bunker_spec(
         bunker_name,
         store_with_load(fn() {
@@ -1566,6 +1576,221 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   assert process.named(bunker_name) == Ok(bunker_before)
   assert process.is_alive(tree)
   stop_tree(tree)
+}
+
+// --- 監視の購読 ---
+
+/// バンカーにリレーを持たせず、監視だけがリレー接続を持つツリー。購読は本番と
+/// 同じ `nostr_no_su.monitor_subscriptions` から組み立てる。バンカーにリレーを
+/// 持たせないのは、購読の報告（`subscribed`）がすべて監視の接続のものになる
+/// ようにするためである。
+fn monitored_accounts_spec(
+  reports: Subject(Report),
+  subscribed: Subject(SubscriptionReport),
+  bunker_name: Name(bunker.Msg),
+  store: bunker.Store,
+  relays: List(app.Relay),
+  load_resume: fn(String) -> Result(Option(Int), String),
+) -> app.Spec {
+  let dedup_name = process.new_name("test_dedup")
+  app.Spec(
+    plugins: [],
+    monitor: Some(app.Monitor(
+      name: dedup_name,
+      dedup_capacity: 64,
+      relays: relays,
+      subscriptions: nostr_no_su.monitor_subscriptions(
+        bunker_name,
+        dedup_name,
+        load_resume,
+        _,
+      ),
+      save_resume: discard_resume_points,
+    )),
+    bunker: bunker_spec(bunker_name, store, [], fixed_retry_delay),
+    admin: None,
+    open: fake_open(reports, Some(subscribed)),
+    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+  )
+}
+
+/// 報告が、指定したリレーの接続の REQ 1 件か。
+fn requests_on(report: SubscriptionReport, relay_url: String) -> Bool {
+  case report {
+    Subscribed(url, [message.Req(..)]) -> url == relay_url
+    _ -> False
+  }
+}
+
+/// 起動直後の監視の購読は、読み込みに時間がかかっても読み込み済みの署名者を含み、
+/// 読み込みの成功による張り直しで同じ内容の REQ が 1 回余計に送られる（決定 11）。
+pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() {
+        // 読み込みが接続の最初の評価より遅れて終わることを模す。
+        process.sleep(300)
+        load_signer(signer_key)
+      }),
+      [test_relay()],
+      fixed_resume_point(Ok(Some(1234))),
+    ))
+  let assert Ok(Subscribed(_relay_url, [message.Req("nostr-no-su", filter)])) =
+    process.receive(subscribed, 2000)
+  assert filter.authors == Some([signer])
+  assert filter.since == Some(1234)
+
+  let #(_skipped, second) =
+    receive_until(subscribed, requests_on(_, test_relay_url), 2000)
+  assert second
+    == Ok(Subscribed(test_relay_url, [message.Req("nostr-no-su", filter)]))
+  stop_tree(tree)
+}
+
+/// 監視の購読は、登録アカウントの追加・削除に合わせて張り直される。追加の時刻は
+/// 追加の呼び出しの前後の現在時刻の範囲に収まり、以後の張り直しでも遡らない。
+pub fn the_monitor_subscription_follows_account_changes_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let calls = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let other_signer = account.pubkey_hex(account_for(other_signer_key))
+  let spec =
+    monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      memory_store(calls, [], False),
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+    )
+  let tree = start_tree(spec)
+  assert process.receive(subscribed, 2000) == Ok(Subscribed(test_relay_url, []))
+
+  let before_first_add = time.now_seconds()
+  assert app.add_account(spec, account_for(signer_key), "main") == Ok(Nil)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, first_filter)])) =
+    process.receive(subscribed, 2000)
+  assert first_filter.authors == Some([signer])
+  let assert Some(since_after_first_add) = first_filter.since
+  assert since_after_first_add >= before_first_add
+  assert since_after_first_add <= time.now_seconds()
+
+  assert app.add_account(spec, account_for(other_signer_key), "second")
+    == Ok(Nil)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, second_filter)])) =
+    process.receive(subscribed, 2000)
+  assert second_filter.authors
+    == Some(list.sort([signer, other_signer], string.compare))
+  let assert Some(since_after_second_add) = second_filter.since
+  assert since_after_second_add >= since_after_first_add
+
+  assert bunker.remove_account(bunker_name, other_signer) == Ok(Nil)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, third_filter)])) =
+    process.receive(subscribed, 2000)
+  assert third_filter.authors == Some([signer])
+  assert third_filter.since == Some(since_after_second_add)
+
+  assert bunker.remove_account(bunker_name, signer) == Ok(Nil)
+  assert process.receive(subscribed, 2000)
+    == Ok(Subscribed(test_relay_url, [message.Close("nostr-no-su")]))
+  stop_tree(tree)
+}
+
+/// 再接続したリレーは、切断前にそのリレーで受け取った最新イベントの `created_at`
+/// から購読し直す。イベントを受け取っていないリレーは保存済みの再開点（無ければ
+/// `None`）から購読する。
+pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let first = named_relay("ws://first.test")
+  let second = named_relay("ws://second.test")
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [first, second],
+      fixed_resume_point(Ok(None)),
+    ))
+  let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
+    await_connection(reports)
+  let assert Opened(_second_url, _connection_2, socket_2, deliver_2) =
+    await_connection(reports)
+  let #(first_socket, second_socket, deliver_first) = case
+    first_url == first.url
+  {
+    True -> #(socket_1, socket_2, deliver_1)
+    False -> #(socket_2, socket_1, deliver_2)
+  }
+  // 接続直後の評価（起動時の読み込みによる張り直しの分を含む、決定 11）を
+  // 読み捨ててから、切断後の張り直しだけを見る。
+  drain_subscriptions(subscribed, 300)
+
+  let received = note("received")
+  deliver_first(received)
+
+  process.kill(first_socket)
+  let #(_skipped, first_requested) =
+    receive_until(subscribed, requests_on(_, first.url), 2000)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, first_after_kill)])) =
+    first_requested
+  assert first_after_kill.since == Some(received.created_at)
+
+  process.kill(second_socket)
+  let #(_skipped, second_requested) =
+    receive_until(subscribed, requests_on(_, second.url), 2000)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, second_after_kill)])) =
+    second_requested
+  assert second_after_kill.since == None
+  stop_tree(tree)
+}
+
+/// 再開点を読めない間は、監視の購読を張らずに再試行を続ける（開いている購読を
+/// 閉じない）。
+pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [test_relay()],
+      fixed_resume_point(Error("unavailable")),
+    ))
+  let assert Ok(first) = process.receive(subscribed, 2000)
+  assert first == Retrying(test_relay_url)
+  assert_never_requests(subscribed, monotonic_ms() + 500)
+  stop_tree(tree)
+}
+
+/// `deadline`（`monotonic_ms` の単位）まで、`subscribed` に届く報告が `Retrying` か
+/// 空の `Subscribed` だけであることを検査する。
+fn assert_never_requests(
+  subscribed: Subject(SubscriptionReport),
+  deadline: Int,
+) -> Nil {
+  case process.receive(subscribed, int.max(deadline - monotonic_ms(), 0)) {
+    Error(Nil) -> Nil
+    Ok(report) -> {
+      assert report == Retrying(test_relay_url)
+        || report == Subscribed(test_relay_url, [])
+      assert_never_requests(subscribed, deadline)
+    }
+  }
 }
 
 // --- 実行中のアカウントの変更 ---

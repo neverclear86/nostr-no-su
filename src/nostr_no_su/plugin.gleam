@@ -82,7 +82,7 @@ const handle_event_name = "handle_event"
 /// 本体が読み込み時に照合する任意エクスポートの名前。
 const required_versions_name = "plugin_required_versions"
 
-/// プラグインは監視対象アカウントから受信したすべてのイベントを処理する。
+/// プラグインはバンカーに登録したアカウントから受信したすべてのイベントを処理する。
 /// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
 /// `Subject` を捕捉できる。
 ///

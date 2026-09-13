@@ -11,11 +11,14 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
+import nostr_no_su/dedup
+import nostr_no_su/dedup/resume_store
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
+import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
@@ -93,7 +96,7 @@ fn startup(loaded: Config) -> Result(Startup, String) {
       plugin.default_call_timeout_ms,
     )
   let specs = plugin_specs(list.append(builtin, external))
-  let #(monitor, monitor_notes) = monitor_spec(loaded)
+  let #(monitor, monitor_notes) = monitor_spec(loaded, bunker)
   Startup(
     spec: app.Spec(
       plugins: specs,
@@ -130,25 +133,90 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
   )
 }
 
-/// 設定されたリレーの監視サブツリー。監視対象がなければ None。
-fn monitor_spec(loaded: Config) -> #(Option(app.Monitor), List(String)) {
+/// 設定されたリレーの監視サブツリー。監視対象がなければ None。購読はバンカーの
+/// 署名者と再開点から組み立て（`monitor_subscriptions`）、再開点はアカウント
+/// ストアと同じ DB に保存する。
+fn monitor_spec(
+  loaded: Config,
+  bunker: app.Bunker,
+) -> #(Option(app.Monitor), List(String)) {
   case loaded.relay_urls {
     [] -> #(None, [
       log.line(log_prefix, "no monitor relays configured; monitoring disabled"),
     ])
-    relay_urls -> #(
-      Some(
-        app.Monitor(
-          name: process.new_name("nostr_no_su_dedup"),
+    relay_urls -> {
+      let name = process.new_name("nostr_no_su_dedup")
+      #(
+        Some(app.Monitor(
+          name: name,
           dedup_capacity: dedup_capacity,
           relays: relays(relay_urls),
-          subscriptions: fn() {
-            Ok([#("nostr-no-su", config.to_filter(loaded))])
-          },
-        ),
-      ),
-      [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
+          subscriptions: monitor_subscriptions(
+            bunker.name,
+            name,
+            resume_point_loader(bunker.pool.pool_name),
+            _,
+          ),
+          save_resume: resume_point_saver(bunker.pool.pool_name),
+        )),
+        [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
+      )
+    }
+  }
+}
+
+/// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から
+/// 組み立て、署名者がいれば `since` をディスパッチャーのメモリの再開点から、無ければ
+/// 保存済みの再開点（`load`）から決める。どれかに応答が無ければ定義を得られなかった
+/// ことにし、開いている購読を閉じない。テストが本番と同じ定義でツリーを動かせるよう
+/// 公開する。
+pub fn monitor_subscriptions(
+  bunker_name: Name(bunker.Msg),
+  dedup_name: Name(dedup.Msg),
+  load: fn(String) -> Result(Option(Int), String),
+  relay_url: String,
+) -> relay_client.Subscriptions {
+  fn() {
+    use signers <- result.try(
+      bunker.signers(bunker_name) |> option.to_result(Nil),
     )
+    use <- config.monitor_subscriptions(signers)
+    use in_memory <- result.try(dedup.since(dedup_name, relay_url))
+    case in_memory {
+      Some(_) -> Ok(in_memory)
+      None -> load(relay_url) |> result.replace_error(Nil)
+    }
+  }
+}
+
+/// リレーの保存済みの再開点を読む操作（`resume_store.load`）。購読の評価の再試行の
+/// 行は理由を含まないので、失敗の理由はここで 1 行出してから返す。
+fn resume_point_loader(
+  pool: Name(pog.Message),
+) -> fn(String) -> Result(Option(Int), String) {
+  fn(relay_url: String) {
+    let db = pog.named_connection(pool)
+    resume_store.load(db, relay_url)
+    |> result.map_error(fn(error) {
+      let reason = account_store.describe(error)
+      log.println(
+        log.relay_prefix(relay_client.label(relay_url)),
+        "could not load resume point: " <> reason,
+      )
+      reason
+    })
+  }
+}
+
+/// 再開点を値を小さくせずに保存する操作（`resume_store.save`）。ログは
+/// `resume_saver` が出す。
+fn resume_point_saver(
+  pool: Name(pog.Message),
+) -> fn(List(#(String, Int))) -> Result(Nil, String) {
+  fn(points: List(#(String, Int))) {
+    let db = pog.named_connection(pool)
+    resume_store.save(db, points)
+    |> result.map_error(account_store.describe)
   }
 }
 

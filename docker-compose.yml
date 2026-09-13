@@ -9,7 +9,6 @@ services:
     environment:
       RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
-      PUBKEYS: ${PUBKEYS:-}
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
       PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}

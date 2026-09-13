@@ -12,7 +12,8 @@
 ////
 //// テーブルの DDL は版つきの移行（`migrations`）として持ち、`load` のたびに
 //// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
-//// ビルドより新しければ `SchemaTooNew` を返す。
+//// ビルドより新しければ `SchemaTooNew` を返す。移行は `bunker_accounts` のほかに、
+//// 監視の再開点のテーブル（`monitor_resume`）も作る。
 ////
 //// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
 //// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
@@ -81,6 +82,14 @@ pub const create_accounts_table = "CREATE TABLE IF NOT EXISTS bunker_accounts (
   created_at timestamptz NOT NULL DEFAULT now()
 )"
 
+/// 監視の購読の再開点を保存するテーブル。`since` は Unix 秒。書き込みは値を
+/// 小さくしない（`dedup/resume_store`）。
+pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resume (
+  relay_url text PRIMARY KEY,
+  since bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+)"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -94,6 +103,7 @@ pub type Migration {
 /// 書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を見直す。
 pub const migrations = [
   Migration(version: 1, statements: [create_accounts_table]),
+  Migration(version: 2, statements: [create_monitor_resume_table]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -460,9 +470,12 @@ pub fn from_query_error(error: pog.QueryError) -> StoreError {
   }
 }
 
-/// クエリーを実行し、失敗を `StoreError` に写す。このモジュールのクエリーはすべて
-/// ここを通す。`pog.execute` が例外を投げたときも値で返す（`execute_catching`）。
-fn execute(
+/// クエリーを実行し、失敗を `StoreError` に写す。本体のクエリーはすべてここを
+/// 通す（`dedup/resume_store` を含む）。`pog.execute` が例外を投げたときも値で
+/// 返す（`execute_catching`）。プールが未登録のとき pgo が呼び出し側を `noproc`
+/// で exit させる問題（`src/nostr_no_su/app.gleam` の doc）も、この経路で
+/// `Unavailable` になる（`execute_catching` の doc）。
+pub fn execute(
   query: pog.Query(row),
   db: pog.Connection,
 ) -> Result(pog.Returned(row), StoreError) {
