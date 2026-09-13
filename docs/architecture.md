@@ -546,7 +546,7 @@ nostr-no-su/
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
 ├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
-├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus と .env.example の検査（成果物には入らない）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus、.env.example、共有パッケージの版の検査（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
 │   └── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
