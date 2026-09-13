@@ -1,14 +1,17 @@
 FROM ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine AS build
-COPY . /build/
+WORKDIR /build
+# ソースだけを変えた再ビルドで依存の取得をキャッシュから使うため、マニフェストを先にコピーする。
+# path 依存の stratus は gleam.toml が無いと解決できない。
+COPY gleam.toml manifest.toml ./
+COPY vendor/stratus/gleam.toml vendor/stratus/
+RUN gleam deps download
+COPY . ./
 # erlang-shipment にはライセンスのファイルが入らないので、再配布の条件として本体、
 # vendor/stratus、Hex の依存のライセンスを shipment に集める。Hex の依存のファイルは
-# /build を消す前にしか取れない。
-RUN cd /build \
-  && gleam deps download \
-  && gleam export erlang-shipment \
+# build/packages にしか無いので、ビルドステージで集める。
+RUN gleam export erlang-shipment \
   && sh dev/collect_licenses.sh build/erlang-shipment \
-  && mv build/erlang-shipment /app \
-  && rm -r /build
+  && mv build/erlang-shipment /app
 
 # BEAM ファイルをコンパイルしたときと同じ OTP で動かすため、実行ステージにも
 # 同じイメージを使う。

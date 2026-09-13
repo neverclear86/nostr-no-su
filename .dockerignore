@@ -10,3 +10,9 @@ plugins
 plugins-src
 examples
 node_modules
+test
+assets
+# collect_licenses.sh とそれが読む overrides だけを残す（Dockerfile の build ステージが使う）
+dev/*
+!dev/collect_licenses.sh
+!dev/licenses-overrides.txt
