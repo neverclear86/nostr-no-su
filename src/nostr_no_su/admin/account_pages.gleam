@@ -7,7 +7,7 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// 秘密鍵（nsec）を描画するのは `generated_key_page`、`registered_page`、
-//// `private_key_page` の 3 つだけである。この 3 つには言語の切り替えを出さない
+//// `private_key_page` の 3 つだけである。この 3 つにはテーマと言語の切り替えを出さない
 //// （`view.NoSwitch`）。
 
 import gleam/option.{type Option, None, Some}
@@ -19,15 +19,18 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
-/// 失敗の理由を出した POST の応答でも、言語を切り替えた後はこの画面を GET で開き直す。
+/// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
+/// 開き直す。
 pub fn new_account_page(
   language: Language,
+  theme: view.Theme,
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
   let path = view.segments_path(dashboard.new_account_segments)
   view.page(
     language,
+    theme,
     i18n.AddAccount,
     view.Narrow,
     view.SwitchReturningTo(path),
@@ -75,11 +78,12 @@ pub fn new_account_page(
 /// 登録でラベルが規則に反したときに再描画する理由。
 pub fn generated_key_page(
   language: Language,
+  theme: view.Theme,
   nsec: String,
   error: Option(i18n.Message),
 ) -> String {
   let text = i18n.text(language, _)
-  view.page(language, i18n.GeneratedKey, view.Narrow, view.NoSwitch, [
+  view.page(language, theme, i18n.GeneratedKey, view.Narrow, view.NoSwitch, [
     view.error_message(language, None, option.map(error, i18n.Translated)),
     view.card([
       view.warning(emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice)),
@@ -106,36 +110,45 @@ pub fn generated_key_page(
 /// 接続 URI はダッシュボードで取得する。
 pub fn registered_page(
   language: Language,
+  theme: view.Theme,
   npub: String,
   label: String,
   nsec: String,
 ) -> String {
   let text = i18n.text(language, _)
-  view.page(language, i18n.AccountRegistered, view.Narrow, view.NoSwitch, [
-    view.card([
-      view.summary_list([
-        #(text(i18n.Label), view.Plain(label)),
-        #(text(i18n.Account), view.Account(npub:, hex: None)),
+  view.page(
+    language,
+    theme,
+    i18n.AccountRegistered,
+    view.Narrow,
+    view.NoSwitch,
+    [
+      view.card([
+        view.summary_list([
+          #(text(i18n.Label), view.Plain(label)),
+          #(text(i18n.Account), view.Account(npub:, hex: None)),
+        ]),
+        view.warning(emphasized(
+          language,
+          i18n.BackUpIfNotAlready,
+          i18n.RegisteredKeyNotice,
+        )),
+        view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
       ]),
-      view.warning(emphasized(
-        language,
-        i18n.BackUpIfNotAlready,
-        i18n.RegisteredKeyNotice,
-      )),
-      view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
-    ]),
-    view.back_link(language),
-  ])
+      view.back_link(language),
+    ],
+  )
 }
 
 /// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
 /// ラベルの編集フォームには、利用者の入力ではなく一覧から得た保存済みのラベルを入れる。
 /// 送信のボタンの重さは操作ごとに決める（ラベルの保存は主操作、secret の作り直しと
 /// 秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、見出しとリンクの文言
-/// （`dashboard.account_action_title`）とは別に持つ。言語を切り替えた後は、この操作の
-/// ページを GET で開き直す。
+/// （`dashboard.account_action_title`）とは別に持つ。テーマか言語を切り替えた後は、
+/// この操作のページを GET で開き直す。
 pub fn account_action_page(
   language: Language,
+  theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
   error: Option(i18n.Reason),
@@ -198,6 +211,7 @@ pub fn account_action_page(
   }
   view.page(
     language,
+    theme,
     dashboard.account_action_title(action),
     view.Narrow,
     view.SwitchReturningTo(path),
@@ -227,10 +241,11 @@ fn action_lead(action: dashboard.AccountAction) -> Option(i18n.Lead) {
 /// 管理パスワードを再入力した後の秘密鍵の表示ページ。
 pub fn private_key_page(
   language: Language,
+  theme: view.Theme,
   row: dashboard.AccountRow,
   nsec: String,
 ) -> String {
-  view.page(language, i18n.PrivateKey, view.Narrow, view.NoSwitch, [
+  view.page(language, theme, i18n.PrivateKey, view.Narrow, view.NoSwitch, [
     view.card([
       account_summary(language, row),
       view.copyable_field(

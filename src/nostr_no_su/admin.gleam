@@ -22,6 +22,9 @@
 //// 認証に失敗した要求（401）は、理由だけを `[admin]` の 1 行でログに出し、資格情報、
 //// パス、送信元は出さない。遅延やロックアウトは入れない（単一利用者がループバックか
 //// VPN の内側で使う前提）。
+////
+//// テーマは言語と同じく認証の後に、切り替えで保存した cookie から決め（`request_theme`）、
+//// 無ければブラウザーの設定に従う。
 
 import gleam/bit_array
 import gleam/bool
@@ -74,7 +77,10 @@ const incorrect_password = "incorrect password"
 /// ホストで動く別のアプリにも送られるので、製品の名前を付ける。
 const language_cookie = "nostr_no_su_language"
 
-/// 言語の cookie の属性。
+/// テーマの切り替えで選んだテーマを保存する cookie の名前。
+const theme_cookie = "nostr_no_su_theme"
+
+/// 言語とテーマの cookie の属性。
 ///
 /// - どのページでも読むので `Path=/` にし、JS から読まないので `HttpOnly` を付ける
 /// - `SameSite=Lax` にする。クライアントが別のサイトから開く承認ページ（`auth_url`）にも
@@ -84,8 +90,8 @@ const language_cookie = "nostr_no_su_language"
 ///   秘密ではない。`wisp.set_cookie` はホストが `localhost` などでなければ `Secure` を
 ///   付けるので使わない
 /// - 365 日保つ。値は言語コードのままで、署名しない（`secret_key_base` は起動ごとの乱数で、
-///   署名すると再起動で読めなくなる。改ざんされても表示の言語が変わるだけである）
-const language_cookie_attributes = cookie.Attributes(
+///   署名すると再起動で読めなくなる。改ざんされても表示の言語かテーマが変わるだけである）
+const preference_cookie_attributes = cookie.Attributes(
   max_age: Some(31_536_000),
   domain: None,
   path: Some("/"),
@@ -135,8 +141,8 @@ pub fn supervised(
 }
 
 /// 指定のアドレスとポートで待ち受ける mist の設定。secret_key_base は wisp が
-/// 要求するが、cookie の署名も暗号化も使わない（言語の cookie も署名しない）ため
-/// 起動ごとの乱数でよい。
+/// 要求するが、cookie の署名も暗号化も使わない（言語とテーマの cookie も署名しない）
+/// ため起動ごとの乱数でよい。
 fn server(
   bind: String,
   port: Int,
@@ -173,7 +179,14 @@ pub fn handle_request(context: Context, request: Request) -> Response {
     ["healthz"] -> healthz(request)
     segments -> {
       use <- require_password(context, request)
-      route(context, request, request_language(request), segments) |> protect
+      route(
+        context,
+        request,
+        request_language(request),
+        request_theme(request),
+        segments,
+      )
+      |> protect
     }
   }
 }
@@ -183,31 +196,34 @@ fn route(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   segments: List(String),
 ) -> Response {
   case segments {
-    [] -> show_dashboard(context, request, language)
+    [] -> show_dashboard(context, request, language, theme)
     segments
       if segments == view.stylesheet_segments
       || segments == view.script_segments
     -> static_file(request)
     segments if segments == view.language_segments -> switch_language(request)
-    ["approve", token] -> approve_connection(context, request, language, token)
-    ["deny", token] -> deny_connection(context, request, language, token)
+    segments if segments == view.theme_segments -> switch_theme(request)
+    ["approve", token] ->
+      approve_connection(context, request, language, theme, token)
+    ["deny", token] -> deny_connection(context, request, language, theme, token)
     segments if segments == dashboard.revoke_segments ->
-      revoke_session(context, request, language)
+      revoke_session(context, request, language, theme)
     segments if segments == dashboard.new_account_segments ->
-      show_new_account(request, language)
+      show_new_account(request, language, theme)
     segments if segments == dashboard.generate_account_segments ->
-      generate_account(request, language)
+      generate_account(request, language, theme)
     segments if segments == dashboard.import_account_segments ->
-      import_account(context, request, language)
+      import_account(context, request, language, theme)
     segments if segments == dashboard.register_generated_segments ->
-      register_generated_account(context, request, language)
+      register_generated_account(context, request, language, theme)
     segments ->
       case dashboard.parse_account_action_path(segments) {
         Ok(#(signer, action)) ->
-          account_action(context, request, language, signer, action)
+          account_action(context, request, language, theme, signer, action)
         Error(Nil) -> wisp.not_found()
       }
   }
@@ -261,6 +277,16 @@ fn request_language(request: Request) -> Language {
   |> result.unwrap(i18n.default_language)
 }
 
+/// 表示のテーマ。切り替えで保存した cookie の値から決め、cookie が無いか対応していない
+/// 値ならブラウザーの設定にする。`Origin` も `Referer` も無い POST では CSRF の検査が
+/// cookie を取り除くので、ブラウザーの設定になる。
+fn request_theme(request: Request) -> view.Theme {
+  request.get_cookies(request)
+  |> list.key_find(theme_cookie)
+  |> result.try(view.theme_from_code)
+  |> result.unwrap(view.System)
+}
+
 /// 言語の切り替え。選んだ言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す。
 /// cookie を変えるので POST だけを受け付け、ほかの POST と同じく CSRF の検査の下に置く。
 /// フォームが送るのは言語と戻り先のパスだけで、秘密鍵を運ばない。
@@ -274,14 +300,48 @@ fn switch_language(request: Request) -> Response {
       |> response.set_cookie(
         language_cookie,
         i18n.code(language),
-        language_cookie_attributes,
+        preference_cookie_attributes,
       )
   }
 }
 
-/// 言語を切り替えた後に開くパス。`/` で始まる値を `/` で分け、空のセグメントを除いて
-/// セグメントごとにパーセントエンコードしてから組み立て直すので、`//host` や `/\host`
-/// のような別のオリジンを指す形にならない。`/` で始まらない値はダッシュボードにする。
+/// テーマの切り替え。選んだテーマを cookie に保存し（ブラウザーの設定では cookie を
+/// 消す）、フォームが送った戻り先へ 303 で戻す。cookie を変えるので POST だけを受け付け、
+/// ほかの POST と同じく CSRF の検査の下に置く。
+fn switch_theme(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Post)
+  use form <- wisp.require_form(request)
+  case view.theme_from_code(form_value(form, view.theme_field)) {
+    Error(Nil) -> wisp.bad_request("unknown theme")
+    Ok(theme) ->
+      wisp.redirect(to: return_path(form_value(form, view.return_field)))
+      |> set_theme_cookie(theme)
+  }
+}
+
+/// 選んだテーマを応答の cookie に反映する。ブラウザーの設定では cookie を消し、それ
+/// 以外はコードを保存する。
+fn set_theme_cookie(response: Response, theme: view.Theme) -> Response {
+  case theme {
+    view.System ->
+      response.expire_cookie(
+        response,
+        theme_cookie,
+        preference_cookie_attributes,
+      )
+    view.Light | view.Dark ->
+      response.set_cookie(
+        response,
+        theme_cookie,
+        view.theme_code(theme),
+        preference_cookie_attributes,
+      )
+  }
+}
+
+/// テーマか言語を切り替えた後に開くパス。`/` で始まる値を `/` で分け、空のセグメントを
+/// 除いてセグメントごとにパーセントエンコードしてから組み立て直すので、`//host` や
+/// `/\host` のような別のオリジンを指す形にならない。`/` で始まらない値はダッシュボードにする。
 fn return_path(raw: String) -> String {
   case raw {
     "/" <> path ->
@@ -299,6 +359,7 @@ fn show_dashboard(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
 ) -> Response {
   use <- wisp.require_method(request, http.Get)
   dashboard.Snapshot(
@@ -308,7 +369,7 @@ fn show_dashboard(
     sessions: context.sessions(),
     plugins: context.plugins(),
   )
-  |> dashboard.render(language, _)
+  |> dashboard.render(language, theme, _)
   |> wisp.html_response(200)
 }
 
@@ -318,14 +379,16 @@ fn approve_connection(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   token: String,
 ) -> Response {
   case request.method {
-    http.Get -> show_approval(context, language, token)
+    http.Get -> show_approval(context, language, theme, token)
     http.Post -> {
-      use entry <- with_pending(context, language, token)
+      use entry <- with_pending(context, language, theme, token)
       decision_response(
         language,
+        theme,
         context.approve(token),
         session_change_line(ConnectionApproved, entry.signer, entry.client),
         i18n.Approved,
@@ -342,12 +405,14 @@ fn deny_connection(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   token: String,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
-  use entry <- with_pending(context, language, token)
+  use entry <- with_pending(context, language, theme, token)
   decision_response(
     language,
+    theme,
     context.deny(token),
     session_change_line(ConnectionDenied, entry.signer, entry.client),
     i18n.Denied,
@@ -360,12 +425,13 @@ fn deny_connection(
 fn show_approval(
   context: Context,
   language: Language,
+  theme: view.Theme,
   token: String,
 ) -> Response {
   case find_pending(context, token) {
     Error(Nil) -> wisp.not_found()
     Ok(entry) ->
-      wisp.html_response(dashboard.approval_page(language, entry), 200)
+      wisp.html_response(dashboard.approval_page(language, theme, entry), 200)
   }
 }
 
@@ -384,12 +450,14 @@ fn find_pending(
 fn with_pending(
   context: Context,
   language: Language,
+  theme: view.Theme,
   token: String,
   next: fn(dashboard.PendingRow) -> Response,
 ) -> Response {
   case find_pending(context, token) {
     Ok(entry) -> next(entry)
-    Error(Nil) -> not_found_notice(language, engine.approval_request_not_found)
+    Error(Nil) ->
+      not_found_notice(language, theme, engine.approval_request_not_found)
   }
 }
 
@@ -423,6 +491,7 @@ pub fn session_change_line(
 /// 呼び出し側が渡す。
 fn decision_response(
   language: Language,
+  theme: view.Theme,
   outcome: Result(Nil, String),
   log_line: String,
   done: i18n.Message,
@@ -432,18 +501,29 @@ fn decision_response(
   case outcome {
     Ok(Nil) -> {
       log.println(log_prefix, log_line)
-      dashboard.notice_page(language, done, i18n.Translated(message), tone)
+      dashboard.notice_page(
+        language,
+        theme,
+        done,
+        i18n.Translated(message),
+        tone,
+      )
       |> wisp.html_response(200)
     }
-    Error(reason) -> not_found_notice(language, reason)
+    Error(reason) -> not_found_notice(language, theme, reason)
   }
 }
 
 /// 処理できなかった要求の、理由を添えた 404 の通知ページ。バンカーの理由は英語の
 /// 文字列で届くので、訳さずに出す。承認・拒否と取り消しが使う。
-fn not_found_notice(language: Language, reason: String) -> Response {
+fn not_found_notice(
+  language: Language,
+  theme: view.Theme,
+  reason: String,
+) -> Response {
   dashboard.notice_page(
     language,
+    theme,
     i18n.NotFound,
     i18n.Untranslated(reason),
     view.Failure,
@@ -458,6 +538,7 @@ fn revoke_session(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
   use form <- wisp.require_form(request)
@@ -474,7 +555,7 @@ fn revoke_session(
           )
           wisp.redirect(to: "/")
         }
-        Error(failure) -> revoke_failure_response(language, failure)
+        Error(failure) -> revoke_failure_response(language, theme, failure)
       }
     _, _ -> wisp.bad_request("signer and client are required")
   }
@@ -486,28 +567,39 @@ fn revoke_session(
 /// やり直してよい一時的な失敗として返す。
 fn revoke_failure_response(
   language: Language,
+  theme: view.Theme,
   failure: RevokeFailure,
 ) -> Response {
   case failure {
-    bunker.SessionNotFound(reason) -> not_found_notice(language, reason)
-    bunker.NotAnswered(reason) -> not_confirmed_notice(language, reason, 503)
+    bunker.SessionNotFound(reason) -> not_found_notice(language, theme, reason)
+    bunker.NotAnswered(reason) ->
+      not_confirmed_notice(language, theme, reason, 503)
   }
 }
 
 /// アカウントの登録画面。
-fn show_new_account(request: Request, language: Language) -> Response {
+fn show_new_account(
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
   use <- wisp.require_method(request, http.Get)
-  account_pages.new_account_page(language, None) |> wisp.html_response(200)
+  account_pages.new_account_page(language, theme, None)
+  |> wisp.html_response(200)
 }
 
 /// 鍵を生成し、確認ページで nsec を 1 回だけ表示する。ここでは登録しないので、
 /// 再読み込みで再送されても別の鍵の確認ページが出るだけで、何も登録されない。
 /// 本文を読まないので、フォームの本文が無い POST も受け付ける。
-fn generate_account(request: Request, language: Language) -> Response {
+fn generate_account(
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
   use <- wisp.require_method(request, http.Post)
   account.generate(crypto.strong_random_bytes)
   |> account.nsec
-  |> account_pages.generated_key_page(language, _, None)
+  |> account_pages.generated_key_page(language, theme, _, None)
   |> wisp.html_response(200)
 }
 
@@ -516,13 +608,25 @@ fn import_account(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
 ) -> Response {
   let reject_label = fn(_account, reason) {
-    account_pages.new_account_page(language, Some(i18n.Translated(reason)))
+    account_pages.new_account_page(
+      language,
+      theme,
+      Some(i18n.Translated(reason)),
+    )
   }
-  use account, label <- register(context, request, language, reject_label)
+  use account, label <- register(
+    context,
+    request,
+    language,
+    theme,
+    reject_label,
+  )
   account_pages.registered_page(
     language,
+    theme,
     account.npub(account),
     label,
     account.nsec(account),
@@ -537,15 +641,23 @@ fn register_generated_account(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
 ) -> Response {
   let reject_label = fn(generated, reason) {
     account_pages.generated_key_page(
       language,
+      theme,
       account.nsec(generated),
       Some(reason),
     )
   }
-  use _account, _label <- register(context, request, language, reject_label)
+  use _account, _label <- register(
+    context,
+    request,
+    language,
+    theme,
+    reject_label,
+  )
   wisp.redirect(to: "/")
 }
 
@@ -557,6 +669,7 @@ fn register(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   reject_label: fn(Account, i18n.Message) -> String,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
@@ -564,7 +677,11 @@ fn register(
   use form <- wisp.require_form(request)
   case parse_private_key(form) {
     Error(reason) ->
-      account_pages.new_account_page(language, Some(i18n.Translated(reason)))
+      account_pages.new_account_page(
+        language,
+        theme,
+        Some(i18n.Translated(reason)),
+      )
       |> wisp.html_response(400)
     Ok(account) ->
       case parse_label(form_value(form, dashboard.label_field)) {
@@ -574,8 +691,8 @@ fn register(
           case context.add_account(account, label) {
             Ok(Nil) -> on_success(account, label)
             Error(failure) ->
-              change_failure_response(language, failure, fn(reason) {
-                account_pages.new_account_page(language, Some(reason))
+              change_failure_response(language, theme, failure, fn(reason) {
+                account_pages.new_account_page(language, theme, Some(reason))
               })
           }
       }
@@ -629,19 +746,21 @@ fn account_action(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   signer: String,
   action: dashboard.AccountAction,
 ) -> Response {
-  use row <- with_account(context, language, signer)
+  use row <- with_account(context, language, theme, signer)
   case request.method, action {
     http.Get, _ ->
-      account_pages.account_action_page(language, row, action, None)
+      account_pages.account_action_page(language, theme, row, action, None)
       |> wisp.html_response(200)
     http.Post, dashboard.EditLabel ->
-      update_label(context, request, language, row)
+      update_label(context, request, language, theme, row)
     http.Post, dashboard.RotateSecret ->
       apply_account_change(
         language,
+        theme,
         row,
         action,
         context.rotate_secret(row.signer),
@@ -649,12 +768,13 @@ fn account_action(
     http.Post, dashboard.DeleteAccount ->
       apply_account_change(
         language,
+        theme,
         row,
         action,
         context.remove_account(row.signer),
       )
     http.Post, dashboard.RevealPrivateKey ->
-      reveal_private_key(context, request, language, row)
+      reveal_private_key(context, request, language, theme, row)
     _, _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post])
   }
 }
@@ -665,11 +785,12 @@ fn account_action(
 fn with_account(
   context: Context,
   language: Language,
+  theme: view.Theme,
   signer: String,
   next: fn(dashboard.AccountRow) -> Response,
 ) -> Response {
   case context.accounts() {
-    Error(reason) -> accounts_unavailable(language, reason)
+    Error(reason) -> accounts_unavailable(language, theme, reason)
     Ok(rows) ->
       case list.find(rows, fn(row) { row.signer == signer }) {
         Ok(row) -> next(row)
@@ -683,6 +804,7 @@ fn update_label(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   row: dashboard.AccountRow,
 ) -> Response {
   use form <- wisp.require_form(request)
@@ -690,6 +812,7 @@ fn update_label(
     Error(reason) ->
       account_pages.account_action_page(
         language,
+        theme,
         row,
         dashboard.EditLabel,
         Some(i18n.Translated(reason)),
@@ -698,6 +821,7 @@ fn update_label(
     Ok(label) ->
       apply_account_change(
         language,
+        theme,
         row,
         dashboard.EditLabel,
         context.update_label(row.signer, label),
@@ -709,6 +833,7 @@ fn update_label(
 /// 失敗なら `change_failure_response` に渡す。
 fn apply_account_change(
   language: Language,
+  theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
   outcome: Result(Nil, ChangeFailure),
@@ -716,8 +841,14 @@ fn apply_account_change(
   case outcome {
     Ok(Nil) -> wisp.redirect(to: "/")
     Error(failure) ->
-      change_failure_response(language, failure, fn(reason) {
-        account_pages.account_action_page(language, row, action, Some(reason))
+      change_failure_response(language, theme, failure, fn(reason) {
+        account_pages.account_action_page(
+          language,
+          theme,
+          row,
+          action,
+          Some(reason),
+        )
       })
   }
 }
@@ -729,14 +860,16 @@ fn apply_account_change(
 /// バンカーの理由は英語の文字列で届くので、訳さずに出す。
 fn change_failure_response(
   language: Language,
+  theme: view.Theme,
   failure: ChangeFailure,
   render: fn(i18n.Reason) -> String,
 ) -> Response {
   case failure {
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
-    bunker.NotReady(reason) -> accounts_unavailable(language, reason)
-    bunker.MaybeApplied(reason) -> not_confirmed_notice(language, reason, 202)
+    bunker.NotReady(reason) -> accounts_unavailable(language, theme, reason)
+    bunker.MaybeApplied(reason) ->
+      not_confirmed_notice(language, theme, reason, 202)
   }
 }
 
@@ -744,11 +877,13 @@ fn change_failure_response(
 /// 決める（アカウントの変更は 202、セッションの取り消しは 503）。
 fn not_confirmed_notice(
   language: Language,
+  theme: view.Theme,
   reason: String,
   status: Int,
 ) -> Response {
   dashboard.notice_page(
     language,
+    theme,
     i18n.ChangeNotConfirmed,
     i18n.Untranslated(reason),
     view.Warning,
@@ -758,9 +893,14 @@ fn not_confirmed_notice(
 
 /// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け
 /// られない、nsec の問い合わせが失敗した場合に共通で使う。
-fn accounts_unavailable(language: Language, reason: String) -> Response {
+fn accounts_unavailable(
+  language: Language,
+  theme: view.Theme,
+  reason: String,
+) -> Response {
   dashboard.notice_page(
     language,
+    theme,
     i18n.AccountsNotAvailable,
     i18n.Untranslated(reason),
     view.Warning,
@@ -774,6 +914,7 @@ fn reveal_private_key(
   context: Context,
   request: Request,
   language: Language,
+  theme: view.Theme,
   row: dashboard.AccountRow,
 ) -> Response {
   use form <- wisp.require_form(request)
@@ -793,6 +934,7 @@ fn reveal_private_key(
       )
       account_pages.account_action_page(
         language,
+        theme,
         row,
         dashboard.RevealPrivateKey,
         Some(i18n.Translated(i18n.IncorrectPassword)),
@@ -803,10 +945,10 @@ fn reveal_private_key(
       case context.nsec(row.signer) {
         Ok(nsec) -> {
           log.println(log_prefix, "revealed the private key of " <> row.npub)
-          account_pages.private_key_page(language, row, nsec)
+          account_pages.private_key_page(language, theme, row, nsec)
           |> wisp.html_response(200)
         }
-        Error(reason) -> accounts_unavailable(language, reason)
+        Error(reason) -> accounts_unavailable(language, theme, reason)
       }
   }
 }
