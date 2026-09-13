@@ -159,7 +159,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 アプリのコンテナーはルートを読み取り専用（`read_only`）にし、ケーパビリティーを全部落として（`cap_drop: [ALL]`、`no-new-privileges`）動く。書けるのは `/tmp` だけで、メモリ上の tmpfs なのでコンテナーの再起動（クラッシュの後の自動再起動を含む）で消え、書いた分だけメモリを使う。自作のプラグインも `/tmp` 以外には書けない。`file_logger` の既定の出力先（`PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log`）と BEAM のクラッシュダンプ（`ERL_CRASH_DUMP=/tmp/erl_crash.dump`）もここに書かれるので、クラッシュダンプは既定では自動再起動で消える。どちらも残したいときは、`docker-compose.override.yml` で volume をマウントし（uid 1000 が書けること）、`PLUGIN_FILE_LOGGER_PATH` と `ERL_CRASH_DUMP` をその下に上書きする。
 
-資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*`、`DATABASE_URL`、`PLUGIN_EVENT_LOGGER_DATABASE_URL` の 3 か所を合わせること。
+同梱の Postgres の資格情報は `.env` の `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変える（既定は `nostr` / `nostr` / `nostr_no_su`）。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値はここから組み立てるので、ほかを書き換える必要は無い。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの URL だけが変わって接続が拒否される。パスワードは URL にそのまま入り、アプリは userinfo を復号しない（注 1）ので、`@ : / ? # %` などを含めないこと。この文書、[バックアップと復旧](docs/operations.md)、`plugins-src/event_logger/README.md` のコマンドの `-U nostr -d nostr_no_su` は既定値なので、変えたときは読み替えること。
 
 ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。docker のログは `json-file` の 10 MB × 3 世代で打ち切られ、`docker compose logs` で見えるのはその範囲だけである。
 
