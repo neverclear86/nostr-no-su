@@ -9,9 +9,7 @@
 | --- | --- | --- |
 | `bunker_accounts` | 公開鍵、ラベル、暗号化した秘密鍵と接続 secret | 全アカウントを登録し直す必要があり、`bunker://` URI の secret も変わる |
 | `monitor_resume` | 監視の購読の再開点（リレーごとの `since`） | 失うと次の購読が保存済みのイベントをすべて求め、`dedup` のウィンドウを超える分がプラグインへもう一度届く |
-| `bunker_sessions` | 承認済みのクライアントセッション（署名者、クライアント、権限） | 失うとクライアントは再承認が要る |
-| `bunker_pending` | 承認待ちの接続要求 | 失うと承認待ちのリクエストは応答を受け取れず、クライアントは `connect` をやり直す |
-| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`、`bunker_sessions`、`bunker_pending`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
+| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
 | `events` | `event_logger` が保存したイベント（このプラグインを置いたときだけ存在する） | プラグインが保存した履歴が失われる |
 | `event_logger_schema_version` | `event_logger` の移行の版 | `events` と対で戻す必要がある |
 | マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（README の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できない |
@@ -39,7 +37,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 docker compose exec -T postgres psql -At -U nostr -d nostr_no_su -c "SELECT count(*) FROM bunker_accounts"
 ```
 
-取ったダンプの中身は次で確かめる。プラグインを置いていなければ 2 行、`event_logger` を置いていれば 4 行の `TABLE DATA` が出る。
+取ったダンプの中身は次で確かめる。プラグインを置いていなければ 5 行、`event_logger` を置いていれば 7 行の `TABLE DATA` が出る。
 
 ```sh
 docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DATA'
