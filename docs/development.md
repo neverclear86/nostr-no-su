@@ -11,7 +11,7 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
+本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。`CI` が設定されているときは失敗する）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -42,7 +42,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本�
 
 ## event_logger プラグインのテスト
 
-`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）:
+`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。`CI` が設定されているときは失敗する）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
