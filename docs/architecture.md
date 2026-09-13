@@ -235,7 +235,7 @@ sequenceDiagram
     bk->>eng: リクエストと現在時刻、乱数
     Note over eng: kind、受付ウィンドウ、<br/>起動時刻、宛先、<br/>処理済みの id を検査
     alt method が connect
-        Note over eng: secret 一致、または<br/>承認済みの組なら ack
+        Note over eng: secret が定数時間で一致、または<br/>承認済みの組なら ack
         opt どちらでもない
             alt 管理 UI が有効
                 eng-->>bk: auth_url 応答と承認待ち
@@ -519,6 +519,7 @@ nostr-no-su/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
+│       ├── bunker/connection_secret.gleam 接続 secret（閉じ込め、定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデック
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
