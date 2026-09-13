@@ -70,21 +70,22 @@ root (one_for_one, 3/60)
 │   ├── children(<plugin>) (one_for_one, 5/10, Temporary)  子仕様を持つプラグインだけ
 │   │   └── <プラグインが申告した子プロセス>
 │   └── runner(<plugin>)   (worker, Permanent)
-├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、次にリレーごとの接続
-│   ├── dedup
-│   └── relay_connection × 監視リレーの数
 ├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次にリレーごとの接続
 │   ├── account_pool      (pog, supervisor)  アカウントストアの接続プール
 │   ├── account_lock_pool (pog, supervisor)  同じ DB に 1 インスタンスだけを許す advisory lock 専用の 1 本のプール
 │   ├── bunker
 │   └── relay_connection × バンカーリレーの数
+├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、リレーごとの接続、再開点の保存
+│   ├── dedup
+│   ├── relay_connection × 監視リレーの数
+│   └── resume_saver
 └── admin        (mist)                管理 UI の HTTP サーバー
 ```
 
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
 接続は復帰の過程で購読を張り直し publisher を登録し直すので、再起動したアクターが再び生きたソケットに配線される。
 一方、アカウントの変更ではバンカーアクターを再起動しない（再起動するとインメモリのセッションが消える）。
-署名者の集合が変わったら、アクターは接続アクターを名前で呼んで購読の張り直しを依頼し、接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。
+署名者の集合が変わったら、アクターはバンカーと監視の接続アクターを名前で呼んで購読の張り直しを依頼し、接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
 
 バンカーのサブツリーだけは、アクターの前に接続プールを置く。
 pgo はチェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で exit させる。
@@ -96,6 +97,8 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 `plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視が無効な構成でも状態を見せたいからである。
 ルートの子は `plugins` を `monitor` より先に追加する。
 逆順だとディスパッチャーが未登録のランナー名へ送り、起動直後のイベントを取りこぼす。
+`bunker` も `monitor` より先に追加する。
+監視の接続は購読を組み立てるたびにバンカーへ署名者を問い合わせるので、逆順だと最初の問い合わせが名前の登録より先に走り、定義を得られずに再試行を待つ。
 
 ### 再起動の許容回数に頼らない設計
 
@@ -140,8 +143,8 @@ sequenceDiagram
     Note over client: id と署名を確かめて<br/>合わないものは捨てる
     client->>handler: 検証済みイベント
     Note over handler: kind 24133 は<br/>ここで落とす
-    handler->>dedup: Incoming(event)
-    Note over dedup: 直近の id と<br/>突き合わせる
+    handler->>dedup: Incoming(relay_url, event)
+    Note over dedup: created_at をリレーごとに記録し、<br/>直近の id と突き合わせる
     dedup->>runner: Handle(event)（送るだけで戻る）
     Note over runner: キュー長を見て<br/>過負荷なら捨てる
     runner->>worker: spawn_monitor
@@ -164,6 +167,46 @@ sequenceDiagram
 プラグインが受け取るのは Gleam のレコードではなく binary キーの Erlang map である。
 レコードはランタイムではタプルなので、フィールドを 1 つ足すだけで既存のプラグインが黙って壊れる。
 map なら Erlang や Elixir で書いたプラグインも載せられる。
+
+## 監視の購読
+
+監視の接続は、接続の直後と張り直しの依頼のたびに購読の定義を評価する。
+定義は、バンカーの現在の署名者（`GetSigners`）と、その接続の再開点から組み立てる（`nostr_no_su.monitor_subscriptions`）。
+署名者が 0 件なら購読を定義せず、再開点も読まない。
+どれかに応答が無ければ、開いている購読を変えずに再試行する。
+
+再開点は、ディスパッチャーのメモリ（`dedup/resume`、`GetSince`）にあればそれを、無ければ DB の `monitor_resume` の値を使う。
+メモリの値は保存済みの値以上である（保存の周期は 5 秒だが、メモリの値は DB の値を `since` にした購読で受け取ったイベントか、追加の時刻から決まるため、常に DB の値以上になる）。
+記録を接続ではなくディスパッチャーに置くのは、接続のプロセスが切断で死ぬためと、監視のイベントがすべてディスパッチャーを通るためである。
+
+保存は `resume_saver` が 5 秒ごとに写しを取り、変わったリレーだけを値を小さくせずに書く。
+DB の遅さをディスパッチャーに持ち込まないためである。
+
+起動時は、接続の直後と読み込みによる張り直しで同じ `since` の REQ が 2 回送られうる（「アカウントの読み込み」の節の最後の段落と同じ理由で許容する）。
+
+```mermaid
+sequenceDiagram
+    participant ui as 管理 UI
+    participant dedup as dedup
+    participant bk as bunker
+    participant conn as relay_connection（監視）
+    participant sock as ソケット（stratus）
+
+    ui->>dedup: AddingAccount(現在時刻)（送るだけ）
+    ui->>bk: AddAccount
+    Note over bk: 書き込みに成功し、<br/>署名者の集合が変わる
+    bk->>conn: Resubscribe
+    bk-->>ui: Ok
+    conn->>sock: resubscribe
+    sock->>bk: GetSigners
+    bk-->>sock: 署名者
+    sock->>dedup: GetSince(relay_url)
+    dedup-->>sock: 追加の時刻以上の since
+    Note over sock: authors と since の REQ（同じ id で置き換え）
+```
+
+`AddingAccount` を書き込みより前に送るのは、張り直しの `GetSince` より先にディスパッチャーへ届けるためである。
+バンカーの張り直しのコールバックは起動時の読み込みや削除でも呼ばれるので、追加の時刻には使わない。
 
 ## アカウントの読み込み
 
@@ -208,6 +251,7 @@ DB が起動時に到達可能なら、どの接続も読み込み済みの署�
 読み込みのトランザクションは、一覧を読む前にスキーマの版を確かめる。
 `schema_version` に記録された版より新しい移行（`account_store.migrations`）を順に実行し、移行ごとに版を記録する。
 記録された版がビルドの最新の版より新しいときは、再試行しても変わらないので、起動処理が組み立てたストアの操作（`nostr_no_su.account_store_operations`）が理由を 1 行出して終了コード 1 で VM を止める。
+版 2 は監視の購読の再開点のテーブル（`monitor_resume`）である。監視はバンカーの署名者が 1 件以上のときだけこのテーブルを読むので、読むのは読み込みが 1 回成功した後になる（「監視の購読」の節）。
 
 再試行を名前なしの subject へ予約するのは、名前付き subject へのタイマーが名前宛てになり、再起動した後の同じ名前のアクターに届いて再試行が重複するためである。
 名前なしの subject は pid 宛てなので、アクターが終了するとランタイムがタイマーを取り消す。
@@ -516,6 +560,9 @@ nostr-no-su/
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
+│       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）
+│       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
+│       ├── dedup/resume_store.gleam 再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
@@ -604,7 +651,6 @@ nostr-no-su/
 | --- | --- |
 | `RELAY_URL` | 監視 |
 | `BUNKER_RELAY_URL` | バンカー |
-| `PUBKEYS` | 監視 |
 | `DATABASE_URL`（`_FILE`） | バンカー（アカウントストア） |
 | `ACCOUNT_MASTER_KEY`（`_FILE`） | バンカー（アカウントの暗号化） |
 | `PLUGIN_DIR` | プラグインローダー |
