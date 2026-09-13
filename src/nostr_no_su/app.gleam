@@ -5,9 +5,10 @@
 //// |-- plugins      (one_for_one): プラグインごとのランナー
 //// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
 //// |   `-- runner(<plugin>)   (worker  / Permanent)
-//// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
 //// |-- bunker       (rest_for_one): アカウントストアの接続プール、ロックのプール、
 //// |                                バンカーアクター、次にリレーごとの接続
+//// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、リレーごとの接続、
+//// |                                再開点の保存
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
@@ -38,6 +39,10 @@
 //// メッセージで行う）からである。監視とプラグインはバンカーのサブツリーと兄弟
 //// なので、DB の障害に巻き込まれない。
 ////
+//// 監視の購読の評価はバンカーと DB（再開点）への問い合わせに依るが、応答が無ければ
+//// 開いている購読を変えない（`relay_client.sync`）。再開点の保存はディスパッチャー
+//// とは別のアクターが行う。
+////
 //// **イベント保存はこのツリーには無い。** 外部プラグイン `event_logger` が
 //// `plugin_children/1` で申告する子として `plugins` サブツリーの下で動く。
 ////
@@ -51,6 +56,8 @@
 //// ならない。プラグイン同士は独立なのでこのサブツリーは `one_for_one` にする。
 //// **ルートの子は `plugins` を `monitor` より先に追加すること。** 逆順だと
 //// ディスパッチャーが未登録のランナー名へ送り、起動直後のイベントを取りこぼす。
+//// **`bunker` も `monitor` より先に追加すること。** 逆順だと、監視の接続の最初の
+//// 購読の評価がバンカーの名前の登録より先に走り、定義を得られずに再試行を待つ。
 ////
 //// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
 //// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
@@ -106,6 +113,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine.{type Pending}
 import nostr_no_su/dedup
+import nostr_no_su/dedup/resume_saver
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Verified}
@@ -143,13 +151,16 @@ pub type PluginSpec {
 }
 
 /// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
-/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。
+/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。`subscriptions`
+/// はリレー URL からそのリレーの購読の定義を返す。`save_resume` は再開点を
+/// 小さくせずに保存する操作で、`resume_saver` が使う。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
     dedup_capacity: Int,
     relays: List(Relay),
-    subscriptions: Subscriptions,
+    subscriptions: fn(String) -> Subscriptions,
+    save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
   )
 }
 
@@ -198,10 +209,12 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
   // 未登録の名前へ送られて届かない（件数はディスパッチャーがログに出す）。
   |> add_plugins(spec.plugins)
+  // バンカーは監視より先に起動する。監視の接続が購読を組み立てるために送る
+  // `GetSigners` を、バンカーの名前の登録と最初の読み込みの後に処理させるため。
+  |> supervisor.add(supervisor.supervised(bunker_tree(spec, spec.bunker)))
   |> add_child(spec.monitor, fn(config) {
     supervisor.supervised(monitor_tree(spec, config))
   })
-  |> supervisor.add(supervisor.supervised(bunker_tree(spec, spec.bunker)))
   |> add_child(spec.admin, admin_child(spec, _))
   |> supervisor.start
 }
@@ -338,7 +351,9 @@ fn plugin_targets(specs: List(PluginSpec)) -> List(plugin_runner.Target) {
   plugin_runner.target(spec.plugin.name, spec.name)
 }
 
-/// 監視サブツリー。ディスパッチャーと、そこへイベントを流し込む接続群。
+/// 監視サブツリー。ディスパッチャー、そこへイベントを流し込む接続群、再開点を
+/// 保存するアクターの順に置く。保存のアクターを末尾に置くのは、その異常終了で
+/// 接続を落とさないためである。
 fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   subtree()
   |> supervisor.add(dedup.supervised(
@@ -346,6 +361,7 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     plugin_targets(spec.plugins),
     plugin_runner.dispatch,
     config.dedup_capacity,
+    list.map(config.relays, fn(relay) { relay.url }),
   ))
   |> add_connections(
     spec,
@@ -355,35 +371,46 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     fn(_relay_url, _socket) { Nil },
     fn(_relay_url) { Nil },
   )
+  |> supervisor.add(resume_saver.supervised(
+    config.name,
+    config.save_resume,
+    resume_saver.default_interval_ms,
+  ))
 }
 
 /// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。バンカー自身の
-/// NIP-46 通信はここで落とす。NIP-01 のフィルターに kind の否定は無く、`PUBKEYS`
-/// に署名者を含む標準的な構成では自分の応答イベントが監視購読にも届くため、
-/// 除外は受信側で行うほかない。
-fn monitor_handler(name: Name(dedup.Msg)) -> fn(Verified) -> Nil {
-  fn(verified: Verified) {
+/// NIP-46 通信はここで落とす。監視の購読の `authors` には署名者が入るので、
+/// 監視とバンカーが同じリレーを使うと、署名者が作るバンカーの応答（kind 24133）も
+/// 監視の購読に届く。
+fn monitor_handler(name: Name(dedup.Msg)) -> fn(String, Verified) -> Nil {
+  fn(relay_url: String, verified: Verified) {
     let incoming = event.verified_event(verified)
     case incoming.kind == event.nip46_kind {
       True -> Nil
-      False -> named.send(name, dedup.Incoming(incoming))
+      False -> named.send(name, dedup.Incoming(relay_url, incoming))
     }
   }
+}
+
+/// 監視サブツリーのリレー。監視が無効なら空。
+fn monitor_relays(spec: Spec) -> List(Relay) {
+  if_enabled(spec.monitor, [], fn(monitor) { monitor.relays })
 }
 
 /// バンカーサブツリー。接続プール、ロックのプール、アクター、それが応答に使う
 /// 接続群の順に置く。アクターはプールが登録された後に起動する必要があり（冒頭の
 /// doc を参照）、各接続はアクターに publisher を登録するため、アクターと一緒に
-/// 再起動する必要がある。アクターが署名者の変化で依頼する購読の張り直しは、各接続
-/// アクターへ名前で送る。`rest_for_one` なので、ロックのプールが再起動すると
-/// アクターと接続も再起動し、アクターの読み込みが advisory lock を取り直す。
+/// 再起動する必要がある。アクターが署名者の変化で依頼する購読の張り直しは、監視と
+/// バンカーの各接続アクターへ名前で送る。監視の購読も署名者から組み立てるためで
+/// ある。`rest_for_one` なので、ロックのプールが再起動するとアクターと接続も
+/// 再起動し、アクターの読み込みが advisory lock を取り直す。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
   |> supervisor.add(pog.supervised(config.pool))
   |> supervisor.add(pog.supervised(config.lock_pool))
   |> supervisor.add(
     bunker.supervised(config.name, config.settings, fn() {
-      list.each(config.relays, fn(relay) {
+      list.each(list.append(monitor_relays(spec), config.relays), fn(relay) {
         relay_connection.resubscribe(relay.name)
       })
     }),
@@ -391,8 +418,10 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   |> add_connections(
     spec,
     config.relays,
-    config.subscriptions,
-    fn(incoming) { named.send(config.name, bunker.Incoming(incoming)) },
+    fn(_relay_url) { config.subscriptions },
+    fn(_relay_url, incoming) {
+      named.send(config.name, bunker.Incoming(incoming))
+    },
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
@@ -410,9 +439,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     admin.Context(
       password: config.password,
       accounts: fn() { account_rows(spec.bunker) },
-      add_account: fn(added, label) {
-        bunker.add_account(bunker_name, added, label)
-      },
+      add_account: fn(added, label) { add_account(spec, added, label) },
       remove_account: bunker.remove_account(bunker_name, _),
       rotate_secret: bunker.rotate_secret(bunker_name, _),
       update_label: fn(signer, label) {
@@ -429,6 +456,27 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       deny: bunker.deny(bunker_name, _),
     ),
   )
+}
+
+/// アカウントを追加し、反映されるまで待つ。監視があれば、先にディスパッチャーへ
+/// 追加の時刻を知らせる。知らせは送るだけで待たないが、追加の成功でバンカーが
+/// 依頼する監視の購読の張り直しの問い合わせより先にディスパッチャーへ届くので、
+/// 張り直した購読の `since` はこの時刻を下回らない。バンカーが読み込めていなければ
+/// 時刻を送らずに `NotReady` を返す。時刻が保存済みの再開点を追い越し、読み込みの
+/// 後の購読が停止中のイベントを求めなくなるためである。アカウントを追加する経路は
+/// すべてこの関数を通すこと。管理 UI の Context が使う。
+pub fn add_account(
+  spec: Spec,
+  added: account.Account,
+  label: String,
+) -> Result(Nil, bunker.ChangeFailure) {
+  use _listings <- result.try(
+    bunker.accounts(spec.bunker.name) |> result.map_error(bunker.NotReady),
+  )
+  if_enabled(spec.monitor, Nil, fn(monitor) {
+    dedup.adding_account(monitor.name)
+  })
+  bunker.add_account(spec.bunker.name, added, label)
 }
 
 /// 設定されているサブツリーにだけ問い合わせ、無効なら既定値を返す。管理 UI は
@@ -470,10 +518,7 @@ pub fn reenable_plugin(
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。
 fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
-  let monitor_rows = {
-    use monitor <- if_enabled(spec.monitor, [])
-    statuses(dashboard.MonitorRelay, monitor.relays)
-  }
+  let monitor_rows = statuses(dashboard.MonitorRelay, monitor_relays(spec))
   list.append(monitor_rows, statuses(dashboard.BunkerRelay, spec.bunker.relays))
 }
 
@@ -538,14 +583,14 @@ fn subtree() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読とハンドラーは
-/// サブツリー内で共有し、接続・切断の通知にはそのリレーの URL を添える。
+/// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読の定義、受信した
+/// イベントのハンドラー、接続・切断の通知には、そのリレーの URL を渡す。
 fn add_connections(
   builder: Builder,
   spec: Spec,
   relays: List(Relay),
-  subscriptions: Subscriptions,
-  handle_event: fn(Verified) -> Nil,
+  subscriptions: fn(String) -> Subscriptions,
+  handle_event: fn(String, Verified) -> Nil,
   on_connect: fn(String, Socket) -> Nil,
   on_disconnect: fn(String) -> Nil,
 ) -> Builder {
@@ -555,7 +600,12 @@ fn add_connections(
     relay_connection.supervised(relay_connection.Settings(
       name: relay.name,
       relay: relay_client.label(relay.url),
-      connect: fn() { spec.open(relay.url, subscriptions, handle_event) },
+      connect: fn() {
+        spec.open(relay.url, subscriptions(relay.url), handle_event(
+          relay.url,
+          _,
+        ))
+      },
       on_connect: on_connect(relay.url, _),
       on_disconnect: fn() { on_disconnect(relay.url) },
       reconnect_delay: spec.reconnect_delay,

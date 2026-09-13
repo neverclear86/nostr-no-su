@@ -442,31 +442,21 @@ pub fn auth_url_base_test() {
     == None
 }
 
-/// 監視対象の pubkey だけが異なる設定。
-fn test_config(pubkeys: List(String)) -> config.Config {
-  config.Config(
-    relay_urls: ["wss://example.com"],
-    bunker_relay_urls: ["wss://example.com"],
-    pubkeys: pubkeys,
-    account_store: config.AccountStoreUnavailable("DATABASE_URL is not set"),
-    plugin_dir: None,
-    plugin_env: dict.new(),
-    admin_ui: config.Disabled,
-    admin_bind: "127.0.0.1",
-    admin_base_url: None,
-  )
-}
-
-/// pubkey が無い場合、監視は直近イベントの一部を購読する。
-pub fn to_filter_without_pubkeys_test() {
-  assert config.to_filter(test_config([]))
-    == Filter(..filter.new(), limit: Some(20))
-}
-
-/// pubkey がある場合、監視はその author を購読する。
-pub fn to_filter_with_pubkeys_test() {
-  assert config.to_filter(test_config(["a"]))
-    == Filter(..filter.new(), authors: Some(["a"]))
+/// 署名者が 0 件なら購読を定義せず、`since` を評価しない。署名者がいれば `since`
+/// を呼び、フィルターに `authors` と `since` を入れる。`since` が `Error(Nil)` なら
+/// 定義を得られなかったことにする。
+pub fn monitor_subscriptions_test() {
+  assert config.monitor_subscriptions([], fn() { panic as "must not be called" })
+    == Ok([])
+  assert config.monitor_subscriptions(["pk1", "pk2"], fn() { Ok(None) })
+    == Ok([
+      #("nostr-no-su", Filter(..filter.new(), authors: Some(["pk1", "pk2"]))),
+    ])
+  let assert Ok([#(_id, with_since)]) =
+    config.monitor_subscriptions(["pk1"], fn() { Ok(Some(1000)) })
+  assert with_since.since == Some(1000)
+  assert config.monitor_subscriptions(["pk1"], fn() { Error(Nil) })
+    == Error(Nil)
 }
 
 /// 署名者がいれば `#p` に入れて購読し、いなければ購読そのものを開かない。

@@ -59,7 +59,6 @@ pub type Config {
   Config(
     relay_urls: List(String),
     bunker_relay_urls: List(String),
-    pubkeys: List(String),
     account_store: AccountStore,
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
@@ -87,7 +86,6 @@ pub fn load() -> Config {
         envoy.get("BUNKER_RELAY_URL") |> result.unwrap("") |> parse_list,
         relay_urls,
       ),
-      pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
       account_store: account_store(),
       plugin_dir: optional("PLUGIN_DIR"),
       plugin_env: plugin_env(),
@@ -282,7 +280,7 @@ fn check_urls(variable: String, urls: List(String)) -> Result(Nil, String) {
   }
 }
 
-/// カンマ区切りのリスト（pubkey、リレー URL）をパースする。前後の空白は無視し、
+/// カンマ区切りのリスト（リレー URL）をパースする。前後の空白は無視し、
 /// 空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度書くと接続が
 /// 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、重複はここで
 /// 落とす。
@@ -294,12 +292,28 @@ pub fn parse_list(raw: String) -> List(String) {
   |> list.unique
 }
 
-/// 設定されたアカウントを購読する。pubkey が未設定なら直近イベントを少数だけ
-/// 購読する。
-pub fn to_filter(config: Config) -> Filter {
-  case config.pubkeys {
-    [] -> Filter(..filter.new(), limit: Some(20))
-    pubkeys -> Filter(..filter.new(), authors: Some(pubkeys))
+/// 監視の購読 id。
+const monitor_subscription_id = "nostr-no-su"
+
+/// 登録アカウントが書いたイベントの購読。署名者がいなければ購読を定義せず、`since`
+/// を評価しない（開いている購読は照合で CLOSE になる、`relay_client.sync`）。`since`
+/// は署名者がいるときだけ呼び、`Ok(None)` なら保存済みのイベントをすべて求め、
+/// `Error(Nil)` なら定義を得られなかったことにする。
+pub fn monitor_subscriptions(
+  signer_pubkeys: List(String),
+  since: fn() -> Result(Option(Int), Nil),
+) -> Result(List(#(String, Filter)), Nil) {
+  case signer_pubkeys {
+    [] -> Ok([])
+    signer_pubkeys -> {
+      use since <- result.map(since())
+      [
+        #(
+          monitor_subscription_id,
+          Filter(..filter.new(), authors: Some(signer_pubkeys), since: since),
+        ),
+      ]
+    }
   }
 }
 

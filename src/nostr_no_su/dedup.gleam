@@ -9,17 +9,38 @@
 //// リレーは同じイベントを繰り返し配信する（複数のリレーが同じイベントを持つ、
 //// 再接続時に保存済みイベントが再送される）ため、プラグインが同じ id を 2 度
 //// 見てはならない。
+////
+//// 監視のイベントがすべて通るアクターなので、購読の再開点（`dedup/resume`）も
+//// ここで記録する。監視の接続は購読を組み立てるたびに再開点を問い合わせ、
+//// `dedup/resume_saver` は周期ごとに写しを取って DB に保存する。再起動した
+//// ディスパッチャーは記録を失い、次の購読は DB の再開点から始まる。
 
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
+import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import nostr_no_su/dedup/resume.{type Resume}
 import nostr_no_su/dedup/window.{type Window}
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/time
+
+/// 再開点の問い合わせを待つ時間。処理は IO を含まないが、積まれた `Incoming` の
+/// 後に処理されるので、起動直後の流入のさなかは超えうる。超えたとき、購読の評価は
+/// 定義を得られなかったことになり、`relay_client` の再試行を待つ。
+const call_timeout_ms = 1000
 
 /// ディスパッチャーが受け取るメッセージ。
 pub type Msg {
-  /// 監視接続のいずれかで受信したイベント。
-  Incoming(event: Event)
+  /// リレー `relay_url` から受信したイベント。
+  Incoming(relay_url: String, event: Event)
+  /// これからアカウントを追加することの知らせ。現在時刻を伴う。
+  AddingAccount(at: Int)
+  /// リレー `relay_url` のメモリ上の再開点の問い合わせ。
+  GetSince(relay_url: String, reply: Subject(Option(Int)))
+  /// 保存のための再開点の写しの問い合わせ。
+  GetPoints(reply: Subject(Dict(String, Int)))
 }
 
 /// ディスパッチャーが保持する状態。`targets` は配送先の状態で、`deliver` が
@@ -29,20 +50,26 @@ type State(targets) {
     targets: targets,
     deliver: fn(targets, Event) -> targets,
     window: Window,
+    resume: Resume,
+    relay_urls: List(String),
   )
 }
 
 /// スーパービジョンツリー用の子仕様。再起動したディスパッチャーは `targets` の
 /// 初期値から始めるので、それまでの配送先の状態は失われる。`plugin_runner` の
 /// 宛先なら、再起動の前から続く取りこぼしの復帰の行は出ず、ランナーがまだ
-/// 居なければ取りこぼしの開始の行がもう一度出る。
+/// 居なければ取りこぼしの開始の行がもう一度出る。`relay_urls` は監視リレーの URL の
+/// 一覧で、アカウントの追加の時刻を記録する先になる。
 pub fn supervised(
   name: Name(Msg),
   targets: targets,
   deliver: fn(targets, Event) -> targets,
   capacity: Int,
+  relay_urls: List(String),
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, targets, deliver, capacity) })
+  supervision.worker(fn() {
+    start(name, targets, deliver, capacity, relay_urls)
+  })
 }
 
 /// 新規と判定したイベントを `deliver` へ渡すディスパッチャーを起動し、直近の
@@ -53,29 +80,84 @@ pub fn start(
   targets: targets,
   deliver: fn(targets, Event) -> targets,
   capacity: Int,
+  relay_urls: List(String),
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new(State(
     targets: targets,
     deliver: deliver,
     window: window.new(capacity),
+    resume: resume.new(),
+    relay_urls: relay_urls,
   ))
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
 }
 
-/// ウィンドウがまだ見ていないイベントを `deliver` へ渡し、それ以外は破棄する。
+/// リレーのメモリ上の再開点。ディスパッチャーが応答しなければ `Error(Nil)` を返し、
+/// 再開点が無いこと（`Ok(None)`）と区別する。
+pub fn since(name: Name(Msg), relay_url: String) -> Result(Option(Int), Nil) {
+  named.call(name, call_timeout_ms, GetSince(relay_url, _))
+  |> option.to_result(Nil)
+}
+
+/// これからアカウントを追加することを、現在時刻とともに知らせる。ディスパッチャー
+/// が動いていなければ何もしない。
+pub fn adding_account(name: Name(Msg)) -> Nil {
+  named.send(name, AddingAccount(time.now_seconds()))
+}
+
+/// 保存のための再開点の写し。応答が無ければ `Error(Nil)`。
+pub fn points(name: Name(Msg)) -> Result(Dict(String, Int), Nil) {
+  named.call(name, call_timeout_ms, GetPoints)
+  |> option.to_result(Nil)
+}
+
+/// メッセージの種類ごとに処理する。
 fn handle(state: State(targets), msg: Msg) -> actor.Next(State(targets), Msg) {
-  let Incoming(incoming) = msg
-  case window.insert(state.window, incoming.id) {
-    Error(Nil) -> actor.continue(state)
-    Ok(next) ->
+  case msg {
+    Incoming(relay_url, incoming) ->
+      actor.continue(receive(state, relay_url, incoming))
+    AddingAccount(at) ->
       actor.continue(
         State(
           ..state,
-          targets: state.deliver(state.targets, incoming),
-          window: next,
+          resume: resume.adding_account(state.resume, state.relay_urls, at),
         ),
+      )
+    GetSince(relay_url, reply) -> {
+      process.send(reply, resume.since(state.resume, relay_url))
+      actor.continue(state)
+    }
+    GetPoints(reply) -> {
+      process.send(reply, resume.points(state.resume))
+      actor.continue(state)
+    }
+  }
+}
+
+/// ウィンドウがまだ見ていないイベントを `deliver` へ渡し、それ以外は破棄する。
+/// 受け取った時点で再開点も記録する。
+fn receive(
+  state: State(targets),
+  relay_url: String,
+  incoming: Event,
+) -> State(targets) {
+  let resume =
+    resume.observe(
+      state.resume,
+      relay_url,
+      incoming.created_at,
+      time.now_seconds(),
+    )
+  case window.insert(state.window, incoming.id) {
+    Error(Nil) -> State(..state, resume: resume)
+    Ok(next) ->
+      State(
+        ..state,
+        targets: state.deliver(state.targets, incoming),
+        window: next,
+        resume: resume,
       )
   }
 }
