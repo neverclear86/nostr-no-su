@@ -75,8 +75,7 @@ fn handle_raw(
 }
 
 /// `Persist` を、書き込みが成功したものとして畳み込む。アクターの `Incoming`
-/// と同じ遷移なので、`connect` や `logout` の後にセッションや承認待ちを前提に
-/// する既存のテストはこれを通せば直さずに済む。
+/// と同じ遷移なので、セッションや承認待ちの変更を前提にするテストが使う。
 fn written(
   handled: #(engine.Engine, engine.Outcome),
 ) -> #(engine.Engine, engine.Outcome) {

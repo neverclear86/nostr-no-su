@@ -37,9 +37,9 @@ const pending_ttl_seconds = 600
 /// 承認待ちの一覧に無いトークンに同じ理由を出す。
 pub const approval_request_not_found = "unknown or expired approval request"
 
-/// セッションまたは承認待ちの DB への書き込みに失敗したときにクライアントへ
-/// 返す理由。書き込めていないので状態は変わっておらず、クライアントは
-/// もう一度 `connect` すればよい。
+/// `connect` で開くセッションか承認待ちを DB に書けなかったときに、同じ id で
+/// クライアントへ返すエラーの理由。書き込みの結果によらず同じ文にし、ストアの
+/// 理由は含めない。
 pub const connection_not_saved = "could not save the connection; try connecting again"
 
 /// リプレイ防止のために記憶するリクエスト id の件数。
