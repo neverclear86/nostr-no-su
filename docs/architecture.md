@@ -412,11 +412,12 @@ sequenceDiagram
 認証に失敗した要求は、理由（資格情報なし、形式の誤り、資格情報の不一致）だけを `[admin]` の 1 行でログに出す。資格情報、パス（承認ページのトークンを含みうる）、送信元は出さず、遅延やロックアウトは入れない。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
-ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
+ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、テーマと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
 ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。
+テーマは切り替えで保存した cookie から決め、無ければブラウザーの設定に従う。
 
 | メソッド | パス | 役割 |
 | --- | --- | --- |
@@ -425,6 +426,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET | `/static/admin.css` | ビルドした CSS（`priv/static/admin.css`） |
 | GET | `/static/admin.js` | 管理 UI の JS（`priv/static/admin.js`） |
 | POST | `/language` | 表示の言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す |
+| POST | `/theme` | 表示のテーマを cookie に保存し（`system` では cookie を消す）、フォームが送った戻り先へ 303 で戻す |
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
