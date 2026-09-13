@@ -21,16 +21,21 @@ if [ "${1-}" = remsh ]; then
     -setcookie "$(cat "$cookie_file")" -kernel inet_dist_use_interface "$interface" -remsh "$node"
 fi
 
-case "${REMSH_ENABLED:-false}" in
-false) ;;
-true)
-  (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$cookie_file")
-  export ERL_EPMD_ADDRESS=127.0.0.1
-  export ERL_FLAGS="${ERL_FLAGS-} -sname $node -setcookie $(cat "$cookie_file") -kernel inet_dist_use_interface $interface"
-  ;;
-*)
-  echo "[start] cannot start: REMSH_ENABLED must be true or false, got \"$REMSH_ENABLED\"" >&2
-  exit 1
-  ;;
-esac
+# cookie の生成と ERL_FLAGS の設定は本体を起動する `run` のときだけ行う。
+# `shell` など他の副コマンドで行うと、動いている本体の cookie ファイルを
+# 新しい乱数で上書きしてしまい、以後の `remsh` が接続できなくなる。
+if [ "${1-}" = run ]; then
+  case "${REMSH_ENABLED:-false}" in
+  false) ;;
+  true)
+    (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$cookie_file")
+    export ERL_EPMD_ADDRESS=127.0.0.1
+    export ERL_FLAGS="${ERL_FLAGS-} -sname $node -setcookie $(cat "$cookie_file") -kernel inet_dist_use_interface $interface"
+    ;;
+  *)
+    echo "[start] cannot start: REMSH_ENABLED must be true or false, got \"$REMSH_ENABLED\"" >&2
+    exit 1
+    ;;
+  esac
+fi
 exec /app/entrypoint.sh "$@"
