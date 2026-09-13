@@ -328,6 +328,49 @@ pub fn malformed_credentials_are_rejected_test() {
   assert response.status == 401
 }
 
+/// Basic 認証の失敗は、資格情報なし、形式の誤り、資格情報の不一致に分類される。
+pub fn authentication_failures_are_classified_test() {
+  let bare = simulate.request(http.Get, "/")
+  assert admin.authenticate(password, bare) == Error(admin.NoCredentials)
+
+  let encode = fn(value) {
+    bit_array.from_string(value) |> bit_array.base64_encode(True)
+  }
+  let malformed = [
+    "Basic not-base64!",
+    "Basic",
+    "Bearer " <> encode("admin:" <> password),
+    "Basic " <> encode("no-colon"),
+  ]
+  list.each(malformed, fn(header) {
+    let request = bare |> request.set_header("authorization", header)
+    assert admin.authenticate(password, request)
+      == Error(admin.MalformedCredentials)
+  })
+
+  let wrong = [#("admin", "wrong"), #("root", password)]
+  list.each(wrong, fn(pair) {
+    let #(user, offered) = pair
+    let request = bare |> with_credentials(user, offered)
+    assert admin.authenticate(password, request)
+      == Error(admin.WrongCredentials)
+  })
+
+  let correct = bare |> with_credentials("admin", password)
+  assert admin.authenticate(password, correct) == Ok(Nil)
+  assert admin.authenticate(password, correct |> lowercase_scheme) == Ok(Nil)
+}
+
+/// 401 のログ行は理由だけを含む。
+pub fn unauthorized_lines_name_the_failure_test() {
+  assert admin.unauthorized_line(admin.NoCredentials)
+    == "rejected a request without credentials"
+  assert admin.unauthorized_line(admin.MalformedCredentials)
+    == "rejected a request with malformed credentials"
+  assert admin.unauthorized_line(admin.WrongCredentials)
+    == "rejected a request with wrong credentials"
+}
+
 /// 認証を通れば、ダッシュボードにアカウント・リレー・セッション・プラグインが
 /// 出る。
 pub fn dashboard_shows_the_current_state_test() {

@@ -18,8 +18,13 @@
 //// `Accept-Language`、既定の言語（英語）の順に決める（`request_language`）。401 と
 //// `/healthz`、wisp が返す text/plain の応答は言語を決める前か HTML でないので、英語の
 //// ままである。ログの文言も英語のままにする。
+////
+//// 認証に失敗した要求（401）は、理由だけを `[admin]` の 1 行でログに出し、資格情報、
+//// パス、送信元は出さない。遅延やロックアウトは入れない（単一利用者がループバックか
+//// VPN の内側で使う前提）。
 
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/http
 import gleam/http/cookie
@@ -806,46 +811,60 @@ fn reveal_private_key(
   }
 }
 
-/// Basic 認証を要求する。資格情報が無い、あるいは一致しないときは 401 を返す。
+/// Basic 認証に失敗した理由。ログ行の言い回しを決める。
+pub type AuthenticationFailure {
+  /// `Authorization` ヘッダーが無い。ブラウザーの最初のリクエストもこれになる。
+  NoCredentials
+  /// ヘッダーはあるが、Basic 認証の資格情報として読めない。
+  MalformedCredentials
+  /// 資格情報は読めたが、ユーザー名かパスワードが一致しない。
+  WrongCredentials
+}
+
+/// Basic 認証を要求する。資格情報が無い、あるいは一致しないときは、失敗の理由を
+/// 1 行ログに出してから 401 を返す。
 fn require_password(
   context: Context,
   request: Request,
   next: fn() -> Response,
 ) -> Response {
-  case authenticated(context.password, request) {
-    True -> next()
-    False -> unauthorized()
+  case authenticate(context.password, request) {
+    Ok(Nil) -> next()
+    Error(failure) -> {
+      log.println(log_prefix, unauthorized_line(failure))
+      unauthorized()
+    }
   }
 }
 
-/// リクエストが正しい Basic 認証の資格情報を持つかどうか。認証スキームの照合は
-/// RFC 7235 に従い大文字小文字を区別しない。
-fn authenticated(password: String, request: Request) -> Bool {
-  case list.key_find(request.headers, "authorization") {
-    Ok(header) ->
-      case string.split_once(header, " ") {
-        Ok(#(scheme, offered)) ->
-          string.lowercase(scheme) == "basic"
-          && matches_password(offered, password)
-        Error(Nil) -> False
-      }
-    Error(Nil) -> False
+/// リクエストの Basic 認証の資格情報を照合する。認証スキームの照合は RFC 7235 に従い
+/// 大文字小文字を区別しない。ユーザー名は公開された固定値なので定数時間では比べず、
+/// 一致したときだけパスワードを定数時間で比べる。
+pub fn authenticate(
+  password: String,
+  request: Request,
+) -> Result(Nil, AuthenticationFailure) {
+  use header <- result.try(
+    list.key_find(request.headers, "authorization")
+    |> result.replace_error(NoCredentials),
+  )
+  use #(user, offered) <- result.try(
+    basic_credentials(header) |> result.replace_error(MalformedCredentials),
+  )
+  case user == username && is_admin_password(offered, password) {
+    True -> Ok(Nil)
+    False -> Error(WrongCredentials)
   }
 }
 
-/// base64 で符号化された資格情報が `admin:<password>` と一致するかどうか。RFC 7617
-/// に従い最初の `:` で分ける（ユーザー名は `:` を含めない）ので、パスワードは `:` を
-/// 含んでよい。ユーザー名は公開された固定値なので定数時間では比べない。
-fn matches_password(offered: String, password: String) -> Bool {
-  case bit_array.base64_decode(offered) |> result.try(bit_array.to_string) {
-    Ok(credentials) ->
-      case string.split_once(credentials, ":") {
-        Ok(#(user, offered_password)) ->
-          user == username && is_admin_password(offered_password, password)
-        Error(Nil) -> False
-      }
-    Error(Nil) -> False
-  }
+/// `Authorization` ヘッダーの値を、Basic 認証のユーザー名とパスワードに分ける。RFC 7617
+/// に従い最初の `:` で分ける（ユーザー名は `:` を含めない）ので、パスワードは `:` を含んでよい。
+fn basic_credentials(header: String) -> Result(#(String, String), Nil) {
+  use #(scheme, encoded) <- result.try(string.split_once(header, " "))
+  use <- bool.guard(string.lowercase(scheme) != "basic", Error(Nil))
+  use decoded <- result.try(bit_array.base64_decode(encoded))
+  use credentials <- result.try(bit_array.to_string(decoded))
+  string.split_once(credentials, ":")
 }
 
 /// 入力されたパスワードが管理パスワードと一致するか。一致した文字数が応答時間に
@@ -855,6 +874,17 @@ fn is_admin_password(offered: String, password: String) -> Bool {
     bit_array.from_string(offered),
     bit_array.from_string(password),
   )
+}
+
+/// Basic 認証に失敗した要求（401）1 件のログ行の本文（接頭辞を除く）。理由だけを
+/// 含め、資格情報、パス、メソッド、送信元は含めない。パスは承認ページのトークンを
+/// 含みうるからである。
+pub fn unauthorized_line(failure: AuthenticationFailure) -> String {
+  case failure {
+    NoCredentials -> "rejected a request without credentials"
+    MalformedCredentials -> "rejected a request with malformed credentials"
+    WrongCredentials -> "rejected a request with wrong credentials"
+  }
 }
 
 /// 401。ブラウザーに資格情報の入力を促すため `WWW-Authenticate` を付ける。
