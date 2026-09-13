@@ -851,12 +851,13 @@ pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
   let next_load = call_counter()
   let store =
     bunker.Store(
-      ..store_with_load(fn() {
+      ..memory_store(calls, [], False),
+      load: fn() {
         case next_load() {
           0 -> load_signer(signer_key)
           _ -> Error(store_failure())
         }
-      }),
+      },
       insert: fn(entry: vault.StoredAccount) {
         process.send(
           calls,
