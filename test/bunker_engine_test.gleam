@@ -926,6 +926,30 @@ pub fn requests_after_the_actor_started_are_handled_test() {
   assert engine.sessions(state) != []
 }
 
+/// 未来側の受付幅は 60 秒で、それを 1 秒でも超えたリクエストは捨てる。
+pub fn the_future_side_of_the_window_ends_after_a_minute_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, accepted) =
+    handle(new_engine(), connect_event(client, signer, secret, 1060), 1000)
+  let assert Reply(_) = accepted
+  let #(_state, rejected) =
+    handle(new_engine(), connect_event(client, signer, secret, 1061), 1000)
+  assert rejected == Ignore("stale or future event")
+}
+
+/// 過去側の受付幅は 600 秒のまま。
+pub fn the_past_side_of_the_window_ends_after_ten_minutes_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, accepted) =
+    handle(new_engine(), connect_event(client, signer, secret, 400), 1000)
+  let assert Reply(_) = accepted
+  let #(_state, rejected) =
+    handle(new_engine(), connect_event(client, signer, secret, 399), 1000)
+  assert rejected == Ignore("stale or future event")
+}
+
 // --- アカウントの追加・削除・secret の差し替え ---
 
 /// 指定したトークンで承認待ちを作る、secret 無しの `connect` を処理する。
