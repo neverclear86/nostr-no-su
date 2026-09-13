@@ -1,0 +1,161 @@
+diff --git a/src/stratus.gleam b/src/stratus.gleam
+index 2a8cac3..bf35c4b 100644
+--- a/src/stratus.gleam
++++ b/src/stratus.gleam
+@@ -171,6 +171,11 @@ pub type Message(user_message) {
+   Text(String)
+   Binary(BitArray)
+   User(user_message)
++  // VENDORED PATCH (nostr-no-su): deliver received pong frames to the user
++  // loop so it can detect a half-open connection (a connection that never
++  // acknowledges a ping it was sent).
++  /// The payload of a pong frame received from the peer.
++  Pong(BitArray)
+ }
+ 
+ pub opaque type Builder(state, user_message) {
+@@ -523,6 +528,51 @@ pub fn supervised(builder: Builder(state, user_message)) {
+   supervision.worker(fn() { start(builder) })
+ }
+ 
++// VENDORED PATCH (nostr-no-su): the Text, Binary and Pong branches of
++// handle_frame all called the user loop and moved its result into the
++// internal Next type in the same ~30 lines (the upstream code even carries a
++// `// TODO:  de-dupe this` comment on the duplication). Pulling that into one
++// function lets the pong branch reuse it instead of duplicating it a third
++// time.
++fn run_user_loop(
++  builder: Builder(user_state, user_message),
++  state: State(user_state, user_message),
++  conn: Connection,
++  message: Message(user_message),
++) -> Next(State(user_state, user_message), InternalMessage(user_message)) {
++  let res =
++    exception.rescue(fn() { builder.loop(state.user_state, message, conn) })
++  case res {
++    Ok(Continue(user_state, user_selector)) -> {
++      let new_state = State(..state, user_state: user_state)
++      case user_selector {
++        Some(user_selector) -> {
++          let selector =
++            user_selector
++            |> process.map_selector(UserMessage)
++            |> process.merge_selector(
++              process.map_selector(socket.selector(), fn(msg) {
++                let assert Ok(msg) = msg
++                from_socket_message(msg)
++              }),
++            )
++          Continue(new_state, Some(selector))
++        }
++        _ -> continue(new_state)
++      }
++    }
++    Ok(NormalStop) -> NormalStop
++    Ok(AbnormalStop(reason)) -> AbnormalStop(reason)
++    Error(reason) -> {
++      logging.log(
++        logging.Error,
++        "Caught error in user handler: " <> string.inspect(reason),
++      )
++      continue(state)
++    }
++  }
++}
++
+ fn handle_frame(
+   builder: Builder(user_state, user_message),
+   state: State(user_state, user_message),
+@@ -532,76 +582,10 @@ fn handle_frame(
+   case frame {
+     DataFrame(TextFrame(payload: data)) -> {
+       let assert Ok(str) = bit_array.to_string(data)
+-      let res =
+-        exception.rescue(fn() {
+-          builder.loop(state.user_state, Text(str), conn)
+-        })
+-      case res {
+-        // TODO:  de-dupe this
+-        Ok(Continue(user_state, user_selector)) -> {
+-          let new_state = State(..state, user_state: user_state)
+-          case user_selector {
+-            Some(user_selector) -> {
+-              let selector =
+-                user_selector
+-                |> process.map_selector(UserMessage)
+-                |> process.merge_selector(
+-                  process.map_selector(socket.selector(), fn(msg) {
+-                    let assert Ok(msg) = msg
+-                    from_socket_message(msg)
+-                  }),
+-                )
+-              Continue(new_state, Some(selector))
+-            }
+-            _ -> continue(new_state)
+-          }
+-        }
+-        Ok(NormalStop) -> NormalStop
+-        Ok(AbnormalStop(reason)) -> AbnormalStop(reason)
+-        Error(reason) -> {
+-          logging.log(
+-            logging.Error,
+-            "Caught error in user handler: " <> string.inspect(reason),
+-          )
+-          continue(state)
+-        }
+-      }
++      run_user_loop(builder, state, conn, Text(str))
+     }
+     DataFrame(BinaryFrame(payload: data)) -> {
+-      let res =
+-        exception.rescue(fn() {
+-          builder.loop(state.user_state, Binary(data), conn)
+-        })
+-      case res {
+-        // TODO:  de-dupe this
+-        Ok(Continue(user_state, user_selector)) -> {
+-          let new_state = State(..state, user_state: user_state)
+-          case user_selector {
+-            Some(user_selector) -> {
+-              let selector =
+-                user_selector
+-                |> process.map_selector(UserMessage)
+-                |> process.merge_selector(
+-                  process.map_selector(socket.selector(), fn(msg) {
+-                    let assert Ok(msg) = msg
+-                    from_socket_message(msg)
+-                  }),
+-                )
+-              Continue(new_state, Some(selector))
+-            }
+-            _ -> continue(new_state)
+-          }
+-        }
+-        Ok(NormalStop) -> NormalStop
+-        Ok(AbnormalStop(reason)) -> AbnormalStop(reason)
+-        Error(reason) -> {
+-          logging.log(
+-            logging.Error,
+-            "Caught error in user handler: " <> string.inspect(reason),
+-          )
+-          continue(state)
+-        }
+-      }
++      run_user_loop(builder, state, conn, Binary(data))
+     }
+     Control(PingFrame(payload)) -> {
+       let mask = Some(<<0:unit(8)-size(4)>>)
+@@ -610,8 +594,11 @@ fn handle_frame(
+       let _ = transport.send(conn.transport, conn.socket, frame)
+       continue(state)
+     }
+-    Control(PongFrame(..)) -> {
+-      continue(state)
++    // VENDORED PATCH (nostr-no-su): deliver the received pong's payload to
++    // the user loop instead of silently dropping it, so callers can detect a
++    // half-open connection (nostr-no-su #83).
++    Control(PongFrame(payload)) -> {
++      run_user_loop(builder, state, conn, Pong(payload))
+     }
+     Control(CloseFrame(reason)) -> {
+       logging.log(
