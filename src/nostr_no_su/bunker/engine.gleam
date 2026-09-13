@@ -141,7 +141,7 @@ pub fn new(
 ///
 /// この関数と下の `remove_account` / `replace_secret` は全域にしてある。アクターは
 /// DB への書き込みが成功したときだけこれらを呼ぶので、不在や重複を失敗として返しても
-/// 到達しない分岐になる（`revoke` と同じ作法）。
+/// 到達しない分岐になる。
 pub fn add_account(engine: Engine, account: Account, secret: String) -> Engine {
   Engine(
     ..engine,
@@ -221,9 +221,17 @@ pub fn sessions(engine: Engine) -> List(Session) {
 }
 
 /// セッションの承認を取り消す。そのクライアントは再び `connect` を求められる。
-/// 承認されていない組を渡しても何も起きない。
-pub fn revoke(engine: Engine, signer: String, client: String) -> Engine {
-  Engine(..engine, sessions: set.delete(engine.sessions, #(signer, client)))
+/// 承認されていない組なら `Error(Nil)` を返す。
+pub fn revoke(
+  engine: Engine,
+  signer: String,
+  client: String,
+) -> Result(Engine, Nil) {
+  let pair = #(signer, client)
+  case set.contains(engine.sessions, pair) {
+    True -> Ok(Engine(..engine, sessions: set.delete(engine.sessions, pair)))
+    False -> Error(Nil)
+  }
 }
 
 /// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。失効した要求
@@ -481,8 +489,9 @@ fn execute(
   let signer = pubkey_hex(account)
   case request.method {
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
+    // 承認されていない組の `logout` も、状態を変えずに ack を返す。
     "logout" -> #(
-      revoke(engine, signer, client_pk_hex),
+      revoke(engine, signer, client_pk_hex) |> result.unwrap(engine),
       rpc.ok(request.id, "ack"),
     )
     _ ->

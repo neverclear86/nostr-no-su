@@ -453,7 +453,7 @@ pub fn revoke_removes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let state =
+  let assert Ok(state) =
     engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
   assert engine.sessions(state) == []
 
@@ -467,14 +467,51 @@ pub fn revoke_removes_the_session_test() {
   )
 }
 
-/// 承認されていない組の取り消しは、他のセッションに影響しない。
-pub fn revoke_of_an_unknown_session_is_harmless_test() {
+/// 承認されていない組の取り消しは `Error(Nil)` になる。取り消し済みの組も同じ。
+pub fn revoke_of_an_unknown_session_is_an_error_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let other = account_for(other_client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let state =
-    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(other))
+  assert engine.revoke(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(other),
+    )
+    == Error(Nil)
+
+  let assert Ok(state) =
+    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
+  assert engine.revoke(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+    == Error(Nil)
+}
+
+/// 承認されていないクライアントの `logout` も ack を返し、他のセッションを残す。
+pub fn logout_without_a_session_is_acknowledged_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, outcome) =
+    handle(
+      state,
+      request_event(
+        other,
+        signer,
+        "{\"id\":\"l1\",\"method\":\"logout\"}",
+        1001,
+      ),
+      1001,
+    )
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(other, signer, response),
+    "\"result\":\"ack\"",
+  )
   assert engine.sessions(state)
     == [
       engine.Session(

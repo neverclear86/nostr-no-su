@@ -552,8 +552,15 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
+/// 取り消しの問い合わせにバンカーが応答しなければ `NotAnswered` になる。
+pub fn revoke_without_a_bunker_is_not_answered_test() {
+  let assert Error(bunker.NotAnswered(_)) =
+    bunker.revoke(process.new_name("test_bunker"), "signer", "client")
+}
+
 /// 管理 UI が使う経路。`connect` 済みのクライアントはセッション一覧に現れ、
-/// 取り消すと消え、以降のリクエストは再び認可を求められる。
+/// 取り消すと消え、以降のリクエストは再び認可を求められる。取り消し済みの組を
+/// もう一度取り消すと `SessionNotFound` になる。
 pub fn sessions_can_be_listed_and_revoked_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -575,8 +582,15 @@ pub fn sessions_can_be_listed_and_revoked_test() {
       ),
     ]
 
-  bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
+  assert bunker.revoke(
+      name,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+    == Ok(Nil)
   assert bunker.sessions(name) == []
+  let assert Error(bunker.SessionNotFound(_)) =
+    bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
   assert string.contains(response_body(denied), "unauthorized")

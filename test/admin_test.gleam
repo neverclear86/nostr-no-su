@@ -41,6 +41,15 @@ const spec_key = "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92f
 
 const client = "bbbb2222"
 
+/// 承認済みのセッションを持たないクライアント。
+const unknown_client = "cccc3333"
+
+/// フェイクの取り消しが、承認済みでない組に返す理由。
+const session_not_approved = "session is not approved"
+
+/// フェイクの取り消しが、バンカーの無応答として返す理由。
+const not_answered = "the bunker did not respond"
+
 /// 無効化されたプラグインの理由。プラグイン由来の文字列なので HTML への埋め込み
 /// でエスケープされなければならない。
 const disabled_reason = "error:<script>alert(1)</script>"
@@ -147,8 +156,15 @@ fn test_context(
       ]
     },
     sessions: fn() { [engine.Session(signer: signer, client: client)] },
-    revoke: fn(signer, client) {
-      process.send(reports, Revoked(signer: signer, client: client))
+    revoke: fn(revoked_signer, revoked_client) {
+      process.send(
+        reports,
+        Revoked(signer: revoked_signer, client: revoked_client),
+      )
+      case revoked_signer == signer && revoked_client == client {
+        True -> Ok(Nil)
+        False -> Error(bunker.SessionNotFound(session_not_approved))
+      }
     },
     pending: fn() {
       [
@@ -392,6 +408,48 @@ pub fn revoke_calls_the_context_and_redirects_test() {
   assert header(response, "location") == "/"
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: client))
+}
+
+/// 承認済みのセッションに無い組の取り消しは 404 で、理由とダッシュボードへのリンクを
+/// 出す。送った値は含めない。
+pub fn revoking_an_unknown_session_is_not_found_test() {
+  let revoked = process.new_subject()
+  let response =
+    post_form(reporting_context(revoked), "/sessions/revoke", [
+      #("signer", signer),
+      #("client", unknown_client),
+    ])
+  assert response.status == 404
+  let body = simulate.read_body(response)
+  assert string.contains(body, session_not_approved)
+  assert string.contains(
+    body,
+    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+  )
+  assert !string.contains(body, unknown_client)
+  assert process.receive(revoked, 1000)
+    == Ok(Revoked(signer: signer, client: unknown_client))
+}
+
+/// バンカーが応答しない取り消しは 503 で、理由とダッシュボードへのリンクを出す。
+pub fn revoke_that_is_not_answered_is_unavailable_test() {
+  let response =
+    post_form(not_answering_context(), "/sessions/revoke", [
+      #("signer", signer),
+      #("client", client),
+    ])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "Change not confirmed")
+  assert string.contains(body, not_answered)
+  assert string.contains(body, "Back to dashboard")
+}
+
+/// 取り消しにバンカーが応答しない Context。
+fn not_answering_context() -> admin.Context {
+  admin.Context(..context(), revoke: fn(_signer, _client) {
+    Error(bunker.NotAnswered(not_answered))
+  })
 }
 
 /// フィールドが欠けた取り消しは 400 になり、取り消しは行われない。
@@ -1386,6 +1444,20 @@ pub fn notices_are_colored_by_outcome_test() {
         failing_context(bunker.NotReady("accounts are not loaded yet")),
         rotate,
       ),
+      "alert alert-warning",
+    ),
+    #(
+      post_form(context(), "/sessions/revoke", [
+        #("signer", signer),
+        #("client", unknown_client),
+      ]),
+      "alert alert-error",
+    ),
+    #(
+      post_form(not_answering_context(), "/sessions/revoke", [
+        #("signer", signer),
+        #("client", client),
+      ]),
       "alert alert-warning",
     ),
   ]
