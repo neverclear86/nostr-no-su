@@ -571,7 +571,7 @@ pub fn session_survives_a_reconnect_test() {
 
 /// 取り消しの問い合わせにバンカーが応答しなければ `NotAnswered` になる。
 pub fn revoke_without_a_bunker_is_not_answered_test() {
-  let assert Error(bunker.NotAnswered(_)) =
+  let assert Error(bunker.NotAnswered) =
     bunker.revoke(process.new_name("test_bunker"), "signer", "client")
 }
 
@@ -1503,7 +1503,7 @@ pub fn load_retries_back_off_and_start_over_after_a_success_test() {
   // 結果が曖昧な書き込みの後の読み直しはすぐに行われて失敗する。待ち時間が初期値に
   // 戻っていれば次は 50ms 後で、延びたままなら 800ms 後になる。
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let assert Ok(Nil) = process.receive(calls, 2000)
   let assert Ok(Nil) = process.receive(calls, 700)
   stop_tree(tree)
@@ -2429,7 +2429,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   let assert Ok(before) = process.named(name)
 
   assert bunker.add_account(name, account_for(other_signer_key), "other")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let stored = database_listings(database)
   assert list.map(stored, fn(listing) { listing.signer })
     == list.sort([signer, other], string.compare)
@@ -2448,12 +2448,12 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   assert bunker.add_account(name, account_for(other_signer_key), "again")
     == Error(bunker.NotApplied("account is already registered"))
   assert bunker.remove_account(name, other)
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert list.map(database_listings(database), fn(listing) { listing.signer })
     == [signer]
   assert bunker.accounts(name) == Ok(database_listings(database))
   assert bunker.add_account(name, account_for(other_signer_key), "back")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert list.length(database_listings(database)) == 2
   assert bunker.accounts(name) == Ok(database_listings(database))
   assert process.named(name) == Ok(before)
@@ -2482,7 +2482,7 @@ pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
 
   assert bunker.rotate_secret(name, signer)
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let assert [bunker.Listing(secret: rotated, ..)] = database_listings(database)
   assert rotated != secret
   assert bunker.accounts(name) == Ok(database_listings(database))
@@ -2525,7 +2525,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
 
   process.send(database, FailReads(True))
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
   assert bunker.add_account(name, account_for(slow_signer_key), "")
@@ -2684,7 +2684,7 @@ pub fn nsec_is_refused_until_an_ambiguous_write_is_reloaded_test() {
 
   process.send(database, FailReads(True))
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert bunker.nsec(name, signer) == Error("accounts are not loaded yet")
 
   process.send(database, FailReads(False))

@@ -723,8 +723,13 @@ fn revoke_failure_response(
   case failure {
     bunker.SessionNotFound(reason) ->
       not_found_notice(language, theme, i18n.Untranslated(reason))
-    bunker.NotAnswered(reason) ->
-      not_confirmed_notice(language, theme, reason, 503)
+    bunker.NotAnswered ->
+      not_confirmed_notice(
+        language,
+        theme,
+        i18n.Translated(i18n.BunkerDidNotRespond),
+        503,
+      )
   }
 }
 
@@ -760,7 +765,7 @@ fn reenable_failure_response(
     PluginNotFound(reason) ->
       not_found_notice(language, theme, i18n.Untranslated(reason))
     PluginNotAnswered(reason) ->
-      not_confirmed_notice(language, theme, reason, 503)
+      not_confirmed_notice(language, theme, i18n.Untranslated(reason), 503)
   }
 }
 
@@ -1049,7 +1054,8 @@ fn apply_account_change(
 /// 受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
 /// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が
 /// 同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
-/// バンカーの理由は英語の文字列で届くので、訳さずに出す。
+/// 反映されたか分からない原因は訳す。ほかの理由は英語の文字列で届くので、
+/// 訳さずに出す。
 fn change_failure_response(
   language: Language,
   theme: view.Theme,
@@ -1060,17 +1066,31 @@ fn change_failure_response(
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
     bunker.NotReady(reason) -> accounts_unavailable(language, theme, reason)
-    bunker.MaybeApplied(reason) ->
-      not_confirmed_notice(language, theme, reason, 202)
+    bunker.MaybeApplied(cause) ->
+      not_confirmed_notice(
+        language,
+        theme,
+        i18n.Translated(not_confirmed_message(cause)),
+        202,
+      )
+  }
+}
+
+/// 確かめられなかった原因を通知ページの本文の文言に写す。
+fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
+  case cause {
+    bunker.BunkerDidNotRespond -> i18n.BunkerDidNotRespond
+    bunker.StoreDidNotConfirm -> i18n.StoreDidNotConfirm
   }
 }
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更は 202、セッションの取り消しは 503）。
+/// 決める（アカウントの変更は 202、セッションの取り消しは 503）。本文は呼び出し側が
+/// 訳すかを決める。
 fn not_confirmed_notice(
   language: Language,
   theme: view.Theme,
-  reason: String,
+  reason: i18n.Reason,
   status: Int,
 ) -> Response {
   dashboard.notice_page(
@@ -1078,7 +1098,7 @@ fn not_confirmed_notice(
     theme,
     return_to_dashboard,
     i18n.ChangeNotConfirmed,
-    i18n.Untranslated(reason),
+    reason,
     view.Warning,
   )
   |> wisp.html_response(status)

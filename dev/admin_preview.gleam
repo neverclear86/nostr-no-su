@@ -69,7 +69,7 @@ fn change(label: String) -> Result(Nil, bunker.ChangeFailure) {
   case label {
     "not-applied" -> Error(bunker.NotApplied("account is not registered"))
     "not-ready" -> Error(bunker.NotReady("accounts are not loaded yet"))
-    "maybe" -> Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    "maybe" -> Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
     _ -> Ok(Nil)
   }
 }
@@ -78,10 +78,7 @@ fn change(label: String) -> Result(Nil, bunker.ChangeFailure) {
 fn revocation(revoked_client: String) -> Result(Nil, bunker.RevokeFailure) {
   case revoked_client {
     "not-approved" -> Error(bunker.SessionNotFound("session is not approved"))
-    "no-answer" ->
-      Error(bunker.NotAnswered(
-        "the bunker did not respond; check the dashboard to see whether the change was applied",
-      ))
+    "no-answer" -> Error(bunker.NotAnswered)
     _ -> Ok(Nil)
   }
 }

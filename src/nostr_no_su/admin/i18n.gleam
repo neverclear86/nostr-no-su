@@ -12,6 +12,9 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 とセッションの
+//// 取り消しの 503）は、バンカーが原因を型で返すので訳す。プラグインの再有効化の 503 は
+//// 英語のまま。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -250,6 +253,8 @@ pub type Message {
   MethodNotAllowedDetail
   FormNotReadable
   OriginMismatch
+  BunkerDidNotRespond
+  StoreDidNotConfirm
   // アカウントの登録画面
   ImportPrivateKey
   ImportDescription
@@ -371,6 +376,10 @@ fn english(message: Message) -> String {
       "The form was incomplete. Go back to the dashboard and try again."
     OriginMismatch ->
       "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see the README."
+    BunkerDidNotRespond ->
+      "the bunker did not respond; check the dashboard to see whether the change was applied"
+    StoreDidNotConfirm ->
+      "the store did not confirm the change; it may have been applied, so open the dashboard to check"
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
@@ -491,6 +500,9 @@ fn japanese(message: Message) -> String {
     FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
     OriginMismatch ->
       "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
+    BunkerDidNotRespond -> "バンカーが応答しませんでした。変更が反映されたかを、ダッシュボードで確認してください。"
+    StoreDidNotConfirm ->
+      "データベースが変更を確定しませんでした。反映されている可能性があるので、ダッシュボードを開いて確認してください。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
