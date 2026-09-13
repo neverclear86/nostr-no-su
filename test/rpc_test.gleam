@@ -37,7 +37,7 @@ pub fn encode_error_test() {
     == "{\"id\":\"x1\",\"result\":\"\",\"error\":\"invalid secret\"}"
 }
 
-/// イベントドラフトは kind・content・tags・created_at に分解される。
+/// イベントドラフトは kind・content・tags・created_at・pubkey に分解される。
 pub fn decode_draft_test() {
   let assert Ok(draft) =
     rpc.decode_draft(
@@ -49,11 +49,26 @@ pub fn decode_draft_test() {
       content: "hi",
       tags: [["t", "x"]],
       created_at: Some(123),
+      pubkey: None,
     )
 }
 
-/// `tags` と `created_at` は省略でき、既定値になる。
+/// `tags`・`created_at`・`pubkey` は省略でき、既定値になる。
 pub fn decode_draft_defaults_test() {
   let assert Ok(draft) = rpc.decode_draft("{\"kind\":1,\"content\":\"hi\"}")
-  assert draft == EventDraft(kind: 1, content: "hi", tags: [], created_at: None)
+  assert draft
+    == EventDraft(
+      kind: 1,
+      content: "hi",
+      tags: [],
+      created_at: None,
+      pubkey: None,
+    )
+}
+
+/// `pubkey` を指定したドラフトは `Some` にデコードされる。
+pub fn decode_draft_with_pubkey_test() {
+  let assert Ok(draft) =
+    rpc.decode_draft("{\"kind\":1,\"content\":\"hi\",\"pubkey\":\"ab\"}")
+  assert draft.pubkey == Some("ab")
 }

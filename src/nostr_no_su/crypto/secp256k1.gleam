@@ -134,22 +134,29 @@ fn point_mul_loop(point: Point, scalar: Int, acc: Point) -> Point {
 }
 
 /// BIP-340 の lift_x。与えられた x-only 鍵から y が偶数となる点を復元する。
+/// 32 バイトでない入力は拒否する（NIP-01 と BIP-340 の定義域の外の入力を受理
+/// しないため）。
 pub fn lift_x(xonly: BitArray) -> Result(Point, KeyError) {
-  let x = int_from_bytes(xonly)
-  case x >= p || x == 0 {
-    True -> Error(InvalidPublicKey)
-    False -> {
-      let c = mod_p(x * x * x + 7)
-      let y = ffi_mod_pow(c, { p + 1 } / 4, p)
-      case mod_p(y * y) == c {
-        False -> Error(InvalidPublicKey)
-        True ->
-          case y % 2 == 0 {
-            True -> Ok(Point(x, y))
-            False -> Ok(Point(x, p - y))
+  case xonly {
+    <<_:bytes-size(32)>> -> {
+      let x = int_from_bytes(xonly)
+      case x >= p || x == 0 {
+        True -> Error(InvalidPublicKey)
+        False -> {
+          let c = mod_p(x * x * x + 7)
+          let y = ffi_mod_pow(c, { p + 1 } / 4, p)
+          case mod_p(y * y) == c {
+            False -> Error(InvalidPublicKey)
+            True ->
+              case y % 2 == 0 {
+                True -> Ok(Point(x, y))
+                False -> Ok(Point(x, p - y))
+              }
           }
+        }
       }
     }
+    _ -> Error(InvalidPublicKey)
   }
 }
 

@@ -482,6 +482,10 @@ fn outcome(reply: Result(Event, String)) -> Outcome {
 
 /// リクエストを 1 件実行する。`connect` と `logout` 以外は、クライアントが先に
 /// 接続済みであることを条件とする。
+///
+/// `logout` はセッションの有無によらず ack を返す。NIP-46 は応答を ack と定め、
+/// クライアント（nostr-tools の `BunkerSigner`）は ack 以外の応答で購読の後
+/// 始末を止めるためである。セッションが無い組では状態を変えない。
 fn execute(
   engine: Engine,
   account: Account,
@@ -493,7 +497,8 @@ fn execute(
   let signer = pubkey_hex(account)
   case request.method {
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
-    // 承認されていない組の `logout` も、状態を変えずに ack を返す。
+    // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
+    // 取り消しの後のクライアントを例外にしないため）。
     "logout" -> #(
       revoke(engine, signer, client_pk_hex) |> result.unwrap(engine),
       rpc.ok(request.id, "ack"),
@@ -509,10 +514,11 @@ fn execute(
   }
 }
 
-/// `connect` を 1 件処理する。シークレットが一致すればその場で承認し、既に承認
-/// 済みの組ならシークレット無しでも通す（クライアントの再読み込みのたびに承認を
-/// 求めないため）。どちらでもないときは、管理 UI が有効なら承認待ちを作って
-/// `auth_url` を返し、無効なら従来どおり拒否する。
+/// `connect` を 1 件処理する。`params[0]` が別の署名者を指していれば、状態を
+/// 変えずに拒否する。シークレットが一致すればその場で承認し、既に承認済みの組
+/// ならシークレット無しでも通す（クライアントの再読み込みのたびに承認を求めない
+/// ため）。どちらでもないときは、管理 UI が有効なら承認待ちを作って `auth_url`
+/// を返し、無効なら従来どおり拒否する。
 fn connect(
   engine: Engine,
   signer: String,
@@ -521,6 +527,10 @@ fn connect(
   request: rpc.Request,
   inputs: Inputs,
 ) -> #(Engine, rpc.Response) {
+  use <- bool.guard(points_elsewhere(connect_signer(request.params), signer), #(
+    engine,
+    rpc.error(request.id, "connect is addressed to another signer"),
+  ))
   let pair = #(signer, client_pk_hex)
   case
     connect_secret(request.params) == Some(secret),
@@ -585,6 +595,25 @@ fn execute_in_session(
   }
 }
 
+/// 指定された pubkey（`connect` の署名者、ドラフトの pubkey）が、`signer` とは
+/// 別人を指しているかどうか。`None` と空文字列は「指定無し」として扱い、
+/// `False` にする。`connect` と `sign_event` の両方の検査が同じ規則を使う。
+fn points_elsewhere(target: Option(String), signer: String) -> Bool {
+  case target {
+    Some(pubkey) -> pubkey != "" && pubkey != signer
+    None -> False
+  }
+}
+
+/// connect リクエストが指す署名者 pubkey。`[secret]` だけを送る古い形式は
+/// 指定無しとして扱う。空文字列の扱いは `points_elsewhere` が決める。
+fn connect_signer(params: List(String)) -> Option(String) {
+  case params {
+    [signer, _, ..] -> Some(signer)
+    _ -> None
+  }
+}
+
 /// connect リクエストのシークレット。クライアントは [signer_pk, secret, perms]
 /// を送るが、古い実装には [secret] だけを送るものもある。シークレット無しで接続
 /// するクライアントは空文字列を送ってくるため、それも「無し」として扱う。
@@ -606,29 +635,54 @@ fn sign_event(
   now: Int,
 ) -> rpc.Response {
   case request.params {
-    [draft_json, ..] ->
-      case rpc.decode_draft(draft_json) {
-        Error(_) -> rpc.error(request.id, "invalid event draft")
-        Ok(draft) -> {
-          let unsigned =
-            Event(
-              id: "",
-              pubkey: pubkey_hex(account),
-              created_at: option.unwrap(draft.created_at, now),
-              kind: draft.kind,
-              tags: draft.tags,
-              content: draft.content,
-              sig: "",
-            )
-          case event.finalize(unsigned, privkey(account)) {
-            Ok(signed) ->
-              rpc.ok(request.id, json.to_string(event.to_json(signed)))
-            Error(_) -> rpc.error(request.id, "failed to sign event")
-          }
-        }
+    [draft_json, ..] -> {
+      let signed = {
+        use draft <- result.try(
+          rpc.decode_draft(draft_json)
+          |> result.replace_error("invalid event draft"),
+        )
+        use unsigned <- result.try(unsigned_event(
+          draft,
+          pubkey_hex(account),
+          now,
+        ))
+        event.finalize(unsigned, privkey(account))
+        |> result.replace_error("failed to sign event")
       }
+      case signed {
+        Ok(signed) -> rpc.ok(request.id, json.to_string(event.to_json(signed)))
+        Error(reason) -> rpc.error(request.id, reason)
+      }
+    }
     [] -> rpc.error(request.id, "sign_event requires an event draft")
   }
+}
+
+/// ドラフトを署名者の未署名イベントにする。別の pubkey を指すドラフトと、
+/// NIP-46 の応答と同じ kind（24133）のドラフトは拒否する。空の pubkey は
+/// 指定無しとして扱う。
+fn unsigned_event(
+  draft: rpc.EventDraft,
+  signer: String,
+  now: Int,
+) -> Result(Event, String) {
+  use <- bool.guard(
+    points_elsewhere(draft.pubkey, signer),
+    Error("event draft pubkey does not match the signer"),
+  )
+  use <- bool.guard(
+    draft.kind == event.nip46_kind,
+    Error("refusing to sign a kind 24133 event"),
+  )
+  Ok(Event(
+    id: "",
+    pubkey: signer,
+    created_at: option.unwrap(draft.created_at, now),
+    kind: draft.kind,
+    tags: draft.tags,
+    content: draft.content,
+    sig: "",
+  ))
 }
 
 /// 第三者宛のテキストをアカウントの鍵で暗号化または復号する。

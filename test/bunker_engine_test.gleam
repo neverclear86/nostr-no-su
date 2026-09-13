@@ -170,13 +170,16 @@ pub fn ping_test() {
     == "{\"id\":\"p1\",\"result\":\"pong\"}"
 }
 
-/// `sign_event` は正しい id と署名を持つイベントを返す。
+/// `sign_event` は正しい id と署名を持つイベントを返す。ドラフトが署名者自身の
+/// pubkey を指していても、一致するので通る。
 pub fn sign_event_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let draft =
-    "{\\\"kind\\\":1,\\\"content\\\":\\\"hello\\\",\\\"tags\\\":[],\\\"created_at\\\":1700000123}"
+    "{\\\"kind\\\":1,\\\"content\\\":\\\"hello\\\",\\\"tags\\\":[],\\\"created_at\\\":1700000123,\\\"pubkey\\\":\\\""
+    <> account.pubkey_hex(signer)
+    <> "\\\"}"
   let body =
     "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
   let #(_state, outcome) =
@@ -491,6 +494,7 @@ pub fn revoke_of_an_unknown_session_is_an_error_test() {
 }
 
 /// 承認されていないクライアントの `logout` も ack を返し、他のセッションを残す。
+/// NIP-46 との相互運用のための挙動を固定する（`execute` の Doc コメントを参照）。
 pub fn logout_without_a_session_is_acknowledged_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -750,6 +754,100 @@ pub fn sign_event_rejects_an_invalid_draft_test() {
     decrypt_response(client, signer, response),
     "invalid event draft",
   )
+}
+
+/// ドラフトの pubkey が別人を指していれば、署名せずにエラー応答を返す。
+pub fn sign_event_rejects_a_draft_for_another_pubkey_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_signer_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let draft =
+    "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\",\\\"pubkey\\\":\\\""
+    <> account.pubkey_hex(other)
+    <> "\\\"}"
+  let body =
+    "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "event draft pubkey does not match the signer",
+  )
+}
+
+/// 空文字列の pubkey を持つドラフトは、指定無しとして署名される。
+pub fn sign_event_accepts_a_draft_with_an_empty_pubkey_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let draft =
+    "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\",\\\"pubkey\\\":\\\"\\\"}"
+  let body =
+    "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  let assert Ok(signed) =
+    parse_result_event(decrypt_response(client, signer, response))
+  assert signed.pubkey == account.pubkey_hex(signer)
+}
+
+/// kind 24133（バンカー自身の応答）のドラフトは、署名せずにエラー応答を返す。
+pub fn sign_event_rejects_a_nip46_kind_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let draft = "{\\\"kind\\\":24133,\\\"content\\\":\\\"hi\\\"}"
+  let body =
+    "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "refusing to sign a kind 24133 event",
+  )
+}
+
+/// 正しい secret でも、別の署名者を指した `connect` は状態を変えずに拒否する。
+pub fn connect_to_another_signer_is_rejected_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_signer_key)
+  let request =
+    request_event(client, signer, connect_body(other, secret, "c1"), 1000)
+  let #(state, outcome) = handle(auth_engine(), request, 1000)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "connect is addressed to another signer",
+  )
+  assert engine.sessions(state) == []
+  assert engine.pending(state, 1000) == []
+}
+
+/// params[0] が空文字列の `connect` は「指定無し」として扱われ、通る。
+pub fn connect_with_an_empty_signer_param_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body =
+    "{\"id\":\"c1\",\"method\":\"connect\",\"params\":[\"\",\""
+    <> secret
+    <> "\"]}"
+  let #(state, outcome) =
+    handle(new_engine(), request_event(client, signer, body, 1000), 1000)
+  let assert Reply(response) = outcome
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+      ),
+    ]
 }
 
 /// 16 進として読めない相手 pubkey には、エラー応答を返す。

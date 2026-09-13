@@ -17,12 +17,15 @@ pub type Response {
 }
 
 /// sign_event の params[0] に JSON 文字列として載る未署名イベントのドラフト。
+/// `pubkey` は省略でき、空でなければ署名者と一致しなければならない（検査は
+/// エンジンが行う）。
 pub type EventDraft {
   EventDraft(
     kind: Int,
     content: String,
     tags: List(List(String)),
     created_at: Option(Int),
+    pubkey: Option(String),
   )
 }
 
@@ -73,7 +76,7 @@ pub fn encode_response(response: Response) -> String {
   json.object(fields) |> json.to_string
 }
 
-/// イベントドラフト用のデコーダー。`tags` と `created_at` は省略できる。
+/// イベントドラフト用のデコーダー。`tags`・`created_at`・`pubkey` は省略できる。
 fn draft_decoder() -> decode.Decoder(EventDraft) {
   use kind <- decode.field("kind", decode.int)
   use content <- decode.field("content", decode.string)
@@ -87,7 +90,12 @@ fn draft_decoder() -> decode.Decoder(EventDraft) {
     None,
     decode.optional(decode.int),
   )
-  decode.success(EventDraft(kind:, content:, tags:, created_at:))
+  use pubkey <- decode.optional_field(
+    "pubkey",
+    None,
+    decode.optional(decode.string),
+  )
+  decode.success(EventDraft(kind:, content:, tags:, created_at:, pubkey:))
 }
 
 /// sign_event の params[0] をイベントドラフトとしてデコードする。
