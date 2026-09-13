@@ -91,11 +91,14 @@ pub type Theme {
 /// 対応するテーマ。ナビゲーションバーのドロップダウンはこの順に並べる。
 pub const themes = [System, Light, Dark]
 
+/// テーマと言語の切り替えで、ブラウザーの設定を表すフォームの値。
+const follow_browser_code = "system"
+
 /// テーマのコード。`data-theme`、切り替えで送る値、cookie の値に使う。`System` は
 /// `data-theme` も cookie も持たないコードなので、フォームの値としてだけ使う。
 pub fn theme_code(theme: Theme) -> String {
   case theme {
-    System -> "system"
+    System -> follow_browser_code
     Light -> "light"
     Dark -> "dark"
   }
@@ -104,6 +107,33 @@ pub fn theme_code(theme: Theme) -> String {
 /// テーマのコードのテーマ。対応していない値なら Error。
 pub fn theme_from_code(value: String) -> Result(Theme, Nil) {
   list.find(themes, fn(theme) { theme_code(theme) == value })
+}
+
+/// 言語の切り替えで選ぶ値。`BrowserLanguage` は cookie を消して `Accept-Language` に従う。
+pub type LanguageChoice {
+  BrowserLanguage
+  ChosenLanguage(language: Language)
+}
+
+/// 言語の一覧に並べる順。ブラウザーの設定を先頭に置き、続けて `i18n.languages` の順。
+pub fn language_choices() -> List(LanguageChoice) {
+  [BrowserLanguage, ..list.map(i18n.languages, ChosenLanguage)]
+}
+
+/// 言語の選択のコード。`BrowserLanguage` はテーマと同じ `follow_browser_code`、
+/// `ChosenLanguage` は言語のコードである。
+pub fn language_choice_code(choice: LanguageChoice) -> String {
+  case choice {
+    BrowserLanguage -> follow_browser_code
+    ChosenLanguage(language) -> i18n.code(language)
+  }
+}
+
+/// 言語の選択のコードの選択。対応していない値なら Error。
+pub fn language_choice_from_code(value: String) -> Result(LanguageChoice, Nil) {
+  list.find(language_choices(), fn(choice) {
+    language_choice_code(choice) == value
+  })
 }
 
 /// ナビゲーションバーにテーマと言語の切り替えを出すかどうか。
@@ -287,21 +317,33 @@ fn theme_label(theme: Theme) -> i18n.Message {
   }
 }
 
-/// 言語の切り替え。対応する言語は `i18n.languages` の順に並べ、言語名はその言語自身で書き
-/// `lang` を付ける。
+/// 言語の切り替え。先頭にブラウザーの設定を置き、続けて `i18n.languages` の順に並べ、
+/// 言語名はその言語自身で書き `lang` を付ける。ブラウザーの設定は選択の印を付けない
+/// （描画は cookie の有無を知らないため、表示中の判定は常に表示している言語につく）。
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
   dropdown(
     i18n.text(current, i18n.LanguageSwitchLabel),
     language_segments,
     return_to,
-    list.map(i18n.languages, fn(language) {
-      dropdown_item(
-        language_field,
-        i18n.code(language),
-        language == current,
-        Some(i18n.code(language)),
-        i18n.native_name(language),
-      )
+    list.map(language_choices(), fn(choice) {
+      case choice {
+        BrowserLanguage ->
+          dropdown_item(
+            language_field,
+            follow_browser_code,
+            False,
+            None,
+            i18n.text(current, i18n.FollowBrowser),
+          )
+        ChosenLanguage(language) ->
+          dropdown_item(
+            language_field,
+            i18n.code(language),
+            language == current,
+            Some(i18n.code(language)),
+            i18n.native_name(language),
+          )
+      }
     }),
   )
 }
@@ -445,7 +487,9 @@ pub fn table(
       html.thead([], [
         html.tr(
           [],
-          list.map(headers, fn(header) { html.th([], [html.text(header)]) }),
+          list.map(headers, fn(header) {
+            html.th([attribute.scope("col")], [html.text(header)])
+          }),
         ),
       ]),
       html.tbody([], list.map(rows, html.tr([], _))),

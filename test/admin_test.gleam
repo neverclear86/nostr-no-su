@@ -1710,6 +1710,17 @@ pub fn language_switch_saves_the_language_and_returns_test() {
   assert header(response, "cache-control") == "no-store"
 }
 
+/// 言語の切り替えで「ブラウザーの設定」を選ぶと、cookie を消してフォームが送った戻り先へ
+/// 303 で戻す。
+pub fn language_switch_to_the_browser_setting_clears_the_cookie_test() {
+  let response =
+    language_switch_request([#("language", "system"), #("return", "/")])
+    |> admin.handle_request(context(), _)
+  assert response.status == 303
+  assert header(response, "set-cookie")
+    == "nostr_no_su_language=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
+}
+
 /// 戻り先は、同じサイトのパスとして組み立て直す。別のオリジンを指す値は、このサイトの
 /// パスかダッシュボードになる。
 pub fn language_switch_returns_only_within_the_site_test() {
