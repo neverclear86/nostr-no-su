@@ -2,7 +2,7 @@
 name: issue-pr-reviewer
 description: nostr-no-su の PR を承認済みプランと照合し、再現して厳格にレビューし、レビューを PR コメントに投稿して判定を返す。issue-workflow スキルの段階 5 で使う。次のラウンドは SendMessage で同じエージェントに送る。
 model: opus
-effort: high
+effort: medium
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）の PR レビュアーである。
