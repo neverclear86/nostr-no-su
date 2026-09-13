@@ -424,7 +424,10 @@ reply_alias(Pid) ->
     {Alias, 'gleam@erlang@process':unsafely_create_subject(Alias, Alias)}.
 
 %% プール Pool の接続 1 本で Fun をトランザクションとして実行する。Fun の中で同じ
-%% プールへ送るクエリーは、pgo がプロセス辞書に置いたこの接続で実行される。
+%% プールへ送るクエリーは、pgo がプロセス辞書に置いたこの接続で実行される。Fun が
+%% {error, _} を返したら例外で pgo に ROLLBACK させ、その値を {ok, _} で返す
+%% （pgo の new_transaction は Fun が返れば値に関わらず COMMIT し、例外だけが
+%% pgo の外から選べる ROLLBACK の手段であるため）。
 %%
 %% 期限 TimeoutMs はチェックアウトの要求から数える。pgo のプールは期限を過ぎた
 %% チェックアウトの接続を閉じるので、トランザクションの中のすべてのクエリーと COMMIT が
@@ -436,13 +439,21 @@ reply_alias(Pid) ->
 %% それ以外の例外（プールが無いときの exit(noproc)、Fun の中の panic など）は failed に
 %% する。どちらも理由の項は捨て、クエリーの引数や結果がクラッシュレポートにもログにも
 %% 出ないようにする。
-%% -> {ok, Result} | {error, checkout_failed} | {error, interrupted} | {error, failed}
+%% -> {ok, {ok, Result} | {error, Reason}} | {error, checkout_failed}
+%%    | {error, interrupted} | {error, failed}
 pool_transaction(Pool, TimeoutMs, Fun) ->
-    try pgo:transaction(Pool, fun() -> {nostr_no_su_completed, Fun()} end,
+    try pgo:transaction(Pool, fun() ->
+                                 case Fun() of
+                                     {error, _} = Failed ->
+                                         throw({nostr_no_su_rollback, Failed});
+                                     Result -> {nostr_no_su_completed, Result}
+                                 end
+                             end,
                         #{pool_options => [{timeout, TimeoutMs}]}) of
         {nostr_no_su_completed, Result} -> {ok, Result};
         {error, _Reason} -> {error, checkout_failed}
     catch
+        throw:{nostr_no_su_rollback, Failed} -> {ok, Failed};
         error:{badmatch, {error, closed}} -> {error, interrupted};
         error:{case_clause, {error, closed}} -> {error, interrupted};
         _:_ -> {error, failed}

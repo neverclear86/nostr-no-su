@@ -123,7 +123,7 @@ fn database_listings(
   key: MasterKey,
 ) -> List(bunker.Listing) {
   let assert Ok(loaded) = account_store.load(pool, key, generous)
-  loaded.accounts
+  loaded.accounts.accounts
   |> list.map(fn(entry) {
     bunker.Listing(
       signer: account.pubkey_hex(entry.account),
