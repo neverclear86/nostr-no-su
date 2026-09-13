@@ -3,20 +3,22 @@ import gleam/json
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter.{type Filter}
 
-/// 本クライアントからリレーへ送るメッセージ（NIP-01）。
+/// 本クライアントからリレーへ送るメッセージ（NIP-01、NIP-42 の AUTH）。
 pub type ClientMessage {
   Req(subscription_id: String, filter: Filter)
   Close(subscription_id: String)
   Publish(event: Event)
+  Auth(event: Event)
 }
 
-/// リレーから本クライアントへ送られるメッセージ（NIP-01）。
+/// リレーから本クライアントへ送られるメッセージ（NIP-01、NIP-42 の AUTH）。
 pub type RelayMessage {
   RelayEvent(subscription_id: String, event: Event)
   RelayEose(subscription_id: String)
   RelayOk(event_id: String, accepted: Bool, message: String)
   RelayNotice(message: String)
   RelayClosed(subscription_id: String, message: String)
+  RelayAuth(challenge: String)
 }
 
 /// クライアントメッセージを、リレーへ送る JSON 配列の文字列にする。
@@ -35,6 +37,8 @@ pub fn encode_client_message(client_message: ClientMessage) -> String {
       ])
     Publish(event) ->
       json.preprocessed_array([json.string("EVENT"), event.to_json(event)])
+    Auth(event) ->
+      json.preprocessed_array([json.string("AUTH"), event.to_json(event)])
   }
   |> json.to_string
 }
@@ -68,6 +72,10 @@ pub fn relay_message_decoder() -> decode.Decoder(RelayMessage) {
       use subscription_id <- decode.field(1, decode.string)
       use text <- decode.field(2, decode.string)
       decode.success(RelayClosed(subscription_id, text))
+    }
+    "AUTH" -> {
+      use challenge <- decode.field(1, decode.string)
+      decode.success(RelayAuth(challenge))
     }
     _ -> decode.failure(RelayNotice(""), "RelayMessage")
   }
