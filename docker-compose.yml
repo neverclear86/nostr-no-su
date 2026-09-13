@@ -1,7 +1,8 @@
 services:
   nostr-no-su:
     build: .
-    # 変数の意味は README の「環境変数」の表にある。${...} の値は .env
+    # 変数の意味は README の「環境変数」の表にある（POSTGRES_* は例外で「docker
+    # compose」の節にある）。${...} の値は .env
     # （.env.example を複製して作る）で変える。秘密（ACCOUNT_MASTER_KEY と
     # ADMIN_PASSWORD）の値はこのファイルに書かないこと。${...} の変数を足す、
     # 消す、既定値を変えるときは、.env.example の行も合わせ、
