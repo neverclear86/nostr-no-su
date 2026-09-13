@@ -16,6 +16,8 @@
     absolute_path/1,
     add_code_path/1,
     is_on_code_path/1,
+    module_application/1,
+    application_version/1,
     message_queue_len/0,
     run_isolated/1,
     describe_exit/1,
@@ -268,6 +270,78 @@ add_code_path(Path) ->
 %% だけである。
 is_on_code_path(Module) ->
     code:which(Module) =/= non_existing.
+
+%% モジュールとして使われる BEAM が属するアプリケーションの名前と版。
+%% `code:add_pathz/1` は末尾追加なので、`code:which/1` は実際にそのモジュール名で
+%% 呼び出したときに使われる勝った側の BEAM を指す。返すのは常にその BEAM が置かれた
+%% ebin にある `.app` で、呼び出し元がコードパスへ追加する順序（本体→影の判定の
+%% 対象）とは独立である。
+%% ebin に `.app` がちょうど 1 つに決まらない（0 個・複数個）、または `.app` が
+%% 読めなければ Error。`preloaded` / `cover_compiled` / `non_existing` も Error。
+%% -> {ok, {AppBinary, VsnBinary}} | {error, nil}
+module_application(Module) ->
+    case code:which(Module) of
+        Path when is_list(Path) ->
+            Dir = filename:dirname(Path),
+            case filelib:wildcard("*.app", Dir) of
+                [AppFile] -> read_app_file(filename:join(Dir, AppFile));
+                _ -> {error, nil}
+            end;
+        _ ->
+            {error, nil}
+    end.
+
+%% コードパス上で最初に見つかるアプリケーションの版。`code:where_is_file/1` は
+%% `code:add_pathz/1` が足した順（先勝ち）でコードパスを辿るため、実行時に実際に
+%% 使われる版と一致する。見つからなければ Error。
+%% -> {ok, VsnBinary} | {error, nil}
+application_version(App) ->
+    case code:where_is_file(unicode:characters_to_list(App) ++ ".app") of
+        non_existing ->
+            {error, nil};
+        Path ->
+            case read_app_file(Path) of
+                {ok, {_App, Vsn}} -> {ok, Vsn};
+                {error, nil} -> {error, nil}
+            end
+    end.
+
+%% `.app` ファイルを直読みして {AppName, Vsn} を得る。`application:get_key/2` を
+%% 使わないのは、ロード済みのアプリケーションにしか答えないため。素の VM では
+%% 本体の依存の一部と、他のプラグインが同梱したアプリはロードされていない。
+%% `.app` の直読みはロード状態に依存せず、本体・プラグインのどちらが提供元でも
+%% 同じ経路で版が出る。
+%%
+%% `.app` は本体が書いたものとは限らず、プラグインが同梱したものや、影の判定で
+%% たまたま踏んだ他バンドルのものもここへ来る。形が崩れていても本体の起動を
+%% 止めてはならないため、例外は投げず、読めない・形が違う・vsn が無い（または
+%% 文字として整形できない）ときはすべて Error にする。
+%% `App` が atom で `Props` が list であることをガードで確かめたうえで
+%% `proplists:get_value/2` を呼ぶ（`function_clause` を避ける）。`atom_to_binary/1`
+%% は atom であれば必ず成功するが、`vsn` の値は不正な整数（コードポイントの範囲外
+%% や負値）を含むリストでも `is_list/1` は真になるため、`unicode:characters_to_binary/1`
+%% の戻り値が binary であることまで確かめる（不正な入力は `{error, Bin, Rest}` を
+%% 返す場合と `badarg` の例外を投げる場合があり、`try` はその両方を一度に塞ぐ）。
+%% -> {ok, {AppBinary, VsnBinary}} | {error, nil}
+read_app_file(Path) ->
+    try
+        case file:consult(Path) of
+            {ok, [{application, App, Props}]} when is_atom(App), is_list(Props) ->
+                case proplists:get_value(vsn, Props) of
+                    Vsn when is_list(Vsn) ->
+                        case unicode:characters_to_binary(Vsn) of
+                            Bin when is_binary(Bin) -> {ok, {atom_to_binary(App), Bin}};
+                            _ -> {error, nil}
+                        end;
+                    _ ->
+                        {error, nil}
+                end;
+            _ ->
+                {error, nil}
+        end
+    catch
+        _:_ -> {error, nil}
+    end.
 
 %% 自プロセスの未処理メッセージ数。プラグインのランナーが、遅いプラグインの
 %% メールボックスが際限なく伸びるのを止めるために見る。self() に対する

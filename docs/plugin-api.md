@@ -28,8 +28,8 @@ Nostr-no-Su は、監視対象アカウントのイベントを受け取るプ�
 
 - `plugin_name/0` の値は管理 UI の表示名とログの識別子に使う。**プラグイン間で一意にすること。**
 - **`handle_event` は `/1` と `/2` のどちらか一方があればよい。** `/2` はプラグイン固有の設定を第 2 引数で受け取る形で（第 6 章）、両方あれば本体は `/2` を優先する。**設定が必須のプラグインは `/2` だけをエクスポートしてよい。** 設定が無ければ正しく書けない `handle_event/1` を、形だけ揃えるために持たせる必要はない。
-- 上記以外のエクスポートは自由に増やしてよい。本体は必須の 3 つだけを見て読み込みを判定するので、未知のエクスポートがあっても読み込みには影響しない。本体が将来使う任意エクスポートは、存在するときだけ呼ばれる。
-- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
+- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
+- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_required_versions/0` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
 
 ## 3. イベント map の仕様
 
@@ -252,7 +252,7 @@ handle_event(Event, Config) -> term().
 
 `plugin_children/0` と `handle_event/1` しか持たないプラグインは**従来どおり動く**。設定を必要としないプラグインは何も変えなくてよい。
 
-**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証は `plugin_api_version` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
+**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証は `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
 
 ### 6.4 設定が足りないことの申告
 
@@ -295,6 +295,8 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 **新しい引数が必要になったときも、既存の関数のアリティは変えない。** プラグイン固有の設定（第 6 章）がその実例である。`plugin_children/0` を `plugin_children/1` に変えるのではなく、`plugin_children/1` と `handle_event/2` を**任意エクスポート**として追加し、本体は存在すればそちらを優先して呼ぶ。`plugin_children/0` と `handle_event/1` しか持たないプラグインは従来どおり動き続ける。
 
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
+
+任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。
 
 バージョン番号を上げるのは、次の破壊的変更のときだけである。
 
@@ -345,9 +347,13 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 - **本体と本体の依存が常に優先される。** プラグインが新しい `gleam_stdlib` を同梱しても、使われるのは本体の版である。
 - プラグイン同士では、名前順で先に読み込まれた側が勝つ。
 
-食い違いは**読み込み時ではなくイベント処理関数の実行時に `undef` として現れる。** 本体の版に無い関数を呼んだ時点で初めて失敗するので、`plugin.load` の検証では検出できない。したがって **プラグインは Dockerfile と同じ Gleam / OTP でビルドすること。** OTP が違う BEAM は `badfile` で拒否される。
+食い違いは、`plugin_required_versions/0` で依存の版を宣言すれば読み込み時に弾かれる（第 7 章）。宣言しなければ**読み込み時ではなくイベント処理関数の実行時に `undef` として現れる。** 本体の版に無い関数を呼んだ時点で初めて失敗するので、`plugin.load` の検証では検出できない。したがって **プラグインは Dockerfile と同じ Gleam / OTP でビルドすること。** OTP が違う BEAM は `badfile` で拒否される。
 
-影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。同梱の `event_logger` の場合は 120 モジュール（`gleam_stdlib` / `gleam_erlang` / `gleam_otp` / `gleam_json` / `exception` / `pog` / `pgo` / `pg_types` / `backoff` / `opentelemetry_api` / `gleam_time`。本体もアカウントストアのために `pog` に依存するため）が影に入り、起動ログに出るのはその 1 行だけである（Dockerfile と同じイメージでビルドしたときの値）。
+影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。報告にはモジュールの提供元となるアプリケーションと版が `app vsn` の形で添えられる（アプリが分からないモジュールは名前を数件だけ挙げる）。同梱の `event_logger` の場合は 120 モジュールが影に入り、起動ログに出るのはその 1 行だけである（Dockerfile と同じイメージでビルドしたときの値）。
+
+```
+event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_stdlib 1.0.3, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
+```
 
 ### 8.5 読み込みの失敗
 
@@ -362,7 +368,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 | `<dir>: cannot add to code path (bad_directory); skipped` | `PLUGIN_DIR` 自身をコードパスへ足せなかった（ルート直下の `.beam` が対象） |
 | `<name>: cannot add <ebin> to code path (bad_directory); skipped` | プラグインの ebin をコードパスへ足せなかった |
 | `<name>: module <name> is already provided by the host or another plugin; skipped` | エントリーモジュール名が本体か他のプラグインと重なる |
-| `<name>: N module(s) already provided by the host or another plugin are ignored (...)` | 同梱した依存が影に入った（読み込みは続行する） |
+| `<name>: N module(s) already provided by the host or another plugin are ignored (gleam_stdlib 1.0.3, ...)` | 同梱した依存が影に入った（読み込みは続行する） |
 | `<mod>: duplicate plugin name "<name>"; keeping the first` | `plugin_name/0` の値が重複した |
 | `loaded 2 plugin(s) from /plugins: file_logger, my_plugin (3 skipped)` | 集計。`skipped` は候補だったが読み込めなかったものの件数 |
 
@@ -393,9 +399,12 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 | `<mod>: missing export handle_event/1 or handle_event/2` | イベント処理関数がどちらのアリティでも無い |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由`。呼び出しのプロセスごと終了した場合は括弧内が終了理由（`killed` など） |
 | `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
-| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0` と `plugin_children/0` `/1` も同じ形で報告される |
+| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 must return an Int, got Float` | 戻り値が整数でない |
 | `<mod>: unsupported api version 2 (expected 1)` | 本体が対応していないバージョン |
+| `<mod>: plugin_required_versions/0 must return a map of application names to version strings (expected String, got Int at gleam_stdlib)` | 戻り値の形が API に合わない。括弧内は `decode` の最初のエラー |
+| `<mod>: requires gleam_stdlib 1.0.2, but the code path provides 1.0.3` | 宣言した版がコードパス上の版と食い違う |
+| `<mod>: requires foo 1.0.0, but no foo.app is on the code path` | 宣言したアプリケーションがコードパスに無い |
 | `<mod>: plugin_name/0 must return a String, got Int` | 名前が文字列（binary）でない |
 | `<mod>: plugin_name/0 must not be empty` | 名前が空文字列 |
 | `<mod>: plugin_children/0 crashed (error:badarg)` | 子仕様の問い合わせが例外を投げた |
@@ -408,7 +417,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 | `<mod>: plugin_children/1 rejected the configuration (path is required); 設定は PLUGIN_FILE_LOGGER_* で渡す` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる |
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
 
-検証は `plugin_api_version` → `plugin_name` → 設定の切り出し → `plugin_children` の順（上の表の順）で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
+検証は `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順（上の表の順）で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
 
 ## 10. Erlang での最小実装例
 
@@ -441,6 +450,7 @@ handle_event(Event) ->
   ```
 
   この `Event` は本体のレコードなので、プラグイン側にも同じフィールドを同じ順で持つ型を宣言しておく（Gleam のレコードは実行時にはタグ付きタプルなので、コンストラクター名（`Event`）とフィールドの並びが一致していれば読める。フィールド名は実行時には残らない）。本体の型に追随する手間を避けたい場合は、`gleam/dynamic/decode` で map を直接読むほうが簡単である。
+- `plugin_required_versions/0` は `dict.from_list([#("gleam_stdlib", "1.0.3")])` のように `Dict(String, String)` を返せばよい。版は自分の `manifest.toml` に書かれた値を使う。
 
 ## 12. Elixir で書くときの注意
 

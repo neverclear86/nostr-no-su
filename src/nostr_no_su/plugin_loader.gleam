@@ -18,7 +18,7 @@
 //// （末尾追加）なので、本体と本体の依存、そして先に読み込まれたプラグインが常に
 //// 勝つ。エントリーモジュールが既にコードパス上にある候補は、コードパスに何も
 //// 足さずに丸ごと飛ばす。同梱された依存が影に入る場合は、バンドルごとに 1 行
-//// 集約して報告する。
+//// 集約して報告する。報告には提供元のアプリと版を添える。
 ////
 //// **順序。** 読み込みはモジュール名の昇順で行い、`file:list_dir/1` の不定な
 //// 順序に依存しない。ただしコードパスへ足す順序だけは別で、ルート直下の
@@ -46,8 +46,8 @@ import nostr_no_su/plugin.{type Plugin}
 /// このモジュールが出すログ行の接頭辞。
 pub const log_prefix = "plugin_loader"
 
-/// 影の報告で名前を挙げるモジュールの件数。Gleam で書いたプラグインは
-/// `gleam_stdlib` を丸ごと同梱するため、全部並べると 1 バンドルで数十件になる。
+/// アプリの分からないモジュールについて名前を挙げる件数。アプリが分かるものは
+/// `shadow_sources` がすべて挙げる。
 const shadow_sample_size = 3
 
 /// `PLUGIN_DIR` を走査して外部プラグインを読み込む。読み込めたプラグインと、
@@ -292,31 +292,46 @@ fn shadowed(ebin: String) -> List(String) {
   }
 }
 
-/// 影に入ったモジュールの報告。バンドルにつき 1 行に集約し、名前は先頭数件だけ
-/// 挙げる。1 つも無ければ行を出さない。
+/// 影に入ったモジュールの報告。バンドルにつき 1 行に集約し、提供元のアプリと
+/// 版をすべて、アプリの分からないモジュールは先頭数件の名前を挙げる。1 つも
+/// 無ければ行を出さない。
 fn shadow_note(name: String, modules: List(String)) -> List(String) {
   case modules {
     [] -> []
-    _ -> {
-      let sample = list.take(modules, shadow_sample_size)
-      let rest = case list.length(modules) > shadow_sample_size {
-        True -> ", ..."
-        False -> ""
-      }
-      [
-        log.line(
-          log_prefix,
-          name
-            <> ": "
-            <> int.to_string(list.length(modules))
-            <> " module(s) already provided by the host or another plugin are ignored ("
-            <> string.join(sample, ", ")
-            <> rest
-            <> ")",
-        ),
-      ]
-    }
+    _ -> [
+      log.line(
+        log_prefix,
+        name
+          <> ": "
+          <> int.to_string(list.length(modules))
+          <> " module(s) already provided by the host or another plugin are ignored ("
+          <> shadow_sources(modules)
+          <> ")",
+      ),
+    ]
   }
+}
+
+/// 影に入ったモジュールの提供元を括弧内の 1 行にする。アプリの分かるものは
+/// `app vsn` を重複なしですべて、分からないものはモジュール名を
+/// `shadow_sample_size` 件まで挙げる。
+fn shadow_sources(modules: List(String)) -> String {
+  let #(apps, unknowns) =
+    list.fold(modules, #([], []), fn(acc, module) {
+      let #(apps, unknowns) = acc
+      case module_application(atom.create(module)) {
+        Ok(#(app, vsn)) -> #([app <> " " <> vsn, ..apps], unknowns)
+        Error(Nil) -> #(apps, [module, ..unknowns])
+      }
+    })
+  let apps = list.reverse(apps) |> list.unique
+  let unknowns = list.reverse(unknowns)
+  let sample = list.take(unknowns, shadow_sample_size)
+  let rest = case list.length(unknowns) > shadow_sample_size {
+    True -> ", ..."
+    False -> ""
+  }
+  string.join(list.append(apps, sample), ", ") <> rest
 }
 
 /// エントリーモジュールが影に入っている候補の報告。
@@ -436,3 +451,8 @@ fn add_code_path(path: String) -> Result(Nil, String)
 /// モジュールが既にコードパス上にあるか。
 @external(erlang, "nostr_no_su_ffi", "is_on_code_path")
 fn is_on_code_path(module: Atom) -> Bool
+
+/// モジュールとして使われる BEAM が属するアプリケーションの名前と版。ebin の
+/// `.app` が 1 つに決まらなければ Error。
+@external(erlang, "nostr_no_su_ffi", "module_application")
+fn module_application(module: Atom) -> Result(#(String, String), Nil)

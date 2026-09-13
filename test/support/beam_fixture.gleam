@@ -69,6 +69,24 @@ handle_event(Event) ->
 "
 }
 
+/// 必須 3 関数と `plugin_required_versions/0` を持ち、その本体を `body`
+/// （Erlang の式）にしたプラグインのソース。版の照合の検証に使う。
+pub fn required_versions_source(
+  module: String,
+  name: String,
+  body: String,
+) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_required_versions/0, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_required_versions() -> " <> body <> ".
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
 /// 必須 3 関数をエクスポートする最小プラグインの Erlang ソース。
 /// `handle_event/1` は受け取った map を `persistent_term` へ退避するので、
 /// イベントが実際に届いたことをテストから確認できる。キーはモジュール名の atom
@@ -199,6 +217,21 @@ pub fn write(path: String, content: String) -> Nil {
   Nil
 }
 
+/// `<ebin>/<app>.app` に `{application, <app>, [{vsn, "<vsn>"}]}.` を書く。本体
+/// 側の版の直読み（`nostr_no_su_ffi:read_app_file/1`）が読める最小の `.app`。
+pub fn write_app_file(ebin: String, app: String, vsn: String) -> Nil {
+  write(
+    ebin <> "/" <> app <> ".app",
+    "{application, " <> app <> ", [{vsn, \"" <> vsn <> "\"}]}.\n",
+  )
+}
+
+/// ロード済みアプリの版。被検コード（`.app` の直読み）と別の経路で期待値を
+/// 得るために使う。
+pub fn loaded_app_version(app: String) -> String {
+  loaded_app_version_ffi(app)
+}
+
 /// モジュールがコードパス上にあるか。エントリーモジュール規則の検証で、飛ばした
 /// バンドルの ebin がコードパスへ入っていないことを確かめるのに使う。
 pub fn on_code_path(module: String) -> Bool {
@@ -234,3 +267,7 @@ fn persistent_term_get_pid(key: Atom) -> Pid
 /// ローダーが使うものと同じ判定。テストからも同じ問い合わせを行う。
 @external(erlang, "nostr_no_su_ffi", "is_on_code_path")
 fn is_on_code_path(module: Atom) -> Bool
+
+/// `application:get_key/2` によるロード済みアプリの版。
+@external(erlang, "beam_fixture", "loaded_app_version")
+fn loaded_app_version_ffi(app: String) -> String
