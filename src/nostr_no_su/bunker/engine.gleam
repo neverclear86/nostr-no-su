@@ -408,7 +408,7 @@ fn route(
 }
 
 /// ["p", pubkey] タグの pubkey を、現れた順に取り出す。
-fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
+pub fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
   use tag <- list.filter_map(tags)
   case tag {
     ["p", pubkey, ..] -> Ok(pubkey)

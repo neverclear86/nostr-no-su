@@ -65,6 +65,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
+import gleam/set.{type Set}
+import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
@@ -73,6 +75,7 @@ import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, type Verified}
 import nostr_no_su/random
+import nostr_no_su/relay_client.{type Acknowledgement}
 import nostr_no_su/time
 
 /// バンカーが出すログ行の接頭辞。
@@ -104,6 +107,10 @@ const change_timeout_ms = 10_000
 
 /// 初期化に許す時間。initialiser は DB に触らないので短くてよい。
 const init_timeout_ms = 1000
+
+/// OK を待つ期間（秒）。OK は通常すぐ返るので、発行からこの秒数で返らない OK は
+/// 返らないとみなす（値は判定の取りこぼしと保持量の兼ね合いで選んだ）。
+const acknowledgement_timeout_seconds = 60
 
 /// 承認ページの URL に入るトークンのバイト数。承認・拒否そのものは管理 UI の
 /// 認証が守るが、トークンは保留の識別子なので、認証を通った管理者が別の要求を
@@ -234,6 +241,8 @@ pub type Msg {
   /// クラッシュした場合は `on_disconnect` を経ないため、再起動した接続が
   /// `SetPublisher` で上書きするまでは古い送信手段が残る。
   RemovePublisher(relay_url: String)
+  /// バンカーリレーの接続が、発行した応答への OK を知らせる。
+  Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))
   /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
@@ -411,10 +420,126 @@ type Change {
   LabelUpdated
 }
 
+/// OK を待っている応答の一覧。キーは応答 id。
+pub opaque type Deliveries {
+  Deliveries(Dict(String, Delivery))
+}
+
+/// 発行した応答 1 件の追跡。`client` は宛先のクライアント pubkey、`awaiting` は
+/// まだ OK を返していないリレーの URL、`rejections` は `#(relay_url, reason)` を
+/// 届いた逆順に積んだ拒否、`published_at` は発行時刻（秒）。
+type Delivery {
+  Delivery(
+    client: String,
+    awaiting: Set(String),
+    rejections: List(#(String, String)),
+    published_at: Int,
+  )
+}
+
+/// 何も待っていない一覧。
+pub fn new_deliveries() -> Deliveries {
+  Deliveries(dict.new())
+}
+
+/// 応答を `relay_urls` に発行したことを記録する。記録の前に、発行から
+/// `acknowledgement_timeout_seconds` 以上経った項目を捨てる。
+pub fn track(
+  deliveries: Deliveries,
+  response: Event,
+  relay_urls: List(String),
+  now: Int,
+) -> Deliveries {
+  let Deliveries(entries) = deliveries
+  let fresh =
+    dict.filter(entries, fn(_id, delivery) {
+      delivery.published_at + acknowledgement_timeout_seconds > now
+    })
+  Deliveries(dict.insert(
+    fresh,
+    response.id,
+    Delivery(
+      client: recipient(response),
+      awaiting: set.from_list(relay_urls),
+      rejections: [],
+      published_at: now,
+    ),
+  ))
+}
+
+/// OK 1 件を反映し、送った先の全リレーが拒否し終えたら出すログ行を返す。id が
+/// 一覧に無ければ（掃除済み、監視と無関係の OK）そのまま返す。受理は項目を消す。
+/// 拒否は未応答からそのリレーを外して積み、未応答が空になった時点で項目を消して
+/// ログ行を返す。すでに未応答に無いリレーからの拒否（同じリレーからの 2 度目）は
+/// 数えない。
+pub fn acknowledge(
+  deliveries: Deliveries,
+  relay_url: String,
+  ack: Acknowledgement,
+) -> #(Deliveries, Option(String)) {
+  let Deliveries(entries) = deliveries
+  case dict.get(entries, ack.event_id), ack.accepted {
+    Error(Nil), _ -> #(deliveries, None)
+    Ok(_delivery), True -> #(
+      Deliveries(dict.delete(entries, ack.event_id)),
+      None,
+    )
+    Ok(delivery), False ->
+      case set.contains(delivery.awaiting, relay_url) {
+        False -> #(deliveries, None)
+        True -> {
+          let remaining = set.delete(delivery.awaiting, relay_url)
+          let updated =
+            Delivery(..delivery, awaiting: remaining, rejections: [
+              #(relay_url, ack.message),
+              ..delivery.rejections
+            ])
+          case set.is_empty(remaining) {
+            False -> #(
+              Deliveries(dict.insert(entries, ack.event_id, updated)),
+              None,
+            )
+            True -> #(
+              Deliveries(dict.delete(entries, ack.event_id)),
+              Some(rejected_line(ack.event_id, updated)),
+            )
+          }
+        }
+      }
+  }
+}
+
+/// 応答の宛先のクライアント pubkey。最初の `["p", pubkey, ..]` タグから取り、
+/// 無ければ `unknown`。
+fn recipient(response: Event) -> String {
+  case engine.p_tag_pubkeys(response.tags) {
+    [pubkey, ..] -> pubkey
+    [] -> "unknown"
+  }
+}
+
+/// 全リレーに拒否された応答の行。拒否は届いた順に並べる。
+fn rejected_line(id: String, delivery: Delivery) -> String {
+  let reasons =
+    delivery.rejections
+    |> list.reverse
+    |> list.map(fn(rejection) {
+      let #(relay_url, reason) = rejection
+      relay_client.label(relay_url) <> ": " <> reason
+    })
+    |> string.join("; ")
+  "response "
+  <> id
+  <> " to "
+  <> delivery.client
+  <> " was rejected by every relay: "
+  <> reasons
+}
+
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
 /// 署名者ごとのラベルと、生きた接続の送信手段と、自分が起動した時刻と、読み込みの
-/// 進み具合だけを持つ。`not_before` はエンジンではなくここに置き、アクターの起動
-/// 時刻を刻む。
+/// 進み具合と、OK を待っている応答の一覧だけを持つ。`not_before` はエンジンでは
+/// なくここに置き、アクターの起動時刻を刻む。
 type State {
   State(
     engine: engine.Engine,
@@ -430,6 +555,8 @@ type State {
     accounts: Accounts,
     /// バンカーリレーの購読の張り直しを依頼する関数。送るだけで待たない。
     resubscribe: fn() -> Nil,
+    /// OK を待っている応答の一覧。
+    deliveries: Deliveries,
   )
 }
 
@@ -493,6 +620,7 @@ fn initialise(
     retry: retry,
     accounts: loading(settings),
     resubscribe: resubscribe,
+    deliveries: new_deliveries(),
   )
   |> actor.initialised
   |> actor.selecting(selector)
@@ -501,8 +629,9 @@ fn initialise(
 }
 
 /// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・セッション・
-/// 承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、あるいは受信イベント
-/// 1 件をエンジンに通して生成された応答を全接続へ送信する。
+/// 承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件を
+/// エンジンに通して生成された応答の全接続への送信、あるいは発行した応答への OK の
+/// 反映を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -619,13 +748,23 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           not_before: state.not_before,
         )
       let #(next, outcome) = engine.handle_event(state.engine, incoming, inputs)
-      case outcome {
+      let published = case outcome {
         engine.Reply(response) -> publish(state, response)
-        engine.Duplicate -> Nil
-        engine.Ignore(reason) ->
+        engine.Duplicate -> state
+        engine.Ignore(reason) -> {
           log.println(log_prefix, "ignored: " <> log.sanitize_external(reason))
+          state
+        }
       }
-      actor.continue(State(..state, engine: next))
+      actor.continue(State(..published, engine: next))
+    }
+    Acknowledged(relay_url, ack) -> {
+      let #(deliveries, line) = acknowledge(state.deliveries, relay_url, ack)
+      case line {
+        Some(text) -> log.println(log_prefix, text)
+        None -> Nil
+      }
+      actor.continue(State(..state, deliveries: deliveries))
     }
   }
 }
@@ -914,21 +1053,33 @@ fn apply_decision(
       actor.continue(state)
     }
     Ok(#(next, response)) -> {
-      publish(state, response)
+      let published = publish(state, response)
       process.send(reply, Ok(Nil))
-      actor.continue(State(..state, engine: next))
+      actor.continue(State(..published, engine: next))
     }
   }
 }
 
 /// 応答イベントを全バンカーリレーへ発行する。接続が 1 本も生きていなければ送る
 /// 先が無いので、応答を落としたことをログに残す（クライアントは接続が戻った
-/// あとの再送で回復する）。
-fn publish(state: State, response: Event) -> Nil {
+/// あとの再送で回復する）。送った先があれば、送った先を `deliveries` に記録する。
+fn publish(state: State, response: Event) -> State {
   case dict.is_empty(state.publishers) {
-    True ->
+    True -> {
       log.println(log_prefix, "no live relay connection; response dropped")
-    False ->
+      state
+    }
+    False -> {
       dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
+      State(
+        ..state,
+        deliveries: track(
+          state.deliveries,
+          response,
+          dict.keys(state.publishers),
+          time.now_seconds(),
+        ),
+      )
+    }
   }
 }
