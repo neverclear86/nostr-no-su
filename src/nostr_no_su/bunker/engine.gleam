@@ -28,6 +28,10 @@ const window_seconds = 600
 /// 無かったものとして扱う。
 const pending_ttl_seconds = 600
 
+/// 承認・拒否しようとした承認待ちが無い（不明、失効、処理済み）ときの理由。管理 UI も、
+/// 承認待ちの一覧に無いトークンに同じ理由を出す。
+pub const approval_request_not_found = "unknown or expired approval request"
+
 /// リプレイ防止のために記憶するリクエスト id の件数。
 ///
 /// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
@@ -279,7 +283,7 @@ fn take_pending(
 ) -> Result(#(Engine, Pending), String) {
   let live = live_pending(engine, now)
   case dict.get(live, token) {
-    Error(_) -> Error("unknown or expired approval request")
+    Error(_) -> Error(approval_request_not_found)
     Ok(entry) ->
       Ok(#(Engine(..engine, pending: dict.delete(live, token)), entry))
   }

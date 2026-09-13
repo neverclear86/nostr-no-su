@@ -317,14 +317,17 @@ fn approve_connection(
 ) -> Response {
   case request.method {
     http.Get -> show_approval(context, language, token)
-    http.Post ->
+    http.Post -> {
+      use entry <- with_pending(context, language, token)
       decision_response(
         language,
         context.approve(token),
+        session_change_line(ConnectionApproved, entry.signer, entry.client),
         i18n.Approved,
         i18n.ApprovedCloseWindow,
         view.Success,
       )
+    }
     _ -> wisp.method_not_allowed(allowed: [http.Get, http.Post])
   }
 }
@@ -337,9 +340,11 @@ fn deny_connection(
   token: String,
 ) -> Response {
   use <- wisp.require_method(request, http.Post)
+  use entry <- with_pending(context, language, token)
   decision_response(
     language,
     context.deny(token),
+    session_change_line(ConnectionDenied, entry.signer, entry.client),
     i18n.Denied,
     i18n.DeniedCloseWindow,
     view.Neutral,
@@ -352,29 +357,79 @@ fn show_approval(
   language: Language,
   token: String,
 ) -> Response {
-  case list.find(context.pending(), fn(entry) { entry.token == token }) {
+  case find_pending(context, token) {
     Error(Nil) -> wisp.not_found()
     Ok(entry) ->
       wisp.html_response(dashboard.approval_page(language, entry), 200)
   }
 }
 
+/// 承認待ちの一覧からトークンの行を引く。不明、失効、処理済みのほか、バンカーが
+/// 応答せず一覧が空のときも `Error(Nil)` になる。
+fn find_pending(
+  context: Context,
+  token: String,
+) -> Result(dashboard.PendingRow, Nil) {
+  list.find(context.pending(), fn(entry) { entry.token == token })
+}
+
+/// 承認・拒否の前に、承認待ちの一覧からトークンの行を引く。無ければ承認・拒否を
+/// 呼ばずに 404 の通知ページを返す。ログに出す署名者とクライアントは、トークンではなく
+/// この行の値から取る。
+fn with_pending(
+  context: Context,
+  language: Language,
+  token: String,
+  next: fn(dashboard.PendingRow) -> Response,
+) -> Response {
+  case find_pending(context, token) {
+    Ok(entry) -> next(entry)
+    Error(Nil) -> not_found_notice(language, engine.approval_request_not_found)
+  }
+}
+
+/// 接続とセッションへの操作の種類。ログ行の言い回しを決める。
+pub type SessionChange {
+  ConnectionApproved
+  ConnectionDenied
+  SessionRevoked
+}
+
+/// 承認・拒否・取り消し 1 件のログ行の本文（接頭辞を除く）。値は署名者とクライアントの
+/// 公開鍵だけで、承認ページのトークンを含めない。
+pub fn session_change_line(
+  change: SessionChange,
+  signer: String,
+  client: String,
+) -> String {
+  let done = case change {
+    ConnectionApproved -> "approved the connection of client "
+    ConnectionDenied -> "denied the connection of client "
+    SessionRevoked -> "revoked the session of client "
+  }
+  done <> client <> " to signer " <> signer
+}
+
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
-/// 終わったことだけを伝える。処理できなかった要求（不明・失効・処理済み、あるいは
-/// バンカーが動いていない）は、区別せず理由を添えた 404 にする。承認と拒否はどちらも
-/// 200 なので、処理できたときの見出し（`done`）、文（`message`）、通知の色（`tone`）は
+/// 終わったことだけを伝える。処理できたときは `log_line` を 1 行ログに出す。処理
+/// できなかった要求（一覧を引いた後に失効・処理済みになった、あるいはバンカーが
+/// 動いていない）は、区別せず理由を添えた 404 にする。承認と拒否はどちらも 200
+/// なので、処理できたときの見出し（`done`）、文（`message`）、通知の色（`tone`）は
 /// 呼び出し側が渡す。
 fn decision_response(
   language: Language,
   outcome: Result(Nil, String),
+  log_line: String,
   done: i18n.Message,
   message: i18n.Message,
   tone: view.Tone,
 ) -> Response {
   case outcome {
-    Ok(Nil) ->
+    Ok(Nil) -> {
+      log.println(log_prefix, log_line)
       dashboard.notice_page(language, done, i18n.Translated(message), tone)
       |> wisp.html_response(200)
+    }
     Error(reason) -> not_found_notice(language, reason)
   }
 }
@@ -407,7 +462,13 @@ fn revoke_session(
   {
     Ok(signer), Ok(client) ->
       case context.revoke(signer, client) {
-        Ok(Nil) -> wisp.redirect(to: "/")
+        Ok(Nil) -> {
+          log.println(
+            log_prefix,
+            session_change_line(SessionRevoked, signer, client),
+          )
+          wisp.redirect(to: "/")
+        }
         Error(failure) -> revoke_failure_response(language, failure)
       }
     _, _ -> wisp.bad_request("signer and client are required")

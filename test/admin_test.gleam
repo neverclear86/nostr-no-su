@@ -54,7 +54,7 @@ const not_answered = "the bunker did not respond"
 /// でエスケープされなければならない。
 const disabled_reason = "error:<script>alert(1)</script>"
 
-/// 承認待ちのトークン。フェイクの承認・拒否はこれだけを知っている。
+/// 承認待ちのトークン。フェイクの一覧（`pending`）はこれだけを持つ。
 const token = "tok-1"
 
 /// アカウントの接続 URI（secret 入りと、承認を経るもの）。
@@ -176,25 +176,19 @@ fn test_context(
         ),
       ]
     },
-    approve: fn(decided) {
-      record_decision(reports, Approved(decided), decided)
-    },
-    deny: fn(decided) { record_decision(reports, Denied(decided), decided) },
+    approve: fn(decided) { record_decision(reports, Approved(decided)) },
+    deny: fn(decided) { record_decision(reports, Denied(decided)) },
   )
 }
 
-/// 承認・拒否のフェイク。テストへ報告したうえで、知っているトークンだけを成功と
-/// して扱う。
+/// 承認・拒否のフェイク。テストへ報告したうえで成功する。承認待ちの一覧に無い
+/// トークンはハンドラーが呼び出す前に 404 にするので、ここには届かない。
 fn record_decision(
   reports: Subject(Report),
   report: Report,
-  decided: String,
 ) -> Result(Nil, String) {
   process.send(reports, report)
-  case decided == token {
-    True -> Ok(Nil)
-    False -> Error("unknown or expired approval request")
-  }
+  Ok(Nil)
 }
 
 /// 状態を変える操作を報告する Context。
@@ -538,10 +532,55 @@ pub fn deny_calls_the_context_test() {
   assert process.receive(reports, 1000) == Ok(Denied(token))
 }
 
-/// 処理できなかった承認・拒否は 404。承認待ちはすでに無い。
+/// 承認待ちの一覧に無いトークンの承認・拒否は、Context の `approve` / `deny` を
+/// 呼ばずに理由を添えた 404 にする。
 pub fn deciding_an_unknown_token_is_not_found_test() {
-  assert post(context(), "/approve/other-token").status == 404
-  assert post(context(), "/deny/other-token").status == 404
+  let reports = process.new_subject()
+  let approve_response =
+    post(reporting_context(reports), "/approve/other-token")
+  assert approve_response.status == 404
+  assert string.contains(
+    simulate.read_body(approve_response),
+    engine.approval_request_not_found,
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+
+  let deny_response = post(reporting_context(reports), "/deny/other-token")
+  assert deny_response.status == 404
+  assert string.contains(
+    simulate.read_body(deny_response),
+    engine.approval_request_not_found,
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 承認・拒否・取り消しのログ行は、署名者とクライアントの公開鍵を含む。
+pub fn session_change_lines_name_the_signer_and_the_client_test() {
+  assert admin.session_change_line(admin.ConnectionApproved, signer, client)
+    == "approved the connection of client " <> client <> " to signer " <> signer
+  assert admin.session_change_line(admin.ConnectionDenied, signer, client)
+    == "denied the connection of client " <> client <> " to signer " <> signer
+  assert admin.session_change_line(admin.SessionRevoked, signer, client)
+    == "revoked the session of client " <> client <> " to signer " <> signer
+}
+
+/// 一覧を引いた後にバンカーが処理できなかった承認・拒否は、バンカーの理由を
+/// 添えた 404。
+pub fn a_decision_the_bunker_rejects_is_not_found_test() {
+  let reason = "bunker is not running"
+  let rejecting =
+    admin.Context(
+      ..context(),
+      approve: fn(_token) { Error(reason) },
+      deny: fn(_token) { Error(reason) },
+    )
+  let approve_response = post(rejecting, "/approve/" <> token)
+  assert approve_response.status == 404
+  assert string.contains(simulate.read_body(approve_response), reason)
+
+  let deny_response = post(rejecting, "/deny/" <> token)
+  assert deny_response.status == 404
+  assert string.contains(simulate.read_body(deny_response), reason)
 }
 
 /// 資格情報のない承認は 401 で、Context には届かない。

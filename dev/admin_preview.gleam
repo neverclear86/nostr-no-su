@@ -154,12 +154,10 @@ fn context() -> admin.Context {
   )
 }
 
-/// 承認・拒否。`tok-1` だけを成功させる。
-fn decide(token: String) -> Result(Nil, String) {
-  case token {
-    "tok-1" -> Ok(Nil)
-    _ -> Error("unknown or expired approval request")
-  }
+/// 承認・拒否。承認待ちの一覧に無いトークンは管理 UI が呼び出す前に 404 にする
+/// ので、呼ばれたら成功させる。
+fn decide(_token: String) -> Result(Nil, String) {
+  Ok(Nil)
 }
 
 /// 待ち受けの先頭のポート。`PREVIEW_PORT` が整数でなければ既定値を使う。
