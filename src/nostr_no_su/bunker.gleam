@@ -807,18 +807,23 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           token: random.hex(token_bytes),
           not_before: state.not_before,
         )
-      let #(next, outcome, _write) =
+      let #(accepted, outcome) =
         engine.handle_event(state.engine, incoming, inputs)
-      let published = case outcome {
-        engine.Reply(response) -> publish(state, response)
-        engine.Duplicate -> state
+      let #(published, next) = case outcome {
+        engine.Reply(response) -> #(publish(state, response), accepted)
+        // 書き込みはまだ通さず、書けたものとして反映する（#225 で書き込む）
+        engine.Persist(next:, response:, ..) -> #(
+          publish(state, response),
+          next,
+        )
+        engine.Duplicate -> #(state, accepted)
         engine.Ignore(reason) -> {
           log.write(
             log.Notice,
             log_prefix,
             "ignored: " <> log.sanitize_external(reason),
           )
-          state
+          #(state, accepted)
         }
       }
       actor.continue(State(..published, engine: next))

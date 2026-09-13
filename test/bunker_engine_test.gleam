@@ -3,10 +3,10 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
+import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
@@ -59,13 +59,14 @@ fn handle(
   handle_after(state, incoming, now, 0)
 }
 
-/// 指定した起点のアクターが受信イベントを 1 件処理し、書き込みの値も返す。
-fn handle_with_write(
+/// 指定した起点のアクターが受信イベントを 1 件処理する。`Persist` はそのまま
+/// 返すので、書き込みの値や `on_failure` を見るテストが使う。
+fn handle_raw(
   state: engine.Engine,
   incoming: Event,
   now: Int,
   not_before: Int,
-) -> #(engine.Engine, engine.Outcome, Option(engine.Write)) {
+) -> #(engine.Engine, engine.Outcome) {
   engine.handle_event(
     state,
     signed_event.verified(incoming),
@@ -73,16 +74,27 @@ fn handle_with_write(
   )
 }
 
-/// 指定した起点のアクターが受信イベントを 1 件処理する。書き込みの値は捨てる。
+/// `Persist` を、書き込みが成功したものとして畳み込む。アクターの `Incoming`
+/// と同じ遷移なので、`connect` や `logout` の後にセッションや承認待ちを前提に
+/// する既存のテストはこれを通せば直さずに済む。
+fn written(
+  handled: #(engine.Engine, engine.Outcome),
+) -> #(engine.Engine, engine.Outcome) {
+  case handled {
+    #(_engine, Persist(next:, response:, ..)) -> #(next, Reply(response))
+    _ -> handled
+  }
+}
+
+/// 指定した起点のアクターが受信イベントを 1 件処理する。`Persist` は書き込みが
+/// 成功したものとして畳み込むので、書き込みの値を見ないテストはこちらを使う。
 fn handle_after(
   state: engine.Engine,
   incoming: Event,
   now: Int,
   not_before: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  let #(state, outcome, _write) =
-    handle_with_write(state, incoming, now, not_before)
-  #(state, outcome)
+  handle_raw(state, incoming, now, not_before) |> written
 }
 
 /// 指定したクライアントから署名者宛の `connect` リクエストイベント。
@@ -111,7 +123,8 @@ fn connect(
   handle(state, connect_event(client, signer, secret_arg, now), now)
 }
 
-/// `perms` を指定した `connect` リクエストを送り、書き込みの値も返す。
+/// `perms` を指定した `connect` リクエストを送る。エンジンの戻り値をそのまま
+/// 返す。
 fn connect_with_perms(
   state: engine.Engine,
   client: Account,
@@ -119,7 +132,7 @@ fn connect_with_perms(
   secret_arg: String,
   perms: String,
   now: Int,
-) -> #(engine.Engine, engine.Outcome, Option(engine.Write)) {
+) -> #(engine.Engine, engine.Outcome) {
   let body =
     request_body(
       "c1",
@@ -132,7 +145,7 @@ fn connect_with_perms(
         <> perms
         <> "\"]",
     )
-  handle_with_write(state, request_event(client, signer, body, now), now, 0)
+  handle_raw(state, request_event(client, signer, body, now), now, 0)
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -730,7 +743,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let #(state, outcome, _write) =
+  let #(state, outcome) =
     engine.handle_event(
       state,
       signed_event.verified(request_event(
@@ -741,6 +754,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
       )),
       engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
+    |> written
   let assert Reply(_) = outcome
   let assert [entry] = engine.pending(state, 1001)
   assert entry.token == "tok-2"
@@ -1032,12 +1046,13 @@ fn connect_for_approval(
   approval_token: String,
   now: Int,
 ) -> engine.Engine {
-  let #(state, outcome, _write) =
+  let #(state, outcome) =
     engine.handle_event(
       state,
       signed_event.verified(connect_event(client, signer, "", now)),
       engine.Inputs(now: now, token: approval_token, not_before: 0),
     )
+    |> written
   let assert Reply(_) = outcome
   state
 }
@@ -1246,7 +1261,7 @@ pub fn has_account_reflects_the_registered_signers_test() {
 pub fn connect_with_the_secret_writes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(_state, _outcome, write) =
+  let #(_state, outcome) =
     connect_with_perms(
       new_engine(),
       client,
@@ -1255,38 +1270,36 @@ pub fn connect_with_the_secret_writes_the_session_test() {
       "sign_event:1",
       1000,
     )
+  let assert Persist(write:, ..) = outcome
   assert write
-    == Some(
-      engine.InsertSession(engine.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        perms: "sign_event:1",
-        created_at: 1000,
-        last_used_at: 1000,
-      )),
-    )
+    == engine.InsertSession(engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "sign_event:1",
+      created_at: 1000,
+      last_used_at: 1000,
+    ))
 }
 
 /// secret 無しの `connect` は、登録する承認待ちを書き込みの値として返す。
 pub fn connect_for_approval_writes_the_pending_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(_state, _outcome, write) =
+  let #(_state, outcome) =
     connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
+  let assert Persist(write:, ..) = outcome
   assert write
-    == Some(
-      engine.InsertPending(
-        pending: engine.Pending(
-          token: token,
-          signer: account.pubkey_hex(signer),
-          client: account.pubkey_hex(client),
-          request_id: "c1",
-          perms: "sign_event:1",
-          secret_mismatch: False,
-          created_at: 1000,
-        ),
-        replaced: [],
+    == engine.InsertPending(
+      pending: engine.Pending(
+        token: token,
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        request_id: "c1",
+        perms: "sign_event:1",
+        secret_mismatch: False,
+        created_at: 1000,
       ),
+      replaced: [],
     )
 }
 
@@ -1294,9 +1307,10 @@ pub fn connect_for_approval_writes_the_pending_test() {
 pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(_state, _outcome, write) =
+  let #(_state, outcome) =
     connect_with_perms(auth_engine(), client, signer, "wrong", "", 1000)
-  let assert Some(engine.InsertPending(pending:, replaced: _)) = write
+  let assert Persist(write: engine.InsertPending(pending:, replaced: _), ..) =
+    outcome
   assert pending.secret_mismatch
 }
 
@@ -1304,9 +1318,9 @@ pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
 pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _, _) =
-    connect_with_perms(auth_engine(), client, signer, "", "", 1000)
-  let #(_state, outcome, write) =
+  let #(state, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "", 1000) |> written
+  let #(_state, outcome) =
     engine.handle_event(
       state,
       signed_event.verified(request_event(
@@ -1317,8 +1331,8 @@ pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
       )),
       engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
-  let assert Reply(_) = outcome
-  let assert Some(engine.InsertPending(pending: _, replaced:)) = write
+  let assert Persist(write: engine.InsertPending(pending: _, replaced:), ..) =
+    outcome
   assert replaced == [token]
 }
 
@@ -1328,29 +1342,17 @@ pub fn reconnecting_an_approved_client_writes_nothing_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, secret, 1000)
-  let #(state, outcome1, write1) =
-    handle_with_write(
-      state,
-      connect_event(client, signer, secret, 1001),
-      1001,
-      0,
-    )
+  let #(state, outcome1) =
+    handle_raw(state, connect_event(client, signer, secret, 1001), 1001, 0)
+  // `Reply` は書き込みを持たないので、書き込みが起きていないことを表す
   let assert Reply(_) = outcome1
-  assert write1 == None
-  let #(state, outcome2, write2) =
-    handle_with_write(state, connect_event(client, signer, "", 1002), 1002, 0)
+  let #(state, outcome2) =
+    handle_raw(state, connect_event(client, signer, "", 1002), 1002, 0)
   let assert Reply(_) = outcome2
-  assert write2 == None
   // secret が違っても、組が承認済みなら書き込みは起きない
-  let #(state, outcome3, write3) =
-    handle_with_write(
-      state,
-      connect_event(client, signer, "wrong", 1003),
-      1003,
-      0,
-    )
+  let #(state, outcome3) =
+    handle_raw(state, connect_event(client, signer, "wrong", 1003), 1003, 0)
   let assert Reply(_) = outcome3
-  assert write3 == None
   assert engine.sessions(state)
     == [
       engine.Session(
@@ -1369,8 +1371,8 @@ pub fn logout_writes_the_session_deletion_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(_state, outcome, write) =
-    handle_with_write(
+  let #(_state, outcome) =
+    handle_raw(
       state,
       request_event(
         client,
@@ -1381,15 +1383,15 @@ pub fn logout_writes_the_session_deletion_test() {
       1001,
       0,
     )
-  let assert Reply(_) = outcome
+  let assert Persist(write:, ..) = outcome
   assert write
-    == Some(engine.DeleteSession(
+    == engine.DeleteSession(
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
-    ))
+    )
 
-  let #(_state, outcome2, write2) =
-    handle_with_write(
+  let #(_state, outcome2) =
+    handle_raw(
       new_engine(),
       request_event(
         client,
@@ -1400,8 +1402,8 @@ pub fn logout_writes_the_session_deletion_test() {
       1000,
       0,
     )
+  // セッションが無い組は状態を変えないので、書き込みを持たない `Reply` になる
   let assert Reply(_) = outcome2
-  assert write2 == None
 }
 
 /// すでに承認済みの組を、その組の承認待ちが残ったまま承認しても、メモリの
@@ -1409,10 +1411,10 @@ pub fn logout_writes_the_session_deletion_test() {
 pub fn approving_an_approved_client_keeps_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _, _) =
-    connect_with_perms(auth_engine(), client, signer, "", "b", 1000)
-  let #(state, _, _) =
-    connect_with_perms(state, client, signer, secret, "a", 1000)
+  let #(state, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "b", 1000) |> written
+  let #(state, _) =
+    connect_with_perms(state, client, signer, secret, "a", 1000) |> written
   let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
   assert engine.sessions(state)
     == [
@@ -1431,8 +1433,9 @@ pub fn approving_an_approved_client_keeps_the_session_test() {
 pub fn approve_writes_the_approval_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _, _) =
+  let #(state, _) =
     connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
+    |> written
   let assert Ok(#(_state, _ack, write)) = engine.approve(state, token, 1001)
   assert write
     == engine.ApprovePending(
@@ -1468,6 +1471,110 @@ pub fn revoke_writes_the_session_deletion_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
     )
+}
+
+// --- 書き込みに失敗したときの応答 ---
+
+/// secret が一致した `connect` の `on_failure` は、同じ id の
+/// `connection_not_saved` エラーである。
+pub fn connect_on_failure_is_connection_not_saved_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, outcome) =
+    handle_raw(
+      new_engine(),
+      connect_event(client, signer, secret, 1000),
+      1000,
+      0,
+    )
+  let assert Persist(on_failure:, ..) = outcome
+  assert decrypt_response(client, signer, on_failure)
+    == "{\"id\":\"c1\",\"result\":\"\",\"error\":\""
+    <> engine.connection_not_saved
+    <> "\"}"
+}
+
+/// 承認待ちを作る `connect` の `on_failure` も同じエラーで、`auth_url` を
+/// 含まない（クライアントに承認ページを開かせない）。
+pub fn pending_on_failure_has_no_auth_url_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, outcome) =
+    handle_raw(auth_engine(), connect_event(client, signer, "", 1000), 1000, 0)
+  let assert Persist(on_failure:, ..) = outcome
+  let decrypted = decrypt_response(client, signer, on_failure)
+  assert decrypted
+    == "{\"id\":\"c1\",\"result\":\"\",\"error\":\""
+    <> engine.connection_not_saved
+    <> "\"}"
+  assert !string.contains(decrypted, auth_base)
+}
+
+/// `logout` の `on_failure` は成功と同じ `ack`。クライアントの後始末を
+/// 止めないため。
+pub fn logout_on_failure_is_ack_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(_state, outcome) =
+    handle_raw(
+      state,
+      request_event(
+        client,
+        signer,
+        "{\"id\":\"l1\",\"method\":\"logout\"}",
+        1001,
+      ),
+      1001,
+      0,
+    )
+  let assert Persist(on_failure:, ..) = outcome
+  assert decrypt_response(client, signer, on_failure)
+    == "{\"id\":\"l1\",\"result\":\"ack\"}"
+}
+
+/// `Persist` の第 1 要素（`handle_raw` の戻り値）は `accept` が `seen` を記録した
+/// だけのエンジンで、セッションも承認待ちも持たない。同じイベントをもう一度
+/// 渡すと重複として扱う。secret が一致した場合と承認待ちを作る場合の両方で
+/// 確かめる。
+pub fn persist_keeps_only_the_seen_id_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+
+  let matched = connect_event(client, signer, secret, 1000)
+  let #(accepted, outcome) = handle_raw(new_engine(), matched, 1000, 0)
+  let assert Persist(..) = outcome
+  let #(state, replayed) = handle(accepted, matched, 1000)
+  assert replayed == Duplicate
+  assert engine.sessions(state) == []
+  assert engine.pending(state, 1000) == []
+
+  let awaiting = connect_event(client, signer, "", 1000)
+  let #(accepted, outcome) = handle_raw(auth_engine(), awaiting, 1000, 0)
+  let assert Persist(..) = outcome
+  let #(state, replayed) = handle(accepted, awaiting, 1000)
+  assert replayed == Duplicate
+  assert engine.sessions(state) == []
+  assert engine.pending(state, 1000) == []
+}
+
+/// `response` は組めても `on_failure` が上限（65535 バイト、`nip44.gleam:97`）を
+/// 超えて組めないときは、`Ignore` になり書き込みも状態の変更も残らない。71 は
+/// `auth_url` 応答の id 以外のバイト数（`{"id":"","result":"auth_url","error":`
+/// `"http://admin.test/approve/tok-1"}`）で、id をこの長さにすると `response`
+/// はちょうど 65535 バイト、`on_failure`（`connection_not_saved` の分 id + 83
+/// バイト）は上限を超え、要求本体（id + 40 バイト）は上限に収まる。
+pub fn unbuildable_on_failure_is_ignored_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let huge_id = string.repeat("x", 65_535 - 71)
+  let request =
+    request_event(client, signer, request_body(huge_id, "connect", "[]"), 1000)
+  let #(state, outcome) = handle(auth_engine(), request, 1000)
+  assert outcome == Ignore("failed to encrypt response")
+  assert engine.pending(state, 1000) == []
+  let #(_state, replayed) = handle(state, request, 1000)
+  assert replayed == Duplicate
 }
 
 // --- 復元 ---
