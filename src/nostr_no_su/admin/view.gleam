@@ -5,10 +5,12 @@
 ////
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。エスケープでは防げない経路には決まった値だけを渡す。`html.style`、
-//// `html.script`、`element.unsafe_raw_html` は使わない。イベント属性には定数の
-//// `copy_script` だけを渡す。`href` と `action` には、`admin/dashboard` のパスの関数が
-//// `/` から組み立てた値か、`"/"` か、`stylesheet_segments` と `language_segments` から
-//// 組み立てた値だけを渡す（lustre は URL を検査しない）。
+//// `html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は使わない。JS の処理は
+//// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
+//// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
+//// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
+//// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments` から組み立てた
+//// 値だけを渡す（lustre は URL を検査しない）。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
@@ -43,6 +45,11 @@ import nostr_no_su/admin/i18n.{type Language}
 /// 読むパスと一致させる。
 pub const stylesheet_segments = ["static", "admin.css"]
 
+/// 管理 UI のスクリプトの URL のパスセグメント。ルーティング（`admin`）とページ枠の `script` が
+/// 同じ定義を見る。`stylesheet_segments` と同じく要求のパスから `priv` の下のファイルを引くので、
+/// `priv` の中の配置（`priv/static/admin.js`）と一致させる。
+pub const script_segments = ["static", "admin.js"]
+
 /// 言語の切り替えの POST 先のパスセグメント。ルーティング（`admin`）とナビゲーション
 /// バーのフォームが同じ定義を見る。
 pub const language_segments = ["language"]
@@ -52,11 +59,6 @@ pub const language_field = "language"
 
 /// 言語の切り替えで、切り替えた後に開くパスを送る欄の名前。
 pub const return_field = "return"
-
-/// コピーのボタンの処理。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたとき
-/// だけコピーの欄の囲み（ボタンの親の親）に `data-copied` を 2 秒付ける。値はスクリプトに
-/// 埋め込まず DOM から読むので、値によらず同じ文字列になる。
-const copy_script = "const f=this.previousElementSibling,w=this.parentElement.parentElement;f.select();if(navigator.clipboard)navigator.clipboard.writeText(f.value).then(()=>{w.dataset.copied=1;clearTimeout(w.copiedTimer);w.copiedTimer=setTimeout(()=>{delete w.dataset.copied},2000)})"
 
 /// ページの本文の幅。
 pub type Layout {
@@ -140,6 +142,14 @@ pub fn page(
         attribute.rel("stylesheet"),
         attribute.href(segments_path(stylesheet_segments)),
       ]),
+      element.element(
+        "script",
+        [
+          attribute.type_("module"),
+          attribute.src(segments_path(script_segments)),
+        ],
+        [],
+      ),
     ]),
     html.body([attribute.class("min-h-screen bg-base-200 text-base-content")], [
       navbar(language, switch),
@@ -423,11 +433,11 @@ pub fn hidden_input(name: String, value: String) -> Element(msg) {
   ])
 }
 
-/// 見出しを付けた読み取り専用の欄と、その値をコピーするボタン。値はスクリプトに埋め込まず、
-/// ボタンが DOM から読む。欄に name を付けない（送信にも入力履歴にも含めないため）。
-/// `copy_script` が囲みをボタンの親の親として読むので、囲みを 1 つの要素として返す。
-/// ボタンの名前は常に「コピー」の文言のままにし、完了は囲みの直下の `role="status"` で
-/// 伝える。
+/// 見出しを付けた読み取り専用の欄と、その値をコピーするボタン。ボタンは `data-action` で
+/// `priv/static/admin.js` の `copy` の処理を指し、値は処理が DOM から読む。欄に name を付けない
+/// （送信にも入力履歴にも含めないため）。処理が囲みをボタンの親の親として読むので、囲みを
+/// 1 つの要素として返す。ボタンの名前は常に「コピー」の文言のままにし、完了は囲みの直下の
+/// `role="status"` で伝える。
 pub fn copyable_field(
   language: Language,
   caption: String,
@@ -449,7 +459,7 @@ pub fn copyable_field(
       html.button(
         [
           attribute.type_("button"),
-          attribute.attribute("onclick", copy_script),
+          attribute.data("action", "copy"),
           attribute.class(
             "btn join-item group-data-copied:btn-success focus-visible:outline-base-content",
           ),
