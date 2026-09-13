@@ -147,7 +147,7 @@ server {
 
 ### docker compose
 
-compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。`ADMIN_PORT=` と空にすると管理 UI は無効になるが、公開は `127.0.0.1:8080` のまま残る。
 
@@ -157,9 +157,11 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml` に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
 
+アプリのコンテナーはルートを読み取り専用（`read_only`）にし、ケーパビリティーを全部落として（`cap_drop: [ALL]`、`no-new-privileges`）動く。書けるのは `/tmp` だけで、メモリ上の tmpfs なのでコンテナーの再起動（クラッシュの後の自動再起動を含む）で消え、書いた分だけメモリを使う。自作のプラグインも `/tmp` 以外には書けない。`file_logger` の既定の出力先（`PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log`）と BEAM のクラッシュダンプ（`ERL_CRASH_DUMP=/tmp/erl_crash.dump`）もここに書かれるので、クラッシュダンプは既定では自動再起動で消える。どちらも残したいときは、`docker-compose.override.yml` で volume をマウントし（uid 1000 が書けること）、`PLUGIN_FILE_LOGGER_PATH` と `ERL_CRASH_DUMP` をその下に上書きする。
+
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*`、`DATABASE_URL`、`PLUGIN_EVENT_LOGGER_DATABASE_URL` の 3 か所を合わせること。
 
-ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。
+ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。docker のログは `json-file` の 10 MB × 3 世代で打ち切られ、`docker compose logs` で見えるのはその範囲だけである。
 
 ### 環境変数
 
