@@ -10,6 +10,7 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Pid}
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -75,6 +76,15 @@ pub fn a_newer_schema_is_described_with_both_versions_test() {
     == "database schema version 2 is newer than this build supports (up to version 1)"
 }
 
+/// 別のセッションが持つロックの説明はロックの番号を含み、書き込みは無かったことに
+/// なる。
+pub fn a_lock_held_elsewhere_is_described_without_values_test() {
+  let error =
+    account_store.HeldByAnotherInstance(account_store.instance_lock_key)
+  assert string.contains(account_store.describe(error), "7237235")
+  assert !account_store.may_have_been_written(error)
+}
+
 /// Postgres の URL からプールの設定を作り、本数を 2 に絞る。`pog.Config` は
 /// パスワードを持つので、表示も比較もせず本数だけを確かめる。
 pub fn pool_config_accepts_postgres_urls_test() {
@@ -84,6 +94,22 @@ pub fn pool_config_accepts_postgres_urls_test() {
       "postgres://user:pw-marker@host:5432/db",
     )
   assert config.pool_size == 2
+}
+
+/// ロックのプールの設定は本数を 1 に絞り、名前を差し替え、それ以外はアカウントの
+/// プールと変わらない。
+pub fn lock_pool_config_uses_one_connection_test() {
+  let assert Ok(pool) =
+    account_store.pool_config(
+      process.new_name("account_store_test_lock_pool_base"),
+      "postgres://user:pw-marker@host:5432/db",
+    )
+  let name = process.new_name("account_store_test_lock_pool")
+  let lock_pool = account_store.lock_pool_config(name, pool)
+  assert lock_pool.pool_size == 1
+  assert lock_pool.pool_name == name
+  assert lock_pool.host == pool.host
+  assert lock_pool.database == pool.database
 }
 
 /// データベース名の無い URL や Postgres 以外の URL は拒否し、理由に URL（パス
@@ -169,6 +195,21 @@ pub fn loading_from_an_unreachable_database_is_a_value_test() {
     == Error(account_store.Unavailable)
 }
 
+/// 到達できないプールでのロックの取得は、例外にならず `Unavailable` を返す。
+pub fn acquiring_a_lock_on_an_unreachable_database_is_a_value_test() {
+  let name = process.new_name("account_store_test_unreachable_lock")
+  let assert Ok(_pool) =
+    pog.default_config(name)
+    |> pog.port(1)
+    |> pog.start
+  assert account_store.acquire_lock(
+      pog.named_connection(name),
+      account_store.instance_lock_key,
+      account_store.default_timeouts,
+    )
+    == Error(account_store.Unavailable)
+}
+
 /// プールのプロセスが無いときの書き込みは、例外にならず `Unavailable` を返す。
 /// pgo はチェックアウトで呼び出し側を exit させるので、クエリーは送られていない。
 pub fn writes_on_a_missing_pool_are_unavailable_test() {
@@ -245,6 +286,15 @@ pub fn postgres_schema_version_test() {
   schema_version_round_trip(database_url)
 }
 
+/// 同じ番号の advisory lock は、同じセッションからは再入で取れ、別のセッションから
+/// は取れない。セッションが解放すると別のセッションが取れる。`TEST_DATABASE_URL`
+/// があるときだけ実行する。CI では未設定なら失敗する。同じ DB に対して
+/// `gleam test` を並行実行することは想定していない。
+pub fn postgres_instance_lock_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  instance_lock_round_trip(database_url)
+}
+
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
 /// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外は専用スキーマへ
 /// 向けた接続で実行する。版 2 の挿入を `search_path` なしの接続に流すと public の
@@ -277,6 +327,32 @@ fn schema_version_round_trip(database_url: String) -> Nil {
     == Error(account_store.SchemaTooNew(found: 2, supported: 1))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// セッション A がロックを取り（再入で 2 回とも成功）、セッション B は取れない。
+/// A がロックを手放すと B が取れる。番号は乱数にし、他の統合テストが取る本番の
+/// 番号（`account_store.instance_lock_key`）と衝突しないようにする。A、B は
+/// `postgres.start_lock_pool` で起動した 1 本のプールの接続である。
+fn instance_lock_round_trip(database_url: String) -> Nil {
+  let key = int.random(1_000_000_000)
+  let a = pog.named_connection(postgres.start_lock_pool(database_url))
+  let b = pog.named_connection(postgres.start_lock_pool(database_url))
+
+  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
+  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
+  assert account_store.acquire_lock(b, key, generous)
+    == Error(account_store.HeldByAnotherInstance(key))
+
+  postgres.run_statement(
+    a,
+    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
+  )
+  assert account_store.acquire_lock(b, key, generous) == Ok(Nil)
+
+  postgres.run_statement(
+    b,
+    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
+  )
 }
 
 /// `schema_version` に記録されている版の一覧（昇順）。
@@ -456,6 +532,7 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
     bunker.Store(
       ..nostr_no_su.account_store_operations(
         pool,
+        process.new_name("account_store_test_unreachable_lock"),
         random_master_key(),
         account_store.default_timeouts,
       ),

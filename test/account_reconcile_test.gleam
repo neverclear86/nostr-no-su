@@ -68,12 +68,18 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
     postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
   })
 
+  let lock_pool = postgres.start_lock_pool(database_url)
   let name = process.new_name("account_reconcile_bunker")
   let assert Ok(started) =
     bunker.start(
       name,
       bunker.Settings(
-        store: nostr_no_su.account_store_operations(pool, key, actor_timeouts),
+        store: nostr_no_su.account_store_operations(
+          pool,
+          lock_pool,
+          key,
+          actor_timeouts,
+        ),
         auth_url: None,
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),

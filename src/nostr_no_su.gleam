@@ -177,19 +177,22 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
 /// アカウントの件数を知らず、0 件でも起動する。
 ///
 /// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
-/// 管理 UI には渡らない。購読は接続と張り直しのたびに現在の署名者から組み立て直す
-/// ため、`since` もその時点の現在時刻から決まる。署名者を問い合わせられなければ
-/// 定義を得られなかったことにし、開いている購読を閉じない。
+/// 管理 UI には渡らない。ロックのプールの名前もこのクロージャーに捕捉される。購読は
+/// 接続と張り直しのたびに現在の署名者から組み立て直すため、`since` もその時点の
+/// 現在時刻から決まる。署名者を問い合わせられなければ定義を得られなかったことにし、
+/// 開いている購読を閉じない。
 fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
-  use #(pool, master_key) <- result.map(bunker_store(loaded))
+  use #(pool, lock_pool, master_key) <- result.map(bunker_store(loaded))
   let name = process.new_name("nostr_no_su_bunker")
   #(
     app.Bunker(
       name: name,
       pool: pool,
+      lock_pool: lock_pool,
       settings: bunker.Settings(
         store: account_store_operations(
           pool.pool_name,
+          lock_pool.pool_name,
           master_key,
           account_store.default_timeouts,
         ),
@@ -226,18 +229,29 @@ fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
 /// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
 /// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
 ///
-/// 読み込みが `SchemaTooNew` を返したら、再試行しても変わらないので、理由を 1 行
-/// 出して VM を止める（`halt_if_schema_too_new`）。バンカーアクターには戻らない。
+/// 読み込みの前に `lock_pool` のセッションで advisory lock を取り直す。読み込みが
+/// `SchemaTooNew` か `HeldByAnotherInstance` を返したら、どちらも再試行しても変わら
+/// ないので、理由を 1 行出して VM を止める（`halt_if_cannot_continue`）。バンカー
+/// アクターには戻らない。
 pub fn account_store_operations(
   pool: Name(pog.Message),
+  lock_pool: Name(pog.Message),
   master_key: vault.MasterKey,
   timeouts: account_store.Timeouts,
 ) -> bunker.Store {
   let db = pog.named_connection(pool)
+  let lock_db = pog.named_connection(lock_pool)
   bunker.Store(
     load: fn() {
-      account_store.load(pool, master_key, timeouts)
-      |> halt_if_schema_too_new
+      account_store.acquire_lock(
+        lock_db,
+        account_store.instance_lock_key,
+        timeouts,
+      )
+      |> result.try(fn(_locked) {
+        account_store.load(pool, master_key, timeouts)
+      })
+      |> halt_if_cannot_continue
       |> result.map_error(account_store.describe)
     },
     insert: fn(entry) {
@@ -266,15 +280,16 @@ pub fn account_store_operations(
   )
 }
 
-/// 読み込みの結果が、DB のスキーマがこのビルドより新しいことを示していたら、
-/// `cannot continue: <理由>` を 1 行出して終了コード 1 で VM を止める。古いビルドの
-/// まま新しい版の DB を読み書きさせないためである。`halt` は戻らないので、それ以外の
+/// 読み込みの結果が、再試行しても変わらない失敗（DB のスキーマがビルドより新しい、
+/// 別のインスタンスが同じ DB を使っている）を示していたら、`cannot continue: <理由>`
+/// を 1 行出して終了コード 1 で VM を止める。`halt` は戻らないので、それ以外の
 /// 結果だけがそのまま返る。
-fn halt_if_schema_too_new(
+fn halt_if_cannot_continue(
   loaded: Result(vault.Loaded, account_store.StoreError),
 ) -> Result(vault.Loaded, account_store.StoreError) {
   case loaded {
-    Error(account_store.SchemaTooNew(..) as error) -> {
+    Error(account_store.SchemaTooNew(..) as error)
+    | Error(account_store.HeldByAnotherInstance(..) as error) -> {
       log.println(
         log_prefix,
         "cannot continue: " <> account_store.describe(error),
@@ -296,11 +311,12 @@ fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
   }
 }
 
-/// アカウントストアの接続プールの設定とマスターキー。設定が揃わない、あるいは
-/// `DATABASE_URL` を解釈できなければ理由を返す。理由は値を含まない。
+/// アカウントストアの接続プールの設定、ロック専用のプールの設定、マスターキー。
+/// 設定が揃わない、あるいは `DATABASE_URL` を解釈できなければ理由を返す。理由は
+/// 値を含まない。
 fn bunker_store(
   loaded: Config,
-) -> Result(#(pog.Config, vault.MasterKey), String) {
+) -> Result(#(pog.Config, pog.Config, vault.MasterKey), String) {
   case loaded.account_store {
     config.AccountStoreUnavailable(reason) -> Error(reason)
     config.AccountStore(database_url:, master_key:) ->
@@ -308,7 +324,14 @@ fn bunker_store(
         process.new_name("nostr_no_su_account_pool"),
         database_url,
       )
-      |> result.map(fn(pool) { #(pool, master_key) })
+      |> result.map(fn(pool) {
+        let lock_pool =
+          account_store.lock_pool_config(
+            process.new_name("nostr_no_su_account_lock_pool"),
+            pool,
+          )
+        #(pool, lock_pool, master_key)
+      })
   }
 }
 

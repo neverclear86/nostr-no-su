@@ -225,10 +225,10 @@ fn start_loading_bunker_tree(
 /// テストは一定の間隔を前提に、読み込みの回数と待ち時間を数える。
 const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
-/// バンカーサブツリーの仕様。接続プールは到達できないポートを指し、偽のストアを
-/// 使うテストでもサブツリーの形（プール、アクター、接続の順）は本番と同じにする。
-/// 購読は本番と同じく、接続と張り直しのたびに現在の署名者から組み立て、署名者を
-/// 問い合わせられなければ定義を得られなかったことにする。
+/// バンカーサブツリーの仕様。接続プールとロックのプールは到達できないポートを指し、
+/// 偽のストアを使うテストでもサブツリーの形（プール、ロックのプール、アクター、
+/// 接続の順）は本番と同じにする。購読は本番と同じく、接続と張り直しのたびに現在の
+/// 署名者から組み立て、署名者を問い合わせられなければ定義を得られなかったことにする。
 fn bunker_spec(
   name: Name(bunker.Msg),
   store: bunker.Store,
@@ -238,6 +238,8 @@ fn bunker_spec(
   app.Bunker(
     name: name,
     pool: pog.default_config(process.new_name("test_account_pool"))
+      |> pog.port(1),
+    lock_pool: pog.default_config(process.new_name("test_account_lock_pool"))
       |> pog.port(1),
     settings: bunker.Settings(
       store: store,
