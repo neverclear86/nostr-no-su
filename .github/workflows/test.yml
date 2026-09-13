@@ -127,19 +127,11 @@ jobs:
             !plugins-src/event_logger/build/dev/erlang/event_logger
           key: gleam-build-event_logger-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-gleam${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/event_logger/manifest.toml') }}
       - run: gleam deps download
-      # 影に入る側は本体の版で実行されるため、版がずれると読み込み時には何も
-      # 起きず、実行時に undef で壊れる。ここで止めるのが唯一の自動検出点。
+      # 影に入る側は本体の版で実行されるため、版がずれると実行時に undef で壊れる。
+      # 検査の内容は dev/check_shared_versions.sh。
       - name: 共有パッケージの版が本体と一致することを確かめる
         working-directory: .
-        run: |
-          set -e
-          for pkg in gleam_stdlib gleam_erlang gleam_otp gleam_json exception \
-            pog pgo pg_types backoff opentelemetry_api gleam_time; do
-            host=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" manifest.toml)
-            plugin=$(grep -o "name = \"$pkg\", version = \"[^\"]*\"" plugins-src/event_logger/manifest.toml)
-            [ -n "$host" ] && [ -n "$plugin" ] || { echo "$pkg が manifest に無い"; exit 1; }
-            [ "$host" = "$plugin" ] || { echo "版がずれている: $host / $plugin"; exit 1; }
-          done
+        run: sh dev/check_shared_versions.sh
       # test/ もコンパイルするので、テストの warning もここで失敗する
       # （gleam test にはこのフラグが無い）。
       - run: gleam build --warnings-as-errors
