@@ -12,7 +12,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Pid}
 import gleam/io
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import nostr_no_su
@@ -25,10 +25,54 @@ import nostr_no_su/bunker/vault.{
 import nostr_no_su/hex
 import nostr_no_su/random
 import pog
+import support/postgres
 
-/// DDL はすべて `IF NOT EXISTS` 付きで、起動のたびに実行してよい。
-pub fn schema_statements_are_idempotent_test() {
-  assert list.all(account_store.schema, string.contains(_, "IF NOT EXISTS"))
+/// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
+/// よい。
+pub fn migration_statements_can_be_re_run_test() {
+  let statements =
+    list.flat_map(account_store.migrations, fn(migration) {
+      migration.statements
+    })
+  assert list.all(statements, string.contains(_, "IF NOT EXISTS"))
+}
+
+/// `account_store.migrations` の版は 1 から欠番なく昇順に並ぶ。
+pub fn migrations_are_numbered_from_one_without_gaps_test() {
+  let versions =
+    list.map(account_store.migrations, fn(migration) { migration.version })
+  assert versions == list.index_map(versions, fn(_, index) { index + 1 })
+}
+
+/// 未適用の移行だけを版の順に返す。
+pub fn pending_migrations_skip_recorded_versions_test() {
+  let migrations = [
+    account_store.Migration(version: 1, statements: ["one"]),
+    account_store.Migration(version: 2, statements: ["two"]),
+  ]
+  assert account_store.pending_migrations(migrations, 0) == Ok(migrations)
+  assert account_store.pending_migrations(migrations, 1)
+    == Ok([account_store.Migration(version: 2, statements: ["two"])])
+  assert account_store.pending_migrations(migrations, 2) == Ok([])
+}
+
+/// 記録された版が移行の最新の版より新しい DB は拒否する。
+pub fn a_database_newer_than_the_migrations_is_refused_test() {
+  let migrations = [
+    account_store.Migration(version: 1, statements: ["one"]),
+    account_store.Migration(version: 2, statements: ["two"]),
+  ]
+  assert account_store.pending_migrations(migrations, 3)
+    == Error(account_store.SchemaTooNew(found: 3, supported: 2))
+}
+
+/// 版が新しい DB の説明は、見つかった版とこのビルドが対応する版の両方を含む。
+pub fn a_newer_schema_is_described_with_both_versions_test() {
+  assert account_store.describe(account_store.SchemaTooNew(
+      found: 2,
+      supported: 1,
+    ))
+    == "database schema version 2 is newer than this build supports (up to version 1)"
 }
 
 /// Postgres の URL からプールの設定を作り、本数を 2 に絞る。`pog.Config` は
@@ -94,6 +138,10 @@ pub fn only_a_timeout_or_an_exception_may_have_been_written_test() {
   assert !account_store.may_have_been_written(account_store.AlreadyRegistered)
   assert !account_store.may_have_been_written(account_store.NotRegistered)
   assert !account_store.may_have_been_written(account_store.QueryFailed("x"))
+  assert !account_store.may_have_been_written(account_store.SchemaTooNew(
+    found: 2,
+    supported: 1,
+  ))
 }
 
 /// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
@@ -121,17 +169,14 @@ pub fn loading_from_an_unreachable_database_is_a_value_test() {
     == Error(account_store.Unavailable)
 }
 
-/// プールのプロセスが無いときのスキーマの用意と書き込みは、例外にならず
-/// `Unavailable` を返す。pgo はチェックアウトで呼び出し側を exit させるので、
-/// クエリーは送られていない。
-pub fn schema_and_writes_on_a_missing_pool_are_unavailable_test() {
+/// プールのプロセスが無いときの書き込みは、例外にならず `Unavailable` を返す。
+/// pgo はチェックアウトで呼び出し側を exit させるので、クエリーは送られていない。
+pub fn writes_on_a_missing_pool_are_unavailable_test() {
   let db = pog.named_connection(process.new_name("account_store_test_missing"))
   let key = random_master_key()
   let entry = random_entry("missing")
   let pubkey = account.pubkey_hex(entry.account)
   let timeouts = account_store.default_timeouts
-  assert account_store.ensure_schema(db, timeouts)
-    == Error(account_store.Unavailable)
   assert account_store.insert(db, key, entry, timeouts)
     == Error(account_store.Unavailable)
   assert account_store.delete(db, pubkey, timeouts)
@@ -194,16 +239,71 @@ pub fn postgres_round_trip_test() {
       io.println(
         "[account_store] TEST_DATABASE_URL is not set; skipping the integration test",
       )
-    Ok(database_url) -> round_trip(connect(database_url))
+    Ok(database_url) -> round_trip(postgres.start_pool(database_url, None))
   }
+}
+
+/// 版の記録より前に作られた DB が版 1 として取り込まれ、版が新しい DB は拒否される。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_schema_version_test() {
+  case envoy.get("TEST_DATABASE_URL") {
+    Ok("") | Error(Nil) ->
+      io.println(
+        "[account_store] TEST_DATABASE_URL is not set; skipping the integration test",
+      )
+    Ok(database_url) -> schema_version_round_trip(database_url)
+  }
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
+/// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外は専用スキーマへ
+/// 向けた接続で実行する。版 2 の挿入を `search_path` なしの接続に流すと public の
+/// `schema_version` に版 2 が残り、以後の `round_trip` の `load` が `SchemaTooNew`
+/// で落ちるためである。
+fn schema_version_round_trip(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+
+  // 版の記録より前に作られた DB を再現する。
+  postgres.run_statement(db, account_store.create_accounts_table)
+  let entry = random_entry("legacy")
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  // 移行の後、入れたアカウントが同じ内容で読める。
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert_same_entry(loaded, entry)
+
+  // もう一度読んでも、移行を二重に適用しない。
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  assert recorded_versions(db) == [1]
+
+  // 記録された版が新しい DB は拒否する。
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (2)")
+  assert account_store.load(pool, key, generous)
+    == Error(account_store.SchemaTooNew(found: 2, supported: 1))
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// `schema_version` に記録されている版の一覧（昇順）。
+fn recorded_versions(db: pog.Connection) -> List(Int) {
+  let assert Ok(returned) =
+    pog.query("SELECT version FROM schema_version ORDER BY version")
+    |> pog.returning(decode.at([0], decode.int))
+    |> pog.execute(on: db)
+  returned.rows
 }
 
 /// 追加、読み込み、更新、改ざん、削除を一巡させ、最後に自分が入れた行を消す。
 fn round_trip(pool: Name(pog.Message)) -> Nil {
   let db = pog.named_connection(pool)
   let key = random_master_key()
-  let assert Ok(Nil) = account_store.ensure_schema(db, generous)
-  let assert Ok(Nil) = account_store.ensure_schema(db, generous)
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
 
   let first = random_entry("first")
   let second = random_entry("second")
@@ -279,15 +379,6 @@ fn round_trip(pool: Name(pog.Message)) -> Nil {
 /// 統合テストの期限。実際の DB との往復は負荷の高い環境で本番の期限（書き込み
 /// 1000ms）を超えうるので、テストが期限の長さに依存しないよう長く取る。
 const generous = account_store.Timeouts(load_ms: 30_000, write_ms: 30_000)
-
-/// テスト用の接続プールを起動し、その名前を返す。プールはテストプロセスにリンク
-/// される。
-fn connect(database_url: String) -> Name(pog.Message) {
-  let name = process.new_name("account_store_test_db")
-  let assert Ok(config) = pog.url_config(name, database_url)
-  let assert Ok(_started) = pog.start(config)
-  name
-}
 
 /// 実行のたびに違うマスターキー。
 fn random_master_key() -> MasterKey {

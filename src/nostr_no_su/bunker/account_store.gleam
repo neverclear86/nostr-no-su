@@ -9,6 +9,10 @@
 //// エラーの説明は値（鍵、secret、ラベル、暗号文）を含まない。Postgres の制約違反の
 //// `detail` は `Failing row contains (...)` の形で行の全列を含むので、写すときに
 //// 捨てる。
+////
+//// テーブルの DDL は版つきの移行（`migrations`）として持ち、`load` のたびに
+//// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
+//// ビルドより新しければ `SchemaTooNew` を返す。
 
 import gleam/bit_array
 import gleam/crypto
@@ -30,7 +34,7 @@ const pool_size = 2
 /// 接続を待つ時間（期限切れで閉じた接続の再接続を含む）もこの値に含まれる。
 pub type Timeouts {
   Timeouts(
-    /// 読み込み 1 回（スキーマの用意、ロック、一覧）全体の期限。
+    /// 読み込み 1 回（スキーマの移行、ロック、一覧）全体の期限。
     load_ms: Int,
     /// 書き込み 1 件の期限。
     write_ms: Int,
@@ -68,8 +72,32 @@ pub const create_accounts_table = "CREATE TABLE IF NOT EXISTS bunker_accounts (
   created_at timestamptz NOT NULL DEFAULT now()
 )"
 
-/// 読み込みの最初に実行する DDL。すべて `IF NOT EXISTS` なので何度実行してもよい。
-pub const schema = [create_accounts_table]
+/// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
+/// `schema_version` に記録する。
+pub type Migration {
+  Migration(version: Int, statements: List(String))
+}
+
+/// 本体のスキーマの移行。版は 1 から欠番なく昇順に並べ、足すときは末尾に置く。
+///
+/// 移行の文は何度実行してもよい形（`IF NOT EXISTS` など）で書く。途中で失敗した
+/// 移行は版が記録されないので、次の読み込みで頭から実行し直される。`IF NOT EXISTS` で
+/// 書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を見直す。
+pub const migrations = [
+  Migration(version: 1, statements: [create_accounts_table]),
+]
+
+/// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
+const create_version_table = "CREATE TABLE IF NOT EXISTS schema_version (
+  version integer PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+)"
+
+/// 記録された版の読み込み。
+const select_versions_sql = "SELECT version FROM schema_version"
+
+/// 版の記録。
+const insert_version_sql = "INSERT INTO schema_version (version) VALUES ($1)"
 
 /// 読み込みのトランザクションの中で、ロックの待ちの上限を設定する（ミリ秒）。
 /// クライアントが期限で諦めた後に、サーバーのバックエンドがロックを待ち続けないため。
@@ -117,6 +145,9 @@ pub type StoreError {
   /// それ以外のクエリーの失敗。Postgres のエラー名など、値を含まない説明だけを
   /// 持つ。
   QueryFailed(reason: String)
+  /// DB に記録されたスキーマの版（`found`）が、このビルドの移行の最新の版
+  /// （`supported`）より新しい。再試行しても変わらない。
+  SchemaTooNew(found: Int, supported: Int)
 }
 
 /// 期限つきのトランザクションを実行できなかった理由。
@@ -140,18 +171,49 @@ pub fn pool_config(
   |> result.replace_error("DATABASE_URL is not a valid postgres URL")
 }
 
-/// テーブルを作成する。すでにあれば何もしない。
-pub fn ensure_schema(
-  db: pog.Connection,
-  timeouts: Timeouts,
-) -> Result(Nil, StoreError) {
-  use statement <- list.try_each(schema)
-  pog.query(statement)
-  |> pog.timeout(timeouts.load_ms)
+/// 版 `current` の DB に適用する移行を、`migrations` の並びのまま返す。`current` が
+/// `migrations` の最新の版より新しければ `SchemaTooNew` を返す。
+pub fn pending_migrations(
+  migrations: List(Migration),
+  current: Int,
+) -> Result(List(Migration), StoreError) {
+  let supported =
+    list.fold(migrations, 0, fn(latest, migration) {
+      int.max(latest, migration.version)
+    })
+  case current > supported {
+    True -> Error(SchemaTooNew(found: current, supported: supported))
+    False ->
+      Ok(list.filter(migrations, fn(migration) { migration.version > current }))
+  }
+}
+
+/// スキーマを `migrations` の最新の版にする。版のテーブルを用意し、記録された版より
+/// 新しい移行の文を順に実行して、移行ごとに版を記録する。`load` のトランザクションの
+/// 中で呼ぶので、文の期限は `pool_transaction` の期限が効く。
+fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
+  use _created <- result.try(pog.query(create_version_table) |> execute(db))
+  use recorded <- result.try(
+    pog.query(select_versions_sql)
+    |> pog.returning(decode.at([0], decode.int))
+    |> execute(db),
+  )
+  use pending <- result.try(pending_migrations(
+    migrations,
+    list.fold(recorded.rows, 0, int.max),
+  ))
+  use migration <- list.try_each(pending)
+  use Nil <- result.try(
+    list.try_each(migration.statements, fn(statement) {
+      pog.query(statement) |> execute(db)
+    }),
+  )
+  pog.query(insert_version_sql)
+  |> pog.parameter(pog.int(migration.version))
   |> execute(db)
 }
 
-/// スキーマを用意してから全行を読み込み、復号できた行と飛ばした行に分ける。
+/// スキーマを最新の版に移行してから全行を読み込み、復号できた行と飛ばした行に分ける。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts IN SHARE MODE` を取る。SHARE は実行中の
 /// `INSERT` / `UPDATE` / `DELETE` が持つ ROW EXCLUSIVE と衝突するので、期限を過ぎた後も
@@ -171,11 +233,12 @@ pub fn ensure_schema(
 ///
 /// 全体を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で打ち切る（期限は
 /// pgo のプールが接続を閉じることで効くので、DB が応答しなくなっても待ちはこの値に
-/// 収まる）。ロックの待ちもサーバー側で同じ値に抑える。期限で打ち切られたら
+/// 収まる）。移行の文とロックの待ちもサーバー側で同じ値に抑える。期限で打ち切られたら
 /// `TimedOut`、接続を得られなければ `Unavailable` を返す。トランザクションの中の
 /// クエリーで `pog.execute` が例外を投げたら、発生箇所を持つ `Raised` を返す
-/// （`execute`）。`pool` を名前で受け取るのは、期限つきのトランザクションをプールの
-/// 名前で開くためである。
+/// （`execute`）。記録された版がこのビルドより新しければ `SchemaTooNew` を返す
+/// （`ensure_schema`）。`pool` を名前で受け取るのは、期限つきのトランザクションを
+/// プールの名前で開くためである。
 pub fn load(
   pool: Name(pog.Message),
   key: MasterKey,
@@ -183,12 +246,12 @@ pub fn load(
 ) -> Result(vault.Loaded, StoreError) {
   let db = pog.named_connection(pool)
   pool_transaction(pool, timeouts.load_ms, fn() {
-    use Nil <- result.try(ensure_schema(db, timeouts))
     use _set <- result.try(
       pog.query(lock_timeout_sql)
       |> pog.parameter(pog.text(int.to_string(timeouts.load_ms)))
       |> execute(db),
     )
+    use Nil <- result.try(ensure_schema(db))
     use _locked <- result.try(pog.query(lock_sql) |> execute(db))
     pog.query(select_sql)
     |> pog.returning(row_decoder())
@@ -298,7 +361,11 @@ pub fn deleted_or_absent(
 pub fn may_have_been_written(error: StoreError) -> Bool {
   case error {
     TimedOut | Raised(_) -> True
-    Unavailable | AlreadyRegistered | NotRegistered | QueryFailed(_) -> False
+    Unavailable
+    | AlreadyRegistered
+    | NotRegistered
+    | QueryFailed(_)
+    | SchemaTooNew(..) -> False
   }
 }
 
@@ -313,6 +380,12 @@ pub fn describe(error: StoreError) -> String {
     AlreadyRegistered -> "account is already registered"
     NotRegistered -> "account is not registered"
     QueryFailed(reason) -> reason
+    SchemaTooNew(found:, supported:) ->
+      "database schema version "
+      <> int.to_string(found)
+      <> " is newer than this build supports (up to version "
+      <> int.to_string(supported)
+      <> ")"
   }
 }
 
