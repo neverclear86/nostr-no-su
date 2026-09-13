@@ -9,9 +9,9 @@ services:
     environment:
       RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
-      DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+      DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
-      PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
+      PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
       ADMIN_PORT: ${ADMIN_PORT-8080}
       ADMIN_BIND: 0.0.0.0
@@ -66,16 +66,22 @@ services:
   postgres:
     # ダイジェストで固定する。上げるときはタグとダイジェストを一緒に変える。
     image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    # 値は .env で変える。効くのは postgres-data volume が空の初回だけ
+    # （イメージが初期化時にしか資格情報を反映しない）。アプリの
+    # DATABASE_URL と PLUGIN_EVENT_LOGGER_DATABASE_URL の既定値はこの 3 変数
+    # から組み立てる。
     environment:
-      POSTGRES_USER: nostr
-      POSTGRES_PASSWORD: nostr
-      POSTGRES_DB: nostr_no_su
+      POSTGRES_USER: ${POSTGRES_USER:-nostr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nostr}
+      POSTGRES_DB: ${POSTGRES_DB:-nostr_no_su}
     # ポートは意図的に公開しない。DB を使うのはアプリだけで、compose の
     # ネットワーク越しに到達できる。
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nostr -d nostr_no_su"]
+      # $$ はコンテナー内のシェルに展開させ、同じサービスの environment の
+      # 値を読む（compose の ${...} で書くと既定値の写しが増える）。
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10

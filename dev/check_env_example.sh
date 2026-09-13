@@ -8,6 +8,11 @@
 # docker-compose.yml の ${...} を足す、消す、既定値を変えるときは、
 # .env.example の行も合わせてこのスクリプトを通すこと。
 #
+# ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:...} のような入れ子の
+# 参照は、内側から外側へ 1 段ずつ既定値に展開して読む。内側の変数
+# （POSTGRES_USER など）も、外側の変数（DATABASE_URL）とは別に 1 行として
+# 数える。
+#
 # 使い方: sh dev/check_env_example.sh
 
 set -eu
@@ -20,15 +25,28 @@ example="$root/.env.example"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# compose の注釈の行を除いた ${...} を 1 つずつ取り出し、NAME=既定値 の形に直す。
-grep -v '^[[:space:]]*#' "$compose" | grep -o '\${[^}]*}' > "$tmp/references" || true
-sed -n 's/^\${\([A-Z][A-Z0-9_]*\):\{0,1\}-\(.*\)}$/\1=\2/p' "$tmp/references" > "$tmp/parsed"
-if [ "$(wc -l < "$tmp/references")" -ne "$(wc -l < "$tmp/parsed")" ]; then
-  echo "docker-compose.yml has a variable reference without a default (use \${NAME-default} or \${NAME:-default}):" >&2
-  grep -v '^\${[A-Z][A-Z0-9_]*:\{0,1\}-.*}$' "$tmp/references" >&2
+# compose の注釈の行を除いた ${...} を、入れ子の無いもの（波括弧を含まない
+# もの）から順に取り出して references に足し、既定値に置き換える。置き換える
+# ものが無くなるまで繰り返すと、入れ子は内側から展開される。
+grep -v '^[[:space:]]*#' "$compose" > "$tmp/text"
+: > "$tmp/references"
+while :; do
+  grep -o '\${[^${}]*}' "$tmp/text" >> "$tmp/references" || true
+  sed 's/\${[A-Z][A-Z0-9_]*:\{0,1\}-\([^${}]*\)}/\1/g' "$tmp/text" > "$tmp/next"
+  cmp -s "$tmp/text" "$tmp/next" && break
+  mv "$tmp/next" "$tmp/text"
+done
+
+# ここまでの繰り返しですべて展開できていれば ${ は残らない。既定値の無い
+# 参照、小文字の名前、既定値に $ を含む参照（${X-a$$b}）は置き換わらずに
+# 残るので、ここで拾う。
+if grep -q '\${' "$tmp/text"; then
+  echo "docker-compose.yml has a variable reference that is not \${NAME-default} or \${NAME:-default}:" >&2
+  grep '\${' "$tmp/text" >&2
   exit 1
 fi
-sort -u "$tmp/parsed" > "$tmp/compose"
+
+sed 's/^\${\([A-Z][A-Z0-9_]*\):\{0,1\}-\(.*\)}$/\1=\2/' "$tmp/references" | sort -u > "$tmp/compose"
 
 # 同じ変数を別の既定値で参照していないか。
 conflicting=$(cut -d = -f 1 "$tmp/compose" | uniq -d)
