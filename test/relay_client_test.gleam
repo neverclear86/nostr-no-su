@@ -20,8 +20,8 @@ import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
-  type SubscriptionState, type Subscriptions, Report, Requested, Reservation,
-  Retried, SubscriptionState, Sync,
+  type SubscriptionState, type Subscriptions, Acknowledge, Acknowledgement,
+  Report, Requested, Reservation, Retried, SubscriptionState, Sync,
 }
 import nostr_no_su/relay_connection
 import stratus
@@ -91,6 +91,7 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
       "ws://relay.invalid:7777",
       fn() { Ok([]) },
       fn(_event) { Nil },
+      fn(_ack) { Nil },
       relay_client.subscription_retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -117,10 +118,14 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   let genuine = signed_event.new(1, "genuine")
   let forged = Event(..genuine, sig: signed_event.new(1, "other").sig)
 
-  relay_client.handle_text("test", event_frame(forged), deliver)
+  relay_client.handle_text("test", event_frame(forged), deliver, fn(_ack) {
+    Nil
+  })
   assert process.receive(delivered, 0) == Error(Nil)
 
-  relay_client.handle_text("test", event_frame(genuine), deliver)
+  relay_client.handle_text("test", event_frame(genuine), deliver, fn(_ack) {
+    Nil
+  })
   let assert Ok(verified) = process.receive(delivered, 0)
   assert event.verified_event(verified) == genuine
 }
@@ -150,6 +155,31 @@ pub fn interpret_sanitizes_the_reason_of_a_closed_subscription_test() {
 
   assert relay_client.interpret(closed)
     == Report("subscription sub x closed: bye [bunker] forged")
+}
+
+/// OK は受理・拒否とも `Acknowledge` にし、値は正規化する。
+pub fn interpret_turns_an_ok_into_an_acknowledgement_test() {
+  let rejected =
+    json.preprocessed_array([
+      json.string("OK"),
+      json.string("e1"),
+      json.bool(False),
+      json.string("blocked\n[bunker] forged"),
+    ])
+    |> json.to_string
+  assert relay_client.interpret(rejected)
+    == Acknowledge(Acknowledgement("e1", False, "blocked [bunker] forged"))
+
+  let accepted =
+    json.preprocessed_array([
+      json.string("OK"),
+      json.string("e1"),
+      json.bool(True),
+      json.string(""),
+    ])
+    |> json.to_string
+  assert relay_client.interpret(accepted)
+    == Acknowledge(Acknowledgement("e1", True, ""))
 }
 
 // --- sync の単体テスト ---
@@ -544,6 +574,7 @@ fn connect(
       relay.url,
       subscriptions,
       fn(_event) { Nil },
+      fn(_ack) { Nil },
       retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -641,6 +672,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
           relay.url,
           fn() { Ok([#(bunker, filter.new())]) },
           fn(_event) { Nil },
+          fn(_ack) { Nil },
         )
       },
       on_connect: fn(_socket) { Nil },
@@ -672,6 +704,7 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
       relay.url,
       fn() { Ok([#(bunker, filter.new())]) },
       process.send(received, _),
+      fn(_ack) { Nil },
       relay_client.subscription_retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -680,6 +713,52 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
   assert verified == signed_event.verified(sent)
   assert process.receive(connections, 0) == Ok(Nil)
   assert process.receive(connections, 0) == Error(Nil)
+
+  stop_client(client)
+  stop_relay(relay)
+}
+
+// --- 発行結果の通知 ---
+
+/// `EVENT` で始まるテキストを受けたら指定の OK を返すリレー。
+fn start_relay_replying_ok(ok: String) -> Relay {
+  start_relay_with(fn() { Nil }, fn(connection, text) {
+    case string.starts_with(text, "[\"EVENT\"") {
+      True -> {
+        let _ = mist.send_text_frame(connection, ok)
+        Nil
+      }
+      False -> Nil
+    }
+  })
+}
+
+/// リレーが発行したイベントに返した OK は `handle_ok` に届く。
+pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
+  let ok =
+    json.preprocessed_array([
+      json.string("OK"),
+      json.string("e1"),
+      json.bool(False),
+      json.string("rate-limited: slow down"),
+    ])
+    |> json.to_string
+  let relay = start_relay_replying_ok(ok)
+  let acks = process.new_subject()
+  let assert Ok(client) =
+    relay_client.start(
+      relay.url,
+      fn() { Ok([]) },
+      fn(_event) { Nil },
+      process.send(acks, _),
+      relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
+    )
+
+  relay_client.publish(client, signed_event.new(1, "published"))
+
+  assert process.receive(acks, 2000)
+    == Ok(Acknowledgement("e1", False, "rate-limited: slow down"))
 
   stop_client(client)
   stop_relay(relay)
@@ -707,6 +786,7 @@ fn open_socket(
     url,
     fn() { Ok([]) },
     fn(_event) { Nil },
+    fn(_ack) { Nil },
     relay_client.subscription_retry_delay,
     interval_ms,
   ))

@@ -172,15 +172,17 @@ pub fn new_subscription_state(
 }
 
 /// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
-/// `handle_event` へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は
-/// 購読の定義を得られなかったときの再試行の待ち時間。`interval_ms` は生存確認の
-/// 刻みの間隔で、本番は `keepalive_interval_ms` を渡す。接続アクターは呼び出し元に
-/// リンクされるため呼び出し元と一緒に死に、exit を trap している呼び出し元には
-/// その死がメッセージとして届く。
+/// `handle_event` へ渡す。発行したイベントへの OK は受理・拒否とも `handle_ok`
+/// へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は購読の定義を
+/// 得られなかったときの再試行の待ち時間。`interval_ms` は生存確認の刻みの間隔で、
+/// 本番は `keepalive_interval_ms` を渡す。接続アクターは呼び出し元にリンクされる
+/// ため呼び出し元と一緒に死に、exit を trap している呼び出し元にはその死が
+/// メッセージとして届く。
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Verified) -> Nil,
+  handle_ok: fn(Acknowledgement) -> Nil,
   retry_delay: backoff.Backoff,
   interval_ms: Int,
 ) -> Result(Client, String) {
@@ -233,7 +235,7 @@ pub fn start(
         stratus.User(KeepaliveTick) ->
           check_keepalive(session, conn, prefix, interval_ms)
         stratus.Text(text) -> {
-          handle_text(prefix, text, handle_event)
+          handle_text(prefix, text, handle_event, handle_ok)
           stratus.continue(session)
         }
         stratus.Binary(_) -> stratus.continue(session)
@@ -475,18 +477,25 @@ fn describe_outgoing(outgoing: message.ClientMessage) -> String {
   }
 }
 
+/// リレーが発行したイベントに返した OK 1 件。受理・拒否のどちらも表す。値は
+/// 外部由来で、正規化済み（`log.sanitize_external`）。
+pub type Acknowledgement {
+  Acknowledgement(event_id: String, accepted: Bool, message: String)
+}
+
 /// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベント、
-/// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Quiet` は
-/// 何も出さない（OK の受理）。
+/// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Acknowledge` は
+/// 発行したイベントへの OK（受理・拒否とも）。
 pub type Interpretation {
   Deliver(event.Verified)
   Report(String)
-  Quiet
+  Acknowledge(Acknowledgement)
 }
 
 /// リレーメッセージ 1 件を解釈する。EVENT は `event.verify` で id と署名を
-/// 確かめ、通ったものを配送に回す。それ以外のメッセージと落としたイベントは、
-/// 外部由来の値を `log.sanitize_external` で 1 行に収めたログ行の本文にする。
+/// 確かめ、通ったものを配送に回す。OK は受理・拒否とも `Acknowledge` にする。
+/// それ以外のメッセージと落としたイベントは、外部由来の値を
+/// `log.sanitize_external` で 1 行に収めたログ行の本文にする。
 pub fn interpret(text: String) -> Interpretation {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
@@ -502,15 +511,12 @@ pub fn interpret(text: String) -> Interpretation {
       }
     Ok(message.RelayEose(subscription)) ->
       Report("end of stored events for " <> log.sanitize_external(subscription))
-    Ok(message.RelayOk(id, False, reason)) ->
-      Report(
-        "rejected event "
-        <> log.sanitize_external(id)
-        <> ": "
-        <> log.sanitize_external(reason),
-      )
-    // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
-    Ok(message.RelayOk(_id, True, _message)) -> Quiet
+    Ok(message.RelayOk(id, accepted, reason)) ->
+      Acknowledge(Acknowledgement(
+        log.sanitize_external(id),
+        accepted,
+        log.sanitize_external(reason),
+      ))
     Ok(message.RelayNotice(text)) ->
       Report("notice: " <> log.sanitize_external(text))
     Ok(message.RelayClosed(subscription, reason)) ->
@@ -525,17 +531,30 @@ pub fn interpret(text: String) -> Interpretation {
 }
 
 /// リレーメッセージを 1 件処理する。解釈は `interpret` にあり、ここはその
-/// 結果を配送とログ出力に移すだけである。`start` の受信ループが呼ぶほか、
-/// テストが直接呼ぶ。
+/// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。`start` の
+/// 受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否とも `handle_ok` に
+/// 渡し、拒否だけそのリレーのログ行も出す。
 pub fn handle_text(
   prefix: String,
   text: String,
   handle_event: fn(event.Verified) -> Nil,
+  handle_ok: fn(Acknowledgement) -> Nil,
 ) -> Nil {
   case interpret(text) {
     Deliver(verified) -> handle_event(verified)
     Report(line) -> log.println(prefix, line)
-    Quiet -> Nil
+    Acknowledge(ack) -> {
+      case ack.accepted {
+        False ->
+          log.println(
+            prefix,
+            "rejected event " <> ack.event_id <> ": " <> ack.message,
+          )
+        // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
+        True -> Nil
+      }
+      handle_ok(ack)
+    }
   }
 }
 

@@ -1,6 +1,8 @@
 //// `bunker.load_report` と `bunker.default_retry_delay` のテストと、バンカーアクターの
 //// 状態に接続 secret が出ないことのテスト。読み込みの結果に対して、どのログ行を
-//// 出すかと、再試行の待ち時間の延び方を確かめる。
+//// 出すかと、再試行の待ち時間の延び方を確かめる。`bunker.track` / `bunker.acknowledge`
+//// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
+//// どう組み立てるかを確かめる。
 
 import gleam/erlang/process
 import gleam/option.{None, Some}
@@ -10,7 +12,129 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
+import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/relay_client.{Acknowledgement}
 import support/nip46_client.{account_for}
+
+/// テストで使うバンカーリレー 2 本。
+const relay_a = "wss://a.example"
+
+const relay_b = "wss://b.example"
+
+/// バンカーが発行する応答イベント 1 件。kind と宛先タグは NIP-46 の応答の形。
+fn response(id: String) -> Event {
+  Event(
+    id: id,
+    pubkey: "s1",
+    created_at: 0,
+    kind: 24_133,
+    tags: [["p", "c1"]],
+    content: "",
+    sig: "",
+  )
+}
+
+/// 2 リレーへ発行した直後の追跡。
+fn tracked(id: String, now: Int) -> bunker.Deliveries {
+  bunker.track(bunker.new_deliveries(), response(id), [relay_a, relay_b], now)
+}
+
+/// 全リレーが拒否すると、拒否を届いた順にまとめた 1 行が返り、項目は消える
+/// （受け入れ条件）。
+pub fn every_relay_rejecting_a_response_is_reported_on_one_line_test() {
+  let deliveries = tracked("e1", 0)
+  let #(deliveries, first) =
+    bunker.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert first == None
+  let #(deliveries, second) =
+    bunker.acknowledge(
+      deliveries,
+      relay_b,
+      Acknowledgement("e1", False, "invalid: bad"),
+    )
+  assert second
+    == Some(
+      "response e1 to c1 was rejected by every relay: a.example: rate-limited: slow down; b.example: invalid: bad",
+    )
+  // 項目が消えているので、同じ id の拒否がもう届いても None。
+  let #(_deliveries, third) =
+    bunker.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert third == None
+}
+
+/// 1 つでも受理すれば、残りのリレーが拒否しても報告しない。
+pub fn a_response_accepted_by_one_relay_is_not_reported_test() {
+  let deliveries = tracked("e1", 0)
+  let #(deliveries, accepted) =
+    bunker.acknowledge(deliveries, relay_a, Acknowledgement("e1", True, ""))
+  assert accepted == None
+  let #(_deliveries, rejected) =
+    bunker.acknowledge(
+      deliveries,
+      relay_b,
+      Acknowledgement("e1", False, "invalid: bad"),
+    )
+  assert rejected == None
+}
+
+/// 同じリレーからの 2 度目の拒否は数えず、報告に必要な残り 1 本のまま止まる。
+pub fn a_repeated_rejection_from_the_same_relay_is_not_counted_test() {
+  let deliveries = tracked("e1", 0)
+  let #(deliveries, first) =
+    bunker.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert first == None
+  let #(deliveries, repeated) =
+    bunker.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert repeated == None
+  let #(_deliveries, second) =
+    bunker.acknowledge(
+      deliveries,
+      relay_b,
+      Acknowledgement("e1", False, "invalid: bad"),
+    )
+  assert second
+    == Some(
+      "response e1 to c1 was rejected by every relay: a.example: rate-limited: slow down; b.example: invalid: bad",
+    )
+}
+
+/// 発行から `acknowledgement_timeout_seconds`（60 秒）以上経った項目は、次の
+/// 発行の記録のときに黙って捨てる。捨てた後に届く OK は一覧に無いので無視する。
+pub fn acknowledgements_after_the_timeout_are_ignored_test() {
+  let deliveries = tracked("e1", 0)
+  let deliveries =
+    bunker.track(deliveries, response("e2"), [relay_a, relay_b], 60)
+  let #(deliveries, first) =
+    bunker.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert first == None
+  let #(_deliveries, second) =
+    bunker.acknowledge(
+      deliveries,
+      relay_b,
+      Acknowledgement("e1", False, "invalid: bad"),
+    )
+  assert second == None
+}
 
 /// 読み込めたアカウント 1 件。
 fn one_account() -> vault.StoredAccount {
