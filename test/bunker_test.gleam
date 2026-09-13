@@ -1,7 +1,11 @@
-//// `bunker.load_report` と `bunker.default_retry_delay` のテスト。読み込みの結果に
-//// 対して、どのログ行を出すかと、再試行の待ち時間の延び方を確かめる。
+//// `bunker.load_report` と `bunker.default_retry_delay` のテストと、バンカーアクターの
+//// 状態に接続 secret が出ないことのテスト。読み込みの結果に対して、どのログ行を
+//// 出すかと、再試行の待ち時間の延び方を確かめる。
 
+import gleam/erlang/process
 import gleam/option.{None, Some}
+import gleam/otp/system
+import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -92,4 +96,37 @@ pub fn a_changed_failure_is_reported_test() {
 pub fn default_retry_delay_is_five_seconds_up_to_two_minutes_test() {
   assert bunker.default_retry_delay
     == backoff.Backoff(initial_ms: 5000, max_ms: 120_000)
+}
+
+/// 読み込んだアカウントを持つバンカーアクターの状態を表示しても、接続 secret は
+/// 現れない。
+pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
+  let name = process.new_name("bunker_state_test")
+  let stored = one_account()
+  let assert Ok(_started) =
+    bunker.start(
+      name,
+      bunker.Settings(
+        store: bunker.Store(
+          load: fn() { Ok(Loaded([stored], [])) },
+          insert: fn(_account) { Ok(Nil) },
+          delete: fn(_signer) { Ok(Nil) },
+          update_secret: fn(_signer, _secret) { Ok(Nil) },
+          update_label: fn(_signer, _label) { Ok(Nil) },
+        ),
+        auth_url: None,
+        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
+      ),
+      fn() { Nil },
+    )
+  // 読み込みの完了を待つ。`LoadAccounts` は起動時に名前なしの subject へ積まれて
+  // おり、アクターは両方の subject を選択しているので、`GetAccounts` はその後に
+  // 処理される。
+  let assert Ok([_]) = bunker.accounts(name)
+  let assert Ok(pid) = process.named(name)
+  let shown = string.inspect(system.get_state(pid))
+  assert string.contains(shown, account.pubkey_hex(stored.account))
+  assert !string.contains(shown, stored.secret)
+  process.unlink(pid)
+  process.kill(pid)
 }

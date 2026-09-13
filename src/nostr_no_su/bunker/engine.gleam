@@ -14,6 +14,7 @@ import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account, privkey, pubkey_hex}
+import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/dedup/window
@@ -58,8 +59,8 @@ const seen_capacity = 16_384
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
   Engine(
-    // 署名者 pubkey hex -> #(account, secret)
-    accounts: Dict(String, #(Account, String)),
+    // 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
+    accounts: Dict(String, #(Account, ConnectionSecret)),
     // #(署名者 pubkey hex, クライアント pubkey hex)
     sessions: Set(#(String, String)),
     // リプレイ防止用: 処理済みのリクエストイベント id
@@ -147,7 +148,7 @@ pub fn new(
 }
 
 /// アカウントを 1 件足す。同じ署名者がすでにあれば、鍵と secret を置き換え、
-/// セッションと承認待ちは残す。
+/// セッションと承認待ちは残す。secret はここで `ConnectionSecret` に閉じ込める。
 ///
 /// この関数と下の `remove_account` / `replace_secret` は全域にしてある。アクターは
 /// DB への書き込みが成功したときだけこれらを呼ぶので、不在や重複を失敗として返しても
@@ -157,7 +158,7 @@ pub fn add_account(engine: Engine, account: Account, secret: String) -> Engine {
     ..engine,
     accounts: dict.insert(engine.accounts, pubkey_hex(account), #(
       account,
-      secret,
+      connection_secret.new(secret),
     )),
   )
 }
@@ -205,11 +206,15 @@ pub fn signers(engine: Engine) -> List(String) {
   |> list.sort(string.compare)
 }
 
-/// 登録済みのアカウントと接続 secret（署名者の昇順）。管理 UI への一覧に使う。
+/// 登録済みのアカウントと接続 secret（署名者の昇順）。閉じ込めた secret を
+/// 開くのはここだけで、管理 UI への一覧に使う。
 pub fn registered_accounts(engine: Engine) -> List(#(Account, String)) {
   dict.to_list(engine.accounts)
   |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
-  |> list.map(fn(entry) { entry.1 })
+  |> list.map(fn(entry) {
+    let #(account, secret) = entry.1
+    #(account, connection_secret.value(secret))
+  })
 }
 
 /// 署名者のアカウント。登録されていなければ `Error(Nil)`。秘密鍵の再表示に使う。
@@ -357,7 +362,7 @@ fn accept(
   engine: Engine,
   incoming: Event,
   inputs: Inputs,
-) -> Result(#(Engine, Account, String), Outcome) {
+) -> Result(#(Engine, Account, ConnectionSecret), Outcome) {
   use <- bool.guard(
     incoming.kind != event.nip46_kind,
     Error(Ignore("not a nip-46 request")),
@@ -391,7 +396,7 @@ fn fresh(created_at: Int, now: Int) -> Bool {
 fn route(
   engine: Engine,
   tags: List(List(String)),
-) -> Result(#(Account, String), String) {
+) -> Result(#(Account, ConnectionSecret), String) {
   case p_tag_pubkeys(tags) {
     [] -> Error("no p tag")
     pubkeys ->
@@ -415,7 +420,7 @@ fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
 fn handle_request(
   engine: Engine,
   account: Account,
-  secret: String,
+  secret: ConnectionSecret,
   incoming: Event,
   inputs: Inputs,
 ) -> #(Engine, Outcome) {
@@ -497,7 +502,7 @@ fn outcome(reply: Result(Event, String)) -> Outcome {
 fn execute(
   engine: Engine,
   account: Account,
-  secret: String,
+  secret: ConnectionSecret,
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
@@ -530,7 +535,7 @@ fn execute(
 fn connect(
   engine: Engine,
   signer: String,
-  secret: String,
+  secret: ConnectionSecret,
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
@@ -540,10 +545,11 @@ fn connect(
     rpc.error(request.id, "connect is addressed to another signer"),
   ))
   let pair = #(signer, client_pk_hex)
-  case
-    connect_secret(request.params) == Some(secret),
-    set.contains(engine.sessions, pair)
-  {
+  let offered_matches = case connect_secret(request.params) {
+    Some(offered) -> connection_secret.matches(secret, offered)
+    None -> False
+  }
+  case offered_matches, set.contains(engine.sessions, pair) {
     True, _ -> #(open_session(engine, pair), rpc.ok(request.id, "ack"))
     _, True -> #(engine, rpc.ok(request.id, "ack"))
     False, False ->
