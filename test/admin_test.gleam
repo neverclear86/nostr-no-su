@@ -1731,7 +1731,7 @@ pub fn language_switch_to_the_browser_setting_clears_the_cookie_test() {
 }
 
 /// 戻り先は、同じサイトのパスとして組み立て直す。別のオリジンを指す値は、このサイトの
-/// パスかダッシュボードになる。
+/// パスかダッシュボードになる。クエリーはキーと値ごとに符号化し直して残す。
 pub fn language_switch_returns_only_within_the_site_test() {
   let cases = [
     #("/", "/"),
@@ -1741,7 +1741,7 @@ pub fn language_switch_returns_only_within_the_site_test() {
     #("/\\evil.example", "/%5Cevil.example"),
     #(
       "/approve/tok-1?next=//evil.example",
-      "/approve/tok-1%3Fnext%3D/evil.example",
+      "/approve/tok-1?next=%2F%2Fevil.example",
     ),
     #(
       "/accounts/new\r\nSet-Cookie: x=1",
@@ -1750,6 +1750,17 @@ pub fn language_switch_returns_only_within_the_site_test() {
     #("https://evil.example/", "/"),
     #("evil.example", "/"),
     #("", "/"),
+    #("/x?y=1", "/x?y=1"),
+    #("/x?y=a%26b&z=1+2", "/x?y=a%26b&z=1%202"),
+    #("/?y=1", "/?y=1"),
+    #("/x?", "/x"),
+    #("/x?y=%zz", "/x"),
+    #("/x?y=1?z", "/x?y=1%3Fz"),
+    #("/x?y=1\r\nSet-Cookie: x=1", "/x?y=1%0D%0ASet-Cookie%3A%20x%3D1"),
+    #("/x?&", "/x"),
+    #("/x?y=1&&z=2", "/x?y=1&z=2"),
+    #("/x?=1&y=2", "/x?y=2"),
+    #("/x?y", "/x?y="),
   ]
   use #(sent, location) <- list.each(cases)
   let response =
