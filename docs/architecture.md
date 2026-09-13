@@ -405,10 +405,11 @@ sequenceDiagram
 
 `/healthz` 以外はすべて Basic 認証を要する。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
-認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じるヘッダーを付ける。
-ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシートと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` が同じ定義を見る。
+認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
+ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
+JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
 ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。
 
 | メソッド | パス | 役割 |
@@ -416,6 +417,7 @@ sequenceDiagram
 | GET | `/healthz` | 認証なしで `ok` を返す |
 | GET | `/` | ダッシュボード |
 | GET | `/static/admin.css` | ビルドした CSS（`priv/static/admin.css`） |
+| GET | `/static/admin.js` | 管理 UI の JS（`priv/static/admin.js`） |
 | POST | `/language` | 表示の言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す |
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
@@ -524,7 +526,7 @@ nostr-no-su/
 │   └── vectors/                  BIP-340 と NIP-44 の公式テストベクター（取得元のまま）
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
-├── priv/static/                  ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
+├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
 ├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus の検査（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース

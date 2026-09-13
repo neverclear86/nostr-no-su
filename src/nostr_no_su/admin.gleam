@@ -55,6 +55,12 @@ const username = "admin"
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
+/// 認証済みの応答に付ける CSP。スクリプトは管理 UI のオリジンのファイル（`/static/admin.js`）だけを
+/// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
+/// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）を読ませるためである（テーマの `--noise`
+/// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。
+const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
 /// 秘密鍵の再表示で、再入力したパスワードが違うときにログに出す理由。画面の文言は
 /// `i18n.IncorrectPassword` で、ログは英語のままにする。
 const incorrect_password = "incorrect password"
@@ -176,7 +182,10 @@ fn route(
 ) -> Response {
   case segments {
     [] -> show_dashboard(context, request, language)
-    segments if segments == view.stylesheet_segments -> stylesheet(request)
+    segments
+      if segments == view.stylesheet_segments
+      || segments == view.script_segments
+    -> static_file(request)
     segments if segments == view.language_segments -> switch_language(request)
     ["approve", token] -> approve_connection(context, request, language, token)
     ["deny", token] -> deny_connection(context, request, language, token)
@@ -201,12 +210,18 @@ fn route(
 
 /// 認証済みの応答すべてに付けるヘッダー。どのページも secret か秘密鍵を含みうるので
 /// 保存させず、状態を変えるボタンを他のサイトの枠に埋め込ませない。枠の中の POST は
-/// 管理 UI と同じオリジンから送られるので、CSRF の検査では防げない。
+/// 管理 UI と同じオリジンから送られるので、CSRF の検査では防げない。実行するスクリプトを
+/// CSP（`content_security_policy`）で管理 UI のファイルに限り、`content-type` を推測させない。
+/// URL（承認の token、署名者の公開鍵）を `Referer` で別のオリジンへ渡さない。`no-referrer` に
+/// しないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査
+/// （`wisp.csrf_known_header_protection`）がすべての POST を拒否するからである。
 fn protect(response: Response) -> Response {
   response
   |> wisp.set_header("cache-control", "no-store")
   |> wisp.set_header("x-frame-options", "DENY")
-  |> wisp.set_header("content-security-policy", "frame-ancestors 'none'")
+  |> wisp.set_header("content-security-policy", content_security_policy)
+  |> wisp.set_header("x-content-type-options", "nosniff")
+  |> wisp.set_header("referrer-policy", "same-origin")
 }
 
 /// コンテナーの healthcheck 用。認証なしで到達できるため、状態は一切返さない。
@@ -215,11 +230,12 @@ fn healthz(request: Request) -> Response {
   wisp.ok() |> wisp.string_body("ok")
 }
 
-/// ビルドした管理 UI のスタイルシート（`priv/static/admin.css`）。ページと同じく認証の後に
-/// 置くので、`protect` のヘッダーが付き、ブラウザーは保存しない（更新しても古い CSS が
-/// 残らない）。パスが `view.stylesheet_segments` に一致したときだけ届き、`serve_static` は
-/// 要求のパスを `priv` からの相対パスとしてファイルを引く。
-fn stylesheet(request: Request) -> Response {
+/// 管理 UI の静的ファイル（ビルドした `priv/static/admin.css` と、手で書く
+/// `priv/static/admin.js`）。ページと同じく認証の後に置くので、`protect` のヘッダーが付き、
+/// ブラウザーは保存しない（更新しても古いファイルが残らない）。パスが
+/// `view.stylesheet_segments` か `view.script_segments` に一致したときだけ届き、
+/// `serve_static` は要求のパスを `priv` からの相対パスとしてファイルを引く。
+fn static_file(request: Request) -> Response {
   use <- wisp.require_method(request, http.Get)
   let assert Ok(priv) = wisp.priv_directory("nostr_no_su")
   use <- wisp.serve_static(request, under: "", from: priv)

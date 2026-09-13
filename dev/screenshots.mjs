@@ -102,9 +102,9 @@ async function open(page, shot) {
 }
 
 // 最初のコピーのボタンを押し、コピーの欄の囲みに data-copied が付いたかを返す。付いた表示は
-// 2 秒で消えるので、付いたらすぐに撮る。完了を表示しない版（#49 より前の main）では false になる。
+// 2 秒で消えるので、付いたらすぐに撮る。
 async function copy(page) {
-  await page.locator("button[onclick]").first().click();
+  await page.locator('button[data-action="copy"]').first().click();
   return page
     .locator("[data-copied]")
     .first()

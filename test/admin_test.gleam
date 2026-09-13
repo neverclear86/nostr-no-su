@@ -1286,6 +1286,7 @@ pub fn authenticated_responses_are_not_stored_test() {
   let responses = [
     get(context, "/"),
     get(context, "/static/admin.css"),
+    get(context, "/static/admin.js"),
     post_form(context, "/language", [#("language", "ja"), #("return", "/")]),
     get(context, "/approve/" <> token),
     get(context, "/accounts/new"),
@@ -1330,14 +1331,16 @@ pub fn authenticated_responses_are_not_stored_test() {
   ]
   assert list.map(responses, fn(response) { response.status })
     == [
-      200, 200, 303, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400, 200,
-      200, 200, 200, 200, 403, 503, 303, 404,
+      200, 200, 200, 303, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400,
+      200, 200, 200, 200, 200, 403, 503, 303, 404,
     ]
   list.each(responses, fn(response) {
     assert header(response, "cache-control") == "no-store"
     assert header(response, "x-frame-options") == "DENY"
     assert header(response, "content-security-policy")
-      == "frame-ancestors 'none'"
+      == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    assert header(response, "x-content-type-options") == "nosniff"
+    assert header(response, "referrer-policy") == "same-origin"
   })
 }
 
@@ -1398,30 +1401,38 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
   assert string.contains(empty, "Add account")
 }
 
-// --- スタイルシートと通知の色 ---
+// --- 静的ファイルと通知の色 ---
 
-/// ページはビルドした CSS を読む。CSS は認証の後に置き、`text/css` で返す。
-pub fn stylesheet_is_served_behind_authentication_test() {
+/// ページはビルドした CSS とスクリプトを読む。どちらも認証の後に置き、ファイルの種類の
+/// `content-type` で返す（`nosniff` の下では、スクリプトは JS の型でないと実行されない）。
+pub fn static_files_are_served_behind_authentication_test() {
   let page = simulate.read_body(get(context(), "/"))
   assert string.contains(
     page,
-    "<link href=\"/static/admin.css\" rel=\"stylesheet\">",
+    "<link href=\"/static/admin.css\" rel=\"stylesheet\"><script src=\"/static/admin.js\" type=\"module\"></script>",
   )
-  let response = get(context(), "/static/admin.css")
+  let files = [
+    #("/static/admin.css", "text/css; charset=utf-8", ".btn{"),
+    #("/static/admin.js", "text/javascript; charset=utf-8", "const actions = {"),
+  ]
+  use #(path, content_type, excerpt) <- list.each(files)
+  let response = get(context(), path)
   assert response.status == 200
-  assert header(response, "content-type") == "text/css; charset=utf-8"
-  assert string.contains(simulate.read_body(response), ".btn{")
+  assert header(response, "content-type") == content_type
+  assert string.contains(simulate.read_body(response), excerpt)
   let anonymous =
-    simulate.request(http.Get, "/static/admin.css")
+    simulate.request(http.Get, path)
     |> admin.handle_request(context(), _)
   assert anonymous.status == 401
 }
 
-/// 配信するのはスタイルシートだけで、GET 以外は受け付けない。
-pub fn only_the_stylesheet_is_served_test() {
+/// 配信するのはスタイルシートとスクリプトだけで、GET 以外は受け付けない。
+pub fn only_the_static_files_are_served_test() {
   assert get(context(), "/static/other.css").status == 404
+  assert get(context(), "/static/other.js").status == 404
   assert get(context(), "/static").status == 404
   assert post(context(), "/static/admin.css").status == 405
+  assert post(context(), "/static/admin.js").status == 405
 }
 
 /// 通知ページの理由の囲みは、カードの中に結果ごとの色で出す。承認と拒否はどちらも 200

@@ -107,7 +107,7 @@ nsec 入力による登録の完了ページを再読み込みすると、同じ
 
 `ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
-ページのスタイルは、ビルドした CSS（`/static/admin.css`）を管理 UI 自身が配信する。CDN などの外部のファイルは読まないので、外部に到達できない環境でも表示できる。CSS もページと同じく Basic 認証の後にある。
+ページのスタイルとスクリプトは、ビルドした CSS（`/static/admin.css`）と JS（`/static/admin.js`）を管理 UI 自身が配信する。CDN などの外部のファイルは読まないので、外部に到達できない環境でも表示できる。CSS と JS もページと同じく Basic 認証の後にある。
 
 待ち受けアドレスの既定は `127.0.0.1`（ループバックのみ）で、`ADMIN_BIND` で変更する。コンテナーの外へポートを公開するには `ADMIN_BIND=0.0.0.0` が必要になるが、その場合は公開範囲を別途絞ること（同梱の compose はホスト側のループバックにだけ公開する）。
 
@@ -144,7 +144,7 @@ secret を持たない `bunker://` URI（ダッシュボードの「接続 URI�
 
 状態を変える POST すべて（アカウントの登録・生成・削除・secret の作り直し・ラベルの編集・秘密鍵の再表示、`POST /sessions/revoke`、`POST /approve/<token>`、`POST /deny/<token>`、言語の切り替え（`POST /language`））は `Origin` / `Referer` と `Host` を突き合わせて CSRF を防いでいる。`Origin` を送らないクライアント（curl など）はそのまま通る。前段にリバースプロキシーを置くときの `Host` の渡し方は「リバースプロキシーの設定」にある。
 
-認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じる `x-frame-options: DENY` / `content-security-policy: frame-ancestors 'none'` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。
+認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じる `x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。CSP（`default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`）は、管理 UI が配信するファイルのスクリプトだけを実行させ、HTML に何かが注入されてもインラインのスクリプトとイベント属性を実行させない。`referrer-policy` を `no-referrer` にしないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査がすべての POST を 400 にするためである。
 
 ### docker compose
 
@@ -274,6 +274,7 @@ src/nostr_no_su/plugins/console_logger.gleam -- コンソールロガープラ�
 src/nostr_no_su_ffi.erl                      -- OTP への FFI（crypto / code / file / process: 監視付きワーカーの生成と終了理由の整形）
 assets/admin.css                             -- 管理 UI の CSS の入力（Tailwind CSS / daisyUI。npm run build:css でビルドする）
 priv/static/admin.css                        -- ビルドした管理 UI の CSS（生成物。CI で最新であることを検査する）
+priv/static/admin.js                         -- 管理 UI の JS（ビルドせず手で書く。ページ枠が全ページで読む）
 dev/admin_preview.gleam                      -- 管理 UI を固定の状態で起動する撮影用のサーバー（成果物には入らない）
 dev/screenshots.mjs                          -- 撮影用のサーバーから全ページを撮るスクリプト（playwright-core）
 dev/check_vendor_stratus.sh                  -- vendor/stratus が上流の tar とパッチから再現できるかの検査（CI でも実行する）
@@ -304,7 +305,7 @@ docs/architecture.md                         -- システム構成（プロセ�
 - **バンカーは専用接続（リレーごと）**: 監視と接続を分けることで、NIP-46 以外の購読を拒否するリレー（relay.nsec.app 等）をバンカー用に使える。応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。クライアントは URI の `relay=` を全部聴くので、リレーが 1 つ生きていれば往復が成立する
 - **イベント保存は外部プラグイン**: イベント保存用の pog の接続プールと保存 actor は本体ではなくプラグインが `plugin_children/1` で申告し（本体のプールはバンカーのアカウント専用である）、`plugins` サブツリーの下（one_for_one）で動く。プラグインごとのサブスーパーバイザーが Temporary なので、DB 由来のクラッシュループが本体を巻き込むことはない。保存 actor はプールを名前で参照するため、rest_for_one でなくても再起動をまたいで配線が保たれる。DB に到達できない間は保存を止めて破棄した件数を数え、復帰時にまとめて報告する（挿入のたびに接続を待つと actor がブロックしてメールボックスが伸びるため）。接続の復旧は pog のプールに任せる
 - **管理 UI は root 直下の独立した子**: mist（HTTP サーバー）は監視・バンカー・保存のどれにも依存しないため、root（one_for_one）に並べる。表示する状態はハンドラーが直接触らず、Context に注入された関数から名前付き actor へ問い合わせて取る。問い合わせが失敗しても（再起動中、タイムアウト）ページ全体を失敗させず、その項目だけ、リレーは「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）、承認待ちとセッションは空の一覧として描画する。描画は「状態のスナップショット → HTML 文字列」の純粋関数である（次項）
-- **管理 UI はサーバー側で描画する**: ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を HTML やスクリプトとしてそのまま解釈させる経路は、定数だけを渡す `onclick` と、パスの定義から作る `href` と `action` に限る。lustre は URL を検査しないので、`href` と `action` にはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS はコピーのボタンの `onclick` だけで、フォームの送信と画面の遷移は JS なしで動く
+- **管理 UI はサーバー側で描画する**: ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を URL としてそのまま解釈させる経路は、パスの定義から作る `href`、`action`、`src` に限る。lustre は URL を検査しないので、これらにはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す。インラインのスクリプトとイベント属性は書かず、CSP でも実行させない）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS は `priv/static/admin.js` のコピーのボタンの処理だけで（要素の `data-action` の名前で処理を選ぶ）、フォームの送信と画面の遷移は JS なしで動く
 - **管理 UI の CSS はビルドしてリポジトリに含め、自前で配信する**: Tailwind CSS 4 と daisyUI 5 の CSS を `npm run build:css` でビルドし、生成物の `priv/static/admin.css` をコミットしている。実行時に CDN などの外部のファイルを読まず、Docker のビルドにも Node.js やツールの取得が要らない。版は `package-lock.json` で固定し、CI でビルドし直した結果がコミットと一致することを検査する（同じ入力から、Node.js 24 と 25、glibc と musl、standalone CLI のどれでもバイト単位で同じ CSS ができることを確かめた）。Tailwind はソースに完全な文字列で書かれたクラスしか出力しないので、クラス名を連結で組み立てず、描画しうるクラスがすべて CSS に定義されていることをテストで検査する。文言のモジュール（`admin/i18n.gleam`）は、文の語が daisyUI の部品の名前として拾われないよう、Tailwind の走査から外している。フォーカスできるボタン（`btn`）の文字列には `focus-visible:outline-base-content` を、入力欄（`input`）の文字列には `border-base-content/60` を付ける（daisyUI の既定では、注意と破壊のボタンのフォーカスの輪郭と入力欄の枠が、隣接する背景に対して 3:1 に届かないため）。ボタンのフォーカスの輪郭と入力欄の枠のクラスの付け忘れも、同じテストで検査する。CSS はページと同じく Basic 認証の後に置き、`no-store` で返す。更新しても古い CSS が残らない代わりに、ページを開くたびに約 40 KB を読み直す。テーマは OS の設定（`prefers-color-scheme`）に従う
 - **管理 UI の言語は cookie に保存し、切り替えは POST にする**: 言語は切り替えで保存した cookie、`Accept-Language`、英語の順に決める。cookie は値が秘密ではないので署名せず（起動ごとの `secret_key_base` で署名すると再起動で読めなくなる）、平文 HTTP の LAN のアドレスでも保存されるよう `Secure` を付けない。承認ページを別のサイトから開いても選んだ言語で出すよう `SameSite=Lax` にする。切り替えは状態を変えるので POST にし、ほかの POST と同じ CSRF の検査の下に置く。戻り先はページの種類から決まるパスをフォームで送り、サーバーがセグメントから組み立て直すので、別のサイトへは戻らない。文言は言語ごとに `Message` のすべての値を網羅する `case` で持ち、片方の訳が無いとビルドが通らない。管理 UI の外から文字列で届く理由（バンカー、アカウントストア、設定、プラグイン）は訳さずに英語のまま出し（設定、DB、プラグインの理由はログと同じ文である）、日本語のページでは何ができなかったかを日本語で前に置く
 - **管理 UI は既定でループバックのみ**: ダッシュボードには secret 入りの `bunker://` URI が載るため、既定 (`ADMIN_BIND=127.0.0.1`) では LAN に露出しない。Docker はホストの iptables を直接操作するので、ポートを公開したうえでファイアウォールに頼る形は避け、compose 側でホストのループバックにだけ公開している
