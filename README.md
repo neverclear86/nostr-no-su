@@ -159,13 +159,15 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 アプリのコンテナーはルートを読み取り専用（`read_only`）にし、ケーパビリティーを全部落として（`cap_drop: [ALL]`、`no-new-privileges`）動く。書けるのは `/tmp` だけで、メモリ上の tmpfs なのでコンテナーの再起動（クラッシュの後の自動再起動を含む）で消え、書いた分だけメモリを使う。自作のプラグインも `/tmp` 以外には書けない。`file_logger` の既定の出力先（`PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log`）と BEAM のクラッシュダンプ（`ERL_CRASH_DUMP=/tmp/erl_crash.dump`）もここに書かれるので、クラッシュダンプは既定では自動再起動で消える。どちらも残したいときは、`docker-compose.override.yml` で volume をマウントし（uid 1000 が書けること）、`PLUGIN_FILE_LOGGER_PATH` と `ERL_CRASH_DUMP` をその下に上書きする。
 
+**`REMSH_ENABLED=true` にするとコンテナーに exec できる者が VM の全て（復号した秘密鍵を含む）に到達できる。既定は無効で、使うときだけ有効にして再作成すること。** 入り方は `docker compose exec nostr-no-su /app/start.sh remsh`、式を流すだけなら `printf '式.\n' | docker compose exec -T nostr-no-su /app/start.sh remsh`。抜けるときは `q().` と `init:stop().` は本体を止めてしまうので使わず、Ctrl+G の後に `q` と入力するか EOF（`Ctrl+D` や `-T` の入力終了）で抜ける。ノード名は `nostr_no_su@localhost`、cookie は起動ごとの乱数で `/tmp/nostr-no-su-remsh.cookie`（0600）にだけ置き、epmd と分散ノードはコンテナー内のループバックにだけ bind する。ポートは公開しない。
+
 同梱の Postgres の資格情報は `.env` の `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変える（既定は `nostr` / `nostr` / `nostr_no_su`）。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値はここから組み立てるので、ほかを書き換える必要は無い。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの URL だけが変わって接続が拒否される。パスワードは URL にそのまま入り、アプリは userinfo をパーセントデコードしない（注 1）ので、`@ : / ? # %` などを含めないこと。この文書、[バックアップと復旧](docs/operations.md)、`plugins-src/event_logger/README.md` のコマンドの `-U nostr -d nostr_no_su` は既定値なので、変えたときは読み替えること。
 
 ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。docker のログは `json-file` の 10 MB × 3 世代で打ち切られ、`docker compose logs` で見えるのはその範囲だけである。
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数だけは例外で、アプリ自身は読まず、docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
@@ -180,6 +182,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
+| `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose」の節）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
