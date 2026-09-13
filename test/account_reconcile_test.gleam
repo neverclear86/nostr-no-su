@@ -1,14 +1,13 @@
 //// 実際の Postgres で、結果が曖昧な書き込みの後にバンカーアクターの一覧が DB と一致
-//// することを確かめる統合テスト。`TEST_DATABASE_URL` があるときだけ実行する。
+//// することを確かめる統合テスト。`TEST_DATABASE_URL` があるときだけ実行する
+//// （CI では未設定なら失敗する）。
 ////
 //// 専用のスキーマのテーブルに、書き込みの期限より長く眠る BEFORE トリガーを付ける。
 //// 書き込みは期限で `TimedOut` を返した後もサーバー側で実行を続け、読み直しより後に
 //// コミットされる。読み直しが実行中の書き込みを待たなければ、一覧は DB と食い違う。
 
-import envoy
 import gleam/crypto
 import gleam/erlang/process.{type Name}
-import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -48,13 +47,8 @@ FOR EACH ROW EXECUTE FUNCTION {schema}.slow_write()",
 /// 期限を過ぎてからコミットされる追加と secret の作り直しの後、バンカーの一覧が DB と
 /// 一致する。合わせた後の登録済みとしての拒否と削除も DB と一致したまま動く。
 pub fn ambiguous_writes_are_reconciled_with_postgres_test() {
-  case envoy.get("TEST_DATABASE_URL") {
-    Ok("") | Error(Nil) ->
-      io.println(
-        "[account_reconcile] TEST_DATABASE_URL is not set; skipping the integration test",
-      )
-    Ok(database_url) -> reconcile_with_postgres(database_url)
-  }
+  use database_url <- postgres.with_test_database_url("account_reconcile")
+  reconcile_with_postgres(database_url)
 }
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。

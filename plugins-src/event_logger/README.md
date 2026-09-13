@@ -114,7 +114,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 cd plugins-src/event_logger
 gleam deps download
 gleam build --warnings-as-errors
-gleam test          # TEST_DATABASE_URL があれば統合テストも走る
+gleam test          # TEST_DATABASE_URL があれば統合テストも走る（CI では未設定だと失敗する）
 gleam format --check src test
 ```
 

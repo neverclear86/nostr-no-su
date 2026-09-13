@@ -592,20 +592,16 @@ pub fn the_pool_shim_flattens_the_start_result_test() {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。スキーマの移行・挿入・重複無視・jsonb としての読み戻し・
-/// インデックスの作成・NUL を含む行の拒否を一巡して確かめる。
+/// ときだけ実行する。CI では未設定なら失敗する。スキーマの移行・挿入・
+/// 重複無視・jsonb としての読み戻し・インデックスの作成・NUL を含む行の拒否を
+/// 一巡して確かめる。
 ///
 /// 同じ DB に対して `gleam test` を並行実行することは想定していない
 /// （版の記録の挿入やテーブルの作成が競合しうる）。CI は専用の service を
 /// 使い、ローカルでも使い捨てのコンテナーを使うこと。
 pub fn postgres_round_trip_test() {
-  case envoy.get("TEST_DATABASE_URL") {
-    Ok("") | Error(Nil) ->
-      io.println(
-        "[event_logger] TEST_DATABASE_URL is not set; skipping the integration test",
-      )
-    Ok(database_url) -> round_trip(database_url)
-  }
+  use database_url <- with_test_database_url
+  round_trip(database_url)
 }
 
 /// スキーマの移行・挿入・重複挿入・後片付け・NUL を含む行の拒否を一巡させる。
@@ -641,16 +637,11 @@ fn round_trip(database_url: String) -> Nil {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。版の記録より前に作られたテーブルが版 1 として取り込まれ、
-/// 版が新しい DB は拒否されることを確かめる。
+/// ときだけ実行する。CI では未設定なら失敗する。版の記録より前に作られた
+/// テーブルが版 1 として取り込まれ、版が新しい DB は拒否されることを確かめる。
 pub fn postgres_schema_version_test() {
-  case envoy.get("TEST_DATABASE_URL") {
-    Ok("") | Error(Nil) ->
-      io.println(
-        "[event_logger] TEST_DATABASE_URL is not set; skipping the integration test",
-      )
-    Ok(database_url) -> schema_version_round_trip(database_url)
-  }
+  use database_url <- with_test_database_url
+  schema_version_round_trip(database_url)
 }
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
@@ -778,4 +769,21 @@ fn delete_row(db: pog.Connection, id: String) -> Nil {
     |> pog.parameter(pog.text(id))
     |> pog.execute(on: db)
   Nil
+}
+
+/// `TEST_DATABASE_URL` が空でなければその値で `run` を呼ぶ。未設定または空の
+/// とき、`CI` が空でなければ panic し、そうでなければスキップを 1 行ログに
+/// 出す。本体の `test/support/postgres.with_test_database_url` と同じ処理だが、
+/// event_logger は本体とは別の Gleam プロジェクトで import できないため、ここに
+/// 重複して持つ。
+fn with_test_database_url(run: fn(String) -> Nil) -> Nil {
+  case envoy.get("TEST_DATABASE_URL"), envoy.get("CI") {
+    Ok(url), _ if url != "" -> run(url)
+    _, Ok(ci) if ci != "" ->
+      panic as "[event_logger] TEST_DATABASE_URL is not set on CI"
+    _, _ ->
+      io.println(
+        "[event_logger] TEST_DATABASE_URL is not set; skipping the integration test",
+      )
+  }
 }

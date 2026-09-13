@@ -1,16 +1,15 @@
 //// `bunker/account_store` のテスト。純粋な部分は常に、実際の Postgres に対する
-//// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する。
+//// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する（CI では未設定なら
+//// 失敗する）。
 ////
 //// 同じテーブルには過去の実行が残した行（別の乱数のマスターキーで暗号化された
 //// もの）がありうるので、読み込みの結果はどれも自分が入れた pubkey に絞ってから
 //// 比べる。
 
-import envoy
 import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Pid}
-import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -231,28 +230,18 @@ pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。同じ DB に対して `gleam test` を並行実行することは想定して
-/// いない。
+/// ときだけ実行する。CI では未設定なら失敗する。同じ DB に対して `gleam test`
+/// を並行実行することは想定していない。
 pub fn postgres_round_trip_test() {
-  case envoy.get("TEST_DATABASE_URL") {
-    Ok("") | Error(Nil) ->
-      io.println(
-        "[account_store] TEST_DATABASE_URL is not set; skipping the integration test",
-      )
-    Ok(database_url) -> round_trip(postgres.start_pool(database_url, None))
-  }
+  use database_url <- postgres.with_test_database_url("account_store")
+  round_trip(postgres.start_pool(database_url, None))
 }
 
 /// 版の記録より前に作られた DB が版 1 として取り込まれ、版が新しい DB は拒否される。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
+/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
 pub fn postgres_schema_version_test() {
-  case envoy.get("TEST_DATABASE_URL") {
-    Ok("") | Error(Nil) ->
-      io.println(
-        "[account_store] TEST_DATABASE_URL is not set; skipping the integration test",
-      )
-    Ok(database_url) -> schema_version_round_trip(database_url)
-  }
+  use database_url <- postgres.with_test_database_url("account_store")
+  schema_version_round_trip(database_url)
 }
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
