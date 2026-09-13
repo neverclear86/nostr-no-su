@@ -127,7 +127,7 @@ docker compose logs nostr-no-su | grep plugin_loader
 ```
 
 ```
-[plugin_loader] event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff, exception, exception_ffi, ...)
+[plugin_loader] event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_stdlib 1.0.3, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
 [plugin_loader] loaded 1 plugin(s) from /plugins: event_logger
 ```
 
