@@ -12,11 +12,15 @@ const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
   // コピーの欄の囲み（ボタンの親の親）に data-copied を 2 秒付ける。書けないときは data-selected を
   // 付け、欄の下に手動でコピーする案内を出す（2 秒では消さない）。値は DOM から読む。
+  // 直前の data-copied が消える前に書けなかった場合に備え、data-selected を付ける前に
+  // data-copied とその予約したタイマーを消す（両方が同時に見える状態を作らない）。
   copy(button) {
     const field = button.previousElementSibling;
     const wrapper = button.parentElement.parentElement;
     field.select();
     const selected = () => {
+      clearTimeout(wrapper.copiedTimer);
+      delete wrapper.dataset.copied;
       wrapper.dataset.selected = "1";
     };
     if (!navigator.clipboard) return selected();
