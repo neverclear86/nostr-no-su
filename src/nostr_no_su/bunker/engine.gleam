@@ -605,11 +605,11 @@ fn points_elsewhere(target: Option(String), signer: String) -> Bool {
   }
 }
 
-/// connect リクエストが指す署名者 pubkey。`[secret]` だけを送る古い形式と、
-/// 空文字列は「指定無し」として扱う。
+/// connect リクエストが指す署名者 pubkey。`[secret]` だけを送る古い形式は
+/// 指定無しとして扱う。空文字列の扱いは `points_elsewhere` が決める。
 fn connect_signer(params: List(String)) -> Option(String) {
   case params {
-    [signer, _, ..] if signer != "" -> Some(signer)
+    [signer, _, ..] -> Some(signer)
     _ -> None
   }
 }
@@ -636,7 +636,7 @@ fn sign_event(
 ) -> rpc.Response {
   case request.params {
     [draft_json, ..] -> {
-      let result = {
+      let signed = {
         use draft <- result.try(
           rpc.decode_draft(draft_json)
           |> result.replace_error("invalid event draft"),
@@ -649,7 +649,7 @@ fn sign_event(
         event.finalize(unsigned, privkey(account))
         |> result.replace_error("failed to sign event")
       }
-      case result {
+      case signed {
         Ok(signed) -> rpc.ok(request.id, json.to_string(event.to_json(signed)))
         Error(reason) -> rpc.error(request.id, reason)
       }
