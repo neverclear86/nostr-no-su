@@ -53,6 +53,8 @@ jobs:
             build/dev/erlang/*
             !build/dev/erlang/nostr_no_su
           key: gleam-build-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-gleam${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('manifest.toml', 'vendor/stratus/**') }}
+      - name: "一時: 戻したキャッシュに本体の成果物が無いことを確かめる"
+        run: test -d build/dev/erlang/stratus && test ! -e build/dev/erlang/nostr_no_su
       - run: gleam deps download
       # test/ もコンパイルするので、テストの warning もここで失敗する
       # （gleam test にはこのフラグが無い）。
@@ -126,6 +128,8 @@ jobs:
             plugins-src/event_logger/build/dev/erlang/*
             !plugins-src/event_logger/build/dev/erlang/event_logger
           key: gleam-build-event_logger-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-gleam${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/event_logger/manifest.toml') }}
+      - name: "一時: 戻したキャッシュに本体の成果物が無いことを確かめる"
+        run: test -d build/dev/erlang/pog && test ! -e build/dev/erlang/event_logger
       - run: gleam deps download
       # 影に入る側は本体の版で実行されるため、版がずれると実行時に undef で壊れる。
       # 検査の内容は dev/check_shared_versions.sh。
