@@ -212,12 +212,28 @@ fn start_loading_bunker_tree(
   store: bunker.Store,
   retry_delay: backoff.Backoff,
 ) -> Pid {
+  start_loading_bunker_tree_with_open(
+    name,
+    store,
+    retry_delay,
+    fake_open(reports, subscribed),
+  )
+}
+
+/// `start_loading_bunker_tree` から接続の開き方だけを差し替えられるようにした版。
+/// AUTH の受け口など `fake_open` が捨てる引数を確かめるテストが使う。
+fn start_loading_bunker_tree_with_open(
+  name: Name(bunker.Msg),
+  store: bunker.Store,
+  retry_delay: backoff.Backoff,
+  open: app.Open,
+) -> Pid {
   start_tree(app.Spec(
     plugins: [],
     monitor: None,
     bunker: bunker_spec(name, store, [test_relay()], retry_delay),
     admin: None,
-    open: fake_open(reports, subscribed),
+    open: open,
     reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
@@ -699,6 +715,22 @@ fn start_monitor_tree(
   name: Name(dedup.Msg),
   excludes_kind: fn(Int) -> Bool,
 ) -> Pid {
+  start_monitor_tree_with_open(
+    seen,
+    name,
+    excludes_kind,
+    fake_open(reports, None),
+  )
+}
+
+/// `start_monitor_tree` から接続の開き方だけを差し替えられるようにした版。
+/// AUTH の受け口など `fake_open` が捨てる引数を確かめるテストが使う。
+fn start_monitor_tree_with_open(
+  seen: Subject(Event),
+  name: Name(dedup.Msg),
+  excludes_kind: fn(Int) -> Bool,
+  open: app.Open,
+) -> Pid {
   start_tree(app.Spec(
     plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
     monitor: Some(app.Monitor(
@@ -711,7 +743,7 @@ fn start_monitor_tree(
     )),
     bunker: idle_bunker(),
     admin: None,
-    open: fake_open(reports, None),
+    open: open,
     reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
@@ -2690,5 +2722,66 @@ pub fn nsec_is_refused_until_an_ambiguous_write_is_reloaded_test() {
   process.send(database, FailReads(False))
   assert await_accounts(name, database_listings(database), 2000)
   assert bunker.nsec(name, signer) == Ok(account.nsec(account_for(signer_key)))
+  stop_tree(tree)
+}
+
+/// 接続を開くたびに AUTH の受け口をリレーの URL と一緒に `authenticators` へ送り、
+/// あとは `fake_open` と同じに振る舞う偽リレー。
+fn authenticator_recording_open(
+  reports: Subject(Report),
+  authenticators: Subject(#(String, Option(relay_client.Authenticator))),
+) -> app.Open {
+  fn(relay_url, subscriptions, handle_event, handle_ok, authenticator) {
+    process.send(authenticators, #(relay_url, authenticator))
+    fake_open(reports, None)(
+      relay_url,
+      subscriptions,
+      handle_event,
+      handle_ok,
+      authenticator,
+    )
+  }
+}
+
+/// バンカーの接続が受けた AUTH の受け口は、登録アカウントの鍵で署名した kind 22242
+/// を、その接続のリレー URL と challenge を載せて返す。
+pub fn bunker_connections_answer_authentication_test() {
+  let reports = process.new_subject()
+  let authenticators = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_loading_bunker_tree_with_open(
+      name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      fixed_retry_delay,
+      authenticator_recording_open(reports, authenticators),
+    )
+  let assert Ok(#(relay_url, Some(authenticate))) =
+    process.receive(authenticators, 2000)
+  assert relay_url == test_relay_url
+  assert await_signers(name, [signer], 3000)
+  let assert Ok([signed]) = authenticate("challenge-1")
+  assert signed.pubkey == signer
+  assert signed.kind == event.auth_kind
+  assert signed.tags
+    == [["relay", test_relay_url], ["challenge", "challenge-1"]]
+  let assert Ok(_verified) = event.verify(signed)
+  stop_tree(tree)
+}
+
+/// 監視の接続は AUTH の受け口を受けない。
+pub fn monitor_connections_do_not_answer_authentication_test() {
+  let reports = process.new_subject()
+  let authenticators = process.new_subject()
+  let tree =
+    start_monitor_tree_with_open(
+      process.new_subject(),
+      process.new_name("test_dedup"),
+      event.is_ephemeral,
+      authenticator_recording_open(reports, authenticators),
+    )
+  let assert Ok(#(relay_url, None)) = process.receive(authenticators, 2000)
+  assert relay_url == test_relay_url
   stop_tree(tree)
 }
