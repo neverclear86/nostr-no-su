@@ -74,6 +74,18 @@ fn change(label: String) -> Result(Nil, bunker.ChangeFailure) {
   }
 }
 
+/// クライアントの値で、取り消しの結果を選ぶ。
+fn revocation(revoked_client: String) -> Result(Nil, bunker.RevokeFailure) {
+  case revoked_client {
+    "not-approved" -> Error(bunker.SessionNotFound("session is not approved"))
+    "no-answer" ->
+      Error(bunker.NotAnswered(
+        "the bunker did not respond; check the dashboard to see whether the change was applied",
+      ))
+    _ -> Ok(Nil)
+  }
+}
+
 /// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。
 fn context() -> admin.Context {
   admin.Context(
@@ -133,7 +145,7 @@ fn context() -> admin.Context {
       ]
     },
     sessions: fn() { [engine.Session(signer:, client:)] },
-    revoke: fn(_, _) { Nil },
+    revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
     pending: fn() {
       [dashboard.PendingRow(token: "tok-1", signer:, client:, age_seconds: 12)]
     },

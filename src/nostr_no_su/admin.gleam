@@ -38,7 +38,7 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/bunker.{type ChangeFailure}
+import nostr_no_su/bunker.{type ChangeFailure, type RevokeFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/log
@@ -105,7 +105,8 @@ pub type Context {
     relays: fn() -> List(dashboard.RelayRow),
     plugins: fn() -> List(dashboard.PluginRow),
     sessions: fn() -> List(Session),
-    revoke: fn(String, String) -> Nil,
+    /// セッション（署名者, クライアント）を 1 件取り消す。
+    revoke: fn(String, String) -> Result(Nil, RevokeFailure),
     pending: fn() -> List(dashboard.PendingRow),
     approve: fn(String) -> Result(Nil, String),
     deny: fn(String) -> Result(Nil, String),
@@ -180,7 +181,7 @@ fn route(
     ["approve", token] -> approve_connection(context, request, language, token)
     ["deny", token] -> deny_connection(context, request, language, token)
     segments if segments == dashboard.revoke_segments ->
-      revoke_session(context, request)
+      revoke_session(context, request, language)
     segments if segments == dashboard.new_account_segments ->
       show_new_account(request, language)
     segments if segments == dashboard.generate_account_segments ->
@@ -358,31 +359,56 @@ fn decision_response(
     Ok(Nil) ->
       dashboard.notice_page(language, done, i18n.Translated(message), tone)
       |> wisp.html_response(200)
-    Error(reason) ->
-      dashboard.notice_page(
-        language,
-        i18n.NotFound,
-        i18n.Untranslated(reason),
-        view.Failure,
-      )
-      |> wisp.html_response(404)
+    Error(reason) -> not_found_notice(language, reason)
   }
 }
 
+/// 処理できなかった要求の、理由を添えた 404 の通知ページ。バンカーの理由は英語の
+/// 文字列で届くので、訳さずに出す。承認・拒否と取り消しが使う。
+fn not_found_notice(language: Language, reason: String) -> Response {
+  dashboard.notice_page(
+    language,
+    i18n.NotFound,
+    i18n.Untranslated(reason),
+    view.Failure,
+  )
+  |> wisp.html_response(404)
+}
+
 /// セッションを 1 件取り消してダッシュボードへ戻す。再読み込みで取り消しが
-/// 再送されないよう 303 でリダイレクトする。
-fn revoke_session(context: Context, request: Request) -> Response {
+/// 再送されないよう 303 でリダイレクトする。取り消せなかったときは
+/// `revoke_failure_response` に渡す。
+fn revoke_session(
+  context: Context,
+  request: Request,
+  language: Language,
+) -> Response {
   use <- wisp.require_method(request, http.Post)
   use form <- wisp.require_form(request)
   case
     list.key_find(form.values, "signer"),
     list.key_find(form.values, "client")
   {
-    Ok(signer), Ok(client) -> {
-      context.revoke(signer, client)
-      wisp.redirect(to: "/")
-    }
+    Ok(signer), Ok(client) ->
+      case context.revoke(signer, client) {
+        Ok(Nil) -> wisp.redirect(to: "/")
+        Error(failure) -> revoke_failure_response(language, failure)
+      }
     _, _ -> wisp.bad_request("signer and client are required")
+  }
+}
+
+/// 取り消しの失敗の応答。承認済みでない組は承認・拒否の失敗と同じ 404、バンカーが
+/// 応答しなければ 503 の通知ページにする。応答が無いときはアカウントの変更と違って
+/// 202 にしない。取り消しは再送しても害が無い（反映済みなら 404 になる）ので、
+/// やり直してよい一時的な失敗として返す。
+fn revoke_failure_response(
+  language: Language,
+  failure: RevokeFailure,
+) -> Response {
+  case failure {
+    bunker.SessionNotFound(reason) -> not_found_notice(language, reason)
+    bunker.NotAnswered(reason) -> not_confirmed_notice(language, reason, 503)
   }
 }
 
@@ -628,15 +654,24 @@ fn change_failure_response(
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
     bunker.NotReady(reason) -> accounts_unavailable(language, reason)
-    bunker.MaybeApplied(reason) ->
-      dashboard.notice_page(
-        language,
-        i18n.ChangeNotConfirmed,
-        i18n.Untranslated(reason),
-        view.Warning,
-      )
-      |> wisp.html_response(202)
+    bunker.MaybeApplied(reason) -> not_confirmed_notice(language, reason, 202)
   }
+}
+
+/// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
+/// 決める（アカウントの変更は 202、セッションの取り消しは 503）。
+fn not_confirmed_notice(
+  language: Language,
+  reason: String,
+  status: Int,
+) -> Response {
+  dashboard.notice_page(
+    language,
+    i18n.ChangeNotConfirmed,
+    i18n.Untranslated(reason),
+    view.Warning,
+  )
+  |> wisp.html_response(status)
 }
 
 /// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け

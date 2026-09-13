@@ -110,9 +110,10 @@ const token_bytes = 16
 /// 推測できない長さにする。
 const connection_secret_bytes = 16
 
-/// 変更がアクターの応答を得られなかったときの理由。タイムアウトした後にアクターが
-/// 書き込みを終えて反映することがあるので、確かめ直すよう促す。変更の失敗のページは
-/// POST の応答で、再読み込みは変更の再送になるため、ダッシュボードで確かめるよう促す。
+/// 変更（アカウントの変更とセッションの取り消し）がアクターの応答を得られなかった
+/// ときの理由。タイムアウトした後にアクターが処理を終えて反映することがあるので、
+/// 確かめ直すよう促す。変更の失敗のページは POST の応答で、再読み込みは変更の再送に
+/// なるため、ダッシュボードで確かめるよう促す。
 const change_not_answered = "the bunker did not respond; check the dashboard to see whether the change was applied"
 
 /// 書き込みの結果が曖昧だった変更の理由。コミットされていることがあるので、単なる
@@ -133,6 +134,9 @@ const account_already_registered = "account is already registered"
 /// 問い合わせに応答が無いときの理由。
 const query_not_answered = "bunker is not responding"
 
+/// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。
+const session_not_approved = "session is not approved"
+
 /// アカウントの変更が成功しなかった理由。理由は値（鍵、secret、ラベル）を含まない
 /// 固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
 pub type ChangeFailure {
@@ -145,6 +149,17 @@ pub type ChangeFailure {
   /// 反映されたかどうか分からない（書き込みの期限切れや途中の切断、DB のクライアントの
   /// 例外、アクターが期限内に応答しない）。
   MaybeApplied(reason: String)
+}
+
+/// セッションの取り消しが成功しなかった理由。理由は値（pubkey）を含まない固定の
+/// 英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+pub type RevokeFailure {
+  /// 承認済みのセッションに無い（取り消し済み、アカウントの削除やアクターの再起動で
+  /// 消えた、フォームの値が違う）。
+  SessionNotFound(reason: String)
+  /// アクターが動いていないか、期限内に応答しなかった。タイムアウトの後にアクターが
+  /// 処理して反映することがある。
+  NotAnswered(reason: String)
 }
 
 /// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
@@ -224,8 +239,12 @@ pub type Msg {
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))
   /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
-  /// 読まないよう、完了を待てるように応答する。
-  Revoke(signer: String, client: String, reply: Subject(Nil))
+  /// 読まないよう、完了を待てるように応答する。承認済みでない組なら理由を返す。
+  Revoke(
+    signer: String,
+    client: String,
+    reply: Subject(Result(Nil, RevokeFailure)),
+  )
   /// 承認待ちの接続要求の一覧を問い合わせる。
   GetPending(reply: Subject(List(Pending)))
   /// 承認待ちの接続要求を承認する。承認を状態に反映し、登録済みの接続へ応答
@@ -268,11 +287,15 @@ pub fn sessions(name: Name(Msg)) -> List(Session) {
   |> option.unwrap([])
 }
 
-/// セッションを 1 件取り消し、反映されるまで待つ。アクターが動いていなければ
-/// 何もしない。
-pub fn revoke(name: Name(Msg), signer: String, client: String) -> Nil {
+/// セッションを 1 件取り消し、反映されるまで待つ。承認済みでない組なら
+/// `SessionNotFound`、アクターが応答しなければ `NotAnswered` を返す。
+pub fn revoke(
+  name: Name(Msg),
+  signer: String,
+  client: String,
+) -> Result(Nil, RevokeFailure) {
   named.call(name, call_timeout_ms, Revoke(signer, client, _))
-  |> option.unwrap(Nil)
+  |> option.unwrap(Error(NotAnswered(change_not_answered)))
 }
 
 /// 承認待ちの接続要求の一覧。アクターが動いていなければ空。
@@ -566,11 +589,17 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, engine.sessions(state.engine))
       actor.continue(state)
     }
-    Revoke(signer, client, reply) -> {
-      let next = engine.revoke(state.engine, signer, client)
-      process.send(reply, Nil)
-      actor.continue(State(..state, engine: next))
-    }
+    Revoke(signer:, client:, reply:) ->
+      case engine.revoke(state.engine, signer, client) {
+        Ok(next) -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(State(..state, engine: next))
+        }
+        Error(Nil) -> {
+          process.send(reply, Error(SessionNotFound(session_not_approved)))
+          actor.continue(state)
+        }
+      }
     SetPublisher(relay_url, publish) ->
       actor.continue(
         State(
