@@ -566,19 +566,18 @@ fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
-        ..reenable_buttons(language, status, plugin.name)
+        ..reenable_form_if_disabled(language, plugin)
       ])
   }
 }
 
-/// `Disabled` のときだけ再有効化のボタンを 1 要素のリストで返す。それ以外は空。
-fn reenable_buttons(
+/// `Disabled` のときだけ再有効化のフォームを 1 要素のリストで返す。それ以外は空。
+fn reenable_form_if_disabled(
   language: Language,
-  status: Option(plugin_runner.Status),
-  name: String,
+  plugin: PluginRow,
 ) -> List(Element(msg)) {
-  case status {
-    Some(plugin_runner.Disabled(..)) -> [reenable_form(language, name)]
+  case plugin.status {
+    Some(plugin_runner.Disabled(..)) -> [reenable_form(language, plugin.name)]
     _ -> []
   }
 }
