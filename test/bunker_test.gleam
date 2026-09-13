@@ -1,7 +1,8 @@
-//// `bunker.load_report` と `bunker.next_retry_delay` のテスト。読み込みの結果に
+//// `bunker.load_report` と `bunker.default_retry_delay` のテスト。読み込みの結果に
 //// 対して、どのログ行を出すかと、再試行の待ち時間の延び方を確かめる。
 
 import gleam/option.{None, Some}
+import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
@@ -86,15 +87,9 @@ pub fn a_changed_failure_is_reported_test() {
     ]
 }
 
-/// 既定の待ち時間は 5 秒から倍に延び、2 分で頭打ちになる。
-pub fn default_retry_delay_doubles_up_to_two_minutes_test() {
-  let retry = bunker.default_retry_delay
-  let next = bunker.next_retry_delay(retry, _)
-  assert retry.initial_ms == 5000
-  assert next(5000) == 10_000
-  assert next(10_000) == 20_000
-  assert next(20_000) == 40_000
-  assert next(40_000) == 80_000
-  assert next(80_000) == 120_000
-  assert next(120_000) == 120_000
+/// 既定の待ち時間は 5 秒から倍に延び、2 分で頭打ちになる（倍加の系列そのものは
+/// `backoff_test.next_doubles_up_to_the_maximum_test` で検査する）。
+pub fn default_retry_delay_is_five_seconds_up_to_two_minutes_test() {
+  assert bunker.default_retry_delay
+    == backoff.Backoff(initial_ms: 5000, max_ms: 120_000)
 }

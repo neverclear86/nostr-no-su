@@ -9,6 +9,7 @@ import gleam/otp/system
 import gleam/result
 import gleam/string
 import nostr_no_su/app
+import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
@@ -82,8 +83,8 @@ type SubscriptionReport {
   Retrying(relay_url: String)
 }
 
-/// 偽ソケットが自分宛てに予約する再試行の間隔。
-const fake_retry_delay_ms = 100
+/// 偽ソケットが自分宛てに予約する再試行の待ち時間の延ばし方。
+const fake_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
 /// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
 /// ツリーへ渡し、送信されたイベントをテストへ転送する。`subscribed` があれば、
@@ -107,7 +108,7 @@ fn fake_open(
               relay_url,
               subscriptions,
               triggers,
-              relay_client.new_subscription_state(),
+              relay_client.new_subscription_state(fake_retry_delay),
             )
           }
           None -> process.sleep_forever()
@@ -142,15 +143,16 @@ fn fake_socket_loop(
   state: relay_client.SubscriptionState,
 ) -> Nil {
   let trigger = process.receive_forever(triggers)
-  let synced = relay_client.sync(state, trigger, subscriptions)
+  let synced =
+    relay_client.sync(state, trigger, subscriptions, fake_retry_delay)
   case synced.schedule_retry {
-    Some(generation) -> {
+    Some(reservation) -> {
       process.send(target, Retrying(relay_url))
       let _ =
         process.send_after(
           triggers,
-          fake_retry_delay_ms,
-          relay_client.Retried(generation),
+          reservation.delay_ms,
+          relay_client.Retried(reservation.generation),
         )
       Nil
     }
@@ -207,7 +209,7 @@ fn start_loading_bunker_tree(
   subscribed: Option(Subject(SubscriptionReport)),
   name: Name(bunker.Msg),
   store: bunker.Store,
-  retry_delay: bunker.RetryDelay,
+  retry_delay: backoff.Backoff,
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [],
@@ -215,13 +217,13 @@ fn start_loading_bunker_tree(
     bunker: bunker_spec(name, store, [test_relay()], retry_delay),
     admin: None,
     open: fake_open(reports, subscribed),
-    reconnect_delay_ms: 100,
+    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
 
 /// テストの読み込みの再試行の待ち時間。初期値と上限を同じにして延ばさない。既存の
 /// テストは一定の間隔を前提に、読み込みの回数と待ち時間を数える。
-const fixed_retry_delay = bunker.RetryDelay(initial_ms: 100, max_ms: 100)
+const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
 /// バンカーサブツリーの仕様。接続プールは到達できないポートを指し、偽のストアを
 /// 使うテストでもサブツリーの形（プール、アクター、接続の順）は本番と同じにする。
@@ -231,7 +233,7 @@ fn bunker_spec(
   name: Name(bunker.Msg),
   store: bunker.Store,
   relays: List(app.Relay),
-  retry_delay: bunker.RetryDelay,
+  retry_delay: backoff.Backoff,
 ) -> app.Bunker {
   app.Bunker(
     name: name,
@@ -650,7 +652,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
       admin: None,
       open: fake_open(reports, None),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
-      reconnect_delay_ms: 60_000,
+      reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
     ))
   // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
   // どちらのリレーの報告かを決める。
@@ -700,7 +702,7 @@ fn start_monitor_tree(
     bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
-    reconnect_delay_ms: 100,
+    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
 
@@ -792,7 +794,7 @@ fn start_plugins_tree(
     bunker: idle_bunker(),
     admin: None,
     open: fake_open(reports, None),
-    reconnect_delay_ms: 100,
+    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
 
@@ -1327,7 +1329,7 @@ pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
         }
       }),
       // 失敗の間にリクエストを確実に届けられるよう、再試行を遅めにする。
-      bunker.RetryDelay(initial_ms: 500, max_ms: 500),
+      Backoff(initial_ms: 500, max_ms: 500),
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -1404,7 +1406,7 @@ pub fn load_retries_back_off_and_start_over_after_a_success_test() {
       None,
       name,
       store,
-      bunker.RetryDelay(initial_ms: 50, max_ms: 3200),
+      Backoff(initial_ms: 50, max_ms: 3200),
     )
   // 1 回目と 2 回目の失敗の間は 50ms。以後は 100、200、400ms と延びる。窓は延びた後の
   // 待ち時間より短く、延びる前の待ち時間の 1.5 倍にする。
@@ -1505,7 +1507,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
       ),
       admin: None,
       open: fake_open(reports, None),
-      reconnect_delay_ms: 100,
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
     ))
   let assert Opened(first_url, _connection_1, _socket_1, deliver_1) =
     await_connection(reports)

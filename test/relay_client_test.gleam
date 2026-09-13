@@ -13,13 +13,14 @@ import gleam/set
 import gleam/string
 import mist
 import nostr_no_su/app
+import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
-  type SubscriptionState, type Subscriptions, Report, Requested, Retried,
-  SubscriptionState, Sync,
+  type SubscriptionState, type Subscriptions, Report, Requested, Reservation,
+  Retried, SubscriptionState, Sync,
 }
 import nostr_no_su/relay_connection
 import stratus
@@ -89,7 +90,7 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
       "ws://relay.invalid:7777",
       fn() { Ok([]) },
       fn(_event) { Nil },
-      relay_client.subscription_retry_delay_ms,
+      relay_client.subscription_retry_delay,
     )
     == Error("WebSocket handshake failed: Sock(Nxdomain)")
 }
@@ -164,13 +165,22 @@ fn other_bunker_filter() -> filter.Filter {
   Filter(..filter.new(), kinds: Some([24_133]), limit: Some(1))
 }
 
-/// 開いている購読と予約から作った状態。世代は 5 から数える。
+/// 開いている購読と予約から作った状態。世代は 5 から数え、待ち時間は 100ms から
+/// 数える。
 fn state_with(
   open: List(String),
   retry: option.Option(Int),
 ) -> SubscriptionState {
-  SubscriptionState(open: set.from_list(open), retry: retry, next_generation: 5)
+  SubscriptionState(
+    open: set.from_list(open),
+    retry: retry,
+    next_generation: 5,
+    delay_ms: 100,
+  )
 }
+
+/// `sync` のテストで使う再試行の待ち時間の延ばし方。
+const retry = Backoff(initial_ms: 100, max_ms: 400)
 
 /// 評価されたことを `calls` へ報告してから `result` を返すサンク。
 fn reporting(
@@ -205,6 +215,7 @@ pub fn sync_opens_a_wanted_subscription_test() {
       state_with([], None),
       Requested,
       reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
     )
   assert synced
     == Sync(
@@ -223,6 +234,7 @@ pub fn sync_closes_a_subscription_that_is_no_longer_wanted_test() {
       state_with([bunker], None),
       Requested,
       reporting(calls, Ok([])),
+      retry,
     )
   assert synced
     == Sync(
@@ -240,6 +252,7 @@ pub fn sync_replaces_an_open_subscription_without_closing_it_test() {
       state_with([bunker], None),
       Requested,
       reporting(calls, Ok([#(bunker, other_bunker_filter())])),
+      retry,
     )
   assert synced.messages == [message.Req(bunker, other_bunker_filter())]
   assert synced.state == state_with([bunker], None)
@@ -249,7 +262,12 @@ pub fn sync_replaces_an_open_subscription_without_closing_it_test() {
 pub fn sync_with_nothing_open_and_nothing_wanted_sends_nothing_test() {
   let calls = process.new_subject()
   let synced =
-    relay_client.sync(state_with([], None), Requested, reporting(calls, Ok([])))
+    relay_client.sync(
+      state_with([], None),
+      Requested,
+      reporting(calls, Ok([])),
+      retry,
+    )
   assert synced
     == Sync(state: state_with([], None), messages: [], schedule_retry: None)
 }
@@ -259,7 +277,8 @@ pub fn sync_with_nothing_open_and_nothing_wanted_sends_nothing_test() {
 pub fn sync_drops_a_retry_without_a_reservation_test() {
   let calls = process.new_subject()
   let state = state_with([bunker], None)
-  let synced = relay_client.sync(state, Retried(1), reporting(calls, Ok([])))
+  let synced =
+    relay_client.sync(state, Retried(1), reporting(calls, Ok([])), retry)
   assert synced == Sync(state: state, messages: [], schedule_retry: None)
   assert !evaluated(calls)
 }
@@ -268,7 +287,8 @@ pub fn sync_drops_a_retry_without_a_reservation_test() {
 pub fn sync_drops_a_retry_of_another_generation_test() {
   let calls = process.new_subject()
   let state = state_with([bunker], Some(2))
-  let synced = relay_client.sync(state, Retried(1), reporting(calls, Ok([])))
+  let synced =
+    relay_client.sync(state, Retried(1), reporting(calls, Ok([])), retry)
   assert synced == Sync(state: state, messages: [], schedule_retry: None)
   assert !evaluated(calls)
 }
@@ -281,6 +301,7 @@ pub fn sync_a_successful_retry_clears_the_reservation_test() {
       state_with([], Some(1)),
       Retried(1),
       reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
     )
   assert synced
     == Sync(
@@ -299,6 +320,7 @@ pub fn sync_a_failed_retry_reserves_a_new_generation_test() {
       state_with([bunker], Some(1)),
       Retried(1),
       reporting(calls, Error(Nil)),
+      retry,
     )
   assert synced
     == Sync(
@@ -306,9 +328,10 @@ pub fn sync_a_failed_retry_reserves_a_new_generation_test() {
         open: set.from_list([bunker]),
         retry: Some(5),
         next_generation: 6,
+        delay_ms: 200,
       ),
       messages: [],
-      schedule_retry: Some(5),
+      schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
     )
   assert evaluated(calls)
 }
@@ -321,6 +344,7 @@ pub fn sync_a_successful_request_clears_the_reservation_test() {
       state_with([], Some(1)),
       Requested,
       reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
     )
   assert synced.state == state_with([bunker], None)
   assert synced.schedule_retry == None
@@ -334,6 +358,7 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
       state_with([bunker], None),
       Requested,
       reporting(calls, Error(Nil)),
+      retry,
     )
   assert synced
     == Sync(
@@ -341,9 +366,10 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
         open: set.from_list([bunker]),
         retry: Some(5),
         next_generation: 6,
+        delay_ms: 200,
       ),
       messages: [],
-      schedule_retry: Some(5),
+      schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
     )
 }
 
@@ -351,7 +377,8 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
 pub fn sync_a_failed_request_keeps_a_single_reservation_test() {
   let calls = process.new_subject()
   let state = state_with([bunker], Some(1))
-  let synced = relay_client.sync(state, Requested, reporting(calls, Error(Nil)))
+  let synced =
+    relay_client.sync(state, Requested, reporting(calls, Error(Nil)), retry)
   assert synced == Sync(state: state, messages: [], schedule_retry: None)
   assert evaluated(calls)
 }
@@ -365,20 +392,61 @@ pub fn sync_ignores_the_timer_of_an_old_generation_test() {
   let succeeding = reporting(calls, Ok([#(bunker, bunker_filter())]))
 
   let first =
-    relay_client.sync(relay_client.new_subscription_state(), Requested, failing)
-  assert first.schedule_retry == Some(1)
-  let second = relay_client.sync(first.state, Requested, succeeding)
+    relay_client.sync(
+      relay_client.new_subscription_state(retry),
+      Requested,
+      failing,
+      retry,
+    )
+  assert first.schedule_retry == Some(Reservation(generation: 1, delay_ms: 100))
+  let second = relay_client.sync(first.state, Requested, succeeding, retry)
   assert second.state.retry == None
-  let third = relay_client.sync(second.state, Requested, failing)
-  assert third.schedule_retry == Some(2)
+  let third = relay_client.sync(second.state, Requested, failing, retry)
+  assert third.schedule_retry == Some(Reservation(generation: 2, delay_ms: 100))
   drain(calls)
 
-  let stale = relay_client.sync(third.state, Retried(1), succeeding)
+  let stale = relay_client.sync(third.state, Retried(1), succeeding, retry)
   assert !evaluated(calls)
   assert stale == Sync(state: third.state, messages: [], schedule_retry: None)
 
-  let _current = relay_client.sync(third.state, Retried(2), succeeding)
+  let _current = relay_client.sync(third.state, Retried(2), succeeding, retry)
   assert evaluated(calls)
+}
+
+/// 定義を得られない再試行が続くと、次に予約する待ち時間が失敗のたびに延び、
+/// 上限で頭打ちになる。
+pub fn sync_a_failed_retry_doubles_the_delay_test() {
+  let calls = process.new_subject()
+  let failing = reporting(calls, Error(Nil))
+  let state = state_with([], Some(4))
+
+  let first = relay_client.sync(state, Retried(4), failing, retry)
+  assert first.schedule_retry == Some(Reservation(generation: 5, delay_ms: 100))
+  assert first.state.delay_ms == 200
+
+  let second = relay_client.sync(first.state, Retried(5), failing, retry)
+  assert second.schedule_retry
+    == Some(Reservation(generation: 6, delay_ms: 200))
+  assert second.state.delay_ms == 400
+
+  let third = relay_client.sync(second.state, Retried(6), failing, retry)
+  assert third.schedule_retry == Some(Reservation(generation: 7, delay_ms: 400))
+  assert third.state.delay_ms == 400
+}
+
+/// 定義を得られると、次に予約する待ち時間は初期値に戻る。
+pub fn sync_a_successful_evaluation_resets_the_delay_test() {
+  let calls = process.new_subject()
+  let state =
+    SubscriptionState(
+      open: set.new(),
+      retry: None,
+      next_generation: 5,
+      delay_ms: 400,
+    )
+  let synced =
+    relay_client.sync(state, Requested, reporting(calls, Ok([])), retry)
+  assert synced.state.delay_ms == 100
 }
 
 // --- ループバックの WebSocket サーバーを使うテスト ---
@@ -467,14 +535,14 @@ fn next_evaluation() -> Int
 fn connect(
   relay: Relay,
   subscriptions: Subscriptions,
-  retry_delay_ms: Int,
+  retry_delay: backoff.Backoff,
 ) -> relay_client.Client {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
       subscriptions,
       fn(_event) { Nil },
-      retry_delay_ms,
+      retry_delay,
     )
   client
 }
@@ -486,7 +554,12 @@ pub fn a_failed_evaluation_is_retried_until_the_req_is_sent_test() {
   let frames = process.new_subject()
   let evaluations = process.new_subject()
   let relay = start_relay(frames)
-  let client = connect(relay, failing_once(evaluations), 300)
+  let client =
+    connect(
+      relay,
+      failing_once(evaluations),
+      Backoff(initial_ms: 400, max_ms: 400),
+    )
 
   assert process.receive(evaluations, 2000) == Ok(0)
   assert process.receive(frames, 200) == Error(Nil)
@@ -504,7 +577,12 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
   let frames = process.new_subject()
   let evaluations = process.new_subject()
   let relay = start_relay(frames)
-  let client = connect(relay, failing_once(evaluations), 500)
+  let client =
+    connect(
+      relay,
+      failing_once(evaluations),
+      Backoff(initial_ms: 500, max_ms: 500),
+    )
 
   assert process.receive(evaluations, 2000) == Ok(0)
   relay_client.resubscribe(client)
@@ -564,7 +642,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
       },
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { Nil },
-      reconnect_delay_ms: 100,
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
     ))
 
   assert process.receive(connections, 2000) == Ok(Nil)
@@ -591,7 +669,7 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
       relay.url,
       fn() { Ok([#(bunker, filter.new())]) },
       process.send(received, _),
-      relay_client.subscription_retry_delay_ms,
+      relay_client.subscription_retry_delay,
     )
 
   let assert Ok(verified) = process.receive(received, 2000)

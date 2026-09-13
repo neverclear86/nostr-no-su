@@ -1,4 +1,6 @@
 import gleam/erlang/process.{type Name, type Pid, type Subject}
+import gleam/option.{None, Some}
+import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 
 /// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
@@ -56,6 +58,21 @@ fn start_named(
   reports: Subject(Report),
   connect: relay_connection.Connector,
 ) -> Pid {
+  start_with_delay(
+    name,
+    reports,
+    connect,
+    Backoff(initial_ms: delay_ms, max_ms: delay_ms),
+  )
+}
+
+/// 指定した名前と待ち時間の延ばし方で接続アクターを起動する。
+fn start_with_delay(
+  name: Name(relay_connection.Msg),
+  reports: Subject(Report),
+  connect: relay_connection.Connector,
+  reconnect_delay: backoff.Backoff,
+) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: name,
@@ -63,10 +80,15 @@ fn start_named(
       connect: connect,
       on_connect: fn(_socket) { process.send(reports, Rewired) },
       on_disconnect: fn() { process.send(reports, Unwired) },
-      reconnect_delay_ms: delay_ms,
+      reconnect_delay: reconnect_delay,
     ))
   started.pid
 }
+
+/// 接続の試行の回数を 0 から数え、呼ぶ前の値を返す。接続関数は接続アクターの
+/// プロセスで呼ばれる。
+@external(erlang, "subscription_counter", "next")
+fn next_attempt() -> Int
 
 /// 接続アクターを停止する。テストプロセスにリンクしているため、先にリンクを
 /// 解除しないとアクターと一緒にテストも落ちる。
@@ -264,4 +286,84 @@ pub fn stops_when_its_parent_exits_test() {
   let assert Ok(actor) = process.receive(started, 1000)
   process.kill(parent)
   assert died_within(actor, 1000)
+}
+
+/// 接続に失敗し続けると、再接続までの待ち時間が失敗のたびに延びる。
+pub fn the_reconnect_delay_grows_while_connecting_fails_test() {
+  let reports = process.new_subject()
+  let actor =
+    start_with_delay(
+      process.new_name("test_relay"),
+      reports,
+      refuses(reports),
+      Backoff(initial_ms: 100, max_ms: 1600),
+    )
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  // 3 回目の後の待ちの基準値は 400ms（下限 320ms）なので、250ms 以内には来ない。
+  assert process.receive(reports, 250) == Error(Nil)
+  stop(actor)
+}
+
+/// 接続できると、再接続までの待ち時間は初期値に戻る。
+pub fn a_successful_connect_resets_the_reconnect_delay_test() {
+  let reports = process.new_subject()
+  let connect = fn() {
+    case next_attempt() {
+      0 | 1 | 2 -> {
+        process.send(reports, Refused)
+        Error("connection refused")
+      }
+      _ -> {
+        let socket = spawn_socket(reports)
+        process.send(reports, Connected(socket.pid))
+        Ok(socket)
+      }
+    }
+  }
+  let actor =
+    start_with_delay(
+      process.new_name("test_relay"),
+      reports,
+      connect,
+      Backoff(initial_ms: 100, max_ms: 3200),
+    )
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  let assert Ok(Connected(socket)) = process.receive(reports, 2000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+
+  process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  // 待ち時間が初期値に戻っていれば 400ms 以内に再接続する
+  // （戻さなければ基準値 800ms、下限 640ms）。
+  let assert Ok(Connected(_reconnected)) = process.receive(reports, 400)
+  stop(actor)
+}
+
+/// 再接続の失敗ログは、直前の失敗と理由が同じなら間引き、理由が変わったときと
+/// 始まりでは出す。
+pub fn reconnect_report_is_silent_while_the_reason_repeats_test() {
+  assert relay_connection.reconnect_report(None, "failed to connect: x", 5000)
+    == Some("failed to connect: x; reconnecting in 5000ms")
+  assert relay_connection.reconnect_report(
+      Some("failed to connect: x"),
+      "failed to connect: x",
+      10_000,
+    )
+    == None
+  assert relay_connection.reconnect_report(
+      Some("failed to connect: x"),
+      "failed to connect: y",
+      10_000,
+    )
+    == Some("failed to connect: y; reconnecting in 10000ms")
 }

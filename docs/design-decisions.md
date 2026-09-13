@@ -15,7 +15,7 @@ root（one_for_one）の下にプラグイン・監視・バンカーのサブ�
 
 ### リレー接続 actor は exit を trap する
 
-stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、5 秒後の再接続をスケジュールする。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
+stratus のプロセスは接続 actor にリンクされる。切断のたびに actor ごと落とすと supervisor の再起動回数を消費してしまうため、exit を trap してメッセージとして受け取り、再接続をスケジュールする（間隔は失敗のたびに倍に延ばし、同じ理由の失敗が続く間はログを出さず、復帰したら `connected` を出す）。gleam_otp の actor ループは trap した exit を未知のメッセージとして捨てるので、supervisor からの shutdown は接続 actor 側で検出し、trap を解除して同じ理由で exit し直す（リンク経由でソケットも一緒に終了する）
 
 ## 監視
 
@@ -89,7 +89,7 @@ DB の停止はプロセスの死にならない（pgo が再接続を内部で�
 
 ### 署名者を問い合わせられないときは購読を変えない
 
-バンカー actor が 5 秒以内に応答せず購読の定義を得られないときは、開いている購読を閉じずにそのままにし、5 秒ごとに再試行する（ログは `could not evaluate subscriptions; keeping the current ones and retrying in 5000ms`）。応答が無いことを署名者 0 件として扱うと、actor が DB の書き込みで詰まっている間に全署名者の購読を閉じてしまうためである。予約する再試行は常に 1 つだけで、世代を付けて古いタイマーを捨てる
+バンカー actor が 5 秒以内に応答せず購読の定義を得られないときは、開いている購読を閉じずにそのままにし、5 秒から倍に延ばして 2 分で頭打ちにしながら再試行する（ログは `could not evaluate subscriptions; keeping the current ones and retrying in <ms>ms`）。応答が無いことを署名者 0 件として扱うと、actor が DB の書き込みで詰まっている間に全署名者の購読を閉じてしまうためである。予約する再試行は常に 1 つだけで、世代を付けて古いタイマーを捨てる
 
 ### DB の行を直接変えても実行中のバンカーには反映されない
 

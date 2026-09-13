@@ -11,12 +11,17 @@ import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import nostr_no_su/backoff
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 
-/// 接続が切れた、あるいは拒否された後、再接続するまでの待ち時間。
-pub const default_reconnect_delay_ms = 5000
+/// 接続が切れた、あるいは拒否された後の再接続の待ち時間。5 秒から倍にして 5 分で
+/// 頭打ちにし、接続できたら 5 秒から数え直す。
+pub const default_reconnect_delay = backoff.Backoff(
+  initial_ms: 5000,
+  max_ms: 300_000,
+)
 
 /// 状態の問い合わせを待つ時間。接続試行はアクターのループをブロックするため、
 /// `relay_client` の connect タイムアウト（3 秒）より長く取る。
@@ -42,7 +47,7 @@ pub type Status {
 
 /// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
 /// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、ソケットを
-/// 失ったときに行う処理、再接続までの待ち時間。
+/// 失ったときに行う処理、再接続の待ち時間の延ばし方。
 pub type Settings {
   Settings(
     name: Name(Msg),
@@ -50,7 +55,7 @@ pub type Settings {
     connect: Connector,
     on_connect: fn(Socket) -> Nil,
     on_disconnect: fn() -> Nil,
-    reconnect_delay_ms: Int,
+    reconnect_delay: backoff.Backoff,
   )
 }
 
@@ -91,6 +96,10 @@ type State {
     parent: Pid,
     self: Subject(Msg),
     socket: Option(Socket),
+    /// 直前の失敗の理由。接続中や未失敗なら `None`。
+    failure: Option(String),
+    /// 次に失敗したときの、ジッターを掛ける前の待ち時間。
+    delay_ms: Int,
   )
 }
 
@@ -102,9 +111,10 @@ pub fn supervised(settings: Settings) -> ChildSpecification(Subject(Msg)) {
   supervision.worker(fn() { start(settings) })
 }
 
-/// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、URL が
-/// 1 つ不正でもサブツリー全体の起動が失敗することはない。`name` で登録するため、
-/// 管理 UI は再起動をまたいで同じ宛先に状態を問い合わせられる。
+/// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、1 つの
+/// リレーの障害でサブツリー全体の起動が失敗することはない（URL の形は起動時に
+/// 検査する）。`name` で登録するため、管理 UI は再起動をまたいで同じ宛先に状態を
+/// 問い合わせられる。
 pub fn start(settings: Settings) -> actor.StartResult(Subject(Msg)) {
   // `start` はアクターをリンクするプロセス上で動く。スーパーバイザー配下では
   // それはスーパーバイザー自身であり、そこからの exit は停止要求を意味する。
@@ -130,7 +140,14 @@ fn initialise(
     process.new_selector()
     |> process.select(self)
     |> process.select_trapped_exits(Exited)
-  State(settings: settings, parent: parent, self: self, socket: None)
+  State(
+    settings: settings,
+    parent: parent,
+    self: self,
+    socket: None,
+    failure: None,
+    delay_ms: settings.reconnect_delay.initial_ms,
+  )
   |> actor.initialised
   |> actor.selecting(selector)
   |> actor.returning(self)
@@ -180,12 +197,25 @@ fn socket_pid(state: State) -> Option(Pid) {
 }
 
 /// ソケットを開き、新しいソケットを `on_connect` に渡す。リレーに到達できない
-/// ときは再試行を予約する。
+/// ときは再試行を予約する。失敗の後に接続できたらその旨を 1 行出し、待ち時間を
+/// 初期値に戻す。
 fn open(state: State) -> actor.Next(State, Msg) {
   case state.settings.connect() {
     Ok(socket) -> {
+      case state.failure {
+        Some(_) ->
+          log.println(log.relay_prefix(state.settings.relay), "connected")
+        None -> Nil
+      }
       state.settings.on_connect(socket)
-      actor.continue(State(..state, socket: Some(socket)))
+      actor.continue(
+        State(
+          ..state,
+          socket: Some(socket),
+          failure: None,
+          delay_ms: state.settings.reconnect_delay.initial_ms,
+        ),
+      )
     }
     Error(reason) -> reconnect(state, "failed to connect: " <> reason)
   }
@@ -193,16 +223,38 @@ fn open(state: State) -> actor.Next(State, Msg) {
 
 /// ソケットが失われた理由をログ出力し、`on_connect` で配った送信手段を撤回して
 /// もらったうえで、次の試行を予約する。接続そのものに失敗した場合も通るが、
-/// 配っていない送信手段の撤回は何も起こさないため区別しない。
+/// 配っていない送信手段の撤回は何も起こさないため区別しない。同じ理由の失敗が
+/// 続く間はログを出さない。待ち時間は失敗のたびに延ばす。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
-  let delay = state.settings.reconnect_delay_ms
-  log.println(
-    log.relay_prefix(state.settings.relay),
-    reason <> "; reconnecting in " <> int.to_string(delay) <> "ms",
-  )
+  let delay = backoff.jittered(state.delay_ms)
+  case reconnect_report(state.failure, reason, delay) {
+    Some(line) -> log.println(log.relay_prefix(state.settings.relay), line)
+    None -> Nil
+  }
   let _ = process.send_after(state.self, delay, Connect)
-  actor.continue(State(..state, socket: None))
+  actor.continue(
+    State(
+      ..state,
+      socket: None,
+      failure: Some(reason),
+      delay_ms: backoff.next(state.settings.reconnect_delay, state.delay_ms),
+    ),
+  )
+}
+
+/// 再接続を予約するときに出すログ行。直前の失敗と同じ理由なら `None`、それ以外は
+/// `<reason>; reconnecting in <delay_ms>ms`。`bunker.load_report` と同じく、
+/// 失敗の始まりと理由の変化だけを報告する。
+pub fn reconnect_report(
+  previous_failure: Option(String),
+  reason: String,
+  delay_ms: Int,
+) -> Option(String) {
+  case previous_failure {
+    Some(previous) if previous == reason -> None
+    _ -> Some(reason <> "; reconnecting in " <> int.to_string(delay_ms) <> "ms")
+  }
 }
 
 /// 停止を要求する exit シグナルを受けて終了する。アクターのループは trap した

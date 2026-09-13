@@ -282,6 +282,44 @@ pub fn plugin_env_drops_empty_values_test() {
   assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH") == Error(Nil)
 }
 
+/// 監視とバンカーのリレー URL がどちらも WebSocket の URL として解釈できれば
+/// 起動を止めない。
+pub fn check_relay_urls_accepts_websocket_urls_test() {
+  let loaded =
+    config_with([
+      #("RELAY_URL", "wss://relay.example,ws://127.0.0.1:7777"),
+      #("BUNKER_RELAY_URL", ""),
+    ])
+  assert config.check_relay_urls(loaded) == Ok(Nil)
+}
+
+/// `RELAY_URL` の不正な URL は、上書きが無く `bunker_relay_urls` にも入っていても
+/// `RELAY_URL` を名指しで報告する。
+pub fn check_relay_urls_reports_the_monitor_variable_test() {
+  let loaded =
+    config_with([
+      #("RELAY_URL", "wss://relay.example,relay.damus.io"),
+      #("BUNKER_RELAY_URL", ""),
+    ])
+  assert config.check_relay_urls(loaded)
+    == Error(
+      "RELAY_URL has an invalid relay url: relay.damus.io (use ws:// or wss://)",
+    )
+}
+
+/// `BUNKER_RELAY_URL` の不正な URL は `BUNKER_RELAY_URL` を名指しで報告する。
+pub fn check_relay_urls_reports_the_bunker_variable_test() {
+  let loaded =
+    config_with([
+      #("RELAY_URL", "wss://relay.example"),
+      #("BUNKER_RELAY_URL", "relay.bunker"),
+    ])
+  assert config.check_relay_urls(loaded)
+    == Error(
+      "BUNKER_RELAY_URL has an invalid relay url: relay.bunker (use ws:// or wss://)",
+    )
+}
+
 /// テスト用の管理パスワード。
 const test_password = "test-admin-password"
 

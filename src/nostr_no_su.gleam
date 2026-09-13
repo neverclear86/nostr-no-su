@@ -50,7 +50,8 @@ type Startup {
 
 /// 設定されたリレーとアカウントのスーパービジョンツリーを起動し、以降は待機
 /// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
-/// バンカーか管理 UI を起動できない設定なら、理由を 1 行出して終了コード 1 で終了する。
+/// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、理由を 1 行出して
+/// 終了コード 1 で終了する。
 pub fn main() -> Nil {
   ensure_ssl_started()
   case startup(config.load()) {
@@ -73,13 +74,14 @@ pub fn main() -> Nil {
 /// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
-/// バンカーか管理 UI を起動できない設定なら、プラグインの読み込みより前にその
-/// 理由を返す。
+/// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、プラグインの
+/// 読み込みより前にその理由を返す。
 ///
 /// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
 /// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
 /// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Result(Startup, String) {
+  use Nil <- result.try(config.check_relay_urls(loaded))
   use #(bunker, bunker_notes) <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins()
@@ -99,7 +101,7 @@ fn startup(loaded: Config) -> Result(Startup, String) {
       bunker: bunker,
       admin: admin,
       open: app.open_websocket,
-      reconnect_delay_ms: relay_connection.default_reconnect_delay_ms,
+      reconnect_delay: relay_connection.default_reconnect_delay,
     ),
     notes: list.flatten([
       monitor_notes,
