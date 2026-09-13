@@ -748,9 +748,10 @@ pub fn a_failed_revocation_keeps_the_session_test() {
   stop_tree(tree)
 }
 
-/// `connect` の書き込みがすべて失敗しても、secret の一致・不一致のどちらでも
-/// メモリを変えずに `connection_not_saved` を返し、ストアの理由をクライアントへ
-/// 漏らさない。承認待ちを作る `connect` も `auth_url` を返さない。
+/// `connect` の書き込みがすべて失敗しても、secret の一致した `connect` でも
+/// 承認待ちを作る `connect` でもメモリを変えずに `connection_not_saved` を返し、
+/// ストアの理由をクライアントへ漏らさない。承認待ちを作る `connect` も
+/// `auth_url` を返さない。
 pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
