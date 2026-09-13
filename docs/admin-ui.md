@@ -51,10 +51,10 @@ secret を持たない `bunker://` URI（ダッシュボードの「接続 URI�
 
 承認される前にクライアントが再読み込みして `connect` を送り直した場合、承認待ちは最新の要求に置き換わる（同じクライアントの保留が並ばないようにするため）。先に受け取った `auth_url` のページは 404 になるので、新しく開かれた方の承認ページを使う。
 
-承認待ちはダッシュボードの「承認待ちの接続」（`Pending connections`）からも承認・拒否でき、10 分で失効する。一度承認したクライアントは、以後 secret 無しで `connect` し直しても承認を求められない（取り消すには「承認済みのセッション」（`Approved sessions`）の「承認を取り消す」（`Revoke`）を使う）。
+承認待ちはダッシュボードの「承認待ちの接続」（`Pending connections`）からも承認・拒否でき、10 分で失効する。一度承認したクライアントは、以後 secret 無しで `connect` し直しても承認を求められない（取り消すには「承認済みのセッション」（`Approved sessions`）の「承認を取り消す」（`Revoke`）を使う）。取り消すとダッシュボードへ戻る。承認済みのセッションに無い組（取り消し済みなど）の取り消しは `Not found`（404）、バンカーが応答しないときは「変更を確認できませんでした」（`Change not confirmed`）（503）のページになる。
 
 ## 状態を変えるリクエストと枠への埋め込み
 
 GET と HEAD 以外のリクエストは、ルーティングの前ですべて `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでいる（ルートごとの検査ではない）。`Origin` も `Referer` も送らないクライアント（curl など）は、cookie を取り除いたうえでそのまま通る。前段にリバースプロキシーを置くときの `Host` の渡し方は、[README](../README.md) の「リバースプロキシーの設定」にある。
 
-認証済みの応答にはすべて `cache-control: no-store` と、枠への埋め込みを禁じる `x-frame-options: DENY` / `content-security-policy: frame-ancestors 'none'` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。
+認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じる `x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。CSP（`default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`）は、管理 UI が配信するファイルのスクリプトだけを実行させ、HTML に何かが注入されてもインラインのスクリプトとイベント属性を実行させない。`referrer-policy` を `no-referrer` にしないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査がすべての POST を 400 にするためである。
