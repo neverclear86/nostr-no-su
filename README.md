@@ -44,7 +44,7 @@ chmod 600 .env
 docker compose up --build
 ```
 
-すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にある（`POSTGRES_*` は例外で「docker compose」の節にある）。`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
+すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にあり、`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
 
 起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
 
@@ -165,7 +165,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数だけは例外で、アプリ自身は読まず、docker compose に同梱した Postgres のイメージだけが読む（デフォルトの欄はそのイメージの既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数だけは例外で、アプリ自身は読まず、docker compose に同梱した Postgres のイメージだけが読む（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `BUNKER_RELAY_URL` | `RELAY_URL` と同じ | バンカーが購読・応答するリレーの URL（カンマ区切りで複数可）。`RELAY_URL` も空なら `wss://relay.damus.io` |
 | `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1）。`DATABASE_URL_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない。`ACCOUNT_MASTER_KEY_FILE` でファイルから読める（「秘密をファイルで渡す」） |
-| `POSTGRES_USER` | `nostr` | docker compose 専用。同梱の Postgres の接続ユーザー名（アプリ自身は読まない）。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値をこれから組み立てる。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
+| `POSTGRES_USER` | `nostr` | docker compose 専用。同梱の Postgres の接続ユーザー名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
 | `POSTGRES_PASSWORD` | `nostr` | docker compose 専用。同梱の Postgres の接続パスワード（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
 | `POSTGRES_DB` | `nostr_no_su` | docker compose 専用。同梱の Postgres のデータベース名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときは空にせず、プラグインを置かない。docker compose では同梱の Postgres を指す |
