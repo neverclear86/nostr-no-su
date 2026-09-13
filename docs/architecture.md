@@ -574,7 +574,7 @@ nostr-no-su/
 | `PLUGIN_<NAME>_<KEY>` | 各プラグイン | プラグインが判断する |
 | `ADMIN_PORT` | 管理 UI | `8080` で待ち受ける |
 | `ADMIN_BIND` | 管理 UI | `127.0.0.1` で待ち受ける |
-| `ADMIN_PASSWORD` | 管理 UI | 起動ごとに乱数で生成する |
+| `ADMIN_PASSWORD` | 管理 UI | 理由を 1 行出して終了する（`ADMIN_PORT` が空か不正なら読まない） |
 | `ADMIN_BASE_URL` | バンカー（承認ページの URL） | `http://localhost:<ADMIN_PORT>` を使う |
 
 プラグイン固有の設定だけは本体が中身を解釈しない。

@@ -20,7 +20,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 
 ### バンカーとして使う
 
-アカウント（秘密鍵と接続 secret）は Postgres に暗号化して保存する。起動には、保存先の `DATABASE_URL` と、暗号化に使うマスターキー `ACCOUNT_MASTER_KEY` の 2 つが必要である。マスターキーは 32 バイトの乱数を 16 進にしたもので、次のように作る:
+アカウント（秘密鍵と接続 secret）は Postgres に暗号化して保存する。起動には、保存先の `DATABASE_URL`、暗号化に使うマスターキー `ACCOUNT_MASTER_KEY`、管理 UI（次節）のパスワード `ADMIN_PASSWORD` の 3 つが必要である。マスターキーは 32 バイトの乱数を 16 進にしたもので、次のように作る:
 
 ```sh
 openssl rand -hex 32
@@ -29,20 +29,22 @@ openssl rand -hex 32
 ```sh
 DATABASE_URL=postgres://nostr:nostr@127.0.0.1:5432/nostr_no_su \
 ACCOUNT_MASTER_KEY=<openssl rand -hex 32 の出力> \
+ADMIN_PASSWORD=<openssl rand -base64 24 の出力> \
 BUNKER_RELAY_URL=wss://relay.nsec.app,wss://relay.nostr.band \
 gleam run
 ```
 
-docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーだけである:
+docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーと管理パスワードだけである:
 
 ```sh
 [ -e .env ] || cp .env.example .env
 chmod 600 .env
 # .env の ACCOUNT_MASTER_KEY= の後に、上の openssl rand -hex 32 の出力を書く
+# .env の ADMIN_PASSWORD= の後に、openssl rand -base64 24 の出力を書く
 docker compose up --build
 ```
 
-すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。ほかの変数の既定値と書き方は `.env.example` のコメントにある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーを書く `.env` をホストのほかのユーザーから読めないようにする。
+すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。ほかの変数の既定値と書き方は `.env.example` のコメントにある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
 
 起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
 
@@ -54,7 +56,7 @@ docker compose up --build
 
 登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。
 
-どちらかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: ...; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
+いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: ...; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
 
 バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数指定すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。`BUNKER_RELAY_URL` を省略すると `RELAY_URL` と同じリレーを使う（`RELAY_URL` も空なら `wss://relay.damus.io`）。
 
@@ -101,11 +103,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 nsec 入力による登録の完了ページを再読み込みすると、同じ nsec の再送は 409 になり、nsec は再び表示されない。生成の確認ページを再読み込みすると、別の鍵の確認ページが出るだけで何も登録されない。生成した鍵の登録でラベルだけが規則に反した場合は、生成した鍵を失わないよう、同じ鍵の確認ページが理由付きで出る（400）。
 
-認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する。未設定なら起動ごとにランダム生成してログに出力する:
-
-```
-[admin] generated password for user "admin": <password>
-```
+認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。`ADMIN_PORT=` で管理 UI を無効にした構成では要らない。パスワードは自動生成しない。
 
 `ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
@@ -180,7 +178,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
-| `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。未設定なら起動ごとにランダム生成してログに出力 |
+| `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 
 注 1: `DATABASE_URL` の userinfo はパーセントデコードされない。`:` を含むパスワードや、データベース名の無い URL は解釈できず、`[main] cannot start: DATABASE_URL is not a valid postgres URL` を出して終了する（URL そのものはログに出さない）。
