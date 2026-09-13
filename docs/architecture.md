@@ -379,6 +379,7 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 
 管理 UI は、変更の結果を型 `bunker.ChangeFailure` で受け取り、状態コードに写す。
 文言は本文に出すだけで、分岐には使わない。
+`MaybeApplied` は原因を `bunker.NotConfirmed` で持ち、管理 UI が表示の言語の文言に写す。
 
 | 結果 | アクターのどの分岐から来るか | 管理 UI の応答 |
 | --- | --- | --- |
