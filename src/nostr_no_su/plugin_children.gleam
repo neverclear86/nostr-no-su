@@ -419,7 +419,7 @@ fn start(
     Error(reason) -> {
       let detail =
         "child \"" <> spec.id <> "\" failed to start (" <> reason <> ")"
-      log.println(log.plugin_prefix(name), detail)
+      log.write(log.Warning, log.plugin_prefix(name), detail)
       Error(actor.InitFailed(detail))
     }
   }

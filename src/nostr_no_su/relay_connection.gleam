@@ -204,7 +204,11 @@ fn open(state: State) -> actor.Next(State, Msg) {
     Ok(socket) -> {
       case state.failure {
         Some(_) ->
-          log.println(log.relay_prefix(state.settings.relay), "connected")
+          log.write(
+            log.Notice,
+            log.relay_prefix(state.settings.relay),
+            "connected",
+          )
         None -> Nil
       }
       state.settings.on_connect(socket)
@@ -229,7 +233,8 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
   let delay = backoff.jittered(state.delay_ms)
   case reconnect_report(state.failure, reason, delay) {
-    Some(line) -> log.println(log.relay_prefix(state.settings.relay), line)
+    Some(line) ->
+      log.write(log.Warning, log.relay_prefix(state.settings.relay), line)
     None -> Nil
   }
   let _ = process.send_after(state.self, delay, Connect)

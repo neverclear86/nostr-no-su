@@ -326,7 +326,7 @@ fn plugin_children_supervisor() -> Builder {
 /// **`StartError` は整形しない。** `gleam_otp_external` が
 /// `{shutdown, {failed_to_start_child, Id, Reason}}` を `InitFailed("shutdown")`
 /// に潰すため、ここには理由が届かない。真の理由は `plugin_children` が子ごとに
-/// 出す 1 行と、BEAM の `=SUPERVISOR REPORT=` にある。
+/// 出す 1 行と、BEAM の supervisor report にある。
 fn start_plugin_children(
   name: String,
   builder: Builder,
@@ -334,10 +334,11 @@ fn start_plugin_children(
   case supervisor.start(builder) {
     Ok(started) -> Ok(started)
     Error(_reason) -> {
-      log.println(
+      log.write(
+        log.Warning,
         log.plugin_prefix(name),
         "children failed to start; the reason is in the child line above, "
-          <> "or in the =SUPERVISOR REPORT=; running without them",
+          <> "or in the supervisor report; running without them",
       )
       supervisor.start(plugin_children_supervisor())
     }

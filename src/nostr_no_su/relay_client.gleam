@@ -243,7 +243,11 @@ pub fn start(
       }
     })
     |> stratus.on_close(fn(_session, reason) {
-      log.println(prefix, "connection closed: " <> string.inspect(reason))
+      log.write(
+        log.Notice,
+        prefix,
+        "connection closed: " <> string.inspect(reason),
+      )
     })
 
   case stratus.start(builder) {
@@ -375,7 +379,8 @@ fn synchronise(
     None -> Nil
     Some(reservation) -> {
       let delay = backoff.jittered(reservation.delay_ms)
-      log.println(
+      log.write(
+        log.Warning,
         prefix,
         "could not evaluate subscriptions; keeping the current ones and retrying in "
           <> int.to_string(delay)
@@ -418,12 +423,17 @@ fn check_keepalive(
       case stratus.send_ping(conn, ping_payload) {
         Ok(Nil) -> Nil
         Error(reason) ->
-          log.println(prefix, "failed to send ping: " <> string.inspect(reason))
+          log.write(
+            log.Warning,
+            prefix,
+            "failed to send ping: " <> string.inspect(reason),
+          )
       }
       continue_after_tick(session, next, interval_ms)
     }
     keepalive.Unresponsive -> {
-      log.println(
+      log.write(
+        log.Warning,
         prefix,
         "no data or pong within "
           <> int.to_string(interval_ms)
@@ -457,7 +467,8 @@ fn send_message(
   case stratus.send_text_message(connection, text) {
     Ok(Nil) -> Nil
     Error(reason) ->
-      log.println(
+      log.write(
+        log.Warning,
         prefix,
         "failed to send "
           <> describe_outgoing(outgoing)
@@ -542,11 +553,12 @@ pub fn handle_text(
 ) -> Nil {
   case interpret(text) {
     Deliver(verified) -> handle_event(verified)
-    Report(line) -> log.println(prefix, line)
+    Report(line) -> log.write(log.Notice, prefix, line)
     Acknowledge(ack) -> {
       case ack.accepted {
         False ->
-          log.println(
+          log.write(
+            log.Warning,
             prefix,
             "rejected event " <> ack.event_id <> ": " <> ack.message,
           )

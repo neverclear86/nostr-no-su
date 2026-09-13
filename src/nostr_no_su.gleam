@@ -1,5 +1,4 @@
 import gleam/erlang/process.{type Name}
-import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -40,11 +39,18 @@ const bunker_since_lookback_seconds = 60
 @external(erlang, "nostr_no_su_ffi", "ensure_ssl_started")
 fn ensure_ssl_started() -> Nil
 
-/// 終了コード `status` で VM を直ちに止める。それまでに標準出力へ書いた行は書き出して
-/// から止まる。`main` が返ると、生成されたエントリーポイントが終了コード 0 で止める
-/// ので、失敗として終了するときはこれを使う。
+/// 終了コード `status` で VM を直ちに止める。既定のログハンドラーは少ない件数を
+/// 非同期に書くため、直前のログ行が書き出される保証は無い。失敗として終了する
+/// ときは `exit_with_failure` を使うこと。`main` が返ると、生成されたエントリー
+/// ポイントが終了コード 0 で止める。
 @external(erlang, "erlang", "halt")
 fn halt(status: Int) -> Nil
+
+/// 溜まったログ行を書き終えてから終了コード 1 で VM を止める。
+fn exit_with_failure() -> Nil {
+  log.flush()
+  halt(1)
+}
 
 /// 起動時に組み立てたツリーの仕様と、その報告行。組み立てから出力を分けることで、
 /// 何をどう報告するかが `main` の 1 か所に集まる。
@@ -57,14 +63,15 @@ type Startup {
 /// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、理由を 1 行出して
 /// 終了コード 1 で終了する。
 pub fn main() -> Nil {
+  log.configure()
   ensure_ssl_started()
   case startup(config.load()) {
     Error(reason) -> {
-      log.println(log_prefix, "cannot start: " <> reason)
-      halt(1)
+      log.write(log.Error, log_prefix, "cannot start: " <> reason)
+      exit_with_failure()
     }
     Ok(started) -> {
-      list.each(started.notes, io.println)
+      list.each(started.notes, log.write_line(log.Notice, _))
       // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
       // クラッシュさせる。コンテナーの再起動はプロセスの終了で起き、終了コードは
       // 失敗を示す。
@@ -86,13 +93,14 @@ pub fn main() -> Nil {
 /// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Result(Startup, String) {
   use Nil <- result.try(config.check_relay_urls(loaded))
+  use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use #(bunker, bunker_notes) <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
-  let builtin = builtin_plugins()
+  let builtin = builtin_plugins(console_logger_enabled)
   let #(external, plugin_notes) =
     plugin_loader.load_all(
       loaded.plugin_dir,
-      list.map(builtin, fn(item) { item.name }),
+      [console_logger.name],
       loaded.plugin_env,
       plugin.default_call_timeout_ms,
     )
@@ -202,7 +210,8 @@ fn resume_point_loader(
     resume_store.load(db, relay_url)
     |> result.map_error(fn(error) {
       let reason = account_store.describe(error)
-      log.println(
+      log.write(
+        log.Warning,
         log.relay_prefix(relay_client.label(relay_url)),
         "could not load resume point: " <> reason,
       )
@@ -229,10 +238,16 @@ fn resume_point_saver(
 /// （`children: []`）。イベント保存は外部プラグイン `event_logger` の仕事に
 /// なったので、ここには含まれない。
 /// **内蔵プラグインは `plugin.load` を通らないので設定 map を受け取らない。**
-/// その設定は従来どおり `config.gleam` が持つため、`PLUGIN_CONSOLE_LOGGER_*` の
-/// ような変数を書いても誰も読まない。
-fn builtin_plugins() -> List(Plugin) {
-  [console_logger.new()]
+/// 内蔵プラグインの設定は `config.gleam` が読む。`PLUGIN_CONSOLE_LOGGER_ENABLED`
+/// だけがある。
+///
+/// `enabled` が `False` なら空リストを返す。予約名（`console_logger.name`）は
+/// 無効時も外部プラグインに使わせないため、呼び出し側で別に渡す。
+fn builtin_plugins(enabled: Bool) -> List(Plugin) {
+  case enabled {
+    True -> [console_logger.new()]
+    False -> []
+  }
 }
 
 /// 承認待ちの token から、クライアントへ渡す承認ページの URL を組み立てる関数。
@@ -353,19 +368,20 @@ pub fn account_store_operations(
 
 /// 読み込みの結果が、再試行しても変わらない失敗（DB のスキーマがビルドより新しい、
 /// 別のインスタンスが同じ DB を使っている）を示していたら、`cannot continue: <理由>`
-/// を 1 行出して終了コード 1 で VM を止める。`halt` は戻らないので、それ以外の
-/// 結果だけがそのまま返る。
+/// を 1 行出して終了コード 1 で VM を止める（`exit_with_failure`）。それ以外の
+/// 結果はそのまま返る。
 fn halt_if_cannot_continue(
   loaded: Result(vault.Loaded, account_store.StoreError),
 ) -> Result(vault.Loaded, account_store.StoreError) {
   case loaded {
     Error(account_store.SchemaTooNew(..) as error)
     | Error(account_store.HeldByAnotherInstance(..) as error) -> {
-      log.println(
+      log.write(
+        log.Error,
         log_prefix,
         "cannot continue: " <> account_store.describe(error),
       )
-      halt(1)
+      exit_with_failure()
       loaded
     }
     _ -> loaded

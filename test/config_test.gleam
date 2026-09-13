@@ -442,6 +442,38 @@ pub fn auth_url_base_test() {
     == None
 }
 
+/// 未設定なら有効（`True`）に倒す。docker compose は未設定の変数を空文字列で
+/// 渡すため、`optional/1` を経由した `None` もここに含まれる。
+pub fn parse_enabled_defaults_to_true_test() {
+  assert config.parse_enabled("PLUGIN_CONSOLE_LOGGER_ENABLED", None) == Ok(True)
+}
+
+/// `"true"` / `"false"` はその値になる。
+pub fn parse_enabled_reads_true_and_false_test() {
+  assert config.parse_enabled("PLUGIN_CONSOLE_LOGGER_ENABLED", Some("true"))
+    == Ok(True)
+  assert config.parse_enabled("PLUGIN_CONSOLE_LOGGER_ENABLED", Some("false"))
+    == Ok(False)
+}
+
+/// それ以外の値は、変数名と値を含む理由で拒否する。誤記（`flase` など）を
+/// 黙って既定に倒すと、切ったつもりで出続けてしまうため。
+pub fn parse_enabled_rejects_other_values_test() {
+  assert config.parse_enabled("PLUGIN_CONSOLE_LOGGER_ENABLED", Some("flase"))
+    == Error(
+      "PLUGIN_CONSOLE_LOGGER_ENABLED must be true or false, got \"flase\"",
+    )
+}
+
+/// `load` は `PLUGIN_CONSOLE_LOGGER_ENABLED` を読んで `console_logger_enabled`
+/// に持つ。
+pub fn load_reads_console_logger_enabled_test() {
+  assert config_with([#("PLUGIN_CONSOLE_LOGGER_ENABLED", "false")]).console_logger_enabled
+    == Ok(False)
+  assert config_without("PLUGIN_CONSOLE_LOGGER_ENABLED").console_logger_enabled
+    == Ok(True)
+}
+
 /// 署名者が 0 件なら購読を定義せず、`since` を評価しない。署名者がいれば `since`
 /// を呼び、フィルターに `authors` と `since` を入れる。`since` が `Error(Nil)` なら
 /// 定義を得られなかったことにする。
