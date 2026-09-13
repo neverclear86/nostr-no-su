@@ -13,6 +13,9 @@
 //// テーブルの DDL は版つきの移行（`migrations`）として持ち、`load` のたびに
 //// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
 //// ビルドより新しければ `SchemaTooNew` を返す。
+////
+//// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
+//// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
 
 import gleam/bit_array
 import gleam/crypto
@@ -30,11 +33,15 @@ import pog
 /// 1 本だと再接続の間は完全に使えなくなるので 2 本にする。
 const pool_size = 2
 
+/// 同じ DB に 1 インスタンスだけを許すための advisory lock の番号。ASCII の
+/// `nns`（`nostr-no-su`）を 16 進にした値。
+pub const instance_lock_key = 7_237_235
+
 /// ストアの操作の期限。どちらもチェックアウトを要求した時点から数えるので、プールの
 /// 接続を待つ時間（期限切れで閉じた接続の再接続を含む）もこの値に含まれる。
 pub type Timeouts {
   Timeouts(
-    /// 読み込み 1 回（スキーマの移行、ロック、一覧）全体の期限。
+    /// 読み込み 1 回（スキーマの移行、テーブルのロック、一覧）全体の期限。
     load_ms: Int,
     /// 書き込み 1 件の期限。
     write_ms: Int,
@@ -55,7 +62,9 @@ pub type Timeouts {
 ///   問い合わせが収まるようにする。期限を過ぎたとき、クエリーがすでにサーバーに届いて
 ///   いれば、サーバーはクライアントの切断を検出せずに文を実行し終えてコミットしうる。
 ///   そのため書き込みの `TimedOut` は「書き込まれたかどうか分からない」を意味する
-///   （`may_have_been_written`）。
+///   （`may_have_been_written`）。`acquire_lock` の期限もこの値を使う。`load` の前に
+///   呼ぶので、ロックと読み込み（3000ms）を合わせても署名者の問い合わせの 5000ms に
+///   収まる。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
@@ -106,6 +115,9 @@ const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 /// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。
 const lock_sql = "LOCK TABLE bunker_accounts IN SHARE MODE"
 
+/// セッション単位の advisory lock を取る（待たない）。
+const try_lock_sql = "SELECT pg_try_advisory_lock($1)"
+
 /// 全行の読み込み。表示とテストが安定するよう登録順に並べる。
 const select_sql = "SELECT pubkey, label, encrypted_privkey, encrypted_secret
 FROM bunker_accounts
@@ -148,6 +160,9 @@ pub type StoreError {
   /// DB に記録されたスキーマの版（`found`）が、このビルドの移行の最新の版
   /// （`supported`）より新しい。再試行しても変わらない。
   SchemaTooNew(found: Int, supported: Int)
+  /// 同じ DB の advisory lock `key` を別のセッションが持っている。別のインスタンス
+  /// が動いているので、再試行しても変わらない。
+  HeldByAnotherInstance(key: Int)
 }
 
 /// 期限つきのトランザクションを実行できなかった理由。
@@ -171,6 +186,15 @@ pub fn pool_config(
   |> result.replace_error("DATABASE_URL is not a valid postgres URL")
 }
 
+/// ロック専用の 1 本のプールの設定。本数を 1 にするのは、ロックを取った接続と次に
+/// 確かめる接続を同じにするためである。
+pub fn lock_pool_config(
+  name: Name(pog.Message),
+  pool: pog.Config,
+) -> pog.Config {
+  pog.Config(..pool, pool_name: name, pool_size: 1)
+}
+
 /// 版 `current` の DB に適用する移行を、`migrations` の並びのまま返す。`current` が
 /// `migrations` の最新の版より新しければ `SchemaTooNew` を返す。
 pub fn pending_migrations(
@@ -185,6 +209,30 @@ pub fn pending_migrations(
     True -> Error(SchemaTooNew(found: current, supported: supported))
     False ->
       Ok(list.filter(migrations, fn(migration) { migration.version > current }))
+  }
+}
+
+/// セッション単位の advisory lock `key` を `db` のセッションで取る。同じセッション
+/// がすでに持っていれば再入で成功し、解放はしない（セッションの終わりで外れる）。
+/// 別のセッションが持っていれば `HeldByAnotherInstance(key)`。`db` は 1 本のプール
+/// （`lock_pool_config`）で、トランザクションの外で呼ぶ（`pgo:query/3` はトランザク
+/// ション中に別のプールを指すと例外を投げる）。
+pub fn acquire_lock(
+  db: pog.Connection,
+  key: Int,
+  timeouts: Timeouts,
+) -> Result(Nil, StoreError) {
+  use returned <- result.try(
+    pog.query(try_lock_sql)
+    |> pog.parameter(pog.int(key))
+    |> pog.returning(decode.at([0], decode.bool))
+    |> pog.timeout(timeouts.write_ms)
+    |> execute(db),
+  )
+  case returned.rows {
+    [True] -> Ok(Nil)
+    [False] -> Error(HeldByAnotherInstance(key))
+    _ -> Error(QueryFailed("unexpected lock result"))
   }
 }
 
@@ -365,7 +413,8 @@ pub fn may_have_been_written(error: StoreError) -> Bool {
     | AlreadyRegistered
     | NotRegistered
     | QueryFailed(_)
-    | SchemaTooNew(..) -> False
+    | SchemaTooNew(..)
+    | HeldByAnotherInstance(..) -> False
   }
 }
 
@@ -386,6 +435,10 @@ pub fn describe(error: StoreError) -> String {
       <> " is newer than this build supports (up to version "
       <> int.to_string(supported)
       <> ")"
+    HeldByAnotherInstance(key:) ->
+      "another instance is using this database (advisory lock "
+      <> int.to_string(key)
+      <> " is held by another session)"
   }
 }
 

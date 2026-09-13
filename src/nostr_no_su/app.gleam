@@ -6,8 +6,8 @@
 //// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
 //// |   `-- runner(<plugin>)   (worker  / Permanent)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、次にリレーごとの接続
-//// |-- bunker       (rest_for_one): アカウントストアの接続プール、バンカーアクター、
-//// |                                次にリレーごとの接続
+//// |-- bunker       (rest_for_one): アカウントストアの接続プール、ロックのプール、
+//// |                                バンカーアクター、次にリレーごとの接続
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
@@ -155,11 +155,13 @@ pub type Monitor {
 
 /// バンカーサブツリー。アカウントストアの接続プールと、NIP-46 アクターと、それが
 /// 待ち受け・応答するリレー群。`pool` はパスワードを含みうるので、表示やログに
-/// 入れないこと。
+/// 入れないこと。`lock_pool` は同じ DB に 1 インスタンスだけを許すロック専用の
+/// 1 本のプール。`pool` と同じくパスワードを含みうる。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
     pool: pog.Config,
+    lock_pool: pog.Config,
     settings: bunker.Settings,
     relays: List(Relay),
     subscriptions: Subscriptions,
@@ -368,13 +370,16 @@ fn monitor_handler(name: Name(dedup.Msg)) -> fn(Verified) -> Nil {
   }
 }
 
-/// バンカーサブツリー。接続プール、アクター、それが応答に使う接続群の順に置く。
-/// アクターはプールが登録された後に起動する必要があり（冒頭の doc を参照）、各接続は
-/// アクターに publisher を登録するため、アクターと一緒に再起動する必要がある。
-/// アクターが署名者の変化で依頼する購読の張り直しは、各接続アクターへ名前で送る。
+/// バンカーサブツリー。接続プール、ロックのプール、アクター、それが応答に使う
+/// 接続群の順に置く。アクターはプールが登録された後に起動する必要があり（冒頭の
+/// doc を参照）、各接続はアクターに publisher を登録するため、アクターと一緒に
+/// 再起動する必要がある。アクターが署名者の変化で依頼する購読の張り直しは、各接続
+/// アクターへ名前で送る。`rest_for_one` なので、ロックのプールが再起動すると
+/// アクターと接続も再起動し、アクターの読み込みが advisory lock を取り直す。
 fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
   subtree()
   |> supervisor.add(pog.supervised(config.pool))
+  |> supervisor.add(pog.supervised(config.lock_pool))
   |> supervisor.add(
     bunker.supervised(config.name, config.settings, fn() {
       list.each(config.relays, fn(relay) {
