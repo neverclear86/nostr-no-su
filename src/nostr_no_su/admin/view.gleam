@@ -667,7 +667,7 @@ pub fn hidden_input(name: String, value: String) -> Element(msg) {
 /// `priv/static/admin.js` の `copy` の処理を指し、値は処理が DOM から読む。欄に name を付けない
 /// （送信にも入力履歴にも含めないため）。処理が囲みをボタンの親の親として読むので、囲みを
 /// 1 つの要素として返す。ボタンの名前は常に「コピー」の文言のままにし、完了は囲みの直下の
-/// `role="status"` で伝える。
+/// `role="status"` で伝える。クリップボードに書けないときの案内も同じ要素に見える形で出す。
 pub fn copyable_field(
   language: Language,
   caption: String,
@@ -717,11 +717,21 @@ pub fn copyable_field(
         ],
       ),
     ]),
-    html.span([attribute.role("status"), attribute.class("sr-only")], [
-      html.span([attribute.class("hidden group-data-copied:inline")], [
-        html.text(copied),
-      ]),
-    ]),
+    html.span(
+      [
+        attribute.role("status"),
+        attribute.class("sr-only group-data-selected:not-sr-only"),
+      ],
+      [
+        html.span([attribute.class("hidden group-data-copied:inline")], [
+          html.text(copied),
+        ]),
+        html.span(
+          [attribute.class("hidden group-data-selected:inline text-sm")],
+          [html.text(i18n.text(language, i18n.SelectedPressCtrlC))],
+        ),
+      ],
+    ),
   ])
 }
 

@@ -192,6 +192,7 @@ pub type Message {
   ThemeDark
   Copy
   Copied
+  SelectedPressCtrlC
   // ダッシュボード
   Dashboard
   PendingConnections
@@ -303,6 +304,7 @@ fn english(message: Message) -> String {
     ThemeDark -> "Dark"
     Copy -> "Copy"
     Copied -> "Copied"
+    SelectedPressCtrlC -> "Selected. Press Ctrl+C (⌘C on macOS) to copy."
     Dashboard -> "Dashboard"
     PendingConnections -> "Pending connections"
     NoPendingConnections -> "No pending connections."
@@ -413,6 +415,7 @@ fn japanese(message: Message) -> String {
     ThemeDark -> "ダーク"
     Copy -> "コピー"
     Copied -> "コピー済み"
+    SelectedPressCtrlC -> "選択しました。Ctrl+C（macOS では ⌘C）でコピーしてください。"
     Dashboard -> "ダッシュボード"
     PendingConnections -> "承認待ちの接続"
     NoPendingConnections -> "承認待ちの接続はありません。"

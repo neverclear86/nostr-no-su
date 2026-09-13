@@ -10,19 +10,24 @@
 
 const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
-  // コピーの欄の囲み（ボタンの親の親）に data-copied を 2 秒付ける。値は DOM から読む。
+  // コピーの欄の囲み（ボタンの親の親）に data-copied を 2 秒付ける。書けないときは data-selected を
+  // 付け、欄の下に手動でコピーする案内を出す（2 秒では消さない）。値は DOM から読む。
   copy(button) {
     const field = button.previousElementSibling;
     const wrapper = button.parentElement.parentElement;
     field.select();
-    if (!navigator.clipboard) return;
+    const selected = () => {
+      wrapper.dataset.selected = "1";
+    };
+    if (!navigator.clipboard) return selected();
     navigator.clipboard.writeText(field.value).then(() => {
+      delete wrapper.dataset.selected;
       wrapper.dataset.copied = "1";
       clearTimeout(wrapper.copiedTimer);
       wrapper.copiedTimer = setTimeout(() => {
         delete wrapper.dataset.copied;
       }, 2000);
-    });
+    }, selected);
   },
 };
 
