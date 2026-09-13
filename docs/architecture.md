@@ -496,7 +496,7 @@ nostr-no-su/
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
-│       ├── admin/view.gleam      ページ枠と、本体の他のモジュールに依存しない部品（lustre）
+│       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
@@ -555,7 +555,10 @@ nostr-no-su/
 │
 ├── docs/
 │   ├── plugin-api.md             プラグイン API v1 の仕様（プラグイン作者向け）
-│   └── architecture.md           この文書
+│   ├── architecture.md           この文書
+│   ├── design-decisions.md       設計上の判断と既知の制約
+│   ├── admin-ui.md               管理 UI の画面と操作
+│   └── development.md            ローカルでの実行とテスト、CSS のビルドと画面の撮影
 │
 ├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
 ├── gleam.toml
@@ -576,20 +579,21 @@ nostr-no-su/
 ## 環境変数と読み手
 
 環境変数はすべて `config.gleam` の 1 か所で読む。
+既定値、空文字列の意味、書き方は [README](../README.md) の「環境変数」にあり、この表は読み手だけを示す。
 
-| 変数 | 読み手 | 未設定のとき |
-| --- | --- | --- |
-| `RELAY_URL` | 監視 | `wss://relay.damus.io` を使う |
-| `BUNKER_RELAY_URL` | バンカー | `RELAY_URL` と同じリレーを使う |
-| `PUBKEYS` | 監視 | 直近のイベントを購読する |
-| `DATABASE_URL` | バンカー（アカウントストア） | 理由を 1 行出して終了する |
-| `ACCOUNT_MASTER_KEY` | バンカー（アカウントの暗号化） | 理由を 1 行出して終了する |
-| `PLUGIN_DIR` | プラグインローダー | 外部プラグインを読み込まない |
-| `PLUGIN_<NAME>_<KEY>` | 各プラグイン | プラグインが判断する |
-| `ADMIN_PORT` | 管理 UI | `8080` で待ち受ける |
-| `ADMIN_BIND` | 管理 UI | `127.0.0.1` で待ち受ける |
-| `ADMIN_PASSWORD` | 管理 UI | 理由を 1 行出して終了する（`ADMIN_PORT` が空か不正なら読まない） |
-| `ADMIN_BASE_URL` | バンカー（承認ページの URL） | `http://localhost:<ADMIN_PORT>` を使う |
+| 変数 | 読み手 |
+| --- | --- |
+| `RELAY_URL` | 監視 |
+| `BUNKER_RELAY_URL` | バンカー |
+| `PUBKEYS` | 監視 |
+| `DATABASE_URL` | バンカー（アカウントストア） |
+| `ACCOUNT_MASTER_KEY` | バンカー（アカウントの暗号化） |
+| `PLUGIN_DIR` | プラグインローダー |
+| `PLUGIN_<NAME>_<KEY>` | 各プラグイン |
+| `ADMIN_PORT` | 管理 UI |
+| `ADMIN_BIND` | 管理 UI |
+| `ADMIN_PASSWORD` | 管理 UI |
+| `ADMIN_BASE_URL` | バンカー（承認ページの URL） |
 
 プラグイン固有の設定だけは本体が中身を解釈しない。
 接頭辞に一致する変数を集めて map で渡すだけで、キーの必須性も値の形式もプラグインが決める。
@@ -597,5 +601,8 @@ nostr-no-su/
 ## 関連文書
 
 - [プラグイン API v1 の仕様](plugin-api.md)：プラグインを書く人向け。必須エクスポート、イベント map、実行モデル、設定、配置と読み込み
-- [README](../README.md)：使い方、環境変数の詳細、設計上の判断と既知の制約
+- [設計上の判断と既知の制約](design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
+- [管理 UI](admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認
+- [開発](development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
+- [README](../README.md)：導入、docker compose、環境変数
 - `plugins-src/event_logger/README.md`：同梱プラグインのビルドと配置

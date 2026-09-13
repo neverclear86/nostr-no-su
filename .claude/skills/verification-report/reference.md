@@ -60,7 +60,7 @@ services:
 
 ### テスト
 
-README のテストの手順（5433）と重ならないポートにする。
+`docs/development.md` のテストの手順（5433）と重ならないポートにする。
 `docker run` が失敗したときに別の Postgres へつながないよう、`&&` でつなぐ。
 コンテナーが止まっていると `docker exec` が失敗し続け、`until` が終わらない。
 待つ時間は `timeout` で 60 秒までにする。
