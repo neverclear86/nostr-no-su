@@ -1,0 +1,14 @@
+# Gleam の依存（Hex）は dependabot が追えないので手で上げる。
+# tailwindcss、@tailwindcss/cli、daisyui を上げる PR は priv/static/admin.css を
+# 作り直さないので admin-css ジョブが落ちることがある。そのときは
+# `npm run build:css` の結果を commit に足す。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
