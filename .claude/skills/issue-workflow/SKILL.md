@@ -1,6 +1,6 @@
 ---
 name: issue-workflow
-description: nostr-no-su の GitHub issue を 1 件ずつ、プラン作成（opus low）→ プランレビュー（opus medium）の往復 → プランを issue に投稿 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（opus high）→ squash マージまで、エージェントの分業で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
+description: nostr-no-su の GitHub issue を 1 件ずつ、プラン作成（opus low）→ プランレビュー（opus medium）の往復 → プランを issue に投稿 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージまで、エージェントの分業で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
 ---
 
 # issue ごとの分業パイプライン（nostr-no-su）
@@ -15,11 +15,11 @@ description: nostr-no-su の GitHub issue を 1 件ずつ、プラン作成（op
 | 3. プランの投稿 | オーケストレーター（自分） | | issue コメント「## 実装プラン（版 N）」 |
 | 4. 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR |
 | 5. PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」。REQUEST CHANGES なら実装エージェントに戻す |
-| 5b. 最終確認 | `issue-final-gate` | opus / high | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
+| 5b. 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
 | 6. マージ | オーケストレーター（自分） | | `gh pr merge --squash --delete-branch` |
 
 役割ごとの基準、出力の書式、安全策は `.claude/agents/issue-*.md` のエージェント定義に書いてあり、モデルと effort もそこで固定している。`Agent` ツールでは `subagent_type` に定義の名前を渡し、`model` は渡さない。
-このパイプラインでは fable を使わない（fable は単価もキャッシュ書き込みも opus の 2 倍で、2026-09-12 の実測では費用の 22% を占めた）。設計の誤りは後の段階で見つかるほど高くつくので、作る側を安くし（プラン作成は opus / low、実装は sonnet / high）、見る側は opus にする（プランレビューと PR レビューは medium、マージ直前の最終確認だけ high）。下げすぎて手戻りが増えると費用が戻るので、これより下げない。オーケストレーター（このセッション）は opus / low で動かす。全体の見直しは、マージが溜まったときにユーザーがスキル `full-review` で fable を呼ぶ。
+このパイプラインで fable を使うのはマージ直前の最終確認（low）だけである（fable は単価もキャッシュ書き込みも opus の 2 倍で、2026-09-12 の実測では費用の 22% を占めた。最終確認は diff とレビューの経緯だけを読むので、fable でも 1 件 $1 程度）。設計の誤りは後の段階で見つかるほど高くつくので、作る側を安くし（プラン作成は opus / low、実装は sonnet / high）、見る側は opus / medium にする（プランレビューと PR レビュー）。下げすぎて手戻りが増えると費用が戻るので、これより下げない。オーケストレーター（このセッション）は opus / low で動かす。全体の見直しは、マージが溜まったときにユーザーがスキル `full-review` で fable を呼ぶ。
 
 モデルと effort を下げた分は、エージェント定義の機械的な手順で補う。プランには主張ごとに根拠（`ファイル:行` かコマンドの出力）を必須にし、プランレビュアーは探索し直さずにその根拠を照合する。行き詰まった issue だけを上げる昇格ルールも下の「前提と守ること」にある。
 
