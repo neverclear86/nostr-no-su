@@ -179,6 +179,81 @@ jobs:
           extra=$(comm -13 <(echo "$allowed") <(echo "$bundled"))
           [ -z "$extra" ] || { echo "manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }
 
+  # 同じコミットから 2 回ビルドして同じイメージになること（#181 の完了条件）と、
+  # 実行イメージの中身を検査する。定義は #181 のプランを参照。
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # ビルドの再現性のため、コミット時刻を SOURCE_DATE_EPOCH として以降の step に渡す。
+      - run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      # 同じ条件で 2 回ビルドし、OCI イメージとして書き出す。attestation はビルド時刻を
+      # 含み同じイメージの定義の対象外なので provenance は付けない（#181）。
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          no-cache: true
+          provenance: false
+          outputs: type=oci,dest=${{ runner.temp }}/image1.tar,rewrite-timestamp=true
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          no-cache: true
+          provenance: false
+          outputs: type=oci,dest=${{ runner.temp }}/image2.tar,rewrite-timestamp=true
+      - name: 2 回のビルドで同じイメージになることを確かめる
+        run: |
+          set -eu
+          media="application/vnd.oci.image.manifest.v1+json"
+          for i in 1 2; do
+            tar -xOf "$RUNNER_TEMP/image$i.tar" index.json \
+              | jq -r '.manifests[0].mediaType, .manifests[0].digest' > "$RUNNER_TEMP/manifest$i.txt"
+            cat "$RUNNER_TEMP/manifest$i.txt"
+            [ "$(sed -n 1p "$RUNNER_TEMP/manifest$i.txt")" = "$media" ] \
+              || { echo "$i 回目の manifest が attestation を含む index になっている"; exit 1; }
+          done
+          diff "$RUNNER_TEMP/manifest1.txt" "$RUNNER_TEMP/manifest2.txt"
+      # 続く検査のため、本体イメージとビルドステージをローカルに読み込む。
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: nostr-no-su:ci
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: build
+          load: true
+          tags: nostr-no-su:ci-build
+      - name: ビルドステージと実行ステージの OTP が一致することを確かめる
+        run: |
+          set -eu
+          otp='io:format("~s ~s~n", [erlang:system_info(otp_release), string:trim(element(2, file:read_file(filename:join([code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"]))))]), halt().'
+          build_otp=$(docker run --rm --entrypoint erl nostr-no-su:ci-build -noshell -eval "$otp")
+          run_otp=$(docker run --rm --entrypoint erl nostr-no-su:ci -noshell -eval "$otp")
+          echo "build: $build_otp"
+          echo "run:   $run_otp"
+          [ "$build_otp" = "$run_otp" ]
+      - name: 実行イメージに gleam と rebar3 が無いことを確かめる
+        run: |
+          set -eu
+          if docker run --rm --entrypoint sh nostr-no-su:ci -c 'command -v gleam || command -v rebar3'; then
+            echo "実行イメージに gleam か rebar3 が残っている"
+            exit 1
+          fi
+      - name: ADMIN_PORT が空白だけのとき healthcheck が待ち受けを叩かずに成功することを確かめる
+        run: |
+          set -eu
+          cmd=$(docker image inspect nostr-no-su:ci --format '{{index .Config.Healthcheck.Test 1}}')
+          docker run --rm -e ADMIN_PORT=' ' --entrypoint sh nostr-no-su:ci -c "$cmd"
+          if docker run --rm --entrypoint sh nostr-no-su:ci -c "$cmd"; then
+            echo "ADMIN_PORT 未設定でも healthcheck が待ち受けを叩かずに成功してしまった"
+            exit 1
+          fi
+
   env-example:
     runs-on: ubuntu-latest
     steps:
