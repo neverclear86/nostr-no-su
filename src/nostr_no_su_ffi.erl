@@ -10,7 +10,7 @@
     aes_256_gcm_open/5,
     int_from_bytes/1,
     ensure_module_loaded/1,
-    call_export/3,
+    call_export_within/4,
     list_dir/1,
     is_directory/1,
     absolute_path/1,
@@ -114,9 +114,9 @@ ensure_module_loaded(Module) ->
         {error, Reason} -> {error, atom_to_binary(Reason)}
     end.
 
-%% プラグインのメタデータ取得（plugin_api_version/0 と plugin_name/0）と、
-%% 子仕様の start（plugin_children/0 が申告した MFA）の呼び出しに使う。壊れた
-%% モジュールが本体の起動を止めないよう、例外を捕捉して文字列にする。
+%% 子仕様の start（plugin_children/0 が申告した MFA）と call_export_within/4 の
+%% 中で、例外を 1 行の理由にするために使う。壊れたモジュールが本体の起動を
+%% 止めないよう、例外を捕捉して文字列にする。
 %% 子仕様の start は起動時（plugin_children/0 の解決時）とスーパーバイザーに
 %% よる再起動時に呼ばれる。どちらの場合も例外を捕まえるのは隔離のためではなく、
 %% 理由を 1 行に整えるためである。
@@ -130,6 +130,43 @@ call_export(Module, Function, Args) ->
     catch
         Class:Reason ->
             {error, format_line("~0p:~0p", [Class, Reason])}
+    end.
+
+%% プラグインのメタデータ用のエクスポート（plugin_api_version/0、plugin_name/0、
+%% plugin_children/0,1）を使い捨てのプロセスで呼び、TimeoutMs で打ち切る。本体の
+%% main プロセスが起動時に同期に呼ぶので、戻らないプラグインが起動を止めないように
+%% する。
+%%
+%% 生成と監視は run_isolated/1 と同じ理由で spawn_monitor/1 により不可分に行う。
+%% 結果は終了理由に載せて DOWN で受け取る。exit/1 の終了は error report を出さず、
+%% 別のメッセージも送らないので、打ち切りの後に遅れた応答がメールボックスに残らない。
+%% 打ち切りでは kill の後に flush 付きで demonitor し、DOWN も残さない。
+%%
+%% 印の無い DOWN は、プラグインが exit(self(), kill) を呼んだか、リンクした
+%% プロセスの死に巻き込まれた場合で、その終了理由を crashed の理由にする。
+%%
+%% 使い捨てのプロセスの終了理由は normal ではない（打ち切りでは kill）ので、
+%% 呼び出しの中でリンクして起こしたプロセスは、exit を trap していなければ一緒に
+%% 終わる。これは意図した挙動で、exit(normal) に変えるとリンクしたプロセスが残る。
+%%
+%% 子仕様の start には使わない。start はスーパーバイザーのプロセスで呼び、子と
+%% リンクさせる必要がある（check_linked/1）。
+%% -> {ok, Value} | {error, {crashed, ReasonBinary}} | {error, timed_out}
+call_export_within(Module, Function, Args, TimeoutMs) ->
+    {Pid, Ref} = erlang:spawn_monitor(fun() ->
+        exit({nostr_no_su_export_result, call_export(Module, Function, Args)})
+    end),
+    receive
+        {'DOWN', Ref, process, Pid, {nostr_no_su_export_result, {ok, Value}}} ->
+            {ok, Value};
+        {'DOWN', Ref, process, Pid, {nostr_no_su_export_result, {error, Reason}}} ->
+            {error, {crashed, Reason}};
+        {'DOWN', Ref, process, Pid, Reason} ->
+            {error, {crashed, format_line("~0p", [Reason])}}
+    after TimeoutMs ->
+        exit(Pid, kill),
+        erlang:demonitor(Ref, [flush]),
+        {error, timed_out}
     end.
 
 %% プラグインが申告した子仕様の start（MFA）を呼ぶ。例外の捕捉と理由の整形は

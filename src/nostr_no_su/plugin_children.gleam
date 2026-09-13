@@ -9,9 +9,9 @@
 ////
 //// **アリティの選び方。** `plugin_children/1` があればそちらを呼び、プラグイン
 //// 固有の設定 map（`plugin_config.to_map` の形）を渡す。無ければ
-//// `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない。判定は
-//// `plugin.gleam` が行い、このモジュールへは引数のリストとして渡ってくる
-//// （アリティはその長さから決まる）。
+//// `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない。判定と期限付きの
+//// 呼び出しは `plugin.gleam` が行い、このモジュールには戻り値とアリティが
+//// 渡ってくる。
 ////
 //// **`{error, Reason}` で設定を拒否できる。** 子仕様のリストの代わりに
 //// `{error, Reason :: binary()}` を返すと、「設定が足りない・不正なのでこの
@@ -134,27 +134,9 @@ type Kind {
   Supervisor
 }
 
-/// モジュールの `plugin_children/<アリティ>` を呼び、子仕様を検証して変換する。
-/// **`plugin.load` の必須エクスポート検証を通った後にだけ呼ぶこと。**
-/// `name` は `plugin_name/0` の値で、子の起動失敗を報告するログの接頭辞に使う。
-/// `args` は呼び出しの引数で、アリティはその長さから決まる（設定を渡す形なら
-/// 設定 map 1 つ、渡さない形なら空）。
-pub fn from_export(
-  module: Atom,
-  name: String,
-  args: List(Dynamic),
-) -> Result(List(ChildSpecification(Pid)), Rejection) {
-  let arity = list.length(args)
-  case call_export(module, atom.create(export_name), args) {
-    Error(reason) ->
-      Error(InvalidSpec(export_label(arity) <> " crashed (" <> reason <> ")"))
-    Ok(value) -> from_dynamic(value, name, arity)
-  }
-}
-
 /// 子仕様のリスト（Dynamic）を検証して変換する。最初に失敗したところで止め、
-/// その 1 行を返す。呼び出しを伴わない単体テストと、ツリー全体のテストが本番と
-/// 同じ経路を通るために公開している。
+/// その 1 行を返す。本体では `plugin.load` が期限付きで呼んだ戻り値を渡す。
+/// 単体テストとツリー全体のテストも同じ経路を通る。
 ///
 /// **`{error, Reason}` の判定はリストのデコードより先に行う。** Erlang の
 /// 2 要素タプルは `decode.list` で長さ 2 のリストとしてデコードされるため、
@@ -442,14 +424,6 @@ fn start(
     }
   }
 }
-
-/// 例外を捕まえて任意エクスポートを呼ぶ。理由は 1 行の文字列になる。
-@external(erlang, "nostr_no_su_ffi", "call_export")
-fn call_export(
-  module: Atom,
-  function: Atom,
-  args: List(Dynamic),
-) -> Result(Dynamic, String)
 
 /// 子仕様の MFA を呼び、リンクを確かめて Pid を返す。
 @external(erlang, "nostr_no_su_ffi", "start_child")

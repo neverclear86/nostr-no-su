@@ -16,6 +16,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/string
 
@@ -50,19 +51,30 @@ pub fn name(fixture: Fixture, label: String) -> String {
   label <> "_" <> fixture.token
 }
 
+/// 必須 3 関数を持ち、`plugin_name/0` の本体を `body`（Erlang の式）にした
+/// プラグインのソース。メタデータの呼び出しが戻らない、プロセスごと終わると
+/// いった形の検証に使う。
+pub fn plugin_name_body_source(
+  module: String,
+  version: Int,
+  body: String,
+) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, handle_event/1]).
+plugin_api_version() -> " <> int.to_string(version) <> ".
+plugin_name() -> " <> body <> ".
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
 /// 必須 3 関数をエクスポートする最小プラグインの Erlang ソース。
 /// `handle_event/1` は受け取った map を `persistent_term` へ退避するので、
 /// イベントが実際に届いたことをテストから確認できる。キーはモジュール名の atom
 /// なので、fixture 同士で衝突しない。
 pub fn plugin_source(module: String, version: Int, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, handle_event/1]).
-plugin_api_version() -> " <> int.to_string(version) <> ".
-plugin_name() -> <<\"" <> name <> "\">>.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
-"
+  plugin_name_body_source(module, version, "<<\"" <> name <> "\">>")
 }
 
 /// 任意エクスポート `plugin_children/0` を持つプラグインの Erlang ソース。
@@ -144,6 +156,11 @@ fn saved(module: String) -> Dynamic {
   persistent_term_get(atom.create(module))
 }
 
+/// fixture がモジュール名の atom をキーに退避した Pid を読み出す。
+pub fn last_pid(module: String) -> Pid {
+  persistent_term_get_pid(atom.create(module))
+}
+
 /// Erlang のソース文字列を `<outdir>/<module>.erl` へ書き出してコンパイルする。
 /// `compile:file/2` は `-module` 宣言とファイル名の一致を要求するため、ファイル名
 /// はモジュール名から決める。
@@ -208,6 +225,11 @@ fn ensure_path(path: String) -> Dynamic
 /// `handle_event/1` が呼ばれていないというテストの失敗そのものである。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic
+
+/// 退避した Pid。`persistent_term_get` とは戻り値の型だけが異なるため別に
+/// 宣言する。
+@external(erlang, "persistent_term", "get")
+fn persistent_term_get_pid(key: Atom) -> Pid
 
 /// ローダーが使うものと同じ判定。テストからも同じ問い合わせを行う。
 @external(erlang, "nostr_no_su_ffi", "is_on_code_path")
