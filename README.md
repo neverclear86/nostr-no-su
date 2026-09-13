@@ -62,7 +62,7 @@ docker compose up --build
 
 バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数指定すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。`BUNKER_RELAY_URL` を省略すると `RELAY_URL` と同じリレーを使う（`RELAY_URL` も空なら `wss://relay.damus.io`）。
 
-> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。
+> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。取り方と戻し方は [バックアップと復旧](docs/operations.md) にある。
 
 > ⚠️ **アカウントの削除と秘密鍵の表示**: 削除するとバンカーからも DB からも鍵が消え、DB 以外に保存していない鍵は戻らない。秘密鍵を表示すると、ログに `[admin] revealed the private key of <npub>` が残る。管理パスワードの再入力が違うときは `[admin] rejected a private key reveal for <npub>: incorrect password` が残る。コピーした nsec や接続 URI はクリップボードに残るので、貼り付けた後は消すこと。
 
@@ -147,7 +147,7 @@ server {
 
 ### docker compose
 
-compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+compose には Postgres（`postgres:17-alpine`）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。`ADMIN_PORT=` と空にすると管理 UI は無効になるが、公開は `127.0.0.1:8080` のまま残る。
 
@@ -185,6 +185,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 - [管理 UI](docs/admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認（auth_url フロー）
 - [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
+- [バックアップと復旧](docs/operations.md)：DB のダンプと復元、マスターキーの保管、復旧後の確認
 - [開発](docs/development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
 - [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
 
