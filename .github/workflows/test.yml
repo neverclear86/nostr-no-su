@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       # アカウントストアの統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が
-      # 設定されているときだけ統合テストが実行される。
+      # 無いと統合テストは失敗する（CI=true のときテストが panic する）。
       postgres:
         image: postgres:17-alpine
         env:
@@ -33,6 +33,8 @@ jobs:
           gleam-version: "1.17.0"
           rebar3-version: "3"
       - run: gleam deps download
+      # test/ もコンパイルするので、テストの warning もここで失敗する
+      # （gleam test にはこのフラグが無い）。
       - run: gleam build --warnings-as-errors
       - run: gleam test
         env:
@@ -69,8 +71,8 @@ jobs:
       run:
         working-directory: plugins-src/event_logger
     services:
-      # 統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が設定されている
-      # ときだけ統合テストが実行される。
+      # 統合テスト用の使い捨て Postgres。TEST_DATABASE_URL が無いと統合テストは
+      # 失敗する（CI=true のときテストが panic する）。
       postgres:
         image: postgres:17-alpine
         env:
@@ -105,6 +107,8 @@ jobs:
             [ -n "$host" ] && [ -n "$plugin" ] || { echo "$pkg が manifest に無い"; exit 1; }
             [ "$host" = "$plugin" ] || { echo "版がずれている: $host / $plugin"; exit 1; }
           done
+      # test/ もコンパイルするので、テストの warning もここで失敗する
+      # （gleam test にはこのフラグが無い）。
       - run: gleam build --warnings-as-errors
       - run: gleam test
         env:
