@@ -30,7 +30,8 @@ sh dev/collect_licenses.sh build/erlang-shipment
 イメージのビルドも同じスクリプトで失敗するので、手元で直してから確かめられる。失敗のメッセージごとの直し方は次のとおりである。
 
 1. `<app> declares no licence and contains no licence file`: 上流のリポジトリでライセンスを確かめ、`dev/licenses-overrides.txt` に「アプリ名 SPDX の識別子 確かめた URL」を 1 行足す。
-2. `<app> is in the shipment but no package in build/packages matches it`: パッケージの形が `dev/collect_licenses.sh` の想定と違うので、アプリ名の読み方を直す。
+2. `<app> has a malformed line in dev/licenses-overrides.txt`: `dev/licenses-overrides.txt` の該当の行が空白またはタブで区切った 3 つの欄になっていないので、書き方を直す。
+3. `<app> is in the shipment but no package in build/packages matches it`: パッケージの形が `dev/collect_licenses.sh` の想定と違うので、アプリ名の読み方を直す。
 
 依存を外したら、`dev/licenses-overrides.txt` の該当の行も消す。
 

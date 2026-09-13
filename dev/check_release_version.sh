@@ -6,7 +6,8 @@
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-tag="${1:?usage: sh dev/check_release_version.sh vX.Y.Z}"
+[ $# -ge 1 ] || { echo "usage: sh dev/check_release_version.sh vX.Y.Z" >&2; exit 1; }
+tag="$1"
 
 if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "tag $tag is not in the form vMAJOR.MINOR.PATCH" >&2

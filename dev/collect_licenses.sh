@@ -87,13 +87,16 @@ for package in "$packages"/*/; do
     files="(no file in package)"
     if [ -z "$declared" ]; then
       # 宣言もファイルも無い依存は、上流で確かめたライセンスを overrides から読む。
-      override=$(grep "^$app " "$overrides" | head -n 1)
-      if [ -n "$override" ]; then
-        declared=$(printf '%s\n' "$override" | cut -d ' ' -f 2)
-        files="(no file in package; confirmed at $(printf '%s\n' "$override" | cut -d ' ' -f 3))"
-      else
-        report "$app declares no licence and contains no licence file; add it to dev/licenses-overrides.txt"
-      fi
+      # 欄は空白またはタブの並びで区切り、欄の数が 3 でなければ壊れた行として報告する。
+      override=$(awk -v a="$app" '$1 == a { print (NF == 3 ? $2 "\t" $3 : "malformed"); exit }' "$overrides")
+      case "$override" in
+      "") report "$app declares no licence and contains no licence file; add it to dev/licenses-overrides.txt" ;;
+      malformed) report "$app has a malformed line in dev/licenses-overrides.txt" ;;
+      *)
+        declared=$(printf '%s\n' "$override" | cut -f 1)
+        files="(no file in package; confirmed at $(printf '%s\n' "$override" | cut -f 2))"
+        ;;
+      esac
     fi
   fi
   printf '%s\t%s\t%s\n' "$app" "${declared:--}" "$files" >>"$out/packages.txt"
