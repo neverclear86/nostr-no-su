@@ -20,9 +20,14 @@ import nostr_no_su/dedup/window
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, type Verified, Event}
 
-/// クライアントの時刻ずれを許容するため、現在時刻から前後この秒数以内の
-/// リクエストを受け付ける。
-const window_seconds = 600
+/// 時計が遅れたクライアントのずれを許容するため、現在時刻からこの秒数より古い
+/// リクエストまでを受け付ける。
+const past_window_seconds = 600
+
+/// 現在時刻からこの秒数より先の `created_at` を持つリクエストは受け付けない。
+/// 起点（`Inputs.not_before`）の保護が効かない時計の進みの上限になるため、過去側
+/// より狭くする。
+const future_window_seconds = 60
 
 /// 承認待ちの有効期間。承認も拒否もされないまま放置された要求は、これを過ぎたら
 /// 無かったものとして扱う。
@@ -37,8 +42,9 @@ pub const approval_request_not_found = "unknown or expired approval request"
 /// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
 /// 署名しただけの kind 24133 であれば、未認可のクライアントからでも 1 件を占める。
 /// つまり流入量は運用者の負荷ではなく送信者が決められるもので、署名検証 1 件が
-/// ミリ秒単位である以上、受付ウィンドウ（`window_seconds`）の間に容量を超える
-/// 件数を送り込むことは攻撃者にとって現実的である。
+/// ミリ秒単位である以上、受付ウィンドウ（`past_window_seconds` と
+/// `future_window_seconds`）の間に容量を超える件数を送り込むことは攻撃者にとって
+/// 現実的である。
 ///
 /// 押し出された id のリプレイが通ったときに起こりうることは限られる。応答は元の
 /// クライアント宛に NIP-44 で暗号化されるため攻撃者は読めず、`logout` の再送で
@@ -84,8 +90,8 @@ pub type Engine {
 /// クライアントには保護が効かない。ずれが D 秒あると、リレーがそのリクエストを
 /// 再配送しうるのは送信から「D + 購読の猶予」の間で、そのうち最初の D 秒に入った
 /// 再起動では、アクターの起点がリクエストの `created_at` に届かず落とせない（D の
-/// 上限は受付ウィンドウの `window_seconds`）。逆に時計が遅れているクライアントの
-/// リクエストは、アクターの起動直後、そのずれの秒数ぶんだけ弾かれうる。
+/// 上限は受付ウィンドウの未来側 `future_window_seconds`）。逆に時計が遅れている
+/// クライアントのリクエストは、アクターの起動直後、そのずれの秒数ぶんだけ弾かれうる。
 pub type Inputs {
   Inputs(now: Int, token: String, not_before: Int)
 }
@@ -373,9 +379,11 @@ fn accept(
   #(Engine(..engine, seen: seen), account, secret)
 }
 
-/// タイムスタンプが現在時刻を中心とした受付ウィンドウ内かどうか。
+/// タイムスタンプが受付ウィンドウ（過去側 `past_window_seconds`、未来側
+/// `future_window_seconds`）の内側かどうか。
 fn fresh(created_at: Int, now: Int) -> Bool {
-  created_at >= now - window_seconds && created_at <= now + window_seconds
+  created_at >= now - past_window_seconds
+  && created_at <= now + future_window_seconds
 }
 
 /// 既知のアカウントに一致する ["p", pubkey] タグへルーティングする。NIP-46 の
