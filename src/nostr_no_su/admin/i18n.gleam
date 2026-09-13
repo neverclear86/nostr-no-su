@@ -228,6 +228,7 @@ pub type Message {
   PluginRunning
   PluginOverloaded
   PluginDisabled
+  ReenablePlugin
   PluginUnavailable
   Dropped(count: Int)
   DroppedAfterReason(count: Int)
@@ -337,6 +338,7 @@ fn english(message: Message) -> String {
     PluginRunning -> "running"
     PluginOverloaded -> "overloaded"
     PluginDisabled -> "disabled"
+    ReenablePlugin -> "Re-enable"
     PluginUnavailable -> "unavailable"
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
     DroppedAfterReason(count:) -> " (dropped " <> int.to_string(count) <> ")"
@@ -446,6 +448,7 @@ fn japanese(message: Message) -> String {
     PluginRunning -> "動作中"
     PluginOverloaded -> "過負荷"
     PluginDisabled -> "無効"
+    ReenablePlugin -> "再有効化"
     PluginUnavailable -> "応答なし"
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     DroppedAfterReason(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"

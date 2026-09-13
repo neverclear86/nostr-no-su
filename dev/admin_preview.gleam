@@ -86,6 +86,16 @@ fn revocation(revoked_client: String) -> Result(Nil, bunker.RevokeFailure) {
   }
 }
 
+/// プラグイン名の値で、再有効化の結果を選ぶ。
+fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
+  case plugin {
+    "missing" -> Error(admin.PluginNotFound("plugin not found"))
+    "no-answer" ->
+      Error(admin.PluginNotAnswered("plugin runner did not answer"))
+    _ -> Ok(Nil)
+  }
+}
+
 /// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。
 fn context() -> admin.Context {
   admin.Context(
@@ -144,6 +154,7 @@ fn context() -> admin.Context {
         dashboard.PluginRow("slow", None),
       ]
     },
+    reenable_plugin: reenabling,
     sessions: fn() { [engine.Session(signer:, client:)] },
     revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
     pending: fn() {

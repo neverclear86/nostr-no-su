@@ -121,6 +121,8 @@ pub type Context {
     nsec: fn(String) -> Result(String, String),
     relays: fn() -> List(dashboard.RelayRow),
     plugins: fn() -> List(dashboard.PluginRow),
+    /// 無効になったプラグインを名前で再有効化する。
+    reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
     sessions: fn() -> List(Session),
     /// セッション（署名者, クライアント）を 1 件取り消す。
     revoke: fn(String, String) -> Result(Nil, RevokeFailure),
@@ -212,6 +214,8 @@ fn route(
     ["deny", token] -> deny_connection(context, request, language, theme, token)
     segments if segments == dashboard.revoke_segments ->
       revoke_session(context, request, language, theme)
+    segments if segments == dashboard.reenable_plugin_segments ->
+      reenable_plugin(context, request, language, theme)
     segments if segments == dashboard.new_account_segments ->
       show_new_account(request, language, theme)
     segments if segments == dashboard.generate_account_segments ->
@@ -468,6 +472,15 @@ pub type SessionChange {
   SessionRevoked
 }
 
+/// プラグインの再有効化が失敗する 2 通り。
+pub type ReenableFailure {
+  /// 名前に一致するプラグインが無い。
+  PluginNotFound(reason: String)
+  /// ランナーが居ないか、期限内に応答しなかった。打ち切った後にランナーが
+  /// 処理して反映することがある。
+  PluginNotAnswered(reason: String)
+}
+
 /// 承認・拒否・取り消し 1 件のログ行の本文（接頭辞を除く）。値は署名者とクライアントの
 /// 公開鍵だけで、承認ページのトークンを含めない。
 pub fn session_change_line(
@@ -573,6 +586,41 @@ fn revoke_failure_response(
   case failure {
     bunker.SessionNotFound(reason) -> not_found_notice(language, theme, reason)
     bunker.NotAnswered(reason) ->
+      not_confirmed_notice(language, theme, reason, 503)
+  }
+}
+
+/// 無効になったプラグインを再有効化してダッシュボードへ戻す。再読み込みで
+/// 再送されないよう 303。失敗は取り消しと同じく 404 と 503。再有効化の 1 行は
+/// ここではなくランナーがプラグインの接頭辞を付けて出す（`plugin_runner.reenable`）。
+fn reenable_plugin(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
+  use <- wisp.require_method(request, http.Post)
+  use form <- wisp.require_form(request)
+  case list.key_find(form.values, "name") {
+    Ok(plugin) ->
+      case context.reenable_plugin(plugin) {
+        Ok(Nil) -> wisp.redirect(to: "/")
+        Error(failure) -> reenable_failure_response(language, theme, failure)
+      }
+    Error(Nil) -> wisp.bad_request("name is required")
+  }
+}
+
+/// 再有効化の失敗の応答。名前に一致するプラグインが無ければ取り消しと同じ 404、
+/// ランナーが応答しなければ 503 の通知ページにする。
+fn reenable_failure_response(
+  language: Language,
+  theme: view.Theme,
+  failure: ReenableFailure,
+) -> Response {
+  case failure {
+    PluginNotFound(reason) -> not_found_notice(language, theme, reason)
+    PluginNotAnswered(reason) ->
       not_confirmed_notice(language, theme, reason, 503)
   }
 }

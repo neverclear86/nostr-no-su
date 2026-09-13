@@ -19,8 +19,8 @@
 ////   なく**キューが上限の半分以下に減るまで**続ける。
 //// - **連続失敗が上限に達したプラグインは無効化する。** 以後イベントを捨てて
 ////   件数だけ数え、**プロセスは生かしたまま**にするので、名前は登録されたままで
-////   管理 UI から状態を問い合わせられる。復帰の手段は本体の再起動か、ランナー
-////   プロセスの強制終了（スーパーバイザーが作り直す）の 2 つである。
+////   管理 UI から状態を問い合わせられる。復帰の手段は本体の再起動か、管理 UI
+////   からの再有効化の 2 つである。
 //// - **ランナーが居ない間（再起動中）に送られたイベントは届かない。** ディス
 ////   パッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
 ////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。
@@ -69,7 +69,7 @@ const max_reason_chars = 120
 /// ログにだけ出すスタックトレースの上限。状態には持たない。
 const max_detail_chars = 400
 
-/// 状態の問い合わせを待つ時間。ランナーは遅いプラグインを最大
+/// 状態の問い合わせと再有効化の要求を待つ時間。ランナーは遅いプラグインを最大
 /// `handle_timeout_ms` 待つが、ここを長くすると管理 UI が固まる。応答が来ない
 /// ことは「状態不明」として正しく描画できるので、短く切って諦める。
 const status_timeout_ms = 1000
@@ -81,6 +81,7 @@ pub type Status {
   /// 未処理のイベントが多すぎるため、キューが上限の半分以下に減るまで捨てている。
   Overloaded(dropped: Int)
   /// 連続失敗の上限に達したので無効化した。以後イベントは捨てて数えるだけ。
+  /// 管理 UI から再有効化すると `Running` に戻る。
   Disabled(reason: String, dropped: Int)
 }
 
@@ -97,6 +98,8 @@ pub type Msg {
   Handle(event: Event)
   /// 管理 UI からの状態の問い合わせ。
   GetStatus(reply: Subject(Status))
+  /// 管理 UI からの再有効化の要求。応答はランナーが要求を処理したことだけを伝える。
+  Reenable(reply: Subject(Nil))
 }
 
 /// ディスパッチャーがイベントを送る宛先 1 つ。`plugin` はログの接頭辞に使う
@@ -157,6 +160,12 @@ pub fn status(name: Name(Msg)) -> Option(Status) {
   named.call(name, status_timeout_ms, GetStatus)
 }
 
+/// ランナーに再有効化を頼む。応答が無ければ `None`（再起動中など）。諦められた
+/// 子は戻らない。
+pub fn request_reenable(name: Name(Msg)) -> Option(Nil) {
+  named.call(name, status_timeout_ms, Reenable)
+}
+
 /// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、実行した
 /// ものは `record` が状態へ反映する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
@@ -164,6 +173,12 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     GetStatus(reply) -> {
       process.send(reply, state.status)
       actor.continue(state)
+    }
+    Reenable(reply) -> {
+      let #(status, note) = reenable(state.status)
+      report(state.plugin.name, note)
+      process.send(reply, Nil)
+      actor.continue(State(..state, status: status))
     }
     Handle(incoming) -> {
       let #(status, should_run, note) =
@@ -237,6 +252,26 @@ pub fn admit(
         <> " events while overloaded",
       ),
     )
+  }
+}
+
+/// 運用者による再有効化を状態へ反映する。返すのは次の状態と、あれば出すログ行。
+///
+/// `Disabled` だけを `Running` に戻す。無効化の時点で連続失敗数は 0 に戻って
+/// いる（`record`）ので、ここでは触れない。`Running` と `Overloaded` は
+/// ボタンの表示先ではないが、表示と送信の間に状態が変わることがあるので、その
+/// ときは何もせず現状のまま返す。
+pub fn reenable(status: Status) -> #(Status, Option(String)) {
+  case status {
+    Disabled(dropped:, ..) -> #(
+      Running,
+      Some(
+        "re-enabled by the operator; dropped "
+        <> int.to_string(dropped)
+        <> " events while disabled",
+      ),
+    )
+    Running | Overloaded(..) -> #(status, None)
   }
 }
 

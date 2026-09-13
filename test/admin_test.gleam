@@ -50,6 +50,12 @@ const session_not_approved = "session is not approved"
 /// フェイクの取り消しが、バンカーの無応答として返す理由。
 const not_answered = "the bunker did not respond"
 
+/// フェイクの再有効化が、名前に一致するプラグインが無いときに返す理由。
+const plugin_not_found = "plugin not found"
+
+/// フェイクの再有効化が、ランナーの無応答として返す理由。
+const plugin_not_answered = "plugin runner did not answer"
+
 /// 無効化されたプラグインの理由。プラグイン由来の文字列なので HTML への埋め込み
 /// でエスケープされなければならない。
 const disabled_reason = "error:<script>alert(1)</script>"
@@ -78,6 +84,7 @@ type Report {
   Rotated(signer: String)
   Relabeled(signer: String, label: String)
   NsecRequested(signer: String)
+  Reenabled(name: String)
 }
 
 /// 指定したラベルを持つ、登録済みのアカウントの行。
@@ -154,6 +161,10 @@ fn test_context(
           )),
         ),
       ]
+    },
+    reenable_plugin: fn(name) {
+      process.send(reports, Reenabled(name))
+      Ok(Nil)
     },
     sessions: fn() { [engine.Session(signer: signer, client: client)] },
     revoke: fn(revoked_signer, revoked_client) {
@@ -531,6 +542,77 @@ pub fn same_origin_revoke_is_accepted_test() {
   assert response.status == 303
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: client))
+}
+
+/// 再有効化フォームは Context の `reenable_plugin` を名前で呼び、ダッシュボードへ
+/// 303 で戻す。
+pub fn reenable_calls_the_context_and_redirects_test() {
+  let reenabled = process.new_subject()
+  let response =
+    post_form(reporting_context(reenabled), "/plugins/reenable", [
+      #("name", "broken"),
+    ])
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reenabled, 1000) == Ok(Reenabled(name: "broken"))
+}
+
+/// 名前に一致するプラグインが無ければ 404 で、理由とダッシュボードへのリンクを出す。
+pub fn reenabling_an_unknown_plugin_is_not_found_test() {
+  let context =
+    admin.Context(..context(), reenable_plugin: fn(_name) {
+      Error(admin.PluginNotFound(plugin_not_found))
+    })
+  let response = post_form(context, "/plugins/reenable", [#("name", "missing")])
+  assert response.status == 404
+  let body = simulate.read_body(response)
+  assert string.contains(body, plugin_not_found)
+  assert string.contains(
+    body,
+    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+  )
+}
+
+/// ランナーが応答しない再有効化は 503 で、理由とダッシュボードへのリンクを出す。
+pub fn reenabling_a_plugin_that_does_not_answer_is_unavailable_test() {
+  let context =
+    admin.Context(..context(), reenable_plugin: fn(_name) {
+      Error(admin.PluginNotAnswered(plugin_not_answered))
+    })
+  let response = post_form(context, "/plugins/reenable", [#("name", "broken")])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "Change not confirmed")
+  assert string.contains(body, plugin_not_answered)
+  assert string.contains(body, "Back to dashboard")
+}
+
+/// 欄 `name` が無い再有効化は 400 で、`reenable_plugin` を呼ばない。
+pub fn reenable_without_a_name_is_a_bad_request_test() {
+  let reenabled = process.new_subject()
+  let response =
+    post_form(reporting_context(reenabled), "/plugins/reenable", [])
+  assert response.status == 400
+  assert process.receive(reenabled, 100) == Error(Nil)
+}
+
+/// 再有効化は POST でしか受け付けない。
+pub fn reenable_rejects_other_methods_test() {
+  let response = get(context(), "/plugins/reenable")
+  assert response.status == 405
+}
+
+/// 別オリジンのフォームから送られた POST は 400 で弾き、`reenable_plugin` を呼ばない。
+pub fn cross_origin_reenable_is_rejected_test() {
+  let reenabled = process.new_subject()
+  let response =
+    simulate.browser_request(http.Post, "/plugins/reenable")
+    |> request.set_header("origin", "http://evil.example")
+    |> with_credentials("admin", password)
+    |> simulate.form_body([#("name", "broken")])
+    |> admin.handle_request(reporting_context(reenabled), _)
+  assert response.status == 400
+  assert process.receive(reenabled, 100) == Error(Nil)
 }
 
 /// ダッシュボードには承認待ちと、承認を経る接続 URI も出る。
