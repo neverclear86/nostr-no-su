@@ -52,6 +52,15 @@
 //// 待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
 //// 承認済みセッションは残る。
 ////
+//// **承認・拒否・取り消し**も同じく、エンジンで判断した後にストアへ書き込み、
+//// 書き込みが成功したときだけ状態に反映し、応答イベントを発行する（取り消しは
+//// 発行しない）。結果が曖昧な書き込みの後は、アカウントの変更と同じ `LoadAccounts`
+//// の読み直しに移るが、承認待ちとセッションは読み直しでは戻らない（#215）ので
+//// メモリに残ったままになり、利用者はダッシュボードに残った行からやり直せる。
+//// 承認の `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（行はまだ
+//// メモリにあるので、同じトークンで承認し直せる）。NIP-46 の受信イベント自体の
+//// 書き込みはまだ捨てている（#221）。
+////
 //// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
 //// 張り直しを依頼する。追加と削除のほか、読み込みの失敗からの復帰でも張り直しが
 //// 起き、secret やラベルの差し替えでは起きない。メモリはこのアクター経由の変更
@@ -136,6 +145,15 @@ const query_not_answered = "bunker is not responding"
 /// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。
 const session_not_approved = "session is not approved"
 
+/// 承認・拒否の書き込みの結果が曖昧だったときに呼び出し側へ返す理由。
+/// `admin/i18n.gleam` の `StoreDidNotConfirm` の英語（`i18n.gleam:381-382`）と
+/// 同じ文にする。#186 が承認・拒否の失敗を型にするときに消す。
+const store_did_not_confirm_change = "the store did not confirm the change; it may have been applied, so open the dashboard to check"
+
+/// 結果が曖昧な書き込みの後のログ行に添える文言。`change_line` の `MaybeWritten`
+/// の枝もこれを使い、同じ文言を 2 か所に持たない。
+const reloading_after_unconfirmed_write = "; the change may have been applied, reloading the accounts from the store"
+
 /// アカウントの変更が成功しなかった理由。`NotApplied` と `NotReady` の理由は値
 /// （鍵、secret、ラベル）を含まない固定の英文、`MaybeApplied` は原因を
 /// `NotConfirmed` で表す。管理 UI は型で応答を分け、理由は本文に出すだけにする。
@@ -167,7 +185,9 @@ pub type RevokeFailure {
   /// 消えた、フォームの値が違う）。
   SessionNotFound(reason: String)
   /// アクターが動いていないか、期限内に応答しなかった。タイムアウトの後にアクターが
-  /// 処理して反映することがある。
+  /// 処理して反映することがある。#186 までは、ストアへの書き込みの失敗と読み込み前も
+  /// ここに入るため、画面に出す原因（バンカーが応答しない）が実際の原因と違うことが
+  /// ある。実際の原因はアクターがログに出す。
   NotAnswered
 }
 
@@ -200,6 +220,8 @@ pub type Store {
     update_secret: fn(String, String) -> Result(Nil, WriteFailure),
     /// 署名者のラベルを差し替える。
     update_label: fn(String, String) -> Result(Nil, WriteFailure),
+    /// セッションと承認待ちの書き込み 1 件（`engine.Write`）を行う。
+    write: fn(engine.Write) -> Result(Nil, WriteFailure),
   )
 }
 
@@ -243,8 +265,10 @@ pub type Msg {
   Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(List(Session)))
-  /// セッションを 1 件取り消す（`logout` 相当）。取り消し後の画面が古い一覧を
-  /// 読まないよう、完了を待てるように応答する。承認済みでない組なら理由を返す。
+  /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
+  /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
+  /// 承認済みでない組、読み込み前、あるいは書き込みが成功しなかったときは
+  /// `NotAnswered` を返す。
   Revoke(
     signer: String,
     client: String,
@@ -252,10 +276,12 @@ pub type Msg {
   )
   /// 承認待ちの接続要求の一覧を問い合わせる。
   GetPending(reply: Subject(List(Pending)))
-  /// 承認待ちの接続要求を承認する。承認を状態に反映し、登録済みの接続へ応答
-  /// イベントを送る。要求が見つからなければ理由を返す。
+  /// 承認待ちの接続要求を承認する。書き込みが成功したときだけ状態に反映し、
+  /// 登録済みの接続へ応答イベントを送る。要求が見つからない、読み込み前、あるいは
+  /// 書き込みが成功しなかったときは理由を返す。
   Approve(token: String, reply: Subject(Result(Nil, String)))
-  /// 承認待ちの接続要求を拒否する。
+  /// 承認待ちの接続要求を拒否する。書き込みが成功したときだけ状態に反映するほかは
+  /// `Approve` と同じ。
   Deny(token: String, reply: Subject(Result(Nil, String)))
   /// ストアからアカウントを読み込む。initialiser と再試行のタイマーが、アクター
   /// ごとに作る名前なしの subject へ送る。名前付き subject へは誰も送らない。
@@ -300,7 +326,8 @@ pub fn sessions(name: Name(Msg)) -> List(Session) {
 }
 
 /// セッションを 1 件取り消し、反映されるまで待つ。承認済みでない組なら
-/// `SessionNotFound`、アクターが応答しなければ `NotAnswered` を返す。
+/// `SessionNotFound`、アクターが応答しない、あるいは書き込みが成功しなかったときは
+/// `NotAnswered` を返す。
 pub fn revoke(
   name: Name(Msg),
   signer: String,
@@ -316,12 +343,14 @@ pub fn pending(name: Name(Msg)) -> List(Pending) {
   |> option.unwrap([])
 }
 
-/// 接続要求を 1 件承認し、応答イベントを送り出すまで待つ。
+/// 接続要求を 1 件承認し、書き込みが成功したときだけ応答イベントを送り出すまで
+/// 待つ。要求が見つからない、あるいは書き込みが成功しなかったときは理由を返す。
 pub fn approve(name: Name(Msg), token: String) -> Result(Nil, String) {
   call_decision(name, Approve(token, _))
 }
 
-/// 接続要求を 1 件拒否し、応答イベントを送り出すまで待つ。
+/// 接続要求を 1 件拒否し、書き込みが成功したときだけ応答イベントを送り出すまで
+/// 待つ。ほかは `approve` と同じ。
 pub fn deny(name: Name(Msg), token: String) -> Result(Nil, String) {
   call_decision(name, Deny(token, _))
 }
@@ -434,6 +463,15 @@ type Change {
   Removed
   SecretRotated
   LabelUpdated
+}
+
+/// 承認・拒否・取り消しの種類。失敗のログ行の言い回しを決める。
+/// `admin.SessionChange`（`admin.gleam:620-624`）と同じ区分だが、`bunker` は
+/// 管理 UI に依存できないので別に持つ。
+type SessionChange {
+  Approval
+  Denial
+  Revocation
 }
 
 /// OK を待っている応答の一覧。キーは応答 id。
@@ -740,24 +778,15 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     Approve(token, reply) ->
-      apply_decision(state, reply, engine.approve(state.engine, token, _))
+      apply_decision(state, reply, Approval, token, engine.approve)
     Deny(token, reply) ->
-      apply_decision(state, reply, engine.deny(state.engine, token, _))
+      apply_decision(state, reply, Denial, token, engine.deny)
     GetSessions(reply) -> {
       process.send(reply, engine.sessions(state.engine))
       actor.continue(state)
     }
     Revoke(signer:, client:, reply:) ->
-      case engine.revoke(state.engine, signer, client) {
-        Ok(#(next, _write)) -> {
-          process.send(reply, Ok(Nil))
-          actor.continue(State(..state, engine: next))
-        }
-        Error(Nil) -> {
-          process.send(reply, Error(SessionNotFound(session_not_approved)))
-          actor.continue(state)
-        }
-      }
+      revoke_session(state, reply, signer, client)
     SetPublisher(relay_url, publish) ->
       actor.continue(
         State(
@@ -1052,13 +1081,10 @@ fn apply_change(
           load_accounts(State(..state, accounts: loading(state.settings))),
           Error(NotApplied(reason)),
         )
-        Error(MaybeWritten(_reason)) -> {
-          process.send(state.retry, LoadAccounts)
-          #(
-            State(..state, accounts: loading(state.settings)),
-            Error(MaybeApplied(StoreDidNotConfirm)),
-          )
-        }
+        Error(MaybeWritten(_reason)) -> #(
+          reload(state),
+          Error(MaybeApplied(StoreDidNotConfirm)),
+        )
       }
     }
   }
@@ -1089,10 +1115,16 @@ fn change_line(
     Error(AlreadyStored(reason)) ->
       failed <> reason <> "; reloading the accounts from the store"
     Error(MaybeWritten(reason)) ->
-      failed
-      <> reason
-      <> "; the change may have been applied, reloading the accounts from the store"
+      failed <> reason <> reloading_after_unconfirmed_write
   }
+}
+
+/// 読み直しの `LoadAccounts` を積み、読み込めていない状態に移る。読み込み済みの
+/// 状態からだけ呼ぶ想定で、読み込みの系列は 1 本のままになる。`apply_change` の
+/// `MaybeWritten` の枝もこれを使う。
+fn reload(state: State) -> State {
+  process.send(state.retry, LoadAccounts)
+  State(..state, accounts: loading(state.settings))
 }
 
 /// 次の状態に移る。署名者の集合が変わっていれば購読の張り直しを依頼する。依頼は
@@ -1106,23 +1138,192 @@ fn transition(from: State, to: State) -> State {
   to
 }
 
-/// 承認・拒否の結果を状態に反映し、待たせているクライアントへ応答イベントを
-/// 発行する。token が不明・失効していれば状態は変えずに理由を返す。
+/// token の承認待ちの（署名者, クライアント）。失効・不明なら `None`。
+fn pending_target(
+  eng: engine.Engine,
+  token: String,
+  now: Int,
+) -> Option(#(String, String)) {
+  engine.pending(eng, now)
+  |> list.find(fn(entry) { entry.token == token })
+  |> option.from_result
+  |> option.map(fn(entry) { #(entry.signer, entry.client) })
+}
+
+/// 承認済みのセッションにある組ならその組、無ければ `None`（フォームの値を
+/// ログに出さないため）。
+fn session_target(
+  eng: engine.Engine,
+  signer: String,
+  client: String,
+) -> Option(#(String, String)) {
+  case
+    list.find(engine.sessions(eng), fn(session) {
+      session.signer == signer && session.client == client
+    })
+  {
+    Ok(_found) -> Some(#(signer, client))
+    Error(Nil) -> None
+  }
+}
+
+/// 失敗 1 件のログ行。値は署名者とクライアントの公開鍵と固定の文言の理由だけで、
+/// 承認ページのトークンを含めない。
+fn session_failure_line(
+  change: SessionChange,
+  signer: String,
+  client: String,
+  reason: String,
+) -> String {
+  let verb = case change {
+    Approval -> "approve the connection of"
+    Denial -> "deny the connection of"
+    Revocation -> "revoke the session of"
+  }
+  "failed to "
+  <> verb
+  <> " client "
+  <> client
+  <> " to signer "
+  <> signer
+  <> ": "
+  <> reason
+}
+
+/// 対象がメモリにあるときだけ、失敗 1 件を `log.Warning` で出す。フォームの値を
+/// そのままログに渡さないため、対象が無ければ黙る。
+fn log_session_failure(
+  change: SessionChange,
+  target: Option(#(String, String)),
+  reason: String,
+) -> Nil {
+  case target {
+    Some(#(signer, client)) ->
+      log.write(
+        log.Warning,
+        log_prefix,
+        session_failure_line(change, signer, client, reason),
+      )
+    None -> Nil
+  }
+}
+
+/// セッションと承認待ちの書き込み 1 件を行い、失敗ならログを出す。`MaybeWritten`
+/// なら読み直しに移った状態を返す。成功ではログを出さない（成功の行は管理 UI が
+/// 出す）。
+fn write_session_change(
+  state: State,
+  change: SessionChange,
+  target: Option(#(String, String)),
+  write: engine.Write,
+) -> #(State, Result(Nil, WriteFailure)) {
+  let written = state.settings.store.write(write)
+  case written {
+    Ok(Nil) -> #(state, written)
+    // セッションと承認待ちの書き込みでは作られないが、書き込まれていない失敗である。
+    Error(NotWritten(reason)) | Error(AlreadyStored(reason)) -> {
+      log_session_failure(change, target, reason)
+      #(state, written)
+    }
+    Error(MaybeWritten(reason)) -> {
+      log_session_failure(
+        change,
+        target,
+        reason <> reloading_after_unconfirmed_write,
+      )
+      #(reload(state), written)
+    }
+  }
+}
+
+/// 読み込み済みのときだけエンジンで承認・拒否し、書き込みが成功したときだけ応答を
+/// 発行して反映する。読み込み前は状態を変えずに `accounts_not_loaded` を返す。
+/// 書き込みが `NotWritten` / `AlreadyStored` ならその理由、`MaybeWritten` なら
+/// `store_did_not_confirm_change` を返し、どちらも `write_session_change` が
+/// 返した読み直し後の状態で続ける（承認の `MaybeWritten` の後は、読み直しの後にも
+/// `ack` を送らない）。
 fn apply_decision(
   state: State,
   reply: Subject(Result(Nil, String)),
-  decision: fn(Int) -> Result(#(engine.Engine, Event, engine.Write), String),
+  change: SessionChange,
+  token: String,
+  decide: fn(engine.Engine, String, Int) ->
+    Result(#(engine.Engine, Event, engine.Write), String),
 ) -> actor.Next(State, Msg) {
-  case decision(time.now_seconds()) {
-    Error(reason) -> {
-      process.send(reply, Error(reason))
+  let now = time.now_seconds()
+  let target = pending_target(state.engine, token, now)
+  case state.accounts {
+    Loading(..) -> {
+      log_session_failure(change, target, accounts_not_loaded)
+      process.send(reply, Error(accounts_not_loaded))
       actor.continue(state)
     }
-    Ok(#(next, response, _write)) -> {
-      let published = publish(state, response)
-      process.send(reply, Ok(Nil))
-      actor.continue(State(..published, engine: next))
+    Ready ->
+      case decide(state.engine, token, now) {
+        Error(reason) -> {
+          process.send(reply, Error(reason))
+          actor.continue(state)
+        }
+        Ok(#(next, response, write)) -> {
+          let #(written_state, outcome) =
+            write_session_change(state, change, target, write)
+          case outcome {
+            Ok(Nil) -> {
+              let published = publish(written_state, response)
+              process.send(reply, Ok(Nil))
+              actor.continue(State(..published, engine: next))
+            }
+            Error(NotWritten(reason)) | Error(AlreadyStored(reason)) -> {
+              process.send(reply, Error(reason))
+              actor.continue(written_state)
+            }
+            Error(MaybeWritten(_reason)) -> {
+              process.send(reply, Error(store_did_not_confirm_change))
+              actor.continue(written_state)
+            }
+          }
+        }
+      }
+  }
+}
+
+/// 読み込み済みのときだけエンジンで取り消し、書き込みが成功したときだけ状態から
+/// セッションを消す。読み込み前、承認済みでない組、あるいは書き込みが成功しな
+/// かったときは `NotAnswered` を返す（`SessionNotFound` は承認済みでない組だけ）。
+fn revoke_session(
+  state: State,
+  reply: Subject(Result(Nil, RevokeFailure)),
+  signer: String,
+  client: String,
+) -> actor.Next(State, Msg) {
+  let target = session_target(state.engine, signer, client)
+  case state.accounts {
+    Loading(..) -> {
+      log_session_failure(Revocation, target, accounts_not_loaded)
+      process.send(reply, Error(NotAnswered))
+      actor.continue(state)
     }
+    Ready ->
+      case engine.revoke(state.engine, signer, client) {
+        Error(Nil) -> {
+          process.send(reply, Error(SessionNotFound(session_not_approved)))
+          actor.continue(state)
+        }
+        Ok(#(next, write)) -> {
+          let #(written_state, outcome) =
+            write_session_change(state, Revocation, target, write)
+          case outcome {
+            Ok(Nil) -> {
+              process.send(reply, Ok(Nil))
+              actor.continue(State(..written_state, engine: next))
+            }
+            Error(_reason) -> {
+              process.send(reply, Error(NotAnswered))
+              actor.continue(written_state)
+            }
+          }
+        }
+      }
   }
 }
 
