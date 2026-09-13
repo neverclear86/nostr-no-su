@@ -267,7 +267,7 @@ pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
   let #(name, pid) = start_bunker(start_resetting_pool())
   let entry = random_entry("resetting")
   assert bunker.add_account(name, entry.account, entry.label)
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert bunker.accounts(name) == Ok([])
   stop(pid)
 }

@@ -26,7 +26,7 @@
 //// 書き込まれていないことが確定した失敗では、メモリを変えずに理由を返す。書き込みが
 //// 期限を過ぎたときや途中で接続が切れたときは、サーバー側でまだ実行中か、すでに
 //// コミットされていることがあるので、メモリを変えずにストアから読み直して合わせ、
-//// 呼び出し側には反映されたかもしれない旨を返す（`change_may_have_been_applied`）。
+//// 呼び出し側には反映されたかもしれない旨を返す（`MaybeApplied(StoreDidNotConfirm)`）。
 //// ストアの読み込みは、実行中の書き込みの終了をテーブルのロックで待ってから読む
 //// （`account_store.load`）。読み直しは起動時の読み込みと同じ `LoadAccounts` の経路で
 //// 行い、失敗すれば同じく名前なしの subject へ再試行を予約する。読み直しが成功する
@@ -121,18 +121,6 @@ const token_bytes = 16
 /// 推測できない長さにする。
 const connection_secret_bytes = 16
 
-/// 変更（アカウントの変更とセッションの取り消し）がアクターの応答を得られなかった
-/// ときの理由。タイムアウトした後にアクターが処理を終えて反映することがあるので、
-/// 確かめ直すよう促す。変更の失敗のページは POST の応答で、再読み込みは変更の再送に
-/// なるため、ダッシュボードで確かめるよう促す。
-const change_not_answered = "the bunker did not respond; check the dashboard to see whether the change was applied"
-
-/// 書き込みの結果が曖昧だった変更の理由。コミットされていることがあるので、単なる
-/// 失敗としては見せず、ストアから読み直した一覧で確かめるよう促す。管理 UI はこの
-/// 文言をそのまま表示してよい。POST の応答のページに出るので、再読み込み（変更の
-/// 再送）ではなくダッシュボードを開くよう促す。
-pub const change_may_have_been_applied = "the store did not confirm the change; it may have been applied, so open the dashboard to check"
-
 /// 読み込みか読み直しが終わっていないときの理由。
 const accounts_not_loaded = "accounts are not loaded yet"
 
@@ -148,8 +136,9 @@ const query_not_answered = "bunker is not responding"
 /// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。
 const session_not_approved = "session is not approved"
 
-/// アカウントの変更が成功しなかった理由。理由は値（鍵、secret、ラベル）を含まない
-/// 固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+/// アカウントの変更が成功しなかった理由。`NotApplied` と `NotReady` の理由は値
+/// （鍵、secret、ラベル）を含まない固定の英文、`MaybeApplied` は原因を
+/// `NotConfirmed` で表す。管理 UI は型で応答を分け、理由は本文に出すだけにする。
 pub type ChangeFailure {
   /// 変更は反映されていない（登録済み、未登録、書き込まれていないことが確定した
   /// ストアの失敗）。
@@ -159,18 +148,27 @@ pub type ChangeFailure {
   NotReady(reason: String)
   /// 反映されたかどうか分からない（書き込みの期限切れや途中の切断、DB のクライアントの
   /// 例外、アクターが期限内に応答しない）。
-  MaybeApplied(reason: String)
+  MaybeApplied(cause: NotConfirmed)
 }
 
-/// セッションの取り消しが成功しなかった理由。理由は値（pubkey）を含まない固定の
-/// 英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+/// 変更が反映されたかを確かめられなかった原因。管理 UI が言語ごとの文言に写す。
+pub type NotConfirmed {
+  /// アクターが期限内に応答しなかった。
+  BunkerDidNotRespond
+  /// ストアへの書き込みの結果が曖昧だった。
+  StoreDidNotConfirm
+}
+
+/// セッションの取り消しが成功しなかった理由。`SessionNotFound` の理由は値
+/// （pubkey）を含まない固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけに
+/// する。
 pub type RevokeFailure {
   /// 承認済みのセッションに無い（取り消し済み、アカウントの削除やアクターの再起動で
   /// 消えた、フォームの値が違う）。
   SessionNotFound(reason: String)
   /// アクターが動いていないか、期限内に応答しなかった。タイムアウトの後にアクターが
   /// 処理して反映することがある。
-  NotAnswered(reason: String)
+  NotAnswered
 }
 
 /// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
@@ -302,7 +300,7 @@ pub fn revoke(
   client: String,
 ) -> Result(Nil, RevokeFailure) {
   named.call(name, call_timeout_ms, Revoke(signer, client, _))
-  |> option.unwrap(Error(NotAnswered(change_not_answered)))
+  |> option.unwrap(Error(NotAnswered))
 }
 
 /// 承認待ちの接続要求の一覧。アクターが動いていなければ空。
@@ -397,7 +395,7 @@ fn call_change(
   request: fn(Subject(Result(Nil, ChangeFailure))) -> Msg,
 ) -> Result(Nil, ChangeFailure) {
   named.call(name, change_timeout_ms, request)
-  |> option.unwrap(Error(MaybeApplied(change_not_answered)))
+  |> option.unwrap(Error(MaybeApplied(BunkerDidNotRespond)))
 }
 
 /// メモリがストアの内容を反映しているかどうか。
@@ -1002,7 +1000,7 @@ fn apply_change(
           process.send(state.retry, LoadAccounts)
           #(
             State(..state, accounts: loading(state.settings)),
-            Error(MaybeApplied(change_may_have_been_applied)),
+            Error(MaybeApplied(StoreDidNotConfirm)),
           )
         }
       }

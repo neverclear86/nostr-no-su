@@ -49,9 +49,6 @@ const unknown_client = "cccc3333"
 /// フェイクの取り消しが、承認済みでない組に返す理由。
 const session_not_approved = "session is not approved"
 
-/// フェイクの取り消しが、バンカーの無応答として返す理由。
-const not_answered = "the bunker did not respond"
-
 /// フェイクの再有効化が、名前に一致するプラグインが無いときに返す理由。
 const plugin_not_found = "plugin not found"
 
@@ -491,14 +488,17 @@ pub fn revoke_that_is_not_answered_is_unavailable_test() {
   assert response.status == 503
   let body = simulate.read_body(response)
   assert string.contains(body, "Change not confirmed")
-  assert string.contains(body, not_answered)
+  assert string.contains(
+    body,
+    i18n.text(i18n.English, i18n.BunkerDidNotRespond),
+  )
   assert string.contains(body, "Back to dashboard")
 }
 
 /// 取り消しにバンカーが応答しない Context。
 fn not_answering_context() -> admin.Context {
   admin.Context(..context(), revoke: fn(_signer, _client) {
-    Error(bunker.NotAnswered(not_answered))
+    Error(bunker.NotAnswered)
   })
 }
 
@@ -885,13 +885,13 @@ pub fn import_rejects_a_registered_account_test() {
 pub fn import_that_may_have_been_applied_is_accepted_test() {
   let response =
     post_form(
-      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
       [#("nsec", spec_nsec)],
     )
   assert response.status == 202
   let body = simulate.read_body(response)
-  assert string.contains(body, bunker.change_may_have_been_applied)
+  assert string.contains(body, i18n.text(i18n.English, i18n.StoreDidNotConfirm))
   assert string.contains(body, "Back to dashboard")
   assert !string.contains(body, spec_nsec)
 }
@@ -1026,7 +1026,7 @@ pub fn register_generated_shares_the_failure_paths_test() {
     ),
     #(
       post_form(
-        failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+        failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
         path,
         spec,
       ),
@@ -1300,23 +1300,29 @@ pub fn label_edit_form_has_no_maxlength_test() {
 /// 受け付けられなければ 503、反映されたか分からなければ 202 になり、理由と
 /// ダッシュボードへのリンクを出す。
 pub fn account_change_failures_map_to_status_codes_test() {
+  let not_applied_reason = "account is not registered"
+  let not_ready_reason = "accounts are not loaded yet"
   let failures = [
-    #(bunker.NotApplied("account is not registered"), 409),
-    #(bunker.NotReady("accounts are not loaded yet"), 503),
-    #(bunker.MaybeApplied(bunker.change_may_have_been_applied), 202),
+    #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
+    #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
+    #(
+      bunker.MaybeApplied(bunker.StoreDidNotConfirm),
+      202,
+      i18n.text(i18n.English, i18n.StoreDidNotConfirm),
+    ),
   ]
   let changes = [
     #(dashboard.DeleteAccount, []),
     #(dashboard.RotateSecret, []),
     #(dashboard.EditLabel, [#("label", "new")]),
   ]
-  use #(failure, status) <- list.each(failures)
+  use #(failure, status, reason) <- list.each(failures)
   use #(action, fields) <- list.each(changes)
   let response =
     post_form(failing_context(failure), action_path(action), fields)
   assert #(action, response.status) == #(action, status)
   let body = simulate.read_body(response)
-  assert string.contains(body, failure.reason)
+  assert string.contains(body, reason)
   assert string.contains(
     body,
     "<a class=\"link\" href=\"/\">Back to dashboard</a>",
@@ -1592,7 +1598,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
     post_form(context, "/accounts/import", [#("nsec", "nope")]),
     post_form(context, "/accounts/import", [#("nsec", signer_nsec)]),
     post_form(
-      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
       spec,
     ),
@@ -1742,7 +1748,7 @@ pub fn notices_are_colored_by_outcome_test() {
     #(post(context(), "/approve/other-token"), "alert alert-error"),
     #(
       post(
-        failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+        failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
         rotate,
       ),
       "alert alert-warning",
@@ -2125,7 +2131,7 @@ pub fn pages_with_a_private_key_have_no_switches_test() {
     get(context(), "/approve/" <> token),
     post(context(), "/approve/" <> token),
     post_form(
-      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       action_path(dashboard.RotateSecret),
       [],
     ),
@@ -2141,8 +2147,7 @@ pub fn pages_with_a_private_key_have_no_switches_test() {
 }
 
 /// 日本語のページでも、バンカーから届く理由は英語のまま `lang="en"` で出す。フォームの上と
-/// アカウントの節では、何ができなかったかを日本語で前に置き、通知ページは見出しが前置きを
-/// 兼ねる。
+/// アカウントの節では、何ができなかったかを日本語で前に置く。
 pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
   let registered =
     simulate.request(http.Post, "/accounts/import")
@@ -2167,25 +2172,56 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
       <> unavailable
       <> "</span></span>",
   )
-  let unconfirmed =
-    simulate.request(http.Post, action_path(dashboard.RotateSecret))
+}
+
+/// 日本語のページで、変更を確認できなかった通知ページの本文が日本語になる（`lang="en"` の
+/// `span` が無い）。アカウントの変更の 202 とセッションの取り消しの 503 のどちらも対象。
+pub fn japanese_pages_translate_unconfirmed_changes_test() {
+  let cases = [
+    #(
+      failing_context(bunker.MaybeApplied(bunker.BunkerDidNotRespond)),
+      action_path(dashboard.RotateSecret),
+      [],
+      i18n.BunkerDidNotRespond,
+    ),
+    #(
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+      action_path(dashboard.RotateSecret),
+      [],
+      i18n.StoreDidNotConfirm,
+    ),
+    #(
+      not_answering_context(),
+      "/sessions/revoke",
+      [#("signer", signer), #("client", client)],
+      i18n.BunkerDidNotRespond,
+    ),
+  ]
+  use #(failing, path, fields, message) <- list.each(cases)
+  let body =
+    simulate.request(http.Post, path)
     |> with_credentials("admin", password)
     |> in_japanese
-    |> admin.handle_request(
-      failing_context(bunker.MaybeApplied(bunker.change_may_have_been_applied)),
-      _,
-    )
+    |> simulate.form_body(fields)
+    |> admin.handle_request(failing, _)
     |> simulate.read_body
   assert string.contains(
-    unconfirmed,
+    body,
     "<h1 class=\"text-2xl font-bold\">変更を確認できませんでした</h1>",
   )
   assert string.contains(
-    unconfirmed,
-    "<span><span lang=\"en\">"
-      <> bunker.change_may_have_been_applied
-      <> "</span></span>",
+    body,
+    "<span>" <> i18n.text(i18n.Japanese, message) <> "</span>",
   )
+  assert !string.contains(body, "<span lang=\"en\">")
+}
+
+/// 202 と取り消しの 503 の英語の文言は、消した定数の文字列のまま変わらない。
+pub fn unconfirmed_change_messages_keep_the_english_text_test() {
+  assert i18n.text(i18n.English, i18n.BunkerDidNotRespond)
+    == "the bunker did not respond; check the dashboard to see whether the change was applied"
+  assert i18n.text(i18n.English, i18n.StoreDidNotConfirm)
+    == "the store did not confirm the change; it may have been applied, so open the dashboard to check"
 }
 
 /// 通知ページで言語を切り替えた後はダッシュボードを開く。一覧を得られない 503 でも、パスの

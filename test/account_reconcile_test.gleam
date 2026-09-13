@@ -90,13 +90,13 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
   let other = random_entry()
   let other_pubkey = account.pubkey_hex(other.account)
   assert bunker.add_account(name, other.account, "other")
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let added = database_listings(pool, key)
   assert list.length(added) == 2
   assert bunker.accounts(name) == Ok(added)
 
   assert bunker.rotate_secret(name, first_pubkey)
-    == Error(bunker.MaybeApplied(bunker.change_may_have_been_applied))
+    == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let rotated = database_listings(pool, key)
   let assert Ok(first_listing) =
     list.find(rotated, fn(listing) { listing.signer == first_pubkey })
