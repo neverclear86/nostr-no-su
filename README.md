@@ -159,7 +159,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*`、`DATABASE_URL`、`PLUGIN_EVENT_LOGGER_DATABASE_URL` の 3 か所を合わせること。
 
-ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。水準は notice（通常）、warning（失敗したが動き続ける）、error（起動を中止する）の 3 つで、本文中の引用はこの先頭を省いて書いている。
+ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。
 
 ### 環境変数
 

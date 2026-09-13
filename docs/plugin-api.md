@@ -88,8 +88,6 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 
 接頭辞は `plugin <plugin_name/0 の値>` で、第 8.5 節の表（接頭辞 `plugin_loader` の読み込み失敗）とは別物である。
 
-プラグイン自身のログは OTP logger（`logger:log/2`）に出せば、時刻と水準が付いた本体と同じ行の形になる（`io:format` は時刻と水準が付かない）。実例は `plugins-src/event_logger`。この文書の例のコードは短さのために `io:format` を使う。
-
 | 行 | 意味 |
 | --- | --- |
 | `handle_event failed (error:badarg); 2/5 at [{my_plugin,handle_event,1},...]` | 実行が失敗した。連続失敗数とスタックトレース（切り詰め）を添える |
@@ -100,6 +98,8 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 | `runner is unavailable; dropping events until it is back` | ランナーが居ない（再起動中）ので、ディスパッチャーがイベントを捨て始めた |
 | `runner is back; dropped 3 events while it was unavailable` | ランナーに再び届くようになった。居なかった間に捨てた件数を添える |
 | `re-enabled by the operator; dropped 12 events while disabled` | 管理 UI から再有効化した。無効の間に捨てた件数を添える |
+
+プラグイン自身のログは OTP logger（`logger:log/2`）に出せば、時刻と水準が付いた本体と同じ行の形になる（`io:format` は時刻と水準が付かない）。実例は `plugins-src/event_logger`。この文書の例のコードは短さのために `io:format` を使う。
 
 ## 5. 状態を持つプラグイン（任意エクスポート `plugin_children`）
 
@@ -339,7 +339,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ### 8.3 読み込み順
 
-プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`）は常に外部プラグインより先に読み込まれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
+プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら読み込まない）は外部プラグインより先に読み込まれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
 
 `plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。
 

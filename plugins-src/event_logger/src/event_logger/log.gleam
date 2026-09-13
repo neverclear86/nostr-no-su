@@ -26,5 +26,6 @@ pub fn write(level: Level, line: String) -> Nil {
   Nil
 }
 
+/// OTP logger へ 1 行を渡す。binary の本文は書式として解釈されない。戻り値は使わない。
 @external(erlang, "logger", "log")
 fn logger_log(level: Level, message: String) -> Dynamic

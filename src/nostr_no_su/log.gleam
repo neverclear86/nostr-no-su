@@ -1,8 +1,9 @@
 //// ログ 1 行の組み立てと、OTP logger への出力。
 ////
 //// 出力される行は `<時刻 UTC> <水準> [接頭辞] 本文` の形になる。水準は
-//// `Notice`（通常）、`Warning`（失敗したが動き続ける）、`Error`（起動を中止する）
-//// の 3 つで、呼び出し側が渡す。
+//// `Notice`（通常）、`Warning`（失敗したが動き続ける）、`Error`（続けられずに止まる。
+//// 起動の中止、`cannot continue`、プラグインの停止）の 3 つで、呼び出し側が渡す。
+//// OTP のクラッシュレポートも `Error` の行として同じ形で出る。
 ////
 //// 接頭辞は「どのモジュールが出した行か」を示すもので、そのモジュールが定数
 //// として持つ。起動時の報告のように別のモジュールが代わりに出力する行も、
@@ -58,6 +59,7 @@ pub fn configure() -> Nil
 @external(erlang, "nostr_no_su_ffi", "flush_logger")
 pub fn flush() -> Nil
 
+/// OTP logger へ 1 行を渡す。binary の本文は書式として解釈されない。戻り値は使わない。
 @external(erlang, "logger", "log")
 fn logger_log(level: Level, message: String) -> Dynamic
 
