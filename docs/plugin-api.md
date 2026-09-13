@@ -88,6 +88,8 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 
 接頭辞は `plugin <plugin_name/0 の値>` で、第 8.5 節の表（接頭辞 `plugin_loader` の読み込み失敗）とは別物である。
 
+プラグイン自身のログは OTP logger（`logger:log/2`）に出せば、時刻と水準が付いた本体と同じ行の形になる（`io:format` は時刻と水準が付かない）。実例は `plugins-src/event_logger`。この文書の例のコードは短さのために `io:format` を使う。
+
 | 行 | 意味 |
 | --- | --- |
 | `handle_event failed (error:badarg); 2/5 at [{my_plugin,handle_event,1},...]` | 実行が失敗した。連続失敗数とスタックトレース（切り詰め）を添える |
@@ -153,12 +155,12 @@ plugin_children() -> [child_spec()].
 
 ```
 [plugin counter] child "counter_store" failed to start (error:badarg)
-[plugin counter] children failed to start; the reason is in the child line above, or in the =SUPERVISOR REPORT=; running without them
+[plugin counter] children failed to start; the reason is in the child line above, or in the supervisor report; running without them
 ```
 
 **理由が入っているのは 1 行目である。** 2 行目は理由を持っていない（スーパーバイザーの起動失敗は本体に理由を返さない）。上の例は登録名の衝突で、`start_link` の中の `register/2` が `badarg` で落ちた場合である。
 
-**子のクラッシュは BEAM の標準レポートとして出る**（`=CRASH REPORT=` / `=SUPERVISOR REPORT=`）。本体が 1 行に整えるイベント処理関数の失敗（第 4.1 節）とは扱いが違う。
+**子のクラッシュは BEAM の標準レポートとして出る**（`error crasher: ...` / `error Supervisor: ...` の 1 行）。本体が 1 行に整えるイベント処理関数の失敗（第 4.1 節）とは扱いが違う。
 
 **外部資源に依存する子は、落ちずに数えて捨てる形を勧める。** 諦められた子は本体の再起動まで戻らないため、DB や HTTP に到達できないあいだ落ち続ける子は、歯止めを使い切って恒久的に失われる。同梱の `event_logger` が DB 到達不能時に行っているのと同じく、到達できない件数を数えてプロセスは生かしておくほうがよい。
 

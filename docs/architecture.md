@@ -588,7 +588,7 @@ nostr-no-su/
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
 │       ├── crypto/aes_gcm.gleam  AES-256-GCM の箱（nonce、暗号文、タグ）
 │       ├── hex.gleam             16 進文字列とバイト列の相互変換
-│       ├── log.gleam             ログ 1 行の組み立てと外部由来の文字列の正規化
+│       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
 │       └── time.gleam            現在時刻（FFI）
@@ -608,6 +608,7 @@ nostr-no-su/
 │       ├── src/
 │       │   ├── event_logger.gleam       API v1 の関数と起動シム
 │       │   ├── event_logger/store.gleam 保存アクターとスキーマ
+│       │   ├── event_logger/log.gleam   ログ 1 行を OTP logger へ出力（本体の log.gleam とは別実装）
 │       │   └── event_logger_ffi.erl     子仕様 map の組み立て
 │       └── test/
 │
@@ -655,6 +656,7 @@ nostr-no-su/
 | `ACCOUNT_MASTER_KEY`（`_FILE`） | バンカー（アカウントの暗号化） |
 | `PLUGIN_DIR` | プラグインローダー |
 | `PLUGIN_<NAME>_<KEY>` | 各プラグイン |
+| `PLUGIN_CONSOLE_LOGGER_ENABLED` | 内蔵プラグイン `console_logger` |
 | `ADMIN_PORT` | 管理 UI |
 | `ADMIN_BIND` | 管理 UI |
 | `ADMIN_PASSWORD`（`_FILE`） | 管理 UI |
@@ -662,6 +664,7 @@ nostr-no-su/
 
 プラグイン固有の設定だけは本体が中身を解釈しない。
 接頭辞に一致する変数を集めて map で渡すだけで、キーの必須性も値の形式もプラグインが決める。
+内蔵の `console_logger` の `PLUGIN_CONSOLE_LOGGER_ENABLED` だけは本体が読む。
 
 ## 関連文書
 

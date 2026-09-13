@@ -159,6 +159,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 
 資格情報は compose 内で `nostr` / `nostr` / `nostr_no_su` に固定されている。変えるときは `postgres` サービスの `POSTGRES_*`、`DATABASE_URL`、`PLUGIN_EVENT_LOGGER_DATABASE_URL` の 3 か所を合わせること。
 
+ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。水準は notice（通常）、warning（失敗したが動き続ける）、error（起動を中止する）の 3 つで、本文中の引用はこの先頭を省いて書いている。
+
 ### 環境変数
 
 表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。
@@ -172,6 +174,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときは空にせず、プラグインを置かない。docker compose では同梱の Postgres を指す |
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
+| `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
