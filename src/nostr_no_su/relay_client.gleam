@@ -97,8 +97,8 @@ pub type Sync {
 type Session {
   Session(
     subscriptions: SubscriptionState,
-    /// 再試行のタイマーの宛先。stratus の initialiser（stratus のプロセスの中で
-    /// 動く）で作り、セレクターに入れる。
+    /// 再試行と生存確認の刻みのタイマーの宛先。stratus の initialiser（stratus
+    /// のプロセスの中で動く）で作り、セレクターに入れる。
     inbox: Subject(Msg),
     /// 生存確認の状態。
     keepalive: keepalive.Keepalive,
