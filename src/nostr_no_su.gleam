@@ -14,6 +14,7 @@ import nostr_no_su/config.{type Config}
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_store
 import nostr_no_su/log
+import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
@@ -135,7 +136,8 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 
 /// 設定されたリレーの監視サブツリー。監視対象がなければ None。購読はバンカーの
 /// 署名者と再開点から組み立て（`monitor_subscriptions`）、再開点はアカウント
-/// ストアと同じ DB に保存する。
+/// ストアと同じ DB に保存する。除外する kind の既定は ephemeral 全般
+/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。
 fn monitor_spec(
   loaded: Config,
   bunker: app.Bunker,
@@ -158,6 +160,7 @@ fn monitor_spec(
             _,
           ),
           save_resume: resume_point_saver(bunker.pool.pool_name),
+          excludes_kind: event.is_ephemeral,
         )),
         [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
       )

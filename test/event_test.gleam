@@ -301,3 +301,12 @@ pub fn from_map_wrong_type_message_test() {
   assert string.contains(reason, "expected")
   assert string.contains(reason, "kind")
 }
+
+/// ephemeral の範囲は 20000 以上 30000 未満で、両端の外は含まない。
+pub fn is_ephemeral_test() {
+  assert !event.is_ephemeral(19_999)
+  assert event.is_ephemeral(20_000)
+  assert event.is_ephemeral(event.nip46_kind)
+  assert event.is_ephemeral(29_999)
+  assert !event.is_ephemeral(30_000)
+}

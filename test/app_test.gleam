@@ -704,6 +704,7 @@ fn start_monitor_tree(
   reports: Subject(Report),
   seen: Subject(Event),
   name: Name(dedup.Msg),
+  excludes_kind: fn(Int) -> Bool,
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
@@ -713,6 +714,7 @@ fn start_monitor_tree(
       relays: [test_relay()],
       subscriptions: fn(_relay_url) { fn() { Ok([]) } },
       save_resume: discard_resume_points,
+      excludes_kind: excludes_kind,
     )),
     bunker: idle_bunker(),
     admin: None,
@@ -721,20 +723,51 @@ fn start_monitor_tree(
   ))
 }
 
-/// バンカー自身の NIP-46 通信は監視の対象外。同じ購読で kind 24133 が届いても
-/// プラグインには渡さず、後続の通常イベントだけが渡る。
-pub fn monitor_drops_nip46_events_test() {
+/// ephemeral イベント（kind 20000〜29999。バンカー自身の NIP-46 通信を含む）
+/// は監視の対象外。同じ購読で届いても、プラグインには渡らず後続の非 ephemeral
+/// イベントだけが渡る。
+pub fn monitor_drops_ephemeral_events_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
-  let tree = start_monitor_tree(reports, seen, process.new_name("test_dedup"))
+  let tree =
+    start_monitor_tree(
+      reports,
+      seen,
+      process.new_name("test_dedup"),
+      event.is_ephemeral,
+    )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  let normal = note("normal")
+  let below_range = signed_event.new(19_999, "below-range")
+  let above_range = signed_event.new(30_000, "above-range")
+  deliver(signed_event.new(20_000, "lower-bound"))
   deliver(signed_event.new(event.nip46_kind, "nip46"))
-  deliver(normal)
-  // 送信順に処理されるため、最初に届くのが通常イベントであれば kind 24133 は
-  // どのプラグインにも渡っていない。
-  assert process.receive(seen, 2000) == Ok(normal)
+  deliver(signed_event.new(29_999, "upper-bound"))
+  deliver(below_range)
+  deliver(above_range)
+  // 送信順に処理されるため、ephemeral の 3 件がすべて落ちていれば範囲外の
+  // 2 件だけがこの順で届く。
+  assert process.receive(seen, 2000) == Ok(below_range)
+  assert process.receive(seen, 2000) == Ok(above_range)
+  stop_tree(tree)
+}
+
+/// `excludes_kind` は `Monitor` の仕様から渡した述語がそのまま効き、既定の
+/// ephemeral 判定に固定されていない。
+pub fn monitor_uses_configured_excluded_kinds_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let tree =
+    start_monitor_tree(reports, seen, process.new_name("test_dedup"), fn(kind) {
+      kind == 1
+    })
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let nip46 = signed_event.new(event.nip46_kind, "nip46")
+  deliver(note("dropped"))
+  deliver(nip46)
+  // kind 1 を落とす述語なので、kind 1 のイベントは届かず kind 24133 が届く。
+  assert process.receive(seen, 2000) == Ok(nip46)
   stop_tree(tree)
 }
 
@@ -744,7 +777,7 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
   let name = process.new_name("test_dedup")
-  let tree = start_monitor_tree(reports, seen, name)
+  let tree = start_monitor_tree(reports, seen, name, event.is_ephemeral)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   let first = note("first")
@@ -804,6 +837,7 @@ fn start_plugins_tree(
       relays: [test_relay()],
       subscriptions: fn(_relay_url) { fn() { Ok([]) } },
       save_resume: discard_resume_points,
+      excludes_kind: event.is_ephemeral,
     )),
     bunker: idle_bunker(),
     admin: None,
@@ -1542,6 +1576,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
         relays: [monitor_relay],
         subscriptions: fn(_relay_url) { fn() { Ok([]) } },
         save_resume: discard_resume_points,
+        excludes_kind: event.is_ephemeral,
       )),
       bunker: bunker_spec(
         bunker_name,
@@ -1606,6 +1641,7 @@ fn monitored_accounts_spec(
         _,
       ),
       save_resume: discard_resume_points,
+      excludes_kind: event.is_ephemeral,
     )),
     bunker: bunker_spec(bunker_name, store, [], fixed_retry_delay),
     admin: None,

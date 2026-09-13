@@ -32,7 +32,7 @@ flowchart LR
         others["その他"]
     end
 
-    relays -->|"kind 24133 以外"| monitor
+    relays -->|"ephemeral（20000〜29999）以外"| monitor
     monitor --> plugins
     plugins --> event_logger
     plugins --> others
@@ -142,7 +142,7 @@ sequenceDiagram
     relay->>client: EVENT（WebSocket）
     Note over client: id と署名を確かめて<br/>合わないものは捨てる
     client->>handler: 検証済みイベント
-    Note over handler: kind 24133 は<br/>ここで落とす
+    Note over handler: ephemeral の kind は<br/>ここで落とす
     handler->>dedup: Incoming(relay_url, event)
     Note over dedup: created_at をリレーごとに記録し、<br/>直近の id と突き合わせる
     dedup->>runner: Handle(event)（送るだけで戻る）

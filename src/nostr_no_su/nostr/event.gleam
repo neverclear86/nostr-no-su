@@ -10,9 +10,15 @@ import gleam/string
 import nostr_no_su/crypto/bip340
 import nostr_no_su/hex
 
-/// NIP-46 のリクエストと応答を運ぶイベントの kind。ephemeral（20000 以上
-/// 30000 未満）なので、リレーは保存せず接続中のクライアントにだけ転送する。
+/// NIP-46 のリクエストと応答を運ぶイベントの kind。`is_ephemeral` が真になる
+/// kind なので、リレーは保存せず接続中のクライアントにだけ転送する。
 pub const nip46_kind = 24_133
+
+/// NIP-01 の ephemeral イベントの kind（20000 以上 30000 未満）か。リレーは
+/// 保存せず、接続中のクライアントにだけ転送する。
+pub fn is_ephemeral(kind: Int) -> Bool {
+  kind >= 20_000 && kind < 30_000
+}
 
 /// NIP-01 で定義される Nostr イベント。
 pub type Event {

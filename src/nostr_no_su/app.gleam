@@ -153,7 +153,8 @@ pub type PluginSpec {
 /// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
 /// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。`subscriptions`
 /// はリレー URL からそのリレーの購読の定義を返す。`save_resume` は再開点を
-/// 小さくせずに保存する操作で、`resume_saver` が使う。
+/// 小さくせずに保存する操作で、`resume_saver` が使う。`excludes_kind` が真を
+/// 返す kind のイベントはプラグインへ渡さない。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
@@ -161,6 +162,7 @@ pub type Monitor {
     relays: List(Relay),
     subscriptions: fn(String) -> Subscriptions,
     save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
+    excludes_kind: fn(Int) -> Bool,
   )
 }
 
@@ -367,7 +369,7 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     spec,
     config.relays,
     config.subscriptions,
-    monitor_handler(config.name),
+    monitor_handler(config.name, config.excludes_kind),
     fn(_relay_url, _socket) { Nil },
     fn(_relay_url) { Nil },
   )
@@ -378,14 +380,17 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
   ))
 }
 
-/// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。バンカー自身の
-/// NIP-46 通信はここで落とす。監視の購読の `authors` には署名者が入るので、
-/// 監視とバンカーが同じリレーを使うと、署名者が作るバンカーの応答（kind 24133）も
-/// 監視の購読に届く。
-fn monitor_handler(name: Name(dedup.Msg)) -> fn(String, Verified) -> Nil {
+/// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。`excludes_kind`
+/// が真の kind のイベントはここで落とす。監視とバンカーが同じリレーを使うと
+/// バンカーの応答（kind 24133）も監視の購読に届くので、呼び出し側はそれを含む
+/// 述語を渡す。
+fn monitor_handler(
+  name: Name(dedup.Msg),
+  excludes_kind: fn(Int) -> Bool,
+) -> fn(String, Verified) -> Nil {
   fn(relay_url: String, verified: Verified) {
     let incoming = event.verified_event(verified)
-    case incoming.kind == event.nip46_kind {
+    case excludes_kind(incoming.kind) {
       True -> Nil
       False -> named.send(name, dedup.Incoming(relay_url, incoming))
     }
