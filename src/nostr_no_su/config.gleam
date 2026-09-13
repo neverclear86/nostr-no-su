@@ -9,6 +9,7 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 import nostr_no_su/plugin_config
+import nostr_no_su/relay_client
 
 const default_relay_url = "wss://relay.damus.io"
 
@@ -198,6 +199,32 @@ pub fn pick_bunker_relays(
     [], [] -> [default_relay_url]
     [], urls -> urls
     urls, _ -> urls
+  }
+}
+
+/// 監視とバンカーのリレー URL が WebSocket の URL として解釈できるかを起動時に
+/// 確かめる。不正な URL を 1 つ見つけたら、変数名と URL を含む理由を返す。
+/// `bunker_relay_urls` は上書きが無ければ `relay_urls` と同じ値なので、
+/// `relay_urls` を先に検査して変数名を取り違えないようにする。
+pub fn check_relay_urls(config: Config) -> Result(Nil, String) {
+  use Nil <- result.try(check_urls("RELAY_URL", config.relay_urls))
+  check_urls("BUNKER_RELAY_URL", config.bunker_relay_urls)
+}
+
+/// `urls` のうち `relay_client.to_request` で解釈できない最初の URL を、変数名を
+/// 添えた理由にする。
+fn check_urls(variable: String, urls: List(String)) -> Result(Nil, String) {
+  case
+    list.find(urls, fn(url) { result.is_error(relay_client.to_request(url)) })
+  {
+    Ok(url) ->
+      Error(
+        variable
+        <> " has an invalid relay url: "
+        <> url
+        <> " (use ws:// or wss://)",
+      )
+    Error(Nil) -> Ok(Nil)
   }
 }
 

@@ -101,6 +101,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine.{type Pending}
@@ -172,7 +173,7 @@ pub type Admin {
 }
 
 /// 動かすプラグインとバンカー、監視と管理 UI を動かすかどうか、接続をどう開くか、
-/// 接続が再接続までどれだけ待つか。
+/// 接続の再接続の待ち時間。
 pub type Spec {
   Spec(
     plugins: List(PluginSpec),
@@ -180,7 +181,7 @@ pub type Spec {
     bunker: Bunker,
     admin: Option(Admin),
     open: Open,
-    reconnect_delay_ms: Int,
+    reconnect_delay: backoff.Backoff,
   )
 }
 
@@ -214,7 +215,7 @@ pub fn open_websocket(
     url,
     subscriptions,
     handle_event,
-    relay_client.subscription_retry_delay_ms,
+    relay_client.subscription_retry_delay,
   ))
   // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)
@@ -534,7 +535,7 @@ fn add_connections(
       connect: fn() { spec.open(relay.url, subscriptions, handle_event) },
       on_connect: on_connect(relay.url, _),
       on_disconnect: fn() { on_disconnect(relay.url) },
-      reconnect_delay_ms: spec.reconnect_delay_ms,
+      reconnect_delay: spec.reconnect_delay,
     )),
   )
 }

@@ -11,7 +11,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する。アカウントの秘密鍵と接続 secret は、マスターキー（`ACCOUNT_MASTER_KEY`）で AES-256-GCM により暗号化して Postgres に保存する
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。NIP-01 のコーデック、イベントの ID と署名の検証（リレーの接続ごとのプロセスで行う）、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
-- 接続が切れたリレーは 5 秒後に個別に自動再接続（セッション状態は再接続をまたいで保持）
+- 接続が切れたリレーは個別に自動再接続（セッション状態は再接続をまたいで保持。基準の間隔は 5 秒から倍に延び 5 分で頭打ちで、実際の間隔はそれを ±20% ずらす）
 - **イベントロガー**: 外部プラグイン `event_logger` を `PLUGIN_DIR` に置き、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。ソースとビルド手順は `plugins-src/event_logger/`
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントとその `bunker://` 接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態を確認できる。アカウントの登録（nsec の入力とサーバー側での鍵の生成）、削除、接続 secret のローテーション、ラベルの編集、管理パスワードの再入力による秘密鍵の再表示もここで行う。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
@@ -56,7 +56,7 @@ docker compose up --build
 
 登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。
 
-いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
+いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。`RELAY_URL` か `BUNKER_RELAY_URL` の URL が不正（スキームの無いものなど）なときも、`[main] cannot start: RELAY_URL has an invalid relay url: <url> (use ws:// or wss://)` のように起動時に止まる。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
 
 登録で `account is already registered` と出るのにダッシュボードにそのアカウントが無いときは、起動時の読み込みで飛ばされた行（ログの `[bunker] skipped account <pubkey>: <理由>`）が `bunker_accounts` に残っている。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときだけ、行を DB から直接消してから登録し直す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey>'"`）。
 
@@ -145,6 +145,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 - [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
 - [開発](docs/development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
 - [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
+
 
 ## ロードマップ
 

@@ -15,6 +15,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
 import gleam/string
+import nostr_no_su/backoff
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
@@ -63,7 +64,16 @@ pub type SubscriptionState {
     retry: Option(Int),
     /// 次に予約するときに使う世代。予約するたびに 1 つ進める。
     next_generation: Int,
+    /// 次に予約するときの、ジッターを掛ける前の待ち時間。
+    delay_ms: Int,
   )
+}
+
+/// 新たに予約する再試行の世代と、ジッターを掛ける前の待ち時間。
+/// `SubscriptionState.retry`（予約中の世代だけ）と区別するため `Retry` という
+/// 名前にしない。
+pub type Reservation {
+  Reservation(generation: Int, delay_ms: Int)
 }
 
 /// 照合 1 回の結果。
@@ -73,8 +83,8 @@ pub type Sync {
     state: SubscriptionState,
     /// 送る REQ と CLOSE。
     messages: List(message.ClientMessage),
-    /// 新たに予約する再試行の世代。予約しなければ None。
-    schedule_retry: Option(Int),
+    /// 新たに予約する再試行。予約しなければ None。
+    schedule_retry: Option(Reservation),
   )
 }
 
@@ -88,9 +98,13 @@ type Session {
   )
 }
 
-/// 本番の再試行の間隔。バンカーの署名者の問い合わせのタイムアウト（5000ms）と
-/// 同じ値にし、評価 1 回の最長の待ちと同じだけ間を空ける。
-pub const subscription_retry_delay_ms = 5000
+/// 購読の定義を得られなかったときの本番の再試行の待ち時間。初期値はバンカーの
+/// 署名者の問い合わせのタイムアウト（5000ms）と同じにし、上限はバンカーの読み込みの
+/// 再試行と同じ 2 分にする。
+pub const subscription_retry_delay = backoff.Backoff(
+  initial_ms: 5000,
+  max_ms: 120_000,
+)
 
 /// ハンドシェイクに許す時間。`start` は呼び出し元を最大でこの時間（さらに
 /// stratus が上乗せする 100ms）ブロックする。呼び出し元はスーパーバイザー配下の
@@ -120,20 +134,27 @@ pub fn label(url: String) -> String {
 }
 
 /// 接続直後の照合の状態。開いている購読も予約も無い。
-pub fn new_subscription_state() -> SubscriptionState {
-  SubscriptionState(open: set.new(), retry: None, next_generation: 1)
+pub fn new_subscription_state(
+  retry_delay: backoff.Backoff,
+) -> SubscriptionState {
+  SubscriptionState(
+    open: set.new(),
+    retry: None,
+    next_generation: 1,
+    delay_ms: retry_delay.initial_ms,
+  )
 }
 
 /// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
-/// `handle_event` へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay_ms`
-/// は購読の定義を得られなかったときの再試行の間隔。接続アクターは呼び出し元に
+/// `handle_event` へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は
+/// 購読の定義を得られなかったときの再試行の待ち時間。接続アクターは呼び出し元に
 /// リンクされるため呼び出し元と一緒に死に、exit を trap している呼び出し元には
 /// その死がメッセージとして届く。
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Verified) -> Nil,
-  retry_delay_ms: Int,
+  retry_delay: backoff.Backoff,
 ) -> Result(Client, String) {
   use req <- result.try(
     to_request(url)
@@ -143,7 +164,7 @@ pub fn start(
   let builder =
     stratus.new_with_initialiser(req, fn() {
       let inbox = process.new_subject()
-      Session(subscriptions: new_subscription_state(), inbox: inbox)
+      Session(subscriptions: new_subscription_state(retry_delay), inbox: inbox)
       |> stratus.initialised
       |> stratus.selecting(process.new_selector() |> process.select(inbox))
       |> Ok
@@ -158,7 +179,7 @@ pub fn start(
             subscriptions,
             conn,
             prefix,
-            retry_delay_ms,
+            retry_delay,
           )
           |> stratus.continue
         stratus.User(RetrySubscribe(generation)) ->
@@ -168,7 +189,7 @@ pub fn start(
             subscriptions,
             conn,
             prefix,
-            retry_delay_ms,
+            retry_delay,
           )
           |> stratus.continue
         stratus.User(Publish(published)) -> {
@@ -219,7 +240,8 @@ pub fn publish(client: Client, published: event.Event) -> Nil {
 
 /// 照合 1 回ぶんの判断。現在の予約と世代が一致しない再試行は定義を評価せずに
 /// 捨てる。それ以外は定義を評価し、得られれば REQ と CLOSE を作って予約を解き、
-/// 得られなければ何も送らず、予約が無ければ新しい世代で予約する。
+/// 得られなければ何も送らず、予約が無ければ新しい世代で予約する。定義を得られたら
+/// 待ち時間を初期値に戻し、新しく予約するたびに待ち時間を延ばす。
 ///
 /// 定義をサンクで受け取るのは、捨てる再試行で定義を評価しない（バンカーへの
 /// 問い合わせを送らない）ためである。
@@ -227,12 +249,17 @@ pub fn sync(
   state: SubscriptionState,
   trigger: Trigger,
   subscriptions: Subscriptions,
+  retry_delay: backoff.Backoff,
 ) -> Sync {
   case trigger, state.retry {
-    Requested, _ -> evaluate(state, subscriptions)
+    Requested, _ -> evaluate(state, subscriptions, retry_delay)
     // 現在の予約のタイマーは予約を消費する。
     Retried(generation), Some(reserved) if generation == reserved ->
-      evaluate(SubscriptionState(..state, retry: None), subscriptions)
+      evaluate(
+        SubscriptionState(..state, retry: None),
+        subscriptions,
+        retry_delay,
+      )
     // 解いた予約や置き換わった予約の、遅れて届いたタイマー。
     Retried(_), _ -> Sync(state: state, messages: [], schedule_retry: None)
   }
@@ -240,12 +267,21 @@ pub fn sync(
 
 /// 定義を評価して照合する。得られなかったとき、予約が残っていればそれに任せ、
 /// 無ければ新しい世代で予約する。
-fn evaluate(state: SubscriptionState, subscriptions: Subscriptions) -> Sync {
+fn evaluate(
+  state: SubscriptionState,
+  subscriptions: Subscriptions,
+  retry_delay: backoff.Backoff,
+) -> Sync {
   case subscriptions(), state.retry {
     Ok(wanted), _ -> {
       let wanted_ids = set.from_list(list.map(wanted, fn(entry) { entry.0 }))
       Sync(
-        state: SubscriptionState(..state, open: wanted_ids, retry: None),
+        state: SubscriptionState(
+          ..state,
+          open: wanted_ids,
+          retry: None,
+          delay_ms: retry_delay.initial_ms,
+        ),
         messages: reconcile(state.open, wanted, wanted_ids),
         schedule_retry: None,
       )
@@ -258,9 +294,13 @@ fn evaluate(state: SubscriptionState, subscriptions: Subscriptions) -> Sync {
           ..state,
           retry: Some(state.next_generation),
           next_generation: state.next_generation + 1,
+          delay_ms: backoff.next(retry_delay, state.delay_ms),
         ),
         messages: [],
-        schedule_retry: Some(state.next_generation),
+        schedule_retry: Some(Reservation(
+          generation: state.next_generation,
+          delay_ms: state.delay_ms,
+        )),
       )
   }
 }
@@ -288,24 +328,25 @@ fn synchronise(
   subscriptions: Subscriptions,
   conn: stratus.Connection,
   prefix: String,
-  retry_delay_ms: Int,
+  retry_delay: backoff.Backoff,
 ) -> Session {
-  let synced = sync(session.subscriptions, trigger, subscriptions)
+  let synced = sync(session.subscriptions, trigger, subscriptions, retry_delay)
   list.each(synced.messages, send_message(conn, prefix, _))
   case synced.schedule_retry {
     None -> Nil
-    Some(generation) -> {
+    Some(reservation) -> {
+      let delay = backoff.jittered(reservation.delay_ms)
       log.println(
         prefix,
         "could not evaluate subscriptions; keeping the current ones and retrying in "
-          <> int.to_string(retry_delay_ms)
+          <> int.to_string(delay)
           <> "ms",
       )
       let _ =
         process.send_after(
           session.inbox,
-          retry_delay_ms,
-          RetrySubscribe(generation),
+          delay,
+          RetrySubscribe(reservation.generation),
         )
       Nil
     }
