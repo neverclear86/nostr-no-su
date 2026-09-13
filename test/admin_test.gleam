@@ -11,6 +11,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
@@ -1088,13 +1089,20 @@ pub fn registration_routes_reject_other_methods_test() {
   })
 }
 
-/// 登録画面の nsec の欄は伏せ字で、自動入力を求めない。
-pub fn new_account_page_has_secret_inputs_test() {
+/// 登録画面の nsec のフォームと欄は伏せ字で、パスワードとして保存させない。
+pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   let response = get(context(), "/accounts/new")
   assert response.status == 200
+  let body = simulate.read_body(response)
   assert string.contains(
-    simulate.read_body(response),
-    "<input autocomplete=\"off\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
+    body,
+    "<input autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
+  )
+  assert string.contains(
+    body,
+    "<form action=\""
+      <> view.segments_path(dashboard.import_account_segments)
+      <> "\" autocomplete=\"off\"",
   )
 }
 

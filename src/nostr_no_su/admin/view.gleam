@@ -550,6 +550,37 @@ pub fn post_form(
   weight: Weight,
   placement: Placement,
 ) -> Element(msg) {
+  form_with([], action, fields, label, weight, placement)
+}
+
+/// 秘密を入力させるフォーム。フォームにも `autocomplete="off"` を付け、ブラウザーが
+/// フォーム全体を資格情報として保存の対象にしないようにする。
+pub fn secret_post_form(
+  action: String,
+  fields: List(Element(msg)),
+  label: String,
+  weight: Weight,
+  placement: Placement,
+) -> Element(msg) {
+  form_with(
+    [attribute.autocomplete("off")],
+    action,
+    fields,
+    label,
+    weight,
+    placement,
+  )
+}
+
+/// `post_form` と `secret_post_form` が共有するフォームの組み立て。
+fn form_with(
+  attributes: List(Attribute(msg)),
+  action: String,
+  fields: List(Element(msg)),
+  label: String,
+  weight: Weight,
+  placement: Placement,
+) -> Element(msg) {
   let submit =
     html.button(
       [
@@ -562,7 +593,7 @@ pub fn post_form(
     [
       attribute.method("post"),
       attribute.action(action),
-      ..form_layout(placement)
+      ..list.append(attributes, form_layout(placement))
     ],
     list.append(fields, [submit]),
   )
@@ -611,12 +642,13 @@ pub fn labelled(caption: String, input: Element(msg)) -> Element(msg) {
   ])
 }
 
-/// nsec や管理パスワードのように伏せて入力させる欄。
-pub fn secret_input(name: String) -> Element(msg) {
+/// nsec や管理パスワードのように伏せて入力させる欄。`autocomplete` は欄の自動入力の種類
+/// （nsec は `new-password`、再入力のパスワードは `off`）。
+pub fn secret_input(name: String, autocomplete: String) -> Element(msg) {
   html.input([
     attribute.type_("password"),
     attribute.name(name),
-    attribute.autocomplete("off"),
+    attribute.autocomplete(autocomplete),
     attribute.required(True),
     attribute.class("input w-full font-mono border-base-content/60"),
   ])
