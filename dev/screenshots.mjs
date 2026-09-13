@@ -66,6 +66,8 @@ const shots = [
   { name: "24-account-page-unavailable", url: `${unavailable}/accounts/${signer}/label`, status: 503 },
   { name: "25-delete-not-applied", url: account("delete"), form: {}, status: 409 },
   { name: "26-dashboard-copied", url: `${base}/`, copy: true },
+  { name: "27-revoke-not-found", url: `${base}/sessions/revoke`, form: { signer, client: "not-approved" }, status: 404 },
+  { name: "28-revoke-not-answered", url: `${base}/sessions/revoke`, form: { signer, client: "no-answer" }, status: 503 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
