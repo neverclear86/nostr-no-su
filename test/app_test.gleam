@@ -213,12 +213,28 @@ fn start_loading_bunker_tree(
   store: bunker.Store,
   retry_delay: backoff.Backoff,
 ) -> Pid {
+  start_loading_bunker_tree_with_open(
+    name,
+    store,
+    retry_delay,
+    fake_open(reports, subscribed),
+  )
+}
+
+/// `start_loading_bunker_tree` から接続の開き方だけを差し替えられるようにした版。
+/// AUTH の受け口など `fake_open` が捨てる引数を確かめるテストが使う。
+fn start_loading_bunker_tree_with_open(
+  name: Name(bunker.Msg),
+  store: bunker.Store,
+  retry_delay: backoff.Backoff,
+  open: app.Open,
+) -> Pid {
   start_tree(app.Spec(
     plugins: [],
     monitor: None,
     bunker: bunker_spec(name, store, [test_relay()], retry_delay),
     admin: None,
-    open: fake_open(reports, subscribed),
+    open: open,
     reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
@@ -706,6 +722,22 @@ fn start_monitor_tree(
   name: Name(dedup.Msg),
   excludes_kind: fn(Int) -> Bool,
 ) -> Pid {
+  start_monitor_tree_with_open(
+    seen,
+    name,
+    excludes_kind,
+    fake_open(reports, None),
+  )
+}
+
+/// `start_monitor_tree` から接続の開き方だけを差し替えられるようにした版。
+/// AUTH の受け口など `fake_open` が捨てる引数を確かめるテストが使う。
+fn start_monitor_tree_with_open(
+  seen: Subject(Event),
+  name: Name(dedup.Msg),
+  excludes_kind: fn(Int) -> Bool,
+  open: app.Open,
+) -> Pid {
   start_tree(app.Spec(
     plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
     monitor: Some(app.Monitor(
@@ -718,7 +750,7 @@ fn start_monitor_tree(
     )),
     bunker: idle_bunker(),
     admin: None,
-    open: fake_open(reports, None),
+    open: open,
     reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
   ))
 }
@@ -2726,19 +2758,12 @@ pub fn bunker_connections_answer_authentication_test() {
   let name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let tree =
-    start_tree(app.Spec(
-      plugins: [],
-      monitor: None,
-      bunker: bunker_spec(
-        name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        [test_relay()],
-        fixed_retry_delay,
-      ),
-      admin: None,
-      open: authenticator_recording_open(reports, authenticators),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    ))
+    start_loading_bunker_tree_with_open(
+      name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      fixed_retry_delay,
+      authenticator_recording_open(reports, authenticators),
+    )
   let assert Ok(#(relay_url, Some(authenticate))) =
     process.receive(authenticators, 2000)
   assert relay_url == test_relay_url
@@ -2757,26 +2782,12 @@ pub fn monitor_connections_do_not_answer_authentication_test() {
   let reports = process.new_subject()
   let authenticators = process.new_subject()
   let tree =
-    start_tree(app.Spec(
-      plugins: [
-        forwarding_spec(
-          process.new_name("test_plugin_forwarding"),
-          process.new_subject(),
-        ),
-      ],
-      monitor: Some(app.Monitor(
-        name: process.new_name("test_dedup"),
-        dedup_capacity: 8,
-        relays: [test_relay()],
-        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-        save_resume: discard_resume_points,
-        excludes_kind: event.is_ephemeral,
-      )),
-      bunker: idle_bunker(),
-      admin: None,
-      open: authenticator_recording_open(reports, authenticators),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    ))
+    start_monitor_tree_with_open(
+      process.new_subject(),
+      process.new_name("test_dedup"),
+      event.is_ephemeral,
+      authenticator_recording_open(reports, authenticators),
+    )
   let assert Ok(#(relay_url, None)) = process.receive(authenticators, 2000)
   assert relay_url == test_relay_url
   stop_tree(tree)
