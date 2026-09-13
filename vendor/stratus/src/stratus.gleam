@@ -262,6 +262,11 @@ pub fn on_close(
   Builder(..builder, on_close: on_close)
 }
 
+// VENDORED PATCH (nostr-no-su): upper bound on the bytes a connection keeps
+// before they decode into frames. A frame whose length including its header
+// exceeds this stops the actor abnormally.
+pub const max_buffer_bytes = 4_194_304
+
 type State(state, user_message) {
   State(
     buffer: BitArray,
@@ -432,6 +437,20 @@ pub fn start(
         actor.stop_abnormal(string.inspect(reason))
       }
       Data(bits) -> {
+        let buffer = bit_array.append(state.buffer, bits)
+        // VENDORED PATCH (nostr-no-su): stop when the bytes not yet decoded
+        // exceed max_buffer_bytes, instead of buffering a frame of any length.
+        use <- bool.lazy_guard(
+          bit_array.byte_size(buffer) > max_buffer_bytes,
+          fn() {
+            close_contexts(state.compression)
+            actor.stop_abnormal(
+              "WebSocket receive buffer exceeded "
+              <> int.to_string(max_buffer_bytes)
+              <> " bytes",
+            )
+          },
+        )
         let conn =
           Connection(
             state.socket,
@@ -440,7 +459,7 @@ pub fn start(
           )
         let #(frames, rest) =
           websocket.decode_many_frames(
-            bit_array.append(state.buffer, bits),
+            buffer,
             option.map(state.compression, fn(context) { context.inflate }),
             [],
           )
