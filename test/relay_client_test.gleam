@@ -1,6 +1,6 @@
 //// `relay_client` のテスト。URL の変換、購読の照合の判断（`sync`）、および
-//// ループバックの WebSocket サーバーへ本物の `relay_client` を接続した再試行の配線を
-//// 確かめる。
+//// ループバックの WebSocket サーバーへ本物の `relay_client` を接続した再試行の配線と
+//// 生存確認によるハーフオープンの検知を確かめる。
 
 import gleam/dynamic
 import gleam/erlang/process.{type Pid, type Subject}
@@ -9,6 +9,7 @@ import gleam/int
 import gleam/json
 import gleam/option.{None, Some}
 import gleam/otp/actor
+import gleam/result
 import gleam/set
 import gleam/string
 import mist
@@ -91,6 +92,7 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
       fn() { Ok([]) },
       fn(_event) { Nil },
       relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
     )
     == Error("WebSocket handshake failed: Sock(Nxdomain)")
 }
@@ -543,6 +545,7 @@ fn connect(
       subscriptions,
       fn(_event) { Nil },
       retry_delay,
+      relay_client.keepalive_interval_ms,
     )
   client
 }
@@ -670,6 +673,7 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
       fn() { Ok([#(bunker, filter.new())]) },
       process.send(received, _),
       relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
     )
 
   let assert Ok(verified) = process.receive(received, 2000)
@@ -678,5 +682,77 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
   assert process.receive(connections, 0) == Error(Nil)
 
   stop_client(client)
+  stop_relay(relay)
+}
+
+// --- 生存確認によるハーフオープンの検知 ---
+
+/// mist の接続プロセスを止めて、TCP は開いたまま応答が止まったリレーを再現する。
+@external(erlang, "erlang", "suspend_process")
+fn suspend_process(pid: Pid) -> Bool
+
+/// 止めた接続プロセスを元に戻す。
+@external(erlang, "erlang", "resume_process")
+fn resume_process(pid: Pid) -> Bool
+
+/// 本物の `relay_client.start` を、空の購読と、何もしない `handle_event` と、
+/// 指定の間隔の生存確認で起動し、`app.open_websocket` と同じく `Socket` に
+/// 包む。`app.open_websocket` は本番の 30 秒の間隔を使うので、短い間隔で
+/// 確かめるこのテストでは使えない。
+fn open_socket(
+  url: String,
+  interval_ms: Int,
+) -> Result(relay_connection.Socket, String) {
+  use connection <- result.try(relay_client.start(
+    url,
+    fn() { Ok([]) },
+    fn(_event) { Nil },
+    relay_client.subscription_retry_delay,
+    interval_ms,
+  ))
+  let assert Ok(pid) = process.subject_owner(connection)
+  Ok(
+    relay_connection.Socket(
+      pid: pid,
+      publish: relay_client.publish(connection, _),
+      resubscribe: fn() { relay_client.resubscribe(connection) },
+    ),
+  )
+}
+
+/// 受信が止まった偽の相手を、mist の接続プロセスを止めて再現する。生存確認の
+/// ping にも応答が無いまま止まった接続は `relay_connection` が張り直す。
+pub fn a_silent_relay_is_closed_and_reconnected_test() {
+  let connection_pids = process.new_subject()
+  let disconnects = process.new_subject()
+  let relay =
+    start_relay_with(
+      fn() { process.send(connection_pids, process.self()) },
+      fn(_connection, _text) { Nil },
+    )
+
+  let assert Ok(started) =
+    relay_connection.start(relay_connection.Settings(
+      name: process.new_name("half_open"),
+      relay: relay_client.label(relay.url),
+      connect: fn() { open_socket(relay.url, 200) },
+      on_connect: fn(_socket) { Nil },
+      on_disconnect: fn() { process.send(disconnects, Nil) },
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+    ))
+
+  let assert Ok(first_pid) = process.receive(connection_pids, 2000)
+
+  // mist はアイドルな接続にも ping に自動で pong を返すので、切られない。
+  assert process.receive(disconnects, 1000) == Error(Nil)
+
+  let assert True = suspend_process(first_pid)
+
+  assert process.receive(disconnects, 2000) == Ok(Nil)
+  let assert Ok(_second_pid) = process.receive(connection_pids, 2000)
+
+  let assert True = resume_process(first_pid)
+  process.unlink(started.pid)
+  process.kill(started.pid)
   stop_relay(relay)
 }
