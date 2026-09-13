@@ -187,6 +187,7 @@ ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
 ${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
+  // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r, effortNote) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
 - 前の版: ${PLANS}/${e.n}-v${v - 1}.md
 - レビュー（ラウンド ${r}）: ${PLANS}/${e.n}-r${r}.md
@@ -220,7 +221,7 @@ ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、�
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
   implement: (e, issue, postUrl) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
 - 土台: origin/main の ${e.base}
-- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（\`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る）
+- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあればそれを取り出して続きから進め、PR がすでにあれば新しく作らずに push して本文を直す）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -292,7 +293,6 @@ async function planStage(e, issue, state) {
     const effortNote = escalated ? 'ラウンドが重なっているので、effort は high 相当で、根拠を確かめながら書く。\n' : ''
     const plan = await call('plan', `Plan #${e.n} v${v}`,
       v === 1 ? P.plan1(e, issue, designUrl) : P.planNext(e, v, r, effortNote),
-      // （版 2 以降の依頼文は前の版のファイル名を規約で組む）
       { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, ...(escalated ? { effort: 'high' } : {}) })
     if (plan.status === 'question') return { blocked: { stage: 'plan', questions: plan.questions || [plan.summary] } }
     r++
@@ -495,29 +495,33 @@ function fake(label, opts) {
   if (t === 'issue-designer') return { commentUrl: `https://example/issue/${n}#design` }
   if (t === 'issue-planner') {
     if (sc === 'question' && v === '1') return { status: 'question', questions: ['since はどこから？'] }
+    if (sc === 'replan-question' && (label.includes('revise') || Number(v) >= 2)) return { status: 'question', questions: ['逸脱の代案はどちらにするか'] }
     return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
   }
   if (t === 'issue-plan-reviewer') {
     if (sc === 'needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, questions: ['A 案と B 案のどちらか'] }
+    if (sc === 'replan-reject' && r >= 2) return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, headings: ['逸脱の解き方が受け入れ条件を満たさない'] }
     const rounds = sc === 'plan2' ? 2 : sc === 'escalate' ? 4 : sc === 'plan-stall' ? 99 : 1
-    const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2) || label.includes('revise') || (sc === 'planurl-deviation')
+    const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2) || sc === 'planurl-deviation'
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 1, postUrl: `https://example/issue/${n}#plan-r${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 1, nit: 0, headings: ['x'] }
   }
   if (t === 'issue-implementer') {
     if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased` }
-    if (label.startsWith('Fix')) return { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}` }
+    if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}` }
     if (sc === 'null') return null
     if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
-    if ((sc === 'deviation' || sc === 'planurl-deviation') && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
+    if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
     return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1` }
   }
   if (t === 'issue-pr-reviewer') {
-    const approveAt = sc === 'pr2' || sc === 'design-must' || sc === 'null-fix' ? 2 : 1
+    if (sc === 'pr-needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#needs-user`, questions: ['エラーを握るか落とすか'] }
+    const approveAt = ['pr2', 'design-must', 'null-fix', 'fix-blocked'].includes(sc) ? 2 : 1
     const inGate = opts.phase === '最終確認'
     if (inGate || r >= approveAt) return { verdict: 'APPROVE', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#approve-r${r}` }
     return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, commentUrl: `https://example/pr#review-r${r}`, designMust: sc === 'design-must' }
   }
   if (t === 'issue-final-gate') {
+    if (sc === 'gate-needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#gate-needs-user`, questions: ['受け入れ条件の解釈が 2 通りある'] }
     const ok = sc !== 'gate' || r >= 2
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#gate-${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, commentUrl: `https://example/pr#gate-${r}` }
   }

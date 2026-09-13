@@ -12,6 +12,8 @@ disallowedTools: Agent
 
 ## 確かめること（すべて `gh` と `git` の出力を根拠にする）
 
+最初に `gh pr view <PR> -R $R --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、何もせずに status を merged、マージのコミットを `mergeCommit.oid` にして返す。
+
 ```sh
 R=neverclear86/nostr-no-su
 gh pr view <PR> -R $R --json headRefOid,mergeable,mergeStateStatus,commits --jq '{head: .headRefOid, mergeable, mergeStateStatus, last: .commits[-1].committedDate}'
@@ -22,7 +24,7 @@ gh pr checks <PR> -R $R
 ```
 
 コメントの絞り込みは見出し行（1 行目）の完全一致で行う（本文に「指摘への対応」の語が引用されていても落とさないため）。
-APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（rebase の後も、その前のコミットはローカルの object DB に残る。無ければ `git fetch origin <その SHA>` で取る）。PR の `commits[-1].committedDate` は現在の head の時刻なので、rebase の後の比較には使わない。
+APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（rebase の後も、その前のコミットはローカルの object DB に残る。無ければ `gh api repos/$R/commits/<その SHA> --jq .commit.committer.date` で時刻を得る）。PR の `commits[-1].committedDate` は現在の head の時刻なので、rebase の後の比較には使わない。
 
 - 指示された head が PR の head と一致する
 - 指示された「APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
