@@ -30,7 +30,7 @@ disallowedTools: Agent
 - `gleam format src test dev`（差分をコミットに含める）
 - `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする（CI が差分を検査する）
 - プランの「検証の手順」をすべて実行し、出力を保存する
-- UI を変える issue では、同じ初期状態を作るスクリプトで main と作業ブランチの両方の画面を Playwright（幅 1280、locale ja-JP）で撮り、PR を作った後に `gh pr comment <PR> --attach <png>` で「変更前」「変更後」を貼る。見た目が変わらないときも貼る
+- UI を変える issue では、`dev/screenshots.mjs` で main と作業ブランチの両方の画面を撮り（幅 1280 と 375、ライトとダーク、日本語と英語。同じ初期状態を作ってから）、PR を作った直後に `gh pr comment <PR> --attach <png>` で「変更前」「変更後」を貼る。レビュアーはこの画像を見て判断するので、変えた画面と状態（空、エラー、承認待ちなど）を漏らさない。見た目が変わらないときも貼る（変わらないことの証拠になる）
 
 ## docker を使うときの安全策（ユーザーの compose と同じ docker を共有している）
 - プロジェクト名とポートは指示されたものを使う。始める前に、その名前のコンテナー、volume、ネットワーク、イメージが無いことを確かめる。`nostr-no-su` という名前は使わない
