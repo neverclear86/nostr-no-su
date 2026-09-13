@@ -10,6 +10,8 @@
 // CHROMIUM に chromium の実行ファイルを渡すと、playwright-core が既定で探すものの代わりに使う。
 // 応答の状態コードが画面ごとの期待値と違うか、応答が HTML でない画面があれば、撮り終えた後にその一覧を出して
 // 終了コード 1 で終える。
+// テーマの POST はコンテキストに cookie を残すので、以降の撮影に影響しないよう末尾に置き、
+// 最後に system（cookie を消す）を送る。
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
@@ -39,6 +41,7 @@ const colorSchemes = ["light", "dark"];
 
 // 撮る画面。form を持つものは POST で開く。status は応答の状態コードの期待値で、無ければ 200。
 // mask は乱数で変わる値を伏せる。copy を持つものは、開いた後に最初のコピーのボタンを押してから撮る。
+// click と keys は、開いた後に順にクリックするセレクターと、順に押すキーの配列。
 const shots = [
   { name: "01-dashboard", url: `${base}/` },
   { name: "02-dashboard-empty", url: `${empty}/` },
@@ -68,17 +71,30 @@ const shots = [
   { name: "26-dashboard-copied", url: `${base}/`, copy: true },
   { name: "27-revoke-not-found", url: `${base}/sessions/revoke`, form: { signer, client: "not-approved" }, status: 404 },
   { name: "28-revoke-not-answered", url: `${base}/sessions/revoke`, form: { signer, client: "no-answer" }, status: 503 },
+  { name: "29-theme-menu", url: `${base}/`, click: ["summary >> nth=0"] },
+  { name: "30-language-menu", url: `${base}/`, click: ["summary >> nth=0", "summary >> nth=1"] },
+  { name: "31-summary-focus", url: `${base}/`, keys: ["Tab", "Tab"] },
+  { name: "32-current-item-focus", url: `${base}/`, keys: ["Tab", "Tab", "Enter", "Tab"] },
+  { name: "33-item-focus", url: `${base}/`, keys: ["Tab", "Tab", "Enter", "Tab", "Tab"] },
+  { name: "34-theme-dark", url: `${base}/theme`, form: { theme: "dark", return: "/" } },
+  { name: "35-theme-light", url: `${base}/theme`, form: { theme: "light", return: "/" } },
+  { name: "36-theme-system", url: `${base}/theme`, form: { theme: "system", return: "/" } },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
-// （CSRF の検査を通り、ブラウザーの実際の遷移で表示される）、POST の応答と、送信で開いた文書の
-// load を待つ。waitForURL は今の URL と同じ URL への送信では遷移を待たずに解決するので使わない。
+// （CSRF の検査を通り、ブラウザーの実際の遷移で表示される）、POST の応答（303 で戻す POST は、
+// 戻り先の文書の応答）と、送信で開いた文書の load を待つ。waitForURL は今の URL と同じ URL への
+// 送信では遷移を待たずに解決するので使わない。
 async function open(page, shot) {
   if (!shot.form) return page.goto(shot.url);
   const origin = new URL(shot.url).origin;
   if (!page.url().startsWith(origin)) await page.goto(`${origin}/`);
   const [response] = await Promise.all([
-    page.waitForResponse((r) => r.request().method() === "POST"),
+    page.waitForResponse((r) => {
+      const request = r.request();
+      const posted = request.method() === "POST" || request.redirectedFrom()?.method() === "POST";
+      return posted && (r.status() < 300 || r.status() >= 400);
+    }),
     page.waitForEvent("load"),
     page.evaluate(
       ({ url, fields }) => {
@@ -99,6 +115,16 @@ async function open(page, shot) {
     ),
   ]);
   return response;
+}
+
+// 撮る前の操作。クリックの後に押すキーを送る。
+async function prepare(page, shot) {
+  for (const selector of shot.click ?? []) {
+    await page.locator(selector).click();
+  }
+  for (const key of shot.keys ?? []) {
+    await page.keyboard.press(key);
+  }
 }
 
 // 最初のコピーのボタンを押し、コピーの欄の囲みに data-copied が付いたかを返す。付いた表示は
@@ -132,6 +158,7 @@ try {
       const page = await context.newPage();
       for (const shot of shots) {
         const response = await open(page, shot);
+        await prepare(page, shot);
         const copied = shot.copy ? ` copied=${await copy(page)}` : "";
         const file = `${out}/${shot.name}-${viewport.name}-${colorScheme}.png`;
         const mask = shot.mask ? [page.locator(shot.mask)] : [];

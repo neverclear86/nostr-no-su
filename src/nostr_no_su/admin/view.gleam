@@ -9,8 +9,8 @@
 //// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
-//// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments` から組み立てた
-//// 値だけを渡す（lustre は URL を検査しない）。
+//// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
+//// `theme_segments` から組み立てた値だけを渡す（lustre は URL を検査しない）。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
@@ -36,6 +36,7 @@ import gleam/string
 import lustre/attribute.{type Attribute}
 import lustre/element.{type Element}
 import lustre/element/html
+import lustre/element/svg
 import nostr_no_su/admin/i18n.{type Language}
 
 /// ビルドした管理 UI のスタイルシートの URL のパスセグメント。ルーティング（`admin`）と
@@ -57,8 +58,19 @@ pub const language_segments = ["language"]
 /// 言語の切り替えで、選んだ言語のコードを送る欄の名前。
 pub const language_field = "language"
 
-/// 言語の切り替えで、切り替えた後に開くパスを送る欄の名前。
+/// テーマの切り替えの POST 先のパスセグメント。ルーティング（`admin`）とナビゲーション
+/// バーのフォームが同じ定義を見る。
+pub const theme_segments = ["theme"]
+
+/// テーマの切り替えで、選んだテーマのコードを送る欄の名前。
+pub const theme_field = "theme"
+
+/// テーマと言語の切り替えで、切り替えた後に開くパスを送る欄の名前。
 pub const return_field = "return"
+
+/// ナビゲーションバーの 2 つのドロップダウン（`details`）に付ける名前。同じ名前の
+/// `details` は Chromium で 1 つだけ開くので、片方を開くともう片方が閉じる。
+pub const navbar_menu_name = "navbar-menu"
 
 /// ページの本文の幅。
 pub type Layout {
@@ -68,8 +80,34 @@ pub type Layout {
   Narrow
 }
 
-/// ナビゲーションバーに言語の切り替えを出すかどうか。
-pub type LanguageSwitch {
+/// 表示のテーマ。`System` はブラウザーの設定（`prefers-color-scheme`）に従い、
+/// `data-theme` も cookie も出さない。
+pub type Theme {
+  System
+  Light
+  Dark
+}
+
+/// 対応するテーマ。ナビゲーションバーのドロップダウンはこの順に並べる。
+pub const themes = [System, Light, Dark]
+
+/// テーマのコード。`data-theme`、切り替えで送る値、cookie の値に使う。`System` は
+/// `data-theme` も cookie も持たないコードなので、フォームの値としてだけ使う。
+pub fn theme_code(theme: Theme) -> String {
+  case theme {
+    System -> "system"
+    Light -> "light"
+    Dark -> "dark"
+  }
+}
+
+/// テーマのコードのテーマ。対応していない値なら Error。
+pub fn theme_from_code(value: String) -> Result(Theme, Nil) {
+  list.find(themes, fn(theme) { theme_code(theme) == value })
+}
+
+/// ナビゲーションバーにテーマと言語の切り替えを出すかどうか。
+pub type NavbarSwitch {
   /// 切り替えを出す。切り替えた後は `return_to`（GET で開けるページのパス）を開く。
   SwitchReturningTo(return_to: String)
   /// 切り替えを出さない。秘密鍵を出すページは同じ内容を GET で開き直せず、切り替えで
@@ -121,16 +159,19 @@ pub type Value {
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
-/// ナビゲーションバーと、`title` を見出し（h1）にした本文を出す。
+/// `theme` が `Light` か `Dark` なら `data-theme` を出す。ナビゲーションバーと、`title` を
+/// 見出し（h1）にした本文を出す。
 pub fn page(
   language: Language,
+  theme: Theme,
   title: i18n.Message,
   layout: Layout,
-  switch: LanguageSwitch,
+  switch: NavbarSwitch,
   body: List(Element(msg)),
 ) -> String {
   let title = i18n.text(language, title)
-  html.html([attribute.lang(i18n.code(language))], [
+  let attrs = [attribute.lang(i18n.code(language)), ..theme_attributes(theme)]
+  html.html(attrs, [
     html.head([], [
       html.meta([attribute.charset("utf-8")]),
       html.meta([
@@ -152,7 +193,7 @@ pub fn page(
       ),
     ]),
     html.body([attribute.class("min-h-screen bg-base-200 text-base-content")], [
-      navbar(language, switch),
+      navbar(language, theme, switch),
       html.main([attribute.class(main_class(layout))], [
         html.h1([attribute.class("text-2xl font-bold")], [html.text(title)]),
         ..body
@@ -169,11 +210,27 @@ pub fn segments_path(segments: List(String)) -> String {
   "/" <> string.join(segments, "/")
 }
 
+/// `<html>` に出す属性。`System` はブラウザーの設定に従うので `data-theme` を出さない。
+fn theme_attributes(theme: Theme) -> List(Attribute(msg)) {
+  case theme {
+    System -> []
+    Light | Dark -> [attribute.data("theme", theme_code(theme))]
+  }
+}
+
 /// 全ページ共通のナビゲーションバー。サイト名はダッシュボードへのリンクにし、右端
-/// （`navbar-end`）に言語の切り替えを置く。切り替えを出さないページでも右端の枠は残す。
-fn navbar(language: Language, switch: LanguageSwitch) -> Element(msg) {
+/// （`navbar-end`）にテーマと言語の切り替えを置く。切り替えを出さないページでも右端の
+/// 枠は残す。
+fn navbar(
+  language: Language,
+  theme: Theme,
+  switch: NavbarSwitch,
+) -> Element(msg) {
   let end = case switch {
-    SwitchReturningTo(return_to:) -> [language_switch(language, return_to)]
+    SwitchReturningTo(return_to:) -> [
+      theme_switch(language, theme, return_to),
+      language_switch(language, return_to),
+    ]
     NoSwitch -> []
   }
   html.header(
@@ -183,7 +240,7 @@ fn navbar(language: Language, switch: LanguageSwitch) -> Element(msg) {
       ),
     ],
     [
-      html.div([attribute.class("navbar-start")], [
+      html.div([attribute.class("navbar-start flex-1")], [
         html.a(
           [
             attribute.href("/"),
@@ -194,65 +251,162 @@ fn navbar(language: Language, switch: LanguageSwitch) -> Element(msg) {
           [html.text("nostr-no-su")],
         ),
       ]),
-      html.div([attribute.class("navbar-end")], end),
+      html.div([attribute.class("navbar-end w-auto gap-2")], end),
     ],
   )
 }
 
-/// 言語の切り替え。対応する言語を `i18n.languages` の順に並べ、表示している言語は押せない
-/// 項目に、それ以外の言語はその言語を POST で送るボタンにする。JS なしで動く。
+/// テーマの切り替え。テーマは `themes` の順（ブラウザーの設定、ライト、ダーク）に並べる。
+fn theme_switch(
+  language: Language,
+  current: Theme,
+  return_to: String,
+) -> Element(msg) {
+  dropdown(
+    i18n.text(language, i18n.ThemeSwitchLabel),
+    theme_segments,
+    return_to,
+    list.map(themes, fn(theme) {
+      dropdown_item(
+        theme_field,
+        theme_code(theme),
+        theme == current,
+        None,
+        i18n.text(language, theme_label(theme)),
+      )
+    }),
+  )
+}
+
+/// テーマの項目の文言。
+fn theme_label(theme: Theme) -> i18n.Message {
+  case theme {
+    System -> i18n.FollowBrowser
+    Light -> i18n.ThemeLight
+    Dark -> i18n.ThemeDark
+  }
+}
+
+/// 言語の切り替え。対応する言語は `i18n.languages` の順に並べ、言語名はその言語自身で書き
+/// `lang` を付ける。
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
-  html.form(
+  dropdown(
+    i18n.text(current, i18n.LanguageSwitchLabel),
+    language_segments,
+    return_to,
+    list.map(i18n.languages, fn(language) {
+      dropdown_item(
+        language_field,
+        i18n.code(language),
+        language == current,
+        Some(i18n.code(language)),
+        i18n.native_name(language),
+      )
+    }),
+  )
+}
+
+/// ナビゲーションバーの切り替えのドロップダウン。`details` で開閉し、一覧の各項目を
+/// `action` へ POST する送信ボタンにする。JS なしで動き、外側のクリックと Esc では閉じない
+/// （`details` の仕様）。ARIA のメニューにしない（矢印キーの移動を実装しないため）。
+fn dropdown(
+  label: String,
+  action: List(String),
+  return_to: String,
+  items: List(Element(msg)),
+) -> Element(msg) {
+  html.details(
+    [attribute.name(navbar_menu_name), attribute.class("dropdown dropdown-end")],
     [
-      attribute.method("post"),
-      attribute.action(segments_path(language_segments)),
-    ],
-    [
-      hidden_input(return_field, return_to),
-      html.div(
+      html.summary(
+        [attribute.class("btn btn-sm focus-visible:outline-base-content")],
+        [html.text(label), chevron_icon()],
+      ),
+      html.form(
         [
-          attribute.role("group"),
-          attribute.aria_label(i18n.text(current, i18n.LanguageSwitchLabel)),
-          attribute.class("join"),
+          attribute.method("post"),
+          attribute.action(segments_path(action)),
+          attribute.class("dropdown-content z-10 mt-1"),
         ],
-        list.map(i18n.languages, language_option(current, _)),
+        [
+          hidden_input(return_field, return_to),
+          html.ul(
+            [
+              attribute.class(
+                "menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm",
+              ),
+            ],
+            list.map(items, fn(item) { html.li([], [item]) }),
+          ),
+        ],
       ),
     ],
   )
 }
 
-/// 切り替えの項目 1 つ。言語名はその言語自身で書き、読み上げと字形がその言語になるよう
-/// `lang` を付ける。表示している言語の項目はフォーカスできない `span` なので、ボタンと
-/// 違ってフォーカスの輪郭のクラスを付けない。
-fn language_option(current: Language, language: Language) -> Element(msg) {
-  let code = i18n.code(language)
-  let name = [html.text(i18n.native_name(language))]
-  case language == current {
-    True ->
-      html.span(
-        [
-          attribute.lang(code),
-          attribute.aria_current("true"),
-          attribute.class(
-            "btn btn-sm join-item cursor-default border-base-content bg-base-content text-base-100",
-          ),
-        ],
-        name,
-      )
-    False ->
-      html.button(
-        [
-          attribute.type_("submit"),
-          attribute.name(language_field),
-          attribute.value(code),
-          attribute.lang(code),
-          attribute.class(
-            "btn btn-sm join-item focus-visible:outline-base-content",
-          ),
-        ],
-        name,
-      )
+/// ドロップダウンの一覧の項目 1 つ。表示中の項目は `aria-current` と `menu-active` と
+/// チェックで示し、押すと同じ値を送り直す。
+fn dropdown_item(
+  field: String,
+  value: String,
+  selected: Bool,
+  lang: Option(String),
+  text: String,
+) -> Element(msg) {
+  let lang_attribute = case lang {
+    Some(code) -> [attribute.lang(code)]
+    None -> []
   }
+  let class = case selected {
+    True ->
+      "menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content"
+    False ->
+      "focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content"
+  }
+  let current = case selected {
+    True -> [attribute.aria_current("true")]
+    False -> []
+  }
+  html.button(
+    [
+      attribute.type_("submit"),
+      attribute.name(field),
+      attribute.value(value),
+      attribute.class(class),
+      ..list.append(lang_attribute, current)
+    ],
+    [check_icon(selected), html.span([], [html.text(text)])],
+  )
+}
+
+/// 線で描く 16 × 16 の飾りのアイコン。読み上げない。
+fn icon(class: String, path: String) -> Element(msg) {
+  svg.svg(
+    [
+      attribute.aria_hidden(True),
+      attribute.attribute("viewBox", "0 0 16 16"),
+      attribute.attribute("fill", "none"),
+      attribute.attribute("stroke", "currentColor"),
+      attribute.attribute("stroke-width", "2"),
+      attribute.class(class),
+    ],
+    [svg.path([attribute.attribute("d", path)])],
+  )
+}
+
+/// 表示中の項目のチェック。表示中でない項目にも同じ大きさの見えない枠を置き、文字の
+/// 位置を揃える。
+fn check_icon(shown: Bool) -> Element(msg) {
+  let class = case shown {
+    True -> "size-4"
+    False -> "invisible size-4"
+  }
+  icon(class, "M3 8.5l3 3 7-7")
+}
+
+/// 開閉のボタンの下向きの矢印。
+fn chevron_icon() -> Element(msg) {
+  icon("size-3", "M4 6l4 4 4-4")
 }
 
 /// ページの本文（`main`）のクラス。

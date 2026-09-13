@@ -186,6 +186,10 @@ pub type Message {
   // ページの枠と共通の部品
   BackToDashboard
   LanguageSwitchLabel
+  ThemeSwitchLabel
+  FollowBrowser
+  ThemeLight
+  ThemeDark
   Copy
   Copied
   // ダッシュボード
@@ -292,6 +296,10 @@ fn english(message: Message) -> String {
   case message {
     BackToDashboard -> "Back to dashboard"
     LanguageSwitchLabel -> "Language"
+    ThemeSwitchLabel -> "Theme"
+    FollowBrowser -> "Browser setting"
+    ThemeLight -> "Light"
+    ThemeDark -> "Dark"
     Copy -> "Copy"
     Copied -> "Copied"
     Dashboard -> "Dashboard"
@@ -397,6 +405,10 @@ fn japanese(message: Message) -> String {
   case message {
     BackToDashboard -> "ダッシュボードに戻る"
     LanguageSwitchLabel -> "言語"
+    ThemeSwitchLabel -> "テーマ"
+    FollowBrowser -> "ブラウザーの設定"
+    ThemeLight -> "ライト"
+    ThemeDark -> "ダーク"
     Copy -> "コピー"
     Copied -> "コピー済み"
     Dashboard -> "ダッシュボード"

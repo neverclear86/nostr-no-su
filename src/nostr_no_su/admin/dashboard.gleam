@@ -9,7 +9,7 @@
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
 //// `admin/account_pages`）が同じ定義を見るようここに置く。ページ枠が使う定義
-//// （スタイルシートと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
+//// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
 
 import gleam/list
@@ -124,20 +124,37 @@ pub const max_label_code_points = 100
 /// スナップショットをダッシュボードのページに描画する。広い画面では、判断を待つ承認待ちと
 /// アカウントとセッションを左の列に、リレーとプラグインの状態を右の列に置く。狭い画面では
 /// この順に 1 列に並ぶ。
-pub fn render(language: Language, snapshot: Snapshot) -> String {
-  view.page(language, i18n.Dashboard, view.Wide, view.SwitchReturningTo("/"), [
-    html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
-      html.div([attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")], [
-        pending_section(language, snapshot.pending),
-        accounts_section(language, snapshot.accounts),
-        sessions_section(language, snapshot.sessions),
+pub fn render(
+  language: Language,
+  theme: view.Theme,
+  snapshot: Snapshot,
+) -> String {
+  view.page(
+    language,
+    theme,
+    i18n.Dashboard,
+    view.Wide,
+    view.SwitchReturningTo("/"),
+    [
+      html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
+        html.div(
+          [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")],
+          [
+            pending_section(language, snapshot.pending),
+            accounts_section(language, snapshot.accounts),
+            sessions_section(language, snapshot.sessions),
+          ],
+        ),
+        html.div(
+          [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-2")],
+          [
+            relays_section(language, snapshot.relays),
+            plugins_section(language, snapshot.plugins),
+          ],
+        ),
       ]),
-      html.div([attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-2")], [
-        relays_section(language, snapshot.relays),
-        plugins_section(language, snapshot.plugins),
-      ]),
-    ]),
-  ])
+    ],
+  )
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。
@@ -253,11 +270,16 @@ fn pending_section(
   )
 }
 
-/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。言語を
+/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。テーマか言語を
 /// 切り替えた後は同じ承認ページを開き直す。
-pub fn approval_page(language: Language, pending: PendingRow) -> String {
+pub fn approval_page(
+  language: Language,
+  theme: view.Theme,
+  pending: PendingRow,
+) -> String {
   view.page(
     language,
+    theme,
     i18n.ApproveConnection,
     view.Narrow,
     view.SwitchReturningTo(approve_path(pending.token)),
@@ -269,15 +291,16 @@ pub fn approval_page(language: Language, pending: PendingRow) -> String {
 /// 変更が反映されたか分からないときに使う。`tone` は理由の囲みの色で、呼び出し側が
 /// 結果に応じて決める。理由はほかのページと同じくカードに入れる（中立の囲みはページの
 /// 背景と同じ色なので、カードの外では見えない）。ダッシュボードで状態を確かめられるよう
-/// リンクを置く。POST の応答か、開き直すと内容が変わるページなので、言語を切り替えた後は
-/// ダッシュボードを開く。
+/// リンクを置く。POST の応答か、開き直すと内容が変わるページなので、テーマか言語を
+/// 切り替えた後はダッシュボードを開く。
 pub fn notice_page(
   language: Language,
+  theme: view.Theme,
   title: i18n.Message,
   message: i18n.Reason,
   tone: view.Tone,
 ) -> String {
-  view.page(language, title, view.Narrow, view.SwitchReturningTo("/"), [
+  view.page(language, theme, title, view.Narrow, view.SwitchReturningTo("/"), [
     view.card([view.alert(tone, view.reason_content(language, None, message))]),
     view.back_link(language),
   ])

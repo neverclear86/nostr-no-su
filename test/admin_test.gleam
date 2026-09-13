@@ -7,7 +7,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
@@ -1732,8 +1732,135 @@ pub fn posts_without_origin_ignore_the_language_cookie_test() {
     |> string.contains("bech32 のチェックサムが一致しません。")
 }
 
-/// 秘密鍵を描画するページには言語の切り替えを出さず、ほかのページには出す。
-pub fn pages_with_a_private_key_have_no_language_switch_test() {
+// --- 表示のテーマ ---
+
+/// 応答のページの `<html>` の `data-theme` の値。`System` では出ないので `None`。
+fn page_theme(response: Response(wisp.Body)) -> Option(String) {
+  let assert Ok(#(_before, rest)) =
+    string.split_once(simulate.read_body(response), "<html")
+  let assert Ok(#(tag, _after)) = string.split_once(rest, ">")
+  case string.split_once(tag, "data-theme=\"") {
+    Ok(#(_before, rest)) -> {
+      let assert Ok(#(theme, _after)) = string.split_once(rest, "\"")
+      Some(theme)
+    }
+    Error(Nil) -> None
+  }
+}
+
+/// テーマの切り替えの POST を、同じオリジンのブラウザーから送ったリクエスト。
+fn theme_switch_request(fields: List(#(String, String))) -> wisp.Request {
+  simulate.browser_request(http.Post, "/theme")
+  |> with_credentials("admin", password)
+  |> simulate.form_body(fields)
+}
+
+/// 表示のテーマは、切り替えで保存した cookie から決め、cookie が無いか対応していない
+/// 値ならブラウザーの設定（`data-theme` を出さない）にする。
+pub fn theme_follows_the_cookie_test() {
+  let cases = [
+    #([], None),
+    #([#("cookie", "nostr_no_su_theme=light")], Some("light")),
+    #([#("cookie", "nostr_no_su_theme=dark")], Some("dark")),
+    #([#("cookie", "nostr_no_su_theme=system")], None),
+    #([#("cookie", "nostr_no_su_theme=blue")], None),
+  ]
+  use #(headers, theme) <- list.each(cases)
+  let response =
+    list.fold(
+      headers,
+      simulate.request(http.Get, "/") |> with_credentials("admin", password),
+      fn(request, header) { request.set_header(request, header.0, header.1) },
+    )
+    |> admin.handle_request(context(), _)
+  assert #(headers, page_theme(response)) == #(headers, theme)
+}
+
+/// テーマの切り替えは、選んだテーマを cookie に保存し、フォームが送った戻り先へ 303 で戻す。
+pub fn theme_switch_saves_the_theme_and_returns_test() {
+  let cases = [
+    #(
+      "light",
+      "nostr_no_su_theme=light; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax",
+    ),
+    #(
+      "dark",
+      "nostr_no_su_theme=dark; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax",
+    ),
+  ]
+  use #(theme, cookie) <- list.each(cases)
+  let response =
+    theme_switch_request([#("theme", theme), #("return", "/accounts/new")])
+    |> admin.handle_request(context(), _)
+  assert response.status == 303
+  assert header(response, "location") == "/accounts/new"
+  assert header(response, "set-cookie") == cookie
+  assert header(response, "cache-control") == "no-store"
+}
+
+/// ブラウザーの設定への切り替えは cookie を消す。
+pub fn theme_switch_to_the_browser_setting_clears_the_cookie_test() {
+  let response =
+    theme_switch_request([#("theme", "system"), #("return", "/")])
+    |> admin.handle_request(context(), _)
+  assert response.status == 303
+  assert header(response, "set-cookie")
+    == "nostr_no_su_theme=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
+}
+
+/// 対応していないテーマ、GET、別のオリジンからの切り替え、資格情報の無い切り替えは
+/// 受け付けず、cookie を保存しない。
+pub fn theme_switch_rejects_invalid_requests_test() {
+  let rejected = [
+    #(
+      theme_switch_request([#("theme", "blue"), #("return", "/")])
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(
+      theme_switch_request([#("return", "/")])
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(get(context(), "/theme"), 405),
+    #(
+      theme_switch_request([#("theme", "dark"), #("return", "/")])
+        |> request.set_header("origin", "http://evil.example")
+        |> admin.handle_request(context(), _),
+      400,
+    ),
+    #(
+      simulate.browser_request(http.Post, "/theme")
+        |> simulate.form_body([#("theme", "dark"), #("return", "/")])
+        |> admin.handle_request(context(), _),
+      401,
+    ),
+  ]
+  use #(response, status) <- list.each(rejected)
+  assert response.status == status
+  assert list.key_find(response.headers, "set-cookie") == Error(Nil)
+}
+
+/// 切り替えたテーマは、GET のページにも、秘密鍵を出す `NoSwitch` のページにも保たれる。
+pub fn switched_theme_carries_across_pages_test() {
+  let switch = theme_switch_request([#("theme", "dark"), #("return", "/")])
+  let switched = admin.handle_request(context(), switch)
+  let new_account =
+    simulate.browser_request(http.Get, "/accounts/new")
+    |> with_credentials("admin", password)
+    |> simulate.session(switch, switched)
+    |> admin.handle_request(context(), _)
+  assert page_theme(new_account) == Some("dark")
+  let generated =
+    simulate.browser_request(http.Post, "/accounts/generate")
+    |> with_credentials("admin", password)
+    |> simulate.session(switch, switched)
+    |> admin.handle_request(context(), _)
+  assert page_theme(generated) == Some("dark")
+}
+
+/// 秘密鍵を描画するページにはテーマと言語の切り替えを出さず、ほかのページには出す。
+pub fn pages_with_a_private_key_have_no_switches_test() {
   let hidden = [
     post(context(), "/accounts/generate"),
     post_form(context(), "/accounts/import", [#("nsec", spec_nsec)]),
@@ -1748,7 +1875,11 @@ pub fn pages_with_a_private_key_have_no_language_switch_test() {
   list.each(hidden, fn(response) {
     assert response.status == 200 || response.status == 400
     let body = simulate.read_body(response)
-    assert string.contains(body, "<div class=\"navbar-end\"></div>")
+    assert string.contains(
+      body,
+      "<div class=\"navbar-end w-auto gap-2\"></div>",
+    )
+    assert !string.contains(body, "action=\"/theme\"")
     assert !string.contains(body, "action=\"/language\"")
   })
   let shown = [
@@ -1766,7 +1897,9 @@ pub fn pages_with_a_private_key_have_no_language_switch_test() {
     })
   ]
   list.each(shown, fn(response) {
-    assert string.contains(simulate.read_body(response), "action=\"/language\"")
+    let body = simulate.read_body(response)
+    assert string.contains(body, "action=\"/theme\"")
+    assert string.contains(body, "action=\"/language\"")
   })
 }
 
