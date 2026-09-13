@@ -90,7 +90,7 @@ const S = {
     },
     required: ['verdict', 'must', 'should', 'nit', 'commentUrl'],
   },
-  gate: { type: 'object', properties: { verdict: VERDICT, ...COUNTS, commentUrl: { type: 'string' } }, required: ['verdict', 'must', 'should', 'nit', 'commentUrl'] },
+  gate: { type: 'object', properties: { verdict: VERDICT, ...COUNTS, commentUrl: { type: 'string' }, questions: { type: 'array', items: { type: 'string' }, description: 'NEEDS_USER のときの論点' } }, required: ['verdict', 'must', 'should', 'nit', 'commentUrl'] },
   merger: {
     type: 'object',
     properties: {
@@ -131,9 +131,25 @@ class StageError extends Error {
   constructor(stage, message) { super(message); this.stage = stage }
 }
 
-const window = limiter(WINDOW)
+const slots = limiter(WINDOW)
 const mergeLock = mutex()
 const done = new Map(a.issues.map((i) => [String(i.n), deferred()]))
+let mergeSeq = 0
+
+/** after の依存関係に循環（自己参照を含む）があるかを調べる */
+function inCycle(start) {
+  const afterOf = new Map(a.issues.map((i) => [String(i.n), (i.after || []).map(String)]))
+  const seen = new Set()
+  const stack = [...(afterOf.get(String(start)) || [])]
+  while (stack.length) {
+    const cur = stack.pop()
+    if (cur === String(start)) return true
+    if (seen.has(cur)) continue
+    seen.add(cur)
+    stack.push(...(afterOf.get(cur) || []))
+  }
+  return false
+}
 
 /** エージェントを 1 体立て、null（打ち切りや落ちた）を段階つきの例外にする */
 async function call(stage, label, prompt, opts) {
@@ -179,11 +195,11 @@ ${common(e)}
 前の版の「決めたこと」は変えず、レビューの指摘の該当箇所だけ直す。指摘が「決めたこと」の変更を求めているときだけ、その 1 件を直す。
 読むのは、issue と、レビューの「該当」と「根拠」が指すファイルに絞る。
 ${effortNote}返答（構造化出力）: status、プランのファイル、「指摘への対応」の表の要旨。プランの全文は返さない。`,
-  planRevise: (e, v, reportFile, why) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。${why}
-- 承認済みの前の版: ${PLANS}/${e.n}-post.md
-- 逸脱の報告: ${reportFile}
+  planRevise: (e, v, prevPlan, reportFile, why) => `issue #${e.n} の実装プランの版を上げてほしい（${v ? `版 ${v}` : '版の番号は、投稿済みの版の番号に 1 を足す'}）。${why}
+- 承認済みの前の版: ${prevPlan}${prevPlan.startsWith('http') ? '（issue コメントの URL。本文は `gh api` で読む）' : ''}
+- 逸脱の報告: ${reportFile}${reportFile.startsWith('http') ? '（PR コメントの URL。本文は `gh api` で読む）' : ''}
 ${common(e)}
-- 書き先: ${PLANS}/${e.n}-v${v}.md（前の版をコピーしてから直す）
+- 書き先: ${PLANS}/${e.n}-v${v || '<版>'}.md（前の版をコピーしてから直す）
 先頭の表は逸脱ごとの対応の表にする。前の版の「決めたこと」は、逸脱が変更を求めている箇所だけ直す。
 返答（構造化出力）: status、プランのファイル、対応の表の要旨。`,
   review1: (e) => `issue #${e.n} の実装プラン（版 1）をレビューしてほしい（ラウンド 1）。
@@ -193,13 +209,13 @@ ${common(e)}
 - レビューの書き先: ${PLANS}/${e.n}-r1.md
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
-  reviewNext: (e, v, r) => `issue #${e.n} の実装プラン（版 ${v}）をレビューしてほしい（ラウンド ${r}）。
-- プラン: ${PLANS}/${e.n}-v${v}.md（先頭に前ラウンドの指摘への対応の表がある）
-- 前のラウンドのレビュー: ${PLANS}/${e.n}-r${r - 1}.md
+  reviewNext: (e, v, r, planFile, prevReview) => `issue #${e.n} の実装プラン（${v ? `版 ${v}` : '版を上げたもの'}）をレビューしてほしい（ラウンド ${r}）。
+- プラン: ${planFile}（先頭に前ラウンドの指摘、または逸脱への対応の表がある）
+- ${prevReview ? `前のラウンドのレビュー: ${prevReview}` : '前のラウンドのレビューは無い（承認済みの版を、逸脱または PR レビューの must を受けて上げた）'}
 - 土台: origin/main の ${e.base}
-- 調査用の作業ツリー: ${e.planWt}（すでにある）
+- 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
 - レビューの書き先: ${PLANS}/${e.n}-r${r}.md
-前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。
+${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。' : '対応の表の各項目が前の版の決定と矛盾しないか、逸脱の解き方が issue の受け入れ条件を満たすかを見て判定してほしい。'}
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md。先頭の「指摘への対応」の表は含めない）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
   implement: (e, issue, postUrl) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
@@ -258,7 +274,7 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
   ${a.trailers.claudeSession}
 返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、問題があればその内容。`,
   rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
-rebase 以外の変更を入れない。衝突の解き方で設計の判断が要るときは push せずに conflicts に理由を書いて返す。
+rebase 以外の変更を入れない。
 返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット。`,
 }
 
@@ -267,7 +283,7 @@ rebase 以外の変更を入れない。衝突の解き方で設計の判断が�
 async function planStage(e, issue, state) {
   let designUrl = null
   if (issue.ui) {
-    const d = await call('design', `Design #${e.n}`, P.design(e, issue), { model: 'opus', phase: 'デザイン', schema: S.design })
+    const d = await call('design', `Design #${e.n}`, P.design(e, issue), { agentType: 'issue-designer', phase: 'デザイン', schema: S.design })
     designUrl = d.commentUrl
   }
   let v = 0, r = 0, escalated = false
@@ -276,17 +292,19 @@ async function planStage(e, issue, state) {
     const effortNote = escalated ? 'ラウンドが重なっているので、effort は high 相当で、根拠を確かめながら書く。\n' : ''
     const plan = await call('plan', `Plan #${e.n} v${v}`,
       v === 1 ? P.plan1(e, issue, designUrl) : P.planNext(e, v, r, effortNote),
+      // （版 2 以降の依頼文は前の版のファイル名を規約で組む）
       { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, ...(escalated ? { effort: 'high' } : {}) })
     if (plan.status === 'question') return { blocked: { stage: 'plan', questions: plan.questions || [plan.summary] } }
     r++
     const rev = await call('plan-review', `Review plan #${e.n} r${r}`,
-      r === 1 ? P.review1(e) : P.reviewNext(e, v, r),
+      r === 1 ? P.review1(e) : P.reviewNext(e, v, r, plan.file || `${PLANS}/${e.n}-v${v}.md`, `${PLANS}/${e.n}-r${r - 1}.md`),
       { agentType: 'issue-plan-reviewer', phase: 'プラン', schema: S.planReviewer })
     state.planRounds = r
     if (rev.verdict === 'NEEDS_USER') return { blocked: { stage: 'plan-review', questions: rev.questions || rev.headings } }
     if (rev.verdict === 'APPROVE') {
       if (!rev.postUrl) throw new StageError('plan-review', `#${e.n} のプランは APPROVE だが投稿の URL が無い`)
-      state.nits = rev.nit
+      state.nits += rev.nit || 0
+      state.postFile = `${PLANS}/${e.n}-post.md`
       return { postUrl: rev.postUrl, version: v }
     }
     if (r >= MAX_PLAN_ROUNDS) return { stalled: { stage: 'plan', reason: `プランレビューが ${r} ラウンドで収束しない（最後は must ${rev.must}、should ${rev.should}）` } }
@@ -296,16 +314,21 @@ async function planStage(e, issue, state) {
 
 /** 逸脱や設計に起因する must を受けて、承認済みプランの版を上げて再承認させる */
 async function revisePlan(e, state, reportFile, why) {
-  state.version++
-  const v = state.version
-  const plan = await call('replan', `Plan #${e.n} v${v}`, P.planRevise(e, v, reportFile, why), { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, effort: 'high' })
+  // planUrl で始めた issue は版の番号が分からないので、プランエージェントに投稿済みの版から決めさせる
+  const v = state.version ? state.version + 1 : null
+  state.replans = (state.replans || 0) + 1
+  const prevPlan = state.postFile || state.postUrl
+  const plan = await call('replan', `Plan #${e.n} ${v ? `v${v}` : `revise ${state.replans}`}`, P.planRevise(e, v, prevPlan, reportFile, why), { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, effort: 'high' })
   if (plan.status === 'question') return { blocked: { stage: 'replan', questions: plan.questions || [plan.summary] } }
+  if (!plan.file) throw new StageError('replan', `#${e.n} の版上げがプランのファイルを返さなかった`)
+  if (v) state.version = v
   state.planRounds++
   const r = state.planRounds
-  const rev = await call('replan-review', `Review plan #${e.n} r${r}`, P.reviewNext(e, v, r), { agentType: 'issue-plan-reviewer', phase: 'プラン', schema: S.planReviewer })
+  const rev = await call('replan-review', `Review plan #${e.n} r${r}`, P.reviewNext(e, v, r, plan.file, null), { agentType: 'issue-plan-reviewer', phase: 'プラン', schema: S.planReviewer })
   if (rev.verdict !== 'APPROVE') return { blocked: { stage: 'replan-review', questions: rev.questions || rev.headings || ['版を上げたプランが承認されない'] } }
-  if (!rev.postUrl) throw new StageError('replan-review', `#${e.n} の版 ${v} は APPROVE だが投稿の URL が無い`)
+  if (!rev.postUrl) throw new StageError('replan-review', `#${e.n} の版上げは APPROVE だが投稿の URL が無い`)
   state.postUrl = rev.postUrl
+  state.postFile = `${PLANS}/${e.n}-post.md`
   return {}
 }
 
@@ -374,7 +397,7 @@ async function gateStage(e, state) {
       { agentType: 'issue-final-gate', phase: '最終確認', schema: S.gate })
     prevGateUrl = gate.commentUrl
     if (gate.verdict === 'APPROVE') { state.nits += gate.nit || 0; state.approvedHead = state.head; return {} }
-    if (gate.verdict === 'NEEDS_USER') return { blocked: { stage: 'gate', questions: ['最終確認がユーザーの判断を求めた'] } }
+    if (gate.verdict === 'NEEDS_USER') return { blocked: { stage: 'gate', questions: gate.questions || ['最終確認がユーザーの判断を求めた'] } }
     if (g === MAX_GATE_ROUNDS) break
     const fix = await fixRound(e, state, `Fix PR #${state.pr} gate r${g}`, P.fix(e, state.pr, gate.commentUrl, '最終確認', ''), '最終確認')
     if (fix.blocked) return fix
@@ -391,35 +414,47 @@ async function gateStage(e, state) {
 /** マージ。衝突なら rebase させて再試行。1 件ずつ */
 async function mergeStage(e, state) {
   return mergeLock(async () => {
+    let notReady = false
     for (let t = 0; t <= MAX_REBASES; t++) {
-      const m = await call('merge', t === 0 ? `Merge PR #${state.pr}` : `Merge PR #${state.pr} (retry ${t})`, P.merge(e, state.pr, state.head, state.approvedHead), { agentType: 'issue-merger', phase: 'マージ', schema: S.merger })
-      if (m.status === 'merged') { state.mergeSha = m.sha; state.issueClosed = m.issueClosed !== false; return {} }
-      if (m.status === 'not_ready') return { stalled: { stage: 'merge', reason: m.problem || 'マージの条件を満たさない' } }
+      const m = await call('merge', t === 0 && !notReady ? `Merge PR #${state.pr}` : `Merge PR #${state.pr} (retry ${t}${notReady ? ' recheck' : ''})`, P.merge(e, state.pr, state.head, state.approvedHead), { agentType: 'issue-merger', phase: 'マージ', schema: S.merger })
+      if (m.status === 'merged') { state.mergeSha = m.sha; state.issueClosed = m.issueClosed !== false; state.mergeSeq = ++mergeSeq; return {} }
+      if (m.status === 'not_ready') {
+        if (notReady) return { stalled: { stage: 'merge', reason: m.problem || 'マージの条件を満たさない' } }
+        notReady = true
+        log(`#${e.n}: PR #${state.pr} はまだマージの条件を満たさない（${m.problem || ''}）。1 回だけ確かめ直す`)
+        t--
+        continue
+      }
       if (t === MAX_REBASES) return { stalled: { stage: 'merge', reason: `rebase を ${t} 回しても衝突が解けない: ${m.problem || ''}` } }
       log(`#${e.n}: PR #${state.pr} が main と衝突しているので rebase させる`)
       const rb = await call('rebase', `Rebase PR #${state.pr} (${t + 1})`, P.rebase(e, state.pr), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
       if (rb.status !== 'rebased' || !rb.head) return { stalled: { stage: 'merge', reason: `rebase の衝突に設計の判断が要る: ${rb.reason || rb.status}` } }
       state.head = rb.head
     }
-    return {}
+    return { stalled: { stage: 'merge', reason: '到達しないはずの経路' } }
   })
 }
 
 /** 1 件の issue を最初から最後まで進める */
 async function runIssue(issue, idx) {
   const e = env(issue, idx)
-  const state = { n: issue.n, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, postUrl: null, pr: null, head: null, approveUrl: null }
+  const state = { n: issue.n, base: e.base, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, postUrl: null, postFile: null, pr: null, head: null, approveUrl: null }
   const finish = (extra) => ({ ...state, ...extra })
   let acquired = false
   try {
-    // 依存する issue のマージを待つ
+    // 依存する issue のマージを待つ。循環は待つ前に弾く
+    if (inCycle(issue.n)) return finish({ status: 'blocked', stage: 'deps', questions: [`#${issue.n} の after が循環している`] })
+    let latestDep = null
     for (const dep of issue.after || []) {
       const d = done.get(String(dep))
       if (!d) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
       const res = await d.promise
       if (res.status !== 'merged') return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] })
+      if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
     }
-    await window.acquire()
+    // should 4: 依存先を取り込んだ main を土台にする（マージは直列なので、最後にマージされた依存先が他を含む）
+    if (latestDep) { e.base = latestDep.mergeSha; state.base = e.base }
+    await slots.acquire()
     acquired = true
     const stages = [
       async () => {
@@ -443,7 +478,7 @@ async function runIssue(issue, idx) {
   } catch (err) {
     return finish({ status: 'failed', stage: err.stage || 'unknown', reason: err.message })
   } finally {
-    if (acquired) window.release()
+    if (acquired) slots.release()
   }
 }
 
@@ -455,26 +490,29 @@ function fake(label, opts) {
   const sc = (dry && dry[n]) || 'happy'
   const v = (label.match(/ v(\d+)/) || [])[1]
   const r = Number((label.match(/ r(\d+)/) || [])[1] || 1)
-  const t = opts.agentType || 'design'
-  if (t === 'design') return { commentUrl: `https://example/issue/${n}#design` }
+  const t = opts.agentType
+  if (sc === 'null-fix' && label.startsWith('Fix')) return null
+  if (t === 'issue-designer') return { commentUrl: `https://example/issue/${n}#design` }
   if (t === 'issue-planner') {
     if (sc === 'question' && v === '1') return { status: 'question', questions: ['since はどこから？'] }
-    return { status: 'plan', file: `${PLANS}/${n}-v${v}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
+    return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
   }
   if (t === 'issue-plan-reviewer') {
+    if (sc === 'needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, questions: ['A 案と B 案のどちらか'] }
     const rounds = sc === 'plan2' ? 2 : sc === 'escalate' ? 4 : sc === 'plan-stall' ? 99 : 1
-    const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2)
+    const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2) || label.includes('revise') || (sc === 'planurl-deviation')
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 1, postUrl: `https://example/issue/${n}#plan-r${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 1, nit: 0, headings: ['x'] }
   }
   if (t === 'issue-implementer') {
     if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased` }
     if (label.startsWith('Fix')) return { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}` }
     if (sc === 'null') return null
-    if (sc === 'deviation' && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
+    if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
+    if ((sc === 'deviation' || sc === 'planurl-deviation') && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
     return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1` }
   }
   if (t === 'issue-pr-reviewer') {
-    const approveAt = sc === 'pr2' || sc === 'design-must' ? 2 : 1
+    const approveAt = sc === 'pr2' || sc === 'design-must' || sc === 'null-fix' ? 2 : 1
     const inGate = opts.phase === '最終確認'
     if (inGate || r >= approveAt) return { verdict: 'APPROVE', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#approve-r${r}` }
     return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, commentUrl: `https://example/pr#review-r${r}`, designMust: sc === 'design-must' }
@@ -485,6 +523,8 @@ function fake(label, opts) {
   }
   if (t === 'issue-merger') {
     if (sc === 'conflict' && !label.includes('retry')) return { status: 'conflict', problem: 'CONFLICTING' }
+    if (sc === 'not-ready' && !label.includes('recheck')) return { status: 'not_ready', problem: 'mergeable が UNKNOWN' }
+    if (sc === 'not-ready-twice') return { status: 'not_ready', problem: 'CI が fail' }
     return { status: 'merged', sha: `merged-${n}`, issueClosed: true }
   }
   throw new Error(`fake: 未知のエージェント型（${label}）`)

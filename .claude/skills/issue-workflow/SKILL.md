@@ -10,7 +10,7 @@ description: nostr-no-su の GitHub issue を、プラン作成（opus low）→
 
 | 段階 | エージェント（`agentType`） | モデル / effort | 成果物 |
 | --- | --- | --- | --- |
-| デザイン（UI を変える issue だけ） | 汎用（`model: opus`） | opus | issue コメント（デザインの方針） |
+| デザイン（UI を変える issue だけ） | `issue-designer` | opus / medium | issue コメント（デザインの方針） |
 | プラン作成 | `issue-planner` | opus / low | `<scratchpad>/plans/{{N}}-v{{V}}.md` |
 | プランレビュー | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿 |
 | 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる |
@@ -30,9 +30,9 @@ description: nostr-no-su の GitHub issue を、プラン作成（opus low）→
 
 - **このセッションの仕事**は、段階 0 の準備、Workflow の起動、結果の処理（質問への回答、止まった issue の報告、再開）である。エージェントの結果を自分で読み直したり、段階を自分で実行したりしない。モデルは何でもよい（受け渡しをしないので文脈は小さいまま）
 - **ワークフローの中ではユーザーに質問できない**。プランエージェントが `status: question`、レビュアーが `NEEDS_USER` を返すと、その issue は `blocked` で戻る。ユーザーに聞いてから `decisions` に答えを入れて再開する。事前に決められる論点は、起動の前にまとめて聞く（段階 0）
-- **再開は `resumeFromRunId`** で行う。完了したエージェントの結果は、依頼文が同じなら再利用される。`base` と `portBase` と `trailers` は再開でも同じ値を渡す（変えると依頼文が変わり、全部やり直しになる）。同じセッションの中でしか再開できない
+- **再開は `Workflow` に `scriptPath` と `resumeFromRunId` を渡して行う**（起動の結果に出る Run ID）。完了したエージェントの結果は、起動順の接頭辞で依頼文が変わっていない範囲まで再利用される（公式文書: 「最初に依頼文が変わったエージェントと、それ以降は走り直す」）。`base` と `portBase` と `trailers` は再開でも同じ値を渡す（変えると依頼文が変わり、全部やり直しになる）。同じ Claude Code のセッションの中でしか再開できない（公式文書の「Same session only」）
 - **同時に進める issue は `window` 件**（既定 4）。1 issue につき動くエージェントは常に 1 体なので、同時のエージェント数も `window` になる。マージは 1 件ずつ直列で、衝突は実装エージェントの rebase で解く
-- **依存する issue** は `after` に書く。依存先がマージされてから始まり、依存先が失敗すると `blocked` になる
+- **依存する issue** は `after` に書く。依存先がマージされてから、そのマージのコミットを土台にして始まる。依存先が失敗すると `blocked` になり、`after` が循環していれば待たずに `blocked` になる
 - **昇格ルール**（スクリプトが行う）：プランレビューが 3 ラウンドで APPROVE にならなければ次の版は `effort: high` で書く。5 ラウンドで `stalled`。PR レビューがプランの設計に起因する must（`designMust`）を出したら、プランの版を上げて（effort high）再承認させてから直す。実装がプランどおりに作れないと報告したら（`deviation`）同じ手順で版を上げ、新しいエージェントに続きを実装させる。PR レビューは 4 ラウンド、最終確認は 3 回で `stalled`
 - **往復は新しいエージェント**で行う。プランの往復も、PR レビューの往復も、修正も、前のファイルや PR コメントの URL を渡して新しいエージェントを立てる（同じエージェントに戻す `SendMessage` は使わない。待機中にキャッシュが切れて文脈全体を書き直すため）。引き継ぎは、プランの「指摘への対応」の表、レビューの「前ラウンドの指摘の照合」の表、PR の対応コメントで行う
 - **レビューの「承認」は PR コメントで表す**：全エージェントが同じ GitHub アカウントで動くので、自分の PR に `gh pr review --approve` は使えない。`判定: APPROVE` かつ must と should が 0 件であることを承認とみなす。nit は残っていてもよい
@@ -102,7 +102,7 @@ mkdir -p <scratchpad>/plans
 - `merged`：PR 番号、マージのコミット、プランのラウンド数、PR レビューのラウンド数、最終確認の回数、残した nit の数を報告に載せる
 - `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れて、同じ `args` に `resumeFromRunId` を付けて再開する。依存先の失敗（`stage: deps`）は依存先を先に直す
 - `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて再開、実装が難しいなら issue を分ける）
-- `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、同じ `args` で再開する（失敗したエージェントとその後だけが走る）
+- `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、同じ `args` で再開する（失敗したエージェントとその後が走る。issue を並行させていると起動順が揺れるので、それより前に完了した他の issue の段階も走り直すことがある。最初の実運用で `journal.jsonl` の再利用の実績を確かめて、ここに書き足す）
 
 再開のときは `args` を変えない（`decisions` の追加だけ）。`base` を今の `origin/main` に更新すると全 issue の依頼文が変わり、完了した結果が再利用されない。main が進んで土台が古びた issue は、次の実行で新しい `base` から始める。
 
@@ -113,7 +113,7 @@ mkdir -p <scratchpad>/plans
 
 ## dry run（スクリプトを変えたとき）
 
-`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`plan2`（プラン 2 ラウンド）、`escalate`（3 ラウンドで effort high）、`plan-stall`、`question`、`null`（実装が結果を返さない）、`deviation`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`conflict`（マージで rebase）。
+`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`plan2`（プラン 2 ラウンド）、`escalate`（3 ラウンドで effort high）、`plan-stall`、`question`、`needs-user`（レビュアーが判断を求める）、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
 
 ```json
 { "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }

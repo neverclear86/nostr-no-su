@@ -38,7 +38,7 @@ disallowedTools: Agent
 
 対象: <短い head SHA>（レビュー ラウンド R の APPROVE の後）
 
-判定: APPROVE または REQUEST CHANGES
+判定: APPROVE または REQUEST CHANGES（判断が割れて収束しないときだけ NEEDS_USER）
 
 ### 指摘
 （無ければ「無し」）
@@ -53,4 +53,6 @@ disallowedTools: Agent
 判定は must と should が 0 件のときだけ APPROVE にする。レビュアーがすでに確かめた事項を繰り返し指摘しない。
 再確認を頼まれたら、前回の指摘ごとに「直った / 直っていない」を表で示し、新しい指摘は対応コミットで入った箇所に限る。
 
-返すもの: 構造化出力で、判定、must と should と nit の件数、投稿したコメントの URL。
+判断が割れて収束しないと感じたら、論点と両案を整理して判定を NEEDS_USER にし、questions に論点を書いて返す。
+
+返すもの: 構造化出力で、判定、must と should と nit の件数、投稿したコメントの URL、NEEDS_USER のときは questions。
