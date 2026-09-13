@@ -153,3 +153,10 @@ jobs:
           bundled=$(find plugins/event_logger -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
           extra=$(comm -13 <(echo "$allowed") <(echo "$bundled"))
           [ -z "$extra" ] || { echo "manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }
+
+  env-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # docker-compose.yml の ${...} の変数と既定値が、.env.example の変数の行と一致するかを検査する。
+      - run: sh dev/check_env_example.sh
