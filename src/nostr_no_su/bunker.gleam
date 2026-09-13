@@ -718,7 +718,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     Revoke(signer:, client:, reply:) ->
       case engine.revoke(state.engine, signer, client) {
-        Ok(next) -> {
+        Ok(#(next, _write)) -> {
           process.send(reply, Ok(Nil))
           actor.continue(State(..state, engine: next))
         }
@@ -747,7 +747,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           token: random.hex(token_bytes),
           not_before: state.not_before,
         )
-      let #(next, outcome) = engine.handle_event(state.engine, incoming, inputs)
+      let #(next, outcome, _write) =
+        engine.handle_event(state.engine, incoming, inputs)
       let published = case outcome {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> state
@@ -1057,14 +1058,14 @@ fn transition(from: State, to: State) -> State {
 fn apply_decision(
   state: State,
   reply: Subject(Result(Nil, String)),
-  decision: fn(Int) -> Result(#(engine.Engine, Event), String),
+  decision: fn(Int) -> Result(#(engine.Engine, Event, engine.Write), String),
 ) -> actor.Next(State, Msg) {
   case decision(time.now_seconds()) {
     Error(reason) -> {
       process.send(reply, Error(reason))
       actor.continue(state)
     }
-    Ok(#(next, response)) -> {
+    Ok(#(next, response, _write)) -> {
       let published = publish(state, response)
       process.send(reply, Ok(Nil))
       actor.continue(State(..published, engine: next))

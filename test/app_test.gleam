@@ -15,7 +15,6 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
-import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
 import nostr_no_su/dedup
@@ -592,13 +591,10 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  assert bunker.sessions(name)
-    == [
-      engine.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-      ),
-    ]
+  let assert [session] = bunker.sessions(name)
+  assert session.signer == account.pubkey_hex(signer)
+  assert session.client == account.pubkey_hex(client)
+  assert session.perms == ""
 
   assert bunker.revoke(
       name,
@@ -639,13 +635,10 @@ pub fn pending_connections_can_be_approved_test() {
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
   assert bunker.pending(name) == []
   let signer = account_for(signer_key)
-  assert bunker.sessions(name)
-    == [
-      engine.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-      ),
-    ]
+  let assert [session] = bunker.sessions(name)
+  assert session.signer == account.pubkey_hex(signer)
+  assert session.client == account.pubkey_hex(client)
+  assert session.perms == ""
   stop_tree(tree)
 }
 

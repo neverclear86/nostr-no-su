@@ -11,7 +11,6 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/result
-import gleam/set.{type Set}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account, privkey, pubkey_hex}
 import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
@@ -61,8 +60,8 @@ pub type Engine {
   Engine(
     // 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
     accounts: Dict(String, #(Account, ConnectionSecret)),
-    // #(署名者 pubkey hex, クライアント pubkey hex)
-    sessions: Set(#(String, String)),
+    // #(署名者, クライアント) -> Session
+    sessions: Dict(#(String, String), Session),
     // リプレイ防止用: 処理済みのリクエストイベント id
     seen: window.Window,
     // 承認待ちの接続要求: token -> Pending
@@ -99,21 +98,52 @@ pub type Inputs {
 
 /// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
 /// 同じものを持つ（一覧に出すときに鍵を持ち回らずに済む）。`request_id` は承認後
-/// の応答を元の `connect` と同じ id で返すために覚えておく。
+/// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は `connect` の
+/// `params[2]`（無ければ空文字列）、`secret_mismatch` は空でない secret が一致
+/// しなかったかどうかを表す。
 pub type Pending {
   Pending(
     token: String,
     signer: String,
     client: String,
     request_id: String,
+    perms: String,
+    secret_mismatch: Bool,
     created_at: Int,
   )
 }
 
 /// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
-/// クライアント）の組で、取り消されるまで署名を代理できる。
+/// クライアント）の組で、取り消されるまで署名を代理できる。時刻は Unix 秒。
+/// `last_used_at` は作成時に `created_at` と同じ値を入れ、エンジンはその後
+/// 更新しない。
 pub type Session {
-  Session(signer: String, client: String)
+  Session(
+    signer: String,
+    client: String,
+    perms: String,
+    created_at: Int,
+    last_used_at: Int,
+  )
+}
+
+/// 状態の変更に伴う DB への書き込み 1 件。変種は `account_store` の書き込みの
+/// 関数に 1 対 1 で対応する。
+pub type Write {
+  /// `insert_session`。
+  InsertSession(session: Session)
+  /// `delete_session`。
+  DeleteSession(signer: String, client: String)
+  /// 同じ組の古い承認待ち `replaced` を `delete_pending` で消し、`insert_pending` で
+  /// 登録する。
+  InsertPending(pending: Pending, replaced: List(String))
+  /// `delete_pending`（拒否）。
+  DeletePending(token: String)
+  /// `approve`（承認待ちの削除とセッションの挿入を 1 トランザクションで）。組が
+  /// すでに承認済みでも `session` は承認の時刻と承認待ちの `perms` を持つ。
+  /// `insert_session` は `ON CONFLICT DO NOTHING` なので、DB でも最初に開いた
+  /// ときの値が残り、メモリの値（`open_session` 参照）と揃う。
+  ApprovePending(token: String, session: Session)
 }
 
 /// 受信イベント 1 件を処理した結果。
@@ -138,7 +168,7 @@ pub fn new(
   let empty =
     Engine(
       accounts: dict.new(),
-      sessions: set.new(),
+      sessions: dict.new(),
       seen: window.new(seen_capacity),
       pending: dict.new(),
       auth_url: auth_url,
@@ -174,7 +204,7 @@ pub fn remove_account(engine: Engine, signer: String) -> Engine {
   Engine(
     ..engine,
     accounts: dict.delete(engine.accounts, signer),
-    sessions: set.filter(engine.sessions, fn(pair) { pair.0 != signer }),
+    sessions: dict.filter(engine.sessions, fn(key, _session) { key.0 != signer }),
     pending: dict.filter(engine.pending, fn(_token, entry) {
       entry.signer != signer
     }),
@@ -223,28 +253,32 @@ pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
   |> result.map(fn(entry) { entry.0 })
 }
 
-/// 承認済みセッションの一覧。集合の走査順は未定義なので、表示とテストが安定
+/// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定
 /// するよう署名者・クライアントの順に並べる。
 pub fn sessions(engine: Engine) -> List(Session) {
   engine.sessions
-  |> set.to_list
+  |> dict.values
   |> list.sort(fn(left, right) {
-    string.compare(left.0, right.0)
-    |> order.break_tie(string.compare(left.1, right.1))
+    string.compare(left.signer, right.signer)
+    |> order.break_tie(string.compare(left.client, right.client))
   })
-  |> list.map(fn(pair) { Session(signer: pair.0, client: pair.1) })
 }
 
 /// セッションの承認を取り消す。そのクライアントは再び `connect` を求められる。
-/// 承認されていない組なら `Error(Nil)` を返す。
+/// 書き込みの値は削除するセッションを表す `DeleteSession`。承認されていない組
+/// なら `Error(Nil)` を返す。
 pub fn revoke(
   engine: Engine,
   signer: String,
   client: String,
-) -> Result(Engine, Nil) {
+) -> Result(#(Engine, Write), Nil) {
   let pair = #(signer, client)
-  case set.contains(engine.sessions, pair) {
-    True -> Ok(Engine(..engine, sessions: set.delete(engine.sessions, pair)))
+  case dict.has_key(engine.sessions, pair) {
+    True ->
+      Ok(#(
+        Engine(..engine, sessions: dict.delete(engine.sessions, pair)),
+        DeleteSession(signer: signer, client: client),
+      ))
     False -> Error(Nil)
   }
 }
@@ -261,28 +295,73 @@ pub fn pending(engine: Engine, now: Int) -> List(Pending) {
   })
 }
 
+/// DB から読んだセッションと承認待ちで `sessions` と `pending` を置き換える。
+/// DB の型に依存しないよう、値はエンジンの型（`Session`・`Pending`）で受け取る。
+/// `accounts`、`seen`、`auth_url` は変えない。DB が正なので既存の値には足さず
+/// 置き換える。署名者が登録されていないセッションと承認待ちは、
+/// `remove_account` と揃えて読み飛ばす。失効した承認待ち（`expired`）も同じく
+/// 読み飛ばす。失敗は返さない。
+pub fn restore(
+  engine: Engine,
+  sessions: List(Session),
+  pending: List(Pending),
+  now: Int,
+) -> Engine {
+  let registered = fn(signer: String) -> Bool {
+    dict.has_key(engine.accounts, signer)
+  }
+  let sessions =
+    sessions
+    |> list.filter(fn(session) { registered(session.signer) })
+    |> list.map(fn(session) { #(#(session.signer, session.client), session) })
+    |> dict.from_list
+  let pending =
+    pending
+    |> list.filter(fn(entry) {
+      registered(entry.signer) && !expired(entry, now)
+    })
+    |> list.map(fn(entry) { #(entry.token, entry) })
+    |> dict.from_list
+  Engine(..engine, sessions: sessions, pending: pending)
+}
+
 /// 承認待ちの接続要求を承認する。（署名者, クライアント）を承認済みにして、元の
-/// `connect` と同じ id の `ack` 応答イベントを返す。token が不明、あるいは失効
-/// していれば理由を返す。
+/// `connect` と同じ id の `ack` 応答イベントを返す。書き込みの値は
+/// `ApprovePending`（組がすでに承認済みのときの値はその Doc を参照）。token が
+/// 不明、あるいは失効していれば理由を返す。
 pub fn approve(
   engine: Engine,
   token: String,
   now: Int,
-) -> Result(#(Engine, Event), String) {
+) -> Result(#(Engine, Event, Write), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  let engine = open_session(engine, #(entry.signer, entry.client))
-  respond(engine, entry, rpc.ok(entry.request_id, "ack"), now)
+  let session = new_session(entry.signer, entry.client, entry.perms, now)
+  let engine = open_session(engine, session)
+  use #(engine, reply) <- result.map(respond(
+    engine,
+    entry,
+    rpc.ok(entry.request_id, "ack"),
+    now,
+  ))
+  #(engine, reply, ApprovePending(token: token, session: session))
 }
 
 /// 承認待ちの接続要求を拒否する。承認済みにはせず、元の `connect` と同じ id の
-/// エラー応答イベントを返す。
+/// エラー応答イベントを返す。書き込みの値は削除する承認待ちを表す
+/// `DeletePending`。
 pub fn deny(
   engine: Engine,
   token: String,
   now: Int,
-) -> Result(#(Engine, Event), String) {
+) -> Result(#(Engine, Event, Write), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  respond(engine, entry, rpc.error(entry.request_id, "connection denied"), now)
+  use #(engine, reply) <- result.map(respond(
+    engine,
+    entry,
+    rpc.error(entry.request_id, "connection denied"),
+    now,
+  ))
+  #(engine, reply, DeletePending(token))
 }
 
 /// 承認待ちを 1 件取り出す。承認も拒否も 1 度きりなので取り出したものは状態から
@@ -340,15 +419,16 @@ fn respond(
 
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
-/// `event.verify` で確かめてあり、エンジンは検証しない。
+/// `event.verify` で確かめてあり、エンジンは検証しない。状態の変更に伴う
+/// DB への書き込みがあれば `Some` で返す。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
   inputs: Inputs,
-) -> #(Engine, Outcome) {
+) -> #(Engine, Outcome, Option(Write)) {
   let incoming = event.verified_event(verified)
   case accept(engine, incoming, inputs) {
-    Error(outcome) -> #(engine, outcome)
+    Error(outcome) -> #(engine, outcome, None)
     Ok(#(engine, account, secret)) ->
       handle_request(engine, account, secret, incoming, inputs)
   }
@@ -423,12 +503,12 @@ fn handle_request(
   secret: ConnectionSecret,
   incoming: Event,
   inputs: Inputs,
-) -> #(Engine, Outcome) {
+) -> #(Engine, Outcome, Option(Write)) {
   let client_pk_hex = incoming.pubkey
   case decode_request(account, incoming) {
-    Error(reason) -> #(engine, Ignore(reason))
+    Error(reason) -> #(engine, Ignore(reason), None)
     Ok(#(conversation_key, request)) -> {
-      let #(engine, response) =
+      let #(engine, response, write) =
         execute(engine, account, secret, client_pk_hex, request, inputs)
       let reply =
         build_reply(
@@ -438,7 +518,7 @@ fn handle_request(
           response,
           inputs.now,
         )
-      #(engine, outcome(reply))
+      #(engine, outcome(reply), write)
     }
   }
 }
@@ -506,32 +586,41 @@ fn execute(
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
-) -> #(Engine, rpc.Response) {
+) -> #(Engine, rpc.Response, Option(Write)) {
   let signer = pubkey_hex(account)
   case request.method {
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
     // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
     // 取り消しの後のクライアントを例外にしないため）。
-    "logout" -> #(
-      revoke(engine, signer, client_pk_hex) |> result.unwrap(engine),
-      rpc.ok(request.id, "ack"),
-    )
+    "logout" -> {
+      let ack = rpc.ok(request.id, "ack")
+      case revoke(engine, signer, client_pk_hex) {
+        Ok(#(next, write)) -> #(next, ack, Some(write))
+        Error(Nil) -> #(engine, ack, None)
+      }
+    }
     _ ->
-      case set.contains(engine.sessions, #(signer, client_pk_hex)) {
+      case dict.has_key(engine.sessions, #(signer, client_pk_hex)) {
         False -> #(
           engine,
           rpc.error(request.id, "unauthorized: send connect first"),
+          None,
         )
-        True -> #(engine, execute_in_session(account, request, inputs.now))
+        True -> #(
+          engine,
+          execute_in_session(account, request, inputs.now),
+          None,
+        )
       }
   }
 }
 
 /// `connect` を 1 件処理する。`params[0]` が別の署名者を指していれば、状態を
-/// 変えずに拒否する。シークレットが一致すればその場で承認し、既に承認済みの組
-/// ならシークレット無しでも通す（クライアントの再読み込みのたびに承認を求めない
-/// ため）。どちらでもないときは、管理 UI が有効なら承認待ちを作って `auth_url`
-/// を返し、無効なら従来どおり拒否する。
+/// 変えずに拒否する。組がすでに承認済みなら、シークレットの一致を問わず状態を
+/// 変えずに ack だけ返す（クライアントの再読み込みのたびに承認を求めないため）。
+/// 組が無くシークレットが一致すればその場で承認する。どちらでもないときは、
+/// 管理 UI が有効なら承認待ちを作って `auth_url` を返し、無効なら従来どおり
+/// 拒否する。
 fn connect(
   engine: Engine,
   signer: String,
@@ -539,56 +628,109 @@ fn connect(
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
-) -> #(Engine, rpc.Response) {
+) -> #(Engine, rpc.Response, Option(Write)) {
   use <- bool.guard(points_elsewhere(connect_signer(request.params), signer), #(
     engine,
     rpc.error(request.id, "connect is addressed to another signer"),
+    None,
   ))
   let pair = #(signer, client_pk_hex)
-  let offered_matches = case connect_secret(request.params) {
-    Some(offered) -> connection_secret.matches(secret, offered)
-    None -> False
-  }
-  case offered_matches, set.contains(engine.sessions, pair) {
-    True, _ -> #(open_session(engine, pair), rpc.ok(request.id, "ack"))
-    _, True -> #(engine, rpc.ok(request.id, "ack"))
-    False, False ->
-      case engine.auth_url {
-        None -> #(engine, rpc.error(request.id, "invalid secret"))
-        Some(auth_url) -> #(
-          record_pending(
-            engine,
-            Pending(
-              token: inputs.token,
-              signer: signer,
-              client: client_pk_hex,
-              request_id: request.id,
-              created_at: inputs.now,
-            ),
-          ),
-          rpc.auth_url(request.id, auth_url(inputs.token)),
-        )
+  case dict.has_key(engine.sessions, pair) {
+    True -> #(engine, rpc.ok(request.id, "ack"), None)
+    False -> {
+      let offered = connect_secret(request.params)
+      let perms = connect_perms(request.params)
+      let offered_matches = case offered {
+        Some(value) -> connection_secret.matches(secret, value)
+        None -> False
       }
+      case offered_matches {
+        True -> {
+          let session = new_session(signer, client_pk_hex, perms, inputs.now)
+          #(
+            open_session(engine, session),
+            rpc.ok(request.id, "ack"),
+            Some(InsertSession(session)),
+          )
+        }
+        False ->
+          case engine.auth_url {
+            None -> #(engine, rpc.error(request.id, "invalid secret"), None)
+            Some(auth_url) -> {
+              let #(engine, write) =
+                record_pending(
+                  engine,
+                  Pending(
+                    token: inputs.token,
+                    signer: signer,
+                    client: client_pk_hex,
+                    request_id: request.id,
+                    perms: perms,
+                    secret_mismatch: option.is_some(offered),
+                    created_at: inputs.now,
+                  ),
+                )
+              #(
+                engine,
+                rpc.auth_url(request.id, auth_url(inputs.token)),
+                Some(write),
+              )
+            }
+          }
+      }
+    }
   }
 }
 
-/// （署名者, クライアント）の組を承認済みにする。
-fn open_session(engine: Engine, pair: #(String, String)) -> Engine {
-  Engine(..engine, sessions: set.insert(engine.sessions, pair))
+/// （署名者, クライアント）の組を承認済みにする。組がすでにあれば、値（作成時刻
+/// と権限）は変えずそのまま返す（DB の `ON CONFLICT DO NOTHING` と揃える）。
+fn open_session(engine: Engine, session: Session) -> Engine {
+  let key = #(session.signer, session.client)
+  case dict.has_key(engine.sessions, key) {
+    True -> engine
+    False ->
+      Engine(..engine, sessions: dict.insert(engine.sessions, key, session))
+  }
+}
+
+/// `now` に作成したセッション。`last_used_at` は `created_at` と同じ値にする
+/// （`insert_session` と揃える）。
+fn new_session(
+  signer: String,
+  client: String,
+  perms: String,
+  now: Int,
+) -> Session {
+  Session(
+    signer: signer,
+    client: client,
+    perms: perms,
+    created_at: now,
+    last_used_at: now,
+  )
 }
 
 /// 承認待ちを 1 件登録する。同じ（署名者, クライアント）の古い要求と、失効した
 /// 要求は同時に捨てる。承認前にクライアントが再読み込みすると `connect` が届き
 /// 直すため、最新の要求だけを残さないと、承認の応答が誰も待っていないリクエスト
 /// id で送られてしまう。失効の基準になる現在時刻は、いま作った要求の作成時刻が
-/// そのまま使える。
-fn record_pending(engine: Engine, entry: Pending) -> Engine {
+/// そのまま使える。書き込みの `replaced` には、消える同じ組の失効していない
+/// token だけを載せる（失効した要求の削除は書き込みに出さない。DB に残った
+/// 失効行は `restore` が読み飛ばす）。
+fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
+  let live = live_pending(engine, entry.created_at)
+  let replaced =
+    dict.filter(live, fn(_token, existing) {
+      existing.signer == entry.signer && existing.client == entry.client
+    })
+    |> dict.keys
+    |> list.sort(string.compare)
   let kept =
-    live_pending(engine, entry.created_at)
-    |> dict.filter(fn(_token, existing) {
+    dict.filter(live, fn(_token, existing) {
       existing.signer != entry.signer || existing.client != entry.client
     })
-  Engine(..engine, pending: dict.insert(kept, entry.token, entry))
+  let updated = Engine(..engine, pending: dict.insert(kept, entry.token, entry))
+  #(updated, InsertPending(pending: entry, replaced: replaced))
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。
@@ -639,6 +781,14 @@ fn connect_secret(params: List(String)) -> Option(String) {
         secret -> Some(secret)
       }
     [] -> None
+  }
+}
+
+/// connect リクエストが要求する権限（`params[2]`）。無ければ空文字列。
+fn connect_perms(params: List(String)) -> String {
+  case params {
+    [_signer, _secret, perms, ..] -> perms
+    _ -> ""
   }
 }
 

@@ -71,7 +71,15 @@ pub fn pages() -> List(String) {
           relay_connection.Disconnected,
         ),
       ],
-      sessions: [engine.Session(signer: "abcd", client: "ef01")],
+      sessions: [
+        engine.Session(
+          signer: "abcd",
+          client: "ef01",
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+      ],
       plugins: [
         dashboard.PluginRow("running", Some(plugin_runner.Running)),
         dashboard.PluginRow(
