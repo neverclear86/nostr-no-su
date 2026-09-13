@@ -85,6 +85,8 @@ const shots = [
   { name: "39-dashboard-copy-selected", url: `${base}/`, copy: "manual" },
   { name: "40-language-ja", url: `${base}/language`, form: { language: "ja", return: "/" } },
   { name: "41-language-system", url: `${base}/language`, form: { language: "system", return: "/" } },
+  { name: "42-import-empty-label", url: `${base}/accounts/import`, form: { nsec: specNsec, label: "" }, status: 400 },
+  { name: "43-edit-label-empty", url: account("label"), form: { label: "" }, status: 400 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
