@@ -267,8 +267,8 @@ pub type Msg {
   GetSessions(reply: Subject(List(Session)))
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
-  /// 承認済みでない組、読み込み前、あるいは書き込みが成功しなかったときは
-  /// `NotAnswered` を返す。
+  /// 読み込み済みで承認済みでない組なら `SessionNotFound`、読み込み前（組に関わらず）
+  /// か書き込みが成功しなかったときは `NotAnswered` を返す。
   Revoke(
     signer: String,
     client: String,
@@ -325,9 +325,9 @@ pub fn sessions(name: Name(Msg)) -> List(Session) {
   |> option.unwrap([])
 }
 
-/// セッションを 1 件取り消し、反映されるまで待つ。承認済みでない組なら
-/// `SessionNotFound`、アクターが応答しない、あるいは書き込みが成功しなかったときは
-/// `NotAnswered` を返す。
+/// セッションを 1 件取り消し、反映されるまで待つ。読み込み済みで承認済みでない組
+/// なら `SessionNotFound`、読み込み前（組に関わらず）、アクターが応答しない、
+/// あるいは書き込みが成功しなかったときは `NotAnswered` を返す。
 pub fn revoke(
   name: Name(Msg),
   signer: String,
@@ -1238,10 +1238,10 @@ fn write_session_change(
 
 /// 読み込み済みのときだけエンジンで承認・拒否し、書き込みが成功したときだけ応答を
 /// 発行して反映する。読み込み前は状態を変えずに `accounts_not_loaded` を返す。
-/// 書き込みが `NotWritten` / `AlreadyStored` ならその理由、`MaybeWritten` なら
-/// `store_did_not_confirm_change` を返し、どちらも `write_session_change` が
-/// 返した読み直し後の状態で続ける（承認の `MaybeWritten` の後は、読み直しの後にも
-/// `ack` を送らない）。
+/// 書き込みが `NotWritten` / `AlreadyStored` ならその理由を返し、書き込み前の状態
+/// で続ける。`MaybeWritten` なら `store_did_not_confirm_change` を返し、
+/// `write_session_change` が返した読み直し後の状態で続ける（承認の `MaybeWritten`
+/// の後は、読み直しの後にも `ack` を送らない）。
 fn apply_decision(
   state: State,
   reply: Subject(Result(Nil, String)),
@@ -1288,8 +1288,9 @@ fn apply_decision(
 }
 
 /// 読み込み済みのときだけエンジンで取り消し、書き込みが成功したときだけ状態から
-/// セッションを消す。読み込み前、承認済みでない組、あるいは書き込みが成功しな
-/// かったときは `NotAnswered` を返す（`SessionNotFound` は承認済みでない組だけ）。
+/// セッションを消す。読み込み済みで承認済みでない組なら `SessionNotFound`、
+/// 読み込み前（組に関わらず）か書き込みが成功しなかったときは `NotAnswered` を
+/// 返す。
 fn revoke_session(
   state: State,
   reply: Subject(Result(Nil, RevokeFailure)),
