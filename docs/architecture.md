@@ -177,6 +177,8 @@ sequenceDiagram
     sup->>bk: 起動
     Note over bk: initialiser は自分用の<br/>名前なしの subject に<br/>LoadAccounts を積むだけ
     sup->>conn: 起動（アクターの後）
+    bk->>store: acquire_lock（ロック専用のプール）
+    store->>db: SELECT pg_try_advisory_lock
     bk->>store: load
     store->>db: BEGIN / lock_timeout / 版の確認と移行 /<br/>LOCK TABLE IN SHARE MODE / SELECT
     alt 読み込めた
@@ -196,6 +198,8 @@ sequenceDiagram
 
 `LoadAccounts` は initialiser が積むのでアクターのメールボックスの先頭になり、接続はアクターの後に起動するので、`GetSigners` は必ず読み込みの後に処理される。
 DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読する。
+
+読み込みの前に、ロック専用の 1 本のプールでセッション単位の advisory lock を取る。別のセッションが持っていれば、`SchemaTooNew` と同じく起動処理が VM を止める。ロックは再入で取り直すだけなので、読み込みのたびに呼ぶ。
 
 読み込みのトランザクションは、一覧を読む前にスキーマの版を確かめる。
 `schema_version` に記録された版より新しい移行（`account_store.migrations`）を順に実行し、移行ごとに版を記録する。
