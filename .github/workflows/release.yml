@@ -38,8 +38,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
           # 既定では実行時刻が入り、同じコミットでも config が変わってしまうため、
-          # created ラベルもコミット時刻にする（同じイメージの定義は #111、検査は
-          # test.yml の docker-image ジョブ）。
+          # created ラベルもコミット時刻にする（同じイメージの定義は #181 のプラン、
+          # 検査は test.yml の docker-image ジョブ）。
           labels: |
             org.opencontainers.image.created={{commit_date 'YYYY-MM-DDTHH:mm:ss.SSS[Z]'}}
       # ビルドの再現性のため、コミット時刻を SOURCE_DATE_EPOCH として以降の step に渡す。
