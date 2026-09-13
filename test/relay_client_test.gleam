@@ -355,7 +355,7 @@ pub fn sync_ignores_the_timer_of_an_old_generation_test() {
 
 // --- ループバックの WebSocket サーバーを使うテスト ---
 
-/// テスト用のリレー。受け取ったテキストフレームをテストへ転送する。
+/// `127.0.0.1` の OS が割り当てたポートで待ち受けるテスト用の WebSocket サーバー。
 type Relay {
   Relay(server: Pid, url: String)
 }
