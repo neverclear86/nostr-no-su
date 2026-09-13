@@ -352,7 +352,7 @@ BEAM のモジュール名前空間はグローバルで、同じ名前のモジ
 影に入ったモジュールは、バンドルにつき 1 行にまとめて起動ログへ出る。報告にはモジュールの提供元となるアプリケーションと版が `app vsn` の形で添えられる（アプリが分からないモジュールは名前を数件だけ挙げる）。同梱の `event_logger` の場合は 120 モジュールが影に入り、起動ログに出るのはその 1 行だけである（Dockerfile と同じイメージでビルドしたときの値）。
 
 ```
-event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_stdlib 1.0.3, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
+event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_stdlib 1.0.3, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
 ```
 
 ### 8.5 読み込みの失敗
