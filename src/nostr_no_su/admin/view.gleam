@@ -326,24 +326,25 @@ fn language_switch(current: Language, return_to: String) -> Element(msg) {
     language_segments,
     return_to,
     list.map(language_choices(), fn(choice) {
-      case choice {
-        BrowserLanguage ->
-          dropdown_item(
-            language_field,
-            follow_browser_code,
-            False,
-            None,
-            i18n.text(current, i18n.FollowBrowser),
-          )
-        ChosenLanguage(language) ->
-          dropdown_item(
-            language_field,
-            i18n.code(language),
-            language == current,
-            Some(i18n.code(language)),
-            i18n.native_name(language),
-          )
+      let #(selected, lang, label) = case choice {
+        BrowserLanguage -> #(
+          False,
+          None,
+          i18n.text(current, i18n.FollowBrowser),
+        )
+        ChosenLanguage(language) -> #(
+          language == current,
+          Some(i18n.code(language)),
+          i18n.native_name(language),
+        )
       }
+      dropdown_item(
+        language_field,
+        language_choice_code(choice),
+        selected,
+        lang,
+        label,
+      )
     }),
   )
 }
