@@ -12,6 +12,11 @@ import nostr_no_su/plugin_config
 
 const default_relay_url = "wss://relay.damus.io"
 
+/// ファイルからも読め、読み込みの後にプロセスの環境から消す秘密の環境変数。
+/// `account_store/0` と `listening_admin_ui/1` が `secret/1` で読む名前と
+/// 一致させる。
+const secret_names = ["DATABASE_URL", "ACCOUNT_MASTER_KEY", "ADMIN_PASSWORD"]
+
 /// 管理 UI が待ち受けるポート。`ADMIN_PORT` で上書きする。
 const default_admin_port = 8080
 
@@ -30,7 +35,8 @@ pub type AdminUi {
   Disabled
   /// `ADMIN_PORT` が不正なので無効にし、起動は続ける。理由は呼び出し側が報告する。
   Invalid(reason: String)
-  /// 待ち受けるのに `ADMIN_PASSWORD` が無いので起動を中止する。理由は値を含まない。
+  /// 待ち受けるのに `ADMIN_PASSWORD` が得られないので起動を中止する。理由は
+  /// 値を含まない。
   MissingPassword(reason: String)
 }
 
@@ -42,7 +48,7 @@ pub type AdminUi {
 pub type AccountStore {
   /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃っている。
   AccountStore(database_url: String, master_key: vault.MasterKey)
-  /// どちらかが未設定か不正。理由は値を含まない。
+  /// どちらかが未設定か不正か、ファイルを読めない。理由は値を含まない。
   AccountStoreUnavailable(reason: String)
 }
 
@@ -65,27 +71,32 @@ pub type Config {
   )
 }
 
-/// 環境変数から設定全体を読み込む。
+/// 環境変数から設定全体を読み込む。秘密の環境変数（`secret_names`）は読んだ後に
+/// 環境から消すので、環境変数で渡した秘密は 2 回目の呼び出しでは読めない
+/// （`<名前>_FILE` は残るのでファイルからは読める）。
 pub fn load() -> Config {
   let relay_urls =
     envoy.get("RELAY_URL")
     |> result.unwrap(default_relay_url)
     |> parse_list
-  Config(
-    relay_urls: relay_urls,
-    bunker_relay_urls: pick_bunker_relays(
-      envoy.get("BUNKER_RELAY_URL") |> result.unwrap("") |> parse_list,
-      relay_urls,
-    ),
-    pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
-    account_store: account_store(),
-    plugin_dir: optional("PLUGIN_DIR"),
-    plugin_env: plugin_env(),
-    admin_ui: admin_ui(),
-    admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
-    admin_base_url: optional("ADMIN_BASE_URL")
-      |> option.map(strip_trailing_slashes),
-  )
+  let loaded =
+    Config(
+      relay_urls: relay_urls,
+      bunker_relay_urls: pick_bunker_relays(
+        envoy.get("BUNKER_RELAY_URL") |> result.unwrap("") |> parse_list,
+        relay_urls,
+      ),
+      pubkeys: envoy.get("PUBKEYS") |> result.unwrap("") |> parse_list,
+      account_store: account_store(),
+      plugin_dir: optional("PLUGIN_DIR"),
+      plugin_env: plugin_env(),
+      admin_ui: admin_ui(),
+      admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
+      admin_base_url: optional("ADMIN_BASE_URL")
+        |> option.map(strip_trailing(_, "/")),
+    )
+  list.each(secret_names, envoy.unset)
+  loaded
 }
 
 /// 承認ページ（`auth_url`）の URL の土台。`ADMIN_BASE_URL` があればそれを、
@@ -102,13 +113,13 @@ pub fn auth_url_base(config: Config) -> Option(String) {
   }
 }
 
-/// 末尾のスラッシュを取り除く。`ADMIN_BASE_URL` にはパスを足して承認ページの URL
-/// を組み立てるため、`http://host:8080/` と書かれてもスラッシュが重ならないように
-/// する。
-fn strip_trailing_slashes(url: String) -> String {
-  case string.ends_with(url, "/") {
-    True -> strip_trailing_slashes(string.drop_end(url, 1))
-    False -> url
+/// 末尾の `suffix` を繰り返し取り除く。書記素の単位で比べるので、`suffix` が
+/// `\n` なら `\r\n` も取り除く。`ADMIN_BASE_URL` の末尾のスラッシュと、秘密の
+/// ファイルの末尾の改行に使う。
+fn strip_trailing(text: String, suffix: String) -> String {
+  case string.ends_with(text, suffix) {
+    True -> strip_trailing(string.drop_end(text, string.length(suffix)), suffix)
+    False -> text
   }
 }
 
@@ -121,11 +132,52 @@ fn optional(name: String) -> Option(String) {
   }
 }
 
-/// バンカーのアカウントストアの設定。理由の文字列は固定の文言にし、入力値を
-/// 含めない。`DATABASE_URL` の URL としての妥当性は、プール名が要るため起動処理
-/// （`account_store.pool_config`）で検査する。マスターキーは自動生成しない。
+/// ファイルの中身。失敗理由は `enoent` などの文字列。
+@external(erlang, "nostr_no_su_ffi", "read_file")
+fn read_file(path: String) -> Result(String, String)
+
+/// 秘密の環境変数 `name` を、値そのものか `<name>_FILE` が指すファイルから読む。
+/// どちらも未設定なら `None`。両方あるとき、ファイルを読めないとき、中身が空の
+/// ときは起動を中止する理由を返す。ファイルの末尾の改行（`\r\n` を含む）は
+/// 落とす。理由は値もパスも含まない。
+fn secret(name: String) -> Result(Option(String), String) {
+  let file_variable = name <> "_FILE"
+  case optional(name), optional(file_variable) {
+    None, None -> Ok(None)
+    Some(value), None -> Ok(Some(value))
+    Some(_), Some(_) ->
+      Error(name <> " and " <> file_variable <> " are both set; set only one")
+    None, Some(path) ->
+      case read_file(path) {
+        Error(reason) ->
+          Error(file_variable <> " could not be read (" <> reason <> ")")
+        Ok(content) ->
+          case strip_trailing(content, "\n") {
+            "" -> Error(file_variable <> " is empty")
+            value -> Ok(Some(value))
+          }
+      }
+  }
+}
+
+/// バンカーのアカウントストアの設定。`<名前>_FILE` からも読む（`secret/1`）。
 fn account_store() -> AccountStore {
-  case optional("DATABASE_URL"), optional("ACCOUNT_MASTER_KEY") {
+  case secret("DATABASE_URL"), secret("ACCOUNT_MASTER_KEY") {
+    Error(reason), _ | _, Error(reason) -> AccountStoreUnavailable(reason)
+    Ok(database_url), Ok(raw_master_key) ->
+      account_store_from(database_url, raw_master_key)
+  }
+}
+
+/// `database_url` と `raw_master_key` が揃っていればアカウントストアを組み立てる。
+/// 理由の文字列は固定の文言にし、入力値を含めない。`DATABASE_URL` の URL として
+/// の妥当性は、プール名が要るため起動処理（`account_store.pool_config`）で検査
+/// する。マスターキーは自動生成しない。
+fn account_store_from(
+  database_url: Option(String),
+  raw_master_key: Option(String),
+) -> AccountStore {
+  case database_url, raw_master_key {
     None, None ->
       AccountStoreUnavailable("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
     None, Some(_) -> AccountStoreUnavailable("DATABASE_URL is not set")
@@ -176,15 +228,17 @@ fn admin_ui() -> AdminUi {
   }
 }
 
-/// `port` で待ち受ける管理 UI の設定。`ADMIN_PASSWORD` が未設定か空なら、起動を
-/// 中止する理由を返す。パスワードは自動生成しない。
+/// `port` で待ち受ける管理 UI の設定。`ADMIN_PASSWORD` が未設定か空、または
+/// `ADMIN_PASSWORD_FILE` を読めなければ、起動を中止する理由を返す。パスワードは
+/// 自動生成しない。
 fn listening_admin_ui(port: Int) -> AdminUi {
-  case optional("ADMIN_PASSWORD") {
-    Some(password) -> Listen(port:, password:)
-    None ->
+  case secret("ADMIN_PASSWORD") {
+    Ok(Some(password)) -> Listen(port:, password:)
+    Ok(None) ->
       MissingPassword(
         "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",
       )
+    Error(reason) -> MissingPassword(reason)
   }
 }
 

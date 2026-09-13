@@ -6,3 +6,7 @@ priv/static/admin.css linguist-generated=true
 # git の属性は後の行が優先されるので、この行は `*` に対する行（text=auto など）
 # より後に置く。SHA-256 の照合は test/support/vector.gleam の read で行う。
 test/vectors/** -text
+
+# 秘密のファイルのフィクスチャー。CRLF の除去を検査するので改行を変換しない
+# （理由は test/vectors と同じ）。
+test/support/secrets/** -text

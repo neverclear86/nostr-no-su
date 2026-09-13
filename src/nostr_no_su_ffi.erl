@@ -12,6 +12,7 @@
     ensure_module_loaded/1,
     call_export_within/4,
     list_dir/1,
+    read_file/1,
     is_directory/1,
     absolute_path/1,
     add_code_path/1,
@@ -243,6 +244,21 @@ list_dir(Path) ->
 %% パスがディレクトリーかどうか。binary をそのまま渡せる。
 is_directory(Path) ->
     filelib:is_dir(Path).
+
+%% ファイルの中身を UTF-8 の binary（Gleam の String）で返す。失敗理由は
+%% enoent などの文字列、UTF-8 でなければ not valid UTF-8。秘密を読むのに
+%% 使うので、内容を理由に入れない。
+%% -> {ok, Binary} | {error, ReasonBinary}
+read_file(Path) ->
+    case file:read_file(Path) of
+        {error, Reason} ->
+            {error, atom_to_binary(Reason)};
+        {ok, Bin} ->
+            case unicode:characters_to_binary(Bin) of
+                Bin -> {ok, Bin};
+                _ -> {error, <<"not valid UTF-8">>}
+            end
+    end.
 
 %% 相対パスを絶対パスにする。プラグインディレクトリーを最初に 1 度だけ正規化し、
 %% ログ行とコードパスへ登録する内容が相対・絶対で食い違わないようにするために

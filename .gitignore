@@ -13,3 +13,6 @@ plugins-src/*/build
 # 外部プラグインの置き場所。中身は環境ごとに違うので追跡しない。
 plugins/*
 !plugins/.gitkeep
+
+# 秘密をファイルで渡すときの置き場所の例（README の「秘密をファイルで渡す」）。
+/secrets/
