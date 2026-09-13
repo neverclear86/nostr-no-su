@@ -13,6 +13,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su
+import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
@@ -80,7 +81,7 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
       bunker.Settings(
         store: nostr_no_su.account_store_operations(pool, key, actor_timeouts),
         auth_url: None,
-        retry_delay: bunker.RetryDelay(initial_ms: 100, max_ms: 100),
+        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },
     )

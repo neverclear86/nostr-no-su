@@ -7,7 +7,7 @@
 //// 応答しなくても初期化のタイムアウトに当たらず、サブツリーの起動は失敗しない。
 //// 読み込みに失敗したら理由をログに出して再試行を予約するだけで、アクターは
 //// 落ちない。再試行の待ち時間は失敗のたびに倍にし、上限で頭打ちにする
-//// （`RetryDelay`）。待ち時間は読み込めていない状態（`Loading`）だけが持つので、
+//// （`backoff.Backoff`）。待ち時間は読み込めていない状態（`Loading`）だけが持つので、
 //// 読み込みに成功した後の失敗は初期値から数え直す。
 ////
 //// **読み込みの順序に関する不変条件**：`LoadAccounts` は initialiser が送るので、
@@ -65,6 +65,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
+import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/vault
@@ -81,7 +82,10 @@ pub const log_prefix = "bunker"
 /// 到達できないとき、読み込み 1 回は最長 3 秒かかり、その間アクターは次のメッセージを
 /// 処理しない。間隔を延ばすのは、DB が長く止まっている間にこの待ちが起きる回数を
 /// 抑えるためである。
-pub const default_retry_delay = RetryDelay(initial_ms: 5000, max_ms: 120_000)
+pub const default_retry_delay = backoff.Backoff(
+  initial_ms: 5000,
+  max_ms: 120_000,
+)
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。アカウントの読み込みは最長で
@@ -194,12 +198,6 @@ pub type Store {
   )
 }
 
-/// 読み込みに失敗したときの再試行の待ち時間。最初の失敗の後は `initial_ms` 待ち、
-/// 失敗が続くたびに倍にして `max_ms` で頭打ちにする。
-pub type RetryDelay {
-  RetryDelay(initial_ms: Int, max_ms: Int)
-}
-
 /// バンカーアクターの設定。設定から決まるものだけを持つ。購読の張り直しの宛先は
 /// ツリーを組む側しか知らないので、ここには入れず `start` の引数で受け取る。
 pub type Settings {
@@ -209,7 +207,7 @@ pub type Settings {
     /// 承認ページの URL を組み立てる関数。`None` なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
     /// 読み込みに失敗したときの再試行の待ち時間。
-    retry_delay: RetryDelay,
+    retry_delay: backoff.Backoff,
   )
 }
 
@@ -653,7 +651,7 @@ fn load_accounts(state: State) -> State {
             ..state,
             accounts: Loading(
               failure: Some(reason),
-              retry_delay_ms: next_retry_delay(
+              retry_delay_ms: backoff.next(
                 state.settings.retry_delay,
                 retry_delay_ms,
               ),
@@ -668,12 +666,6 @@ fn load_accounts(state: State) -> State {
 /// 読み込めていない状態の始まり。待ち時間は初期値から数える。
 fn loading(settings: Settings) -> Accounts {
   Loading(failure: None, retry_delay_ms: settings.retry_delay.initial_ms)
-}
-
-/// `delay_ms` 待った後の読み込みも失敗したときの、次の待ち時間。倍にして上限で
-/// 頭打ちにする。
-pub fn next_retry_delay(retry: RetryDelay, delay_ms: Int) -> Int {
-  int.min(delay_ms * 2, retry.max_ms)
 }
 
 /// 読み込みの結果に対して出すログ行。`previous_failure` は直前の失敗の理由
