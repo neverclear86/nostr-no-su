@@ -218,6 +218,7 @@ pub fn open_websocket(
     subscriptions,
     handle_event,
     relay_client.subscription_retry_delay,
+    relay_client.keepalive_interval_ms,
   ))
   // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)

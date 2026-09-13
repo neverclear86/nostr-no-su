@@ -5,6 +5,8 @@
 //// いて定義から消えた購読には CLOSE を送る。定義を得られなかったときは開いている
 //// 購読を変えずに再試行を 1 つだけ予約する。判断は純粋関数 `sync` にあり、stratus の
 //// ループはその結果を送信と予約に移すだけである。
+//// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
+//// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
@@ -16,6 +18,7 @@ import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 import nostr_no_su/backoff
+import nostr_no_su/keepalive
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter}
@@ -33,6 +36,8 @@ pub type Msg {
   RetrySubscribe(generation: Int)
   /// イベントを 1 件このソケットから発行する。
   Publish(event: event.Event)
+  /// 生存確認の刻み。relay_client が自分宛てに予約する。
+  KeepaliveTick
 }
 
 /// 起動済みのリレークライアント。イベントの送信は `publish` を通じて行い、
@@ -95,6 +100,8 @@ type Session {
     /// 再試行のタイマーの宛先。stratus の initialiser（stratus のプロセスの中で
     /// 動く）で作り、セレクターに入れる。
     inbox: Subject(Msg),
+    /// 生存確認の状態。
+    keepalive: keepalive.Keepalive,
   )
 }
 
@@ -105,6 +112,15 @@ pub const subscription_retry_delay = backoff.Backoff(
   initial_ms: 5000,
   max_ms: 120_000,
 )
+
+/// 本番の生存確認の刻みの間隔（30 秒）。ping は無受信がこの 1 倍を超えて 2 倍
+/// 以内に送り、切断は 2 倍を超えて 3 倍以内に起きる（`nostr_no_su/keepalive` を
+/// 参照）。
+pub const keepalive_interval_ms = 30_000
+
+/// 生存確認の ping に送るペイロード。空にすると、上流の stratus の `send_ping`
+/// がマスクを 4 ビットの値で組み立てて `let assert` に失敗する。
+const ping_payload = <<"nostr-no-su">>
 
 /// ハンドシェイクに許す時間。`start` は呼び出し元を最大でこの時間（さらに
 /// stratus が上乗せする 100ms）ブロックする。呼び出し元はスーパーバイザー配下の
@@ -147,7 +163,8 @@ pub fn new_subscription_state(
 
 /// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
 /// `handle_event` へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は
-/// 購読の定義を得られなかったときの再試行の待ち時間。接続アクターは呼び出し元に
+/// 購読の定義を得られなかったときの再試行の待ち時間。`interval_ms` は生存確認の
+/// 刻みの間隔で、本番は `keepalive_interval_ms` を渡す。接続アクターは呼び出し元に
 /// リンクされるため呼び出し元と一緒に死に、exit を trap している呼び出し元には
 /// その死がメッセージとして届く。
 pub fn start(
@@ -155,6 +172,7 @@ pub fn start(
   subscriptions: Subscriptions,
   handle_event: fn(event.Verified) -> Nil,
   retry_delay: backoff.Backoff,
+  interval_ms: Int,
 ) -> Result(Client, String) {
   use req <- result.try(
     to_request(url)
@@ -164,13 +182,19 @@ pub fn start(
   let builder =
     stratus.new_with_initialiser(req, fn() {
       let inbox = process.new_subject()
-      Session(subscriptions: new_subscription_state(retry_delay), inbox: inbox)
+      let _ = process.send_after(inbox, interval_ms, KeepaliveTick)
+      Session(
+        subscriptions: new_subscription_state(retry_delay),
+        inbox: inbox,
+        keepalive: keepalive.new(),
+      )
       |> stratus.initialised
       |> stratus.selecting(process.new_selector() |> process.select(inbox))
       |> Ok
     })
     |> stratus.with_connect_timeout(connect_timeout_ms)
     |> stratus.on_message(fn(session, msg, conn) {
+      let session = record_inbound(session, msg)
       case msg {
         stratus.User(Subscribe) ->
           synchronise(
@@ -196,11 +220,14 @@ pub fn start(
           send_message(conn, prefix, message.Publish(published))
           stratus.continue(session)
         }
+        stratus.User(KeepaliveTick) ->
+          check_keepalive(session, conn, prefix, interval_ms)
         stratus.Text(text) -> {
           handle_text(prefix, text, handle_event)
           stratus.continue(session)
         }
         stratus.Binary(_) -> stratus.continue(session)
+        stratus.Pong(_) -> stratus.continue(session)
       }
     })
     |> stratus.on_close(fn(_session, reason) {
@@ -352,6 +379,58 @@ fn synchronise(
     }
   }
   Session(..session, subscriptions: synced.state)
+}
+
+/// リレーから何かを受信したら生存確認の状態に記録する。自分宛てのメッセージは
+/// 受信に数えない。
+fn record_inbound(session: Session, msg: stratus.Message(Msg)) -> Session {
+  case msg {
+    stratus.User(_) -> session
+    stratus.Text(_) | stratus.Binary(_) | stratus.Pong(_) ->
+      Session(..session, keepalive: keepalive.received(session.keepalive))
+  }
+}
+
+/// 生存確認の刻み 1 回。判定は `keepalive.tick` にあり、ここは ping の送信、
+/// 次の刻みの予約、停止に移すだけである。
+fn check_keepalive(
+  session: Session,
+  conn: stratus.Connection,
+  prefix: String,
+  interval_ms: Int,
+) -> stratus.Next(Session, Msg) {
+  let #(next, verdict) = keepalive.tick(session.keepalive)
+  case verdict {
+    keepalive.Healthy -> continue_after_tick(session, next, interval_ms)
+    keepalive.SendPing -> {
+      case stratus.send_ping(conn, ping_payload) {
+        Ok(Nil) -> Nil
+        Error(reason) ->
+          log.println(prefix, "failed to send ping: " <> string.inspect(reason))
+      }
+      continue_after_tick(session, next, interval_ms)
+    }
+    keepalive.Unresponsive -> {
+      log.println(
+        prefix,
+        "no data or pong within "
+          <> int.to_string(interval_ms)
+          <> "ms after a ping; closing the connection",
+      )
+      stratus.stop()
+    }
+  }
+}
+
+/// 次の生存確認の刻みを予約し、状態を更新して continue する。
+/// `Healthy` と `SendPing` の判定はどちらもこれで終わる。
+fn continue_after_tick(
+  session: Session,
+  next_keepalive: keepalive.Keepalive,
+  interval_ms: Int,
+) -> stratus.Next(Session, Msg) {
+  let _ = process.send_after(session.inbox, interval_ms, KeepaliveTick)
+  stratus.continue(Session(..session, keepalive: next_keepalive))
 }
 
 /// クライアントメッセージを 1 件ソケットへ書き込む。書けなかった購読や応答は
