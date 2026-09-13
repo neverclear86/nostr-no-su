@@ -311,21 +311,36 @@ application_version(App) ->
 %% 本体の依存の一部と、他のプラグインが同梱したアプリはロードされていない。
 %% `.app` の直読みはロード状態に依存せず、本体・プラグインのどちらが提供元でも
 %% 同じ経路で版が出る。
-%% `file:consult/1` が `{ok, [{application, App, Props}]}` を返し、`vsn` が
-%% charlist のときだけ成功。読めない・形が違う・vsn が無い（またはリストでない）
-%% ときは Error。
+%%
+%% `.app` は本体が書いたものとは限らず、プラグインが同梱したものや、影の判定で
+%% たまたま踏んだ他バンドルのものもここへ来る。形が崩れていても本体の起動を
+%% 止めてはならないため、例外は投げず、読めない・形が違う・vsn が無い（または
+%% 文字として整形できない）ときはすべて Error にする。
+%% `App` が atom で `Props` が list であることをガードで確かめたうえで
+%% `proplists:get_value/2` を呼ぶ（`function_clause` を避ける）。`atom_to_binary/1`
+%% は atom であれば必ず成功するが、`vsn` の値は不正な整数（コードポイントの範囲外
+%% や負値）を含むリストでも `is_list/1` は真になるため、`unicode:characters_to_binary/1`
+%% の戻り値が binary であることまで確かめる（不正な入力は `{error, Bin, Rest}` を
+%% 返す場合と `badarg` の例外を投げる場合があり、`try` はその両方を一度に塞ぐ）。
 %% -> {ok, {AppBinary, VsnBinary}} | {error, nil}
 read_app_file(Path) ->
-    case file:consult(Path) of
-        {ok, [{application, App, Props}]} ->
-            case proplists:get_value(vsn, Props) of
-                Vsn when is_list(Vsn) ->
-                    {ok, {atom_to_binary(App), unicode:characters_to_binary(Vsn)}};
-                _ ->
-                    {error, nil}
-            end;
-        _ ->
-            {error, nil}
+    try
+        case file:consult(Path) of
+            {ok, [{application, App, Props}]} when is_atom(App), is_list(Props) ->
+                case proplists:get_value(vsn, Props) of
+                    Vsn when is_list(Vsn) ->
+                        case unicode:characters_to_binary(Vsn) of
+                            Bin when is_binary(Bin) -> {ok, {atom_to_binary(App), Bin}};
+                            _ -> {error, nil}
+                        end;
+                    _ ->
+                        {error, nil}
+                end;
+            _ ->
+                {error, nil}
+        end
+    catch
+        _:_ -> {error, nil}
     end.
 
 %% 自プロセスの未処理メッセージ数。プラグインのランナーが、遅いプラグインの

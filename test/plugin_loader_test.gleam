@@ -555,6 +555,117 @@ pub fn load_all_required_versions_timeout_test() {
   )
 }
 
+/// 要求したアプリケーションの `.app` が形の崩れたものでも、例外にはならず
+/// 「見つからない」と同じ理由で読み込みを拒否し、他のプラグインは読み込まれる。
+/// `.app` の直読み（`read_app_file/1`）が例外を投げないことの検証を兼ねる。
+pub fn load_all_required_versions_broken_app_test() {
+  let fixture = beam_fixture.new("required_broken_app")
+  let broken = beam_fixture.name(fixture, "aaa")
+  let good = beam_fixture.name(fixture, "bbb")
+  let ebin = ebin_in(fixture, [broken])
+  let app = beam_fixture.name(fixture, "broken_req_app")
+  beam_fixture.write(
+    ebin <> "/" <> app <> ".app",
+    "{application, " <> app <> ", [{vsn, [foo]}]}.\n",
+  )
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      broken,
+      "broken_req_plugin",
+      "#{<<\"" <> app <> "\">> => <<\"1.0.0\">>}",
+    ),
+    broken,
+    ebin,
+  )
+  put_plugin(good, "survivor_plugin", fixture.root)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "survivor_plugin"
+  assert has_note(notes, "but no " <> app <> ".app is on the code path")
+  assert has_note(notes, "(1 skipped)")
+}
+
+/// 影の提供元の ebin にある `.app` が形の崩れたものでも、影の行はアプリ不明の
+/// 分岐（モジュール名）に落ち、両方のプラグインの読み込みは続く。
+pub fn load_all_shadow_broken_app_test() {
+  let fixture = beam_fixture.new("shadow_broken_app")
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  let shared = beam_fixture.name(fixture, "shared")
+  let first_ebin = ebin_in(fixture, [first])
+  let second_ebin = ebin_in(fixture, [second])
+  put_plugin(first, "first_plugin", first_ebin)
+  beam_fixture.write(
+    first_ebin <> "/" <> shared <> "_app.app",
+    "{application, " <> shared <> "_app, [{vsn, [foo]}]}.\n",
+  )
+  beam_fixture.compile(beam_fixture.value_source(shared, 1), shared, first_ebin)
+  beam_fixture.compile(
+    beam_fixture.value_source(shared, 2),
+    shared,
+    second_ebin,
+  )
+  put_plugin(second, "second_plugin", second_ebin)
+
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert list.map(plugins, fn(item) { item.name })
+    == ["first_plugin", "second_plugin"]
+  assert has_note(notes, second <> ": 1 module(s) already provided")
+  assert has_note(notes, "(" <> shared <> ")")
+}
+
+/// 影に入ったモジュールが複数でも、同じアプリは 1 件に畳まれ、アプリ不明のもの
+/// はアプリ分の後にモジュール名で続く。
+pub fn load_all_shadow_dedup_and_mixed_test() {
+  let fixture = beam_fixture.new("shadow_mixed")
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  let shared = beam_fixture.name(fixture, "shared")
+  let first_ebin = ebin_in(fixture, [first])
+  let second_ebin = ebin_in(fixture, [second])
+  put_plugin(first, "first_plugin", first_ebin)
+  beam_fixture.compile(beam_fixture.value_source(shared, 1), shared, first_ebin)
+  beam_fixture.write_garbage(second_ebin <> "/lists.beam")
+  beam_fixture.write_garbage(second_ebin <> "/maps.beam")
+  beam_fixture.compile(
+    beam_fixture.value_source(shared, 2),
+    shared,
+    second_ebin,
+  )
+  put_plugin(second, "second_plugin", second_ebin)
+
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert list.map(plugins, fn(item) { item.name })
+    == ["first_plugin", "second_plugin"]
+  assert has_note(
+    notes,
+    second
+      <> ": 3 module(s) already provided by the host or another plugin are ignored (stdlib "
+      <> beam_fixture.loaded_app_version("stdlib")
+      <> ", "
+      <> shared
+      <> ")",
+  )
+}
+
 /// 読み込んだ `Plugin.handle` にイベントを渡すと、プラグインへイベント map が
 /// 届く。
 pub fn load_all_dispatches_event_test() {
