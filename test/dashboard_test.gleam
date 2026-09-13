@@ -155,6 +155,7 @@ pub fn language_switch_return_paths_test() {
     dashboard.notice_page(
       i18n.Japanese,
       view.System,
+      view.SwitchReturningTo("/"),
       i18n.NotFound,
       i18n.Untranslated("unknown or expired approval request"),
       view.Failure,

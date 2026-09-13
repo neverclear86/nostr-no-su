@@ -290,20 +290,21 @@ pub fn approval_page(
   )
 }
 
-/// 見出しと理由だけを伝えるページ。承認・拒否の結果と、アカウントを扱えないときや
-/// 変更が反映されたか分からないときに使う。`tone` は理由の囲みの色で、呼び出し側が
-/// 結果に応じて決める。理由はほかのページと同じくカードに入れる（中立の囲みはページの
-/// 背景と同じ色なので、カードの外では見えない）。ダッシュボードで状態を確かめられるよう
-/// リンクを置く。POST の応答か、開き直すと内容が変わるページなので、テーマか言語を
-/// 切り替えた後はダッシュボードを開く。
+/// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、
+/// 変更が反映されたか分からないとき、404 / 405 / 400 の通知に使う。`tone` は理由の
+/// 囲みの色で、呼び出し側が結果に応じて決める。理由はほかのページと同じくカードに入れる
+/// （中立の囲みはページの背景と同じ色なので、カードの外では見えない）。ダッシュボードで
+/// 状態を確かめられるようリンクを置く。切り替えを出すか、切り替えた後にどこを開くかは
+/// 呼び出し側が `switch` で決める。
 pub fn notice_page(
   language: Language,
   theme: view.Theme,
+  switch: view.NavbarSwitch,
   title: i18n.Message,
   message: i18n.Reason,
   tone: view.Tone,
 ) -> String {
-  view.page(language, theme, title, view.Narrow, view.SwitchReturningTo("/"), [
+  view.page(language, theme, title, view.Narrow, switch, [
     view.card([view.alert(tone, view.reason_content(language, None, message))]),
     view.back_link(language),
   ])
