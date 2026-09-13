@@ -11,6 +11,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -635,9 +636,15 @@ pub fn approval_page_shows_the_request_test() {
   assert string.contains(body, "<dd class=\"break-words\">12s</dd>")
 }
 
-/// 知らない、あるいは失効したトークンの承認ページは 404。
+/// 知らない、あるいは失効したトークンの承認ページは 404 の HTML で、理由を出し
+/// token を含めない。
 pub fn approval_page_for_an_unknown_token_is_not_found_test() {
-  assert get(context(), "/approve/other-token").status == 404
+  let response = get(context(), "/approve/other-token")
+  assert response.status == 404
+  let body = simulate.read_body(response)
+  assert header(response, "content-type") == "text/html; charset=utf-8"
+  assert string.contains(body, "unknown or expired approval request")
+  assert !string.contains(body, "other-token")
 }
 
 /// 承認は Context の `approve` を呼び、閉じてよいことを伝える。
@@ -782,9 +789,15 @@ pub fn dashboard_shows_that_no_accounts_are_registered_test() {
   assert string.contains(body, "No accounts registered.")
 }
 
-/// 知らないパスは 404。認証は先に通っている。
+/// 知らないパスは 404 の HTML で、理由を出し、パスを含めない。アカウントの一覧を
+/// 引かない（503 にならない）ことで、`Context` を呼ばずに描画することを表す。
 pub fn unknown_paths_are_not_found_test() {
-  assert get(context(), "/nope").status == 404
+  let response = get(with_accounts(Error(unavailable)), "/nope-path")
+  assert response.status == 404
+  let body = simulate.read_body(response)
+  assert header(response, "content-type") == "text/html; charset=utf-8"
+  assert string.contains(body, i18n.text(i18n.English, i18n.PageNotFound))
+  assert !string.contains(body, "nope-path")
 }
 
 // --- アカウントの登録 ---
@@ -1335,6 +1348,16 @@ pub fn unknown_account_action_is_not_found_test() {
   assert post(context(), "/accounts/" <> signer <> "/nope").status == 404
 }
 
+/// 一覧に無い署名者への操作の GET は 404 の HTML で、理由を出し、署名者を含めない。
+pub fn unlisted_signer_is_not_found_page_test() {
+  let response = get(with_accounts(Ok([])), action_path(dashboard.EditLabel))
+  assert response.status == 404
+  let body = simulate.read_body(response)
+  assert header(response, "content-type") == "text/html; charset=utf-8"
+  assert string.contains(body, i18n.text(i18n.English, i18n.AccountNotFound))
+  assert !string.contains(body, signer)
+}
+
 /// アカウントの一覧を得られなければ、操作の GET と POST は 503 で理由を出す。
 pub fn account_pages_need_the_account_list_test() {
   let failing = with_accounts(Error(unavailable))
@@ -1392,6 +1415,103 @@ pub fn same_origin_account_change_is_accepted_test() {
   assert process.receive(reports, 1000) == Ok(Removed(signer))
 }
 
+/// メソッドが違うリクエストは 405 の HTML で、`allow` を持ちメソッドとパスを本文に
+/// 含めない。
+pub fn method_not_allowed_pages_test() {
+  let get_only_paths = ["/", "/accounts/new"]
+  let post_only_paths = [
+    "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
+    "/accounts/generate", "/accounts/import", "/accounts/register-generated",
+  ]
+  let both_methods_paths = ["/approve/tok", action_path(dashboard.EditLabel)]
+  let cases =
+    list.flatten([
+      list.map(post_only_paths, fn(path) { #(get(context(), path), "POST") }),
+      list.map(get_only_paths, fn(path) { #(post(context(), path), "GET") }),
+      list.map(both_methods_paths, fn(path) {
+        #(
+          simulate.request(http.Put, path)
+            |> with_credentials("admin", password)
+            |> admin.handle_request(context(), _),
+          "GET, POST",
+        )
+      }),
+    ])
+  use #(response, allowed) <- list.each(cases)
+  assert response.status == 405
+  assert header(response, "allow") == allowed
+  assert header(response, "content-type") == "text/html; charset=utf-8"
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    i18n.text(i18n.English, i18n.MethodNotAllowedDetail),
+  )
+  assert string.contains(
+    body,
+    "<input name=\"return\" type=\"hidden\" value=\"/\">",
+  )
+}
+
+/// 管理 UI のフォームからは送られない値（欄の欠落、未対応の言語とテーマ）は 400 の
+/// HTML で、`FormNotReadable` の英文を出す。
+pub fn bad_request_pages_test() {
+  let responses = [
+    post_form(context(), "/language", [#("language", "xx")]),
+    post_form(context(), "/theme", [#("theme", "xx")]),
+    post_form(context(), "/sessions/revoke", [#("signer", signer)]),
+    post_form(context(), "/plugins/reenable", []),
+  ]
+  use response <- list.each(responses)
+  assert response.status == 400
+  assert header(response, "content-type") == "text/html; charset=utf-8"
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.FormNotReadable),
+  )
+}
+
+/// 別オリジンの POST は 400 の HTML で、切り替えを出さず、枠への埋め込みも禁じる。
+/// `Host` の無いリクエストも同じ 400 の HTML になる。
+pub fn cross_origin_post_is_an_origin_mismatch_page_test() {
+  let base =
+    simulate.request(http.Post, "/language")
+    |> request.set_header("origin", "http://evil.example")
+    |> in_japanese
+    |> with_credentials("admin", password)
+
+  let with_host = admin.handle_request(context(), base)
+  assert with_host.status == 400
+  assert header(with_host, "content-type") == "text/html; charset=utf-8"
+  let body = simulate.read_body(with_host)
+  assert string.contains(body, i18n.text(i18n.Japanese, i18n.OriginMismatch))
+  assert !string.contains(body, "name=\"return\"")
+  assert header(with_host, "x-frame-options") == "DENY"
+
+  let without_host =
+    request.Request(
+      ..base,
+      headers: list.filter(base.headers, fn(h) { h.0 != "host" }),
+    )
+    |> admin.handle_request(context(), _)
+  assert without_host.status == 400
+  assert header(without_host, "content-type") == "text/html; charset=utf-8"
+}
+
+/// 操作中に届かない応答は `text/plain` のまま。CSS への POST は 405、フォームの本文の
+/// 無い登録は 415。401 と `/healthz` は他のテストが確かめる。
+pub fn kept_plain_text_responses_test() {
+  let method = post(context(), "/static/admin.css")
+  assert method.status == 405
+  assert simulate.read_body(method) == "Method not allowed"
+
+  let unsupported_media =
+    simulate.request(http.Post, "/accounts/import")
+    |> with_credentials("admin", password)
+    |> admin.handle_request(context(), _)
+  assert unsupported_media.status == 415
+  assert header(unsupported_media, "content-type") == "text/plain"
+}
+
 /// `Origin`（無ければ `Referer`）がある POST は、そのホストとポートが `Host` と一致するときだけ
 /// 通す。リバースプロキシーが `Host` を上流のアドレスに書き換えるか、ポートを落とすと 400 になり、
 /// 公開ホスト名とポートのまま渡せば通る（README のリバースプロキシーの節の根拠）。検査は
@@ -1444,7 +1564,11 @@ pub fn posts_need_a_host_that_matches_the_origin_test() {
     }
     False -> {
       assert #(headers, response.status, saved) == #(headers, 400, False)
-      assert simulate.read_body(response) == "Bad request: Invalid origin"
+      assert header(response, "content-type") == "text/html; charset=utf-8"
+      assert string.contains(
+        simulate.read_body(response),
+        i18n.text(i18n.English, i18n.OriginMismatch),
+      )
     }
   }
 }

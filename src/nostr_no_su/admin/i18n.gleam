@@ -243,6 +243,13 @@ pub type Message {
   NotFound
   ChangeNotConfirmed
   AccountsNotAvailable
+  MethodNotAllowed
+  BadRequest
+  PageNotFound
+  AccountNotFound
+  MethodNotAllowedDetail
+  FormNotReadable
+  OriginMismatch
   // アカウントの登録画面
   ImportPrivateKey
   ImportDescription
@@ -353,6 +360,17 @@ fn english(message: Message) -> String {
     NotFound -> "Not found"
     ChangeNotConfirmed -> "Change not confirmed"
     AccountsNotAvailable -> "Accounts are not available"
+    MethodNotAllowed -> "Method not allowed"
+    BadRequest -> "Bad request"
+    PageNotFound -> "There is no page at this URL."
+    AccountNotFound ->
+      "This account is not registered. It may have been deleted already; check the dashboard."
+    MethodNotAllowedDetail ->
+      "This URL is for a button in the admin UI and cannot be opened directly. Use the dashboard instead."
+    FormNotReadable ->
+      "The form was incomplete. Go back to the dashboard and try again."
+    OriginMismatch ->
+      "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see the README."
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
@@ -464,6 +482,15 @@ fn japanese(message: Message) -> String {
     NotFound -> "見つかりません"
     ChangeNotConfirmed -> "変更を確認できませんでした"
     AccountsNotAvailable -> "アカウントを利用できません"
+    MethodNotAllowed -> "この方法では開けません"
+    BadRequest -> "要求を処理できません"
+    PageNotFound -> "この URL のページはありません。"
+    AccountNotFound -> "このアカウントは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
+    MethodNotAllowedDetail ->
+      "この URL は管理 UI のボタンから送る操作のもので、直接は開けません。ダッシュボードから操作してください。"
+    FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
+    OriginMismatch ->
+      "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"

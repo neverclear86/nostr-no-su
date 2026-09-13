@@ -115,8 +115,25 @@ pub fn pages() -> List(String) {
     ],
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure],
-      dashboard.notice_page(language, view.System, i18n.NotFound, reason, _),
+      dashboard.notice_page(
+        language,
+        view.System,
+        view.SwitchReturningTo("/"),
+        i18n.NotFound,
+        reason,
+        _,
+      ),
     ),
+    [
+      dashboard.notice_page(
+        language,
+        view.System,
+        view.NoSwitch,
+        i18n.BadRequest,
+        i18n.Translated(i18n.OriginMismatch),
+        view.Failure,
+      ),
+    ],
     list.map(account_actions.all, account_pages.account_action_page(
       language,
       view.System,
