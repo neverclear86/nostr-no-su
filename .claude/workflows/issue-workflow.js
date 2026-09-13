@@ -51,7 +51,8 @@ const S = {
   planner: {
     type: 'object',
     properties: {
-      status: { type: 'string', enum: ['plan', 'question'] },
+      status: { type: 'string', enum: ['plan', 'question', 'split'] },
+      subIssues: { type: 'array', items: { type: 'integer' }, description: 'status が split のとき、作ったサブ issue の番号を実装する順に' },
       file: { type: 'string', description: '書いたプランのファイル' },
       summary: { type: 'string', description: '方針の要約。版 2 以降は指摘への対応の表の要旨' },
       questions: { type: 'array', items: { type: 'string' }, description: 'status が question のとき、ユーザーに聞く質問' },
@@ -77,6 +78,7 @@ const S = {
       commentUrl: { type: 'string', description: 'fixed のとき、投稿した対応コメントの URL' },
       reportFile: { type: 'string', description: 'deviation のとき、逸脱の箇所と理由を書いたファイル' },
       reason: { type: 'string', description: 'deviation / blocked の理由、または rebase で解けなかった衝突' },
+      ciPassed: { type: 'boolean', description: 'PR の head で CI の全ジョブが pass したか（pr / fixed / rebased のとき必須）' },
     },
     required: ['status'],
   },
@@ -132,6 +134,7 @@ class StageError extends Error {
 }
 
 const slots = limiter(WINDOW)
+let nextIdx = a.issues.length
 const mergeLock = mutex()
 const done = new Map(a.issues.map((i) => [String(i.n), deferred()]))
 let mergeSeq = 0
@@ -185,7 +188,7 @@ ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメ�
   plan1: (e, issue, designUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
-${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。
+${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるときは、定義の「分割」に従ってサブ issue を作り、status を split にして番号を返す。
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
   // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r, effortNote) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
@@ -230,27 +233,31 @@ ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、�
   🤖 Generated with [Claude Code](https://claude.com/claude-code)
   ${a.trailers.sessionUrl}
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、逸脱の箇所と理由を ${PLANS}/${e.n}-deviation.md に書き、status を deviation にして返す。
-返答（構造化出力）: status、PR の番号と URL、head のコミット。`,
+PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   implementContinue: (e, postUrl) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
 新しい版のプランとの差分だけを直して実装を仕上げ、PR を作ってほしい（すでに PR があれば push して本文を直す）。
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラーと PR 本文の末尾は、作業ツリーの \`git log\` と既存の PR 本文の形に合わせる。無ければ次の 2 行:
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
-返答（構造化出力）: status、PR の番号と URL、head のコミット。`,
+PR を作ったら（または push したら）\`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   fix: (e, pr, reviewUrl, kind, planNote) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）の${kind}（${reviewUrl}）は REQUEST CHANGES だった。指摘は \`gh api\` でその URL のコメント本文を読む。
 ${planNote ? `${planNote}\n` : ''}
 作業ツリー ${e.wt} とブランチはすでにある（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）。
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー: 作業ツリーの \`git log\` の直近のコミットと同じ 2 行
 直して push し、「## ${kind}の指摘への対応（<短い SHA>）」を PR に投稿して、コメントの URL と新しい head を返してほしい。
-返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット。`,
+push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット、ciPassed。`,
   prReview1: (e, pr, head, postUrl, issue) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
 - 承認済みのプラン: ${postUrl}
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
-${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}レビューを PR コメントに投稿してほしい。
+${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、test、format、CSS、vendor、プラグイン、.env.example）は再現せず、CI に無い検証だけを再現する。
+レビューを PR コメントに投稿してほしい。
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、must が承認済みプランの設計に起因するか。`,
   prReviewNext: (e, pr, r, responseUrl, head, prevUrl, prevKind) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）のレビューをしてほしい（ラウンド ${r}）。
 実装側が${prevKind}（${prevUrl}）の指摘に対応した（${responseUrl}、head ${head}）。
@@ -276,7 +283,8 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
 返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、問題があればその内容。`,
   rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
 rebase 以外の変更を入れない。
-返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット。`,
+push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待つ。
+返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット、ciPassed。`,
 }
 
 // --- 段階 -------------------------------------------------------------------
@@ -295,6 +303,10 @@ async function planStage(e, issue, state) {
       v === 1 ? P.plan1(e, issue, designUrl) : P.planNext(e, v, r, effortNote),
       { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, ...(escalated ? { effort: 'high' } : {}) })
     if (plan.status === 'question') return { blocked: { stage: 'plan', questions: plan.questions || [plan.summary] } }
+    if (plan.status === 'split') {
+      if (!Array.isArray(plan.subIssues) || plan.subIssues.length === 0) throw new StageError('plan', `#${e.n} は split だがサブ issue の番号が無い`)
+      return { split: plan.subIssues }
+    }
     r++
     const rev = await call('plan-review', `Review plan #${e.n} r${r}`,
       r === 1 ? P.review1(e) : P.reviewNext(e, v, r, plan.file || `${PLANS}/${e.n}-v${v}.md`, `${PLANS}/${e.n}-r${r - 1}.md`),
@@ -346,6 +358,7 @@ async function implementStage(e, issue, state) {
   }
   if (impl.status === 'blocked') return { blocked: { stage: 'implement', questions: [impl.reason || '実装が進められない'] } }
   if (!impl.pr || !impl.head) throw new StageError('implement', `#${e.n} の実装が PR の番号か head を返さなかった`)
+  if (impl.ciPassed !== true) return { blocked: { stage: 'implement', questions: [`PR #${impl.pr} の CI が通っていない（${impl.reason || '理由の報告なし'}）`] } }
   state.pr = impl.pr
   state.head = impl.head
   return {}
@@ -356,6 +369,7 @@ async function fixRound(e, state, label, prompt, phase) {
   const fix = await call('fix', label, prompt, { agentType: 'issue-implementer', phase, schema: S.implementer })
   if (fix.status === 'blocked' || fix.status === 'deviation') return { blocked: { stage: 'fix', questions: [fix.reason || '指摘への対応が進められない'] } }
   if (!fix.commentUrl || !fix.head) throw new StageError('fix', `${label} が対応コメントの URL か head を返さなかった`)
+  if (fix.ciPassed !== true) return { blocked: { stage: 'fix', questions: [`対応コミット ${fix.head} の CI が通っていない（${fix.reason || '理由の報告なし'}）`] } }
   return fix
 }
 
@@ -429,10 +443,27 @@ async function mergeStage(e, state) {
       log(`#${e.n}: PR #${state.pr} が main と衝突しているので rebase させる`)
       const rb = await call('rebase', `Rebase PR #${state.pr} (${t + 1})`, P.rebase(e, state.pr), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
       if (rb.status !== 'rebased' || !rb.head) return { stalled: { stage: 'merge', reason: `rebase の衝突に設計の判断が要る: ${rb.reason || rb.status}` } }
+      if (rb.ciPassed !== true) return { stalled: { stage: 'merge', reason: `rebase 後の CI が通っていない: ${rb.reason || ''}` } }
       state.head = rb.head
     }
     return { stalled: { stage: 'merge', reason: '到達しないはずの経路' } }
   })
+}
+
+/** 分割で生まれたサブ issue を、前のサブ issue のマージを待つ連鎖で進める */
+async function runSplit(parent, subs) {
+  const results = []
+  let prev = null
+  for (const n of subs) {
+    const key = String(n)
+    if (!done.has(key)) done.set(key, deferred())
+    const child = { n, branch: `${parent.branch}-${n}`, ui: parent.ui, after: prev ? [prev] : (parent.after || []), note: `#${parent.n} を分割したサブ issue。親のプランのコメントに分割の設計がある` }
+    const res = await runIssue(child, nextIdx++)
+    done.get(key).resolve(res)
+    results.push(res)
+    prev = n
+  }
+  return results
 }
 
 /** 1 件の issue を最初から最後まで進める */
@@ -448,7 +479,9 @@ async function runIssue(issue, idx) {
     for (const dep of issue.after || []) {
       const d = done.get(String(dep))
       if (!d) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
-      const res = await d.promise
+      let res = await d.promise
+      // 分割された依存先は、サブ issue が全部マージされていれば最後のサブ issue のマージを依存先とみなす
+      if (res.status === 'split' && (res.children || []).length && res.children.every((c) => c.status === 'merged')) res = res.children[res.children.length - 1]
       if (res.status !== 'merged') return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] })
       if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
     }
@@ -472,6 +505,13 @@ async function runIssue(issue, idx) {
       const r = await stage()
       if (r.blocked) return finish({ status: 'blocked', ...r.blocked })
       if (r.stalled) return finish({ status: 'stalled', ...r.stalled })
+      if (r.split) {
+        // 親の枠を返してから、サブ issue を after の連鎖で同じ実行に足す
+        slots.release(); acquired = false
+        log(`#${issue.n}: 大きいのでサブ issue ${r.split.map((n) => `#${n}`).join(' ')} に分けた。順に進める`)
+        const children = await runSplit(issue, r.split)
+        return finish({ status: 'split', subIssues: r.split, children })
+      }
     }
     log(`#${issue.n}: PR #${state.pr} をマージした（${state.mergeSha}）`)
     return finish({ status: 'merged' })
@@ -495,6 +535,7 @@ function fake(label, opts) {
   if (t === 'issue-designer') return { commentUrl: `https://example/issue/${n}#design` }
   if (t === 'issue-planner') {
     if (sc === 'question' && v === '1') return { status: 'question', questions: ['since はどこから？'] }
+    if (sc === 'split' && v === '1') return { status: 'split', subIssues: [Number(n) * 100 + 1, Number(n) * 100 + 2] }
     if (sc === 'replan-question' && (label.includes('revise') || Number(v) >= 2)) return { status: 'question', questions: ['逸脱の代案はどちらにするか'] }
     return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
   }
@@ -506,12 +547,13 @@ function fake(label, opts) {
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 1, postUrl: `https://example/issue/${n}#plan-r${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 1, nit: 0, headings: ['x'] }
   }
   if (t === 'issue-implementer') {
-    if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased` }
-    if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}` }
+    if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased`, ciPassed: true }
+    if (sc === 'ci-fail') return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: false, reason: 'test が fail' }
+    if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
     if (sc === 'null') return null
     if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
     if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
-    return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1` }
+    return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true }
   }
   if (t === 'issue-pr-reviewer') {
     if (sc === 'pr-needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#needs-user`, questions: ['エラーを握るか落とすか'] }
@@ -542,5 +584,5 @@ const results = await Promise.all(a.issues.map(async (issue, idx) => {
   return res
 }))
 const count = (s) => results.filter((r) => r.status === s).length
-log(`merged ${count('merged')} / blocked ${count('blocked')} / stalled ${count('stalled')} / failed ${count('failed')}`)
+log(`merged ${count('merged')} / split ${count('split')} / blocked ${count('blocked')} / stalled ${count('stalled')} / failed ${count('failed')}`)
 return { base: a.base, results }

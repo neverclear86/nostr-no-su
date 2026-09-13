@@ -41,6 +41,7 @@ disallowedTools: Agent
 ## コミットと PR
 - コミットは意味のまとまりごとに分け、メッセージは `feat:`、`fix:`、`docs:`、`refactor:`、`test:` の接頭辞と日本語の要約（直近の `git log --oneline` の形）。本文の最後に、指示されたトレーラーの行を付ける
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
+- PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の全ジョブが pass するのを待つ。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文の書式は次のとおり。末尾に `Closes #<N>` と、指示された生成表記の行を置く
 
 ```
@@ -62,7 +63,7 @@ disallowedTools: Agent
 PR 本文と対応コメントは、レビュアーが次に取る行動を変える情報だけで組む。変更点はファイルごとに 1〜3 行、テストと検証は「コマンド | 結果」の表にし、プランの言い直しや定型文で膨らませない。ツール呼び出しの間の文は 1 文までにする。
 
 ## 返すもの
-構造化出力で、status（pr）、PR の番号と URL、head のコミットを返す。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（テストが失敗したらそのまま書く。飛ばした検査があればそう書く）。
+構造化出力で、status（pr）、PR の番号と URL、head のコミット、ciPassed を返す。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（テストが失敗したらそのまま書く。飛ばした検査があればそう書く）。
 
 ## レビューの指摘を受け取ったら
 - 指摘は、指示されたレビューコメントの URL の本文を `gh api` で読む（依頼文には貼られない）

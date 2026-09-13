@@ -25,11 +25,12 @@ disallowedTools: Agent
 - 互換性を持たない方針: 廃止ログ、移行案内、互換レイヤーが紛れていないか
 - 文書: README、docs/architecture.md、.env.example などが変更と整合するか
 - 文体: PR 本文とコミットメッセージが標準的な技術文体の日本語か
-- CI: `gh pr checks <PR> -R neverclear86/nostr-no-su` の 3 つのジョブが pass か
+- CI: `gh pr checks <PR> -R neverclear86/nostr-no-su` の全ジョブが head で pass か（実装エージェントが待ってから返す決まりなので、fail していれば must）
 - UI を変える PR: 変更前と変更後のスクリーンショットが貼られ、デザインの方針と合うか。`priv/static/admin.css` が再ビルドされているか
 
 ## 再現
-- 作業ツリーで `gleam build --warnings-as-errors`、`gleam test`（使い捨ての Postgres を指示されたポートに立て、終わったら `docker rm -f` で消す）、`gleam format --check src test dev` を実行する
+- CI（`gh pr checks <PR> -R neverclear86/nostr-no-su`）が head で pass していることを確かめる。CI が行う検査（build、test、format、CSS の差分、vendor、プラグインの build と test と shipment、.env.example）は再現しない。CI の結果は「確認したこと」の表に 1 行で書く
+- 再現するのは CI に無いものだけ: プランの「検証の手順」のうち自動テストで表されていない手順、UI のスクリーンショットの確認、差分を読んで疑わしいと思った箇所の実行。そのために build や test が要るときは作業ツリーで行う（使い捨ての Postgres は指示されたポートに立て、終わったら `docker rm -f` で消す）
 - プランの「検証の手順」を実行する。docker を使うときは指示されたプロジェクト名とポートを使い、始める前にその名前の資源が無いことを確かめる。`nostr-no-su` という名前は使わない。1 回の Bash 呼び出しで完結するスクリプトにし、`.env` は作業ツリーに置かず `--env-file` でスクラッチパッドから渡す。後片付けでイメージはタグで消し、ID では消さない。`prune` は使わない。前後で資源の一覧を比べる
 
 ## 指摘の重さ
