@@ -10,7 +10,7 @@ gh api repos/neverclear86/nostr-no-su/issues/61/comments --jq '.[1].body'    # �
 gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR 本文
 ```
 
-## issue に投稿するプラン（オーケストレーターが投稿）
+## issue に投稿するプラン（プランレビュアーが APPROVE のときに投稿）
 
 ```
 ## 実装プラン（版 N）
@@ -80,6 +80,8 @@ Closes #N
 
 ## 指摘への対応（実装エージェントが投稿）
 
+最終確認の指摘への対応は見出しを「## 最終確認の指摘への対応（<短い SHA>）」にする。
+
 ```
 ## レビュー（ラウンド R）の指摘への対応（<短い SHA>）
 
@@ -103,7 +105,7 @@ Closes #N
 - 直し方の案: …
 ```
 
-## squash コミット（オーケストレーター）
+## squash コミット（issue-merger）
 
 件名は PR タイトルに ` (#PR)` を付けたもの。本文はトレーラー 2 行だけ。
 
