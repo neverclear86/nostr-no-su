@@ -19,15 +19,19 @@ const default_admin_port = 8080
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
 const default_admin_bind = "127.0.0.1"
 
-/// `ADMIN_PORT` の解釈結果。無効化には「明示的に空にした」と「値が不正だった」の
-/// 2 通りがあり、後者だけ起動時に理由を報告する。
-pub type AdminPort {
-  /// このポートで管理 UI を待ち受ける。
-  Listen(port: Int)
-  /// 空文字列で明示的に無効化された。
+/// `ADMIN_PORT` と `ADMIN_PASSWORD` の解釈結果。無効化には「明示的に空にした」と
+/// 「ポートが不正だった」の 2 通りがあり、後者だけ起動時に理由を報告する。
+/// 待ち受けるのにパスワードが無ければ、無効化ではなく起動を中止する。
+/// `password` は秘密なので、表示やログに入れないこと。
+pub type AdminUi {
+  /// このポートとパスワードで管理 UI を待ち受ける。
+  Listen(port: Int, password: String)
+  /// `ADMIN_PORT` の空文字列で明示的に無効化された。
   Disabled
-  /// 値が不正なので無効にする。理由は呼び出し側が報告する。
+  /// `ADMIN_PORT` が不正なので無効にし、起動は続ける。理由は呼び出し側が報告する。
   Invalid(reason: String)
+  /// 待ち受けるのに `ADMIN_PASSWORD` が無いので起動を中止する。理由は値を含まない。
+  MissingPassword(reason: String)
 }
 
 /// バンカーのアカウントストアの設定。揃っていなければ起動を中止する。
@@ -43,7 +47,7 @@ pub type AccountStore {
 }
 
 /// 環境変数から読み込んだ設定の全体。秘密（マスターキー、`DATABASE_URL` の
-/// パスワード）を含むので、表示やログに入れないこと。
+/// パスワード、管理パスワード）を含むので、表示やログに入れないこと。
 pub type Config {
   Config(
     relay_urls: List(String),
@@ -55,9 +59,8 @@ pub type Config {
     /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
     /// 絞り込んだままの形で持つ。
     plugin_env: Dict(String, String),
-    admin_port: AdminPort,
+    admin_ui: AdminUi,
     admin_bind: String,
-    admin_password: Option(String),
     admin_base_url: Option(String),
   )
 }
@@ -78,9 +81,8 @@ pub fn load() -> Config {
     account_store: account_store(),
     plugin_dir: optional("PLUGIN_DIR"),
     plugin_env: plugin_env(),
-    admin_port: admin_port(),
+    admin_ui: admin_ui(),
     admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
-    admin_password: optional("ADMIN_PASSWORD"),
     admin_base_url: optional("ADMIN_BASE_URL")
       |> option.map(strip_trailing_slashes),
   )
@@ -90,9 +92,9 @@ pub fn load() -> Config {
 /// 無ければ待ち受けポートから既定値を組み立てる。承認は管理 UI の上で行うため、
 /// 管理 UI が無効なら承認フローも無効として `None` を返す。
 pub fn auth_url_base(config: Config) -> Option(String) {
-  case config.admin_port {
-    Disabled | Invalid(_) -> None
-    Listen(port) ->
+  case config.admin_ui {
+    Disabled | Invalid(_) | MissingPassword(_) -> None
+    Listen(port:, ..) ->
       Some(option.unwrap(
         config.admin_base_url,
         "http://localhost:" <> int.to_string(port),
@@ -150,19 +152,19 @@ fn plugin_env() -> Dict(String, String) {
   })
 }
 
-/// 管理 UI の待ち受けポート。未設定なら既定ポートを使う。他の任意設定と違い未設定
-/// と空文字列で意味が分かれるのは、既定で有効な設定を明示的に切れるようにする
-/// ため。範囲外の値をそのまま渡すと待ち受け開始時に badarg でクラッシュするので、
-/// ここで弾く。
-fn admin_port() -> AdminPort {
+/// 管理 UI の設定。`ADMIN_PORT` が未設定なら既定ポートを使う。他の任意設定と違い
+/// 未設定と空文字列で意味が分かれるのは、既定で有効な設定を明示的に切れるように
+/// するため。範囲外の値をそのまま渡すと待ち受け開始時に badarg でクラッシュする
+/// ので、ここで弾く。待ち受けるときのパスワードは `listening_admin_ui` が読む。
+fn admin_ui() -> AdminUi {
   case envoy.get("ADMIN_PORT") {
-    Error(Nil) -> Listen(default_admin_port)
+    Error(Nil) -> listening_admin_ui(default_admin_port)
     Ok(raw) ->
       case string.trim(raw) {
         "" -> Disabled
         trimmed ->
           case int.parse(trimmed) {
-            Ok(port) if port >= 1 && port <= 65_535 -> Listen(port)
+            Ok(port) if port >= 1 && port <= 65_535 -> listening_admin_ui(port)
             _ ->
               Invalid(
                 "ADMIN_PORT must be an integer between 1 and 65535, got \""
@@ -171,6 +173,18 @@ fn admin_port() -> AdminPort {
               )
           }
       }
+  }
+}
+
+/// `port` で待ち受ける管理 UI の設定。`ADMIN_PASSWORD` が未設定か空なら、起動を
+/// 中止する理由を返す。パスワードは自動生成しない。
+fn listening_admin_ui(port: Int) -> AdminUi {
+  case optional("ADMIN_PASSWORD") {
+    Some(password) -> Listen(port:, password:)
+    None ->
+      MissingPassword(
+        "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",
+      )
   }
 }
 
