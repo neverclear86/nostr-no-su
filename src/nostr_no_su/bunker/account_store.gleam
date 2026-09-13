@@ -646,6 +646,22 @@ pub fn approve(
   })
 }
 
+/// 同じ組の古い承認待ち `replaced` を消し、`pending` を登録する。1 トランザクション
+/// で行うので、削除だけが残ることは無い。
+pub fn insert_pending_replacing(
+  pool: Name(pog.Message),
+  timeouts: Timeouts,
+  pending pending: StoredPending,
+  replaced replaced: List(String),
+) -> Result(Nil, StoreError) {
+  transaction(pool, timeouts.write_ms, fn(db) {
+    use Nil <- result.try(
+      list.try_each(replaced, delete_pending(db, timeouts, token: _)),
+    )
+    insert_pending(db, pending, timeouts)
+  })
+}
+
 /// 削除の結果で、行が無かったこと（`NotRegistered`）を成功に写す。削除は行が無い
 /// 状態にすることが目的なので、タイムアウトした削除がサーバー側でコミットされて
 /// いた場合や、DB の外で行を消した場合にも、呼び出し側が削除を完了できるようにする。

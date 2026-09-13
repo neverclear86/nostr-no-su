@@ -8,6 +8,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
 import nostr_no_su/dedup
@@ -319,6 +320,9 @@ fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
 /// `SchemaTooNew` か `HeldByAnotherInstance` を返したら、どちらも再試行しても変わら
 /// ないので、理由を 1 行出して VM を止める（`halt_if_cannot_continue`）。バンカー
 /// アクターには戻らない。
+///
+/// `write` はエンジンのセッションと承認待ちの書き込み 1 件を `account_store` の
+/// 関数に写す（`write_session_state`）。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
@@ -364,6 +368,66 @@ pub fn account_store_operations(
       account_store.update_label(db, signer, label, timeouts)
       |> result.map_error(write_failure)
     },
+    write: fn(change) {
+      write_session_state(pool, db, timeouts, change)
+      |> result.map_error(write_failure)
+    },
+  )
+}
+
+/// エンジンの書き込み 1 件を `account_store` の関数に写す。`delete_session` と
+/// `delete_pending` は行が無くても `Ok`（`account_store.gleam:574-586`、
+/// `:609-620`）なので `deleted_or_absent` は通さない。
+fn write_session_state(
+  pool: Name(pog.Message),
+  db: pog.Connection,
+  timeouts: account_store.Timeouts,
+  change: engine.Write,
+) -> Result(Nil, account_store.StoreError) {
+  case change {
+    engine.InsertSession(session:) ->
+      account_store.insert_session(
+        db,
+        timeouts,
+        signer: session.signer,
+        client: session.client,
+        perms: session.perms,
+        now: session.created_at,
+      )
+    engine.DeleteSession(signer:, client:) ->
+      account_store.delete_session(db, timeouts, signer:, client:)
+    engine.InsertPending(pending:, replaced:) ->
+      account_store.insert_pending_replacing(
+        pool,
+        timeouts,
+        pending: stored_pending(pending),
+        replaced: replaced,
+      )
+    engine.DeletePending(token:) ->
+      account_store.delete_pending(db, timeouts, token:)
+    engine.ApprovePending(token:, session:) ->
+      account_store.approve(
+        pool,
+        timeouts,
+        token: token,
+        signer: session.signer,
+        client: session.client,
+        perms: session.perms,
+        now: session.created_at,
+      )
+  }
+}
+
+/// エンジンの承認待ちを DB の行の型にする。
+fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
+  account_store.StoredPending(
+    token: pending.token,
+    signer: pending.signer,
+    client: pending.client,
+    request_id: pending.request_id,
+    perms: pending.perms,
+    secret_mismatch: pending.secret_mismatch,
+    created_at: pending.created_at,
   )
 }
 

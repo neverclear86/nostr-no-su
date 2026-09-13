@@ -10,11 +10,13 @@ import gleam/result
 import gleam/string
 import nostr_no_su
 import nostr_no_su/admin
+import nostr_no_su/admin/i18n
 import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
 import nostr_no_su/dedup
@@ -292,6 +294,7 @@ type StoreCall {
   Deleted(signer: String)
   SecretUpdated(signer: String, secret: String)
   LabelUpdated(signer: String, label: String)
+  Wrote(write: engine.Write)
 }
 
 /// 指定した読み込み関数を持ち、書き込みはすべて成功する偽のストア。
@@ -302,6 +305,7 @@ fn store_with_load(load: fn() -> Result(vault.Loaded, String)) -> bunker.Store {
     delete: fn(_signer) { Ok(Nil) },
     update_secret: fn(_signer, _secret) { Ok(Nil) },
     update_label: fn(_signer, _label) { Ok(Nil) },
+    write: fn(_write) { Ok(Nil) },
   )
 }
 
@@ -331,6 +335,7 @@ fn memory_store(
     delete: fn(signer) { written(Deleted(signer)) },
     update_secret: fn(signer, secret) { written(SecretUpdated(signer, secret)) },
     update_label: fn(signer, label) { written(LabelUpdated(signer, label)) },
+    write: fn(change) { written(Wrote(change)) },
   )
 }
 
@@ -642,7 +647,8 @@ pub fn pending_connections_can_be_approved_test() {
   let client = account_for(client_key)
   let assert [entry] = bunker.pending(name)
   assert entry.client == account.pubkey_hex(client)
-  let assert Error(_) = bunker.approve(name, "other-token")
+  assert bunker.approve(name, "other-token")
+    == Error(engine.approval_request_not_found)
 
   assert bunker.approve(name, entry.token) == Ok(Nil)
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
@@ -655,6 +661,236 @@ pub fn pending_connections_can_be_approved_test() {
   assert session.signer == account.pubkey_hex(signer)
   assert session.client == account.pubkey_hex(client)
   assert session.perms == ""
+  stop_tree(tree)
+}
+
+/// 書き込めなかった承認・拒否は、メモリの承認待ちを変えず、応答イベントを発行
+/// しない（#126 の完了条件）。
+pub fn failed_decisions_keep_the_pending_request_and_publish_nothing_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store = memory_store(calls, [stored_signer(signer_key)], True)
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert [entry] = bunker.pending(name)
+
+  assert bunker.approve(name, entry.token) == Error(store_failure())
+  let assert Ok(Wrote(engine.ApprovePending(token: approved_token, ..))) =
+    process.receive(calls, 1000)
+  assert approved_token == entry.token
+
+  assert bunker.deny(name, entry.token) == Error(store_failure())
+  let assert Ok(Wrote(engine.DeletePending(token: denied_token))) =
+    process.receive(calls, 1000)
+  assert denied_token == entry.token
+
+  assert bunker.pending(name) == [entry]
+  assert bunker.sessions(name) == []
+  assert process.receive(reports, 300) == Error(Nil)
+
+  assert bunker.approve(name, "unknown-token")
+    == Error(engine.approval_request_not_found)
+  assert bunker.deny(name, "unknown-token")
+    == Error(engine.approval_request_not_found)
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 書き込めなかった取り消しは、メモリのセッションを変えない。
+pub fn a_failed_revocation_keeps_the_session_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store = memory_store(calls, [stored_signer(signer_key)], True)
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert [session] = bunker.sessions(name)
+
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.NotAnswered)
+  let assert Ok(Wrote(engine.DeleteSession(signer:, client:))) =
+    process.receive(calls, 1000)
+  assert #(signer, client) == #(session.signer, session.client)
+  assert bunker.sessions(name) == [session]
+
+  let assert Error(bunker.SessionNotFound(_reason)) =
+    bunker.revoke(name, session.signer, other_client_key)
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// バンカーが読み込み済みか問い合わせ続け、`Ok` になるまで待つ。
+fn await_loaded(name: Name(bunker.Msg), remaining: Int) -> Bool {
+  case bunker.accounts(name) {
+    Ok(_) -> True
+    Error(_) ->
+      case remaining <= 0 {
+        True -> False
+        False -> {
+          process.sleep(20)
+          await_loaded(name, remaining - 20)
+        }
+      }
+  }
+}
+
+/// 承認の書き込みの結果が曖昧だったときは、承認待ちとセッションを変えずに読み
+/// 直しへ移り、`ack` を発行しない。読み直しが成功した後、同じトークンで承認し
+/// 直すと `Ok` になり、`ack` が 1 回発行される（#220 の方針 1 節）。
+pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_write = call_counter()
+  let store =
+    bunker.Store(
+      ..memory_store(calls, [stored_signer(signer_key)], False),
+      load: fn() {
+        process.send(loads, Nil)
+        load_signer(signer_key)
+      },
+      write: fn(_write) {
+        case next_write() {
+          0 -> Error(bunker.MaybeWritten(store_failure()))
+          _ -> Ok(Nil)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Nil) = process.receive(loads, 2000)
+
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert [entry] = bunker.pending(name)
+
+  assert bunker.approve(name, entry.token)
+    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert process.receive(loads, 300) == Error(Nil)
+  assert process.receive(reports, 300) == Error(Nil)
+  assert bunker.pending(name) == [entry]
+  assert bunker.sessions(name) == []
+
+  assert await_loaded(name, 2000)
+  assert bunker.approve(name, entry.token) == Ok(Nil)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"id\":\"c1\"")
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 拒否と取り消しの書き込みの結果が曖昧だったときも、同じ読み直しに移り、理由を
+/// 報告する。
+pub fn unconfirmed_denials_and_revocations_are_reported_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store =
+    bunker.Store(
+      ..memory_store(calls, [stored_signer(signer_key)], False),
+      load: fn() {
+        process.send(loads, Nil)
+        load_signer(signer_key)
+      },
+      write: fn(_write) { Error(bunker.MaybeWritten(store_failure())) },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Nil) = process.receive(loads, 2000)
+
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert [pending] = bunker.pending(name)
+
+  assert bunker.deny(name, pending.token)
+    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert bunker.pending(name) == [pending]
+  assert bunker.sessions(name) == []
+
+  assert await_loaded(name, 2000)
+  deliver(connect_request_from(other_client_key, "c2", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert [session] = bunker.sessions(name)
+
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.NotAnswered)
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert bunker.pending(name) == [pending]
+  assert bunker.sessions(name) == [session]
+  stop_tree(tree)
+}
+
+/// 読み込みが終わっていない間の承認・拒否・取り消しはストアを呼ばずに拒否する
+/// （#202 の方針 3 節）。
+pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_load = call_counter()
+  let store =
+    bunker.Store(
+      ..memory_store(calls, [], False),
+      load: fn() {
+        case next_load() {
+          0 -> load_signer(signer_key)
+          _ -> Error(store_failure())
+        }
+      },
+      insert: fn(entry: vault.StoredAccount) {
+        process.send(
+          calls,
+          Inserted(account.pubkey_hex(entry.account), entry.secret, entry.label),
+        )
+        Error(bunker.MaybeWritten(store_failure()))
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let assert [pending] = bunker.pending(name)
+  deliver(connect_request_from(other_client_key, "c2", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert [session] = bunker.sessions(name)
+
+  // 読み直しの失敗が続く状態にする。
+  let assert Error(bunker.MaybeApplied(_)) =
+    bunker.add_account(name, account_for(other_signer_key), "")
+  let assert Ok(Inserted(..)) = process.receive(calls, 1000)
+
+  assert bunker.approve(name, pending.token)
+    == Error("accounts are not loaded yet")
+  assert bunker.deny(name, pending.token)
+    == Error("accounts are not loaded yet")
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.NotAnswered)
+  assert process.receive(calls, 100) == Error(Nil)
+  assert bunker.pending(name) == [pending]
+  assert bunker.sessions(name) == [session]
   stop_tree(tree)
 }
 
@@ -2416,6 +2652,7 @@ fn committed_but_timed_out_store(
     update_label: fn(signer, label) {
       modify(signer, fn(row) { StoredAccount(..row, label: label) })
     },
+    write: fn(_write) { Ok(Nil) },
   )
 }
 
