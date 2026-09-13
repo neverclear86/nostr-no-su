@@ -147,6 +147,110 @@ pub fn an_invalid_master_key_is_reported_without_its_value_test() {
   assert !string.contains(reason, "pw-marker")
 }
 
+/// 秘密のファイルのフィクスチャーのパス。`gleam test` はプロジェクトの直下で
+/// 動く。
+fn secret_file(name: String) -> String {
+  "test/support/secrets/" <> name
+}
+
+/// マスターキーをファイルから読める。`master_key_from_hex` が trim するので、
+/// このテストは改行の除去を検証しない（除去は
+/// `admin_password_is_read_from_a_file_test` で確かめる）。
+pub fn account_store_reads_the_master_key_from_a_file_test() {
+  use <- with_env("DATABASE_URL", database_url)
+  use <- without_env("ACCOUNT_MASTER_KEY")
+  use <- with_env(
+    "ACCOUNT_MASTER_KEY_FILE",
+    secret_file("master_key_with_newline"),
+  )
+  let assert config.AccountStore(database_url: url, ..) =
+    config.load().account_store
+  assert url == database_url
+}
+
+/// 秘密の環境変数と `<名前>_FILE` の両方が設定されていると起動を中止する。
+/// `DATABASE_URL` も `ACCOUNT_MASTER_KEY` と同じ形の理由になる。
+pub fn a_secret_and_its_file_cannot_both_be_set_test() {
+  with_env("DATABASE_URL", database_url, fn() {
+    with_env("ACCOUNT_MASTER_KEY", master_key_hex, fn() {
+      with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("missing"), fn() {
+        assert config.load().account_store
+          == config.AccountStoreUnavailable(
+            "ACCOUNT_MASTER_KEY and ACCOUNT_MASTER_KEY_FILE are both set; set only one",
+          )
+      })
+    })
+  })
+
+  with_env("ACCOUNT_MASTER_KEY", master_key_hex, fn() {
+    with_env("DATABASE_URL", database_url, fn() {
+      with_env("DATABASE_URL_FILE", secret_file("missing"), fn() {
+        assert config.load().account_store
+          == config.AccountStoreUnavailable(
+            "DATABASE_URL and DATABASE_URL_FILE are both set; set only one",
+          )
+      })
+    })
+  })
+}
+
+/// 読めないファイルの理由にはパスを含めない。
+pub fn an_unreadable_secret_file_is_reported_without_its_path_test() {
+  use <- with_env("DATABASE_URL", database_url)
+  use <- without_env("ACCOUNT_MASTER_KEY")
+  use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("missing"))
+  assert config.load().account_store
+    == config.AccountStoreUnavailable(
+      "ACCOUNT_MASTER_KEY_FILE could not be read (enoent)",
+    )
+}
+
+/// 空のファイルは「未設定」ではなく専用の理由で報告する。
+pub fn an_empty_secret_file_is_reported_test() {
+  use <- with_env("DATABASE_URL", database_url)
+  use <- without_env("ACCOUNT_MASTER_KEY")
+  use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("empty"))
+  assert config.load().account_store
+    == config.AccountStoreUnavailable("ACCOUNT_MASTER_KEY_FILE is empty")
+}
+
+/// UTF-8 でないファイルは専用の理由で報告する。
+pub fn a_secret_file_that_is_not_utf8_is_reported_test() {
+  use <- with_env("DATABASE_URL", database_url)
+  use <- without_env("ACCOUNT_MASTER_KEY")
+  use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("invalid_utf8"))
+  assert config.load().account_store
+    == config.AccountStoreUnavailable(
+      "ACCOUNT_MASTER_KEY_FILE could not be read (not valid UTF-8)",
+    )
+}
+
+/// `load` は 3 つの秘密（`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、
+/// `ADMIN_PASSWORD`）を読み込んだ後にプロセスの環境から消す。同じ VM で動く
+/// プラグインが `os:getenv/1` で読めないようにするため。
+pub fn load_removes_secrets_from_the_environment_test() {
+  use <- with_env("DATABASE_URL", database_url)
+  use <- with_env("ACCOUNT_MASTER_KEY", master_key_hex)
+  use <- with_env("ADMIN_PASSWORD", test_password)
+  let _ = config.load()
+  assert envoy.get("DATABASE_URL") == Error(Nil)
+  assert envoy.get("ACCOUNT_MASTER_KEY") == Error(Nil)
+  assert envoy.get("ADMIN_PASSWORD") == Error(Nil)
+}
+
+/// `<名前>_FILE`（パス）は秘密ではないので、`load` の後も環境に残る。
+pub fn load_keeps_secret_file_variables_test() {
+  use <- without_env("ACCOUNT_MASTER_KEY")
+  use <- with_env("DATABASE_URL", database_url)
+  use <- with_env(
+    "ACCOUNT_MASTER_KEY_FILE",
+    secret_file("master_key_with_newline"),
+  )
+  let _ = config.load()
+  assert envoy.get("ACCOUNT_MASTER_KEY_FILE")
+    == Ok(secret_file("master_key_with_newline"))
+}
+
 /// `PLUGIN_DIR` は未設定・空文字列なら None（外部プラグインの読み込みを無効に
 /// する）。値があればそのまま走査対象のディレクトリーになる。
 pub fn plugin_dir_test() {
@@ -228,6 +332,25 @@ pub fn admin_ui_requires_a_password_when_listening_test() {
   assert admin_ui_for(None, None) == missing
   assert admin_ui_for(Some("9000"), None) == missing
   assert admin_ui_for(Some("9000"), Some("")) == missing
+}
+
+/// `ADMIN_PASSWORD` をファイルから読める。末尾の改行（`\r\n` を含む）は落ちる
+/// が、それ以外の空白（先頭の空白）は残る。読めないファイルは理由を返す。
+pub fn admin_password_is_read_from_a_file_test() {
+  use <- without_env("ADMIN_PORT")
+  use <- without_env("ADMIN_PASSWORD")
+  with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_newlines"), fn() {
+    assert config.load().admin_ui == config.Listen(8080, " file password")
+  })
+  with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_crlf"), fn() {
+    assert config.load().admin_ui == config.Listen(8080, "crlf password")
+  })
+  with_env("ADMIN_PASSWORD_FILE", secret_file("missing"), fn() {
+    assert config.load().admin_ui
+      == config.MissingPassword(
+        "ADMIN_PASSWORD_FILE could not be read (enoent)",
+      )
+  })
 }
 
 /// 管理 UI を待ち受けない構成（空の `ADMIN_PORT`、不正な `ADMIN_PORT`）では
