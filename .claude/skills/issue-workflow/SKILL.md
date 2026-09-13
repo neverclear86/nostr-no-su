@@ -1,152 +1,124 @@
 ---
 name: issue-workflow
-description: nostr-no-su の GitHub issue を 1 件ずつ、プラン作成（opus low）→ プランレビュー（opus medium）の往復 → プランを issue に投稿 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージまで、エージェントの分業で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
+description: nostr-no-su の GitHub issue を、プラン作成（opus low）→ プランレビュー（opus medium）の往復 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージ（opus low）まで、Workflow ツールのスクリプト `.claude/workflows/issue-workflow.js` で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」「/issue-pipeline 57 83」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
 ---
 
 # issue ごとの分業パイプライン（nostr-no-su）
 
 対象のリポジトリは `neverclear86/nostr-no-su`（private）である。
-1 件の issue を、役割ごとに別のエージェントで、次の順に進める。
+1 件の issue を、役割ごとに別のエージェントで、次の順に進める。進行はスクリプト `.claude/workflows/issue-workflow.js` が行い、このセッションは進行役ではなく、入力の準備と結果の処理だけを行う。
 
-| 段階 | エージェント（`subagent_type`） | モデル / effort | 成果物 |
+| 段階 | エージェント（`agentType`） | モデル / effort | 成果物 |
 | --- | --- | --- | --- |
-| 1. プラン作成 | `issue-planner` | opus / low | 実装プランのファイル `<scratchpad>/plans/{{N}}-v{{V}}.md` |
-| 2. プランレビュー | `issue-plan-reviewer` | opus / medium | レビューのファイル `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。REQUEST CHANGES なら新しいプランエージェントに戻す |
-| 3. プランの投稿 | オーケストレーター（自分） | | issue コメント「## 実装プラン（版 N）」 |
-| 4. 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR |
-| 5. PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」。REQUEST CHANGES なら実装エージェントに戻す |
-| 5b. 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
-| 6. マージ | オーケストレーター（自分） | | `gh pr merge --squash --delete-branch` |
+| デザイン（UI を変える issue だけ） | `issue-designer` | opus / medium | issue コメント（デザインの方針） |
+| プラン作成 | `issue-planner` | opus / low | `<scratchpad>/plans/{{N}}-v{{V}}.md` |
+| プランレビュー | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿 |
+| 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる |
+| PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」 |
+| 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
+| マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
 
-役割ごとの基準、出力の書式、安全策は `.claude/agents/issue-*.md` のエージェント定義に書いてあり、モデルと effort もそこで固定している。`Agent` ツールでは `subagent_type` に定義の名前を渡し、`model` は渡さない。
-このパイプラインで fable を使うのはマージ直前の最終確認（low）だけである（fable は単価もキャッシュ書き込みも opus の 2 倍で、2026-09-12 の実測では費用の 22% を占めた。最終確認は diff とレビューの経緯だけを読むので、fable でも 1 件 $1 程度）。設計の誤りは後の段階で見つかるほど高くつくので、作る側を安くし（プラン作成は opus / low、実装は sonnet / high）、見る側は opus / medium にする（プランレビューと PR レビュー）。下げすぎて手戻りが増えると費用が戻るので、これより下げない。オーケストレーター（このセッション）は opus / low で動かす。マージが溜まったあとの全体の見直しは、必要になったときに別のスキルとして設計する。
+役割ごとの基準、出力の書式、安全策は `.claude/agents/issue-*.md` のエージェント定義に書いてあり、モデルと effort もそこで固定している。各段階の依頼文はスクリプトの `P` にある。返答は構造化出力（`schema`）で判定や URL だけを返し、プランやレビューの全文はファイルと GitHub のコメントで受け渡す。
+書式は [references/formats.md](references/formats.md)。
 
-モデルと effort を下げた分は、エージェント定義の機械的な手順で補う。プランには主張ごとに根拠（`ファイル:行` かコマンドの出力）を必須にし、プランレビュアーは探索し直さずにその根拠を照合する。行き詰まった issue だけを上げる昇格ルールも下の「前提と守ること」にある。
+## なぜスクリプトで進めるか（2026-09-13 の実測）
 
-実行ごとに変わる値（issue 番号、ブランチ、作業ツリー、ポート、トレーラー）はプロンプトで渡す。
-
-- [references/task-messages.md](references/task-messages.md) — 各エージェントへの依頼文の型（最初の依頼と、往復で返すときの文）
-- [references/formats.md](references/formats.md) — issue コメント、PR 本文、レビューの書式（#56 と #61 で確立した形）
-
-## 費用の実測から決めたこと（2026-09-12 のセッションの集計）
-
-22 件の issue を並行で回したセッションでは、費用の 49% がプラン作成、20% がプランレビュー、14% がオーケストレーターだった。
-重さの正体はモデルや effort ではなく「文脈の大きさ × リクエスト回数」で、次の 4 つが効いていた。この節の決定はそれぞれに対応する。
-
-- 先行して 22 件のプランを作ったが、実装まで進んだのは 9 件だった。残りは main が進むと古びる → **先行プランは 1〜2 件まで**
-- サブエージェントのプロンプトキャッシュは 5 分で切れる。レビューを待つ 20〜30 分の間に失効し、`SendMessage` で戻すとラウンドの最初に文脈全体（30〜70 万トークン）を書き直していた。書き直しだけで費用の 13% → **プランの往復は新しいエージェントで行う**
-- プラン全文（3〜7 万文字）を依頼文に貼り、版ごとに全文を返させ、オーケストレーター経由で各段階に貼り回していた。オーケストレーターの文脈が 40 万トークンを超えて圧縮が走った → **プランはファイルと issue の URL で受け渡し、返答は要旨と判定だけにする**
-- プランにコードが丸ごと入っていた（最大 7.4 万文字） → **コードを書くのは複雑な処理だけにする**
+進行役を opus low のセッションにしていた 09-13 のセッションでは、28 件で $718、うち 22%（$159）が進行役だった。進行役の文脈はエージェントの受け渡し（252 回）のたびに 3.9k ずつ伸びて 95 万トークンに達し、費用は受け渡し回数の 2 乗で効いていた。モデルを混ぜたことによるキャッシュの損は $5 で、無視できる。
+スクリプトにすると、受け渡しは変数で行われて LLM の文脈に入らず、待機中のエージェントのキャッシュ失効（$39）も無くなる。判断が要る箇所（質問、逸脱、収束しない往復）だけがこのセッションに戻る。
 
 ## 前提と守ること
 
-- **オーケストレーターのモデル**：このセッションは opus / low で動かす。段階 0 で自分のモデルを確かめ（システムプロンプトの「You are powered by the model named …」）、fable なら手順を始めずに、ユーザーに `/model opus` と effort の変更を頼む。fable のオーケストレーターは、全エージェントの結果が流れ込む長い文脈を 2 倍の単価で読み続けるので、他の節約が打ち消される
-- **昇格ルール**：モデルを下げた分の手戻りを、issue 単位で止める。プランレビューがラウンド 3 で APPROVE にならない、または PR レビューがプランの設計に起因する must を出したら、その issue だけ新しいプランエージェントを `Agent` の `model: "opus"` で立て直し、依頼文に「effort は high 相当で、根拠を確かめながら書く」と添える（定義の effort はプロンプトで上書きできないので、依頼文で深く考えるよう指示する）。全体のモデルを上げない
-- **計測**：モデルと effort を変えたあとの最初の 3 件は、issue ごとに、プランレビューのラウンド数、must と should の件数、PR レビューのラウンド数を報告に含める。比較の基準は 2026-09-12 の実測（完了 9 件で $10〜65、プランレビューのラウンド 1 で must が出たのは 14 件中 3 件、PR レビューの must は #137 で 2 件と #129 で 1 件）
-
-- **先行プランは 1〜2 件まで**：実装中の issue の次の 1〜2 件だけプランを進める。それより先のプランは、前の issue がマージされてから始める。プランは main が進むと古びるし、レビューが承認しても実装まで進まなければ費用が無駄になる
-- **プランの往復は新しいエージェントで行う**：プランレビューが REQUEST CHANGES を返したら、同じプランエージェントに `SendMessage` で戻さず、新しい `issue-planner` を立てて、前の版のファイルとレビューのファイルを渡す。次のラウンドのレビューも新しい `issue-plan-reviewer` を立て、前のレビューのファイルと新しい版のファイルを渡す。サブエージェントのキャッシュは 5 分で切れるので、待ち時間のあとに同じエージェントへ戻すと文脈全体を書き直す。新しいエージェントは、レビューの「該当」が指す箇所だけ読めばよいので文脈が小さい。引き継ぎは、プランの先頭の「指摘への対応」の表と、レビューの先頭の「前ラウンドの指摘の照合」の表で行う。新しいプランエージェントには「前の版の決めたことは変えず、指摘の該当箇所だけ直す」と伝え、再議論を防ぐ
-- **プランはファイルで受け渡す**：プランエージェントは `<scratchpad>/plans/{{N}}-v{{V}}.md` に書き、レビュアーは `<scratchpad>/plans/{{N}}-r{{R}}.md` に書く。依頼文にはパスだけを書き、全文を貼らない。エージェントの返答は要旨と判定だけにし、全文を返させない。承認の後は issue に投稿し、実装以降の段階には issue コメントの URL だけを渡す。オーケストレーターがプランの全文を読むのは、投稿する前に先頭の書式を整えるときだけにする
-- **実装と PR レビューの往復は同じエージェントに戻す**：実装エージェントは作業ツリーとビルドの状態を持ち、PR レビュアーは再現の環境を持つので、`SendMessage` で同じエージェントに送る（書き直しの費用は小さく、状態を引き継ぐ価値が大きい）。`SendMessage` は遅延ツールなので、最初に `ToolSearch` の `select:SendMessage` で読み込んでおく。エージェントは `Agent` ツールで `subagent_type` を指定して立てる。エージェントの結果と `SendMessage` への返答は、戻り値ではなく後から届く通知で受け取る。届くまで待ち、`ListAgents` を繰り返し呼んだり催促の送信をしたりしない
-- **レビューの「承認」は PR コメントで表す**：全エージェントが同じ GitHub アカウントで動くので、自分の PR に `gh pr review --approve` は使えない（GitHub が拒否する）。レビューは PR コメントに残し、`判定: APPROVE` かつ must と should が 0 件であることを承認とみなす。nit は残っていてもよい
-- **ユーザーの作業ツリーに触れない**：実装もレビューの再現も、スクラッチパッドに `git worktree add` した作業ツリーで行う。Bash の cwd はユーザーの作業ツリーに戻るので、ファイルは絶対パスで扱う。docker を使うときはプロジェクト名とポートを固有にし、エージェント定義の docker の節の安全策が効くようにプロジェクト名とポートを依頼文で渡す
-- **文体**：issue、PR、コミット、コード内コメントは標準的な技術文体の日本語で書く（ギャル口調は使わない）。issue と PR の文章はスキル `japanese-tech-writing` の規範に従う（サブエージェントには読み込まれないので、プロンプトの「である調、一文一行、根拠の無い形容を避ける」が契約であり、詳しく従わせたいときは `~/.claude/skills/japanese-tech-writing/SKILL.md` を読ませる）
+- **このセッションの仕事**は、段階 0 の準備、Workflow の起動、結果の処理（質問への回答、止まった issue の報告、再開）である。エージェントの結果を自分で読み直したり、段階を自分で実行したりしない。モデルは何でもよい（受け渡しをしないので文脈は小さいまま）
+- **ワークフローの中ではユーザーに質問できない**。プランエージェントが `status: question`、レビュアーが `NEEDS_USER` を返すと、その issue は `blocked` で戻る。ユーザーに聞いてから `decisions` に答えを入れて再開する。事前に決められる論点は、起動の前にまとめて聞く（段階 0）
+- **再開は `Workflow` に `scriptPath` と `resumeFromRunId` を渡して行う**（起動の結果に出る Run ID）。完了したエージェントの結果は、起動順の接頭辞で依頼文が変わっていない範囲まで再利用される（公式文書: 「最初に依頼文が変わったエージェントと、それ以降は走り直す」）。`base` と `portBase` と `trailers` は再開でも同じ値を渡す（変えると依頼文が変わり、全部やり直しになる）。同じ Claude Code のセッションの中でしか再開できない（Agent SDK リファレンスの `resumeFromRunId` の項の「Same session only」）
+- **同時に進める issue は `window` 件**（既定 4）。1 issue につき動くエージェントは常に 1 体なので、同時のエージェント数も `window` になる。マージは 1 件ずつ直列で、衝突は実装エージェントの rebase で解く
+- **依存する issue** は `after` に書く。依存先がマージされてから、そのマージのコミットを土台にして始まる。依存先が失敗すると `blocked` になり、`after` が循環していれば待たずに `blocked` になる
+- **CI が通るまでレビューしない**：実装エージェントは PR を作ったら（指摘への対応や rebase の push でも）`gh pr checks --watch` で CI の全ジョブの pass を待ち、fail は直してから返す（`ciPassed`）。通らないまま返ると `blocked`。PR レビュアーは CI が行う検査（build、test、format、CSS、vendor、プラグイン、.env.example）を再現せず、CI に無い検証だけを再現する。CI に docker build と strfry の E2E を足す #109 が入ると、プランの手作業の検証手順はさらに減る
+- **大きい issue は分割する**：プランエージェントは、変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるとき、`gh issue create --parent` でサブ issue を作り、親に「## 分割の設計」をコメントして `status: split` を返す。スクリプトはサブ issue を `after` の連鎖で同じ実行に足し、親は `split`（`subIssues` と `children` の結果つき）で返る。しきい値より小さい issue は分けない（固定費が増える）
+- **昇格ルール**（スクリプトが行う）：プランレビューが 3 ラウンドで APPROVE にならなければ次の版は `effort: high` で書く。5 ラウンドで `stalled`。PR レビューがプランの設計に起因する must（`designMust`）を出したら、プランの版を上げて（effort high）再承認させてから直す。実装がプランどおりに作れないと報告したら（`deviation`）同じ手順で版を上げ、新しいエージェントに続きを実装させる。PR レビューは 4 ラウンド、最終確認は 3 回で `stalled`
+- **往復は新しいエージェント**で行う。プランの往復も、PR レビューの往復も、修正も、前のファイルや PR コメントの URL を渡して新しいエージェントを立てる（同じエージェントに戻す `SendMessage` は使わない。待機中にキャッシュが切れて文脈全体を書き直すため）。引き継ぎは、プランの「指摘への対応」の表、レビューの「前ラウンドの指摘の照合」の表、PR の対応コメントで行う
+- **レビューの「承認」は PR コメントで表す**：全エージェントが同じ GitHub アカウントで動くので、自分の PR に `gh pr review --approve` は使えない。`判定: APPROVE` かつ must と should が 0 件であることを承認とみなす。nit は残っていてもよい
+- **ユーザーの作業ツリーに触れない**：実装もレビューの再現も、スクラッチパッドに `git worktree add` した作業ツリーで行う。docker のプロジェクト名とポートは issue ごとに固有で、スクリプトが `portBase` から割り当てる
+- **文書の長さ**：プランは 2 万字以内でコードは 1 割まで、レビューの「確認したこと」は表だけ、最終確認は指摘と「読んだもの」だけ（定義の「文書の長さ」の節）。往復の回数は変えない。効果は、投稿されたプランと PR レビューの文字数と must の件数を 09-13 の実測（プラン中央値 18,207 字で 2 万字超 12/28、PR レビュー中央値 5,916 字でその 67% が確認したこと、must 9 件）と比べて見る
+- **文体**：issue、PR、コミット、コード内コメントは標準的な技術文体の日本語で書く（ギャル口調は使わない）。issue と PR の文章はスキル `japanese-tech-writing` の規範に従う（サブエージェントには読み込まれないので、エージェント定義の「である調、一文一行、根拠の無い形容を避ける」が契約）
 - **実装とレビューの基準**：DRY、シンプルさ、命名、仕様（issue とプラン）への準拠を厳しめに見る。関数型の書き方を重視し、全関数に簡潔な Doc コメントを書く。コメントは日本語（ログ文字列と識別子は英語のまま）
 - **互換性は持たない**：v0.1 未満で非公開なので、消した設定や API は「最初から無かったもの」として扱い、廃止ログ、移行案内、互換レイヤーは作らない。バンカー無効での起動は想定しない
-- **UI を変える issue**：プランの前にデザインエージェント（`Agent` の `model: "opus"`。専用の定義は無い）を立て、画面構成、コンポーネント、テーマ、狭い幅、空とエラーの状態の方針を issue にコメントさせ、プランエージェントに取り込ませる。PR には変更前（main）と変更後のスクリーンショットを `gh pr comment --attach` で貼る。見た目が変わらないリファクタリングでも貼る（変わらないことの証拠になる）。管理 UI の `.gleam` を変えたら `npm run build:css` の結果をコミットする（CI が差分を検査する）
-- **往復に回数の上限は設けない**：must と should が 0 になるまで回す。ただし機械的に回し続けず、次のどれかになったら止めてユーザーに報告する。レビュアーが同じ趣旨の指摘を言い換えて繰り返している、作成側とレビュアーの判断が割れて両方が根拠を出し尽くしている、レビュアーが「ユーザーの判断が要る」と返した、指摘が issue の範囲を超え始めた
-- **複数の issue は順に処理する**：どれも main にマージされるので並行させると衝突する。1 件をマージしてから次の issue を `origin/main` の最新から始める。同時に動かすエージェントは全体で 4 件までにする
-- **コミットのトレーラー**：サブエージェントはこのセッションの system-reminder を見ないので、`Co-Authored-By` と `Claude-Session` の行をこのセッションの指定から写して、実装エージェントのプロンプトに入れる
+- **UI を変える issue** は `ui: true` を付ける。スクリプトがデザインエージェントを先に立て、プランに取り込ませ、実装エージェントに変更前（main）と変更後のスクリーンショットを PR に貼らせる（見た目が変わらないリファクタリングでも貼る）。管理 UI の `.gleam` を変えたら `npm run build:css` の結果をコミットする（CI が差分を検査する）
+- **文書を動かす issue は先に単独で**：README の分割など、他の PR が触る文書の置き場所を変える issue は、並行させずに 1 件だけの実行でマージしてから次を始める（09-13 の #149 は並行した 4 件と衝突して 4 ラウンドかかった）
+- **コミットのトレーラー**：サブエージェントはこのセッションの system-reminder を見ないので、`Co-Authored-By` と `Claude-Session` の行と Claude-Session の URL を `trailers` で渡す
+- **キャッシュ**：ワークフローのエージェントのキャッシュは既定 5 分で切れる。1 issue の段階は続けて動くので通常は足りるが、待ちが長くなるなら設定 `subagentPromptCacheTtl` を `1h` にする（書き込みの単価が上がる）
 
 ## 手順
 
 ### 0. 準備
 
-```sh
-gh issue view {{N}} -R neverclear86/nostr-no-su --comments
-git -C /home/lina/workspace/projects/nostr-no-su fetch origin main
-mkdir -p <scratchpad>/plans
-```
-
-issue の本文とコメントを読み、次を決める。
-
-- **土台のコミット**：`origin/main` の先頭。プランにも PR にも書く
-- **ブランチ名**：`feat/…`、`fix/…`、`docs/…`、`refactor/…` の形で英語
-- **作業ツリーの場所**：スクラッチパッドの下。プランとプランレビューの調査用に `<scratchpad>/wt-{{N}}-plan`（`--detach` で origin/main）、実装用に `<scratchpad>/wt-{{N}}`、レビュアーの再現用に `<scratchpad>/wt-{{N}}-review`。役割ごとに分けるのは、同じブランチを 2 つの作業ツリーで持てないのと、プラン側の実験が実装の差分に混ざらないようにするため
-- **docker が要るか**：要るなら固有のプロジェクト名（`nns-issue{{N}}`、`nns-review{{N}}`）と空いているポート（`ss -ltn` で確かめる。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 は避ける）
-- **UI を変えるか**：変えるならデザインエージェントを先に立てる
-- **既存のプラン**：issue にすでに「## 実装プラン（版 N）」と `判定: APPROVE` のレビューがあれば、段階 1〜3 は飛ばして 4 から始める。土台のコミットが今の `origin/main` より古いときは、その間の差分がプランの触るファイルに掛かっていないかを確かめ、掛かっていればプランレビューからやり直す
-
-### 1〜2. プランとプランレビューの往復
-
-1. `references/task-messages.md` の依頼文を埋めて `issue-planner` を立てる。プランは `<scratchpad>/plans/{{N}}-v1.md` に書かせ、返答は要旨（方針の要約と、決めたことの見出し）だけにさせる
-2. 依頼文にプランのファイルのパスを書いて `issue-plan-reviewer` を立てる。レビューは `<scratchpad>/plans/{{N}}-r1.md` に書かせ、返答は判定と must、should、nit の件数と各指摘の見出しだけにさせる
-3. `判定: REQUEST CHANGES` なら、新しい `issue-planner` を立て、前の版とレビューのファイルのパスを渡して、次の版 `{{N}}-v{{V+1}}.md` を書かせる。次に新しい `issue-plan-reviewer` を立て、次の版と前のレビューのファイルのパスを渡して再判定させる
-4. `判定: APPROVE` になるまで 3 を繰り返す
-
-プランエージェントは、issue の前提が間違っている、または選択肢がユーザーの判断を要すると考えたら、プランではなく質問を返す。その場合はユーザーに聞いてから続ける。
-
-### 3. プランの投稿
-
-承認された版のファイルの先頭を `references/formats.md` の書式に整えて（`## 実装プラン（版 N）`、レビューのラウンド数と最終ラウンドの指摘の要旨、残した nit）、issue に投稿する。版 2 以降の先頭にある「指摘への対応」の表は投稿には含めない。
-
-```sh
-gh issue comment {{N}} -R neverclear86/nostr-no-su --body-file <scratchpad>/plans/{{N}}-post.md
-```
-
-プランの途中の版とレビューの全文は issue には貼らない（往復はエージェント間で完結させ、issue には承認済みの版だけを残す）。
-
-### 4. 実装と PR
-
-`references/task-messages.md` の依頼文を埋めて `issue-implementer` を立てる。issue コメントの URL とコミットのトレーラーを渡し、プランは実装エージェント自身に `gh api` で読ませる（全文は貼らない）。
-PR を作るところまで任せ、PR 番号と head のコミットを返させる。
-
-実装エージェントは、プランどおりに作れない箇所が見つかったら勝手に設計を変えず、理由を添えて報告する。オーケストレーターは、小さな逸脱なら実装エージェントに判断を返し、設計に関わるなら新しいプランエージェントに承認済みの版と逸脱の内容を渡して版を上げ、issue に追記する。
-
-### 5. PR レビューの往復
-
-1. `references/task-messages.md` の依頼文を埋めて `issue-pr-reviewer` を立てる。レビューを PR コメントに投稿させ、判定を返させる
-2. `判定: REQUEST CHANGES` なら、レビューコメントの URL を実装エージェントに `SendMessage` で送る（指摘は実装エージェント自身に `gh api` で読ませる）。実装エージェントは直したコミットを push し、対応の内容を PR コメントに投稿する（`references/formats.md` の「指摘への対応」）
-3. 実装エージェントの対応コメントの URL と head のコミットを PR レビュアーに `SendMessage` で送り、次のラウンドをレビューさせる
-4. `判定: APPROVE`（must 0、should 0）になるまで 2〜3 を繰り返す
-
-### 5b. 最終確認
-
-PR レビュアーの APPROVE の後、`references/task-messages.md` の依頼文を埋めて `issue-final-gate` を立てる。再現はさせず、diff、PR 本文、レビューと対応のコメント、プラン、issue の受け入れ条件を読ませて、「## 最終確認」を PR コメントに投稿させる。
-
-- `判定: APPROVE` なら 6 へ進む
-- `判定: REQUEST CHANGES` なら、指摘のコメントの URL を実装エージェントに `SendMessage` で送って直させ、対応コメントを投稿させる。次に PR レビュアーに `SendMessage` で対応コミットを再レビューさせ（対応の範囲に収まっているか、再現が要るかはレビュアーが決める）、APPROVE の後に最終確認のエージェントへ `SendMessage` で再確認を頼む。最終確認が APPROVE になるまで繰り返す
-
-### 6. マージ
-
-承認の後、オーケストレーターが自分で次を確かめてからマージする。レビュアーにマージさせない（自分の PR に承認を付けられない構成なので、ハーネスが「Merge Without Review」の警告を出すことがある）。
+対象の issue（1 件でも複数でも）について、次を集めて `args` を組み立てる。
 
 ```sh
 R=neverclear86/nostr-no-su
-gh pr view {{PR}} -R $R --json headRefOid,mergeable,commits --jq '{head: .headRefOid, mergeable, last: .commits[-1].committedDate}'
-gh api repos/$R/issues/{{PR}}/comments --jq '.[] | select(((.body | startswith("## レビュー")) or (.body | startswith("## 最終確認"))) and (.body | contains("の指摘への対応") | not)) | "\(.created_at) \(.body | split("\n") | map(select(startswith("判定"))) | .[0])"'
-gh pr checks {{PR}} -R $R
+gh issue view {{N}} -R $R --comments          # issue ごとに本文とコメントを読む
+git -C /home/lina/workspace/projects/nostr-no-su fetch origin main
+git -C /home/lina/workspace/projects/nostr-no-su rev-parse origin/main   # base
+ss -ltn | awk 'NR>1 {print $4}' | sed 's/.*://' | sort -n | uniq        # 使用中のポート
+mkdir -p <scratchpad>/plans
 ```
 
-- 「## レビュー」の最後の `判定: APPROVE` と、「## 最終確認」の最後の `判定: APPROVE` が、どちらも head のコミットより後の時刻であること
-- APPROVE の後に push が無いこと（あれば nit だけの対応で、レビュアーが再レビュー不要と明言しているか、もう 1 ラウンド回す）
-- CI の 3 つのジョブ（`test`、`admin-css`、`plugin-event-logger`）が pass であること
-- `mergeable` が `MERGEABLE` であること。main が進んで衝突するなら実装エージェントに rebase させ、レビュアーに差分が rebase だけであることを確かめさせる
+- **base**：`origin/main` の先頭。全 issue で同じ
+- **issues**：issue ごとに `n`、`branch`（`feat/…`、`fix/…`、`docs/…`、`refactor/…` の形で英語）、UI を変えるなら `ui: true`、依存があれば `after: [n]`、issue コメントで決まった事項や補足があれば `note`
+- **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
+- **trailers**：このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
+- **window**：同時に進める件数。既定 4。文書を動かす issue や大きい issue は 1
+- **既存のプラン**：issue にすでに承認済みの「## 実装プラン（版 N）」が投稿されていれば、そのコメントの URL を `planUrl` に書く。スクリプトはプランの段階を飛ばして実装から始める。土台が古びていて作れない箇所があれば、実装エージェントが `deviation` を返し、スクリプトがプランの版を上げる
+- **事前に聞く論点**：issue の本文とコメントに未決の設計判断（どの鍵で応答するか、既定値をどうするか、など）があれば、起動の前に `AskUserQuestion` でまとめて聞き、`decisions[n]` に書く。09-13 の実績では 28 件で 9 件の質問があり、すべてプラン段階の設計判断だった
 
-マージの前に、実装用とレビュー用の作業ツリーを消す（`--delete-branch` はローカルのブランチも消すので、作業ツリーがブランチを持ったままだと失敗する）。
+### 1. 起動
 
-```sh
-git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force <scratchpad>/wt-{{N}}
-git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force <scratchpad>/wt-{{N}}-review
-git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force <scratchpad>/wt-{{N}}-plan
-gh pr merge {{PR}} -R $R --squash --delete-branch --subject "{{PR タイトル}} (#{{PR}})" --body "$(printf '%s\n' "{{Co-Authored-By 行}}" "{{Claude-Session 行}}")"
-git -C /home/lina/workspace/projects/nostr-no-su fetch --prune origin
+`Workflow` ツールを `name: "issue-pipeline"`（スクリプトの `meta.name`。スキルと別の名前にしてある）か `scriptPath: ".claude/workflows/issue-workflow.js"` と、`args` で呼ぶ。ユーザーが `/issue-pipeline` と打ったときも、先に段階 0 を行ってから起動する（issue 番号だけではスクリプトが動かない）。`args` は JSON のオブジェクトで渡す（文字列にしない）。
+
+```json
+{
+  "issues": [
+    { "n": 57, "branch": "feat/watch-all-accounts", "note": "since は最後に受け取った created_at から" },
+    { "n": 83, "branch": "fix/half-open-websocket", "after": [57] },
+    { "n": 86, "branch": "feat/log-level-and-timestamp", "planUrl": "https://github.com/neverclear86/nostr-no-su/issues/86#issuecomment-…" },
+    { "n": 58, "branch": "feat/theme-toggle", "ui": true }
+  ],
+  "base": "ad787b6…",
+  "scratchpad": "/tmp/claude-1000/…/scratchpad",
+  "portBase": 5600,
+  "window": 4,
+  "trailers": {
+    "coAuthoredBy": "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>",
+    "claudeSession": "Claude-Session: https://claude.ai/code/session_…",
+    "sessionUrl": "https://claude.ai/code/session_…"
+  },
+  "decisions": { "57": "起動直後の購読は DB に保存した最後の受信時刻から" }
+}
 ```
 
-squash コミットの件名は PR のタイトルに `(#PR番号)` を付けたもの、本文はトレーラーだけにする（直近の main の履歴と同じ形）。
-issue が PR の `Closes #N` で閉じたことを `gh issue view` で確かめる。閉じていなければ `gh issue close` で閉じる。
+起動は背景で走り、完了の通知で `results` が届く。途中経過は `/workflows`。結果を待つ間に `ListAgents` を繰り返したり催促したりしない。
 
-## ユーザーへの報告
+### 2. 結果の処理
+
+`results` の各要素は `status` で分ける。
+
+- `split`：親が分割された。`subIssues` の順と `children` の各結果を、それぞれ上の分類で扱う
+- `merged`：PR 番号、マージのコミット、プランのラウンド数、PR レビューのラウンド数、最終確認の回数、残した nit の数を報告に載せる
+- `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れて、同じ `args` に `resumeFromRunId` を付けて再開する。依存先の失敗（`stage: deps`）は依存先を先に直す
+- `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて再開、実装が難しいなら issue を分ける）
+- `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、同じ `args` で再開する。走り直したエージェントが済んだ副作用に出会う場合（PR がある、ブランチがある、マージ済み）は、実装エージェントと merger の定義がそれを検知して続きから進める（失敗したエージェントとその後が走る。issue を並行させていると起動順が揺れるので、それより前に完了した他の issue の段階も走り直すことがある。最初の実運用で `journal.jsonl` の再利用の実績を確かめて、ここに書き足す）
+
+再開のときは `args` を変えない（`decisions` の追加だけ）。`base` を今の `origin/main` に更新すると全 issue の依頼文が変わり、完了した結果が再利用されない。main が進んで土台が古びた issue は、次の実行で新しい `base` から始める。
+
+### 3. ユーザーへの報告
 
 1 件ごとに、issue 番号、プランのラウンド数、PR 番号、PR レビューのラウンド数、最終確認の結果、マージのコミット、残した nit と後続の issue にした事項を短くまとめる。
-途中で止めたときは、どの段階で、何が決まらなかったかを書く。
+止まった issue は、どの段階で、何が決まらなかったかを書く。
+
+## dry run（スクリプトを変えたとき）
+
+`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`plan2`（プラン 2 ラウンド）、`escalate`（3 ラウンドで effort high）、`plan-stall`、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（サブ issue 2 件に分割）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
+
+```json
+{ "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }
+```
