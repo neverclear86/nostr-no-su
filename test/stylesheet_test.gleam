@@ -19,11 +19,11 @@ pub fn stylesheet_defines_every_rendered_class_test() {
   assert undefined == []
 }
 
-/// フォーカスできるボタン（`a` と `button` の `btn`）はフォーカスの輪郭を、入力欄（`input` の
-/// `input`）は枠を、`base-content` の色にする（デザイン方針 6 節の規則）。daisyUI の既定では
-/// 輪郭が塗りの色になり、枠は薄いので、付け忘れるとコントラストが足りなくなる。付け忘れても
-/// クラスはほかの文字列で CSS に出力されるので、定義の検査では見つからない。フォーカス
-/// できない要素（#50 の表示中の言語の `span` など）の `btn` は対象にしない。
+/// フォーカスできるボタン（`a`、`button`、`summary` の `btn`）はフォーカスの輪郭を、入力欄
+/// （`input` の `input`）は枠を、`base-content` の色にする（デザイン方針 6 節の規則）。daisyUI
+/// の既定では輪郭が塗りの色になり、枠は薄いので、付け忘れるとコントラストが足りなくなる。
+/// 付け忘れてもクラスはほかの文字列で CSS に出力されるので、定義の検査では見つからない。
+/// フォーカスできない要素の `btn` は対象にしない。
 pub fn buttons_and_inputs_follow_the_color_rules_test() {
   let violations =
     admin_ui.pages()
@@ -32,7 +32,7 @@ pub fn buttons_and_inputs_follow_the_color_rules_test() {
     |> list.filter(fn(element) {
       let #(tag, classes) = element
       case tag {
-        "a" | "button" ->
+        "a" | "button" | "summary" ->
           list.contains(classes, "btn")
           && !list.contains(classes, "focus-visible:outline-base-content")
         "input" ->

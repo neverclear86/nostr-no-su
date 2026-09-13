@@ -28,7 +28,9 @@ pub fn static_file(segments: List(String)) -> String {
 
 /// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。言語ごとに描画し、
 /// 言語の切り替えの項目（表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを
-/// 通す。描画に状態の分岐を足したら、ここにもその状態のページを足す。
+/// 通す。テーマの一覧の項目（`view.themes` ごとの表示中の項目の 3 通り）は、ダッシュボードを
+/// テーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に状態の分岐を
+/// 足したら、ここにもその状態のページを足す。
 pub fn pages() -> List(String) {
   let row =
     dashboard.AccountRow(
@@ -86,34 +88,38 @@ pub fn pages() -> List(String) {
   use language <- list.flat_map(i18n.languages)
   let reason = i18n.Untranslated("reason")
   list.flatten([
+    list.map(view.themes, dashboard.render(language, _, full)),
     [
-      dashboard.render(language, full),
-      dashboard.render(language, empty),
+      dashboard.render(language, view.System, empty),
       dashboard.render(
         language,
+        view.System,
         dashboard.Snapshot(..empty, accounts: Error("reason")),
       ),
-      dashboard.approval_page(language, pending),
-      account_pages.new_account_page(language, Some(reason)),
+      dashboard.approval_page(language, view.System, pending),
+      account_pages.new_account_page(language, view.System, Some(reason)),
       account_pages.generated_key_page(
         language,
+        view.System,
         "nsec1example",
         Some(i18n.LabelHasControlCharacters),
       ),
       account_pages.registered_page(
         language,
+        view.System,
         "npub1example",
         "main",
         "nsec1example",
       ),
-      account_pages.private_key_page(language, row, "nsec1example"),
+      account_pages.private_key_page(language, view.System, row, "nsec1example"),
     ],
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure],
-      dashboard.notice_page(language, i18n.NotFound, reason, _),
+      dashboard.notice_page(language, view.System, i18n.NotFound, reason, _),
     ),
     list.map(account_actions.all, account_pages.account_action_page(
       language,
+      view.System,
       row,
       _,
       Some(reason),

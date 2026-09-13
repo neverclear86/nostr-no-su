@@ -68,7 +68,7 @@ fn states() -> dashboard.Snapshot {
 /// リレーとプラグインの状態は、状態ごとの色のバッジで出し、状態の語と詳細を文字で残す。
 /// プラグイン由来の理由は英語のまま `lang="en"` を付けて出す。
 pub fn states_are_shown_as_badges_test() {
-  let body = dashboard.render(i18n.English, states())
+  let body = dashboard.render(i18n.English, view.System, states())
   let badges = [
     "<td class=\"whitespace-nowrap\">monitor</td>",
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
@@ -87,7 +87,7 @@ pub fn states_are_shown_as_badges_test() {
 /// 日本語のダッシュボードでは、状態の語、件数、経過時間を日本語の形で出す。バッジの
 /// クラスは英語と同じである。
 pub fn japanese_states_are_translated_test() {
-  let body = dashboard.render(i18n.Japanese, states())
+  let body = dashboard.render(i18n.Japanese, view.System, states())
   let badges = [
     "<td class=\"whitespace-nowrap\">監視</td>",
     "<td class=\"whitespace-nowrap\">バンカー</td>",
@@ -104,17 +104,18 @@ pub fn japanese_states_are_translated_test() {
   })
 }
 
-/// 言語の切り替えは、表示している言語を押せない項目にし、それ以外の言語をその言語の
-/// コードを送るボタンにする。言語名はどちらの言語のページでも同じ文字で出す。
-pub fn language_switch_marks_the_current_language_test() {
+/// テーマと言語のドロップダウンは、それぞれ表示中の項目に `aria-current` と `menu-active` と
+/// 見えるチェックを付け、それ以外の項目はその値を POST で送るボタンにする。言語名はその言語
+/// 自身の文字で出す。
+pub fn navbar_dropdowns_mark_the_current_choice_test() {
   let snapshot = dashboard.Snapshot(..states(), plugins: [], relays: [])
   assert string.contains(
-    dashboard.render(i18n.English, snapshot),
-    "<div class=\"navbar-end\"><form action=\"/language\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><div aria-label=\"Language\" class=\"join\" role=\"group\"><span aria-current=\"true\" class=\"btn btn-sm join-item cursor-default border-base-content bg-base-content text-base-100\" lang=\"en\">English</span><button class=\"btn btn-sm join-item focus-visible:outline-base-content\" lang=\"ja\" name=\"language\" type=\"submit\" value=\"ja\">日本語</button></div></form></div>",
+    dashboard.render(i18n.English, view.Dark, snapshot),
+    "<div class=\"navbar-end w-auto gap-2\"><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">Theme<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/theme\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"system\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Browser setting</span></button></li><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"light\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Light</span></button></li><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" name=\"theme\" type=\"submit\" value=\"dark\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Dark</span></button></li></ul></form></details><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">Language<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/language\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" lang=\"en\" name=\"language\" type=\"submit\" value=\"en\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>English</span></button></li><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" lang=\"ja\" name=\"language\" type=\"submit\" value=\"ja\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>日本語</span></button></li></ul></form></details></div>",
   )
   assert string.contains(
-    dashboard.render(i18n.Japanese, snapshot),
-    "<div class=\"navbar-end\"><form action=\"/language\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><div aria-label=\"言語\" class=\"join\" role=\"group\"><button class=\"btn btn-sm join-item focus-visible:outline-base-content\" lang=\"en\" name=\"language\" type=\"submit\" value=\"en\">English</button><span aria-current=\"true\" class=\"btn btn-sm join-item cursor-default border-base-content bg-base-content text-base-100\" lang=\"ja\">日本語</span></div></form></div>",
+    dashboard.render(i18n.Japanese, view.Dark, snapshot),
+    "<div class=\"navbar-end w-auto gap-2\"><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">テーマ<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/theme\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"system\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>ブラウザーの設定</span></button></li><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"light\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>ライト</span></button></li><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" name=\"theme\" type=\"submit\" value=\"dark\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>ダーク</span></button></li></ul></form></details><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">言語<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/language\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" lang=\"en\" name=\"language\" type=\"submit\" value=\"en\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>English</span></button></li><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" lang=\"ja\" name=\"language\" type=\"submit\" value=\"ja\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>日本語</span></button></li></ul></form></details></div>",
   )
 }
 
@@ -122,12 +123,13 @@ pub fn language_switch_marks_the_current_language_test() {
 pub fn language_switch_return_paths_test() {
   let assert [pending] = states().pending
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, pending),
+    dashboard.approval_page(i18n.Japanese, view.System, pending),
     "<input name=\"return\" type=\"hidden\" value=\"/approve/tok\">",
   )
   assert string.contains(
     dashboard.notice_page(
       i18n.Japanese,
+      view.System,
       i18n.NotFound,
       i18n.Untranslated("unknown or expired approval request"),
       view.Failure,
