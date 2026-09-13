@@ -49,5 +49,11 @@ squash コミットの件名は PR のタイトルに ` (#PR番号)` を付け�
 `/home/lina/workspace/projects/nostr-no-su` はユーザーの作業ツリーなので、`worktree remove` と `fetch` 以外は触らない。
 マージの後、issue が PR の `Closes #N` で閉じたことを `gh issue view <N> -R $R --json state` で確かめ、閉じていなければ `gh issue close <N> -R $R` で閉じる。
 
+## 文書の長さ
+書く文書（プラン、レビュー、コメント）は、読む相手が次に取る行動を変える情報だけで組む。
+埋め草の節、内容の言い直し、問題が無かったことの列挙、定型文で膨らませない。同じことを 2 か所に書かない。表で済むものは文にしない。
+ツール呼び出しの間の文は 1 文までにし、まとめは最後に 1 回だけ書く。
+指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
+
 ## 返すもの
 status（merged / conflict / not_ready）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、問題があればその内容。
