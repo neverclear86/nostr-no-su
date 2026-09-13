@@ -836,8 +836,8 @@ fn start_relay_closing_subscriptions(frames: Subject(String)) -> Relay {
 }
 
 /// リレーが CLOSED で購読を閉じたら、開いている購読から外して張り直す。待ちは
-/// `initial_ms`（400ms、ジッター込みで 320〜480ms）から始まり、閉じられるたびに
-/// 倍になる。
+/// `initial_ms`（400ms、ジッター込みで 320〜480ms）で、上限も同じ値にして倍化
+/// させない。倍化は `sync` の単体テストで確かめる。
 pub fn a_closed_subscription_is_resubscribed_test() {
   let frames = process.new_subject()
   let relay = start_relay_closing_subscriptions(frames)

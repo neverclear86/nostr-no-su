@@ -188,10 +188,9 @@ pub fn new_subscription_state(
 /// `handle_event` へ渡す。発行したイベントへの OK は受理・拒否とも `handle_ok`
 /// へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は購読の定義を
 /// 得られなかったとき、およびリレーが購読を閉じたときの再試行の待ち時間。
-/// `interval_ms` は生存確認の刻みの間隔で、
-/// 本番は `keepalive_interval_ms` を渡す。接続アクターは呼び出し元にリンクされる
-/// ため呼び出し元と一緒に死に、exit を trap している呼び出し元にはその死が
-/// メッセージとして届く。
+/// `interval_ms` は生存確認の刻みの間隔で、本番は `keepalive_interval_ms` を
+/// 渡す。接続アクターは呼び出し元にリンクされるため呼び出し元と一緒に死に、
+/// exit を trap している呼び出し元にはその死がメッセージとして届く。
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
@@ -463,7 +462,11 @@ fn synchronise(
     None -> Nil
     Some(reservation) -> {
       let delay = backoff.jittered(reservation.delay_ms)
-      log.write(log.Warning, prefix, describe_reservation(trigger, delay))
+      log.write(
+        reservation_log_level(trigger),
+        prefix,
+        describe_reservation(trigger, delay),
+      )
       let _ =
         process.send_after(
           session.inbox,
@@ -474,6 +477,15 @@ fn synchronise(
     }
   }
   Session(..session, subscriptions: synced.state)
+}
+
+/// 再試行を予約したときのログの水準。CLOSED はリレーの通常の応答なので Notice に、
+/// 定義を得られなかった予約は異常なので Warning にする。
+fn reservation_log_level(trigger: Trigger) -> log.Level {
+  case trigger {
+    Closed(_) -> log.Notice
+    Requested | Retried(_) -> log.Warning
+  }
 }
 
 /// 再試行を予約したときのログ行の本文。CLOSED による予約と、定義を得られなかった
