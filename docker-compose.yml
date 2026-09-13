@@ -18,6 +18,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
+      PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
       # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない

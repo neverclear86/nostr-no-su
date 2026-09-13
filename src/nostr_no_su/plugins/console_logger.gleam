@@ -4,8 +4,9 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
 
-/// プラグインの名前。`new` とログの接頭辞の両方で使う。
-const name = "console_logger"
+/// プラグインの名前。`new` とログの接頭辞のほか、予約名としても使う
+/// （`nostr_no_su.builtin_plugins` が無効時にも `plugin_loader.load_all` へ渡す）。
+pub const name = "console_logger"
 
 /// 受信したイベントの概要を標準出力に書くプラグイン。
 pub fn new() -> Plugin {
@@ -14,7 +15,7 @@ pub fn new() -> Plugin {
 
 /// イベント 1 件の概要をこのプラグインの接頭辞を付けて出力する。
 fn log_event(event: Event) -> Nil {
-  log.println(log.plugin_prefix(name), event_line(event))
+  log.write(log.Notice, log.plugin_prefix(name), event_line(event))
 }
 
 /// イベント 1 件の概要のログ行の本文。content は長くなりうるので先頭の 80

@@ -752,7 +752,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> state
         engine.Ignore(reason) -> {
-          log.println(log_prefix, "ignored: " <> log.sanitize_external(reason))
+          log.write(
+            log.Notice,
+            log_prefix,
+            "ignored: " <> log.sanitize_external(reason),
+          )
           state
         }
       }
@@ -761,7 +765,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Acknowledged(relay_url, ack) -> {
       let #(deliveries, line) = acknowledge(state.deliveries, relay_url, ack)
       case line {
-        Some(text) -> log.println(log_prefix, text)
+        Some(text) -> log.write(log.Warning, log_prefix, text)
         None -> Nil
       }
       actor.continue(State(..state, deliveries: deliveries))
@@ -778,8 +782,12 @@ fn load_accounts(state: State) -> State {
     Ready -> state
     Loading(failure:, retry_delay_ms:) -> {
       let outcome = state.settings.store.load()
+      let level = case outcome {
+        Ok(_) -> log.Notice
+        Error(_) -> log.Warning
+      }
       load_report(failure, outcome, retry_delay_ms)
-      |> list.each(log.println(log_prefix, _))
+      |> list.each(log.write(level, log_prefix, _))
       case outcome {
         Ok(loaded) ->
           reconcile(State(..state, accounts: Ready), loaded)
@@ -974,7 +982,11 @@ fn apply_change(
     Ready, Error(failure) -> #(state, Error(failure))
     Ready, Ok(Nil) -> {
       let written = write()
-      log.println(log_prefix, change_line(change, signer, written))
+      let level = case written {
+        Ok(_) -> log.Notice
+        Error(_) -> log.Warning
+      }
+      log.write(level, log_prefix, change_line(change, signer, written))
       case written {
         Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
         Error(NotWritten(reason)) -> #(state, Error(NotApplied(reason)))
@@ -1066,7 +1078,11 @@ fn apply_decision(
 fn publish(state: State, response: Event) -> State {
   case dict.is_empty(state.publishers) {
     True -> {
-      log.println(log_prefix, "no live relay connection; response dropped")
+      log.write(
+        log.Warning,
+        log_prefix,
+        "no live relay connection; response dropped",
+      )
       state
     }
     False -> {

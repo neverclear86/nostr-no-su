@@ -99,6 +99,8 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 | `runner is back; dropped 3 events while it was unavailable` | ランナーに再び届くようになった。居なかった間に捨てた件数を添える |
 | `re-enabled by the operator; dropped 12 events while disabled` | 管理 UI から再有効化した。無効の間に捨てた件数を添える |
 
+プラグイン自身のログは OTP logger（`logger:log/2`）に出せば、時刻と水準が付いた本体と同じ行の形になる（`io:format` は時刻と水準が付かない）。実例は `plugins-src/event_logger`。この文書の例のコードは短さのために `io:format` を使う。
+
 ## 5. 状態を持つプラグイン（任意エクスポート `plugin_children`）
 
 イベント処理関数はイベントごとに別のプロセスで動くため、呼び出しをまたいで状態を持つには自分でプロセスを起こす必要がある（第 4 章）。任意エクスポート `plugin_children/0` を持つプラグインは、そのプロセスの子仕様を本体に申告できる。本体は起動時に 1 度だけこの関数を呼び（第 2 章の期限が掛かる）、返ってきた子仕様をスーパービジョンツリーに載せる。
@@ -153,12 +155,12 @@ plugin_children() -> [child_spec()].
 
 ```
 [plugin counter] child "counter_store" failed to start (error:badarg)
-[plugin counter] children failed to start; the reason is in the child line above, or in the =SUPERVISOR REPORT=; running without them
+[plugin counter] children failed to start; the reason is in the child line above, or in the supervisor report; running without them
 ```
 
 **理由が入っているのは 1 行目である。** 2 行目は理由を持っていない（スーパーバイザーの起動失敗は本体に理由を返さない）。上の例は登録名の衝突で、`start_link` の中の `register/2` が `badarg` で落ちた場合である。
 
-**子のクラッシュは BEAM の標準レポートとして出る**（`=CRASH REPORT=` / `=SUPERVISOR REPORT=`）。本体が 1 行に整えるイベント処理関数の失敗（第 4.1 節）とは扱いが違う。
+**子のクラッシュは BEAM の標準レポートとして出る**（`error crasher: ...` / `error Supervisor: ...` の 1 行）。本体が 1 行に整えるイベント処理関数の失敗（第 4.1 節）とは扱いが違う。
 
 **外部資源に依存する子は、落ちずに数えて捨てる形を勧める。** 諦められた子は本体の再起動まで戻らないため、DB や HTTP に到達できないあいだ落ち続ける子は、歯止めを使い切って恒久的に失われる。同梱の `event_logger` が DB 到達不能時に行っているのと同じく、到達できない件数を数えてプロセスは生かしておくほうがよい。
 
@@ -337,7 +339,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ### 8.3 読み込み順
 
-プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`）は常に外部プラグインより先に読み込まれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
+プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら読み込まない）は外部プラグインより先に読み込まれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
 
 `plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。
 

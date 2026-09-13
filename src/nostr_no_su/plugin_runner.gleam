@@ -203,7 +203,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 fn report(name: String, note: Option(String)) -> Nil {
   case note {
     None -> Nil
-    Some(line) -> log.println(log.plugin_prefix(name), line)
+    Some(line) -> log.write(log.Warning, log.plugin_prefix(name), line)
   }
 }
 

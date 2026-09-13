@@ -59,7 +59,7 @@ tar の中の `contents.tar.gz` を展開し、hex への公開のときに Glea
 
 - ファイル: `patches/0004-handshake-failure-debug-log.patch`
 - 変更: `src/stratus.gleam` の `start` で、ハンドシェイクの失敗の文を `logging.log` に渡す水準を `Error` から `Debug` にする。
-- 理由: 同じ文は `InitFailed` で呼び出し元に返る。nostr-no-su はそれを再接続の予告と一緒に 1 行で出すので、error の水準のままだと、試行ごとに `=ERROR REPORT====` の 2 行が重なる。Erlang の logger で抑えるには `logging` モジュール全体の水準を下げるしかなく、同じ `logging` パッケージを使う mist、glisten、wisp のエラーも消える。
+- 理由: 同じ文は `InitFailed` で呼び出し元に返る。nostr-no-su はそれを再接続の予告と一緒に 1 行で出すので、error の水準のままだと、試行ごとに error の行が重なる。Erlang の logger で抑えるには `logging` モジュール全体の水準を下げるしかなく、同じ `logging` パッケージを使う mist、glisten、wisp のエラーも消える。
 - 戻す条件: 上流の stratus がハンドシェイクの失敗を error の水準で出さなくなった版に上げるとき。
 
 ### 0005 受信バッファに上限を設ける

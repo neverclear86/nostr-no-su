@@ -23,11 +23,11 @@
 //// 異常終了させる。待っても直らず、生かしたまま捨て続けると管理 UI に止まっている
 //// ことが見えないため（`docs/plugin-api.md` 第 5.4 節）。
 
+import event_logger/log
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -45,10 +45,6 @@ const schema_retry_delay_ms = 5000
 /// が、待つのは再試行 1 回につき 1 度で、その間に届いたイベントは未準備の経路で
 /// 捨てられる。
 const schema_timeout_ms = 30_000
-
-/// このプラグインが自分で出すログ行の接頭辞。本体が出す行の接頭辞
-/// （`[plugin event_logger]`）とは別物である。
-const log_prefix = "[event_logger] "
 
 /// 保存を待つ `Store` の上限の既定値。本体のランナーの上限と同じ件数にする。
 pub const default_max_queue_len = 1000
@@ -225,7 +221,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case prepare(state) {
         Ok(availability) -> actor.continue(State(..state, availability:))
         Error(reason) -> {
-          println(reason)
+          log.write(log.Error, reason)
           actor.stop_abnormal(reason)
         }
       }
@@ -268,20 +264,22 @@ fn persist(state: State, row: Row, queue_len: Int) -> Availability {
     Overloaded(dropped:) if queue_len > state.max_queue_len / 2 ->
       Overloaded(dropped: dropped + 1)
     Overloaded(dropped:) -> {
-      println(
+      log.write(
+        log.Notice,
         "caught up; dropped "
-        <> int.to_string(dropped)
-        <> " events while overloaded",
+          <> int.to_string(dropped)
+          <> " events while overloaded",
       )
       write(state, row)
     }
     Ready if queue_len > state.max_queue_len -> {
-      println(
+      log.write(
+        log.Warning,
         "too slow: "
-        <> int.to_string(queue_len)
-        <> " events queued (limit "
-        <> int.to_string(state.max_queue_len)
-        <> "); dropping until it catches up",
+          <> int.to_string(queue_len)
+          <> " events queued (limit "
+          <> int.to_string(state.max_queue_len)
+          <> "); dropping until it catches up",
       )
       Overloaded(dropped: 1)
     }
@@ -299,11 +297,12 @@ fn write(state: State, row: Row) -> Availability {
         True -> suspend(state, error, 1)
         // それ以外はこのイベント固有の問題なので、保存は続ける。
         False -> {
-          println(
+          log.write(
+            log.Warning,
             "insert failed for event "
-            <> row.id
-            <> ": "
-            <> string.inspect(error),
+              <> row.id
+              <> ": "
+              <> string.inspect(error),
           )
           Ready
         }
@@ -315,12 +314,13 @@ fn write(state: State, row: Row) -> Availability {
 fn resume(availability: Availability) -> Availability {
   case availability {
     Unavailable(dropped:, ..) if dropped > 0 ->
-      println(
+      log.write(
+        log.Notice,
         "database is back; dropped "
-        <> int.to_string(dropped)
-        <> " events while it was unavailable",
+          <> int.to_string(dropped)
+          <> " events while it was unavailable",
       )
-    _ -> println("schema ready")
+    _ -> log.write(log.Notice, "schema ready")
   }
   Ready
 }
@@ -331,7 +331,7 @@ fn resume(availability: Availability) -> Availability {
 fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
   let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
   case suspension_message(error, was_reported(state.availability), dropped) {
-    Some(line) -> println(line)
+    Some(line) -> log.write(log.Warning, line)
     None -> Nil
   }
   Unavailable(dropped: dropped, reported: unreachable(error))
@@ -498,11 +498,6 @@ fn row_decoder() -> decode.Decoder(Row) {
     content: content,
     sig: sig,
   ))
-}
-
-/// このプラグインのログ行を 1 行出す。
-fn println(line: String) -> Nil {
-  io.println(log_prefix <> line)
 }
 
 /// 自プロセスの未処理メッセージ数。

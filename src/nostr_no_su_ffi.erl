@@ -1,6 +1,8 @@
 -module(nostr_no_su_ffi).
 -export([
     ensure_ssl_started/0,
+    configure_logger/0,
+    flush_logger/0,
     now_seconds/0,
     ec_point_from_priv/1,
     ecdh_x/2,
@@ -35,6 +37,38 @@
 %% 明示する。冪等なので二重に起動されても害は無い。
 ensure_ssl_started() ->
     {ok, _} = application:ensure_all_started(ssl),
+    nil.
+
+%% 既定のハンドラーの formatter を `<時刻 UTC> <水準> <本文>` の 1 行形式にし、
+%% 流量制限と欠落を切る。`ok = ...` の照合により、どちらかが失敗すると起動が
+%% 止まる。設定されないまま行が落ちる状態で動かさないためである。
+%%
+%% burst_limit_enable を切るだけでは、多数のプロセスが同時に出したときに
+%% 待ち行列が drop_mode_qlen / flush_qlen を超えて行が落ちる。上限は同時に
+%% 出しうるプロセスの数より十分大きい値にする必要があり、ここでは
+%% 実質無制限（1000000）にする。sync_mode_qlen は既定の 10 のままなので、
+%% 待ち行列が 10 を超えると呼び出し側は書き終えるまで待ち、`io.println`
+%% （group leader への同期の要求）と同じ背圧が働く。
+configure_logger() ->
+    ok = logger:update_handler_config(
+        default,
+        formatter,
+        {logger_formatter, #{
+            single_line => true,
+            template => [time, " ", level, " ", msg, "\n"],
+            time_offset => "Z"
+        }}
+    ),
+    ok = logger:update_handler_config(default, config, #{
+        burst_limit_enable => false,
+        drop_mode_qlen => 1000000,
+        flush_qlen => 1000000
+    }),
+    nil.
+
+%% 既定のハンドラーに溜まった行を書き終えるまで待つ。`halt` の直前に呼ぶ。
+flush_logger() ->
+    logger_std_h:filesync(default),
     nil.
 
 %% 現在時刻の Unix タイムスタンプ（秒）。

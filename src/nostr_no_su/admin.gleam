@@ -156,7 +156,11 @@ fn server(
   |> mist.bind(bind)
   |> mist.port(port)
   |> mist.after_start(fn(port, _scheme, address) {
-    log.println(log_prefix, "listening on " <> listening_url(address, port))
+    log.write(
+      log.Notice,
+      log_prefix,
+      "listening on " <> listening_url(address, port),
+    )
   })
 }
 
@@ -519,7 +523,7 @@ fn decision_response(
 ) -> Response {
   case outcome {
     Ok(Nil) -> {
-      log.println(log_prefix, log_line)
+      log.write(log.Notice, log_prefix, log_line)
       dashboard.notice_page(
         language,
         theme,
@@ -568,7 +572,8 @@ fn revoke_session(
     Ok(signer), Ok(client) ->
       case context.revoke(signer, client) {
         Ok(Nil) -> {
-          log.println(
+          log.write(
+            log.Notice,
             log_prefix,
             session_change_line(SessionRevoked, signer, client),
           )
@@ -979,7 +984,8 @@ fn reveal_private_key(
     )
   {
     False -> {
-      log.println(
+      log.write(
+        log.Warning,
         log_prefix,
         "rejected a private key reveal for "
           <> row.npub
@@ -998,7 +1004,11 @@ fn reveal_private_key(
     True ->
       case context.nsec(row.signer) {
         Ok(nsec) -> {
-          log.println(log_prefix, "revealed the private key of " <> row.npub)
+          log.write(
+            log.Notice,
+            log_prefix,
+            "revealed the private key of " <> row.npub,
+          )
           account_pages.private_key_page(language, theme, row, nsec)
           |> wisp.html_response(200)
         }
@@ -1027,7 +1037,7 @@ fn require_password(
   case authenticate(context.password, request) {
     Ok(Nil) -> next()
     Error(failure) -> {
-      log.println(log_prefix, unauthorized_line(failure))
+      log.write(log.Warning, log_prefix, unauthorized_line(failure))
       unauthorized()
     }
   }

@@ -68,6 +68,8 @@ pub type Config {
     admin_ui: AdminUi,
     admin_bind: String,
     admin_base_url: Option(String),
+    /// `PLUGIN_CONSOLE_LOGGER_ENABLED` の解析結果。`Error` は起動を中止する理由。
+    console_logger_enabled: Result(Bool, String),
   )
 }
 
@@ -93,6 +95,10 @@ pub fn load() -> Config {
       admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
       admin_base_url: optional("ADMIN_BASE_URL")
         |> option.map(strip_trailing(_, "/")),
+      console_logger_enabled: parse_enabled(
+        "PLUGIN_CONSOLE_LOGGER_ENABLED",
+        optional("PLUGIN_CONSOLE_LOGGER_ENABLED"),
+      ),
     )
   list.each(secret_names, envoy.unset)
   loaded
@@ -128,6 +134,22 @@ fn optional(name: String) -> Option(String) {
   case envoy.get(name) {
     Ok("") | Error(Nil) -> None
     Ok(value) -> Some(value)
+  }
+}
+
+/// 有効か無効かを表す任意の環境変数を読む。`None`（未設定か空。`optional/1` が
+/// 空文字列も `None` にする）は `True`、`"true"` / `"false"` はその値、それ以外は
+/// 変数名と値を含む理由にする。値は秘密ではないので理由に含めてよい。
+pub fn parse_enabled(
+  name: String,
+  raw: Option(String),
+) -> Result(Bool, String) {
+  case raw {
+    None -> Ok(True)
+    Some("true") -> Ok(True)
+    Some("false") -> Ok(False)
+    Some(other) ->
+      Error(name <> " must be true or false, got \"" <> other <> "\"")
   }
 }
 

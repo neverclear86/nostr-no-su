@@ -95,7 +95,8 @@ fn save_points(state: State) -> State {
           case state.save(unsaved) {
             Ok(Nil) -> {
               case state.failing {
-                True -> log.println(log_prefix, "resume points saved again")
+                True ->
+                  log.write(log.Notice, log_prefix, "resume points saved again")
                 False -> Nil
               }
               State(..state, saved: current, failing: False)
@@ -103,7 +104,8 @@ fn save_points(state: State) -> State {
             Error(reason) -> {
               case state.failing {
                 False ->
-                  log.println(
+                  log.write(
+                    log.Warning,
                     log_prefix,
                     "could not save resume points: "
                       <> reason
