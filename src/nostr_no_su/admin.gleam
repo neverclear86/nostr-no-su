@@ -353,18 +353,40 @@ fn set_preference_cookie(
   }
 }
 
-/// テーマか言語を切り替えた後に開くパス。`/` で始まる値を `/` で分け、空のセグメントを
-/// 除いてセグメントごとにパーセントエンコードしてから組み立て直すので、`//host` や
-/// `/\host` のような別のオリジンを指す形にならない。`/` で始まらない値はダッシュボードにする。
+/// テーマか言語を切り替えた後に開くパス。`/` で始まる値をパスとクエリーに分け、
+/// パスはセグメントごと、クエリーはキーと値ごとにパーセントエンコードしてから
+/// 組み立て直すので、`//host` や `/\host` のような別のオリジンを指す形にならない。
+/// クエリーを分解できないときは捨てる。`/` で始まらない値はダッシュボードにする。
 fn return_path(raw: String) -> String {
   case raw {
-    "/" <> path ->
-      string.split(path, "/")
-      |> list.filter(fn(segment) { segment != "" })
-      |> list.map(uri.percent_encode)
-      |> string.join("/")
-      |> string.append("/", _)
+    "/" <> rest -> {
+      let #(path, query) =
+        string.split_once(rest, "?") |> result.unwrap(#(rest, ""))
+      return_segments(path) <> return_query(query)
+    }
     _ -> "/"
+  }
+}
+
+/// パスの空のセグメントを除いてセグメントごとにパーセントエンコードし、
+/// `/` で始まるパスに組み立てる。
+fn return_segments(path: String) -> String {
+  string.split(path, "/")
+  |> list.filter(fn(segment) { segment != "" })
+  |> list.map(uri.percent_encode)
+  |> string.join("/")
+  |> string.append("/", _)
+}
+
+/// クエリーのうちキーが空の組を除き、キーと値ごとにパーセントエンコードして
+/// `?` 付きで返す。残る組が無いときと分解できないときは空文字列を返す。
+fn return_query(query: String) -> String {
+  case
+    uri.parse_query(query)
+    |> result.map(list.filter(_, fn(pair) { pair.0 != "" }))
+  {
+    Ok([_, ..] as pairs) -> "?" <> uri.query_to_string(pairs)
+    _ -> ""
   }
 }
 
