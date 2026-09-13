@@ -347,6 +347,9 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 取り消せたらダッシュボードへ 303 で戻し、承認済みのセッションに無い組（`SessionNotFound`）は承認・拒否の失敗と同じ 404 の通知ページ、バンカーの無応答（`NotAnswered`）は 503 の「変更を確認できませんでした」の通知ページにする。
 無応答をアカウントの変更と違って 202 にしないのは、取り消しは再送しても害が無い（反映済みなら 404 になる）からである。
 
+プラグインの再有効化（`POST /plugins/reenable`）は、結果を型 `admin.ReenableFailure` で受け取る。
+成功は 303、名前に一致するプラグインが無い（`PluginNotFound`）は 404、ランナーの無応答（`PluginNotAnswered`）は 503 にする。
+
 ## アカウントの登録と秘密鍵の再表示
 
 管理 UI は秘密鍵をサーバーに保持しない。
@@ -437,6 +440,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
+| POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
 | POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
 | POST | `/accounts/import` | nsec 入力による登録。完了ページで nsec を 1 回表示する |
@@ -448,6 +452,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 
 承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404 にする。
 承認、拒否、セッションの取り消しは、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
+再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
 `<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
 アカウント 1 件の操作は GET でも POST でも先にバンカーの一覧を引き、一覧に無い署名者は 404 にする。
