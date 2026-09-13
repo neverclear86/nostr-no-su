@@ -139,7 +139,10 @@ pub type Write {
   InsertPending(pending: Pending, replaced: List(String))
   /// `delete_pending`（拒否）。
   DeletePending(token: String)
-  /// `approve`（承認待ちの削除とセッションの挿入を 1 トランザクションで）。
+  /// `approve`（承認待ちの削除とセッションの挿入を 1 トランザクションで）。組が
+  /// すでに承認済みでも `session` は承認の時刻と承認待ちの `perms` を持つ。
+  /// `insert_session` は `ON CONFLICT DO NOTHING` なので、DB でも最初に開いた
+  /// ときの値が残り、メモリの値（`open_session` 参照）と揃う。
   ApprovePending(token: String, session: Session)
 }
 
@@ -293,6 +296,7 @@ pub fn pending(engine: Engine, now: Int) -> List(Pending) {
 }
 
 /// DB から読んだセッションと承認待ちで `sessions` と `pending` を置き換える。
+/// DB の型に依存しないよう、値はエンジンの型（`Session`・`Pending`）で受け取る。
 /// `accounts`、`seen`、`auth_url` は変えない。DB が正なので既存の値には足さず
 /// 置き換える。署名者が登録されていないセッションと承認待ちは、
 /// `remove_account` と揃えて読み飛ばす。失効した承認待ち（`expired`）も同じく
@@ -322,10 +326,9 @@ pub fn restore(
 }
 
 /// 承認待ちの接続要求を承認する。（署名者, クライアント）を承認済みにして、元の
-/// `connect` と同じ id の `ack` 応答イベントを返す。組がすでに承認済みでも
-/// メモリの `Session` は変えないが、書き込みの値は承認の時刻と承認待ちの `perms`
-/// を持つ `Session` を持つ（`ApprovePending` の Doc を参照）。token が不明、
-/// あるいは失効していれば理由を返す。
+/// `connect` と同じ id の `ack` 応答イベントを返す。書き込みの値は
+/// `ApprovePending`（組がすでに承認済みのときの値はその Doc を参照）。token が
+/// 不明、あるいは失効していれば理由を返す。
 pub fn approve(
   engine: Engine,
   token: String,
@@ -416,8 +419,8 @@ fn respond(
 
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
-/// `event.verify` で確かめてあり、エンジンは検証しない。状態を変えた場合に伴う
-/// DB への書き込みがあれば `Some` で返す（アクターが `account_store` へ書く）。
+/// `event.verify` で確かめてあり、エンジンは検証しない。状態の変更に伴う
+/// DB への書き込みがあれば `Some` で返す。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
@@ -589,11 +592,13 @@ fn execute(
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
     // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
     // 取り消しの後のクライアントを例外にしないため）。
-    "logout" ->
+    "logout" -> {
+      let ack = rpc.ok(request.id, "ack")
       case revoke(engine, signer, client_pk_hex) {
-        Ok(#(next, write)) -> #(next, rpc.ok(request.id, "ack"), Some(write))
-        Error(Nil) -> #(engine, rpc.ok(request.id, "ack"), None)
+        Ok(#(next, write)) -> #(next, ack, Some(write))
+        Error(Nil) -> #(engine, ack, None)
       }
+    }
     _ ->
       case dict.has_key(engine.sessions, #(signer, client_pk_hex)) {
         False -> #(
@@ -634,19 +639,14 @@ fn connect(
     True -> #(engine, rpc.ok(request.id, "ack"), None)
     False -> {
       let offered = connect_secret(request.params)
+      let perms = connect_perms(request.params)
       let offered_matches = case offered {
         Some(value) -> connection_secret.matches(secret, value)
         None -> False
       }
       case offered_matches {
         True -> {
-          let session =
-            new_session(
-              signer,
-              client_pk_hex,
-              connect_perms(request.params),
-              inputs.now,
-            )
+          let session = new_session(signer, client_pk_hex, perms, inputs.now)
           #(
             open_session(engine, session),
             rpc.ok(request.id, "ack"),
@@ -665,7 +665,7 @@ fn connect(
                     signer: signer,
                     client: client_pk_hex,
                     request_id: request.id,
-                    perms: connect_perms(request.params),
+                    perms: perms,
                     secret_mismatch: option.is_some(offered),
                     created_at: inputs.now,
                   ),

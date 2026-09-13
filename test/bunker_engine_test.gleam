@@ -1341,7 +1341,7 @@ pub fn reconnecting_an_approved_client_writes_nothing_test() {
     handle_with_write(state, connect_event(client, signer, "", 1002), 1002, 0)
   let assert Reply(_) = outcome2
   assert write2 == None
-  // secret が違っても、組が承認済みなら書き込みは起きない（決めたこと 5）
+  // secret が違っても、組が承認済みなら書き込みは起きない
   let #(state, outcome3, write3) =
     handle_with_write(
       state,
