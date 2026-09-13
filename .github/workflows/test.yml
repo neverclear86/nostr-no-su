@@ -6,6 +6,16 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
+# PR に push が続くと古い実行を取り消す。実行のグループは PR ごとに 1 つに
+# なる。main への push は squash マージが続くことがあり、取り消すと commit
+# に CI の結果が残らないので run ごとに別のグループにする。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,10 +38,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: erlef/setup-beam@v1
+        id: beam
         with:
           otp-version: "29"
           gleam-version: "1.17.0"
           rebar3-version: "3"
+      # 依存のソースとコンパイル済みの依存を戻す。鍵が src/ と test/ を含まないので
+      # 本体の成果物は除く（path は子を列挙しないと ! が効かないので erlang/* と書く）。
+      # 鍵が変われば作り直すので restore-keys は付けない。
+      - uses: actions/cache@v6
+        with:
+          path: |
+            build/packages
+            build/dev/erlang/*
+            !build/dev/erlang/nostr_no_su
+          key: gleam-build-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-gleam${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('manifest.toml', 'vendor/stratus/**') }}
       - run: gleam deps download
       # test/ もコンパイルするので、テストの warning もここで失敗する
       # （gleam test にはこのフラグが無い）。
@@ -48,6 +69,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+          cache: npm
       - run: npm ci
       - run: npm run build:css
       # 生成物をリポジトリに含めているので、描画のモジュール（src/nostr_no_su/admin/ の
@@ -89,10 +111,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: erlef/setup-beam@v1
+        id: beam
         with:
           otp-version: "29"
           gleam-version: "1.17.0"
           rebar3-version: "3"
+      # 依存のソースとコンパイル済みの依存を戻す。uses: のステップには working-directory
+      # が効かないので、path はリポジトリのルートからのパスで書く。鍵が変われば
+      # 作り直すので restore-keys は付けない。
+      - uses: actions/cache@v6
+        with:
+          path: |
+            plugins-src/event_logger/build/packages
+            plugins-src/event_logger/build/dev/erlang/*
+            !plugins-src/event_logger/build/dev/erlang/event_logger
+          key: gleam-build-event_logger-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-gleam${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/event_logger/manifest.toml') }}
       - run: gleam deps download
       # 影に入る側は本体の版で実行されるため、版がずれると読み込み時には何も
       # 起きず、実行時に undef で壊れる。ここで止めるのが唯一の自動検出点。
