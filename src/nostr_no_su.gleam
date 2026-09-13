@@ -240,10 +240,11 @@ pub fn account_store_operations(
   timeouts: account_store.Timeouts,
 ) -> bunker.Store {
   let db = pog.named_connection(pool)
+  let lock_db = pog.named_connection(lock_pool)
   bunker.Store(
     load: fn() {
       account_store.acquire_lock(
-        pog.named_connection(lock_pool),
+        lock_db,
         account_store.instance_lock_key,
         timeouts,
       )
