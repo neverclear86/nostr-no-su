@@ -62,6 +62,13 @@ tar の中の `contents.tar.gz` を展開し、hex への公開のときに Glea
 - 理由: 同じ文は `InitFailed` で呼び出し元に返る。nostr-no-su はそれを再接続の予告と一緒に 1 行で出すので、error の水準のままだと、試行ごとに `=ERROR REPORT====` の 2 行が重なる。Erlang の logger で抑えるには `logging` モジュール全体の水準を下げるしかなく、同じ `logging` パッケージを使う mist、glisten、wisp のエラーも消える。
 - 戻す条件: 上流の stratus がハンドシェイクの失敗を error の水準で出さなくなった版に上げるとき。
 
+### 0005 受信バッファに上限を設ける
+
+- ファイル: `patches/0005-receive-buffer-limit.patch`
+- 変更: `src/stratus.gleam` に `max_buffer_bytes`（4 MiB）を足し、`start` の `Data` の処理で、まだフレームにデコードしていないバイトがこれを超えたら、アクターを `stop_abnormal` で止める。上限はヘッダーを含むバイト数に掛かり、ペイロード長の上限ではない。
+- 理由: 上流は受信したバイトを `State` の `buffer` に上限なく溜める。gramps の `decode_many_frames` は、揃っていないフレームも不正なフレームも残りとして返すので、巨大な長さを宣言したフレームや不正なバイトを送るリレーが、プロセスのメモリを使い尽くしうる（nostr-no-su の #87）。止めたアクターは、nostr-no-su の `relay_connection` が張り直す。
+- 戻す条件: 上流の stratus が受信のバッファかフレーム長に上限を持つ版を hex に出し、その版に上げるとき。2026-09-13 の時点で hex の最新は 3.0.0 で、rawhat/stratus の main の `src/stratus.gleam` にも上限は無い。
+
 ## パッチを足す手順
 
 1. このディレクトリーの中のファイルを直し、直した箇所に `VENDORED PATCH (nostr-no-su):` で始まるコメントで変更と理由を書く。README のような文書は、0002 のように冒頭に注記を置く。Apache License 2.0 の 4 (b) が、改変したファイルに改変した旨を示すことを求めるためである。

@@ -12,6 +12,7 @@ import gleam/otp/actor
 import gleam/set
 import gleam/string
 import mist
+import nostr_no_su/app
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
@@ -19,6 +20,8 @@ import nostr_no_su/relay_client.{
   type SubscriptionState, type Subscriptions, Requested, Retried,
   SubscriptionState, Sync,
 }
+import nostr_no_su/relay_connection
+import stratus
 import support/signed_event
 
 /// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
@@ -357,21 +360,29 @@ type Relay {
   Relay(server: Pid, url: String)
 }
 
-/// `127.0.0.1` の OS が割り当てたポートで WebSocket サーバーを立てる。
-fn start_relay(frames: Subject(String)) -> Relay {
+/// `127.0.0.1` の OS が割り当てたポートで WebSocket サーバーを立てる。接続を
+/// 受け入れるたびに `on_connect` を、テキストフレームを受け取るたびに `on_text` を
+/// 呼ぶ。
+fn start_relay_with(
+  on_connect: fn() -> Nil,
+  on_text: fn(mist.WebsocketConnection, String) -> Nil,
+) -> Relay {
   let ports = process.new_subject()
   let assert Ok(started) =
     mist.new(fn(request) {
       mist.websocket(
         request: request,
-        handler: fn(state, received, _connection) {
+        handler: fn(state, received, connection) {
           case received {
-            mist.Text(text) -> process.send(frames, text)
+            mist.Text(text) -> on_text(connection, text)
             _ -> Nil
           }
           mist.continue(state)
         },
-        on_init: fn(_connection) { #(Nil, None) },
+        on_init: fn(_connection) {
+          on_connect()
+          #(Nil, None)
+        },
         on_close: fn(_state) { Nil },
       )
     })
@@ -383,6 +394,14 @@ fn start_relay(frames: Subject(String)) -> Relay {
     |> mist.start
   let assert Ok(port) = process.receive(ports, 2000)
   Relay(server: started.pid, url: "ws://127.0.0.1:" <> int.to_string(port))
+}
+
+/// `127.0.0.1` の OS が割り当てたポートで WebSocket サーバーを立てる。受け取った
+/// テキストフレームをテストへ転送する。
+fn start_relay(frames: Subject(String)) -> Relay {
+  start_relay_with(fn() { Nil }, fn(_connection, text) {
+    process.send(frames, text)
+  })
 }
 
 /// テストプロセスにリンクしたクライアントを、テストを巻き込まずに止める。
@@ -466,6 +485,91 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
   assert string.starts_with(frame, "[\"REQ\",\"bunker\",")
   assert process.receive(evaluations, 900) == Error(Nil)
   assert process.receive(frames, 0) == Error(Nil)
+
+  stop_client(client)
+  stop_relay(relay)
+}
+
+// --- 受信バッファの上限 ---
+
+/// REQ を受け取るたびに `bytes` バイトのバイナリフレームを送ってから `after` の
+/// テキストフレームを送るリレー。接続を受け入れるたびに `connections` へ知らせる。
+fn start_sending_relay(
+  connections: Subject(Nil),
+  bytes: Int,
+  after: String,
+) -> Relay {
+  start_relay_with(
+    fn() { process.send(connections, Nil) },
+    fn(connection, text) {
+      case string.starts_with(text, "[\"REQ\"") {
+        True -> {
+          // クライアントが上限を超えたフレームを受け取った直後に切ることがあり、
+          // 続く送信は失敗しうる。`let assert` にするとハンドラーが落ちて、テスト
+          // の出力にエラーが混ざる。
+          let _ = mist.send_binary_frame(connection, <<0:size(bytes)-unit(8)>>)
+          let _ = mist.send_text_frame(connection, after)
+          Nil
+        }
+        False -> Nil
+      }
+    },
+  )
+}
+
+/// 受信バッファの上限（`stratus.max_buffer_bytes`）を超えるフレームを送ると、
+/// 接続アクターが異常終了し、`relay_connection` が張り直す。
+pub fn a_frame_over_the_receive_limit_reconnects_test() {
+  let connections = process.new_subject()
+  let relay =
+    start_sending_relay(connections, stratus.max_buffer_bytes + 1, "[]")
+  let assert Ok(started) =
+    relay_connection.start(relay_connection.Settings(
+      name: process.new_name("receive_limit"),
+      relay: relay_client.label(relay.url),
+      connect: fn() {
+        app.open_websocket(
+          relay.url,
+          fn() { Ok([#(bunker, filter.new())]) },
+          fn(_event) { Nil },
+        )
+      },
+      on_connect: fn(_socket) { Nil },
+      on_disconnect: fn() { Nil },
+      reconnect_delay_ms: 100,
+    ))
+
+  assert process.receive(connections, 2000) == Ok(Nil)
+  assert process.receive(connections, 2000) == Ok(Nil)
+
+  process.unlink(started.pid)
+  process.kill(started.pid)
+  stop_relay(relay)
+}
+
+/// 上限の半分のフレームは受け取っても接続を保ち、続くイベントを届ける。
+pub fn a_frame_under_the_receive_limit_is_received_test() {
+  let connections = process.new_subject()
+  let sent = signed_event.new(1, "under the receive limit")
+  let relay =
+    start_sending_relay(
+      connections,
+      stratus.max_buffer_bytes / 2,
+      event_frame(sent),
+    )
+  let received = process.new_subject()
+  let assert Ok(client) =
+    relay_client.start(
+      relay.url,
+      fn() { Ok([#(bunker, filter.new())]) },
+      process.send(received, _),
+      relay_client.subscription_retry_delay_ms,
+    )
+
+  let assert Ok(verified) = process.receive(received, 2000)
+  assert verified == signed_event.verified(sent)
+  assert process.receive(connections, 0) == Ok(Nil)
+  assert process.receive(connections, 0) == Error(Nil)
 
   stop_client(client)
   stop_relay(relay)
