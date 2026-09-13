@@ -37,6 +37,11 @@ const pending_ttl_seconds = 600
 /// 承認待ちの一覧に無いトークンに同じ理由を出す。
 pub const approval_request_not_found = "unknown or expired approval request"
 
+/// `connect` で開くセッションか承認待ちを DB に書けなかったときに、同じ id で
+/// クライアントへ返すエラーの理由。書き込みの結果によらず同じ文にし、ストアの
+/// 理由は含めない。
+pub const connection_not_saved = "could not save the connection; try connecting again"
+
 /// リプレイ防止のために記憶するリクエスト id の件数。
 ///
 /// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
@@ -150,11 +155,29 @@ pub type Write {
 pub type Outcome {
   /// クライアントへ送り返す応答イベント。
   Reply(response: Event)
+  /// DB への書き込みが要る応答。書けたら `response` を送って `next` で続け、
+  /// 書けなかったら `on_failure` を送って `handle_event` の第 1 要素で続ける。
+  Persist(write: Write, next: Engine, response: Event, on_failure: Event)
   /// 処理済みのリクエスト。2 つ目のバンカーリレーから同じものが届いた場合など。
   /// 複数リレー構成では想定内なので、呼び出し側はログを出さない。
   Duplicate
   /// リクエストを破棄した。ログに出す理由を伴う。
   Ignore(reason: String)
+}
+
+/// リクエストを実行した結果（暗号化の前）。状態を変える実行は必ず書き込みを
+/// 伴う。
+type Execution {
+  /// 状態を変えずに返す応答。
+  Respond(response: rpc.Response)
+  /// 書き込みが要る応答。`next` は書けたときのエンジン、`on_failure` は書けな
+  /// かったときの応答。
+  Record(
+    write: Write,
+    next: Engine,
+    response: rpc.Response,
+    on_failure: rpc.Response,
+  )
 }
 
 /// 指定したアカウント群（それぞれの接続シークレット付き）を扱うエンジン。
@@ -419,16 +442,17 @@ fn respond(
 
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
-/// `event.verify` で確かめてあり、エンジンは検証しない。状態の変更に伴う
-/// DB への書き込みがあれば `Some` で返す。
+/// `event.verify` で確かめてあり、エンジンは検証しない。第 1 要素は受理した
+/// イベントの id だけを記録したエンジンで、セッションと承認待ちの変更は
+/// `Persist` の `next` に載せる。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
   inputs: Inputs,
-) -> #(Engine, Outcome, Option(Write)) {
+) -> #(Engine, Outcome) {
   let incoming = event.verified_event(verified)
   case accept(engine, incoming, inputs) {
-    Error(outcome) -> #(engine, outcome, None)
+    Error(outcome) -> #(engine, outcome)
     Ok(#(engine, account, secret)) ->
       handle_request(engine, account, secret, incoming, inputs)
   }
@@ -496,21 +520,21 @@ pub fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
   }
 }
 
-/// リクエストを復号・デコードし、暗号化した応答を組み立てる。
+/// リクエストを復号・デコードし、実行結果を暗号化した応答にする。
 fn handle_request(
   engine: Engine,
   account: Account,
   secret: ConnectionSecret,
   incoming: Event,
   inputs: Inputs,
-) -> #(Engine, Outcome, Option(Write)) {
+) -> #(Engine, Outcome) {
   let client_pk_hex = incoming.pubkey
   case decode_request(account, incoming) {
-    Error(reason) -> #(engine, Ignore(reason), None)
+    Error(reason) -> #(engine, Ignore(reason))
     Ok(#(conversation_key, request)) -> {
-      let #(engine, response, write) =
+      let execution =
         execute(engine, account, secret, client_pk_hex, request, inputs)
-      let reply =
+      let build = fn(response) {
         build_reply(
           account,
           conversation_key,
@@ -518,7 +542,8 @@ fn handle_request(
           response,
           inputs.now,
         )
-      #(engine, outcome(reply), write)
+      }
+      #(engine, outcome(execution, build))
     }
   }
 }
@@ -565,10 +590,22 @@ fn client_conversation_key(
   |> result.replace_error("cannot derive conversation key")
 }
 
-/// 組み立てた応答イベントを Outcome にする。失敗は送るものが無いので破棄する。
-fn outcome(reply: Result(Event, String)) -> Outcome {
-  case reply {
-    Ok(response) -> Reply(response)
+/// 実行の結果の応答を `build` でイベントにし、Outcome にする。応答を 1 つでも組め
+/// なければ送るものが無いので、書き込みごと破棄する。
+fn outcome(
+  execution: Execution,
+  build: fn(rpc.Response) -> Result(Event, String),
+) -> Outcome {
+  let built = case execution {
+    Respond(response) -> build(response) |> result.map(Reply)
+    Record(write:, next:, response:, on_failure:) -> {
+      use response <- result.try(build(response))
+      use on_failure <- result.map(build(on_failure))
+      Persist(write:, next:, response:, on_failure:)
+    }
+  }
+  case built {
+    Ok(outcome) -> outcome
     Error(reason) -> Ignore(reason)
   }
 }
@@ -586,7 +623,7 @@ fn execute(
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
-) -> #(Engine, rpc.Response, Option(Write)) {
+) -> Execution {
   let signer = pubkey_hex(account)
   case request.method {
     "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
@@ -595,22 +632,17 @@ fn execute(
     "logout" -> {
       let ack = rpc.ok(request.id, "ack")
       case revoke(engine, signer, client_pk_hex) {
-        Ok(#(next, write)) -> #(next, ack, Some(write))
-        Error(Nil) -> #(engine, ack, None)
+        // 書けなくても ack を返す（クライアントの後始末を止めないため）。
+        Ok(#(next, write)) ->
+          Record(write:, next:, response: ack, on_failure: ack)
+        Error(Nil) -> Respond(ack)
       }
     }
     _ ->
       case dict.has_key(engine.sessions, #(signer, client_pk_hex)) {
-        False -> #(
-          engine,
-          rpc.error(request.id, "unauthorized: send connect first"),
-          None,
-        )
-        True -> #(
-          engine,
-          execute_in_session(account, request, inputs.now),
-          None,
-        )
+        False ->
+          Respond(rpc.error(request.id, "unauthorized: send connect first"))
+        True -> Respond(execute_in_session(account, request, inputs.now))
       }
   }
 }
@@ -628,15 +660,14 @@ fn connect(
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
-) -> #(Engine, rpc.Response, Option(Write)) {
-  use <- bool.guard(points_elsewhere(connect_signer(request.params), signer), #(
-    engine,
-    rpc.error(request.id, "connect is addressed to another signer"),
-    None,
-  ))
+) -> Execution {
+  use <- bool.guard(
+    points_elsewhere(connect_signer(request.params), signer),
+    Respond(rpc.error(request.id, "connect is addressed to another signer")),
+  )
   let pair = #(signer, client_pk_hex)
   case dict.has_key(engine.sessions, pair) {
-    True -> #(engine, rpc.ok(request.id, "ack"), None)
+    True -> Respond(rpc.ok(request.id, "ack"))
     False -> {
       let offered = connect_secret(request.params)
       let perms = connect_perms(request.params)
@@ -644,20 +675,22 @@ fn connect(
         Some(value) -> connection_secret.matches(secret, value)
         None -> False
       }
+      let not_saved = rpc.error(request.id, connection_not_saved)
       case offered_matches {
         True -> {
           let session = new_session(signer, client_pk_hex, perms, inputs.now)
-          #(
-            open_session(engine, session),
-            rpc.ok(request.id, "ack"),
-            Some(InsertSession(session)),
+          Record(
+            write: InsertSession(session),
+            next: open_session(engine, session),
+            response: rpc.ok(request.id, "ack"),
+            on_failure: not_saved,
           )
         }
         False ->
           case engine.auth_url {
-            None -> #(engine, rpc.error(request.id, "invalid secret"), None)
+            None -> Respond(rpc.error(request.id, "invalid secret"))
             Some(auth_url) -> {
-              let #(engine, write) =
+              let #(next, write) =
                 record_pending(
                   engine,
                   Pending(
@@ -670,10 +703,11 @@ fn connect(
                     created_at: inputs.now,
                   ),
                 )
-              #(
-                engine,
-                rpc.auth_url(request.id, auth_url(inputs.token)),
-                Some(write),
+              Record(
+                write:,
+                next:,
+                response: rpc.auth_url(request.id, auth_url(inputs.token)),
+                on_failure: not_saved,
               )
             }
           }
