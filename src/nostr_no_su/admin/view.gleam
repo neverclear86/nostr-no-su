@@ -1,4 +1,4 @@
-//// 管理 UI のページ枠と、本体の他のモジュールに依存しない HTML の部品。lustre の
+//// 管理 UI のページ枠と、`admin/i18n` 以外の本体のモジュールに依存しない HTML の部品。lustre の
 //// 要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
 //// components は使わない。部品は `Element` を返し、HTML 文書の文字列にするのは
 //// `page` だけである。
