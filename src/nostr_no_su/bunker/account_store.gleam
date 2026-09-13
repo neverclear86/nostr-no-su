@@ -2,7 +2,8 @@
 ////
 //// SQL と pog の呼び出しだけを持ち、暗号化と行の検証は `vault` に任せる。nonce の
 //// 乱数はこの層で引く。DB へ送るのは暗号文だけで、平文もマスターキーも DB へは
-//// 出ない。
+//// 出ない。承認済みのセッション（`bunker_sessions`）と承認待ちの接続要求
+//// （`bunker_pending`）も同じ DB に保存し、`load` が同じトランザクションで読む。
 ////
 //// 失敗はすべて `StoreError` の値で返し、呼び出し側のプロセスを落とさない。
 //// pog と pgo が投げる例外も、クエリーの実行の入口（`execute`）で値に写す。
@@ -13,7 +14,8 @@
 //// テーブルの DDL は版つきの移行（`migrations`）として持ち、`load` のたびに
 //// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
 //// ビルドより新しければ `SchemaTooNew` を返す。移行は `bunker_accounts` のほかに、
-//// 監視の再開点のテーブル（`monitor_resume`）も作る。
+//// 監視の再開点のテーブル（`monitor_resume`）、セッションと承認待ちのテーブルも
+//// 作る。
 ////
 //// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
 //// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
@@ -90,6 +92,34 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
   updated_at timestamptz NOT NULL DEFAULT now()
 )"
 
+/// 承認済みのセッションを保存するテーブル。主キーは（signer, client）。`perms` は
+/// `connect` が要求した値をそのまま保存し、空文字列は要求なしを表す。`signer` は
+/// `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で参照するので、アカウントの
+/// 削除でその署名者のセッションも消える。時刻は Unix 秒。挿入では `created_at` と
+/// `last_used_at` に同じ値を入れる（`insert_session`）。
+pub const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
+  signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
+  client text NOT NULL,
+  perms text NOT NULL,
+  created_at bigint NOT NULL,
+  last_used_at bigint NOT NULL,
+  PRIMARY KEY (signer, client)
+)"
+
+/// 承認待ちの接続要求を保存するテーブル。`token` が主キーで、承認ページの URL に
+/// 入る値である。`signer` は `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で
+/// 参照するので、アカウントの削除でその署名者の承認待ちも消える。時刻は
+/// Unix 秒。長さの `CHECK` は置かない。
+pub const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
+  token text PRIMARY KEY,
+  signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
+  client text NOT NULL,
+  request_id text NOT NULL,
+  perms text NOT NULL,
+  secret_mismatch boolean NOT NULL,
+  created_at bigint NOT NULL
+)"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -104,10 +134,16 @@ pub type Migration {
 pub const migrations = [
   Migration(version: 1, statements: [create_accounts_table]),
   Migration(version: 2, statements: [create_monitor_resume_table]),
+  Migration(
+    version: 3,
+    statements: [create_sessions_table, create_pending_table],
+  ),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
-const create_version_table = "CREATE TABLE IF NOT EXISTS schema_version (
+/// `pub` にしているのは、版 2 の DB をテストで再現するため（`create_accounts_table`、
+/// `create_monitor_resume_table` と同じ扱い）。
+pub const create_version_table = "CREATE TABLE IF NOT EXISTS schema_version (
   version integer PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
 )"
@@ -122,8 +158,14 @@ const insert_version_sql = "INSERT INTO schema_version (version) VALUES ($1)"
 /// クライアントが期限で諦めた後に、サーバーのバックエンドがロックを待ち続けないため。
 const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 
-/// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。
-const lock_sql = "LOCK TABLE bunker_accounts IN SHARE MODE"
+/// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。PostgreSQL は列挙の
+/// 順に 1 つずつロックを取るので、書き手の順に合わせる。アカウントの削除
+/// （連鎖を含む）は下の 2 表に触る前に `bunker_accounts` の ROW EXCLUSIVE を持つので
+/// 先頭に置き、`approve` は `bunker_pending` の DELETE の後に `bunker_sessions` へ
+/// INSERT するので、その順に並べる。逆にすると、この読み込みが `bunker_sessions` を
+/// 持って `bunker_pending` を待ち、`approve` が `bunker_sessions` を待つデッドロックに
+/// なる。
+const lock_sql = "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
 
 /// セッション単位の advisory lock を取る（待たない）。
 const try_lock_sql = "SELECT pg_try_advisory_lock($1)"
@@ -145,6 +187,81 @@ const update_secret_sql = "UPDATE bunker_accounts SET encrypted_secret = $2 WHER
 
 /// ラベルの差し替え。
 const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
+
+/// セッションの一覧。テストの安定のための順。
+const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at
+FROM bunker_sessions
+ORDER BY created_at, signer, client"
+
+/// 承認待ちの一覧。テストの安定のための順。
+const select_pending_sql = "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at
+FROM bunker_pending
+ORDER BY created_at, token"
+
+/// セッションの挿入。同じ（signer, client）があれば何もしない。`last_used_at` には
+/// `created_at`（`$4`）と同じ値を入れる。
+const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at)
+VALUES ($1, $2, $3, $4, $4)
+ON CONFLICT (signer, client) DO NOTHING"
+
+/// セッションの削除。
+const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
+
+/// 承認待ちの挿入。同じ token があれば何もしない。
+const insert_pending_sql = "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (token) DO NOTHING"
+
+/// 承認待ちの削除。
+const delete_pending_sql = "DELETE FROM bunker_pending WHERE token = $1"
+
+/// 承認済みのセッション 1 件。
+pub type StoredSession {
+  StoredSession(
+    /// 署名者の公開鍵（16 進、小文字）。
+    signer: String,
+    /// クライアントの公開鍵（16 進、小文字）。
+    client: String,
+    /// 要求された権限。空文字列は要求なし。
+    perms: String,
+    /// 作成した Unix 秒。
+    created_at: Int,
+    /// 最後に使った Unix 秒。挿入では `created_at` と同じ値。
+    last_used_at: Int,
+  )
+}
+
+/// 承認待ちの接続要求 1 件。
+pub type StoredPending {
+  StoredPending(
+    /// 承認ページの URL に入るトークン。
+    token: String,
+    /// 署名者の公開鍵（16 進、小文字）。
+    signer: String,
+    /// クライアントの公開鍵（16 進、小文字）。
+    client: String,
+    /// 元の `connect` リクエストの id。
+    request_id: String,
+    /// 要求された権限。空文字列は要求なし。
+    perms: String,
+    /// secret が一致しなかったか。
+    secret_mismatch: Bool,
+    /// 作成した Unix 秒。
+    created_at: Int,
+  )
+}
+
+/// `load` が 1 つのトランザクションで読み込んだ全体。
+pub type Stored {
+  Stored(
+    /// 復号できたアカウントと、復号できずに飛ばした行。
+    accounts: vault.Loaded,
+    /// 承認済みのセッション（`created_at`、`signer`、`client` の順）。
+    sessions: List(StoredSession),
+    /// 承認待ちの接続要求（`created_at`、`token` の順）。
+    pending: List(StoredPending),
+  )
+}
 
 /// ストア操作の失敗。説明は値（鍵、secret、ラベル、暗号文）を含まない。
 pub type StoreError {
@@ -181,7 +298,7 @@ type TransactionFailure {
   CheckoutFailed
   /// 期限で接続が閉じられた、あるいは途中で接続が切れた。
   Interrupted
-  /// それ以外の例外（プールが無い、読み込みの中の panic など）。
+  /// それ以外の例外（プールが無い、`run` の中の panic など）。
   Failed
 }
 
@@ -271,15 +388,43 @@ fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
   |> execute(db)
 }
 
-/// スキーマを最新の版に移行してから全行を読み込み、復号できた行と飛ばした行に分ける。
+/// プールの接続 1 本で `run` をトランザクションとして実行し、`timeout_ms` の期限で
+/// 打ち切る（期限は pgo のプールが接続を閉じることで効くので、DB が応答しなくなっても
+/// 待ちはこの値に収まる）。`run` の中で同じプールへ送るクエリーはこの接続で実行
+/// される。`run` が `Error` を返したらロールバックし、その値をそのまま返す
+/// （`pool_transaction`）。期限で打ち切られたら `TimedOut`、接続を得られなければ
+/// `Unavailable`、それ以外の例外（プールが無い、`run` の中の panic など）は
+/// `QueryFailed("the transaction failed")` を返す。`pool` を名前で受け取るのは、
+/// 期限つきのトランザクションをプールの名前で開くためである。
+pub fn transaction(
+  pool: Name(pog.Message),
+  timeout_ms: Int,
+  run: fn(pog.Connection) -> Result(a, StoreError),
+) -> Result(a, StoreError) {
+  let db = pog.named_connection(pool)
+  pool_transaction(pool, timeout_ms, fn() { run(db) })
+  |> result.map_error(fn(failure) {
+    case failure {
+      CheckoutFailed -> Unavailable
+      Interrupted -> TimedOut
+      Failed -> QueryFailed("the transaction failed")
+    }
+  })
+  |> result.flatten
+}
+
+/// スキーマを最新の版に移行してから、アカウント、承認済みのセッション、承認待ちの
+/// 接続要求を読み込む。アカウントは復号できた行と飛ばした行に分ける
+/// （`vault.open_rows`）。3 つのうちどれかの読み込みが `Error` なら全体を `Error`
+/// にする。
 ///
-/// 一覧を読む前に `LOCK TABLE bunker_accounts IN SHARE MODE` を取る。SHARE は実行中の
-/// `INSERT` / `UPDATE` / `DELETE` が持つ ROW EXCLUSIVE と衝突するので、期限を過ぎた後も
-/// サーバー側で実行を続けている書き込みがあれば、その終了（コミットかロールバック）を
-/// 待ってから読む。READ COMMITTED の `SELECT` は文ごとのスナップショットで読むので、
-/// 待った書き込みの結果が見える。起動時の読み込みも同じ読み方にする。前のアクターが
-/// 書き込みの途中で終了した後に再起動したアクターが、その書き込みより先に読むのを
-/// 防ぐためである。
+/// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
+/// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の `INSERT` / `UPDATE` /
+/// `DELETE` が持つ ROW EXCLUSIVE と衝突するので、期限を過ぎた後もサーバー側で実行を
+/// 続けている書き込みがあれば、その終了（コミットかロールバック）を待ってから読む。
+/// READ COMMITTED の `SELECT` は文ごとのスナップショットで読むので、待った書き込みの
+/// 結果が見える。起動時の読み込みも同じ読み方にする。前のアクターが書き込みの途中で
+/// 終了した後に再起動したアクターが、その書き込みより先に読むのを防ぐためである。
 ///
 /// **残る窓**：書き込みの文がサーバーに届いてテーブルのロックを取るより先に、この
 /// ロックが取られた場合（クライアントの期限の直前に送った文が、まだ転送中か
@@ -289,21 +434,17 @@ fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
 /// 読み込みでは 712 件中 77 件）。窓の長さは、期限の時点での転送とサーバーの
 /// スケジューリングの遅れで決まる。
 ///
-/// 全体を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で打ち切る（期限は
-/// pgo のプールが接続を閉じることで効くので、DB が応答しなくなっても待ちはこの値に
-/// 収まる）。移行の文とロックの待ちもサーバー側で同じ値に抑える。期限で打ち切られたら
-/// `TimedOut`、接続を得られなければ `Unavailable` を返す。トランザクションの中の
-/// クエリーで `pog.execute` が例外を投げたら、発生箇所を持つ `Raised` を返す
-/// （`execute`）。記録された版がこのビルドより新しければ `SchemaTooNew` を返す
-/// （`ensure_schema`）。`pool` を名前で受け取るのは、期限つきのトランザクションを
-/// プールの名前で開くためである。
+/// 全体を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で打ち切る
+/// （`transaction`）。移行の文とロックの待ちもサーバー側で同じ値に抑える。
+/// トランザクションの中のクエリーで `pog.execute` が例外を投げたら、発生箇所を持つ
+/// `Raised` を返す（`execute`）。記録された版がこのビルドより新しければ
+/// `SchemaTooNew` を返す（`ensure_schema`）。
 pub fn load(
   pool: Name(pog.Message),
   key: MasterKey,
   timeouts: Timeouts,
-) -> Result(vault.Loaded, StoreError) {
-  let db = pog.named_connection(pool)
-  pool_transaction(pool, timeouts.load_ms, fn() {
+) -> Result(Stored, StoreError) {
+  transaction(pool, timeouts.load_ms, fn(db) {
     use _set <- result.try(
       pog.query(lock_timeout_sql)
       |> pog.parameter(pog.text(int.to_string(timeouts.load_ms)))
@@ -311,19 +452,27 @@ pub fn load(
     )
     use Nil <- result.try(ensure_schema(db))
     use _locked <- result.try(pog.query(lock_sql) |> execute(db))
-    pog.query(select_sql)
-    |> pog.returning(row_decoder())
-    |> execute(db)
-    |> result.map(fn(returned) { vault.open_rows(key, returned.rows) })
+    use accounts <- result.try(
+      pog.query(select_sql)
+      |> pog.returning(row_decoder())
+      |> execute(db),
+    )
+    use sessions <- result.try(
+      pog.query(select_sessions_sql)
+      |> pog.returning(session_decoder())
+      |> execute(db),
+    )
+    use pending <- result.try(
+      pog.query(select_pending_sql)
+      |> pog.returning(pending_decoder())
+      |> execute(db),
+    )
+    Ok(Stored(
+      accounts: vault.open_rows(key, accounts.rows),
+      sessions: sessions.rows,
+      pending: pending.rows,
+    ))
   })
-  |> result.map_error(fn(failure) {
-    case failure {
-      CheckoutFailed -> Unavailable
-      Interrupted -> TimedOut
-      Failed -> QueryFailed("the load transaction failed")
-    }
-  })
-  |> result.flatten
 }
 
 /// アカウントを 1 件追加する。
@@ -399,6 +548,102 @@ pub fn update_label(
   |> pog.parameter(pog.text(pubkey))
   |> pog.parameter(pog.text(label))
   |> execute_on_one_row(db, timeouts)
+}
+
+/// セッションを 1 件追加する。同じ（signer, client）の組がすでにあれば何もしない
+/// （2 インスタンスが並ぶ窓で、両方が同じ値を挿そうとする場合を吸収する）。
+/// `last_used_at` は `now` と同じ値で入れる。
+pub fn insert_session(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  signer signer: String,
+  client client: String,
+  perms perms: String,
+  now now: Int,
+) -> Result(Nil, StoreError) {
+  pog.query(insert_session_sql)
+  |> pog.parameter(pog.text(signer))
+  |> pog.parameter(pog.text(client))
+  |> pog.parameter(pog.text(perms))
+  |> pog.parameter(pog.int(now))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// セッションを 1 件取り消す。行が無くても `Ok`。
+pub fn delete_session(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  signer signer: String,
+  client client: String,
+) -> Result(Nil, StoreError) {
+  pog.query(delete_session_sql)
+  |> pog.parameter(pog.text(signer))
+  |> pog.parameter(pog.text(client))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// 承認待ちの接続要求を 1 件追加する。同じ `token` がすでにあれば何もしない
+/// （2 インスタンスが並ぶ窓を吸収する）。
+pub fn insert_pending(
+  db: pog.Connection,
+  pending: StoredPending,
+  timeouts: Timeouts,
+) -> Result(Nil, StoreError) {
+  pog.query(insert_pending_sql)
+  |> pog.parameter(pog.text(pending.token))
+  |> pog.parameter(pog.text(pending.signer))
+  |> pog.parameter(pog.text(pending.client))
+  |> pog.parameter(pog.text(pending.request_id))
+  |> pog.parameter(pog.text(pending.perms))
+  |> pog.parameter(pog.bool(pending.secret_mismatch))
+  |> pog.parameter(pog.int(pending.created_at))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// 承認待ちの接続要求を 1 件取り除く。行が無くても `Ok`。
+pub fn delete_pending(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  token token: String,
+) -> Result(Nil, StoreError) {
+  pog.query(delete_pending_sql)
+  |> pog.parameter(pog.text(token))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// 承認待ちの接続要求 `token` を承認する。1 トランザクションでその行を消し、
+/// `signer`、`client`、`perms`、`now` のセッションを追加する。承認の値の出どころは
+/// エンジンのメモリなので、消した行から読み返さない。`DELETE … RETURNING` で拾うと、
+/// 2 インスタンスが並ぶ窓で別のインスタンスが先に消していた場合にセッションを
+/// 作れなくなるためである。承認待ちの行が無くても追加する。
+pub fn approve(
+  pool: Name(pog.Message),
+  timeouts: Timeouts,
+  token token: String,
+  signer signer: String,
+  client client: String,
+  perms perms: String,
+  now now: Int,
+) -> Result(Nil, StoreError) {
+  transaction(pool, timeouts.write_ms, fn(db) {
+    use Nil <- result.try(delete_pending(db, timeouts, token: token))
+    insert_session(
+      db,
+      timeouts,
+      signer: signer,
+      client: client,
+      perms: perms,
+      now: now,
+    )
+  })
 }
 
 /// 削除の結果で、行が無かったこと（`NotRegistered`）を成功に写す。削除は行が無い
@@ -511,13 +756,14 @@ fn execute_on_one_row(
 }
 
 /// プールの接続 1 本で `run` をトランザクションとして実行し、`timeout_ms` の期限で
-/// 打ち切る。`run` の中で同じプールへ送るクエリーはこの接続で実行される。
+/// 打ち切る。`run` の中で同じプールへ送るクエリーはこの接続で実行される。`run` が
+/// `Error` を返したらロールバックする。
 @external(erlang, "nostr_no_su_ffi", "pool_transaction")
 fn pool_transaction(
   pool: Name(pog.Message),
   timeout_ms: Int,
-  run: fn() -> result,
-) -> Result(result, TransactionFailure)
+  run: fn() -> Result(a, e),
+) -> Result(Result(a, e), TransactionFailure)
 
 /// 暗号化 1 回ぶんの nonce。
 fn random_nonce() -> BitArray {
@@ -535,5 +781,41 @@ fn row_decoder() -> decode.Decoder(vault.Row) {
     label: label,
     encrypted_privkey: encrypted_privkey,
     encrypted_secret: encrypted_secret,
+  ))
+}
+
+/// `bunker_sessions` の 1 行を読むデコーダー。列の順序は `select_sessions_sql` と同じ。
+fn session_decoder() -> decode.Decoder(StoredSession) {
+  use signer <- decode.field(0, decode.string)
+  use client <- decode.field(1, decode.string)
+  use perms <- decode.field(2, decode.string)
+  use created_at <- decode.field(3, decode.int)
+  use last_used_at <- decode.field(4, decode.int)
+  decode.success(StoredSession(
+    signer:,
+    client:,
+    perms:,
+    created_at:,
+    last_used_at:,
+  ))
+}
+
+/// `bunker_pending` の 1 行を読むデコーダー。列の順序は `select_pending_sql` と同じ。
+fn pending_decoder() -> decode.Decoder(StoredPending) {
+  use token <- decode.field(0, decode.string)
+  use signer <- decode.field(1, decode.string)
+  use client <- decode.field(2, decode.string)
+  use request_id <- decode.field(3, decode.string)
+  use perms <- decode.field(4, decode.string)
+  use secret_mismatch <- decode.field(5, decode.bool)
+  use created_at <- decode.field(6, decode.int)
+  decode.success(StoredPending(
+    token:,
+    signer:,
+    client:,
+    request_id:,
+    perms:,
+    secret_mismatch:,
+    created_at:,
   ))
 }

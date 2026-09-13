@@ -336,6 +336,7 @@ pub fn account_store_operations(
       )
       |> result.try(fn(_locked) {
         account_store.load(pool, master_key, timeouts)
+        |> result.map(fn(stored) { stored.accounts })
       })
       |> halt_if_cannot_continue
       |> result.map_error(account_store.describe)

@@ -320,12 +320,12 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2]
+  assert recorded_versions(db) == [1, 2, 3]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (3)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (4)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 3, supported: 2))
+    == Error(account_store.SchemaTooNew(found: 4, supported: 3))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -354,6 +354,290 @@ pub fn postgres_resume_store_test() {
 
   let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 300)])
   assert resume_store.load(db, "wss://a") == Ok(Some(300))
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
+/// テーブルは無い）に版 3 の移行が適用でき、読み込んだ `sessions` と `pending` は
+/// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_migrates_a_version_two_database_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+
+  // 版 2 の DB を再現する。
+  postgres.run_statement(db, account_store.create_version_table)
+  postgres.run_statement(db, account_store.create_accounts_table)
+  postgres.run_statement(db, account_store.create_monitor_resume_table)
+  postgres.run_statement(
+    db,
+    "INSERT INTO schema_version (version) VALUES (1), (2)",
+  )
+
+  let assert Ok(loaded) =
+    account_store.load(pool, random_master_key(), generous)
+  assert recorded_versions(db) == [1, 2, 3]
+  assert loaded.sessions == []
+  assert loaded.pending == []
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// セッションと承認待ちの読み書きを一巡させる。空の DB への版 3 の適用、書いた値を
+/// 読み直すと同じ内容で戻ること、同じ主キーの 2 回の挿入がエラーにならないこと、
+/// `approve`、アカウントの削除でその署名者の行が消えることを確かめる。
+/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_bunker_state_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  bunker_state_round_trip(database_url)
+}
+
+fn bunker_state_round_trip(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let now = 1_700_000_000
+
+  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3] になる。
+  let assert Ok(empty) = account_store.load(pool, key, generous)
+  assert recorded_versions(db) == [1, 2, 3]
+  assert empty.sessions == []
+  assert empty.pending == []
+
+  // 2. A, B を登録し、それぞれにセッションと承認待ちを 1 件ずつ挿す。同じ引数の
+  // 挿入をもう一度呼んでも Ok（ON CONFLICT DO NOTHING）。
+  let a = random_entry("a")
+  let b = random_entry("b")
+  let a_pubkey = account.pubkey_hex(a.account)
+  let b_pubkey = account.pubkey_hex(b.account)
+  let assert Ok(Nil) = account_store.insert(db, key, a, generous)
+  let assert Ok(Nil) = account_store.insert(db, key, b, generous)
+
+  let pa =
+    account_store.StoredPending(
+      token: "token-a",
+      signer: a_pubkey,
+      client: "pending-client-a",
+      request_id: "req-a",
+      perms: "",
+      secret_mismatch: False,
+      created_at: now,
+    )
+  let pb =
+    account_store.StoredPending(
+      token: "token-b",
+      signer: b_pubkey,
+      client: "pending-client-b",
+      request_id: "req-b",
+      perms: "sign_event:1",
+      secret_mismatch: True,
+      created_at: now + 1,
+    )
+  let insert_a_and_b = fn() {
+    let assert Ok(Nil) =
+      account_store.insert_session(
+        db,
+        generous,
+        signer: a_pubkey,
+        client: "client-a",
+        perms: "",
+        now: now,
+      )
+    let assert Ok(Nil) =
+      account_store.insert_session(
+        db,
+        generous,
+        signer: b_pubkey,
+        client: "client-b",
+        perms: "sign_event:1",
+        now: now + 1,
+      )
+    let assert Ok(Nil) = account_store.insert_pending(db, pa, generous)
+    let assert Ok(Nil) = account_store.insert_pending(db, pb, generous)
+    Nil
+  }
+  insert_a_and_b()
+  // 同じ引数でもう一度呼んでも、ON CONFLICT DO NOTHING で Ok になる。
+  insert_a_and_b()
+
+  // 3. load の sessions が A, B の 2 件、pending が [pa, pb]。
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert loaded.sessions
+    == [
+      account_store.StoredSession(
+        signer: a_pubkey,
+        client: "client-a",
+        perms: "",
+        created_at: now,
+        last_used_at: now,
+      ),
+      account_store.StoredSession(
+        signer: b_pubkey,
+        client: "client-b",
+        perms: "sign_event:1",
+        created_at: now + 1,
+        last_used_at: now + 1,
+      ),
+    ]
+  assert loaded.pending == [pa, pb]
+
+  // 4. 行があるときの削除: A に 2 件目のセッションと承認待ちを挿してから消すと、
+  // load が手順 3 と同じになる。
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      generous,
+      signer: a_pubkey,
+      client: "client-a-2",
+      perms: "",
+      now: now + 2,
+    )
+  let pa2 =
+    account_store.StoredPending(
+      token: "token-a2",
+      signer: a_pubkey,
+      client: "pending-client-a2",
+      request_id: "req-a2",
+      perms: "",
+      secret_mismatch: False,
+      created_at: now + 2,
+    )
+  let assert Ok(Nil) = account_store.insert_pending(db, pa2, generous)
+  let assert Ok(Nil) =
+    account_store.delete_session(
+      db,
+      generous,
+      signer: a_pubkey,
+      client: "client-a-2",
+    )
+  let assert Ok(Nil) =
+    account_store.delete_pending(db, generous, token: pa2.token)
+  let assert Ok(after_row_delete) = account_store.load(pool, key, generous)
+  assert after_row_delete.sessions == loaded.sessions
+  assert after_row_delete.pending == loaded.pending
+
+  // 5. 行が無いときの削除も Ok。
+  let assert Ok(Nil) =
+    account_store.delete_session(
+      db,
+      generous,
+      signer: a_pubkey,
+      client: "client-a-2",
+    )
+  let assert Ok(Nil) =
+    account_store.delete_pending(db, generous, token: pa2.token)
+
+  // 6. approve: 承認待ちの行が消え、セッションが増える。
+  let pa3 =
+    account_store.StoredPending(
+      token: "token-a3",
+      signer: a_pubkey,
+      client: "client-a3",
+      request_id: "req-a3",
+      perms: "sign_event:0,sign_event:1",
+      secret_mismatch: False,
+      created_at: now + 3,
+    )
+  let assert Ok(Nil) = account_store.insert_pending(db, pa3, generous)
+  let assert Ok(Nil) =
+    account_store.approve(
+      pool,
+      generous,
+      token: pa3.token,
+      signer: a_pubkey,
+      client: pa3.client,
+      perms: pa3.perms,
+      now: now + 4,
+    )
+  let assert Ok(after_approve) = account_store.load(pool, key, generous)
+  assert after_approve.pending == [pa, pb]
+  assert after_approve.sessions
+    == [
+      account_store.StoredSession(
+        signer: a_pubkey,
+        client: "client-a",
+        perms: "",
+        created_at: now,
+        last_used_at: now,
+      ),
+      account_store.StoredSession(
+        signer: b_pubkey,
+        client: "client-b",
+        perms: "sign_event:1",
+        created_at: now + 1,
+        last_used_at: now + 1,
+      ),
+      account_store.StoredSession(
+        signer: a_pubkey,
+        client: pa3.client,
+        perms: pa3.perms,
+        created_at: now + 4,
+        last_used_at: now + 4,
+      ),
+    ]
+
+  // 7. アカウントの削除: A のセッションと承認待ちが消え、B だけ残る。
+  let assert Ok(Nil) = account_store.delete(db, a_pubkey, generous)
+  let assert Ok(after_account_delete) = account_store.load(pool, key, generous)
+  assert after_account_delete.sessions
+    == [
+      account_store.StoredSession(
+        signer: b_pubkey,
+        client: "client-b",
+        perms: "sign_event:1",
+        created_at: now + 1,
+        last_used_at: now + 1,
+      ),
+    ]
+  assert after_account_delete.pending == [pb]
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// トランザクションの中の `run` が `Error` を返すと、先に行った書き込みが残らない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_transaction_rolls_back_on_error_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  transaction_rolls_back_on_error(database_url)
+}
+
+fn transaction_rolls_back_on_error(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+
+  let entry = random_entry("rollback")
+  let pubkey = account.pubkey_hex(entry.account)
+  // 移行を実行してから、外部キーの対象になるアカウントを 1 件登録する。
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let outcome =
+    account_store.transaction(pool, generous.write_ms, fn(db) {
+      use Nil <- result.try(account_store.insert_session(
+        db,
+        generous,
+        signer: pubkey,
+        client: "client",
+        perms: "",
+        now: 1,
+      ))
+      Error(account_store.QueryFailed("forced"))
+    })
+  assert outcome == Error(account_store.QueryFailed("forced"))
+
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert loaded.sessions == []
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -489,10 +773,13 @@ fn random_entry(label: String) -> StoredAccount {
 }
 
 /// 読み込みの結果に、期待したアカウントが同じ内容で入っていることを確かめる。
-fn assert_same_entry(loaded: vault.Loaded, expected: StoredAccount) -> Nil {
+fn assert_same_entry(
+  loaded: account_store.Stored,
+  expected: StoredAccount,
+) -> Nil {
   let pubkey = account.pubkey_hex(expected.account)
   let assert Ok(found) =
-    list.find(loaded.accounts, fn(entry) {
+    list.find(loaded.accounts.accounts, fn(entry) {
       account.pubkey_hex(entry.account) == pubkey
     })
   assert account.privkey(found.account) == account.privkey(expected.account)
@@ -501,18 +788,21 @@ fn assert_same_entry(loaded: vault.Loaded, expected: StoredAccount) -> Nil {
 }
 
 /// 読み込めた行のうち、指定した pubkey のもの。
-fn loaded_pubkeys(loaded: vault.Loaded, own: List(String)) -> List(String) {
-  loaded.accounts
+fn loaded_pubkeys(
+  loaded: account_store.Stored,
+  own: List(String),
+) -> List(String) {
+  loaded.accounts.accounts
   |> list.map(fn(entry) { account.pubkey_hex(entry.account) })
   |> list.filter(list.contains(own, _))
 }
 
 /// 飛ばした行のうち、指定した pubkey のものと、その理由。
 fn skipped_reasons(
-  loaded: vault.Loaded,
+  loaded: account_store.Stored,
   own: List(String),
 ) -> List(#(String, vault.RowError)) {
-  loaded.skipped
+  loaded.accounts.skipped
   |> list.filter(fn(entry) { list.contains(own, entry.pubkey) })
   |> list.map(fn(entry) { #(entry.pubkey, entry.reason) })
 }
