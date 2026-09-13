@@ -23,6 +23,7 @@ TEST_DATABASE_URL=postgres://… gleam test   # 統合テストに Postgres が�
 gleam format --check src test dev
 npm ci && npm run build:css && git diff --exit-code -- priv/static/admin.css
 sh dev/check_vendor_stratus.sh
+sh dev/check_env_example.sh
 cd plugins-src/event_logger && gleam build --warnings-as-errors && TEST_DATABASE_URL=postgres://… gleam test && gleam format --check src test
 ```
 

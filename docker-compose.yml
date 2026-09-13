@@ -1,55 +1,23 @@
 services:
   nostr-no-su:
     build: .
-    # ${...} の値は .env（.env.example を複製して作る）で変える。変数の意味は
-    # README の「環境変数」にある。秘密（ACCOUNT_MASTER_KEY と ADMIN_PASSWORD）の
-    # 値はこのファイルに書かないこと。${...} の変数を足す、消す、既定値を変える
-    # ときは、.env.example の行も合わせること。
+    # 変数の意味は README の「環境変数」の表にある。${...} の値は .env
+    # （.env.example を複製して作る）で変える。秘密（ACCOUNT_MASTER_KEY と
+    # ADMIN_PASSWORD）の値はこのファイルに書かないこと。${...} の変数を足す、
+    # 消す、既定値を変えるときは、.env.example の行も合わせ、
+    # sh dev/check_env_example.sh で確かめること。
     environment:
-      # 監視するリレー URL（カンマ区切り）。空にすると監視を無効にする。
       RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
-      # バンカーが購読・応答に使うリレー（カンマ区切り）。既定は RELAY_URL と
-      # 同じ。NIP-46 専用リレー（relay.nsec.app など）もここには指定できる。
       BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
       PUBKEYS: ${PUBKEYS:-}
-      # バンカーのアカウント（暗号化した秘密鍵と接続 secret）の保存先。既定は
-      # 下の同梱 postgres サービスを指す。イベント保存の
-      # PLUGIN_EVENT_LOGGER_DATABASE_URL とは別の設定である。
       DATABASE_URL: ${DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
-      # 秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト）。
-      # `openssl rand -hex 32` で作り、値を直接書かず追跡しない .env ファイルに
-      # 置くこと。**失うと保存した全アカウントの鍵を失う。** 空なら理由を
-      # 1 行出して終了する（下の restart を参照）。
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
-      # プラグイン固有の設定は PLUGIN_<NAME>_<KEY> で渡す。compose の
-      # environment: は明示的な列挙なので、自分のプラグインの分はここに足すこと。
-      # 監視したイベントの保存先。**DATABASE_URL は廃止し、外部プラグイン
-      # event_logger の設定になった**（PLUGIN_<NAME>_<KEY> の規則）。プラグインを
-      # plugins/event_logger へ置いて初めて保存が有効になる。置き方は
-      # plugins-src/event_logger/README.md を参照。空にしても無効化にはならず
-      # （キーごと届かないため）設定不足として拒否されるので、保存をやめるなら
-      # プラグインを置かないこと。下の postgres サービスの資格情報と一致させる
-      # （DATABASE_URL も同じ）。
       PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://nostr:nostr@postgres:5432/nostr_no_su}
-      # file_logger の出力先。/plugins は読み取り専用なのでそこには書けない。
       PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
-      # 管理 UI の待ち受けポート。空にすると管理 UI を無効にする。その場合は
-      # イメージの HEALTHCHECK（/healthz を叩く）もチェックを省略する。
       ADMIN_PORT: ${ADMIN_PORT-8080}
-      # コンテナー内では全インターフェースで待ち受ける必要がある。そうしないと
-      # 下で公開したポートから届かない。露出はホスト側のループバックに限定する
-      # ことで抑える。
       ADMIN_BIND: 0.0.0.0
-      # 管理 UI の Basic 認証のパスワード（ユーザー名は常に "admin"）。値を直接
-      # 書かず .env に置くこと。空なら理由を 1 行出して終了する（下の restart を
-      # 参照）。ADMIN_PORT を空にして管理 UI を無効にしたときは要らない。
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      # 管理 UI の公開 URL。クライアントへ auth_url として渡す承認ページの URL を
-      # 組み立てるのに使う。既定は http://localhost:<ADMIN_PORT>。別のホストや
-      # プロキシー越しに管理 UI へ到達する構成では明示的に設定する。
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
-      # 外部プラグインを探すディレクトリー。空にすると読み込みを無効にする。
-      # ここに置いた BEAM は本体と同じ VM で動く。信頼できるものだけを置くこと。
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
