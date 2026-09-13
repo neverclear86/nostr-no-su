@@ -1,3 +1,4 @@
+import gleam/dict
 import gleam/dynamic/decode
 import gleam/int
 import gleam/json
@@ -9,7 +10,7 @@ import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
-  account_for, connect_body, decrypt_response, request_event,
+  account_for, connect_body, decrypt_response, request_body, request_event,
 }
 import support/signed_event
 
@@ -108,6 +109,30 @@ fn connect(
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
   handle(state, connect_event(client, signer, secret_arg, now), now)
+}
+
+/// `perms` を指定した `connect` リクエストを送り、書き込みの値も返す。
+fn connect_with_perms(
+  state: engine.Engine,
+  client: Account,
+  signer: Account,
+  secret_arg: String,
+  perms: String,
+  now: Int,
+) -> #(engine.Engine, engine.Outcome, Option(engine.Write)) {
+  let body =
+    request_body(
+      "c1",
+      "connect",
+      "[\""
+        <> account.pubkey_hex(signer)
+        <> "\",\""
+        <> secret_arg
+        <> "\",\""
+        <> perms
+        <> "\"]",
+    )
+  handle_with_write(state, request_event(client, signer, body, now), now, 0)
 }
 
 /// 正しいシークレットには、クライアント宛の署名済み応答で ack を返す。
@@ -1213,4 +1238,356 @@ pub fn has_account_reflects_the_registered_signers_test() {
     engine.remove_account(new_engine(), signer),
     signer,
   )
+}
+
+// --- 書き込みの値 ---
+
+/// secret が一致した `connect` は、挿入するセッションを書き込みの値として返す。
+pub fn connect_with_the_secret_writes_the_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, _outcome, write) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:1",
+      1000,
+    )
+  assert write
+    == Some(
+      engine.InsertSession(engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "sign_event:1",
+        created_at: 1000,
+        last_used_at: 1000,
+      )),
+    )
+}
+
+/// secret 無しの `connect` は、登録する承認待ちを書き込みの値として返す。
+pub fn connect_for_approval_writes_the_pending_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, _outcome, write) =
+    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
+  assert write
+    == Some(
+      engine.InsertPending(
+        pending: engine.Pending(
+          token: token,
+          signer: account.pubkey_hex(signer),
+          client: account.pubkey_hex(client),
+          request_id: "c1",
+          perms: "sign_event:1",
+          secret_mismatch: False,
+          created_at: 1000,
+        ),
+        replaced: [],
+      ),
+    )
+}
+
+/// secret が一致しない `connect` の承認待ちは `secret_mismatch: True` を持つ。
+pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(_state, _outcome, write) =
+    connect_with_perms(auth_engine(), client, signer, "wrong", "", 1000)
+  let assert Some(engine.InsertPending(pending:, replaced: _)) = write
+  assert pending.secret_mismatch
+}
+
+/// 承認前に同じ組が再 `connect` すると、古い token を `replaced` に載せる。
+pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "", 1000)
+  let #(_state, outcome, write) =
+    engine.handle_event(
+      state,
+      signed_event.verified(request_event(
+        client,
+        signer,
+        connect_body(signer, "", "c2"),
+        1001,
+      )),
+      engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
+    )
+  let assert Reply(_) = outcome
+  let assert Some(engine.InsertPending(pending: _, replaced:)) = write
+  assert replaced == [token]
+}
+
+/// すでに承認済みの組への再 `connect` は、secret の一致を問わず書き込みを
+/// 返さず、セッションの値も変えない。
+pub fn reconnecting_an_approved_client_writes_nothing_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, secret, 1000)
+  let #(state, outcome1, write1) =
+    handle_with_write(
+      state,
+      connect_event(client, signer, secret, 1001),
+      1001,
+      0,
+    )
+  let assert Reply(_) = outcome1
+  assert write1 == None
+  let #(state, outcome2, write2) =
+    handle_with_write(state, connect_event(client, signer, "", 1002), 1002, 0)
+  let assert Reply(_) = outcome2
+  assert write2 == None
+  // secret が違っても、組が承認済みなら書き込みは起きない（決めたこと 5）
+  let #(state, outcome3, write3) =
+    handle_with_write(
+      state,
+      connect_event(client, signer, "wrong", 1003),
+      1003,
+      0,
+    )
+  let assert Reply(_) = outcome3
+  assert write3 == None
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
+      ),
+    ]
+}
+
+/// `logout` は削除するセッションを書き込みの値として返す。セッションが無い
+/// 組の `logout` は書き込みを返さない。
+pub fn logout_writes_the_session_deletion_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(_state, outcome, write) =
+    handle_with_write(
+      state,
+      request_event(
+        client,
+        signer,
+        "{\"id\":\"l1\",\"method\":\"logout\"}",
+        1001,
+      ),
+      1001,
+      0,
+    )
+  let assert Reply(_) = outcome
+  assert write
+    == Some(engine.DeleteSession(
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    ))
+
+  let #(_state, outcome2, write2) =
+    handle_with_write(
+      new_engine(),
+      request_event(
+        client,
+        signer,
+        "{\"id\":\"l1\",\"method\":\"logout\"}",
+        1000,
+      ),
+      1000,
+      0,
+    )
+  let assert Reply(_) = outcome2
+  assert write2 == None
+}
+
+/// すでに承認済みの組を、その組の承認待ちが残ったまま承認しても、メモリの
+/// `Session` は最初に開いたときの値のままになる。
+pub fn approving_an_approved_client_keeps_the_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "b", 1000)
+  let #(state, _, _) =
+    connect_with_perms(state, client, signer, secret, "a", 1000)
+  let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "a",
+        created_at: 1000,
+        last_used_at: 1000,
+      ),
+    ]
+}
+
+/// `approve` は、承認の時刻と承認待ちの `perms` を持つセッションを書き込みの
+/// 値として返す。
+pub fn approve_writes_the_approval_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
+  let assert Ok(#(_state, _ack, write)) = engine.approve(state, token, 1001)
+  assert write
+    == engine.ApprovePending(
+      token: token,
+      session: engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "sign_event:1",
+        created_at: 1001,
+        last_used_at: 1001,
+      ),
+    )
+}
+
+/// `deny` は、削除する承認待ちの token を書き込みの値として返す。
+pub fn deny_writes_the_pending_deletion_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  let assert Ok(#(_state, _denied, write)) = engine.deny(state, token, 1001)
+  assert write == engine.DeletePending(token)
+}
+
+/// `revoke` は、削除するセッションを書き込みの値として返す。
+pub fn revoke_writes_the_session_deletion_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let assert Ok(#(_state, write)) =
+    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
+  assert write
+    == engine.DeleteSession(
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+}
+
+// --- 復元 ---
+
+/// `restore` したセッションのクライアントは、`connect` なしで `sign_event`
+/// できる。
+pub fn restored_session_can_sign_without_connect_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let session =
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "",
+      created_at: 500,
+      last_used_at: 500,
+    )
+  let state = engine.restore(new_engine(), [session], [], 1000)
+  let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
+  let body =
+    "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  let assert Ok(signed) =
+    parse_result_event(decrypt_response(client, signer, response))
+  assert signed.pubkey == account.pubkey_hex(signer)
+}
+
+/// `restore` した承認待ちは、元の `request_id` の `ack` で承認できる。
+pub fn restored_pending_can_be_approved_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let pending =
+    engine.Pending(
+      token: "restored-token",
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 900,
+    )
+  let state = engine.restore(auth_engine(), [], [pending], 1000)
+  let assert Ok(#(_state, ack, _write)) =
+    engine.approve(state, "restored-token", 1000)
+  assert decrypt_response(client, signer, ack)
+    == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// `restore` は、失効した承認待ちを読み飛ばす。境界のちょうど 600 秒前は残る。
+pub fn restore_skips_expired_pending_test() {
+  let signer = account_for(signer_key)
+  let client = account.pubkey_hex(account_for(client_key))
+  let kept =
+    engine.Pending(
+      token: "kept",
+      signer: account.pubkey_hex(signer),
+      client: client,
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 1400,
+    )
+  let dropped = engine.Pending(..kept, token: "dropped", created_at: 1399)
+  let state = engine.restore(new_engine(), [], [kept, dropped], 2000)
+  assert dict.keys(state.pending) == ["kept"]
+}
+
+/// `restore` は、登録されていない署名者のセッションと承認待ちを読み飛ばす。
+pub fn restore_skips_unregistered_signers_test() {
+  let stranger = account.pubkey_hex(account_for(other_signer_key))
+  let client = account.pubkey_hex(account_for(client_key))
+  let session =
+    engine.Session(
+      signer: stranger,
+      client: client,
+      perms: "",
+      created_at: 1000,
+      last_used_at: 1000,
+    )
+  let pending =
+    engine.Pending(
+      token: "t",
+      signer: stranger,
+      client: client,
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 1000,
+    )
+  let state = engine.restore(new_engine(), [session], [pending], 1000)
+  assert engine.sessions(state) == []
+  assert engine.pending(state, 1000) == []
+}
+
+/// `restore` は既存の `sessions` と `pending` を読んだ値で置き換える。`seen`
+/// は変わらないので、置き換え前と同じリクエストの再送は重複として扱われる。
+pub fn restore_replaces_sessions_and_pending_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let request = connect_event(client, signer, secret, 1000)
+  let #(state, first) = handle(auth_engine(), request, 1000)
+  let assert Reply(_) = first
+  let state =
+    connect_for_approval(
+      state,
+      account_for(other_client_key),
+      signer,
+      "tok-x",
+      1000,
+    )
+  assert engine.sessions(state) != []
+  assert engine.pending(state, 1000) != []
+
+  let state = engine.restore(state, [], [], 1000)
+  assert engine.sessions(state) == []
+  assert engine.pending(state, 1000) == []
+
+  // seen は変わらないので、置き換え前と同じイベントの再送は重複として扱う
+  let #(_state, replayed) = handle(state, request, 1000)
+  assert replayed == Duplicate
 }
