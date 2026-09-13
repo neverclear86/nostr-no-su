@@ -160,13 +160,7 @@ pub fn interpret_keeps_a_large_notice_on_one_line_test() {
 /// CLOSED の理由は改行を含む制御文字を空白に置き換えて正規化するが、契機に積む id は
 /// 照合に使うため正規化しない生の値のままにする。
 pub fn interpret_sanitizes_the_reason_of_a_closed_subscription_test() {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("sub\nx"),
-      json.string("bye\n[bunker] forged"),
-    ])
-    |> json.to_string
+  let closed = closed_frame("sub\nx", "bye\n[bunker] forged")
 
   assert relay_client.interpret(closed)
     == Synchronise(
@@ -203,12 +197,7 @@ pub fn interpret_turns_an_ok_into_an_acknowledgement_test() {
 /// AUTH は `Authenticate` にし、challenge は照合の契機の id と同じく正規化しない
 /// （署名に使うため）。
 pub fn interpret_turns_an_auth_into_authenticate_test() {
-  let auth =
-    json.preprocessed_array([
-      json.string("AUTH"),
-      json.string("c1\n[bunker] forged"),
-    ])
-    |> json.to_string
+  let auth = auth_frame("c1\n[bunker] forged")
 
   assert relay_client.interpret(auth)
     == relay_client.Authenticate("c1\n[bunker] forged")
@@ -216,13 +205,7 @@ pub fn interpret_turns_an_auth_into_authenticate_test() {
 
 /// CLOSED は照合の契機を返し、それ以外のメッセージは返さない。
 pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("bunker"),
-      json.string("rate-limited: slow down"),
-    ])
-    |> json.to_string
+  let closed = closed_frame("bunker", "rate-limited: slow down")
   assert relay_client.handle_text(
       "test",
       closed,
@@ -266,6 +249,16 @@ fn auth_frame(challenge: String) -> String {
   |> json.to_string
 }
 
+/// リレーからの CLOSED を購読 id と理由で組み立てた JSON フレーム。
+fn closed_frame(subscription_id: String, reason: String) -> String {
+  json.preprocessed_array([
+    json.string("CLOSED"),
+    json.string(subscription_id),
+    json.string(reason),
+  ])
+  |> json.to_string
+}
+
 /// AUTH は受け口があるときだけ challenge を渡し、得たイベントを `send` で送る。
 /// 受け口が無い、または署名を得られないときは `send` に何も届かない。
 pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
@@ -288,6 +281,7 @@ pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
     == None
   assert process.receive(challenges, 0) == Ok("c1")
   assert process.receive(sent, 0) == Ok(message.Auth(signed))
+  assert process.receive(sent, 0) == Error(Nil)
 
   assert relay_client.handle_text(
       "test",
@@ -914,13 +908,7 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
 /// `REQ` で始まるテキストを受けるたびに `frames` へ転送し、その購読を CLOSED で
 /// 閉じるリレー。
 fn start_relay_closing_subscriptions(frames: Subject(String)) -> Relay {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("bunker"),
-      json.string("rate-limited: slow down"),
-    ])
-    |> json.to_string
+  let closed = closed_frame("bunker", "rate-limited: slow down")
   start_relay_with(fn() { Nil }, fn(connection, text) {
     case string.starts_with(text, "[\"REQ\"") {
       True -> {
@@ -961,16 +949,8 @@ pub fn a_closed_subscription_is_resubscribed_test() {
 /// `REQ` で始まるテキストのたびに AUTH の challenge を送り、続けて `auth-required`
 /// で CLOSED にするリレー。受けたテキストはすべて `frames` へ転送する。
 fn start_relay_requiring_auth(frames: Subject(String)) -> Relay {
-  let auth =
-    json.preprocessed_array([json.string("AUTH"), json.string("c1")])
-    |> json.to_string
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("bunker"),
-      json.string("auth-required: sign in"),
-    ])
-    |> json.to_string
+  let auth = auth_frame("c1")
+  let closed = closed_frame("bunker", "auth-required: sign in")
   start_relay_with(fn() { Nil }, fn(connection, text) {
     process.send(frames, text)
     case string.starts_with(text, "[\"REQ\"") {
