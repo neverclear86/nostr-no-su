@@ -36,7 +36,7 @@ npm run build:css  # assets/admin.css から priv/static/admin.css を作る
 ```sh
 PREVIEW_PORT=18461 gleam run -m admin_preview                          # 端末 1（終了しない）
 npx playwright-core install chromium                                   # 端末 2。初回だけ
-PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # 26 画面を 1280px と 375px、ライトとダークで撮る
+PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # 41 画面を 1280px と 375px、ライトとダークで撮る
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本語の画面を撮る
 ```
 

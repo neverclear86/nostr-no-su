@@ -10,8 +10,9 @@
 // CHROMIUM に chromium の実行ファイルを渡すと、playwright-core が既定で探すものの代わりに使う。
 // 応答の状態コードが画面ごとの期待値と違うか、応答が HTML でない画面があれば、撮り終えた後にその一覧を出して
 // 終了コード 1 で終える。
-// テーマの POST はコンテキストに cookie を残すので、以降の撮影に影響しないよう末尾に置き、
+// テーマと言語の POST はコンテキストに cookie を残すので、以降の撮影に影響しないよう末尾に置き、
 // 最後に system（cookie を消す）を送る。
+// copy: "manual" は navigator.clipboard を消してから押す。
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
@@ -81,6 +82,9 @@ const shots = [
   { name: "36-theme-dark", url: `${base}/theme`, form: { theme: "dark", return: "/" } },
   { name: "37-theme-light", url: `${base}/theme`, form: { theme: "light", return: "/" } },
   { name: "38-theme-system", url: `${base}/theme`, form: { theme: "system", return: "/" } },
+  { name: "39-dashboard-copy-selected", url: `${base}/`, copy: "manual" },
+  { name: "40-language-ja", url: `${base}/language`, form: { language: "ja", return: "/" } },
+  { name: "41-language-system", url: `${base}/language`, form: { language: "system", return: "/" } },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
@@ -129,12 +133,19 @@ async function prepare(page, shot) {
   }
 }
 
-// 最初のコピーのボタンを押し、コピーの欄の囲みに data-copied が付いたかを返す。付いた表示は
-// 2 秒で消えるので、付いたらすぐに撮る。
-async function copy(page) {
+// 最初のコピーのボタンを押し、コピーの欄の囲みに data-copied（manual なら data-selected）が
+// 付いたかを返す。manual なら押す前に navigator.clipboard を消し、書けない状態を再現する。
+// 付いた表示は 2 秒で消える（data-selected は消えない）ので、付いたらすぐに撮る。
+async function copy(page, manual) {
+  if (manual) {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { value: undefined });
+    });
+  }
   await page.locator('button[data-action="copy"]').first().click();
+  const attribute = manual ? "data-selected" : "data-copied";
   return page
-    .locator("[data-copied]")
+    .locator(`[${attribute}]`)
     .first()
     .waitFor({ timeout: 1000 })
     .then(() => true, () => false);
@@ -161,7 +172,10 @@ try {
       for (const shot of shots) {
         const response = await open(page, shot);
         await prepare(page, shot);
-        const copied = shot.copy ? ` copied=${await copy(page)}` : "";
+        const copyLabel = shot.copy === "manual" ? "selected" : "copied";
+        const copied = shot.copy
+          ? ` ${copyLabel}=${await copy(page, shot.copy === "manual")}`
+          : "";
         const file = `${out}/${shot.name}-${viewport.name}-${colorScheme}.png`;
         const mask = shot.mask ? [page.locator(shot.mask)] : [];
         // animations: "disabled" は、ボタンの色の遷移を終わった状態にしてから撮る。
