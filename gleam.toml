@@ -1,5 +1,5 @@
 name = "nostr_no_su"
-version = "1.0.0"
+version = "0.0.0"
 description = "Nostr bunker (NIP-46) and utility server on the BEAM"
 repository = { type = "github", user = "neverclear86", repo = "nostr-no-su" }
 

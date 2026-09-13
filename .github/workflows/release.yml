@@ -1,0 +1,47 @@
+name: release
+
+# vX.Y.Z のタグの push で、イメージを ghcr.io/<owner>/<repo> に公開する。
+# テストは再実行しないので、CI が通った main のコミットにだけタグを切る（CONTRIBUTING.md の「リリース」）。
+# packages: write を持つので、action はコミット SHA で固定し、版をコメントに添える。
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+  # GITHUB_TOKEN で ghcr に push するのに要る。
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      # 版を上げ忘れたタグで、中身と名前の違うイメージを公開しないように先に止める。
+      - run: sh dev/check_release_version.sh "$GITHUB_REF_NAME"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # v0.1.0 から 0.1.0、0.1、latest を付ける。0.x の間は minor が破壊的変更を
+          # 含むので、major だけのタグ（0）は付けない。
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
