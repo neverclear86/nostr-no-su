@@ -1,8 +1,9 @@
 //// 監視の購読の再開点を Postgres の `monitor_resume` に保存する。
 ////
 //// テーブルは本体の移行（`account_store.migrations` の版 2）で作るので、バンカーの
-//// 読み込みが 1 回成功した後に使う（`dedup/resume` の設計判断 9）。クエリーは
-//// `account_store.execute` を通し、例外も値で返す。
+//// 読み込みが 1 回成功した後に使う（`docs/architecture.md` の「監視の購読」と
+//// 「アカウントの読み込み」の節）。クエリーは `account_store.execute` を通し、
+//// 例外も値で返す。
 
 import gleam/dynamic/decode
 import gleam/list

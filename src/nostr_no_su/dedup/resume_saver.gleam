@@ -49,8 +49,9 @@ pub fn supervised(
 }
 
 /// アクターを起動する。周期のタイマーは名前の無い自分の subject に送るため、
-/// 名前付き subject へのタイマーが再起動後のアクターに届く問題
-/// （`docs/architecture.md` の「名前なしの subject」の節）を避ける。
+/// 名前付き subject へのタイマーが再起動後のアクターに届く問題（`docs/architecture.md`
+/// の「アカウントの読み込み」の節にある、再試行を名前なしの subject へ予約する
+/// 理由と同じ）を避ける。
 pub fn start(
   dedup: Name(dedup.Msg),
   save: fn(List(#(String, Int))) -> Result(Nil, String),
