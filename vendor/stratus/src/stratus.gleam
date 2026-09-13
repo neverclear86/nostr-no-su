@@ -528,12 +528,11 @@ pub fn supervised(builder: Builder(state, user_message)) {
   supervision.worker(fn() { start(builder) })
 }
 
-// VENDORED PATCH (nostr-no-su): the Text, Binary and Pong branches of
-// handle_frame all called the user loop and moved its result into the
-// internal Next type in the same ~30 lines (the upstream code even carries a
-// `// TODO:  de-dupe this` comment on the duplication). Pulling that into one
-// function lets the pong branch reuse it instead of duplicating it a third
-// time.
+// VENDORED PATCH (nostr-no-su): the Text and Binary branches of handle_frame
+// called the user loop and moved its result into the internal Next type in
+// the same ~30 lines (the upstream code even carries a `// TODO:  de-dupe
+// this` comment on the duplication). Pulling that into one function lets the
+// new pong branch reuse it instead of duplicating it a third time.
 fn run_user_loop(
   builder: Builder(user_state, user_message),
   state: State(user_state, user_message),

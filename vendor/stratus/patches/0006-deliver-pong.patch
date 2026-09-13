@@ -1,5 +1,5 @@
 diff --git a/src/stratus.gleam b/src/stratus.gleam
-index 2a8cac3..bf35c4b 100644
+index 2a8cac3..1a6f0c3 100644
 --- a/src/stratus.gleam
 +++ b/src/stratus.gleam
 @@ -171,6 +171,11 @@ pub type Message(user_message) {
@@ -14,16 +14,15 @@ index 2a8cac3..bf35c4b 100644
  }
  
  pub opaque type Builder(state, user_message) {
-@@ -523,6 +528,51 @@ pub fn supervised(builder: Builder(state, user_message)) {
+@@ -523,6 +528,50 @@ pub fn supervised(builder: Builder(state, user_message)) {
    supervision.worker(fn() { start(builder) })
  }
  
-+// VENDORED PATCH (nostr-no-su): the Text, Binary and Pong branches of
-+// handle_frame all called the user loop and moved its result into the
-+// internal Next type in the same ~30 lines (the upstream code even carries a
-+// `// TODO:  de-dupe this` comment on the duplication). Pulling that into one
-+// function lets the pong branch reuse it instead of duplicating it a third
-+// time.
++// VENDORED PATCH (nostr-no-su): the Text and Binary branches of handle_frame
++// called the user loop and moved its result into the internal Next type in
++// the same ~30 lines (the upstream code even carries a `// TODO:  de-dupe
++// this` comment on the duplication). Pulling that into one function lets the
++// new pong branch reuse it instead of duplicating it a third time.
 +fn run_user_loop(
 +  builder: Builder(user_state, user_message),
 +  state: State(user_state, user_message),
@@ -66,7 +65,7 @@ index 2a8cac3..bf35c4b 100644
  fn handle_frame(
    builder: Builder(user_state, user_message),
    state: State(user_state, user_message),
-@@ -532,76 +582,10 @@ fn handle_frame(
+@@ -532,76 +581,10 @@ fn handle_frame(
    case frame {
      DataFrame(TextFrame(payload: data)) -> {
        let assert Ok(str) = bit_array.to_string(data)
@@ -145,7 +144,7 @@ index 2a8cac3..bf35c4b 100644
      }
      Control(PingFrame(payload)) -> {
        let mask = Some(<<0:unit(8)-size(4)>>)
-@@ -610,8 +594,11 @@ fn handle_frame(
+@@ -610,8 +593,11 @@ fn handle_frame(
        let _ = transport.send(conn.transport, conn.socket, frame)
        continue(state)
      }
