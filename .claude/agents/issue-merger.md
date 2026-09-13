@@ -12,7 +12,7 @@ disallowedTools: Agent
 
 ## 確かめること（すべて `gh` と `git` の出力を根拠にする）
 
-最初に `gh pr view <PR> -R $R --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、何もせずに status を merged、マージのコミットを `mergeCommit.oid` にして返す。
+最初に `gh pr view <PR> -R $R --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、マージはせずに「マージ」の節の後片付け（作業ツリーの削除、`fetch --prune`、issue が閉じたかの確認）だけを行い、status を merged、マージのコミットを `mergeCommit.oid` にして返す。
 
 ```sh
 R=neverclear86/nostr-no-su

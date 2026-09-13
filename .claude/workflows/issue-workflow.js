@@ -221,7 +221,7 @@ ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、�
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
   implement: (e, issue, postUrl) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
 - 土台: origin/main の ${e.base}
-- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあればそれを取り出して続きから進め、PR がすでにあれば新しく作らずに push して本文を直す）
+- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
