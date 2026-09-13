@@ -396,8 +396,8 @@ fn icon(class: String, path: String) -> Element(msg) {
 
 /// 表示中の項目のチェック。表示中でない項目にも同じ大きさの見えない枠を置き、文字の
 /// 位置を揃える。
-fn check_icon(visible: Bool) -> Element(msg) {
-  let class = case visible {
+fn check_icon(shown: Bool) -> Element(msg) {
+  let class = case shown {
     True -> "size-4"
     False -> "invisible size-4"
   }
