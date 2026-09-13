@@ -16,7 +16,6 @@ import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import pog
@@ -27,9 +26,6 @@ const log_prefix = "main"
 /// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
 /// 件数（正確な上限は `dedup` を参照）。
 const dedup_capacity = 4096
-
-/// 生成する管理 UI パスワードのバイト数。
-const admin_password_bytes = 16
 
 /// バンカーの購読が現在時刻からどれだけ遡るか。切断していた間に届いたリクエストを
 /// 取りこぼさないための猶予。クライアントは数十秒で応答を諦めるため、これより古い
@@ -54,7 +50,7 @@ type Startup {
 
 /// 設定されたリレーとアカウントのスーパービジョンツリーを起動し、以降は待機
 /// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
-/// バンカーを起動できない設定なら、理由を 1 行出して終了コード 1 で終了する。
+/// バンカーか管理 UI を起動できない設定なら、理由を 1 行出して終了コード 1 で終了する。
 pub fn main() -> Nil {
   ensure_ssl_started()
   case startup(config.load()) {
@@ -77,13 +73,15 @@ pub fn main() -> Nil {
 /// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
-/// バンカーを起動できない設定なら、プラグインの読み込みより前にその理由を返す。
+/// バンカーか管理 UI を起動できない設定なら、プラグインの読み込みより前にその
+/// 理由を返す。
 ///
 /// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
 /// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
 /// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Result(Startup, String) {
-  use #(bunker, bunker_notes) <- result.map(bunker_spec(loaded))
+  use #(bunker, bunker_notes) <- result.try(bunker_spec(loaded))
+  use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins()
   let #(external, plugin_notes) =
     plugin_loader.load_all(
@@ -93,7 +91,6 @@ fn startup(loaded: Config) -> Result(Startup, String) {
     )
   let specs = plugin_specs(list.append(builtin, external))
   let #(monitor, monitor_notes) = monitor_spec(loaded)
-  let #(admin, admin_notes) = admin_spec(loaded)
   Startup(
     spec: app.Spec(
       plugins: specs,
@@ -288,39 +285,24 @@ fn bunker_store(
   }
 }
 
-/// 管理 UI の仕様。`ADMIN_PORT` が空なら黙って無効にし、値が不正なときは理由を
-/// 報告してから無効にする。
-fn admin_spec(loaded: Config) -> #(Option(app.Admin), List(String)) {
-  case loaded.admin_port {
-    config.Disabled -> #(None, [
-      log.line(admin.log_prefix, "ADMIN_PORT is empty; admin UI disabled"),
-    ])
-    config.Invalid(reason) -> #(None, [
-      log.line(admin.log_prefix, reason <> "; admin UI disabled"),
-    ])
-    config.Listen(port) -> {
-      let #(password, notes) = admin_password(loaded)
-      #(
-        Some(app.Admin(bind: loaded.admin_bind, port: port, password: password)),
-        notes,
+/// 管理 UI の仕様と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、値が不正な
+/// ときは理由を報告してから無効にする。待ち受けるのに `ADMIN_PASSWORD` が無ければ、
+/// その理由を返す。
+fn admin_spec(
+  loaded: Config,
+) -> Result(#(Option(app.Admin), List(String)), String) {
+  case loaded.admin_ui {
+    config.MissingPassword(reason) -> Error(reason)
+    config.Disabled ->
+      Ok(
+        #(None, [
+          log.line(admin.log_prefix, "ADMIN_PORT is empty; admin UI disabled"),
+        ]),
       )
-    }
-  }
-}
-
-/// 管理 UI のパスワード。未設定なら起動ごとに生成して報告する。
-fn admin_password(loaded: Config) -> #(String, List(String)) {
-  case loaded.admin_password {
-    Some(password) -> #(password, [])
-    None -> {
-      let generated = random.hex(admin_password_bytes)
-      #(generated, [
-        log.line(
-          admin.log_prefix,
-          "generated password for user \"admin\": " <> generated,
-        ),
-      ])
-    }
+    config.Invalid(reason) ->
+      Ok(#(None, [log.line(admin.log_prefix, reason <> "; admin UI disabled")]))
+    config.Listen(port:, password:) ->
+      Ok(#(Some(app.Admin(bind: loaded.admin_bind, port:, password:)), []))
   }
 }
 

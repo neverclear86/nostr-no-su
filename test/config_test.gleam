@@ -178,31 +178,63 @@ pub fn plugin_env_drops_empty_values_test() {
   assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH") == Error(Nil)
 }
 
+/// テスト用の管理パスワード。
+const test_password = "test-admin-password"
+
+/// 指定した `ADMIN_PORT` と `ADMIN_PASSWORD` で読み込んだ管理 UI の設定。`None` の
+/// 変数は未設定にする。
+fn admin_ui_for(
+  port: Option(String),
+  password: Option(String),
+) -> config.AdminUi {
+  use <- with_optional_env("ADMIN_PORT", port)
+  use <- with_optional_env("ADMIN_PASSWORD", password)
+  config.load().admin_ui
+}
+
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
-pub fn admin_port_test() {
-  assert config_without("ADMIN_PORT").admin_port == config.Listen(8080)
-  assert config_with([#("ADMIN_PORT", "9000")]).admin_port
-    == config.Listen(9000)
-  assert config_with([#("ADMIN_PORT", " 9000 ")]).admin_port
-    == config.Listen(9000)
+pub fn admin_ui_port_test() {
+  assert admin_ui_for(None, Some(test_password))
+    == config.Listen(8080, test_password)
+  assert admin_ui_for(Some("9000"), Some(test_password))
+    == config.Listen(9000, test_password)
+  assert admin_ui_for(Some(" 9000 "), Some(test_password))
+    == config.Listen(9000, test_password)
   // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
-  assert config_with([#("ADMIN_PORT", "65535")]).admin_port
-    == config.Listen(65_535)
-  assert config_with([#("ADMIN_PORT", "")]).admin_port == config.Disabled
+  assert admin_ui_for(Some("65535"), Some(test_password))
+    == config.Listen(65_535, test_password)
+  assert admin_ui_for(Some(""), Some(test_password)) == config.Disabled
 }
 
 /// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
 /// 検証しないと待ち受け開始時に badarg でクラッシュする。
-pub fn admin_port_rejects_invalid_values_test() {
-  let assert config.Invalid(_) = admin_port_for("not-a-port")
-  let assert config.Invalid(_) = admin_port_for("0")
-  let assert config.Invalid(_) = admin_port_for("-1")
-  let assert config.Invalid(_) = admin_port_for("65536")
+pub fn admin_ui_rejects_invalid_ports_test() {
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("not-a-port"), Some(test_password))
+  let assert config.Invalid(_) = admin_ui_for(Some("0"), Some(test_password))
+  let assert config.Invalid(_) = admin_ui_for(Some("-1"), Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("65536"), Some(test_password))
 }
 
-/// 指定した `ADMIN_PORT` を設定して読み込んだ結果。
-fn admin_port_for(raw: String) -> config.AdminPort {
-  config_with([#("ADMIN_PORT", raw)]).admin_port
+/// 管理 UI を待ち受けるのに `ADMIN_PASSWORD` が未設定か空なら、起動を中止する
+/// 理由を返す。空文字列も未設定として扱うのは、docker compose が未設定の変数を
+/// 空文字列として渡すため。
+pub fn admin_ui_requires_a_password_when_listening_test() {
+  let missing =
+    config.MissingPassword(
+      "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",
+    )
+  assert admin_ui_for(None, None) == missing
+  assert admin_ui_for(Some("9000"), None) == missing
+  assert admin_ui_for(Some("9000"), Some("")) == missing
+}
+
+/// 管理 UI を待ち受けない構成（空の `ADMIN_PORT`、不正な `ADMIN_PORT`）では
+/// `ADMIN_PASSWORD` を求めない。
+pub fn admin_ui_without_a_listener_needs_no_password_test() {
+  assert admin_ui_for(Some(""), None) == config.Disabled
+  let assert config.Invalid(_) = admin_ui_for(Some("not-a-port"), None)
 }
 
 /// `ADMIN_BIND` は未設定ならループバックのみ。ページに secret が載るため、外部へ
@@ -229,12 +261,17 @@ pub fn admin_base_url_test() {
 pub fn auth_url_base_test() {
   // 空文字列は未設定として扱われるため、`ADMIN_BASE_URL` を明示的に外せる。
   let from_port =
-    config_with([#("ADMIN_PORT", "9000"), #("ADMIN_BASE_URL", "")])
+    config_with([
+      #("ADMIN_PORT", "9000"),
+      #("ADMIN_PASSWORD", test_password),
+      #("ADMIN_BASE_URL", ""),
+    ])
   assert config.auth_url_base(from_port) == Some("http://localhost:9000")
 
   let from_base_url =
     config_with([
       #("ADMIN_PORT", "9000"),
+      #("ADMIN_PASSWORD", test_password),
       #("ADMIN_BASE_URL", "https://bunker.example"),
     ])
   assert config.auth_url_base(from_base_url) == Some("https://bunker.example")
@@ -253,9 +290,8 @@ fn test_config(pubkeys: List(String)) -> config.Config {
     account_store: config.AccountStoreUnavailable("DATABASE_URL is not set"),
     plugin_dir: None,
     plugin_env: dict.new(),
-    admin_port: config.Disabled,
+    admin_ui: config.Disabled,
     admin_bind: "127.0.0.1",
-    admin_password: None,
     admin_base_url: None,
   )
 }

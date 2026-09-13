@@ -40,8 +40,9 @@ services:
       # 下で公開したポートから届かない。露出はホスト側のループバックに限定する
       # ことで抑える。
       ADMIN_BIND: 0.0.0.0
-      # 任意。未設定なら起動ごとに乱数で生成してログに出す。ユーザー名は常に
-      # "admin"。
+      # 管理 UI の Basic 認証のパスワード（ユーザー名は常に "admin"）。値を直接
+      # 書かず .env に置くこと。空なら理由を 1 行出して終了する（下の restart を
+      # 参照）。ADMIN_PORT を空にして管理 UI を無効にしたときは要らない。
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 管理 UI の公開 URL。クライアントへ auth_url として渡す承認ページの URL を
       # 組み立てるのに使う。既定は http://localhost:<ADMIN_PORT>。別のホストや

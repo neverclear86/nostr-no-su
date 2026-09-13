@@ -20,7 +20,7 @@ COPY --from=build --chown=nostr:nostr /app /app
 USER nostr
 # 管理 UI の /healthz は認証なしで応答する。`ADMIN_PORT=` として管理 UI を無効に
 # した構成では待ち受けが無いため、チェック自体を省略して成功扱いにする。空文字列を
-# 無効の指定として扱うのは `config.admin_port` と同じ意味論で、`-` の既定値展開に
+# 無効の指定として扱うのは `config.admin_ui` と同じ意味論で、`-` の既定値展開に
 # しているのは「未設定なら 8080」を再現するため。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD sh -c 'port="${ADMIN_PORT-8080}"; [ -z "$port" ] \
