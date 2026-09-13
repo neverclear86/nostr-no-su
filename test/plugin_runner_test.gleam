@@ -211,6 +211,22 @@ pub fn record_appends_the_stacktrace_to_the_log_only_test() {
   assert !string.contains(line, "my_plugin")
 }
 
+/// 無効化されたプラグインは再有効化で `Running` に戻り、捨てた件数を報告する。
+pub fn reenable_returns_a_disabled_plugin_to_running_test() {
+  assert plugin_runner.reenable(Disabled(reason: "error:badarg", dropped: 12))
+    == #(
+      Running,
+      Some("re-enabled by the operator; dropped 12 events while disabled"),
+    )
+}
+
+/// `Disabled` 以外はそのままで、何も報告しない。
+pub fn reenable_leaves_other_states_test() {
+  assert plugin_runner.reenable(Running) == #(Running, None)
+  assert plugin_runner.reenable(Overloaded(dropped: 3))
+    == #(Overloaded(dropped: 3), None)
+}
+
 /// 長い文字列は省略記号を付けて切る。
 pub fn truncate_caps_long_text_test() {
   let text = string.repeat("a", 20)
@@ -239,6 +255,41 @@ pub fn crashing_plugin_is_disabled_and_stays_alive_test() {
   assert string.length(reason) <= 123
   assert dropped == 7
   assert process.is_alive(runner)
+}
+
+/// 再有効化するとランナーは `Running` に戻り、イベントを再び処理する。プロセスは
+/// 無効化の前後で同じままである。
+pub fn a_reenabled_runner_handles_events_again_test() {
+  let handled = process.new_subject()
+  let name =
+    start_runner(
+      fn(incoming: Event) {
+        case incoming.id {
+          "bad" -> panic as "boom"
+          id -> process.send(handled, id)
+        }
+      },
+      Limits(..limits, max_failures: 3),
+    )
+  let assert Ok(runner_before) = process.named(name)
+  let targets = [plugin_runner.target("runner_test", name)]
+  list.each(list.repeat(Nil, 3), fn(_unit) {
+    plugin_runner.dispatch(targets, test_event("bad"))
+  })
+  let assert Some(Disabled(..)) = plugin_runner.status(name)
+
+  assert plugin_runner.request_reenable(name) == Some(Nil)
+  assert plugin_runner.status(name) == Some(Running)
+  assert process.named(name) == Ok(runner_before)
+
+  plugin_runner.dispatch(targets, test_event("ok"))
+  assert process.receive(handled, 1000) == Ok("ok")
+}
+
+/// 名前にランナーが居なければ再有効化の要求も応答が無い。
+pub fn request_reenable_without_a_runner_is_none_test() {
+  let name = process.new_name("test_plugin_runner")
+  assert plugin_runner.request_reenable(name) == None
 }
 
 /// ワーカーの終了理由は短い 1 行に整えられる。FFI のラッパーが例外クラスと理由

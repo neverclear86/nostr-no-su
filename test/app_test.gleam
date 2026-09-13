@@ -8,6 +8,7 @@ import gleam/otp/actor
 import gleam/otp/system
 import gleam/result
 import gleam/string
+import nostr_no_su/admin
 import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
@@ -896,6 +897,36 @@ pub fn disabled_plugin_keeps_the_others_running_test() {
   deliver_and_expect(deliver, seen, event_labels("after", 5), 2000)
   assert process.named(crashing) == Ok(runner_before)
   stop_tree(tree)
+}
+
+/// 管理 UI の再有効化は名前でランナーを引き、無効化されたプラグインを
+/// `Running` に戻す。ランナーのプロセスは不変である。
+pub fn reenable_plugin_finds_the_runner_by_name_test() {
+  let reports = process.new_subject()
+  let seen = process.new_subject()
+  let crashing = process.new_name("test_plugin_crashing")
+  let specs = [
+    crashing_spec(crashing, plugin_runner.default_limits),
+    forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+  ]
+  let tree = start_plugins_tree(reports, process.new_name("test_dedup"), specs)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(runner_before) = process.named(crashing)
+
+  deliver_and_expect(deliver, seen, event_labels("crash", 20), 2000)
+  let assert Some(plugin_runner.Disabled(..)) = plugin_runner.status(crashing)
+
+  assert app.reenable_plugin(specs, "crashing") == Ok(Nil)
+  assert plugin_runner.status(crashing) == Some(plugin_runner.Running)
+  assert process.named(crashing) == Ok(runner_before)
+  stop_tree(tree)
+}
+
+/// 名前に一致するプラグインが無ければ `PluginNotFound` を返す。
+pub fn reenable_plugin_with_an_unknown_name_is_not_found_test() {
+  assert app.reenable_plugin([], "missing")
+    == Error(admin.PluginNotFound("plugin not found"))
 }
 
 /// 決して戻らないプラグインがいても、他のプラグインは待たされない。遅い側は

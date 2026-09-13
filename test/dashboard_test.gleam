@@ -104,6 +104,24 @@ pub fn japanese_states_are_translated_test() {
   })
 }
 
+/// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を
+/// hidden 欄で送る。
+pub fn only_disabled_plugins_have_a_reenable_button_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  let forms =
+    string.split(body, "action=\"/plugins/reenable\"")
+    |> list.length
+  assert forms == 2
+  assert string.contains(
+    body,
+    "action=\"/plugins/reenable\" method=\"post\"><input name=\"name\" type=\"hidden\" value=\"c\">",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, states()),
+    "再有効化",
+  )
+}
+
 /// テーマと言語のドロップダウンは、それぞれ表示中の項目に `aria-current` と `menu-active` と
 /// 見えるチェックを付け、それ以外の項目はその値を POST で送るボタンにする。言語名はその言語
 /// 自身の文字で出す。
