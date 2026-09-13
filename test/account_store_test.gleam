@@ -647,42 +647,21 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
-/// テストのクライアントから署名者宛の `connect`（secret 無し）を検証済みイベント
+/// テストのクライアントから署名者宛の、本文 `body` のリクエストを検証済みイベント
 /// にする。`bunker.Incoming` の入力に使う。
-fn connect_event(
+fn client_request(
   client: account.Account,
   signer: account.Account,
-  id: String,
+  body: String,
 ) -> event.Verified {
   let assert Ok(verified) =
     event.verify(nip46_client.request_event(
       client,
       signer,
-      nip46_client.connect_body(signer, "", id),
+      body,
       time.now_seconds(),
     ))
   verified
-}
-
-/// `bunker.pending` の 1 件を、対応する DB の行として直接書き込む。#220 の間は
-/// `Incoming` の書き込みが DB に届かないので、承認・拒否の前にこれで補う
-/// （実装プランの決めたこと 4）。
-fn insert_pending_row(db: pog.Connection, entry: engine.Pending) -> Nil {
-  let assert Ok(Nil) =
-    account_store.insert_pending(
-      db,
-      account_store.StoredPending(
-        token: entry.token,
-        signer: entry.signer,
-        client: entry.client,
-        request_id: entry.request_id,
-        perms: entry.perms,
-        secret_mismatch: entry.secret_mismatch,
-        created_at: entry.created_at,
-      ),
-      generous,
-    )
-  Nil
 }
 
 /// `StoredSession` から作成・最終利用時刻を除いた組。行の内容だけを比べるために
@@ -693,9 +672,10 @@ fn session_tuple(
   #(session.signer, session.client, session.perms)
 }
 
-/// 実際の Postgres に対する統合テスト。承認・拒否・取り消しが成功したときだけ
-/// `account_store` の行が書かれる（`start_bunker` の経路）。`TEST_DATABASE_URL`
-/// があるときだけ実行する。CI では未設定なら失敗する。
+/// 実際の Postgres に対する統合テスト。`connect`（セッションと承認待ち、
+/// 再登録）、`logout`、承認・拒否・取り消しが成功したときだけ `account_store` の
+/// 行が書かれる（`start_bunker` の経路）。`TEST_DATABASE_URL` があるときだけ
+/// 実行する。CI では未設定なら失敗する。
 pub fn postgres_bunker_session_writes_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   bunker_session_writes(database_url)
@@ -706,7 +686,6 @@ fn bunker_session_writes(database_url: String) -> Nil {
   let admin = pog.named_connection(postgres.start_pool(database_url, None))
   postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
   let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
   let key = random_master_key()
   // 移行してから、書き込みが実際のストアの操作を使うアクターを起動する。
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
@@ -716,13 +695,26 @@ fn bunker_session_writes(database_url: String) -> Nil {
   let signer = entry.account
   let signer_hex = account.pubkey_hex(signer)
   assert bunker.add_account(name, signer, entry.label) == Ok(Nil)
+  let assert Ok([bunker.Listing(secret:, ..)]) = bunker.accounts(name)
+  let connect = fn(client, secret_arg, id) {
+    named.send(
+      name,
+      bunker.Incoming(client_request(
+        client,
+        signer,
+        nip46_client.connect_body(signer, secret_arg, id),
+      )),
+    )
+  }
 
-  // クライアント 1: 承認。
+  // クライアント 1: 承認待ちの登録と承認。
   let assert Ok(client1) = account.from_privkey(crypto.strong_random_bytes(32))
   let client1_hex = account.pubkey_hex(client1)
-  named.send(name, bunker.Incoming(connect_event(client1, signer, "c1")))
+  connect(client1, "", "c1")
   let assert [pending1] = bunker.pending(name)
-  insert_pending_row(db, pending1)
+  let assert Ok(after_connect) = account_store.load(pool, key, generous)
+  assert list.map(after_connect.pending, fn(row) { row.token })
+    == [pending1.token]
   assert bunker.approve(name, pending1.token) == Ok(Nil)
 
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
@@ -730,16 +722,43 @@ fn bunker_session_writes(database_url: String) -> Nil {
   assert list.map(after_approve.sessions, session_tuple)
     == [#(signer_hex, client1_hex, "")]
 
-  // クライアント 2: 拒否。
+  // クライアント 2: 承認待ちの再登録（replaced）と拒否。
   let assert Ok(client2) = account.from_privkey(crypto.strong_random_bytes(32))
-  named.send(name, bunker.Incoming(connect_event(client2, signer, "c2")))
+  connect(client2, "", "c2")
+  let assert [_first] = bunker.pending(name)
+  connect(client2, "", "c2-again")
   let assert [pending2] = bunker.pending(name)
-  insert_pending_row(db, pending2)
+  let assert Ok(after_reconnect) = account_store.load(pool, key, generous)
+  assert list.map(after_reconnect.pending, fn(row) { row.token })
+    == [pending2.token]
   assert bunker.deny(name, pending2.token) == Ok(Nil)
 
   let assert Ok(after_deny) = account_store.load(pool, key, generous)
   assert after_deny.pending == []
   assert list.map(after_deny.sessions, session_tuple)
+    == [#(signer_hex, client1_hex, "")]
+
+  // クライアント 3: secret の一致でセッションを開き、logout で閉じる。
+  let assert Ok(client3) = account.from_privkey(crypto.strong_random_bytes(32))
+  let client3_hex = account.pubkey_hex(client3)
+  connect(client3, secret, "c3")
+  let assert [_, _] = bunker.sessions(name)
+  let assert Ok(after_open) = account_store.load(pool, key, generous)
+  let after_open_tuples = list.map(after_open.sessions, session_tuple)
+  assert list.length(after_open_tuples) == 2
+  assert list.contains(after_open_tuples, #(signer_hex, client1_hex, ""))
+  assert list.contains(after_open_tuples, #(signer_hex, client3_hex, ""))
+  named.send(
+    name,
+    bunker.Incoming(client_request(
+      client3,
+      signer,
+      nip46_client.request_body("l3", "logout", "[]"),
+    )),
+  )
+  let assert [_] = bunker.sessions(name)
+  let assert Ok(after_logout) = account_store.load(pool, key, generous)
+  assert list.map(after_logout.sessions, session_tuple)
     == [#(signer_hex, client1_hex, "")]
 
   // 取り消し。
@@ -780,8 +799,7 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
       generous,
     ).write
 
-  insert_pending_row(
-    db,
+  let old_pending =
     engine.Pending(
       token: "old",
       signer: signer_hex,
@@ -790,8 +808,9 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
       perms: "",
       secret_mismatch: False,
       created_at: 1,
-    ),
-  )
+    )
+  assert write(engine.InsertPending(pending: old_pending, replaced: []))
+    == Ok(Nil)
   let new_pending =
     engine.Pending(
       token: "new",
