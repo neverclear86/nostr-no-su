@@ -188,6 +188,8 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 - [バックアップと復旧](docs/operations.md)：DB のダンプと復元、マスターキーの保管、復旧後の確認
 - [開発](docs/development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
 - [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
+- [貢献の手引き](CONTRIBUTING.md)：変更の出し方、版数の方針、リリースの手順
+- [変更履歴](CHANGELOG.md)：リリースごとの変更
 
 
 ## ロードマップ
