@@ -109,6 +109,9 @@ pub const register_generated_segments = [accounts_segment, "register-generated"]
 /// セッション取り消しの POST 先のパスセグメント。
 pub const revoke_segments = ["sessions", "revoke"]
 
+/// プラグインの再有効化の POST 先のパスセグメント。
+pub const reenable_plugin_segments = ["plugins", "reenable"]
+
 /// 登録のフォームで nsec を送る欄の名前。
 pub const nsec_field = "nsec"
 
@@ -418,7 +421,7 @@ fn plugins_section(
     list.map(rows, fn(plugin) {
       [
         html.td([attribute.class("break-words")], [html.text(plugin.name)]),
-        html.td([], [plugin_state(language, plugin.status)]),
+        html.td([], [plugin_state(language, plugin)]),
       ]
     }),
   )
@@ -517,6 +520,19 @@ fn revoke_form(language: Language, session: Session) -> Element(msg) {
   )
 }
 
+/// 無効になったプラグイン 1 つの再有効化フォーム。イベント処理を再開させ、失敗が
+/// 続けばまた無効になるので、状態を変えない `Normal` でも取り返しの付かない
+/// `Destructive` でもなく注意の重さにする。
+fn reenable_form(language: Language, name: String) -> Element(msg) {
+  view.post_form(
+    view.segments_path(reenable_plugin_segments),
+    [view.hidden_input("name", name)],
+    i18n.text(language, i18n.ReenablePlugin),
+    view.Caution,
+    view.InRow,
+  )
+}
+
 /// リレーの接続状態のバッジ。
 fn relay_status(language: Language, status: Status) -> Element(msg) {
   let class = case status {
@@ -529,11 +545,10 @@ fn relay_status(language: Language, status: Status) -> Element(msg) {
 }
 
 /// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
-/// 一時的な状態なので、異常の色にしない。
-fn plugin_state(
-  language: Language,
-  status: Option(plugin_runner.Status),
-) -> Element(msg) {
+/// 一時的な状態なので、異常の色にしない。`Disabled` のときだけ、詳細の下に再有効化の
+/// ボタンを並べる。
+fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
+  let status = plugin.status
   let class = case status {
     None -> "badge badge-sm badge-ghost whitespace-nowrap"
     Some(plugin_runner.Running) ->
@@ -551,7 +566,20 @@ fn plugin_state(
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
+        ..reenable_buttons(language, status, plugin.name)
       ])
+  }
+}
+
+/// `Disabled` のときだけ再有効化のボタンを 1 要素のリストで返す。それ以外は空。
+fn reenable_buttons(
+  language: Language,
+  status: Option(plugin_runner.Status),
+  name: String,
+) -> List(Element(msg)) {
+  case status {
+    Some(plugin_runner.Disabled(..)) -> [reenable_form(language, name)]
+    _ -> []
   }
 }
 

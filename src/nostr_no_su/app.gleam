@@ -419,6 +419,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       },
       nsec: bunker.nsec(bunker_name, _),
       plugins: fn() { plugin_rows(spec.plugins) },
+      reenable_plugin: reenable_plugin(spec.plugins, _),
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { bunker.sessions(bunker_name) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
@@ -448,6 +449,22 @@ fn plugin_rows(specs: List(PluginSpec)) -> List(dashboard.PluginRow) {
     name: spec.plugin.name,
     status: plugin_runner.status(spec.name),
   )
+}
+
+/// 管理 UI の再有効化。名前でランナーを引き、応答を待つ。名前で引いてよいのは、
+/// 読み込みが同名のプラグインを 2 つ目以降で捨てるためである
+/// （`plugin_loader.gleam` の重複検査。同梱のプラグイン名も `reserved` として
+/// 同じ検査に入る）。
+pub fn reenable_plugin(
+  specs: List(PluginSpec),
+  plugin: String,
+) -> Result(Nil, admin.ReenableFailure) {
+  use spec <- result.try(
+    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    |> result.replace_error(admin.PluginNotFound("plugin not found")),
+  )
+  plugin_runner.request_reenable(spec.name)
+  |> option.to_result(admin.PluginNotAnswered("plugin runner did not answer"))
 }
 
 /// 監視・バンカー両サブツリーのリレー接続の現在の状態。
