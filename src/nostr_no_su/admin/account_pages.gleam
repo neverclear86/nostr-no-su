@@ -39,12 +39,12 @@ pub fn new_account_page(
       view.card([
         view.heading(text(i18n.ImportPrivateKey)),
         form_description(text(i18n.ImportDescription)),
-        view.post_form(
+        view.secret_post_form(
           view.segments_path(dashboard.import_account_segments),
           [
             view.labelled(
               text(i18n.PrivateKeyNsec),
-              view.secret_input(dashboard.nsec_field),
+              view.secret_input(dashboard.nsec_field, "new-password"),
             ),
             view.labelled(
               text(i18n.Label),
@@ -200,7 +200,7 @@ pub fn account_action_page(
         [
           view.labelled(
             text(i18n.AdminPassword),
-            view.secret_input(dashboard.password_field),
+            view.secret_input(dashboard.password_field, "off"),
           ),
         ],
         text(i18n.ShowPrivateKeySubmit),

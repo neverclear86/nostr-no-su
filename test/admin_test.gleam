@@ -11,6 +11,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
@@ -1088,13 +1089,20 @@ pub fn registration_routes_reject_other_methods_test() {
   })
 }
 
-/// 登録画面の nsec の欄は伏せ字で、自動入力を求めない。
-pub fn new_account_page_has_secret_inputs_test() {
+/// 登録画面の nsec のフォームと欄は伏せ字で、パスワードとして保存させない。
+pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   let response = get(context(), "/accounts/new")
   assert response.status == 200
+  let body = simulate.read_body(response)
   assert string.contains(
-    simulate.read_body(response),
-    "<input autocomplete=\"off\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
+    body,
+    "<input autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
+  )
+  assert string.contains(
+    body,
+    "<form action=\""
+      <> view.segments_path(dashboard.import_account_segments)
+      <> "\" autocomplete=\"off\"",
   )
 }
 
@@ -1441,8 +1449,9 @@ pub fn posts_need_a_host_that_matches_the_origin_test() {
   }
 }
 
-/// 認証済みの応答はどれも保存させず、枠への埋め込みを禁じる。
-pub fn authenticated_responses_are_not_stored_test() {
+/// 認証済みの応答はどれも、保存の禁止、枠への埋め込みの禁止、CSP、`nosniff`、
+/// `Referrer-Policy` のヘッダーを持つ。
+pub fn authenticated_responses_carry_security_headers_test() {
   let context = context()
   let reveal = action_path(dashboard.RevealPrivateKey)
   let with_password = [#("password", password)]
@@ -1708,6 +1717,17 @@ pub fn language_switch_saves_the_language_and_returns_test() {
   assert header(response, "set-cookie")
     == "nostr_no_su_language=ja; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax"
   assert header(response, "cache-control") == "no-store"
+}
+
+/// 言語の切り替えで「ブラウザーの設定」を選ぶと、cookie を消してフォームが送った戻り先へ
+/// 303 で戻す。
+pub fn language_switch_to_the_browser_setting_clears_the_cookie_test() {
+  let response =
+    language_switch_request([#("language", "system"), #("return", "/")])
+    |> admin.handle_request(context(), _)
+  assert response.status == 303
+  assert header(response, "set-cookie")
+    == "nostr_no_su_language=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
 }
 
 /// 戻り先は、同じサイトのパスとして組み立て直す。別のオリジンを指す値は、このサイトの

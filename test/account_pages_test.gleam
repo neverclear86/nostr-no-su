@@ -83,7 +83,8 @@ pub fn error_reasons_are_escaped_test() {
 /// コピーのボタンは値を持たず、スクリプトの `copy` の処理を名前で指す。値は `name` の無い読み取り
 /// 専用の欄に、エスケープして入る。コピーの欄は、処理が頼る形（欄はボタンの直前の兄弟、
 /// 囲みはボタンの親の親、`role="status"` は囲みの直下）で出す。形が崩れてもコピーはできて
-/// しまい、完了の表示と読み上げだけが消えるので、欄全体を照合する。
+/// しまい、完了の表示と読み上げだけが消えるので、欄全体を照合する。クリップボードに書けない
+/// ときの案内は、完了の表示と同じ `role="status"` の中に、見えない状態で出す。
 pub fn copy_button_reads_the_value_from_the_page_test() {
   let page =
     account_pages.private_key_page(
@@ -98,7 +99,7 @@ pub fn copy_button_reads_the_value_from_the_page_test() {
   )
   assert string.contains(
     page,
-    "</button></div><span class=\"sr-only\" role=\"status\"><span class=\"hidden group-data-copied:inline\">Copied</span></span></div>",
+    "</button></div><span class=\"sr-only group-data-selected:not-sr-only\" role=\"status\"><span class=\"hidden group-data-copied:inline\">Copied</span><span class=\"hidden group-data-selected:inline text-sm\">Selected. Press Ctrl+C (⌘C on macOS) to copy.</span></span></div>",
   )
 }
 

@@ -192,6 +192,7 @@ pub type Message {
   ThemeDark
   Copy
   Copied
+  SelectedPressCtrlC
   // ダッシュボード
   Dashboard
   PendingConnections
@@ -303,6 +304,7 @@ fn english(message: Message) -> String {
     ThemeDark -> "Dark"
     Copy -> "Copy"
     Copied -> "Copied"
+    SelectedPressCtrlC -> "Selected. Press Ctrl+C (⌘C on macOS) to copy."
     Dashboard -> "Dashboard"
     PendingConnections -> "Pending connections"
     NoPendingConnections -> "No pending connections."
@@ -353,7 +355,7 @@ fn english(message: Message) -> String {
     AccountsNotAvailable -> "Accounts are not available"
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
-      "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password."
+      "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
     PrivateKeyNsec -> "Private key (nsec)"
     Label -> "Label"
     Register -> "Register"
@@ -413,6 +415,7 @@ fn japanese(message: Message) -> String {
     ThemeDark -> "ダーク"
     Copy -> "コピー"
     Copied -> "コピー済み"
+    SelectedPressCtrlC -> "選択しました。Ctrl+C（macOS では ⌘C）でコピーしてください。"
     Dashboard -> "ダッシュボード"
     PendingConnections -> "承認待ちの接続"
     NoPendingConnections -> "承認待ちの接続はありません。"
@@ -463,7 +466,7 @@ fn japanese(message: Message) -> String {
     AccountsNotAvailable -> "アカウントを利用できません"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
-      "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。"
+      "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
     PrivateKeyNsec -> "秘密鍵（nsec）"
     Label -> "ラベル"
     Register -> "登録する"

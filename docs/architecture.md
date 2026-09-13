@@ -471,7 +471,7 @@ sequenceDiagram
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
-ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。
+ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。言語の一覧の「ブラウザーの設定」は cookie を消す。
 テーマは切り替えで保存した cookie から決め、無ければブラウザーの設定に従う。
 
 | メソッド | パス | 役割 |
@@ -480,7 +480,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET | `/` | ダッシュボード |
 | GET | `/static/admin.css` | ビルドした CSS（`priv/static/admin.css`） |
 | GET | `/static/admin.js` | 管理 UI の JS（`priv/static/admin.js`） |
-| POST | `/language` | 表示の言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す |
+| POST | `/language` | 表示の言語を cookie に保存し（ブラウザーの設定では消し）、フォームが送った戻り先へ 303 で戻す |
 | POST | `/theme` | 表示のテーマを cookie に保存し（`system` では cookie を消す）、フォームが送った戻り先へ 303 で戻す |
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |

@@ -35,7 +35,7 @@ import gleam/http/request
 import gleam/http/response
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
@@ -291,21 +291,18 @@ fn request_theme(request: Request) -> view.Theme {
   |> result.unwrap(view.System)
 }
 
-/// 言語の切り替え。選んだ言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す。
-/// cookie を変えるので POST だけを受け付け、ほかの POST と同じく CSRF の検査の下に置く。
-/// フォームが送るのは言語と戻り先のパスだけで、秘密鍵を運ばない。
+/// 言語の切り替え。選んだ言語を cookie に保存し（ブラウザーの設定では cookie を消す）、
+/// フォームが送った戻り先へ 303 で戻す。cookie を変えるので POST だけを受け付け、ほかの
+/// POST と同じく CSRF の検査の下に置く。フォームが送るのは言語と戻り先のパスだけで、
+/// 秘密鍵を運ばない。
 fn switch_language(request: Request) -> Response {
   use <- wisp.require_method(request, http.Post)
   use form <- wisp.require_form(request)
-  case i18n.from_code(form_value(form, view.language_field)) {
+  case view.language_choice_from_code(form_value(form, view.language_field)) {
     Error(Nil) -> wisp.bad_request("unknown language")
-    Ok(language) ->
+    Ok(choice) ->
       wisp.redirect(to: return_path(form_value(form, view.return_field)))
-      |> response.set_cookie(
-        language_cookie,
-        i18n.code(language),
-        preference_cookie_attributes,
-      )
+      |> set_preference_cookie(language_cookie, language_cookie_value(choice))
   }
 }
 
@@ -319,27 +316,36 @@ fn switch_theme(request: Request) -> Response {
     Error(Nil) -> wisp.bad_request("unknown theme")
     Ok(theme) ->
       wisp.redirect(to: return_path(form_value(form, view.return_field)))
-      |> set_theme_cookie(theme)
+      |> set_preference_cookie(theme_cookie, theme_cookie_value(theme))
   }
 }
 
-/// 選んだテーマを応答の cookie に反映する。ブラウザーの設定では cookie を消し、それ
-/// 以外はコードを保存する。
-fn set_theme_cookie(response: Response, theme: view.Theme) -> Response {
+/// cookie に保存する値。ブラウザーの設定は保存しない。
+fn theme_cookie_value(theme: view.Theme) -> Option(String) {
   case theme {
-    view.System ->
-      response.expire_cookie(
-        response,
-        theme_cookie,
-        preference_cookie_attributes,
-      )
-    view.Light | view.Dark ->
-      response.set_cookie(
-        response,
-        theme_cookie,
-        view.theme_code(theme),
-        preference_cookie_attributes,
-      )
+    view.System -> None
+    view.Light | view.Dark -> Some(view.theme_code(theme))
+  }
+}
+
+/// cookie に保存する値。ブラウザーの設定は保存しない。
+fn language_cookie_value(choice: view.LanguageChoice) -> Option(String) {
+  case choice {
+    view.BrowserLanguage -> None
+    view.ChosenLanguage(_) -> Some(view.language_choice_code(choice))
+  }
+}
+
+/// テーマか言語の選択を cookie に反映する。値が無ければ（ブラウザーの設定）cookie を消す。
+fn set_preference_cookie(
+  response: Response,
+  name: String,
+  value: Option(String),
+) -> Response {
+  case value {
+    None -> response.expire_cookie(response, name, preference_cookie_attributes)
+    Some(value) ->
+      response.set_cookie(response, name, value, preference_cookie_attributes)
   }
 }
 
