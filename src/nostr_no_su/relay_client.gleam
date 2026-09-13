@@ -345,45 +345,67 @@ fn describe_outgoing(outgoing: message.ClientMessage) -> String {
   }
 }
 
-/// リレーメッセージを 1 件デコードする。EVENT は `event.verify` で id と署名を
-/// 確かめ、通ったものだけを `handle_event` へ渡す。落としたイベントとそれ以外の
-/// メッセージは、送信元のリレー名を添えてログ出力する。`start` の受信ループが
-/// 呼ぶほか、テストが直接呼ぶ。
+/// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベント、
+/// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Quiet` は
+/// 何も出さない（OK の受理）。
+pub type Interpretation {
+  Deliver(event.Verified)
+  Report(String)
+  Quiet
+}
+
+/// リレーメッセージ 1 件を解釈する。EVENT は `event.verify` で id と署名を
+/// 確かめ、通ったものを配送に回す。それ以外のメッセージと落としたイベントは、
+/// 外部由来の値を `log.sanitize_external` で 1 行に収めたログ行の本文にする。
+pub fn interpret(text: String) -> Interpretation {
+  case message.decode_relay_message(text) {
+    Ok(message.RelayEvent(_, received)) ->
+      case event.verify(received) {
+        Ok(verified) -> Deliver(verified)
+        Error(error) ->
+          Report(
+            "dropped event with "
+            <> describe_verify_error(error)
+            <> ": "
+            <> log.sanitize_external(received.id),
+          )
+      }
+    Ok(message.RelayEose(subscription)) ->
+      Report("end of stored events for " <> log.sanitize_external(subscription))
+    Ok(message.RelayOk(id, False, reason)) ->
+      Report(
+        "rejected event "
+        <> log.sanitize_external(id)
+        <> ": "
+        <> log.sanitize_external(reason),
+      )
+    // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
+    Ok(message.RelayOk(_id, True, _message)) -> Quiet
+    Ok(message.RelayNotice(text)) ->
+      Report("notice: " <> log.sanitize_external(text))
+    Ok(message.RelayClosed(subscription, reason)) ->
+      Report(
+        "subscription "
+        <> log.sanitize_external(subscription)
+        <> " closed: "
+        <> log.sanitize_external(reason),
+      )
+    Error(_) -> Report("unrecognised message: " <> log.sanitize_external(text))
+  }
+}
+
+/// リレーメッセージを 1 件処理する。解釈は `interpret` にあり、ここはその
+/// 結果を配送とログ出力に移すだけである。`start` の受信ループが呼ぶほか、
+/// テストが直接呼ぶ。
 pub fn handle_text(
   prefix: String,
   text: String,
   handle_event: fn(event.Verified) -> Nil,
 ) -> Nil {
-  case message.decode_relay_message(text) {
-    Ok(message.RelayEvent(_, received)) ->
-      case event.verify(received) {
-        Ok(verified) -> handle_event(verified)
-        Error(error) ->
-          log.println(
-            prefix,
-            "dropped event with "
-              <> describe_verify_error(error)
-              <> ": "
-              <> received.id,
-          )
-      }
-    Ok(message.RelayEose(subscription)) ->
-      log.println(prefix, "end of stored events for " <> subscription)
-    Ok(message.RelayOk(id, False, reason)) ->
-      log.println(prefix, "rejected event " <> id <> ": " <> reason)
-    // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
-    Ok(message.RelayOk(_id, True, _message)) -> Nil
-    Ok(message.RelayNotice(text)) -> log.println(prefix, "notice: " <> text)
-    Ok(message.RelayClosed(subscription, reason)) ->
-      log.println(
-        prefix,
-        "subscription " <> subscription <> " closed: " <> reason,
-      )
-    Error(_) ->
-      log.println(
-        prefix,
-        "unrecognised message: " <> string.slice(text, 0, 120),
-      )
+  case interpret(text) {
+    Deliver(verified) -> handle_event(verified)
+    Report(line) -> log.println(prefix, line)
+    Quiet -> Nil
   }
 }
 

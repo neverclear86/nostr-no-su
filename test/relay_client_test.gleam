@@ -13,11 +13,12 @@ import gleam/set
 import gleam/string
 import mist
 import nostr_no_su/app
+import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
-  type SubscriptionState, type Subscriptions, Requested, Retried,
+  type SubscriptionState, type Subscriptions, Report, Requested, Retried,
   SubscriptionState, Sync,
 }
 import nostr_no_su/relay_connection
@@ -119,6 +120,33 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   relay_client.handle_text("test", event_frame(genuine), deliver)
   let assert Ok(verified) = process.receive(delivered, 0)
   assert event.verified_event(verified) == genuine
+}
+
+/// NOTICE の本文にログ行を偽造しうる長さと改行があっても、1 行に収まる。
+pub fn interpret_keeps_a_large_notice_on_one_line_test() {
+  let body = string.repeat("x", 10_000) <> "\n[bunker] forged"
+  let notice =
+    json.preprocessed_array([json.string("NOTICE"), json.string(body)])
+    |> json.to_string
+
+  let assert Report(line) = relay_client.interpret(notice)
+  assert !string.contains(line, "\n")
+  assert string.length(line)
+    <= string.length("notice: ") + log.max_external_chars + 3
+}
+
+/// CLOSED の購読 id と理由も、改行を含む制御文字を空白に置き換えて正規化する。
+pub fn interpret_sanitizes_the_reason_of_a_closed_subscription_test() {
+  let closed =
+    json.preprocessed_array([
+      json.string("CLOSED"),
+      json.string("sub\nx"),
+      json.string("bye\n[bunker] forged"),
+    ])
+    |> json.to_string
+
+  assert relay_client.interpret(closed)
+    == Report("subscription sub x closed: bye [bunker] forged")
 }
 
 // --- sync の単体テスト ---

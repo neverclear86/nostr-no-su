@@ -624,7 +624,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case outcome {
         engine.Reply(response) -> publish(state, response)
         engine.Duplicate -> Nil
-        engine.Ignore(reason) -> log.println(log_prefix, "ignored: " <> reason)
+        engine.Ignore(reason) ->
+          log.println(log_prefix, "ignored: " <> log.sanitize_external(reason))
       }
       actor.continue(State(..state, engine: next))
     }

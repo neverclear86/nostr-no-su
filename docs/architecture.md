@@ -524,7 +524,7 @@ nostr-no-su/
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
 │       ├── crypto/aes_gcm.gleam  AES-256-GCM の箱（nonce、暗号文、タグ）
 │       ├── hex.gleam             16 進文字列とバイト列の相互変換
-│       ├── log.gleam             ログ 1 行の組み立て
+│       ├── log.gleam             ログ 1 行の組み立てと外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
 │       └── time.gleam            現在時刻（FFI）
