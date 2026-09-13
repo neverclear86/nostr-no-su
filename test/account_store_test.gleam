@@ -23,6 +23,7 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/vault.{
   type MasterKey, type StoredAccount, StoredAccount,
 }
+import nostr_no_su/dedup/resume_store
 import nostr_no_su/hex
 import nostr_no_su/random
 import pog
@@ -297,9 +298,9 @@ pub fn postgres_instance_lock_test() {
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
 /// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外は専用スキーマへ
-/// 向けた接続で実行する。版 2 の挿入を `search_path` なしの接続に流すと public の
-/// `schema_version` に版 2 が残り、以後の `round_trip` の `load` が `SchemaTooNew`
-/// で落ちるためである。
+/// 向けた接続で実行する。ビルドより新しい版の挿入を `search_path` なしの接続に流すと
+/// public の `schema_version` にその版が残り、以後の `round_trip` の `load` が
+/// `SchemaTooNew` で落ちるためである。
 fn schema_version_round_trip(database_url: String) -> Nil {
   let schema = "account_store_schema_" <> random.hex(8)
   let admin = pog.named_connection(postgres.start_pool(database_url, None))
@@ -319,12 +320,40 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1]
+  assert recorded_versions(db) == [1, 2]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (2)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (3)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 2, supported: 1))
+    == Error(account_store.SchemaTooNew(found: 3, supported: 2))
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 監視の購読の再開点は、DB からの読み込みと保存を一巡できる。移行の後に読み書き
+/// できることは、`monitor_resume` が版 2 の移行で作られることの確認を兼ねる。
+pub fn postgres_resume_store_test() {
+  use database_url <- postgres.with_test_database_url("resume_store")
+  let schema = "resume_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  assert resume_store.load(db, "wss://a") == Ok(None)
+  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 200)])
+  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+
+  // 値を小さくする保存は無視する（GREATEST）。
+  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 100)])
+  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+
+  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 300)])
+  assert resume_store.load(db, "wss://a") == Ok(Some(300))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
