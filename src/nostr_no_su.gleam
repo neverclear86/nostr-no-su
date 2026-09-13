@@ -223,6 +223,9 @@ fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
 ///
 /// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
 /// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
+///
+/// 読み込みが `SchemaTooNew` を返したら、再試行しても変わらないので、理由を 1 行
+/// 出して VM を止める（`halt_if_schema_too_new`）。バンカーアクターには戻らない。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   master_key: vault.MasterKey,
@@ -232,6 +235,7 @@ pub fn account_store_operations(
   bunker.Store(
     load: fn() {
       account_store.load(pool, master_key, timeouts)
+      |> halt_if_schema_too_new
       |> result.map_error(account_store.describe)
     },
     insert: fn(entry) {
@@ -258,6 +262,26 @@ pub fn account_store_operations(
       |> result.map_error(write_failure)
     },
   )
+}
+
+/// 読み込みの結果が、DB のスキーマがこのビルドより新しいことを示していたら、
+/// `cannot continue: <理由>` を 1 行出して終了コード 1 で VM を止める。古いビルドの
+/// まま新しい版の DB を読み書きさせないためである。`halt` は戻らないので、それ以外の
+/// 結果だけがそのまま返る。
+fn halt_if_schema_too_new(
+  loaded: Result(vault.Loaded, account_store.StoreError),
+) -> Result(vault.Loaded, account_store.StoreError) {
+  case loaded {
+    Error(account_store.SchemaTooNew(..) as error) -> {
+      log.println(
+        log_prefix,
+        "cannot continue: " <> account_store.describe(error),
+      )
+      halt(1)
+      loaded
+    }
+    _ -> loaded
+  }
 }
 
 /// 書き込みの失敗を、書き込まれていることがあるかどうかの区別つきでバンカーへ渡す形に

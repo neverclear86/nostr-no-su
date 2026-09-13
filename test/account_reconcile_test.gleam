@@ -10,7 +10,7 @@ import gleam/crypto
 import gleam/erlang/process.{type Name}
 import gleam/io
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su
 import nostr_no_su/bunker
@@ -22,6 +22,7 @@ import nostr_no_su/bunker/vault.{
 import nostr_no_su/hex
 import nostr_no_su/random
 import pog
+import support/postgres
 
 /// バンカーアクターに渡すストアの期限。書き込みはトリガーの眠りより短く、負荷の高い
 /// 環境でもクエリーがサーバーに届くだけの長さにする。読み込みは書き込みの残りを待てる
@@ -59,17 +60,17 @@ pub fn ambiguous_writes_are_reconciled_with_postgres_test() {
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。
 fn reconcile_with_postgres(database_url: String) -> Nil {
   let schema = "bunker_reconcile_" <> random.hex(8)
-  let admin = pog.named_connection(start_pool(database_url, None))
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = start_pool(database_url, Some(schema))
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
   let key = random_master_key()
   let first = random_entry()
   let first_pubkey = account.pubkey_hex(first.account)
   let db = pog.named_connection(pool)
-  let assert Ok(Nil) = account_store.ensure_schema(db, generous)
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
   let assert Ok(Nil) = account_store.insert(db, key, first, generous)
   list.each(slow_trigger, fn(statement) {
-    run_statement(admin, string.replace(statement, "{schema}", schema))
+    postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
   })
 
   let name = process.new_name("account_reconcile_bunker")
@@ -111,32 +112,7 @@ fn reconcile_with_postgres(database_url: String) -> Nil {
 
   process.unlink(started.pid)
   process.kill(started.pid)
-  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
-}
-
-/// 接続プールを起動し、その名前を返す。`search_path` を指定すると、テーブル名を
-/// そのスキーマで解決する。プールはテストプロセスにリンクされる。
-fn start_pool(
-  database_url: String,
-  search_path: Option(String),
-) -> Name(pog.Message) {
-  let name = process.new_name("account_reconcile_pool")
-  let assert Ok(config) = pog.url_config(name, database_url)
-  let config = case search_path {
-    Some(schema) -> pog.connection_parameter(config, "search_path", schema)
-    None -> config
-  }
-  let assert Ok(_started) = pog.start(pog.pool_size(config, 2))
-  name
-}
-
-/// 結果を読まない文を 1 つ実行する。
-fn run_statement(db: pog.Connection, statement: String) -> Nil {
-  let assert Ok(_returned) =
-    pog.query(statement)
-    |> pog.timeout(30_000)
-    |> pog.execute(on: db)
-  Nil
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// DB の行を、バンカーの一覧と同じ形（署名者の昇順）で読む。読み込みは実行中の

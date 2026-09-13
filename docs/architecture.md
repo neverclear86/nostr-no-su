@@ -117,6 +117,7 @@ DB の障害も同じ考え方で、プロセスの死にしない。
 DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
 pog が写せないエラーで `pog.execute` が例外を投げても、`account_store` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
 したがって DB が落ちていてもルートの許容回数は消費されず、兄弟の監視とプラグインは動き続ける。
+例外は DB のスキーマの版がビルドより新しいときで、待っても直らないのでプロセスを終了する（「アカウントの読み込み」の節）。
 
 ## イベントが流れる経路
 
@@ -177,7 +178,7 @@ sequenceDiagram
     Note over bk: initialiser は自分用の<br/>名前なしの subject に<br/>LoadAccounts を積むだけ
     sup->>conn: 起動（アクターの後）
     bk->>store: load
-    store->>db: BEGIN / CREATE TABLE IF NOT EXISTS /<br/>LOCK TABLE IN SHARE MODE / SELECT
+    store->>db: BEGIN / lock_timeout / 版の確認と移行 /<br/>LOCK TABLE IN SHARE MODE / SELECT
     alt 読み込めた
         db-->>store: 行
         Note over store: 行ごとに復号して検証し、<br/>読めない行は飛ばす
@@ -195,6 +196,10 @@ sequenceDiagram
 
 `LoadAccounts` は initialiser が積むのでアクターのメールボックスの先頭になり、接続はアクターの後に起動するので、`GetSigners` は必ず読み込みの後に処理される。
 DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読する。
+
+読み込みのトランザクションは、一覧を読む前にスキーマの版を確かめる。
+`schema_version` に記録された版より新しい移行（`account_store.migrations`）を順に実行し、移行ごとに版を記録する。
+記録された版がビルドの最新の版より新しいときは、再試行しても変わらないので、起動処理が組み立てたストアの操作（`nostr_no_su.account_store_operations`）が理由を 1 行出して終了コード 1 で VM を止める。
 
 再試行を名前なしの subject へ予約するのは、名前付き subject へのタイマーが名前宛てになり、再起動した後の同じ名前のアクターに届いて再試行が重複するためである。
 名前なしの subject は pid 宛てなので、アクターが終了するとランタイムがタイマーを取り消す。

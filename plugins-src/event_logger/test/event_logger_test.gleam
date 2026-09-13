@@ -8,7 +8,7 @@ import gleam/erlang/process.{type Monitor, type Pid}
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleeunit
@@ -81,9 +81,40 @@ pub fn unknown_event_keys_are_ignored_test() {
   assert row.id == "a3"
 }
 
-/// DDL はすべて `IF NOT EXISTS` 付きで、起動のたびに実行してよい。
-pub fn schema_statements_are_idempotent_test() {
-  assert list.all(store.schema, string.contains(_, "IF NOT EXISTS"))
+/// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
+/// よい。
+pub fn migration_statements_can_be_re_run_test() {
+  let statements =
+    list.flat_map(store.migrations, fn(migration) { migration.statements })
+  assert list.all(statements, string.contains(_, "IF NOT EXISTS"))
+}
+
+/// `store.migrations` の版は 1 から欠番なく昇順に並ぶ。
+pub fn migrations_are_numbered_from_one_without_gaps_test() {
+  let versions = list.map(store.migrations, fn(migration) { migration.version })
+  assert versions == list.index_map(versions, fn(_, index) { index + 1 })
+}
+
+/// 未適用の移行だけを版の順に返す。
+pub fn pending_migrations_skip_recorded_versions_test() {
+  let migrations = [
+    store.Migration(version: 1, statements: ["one"]),
+    store.Migration(version: 2, statements: ["two"]),
+  ]
+  assert store.pending_migrations(migrations, 0) == Ok(migrations)
+  assert store.pending_migrations(migrations, 1)
+    == Ok([store.Migration(version: 2, statements: ["two"])])
+  assert store.pending_migrations(migrations, 2) == Ok([])
+}
+
+/// 記録された版が移行の最新の版より新しい DB は拒否する。
+pub fn a_database_newer_than_the_migrations_is_refused_test() {
+  let migrations = [
+    store.Migration(version: 1, statements: ["one"]),
+    store.Migration(version: 2, statements: ["two"]),
+  ]
+  assert store.pending_migrations(migrations, 3)
+    == Error(store.SchemaTooNew(found: 3, supported: 2))
 }
 
 /// 挿入する列とプレースホルダーが、`insert` がパラメーターを積む順序と対応して
@@ -311,6 +342,41 @@ fn message_queue_len(pid: Pid) -> Result(Int, Nil) {
 @external(erlang, "erlang", "process_info")
 fn process_info(pid: Pid, key: Atom) -> Dynamic
 
+/// 版がこのプラグインより新しい DB では、保存アクターが理由を 1 行出して異常終了する。
+///
+/// `store.start` は呼び出し側にリンクするので、テストプロセスとリンクしない仲介の
+/// プロセスで起動し、その終了理由をテストプロセスへ送る。仲介プロセスは
+/// `store.start` を呼ぶ前に exit を trap するので、EXIT のシグナルはメッセージとして
+/// 積まれ、監視を張る前に終わる競合が無い。
+pub fn a_newer_schema_stops_the_store_test() {
+  let database =
+    store.Database(
+      ensure_schema: fn() { Error(store.SchemaTooNew(found: 2, supported: 1)) },
+      insert: fn(_row) { Ok(1) },
+    )
+  let reply = process.new_subject()
+  process.spawn_unlinked(fn() {
+    process.trap_exits(True)
+    let assert Ok(_started) =
+      store.start(
+        process.new_name("test_newer_schema_store"),
+        database,
+        store.default_max_queue_len,
+      )
+    let exit =
+      process.new_selector()
+      |> process.select_trapped_exits(fn(exit) { exit.reason })
+      |> process.selector_receive(exit_timeout_ms)
+    process.send(reply, exit)
+  })
+  let assert Ok(Ok(process.Abnormal(reason))) =
+    process.receive(reply, exit_timeout_ms)
+  assert string.contains(
+    string.inspect(reason),
+    "database schema version 2 is newer than this plugin supports (up to version 1)",
+  )
+}
+
 /// 到達性と無関係な挿入エラーは、そのイベントだけの問題として保存を続ける。
 /// 保存を止める実装なら、2 件目は捨てられて挿入が試みられない。
 pub fn insert_failures_unrelated_to_reachability_keep_storing_test() {
@@ -526,11 +592,11 @@ pub fn the_pool_shim_flattens_the_start_result_test() {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。スキーマ作成の冪等性・挿入・重複無視・jsonb としての
-/// 読み戻し・インデックスの作成・NUL を含む行の拒否を一巡して確かめる。
+/// ときだけ実行する。スキーマの移行・挿入・重複無視・jsonb としての読み戻し・
+/// インデックスの作成・NUL を含む行の拒否を一巡して確かめる。
 ///
 /// 同じ DB に対して `gleam test` を並行実行することは想定していない
-/// （`CREATE TABLE IF NOT EXISTS` 同士が競合しうる）。CI は専用の service を
+/// （版の記録の挿入やテーブルの作成が競合しうる）。CI は専用の service を
 /// 使い、ローカルでも使い捨てのコンテナーを使うこと。
 pub fn postgres_round_trip_test() {
   case envoy.get("TEST_DATABASE_URL") {
@@ -542,9 +608,9 @@ pub fn postgres_round_trip_test() {
   }
 }
 
-/// スキーマ作成・挿入・重複挿入・後片付け・NUL を含む行の拒否を一巡させる。
+/// スキーマの移行・挿入・重複挿入・後片付け・NUL を含む行の拒否を一巡させる。
 fn round_trip(database_url: String) -> Nil {
-  let db = connect(database_url)
+  let db = connect(database_url, None)
   // 2 回続けて実行しても失敗しない。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
@@ -574,11 +640,83 @@ fn round_trip(database_url: String) -> Nil {
   assert count_rows(db, stored.id) == 0
 }
 
+/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。版の記録より前に作られたテーブルが版 1 として取り込まれ、
+/// 版が新しい DB は拒否されることを確かめる。
+pub fn postgres_schema_version_test() {
+  case envoy.get("TEST_DATABASE_URL") {
+    Ok("") | Error(Nil) ->
+      io.println(
+        "[event_logger] TEST_DATABASE_URL is not set; skipping the integration test",
+      )
+    Ok(database_url) -> schema_version_round_trip(database_url)
+  }
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
+/// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外（テーブルと
+/// インデックスの直接実行、`ensure_schema`、版 2 の挿入、版の読み込み）は専用
+/// スキーマへ向けた接続で実行する。
+fn schema_version_round_trip(database_url: String) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  let db = connect(database_url, Some(schema))
+
+  // 版の記録より前に作られた DB を再現する。
+  run_statement(db, store.create_events_table)
+  run_statement(db, store.create_pubkey_index)
+  run_statement(db, store.create_kind_index)
+
+  // 移行の後、もう一度実行しても版は 1 のまま（移行を二重に適用しない）。
+  let assert Ok(Nil) = store.ensure_schema(db)
+  let assert Ok(Nil) = store.ensure_schema(db)
+  assert recorded_versions(db) == [1]
+
+  // 記録された版が新しい DB は拒否する。
+  run_statement(
+    db,
+    "INSERT INTO event_logger_schema_version (version) VALUES (2)",
+  )
+  assert store.ensure_schema(db)
+    == Error(store.SchemaTooNew(found: 2, supported: 1))
+
+  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 結果を読まない文を 1 つ実行する。
+fn run_statement(db: pog.Connection, statement: String) -> Nil {
+  let assert Ok(_returned) =
+    pog.query(statement)
+    |> pog.timeout(30_000)
+    |> pog.execute(on: db)
+  Nil
+}
+
+/// `event_logger_schema_version` に記録されている版の一覧（昇順）。
+fn recorded_versions(db: pog.Connection) -> List(Int) {
+  let assert Ok(returned) =
+    pog.query(
+      "SELECT version FROM event_logger_schema_version ORDER BY version",
+    )
+    |> pog.returning(decode.at([0], decode.int))
+    |> pog.execute(on: db)
+  returned.rows
+}
+
 /// テスト用の接続プールを起動する。プールはテストプロセスにリンクされるため、
-/// テストが終われば一緒に停止する。
-fn connect(database_url: String) -> pog.Connection {
+/// テストが終われば一緒に停止する。`search_path` を指定すると、テーブル名を
+/// そのスキーマで解決する。
+fn connect(
+  database_url: String,
+  search_path: Option(String),
+) -> pog.Connection {
   let assert Ok(config) =
     pog.url_config(process.new_name("test_event_logger_pool"), database_url)
+  let config = case search_path {
+    Some(schema) -> pog.connection_parameter(config, "search_path", schema)
+    None -> config
+  }
   let assert Ok(started) = pog.start(config)
   started.data
 }
@@ -588,7 +726,9 @@ fn random_id() -> String {
   int.to_base16(int.random(1_000_000_000))
 }
 
-/// `events` に張られているインデックスの名前（主キーを含む）。
+/// `events` に張られているインデックスの名前（主キーを含む）。現在の
+/// `search_path` が解決するスキーマに絞る。専用のスキーマが後片付けの失敗で
+/// 残っていても、他のスキーマの同名のインデックスを拾わないためである。
 fn index_names(db: pog.Connection) -> List(String) {
   let decoder = {
     use name <- decode.field(0, decode.string)
@@ -596,7 +736,9 @@ fn index_names(db: pog.Connection) -> List(String) {
   }
   let assert Ok(returned) =
     pog.query(
-      "SELECT indexname FROM pg_indexes WHERE tablename = 'events' ORDER BY indexname",
+      "SELECT indexname FROM pg_indexes
+WHERE tablename = 'events' AND schemaname = ANY(current_schemas(false))
+ORDER BY indexname",
     )
     |> pog.returning(decoder)
     |> pog.execute(on: db)

@@ -17,6 +17,11 @@
 //// 積まれ続ける。そこで `Store` を取り出すたびに残りの件数を見て、上限を超えたら
 //// 上限の半分に減るまで数えて捨てる。取り出すときに見るので、1 件の挿入の間に
 //// 届いた分だけは上限を超えうる。
+////
+//// テーブルとインデックスは版つきの移行として持ち、`event_logger_schema_version` に
+//// 記録する。記録された版がこのプラグインより新しければ、理由を 1 行出してアクターを
+//// 異常終了させる。待っても直らず、生かしたまま捨て続けると管理 UI に止まっている
+//// ことが見えないため（`docs/plugin-api.md` 第 5.4 節）。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -31,8 +36,8 @@ import gleam/result
 import gleam/string
 import pog
 
-/// 保存を止めてから作り直しを試みるまでの待ち時間。DDL は `IF NOT EXISTS` 付き
-/// なので、再試行がそのまま疎通確認を兼ねる。
+/// 保存を止めてから作り直しを試みるまでの待ち時間。移行は記録された版より新しい
+/// ものだけを実行するので、再試行がそのまま疎通確認を兼ねる。
 const schema_retry_delay_ms = 5000
 
 /// DDL のタイムアウト。既存のテーブルへインデックスを張る場合、既定の 5 秒では
@@ -67,8 +72,46 @@ pub const create_pubkey_index = "CREATE INDEX IF NOT EXISTS events_pubkey_create
 /// kind で絞り込むためのインデックス。
 pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events (kind)"
 
-/// 起動時に実行する DDL。すべて `IF NOT EXISTS` なので何度実行してもよい。
-pub const schema = [create_events_table, create_pubkey_index, create_kind_index]
+/// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
+/// `event_logger_schema_version` に記録する。
+pub type Migration {
+  Migration(version: Int, statements: List(String))
+}
+
+/// このプラグインのスキーマの移行。版は 1 から欠番なく昇順に並べ、足すときは末尾に
+/// 置く。
+///
+/// 移行の文は何度実行してもよい形（`IF NOT EXISTS` など）で書く。途中で失敗した
+/// 移行は版が記録されないので、次の読み込みで頭から実行し直される。`IF NOT EXISTS` で
+/// 書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を見直す。
+pub const migrations = [
+  Migration(
+    version: 1,
+    statements: [create_events_table, create_pubkey_index, create_kind_index],
+  ),
+]
+
+/// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
+/// 本体の `schema_version` と名前が衝突しないよう、プラグイン名を付ける。
+const create_version_table = "CREATE TABLE IF NOT EXISTS event_logger_schema_version (
+  version integer PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+)"
+
+/// 記録された版の読み込み。
+const select_versions_sql = "SELECT version FROM event_logger_schema_version"
+
+/// 版の記録。
+const insert_version_sql = "INSERT INTO event_logger_schema_version (version) VALUES ($1)"
+
+/// スキーマの用意の失敗。
+pub type SchemaError {
+  /// 版の読み書きか移行の文が失敗した。
+  SchemaQueryFailed(error: pog.QueryError)
+  /// DB に記録された版（`found`）が、このプラグインの移行の最新の版（`supported`）
+  /// より新しい。
+  SchemaTooNew(found: Int, supported: Int)
+}
 
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
@@ -95,7 +138,7 @@ pub type Msg {
   /// 保存する 1 行。イベント map からの変換は送り手（使い捨てプロセス）が
   /// 済ませ、アクターには DB の仕事だけを残す。
   Store(row: Row)
-  /// スキーマ作成を試みる。初期化時と、保存を止めたあとの再試行タイマーから
+  /// スキーマの移行を試みる。初期化時と、保存を止めたあとの再試行タイマーから
   /// 送られる。
   EnsureSchema
 }
@@ -104,7 +147,7 @@ pub type Msg {
 /// プールから作り、テストは遅い DB や失敗する DB を模した関数を渡す。
 pub type Database {
   Database(
-    ensure_schema: fn() -> Result(Nil, pog.QueryError),
+    ensure_schema: fn() -> Result(Nil, SchemaError),
     insert: fn(Row) -> Result(Int, pog.QueryError),
   )
 }
@@ -174,22 +217,42 @@ fn initialise(
   |> Ok
 }
 
-/// スキーマを用意するか、イベントを 1 件保存する。どちらも次の可用性を返す。
+/// スキーマを用意するか、イベントを 1 件保存する。スキーマの版がこのプラグインより
+/// 新しければ、理由を 1 行出してアクターを異常終了させる。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
-  let availability = case msg {
-    EnsureSchema -> prepare(state)
-    Store(row:) -> persist(state, row, message_queue_len())
+  case msg {
+    EnsureSchema ->
+      case prepare(state) {
+        Ok(availability) -> actor.continue(State(..state, availability:))
+        Error(reason) -> {
+          println(reason)
+          actor.stop_abnormal(reason)
+        }
+      }
+    Store(row:) ->
+      actor.continue(
+        State(..state, availability: persist(state, row, message_queue_len())),
+      )
   }
-  actor.continue(State(..state, availability: availability))
 }
 
-/// テーブルとインデックスを作成する。失敗してもクラッシュせず、保存を止めた
-/// まま再試行を予約する。DB がアプリより後に立ち上がる、あるいは一時的に落ちて
-/// いる状況が普通にあるため。
-fn prepare(state: State) -> Availability {
+/// スキーマを最新の版に移行し、次の可用性を返す。クエリーの失敗ではクラッシュせず、
+/// 保存を止めたまま再試行を予約する（DB がアプリより後に立ち上がる、あるいは一時的に
+/// 落ちている状況が普通にあるため）。版がこのプラグインより新しければ、待っても
+/// 直らないので止める理由を返す。
+fn prepare(state: State) -> Result(Availability, String) {
   case state.database.ensure_schema() {
-    Ok(Nil) -> resume(state.availability)
-    Error(error) -> suspend(state, error, dropped(state.availability))
+    Ok(Nil) -> Ok(resume(state.availability))
+    Error(SchemaQueryFailed(error)) ->
+      Ok(suspend(state, error, dropped(state.availability)))
+    Error(SchemaTooNew(found:, supported:)) ->
+      Error(
+        "database schema version "
+        <> int.to_string(found)
+        <> " is newer than this plugin supports (up to version "
+        <> int.to_string(supported)
+        <> "); stopping the store",
+      )
   }
 }
 
@@ -337,12 +400,61 @@ fn was_reported(availability: Availability) -> Bool {
   }
 }
 
-/// テーブルとインデックスを作成する。すでにあれば何もしない。
-pub fn ensure_schema(db: pog.Connection) -> Result(Nil, pog.QueryError) {
-  use statement <- list.try_each(schema)
-  pog.query(statement)
+/// 版 `current` の DB に適用する移行を、`migrations` の並びのまま返す。`current` が
+/// `migrations` の最新の版より新しければ `SchemaTooNew` を返す。
+pub fn pending_migrations(
+  migrations: List(Migration),
+  current: Int,
+) -> Result(List(Migration), SchemaError) {
+  let supported =
+    list.fold(migrations, 0, fn(latest, migration) {
+      int.max(latest, migration.version)
+    })
+  case current > supported {
+    True -> Error(SchemaTooNew(found: current, supported: supported))
+    False ->
+      Ok(list.filter(migrations, fn(migration) { migration.version > current }))
+  }
+}
+
+/// スキーマを `migrations` の最新の版にする。トランザクションは使わない
+/// （`pog.transaction` は 5 秒で打ち切られるため）。記録された版がこのプラグインより
+/// 新しければ `SchemaTooNew`。
+pub fn ensure_schema(db: pog.Connection) -> Result(Nil, SchemaError) {
+  use _created <- result.try(run_schema_query(
+    db,
+    pog.query(create_version_table),
+  ))
+  use recorded <- result.try(run_schema_query(
+    db,
+    pog.query(select_versions_sql) |> pog.returning(decode.at([0], decode.int)),
+  ))
+  use pending <- result.try(pending_migrations(
+    migrations,
+    list.fold(recorded.rows, 0, int.max),
+  ))
+  use migration <- list.try_each(pending)
+  use Nil <- result.try(
+    list.try_each(migration.statements, fn(statement) {
+      run_schema_query(db, pog.query(statement))
+    }),
+  )
+  run_schema_query(
+    db,
+    pog.query(insert_version_sql) |> pog.parameter(pog.int(migration.version)),
+  )
+}
+
+/// スキーマの用意の問い合わせを 1 つ、`schema_timeout_ms` の期限で実行する。DDL 以外の
+/// 問い合わせ（版の読み書き）も通す。
+fn run_schema_query(
+  db: pog.Connection,
+  query: pog.Query(a),
+) -> Result(pog.Returned(a), SchemaError) {
+  query
   |> pog.timeout(schema_timeout_ms)
   |> pog.execute(on: db)
+  |> result.map_error(SchemaQueryFailed)
 }
 
 /// 1 行を挿入し、実際に挿入された行数を返す。すでに保存済みの id なら 0 になる。
