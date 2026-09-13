@@ -1449,8 +1449,9 @@ pub fn posts_need_a_host_that_matches_the_origin_test() {
   }
 }
 
-/// 認証済みの応答はどれも保存させず、枠への埋め込みを禁じる。
-pub fn authenticated_responses_are_not_stored_test() {
+/// 認証済みの応答はどれも、保存の禁止、枠への埋め込みの禁止、CSP、`nosniff`、
+/// `Referrer-Policy` のヘッダーを持つ。
+pub fn authenticated_responses_carry_security_headers_test() {
   let context = context()
   let reveal = action_path(dashboard.RevealPrivateKey)
   let with_password = [#("password", password)]
