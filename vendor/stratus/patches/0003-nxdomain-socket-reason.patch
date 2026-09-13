@@ -1,0 +1,52 @@
+diff --git a/src/stratus/internal/socket.gleam b/src/stratus/internal/socket.gleam
+index 9ea7506..d0ea597 100644
+--- a/src/stratus/internal/socket.gleam
++++ b/src/stratus/internal/socket.gleam
+@@ -39,6 +39,11 @@ pub type SocketReason {
+   Ewouldblock
+   Exbadport
+   Exbadseq
++  // VENDORED PATCH (nostr-no-su): gen_tcp:connect and ssl:connect return
++  // {error, nxdomain} when the host name cannot be resolved. Without this
++  // variant the conversion in stratus.gleam crashes the actor with a
++  // case_clause during the handshake.
++  Nxdomain
+ }
+ 
+ pub type TcpOption =
+diff --git a/src/stratus.gleam b/src/stratus.gleam
+index a67da56..3cdeb2a 100644
+--- a/src/stratus.gleam
++++ b/src/stratus.gleam
+@@ -71,6 +71,9 @@ pub type SocketReason {
+   Ewouldblock
+   Exbadport
+   Exbadseq
++  // VENDORED PATCH (nostr-no-su): the host name could not be resolved. See
++  // socket.SocketReason.
++  Nxdomain
+ }
+ 
+ pub type CustomCloseError {
+@@ -112,6 +115,8 @@ fn convert_socket_reason(reason: socket.SocketReason) -> SocketReason {
+     socket.Exbadseq -> Exbadseq
+     socket.Terminated -> Terminated
+     socket.Timeout -> Timeout
++    // VENDORED PATCH (nostr-no-su): see socket.SocketReason.
++    socket.Nxdomain -> Nxdomain
+   }
+ }
+ 
+diff --git a/src/stratus_ffi.erl b/src/stratus_ffi.erl
+index 515cac1..341b018 100644
+--- a/src/stratus_ffi.erl
++++ b/src/stratus_ffi.erl
+@@ -112,5 +112,8 @@ parse_known_socket_reason(Reason) ->
+     ewouldblock -> {ok, ewouldblock};
+     exbadport -> {ok, exbadport};
+     exbadseq -> {ok, exbadseq};
++    % VENDORED PATCH (nostr-no-su): mirror socket.SocketReason, which gained
++    % nxdomain.
++    nxdomain -> {ok, nxdomain};
+     Unknown -> {error, Unknown}
+   end.

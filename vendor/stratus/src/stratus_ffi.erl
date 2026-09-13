@@ -112,5 +112,8 @@ parse_known_socket_reason(Reason) ->
     ewouldblock -> {ok, ewouldblock};
     exbadport -> {ok, exbadport};
     exbadseq -> {ok, exbadseq};
+    % VENDORED PATCH (nostr-no-su): mirror socket.SocketReason, which gained
+    % nxdomain.
+    nxdomain -> {ok, nxdomain};
     Unknown -> {error, Unknown}
   end.

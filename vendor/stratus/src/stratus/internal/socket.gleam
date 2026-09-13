@@ -39,6 +39,11 @@ pub type SocketReason {
   Ewouldblock
   Exbadport
   Exbadseq
+  // VENDORED PATCH (nostr-no-su): gen_tcp:connect and ssl:connect return
+  // {error, nxdomain} when the host name cannot be resolved. Without this
+  // variant the conversion in stratus.gleam crashes the actor with a
+  // case_clause during the handshake.
+  Nxdomain
 }
 
 pub type TcpOption =
