@@ -5,7 +5,8 @@ import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
-import nostr_no_su/crypto/secp256k1
+import nostr_no_su/crypto/bip340
+import nostr_no_su/crypto/secp256k1.{Point}
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
@@ -124,6 +125,73 @@ pub fn verify_test() {
     == Error(event.InvalidSignature)
   assert event.verify(Event(..signed, content: "tampered"))
     == Error(event.InvalidId)
+}
+
+/// 32 バイトでない pubkey（NIP-01 の定義域の外）を持つイベントは、challenge が
+/// そのバイト列を含んだ正しい署名を持っていても検証に落ちる。
+pub fn verify_rejects_a_pubkey_that_is_not_32_bytes_test() {
+  let key = "0000000000000000000000000000000000000000000000000000000000000003"
+  let assert Ok(privkey_bytes) = hex.decode(key)
+  let privkey = secp256k1.int_from_bytes(privkey_bytes)
+  let assert Ok(Point(px, _py)) = secp256k1.mul_g(privkey)
+  // 32 バイトの x-only pubkey の前に 00 を足した、33 バイトの pubkey。
+  let pubkey_33 = <<0:size(8), secp256k1.int_to_bytes32(px):bits>>
+  let draft =
+    Event(
+      id: "",
+      pubkey: hex.encode(pubkey_33),
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: [],
+      content: "hi",
+      sig: "",
+    )
+  let sig =
+    sign_over_pubkey_bytes(privkey, pubkey_33, event.hash_for_signing(draft))
+  let signed = Event(..draft, id: event.compute_id(draft), sig: hex.encode(sig))
+  assert !event.verify_signature(signed)
+  assert event.verify(signed) == Error(event.InvalidSignature)
+}
+
+/// 64 バイトでない sig を持つイベントは検証に落ちる。長さの検査は
+/// `bip340.verify` が担うため、`verify_signature` には重ねて検査を足さない
+/// という決定を固定する。
+pub fn verify_signature_rejects_a_signature_that_is_not_64_bytes_test() {
+  let signed = signed_event.new(1, "verified")
+  assert !event.verify_signature(Event(..signed, sig: signed.sig <> "00"))
+}
+
+/// 任意のバイト列を pubkey として BIP-340 の challenge に入れて署名する。長さの
+/// 検査を確かめるための、仕様外の pubkey を持つ正しい署名を作る。
+/// `bip340.sign_with_aux` から乱数を除き、固定の nonce `k0 = 1` を使う。
+fn sign_over_pubkey_bytes(
+  privkey: Int,
+  pubkey: BitArray,
+  message: BitArray,
+) -> BitArray {
+  let assert Ok(Point(_px, py)) = secp256k1.mul_g(privkey)
+  let d = case py % 2 == 0 {
+    True -> privkey
+    False -> secp256k1.n - privkey
+  }
+  let k0 = 1
+  let assert Ok(Point(rx, ry)) = secp256k1.mul_g(k0)
+  let k = case ry % 2 == 0 {
+    True -> k0
+    False -> secp256k1.n - k0
+  }
+  let rx_bytes = secp256k1.int_to_bytes32(rx)
+  let e =
+    secp256k1.int_from_bytes(
+      bip340.tagged_hash("BIP0340/challenge", <<
+        rx_bytes:bits,
+        pubkey:bits,
+        message:bits,
+      >>),
+    )
+    % secp256k1.n
+  let s = { k + e * d } % secp256k1.n
+  <<rx_bytes:bits, secp256k1.int_to_bytes32(s):bits>>
 }
 
 /// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した

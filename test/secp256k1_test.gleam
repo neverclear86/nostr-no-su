@@ -110,3 +110,10 @@ pub fn lift_x_rejects_invalid_x_test() {
   assert secp256k1.lift_x(secp256k1.int_to_bytes32(5))
     == Error(secp256k1.InvalidPublicKey)
 }
+
+/// 32 バイトでない入力は、整数としては有効な x でも拒否する。
+pub fn lift_x_rejects_input_that_is_not_32_bytes_test() {
+  let assert Ok(Point(x, _y)) = secp256k1.mul_g(1)
+  let too_long = <<0:size(8), secp256k1.int_to_bytes32(x):bits>>
+  assert secp256k1.lift_x(too_long) == Error(secp256k1.InvalidPublicKey)
+}
