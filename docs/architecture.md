@@ -409,6 +409,7 @@ sequenceDiagram
 ## 管理 UI のルート
 
 `/healthz` 以外はすべて Basic 認証を要する。
+認証に失敗した要求は、理由（資格情報なし、形式の誤り、資格情報の不一致）だけを `[admin]` の 1 行でログに出す。資格情報、パス（承認ページのトークンを含みうる）、送信元は出さず、遅延やロックアウトは入れない。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
 ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
