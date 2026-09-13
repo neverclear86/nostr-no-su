@@ -354,6 +354,207 @@ pub fn load_all_reports_shadowed_modules_test() {
     decode.run(apply(atom.create(shared), atom.create("value"), []), decode.int)
 }
 
+/// 影に入ったモジュールの報告には、提供元のアプリと版が添えられる（#92 の
+/// 受け入れ条件）。版をハードコードせず、被検コードとは別の経路
+/// （`application:get_key/2`）で得た値と比べる。
+pub fn load_all_reports_shadowed_module_versions_test() {
+  let fixture = beam_fixture.new("shadow_versions")
+  let ebin = ebin_in(fixture, [fixture.module])
+  beam_fixture.write_garbage(ebin <> "/lists.beam")
+  put_plugin(fixture.module, "shadow_versions_plugin", ebin)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "shadow_versions_plugin"
+  assert has_note(notes, ": 1 module(s) already provided")
+  assert has_note(
+    notes,
+    "(stdlib " <> beam_fixture.loaded_app_version("stdlib") <> ")",
+  )
+}
+
+/// 要求した版がコードパス上の版と完全一致すれば読み込まれる。
+pub fn load_all_required_versions_match_test() {
+  let fixture = beam_fixture.new("required_match")
+  let ebin = ebin_in(fixture, [fixture.module])
+  let app = beam_fixture.name(fixture, "req_app")
+  beam_fixture.write_app_file(ebin, app, "1.2.0")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "required_match_plugin",
+      "#{<<\"" <> app <> "\">> => <<\"1.2.0\">>}",
+    ),
+    fixture.module,
+    ebin,
+  )
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "required_match_plugin"
+}
+
+/// 照合の相手は「実行時に実際に使われる版」である。プラグインが偽の
+/// `stdlib.app` を同梱していても、本体側の `.app` が先に見つかるので、本物の
+/// 版を要求すれば読み込まれる。
+pub fn load_all_required_versions_host_wins_test() {
+  let fixture = beam_fixture.new("required_host_wins")
+  let ebin = ebin_in(fixture, [fixture.module])
+  beam_fixture.write_app_file(ebin, "stdlib", "0.0.0")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "required_host_wins_plugin",
+      "#{<<\"stdlib\">> => <<\""
+        <> beam_fixture.loaded_app_version("stdlib")
+        <> "\">>}",
+    ),
+    fixture.module,
+    ebin,
+  )
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "required_host_wins_plugin"
+}
+
+/// 要求した版がコードパス上の版と食い違うと読み込まれず、理由に両方の版が出る。
+pub fn load_all_required_versions_mismatch_test() {
+  let fixture = beam_fixture.new("required_mismatch")
+  let ebin = ebin_in(fixture, [fixture.module])
+  let app = beam_fixture.name(fixture, "req_app")
+  beam_fixture.write_app_file(ebin, app, "1.2.0")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "mismatch_plugin",
+      "#{<<\"" <> app <> "\">> => <<\"1.3.0\">>}",
+    ),
+    fixture.module,
+    ebin,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    "requires " <> app <> " 1.3.0, but the code path provides 1.2.0",
+  )
+  assert has_note(notes, "(1 skipped)")
+}
+
+/// コードパスのどこにも無いアプリケーションを要求すると読み込まれない。
+pub fn load_all_required_versions_missing_app_test() {
+  let fixture = beam_fixture.new("required_missing_app")
+  let app = beam_fixture.name(fixture, "missing_app")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "missing_app_plugin",
+      "#{<<\"" <> app <> "\">> => <<\"1.0.0\">>}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "but no " <> app <> ".app is on the code path")
+}
+
+/// `plugin_required_versions/0` の戻り値の形が合わないと、`decode` のエラーを
+/// 整えた 1 行になる。値が悪い場合とキーの集合自体が悪い（map でない）場合の
+/// 両方を確かめる。
+pub fn load_all_required_versions_bad_shape_test() {
+  let fixture = beam_fixture.new("required_bad_shape")
+  let bad_value = beam_fixture.name(fixture, "aaa")
+  let bad_list = beam_fixture.name(fixture, "bbb")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      bad_value,
+      "bad_value_plugin",
+      "#{<<\"app\">> => 1}",
+    ),
+    bad_value,
+    fixture.root,
+  )
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(bad_list, "bad_list_plugin", "[]"),
+    bad_list,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    bad_value
+      <> ": plugin_required_versions/0 must return a map of application names to version strings (expected String, got Int at app)",
+  )
+  assert has_note(
+    notes,
+    bad_list
+      <> ": plugin_required_versions/0 must return a map of application names to version strings (expected Dict, got List)",
+  )
+}
+
+/// 戻らない `plugin_required_versions/0` は他のメタデータ関数と同じ形で
+/// タイムアウトになる。
+pub fn load_all_required_versions_timeout_test() {
+  let fixture = beam_fixture.new("required_timeout")
+  beam_fixture.compile(
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "required_timeout_plugin",
+      "receive after infinity -> ok end",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      short_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    fixture.module <> ": plugin_required_versions/0 timed out after 100ms",
+  )
+}
+
 /// 読み込んだ `Plugin.handle` にイベントを渡すと、プラグインへイベント map が
 /// 届く。
 pub fn load_all_dispatches_event_test() {

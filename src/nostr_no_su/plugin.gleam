@@ -4,8 +4,9 @@
 ////
 //// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`
 ////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
-////   エクスポートする。それ以外のエクスポートはすべて任意で、あっても無くても
-////   読み込み判定に影響しない。
+////   エクスポートする。未知のエクスポートは読み込みに影響しない。本体が使う
+////   任意エクスポート（`plugin_children`、`plugin_required_versions`）は存在
+////   するときだけ呼ばれ、その結果で読み込まれないことがある。
 //// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
 //// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
@@ -27,14 +28,18 @@
 ////   `plugin_children` が行い、結果は `Plugin.children` に載る。子仕様の代わりに
 ////   `{error, Reason}` を返すと「設定が足りないので読み込まないでほしい」という
 ////   申告になり、そのプラグインだけが無効になる。
-//// - 検証の順序は `plugin_api_version` → `plugin_name` → 設定の切り出し →
-////   `plugin_children` で、最初に失敗したところで止まる。**設定の切り出しは
-////   `plugin_name/0` の後にしかできない**（環境変数の接頭辞がプラグイン名から
-////   決まるため）。
-//// - メタデータの呼び出し（`plugin_api_version/0`、`plugin_name/0`、
-////   `plugin_children/0,1`）は `main` のプロセスで起動時に同期に行われるので、
-////   1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で打ち切る。戻らない
-////   プラグインは理由の 1 行で読み込まれず、起動は続く。
+//// - 任意エクスポート `plugin_required_versions/0` があれば、依存する本体側の
+////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
+////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
+////   プラグインを読み込まない。
+//// - 検証の順序は `plugin_api_version` → `plugin_required_versions` →
+////   `plugin_name` → 設定の切り出し → `plugin_children` で、最初に失敗した
+////   ところで止まる。**設定の切り出しは `plugin_name/0` の後にしかできない**
+////   （環境変数の接頭辞がプラグイン名から決まるため）。
+//// - メタデータの呼び出し（`plugin_api_version/0`、`plugin_required_versions/0`、
+////   `plugin_name/0`、`plugin_children/0,1`）は `main` のプロセスで起動時に
+////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で
+////   打ち切る。戻らないプラグインは理由の 1 行で読み込まれず、起動は続く。
 //// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
 ////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
 ////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
@@ -57,6 +62,7 @@ import gleam/int
 import gleam/list
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
+import gleam/string
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_config
@@ -72,6 +78,9 @@ pub const default_call_timeout_ms: Int = 5000
 
 /// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
 const handle_event_name = "handle_event"
+
+/// 本体が読み込み時に照合する任意エクスポートの名前。
+const required_versions_name = "plugin_required_versions"
 
 /// プラグインは監視対象アカウントから受信したすべてのイベントを処理する。
 /// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
@@ -142,6 +151,7 @@ pub fn load(
   let takes_config = has_export(module, handle_event_name, 2)
   use _ <- result.try(require_exports(module, name, takes_config))
   use _ <- result.try(check_api_version(module, name, call_timeout_ms))
+  use _ <- result.try(check_required_versions(module, name, call_timeout_ms))
   use plugin_name <- result.try(read_plugin_name(module, name, call_timeout_ms))
   let config_map =
     plugin_config.to_map(plugin_config.for_plugin(env, plugin_name))
@@ -236,6 +246,94 @@ fn check_api_version(
           <> int.to_string(api_version)
           <> ")",
       ))
+  }
+}
+
+/// 任意エクスポート `plugin_required_versions/0` があれば期限付きで呼び、宣言
+/// されたアプリケーションの版がコードパス上の `.app` の版と完全一致することを
+/// 確かめる。エクスポートが無ければ照合しない。
+fn check_required_versions(
+  module: Atom,
+  name: String,
+  call_timeout_ms: Int,
+) -> Result(Nil, String) {
+  case has_export(module, required_versions_name, 0) {
+    False -> Ok(Nil)
+    True -> {
+      use value <- result.try(call_export(
+        module,
+        name,
+        required_versions_name,
+        [],
+        call_timeout_ms,
+      ))
+      use required <- result.try(
+        decode.run(value, decode.dict(decode.string, decode.string))
+        |> result.map_error(fn(errors) {
+          prefix(
+            name,
+            required_versions_name
+              <> "/0 must return a map of application names to version strings ("
+              <> describe_decode_error(errors)
+              <> ")",
+          )
+        }),
+      )
+      required
+      |> dict.to_list
+      |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+      |> list.try_each(fn(pair) { check_required_version(name, pair.0, pair.1) })
+    }
+  }
+}
+
+/// アプリケーション 1 つの要求版を、コードパス上の版と照らし合わせる。
+fn check_required_version(
+  name: String,
+  app: String,
+  required: String,
+) -> Result(Nil, String) {
+  use found <- result.try(
+    application_version(app)
+    |> result.replace_error(prefix(
+      name,
+      "requires "
+        <> app
+        <> " "
+        <> required
+        <> ", but no "
+        <> app
+        <> ".app is on the code path",
+    )),
+  )
+  case found == required {
+    True -> Ok(Nil)
+    False ->
+      Error(prefix(
+        name,
+        "requires "
+          <> app
+          <> " "
+          <> required
+          <> ", but the code path provides "
+          <> found,
+      ))
+  }
+}
+
+/// `decode` の最初のエラーを `expected X, got Y at a.b` の 1 行にする。エラーの
+/// リストが空になることは `decode.run` の `Error` では起きないが、網羅のために
+/// 節を置く。
+fn describe_decode_error(errors: List(decode.DecodeError)) -> String {
+  case errors {
+    [] -> "invalid value"
+    [error, ..] -> {
+      let location = case error.path {
+        [] -> ""
+        path -> " at " <> string.join(path, ".")
+      }
+      "expected " <> error.expected <> ", got " <> error.found <> location
+    }
   }
 }
 
@@ -376,3 +474,7 @@ fn call_export_within(
   args: List(Dynamic),
   timeout_ms: Int,
 ) -> Result(Dynamic, CallFailure)
+
+/// コードパス上で最初に見つかる `<app>.app` の `vsn`。
+@external(erlang, "nostr_no_su_ffi", "application_version")
+fn application_version(app: String) -> Result(String, Nil)
