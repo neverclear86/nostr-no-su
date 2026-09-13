@@ -1157,14 +1157,11 @@ fn session_target(
   signer: String,
   client: String,
 ) -> Option(#(String, String)) {
-  case
-    list.find(engine.sessions(eng), fn(session) {
-      session.signer == signer && session.client == client
-    })
-  {
-    Ok(_found) -> Some(#(signer, client))
-    Error(Nil) -> None
-  }
+  list.find(engine.sessions(eng), fn(session) {
+    session.signer == signer && session.client == client
+  })
+  |> option.from_result
+  |> option.map(fn(_found) { #(signer, client) })
 }
 
 /// 失敗 1 件のログ行。値は署名者とクライアントの公開鍵と固定の文言の理由だけで、
