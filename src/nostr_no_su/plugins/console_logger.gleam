@@ -1,22 +1,29 @@
 import gleam/int
-import gleam/io
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
 
+/// プラグインの名前。`new` とログの接頭辞の両方で使う。
+const name = "console_logger"
+
 /// 受信したイベントの概要を標準出力に書くプラグイン。
 pub fn new() -> Plugin {
-  Plugin(name: "console_logger", children: [], handle: log_event)
+  Plugin(name: name, children: [], handle: log_event)
 }
 
-/// イベント 1 件を 1 行にする。content は長くなりうるので先頭だけを出す。
+/// イベント 1 件の概要をこのプラグインの接頭辞を付けて出力する。
 fn log_event(event: Event) -> Nil {
-  io.println(
-    "[event] kind="
-    <> int.to_string(event.kind)
-    <> " pubkey="
-    <> string.slice(event.pubkey, 0, 8)
-    <> " content="
-    <> string.slice(event.content, 0, 80),
-  )
+  log.println(log.plugin_prefix(name), event_line(event))
+}
+
+/// イベント 1 件の概要のログ行の本文。content は長くなりうるので先頭の 80
+/// コードポイントだけを、改行を含む制御文字を空白にして出す。
+pub fn event_line(event: Event) -> String {
+  "kind="
+  <> int.to_string(event.kind)
+  <> " pubkey="
+  <> string.slice(event.pubkey, 0, 8)
+  <> " content="
+  <> log.sanitize(event.content, 80)
 }
