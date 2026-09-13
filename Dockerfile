@@ -1,8 +1,12 @@
 FROM ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine AS build
 COPY . /build/
+# erlang-shipment にはライセンスのファイルが入らないので、再配布の条件として本体、
+# vendor/stratus、Hex の依存のライセンスを shipment に集める。Hex の依存のファイルは
+# /build を消す前にしか取れない。
 RUN cd /build \
   && gleam deps download \
   && gleam export erlang-shipment \
+  && sh dev/collect_licenses.sh build/erlang-shipment \
   && mv build/erlang-shipment /app \
   && rm -r /build
 
