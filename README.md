@@ -118,7 +118,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。`ADMIN_PORT=` で管理 UI を無効にした構成では要らない。パスワードは自動生成しない。認証に失敗した要求は `[admin] rejected a request with wrong credentials` のように理由だけを 1 行ログに出す（資格情報なしの `without credentials`、形式が壊れた `with malformed credentials` もある）。ブラウザーは最初に資格情報なしで要求するので、`without credentials` の行は正規の利用でも出る。試行の回数の制限や遅延は無いので、推測されにくいパスワードを使い、公開範囲をループバックか VPN の内側に絞ること。
 
-`ADMIN_PORT` で待ち受けポートを変更でき、空文字列（`ADMIN_PORT=`）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
+`ADMIN_PORT` で待ち受けポートを変更でき、空文字列や空白だけの値（`ADMIN_PORT=` など）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` か空白だけの値で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
 ページのスタイルとスクリプトは、ビルドした CSS（`/static/admin.css`）と JS（`/static/admin.js`）を管理 UI 自身が配信する。CDN などの外部のファイルは読まないので、外部に到達できない環境でも表示できる。CSS と JS もページと同じく Basic 認証の後にある。
 
@@ -175,7 +175,7 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
-| `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
+| `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
