@@ -15,8 +15,8 @@ RUN apk add --no-cache ca-certificates \
   && adduser -D -H nostr
 WORKDIR /app
 COPY --from=build --chown=nostr:nostr /app /app
-# 秘密鍵を暗号化するマスターキーを環境変数で受け取り、復号した秘密鍵をメモリに
-# 持つプロセスなので、root では動かさない。
+# 秘密鍵を暗号化するマスターキーを環境変数かファイルで受け取り、復号した秘密鍵を
+# メモリに持つプロセスなので、root では動かさない。
 USER nostr
 # 管理 UI の /healthz は認証なしで応答する。`ADMIN_PORT=` として管理 UI を無効に
 # した構成では待ち受けが無いため、チェック自体を省略して成功扱いにする。空文字列を

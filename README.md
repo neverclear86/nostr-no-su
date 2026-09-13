@@ -62,9 +62,51 @@ docker compose up --build
 
 バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数指定すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。`BUNKER_RELAY_URL` を省略すると `RELAY_URL` と同じリレーを使う（`RELAY_URL` も空なら `wss://relay.damus.io`）。
 
-> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ホストの権限も絞ること。
+> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。
 
 > ⚠️ **アカウントの削除と秘密鍵の表示**: 削除するとバンカーからも DB からも鍵が消え、DB 以外に保存していない鍵は戻らない。秘密鍵を表示すると、ログに `[admin] revealed the private key of <npub>` が残る。管理パスワードの再入力が違うときは `[admin] rejected a private key reveal for <npub>: incorrect password` が残る。コピーした nsec や接続 URI はクリップボードに残るので、貼り付けた後は消すこと。
+
+#### 秘密をファイルで渡す
+
+`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD` は、`<変数>_FILE` に置いたファイルのパスからも読める。両方を空でない値にすると起動しない。末尾の改行は落とす。読めないファイルと空のファイルは `[main] cannot start: <変数>_FILE could not be read (enoent)` などの 1 行を出して終了する。
+
+本体はこの 3 つを読み込んだ後にプロセスの環境から消すので、同じ VM で動くプラグインは `os:getenv/1` で読めない。ただし環境変数で渡した値は `docker inspect` と `/proc/<pid>/environ` に残る。これを避けるにはファイルで渡す。
+
+docker compose の例:
+
+```sh
+mkdir -p secrets
+openssl rand -hex 32 > secrets/account_master_key
+openssl rand -base64 24 > secrets/admin_password
+chmod 600 secrets/*
+# ホストの uid が 1000 でなければ続けて実行する（コンテナーは uid 1000 で動き、
+# compose の secrets: はホストの所有者とモードのまま見える）
+sudo chown 1000 secrets/*
+# chown の後はホストの利用者が読めないので、ログインに使うパスワードは
+# sudo cat secrets/admin_password で確かめる
+```
+
+次の `docker-compose.override.yml`（`docker compose up` が自動で重ねる）を置き、`.env` の `ACCOUNT_MASTER_KEY=` と `ADMIN_PASSWORD=` は空のままにする。
+
+```yaml
+services:
+  nostr-no-su:
+    environment:
+      ACCOUNT_MASTER_KEY_FILE: /run/secrets/account_master_key
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+    secrets:
+      - account_master_key
+      - admin_password
+secrets:
+  account_master_key:
+    file: ./secrets/account_master_key
+  admin_password:
+    file: ./secrets/admin_password
+```
+
+`DATABASE_URL_FILE` を compose で使うときは、`.env` に `DATABASE_URL=` と空で書く。同梱の compose は `${DATABASE_URL-...}` で、未設定なら同梱の Postgres の URL を渡すので、書かないと両方が設定された扱いで起動しない。
+
+パーミッション: compose の `secrets:` はホストのファイルをそのままマウントするので、swarm でなければ `uid` や `mode` の指定は効かない。`chown` を忘れると `[main] cannot start: ACCOUNT_MASTER_KEY_FILE could not be read (eacces)` で終了する。`secrets/` は `.gitignore` に入っている。
 
 #### 対応クライアントと相互運用
 
@@ -125,15 +167,15 @@ compose には Postgres（`postgres:17-alpine`）が同梱されており、ア�
 | --- | --- | --- |
 | `RELAY_URL` | `wss://relay.damus.io` | 監視先リレーの URL（カンマ区切りで複数可）。空にすると監視無効（バンカーのみ） |
 | `BUNKER_RELAY_URL` | `RELAY_URL` と同じ | バンカーが購読・応答するリレーの URL（カンマ区切りで複数可）。`RELAY_URL` も空なら `wss://relay.damus.io` |
-| `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1） |
-| `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない |
+| `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1）。`DATABASE_URL_FILE` でファイルから読める（「秘密をファイルで渡す」） |
+| `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない。`ACCOUNT_MASTER_KEY_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `PUBKEYS` | （空） | 監視するアカウントの hex 公開鍵（カンマ区切り）。空なら直近のイベントを購読 |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にしても無効化にはならない（保存をやめるならプラグインを置かない）。docker compose では同梱の Postgres を指す |
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
-| `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない |
+| `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 
 注 1: `DATABASE_URL` の userinfo はパーセントデコードされない。`:` を含むパスワード、ユーザー名の無い URL（`postgres://host:5432/db` のように `user@` を持たないもの）、データベース名の無い URL は解釈できず、`[main] cannot start: DATABASE_URL is not a valid postgres URL` を出して終了する（URL そのものはログに出さない）。

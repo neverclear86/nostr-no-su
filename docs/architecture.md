@@ -579,6 +579,7 @@ nostr-no-su/
 ## 環境変数と読み手
 
 環境変数はすべて `config.gleam` の 1 か所で読む。
+`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD` は `<変数>_FILE` のファイルからも読み、読み込みの後にプロセスの環境から消す。
 既定値、空文字列の意味、書き方は [README](../README.md) の「環境変数」にあり、この表は読み手だけを示す。
 
 | 変数 | 読み手 |
@@ -586,13 +587,13 @@ nostr-no-su/
 | `RELAY_URL` | 監視 |
 | `BUNKER_RELAY_URL` | バンカー |
 | `PUBKEYS` | 監視 |
-| `DATABASE_URL` | バンカー（アカウントストア） |
-| `ACCOUNT_MASTER_KEY` | バンカー（アカウントの暗号化） |
+| `DATABASE_URL`（`_FILE`） | バンカー（アカウントストア） |
+| `ACCOUNT_MASTER_KEY`（`_FILE`） | バンカー（アカウントの暗号化） |
 | `PLUGIN_DIR` | プラグインローダー |
 | `PLUGIN_<NAME>_<KEY>` | 各プラグイン |
 | `ADMIN_PORT` | 管理 UI |
 | `ADMIN_BIND` | 管理 UI |
-| `ADMIN_PASSWORD` | 管理 UI |
+| `ADMIN_PASSWORD`（`_FILE`） | 管理 UI |
 | `ADMIN_BASE_URL` | バンカー（承認ページの URL） |
 
 プラグイン固有の設定だけは本体が中身を解釈しない。
