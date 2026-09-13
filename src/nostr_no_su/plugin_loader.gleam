@@ -59,6 +59,9 @@ const shadow_sample_size = 3
 /// `plugin_env` には `PLUGIN_*` の環境変数（`config.plugin_env`）を渡す。走査・
 /// コードパス・影の判定には一切関与せず、`plugin.load` へそのまま渡すだけである。
 ///
+/// `call_timeout_ms` は `plugin.load` へそのまま渡す、メタデータ用のエクスポート
+/// 1 回ごとの期限。
+///
 /// `Plugin` は任意エクスポート `plugin_children/0` `plugin_children/1` から
 /// 解決した子仕様（`children`）を持って返る。モジュール atom は `Plugin` に載せない（任意
 /// エクスポートの問い合わせは、atom がまだ手元にある `plugin.load` の中で
@@ -68,12 +71,13 @@ pub fn load_all(
   plugin_dir: Option(String),
   reserved: List(String),
   plugin_env: Dict(String, String),
+  call_timeout_ms: Int,
 ) -> #(List(Plugin), List(String)) {
   case plugin_dir {
     None -> #([], [
       log.line(log_prefix, "no PLUGIN_DIR set; external plugins disabled"),
     ])
-    Some(raw) -> scan(absolute_path(raw), reserved, plugin_env)
+    Some(raw) -> scan(absolute_path(raw), reserved, plugin_env, call_timeout_ms)
   }
 }
 
@@ -83,6 +87,7 @@ fn scan(
   dir: String,
   reserved: List(String),
   plugin_env: Dict(String, String),
+  call_timeout_ms: Int,
 ) -> #(List(Plugin), List(String)) {
   case list_dir(dir) {
     Error(reason) -> #([], [
@@ -104,7 +109,7 @@ fn scan(
         |> list.sort(string.compare)
         |> list.unique
       let #(plugins, load_notes) =
-        load_candidates(modules, reserved, plugin_env)
+        load_candidates(modules, reserved, plugin_env, call_timeout_ms)
       #(
         plugins,
         list.flatten([
@@ -343,6 +348,7 @@ fn load_candidates(
   modules: List(String),
   reserved: List(String),
   plugin_env: Dict(String, String),
+  call_timeout_ms: Int,
 ) -> #(List(Plugin), List(String)) {
   let #(plugins, notes) =
     list.fold(
@@ -350,7 +356,7 @@ fn load_candidates(
       #([], []),
       fn(acc: #(List(Plugin), List(String)), module) {
         let #(plugins, notes) = acc
-        case plugin.load(atom.create(module), plugin_env) {
+        case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
           Error(reason) -> #(plugins, [log.line(log_prefix, reason), ..notes])
           Ok(loaded) -> {
             let taken =

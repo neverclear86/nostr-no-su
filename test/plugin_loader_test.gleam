@@ -11,6 +11,7 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -18,6 +19,10 @@ import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import support/beam_fixture.{type Fixture}
+
+/// 戻らない・異常終了するメタデータ呼び出しのテストに使う短い期限。実時間に
+/// 依存しないよう小さく取る（`plugin_runner_test.gleam` の `limits` と同じ形）。
+const short_call_timeout_ms = 100
 
 /// 配信の確認に使うサンプルイベント。
 fn sample_event() -> Event {
@@ -60,7 +65,8 @@ fn put_plugin(module: String, name: String, outdir: String) -> Nil {
 
 /// `PLUGIN_DIR` が未設定なら、プラグインは 0 件で「無効」の行だけが出る。
 pub fn load_all_without_plugin_dir_test() {
-  let #(plugins, notes) = plugin_loader.load_all(None, [], dict.new())
+  let #(plugins, notes) =
+    plugin_loader.load_all(None, [], dict.new(), plugin.default_call_timeout_ms)
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "no PLUGIN_DIR set")
@@ -70,7 +76,12 @@ pub fn load_all_without_plugin_dir_test() {
 pub fn load_all_missing_directory_test() {
   let fixture = beam_fixture.new("missing")
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root <> "/nope"), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root <> "/nope"),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(notes, "cannot read directory (enoent)")
   assert has_note(notes, "external plugins disabled")
@@ -81,7 +92,13 @@ pub fn load_all_not_a_directory_test() {
   let fixture = beam_fixture.new("not_a_dir")
   let path = fixture.root <> "/file.txt"
   beam_fixture.write(path, "not a directory")
-  let #(plugins, notes) = plugin_loader.load_all(Some(path), [], dict.new())
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(path),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(notes, "cannot read directory (enotdir)")
 }
@@ -91,7 +108,12 @@ pub fn load_all_flat_beam_test() {
   let fixture = beam_fixture.new("flat")
   put_plugin(fixture.module, "flat_plugin", fixture.root)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "flat_plugin"
   assert has_note(notes, "loaded 1 plugin(s) from")
@@ -106,7 +128,12 @@ pub fn load_all_bundle_ebin_test() {
     ebin_in(fixture, [fixture.module]),
   )
   let #(plugins, _notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "bundle_plugin"
 }
@@ -118,7 +145,12 @@ pub fn load_all_shipment_layout_test() {
   let ebin = ebin_in(fixture, [fixture.module, "some_app"])
   put_plugin(fixture.module, "shipment_plugin", ebin)
   let #(plugins, _notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "shipment_plugin"
 }
@@ -132,7 +164,12 @@ pub fn load_all_broken_beam_test() {
   beam_fixture.write_garbage(fixture.root <> "/" <> broken <> ".beam")
   put_plugin(good, "survivor_plugin", fixture.root)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "cannot load module (badfile)")
@@ -148,7 +185,12 @@ pub fn load_all_api_mismatch_test() {
     fixture.root,
   )
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(notes, "unsupported api version 2")
 }
@@ -159,7 +201,12 @@ pub fn load_all_directory_without_ebin_test() {
   let bundle = beam_fixture.name(fixture, "empty")
   beam_fixture.mkdir(fixture.root <> "/" <> bundle)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(notes, "no ebin directory found")
   assert has_note(notes, bundle <> "/ebin or " <> bundle <> "/*/ebin")
@@ -172,7 +219,12 @@ pub fn load_all_ignores_non_plugin_entries_test() {
   beam_fixture.write(fixture.root <> "/.gitkeep", "")
   beam_fixture.write(fixture.root <> "/README.md", "# plugins")
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "loaded no plugins from")
@@ -187,7 +239,12 @@ pub fn load_all_duplicate_name_test() {
   put_plugin(first, "same_name", fixture.root)
   put_plugin(second, "same_name", fixture.root)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "same_name"
   assert has_note(notes, second <> ": duplicate plugin name \"same_name\"")
@@ -200,7 +257,12 @@ pub fn load_all_rejects_reserved_name_test() {
   let fixture = beam_fixture.new("reserved")
   put_plugin(fixture.module, "console_logger", fixture.root)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), ["console_logger"], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      ["console_logger"],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(notes, "duplicate plugin name \"console_logger\"")
 }
@@ -215,7 +277,12 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
   let unrelated = beam_fixture.name(fixture, "unrelated")
   beam_fixture.compile(beam_fixture.value_source(unrelated, 1), unrelated, ebin)
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(
     notes,
@@ -235,7 +302,12 @@ pub fn load_all_skips_shadowed_entry_module_flat_test() {
   let fixture = beam_fixture.new("shadow_flat")
   beam_fixture.write_garbage(fixture.root <> "/minimal_plugin.beam")
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert plugins == []
   assert has_note(
     notes,
@@ -264,7 +336,12 @@ pub fn load_all_reports_shadowed_modules_test() {
   )
 
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert list.map(plugins, fn(item) { item.name })
     == ["first_plugin", "second_plugin"]
   assert has_note(notes, second <> ": 1 module(s) already provided")
@@ -283,7 +360,12 @@ pub fn load_all_dispatches_event_test() {
   let fixture = beam_fixture.new("dispatch")
   put_plugin(fixture.module, "dispatch_plugin", fixture.root)
   let #(plugins, _notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   loaded.handle(sample_event())
   assert event.from_map(beam_fixture.last_event(fixture.module))
@@ -312,11 +394,17 @@ pub fn load_all_example_plugin_test() {
       dict.from_list([
         #("PLUGIN_FILE_LOGGER_PATH", "/tmp/nostr-no-su-events.log"),
       ]),
+      plugin.default_call_timeout_ms,
     )
   let assert [loaded] = plugins
   assert loaded.name == "file_logger"
 
-  let assert Error(reason) = plugin.load(atom.create("file_logger"), dict.new())
+  let assert Error(reason) =
+    plugin.load(
+      atom.create("file_logger"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert string.contains(
     reason,
     "plugin_children/1 rejected the configuration (path is required); "
@@ -342,6 +430,7 @@ pub fn load_all_passes_config_test() {
         #("PLUGIN_OTHER_PLUGIN_PATH", "/tmp/other.log"),
         #("PLUGIN_DIR", fixture.root),
       ]),
+      plugin.default_call_timeout_ms,
     )
   let assert [_loaded] = plugins
   assert decode.run(
@@ -367,7 +456,12 @@ pub fn load_all_rejected_config_test() {
     ebin_in(fixture, [good]),
   )
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "good_config_plugin"
   assert has_note(
@@ -390,7 +484,12 @@ pub fn load_all_counter_example_test() {
     fixture.root,
   )
   let #(plugins, _notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "counter"
   assert list.length(loaded.children) == 1
@@ -409,7 +508,12 @@ pub fn load_all_plugin_with_children_test() {
     ebin_in(fixture, [fixture.module]),
   )
   let #(plugins, _notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert list.length(loaded.children) == 1
 }
@@ -430,11 +534,74 @@ pub fn load_all_bad_children_test() {
     ebin_in(fixture, [good]),
   )
   let #(plugins, notes) =
-    plugin_loader.load_all(Some(fixture.root), [], dict.new())
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let assert [loaded] = plugins
   assert loaded.name == "good_children_plugin"
   assert has_note(notes, "plugin_children/0: child #0: missing id")
   assert has_note(notes, "(1 skipped)")
+}
+
+/// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
+/// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる（受け入れ条件）。
+/// 打ち切られた呼び出しのプロセスも残らない。
+///
+/// 期限 100ms は、使い捨てのプロセスが `plugin_name/0` の先頭で Pid を退避する
+/// より十分長い（退避の前に打ち切ると `last_pid` が `badarg` で落ちる）。
+pub fn load_all_hanging_metadata_test() {
+  let fixture = beam_fixture.new("hanging_metadata")
+  let hanging = beam_fixture.name(fixture, "aaa")
+  let good = beam_fixture.name(fixture, "bbb")
+  beam_fixture.compile(
+    beam_fixture.plugin_name_body_source(
+      hanging,
+      1,
+      "persistent_term:put(?MODULE, self()), receive after infinity -> ok end",
+    ),
+    hanging,
+    fixture.root,
+  )
+  put_plugin(good, "survivor_plugin", fixture.root)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      short_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "survivor_plugin"
+  assert has_note(notes, hanging <> ": plugin_name/0 timed out after 100ms")
+  assert has_note(notes, "(1 skipped)")
+  assert !process.is_alive(beam_fixture.last_pid(hanging))
+}
+
+/// `plugin_name/0` が自プロセスを kill するプラグインは、印の無い DOWN として
+/// `crashed` の理由になる（`killed`）。
+pub fn load_all_killed_metadata_test() {
+  let fixture = beam_fixture.new("killed_metadata")
+  beam_fixture.compile(
+    beam_fixture.plugin_name_body_source(
+      fixture.module,
+      1,
+      "exit(self(), kill)",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      short_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, fixture.module <> ": plugin_name/0 crashed (killed)")
 }
 
 /// 影に入ったモジュールを実際に呼ぶために使う。戻り値の型はモジュール次第なので

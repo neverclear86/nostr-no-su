@@ -24,7 +24,12 @@ fn sample_event() -> event.Event {
 
 /// 読み込みに失敗した理由の文字列を取り出す。設定は空。
 fn load_error(module_name: String) -> String {
-  let assert Error(reason) = plugin.load(atom.create(module_name), dict.new())
+  let assert Error(reason) =
+    plugin.load(
+      atom.create(module_name),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   reason
 }
 
@@ -34,7 +39,11 @@ fn load_error_with(
   env: List(#(String, String)),
 ) -> String {
   let assert Error(reason) =
-    plugin.load(atom.create(module_name), dict.from_list(env))
+    plugin.load(
+      atom.create(module_name),
+      dict.from_list(env),
+      plugin.default_call_timeout_ms,
+    )
   reason
 }
 
@@ -52,7 +61,11 @@ fn saved_config(key: Atom) -> dict.Dict(String, String) {
 /// になる。
 pub fn load_valid_test() {
   let assert Ok(loaded) =
-    plugin.load(atom.create("support@plugin_valid"), dict.new())
+    plugin.load(
+      atom.create("support@plugin_valid"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert loaded.name == "plugin_valid"
 }
 
@@ -95,7 +108,7 @@ pub fn load_empty_name_test() {
 pub fn load_crashing_version_test() {
   assert string.contains(
     load_error("support@plugin_crashing_version"),
-    "crashed",
+    "plugin_api_version/0 crashed (error:",
   )
 }
 
@@ -111,7 +124,11 @@ pub fn load_unknown_module_test() {
 /// `event.from_map` で元の `Event` に戻せる。
 pub fn handle_passes_event_map_test() {
   let assert Ok(loaded) =
-    plugin.load(atom.create("support@plugin_valid"), dict.new())
+    plugin.load(
+      atom.create("support@plugin_valid"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   let original = sample_event()
   loaded.handle(original)
   let assert Ok(received) =
@@ -123,7 +140,8 @@ pub fn handle_passes_event_map_test() {
 /// 判定する。
 pub fn has_export_test() {
   let module = atom.create("support@plugin_valid")
-  let assert Ok(_) = plugin.load(module, dict.new())
+  let assert Ok(_) =
+    plugin.load(module, dict.new(), plugin.default_call_timeout_ms)
   assert plugin.has_export(module, "handle_event", 1)
   assert !plugin.has_export(module, "handle_event", 2)
   assert !plugin.has_export(module, "no_such_function", 0)
@@ -139,7 +157,12 @@ pub fn load_non_integer_version_test() {
 
 /// 仕様書に載せている Erlang の最小実装が、実際に読み込めること。
 pub fn load_erlang_minimal_plugin_test() {
-  let assert Ok(loaded) = plugin.load(atom.create("minimal_plugin"), dict.new())
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("minimal_plugin"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert loaded.name == "minimal_plugin"
 }
 
@@ -147,7 +170,11 @@ pub fn load_erlang_minimal_plugin_test() {
 /// 状態で読み込まれる。
 pub fn load_resolves_children_test() {
   let assert Ok(loaded) =
-    plugin.load(atom.create("support@plugin_with_children"), dict.new())
+    plugin.load(
+      atom.create("support@plugin_with_children"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert list.length(loaded.children) == 1
 }
 
@@ -156,7 +183,11 @@ pub fn load_resolves_children_test() {
 /// なる。
 pub fn load_without_children_export_test() {
   let assert Ok(loaded) =
-    plugin.load(atom.create("support@plugin_valid"), dict.new())
+    plugin.load(
+      atom.create("support@plugin_valid"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert loaded.children == []
 }
 
@@ -180,7 +211,11 @@ pub fn load_crashing_children_test() {
 /// 必須としている。
 pub fn load_handle_event_arity_two_test() {
   let assert Ok(loaded) =
-    plugin.load(atom.create("support@plugin_with_config"), dict.new())
+    plugin.load(
+      atom.create("support@plugin_with_config"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
   assert loaded.name == "plugin_with_config"
 }
 
@@ -194,6 +229,7 @@ pub fn children_receives_config_test() {
         #("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log"),
         #("PLUGIN_COUNTER_LIMIT", "10"),
       ]),
+      plugin.default_call_timeout_ms,
     )
   assert saved_config(plugin_with_config.children_config_key())
     == dict.from_list([#("path", "/tmp/events.log")])
@@ -205,6 +241,7 @@ pub fn handle_receives_config_test() {
     plugin.load(
       atom.create("support@plugin_with_config"),
       dict.from_list([#("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log")]),
+      plugin.default_call_timeout_ms,
     )
   loaded.handle(sample_event())
   assert saved_config(plugin_with_config.handle_config_key())

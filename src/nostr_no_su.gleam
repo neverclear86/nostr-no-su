@@ -88,6 +88,7 @@ fn startup(loaded: Config) -> Result(Startup, String) {
       loaded.plugin_dir,
       list.map(builtin, fn(item) { item.name }),
       loaded.plugin_env,
+      plugin.default_call_timeout_ms,
     )
   let specs = plugin_specs(list.append(builtin, external))
   let #(monitor, monitor_notes) = monitor_spec(loaded)

@@ -31,6 +31,10 @@
 ////   `plugin_children` で、最初に失敗したところで止まる。**設定の切り出しは
 ////   `plugin_name/0` の後にしかできない**（環境変数の接頭辞がプラグイン名から
 ////   決まるため）。
+//// - メタデータの呼び出し（`plugin_api_version/0`、`plugin_name/0`、
+////   `plugin_children/0,1`）は `main` のプロセスで起動時に同期に行われるので、
+////   1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で打ち切る。戻らない
+////   プラグインは理由の 1 行で読み込まれず、起動は続く。
 //// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
 ////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
 ////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
@@ -61,6 +65,11 @@ import nostr_no_su/plugin_config
 /// 完全に一致しなければならない。
 pub const api_version: Int = 1
 
+/// メタデータ用のエクスポート 1 回の呼び出しを待つ上限（ミリ秒）で、`main` が
+/// 渡す既定値。メタデータの関数は即座に戻る約束で、これは戻らないことを検出
+/// するための期限である。
+pub const default_call_timeout_ms: Int = 5000
+
 /// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
 const handle_event_name = "handle_event"
 
@@ -85,6 +94,15 @@ pub type Plugin {
   )
 }
 
+/// 期限付きで呼んだエクスポートが値を返さなかった理由。FFI の
+/// `{crashed, Reason}` と `timed_out` に対応する。
+type CallFailure {
+  /// 例外を投げたか、呼び出しのプロセスが異常終了した。理由は 1 行。
+  Crashed(reason: String)
+  /// 期限までに戻らなかった。
+  TimedOut
+}
+
 /// モジュールが指定した名前・アリティの関数をエクスポートしているか。任意
 /// エクスポートの有無を問い合わせるためのプリミティブで、本体は真のときだけ
 /// その関数を呼ぶ。
@@ -104,7 +122,14 @@ pub fn has_export(module: Atom, name: String, arity: Int) -> Bool {
 /// `env` は `PLUGIN_*` の環境変数全体（`config.plugin_env`）で、プラグイン名が
 /// 決まった時点でそのプラグインぶんだけを切り出す。切り出し済みの map を渡せない
 /// のは、接頭辞の元になるプラグイン名がこの関数の中でしか分からないためである。
-pub fn load(module: Atom, env: Dict(String, String)) -> Result(Plugin, String) {
+///
+/// `call_timeout_ms` はメタデータ用のエクスポート 1 回ごとの期限で、本番は
+/// `default_call_timeout_ms`。
+pub fn load(
+  module: Atom,
+  env: Dict(String, String),
+  call_timeout_ms: Int,
+) -> Result(Plugin, String) {
   let name = atom.to_string(module)
   use _ <- result.try(
     ensure_module_loaded(module)
@@ -116,8 +141,8 @@ pub fn load(module: Atom, env: Dict(String, String)) -> Result(Plugin, String) {
   // の判定と、下のクロージャーが渡す引数の決定の両方でこの値を使う。
   let takes_config = has_export(module, handle_event_name, 2)
   use _ <- result.try(require_exports(module, name, takes_config))
-  use _ <- result.try(check_api_version(module, name))
-  use plugin_name <- result.try(read_plugin_name(module, name))
+  use _ <- result.try(check_api_version(module, name, call_timeout_ms))
+  use plugin_name <- result.try(read_plugin_name(module, name, call_timeout_ms))
   let config_map =
     plugin_config.to_map(plugin_config.for_plugin(env, plugin_name))
   use children <- result.try(read_children(
@@ -125,6 +150,7 @@ pub fn load(module: Atom, env: Dict(String, String)) -> Result(Plugin, String) {
     name,
     plugin_name,
     config_map,
+    call_timeout_ms,
   ))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
   let handle_event = atom.create(handle_event_name)
@@ -180,8 +206,18 @@ fn require_exports(
 
 /// `plugin_api_version/0` を呼び、Int であることと `api_version` と一致すること
 /// を確かめる。
-fn check_api_version(module: Atom, name: String) -> Result(Nil, String) {
-  use value <- result.try(meta(module, name, "plugin_api_version"))
+fn check_api_version(
+  module: Atom,
+  name: String,
+  call_timeout_ms: Int,
+) -> Result(Nil, String) {
+  use value <- result.try(call_export(
+    module,
+    name,
+    "plugin_api_version",
+    [],
+    call_timeout_ms,
+  ))
   use version <- result.try(
     decode.run(value, decode.int)
     |> result.replace_error(prefix(
@@ -204,8 +240,18 @@ fn check_api_version(module: Atom, name: String) -> Result(Nil, String) {
 }
 
 /// `plugin_name/0` を呼び、空でない String であることを確かめる。
-fn read_plugin_name(module: Atom, name: String) -> Result(String, String) {
-  use value <- result.try(meta(module, name, "plugin_name"))
+fn read_plugin_name(
+  module: Atom,
+  name: String,
+  call_timeout_ms: Int,
+) -> Result(String, String) {
+  use value <- result.try(call_export(
+    module,
+    name,
+    "plugin_name",
+    [],
+    call_timeout_ms,
+  ))
   use plugin_name <- result.try(
     decode.run(value, decode.string)
     |> result.replace_error(prefix(
@@ -230,26 +276,37 @@ fn read_children(
   name: String,
   plugin_name: String,
   config_map: Dynamic,
+  call_timeout_ms: Int,
 ) -> Result(List(ChildSpecification(Pid)), String) {
   let export = plugin_children.export_name
   case has_export(module, export, 1), has_export(module, export, 0) {
     // 任意エクスポートを 1 つも持たないプラグインは子を持たない。ここで
     // 問い合わせると `call_export` が `undef` になる。
     False, False -> Ok([])
-    True, _ -> children(module, name, plugin_name, [config_map])
-    False, True -> children(module, name, plugin_name, [])
+    True, _ ->
+      children(module, name, plugin_name, [config_map], call_timeout_ms)
+    False, True -> children(module, name, plugin_name, [], call_timeout_ms)
   }
 }
 
-/// `plugin_children` を呼び、失敗を 1 行の理由に整える。設定の拒否のときだけ、
-/// 運用者がそのまま `grep` や compose の編集に使えるよう環境変数の接頭辞を添える。
+/// `plugin_children` を期限付きで呼び、失敗を 1 行の理由に整える。設定の拒否の
+/// ときだけ、運用者がそのまま `grep` や compose の編集に使えるよう環境変数の
+/// 接頭辞を添える。
 fn children(
   module: Atom,
   name: String,
   plugin_name: String,
   args: List(Dynamic),
+  call_timeout_ms: Int,
 ) -> Result(List(ChildSpecification(Pid)), String) {
-  plugin_children.from_export(module, plugin_name, args)
+  use value <- result.try(call_export(
+    module,
+    name,
+    plugin_children.export_name,
+    args,
+    call_timeout_ms,
+  ))
+  plugin_children.from_dynamic(value, plugin_name, list.length(args))
   |> result.map_error(fn(rejection) {
     case rejection {
       plugin_children.InvalidSpec(reason) -> prefix(name, reason)
@@ -267,16 +324,27 @@ fn children(
   })
 }
 
-/// メタデータ用のエクスポートを引数なしで呼ぶ。壊れたモジュールが本体の起動を
-/// 止めないよう、例外は理由の文字列に変える。
-fn meta(
+/// プラグインのエクスポートを使い捨てのプロセスで期限付きで呼ぶ。失敗は
+/// モジュール名と `関数/アリティ` を付けた 1 行（`crashed (...)` か
+/// `timed out after <ms>ms`）にする。アリティは `args` の長さから決まる。
+fn call_export(
   module: Atom,
   name: String,
   function: String,
+  args: List(Dynamic),
+  call_timeout_ms: Int,
 ) -> Result(Dynamic, String) {
-  call_export(module, atom.create(function), [])
-  |> result.map_error(fn(reason) {
-    prefix(name, function <> "/0 crashed (" <> reason <> ")")
+  let label = function <> "/" <> int.to_string(list.length(args))
+  call_export_within(module, atom.create(function), args, call_timeout_ms)
+  |> result.map_error(fn(failure) {
+    case failure {
+      Crashed(reason) -> prefix(name, label <> " crashed (" <> reason <> ")")
+      TimedOut ->
+        prefix(
+          name,
+          label <> " timed out after " <> int.to_string(call_timeout_ms) <> "ms",
+        )
+    }
   })
 }
 
@@ -300,10 +368,11 @@ fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 @external(erlang, "nostr_no_su_ffi", "ensure_module_loaded")
 fn ensure_module_loaded(module: Atom) -> Result(Nil, String)
 
-/// 例外を捕まえてメタデータ用のエクスポートを呼ぶ。理由は 1 行の文字列になる。
-@external(erlang, "nostr_no_su_ffi", "call_export")
-fn call_export(
+/// 例外と戻らない呼び出しを `CallFailure` にしてエクスポートを呼ぶ。
+@external(erlang, "nostr_no_su_ffi", "call_export_within")
+fn call_export_within(
   module: Atom,
   function: Atom,
   args: List(Dynamic),
-) -> Result(Dynamic, String)
+  timeout_ms: Int,
+) -> Result(Dynamic, CallFailure)
