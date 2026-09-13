@@ -11,6 +11,7 @@ import gleam/http/request.{type Request}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
 import gleam/string
@@ -190,7 +191,19 @@ pub fn start(
       resubscribe(started.data)
       Ok(started.data)
     }
-    Error(error) -> Error(string.inspect(error))
+    Error(error) -> Error(describe_start_error(error))
+  }
+}
+
+/// stratus のアクターを起動できなかった理由を、ログ 1 行に収まる文にする。
+/// ハンドシェイクの失敗は stratus が `InitFailed` に入れた文をそのまま使う。
+/// 初期化の中でプロセスが落ちたときの終了理由はスタックトレースを含み、同じ内容が
+/// クラッシュレポートにも出るので、ここでは出さない。
+pub fn describe_start_error(error: actor.StartError) -> String {
+  case error {
+    actor.InitFailed(reason) -> reason
+    actor.InitTimeout -> "WebSocket handshake timed out"
+    actor.InitExited(_reason) -> "WebSocket client exited during the handshake"
   }
 }
 

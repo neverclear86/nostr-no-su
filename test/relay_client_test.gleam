@@ -2,11 +2,13 @@
 //// ループバックの WebSocket サーバーへ本物の `relay_client` を接続した再試行の配線を
 //// 確かめる。
 
+import gleam/dynamic
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http
 import gleam/int
 import gleam/json
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/set
 import gleam/string
 import mist
@@ -48,6 +50,44 @@ pub fn to_request_leaves_other_schemes_alone_test() {
   let assert Ok(req) = relay_client.to_request("https://relay.example")
   assert req.scheme == http.Https
   assert req.host == "relay.example"
+}
+
+// --- 接続の失敗の理由 ---
+
+/// ハンドシェイクの失敗は stratus が組み立てた文をそのまま使う。
+pub fn describe_start_error_keeps_the_handshake_failure_test() {
+  assert relay_client.describe_start_error(actor.InitFailed(
+      "WebSocket handshake failed: Sock(Econnrefused)",
+    ))
+    == "WebSocket handshake failed: Sock(Econnrefused)"
+}
+
+/// 初期化の中でプロセスが落ちたときの終了理由（スタックトレースを含みうる）は
+/// 1 行の理由に含めない。同じ内容はクラッシュレポートに出る。
+pub fn describe_start_error_omits_the_exit_reason_test() {
+  assert relay_client.describe_start_error(
+      actor.InitExited(process.Abnormal(dynamic.string("stacktrace"))),
+    )
+    == "WebSocket client exited during the handshake"
+}
+
+/// ハンドシェイクがタイムアウトした場合の理由。
+pub fn describe_start_error_reports_a_timeout_test() {
+  assert relay_client.describe_start_error(actor.InitTimeout)
+    == "WebSocket handshake timed out"
+}
+
+/// `.invalid` は RFC 6761 で名前解決に必ず失敗することが定められた予約ドメインで、
+/// 名前解決の失敗（vendor のパッチ 0003 が扱う `nxdomain`）を安定して再現できる。
+/// この経路が回帰すると、`InitExited` のスタックトレースを含む文が返る。
+pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
+  assert relay_client.start(
+      "ws://relay.invalid:7777",
+      fn() { Ok([]) },
+      fn(_event) { Nil },
+      relay_client.subscription_retry_delay_ms,
+    )
+    == Error("WebSocket handshake failed: Sock(Nxdomain)")
 }
 
 // --- handle_text の単体テスト ---
