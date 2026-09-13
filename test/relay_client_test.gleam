@@ -93,6 +93,7 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
       fn() { Ok([]) },
       fn(_event) { Nil },
       fn(_ack) { Nil },
+      None,
       relay_client.subscription_retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -124,6 +125,8 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
       event_frame(forged),
       deliver,
       fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
     )
     == None
   assert process.receive(delivered, 0) == Error(Nil)
@@ -133,6 +136,8 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
       event_frame(genuine),
       deliver,
       fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
     )
     == None
   let assert Ok(verified) = process.receive(delivered, 0)
@@ -155,13 +160,7 @@ pub fn interpret_keeps_a_large_notice_on_one_line_test() {
 /// CLOSED の理由は改行を含む制御文字を空白に置き換えて正規化するが、契機に積む id は
 /// 照合に使うため正規化しない生の値のままにする。
 pub fn interpret_sanitizes_the_reason_of_a_closed_subscription_test() {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("sub\nx"),
-      json.string("bye\n[bunker] forged"),
-    ])
-    |> json.to_string
+  let closed = closed_frame("sub\nx", "bye\n[bunker] forged")
 
   assert relay_client.interpret(closed)
     == Synchronise(
@@ -195,27 +194,116 @@ pub fn interpret_turns_an_ok_into_an_acknowledgement_test() {
     == Acknowledge(Acknowledgement("e1", True, ""))
 }
 
+/// AUTH は `Authenticate` にし、challenge は照合の契機の id と同じく正規化しない
+/// （署名に使うため）。
+pub fn interpret_turns_an_auth_into_authenticate_test() {
+  let auth = auth_frame("c1\n[bunker] forged")
+
+  assert relay_client.interpret(auth)
+    == relay_client.Authenticate("c1\n[bunker] forged")
+}
+
 /// CLOSED は照合の契機を返し、それ以外のメッセージは返さない。
 pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("bunker"),
-      json.string("rate-limited: slow down"),
-    ])
-    |> json.to_string
-  assert relay_client.handle_text("test", closed, fn(_event) { Nil }, fn(_ack) {
-      Nil
-    })
+  let closed = closed_frame("bunker", "rate-limited: slow down")
+  assert relay_client.handle_text(
+      "test",
+      closed,
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
+    )
     == Some(Closed("bunker"))
 
   let notice =
     json.preprocessed_array([json.string("NOTICE"), json.string("x")])
     |> json.to_string
-  assert relay_client.handle_text("test", notice, fn(_event) { Nil }, fn(_ack) {
-      Nil
-    })
+  assert relay_client.handle_text(
+      "test",
+      notice,
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
+    )
     == None
+}
+
+/// AUTH を受けたときのログの水準と本文は 3 枝で固定する。
+pub fn describe_auth_test() {
+  assert relay_client.describe_auth(relay_client.NotAnswered)
+    == #(
+      log.Notice,
+      "relay requested authentication; not answering on this connection",
+    )
+  assert relay_client.describe_auth(relay_client.Answered(3))
+    == #(log.Notice, "answered authentication with 3 event(s)")
+  assert relay_client.describe_auth(relay_client.Unsigned("no signer"))
+    == #(log.Warning, "could not answer authentication: no signer")
+}
+
+/// リレーからの AUTH の challenge を渡した JSON フレーム。
+fn auth_frame(challenge: String) -> String {
+  json.preprocessed_array([json.string("AUTH"), json.string(challenge)])
+  |> json.to_string
+}
+
+/// リレーからの CLOSED を購読 id と理由で組み立てた JSON フレーム。
+fn closed_frame(subscription_id: String, reason: String) -> String {
+  json.preprocessed_array([
+    json.string("CLOSED"),
+    json.string(subscription_id),
+    json.string(reason),
+  ])
+  |> json.to_string
+}
+
+/// AUTH は受け口があるときだけ challenge を渡し、得たイベントを `send` で送る。
+/// 受け口が無い、または署名を得られないときは `send` に何も届かない。
+pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
+  let sent = process.new_subject()
+  let send = process.send(sent, _)
+  let signed = signed_event.new(22_242, "")
+  let challenges = process.new_subject()
+
+  assert relay_client.handle_text(
+      "test",
+      auth_frame("c1"),
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      Some(fn(received) {
+        process.send(challenges, received)
+        Ok([signed])
+      }),
+      send,
+    )
+    == None
+  assert process.receive(challenges, 0) == Ok("c1")
+  assert process.receive(sent, 0) == Ok(message.Auth(signed))
+  assert process.receive(sent, 0) == Error(Nil)
+
+  assert relay_client.handle_text(
+      "test",
+      auth_frame("c1"),
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      send,
+    )
+    == None
+  assert process.receive(sent, 0) == Error(Nil)
+
+  assert relay_client.handle_text(
+      "test",
+      auth_frame("c1"),
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      Some(fn(_challenge) { Error("no signer") }),
+      send,
+    )
+    == None
+  assert process.receive(sent, 0) == Error(Nil)
 }
 
 // --- sync の単体テスト ---
@@ -751,6 +839,7 @@ fn connect(
   relay: Relay,
   subscriptions: Subscriptions,
   retry_delay: backoff.Backoff,
+  authenticator: option.Option(relay_client.Authenticator),
 ) -> relay_client.Client {
   let assert Ok(client) =
     relay_client.start(
@@ -758,6 +847,7 @@ fn connect(
       subscriptions,
       fn(_event) { Nil },
       fn(_ack) { Nil },
+      authenticator,
       retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -776,6 +866,7 @@ pub fn a_failed_evaluation_is_retried_until_the_req_is_sent_test() {
       relay,
       failing_once(evaluations),
       Backoff(initial_ms: 400, max_ms: 400),
+      None,
     )
 
   assert process.receive(evaluations, 2000) == Ok(0)
@@ -799,6 +890,7 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
       relay,
       failing_once(evaluations),
       Backoff(initial_ms: 500, max_ms: 500),
+      None,
     )
 
   assert process.receive(evaluations, 2000) == Ok(0)
@@ -816,13 +908,7 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
 /// `REQ` で始まるテキストを受けるたびに `frames` へ転送し、その購読を CLOSED で
 /// 閉じるリレー。
 fn start_relay_closing_subscriptions(frames: Subject(String)) -> Relay {
-  let closed =
-    json.preprocessed_array([
-      json.string("CLOSED"),
-      json.string("bunker"),
-      json.string("rate-limited: slow down"),
-    ])
-    |> json.to_string
+  let closed = closed_frame("bunker", "rate-limited: slow down")
   start_relay_with(fn() { Nil }, fn(connection, text) {
     case string.starts_with(text, "[\"REQ\"") {
       True -> {
@@ -846,6 +932,7 @@ pub fn a_closed_subscription_is_resubscribed_test() {
       relay,
       fn() { Ok([#(bunker, filter.new())]) },
       Backoff(initial_ms: 400, max_ms: 400),
+      None,
     )
 
   let assert Ok(first) = process.receive(frames, 2000)
@@ -853,6 +940,73 @@ pub fn a_closed_subscription_is_resubscribed_test() {
 
   assert process.receive(frames, 200) == Error(Nil)
   let assert Ok(second) = process.receive(frames, 1000)
+  assert string.starts_with(second, "[\"REQ\",\"bunker\",")
+
+  stop_client(client)
+  stop_relay(relay)
+}
+
+/// `REQ` で始まるテキストのたびに AUTH の challenge を送り、続けて `auth-required`
+/// で CLOSED にするリレー。受けたテキストはすべて `frames` へ転送する。
+fn start_relay_requiring_auth(frames: Subject(String)) -> Relay {
+  let auth = auth_frame("c1")
+  let closed = closed_frame("bunker", "auth-required: sign in")
+  start_relay_with(fn() { Nil }, fn(connection, text) {
+    process.send(frames, text)
+    case string.starts_with(text, "[\"REQ\"") {
+      True -> {
+        let _ = mist.send_text_frame(connection, auth)
+        let _ = mist.send_text_frame(connection, closed)
+        Nil
+      }
+      False -> Nil
+    }
+  })
+}
+
+/// 受け口があれば AUTH に応答してから、CLOSED の後の張り直しで REQ を送り直す。
+/// AUTH の応答は同じ接続のプロセスが CLOSED を処理する前に書くため、この順序は
+/// TCP の到着順で確かめられ、待ち時間に頼らない。
+pub fn start_answers_an_auth_before_resubscribing_test() {
+  let frames = process.new_subject()
+  let relay = start_relay_requiring_auth(frames)
+  let signed = signed_event.new(22_242, "")
+  let client =
+    connect(
+      relay,
+      fn() { Ok([#(bunker, filter.new())]) },
+      Backoff(initial_ms: 50, max_ms: 50),
+      Some(fn(_challenge) { Ok([signed]) }),
+    )
+
+  let assert Ok(first) = process.receive(frames, 2000)
+  assert string.starts_with(first, "[\"REQ\",\"bunker\",")
+  assert process.receive(frames, 2000)
+    == Ok(message.encode_client_message(message.Auth(signed)))
+  let assert Ok(second) = process.receive(frames, 2000)
+  assert string.starts_with(second, "[\"REQ\",\"bunker\",")
+
+  stop_client(client)
+  stop_relay(relay)
+}
+
+/// 受け口が無ければ AUTH には応答しない。受けたフレームはすべて `frames` へ転送
+/// されるので、1 本目の次に届くのが 2 本目の REQ であること自体が、間に AUTH の
+/// 応答が無かった証拠になる。
+pub fn start_does_not_answer_an_auth_without_an_authenticator_test() {
+  let frames = process.new_subject()
+  let relay = start_relay_requiring_auth(frames)
+  let client =
+    connect(
+      relay,
+      fn() { Ok([#(bunker, filter.new())]) },
+      Backoff(initial_ms: 50, max_ms: 50),
+      None,
+    )
+
+  let assert Ok(first) = process.receive(frames, 2000)
+  assert string.starts_with(first, "[\"REQ\",\"bunker\",")
+  let assert Ok(second) = process.receive(frames, 2000)
   assert string.starts_with(second, "[\"REQ\",\"bunker\",")
 
   stop_client(client)
@@ -902,6 +1056,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
           fn() { Ok([#(bunker, filter.new())]) },
           fn(_event) { Nil },
           fn(_ack) { Nil },
+          None,
         )
       },
       on_connect: fn(_socket) { Nil },
@@ -934,6 +1089,7 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
       fn() { Ok([#(bunker, filter.new())]) },
       process.send(received, _),
       fn(_ack) { Nil },
+      None,
       relay_client.subscription_retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -980,6 +1136,7 @@ pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
       fn() { Ok([]) },
       fn(_event) { Nil },
       process.send(acks, _),
+      None,
       relay_client.subscription_retry_delay,
       relay_client.keepalive_interval_ms,
     )
@@ -1016,6 +1173,7 @@ fn open_socket(
     fn() { Ok([]) },
     fn(_event) { Nil },
     fn(_ack) { Nil },
+    None,
     relay_client.subscription_retry_delay,
     interval_ms,
   ))

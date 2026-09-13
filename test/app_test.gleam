@@ -96,7 +96,7 @@ fn fake_open(
   reports: Subject(Report),
   subscribed: Option(Subject(SubscriptionReport)),
 ) -> app.Open {
-  fn(relay_url, subscriptions, handle_event, _handle_ok) {
+  fn(relay_url, subscriptions, handle_event, _handle_ok, _authenticator) {
     let ready = process.new_subject()
     let socket =
       process.spawn(fn() {

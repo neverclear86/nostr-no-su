@@ -119,7 +119,9 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Verified}
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_runner
-import nostr_no_su/relay_client.{type Acknowledgement, type Subscriptions}
+import nostr_no_su/relay_client.{
+  type Acknowledgement, type Authenticator, type Subscriptions,
+}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/time
 import pog
@@ -127,10 +129,15 @@ import pog
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
 /// ネットワークなしでもツリー全体を動かせるようにする。ハンドラーが受け取るのは
 /// 接続のプロセスで id と署名を確かめたイベントと、発行したイベントへの OK
-/// （受理・拒否とも）である。
+/// （受理・拒否とも）である。AUTH の受け口（応答しない接続は `None`）も渡す。
 pub type Open =
-  fn(String, Subscriptions, fn(Verified) -> Nil, fn(Acknowledgement) -> Nil) ->
-    Result(Socket, String)
+  fn(
+    String,
+    Subscriptions,
+    fn(Verified) -> Nil,
+    fn(Acknowledgement) -> Nil,
+    Option(Authenticator),
+  ) -> Result(Socket, String)
 
 /// リレー接続 1 本ぶんの識別情報。名前を付けておくと、管理 UI が接続アクターに
 /// 状態を問い合わせられる。
@@ -230,12 +237,14 @@ pub fn open_websocket(
   subscriptions: Subscriptions,
   handle_event: fn(Verified) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
+  authenticator: Option(Authenticator),
 ) -> Result(Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
     subscriptions,
     handle_event,
     handle_ok,
+    authenticator,
     relay_client.subscription_retry_delay,
     relay_client.keepalive_interval_ms,
   ))
@@ -376,6 +385,7 @@ fn monitor_tree(spec: Spec, config: Monitor) -> Builder {
     config.subscriptions,
     monitor_handler(config.name, config.excludes_kind),
     fn(_relay_url, _ack) { Nil },
+    fn(_relay_url) { None },
     fn(_relay_url, _socket) { Nil },
     fn(_relay_url) { Nil },
   )
@@ -436,6 +446,7 @@ fn bunker_tree(spec: Spec, config: Bunker) -> Builder {
     fn(relay_url, ack) {
       named.send(config.name, bunker.Acknowledged(relay_url, ack))
     },
+    fn(_relay_url) { None },
     fn(relay_url, socket: Socket) {
       named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
     },
@@ -598,8 +609,8 @@ fn subtree() -> Builder {
 }
 
 /// リレーごとにスーパーバイザー配下の接続を 1 つ追加する。購読の定義、受信した
-/// イベントのハンドラー、発行した応答への OK のハンドラー、接続・切断の通知には、
-/// そのリレーの URL を渡す。
+/// イベントのハンドラー、発行した応答への OK のハンドラー、AUTH の受け口、
+/// 接続・切断の通知には、そのリレーの URL を渡す。
 fn add_connections(
   builder: Builder,
   spec: Spec,
@@ -607,6 +618,7 @@ fn add_connections(
   subscriptions: fn(String) -> Subscriptions,
   handle_event: fn(String, Verified) -> Nil,
   handle_ok: fn(String, Acknowledgement) -> Nil,
+  authenticator: fn(String) -> Option(Authenticator),
   on_connect: fn(String, Socket) -> Nil,
   on_disconnect: fn(String) -> Nil,
 ) -> Builder {
@@ -622,6 +634,7 @@ fn add_connections(
           subscriptions(relay.url),
           handle_event(relay.url, _),
           handle_ok(relay.url, _),
+          authenticator(relay.url),
         )
       },
       on_connect: on_connect(relay.url, _),

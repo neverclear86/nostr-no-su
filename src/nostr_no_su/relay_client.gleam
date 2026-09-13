@@ -9,6 +9,8 @@
 //// 送信と予約に移すだけである。
 //// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
+//// AUTH（NIP-42）は受け口があれば応答し、無ければ応答せずログに出す。
+//// `auth-required` の CLOSED は他の CLOSED と同じく張り直す。
 
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
@@ -53,6 +55,21 @@ pub type Client =
 /// 開いている購読を閉じる。
 pub type Subscriptions =
   fn() -> Result(List(#(String, Filter)), Nil)
+
+/// AUTH（NIP-42）の受け口。challenge を受け取り、同じ接続へ AUTH で送る署名済みの
+/// イベントを返す。得られないときは理由を `Error` で返す。
+pub type Authenticator =
+  fn(String) -> Result(List(event.Event), String)
+
+/// AUTH を受けたときの結果。ログ行は `describe_auth` が作る。
+pub type AuthOutcome {
+  /// 受け口が無く、応答しなかった。
+  NotAnswered
+  /// 受け口が返したイベントを count 件、AUTH で送った。
+  Answered(count: Int)
+  /// 受け口が署名を得られなかった。
+  Unsigned(reason: String)
+}
 
 /// 照合の契機。
 pub type Trigger {
@@ -191,11 +208,13 @@ pub fn new_subscription_state(
 /// `interval_ms` は生存確認の刻みの間隔で、本番は `keepalive_interval_ms` を
 /// 渡す。接続アクターは呼び出し元にリンクされるため呼び出し元と一緒に死に、
 /// exit を trap している呼び出し元にはその死がメッセージとして届く。
+/// リレーの AUTH には `authenticator` があれば応答し、無ければ応答せずログに出す。
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
   handle_event: fn(event.Verified) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
+  authenticator: Option(Authenticator),
   retry_delay: backoff.Backoff,
   interval_ms: Int,
 ) -> Result(Client, String) {
@@ -248,7 +267,16 @@ pub fn start(
         stratus.User(KeepaliveTick) ->
           check_keepalive(session, conn, prefix, interval_ms)
         stratus.Text(text) ->
-          case handle_text(prefix, text, handle_event, handle_ok) {
+          case
+            handle_text(
+              prefix,
+              text,
+              handle_event,
+              handle_ok,
+              authenticator,
+              send_message(conn, prefix, _),
+            )
+          {
             Some(trigger) ->
               synchronise(
                 session,
@@ -592,6 +620,7 @@ fn describe_outgoing(outgoing: message.ClientMessage) -> String {
     message.Close(subscription_id) ->
       "close of subscription " <> subscription_id
     message.Publish(published) -> "event " <> published.id
+    message.Auth(signed) -> "authentication event " <> signed.id
   }
 }
 
@@ -605,19 +634,21 @@ pub type Acknowledgement {
 /// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Acknowledge` は
 /// 発行したイベントへの OK（受理・拒否とも）、`Synchronise` は購読の状態を変える
 /// 応答（CLOSED）で、ログ行の本文と照合の契機を持つ。契機の id は照合に使うため
-/// 正規化しない。ログ行の本文は正規化済み。
+/// 正規化しない。ログ行の本文は正規化済み。`Authenticate` は AUTH の challenge で、
+/// 署名に使うため正規化しない。
 pub type Interpretation {
   Deliver(event.Verified)
   Report(String)
   Acknowledge(Acknowledgement)
   Synchronise(trigger: Trigger, line: String)
+  Authenticate(challenge: String)
 }
 
 /// リレーメッセージ 1 件を解釈する。EVENT は `event.verify` で id と署名を
 /// 確かめ、通ったものを配送に回す。OK は受理・拒否とも `Acknowledge` にする。
-/// CLOSED は購読の状態を変えるため `Synchronise` にする。それ以外のメッセージと
-/// 落としたイベントは、外部由来の値を `log.sanitize_external` で 1 行に収めた
-/// ログ行の本文にする。
+/// CLOSED は購読の状態を変えるため `Synchronise` にする。AUTH は `Authenticate`
+/// にする。それ以外のメッセージと落としたイベントは、外部由来の値を
+/// `log.sanitize_external` で 1 行に収めたログ行の本文にする。
 pub fn interpret(text: String) -> Interpretation {
   case message.decode_relay_message(text) {
     Ok(message.RelayEvent(_, received)) ->
@@ -649,6 +680,7 @@ pub fn interpret(text: String) -> Interpretation {
           <> " closed: "
           <> log.sanitize_external(reason),
       )
+    Ok(message.RelayAuth(challenge)) -> Authenticate(challenge)
     Error(_) -> Report("unrecognised message: " <> log.sanitize_external(text))
   }
 }
@@ -657,12 +689,15 @@ pub fn interpret(text: String) -> Interpretation {
 /// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。`start` の
 /// 受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否とも `handle_ok` に
 /// 渡し、拒否だけそのリレーのログ行も出す。購読の状態を変える応答は契機を返し、
-/// ループが照合に渡す。
+/// ループが照合に渡す。AUTH は受け口があれば得たイベントを `send` で送り、結果を
+/// ログに出す。
 pub fn handle_text(
   prefix: String,
   text: String,
   handle_event: fn(event.Verified) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
+  authenticator: Option(Authenticator),
+  send: fn(message.ClientMessage) -> Nil,
 ) -> Option(Trigger) {
   case interpret(text) {
     Deliver(verified) -> {
@@ -691,6 +726,50 @@ pub fn handle_text(
       log.write(log.Notice, prefix, line)
       Some(trigger)
     }
+    Authenticate(challenge) -> {
+      let #(level, line) =
+        describe_auth(answer_auth(authenticator, challenge, send))
+      log.write(level, prefix, line)
+      None
+    }
+  }
+}
+
+/// 受け口に challenge を渡し、得たイベントを 1 件ずつ AUTH で送る。受け口が
+/// 無ければ何もしない。
+fn answer_auth(
+  authenticator: Option(Authenticator),
+  challenge: String,
+  send: fn(message.ClientMessage) -> Nil,
+) -> AuthOutcome {
+  case authenticator {
+    None -> NotAnswered
+    Some(authenticate) ->
+      case authenticate(challenge) {
+        Ok(signed) -> {
+          list.each(signed, fn(event) { send(message.Auth(event)) })
+          Answered(list.length(signed))
+        }
+        Error(reason) -> Unsigned(reason)
+      }
+  }
+}
+
+/// AUTH を受けたときのログの水準と本文。
+pub fn describe_auth(outcome: AuthOutcome) -> #(log.Level, String) {
+  case outcome {
+    NotAnswered -> #(
+      log.Notice,
+      "relay requested authentication; not answering on this connection",
+    )
+    Answered(count) -> #(
+      log.Notice,
+      "answered authentication with " <> int.to_string(count) <> " event(s)",
+    )
+    Unsigned(reason) -> #(
+      log.Warning,
+      "could not answer authentication: " <> reason,
+    )
   }
 }
 

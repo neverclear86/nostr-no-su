@@ -39,9 +39,15 @@ pub fn decode_closed_test() {
     == Ok(RelayClosed("sub1", "reason"))
 }
 
-/// 未対応のタグ（AUTH など）はデコードに失敗する。
+/// 未対応のタグ（COUNT など）はデコードに失敗する。
 pub fn decode_unknown_tag_test() {
-  let assert Error(_) = message.decode_relay_message("[\"AUTH\",\"challenge\"]")
+  let assert Error(_) = message.decode_relay_message("[\"COUNT\",\"sub1\"]")
+}
+
+/// AUTH メッセージは challenge だけを持つ。
+pub fn decode_auth_test() {
+  assert message.decode_relay_message("[\"AUTH\",\"c1\"]")
+    == Ok(message.RelayAuth("c1"))
 }
 
 /// JSON として読めないもの、配列でないものはデコードに失敗する。
@@ -78,4 +84,21 @@ pub fn encode_publish_test() {
   assert message.encode_client_message(message.Publish(event))
     == "[\"EVENT\",{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
     <> "\"kind\":1,\"tags\":[],\"content\":\"hi\",\"sig\":\"00\"}]"
+}
+
+/// AUTH はイベントをそのまま載せた配列になる。
+pub fn encode_auth_test() {
+  let event =
+    Event(
+      id: "abc",
+      pubkey: "def",
+      created_at: 1_700_000_000,
+      kind: 22_242,
+      tags: [],
+      content: "",
+      sig: "00",
+    )
+  assert message.encode_client_message(message.Auth(event))
+    == "[\"AUTH\",{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
+    <> "\"kind\":22242,\"tags\":[],\"content\":\"\",\"sig\":\"00\"}]"
 }
