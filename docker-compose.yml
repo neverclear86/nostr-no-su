@@ -15,6 +15,10 @@ services:
       PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
       ADMIN_PORT: ${ADMIN_PORT-8080}
       ADMIN_BIND: 0.0.0.0
+      # ルートが読み取り専用なので、クラッシュダンプは tmpfs の /tmp に書く。
+      # コンテナーの再起動で消えるので、残すときは override で volume を
+      # マウントし、この値をその下を指すように上書きする。
+      ERL_CRASH_DUMP: /tmp/erl_crash.dump
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
@@ -40,9 +44,28 @@ services:
     # 終了したときは、docker が間隔を延ばしながら再起動を繰り返し、そのたびに
     # 理由の 1 行が出る。
     restart: unless-stopped
+    # ルートは読み取り専用にし、書き込みは /tmp（メモリ上の tmpfs、再起動で
+    # 消える）だけにする。wisp の一時ファイルと PLUGIN_FILE_LOGGER_PATH の
+    # 既定値、ERL_CRASH_DUMP がここに書く。
+    read_only: true
+    tmpfs:
+      - /tmp
+    # 非 root で動き、特権の要る操作をしないので、ケーパビリティーは要らない。
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # console_logger が 1 イベント 1 行を出すので、docker のログを
+    # 10 MB × 3 世代で打ち切る。
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   postgres:
-    image: postgres:17-alpine
+    # ダイジェストで固定する。上げるときはタグとダイジェストを一緒に変える。
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     environment:
       POSTGRES_USER: nostr
       POSTGRES_PASSWORD: nostr
