@@ -155,7 +155,17 @@ fn context() -> admin.Context {
       ]
     },
     reenable_plugin: reenabling,
-    sessions: fn() { [engine.Session(signer:, client:)] },
+    sessions: fn() {
+      [
+        engine.Session(
+          signer:,
+          client:,
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+      ]
+    },
     revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
     pending: fn() {
       [dashboard.PendingRow(token: "tok-1", signer:, client:, age_seconds: 12)]

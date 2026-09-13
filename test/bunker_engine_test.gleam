@@ -1,7 +1,8 @@
 import gleam/dynamic/decode
+import gleam/int
 import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{Duplicate, Ignore, Reply}
@@ -57,18 +58,30 @@ fn handle(
   handle_after(state, incoming, now, 0)
 }
 
-/// 指定した起点のアクターが受信イベントを 1 件処理する。
+/// 指定した起点のアクターが受信イベントを 1 件処理し、書き込みの値も返す。
+fn handle_with_write(
+  state: engine.Engine,
+  incoming: Event,
+  now: Int,
+  not_before: Int,
+) -> #(engine.Engine, engine.Outcome, Option(engine.Write)) {
+  engine.handle_event(
+    state,
+    signed_event.verified(incoming),
+    engine.Inputs(now: now, token: token, not_before: not_before),
+  )
+}
+
+/// 指定した起点のアクターが受信イベントを 1 件処理する。書き込みの値は捨てる。
 fn handle_after(
   state: engine.Engine,
   incoming: Event,
   now: Int,
   not_before: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(
-    state,
-    signed_event.verified(incoming),
-    engine.Inputs(now: now, token: token, not_before: not_before),
-  )
+  let #(state, outcome, _write) =
+    handle_with_write(state, incoming, now, not_before)
+  #(state, outcome)
 }
 
 /// 指定したクライアントから署名者宛の `connect` リクエストイベント。
@@ -431,24 +444,47 @@ pub fn sessions_lists_connected_clients_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
       ),
     ]
 }
 
-/// 一覧は署名者・クライアントの順に並ぶため、集合の走査順に左右されない。
+/// 一覧は署名者・クライアントの順に並ぶため、辞書の走査順に左右されない。
+/// Erlang の map は 32 キー以下だとキーの昇順で走査してしまい、少数の組では
+/// 並べ忘れを検出できないため、`restore` で 40 個のクライアントを逆順に渡す。
 pub fn sessions_are_sorted_test() {
   let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let other = account_for(other_client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(state, _) = connect(state, other, signer, secret, 1001)
-  let sorted =
-    [account.pubkey_hex(client), account.pubkey_hex(other)]
+  let client_keys =
+    list.repeat(Nil, 40)
+    |> list.index_map(fn(_, index) { "client-" <> int.to_string(index) })
+  let sessions =
+    client_keys
+    |> list.reverse
+    |> list.map(fn(client) {
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: client,
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
+      )
+    })
+  let state = engine.restore(new_engine(), sessions, [], 1000)
+  let expected =
+    client_keys
     |> list.sort(string.compare)
     |> list.map(fn(client) {
-      engine.Session(signer: account.pubkey_hex(signer), client: client)
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: client,
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
+      )
     })
-  assert engine.sessions(state) == sorted
+  assert engine.sessions(state) == expected
 }
 
 /// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。
@@ -456,7 +492,7 @@ pub fn revoke_removes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let assert Ok(state) =
+  let assert Ok(#(state, _write)) =
     engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
   assert engine.sessions(state) == []
 
@@ -483,7 +519,7 @@ pub fn revoke_of_an_unknown_session_is_an_error_test() {
     )
     == Error(Nil)
 
-  let assert Ok(state) =
+  let assert Ok(#(state, _write)) =
     engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
   assert engine.revoke(
       state,
@@ -521,6 +557,9 @@ pub fn logout_without_a_session_is_acknowledged_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
       ),
     ]
 }
@@ -543,6 +582,8 @@ pub fn connect_without_secret_asks_for_approval_test() {
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         request_id: "c1",
+        perms: "",
+        secret_mismatch: False,
         created_at: 1000,
       ),
     ]
@@ -591,7 +632,7 @@ pub fn approve_answers_the_original_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Ok(#(state, ack)) = engine.approve(state, token, 1001)
+  let assert Ok(#(state, ack, _write)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
   assert ack.kind == event.nip46_kind
   assert ack.tags == [["p", account.pubkey_hex(client)]]
@@ -604,6 +645,9 @@ pub fn approve_answers_the_original_request_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1001,
+        last_used_at: 1001,
       ),
     ]
   assert engine.pending(state, 1001) == []
@@ -624,7 +668,7 @@ pub fn deny_answers_the_original_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Ok(#(state, denied)) = engine.deny(state, token, 1001)
+  let assert Ok(#(state, denied, _write)) = engine.deny(state, token, 1001)
   assert decrypt_response(client, signer, denied)
     == "{\"id\":\"c1\",\"result\":\"\",\"error\":\"connection denied\"}"
   assert engine.sessions(state) == []
@@ -646,7 +690,7 @@ pub fn approved_client_can_reconnect_without_a_secret_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Ok(#(state, _ack)) = engine.approve(state, token, 1001)
+  let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
   let #(state, outcome) = connect(state, client, signer, "", 1002)
   let assert Reply(response) = outcome
   assert decrypt_response(client, signer, response)
@@ -661,7 +705,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let #(state, outcome) =
+  let #(state, outcome, _write) =
     engine.handle_event(
       state,
       signed_event.verified(request_event(
@@ -677,7 +721,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
   assert entry.token == "tok-2"
 
   let assert Error(_) = engine.approve(state, token, 1001)
-  let assert Ok(#(state, ack)) = engine.approve(state, "tok-2", 1002)
+  let assert Ok(#(state, ack, _write)) = engine.approve(state, "tok-2", 1002)
   assert decrypt_response(client, signer, ack)
     == "{\"id\":\"c2\",\"result\":\"ack\"}"
   assert engine.pending(state, 1002) == []
@@ -702,7 +746,7 @@ pub fn unknown_token_cannot_be_decided_test() {
   let assert Error(_) = engine.approve(state, "other-token", 1001)
   let assert Error(_) = engine.deny(state, "other-token", 1001)
   // 同じ token を二度は使えない
-  let assert Ok(#(state, _ack)) = engine.approve(state, token, 1001)
+  let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
   let assert Error(_) = engine.approve(state, token, 1001)
 }
 
@@ -846,6 +890,9 @@ pub fn connect_with_an_empty_signer_param_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
       ),
     ]
 }
@@ -960,7 +1007,7 @@ fn connect_for_approval(
   approval_token: String,
   now: Int,
 ) -> engine.Engine {
-  let #(state, outcome) =
+  let #(state, outcome, _write) =
     engine.handle_event(
       state,
       signed_event.verified(connect_event(client, signer, "", now)),
@@ -1010,6 +1057,9 @@ pub fn remove_account_drops_only_its_sessions_and_pending_test() {
       engine.Session(
         signer: account.pubkey_hex(signer_b),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
       ),
     ]
   let assert [remaining] = engine.pending(state, 1000)
@@ -1107,6 +1157,9 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
       ),
     ]
 }

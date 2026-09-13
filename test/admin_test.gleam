@@ -167,7 +167,17 @@ fn test_context(
       process.send(reports, Reenabled(name))
       Ok(Nil)
     },
-    sessions: fn() { [engine.Session(signer: signer, client: client)] },
+    sessions: fn() {
+      [
+        engine.Session(
+          signer: signer,
+          client: client,
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+      ]
+    },
     revoke: fn(revoked_signer, revoked_client) {
       process.send(
         reports,
