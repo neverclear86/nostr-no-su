@@ -199,7 +199,10 @@ fn resume_point_loader(
     resume_store.load(db, relay_url)
     |> result.map_error(fn(error) {
       let reason = account_store.describe(error)
-      log.println(log.relay_prefix(relay_client.label(relay_url)), reason)
+      log.println(
+        log.relay_prefix(relay_client.label(relay_url)),
+        "could not load resume point: " <> reason,
+      )
       reason
     })
   }
