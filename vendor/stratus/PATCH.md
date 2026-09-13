@@ -48,6 +48,20 @@ tar の中の `contents.tar.gz` を展開し、hex への公開のときに Glea
 - 理由: 上流の README は hex 版の導入の手順（`gleam add stratus`）と機能の一覧（Per-message deflate を含む）を載せており、このディレクトリーの中身と食い違う。
 - 戻す条件: ほかのパッチがすべて不要になり、vendor をやめて hex の stratus に戻すとき。
 
+### 0003 名前解決の失敗をソケットの理由に加える
+
+- ファイル: `patches/0003-nxdomain-socket-reason.patch`
+- 変更: `src/stratus/internal/socket.gleam` と `src/stratus.gleam` の `SocketReason` に `Nxdomain` を足し、`src/stratus.gleam` の `convert_socket_reason` と `src/stratus_ffi.erl` の `parse_known_socket_reason/1` に対応を足す。
+- 理由: `gen_tcp:connect` と `ssl:connect` は、ホスト名を名前解決できないと `{error, nxdomain}` を返す。上流の `SocketReason` にはこの値が無く、`perform_handshake` の中の `convert_socket_reason` が `case_clause` で落ちる。アクターの初期化の中で落ちるので、再接続の試行ごとにクラッシュレポートが出て、`start` はスタックトレースを含む `InitExited` を返す（nostr-no-su の #46）。
+- 戻す条件: 上流の stratus が名前解決の失敗で落ちない版を hex に出し、その版に上げるとき。2026-09-13 の時点で hex の最新は 3.0.0 で、rawhat/stratus の main の `src/stratus.gleam` にも `nxdomain` の扱いは無い。
+
+### 0004 ハンドシェイクの失敗を error の水準でログに出さない
+
+- ファイル: `patches/0004-handshake-failure-debug-log.patch`
+- 変更: `src/stratus.gleam` の `start` で、ハンドシェイクの失敗の文を `logging.log` に渡す水準を `Error` から `Debug` にする。
+- 理由: 同じ文は `InitFailed` で呼び出し元に返る。nostr-no-su はそれを再接続の予告と一緒に 1 行で出すので、error の水準のままだと、試行ごとに `=ERROR REPORT====` の 2 行が重なる。Erlang の logger で抑えるには `logging` モジュール全体の水準を下げるしかなく、同じ `logging` パッケージを使う mist、glisten、wisp のエラーも消える。
+- 戻す条件: 上流の stratus がハンドシェイクの失敗を error の水準で出さなくなった版に上げるとき。
+
 ## パッチを足す手順
 
 1. このディレクトリーの中のファイルを直し、直した箇所に `VENDORED PATCH (nostr-no-su):` で始まるコメントで変更と理由を書く。README のような文書は、0002 のように冒頭に注記を置く。Apache License 2.0 の 4 (b) が、改変したファイルに改変した旨を示すことを求めるためである。

@@ -71,6 +71,9 @@ pub type SocketReason {
   Ewouldblock
   Exbadport
   Exbadseq
+  // VENDORED PATCH (nostr-no-su): the host name could not be resolved. See
+  // socket.SocketReason.
+  Nxdomain
 }
 
 pub type CustomCloseError {
@@ -112,6 +115,8 @@ fn convert_socket_reason(reason: socket.SocketReason) -> SocketReason {
     socket.Exbadseq -> Exbadseq
     socket.Terminated -> Terminated
     socket.Timeout -> Timeout
+    // VENDORED PATCH (nostr-no-su): see socket.SocketReason.
+    socket.Nxdomain -> Nxdomain
   }
 }
 
@@ -304,7 +309,10 @@ pub fn start(
             <> int.to_string(resp.status)
           reason -> "WebSocket handshake failed: " <> string.inspect(reason)
         }
-        logging.log(logging.Error, msg)
+        // VENDORED PATCH (nostr-no-su): log at debug instead of error. The
+        // same message is returned to the caller as InitFailed, and a caller
+        // that retries would otherwise print an error report per attempt.
+        logging.log(logging.Debug, msg)
         msg
       })
 

@@ -1,0 +1,16 @@
+diff --git a/src/stratus.gleam b/src/stratus.gleam
+index 3cdeb2a..2417cc0 100644
+--- a/src/stratus.gleam
++++ b/src/stratus.gleam
+@@ -309,7 +309,10 @@ pub fn start(
+             <> int.to_string(resp.status)
+           reason -> "WebSocket handshake failed: " <> string.inspect(reason)
+         }
+-        logging.log(logging.Error, msg)
++        // VENDORED PATCH (nostr-no-su): log at debug instead of error. The
++        // same message is returned to the caller as InitFailed, and a caller
++        // that retries would otherwise print an error report per attempt.
++        logging.log(logging.Debug, msg)
+         msg
+       })
+ 
