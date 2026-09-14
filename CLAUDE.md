@@ -21,6 +21,8 @@ CI の主な検査は次のとおりである（Gleam 1.17.0 / OTP 29）。全�
 gleam build --warnings-as-errors
 TEST_DATABASE_URL=postgres://… gleam test   # 統合テストに Postgres が要る。起動は docs/development.md の「実行とテスト」「event_logger プラグインのテスト」
 gleam format --check src test dev
+erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl
+gleam export erlang-shipment
 npm ci && npm run build:css && git diff --exit-code -- priv/static/admin.css
 sh dev/check_vendor_stratus.sh
 sh dev/check_shared_versions.sh
