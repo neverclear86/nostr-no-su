@@ -275,9 +275,8 @@ pub type Msg {
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
   /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
-  /// `SessionNotFound`、書き込まれていないことが確定したら `SessionNotApplied`、
-  /// 書き込みの結果が曖昧なときとアクターが応答しないときは `SessionMaybeApplied`
-  /// を返す。
+  /// `SessionNotFound`、書き込みの結果が曖昧なときは `SessionMaybeApplied`、
+  /// 書き込まれていないことが確定したら `SessionNotApplied` を返す。
   Revoke(
     signer: String,
     client: String,
