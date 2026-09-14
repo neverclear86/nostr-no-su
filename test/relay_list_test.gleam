@@ -1,5 +1,5 @@
-//// `relay_list` の一覧を変える純粋関数（決めたこと 6、7）のテスト。アクターを
-//// 介さないので `process.new_name` で作った名前をそのまま比べられる。
+//// `relay_list` の一覧を変える純粋関数のテスト。アクターを介さないので
+//// `process.new_name` で作った名前をそのまま比べられる。
 
 import gleam/erlang/process
 import gleam/list
@@ -9,10 +9,14 @@ import nostr_no_su/relay_list
 /// 起動時の一覧は監視の一覧を先に並べ、その後にバンカーの一覧のうち未出の
 /// URL を並べる。両方にある URL は 1 項目にまとまり、バンカーの名前が足される。
 pub fn initial_lists_monitor_relays_first_and_merges_roles_test() {
-  let monitor_a = relay_list.Connection(process.new_name("m_a"), "wss://a")
-  let monitor_b = relay_list.Connection(process.new_name("m_b"), "wss://b")
-  let bunker_b = relay_list.Connection(process.new_name("b_b"), "wss://b")
-  let bunker_c = relay_list.Connection(process.new_name("b_c"), "wss://c")
+  let monitor_a =
+    relay_list.Connection(name: process.new_name("m_a"), url: "wss://a")
+  let monitor_b =
+    relay_list.Connection(name: process.new_name("m_b"), url: "wss://b")
+  let bunker_b =
+    relay_list.Connection(name: process.new_name("b_b"), url: "wss://b")
+  let bunker_c =
+    relay_list.Connection(name: process.new_name("b_c"), url: "wss://c")
   let entries = relay_list.initial([monitor_a, monitor_b], [bunker_b, bunker_c])
   assert entries
     == [
@@ -39,26 +43,39 @@ pub fn initial_lists_monitor_relays_first_and_merges_roles_test() {
 pub fn open_refuses_invalid_duplicate_and_roleless_relays_test() {
   let existing =
     relay_list.initial(
-      [relay_list.Connection(process.new_name("m"), "wss://existing")],
+      [
+        relay_list.Connection(
+          name: process.new_name("m"),
+          url: "wss://existing",
+        ),
+      ],
       [],
     )
   assert relay_list.open(
       existing,
       "relay.damus.io",
-      relay_list.Roles(True, False),
+      relay_list.Roles(monitor: True, bunker: False),
     )
     == Error(relay_list.InvalidUrl)
   assert relay_list.open(
       existing,
       "wss://existing",
-      relay_list.Roles(True, False),
+      relay_list.Roles(monitor: True, bunker: False),
     )
     == Error(relay_list.AlreadyListed)
-  assert relay_list.open(existing, "wss://new", relay_list.Roles(False, False))
+  assert relay_list.open(
+      existing,
+      "wss://new",
+      relay_list.Roles(monitor: False, bunker: False),
+    )
     == Error(relay_list.NoRole)
 
   let assert Ok(opened) =
-    relay_list.open(existing, "wss://new", relay_list.Roles(True, True))
+    relay_list.open(
+      existing,
+      "wss://new",
+      relay_list.Roles(monitor: True, bunker: True),
+    )
   let assert Ok(added) = list.last(opened)
   assert added.url == "wss://new"
   assert option.is_some(added.monitor)
@@ -74,25 +91,29 @@ pub fn close_refuses_an_unlisted_relay_test() {
 /// `change_roles` は項目の位置を保ち、残る用途の名前を保ち、外した用途は
 /// `None` にする。用途が両方偽なら `NoRole`、URL が無ければ `NotListed`。
 pub fn change_roles_keeps_the_position_and_kept_names_test() {
-  let a = relay_list.Connection(process.new_name("a"), "wss://a")
-  let b = relay_list.Connection(process.new_name("b"), "wss://b")
+  let a = relay_list.Connection(name: process.new_name("a"), url: "wss://a")
+  let b = relay_list.Connection(name: process.new_name("b"), url: "wss://b")
   let entries = relay_list.initial([a, b], [])
 
   assert relay_list.change_roles(
       entries,
       "wss://a",
-      relay_list.Roles(False, False),
+      relay_list.Roles(monitor: False, bunker: False),
     )
     == Error(relay_list.NoRole)
   assert relay_list.change_roles(
       entries,
       "wss://missing",
-      relay_list.Roles(True, False),
+      relay_list.Roles(monitor: True, bunker: False),
     )
     == Error(relay_list.NotListed)
 
   let assert Ok(changed) =
-    relay_list.change_roles(entries, "wss://a", relay_list.Roles(False, True))
+    relay_list.change_roles(
+      entries,
+      "wss://a",
+      relay_list.Roles(monitor: False, bunker: True),
+    )
   let assert [first, second] = changed
   assert first.url == "wss://a"
   assert first.monitor == None
@@ -102,7 +123,11 @@ pub fn change_roles_keeps_the_position_and_kept_names_test() {
     == relay_list.Entry(url: "wss://b", monitor: Some(b.name), bunker: None)
 
   let assert Ok(kept) =
-    relay_list.change_roles(entries, "wss://b", relay_list.Roles(True, True))
+    relay_list.change_roles(
+      entries,
+      "wss://b",
+      relay_list.Roles(monitor: True, bunker: True),
+    )
   let assert [_, kept_b] = kept
   // 残した用途（監視）は名前を保つ。
   assert kept_b.monitor == Some(b.name)
@@ -111,9 +136,11 @@ pub fn change_roles_keeps_the_position_and_kept_names_test() {
 
 /// `connections` と `urls` は、その用途で使う項目だけを一覧の順に並べる。
 pub fn connections_follow_the_entry_order_test() {
-  let a = relay_list.Connection(process.new_name("m_a"), "wss://a")
-  let b_monitor = relay_list.Connection(process.new_name("m_b"), "wss://b")
-  let b_bunker = relay_list.Connection(process.new_name("bk_b"), "wss://b")
+  let a = relay_list.Connection(name: process.new_name("m_a"), url: "wss://a")
+  let b_monitor =
+    relay_list.Connection(name: process.new_name("m_b"), url: "wss://b")
+  let b_bunker =
+    relay_list.Connection(name: process.new_name("bk_b"), url: "wss://b")
   let entries = relay_list.initial([a, b_monitor], [b_bunker])
 
   assert relay_list.connections(entries, relay_list.Monitor)

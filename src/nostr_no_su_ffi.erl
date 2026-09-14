@@ -264,7 +264,8 @@ check_linked(Pid) ->
 
 %% factory_supervisor（simple_one_for_one）の子を、Arg を引数に起動する。呼び出し
 %% 先の factory が未登録だと supervisor:start_child/2 は呼び出し側を noproc で
-%% exit させるため、try/catch で値に写す（relay_list.gleam の決めたこと 4）。
+%% exit させるため、try/catch で値に写す（relay_list.gleam のモジュール doc の
+%% 「呼び出し先の factory がまだ登録されていないとき」を参照）。
 %% {ok, Pid, Data} は子の start 関数（gleam@otp@factory_supervisor の
 %% start_child_callback/2）が Result2 の Ok(Pid, Data) を 3 要素タプルとして
 %% 返すことによる。

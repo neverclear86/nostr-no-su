@@ -2580,7 +2580,8 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
   assert app.add_account(spec, account_for(other_signer_key), "second")
     == Ok(Nil)
   // 張り直しの評価は、変更前の一覧を含む古い内容が 1 回余計に届きうる
-  // （decision 11 と同じ理由）。両方揃った内容が届くまで読み飛ばす。
+  // （読み込みの成功による張り直しで同じ内容の REQ が 1 回余計に送られるのと
+  // 同じ理由である）。両方揃った内容が届くまで読み飛ばす。
   let both_signers = Some(list.sort([signer, other_signer], string.compare))
   let assert Ok(Subscribed(_relay_url, [message.Req(_id, added_filter)])) =
     receive_until(
@@ -2614,8 +2615,8 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
 }
 
 /// バンカーのリレーを実行時に足すと、バンカーアクターが再起動して
-/// `connections` の factory ごと落ちても、`relay_list` が `Repopulate` で
-/// 再び起動する（決めたこと 2）。
+/// `connections` の factory ごと落ちても、`connections` の起動のたびに
+/// `relay_list` へ送られる `Repopulate` が未登録の接続を起動し直す。
 pub fn runtime_relays_are_reopened_when_the_bunker_restarts_test() {
   let reports = process.new_subject()
   let bunker_name = process.new_name("test_bunker")
