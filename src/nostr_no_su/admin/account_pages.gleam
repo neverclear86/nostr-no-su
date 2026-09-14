@@ -99,7 +99,11 @@ pub fn generated_key_page(
     option.map(problem, problem_alert(language, _))
       |> option.unwrap(element.none()),
     view.card([
-      view.warning(emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice)),
+      view.warning(view.emphasized(
+        language,
+        i18n.BackUpNow,
+        i18n.GeneratedKeyNotice,
+      )),
       view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
       view.post_form(
         view.segments_path(dashboard.register_generated_segments),
@@ -179,7 +183,7 @@ pub fn registered_page(
           #(text(i18n.Label), view.Plain(label)),
           #(text(i18n.Account), view.Account(npub:, hex: None)),
         ]),
-        view.warning(emphasized(
+        view.warning(view.emphasized(
           language,
           i18n.BackUpIfNotAlready,
           i18n.RegisteredKeyNotice,
@@ -306,7 +310,7 @@ pub fn private_key_page(
         i18n.text(language, i18n.PrivateKeyNsec),
         nsec,
       ),
-      view.warning(emphasized(
+      view.warning(view.emphasized(
         language,
         i18n.CloseTabAfterCopying,
         i18n.ResendNotice,
@@ -326,19 +330,6 @@ fn account_summary(
     #(text(i18n.Label), view.Plain(row.label)),
     #(text(i18n.Account), view.Account(npub: row.npub, hex: Some(row.signer))),
   ])
-}
-
-/// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に
-/// する。
-fn emphasized(
-  language: Language,
-  first: i18n.Message,
-  rest: i18n.Message,
-) -> List(Element(msg)) {
-  [
-    html.strong([], [html.text(i18n.text(language, first))]),
-    html.text(i18n.sentence_gap(language) <> i18n.text(language, rest)),
-  ]
 }
 
 /// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。

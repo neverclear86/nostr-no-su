@@ -834,9 +834,22 @@ pub fn untranslated(text: String) -> Element(msg) {
   html.span([attribute.lang("en")], [html.text(text)])
 }
 
-/// 秘密鍵を表示するページの、読み飛ばされては困る注意。
+/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。
 pub fn warning(content: List(Element(msg))) -> Element(msg) {
   html.div([attribute.class(alert_class(Warning))], [html.p([], content)])
+}
+
+/// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に
+/// する。
+pub fn emphasized(
+  language: Language,
+  first: i18n.Message,
+  rest: i18n.Message,
+) -> List(Element(msg)) {
+  [
+    html.strong([], [html.text(i18n.text(language, first))]),
+    html.text(i18n.sentence_gap(language) <> i18n.text(language, rest)),
+  ]
 }
 
 /// トーンごとの囲みのクラス。
