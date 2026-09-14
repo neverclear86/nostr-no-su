@@ -57,7 +57,8 @@ flowchart LR
 ## スーパービジョンツリー
 
 常駐するプロセスはすべて `static_supervisor` の下に置く。
-ツリーは起動時に 1 度だけ組み、実行中に子を足すことはしない。
+ツリーの形は起動時に 1 度だけ組む。
+リレーの接続だけは例外で、用途（監視・バンカー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
 ツリーの外で動くプロセスが 2 種類ある。
 プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスである。
@@ -66,18 +67,21 @@ flowchart LR
 
 ```
 root (one_for_one, 3/60)
+├── relay_list   (worker)              実行時のリレーの一覧と connections の子の起動・停止
 ├── plugins      (one_for_one, 5/10)   プラグインごとのランナー
 │   ├── children(<plugin>) (one_for_one, 5/10, Temporary)  子仕様を持つプラグインだけ
 │   │   └── <プラグインが申告した子プロセス>
 │   └── runner(<plugin>)   (worker, Permanent)
-├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次にリレーごとの接続
+├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次に connections
 │   ├── account_pool      (pog, supervisor)  アカウントストアの接続プール
 │   ├── account_lock_pool (pog, supervisor)  同じ DB に 1 インスタンスだけを許す advisory lock 専用の 1 本のプール
 │   ├── bunker
-│   └── relay_connection × バンカーリレーの数
-├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、リレーごとの接続、再開点の保存
+│   └── connections (factory, 5/10)    バンカーリレーの用途の relay_connection
+│       └── relay_connection × バンカーリレーの数
+├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、connections、再開点の保存
 │   ├── dedup
-│   ├── relay_connection × 監視リレーの数
+│   ├── connections (factory, 5/10)    監視リレーの用途の relay_connection
+│   │   └── relay_connection × 監視リレーの数
 │   └── resume_saver
 └── admin        (mist)                管理 UI の HTTP サーバー
 ```
@@ -85,7 +89,7 @@ root (one_for_one, 3/60)
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
 接続は復帰の過程で購読を張り直し publisher を登録し直すので、再起動したアクターが再び生きたソケットに配線される。
 一方、アカウントの変更ではバンカーアクターを再起動しない（再起動すると接続が落ち、リプレイ防止の `seen` が空になる）。
-署名者の集合が変わったら、アクターはバンカーと監視の接続アクターを名前で呼んで購読の張り直しを依頼し、接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
+署名者の集合が変わったら、アクターは `relay_list` に `ResubscribeAll` を送るだけで、`relay_list` が現在の全接続へ購読の張り直しを依頼し、各接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
 
 バンカーのサブツリーだけは、アクターの前に接続プールを置く。
 pgo はチェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で exit させる。
@@ -94,11 +98,29 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 ロックのプールもアクターの前に置く理由は同じで、`account_pool` の次、`bunker` アクターより前に並べる。
 `rest_for_one` なので、ロックのプールが再起動すると後続のアクターと接続もまとめて再起動し、アクターの初回の読み込みが advisory lock を取り直す（「アカウントの読み込み」の節）。
 
-`plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視が無効な構成でも状態を見せたいからである。
+`plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視と独立に状態を見せたいからである。
 ルートの子は `plugins` を `monitor` より先に追加する。
 逆順だとディスパッチャーが未登録のランナー名へ送り、起動直後のイベントを取りこぼす。
 `bunker` も `monitor` より先に追加する。
 監視の接続は購読を組み立てるたびにバンカーへ署名者を問い合わせるので、逆順だと最初の問い合わせが名前の登録より先に走り、定義を得られずに再試行を待つ。
+`relay_list` はすべてより先に追加する。
+後だと起動直後に `connections` の factory が送る `Repopulate` が未登録の名前へ送られて捨てられ、初期のリレーが起動されない。
+
+### 実行時のリレーの増減
+
+`relay_list` は用途（監視・バンカー）ごとの接続の一覧を、加えた順に持つ。
+`app.open_relay` / `close_relay` / `change_relay_roles` による一覧の変更と、`connections` の子（`relay_connection`）の起動・停止は、`relay_list` 自身のハンドラーで直列に行う。
+同時に届く変更が重ならず、最後に処理した変更と一覧が一致するようにするためである。
+子を止めるのは `supervisor:terminate_child/2`（`nostr_no_su_ffi` の `terminate_dynamic_child/2`）で、simple_one_for_one のこの関数は子を止めてから仕様ごと消すため、止めた接続は再起動されない。
+
+`connections` は用途ごとの `factory_supervisor` で、`static_supervisor` には無い `start_child` 相当の API を持ち、実行時に子を増減できる。
+`rest_for_one` のサブツリー再起動で `connections` ごと落ちると、simple_one_for_one の性質上、動的な子はすべて消える。
+`connections` は起動のたびに `relay_list` へ `Repopulate` を送り、`relay_list` はその用途の一覧のうち未登録の接続だけを起動し直す。
+
+止めたバンカーの接続は、`relay_connection` の `on_disconnect` を経て `RemovePublisher` が送られ、バンカーの送信先から外れる。
+監視の再開点の対象（次節）は、`app.add_account` がその時点の監視の一覧から求めて渡すため、閉じたリレーは以後の対象から外れる。
+
+詳細な決定と既知の窓は `relay_list` のモジュール doc を参照。
 
 ### 再起動の許容回数に頼らない設計
 
@@ -191,14 +213,16 @@ sequenceDiagram
     participant ui as 管理 UI
     participant dedup as dedup
     participant bk as bunker
+    participant list as relay_list
     participant conn as relay_connection（監視）
     participant sock as ソケット（stratus）
 
-    ui->>dedup: AddingAccount(現在時刻)（送るだけ）
+    ui->>dedup: AddingAccount(現在時刻, 監視リレーの URL)（送るだけ）
     ui->>bk: AddAccount
     Note over bk: 書き込みに成功し、<br/>署名者の集合が変わる
-    bk->>conn: Resubscribe
+    bk->>list: ResubscribeAll（送るだけ）
     bk-->>ui: Ok
+    list->>conn: Resubscribe
     conn->>sock: resubscribe
     sock->>bk: GetSigners
     bk-->>sock: 署名者
@@ -208,6 +232,7 @@ sequenceDiagram
 ```
 
 `AddingAccount` を書き込みより前に送るのは、張り直しの `GetSince` より先にディスパッチャーへ届けるためである。
+監視リレーの URL は、その時点で `relay_list` に載っている一覧から `app.add_account` が求めて渡す。
 バンカーの張り直しのコールバックは起動時の読み込みや削除でも呼ばれるので、追加の時刻には使わない。
 
 ## アカウントの読み込み
@@ -332,6 +357,7 @@ sequenceDiagram
     participant bk as bunker
     participant store as account_store
     participant db as Postgres
+    participant list as relay_list
     participant conn as relay_connection
     participant sock as ソケット（stratus）
 
@@ -344,7 +370,8 @@ sequenceDiagram
         store-->>bk: Ok
         Note over bk: 状態を変える
         opt 署名者の集合が変わった
-            bk->>conn: Resubscribe（送るだけ）
+            bk->>list: ResubscribeAll（送るだけ）
+            list->>conn: Resubscribe
         end
         bk-->>ui: Ok
         conn->>sock: Subscribe

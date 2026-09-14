@@ -25,6 +25,8 @@
     run_isolated/1,
     describe_exit/1,
     start_child/3,
+    start_dynamic_child/2,
+    terminate_dynamic_child/2,
     describe_term/1,
     reply_alias/1,
     pool_transaction/3,
@@ -258,6 +260,36 @@ check_linked(Pid) ->
                 false ->
                     {ok, Pid}
             end
+    end.
+
+%% factory_supervisor（simple_one_for_one）の子を、Arg を引数に起動する。呼び出し
+%% 先の factory が未登録だと supervisor:start_child/2 は呼び出し側を noproc で
+%% exit させるため、try/catch で値に写す（relay_list.gleam のモジュール doc の
+%% 「呼び出し先の factory がまだ登録されていないとき」を参照）。
+%% {ok, Pid, Data} は子の start 関数（gleam@otp@factory_supervisor の
+%% start_child_callback/2）が Result2 の Ok(Pid, Data) を 3 要素タプルとして
+%% 返すことによる。
+%% -> {ok, nil} | {error, ReasonBinary}
+start_dynamic_child(Sup, Arg) ->
+    try supervisor:start_child(Sup, [Arg]) of
+        {ok, _Pid, _Data} -> {ok, nil};
+        {ok, _Pid} -> {ok, nil};
+        {error, Reason} -> {error, format_line("~0p", [Reason])}
+    catch
+        exit:Reason -> {error, format_line("~0p", [Reason])}
+    end.
+
+%% factory_supervisor の子を Pid で止める。simple_one_for_one の
+%% terminate_child/2 は子を止めてから仕様を消し（再起動しない）、factory が
+%% 未登録なら start_dynamic_child/2 と同じく noproc で exit するので、同じく
+%% 値に写す。
+%% -> {ok, nil} | {error, ReasonBinary}
+terminate_dynamic_child(Sup, Pid) ->
+    try supervisor:terminate_child(Sup, Pid) of
+        ok -> {ok, nil};
+        {error, Reason} -> {error, format_line("~0p", [Reason])}
+    catch
+        exit:Reason -> {error, format_line("~0p", [Reason])}
     end.
 
 %% 任意の項を 1 行の文字列にする。子仕様の理由の文字列で、受け取った値をそのまま

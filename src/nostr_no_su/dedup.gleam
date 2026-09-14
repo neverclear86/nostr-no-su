@@ -35,8 +35,10 @@ const call_timeout_ms = 1000
 pub type Msg {
   /// リレー `relay_url` から受信したイベント。
   Incoming(relay_url: String, event: Event)
-  /// これからアカウントを追加することの知らせ。現在時刻を伴う。
-  AddingAccount(at: Int)
+  /// これからアカウントを追加することの知らせ。現在時刻と、その時点の監視
+  /// リレーの URL を伴う（呼び出し側の `relay_list` から渡る。`dedup` は
+  /// 一覧の出どころを知らない）。
+  AddingAccount(at: Int, relay_urls: List(String))
   /// リレー `relay_url` のメモリ上の再開点の問い合わせ。
   GetSince(relay_url: String, reply: Subject(Option(Int)))
   /// 保存のための再開点の写しの問い合わせ。
@@ -51,25 +53,20 @@ type State(targets) {
     deliver: fn(targets, Event) -> targets,
     window: Window,
     resume: Resume,
-    relay_urls: List(String),
   )
 }
 
 /// スーパービジョンツリー用の子仕様。再起動したディスパッチャーは `targets` の
 /// 初期値から始めるので、それまでの配送先の状態は失われる。`plugin_runner` の
 /// 宛先なら、再起動の前から続く取りこぼしの復帰の行は出ず、ランナーがまだ
-/// 居なければ取りこぼしの開始の行がもう一度出る。`relay_urls` は監視リレーの URL の
-/// 一覧で、アカウントの追加の時刻を記録する先になる。
+/// 居なければ取りこぼしの開始の行がもう一度出る。
 pub fn supervised(
   name: Name(Msg),
   targets: targets,
   deliver: fn(targets, Event) -> targets,
   capacity: Int,
-  relay_urls: List(String),
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() {
-    start(name, targets, deliver, capacity, relay_urls)
-  })
+  supervision.worker(fn() { start(name, targets, deliver, capacity) })
 }
 
 /// 新規と判定したイベントを `deliver` へ渡すディスパッチャーを起動し、直近の
@@ -80,14 +77,12 @@ pub fn start(
   targets: targets,
   deliver: fn(targets, Event) -> targets,
   capacity: Int,
-  relay_urls: List(String),
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new(State(
     targets: targets,
     deliver: deliver,
     window: window.new(capacity),
     resume: resume.new(),
-    relay_urls: relay_urls,
   ))
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -101,10 +96,10 @@ pub fn since(name: Name(Msg), relay_url: String) -> Result(Option(Int), Nil) {
   |> option.to_result(Nil)
 }
 
-/// これからアカウントを追加することを、現在時刻とともに知らせる。ディスパッチャー
-/// が動いていなければ何もしない。
-pub fn adding_account(name: Name(Msg)) -> Nil {
-  named.send(name, AddingAccount(time.now_seconds()))
+/// これからアカウントを追加することを、現在時刻とその時点の監視リレーの URL
+/// とともに知らせる。ディスパッチャーが動いていなければ何もしない。
+pub fn adding_account(name: Name(Msg), relay_urls: List(String)) -> Nil {
+  named.send(name, AddingAccount(time.now_seconds(), relay_urls))
 }
 
 /// 保存のための再開点の写し。応答が無ければ `Error(Nil)`。
@@ -118,11 +113,11 @@ fn handle(state: State(targets), msg: Msg) -> actor.Next(State(targets), Msg) {
   case msg {
     Incoming(relay_url, incoming) ->
       actor.continue(receive(state, relay_url, incoming))
-    AddingAccount(at) ->
+    AddingAccount(at, relay_urls) ->
       actor.continue(
         State(
           ..state,
-          resume: resume.adding_account(state.resume, state.relay_urls, at),
+          resume: resume.adding_account(state.resume, relay_urls, at),
         ),
       )
     GetSince(relay_url, reply) -> {
