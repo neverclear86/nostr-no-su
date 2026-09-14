@@ -12,7 +12,7 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更とリレーの追加の 202 と、
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更とリレーの変更の 202 と、
 //// 承認・拒否・取り消しの 503）は、バンカーと管理 UI の Context が原因を型で返すので訳す。
 //// プラグインの再有効化の 503 は英語のまま。
 ////
@@ -163,6 +163,8 @@ pub type Lead {
   CouldNotListSessions
   CouldNotListRelays
   CouldNotAddRelay
+  CouldNotSaveRelay
+  CouldNotDeleteRelay
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -180,6 +182,8 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotListSessions -> "セッションの一覧を表示できません。"
         CouldNotListRelays -> "リレーの一覧を表示できません。"
         CouldNotAddRelay -> "リレーを登録できませんでした。"
+        CouldNotSaveRelay -> "用途を保存できませんでした。"
+        CouldNotDeleteRelay -> "リレーを削除できませんでした。"
       })
   }
 }
@@ -249,6 +253,13 @@ pub type Message {
   RelayAlreadyRegistered
   RelayRoleRequired
   RelayConnectionsNotConfirmed
+  EditRelayRoles
+  DeleteRelay
+  DeleteRelaySubmit
+  EditRelayRolesDescription
+  DeleteRelayDescription
+  RelaysNotAvailable
+  RelayNotFound
   Plugins
   NameColumn
   PluginRunning
@@ -395,6 +406,16 @@ fn english(message: Message) -> String {
     RelayRoleRequired -> "choose monitoring, the bunker, or both"
     RelayConnectionsNotConfirmed ->
       "the change was saved, but the relay connections did not confirm it"
+    EditRelayRoles -> "Edit roles"
+    DeleteRelay -> "Delete relay"
+    DeleteRelaySubmit -> "Delete relay"
+    EditRelayRolesDescription ->
+      "If you stop using this relay for the bunker, it is removed from relay= in the connection URIs, and clients that connect only through it stop receiving responses. Paste the new connection URI from the dashboard into those clients."
+    DeleteRelayDescription ->
+      "The connections to this relay are closed and the relay is removed. If it was used for the bunker, clients that connect only through it stop receiving responses; paste the new connection URI from the dashboard into those clients."
+    RelaysNotAvailable -> "Relays are not available"
+    RelayNotFound ->
+      "This relay is not registered. It may have been deleted already; check the dashboard."
     Plugins -> "Plugins"
     NameColumn -> "Name"
     PluginRunning -> "running"
@@ -551,6 +572,15 @@ fn japanese(message: Message) -> String {
     RelayAlreadyRegistered -> "このリレーはすでに登録されています。"
     RelayRoleRequired -> "監視とバンカーの少なくとも一方を選んでください。"
     RelayConnectionsNotConfirmed -> "変更は保存しましたが、リレーの接続に反映されたかを確認できませんでした。"
+    EditRelayRoles -> "用途を編集"
+    DeleteRelay -> "リレーを削除"
+    DeleteRelaySubmit -> "リレーを削除する"
+    EditRelayRolesDescription ->
+      "バンカーに使うのをやめると、接続 URI の relay= からこのリレーが外れ、このリレーだけで接続しているクライアントは応答を受け取れなくなります。そのクライアントには、ダッシュボードから新しい接続 URI を貼り付け直してください。"
+    DeleteRelayDescription ->
+      "このリレーへの接続を閉じ、登録から削除します。バンカーに使っていた場合、このリレーだけで接続しているクライアントは応答を受け取れなくなるので、ダッシュボードから新しい接続 URI を貼り付け直してください。"
+    RelaysNotAvailable -> "リレーを利用できません"
+    RelayNotFound -> "このリレーは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
     Plugins -> "プラグイン"
     NameColumn -> "名前"
     PluginRunning -> "動作中"

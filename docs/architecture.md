@@ -553,6 +553,8 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
 | GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
 | GET / POST | `/relays/new` | リレーの追加のフォーム / 登録。303 でダッシュボードへ戻す |
+| GET / POST | `/relays/<id>/edit` | 用途の編集フォーム / 差し替え。303 でダッシュボードへ戻す |
+| GET / POST | `/relays/<id>/delete` | 削除の確認 / 実行。303 でダッシュボードへ戻す |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
 承認、拒否、セッションの取り消しは、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。

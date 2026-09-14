@@ -2690,6 +2690,74 @@ pub fn add_relay_saves_the_row_before_opening_test() {
   postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// `app.update_relay_roles` と `app.delete_relay` は DB に書いてから接続を変えるので、
+/// 再起動なしで `registered_relays` と `relay_list` の両方に反映される。行を消した後は、
+/// 同じ行への変更と削除がどちらも `UnregisteredRelay` になる。`TEST_DATABASE_URL` が
+/// あるときだけ実行する（CI では未設定なら失敗する）。
+pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
+  use database_url <- postgres.with_test_database_url("app")
+  let schema = "app_relay_update_schema_" <> random.hex(8)
+  let admin_db = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin_db, "CREATE SCHEMA " <> schema)
+
+  let assert Ok(_loaded) =
+    account_store.load(
+      postgres.start_pool(database_url, Some(schema)),
+      random_master_key(),
+      account_store.default_timeouts,
+    )
+
+  let assert Ok(config) =
+    pog.url_config(process.new_name("test_app_relay_update_pool"), database_url)
+  let config = pog.connection_parameter(config, "search_path", schema)
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: app.Bunker(..idle_bunker(), pool: config),
+      admin: None,
+      open: fake_open(process.new_subject(), None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_app_relay_update"),
+    )
+  let tree = start_tree(spec)
+
+  let assert Ok(Nil) =
+    app.add_relay(
+      spec,
+      "ws://update.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+  let assert Ok([relay]) = app.registered_relays(spec)
+  assert relay.url == "ws://update.test"
+  assert relay.roles == relay_list.Roles(monitor: True, bunker: False)
+
+  let assert Ok(Nil) =
+    app.update_relay_roles(
+      spec,
+      relay,
+      relay_list.Roles(monitor: False, bunker: True),
+    )
+  let assert Ok([updated]) = app.registered_relays(spec)
+  assert updated.roles == relay_list.Roles(monitor: False, bunker: True)
+  assert role_url_pairs(spec) == [#(relay_list.Bunker, "ws://update.test")]
+
+  let assert Ok(Nil) = app.delete_relay(spec, updated)
+  assert app.registered_relays(spec) == Ok([])
+  assert role_url_pairs(spec) == []
+
+  assert app.update_relay_roles(
+      spec,
+      updated,
+      relay_list.Roles(monitor: True, bunker: True),
+    )
+    == Error(admin.UnregisteredRelay)
+  assert app.delete_relay(spec, updated) == Error(admin.UnregisteredRelay)
+
+  stop_tree(tree)
+  postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// 乱数のマスターキー。実行のたびに違う鍵を使う。
 fn random_master_key() -> vault.MasterKey {
   let assert Ok(key) =

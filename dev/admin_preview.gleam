@@ -21,6 +21,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 
 /// 使い捨ての管理パスワード。
 const password = "preview-password"
@@ -105,6 +106,34 @@ fn adding_relay(
   }
 }
 
+/// `relays` と同じ id と URL の DB の行。用途の編集と削除の撮影に使う。
+fn db_relays() -> List(relay_store.Relay) {
+  [
+    relay_store.Relay(1, "wss://relay.example", relay_list.Roles(True, True)),
+    relay_store.Relay(
+      2,
+      "ws://evil/\"><b>xss</b>",
+      relay_list.Roles(True, False),
+    ),
+    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.Roles(False, True)),
+  ]
+}
+
+/// id の値で、用途の編集と削除の結果を選ぶ。id 2 は書き込まれていないことが確定した DB の
+/// 失敗、id 3 は接続の確認ができない状態、それ以外は成功。
+fn changing_relay(
+  relay: relay_store.Relay,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  case relay.id {
+    2 ->
+      Error(admin.RelayNotSaved(
+        "database is unreachable or rejected the connection",
+      ))
+    3 -> Error(admin.ConnectionsNotConfirmed)
+    _ -> Ok(Nil)
+  }
+}
+
 /// プラグイン名の値で、再有効化の結果を選ぶ。
 fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
   case plugin {
@@ -182,6 +211,9 @@ fn context() -> admin.Context {
       ]
     },
     add_relay: adding_relay,
+    registered_relays: fn() { Ok(db_relays()) },
+    update_relay_roles: fn(relay, _roles) { changing_relay(relay) },
+    delete_relay: changing_relay,
     reenable_plugin: reenabling,
     sessions: fn() {
       Ok([
