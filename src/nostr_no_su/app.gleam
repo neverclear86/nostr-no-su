@@ -219,7 +219,7 @@ pub type Admin {
   Admin(bind: String, port: Int, password: String)
 }
 
-/// 動かすプラグインとバンカー、監視と管理 UI を動かすかどうか、接続をどう開くか、
+/// 動かすプラグインとバンカーと監視、管理 UI を動かすかどうか、接続をどう開くか、
 /// 接続の再接続の待ち時間、実行時のリレーの一覧を持つ `relay_list` の名前。
 pub type Spec {
   Spec(

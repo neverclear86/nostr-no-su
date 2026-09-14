@@ -98,7 +98,7 @@ root (one_for_one, 3/60)
 同時に届く変更が重ならず、最後に処理した変更と一覧が一致するようにするためである。
 子を止めるのは `supervisor:terminate_child/2`（`nostr_no_su_ffi` の `terminate_dynamic_child/2`）で、simple_one_for_one のこの関数は子を止めてから仕様ごと消すため、止めた接続は再起動されない。
 
-`connections` は用途ごとの `factory_supervisor` で、実行時に子を増減できる `static_supervisor` には無い `start_child` 相当の API を持つ。
+`connections` は用途ごとの `factory_supervisor` で、`static_supervisor` には無い `start_child` 相当の API を持ち、実行時に子を増減できる。
 `rest_for_one` のサブツリー再起動で `connections` ごと落ちると、simple_one_for_one の性質上、動的な子はすべて消える。
 `connections` は起動のたびに `relay_list` へ `Repopulate` を送り、`relay_list` はその用途の一覧のうち未登録の接続だけを起動し直す。
 

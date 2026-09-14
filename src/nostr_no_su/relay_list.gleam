@@ -29,9 +29,12 @@
 //// 返しうるが、`Change` メッセージ自体はメールボックスに残り、後で適用されうる
 //// （結果は呼び出し側からは不明）。
 ////
-//// 呼び出し先の factory がまだ登録されていないとき（起動直後で `Repopulate` が
-//// まだ届いていない、`root` の先頭に置く前提が崩れたとき）の `start_dynamic_child`
-//// / `terminate_dynamic_child` も同じく FFI で値にする。
+//// 呼び出し先の factory がまだ登録されていないとき（サブツリーの `rest_for_one`
+//// の再起動で factory が止まってから起動し直すまでの間。この間に届いた
+//// `Change` で起動できなかった接続は、再起動後の `Repopulate` が起動する。
+//// `terminate_dynamic_child` の待ちの最中にサブツリーがさらに factory を止める
+//// ときも同様）の `start_dynamic_child` / `terminate_dynamic_child` も同じく
+//// FFI で値にする。
 
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/list
@@ -333,8 +336,8 @@ pub fn connections_child(
 
 /// このアクターが `Change` に応答するまで待つ時間の上限。ハンドラーは用途ごとに
 /// `terminate_dynamic_child` で接続の停止のタイムアウト（factory の
-/// `worker_child` の既定 5000ms）まで待ちうり、1 回の変更で 2 用途を止めうる
-/// ので、それより十分に長く取る。
+/// `worker_child` の既定 5000ms）まで待つことがあり、1 回の変更で 2 用途を
+/// 止めうるので、それより十分に長く取る。
 pub const call_timeout_ms = 15_000
 
 /// 一覧を `apply` で変える。応答が無ければ `NotAnswered` にする。`NotAnswered`
