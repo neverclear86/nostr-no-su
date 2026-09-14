@@ -4,6 +4,7 @@
     configure_logger/0,
     flush_logger/0,
     now_seconds/0,
+    monotonic_ms/0,
     ec_point_from_priv/1,
     ecdh_x/2,
     mod_pow/3,
@@ -77,6 +78,10 @@ flush_logger() ->
 %% 現在時刻の Unix タイムスタンプ（秒）。
 now_seconds() ->
     erlang:system_time(second).
+
+%% 単調に増える時刻（ミリ秒）。値そのものに意味は無く、差だけを使う。
+monotonic_ms() ->
+    erlang:monotonic_time(millisecond).
 
 %% OpenSSL による d*G。呼び出し側は事前に 1 =< d < n を必ず検査すること。
 %% priv = 0 でも例外にはならず、退化した {<<0>>, _} の点を黙って返す。
