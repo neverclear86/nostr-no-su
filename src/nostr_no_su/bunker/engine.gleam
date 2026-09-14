@@ -79,18 +79,18 @@ pub const max_perms_bytes = 512
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
   Engine(
-    // 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
+    /// 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
     accounts: Dict(String, #(Account, ConnectionSecret)),
-    // #(署名者, クライアント) -> Session
+    /// #(署名者, クライアント) -> Session
     sessions: Dict(#(String, String), Session),
-    // リプレイ防止用: 処理済みのリクエストイベント id
+    /// リプレイ防止用: 処理済みのリクエストイベント id
     seen: window.Window,
-    // 承認待ちの接続要求: token -> Pending
+    /// 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
-    // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
+    /// token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
-    // #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
-    // 間も `touch` の間引きに使う。
+    /// #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
+    /// 間も `touch` の間引きに使う。
     touch_attempts: Dict(#(String, String), Int),
   )
 }
