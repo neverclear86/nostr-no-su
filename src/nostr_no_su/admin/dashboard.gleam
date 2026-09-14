@@ -132,6 +132,12 @@ const accounts_segment = "accounts"
 /// リレーのページのパスの先頭のセグメント。
 const relays_segment = "relays"
 
+/// 承認ページのパスの先頭のセグメント。
+pub const approve_segment = "approve"
+
+/// 拒否のパスの先頭のセグメント。
+pub const deny_segment = "deny"
+
 /// アカウントの登録画面のパスセグメント。
 pub const new_account_segments = [accounts_segment, "new"]
 
@@ -170,6 +176,15 @@ pub const bunker_field = "bunker"
 
 /// 秘密鍵の再表示で管理パスワードを送る欄の名前。
 pub const password_field = "password"
+
+/// セッション取り消しのフォームで署名者を送る欄の名前。
+pub const signer_field = "signer"
+
+/// セッション取り消しのフォームでクライアントを送る欄の名前。
+pub const client_field = "client"
+
+/// プラグインの再有効化のフォームでプラグイン名を送る欄の名前。
+pub const plugin_name_field = "name"
 
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
@@ -737,12 +752,12 @@ fn button_row(buttons: List(Element(msg))) -> Element(msg) {
 /// 承認ページのパス。`auth_url` としてクライアントへ渡す URL も、このパスに
 /// 公開 URL を前置して組み立てる。
 pub fn approve_path(token: String) -> String {
-  "/approve/" <> token
+  view.segments_path([approve_segment, token])
 }
 
 /// 拒否のパス。承認ページと違い、POST でしか使わない。
 fn deny_path(token: String) -> String {
-  "/deny/" <> token
+  view.segments_path([deny_segment, token])
 }
 
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。承認が
@@ -773,8 +788,8 @@ fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
   view.post_form(
     view.segments_path(revoke_segments),
     [
-      view.hidden_input("signer", session.signer),
-      view.hidden_input("client", session.client),
+      view.hidden_input(signer_field, session.signer),
+      view.hidden_input(client_field, session.client),
     ],
     i18n.text(language, i18n.Revoke),
     view.Caution,
@@ -788,7 +803,7 @@ fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
 fn reenable_form(language: Language, name: String) -> Element(msg) {
   view.post_form(
     view.segments_path(reenable_plugin_segments),
-    [view.hidden_input("name", name)],
+    [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
     view.Caution,
     view.InRow,
@@ -863,7 +878,7 @@ fn plugin_state_label(
       text(i18n.PluginDisabled),
       Some([
         view.untranslated(reason),
-        html.text(text(i18n.DroppedAfterReason(dropped))),
+        html.text(i18n.sentence_gap(language) <> text(i18n.Dropped(dropped))),
       ]),
     )
   }

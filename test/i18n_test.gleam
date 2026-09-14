@@ -79,7 +79,6 @@ pub fn messages_with_values_follow_each_language_test() {
       "100 文字まで。組み合わせた絵文字は 1 つで数文字分になることがあります。",
     ),
     #(i18n.Dropped(3), "(dropped 3)", "（破棄 3 件）"),
-    #(i18n.DroppedAfterReason(3), " (dropped 3)", "（破棄 3 件）"),
     #(
       i18n.InvalidNsec(nip19.PrefixMismatch(nip19.Nsec)),
       "expected nsec prefix",
