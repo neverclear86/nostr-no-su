@@ -24,6 +24,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/engine
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
@@ -58,15 +59,15 @@ pub type PluginRow {
   PluginRow(name: String, status: Option(plugin_runner.Status))
 }
 
-/// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
-/// `secret_mismatch` は提示された secret が一致しなかったか（偽なら提示が無い）。
-/// `perms` は `connect` で要求された権限（無ければ空文字列）。
+/// 承認待ちの接続要求 1 件の表示内容。`expires_in_seconds` は描画時点で失効まで
+/// あと何秒か。`secret_mismatch` は提示された secret が一致しなかったか（偽なら
+/// 提示が無い）。`perms` は `connect` で要求された権限（無ければ空文字列）。
 pub type PendingRow {
   PendingRow(
     token: String,
     signer: String,
     client: String,
-    age_seconds: Int,
+    expires_in_seconds: Int,
     secret_mismatch: Bool,
     perms: String,
   )
@@ -189,6 +190,20 @@ pub const plugin_name_field = "name"
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
 
+/// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
+const refresh_seconds = 30
+
+/// ダッシュボードを自動で読み込み直すかどうか。承認待ちを 1 件以上得たときだけ更新し、
+/// 空のときと一覧を得られないときは、コピー中の選択を壊さないために更新しない。
+fn dashboard_refresh(
+  pending: Result(List(PendingRow), String),
+) -> view.Refresh {
+  case pending {
+    Ok([_, ..]) -> view.RefreshEverySeconds(refresh_seconds)
+    _ -> view.NoRefresh
+  }
+}
+
 /// スナップショットをダッシュボードのページに描画する。広い画面では、判断を待つ承認待ちと
 /// アカウントとセッションを左の列に、リレーとプラグインの状態を右の列に置く。狭い画面では
 /// この順に 1 列に並ぶ。
@@ -203,6 +218,7 @@ pub fn render(
     i18n.Dashboard,
     view.Wide,
     view.SwitchReturningTo("/"),
+    dashboard_refresh(snapshot.pending),
     [
       html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
         html.div(
@@ -263,9 +279,14 @@ fn section_heading(
     Ok(_) -> view.button_link(href, i18n.text(language, link), view.Primary)
     Error(_) -> element.none()
   }
+  heading_row(i18n.text(language, title), add_link)
+}
+
+/// 節の見出しと、その右（狭い幅では下）に並べる要素の行。
+fn heading_row(title: String, trailing: Element(msg)) -> Element(msg) {
   html.div(
     [attribute.class("flex flex-wrap items-center justify-between gap-2")],
-    [view.heading(i18n.text(language, title)), add_link],
+    [view.heading(title), trailing],
   )
 }
 
@@ -354,13 +375,18 @@ fn pending_section(
   pending: Result(List(PendingRow), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
+  let refresh_hint = case dashboard_refresh(pending) {
+    view.RefreshEverySeconds(seconds:) ->
+      view.hint(text(i18n.AutoRefreshingEverySeconds(seconds)))
+    view.NoRefresh -> element.none()
+  }
   view.card([
-    view.heading(text(i18n.PendingConnections)),
+    heading_row(text(i18n.PendingConnections), refresh_hint),
     listed_body(
       language,
       pending,
       i18n.CouldNotListPending,
-      view.hint(text(i18n.NoPendingConnections)),
+      view.hint(text(i18n.NoPendingConnections(engine.pending_ttl_minutes()))),
       fn(rows) {
         item_list(
           list.map(rows, fn(entry) {
@@ -385,6 +411,7 @@ pub fn approval_page(
     i18n.ApproveConnection,
     view.Narrow,
     view.SwitchReturningTo(approve_path(pending.token)),
+    view.RefreshEverySeconds(refresh_seconds),
     [view.card(approval_content(language, pending))],
   )
 }
@@ -424,7 +451,7 @@ pub fn notice_page(
   tone: view.Tone,
   below: List(Element(msg)),
 ) -> String {
-  view.page(language, theme, title, view.Narrow, switch, [
+  view.page(language, theme, title, view.Narrow, switch, view.NoRefresh, [
     view.card([
       view.alert(tone, view.reason_content(language, None, message)),
       ..below
@@ -522,7 +549,7 @@ fn relay_action_link_weight(action: RelayAction) -> view.Weight {
   }
 }
 
-/// 承認待ち 1 件の、署名者・クライアント・経過時間・secret の提示の区別・権限と、
+/// 承認待ち 1 件の、署名者・クライアント・失効までの時間・secret の提示の区別・権限と、
 /// 承認・拒否ボタン。ダッシュボードの行と承認ページが使う。
 fn pending_content(
   language: Language,
@@ -537,12 +564,25 @@ fn pending_content(
     view.summary_list([
       #(text(i18n.Signer), view.Code(pending.signer)),
       #(text(i18n.Client), view.Code(pending.client)),
-      #(text(i18n.Age), view.Plain(text(i18n.AgeSeconds(pending.age_seconds)))),
+      #(
+        text(i18n.ExpiresIn),
+        expires_in_value(pending.expires_in_seconds, language),
+      ),
       #(text(i18n.SecretLabel), secret_value),
       #(text(i18n.Permissions), perms_value(language, pending.perms)),
     ]),
     button_row(decision_forms(language, pending.token)),
   ]
+}
+
+/// 失効までの残り秒の値。残りが 60 秒未満なら、承認しても失敗しうることを示す警告の
+/// 体裁にする。
+fn expires_in_value(seconds: Int, language: Language) -> view.Value {
+  let text = i18n.text(language, i18n.ExpiresInSeconds(seconds))
+  case seconds < 60 {
+    True -> view.Flag(text)
+    False -> view.Plain(text)
+  }
 }
 
 /// 要求された権限の値。空なら署名と暗号化を拒否する旨の文を本文の書体で、空でなければ

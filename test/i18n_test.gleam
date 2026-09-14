@@ -67,7 +67,18 @@ fn language_count(language: i18n.Language) -> Int {
 /// 値を埋め込む文言は、言語ごとの語順と記号で文全体を返す。
 pub fn messages_with_values_follow_each_language_test() {
   let cases = [
-    #(i18n.AgeSeconds(12), "12s", "12 秒"),
+    #(i18n.ExpiresInSeconds(12), "12s", "12 秒"),
+    #(
+      i18n.NoPendingConnections(10),
+      "No pending connections. Pending connections expire after 10 minutes.",
+      "承認待ちの接続はありません。承認待ちは 10 分で失効します。",
+    ),
+    #(i18n.AutoRefreshingEverySeconds(30), "Refreshing every 30s", "30 秒ごとに更新中"),
+    #(
+      i18n.ApprovalRequestGone(10),
+      "This connection request was not found. It may have expired (requests expire after 10 minutes) or already been approved or denied. Connect again from the client.",
+      "この接続要求は見つかりません。10 分で失効するため時間切れになったか、すでに承認か拒否がされた可能性があります。クライアントから接続し直してください。",
+    ),
     #(
       i18n.LabelTooLong(max: 100),
       "label must be at most 100 characters",

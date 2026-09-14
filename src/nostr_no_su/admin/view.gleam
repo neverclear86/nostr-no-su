@@ -30,6 +30,7 @@
 //// `focus-visible:outline-base-content`、`input` と `checkbox` の文字列には
 //// `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が検査する）。
 
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -180,11 +181,18 @@ pub type Tone {
   Failure
 }
 
+/// ページを自動で読み込み直すかどうか。`RefreshEverySeconds` のページだけ
+/// `<meta http-equiv="refresh">` を出す。
+pub type Refresh {
+  NoRefresh
+  RefreshEverySeconds(seconds: Int)
+}
+
 /// 見出しと値の組（`dl`）の値の見せ方。
 pub type Value {
   /// 16 進の公開鍵のように、等幅で任意の位置で折り返す値。
   Code(String)
-  /// ラベルや経過秒のように、単語の区切りで折り返す値。
+  /// ラベルや残り秒のように、単語の区切りで折り返す値。
   Plain(String)
   /// npub と、あれば 16 進の公開鍵を縦に並べたアカウント。
   Account(npub: String, hex: Option(String))
@@ -195,14 +203,16 @@ pub type Value {
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
-/// `theme` が `Light` か `Dark` なら `data-theme` を出す。ナビゲーションバーと、`title` を
-/// 見出し（h1）にした本文を出す。
+/// `theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
+/// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。ナビゲーションバーと、
+/// `title` を見出し（h1）にした本文を出す。
 pub fn page(
   language: Language,
   theme: Theme,
   title: i18n.Message,
   layout: Layout,
   switch: NavbarSwitch,
+  refresh: Refresh,
   body: List(Element(msg)),
 ) -> String {
   let title = i18n.text(language, title)
@@ -214,6 +224,7 @@ pub fn page(
         attribute.name("viewport"),
         attribute.content("width=device-width,initial-scale=1"),
       ]),
+      refresh_meta(refresh),
       html.title([], "nostr-no-su — " <> title),
       html.link([
         attribute.rel("stylesheet"),
@@ -237,6 +248,18 @@ pub fn page(
     ]),
   ])
   |> element.to_document_string
+}
+
+/// `refresh` に応じた `<meta http-equiv="refresh">`。`NoRefresh` は何も出さない。
+fn refresh_meta(refresh: Refresh) -> Element(msg) {
+  case refresh {
+    NoRefresh -> element.none()
+    RefreshEverySeconds(seconds:) ->
+      html.meta([
+        attribute.attribute("http-equiv", "refresh"),
+        attribute.content(int.to_string(seconds)),
+      ])
+  }
 }
 
 /// パスセグメントを `/` から連結したパス。ルーティング（`admin`）が照合するのと同じ

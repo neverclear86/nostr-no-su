@@ -36,6 +36,7 @@ pub fn new_relay_page(
     i18n.AddRelay,
     view.Narrow,
     view.SwitchReturningTo(path),
+    view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotAddRelay), error),
       view.card([
@@ -97,6 +98,7 @@ pub fn relay_action_page(
     dashboard.relay_action_title(action),
     view.Narrow,
     view.SwitchReturningTo(path),
+    view.NoRefresh,
     [
       view.card([
         view.summary_list([#(text(i18n.RelayUrl), view.Code(relay.url))]),

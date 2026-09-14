@@ -638,8 +638,8 @@ fn deny_connection(
 /// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
 /// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
 /// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧に無いので
-/// 404 になる。ログに出す署名者とクライアントは、トークンではなくこの行の値から
-/// 取る。
+/// 404 になる。404 の理由は失効の可能性を含む訳した文。ログに出す署名者とクライアントは、
+/// トークンではなくこの行の値から取る。
 fn with_pending(
   context: Context,
   language: Language,
@@ -657,7 +657,9 @@ fn with_pending(
           not_found_notice(
             language,
             theme,
-            i18n.Untranslated(engine.approval_request_not_found),
+            i18n.Translated(
+              i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
+            ),
           )
       }
   }

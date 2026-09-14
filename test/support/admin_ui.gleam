@@ -47,7 +47,7 @@ pub fn pages() -> List(String) {
       token: "tok",
       signer: "abcd",
       client: "ef01",
-      age_seconds: 12,
+      expires_in_seconds: 540,
       secret_mismatch: False,
       perms: "sign_event:1",
     )
@@ -64,7 +64,7 @@ pub fn pages() -> List(String) {
       token: "tok2",
       signer: "abcd",
       client: "ef01",
-      age_seconds: 48,
+      expires_in_seconds: 45,
       secret_mismatch: True,
       perms: "",
     )
