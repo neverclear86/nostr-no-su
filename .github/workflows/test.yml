@@ -71,6 +71,56 @@ jobs:
       # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
       - run: gleam export erlang-shipment
 
+  # 実リレー（strfry）を使う NIP-46 の E2E。`gleam test` は TEST_RELAY_URL が
+  # 無いとこのテストをスキップするので、strfry のログで実際に実行されたことを
+  # 確かめる（後続の step）。
+  nip46-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nostr_no_su_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nostr_no_su_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      strfry:
+        # 既定の設定は 127.0.0.1 に bind し、ポートの転送が届かないので 0.0.0.0 にする。
+        image: ghcr.io/hoytech/strfry@sha256:36f1886d185a88ca57c66ebe52e6e9e8428dac2486eea0a5d50ff934f18b60c3
+        command: --set relay.bind=0.0.0.0 relay
+        ports:
+          - 7777:7777
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            build/packages
+            build/dev/erlang/*
+            !build/dev/erlang/nostr_no_su
+          key: gleam-build-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('manifest.toml', 'vendor/stratus/**') }}
+      - run: gleam deps download
+      - name: strfry が応答するまで待つ
+        run: timeout 60 sh -c 'until curl -sf -H "Accept: application/nostr+json" http://127.0.0.1:7777/ >/dev/null; do sleep 1; done'
+      - run: gleam test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
+          TEST_RELAY_URL: ws://127.0.0.1:7777
+      - name: E2E がリレーにイベントを書いたことを確かめる
+        run: docker logs "${{ job.services.strfry.id }}" 2>&1 | grep -q 'Inserted event'
+
   admin-css:
     runs-on: ubuntu-latest
     steps:
