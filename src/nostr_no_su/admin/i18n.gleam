@@ -261,6 +261,8 @@ pub type Message {
   NoPlugins
   // 承認ページと通知ページ
   ApproveConnection
+  WrongSecretOffered
+  WrongSecretNotice
   Approved
   Denied
   ApprovedCloseWindow
@@ -404,6 +406,9 @@ fn english(message: Message) -> String {
     DroppedAfterReason(count:) -> " (dropped " <> int.to_string(count) <> ")"
     NoPlugins -> "No plugins enabled."
     ApproveConnection -> "Approve connection"
+    WrongSecretOffered -> "The connection secret does not match."
+    WrongSecretNotice ->
+      "This happens when a client still uses the connection URI from before the secret was rotated, or when someone is guessing the secret. If you do not recognize this client, deny the request."
     Approved -> "Approved"
     Denied -> "Denied"
     ApprovedCloseWindow -> "Approved. You can close this window."
@@ -557,6 +562,9 @@ fn japanese(message: Message) -> String {
     DroppedAfterReason(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。"
     ApproveConnection -> "接続を承認"
+    WrongSecretOffered -> "接続 secret が一致しません。"
+    WrongSecretNotice ->
+      "secret を再生成する前の接続 URI を使い続けているクライアントか、secret を推測する試みです。心当たりの無いクライアントなら拒否してください。"
     Approved -> "承認しました"
     Denied -> "拒否しました"
     ApprovedCloseWindow -> "承認しました。このウィンドウは閉じてかまいません。"
