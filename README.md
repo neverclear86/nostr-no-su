@@ -173,7 +173,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
-| `RELAY_URL` | `wss://relay.damus.io` | 監視先リレーの URL（カンマ区切りで複数可）。空にすると監視無効（バンカーのみ） |
+| `RELAY_URL` | `wss://relay.damus.io` | 監視先リレーの URL（カンマ区切りで複数可）。空にすると監視のリレー 0 本で起動する |
 | `BUNKER_RELAY_URL` | `RELAY_URL` と同じ | バンカーが購読・応答するリレーの URL（カンマ区切りで複数可）。`RELAY_URL` も空なら `wss://relay.damus.io` |
 | `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1）。`DATABASE_URL_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない。`ACCOUNT_MASTER_KEY_FILE` でファイルから読める（「秘密をファイルで渡す」） |
