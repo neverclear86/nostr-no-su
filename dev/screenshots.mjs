@@ -99,6 +99,13 @@ const shots = [
   { name: "51-add-relay-not-saved", url: `${base}/relays/new`, form: { url: "wss://not-saved.example", monitor: "on" }, status: 409 },
   { name: "52-add-relay-maybe", url: `${base}/relays/new`, form: { url: "wss://maybe.example", monitor: "on" }, status: 202 },
   { name: "53-add-relay-unconfirmed", url: `${base}/relays/new`, form: { url: "wss://unconfirmed.example", monitor: "on" }, status: 202 },
+  { name: "54-edit-relay", url: `${base}/relays/1/edit` },
+  { name: "55-edit-relay-role-required", url: `${base}/relays/1/edit`, form: {}, status: 400 },
+  { name: "56-edit-relay-not-saved", url: `${base}/relays/2/edit`, form: { monitor: "on" }, status: 409 },
+  { name: "57-delete-relay", url: `${base}/relays/1/delete` },
+  { name: "58-delete-relay-not-saved", url: `${base}/relays/2/delete`, form: {}, status: 409 },
+  { name: "59-delete-relay-unconfirmed", url: `${base}/relays/3/delete`, form: {}, status: 202 },
+  { name: "60-relay-not-found", url: `${base}/relays/99/edit`, status: 404 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り

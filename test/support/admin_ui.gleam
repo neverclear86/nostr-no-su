@@ -13,6 +13,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
+import nostr_no_su/relay_store
 import support/account_actions
 
 /// ファイルの中身を読む。
@@ -160,6 +161,22 @@ pub fn pages() -> List(String) {
         view.System,
         "https://relay.example",
         Roles(False, True),
+        Some(reason),
+      ),
+      relay_pages.relay_action_page(
+        language,
+        view.System,
+        relay_store.Relay(1, "wss://a", Roles(True, True)),
+        dashboard.EditRelayRoles,
+        Some(Roles(False, False)),
+        Some(i18n.Translated(i18n.RelayRoleRequired)),
+      ),
+      relay_pages.relay_action_page(
+        language,
+        view.System,
+        relay_store.Relay(1, "wss://a", Roles(True, True)),
+        dashboard.DeleteRelay,
+        None,
         Some(reason),
       ),
     ],

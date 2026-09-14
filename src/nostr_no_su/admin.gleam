@@ -66,6 +66,7 @@ import nostr_no_su/log
 import nostr_no_su/nostr/nip19
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
@@ -120,7 +121,7 @@ const preference_cookie_attributes = cookie.Attributes(
   same_site: Some(cookie.Lax),
 )
 
-/// リレーの追加が反映されなかった理由。
+/// リレーの追加、用途の変更、削除が反映されなかった理由。
 pub type RelayChangeFailure {
   /// 同じ URL が登録済み。書き込まれていない。
   DuplicateRelay
@@ -130,6 +131,8 @@ pub type RelayChangeFailure {
   RelayMaybeSaved
   /// DB には書けたが、接続の一覧が変更を確かめられなかった。
   ConnectionsNotConfirmed
+  /// 対象の行が DB に無い。書き込まれていない。
+  UnregisteredRelay
 }
 
 /// ハンドラーが必要とするものすべて。パスワード以外の状態（アカウント、リレー、
@@ -155,6 +158,13 @@ pub type Context {
     relays: fn() -> Result(List(dashboard.RelayRow), String),
     /// リレーを DB に登録し、接続を開く。
     add_relay: fn(String, relay_list.Roles) -> Result(Nil, RelayChangeFailure),
+    /// DB の `relays` の全行。読めなければ理由を返す。
+    registered_relays: fn() -> Result(List(relay_store.Relay), String),
+    /// 用途を DB に書き、接続を変える。
+    update_relay_roles: fn(relay_store.Relay, relay_list.Roles) ->
+      Result(Nil, RelayChangeFailure),
+    /// 行を DB から消し、接続を閉じる。
+    delete_relay: fn(relay_store.Relay) -> Result(Nil, RelayChangeFailure),
     plugins: fn() -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
@@ -300,10 +310,15 @@ fn route(
     segments if segments == dashboard.register_generated_segments ->
       register_generated_account(context, request, language, theme)
     segments ->
-      case dashboard.parse_account_action_path(segments) {
-        Ok(#(signer, action)) ->
+      case
+        dashboard.parse_account_action_path(segments),
+        dashboard.parse_relay_action_path(segments)
+      {
+        Ok(#(signer, action)), _ ->
           account_action(context, request, language, theme, signer, action)
-        Error(Nil) ->
+        _, Ok(#(id, action)) ->
+          relay_action(context, request, language, theme, id, action)
+        Error(Nil), Error(Nil) ->
           not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
       }
   }
@@ -1055,11 +1070,12 @@ fn add_relay(
           redraw(i18n.Translated(i18n.RelayRoleRequired))
           |> wisp.html_response(400)
         True ->
-          case context.add_relay(url, roles) {
-            Ok(Nil) -> wisp.redirect(to: "/")
-            Error(failure) ->
-              relay_failure_response(language, theme, failure, redraw)
-          }
+          relay_change_response(
+            language,
+            theme,
+            context.add_relay(url, roles),
+            redraw,
+          )
       }
   }
 }
@@ -1087,10 +1103,10 @@ fn relay_roles(form: wisp.FormData) -> relay_list.Roles {
   )
 }
 
-/// リレーの追加の失敗の応答。書き込まれていないことが確定していれば 409、DB には
-/// 書けたが確かめられなければ 202 の通知ページにする。202 にする理由は
-/// `change_failure_response` と同じで、確かめられない変更を「拒否された」と見せると
-/// 利用者が追加をやり直してしまうからである。
+/// リレーの変更の失敗の応答。書き込まれていないことが確定していれば 409、DB には
+/// 書けたが確かめられなければ 202 の通知ページにする。対象の行が DB に無ければ 404。
+/// 202 にする理由は `change_failure_response` と同じで、確かめられない変更を「拒否された」と
+/// 見せると利用者がやり直してしまうからである。
 fn relay_failure_response(
   language: Language,
   theme: view.Theme,
@@ -1117,6 +1133,103 @@ fn relay_failure_response(
         i18n.Translated(i18n.RelayConnectionsNotConfirmed),
         202,
       )
+    UnregisteredRelay ->
+      not_found_notice(language, theme, i18n.Translated(i18n.RelayNotFound))
+  }
+}
+
+/// リレーの変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させ
+/// ない）、失敗なら `relay_failure_response` に渡す。追加、用途の変更、削除が使う。
+fn relay_change_response(
+  language: Language,
+  theme: view.Theme,
+  outcome: Result(Nil, RelayChangeFailure),
+  render: fn(i18n.Reason) -> String,
+) -> Response {
+  case outcome {
+    Ok(Nil) -> wisp.redirect(to: "/")
+    Error(failure) -> relay_failure_response(language, theme, failure, render)
+  }
+}
+
+/// DB の一覧から id の行を引く。一覧を得られなければ 503、無ければ 404。
+fn with_relay(
+  context: Context,
+  language: Language,
+  theme: view.Theme,
+  id: Int,
+  next: fn(relay_store.Relay) -> Response,
+) -> Response {
+  case context.registered_relays() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.RelaysNotAvailable, reason)
+    Ok(rows) ->
+      case list.find(rows, fn(row) { row.id == id }) {
+        Ok(row) -> next(row)
+        Error(Nil) ->
+          not_found_notice(language, theme, i18n.Translated(i18n.RelayNotFound))
+      }
+  }
+}
+
+/// リレー 1 件への操作。DB の行を引いてから、GET は操作のページを、POST は変更を
+/// 実行する。
+fn relay_action(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  id: Int,
+  action: dashboard.RelayAction,
+) -> Response {
+  use relay <- with_relay(context, language, theme, id)
+  case request.method, action {
+    http.Get, _ ->
+      relay_pages.relay_action_page(language, theme, relay, action, None, None)
+      |> wisp.html_response(200)
+    http.Post, dashboard.EditRelayRoles -> {
+      use form <- wisp.require_form(request)
+      let roles = relay_roles(form)
+      let redraw = fn(reason) {
+        relay_pages.relay_action_page(
+          language,
+          theme,
+          relay,
+          dashboard.EditRelayRoles,
+          Some(roles),
+          Some(reason),
+        )
+      }
+      case roles.monitor || roles.bunker {
+        False ->
+          redraw(i18n.Translated(i18n.RelayRoleRequired))
+          |> wisp.html_response(400)
+        True ->
+          relay_change_response(
+            language,
+            theme,
+            context.update_relay_roles(relay, roles),
+            redraw,
+          )
+      }
+    }
+    http.Post, dashboard.DeleteRelay ->
+      relay_change_response(
+        language,
+        theme,
+        context.delete_relay(relay),
+        fn(reason) {
+          relay_pages.relay_action_page(
+            language,
+            theme,
+            relay,
+            dashboard.DeleteRelay,
+            None,
+            Some(reason),
+          )
+        },
+      )
+    _, _ -> method_not_allowed(language, theme, [http.Get, http.Post])
   }
 }
 
@@ -1307,7 +1420,7 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
 }
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更とリレーの追加は 202、承認・拒否・取り消しと再有効化は
+/// 決める（アカウントの変更とリレーの変更は 202、承認・拒否・取り消しと再有効化は
 /// 503）。本文は呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめるよう
 /// 促す一文を添える。
 fn not_confirmed_notice(

@@ -99,4 +99,8 @@ pub fn leads_are_only_for_other_languages_test() {
     == Some("リレーの一覧を表示できません。")
   assert i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
     == Some("リレーを登録できませんでした。")
+  assert i18n.lead(i18n.Japanese, i18n.CouldNotSaveRelay)
+    == Some("用途を保存できませんでした。")
+  assert i18n.lead(i18n.Japanese, i18n.CouldNotDeleteRelay)
+    == Some("リレーを削除できませんでした。")
 }

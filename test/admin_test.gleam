@@ -20,6 +20,7 @@ import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import support/account_actions
 import support/nip46_client.{account_for}
 import wisp
@@ -86,6 +87,8 @@ type Report {
   NsecRequested(signer: String)
   Reenabled(name: String)
   RelayAdded(url: String, roles: relay_list.Roles)
+  RelayRolesUpdated(id: Int, roles: relay_list.Roles)
+  RelayDeleted(id: Int)
 }
 
 /// 指定したラベルを持つ、登録済みのアカウントの行。
@@ -155,6 +158,28 @@ fn test_context(
         True -> Error(admin.DuplicateRelay)
         False -> Ok(Nil)
       }
+    },
+    registered_relays: fn() {
+      Ok([
+        relay_store.Relay(
+          id: 1,
+          url: monitor_relay_url,
+          roles: relay_list.Roles(monitor: True, bunker: False),
+        ),
+        relay_store.Relay(
+          id: 2,
+          url: "wss://bunker.example",
+          roles: relay_list.Roles(monitor: False, bunker: True),
+        ),
+      ])
+    },
+    update_relay_roles: fn(relay, roles) {
+      process.send(reports, RelayRolesUpdated(relay.id, roles))
+      Ok(Nil)
+    },
+    delete_relay: fn(relay) {
+      process.send(reports, RelayDeleted(relay.id))
+      Ok(Nil)
     },
     plugins: fn() {
       [
@@ -1773,6 +1798,8 @@ pub fn method_not_allowed_pages_test() {
     "/approve/tok",
     action_path(dashboard.EditLabel),
     "/relays/new",
+    dashboard.relay_action_path(1, dashboard.EditRelayRoles),
+    dashboard.relay_action_path(1, dashboard.DeleteRelay),
   ]
   let cases =
     list.flatten([
@@ -2143,6 +2170,7 @@ pub fn add_relay_failures_test() {
       admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
       admin.ConnectionsNotConfirmed ->
         i18n.text(language, i18n.RelayConnectionsNotConfirmed)
+      admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
     }
   }
   let failures = [
@@ -2174,6 +2202,204 @@ pub fn add_relay_failures_test() {
   case failure {
     admin.RelayNotSaved(_) -> {
       let assert Some(prefix) = i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
+      assert string.contains(japanese_body, prefix)
+    }
+    _ -> Nil
+  }
+}
+
+// --- リレーの用途の編集と削除 ---
+
+/// 用途の編集の GET は 200 で、フォームの action と return は自分のパス、URL を `dd` で
+/// 出し、保存済みの用途（監視だけ）にチェックが入る。
+pub fn edit_relay_page_checks_the_saved_roles_test() {
+  let path = dashboard.relay_action_path(1, dashboard.EditRelayRoles)
+  let response = get(context(), path)
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "<form action=\""
+      <> path
+      <> "\" class=\"flex flex-col gap-4\" method=\"post\">",
+  )
+  assert string.contains(
+    body,
+    "<input name=\"return\" type=\"hidden\" value=\"" <> path <> "\">",
+  )
+  assert string.contains(
+    body,
+    "<dd class=\"font-mono text-xs break-all\">wss://relay.example</dd>",
+  )
+  assert string.contains(
+    body,
+    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+  )
+  assert !string.contains(
+    body,
+    "<input checked class=\"checkbox border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
+  )
+}
+
+/// 用途の編集の POST は id とチェックを Context に渡し、ダッシュボードへ 303 で戻す。
+pub fn update_relay_roles_saves_the_roles_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.relay_action_path(2, dashboard.EditRelayRoles),
+      [#("monitor", "on"), #("bunker", "on")],
+    )
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000)
+    == Ok(RelayRolesUpdated(2, relay_list.Roles(monitor: True, bunker: True)))
+}
+
+/// 用途を 1 つも選ばない POST は 400 で `RelayRoleRequired` を出し、チェックは無く、
+/// Context を呼ばない。
+pub fn update_relay_roles_requires_a_role_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.relay_action_path(1, dashboard.EditRelayRoles),
+      [],
+    )
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
+  assert !string.contains(body, "checked class=\"checkbox")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 削除のページは URL を `dd` で出し、送信ボタンは注意の重さ。POST は id を Context に
+/// 渡し、ダッシュボードへ 303 で戻す。
+pub fn delete_relay_page_and_submit_test() {
+  let path = dashboard.relay_action_path(2, dashboard.DeleteRelay)
+  let body = simulate.read_body(get(context(), path))
+  assert string.contains(
+    body,
+    "<dd class=\"font-mono text-xs break-all\">wss://bunker.example</dd>",
+  )
+  assert string.contains(body, "btn-warning")
+
+  let reports = process.new_subject()
+  let response = post(reporting_context(reports), path)
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000) == Ok(RelayDeleted(2))
+}
+
+/// 一覧に無い id への操作の GET と POST は 404 で `RelayNotFound` を出し、Context の
+/// 変更を呼ばない。
+pub fn relay_action_for_an_unknown_id_is_not_found_test() {
+  let reports = process.new_subject()
+  let paths = [
+    dashboard.relay_action_path(99, dashboard.EditRelayRoles),
+    dashboard.relay_action_path(99, dashboard.DeleteRelay),
+  ]
+  use path <- list.each(paths)
+  let get_response = get(reporting_context(reports), path)
+  assert #(path, get_response.status) == #(path, 404)
+  assert string.contains(
+    simulate.read_body(get_response),
+    i18n.text(i18n.English, i18n.RelayNotFound),
+  )
+  let post_response = post(reporting_context(reports), path)
+  assert #(path, post_response.status) == #(path, 404)
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 整数でない id は、DB の一覧を引かずに 404 の `PageNotFound` にする。
+pub fn relay_action_with_a_non_integer_id_is_not_found_test() {
+  let failing =
+    admin.Context(..context(), registered_relays: fn() { Error("boom") })
+  let response = get(failing, "/relays/abc/edit")
+  assert response.status == 404
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.PageNotFound),
+  )
+}
+
+/// DB の一覧を得られなければ、操作の GET は 503 で `RelaysNotAvailable` と理由を出す。
+pub fn relay_action_without_registered_relays_is_unavailable_test() {
+  let failing =
+    admin.Context(..context(), registered_relays: fn() { Error("boom") })
+  let paths = [
+    dashboard.relay_action_path(1, dashboard.EditRelayRoles),
+    dashboard.relay_action_path(1, dashboard.DeleteRelay),
+  ]
+  use path <- list.each(paths)
+  let response = get(failing, path)
+  assert #(path, response.status) == #(path, 503)
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelaysNotAvailable))
+  assert string.contains(body, "boom")
+}
+
+/// Context が返す変種ごとの状態コードと本文。編集と削除のどちらでも、対象の行が無い
+/// （`UnregisteredRelay`）は 404、反映されたか分からない 2 つは訳した本文で 202、
+/// `RelayNotSaved` は日本語のページだけ前置き（`CouldNotSaveRelay`、`CouldNotDeleteRelay`）が
+/// 付く。
+pub fn relay_change_failures_test() {
+  let not_saved_reason = "database is unreachable or rejected the connection"
+  let expected_text = fn(language, failure) {
+    case failure {
+      admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
+      admin.RelayNotSaved(reason) -> reason
+      admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
+      admin.ConnectionsNotConfirmed ->
+        i18n.text(language, i18n.RelayConnectionsNotConfirmed)
+      admin.DuplicateRelay -> i18n.text(language, i18n.RelayAlreadyRegistered)
+    }
+  }
+  let failures = [
+    #(admin.UnregisteredRelay, 404),
+    #(admin.RelayNotSaved(not_saved_reason), 409),
+    #(admin.RelayMaybeSaved, 202),
+    #(admin.ConnectionsNotConfirmed, 202),
+  ]
+  let cases = [
+    #(
+      dashboard.relay_action_path(1, dashboard.EditRelayRoles),
+      [#("monitor", "on")],
+      i18n.CouldNotSaveRelay,
+    ),
+    #(
+      dashboard.relay_action_path(1, dashboard.DeleteRelay),
+      [],
+      i18n.CouldNotDeleteRelay,
+    ),
+  ]
+  use #(path, form, lead) <- list.each(cases)
+  use #(failure, status) <- list.each(failures)
+  let failing =
+    admin.Context(
+      ..context(),
+      update_relay_roles: fn(_relay, _roles) { Error(failure) },
+      delete_relay: fn(_relay) { Error(failure) },
+    )
+  let english = post_form(failing, path, form)
+  assert #(path, failure, english.status) == #(path, failure, status)
+  assert string.contains(
+    simulate.read_body(english),
+    expected_text(i18n.English, failure),
+  )
+
+  let japanese =
+    simulate.request(http.Post, path)
+    |> in_japanese
+    |> with_credentials("admin", password)
+    |> simulate.form_body(form)
+    |> admin.handle_request(failing, _)
+  assert #(path, failure, japanese.status) == #(path, failure, status)
+  let japanese_body = simulate.read_body(japanese)
+  assert string.contains(japanese_body, expected_text(i18n.Japanese, failure))
+  case failure {
+    admin.RelayNotSaved(_) -> {
+      let assert Some(prefix) = i18n.lead(i18n.Japanese, lead)
       assert string.contains(japanese_body, prefix)
     }
     _ -> Nil

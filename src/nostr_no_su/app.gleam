@@ -536,6 +536,11 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       reenable_plugin: reenable_plugin(spec.plugins, _),
       relays: fn() { relay_rows(spec) },
       add_relay: fn(url, roles) { add_relay(spec, url, roles) },
+      registered_relays: fn() { registered_relays(spec) },
+      update_relay_roles: fn(relay, roles) {
+        update_relay_roles(spec, relay, roles)
+      },
+      delete_relay: fn(relay) { delete_relay(spec, relay) },
       sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
@@ -644,14 +649,19 @@ pub fn relay_rows(spec: Spec) -> Result(List(dashboard.RelayRow), String) {
     relay_list.entries(spec.relay_list)
     |> result.replace_error("relay list did not answer"),
   )
-  use relays <- result.map(
-    relay_store.list(store_connection(spec), account_store.default_timeouts)
-    |> result.map_error(account_store.describe),
-  )
+  use relays <- result.map(registered_relays(spec))
   merge_relay_rows(relays, entries, relay_connection.status)
 }
 
-/// バンカーの接続プールへの名前つき接続。`relay_rows` と `add_relay` が共有する。
+/// DB の `relays` の全行。読めなければ英語の理由を返す。管理 UI の Context が使う。
+pub fn registered_relays(
+  spec: Spec,
+) -> Result(List(relay_store.Relay), String) {
+  relay_store.list(store_connection(spec), account_store.default_timeouts)
+  |> result.map_error(account_store.describe)
+}
+
+/// バンカーの接続プールへの名前つき接続。リレーの読み書きが共有する。
 fn store_connection(spec: Spec) -> pog.Connection {
   pog.named_connection(spec.bunker.pool.pool_name)
 }
@@ -676,10 +686,48 @@ pub fn add_relay(
   |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
+/// 用途を DB に書いてから接続の用途を変える。DB に書けなければ接続を変えない。管理 UI の
+/// Context が使う。
+pub fn update_relay_roles(
+  spec: Spec,
+  relay: relay_store.Relay,
+  roles: relay_list.Roles,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  use _nil <- result.try(
+    relay_store.update_roles(
+      store_connection(spec),
+      relay.id,
+      roles,
+      account_store.default_timeouts,
+    )
+    |> result.map_error(store_failure),
+  )
+  change_relay_roles(spec, relay.url, roles)
+  |> result.replace_error(admin.ConnectionsNotConfirmed)
+}
+
+/// 行を DB から消してから接続を閉じる。管理 UI の Context が使う。
+pub fn delete_relay(
+  spec: Spec,
+  relay: relay_store.Relay,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  use _nil <- result.try(
+    relay_store.delete(
+      store_connection(spec),
+      relay.id,
+      account_store.default_timeouts,
+    )
+    |> result.map_error(store_failure),
+  )
+  close_relay(spec, relay.url)
+  |> result.replace_error(admin.ConnectionsNotConfirmed)
+}
+
 /// `account_store.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
 fn store_failure(error: account_store.StoreError) -> admin.RelayChangeFailure {
   case error {
     account_store.RelayAlreadyRegistered -> admin.DuplicateRelay
+    account_store.RelayNotRegistered -> admin.UnregisteredRelay
     _ ->
       case account_store.may_have_been_written(error) {
         True -> admin.RelayMaybeSaved

@@ -13,6 +13,7 @@
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
 
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -107,6 +108,15 @@ const account_actions = [
   DeleteAccount,
 ]
 
+/// リレー 1 件に対する操作。
+pub type RelayAction {
+  EditRelayRoles
+  DeleteRelay
+}
+
+/// 操作の一覧。ダッシュボードのリンクはこの順に並べ、セグメントとの対応もここから引く。
+const relay_actions = [EditRelayRoles, DeleteRelay]
+
 /// アカウントのページのパスの先頭のセグメント。
 const accounts_segment = "accounts"
 
@@ -143,10 +153,10 @@ pub const label_field = "label"
 /// リレーの追加のフォームで URL を送る欄の名前。
 pub const relay_url_field = "url"
 
-/// リレーの追加のフォームで監視に使うかを送る欄の名前。
+/// リレーの追加と用途の編集のフォームで監視に使うかを送る欄の名前。
 pub const monitor_field = "monitor"
 
-/// リレーの追加のフォームでバンカーに使うかを送る欄の名前。
+/// リレーの追加と用途の編集のフォームでバンカーに使うかを送る欄の名前。
 pub const bunker_field = "bunker"
 
 /// 秘密鍵の再表示で管理パスワードを送る欄の名前。
@@ -438,6 +448,56 @@ pub fn parse_account_action_path(
   }
 }
 
+/// 操作の見出しと、ダッシュボードのリンクの文言。
+pub fn relay_action_title(action: RelayAction) -> i18n.Message {
+  case action {
+    EditRelayRoles -> i18n.EditRelayRoles
+    DeleteRelay -> i18n.DeleteRelay
+  }
+}
+
+/// 操作のパスセグメント。
+fn relay_action_segment(action: RelayAction) -> String {
+  case action {
+    EditRelayRoles -> "edit"
+    DeleteRelay -> "delete"
+  }
+}
+
+/// 操作のパス（`/relays/<id>/<segment>`）。
+pub fn relay_action_path(id: Int, action: RelayAction) -> String {
+  view.segments_path([
+    relays_segment,
+    int.to_string(id),
+    relay_action_segment(action),
+  ])
+}
+
+/// パスセグメントから、リレー 1 件への操作の DB の行の id と操作を引く。id が整数として
+/// 読めなければ Error。行との照合は呼び出し側が行う。
+pub fn parse_relay_action_path(
+  segments: List(String),
+) -> Result(#(Int, RelayAction), Nil) {
+  case segments {
+    [first, id, segment] if first == relays_segment -> {
+      use id <- result.try(int.parse(id))
+      relay_actions
+      |> list.find(fn(action) { relay_action_segment(action) == segment })
+      |> result.map(fn(action) { #(id, action) })
+    }
+    _ -> Error(Nil)
+  }
+}
+
+/// 操作のページへのリンクの重さ。編集は開くだけなので通常、削除は接続中のクライアントに
+/// 影響するので注意にする。
+fn relay_action_link_weight(action: RelayAction) -> view.Weight {
+  case action {
+    EditRelayRoles -> view.Normal
+    DeleteRelay -> view.Caution
+  }
+}
+
 /// 承認待ち 1 件の、署名者・クライアント・経過時間・secret の提示の区別と、承認・拒否
 /// ボタン。ダッシュボードの行と承認ページが使う。
 fn pending_content(
@@ -504,7 +564,8 @@ fn no_bunker_relay_warning(
   }
 }
 
-/// リレー 1 件。URL と、使っている用途の語と状態の組を監視、バンカーの順に並べる。
+/// リレー 1 件。URL と、使っている用途の語と状態の組を監視、バンカーの順に並べ、
+/// 操作のリンク（用途の編集、削除）を続ける。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   entry_item([
     html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
@@ -519,6 +580,15 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
         ]),
       ),
     ]),
+    button_row(
+      list.map(relay_actions, fn(action) {
+        view.button_link(
+          relay_action_path(row.id, action),
+          i18n.text(language, relay_action_title(action)),
+          relay_action_link_weight(action),
+        )
+      }),
+    ),
   ])
 }
 

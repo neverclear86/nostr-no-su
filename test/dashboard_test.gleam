@@ -294,13 +294,27 @@ pub fn sessions_show_created_and_last_used_times_test() {
   )
 }
 
-/// リレーは 1 行につき `<li>` 1 件で、使っている用途を監視、バンカーの順に並べる。
-/// 使っていない用途は出さず、URL は `break-all`、用途の語とバッジは `whitespace-nowrap`。
+/// リレーは 1 行につき `<li>` 1 件で、使っている用途を監視、バンカーの順に並べ、操作の
+/// リンク（用途の編集、削除）を続ける。使っていない用途は出さず、URL は `break-all`、
+/// 用途の語とバッジは `whitespace-nowrap`。
 pub fn relays_are_listed_one_item_per_row_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span></span><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">bunker</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div></li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div></li></ul>",
+    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span></span><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">bunker</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-sm focus-visible:outline-base-content\" href=\"/relays/1/edit\">Edit roles</a><a class=\"btn btn-sm btn-warning focus-visible:outline-base-content\" href=\"/relays/1/delete\">Delete relay</a></div></li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-sm focus-visible:outline-base-content\" href=\"/relays/2/edit\">Edit roles</a><a class=\"btn btn-sm btn-warning focus-visible:outline-base-content\" href=\"/relays/2/delete\">Delete relay</a></div></li></ul>",
+  )
+}
+
+/// リレーの行のリンクは、用途の編集が通常の重さ、削除が注意の重さ。
+pub fn relay_rows_link_to_edit_and_delete_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    body,
+    "<a class=\"btn btn-sm focus-visible:outline-base-content\" href=\"/relays/1/edit\">Edit roles</a>",
+  )
+  assert string.contains(
+    body,
+    "<a class=\"btn btn-sm btn-warning focus-visible:outline-base-content\" href=\"/relays/1/delete\">Delete relay</a>",
   )
 }
 
