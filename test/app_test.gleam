@@ -2095,7 +2095,14 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  deliver(connect_request("c1", secret))
+  deliver(
+    signed_request(nip46_client.connect_body_with_perms(
+      account_for(signer_key),
+      secret,
+      "sign_event:1",
+      "c1",
+    )),
+  )
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
 

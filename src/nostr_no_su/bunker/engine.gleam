@@ -71,6 +71,10 @@ pub const session_capacity = 32
 /// 古い順（`pending` の並びの末尾）に押し出す。
 pub const pending_capacity = 16
 
+/// `connect` の perms を保持する上限（バイト）。超える値はカンマの境で切る
+/// （`bounded_perms`）。
+pub const max_perms_bytes = 512
+
 /// バンカーが持つ状態のすべて。プロセスも時計も持たない純粋な値で、`bunker` の
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
@@ -118,10 +122,10 @@ pub type Inputs {
 
 /// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
 /// 同じものを持つ（一覧に出すときに鍵を持ち回らずに済む）。`request_id` は承認後
-/// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は `connect` の
-/// `params[2]`（無ければ空文字列）、`secret_mismatch` は空でない secret が一致
-/// しなかったかどうかを表す。`pending_capacity` を超えると作成の古い順に押し出さ
-/// れる。
+/// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は
+/// `params[2]` を `max_perms_bytes` で切った値（無ければ空文字列）、
+/// `secret_mismatch` は空でない secret が一致しなかったかどうかを表す。
+/// `pending_capacity` を超えると作成の古い順に押し出される。
 pub type Pending {
   Pending(
     token: String,
@@ -139,7 +143,9 @@ pub type Pending {
 /// 押し出しまで署名を代理できる。時刻は Unix 秒。
 /// `last_used_at` は作成時に `created_at` と同じ値を入れ、セッション内の
 /// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
-/// 経っていれば更新する。
+/// 経っていれば更新する。`perms` はセッション内の `sign_event` と
+/// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
+/// の値から変わらない。
 pub type Session {
   Session(
     signer: String,
@@ -716,7 +722,7 @@ fn execute(
           touch(
             engine,
             session,
-            execute_in_session(account, request, inputs.now),
+            execute_in_session(account, session.perms, request, inputs.now),
             inputs.now,
           )
       }
@@ -906,18 +912,29 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
   #(updated, InsertPending(pending: entry, replaced:, evicted:))
 }
 
-/// 接続済みクライアントからのリクエストを 1 件実行する。
+/// 接続済みクライアントからのリクエストを 1 件実行する。`sign_event` と
+/// `nip44_encrypt` / `nip44_decrypt` は `perms` が許すときだけ実行し、
+/// `get_public_key` と `ping` は `perms` に関わらず答える。
 fn execute_in_session(
   account: Account,
+  perms: String,
   request: rpc.Request,
   now: Int,
 ) -> rpc.Response {
   case request.method {
     "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
     "ping" -> rpc.ok(request.id, "pong")
-    "sign_event" -> sign_event(account, request, now)
-    "nip44_encrypt" -> nip44_op(account, request, True)
-    "nip44_decrypt" -> nip44_op(account, request, False)
+    "sign_event" -> sign_event(account, perms, request, now)
+    "nip44_encrypt" ->
+      case grants(perms, "nip44_encrypt") {
+        True -> nip44_op(account, request, True)
+        False -> rpc.error(request.id, denial("nip44_encrypt"))
+      }
+    "nip44_decrypt" ->
+      case grants(perms, "nip44_decrypt") {
+        True -> nip44_op(account, request, False)
+        False -> rpc.error(request.id, denial("nip44_decrypt"))
+      }
     "nip04_encrypt" | "nip04_decrypt" ->
       rpc.error(request.id, "nip04 is not supported")
     method -> rpc.error(request.id, "unsupported method: " <> method)
@@ -957,17 +974,47 @@ fn connect_secret(params: List(String)) -> Option(String) {
   }
 }
 
-/// connect リクエストが要求する権限（`params[2]`）。無ければ空文字列。
+/// connect リクエストが要求する権限（`params[2]`）を `max_perms_bytes` で切った
+/// 値。無ければ空文字列。
 fn connect_perms(params: List(String)) -> String {
   case params {
-    [_signer, _secret, perms, ..] -> perms
+    [_signer, _secret, perms, ..] -> bounded_perms(perms)
     _ -> ""
   }
 }
 
-/// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。
+/// `perms` が `max_perms_bytes` 以下ならそのまま、超えればカンマで分けたトークン
+/// を先頭から上限に収まる所まで残す。トークンの途中では切らない
+/// （`sign_event:12` を `sign_event:1` にしないため）。
+fn bounded_perms(perms: String) -> String {
+  let #(kept, _) =
+    string.split(perms, ",")
+    |> list.fold_until(#([], -1), fn(acc, token) {
+      let grown = acc.1 + 1 + string.byte_size(token)
+      case grown <= max_perms_bytes {
+        True -> list.Continue(#([token, ..acc.0], grown))
+        False -> list.Stop(acc)
+      }
+    })
+  kept |> list.reverse |> string.join(",")
+}
+
+/// カンマ区切りの `perms` に `permission` と完全に一致するトークンがあるか。前後
+/// の空白は除かない。
+fn grants(perms: String, permission: String) -> Bool {
+  string.split(perms, ",") |> list.contains(permission)
+}
+
+/// `permission` が許されていないことを示すエラーの文言。
+fn denial(permission: String) -> String {
+  "permission denied: " <> permission
+}
+
+/// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。`perms` が
+/// `sign_event` か `sign_event:<kind>` を含むときだけ署名する。
 fn sign_event(
   account: Account,
+  perms: String,
   request: rpc.Request,
   now: Int,
 ) -> rpc.Response {
@@ -978,6 +1025,9 @@ fn sign_event(
           rpc.decode_draft(draft_json)
           |> result.replace_error("invalid event draft"),
         )
+        let permission = "sign_event:" <> int.to_string(draft.kind)
+        let permitted = grants(perms, "sign_event") || grants(perms, permission)
+        use <- bool.guard(!permitted, Error(denial(permission)))
         use unsigned <- result.try(unsigned_event(
           draft,
           pubkey_hex(account),
@@ -996,8 +1046,8 @@ fn sign_event(
 }
 
 /// ドラフトを署名者の未署名イベントにする。別の pubkey を指すドラフトと、
-/// NIP-46 の応答と同じ kind（24133）のドラフトは拒否する。空の pubkey は
-/// 指定無しとして扱う。
+/// NIP-46 の応答と同じ kind（24133）のドラフトは、perms で宣言されていても
+/// 拒否する。空の pubkey は指定無しとして扱う。
 fn unsigned_event(
   draft: rpc.EventDraft,
   signer: String,

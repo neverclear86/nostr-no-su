@@ -10,8 +10,8 @@ import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
-  account_for, connect_body, decrypt_response, padded_hex, request_body,
-  request_event,
+  account_for, connect_body, connect_body_with_perms, decrypt_response,
+  padded_hex, request_body, request_event,
 }
 import support/signed_event
 
@@ -133,18 +133,7 @@ fn connect_with_perms(
   perms: String,
   now: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  let body =
-    request_body(
-      "c1",
-      "connect",
-      "[\""
-        <> account.pubkey_hex(signer)
-        <> "\",\""
-        <> secret_arg
-        <> "\",\""
-        <> perms
-        <> "\"]",
-    )
+  let body = connect_body_with_perms(signer, secret_arg, perms, "c1")
   handle_raw(state, request_event(client, signer, body, now), now, 0)
 }
 
@@ -226,7 +215,16 @@ pub fn ping_test() {
 pub fn sign_event_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:1",
+      1000,
+    )
+    |> written
   let draft =
     "{\\\"kind\\\":1,\\\"content\\\":\\\"hello\\\",\\\"tags\\\":[],\\\"created_at\\\":1700000123,\\\"pubkey\\\":\\\""
     <> account.pubkey_hex(signer)
@@ -252,7 +250,16 @@ pub fn sign_event_test() {
 pub fn sign_event_fills_created_at_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:1",
+      1000,
+    )
+    |> written
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
   let body =
     "{\"id\":\"s2\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
@@ -390,7 +397,16 @@ pub fn nip44_roundtrip_via_engine_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let third_party = account_for(other_client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "nip44_encrypt,nip44_decrypt",
+      1000,
+    )
+    |> written
   // 署名者を介して "secret msg" を third_party 宛に暗号化する
   let enc_body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\""
@@ -724,7 +740,9 @@ pub fn connect_with_the_secret_skips_approval_test() {
 pub fn approve_answers_the_original_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  let #(state, _) =
+    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
+    |> written
   let assert Ok(#(state, ack, _write)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
   assert ack.kind == event.nip46_kind
@@ -738,7 +756,7 @@ pub fn approve_answers_the_original_request_test() {
       engine.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
-        perms: "",
+        perms: "sign_event:1",
         created_at: 1001,
         last_used_at: 1001,
       ),
@@ -899,7 +917,16 @@ pub fn sign_event_rejects_a_draft_for_another_pubkey_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let other = account_for(other_signer_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:1",
+      1000,
+    )
+    |> written
   let draft =
     "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\",\\\"pubkey\\\":\\\""
     <> account.pubkey_hex(other)
@@ -919,7 +946,16 @@ pub fn sign_event_rejects_a_draft_for_another_pubkey_test() {
 pub fn sign_event_accepts_a_draft_with_an_empty_pubkey_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:1",
+      1000,
+    )
+    |> written
   let draft =
     "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\",\\\"pubkey\\\":\\\"\\\"}"
   let body =
@@ -936,7 +972,16 @@ pub fn sign_event_accepts_a_draft_with_an_empty_pubkey_test() {
 pub fn sign_event_rejects_a_nip46_kind_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "sign_event:24133",
+      1000,
+    )
+    |> written
   let draft = "{\\\"kind\\\":24133,\\\"content\\\":\\\"hi\\\"}"
   let body =
     "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"" <> draft <> "\"]}"
@@ -995,7 +1040,16 @@ pub fn connect_with_an_empty_signer_param_test() {
 pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let #(state, _) =
+    connect_with_perms(
+      new_engine(),
+      client,
+      signer,
+      secret,
+      "nip44_encrypt",
+      1000,
+    )
+    |> written
   let body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\"zz\",\"hi\"]}"
   let #(_state, outcome) =
@@ -1005,6 +1059,124 @@ pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
     decrypt_response(client, signer, response),
     "invalid third-party pubkey",
   )
+}
+
+// --- 権限の照合 ---
+
+/// `perms` を宣言して secret 付きで接続したエンジン。
+fn granted_session(perms: String) -> engine.Engine {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) =
+    connect_with_perms(new_engine(), client, signer, secret, perms, 1000)
+    |> written
+  state
+}
+
+/// セッション内のリクエストを 1 件送り、復号した応答の本文を返す。
+fn session_reply(
+  state: engine.Engine,
+  method: String,
+  params_json: String,
+) -> String {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body = request_body("r1", method, params_json)
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  decrypt_response(client, signer, response)
+}
+
+/// content だけのドラフト 1 件の params の JSON。
+fn kind_draft_params(kind: Int) -> String {
+  let draft =
+    "{\\\"kind\\\":" <> int.to_string(kind) <> ",\\\"content\\\":\\\"hi\\\"}"
+  "[\"" <> draft <> "\"]"
+}
+
+/// `sign_event:<kind>` は宣言した kind だけを許し、宣言していない kind は
+/// 拒否する。kind 無しの `sign_event` はすべての kind（24133 を除く）を許す。
+pub fn sign_event_of_an_undeclared_kind_is_denied_test() {
+  let state = granted_session("sign_event:1")
+  assert string.contains(
+    session_reply(state, "sign_event", kind_draft_params(7)),
+    "permission denied: sign_event:7",
+  )
+  let assert Ok(signed) =
+    parse_result_event(session_reply(state, "sign_event", kind_draft_params(1)))
+  assert signed.kind == 1
+
+  let unrestricted = granted_session("sign_event")
+  let assert Ok(signed) =
+    parse_result_event(session_reply(
+      unrestricted,
+      "sign_event",
+      kind_draft_params(7),
+    ))
+  assert signed.kind == 7
+}
+
+/// `nip44_encrypt` と `nip44_decrypt` は、宣言していなければ個別に拒否される。
+pub fn undeclared_encryption_methods_are_denied_test() {
+  let state = granted_session("sign_event:1")
+  let params =
+    "[\"" <> account.pubkey_hex(account_for(other_client_key)) <> "\",\"hi\"]"
+  assert string.contains(
+    session_reply(state, "nip44_encrypt", params),
+    "permission denied: nip44_encrypt",
+  )
+  assert string.contains(
+    session_reply(state, "nip44_decrypt", params),
+    "permission denied: nip44_decrypt",
+  )
+}
+
+/// perms が空のセッションは署名も暗号化もできないが、`ping` と
+/// `get_public_key` は perms に関わらず応答する。
+pub fn empty_perms_refuse_signing_and_encryption_test() {
+  let signer = account_for(signer_key)
+  let state = granted_session("")
+  let params =
+    "[\"" <> account.pubkey_hex(account_for(other_client_key)) <> "\",\"hi\"]"
+  assert string.contains(
+    session_reply(state, "sign_event", kind_draft_params(1)),
+    "permission denied: sign_event:1",
+  )
+  assert string.contains(
+    session_reply(state, "nip44_encrypt", params),
+    "permission denied: nip44_encrypt",
+  )
+  assert string.contains(
+    session_reply(state, "nip44_decrypt", params),
+    "permission denied: nip44_decrypt",
+  )
+  assert session_reply(state, "ping", "[]")
+    == "{\"id\":\"r1\",\"result\":\"pong\"}"
+  assert session_reply(state, "get_public_key", "[]")
+    == "{\"id\":\"r1\",\"result\":\"" <> account.pubkey_hex(signer) <> "\"}"
+}
+
+/// 上限を超える perms はトークンの境で切り、上限ちょうどの perms はそのまま
+/// 残す。
+pub fn perms_over_the_limit_are_cut_at_a_comma_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
+  let over_limit = long_prefix <> ",sign_event:12"
+  let at_limit = long_prefix <> ",sign_event:1"
+
+  let #(state, _) =
+    connect_with_perms(auth_engine(), client, signer, "", over_limit, 1000)
+    |> written
+  let assert [pending] = engine.pending(state, 1000)
+  assert pending.perms == long_prefix
+
+  let #(state, _) =
+    connect_with_perms(auth_engine(), client, signer, "", at_limit, 1001)
+    |> written
+  let assert [pending] = engine.pending(state, 1001)
+  assert pending.perms == at_limit
 }
 
 // --- ヘルパー ---
@@ -1844,7 +2016,7 @@ pub fn restored_session_can_sign_without_connect_test() {
     engine.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
-      perms: "",
+      perms: "sign_event:1",
       created_at: 500,
       last_used_at: 500,
     )

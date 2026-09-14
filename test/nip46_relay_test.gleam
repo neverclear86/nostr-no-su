@@ -58,7 +58,12 @@ pub fn nip46_round_trip_over_a_relay_test() {
       connection,
       client,
       signer,
-      nip46_client.connect_body(signer, secret, "connect-1"),
+      nip46_client.connect_body_with_perms(
+        signer,
+        secret,
+        "sign_event:1",
+        "connect-1",
+      ),
       events,
       acks,
     )
