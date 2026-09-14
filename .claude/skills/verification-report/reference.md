@@ -32,6 +32,7 @@ ADMIN_PORT=8095
 ADMIN_BASE_URL=http://127.0.0.1:8095
 ADMIN_PASSWORD=verify-<乱数>
 ACCOUNT_MASTER_KEY=<openssl rand -hex 32 の出力>
+REMSH_ENABLED=true
 ```
 
 マスターキーが無い場合と不正な場合は、その行だけを変えた env ファイルを別に作り、`ENVF=$V/nns-nokey.env ./dc.sh up -d nostr-no-su` のように切り替える。
@@ -292,38 +293,18 @@ nsec やパスワードは伏せないので、`ERROR` の行が出ていると�
 grep -a -n -w -- '[0-9a-f]\{32\}' <HIT のファイル> | sed 's/[0-9a-f]\{32,\}/<hex>/g'
 ```
 
-## ローカル実行とアクターの kill
-
-テスト用の Postgres（5533）と重ならないポートにする。
+## アクターの kill（remsh）
 
 ```sh
-docker run -d --name nns-verify-localpg -p 127.0.0.1:5534:5432 \
-  -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su postgres:17-alpine
-
-cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5534/nostr_no_su \
-  ACCOUNT_MASTER_KEY=<使い捨て> RELAY_URL= BUNKER_RELAY_URL=ws://127.0.0.1:7801 \
-  ADMIN_PORT=8096 ADMIN_PASSWORD=<使い捨て> ADMIN_BASE_URL=http://127.0.0.1:8096 PLUGIN_DIR= \
-  ERL_FLAGS="-sname nnsverify -setcookie nnsverifycookie" gleam run > "$V/log-local-run.txt" 2>&1 &
+expr='[N] = [X || X <- registered(), lists:prefix("nostr_no_su_bunker$", atom_to_list(X))], P1 = whereis(N), exit(P1, kill), timer:sleep(3000), P2 = whereis(N), io:format("bunker ~p ~p -> ~p restarted=~p~n", [N, P1, P2, is_pid(P2) andalso P2 =/= P1]).'
+printf '%s\n' "$expr" | ./dc.sh exec -T nostr-no-su /app/start.sh remsh > "$V/log-remsh-kill.txt" 2>&1
+./dc.sh ps --format '{{.Name}} {{.Status}}'
+./dc.sh logs nostr-no-su | grep -E 'Supervisor|\[bunker\] loaded'
 ```
 
-アカウントは `curl -u admin:<パスワード> -d nsec=... -d label=... http://127.0.0.1:8096/accounts/import` で登録できる（`Origin` を送らないので CSRF の検査を通る）。
-
-```sh
-erl -sname probe$$ -setcookie nnsverifycookie -noshell -eval '
-  {ok, H} = inet:gethostname(), N = list_to_atom("nnsverify@" ++ H), pong = net_adm:ping(N),
-  Find = fun() -> [{X, rpc:call(N, erlang, whereis, [X])} || X <- rpc:call(N, erlang, registered, []),
-                   lists:prefix("nostr_no_su_bunker$", atom_to_list(X))] end,
-  B = Find(), io:format("BUNKER-BEFORE ~p~n", [B]),
-  [rpc:call(N, erlang, exit, [P, kill]) || {_, P} <- B],
-  timer:sleep(3000), io:format("BUNKER-AFTER  ~p~n", [Find()]), halt().'
-```
-
-止めるときは本体を先に止め、それから Postgres のコンテナーを消す。
-
-```sh
-pkill -f '[b]eam.smp.*nnsverify'
-docker rm -f nns-verify-localpg
-```
+式は CI の `docker-image` ジョブの式（`.github/workflows/test.yml` の「REMSH_ENABLED=true で remsh からバンカーを kill して再起動を観測する」の step）と同じ形で、待ちを 3 秒にしている。pid はノードごとに変わるので `restarted=true` を見る。
+`-T` で流すと入力の終わりで抜け、`*** Shell process terminated! Read EOF ***` が出るが本体は止まらない。対話で入ったときは Ctrl+G の後に `q` で抜け、`q().` と `init:stop().` は送らない（README の「docker compose」の節と同じ）。
+アカウントは管理 UI で登録済みのものを使い、署名の継続は「接続したままのクライアント」に `echo sign >&3` を送って確かめる。
 
 ## 投稿と確認
 
