@@ -175,4 +175,4 @@ nsec と管理パスワードの欄には `autocomplete="off"` を付けてい�
 
 WebSocket クライアントの stratus は、hex で公開された版を改変して `vendor/stratus/` に同梱している。
 改変の内容と理由、上流の版と tar の SHA-256、hex 版に戻す条件は `vendor/stratus/PATCH.md` にある。
-CI の `vendor-stratus` ジョブが、上流の tar にパッチを当てた結果と `vendor/stratus/` が一致することを確かめる。
+PR の CI が、上流の tar にパッチを当てた結果と `vendor/stratus/` が一致することを確かめる。

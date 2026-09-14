@@ -30,7 +30,7 @@ APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（re
 - 指示された「APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
 - 「## レビュー」の最後の `判定: APPROVE` と「## 最終確認」の最後の `判定: APPROVE` が、どちらも APPROVE を出した head のコミットより後の時刻である
 - APPROVE の後の push が rebase 以外に無い（あれば not_ready）
-- CI の 3 つのジョブ（`test`、`admin-css`、`plugin-event-logger`）が pass である（pending なら `gh pr checks <PR> -R $R --watch` で待つ）
+- CI の `test` ジョブが pass である（pending なら `gh pr checks <PR> -R $R --watch` で待つ）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す
 
 条件を 1 つでも満たさなければマージせず、status を not_ready（衝突だけなら conflict）にして problem に根拠を書く。

@@ -25,13 +25,16 @@ disallowedTools: Agent
 - README、docs/architecture.md、.env.example など、変更に関係する文書も同じ PR で直す
 
 ## PR を作る前の検査（この順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く）
-1. `gleam build --warnings-as-errors`
-2. `gleam test`。Postgres は `TEST_DATABASE_URL` に渡す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す
-3. `gleam format src test dev`（差分をコミットに含める）
-4. `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする
-5. プランの「検証の手順」をすべて実行し、出力を保存する
-6. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README、docs/、.env.example に古い記述が残っていないことを確かめる。確かめた語を「テストと検証」に書く（0 件でも）
-7. 自己レビュー: push の前に差分を PR レビュアーの must と should の観点（受け入れ条件、動作の誤り、DRY、命名、文書の食い違い）で 1 回読み、見つけたものは直す
+push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
+1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）
+2. `gleam build --warnings-as-errors`
+3. `gleam test`。PR の CI は統合テストを走らせないので、ここでは Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す
+4. `gleam format src test dev`（差分をコミットに含める）と `gleam format --check src test dev`
+5. `examples/` を変えたら `erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl`。`vendor/` を変えたら `sh dev/check_vendor_stratus.sh`。`docker-compose.yml` か `.env.example` を変えたら `sh dev/check_env_example.sh`。`plugins-src/`、`gleam.toml`、`manifest.toml` を変えたら `sh dev/check_shared_versions.sh` と、`plugins-src/event_logger` で `gleam build --warnings-as-errors`、`gleam test`（Postgres つき）、`gleam format --check src test`
+6. `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする
+7. プランの「検証の手順」をすべて実行し、出力を保存する
+8. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README、docs/、.env.example に古い記述が残っていないことを確かめる。確かめた語を「テストと検証」に書く（0 件でも）
+9. 自己レビュー: push の前に差分を PR レビュアーの must と should の観点（受け入れ条件、動作の誤り、DRY、命名、文書の食い違い）で 1 回読み、見つけたものは直す
 - UI を変える issue（`ui: true`）でだけ、`dev/screenshots.mjs` で main と作業ブランチの両方の画面を撮り（幅 1280 と 375、ライトとダーク。同じ初期状態を作ってから）、PR を作った直後に `gh pr comment <PR> --attach <png>` で「変更前」「変更後」を貼る。貼るのは変えた画面だけで、全画面の一式は貼らない（撮影は一式でよいが、貼るのは差分のある画面に絞る）。言語は日本語（`ja-JP`）で撮り、英語は貼らない。英語画面の修正が主題の issue のときだけ英語で撮る。変えた画面の状態（空、エラー、承認待ちなど）は漏らさず、見た目が変わらないときも貼る。UI を変えない issue では撮らない
 
 ## docker を使うときの安全策（ユーザーの compose と同じ docker を共有している）
@@ -49,7 +52,8 @@ disallowedTools: Agent
 - コミットは意味のまとまりごとに分け、メッセージは `feat:`、`fix:`、`docs:`、`refactor:`、`test:` の接頭辞と日本語の要約（直近の `git log --oneline` の形）。本文の最後に、指示されたトレーラーの行を付ける
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文の書式は次のとおり。末尾に `Closes #<N>`（issue の「依存」節がこの PR で閉じると書く issue はすべて並べる）と、指示された生成表記の行を置く
-- PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の全ジョブが pass するのを待つ。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
+- 指摘への対応や rebase で push するときも、上の「PR を作る前の検査」を通してから push する
+- PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の `test` ジョブが pass するのを待つ。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
 - CI が pass したら `sh <作業ツリー>/dev/pr_facts.sh <PR>` を回し、その表を「テストと検証」に貼り、`Closes` が表の closingIssuesReferences と一致することを確かめて `gh pr edit <PR> -R neverclear86/nostr-no-su --body-file <ファイル>` で本文を更新する（push のたびに貼り直す）
 
 ```

@@ -11,7 +11,7 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。`CI` が設定されているときは失敗する）:
+本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。PR の CI は渡さないので、push の前に手元で通す:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -42,7 +42,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本�
 
 ## NIP-46 の E2E（strfry）
 
-実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（`TEST_RELAY_URL` が未設定なら `CI` の有無に関わらずスキップして 1 行ログを出す。`TEST_DATABASE_URL` だけが未設定のときは、他の統合テストと同じく `CI` が設定されていれば失敗する。`test` ジョブは `TEST_RELAY_URL` を渡さないのでスキップされる）。テストごとに専用の database を作って消す:
+実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（どちらかが未設定ならスキップして 1 行ログを出す。PR の CI はどちらも渡さない）。テストごとに専用の database を作って消す:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -57,7 +57,7 @@ docker rm -f nns-pg-test nns-strfry-test
 
 ## event_logger プラグインのテスト
 
-`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。`CI` が設定されているときは失敗する）:
+`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。PR の CI は渡さない）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -66,6 +66,20 @@ cd plugins-src/event_logger
 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test gleam test
 docker rm -f nns-pg-test
 ```
+
+## 手動の検査
+
+PR の CI（`.github/workflows/test.yml`）は、build、単体テスト、format、例のプラグインのコンパイル、`vendor/stratus` と `.env.example` と共有パッケージの版の検査、CSS の差分だけを行う。Postgres と strfry を使うテスト、shipment、docker イメージ、プラグインの README のビルド手順は `.github/workflows/manual.yml` にあり、GitHub の Actions で `manual` を選んで「Run workflow」で main に対して起動する。リリースの前（CONTRIBUTING.md の「リリース」）と、Dockerfile、`docker-compose.yml`、`docker/`、リレーとの接続、統合テストに関わる変更をマージしたあとに実行する。ジョブは次のとおり:
+
+| ジョブ | 検査 |
+|--|--|
+| `integration` | Postgres つきの `gleam test` と `gleam export erlang-shipment` |
+| `nip46-e2e` | strfry と Postgres つきの `gleam test`。strfry のログでイベントの保存を確かめる |
+| `plugin-event-logger` | event_logger の Postgres つきの `gleam test` と shipment |
+| `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる |
+| `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 |
+
+手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
 
 ## レビューの前の機械的な検査
 

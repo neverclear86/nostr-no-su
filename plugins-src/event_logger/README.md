@@ -8,7 +8,7 @@
 
 ## ビルド
 
-<!-- この節の最初の sh ブロックは、CI（.github/workflows/test.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
+<!-- この節の最初の sh ブロックは、手動のワークフロー（.github/workflows/manual.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
 
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
 
@@ -114,7 +114,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 cd plugins-src/event_logger
 gleam deps download
 gleam build --warnings-as-errors
-gleam test          # TEST_DATABASE_URL があれば統合テストも走る（CI では未設定だと失敗する）
+gleam test          # TEST_DATABASE_URL があれば統合テストも走る（PR の CI は渡さない）
 gleam format --check src test
 ```
 

@@ -8,7 +8,7 @@ Gleam プロジェクトにせず Erlang 1 ファイルにしているのは、�
 
 ## ビルド
 
-<!-- この節の最初の sh ブロックは、CI（.github/workflows/test.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
+<!-- この節の最初の sh ブロックは、手動のワークフロー（.github/workflows/manual.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
 
 **本体と同じイメージでビルドすること。** OTP が違うとローダーが `badfile` で拒否する。
 
