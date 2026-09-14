@@ -8,9 +8,9 @@ NIP-46 で鍵を管理するバンカーであり、自分のアカウントの�
 
 NIP-46 リモート署名バンカーが動作する。クライアント（nsec.app / noStrudel 等）が `bunker://` URI で接続し、暗号化されたリクエスト経由で署名を委任できる。あわせて、バンカーに登録したアカウントのイベントを監視してプラグインで処理する。
 
-- **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（`BUNKER_RELAY_URL` カンマ区切り）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する。アカウントの秘密鍵と接続 secret は、マスターキー（`ACCOUNT_MASTER_KEY`）で AES-256-GCM により暗号化して Postgres に保存する
+- **NIP-46 バンカー**: kind 24133 のリクエストを検証・復号し、`connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` を処理。バンカーは監視とは別の専用接続を複数リレーに張れる（管理 UI のリレーの一覧（DB）でバンカー用に登録したもの）。どれか 1 つでも生きていれば署名できる。secret を持たないクライアントは `auth_url` フローで管理 UI の承認を経て接続する。アカウントの秘密鍵と接続 secret は、マスターキー（`ACCOUNT_MASTER_KEY`）で AES-256-GCM により暗号化して Postgres に保存する
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
-- **イベント監視**: 複数リレーへ同時接続（`RELAY_URL` カンマ区切り）。監視するのはバンカーに登録した全アカウントが作ったイベントで、管理 UI でのアカウントの追加と削除は再起動なしで購読に反映する。ephemeral イベント（kind 20000〜29999。バンカーの NIP-46 の通信を含む）はプラグインに渡さない。登録アカウント以外のイベントを受け取るプラグインは想定しない。NIP-01 のコーデック、イベントの ID と署名の検証（リレーの接続ごとのプロセスで行う）、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
+- **イベント監視**: 複数リレーへ同時接続（管理 UI のリレーの一覧（DB）で監視用に登録したもの）。監視するのはバンカーに登録した全アカウントが作ったイベントで、管理 UI でのアカウントの追加と削除は再起動なしで購読に反映する。ephemeral イベント（kind 20000〜29999。バンカーの NIP-46 の通信を含む）はプラグインに渡さない。登録アカウント以外のイベントを受け取るプラグインは想定しない。NIP-01 のコーデック、イベントの ID と署名の検証（リレーの接続ごとのプロセスで行う）、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
 - 接続が切れたリレーは個別に自動再接続（セッション状態は再接続をまたいで保持。基準の間隔は 5 秒から倍に延び 5 分で頭打ちで、実際の間隔はそれを ±20% ずらす）
 - **イベントロガー**: 外部プラグイン `event_logger` を `PLUGIN_DIR` に置き、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。ソースとビルド手順は `plugins-src/event_logger/`
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントとその `bunker://` 接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態（無効なら再有効化可）を確認できる。アカウントの登録（nsec の入力とサーバー側での鍵の生成）、削除、接続 secret のローテーション、ラベルの編集、管理パスワードの再入力による秘密鍵の再表示もここで行う。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
@@ -30,7 +30,6 @@ openssl rand -hex 32
 DATABASE_URL=postgres://nostr:nostr@127.0.0.1:5432/nostr_no_su \
 ACCOUNT_MASTER_KEY=<openssl rand -hex 32 の出力> \
 ADMIN_PASSWORD=<openssl rand -base64 24 の出力> \
-BUNKER_RELAY_URL=wss://relay.nsec.app,wss://relay.nostr.band \
 gleam run
 ```
 
@@ -56,11 +55,21 @@ docker compose up --build
 
 登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。
 
-いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。`RELAY_URL` か `BUNKER_RELAY_URL` の URL が不正（スキームの無いものなど）なときも、`[main] cannot start: RELAY_URL has an invalid relay url: <url> (use ws:// or wss://)` のように起動時に止まる。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。同じ DB を別のインスタンスが使っているときは、`[main] cannot continue: another instance is using this database (advisory lock 7237235 is held by another session)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「同じ DB に対して動けるのは 1 インスタンスだけである」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間も監視とプラグインは止まらない。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
+いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。同じ DB を別のインスタンスが使っているときは、`[main] cannot continue: another instance is using this database (advisory lock 7237235 is held by another session)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「同じ DB に対して動けるのは 1 インスタンスだけである」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間もプラグインは止まらない。リレーの接続は DB から行を読めた後に開く。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
 
 登録で `account is already registered` と出るのにダッシュボードにそのアカウントが無いときは、起動時の読み込みで飛ばされた行（ログの `[bunker] skipped account <pubkey>: <理由>`）が `bunker_accounts` に残っている。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときだけ、行を DB から直接消してから登録し直す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey>'"`）。
 
-バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数指定すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。`BUNKER_RELAY_URL` を省略すると `RELAY_URL` と同じリレーを使う（`RELAY_URL` も空なら `wss://relay.damus.io`）。
+バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数登録すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。リレーは `relays` テーブルの行（URL、監視用かどうか、バンカー用かどうか）で決まり、環境変数では設定しない。登録の手順は次の段落を参照。
+
+管理 UI からリレーを足す画面はまだ無いので、`relays` テーブルへの登録は SQL で行う。`relays` はバンカーの移行で作られるので、一度 `docker compose up -d` で起動した後に次を実行する（`-U nostr -d nostr_no_su` は既定値なので、`.env` で `POSTGRES_USER` や `POSTGRES_DB` を変えていればその値に読み替える）:
+
+```sh
+docker compose exec postgres psql -U nostr -d nostr_no_su \
+  -c "INSERT INTO relays (url, observe, bunker) VALUES ('wss://relay.nsec.app', false, true)"
+docker compose restart nostr-no-su
+```
+
+稼働中に INSERT した行は、次にバンカーが読み込みに成功するまで反映されない（再起動すれば確実に反映される）。空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
 
 > ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。取り方と戻し方は [バックアップと復旧](docs/operations.md) にある。
 
@@ -110,7 +119,7 @@ secrets:
 
 #### 対応クライアントと相互運用
 
-kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）。NIP-04 のみの古いクライアントは非対応（受信するとログに記録して無視）。ephemeral イベントなので、レート制限のあるリレーだと転送されないことがある（例: `relay.damus.io` は連続リクエストで応答イベントを rate-limit で拒否することがある）。`BUNKER_RELAY_URL` には `wss://relay.nsec.app` などバンカー向けリレーを推奨。
+kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）。NIP-04 のみの古いクライアントは非対応（受信するとログに記録して無視）。ephemeral イベントなので、レート制限のあるリレーだと転送されないことがある（例: `relay.damus.io` は連続リクエストで応答イベントを rate-limit で拒否することがある）。バンカーに使うリレーには `wss://relay.nsec.app` などバンカー向けリレーを推奨。
 
 バンカーの接続（クライアントの署名要求を受ける接続）は、リレーが NIP-42 の AUTH を要求すると、登録アカウントごとに署名した kind 22242 で応答する（監視の接続は応答せずログに出すだけ）。リレーが challenge を送るたびに、その時点で読み込み済みのアカウントで応答する（バンカー側からアカウントの変化を契機に再認証を始める経路は無い）。最初の読み込みが失敗していれば 0 件で応答し、その後の読み込みの成功や接続確立後のアカウントの追加は、リレーが再び challenge を送るか再接続するまでその接続の認証に反映されない。認証必須のリレーを選ぶ場合はこの制約を踏まえること。
 
@@ -161,18 +170,18 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 アプリのコンテナーはルートを読み取り専用（`read_only`）にし、ケーパビリティーを全部落として（`cap_drop: [ALL]`、`no-new-privileges`）動く。書けるのは `/tmp` だけで、メモリ上の tmpfs なのでコンテナーの再起動（クラッシュの後の自動再起動を含む）で消え、書いた分だけメモリを使う。自作のプラグインも `/tmp` 以外には書けない。`file_logger` の既定の出力先（`PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log`）と BEAM のクラッシュダンプ（`ERL_CRASH_DUMP=/tmp/erl_crash.dump`）もここに書かれるので、クラッシュダンプは既定では自動再起動で消える。どちらも残したいときは、`docker-compose.override.yml` で volume をマウントし（uid 1000 が書けること）、`PLUGIN_FILE_LOGGER_PATH` と `ERL_CRASH_DUMP` をその下に上書きする。
 
+**`REMSH_ENABLED=true` にするとコンテナーに exec できる者が VM の全て（復号した秘密鍵を含む）に到達できる。既定は無効で、使うときだけ有効にして再作成すること。** 入り方は `docker compose exec nostr-no-su /app/start.sh remsh`、式を流すだけなら `printf '式.\n' | docker compose exec -T nostr-no-su /app/start.sh remsh`。抜けるときは `q().` と `init:stop().` は本体を止めてしまうので使わず、Ctrl+G の後に `q` と入力する。`-T` で式を流した場合は入力の終わりで抜ける。ノード名は `nostr_no_su@localhost`、cookie は起動ごとの乱数で `/tmp/nostr-no-su-remsh.cookie`（0600）に置き、`remsh` はこのファイルから読む。epmd と分散ノードはコンテナー内のループバックにだけ bind する。ポートは公開しない。
+
 同梱の Postgres の資格情報は `.env` の `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変える（既定は `nostr` / `nostr` / `nostr_no_su`）。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値はここから組み立てるので、ほかを書き換える必要は無い。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの URL だけが変わって接続が拒否される。パスワードは URL にそのまま入り、アプリは userinfo をパーセントデコードしない（注 1）ので、`@ : / ? # %` などを含めないこと。この文書、[バックアップと復旧](docs/operations.md)、`plugins-src/event_logger/README.md` のコマンドの `-U nostr -d nostr_no_su` は既定値なので、変えたときは読み替えること。
 
 ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。docker のログは `json-file` の 10 MB × 3 世代で打ち切られ、`docker compose logs` で見えるのはその範囲だけである。
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数だけは例外で、アプリ自身は読まず、docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
-| `RELAY_URL` | `wss://relay.damus.io` | 監視先リレーの URL（カンマ区切りで複数可）。空にすると監視無効（バンカーのみ） |
-| `BUNKER_RELAY_URL` | `RELAY_URL` と同じ | バンカーが購読・応答するリレーの URL（カンマ区切りで複数可）。`RELAY_URL` も空なら `wss://relay.damus.io` |
 | `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1）。`DATABASE_URL_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない。`ACCOUNT_MASTER_KEY_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `POSTGRES_USER` | `nostr` | docker compose 専用。同梱の Postgres の接続ユーザー名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
@@ -182,6 +191,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
+| `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose」の節）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |

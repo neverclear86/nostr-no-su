@@ -7,8 +7,6 @@ services:
     # 消す、既定値を変えるときは、.env.example の行も合わせ、
     # sh dev/check_env_example.sh で確かめること。
     environment:
-      RELAY_URL: ${RELAY_URL-wss://relay.damus.io}
-      BUNKER_RELAY_URL: ${BUNKER_RELAY_URL:-}
       DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
       PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
@@ -23,6 +21,9 @@ services:
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
+      # true にすると VM の全て（復号した秘密鍵を含む）に到達できる。
+      # 使い方は README の「docker compose」の節。
+      REMSH_ENABLED: ${REMSH_ENABLED-false}
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
       # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない
@@ -33,10 +34,10 @@ services:
       # シークレットを含む bunker:// URI を表示するため。外部から到達させるときは
       # TLS を終端するリバースプロキシーを前に置くこと。
       - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
-    # 本体のバンカーはアカウントを Postgres に保存し、event_logger を置けば
-    # イベントも同じ Postgres に保存する。Postgres が落ちていても本体は起動し、
+    # 本体のバンカーはアカウントとリレーの一覧を Postgres に保存し、event_logger を
+    # 置けばイベントも同じ Postgres に保存する。Postgres が落ちていても本体は起動し、
     # バンカーは間隔を 5 秒から 2 分まで延ばしながらアカウントの読み込みを再試行する
-    # （監視とプラグインは動く）。
+    # （プラグインは動く。リレーの接続は DB から行を読めた後に開く）。
     depends_on:
       postgres:
         condition: service_healthy

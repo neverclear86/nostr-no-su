@@ -253,6 +253,84 @@ jobs:
             echo "ADMIN_PORT 未設定でも healthcheck が待ち受けを叩かずに成功してしまった"
             exit 1
           fi
+      - name: remsh の検査に共通の docker run 引数を用意する
+        run: |
+          echo "COMMON_ARGS=--read-only --tmpfs /tmp --cap-drop ALL -e DATABASE_URL=postgres://u:p@127.0.0.1:1/db -e ACCOUNT_MASTER_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e ADMIN_PORT= -e PLUGIN_DIR=" >> "$GITHUB_ENV"
+      # 以下 3 つは remsh の口（#211）を確かめる。到達できない DATABASE_URL でも
+      # 本体は起動しバンカーのアクターは登録されるので、Postgres は要らない。
+      - name: REMSH_ENABLED が true / false 以外なら起動しないことを確かめる
+        run: |
+          set -eu
+          out=$(docker run --rm $COMMON_ARGS -e REMSH_ENABLED=yes nostr-no-su:ci 2>&1) && code=0 || code=$?
+          echo "$out"
+          [ "$code" -eq 1 ]
+          echo "$out" | grep -q 'REMSH_ENABLED must be true or false'
+      - name: 既定では分散ノードが立たないことを確かめる
+        run: |
+          set -eu
+          c=$(docker run -d $COMMON_ARGS nostr-no-su:ci)
+          trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$c"; docker rm -f "$c" >/dev/null; exit "$rc"' EXIT
+          i=0
+          until docker logs "$c" 2>&1 | grep -q '\[bunker\] account store unavailable'; do
+            i=$((i + 1))
+            [ "$i" -lt 60 ] || { echo "本体の起動ログが 60 秒待っても出なかった"; exit 1; }
+            sleep 1
+          done
+          ps_out=$(docker exec "$c" ps -o comm)
+          echo "$ps_out"
+          if echo "$ps_out" | grep -qx epmd; then
+            echo "既定なのに epmd が動いている"
+            exit 1
+          fi
+          tcp_files="/proc/net/tcp"
+          docker exec "$c" test -r /proc/net/tcp6 && tcp_files="$tcp_files /proc/net/tcp6"
+          listen=$(docker exec "$c" awk 'FNR > 1 && $4 == "0A"' $tcp_files)
+          if [ -n "$listen" ]; then
+            echo "既定なのに LISTEN の待ち受けがある:"
+            echo "$listen"
+            exit 1
+          fi
+          set +e
+          remsh_out=$(docker exec "$c" /app/start.sh remsh 2>&1)
+          remsh_code=$?
+          set -e
+          echo "$remsh_out"
+          [ "$remsh_code" -eq 1 ]
+          echo "$remsh_out" | grep -q 'REMSH_ENABLED is not true'
+          status=$(docker inspect -f '{{.State.Status}}' "$c")
+          [ "$status" = running ]
+      - name: REMSH_ENABLED=true で remsh からバンカーを kill して再起動を観測する
+        run: |
+          set -eu
+          c=$(docker run -d $COMMON_ARGS -e REMSH_ENABLED=true nostr-no-su:ci)
+          trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$c"; docker rm -f "$c" >/dev/null; exit "$rc"' EXIT
+          i=0
+          until docker logs "$c" 2>&1 | grep -q '\[bunker\] account store unavailable'; do
+            i=$((i + 1))
+            [ "$i" -lt 60 ] || { echo "本体の起動ログが 60 秒待っても出なかった"; exit 1; }
+            sleep 1
+          done
+          perm=$(docker exec "$c" stat -c '%a %U' /tmp/nostr-no-su-remsh.cookie)
+          [ "$perm" = "600 nostr" ]
+          expr='[N] = [X || X <- registered(), lists:prefix("nostr_no_su_bunker$", atom_to_list(X))], P1 = whereis(N), exit(P1, kill), timer:sleep(1000), P2 = whereis(N), io:format("bunker ~p ~p -> ~p restarted=~p~n", [N, P1, P2, is_pid(P2) andalso P2 =/= P1]).'
+          out=$(printf '%s\n' "$expr" | docker exec -i "$c" /app/start.sh remsh)
+          echo "$out"
+          echo "$out" | grep -q 'restarted=true'
+          ps_out=$(docker exec "$c" ps -o comm)
+          echo "$ps_out"
+          echo "$ps_out" | grep -qx epmd
+          tcp_files="/proc/net/tcp"
+          docker exec "$c" test -r /proc/net/tcp6 && tcp_files="$tcp_files /proc/net/tcp6"
+          listen=$(docker exec "$c" awk 'FNR > 1 && $4 == "0A" { print FILENAME, $2 }' $tcp_files)
+          echo "$listen"
+          epmd_count=$(echo "$listen" | grep -c '^/proc/net/tcp 0100007F:1111$' || true)
+          dist_count=$(echo "$listen" | { grep '^/proc/net/tcp 0100007F:' || true; } | grep -vc '^/proc/net/tcp 0100007F:1111$' || true)
+          other_count=$(echo "$listen" | { grep -v '^/proc/net/tcp 0100007F:' || true; } | grep -vc '^/proc/net/tcp6 00000000000000000000000001000000:1111$' || true)
+          [ "$epmd_count" -eq 1 ]
+          [ "$dist_count" -eq 1 ]
+          [ "$other_count" -eq 0 ]
+          status=$(docker inspect -f '{{.State.Status}}' "$c")
+          [ "$status" = running ]
 
   env-example:
     runs-on: ubuntu-latest

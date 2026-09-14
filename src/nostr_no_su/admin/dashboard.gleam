@@ -31,8 +31,8 @@ pub type Role {
   BunkerRelay
 }
 
-/// リレー接続 1 本の表示内容。接続の仕様を表す `app.Relay` とは別物なので、
-/// 表の行であることを名前に出す。
+/// リレー接続 1 本の表示内容。接続の識別を表す `relay_list.Connection` とは
+/// 別物なので、表の行であることを名前に出す。
 pub type RelayRow {
   RelayRow(role: Role, url: String, status: Status)
 }
@@ -67,9 +67,12 @@ pub type Snapshot {
   Snapshot(
     /// アカウントの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
     accounts: Result(List(AccountRow), String),
-    pending: List(PendingRow),
+    /// 承認待ちの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
+    pending: Result(List(PendingRow), String),
     relays: List(RelayRow),
-    sessions: List(Session),
+    /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし）は表示する
+    /// 理由。
+    sessions: Result(List(Session), String),
     plugins: List(PluginRow),
   )
 }
@@ -167,36 +170,47 @@ fn accounts_section(
   accounts: Result(List(AccountRow), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let #(add_link, body) = case accounts {
-    Ok(rows) -> #(
+  let add_link = case accounts {
+    Ok(_) ->
       view.button_link(
         view.segments_path(new_account_segments),
         text(i18n.AddAccount),
         view.Primary,
-      ),
-      section_body(rows, text(i18n.NoAccounts), fn(rows) {
-        item_list(list.map(rows, account_item(language, _)))
-      }),
-    )
-    Error(reason) -> #(
-      element.none(),
-      view.alert(
-        view.Neutral,
-        view.reason_content(
-          language,
-          Some(i18n.CouldNotListAccounts),
-          i18n.Untranslated(reason),
-        ),
-      ),
-    )
+      )
+    Error(_) -> element.none()
   }
   view.card([
     html.div(
       [attribute.class("flex flex-wrap items-center justify-between gap-2")],
       [view.heading(text(i18n.Accounts)), add_link],
     ),
-    body,
+    listed_body(
+      language,
+      accounts,
+      i18n.CouldNotListAccounts,
+      text(i18n.NoAccounts),
+      fn(rows) { item_list(list.map(rows, account_item(language, _))) },
+    ),
   ])
+}
+
+/// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした理由の囲みを、
+/// 得られれば `render` の内容を出す。アカウント、承認待ち、セッションの節が使う。
+fn listed_body(
+  language: Language,
+  listing: Result(List(a), String),
+  lead: i18n.Lead,
+  empty: String,
+  render: fn(List(a)) -> Element(msg),
+) -> Element(msg) {
+  case listing {
+    Ok(rows) -> section_body(rows, empty, render)
+    Error(reason) ->
+      view.alert(
+        view.Neutral,
+        view.reason_content(language, Some(lead), i18n.Untranslated(reason)),
+      )
+  }
 }
 
 /// アカウント 1 件。識別、2 つの接続 URI、操作のリンクを縦に並べる。
@@ -257,20 +271,29 @@ fn account_action_link_weight(action: AccountAction) -> view.Weight {
   }
 }
 
-/// 承認待ちの接続要求と、その承認・拒否ボタン。
+/// 承認待ちの接続要求と、その承認・拒否ボタン。一覧を得られないときは、一覧の
+/// 代わりにその理由を出す。
 fn pending_section(
   language: Language,
-  pending: List(PendingRow),
+  pending: Result(List(PendingRow), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  use rows <- section(
-    text(i18n.PendingConnections),
-    pending,
-    text(i18n.NoPendingConnections),
-  )
-  item_list(
-    list.map(rows, fn(entry) { entry_item(pending_content(language, entry)) }),
-  )
+  view.card([
+    view.heading(text(i18n.PendingConnections)),
+    listed_body(
+      language,
+      pending,
+      i18n.CouldNotListPending,
+      text(i18n.NoPendingConnections),
+      fn(rows) {
+        item_list(
+          list.map(rows, fn(entry) {
+            entry_item(pending_content(language, entry))
+          }),
+        )
+      },
+    ),
+  ])
 }
 
 /// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。テーマか言語を
@@ -293,7 +316,8 @@ pub fn approval_page(
 /// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、
 /// 変更が反映されたか分からないとき、404 / 405 / 400 の通知に使う。`tone` は理由の
 /// 囲みの色で、呼び出し側が結果に応じて決める。理由はほかのページと同じくカードに入れる
-/// （中立の囲みはページの背景と同じ色なので、カードの外では見えない）。ダッシュボードで
+/// （中立の囲みはページの背景と同じ色なので、カードの外では見えない）。`below` は
+/// 囲みの直後にカードの中へ並べる要素で、無ければ空リストを渡す。ダッシュボードで
 /// 状態を確かめられるようリンクを置く。切り替えを出すか、切り替えた後にどこを開くかは
 /// 呼び出し側が `switch` で決める。
 pub fn notice_page(
@@ -303,9 +327,13 @@ pub fn notice_page(
   title: i18n.Message,
   message: i18n.Reason,
   tone: view.Tone,
+  below: List(Element(msg)),
 ) -> String {
   view.page(language, theme, title, view.Narrow, switch, [
-    view.card([view.alert(tone, view.reason_content(language, None, message))]),
+    view.card([
+      view.alert(tone, view.reason_content(language, None, message)),
+      ..below
+    ]),
     view.back_link(language),
   ])
 }
@@ -386,28 +414,35 @@ fn relays_section(language: Language, relays: List(RelayRow)) -> Element(msg) {
   )
 }
 
-/// 承認済みセッションと、その取り消しボタン。
+/// 承認済みセッションと、その取り消しボタン。一覧を得られないときは、一覧の
+/// 代わりにその理由を出す。
 fn sessions_section(
   language: Language,
-  sessions: List(Session),
+  sessions: Result(List(Session), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  use rows <- section(
-    text(i18n.ApprovedSessions),
-    sessions,
-    text(i18n.NoApprovedSessions),
-  )
-  item_list(
-    list.map(rows, fn(session) {
-      entry_item([
-        view.summary_list([
-          #(text(i18n.Signer), view.Code(session.signer)),
-          #(text(i18n.Client), view.Code(session.client)),
-        ]),
-        button_row([revoke_form(language, session)]),
-      ])
-    }),
-  )
+  view.card([
+    view.heading(text(i18n.ApprovedSessions)),
+    listed_body(
+      language,
+      sessions,
+      i18n.CouldNotListSessions,
+      text(i18n.NoApprovedSessions),
+      fn(rows) {
+        item_list(
+          list.map(rows, fn(session) {
+            entry_item([
+              view.summary_list([
+                #(text(i18n.Signer), view.Code(session.signer)),
+                #(text(i18n.Client), view.Code(session.client)),
+              ]),
+              button_row([revoke_form(language, session)]),
+            ])
+          }),
+        )
+      },
+    ),
+  ])
 }
 
 /// 監視イベントを処理するプラグインと、その現在の状態。

@@ -2,7 +2,6 @@ import gleam/erlang/process.{type Name}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/app
@@ -21,6 +20,8 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
 
@@ -59,10 +60,9 @@ type Startup {
   Startup(spec: app.Spec, notes: List(String))
 }
 
-/// 設定されたリレーとアカウントのスーパービジョンツリーを起動し、以降は待機
-/// する。ここから先はプロセスの監視・再起動・再配線をすべてツリーが担う。
-/// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、理由を 1 行出して
-/// 終了コード 1 で終了する。
+/// 設定されたアカウントのスーパービジョンツリーを起動し、以降は待機する。ここから
+/// 先はプロセスの監視・再起動・再配線をすべてツリーが担う。バンカーか管理 UI を
+/// 起動できない設定なら、理由を 1 行出して終了コード 1 で終了する。
 pub fn main() -> Nil {
   log.configure()
   ensure_ssl_started()
@@ -86,16 +86,16 @@ pub fn main() -> Nil {
 /// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
 /// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
 /// 出力は行わず、報告する内容は文字列として返す。
-/// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、プラグインの
-/// 読み込みより前にその理由を返す。
+/// バンカーか管理 UI を起動できない設定なら、プラグインの読み込みより前にその理由を
+/// 返す。
 ///
-/// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
-/// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
-/// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
+/// 外部プラグインの読み込みは監視のリレーの有無に関わらず行う。読み込んだ
+/// プラグインは監視のリレーが 0 本でも動く。ルート直下の `plugins` サブツリーで
+/// 動き、ダッシュボードにも状態が出る。監視のツリーは常に起動し、リレーが無い間は
+/// 配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Result(Startup, String) {
-  use Nil <- result.try(config.check_relay_urls(loaded))
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
-  use #(bunker, bunker_notes) <- result.try(bunker_spec(loaded))
+  use bunker <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
   let #(external, plugin_notes) =
@@ -106,29 +106,18 @@ fn startup(loaded: Config) -> Result(Startup, String) {
       plugin.default_call_timeout_ms,
     )
   let specs = plugin_specs(list.append(builtin, external))
-  let #(monitor, monitor_notes) = monitor_spec(loaded, bunker)
   Startup(
     spec: app.Spec(
       plugins: specs,
-      monitor: monitor,
+      monitor: monitor_spec(bunker),
       bunker: bunker,
       admin: admin,
       open: app.open_websocket,
       reconnect_delay: relay_connection.default_reconnect_delay,
+      relay_list: process.new_name("nostr_no_su_relay_list"),
     ),
-    notes: list.flatten([
-      monitor_notes,
-      plugin_notes,
-      bunker_notes,
-      admin_notes,
-    ]),
+    notes: list.flatten([plugin_notes, admin_notes]),
   )
-}
-
-/// リレー URL ごとに接続 1 本ぶんの仕様を作る。
-fn relays(relay_urls: List(String)) -> List(app.Relay) {
-  use url <- list.map(relay_urls)
-  app.Relay(name: process.new_name("nostr_no_su_relay"), url: url)
 }
 
 /// プラグインごとにランナープロセスの名前を作る。名前はここで 1 度だけ作り、
@@ -143,38 +132,26 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
   )
 }
 
-/// 設定されたリレーの監視サブツリー。監視対象がなければ None。購読はバンカーの
-/// 署名者と再開点から組み立て（`monitor_subscriptions`）、再開点はアカウント
-/// ストアと同じ DB に保存する。除外する kind の既定は ephemeral 全般
+/// 監視サブツリー。起動時のリレーは常に空で、行はバンカーの読み込みから
+/// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
+/// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
+/// 同じ DB に保存する。除外する kind の既定は ephemeral 全般
 /// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。
-fn monitor_spec(
-  loaded: Config,
-  bunker: app.Bunker,
-) -> #(Option(app.Monitor), List(String)) {
-  case loaded.relay_urls {
-    [] -> #(None, [
-      log.line(log_prefix, "no monitor relays configured; monitoring disabled"),
-    ])
-    relay_urls -> {
-      let name = process.new_name("nostr_no_su_dedup")
-      #(
-        Some(app.Monitor(
-          name: name,
-          dedup_capacity: dedup_capacity,
-          relays: relays(relay_urls),
-          subscriptions: monitor_subscriptions(
-            bunker.name,
-            name,
-            resume_point_loader(bunker.pool.pool_name),
-            _,
-          ),
-          save_resume: resume_point_saver(bunker.pool.pool_name),
-          excludes_kind: event.is_ephemeral,
-        )),
-        [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
-      )
-    }
-  }
+fn monitor_spec(bunker: app.Bunker) -> app.Monitor {
+  let name = process.new_name("nostr_no_su_dedup")
+  app.Monitor(
+    name: name,
+    dedup_capacity: dedup_capacity,
+    relays: [],
+    subscriptions: monitor_subscriptions(
+      bunker.name,
+      name,
+      resume_point_loader(bunker.pool.pool_name),
+      _,
+    ),
+    save_resume: resume_point_saver(bunker.pool.pool_name),
+    excludes_kind: event.is_ephemeral,
+  )
 }
 
 /// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から
@@ -259,49 +236,42 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   fn(token) { base <> dashboard.approve_path(token) }
 }
 
-/// バンカーサブツリーと、その報告行。アカウントストアの設定が揃わないか不正なら、
-/// その理由を返す。アカウントはアクターが起動後にストアから読むので、ここでは
-/// アカウントの件数を知らず、0 件でも起動する。
+/// バンカーサブツリー。アカウントストアの設定が揃わないか不正なら、その理由を
+/// 返す。アカウントはアクターが起動後にストアから読むので、ここではアカウントの
+/// 件数を知らず、0 件でも起動する。起動時のリレーは常に空で、行はバンカーの
+/// 読み込みから `OpenRegistered` で届く（`app.gleam` の doc）。
 ///
 /// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
 /// 管理 UI には渡らない。ロックのプールの名前もこのクロージャーに捕捉される。購読は
 /// 接続と張り直しのたびに現在の署名者から組み立て直すため、`since` もその時点の
 /// 現在時刻から決まる。署名者を問い合わせられなければ定義を得られなかったことにし、
 /// 開いている購読を閉じない。
-fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
+fn bunker_spec(loaded: Config) -> Result(app.Bunker, String) {
   use #(pool, lock_pool, master_key) <- result.map(bunker_store(loaded))
   let name = process.new_name("nostr_no_su_bunker")
-  #(
-    app.Bunker(
-      name: name,
-      pool: pool,
-      lock_pool: lock_pool,
-      settings: bunker.Settings(
-        store: account_store_operations(
-          pool.pool_name,
-          lock_pool.pool_name,
-          master_key,
-          account_store.default_timeouts,
-        ),
-        auth_url: auth_url(loaded),
-        retry_delay: bunker.default_retry_delay,
+  app.Bunker(
+    name: name,
+    pool: pool,
+    lock_pool: lock_pool,
+    settings: bunker.Settings(
+      store: account_store_operations(
+        pool.pool_name,
+        lock_pool.pool_name,
+        master_key,
+        account_store.default_timeouts,
       ),
-      relays: relays(loaded.bunker_relay_urls),
-      subscriptions: fn() {
-        bunker.signers(name)
-        |> option.to_result(Nil)
-        |> result.map(config.bunker_subscriptions(
-          _,
-          time.now_seconds() - bunker_since_lookback_seconds,
-        ))
-      },
+      auth_url: auth_url(loaded),
+      retry_delay: bunker.default_retry_delay,
     ),
-    [
-      log.line(
-        log_prefix,
-        "bunker relays: " <> describe(loaded.bunker_relay_urls),
-      ),
-    ],
+    relays: [],
+    subscriptions: fn() {
+      bunker.signers(name)
+      |> option.to_result(Nil)
+      |> result.map(config.bunker_subscriptions(
+        _,
+        time.now_seconds() - bunker_since_lookback_seconds,
+      ))
+    },
   )
 }
 
@@ -322,7 +292,8 @@ fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
 /// アクターには戻らない。
 ///
 /// `write` はエンジンのセッションと承認待ちの書き込み 1 件を `account_store` の
-/// 関数に写す（`write_session_state`）。
+/// 関数に写す（`write_session_state`）。`load` はアカウントと一緒にセッション、
+/// 承認待ち、登録されたリレーを返す（`load_snapshot`）。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
@@ -338,10 +309,7 @@ pub fn account_store_operations(
         account_store.instance_lock_key,
         timeouts,
       )
-      |> result.try(fn(_locked) {
-        account_store.load(pool, master_key, timeouts)
-        |> result.map(fn(stored) { stored.accounts })
-      })
+      |> result.try(fn(_locked) { load_snapshot(pool, master_key, timeouts) })
       |> halt_if_cannot_continue
       |> result.map_error(account_store.describe)
     },
@@ -418,6 +386,54 @@ fn write_session_state(
   }
 }
 
+/// 1 つのトランザクション（`account_store.transaction`、期限 `load_ms`）で、
+/// 移行を含む `load_within` の後に `relay_store.list` を読み（`relays` は移行で
+/// 作られるので順を変えない）、バンカーの読み込みの結果にする。統合テストが
+/// ロックを通さずに呼べるよう公開する。
+pub fn load_snapshot(
+  pool: Name(pog.Message),
+  key: vault.MasterKey,
+  timeouts: account_store.Timeouts,
+) -> Result(bunker.Snapshot, account_store.StoreError) {
+  use db <- account_store.transaction(pool, timeouts.load_ms)
+  use stored <- result.try(account_store.load_within(db, key, timeouts))
+  use relays <- result.try(relay_store.list(db, timeouts))
+  Ok(bunker_snapshot(stored, relays))
+}
+
+/// DB から読んだ行を、バンカーの読み込みの結果（エンジンの型）にする。
+fn bunker_snapshot(
+  stored: account_store.Stored,
+  relays: List(relay_store.Relay),
+) -> bunker.Snapshot {
+  bunker.Snapshot(
+    accounts: stored.accounts,
+    sessions: list.map(stored.sessions, fn(session) {
+      engine.Session(
+        signer: session.signer,
+        client: session.client,
+        perms: session.perms,
+        created_at: session.created_at,
+        last_used_at: session.last_used_at,
+      )
+    }),
+    pending: list.map(stored.pending, fn(pending) {
+      engine.Pending(
+        token: pending.token,
+        signer: pending.signer,
+        client: pending.client,
+        request_id: pending.request_id,
+        perms: pending.perms,
+        secret_mismatch: pending.secret_mismatch,
+        created_at: pending.created_at,
+      )
+    }),
+    relays: list.map(relays, fn(relay) {
+      relay_list.Registered(url: relay.url, roles: relay.roles)
+    }),
+  )
+}
+
 /// エンジンの承認待ちを DB の行の型にする。
 fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
   account_store.StoredPending(
@@ -436,8 +452,8 @@ fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
 /// を 1 行出して終了コード 1 で VM を止める（`exit_with_failure`）。それ以外の
 /// 結果はそのまま返る。
 fn halt_if_cannot_continue(
-  loaded: Result(vault.Loaded, account_store.StoreError),
-) -> Result(vault.Loaded, account_store.StoreError) {
+  loaded: Result(a, account_store.StoreError),
+) -> Result(a, account_store.StoreError) {
   case loaded {
     Error(account_store.SchemaTooNew(..) as error)
     | Error(account_store.HeldByAnotherInstance(..) as error) -> {
@@ -505,13 +521,5 @@ fn admin_spec(
       Ok(#(None, [log.line(admin.log_prefix, reason <> "; admin UI disabled")]))
     config.Listen(port:, password:) ->
       Ok(#(Some(app.Admin(bind: loaded.admin_bind, port:, password:)), []))
-  }
-}
-
-/// 起動ログ用にリレー一覧を文字列化する。
-fn describe(relay_urls: List(String)) -> String {
-  case relay_urls {
-    [] -> "(none)"
-    urls -> string.join(urls, ", ")
   }
 }

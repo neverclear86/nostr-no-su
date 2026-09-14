@@ -27,7 +27,6 @@ exec docker compose -p nns-verify -f "$W/docker-compose.yml" -f "$V/strfry.yml" 
 
 ```sh
 # $V/nns.env
-RELAY_URL=ws://strfry-a:7777,ws://strfry-b:7777
 ADMIN_PORT=8095
 ADMIN_BASE_URL=http://127.0.0.1:8095
 ADMIN_PASSWORD=verify-<乱数>
@@ -85,6 +84,15 @@ docker run --rm -v "$W/plugins-src/event_logger:/src:ro" -v "$W/plugins/event_lo
 ./dc.sh up -d nostr-no-su
 ```
 
+リレーは環境変数ではなく `relays` テーブルの行で登録する。
+テーブルは本体の移行で作られるので、起動して移行が済んだ（起動のログに `[bunker] loaded` が出た）ことを確かめてから登録する（`nns.env` は `POSTGRES_USER` を設定しないので既定の `nostr`。`docker-compose.yml:75`、`:77`）:
+
+```sh
+./dc.sh exec -T postgres psql -U nostr -d nostr_no_su \
+  -c "INSERT INTO relays (url, observe, bunker) VALUES ('ws://strfry-a:7777', true, true), ('ws://strfry-b:7777', true, true)"
+./dc.sh restart nostr-no-su
+```
+
 ### 起動時の確認
 
 ```sh
@@ -140,7 +148,6 @@ await page.screenshot({ path: "06-registered.png", fullPage: true, animations: "
 ```
 
 - 制御文字を含むラベルは `String.fromCharCode` で組み立て、`evaluate` の引数で渡す（`locator(...).evaluate((el, value) => { el.value = value; }, "生成" + String.fromCharCode(0x85) + "C")`）
-- `maxlength` を超える値も、`evaluate` で入力欄に直接入れる
 - コピーのボタンは、押した直後に `[data-copied]` を `waitFor({ timeout: 1000 })` で待ち（2 秒で消える）、`navigator.clipboard.readText()` の値を隣の入力欄の値と比べる
 - 狭い画面は `viewport: { width: 375, height: 812 }`、ダークは `colorScheme: "dark"`、JS 無効は `javaScriptEnabled: false` のコンテキストを別に作る。横のはみ出しは `page.evaluate(() => document.documentElement.scrollWidth)` が画面の幅以下であることで確かめる
 - 一括の確認と、1 操作ずつ呼べるスクリプト（登録、ローテーション、削除、ラベル、URI の一覧、承認、拒否、取り消し）を分けておくと、シェルのシナリオから組み合わせやすい。URI の一覧は JSON で出し、変更の前に毎回ファイルへ追記する
@@ -301,9 +308,17 @@ docker run -d --name nns-verify-localpg -p 127.0.0.1:5534:5432 \
   -e POSTGRES_PASSWORD=<使い捨て> -e POSTGRES_DB=nostr_no_su postgres:17-alpine
 
 cd "$W" && env DATABASE_URL=postgres://postgres:<使い捨て>@127.0.0.1:5534/nostr_no_su \
-  ACCOUNT_MASTER_KEY=<使い捨て> RELAY_URL= BUNKER_RELAY_URL=ws://127.0.0.1:7801 \
+  ACCOUNT_MASTER_KEY=<使い捨て> \
   ADMIN_PORT=8096 ADMIN_PASSWORD=<使い捨て> ADMIN_BASE_URL=http://127.0.0.1:8096 PLUGIN_DIR= \
   ERL_FLAGS="-sname nnsverify -setcookie nnsverifycookie" gleam run > "$V/log-local-run.txt" 2>&1 &
+```
+
+リレーも環境変数ではなく `relays` テーブルの行で登録する。
+起動のログに `[bunker] loaded` が出た（移行が済んだ）ことを確かめてから登録し、反映のために本体を止めて同じ env で起動し直す:
+
+```sh
+docker exec nns-verify-localpg psql -U postgres -d nostr_no_su \
+  -c "INSERT INTO relays (url, observe, bunker) VALUES ('ws://127.0.0.1:7801', false, true)"
 ```
 
 アカウントは `curl -u admin:<パスワード> -d nsec=... -d label=... http://127.0.0.1:8096/accounts/import` で登録できる（`Origin` を送らないので CSRF の検査を通る）。

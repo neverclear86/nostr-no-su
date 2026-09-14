@@ -32,15 +32,15 @@ pub fn unknown_account_action_paths_are_rejected_test() {
 fn states() -> dashboard.Snapshot {
   dashboard.Snapshot(
     accounts: Ok([]),
-    pending: [
+    pending: Ok([
       dashboard.PendingRow(
         token: "tok",
         signer: "abcd",
         client: "ef01",
         age_seconds: 12,
       ),
-    ],
-    sessions: [],
+    ]),
+    sessions: Ok([]),
     relays: [
       dashboard.RelayRow(
         dashboard.MonitorRelay,
@@ -144,9 +144,43 @@ pub fn table_headers_scope_their_columns_test() {
   assert !string.contains(body, "<th>")
 }
 
+/// 承認待ちとセッションを得られないときは、「0 件」の代わりに理由を出し、
+/// 承認・拒否や取り消しのフォームも出さない。日本語では前置きも出る。
+pub fn unlisted_pending_and_sessions_show_the_reason_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      pending: Error("pending reason"),
+      sessions: Error("sessions reason"),
+    )
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(english, "<span lang=\"en\">pending reason</span>")
+  assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
+  assert !string.contains(
+    english,
+    i18n.text(i18n.English, i18n.NoPendingConnections),
+  )
+  assert !string.contains(
+    english,
+    i18n.text(i18n.English, i18n.NoApprovedSessions),
+  )
+  assert !string.contains(english, "action=\"/approve/")
+  assert !string.contains(english, "action=\"/sessions/revoke\"")
+
+  let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
+  assert string.contains(
+    japanese,
+    "<span>承認待ちの一覧を表示できません。<span lang=\"en\">pending reason</span></span>",
+  )
+  assert string.contains(
+    japanese,
+    "<span>セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
+  )
+}
+
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。
 pub fn language_switch_return_paths_test() {
-  let assert [pending] = states().pending
+  let assert Ok([pending]) = states().pending
   assert string.contains(
     dashboard.approval_page(i18n.Japanese, view.System, pending),
     "<input name=\"return\" type=\"hidden\" value=\"/approve/tok\">",
@@ -159,6 +193,7 @@ pub fn language_switch_return_paths_test() {
       i18n.NotFound,
       i18n.Untranslated("unknown or expired approval request"),
       view.Failure,
+      [],
     ),
     "<input name=\"return\" type=\"hidden\" value=\"/\">",
   )

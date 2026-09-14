@@ -40,6 +40,16 @@ pub fn bunker_uri_without_a_secret_test() {
     <> "?relay=wss%3A%2F%2Frelay.one"
 }
 
+/// リレーが 0 件でも URI を返す。secret があれば `?secret=` だけ、無ければ
+/// クエリー文字列自体を省く。
+pub fn bunker_uri_without_relays_test() {
+  let assert Ok(signer) = account.from_privkey(bytes(key))
+  assert account.bunker_uri(account.pubkey_hex(signer), [], Some("s3cret"))
+    == "bunker://" <> account.pubkey_hex(signer) <> "?secret=s3cret"
+  assert account.bunker_uri(account.pubkey_hex(signer), [], None)
+    == "bunker://" <> account.pubkey_hex(signer)
+}
+
 /// BIP-340 の公式ベクター 0 の秘密鍵から、同じベクターの公開鍵を導く。閉じ込めた
 /// 秘密鍵はアクセサーでそのまま取り出せる。
 pub fn from_privkey_bip340_vector0_test() {
