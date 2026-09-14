@@ -1326,13 +1326,16 @@ pub fn connect_with_the_secret_writes_the_session_test() {
     )
   let assert Persist(write:, ..) = outcome
   assert write
-    == engine.InsertSession(engine.Session(
-      signer: account.pubkey_hex(signer),
-      client: account.pubkey_hex(client),
-      perms: "sign_event:1",
-      created_at: 1000,
-      last_used_at: 1000,
-    ))
+    == engine.InsertSession(
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "sign_event:1",
+        created_at: 1000,
+        last_used_at: 1000,
+      ),
+      evicted: [],
+    )
 }
 
 /// secret 無しの `connect` は、登録する承認待ちを書き込みの値として返す。
@@ -1501,7 +1504,113 @@ pub fn approve_writes_the_approval_test() {
         created_at: 1001,
         last_used_at: 1001,
       ),
+      evicted: [],
     )
+}
+
+// --- セッションの件数の上限 ---
+
+/// 上限ちょうどの 32 件のセッション。`client-0` は最終利用が最も古く、作成は
+/// 最も新しい（押し出しの対象であることをこの 1 件で示す）。上限のテスト 3 件が
+/// 共有する。
+fn full_sessions(signer: Account) -> List(engine.Session) {
+  list.repeat(Nil, engine.session_capacity)
+  |> list.index_map(fn(_, index) {
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: "client-" <> int.to_string(index),
+      perms: "",
+      created_at: 2000 - index,
+      last_used_at: 1000 + index,
+    )
+  })
+}
+
+/// 上限に達したセッション一覧で secret つき `connect` を処理すると、最終利用が
+/// 最も古い組を押し出す。
+pub fn connect_at_the_capacity_evicts_the_least_recently_used_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state = engine.restore(new_engine(), full_sessions(signer), [], 2000)
+  let #(_state, outcome) =
+    connect_with_perms(state, client, signer, secret, "sign_event:1", 2000)
+  let assert Persist(write:, next:, ..) = outcome
+  assert write
+    == engine.InsertSession(
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "sign_event:1",
+        created_at: 2000,
+        last_used_at: 2000,
+      ),
+      evicted: [#(account.pubkey_hex(signer), "client-0")],
+    )
+  assert list.length(engine.sessions(next)) == engine.session_capacity
+}
+
+/// 上限に達したセッション一覧で承認待ちを `approve` すると、最終利用が最も古い
+/// 組を押し出す。
+pub fn approve_at_the_capacity_evicts_the_least_recently_used_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let pending =
+    engine.Pending(
+      token: token,
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "sign_event:1",
+      secret_mismatch: False,
+      created_at: 1900,
+    )
+  let state =
+    engine.restore(auth_engine(), full_sessions(signer), [pending], 2000)
+  let assert Ok(#(next, _ack, write)) = engine.approve(state, token, 2000)
+  assert write
+    == engine.ApprovePending(
+      token: token,
+      session: engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "sign_event:1",
+        created_at: 2000,
+        last_used_at: 2000,
+      ),
+      evicted: [#(account.pubkey_hex(signer), "client-0")],
+    )
+  assert list.length(engine.sessions(next)) == engine.session_capacity
+}
+
+/// 上限に達したセッション一覧でも、すでに開いている組を `approve` すると何も
+/// 押し出さない。承認待ちのクライアントは公開鍵として検証されるので、`client-0`
+/// を `client_key` の公開鍵に差し替える。
+pub fn approving_an_open_session_at_the_capacity_evicts_nothing_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let sessions =
+    full_sessions(signer)
+    |> list.map(fn(session) {
+      case session.client {
+        "client-0" ->
+          engine.Session(..session, client: account.pubkey_hex(client))
+        _ -> session
+      }
+    })
+  let pending =
+    engine.Pending(
+      token: token,
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "sign_event:1",
+      secret_mismatch: False,
+      created_at: 1900,
+    )
+  let state = engine.restore(auth_engine(), sessions, [pending], 2000)
+  let assert Ok(#(next, _ack, write)) = engine.approve(state, token, 2000)
+  let assert engine.ApprovePending(evicted: [], ..) = write
+  assert list.length(engine.sessions(next)) == engine.session_capacity
 }
 
 /// `deny` は、削除する承認待ちの token を書き込みの値として返す。

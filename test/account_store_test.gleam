@@ -35,6 +35,7 @@ import nostr_no_su/time
 import pog
 import support/nip46_client
 import support/postgres
+import support/signed_event
 
 /// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
 /// よい。
@@ -562,6 +563,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
       client: pa3.client,
       perms: pa3.perms,
       now: now + 4,
+      evicted: [],
     )
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
   assert after_approve.pending == [pa, pb]
@@ -1003,13 +1005,16 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
     ).write
 
   assert write(
-      engine.InsertSession(session: engine.Session(
-        signer: signer_hex,
-        client: "client",
-        perms: "",
-        created_at: 1000,
-        last_used_at: 1000,
-      )),
+      engine.InsertSession(
+        session: engine.Session(
+          signer: signer_hex,
+          client: "client",
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+        evicted: [],
+      ),
     )
     == Ok(Nil)
   assert write(engine.TouchSession(
@@ -1038,6 +1043,183 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
       #(session.client, session.created_at, session.last_used_at)
     })
     == [#("client", 1000, 1060)]
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// n（1 以上）を 64 桁の 16 進文字列にする。secp256k1 の秘密鍵として有効な、
+/// テスト用クライアントの鍵を大量に作るのに使う。
+fn padded_hex(n: Int) -> String {
+  string.pad_start(int.to_string(n), 64, "0")
+}
+
+/// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
+/// 順に `connect` すると、DB の行数も `session_capacity` で頭打ちになり、行の
+/// クライアントの集合はエンジンのセッションと一致する。`TEST_DATABASE_URL` が
+/// あるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_sessions_stay_within_the_capacity_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  sessions_stay_within_the_capacity(database_url)
+}
+
+fn sessions_stay_within_the_capacity(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("capacity")
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_capacity_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  // エンジンだけで session_capacity + 1 件の connect を順に処理し、Persist の
+  // 書き込みをそのつど DB に反映して次のエンジンで続ける。
+  let final_engine =
+    list.fold(
+      list.repeat(Nil, engine.session_capacity + 1)
+        |> list.index_map(fn(_, index) { index + 1 }),
+      engine.new([#(entry.account, entry.secret)], None),
+      fn(state, n) {
+        let client = nip46_client.account_for(padded_hex(n))
+        let incoming =
+          nip46_client.request_event(
+            client,
+            entry.account,
+            nip46_client.connect_body(entry.account, entry.secret, "c1"),
+            1000,
+          )
+        let #(_seen, outcome) =
+          engine.handle_event(
+            state,
+            signed_event.verified(incoming),
+            engine.Inputs(now: 1000, token: "unused", not_before: 0),
+          )
+        let assert engine.Persist(write: change, next:, ..) = outcome
+        let assert Ok(Nil) = write(change)
+        next
+      },
+    )
+
+  let assert Ok(after) = account_store.load(pool, key, generous)
+  assert list.length(after.sessions) == engine.session_capacity
+  assert list.map(after.sessions, fn(row) { row.client })
+    |> list.sort(string.compare)
+    == engine.sessions(final_engine)
+    |> list.map(fn(session) { session.client })
+    |> list.sort(string.compare)
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// セッションの削除を拒むトリガー。`{schema}` は専用のスキーマの名前に置き換える。
+const reject_session_delete = [
+  "CREATE FUNCTION {schema}.reject_session_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'delete rejected for test';
+END
+$$",
+  "CREATE TRIGGER reject_session_delete BEFORE DELETE ON {schema}.bunker_sessions
+FOR EACH ROW EXECUTE FUNCTION {schema}.reject_session_delete()",
+]
+
+/// 実際の Postgres に対する統合テスト。押し出しの削除が失敗すると、`InsertSession`
+/// と `ApprovePending` はどちらも挿入だけを残さず、行は書き込み前のままになる
+/// （1 トランザクション）。`TEST_DATABASE_URL` があるときだけ実行する。CI では
+/// 未設定なら失敗する。
+pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  a_failed_eviction_leaves_no_inserted_session(database_url)
+}
+
+fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("eviction")
+  let signer_hex = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_eviction_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      generous,
+      signer: signer_hex,
+      client: "old",
+      perms: "",
+      now: 1000,
+    )
+  let pending =
+    account_store.StoredPending(
+      token: "tok",
+      signer: signer_hex,
+      client: "new",
+      request_id: "req",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 1000,
+    )
+  let assert Ok(Nil) = account_store.insert_pending(db, pending, generous)
+
+  list.each(reject_session_delete, fn(statement) {
+    postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
+  })
+
+  let assert Error(bunker.NotWritten(_reason)) =
+    write(
+      engine.InsertSession(
+        session: engine.Session(
+          signer: signer_hex,
+          client: "another",
+          perms: "",
+          created_at: 1001,
+          last_used_at: 1001,
+        ),
+        evicted: [#(signer_hex, "old")],
+      ),
+    )
+  let assert Ok(after_insert) = account_store.load(pool, key, generous)
+  assert list.map(after_insert.sessions, fn(row) { row.client }) == ["old"]
+
+  let assert Error(bunker.NotWritten(_reason)) =
+    write(
+      engine.ApprovePending(
+        token: "tok",
+        session: engine.Session(
+          signer: signer_hex,
+          client: "new",
+          perms: "",
+          created_at: 1002,
+          last_used_at: 1002,
+        ),
+        evicted: [#(signer_hex, "old")],
+      ),
+    )
+  let assert Ok(after_approve) = account_store.load(pool, key, generous)
+  assert list.map(after_approve.sessions, fn(row) { row.client }) == ["old"]
+  assert list.map(after_approve.pending, fn(row) { row.token }) == ["tok"]
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
