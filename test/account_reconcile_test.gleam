@@ -8,7 +8,7 @@
 //// セッションの削除でも同じ。
 
 import gleam/crypto
-import gleam/erlang/process.{type Name}
+import gleam/erlang/process.{type Name, type Pid}
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -73,15 +73,11 @@ pub fn ambiguous_writes_are_reconciled_with_postgres_test() {
   reconcile_sessions_with_postgres(database_url, lock_pool)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。
 fn reconcile_with_postgres(
   database_url: String,
   lock_pool: Name(pog.Message),
 ) -> Nil {
-  let schema = "bunker_reconcile_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
+  use schema, admin, pool <- with_schema(database_url)
   let key = random_master_key()
   let first = random_entry()
   let first_pubkey = account.pubkey_hex(first.account)
@@ -93,22 +89,11 @@ fn reconcile_with_postgres(
   })
 
   let name = process.new_name("account_reconcile_bunker")
-  let assert Ok(started) =
-    bunker.start(
-      name,
-      bunker.Settings(
-        store: nostr_no_su.account_store_operations(
-          pool,
-          lock_pool,
-          key,
-          actor_timeouts,
-        ),
-        auth_url: None,
-        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
-      ),
-      fn() { Nil },
-    )
-  assert await_listings(name, database_listings(pool, key), 10_000)
+  let pid = start_store_bunker(name, pool, lock_pool, key)
+  assert await(
+    fn() { bunker.accounts(name) == Ok(database_listings(pool, key)) },
+    10_000,
+  )
 
   let other = random_entry()
   let other_pubkey = account.pubkey_hex(other.account)
@@ -134,9 +119,8 @@ fn reconcile_with_postgres(
   assert list.map(removed, fn(listing) { listing.signer }) == [first_pubkey]
   assert bunker.accounts(name) == Ok(removed)
 
-  process.unlink(started.pid)
-  process.kill(started.pid)
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+  process.unlink(pid)
+  process.kill(pid)
 }
 
 /// DB の行を、バンカーの一覧と同じ形（署名者の昇順）で読む。読み込みは実行中の
@@ -158,34 +142,15 @@ fn database_listings(
   |> list.sort(fn(left, right) { string.compare(left.signer, right.signer) })
 }
 
-/// バンカーの一覧が期待どおりになるまで待つ。
-fn await_listings(
-  name: Name(bunker.Msg),
-  expected: List(bunker.Listing),
-  remaining: Int,
-) -> Bool {
-  case bunker.accounts(name) == Ok(expected), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(50)
-      await_listings(name, expected, remaining - 50)
-    }
-  }
-}
-
 /// DB に保存したセッション 1 件と承認待ち 1 件を経過時間を保ったまま起動時に
 /// 読み戻すこと、承認待ちを DB から直接消してから起こした期限切れの取り消しの
 /// 後、読み直しでセッションと承認待ちが DB の内容（空）に置き換わることを
-/// 確かめる。専用のスキーマでテストを行い、最後にスキーマごと消す。
+/// 確かめる。
 fn reconcile_sessions_with_postgres(
   database_url: String,
   lock_pool: Name(pog.Message),
 ) -> Nil {
-  let schema = "bunker_reconcile_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
+  use schema, admin, pool <- with_schema(database_url)
   let key = random_master_key()
   let entry = random_entry()
   let signer = account.pubkey_hex(entry.account)
@@ -223,6 +188,56 @@ fn reconcile_sessions_with_postgres(
   })
 
   let name = process.new_name("account_reconcile_sessions_bunker")
+  let pid = start_store_bunker(name, pool, lock_pool, key)
+  let session =
+    engine.Session(
+      signer: signer,
+      client: client,
+      perms: "",
+      created_at: now - 60,
+      last_used_at: now - 60,
+    )
+  assert await(fn() { bunker.sessions(name) == [session] }, 10_000)
+  let assert [pending] = bunker.pending(name)
+  assert pending.created_at == now - 120
+  assert pending.request_id == "c2"
+
+  let assert Ok(Nil) =
+    account_store.delete_pending(db, generous, token: pending.token)
+  assert bunker.revoke(name, signer, client) == Error(bunker.NotAnswered)
+
+  assert await(fn() { bunker.sessions(name) == [] }, 10_000)
+  assert bunker.pending(name) == []
+  let assert Ok(after) = account_store.load(pool, key, generous)
+  assert after.sessions == []
+  assert after.pending == []
+
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。専用の
+/// スキーマ名は `run` にも渡し、そのスキーマ限定のトリガーを作るのに使えるようにする。
+fn with_schema(
+  database_url: String,
+  run: fn(String, pog.Connection, Name(pog.Message)) -> Nil,
+) -> Nil {
+  let schema = "bunker_reconcile_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  run(schema, admin, pool)
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 専用のスキーマに向けた `account_store_operations` でバンカーアクターを起動し、
+/// その pid を返す。両方のシナリオが同じ起動の手順を使う。
+fn start_store_bunker(
+  name: Name(bunker.Msg),
+  pool: Name(pog.Message),
+  lock_pool: Name(pog.Message),
+  key: MasterKey,
+) -> Pid {
   let assert Ok(started) =
     bunker.start(
       name,
@@ -238,46 +253,17 @@ fn reconcile_sessions_with_postgres(
       ),
       fn() { Nil },
     )
-  let session =
-    engine.Session(
-      signer: signer,
-      client: client,
-      perms: "",
-      created_at: now - 60,
-      last_used_at: now - 60,
-    )
-  assert await_sessions(name, [session], 10_000)
-  let assert [pending] = bunker.pending(name)
-  assert pending.created_at == now - 120
-  assert pending.request_id == "c2"
-
-  let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pending.token)
-  assert bunker.revoke(name, signer, client) == Error(bunker.NotAnswered)
-
-  assert await_sessions(name, [], 10_000)
-  assert bunker.pending(name) == []
-  let assert Ok(after) = account_store.load(pool, key, generous)
-  assert after.sessions == []
-  assert after.pending == []
-
-  process.unlink(started.pid)
-  process.kill(started.pid)
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+  started.pid
 }
 
-/// バンカーのセッション一覧が期待どおりになるまで待つ。
-fn await_sessions(
-  name: Name(bunker.Msg),
-  expected: List(engine.Session),
-  remaining: Int,
-) -> Bool {
-  case bunker.sessions(name) == expected, remaining <= 0 {
+/// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
+fn await(check: fn() -> Bool, remaining: Int) -> Bool {
+  case check(), remaining <= 0 {
     True, _ -> True
     _, True -> False
     _, False -> {
       process.sleep(50)
-      await_sessions(name, expected, remaining - 50)
+      await(check, remaining - 50)
     }
   }
 }
