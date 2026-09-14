@@ -426,7 +426,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる。`plugin_children/0` が返した場合は `plugin_children/0 rejected the configuration (…); configure it with PLUGIN_<NAME>_*` になる |
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
 
-`got` の後は `dynamic.classify` の値（`test/plugin_children_test.gleam:158` の `got Array` と同じ形）、括弧の中は `describe_term`（`nostr_no_su_ffi.erl:298-299`、`~0p`）の値で、表の値は例示である。
+子仕様の行の `got` の後は受け取った値の `dynamic.classify` の分類名、`unsupported …` の括弧の中は受け取った値そのもの（`~0p` で 1 行にしたもの）で、表の値は例示である。
 
 検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
 
