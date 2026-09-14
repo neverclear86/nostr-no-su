@@ -72,6 +72,7 @@ const S = {
       file: { type: 'string', description: '書いたレビューのファイル' },
       headings: { type: 'array', items: { type: 'string' }, description: '各指摘の見出し' },
       postUrl: { type: 'string', description: 'APPROVE のときに issue に投稿したプランのコメントの URL' },
+      conditions: { type: 'array', items: { type: 'string' }, description: 'APPROVE のとき、置換文か 1 行の追記で直る should をそのまま実装時の条件として列挙（投稿した版の「### 実装時の条件」と同じ）' },
       questions: { type: 'array', items: { type: 'string' }, description: 'NEEDS_USER のときの論点' },
     },
     required: ['verdict', 'must', 'should', 'nit'],
@@ -190,6 +191,12 @@ const common = (e) => `- 土台: origin/main の ${e.base}
 /** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
 const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
 - issue と PR のコメントは \`--body-file <ファイル>\` で投稿する。\`--body @file\` はファイル名がそのまま本文になる。既存のコメントは編集しない`
+/** プランレビューが APPROVE に添えた実装時の条件を依頼文にする。null は planUrl で始めた issue（条件は投稿済みのプランにしか無い） */
+const conditionsNote = (conditions) => conditions === null
+  ? '- 実装時の条件: 投稿済みのプランの冒頭の「### 実装時の条件」を読み、あれば取り込んで PR 本文の「プランからの変更」に書く\n'
+  : conditions.length
+    ? `- 実装時の条件（プランレビューの should。取り込んで PR 本文の「プランからの変更」に書く）:\n${conditions.map((c, i) => `  ${i + 1}. ${c}`).join('\n')}\n`
+    : ''
 const P = {
   triage: (e, issue) => `issue #${e.n} を分割するかどうかを判定してほしい（定義の「分割の判定」）。プランはまだ書かない。
 issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。触るファイルの当たりは ${REPO_DIR} を \`ls\`、\`grep -n\`、\`wc -l\` で読むだけにし、build や実行はしない。
@@ -236,9 +243,9 @@ ${common(e)}
 ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。' : '対応の表の各項目が前の版の決定と矛盾しないか、逸脱の解き方が issue の受け入れ条件を満たすかを見て判定してほしい。'}
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md。先頭の「指摘への対応」の表は含めない）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
-  implement: (e, issue, postUrl) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
+  implement: (e, issue, postUrl, conditions) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
 - 土台: origin/main の ${e.base}
-- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
+${conditionsNote(conditions)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -250,9 +257,9 @@ ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーン�
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
-  implementContinue: (e, postUrl) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
+  implementContinue: (e, postUrl, conditions) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
 新しい版のプランとの差分だけを直して実装を仕上げ、PR を作ってほしい（すでに PR があれば push して本文を直す）。
-- テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
+${conditionsNote(conditions)}- テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラーと PR 本文の末尾は、作業ツリーの \`git log\` と既存の PR 本文の形に合わせる。無ければ次の 2 行:
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
@@ -268,8 +275,8 @@ ${planNote ? `${planNote}\n` : ''}
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
 返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット、ciPassed。`,
-  prReview1: (e, pr, head, postUrl, issue) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
-- 承認済みのプラン: ${postUrl}
+  prReview1: (e, pr, head, postUrl, issue, conditions) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
+- 承認済みのプラン: ${postUrl}${conditions === null || conditions.length ? '（冒頭の「### 実装時の条件」が取り込まれたかを「確認したこと」の表で照合する）' : ''}
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
@@ -362,6 +369,7 @@ async function planStage(e, issue, state) {
       if (!rev.postUrl) throw new StageError('plan-review', `#${e.n} のプランは APPROVE だが投稿の URL が無い`)
       state.nits += rev.nit || 0
       state.postFile = `${PLANS}/${e.n}-post.md`
+      state.conditions = rev.conditions || []
       return { postUrl: rev.postUrl, version: v }
     }
     if (r >= MAX_PLAN_ROUNDS) return { stalled: { stage: 'plan', reason: `プランレビューが ${r} ラウンドで収束しない（最後は must ${rev.must}、should ${rev.should}）` } }
@@ -386,12 +394,13 @@ async function revisePlan(e, state, reportFile, why) {
   if (!rev.postUrl) throw new StageError('replan-review', `#${e.n} の版上げは APPROVE だが投稿の URL が無い`)
   state.postUrl = rev.postUrl
   state.postFile = `${PLANS}/${e.n}-post.md`
+  state.conditions = rev.conditions || []
   return {}
 }
 
 /** 実装と PR 作成。逸脱はプランの版を上げてから続きを実装させる */
 async function implementStage(e, issue, state) {
-  let impl = await call('implement', `Implement #${e.n}`, P.implement(e, issue, state.postUrl), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
+  let impl = await call('implement', `Implement #${e.n}`, P.implement(e, issue, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
   let replans = 0
   while (impl.status === 'deviation') {
     if (replans >= MAX_REPLANS) return { stalled: { stage: 'implement', reason: `逸脱でプランを ${replans} 回上げても実装が終わらない: ${impl.reason || ''}` } }
@@ -399,7 +408,7 @@ async function implementStage(e, issue, state) {
     log(`#${e.n}: 実装がプランから逸脱した（${impl.reason || impl.reportFile}）。プランの版を上げる`)
     const rv = await revisePlan(e, state, impl.reportFile || `${PLANS}/${e.n}-deviation.md`, '実装中にプランどおりに作れない箇所が見つかった。')
     if (rv.blocked) return rv
-    impl = await call('implement', `Implement #${e.n} (続き ${replans})`, P.implementContinue(e, state.postUrl), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
+    impl = await call('implement', `Implement #${e.n} (続き ${replans})`, P.implementContinue(e, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
   }
   if (impl.status === 'blocked') return { blocked: { stage: 'implement', questions: [impl.reason || '実装が進められない'] } }
   if (!impl.pr || !impl.head) throw new StageError('implement', `#${e.n} の実装が PR の番号か head を返さなかった`)
@@ -425,7 +434,7 @@ async function prReviewStage(e, issue, state) {
     state.prRounds++
     const r = state.prRounds
     const rev = await call('pr-review', `PR review #${state.pr} r${r}`,
-      r === 1 ? P.prReview1(e, state.pr, state.head, state.postUrl, issue) : P.prReviewNext(e, state.pr, r, responseUrl, state.head, prevUrl, `ラウンド ${r - 1} のレビュー`),
+      r === 1 ? P.prReview1(e, state.pr, state.head, state.postUrl, issue, state.conditions) : P.prReviewNext(e, state.pr, r, responseUrl, state.head, prevUrl, `ラウンド ${r - 1} のレビュー`),
       { agentType: 'issue-pr-reviewer', phase: 'PR レビュー', schema: S.prReviewer })
     prevUrl = rev.commentUrl
     if (rev.verdict === 'NEEDS_USER') return { blocked: { stage: 'pr-review', questions: rev.questions || ['レビュアーがユーザーの判断を求めた'] } }
@@ -437,7 +446,7 @@ async function prReviewStage(e, issue, state) {
       log(`#${e.n}: PR レビューの must がプランの設計に起因するので、プランの版を上げる`)
       const rv = await revisePlan(e, state, rev.commentUrl, 'PR レビューで、承認済みプランの設計に起因する must が出た。')
       if (rv.blocked) return rv
-      planNote = `この must を受けてプランの版が上がり、承認された（${state.postUrl}）。新しい版との差分も含めて直す。`
+      planNote = `この must を受けてプランの版が上がり、承認された（${state.postUrl}）。新しい版との差分も含めて直す。${state.conditions.length ? `\n${conditionsNote(state.conditions).trimEnd()}` : ''}`
     }
     const fix = await fixRound(e, state, `Fix PR #${state.pr} r${r}`, P.fix(e, state.pr, rev.commentUrl, `レビュー（ラウンド ${r}）`, planNote), 'PR レビュー')
     if (fix.blocked) return fix
@@ -523,7 +532,7 @@ function resolveSplitDep(res) {
 /** 1 件の issue を最初から最後まで進める */
 async function runIssue(issue, idx) {
   const e = env(issue, idx)
-  const state = { n: issue.n, base: e.base, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, designUrl: issue.designUrl || null, postUrl: null, postFile: null, pr: null, head: null, approveUrl: null }
+  const state = { n: issue.n, base: e.base, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, designUrl: issue.designUrl || null, postUrl: null, postFile: null, conditions: null, pr: null, head: null, approveUrl: null }
   const finish = (extra) => ({ ...state, ...extra })
   let acquired = false
   try {
@@ -617,6 +626,8 @@ function fake(label, opts) {
     if (sc === 'replan-reject' && r >= 2) return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, headings: ['逸脱の解き方が受け入れ条件を満たさない'] }
     const rounds = sc === 'plan2' ? 2 : sc === 'escalate' ? 4 : sc === 'plan-stall' ? 99 : 1
     const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2) || sc === 'planurl-deviation'
+    // approve-with-conditions: r1 で APPROVE し、置換文で直る should 2 件を実装時の条件として返す
+    if (sc === 'approve-with-conditions') return { verdict: 'APPROVE', must: 0, should: 0, nit: 0, conditions: ['`src/x.gleam` の Doc を「…」にする', 'README の環境変数の表に 1 行足す'], postUrl: `https://example/issue/${n}#plan-r${r}` }
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 1, postUrl: `https://example/issue/${n}#plan-r${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 1, nit: 0, headings: ['x'] }
   }
   if (t === 'issue-implementer') {

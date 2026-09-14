@@ -16,9 +16,11 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 ## 実装プラン（版 N）
 
 #N の実装プランである。土台は origin/main の `SHA` で、…。
-プランレビューを R ラウンド行い、ラウンド R で APPROVE になった（must 0、should 0、nit K）。
+プランレビューを R ラウンド行い、ラウンド R で APPROVE になった（must 0、should S、nit K）。
 残した nit: …（無ければ「無し」）
 
+### 実装時の条件
+（置換文か 1 行の追記で直る should を番号付きで。実装者が取り込む。無ければ「無し」）
 ### 方針の要約
 ### 決めたこと
 ### 変更するファイル
