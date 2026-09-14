@@ -94,8 +94,10 @@ jobs:
         # 既定の設定は 127.0.0.1 に bind し、ポートの転送が届かないので 0.0.0.0 にする。
         # 既定の nofiles（524288）は GitHub Actions ランナーの open files の上限
         # （65536）を超え、起動直後に exit するので 0（設定しない）にする。
+        # スレッドを増やすと、並走する 2 本の接続で strfry が `phmap.h: set_ctrl` の
+        # assertion で落ちるので、各スレッドを 1 にする。
         image: ghcr.io/hoytech/strfry@sha256:36f1886d185a88ca57c66ebe52e6e9e8428dac2486eea0a5d50ff934f18b60c3
-        command: --set relay.bind=0.0.0.0 --set relay.nofiles=0 relay
+        command: --set relay.bind=0.0.0.0 --set relay.nofiles=0 --set relay.numThreads.ingester=1 --set relay.numThreads.reqWorker=1 --set relay.numThreads.reqMonitor=1 --set relay.numThreads.negentropy=1 relay
         ports:
           - 7777:7777
     steps:
