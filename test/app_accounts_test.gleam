@@ -1,3 +1,6 @@
+//// 偽のストアを持つバンカーで、アカウントの読み込みと再試行、実行中の変更、結果が
+//// 曖昧な書き込みの後の読み直し、秘密鍵の問い合わせを確かめるテスト。
+
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/list

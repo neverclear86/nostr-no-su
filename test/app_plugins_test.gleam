@@ -1,3 +1,6 @@
+//// 偽リレーの上のツリーで、監視の接続とリレーの増減、プラグイン（ランナー、
+//// プラグインの子）の障害の分離を確かめるテスト。
+
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}

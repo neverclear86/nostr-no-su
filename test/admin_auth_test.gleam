@@ -1,3 +1,6 @@
+//// Basic 認証、CSRF の検査（`Origin` と `Host` の照合）、認証済みの応答の
+//// ヘッダーのテスト。
+
 import gleam/bit_array
 import gleam/erlang/process
 import gleam/http

@@ -1,3 +1,8 @@
+//// app_bunker_test、app_plugins_test、app_accounts_test が共有する、偽リレーの
+//// 上でスーパービジョンツリーを動かすヘルパー。gleeunit は test/ 配下の全モジュールを
+//// eunit に渡すので、関数名を `_test` で終わらせないこと（`beam_fixture.gleam` 冒頭と
+//// 同じ注意）。
+
 import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
@@ -27,13 +32,16 @@ import support/erl.{monotonic_time}
 import support/nip46_client.{account_for}
 import support/signed_event
 
+/// テスト用の署名者の接続 secret。
 pub const secret = "s3cr3t-token"
 
+/// テスト用の署名者の秘密鍵（16 進）。
 pub const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
 
 /// ストアの最新の内容が変わったことを表す、2 人目の署名者の鍵。
 pub const other_signer_key = "0000000000000000000000000000000000000000000000000000000000000077"
 
+/// テスト用のクライアントの秘密鍵（16 進）。
 pub const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
 
 /// 2 人目のクライアントの鍵。承認済みセッションを持たないクライアントとして使う。

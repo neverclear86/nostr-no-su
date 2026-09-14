@@ -1,3 +1,6 @@
+//// admin_*_test が共有する、状態を即値で持つ `admin.Context` と認証済みの
+//// リクエストを組み立てるヘルパー。関数名の注意は `app_tree` と同じ。
+
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}
 import gleam/http
@@ -16,6 +19,7 @@ import nostr_no_su/relay_store
 import wisp
 import wisp/simulate
 
+/// 管理 UI のパスワード。`test_context` が Context に入れ、Basic 認証と再表示の入力に使う。
 pub const password = "s3cr3t-password"
 
 /// 登録済みのアカウントの署名者。BIP-340 の公式ベクター 0 の公開鍵。
@@ -30,6 +34,7 @@ pub const signer_nsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
 /// 未登録のアカウントとして登録に使う、NIP-19 の仕様の nsec。
 pub const spec_nsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
 
+/// セッション一覧に出るクライアント。公開鍵の代わりに短い値を使う。
 pub const client = "bbbb2222"
 
 /// フェイクの取り消しが、承認済みでない組に返す理由。
@@ -45,6 +50,7 @@ pub const token = "tok-1"
 /// アカウントの接続 URI（secret 入りと、承認を経るもの）。
 pub const uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
 
+/// 承認を経る接続 URI（secret なし）。
 pub const auth_uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
 /// アカウントのラベル。

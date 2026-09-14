@@ -17,9 +17,10 @@ import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/relay_client.{Acknowledgement}
 import support/nip46_client.{account_for}
 
-/// テストで使うバンカーリレー 2 本。
+/// テストで使うバンカーリレーの 1 本目。
 const relay_a = "wss://a.example"
 
+/// テストで使うバンカーリレーの 2 本目。
 const relay_b = "wss://b.example"
 
 /// バンカーが発行する応答イベント 1 件。kind と宛先タグは NIP-46 の応答の形。

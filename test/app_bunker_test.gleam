@@ -1,3 +1,6 @@
+//// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
+//// 読み直しを確かめるテスト。
+
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
 import gleam/option.{None, Some}

@@ -9,12 +9,16 @@ import nostr_no_su/nostr/nip19.{
 import qcheck
 import support/vector.{bytes}
 
+/// NIP-19 の仕様に載っている npub の例。
 const spec_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
 
+/// `spec_npub` の公開鍵の 16 進。
 const spec_npub_key = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
 
+/// NIP-19 の仕様に載っている nsec の例。
 const spec_nsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
 
+/// `spec_nsec` の秘密鍵の 16 進。
 const spec_nsec_key = "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa"
 
 /// 文字列と 16 進の鍵が、指定した接頭辞で両方向に対応することを確かめる。

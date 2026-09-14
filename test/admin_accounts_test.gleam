@@ -1,3 +1,6 @@
+//// アカウント管理（登録、鍵の生成、秘密鍵の再表示、削除、secret の作り直し、
+//// ラベル、ダッシュボードのアカウントの節）のテスト。
+
 import gleam/erlang/process
 import gleam/http
 import gleam/list

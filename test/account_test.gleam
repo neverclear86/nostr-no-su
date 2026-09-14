@@ -7,6 +7,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/nostr/nip19
 import support/vector.{bytes}
 
+/// テスト用の署名者の秘密鍵（16 進）。
 const key = "0000000000000000000000000000000000000000000000000000000000000042"
 
 /// 設定したリレーはそれぞれパーセントエンコードされた `relay=` ヒントになる。

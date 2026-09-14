@@ -1,3 +1,6 @@
+//// 表示の言語（cookie、`Accept-Language`、切り替えの POST、日本語ページでの
+//// バンカー由来の理由と通知ページの本文の扱い）のテスト。
+
 import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
