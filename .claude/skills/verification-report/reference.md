@@ -85,7 +85,7 @@ docker run --rm -v "$W/plugins-src/event_logger:/src:ro" -v "$W/plugins/event_lo
 ```
 
 リレーは環境変数ではなく `relays` テーブルの行で登録する。
-テーブルは本体の移行で作られるので、起動して移行が済んだ（起動のログに `[bunker] loaded` が出た）ことを確かめてから登録する（`nns.env` は `POSTGRES_USER` を設定しないので既定の `nostr`。`docker-compose.yml:77`、`:79`）:
+テーブルは本体の移行で作られるので、起動して移行が済んだ（起動のログに `[bunker] loaded` が出た）ことを確かめてから登録する（`nns.env` は `POSTGRES_USER` を設定しないので既定の `nostr`。`docker-compose.yml:75`、`:77`）:
 
 ```sh
 ./dc.sh exec -T postgres psql -U nostr -d nostr_no_su \

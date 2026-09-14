@@ -122,7 +122,7 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 
 起動時の一覧は `relay_list` の初期値としては空で渡す。
 `relays` テーブルの行は、バンカーが読み込みに成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけを足す（不正な URL と用途の無い行は Warning 1 行を出して飛ばす）。
-DB に一度も届いていない間や読み込みが失敗している間は、リレーの接続を 1 本も開かない。
+DB に一度も届いていない間や読み込みが失敗している間は、リレーの接続を新たに開かない（すでに開いている接続は閉じない）。
 
 詳細な決定と既知の窓は `relay_list` のモジュール doc を参照。
 
@@ -148,7 +148,7 @@ DB に一度も届いていない間や読み込みが失敗している間は�
 DB の障害も同じ考え方で、プロセスの死にしない。
 DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
 pog が写せないエラーで `pog.execute` が例外を投げても、`account_store` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
-したがって DB が落ちていてもルートの許容回数は消費されず、兄弟の監視とプラグインは動き続ける。
+したがって DB が落ちていてもルートの許容回数は消費されず、プロセスは落ちず、プラグインは動き続ける。監視とバンカーのリレーの接続は、最初の読み込みが成功した後に開き、その後の DB の障害では閉じない。
 例外は DB のスキーマの版がビルドより新しいときで、待っても直らないのでプロセスを終了する（「アカウントの読み込み」の節）。
 
 ## イベントが流れる経路
@@ -620,13 +620,15 @@ nostr-no-su/
 │       ├── bunker/rpc.gleam      JSON-RPC コーデック
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
-│       ├── bunker/account_store.gleam アカウント、セッション、承認待ちを Postgres に保存するストア
+│       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
 │       ├── nostr/nip19.gleam     NIP-19 の npub / nsec の符号化と復号
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
+│       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止
+│       ├── relay_store.gleam     リレーの一覧（relays）の SQL
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH
 │       ├── crypto/bip340.gleam   BIP-340 Schnorr 署名と検証
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
