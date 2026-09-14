@@ -8,9 +8,11 @@ import gleam/option.{None, Some}
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/view
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list.{Roles}
 import support/account_actions
 
 /// ファイルの中身を読む。
@@ -137,6 +139,20 @@ pub fn pages() -> List(String) {
         "nsec1example",
       ),
       account_pages.private_key_page(language, view.System, row, "nsec1example"),
+      relay_pages.new_relay_page(
+        language,
+        view.System,
+        "",
+        Roles(True, True),
+        None,
+      ),
+      relay_pages.new_relay_page(
+        language,
+        view.System,
+        "https://relay.example",
+        Roles(False, True),
+        Some(reason),
+      ),
     ],
     list.map(
       [

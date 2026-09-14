@@ -228,7 +228,7 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     no_rows,
-    "Relays</h2><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
+    "Relays</h2><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
   )
   let monitor_only =
     dashboard.render(
@@ -248,7 +248,7 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     monitor_only,
-    "Relays</h2><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+    "Relays</h2><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -262,12 +262,26 @@ pub fn unlisted_relays_show_the_reason_test() {
   let snapshot = dashboard.Snapshot(..states(), relays: Error("boom"))
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
-    "Relays</h2><div class=\"alert\"><span><span lang=\"en\">boom</span></span></div></div></section>",
+    "Relays</h2></div><div class=\"alert\"><span><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
-    "リレー</h2><div class=\"alert\"><span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+    "リレー</h2></div><div class=\"alert\"><span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
+}
+
+/// リレーの節の見出しの行は、一覧を得たときだけ追加のリンクを出す。
+pub fn relays_heading_links_to_add_a_relay_test() {
+  let ok = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(ok, "href=\"/relays/new\">Add relay</a>")
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), relays: Error("boom")),
+    )
+  assert !string.contains(unavailable, "/relays/new")
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。

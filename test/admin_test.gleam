@@ -19,6 +19,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
 import support/account_actions
 import support/nip46_client.{account_for}
 import wisp
@@ -84,6 +85,7 @@ type Report {
   Relabeled(signer: String, label: String)
   NsecRequested(signer: String)
   Reenabled(name: String)
+  RelayAdded(url: String, roles: relay_list.Roles)
 }
 
 /// 指定したラベルを持つ、登録済みのアカウントの行。
@@ -146,6 +148,13 @@ fn test_context(
           bunker: Some(relay_connection.Disconnected),
         ),
       ])
+    },
+    add_relay: fn(added_url, added_roles) {
+      process.send(reports, RelayAdded(added_url, added_roles))
+      case added_url == "wss://bunker.example" {
+        True -> Error(admin.DuplicateRelay)
+        False -> Ok(Nil)
+      }
     },
     plugins: fn() {
       [
@@ -1759,7 +1768,11 @@ pub fn method_not_allowed_pages_test() {
     "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
     "/accounts/generate", "/accounts/import", "/accounts/register-generated",
   ]
-  let both_methods_paths = ["/approve/tok", action_path(dashboard.EditLabel)]
+  let both_methods_paths = [
+    "/approve/tok",
+    action_path(dashboard.EditLabel),
+    "/relays/new",
+  ]
   let cases =
     list.flatten([
       list.map(post_only_paths, fn(path) { #(get(context(), path), "POST") }),
@@ -2035,6 +2048,134 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
   assert !string.contains(failing, "Add account")
   let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
   assert string.contains(empty, "Add account")
+}
+
+// --- リレーの追加 ---
+
+/// GET は URL の欄が空で、両方のチェックボックスにチェックが入った状態で返す。
+pub fn new_relay_page_checks_both_roles_test() {
+  let body = simulate.read_body(get(context(), "/relays/new"))
+  assert string.contains(
+    body,
+    "<form action=\"/relays/new\" class=\"flex flex-col gap-4\" method=\"post\">",
+  )
+  assert string.contains(
+    body,
+    "<input name=\"return\" type=\"hidden\" value=\"/relays/new\">",
+  )
+  assert string.contains(body, "name=\"url\"")
+  assert string.contains(body, "value=\"\"")
+  assert string.contains(
+    body,
+    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+  )
+  assert string.contains(
+    body,
+    "<input checked class=\"checkbox border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
+  )
+}
+
+/// トリムした URL でリレーを追加し、ダッシュボードへ 303 で戻す。
+pub fn add_relay_saves_the_trimmed_url_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/relays/new", [
+      #("url", " wss://new.example "),
+      #("monitor", "on"),
+    ])
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000)
+    == Ok(RelayAdded(
+      "wss://new.example",
+      relay_list.Roles(monitor: True, bunker: False),
+    ))
+}
+
+/// URL の規則に外れる値は 400 で `InvalidRelayUrl` を出し、送った URL とチェックを
+/// 欄に保ち、Context を呼ばない。
+pub fn add_relay_rejects_an_invalid_url_test() {
+  let reports = process.new_subject()
+  let invalid_urls = ["https://relay.example", "relay.example", "wss://"]
+  use invalid_url <- list.each(invalid_urls)
+  let response =
+    post_form(reporting_context(reports), "/relays/new", [
+      #("url", invalid_url),
+      #("monitor", "on"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.InvalidRelayUrl))
+  assert string.contains(body, "value=\"" <> invalid_url <> "\"")
+  assert string.contains(
+    body,
+    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 用途を 1 つも選ばないと 400 で `RelayRoleRequired` を出し、URL を保ちつつ
+/// チェックボックスはどちらも外れる。
+pub fn add_relay_requires_a_role_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/relays/new", [
+      #("url", "wss://relay.example"),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
+  assert string.contains(body, "value=\"wss://relay.example\"")
+  assert !string.contains(body, "checked class=\"checkbox")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// Context が返す 4 変種ごとの状態コードと本文。重複と反映されたか分からない 2 つは
+/// 訳した本文で、`RelayNotSaved` は英語の理由に日本語のページだけ前置きが付く。
+pub fn add_relay_failures_test() {
+  let not_saved_reason = "database is unreachable or rejected the connection"
+  let expected_text = fn(language, failure) {
+    case failure {
+      admin.DuplicateRelay -> i18n.text(language, i18n.RelayAlreadyRegistered)
+      admin.RelayNotSaved(reason) -> reason
+      admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
+      admin.ConnectionsNotConfirmed ->
+        i18n.text(language, i18n.RelayConnectionsNotConfirmed)
+    }
+  }
+  let failures = [
+    #(admin.DuplicateRelay, 409),
+    #(admin.RelayNotSaved(not_saved_reason), 409),
+    #(admin.RelayMaybeSaved, 202),
+    #(admin.ConnectionsNotConfirmed, 202),
+  ]
+  let form = [#("url", "wss://relay.example"), #("monitor", "on")]
+  use #(failure, status) <- list.each(failures)
+  let failing =
+    admin.Context(..context(), add_relay: fn(_url, _roles) { Error(failure) })
+  let english = post_form(failing, "/relays/new", form)
+  assert english.status == status
+  assert string.contains(
+    simulate.read_body(english),
+    expected_text(i18n.English, failure),
+  )
+
+  let japanese =
+    simulate.request(http.Post, "/relays/new")
+    |> in_japanese
+    |> with_credentials("admin", password)
+    |> simulate.form_body(form)
+    |> admin.handle_request(failing, _)
+  assert japanese.status == status
+  let japanese_body = simulate.read_body(japanese)
+  assert string.contains(japanese_body, expected_text(i18n.Japanese, failure))
+  case failure {
+    admin.RelayNotSaved(_) -> {
+      let assert Some(prefix) = i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
+      assert string.contains(japanese_body, prefix)
+    }
+    _ -> Nil
+  }
 }
 
 // --- 静的ファイルと通知の色 ---

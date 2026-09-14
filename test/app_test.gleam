@@ -1,3 +1,4 @@
+import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -20,12 +21,14 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/config
 import nostr_no_su/dedup
+import nostr_no_su/hex
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
+import nostr_no_su/random
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -33,6 +36,7 @@ import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
+import support/postgres
 import support/signed_event
 
 const secret = "s3cr3t-token"
@@ -2612,6 +2616,85 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
     await_connection(reports)
   deliver_and_expect(deliver, seen, event_labels("runtime", 3), 2000)
   stop_tree(tree)
+}
+
+/// `app.add_relay` は DB に挿入してから接続を開く。同じ URL の 2 回目は
+/// `DuplicateRelay`、`relay_list` にすでにある URL への追加は `ConnectionsNotConfirmed`
+/// になるが、どちらも先に挿入は確かめる。`TEST_DATABASE_URL` があるときだけ実行する
+/// （CI では未設定なら失敗する）。
+pub fn add_relay_saves_the_row_before_opening_test() {
+  use database_url <- postgres.with_test_database_url("app")
+  let schema = "app_relay_schema_" <> random.hex(8)
+  let admin_db = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin_db, "CREATE SCHEMA " <> schema)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(
+      postgres.start_pool(database_url, Some(schema)),
+      random_master_key(),
+      account_store.default_timeouts,
+    )
+
+  let assert Ok(config) =
+    pog.url_config(process.new_name("test_app_relay_pool"), database_url)
+  let config = pog.connection_parameter(config, "search_path", schema)
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: app.Bunker(..idle_bunker(), pool: config),
+      admin: None,
+      open: fake_open(process.new_subject(), None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_app_relay_add"),
+    )
+  let tree = start_tree(spec)
+  let db = pog.named_connection(config.pool_name)
+
+  let assert Ok(Nil) =
+    app.add_relay(
+      spec,
+      "ws://added.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+  assert role_url_pairs(spec) == [#(relay_list.Monitor, "ws://added.test")]
+  let assert Ok(rows) = relay_store.list(db, account_store.default_timeouts)
+  assert list.map(rows, fn(row) { row.url }) == ["ws://added.test"]
+
+  assert app.add_relay(
+      spec,
+      "ws://added.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+    == Error(admin.DuplicateRelay)
+
+  let assert Ok(Nil) =
+    app.open_relay(
+      spec,
+      "ws://listed.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+  assert app.add_relay(
+      spec,
+      "ws://listed.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+    == Error(admin.ConnectionsNotConfirmed)
+  let assert Ok(rows_after) =
+    relay_store.list(db, account_store.default_timeouts)
+  assert list.map(rows_after, fn(row) { row.url })
+    == ["ws://added.test", "ws://listed.test"]
+
+  stop_tree(tree)
+  postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 乱数のマスターキー。実行のたびに違う鍵を使う。
+fn random_master_key() -> vault.MasterKey {
+  let assert Ok(key) =
+    vault.master_key_from_hex(hex.encode(crypto.strong_random_bytes(32)))
+  key
 }
 
 /// `open_relay` / `change_relay_roles` / `close_relay` の直後、`relay_list` の
