@@ -17,7 +17,7 @@ disallowedTools: Agent
 ```sh
 R=neverclear86/nostr-no-su
 gh pr view <PR> -R $R --json headRefOid,mergeable,mergeStateStatus,commits --jq '{head: .headRefOid, mergeable, mergeStateStatus, last: .commits[-1].committedDate}'
-gh api repos/$R/issues/<PR>/comments --jq '.[] | select((.body | split("\n")[0]) | test("^## (レビュー（ラウンド [0-9]+）|最終確認)$")) | "\(.created_at) \(.body | split("\n")[0]) \(.body | split("\n") | map(select(startswith("判定"))) | .[0])"'
+gh api repos/$R/issues/<PR>/comments --jq '.[] | select((.body | split("\n")[0]) | test("^## (レビュー（ラウンド [0-9]+）|最終確認(（再確認）)?)$")) | "\(.created_at) \(.body | split("\n")[0]) \(.body | split("\n") | map(select(startswith("判定"))) | .[0])"'
 git -C /home/lina/workspace/projects/nostr-no-su fetch origin main <ブランチ>
 git -C /home/lina/workspace/projects/nostr-no-su show -s --format=%cI <APPROVE を出した head>
 gh pr checks <PR> -R $R

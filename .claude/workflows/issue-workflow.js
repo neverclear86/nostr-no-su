@@ -180,6 +180,9 @@ function env(issue, idx) {
 const common = (e) => `- 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
 - docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
+/** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
+const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
+- issue と PR のコメントは \`--body-file <ファイル>\` で投稿する。\`--body @file\` はファイル名がそのまま本文になる。既存のコメントは編集しない`
 const P = {
   design: (e, issue) => `issue #${e.n} は管理 UI を変える。プランの前にデザインの方針を決めて、issue にコメントしてほしい。
 issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。管理 UI のソースは ${REPO_DIR}/src/nostr_no_su/admin/ にある（ユーザーの作業ツリーなので読むだけにする）。
@@ -188,7 +191,7 @@ ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメ�
   plan1: (e, issue, designUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
-${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるときは、定義の「分割」に従ってサブ issue を作り、status を split にして番号を返す。
+${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。${issue.noSplit ? 'この issue は分割で生まれたサブ issue なので、しきい値を超えても再び分割せず、1 つのプランにする（status に split を返さない）。' : '変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるときは、定義の「分割」に従ってサブ issue を作り、status を split にして番号を返す。'}
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
   // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r, effortNote) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
@@ -234,6 +237,7 @@ ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、�
   ${a.trailers.sessionUrl}
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、逸脱の箇所と理由を ${PLANS}/${e.n}-deviation.md に書き、status を deviation にして返す。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   implementContinue: (e, postUrl) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
 新しい版のプランとの差分だけを直して実装を仕上げ、PR を作ってほしい（すでに PR があれば push して本文を直す）。
@@ -242,6 +246,7 @@ PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョ�
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
 PR を作ったら（または push したら）\`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   fix: (e, pr, reviewUrl, kind, planNote) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）の${kind}（${reviewUrl}）は REQUEST CHANGES だった。指摘は \`gh api\` でその URL のコメント本文を読む。
 ${planNote ? `${planNote}\n` : ''}
@@ -250,6 +255,7 @@ ${planNote ? `${planNote}\n` : ''}
 - コミットのトレーラー: 作業ツリーの \`git log\` の直近のコミットと同じ 2 行
 直して push し、「## ${kind}の指摘への対応（<短い SHA>）」を PR に投稿して、コメントの URL と新しい head を返してほしい。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット、ciPassed。`,
   prReview1: (e, pr, head, postUrl, issue) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
 - 承認済みのプラン: ${postUrl}
@@ -258,12 +264,14 @@ push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブ�
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
 ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、test、format、CSS、vendor、プラグイン、.env.example）は再現せず、CI に無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
+${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、must が承認済みプランの設計に起因するか。`,
   prReviewNext: (e, pr, r, responseUrl, head, prevUrl, prevKind) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）のレビューをしてほしい（ラウンド ${r}）。
 実装側が${prevKind}（${prevUrl}）の指摘に対応した（${responseUrl}、head ${head}）。
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${e.reviewWt} fetch origin ${e.branch} && git -C ${e.reviewWt} checkout --detach origin/${e.branch}\` で進める。無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
 前のラウンドの指摘ごとに直ったかを照合し、対応コミットの差分がその範囲に収まっているかを確かめて、再判定してほしい。
+${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、must が承認済みプランの設計に起因するか。`,
   gate1: (e, pr, head, postUrl, approveUrl, r) => `PR #${pr}（issue #${e.n}、head ${head}）の最終確認をしてほしい。
 - 承認済みのプラン: ${postUrl}
@@ -272,7 +280,7 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL。`,
   gateNext: (e, pr, head, responseUrl, approveUrl, prevGateUrl) => `PR #${pr}（issue #${e.n}、head ${head}）の最終確認の再確認をしてほしい。
 前回の最終確認（${prevGateUrl}）の指摘に実装側が対応し（${responseUrl}）、PR レビュアーも再レビューで APPROVE を出した（${approveUrl}）。
-前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。
+前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。見出しは再確認でも「## 最終確認」だけにする（マージ担当が見出しの完全一致で探す）。
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL。`,
   merge: (e, pr, head, approvedHead) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
 - レビューと最終確認が APPROVE を出した head: ${approvedHead}${head !== approvedHead ? '（その後に rebase で head が変わった。差分が rebase だけであることを確かめてからマージする）' : ''}
@@ -284,6 +292,7 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
   rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
 rebase 以外の変更を入れない。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待つ。
+${SAFETY}
 返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット、ciPassed。`,
 }
 
@@ -450,6 +459,13 @@ async function mergeStage(e, state) {
   })
 }
 
+/** 分割された結果を、入れ子の分割もたどって、全部マージ済みなら最後にマージされた葉の結果に畳む */
+function settled(res) {
+  if (res.status !== 'split' || !(res.children || []).length) return res
+  const leaves = res.children.map(settled)
+  return leaves.every((c) => c.status === 'merged') ? leaves.reduce((x, y) => (y.mergeSeq > x.mergeSeq ? y : x)) : leaves.find((c) => c.status !== 'merged')
+}
+
 /** 分割で生まれたサブ issue を、前のサブ issue のマージを待つ連鎖で進める */
 async function runSplit(parent, subs) {
   const results = []
@@ -457,7 +473,7 @@ async function runSplit(parent, subs) {
   for (const n of subs) {
     const key = String(n)
     if (!done.has(key)) done.set(key, deferred())
-    const child = { n, branch: `${parent.branch}-${n}`, ui: parent.ui, after: prev ? [prev] : (parent.after || []), note: `#${parent.n} を分割したサブ issue。親のプランのコメントに分割の設計がある` }
+    const child = { n, branch: `${parent.branch}-${n}`, ui: parent.ui, noSplit: true, after: prev ? [prev] : (parent.after || []), note: `#${parent.n} を分割したサブ issue。親のプランのコメントに分割の設計がある` }
     const res = await runIssue(child, nextIdx++)
     done.get(key).resolve(res)
     results.push(res)
@@ -479,9 +495,7 @@ async function runIssue(issue, idx) {
     for (const dep of issue.after || []) {
       const d = done.get(String(dep))
       if (!d) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
-      let res = await d.promise
-      // 分割された依存先は、サブ issue が全部マージされていれば最後のサブ issue のマージを依存先とみなす
-      if (res.status === 'split' && (res.children || []).length && res.children.every((c) => c.status === 'merged')) res = res.children[res.children.length - 1]
+      const res = settled(await d.promise)
       if (res.status !== 'merged') return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] })
       if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
     }
