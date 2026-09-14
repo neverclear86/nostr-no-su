@@ -51,3 +51,13 @@ cd plugins-src/event_logger
 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test gleam test
 docker rm -f nns-pg-test
 ```
+
+## レビューの前の機械的な検査
+
+プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りだけのスクリプトを置いている。CI では実行しない。エージェント（プラン、実装、レビュー）が手元で回し、出力をプランや PR 本文に貼る:
+
+```sh
+sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（code / doc-comment / test / docs / config）を表にする。0 件も出す
+sh dev/pr_facts.sh <PR 番号>                     # head と base の SHA、差分の行数、閉じる issue、CI のジョブを 1 枚の表にする
+sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付きの手順を「1 つずつ別の Bash で実行される」前提で静的に検査する
+```
