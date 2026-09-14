@@ -1,6 +1,6 @@
 ---
 name: issue-workflow
-description: nostr-no-su の GitHub issue を、プラン作成（opus low）→ プランレビュー（opus medium）の往復 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージ（opus low）まで、Workflow ツールのスクリプト `.claude/workflows/issue-workflow.js` で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」「/issue-pipeline 57 83」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
+description: nostr-no-su の GitHub issue を、分割の判定（opus low）→ プラン作成（opus low）→ プランレビュー（opus medium）の往復 → 実装と PR 作成（opus low）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージ（opus low）まで、Workflow ツールのスクリプト `.claude/workflows/issue-workflow.js` で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」「/issue-pipeline 57 83」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
 ---
 
 # issue ごとの分業パイプライン（nostr-no-su）
@@ -10,10 +10,11 @@ description: nostr-no-su の GitHub issue を、プラン作成（opus low）→
 
 | 段階 | エージェント（`agentType`） | モデル / effort | 成果物 |
 | --- | --- | --- | --- |
-| デザイン（UI を変える issue だけ） | `issue-designer` | opus / medium | issue コメント（デザインの方針） |
+| 判定 | `issue-planner` | opus / low | issue だけ読んで分割の要否を決める。大きければサブ issue と親コメント「## 分割の設計」 |
+| デザイン（UI を変える issue だけ） | `issue-designer` | opus / medium | issue コメント（デザインの方針）。分割した親でも 1 回だけで、サブ issue は親の URL を継ぐ |
 | プラン作成 | `issue-planner` | opus / low | `<scratchpad>/plans/{{N}}-v{{V}}.md` |
 | プランレビュー | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿 |
-| 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる |
+| 実装 | `issue-implementer` | opus / low | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる。09-14 から試行中（それまで sonnet / high。実装 1 件 $4.00、PR レビューのラウンド 1 で APPROVE 5/19 と比べる） |
 | PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」 |
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
 | マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
@@ -34,7 +35,7 @@ description: nostr-no-su の GitHub issue を、プラン作成（opus low）→
 - **同時に進める issue は `window` 件**（既定 4）。1 issue につき動くエージェントは常に 1 体なので、同時のエージェント数も `window` になる。マージは 1 件ずつ直列で、衝突は実装エージェントの rebase で解く
 - **依存する issue** は `after` に書く。依存先がマージされてから、そのマージのコミットを土台にして始まる。依存先が失敗すると `blocked` になり、`after` が循環していれば待たずに `blocked` になる
 - **CI が通るまでレビューしない**：実装エージェントは PR を作ったら（指摘への対応や rebase の push でも）`gh pr checks --watch` で CI の全ジョブの pass を待ち、fail は直してから返す（`ciPassed`）。通らないまま返ると `blocked`。PR レビュアーは CI が行う検査（build、test、format、CSS、vendor、プラグイン、.env.example）を再現せず、CI に無い検証だけを再現する。CI に docker build と strfry の E2E を足す #109 が入ると、プランの手作業の検証手順はさらに減る
-- **大きい issue は分割する**：プランエージェントは、変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるとき、`gh issue create --parent` でサブ issue を作り、親に「## 分割の設計」をコメントして `status: split` を返す。スクリプトはサブ issue を `after` の連鎖で同じ実行に足し、親は `split`（`subIssues` と `children` の結果つき）で返る。しきい値より小さい issue は分けない（固定費が増える）
+- **大きい issue は分割する**：プランの前に「判定」の段階（`issue-planner` に判定だけを依頼）が issue だけ読んで見込みを出し、変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるとき、`gh issue create --parent` でサブ issue を作り、親に「## 分割の設計」をコメントして `status: split` を返す。各サブ issue は単独でしきい値に収まる粒度で切り、兄弟への依存 `after` は論理的な順序と同じファイルを触る場合だけ付ける。スクリプトはサブ issue を同じ実行に足し、`after` の無いものは並列に進める（親のデザインは 1 回だけで、サブ issue は URL を継ぐ）。サブ issue は判定を飛ばし、再分割しない（プランが再分割を求めたら `blocked` で戻る）。親は `split`（`subIssues` と `children` の結果つき）で返る。しきい値より小さい issue は分けない（固定費が増える）。09-13 夜の実行では、分割の 2 番目の子が再分割される連鎖（#126 → #185 → #202 → #214 → #221）で同時 10 件の枠が直列に潰れ、最後の 3 件に 4.5 時間かかった
 - **昇格ルール**（スクリプトが行う）：プランレビューが 3 ラウンドで APPROVE にならなければ次の版は `effort: high` で書く。5 ラウンドで `stalled`。PR レビューがプランの設計に起因する must（`designMust`）を出したら、プランの版を上げて（effort high）再承認させてから直す。実装がプランどおりに作れないと報告したら（`deviation`）同じ手順で版を上げ、新しいエージェントに続きを実装させる。PR レビューは 4 ラウンド、最終確認は 3 回で `stalled`
 - **往復は新しいエージェント**で行う。プランの往復も、PR レビューの往復も、修正も、前のファイルや PR コメントの URL を渡して新しいエージェントを立てる（同じエージェントに戻す `SendMessage` は使わない。待機中にキャッシュが切れて文脈全体を書き直すため）。引き継ぎは、プランの「指摘への対応」の表、レビューの「前ラウンドの指摘の照合」の表、PR の対応コメントで行う
 - **レビューの「承認」は PR コメントで表す**：全エージェントが同じ GitHub アカウントで動くので、自分の PR に `gh pr review --approve` は使えない。`判定: APPROVE` かつ must と should が 0 件であることを承認とみなす。nit は残っていてもよい
@@ -102,7 +103,7 @@ mkdir -p <scratchpad>/plans
 
 `results` の各要素は `status` で分ける。
 
-- `split`：親が分割された。`subIssues` の順と `children` の各結果を、それぞれ上の分類で扱う
+- `split`：親が分割された。`subIssues`（番号の配列）と `children` の各結果を、それぞれ上の分類で扱う
 - `merged`：PR 番号、マージのコミット、プランのラウンド数、PR レビューのラウンド数、最終確認の回数、残した nit の数を報告に載せる
 - `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れて、同じ `args` に `resumeFromRunId` を付けて再開する。依存先の失敗（`stage: deps`）は依存先を先に直す
 - `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて再開、実装が難しいなら issue を分ける）
@@ -117,7 +118,7 @@ mkdir -p <scratchpad>/plans
 
 ## dry run（スクリプトを変えたとき）
 
-`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`plan2`（プラン 2 ラウンド）、`escalate`（3 ラウンドで effort high）、`plan-stall`、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（サブ issue 2 件に分割）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
+`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`plan2`（プラン 2 ラウンド）、`escalate`（3 ラウンドで effort high）、`plan-stall`、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
 
 ```json
 { "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }

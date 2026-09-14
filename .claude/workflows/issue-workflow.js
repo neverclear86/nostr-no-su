@@ -3,7 +3,8 @@ export const meta = {
   description: 'nostr-no-su の issue を、プラン → プランレビュー → 実装 → PR レビュー → 最終確認 → squash マージまで、役割別のエージェントで進める',
   whenToUse: 'スキル issue-workflow の段階 0 で args（issues、base、scratchpad、portBase、trailers）を組み立ててから呼ぶ。issue 番号だけでは動かない',
   phases: [
-    { title: 'デザイン', detail: 'UI を変える issue だけ。方針を issue にコメントする' },
+    { title: '判定', detail: 'issue だけ読んで分割の要否を決める。大きければサブ issue を作る' },
+    { title: 'デザイン', detail: 'UI を変える issue だけ。方針を issue にコメントする。分割した親でも 1 回だけ' },
     { title: 'プラン', detail: 'issue-planner と issue-plan-reviewer の往復。APPROVE でレビュアーが issue に投稿する' },
     { title: '実装', detail: 'issue-implementer がブランチで実装して PR を作る' },
     { title: 'PR レビュー', detail: 'issue-pr-reviewer と修正の往復' },
@@ -15,7 +16,8 @@ export const meta = {
 // ---------------------------------------------------------------------------
 // args の契約（スキル issue-workflow の段階 0 で組み立てる）
 //   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl? }]
-//               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あればプランの段階を飛ばす
+//               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あれば判定・デザイン・プランの段階を飛ばす
+//               分割で生まれたサブ issue はスクリプトが足す（designUrl を親から継ぎ、depth 1。再分割はしない）
 //   base:       origin/main の SHA。再開のときも同じ値を渡す（変えるとプロンプトが変わり、結果の再利用が効かない）
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
@@ -51,8 +53,12 @@ const S = {
   planner: {
     type: 'object',
     properties: {
-      status: { type: 'string', enum: ['plan', 'question', 'split'] },
-      subIssues: { type: 'array', items: { type: 'integer' }, description: 'status が split のとき、作ったサブ issue の番号を実装する順に' },
+      status: { type: 'string', enum: ['plan', 'question', 'split'], description: '判定の依頼では plan（分けずに進める）か split か question' },
+      subIssues: {
+        type: 'array',
+        items: { type: 'object', properties: { n: { type: 'integer' }, after: { type: 'array', items: { type: 'integer' }, description: '先にマージされている必要がある兄弟サブ issue の番号。無ければ空' } }, required: ['n'] },
+        description: 'status が split のとき、作ったサブ issue。after が無いもの同士は並列に進む',
+      },
       file: { type: 'string', description: '書いたプランのファイル' },
       summary: { type: 'string', description: '方針の要約。版 2 以降は指摘への対応の表の要旨' },
       questions: { type: 'array', items: { type: 'string' }, description: 'status が question のとき、ユーザーに聞く質問' },
@@ -137,11 +143,12 @@ const slots = limiter(WINDOW)
 let nextIdx = a.issues.length
 const mergeLock = mutex()
 const done = new Map(a.issues.map((i) => [String(i.n), deferred()]))
+/** issue 番号 → after の表。分割で生まれたサブ issue は runSplit が足す */
+const afterOf = new Map(a.issues.map((i) => [String(i.n), (i.after || []).map(String)]))
 let mergeSeq = 0
 
 /** after の依存関係に循環（自己参照を含む）があるかを調べる */
 function inCycle(start) {
-  const afterOf = new Map(a.issues.map((i) => [String(i.n), (i.after || []).map(String)]))
   const seen = new Set()
   const stack = [...(afterOf.get(String(start)) || [])]
   while (stack.length) {
@@ -181,6 +188,10 @@ const common = (e) => `- 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
 - docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
 const P = {
+  triage: (e, issue) => `issue #${e.n} を分割するかどうかを判定してほしい（定義の「分割の判定」）。プランはまだ書かない。
+issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。触るファイルの当たりは ${REPO_DIR} を \`ls\`、\`grep -n\`、\`wc -l\` で読むだけにし、build や実行はしない。
+${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるときだけ、サブ issue を作って status を split にする。しきい値以内なら status を plan にして返す（何も投稿しない）。issue の前提が間違っているときは status を question にする。
+返答（構造化出力）: status、split のときは subIssues（各サブ issue の番号と、先にマージされている必要がある兄弟の番号 after）、summary に見込みの行数とファイル数。`,
   design: (e, issue) => `issue #${e.n} は管理 UI を変える。プランの前にデザインの方針を決めて、issue にコメントしてほしい。
 issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。管理 UI のソースは ${REPO_DIR}/src/nostr_no_su/admin/ にある（ユーザーの作業ツリーなので読むだけにする）。
 画面構成、使うコンポーネント（daisyUI）、テーマ、狭い幅（375px）、空とエラーの状態の方針を、標準的な技術文体の日本語（である調、一文一行）で \`gh issue comment ${e.n} -R ${REPO} --body-file <スクラッチパッドのファイル>\` で投稿する。
@@ -188,7 +199,7 @@ ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメ�
   plan1: (e, issue, designUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
-${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。変更の見込みが 300 行か 6 ファイルを超えるか、独立に出せる「決めたこと」が 2 つ以上あるときは、定義の「分割」に従ってサブ issue を作り、status を split にして番号を返す。
+${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
   // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r, effortNote) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
@@ -288,13 +299,37 @@ push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブ�
 }
 
 // --- 段階 -------------------------------------------------------------------
+/** subIssues を { n, after } の形にそろえる（番号だけの要素は依存無し） */
+function normalizeSubIssues(stage, n, subIssues) {
+  if (!Array.isArray(subIssues) || subIssues.length === 0) throw new StageError(stage, `#${n} は split だがサブ issue の番号が無い`)
+  const subs = subIssues.map((s) => (typeof s === 'number' ? { n: s, after: [] } : { n: s.n, after: s.after || [] }))
+  const nums = new Set(subs.map((s) => s.n))
+  for (const s of subs) {
+    if (!Number.isInteger(s.n)) throw new StageError(stage, `#${n} のサブ issue の番号が整数でない: ${JSON.stringify(s)}`)
+    for (const d of s.after) if (!nums.has(d)) throw new StageError(stage, `#${n} のサブ issue #${s.n} の after #${d} が兄弟にいない`)
+  }
+  return subs
+}
+
+/** 分割の判定。issue だけ読んで、分けずに進めるか、サブ issue に分けるかを決める */
+async function triageStage(e, issue) {
+  const t = await call('triage', `Triage #${e.n}`, P.triage(e, issue), { agentType: 'issue-planner', phase: '判定', schema: S.planner })
+  if (t.status === 'question') return { blocked: { stage: 'triage', questions: t.questions || [t.summary] } }
+  if (t.status === 'split') return { split: normalizeSubIssues('triage', e.n, t.subIssues) }
+  return {}
+}
+
+/** UI を変える issue のデザイン。分割した親で 1 回だけ行い、サブ issue は親の URL を継ぐ */
+async function designStage(e, issue, state) {
+  if (!issue.ui || issue.designUrl) return {}
+  const d = await call('design', `Design #${e.n}`, P.design(e, issue), { agentType: 'issue-designer', phase: 'デザイン', schema: S.design })
+  state.designUrl = d.commentUrl
+  return {}
+}
+
 /** プランとプランレビューの往復。承認された版の issue コメント URL を返す */
 async function planStage(e, issue, state) {
-  let designUrl = null
-  if (issue.ui) {
-    const d = await call('design', `Design #${e.n}`, P.design(e, issue), { agentType: 'issue-designer', phase: 'デザイン', schema: S.design })
-    designUrl = d.commentUrl
-  }
+  const designUrl = issue.designUrl || state.designUrl || null
   let v = 0, r = 0, escalated = false
   while (true) {
     v++
@@ -304,8 +339,9 @@ async function planStage(e, issue, state) {
       { agentType: 'issue-planner', phase: 'プラン', schema: S.planner, ...(escalated ? { effort: 'high' } : {}) })
     if (plan.status === 'question') return { blocked: { stage: 'plan', questions: plan.questions || [plan.summary] } }
     if (plan.status === 'split') {
-      if (!Array.isArray(plan.subIssues) || plan.subIssues.length === 0) throw new StageError('plan', `#${e.n} は split だがサブ issue の番号が無い`)
-      return { split: plan.subIssues }
+      // サブ issue の再分割は許さない（連鎖が直列化して枠が潰れる）。親の分割の粒度を見直す判断はユーザーに戻す
+      if (issue.depth) return { blocked: { stage: 'plan', questions: [`サブ issue #${e.n}（親 #${issue.parent}）のプランがさらに分割を求めた: ${plan.summary || ''}。親の「## 分割の設計」の粒度を見直すか、このまま 1 件で実装させるかを決める`] } }
+      return { split: normalizeSubIssues('plan', e.n, plan.subIssues) }
     }
     r++
     const rev = await call('plan-review', `Review plan #${e.n} r${r}`,
@@ -450,26 +486,35 @@ async function mergeStage(e, state) {
   })
 }
 
-/** 分割で生まれたサブ issue を、前のサブ issue のマージを待つ連鎖で進める */
-async function runSplit(parent, subs) {
-  const results = []
-  let prev = null
-  for (const n of subs) {
-    const key = String(n)
-    if (!done.has(key)) done.set(key, deferred())
-    const child = { n, branch: `${parent.branch}-${n}`, ui: parent.ui, after: prev ? [prev] : (parent.after || []), note: `#${parent.n} を分割したサブ issue。親のプランのコメントに分割の設計がある` }
-    const res = await runIssue(child, nextIdx++)
-    done.get(key).resolve(res)
-    results.push(res)
-    prev = n
+/** 分割で生まれたサブ issue を並列に進める。after を宣言した子だけが兄弟のマージを待つ */
+async function runSplit(parent, subs, designUrl) {
+  // 兄弟の完了の表と after の表は、どの子を始めるより前に全部そろえる（後の兄弟に依存する子が「依存先がいない」で止まらないように）
+  for (const s of subs) {
+    if (!done.has(String(s.n))) done.set(String(s.n), deferred())
+    afterOf.set(String(s.n), (s.after.length ? s.after : (parent.after || [])).map(String))
   }
-  return results
+  return Promise.all(subs.map(async (s) => {
+    const child = {
+      n: s.n, branch: `${parent.branch}-${s.n}`, ui: parent.ui, designUrl, depth: (parent.depth || 0) + 1, parent: parent.n,
+      after: afterOf.get(String(s.n)).map(Number),
+      note: `#${parent.n} を分割したサブ issue。親の issue のコメント「## 分割の設計」に全体の方針と兄弟との分担がある`,
+    }
+    const res = await runIssue(child, nextIdx++)
+    done.get(String(s.n)).resolve(res)
+    return res
+  }))
+}
+
+/** 分割された依存先を、子が全部マージされていれば最後にマージされた子で置き換える */
+function resolveSplitDep(res) {
+  if (res.status !== 'split' || !(res.children || []).length || !res.children.every((c) => c.status === 'merged')) return res
+  return res.children.reduce((last, c) => (c.mergeSeq > last.mergeSeq ? c : last))
 }
 
 /** 1 件の issue を最初から最後まで進める */
 async function runIssue(issue, idx) {
   const e = env(issue, idx)
-  const state = { n: issue.n, base: e.base, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, postUrl: null, postFile: null, pr: null, head: null, approveUrl: null }
+  const state = { n: issue.n, base: e.base, planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, designUrl: issue.designUrl || null, postUrl: null, postFile: null, pr: null, head: null, approveUrl: null }
   const finish = (extra) => ({ ...state, ...extra })
   let acquired = false
   try {
@@ -479,9 +524,8 @@ async function runIssue(issue, idx) {
     for (const dep of issue.after || []) {
       const d = done.get(String(dep))
       if (!d) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
-      let res = await d.promise
-      // 分割された依存先は、サブ issue が全部マージされていれば最後のサブ issue のマージを依存先とみなす
-      if (res.status === 'split' && (res.children || []).length && res.children.every((c) => c.status === 'merged')) res = res.children[res.children.length - 1]
+      // 分割された依存先は、サブ issue が全部マージされていれば最後にマージされたサブ issue を依存先とみなす
+      const res = resolveSplitDep(await d.promise)
       if (res.status !== 'merged') return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] })
       if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
     }
@@ -490,8 +534,20 @@ async function runIssue(issue, idx) {
     await slots.acquire()
     acquired = true
     const stages = [
+      // 判定 → デザイン → プラン。承認済みのプランがあれば 3 つとも飛ばす。サブ issue は判定を飛ばし、デザインは親の URL を継ぐ
       async () => {
         if (issue.planUrl) { state.postUrl = issue.planUrl; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
+        if (!issue.depth) {
+          const t = await triageStage(e, issue)
+          if (t.blocked) return t
+          if (t.split) {
+            const d = await designStage(e, issue, state)
+            if (d.blocked) return d
+            return t
+          }
+        }
+        const d = await designStage(e, issue, state)
+        if (d.blocked) return d
         const r = await planStage(e, issue, state)
         if (r.postUrl) { state.postUrl = r.postUrl; state.version = r.version }
         return r
@@ -506,11 +562,11 @@ async function runIssue(issue, idx) {
       if (r.blocked) return finish({ status: 'blocked', ...r.blocked })
       if (r.stalled) return finish({ status: 'stalled', ...r.stalled })
       if (r.split) {
-        // 親の枠を返してから、サブ issue を after の連鎖で同じ実行に足す
+        // 親の枠を返してから、サブ issue を同じ実行に足す。after の無い子は並列に進む
         slots.release(); acquired = false
-        log(`#${issue.n}: 大きいのでサブ issue ${r.split.map((n) => `#${n}`).join(' ')} に分けた。順に進める`)
-        const children = await runSplit(issue, r.split)
-        return finish({ status: 'split', subIssues: r.split, children })
+        log(`#${issue.n}: 大きいのでサブ issue ${r.split.map((s) => `#${s.n}${s.after.length ? `（${s.after.map((d) => `#${d}`).join(' ')} の後）` : ''}`).join(' ')} に分けた`)
+        const children = await runSplit(issue, r.split, state.designUrl)
+        return finish({ status: 'split', subIssues: r.split.map((s) => s.n), children })
       }
     }
     log(`#${issue.n}: PR #${state.pr} をマージした（${state.mergeSha}）`)
@@ -534,8 +590,16 @@ function fake(label, opts) {
   if (sc === 'null-fix' && label.startsWith('Fix')) return null
   if (t === 'issue-designer') return { commentUrl: `https://example/issue/${n}#design` }
   if (t === 'issue-planner') {
+    if (label.startsWith('Triage')) {
+      // split: 2 番目が 1 番目の後 / split-parallel: 依存無し / triage-question: 判定で質問
+      if (sc === 'split') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [] }, { n: Number(n) * 100 + 2, after: [Number(n) * 100 + 1] }], summary: '見込み 500 行 / 8 ファイル' }
+      if (sc === 'split-parallel') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1 }, { n: Number(n) * 100 + 2 }], summary: '見込み 400 行' }
+      if (sc === 'triage-question') return { status: 'question', questions: ['issue の前提の A は今の main に無い'] }
+      return { status: 'plan', summary: '見込み 120 行 / 3 ファイル' }
+    }
     if (sc === 'question' && v === '1') return { status: 'question', questions: ['since はどこから？'] }
-    if (sc === 'split' && v === '1') return { status: 'split', subIssues: [Number(n) * 100 + 1, Number(n) * 100 + 2] }
+    // plan-split: 判定は plan だったが調査で大きいと分かった / child-split: サブ issue のプランが再分割を求める（blocked になる）
+    if ((sc === 'plan-split' || sc === 'child-split') && v === '1') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [] }], summary: '調査で 600 行と分かった' }
     if (sc === 'replan-question' && (label.includes('revise') || Number(v) >= 2)) return { status: 'question', questions: ['逸脱の代案はどちらにするか'] }
     return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
   }
