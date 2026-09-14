@@ -317,7 +317,7 @@ printf '%s\n' "$expr" | ./dc.sh exec -T nostr-no-su /app/start.sh remsh > "$V/lo
 ./dc.sh logs nostr-no-su | grep -E 'Supervisor|\[bunker\] loaded'
 ```
 
-式は CI の `docker-image` ジョブの式（`.github/workflows/test.yml` の「REMSH_ENABLED=true で remsh からバンカーを kill して再起動を観測する」の step）と同じ形で、待ちを 3 秒にしている。pid はノードごとに変わるので `restarted=true` を見る。
+式は手動のワークフローの `docker-image` ジョブの式（`.github/workflows/manual.yml` の「REMSH_ENABLED=true で remsh からバンカーを kill して再起動を観測する」の step）と同じ形で、待ちを 3 秒にしている。pid はノードごとに変わるので `restarted=true` を見る。
 `-T` で流すと入力の終わりで抜け、`*** Shell process terminated! Read EOF ***` が出るが本体は止まらない。対話で入ったときは Ctrl+G の後に `q` で抜け、`q().` と `init:stop().` は送らない（README の「docker compose」の節と同じ）。
 アカウントは管理 UI で登録済みのものを使い、署名の継続は「接続したままのクライアント」に `echo sign >&3` を送って確かめる。
 

@@ -1083,8 +1083,7 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
 
 /// `app.add_relay` は DB に挿入してから接続を開く。同じ URL の 2 回目は
 /// `DuplicateRelay`、`relay_list` にすでにある URL への追加は `ConnectionsNotConfirmed`
-/// になるが、どちらも先に挿入は確かめる。`TEST_DATABASE_URL` があるときだけ実行する
-/// （CI では未設定なら失敗する）。
+/// になるが、どちらも先に挿入は確かめる。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn add_relay_saves_the_row_before_opening_test() {
   use database_url <- postgres.with_test_database_url("app")
   let schema = "app_relay_schema_" <> random.hex(8)
@@ -1156,7 +1155,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
 /// `app.update_relay_roles` と `app.delete_relay` は DB に書いてから接続を変えるので、
 /// 再起動なしで `registered_relays` と `relay_list` の両方に反映される。行を消した後は、
 /// 同じ行への変更と削除がどちらも `UnregisteredRelay` になる。`TEST_DATABASE_URL` が
-/// あるときだけ実行する（CI では未設定なら失敗する）。
+/// あるときだけ実行する。
 pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
   use database_url <- postgres.with_test_database_url("app")
   let schema = "app_relay_update_schema_" <> random.hex(8)

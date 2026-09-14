@@ -45,7 +45,7 @@ sh dev/collect_licenses.sh build/erlang-shipment
 
 1. リリースに含めると決めた issue がすべて閉じていることを確かめる。
 2. リリースの PR を出す。2 つの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
-3. PR を squash マージし、main のそのコミットで `test` のワークフローが成功したことを確かめ、そのコミットの SHA を控える。
+3. PR を squash マージし、main のそのコミットで `manual` のワークフローを起動して（docs/development.md の「手動の検査」）成功したことを確かめ、そのコミットの SHA を控える。PR の CI（`test`）は統合テストと docker イメージを検査しない。
 4. 手順 3 で控えたコミットに注釈付きのタグを切って push する。
 
    ```sh
