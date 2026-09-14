@@ -1,8 +1,9 @@
-//// 暗号のテストベクターを読むためのヘルパー。
+//// 暗号のテストベクターを読むヘルパーと、バイト列を扱うヘルパー。
 
 import gleam/bit_array
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
+import gleam/string
 import nostr_no_su/hex
 
 /// ファイルの中身を読む。
@@ -25,4 +26,9 @@ pub fn read(name: String, sha256: String) -> String {
     as "test vector file differs from the pinned upstream version"
   let assert Ok(text) = bit_array.to_string(content)
   text
+}
+
+/// `haystack` が `needle` を部分列として含むかどうか。
+pub fn contains_bytes(haystack: BitArray, needle: BitArray) -> Bool {
+  string.contains(hex.encode(haystack), hex.encode(needle))
 }

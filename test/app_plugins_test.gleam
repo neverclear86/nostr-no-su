@@ -39,6 +39,7 @@ import support/app_tree.{
   start_tree, stop_tree, store_failure, store_with_load, test_relay,
   test_relay_url,
 }
+import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
 import support/postgres
 import support/signed_event
@@ -635,10 +636,6 @@ fn await_restarted(store: Atom, previous: Dynamic, remaining: Int) -> Bool {
 @external(erlang, "child_fixture", "spec")
 fn child_spec_map(kind: Atom, name: Atom) -> Dynamic
 
-/// 登録名が使われているか。
-@external(erlang, "child_fixture", "is_registered")
-fn is_registered(name: Atom) -> Bool
-
 /// 登録名が指すプロセス（未登録なら atom の `undefined`）。
 @external(erlang, "child_fixture", "whereis_name")
 fn whereis_name(name: Atom) -> Dynamic
@@ -658,10 +655,6 @@ fn supervisor_of(name: Atom) -> Pid
 /// 登録名が指すプロセスを強制終了する。
 @external(erlang, "child_fixture", "kill_registered")
 fn kill_registered(name: Atom) -> Nil
-
-/// テストごとに一意な整数。
-@external(erlang, "erlang", "unique_integer")
-fn unique_integer(options: List(Atom)) -> Int
 
 // --- 監視の購読 ---
 

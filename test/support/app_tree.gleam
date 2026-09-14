@@ -1,4 +1,4 @@
-import gleam/erlang/atom.{type Atom}
+import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -23,6 +23,7 @@ import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
+import support/erl.{monotonic_time}
 import support/nip46_client.{account_for}
 import support/signed_event
 
@@ -420,10 +421,6 @@ pub fn deliver_and_expect(
   use sent <- list.each(events)
   assert process.receive(seen, timeout_ms) == Ok(sent)
 }
-
-/// 単調増加する時計の現在値。
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
 
 /// 単調増加する時計の現在値（ミリ秒）。
 pub fn monotonic_ms() -> Int {
