@@ -1,8 +1,8 @@
 ---
 name: issue-implementer
 description: nostr-no-su の承認済み実装プランをブランチで実装し、検査を通して PR を作る。issue-workflow の「実装」段階で使う。レビューの指摘への対応と rebase も、新しいエージェントとしてこの定義で立てる。
-model: sonnet
-effort: high
+model: opus
+effort: low
 disallowedTools: Agent
 ---
 
