@@ -71,17 +71,16 @@
 //// **`bunker` も `monitor` より先に追加すること。** 逆順だと、監視の接続の最初の
 //// 購読の評価がバンカーの名前の登録より先に走り、定義を得られずに再試行を待つ。
 ////
-//// ## 実行時のリレーの増減
-////
-//// `relay_list` は用途（監視・バンカー）ごとの接続の一覧を加えた順に持ち、
-//// `open_relay` / `close_relay` / `change_relay_roles` による変更と、
-//// `connections` の factory の子の起動・停止を、自分のハンドラーで直列に行う
-//// （同時に届く変更の重なりを避けるため）。factory は `rest_for_one` の再起動で
-//// 動的な子をすべて失うため、`relay_list` は再起動後に届く `Repopulate` で
-//// 一覧から起動し直す。止めた接続（バンカーの用途）は `on_disconnect` を経て
-//// `RemovePublisher` が送られ、バンカーの送信先から外れる。署名者の変化による
-//// 張り直しは、`relay_list` の `ResubscribeAll` が現在の全接続へ送る。詳細と
-//// 既知の窓は `relay_list` のモジュール doc を参照。
+//// **実行時のリレーの増減は `relay_list` が担う。** 用途（監視・バンカー）
+//// ごとの接続の一覧を加えた順に持ち、`open_relay` / `close_relay` /
+//// `change_relay_roles` による変更と、`connections` の factory の子の
+//// 起動・停止を、自分のハンドラーで直列に行う（同時に届く変更の重なりを
+//// 避けるため）。factory は `rest_for_one` の再起動で動的な子をすべて失うため、
+//// `relay_list` は再起動後に届く `Repopulate` で一覧から起動し直す。止めた
+//// 接続（バンカーの用途）は `on_disconnect` を経て `RemovePublisher` が送られ、
+//// バンカーの送信先から外れる。署名者の変化による張り直しは、`relay_list` の
+//// `ResubscribeAll` が現在の全接続へ送る。詳細と既知の窓は `relay_list` の
+//// モジュール doc を参照。
 ////
 //// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
 //// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
