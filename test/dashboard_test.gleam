@@ -161,6 +161,39 @@ pub fn japanese_pending_secret_is_translated_test() {
   )
 }
 
+/// secret が一致しない承認待ちの承認ページにだけ警告が出て、提示が無い承認待ちの承認
+/// ページとダッシュボードの行には出ない。
+pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
+  let assert Ok([not_offered, mismatched]) = secret_states().pending
+
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, mismatched),
+    "<div class=\"alert alert-warning\"><p><strong>The connection secret does not match.</strong> This happens when",
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.Japanese, view.System, mismatched),
+    "<div class=\"alert alert-warning\"><p><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
+  )
+
+  assert !string.contains(
+    dashboard.approval_page(i18n.English, view.System, not_offered),
+    "alert-warning",
+  )
+  assert !string.contains(
+    dashboard.approval_page(i18n.Japanese, view.System, not_offered),
+    "alert-warning",
+  )
+
+  assert !string.contains(
+    dashboard.render(i18n.English, view.System, secret_states()),
+    "The connection secret does not match.",
+  )
+  assert !string.contains(
+    dashboard.render(i18n.Japanese, view.System, secret_states()),
+    "接続 secret が一致しません。",
+  )
+}
+
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を
 /// hidden 欄で送る。
 pub fn only_disabled_plugins_have_a_reenable_button_test() {

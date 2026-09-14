@@ -351,8 +351,27 @@ pub fn approval_page(
     i18n.ApproveConnection,
     view.Narrow,
     view.SwitchReturningTo(approve_path(pending.token)),
-    [view.card(pending_content(language, pending))],
+    [view.card(approval_content(language, pending))],
   )
+}
+
+/// 承認ページのカードの中身。secret が一致しなかった承認待ちでは、判断の前に読ませる
+/// 警告を先頭に置く。
+fn approval_content(
+  language: Language,
+  pending: PendingRow,
+) -> List(Element(msg)) {
+  case pending.secret_mismatch {
+    True -> [
+      view.warning(view.emphasized(
+        language,
+        i18n.WrongSecretOffered,
+        i18n.WrongSecretNotice,
+      )),
+      ..pending_content(language, pending)
+    ]
+    False -> pending_content(language, pending)
+  }
 }
 
 /// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、
