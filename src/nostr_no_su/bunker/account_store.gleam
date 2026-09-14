@@ -100,7 +100,8 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
 /// `connect` が要求した値をそのまま保存し、空文字列は要求なしを表す。`signer` は
 /// `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で参照するので、アカウントの
 /// 削除でその署名者のセッションも消える。時刻は Unix 秒。挿入では `created_at` と
-/// `last_used_at` に同じ値を入れる（`insert_session`）。
+/// `last_used_at` に同じ値を入れる（`insert_session`）。`last_used_at` は
+/// `touch_session` で進める。
 pub const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
   client text NOT NULL,
@@ -217,6 +218,9 @@ ORDER BY created_at, token"
 const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at)
 VALUES ($1, $2, $3, $4, $4)
 ON CONFLICT (signer, client) DO NOTHING"
+
+/// 最終利用の更新。時刻が進むときだけ書き換える。
+const touch_session_sql = "UPDATE bunker_sessions SET last_used_at = $3 WHERE signer = $1 AND client = $2 AND last_used_at < $3"
 
 /// セッションの削除。
 const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
@@ -591,6 +595,24 @@ pub fn insert_session(
   |> pog.parameter(pog.text(signer))
   |> pog.parameter(pog.text(client))
   |> pog.parameter(pog.text(perms))
+  |> pog.parameter(pog.int(now))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// セッションの最終利用を `now` に進める。行が無いか、すでに `now` 以上なら
+/// 何もせず `Ok`（2 インスタンスが並ぶ窓で後退させない）。
+pub fn touch_session(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  signer signer: String,
+  client client: String,
+  now now: Int,
+) -> Result(Nil, StoreError) {
+  pog.query(touch_session_sql)
+  |> pog.parameter(pog.text(signer))
+  |> pog.parameter(pog.text(client))
   |> pog.parameter(pog.int(now))
   |> pog.timeout(timeouts.write_ms)
   |> execute(db)

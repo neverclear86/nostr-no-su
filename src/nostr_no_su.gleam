@@ -343,9 +343,9 @@ pub fn account_store_operations(
   )
 }
 
-/// エンジンの書き込み 1 件を `account_store` の関数に写す。`delete_session` と
-/// `delete_pending` は行が無くても `Ok`（`account_store.gleam:574-586`、
-/// `:609-620`）なので `deleted_or_absent` は通さない。
+/// エンジンの書き込み 1 件を `account_store` の関数に写す。`touch_session`、
+/// `delete_session`、`delete_pending` は行が無くても `Ok` なので
+/// `deleted_or_absent` は通さない。
 fn write_session_state(
   pool: Name(pog.Message),
   db: pog.Connection,
@@ -364,6 +364,14 @@ fn write_session_state(
       )
     engine.DeleteSession(signer:, client:) ->
       account_store.delete_session(db, timeouts, signer:, client:)
+    engine.TouchSession(signer:, client:, last_used_at:) ->
+      account_store.touch_session(
+        db,
+        timeouts,
+        signer:,
+        client:,
+        now: last_used_at,
+      )
     engine.InsertPending(pending:, replaced:) ->
       account_store.insert_pending_replacing(
         pool,

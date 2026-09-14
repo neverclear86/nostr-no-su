@@ -979,6 +979,69 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// `touch_session` は最終利用を進め、後退させず、行が無くても `Ok`。
+pub fn postgres_touching_a_session_moves_its_last_use_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("touch")
+  let signer_hex = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_touch_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  assert write(
+      engine.InsertSession(session: engine.Session(
+        signer: signer_hex,
+        client: "client",
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
+      )),
+    )
+    == Ok(Nil)
+  assert write(engine.TouchSession(
+      signer: signer_hex,
+      client: "client",
+      last_used_at: 1060,
+    ))
+    == Ok(Nil)
+  // 後退はしない。
+  assert write(engine.TouchSession(
+      signer: signer_hex,
+      client: "client",
+      last_used_at: 1030,
+    ))
+    == Ok(Nil)
+  // 無い組は何もせず Ok。
+  assert write(engine.TouchSession(
+      signer: signer_hex,
+      client: "no-such-client",
+      last_used_at: 1090,
+    ))
+    == Ok(Nil)
+
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert list.map(loaded.sessions, fn(session) {
+      #(session.client, session.created_at, session.last_used_at)
+    })
+    == [#("client", 1000, 1060)]
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// セッション A がロックを取り（再入で 2 回とも成功）、セッション B は取れない。
 /// A がロックを手放すと B が取れる。番号は乱数にし、他の統合テストが取る本番の
 /// 番号（`account_store.instance_lock_key`）と衝突しないようにする。A、B は

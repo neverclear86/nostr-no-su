@@ -32,8 +32,8 @@
 //// 行い、失敗すれば同じく名前なしの subject へ再試行を予約する。読み直しが成功する
 //// までの間はメモリが DB と食い違っていることがあり、その間の変更は起動時の読み込みの
 //// 前と同じく `accounts are not loaded yet` で拒否し、一覧は理由を返す。NIP-46 の処理は
-//// その間もメモリのアカウントで続け、`connect` と `logout` の書き込みも行う
-//// （読み直しは積み増さない）。
+//// その間もメモリのアカウントで続け、`connect`、`logout`、セッション内のリクエストの
+//// 最終利用の書き込みも行う（読み直しは積み増さない）。
 ////
 //// 保証するのは次のことである。メモリは、成功した書き込みと成功した読み込みの結果
 //// だけで変わる。結果が曖昧な書き込みの後は、読み直しに成功した時点で、その書き込みの
@@ -59,11 +59,14 @@
 //// の読み直しに移り、読み直しで承認待ちとセッションも DB の内容に置き換わる。
 //// 書けていなければ行が残るので、利用者はダッシュボードからやり直せる。承認の
 //// `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（書けていれば
-//// 承認待ちは消え、クライアントは接続し直す）。NIP-46 の `connect` と `logout` も、
-//// 書き込みが成功したときだけ状態に反映し、応答を発行する。書き込みが失敗したときは
-//// メモリを変えず、`connect` には `connection_not_saved` のエラーを返し、`logout` には
-//// クライアントの後始末を止めないため `ack` を返す。結果が曖昧な書き込みの後は同じ
-//// 読み直しに移る。
+//// 承認待ちは消え、クライアントは接続し直す）。NIP-46 の `connect`、`logout`、セッション
+//// 内のリクエストの最終利用（組ごとに `last_used_granularity_seconds` に 1 回まで）も、
+//// 書き込みが成功したときだけ状態に反映する。書き込みが失敗したときはメモリの
+//// セッションと承認待ちを変えず、`connect` には `connection_not_saved` のエラーを返し、
+//// `logout` にはクライアントの後始末を止めないため `ack` を返し、セッション内の
+//// リクエストには成功時と同じ応答を返す（試行の時刻はエンジンの `touch_attempts` に
+//// 残し、次の書き込みまでの間隔に数える）。結果が曖昧な書き込みの後は同じ読み直しに
+//// 移る。
 ////
 //// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
 //// 張り直しを依頼する。追加と削除のほか、読み込みの失敗からの復帰でも張り直しが
@@ -482,9 +485,9 @@ type Change {
 }
 
 /// 承認・拒否・取り消しと、NIP-46 の `connect`（セッションを開く、承認待ちを
-/// 登録する）と `logout` の書き込みの種類。失敗のログ行の言い回しを決める。前の
-/// 3 つは `admin.SessionChange`（`admin.gleam:620-624`）と同じ区分だが、`bunker`
-/// は管理 UI に依存できないので別に持つ。
+/// 登録する）・`logout`・セッション内のリクエストの最終利用の書き込みの種類。
+/// 失敗のログ行の言い回しを決める。前の 3 つは `admin.SessionChange` と同じ
+/// 区分だが、`bunker` は管理 UI に依存できないので別に持つ。
 type SessionChange {
   Approval
   Denial
@@ -492,6 +495,7 @@ type SessionChange {
   SessionOpening
   PendingRecording
   SessionClosing
+  SessionUse
 }
 
 /// OK を待っている応答の一覧。キーは応答 id。
@@ -1256,6 +1260,7 @@ fn session_failure_line(
     SessionOpening -> "open the session of"
     PendingRecording -> "record the pending connection of"
     SessionClosing -> "close the session of"
+    SessionUse -> "record the use of the session of"
   }
   "failed to "
   <> verb
@@ -1331,8 +1336,8 @@ fn session_write_failure(failure: WriteFailure) -> SessionFailure {
 /// `handle_event` の `Persist` の書き込みの種類と、失敗のログに出す
 /// （署名者, クライアント）。組は `Write` の値から取る（`connect` の書き込みの前は
 /// 組がメモリに無いので `session_target` で引かない）。`handle_event` が載せるのは
-/// `InsertSession`、`InsertPending`、`DeleteSession` だけで、残りは管理 UI と同じ
-/// 区分に写す。承認待ちの token は返さない。
+/// `InsertSession`、`InsertPending`、`DeleteSession`、`TouchSession` だけで、残りは
+/// 管理 UI と同じ区分に写す。承認待ちの token は返さない。
 fn incoming_write_change(
   write: engine.Write,
 ) -> #(SessionChange, Option(#(String, String))) {
@@ -1340,6 +1345,10 @@ fn incoming_write_change(
     engine.InsertSession(session:) -> #(
       SessionOpening,
       Some(#(session.signer, session.client)),
+    )
+    engine.TouchSession(signer:, client:, ..) -> #(
+      SessionUse,
+      Some(#(signer, client)),
     )
     engine.InsertPending(pending:, ..) -> #(
       PendingRecording,

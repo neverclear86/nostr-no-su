@@ -488,7 +488,41 @@ pub fn sessions_lists_connected_clients_test() {
     ]
 }
 
-/// 一覧は署名者・クライアントの順に並ぶため、辞書の走査順に左右されない。
+/// セッション内のリクエストは、前回の最終利用から `last_used_granularity_seconds`
+/// 未満なら書き込まず `Reply`、以上なら `TouchSession` を書き込む `Persist` を返す。
+/// 書けたセッションは最終利用が進む。
+pub fn requests_in_a_session_write_the_last_use_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let ping = "{\"id\":\"p1\",\"method\":\"ping\"}"
+
+  let #(_unwritten, outcome1) =
+    handle_raw(state, request_event(client, signer, ping, 1059), 1059, 0)
+  let assert Reply(_) = outcome1
+
+  let #(_unwritten, outcome2) =
+    handle_raw(state, request_event(client, signer, ping, 1060), 1060, 0)
+  let assert Persist(write:, next:, ..) = outcome2
+  assert write
+    == engine.TouchSession(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      last_used_at: 1060,
+    )
+  assert engine.sessions(next)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1060,
+      ),
+    ]
+}
+
+/// 時刻が同じ一覧は署名者・クライアントの順に並ぶため、辞書の走査順に左右されない。
 /// Erlang の map は 32 キー以下だとキーの昇順で走査してしまい、少数の組では
 /// 並べ忘れを検出できないため、`restore` で 40 個のクライアントを逆順に渡す。
 pub fn sessions_are_sorted_test() {
@@ -522,6 +556,27 @@ pub fn sessions_are_sorted_test() {
       )
     })
   assert engine.sessions(state) == expected
+}
+
+/// 一覧は最終利用の新しい順、同じなら作成の新しい順、次に署名者・クライアントの
+/// 昇順に並ぶ。
+pub fn sessions_are_sorted_by_the_last_use_test() {
+  let signer = account_for(signer_key)
+  let session = fn(client: String, created_at: Int, last_used_at: Int) {
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: client,
+      perms: "",
+      created_at: created_at,
+      last_used_at: last_used_at,
+    )
+  }
+  let a = session("a", 100, 300)
+  let b = session("b", 200, 300)
+  let c = session("c", 200, 300)
+  let d = session("d", 100, 400)
+  let state = engine.restore(new_engine(), [a, b, c, d], [], 1000)
+  assert engine.sessions(state) == [d, b, c, a]
 }
 
 /// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。
@@ -1532,10 +1587,10 @@ pub fn logout_on_failure_is_ack_test() {
     == "{\"id\":\"l1\",\"result\":\"ack\"}"
 }
 
-/// `Persist` の第 1 要素（`handle_raw` の戻り値）は `accept` が `seen` を記録した
-/// だけのエンジンで、セッションも承認待ちも持たない。同じイベントをもう一度
-/// 渡すと重複として扱う。secret が一致した場合と承認待ちを作る場合の両方で
-/// 確かめる。
+/// `connect` の `Persist` の第 1 要素（`handle_raw` の戻り値）は `accept` が `seen` を
+/// 記録しただけのエンジンで、セッションも承認待ちも持たない。同じイベントを
+/// もう一度渡すと重複として扱う。secret が一致した場合と承認待ちを作る場合の
+/// 両方で確かめる。
 pub fn persist_keeps_only_the_seen_id_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -1555,6 +1610,35 @@ pub fn persist_keeps_only_the_seen_id_test() {
   assert replayed == Duplicate
   assert engine.sessions(state) == []
   assert engine.pending(state, 1000) == []
+}
+
+/// `TouchSession` を書けなかったときも、次に書きに行くまでの間隔は書き込みを
+/// 試みた時刻から数える。読み直し（`restore`）をまたいでも、組がセッションに
+/// 残っていれば同じ間隔が保たれる。
+pub fn a_failed_touch_still_thins_the_next_write_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let ping = "{\"id\":\"p1\",\"method\":\"ping\"}"
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+
+  let #(accepted, outcome) =
+    handle_raw(state, request_event(client, signer, ping, 1060), 1060, 0)
+  let assert Persist(..) = outcome
+
+  // 書けなかったものとして `accepted`（第 1 要素）で続けると、試行の時刻
+  // 1060 から 60 秒未満の 1119 は `Reply`、60 秒以上の 1120 は `Persist`。
+  let #(_state, outcome_soon) =
+    handle_raw(accepted, request_event(client, signer, ping, 1119), 1119, 0)
+  let assert Reply(_) = outcome_soon
+  let #(_state, outcome_later) =
+    handle_raw(accepted, request_event(client, signer, ping, 1120), 1120, 0)
+  let assert Persist(..) = outcome_later
+
+  // 読み直しても組が残っていれば試行の時刻は保たれ、1110 はまだ `Reply`。
+  let restored = engine.restore(accepted, engine.sessions(accepted), [], 1119)
+  let #(_state, outcome_restored) =
+    handle_raw(restored, request_event(client, signer, ping, 1110), 1110, 0)
+  let assert Reply(_) = outcome_restored
 }
 
 /// `response` は組めても `on_failure` が上限（65535 バイト、`nip44.gleam:97`）を
