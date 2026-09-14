@@ -20,10 +20,11 @@ import nostr_no_su/admin/view
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
 /// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
-/// 開き直す。
+/// 開き直す。`label` は欄に入れる値。GET では空、入力の誤りで戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
   theme: view.Theme,
+  label: String,
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
@@ -48,7 +49,7 @@ pub fn new_account_page(
             ),
             view.labelled(
               text(i18n.Label),
-              label_input("", Some(dashboard.max_label_code_points)),
+              label_input(label, Some(dashboard.max_label_code_points)),
             ),
           ],
           text(i18n.Register),
@@ -74,12 +75,14 @@ pub fn new_account_page(
 }
 
 /// 生成した鍵の確認ページ。生成した nsec を表示する唯一のページで、ここではまだ
-/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`error` は、生成した鍵の
-/// 登録でラベルが規則に反したときに再描画する理由。
+/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`label` は欄に入れる値
+/// （生成の直後は空、ラベルが規則に反して再描画するときは送られた値）。`error` は、
+/// 生成した鍵の登録でラベルが規則に反したときに再描画する理由。
 pub fn generated_key_page(
   language: Language,
   theme: view.Theme,
   nsec: String,
+  label: String,
   error: Option(i18n.Message),
 ) -> String {
   let text = i18n.text(language, _)
@@ -94,7 +97,7 @@ pub fn generated_key_page(
           view.hidden_input(dashboard.nsec_field, nsec),
           view.labelled(
             text(i18n.Label),
-            label_input("", Some(dashboard.max_label_code_points)),
+            label_input(label, Some(dashboard.max_label_code_points)),
           ),
         ],
         text(i18n.RegisterThisKey),
@@ -141,16 +144,18 @@ pub fn registered_page(
 }
 
 /// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
-/// ラベルの編集フォームには、利用者の入力ではなく一覧から得た保存済みのラベルを入れる。
-/// 送信のボタンの重さは操作ごとに決める（ラベルの保存は主操作、secret の作り直しと
-/// 秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、見出しとリンクの文言
-/// （`dashboard.account_action_title`）とは別に持つ。テーマか言語を切り替えた後は、
-/// この操作のページを GET で開き直す。
+/// ラベルの編集フォームの欄には、GET では一覧から得た保存済みのラベルを、入力の誤りか
+/// 409 で再描画するときは送られた値（`label`）を入れる。カードの上の `account_summary`
+/// は保存済みのラベルのままにする。送信のボタンの重さは操作ごとに決める（ラベルの保存は
+/// 主操作、secret の作り直しと秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、
+/// 見出しとリンクの文言（`dashboard.account_action_title`）とは別に持つ。テーマか言語を
+/// 切り替えた後は、この操作のページを GET で開き直す。
 pub fn account_action_page(
   language: Language,
   theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
+  label: Option(String),
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
@@ -160,7 +165,12 @@ pub fn account_action_page(
       element.none(),
       view.post_form(
         path,
-        [view.labelled(text(i18n.Label), label_input(row.label, None))],
+        [
+          view.labelled(
+            text(i18n.Label),
+            label_input(option.unwrap(label, row.label), None),
+          ),
+        ],
         text(i18n.Save),
         view.Primary,
         view.InForm,

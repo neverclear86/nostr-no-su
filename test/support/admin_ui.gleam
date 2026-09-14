@@ -105,11 +105,12 @@ pub fn pages() -> List(String) {
         dashboard.Snapshot(..empty, accounts: Error("reason")),
       ),
       dashboard.approval_page(language, view.System, pending),
-      account_pages.new_account_page(language, view.System, Some(reason)),
+      account_pages.new_account_page(language, view.System, "", Some(reason)),
       account_pages.generated_key_page(
         language,
         view.System,
         "nsec1example",
+        "",
         Some(i18n.LabelHasControlCharacters),
       ),
       account_pages.registered_page(
@@ -147,6 +148,7 @@ pub fn pages() -> List(String) {
       view.System,
       row,
       _,
+      None,
       Some(reason),
     )),
   ])
