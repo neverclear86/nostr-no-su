@@ -972,7 +972,7 @@ pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
 }
 
 /// 承認が実は書けていて、読み直しの後にも `ack` を発行しないとき、クライアントは
-/// 応答を受け取れないが、承認済みのセッションで接続し直せる。
+/// 応答を受け取れないが、承認済みのセッションは残る。
 pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -980,10 +980,12 @@ pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
   let base = committed_but_timed_out_store(database)
   let store =
     bunker.Store(..base, write: fn(write) {
-      let _ = base.write(write)
       case write {
-        engine.ApprovePending(..) -> Error(bunker.MaybeWritten(store_failure()))
-        _ -> Ok(Nil)
+        engine.ApprovePending(..) -> {
+          let _ = base.write(write)
+          Error(bunker.MaybeWritten(store_failure()))
+        }
+        _ -> base.write(write)
       }
     })
   let tree =
