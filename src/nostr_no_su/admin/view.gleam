@@ -188,6 +188,8 @@ pub type Value {
   Plain(String)
   /// npub と、あれば 16 進の公開鍵を縦に並べたアカウント。
   Account(npub: String, hex: Option(String))
+  /// RFC 3339 の UTC の時刻。折り返さず、数字の幅を揃える。
+  Timestamp(String)
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
@@ -542,6 +544,16 @@ fn summary_value(value: Value) -> Element(msg) {
         [html.span([], [html.text(npub)]), ..hex],
       )
     }
+    Timestamp(text) ->
+      html.dd([], [
+        html.time(
+          [
+            attribute.attribute("datetime", text),
+            attribute.class("whitespace-nowrap tabular-nums"),
+          ],
+          [html.text(text)],
+        ),
+      ])
   }
 }
 

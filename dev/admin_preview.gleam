@@ -42,6 +42,9 @@ const second = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e
 /// `second` の npub。
 const second_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
 
+/// 辞書順で `client` より前に来る、2 件目のセッションのクライアントの公開鍵（ダミー）。
+const earlier_client = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+
 /// 接続してきたクライアントの公開鍵（ダミー）。
 const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
 
@@ -166,8 +169,14 @@ fn context() -> admin.Context {
         dashboard.SessionRow(
           signer:,
           client:,
-          created_at: 1000,
-          last_used_at: 1000,
+          created_at: 1_788_253_200,
+          last_used_at: 1_789_276_354,
+        ),
+        dashboard.SessionRow(
+          signer:,
+          client: earlier_client,
+          created_at: 1_789_075_800,
+          last_used_at: 1_789_075_800,
         ),
       ])
     },
