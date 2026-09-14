@@ -220,12 +220,14 @@ fn context() -> admin.Context {
         dashboard.SessionRow(
           signer:,
           client:,
+          perms: "sign_event:1,sign_event:7,nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt",
           created_at: 1_788_253_200,
           last_used_at: 1_789_276_354,
         ),
         dashboard.SessionRow(
           signer:,
           client: earlier_client,
+          perms: "",
           created_at: 1_789_075_800,
           last_used_at: 1_789_075_800,
         ),
@@ -240,6 +242,7 @@ fn context() -> admin.Context {
           client:,
           age_seconds: 12,
           secret_mismatch: False,
+          perms: "sign_event:1,sign_event:7,nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt",
         ),
         dashboard.PendingRow(
           token: "tok-2",
@@ -247,6 +250,7 @@ fn context() -> admin.Context {
           client:,
           age_seconds: 48,
           secret_mismatch: True,
+          perms: "",
         ),
       ])
     },

@@ -206,6 +206,7 @@ fn test_context(
         dashboard.SessionRow(
           signer: signer,
           client: client,
+          perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),
@@ -229,6 +230,7 @@ fn test_context(
           client: client,
           age_seconds: 12,
           secret_mismatch: False,
+          perms: "",
         ),
       ])
     },

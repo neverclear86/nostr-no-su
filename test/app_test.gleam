@@ -4047,8 +4047,8 @@ pub fn monitor_connections_do_not_answer_authentication_test() {
   stop_tree(tree)
 }
 
-/// `app.session_rows` は時刻をそのまま写し、perms は行に含めない。
-pub fn session_rows_keep_times_and_drop_perms_test() {
+/// `app.session_rows` は時刻と perms をそのまま写す。
+pub fn session_rows_keep_times_and_perms_test() {
   let sessions = [
     engine.Session(
       signer: "ab",
@@ -4063,6 +4063,7 @@ pub fn session_rows_keep_times_and_drop_perms_test() {
       dashboard.SessionRow(
         signer: "ab",
         client: "cd",
+        perms: "sign_event:1",
         created_at: 10,
         last_used_at: 20,
       ),

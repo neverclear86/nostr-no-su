@@ -39,6 +39,7 @@ fn states() -> dashboard.Snapshot {
         client: "ef01",
         age_seconds: 12,
         secret_mismatch: False,
+        perms: "",
       ),
     ]),
     sessions: Ok([]),
@@ -68,7 +69,8 @@ fn states() -> dashboard.Snapshot {
   )
 }
 
-/// 提示なしと不一致の承認待ちを、経過時間の短い順に持つスナップショット。
+/// 提示なしと不一致の承認待ちを、経過時間の短い順に持つスナップショット。提示なしの方
+/// (`tok-1`) は権限を要求し、不一致の方（`tok-2`）は権限を要求しない。
 fn secret_states() -> dashboard.Snapshot {
   dashboard.Snapshot(
     ..states(),
@@ -79,6 +81,7 @@ fn secret_states() -> dashboard.Snapshot {
         client: "ef01",
         age_seconds: 12,
         secret_mismatch: False,
+        perms: "sign_event:1,nip44_encrypt",
       ),
       dashboard.PendingRow(
         token: "tok-2",
@@ -86,6 +89,7 @@ fn secret_states() -> dashboard.Snapshot {
         client: "ef01",
         age_seconds: 48,
         secret_mismatch: True,
+        perms: "",
       ),
     ]),
   )
@@ -194,6 +198,81 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   )
 }
 
+/// 要求された権限は、承認待ちの行と承認ページの両方で secret の行の直後に等幅で出る。
+pub fn pending_perms_are_shown_on_rows_and_approval_page_test() {
+  let assert Ok([offered, ..]) = secret_states().pending
+  let expected =
+    "<dd class=\"break-words\">Not offered</dd><dt class=\"text-base-content/70\">Permissions</dt><dd class=\"font-mono text-xs break-all\">sign_event:1,nip44_encrypt</dd>"
+
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, secret_states()),
+    expected,
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, offered),
+    expected,
+  )
+}
+
+/// セッションの行は、クライアントの直後に権限を出し、続けて作成の時刻が並ぶ。
+pub fn sessions_show_perms_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      sessions: Ok([
+        dashboard.SessionRow(
+          signer: "abcd",
+          client: "ef01",
+          perms: "sign_event:7",
+          created_at: 1_788_253_200,
+          last_used_at: 1_789_276_354,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(
+    body,
+    "<dt class=\"text-base-content/70\">Client</dt><dd class=\"font-mono text-xs break-all\">ef01</dd><dt class=\"text-base-content/70\">Permissions</dt><dd class=\"font-mono text-xs break-all\">sign_event:7</dd><dt class=\"text-base-content/70\">Created</dt>",
+  )
+}
+
+/// 権限が空のときは、承認待ちの行と承認ページ、セッションの行のいずれも「署名と暗号化は
+/// 拒否します」の旨の文が出る（値は等幅にしない）。
+pub fn empty_perms_say_signing_and_encryption_are_refused_test() {
+  let assert Ok([_, not_requested]) = secret_states().pending
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      sessions: Ok([
+        dashboard.SessionRow(
+          signer: "abcd",
+          client: "ef01",
+          perms: "",
+          created_at: 1_788_253_200,
+          last_used_at: 1_789_276_354,
+        ),
+      ]),
+    )
+
+  let assert Ok(#(_, sessions)) =
+    string.split_once(
+      dashboard.render(i18n.English, view.System, snapshot),
+      "Approved sessions",
+    )
+  assert string.contains(
+    sessions,
+    "<dt class=\"text-base-content/70\">Permissions</dt><dd class=\"break-words\">None requested. Signing and encryption are refused.</dd>",
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, not_requested),
+    "<dd class=\"break-words\">None requested. Signing and encryption are refused.</dd>",
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.Japanese, view.System, not_requested),
+    "<dt class=\"text-base-content/70\">権限</dt><dd class=\"break-words\">要求なし。署名と暗号化は拒否します。</dd>",
+  )
+}
+
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を
 /// hidden 欄で送る。
 pub fn only_disabled_plugins_have_a_reenable_button_test() {
@@ -278,6 +357,7 @@ pub fn sessions_show_created_and_last_used_times_test() {
         dashboard.SessionRow(
           signer: "abcd",
           client: "ef01",
+          perms: "",
           created_at: 1_788_253_200,
           last_used_at: 1_789_276_354,
         ),
