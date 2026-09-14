@@ -161,12 +161,15 @@ pub fn open_all(
   entries: List(Entry),
   registered: List(Registered),
 ) -> #(List(Entry), List(#(String, ChangeError))) {
-  use #(entries, rejections), item <- list.fold(registered, #(entries, []))
-  case open(entries, item.url, item.roles) {
-    Ok(next) -> #(next, rejections)
-    Error(AlreadyListed) -> #(entries, rejections)
-    Error(error) -> #(entries, list.append(rejections, [#(item.url, error)]))
+  let #(entries, rejections) = {
+    use #(entries, rejections), item <- list.fold(registered, #(entries, []))
+    case open(entries, item.url, item.roles) {
+      Ok(next) -> #(next, rejections)
+      Error(AlreadyListed) -> #(entries, rejections)
+      Error(error) -> #(entries, [#(item.url, error), ..rejections])
+    }
   }
+  #(entries, list.reverse(rejections))
 }
 
 /// `url` を一覧の末尾に足す。用途ごとに新しい名前を作る。

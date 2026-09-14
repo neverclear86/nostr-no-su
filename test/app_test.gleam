@@ -2395,7 +2395,7 @@ fn assert_never_requests(
 
 // --- 登録されたリレー ---
 
-/// `仕様の relays: []` の Bunker でも、最初の読み込みで届いた `Snapshot.relays`
+/// 仕様の `relays: []` の Bunker でも、最初の読み込みで届いた `Snapshot.relays`
 /// から接続が開く。
 pub fn registered_relays_open_after_the_first_load_test() {
   let reports = process.new_subject()
