@@ -37,7 +37,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 docker compose exec -T postgres psql -At -U nostr -d nostr_no_su -c "SELECT count(*) FROM bunker_accounts"
 ```
 
-取ったダンプの中身は次で確かめる。プラグインを置いていなければ 5 行、`event_logger` を置いていれば 7 行の `TABLE DATA` が出る。
+取ったダンプの中身は次で確かめる。プラグインを置いていなければ 6 行、`event_logger` を置いていれば 8 行の `TABLE DATA` が出る。
 
 ```sh
 docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DATA'

@@ -69,7 +69,7 @@ docker compose exec postgres psql -U nostr -d nostr_no_su \
 docker compose restart nostr-no-su
 ```
 
-稼働中に INSERT した行は、次にバンカーが読み込みに成功するまで反映されない（再起動すれば確実に反映される）。空の DB でもリレー 0 件で起動する。
+稼働中に INSERT した行は、次にバンカーが読み込みに成功するまで反映されない（再起動すれば確実に反映される）。空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
 
 > ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。取り方と戻し方は [バックアップと復旧](docs/operations.md) にある。
 
