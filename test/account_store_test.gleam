@@ -711,7 +711,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
   let assert Ok(client1) = account.from_privkey(crypto.strong_random_bytes(32))
   let client1_hex = account.pubkey_hex(client1)
   connect(client1, "", "c1")
-  let assert [pending1] = bunker.pending(name)
+  let assert Ok([pending1]) = bunker.pending(name)
   let assert Ok(after_connect) = account_store.load(pool, key, generous)
   assert list.map(after_connect.pending, fn(row) { row.token })
     == [pending1.token]
@@ -725,9 +725,9 @@ fn bunker_session_writes(database_url: String) -> Nil {
   // クライアント 2: 承認待ちの再登録（replaced）と拒否。
   let assert Ok(client2) = account.from_privkey(crypto.strong_random_bytes(32))
   connect(client2, "", "c2")
-  let assert [_first] = bunker.pending(name)
+  let assert Ok([_first]) = bunker.pending(name)
   connect(client2, "", "c2-again")
-  let assert [pending2] = bunker.pending(name)
+  let assert Ok([pending2]) = bunker.pending(name)
   let assert Ok(after_reconnect) = account_store.load(pool, key, generous)
   assert list.map(after_reconnect.pending, fn(row) { row.token })
     == [pending2.token]
@@ -742,7 +742,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
   let assert Ok(client3) = account.from_privkey(crypto.strong_random_bytes(32))
   let client3_hex = account.pubkey_hex(client3)
   connect(client3, secret, "c3")
-  let assert [_, _] = bunker.sessions(name)
+  let assert Ok([_, _]) = bunker.sessions(name)
   let assert Ok(after_open) = account_store.load(pool, key, generous)
   let after_open_tuples = list.map(after_open.sessions, session_tuple)
   assert list.length(after_open_tuples) == 2
@@ -756,7 +756,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
       nip46_client.request_body("l3", "logout", "[]"),
     )),
   )
-  let assert [_] = bunker.sessions(name)
+  let assert Ok([_]) = bunker.sessions(name)
   let assert Ok(after_logout) = account_store.load(pool, key, generous)
   assert list.map(after_logout.sessions, session_tuple)
     == [#(signer_hex, client1_hex, "")]

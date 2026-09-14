@@ -200,17 +200,18 @@ fn reconcile_sessions_with_postgres(
       created_at: now - 60,
       last_used_at: now - 60,
     )
-  assert await(fn() { bunker.sessions(name) == [session] }, 10_000)
-  let assert [pending] = bunker.pending(name)
+  assert await(fn() { bunker.sessions(name) == Ok([session]) }, 10_000)
+  let assert Ok([pending]) = bunker.pending(name)
   assert pending.created_at == now - 120
   assert pending.request_id == "c2"
 
   let assert Ok(Nil) =
     account_store.delete_pending(db, generous, token: pending.token)
-  assert bunker.revoke(name, signer, client) == Error(bunker.NotAnswered)
+  assert bunker.revoke(name, signer, client)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 
-  assert await(fn() { bunker.sessions(name) == [] }, 10_000)
-  assert bunker.pending(name) == []
+  assert await(fn() { bunker.sessions(name) == Ok([]) }, 10_000)
+  assert bunker.pending(name) == Ok([])
   let assert Ok(after) = account_store.load(pool, key, generous)
   assert after.sessions == []
   assert after.pending == []

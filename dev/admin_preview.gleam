@@ -1,8 +1,8 @@
 //// 管理 UI を固定の状態で起動する撮影用のサーバー。`admin.handle_request` を本物のまま
 //// 使い、`Context` の関数だけを固定の値に差し替える。待ち受けるのは `PREVIEW_PORT`
-//// （既定は 18461）から続く 3 つのポートで、順に通常の状態、アカウントの一覧を得られない
-//// 状態、すべての一覧が空の状態である。`gleam run -m admin_preview` で起動し、
-//// `dev/screenshots.mjs` で撮る。
+//// （既定は 18461）から続く 3 つのポートで、順に通常の状態、アカウント・承認待ち・
+//// セッションの一覧を得られない状態、すべての一覧が空の状態である。
+//// `gleam run -m admin_preview` で起動し、`dev/screenshots.mjs` で撮る。
 ////
 //// `dev/` は `gleam build` と `gleam test` でコンパイルされるので、`Context` を変えて
 //// ここを直し忘れると CI で落ちる。`gleam export erlang-shipment` の成果物には入らない。
@@ -75,10 +75,12 @@ fn change(label: String) -> Result(Nil, bunker.ChangeFailure) {
 }
 
 /// クライアントの値で、取り消しの結果を選ぶ。
-fn revocation(revoked_client: String) -> Result(Nil, bunker.RevokeFailure) {
+fn revocation(revoked_client: String) -> Result(Nil, bunker.SessionFailure) {
   case revoked_client {
     "not-approved" -> Error(bunker.SessionNotFound("session is not approved"))
-    "no-answer" -> Error(bunker.NotAnswered)
+    "not-applied" -> Error(bunker.SessionNotApplied("not written"))
+    "not-ready" -> Error(bunker.SessionNotReady("accounts are not loaded yet"))
+    "no-answer" -> Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
     _ -> Ok(Nil)
   }
 }
@@ -158,7 +160,7 @@ fn context() -> admin.Context {
     },
     reenable_plugin: reenabling,
     sessions: fn() {
-      [
+      Ok([
         engine.Session(
           signer:,
           client:,
@@ -166,11 +168,13 @@ fn context() -> admin.Context {
           created_at: 1000,
           last_used_at: 1000,
         ),
-      ]
+      ])
     },
     revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
     pending: fn() {
-      [dashboard.PendingRow(token: "tok-1", signer:, client:, age_seconds: 12)]
+      Ok([
+        dashboard.PendingRow(token: "tok-1", signer:, client:, age_seconds: 12),
+      ])
     },
     approve: decide,
     deny: decide,
@@ -179,7 +183,7 @@ fn context() -> admin.Context {
 
 /// 承認・拒否。承認待ちの一覧に無いトークンは管理 UI が呼び出す前に 404 にする
 /// ので、呼ばれたら成功させる。
-fn decide(_token: String) -> Result(Nil, String) {
+fn decide(_token: String) -> Result(Nil, bunker.SessionFailure) {
   Ok(Nil)
 }
 
@@ -193,20 +197,23 @@ fn base_port() -> Int {
 /// 3 つの状態の管理 UI を、先頭のポートから順に起動して待ち続ける。
 pub fn main() -> Nil {
   let port = base_port()
+  let unavailable_reason =
+    "account store unavailable: database is unreachable or rejected the connection"
   let unavailable =
-    admin.Context(..context(), accounts: fn() {
-      Error(
-        "account store unavailable: database is unreachable or rejected the connection",
-      )
-    })
+    admin.Context(
+      ..context(),
+      accounts: fn() { Error(unavailable_reason) },
+      pending: fn() { Error(unavailable_reason) },
+      sessions: fn() { Error(unavailable_reason) },
+    )
   let empty =
     admin.Context(
       ..context(),
       accounts: fn() { Ok([]) },
       relays: fn() { [] },
       plugins: fn() { [] },
-      sessions: fn() { [] },
-      pending: fn() { [] },
+      sessions: fn() { Ok([]) },
+      pending: fn() { Ok([]) },
     )
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)

@@ -529,7 +529,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       relays: fn() { relay_statuses(spec) },
       sessions: fn() { bunker.sessions(bunker_name) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
-      pending: fn() { pending_rows(bunker.pending(bunker_name)) },
+      pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
       approve: bunker.approve(bunker_name, _),
       deny: bunker.deny(bunker_name, _),
     ),

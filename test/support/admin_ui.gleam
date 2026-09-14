@@ -50,15 +50,15 @@ pub fn pages() -> List(String) {
   let empty =
     dashboard.Snapshot(
       accounts: Ok([]),
-      pending: [],
+      pending: Ok([]),
       relays: [],
-      sessions: [],
+      sessions: Ok([]),
       plugins: [],
     )
   let full =
     dashboard.Snapshot(
       accounts: Ok([row]),
-      pending: [pending],
+      pending: Ok([pending]),
       relays: [
         dashboard.RelayRow(
           dashboard.MonitorRelay,
@@ -71,7 +71,7 @@ pub fn pages() -> List(String) {
           relay_connection.Disconnected,
         ),
       ],
-      sessions: [
+      sessions: Ok([
         engine.Session(
           signer: "abcd",
           client: "ef01",
@@ -79,7 +79,7 @@ pub fn pages() -> List(String) {
           created_at: 1000,
           last_used_at: 1000,
         ),
-      ],
+      ]),
       plugins: [
         dashboard.PluginRow("running", Some(plugin_runner.Running)),
         dashboard.PluginRow(
@@ -102,7 +102,12 @@ pub fn pages() -> List(String) {
       dashboard.render(
         language,
         view.System,
-        dashboard.Snapshot(..empty, accounts: Error("reason")),
+        dashboard.Snapshot(
+          ..empty,
+          accounts: Error("reason"),
+          pending: Error("reason"),
+          sessions: Error("reason"),
+        ),
       ),
       dashboard.approval_page(language, view.System, pending),
       account_pages.new_account_page(language, view.System, "", Some(reason)),
@@ -147,9 +152,19 @@ pub fn pages() -> List(String) {
         i18n.NotFound,
         reason,
         _,
+        [],
       ),
     ),
     [
+      dashboard.notice_page(
+        language,
+        view.System,
+        view.SwitchReturningTo("/"),
+        i18n.ChangeNotConfirmed,
+        reason,
+        view.Warning,
+        [view.hint("hint")],
+      ),
       dashboard.notice_page(
         language,
         view.System,
@@ -157,6 +172,7 @@ pub fn pages() -> List(String) {
         i18n.BadRequest,
         i18n.Translated(i18n.OriginMismatch),
         view.Failure,
+        [],
       ),
     ],
     list.map(account_actions.all, account_pages.account_action_page(

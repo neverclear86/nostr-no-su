@@ -11,7 +11,6 @@ import gleam/string
 import nostr_no_su
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
-import nostr_no_su/admin/i18n
 import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
@@ -580,7 +579,7 @@ pub fn restarted_bunker_ignores_requests_from_before_it_started_test() {
     await_connection(reports)
   deliver(request)
   let assert Error(Nil) = process.receive(reports, 500)
-  assert bunker.sessions(name) == []
+  assert bunker.sessions(name) == Ok([])
   stop_tree(tree)
 }
 
@@ -633,10 +632,18 @@ pub fn session_survives_a_reconnect_test() {
   stop_tree(tree)
 }
 
-/// 取り消しの問い合わせにバンカーが応答しなければ `NotAnswered` になる。
-pub fn revoke_without_a_bunker_is_not_answered_test() {
-  let assert Error(bunker.NotAnswered) =
-    bunker.revoke(process.new_name("test_bunker"), "signer", "client")
+/// バンカーが動いていなければ、承認・拒否・取り消しは `SessionMaybeApplied`
+/// （応答が無ければアクターが処理しうる）、一覧は理由を返す。
+pub fn session_calls_without_a_bunker_are_not_answered_test() {
+  let name = process.new_name("test_bunker")
+  assert bunker.revoke(name, "signer", "client")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.approve(name, "token")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.deny(name, "token")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.sessions(name) == Error("bunker is not responding")
+  assert bunker.pending(name) == Error("bunker is not responding")
 }
 
 /// 管理 UI が使う経路。`connect` 済みのクライアントはセッション一覧に現れ、
@@ -648,14 +655,14 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let tree = start_bunker_tree(reports, name)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  assert bunker.sessions(name) == []
+  assert bunker.sessions(name) == Ok([])
 
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
   assert session.signer == account.pubkey_hex(signer)
   assert session.client == account.pubkey_hex(client)
   assert session.perms == ""
@@ -666,7 +673,7 @@ pub fn sessions_can_be_listed_and_revoked_test() {
       account.pubkey_hex(client),
     )
     == Ok(Nil)
-  assert bunker.sessions(name) == []
+  assert bunker.sessions(name) == Ok([])
   let assert Error(bunker.SessionNotFound(_)) =
     bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
   deliver(request("p1", "ping", "[]"))
@@ -688,19 +695,19 @@ pub fn pending_connections_can_be_approved_test() {
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
 
   let client = account_for(client_key)
-  let assert [entry] = bunker.pending(name)
+  let assert Ok([entry]) = bunker.pending(name)
   assert entry.client == account.pubkey_hex(client)
   assert bunker.approve(name, "other-token")
-    == Error(engine.approval_request_not_found)
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
 
   assert bunker.approve(name, entry.token) == Ok(Nil)
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
   assert string.contains(response_body(ack), "\"id\":\"c1\"")
   assert string.contains(response_body(ack), "\"result\":\"ack\"")
-  assert bunker.pending(name) == []
+  assert bunker.pending(name) == Ok([])
   let signer = account_for(signer_key)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
   assert session.signer == account.pubkey_hex(signer)
   assert session.client == account.pubkey_hex(client)
   assert session.perms == ""
@@ -721,27 +728,29 @@ pub fn failed_decisions_keep_the_pending_request_and_publish_nothing_test() {
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
-  let assert [entry] = bunker.pending(name)
+  let assert Ok([entry]) = bunker.pending(name)
   let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
 
-  assert bunker.approve(name, entry.token) == Error(store_failure())
+  assert bunker.approve(name, entry.token)
+    == Error(bunker.SessionNotApplied(store_failure()))
   let assert Ok(Wrote(engine.ApprovePending(token: approved_token, ..))) =
     process.receive(calls, 1000)
   assert approved_token == entry.token
 
-  assert bunker.deny(name, entry.token) == Error(store_failure())
+  assert bunker.deny(name, entry.token)
+    == Error(bunker.SessionNotApplied(store_failure()))
   let assert Ok(Wrote(engine.DeletePending(token: denied_token))) =
     process.receive(calls, 1000)
   assert denied_token == entry.token
 
-  assert bunker.pending(name) == [entry]
-  assert bunker.sessions(name) == []
+  assert bunker.pending(name) == Ok([entry])
+  assert bunker.sessions(name) == Ok([])
   assert process.receive(reports, 300) == Error(Nil)
 
   assert bunker.approve(name, "unknown-token")
-    == Error(engine.approval_request_not_found)
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
   assert bunker.deny(name, "unknown-token")
-    == Error(engine.approval_request_not_found)
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
   assert process.receive(calls, 100) == Error(Nil)
   stop_tree(tree)
 }
@@ -758,15 +767,15 @@ pub fn a_failed_revocation_keeps_the_session_test() {
     await_connection(reports)
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
   assert bunker.revoke(name, session.signer, session.client)
-    == Error(bunker.NotAnswered)
+    == Error(bunker.SessionNotApplied(store_failure()))
   let assert Ok(Wrote(engine.DeleteSession(signer:, client:))) =
     process.receive(calls, 1000)
   assert #(signer, client) == #(session.signer, session.client)
-  assert bunker.sessions(name) == [session]
+  assert bunker.sessions(name) == Ok([session])
 
   let assert Error(bunker.SessionNotFound(_reason)) =
     bunker.revoke(name, session.signer, other_client_key)
@@ -793,7 +802,7 @@ pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
   assert string.contains(body, "\"id\":\"c1\"")
   assert string.contains(body, engine.connection_not_saved)
   assert !string.contains(body, store_failure())
-  assert bunker.sessions(name) == []
+  assert bunker.sessions(name) == Ok([])
 
   deliver(connect_request("c2", ""))
   let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
@@ -802,7 +811,7 @@ pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
   assert string.contains(body, engine.connection_not_saved)
   assert !string.contains(body, "auth_url")
   assert !string.contains(body, store_failure())
-  assert bunker.pending(name) == []
+  assert bunker.pending(name) == Ok([])
   assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
 }
@@ -828,7 +837,7 @@ pub fn a_failed_logout_acknowledges_and_keeps_the_session_test() {
     await_connection(reports)
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
 
   deliver(request("l1", "logout", "[]"))
   let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
@@ -836,7 +845,7 @@ pub fn a_failed_logout_acknowledges_and_keeps_the_session_test() {
   assert string.contains(body, "\"id\":\"l1\"")
   assert string.contains(body, "\"result\":\"ack\"")
   assert !string.contains(body, store_failure())
-  assert bunker.sessions(name) == [session]
+  assert bunker.sessions(name) == Ok([session])
   stop_tree(tree)
 }
 
@@ -867,7 +876,7 @@ pub fn a_redelivered_failed_connect_is_not_answered_again_test() {
 
   deliver(connect)
   assert process.receive(reports, 300) == Error(Nil)
-  assert bunker.pending(name) == []
+  assert bunker.pending(name) == Ok([])
   assert next_write() == 1
   stop_tree(tree)
 }
@@ -917,8 +926,10 @@ pub fn unconfirmed_nip46_writes_reload_once_and_not_while_loading_test() {
   assert process.receive(loads, 500) == Error(Nil)
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
-  assert bunker.sessions(name) == []
-  assert bunker.pending(name) == []
+  assert bunker.sessions(name)
+    == Error("account store unavailable: " <> store_failure())
+  assert bunker.pending(name)
+    == Error("account store unavailable: " <> store_failure())
   stop_tree(tree)
 }
 
@@ -970,15 +981,15 @@ pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
-  let assert [entry] = bunker.pending(name)
+  let assert Ok([entry]) = bunker.pending(name)
 
   assert bunker.approve(name, entry.token)
-    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
   let assert Ok(Nil) = process.receive(loads, 1000)
   assert process.receive(loads, 300) == Error(Nil)
   assert process.receive(reports, 300) == Error(Nil)
-  assert bunker.pending(name) == [entry]
-  assert bunker.sessions(name) == []
+  assert bunker.pending(name) == Ok([entry])
+  assert bunker.sessions(name) == Ok([])
 
   assert await_loaded(name, 2000)
   assert bunker.approve(name, entry.token) == Ok(Nil)
@@ -1014,14 +1025,14 @@ pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
-  let assert [entry] = bunker.pending(name)
+  let assert Ok([entry]) = bunker.pending(name)
 
   assert bunker.approve(name, entry.token)
-    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 
   assert await_loaded(name, 2000)
-  assert bunker.pending(name) == []
-  let assert [session] = bunker.sessions(name)
+  assert bunker.pending(name) == Ok([])
+  let assert Ok([session]) = bunker.sessions(name)
   assert session.client == account.pubkey_hex(account_for(client_key))
   assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
@@ -1059,24 +1070,24 @@ pub fn unconfirmed_denials_and_revocations_are_reported_test() {
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
   assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
-  let assert [pending] = bunker.pending(name)
+  let assert Ok([pending]) = bunker.pending(name)
 
   assert bunker.deny(name, pending.token)
-    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
   let assert Ok(Nil) = process.receive(loads, 1000)
-  assert bunker.pending(name) == [pending]
-  assert bunker.sessions(name) == []
+  assert bunker.pending(name) == Ok([pending])
+  assert bunker.sessions(name) == Ok([])
 
   assert await_loaded(name, 2000)
   deliver(connect_request_from(other_client_key, "c2", secret))
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
 
   assert bunker.revoke(name, session.signer, session.client)
-    == Error(bunker.NotAnswered)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
   let assert Ok(Nil) = process.receive(loads, 1000)
-  assert bunker.pending(name) == [pending]
-  assert bunker.sessions(name) == [session]
+  assert bunker.pending(name) == Ok([pending])
+  assert bunker.sessions(name) == Ok([session])
   stop_tree(tree)
 }
 
@@ -1110,11 +1121,11 @@ pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
     await_connection(reports)
   deliver(connect_request("c1", ""))
   let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
-  let assert [pending] = bunker.pending(name)
+  let assert Ok([pending]) = bunker.pending(name)
   let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
   deliver(connect_request_from(other_client_key, "c2", secret))
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
   // 読み直しの失敗が続く状態にする。
@@ -1123,14 +1134,16 @@ pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
   let assert Ok(Inserted(..)) = process.receive(calls, 1000)
 
   assert bunker.approve(name, pending.token)
-    == Error("accounts are not loaded yet")
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
   assert bunker.deny(name, pending.token)
-    == Error("accounts are not loaded yet")
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
   assert bunker.revoke(name, session.signer, session.client)
-    == Error(bunker.NotAnswered)
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
   assert process.receive(calls, 100) == Error(Nil)
-  assert bunker.pending(name) == [pending]
-  assert bunker.sessions(name) == [session]
+  // メモリを変えていないことは、直前の `calls` が空であることで確かめている
+  // （読み直しの失敗が続く間、一覧そのものは理由を返す）。
+  let assert Error(_) = bunker.pending(name)
+  let assert Error(_) = bunker.sessions(name)
   stop_tree(tree)
 }
 
@@ -2079,11 +2092,11 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
     await_connection(reports)
   deliver(connect_request("c1", secret))
   let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
-  let assert [session] = bunker.sessions(name)
+  let assert Ok([session]) = bunker.sessions(name)
 
   deliver(connect_request_from(other_client_key, "c2", ""))
   let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
-  let assert [entry] = bunker.pending(name)
+  let assert Ok([entry]) = bunker.pending(name)
 
   // DB の作成時刻だけをずらし、メモリではなく DB から読み込んだことを見分ける。
   let shifted = engine.Pending(..entry, created_at: entry.created_at - 300)
@@ -2096,8 +2109,8 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
   process.kill(killed)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
-  assert bunker.sessions(name) == [session]
-  assert bunker.pending(name) == [shifted]
+  assert bunker.sessions(name) == Ok([session])
+  assert bunker.pending(name) == Ok([shifted])
 
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
   deliver(request("s1", "sign_event", "[\"" <> draft <> "\"]"))
@@ -2167,9 +2180,9 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
 
   deliver_and_expect(deliver, seen, event_labels("while-failing", 3), 2000)
   let asked_at = monotonic_ms()
-  // `bunker.sessions` はタイムアウトしても `[]` を返すので、応答したことは
+  // 読み込めていない間 `bunker.sessions` は理由を返すので、応答したことは
   // `named.call` の `Some` で確かめる。
-  assert named.call(bunker_name, 5000, bunker.GetSessions) == Some([])
+  let assert Some(_) = named.call(bunker_name, 5000, bunker.GetSessions)
   assert monotonic_ms() - asked_at < 5000
   assert process.named(bunker_name) == Ok(bunker_before)
   assert process.is_alive(tree)
@@ -2804,7 +2817,7 @@ pub fn a_removed_account_stops_answering_test() {
   deliver(request("p1", "ping", "[]"))
   deliver(connect_request("c2", secret))
   assert process.receive(reports, 300) == Error(Nil)
-  assert bunker.sessions(name) == []
+  assert bunker.sessions(name) == Ok([])
   stop_tree(tree)
 }
 
