@@ -50,7 +50,7 @@ pub fn pages() -> List(String) {
     dashboard.Snapshot(
       accounts: Ok([]),
       pending: Ok([]),
-      relays: [],
+      relays: Ok([]),
       sessions: Ok([]),
       plugins: [],
     )
@@ -58,18 +58,15 @@ pub fn pages() -> List(String) {
     dashboard.Snapshot(
       accounts: Ok([row]),
       pending: Ok([pending]),
-      relays: [
+      relays: Ok([
         dashboard.RelayRow(
-          dashboard.MonitorRelay,
+          1,
           "wss://a",
-          relay_connection.Connected,
+          Some(relay_connection.Connected),
+          Some(relay_connection.Disconnected),
         ),
-        dashboard.RelayRow(
-          dashboard.BunkerRelay,
-          "wss://b",
-          relay_connection.Disconnected,
-        ),
-      ],
+        dashboard.RelayRow(2, "wss://b", Some(relay_connection.Connected), None),
+      ]),
       sessions: Ok([
         dashboard.SessionRow(
           signer: "abcd",
@@ -104,7 +101,23 @@ pub fn pages() -> List(String) {
           ..empty,
           accounts: Error("reason"),
           pending: Error("reason"),
+          relays: Error("reason"),
           sessions: Error("reason"),
+        ),
+      ),
+      dashboard.render(
+        language,
+        view.System,
+        dashboard.Snapshot(
+          ..empty,
+          relays: Ok([
+            dashboard.RelayRow(
+              1,
+              "wss://a",
+              Some(relay_connection.Connected),
+              None,
+            ),
+          ]),
         ),
       ),
       dashboard.approval_page(language, view.System, pending),
