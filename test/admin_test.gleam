@@ -167,10 +167,9 @@ fn test_context(
     },
     sessions: fn() {
       Ok([
-        engine.Session(
+        dashboard.SessionRow(
           signer: signer,
           client: client,
-          perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),

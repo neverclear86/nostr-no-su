@@ -20,7 +20,6 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
@@ -62,6 +61,11 @@ pub type PendingRow {
   PendingRow(token: String, signer: String, client: String, age_seconds: Int)
 }
 
+/// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。
+pub type SessionRow {
+  SessionRow(signer: String, client: String, created_at: Int, last_used_at: Int)
+}
+
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
@@ -72,7 +76,7 @@ pub type Snapshot {
     relays: List(RelayRow),
     /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし）は表示する
     /// 理由。
-    sessions: Result(List(Session), String),
+    sessions: Result(List(SessionRow), String),
     plugins: List(PluginRow),
   )
 }
@@ -418,7 +422,7 @@ fn relays_section(language: Language, relays: List(RelayRow)) -> Element(msg) {
 /// 代わりにその理由を出す。
 fn sessions_section(
   language: Language,
-  sessions: Result(List(Session), String),
+  sessions: Result(List(SessionRow), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
@@ -543,7 +547,7 @@ fn decision_forms(language: Language, token: String) -> List(Element(msg)) {
 
 /// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。確認のページを
 /// 経ずに接続中のクライアントに影響するが、クライアントは接続し直せるので注意の重さにする。
-fn revoke_form(language: Language, session: Session) -> Element(msg) {
+fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
   view.post_form(
     view.segments_path(revoke_segments),
     [

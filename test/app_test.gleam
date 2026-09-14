@@ -3775,3 +3775,25 @@ pub fn monitor_connections_do_not_answer_authentication_test() {
   assert relay_url == test_relay_url
   stop_tree(tree)
 }
+
+/// `app.session_rows` は時刻をそのまま写し、perms は行に含めない。
+pub fn session_rows_keep_times_and_drop_perms_test() {
+  let sessions = [
+    engine.Session(
+      signer: "ab",
+      client: "cd",
+      perms: "sign_event:1",
+      created_at: 10,
+      last_used_at: 20,
+    ),
+  ]
+  assert app.session_rows(sessions)
+    == [
+      dashboard.SessionRow(
+        signer: "ab",
+        client: "cd",
+        created_at: 10,
+        last_used_at: 20,
+      ),
+    ]
+}
