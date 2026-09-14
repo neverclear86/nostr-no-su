@@ -188,7 +188,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
   }
 }
 
-/// 強調した文とそれに続く文の間に置く文字。英語は空白で区切り、日本語は区切らない。
+/// 文や句を続けて置くときの間の文字。英語は空白で区切り、日本語は区切らない。
 pub fn sentence_gap(language: Language) -> String {
   case language {
     English -> " "
@@ -270,7 +270,6 @@ pub type Message {
   ReenablePlugin
   PluginUnavailable
   Dropped(count: Int)
-  DroppedAfterReason(count: Int)
   NoPlugins
   // 承認ページと通知ページ
   ApproveConnection
@@ -429,7 +428,6 @@ fn english(message: Message) -> String {
     ReenablePlugin -> "Re-enable"
     PluginUnavailable -> "unavailable"
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
-    DroppedAfterReason(count:) -> " (dropped " <> int.to_string(count) <> ")"
     NoPlugins -> "No plugins enabled."
     ApproveConnection -> "Approve connection"
     WrongSecretOffered -> "The connection secret does not match."
@@ -596,7 +594,6 @@ fn japanese(message: Message) -> String {
     ReenablePlugin -> "再有効化"
     PluginUnavailable -> "応答なし"
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
-    DroppedAfterReason(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。"
     ApproveConnection -> "接続を承認"
     WrongSecretOffered -> "接続 secret が一致しません。"
