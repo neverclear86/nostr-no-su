@@ -151,16 +151,18 @@ pub fn parse_enabled(
 fn dedup_capacity() -> Result(Int, String) {
   case optional("DEDUP_CAPACITY") {
     None -> Ok(default_dedup_capacity)
-    Some(raw) ->
-      case int.parse(string.trim(raw)) {
+    Some(raw) -> {
+      let trimmed = string.trim(raw)
+      case int.parse(trimmed) {
         Ok(capacity) if capacity >= 1 -> Ok(capacity)
         _ ->
           Error(
             "DEDUP_CAPACITY must be an integer of at least 1, got \""
-            <> string.trim(raw)
+            <> trimmed
             <> "\"",
           )
       }
+    }
   }
 }
 
