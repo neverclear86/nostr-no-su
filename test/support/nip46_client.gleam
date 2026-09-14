@@ -6,6 +6,7 @@
 //// テスト（`app_bunker_test` など）が同じ手順を共有するために置く。
 
 import gleam/int
+import gleam/list
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/nip44
@@ -38,14 +39,20 @@ pub fn request_body(id: String, method: String, params_json: String) -> String {
   <> "}"
 }
 
+/// params を並びのまま載せた `connect` リクエストの本文。要素数が本題になる
+/// テストが使う。値に `"` や `\` は含めない前提である。
+pub fn connect_body_of(params: List(String), id: String) -> String {
+  let params_json =
+    params
+    |> list.map(fn(param) { "\"" <> param <> "\"" })
+    |> string.join(",")
+  request_body(id, "connect", "[" <> params_json <> "]")
+}
+
 /// `connect` リクエストの本文。`secret_arg` が空文字列なら、シークレット無しで
 /// 接続するクライアントと同じ形になる（nostr-tools はそのように送る）。
 pub fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
-  request_body(
-    id,
-    "connect",
-    "[\"" <> account.pubkey_hex(signer) <> "\",\"" <> secret_arg <> "\"]",
-  )
+  connect_body_of([account.pubkey_hex(signer), secret_arg], id)
 }
 
 /// `perms` を 3 要素目に載せた `connect` リクエストの本文。`secret_arg` の扱いは
@@ -56,17 +63,7 @@ pub fn connect_body_with_perms(
   perms: String,
   id: String,
 ) -> String {
-  request_body(
-    id,
-    "connect",
-    "[\""
-      <> account.pubkey_hex(signer)
-      <> "\",\""
-      <> secret_arg
-      <> "\",\""
-      <> perms
-      <> "\"]",
-  )
+  connect_body_of([account.pubkey_hex(signer), secret_arg, perms], id)
 }
 
 /// 指定した本文を持つリクエストイベント。署名者宛に暗号化し、署名者への p タグ
