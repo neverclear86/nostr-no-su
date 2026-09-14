@@ -80,7 +80,7 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 - **未処理のイベントが 1000 件を超えると、500 件以下に減るまでイベントを捨てる。** 減った時点で捨てた件数をログへ報告し、配信を再開する。**捨てるのは超過分だけではなく、そのとき積まれていたバックログのうち新しい側の約 500 件を除く全部である。** 上限をわずかに超えただけなら約半分で済むが、キュー長を確かめるのはイベントを 1 件取り出すときだけなので、1 件の実行（最大 30 秒）の間に届いたイベントの分だけ、気付いた時点のバックログは上限を大きく超えうる。一度に大量のイベントが届くバースト（再開点の無いリレーへの最初の購読で、リレーが保存済みイベントをまとめて返す場合など）では、上限を超えるたびにこれが起きる。**したがって配信は best-effort であり、遅いプラグインは取りこぼす。** 取りこぼしたくない処理は、イベント処理関数を短く保って自前のプロセスへ渡すこと。
 - **ランナーの再起動中に届いたイベントも渡らない。** ディスパッチャーはその件数を数え、ランナーに再び届いた時点でログへ報告する（第 4.1 節）。
 - 同じイベント（同じ `id`）が複数のリレーから届いても、**通常は**イベント処理関数は 1 回しか呼ばれない。ただし重複排除は有界なウィンドウ（直近の id を一定件数だけ記憶する）で行うため、容量を超えて古い id が押し出された後に同じイベントが再配信されると 2 回目が呼ばれる。ディスパッチャーが再起動したときもウィンドウは空になり、あわせて監視のリレー接続も張り直されるため、リレーが保存済みイベントを再送すれば同じイベントがもう一度届く。張り直した購読は DB に保存した再開点から始まるので、再送されるのは再開点以降のイベントである。本体の停止（正常な停止を含む）や異常終了のときも、最後の保存からの数秒ぶんのイベントがもう一度届きうる。
-- したがって**イベント処理関数は冪等に書くこと。** 同じイベントを 2 回処理しても結果が変わらないようにする（保存するなら `id` を一意キーにする、通知するなら送信済みの `id` を記録する、など）。この仕組みが保証するのは at-least-once であって exactly-once ではない。
+- したがって**イベント処理関数は冪等に書くこと。** 同じイベントを 2 回処理しても結果が変わらないようにする（保存するなら `id` を一意キーにする、通知するなら送信済みの `id` を記録する、など）。重複排除は重複を防ぎきらず（exactly-once ではない）、上のとおり取りこぼしもある（best-effort）。
 
 > Gleam で書いたプラグインの `panic` は、理由そのものに `file` / `line` / `message` が入るため冗長になり、切り詰められて読みにくくなる。外部プラグインは `erlang:error/1` を使うか、失敗を素直に返す形を選ぶとログが読みやすい（下の表の `error:badarg` は Erlang プラグインの形）。
 
@@ -106,10 +106,10 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 イベント処理関数はイベントごとに別のプロセスで動くため、呼び出しをまたいで状態を持つには自分でプロセスを起こす必要がある（第 4 章）。任意エクスポート `plugin_children/0` を持つプラグインは、そのプロセスの子仕様を本体に申告できる。本体は起動時に 1 度だけこの関数を呼び（第 2 章の期限が掛かる）、返ってきた子仕様をスーパービジョンツリーに載せる。
 
 ```erlang
-plugin_children() -> [child_spec()].
+plugin_children() -> [child_spec()] | {error, Reason}.
 ```
 
-**この関数は任意エクスポートであり、API バージョンは上げない**（第 7 章）。持たないプラグインは従来どおり動く。空のリストを返してもよい。
+**この関数は任意エクスポートであり、API バージョンは上げない**（第 7 章）。持たないプラグインは従来どおり動く。空のリストを返してもよい。`{error, Reason}` は読み込みを断る申告である（第 6.4 節）。
 
 ### 5.1 子仕様の形
 
@@ -164,7 +164,7 @@ plugin_children() -> [child_spec()].
 
 **外部資源に依存する子は、落ちずに数えて捨てる形を勧める。** 諦められた子は本体の再起動まで戻らないため、DB や HTTP に到達できないあいだ落ち続ける子は、歯止めを使い切って恒久的に失われる。同梱の `event_logger` が DB 到達不能時に行っているのと同じく、到達できない件数を数えてプロセスは生かしておくほうがよい。
 
-子の起動に必要な設定（接続文字列など）は、`plugin_children/1` の引数として受け取る（第 6 章）。設定が足りないときは子仕様を組み立てず、`{error, Reason}` を返してそのプラグインを読み込ませないこと。
+子の起動に必要な設定（接続文字列など）は、`plugin_children/1` の引数として受け取る（第 6 章）。設定が足りないときは子仕様を組み立てず、`{error, Reason}` を返してそのプラグインを読み込ませないこと。`{error, Reason}` は `plugin_children/0` も返せる（第 6.4 節）。
 
 ### 5.5 Erlang の例
 
@@ -255,11 +255,11 @@ handle_event(Event, Config) -> term().
 
 `plugin_children/0` と `handle_event/1` しか持たないプラグインは**従来どおり動く**。設定を必要としないプラグインは何も変えなくてよい。
 
-**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証は `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
+**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証はモジュールの読み込み → 必須エクスポート → `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
 
 ### 6.4 設定が足りないことの申告
 
-`plugin_children/1` は、子仕様のリストの代わりに `{error, Reason}` を返せる。これは「**設定が足りない・不正なのでこのプラグインを読み込まないでほしい**」という申告である。`Reason` は binary で、環境変数名ではなく**キー名**を書けばよい（接頭辞は本体が添える）。
+`plugin_children/1` と `plugin_children/0` は、子仕様のリストの代わりに `{error, Reason}` を返せる。これは「**設定が足りない・不正なのでこのプラグインを読み込まないでほしい**」という申告である。`Reason` は binary で、環境変数名ではなく**キー名**を書けばよい（接頭辞は本体が添える）。
 
 ```erlang
 plugin_children(#{<<"path">> := _Path}) -> [];
@@ -268,10 +268,10 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 - **判別子は「1 番目の要素が atom の `error` であること」だけ**で、要素数は見ない。`{ok, 1}` のような他のタプルは子仕様のリストとして検証され、その形で弾かれる。
 - **子プロセスを持たないプラグインも、設定の検査だけのためにこの関数を使える。** 設定が揃っていれば `[]` を返せばよい。上の例がその形である。
-- 本体は次の 1 行をログに出し、**そのプラグインだけを無効にする。起動は止まらない**（走査の集計行では `skipped` に数えられる）。
+- 本体は次の 1 行をログに出し、**そのプラグインだけを無効にする。起動は止まらない**（走査の集計行では `skipped` に数えられる）。行の関数名は本体が呼んだアリティになり、`plugin_children/0` が返した場合も末尾に環境変数の接頭辞が付く。
 
   ```
-  [plugin_loader] file_logger: plugin_children/1 rejected the configuration (path is required); 設定は PLUGIN_FILE_LOGGER_* で渡す
+  [plugin_loader] file_logger: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*
   ```
 
 - **この行は子を持たないプラグインでも出る。** 関数名は「子仕様」と言っているが、設定は子仕様を組み立てるために要るものなので、設定の検査結果もこの関数から報告される。
@@ -339,9 +339,9 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ### 8.3 読み込み順
 
-プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら読み込まない）は外部プラグインより先に読み込まれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
+プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら置かない）は `PLUGIN_DIR` から読み込むのではなく本体に組み込まれており、プラグインの並びの先頭に置かれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
 
-`plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。
+`plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。内蔵プラグインを無効にしても名前 `console_logger` は予約されたままで、外部プラグインは使えない。
 
 ### 8.4 コードパスと影（モジュール名前空間の衝突）
 
@@ -374,6 +374,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<name>: N module(s) already provided by the host or another plugin are ignored (gleam_stdlib 1.0.3, ...)` | 同梱した依存が影に入った（読み込みは続行する） |
 | `<mod>: duplicate plugin name "<name>"; keeping the first` | `plugin_name/0` の値が重複した |
 | `loaded 2 plugin(s) from /plugins: file_logger, my_plugin (3 skipped)` | 集計。`skipped` は候補だったが読み込めなかったものの件数 |
+| `loaded no plugins from /plugins (3 skipped)` | 集計。1 件も読み込めなかったとき。`skipped` が 0 なら括弧ごと省く |
 
 モジュール自体の検証で失敗した場合の理由は第 9 章の表を参照すること。
 
@@ -415,12 +416,19 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_children/0: child #0: must be a child specification map, got Array` | 子仕様が map でない。素の `{Module, Function, Args}` の短縮形はここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
 | `<mod>: plugin_children/0: child #0: missing id` | `id` が無い。番号は 0 起点のリストの位置 |
 | `<mod>: plugin_children/0: child "store": missing start` | `start` が無い。`id` が読めた子はその値で名指しされる |
+| `<mod>: plugin_children/0: child #0: id must be an atom or a string, got Int` | `id` が atom でも binary でもない |
+| `<mod>: plugin_children/0: child "store": start must be a {Module, Function, Args} tuple, got List` | `start` が 3 要素のタプル（atom、atom、リスト）でない |
 | `<mod>: plugin_children/0: child "store": unsupported shutdown (brutal_kill); use a number of milliseconds or infinity` | 表現できない `shutdown` |
+| `<mod>: plugin_children/0: child "store": unsupported restart (always); use permanent, transient or temporary` | 表現できない `restart` |
+| `<mod>: plugin_children/0: child "store": unsupported type (dynamic); use worker or supervisor` | 表現できない `type` |
+| `<mod>: plugin_children/0: child "store": supervisor children must use shutdown => infinity` | `type => supervisor` の子に有限の `shutdown` を書いた |
 | `<mod>: plugin_children/1 crashed (error:badarg)` | 設定を受け取る形の問い合わせが例外を投げた。理由の中のアリティは本体が呼んだ側のもの |
-| `<mod>: plugin_children/1 rejected the configuration (path is required); 設定は PLUGIN_FILE_LOGGER_* で渡す` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる |
+| `<mod>: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる。`plugin_children/0` が返した場合は `plugin_children/0 rejected the configuration (…); configure it with PLUGIN_<NAME>_*` になる |
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
 
-検証は `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順（上の表の順）で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
+`got` の後は `dynamic.classify` の値（`test/plugin_children_test.gleam:158` の `got Array` と同じ形）、括弧の中は `describe_term`（`nostr_no_su_ffi.erl:298-299`、`~0p`）の値で、表の値は例示である。
+
+検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
 
 ## 10. Erlang での最小実装例
 

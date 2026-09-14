@@ -51,7 +51,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 設定が無い、あるいは URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
 
 ```
-[plugin_loader] event_logger: plugin_children/1 rejected the configuration (PLUGIN_EVENT_LOGGER_DATABASE_URL is required); 設定は PLUGIN_EVENT_LOGGER_* で渡す
+[plugin_loader] event_logger: plugin_children/1 rejected the configuration (PLUGIN_EVENT_LOGGER_DATABASE_URL is required); configure it with PLUGIN_EVENT_LOGGER_*
 ```
 
 ## 保存が追いつかないとき

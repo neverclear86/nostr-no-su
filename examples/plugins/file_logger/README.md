@@ -47,7 +47,7 @@ plugins/file_logger/ebin/file_logger.beam
 設定が無いとこのプラグインだけが無効になり、理由が 1 行出る。本体の起動と他のプラグインには影響しない。
 
 ```
-[plugin_loader] file_logger: plugin_children/1 rejected the configuration (path is required); 設定は PLUGIN_FILE_LOGGER_* で渡す
+[plugin_loader] file_logger: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*
 ```
 
 エクスポートしているのは `handle_event/2` だけで、`handle_event/1` は持たない。設定が必須のプラグインは、設定を受け取らない `handle_event/1` を正しく書けないためである（既定値に落とすか、落ちるだけの死んだ節を書くしかない）。その代わり、**このプラグインは `handle_event/2` に対応した本体でしか読み込めない。**
