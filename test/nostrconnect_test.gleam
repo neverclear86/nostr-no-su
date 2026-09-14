@@ -117,7 +117,8 @@ pub fn parse_rejects_missing_relay_test() {
     == Error(NoRelay)
 }
 
-/// `https://a`、空の値、`wss://a b` が `InvalidRelayUrl`。
+/// `https://a`、空の値、`wss://a b`、大文字スキームの `WSS://a.example` が
+/// `InvalidRelayUrl`。
 pub fn parse_rejects_non_websocket_relay_test() {
   assert nostrconnect.parse(
       "nostrconnect://" <> client <> "?relay=https://a.example&secret=s",
@@ -129,6 +130,10 @@ pub fn parse_rejects_non_websocket_relay_test() {
       "nostrconnect://" <> client <> "?relay=wss%3A%2F%2Fa%20b&secret=s",
     )
     == Error(InvalidRelayUrl("wss://a b"))
+  assert nostrconnect.parse(
+      "nostrconnect://" <> client <> "?relay=WSS://a.example&secret=s",
+    )
+    == Error(InvalidRelayUrl("WSS://a.example"))
 }
 
 /// `secret` 無しと `secret=` が `NoSecret`。

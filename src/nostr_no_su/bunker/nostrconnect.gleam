@@ -117,13 +117,18 @@ fn relay_urls(
   }
 }
 
-/// 1 件の relay URL がスキーム `ws` / `wss` でホストが空でないかを確かめる。
+/// 1 件の relay URL が `ws://` / `wss://` で始まり、ホストが空でないかを確かめる。
+/// `relay_client.to_request` と同じ生の文字列でスキームを見るのは、`uri.parse` が
+/// RFC 3986 のとおりスキームを小文字にするため、大文字混じりの URL（例:
+/// `WSS://a.example`）を通すと `relay_client.to_request` が拒む URL を通してしまう
+/// ことによる。ホストの検査だけは `to_request` が最後に呼ぶ `request.to` と同じ
+/// `uri.parse` に任せる。
 fn check_relay_url(url: String) -> Result(String, ParseError) {
-  case uri.parse(url) {
-    Ok(uri.Uri(scheme: Some(scheme), host: Some(host), ..))
-      if { scheme == "ws" || scheme == "wss" } && host != ""
-    -> Ok(url)
-    _ -> Error(InvalidRelayUrl(url))
+  let websocket =
+    string.starts_with(url, "ws://") || string.starts_with(url, "wss://")
+  case websocket, uri.parse(url) {
+    True, Ok(uri.Uri(host: Some(host), ..)) if host != "" -> Ok(url)
+    _, _ -> Error(InvalidRelayUrl(url))
   }
 }
 

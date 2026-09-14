@@ -639,6 +639,7 @@ nostr-no-su/
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
+│       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
