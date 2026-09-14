@@ -187,6 +187,9 @@ function env(issue, idx) {
 const common = (e) => `- 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
 - docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
+/** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
+const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
+- issue と PR のコメントは \`--body-file <ファイル>\` で投稿する。\`--body @file\` はファイル名がそのまま本文になる。既存のコメントは編集しない`
 const P = {
   triage: (e, issue) => `issue #${e.n} を分割するかどうかを判定してほしい（定義の「分割の判定」）。プランはまだ書かない。
 issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。触るファイルの当たりは ${REPO_DIR} を \`ls\`、\`grep -n\`、\`wc -l\` で読むだけにし、build や実行はしない。
@@ -245,6 +248,7 @@ ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、�
   ${a.trailers.sessionUrl}
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、逸脱の箇所と理由を ${PLANS}/${e.n}-deviation.md に書き、status を deviation にして返す。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   implementContinue: (e, postUrl) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
 新しい版のプランとの差分だけを直して実装を仕上げ、PR を作ってほしい（すでに PR があれば push して本文を直す）。
@@ -253,6 +257,7 @@ PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョ�
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
 PR を作ったら（または push したら）\`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
   fix: (e, pr, reviewUrl, kind, planNote) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）の${kind}（${reviewUrl}）は REQUEST CHANGES だった。指摘は \`gh api\` でその URL のコメント本文を読む。
 ${planNote ? `${planNote}\n` : ''}
@@ -261,6 +266,7 @@ ${planNote ? `${planNote}\n` : ''}
 - コミットのトレーラー: 作業ツリーの \`git log\` の直近のコミットと同じ 2 行
 直して push し、「## ${kind}の指摘への対応（<短い SHA>）」を PR に投稿して、コメントの URL と新しい head を返してほしい。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
+${SAFETY}
 返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット、ciPassed。`,
   prReview1: (e, pr, head, postUrl, issue) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
 - 承認済みのプラン: ${postUrl}
@@ -269,12 +275,14 @@ push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブ�
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
 ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、test、format、CSS、vendor、プラグイン、.env.example）は再現せず、CI に無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
+${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、must が承認済みプランの設計に起因するか。`,
   prReviewNext: (e, pr, r, responseUrl, head, prevUrl, prevKind) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）のレビューをしてほしい（ラウンド ${r}）。
 実装側が${prevKind}（${prevUrl}）の指摘に対応した（${responseUrl}、head ${head}）。
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${e.reviewWt} fetch origin ${e.branch} && git -C ${e.reviewWt} checkout --detach origin/${e.branch}\` で進める。無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
 前のラウンドの指摘ごとに直ったかを照合し、対応コミットの差分がその範囲に収まっているかを確かめて、再判定してほしい。
+${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、must が承認済みプランの設計に起因するか。`,
   gate1: (e, pr, head, postUrl, approveUrl, r) => `PR #${pr}（issue #${e.n}、head ${head}）の最終確認をしてほしい。
 - 承認済みのプラン: ${postUrl}
@@ -283,7 +291,7 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL。`,
   gateNext: (e, pr, head, responseUrl, approveUrl, prevGateUrl) => `PR #${pr}（issue #${e.n}、head ${head}）の最終確認の再確認をしてほしい。
 前回の最終確認（${prevGateUrl}）の指摘に実装側が対応し（${responseUrl}）、PR レビュアーも再レビューで APPROVE を出した（${approveUrl}）。
-前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。
+前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。見出しは再確認でも「## 最終確認」だけにする（マージ担当が見出しの完全一致で探す）。
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL。`,
   merge: (e, pr, head, approvedHead) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
 - レビューと最終確認が APPROVE を出した head: ${approvedHead}${head !== approvedHead ? '（その後に rebase で head が変わった。差分が rebase だけであることを確かめてからマージする）' : ''}
@@ -295,6 +303,7 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
   rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
 rebase 以外の変更を入れない。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待つ。
+${SAFETY}
 返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット、ciPassed。`,
 }
 
