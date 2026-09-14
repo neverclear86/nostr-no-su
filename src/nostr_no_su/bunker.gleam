@@ -274,9 +274,10 @@ pub type Msg {
   GetSessions(reply: Subject(Result(List(Session), String)))
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
-  /// 読み込み済みで承認済みでない組なら `SessionNotFound`、読み込み前は
-  /// `SessionNotReady`、書き込みが成功しなかったときは `session_write_failure` が
-  /// 写す理由を返す。
+  /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
+  /// `SessionNotFound`、書き込まれていないことが確定したら `SessionNotApplied`、
+  /// 書き込みの結果が曖昧なときとアクターが応答しないときは `SessionMaybeApplied`
+  /// を返す。
   Revoke(
     signer: String,
     client: String,
@@ -334,10 +335,10 @@ pub fn sessions(name: Name(Msg)) -> Result(List(Session), String) {
   |> option.unwrap(Error(query_not_answered))
 }
 
-/// セッションを 1 件取り消し、反映されるまで待つ。読み込み済みで承認済みでない組
-/// なら `SessionNotFound`、読み込み前は `SessionNotReady`、アクターが応答しない、
-/// あるいは書き込みが成功しなかったときは `session_write_failure` が写す理由を
-/// 返す。
+/// セッションを 1 件取り消し、反映されるまで待つ。読み込み前は `SessionNotReady`、
+/// 読み込み済みで承認済みでない組なら `SessionNotFound`、書き込まれていないことが
+/// 確定したら `SessionNotApplied`、書き込みの結果が曖昧なときとアクターが応答
+/// しないときは `SessionMaybeApplied` を返す。
 pub fn revoke(
   name: Name(Msg),
   signer: String,
@@ -354,8 +355,9 @@ pub fn pending(name: Name(Msg)) -> Result(List(Pending), String) {
 }
 
 /// 接続要求を 1 件承認し、書き込みが成功したときだけ応答イベントを送り出すまで
-/// 待つ。要求が見つからない、あるいは書き込みが成功しなかったときは `SessionFailure`
-/// で理由を返す。
+/// 待つ。読み込み前は `SessionNotReady`、要求が見つからなければ `SessionNotFound`、
+/// 書き込まれていないことが確定したら `SessionNotApplied`、書き込みの結果が
+/// 曖昧なときとアクターが応答しないときは `SessionMaybeApplied` を返す。
 pub fn approve(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
   call_session_change(name, Approve(token, _))
 }
