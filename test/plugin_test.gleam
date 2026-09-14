@@ -261,7 +261,7 @@ pub fn children_prefers_arity_one_test() {
 pub fn children_rejecting_config_test() {
   assert load_error("plugin_rejecting_config")
     == "plugin_rejecting_config: plugin_children/1 rejected the configuration "
-    <> "(path is required); 設定は PLUGIN_PLUGIN_REJECTING_CONFIG_* で渡す"
+    <> "(path is required); configure it with PLUGIN_PLUGIN_REJECTING_CONFIG_*"
 }
 
 /// `{error, Reason}` の理由が binary でなければ、設定の拒否ではなく戻り値の形の

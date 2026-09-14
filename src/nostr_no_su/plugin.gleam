@@ -32,9 +32,10 @@
 ////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
 ////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
 ////   プラグインを読み込まない。
-//// - 検証の順序は `plugin_api_version` → `plugin_required_versions` →
-////   `plugin_name` → 設定の切り出し → `plugin_children` で、最初に失敗した
-////   ところで止まる。**設定の切り出しは `plugin_name/0` の後にしかできない**
+//// - 検証の順序はモジュールの読み込み → 必須エクスポート →
+////   `plugin_api_version` → `plugin_required_versions` → `plugin_name` →
+////   設定の切り出し → `plugin_children` で、最初に失敗したところで止まる。
+////   **設定の切り出しは `plugin_name/0` の後にしかできない**
 ////   （環境変数の接頭辞がプラグイン名から決まるため）。
 //// - メタデータの呼び出し（`plugin_api_version/0`、`plugin_required_versions/0`、
 ////   `plugin_name/0`、`plugin_children/0,1`）は `main` のプロセスで起動時に
@@ -414,9 +415,9 @@ fn children(
           plugin_children.export_label(list.length(args))
             <> " rejected the configuration ("
             <> reason
-            <> "); 設定は "
+            <> "); configure it with "
             <> plugin_config.prefix(plugin_name)
-            <> "* で渡す",
+            <> "*",
         )
     }
   })
