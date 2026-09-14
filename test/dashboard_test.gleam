@@ -50,14 +50,14 @@ fn states() -> dashboard.Snapshot {
       dashboard.RelayRow(
         1,
         "wss://a",
-        Some(relay_connection.Connected),
-        Some(relay_connection.Disconnected),
+        dashboard.Reported(relay_connection.Connected),
+        dashboard.Reported(relay_connection.Disconnected),
       ),
       dashboard.RelayRow(
         2,
         "wss://b",
-        Some(relay_connection.Disconnected),
-        None,
+        dashboard.Reported(relay_connection.Disconnected),
+        dashboard.Unused,
       ),
     ]),
     plugins: [
@@ -330,8 +330,8 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(
       ..states(),
-      pending: Error("pending reason"),
-      sessions: Error("sessions reason"),
+      pending: Error(i18n.Untranslated("pending reason")),
+      sessions: Error(i18n.Untranslated("sessions reason")),
     )
   let english = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(english, "<span lang=\"en\">pending reason</span>")
@@ -488,6 +488,34 @@ pub fn relay_rows_link_to_edit_and_delete_test() {
   )
 }
 
+/// 締め切りまでに答えなかった用途（`Unanswered`）は「応答なし」のバッジになり、
+/// URL と操作のリンク（用途の編集、削除）は残る。
+pub fn a_relay_role_without_a_status_shows_unavailable_test() {
+  let body =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(
+        ..states(),
+        relays: Ok([
+          dashboard.RelayRow(
+            1,
+            "wss://a",
+            dashboard.Unanswered,
+            dashboard.Unused,
+          ),
+        ]),
+      ),
+    )
+  assert string.contains(
+    body,
+    "<span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-ghost whitespace-nowrap\">unavailable</span>",
+  )
+  assert string.contains(body, "wss://a")
+  assert string.contains(body, "href=\"/relays/1/edit\">Edit roles</a>")
+  assert string.contains(body, "href=\"/relays/1/delete\">Delete relay</a>")
+}
+
 /// バンカーに使う行が 1 件も無ければ、見出しの直後に警告が出て一覧は出さない。監視だけの
 /// 行があれば警告の後に一覧を出し、バンカーの行が 1 件でもあれば警告を出さない
 /// （`states()` はバンカーの行を持つので、上のテストの描画に警告が無いことで確かめる）。
@@ -512,8 +540,8 @@ pub fn no_bunker_relay_is_warned_test() {
           dashboard.RelayRow(
             1,
             "wss://a",
-            Some(relay_connection.Connected),
-            None,
+            dashboard.Reported(relay_connection.Connected),
+            dashboard.Unused,
           ),
         ]),
       ),
@@ -531,7 +559,8 @@ pub fn no_bunker_relay_is_warned_test() {
 /// リレーの一覧を得られないときは、一覧の代わりに理由を出し、警告は出さない。日本語では
 /// 前置きも出る。
 pub fn unlisted_relays_show_the_reason_test() {
-  let snapshot = dashboard.Snapshot(..states(), relays: Error("boom"))
+  let snapshot =
+    dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
     "Relays</h2></div><div class=\"alert\"><span><span lang=\"en\">boom</span></span></div></div></section>",
@@ -539,6 +568,24 @@ pub fn unlisted_relays_show_the_reason_test() {
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "リレー</h2></div><div class=\"alert\"><span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+  )
+}
+
+/// 締め切りを超えた節は、上流の理由の代わりに訳した「今は取得できません。」
+/// （`Not available right now.`）を出す。
+pub fn a_section_past_the_deadline_says_not_available_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      relays: Error(i18n.Translated(i18n.NotAvailable)),
+    )
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, snapshot),
+    "Not available right now.",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, snapshot),
+    "今は取得できません。",
   )
 }
 
@@ -551,7 +598,7 @@ pub fn relays_heading_links_to_add_a_relay_test() {
     dashboard.render(
       i18n.English,
       view.System,
-      dashboard.Snapshot(..states(), relays: Error("boom")),
+      dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
     )
   assert !string.contains(unavailable, "/relays/new")
 }

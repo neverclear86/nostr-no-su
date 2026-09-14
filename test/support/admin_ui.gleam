@@ -93,10 +93,15 @@ pub fn pages(language: i18n.Language) -> List(String) {
         dashboard.RelayRow(
           1,
           "wss://a",
-          Some(relay_connection.Connected),
-          Some(relay_connection.Disconnected),
+          dashboard.Reported(relay_connection.Connected),
+          dashboard.Reported(relay_connection.Disconnected),
         ),
-        dashboard.RelayRow(2, "wss://b", Some(relay_connection.Connected), None),
+        dashboard.RelayRow(
+          2,
+          "wss://b",
+          dashboard.Reported(relay_connection.Connected),
+          dashboard.Unused,
+        ),
       ]),
       sessions: Ok([
         dashboard.SessionRow(
@@ -130,10 +135,10 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         dashboard.Snapshot(
           ..empty,
-          accounts: Error("reason"),
-          pending: Error("reason"),
-          relays: Error("reason"),
-          sessions: Error("reason"),
+          accounts: Error(i18n.Untranslated("reason")),
+          pending: Error(i18n.Untranslated("reason")),
+          relays: Error(i18n.Untranslated("reason")),
+          sessions: Error(i18n.Untranslated("reason")),
         ),
       ),
       dashboard.render(
@@ -145,8 +150,8 @@ pub fn pages(language: i18n.Language) -> List(String) {
             dashboard.RelayRow(
               1,
               "wss://a",
-              Some(relay_connection.Connected),
-              None,
+              dashboard.Reported(relay_connection.Connected),
+              dashboard.Unused,
             ),
           ]),
         ),

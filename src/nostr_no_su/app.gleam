@@ -155,6 +155,7 @@ import nostr_no_su/relay_client.{
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/task
 import nostr_no_su/time
 import pog
 
@@ -536,9 +537,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
         bunker.update_label(bunker_name, signer, label)
       },
       nsec: bunker.nsec(bunker_name, _),
-      plugins: fn() { plugin_rows(spec.plugins) },
+      plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
-      relays: fn() { relay_rows(spec) },
+      relays: fn(deadline) { relay_rows(spec, deadline) },
       add_relay: fn(url, roles) { add_relay(spec, url, roles) },
       registered_relays: fn() { registered_relays(spec) },
       update_relay_roles: fn(relay, roles) {
@@ -614,12 +615,20 @@ pub fn change_relay_roles(
   relay_list.change(spec.relay_list, relay_list.change_roles(_, url, roles))
 }
 
-/// プラグインごとの表示行。状態は各ランナーへ問い合わせて取る。
-fn plugin_rows(specs: List(PluginSpec)) -> List(dashboard.PluginRow) {
-  use spec <- list.map(specs)
+/// プラグインごとの表示行。状態は各ランナーへ並行に問い合わせ、締め切りまでに
+/// 答えなかったランナーは `None`（応答なし）にする。
+fn plugin_rows(
+  specs: List(PluginSpec),
+  deadline: task.Deadline,
+) -> List(dashboard.PluginRow) {
+  let tasks =
+    list.map(specs, fn(spec) {
+      #(spec.plugin.name, task.start(fn() { plugin_runner.status(spec.name) }))
+    })
+  use #(name, status) <- list.map(tasks)
   dashboard.PluginRow(
-    name: spec.plugin.name,
-    status: plugin_runner.status(spec.name),
+    name:,
+    status: task.await(status, deadline) |> result.unwrap(None),
   )
 }
 
@@ -640,21 +649,42 @@ pub fn reenable_plugin(
 }
 
 /// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を
-/// 読めなければその理由を返す。状態は行の順に逐次に問い合わせる。
+/// 読めなければその理由を返す。用途ごとの接続の状態は `relay_statuses` で並行に
+/// 問い合わせ、締め切りまでに答えなかった接続は `dashboard.Unanswered` にする。
 ///
-/// 逐次に問い合わせるため待ち時間はリレー数ぶん積み上がるが、接続アクターが
-/// ループをブロックするのは `connect` の実行中だけで、その上限は `relay_client`
-/// の connect タイムアウト（3 秒）である。`relay_connection` の問い合わせ
-/// タイムアウト（5 秒）はそれを包む安全網であって通常の待ち時間ではない。数本の
-/// リレーが同時にハンドシェイク中でも管理 UI の表示が数秒遅れるだけなので、
-/// 並列化して部分的な結果を扱う複雑さは引き合わない。
-pub fn relay_rows(spec: Spec) -> Result(List(dashboard.RelayRow), String) {
+/// `relay_list` の応答（15 秒）と DB の読み込み（3 秒）の待ちは締め切りの外で、
+/// 最悪 18 秒になる。どちらもローカルのアクターと DB の待ちで、リレーの無応答では
+/// 起きない。
+pub fn relay_rows(
+  spec: Spec,
+  deadline: task.Deadline,
+) -> Result(List(dashboard.RelayRow), String) {
   use entries <- result.try(
     relay_list.entries(spec.relay_list)
     |> result.replace_error("relay list did not answer"),
   )
   use relays <- result.map(registered_relays(spec))
-  merge_relay_rows(relays, entries, relay_connection.status)
+  let names =
+    list.flat_map(entries, fn(entry) {
+      option.values([entry.monitor, entry.bunker])
+    })
+  let statuses = relay_statuses(names, deadline)
+  let status = fn(name) { list.key_find(statuses, name) |> result.unwrap(None) }
+  merge_relay_rows(relays, entries, status)
+}
+
+/// 名前ごとの接続の状態を並行に問い合わせる。締め切りまでに答えなかった接続は
+/// `None`。単体テストが呼べるよう公開する。
+pub fn relay_statuses(
+  names: List(Name(relay_connection.Msg)),
+  deadline: task.Deadline,
+) -> List(#(Name(relay_connection.Msg), Option(relay_connection.Status))) {
+  let tasks =
+    list.map(names, fn(name) {
+      #(name, task.start(fn() { relay_connection.status(name) }))
+    })
+  use #(name, status) <- list.map(tasks)
+  #(name, task.await(status, deadline) |> option.from_result)
 }
 
 /// DB の `relays` の全行。読めなければ英語の理由を返す。管理 UI の Context が使う。
@@ -742,11 +772,12 @@ fn store_failure(error: account_store.StoreError) -> admin.RelayChangeFailure {
 
 /// DB の行ごとに、用途の状態を `relay_list` の項目から求める。行の順は `relays`
 /// のままで、`entries` にだけある URL は出さない。使う用途は、その用途の接続が
-/// あれば `status` の結果、無ければ未接続にする。単体テストが呼べるよう公開する。
+/// あれば `status` の結果（締め切りまでに答えなければ `Unanswered`）、無ければ
+/// 未接続にする。単体テストが呼べるよう公開する。
 pub fn merge_relay_rows(
   relays: List(relay_store.Relay),
   entries: List(relay_list.Entry),
-  status: fn(Name(relay_connection.Msg)) -> relay_connection.Status,
+  status: fn(Name(relay_connection.Msg)) -> Option(relay_connection.Status),
 ) -> List(dashboard.RelayRow) {
   use relay <- list.map(relays)
   let entry =
@@ -768,16 +799,21 @@ pub fn merge_relay_rows(
   )
 }
 
-/// 1 つの用途の状態。使っていなければ `None`。
+/// 1 つの用途の状態。使っていなければ `Unused`、接続が締め切りまでに答えなければ
+/// `Unanswered`。
 fn role_status(
   used: Bool,
   connection: Option(Name(relay_connection.Msg)),
-  status: fn(Name(relay_connection.Msg)) -> relay_connection.Status,
-) -> Option(relay_connection.Status) {
+  status: fn(Name(relay_connection.Msg)) -> Option(relay_connection.Status),
+) -> dashboard.RoleState {
   case used, connection {
-    False, _ -> None
-    True, None -> Some(relay_connection.Disconnected)
-    True, Some(name) -> Some(status(name))
+    False, _ -> dashboard.Unused
+    True, None -> dashboard.Reported(relay_connection.Disconnected)
+    True, Some(name) ->
+      case status(name) {
+        Some(value) -> dashboard.Reported(value)
+        None -> dashboard.Unanswered
+      }
   }
 }
 

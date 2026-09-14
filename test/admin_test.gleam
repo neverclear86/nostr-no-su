@@ -17,6 +17,8 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/engine
 import nostr_no_su/relay_list
+import nostr_no_su/task
+import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
   Approved, Denied, Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated,
@@ -88,6 +90,23 @@ pub fn dashboard_escapes_a_plugin_failure_reason_test() {
   assert string.contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;")
   assert !string.contains(body, "<script>alert(1)</script>")
   assert string.contains(body, "(dropped 3)")
+}
+
+/// accounts が締め切りまでに答えなければ、その節だけ締め切り超過の理由になり、
+/// 間に合った pending と sessions はそのまま出る。経過は締め切りに収まる
+/// （1 秒未満）。
+pub fn the_dashboard_gives_up_on_slow_sections_at_the_deadline_test() {
+  let slow_context =
+    admin.Context(..context(), accounts: fn() {
+      process.sleep(3000)
+      Ok([])
+    })
+  let started_at = time.monotonic_ms()
+  let snapshot = admin.snapshot(slow_context, task.deadline_in(300))
+  assert snapshot.accounts == Error(i18n.Translated(i18n.NotAvailable))
+  let assert Ok(_) = snapshot.pending
+  let assert Ok(_) = snapshot.sessions
+  assert time.monotonic_ms() - started_at < 1000
 }
 
 /// 取り消しフォームは Context の `revoke` を呼び、ダッシュボードへ 303 で戻す。

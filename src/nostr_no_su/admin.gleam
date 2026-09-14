@@ -67,6 +67,7 @@ import nostr_no_su/nostr/nip19
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/task
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
@@ -157,8 +158,9 @@ pub type Context {
     /// 再表示のために、署名者の秘密鍵を nsec の文字列で問い合わせる。`Ok` の値は
     /// 秘密鍵そのもの。
     nsec: fn(String) -> Result(String, String),
-    /// リレーの一覧。`relay_list` が応答しない、DB を読めないときは表示する理由を返す。
-    relays: fn() -> Result(List(dashboard.RelayRow), String),
+    /// リレーの一覧。締め切りを渡す。`relay_list` が応答しない、DB を読めないときは
+    /// 表示する理由を返し、期限内に用途の状態を得られない接続は応答なしとして返す。
+    relays: fn(task.Deadline) -> Result(List(dashboard.RelayRow), String),
     /// リレーを DB に登録し、接続を開く。
     add_relay: fn(String, relay_list.Roles) -> Result(Nil, RelayChangeFailure),
     /// DB の `relays` の全行。読めなければ理由を返す。
@@ -168,7 +170,9 @@ pub type Context {
       Result(Nil, RelayChangeFailure),
     /// 行を DB から消し、接続を閉じる。
     delete_relay: fn(relay_store.Relay) -> Result(Nil, RelayChangeFailure),
-    plugins: fn() -> List(dashboard.PluginRow),
+    /// プラグインの一覧。締め切りを渡す。期限内に状態を得られないプラグインは
+    /// 応答なしとして返す。
+    plugins: fn(task.Deadline) -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
@@ -568,6 +572,53 @@ fn return_query(query: String) -> String {
   }
 }
 
+/// ダッシュボードの 6 つの節に共通の締め切り。バンカーの問い合わせと接続の状態の
+/// 問い合わせ（どちらも 5 秒）と同値なので、相手が答えないときどちらが先に切れるかは
+/// ミリ秒の端数で決まる。バンカーの節はどちらでも同じ囲みになり、文言が上流の英語の
+/// 理由か締め切り超過の訳文かだけが変わる。リレーの行は、接続の問い合わせが先に
+/// 切れれば切断、締め切りが先なら応答なしのバッジになる。どちらでも行は残り、全体の
+/// 待ちは締め切りで止まる。
+const snapshot_deadline_ms = 5000
+
+/// ダッシュボードが表示する状態を、共通の締め切りの下で集める。締め切りを自分で
+/// 守れない accounts・skipped・pending・sessions を先に `task.start` で起動し、
+/// 続けて `context.plugins`、`context.relays` を呼び出し元のプロセスで実行してから、
+/// 最後に 4 つのタスクを残り時間で `task.await` する。plugins と relays は内部で
+/// 複数の問い合わせを同じ締め切りで待つため、これらも別プロセスにすると内側の
+/// 締め切りと外側の `await` が同時に切れる競争になり、間に合った行だけを出す
+/// （`dashboard.RoleState` の `Unanswered` など）動きが観測できなくなる。呼び出し元で
+/// 実行すればこの競争は無い。単体テストが呼べるよう公開する。
+pub fn snapshot(
+  context: Context,
+  deadline: task.Deadline,
+) -> dashboard.Snapshot {
+  let accounts = task.start(context.accounts)
+  let skipped = task.start(context.skipped)
+  let pending = task.start(context.pending)
+  let sessions = task.start(context.sessions)
+  let plugins = context.plugins(deadline)
+  let relays = context.relays(deadline)
+  dashboard.Snapshot(
+    accounts: within(task.await(accounts, deadline)),
+    skipped: within(task.await(skipped, deadline)),
+    pending: within(task.await(pending, deadline)),
+    relays: result.map_error(relays, i18n.Untranslated),
+    sessions: within(task.await(sessions, deadline)),
+    plugins:,
+  )
+}
+
+/// タスクの結果を、ダッシュボードが表示する理由に写す。締め切りに間に合わなければ
+/// 訳した「今は取得できません。」に、間に合っても得られなければ上流の英語の理由を
+/// 訳さずに包む。
+fn within(awaited: Result(Result(a, String), Nil)) -> Result(a, i18n.Reason) {
+  case awaited {
+    Ok(Ok(value)) -> Ok(value)
+    Ok(Error(reason)) -> Error(i18n.Untranslated(reason))
+    Error(Nil) -> Error(i18n.Translated(i18n.NotAvailable))
+  }
+}
+
 /// ダッシュボード。表示に必要な状態をここで集め、描画は純粋関数へ渡す。
 fn show_dashboard(
   context: Context,
@@ -576,14 +627,7 @@ fn show_dashboard(
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Get, language, theme)
-  dashboard.Snapshot(
-    accounts: context.accounts(),
-    skipped: context.skipped(),
-    pending: context.pending(),
-    relays: context.relays(),
-    sessions: context.sessions(),
-    plugins: context.plugins(),
-  )
+  snapshot(context, task.deadline_in(snapshot_deadline_ms))
   |> dashboard.render(language, theme, _)
   |> wisp.html_response(200)
 }
