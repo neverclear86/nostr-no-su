@@ -40,6 +40,21 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # 43 画�
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本語の画面を撮る
 ```
 
+## NIP-46 の E2E（strfry）
+
+実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（`TEST_RELAY_URL` が未設定なら `CI` の有無に関わらずスキップして 1 行ログを出す。`TEST_DATABASE_URL` だけが未設定のときは、他の統合テストと同じく `CI` が設定されていれば失敗する。`test` ジョブは `TEST_RELAY_URL` を渡さないのでスキップされる）。テストごとに専用の database を作って消す:
+
+```sh
+docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine
+docker run -d --name nns-strfry-test -p 127.0.0.1:7777:7777 \
+  ghcr.io/hoytech/strfry@sha256:36f1886d185a88ca57c66ebe52e6e9e8428dac2486eea0a5d50ff934f18b60c3 \
+  --set relay.bind=0.0.0.0 --set relay.nofiles=0 --set relay.numThreads.ingester=1 --set relay.numThreads.reqWorker=1 --set relay.numThreads.reqMonitor=1 --set relay.numThreads.negentropy=1 relay
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test \
+  TEST_RELAY_URL=ws://127.0.0.1:7777 gleam test
+docker rm -f nns-pg-test nns-strfry-test
+```
+
 ## event_logger プラグインのテスト
 
 `event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。`CI` が設定されているときは失敗する）:

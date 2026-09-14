@@ -20,6 +20,7 @@ CI の主な検査は次のとおりである（Gleam 1.17.0 / OTP 29）。全�
 ```sh
 gleam build --warnings-as-errors
 TEST_DATABASE_URL=postgres://… gleam test   # 統合テストに Postgres が要る。起動は docs/development.md の「実行とテスト」「event_logger プラグインのテスト」
+TEST_DATABASE_URL=postgres://… TEST_RELAY_URL=ws://… gleam test   # NIP-46 の E2E に strfry も要る。起動は docs/development.md の「NIP-46 の E2E（strfry）」
 gleam format --check src test dev
 erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl
 gleam export erlang-shipment

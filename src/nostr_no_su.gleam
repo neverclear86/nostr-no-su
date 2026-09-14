@@ -56,7 +56,7 @@ fn exit_with_failure() -> Nil {
 
 /// 起動時に組み立てたツリーの仕様と、その報告行。組み立てから出力を分けることで、
 /// 何をどう報告するかが `main` の 1 か所に集まる。
-type Startup {
+pub type Startup {
   Startup(spec: app.Spec, notes: List(String))
 }
 
@@ -93,7 +93,9 @@ pub fn main() -> Nil {
 /// プラグインは監視のリレーが 0 本でも動く。ルート直下の `plugins` サブツリーで
 /// 動き、ダッシュボードにも状態が出る。監視のツリーは常に起動し、リレーが無い間は
 /// 配信されるイベントが無いだけである。
-fn startup(loaded: Config) -> Result(Startup, String) {
+///
+/// テストが本番と同じ仕様でツリーを動かせるよう公開する。
+pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use bunker <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
