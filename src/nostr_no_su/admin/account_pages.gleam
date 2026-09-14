@@ -295,6 +295,7 @@ fn form_description(text: String) -> Element(msg) {
 
 /// ラベルの入力欄。`maxlength` は新しく入力する欄にだけ付ける。保存済みのラベルは
 /// UTF-16 で上限を超えうるので、編集の欄に付けると 1 文字の編集で送信できなくなる。
+/// 3 つのフォーム（登録画面、生成した鍵の確認、編集）のどれでも必須にする。
 fn label_input(value: String, maxlength: Option(Int)) -> Element(msg) {
   let limit = case maxlength {
     Some(limit) -> [attribute.maxlength(limit)]
@@ -305,6 +306,7 @@ fn label_input(value: String, maxlength: Option(Int)) -> Element(msg) {
     attribute.name(dashboard.label_field),
     attribute.autocomplete("off"),
     attribute.default_value(value),
+    attribute.required(True),
     attribute.class("input w-full border-base-content/60"),
     ..limit
   ])

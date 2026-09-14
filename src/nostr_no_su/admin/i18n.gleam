@@ -291,6 +291,7 @@ pub type Message {
   ResendNotice
   // 管理 UI が検査して返す理由
   IncorrectPassword
+  LabelEmpty
   LabelTooLong(max: Int)
   LabelHasControlCharacters
   InvalidNsec(nip19.Nip19Error)
@@ -422,6 +423,7 @@ fn english(message: Message) -> String {
     ResendNotice ->
       "Reloading this page or coming back to it with the back button can resend the form, which shows the key again and logs it again."
     IncorrectPassword -> "incorrect password"
+    LabelEmpty -> "label must not be empty"
     LabelTooLong(max:) ->
       "label must be at most " <> int.to_string(max) <> " characters"
     LabelHasControlCharacters -> "label must not contain control characters"
@@ -542,6 +544,7 @@ fn japanese(message: Message) -> String {
     ResendNotice ->
       "このページを再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示されてログにも再び記録されることがあります。"
     IncorrectPassword -> "管理パスワードが違います。"
+    LabelEmpty -> "ラベルを入力してください。"
     LabelTooLong(max:) -> "ラベルは " <> int.to_string(max) <> " 文字以内にしてください。"
     LabelHasControlCharacters -> "ラベルに制御文字は使えません。"
     InvalidNsec(error) -> japanese_nip19(error)

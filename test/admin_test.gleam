@@ -835,7 +835,10 @@ pub fn import_normalizes_the_nsec_test() {
   let sent = " " <> string.uppercase(spec_nsec) <> "\n"
   let body =
     simulate.read_body(
-      post_form(context(), "/accounts/import", [#("nsec", sent)]),
+      post_form(context(), "/accounts/import", [
+        #("nsec", sent),
+        #("label", "work"),
+      ]),
     )
   assert string.contains(body, spec_nsec)
   assert !string.contains(body, string.uppercase(spec_nsec))
@@ -879,7 +882,10 @@ pub fn import_rejects_an_out_of_range_key_test() {
 /// ダッシュボードへのリンクを出す。nsec は出さない。
 pub fn import_rejects_a_registered_account_test() {
   let response =
-    post_form(context(), "/accounts/import", [#("nsec", signer_nsec)])
+    post_form(context(), "/accounts/import", [
+      #("nsec", signer_nsec),
+      #("label", "work"),
+    ])
   assert response.status == 409
   let body = simulate.read_body(response)
   assert string.contains(body, "account is already registered")
@@ -897,7 +903,7 @@ pub fn import_that_may_have_been_applied_is_accepted_test() {
     post_form(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
-      [#("nsec", spec_nsec)],
+      [#("nsec", spec_nsec), #("label", "work")],
     )
   assert response.status == 202
   let body = simulate.read_body(response)
@@ -912,7 +918,7 @@ pub fn import_while_accounts_are_not_ready_is_unavailable_test() {
     post_form(
       failing_context(bunker.NotReady("accounts are not loaded yet")),
       "/accounts/import",
-      [#("nsec", spec_nsec)],
+      [#("nsec", spec_nsec), #("label", "work")],
     )
   assert response.status == 503
   let body = simulate.read_body(response)
@@ -942,6 +948,50 @@ pub fn import_rejects_a_label_over_the_code_point_limit_test() {
       ])
     assert response.status == 400
     assert string.contains(simulate.read_body(response), reason)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 空のラベル（欄が無い、空文字列、空白だけ）と、trim の前にだけある制御文字
+/// （末尾の "\n"、U+0085 だけ）は、登録、生成した鍵の登録、ラベルの編集のどの経路
+/// でも 400 になり、登録も更新もしない。
+pub fn invalid_label_is_rejected_on_every_path_test() {
+  let reports = process.new_subject()
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let cases = [
+    #([], "label must not be empty"),
+    #([#("label", "")], "label must not be empty"),
+    #([#("label", "   ")], "label must not be empty"),
+    #([#("label", "abc\n")], "label must not contain control characters"),
+    #([#("label", "\u{0085}")], "label must not contain control characters"),
+  ]
+  list.each(cases, fn(entry) {
+    let #(label_field, reason) = entry
+    let import_response =
+      post_form(reporting_context(reports), "/accounts/import", [
+        #("nsec", spec_nsec),
+        ..label_field
+      ])
+    assert import_response.status == 400
+    assert string.contains(simulate.read_body(import_response), reason)
+
+    let generated_response =
+      post_form(reporting_context(reports), "/accounts/register-generated", [
+        #("nsec", generated),
+        ..label_field
+      ])
+    assert generated_response.status == 400
+    assert string.contains(simulate.read_body(generated_response), reason)
+
+    let edit_response =
+      post_form(
+        reporting_context(reports),
+        action_path(dashboard.EditLabel),
+        label_field,
+      )
+    assert edit_response.status == 400
+    assert string.contains(simulate.read_body(edit_response), reason)
   })
   assert process.receive(reports, 100) == Error(Nil)
 }
@@ -1022,10 +1072,16 @@ pub fn generated_key_can_be_registered_test() {
 /// 出さない。
 pub fn register_generated_shares_the_failure_paths_test() {
   let path = "/accounts/register-generated"
-  let spec = [#("nsec", spec_nsec)]
+  let spec = [#("nsec", spec_nsec), #("label", "work")]
   let responses = [
     #(post_form(context(), path, [#("nsec", "nsec1invalid")]), 400),
-    #(post_form(context(), path, [#("nsec", signer_nsec)]), 409),
+    #(
+      post_form(context(), path, [
+        #("nsec", signer_nsec),
+        #("label", "work"),
+      ]),
+      409,
+    ),
     #(
       post_form(
         failing_context(bunker.NotReady("accounts are not loaded yet")),
@@ -1297,13 +1353,24 @@ pub fn label_edit_form_has_no_maxlength_test() {
     simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
   assert string.contains(
     edit,
-    "autocomplete=\"off\" class=\"input w-full border-base-content/60\" name=\"label\" type=\"text\" value=\""
+    "autocomplete=\"off\" class=\"input w-full border-base-content/60\" name=\"label\" required type=\"text\" value=\""
       <> label
       <> "\"",
   )
   assert !string.contains(edit, "maxlength")
   let new = simulate.read_body(get(context(), "/accounts/new"))
   assert string.contains(new, "maxlength=\"100\" name=\"label\"")
+}
+
+/// 登録画面、生成した鍵の確認、ラベルの編集の 3 つの欄はどれも必須。
+pub fn label_inputs_are_required_test() {
+  let new = simulate.read_body(get(context(), "/accounts/new"))
+  assert string.contains(new, "name=\"label\" required type=\"text\"")
+  let generated = simulate.read_body(post(context(), "/accounts/generate"))
+  assert string.contains(generated, "name=\"label\" required type=\"text\"")
+  let edit =
+    simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
+  assert string.contains(edit, "name=\"label\" required type=\"text\"")
 }
 
 /// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ 409、
@@ -1595,7 +1662,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
   let context = context()
   let reveal = action_path(dashboard.RevealPrivateKey)
   let with_password = [#("password", password)]
-  let spec = [#("nsec", spec_nsec)]
+  let spec = [#("nsec", spec_nsec), #("label", "work")]
   let responses = [
     get(context, "/"),
     get(context, "/static/admin.css"),
@@ -1606,7 +1673,10 @@ pub fn authenticated_responses_carry_security_headers_test() {
     post(context, "/accounts/generate"),
     post_form(context, "/accounts/import", spec),
     post_form(context, "/accounts/import", [#("nsec", "nope")]),
-    post_form(context, "/accounts/import", [#("nsec", signer_nsec)]),
+    post_form(context, "/accounts/import", [
+      #("nsec", signer_nsec),
+      #("label", "work"),
+    ]),
     post_form(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
@@ -2116,7 +2186,10 @@ pub fn switched_theme_carries_across_pages_test() {
 pub fn pages_with_a_private_key_have_no_switches_test() {
   let hidden = [
     post(context(), "/accounts/generate"),
-    post_form(context(), "/accounts/import", [#("nsec", spec_nsec)]),
+    post_form(context(), "/accounts/import", [
+      #("nsec", spec_nsec),
+      #("label", "work"),
+    ]),
     post_form(context(), "/accounts/register-generated", [
       #("nsec", spec_nsec),
       #("label", "a\tb"),
@@ -2163,7 +2236,7 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
     simulate.request(http.Post, "/accounts/import")
     |> with_credentials("admin", password)
     |> in_japanese
-    |> simulate.form_body([#("nsec", signer_nsec)])
+    |> simulate.form_body([#("nsec", signer_nsec), #("label", "work")])
     |> admin.handle_request(context(), _)
   assert registered.status == 409
   assert string.contains(

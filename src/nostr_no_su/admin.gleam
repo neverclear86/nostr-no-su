@@ -909,24 +909,29 @@ fn form_value(form: wisp.FormData, name: String) -> String {
   list.key_find(form.values, name) |> result.unwrap("")
 }
 
-/// ラベルを検査する。前後の空白を除き、符号位置が多すぎるものと制御文字（Unicode の
-/// Cc）を含むものを拒否する。長さを書記素クラスターで数えないのは、結合文字を続けた
-/// 文字列が長さ 1 のまま任意のバイト数になり、上限にならないからである。
+/// ラベルを検査する。送られた値のまま制御文字（Unicode の Cc）を含むものを拒否し、
+/// 前後の空白を除いてから、空のものと符号位置が多すぎるものを拒否する。制御文字を
+/// trim の前に検査するのは、前後の制御文字が trim で黙って消えないようにするため
+/// である。長さを書記素クラスターで数えないのは、結合文字を続けた文字列が長さ 1 の
+/// まま任意のバイト数になり、上限にならないからである。
 fn parse_label(raw: String) -> Result(String, i18n.Message) {
   let label = string.trim(raw)
-  let code_points = string.to_utf_codepoints(label)
   case
-    list.length(code_points) > dashboard.max_label_code_points,
-    list.any(code_points, is_control_character)
+    list.any(string.to_utf_codepoints(raw), is_control_character),
+    label,
+    list.length(string.to_utf_codepoints(label))
+    > dashboard.max_label_code_points
   {
-    True, _ -> Error(i18n.LabelTooLong(max: dashboard.max_label_code_points))
-    False, True -> Error(i18n.LabelHasControlCharacters)
-    False, False -> Ok(label)
+    True, _, _ -> Error(i18n.LabelHasControlCharacters)
+    False, "", _ -> Error(i18n.LabelEmpty)
+    False, _, True ->
+      Error(i18n.LabelTooLong(max: dashboard.max_label_code_points))
+    False, _, False -> Ok(label)
   }
 }
 
-/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は途中の C1 を
-/// 残すので、明示的に拒否するために使う。
+/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は U+0085 や
+/// 末尾の `\n` を黙って消すので、`parse_label` は trim の前の値をこれで検査する。
 fn is_control_character(code_point: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(code_point)
   code <= 0x1f || { code >= 0x7f && code <= 0x9f }
