@@ -11,7 +11,8 @@ COPY . ./
 # build/packages にしか無いので、ビルドステージで集める。
 RUN gleam export erlang-shipment \
   && sh dev/collect_licenses.sh build/erlang-shipment \
-  && mv build/erlang-shipment /app
+  && mv build/erlang-shipment /app \
+  && install -m 0755 docker/start.sh /app/start.sh
 
 # gleam のビルドイメージは erlang:29.0.1-alpine の上に /bin/gleam を足したものなので、
 # BEAM ファイルをコンパイルした OTP と実行する OTP を一致させるため、実行ステージには
@@ -40,5 +41,7 @@ USER nostr
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD sh -c 'set -f; port=$(echo ${ADMIN_PORT-8080}); [ -z "$port" ] \
     || wget -q -O /dev/null "http://127.0.0.1:$port/healthz"'
-ENTRYPOINT ["/app/entrypoint.sh"]
+# start.sh は REMSH_ENABLED を読んでから entrypoint.sh を実行する（README の
+# 「docker compose」の節）。
+ENTRYPOINT ["/app/start.sh"]
 CMD ["run"]

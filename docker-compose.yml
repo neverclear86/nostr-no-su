@@ -23,6 +23,9 @@ services:
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
+      # true にすると VM の全て（復号した秘密鍵を含む）に到達できる。
+      # 使い方は README の「docker compose」の節。
+      REMSH_ENABLED: ${REMSH_ENABLED-false}
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
       # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない
