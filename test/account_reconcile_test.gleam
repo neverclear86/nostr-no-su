@@ -255,6 +255,7 @@ fn start_store_bunker(
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },
+      fn(_relays) { Nil },
     )
   started.pid
 }

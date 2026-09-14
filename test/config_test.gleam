@@ -6,37 +6,6 @@ import gleam/string
 import nostr_no_su/config
 import nostr_no_su/nostr/filter.{Filter}
 
-/// カンマ区切りのリストは前後の空白を除去し、空の要素を取り除く。
-pub fn parse_list_test() {
-  assert config.parse_list("") == []
-  assert config.parse_list("a,b") == ["a", "b"]
-  assert config.parse_list(" a , b ,") == ["a", "b"]
-}
-
-/// 重複した要素は最初の 1 つだけ残る。同じリレー URL を 2 度書くと接続が 2 本
-/// 開き、バンカーが URL で持つ送信手段のキーが衝突するため。
-pub fn parse_list_drops_duplicates_test() {
-  assert config.parse_list("wss://a, wss://b, wss://a")
-    == ["wss://a", "wss://b"]
-}
-
-/// `BUNKER_RELAY_URL` が設定されていれば、監視用リレーより優先される。
-pub fn pick_bunker_relays_prefers_override_test() {
-  assert config.pick_bunker_relays(["wss://x"], ["wss://a", "wss://b"])
-    == ["wss://x"]
-}
-
-/// 上書きが空の場合は監視用リレーにフォールバックする。
-pub fn pick_bunker_relays_falls_back_to_monitor_relays_test() {
-  assert config.pick_bunker_relays([], ["wss://a", "wss://b"])
-    == ["wss://a", "wss://b"]
-}
-
-/// どちらのリストも未設定なら、バンカーは既定のリレーを使う。
-pub fn pick_bunker_relays_defaults_when_nothing_configured_test() {
-  assert config.pick_bunker_relays([], []) == ["wss://relay.damus.io"]
-}
-
 /// 環境変数を一時的に設定して `run` を実行し、終了後に元の値へ戻す。`run` が
 /// assert の失敗などでクラッシュしても、戻してからそのクラッシュを伝える。設定と
 /// 復元を 1 か所にまとめることで、テストごとに散らばる後始末と、その書き忘れを防ぐ。
@@ -267,11 +236,11 @@ pub fn plugin_env_test() {
   let loaded =
     config_with([
       #("PLUGIN_FILE_LOGGER_PATH", "/tmp/events.log"),
-      #("RELAY_URL", "wss://example.com"),
+      #("ADMIN_BIND", "0.0.0.0"),
     ])
   assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH")
     == Ok("/tmp/events.log")
-  assert dict.get(loaded.plugin_env, "RELAY_URL") == Error(Nil)
+  assert dict.get(loaded.plugin_env, "ADMIN_BIND") == Error(Nil)
 }
 
 /// 空文字列の `PLUGIN_*` は落とす。`optional/1` と同じ規則で、docker compose が
@@ -280,44 +249,6 @@ pub fn plugin_env_test() {
 pub fn plugin_env_drops_empty_values_test() {
   let loaded = config_with([#("PLUGIN_FILE_LOGGER_PATH", "")])
   assert dict.get(loaded.plugin_env, "PLUGIN_FILE_LOGGER_PATH") == Error(Nil)
-}
-
-/// 監視とバンカーのリレー URL がどちらも WebSocket の URL として解釈できれば
-/// 起動を止めない。
-pub fn check_relay_urls_accepts_websocket_urls_test() {
-  let loaded =
-    config_with([
-      #("RELAY_URL", "wss://relay.example,ws://127.0.0.1:7777"),
-      #("BUNKER_RELAY_URL", ""),
-    ])
-  assert config.check_relay_urls(loaded) == Ok(Nil)
-}
-
-/// `RELAY_URL` の不正な URL は、上書きが無く `bunker_relay_urls` にも入っていても
-/// `RELAY_URL` を名指しで報告する。
-pub fn check_relay_urls_reports_the_monitor_variable_test() {
-  let loaded =
-    config_with([
-      #("RELAY_URL", "wss://relay.example,relay.damus.io"),
-      #("BUNKER_RELAY_URL", ""),
-    ])
-  assert config.check_relay_urls(loaded)
-    == Error(
-      "RELAY_URL has an invalid relay url: relay.damus.io (use ws:// or wss://)",
-    )
-}
-
-/// `BUNKER_RELAY_URL` の不正な URL は `BUNKER_RELAY_URL` を名指しで報告する。
-pub fn check_relay_urls_reports_the_bunker_variable_test() {
-  let loaded =
-    config_with([
-      #("RELAY_URL", "wss://relay.example"),
-      #("BUNKER_RELAY_URL", "relay.bunker"),
-    ])
-  assert config.check_relay_urls(loaded)
-    == Error(
-      "BUNKER_RELAY_URL has an invalid relay url: relay.bunker (use ws:// or wss://)",
-    )
 }
 
 /// テスト用の管理パスワード。

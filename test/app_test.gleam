@@ -389,7 +389,7 @@ fn load_signer(key_hex: String) -> Result(bunker.Snapshot, String) {
 
 /// アカウントだけがあり、セッションと承認待ちが無い読み込みの結果。
 fn accounts_only(accounts: List(vault.StoredAccount)) -> bunker.Snapshot {
-  bunker.Snapshot(Loaded(accounts: accounts, skipped: []), [], [])
+  bunker.Snapshot(Loaded(accounts: accounts, skipped: []), [], [], [])
 }
 
 /// どのリレーにも `stored` を返す、再開点の読み込みの操作。
@@ -2393,6 +2393,92 @@ fn assert_never_requests(
   }
 }
 
+// --- 登録されたリレー ---
+
+/// `仕様の relays: []` の Bunker でも、最初の読み込みで届いた `Snapshot.relays`
+/// から接続が開く。
+pub fn registered_relays_open_after_the_first_load_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let url = "ws://registered.test"
+  let store =
+    store_with_load(fn() {
+      use snapshot <- result.try(load_signer(signer_key))
+      Ok(
+        bunker.Snapshot(..snapshot, relays: [
+          relay_list.Registered(
+            url: url,
+            roles: relay_list.Roles(monitor: False, bunker: True),
+          ),
+        ]),
+      )
+    })
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: bunker_spec(name, store, [], fixed_retry_delay),
+      admin: None,
+      open: fake_open(reports, None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list"),
+    )
+  let tree = start_tree(spec)
+  let assert Opened(opened_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert opened_url == url
+  assert role_url_pairs(spec) == [#(dashboard.BunkerRelay, url)]
+  stop_tree(tree)
+}
+
+/// 読み込みが失敗している間はリレーを開かず、ストアが復旧して読み込みに成功した
+/// 後に開く。
+pub fn registered_relays_open_after_the_store_recovers_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let url = "ws://registered-after-recovery.test"
+  let next_load = call_counter()
+  let store =
+    store_with_load(fn() {
+      case next_load() {
+        0 -> Error(store_failure())
+        _ -> {
+          use snapshot <- result.try(load_signer(signer_key))
+          Ok(
+            bunker.Snapshot(..snapshot, relays: [
+              relay_list.Registered(
+                url: url,
+                roles: relay_list.Roles(monitor: False, bunker: True),
+              ),
+            ]),
+          )
+        }
+      }
+    })
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: bunker_spec(
+        name,
+        store,
+        [],
+        Backoff(initial_ms: 300, max_ms: 300),
+      ),
+      admin: None,
+      open: fake_open(reports, None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list"),
+    )
+  let tree = start_tree(spec)
+  // 最初の読み込みが失敗している間は開かない。
+  assert process.receive(reports, 100) == Error(Nil)
+  let assert Opened(opened_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert opened_url == url
+  stop_tree(tree)
+}
+
 // --- 実行時のリレーの増減 ---
 
 /// `app.relay_statuses` の行を `#(用途, URL)` に落とし、ステータスの問い合わせの
@@ -3159,11 +3245,14 @@ fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
           process.send(reply, case database.failing_reads {
             True -> Error(Nil)
             False ->
-              Ok(bunker.Snapshot(
-                Loaded(accounts: database.rows, skipped: []),
-                database.sessions,
-                database.pending,
-              ))
+              Ok(
+                bunker.Snapshot(
+                  Loaded(accounts: database.rows, skipped: []),
+                  database.sessions,
+                  database.pending,
+                  [],
+                ),
+              )
           })
           actor.continue(database)
         }

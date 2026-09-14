@@ -89,6 +89,7 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, type Verified}
 import nostr_no_su/random
 import nostr_no_su/relay_client.{type Acknowledgement}
+import nostr_no_su/relay_list
 import nostr_no_su/time
 
 /// バンカーが出すログ行の接頭辞。
@@ -214,6 +215,8 @@ pub type Snapshot {
     accounts: vault.Loaded,
     sessions: List(Session),
     pending: List(Pending),
+    /// 登録されたリレー。アクターは持たず `open_relays` へ渡すだけ。
+    relays: List(relay_list.Registered),
   )
 }
 
@@ -222,7 +225,7 @@ pub type Snapshot {
 /// 失敗の理由は値（鍵、secret、ラベル）を含まない固定の文言。
 pub type Store {
   Store(
-    /// アカウント、セッション、承認待ちを読み込む。
+    /// アカウント、セッション、承認待ち、登録されたリレーを読み込む。
     load: fn() -> Result(Snapshot, String),
     /// アカウントを 1 件追加する。
     insert: fn(vault.StoredAccount) -> Result(Nil, WriteFailure),
@@ -626,19 +629,23 @@ type State {
     accounts: Accounts,
     /// バンカーリレーの購読の張り直しを依頼する関数。送るだけで待たない。
     resubscribe: fn() -> Nil,
+    /// 読み込みに成功するたびに、登録されたリレーを渡す関数。送るだけで待たない。
+    open_relays: fn(List(relay_list.Registered)) -> Nil,
     /// OK を待っている応答の一覧。
     deliveries: Deliveries,
   )
 }
 
 /// スーパービジョンツリー用の子仕様。`resubscribe` は署名者の集合が変わったときに
-/// 呼ぶ関数で、ツリーを組む側がバンカーリレーの接続へ配線する。
+/// 呼ぶ関数、`open_relays` は読み込みに成功するたびに登録されたリレーを渡す関数で、
+/// どちらもツリーを組む側が配線する。
 pub fn supervised(
   name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, settings, resubscribe) })
+  supervision.worker(fn() { start(name, settings, resubscribe, open_relays) })
 }
 
 /// バンカーアクターを起動する。`name` で登録するため、接続は起動時に生きていた
@@ -653,9 +660,10 @@ pub fn start(
   name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(init_timeout_ms, fn(self) {
-    initialise(settings, resubscribe, self)
+    initialise(settings, resubscribe, open_relays, self)
   })
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -673,6 +681,7 @@ pub fn start(
 fn initialise(
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   let retry = process.new_subject()
@@ -692,6 +701,7 @@ fn initialise(
     retry: retry,
     accounts: loading(settings),
     resubscribe: resubscribe,
+    open_relays: open_relays,
     deliveries: new_deliveries(),
   )
   |> actor.initialised
@@ -883,13 +893,15 @@ fn load_accounts(state: State) -> State {
       )
       |> list.each(log.write(level, log_prefix, _))
       case outcome {
-        Ok(snapshot) ->
+        Ok(snapshot) -> {
+          state.open_relays(snapshot.relays)
           reconcile(
             State(..state, accounts: Ready),
             snapshot,
             time.now_seconds(),
           )
           |> transition(state, _)
+        }
         Error(reason) -> {
           let _ = process.send_after(state.retry, retry_delay_ms, LoadAccounts)
           State(

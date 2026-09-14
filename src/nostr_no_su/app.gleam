@@ -79,8 +79,10 @@
 //// `relay_list` は再起動後に届く `Repopulate` で一覧から起動し直す。止めた
 //// 接続（バンカーの用途）は `on_disconnect` を経て `RemovePublisher` が送られ、
 //// バンカーの送信先から外れる。署名者の変化による張り直しは、`relay_list` の
-//// `ResubscribeAll` が現在の全接続へ送る。詳細と既知の窓は `relay_list` の
-//// モジュール doc を参照。
+//// `ResubscribeAll` が現在の全接続へ送る。**起動時のリレーは `relays` テーブルの
+//// 行から決まる。** バンカーが読み込みに成功するたびに `OpenRegistered` で
+//// `relay_list` へ渡り、一覧に無い URL だけが足される。詳細と既知の窓は
+//// `relay_list` のモジュール doc を参照。
 ////
 //// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
 //// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
@@ -180,11 +182,11 @@ pub type PluginSpec {
 
 /// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
 /// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。`relays` は
-/// 起動時に開くリレー（`relay_list` の初期値）で、実行時の増減には
-/// `open_relay` などを使う。`subscriptions` はリレー URL からそのリレーの購読の
-/// 定義を返す。`save_resume` は再開点を小さくせずに保存する操作で、
-/// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントはプラグイン
-/// へ渡さない。
+/// `relay_list` の起動時の一覧で、本番は空。行はバンカーの読み込みから
+/// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。
+/// `subscriptions` はリレー URL からそのリレーの購読の定義を返す。`save_resume`
+/// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。`excludes_kind`
+/// が真を返す kind のイベントはプラグインへ渡さない。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
@@ -199,8 +201,9 @@ pub type Monitor {
 /// バンカーサブツリー。アカウントストアの接続プールと、NIP-46 アクターと、それが
 /// 待ち受け・応答するリレー群。`pool` はパスワードを含みうるので、表示やログに
 /// 入れないこと。`lock_pool` は同じ DB に 1 インスタンスだけを許すロック専用の
-/// 1 本のプール。`pool` と同じくパスワードを含みうる。`relays` は起動時に開く
-/// リレー（`relay_list` の初期値）で、実行時の増減には `open_relay` などを使う。
+/// 1 本のプール。`pool` と同じくパスワードを含みうる。`relays` は `relay_list` の
+/// 起動時の一覧で、本番は空。行はバンカーの読み込みから `OpenRegistered` で届き、
+/// 実行時の増減には `open_relay` などを使う。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
@@ -480,9 +483,12 @@ fn bunker_tree(
   |> supervisor.add(pog.supervised(config.pool))
   |> supervisor.add(pog.supervised(config.lock_pool))
   |> supervisor.add(
-    bunker.supervised(config.name, config.settings, fn() {
-      relay_list.resubscribe_all(spec.relay_list)
-    }),
+    bunker.supervised(
+      config.name,
+      config.settings,
+      fn() { relay_list.resubscribe_all(spec.relay_list) },
+      relay_list.open_registered(spec.relay_list, _),
+    ),
   )
   |> supervisor.add(
     relay_connections_child(

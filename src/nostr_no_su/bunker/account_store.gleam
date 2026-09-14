@@ -14,8 +14,8 @@
 //// テーブルの DDL は版つきの移行（`migrations`）として持ち、`load` のたびに
 //// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
 //// ビルドより新しければ `SchemaTooNew` を返す。移行は `bunker_accounts` のほかに、
-//// 監視の再開点のテーブル（`monitor_resume`）、セッションと承認待ちのテーブルも
-//// 作る。
+//// 監視の再開点のテーブル（`monitor_resume`）、セッションと承認待ちのテーブル、
+//// リレーの一覧（`relays`）も作る。
 ////
 //// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
 //// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
@@ -73,6 +73,10 @@ pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
 const primary_key_constraint = "bunker_accounts_pkey"
 
+/// `relays.url` の一意制約の名前。これに違反した挿入は、同じ URL の登録済みを
+/// 意味する。
+const relay_url_constraint = "relays_url_key"
+
 /// アカウントを保存するテーブル。`pubkey` は小文字 16 進に固定し、表記の揺れで
 /// 同じ鍵が二重に登録されるのを防ぐ。暗号文の長さの検査は、秘密鍵が
 /// 12 + 32 + 16 = 60 バイト、secret が空でない（12 + 1 以上 + 16）ことを表す。
@@ -120,6 +124,15 @@ pub const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
   created_at bigint NOT NULL
 )"
 
+/// 監視とバンカーのリレーを保存するテーブル。`observe` は Gleam 側で
+/// `relay_list.Roles.monitor` に写す。順は `id`。
+pub const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  url text NOT NULL CONSTRAINT relays_url_key UNIQUE,
+  observe boolean NOT NULL,
+  bunker boolean NOT NULL
+)"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -138,6 +151,7 @@ pub const migrations = [
     version: 3,
     statements: [create_sessions_table, create_pending_table],
   ),
+  Migration(version: 4, statements: [create_relays_table]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -281,6 +295,10 @@ pub type StoreError {
   AlreadyRegistered
   /// 指定した pubkey が登録されていない。
   NotRegistered
+  /// 同じ URL のリレーがすでに登録されている。
+  RelayAlreadyRegistered
+  /// 指定した id のリレーが登録されていない。
+  RelayNotRegistered
   /// それ以外のクエリーの失敗。Postgres のエラー名など、値を含まない説明だけを
   /// 持つ。
   QueryFailed(reason: String)
@@ -416,7 +434,8 @@ pub fn transaction(
 /// スキーマを最新の版に移行してから、アカウント、承認済みのセッション、承認待ちの
 /// 接続要求を読み込む。アカウントは復号できた行と飛ばした行に分ける
 /// （`vault.open_rows`）。3 つのうちどれかの読み込みが `Error` なら全体を `Error`
-/// にする。
+/// にする。`transaction` の中で呼ぶ（`load`）。`nostr_no_su.load_snapshot` が
+/// 同じトランザクションで `relay_store.list` も読むために公開する。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
 /// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の `INSERT` / `UPDATE` /
@@ -425,6 +444,8 @@ pub fn transaction(
 /// READ COMMITTED の `SELECT` は文ごとのスナップショットで読むので、待った書き込みの
 /// 結果が見える。起動時の読み込みも同じ読み方にする。前のアクターが書き込みの途中で
 /// 終了した後に再起動したアクターが、その書き込みより先に読むのを防ぐためである。
+/// `relays` はここではロックしない。このロックはバンカー自身の期限切れの書き込みを
+/// 待つためのもので、`relays` の書き手はバンカーではないためである。
 ///
 /// **残る窓**：書き込みの文がサーバーに届いてテーブルのロックを取るより先に、この
 /// ロックが取られた場合（クライアントの期限の直前に送った文が、まだ転送中か
@@ -433,9 +454,42 @@ pub fn transaction(
 /// コミットされた 704 件のうち読み込みに見えなかったものは 0 件だった（ロックを取らない
 /// 読み込みでは 712 件中 77 件）。窓の長さは、期限の時点での転送とサーバーの
 /// スケジューリングの遅れで決まる。
-///
-/// 全体を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で打ち切る
-/// （`transaction`）。移行の文とロックの待ちもサーバー側で同じ値に抑える。
+pub fn load_within(
+  db: pog.Connection,
+  key: MasterKey,
+  timeouts: Timeouts,
+) -> Result(Stored, StoreError) {
+  use _set <- result.try(
+    pog.query(lock_timeout_sql)
+    |> pog.parameter(pog.text(int.to_string(timeouts.load_ms)))
+    |> execute(db),
+  )
+  use Nil <- result.try(ensure_schema(db))
+  use _locked <- result.try(pog.query(lock_sql) |> execute(db))
+  use accounts <- result.try(
+    pog.query(select_sql)
+    |> pog.returning(row_decoder())
+    |> execute(db),
+  )
+  use sessions <- result.try(
+    pog.query(select_sessions_sql)
+    |> pog.returning(session_decoder())
+    |> execute(db),
+  )
+  use pending <- result.try(
+    pog.query(select_pending_sql)
+    |> pog.returning(pending_decoder())
+    |> execute(db),
+  )
+  Ok(Stored(
+    accounts: vault.open_rows(key, accounts.rows),
+    sessions: sessions.rows,
+    pending: pending.rows,
+  ))
+}
+
+/// `load_within` を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で
+/// 打ち切る（`transaction`）。移行の文とロックの待ちもサーバー側で同じ値に抑える。
 /// トランザクションの中のクエリーで `pog.execute` が例外を投げたら、発生箇所を持つ
 /// `Raised` を返す（`execute`）。記録された版がこのビルドより新しければ
 /// `SchemaTooNew` を返す（`ensure_schema`）。
@@ -444,35 +498,7 @@ pub fn load(
   key: MasterKey,
   timeouts: Timeouts,
 ) -> Result(Stored, StoreError) {
-  transaction(pool, timeouts.load_ms, fn(db) {
-    use _set <- result.try(
-      pog.query(lock_timeout_sql)
-      |> pog.parameter(pog.text(int.to_string(timeouts.load_ms)))
-      |> execute(db),
-    )
-    use Nil <- result.try(ensure_schema(db))
-    use _locked <- result.try(pog.query(lock_sql) |> execute(db))
-    use accounts <- result.try(
-      pog.query(select_sql)
-      |> pog.returning(row_decoder())
-      |> execute(db),
-    )
-    use sessions <- result.try(
-      pog.query(select_sessions_sql)
-      |> pog.returning(session_decoder())
-      |> execute(db),
-    )
-    use pending <- result.try(
-      pog.query(select_pending_sql)
-      |> pog.returning(pending_decoder())
-      |> execute(db),
-    )
-    Ok(Stored(
-      accounts: vault.open_rows(key, accounts.rows),
-      sessions: sessions.rows,
-      pending: pending.rows,
-    ))
-  })
+  transaction(pool, timeouts.load_ms, load_within(_, key, timeouts))
 }
 
 /// アカウントを 1 件追加する。
@@ -506,7 +532,7 @@ pub fn delete(
 ) -> Result(Nil, StoreError) {
   pog.query(delete_sql)
   |> pog.parameter(pog.text(pubkey))
-  |> execute_on_one_row(db, timeouts)
+  |> execute_on_one_row(db, timeouts, NotRegistered)
 }
 
 /// 接続 secret を差し替える。`pubkey` が 16 進として読めないときは、列の制約上
@@ -534,7 +560,7 @@ pub fn update_secret(
   pog.query(update_secret_sql)
   |> pog.parameter(pog.text(pubkey))
   |> pog.parameter(pog.bytea(encrypted_secret))
-  |> execute_on_one_row(db, timeouts)
+  |> execute_on_one_row(db, timeouts, NotRegistered)
 }
 
 /// ラベルを差し替える。
@@ -547,7 +573,7 @@ pub fn update_label(
   pog.query(update_label_sql)
   |> pog.parameter(pog.text(pubkey))
   |> pog.parameter(pog.text(label))
-  |> execute_on_one_row(db, timeouts)
+  |> execute_on_one_row(db, timeouts, NotRegistered)
 }
 
 /// セッションを 1 件追加する。同じ（signer, client）の組がすでにあれば何もしない
@@ -683,6 +709,8 @@ pub fn may_have_been_written(error: StoreError) -> Bool {
     Unavailable
     | AlreadyRegistered
     | NotRegistered
+    | RelayAlreadyRegistered
+    | RelayNotRegistered
     | QueryFailed(_)
     | SchemaTooNew(..)
     | HeldByAnotherInstance(..) -> False
@@ -699,6 +727,8 @@ pub fn describe(error: StoreError) -> String {
       "the database client raised an exception: " <> exception
     AlreadyRegistered -> "account is already registered"
     NotRegistered -> "account is not registered"
+    RelayAlreadyRegistered -> "relay is already registered"
+    RelayNotRegistered -> "relay is not registered"
     QueryFailed(reason) -> reason
     SchemaTooNew(found:, supported:) ->
       "database schema version "
@@ -722,6 +752,9 @@ pub fn from_query_error(error: pog.QueryError) -> StoreError {
     pog.ConstraintViolated(constraint:, ..)
       if constraint == primary_key_constraint
     -> AlreadyRegistered
+    pog.ConstraintViolated(constraint:, ..)
+      if constraint == relay_url_constraint
+    -> RelayAlreadyRegistered
     pog.ConstraintViolated(constraint:, ..) ->
       QueryFailed("constraint violated: " <> constraint)
     pog.PostgresqlError(name:, ..) -> QueryFailed("postgres error: " <> name)
@@ -754,11 +787,12 @@ fn execute_catching(
   db: pog.Connection,
 ) -> Result(Result(pog.Returned(row), pog.QueryError), StoreError)
 
-/// 1 行を対象にする書き込みを実行する。対象の行が無ければ `NotRegistered`。
-fn execute_on_one_row(
+/// 1 行を対象にする書き込みを実行する。対象の行が無ければ `missing`。
+pub fn execute_on_one_row(
   query: pog.Query(Nil),
   db: pog.Connection,
   timeouts: Timeouts,
+  missing: StoreError,
 ) -> Result(Nil, StoreError) {
   use returned <- result.try(
     query
@@ -766,7 +800,7 @@ fn execute_on_one_row(
     |> execute(db),
   )
   case returned.count {
-    0 -> Error(NotRegistered)
+    0 -> Error(missing)
     _ -> Ok(Nil)
   }
 }
