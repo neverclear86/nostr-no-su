@@ -54,7 +54,7 @@ compose を env を変えて作り直すと前のコンテナーのログが消�
 
 1. **起動**：healthy、非 root、再起動回数 0、`schema ready` と `loaded N account(s)`。全行が時刻と水準で始まる。マスターキーが無いときと不正なときに、`[main] cannot start: <理由>` の 1 行だけを出して終了コード 1 で終了し、`restart: unless-stopped` により再起動を繰り返すこと
 2. **管理 UI のアカウント管理**：Playwright で実際のブラウザーを操作し、状態コードとヘッダーは curl でも確かめる。nsec 入力による登録、重複（409）と不正な nsec（400、入力値を表示しない）、鍵の生成（確認ページだけに nsec、登録は 303）、生成した鍵のラベル不正（途中に制御文字を置く。同じ nsec の確認ページを再表示）、ラベルの編集（絵文字を含む）と 101 文字のラベル（400）、コピーのボタン、秘密鍵の再表示（誤ったパスワードで 403、正しいパスワードで 200 とログ 1 行）、削除（再送は 404）、secret のローテーション
-3. **NIP-46 とバンカー経由の投稿**：UI からコピーした URI で、connect、get_public_key、sign_event、ping、nip44_encrypt、nip44_decrypt、logout を実行する。kind 1 を署名して 2 台のリレーへ発行し、読み戻して署名を検証する
+3. **NIP-46 とバンカー経由の投稿**：UI からコピーした URI で、connect、get_public_key、sign_event、ping、nip44_encrypt、nip44_decrypt、logout を実行する。connect では perms に `sign_event:1,nip44_encrypt,nip44_decrypt` を宣言する（宣言しないメソッドと kind は `permission denied: <権限>` で拒否される）。kind 1 を署名して 2 台のリレーへ発行し、読み戻して署名を検証する
 4. **再起動なしのアカウント変更**：クライアントを接続したまま UI でアカウントを追加し、すぐ署名できること、削除すると応答しなくなること、既存のセッションが続くことを確かめる
 5. **ローテーション**：古い URI からの新しい connect は承認待ち（`auth_url`）になり、接続済みのセッションは続く。残った承認待ちは拒否して片付ける
 6. **永続化**：本体のコンテナーを再起動しても同じ URI で署名できること。`pg_dump` に平文の鍵も secret も無いこと

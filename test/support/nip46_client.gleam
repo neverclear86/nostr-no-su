@@ -48,6 +48,27 @@ pub fn connect_body(signer: Account, secret_arg: String, id: String) -> String {
   )
 }
 
+/// `perms` を 3 要素目に載せた `connect` リクエストの本文。`secret_arg` の扱いは
+/// `connect_body` と同じ。
+pub fn connect_body_with_perms(
+  signer: Account,
+  secret_arg: String,
+  perms: String,
+  id: String,
+) -> String {
+  request_body(
+    id,
+    "connect",
+    "[\""
+      <> account.pubkey_hex(signer)
+      <> "\",\""
+      <> secret_arg
+      <> "\",\""
+      <> perms
+      <> "\"]",
+  )
+}
+
 /// 指定した本文を持つリクエストイベント。署名者宛に暗号化し、署名者への p タグ
 /// を付けて、クライアントの鍵で署名する。
 pub fn request_event(
