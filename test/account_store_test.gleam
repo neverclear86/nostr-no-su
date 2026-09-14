@@ -21,11 +21,8 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/vault.{
-  type MasterKey, type StoredAccount, StoredAccount,
-}
+import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
 import nostr_no_su/dedup/resume_store
-import nostr_no_su/hex
 import nostr_no_su/named
 import nostr_no_su/nostr/event
 import nostr_no_su/random
@@ -35,7 +32,9 @@ import nostr_no_su/time
 import pog
 import support/nip46_client
 import support/postgres
+import support/random_account.{random_entry, random_master_key}
 import support/signed_event
+import support/vector.{contains_bytes}
 
 /// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
 /// よい。
@@ -1412,19 +1411,6 @@ fn round_trip(pool: Name(pog.Message)) -> Nil {
 /// 1000ms）を超えうるので、テストが期限の長さに依存しないよう長く取る。
 const generous = account_store.Timeouts(load_ms: 30_000, write_ms: 30_000)
 
-/// 実行のたびに違うマスターキー。
-fn random_master_key() -> MasterKey {
-  let assert Ok(key) =
-    vault.master_key_from_hex(hex.encode(crypto.strong_random_bytes(32)))
-  key
-}
-
-/// 実行のたびに違う鍵と secret を持つアカウント。
-fn random_entry(label: String) -> StoredAccount {
-  let assert Ok(signer) = account.from_privkey(crypto.strong_random_bytes(32))
-  StoredAccount(account: signer, secret: random.hex(16), label: label)
-}
-
 /// 読み込みの結果に、期待したアカウントが同じ内容で入っていることを確かめる。
 fn assert_same_entry(
   loaded: account_store.Stored,
@@ -1488,11 +1474,6 @@ WHERE pubkey = $1",
     |> pog.parameter(pog.text(pubkey))
     |> pog.execute(on: db)
   Nil
-}
-
-/// `haystack` が `needle` を部分列として含むかどうか。
-fn contains_bytes(haystack: BitArray, needle: BitArray) -> Bool {
-  string.contains(hex.encode(haystack), hex.encode(needle))
 }
 
 /// 書き込みを `pool` への実際のストアの操作で行い、読み込みは常に空を返す

@@ -7,7 +7,6 @@
 //// コミットされる。読み直しが実行中の書き込みを待たなければ、一覧は DB と食い違う。
 //// セッションの削除でも同じ。
 
-import gleam/crypto
 import gleam/erlang/process.{type Name, type Pid}
 import gleam/list
 import gleam/option.{None, Some}
@@ -18,14 +17,12 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/vault.{
-  type MasterKey, type StoredAccount, StoredAccount,
-}
-import nostr_no_su/hex
+import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/random
 import nostr_no_su/time
 import pog
 import support/postgres
+import support/random_account.{random_entry, random_master_key}
 
 /// バンカーアクターに渡すストアの期限。書き込みはトリガーの眠りより短く、負荷の高い
 /// 環境でもクエリーがサーバーに届くだけの長さにする。読み込みは書き込みの残りを待てる
@@ -82,7 +79,7 @@ fn reconcile_with_postgres(
 ) -> Nil {
   use schema, admin, pool <- with_schema(database_url)
   let key = random_master_key()
-  let first = random_entry()
+  let first = random_entry("")
   let first_pubkey = account.pubkey_hex(first.account)
   let db = pog.named_connection(pool)
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
@@ -98,7 +95,7 @@ fn reconcile_with_postgres(
     10_000,
   )
 
-  let other = random_entry()
+  let other = random_entry("")
   let other_pubkey = account.pubkey_hex(other.account)
   assert bunker.add_account(name, other.account, "other")
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
@@ -155,7 +152,7 @@ fn reconcile_sessions_with_postgres(
 ) -> Nil {
   use schema, admin, pool <- with_schema(database_url)
   let key = random_master_key()
-  let entry = random_entry()
+  let entry = random_entry("")
   let signer = account.pubkey_hex(entry.account)
   let client =
     "0000000000000000000000000000000000000000000000000000000000000009"
@@ -271,17 +268,4 @@ fn await(check: fn() -> Bool, remaining: Int) -> Bool {
       await(check, remaining - 50)
     }
   }
-}
-
-/// 実行のたびに違うマスターキー。
-fn random_master_key() -> MasterKey {
-  let assert Ok(key) =
-    vault.master_key_from_hex(hex.encode(crypto.strong_random_bytes(32)))
-  key
-}
-
-/// 実行のたびに違う鍵と secret を持つアカウント。
-fn random_entry() -> StoredAccount {
-  let assert Ok(signer) = account.from_privkey(crypto.strong_random_bytes(32))
-  StoredAccount(account: signer, secret: random.hex(16), label: "")
 }

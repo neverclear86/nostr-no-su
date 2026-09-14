@@ -19,6 +19,7 @@ import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/string
+import support/erl.{unique_integer}
 
 /// 1 回のテストが使う一時ディレクトリーと、そこに置くモジュールの名前。
 /// **両方を同じトークンから作る。** エントリーモジュール名はバンドルの
@@ -237,10 +238,6 @@ pub fn loaded_app_version(app: String) -> String {
 pub fn on_code_path(module: String) -> Bool {
   is_on_code_path(atom.create(module))
 }
-
-/// テストごとに一意な整数。`[positive]` で常に正の値になる。
-@external(erlang, "erlang", "unique_integer")
-fn unique_integer(options: List(Atom)) -> Int
 
 /// `.erl` をコンパイルする。charlist への変換は Erlang 側で行う。
 @external(erlang, "beam_fixture", "compile_to")

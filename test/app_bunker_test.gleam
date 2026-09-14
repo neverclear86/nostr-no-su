@@ -1,0 +1,842 @@
+//// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
+//// 読み直しを確かめるテスト。
+
+import gleam/erlang/atom
+import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
+import gleam/option.{None, Some}
+import gleam/string
+import nostr_no_su/admin/dashboard
+import nostr_no_su/app
+import nostr_no_su/backoff.{Backoff}
+import nostr_no_su/bunker
+import nostr_no_su/bunker/account
+import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/vault
+import nostr_no_su/nostr/event
+import nostr_no_su/relay_connection
+import nostr_no_su/time
+import support/app_tree.{
+  type Report, type StoreCall, Inserted, Opened, Published, Wrote,
+  authenticator_recording_open, await_connection, await_signers, bunker_spec,
+  call_counter, client_key, committed_but_timed_out_store, connect_request,
+  connect_request_from, fake_open, fixed_retry_delay, idle_monitor, load_signer,
+  memory_store, named_relay, other_client_key, other_signer_key, request,
+  response_body, secret, signer_key, start_database, start_loading_bunker_tree,
+  start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
+  store_with_load, stored_signer, test_relay_url,
+}
+import support/nip46_client.{account_for}
+
+/// 接続が切断状態になるまで待つ。切断を観測できた時点で、接続アクターは
+/// `on_disconnect` を実行し終えている。
+fn await_disconnect(name: Name(relay_connection.Msg), timeout_ms: Int) -> Bool {
+  case relay_connection.status(name), timeout_ms <= 0 {
+    relay_connection.Disconnected, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(10)
+      await_disconnect(name, timeout_ms - 10)
+    }
+  }
+}
+
+/// 偽リレー 1 本の上でバンカーだけを動かすツリー。アカウントの読み込みは
+/// 署名者 1 件ですぐに成功する。
+fn start_bunker_tree(reports: Subject(Report), name: Name(bunker.Msg)) -> Pid {
+  start_loading_bunker_tree(
+    reports,
+    None,
+    name,
+    store_with_load(fn() { load_signer(signer_key) }),
+    fixed_retry_delay,
+  )
+}
+
+/// `memory_store` と同じく書き込みを `calls` へ報告し、最初の書き込みだけ成功して
+/// 以降は固定の理由で失敗する偽のストア。前提の `connect` を書いてから、確かめる
+/// 書き込みを失敗させるテストが使う。
+fn first_write_succeeds_store(
+  calls: Subject(StoreCall),
+  initial: List(vault.StoredAccount),
+) -> bunker.Store {
+  let next_write = call_counter()
+  bunker.Store(..memory_store(calls, initial, False), write: fn(write) {
+    process.send(calls, Wrote(write))
+    case next_write() {
+      0 -> Ok(Nil)
+      _ -> Error(bunker.NotWritten(store_failure()))
+    }
+  })
+}
+
+/// 指定した秒より時計が進むまで待つ。バンカーアクターの起点の判定は秒単位なので、
+/// 秒をまたいでおかないと、再起動の前に作られたリクエストと起動時刻が並んでしまう。
+fn await_next_second(from: Int) -> Nil {
+  case time.now_seconds() > from {
+    True -> Nil
+    False -> {
+      process.sleep(50)
+      await_next_second(from)
+    }
+  }
+}
+
+/// 監視中のプロセスが停止するのを待つ。
+fn await_down(monitor: process.Monitor, timeout_ms: Int) -> Result(Down, Nil) {
+  process.new_selector()
+  |> process.select_specific_monitor(monitor, fn(down) { down })
+  |> process.selector_receive(timeout_ms)
+}
+
+/// ある接続で届いたリクエストには、その接続で応答する。
+pub fn bunker_replies_on_its_connection_test() {
+  let reports = process.new_subject()
+  let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(answered_on, response)) =
+    process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(response), "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
+/// バンカーアクターを kill しても復帰できる。スーパーバイザーが同じ名前で代替を
+/// 起動し、その後ろで再起動した接続が publisher を登録し直すため、往復が再び
+/// 成立する。
+pub fn bunker_survives_being_killed_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let assert Ok(restarted) = process.named(name)
+  assert restarted != killed
+  deliver(connect_request("c2", secret))
+  let assert Ok(Published(answered_on, response)) =
+    process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(response), "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
+/// バンカーの後ろで再起動する接続は、スーパーバイザーが要求した理由で終了する。
+/// exit を trap したまま何もしないと、スーパーバイザーの停止タイムアウトで kill
+/// されるまで動き続けてしまう。
+pub fn connections_shut_down_when_the_bunker_restarts_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, connection, socket, _deliver) =
+    await_connection(reports)
+  let connection_monitor = process.monitor(connection)
+  let socket_monitor = process.monitor(socket)
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+
+  let assert Ok(process.ProcessDown(reason: reason, ..)) =
+    await_down(connection_monitor, 1000)
+  assert reason == process.Abnormal(atom.to_dynamic(atom.create("shutdown")))
+  // ソケットは接続アクターが保持するリンクを通じて一緒に落ちる。
+  let assert Ok(_socket_down) = await_down(socket_monitor, 1000)
+  stop_tree(tree)
+}
+
+/// バンカーアクターが再起動したあとは、リレーが再配送した処理済みのリクエストを
+/// 実行しない。アクターが変わるとリプレイ防止の `seen` は空になるため、実行して
+/// しまうと応答が再発行され、取り消したはずのセッションまで復活する。
+pub fn restarted_bunker_ignores_requests_from_before_it_started_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let request = connect_request("c1", secret)
+  deliver(request)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  // 同じアクターが生きている間は、再配送を `seen` が落とす。
+  deliver(request)
+  let assert Error(Nil) = process.receive(reports, 200)
+
+  await_next_second(request.created_at)
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(request)
+  let assert Error(Nil) = process.receive(reports, 500)
+  assert bunker.sessions(name) == Ok([])
+  stop_tree(tree)
+}
+
+/// 切断していた間に届いたリクエストは、再接続後に実行する。アクターが生き続けて
+/// いる限り起点は動かないため、購読が現在時刻から遡って拾い直したリクエストは、
+/// 秒をまたいでいても処理される。
+pub fn reconnected_bunker_handles_requests_from_the_outage_test() {
+  let reports = process.new_subject()
+  let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
+  let assert Opened(_relay_url, _connection, socket, _deliver) =
+    await_connection(reports)
+  let request = connect_request("c1", secret)
+  // 秒をまたいでから接続を落とす。起点が再接続で更新されていれば、このリクエストは
+  // 起点より古いものとして落ちる。
+  await_next_second(request.created_at)
+
+  process.kill(socket)
+  let assert Opened(_relay_url, _connection, reconnected, deliver) =
+    await_connection(reports)
+  assert reconnected != socket
+  deliver(request)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == reconnected
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
+/// セッション状態は接続ではなくバンカーアクターが保持するため、再接続後も残る。
+/// クライアントは再度 connect しなくても認可されたままになる。
+pub fn session_survives_a_reconnect_test() {
+  let reports = process.new_subject()
+  let tree = start_bunker_tree(reports, process.new_name("test_bunker"))
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+
+  process.kill(socket)
+  let assert Opened(_relay_url, _connection, reconnected, deliver) =
+    await_connection(reports)
+  assert reconnected != socket
+  // 2 度目の `connect` は送らない。pong が返るのは認可済みクライアントだけで、
+  // 応答は死んだソケットを置き換えた新しいソケットから出ていく。
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(pong_on, pong)) = process.receive(reports, 2000)
+  assert pong_on == reconnected
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  stop_tree(tree)
+}
+
+/// バンカーが動いていなければ、承認・拒否・取り消しは `SessionMaybeApplied`
+/// （応答が無ければアクターが処理しうる）、一覧は理由を返す。
+pub fn session_calls_without_a_bunker_are_not_answered_test() {
+  let name = process.new_name("test_bunker")
+  assert bunker.revoke(name, "signer", "client")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.approve(name, "token")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.deny(name, "token")
+    == Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.sessions(name) == Error("bunker is not responding")
+  assert bunker.pending(name) == Error("bunker is not responding")
+}
+
+/// 管理 UI が使う経路。`connect` 済みのクライアントはセッション一覧に現れ、
+/// 取り消すと消え、以降のリクエストは再び認可を求められる。取り消し済みの組を
+/// もう一度取り消すと `SessionNotFound` になる。
+pub fn sessions_can_be_listed_and_revoked_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  assert bunker.sessions(name) == Ok([])
+
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let assert Ok([session]) = bunker.sessions(name)
+  assert session.signer == account.pubkey_hex(signer)
+  assert session.client == account.pubkey_hex(client)
+  assert session.perms == ""
+
+  assert bunker.revoke(
+      name,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+    == Ok(Nil)
+  assert bunker.sessions(name) == Ok([])
+  let assert Error(bunker.SessionNotFound(_)) =
+    bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
+  assert string.contains(response_body(denied), "unauthorized")
+  stop_tree(tree)
+}
+
+/// 管理 UI が使う経路。シークレット無しの `connect` は承認待ちになり、承認すると
+/// 元のリクエストと同じ id の ack が接続から出ていく。
+pub fn pending_connections_can_be_approved_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+
+  let client = account_for(client_key)
+  let assert Ok([entry]) = bunker.pending(name)
+  assert entry.client == account.pubkey_hex(client)
+  assert bunker.approve(name, "other-token")
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
+
+  assert bunker.approve(name, entry.token) == Ok(Nil)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"id\":\"c1\"")
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert bunker.pending(name) == Ok([])
+  let signer = account_for(signer_key)
+  let assert Ok([session]) = bunker.sessions(name)
+  assert session.signer == account.pubkey_hex(signer)
+  assert session.client == account.pubkey_hex(client)
+  assert session.perms == ""
+  stop_tree(tree)
+}
+
+/// 書き込めなかった承認・拒否は、メモリの承認待ちを変えず、応答イベントを発行
+/// しない（#126 の完了条件）。
+pub fn failed_decisions_keep_the_pending_request_and_publish_nothing_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store = first_write_succeeds_store(calls, [stored_signer(signer_key)])
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert Ok([entry]) = bunker.pending(name)
+  let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
+
+  assert bunker.approve(name, entry.token)
+    == Error(bunker.SessionNotApplied(store_failure()))
+  let assert Ok(Wrote(engine.ApprovePending(token: approved_token, ..))) =
+    process.receive(calls, 1000)
+  assert approved_token == entry.token
+
+  assert bunker.deny(name, entry.token)
+    == Error(bunker.SessionNotApplied(store_failure()))
+  let assert Ok(Wrote(engine.DeletePending(token: denied_token))) =
+    process.receive(calls, 1000)
+  assert denied_token == entry.token
+
+  assert bunker.pending(name) == Ok([entry])
+  assert bunker.sessions(name) == Ok([])
+  assert process.receive(reports, 300) == Error(Nil)
+
+  assert bunker.approve(name, "unknown-token")
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
+  assert bunker.deny(name, "unknown-token")
+    == Error(bunker.SessionNotFound(engine.approval_request_not_found))
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 書き込めなかった取り消しは、メモリのセッションを変えない。
+pub fn a_failed_revocation_keeps_the_session_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store = first_write_succeeds_store(calls, [stored_signer(signer_key)])
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+  let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
+
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.SessionNotApplied(store_failure()))
+  let assert Ok(Wrote(engine.DeleteSession(signer:, client:))) =
+    process.receive(calls, 1000)
+  assert #(signer, client) == #(session.signer, session.client)
+  assert bunker.sessions(name) == Ok([session])
+
+  let assert Error(bunker.SessionNotFound(_reason)) =
+    bunker.revoke(name, session.signer, other_client_key)
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// `connect` の書き込みがすべて失敗しても、secret の一致した `connect` でも
+/// 承認待ちを作る `connect` でもメモリを変えずに `connection_not_saved` を返し、
+/// ストアの理由をクライアントへ漏らさない。承認待ちを作る `connect` も
+/// `auth_url` を返さない。
+pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store =
+    memory_store(process.new_subject(), [stored_signer(signer_key)], True)
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let body = response_body(refused)
+  assert string.contains(body, "\"id\":\"c1\"")
+  assert string.contains(body, engine.connection_not_saved)
+  assert !string.contains(body, store_failure())
+  assert bunker.sessions(name) == Ok([])
+
+  deliver(connect_request("c2", ""))
+  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let body = response_body(refused)
+  assert string.contains(body, "\"id\":\"c2\"")
+  assert string.contains(body, engine.connection_not_saved)
+  assert !string.contains(body, "auth_url")
+  assert !string.contains(body, store_failure())
+  assert bunker.pending(name) == Ok([])
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// `logout` の `DeleteSession` の書き込みが失敗しても、クライアントの後始末を
+/// 止めないため `ack` を返し、セッションはメモリに残る。
+pub fn a_failed_logout_acknowledges_and_keeps_the_session_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store =
+    bunker.Store(
+      ..memory_store(process.new_subject(), [stored_signer(signer_key)], False),
+      write: fn(write) {
+        case write {
+          engine.DeleteSession(..) -> Error(bunker.NotWritten(store_failure()))
+          _ -> Ok(Nil)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+
+  deliver(request("l1", "logout", "[]"))
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let body = response_body(ack)
+  assert string.contains(body, "\"id\":\"l1\"")
+  assert string.contains(body, "\"result\":\"ack\"")
+  assert !string.contains(body, store_failure())
+  assert bunker.sessions(name) == Ok([session])
+  stop_tree(tree)
+}
+
+/// 書き込みに失敗した `connect` のイベント id は `seen` に残るので、リレーが
+/// 同じイベントを再配送しても 2 度目の書き込みも応答も起きない。
+pub fn a_redelivered_failed_connect_is_not_answered_again_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_write = call_counter()
+  let store =
+    bunker.Store(
+      ..memory_store(process.new_subject(), [stored_signer(signer_key)], False),
+      write: fn(_write) {
+        case next_write() {
+          0 -> Error(bunker.NotWritten(store_failure()))
+          _ -> Ok(Nil)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let connect = connect_request("c1", "")
+  deliver(connect)
+  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  assert string.contains(response_body(refused), engine.connection_not_saved)
+
+  deliver(connect)
+  assert process.receive(reports, 300) == Error(Nil)
+  assert bunker.pending(name) == Ok([])
+  assert next_write() == 1
+  stop_tree(tree)
+}
+
+/// NIP-46 の書き込みの結果が曖昧だったときも読み直しに移るが、`Loading` の間に
+/// 届いた書き込みでは読み直しを積み増さない。再試行の待ちは、再試行のタイマーが
+/// 待ちの間に発火しないよう既定より長くする。
+pub fn unconfirmed_nip46_writes_reload_once_and_not_while_loading_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_load = call_counter()
+  let store =
+    bunker.Store(
+      ..memory_store(process.new_subject(), [], False),
+      load: fn() {
+        process.send(loads, Nil)
+        case next_load() {
+          0 -> load_signer(signer_key)
+          _ -> Error(store_failure())
+        }
+      },
+      write: fn(_write) { Error(bunker.MaybeWritten(store_failure())) },
+    )
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store,
+      Backoff(initial_ms: 5000, max_ms: 5000),
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Nil) = process.receive(loads, 2000)
+
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  assert string.contains(response_body(refused), engine.connection_not_saved)
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert bunker.accounts(name)
+    == Error("account store unavailable: " <> store_failure())
+
+  deliver(connect_request("c2", ""))
+  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  assert string.contains(response_body(refused), engine.connection_not_saved)
+  assert process.receive(loads, 500) == Error(Nil)
+  assert bunker.accounts(name)
+    == Error("account store unavailable: " <> store_failure())
+  assert bunker.sessions(name)
+    == Error("account store unavailable: " <> store_failure())
+  assert bunker.pending(name)
+    == Error("account store unavailable: " <> store_failure())
+  stop_tree(tree)
+}
+
+/// バンカーが読み込み済みか問い合わせ続け、`Ok` になるまで待つ。
+fn await_loaded(name: Name(bunker.Msg), remaining: Int) -> Bool {
+  case bunker.accounts(name) {
+    Ok(_) -> True
+    Error(_) ->
+      case remaining <= 0 {
+        True -> False
+        False -> {
+          process.sleep(20)
+          await_loaded(name, remaining - 20)
+        }
+      }
+  }
+}
+
+/// 承認の書き込みの結果が曖昧だったときは、承認待ちとセッションを変えずに読み
+/// 直しへ移り、`ack` を発行しない。読み直しが成功した後、同じトークンで承認し
+/// 直すと `Ok` になり、`ack` が 1 回発行される（#220 の方針 1 節）。
+pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
+  let next_write = call_counter()
+  let store =
+    bunker.Store(
+      ..base,
+      load: fn() {
+        process.send(loads, Nil)
+        base.load()
+      },
+      write: fn(write) {
+        case next_write() {
+          1 -> Error(bunker.MaybeWritten(store_failure()))
+          _ -> base.write(write)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Nil) = process.receive(loads, 2000)
+
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert Ok([entry]) = bunker.pending(name)
+
+  assert bunker.approve(name, entry.token)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert process.receive(loads, 300) == Error(Nil)
+  assert process.receive(reports, 300) == Error(Nil)
+  assert bunker.pending(name) == Ok([entry])
+  assert bunker.sessions(name) == Ok([])
+
+  assert await_loaded(name, 2000)
+  assert bunker.approve(name, entry.token) == Ok(Nil)
+  let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
+  assert answered_on == socket
+  assert string.contains(response_body(ack), "\"id\":\"c1\"")
+  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 承認が実は書けていて、読み直しの後にも `ack` を発行しないとき、クライアントは
+/// 応答を受け取れないが、承認済みのセッションは残る。
+pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
+  let store =
+    bunker.Store(..base, write: fn(write) {
+      case write {
+        engine.ApprovePending(..) -> {
+          let _ = base.write(write)
+          Error(bunker.MaybeWritten(store_failure()))
+        }
+        _ -> base.write(write)
+      }
+    })
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert Ok([entry]) = bunker.pending(name)
+
+  assert bunker.approve(name, entry.token)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+
+  assert await_loaded(name, 2000)
+  assert bunker.pending(name) == Ok([])
+  let assert Ok([session]) = bunker.sessions(name)
+  assert session.client == account.pubkey_hex(account_for(client_key))
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 拒否と取り消しの書き込みの結果が曖昧だったときも、同じ読み直しに移り、理由を
+/// 報告する。
+pub fn unconfirmed_denials_and_revocations_are_reported_test() {
+  let reports = process.new_subject()
+  let loads = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
+  let store =
+    bunker.Store(
+      ..base,
+      load: fn() {
+        process.send(loads, Nil)
+        base.load()
+      },
+      write: fn(write) {
+        case write {
+          engine.DeletePending(..) | engine.DeleteSession(..) ->
+            Error(bunker.MaybeWritten(store_failure()))
+          _ -> base.write(write)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let assert Ok(Nil) = process.receive(loads, 2000)
+
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert Ok([pending]) = bunker.pending(name)
+
+  assert bunker.deny(name, pending.token)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert bunker.pending(name) == Ok([pending])
+  assert bunker.sessions(name) == Ok([])
+
+  assert await_loaded(name, 2000)
+  deliver(connect_request_from(other_client_key, "c2", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+  let assert Ok(Nil) = process.receive(loads, 1000)
+  assert bunker.pending(name) == Ok([pending])
+  assert bunker.sessions(name) == Ok([session])
+  stop_tree(tree)
+}
+
+/// 読み込みが終わっていない間の承認・拒否・取り消しはストアを呼ばずに拒否する
+/// （#202 の方針 3 節）。
+pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_load = call_counter()
+  let store =
+    bunker.Store(
+      ..memory_store(calls, [], False),
+      load: fn() {
+        case next_load() {
+          0 -> load_signer(signer_key)
+          _ -> Error(store_failure())
+        }
+      },
+      insert: fn(entry: vault.StoredAccount) {
+        process.send(
+          calls,
+          Inserted(account.pubkey_hex(entry.account), entry.secret, entry.label),
+        )
+        Error(bunker.MaybeWritten(store_failure()))
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let assert Ok([pending]) = bunker.pending(name)
+  let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
+  deliver(connect_request_from(other_client_key, "c2", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+  let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
+
+  // 読み直しの失敗が続く状態にする。
+  let assert Error(bunker.MaybeApplied(_)) =
+    bunker.add_account(name, account_for(other_signer_key), "")
+  let assert Ok(Inserted(..)) = process.receive(calls, 1000)
+
+  assert bunker.approve(name, pending.token)
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert bunker.deny(name, pending.token)
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert process.receive(calls, 100) == Error(Nil)
+  // メモリを変えていないことは、直前の `calls` が空であることで確かめている
+  // （読み直しの失敗が続く間、一覧そのものは理由を返す）。
+  let assert Error(_) = bunker.pending(name)
+  let assert Error(_) = bunker.sessions(name)
+  stop_tree(tree)
+}
+
+/// ソケットを失った接続の送信手段は取り下げられる。バンカーリレーを 2 本張り、
+/// 片方のソケットを kill すると、以降の応答は生きている側からだけ出ていく。
+pub fn a_lost_socket_stops_receiving_responses_test() {
+  let reports = process.new_subject()
+  let relay_a = named_relay("ws://relay.one")
+  let relay_b = named_relay("ws://relay.two")
+  let tree =
+    start_tree(app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: bunker_spec(
+        process.new_name("test_bunker"),
+        store_with_load(fn() { load_signer(signer_key) }),
+        [relay_a, relay_b],
+        fixed_retry_delay,
+      ),
+      admin: None,
+      open: fake_open(reports, None),
+      // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
+      reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
+      relay_list: process.new_name("test_relay_list"),
+    ))
+  // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
+  // どちらのリレーの報告かを決める。
+  let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
+    await_connection(reports)
+  let assert Opened(_second_url, _connection_2, socket_2, deliver_2) =
+    await_connection(reports)
+  let #(socket_a, socket_b, deliver) = case first_url == relay_a.url {
+    True -> #(socket_1, socket_2, deliver_1)
+    False -> #(socket_2, socket_1, deliver_2)
+  }
+
+  // 2 本とも生きている間は、応答が両方のソケットから出ていく。
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(first, _ack)) = process.receive(reports, 2000)
+  let assert Ok(Published(second, _same_ack)) = process.receive(reports, 2000)
+  assert first != second
+
+  process.kill(socket_a)
+  assert await_disconnect(relay_a.name, 2000)
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(answered_on, pong)) = process.receive(reports, 2000)
+  assert answered_on == socket_b
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  // 死んだソケットには送られない。生きているのは 1 本だけになっている。
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// バンカーの接続が受けた AUTH の受け口は、登録アカウントの鍵で署名した kind 22242
+/// を、その接続のリレー URL と challenge を載せて返す。
+pub fn bunker_connections_answer_authentication_test() {
+  let reports = process.new_subject()
+  let authenticators = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let tree =
+    start_loading_bunker_tree_with_open(
+      name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      fixed_retry_delay,
+      authenticator_recording_open(reports, authenticators),
+    )
+  let assert Ok(#(relay_url, Some(authenticate))) =
+    process.receive(authenticators, 2000)
+  assert relay_url == test_relay_url
+  assert await_signers(name, [signer], 3000)
+  let assert Ok([signed]) = authenticate("challenge-1")
+  assert signed.pubkey == signer
+  assert signed.kind == event.auth_kind
+  assert signed.tags
+    == [["relay", test_relay_url], ["challenge", "challenge-1"]]
+  let assert Ok(_verified) = event.verify(signed)
+  stop_tree(tree)
+}
+
+/// `app.session_rows` は時刻と perms をそのまま写す。
+pub fn session_rows_keep_times_and_perms_test() {
+  let sessions = [
+    engine.Session(
+      signer: "ab",
+      client: "cd",
+      perms: "sign_event:1",
+      created_at: 10,
+      last_used_at: 20,
+    ),
+  ]
+  assert app.session_rows(sessions)
+    == [
+      dashboard.SessionRow(
+        signer: "ab",
+        client: "cd",
+        perms: "sign_event:1",
+        created_at: 10,
+        last_used_at: 20,
+      ),
+    ]
+}

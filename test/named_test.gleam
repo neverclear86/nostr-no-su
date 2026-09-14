@@ -2,6 +2,7 @@ import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/named
+import support/erl.{monotonic_time}
 
 /// 問い合わせに使うメッセージ。宛先の振る舞いを模す。
 type Msg {
@@ -77,10 +78,6 @@ fn call_in_a_fresh_process(
 /// 自プロセスの未処理メッセージ数。
 @external(erlang, "nostr_no_su_ffi", "message_queue_len")
 fn message_queue_len() -> Int
-
-/// 単調増加する時計の現在値。
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: atom.Atom) -> Int
 
 /// 応答する宛先には、その応答がそのまま返る。
 ///

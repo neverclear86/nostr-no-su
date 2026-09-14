@@ -10,7 +10,7 @@ import nostr_no_su/bunker/vault.{
   type MasterKey, Loaded, Row, Skipped, StoredAccount,
 }
 import nostr_no_su/hex
-import support/vector.{bytes}
+import support/vector.{bytes, contains_bytes}
 
 /// テスト用のマスターキー（16 進）。
 const master_key_hex = "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
@@ -250,9 +250,4 @@ pub fn skipped_rows_are_described_by_pubkey_and_reason_test() {
     == "skipped account "
     <> pubkey
     <> ": private key could not be decrypted (wrong ACCOUNT_MASTER_KEY or tampered row)"
-}
-
-/// `haystack` が `needle` を部分列として含むかどうか。
-fn contains_bytes(haystack: BitArray, needle: BitArray) -> Bool {
-  string.contains(hex.encode(haystack), hex.encode(needle))
 }

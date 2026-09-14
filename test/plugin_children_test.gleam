@@ -22,6 +22,7 @@ import gleam/string
 import nostr_no_su/plugin_children.{
   type Rejection, ConfigRejected, InvalidSpec, from_dynamic,
 }
+import support/erl.{is_registered, unique_integer}
 
 /// 子の起動失敗のログ行に出るプラグイン名。
 const plugin_name = "children_test"
@@ -376,10 +377,6 @@ fn spec(kind: Atom, name: Atom) -> Dynamic
 @external(erlang, "child_fixture", "bad_spec")
 fn bad_spec(kind: Atom) -> Dynamic
 
-/// 登録名が使われているか。
-@external(erlang, "child_fixture", "is_registered")
-fn is_registered(name: Atom) -> Bool
-
 /// OTP 側に登録された子仕様。
 @external(erlang, "child_fixture", "childspec")
 fn childspec(supervisor: Pid, id: Int) -> Dynamic
@@ -387,7 +384,3 @@ fn childspec(supervisor: Pid, id: Int) -> Dynamic
 /// 任意の項を 1 行の文字列にする。
 @external(erlang, "nostr_no_su_ffi", "describe_term")
 fn describe_term(term: Dynamic) -> String
-
-/// テストごとに一意な整数。
-@external(erlang, "erlang", "unique_integer")
-fn unique_integer(options: List(Atom)) -> Int

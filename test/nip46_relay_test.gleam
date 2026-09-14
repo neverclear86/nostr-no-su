@@ -6,7 +6,6 @@
 //// このテストはスキップされる。
 
 import envoy
-import gleam/crypto
 import gleam/dict
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/io
@@ -17,9 +16,7 @@ import nostr_no_su
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/vault
 import nostr_no_su/config
-import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/relay_client
@@ -28,6 +25,7 @@ import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
 import support/postgres
+import support/random_account.{random_master_key}
 
 /// テスト用の署名者の 16 進秘密鍵。他のテストと同じ固定値。
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
@@ -177,13 +175,6 @@ fn test_config(database_url: String) -> config.Config {
     console_logger_enabled: Ok(False),
     dedup_capacity: Ok(4096),
   )
-}
-
-/// 実行のたびに違うマスターキー。
-fn random_master_key() -> vault.MasterKey {
-  let assert Ok(key) =
-    vault.master_key_from_hex(hex.encode(crypto.strong_random_bytes(32)))
-  key
 }
 
 /// `relay_url` へ繋ぎ、`client` 宛ての kind 24133 を購読する。イベントと OK は

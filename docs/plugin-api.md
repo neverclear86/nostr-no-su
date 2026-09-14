@@ -432,7 +432,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 
 ## 10. Erlang での最小実装例
 
-次のモジュールがそのまま動く最小のプラグインである（このファイルは `test/support/minimal_plugin.erl` としてテストにも使っており、読み込めることを検証している）。
+次のモジュールがそのまま動く最小のプラグインである（`test/support/minimal_plugin.erl` は先頭のコメントを除いてこのモジュールと同じ内容で、テストで読み込めることを検証している）。
 
 ```erlang
 -module(minimal_plugin).
