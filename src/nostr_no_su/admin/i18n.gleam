@@ -210,6 +210,8 @@ pub type Message {
   Client
   Age
   AgeSeconds(seconds: Int)
+  Created
+  LastUsed
   Approve
   Deny
   Accounts
@@ -336,6 +338,8 @@ fn english(message: Message) -> String {
     Client -> "Client"
     Age -> "Age"
     AgeSeconds(seconds:) -> int.to_string(seconds) <> "s"
+    Created -> "Created"
+    LastUsed -> "Last used"
     Approve -> "Approve"
     Deny -> "Deny"
     Accounts -> "Accounts"
@@ -474,6 +478,8 @@ fn japanese(message: Message) -> String {
     Client -> "クライアント"
     Age -> "経過時間"
     AgeSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
+    Created -> "作成"
+    LastUsed -> "最終利用"
     Approve -> "承認する"
     Deny -> "拒否する"
     Accounts -> "アカウント"

@@ -15,6 +15,8 @@
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/time/calendar
+import gleam/time/timestamp
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -489,6 +491,14 @@ fn sessions_section(
               view.summary_list([
                 #(text(i18n.Signer), view.Code(session.signer)),
                 #(text(i18n.Client), view.Code(session.client)),
+                #(
+                  text(i18n.Created),
+                  view.Timestamp(utc_time(session.created_at)),
+                ),
+                #(
+                  text(i18n.LastUsed),
+                  view.Timestamp(utc_time(session.last_used_at)),
+                ),
               ]),
               button_row([revoke_form(language, session)]),
             ])
@@ -497,6 +507,12 @@ fn sessions_section(
       },
     ),
   ])
+}
+
+/// Unix 秒を RFC 3339 の UTC の文字列（`2026-09-13T05:12:34Z`）にする。
+fn utc_time(seconds: Int) -> String {
+  timestamp.from_unix_seconds(seconds)
+  |> timestamp.to_rfc3339(calendar.utc_offset)
 }
 
 /// 監視イベントを処理するプラグインと、その現在の状態。

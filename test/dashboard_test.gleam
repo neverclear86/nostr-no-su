@@ -180,6 +180,32 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   )
 }
 
+/// 承認済みセッションの行は、作成と最終利用を Unix 秒から RFC 3339 の UTC で出し、`time`
+/// の `datetime` 属性にも同じ値を入れる。
+pub fn sessions_show_created_and_last_used_times_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      sessions: Ok([
+        dashboard.SessionRow(
+          signer: "abcd",
+          client: "ef01",
+          created_at: 1_788_253_200,
+          last_used_at: 1_789_276_354,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(
+    body,
+    "<dt class=\"text-base-content/70\">Created</dt><dd><time class=\"whitespace-nowrap tabular-nums\" datetime=\"2026-09-01T09:00:00Z\">2026-09-01T09:00:00Z</time></dd>",
+  )
+  assert string.contains(
+    body,
+    "<dt class=\"text-base-content/70\">Last used</dt><dd><time class=\"whitespace-nowrap tabular-nums\" datetime=\"2026-09-13T05:12:34Z\">2026-09-13T05:12:34Z</time></dd>",
+  )
+}
+
 /// リレーは 1 行につき `<li>` 1 件で、使っている用途を監視、バンカーの順に並べる。
 /// 使っていない用途は出さず、URL は `break-all`、用途の語とバッジは `whitespace-nowrap`。
 pub fn relays_are_listed_one_item_per_row_test() {

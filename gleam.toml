@@ -25,6 +25,7 @@ lustre = ">= 5.7.1 and < 6.0.0"
 # plugins-src/event_logger/gleam.toml と一致させ、manifest.toml の版の一致は CI で
 # 検査している。
 pog = ">= 4.1.0 and < 5.0.0"
+gleam_time = ">= 1.10.0 and < 2.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
