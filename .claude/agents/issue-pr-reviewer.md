@@ -26,7 +26,7 @@ disallowedTools: Agent
 - 文書: README、docs/architecture.md、.env.example などが変更と整合するか
 - 文体: PR 本文とコミットメッセージが標準的な技術文体の日本語か
 - CI: `gh pr checks <PR> -R neverclear86/nostr-no-su` の全ジョブが head で pass か（実装エージェントが待ってから返す決まりなので、fail していれば must）
-- UI を変える PR: 実装エージェントが PR に貼った変更前（main）と変更後のスクリーンショット（`gh api repos/<R>/issues/<PR>/comments` の画像 URL を `curl -L` でスクラッチパッドに落とし、Read で見る）が、デザインの方針と issue の受け入れ条件に合うか。自分で撮り直すのは、貼られた画像に無い状態（狭い幅、ダーク、エラー表示など）を確かめたいときだけ。スクリーンショットのコメントは画像が出ていて変更前と変更後の対応が分かることだけを見て、説明文の文言は指摘しない。`priv/static/admin.css` が再ビルドされているか
+- UI を変える PR: 実装エージェントが PR に貼った変更前（main）と変更後のスクリーンショット（`gh api repos/<R>/issues/<PR>/comments` の画像 URL を `curl -L` でスクラッチパッドに落とし、Read で見る）が、デザインの方針と issue の受け入れ条件に合うか。スクリーンショットは日本語が基本で、英語は `i18n.gleam` の英語の文言を変えた画面だけが貼られる決まりなので、英語の一式が無いことは指摘しない。自分で撮り直すのは、貼られた画像に無い状態（狭い幅、ダーク、エラー表示など）を確かめたいときだけ。スクリーンショットのコメントは画像が出ていて変更前と変更後の対応が分かることだけを見て、説明文の文言は指摘しない。`priv/static/admin.css` が再ビルドされているか
 
 ## 再現
 - CI（`gh pr checks <PR> -R neverclear86/nostr-no-su`）が head で pass していることを確かめる。CI が行う検査（build、test、format、CSS の差分、vendor、プラグイン、.env.example）は再現しない。CI の結果は「確認したこと」の表に 1 行で書く
