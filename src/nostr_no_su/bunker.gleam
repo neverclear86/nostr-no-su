@@ -482,9 +482,9 @@ type Change {
 }
 
 /// 承認・拒否・取り消しと、NIP-46 の `connect`（セッションを開く、承認待ちを
-/// 登録する）と `logout` の書き込みの種類。失敗のログ行の言い回しを決める。前の
-/// 3 つは `admin.SessionChange`（`admin.gleam:620-624`）と同じ区分だが、`bunker`
-/// は管理 UI に依存できないので別に持つ。
+/// 登録する）・`logout`・セッション内のリクエストの最終利用の書き込みの種類。
+/// 失敗のログ行の言い回しを決める。前の 3 つは `admin.SessionChange` と同じ
+/// 区分だが、`bunker` は管理 UI に依存できないので別に持つ。
 type SessionChange {
   Approval
   Denial
@@ -492,6 +492,7 @@ type SessionChange {
   SessionOpening
   PendingRecording
   SessionClosing
+  SessionUse
 }
 
 /// OK を待っている応答の一覧。キーは応答 id。
@@ -1256,6 +1257,7 @@ fn session_failure_line(
     SessionOpening -> "open the session of"
     PendingRecording -> "record the pending connection of"
     SessionClosing -> "close the session of"
+    SessionUse -> "record the use of the session of"
   }
   "failed to "
   <> verb
@@ -1331,8 +1333,8 @@ fn session_write_failure(failure: WriteFailure) -> SessionFailure {
 /// `handle_event` の `Persist` の書き込みの種類と、失敗のログに出す
 /// （署名者, クライアント）。組は `Write` の値から取る（`connect` の書き込みの前は
 /// 組がメモリに無いので `session_target` で引かない）。`handle_event` が載せるのは
-/// `InsertSession`、`InsertPending`、`DeleteSession` だけで、残りは管理 UI と同じ
-/// 区分に写す。承認待ちの token は返さない。
+/// `InsertSession`、`InsertPending`、`DeleteSession`、`TouchSession` だけで、残りは
+/// 管理 UI と同じ区分に写す。承認待ちの token は返さない。
 fn incoming_write_change(
   write: engine.Write,
 ) -> #(SessionChange, Option(#(String, String))) {
@@ -1340,6 +1342,10 @@ fn incoming_write_change(
     engine.InsertSession(session:) -> #(
       SessionOpening,
       Some(#(session.signer, session.client)),
+    )
+    engine.TouchSession(signer:, client:, ..) -> #(
+      SessionUse,
+      Some(#(signer, client)),
     )
     engine.InsertPending(pending:, ..) -> #(
       PendingRecording,

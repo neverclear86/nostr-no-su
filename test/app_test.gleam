@@ -3288,9 +3288,11 @@ fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 /// 書き込み 1 件を、`account_store` の対応する関数と同じ意味で偽のデータベースに
 /// 反映する。`InsertSession` は同じ（signer, client）の行が無いときだけ末尾に足し、
 /// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。
-/// `DeleteSession` は組で除く。`InsertPending` は `replaced` の token を除いてから
-/// 足す。`DeletePending` は token で除く。`ApprovePending` は `DeletePending` の後に
-/// `InsertSession` と同じ規則でセッションを足す。
+/// `DeleteSession` は組で除く。`TouchSession` は組の行の `last_used_at` を
+/// `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。`InsertPending` は
+/// `replaced` の token を除いてから足す。`DeletePending` は token で除く。
+/// `ApprovePending` は `DeletePending` の後に `InsertSession` と同じ規則でセッションを
+/// 足す。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
     engine.InsertSession(session:) ->
@@ -3300,6 +3302,20 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
         ..database,
         sessions: list.filter(database.sessions, fn(session) {
           #(session.signer, session.client) != #(signer, client)
+        }),
+      )
+    engine.TouchSession(signer:, client:, last_used_at:) ->
+      Database(
+        ..database,
+        sessions: list.map(database.sessions, fn(session) {
+          case #(session.signer, session.client) == #(signer, client) {
+            True ->
+              engine.Session(
+                ..session,
+                last_used_at: int.max(session.last_used_at, last_used_at),
+              )
+            False -> session
+          }
         }),
       )
     engine.InsertPending(pending:, replaced:) ->

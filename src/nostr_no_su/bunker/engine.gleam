@@ -33,6 +33,10 @@ const future_window_seconds = 60
 /// 無かったものとして扱う。
 const pending_ttl_seconds = 600
 
+/// セッション内のリクエストで最終利用を書き込む最小の間隔（秒）。これより短い
+/// 間隔のリクエストは書き込みを伴わない。
+const last_used_granularity_seconds = 60
+
 /// 承認・拒否しようとした承認待ちが無い（不明、失効、処理済み）ときの理由。管理 UI も、
 /// 承認待ちの一覧に無いトークンに同じ理由を出す。
 pub const approval_request_not_found = "unknown or expired approval request"
@@ -73,6 +77,9 @@ pub type Engine {
     pending: Dict(String, Pending),
     // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
+    // #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
+    // 間も `touch` の間引きに使う。
+    touch_attempts: Dict(#(String, String), Int),
   )
 }
 
@@ -120,8 +127,9 @@ pub type Pending {
 
 /// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
 /// クライアント）の組で、取り消されるまで署名を代理できる。時刻は Unix 秒。
-/// `last_used_at` は作成時に `created_at` と同じ値を入れ、エンジンはその後
-/// 更新しない。
+/// `last_used_at` は作成時に `created_at` と同じ値を入れ、セッション内の
+/// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
+/// 経っていれば更新する。
 pub type Session {
   Session(
     signer: String,
@@ -139,6 +147,8 @@ pub type Write {
   InsertSession(session: Session)
   /// `delete_session`。
   DeleteSession(signer: String, client: String)
+  /// `touch_session`。組の最終利用を `last_used_at` に進める。
+  TouchSession(signer: String, client: String, last_used_at: Int)
   /// 同じ組の古い承認待ち `replaced` を `delete_pending` で消し、`insert_pending` で
   /// 登録する。
   InsertPending(pending: Pending, replaced: List(String))
@@ -195,6 +205,7 @@ pub fn new(
       seen: window.new(seen_capacity),
       pending: dict.new(),
       auth_url: auth_url,
+      touch_attempts: dict.new(),
     )
   use engine, pair <- list.fold(accounts, empty)
   add_account(engine, pair.0, pair.1)
@@ -276,13 +287,16 @@ pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
   |> result.map(fn(entry) { entry.0 })
 }
 
-/// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定
-/// するよう署名者・クライアントの順に並べる。
+/// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定し、
+/// 使われていない組が末尾に来るよう、最終利用の新しい順、作成の新しい順、
+/// 署名者、クライアントの昇順に並べる。
 pub fn sessions(engine: Engine) -> List(Session) {
   engine.sessions
   |> dict.values
   |> list.sort(fn(left, right) {
-    string.compare(left.signer, right.signer)
+    int.compare(right.last_used_at, left.last_used_at)
+    |> order.break_tie(int.compare(right.created_at, left.created_at))
+    |> order.break_tie(string.compare(left.signer, right.signer))
     |> order.break_tie(string.compare(left.client, right.client))
   })
 }
@@ -323,7 +337,9 @@ pub fn pending(engine: Engine, now: Int) -> List(Pending) {
 /// `accounts`、`seen`、`auth_url` は変えない。DB が正なので既存の値には足さず
 /// 置き換える。署名者が登録されていないセッションと承認待ちは、
 /// `remove_account` と揃えて読み飛ばす。失効した承認待ち（`expired`）も同じく
-/// 読み飛ばす。失敗は返さない。
+/// 読み飛ばす。`touch_attempts` は読み込んだセッションに組がある項目だけ残す
+/// （書けなかった書き込みの後の読み直しで、すぐ書き直さないため）。失敗は
+/// 返さない。
 pub fn restore(
   engine: Engine,
   sessions: List(Session),
@@ -345,7 +361,16 @@ pub fn restore(
     })
     |> list.map(fn(entry) { #(entry.token, entry) })
     |> dict.from_list
-  Engine(..engine, sessions: sessions, pending: pending)
+  let touch_attempts =
+    dict.filter(engine.touch_attempts, fn(pair, _attempted_at) {
+      dict.has_key(sessions, pair)
+    })
+  Engine(
+    ..engine,
+    sessions: sessions,
+    pending: pending,
+    touch_attempts: touch_attempts,
+  )
 }
 
 /// 承認待ちの接続要求を承認する。（署名者, クライアント）を承認済みにして、元の
@@ -443,8 +468,8 @@ fn respond(
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
 /// `event.verify` で確かめてあり、エンジンは検証しない。第 1 要素は受理した
-/// イベントの id だけを記録したエンジンで、セッションと承認待ちの変更は
-/// `Persist` の `next` に載せる。
+/// イベントの id と、`TouchSession` を書こうとした組の試行の時刻を記録した
+/// エンジンで、セッションと承認待ちの変更は `Persist` の `next` に載せる。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
@@ -543,8 +568,26 @@ fn handle_request(
           inputs.now,
         )
       }
-      #(engine, outcome(execution, build))
+      #(attempted(engine, execution), outcome(execution, build))
     }
+  }
+}
+
+/// 書き込みが成功しなかったとき（失敗、または応答を組めず破棄したとき）に続ける
+/// エンジン。`TouchSession` を書こうとした実行なら組の試行の時刻を
+/// `touch_attempts` に残し、それ以外は `engine` をそのまま返す。
+fn attempted(engine: Engine, execution: Execution) -> Engine {
+  case execution {
+    Record(write: TouchSession(signer:, client:, last_used_at:), ..) ->
+      Engine(
+        ..engine,
+        touch_attempts: dict.insert(
+          engine.touch_attempts,
+          #(signer, client),
+          last_used_at,
+        ),
+      )
+    _ -> engine
   }
 }
 
@@ -611,7 +654,8 @@ fn outcome(
 }
 
 /// リクエストを 1 件実行する。`connect` と `logout` 以外は、クライアントが先に
-/// 接続済みであることを条件とする。
+/// 接続済みであることを条件とする。セッション内のリクエストは `touch` が
+/// 最終利用を書く。
 ///
 /// `logout` はセッションの有無によらず ack を返す。NIP-46 は応答を ack と定め、
 /// クライアント（nostr-tools の `BunkerSigner`）は ack 以外の応答で購読の後
@@ -639,11 +683,60 @@ fn execute(
       }
     }
     _ ->
-      case dict.has_key(engine.sessions, #(signer, client_pk_hex)) {
-        False ->
+      case dict.get(engine.sessions, #(signer, client_pk_hex)) {
+        Error(Nil) ->
           Respond(rpc.error(request.id, "unauthorized: send connect first"))
-        True -> Respond(execute_in_session(account, request, inputs.now))
+        Ok(session) ->
+          touch(
+            engine,
+            session,
+            execute_in_session(account, request, inputs.now),
+            inputs.now,
+          )
       }
+  }
+}
+
+/// セッション内の応答を、最終利用の書き込みを伴う実行にする。最終利用と
+/// `touch_attempts` の試行の時刻の新しい方から `last_used_granularity_seconds`
+/// 未満なら書き込まずに `Respond`。以上なら `TouchSession` を書き、書けたら
+/// `last_used_at` を `now` にし組の試行の時刻を消したエンジンで続け、書けなくても
+/// 同じ応答を返す（応答は DB に依存しない）。
+fn touch(
+  engine: Engine,
+  session: Session,
+  response: rpc.Response,
+  now: Int,
+) -> Execution {
+  let pair = #(session.signer, session.client)
+  let last_attempt = dict.get(engine.touch_attempts, pair) |> result.unwrap(0)
+  case
+    now - int.max(session.last_used_at, last_attempt)
+    < last_used_granularity_seconds
+  {
+    True -> Respond(response)
+    False -> {
+      let next =
+        Engine(
+          ..engine,
+          sessions: dict.insert(
+            engine.sessions,
+            pair,
+            Session(..session, last_used_at: now),
+          ),
+          touch_attempts: dict.delete(engine.touch_attempts, pair),
+        )
+      Record(
+        write: TouchSession(
+          signer: session.signer,
+          client: session.client,
+          last_used_at: now,
+        ),
+        next:,
+        response:,
+        on_failure: response,
+      )
+    }
   }
 }
 
