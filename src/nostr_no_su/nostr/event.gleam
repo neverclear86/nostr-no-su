@@ -1,3 +1,9 @@
+//// NIP-01 のイベントの表現と、id の計算・署名・検証。
+////
+//// JSON（`to_json` / `decoder`）とプラグインへ渡す map（`to_map` / `from_map`）の
+//// 2 つの外向きの表現を持ち、後者はプラグイン API v1 の境界である。
+//// リレーとの送受信のメッセージは `nostr_no_su/nostr/message` が担う。
+
 import gleam/bit_array
 import gleam/bool
 import gleam/crypto

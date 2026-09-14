@@ -1,3 +1,8 @@
+//// NIP-01 の REQ に載せる購読フィルター。
+////
+//// 本体が実際に使う `authors`、`kinds`、`#p`、`since`、`limit` の 5 つだけを
+//// 持つ。`ids` や `#e`、`until` は必要になるまで足さない。
+
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}

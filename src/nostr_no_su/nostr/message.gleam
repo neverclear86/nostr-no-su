@@ -1,3 +1,9 @@
+//// リレーとやり取りする NIP-01 と NIP-42 のメッセージの符号化と復号。
+////
+//// 送るのは `REQ`、`CLOSE`、`EVENT`、`AUTH`、受け取るのは `EVENT`、`EOSE`、
+//// `OK`、`NOTICE`、`CLOSED`、`AUTH` で、未知のタグはデコードのエラーにする。
+//// WebSocket の接続と再接続は `nostr_no_su/relay_connection` が担う。
+
 import gleam/dynamic/decode
 import gleam/json
 import nostr_no_su/nostr/event.{type Event}
