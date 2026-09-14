@@ -57,7 +57,7 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/bunker.{type ChangeFailure, type RevokeFailure}
+import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/log
@@ -139,12 +139,14 @@ pub type Context {
     plugins: fn() -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
-    sessions: fn() -> List(Session),
+    /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
+    sessions: fn() -> Result(List(Session), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
-    revoke: fn(String, String) -> Result(Nil, RevokeFailure),
-    pending: fn() -> List(dashboard.PendingRow),
-    approve: fn(String) -> Result(Nil, String),
-    deny: fn(String) -> Result(Nil, String),
+    revoke: fn(String, String) -> Result(Nil, SessionFailure),
+    /// 承認待ちの一覧。読み込み中、応答なしのときは表示する理由を返す。
+    pending: fn() -> Result(List(dashboard.PendingRow), String),
+    approve: fn(String) -> Result(Nil, SessionFailure),
+    deny: fn(String) -> Result(Nil, SessionFailure),
   )
 }
 
@@ -235,6 +237,7 @@ fn require_same_origin(
         i18n.BadRequest,
         i18n.Translated(i18n.OriginMismatch),
         view.Failure,
+        [],
       )
       |> wisp.html_response(400)
       |> protect
@@ -317,6 +320,7 @@ fn failure_page(
     title,
     message,
     view.Failure,
+    [],
   )
 }
 
@@ -594,10 +598,11 @@ fn deny_connection(
   )
 }
 
-/// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。無ければ
-/// 表示や承認・拒否を呼ばずに 404 の通知ページを返す。不明、失効、処理済みのほか、
-/// バンカーが応答せず一覧が空のときも一致しない。ログに出す署名者とクライアントは、
-/// トークンではなくこの行の値から取る。
+/// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
+/// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
+/// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧にあっても
+/// 一致しない。ログに出す署名者とクライアントは、トークンではなくこの行の値から
+/// 取る。
 fn with_pending(
   context: Context,
   language: Language,
@@ -605,14 +610,19 @@ fn with_pending(
   token: String,
   next: fn(dashboard.PendingRow) -> Response,
 ) -> Response {
-  case list.find(context.pending(), fn(entry) { entry.token == token }) {
-    Ok(entry) -> next(entry)
-    Error(Nil) ->
-      not_found_notice(
-        language,
-        theme,
-        i18n.Untranslated(engine.approval_request_not_found),
-      )
+  case context.pending() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
+    Ok(rows) ->
+      case list.find(rows, fn(entry) { entry.token == token }) {
+        Ok(entry) -> next(entry)
+        Error(Nil) ->
+          not_found_notice(
+            language,
+            theme,
+            i18n.Untranslated(engine.approval_request_not_found),
+          )
+      }
   }
 }
 
@@ -649,14 +659,13 @@ pub fn session_change_line(
 
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
 /// 終わったことだけを伝える。処理できたときは `log_line` を 1 行ログに出す。処理
-/// できなかった要求（一覧を引いた後に失効・処理済みになった、あるいはバンカーが
-/// 動いていない）は、区別せず理由を添えた 404 にする。承認と拒否はどちらも 200
+/// できなかった要求は `session_failure_response` に渡す。承認と拒否はどちらも 200
 /// なので、処理できたときの見出し（`done`）、文（`message`）、通知の色（`tone`）は
 /// 呼び出し側が渡す。
 fn decision_response(
   language: Language,
   theme: view.Theme,
-  outcome: Result(Nil, String),
+  outcome: Result(Nil, SessionFailure),
   log_line: String,
   done: i18n.Message,
   message: i18n.Message,
@@ -672,17 +681,17 @@ fn decision_response(
         done,
         i18n.Translated(message),
         tone,
+        [],
       )
       |> wisp.html_response(200)
     }
-    Error(reason) ->
-      not_found_notice(language, theme, i18n.Untranslated(reason))
+    Error(failure) -> session_failure_response(language, theme, failure)
   }
 }
 
 /// セッションを 1 件取り消してダッシュボードへ戻す。再読み込みで取り消しが
 /// 再送されないよう 303 でリダイレクトする。取り消せなかったときは
-/// `revoke_failure_response` に渡す。
+/// `session_failure_response` に渡す。
 fn revoke_session(
   context: Context,
   request: Request,
@@ -705,29 +714,41 @@ fn revoke_session(
           )
           wisp.redirect(to: "/")
         }
-        Error(failure) -> revoke_failure_response(language, theme, failure)
+        Error(failure) -> session_failure_response(language, theme, failure)
       }
     _, _ -> bad_request(language, theme)
   }
 }
 
-/// 取り消しの失敗の応答。承認済みでない組は承認・拒否の失敗と同じ 404、バンカーが
-/// 応答しなければ 503 の通知ページにする。応答が無いときはアカウントの変更と違って
-/// 202 にしない。取り消しは再送しても害が無い（反映済みなら 404 になる）ので、
-/// やり直してよい一時的な失敗として返す。
-fn revoke_failure_response(
+/// 承認・拒否・取り消しの失敗の応答。対象が無ければ承認・拒否の失敗と同じ 404、
+/// 書き込まれていないことが確定していれば 409、受け付けられなければ 503 の
+/// `BunkerNotAvailable`、反映されたか分からなければ 503 の `ChangeNotConfirmed`
+/// の通知ページにする。「分からない」をアカウントの変更と違って 202 にしないのは、
+/// 承認・拒否・取り消しは再送しても害が無い（反映済みなら 404 になる）ので、
+/// やり直してよい一時的な失敗として返せるからである。
+fn session_failure_response(
   language: Language,
   theme: view.Theme,
-  failure: RevokeFailure,
+  failure: SessionFailure,
 ) -> Response {
   case failure {
     bunker.SessionNotFound(reason) ->
       not_found_notice(language, theme, i18n.Untranslated(reason))
-    bunker.NotAnswered ->
+    bunker.SessionNotApplied(reason) ->
+      failure_page(
+        language,
+        theme,
+        i18n.ChangeNotApplied,
+        i18n.Untranslated(reason),
+      )
+      |> wisp.html_response(409)
+    bunker.SessionNotReady(reason) ->
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
+    bunker.SessionMaybeApplied(cause) ->
       not_confirmed_notice(
         language,
         theme,
-        i18n.Translated(i18n.BunkerDidNotRespond),
+        i18n.Translated(not_confirmed_message(cause)),
         503,
       )
   }
@@ -1028,7 +1049,8 @@ fn with_account(
   next: fn(dashboard.AccountRow) -> Response,
 ) -> Response {
   case context.accounts() {
-    Error(reason) -> accounts_unavailable(language, theme, reason)
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     Ok(rows) ->
       case list.find(rows, fn(row) { row.signer == signer }) {
         Ok(row) -> next(row)
@@ -1119,7 +1141,8 @@ fn change_failure_response(
   case failure {
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
-    bunker.NotReady(reason) -> accounts_unavailable(language, theme, reason)
+    bunker.NotReady(reason) ->
+      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     bunker.MaybeApplied(cause) ->
       not_confirmed_notice(
         language,
@@ -1154,8 +1177,9 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
 }
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更は 202、セッションの取り消しは 503）。本文は呼び出し側が
-/// 訳すかを決める。
+/// 決める（アカウントの変更は 202、承認・拒否・取り消しと再有効化は 503）。本文は
+/// 呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめるよう促す一文を
+/// 添える。
 fn not_confirmed_notice(
   language: Language,
   theme: view.Theme,
@@ -1169,24 +1193,27 @@ fn not_confirmed_notice(
     i18n.ChangeNotConfirmed,
     reason,
     view.Warning,
+    [view.hint(i18n.text(language, i18n.CheckDashboardBeforeRetrying))],
   )
   |> wisp.html_response(status)
 }
 
-/// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け
-/// られない、nsec の問い合わせが失敗した場合に共通で使う。
-fn accounts_unavailable(
+/// 受け付けられないときの 503 の通知ページ。一覧を得られない、変更や照会を受け
+/// 付けられないときに共通で使う。見出しは呼び出し側が決める。
+fn unavailable_notice(
   language: Language,
   theme: view.Theme,
+  title: i18n.Message,
   reason: String,
 ) -> Response {
   dashboard.notice_page(
     language,
     theme,
     return_to_dashboard,
-    i18n.AccountsNotAvailable,
+    title,
     i18n.Untranslated(reason),
     view.Warning,
+    [],
   )
   |> wisp.html_response(503)
 }
@@ -1237,7 +1264,8 @@ fn reveal_private_key(
           account_pages.private_key_page(language, theme, row, nsec)
           |> wisp.html_response(200)
         }
-        Error(reason) -> accounts_unavailable(language, theme, reason)
+        Error(reason) ->
+          unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
       }
   }
 }

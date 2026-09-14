@@ -12,7 +12,7 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 とセッションの
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 と、承認・拒否・
 //// 取り消しの 503）は、バンカーが原因を型で返すので訳す。プラグインの再有効化の 503 は
 //// 英語のまま。
 ////
@@ -159,6 +159,8 @@ pub type Lead {
   CouldNotRotateSecret
   CouldNotDeleteAccount
   CouldNotListAccounts
+  CouldNotListPending
+  CouldNotListSessions
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -172,6 +174,8 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotRotateSecret -> "secret を再生成できませんでした。"
         CouldNotDeleteAccount -> "アカウントを削除できませんでした。"
         CouldNotListAccounts -> "アカウントの一覧を表示できません。"
+        CouldNotListPending -> "承認待ちの一覧を表示できません。"
+        CouldNotListSessions -> "セッションの一覧を表示できません。"
       })
   }
 }
@@ -245,6 +249,9 @@ pub type Message {
   DeniedCloseWindow
   NotFound
   ChangeNotConfirmed
+  ChangeNotApplied
+  BunkerNotAvailable
+  CheckDashboardBeforeRetrying
   AccountsNotAvailable
   MethodNotAllowed
   BadRequest
@@ -368,6 +375,10 @@ fn english(message: Message) -> String {
     DeniedCloseWindow -> "Denied. You can close this window."
     NotFound -> "Not found"
     ChangeNotConfirmed -> "Change not confirmed"
+    ChangeNotApplied -> "Change not applied"
+    BunkerNotAvailable -> "Bunker is not available"
+    CheckDashboardBeforeRetrying ->
+      "Before trying again, check on the dashboard whether the change was applied."
     AccountsNotAvailable -> "Accounts are not available"
     MethodNotAllowed -> "Method not allowed"
     BadRequest -> "Bad request"
@@ -380,10 +391,9 @@ fn english(message: Message) -> String {
       "The form was incomplete. Go back to the dashboard and try again."
     OriginMismatch ->
       "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see the README."
-    BunkerDidNotRespond ->
-      "the bunker did not respond; check the dashboard to see whether the change was applied"
+    BunkerDidNotRespond -> "the bunker did not respond"
     StoreDidNotConfirm ->
-      "the store did not confirm the change; it may have been applied, so open the dashboard to check"
+      "the store did not confirm the change; it may have been applied"
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
@@ -503,6 +513,9 @@ fn japanese(message: Message) -> String {
     DeniedCloseWindow -> "拒否しました。このウィンドウは閉じてかまいません。"
     NotFound -> "見つかりません"
     ChangeNotConfirmed -> "変更を確認できませんでした"
+    ChangeNotApplied -> "変更を反映できませんでした"
+    BunkerNotAvailable -> "バンカーを利用できません"
+    CheckDashboardBeforeRetrying -> "やり直す前に、ダッシュボードで反映されたかを確かめてください。"
     AccountsNotAvailable -> "アカウントを利用できません"
     MethodNotAllowed -> "この方法では開けません"
     BadRequest -> "要求を処理できません"
@@ -513,9 +526,8 @@ fn japanese(message: Message) -> String {
     FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
     OriginMismatch ->
       "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
-    BunkerDidNotRespond -> "バンカーが応答しませんでした。変更が反映されたかを、ダッシュボードで確認してください。"
-    StoreDidNotConfirm ->
-      "データベースが変更を確定しませんでした。反映されている可能性があるので、ダッシュボードを開いて確認してください。"
+    BunkerDidNotRespond -> "バンカーが応答しませんでした。"
+    StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
