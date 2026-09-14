@@ -190,6 +190,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
+| `DEDUP_CAPACITY` | `4096` | 監視の重複排除が記憶する直近のイベント id の件数（実際に記憶するのはこの 1〜2 倍）。1 以上の整数。未設定か空なら既定。0 以下や数値でない値は起動しない |
 
 注 1: `DATABASE_URL` の userinfo はパーセントデコードされない。`:` を含むパスワード、ユーザー名の無い URL（`postgres://host:5432/db` のように `user@` を持たないもの）、データベース名の無い URL は解釈できず、`[main] cannot start: DATABASE_URL is not a valid postgres URL` を出して終了する（URL そのものはログに出さない）。
 

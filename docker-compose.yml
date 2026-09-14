@@ -21,6 +21,7 @@ services:
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
+      DEDUP_CAPACITY: ${DEDUP_CAPACITY-4096}
       # true にすると VM の全て（復号した秘密鍵を含む）に到達できる。
       # 使い方は README の「docker compose」の節。
       REMSH_ENABLED: ${REMSH_ENABLED-false}

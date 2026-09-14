@@ -175,6 +175,7 @@ fn test_config(database_url: String) -> config.Config {
     admin_bind: "127.0.0.1",
     admin_base_url: None,
     console_logger_enabled: Ok(False),
+    dedup_capacity: Ok(4096),
   )
 }
 
