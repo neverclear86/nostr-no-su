@@ -1064,7 +1064,9 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
         random_master_key(),
         account_store.default_timeouts,
       ),
-      load: fn() { Ok(vault.Loaded(accounts: [], skipped: [])) },
+      load: fn() {
+        Ok(bunker.Snapshot(vault.Loaded(accounts: [], skipped: []), [], []))
+      },
     )
   let assert Ok(started) =
     bunker.start(

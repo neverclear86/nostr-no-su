@@ -281,7 +281,7 @@ fn bunker_spec(
 fn idle_bunker() -> app.Bunker {
   bunker_spec(
     process.new_name("test_bunker"),
-    store_with_load(fn() { Ok(Loaded(accounts: [], skipped: [])) }),
+    store_with_load(fn() { Ok(accounts_only([])) }),
     [],
     fixed_retry_delay,
   )
@@ -298,7 +298,9 @@ type StoreCall {
 }
 
 /// 指定した読み込み関数を持ち、書き込みはすべて成功する偽のストア。
-fn store_with_load(load: fn() -> Result(vault.Loaded, String)) -> bunker.Store {
+fn store_with_load(
+  load: fn() -> Result(bunker.Snapshot, String),
+) -> bunker.Store {
   bunker.Store(
     load: load,
     insert: fn(_entry) { Ok(Nil) },
@@ -324,7 +326,7 @@ fn memory_store(
     }
   }
   bunker.Store(
-    load: fn() { Ok(Loaded(accounts: initial, skipped: [])) },
+    load: fn() { Ok(accounts_only(initial)) },
     insert: fn(entry: vault.StoredAccount) {
       written(Inserted(
         account.pubkey_hex(entry.account),
@@ -362,8 +364,13 @@ fn stored_signer(key_hex: String) -> vault.StoredAccount {
 }
 
 /// 指定した秘密鍵の署名者 1 件を、テストの secret 付きで読み込んだ結果。
-fn load_signer(key_hex: String) -> Result(vault.Loaded, String) {
-  Ok(Loaded(accounts: [stored_signer(key_hex)], skipped: []))
+fn load_signer(key_hex: String) -> Result(bunker.Snapshot, String) {
+  Ok(accounts_only([stored_signer(key_hex)]))
+}
+
+/// アカウントだけがあり、セッションと承認待ちが無い読み込みの結果。
+fn accounts_only(accounts: List(vault.StoredAccount)) -> bunker.Snapshot {
+  bunker.Snapshot(Loaded(accounts: accounts, skipped: []), [], [])
 }
 
 /// どのリレーにも `stored` を返す、再開点の読み込みの操作。
@@ -917,20 +924,21 @@ fn await_loaded(name: Name(bunker.Msg), remaining: Int) -> Bool {
 pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   let reports = process.new_subject()
   let loads = process.new_subject()
-  let calls = process.new_subject()
   let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
   let next_write = call_counter()
   let store =
     bunker.Store(
-      ..memory_store(calls, [stored_signer(signer_key)], False),
+      ..base,
       load: fn() {
         process.send(loads, Nil)
-        load_signer(signer_key)
+        base.load()
       },
-      write: fn(_write) {
+      write: fn(write) {
         case next_write() {
           1 -> Error(bunker.MaybeWritten(store_failure()))
-          _ -> Ok(Nil)
+          _ -> base.write(write)
         }
       },
     )
@@ -963,25 +971,61 @@ pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   stop_tree(tree)
 }
 
+/// 承認が実は書けていて、読み直しの後にも `ack` を発行しないとき、クライアントは
+/// 応答を受け取れないが、承認済みのセッションで接続し直せる。
+pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
+  let store =
+    bunker.Store(..base, write: fn(write) {
+      let _ = base.write(write)
+      case write {
+        engine.ApprovePending(..) -> Error(bunker.MaybeWritten(store_failure()))
+        _ -> Ok(Nil)
+      }
+    })
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", ""))
+  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  let assert [entry] = bunker.pending(name)
+
+  assert bunker.approve(name, entry.token)
+    == Error(i18n.text(i18n.English, i18n.StoreDidNotConfirm))
+
+  assert await_loaded(name, 2000)
+  assert bunker.pending(name) == []
+  let assert [session] = bunker.sessions(name)
+  assert session.client == account.pubkey_hex(account_for(client_key))
+  assert process.receive(reports, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
 /// 拒否と取り消しの書き込みの結果が曖昧だったときも、同じ読み直しに移り、理由を
 /// 報告する。
 pub fn unconfirmed_denials_and_revocations_are_reported_test() {
   let reports = process.new_subject()
   let loads = process.new_subject()
-  let calls = process.new_subject()
   let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let base = committed_but_timed_out_store(database)
   let store =
     bunker.Store(
-      ..memory_store(calls, [stored_signer(signer_key)], False),
+      ..base,
       load: fn() {
         process.send(loads, Nil)
-        load_signer(signer_key)
+        base.load()
       },
       write: fn(write) {
         case write {
           engine.DeletePending(..) | engine.DeleteSession(..) ->
             Error(bunker.MaybeWritten(store_failure()))
-          _ -> Ok(Nil)
+          _ -> base.write(write)
         }
       },
     )
@@ -1993,6 +2037,64 @@ pub fn a_restarted_bunker_reloads_the_accounts_test() {
   stop_tree(tree)
 }
 
+/// 再起動しても、接続済みのクライアントは再 `connect` なしで署名でき、承認待ちは
+/// DB に保存した経過時間のまま残って承認できる（#215 の受け入れ条件）。
+pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let database = start_database([stored_signer(signer_key)])
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      committed_but_timed_out_store(database),
+      fixed_retry_delay,
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert [session] = bunker.sessions(name)
+
+  deliver(connect_request_from(other_client_key, "c2", ""))
+  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let assert [entry] = bunker.pending(name)
+
+  // DB の作成時刻だけをずらし、メモリではなく DB から読み込んだことを見分ける。
+  let shifted = engine.Pending(..entry, created_at: entry.created_at - 300)
+  process.call(database, 1000, ApplyWrite(
+    engine.InsertPending(pending: shifted, replaced: [entry.token]),
+    _,
+  ))
+
+  let assert Ok(killed) = process.named(name)
+  process.kill(killed)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  assert bunker.sessions(name) == [session]
+  assert bunker.pending(name) == [shifted]
+
+  let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
+  deliver(request("s1", "sign_event", "[\"" <> draft <> "\"]"))
+  let assert Ok(Published(_socket, signed)) = process.receive(reports, 2000)
+  let signed_body = response_body(signed)
+  assert string.contains(signed_body, "\"id\":\"s1\"")
+  assert string.contains(signed_body, "\\\"sig\\\"")
+
+  assert bunker.approve(name, entry.token) == Ok(Nil)
+  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let ack_body =
+    nip46_client.decrypt_response(
+      account_for(other_client_key),
+      account_for(signer_key),
+      ack,
+    )
+  assert string.contains(ack_body, "\"id\":\"c2\"")
+  assert string.contains(ack_body, "\"result\":\"ack\"")
+  stop_tree(tree)
+}
+
 /// ストアの読み込みに失敗し続けても、監視のプラグインにはイベントが届き続け、
 /// バンカーもルートも再起動しない。読み込みでアクターのループが止まっていても、
 /// 問い合わせは `named.call` のタイムアウトより前に応答する。
@@ -2733,38 +2835,60 @@ fn process_info(pid: Pid, item: Atom) -> #(Atom, Int)
 
 /// 偽のデータベースへの操作。
 type DatabaseMsg {
-  /// 現在の行を読む。読み込みを失敗させている間は `Error`。
-  ReadRows(reply: Subject(Result(List(vault.StoredAccount), Nil)))
-  /// 行を書き換える。
+  /// 現在の内容を読む。読み込みを失敗させている間は `Error`。
+  ReadRows(reply: Subject(Result(bunker.Snapshot, Nil)))
+  /// アカウントの行を書き換える。
   WriteRows(
     change: fn(List(vault.StoredAccount)) -> List(vault.StoredAccount),
     reply: Subject(Nil),
   )
+  /// セッションと承認待ちの書き込み 1 件を反映する。
+  ApplyWrite(write: engine.Write, reply: Subject(Nil))
   /// 読み込みを失敗させるかどうかを切り替える。
   FailReads(failing: Bool)
 }
 
-/// 偽のデータベースの状態。行と、読み込みを失敗させているかどうか。
+/// 偽のデータベースの状態。アカウントの行、セッション、承認待ち、読み込みを
+/// 失敗させているかどうか。
 type Database {
-  Database(rows: List(vault.StoredAccount), failing_reads: Bool)
+  Database(
+    rows: List(vault.StoredAccount),
+    sessions: List(engine.Session),
+    pending: List(engine.Pending),
+    failing_reads: Bool,
+  )
 }
 
-/// 行を持つ偽のデータベースを起動する。
+/// アカウントの行を持ち、セッションと承認待ちが空の偽のデータベースを起動する。
 fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
   let assert Ok(started) =
-    actor.new(Database(rows: rows, failing_reads: False))
+    actor.new(Database(
+      rows: rows,
+      sessions: [],
+      pending: [],
+      failing_reads: False,
+    ))
     |> actor.on_message(fn(database, msg) {
       case msg {
         ReadRows(reply) -> {
           process.send(reply, case database.failing_reads {
             True -> Error(Nil)
-            False -> Ok(database.rows)
+            False ->
+              Ok(bunker.Snapshot(
+                Loaded(accounts: database.rows, skipped: []),
+                database.sessions,
+                database.pending,
+              ))
           })
           actor.continue(database)
         }
         WriteRows(change, reply) -> {
           process.send(reply, Nil)
           actor.continue(Database(..database, rows: change(database.rows)))
+        }
+        ApplyWrite(write, reply) -> {
+          process.send(reply, Nil)
+          actor.continue(apply_write(database, write))
         }
         FailReads(failing) ->
           actor.continue(Database(..database, failing_reads: failing))
@@ -2774,10 +2898,67 @@ fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
   started.data
 }
 
+/// 書き込み 1 件を、`account_store` の対応する関数と同じ意味で偽のデータベースに
+/// 反映する。`InsertSession` は同じ（signer, client）の行が無いときだけ末尾に足し、
+/// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。
+/// `DeleteSession` は組で除く。`InsertPending` は `replaced` の token を除いてから
+/// 足す。`DeletePending` は token で除く。`ApprovePending` は `DeletePending` の後に
+/// `InsertSession` と同じ規則でセッションを足す。
+fn apply_write(database: Database, write: engine.Write) -> Database {
+  case write {
+    engine.InsertSession(session:) ->
+      Database(..database, sessions: insert_session(database.sessions, session))
+    engine.DeleteSession(signer:, client:) ->
+      Database(
+        ..database,
+        sessions: list.filter(database.sessions, fn(session) {
+          #(session.signer, session.client) != #(signer, client)
+        }),
+      )
+    engine.InsertPending(pending:, replaced:) ->
+      Database(..database, pending: [
+        pending,
+        ..list.filter(database.pending, fn(entry) {
+          !list.contains(replaced, entry.token)
+        })
+      ])
+    engine.DeletePending(token:) ->
+      Database(
+        ..database,
+        pending: list.filter(database.pending, fn(entry) {
+          entry.token != token
+        }),
+      )
+    engine.ApprovePending(token:, session:) ->
+      Database(
+        ..database,
+        pending: list.filter(database.pending, fn(entry) {
+          entry.token != token
+        }),
+        sessions: insert_session(database.sessions, session),
+      )
+  }
+}
+
+/// `ON CONFLICT (signer, client) DO NOTHING` と同じ規則でセッションを足す。
+fn insert_session(
+  sessions: List(engine.Session),
+  session: engine.Session,
+) -> List(engine.Session) {
+  case
+    list.any(sessions, fn(existing) {
+      #(existing.signer, existing.client) == #(session.signer, session.client)
+    })
+  {
+    True -> sessions
+    False -> list.append(sessions, [session])
+  }
+}
+
 /// 偽のデータベースの行を、バンカーの一覧と同じ形（署名者の昇順）にする。
 fn database_listings(database: Subject(DatabaseMsg)) -> List(bunker.Listing) {
-  let assert Ok(rows) = process.call(database, 1000, ReadRows)
-  rows
+  let assert Ok(snapshot) = process.call(database, 1000, ReadRows)
+  snapshot.accounts.accounts
   |> list.map(fn(row) {
     bunker.Listing(
       signer: account.pubkey_hex(row.account),
@@ -2791,7 +2972,8 @@ fn database_listings(database: Subject(DatabaseMsg)) -> List(bunker.Listing) {
 
 /// 偽のデータベースに書き込んだうえで、結果が曖昧な失敗を返すストア。サーバー側で
 /// コミットされたのに、クライアント側の期限を過ぎた書き込みを模す。読み込みは
-/// 偽のデータベースの現在の行を返す。
+/// 偽のデータベースの現在の内容を返す。セッションと承認待ちの書き込みは偽の
+/// データベースに反映して成功を返す。
 fn committed_but_timed_out_store(
   database: Subject(DatabaseMsg),
 ) -> bunker.Store {
@@ -2813,10 +2995,8 @@ fn committed_but_timed_out_store(
   }
   bunker.Store(
     load: fn() {
-      case process.call(database, 1000, ReadRows) {
-        Ok(rows) -> Ok(Loaded(accounts: rows, skipped: []))
-        Error(Nil) -> Error(store_failure())
-      }
+      process.call(database, 1000, ReadRows)
+      |> result.replace_error(store_failure())
     },
     insert: fn(entry) { write(list.append(_, [entry])) },
     delete: fn(signer) {
@@ -2832,7 +3012,10 @@ fn committed_but_timed_out_store(
     update_label: fn(signer, label) {
       modify(signer, fn(row) { StoredAccount(..row, label: label) })
     },
-    write: fn(_write) { Ok(Nil) },
+    write: fn(change) {
+      process.call(database, 1000, ApplyWrite(change, _))
+      Ok(Nil)
+    },
   )
 }
 
@@ -3037,12 +3220,15 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
       ..store_with_load(fn() {
         process.send(loads, Nil)
         Ok(
-          Loaded(accounts: [], skipped: [
-            vault.Skipped(
-              pubkey: skipped,
-              reason: vault.UndecryptablePrivateKey,
-            ),
-          ]),
+          bunker.Snapshot(
+            ..accounts_only([]),
+            accounts: Loaded(accounts: [], skipped: [
+              vault.Skipped(
+                pubkey: skipped,
+                reason: vault.UndecryptablePrivateKey,
+              ),
+            ]),
+          ),
         )
       }),
       insert: fn(_entry) { already_stored() },
