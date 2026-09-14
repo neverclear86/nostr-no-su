@@ -206,7 +206,7 @@ pub fn dashboard_shows_pending_connections_test() {
   assert string.contains(body, "value=\"" <> auth_uri <> "\"")
   assert string.contains(body, "action=\"/approve/" <> token <> "\"")
   assert string.contains(body, "action=\"/deny/" <> token <> "\"")
-  assert string.contains(body, "<dd class=\"break-words\">12s</dd>")
+  assert string.contains(body, "<dd class=\"break-words\">540s</dd>")
 }
 
 /// 承認ページには、誰が誰に接続しようとしているかが出る。
@@ -216,7 +216,7 @@ pub fn approval_page_shows_the_request_test() {
   let body = simulate.read_body(response)
   assert string.contains(body, signer)
   assert string.contains(body, client)
-  assert string.contains(body, "<dd class=\"break-words\">12s</dd>")
+  assert string.contains(body, "<dd class=\"break-words\">540s</dd>")
 }
 
 /// 知らない、あるいは失効したトークンの承認ページは 404 の HTML で、理由を出し
@@ -226,7 +226,7 @@ pub fn approval_page_for_an_unknown_token_is_not_found_test() {
   assert response.status == 404
   let body = simulate.read_body(response)
   assert header(response, "content-type") == "text/html; charset=utf-8"
-  assert string.contains(body, "unknown or expired approval request")
+  assert string.contains(body, "It may have expired")
   assert !string.contains(body, "other-token")
 }
 
@@ -254,19 +254,18 @@ pub fn deciding_an_unknown_token_is_not_found_test() {
   let reports = process.new_subject()
   let approve_response =
     post(reporting_context(reports), "/approve/other-token")
+  let expected_reason =
+    i18n.text(
+      i18n.English,
+      i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
+    )
   assert approve_response.status == 404
-  assert string.contains(
-    simulate.read_body(approve_response),
-    engine.approval_request_not_found,
-  )
+  assert string.contains(simulate.read_body(approve_response), expected_reason)
   assert process.receive(reports, 100) == Error(Nil)
 
   let deny_response = post(reporting_context(reports), "/deny/other-token")
   assert deny_response.status == 404
-  assert string.contains(
-    simulate.read_body(deny_response),
-    engine.approval_request_not_found,
-  )
+  assert string.contains(simulate.read_body(deny_response), expected_reason)
   assert process.receive(reports, 100) == Error(Nil)
 }
 

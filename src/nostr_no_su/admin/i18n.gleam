@@ -2,7 +2,7 @@
 ////
 //// 文言は `Message` の値で表し、`text` が表示の言語の文字列にする。言語ごとの関数
 //// （`english`、`japanese`）は、どれも `Message` のすべての値を網羅する `case` なので、
-//// どちらかの言語の訳が無いとビルドが通らない。値を埋め込む文言（経過秒、件数、ラベルの
+//// どちらかの言語の訳が無いとビルドが通らない。値を埋め込む文言（残り秒、件数、ラベルの
 //// 上限）は値を持つ構築子にし、語順と記号を含めて言語ごとに文全体を返す。
 ////
 //// 言語を足すときは、`Language` に構築子を、`languages` に値を足し、コンパイラーが示す
@@ -14,7 +14,9 @@
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
 //// 例外として、変更を確認できなかったときの本文（アカウントの変更とリレーの変更の 202 と、
 //// 承認・拒否・取り消しの 503）は、バンカーと管理 UI の Context が原因を型で返すので訳す。
-//// プラグインの再有効化の 503 は英語のまま。
+//// 承認待ちの一覧に無いトークンの承認ページの 404 の本文も訳す。これは外から届いた文字列
+//// ではなく、管理 UI が一覧との照合で自分で決めている判定だからである。プラグインの
+//// 再有効化の 503 は英語のまま。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -211,11 +213,12 @@ pub type Message {
   // ダッシュボード
   Dashboard
   PendingConnections
-  NoPendingConnections
+  NoPendingConnections(minutes: Int)
+  AutoRefreshingEverySeconds(seconds: Int)
   Signer
   Client
-  Age
-  AgeSeconds(seconds: Int)
+  ExpiresIn
+  ExpiresInSeconds(seconds: Int)
   SecretLabel
   SecretNotOffered
   SecretMismatch
@@ -288,6 +291,7 @@ pub type Message {
   MethodNotAllowed
   BadRequest
   PageNotFound
+  ApprovalRequestGone(minutes: Int)
   AccountNotFound
   MethodNotAllowedDetail
   FormNotReadable
@@ -362,11 +366,16 @@ fn english(message: Message) -> String {
     SelectedPressCtrlC -> "Selected. Press Ctrl+C (⌘C on macOS) to copy."
     Dashboard -> "Dashboard"
     PendingConnections -> "Pending connections"
-    NoPendingConnections -> "No pending connections."
+    NoPendingConnections(minutes:) ->
+      "No pending connections. Pending connections expire after "
+      <> int.to_string(minutes)
+      <> " minutes."
+    AutoRefreshingEverySeconds(seconds:) ->
+      "Refreshing every " <> int.to_string(seconds) <> "s"
     Signer -> "Signer"
     Client -> "Client"
-    Age -> "Age"
-    AgeSeconds(seconds:) -> int.to_string(seconds) <> "s"
+    ExpiresIn -> "Expires in"
+    ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
     SecretLabel -> "Secret"
     SecretNotOffered -> "Not offered"
     SecretMismatch -> "Mismatch"
@@ -447,6 +456,10 @@ fn english(message: Message) -> String {
     MethodNotAllowed -> "Method not allowed"
     BadRequest -> "Bad request"
     PageNotFound -> "There is no page at this URL."
+    ApprovalRequestGone(minutes:) ->
+      "This connection request was not found. It may have expired (requests expire after "
+      <> int.to_string(minutes)
+      <> " minutes) or already been approved or denied. Connect again from the client."
     AccountNotFound ->
       "This account is not registered. It may have been deleted already; check the dashboard."
     MethodNotAllowedDetail ->
@@ -532,11 +545,13 @@ fn japanese(message: Message) -> String {
     SelectedPressCtrlC -> "選択しました。Ctrl+C（macOS では ⌘C）でコピーしてください。"
     Dashboard -> "ダッシュボード"
     PendingConnections -> "承認待ちの接続"
-    NoPendingConnections -> "承認待ちの接続はありません。"
+    NoPendingConnections(minutes:) ->
+      "承認待ちの接続はありません。承認待ちは " <> int.to_string(minutes) <> " 分で失効します。"
+    AutoRefreshingEverySeconds(seconds:) -> int.to_string(seconds) <> " 秒ごとに更新中"
     Signer -> "署名者"
     Client -> "クライアント"
-    Age -> "経過時間"
-    AgeSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
+    ExpiresIn -> "失効まで"
+    ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
     SecretLabel -> "secret"
     SecretNotOffered -> "提示なし"
     SecretMismatch -> "不一致"
@@ -612,6 +627,10 @@ fn japanese(message: Message) -> String {
     MethodNotAllowed -> "この方法では開けません"
     BadRequest -> "要求を処理できません"
     PageNotFound -> "この URL のページはありません。"
+    ApprovalRequestGone(minutes:) ->
+      "この接続要求は見つかりません。"
+      <> int.to_string(minutes)
+      <> " 分で失効するため時間切れになったか、すでに承認か拒否がされた可能性があります。クライアントから接続し直してください。"
     AccountNotFound -> "このアカウントは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
     MethodNotAllowedDetail ->
       "この URL は管理 UI のボタンから送る操作のもので、直接は開けません。ダッシュボードから操作してください。"

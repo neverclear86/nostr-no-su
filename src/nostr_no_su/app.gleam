@@ -805,7 +805,7 @@ fn account_row(
   )
 }
 
-/// 承認待ちを管理 UI の行にする。経過時間は問い合わせた時点で求める。
+/// 承認待ちを管理 UI の行にする。失効までの残り秒は問い合わせた時点で求める。
 fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
   let now = time.now_seconds()
   use entry <- list.map(pending)
@@ -813,7 +813,7 @@ fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     token: entry.token,
     signer: entry.signer,
     client: entry.client,
-    age_seconds: now - entry.created_at,
+    expires_in_seconds: entry.created_at + engine.pending_ttl_seconds - now,
     secret_mismatch: entry.secret_mismatch,
     perms: entry.perms,
   )

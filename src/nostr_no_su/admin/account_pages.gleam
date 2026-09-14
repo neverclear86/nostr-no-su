@@ -35,6 +35,7 @@ pub fn new_account_page(
     i18n.AddAccount,
     view.Narrow,
     view.SwitchReturningTo(path),
+    view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotRegister), error),
       view.card([
@@ -95,29 +96,37 @@ pub fn generated_key_page(
   problem: Option(GeneratedKeyProblem),
 ) -> String {
   let text = i18n.text(language, _)
-  view.page(language, theme, i18n.GeneratedKey, view.Narrow, view.NoSwitch, [
-    option.map(problem, problem_alert(language, _))
-      |> option.unwrap(element.none()),
-    view.card([
-      view.warning(view.emphasized(
-        language,
-        i18n.BackUpNow,
-        i18n.GeneratedKeyNotice,
-      )),
-      view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
-      view.post_form(
-        view.segments_path(dashboard.register_generated_segments),
-        [
-          view.hidden_input(dashboard.nsec_field, nsec),
-          label_fieldset(language, label),
-        ],
-        text(i18n.RegisterThisKey),
-        view.Primary,
-        view.InForm,
-      ),
-    ]),
-    view.back_link(language),
-  ])
+  view.page(
+    language,
+    theme,
+    i18n.GeneratedKey,
+    view.Narrow,
+    view.NoSwitch,
+    view.NoRefresh,
+    [
+      option.map(problem, problem_alert(language, _))
+        |> option.unwrap(element.none()),
+      view.card([
+        view.warning(view.emphasized(
+          language,
+          i18n.BackUpNow,
+          i18n.GeneratedKeyNotice,
+        )),
+        view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
+        view.post_form(
+          view.segments_path(dashboard.register_generated_segments),
+          [
+            view.hidden_input(dashboard.nsec_field, nsec),
+            label_fieldset(language, label),
+          ],
+          text(i18n.RegisterThisKey),
+          view.Primary,
+          view.InForm,
+        ),
+      ]),
+      view.back_link(language),
+    ],
+  )
 }
 
 /// 確認ページのカードの上に出す、再描画の理由の囲み。
@@ -177,6 +186,7 @@ pub fn registered_page(
     i18n.AccountRegistered,
     view.Narrow,
     view.NoSwitch,
+    view.NoRefresh,
     [
       view.card([
         view.summary_list([
@@ -272,6 +282,7 @@ pub fn account_action_page(
     dashboard.account_action_title(action),
     view.Narrow,
     view.SwitchReturningTo(path),
+    view.NoRefresh,
     [
       view.card([
         account_summary(language, row),
@@ -302,22 +313,30 @@ pub fn private_key_page(
   row: dashboard.AccountRow,
   nsec: String,
 ) -> String {
-  view.page(language, theme, i18n.PrivateKey, view.Narrow, view.NoSwitch, [
-    view.card([
-      account_summary(language, row),
-      view.copyable_field(
-        language,
-        i18n.text(language, i18n.PrivateKeyNsec),
-        nsec,
-      ),
-      view.warning(view.emphasized(
-        language,
-        i18n.CloseTabAfterCopying,
-        i18n.ResendNotice,
-      )),
-    ]),
-    view.back_link(language),
-  ])
+  view.page(
+    language,
+    theme,
+    i18n.PrivateKey,
+    view.Narrow,
+    view.NoSwitch,
+    view.NoRefresh,
+    [
+      view.card([
+        account_summary(language, row),
+        view.copyable_field(
+          language,
+          i18n.text(language, i18n.PrivateKeyNsec),
+          nsec,
+        ),
+        view.warning(view.emphasized(
+          language,
+          i18n.CloseTabAfterCopying,
+          i18n.ResendNotice,
+        )),
+      ]),
+      view.back_link(language),
+    ],
+  )
 }
 
 /// 操作の対象のアカウント（ラベルと、npub と 16 進の公開鍵）。

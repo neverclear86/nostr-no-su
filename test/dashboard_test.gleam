@@ -6,6 +6,7 @@ import gleam/string
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/engine
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import support/account_actions
@@ -37,7 +38,7 @@ fn states() -> dashboard.Snapshot {
         token: "tok",
         signer: "abcd",
         client: "ef01",
-        age_seconds: 12,
+        expires_in_seconds: 540,
         secret_mismatch: False,
         perms: "",
       ),
@@ -69,8 +70,9 @@ fn states() -> dashboard.Snapshot {
   )
 }
 
-/// 提示なしと不一致の承認待ちを、経過時間の短い順に持つスナップショット。提示なしの方
-/// (`tok-1`) は権限を要求し、不一致の方（`tok-2`）は権限を要求しない。
+/// 提示なしと不一致の承認待ちを、失効までが長い順（作成の新しい順）に持つスナップショット。
+/// 提示なしの方(`tok-1`) は権限を要求し、不一致の方（`tok-2`）は権限を要求しない。`tok-2`
+/// は残り 60 秒未満で、警告のバッジを見るためのものである。
 fn secret_states() -> dashboard.Snapshot {
   dashboard.Snapshot(
     ..states(),
@@ -79,7 +81,7 @@ fn secret_states() -> dashboard.Snapshot {
         token: "tok-1",
         signer: "abcd",
         client: "ef01",
-        age_seconds: 12,
+        expires_in_seconds: 540,
         secret_mismatch: False,
         perms: "sign_event:1,nip44_encrypt",
       ),
@@ -87,7 +89,7 @@ fn secret_states() -> dashboard.Snapshot {
         token: "tok-2",
         signer: "abcd",
         client: "ef01",
-        age_seconds: 48,
+        expires_in_seconds: 45,
         secret_mismatch: True,
         perms: "",
       ),
@@ -107,14 +109,14 @@ pub fn states_are_shown_as_badges_test() {
     "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">overloaded</span><span class=\"text-xs break-words\">(dropped 4)</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disabled</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
     "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">unavailable</span>",
-    "<dd class=\"break-words\">12s</dd>",
+    "<dd class=\"break-words\">540s</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
   })
 }
 
-/// 日本語のダッシュボードでは、状態の語、件数、経過時間を日本語の形で出す。バッジの
+/// 日本語のダッシュボードでは、状態の語、件数、残り秒を日本語の形で出す。バッジの
 /// クラスは英語と同じである。
 pub fn japanese_states_are_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, states())
@@ -127,7 +129,7 @@ pub fn japanese_states_are_translated_test() {
     "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">過負荷</span><span class=\"text-xs break-words\">（破棄 4 件）</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">無効</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
     "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">応答なし</span>",
-    "<dd class=\"break-words\">12 秒</dd>",
+    "<dd class=\"break-words\">540 秒</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
@@ -135,14 +137,18 @@ pub fn japanese_states_are_translated_test() {
 }
 
 /// 提示なしの承認待ちは secret の行が「Not offered」、不一致は塗りの警告バッジの
-/// 「Mismatch」になる。承認待ちは経過時間の短い順に並ぶ。
+/// 「Mismatch」になる。承認待ちは失効までが長い順に並ぶ。残り 60 秒未満の `tok-2` は
+/// 失効までの値も警告のバッジになる。
 pub fn pending_secret_is_shown_test() {
   let body = dashboard.render(i18n.English, view.System, secret_states())
   let assert Ok(#(before, after)) =
-    string.split_once(body, "<dd class=\"break-words\">48s</dd>")
+    string.split_once(
+      body,
+      "<dd><span class=\"badge badge-sm badge-warning whitespace-nowrap\">45s</span></dd>",
+    )
   assert string.contains(
     before,
-    "<dd class=\"break-words\">12s</dd><dt class=\"text-base-content/70\">Secret</dt><dd class=\"break-words\">Not offered</dd>",
+    "<dd class=\"break-words\">540s</dd><dt class=\"text-base-content/70\">Secret</dt><dd class=\"break-words\">Not offered</dd>",
   )
   assert string.contains(
     after,
@@ -154,10 +160,13 @@ pub fn pending_secret_is_shown_test() {
 pub fn japanese_pending_secret_is_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, secret_states())
   let assert Ok(#(before, after)) =
-    string.split_once(body, "<dd class=\"break-words\">48 秒</dd>")
+    string.split_once(
+      body,
+      "<dd><span class=\"badge badge-sm badge-warning whitespace-nowrap\">45 秒</span></dd>",
+    )
   assert string.contains(
     before,
-    "<dd class=\"break-words\">12 秒</dd><dt class=\"text-base-content/70\">secret</dt><dd class=\"break-words\">提示なし</dd>",
+    "<dd class=\"break-words\">540 秒</dd><dt class=\"text-base-content/70\">secret</dt><dd class=\"break-words\">提示なし</dd>",
   )
   assert string.contains(
     after,
@@ -327,7 +336,10 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
   assert !string.contains(
     english,
-    i18n.text(i18n.English, i18n.NoPendingConnections),
+    i18n.text(
+      i18n.English,
+      i18n.NoPendingConnections(engine.pending_ttl_minutes()),
+    ),
   )
   assert !string.contains(
     english,
@@ -484,5 +496,79 @@ pub fn language_switch_return_paths_test() {
       [],
     ),
     "<input name=\"return\" type=\"hidden\" value=\"/\">",
+  )
+}
+
+/// ダッシュボードは承認待ちを 1 件以上得たときだけ 30 秒ごとに自動で読み込み直す。
+/// 空のときと一覧を得られないときは自動更新しない。
+pub fn dashboard_refreshes_only_when_pending_exists_test() {
+  let with_pending = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(with_pending, "http-equiv=\"refresh\"")
+  assert string.contains(with_pending, "content=\"30\"")
+  assert !string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    ),
+    "http-equiv=\"refresh\"",
+  )
+  assert !string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Error("boom")),
+    ),
+    "http-equiv=\"refresh\"",
+  )
+}
+
+/// 承認待ちの節の見出しは、自動更新中のときだけ更新の間隔を伝える注記を出す。
+pub fn pending_heading_shows_auto_refresh_note_only_when_refreshing_test() {
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    "Refreshing every 30s",
+  )
+  assert !string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    ),
+    "Refreshing every",
+  )
+}
+
+/// 承認ページは常に 30 秒ごとに自動で読み込み直すが、その移り先の通知ページは
+/// 読み込みを繰り返さない。
+pub fn approval_page_refreshes_automatically_test() {
+  let assert Ok([pending]) = states().pending
+  let approval = dashboard.approval_page(i18n.English, view.System, pending)
+  assert string.contains(approval, "http-equiv=\"refresh\"")
+  assert string.contains(approval, "content=\"30\"")
+  assert !string.contains(
+    dashboard.notice_page(
+      i18n.English,
+      view.System,
+      view.SwitchReturningTo("/"),
+      i18n.NotFound,
+      i18n.Untranslated("gone"),
+      view.Failure,
+      [],
+    ),
+    "http-equiv=\"refresh\"",
+  )
+}
+
+/// 承認待ちの行と承認ページには「失効まで」の欄が出る。
+pub fn pending_shows_time_until_expiry_test() {
+  let assert Ok([pending]) = states().pending
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    "<dt class=\"text-base-content/70\">Expires in</dt><dd class=\"break-words\">540s</dd>",
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.Japanese, view.System, pending),
+    "<dt class=\"text-base-content/70\">失効まで</dt><dd class=\"break-words\">540 秒</dd>",
   )
 }

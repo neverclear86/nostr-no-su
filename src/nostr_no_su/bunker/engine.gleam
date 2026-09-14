@@ -31,14 +31,18 @@ const future_window_seconds = 60
 
 /// 承認待ちの有効期間。承認も拒否もされないまま放置された要求は、これを過ぎたら
 /// 無かったものとして扱う。
-const pending_ttl_seconds = 600
+pub const pending_ttl_seconds = 600
+
+/// 承認待ちの有効期間を分で表した値。管理 UI の文言が使う。
+pub fn pending_ttl_minutes() -> Int {
+  pending_ttl_seconds / 60
+}
 
 /// セッション内のリクエストで最終利用を書き込む最小の間隔（秒）。これより短い
 /// 間隔のリクエストは書き込みを伴わない。
 const last_used_granularity_seconds = 60
 
-/// 承認・拒否しようとした承認待ちが無い（不明、失効、処理済み）ときの理由。管理 UI も、
-/// 承認待ちの一覧に無いトークンに同じ理由を出す。
+/// 承認・拒否しようとした承認待ちが無い（不明、失効、処理済み）ときの理由。
 pub const approval_request_not_found = "unknown or expired approval request"
 
 /// `connect` で開くセッションか承認待ちを DB に書けなかったときに、同じ id で
