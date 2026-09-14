@@ -17,9 +17,9 @@
 //// する。**`LoadAccounts` の最初の送信を initialiser 以外へ移さないこと。**
 ////
 //// 読み込んだアカウントは、メモリの署名者と突き合わせて合わせる（`reconcile`）。
-//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換えるので、ストアに
-//// 残っている署名者のセッションと承認待ちは残る。起動時の読み込みではメモリが空なので、
-//// 読み込んだアカウントをそのまま足すことになる。
+//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換える。その後、
+//// 読み込んだセッションと承認待ちでエンジンのものを置き換える。起動時の読み込みでは
+//// メモリが空なので、読み込んだアカウントをそのまま足すことになる。
 ////
 //// **アカウントの変更**（追加、削除、secret の作り直し、ラベルの差し替え）は、
 //// アクターの中でストアへ書き込み、書き込みが成功したときだけメモリの状態を変える。
@@ -50,16 +50,16 @@
 //// できないときのチェックアウトの失敗）、読み込み 1 回は読み込みの期限の 3 秒で打ち
 //// 切る。DB を一時停止した測定では、読み込みは 3000ms、2950ms、2000ms で失敗して返った。
 //// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行のたびに最長 3 秒ずつ
-//// 待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
-//// 承認済みセッションは残る。
+//// 待ちが生じ、読み直しが成功するまで続く。読み直しが失敗し続けても、承認済み
+//// セッションは失われない。
 ////
 //// **承認・拒否・取り消し**も同じく、エンジンで判断した後にストアへ書き込み、
 //// 書き込みが成功したときだけ状態に反映し、応答イベントを発行する（取り消しは
 //// 発行しない）。結果が曖昧な書き込みの後は、アカウントの変更と同じ `LoadAccounts`
-//// の読み直しに移るが、承認待ちとセッションは読み直しでは戻らない（#215）ので
-//// メモリに残ったままになり、利用者はダッシュボードに残った行からやり直せる。
-//// 承認の `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（行はまだ
-//// メモリにあるので、同じトークンで承認し直せる）。NIP-46 の `connect` と `logout` も、
+//// の読み直しに移り、読み直しで承認待ちとセッションも DB の内容に置き換わる。
+//// 書けていなければ行が残るので、利用者はダッシュボードからやり直せる。承認の
+//// `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（書けていれば
+//// 承認待ちは消え、クライアントは接続し直す）。NIP-46 の `connect` と `logout` も、
 //// 書き込みが成功したときだけ状態に反映し、応答を発行する。書き込みが失敗したときは
 //// メモリを変えず、`connect` には `connection_not_saved` のエラーを返し、`logout` には
 //// クライアントの後始末を止めないため `ack` を返す。結果が曖昧な書き込みの後は同じ
@@ -185,8 +185,8 @@ pub type NotConfirmed {
 /// （pubkey）を含まない固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけに
 /// する。
 pub type RevokeFailure {
-  /// 承認済みのセッションに無い（取り消し済み、アカウントの削除やアクターの再起動で
-  /// 消えた、フォームの値が違う）。
+  /// 承認済みのセッションに無い（取り消し済み、アカウントの削除で消えた、フォームの
+  /// 値が違う）。
   SessionNotFound(reason: String)
   /// アクターが動いていないか、期限内に応答しなかった。タイムアウトの後にアクターが
   /// 処理して反映することがある。#186 までは、ストアへの書き込みの失敗と読み込み前も
@@ -208,13 +208,22 @@ pub type WriteFailure {
   MaybeWritten(reason: String)
 }
 
+/// ストアから読み込んだバンカーの状態。セッションと承認待ちはエンジンの型で持つ。
+pub type Snapshot {
+  Snapshot(
+    accounts: vault.Loaded,
+    sessions: List(Session),
+    pending: List(Pending),
+  )
+}
+
 /// アカウントストアの操作。起動処理がプールとマスターキーを閉じ込めて渡すので、
 /// アクターの状態を表示してもキーが出ず、テストは DB なしで偽の操作を渡せる。
 /// 失敗の理由は値（鍵、secret、ラベル）を含まない固定の文言。
 pub type Store {
   Store(
-    /// アカウントを読み込む。
-    load: fn() -> Result(vault.Loaded, String),
+    /// アカウント、セッション、承認待ちを読み込む。
+    load: fn() -> Result(Snapshot, String),
     /// アカウントを 1 件追加する。
     insert: fn(vault.StoredAccount) -> Result(Nil, WriteFailure),
     /// 署名者を削除する。登録されていなければ成功として `Ok(Nil)` を返す（削除は
@@ -635,9 +644,10 @@ pub fn supervised(
 /// バンカーアクターを起動する。`name` で登録するため、接続は起動時に生きていた
 /// プロセスではなく、現在その名前を保持しているプロセスに到達する。
 ///
-/// スーパーバイザーは再起動のたびにこれを呼ぶため、アクターは承認済みセッション
-/// もリプレイ防止の `seen` も引き継がない。記憶していないリクエストを再実行しない
-/// よう、ここで起動時刻を刻み、それより古いリクエストはエンジンが受け付けない。
+/// スーパーバイザーは再起動のたびにこれを呼ぶため、アクターはリプレイ防止の
+/// `seen` を引き継がない（セッションと承認待ちは読み込みでストアから戻る）。
+/// 記憶していないリクエストを再実行しないよう、ここで起動時刻を刻み、それより
+/// 古いリクエストはエンジンが受け付けない。
 /// アカウントは仕様のスナップショットではなく、起動のたびにストアの最新から読む。
 pub fn start(
   name: Name(Msg),
@@ -852,10 +862,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// ストアからアカウントを読み込む。成功したらメモリを読み込んだ内容に合わせて
-/// 読み込み済みに移り、失敗したら再試行を予約して次の待ち時間を延ばす。読み込み
-/// 済みなら何もしない（`LoadAccounts` を積むのは読み込めていない状態に移るときだけ
-/// で、読み込み用の subject はこのプロセスの外に出ないので、通常は起きない）。
+/// ストアからアカウント、セッション、承認待ちを読み込む。成功したらメモリを
+/// 読み込んだ内容に合わせて読み込み済みに移り、失敗したら再試行を予約して次の
+/// 待ち時間を延ばす。読み込み済みなら何もしない（`LoadAccounts` を積むのは
+/// 読み込めていない状態に移るときだけで、読み込み用の subject はこのプロセスの
+/// 外に出ないので、通常は起きない）。
 fn load_accounts(state: State) -> State {
   case state.accounts {
     Ready -> state
@@ -865,11 +876,19 @@ fn load_accounts(state: State) -> State {
         Ok(_) -> log.Notice
         Error(_) -> log.Warning
       }
-      load_report(failure, outcome, retry_delay_ms)
+      load_report(
+        failure,
+        result.map(outcome, fn(snapshot) { snapshot.accounts }),
+        retry_delay_ms,
+      )
       |> list.each(log.write(level, log_prefix, _))
       case outcome {
-        Ok(loaded) ->
-          reconcile(State(..state, accounts: Ready), loaded)
+        Ok(snapshot) ->
+          reconcile(
+            State(..state, accounts: Ready),
+            snapshot,
+            time.now_seconds(),
+          )
           |> transition(state, _)
         Error(reason) -> {
           let _ = process.send_after(state.retry, retry_delay_ms, LoadAccounts)
@@ -1000,16 +1019,29 @@ fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
   }
 }
 
-/// ストアから読み込んだアカウントにメモリを合わせる。ストアに無い署名者を取り除き、
-/// 読み込んだアカウントを足す（登録済みの署名者なら鍵・secret・ラベルを置き換える）。
-/// エンジンを作り直さないので、ストアに残っている署名者のセッションと承認待ちは残る。
-fn reconcile(state: State, loaded: vault.Loaded) -> State {
+/// ストアから読み込んだアカウントにメモリを合わせる（ストアに無い署名者を取り除き、
+/// 読み込んだアカウントを足す。登録済みの署名者なら鍵・secret・ラベルを置き換える）。
+/// アカウントを合わせた後、読み込んだセッションと承認待ちでエンジンのものを置き換える
+/// （`engine.restore`。登録済みの署名者のものと失効していない承認待ちだけが残る）。
+/// `restore` は登録済みの署名者で絞るので、アカウントを先に合わせる。
+fn reconcile(state: State, snapshot: Snapshot, now: Int) -> State {
+  let loaded = snapshot.accounts
   let stored =
     list.map(loaded.accounts, fn(entry) { account.pubkey_hex(entry.account) })
-  engine.signers(state.engine)
-  |> list.filter(fn(signer) { !list.contains(stored, signer) })
-  |> list.fold(state, without_account)
-  |> list.fold(loaded.accounts, _, with_account)
+  let state =
+    engine.signers(state.engine)
+    |> list.filter(fn(signer) { !list.contains(stored, signer) })
+    |> list.fold(state, without_account)
+    |> list.fold(loaded.accounts, _, with_account)
+  State(
+    ..state,
+    engine: engine.restore(
+      state.engine,
+      snapshot.sessions,
+      snapshot.pending,
+      now,
+    ),
+  )
 }
 
 /// 読み込みか追加で得たアカウントを、エンジンとラベルの両方に入れる。

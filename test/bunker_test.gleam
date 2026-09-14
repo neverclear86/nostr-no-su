@@ -233,7 +233,7 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
       name,
       bunker.Settings(
         store: bunker.Store(
-          load: fn() { Ok(Loaded([stored], [])) },
+          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [])) },
           insert: fn(_account) { Ok(Nil) },
           delete: fn(_signer) { Ok(Nil) },
           update_secret: fn(_signer, _secret) { Ok(Nil) },
