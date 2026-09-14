@@ -405,6 +405,31 @@ pub fn load_reads_console_logger_enabled_test() {
     == Ok(True)
 }
 
+/// 指定した `DEDUP_CAPACITY` で読み込んだ重複排除の容量の解析結果。`None` は
+/// 未設定にする。
+fn dedup_capacity_for(raw: Option(String)) -> Result(Int, String) {
+  use <- with_optional_env("DEDUP_CAPACITY", raw)
+  config.load().dedup_capacity
+}
+
+/// `DEDUP_CAPACITY` は未設定と空文字列なら既定の 4096、整数なら前後の空白を
+/// 落とした値。下限の 1 も受け取る。
+pub fn dedup_capacity_test() {
+  assert dedup_capacity_for(None) == Ok(4096)
+  assert dedup_capacity_for(Some("")) == Ok(4096)
+  assert dedup_capacity_for(Some("100")) == Ok(100)
+  assert dedup_capacity_for(Some(" 100 ")) == Ok(100)
+  assert dedup_capacity_for(Some("1")) == Ok(1)
+}
+
+/// 0 以下や数値でない `DEDUP_CAPACITY` は起動を中止する理由にする。容量が 1
+/// 未満だとウィンドウが毎回の挿入で世代を切り替え、重複排除が効かなくなるため。
+pub fn dedup_capacity_rejects_invalid_values_test() {
+  let assert Error(_) = dedup_capacity_for(Some("0"))
+  let assert Error(_) = dedup_capacity_for(Some("-1"))
+  let assert Error(_) = dedup_capacity_for(Some("abc"))
+}
+
 /// 署名者が 0 件なら購読を定義せず、`since` を評価しない。署名者がいれば `since`
 /// を呼び、フィルターに `authors` と `since` を入れる。`since` が `Error(Nil)` なら
 /// 定義を得られなかったことにする。

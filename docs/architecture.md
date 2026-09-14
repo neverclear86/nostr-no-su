@@ -725,6 +725,7 @@ nostr-no-su/
 | `ADMIN_BIND` | 管理 UI |
 | `ADMIN_PASSWORD`（`_FILE`） | 管理 UI |
 | `ADMIN_BASE_URL` | バンカー（承認ページの URL） |
+| `DEDUP_CAPACITY` | 監視（重複排除ディスパッチャー） |
 
 プラグイン固有の設定だけは本体が中身を解釈しない。
 接頭辞に一致する変数を集めて map で渡すだけで、キーの必須性も値の形式もプラグインが決める。

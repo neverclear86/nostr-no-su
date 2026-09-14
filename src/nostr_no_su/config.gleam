@@ -22,6 +22,10 @@ const default_admin_port = 8080
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
 const default_admin_bind = "127.0.0.1"
 
+/// `DEDUP_CAPACITY` の既定値。監視の重複排除が記憶する直近のイベント id の件数
+/// （実際に記憶するのはこの 1〜2 倍。`dedup/window`）。
+const default_dedup_capacity = 4096
+
 /// `ADMIN_PORT` と `ADMIN_PASSWORD` の解釈結果。無効化には「明示的に空にした」と
 /// 「ポートが不正だった」の 2 通りがあり、後者だけ起動時に理由を報告する。
 /// 待ち受けるのにパスワードが無ければ、無効化ではなく起動を中止する。
@@ -65,6 +69,8 @@ pub type Config {
     admin_base_url: Option(String),
     /// `PLUGIN_CONSOLE_LOGGER_ENABLED` の解析結果。`Error` は起動を中止する理由。
     console_logger_enabled: Result(Bool, String),
+    /// `DEDUP_CAPACITY` の解析結果。`Error` は起動を中止する理由。
+    dedup_capacity: Result(Int, String),
   )
 }
 
@@ -85,6 +91,7 @@ pub fn load() -> Config {
         "PLUGIN_CONSOLE_LOGGER_ENABLED",
         optional("PLUGIN_CONSOLE_LOGGER_ENABLED"),
       ),
+      dedup_capacity: dedup_capacity(),
     )
   list.each(secret_names, envoy.unset)
   loaded
@@ -136,6 +143,26 @@ pub fn parse_enabled(
     Some("false") -> Ok(False)
     Some(other) ->
       Error(name <> " must be true or false, got \"" <> other <> "\"")
+  }
+}
+
+/// 監視の重複排除が記憶する直近のイベント id の件数。未設定と空文字列は既定値。
+/// 0 以下と数値でない値は、起動を中止する理由にする。
+fn dedup_capacity() -> Result(Int, String) {
+  case optional("DEDUP_CAPACITY") {
+    None -> Ok(default_dedup_capacity)
+    Some(raw) -> {
+      let trimmed = string.trim(raw)
+      case int.parse(trimmed) {
+        Ok(capacity) if capacity >= 1 -> Ok(capacity)
+        _ ->
+          Error(
+            "DEDUP_CAPACITY must be an integer of at least 1, got \""
+            <> trimmed
+            <> "\"",
+          )
+      }
+    }
   }
 }
 

@@ -28,10 +28,6 @@ import pog
 /// 起動処理そのものが出すログ行の接頭辞。
 const log_prefix = "main"
 
-/// 監視ディスパッチャーがリレー間の重複排除のために記憶する直近イベント id の
-/// 件数（正確な上限は `dedup` を参照）。
-const dedup_capacity = 4096
-
 /// バンカーの購読が現在時刻からどれだけ遡るか。切断していた間に届いたリクエストを
 /// 取りこぼさないための猶予。クライアントは数十秒で応答を諦めるため、これより古い
 /// リクエストには待っている相手がいない。
@@ -97,6 +93,7 @@ pub fn main() -> Nil {
 /// テストが本番と同じ仕様でツリーを動かせるよう公開する。
 pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
+  use dedup_capacity <- result.try(loaded.dedup_capacity)
   use bunker <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
@@ -111,7 +108,7 @@ pub fn startup(loaded: Config) -> Result(Startup, String) {
   Startup(
     spec: app.Spec(
       plugins: specs,
-      monitor: monitor_spec(bunker),
+      monitor: monitor_spec(bunker, dedup_capacity),
       bunker: bunker,
       admin: admin,
       open: app.open_websocket,
@@ -138,8 +135,9 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 /// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
 /// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
 /// 同じ DB に保存する。除外する kind の既定は ephemeral 全般
-/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。
-fn monitor_spec(bunker: app.Bunker) -> app.Monitor {
+/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。`dedup_capacity` は
+/// `DEDUP_CAPACITY` から読んだ値である。
+fn monitor_spec(bunker: app.Bunker, dedup_capacity: Int) -> app.Monitor {
   let name = process.new_name("nostr_no_su_dedup")
   app.Monitor(
     name: name,
