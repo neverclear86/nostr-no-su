@@ -42,7 +42,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本�
 
 ## NIP-46 の E2E（strfry）
 
-実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（未設定なら `CI` の有無に関わらずスキップして 1 行ログを出す。`test` ジョブは `TEST_RELAY_URL` を渡さないのでスキップされる）。テストごとに専用の database を作って消す:
+実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（`TEST_RELAY_URL` が未設定なら `CI` の有無に関わらずスキップして 1 行ログを出す。`TEST_DATABASE_URL` だけが未設定のときは、他の統合テストと同じく `CI` が設定されていれば失敗する。`test` ジョブは `TEST_RELAY_URL` を渡さないのでスキップされる）。テストごとに専用の database を作って消す:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
