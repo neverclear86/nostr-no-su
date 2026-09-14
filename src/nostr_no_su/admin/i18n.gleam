@@ -260,6 +260,7 @@ pub type Message {
   ImportDescription
   PrivateKeyNsec
   Label
+  LabelHint(max: Int)
   Register
   GenerateNewKey
   GenerateDescription
@@ -386,6 +387,10 @@ fn english(message: Message) -> String {
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
     PrivateKeyNsec -> "Private key (nsec)"
     Label -> "Label"
+    LabelHint(max:) ->
+      "Up to "
+      <> int.to_string(max)
+      <> " characters. A combined emoji can count as several characters."
     Register -> "Register"
     GenerateNewKey -> "Generate a new key"
     GenerateDescription ->
@@ -510,6 +515,8 @@ fn japanese(message: Message) -> String {
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
     PrivateKeyNsec -> "秘密鍵（nsec）"
     Label -> "ラベル"
+    LabelHint(max:) ->
+      int.to_string(max) <> " 文字まで。組み合わせた絵文字は 1 つで数文字分になることがあります。"
     Register -> "登録する"
     GenerateNewKey -> "新しい秘密鍵を生成"
     GenerateDescription -> "サーバーで新しい秘密鍵を生成します。登録する前に、バックアップのために表示します。"

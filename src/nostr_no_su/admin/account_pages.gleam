@@ -47,10 +47,7 @@ pub fn new_account_page(
               text(i18n.PrivateKeyNsec),
               view.secret_input(dashboard.nsec_field, "new-password"),
             ),
-            view.labelled(
-              text(i18n.Label),
-              label_input(label, Some(dashboard.max_label_code_points)),
-            ),
+            label_fieldset(language, label),
           ],
           text(i18n.Register),
           view.Primary,
@@ -95,10 +92,7 @@ pub fn generated_key_page(
         view.segments_path(dashboard.register_generated_segments),
         [
           view.hidden_input(dashboard.nsec_field, nsec),
-          view.labelled(
-            text(i18n.Label),
-            label_input(label, Some(dashboard.max_label_code_points)),
-          ),
+          label_fieldset(language, label),
         ],
         text(i18n.RegisterThisKey),
         view.Primary,
@@ -165,12 +159,7 @@ pub fn account_action_page(
       element.none(),
       view.post_form(
         path,
-        [
-          view.labelled(
-            text(i18n.Label),
-            label_input(option.unwrap(label, row.label), None),
-          ),
-        ],
+        [label_fieldset(language, option.unwrap(label, row.label))],
         text(i18n.Save),
         view.Primary,
         view.InForm,
@@ -303,21 +292,33 @@ fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
-/// ラベルの入力欄。`maxlength` は新しく入力する欄にだけ付ける。保存済みのラベルは
-/// UTF-16 で上限を超えうるので、編集の欄に付けると 1 文字の編集で送信できなくなる。
-/// 3 つのフォーム（登録画面、生成した鍵の確認、編集）のどれでも必須にする。
-fn label_input(value: String, maxlength: Option(Int)) -> Element(msg) {
-  let limit = case maxlength {
-    Some(limit) -> [attribute.maxlength(limit)]
-    None -> []
-  }
-  html.input([
-    attribute.type_("text"),
-    attribute.name(dashboard.label_field),
-    attribute.autocomplete("off"),
-    attribute.default_value(value),
-    attribute.required(True),
-    attribute.class("input w-full border-base-content/60"),
-    ..limit
+/// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
+const label_hint_id = "label-hint"
+
+/// ラベルの見出し、入力欄、上限の案内をまとめた囲み。3 つのフォーム（登録画面、生成した
+/// 鍵の確認、編集）のどれでも必須にする。
+fn label_fieldset(language: Language, value: String) -> Element(msg) {
+  let caption = i18n.text(language, i18n.Label)
+  html.div([attribute.class("fieldset")], [
+    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    html.input([
+      attribute.type_("text"),
+      attribute.name(dashboard.label_field),
+      attribute.autocomplete("off"),
+      attribute.default_value(value),
+      attribute.required(True),
+      attribute.class("input w-full border-base-content/60"),
+      attribute.aria_label(caption),
+      attribute.aria_describedby(label_hint_id),
+    ]),
+    html.p(
+      [attribute.id(label_hint_id), attribute.class("text-base-content/70")],
+      [
+        html.text(i18n.text(
+          language,
+          i18n.LabelHint(max: dashboard.max_label_code_points),
+        )),
+      ],
+    ),
   ])
 }

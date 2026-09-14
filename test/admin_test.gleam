@@ -1510,19 +1510,38 @@ pub fn reflected_label_is_escaped_test() {
   assert !string.contains(body, "\"><b>")
 }
 
-/// ラベルの編集の欄には `maxlength` を付けず、新しいアカウントの欄には付ける。
-pub fn label_edit_form_has_no_maxlength_test() {
-  let edit =
-    simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
+/// 3 つのラベルの欄には `maxlength` が無く、欄の下に表示の言語の上限の案内がある。
+pub fn label_inputs_describe_the_limit_without_maxlength_test() {
+  let hint = fn(language) {
+    "<p class=\"text-base-content/70\" id=\"label-hint\">"
+    <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
+    <> "</p>"
+  }
+  let bodies = [
+    simulate.read_body(get(context(), "/accounts/new")),
+    simulate.read_body(post(context(), "/accounts/generate")),
+    simulate.read_body(get(context(), action_path(dashboard.EditLabel))),
+  ]
+  list.each(bodies, fn(body) {
+    assert !string.contains(body, "maxlength")
+    assert string.contains(
+      body,
+      "aria-describedby=\"label-hint\" aria-label=\"Label\" autocomplete=\"off\"",
+    )
+    assert string.contains(body, hint(i18n.English))
+  })
+
+  let japanese_request =
+    simulate.request(http.Get, "/accounts/new")
+    |> in_japanese
+    |> with_credentials("admin", password)
+  let japanese_body =
+    simulate.read_body(admin.handle_request(context(), japanese_request))
   assert string.contains(
-    edit,
-    "autocomplete=\"off\" class=\"input w-full border-base-content/60\" name=\"label\" required type=\"text\" value=\""
-      <> label
-      <> "\"",
+    japanese_body,
+    "aria-describedby=\"label-hint\" aria-label=\"ラベル\" autocomplete=\"off\"",
   )
-  assert !string.contains(edit, "maxlength")
-  let new = simulate.read_body(get(context(), "/accounts/new"))
-  assert string.contains(new, "maxlength=\"100\" name=\"label\"")
+  assert string.contains(japanese_body, hint(i18n.Japanese))
 }
 
 /// 登録画面、生成した鍵の確認、ラベルの編集の 3 つの欄はどれも必須。
