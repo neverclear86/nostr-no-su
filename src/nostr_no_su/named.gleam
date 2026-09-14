@@ -93,7 +93,7 @@ fn finish_call(
   case received {
     Ok(Some(answer)) -> {
       // 応答の受信で監視は外れているが、宛先が応答の直後に終了したときの
-      // `DOWN` がすでに届いていうるので、flush 付きで捨てる。
+      // `DOWN` がすでに届きうるので、flush 付きで捨てる。
       process.demonitor_process(monitor)
       Some(answer)
     }
