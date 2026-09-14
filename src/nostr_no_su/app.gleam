@@ -137,6 +137,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
@@ -150,6 +151,7 @@ import nostr_no_su/relay_client.{
 }
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
 
@@ -532,7 +534,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       nsec: bunker.nsec(bunker_name, _),
       plugins: fn() { plugin_rows(spec.plugins) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
-      relays: fn() { relay_statuses(spec) },
+      relays: fn() { relay_rows(spec) },
       sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
@@ -627,44 +629,69 @@ pub fn reenable_plugin(
   |> option.to_result(admin.PluginNotAnswered("plugin runner did not answer"))
 }
 
-/// 監視・バンカー両サブツリーのリレー接続の現在の状態。`relay_list` は 1 回だけ
-/// 引き、監視、次にバンカーの接続の順で並べる。応答が無ければ両方とも空にする
-/// （`architecture.md` の「問い合わせが失敗したときはその項目だけ」と同じ
-/// 扱い）。
-pub fn relay_statuses(spec: Spec) -> List(dashboard.RelayRow) {
-  case relay_list.entries(spec.relay_list) {
-    Error(Nil) -> []
-    Ok(entries) ->
-      list.append(
-        statuses(
-          dashboard.MonitorRelay,
-          relay_list.connections(entries, relay_list.Monitor),
-        ),
-        statuses(
-          dashboard.BunkerRelay,
-          relay_list.connections(entries, relay_list.Bunker),
-        ),
-      )
-  }
-}
-
-/// 指定した用途の接続それぞれについて、接続アクターに状態を問い合わせる。
+/// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を
+/// 読めなければその理由を返す。状態は行の順に逐次に問い合わせる。
+///
 /// 逐次に問い合わせるため待ち時間はリレー数ぶん積み上がるが、接続アクターが
 /// ループをブロックするのは `connect` の実行中だけで、その上限は `relay_client`
 /// の connect タイムアウト（3 秒）である。`relay_connection` の問い合わせ
 /// タイムアウト（5 秒）はそれを包む安全網であって通常の待ち時間ではない。数本の
 /// リレーが同時にハンドシェイク中でも管理 UI の表示が数秒遅れるだけなので、
 /// 並列化して部分的な結果を扱う複雑さは引き合わない。
-fn statuses(
-  role: dashboard.Role,
-  connections: List(relay_list.Connection),
-) -> List(dashboard.RelayRow) {
-  use connection <- list.map(connections)
-  dashboard.RelayRow(
-    role: role,
-    url: connection.url,
-    status: relay_connection.status(connection.name),
+pub fn relay_rows(spec: Spec) -> Result(List(dashboard.RelayRow), String) {
+  use entries <- result.try(
+    relay_list.entries(spec.relay_list)
+    |> result.replace_error("relay list did not answer"),
   )
+  use relays <- result.map(
+    relay_store.list(
+      pog.named_connection(spec.bunker.pool.pool_name),
+      account_store.default_timeouts,
+    )
+    |> result.map_error(account_store.describe),
+  )
+  merge_relay_rows(relays, entries, relay_connection.status)
+}
+
+/// DB の行ごとに、用途の状態を `relay_list` の項目から求める。行の順は `relays`
+/// のままで、`entries` にだけある URL は出さない。使う用途は、その用途の接続が
+/// あれば `status` の結果、無ければ未接続にする。単体テストが呼べるよう公開する。
+pub fn merge_relay_rows(
+  relays: List(relay_store.Relay),
+  entries: List(relay_list.Entry),
+  status: fn(Name(relay_connection.Msg)) -> relay_connection.Status,
+) -> List(dashboard.RelayRow) {
+  use relay <- list.map(relays)
+  let entry =
+    list.find(entries, fn(entry) { entry.url == relay.url })
+    |> option.from_result
+  dashboard.RelayRow(
+    id: relay.id,
+    url: relay.url,
+    monitor: role_status(
+      relay.roles.monitor,
+      option.then(entry, fn(entry) { entry.monitor }),
+      status,
+    ),
+    bunker: role_status(
+      relay.roles.bunker,
+      option.then(entry, fn(entry) { entry.bunker }),
+      status,
+    ),
+  )
+}
+
+/// 1 つの用途の状態。使っていなければ `None`。
+fn role_status(
+  used: Bool,
+  connection: Option(Name(relay_connection.Msg)),
+  status: fn(Name(relay_connection.Msg)) -> relay_connection.Status,
+) -> Option(relay_connection.Status) {
+  case used, connection {
+    False, _ -> None
+    True, None -> Some(relay_connection.Disconnected)
+    True, Some(name) -> Some(status(name))
+  }
 }
 
 /// Accounts 節の行。`relay_list` が応答しなければその理由を返し

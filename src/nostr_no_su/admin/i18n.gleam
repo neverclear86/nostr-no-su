@@ -161,6 +161,7 @@ pub type Lead {
   CouldNotListAccounts
   CouldNotListPending
   CouldNotListSessions
+  CouldNotListRelays
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -176,6 +177,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotListAccounts -> "アカウントの一覧を表示できません。"
         CouldNotListPending -> "承認待ちの一覧を表示できません。"
         CouldNotListSessions -> "セッションの一覧を表示できません。"
+        CouldNotListRelays -> "リレーの一覧を表示できません。"
       })
   }
 }
@@ -224,13 +226,12 @@ pub type Message {
   Revoke
   Relays
   RoleColumn
-  UrlColumn
   StateColumn
   MonitorRole
   BunkerRole
   RelayConnected
   RelayDisconnected
-  NoRelays
+  NoBunkerRelay
   Plugins
   NameColumn
   PluginRunning
@@ -351,13 +352,13 @@ fn english(message: Message) -> String {
     Revoke -> "Revoke"
     Relays -> "Relays"
     RoleColumn -> "Role"
-    UrlColumn -> "URL"
     StateColumn -> "State"
     MonitorRole -> "monitor"
     BunkerRole -> "bunker"
     RelayConnected -> "connected"
     RelayDisconnected -> "disconnected"
-    NoRelays -> "No relays configured."
+    NoBunkerRelay ->
+      "No relay is used for the bunker. Clients cannot connect to any account until you add one."
     Plugins -> "Plugins"
     NameColumn -> "Name"
     PluginRunning -> "running"
@@ -489,13 +490,12 @@ fn japanese(message: Message) -> String {
     Revoke -> "承認を取り消す"
     Relays -> "リレー"
     RoleColumn -> "用途"
-    UrlColumn -> "URL"
     StateColumn -> "状態"
     MonitorRole -> "監視"
     BunkerRole -> "バンカー"
     RelayConnected -> "接続中"
     RelayDisconnected -> "未接続"
-    NoRelays -> "リレーが設定されていません。"
+    NoBunkerRelay -> "バンカーに使うリレーがありません。リレーを追加するまで、クライアントはどのアカウントにも接続できません。"
     Plugins -> "プラグイン"
     NameColumn -> "名前"
     PluginRunning -> "動作中"

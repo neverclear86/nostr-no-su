@@ -95,4 +95,6 @@ pub fn messages_with_values_follow_each_language_test() {
 pub fn leads_are_only_for_other_languages_test() {
   assert i18n.lead(i18n.English, i18n.CouldNotRegister) == None
   assert i18n.lead(i18n.Japanese, i18n.CouldNotRegister) == Some("登録できませんでした。")
+  assert i18n.lead(i18n.Japanese, i18n.CouldNotListRelays)
+    == Some("リレーの一覧を表示できません。")
 }

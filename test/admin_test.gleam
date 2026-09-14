@@ -132,18 +132,20 @@ fn test_context(
       Ok(signer_nsec)
     },
     relays: fn() {
-      [
+      Ok([
         dashboard.RelayRow(
-          role: dashboard.MonitorRelay,
+          id: 1,
           url: monitor_relay_url,
-          status: relay_connection.Connected,
+          monitor: Some(relay_connection.Connected),
+          bunker: None,
         ),
         dashboard.RelayRow(
-          role: dashboard.BunkerRelay,
+          id: 2,
           url: "wss://bunker.example",
-          status: relay_connection.Disconnected,
+          monitor: None,
+          bunker: Some(relay_connection.Disconnected),
         ),
-      ]
+      ])
     },
     plugins: fn() {
       [
@@ -402,12 +404,18 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "wss://relay.example")
   assert string.contains(body, "wss://bunker.example")
   // 要素単位で見る。"connected" だけでは "disconnected" にも一致してしまう。
-  assert string.contains(body, "<td class=\"whitespace-nowrap\">monitor</td>")
+  assert string.contains(
+    body,
+    "<span class=\"whitespace-nowrap\">monitor</span>",
+  )
   assert string.contains(
     body,
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
   )
-  assert string.contains(body, "<td class=\"whitespace-nowrap\">bunker</td>")
+  assert string.contains(
+    body,
+    "<span class=\"whitespace-nowrap\">bunker</span>",
+  )
   assert string.contains(
     body,
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span>",

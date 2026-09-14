@@ -41,18 +41,20 @@ fn states() -> dashboard.Snapshot {
       ),
     ]),
     sessions: Ok([]),
-    relays: [
+    relays: Ok([
       dashboard.RelayRow(
-        dashboard.MonitorRelay,
+        1,
         "wss://a",
-        relay_connection.Connected,
+        Some(relay_connection.Connected),
+        Some(relay_connection.Disconnected),
       ),
       dashboard.RelayRow(
-        dashboard.BunkerRelay,
+        2,
         "wss://b",
-        relay_connection.Disconnected,
+        Some(relay_connection.Disconnected),
+        None,
       ),
-    ],
+    ]),
     plugins: [
       dashboard.PluginRow("a", Some(plugin_runner.Running)),
       dashboard.PluginRow("b", Some(plugin_runner.Overloaded(dropped: 4))),
@@ -70,7 +72,7 @@ fn states() -> dashboard.Snapshot {
 pub fn states_are_shown_as_badges_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let badges = [
-    "<td class=\"whitespace-nowrap\">monitor</td>",
+    "<span class=\"whitespace-nowrap\">monitor</span>",
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span>",
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">running</span>",
@@ -89,8 +91,8 @@ pub fn states_are_shown_as_badges_test() {
 pub fn japanese_states_are_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, states())
   let badges = [
-    "<td class=\"whitespace-nowrap\">監視</td>",
-    "<td class=\"whitespace-nowrap\">バンカー</td>",
+    "<span class=\"whitespace-nowrap\">監視</span>",
+    "<span class=\"whitespace-nowrap\">バンカー</span>",
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">接続中</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">未接続</span>",
     "<span class=\"badge badge-sm badge-success whitespace-nowrap\">動作中</span>",
@@ -126,7 +128,7 @@ pub fn only_disabled_plugins_have_a_reenable_button_test() {
 /// 見えるチェックを付け、それ以外の項目はその値を POST で送るボタンにする。言語名はその言語
 /// 自身の文字で出す。
 pub fn navbar_dropdowns_mark_the_current_choice_test() {
-  let snapshot = dashboard.Snapshot(..states(), plugins: [], relays: [])
+  let snapshot = dashboard.Snapshot(..states(), plugins: [], relays: Ok([]))
   assert string.contains(
     dashboard.render(i18n.English, view.Dark, snapshot),
     "<div class=\"navbar-end w-auto gap-2\"><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">Theme<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/theme\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"system\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Browser setting</span></button></li><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"theme\" type=\"submit\" value=\"light\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Light</span></button></li><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" name=\"theme\" type=\"submit\" value=\"dark\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Dark</span></button></li></ul></form></details><details class=\"dropdown dropdown-end\" name=\"navbar-menu\"><summary class=\"btn btn-sm focus-visible:outline-base-content\">Language<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M4 6l4 4 4-4\"></path></svg></summary><form action=\"/language\" class=\"dropdown-content z-10 mt-1\" method=\"post\"><input name=\"return\" type=\"hidden\" value=\"/\"><ul class=\"menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm\"><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" name=\"language\" type=\"submit\" value=\"system\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>Browser setting</span></button></li><li><button aria-current=\"true\" class=\"menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content\" lang=\"en\" name=\"language\" type=\"submit\" value=\"en\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>English</span></button></li><li><button class=\"focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content\" lang=\"ja\" name=\"language\" type=\"submit\" value=\"ja\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"invisible size-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 16 16\"><path d=\"M3 8.5l3 3 7-7\"></path></svg><span>日本語</span></button></li></ul></form></details></div>",
@@ -175,6 +177,70 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   assert string.contains(
     japanese,
     "<span>セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
+  )
+}
+
+/// リレーは 1 行につき `<li>` 1 件で、使っている用途を監視、バンカーの順に並べる。
+/// 使っていない用途は出さず、URL は `break-all`、用途の語とバッジは `whitespace-nowrap`。
+pub fn relays_are_listed_one_item_per_row_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    body,
+    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span></span><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">bunker</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div></li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div></li></ul>",
+  )
+}
+
+/// バンカーに使う行が 1 件も無ければ、見出しの直後に警告が出て一覧は出さない。監視だけの
+/// 行があれば警告の後に一覧を出し、バンカーの行が 1 件でもあれば警告を出さない
+/// （`states()` はバンカーの行を持つので、上のテストの描画に警告が無いことで確かめる）。
+pub fn no_bunker_relay_is_warned_test() {
+  let no_rows =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), relays: Ok([])),
+    )
+  assert string.contains(
+    no_rows,
+    "Relays</h2><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
+  )
+  let monitor_only =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(
+        ..states(),
+        relays: Ok([
+          dashboard.RelayRow(
+            1,
+            "wss://a",
+            Some(relay_connection.Connected),
+            None,
+          ),
+        ]),
+      ),
+    )
+  assert string.contains(
+    monitor_only,
+    "Relays</h2><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+  )
+  assert !string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    "No relay is used for the bunker.",
+  )
+}
+
+/// リレーの一覧を得られないときは、一覧の代わりに理由を出し、警告は出さない。日本語では
+/// 前置きも出る。
+pub fn unlisted_relays_show_the_reason_test() {
+  let snapshot = dashboard.Snapshot(..states(), relays: Error("boom"))
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, snapshot),
+    "Relays</h2><div class=\"alert\"><span><span lang=\"en\">boom</span></span></div></div></section>",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, snapshot),
+    "リレー</h2><div class=\"alert\"><span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
 }
 

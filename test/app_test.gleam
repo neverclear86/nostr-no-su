@@ -29,6 +29,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
@@ -2440,7 +2441,7 @@ pub fn registered_relays_open_after_the_first_load_test() {
   let assert Opened(opened_url, _connection, _socket, _deliver) =
     await_connection(reports)
   assert opened_url == url
-  assert role_url_pairs(spec) == [#(dashboard.BunkerRelay, url)]
+  assert role_url_pairs(spec) == [#(relay_list.Bunker, url)]
   stop_tree(tree)
 }
 
@@ -2494,11 +2495,93 @@ pub fn registered_relays_open_after_the_store_recovers_test() {
 
 // --- 実行時のリレーの増減 ---
 
-/// `app.relay_statuses` の行を `#(用途, URL)` に落とし、ステータスの問い合わせの
-/// タイミングに左右されず並びだけを検査できるようにする。
-fn role_url_pairs(spec: app.Spec) -> List(#(dashboard.Role, String)) {
-  use row <- list.map(app.relay_statuses(spec))
-  #(row.role, row.url)
+/// `relay_list` の一覧を、監視、バンカーの順の `#(用途, URL)` にする。
+fn role_url_pairs(spec: app.Spec) -> List(#(relay_list.Role, String)) {
+  let assert Ok(entries) = relay_list.entries(spec.relay_list)
+  [relay_list.Monitor, relay_list.Bunker]
+  |> list.flat_map(fn(role) {
+    list.map(relay_list.urls(entries, role), fn(url) { #(role, url) })
+  })
+}
+
+/// `merge_relay_rows` は DB の行の順を保ち、`relay_list` にだけある URL を出さない。
+/// 用途を使っていて接続があれば `status` の結果を、無ければ未接続を、用途を
+/// 使っていなければ `None` を返す。
+pub fn merged_relay_rows_follow_the_store_test() {
+  let monitor_a = process.new_name("test_merge_monitor_a")
+  let bunker_a = process.new_name("test_merge_bunker_a")
+  let relays = [
+    relay_store.Relay(
+      id: 1,
+      url: "wss://a",
+      roles: relay_list.Roles(monitor: True, bunker: True),
+    ),
+    relay_store.Relay(
+      id: 2,
+      url: "wss://b",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
+    relay_store.Relay(
+      id: 3,
+      url: "wss://c",
+      roles: relay_list.Roles(monitor: False, bunker: True),
+    ),
+  ]
+  let entries = [
+    relay_list.Entry(
+      url: "wss://a",
+      monitor: Some(monitor_a),
+      bunker: Some(bunker_a),
+    ),
+    relay_list.Entry(
+      url: "wss://only-in-relay-list",
+      monitor: Some(process.new_name("test_merge_extra")),
+      bunker: None,
+    ),
+  ]
+  let status = fn(name) {
+    case name == monitor_a, name == bunker_a {
+      True, _ -> relay_connection.Connected
+      _, True -> relay_connection.Disconnected
+      _, _ -> panic as "unexpected name"
+    }
+  }
+  assert app.merge_relay_rows(relays, entries, status)
+    == [
+      dashboard.RelayRow(
+        id: 1,
+        url: "wss://a",
+        monitor: Some(relay_connection.Connected),
+        bunker: Some(relay_connection.Disconnected),
+      ),
+      dashboard.RelayRow(
+        id: 2,
+        url: "wss://b",
+        monitor: Some(relay_connection.Disconnected),
+        bunker: None,
+      ),
+      dashboard.RelayRow(
+        id: 3,
+        url: "wss://c",
+        monitor: None,
+        bunker: Some(relay_connection.Disconnected),
+      ),
+    ]
+}
+
+/// `relay_list` が応答しなければ、DB を読まずにその理由を返す。
+pub fn relay_rows_without_the_relay_list_test() {
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: idle_bunker(),
+      admin: None,
+      open: fake_open(process.new_subject(), None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list_unanswered"),
+    )
+  assert app.relay_rows(spec) == Error("relay list did not answer")
 }
 
 /// 監視のリレー 0 本の木で `open_relay` を呼ぶと、後から足したリレーで受信した
@@ -2531,7 +2614,7 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
   stop_tree(tree)
 }
 
-/// `open_relay` / `change_relay_roles` / `close_relay` の直後、ダッシュボードの
+/// `open_relay` / `change_relay_roles` / `close_relay` の直後、`relay_list` の
 /// 一覧と `relay=` は一覧の順のまま反映される。
 pub fn runtime_relay_changes_are_listed_in_order_test() {
   let reports = process.new_subject()
@@ -2564,18 +2647,18 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
   let tree = start_tree(spec)
   assert role_url_pairs(spec)
     == [
-      #(dashboard.MonitorRelay, a),
-      #(dashboard.BunkerRelay, b),
+      #(relay_list.Monitor, a),
+      #(relay_list.Bunker, b),
     ]
 
   let assert Ok(Nil) =
     app.open_relay(spec, c, relay_list.Roles(monitor: True, bunker: True))
   assert role_url_pairs(spec)
     == [
-      #(dashboard.MonitorRelay, a),
-      #(dashboard.MonitorRelay, c),
-      #(dashboard.BunkerRelay, b),
-      #(dashboard.BunkerRelay, c),
+      #(relay_list.Monitor, a),
+      #(relay_list.Monitor, c),
+      #(relay_list.Bunker, b),
+      #(relay_list.Bunker, c),
     ]
 
   let assert Ok(Nil) =
@@ -2586,17 +2669,17 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
     )
   assert role_url_pairs(spec)
     == [
-      #(dashboard.MonitorRelay, c),
-      #(dashboard.BunkerRelay, a),
-      #(dashboard.BunkerRelay, b),
-      #(dashboard.BunkerRelay, c),
+      #(relay_list.Monitor, c),
+      #(relay_list.Bunker, a),
+      #(relay_list.Bunker, b),
+      #(relay_list.Bunker, c),
     ]
 
   let assert Ok(Nil) = app.close_relay(spec, c)
   assert role_url_pairs(spec)
     == [
-      #(dashboard.BunkerRelay, a),
-      #(dashboard.BunkerRelay, b),
+      #(relay_list.Bunker, a),
+      #(relay_list.Bunker, b),
     ]
 
   let assert Ok(rows) = app.account_rows(spec)

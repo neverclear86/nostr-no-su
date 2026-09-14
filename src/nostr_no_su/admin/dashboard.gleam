@@ -23,17 +23,15 @@ import nostr_no_su/admin/view
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
-/// リレーの用途。同じ URL を監視とバンカーの両方に使う構成があるため、行を
-/// 区別できるようにする。
-pub type Role {
-  MonitorRelay
-  BunkerRelay
-}
-
-/// リレー接続 1 本の表示内容。接続の識別を表す `relay_list.Connection` とは
-/// 別物なので、表の行であることを名前に出す。
+/// `relays` の 1 行の表示内容。用途ごとに、使っていればその接続の状態を `Some` で、
+/// 使っていなければ `None` を持つ。
 pub type RelayRow {
-  RelayRow(role: Role, url: String, status: Status)
+  RelayRow(
+    id: Int,
+    url: String,
+    monitor: Option(Status),
+    bunker: Option(Status),
+  )
 }
 
 /// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
@@ -73,7 +71,8 @@ pub type Snapshot {
     accounts: Result(List(AccountRow), String),
     /// 承認待ちの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
     pending: Result(List(PendingRow), String),
-    relays: List(RelayRow),
+    /// リレーの一覧。得られないとき（`relay_list` の応答なし、DB の障害）は表示する理由。
+    relays: Result(List(RelayRow), String),
     /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし）は表示する
     /// 理由。
     sessions: Result(List(SessionRow), String),
@@ -192,19 +191,20 @@ fn accounts_section(
       language,
       accounts,
       i18n.CouldNotListAccounts,
-      text(i18n.NoAccounts),
+      view.hint(text(i18n.NoAccounts)),
       fn(rows) { item_list(list.map(rows, account_item(language, _))) },
     ),
   ])
 }
 
 /// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした理由の囲みを、
-/// 得られれば `render` の内容を出す。アカウント、承認待ち、セッションの節が使う。
+/// 得られれば `render` の内容を出す。アカウント、承認待ち、セッション、リレーの
+/// 節が使う。
 fn listed_body(
   language: Language,
   listing: Result(List(a), String),
   lead: i18n.Lead,
-  empty: String,
+  empty: Element(msg),
   render: fn(List(a)) -> Element(msg),
 ) -> Element(msg) {
   case listing {
@@ -288,7 +288,7 @@ fn pending_section(
       language,
       pending,
       i18n.CouldNotListPending,
-      text(i18n.NoPendingConnections),
+      view.hint(text(i18n.NoPendingConnections)),
       fn(rows) {
         item_list(
           list.map(rows, fn(entry) {
@@ -398,24 +398,74 @@ fn pending_content(
   ]
 }
 
-/// リレーごとの接続状態。
-fn relays_section(language: Language, relays: List(RelayRow)) -> Element(msg) {
+/// リレーの一覧。1 件は `relays` の 1 行で、使っている用途ごとに用途の語と状態を並べる。
+/// バンカーに使う行が無ければ警告を、一覧を得られないときは理由を出す。
+fn relays_section(
+  language: Language,
+  relays: Result(List(RelayRow), String),
+) -> Element(msg) {
   let text = i18n.text(language, _)
-  use rows <- section(text(i18n.Relays), relays, text(i18n.NoRelays))
-  view.table(
-    [text(i18n.RoleColumn), text(i18n.UrlColumn), text(i18n.StateColumn)],
-    list.map(rows, fn(relay) {
-      [
-        html.td([attribute.class("whitespace-nowrap")], [
-          html.text(text(role_label(relay.role))),
+  view.card([
+    view.heading(text(i18n.Relays)),
+    no_bunker_relay_warning(language, relays),
+    listed_body(
+      language,
+      relays,
+      i18n.CouldNotListRelays,
+      element.none(),
+      fn(rows) { item_list(list.map(rows, relay_item(language, _))) },
+    ),
+  ])
+}
+
+/// 一覧を得て、バンカーに使う行が 1 件も無いときの警告。
+fn no_bunker_relay_warning(
+  language: Language,
+  relays: Result(List(RelayRow), String),
+) -> Element(msg) {
+  case relays {
+    Ok(rows) ->
+      case list.any(rows, fn(row) { option.is_some(row.bunker) }) {
+        True -> element.none()
+        False ->
+          view.alert(view.Warning, [
+            html.text(i18n.text(language, i18n.NoBunkerRelay)),
+          ])
+      }
+    Error(_) -> element.none()
+  }
+}
+
+/// リレー 1 件。URL と、使っている用途の語と状態の組を監視、バンカーの順に並べる。
+fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
+  entry_item([
+    html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+      html.p([attribute.class("font-mono text-xs break-all")], [
+        html.text(row.url),
+      ]),
+      html.div(
+        [attribute.class("flex flex-wrap gap-x-4 gap-y-1 text-sm")],
+        option.values([
+          option.map(row.monitor, relay_role(language, i18n.MonitorRole, _)),
+          option.map(row.bunker, relay_role(language, i18n.BunkerRole, _)),
         ]),
-        html.td([attribute.class("font-mono text-xs break-all")], [
-          html.text(relay.url),
-        ]),
-        html.td([], [relay_status(language, relay.status)]),
-      ]
-    }),
-  )
+      ),
+    ]),
+  ])
+}
+
+/// 用途の語と、その用途の接続の状態のバッジの組。
+fn relay_role(
+  language: Language,
+  role: i18n.Message,
+  status: Status,
+) -> Element(msg) {
+  html.span([attribute.class("flex items-center gap-2")], [
+    html.span([attribute.class("whitespace-nowrap")], [
+      html.text(i18n.text(language, role)),
+    ]),
+    relay_status(language, status),
+  ])
 }
 
 /// 承認済みセッションと、その取り消しボタン。一覧を得られないときは、一覧の
@@ -431,7 +481,7 @@ fn sessions_section(
       language,
       sessions,
       i18n.CouldNotListSessions,
-      text(i18n.NoApprovedSessions),
+      view.hint(text(i18n.NoApprovedSessions)),
       fn(rows) {
         item_list(
           list.map(rows, fn(session) {
@@ -474,17 +524,17 @@ fn section(
   empty: String,
   render: fn(List(a)) -> Element(msg),
 ) -> Element(msg) {
-  view.card([view.heading(title), section_body(rows, empty, render)])
+  view.card([view.heading(title), section_body(rows, view.hint(empty), render)])
 }
 
-/// 節の本文。行が無いときは `render` の代わりに一言を出す。
+/// 節の本文。行が無いときは `render` の代わりに `empty` を出す。
 fn section_body(
   rows: List(a),
-  empty: String,
+  empty: Element(msg),
   render: fn(List(a)) -> Element(msg),
 ) -> Element(msg) {
   case rows {
-    [] -> view.hint(empty)
+    [] -> empty
     rows -> render(rows)
   }
 }
@@ -494,8 +544,8 @@ fn item_list(items: List(Element(msg))) -> Element(msg) {
   html.ul([attribute.class("divide-y divide-base-300")], items)
 }
 
-/// 承認待ちとセッションの 1 件。値の組とボタンの並びを横に置き、収まらなければボタンを
-/// 下へ回す。
+/// 承認待ち、セッション、リレーの 1 件。値の組とボタンの並びを横に置き、収まらなければ
+/// ボタンを下へ回す。
 fn entry_item(content: List(Element(msg))) -> Element(msg) {
   html.li(
     [
@@ -644,14 +694,6 @@ fn plugin_state_label(
         html.text(text(i18n.DroppedAfterReason(dropped))),
       ]),
     )
-  }
-}
-
-/// リレーの用途の表示名。
-fn role_label(role: Role) -> i18n.Message {
-  case role {
-    MonitorRelay -> i18n.MonitorRole
-    BunkerRelay -> i18n.BunkerRole
   }
 }
 
