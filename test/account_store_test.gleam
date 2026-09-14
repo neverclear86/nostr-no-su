@@ -29,6 +29,8 @@ import nostr_no_su/hex
 import nostr_no_su/named
 import nostr_no_su/nostr/event
 import nostr_no_su/random
+import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
 import support/nip46_client
@@ -325,12 +327,12 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3]
+  assert recorded_versions(db) == [1, 2, 3, 4]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (4)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (5)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 4, supported: 3))
+    == Error(account_store.SchemaTooNew(found: 5, supported: 4))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -385,7 +387,7 @@ pub fn postgres_migrates_a_version_two_database_test() {
 
   let assert Ok(loaded) =
     account_store.load(pool, random_master_key(), generous)
-  assert recorded_versions(db) == [1, 2, 3]
+  assert recorded_versions(db) == [1, 2, 3, 4]
   assert loaded.sessions == []
   assert loaded.pending == []
 
@@ -410,9 +412,9 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   let key = random_master_key()
   let now = 1_700_000_000
 
-  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3] になる。
+  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4] になる。
   let assert Ok(empty) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3]
+  assert recorded_versions(db) == [1, 2, 3, 4]
   assert empty.sessions == []
   assert empty.pending == []
 
@@ -643,6 +645,133 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded.sessions == []
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// `relay_store` の一覧・追加・用途の更新・削除。`TEST_DATABASE_URL` があるときだけ
+/// 実行する。CI では未設定なら失敗する。
+pub fn postgres_relay_store_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  relay_store_round_trip(database_url)
+}
+
+fn relay_store_round_trip(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  assert relay_store.list(db, generous) == Ok([])
+
+  // 追加は id の順に戻り、`observe` は `roles.monitor` に写る。
+  let assert Ok(a) =
+    relay_store.insert(
+      db,
+      "wss://a",
+      relay_list.Roles(monitor: True, bunker: False),
+      generous,
+    )
+  let assert Ok(b) =
+    relay_store.insert(
+      db,
+      "wss://b",
+      relay_list.Roles(monitor: False, bunker: True),
+      generous,
+    )
+  assert relay_store.list(db, generous) == Ok([a, b])
+  assert a.roles == relay_list.Roles(monitor: True, bunker: False)
+
+  // 同じ URL の追加は他の DB の失敗と区別できる値で返る。
+  assert relay_store.insert(
+      db,
+      "wss://a",
+      relay_list.Roles(monitor: True, bunker: True),
+      generous,
+    )
+    == Error(account_store.RelayAlreadyRegistered)
+
+  // 用途の更新が反映される。
+  let assert Ok(Nil) =
+    relay_store.update_roles(
+      db,
+      a.id,
+      relay_list.Roles(monitor: True, bunker: True),
+      generous,
+    )
+  let assert Ok([updated_a, _updated_b]) = relay_store.list(db, generous)
+  assert updated_a.roles == relay_list.Roles(monitor: True, bunker: True)
+
+  // 無い id の更新と削除は区別できる値で返る。
+  assert relay_store.update_roles(
+      db,
+      -1,
+      relay_list.Roles(monitor: True, bunker: True),
+      generous,
+    )
+    == Error(account_store.RelayNotRegistered)
+  assert relay_store.delete(db, -1, generous)
+    == Error(account_store.RelayNotRegistered)
+
+  // 削除で消える。
+  let assert Ok(Nil) = relay_store.delete(db, a.id, generous)
+  assert relay_store.list(db, generous) == Ok([b])
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// `nostr_no_su.load_snapshot` は移行を含む読み込みと同じトランザクションで
+/// `relays` を読み、登録の順に並べる。advisory lock を通す
+/// `account_store_operations` の `load` はロックが取れなければ VM を止めるので
+/// （`nostr_no_su.gleam` の `halt_if_cannot_continue`）ここでは使わない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+pub fn postgres_load_snapshot_reads_relays_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  load_snapshot_reads_relays(database_url)
+}
+
+fn load_snapshot_reads_relays(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+
+  // 移行を実行してから行を足す。
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(_a) =
+    relay_store.insert(
+      db,
+      "wss://a",
+      relay_list.Roles(monitor: True, bunker: False),
+      generous,
+    )
+  let assert Ok(_b) =
+    relay_store.insert(
+      db,
+      "wss://b",
+      relay_list.Roles(monitor: False, bunker: True),
+      generous,
+    )
+
+  let assert Ok(snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
+  assert snapshot.relays
+    == [
+      relay_list.Registered(
+        url: "wss://a",
+        roles: relay_list.Roles(monitor: True, bunker: False),
+      ),
+      relay_list.Registered(
+        url: "wss://b",
+        roles: relay_list.Roles(monitor: False, bunker: True),
+      ),
+    ]
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -1065,7 +1194,7 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
         account_store.default_timeouts,
       ),
       load: fn() {
-        Ok(bunker.Snapshot(vault.Loaded(accounts: [], skipped: []), [], []))
+        Ok(bunker.Snapshot(vault.Loaded(accounts: [], skipped: []), [], [], []))
       },
     )
   let assert Ok(started) =
@@ -1077,6 +1206,7 @@ fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },
+      fn(_relays) { Nil },
     )
   #(name, started.pid)
 }

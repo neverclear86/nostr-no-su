@@ -134,6 +134,61 @@ pub fn change_roles_keeps_the_position_and_kept_names_test() {
   assert option.is_some(kept_b.bunker)
 }
 
+/// `open_all` は空の一覧に登録された順で足す。用途ごとに新しい名前を作る。
+pub fn open_all_keeps_the_registered_order_test() {
+  let registered = [
+    relay_list.Registered(
+      url: "wss://a",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
+    relay_list.Registered(
+      url: "wss://b",
+      roles: relay_list.Roles(monitor: False, bunker: True),
+    ),
+    relay_list.Registered(
+      url: "wss://c",
+      roles: relay_list.Roles(monitor: True, bunker: True),
+    ),
+  ]
+  let #(entries, rejections) = relay_list.open_all([], registered)
+  assert rejections == []
+  assert list.map(entries, fn(entry) { entry.url })
+    == ["wss://a", "wss://b", "wss://c"]
+  assert relay_list.urls(entries, relay_list.Monitor) == ["wss://a", "wss://c"]
+  assert relay_list.urls(entries, relay_list.Bunker) == ["wss://b", "wss://c"]
+}
+
+/// `open_all` は一覧にある URL を黙って飛ばし、位置も一覧も変えない。不正な URL と
+/// 用途の無い行は、URL つきの拒否として返り一覧に入らない。
+pub fn open_all_skips_listed_invalid_and_roleless_relays_test() {
+  let existing =
+    relay_list.initial(
+      [relay_list.Connection(name: process.new_name("m"), url: "wss://a")],
+      [],
+    )
+  let registered = [
+    relay_list.Registered(
+      url: "wss://a",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
+    relay_list.Registered(
+      url: "relay.damus.io",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
+    relay_list.Registered(
+      url: "wss://no-role",
+      roles: relay_list.Roles(monitor: False, bunker: False),
+    ),
+  ]
+  let #(entries, rejections) = relay_list.open_all(existing, registered)
+  assert entries == existing
+  assert rejections
+    == [
+      #("relay.damus.io", relay_list.InvalidUrl),
+      #("wss://no-role", relay_list.NoRole),
+    ]
+}
+
 /// `connections` と `urls` は、その用途で使う項目だけを一覧の順に並べる。
 pub fn connections_follow_the_entry_order_test() {
   let a = relay_list.Connection(name: process.new_name("m_a"), url: "wss://a")

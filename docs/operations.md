@@ -9,11 +9,11 @@
 | --- | --- | --- |
 | `bunker_accounts` | 公開鍵、ラベル、暗号化した秘密鍵と接続 secret | 全アカウントを登録し直す必要があり、`bunker://` URI の secret も変わる |
 | `monitor_resume` | 監視の購読の再開点（リレーごとの `since`） | 失うと次の購読が保存済みのイベントをすべて求め、`dedup` のウィンドウを超える分がプラグインへもう一度届く |
-| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
+| `relays` | 登録したリレーの URL と用途（監視・バンカー） | 失うと `bunker://` URI の `relay=` が変わり、下の「復旧後の確認」の 2 が一致しなくなる |
+| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`、`relays`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
 | `events` | `event_logger` が保存したイベント（このプラグインを置いたときだけ存在する） | プラグインが保存した履歴が失われる |
 | `event_logger_schema_version` | `event_logger` の移行の版 | `events` と対で戻す必要がある |
 | マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（README の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できない |
-| リレーの設定（`BUNKER_RELAY_URL`、未設定なら `RELAY_URL`） | `.env` の環境変数。DB には保存しない | 復旧後に値が変わると `bunker://` URI の `relay=` も変わり、下の「復旧後の確認」の 2 が一致しなくなる |
 
 ## マスターキーの保管
 
@@ -37,7 +37,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 docker compose exec -T postgres psql -At -U nostr -d nostr_no_su -c "SELECT count(*) FROM bunker_accounts"
 ```
 
-取ったダンプの中身は次で確かめる。プラグインを置いていなければ 5 行、`event_logger` を置いていれば 7 行の `TABLE DATA` が出る。
+取ったダンプの中身は次で確かめる。プラグインを置いていなければ 6 行、`event_logger` を置いていれば 8 行の `TABLE DATA` が出る。
 
 ```sh
 docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DATA'
@@ -51,7 +51,7 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 
 ## 復旧
 
-始める前に、同じマスターキーと同じリレーの設定（`BUNKER_RELAY_URL`、`RELAY_URL`）を含む `.env` を用意する（マスターキーをファイルで渡す構成なら同じ秘密のファイルと `docker-compose.override.yml`。ファイルの権限は [README](../README.md) の「秘密をファイルで渡す」）。リレーの設定が変わると `bunker://` URI の `relay=` も変わり、復旧後の確認 2 が以前と同じにならない。
+始める前に、同じマスターキーを含む `.env` を用意する（マスターキーをファイルで渡す構成なら同じ秘密のファイルと `docker-compose.override.yml`。ファイルの権限は [README](../README.md) の「秘密をファイルで渡す」）。リレーはダンプの `relays` に入っているので、同じダンプなら `bunker://` URI の `relay=` も変わらない。
 
 新しいホストへ移して復旧するときは、先に旧ホストのアプリを止める。advisory lock は同じ `DATABASE_URL` の DB に対してしか働かないため（[設計上の判断と既知の制約](design-decisions.md) の「同じ DB に対して動けるのは 1 インスタンスだけである」）、新旧ホストがそれぞれ同梱の Postgres を持つ構成では DB が別になり、ロックは効かず、旧ホストのアプリが動いたままだと同じアカウントに 2 つのバンカーが応答してしまう。外部の Postgres を新旧ホストで共有する構成なら、advisory lock により 2 台目は `[main] cannot continue: another instance is using this database (advisory lock 7237235 is held by another session)` で止まる。
 
@@ -92,7 +92,7 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 ## 復旧後の確認
 
 1. `docker compose logs nostr-no-su` に `[bunker] loaded N account(s)` が出て、`N` がバックアップの時点に控えたアカウント数と一致すること。`of` の形（`loaded N of M account(s)`、飛ばした行がある）になっていないこと。
-2. 管理 UI のダッシュボードの `bunker://` URI がバックアップ前と同じであること。URI は公開鍵、リレー、secret だけで決まる。secret は DB の `encrypted_secret` から復号するので、同じダンプと同じマスターキーなら変わらない。`BUNKER_RELAY_URL`（未設定なら `RELAY_URL`）を変えると URI の `relay=` が変わる。
+2. 管理 UI のダッシュボードの `bunker://` URI がバックアップ前と同じであること。URI は公開鍵、リレー、secret だけで決まる。secret は DB の `encrypted_secret` から復号するので、同じダンプと同じマスターキーなら変わらない。リレーもダンプの `relays` から決まるので、同じダンプなら `relay=` も変わらない。
 3. その URI でクライアントから署名できること。
 
 `loaded 0 of N account(s)` や `skipped account` が出たときは、DB の行を消さずに次で戻す。マスターキーの渡し方で操作が異なる。

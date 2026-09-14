@@ -233,7 +233,7 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
       name,
       bunker.Settings(
         store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [])) },
+          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
           insert: fn(_account) { Ok(Nil) },
           delete: fn(_signer) { Ok(Nil) },
           update_secret: fn(_signer, _secret) { Ok(Nil) },
@@ -244,6 +244,7 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
         retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
       ),
       fn() { Nil },
+      fn(_relays) { Nil },
     )
   // 読み込みの完了を待つ。`LoadAccounts` は起動時に名前なしの subject へ積まれて
   // おり、アクターは両方の subject を選択しているので、`GetAccounts` はその後に

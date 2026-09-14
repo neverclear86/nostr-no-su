@@ -19,9 +19,10 @@
 //// `process.named` が `Error` なので止められず、再起動した接続が一覧から消えた
 //// まま残る。落ちる経路はバグに限られるので容認する。
 ////
-//// **既知の窓 2**: このアクター自身が落ちると一覧は起動時の値に戻り、動いて
-//// いる接続とずれる。ハンドラーが呼ぶ FFI は落ちる経路（`exit`）を値にしている
-//// ため、落ちるのはバグに限られる。一覧の出どころは #231 で DB に移る。
+//// **既知の窓 2**: このアクター自身が落ちると一覧は起動時の値（本番は空）に戻り、
+//// 動いている接続とずれる。次にバンカーが読み込みに成功するまで、行は
+//// `OpenRegistered` で戻らない。ハンドラーが呼ぶ FFI は落ちる経路（`exit`）を
+//// 値にしているため、落ちるのはバグに限られる。
 ////
 //// **既知の窓 3**: ハンドラーは `terminate_dynamic_child` で、接続の停止のタイム
 //// アウト（`factory_supervisor.worker_child` の既定 5000ms）まで待ちうる。変更が
@@ -73,6 +74,11 @@ pub type Role {
   Bunker
 }
 
+/// ストアに登録されたリレー 1 件。DB に依存しないための形。
+pub type Registered {
+  Registered(url: String, roles: Roles)
+}
+
 /// 一覧の変更を拒む理由。
 pub type ChangeError {
   /// `relay_client.to_request` で解釈できない URL。
@@ -110,6 +116,9 @@ pub type Msg {
   /// 用途 `role` の factory が（再）起動した。まだ登録されていない接続を
   /// 一覧から起動し直す。
   Repopulate(role: Role)
+  /// ストアに登録されたリレーを、一覧に無い URL だけ足す（`open_all`）。バンカーが
+  /// 読み込みに成功するたびに送る。
+  OpenRegistered(relays: List(Registered))
   /// 全接続（両用途）へ購読の張り直しを依頼する。
   ResubscribeAll
 }
@@ -143,6 +152,24 @@ pub fn initial(
         Entry(url: connection.url, monitor: None, bunker: Some(connection.name)),
       ])
   }
+}
+
+/// `registered` を順に `open` で一覧の末尾へ足す。すでに一覧にある URL
+/// （`AlreadyListed`）は黙って飛ばし、それ以外の拒否は URL と理由の組にして
+/// 返す。
+pub fn open_all(
+  entries: List(Entry),
+  registered: List(Registered),
+) -> #(List(Entry), List(#(String, ChangeError))) {
+  let #(entries, rejections) = {
+    use #(entries, rejections), item <- list.fold(registered, #(entries, []))
+    case open(entries, item.url, item.roles) {
+      Ok(next) -> #(next, rejections)
+      Error(AlreadyListed) -> #(entries, rejections)
+      Error(error) -> #(entries, [#(item.url, error), ..rejections])
+    }
+  }
+  #(entries, list.reverse(rejections))
 }
 
 /// `url` を一覧の末尾に足す。用途ごとに新しい名前を作る。
@@ -361,6 +388,11 @@ pub fn resubscribe_all(name: Name(Msg)) -> Nil {
   named.send(name, ResubscribeAll)
 }
 
+/// ストアに登録されたリレーを一覧へ足す。送るだけで待たない。
+pub fn open_registered(name: Name(Msg), relays: List(Registered)) -> Nil {
+  named.send(name, OpenRegistered(relays))
+}
+
 /// メッセージの種類ごとに処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
@@ -372,6 +404,18 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Repopulate(role) -> {
       repopulate(state, role)
       actor.continue(state)
+    }
+    OpenRegistered(relays) -> {
+      let #(next, rejections) = open_all(state.entries, relays)
+      list.each(rejections, fn(rejection) {
+        let #(url, error) = rejection
+        log.write(
+          log.Warning,
+          log.relay_prefix(relay_client.label(url)),
+          "skipped registered relay: " <> skipped_reason(error),
+        )
+      })
+      actor.continue(apply_entries(state, next))
     }
     ResubscribeAll -> {
       list.each([Monitor, Bunker], fn(role) {
@@ -398,15 +442,33 @@ fn handle_change(
       actor.continue(state)
     }
     Ok(next) -> {
-      list.each([Monitor, Bunker], fn(role) {
-        let before = connections(state.entries, role)
-        let after = connections(next, role)
-        list.each(missing_from(before, after), stop_connection(state, role, _))
-        list.each(missing_from(after, before), start_connection(state, role, _))
-      })
+      let updated = apply_entries(state, next)
       process.send(reply, Ok(Nil))
-      actor.continue(State(..state, entries: next))
+      actor.continue(updated)
     }
+  }
+}
+
+/// 用途ごとの名前の差分を取って先に止めてから起動し、一覧を `next` に差し替える。
+fn apply_entries(state: State, next: List(Entry)) -> State {
+  list.each([Monitor, Bunker], fn(role) {
+    let before = connections(state.entries, role)
+    let after = connections(next, role)
+    list.each(missing_from(before, after), stop_connection(state, role, _))
+    list.each(missing_from(after, before), start_connection(state, role, _))
+  })
+  State(..state, entries: next)
+}
+
+/// 登録されたリレーを飛ばした理由の説明。`open_all` が返す拒否は `InvalidUrl` か
+/// `NoRole` だけ（`AlreadyListed` は `open_all` の時点で飛ばし、`NotListed` と
+/// `NotAnswered` は `open` が返さない）だが、`ChangeError` を網羅するために残りも
+/// 扱う。
+fn skipped_reason(error: ChangeError) -> String {
+  case error {
+    InvalidUrl -> "invalid url (use ws:// or wss://)"
+    NoRole -> "no role"
+    AlreadyListed | NotListed | NotAnswered -> "rejected"
   }
 }
 
