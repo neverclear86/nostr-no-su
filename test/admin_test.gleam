@@ -996,6 +996,133 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
+/// ラベルの欄を持つフォームを再描画する 6 つの経路は、送られた値から制御文字を除き、
+/// trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
+/// 出し、欄に `input-error` と `aria-invalid` を付けない。送った nsec は反射しない。
+pub fn invalid_input_keeps_the_label_on_every_path_test() {
+  let broken = string.drop_end(spec_nsec, 1) <> "4"
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let cases = [
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", broken),
+        #("label", "a\tb"),
+      ]),
+      400,
+      "invalid bech32 checksum",
+      "ab",
+      Some(broken),
+    ),
+    #(
+      post_form(context(), "/accounts/register-generated", [
+        #("nsec", broken),
+        #("label", " a\tb "),
+      ]),
+      400,
+      "invalid bech32 checksum",
+      " ab ",
+      Some(broken),
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", " a\tb"),
+      ]),
+      400,
+      "label must not contain control characters",
+      " ab",
+      Some(spec_nsec),
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", "   "),
+      ]),
+      400,
+      "label must not be empty",
+      "   ",
+      Some(spec_nsec),
+    ),
+    #(
+      post_form(context(), "/accounts/register-generated", [
+        #("nsec", generated),
+        #("label", "a\u{0085}b "),
+      ]),
+      400,
+      "label must not contain control characters",
+      "ab ",
+      None,
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", signer_nsec),
+        #("label", " work "),
+      ]),
+      409,
+      "account is already registered",
+      " work ",
+      Some(signer_nsec),
+    ),
+    #(
+      post_form(context(), "/accounts/register-generated", [
+        #("nsec", signer_nsec),
+        #("label", " work "),
+      ]),
+      409,
+      "account is already registered",
+      " work ",
+      Some(signer_nsec),
+    ),
+    #(
+      post_form(context(), action_path(dashboard.EditLabel), [
+        #("label", " a\nb "),
+      ]),
+      400,
+      "label must not contain control characters",
+      " ab ",
+      None,
+    ),
+    #(
+      post_form(
+        failing_context(bunker.NotApplied("account is not registered")),
+        action_path(dashboard.EditLabel),
+        [#("label", " new ")],
+      ),
+      409,
+      "account is not registered",
+      " new ",
+      None,
+    ),
+  ]
+  use #(response, status, reason, field_value, sent_nsec) <- list.each(cases)
+  assert response.status == status
+  let body = simulate.read_body(response)
+  assert string.contains(body, reason)
+  assert string.contains(
+    body,
+    "name=\"label\" required type=\"text\" value=\"" <> field_value <> "\"",
+  )
+  let assert Ok(#(_before, after_alert)) =
+    string.split_once(
+      body,
+      "<div class=\"alert alert-error\" role=\"alert\"><span>",
+    )
+  let assert Ok(#(reason_text, after_reason)) =
+    string.split_once(after_alert, "</div>")
+  assert string.contains(reason_text, reason)
+  assert string.contains(after_reason, "name=\"label\"")
+  assert !string.contains(body, "input-error")
+  assert !string.contains(body, "aria-invalid")
+  let echoes_the_sent_nsec = case sent_nsec {
+    Some(nsec) -> string.contains(body, nsec)
+    None -> False
+  }
+  assert !echoes_the_sent_nsec
+  assert !string.contains(body, spec_nsec)
+  assert !string.contains(body, signer_nsec)
+}
+
 /// 前後に空白を付けた 100 符号位置のラベルは通り、空白を除いた値で登録する。
 pub fn import_accepts_a_label_at_the_code_point_limit_test() {
   let reports = process.new_subject()
@@ -1109,7 +1236,8 @@ pub fn register_generated_shares_the_failure_paths_test() {
 }
 
 /// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた
-/// nsec の確認ページを理由付きで 400 で返す。登録はしない。
+/// nsec の確認ページを理由付きで 400 で返す。登録はせず、ラベルの欄には制御文字を除いた
+/// 値を入れる。
 pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   let reports = process.new_subject()
   let generated =
@@ -1127,6 +1255,7 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
     body,
     "<div class=\"alert alert-error\" role=\"alert\"><span>label must not contain control characters</span></div>",
   )
+  assert string.contains(body, "value=\"ab\"")
   assert !string.contains(body, "a\tb")
   assert header(response, "cache-control") == "no-store"
   assert process.receive(reports, 100) == Error(Nil)
@@ -1332,8 +1461,8 @@ pub fn label_update_calls_the_context_and_redirects_test() {
   assert process.receive(reports, 1000) == Ok(Relabeled(signer, "new"))
 }
 
-/// 規則に反するラベルは 400 で、編集の欄には保存済みのラベルを入れ、Context を
-/// 呼ばない。
+/// 規則に反するラベルは 400 で、編集の欄には送られた値から制御文字を除いた値を入れ、
+/// Context を呼ばない。
 pub fn label_update_rejects_an_invalid_label_test() {
   let reports = process.new_subject()
   let response =
@@ -1343,8 +1472,42 @@ pub fn label_update_rejects_an_invalid_label_test() {
   assert response.status == 400
   let body = simulate.read_body(response)
   assert string.contains(body, "label must not contain control characters")
-  assert string.contains(body, "value=\"" <> label <> "\"")
+  assert string.contains(body, "value=\"ab\"")
   assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 編集のページを再描画しても、カードの上の要約は保存済みのラベルのまま。
+pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
+  let saved = "<dd class=\"break-words\">" <> label <> "</dd>"
+  let invalid_input =
+    simulate.read_body(
+      post_form(context(), action_path(dashboard.EditLabel), [
+        #("label", "a\nb"),
+      ]),
+    )
+  assert string.contains(invalid_input, saved)
+  let conflict =
+    simulate.read_body(
+      post_form(
+        failing_context(bunker.NotApplied("account is not registered")),
+        action_path(dashboard.EditLabel),
+        [#("label", "new")],
+      ),
+    )
+  assert string.contains(conflict, saved)
+}
+
+/// 欄に戻したラベルは属性値としてエスケープする。
+pub fn reflected_label_is_escaped_test() {
+  let body =
+    simulate.read_body(
+      post_form(context(), "/accounts/import", [
+        #("nsec", "nsec1invalid"),
+        #("label", "a\tb\"><b>"),
+      ]),
+    )
+  assert string.contains(body, "value=\"ab&quot;&gt;&lt;b&gt;\"")
+  assert !string.contains(body, "\"><b>")
 }
 
 /// ラベルの編集の欄には `maxlength` を付けず、新しいアカウントの欄には付ける。
