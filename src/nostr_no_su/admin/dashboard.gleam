@@ -57,8 +57,15 @@ pub type PluginRow {
 }
 
 /// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
+/// `secret_mismatch` は提示された secret が一致しなかったか（偽なら提示が無い）。
 pub type PendingRow {
-  PendingRow(token: String, signer: String, client: String, age_seconds: Int)
+  PendingRow(
+    token: String,
+    signer: String,
+    client: String,
+    age_seconds: Int,
+    secret_mismatch: Bool,
+  )
 }
 
 /// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。
@@ -383,18 +390,23 @@ pub fn parse_account_action_path(
   }
 }
 
-/// 承認待ち 1 件の、署名者・クライアント・経過時間と、承認・拒否ボタン。ダッシュボードの
-/// 行と承認ページが使う。
+/// 承認待ち 1 件の、署名者・クライアント・経過時間・secret の提示の区別と、承認・拒否
+/// ボタン。ダッシュボードの行と承認ページが使う。
 fn pending_content(
   language: Language,
   pending: PendingRow,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
+  let secret_value = case pending.secret_mismatch {
+    True -> view.Flag(text(i18n.SecretMismatch))
+    False -> view.Plain(text(i18n.SecretNotOffered))
+  }
   [
     view.summary_list([
       #(text(i18n.Signer), view.Code(pending.signer)),
       #(text(i18n.Client), view.Code(pending.client)),
       #(text(i18n.Age), view.Plain(text(i18n.AgeSeconds(pending.age_seconds)))),
+      #(text(i18n.SecretLabel), secret_value),
     ]),
     button_row(decision_forms(language, pending.token)),
   ]

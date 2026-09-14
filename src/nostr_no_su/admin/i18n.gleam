@@ -210,6 +210,9 @@ pub type Message {
   Client
   Age
   AgeSeconds(seconds: Int)
+  SecretLabel
+  SecretNotOffered
+  SecretMismatch
   Created
   LastUsed
   Approve
@@ -338,6 +341,9 @@ fn english(message: Message) -> String {
     Client -> "Client"
     Age -> "Age"
     AgeSeconds(seconds:) -> int.to_string(seconds) <> "s"
+    SecretLabel -> "Secret"
+    SecretNotOffered -> "Not offered"
+    SecretMismatch -> "Mismatch"
     Created -> "Created"
     LastUsed -> "Last used"
     Approve -> "Approve"
@@ -478,6 +484,9 @@ fn japanese(message: Message) -> String {
     Client -> "クライアント"
     Age -> "経過時間"
     AgeSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
+    SecretLabel -> "secret"
+    SecretNotOffered -> "提示なし"
+    SecretMismatch -> "不一致"
     Created -> "作成"
     LastUsed -> "最終利用"
     Approve -> "承認する"
