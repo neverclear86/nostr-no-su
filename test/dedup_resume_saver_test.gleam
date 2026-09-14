@@ -27,9 +27,7 @@ fn recording_save(
 pub fn received_events_are_saved_as_resume_points_test() {
   let dedup_name = process.new_name("test_dedup_resume_saver")
   let assert Ok(_dedup) =
-    dedup.start(dedup_name, Nil, fn(targets, _event) { targets }, 64, [
-      "wss://a",
-    ])
+    dedup.start(dedup_name, Nil, fn(targets, _event) { targets }, 64)
   let saves = process.new_subject()
   let assert Ok(_saver) =
     resume_saver.start(dedup_name, recording_save(saves, False), 50)
@@ -45,9 +43,7 @@ pub fn received_events_are_saved_as_resume_points_test() {
 pub fn a_failed_save_is_retried_on_the_next_interval_test() {
   let dedup_name = process.new_name("test_dedup_resume_saver_failing")
   let assert Ok(_dedup) =
-    dedup.start(dedup_name, Nil, fn(targets, _event) { targets }, 64, [
-      "wss://a",
-    ])
+    dedup.start(dedup_name, Nil, fn(targets, _event) { targets }, 64)
   let saves = process.new_subject()
   let assert Ok(_saver) =
     resume_saver.start(dedup_name, recording_save(saves, True), 50)

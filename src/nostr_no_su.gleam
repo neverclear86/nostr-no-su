@@ -21,6 +21,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
 
@@ -89,9 +90,10 @@ pub fn main() -> Nil {
 /// リレー URL が不正か、バンカーか管理 UI を起動できない設定なら、プラグインの
 /// 読み込みより前にその理由を返す。
 ///
-/// 外部プラグインの読み込みは監視の有無に関わらず行う。読み込んだプラグインは
-/// ルート直下の `plugins` サブツリーで動き、ダッシュボードにも状態が出る。
-/// 監視が無効な構成（`RELAY_URL` が空）なら、配信されるイベントが無いだけである。
+/// 外部プラグインの読み込みは監視のリレーの有無に関わらず行う。読み込んだ
+/// プラグインは監視のリレーが 0 本でも動く。ルート直下の `plugins` サブツリーで
+/// 動き、ダッシュボードにも状態が出る。`RELAY_URL` が空でも監視のツリーは常に
+/// 起動し、配信されるイベントが無いだけである。
 fn startup(loaded: Config) -> Result(Startup, String) {
   use Nil <- result.try(config.check_relay_urls(loaded))
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
@@ -115,6 +117,7 @@ fn startup(loaded: Config) -> Result(Startup, String) {
       admin: admin,
       open: app.open_websocket,
       reconnect_delay: relay_connection.default_reconnect_delay,
+      relay_list: process.new_name("nostr_no_su_relay_list"),
     ),
     notes: list.flatten([
       monitor_notes,
@@ -125,10 +128,10 @@ fn startup(loaded: Config) -> Result(Startup, String) {
   )
 }
 
-/// リレー URL ごとに接続 1 本ぶんの仕様を作る。
-fn relays(relay_urls: List(String)) -> List(app.Relay) {
+/// リレー URL ごとに接続 1 本ぶんの識別を作る。
+fn relays(relay_urls: List(String)) -> List(relay_list.Connection) {
   use url <- list.map(relay_urls)
-  app.Relay(name: process.new_name("nostr_no_su_relay"), url: url)
+  relay_list.Connection(name: process.new_name("nostr_no_su_relay"), url: url)
 }
 
 /// プラグインごとにランナープロセスの名前を作る。名前はここで 1 度だけ作り、
@@ -143,38 +146,32 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
   )
 }
 
-/// 設定されたリレーの監視サブツリー。監視対象がなければ None。購読はバンカーの
-/// 署名者と再開点から組み立て（`monitor_subscriptions`）、再開点はアカウント
-/// ストアと同じ DB に保存する。除外する kind の既定は ephemeral 全般
-/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。
+/// 設定されたリレーの監視サブツリー。リレーが 0 本でもツリーは起動する（後から
+/// `app.open_relay` で足せる）。購読はバンカーの署名者と再開点から組み立て
+/// （`monitor_subscriptions`）、再開点はアカウントストアと同じ DB に保存する。
+/// 除外する kind の既定は ephemeral 全般（`event.is_ephemeral`）。バンカーの
+/// NIP-46 の応答を含む。
 fn monitor_spec(
   loaded: Config,
   bunker: app.Bunker,
-) -> #(Option(app.Monitor), List(String)) {
-  case loaded.relay_urls {
-    [] -> #(None, [
-      log.line(log_prefix, "no monitor relays configured; monitoring disabled"),
-    ])
-    relay_urls -> {
-      let name = process.new_name("nostr_no_su_dedup")
-      #(
-        Some(app.Monitor(
-          name: name,
-          dedup_capacity: dedup_capacity,
-          relays: relays(relay_urls),
-          subscriptions: monitor_subscriptions(
-            bunker.name,
-            name,
-            resume_point_loader(bunker.pool.pool_name),
-            _,
-          ),
-          save_resume: resume_point_saver(bunker.pool.pool_name),
-          excludes_kind: event.is_ephemeral,
-        )),
-        [log.line(log_prefix, "monitor relays: " <> describe(relay_urls))],
-      )
-    }
-  }
+) -> #(app.Monitor, List(String)) {
+  let name = process.new_name("nostr_no_su_dedup")
+  #(
+    app.Monitor(
+      name: name,
+      dedup_capacity: dedup_capacity,
+      relays: relays(loaded.relay_urls),
+      subscriptions: monitor_subscriptions(
+        bunker.name,
+        name,
+        resume_point_loader(bunker.pool.pool_name),
+        _,
+      ),
+      save_resume: resume_point_saver(bunker.pool.pool_name),
+      excludes_kind: event.is_ephemeral,
+    ),
+    [log.line(log_prefix, "monitor relays: " <> describe(loaded.relay_urls))],
+  )
 }
 
 /// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から

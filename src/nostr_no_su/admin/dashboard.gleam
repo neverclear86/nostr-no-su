@@ -31,8 +31,8 @@ pub type Role {
   BunkerRelay
 }
 
-/// リレー接続 1 本の表示内容。接続の仕様を表す `app.Relay` とは別物なので、
-/// 表の行であることを名前に出す。
+/// リレー接続 1 本の表示内容。接続の識別を表す `relay_list.Connection` とは
+/// 別物なので、表の行であることを名前に出す。
 pub type RelayRow {
   RelayRow(role: Role, url: String, status: Status)
 }
