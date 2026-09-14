@@ -63,6 +63,10 @@ pub const connection_not_saved = "could not save the connection; try connecting 
 /// 優先して件数のみで区切っている。
 const seen_capacity = 16_384
 
+/// 承認済みセッションの件数の上限（全署名者で 1 つ）。新しいセッションを開くと、
+/// 最終利用の古い順（`sessions` の並びの末尾）に押し出す。
+pub const session_capacity = 32
+
 /// バンカーが持つ状態のすべて。プロセスも時計も持たない純粋な値で、`bunker` の
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
@@ -126,7 +130,8 @@ pub type Pending {
 }
 
 /// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
-/// クライアント）の組で、取り消されるまで署名を代理できる。時刻は Unix 秒。
+/// クライアント）の組で、取り消し、アカウントの削除、`session_capacity` による
+/// 押し出しまで署名を代理できる。時刻は Unix 秒。
 /// `last_used_at` は作成時に `created_at` と同じ値を入れ、セッション内の
 /// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
 /// 経っていれば更新する。
@@ -143,8 +148,8 @@ pub type Session {
 /// 状態の変更に伴う DB への書き込み 1 件。変種は `account_store` の書き込みの
 /// 関数に 1 対 1 で対応する。
 pub type Write {
-  /// `insert_session`。
-  InsertSession(session: Session)
+  /// `insert_session_evicting`。`evicted` は押し出す（署名者, クライアント）の組。
+  InsertSession(session: Session, evicted: List(#(String, String)))
   /// `delete_session`。
   DeleteSession(signer: String, client: String)
   /// `touch_session`。組の最終利用を `last_used_at` に進める。
@@ -154,11 +159,16 @@ pub type Write {
   InsertPending(pending: Pending, replaced: List(String))
   /// `delete_pending`（拒否）。
   DeletePending(token: String)
-  /// `approve`（承認待ちの削除とセッションの挿入を 1 トランザクションで）。組が
-  /// すでに承認済みでも `session` は承認の時刻と承認待ちの `perms` を持つ。
-  /// `insert_session` は `ON CONFLICT DO NOTHING` なので、DB でも最初に開いた
-  /// ときの値が残り、メモリの値（`open_session` 参照）と揃う。
-  ApprovePending(token: String, session: Session)
+  /// `approve`（承認待ちの削除とセッションの挿入、押し出しの削除を 1
+  /// トランザクションで）。組がすでに承認済みでも `session` は承認の時刻と
+  /// 承認待ちの `perms` を持つ。`insert_session` は `ON CONFLICT DO NOTHING`
+  /// なので、DB でも最初に開いたときの値が残り、メモリの値（`open_session`
+  /// 参照）と揃う。`evicted` は `InsertSession` と同じ、押し出す組。
+  ApprovePending(
+    token: String,
+    session: Session,
+    evicted: List(#(String, String)),
+  )
 }
 
 /// 受信イベント 1 件を処理した結果。
@@ -384,14 +394,18 @@ pub fn approve(
 ) -> Result(#(Engine, Event, Write), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
   let session = new_session(entry.signer, entry.client, entry.perms, now)
-  let engine = open_session(engine, session)
+  let #(engine, evicted) = open_session(engine, session)
   use #(engine, reply) <- result.map(respond(
     engine,
     entry,
     rpc.ok(entry.request_id, "ack"),
     now,
   ))
-  #(engine, reply, ApprovePending(token: token, session: session))
+  #(
+    engine,
+    reply,
+    ApprovePending(token: token, session: session, evicted: evicted),
+  )
 }
 
 /// 承認待ちの接続要求を拒否する。承認済みにはせず、元の `connect` と同じ id の
@@ -772,9 +786,10 @@ fn connect(
       case offered_matches {
         True -> {
           let session = new_session(signer, client_pk_hex, perms, inputs.now)
+          let #(next, evicted) = open_session(engine, session)
           Record(
-            write: InsertSession(session),
-            next: open_session(engine, session),
+            write: InsertSession(session:, evicted:),
+            next:,
             response: rpc.ok(request.id, "ack"),
             on_failure: not_saved,
           )
@@ -810,13 +825,25 @@ fn connect(
 }
 
 /// （署名者, クライアント）の組を承認済みにする。組がすでにあれば、値（作成時刻
-/// と権限）は変えずそのまま返す（DB の `ON CONFLICT DO NOTHING` と揃える）。
-fn open_session(engine: Engine, session: Session) -> Engine {
+/// と権限）は変えずそのまま返し、何も押し出さない（DB の `ON CONFLICT DO
+/// NOTHING` と揃える）。無ければ、挿入の前の一覧（最終利用の新しい順）で
+/// `session_capacity - 1` 件より後ろの組を押し出してから新しい組を入れる。
+/// 戻り値の第 2 要素は押し出した（署名者, クライアント）の組。
+fn open_session(
+  engine: Engine,
+  session: Session,
+) -> #(Engine, List(#(String, String))) {
   let key = #(session.signer, session.client)
   case dict.has_key(engine.sessions, key) {
-    True -> engine
-    False ->
-      Engine(..engine, sessions: dict.insert(engine.sessions, key, session))
+    True -> #(engine, [])
+    False -> {
+      let evicted =
+        sessions(engine)
+        |> list.drop(session_capacity - 1)
+        |> list.map(fn(session) { #(session.signer, session.client) })
+      let kept = list.fold(evicted, engine.sessions, dict.delete)
+      #(Engine(..engine, sessions: dict.insert(kept, key, session)), evicted)
+    }
   }
 }
 

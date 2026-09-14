@@ -353,14 +353,15 @@ fn write_session_state(
   change: engine.Write,
 ) -> Result(Nil, account_store.StoreError) {
   case change {
-    engine.InsertSession(session:) ->
-      account_store.insert_session(
-        db,
+    engine.InsertSession(session:, evicted:) ->
+      account_store.insert_session_evicting(
+        pool,
         timeouts,
         signer: session.signer,
         client: session.client,
         perms: session.perms,
         now: session.created_at,
+        evicted: evicted,
       )
     engine.DeleteSession(signer:, client:) ->
       account_store.delete_session(db, timeouts, signer:, client:)
@@ -381,7 +382,7 @@ fn write_session_state(
       )
     engine.DeletePending(token:) ->
       account_store.delete_pending(db, timeouts, token:)
-    engine.ApprovePending(token:, session:) ->
+    engine.ApprovePending(token:, session:, evicted:) ->
       account_store.approve(
         pool,
         timeouts,
@@ -390,6 +391,7 @@ fn write_session_state(
         client: session.client,
         perms: session.perms,
         now: session.created_at,
+        evicted: evicted,
       )
   }
 }

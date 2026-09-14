@@ -1342,7 +1342,7 @@ fn incoming_write_change(
   write: engine.Write,
 ) -> #(SessionChange, Option(#(String, String))) {
   case write {
-    engine.InsertSession(session:) -> #(
+    engine.InsertSession(session:, ..) -> #(
       SessionOpening,
       Some(#(session.signer, session.client)),
     )
