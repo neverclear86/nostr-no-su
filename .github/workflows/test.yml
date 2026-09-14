@@ -61,6 +61,15 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
       - run: gleam format --check src test dev
+      # 例のプラグイン（examples/plugins/*/src/*.erl）が警告なしでコンパイルできることを確かめる。
+      # -Wall だけでは警告で失敗しないので -Werror を付ける。成果物はリポジトリの外に出す。
+      - name: 例のプラグインを警告なしでコンパイルする
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/examples"
+          erlc -Wall -Werror -o "$RUNNER_TEMP/examples" examples/plugins/*/src/*.erl
+      # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
+      - run: gleam export erlang-shipment
 
   admin-css:
     runs-on: ubuntu-latest
