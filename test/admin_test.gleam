@@ -194,6 +194,7 @@ fn test_context(
           signer: signer,
           client: client,
           age_seconds: 12,
+          secret_mismatch: False,
         ),
       ])
     },
