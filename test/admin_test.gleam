@@ -166,7 +166,7 @@ fn test_context(
       Ok(Nil)
     },
     sessions: fn() {
-      [
+      Ok([
         engine.Session(
           signer: signer,
           client: client,
@@ -174,7 +174,7 @@ fn test_context(
           created_at: 1000,
           last_used_at: 1000,
         ),
-      ]
+      ])
     },
     revoke: fn(revoked_signer, revoked_client) {
       process.send(
@@ -187,14 +187,14 @@ fn test_context(
       }
     },
     pending: fn() {
-      [
+      Ok([
         dashboard.PendingRow(
           token: token,
           signer: signer,
           client: client,
           age_seconds: 12,
         ),
-      ]
+      ])
     },
     approve: fn(decided) { record_decision(reports, Approved(decided)) },
     deny: fn(decided) { record_decision(reports, Denied(decided)) },
@@ -206,7 +206,7 @@ fn test_context(
 fn record_decision(
   reports: Subject(Report),
   report: Report,
-) -> Result(Nil, String) {
+) -> Result(Nil, bunker.SessionFailure) {
   process.send(reports, report)
   Ok(Nil)
 }
@@ -488,27 +488,10 @@ pub fn revoking_an_unknown_session_is_not_found_test() {
     == Ok(Revoked(signer: signer, client: unknown_client))
 }
 
-/// バンカーが応答しない取り消しは 503 で、理由とダッシュボードへのリンクを出す。
-pub fn revoke_that_is_not_answered_is_unavailable_test() {
-  let response =
-    post_form(not_answering_context(), "/sessions/revoke", [
-      #("signer", signer),
-      #("client", client),
-    ])
-  assert response.status == 503
-  let body = simulate.read_body(response)
-  assert string.contains(body, "Change not confirmed")
-  assert string.contains(
-    body,
-    i18n.text(i18n.English, i18n.BunkerDidNotRespond),
-  )
-  assert string.contains(body, "Back to dashboard")
-}
-
 /// 取り消しにバンカーが応答しない Context。
 fn not_answering_context() -> admin.Context {
   admin.Context(..context(), revoke: fn(_signer, _client) {
-    Error(bunker.NotAnswered)
+    Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
   })
 }
 
@@ -697,6 +680,116 @@ pub fn deciding_an_unknown_token_is_not_found_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
+/// 承認待ちの一覧を得られなければ、承認ページの GET と、承認・拒否の POST は
+/// 503 の `Bunker is not available` になり、理由を出す。approve と deny は
+/// 呼ばれない。
+pub fn pending_that_cannot_be_listed_is_unavailable_test() {
+  let reports = process.new_subject()
+  let reason = "account store unavailable: database is unreachable"
+  let failing =
+    admin.Context(..reporting_context(reports), pending: fn() { Error(reason) })
+
+  let get_response = get(failing, "/approve/" <> token)
+  assert get_response.status == 503
+  let get_body = simulate.read_body(get_response)
+  assert string.contains(get_body, "Bunker is not available")
+  assert string.contains(get_body, reason)
+
+  let approve_response = post(failing, "/approve/" <> token)
+  assert approve_response.status == 503
+  assert string.contains(simulate.read_body(approve_response), reason)
+
+  let deny_response = post(failing, "/deny/" <> token)
+  assert deny_response.status == 503
+  assert string.contains(simulate.read_body(deny_response), reason)
+
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 承認・拒否・取り消しの失敗は、対象が無ければ 404、書き込まれていないことが
+/// 確定していれば 409、受け付けられなければ 503 の `Bunker is not available`、
+/// 反映されたか分からなければ 503 の `Change not confirmed` になる。
+pub fn session_failures_are_shown_as_notice_pages_test() {
+  let cases = [
+    #(bunker.SessionNotFound("not found reason"), 404, "Not found"),
+    #(bunker.SessionNotApplied("not applied reason"), 409, "Change not applied"),
+    #(
+      bunker.SessionNotReady("accounts are not loaded yet"),
+      503,
+      "Bunker is not available",
+    ),
+    #(
+      bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm),
+      503,
+      "Change not confirmed",
+    ),
+  ]
+  use #(failure, status, heading) <- list.each(cases)
+  let failing =
+    admin.Context(
+      ..context(),
+      approve: fn(_token) { Error(failure) },
+      deny: fn(_token) { Error(failure) },
+      revoke: fn(_signer, _client) { Error(failure) },
+    )
+  let responses = [
+    post(failing, "/approve/" <> token),
+    post(failing, "/deny/" <> token),
+    post_form(failing, "/sessions/revoke", [
+      #("signer", signer),
+      #("client", client),
+    ]),
+  ]
+  list.each(responses, fn(response) {
+    assert #(heading, response.status) == #(heading, status)
+    assert string.contains(
+      simulate.read_body(response),
+      "<h1 class=\"text-2xl font-bold\">" <> heading <> "</h1>",
+    )
+  })
+}
+
+/// 反映されたか分からない失敗のページには、やり直す前にダッシュボードで確かめる
+/// よう促す一文が付く。アカウントの変更の 202、プラグインの再有効化の 503、
+/// `SessionMaybeApplied` の 503 のどれにも出て、対象が無い 404 には出ない。
+pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
+  let hint = i18n.text(i18n.English, i18n.CheckDashboardBeforeRetrying)
+  let with_hint = [
+    post_form(
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+      action_path(dashboard.RotateSecret),
+      [],
+    ),
+    post_form(
+      admin.Context(..context(), reenable_plugin: fn(_name) {
+        Error(admin.PluginNotAnswered(plugin_not_answered))
+      }),
+      "/plugins/reenable",
+      [#("name", "broken")],
+    ),
+    post_form(
+      admin.Context(..context(), revoke: fn(_signer, _client) {
+        Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+      }),
+      "/sessions/revoke",
+      [#("signer", signer), #("client", client)],
+    ),
+  ]
+  list.each(with_hint, fn(response) {
+    assert string.contains(simulate.read_body(response), hint)
+  })
+
+  let not_found =
+    post_form(
+      admin.Context(..context(), revoke: fn(_signer, _client) {
+        Error(bunker.SessionNotFound(session_not_approved))
+      }),
+      "/sessions/revoke",
+      [#("signer", signer), #("client", client)],
+    )
+  assert !string.contains(simulate.read_body(not_found), hint)
+}
+
 /// 承認・拒否・取り消しのログ行は、署名者とクライアントの公開鍵を含む。
 pub fn session_change_lines_name_the_signer_and_the_client_test() {
   assert admin.session_change_line(admin.ConnectionApproved, signer, client)
@@ -705,25 +798,6 @@ pub fn session_change_lines_name_the_signer_and_the_client_test() {
     == "denied the connection of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.SessionRevoked, signer, client)
     == "revoked the session of client " <> client <> " to signer " <> signer
-}
-
-/// 一覧を引いた後にバンカーが処理できなかった承認・拒否は、バンカーの理由を
-/// 添えた 404。
-pub fn a_decision_the_bunker_rejects_is_not_found_test() {
-  let reason = "bunker is not running"
-  let rejecting =
-    admin.Context(
-      ..context(),
-      approve: fn(_token) { Error(reason) },
-      deny: fn(_token) { Error(reason) },
-    )
-  let approve_response = post(rejecting, "/approve/" <> token)
-  assert approve_response.status == 404
-  assert string.contains(simulate.read_body(approve_response), reason)
-
-  let deny_response = post(rejecting, "/deny/" <> token)
-  assert deny_response.status == 404
-  assert string.contains(simulate.read_body(deny_response), reason)
 }
 
 /// 資格情報のない承認は 401 で、Context には届かない。
@@ -2430,7 +2504,7 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
 }
 
 /// 日本語のページで、変更を確認できなかった通知ページの本文が日本語になる（`lang="en"` の
-/// `span` が無い）。アカウントの変更の 202 とセッションの取り消しの 503 のどちらも対象。
+/// `span` が無い）。アカウントの変更の 202 と承認・拒否・取り消しの 503 のどれも対象。
 pub fn japanese_pages_translate_unconfirmed_changes_test() {
   let cases = [
     #(
@@ -2451,6 +2525,14 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
       [#("signer", signer), #("client", client)],
       i18n.BunkerDidNotRespond,
     ),
+    #(
+      admin.Context(..context(), approve: fn(_token) {
+        Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+      }),
+      "/approve/" <> token,
+      [],
+      i18n.StoreDidNotConfirm,
+    ),
   ]
   use #(failing, path, fields, message) <- list.each(cases)
   let body =
@@ -2469,14 +2551,6 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
     "<span>" <> i18n.text(i18n.Japanese, message) <> "</span>",
   )
   assert !string.contains(body, "<span lang=\"en\">")
-}
-
-/// 202 と取り消しの 503 の英語の文言は、消した定数の文字列のまま変わらない。
-pub fn unconfirmed_change_messages_keep_the_english_text_test() {
-  assert i18n.text(i18n.English, i18n.BunkerDidNotRespond)
-    == "the bunker did not respond; check the dashboard to see whether the change was applied"
-  assert i18n.text(i18n.English, i18n.StoreDidNotConfirm)
-    == "the store did not confirm the change; it may have been applied, so open the dashboard to check"
 }
 
 /// 通知ページで言語を切り替えた後はダッシュボードを開く。一覧を得られない 503 でも、パスの
