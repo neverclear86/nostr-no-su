@@ -359,8 +359,6 @@ fn label_fieldset(language: Language, value: String) -> Element(msg) {
       attribute.default_value(value),
       attribute.required(True),
       attribute.class("input w-full border-base-content/60"),
-      attribute.aria_label(caption),
-      attribute.aria_describedby(label_hint_id),
     ],
   )
 }

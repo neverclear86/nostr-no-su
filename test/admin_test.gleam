@@ -2065,6 +2065,7 @@ pub fn new_relay_page_checks_both_roles_test() {
   )
   assert string.contains(body, "name=\"url\"")
   assert string.contains(body, "value=\"\"")
+  assert string.contains(body, "aria-describedby=\"relay-url-hint\"")
   assert string.contains(
     body,
     "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",

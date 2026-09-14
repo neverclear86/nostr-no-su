@@ -672,7 +672,11 @@ pub fn hinted_input(
 ) -> Element(msg) {
   html.div([attribute.class("fieldset")], [
     html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
-    html.input(attributes),
+    html.input([
+      attribute.aria_label(caption),
+      attribute.aria_describedby(hint_id),
+      ..attributes
+    ]),
     html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
       html.text(hint),
     ]),
