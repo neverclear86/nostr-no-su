@@ -292,9 +292,10 @@ fn route(
       switch_language(request, language, theme)
     segments if segments == view.theme_segments ->
       switch_theme(request, language, theme)
-    ["approve", token] ->
+    [first, token] if first == dashboard.approve_segment ->
       approve_connection(context, request, language, theme, token)
-    ["deny", token] -> deny_connection(context, request, language, theme, token)
+    [first, token] if first == dashboard.deny_segment ->
+      deny_connection(context, request, language, theme, token)
     segments if segments == dashboard.revoke_segments ->
       revoke_session(context, request, language, theme)
     segments if segments == dashboard.reenable_plugin_segments ->
@@ -737,8 +738,8 @@ fn revoke_session(
   use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
   case
-    list.key_find(form.values, "signer"),
-    list.key_find(form.values, "client")
+    list.key_find(form.values, dashboard.signer_field),
+    list.key_find(form.values, dashboard.client_field)
   {
     Ok(signer), Ok(client) ->
       case context.revoke(signer, client) {
@@ -801,7 +802,7 @@ fn reenable_plugin(
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
-  case list.key_find(form.values, "name") {
+  case list.key_find(form.values, dashboard.plugin_name_field) {
     Ok(plugin) ->
       case context.reenable_plugin(plugin) {
         Ok(Nil) -> wisp.redirect(to: "/")
