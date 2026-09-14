@@ -1047,8 +1047,9 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
-/// n（1 以上）を 64 桁の 16 進文字列にする。secp256k1 の秘密鍵として有効な、
-/// テスト用クライアントの鍵を大量に作るのに使う。
+/// n（1 以上）の 10 進表記を 64 桁に 0 詰めする。数字だけの文字列なので 16 進
+/// としても読め、secp256k1 の秘密鍵として有効な、テスト用クライアントの鍵を
+/// 大量に作るのに使う。
 fn padded_hex(n: Int) -> String {
   string.pad_start(int.to_string(n), 64, "0")
 }

@@ -840,7 +840,7 @@ fn open_session(
       let evicted =
         sessions(engine)
         |> list.drop(session_capacity - 1)
-        |> list.map(fn(session) { #(session.signer, session.client) })
+        |> list.map(fn(evictee) { #(evictee.signer, evictee.client) })
       let kept = list.fold(evicted, engine.sessions, dict.delete)
       #(Engine(..engine, sessions: dict.insert(kept, key, session)), evicted)
     }
