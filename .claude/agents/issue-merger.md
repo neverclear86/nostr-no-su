@@ -12,7 +12,7 @@ disallowedTools: Agent
 
 ## 確かめること（すべて `gh` と `git` の出力を根拠にする）
 
-最初に `gh pr view <PR> -R $R --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、マージはせずに「マージ」の節の後片付け（作業ツリーの削除、`fetch --prune`、issue が閉じたかの確認、親 issue の確認）だけを行い、status を merged、マージのコミットを `mergeCommit.oid` にして返す。
+最初に `gh pr view <PR> -R $R --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、マージはせずに「マージ」の節の後片付け（作業ツリーの削除、`fetch --prune`、issue が閉じたかの確認、親 issue のサブ issue の集計）だけを行い、status を merged、マージのコミットを `mergeCommit.oid` にして返す。
 
 ```sh
 R=neverclear86/nostr-no-su
@@ -49,15 +49,15 @@ squash コミットの件名は PR のタイトルに ` (#PR番号)` を付け�
 `/home/lina/workspace/projects/nostr-no-su` はユーザーの作業ツリーなので、`worktree remove` と `fetch` 以外は触らない。
 マージの後、issue が PR の `Closes #N` で閉じたことを `gh issue view <N> -R $R --json state` で確かめ、閉じていなければ `gh issue close <N> -R $R` で閉じる。
 
-### 親 issue の確認
+### 親 issue のサブ issue の集計
 
-issue が分割で生まれたサブ issue なら、兄弟がすべて閉じた時点で親も閉じる（PR の `Closes` は親を閉じないので、最後の兄弟をマージした merger が閉じる）。issue を閉じたあと、次で親と親のサブ issue の集計を取る。
+issue が分割で生まれたサブ issue なら、兄弟がすべて閉じたかを調べて報告する。親 issue は閉じない（ユーザーが別に確認してから閉じる）。issue を閉じたあと、次で親と親のサブ issue の集計を取る。
 
 ```sh
 gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86",name:"nostr-no-su"){issue(number:$n){parent{number state subIssuesSummary{total completed}}}}}'
 ```
 
-`parent` が null なら終わり。親が `OPEN` で `completed` が `total` に等しければ `gh issue close <親> -R $R -c "サブ issue がすべて閉じたので閉じる。"` で閉じ、閉じた親を `<N>` にして同じ確認を繰り返す（親も分割で生まれたサブ issue でありうる）。親が `CLOSED` か、まだ開いている兄弟があれば止める。
+`parent` が null なら終わり。親が `OPEN` で `completed` が `total` に等しければ、その親を「サブ issue が全部閉じた親」として返すものに載せる。
 
 ## 文書の長さ
 書く文書（プラン、レビュー、コメント）は、読む相手が次に取る行動を変える情報だけで組む。
@@ -66,4 +66,4 @@ gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86"
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 返すもの
-status（merged / conflict / not_ready）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、閉じた親 issue の番号（無ければ無し）、問題があればその内容。
+status（merged / conflict / not_ready）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、サブ issue が全部閉じた親 issue の番号（閉じずに報告だけ。無ければ無し）、問題があればその内容。
