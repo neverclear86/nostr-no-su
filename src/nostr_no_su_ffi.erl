@@ -30,7 +30,8 @@
     describe_term/1,
     reply_alias/1,
     pool_transaction/3,
-    execute_catching/2
+    execute_catching/2,
+    is_ip_address/1
 ]).
 
 %% stratus は wss:// 接続に ssl アプリケーションを必要とする。本体の依存
@@ -326,6 +327,14 @@ read_file(Path) ->
                 Bin -> {ok, Bin};
                 _ -> {error, <<"not valid UTF-8">>}
             end
+    end.
+
+%% Address が IPv4 か IPv6 のアドレスとして読めるか。glisten の bind は読めない
+%% 値で panic するので、設定の読み込みで同じ規則で弾くために使う。
+is_ip_address(Address) ->
+    case inet:parse_address(unicode:characters_to_list(Address)) of
+        {ok, _} -> true;
+        {error, _} -> false
     end.
 
 %% 相対パスを絶対パスにする。プラグインディレクトリーを最初に 1 度だけ正規化し、

@@ -254,12 +254,14 @@ pub fn plugin_env_drops_empty_values_test() {
 /// テスト用の管理パスワード。
 const test_password = "test-admin-password"
 
-/// 指定した `ADMIN_PORT` と `ADMIN_PASSWORD` で読み込んだ管理 UI の設定。`None` の
-/// 変数は未設定にする。
+/// 指定した `ADMIN_BIND` / `ADMIN_PORT` / `ADMIN_PASSWORD` で読み込んだ管理 UI の
+/// 設定。`None` の変数は未設定にする。
 fn admin_ui_for(
+  bind: Option(String),
   port: Option(String),
   password: Option(String),
 ) -> config.AdminUi {
+  use <- with_optional_env("ADMIN_BIND", bind)
   use <- with_optional_env("ADMIN_PORT", port)
   use <- with_optional_env("ADMIN_PASSWORD", password)
   config.load().admin_ui
@@ -267,27 +269,42 @@ fn admin_ui_for(
 
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_ui_port_test() {
-  assert admin_ui_for(None, Some(test_password))
-    == config.Listen(8080, test_password)
-  assert admin_ui_for(Some("9000"), Some(test_password))
-    == config.Listen(9000, test_password)
-  assert admin_ui_for(Some(" 9000 "), Some(test_password))
-    == config.Listen(9000, test_password)
+  assert admin_ui_for(None, None, Some(test_password))
+    == config.Listen("127.0.0.1", 8080, test_password)
+  assert admin_ui_for(None, Some("9000"), Some(test_password))
+    == config.Listen("127.0.0.1", 9000, test_password)
+  assert admin_ui_for(None, Some(" 9000 "), Some(test_password))
+    == config.Listen("127.0.0.1", 9000, test_password)
   // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
-  assert admin_ui_for(Some("65535"), Some(test_password))
-    == config.Listen(65_535, test_password)
-  assert admin_ui_for(Some(""), Some(test_password)) == config.Disabled
+  assert admin_ui_for(None, Some("65535"), Some(test_password))
+    == config.Listen("127.0.0.1", 65_535, test_password)
+  assert admin_ui_for(None, Some(""), Some(test_password)) == config.Disabled
 }
 
 /// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
 /// 検証しないと待ち受け開始時に badarg でクラッシュする。
 pub fn admin_ui_rejects_invalid_ports_test() {
   let assert config.Invalid(_) =
-    admin_ui_for(Some("not-a-port"), Some(test_password))
-  let assert config.Invalid(_) = admin_ui_for(Some("0"), Some(test_password))
-  let assert config.Invalid(_) = admin_ui_for(Some("-1"), Some(test_password))
+    admin_ui_for(None, Some("not-a-port"), Some(test_password))
   let assert config.Invalid(_) =
-    admin_ui_for(Some("65536"), Some(test_password))
+    admin_ui_for(None, Some("0"), Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(None, Some("-1"), Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(None, Some("65536"), Some(test_password))
+}
+
+/// `"localhost"` と IPv4 / IPv6 のアドレス以外の `ADMIN_BIND` は、理由付きで
+/// 無効として報告する。検証しないと待ち受け開始時に panic する。
+pub fn admin_ui_rejects_invalid_binds_test() {
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("not-an-address"), None, Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("256.0.0.1"), None, Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("127.0.0.1:8080"), None, Some(test_password))
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("   "), None, Some(test_password))
 }
 
 /// 管理 UI を待ち受けるのに `ADMIN_PASSWORD` が未設定か空なら、起動を中止する
@@ -298,21 +315,24 @@ pub fn admin_ui_requires_a_password_when_listening_test() {
     config.MissingPassword(
       "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",
     )
-  assert admin_ui_for(None, None) == missing
-  assert admin_ui_for(Some("9000"), None) == missing
-  assert admin_ui_for(Some("9000"), Some("")) == missing
+  assert admin_ui_for(None, None, None) == missing
+  assert admin_ui_for(None, Some("9000"), None) == missing
+  assert admin_ui_for(None, Some("9000"), Some("")) == missing
 }
 
 /// `ADMIN_PASSWORD` をファイルから読める。末尾の改行（`\r\n` を含む）は落ちる
 /// が、それ以外の空白（先頭の空白）は残る。読めないファイルは理由を返す。
 pub fn admin_password_is_read_from_a_file_test() {
+  use <- without_env("ADMIN_BIND")
   use <- without_env("ADMIN_PORT")
   use <- without_env("ADMIN_PASSWORD")
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_newlines"), fn() {
-    assert config.load().admin_ui == config.Listen(8080, " file password")
+    assert config.load().admin_ui
+      == config.Listen("127.0.0.1", 8080, " file password")
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_crlf"), fn() {
-    assert config.load().admin_ui == config.Listen(8080, "crlf password")
+    assert config.load().admin_ui
+      == config.Listen("127.0.0.1", 8080, "crlf password")
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("missing"), fn() {
     assert config.load().admin_ui
@@ -322,19 +342,33 @@ pub fn admin_password_is_read_from_a_file_test() {
   })
 }
 
-/// 管理 UI を待ち受けない構成（空の `ADMIN_PORT`、不正な `ADMIN_PORT`）では
-/// `ADMIN_PASSWORD` を求めない。
+/// 管理 UI を待ち受けない構成（空の `ADMIN_PORT`、不正な `ADMIN_PORT`、不正な
+/// `ADMIN_BIND`）では `ADMIN_PASSWORD` を求めない。
 pub fn admin_ui_without_a_listener_needs_no_password_test() {
-  assert admin_ui_for(Some(""), None) == config.Disabled
-  let assert config.Invalid(_) = admin_ui_for(Some("not-a-port"), None)
+  assert admin_ui_for(None, Some(""), None) == config.Disabled
+  let assert config.Invalid(_) = admin_ui_for(None, Some("not-a-port"), None)
+  let assert config.Invalid(_) =
+    admin_ui_for(Some("not-an-address"), None, None)
 }
 
-/// `ADMIN_BIND` は未設定ならループバックのみ。ページに secret が載るため、外部へ
-/// 出すのは明示的な設定にする。
+/// `ADMIN_BIND` は未設定と空文字列ならループバックのみ。前後の空白は落とす。
+/// ページに secret が載るため、外部へ出すのは明示的な設定にする。
 pub fn admin_bind_test() {
-  assert config_without("ADMIN_BIND").admin_bind == "127.0.0.1"
-  assert config_with([#("ADMIN_BIND", "0.0.0.0")]).admin_bind == "0.0.0.0"
-  assert config_with([#("ADMIN_BIND", "")]).admin_bind == "127.0.0.1"
+  let assert config.Listen(bind:, ..) =
+    admin_ui_for(None, None, Some(test_password))
+  assert bind == "127.0.0.1"
+  let assert config.Listen(bind:, ..) =
+    admin_ui_for(Some(""), None, Some(test_password))
+  assert bind == "127.0.0.1"
+  let assert config.Listen(bind:, ..) =
+    admin_ui_for(Some("0.0.0.0"), None, Some(test_password))
+  assert bind == "0.0.0.0"
+  let assert config.Listen(bind:, ..) =
+    admin_ui_for(Some(" ::1 "), None, Some(test_password))
+  assert bind == "::1"
+  let assert config.Listen(bind:, ..) =
+    admin_ui_for(Some("localhost"), None, Some(test_password))
+  assert bind == "localhost"
 }
 
 /// `ADMIN_BASE_URL` は未設定なら None。末尾のスラッシュは、承認ページのパスと
