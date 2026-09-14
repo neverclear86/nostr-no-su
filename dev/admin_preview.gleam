@@ -18,7 +18,6 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/engine
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 
@@ -161,10 +160,9 @@ fn context() -> admin.Context {
     reenable_plugin: reenabling,
     sessions: fn() {
       Ok([
-        engine.Session(
+        dashboard.SessionRow(
           signer:,
           client:,
-          perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),

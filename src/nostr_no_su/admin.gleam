@@ -59,7 +59,7 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/engine.{type Session}
+import nostr_no_su/bunker/engine
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
 import wisp.{type Request, type Response}
@@ -140,7 +140,7 @@ pub type Context {
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
-    sessions: fn() -> Result(List(Session), String),
+    sessions: fn() -> Result(List(dashboard.SessionRow), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
     revoke: fn(String, String) -> Result(Nil, SessionFailure),
     /// 承認待ちの一覧。読み込み中、応答なしのときは表示する理由を返す。

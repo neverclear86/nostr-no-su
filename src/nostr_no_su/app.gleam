@@ -137,7 +137,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/engine.{type Pending}
+import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
 import nostr_no_su/log
@@ -533,7 +533,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       plugins: fn() { plugin_rows(spec.plugins) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
       relays: fn() { relay_statuses(spec) },
-      sessions: fn() { bunker.sessions(bunker_name) },
+      sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
       approve: bunker.approve(bunker_name, _),
@@ -704,6 +704,17 @@ fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     signer: entry.signer,
     client: entry.client,
     age_seconds: now - entry.created_at,
+  )
+}
+
+/// 承認済みセッションを管理 UI の行にする。権限は行に含めない。
+pub fn session_rows(sessions: List(Session)) -> List(dashboard.SessionRow) {
+  use session <- list.map(sessions)
+  dashboard.SessionRow(
+    signer: session.signer,
+    client: session.client,
+    created_at: session.created_at,
+    last_used_at: session.last_used_at,
   )
 }
 

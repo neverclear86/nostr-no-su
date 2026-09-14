@@ -9,7 +9,6 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/engine
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import support/account_actions
@@ -72,10 +71,9 @@ pub fn pages() -> List(String) {
         ),
       ],
       sessions: Ok([
-        engine.Session(
+        dashboard.SessionRow(
           signer: "abcd",
           client: "ef01",
-          perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),
