@@ -143,6 +143,9 @@ pub type Context {
     password: String,
     /// アカウントの一覧。読み込み中、応答なしのときは表示する理由を返す。
     accounts: fn() -> Result(List(dashboard.AccountRow), String),
+    /// 直近の読み込みで飛ばされた行の一覧。読み込み中、応答なしのときは表示する
+    /// 理由を返す。
+    skipped: fn() -> Result(List(dashboard.SkippedRow), String),
     /// アカウントを登録する。secret はバンカーが生成する。
     add_account: fn(Account, String) -> Result(Nil, ChangeFailure),
     /// アカウントを削除する。
@@ -575,6 +578,7 @@ fn show_dashboard(
   use <- require_method(request, http.Get, language, theme)
   dashboard.Snapshot(
     accounts: context.accounts(),
+    skipped: context.skipped(),
     pending: context.pending(),
     relays: context.relays(),
     sessions: context.sessions(),

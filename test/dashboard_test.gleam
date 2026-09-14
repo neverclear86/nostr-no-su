@@ -7,6 +7,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import support/account_actions
@@ -33,6 +34,7 @@ pub fn unknown_account_action_paths_are_rejected_test() {
 fn states() -> dashboard.Snapshot {
   dashboard.Snapshot(
     accounts: Ok([]),
+    skipped: Ok([]),
     pending: Ok([
       dashboard.PendingRow(
         token: "tok",
@@ -383,6 +385,82 @@ pub fn sessions_show_created_and_last_used_times_test() {
   assert string.contains(
     body,
     "<dt class=\"text-base-content/70\">Last used</dt><dd><time class=\"whitespace-nowrap tabular-nums\" datetime=\"2026-09-13T05:12:34Z\">2026-09-13T05:12:34Z</time></dd>",
+  )
+}
+
+/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub・16 進の
+/// pubkey）・理由が出る。日本語でも見出しが訳される。
+pub fn skipped_rows_are_listed_with_their_reason_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      skipped: Ok([
+        dashboard.SkippedRow(
+          pubkey: "abcd1234",
+          npub: "npub1unreadable",
+          label: "old wallet",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+      ]),
+    )
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(english, "Unreadable accounts")
+  assert string.contains(
+    english,
+    "The current ACCOUNT_MASTER_KEY cannot decrypt these rows.",
+  )
+  assert string.contains(english, "old wallet")
+  assert string.contains(english, "npub1unreadable")
+  assert string.contains(english, "abcd1234")
+  assert string.contains(
+    english,
+    "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row).",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, snapshot),
+    "読み込めなかったアカウント",
+  )
+}
+
+/// `pubkey` 列を読めない行は、識別を出さず理由の 1 文だけを出す。
+pub fn malformed_pubkey_rows_show_only_the_reason_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      skipped: Ok([
+        dashboard.SkippedRow(
+          pubkey: "not-a-valid-pubkey-value",
+          npub: "",
+          label: "",
+          reason: vault.MalformedPubkey,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "The pubkey column cannot be read.")
+  assert !string.contains(body, "not-a-valid-pubkey-value")
+}
+
+/// 飛ばされた行が 0 件、あるいは一覧を得られないときはカードを描かない。
+pub fn no_skipped_rows_draws_no_card_test() {
+  let empty = dashboard.Snapshot(..states(), skipped: Ok([]))
+  let unavailable = dashboard.Snapshot(..states(), skipped: Error("boom"))
+  use language <- list.each([i18n.English, i18n.Japanese])
+  assert !string.contains(
+    dashboard.render(language, view.System, empty),
+    "Unreadable accounts",
+  )
+  assert !string.contains(
+    dashboard.render(language, view.System, empty),
+    "読み込めなかったアカウント",
+  )
+  assert !string.contains(
+    dashboard.render(language, view.System, unavailable),
+    "Unreadable accounts",
+  )
+  assert !string.contains(
+    dashboard.render(language, view.System, unavailable),
+    "読み込めなかったアカウント",
   )
 }
 

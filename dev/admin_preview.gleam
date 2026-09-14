@@ -1,7 +1,7 @@
 //// 管理 UI を固定の状態で起動する撮影用のサーバー。`admin.handle_request` を本物のまま
 //// 使い、`Context` の関数だけを固定の値に差し替える。待ち受けるのは `PREVIEW_PORT`
-//// （既定は 18461）から続く 3 つのポートで、順に通常の状態、アカウント・承認待ち・
-//// セッションの一覧を得られない状態、すべての一覧が空の状態である。
+//// （既定は 18461）から続く 3 つのポートで、順に通常の状態、アカウント・飛ばされた行・
+//// 承認待ち・セッションの一覧を得られない状態、すべての一覧が空の状態である。
 //// `gleam run -m admin_preview` で起動し、`dev/screenshots.mjs` で撮る。
 ////
 //// `dev/` は `gleam build` と `gleam test` でコンパイルされるので、`Context` を変えて
@@ -18,6 +18,7 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -43,6 +44,16 @@ const second = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e
 
 /// `second` の npub。
 const second_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+
+/// 読み込みで飛ばされた行（秘密鍵を復号できない）の pubkey（ダミー）。
+const unreadable_pubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+
+/// `unreadable_pubkey` の npub。
+const unreadable_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
+
+/// 読み込みで飛ばされた行（`pubkey` 列が形式不正）の値。32 バイトの 16 進として
+/// 読めない。
+const malformed_pubkey = "not-a-valid-pubkey"
 
 /// 辞書順で `client` より前に来る、2 件目のセッションのクライアントの公開鍵（ダミー）。
 const earlier_client = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
@@ -154,6 +165,22 @@ fn context() -> admin.Context {
       Ok([
         row(signer, signer_npub, "main account"),
         row(second, second_npub, "<b>bot</b> 🙂"),
+      ])
+    },
+    skipped: fn() {
+      Ok([
+        dashboard.SkippedRow(
+          pubkey: unreadable_pubkey,
+          npub: unreadable_npub,
+          label: "old wallet",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+        dashboard.SkippedRow(
+          pubkey: malformed_pubkey,
+          npub: "",
+          label: "",
+          reason: vault.MalformedPubkey,
+        ),
       ])
     },
     add_account: fn(added, label) {
@@ -281,6 +308,7 @@ pub fn main() -> Nil {
     admin.Context(
       ..context(),
       accounts: fn() { Error(unavailable_reason) },
+      skipped: fn() { Error(unavailable_reason) },
       pending: fn() { Error(unavailable_reason) },
       sessions: fn() { Error(unavailable_reason) },
     )
@@ -288,6 +316,7 @@ pub fn main() -> Nil {
     admin.Context(
       ..context(),
       accounts: fn() { Ok([]) },
+      skipped: fn() { Ok([]) },
       relays: fn() { Ok([]) },
       plugins: fn() { [] },
       sessions: fn() { Ok([]) },

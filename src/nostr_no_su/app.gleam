@@ -139,11 +139,14 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/bunker/vault
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
+import nostr_no_su/hex
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Verified}
+import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{
@@ -525,6 +528,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     admin.Context(
       password: config.password,
       accounts: fn() { account_rows(spec) },
+      skipped: fn() { skipped_rows(spec) },
       add_account: fn(added, label) { add_account(spec, added, label) },
       remove_account: bunker.remove_account(bunker_name, _),
       rotate_secret: bunker.rotate_secret(bunker_name, _),
@@ -802,6 +806,27 @@ fn account_row(
     label: listing.label,
     uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
     auth_uri: account.bunker_uri(listing.signer, relay_urls, None),
+  )
+}
+
+/// 直近の読み込みで飛ばされた行の表示行。読み込み前、読み直しの前、アクターが
+/// 応答しないときは理由を返す。
+pub fn skipped_rows(spec: Spec) -> Result(List(dashboard.SkippedRow), String) {
+  bunker.skipped(spec.bunker.name) |> result.map(list.map(_, skipped_row))
+}
+
+/// 飛ばした行 1 件の表示行。npub は `pubkey` 列から導く。`MalformedPubkey` の
+/// 行だけは導けないので空文字列にし、その行は識別を描かない。
+fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
+  let npub = case hex.decode(row.pubkey) {
+    Ok(bytes) -> nip19.encode(bytes, nip19.Npub) |> result.unwrap("")
+    Error(Nil) -> ""
+  }
+  dashboard.SkippedRow(
+    pubkey: row.pubkey,
+    npub: npub,
+    label: row.label,
+    reason: row.reason,
   )
 }
 

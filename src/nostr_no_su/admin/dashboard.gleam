@@ -25,6 +25,7 @@ import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
@@ -50,6 +51,18 @@ pub type AccountRow {
     label: String,
     uri: String,
     auth_uri: String,
+  )
+}
+
+/// 読み込みで飛ばされた行 1 件の表示内容。`npub` は `pubkey` から導けたときだけ
+/// 入り、`MalformedPubkey` の行では空文字列になる。この行は識別を描かず、
+/// `reason` の 1 文だけを出す。
+pub type SkippedRow {
+  SkippedRow(
+    pubkey: String,
+    npub: String,
+    label: String,
+    reason: vault.RowError,
   )
 }
 
@@ -90,6 +103,8 @@ pub type Snapshot {
   Snapshot(
     /// アカウントの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
     accounts: Result(List(AccountRow), String),
+    /// 直近の読み込みで飛ばされた行の一覧。得られないときはカードごと描かない。
+    skipped: Result(List(SkippedRow), String),
     /// 承認待ちの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
     pending: Result(List(PendingRow), String),
     /// リレーの一覧。得られないとき（`relay_list` の応答なし、DB の障害）は表示する理由。
@@ -205,8 +220,8 @@ fn dashboard_refresh(
 }
 
 /// スナップショットをダッシュボードのページに描画する。広い画面では、判断を待つ承認待ちと
-/// アカウントとセッションを左の列に、リレーとプラグインの状態を右の列に置く。狭い画面では
-/// この順に 1 列に並ぶ。
+/// アカウントと読み込めなかったアカウントとセッションを左の列に、リレーとプラグインの状態を
+/// 右の列に置く。狭い画面ではこの順に 1 列に並ぶ。
 pub fn render(
   language: Language,
   theme: view.Theme,
@@ -226,6 +241,7 @@ pub fn render(
           [
             pending_section(language, snapshot.pending),
             accounts_section(language, snapshot.accounts),
+            skipped_section(language, snapshot.skipped),
             sessions_section(language, snapshot.sessions),
           ],
         ),
@@ -264,6 +280,44 @@ fn accounts_section(
       fn(rows) { item_list(list.map(rows, account_item(language, _))) },
     ),
   ])
+}
+
+/// 直近の読み込みで飛ばされた行。1 件以上あるときだけカードを描く。一覧を
+/// 得られないとき（読み込み中、応答なし）も描かない。
+fn skipped_section(
+  language: Language,
+  skipped: Result(List(SkippedRow), String),
+) -> Element(msg) {
+  case skipped {
+    Ok([_, ..] as rows) ->
+      view.card([
+        view.heading(i18n.text(language, i18n.UnreadableAccounts)),
+        view.alert(view.Warning, [
+          html.text(i18n.text(language, i18n.UnreadableAccountsWarning)),
+        ]),
+        item_list(list.map(rows, skipped_item(language, _))),
+      ])
+    Ok([]) | Error(_) -> element.none()
+  }
+}
+
+/// 飛ばした行 1 件。識別と理由の 1 文を縦に並べる。`pubkey` 列が形式不正の行は
+/// 識別を描かず、理由の 1 文だけを出す。
+fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
+  let reason =
+    html.p([attribute.class("text-sm")], [
+      html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
+    ])
+  case row.reason {
+    vault.MalformedPubkey -> entry_item([reason])
+    _ ->
+      entry_item([
+        html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+          identity(row.label, row.npub, row.pubkey),
+          reason,
+        ]),
+      ])
+  }
 }
 
 /// 節の見出しと、一覧を得たときだけ出す追加のリンク（Primary）の行。アカウントと
@@ -314,7 +368,7 @@ fn listed_body(
 fn account_item(language: Language, account: AccountRow) -> Element(msg) {
   let text = i18n.text(language, _)
   html.li([attribute.class("flex flex-col gap-3 py-4 first:pt-0 last:pb-0")], [
-    account_identity(account),
+    identity(account.label, account.npub, account.signer),
     view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
     view.copyable_field(
       language,
@@ -325,19 +379,18 @@ fn account_item(language: Language, account: AccountRow) -> Element(msg) {
   ])
 }
 
-/// アカウントを識別する、ラベル、npub、16 進の公開鍵。
-fn account_identity(account: AccountRow) -> Element(msg) {
+/// アカウントを識別する、ラベル、npub、16 進の公開鍵。アカウントと、読み込みで
+/// 飛ばされた行のどちらの一覧からも使う。
+fn identity(label: String, npub: String, pubkey: String) -> Element(msg) {
   html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-    html.p([attribute.class("font-semibold break-words")], [
-      html.text(account.label),
-    ]),
+    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
     html.p([attribute.class("font-mono text-xs break-all")], [
-      html.text(account.npub),
+      html.text(npub),
     ]),
     html.p(
       [attribute.class("font-mono text-xs break-all text-base-content/70")],
       [
-        html.text(account.signer),
+        html.text(pubkey),
       ],
     ),
   ])
@@ -771,8 +824,8 @@ fn item_list(items: List(Element(msg))) -> Element(msg) {
   html.ul([attribute.class("divide-y divide-base-300")], items)
 }
 
-/// 承認待ち、セッション、リレーの 1 件。値の組とボタンの並びを横に置き、収まらなければ
-/// ボタンを下へ回す。
+/// 承認待ち、飛ばされた行、セッション、リレーの 1 件。値の組とボタンの並びを横に置き、
+/// 収まらなければボタンを下へ回す。
 fn entry_item(content: List(Element(msg))) -> Element(msg) {
   html.li(
     [

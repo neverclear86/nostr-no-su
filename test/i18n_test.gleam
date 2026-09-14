@@ -3,6 +3,7 @@
 import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/admin/i18n
+import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/nip19
 
 /// `Accept-Language` から、対応する言語のうち最も優先される言語を選ぶ。優先度が同じなら
@@ -94,6 +95,11 @@ pub fn messages_with_values_follow_each_language_test() {
       i18n.InvalidNsec(nip19.PrefixMismatch(nip19.Nsec)),
       "expected nsec prefix",
       "接頭辞が nsec ではありません。",
+    ),
+    #(
+      i18n.UnreadableReason(vault.PublicKeyMismatch),
+      "The decrypted private key does not match the pubkey.",
+      "復号した秘密鍵が pubkey と一致しません。",
     ),
   ]
   use #(message, english, japanese) <- list.each(cases)

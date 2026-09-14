@@ -155,6 +155,7 @@ fn one_skipped() -> vault.Skipped {
     pubkey: account.pubkey_hex(account_for(
       "0000000000000000000000000000000000000000000000000000000000000009",
     )),
+    label: "",
     reason: vault.UndecryptablePrivateKey,
   )
 }
