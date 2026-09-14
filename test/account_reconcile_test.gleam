@@ -73,6 +73,9 @@ pub fn ambiguous_writes_are_reconciled_with_postgres_test() {
   reconcile_sessions_with_postgres(database_url, lock_pool)
 }
 
+/// 期限を過ぎてからコミットされる追加と secret の作り直しの後、バンカーの一覧が DB と
+/// 一致することを確かめる。合わせた後の登録済みとしての拒否と削除も DB と一致した
+/// まま動くことを確かめる。
 fn reconcile_with_postgres(
   database_url: String,
   lock_pool: Name(pog.Message),
