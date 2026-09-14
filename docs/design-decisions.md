@@ -21,7 +21,7 @@ stratus のプロセスは接続 actor にリンクされる。切断のたび�
 
 ### 監視は ephemeral イベントを処理しない
 
-監視の購読の `authors` には署名者が入るので、`RELAY_URL` と `BUNKER_RELAY_URL` を同じリレーにすると、バンカーの応答（kind 24133）が監視の購読にも届く。NIP-01 のフィルターには kind の否定が無いので、プラグインに渡す前に受信側で落とす。落とす対象は ephemeral 全般（`Monitor` の `excludes_kind`、既定は `event.is_ephemeral`）で、コンソールにも `events` テーブルにも現れない（ephemeral は NIP-01 上リレーが保存しない想定のイベントで、保存する意味も無い）
+監視の購読の `authors` には署名者が入るので、同じリレーを監視とバンカーの両方に使うと、バンカーの応答（kind 24133）が監視の購読にも届く。NIP-01 のフィルターには kind の否定が無いので、プラグインに渡す前に受信側で落とす。落とす対象は ephemeral 全般（`Monitor` の `excludes_kind`、既定は `event.is_ephemeral`）で、コンソールにも `events` テーブルにも現れない（ephemeral は NIP-01 上リレーが保存しない想定のイベントで、保存する意味も無い）
 
 ### 監視の重複排除は世代式スライディングウィンドウ
 
