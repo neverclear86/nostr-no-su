@@ -1282,7 +1282,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       spec_nsec,
       202,
-      "<div class=\"alert alert-warning\" role=\"alert\"><span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied, so open the dashboard to check</span></div>",
+      "<div class=\"alert alert-warning\" role=\"alert\"><span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
     ),
   ]
   use #(ctx, nsec, status, alert) <- list.each(cases)
