@@ -215,8 +215,16 @@ const signer = BunkerSigner.fromBunker(generateSecretKey(), pointer!, {
 const withTimeout = <T>(p: Promise<T>, ms = 15000) =>
   Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject("timeout"), ms))]);
 
+// nostr-tools 2.25.2 の BunkerSigner.connect() は params[2]（perms）を常に空文字列
+// で送るため、perms を宣言するには sendRequest で connect を直接組み立てる
 try {
-  await withTimeout(signer.connect());
+  await withTimeout(
+    signer.sendRequest("connect", [
+      pointer!.pubkey,
+      pointer!.secret ?? "",
+      "sign_event:1,nip44_encrypt,nip44_decrypt",
+    ]),
+  );
 } catch (e) {
   // 拒否は Error ではなく文字列で届く
   console.log(e instanceof Error ? e.message : String(e));
