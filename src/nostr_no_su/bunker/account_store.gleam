@@ -177,9 +177,9 @@ const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 /// 順に 1 つずつロックを取るので、書き手の順に合わせる。アカウントの削除
 /// （連鎖を含む）は下の 2 表に触る前に `bunker_accounts` の ROW EXCLUSIVE を持つので
 /// 先頭に置き、`approve` は `bunker_pending` の DELETE の後に `bunker_sessions` へ
-/// INSERT するので、その順に並べる。逆にすると、この読み込みが `bunker_sessions` を
-/// 持って `bunker_pending` を待ち、`approve` が `bunker_sessions` を待つデッドロックに
-/// なる。
+/// INSERT・DELETE するので、その順に並べる。逆にすると、この読み込みが
+/// `bunker_sessions` を持って `bunker_pending` を待ち、`approve` が `bunker_sessions`
+/// を待つデッドロックになる。
 const lock_sql = "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
 
 /// セッション単位の advisory lock を取る（待たない）。
@@ -634,6 +634,42 @@ pub fn delete_session(
   |> result.replace(Nil)
 }
 
+/// `pairs` の（signer, client）の組をすべて `delete_session` で消す。行が無くても
+/// `Ok`。
+fn delete_sessions(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  pairs: List(#(String, String)),
+) -> Result(Nil, StoreError) {
+  list.try_each(pairs, fn(pair) {
+    delete_session(db, timeouts, signer: pair.0, client: pair.1)
+  })
+}
+
+/// セッションを 1 件追加し、`evicted` の組を消す。1 トランザクションで行うので、
+/// 挿入だけが残ることは無い。
+pub fn insert_session_evicting(
+  pool: Name(pog.Message),
+  timeouts: Timeouts,
+  signer signer: String,
+  client client: String,
+  perms perms: String,
+  now now: Int,
+  evicted evicted: List(#(String, String)),
+) -> Result(Nil, StoreError) {
+  transaction(pool, timeouts.write_ms, fn(db) {
+    use Nil <- result.try(insert_session(
+      db,
+      timeouts,
+      signer: signer,
+      client: client,
+      perms: perms,
+      now: now,
+    ))
+    delete_sessions(db, timeouts, evicted)
+  })
+}
+
 /// 承認待ちの接続要求を 1 件追加する。同じ `token` がすでにあれば何もしない
 /// （2 インスタンスが並ぶ窓を吸収する）。
 pub fn insert_pending(
@@ -668,10 +704,11 @@ pub fn delete_pending(
 }
 
 /// 承認待ちの接続要求 `token` を承認する。1 トランザクションでその行を消し、
-/// `signer`、`client`、`perms`、`now` のセッションを追加する。承認の値の出どころは
-/// エンジンのメモリなので、消した行から読み返さない。`DELETE … RETURNING` で拾うと、
-/// 2 インスタンスが並ぶ窓で別のインスタンスが先に消していた場合にセッションを
-/// 作れなくなるためである。承認待ちの行が無くても追加する。
+/// `signer`、`client`、`perms`、`now` のセッションを追加し、`evicted` の組を消す。
+/// 承認の値の出どころはエンジンのメモリなので、消した行から読み返さない。
+/// `DELETE … RETURNING` で拾うと、2 インスタンスが並ぶ窓で別のインスタンスが先に
+/// 消していた場合にセッションを作れなくなるためである。承認待ちの行が無くても
+/// 追加する。
 pub fn approve(
   pool: Name(pog.Message),
   timeouts: Timeouts,
@@ -680,17 +717,19 @@ pub fn approve(
   client client: String,
   perms perms: String,
   now now: Int,
+  evicted evicted: List(#(String, String)),
 ) -> Result(Nil, StoreError) {
   transaction(pool, timeouts.write_ms, fn(db) {
     use Nil <- result.try(delete_pending(db, timeouts, token: token))
-    insert_session(
+    use Nil <- result.try(insert_session(
       db,
       timeouts,
       signer: signer,
       client: client,
       perms: perms,
       now: now,
-    )
+    ))
+    delete_sessions(db, timeouts, evicted)
   })
 }
 

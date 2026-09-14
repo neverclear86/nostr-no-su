@@ -3370,16 +3370,19 @@ fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 
 /// 書き込み 1 件を、`account_store` の対応する関数と同じ意味で偽のデータベースに
 /// 反映する。`InsertSession` は同じ（signer, client）の行が無いときだけ末尾に足し、
-/// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。
-/// `DeleteSession` は組で除く。`TouchSession` は組の行の `last_used_at` を
-/// `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。`InsertPending` は
-/// `replaced` の token を除いてから足す。`DeletePending` は token で除く。
-/// `ApprovePending` は `DeletePending` の後に `InsertSession` と同じ規則でセッションを
-/// 足す。
+/// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。挿入の後に
+/// `evicted` の組を除く。`DeleteSession` は組で除く。`TouchSession` は組の行の
+/// `last_used_at` を `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。
+/// `InsertPending` は `replaced` の token を除いてから足す。`DeletePending` は token
+/// で除く。`ApprovePending` は `DeletePending` の後に `InsertSession` と同じ規則で
+/// セッションを足す。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
-    engine.InsertSession(session:) ->
-      Database(..database, sessions: insert_session(database.sessions, session))
+    engine.InsertSession(session:, evicted:) ->
+      Database(
+        ..database,
+        sessions: evict(insert_session(database.sessions, session), evicted),
+      )
     engine.DeleteSession(signer:, client:) ->
       Database(
         ..database,
@@ -3415,13 +3418,13 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
           entry.token != token
         }),
       )
-    engine.ApprovePending(token:, session:) ->
+    engine.ApprovePending(token:, session:, evicted:) ->
       Database(
         ..database,
         pending: list.filter(database.pending, fn(entry) {
           entry.token != token
         }),
-        sessions: insert_session(database.sessions, session),
+        sessions: evict(insert_session(database.sessions, session), evicted),
       )
   }
 }
@@ -3439,6 +3442,16 @@ fn insert_session(
     True -> sessions
     False -> list.append(sessions, [session])
   }
+}
+
+/// `pairs` に載る（signer, client）の組の行を除く。
+fn evict(
+  sessions: List(engine.Session),
+  pairs: List(#(String, String)),
+) -> List(engine.Session) {
+  list.filter(sessions, fn(session) {
+    !list.contains(pairs, #(session.signer, session.client))
+  })
 }
 
 /// 偽のデータベースの行を、バンカーの一覧と同じ形（署名者の昇順）にする。
