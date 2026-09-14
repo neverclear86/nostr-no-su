@@ -90,19 +90,20 @@ pub fn nsec(account: Account) -> String {
 /// `Account` を受け取らない。NIP-46 は複数の `relay=` ヒントを許容し、クライアント
 /// はそのすべてに接続するため、生きているリレーが 1 つあればバンカーに到達できる。
 /// `secret` が `None` の URI はその場では接続できず、管理 UI での承認（auth_url
-/// フロー）を経る。
+/// フロー）を経る。リレーが 0 件でも URI を返す（クエリー文字列自体を省く）。
 pub fn bunker_uri(
   signer: String,
   relay_urls: List(String),
   secret: Option(String),
 ) -> String {
   let relay_params =
-    relay_urls
-    |> list.map(fn(url) { "relay=" <> uri.percent_encode(url) })
-    |> string.join("&")
+    list.map(relay_urls, fn(url) { "relay=" <> uri.percent_encode(url) })
   let secret_param = case secret {
-    None -> ""
-    Some(secret) -> "&secret=" <> secret
+    None -> []
+    Some(secret) -> ["secret=" <> secret]
   }
-  "bunker://" <> signer <> "?" <> relay_params <> secret_param
+  case list.append(relay_params, secret_param) {
+    [] -> "bunker://" <> signer
+    params -> "bunker://" <> signer <> "?" <> string.join(params, "&")
+  }
 }

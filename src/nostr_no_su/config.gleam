@@ -9,9 +9,6 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/filter.{type Filter, Filter}
 import nostr_no_su/plugin_config
-import nostr_no_su/relay_client
-
-const default_relay_url = "wss://relay.damus.io"
 
 /// ファイルからも読め、読み込みの後にプロセスの環境から消す秘密の環境変数。
 /// `account_store/0` と `listening_admin_ui/1` が `secret/1` で読む名前と
@@ -57,8 +54,6 @@ pub type AccountStore {
 /// パスワード、管理パスワード）を含むので、表示やログに入れないこと。
 pub type Config {
   Config(
-    relay_urls: List(String),
-    bunker_relay_urls: List(String),
     account_store: AccountStore,
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
@@ -77,17 +72,8 @@ pub type Config {
 /// 環境から消すので、環境変数で渡した秘密は 2 回目の呼び出しでは読めない
 /// （`<名前>_FILE` は残るのでファイルからは読める）。
 pub fn load() -> Config {
-  let relay_urls =
-    envoy.get("RELAY_URL")
-    |> result.unwrap(default_relay_url)
-    |> parse_list
   let loaded =
     Config(
-      relay_urls: relay_urls,
-      bunker_relay_urls: pick_bunker_relays(
-        envoy.get("BUNKER_RELAY_URL") |> result.unwrap("") |> parse_list,
-        relay_urls,
-      ),
       account_store: account_store(),
       plugin_dir: optional("PLUGIN_DIR"),
       plugin_env: plugin_env(),
@@ -261,57 +247,6 @@ fn listening_admin_ui(port: Int) -> AdminUi {
       )
     Error(reason) -> MissingPassword(reason)
   }
-}
-
-/// バンカーが待ち受け・応答するリレー。明示的な上書きが空でなければそれを、
-/// 無ければ監視用リレーを、それも無ければ既定のリレーを使う。
-pub fn pick_bunker_relays(
-  override: List(String),
-  relay_urls: List(String),
-) -> List(String) {
-  case override, relay_urls {
-    [], [] -> [default_relay_url]
-    [], urls -> urls
-    urls, _ -> urls
-  }
-}
-
-/// 監視とバンカーのリレー URL が WebSocket の URL として解釈できるかを起動時に
-/// 確かめる。不正な URL を 1 つ見つけたら、変数名と URL を含む理由を返す。
-/// `bunker_relay_urls` は上書きが無ければ `relay_urls` と同じ値なので、
-/// `relay_urls` を先に検査して変数名を取り違えないようにする。
-pub fn check_relay_urls(config: Config) -> Result(Nil, String) {
-  use Nil <- result.try(check_urls("RELAY_URL", config.relay_urls))
-  check_urls("BUNKER_RELAY_URL", config.bunker_relay_urls)
-}
-
-/// `urls` のうち `relay_client.to_request` で解釈できない最初の URL を、変数名を
-/// 添えた理由にする。
-fn check_urls(variable: String, urls: List(String)) -> Result(Nil, String) {
-  case
-    list.find(urls, fn(url) { result.is_error(relay_client.to_request(url)) })
-  {
-    Ok(url) ->
-      Error(
-        variable
-        <> " has an invalid relay url: "
-        <> url
-        <> " (use ws:// or wss://)",
-      )
-    Error(Nil) -> Ok(Nil)
-  }
-}
-
-/// カンマ区切りのリスト（リレー URL）をパースする。前後の空白は無視し、
-/// 空の要素は除外し、重複は最初の 1 つだけ残す。同じリレー URL を 2 度書くと接続が
-/// 2 本開き、バンカーが URL で持つ送信手段のキーが衝突するため、重複はここで
-/// 落とす。
-pub fn parse_list(raw: String) -> List(String) {
-  raw
-  |> string.split(",")
-  |> list.map(string.trim)
-  |> list.filter(fn(entry) { entry != "" })
-  |> list.unique
 }
 
 /// 監視の購読 id。

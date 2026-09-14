@@ -12,7 +12,7 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 とセッションの
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 と、承認・拒否・
 //// 取り消しの 503）は、バンカーが原因を型で返すので訳す。プラグインの再有効化の 503 は
 //// 英語のまま。
 ////
@@ -159,6 +159,8 @@ pub type Lead {
   CouldNotRotateSecret
   CouldNotDeleteAccount
   CouldNotListAccounts
+  CouldNotListPending
+  CouldNotListSessions
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -172,6 +174,8 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotRotateSecret -> "secret を再生成できませんでした。"
         CouldNotDeleteAccount -> "アカウントを削除できませんでした。"
         CouldNotListAccounts -> "アカウントの一覧を表示できません。"
+        CouldNotListPending -> "承認待ちの一覧を表示できません。"
+        CouldNotListSessions -> "セッションの一覧を表示できません。"
       })
   }
 }
@@ -245,6 +249,9 @@ pub type Message {
   DeniedCloseWindow
   NotFound
   ChangeNotConfirmed
+  ChangeNotApplied
+  BunkerNotAvailable
+  CheckDashboardBeforeRetrying
   AccountsNotAvailable
   MethodNotAllowed
   BadRequest
@@ -260,6 +267,7 @@ pub type Message {
   ImportDescription
   PrivateKeyNsec
   Label
+  LabelHint(max: Int)
   Register
   GenerateNewKey
   GenerateDescription
@@ -270,6 +278,8 @@ pub type Message {
   BackUpNow
   GeneratedKeyNotice
   RegisterThisKey
+  RegistrationNotAccepted
+  RegistrationNotConfirmed
   AccountRegistered
   Account
   BackUpIfNotAlready
@@ -291,6 +301,7 @@ pub type Message {
   ResendNotice
   // 管理 UI が検査して返す理由
   IncorrectPassword
+  LabelEmpty
   LabelTooLong(max: Int)
   LabelHasControlCharacters
   InvalidNsec(nip19.Nip19Error)
@@ -364,6 +375,10 @@ fn english(message: Message) -> String {
     DeniedCloseWindow -> "Denied. You can close this window."
     NotFound -> "Not found"
     ChangeNotConfirmed -> "Change not confirmed"
+    ChangeNotApplied -> "Change not applied"
+    BunkerNotAvailable -> "Bunker is not available"
+    CheckDashboardBeforeRetrying ->
+      "Before trying again, check on the dashboard whether the change was applied."
     AccountsNotAvailable -> "Accounts are not available"
     MethodNotAllowed -> "Method not allowed"
     BadRequest -> "Bad request"
@@ -376,15 +391,18 @@ fn english(message: Message) -> String {
       "The form was incomplete. Go back to the dashboard and try again."
     OriginMismatch ->
       "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see the README."
-    BunkerDidNotRespond ->
-      "the bunker did not respond; check the dashboard to see whether the change was applied"
+    BunkerDidNotRespond -> "the bunker did not respond"
     StoreDidNotConfirm ->
-      "the store did not confirm the change; it may have been applied, so open the dashboard to check"
+      "the store did not confirm the change; it may have been applied"
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
     PrivateKeyNsec -> "Private key (nsec)"
     Label -> "Label"
+    LabelHint(max:) ->
+      "Up to "
+      <> int.to_string(max)
+      <> " characters. A combined emoji can count as several characters."
     Register -> "Register"
     GenerateNewKey -> "Generate a new key"
     GenerateDescription ->
@@ -397,6 +415,10 @@ fn english(message: Message) -> String {
     GeneratedKeyNotice ->
       "The account is not registered until you press \"Register this key\". After registration, the key is shown only when you re-enter the admin password."
     RegisterThisKey -> "Register this key"
+    RegistrationNotAccepted ->
+      "The key was not registered because accounts are not available right now. Wait a moment, then press \"Register this key\" again."
+    RegistrationNotConfirmed ->
+      "The registration was not confirmed. Back up this key, then press \"Register this key\" again: it is registered if it was not, or \"account is already registered\" is shown if it was."
     AccountRegistered -> "Account registered"
     Account -> "Account"
     BackUpIfNotAlready -> "Back up this private key if you have not already."
@@ -422,6 +444,7 @@ fn english(message: Message) -> String {
     ResendNotice ->
       "Reloading this page or coming back to it with the back button can resend the form, which shows the key again and logs it again."
     IncorrectPassword -> "incorrect password"
+    LabelEmpty -> "label must not be empty"
     LabelTooLong(max:) ->
       "label must be at most " <> int.to_string(max) <> " characters"
     LabelHasControlCharacters -> "label must not contain control characters"
@@ -490,6 +513,9 @@ fn japanese(message: Message) -> String {
     DeniedCloseWindow -> "拒否しました。このウィンドウは閉じてかまいません。"
     NotFound -> "見つかりません"
     ChangeNotConfirmed -> "変更を確認できませんでした"
+    ChangeNotApplied -> "変更を反映できませんでした"
+    BunkerNotAvailable -> "バンカーを利用できません"
+    CheckDashboardBeforeRetrying -> "やり直す前に、ダッシュボードで反映されたかを確かめてください。"
     AccountsNotAvailable -> "アカウントを利用できません"
     MethodNotAllowed -> "この方法では開けません"
     BadRequest -> "要求を処理できません"
@@ -500,14 +526,15 @@ fn japanese(message: Message) -> String {
     FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
     OriginMismatch ->
       "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
-    BunkerDidNotRespond -> "バンカーが応答しませんでした。変更が反映されたかを、ダッシュボードで確認してください。"
-    StoreDidNotConfirm ->
-      "データベースが変更を確定しませんでした。反映されている可能性があるので、ダッシュボードを開いて確認してください。"
+    BunkerDidNotRespond -> "バンカーが応答しませんでした。"
+    StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
     PrivateKeyNsec -> "秘密鍵（nsec）"
     Label -> "ラベル"
+    LabelHint(max:) ->
+      int.to_string(max) <> " 文字まで。組み合わせた絵文字は 1 つで数文字分になることがあります。"
     Register -> "登録する"
     GenerateNewKey -> "新しい秘密鍵を生成"
     GenerateDescription -> "サーバーで新しい秘密鍵を生成します。登録する前に、バックアップのために表示します。"
@@ -521,6 +548,12 @@ fn japanese(message: Message) -> String {
     GeneratedKeyNotice ->
       "「この鍵を登録する」を押すまで、アカウントは登録されません。登録した後は、管理パスワードを入力し直したときにだけ表示します。"
     RegisterThisKey -> "この鍵を登録する"
+    RegistrationNotAccepted ->
+      "アカウントを利用できない状態のため、登録していません。しばらく待ってから、もう一度「この鍵を登録する」を押してください。"
+    // 引用する理由（account is already registered）はバンカーから英語のまま届くので、
+    // 画面に出る文言と一致させるために英語で引用する。
+    RegistrationNotConfirmed ->
+      "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「account is already registered」と表示します。"
     AccountRegistered -> "アカウントを登録しました"
     Account -> "アカウント"
     BackUpIfNotAlready -> "まだバックアップしていなければ、この秘密鍵をバックアップしてください。"
@@ -542,6 +575,7 @@ fn japanese(message: Message) -> String {
     ResendNotice ->
       "このページを再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示されてログにも再び記録されることがあります。"
     IncorrectPassword -> "管理パスワードが違います。"
+    LabelEmpty -> "ラベルを入力してください。"
     LabelTooLong(max:) -> "ラベルは " <> int.to_string(max) <> " 文字以内にしてください。"
     LabelHasControlCharacters -> "ラベルに制御文字は使えません。"
     InvalidNsec(error) -> japanese_nip19(error)

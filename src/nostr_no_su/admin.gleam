@@ -57,7 +57,7 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/bunker.{type ChangeFailure, type RevokeFailure}
+import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Session}
 import nostr_no_su/log
@@ -139,12 +139,14 @@ pub type Context {
     plugins: fn() -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
-    sessions: fn() -> List(Session),
+    /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
+    sessions: fn() -> Result(List(Session), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
-    revoke: fn(String, String) -> Result(Nil, RevokeFailure),
-    pending: fn() -> List(dashboard.PendingRow),
-    approve: fn(String) -> Result(Nil, String),
-    deny: fn(String) -> Result(Nil, String),
+    revoke: fn(String, String) -> Result(Nil, SessionFailure),
+    /// 承認待ちの一覧。読み込み中、応答なしのときは表示する理由を返す。
+    pending: fn() -> Result(List(dashboard.PendingRow), String),
+    approve: fn(String) -> Result(Nil, SessionFailure),
+    deny: fn(String) -> Result(Nil, SessionFailure),
   )
 }
 
@@ -235,6 +237,7 @@ fn require_same_origin(
         i18n.BadRequest,
         i18n.Translated(i18n.OriginMismatch),
         view.Failure,
+        [],
       )
       |> wisp.html_response(400)
       |> protect
@@ -317,6 +320,7 @@ fn failure_page(
     title,
     message,
     view.Failure,
+    [],
   )
 }
 
@@ -594,10 +598,11 @@ fn deny_connection(
   )
 }
 
-/// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。無ければ
-/// 表示や承認・拒否を呼ばずに 404 の通知ページを返す。不明、失効、処理済みのほか、
-/// バンカーが応答せず一覧が空のときも一致しない。ログに出す署名者とクライアントは、
-/// トークンではなくこの行の値から取る。
+/// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
+/// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
+/// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧に無いので
+/// 404 になる。ログに出す署名者とクライアントは、トークンではなくこの行の値から
+/// 取る。
 fn with_pending(
   context: Context,
   language: Language,
@@ -605,14 +610,19 @@ fn with_pending(
   token: String,
   next: fn(dashboard.PendingRow) -> Response,
 ) -> Response {
-  case list.find(context.pending(), fn(entry) { entry.token == token }) {
-    Ok(entry) -> next(entry)
-    Error(Nil) ->
-      not_found_notice(
-        language,
-        theme,
-        i18n.Untranslated(engine.approval_request_not_found),
-      )
+  case context.pending() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
+    Ok(rows) ->
+      case list.find(rows, fn(entry) { entry.token == token }) {
+        Ok(entry) -> next(entry)
+        Error(Nil) ->
+          not_found_notice(
+            language,
+            theme,
+            i18n.Untranslated(engine.approval_request_not_found),
+          )
+      }
   }
 }
 
@@ -649,14 +659,13 @@ pub fn session_change_line(
 
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
 /// 終わったことだけを伝える。処理できたときは `log_line` を 1 行ログに出す。処理
-/// できなかった要求（一覧を引いた後に失効・処理済みになった、あるいはバンカーが
-/// 動いていない）は、区別せず理由を添えた 404 にする。承認と拒否はどちらも 200
+/// できなかった要求は `session_failure_response` に渡す。承認と拒否はどちらも 200
 /// なので、処理できたときの見出し（`done`）、文（`message`）、通知の色（`tone`）は
 /// 呼び出し側が渡す。
 fn decision_response(
   language: Language,
   theme: view.Theme,
-  outcome: Result(Nil, String),
+  outcome: Result(Nil, SessionFailure),
   log_line: String,
   done: i18n.Message,
   message: i18n.Message,
@@ -672,17 +681,17 @@ fn decision_response(
         done,
         i18n.Translated(message),
         tone,
+        [],
       )
       |> wisp.html_response(200)
     }
-    Error(reason) ->
-      not_found_notice(language, theme, i18n.Untranslated(reason))
+    Error(failure) -> session_failure_response(language, theme, failure)
   }
 }
 
 /// セッションを 1 件取り消してダッシュボードへ戻す。再読み込みで取り消しが
 /// 再送されないよう 303 でリダイレクトする。取り消せなかったときは
-/// `revoke_failure_response` に渡す。
+/// `session_failure_response` に渡す。
 fn revoke_session(
   context: Context,
   request: Request,
@@ -705,29 +714,41 @@ fn revoke_session(
           )
           wisp.redirect(to: "/")
         }
-        Error(failure) -> revoke_failure_response(language, theme, failure)
+        Error(failure) -> session_failure_response(language, theme, failure)
       }
     _, _ -> bad_request(language, theme)
   }
 }
 
-/// 取り消しの失敗の応答。承認済みでない組は承認・拒否の失敗と同じ 404、バンカーが
-/// 応答しなければ 503 の通知ページにする。応答が無いときはアカウントの変更と違って
-/// 202 にしない。取り消しは再送しても害が無い（反映済みなら 404 になる）ので、
-/// やり直してよい一時的な失敗として返す。
-fn revoke_failure_response(
+/// 承認・拒否・取り消しの失敗の応答。対象が無ければ 404、
+/// 書き込まれていないことが確定していれば 409、受け付けられなければ 503 の
+/// `BunkerNotAvailable`、反映されたか分からなければ 503 の `ChangeNotConfirmed`
+/// の通知ページにする。「分からない」をアカウントの変更と違って 202 にしないのは、
+/// 承認・拒否・取り消しは再送しても害が無い（反映済みなら 404 になる）ので、
+/// やり直してよい一時的な失敗として返せるからである。
+fn session_failure_response(
   language: Language,
   theme: view.Theme,
-  failure: RevokeFailure,
+  failure: SessionFailure,
 ) -> Response {
   case failure {
     bunker.SessionNotFound(reason) ->
       not_found_notice(language, theme, i18n.Untranslated(reason))
-    bunker.NotAnswered ->
+    bunker.SessionNotApplied(reason) ->
+      failure_page(
+        language,
+        theme,
+        i18n.ChangeNotApplied,
+        i18n.Untranslated(reason),
+      )
+      |> wisp.html_response(409)
+    bunker.SessionNotReady(reason) ->
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
+    bunker.SessionMaybeApplied(cause) ->
       not_confirmed_notice(
         language,
         theme,
-        i18n.Translated(i18n.BunkerDidNotRespond),
+        i18n.Translated(not_confirmed_message(cause)),
         503,
       )
   }
@@ -776,7 +797,7 @@ fn show_new_account(
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Get, language, theme)
-  account_pages.new_account_page(language, theme, None)
+  account_pages.new_account_page(language, theme, "", None)
   |> wisp.html_response(200)
 }
 
@@ -791,7 +812,7 @@ fn generate_account(
   use <- require_method(request, http.Post, language, theme)
   account.generate(crypto.strong_random_bytes)
   |> account.nsec
-  |> account_pages.generated_key_page(language, theme, _, None)
+  |> account_pages.generated_key_page(language, theme, _, "", None)
   |> wisp.html_response(200)
 }
 
@@ -802,12 +823,18 @@ fn import_account(
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  let reject_label = fn(_account, reason) {
+  let reject_label = fn(_account, label, reason) {
     account_pages.new_account_page(
       language,
       theme,
+      label,
       Some(i18n.Translated(reason)),
     )
+  }
+  let on_failure = fn(_account, label, failure) {
+    change_failure_response(language, theme, failure, fn(reason) {
+      account_pages.new_account_page(language, theme, label, Some(reason))
+    })
   }
   use account, label <- register(
     context,
@@ -815,6 +842,7 @@ fn import_account(
     language,
     theme,
     reject_label,
+    on_failure,
   )
   account_pages.registered_page(
     language,
@@ -827,21 +855,34 @@ fn import_account(
 }
 
 /// 生成の確認ページから送られた鍵の登録。nsec は確認ページで表示済みなので描画せず、
-/// ダッシュボードへ 303 で戻す。ラベルだけが規則に反するときは、生成した鍵を失わない
-/// よう、送られた nsec の確認ページを理由付きで返す（この POST の応答の本文だけに出る）。
+/// ダッシュボードへ 303 で戻す。ラベルが規則に反するか、バンカーが登録に失敗したときは、
+/// 生成した鍵を失わないよう、送られた nsec の確認ページを理由付きで返す（状態コードは
+/// nsec 入力による登録と同じ。この POST の応答の本文だけに出る）。
 fn register_generated_account(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  let reject_label = fn(generated, reason) {
+  let reject_label = fn(generated, label, reason) {
     account_pages.generated_key_page(
       language,
       theme,
       account.nsec(generated),
-      Some(reason),
+      label,
+      Some(account_pages.InvalidLabel(reason)),
     )
+  }
+  let on_failure = fn(generated, label, failure) {
+    let #(problem, status) = generated_key_problem(failure)
+    account_pages.generated_key_page(
+      language,
+      theme,
+      account.nsec(generated),
+      label,
+      Some(problem),
+    )
+    |> wisp.html_response(status)
   }
   use _account, _label <- register(
     context,
@@ -849,43 +890,46 @@ fn register_generated_account(
     language,
     theme,
     reject_label,
+    on_failure,
   )
   wisp.redirect(to: "/")
 }
 
 /// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 で登録画面を
 /// 返し、ラベルだけが不正なら 400 で `reject_label` が描画するページを返す。バンカーの
-/// 失敗は `change_failure_response` に渡す。登録できたときだけ `on_success` を呼ぶので、
-/// 反映されたか分からないときに nsec を描画する経路は無い。
+/// 失敗は `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた値から制御文字を
+/// 除いた値を入れる。nsec のフォームの値はそのまま反射しない。
 fn register(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
-  reject_label: fn(Account, i18n.Message) -> String,
+  reject_label: fn(Account, String, i18n.Message) -> String,
+  on_failure: fn(Account, String, ChangeFailure) -> Response,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
+  let raw_label = form_value(form, dashboard.label_field)
+  let echoed_label = without_control_characters(raw_label)
   case parse_private_key(form) {
     Error(reason) ->
       account_pages.new_account_page(
         language,
         theme,
+        echoed_label,
         Some(i18n.Translated(reason)),
       )
       |> wisp.html_response(400)
     Ok(account) ->
-      case parse_label(form_value(form, dashboard.label_field)) {
+      case parse_label(raw_label) {
         Error(reason) ->
-          reject_label(account, reason) |> wisp.html_response(400)
+          reject_label(account, echoed_label, reason)
+          |> wisp.html_response(400)
         Ok(label) ->
           case context.add_account(account, label) {
             Ok(Nil) -> on_success(account, label)
-            Error(failure) ->
-              change_failure_response(language, theme, failure, fn(reason) {
-                account_pages.new_account_page(language, theme, Some(reason))
-              })
+            Error(failure) -> on_failure(account, echoed_label, failure)
           }
       }
   }
@@ -909,24 +953,38 @@ fn form_value(form: wisp.FormData, name: String) -> String {
   list.key_find(form.values, name) |> result.unwrap("")
 }
 
-/// ラベルを検査する。前後の空白を除き、符号位置が多すぎるものと制御文字（Unicode の
-/// Cc）を含むものを拒否する。長さを書記素クラスターで数えないのは、結合文字を続けた
-/// 文字列が長さ 1 のまま任意のバイト数になり、上限にならないからである。
+/// ラベルを検査する。送られた値のまま制御文字（Unicode の Cc）を含むものを拒否し、
+/// 前後の空白を除いてから、空のものと符号位置が多すぎるものを拒否する。制御文字を
+/// trim の前に検査するのは、前後の制御文字が trim で黙って消えないようにするため
+/// である。長さを書記素クラスターで数えないのは、結合文字を続けた文字列が長さ 1 の
+/// まま任意のバイト数になり、上限にならないからである。
 fn parse_label(raw: String) -> Result(String, i18n.Message) {
   let label = string.trim(raw)
-  let code_points = string.to_utf_codepoints(label)
   case
-    list.length(code_points) > dashboard.max_label_code_points,
-    list.any(code_points, is_control_character)
+    list.any(string.to_utf_codepoints(raw), is_control_character),
+    label,
+    list.length(string.to_utf_codepoints(label))
+    > dashboard.max_label_code_points
   {
-    True, _ -> Error(i18n.LabelTooLong(max: dashboard.max_label_code_points))
-    False, True -> Error(i18n.LabelHasControlCharacters)
-    False, False -> Ok(label)
+    True, _, _ -> Error(i18n.LabelHasControlCharacters)
+    False, "", _ -> Error(i18n.LabelEmpty)
+    False, _, True ->
+      Error(i18n.LabelTooLong(max: dashboard.max_label_code_points))
+    False, _, False -> Ok(label)
   }
 }
 
-/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は途中の C1 を
-/// 残すので、明示的に拒否するために使う。
+/// 入力の誤りで戻したフォームの欄に入れる値を作る。制御文字は欄で見えず、残すと同じに
+/// 見える欄を送り直して同じ 400 を繰り返すので除く。前後の空白は利用者が打った値として
+/// 残す（サーバーが trim するので変える必要が無い）。
+fn without_control_characters(raw: String) -> String {
+  string.to_utf_codepoints(raw)
+  |> list.filter(fn(code_point) { !is_control_character(code_point) })
+  |> string.from_utf_codepoints
+}
+
+/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は U+0085 や
+/// 末尾の `\n` を黙って消すので、`parse_label` は trim の前の値をこれで検査する。
 fn is_control_character(code_point: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(code_point)
   code <= 0x1f || { code >= 0x7f && code <= 0x9f }
@@ -945,7 +1003,14 @@ fn account_action(
   use row <- with_account(context, language, theme, signer)
   case request.method, action {
     http.Get, _ ->
-      account_pages.account_action_page(language, theme, row, action, None)
+      account_pages.account_action_page(
+        language,
+        theme,
+        row,
+        action,
+        None,
+        None,
+      )
       |> wisp.html_response(200)
     http.Post, dashboard.EditLabel ->
       update_label(context, request, language, theme, row)
@@ -955,6 +1020,7 @@ fn account_action(
         theme,
         row,
         action,
+        None,
         context.rotate_secret(row.signer),
       )
     http.Post, dashboard.DeleteAccount ->
@@ -963,6 +1029,7 @@ fn account_action(
         theme,
         row,
         action,
+        None,
         context.remove_account(row.signer),
       )
     http.Post, dashboard.RevealPrivateKey ->
@@ -982,7 +1049,8 @@ fn with_account(
   next: fn(dashboard.AccountRow) -> Response,
 ) -> Response {
   case context.accounts() {
-    Error(reason) -> accounts_unavailable(language, theme, reason)
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     Ok(rows) ->
       case list.find(rows, fn(row) { row.signer == signer }) {
         Ok(row) -> next(row)
@@ -996,7 +1064,8 @@ fn with_account(
   }
 }
 
-/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。
+/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。400 と 409 の
+/// 編集のページの欄には送られた値を入れる。
 fn update_label(
   context: Context,
   request: Request,
@@ -1005,13 +1074,16 @@ fn update_label(
   row: dashboard.AccountRow,
 ) -> Response {
   use form <- wisp.require_form(request)
-  case parse_label(form_value(form, dashboard.label_field)) {
+  let raw_label = form_value(form, dashboard.label_field)
+  let echoed_label = Some(without_control_characters(raw_label))
+  case parse_label(raw_label) {
     Error(reason) ->
       account_pages.account_action_page(
         language,
         theme,
         row,
         dashboard.EditLabel,
+        echoed_label,
         Some(i18n.Translated(reason)),
       )
       |> wisp.html_response(400)
@@ -1021,18 +1093,21 @@ fn update_label(
         theme,
         row,
         dashboard.EditLabel,
+        echoed_label,
         context.update_label(row.signer, label),
       )
   }
 }
 
 /// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
-/// 失敗なら `change_failure_response` に渡す。
+/// 失敗なら `change_failure_response` に渡す。`label` は失敗を再描画するときの欄の値
+/// （`None` は保存済みのラベル）。
 fn apply_account_change(
   language: Language,
   theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
+  label: Option(String),
   outcome: Result(Nil, ChangeFailure),
 ) -> Response {
   case outcome {
@@ -1044,6 +1119,7 @@ fn apply_account_change(
           theme,
           row,
           action,
+          label,
           Some(reason),
         )
       })
@@ -1065,7 +1141,8 @@ fn change_failure_response(
   case failure {
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
-    bunker.NotReady(reason) -> accounts_unavailable(language, theme, reason)
+    bunker.NotReady(reason) ->
+      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     bunker.MaybeApplied(cause) ->
       not_confirmed_notice(
         language,
@@ -1073,6 +1150,21 @@ fn change_failure_response(
         i18n.Translated(not_confirmed_message(cause)),
         202,
       )
+  }
+}
+
+/// 生成した鍵の登録のバンカーの失敗を、確認ページの理由と状態コードに写す。状態コードは
+/// `change_failure_response` と同じ対応にする。
+fn generated_key_problem(
+  failure: ChangeFailure,
+) -> #(account_pages.GeneratedKeyProblem, Int) {
+  case failure {
+    bunker.NotApplied(reason) -> #(account_pages.NotApplied(reason), 409)
+    bunker.NotReady(reason) -> #(account_pages.NotAccepted(reason), 503)
+    bunker.MaybeApplied(cause) -> #(
+      account_pages.NotConfirmed(not_confirmed_message(cause)),
+      202,
+    )
   }
 }
 
@@ -1085,8 +1177,9 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
 }
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更は 202、セッションの取り消しは 503）。本文は呼び出し側が
-/// 訳すかを決める。
+/// 決める（アカウントの変更は 202、承認・拒否・取り消しと再有効化は 503）。本文は
+/// 呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめるよう促す一文を
+/// 添える。
 fn not_confirmed_notice(
   language: Language,
   theme: view.Theme,
@@ -1100,24 +1193,27 @@ fn not_confirmed_notice(
     i18n.ChangeNotConfirmed,
     reason,
     view.Warning,
+    [view.hint(i18n.text(language, i18n.CheckDashboardBeforeRetrying))],
   )
   |> wisp.html_response(status)
 }
 
-/// アカウントを扱えないときの 503 の通知ページ。一覧を得られない、変更を受け付け
-/// られない、nsec の問い合わせが失敗した場合に共通で使う。
-fn accounts_unavailable(
+/// 受け付けられないときの 503 の通知ページ。一覧を得られない、変更や照会を受け
+/// 付けられないときに共通で使う。見出しは呼び出し側が決める。
+fn unavailable_notice(
   language: Language,
   theme: view.Theme,
+  title: i18n.Message,
   reason: String,
 ) -> Response {
   dashboard.notice_page(
     language,
     theme,
     return_to_dashboard,
-    i18n.AccountsNotAvailable,
+    title,
     i18n.Untranslated(reason),
     view.Warning,
+    [],
   )
   |> wisp.html_response(503)
 }
@@ -1152,6 +1248,7 @@ fn reveal_private_key(
         theme,
         row,
         dashboard.RevealPrivateKey,
+        None,
         Some(i18n.Translated(i18n.IncorrectPassword)),
       )
       |> wisp.html_response(403)
@@ -1167,7 +1264,8 @@ fn reveal_private_key(
           account_pages.private_key_page(language, theme, row, nsec)
           |> wisp.html_response(200)
         }
-        Error(reason) -> accounts_unavailable(language, theme, reason)
+        Error(reason) ->
+          unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
       }
   }
 }

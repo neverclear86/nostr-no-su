@@ -50,15 +50,15 @@ pub fn pages() -> List(String) {
   let empty =
     dashboard.Snapshot(
       accounts: Ok([]),
-      pending: [],
+      pending: Ok([]),
       relays: [],
-      sessions: [],
+      sessions: Ok([]),
       plugins: [],
     )
   let full =
     dashboard.Snapshot(
       accounts: Ok([row]),
-      pending: [pending],
+      pending: Ok([pending]),
       relays: [
         dashboard.RelayRow(
           dashboard.MonitorRelay,
@@ -71,7 +71,7 @@ pub fn pages() -> List(String) {
           relay_connection.Disconnected,
         ),
       ],
-      sessions: [
+      sessions: Ok([
         engine.Session(
           signer: "abcd",
           client: "ef01",
@@ -79,7 +79,7 @@ pub fn pages() -> List(String) {
           created_at: 1000,
           last_used_at: 1000,
         ),
-      ],
+      ]),
       plugins: [
         dashboard.PluginRow("running", Some(plugin_runner.Running)),
         dashboard.PluginRow(
@@ -102,15 +102,21 @@ pub fn pages() -> List(String) {
       dashboard.render(
         language,
         view.System,
-        dashboard.Snapshot(..empty, accounts: Error("reason")),
+        dashboard.Snapshot(
+          ..empty,
+          accounts: Error("reason"),
+          pending: Error("reason"),
+          sessions: Error("reason"),
+        ),
       ),
       dashboard.approval_page(language, view.System, pending),
-      account_pages.new_account_page(language, view.System, Some(reason)),
+      account_pages.new_account_page(language, view.System, "", Some(reason)),
       account_pages.generated_key_page(
         language,
         view.System,
         "nsec1example",
-        Some(i18n.LabelHasControlCharacters),
+        "",
+        Some(account_pages.InvalidLabel(i18n.LabelHasControlCharacters)),
       ),
       account_pages.registered_page(
         language,
@@ -122,6 +128,22 @@ pub fn pages() -> List(String) {
       account_pages.private_key_page(language, view.System, row, "nsec1example"),
     ],
     list.map(
+      [
+        account_pages.NotApplied("reason"),
+        account_pages.NotAccepted("reason"),
+        account_pages.NotConfirmed(i18n.StoreDidNotConfirm),
+      ],
+      fn(problem) {
+        account_pages.generated_key_page(
+          language,
+          view.System,
+          "nsec1example",
+          "main",
+          Some(problem),
+        )
+      },
+    ),
+    list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure],
       dashboard.notice_page(
         language,
@@ -130,9 +152,19 @@ pub fn pages() -> List(String) {
         i18n.NotFound,
         reason,
         _,
+        [],
       ),
     ),
     [
+      dashboard.notice_page(
+        language,
+        view.System,
+        view.SwitchReturningTo("/"),
+        i18n.ChangeNotConfirmed,
+        reason,
+        view.Warning,
+        [view.hint("hint")],
+      ),
       dashboard.notice_page(
         language,
         view.System,
@@ -140,6 +172,7 @@ pub fn pages() -> List(String) {
         i18n.BadRequest,
         i18n.Translated(i18n.OriginMismatch),
         view.Failure,
+        [],
       ),
     ],
     list.map(account_actions.all, account_pages.account_action_page(
@@ -147,6 +180,7 @@ pub fn pages() -> List(String) {
       view.System,
       row,
       _,
+      None,
       Some(reason),
     )),
   ])

@@ -151,6 +151,19 @@ pub fn calls_on_disconnect_when_the_socket_dies_test() {
   stop(actor)
 }
 
+/// 親から停止させられたとき（`relay_list` の `close_relay` が `terminate_child`
+/// で止めるとき）も `on_disconnect` を呼ぶ。バンカーはこれで、閉じた接続の
+/// 送信手段を確実に取り下げられる。
+pub fn calls_on_disconnect_when_stopped_by_the_parent_test() {
+  let reports = process.new_subject()
+  let actor = start(reports, connects(reports))
+  let assert Ok(Connected(_socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  // アクターのリンク先プロセス（このテスト）からの normal な exit シグナル。
+  process.send_exit(actor)
+  assert process.receive(reports, 1000) == Ok(Unwired)
+}
+
 /// 接続を拒否するリレーには、諦めずに再試行する。
 pub fn keeps_retrying_after_a_failed_connect_test() {
   let reports = process.new_subject()

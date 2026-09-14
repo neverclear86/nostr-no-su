@@ -166,7 +166,7 @@ fn test_context(
       Ok(Nil)
     },
     sessions: fn() {
-      [
+      Ok([
         engine.Session(
           signer: signer,
           client: client,
@@ -174,7 +174,7 @@ fn test_context(
           created_at: 1000,
           last_used_at: 1000,
         ),
-      ]
+      ])
     },
     revoke: fn(revoked_signer, revoked_client) {
       process.send(
@@ -187,14 +187,14 @@ fn test_context(
       }
     },
     pending: fn() {
-      [
+      Ok([
         dashboard.PendingRow(
           token: token,
           signer: signer,
           client: client,
           age_seconds: 12,
         ),
-      ]
+      ])
     },
     approve: fn(decided) { record_decision(reports, Approved(decided)) },
     deny: fn(decided) { record_decision(reports, Denied(decided)) },
@@ -206,7 +206,7 @@ fn test_context(
 fn record_decision(
   reports: Subject(Report),
   report: Report,
-) -> Result(Nil, String) {
+) -> Result(Nil, bunker.SessionFailure) {
   process.send(reports, report)
   Ok(Nil)
 }
@@ -488,27 +488,10 @@ pub fn revoking_an_unknown_session_is_not_found_test() {
     == Ok(Revoked(signer: signer, client: unknown_client))
 }
 
-/// バンカーが応答しない取り消しは 503 で、理由とダッシュボードへのリンクを出す。
-pub fn revoke_that_is_not_answered_is_unavailable_test() {
-  let response =
-    post_form(not_answering_context(), "/sessions/revoke", [
-      #("signer", signer),
-      #("client", client),
-    ])
-  assert response.status == 503
-  let body = simulate.read_body(response)
-  assert string.contains(body, "Change not confirmed")
-  assert string.contains(
-    body,
-    i18n.text(i18n.English, i18n.BunkerDidNotRespond),
-  )
-  assert string.contains(body, "Back to dashboard")
-}
-
 /// 取り消しにバンカーが応答しない Context。
 fn not_answering_context() -> admin.Context {
   admin.Context(..context(), revoke: fn(_signer, _client) {
-    Error(bunker.NotAnswered)
+    Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
   })
 }
 
@@ -697,6 +680,116 @@ pub fn deciding_an_unknown_token_is_not_found_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
+/// 承認待ちの一覧を得られなければ、承認ページの GET と、承認・拒否の POST は
+/// 503 の `Bunker is not available` になり、理由を出す。approve と deny は
+/// 呼ばれない。
+pub fn pending_that_cannot_be_listed_is_unavailable_test() {
+  let reports = process.new_subject()
+  let reason = "account store unavailable: database is unreachable"
+  let failing =
+    admin.Context(..reporting_context(reports), pending: fn() { Error(reason) })
+
+  let get_response = get(failing, "/approve/" <> token)
+  assert get_response.status == 503
+  let get_body = simulate.read_body(get_response)
+  assert string.contains(get_body, "Bunker is not available")
+  assert string.contains(get_body, reason)
+
+  let approve_response = post(failing, "/approve/" <> token)
+  assert approve_response.status == 503
+  assert string.contains(simulate.read_body(approve_response), reason)
+
+  let deny_response = post(failing, "/deny/" <> token)
+  assert deny_response.status == 503
+  assert string.contains(simulate.read_body(deny_response), reason)
+
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 承認・拒否・取り消しの失敗は、対象が無ければ 404、書き込まれていないことが
+/// 確定していれば 409、受け付けられなければ 503 の `Bunker is not available`、
+/// 反映されたか分からなければ 503 の `Change not confirmed` になる。
+pub fn session_failures_are_shown_as_notice_pages_test() {
+  let cases = [
+    #(bunker.SessionNotFound("not found reason"), 404, "Not found"),
+    #(bunker.SessionNotApplied("not applied reason"), 409, "Change not applied"),
+    #(
+      bunker.SessionNotReady("accounts are not loaded yet"),
+      503,
+      "Bunker is not available",
+    ),
+    #(
+      bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm),
+      503,
+      "Change not confirmed",
+    ),
+  ]
+  use #(failure, status, heading) <- list.each(cases)
+  let failing =
+    admin.Context(
+      ..context(),
+      approve: fn(_token) { Error(failure) },
+      deny: fn(_token) { Error(failure) },
+      revoke: fn(_signer, _client) { Error(failure) },
+    )
+  let responses = [
+    post(failing, "/approve/" <> token),
+    post(failing, "/deny/" <> token),
+    post_form(failing, "/sessions/revoke", [
+      #("signer", signer),
+      #("client", client),
+    ]),
+  ]
+  list.each(responses, fn(response) {
+    assert #(heading, response.status) == #(heading, status)
+    assert string.contains(
+      simulate.read_body(response),
+      "<h1 class=\"text-2xl font-bold\">" <> heading <> "</h1>",
+    )
+  })
+}
+
+/// 反映されたか分からない失敗のページには、やり直す前にダッシュボードで確かめる
+/// よう促す一文が付く。アカウントの変更の 202、プラグインの再有効化の 503、
+/// `SessionMaybeApplied` の 503 のどれにも出て、対象が無い 404 には出ない。
+pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
+  let hint = i18n.text(i18n.English, i18n.CheckDashboardBeforeRetrying)
+  let with_hint = [
+    post_form(
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+      action_path(dashboard.RotateSecret),
+      [],
+    ),
+    post_form(
+      admin.Context(..context(), reenable_plugin: fn(_name) {
+        Error(admin.PluginNotAnswered(plugin_not_answered))
+      }),
+      "/plugins/reenable",
+      [#("name", "broken")],
+    ),
+    post_form(
+      admin.Context(..context(), revoke: fn(_signer, _client) {
+        Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+      }),
+      "/sessions/revoke",
+      [#("signer", signer), #("client", client)],
+    ),
+  ]
+  list.each(with_hint, fn(response) {
+    assert string.contains(simulate.read_body(response), hint)
+  })
+
+  let not_found =
+    post_form(
+      admin.Context(..context(), revoke: fn(_signer, _client) {
+        Error(bunker.SessionNotFound(session_not_approved))
+      }),
+      "/sessions/revoke",
+      [#("signer", signer), #("client", client)],
+    )
+  assert !string.contains(simulate.read_body(not_found), hint)
+}
+
 /// 承認・拒否・取り消しのログ行は、署名者とクライアントの公開鍵を含む。
 pub fn session_change_lines_name_the_signer_and_the_client_test() {
   assert admin.session_change_line(admin.ConnectionApproved, signer, client)
@@ -705,25 +798,6 @@ pub fn session_change_lines_name_the_signer_and_the_client_test() {
     == "denied the connection of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.SessionRevoked, signer, client)
     == "revoked the session of client " <> client <> " to signer " <> signer
-}
-
-/// 一覧を引いた後にバンカーが処理できなかった承認・拒否は、バンカーの理由を
-/// 添えた 404。
-pub fn a_decision_the_bunker_rejects_is_not_found_test() {
-  let reason = "bunker is not running"
-  let rejecting =
-    admin.Context(
-      ..context(),
-      approve: fn(_token) { Error(reason) },
-      deny: fn(_token) { Error(reason) },
-    )
-  let approve_response = post(rejecting, "/approve/" <> token)
-  assert approve_response.status == 404
-  assert string.contains(simulate.read_body(approve_response), reason)
-
-  let deny_response = post(rejecting, "/deny/" <> token)
-  assert deny_response.status == 404
-  assert string.contains(simulate.read_body(deny_response), reason)
 }
 
 /// 資格情報のない承認は 401 で、Context には届かない。
@@ -835,7 +909,10 @@ pub fn import_normalizes_the_nsec_test() {
   let sent = " " <> string.uppercase(spec_nsec) <> "\n"
   let body =
     simulate.read_body(
-      post_form(context(), "/accounts/import", [#("nsec", sent)]),
+      post_form(context(), "/accounts/import", [
+        #("nsec", sent),
+        #("label", "work"),
+      ]),
     )
   assert string.contains(body, spec_nsec)
   assert !string.contains(body, string.uppercase(spec_nsec))
@@ -879,7 +956,10 @@ pub fn import_rejects_an_out_of_range_key_test() {
 /// ダッシュボードへのリンクを出す。nsec は出さない。
 pub fn import_rejects_a_registered_account_test() {
   let response =
-    post_form(context(), "/accounts/import", [#("nsec", signer_nsec)])
+    post_form(context(), "/accounts/import", [
+      #("nsec", signer_nsec),
+      #("label", "work"),
+    ])
   assert response.status == 409
   let body = simulate.read_body(response)
   assert string.contains(body, "account is already registered")
@@ -897,7 +977,7 @@ pub fn import_that_may_have_been_applied_is_accepted_test() {
     post_form(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
-      [#("nsec", spec_nsec)],
+      [#("nsec", spec_nsec), #("label", "work")],
     )
   assert response.status == 202
   let body = simulate.read_body(response)
@@ -912,7 +992,7 @@ pub fn import_while_accounts_are_not_ready_is_unavailable_test() {
     post_form(
       failing_context(bunker.NotReady("accounts are not loaded yet")),
       "/accounts/import",
-      [#("nsec", spec_nsec)],
+      [#("nsec", spec_nsec), #("label", "work")],
     )
   assert response.status == 503
   let body = simulate.read_body(response)
@@ -944,6 +1024,167 @@ pub fn import_rejects_a_label_over_the_code_point_limit_test() {
     assert string.contains(simulate.read_body(response), reason)
   })
   assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 空のラベル（欄が無い、空文字列、空白だけ）と、trim の前にだけある制御文字
+/// （末尾の "\n"、U+0085 だけ）は、登録、生成した鍵の登録、ラベルの編集のどの経路
+/// でも 400 になり、登録も更新もしない。
+pub fn invalid_label_is_rejected_on_every_path_test() {
+  let reports = process.new_subject()
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let cases = [
+    #([], "label must not be empty"),
+    #([#("label", "")], "label must not be empty"),
+    #([#("label", "   ")], "label must not be empty"),
+    #([#("label", "abc\n")], "label must not contain control characters"),
+    #([#("label", "\u{0085}")], "label must not contain control characters"),
+  ]
+  list.each(cases, fn(entry) {
+    let #(label_field, reason) = entry
+    let import_response =
+      post_form(reporting_context(reports), "/accounts/import", [
+        #("nsec", spec_nsec),
+        ..label_field
+      ])
+    assert import_response.status == 400
+    assert string.contains(simulate.read_body(import_response), reason)
+
+    let generated_response =
+      post_form(reporting_context(reports), "/accounts/register-generated", [
+        #("nsec", generated),
+        ..label_field
+      ])
+    assert generated_response.status == 400
+    assert string.contains(simulate.read_body(generated_response), reason)
+
+    let edit_response =
+      post_form(
+        reporting_context(reports),
+        action_path(dashboard.EditLabel),
+        label_field,
+      )
+    assert edit_response.status == 400
+    assert string.contains(simulate.read_body(edit_response), reason)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// ラベルの欄を持つフォームを再描画する 5 つの経路は、送られた値から制御文字を除き、
+/// trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
+/// 出し、欄に `input-error` と `aria-invalid` を付けない。送った nsec は反射しない。
+pub fn invalid_input_keeps_the_label_on_every_path_test() {
+  let broken = string.drop_end(spec_nsec, 1) <> "4"
+  let generated =
+    hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
+  let cases = [
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", broken),
+        #("label", "a\tb"),
+      ]),
+      400,
+      "invalid bech32 checksum",
+      "ab",
+      Some(broken),
+    ),
+    #(
+      post_form(context(), "/accounts/register-generated", [
+        #("nsec", broken),
+        #("label", " a\tb "),
+      ]),
+      400,
+      "invalid bech32 checksum",
+      " ab ",
+      Some(broken),
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", " a\tb"),
+      ]),
+      400,
+      "label must not contain control characters",
+      " ab",
+      Some(spec_nsec),
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", spec_nsec),
+        #("label", "   "),
+      ]),
+      400,
+      "label must not be empty",
+      "   ",
+      Some(spec_nsec),
+    ),
+    #(
+      post_form(context(), "/accounts/register-generated", [
+        #("nsec", generated),
+        #("label", "a\u{0085}b "),
+      ]),
+      400,
+      "label must not contain control characters",
+      "ab ",
+      None,
+    ),
+    #(
+      post_form(context(), "/accounts/import", [
+        #("nsec", signer_nsec),
+        #("label", " work "),
+      ]),
+      409,
+      "account is already registered",
+      " work ",
+      Some(signer_nsec),
+    ),
+    #(
+      post_form(context(), action_path(dashboard.EditLabel), [
+        #("label", " a\nb "),
+      ]),
+      400,
+      "label must not contain control characters",
+      " ab ",
+      None,
+    ),
+    #(
+      post_form(
+        failing_context(bunker.NotApplied("account is not registered")),
+        action_path(dashboard.EditLabel),
+        [#("label", " new ")],
+      ),
+      409,
+      "account is not registered",
+      " new ",
+      None,
+    ),
+  ]
+  use #(response, status, reason, field_value, sent_nsec) <- list.each(cases)
+  assert response.status == status
+  let body = simulate.read_body(response)
+  assert string.contains(body, reason)
+  assert string.contains(
+    body,
+    "name=\"label\" required type=\"text\" value=\"" <> field_value <> "\"",
+  )
+  let assert Ok(#(_before, after_alert)) =
+    string.split_once(
+      body,
+      "<div class=\"alert alert-error\" role=\"alert\"><span>",
+    )
+  let assert Ok(#(reason_text, after_reason)) =
+    string.split_once(after_alert, "</div>")
+  assert string.contains(reason_text, reason)
+  assert string.contains(after_reason, "name=\"label\"")
+  assert !string.contains(body, "input-error")
+  assert !string.contains(body, "aria-invalid")
+  let echoes_the_sent_nsec = case sent_nsec {
+    Some(nsec) -> string.contains(body, nsec)
+    None -> False
+  }
+  assert !echoes_the_sent_nsec
+  assert !string.contains(body, spec_nsec)
+  assert !string.contains(body, signer_nsec)
 }
 
 /// 前後に空白を付けた 100 符号位置のラベルは通り、空白を除いた値で登録する。
@@ -1018,42 +1259,49 @@ pub fn generated_key_can_be_registered_test() {
     == Ok(Added(nsec_signer(generated), "fresh"))
 }
 
-/// 生成した鍵の登録は、nsec 入力による登録と同じ失敗の経路を通り、どの本文にも nsec を
-/// 出さない。
-pub fn register_generated_shares_the_failure_paths_test() {
+/// 生成した鍵の登録でバンカーが失敗すると、生成した鍵を失わないよう、送られた nsec の
+/// 確認ページを理由付きで返す。状態コードは nsec 入力による登録と同じで、ラベルの欄には
+/// 送られた値を入れる。
+pub fn register_generated_bunker_failure_keeps_the_key_test() {
   let path = "/accounts/register-generated"
-  let spec = [#("nsec", spec_nsec)]
-  let responses = [
-    #(post_form(context(), path, [#("nsec", "nsec1invalid")]), 400),
-    #(post_form(context(), path, [#("nsec", signer_nsec)]), 409),
+  let label = " work "
+  let cases = [
     #(
-      post_form(
-        failing_context(bunker.NotReady("accounts are not loaded yet")),
-        path,
-        spec,
-      ),
-      503,
+      context(),
+      signer_nsec,
+      409,
+      "<div class=\"alert alert-error\" role=\"alert\"><span><span lang=\"en\">account is already registered</span></span></div>",
     ),
     #(
-      post_form(
-        failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
-        path,
-        spec,
-      ),
+      failing_context(bunker.NotReady("accounts are not loaded yet")),
+      spec_nsec,
+      503,
+      "<div class=\"alert alert-warning\" role=\"alert\"><span>The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
+    ),
+    #(
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+      spec_nsec,
       202,
+      "<div class=\"alert alert-warning\" role=\"alert\"><span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
     ),
   ]
-  list.each(responses, fn(entry) {
-    let #(response, status) = entry
-    assert response.status == status
-    let body = simulate.read_body(response)
-    assert !string.contains(body, spec_nsec)
-    assert !string.contains(body, signer_nsec)
-  })
+  use #(ctx, nsec, status, alert) <- list.each(cases)
+  let response = post_form(ctx, path, [#("nsec", nsec), #("label", label)])
+  assert response.status == status
+  let body = simulate.read_body(response)
+  assert hidden_nsec(body) == nsec
+  assert string.contains(body, "action=\"/accounts/register-generated\"")
+  assert string.contains(body, alert)
+  assert string.contains(
+    body,
+    "name=\"label\" required type=\"text\" value=\" work \"",
+  )
+  assert header(response, "cache-control") == "no-store"
 }
 
 /// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた
-/// nsec の確認ページを理由付きで 400 で返す。登録はしない。
+/// nsec の確認ページを理由付きで 400 で返す。登録はせず、ラベルの欄には制御文字を除いた
+/// 値を入れる。
 pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   let reports = process.new_subject()
   let generated =
@@ -1071,6 +1319,7 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
     body,
     "<div class=\"alert alert-error\" role=\"alert\"><span>label must not contain control characters</span></div>",
   )
+  assert string.contains(body, "value=\"ab\"")
   assert !string.contains(body, "a\tb")
   assert header(response, "cache-control") == "no-store"
   assert process.receive(reports, 100) == Error(Nil)
@@ -1276,8 +1525,8 @@ pub fn label_update_calls_the_context_and_redirects_test() {
   assert process.receive(reports, 1000) == Ok(Relabeled(signer, "new"))
 }
 
-/// 規則に反するラベルは 400 で、編集の欄には保存済みのラベルを入れ、Context を
-/// 呼ばない。
+/// 規則に反するラベルは 400 で、編集の欄には送られた値から制御文字を除いた値を入れ、
+/// Context を呼ばない。
 pub fn label_update_rejects_an_invalid_label_test() {
   let reports = process.new_subject()
   let response =
@@ -1287,23 +1536,87 @@ pub fn label_update_rejects_an_invalid_label_test() {
   assert response.status == 400
   let body = simulate.read_body(response)
   assert string.contains(body, "label must not contain control characters")
-  assert string.contains(body, "value=\"" <> label <> "\"")
+  assert string.contains(body, "value=\"ab\"")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// ラベルの編集の欄には `maxlength` を付けず、新しいアカウントの欄には付ける。
-pub fn label_edit_form_has_no_maxlength_test() {
+/// 編集のページを再描画しても、カードの上の要約は保存済みのラベルのまま。
+pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
+  let saved = "<dd class=\"break-words\">" <> label <> "</dd>"
+  let invalid_input =
+    simulate.read_body(
+      post_form(context(), action_path(dashboard.EditLabel), [
+        #("label", "a\nb"),
+      ]),
+    )
+  assert string.contains(invalid_input, saved)
+  let conflict =
+    simulate.read_body(
+      post_form(
+        failing_context(bunker.NotApplied("account is not registered")),
+        action_path(dashboard.EditLabel),
+        [#("label", "new")],
+      ),
+    )
+  assert string.contains(conflict, saved)
+}
+
+/// 欄に戻したラベルは属性値としてエスケープする。
+pub fn reflected_label_is_escaped_test() {
+  let body =
+    simulate.read_body(
+      post_form(context(), "/accounts/import", [
+        #("nsec", "nsec1invalid"),
+        #("label", "a\tb\"><b>"),
+      ]),
+    )
+  assert string.contains(body, "value=\"ab&quot;&gt;&lt;b&gt;\"")
+  assert !string.contains(body, "\"><b>")
+}
+
+/// 3 つのラベルの欄には `maxlength` が無く、欄の下に表示の言語の上限の案内がある。
+pub fn label_inputs_describe_the_limit_without_maxlength_test() {
+  let hint = fn(language) {
+    "<p class=\"text-base-content/70\" id=\"label-hint\">"
+    <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
+    <> "</p>"
+  }
+  let bodies = [
+    simulate.read_body(get(context(), "/accounts/new")),
+    simulate.read_body(post(context(), "/accounts/generate")),
+    simulate.read_body(get(context(), action_path(dashboard.EditLabel))),
+  ]
+  list.each(bodies, fn(body) {
+    assert !string.contains(body, "maxlength")
+    assert string.contains(
+      body,
+      "aria-describedby=\"label-hint\" aria-label=\"Label\" autocomplete=\"off\"",
+    )
+    assert string.contains(body, hint(i18n.English))
+  })
+
+  let japanese_request =
+    simulate.request(http.Get, "/accounts/new")
+    |> in_japanese
+    |> with_credentials("admin", password)
+  let japanese_body =
+    simulate.read_body(admin.handle_request(context(), japanese_request))
+  assert string.contains(
+    japanese_body,
+    "aria-describedby=\"label-hint\" aria-label=\"ラベル\" autocomplete=\"off\"",
+  )
+  assert string.contains(japanese_body, hint(i18n.Japanese))
+}
+
+/// 登録画面、生成した鍵の確認、ラベルの編集の 3 つの欄はどれも必須。
+pub fn label_inputs_are_required_test() {
+  let new = simulate.read_body(get(context(), "/accounts/new"))
+  assert string.contains(new, "name=\"label\" required type=\"text\"")
+  let generated = simulate.read_body(post(context(), "/accounts/generate"))
+  assert string.contains(generated, "name=\"label\" required type=\"text\"")
   let edit =
     simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
-  assert string.contains(
-    edit,
-    "autocomplete=\"off\" class=\"input w-full border-base-content/60\" name=\"label\" type=\"text\" value=\""
-      <> label
-      <> "\"",
-  )
-  assert !string.contains(edit, "maxlength")
-  let new = simulate.read_body(get(context(), "/accounts/new"))
-  assert string.contains(new, "maxlength=\"100\" name=\"label\"")
+  assert string.contains(edit, "name=\"label\" required type=\"text\"")
 }
 
 /// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ 409、
@@ -1595,7 +1908,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
   let context = context()
   let reveal = action_path(dashboard.RevealPrivateKey)
   let with_password = [#("password", password)]
-  let spec = [#("nsec", spec_nsec)]
+  let spec = [#("nsec", spec_nsec), #("label", "work")]
   let responses = [
     get(context, "/"),
     get(context, "/static/admin.css"),
@@ -1606,7 +1919,10 @@ pub fn authenticated_responses_carry_security_headers_test() {
     post(context, "/accounts/generate"),
     post_form(context, "/accounts/import", spec),
     post_form(context, "/accounts/import", [#("nsec", "nope")]),
-    post_form(context, "/accounts/import", [#("nsec", signer_nsec)]),
+    post_form(context, "/accounts/import", [
+      #("nsec", signer_nsec),
+      #("label", "work"),
+    ]),
     post_form(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       "/accounts/import",
@@ -2116,7 +2432,10 @@ pub fn switched_theme_carries_across_pages_test() {
 pub fn pages_with_a_private_key_have_no_switches_test() {
   let hidden = [
     post(context(), "/accounts/generate"),
-    post_form(context(), "/accounts/import", [#("nsec", spec_nsec)]),
+    post_form(context(), "/accounts/import", [
+      #("nsec", spec_nsec),
+      #("label", "work"),
+    ]),
     post_form(context(), "/accounts/register-generated", [
       #("nsec", spec_nsec),
       #("label", "a\tb"),
@@ -2163,7 +2482,7 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
     simulate.request(http.Post, "/accounts/import")
     |> with_credentials("admin", password)
     |> in_japanese
-    |> simulate.form_body([#("nsec", signer_nsec)])
+    |> simulate.form_body([#("nsec", signer_nsec), #("label", "work")])
     |> admin.handle_request(context(), _)
   assert registered.status == 409
   assert string.contains(
@@ -2185,7 +2504,7 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
 }
 
 /// 日本語のページで、変更を確認できなかった通知ページの本文が日本語になる（`lang="en"` の
-/// `span` が無い）。アカウントの変更の 202 とセッションの取り消しの 503 のどちらも対象。
+/// `span` が無い）。アカウントの変更の 202 と承認・拒否・取り消しの 503 のどれも対象。
 pub fn japanese_pages_translate_unconfirmed_changes_test() {
   let cases = [
     #(
@@ -2206,6 +2525,14 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
       [#("signer", signer), #("client", client)],
       i18n.BunkerDidNotRespond,
     ),
+    #(
+      admin.Context(..context(), approve: fn(_token) {
+        Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+      }),
+      "/approve/" <> token,
+      [],
+      i18n.StoreDidNotConfirm,
+    ),
   ]
   use #(failing, path, fields, message) <- list.each(cases)
   let body =
@@ -2224,14 +2551,6 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
     "<span>" <> i18n.text(i18n.Japanese, message) <> "</span>",
   )
   assert !string.contains(body, "<span lang=\"en\">")
-}
-
-/// 202 と取り消しの 503 の英語の文言は、消した定数の文字列のまま変わらない。
-pub fn unconfirmed_change_messages_keep_the_english_text_test() {
-  assert i18n.text(i18n.English, i18n.BunkerDidNotRespond)
-    == "the bunker did not respond; check the dashboard to see whether the change was applied"
-  assert i18n.text(i18n.English, i18n.StoreDidNotConfirm)
-    == "the store did not confirm the change; it may have been applied, so open the dashboard to check"
 }
 
 /// 通知ページで言語を切り替えた後はダッシュボードを開く。一覧を得られない 503 でも、パスの

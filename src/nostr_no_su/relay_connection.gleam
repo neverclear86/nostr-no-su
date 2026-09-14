@@ -47,7 +47,8 @@ pub type Status {
 
 /// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
 /// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、ソケットを
-/// 失ったときに行う処理、再接続の待ち時間の延ばし方。
+/// 失ったとき（再接続を待つ間、および親（スーパーバイザー）からの停止）に
+/// 行う処理、再接続の待ち時間の延ばし方。
 pub type Settings {
   Settings(
     name: Name(Msg),
@@ -265,11 +266,18 @@ pub fn reconnect_report(
 /// 停止を要求する exit シグナルを受けて終了する。アクターのループは trap した
 /// exit を通常のメッセージとして扱うため、スーパーバイザーが待っている理由で
 /// 終了するには、trap を解除してシグナルを送り直す必要がある。ソケットはリンクを
-/// 通じて一緒に死ぬ。
+/// 通じて一緒に死ぬ。生きたソケットを持っていれば、`reconnect` と同じく
+/// `on_disconnect` を呼んで送信手段を撤回してもらう。`relay_list` の
+/// `close_relay` はこの終了を待ってから戻るため、戻った時点で撤回は依頼済みに
+/// なる。
 fn shutdown(
   state: State,
   reason: process.ExitReason,
 ) -> actor.Next(State, Msg) {
+  case state.socket {
+    Some(_socket) -> state.settings.on_disconnect()
+    None -> Nil
+  }
   process.trap_exits(False)
   case reason {
     // `Normal` な exit はリンク越しに伝播しないため、ソケットがアクターより長く

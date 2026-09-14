@@ -17,9 +17,9 @@
 //// する。**`LoadAccounts` の最初の送信を initialiser 以外へ移さないこと。**
 ////
 //// 読み込んだアカウントは、メモリの署名者と突き合わせて合わせる（`reconcile`）。
-//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換えるので、ストアに
-//// 残っている署名者のセッションと承認待ちは残る。起動時の読み込みではメモリが空なので、
-//// 読み込んだアカウントをそのまま足すことになる。
+//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換える。その後、
+//// 読み込んだセッションと承認待ちでエンジンのものを置き換える。起動時の読み込みでは
+//// メモリが空なので、読み込んだアカウントをそのまま足すことになる。
 ////
 //// **アカウントの変更**（追加、削除、secret の作り直し、ラベルの差し替え）は、
 //// アクターの中でストアへ書き込み、書き込みが成功したときだけメモリの状態を変える。
@@ -50,16 +50,16 @@
 //// できないときのチェックアウトの失敗）、読み込み 1 回は読み込みの期限の 3 秒で打ち
 //// 切る。DB を一時停止した測定では、読み込みは 3000ms、2950ms、2000ms で失敗して返った。
 //// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行のたびに最長 3 秒ずつ
-//// 待ちが生じ、読み直しが成功するまで続く。変更でアクターは再起動しないので、
-//// 承認済みセッションは残る。
+//// 待ちが生じ、読み直しが成功するまで続く。読み直しが失敗し続けても、承認済み
+//// セッションは失われない。
 ////
 //// **承認・拒否・取り消し**も同じく、エンジンで判断した後にストアへ書き込み、
 //// 書き込みが成功したときだけ状態に反映し、応答イベントを発行する（取り消しは
 //// 発行しない）。結果が曖昧な書き込みの後は、アカウントの変更と同じ `LoadAccounts`
-//// の読み直しに移るが、承認待ちとセッションは読み直しでは戻らない（#215）ので
-//// メモリに残ったままになり、利用者はダッシュボードに残った行からやり直せる。
-//// 承認の `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（行はまだ
-//// メモリにあるので、同じトークンで承認し直せる）。NIP-46 の `connect` と `logout` も、
+//// の読み直しに移り、読み直しで承認待ちとセッションも DB の内容に置き換わる。
+//// 書けていなければ行が残るので、利用者はダッシュボードからやり直せる。承認の
+//// `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（書けていれば
+//// 承認待ちは消え、クライアントは接続し直す）。NIP-46 の `connect` と `logout` も、
 //// 書き込みが成功したときだけ状態に反映し、応答を発行する。書き込みが失敗したときは
 //// メモリを変えず、`connect` には `connection_not_saved` のエラーを返し、`logout` には
 //// クライアントの後始末を止めないため `ack` を返す。結果が曖昧な書き込みの後は同じ
@@ -89,6 +89,7 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, type Verified}
 import nostr_no_su/random
 import nostr_no_su/relay_client.{type Acknowledgement}
+import nostr_no_su/relay_list
 import nostr_no_su/time
 
 /// バンカーが出すログ行の接頭辞。
@@ -149,11 +150,6 @@ const query_not_answered = "bunker is not responding"
 /// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。
 const session_not_approved = "session is not approved"
 
-/// 承認・拒否の書き込みの結果が曖昧だったときに呼び出し側へ返す理由。
-/// `admin/i18n.gleam` の `StoreDidNotConfirm` の英語（`i18n.gleam:381-382`）と
-/// 同じ文にする。#186 が承認・拒否の失敗を型にするときに消す。
-const store_did_not_confirm_change = "the store did not confirm the change; it may have been applied, so open the dashboard to check"
-
 /// 結果が曖昧な書き込みの後のログ行に添える文言。`change_line` の `MaybeWritten`
 /// の枝もこれを使い、同じ文言を 2 か所に持たない。
 const reloading_after_unconfirmed_write = "; the change may have been applied, reloading the accounts from the store"
@@ -181,18 +177,17 @@ pub type NotConfirmed {
   StoreDidNotConfirm
 }
 
-/// セッションの取り消しが成功しなかった理由。`SessionNotFound` の理由は値
-/// （pubkey）を含まない固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけに
-/// する。
-pub type RevokeFailure {
-  /// 承認済みのセッションに無い（取り消し済み、アカウントの削除やアクターの再起動で
-  /// 消えた、フォームの値が違う）。
+/// 承認・拒否・取り消しが成功しなかった理由。理由の文字列は値（pubkey、token）を含まない
+/// 固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+pub type SessionFailure {
+  /// 対象が無い（不明、失効、処理済み、承認済みでない組）。
   SessionNotFound(reason: String)
-  /// アクターが動いていないか、期限内に応答しなかった。タイムアウトの後にアクターが
-  /// 処理して反映することがある。#186 までは、ストアへの書き込みの失敗と読み込み前も
-  /// ここに入るため、画面に出す原因（バンカーが応答しない）が実際の原因と違うことが
-  /// ある。実際の原因はアクターがログに出す。
-  NotAnswered
+  /// 書き込まれていないことが確定した（`NotWritten`、`AlreadyStored`）。
+  SessionNotApplied(reason: String)
+  /// 読み込みか読み直しの前。時間をおけば受け付けうる。
+  SessionNotReady(reason: String)
+  /// 反映されたか分からない（`MaybeWritten`、アクターの無応答）。
+  SessionMaybeApplied(cause: NotConfirmed)
 }
 
 /// ストアへの書き込みの失敗。理由は値（鍵、secret、ラベル）を含まない固定の文言。
@@ -208,13 +203,24 @@ pub type WriteFailure {
   MaybeWritten(reason: String)
 }
 
+/// ストアから読み込んだバンカーの状態。セッションと承認待ちはエンジンの型で持つ。
+pub type Snapshot {
+  Snapshot(
+    accounts: vault.Loaded,
+    sessions: List(Session),
+    pending: List(Pending),
+    /// 登録されたリレー。アクターは持たず `open_relays` へ渡すだけ。
+    relays: List(relay_list.Registered),
+  )
+}
+
 /// アカウントストアの操作。起動処理がプールとマスターキーを閉じ込めて渡すので、
 /// アクターの状態を表示してもキーが出ず、テストは DB なしで偽の操作を渡せる。
 /// 失敗の理由は値（鍵、secret、ラベル）を含まない固定の文言。
 pub type Store {
   Store(
-    /// アカウントを読み込む。
-    load: fn() -> Result(vault.Loaded, String),
+    /// アカウント、セッション、承認待ち、登録されたリレーを読み込む。
+    load: fn() -> Result(Snapshot, String),
     /// アカウントを 1 件追加する。
     insert: fn(vault.StoredAccount) -> Result(Nil, WriteFailure),
     /// 署名者を削除する。登録されていなければ成功として `Ok(Nil)` を返す（削除は
@@ -267,26 +273,27 @@ pub type Msg {
   RemovePublisher(relay_url: String)
   /// バンカーリレーの接続が、発行した応答への OK を知らせる。
   Acknowledged(relay_url: String, ack: Acknowledgement)
-  /// 承認済みセッションの一覧を問い合わせる。
-  GetSessions(reply: Subject(List(Session)))
+  /// 承認済みセッションの一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
+  GetSessions(reply: Subject(Result(List(Session), String)))
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
-  /// 読み込み済みで承認済みでない組なら `SessionNotFound`、読み込み前（組に関わらず）
-  /// か書き込みが成功しなかったときは `NotAnswered` を返す。
+  /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
+  /// `SessionNotFound`、書き込みの結果が曖昧なときは `SessionMaybeApplied`、
+  /// 書き込まれていないことが確定したら `SessionNotApplied` を返す。
   Revoke(
     signer: String,
     client: String,
-    reply: Subject(Result(Nil, RevokeFailure)),
+    reply: Subject(Result(Nil, SessionFailure)),
   )
-  /// 承認待ちの接続要求の一覧を問い合わせる。
-  GetPending(reply: Subject(List(Pending)))
+  /// 承認待ちの接続要求の一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
+  GetPending(reply: Subject(Result(List(Pending), String)))
   /// 承認待ちの接続要求を承認する。書き込みが成功したときだけ状態に反映し、
   /// 登録済みの接続へ応答イベントを送る。要求が見つからない、読み込み前、あるいは
-  /// 書き込みが成功しなかったときは理由を返す。
-  Approve(token: String, reply: Subject(Result(Nil, String)))
+  /// 書き込みが成功しなかったときは `SessionFailure` で理由を返す。
+  Approve(token: String, reply: Subject(Result(Nil, SessionFailure)))
   /// 承認待ちの接続要求を拒否する。書き込みが成功したときだけ状態に反映するほかは
   /// `Approve` と同じ。
-  Deny(token: String, reply: Subject(Result(Nil, String)))
+  Deny(token: String, reply: Subject(Result(Nil, SessionFailure)))
   /// ストアからアカウントを読み込む。initialiser と再試行のタイマーが、アクター
   /// ごとに作る名前なしの subject へ送る。名前付き subject へは誰も送らない。
   LoadAccounts
@@ -323,40 +330,44 @@ pub type Msg {
   )
 }
 
-/// バンカーが保持する承認済みセッションの一覧。アクターが動いていなければ空。
-pub fn sessions(name: Name(Msg)) -> List(Session) {
+/// バンカーが保持する承認済みセッションの一覧。読み込み前、読み直しの前、
+/// アクターが応答しないときは理由を返す。
+pub fn sessions(name: Name(Msg)) -> Result(List(Session), String) {
   named.call(name, call_timeout_ms, GetSessions)
-  |> option.unwrap([])
+  |> option.unwrap(Error(query_not_answered))
 }
 
-/// セッションを 1 件取り消し、反映されるまで待つ。読み込み済みで承認済みでない組
-/// なら `SessionNotFound`、読み込み前（組に関わらず）、アクターが応答しない、
-/// あるいは書き込みが成功しなかったときは `NotAnswered` を返す。
+/// セッションを 1 件取り消し、反映されるまで待つ。読み込み前は `SessionNotReady`、
+/// 読み込み済みで承認済みでない組なら `SessionNotFound`、書き込まれていないことが
+/// 確定したら `SessionNotApplied`、書き込みの結果が曖昧なときとアクターが応答
+/// しないときは `SessionMaybeApplied` を返す。
 pub fn revoke(
   name: Name(Msg),
   signer: String,
   client: String,
-) -> Result(Nil, RevokeFailure) {
-  named.call(name, call_timeout_ms, Revoke(signer, client, _))
-  |> option.unwrap(Error(NotAnswered))
+) -> Result(Nil, SessionFailure) {
+  call_session_change(name, Revoke(signer, client, _))
 }
 
-/// 承認待ちの接続要求の一覧。アクターが動いていなければ空。
-pub fn pending(name: Name(Msg)) -> List(Pending) {
+/// 承認待ちの接続要求の一覧。読み込み前、読み直しの前、アクターが応答しないときは
+/// 理由を返す。
+pub fn pending(name: Name(Msg)) -> Result(List(Pending), String) {
   named.call(name, call_timeout_ms, GetPending)
-  |> option.unwrap([])
+  |> option.unwrap(Error(query_not_answered))
 }
 
 /// 接続要求を 1 件承認し、書き込みが成功したときだけ応答イベントを送り出すまで
-/// 待つ。要求が見つからない、あるいは書き込みが成功しなかったときは理由を返す。
-pub fn approve(name: Name(Msg), token: String) -> Result(Nil, String) {
-  call_decision(name, Approve(token, _))
+/// 待つ。読み込み前は `SessionNotReady`、要求が見つからなければ `SessionNotFound`、
+/// 書き込まれていないことが確定したら `SessionNotApplied`、書き込みの結果が
+/// 曖昧なときとアクターが応答しないときは `SessionMaybeApplied` を返す。
+pub fn approve(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
+  call_session_change(name, Approve(token, _))
 }
 
 /// 接続要求を 1 件拒否し、書き込みが成功したときだけ応答イベントを送り出すまで
 /// 待つ。ほかは `approve` と同じ。
-pub fn deny(name: Name(Msg), token: String) -> Result(Nil, String) {
-  call_decision(name, Deny(token, _))
+pub fn deny(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
+  call_session_change(name, Deny(token, _))
 }
 
 /// 現在の署名者 pubkey の一覧。読み込みの前は空。アクターが応答しなければ
@@ -430,14 +441,15 @@ pub fn authenticate(
   |> option.unwrap(Error(query_not_answered))
 }
 
-/// 承認・拒否をアクターへ送って結果を待つ。アクターが動いていなければエラーに
-/// する。承認したつもりのまま待たせ続けるより、UI に失敗として出す方がよい。
-fn call_decision(
+/// 承認・拒否・取り消しをアクターへ送って結果を待つ。応答が無ければ、打ち切った
+/// 後にアクターが処理しうるので `SessionMaybeApplied(BunkerDidNotRespond)` を
+/// 返す。承認したつもりのまま待たせ続けるより、UI に失敗として出す方がよい。
+fn call_session_change(
   name: Name(Msg),
-  request: fn(Subject(Result(Nil, String))) -> Msg,
-) -> Result(Nil, String) {
+  request: fn(Subject(Result(Nil, SessionFailure))) -> Msg,
+) -> Result(Nil, SessionFailure) {
   named.call(name, call_timeout_ms, request)
-  |> option.unwrap(Error("bunker is not running"))
+  |> option.unwrap(Error(SessionMaybeApplied(BunkerDidNotRespond)))
 }
 
 /// アカウントの変更をアクターへ送って結果を待つ。
@@ -617,35 +629,41 @@ type State {
     accounts: Accounts,
     /// バンカーリレーの購読の張り直しを依頼する関数。送るだけで待たない。
     resubscribe: fn() -> Nil,
+    /// 読み込みに成功するたびに、登録されたリレーを渡す関数。送るだけで待たない。
+    open_relays: fn(List(relay_list.Registered)) -> Nil,
     /// OK を待っている応答の一覧。
     deliveries: Deliveries,
   )
 }
 
 /// スーパービジョンツリー用の子仕様。`resubscribe` は署名者の集合が変わったときに
-/// 呼ぶ関数で、ツリーを組む側がバンカーリレーの接続へ配線する。
+/// 呼ぶ関数、`open_relays` は読み込みに成功するたびに登録されたリレーを渡す関数で、
+/// どちらもツリーを組む側が配線する。
 pub fn supervised(
   name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, settings, resubscribe) })
+  supervision.worker(fn() { start(name, settings, resubscribe, open_relays) })
 }
 
 /// バンカーアクターを起動する。`name` で登録するため、接続は起動時に生きていた
 /// プロセスではなく、現在その名前を保持しているプロセスに到達する。
 ///
-/// スーパーバイザーは再起動のたびにこれを呼ぶため、アクターは承認済みセッション
-/// もリプレイ防止の `seen` も引き継がない。記憶していないリクエストを再実行しない
-/// よう、ここで起動時刻を刻み、それより古いリクエストはエンジンが受け付けない。
+/// スーパーバイザーは再起動のたびにこれを呼ぶため、アクターはリプレイ防止の
+/// `seen` を引き継がない（セッションと承認待ちは読み込みでストアから戻る）。
+/// 記憶していないリクエストを再実行しないよう、ここで起動時刻を刻み、それより
+/// 古いリクエストはエンジンが受け付けない。
 /// アカウントは仕様のスナップショットではなく、起動のたびにストアの最新から読む。
 pub fn start(
   name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(init_timeout_ms, fn(self) {
-    initialise(settings, resubscribe, self)
+    initialise(settings, resubscribe, open_relays, self)
   })
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -663,6 +681,7 @@ pub fn start(
 fn initialise(
   settings: Settings,
   resubscribe: fn() -> Nil,
+  open_relays: fn(List(relay_list.Registered)) -> Nil,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   let retry = process.new_subject()
@@ -682,6 +701,7 @@ fn initialise(
     retry: retry,
     accounts: loading(settings),
     resubscribe: resubscribe,
+    open_relays: open_relays,
     deliveries: new_deliveries(),
   )
   |> actor.initialised
@@ -782,7 +802,12 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         },
       )
     GetPending(reply) -> {
-      process.send(reply, engine.pending(state.engine, time.now_seconds()))
+      process.send(
+        reply,
+        when_loaded(state, fn() {
+          engine.pending(state.engine, time.now_seconds())
+        }),
+      )
       actor.continue(state)
     }
     Approve(token, reply) ->
@@ -790,7 +815,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Deny(token, reply) ->
       apply_decision(state, reply, Denial, token, engine.deny)
     GetSessions(reply) -> {
-      process.send(reply, engine.sessions(state.engine))
+      process.send(
+        reply,
+        when_loaded(state, fn() { engine.sessions(state.engine) }),
+      )
       actor.continue(state)
     }
     Revoke(signer:, client:, reply:) ->
@@ -852,10 +880,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// ストアからアカウントを読み込む。成功したらメモリを読み込んだ内容に合わせて
-/// 読み込み済みに移り、失敗したら再試行を予約して次の待ち時間を延ばす。読み込み
-/// 済みなら何もしない（`LoadAccounts` を積むのは読み込めていない状態に移るときだけ
-/// で、読み込み用の subject はこのプロセスの外に出ないので、通常は起きない）。
+/// ストアからアカウント、セッション、承認待ちを読み込む。成功したらメモリを
+/// 読み込んだ内容に合わせて読み込み済みに移り、失敗したら再試行を予約して次の
+/// 待ち時間を延ばす。読み込み済みなら何もしない（`LoadAccounts` を積むのは
+/// 読み込めていない状態に移るときだけで、読み込み用の subject はこのプロセスの
+/// 外に出ないので、通常は起きない）。
 fn load_accounts(state: State) -> State {
   case state.accounts {
     Ready -> state
@@ -865,12 +894,22 @@ fn load_accounts(state: State) -> State {
         Ok(_) -> log.Notice
         Error(_) -> log.Warning
       }
-      load_report(failure, outcome, retry_delay_ms)
+      load_report(
+        failure,
+        result.map(outcome, fn(snapshot) { snapshot.accounts }),
+        retry_delay_ms,
+      )
       |> list.each(log.write(level, log_prefix, _))
       case outcome {
-        Ok(loaded) ->
-          reconcile(State(..state, accounts: Ready), loaded)
+        Ok(snapshot) -> {
+          state.open_relays(snapshot.relays)
+          reconcile(
+            State(..state, accounts: Ready),
+            snapshot,
+            time.now_seconds(),
+          )
           |> transition(state, _)
+        }
         Error(reason) -> {
           let _ = process.send_after(state.retry, retry_delay_ms, LoadAccounts)
           State(
@@ -967,20 +1006,26 @@ fn skipped_lines(loaded: vault.Loaded) -> List(String) {
 /// （DB の列の既定値と同じ）にする。読み込めていなければ理由を返す。npub はメモリの
 /// `Account` から作るので、`account.npub` の前提（32 バイトの公開鍵）が型で保たれる。
 fn listings(state: State) -> Result(List(Listing), String) {
+  when_loaded(state, fn() {
+    engine.registered_accounts(state.engine)
+    |> list.map(fn(entry) {
+      let #(registered, secret) = entry
+      let signer = account.pubkey_hex(registered)
+      Listing(
+        signer: signer,
+        npub: account.npub(registered),
+        label: dict.get(state.labels, signer) |> result.unwrap(""),
+        secret: secret,
+      )
+    })
+  })
+}
+
+/// 読み込み済みなら `read` の値を、読み込みか読み直しが終わっていなければ一覧の
+/// 代わりの理由を返す。アカウント、承認待ち、セッションの一覧が使う。
+fn when_loaded(state: State, read: fn() -> a) -> Result(a, String) {
   case state.accounts {
-    Ready ->
-      engine.registered_accounts(state.engine)
-      |> list.map(fn(entry) {
-        let #(registered, secret) = entry
-        let signer = account.pubkey_hex(registered)
-        Listing(
-          signer: signer,
-          npub: account.npub(registered),
-          label: dict.get(state.labels, signer) |> result.unwrap(""),
-          secret: secret,
-        )
-      })
-      |> Ok
+    Ready -> Ok(read())
     Loading(failure: None, ..) -> Error("accounts are being loaded")
     Loading(failure: Some(reason), ..) ->
       Error("account store unavailable: " <> reason)
@@ -1000,16 +1045,29 @@ fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
   }
 }
 
-/// ストアから読み込んだアカウントにメモリを合わせる。ストアに無い署名者を取り除き、
-/// 読み込んだアカウントを足す（登録済みの署名者なら鍵・secret・ラベルを置き換える）。
-/// エンジンを作り直さないので、ストアに残っている署名者のセッションと承認待ちは残る。
-fn reconcile(state: State, loaded: vault.Loaded) -> State {
+/// ストアから読み込んだアカウントにメモリを合わせる（ストアに無い署名者を取り除き、
+/// 読み込んだアカウントを足す。登録済みの署名者なら鍵・secret・ラベルを置き換える）。
+/// アカウントを合わせた後、読み込んだセッションと承認待ちでエンジンのものを置き換える
+/// （`engine.restore`。登録済みの署名者のものと失効していない承認待ちだけが残る）。
+/// `restore` は登録済みの署名者で絞るので、アカウントを先に合わせる。
+fn reconcile(state: State, snapshot: Snapshot, now: Int) -> State {
+  let loaded = snapshot.accounts
   let stored =
     list.map(loaded.accounts, fn(entry) { account.pubkey_hex(entry.account) })
-  engine.signers(state.engine)
-  |> list.filter(fn(signer) { !list.contains(stored, signer) })
-  |> list.fold(state, without_account)
-  |> list.fold(loaded.accounts, _, with_account)
+  let state =
+    engine.signers(state.engine)
+    |> list.filter(fn(signer) { !list.contains(stored, signer) })
+    |> list.fold(state, without_account)
+    |> list.fold(loaded.accounts, _, with_account)
+  State(
+    ..state,
+    engine: engine.restore(
+      state.engine,
+      snapshot.sessions,
+      snapshot.pending,
+      now,
+    ),
+  )
 }
 
 /// 読み込みか追加で得たアカウントを、エンジンとラベルの両方に入れる。
@@ -1260,6 +1318,16 @@ fn write_session_change(
   }
 }
 
+/// セッションと承認待ちの書き込みの失敗を、管理 UI が応答に使う `SessionFailure`
+/// の区分に写す。`NotWritten`、`AlreadyStored` は書き込まれていないことが確定した
+/// 失敗、`MaybeWritten` は結果が曖昧な失敗である。
+fn session_write_failure(failure: WriteFailure) -> SessionFailure {
+  case failure {
+    NotWritten(reason) | AlreadyStored(reason) -> SessionNotApplied(reason)
+    MaybeWritten(_reason) -> SessionMaybeApplied(StoreDidNotConfirm)
+  }
+}
+
 /// `handle_event` の `Persist` の書き込みの種類と、失敗のログに出す
 /// （署名者, クライアント）。組は `Write` の値から取る（`connect` の書き込みの前は
 /// 組がメモリに無いので `session_target` で引かない）。`handle_event` が載せるのは
@@ -1290,14 +1358,14 @@ fn incoming_write_change(
 }
 
 /// 読み込み済みのときだけエンジンで承認・拒否し、書き込みが成功したときだけ応答を
-/// 発行して反映する。読み込み前は状態を変えずに `accounts_not_loaded` を返す。
-/// 書き込みが `NotWritten` / `AlreadyStored` ならその理由を返し、書き込み前の状態
-/// で続ける。`MaybeWritten` なら `store_did_not_confirm_change` を返し、
-/// `write_session_change` が返した読み直し後の状態で続ける（承認の `MaybeWritten`
-/// の後は、読み直しの後にも `ack` を送らない）。
+/// 発行して反映する。読み込み前は状態を変えずに `SessionNotReady` を返す。対象が
+/// 無ければ `SessionNotFound`、書き込みの失敗は `session_write_failure` が
+/// `SessionFailure` に写す（`MaybeWritten` の後は、`write_session_change` が返した
+/// 読み直し後の状態で続ける。承認の `MaybeWritten` の後は、読み直しの後にも `ack` を
+/// 送らない）。
 fn apply_decision(
   state: State,
-  reply: Subject(Result(Nil, String)),
+  reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
   token: String,
   decide: fn(engine.Engine, String, Int) ->
@@ -1308,13 +1376,13 @@ fn apply_decision(
   case state.accounts {
     Loading(..) -> {
       log_session_failure(change, target, accounts_not_loaded)
-      process.send(reply, Error(accounts_not_loaded))
+      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
       actor.continue(state)
     }
     Ready ->
       case decide(state.engine, token, now) {
         Error(reason) -> {
-          process.send(reply, Error(reason))
+          process.send(reply, Error(SessionNotFound(reason)))
           actor.continue(state)
         }
         Ok(#(next, response, write)) -> {
@@ -1326,12 +1394,8 @@ fn apply_decision(
               process.send(reply, Ok(Nil))
               actor.continue(State(..published, engine: next))
             }
-            Error(NotWritten(reason)) | Error(AlreadyStored(reason)) -> {
-              process.send(reply, Error(reason))
-              actor.continue(written_state)
-            }
-            Error(MaybeWritten(_reason)) -> {
-              process.send(reply, Error(store_did_not_confirm_change))
+            Error(failure) -> {
+              process.send(reply, Error(session_write_failure(failure)))
               actor.continue(written_state)
             }
           }
@@ -1341,12 +1405,12 @@ fn apply_decision(
 }
 
 /// 読み込み済みのときだけエンジンで取り消し、書き込みが成功したときだけ状態から
-/// セッションを消す。読み込み済みで承認済みでない組なら `SessionNotFound`、
-/// 読み込み前（組に関わらず）か書き込みが成功しなかったときは `NotAnswered` を
-/// 返す。
+/// セッションを消す。読み込み前は `SessionNotReady`、読み込み済みで承認済みでない
+/// 組なら `SessionNotFound`、書き込みの失敗は `session_write_failure` が
+/// `SessionFailure` に写す。
 fn revoke_session(
   state: State,
-  reply: Subject(Result(Nil, RevokeFailure)),
+  reply: Subject(Result(Nil, SessionFailure)),
   signer: String,
   client: String,
 ) -> actor.Next(State, Msg) {
@@ -1354,7 +1418,7 @@ fn revoke_session(
   case state.accounts {
     Loading(..) -> {
       log_session_failure(Revocation, target, accounts_not_loaded)
-      process.send(reply, Error(NotAnswered))
+      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
       actor.continue(state)
     }
     Ready ->
@@ -1371,8 +1435,8 @@ fn revoke_session(
               process.send(reply, Ok(Nil))
               actor.continue(State(..written_state, engine: next))
             }
-            Error(_reason) -> {
-              process.send(reply, Error(NotAnswered))
+            Error(failure) -> {
+              process.send(reply, Error(session_write_failure(failure)))
               actor.continue(written_state)
             }
           }

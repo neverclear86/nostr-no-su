@@ -169,8 +169,8 @@ pub type Placement {
 
 /// 通知や理由の囲みの色。
 pub type Tone {
-  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウントの
-  /// 一覧を得られない）。
+  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウント、
+  /// 承認待ち、セッションの一覧を得られない）。
   Neutral
   /// 求めた操作が反映された結果（接続の承認）。
   Success
@@ -743,6 +743,13 @@ pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
   html.div([attribute.class(alert_class(tone))], [html.span([], content)])
 }
 
+/// フォームの上に出す理由の囲み。`role="alert"` で伝え、色を `tone` にする。
+pub fn reason_alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
+  html.div([attribute.role("alert"), attribute.class(alert_class(tone))], [
+    html.span([], content),
+  ])
+}
+
 /// フォームの上に出す失敗の理由。無ければ何も出さない。`lead` は、英語のまま届いた理由の
 /// 前に置く前置き。
 pub fn error_message(
@@ -753,10 +760,7 @@ pub fn error_message(
   case error {
     None -> element.none()
     Some(reason) ->
-      html.div(
-        [attribute.role("alert"), attribute.class(alert_class(Failure))],
-        [html.span([], reason_content(language, lead, reason))],
-      )
+      reason_alert(Failure, reason_content(language, lead, reason))
   }
 }
 

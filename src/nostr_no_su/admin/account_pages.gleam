@@ -20,10 +20,11 @@ import nostr_no_su/admin/view
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
 /// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
-/// 開き直す。
+/// 開き直す。`label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
   theme: view.Theme,
+  label: String,
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
@@ -46,10 +47,7 @@ pub fn new_account_page(
               text(i18n.PrivateKeyNsec),
               view.secret_input(dashboard.nsec_field, "new-password"),
             ),
-            view.labelled(
-              text(i18n.Label),
-              label_input("", Some(dashboard.max_label_code_points)),
-            ),
+            label_fieldset(language, label),
           ],
           text(i18n.Register),
           view.Primary,
@@ -73,18 +71,33 @@ pub fn new_account_page(
   )
 }
 
+/// 生成した鍵の登録に失敗して確認ページを再描画する理由。
+pub type GeneratedKeyProblem {
+  /// ラベルが規則に反した（400）。
+  InvalidLabel(i18n.Message)
+  /// バンカーが登録を反映しなかった（409）。英語のまま届いた理由を持つ。
+  NotApplied(String)
+  /// バンカーが今は登録を受け付けられない（503）。英語のまま届いた理由を持つ。
+  NotAccepted(String)
+  /// 登録が反映されたか分からない（202）。確かめられなかった原因の文言を持つ。
+  NotConfirmed(i18n.Message)
+}
+
 /// 生成した鍵の確認ページ。生成した nsec を表示する唯一のページで、ここではまだ
-/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`error` は、生成した鍵の
-/// 登録でラベルが規則に反したときに再描画する理由。
+/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`label` は欄に入れる値
+/// （生成の直後は空、ラベルが規則に反するかバンカーが登録に失敗して再描画するときは
+/// 送られた値）。`problem` は再描画の理由。
 pub fn generated_key_page(
   language: Language,
   theme: view.Theme,
   nsec: String,
-  error: Option(i18n.Message),
+  label: String,
+  problem: Option(GeneratedKeyProblem),
 ) -> String {
   let text = i18n.text(language, _)
   view.page(language, theme, i18n.GeneratedKey, view.Narrow, view.NoSwitch, [
-    view.error_message(language, None, option.map(error, i18n.Translated)),
+    option.map(problem, problem_alert(language, _))
+      |> option.unwrap(element.none()),
     view.card([
       view.warning(emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice)),
       view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
@@ -92,10 +105,7 @@ pub fn generated_key_page(
         view.segments_path(dashboard.register_generated_segments),
         [
           view.hidden_input(dashboard.nsec_field, nsec),
-          view.labelled(
-            text(i18n.Label),
-            label_input("", Some(dashboard.max_label_code_points)),
-          ),
+          label_fieldset(language, label),
         ],
         text(i18n.RegisterThisKey),
         view.Primary,
@@ -103,6 +113,47 @@ pub fn generated_key_page(
       ),
     ]),
     view.back_link(language),
+  ])
+}
+
+/// 確認ページのカードの上に出す、再描画の理由の囲み。
+fn problem_alert(
+  language: Language,
+  problem: GeneratedKeyProblem,
+) -> Element(msg) {
+  case problem {
+    InvalidLabel(reason) ->
+      view.error_message(language, None, Some(i18n.Translated(reason)))
+    NotApplied(reason) ->
+      view.error_message(
+        language,
+        Some(i18n.CouldNotRegister),
+        Some(i18n.Untranslated(reason)),
+      )
+    NotAccepted(reason) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotAccepted,
+        i18n.Untranslated(reason),
+      )
+    NotConfirmed(cause) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotConfirmed,
+        i18n.Translated(cause),
+      )
+  }
+}
+
+/// 次の操作の案内の文に理由を続けた、`Warning` の囲み。
+fn guided_warning(
+  language: Language,
+  guide: i18n.Message,
+  reason: i18n.Reason,
+) -> Element(msg) {
+  view.reason_alert(view.Warning, [
+    html.text(i18n.text(language, guide) <> i18n.sentence_gap(language)),
+    ..view.reason_content(language, None, reason)
   ])
 }
 
@@ -141,16 +192,18 @@ pub fn registered_page(
 }
 
 /// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
-/// ラベルの編集フォームには、利用者の入力ではなく一覧から得た保存済みのラベルを入れる。
-/// 送信のボタンの重さは操作ごとに決める（ラベルの保存は主操作、secret の作り直しと
-/// 秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、見出しとリンクの文言
-/// （`dashboard.account_action_title`）とは別に持つ。テーマか言語を切り替えた後は、
-/// この操作のページを GET で開き直す。
+/// ラベルの編集フォームの欄には、GET では一覧から得た保存済みのラベルを、入力の誤りか
+/// 409 で再描画するときは送られた値（`label`）を入れる。カードの上の `account_summary`
+/// は保存済みのラベルのままにする。送信のボタンの重さは操作ごとに決める（ラベルの保存は
+/// 主操作、secret の作り直しと秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、
+/// 見出しとリンクの文言（`dashboard.account_action_title`）とは別に持つ。テーマか言語を
+/// 切り替えた後は、この操作のページを GET で開き直す。
 pub fn account_action_page(
   language: Language,
   theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
+  label: Option(String),
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
@@ -160,7 +213,7 @@ pub fn account_action_page(
       element.none(),
       view.post_form(
         path,
-        [view.labelled(text(i18n.Label), label_input(row.label, None))],
+        [label_fieldset(language, option.unwrap(label, row.label))],
         text(i18n.Save),
         view.Primary,
         view.InForm,
@@ -293,19 +346,33 @@ fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
-/// ラベルの入力欄。`maxlength` は新しく入力する欄にだけ付ける。保存済みのラベルは
-/// UTF-16 で上限を超えうるので、編集の欄に付けると 1 文字の編集で送信できなくなる。
-fn label_input(value: String, maxlength: Option(Int)) -> Element(msg) {
-  let limit = case maxlength {
-    Some(limit) -> [attribute.maxlength(limit)]
-    None -> []
-  }
-  html.input([
-    attribute.type_("text"),
-    attribute.name(dashboard.label_field),
-    attribute.autocomplete("off"),
-    attribute.default_value(value),
-    attribute.class("input w-full border-base-content/60"),
-    ..limit
+/// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
+const label_hint_id = "label-hint"
+
+/// ラベルの見出し、入力欄、上限の案内をまとめた囲み。3 つのフォーム（登録画面、生成した
+/// 鍵の確認、編集）のどれでも必須にする。
+fn label_fieldset(language: Language, value: String) -> Element(msg) {
+  let caption = i18n.text(language, i18n.Label)
+  html.div([attribute.class("fieldset")], [
+    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    html.input([
+      attribute.type_("text"),
+      attribute.name(dashboard.label_field),
+      attribute.autocomplete("off"),
+      attribute.default_value(value),
+      attribute.required(True),
+      attribute.class("input w-full border-base-content/60"),
+      attribute.aria_label(caption),
+      attribute.aria_describedby(label_hint_id),
+    ]),
+    html.p(
+      [attribute.id(label_hint_id), attribute.class("text-base-content/70")],
+      [
+        html.text(i18n.text(
+          language,
+          i18n.LabelHint(max: dashboard.max_label_code_points),
+        )),
+      ],
+    ),
   ])
 }

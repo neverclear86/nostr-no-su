@@ -47,17 +47,18 @@ flowchart LR
 ```
 
 監視とバンカーはリレーへの接続を共有しない。
-`relay.nsec.app` のように kind 24133 以外の購読を拒否するリレーをバンカー専用に使えるようにするためで、`RELAY_URL` と `BUNKER_RELAY_URL` は別々に設定する。
+`relay.nsec.app` のように kind 24133 以外の購読を拒否するリレーをバンカー専用に使えるようにするためで、`relays` テーブルの行はリレーごとに用途（監視、バンカー）を持つ。
 
 管理 UI は他のどの部分にも依存しない。
 表示する状態は名前付きアクターへの問い合わせで取るので、UI が再起動しても問い合わせ先が再起動しても、配線をやり直す必要がない。
-問い合わせが失敗したときはその項目だけを、リレーは「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）、承認待ちとセッションは空の一覧として描画し、ページ全体は失敗させない。
+問い合わせが失敗したときはその項目だけを、リレーは「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）として描画し、アカウント・承認待ち・セッションは一覧の代わりにその理由を出す。ページ全体は失敗させない。
 問い合わせの返信先は OTP の `gen_server:call` と同じく monitor の alias なので、タイムアウトの後に届いた応答（接続 secret を含みうる）はランタイムが捨て、UI のハンドラーのメールボックスにもログにも残らない。
 
 ## スーパービジョンツリー
 
 常駐するプロセスはすべて `static_supervisor` の下に置く。
-ツリーは起動時に 1 度だけ組み、実行中に子を足すことはしない。
+ツリーの形は起動時に 1 度だけ組む。
+リレーの接続だけは例外で、用途（監視・バンカー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
 ツリーの外で動くプロセスが 2 種類ある。
 プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスである。
@@ -66,39 +67,64 @@ flowchart LR
 
 ```
 root (one_for_one, 3/60)
+├── relay_list   (worker)              実行時のリレーの一覧と connections の子の起動・停止
 ├── plugins      (one_for_one, 5/10)   プラグインごとのランナー
 │   ├── children(<plugin>) (one_for_one, 5/10, Temporary)  子仕様を持つプラグインだけ
 │   │   └── <プラグインが申告した子プロセス>
 │   └── runner(<plugin>)   (worker, Permanent)
-├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次にリレーごとの接続
+├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次に connections
 │   ├── account_pool      (pog, supervisor)  アカウントストアの接続プール
 │   ├── account_lock_pool (pog, supervisor)  同じ DB に 1 インスタンスだけを許す advisory lock 専用の 1 本のプール
 │   ├── bunker
-│   └── relay_connection × バンカーリレーの数
-├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、リレーごとの接続、再開点の保存
+│   └── connections (factory, 5/10)    バンカーリレーの用途の relay_connection
+│       └── relay_connection × バンカーリレーの数
+├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、connections、再開点の保存
 │   ├── dedup
-│   ├── relay_connection × 監視リレーの数
+│   ├── connections (factory, 5/10)    監視リレーの用途の relay_connection
+│   │   └── relay_connection × 監視リレーの数
 │   └── resume_saver
 └── admin        (mist)                管理 UI の HTTP サーバー
 ```
 
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
 接続は復帰の過程で購読を張り直し publisher を登録し直すので、再起動したアクターが再び生きたソケットに配線される。
-一方、アカウントの変更ではバンカーアクターを再起動しない（再起動するとインメモリのセッションが消える）。
-署名者の集合が変わったら、アクターはバンカーと監視の接続アクターを名前で呼んで購読の張り直しを依頼し、接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
+一方、アカウントの変更ではバンカーアクターを再起動しない（再起動すると接続が落ち、リプレイ防止の `seen` が空になる）。
+署名者の集合が変わったら、アクターは `relay_list` に `ResubscribeAll` を送るだけで、`relay_list` が現在の全接続へ購読の張り直しを依頼し、各接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
 
 バンカーのサブツリーだけは、アクターの前に接続プールを置く。
 pgo はチェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で exit させる。
 プールを先頭に置けば、アクターはプールの登録後にしか起動せず、プールが落ちればアクターも止められてから起動し直すので、未登録のプールを叩く状況が構造上生じない。
-DB の停止や再起動ではプールのプロセスは死なない（pgo が再接続を内部で扱い、クエリーは値で失敗する）ので、プールの再起動に伴ってアクターのセッションが消えるのは、プール自体のバグか外部からの kill のときに限られる。
+DB の停止や再起動ではプールのプロセスは死なない（pgo が再接続を内部で扱い、クエリーは値で失敗する）ので、プールの再起動に伴ってアクターが再起動するのは、プール自体のバグか外部からの kill のときに限られる。
 ロックのプールもアクターの前に置く理由は同じで、`account_pool` の次、`bunker` アクターより前に並べる。
 `rest_for_one` なので、ロックのプールが再起動すると後続のアクターと接続もまとめて再起動し、アクターの初回の読み込みが advisory lock を取り直す（「アカウントの読み込み」の節）。
 
-`plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視が無効な構成でも状態を見せたいからである。
+`plugins` サブツリーがルート直下にあってプラグインのランナーが `one_for_one` で並ぶのは、プラグイン同士が独立で、監視と独立に状態を見せたいからである。
 ルートの子は `plugins` を `monitor` より先に追加する。
 逆順だとディスパッチャーが未登録のランナー名へ送り、起動直後のイベントを取りこぼす。
 `bunker` も `monitor` より先に追加する。
 監視の接続は購読を組み立てるたびにバンカーへ署名者を問い合わせるので、逆順だと最初の問い合わせが名前の登録より先に走り、定義を得られずに再試行を待つ。
+`relay_list` はすべてより先に追加する。
+後だと起動直後に `connections` の factory が送る `Repopulate` が未登録の名前へ送られて捨てられ、初期のリレーが起動されない。
+
+### 実行時のリレーの増減
+
+`relay_list` は用途（監視・バンカー）ごとの接続の一覧を、加えた順に持つ。
+`app.open_relay` / `close_relay` / `change_relay_roles` による一覧の変更と、`connections` の子（`relay_connection`）の起動・停止は、`relay_list` 自身のハンドラーで直列に行う。
+同時に届く変更が重ならず、最後に処理した変更と一覧が一致するようにするためである。
+子を止めるのは `supervisor:terminate_child/2`（`nostr_no_su_ffi` の `terminate_dynamic_child/2`）で、simple_one_for_one のこの関数は子を止めてから仕様ごと消すため、止めた接続は再起動されない。
+
+`connections` は用途ごとの `factory_supervisor` で、`static_supervisor` には無い `start_child` 相当の API を持ち、実行時に子を増減できる。
+`rest_for_one` のサブツリー再起動で `connections` ごと落ちると、simple_one_for_one の性質上、動的な子はすべて消える。
+`connections` は起動のたびに `relay_list` へ `Repopulate` を送り、`relay_list` はその用途の一覧のうち未登録の接続だけを起動し直す。
+
+止めたバンカーの接続は、`relay_connection` の `on_disconnect` を経て `RemovePublisher` が送られ、バンカーの送信先から外れる。
+監視の再開点の対象（次節）は、`app.add_account` がその時点の監視の一覧から求めて渡すため、閉じたリレーは以後の対象から外れる。
+
+起動時の一覧は `relay_list` の初期値としては空で渡す。
+`relays` テーブルの行は、バンカーが読み込みに成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけを足す（不正な URL と用途の無い行は Warning 1 行を出して飛ばす）。
+DB に一度も届いていない間や読み込みが失敗している間は、リレーの接続を新たに開かない（すでに開いている接続は閉じない）。
+
+詳細な決定と既知の窓は `relay_list` のモジュール doc を参照。
 
 ### 再起動の許容回数に頼らない設計
 
@@ -122,7 +148,8 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 DB の障害も同じ考え方で、プロセスの死にしない。
 DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
 pog が写せないエラーで `pog.execute` が例外を投げても、`account_store` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
-したがって DB が落ちていてもルートの許容回数は消費されず、兄弟の監視とプラグインは動き続ける。
+したがって DB が落ちていてもルートの許容回数は消費されず、プロセスは落ちず、プラグインは動き続ける。
+監視とバンカーのリレーの接続は、最初の読み込みが成功した後に開き、その後の DB の障害では閉じない。
 例外は DB のスキーマの版がビルドより新しいときで、待っても直らないのでプロセスを終了する（「アカウントの読み込み」の節）。
 
 ## イベントが流れる経路
@@ -191,14 +218,16 @@ sequenceDiagram
     participant ui as 管理 UI
     participant dedup as dedup
     participant bk as bunker
+    participant list as relay_list
     participant conn as relay_connection（監視）
     participant sock as ソケット（stratus）
 
-    ui->>dedup: AddingAccount(現在時刻)（送るだけ）
+    ui->>dedup: AddingAccount(現在時刻, 監視リレーの URL)（送るだけ）
     ui->>bk: AddAccount
     Note over bk: 書き込みに成功し、<br/>署名者の集合が変わる
-    bk->>conn: Resubscribe
+    bk->>list: ResubscribeAll（送るだけ）
     bk-->>ui: Ok
+    list->>conn: Resubscribe
     conn->>sock: resubscribe
     sock->>bk: GetSigners
     bk-->>sock: 署名者
@@ -208,6 +237,7 @@ sequenceDiagram
 ```
 
 `AddingAccount` を書き込みより前に送るのは、張り直しの `GetSince` より先にディスパッチャーへ届けるためである。
+監視リレーの URL は、その時点で `relay_list` に載っている一覧から `app.add_account` が求めて渡す。
 バンカーの張り直しのコールバックは起動時の読み込みや削除でも呼ばれるので、追加の時刻には使わない。
 
 ## アカウントの読み込み
@@ -255,6 +285,7 @@ DB が起動時に到達可能なら、どの接続も読み込み済みの署�
 記録された版がビルドの最新の版より新しいときは、再試行しても変わらないので、起動処理が組み立てたストアの操作（`nostr_no_su.account_store_operations`）が理由を 1 行出して終了コード 1 で VM を止める。
 版 2 は監視の購読の再開点のテーブル（`monitor_resume`）である。監視はバンカーの署名者が 1 件以上のときだけこのテーブルを読むので、読むのは読み込みが 1 回成功した後になる（「監視の購読」の節）。
 版 3 は承認済みのセッション（`bunker_sessions`）と承認待ち（`bunker_pending`）のテーブルで、読み込みは同じトランザクションでこれらも読む。どれかが読めなければ読み込み全体が失敗する。
+版 4 は登録したリレーのテーブル（`relays`）である。読み込みは同じトランザクションでこれも読み、読み込みが成功するたびに行を `relay_list` へ渡す（「実行時のリレーの増減」の節）。
 
 再試行を名前なしの subject へ予約するのは、名前付き subject へのタイマーが名前宛てになり、再起動した後の同じ名前のアクターに届いて再試行が重複するためである。
 名前なしの subject は pid 宛てなので、アクターが終了するとランタイムがタイマーを取り消す。
@@ -332,6 +363,7 @@ sequenceDiagram
     participant bk as bunker
     participant store as account_store
     participant db as Postgres
+    participant list as relay_list
     participant conn as relay_connection
     participant sock as ソケット（stratus）
 
@@ -344,7 +376,8 @@ sequenceDiagram
         store-->>bk: Ok
         Note over bk: 状態を変える
         opt 署名者の集合が変わった
-            bk->>conn: Resubscribe（送るだけ）
+            bk->>list: ResubscribeAll（送るだけ）
+            list->>conn: Resubscribe
         end
         bk-->>ui: Ok
         conn->>sock: Subscribe
@@ -365,7 +398,7 @@ sequenceDiagram
 
 書き込みはアクターの中で行い、成功したときだけ状態を変える。
 書き込みが期限を過ぎたとき、途中で接続が切れたとき、DB のクライアントが例外を投げたときは、サーバー側でコミットされていることがあるので、メモリを変えずに読み直して合わせる。
-合わせる処理はエンジンを作り直さず、ストアに無い署名者を取り除いて読み込んだアカウントを足すので、残った署名者のセッションは消えない。
+合わせる処理はエンジンを作り直さず、ストアに無い署名者を取り除いて読み込んだアカウントを足す。アカウントを合わせた後に、読み込んだセッションと承認待ちでエンジンのものを置き換える（`engine.restore`）。
 読み直しに失敗したら起動時の読み込みと同じく名前なしの subject へ再試行を予約し、成功するまでの間は変更を拒否する。
 読み込みは 1 本のトランザクションで `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE` を取ってから一覧を読む。
 PostgreSQL は列挙の順に 1 つずつロックを取るので、書き手の順（承認は `bunker_pending` の DELETE の後に `bunker_sessions` へ INSERT する）に合わせ、アカウントの削除（連鎖を含む）が最初に触る `bunker_accounts` を先頭に置く。
@@ -392,17 +425,26 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 | --- | --- | --- |
 | `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ（nsec 入力による登録は 200 の完了ページ） |
 | `NotApplied` | 登録済み・未登録の検査（`require_unregistered` / `require_registered`）、`NotWritten`、`AlreadyStored` | 409 でフォームに理由を出す |
-| `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ |
-| `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ |
+| `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
+| `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
 
 `MaybeApplied` を 409 にしないのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
 アカウント 1 件の操作は変更の前に一覧を引くので、一覧に無い署名者（削除済みの署名者への再送など）はバンカーに届く前に 404 になる。
 `require_registered` の拒否（409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 
-セッションの取り消し（`POST /sessions/revoke`）は、結果を型 `bunker.RevokeFailure` で受け取る。
-取り消せたらダッシュボードへ 303 で戻し、承認済みのセッションに無い組（`SessionNotFound`）は承認・拒否の失敗と同じ 404 の通知ページ、バンカーの無応答（`NotAnswered`。読み込み前とストアへの書き込みの失敗も含む。型を分けるのは #186）は 503 の「変更を確認できませんでした」の通知ページにする。
-無応答をアカウントの変更と違って 202 にしないのは、取り消しは再送しても害が無い（反映済みなら 404、書き込みの結果が曖昧だったときは再送で消し直す）からである。
+承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）とセッションの取り消し（`POST /sessions/revoke`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。
+
+| 構築子 | 管理 UI の応答 |
+| --- | --- |
+| `SessionNotFound` | 404（対象が無い。不明、失効、処理済み、承認済みでない組） |
+| `SessionNotApplied` | 409（書き込まれていないことが確定した） |
+| `SessionNotReady` | 503 の「バンカーを利用できません」（読み込み・読み直しの前） |
+| `SessionMaybeApplied` | 503 の「変更を確認できませんでした」（反映されたか分からない） |
+
+`SessionNotApplied` を `SessionNotReady` と分けるのは、`NotReady` は時間をおけば同じ操作を受け付けうる一時的な状態（一覧を得られないときの 503 と揃えている）だが、`SessionNotApplied` は書き込まれていないことが確定しており、やり直してよいからである。アカウントの変更の `NotApplied` / `NotReady` と同じ理由による。
+`SessionMaybeApplied` をアカウントの変更と違って 202 にしないのは、承認・拒否・取り消しは再送しても害が無い（反映済みなら 404。書き込みの結果が曖昧だったときはバンカーが DB を読み直してセッションと承認待ちを揃えるので、書けていれば再送は 404、書けていなければ再送で受け付けられる）からである。
+承認ページの GET と承認・拒否の POST の前の照合も、承認待ちの一覧を得られなければ `SessionNotReady` と同じ 503 にする（取り消しは承認待ちの一覧を引かない）。
 
 プラグインの再有効化（`POST /plugins/reenable`）は、結果を型 `admin.ReenableFailure` で受け取る。
 成功は 303、名前に一致するプラグインが無い（`PluginNotFound`）は 404、ランナーの無応答（`PluginNotAnswered`）は 503 にする。
@@ -434,14 +476,16 @@ sequenceDiagram
         ui-->>browser: 303 でダッシュボードへ（nsec を描画しない）
     else nsec 入力による登録に成功
         ui-->>browser: 完了ページ（nsec を 1 回表示）
-    else 失敗
+    else nsec 入力による登録に失敗
         ui-->>browser: 409 / 503 / 202（nsec を描画しない）
+    else 生成した鍵の登録に失敗
+        ui-->>browser: 409 / 503 / 202（送られた nsec の確認ページを理由付きで返す）
     end
 ```
 
-生成と登録を分けるのは、確認ページの再読み込みで POST が再送されても何も登録されないようにするためである。
+生成と登録を分けるのは、生成の確認ページ（`POST /accounts/generate` の応答）の再読み込みで POST が再送されても何も登録されないようにするためである。
 1 回の POST で生成と登録を行うと、再送のたびに別の鍵のアカウントが登録される。
-生成した鍵の登録でラベルだけが規則に反したときは、送られた nsec の確認ページを理由付きで返し、生成した鍵を失わないようにする（nsec が不正なら登録画面に戻す）。
+生成した鍵の登録でラベルが規則に反したときと、バンカーが登録に失敗したとき（409 / 503 / 202）は、送られた nsec の確認ページを理由付きで返し、生成した鍵を失わないようにする（nsec が不正なら登録画面に戻す）。
 
 ```mermaid
 sequenceDiagram
@@ -507,7 +551,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
 | GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
 
-承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404 にする。
+承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
 承認、拒否、セッションの取り消しは、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
 再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
@@ -588,13 +632,15 @@ nostr-no-su/
 │       ├── bunker/rpc.gleam      JSON-RPC コーデック
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
-│       ├── bunker/account_store.gleam アカウント、セッション、承認待ちを Postgres に保存するストア
+│       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
 │       ├── nostr/nip19.gleam     NIP-19 の npub / nsec の符号化と復号
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
+│       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止
+│       ├── relay_store.gleam     リレーの一覧（relays）の SQL
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH
 │       ├── crypto/bip340.gleam   BIP-340 Schnorr 署名と検証
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
@@ -662,8 +708,6 @@ nostr-no-su/
 
 | 変数 | 読み手 |
 | --- | --- |
-| `RELAY_URL` | 監視 |
-| `BUNKER_RELAY_URL` | バンカー |
 | `DATABASE_URL`（`_FILE`） | バンカー（アカウントストア） |
 | `ACCOUNT_MASTER_KEY`（`_FILE`） | バンカー（アカウントの暗号化） |
 | `PLUGIN_DIR` | プラグインローダー |
