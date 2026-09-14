@@ -79,18 +79,18 @@ pub const max_perms_bytes = 512
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
   Engine(
-    // 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
+    /// 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
     accounts: Dict(String, #(Account, ConnectionSecret)),
-    // #(署名者, クライアント) -> Session
+    /// #(署名者, クライアント) -> Session
     sessions: Dict(#(String, String), Session),
-    // リプレイ防止用: 処理済みのリクエストイベント id
+    /// リプレイ防止用: 処理済みのリクエストイベント id
     seen: window.Window,
-    // 承認待ちの接続要求: token -> Pending
+    /// 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
-    // token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
+    /// token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
-    // #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
-    // 間も `touch` の間引きに使う。
+    /// #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
+    /// 間も `touch` の間引きに使う。
     touch_attempts: Dict(#(String, String), Int),
   )
 }
@@ -1005,66 +1005,54 @@ fn denial(permission: String) -> String {
   "permission denied: " <> permission
 }
 
+/// 実行の結果を、同じ id の成功応答か失敗応答にする。
+fn response_of(id: String, outcome: Result(String, String)) -> rpc.Response {
+  case outcome {
+    Ok(value) -> rpc.ok(id, value)
+    Error(reason) -> rpc.error(id, reason)
+  }
+}
+
 /// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。`perms` が
-/// `sign_event` か `sign_event:<kind>` を含むときだけ署名する。
+/// `sign_event` か `sign_event:<kind>` を含むときだけ署名する。別の pubkey を
+/// 指すドラフトと、NIP-46 の応答と同じ kind（24133）のドラフトは、perms で
+/// 宣言されていても拒否する。空の pubkey は指定無しとして扱う。
 fn sign_event(
   account: Account,
   perms: String,
   request: rpc.Request,
   now: Int,
 ) -> rpc.Response {
-  case request.params {
-    [draft_json, ..] -> {
-      let signed = {
-        use draft <- result.try(
-          rpc.decode_draft(draft_json)
-          |> result.replace_error("invalid event draft"),
-        )
-        let permission = "sign_event:" <> int.to_string(draft.kind)
-        let permitted = grants(perms, "sign_event") || grants(perms, permission)
-        use <- bool.guard(!permitted, Error(denial(permission)))
-        use unsigned <- result.try(unsigned_event(
-          draft,
-          pubkey_hex(account),
-          now,
-        ))
-        event.finalize(unsigned, privkey(account))
-        |> result.replace_error("failed to sign event")
-      }
-      case signed {
-        Ok(signed) -> rpc.ok(request.id, json.to_string(event.to_json(signed)))
-        Error(reason) -> rpc.error(request.id, reason)
-      }
-    }
-    [] -> rpc.error(request.id, "sign_event requires an event draft")
-  }
-}
-
-/// ドラフトを署名者の未署名イベントにする。別の pubkey を指すドラフトと、
-/// NIP-46 の応答と同じ kind（24133）のドラフトは、perms で宣言されていても
-/// 拒否する。空の pubkey は指定無しとして扱う。
-fn unsigned_event(
-  draft: rpc.EventDraft,
-  signer: String,
-  now: Int,
-) -> Result(Event, String) {
-  use <- bool.guard(
-    points_elsewhere(draft.pubkey, signer),
-    Error("event draft pubkey does not match the signer"),
-  )
-  use <- bool.guard(
-    draft.kind == event.nip46_kind,
-    Error("refusing to sign a kind 24133 event"),
-  )
-  Ok(Event(
-    id: "",
-    pubkey: signer,
-    created_at: option.unwrap(draft.created_at, now),
-    kind: draft.kind,
-    tags: draft.tags,
-    content: draft.content,
-    sig: "",
-  ))
+  response_of(request.id, {
+    use draft_json <- result.try(case request.params {
+      [draft_json, ..] -> Ok(draft_json)
+      [] -> Error("sign_event requires an event draft")
+    })
+    use draft <- result.try(
+      rpc.decode_draft(draft_json)
+      |> result.replace_error("invalid event draft"),
+    )
+    let permission = "sign_event:" <> int.to_string(draft.kind)
+    let permitted = grants(perms, "sign_event") || grants(perms, permission)
+    use <- bool.guard(!permitted, Error(denial(permission)))
+    use <- bool.guard(
+      points_elsewhere(draft.pubkey, pubkey_hex(account)),
+      Error("event draft pubkey does not match the signer"),
+    )
+    use <- bool.guard(
+      draft.kind == event.nip46_kind,
+      Error("refusing to sign a kind 24133 event"),
+    )
+    sign_as(
+      account,
+      draft.kind,
+      draft.tags,
+      draft.content,
+      option.unwrap(draft.created_at, now),
+    )
+    |> result.replace_error("failed to sign event")
+    |> result.map(fn(signed) { json.to_string(event.to_json(signed)) })
+  })
 }
 
 /// 第三者宛のテキストをアカウントの鍵で暗号化または復号する。
@@ -1073,27 +1061,45 @@ fn nip44_op(
   request: rpc.Request,
   encrypting: Bool,
 ) -> rpc.Response {
-  case request.params {
-    [third_party_hex, text, ..] ->
-      case hex.decode(third_party_hex) {
-        Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
-        Ok(third_party) ->
-          case nip44.conversation_key(privkey(account), third_party) {
-            Error(_) -> rpc.error(request.id, "invalid third-party pubkey")
-            Ok(key) -> {
-              let outcome = case encrypting {
-                True -> nip44.encrypt(text, key)
-                False -> nip44.decrypt(text, key)
-              }
-              case outcome {
-                Ok(result) -> rpc.ok(request.id, result)
-                Error(_) -> rpc.error(request.id, "nip44 operation failed")
-              }
-            }
-          }
-      }
-    _ -> rpc.error(request.id, "nip44 requires [pubkey, text]")
-  }
+  response_of(request.id, {
+    use #(third_party_hex, text) <- result.try(case request.params {
+      [third_party_hex, text, ..] -> Ok(#(third_party_hex, text))
+      _ -> Error("nip44 requires [pubkey, text]")
+    })
+    use third_party <- result.try(
+      hex.decode(third_party_hex)
+      |> result.replace_error("invalid third-party pubkey"),
+    )
+    use key <- result.try(
+      nip44.conversation_key(privkey(account), third_party)
+      |> result.replace_error("invalid third-party pubkey"),
+    )
+    case encrypting {
+      True -> nip44.encrypt(text, key)
+      False -> nip44.decrypt(text, key)
+    }
+    |> result.replace_error("nip44 operation failed")
+  })
+}
+
+/// アカウントの鍵で署名したイベント。`id` と `sig` は `event.finalize` が埋める。
+fn sign_as(
+  account: Account,
+  kind: Int,
+  tags: List(List(String)),
+  content: String,
+  created_at: Int,
+) -> Result(Event, Nil) {
+  Event(
+    id: "",
+    pubkey: pubkey_hex(account),
+    created_at:,
+    kind:,
+    tags:,
+    content:,
+    sig: "",
+  )
+  |> event.finalize(privkey(account))
 }
 
 /// 応答をクライアント宛に暗号化し、kind 24133 イベントとして署名する。
@@ -1104,23 +1110,10 @@ fn build_reply(
   response: rpc.Response,
   now: Int,
 ) -> Result(Event, String) {
-  case nip44.encrypt(rpc.encode_response(response), conversation_key) {
-    Error(_) -> Error("failed to encrypt response")
-    Ok(content) -> {
-      let unsigned =
-        Event(
-          id: "",
-          pubkey: pubkey_hex(account),
-          created_at: now,
-          kind: event.nip46_kind,
-          tags: [["p", client_pk_hex]],
-          content: content,
-          sig: "",
-        )
-      case event.finalize(unsigned, privkey(account)) {
-        Ok(signed) -> Ok(signed)
-        Error(_) -> Error("failed to sign response")
-      }
-    }
-  }
+  use content <- result.try(
+    nip44.encrypt(rpc.encode_response(response), conversation_key)
+    |> result.replace_error("failed to encrypt response"),
+  )
+  sign_as(account, event.nip46_kind, [["p", client_pk_hex]], content, now)
+  |> result.replace_error("failed to sign response")
 }
