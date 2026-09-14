@@ -282,7 +282,7 @@ fn section_heading(
   heading_row(i18n.text(language, title), add_link)
 }
 
-/// 節の見出しと、その右（狭い幅では下）に並べる要素の行。
+/// 節の見出しと、それに並べる要素の行。要素は幅が余れば右に寄る（狭い幅では下に落ちる）。
 fn heading_row(title: String, trailing: Element(msg)) -> Element(msg) {
   html.div(
     [attribute.class("flex flex-wrap items-center justify-between gap-2")],
@@ -566,7 +566,7 @@ fn pending_content(
       #(text(i18n.Client), view.Code(pending.client)),
       #(
         text(i18n.ExpiresIn),
-        expires_in_value(pending.expires_in_seconds, language),
+        expires_in_value(language, pending.expires_in_seconds),
       ),
       #(text(i18n.SecretLabel), secret_value),
       #(text(i18n.Permissions), perms_value(language, pending.perms)),
@@ -577,7 +577,7 @@ fn pending_content(
 
 /// 失効までの残り秒の値。残りが 60 秒未満なら、承認しても失敗しうることを示す警告の
 /// 体裁にする。
-fn expires_in_value(seconds: Int, language: Language) -> view.Value {
+fn expires_in_value(language: Language, seconds: Int) -> view.Value {
   let text = i18n.text(language, i18n.ExpiresInSeconds(seconds))
   case seconds < 60 {
     True -> view.Flag(text)
