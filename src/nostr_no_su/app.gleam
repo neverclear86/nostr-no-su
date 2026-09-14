@@ -649,8 +649,9 @@ pub fn reenable_plugin(
 }
 
 /// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を
-/// 読めなければその理由を返す。用途ごとの接続の状態は `relay_statuses` で並行に
-/// 問い合わせ、締め切りまでに答えなかった接続は `dashboard.Unanswered` にする。
+/// 読めなければその理由を返す。DB の行の URL に対応する接続の名前を集めて
+/// `relay_statuses` で並行に問い合わせ、締め切りまでに答えなかった接続は
+/// `dashboard.Unanswered` にする。
 ///
 /// `relay_list` の応答（15 秒）と DB の読み込み（3 秒）の待ちは締め切りの外で、
 /// 最悪 18 秒になる。どちらもローカルのアクターと DB の待ちで、リレーの無応答では
@@ -664,10 +665,11 @@ pub fn relay_rows(
     |> result.replace_error("relay list did not answer"),
   )
   use relays <- result.map(registered_relays(spec))
+  let relay_urls = list.map(relays, fn(relay) { relay.url })
   let names =
-    list.flat_map(entries, fn(entry) {
-      option.values([entry.monitor, entry.bunker])
-    })
+    entries
+    |> list.filter(fn(entry) { list.contains(relay_urls, entry.url) })
+    |> list.flat_map(fn(entry) { option.values([entry.monitor, entry.bunker]) })
   let statuses = relay_statuses(names, deadline)
   let status = fn(name) { list.key_find(statuses, name) |> result.unwrap(None) }
   merge_relay_rows(relays, entries, status)

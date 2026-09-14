@@ -656,7 +656,8 @@ nostr-no-su/
 │       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
-│       └── time.gleam            現在時刻（FFI）
+│       ├── time.gleam            現在時刻（壁時計・単調時計、FFI）
+│       └── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボードが使う）
 │
 ├── test/                         本体のテスト（gleeunit と qcheck）
 │   ├── support/                  テスト用の fixture
