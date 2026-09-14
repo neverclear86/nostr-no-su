@@ -776,7 +776,7 @@ fn show_new_account(
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Get, language, theme)
-  account_pages.new_account_page(language, theme, None)
+  account_pages.new_account_page(language, theme, "", None)
   |> wisp.html_response(200)
 }
 
@@ -791,7 +791,7 @@ fn generate_account(
   use <- require_method(request, http.Post, language, theme)
   account.generate(crypto.strong_random_bytes)
   |> account.nsec
-  |> account_pages.generated_key_page(language, theme, _, None)
+  |> account_pages.generated_key_page(language, theme, _, "", None)
   |> wisp.html_response(200)
 }
 
@@ -802,10 +802,11 @@ fn import_account(
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  let reject_label = fn(_account, reason) {
+  let reject_label = fn(_account, label, reason) {
     account_pages.new_account_page(
       language,
       theme,
+      label,
       Some(i18n.Translated(reason)),
     )
   }
@@ -835,11 +836,12 @@ fn register_generated_account(
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  let reject_label = fn(generated, reason) {
+  let reject_label = fn(generated, label, reason) {
     account_pages.generated_key_page(
       language,
       theme,
       account.nsec(generated),
+      label,
       Some(reason),
     )
   }
@@ -856,35 +858,45 @@ fn register_generated_account(
 /// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 で登録画面を
 /// 返し、ラベルだけが不正なら 400 で `reject_label` が描画するページを返す。バンカーの
 /// 失敗は `change_failure_response` に渡す。登録できたときだけ `on_success` を呼ぶので、
-/// 反映されたか分からないときに nsec を描画する経路は無い。
+/// 反映されたか分からないときに nsec を描画する経路は無い。どの失敗でも、ラベルの欄には
+/// 送られた値から制御文字を除いた値を入れる。nsec は反射しない。
 fn register(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
-  reject_label: fn(Account, i18n.Message) -> String,
+  reject_label: fn(Account, String, i18n.Message) -> String,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
+  let raw_label = form_value(form, dashboard.label_field)
+  let echoed_label = without_control_characters(raw_label)
   case parse_private_key(form) {
     Error(reason) ->
       account_pages.new_account_page(
         language,
         theme,
+        echoed_label,
         Some(i18n.Translated(reason)),
       )
       |> wisp.html_response(400)
     Ok(account) ->
-      case parse_label(form_value(form, dashboard.label_field)) {
+      case parse_label(raw_label) {
         Error(reason) ->
-          reject_label(account, reason) |> wisp.html_response(400)
+          reject_label(account, echoed_label, reason)
+          |> wisp.html_response(400)
         Ok(label) ->
           case context.add_account(account, label) {
             Ok(Nil) -> on_success(account, label)
             Error(failure) ->
               change_failure_response(language, theme, failure, fn(reason) {
-                account_pages.new_account_page(language, theme, Some(reason))
+                account_pages.new_account_page(
+                  language,
+                  theme,
+                  echoed_label,
+                  Some(reason),
+                )
               })
           }
       }
@@ -930,6 +942,15 @@ fn parse_label(raw: String) -> Result(String, i18n.Message) {
   }
 }
 
+/// 入力の誤りで戻したフォームの欄に入れる値を作る。制御文字は欄で見えず、残すと同じに
+/// 見える欄を送り直して同じ 400 を繰り返すので除く。前後の空白は利用者が打った値として
+/// 残す（サーバーが trim するので変える必要が無い）。
+fn without_control_characters(raw: String) -> String {
+  string.to_utf_codepoints(raw)
+  |> list.filter(fn(code_point) { !is_control_character(code_point) })
+  |> string.from_utf_codepoints
+}
+
 /// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は U+0085 や
 /// 末尾の `\n` を黙って消すので、`parse_label` は trim の前の値をこれで検査する。
 fn is_control_character(code_point: UtfCodepoint) -> Bool {
@@ -950,7 +971,14 @@ fn account_action(
   use row <- with_account(context, language, theme, signer)
   case request.method, action {
     http.Get, _ ->
-      account_pages.account_action_page(language, theme, row, action, None)
+      account_pages.account_action_page(
+        language,
+        theme,
+        row,
+        action,
+        None,
+        None,
+      )
       |> wisp.html_response(200)
     http.Post, dashboard.EditLabel ->
       update_label(context, request, language, theme, row)
@@ -960,6 +988,7 @@ fn account_action(
         theme,
         row,
         action,
+        None,
         context.rotate_secret(row.signer),
       )
     http.Post, dashboard.DeleteAccount ->
@@ -968,6 +997,7 @@ fn account_action(
         theme,
         row,
         action,
+        None,
         context.remove_account(row.signer),
       )
     http.Post, dashboard.RevealPrivateKey ->
@@ -1001,7 +1031,8 @@ fn with_account(
   }
 }
 
-/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。
+/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。400 と 409 の
+/// 編集のページの欄には送られた値を入れる。
 fn update_label(
   context: Context,
   request: Request,
@@ -1010,13 +1041,16 @@ fn update_label(
   row: dashboard.AccountRow,
 ) -> Response {
   use form <- wisp.require_form(request)
-  case parse_label(form_value(form, dashboard.label_field)) {
+  let raw_label = form_value(form, dashboard.label_field)
+  let echoed_label = Some(without_control_characters(raw_label))
+  case parse_label(raw_label) {
     Error(reason) ->
       account_pages.account_action_page(
         language,
         theme,
         row,
         dashboard.EditLabel,
+        echoed_label,
         Some(i18n.Translated(reason)),
       )
       |> wisp.html_response(400)
@@ -1026,18 +1060,21 @@ fn update_label(
         theme,
         row,
         dashboard.EditLabel,
+        echoed_label,
         context.update_label(row.signer, label),
       )
   }
 }
 
 /// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
-/// 失敗なら `change_failure_response` に渡す。
+/// 失敗なら `change_failure_response` に渡す。`label` は失敗を再描画するときの欄の値
+/// （`None` は保存済みのラベル）。
 fn apply_account_change(
   language: Language,
   theme: view.Theme,
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
+  label: Option(String),
   outcome: Result(Nil, ChangeFailure),
 ) -> Response {
   case outcome {
@@ -1049,6 +1086,7 @@ fn apply_account_change(
           theme,
           row,
           action,
+          label,
           Some(reason),
         )
       })
@@ -1157,6 +1195,7 @@ fn reveal_private_key(
         theme,
         row,
         dashboard.RevealPrivateKey,
+        None,
         Some(i18n.Translated(i18n.IncorrectPassword)),
       )
       |> wisp.html_response(403)

@@ -27,7 +27,8 @@ fn row(label: String) -> dashboard.AccountRow {
   )
 }
 
-/// ラベルは、完了ページ、再表示のページ、操作のページのどれでもエスケープして出す。
+/// ラベルは、完了ページ、再表示のページ、操作のページ、入力の誤りで戻したフォームの
+/// 欄のどれでもエスケープして出す。
 pub fn account_pages_escape_the_label_test() {
   let pages = [
     account_pages.registered_page(
@@ -43,11 +44,28 @@ pub fn account_pages_escape_the_label_test() {
       row(hostile),
       "nsec1example",
     ),
+    account_pages.new_account_page(i18n.English, view.System, hostile, None),
+    account_pages.generated_key_page(
+      i18n.English,
+      view.System,
+      "nsec1example",
+      hostile,
+      None,
+    ),
+    account_pages.account_action_page(
+      i18n.English,
+      view.System,
+      row("main"),
+      dashboard.EditLabel,
+      Some(hostile),
+      None,
+    ),
     ..list.map(account_actions.all, account_pages.account_action_page(
       i18n.English,
       view.System,
       row(hostile),
       _,
+      None,
       None,
     ))
   ]
@@ -61,12 +79,13 @@ pub fn account_pages_escape_the_label_test() {
 pub fn error_reasons_are_escaped_test() {
   let reason = Some(i18n.Untranslated(hostile))
   let pages = [
-    account_pages.new_account_page(i18n.English, view.System, reason),
+    account_pages.new_account_page(i18n.English, view.System, "", reason),
     account_pages.account_action_page(
       i18n.English,
       view.System,
       row("main"),
       dashboard.EditLabel,
+      None,
       reason,
     ),
   ]
@@ -78,6 +97,34 @@ pub fn error_reasons_are_escaped_test() {
       <> "</span></span></div>",
   )
   assert !string.contains(page, hostile)
+}
+
+/// 操作のページの欄は、`label` が `None` なら一覧から得た保存済みのラベルを、`Some` なら
+/// 渡した値を入れる。カードの上の要約はどちらでも保存済みのまま。
+pub fn edit_label_page_uses_the_given_label_test() {
+  let saved = row("saved")
+  let unset =
+    account_pages.account_action_page(
+      i18n.English,
+      view.System,
+      saved,
+      dashboard.EditLabel,
+      None,
+      None,
+    )
+  assert string.contains(unset, "value=\"saved\"")
+  assert string.contains(unset, "<dd class=\"break-words\">saved</dd>")
+  let overridden =
+    account_pages.account_action_page(
+      i18n.English,
+      view.System,
+      saved,
+      dashboard.EditLabel,
+      Some("sent"),
+      None,
+    )
+  assert string.contains(overridden, "value=\"sent\"")
+  assert string.contains(overridden, "<dd class=\"break-words\">saved</dd>")
 }
 
 /// コピーのボタンは値を持たず、スクリプトの `copy` の処理を名前で指す。値は `name` の無い読み取り
@@ -113,6 +160,7 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
       language,
       view.System,
       "nsec1example",
+      "",
       None,
     ),
     account_pages.registered_page(
@@ -130,12 +178,13 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
     ),
   ]
   let shown = [
-    account_pages.new_account_page(language, view.System, None),
+    account_pages.new_account_page(language, view.System, "", None),
     ..list.map(account_actions.all, account_pages.account_action_page(
       language,
       view.System,
       row("main"),
       _,
+      None,
       None,
     ))
   ]
@@ -160,7 +209,7 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
 pub fn language_switch_returns_to_the_page_test() {
   let reason = Some(i18n.Untranslated("account is not registered"))
   assert string.contains(
-    account_pages.new_account_page(i18n.English, view.System, reason),
+    account_pages.new_account_page(i18n.English, view.System, "", reason),
     "<input name=\"return\" type=\"hidden\" value=\"/accounts/new\">",
   )
   list.each(account_actions.all, fn(action) {
@@ -170,6 +219,7 @@ pub fn language_switch_returns_to_the_page_test() {
         view.System,
         row("main"),
         action,
+        None,
         reason,
       ),
       "<input name=\"return\" type=\"hidden\" value=\""
@@ -186,16 +236,17 @@ pub fn japanese_pages_translate_reasons_test() {
     account_pages.new_account_page(
       i18n.Japanese,
       view.System,
+      "",
       Some(i18n.Translated(i18n.InvalidNsec(nip19.InvalidChecksum))),
     )
   assert string.contains(invalid, "<span>bech32 のチェックサムが一致しません。</span>")
   let registered = Some(i18n.Untranslated("account is already registered"))
   assert string.contains(
-    account_pages.new_account_page(i18n.Japanese, view.System, registered),
+    account_pages.new_account_page(i18n.Japanese, view.System, "", registered),
     "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(
-    account_pages.new_account_page(i18n.English, view.System, registered),
+    account_pages.new_account_page(i18n.English, view.System, "", registered),
     "<span><span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(
@@ -204,6 +255,7 @@ pub fn japanese_pages_translate_reasons_test() {
       view.System,
       row("main"),
       dashboard.RevealPrivateKey,
+      None,
       Some(i18n.Translated(i18n.IncorrectPassword)),
     ),
     "<span>管理パスワードが違います。</span>",
@@ -218,6 +270,7 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
       i18n.English,
       view.System,
       "nsec1example",
+      "",
       None,
     ),
     "<strong>Back up this private key now.</strong> The account is not registered",
@@ -227,6 +280,7 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
       i18n.Japanese,
       view.System,
       "nsec1example",
+      "",
       None,
     ),
     "<strong>この秘密鍵を今すぐバックアップしてください。</strong>「この鍵を登録する」を押すまで",
@@ -237,6 +291,7 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
       view.System,
       row("main"),
       dashboard.DeleteAccount,
+      None,
       None,
     )
   assert string.contains(
