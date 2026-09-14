@@ -815,15 +815,17 @@ fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     client: entry.client,
     age_seconds: now - entry.created_at,
     secret_mismatch: entry.secret_mismatch,
+    perms: entry.perms,
   )
 }
 
-/// 承認済みセッションを管理 UI の行にする。権限は行に含めない。
+/// 承認済みセッションを管理 UI の行にする。
 pub fn session_rows(sessions: List(Session)) -> List(dashboard.SessionRow) {
   use session <- list.map(sessions)
   dashboard.SessionRow(
     signer: session.signer,
     client: session.client,
+    perms: session.perms,
     created_at: session.created_at,
     last_used_at: session.last_used_at,
   )

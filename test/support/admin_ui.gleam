@@ -49,6 +49,7 @@ pub fn pages() -> List(String) {
       client: "ef01",
       age_seconds: 12,
       secret_mismatch: False,
+      perms: "sign_event:1",
     )
   let empty =
     dashboard.Snapshot(
@@ -65,6 +66,7 @@ pub fn pages() -> List(String) {
       client: "ef01",
       age_seconds: 48,
       secret_mismatch: True,
+      perms: "",
     )
   let full =
     dashboard.Snapshot(
@@ -83,6 +85,7 @@ pub fn pages() -> List(String) {
         dashboard.SessionRow(
           signer: "abcd",
           client: "ef01",
+          perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),

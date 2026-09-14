@@ -60,6 +60,7 @@ pub type PluginRow {
 
 /// 承認待ちの接続要求 1 件の表示内容。`age_seconds` は描画時点での経過秒。
 /// `secret_mismatch` は提示された secret が一致しなかったか（偽なら提示が無い）。
+/// `perms` は `connect` で要求された権限（無ければ空文字列）。
 pub type PendingRow {
   PendingRow(
     token: String,
@@ -67,12 +68,20 @@ pub type PendingRow {
     client: String,
     age_seconds: Int,
     secret_mismatch: Bool,
+    perms: String,
   )
 }
 
-/// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。
+/// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。`perms` は承認したときに要求
+/// されていた権限（無ければ空文字列）で、以後 `connect` し直しても変わらない。
 pub type SessionRow {
-  SessionRow(signer: String, client: String, created_at: Int, last_used_at: Int)
+  SessionRow(
+    signer: String,
+    client: String,
+    perms: String,
+    created_at: Int,
+    last_used_at: Int,
+  )
 }
 
 /// ダッシュボードが表示する状態の一式。
@@ -498,8 +507,8 @@ fn relay_action_link_weight(action: RelayAction) -> view.Weight {
   }
 }
 
-/// 承認待ち 1 件の、署名者・クライアント・経過時間・secret の提示の区別と、承認・拒否
-/// ボタン。ダッシュボードの行と承認ページが使う。
+/// 承認待ち 1 件の、署名者・クライアント・経過時間・secret の提示の区別・権限と、
+/// 承認・拒否ボタン。ダッシュボードの行と承認ページが使う。
 fn pending_content(
   language: Language,
   pending: PendingRow,
@@ -515,9 +524,19 @@ fn pending_content(
       #(text(i18n.Client), view.Code(pending.client)),
       #(text(i18n.Age), view.Plain(text(i18n.AgeSeconds(pending.age_seconds)))),
       #(text(i18n.SecretLabel), secret_value),
+      #(text(i18n.Permissions), perms_value(language, pending.perms)),
     ]),
     button_row(decision_forms(language, pending.token)),
   ]
+}
+
+/// 要求された権限の値。空なら署名と暗号化を拒否する旨の文を本文の書体で、空でなければ
+/// 値をそのまま等幅で出す。
+fn perms_value(language: Language, perms: String) -> view.Value {
+  case perms {
+    "" -> view.Plain(i18n.text(language, i18n.NoPermissionsRequested))
+    _ -> view.Code(perms)
+  }
 }
 
 /// リレーの一覧。1 件は `relays` の 1 行で、使っている用途ごとに用途の語と状態を並べる。
@@ -627,6 +646,7 @@ fn sessions_section(
               view.summary_list([
                 #(text(i18n.Signer), view.Code(session.signer)),
                 #(text(i18n.Client), view.Code(session.client)),
+                #(text(i18n.Permissions), perms_value(language, session.perms)),
                 #(
                   text(i18n.Created),
                   view.Timestamp(utc_time(session.created_at)),

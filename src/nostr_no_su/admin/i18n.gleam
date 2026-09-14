@@ -219,6 +219,8 @@ pub type Message {
   SecretLabel
   SecretNotOffered
   SecretMismatch
+  Permissions
+  NoPermissionsRequested
   Created
   LastUsed
   Approve
@@ -369,6 +371,9 @@ fn english(message: Message) -> String {
     SecretLabel -> "Secret"
     SecretNotOffered -> "Not offered"
     SecretMismatch -> "Mismatch"
+    Permissions -> "Permissions"
+    NoPermissionsRequested ->
+      "None requested. Signing and encryption are refused."
     Created -> "Created"
     LastUsed -> "Last used"
     Approve -> "Approve"
@@ -537,6 +542,8 @@ fn japanese(message: Message) -> String {
     SecretLabel -> "secret"
     SecretNotOffered -> "提示なし"
     SecretMismatch -> "不一致"
+    Permissions -> "権限"
+    NoPermissionsRequested -> "要求なし。署名と暗号化は拒否します。"
     Created -> "作成"
     LastUsed -> "最終利用"
     Approve -> "承認する"
