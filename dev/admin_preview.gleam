@@ -93,7 +93,9 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
   }
 }
 
-/// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。
+/// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。登録は
+/// `signer` の鍵なら「反映されていない」（409）、ラベルが `not-ready` / `maybe` なら
+/// それぞれ 503 / 202 を返す（生成した鍵の確認ページの撮影用）。
 fn context() -> admin.Context {
   admin.Context(
     password:,
@@ -103,10 +105,13 @@ fn context() -> admin.Context {
         row(second, second_npub, "<b>bot</b> 🙂"),
       ])
     },
-    add_account: fn(added, _label) {
-      case account.pubkey_hex(added) == signer {
-        True -> Error(bunker.NotApplied("account is already registered"))
-        False -> Ok(Nil)
+    add_account: fn(added, label) {
+      case account.pubkey_hex(added) == signer, label {
+        True, _ -> Error(bunker.NotApplied("account is already registered"))
+        False, "not-ready" ->
+          Error(bunker.NotReady("accounts are not loaded yet"))
+        False, "maybe" -> Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
+        False, _ -> Ok(Nil)
       }
     },
     remove_account: fn(_) {

@@ -810,12 +810,18 @@ fn import_account(
       Some(i18n.Translated(reason)),
     )
   }
+  let on_failure = fn(_account, label, failure) {
+    change_failure_response(language, theme, failure, fn(reason) {
+      account_pages.new_account_page(language, theme, label, Some(reason))
+    })
+  }
   use account, label <- register(
     context,
     request,
     language,
     theme,
     reject_label,
+    on_failure,
   )
   account_pages.registered_page(
     language,
@@ -828,8 +834,9 @@ fn import_account(
 }
 
 /// 生成の確認ページから送られた鍵の登録。nsec は確認ページで表示済みなので描画せず、
-/// ダッシュボードへ 303 で戻す。ラベルだけが規則に反するときは、生成した鍵を失わない
-/// よう、送られた nsec の確認ページを理由付きで返す（この POST の応答の本文だけに出る）。
+/// ダッシュボードへ 303 で戻す。ラベルが規則に反するか、バンカーが登録に失敗したときは、
+/// 生成した鍵を失わないよう、送られた nsec の確認ページを理由付きで返す（状態コードは
+/// nsec 入力による登録と同じ。この POST の応答の本文だけに出る）。
 fn register_generated_account(
   context: Context,
   request: Request,
@@ -842,8 +849,19 @@ fn register_generated_account(
       theme,
       account.nsec(generated),
       label,
-      Some(reason),
+      Some(account_pages.InvalidLabel(reason)),
     )
+  }
+  let on_failure = fn(generated, label, failure) {
+    let #(problem, status) = generated_key_problem(failure)
+    account_pages.generated_key_page(
+      language,
+      theme,
+      account.nsec(generated),
+      label,
+      Some(problem),
+    )
+    |> wisp.html_response(status)
   }
   use _account, _label <- register(
     context,
@@ -851,21 +869,22 @@ fn register_generated_account(
     language,
     theme,
     reject_label,
+    on_failure,
   )
   wisp.redirect(to: "/")
 }
 
 /// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 で登録画面を
 /// 返し、ラベルだけが不正なら 400 で `reject_label` が描画するページを返す。バンカーの
-/// 失敗は `change_failure_response` に渡す。登録できたときだけ `on_success` を呼ぶので、
-/// 反映されたか分からないときに nsec を描画する経路は無い。どの失敗でも、ラベルの欄には
-/// 送られた値から制御文字を除いた値を入れる。nsec は反射しない。
+/// 失敗は `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた値から制御文字を
+/// 除いた値を入れる。nsec のフォームの値はそのまま反射しない。
 fn register(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
   reject_label: fn(Account, String, i18n.Message) -> String,
+  on_failure: fn(Account, String, ChangeFailure) -> Response,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
@@ -889,15 +908,7 @@ fn register(
         Ok(label) ->
           case context.add_account(account, label) {
             Ok(Nil) -> on_success(account, label)
-            Error(failure) ->
-              change_failure_response(language, theme, failure, fn(reason) {
-                account_pages.new_account_page(
-                  language,
-                  theme,
-                  echoed_label,
-                  Some(reason),
-                )
-              })
+            Error(failure) -> on_failure(account, echoed_label, failure)
           }
       }
   }
@@ -1116,6 +1127,21 @@ fn change_failure_response(
         i18n.Translated(not_confirmed_message(cause)),
         202,
       )
+  }
+}
+
+/// 生成した鍵の登録のバンカーの失敗を、確認ページの理由と状態コードに写す。状態コードは
+/// `change_failure_response` と同じ対応にする。
+fn generated_key_problem(
+  failure: ChangeFailure,
+) -> #(account_pages.GeneratedKeyProblem, Int) {
+  case failure {
+    bunker.NotApplied(reason) -> #(account_pages.NotApplied(reason), 409)
+    bunker.NotReady(reason) -> #(account_pages.NotAccepted(reason), 503)
+    bunker.MaybeApplied(cause) -> #(
+      account_pages.NotConfirmed(not_confirmed_message(cause)),
+      202,
+    )
   }
 }
 

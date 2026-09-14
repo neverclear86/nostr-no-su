@@ -71,20 +71,33 @@ pub fn new_account_page(
   )
 }
 
+/// 生成した鍵の登録に失敗して確認ページを再描画する理由。
+pub type GeneratedKeyProblem {
+  /// ラベルが規則に反した（400）。
+  InvalidLabel(i18n.Message)
+  /// バンカーが登録を反映しなかった（409）。英語のまま届いた理由を持つ。
+  NotApplied(String)
+  /// バンカーが今は登録を受け付けられない（503）。英語のまま届いた理由を持つ。
+  NotAccepted(String)
+  /// 登録が反映されたか分からない（202）。確かめられなかった原因の文言を持つ。
+  NotConfirmed(i18n.Message)
+}
+
 /// 生成した鍵の確認ページ。生成した nsec を表示する唯一のページで、ここではまだ
 /// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`label` は欄に入れる値
-/// （生成の直後は空、ラベルが規則に反して再描画するときは送られた値）。`error` は、
-/// 生成した鍵の登録でラベルが規則に反したときに再描画する理由。
+/// （生成の直後は空、ラベルが規則に反するかバンカーが登録に失敗して再描画するときは
+/// 送られた値）。`problem` は再描画の理由。
 pub fn generated_key_page(
   language: Language,
   theme: view.Theme,
   nsec: String,
   label: String,
-  error: Option(i18n.Message),
+  problem: Option(GeneratedKeyProblem),
 ) -> String {
   let text = i18n.text(language, _)
   view.page(language, theme, i18n.GeneratedKey, view.Narrow, view.NoSwitch, [
-    view.error_message(language, None, option.map(error, i18n.Translated)),
+    option.map(problem, problem_alert(language, _))
+      |> option.unwrap(element.none()),
     view.card([
       view.warning(emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice)),
       view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
@@ -100,6 +113,47 @@ pub fn generated_key_page(
       ),
     ]),
     view.back_link(language),
+  ])
+}
+
+/// 確認ページのカードの上に出す、再描画の理由の囲み。
+fn problem_alert(
+  language: Language,
+  problem: GeneratedKeyProblem,
+) -> Element(msg) {
+  case problem {
+    InvalidLabel(reason) ->
+      view.error_message(language, None, Some(i18n.Translated(reason)))
+    NotApplied(reason) ->
+      view.error_message(
+        language,
+        Some(i18n.CouldNotRegister),
+        Some(i18n.Untranslated(reason)),
+      )
+    NotAccepted(reason) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotAccepted,
+        i18n.Untranslated(reason),
+      )
+    NotConfirmed(cause) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotConfirmed,
+        i18n.Translated(cause),
+      )
+  }
+}
+
+/// 次の操作の案内の文に理由を続けた、`Warning` の囲み。
+fn guided_warning(
+  language: Language,
+  guide: i18n.Message,
+  reason: i18n.Reason,
+) -> Element(msg) {
+  view.reason_alert(view.Warning, [
+    html.text(i18n.text(language, guide) <> i18n.sentence_gap(language)),
+    ..view.reason_content(language, None, reason)
   ])
 }
 
