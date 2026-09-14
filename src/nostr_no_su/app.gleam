@@ -731,6 +731,7 @@ fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     signer: entry.signer,
     client: entry.client,
     age_seconds: now - entry.created_at,
+    secret_mismatch: entry.secret_mismatch,
   )
 }
 

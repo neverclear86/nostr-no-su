@@ -38,6 +38,7 @@ fn states() -> dashboard.Snapshot {
         signer: "abcd",
         client: "ef01",
         age_seconds: 12,
+        secret_mismatch: False,
       ),
     ]),
     sessions: Ok([]),
@@ -64,6 +65,29 @@ fn states() -> dashboard.Snapshot {
       ),
       dashboard.PluginRow("d", None),
     ],
+  )
+}
+
+/// 提示なしと不一致の承認待ちを、経過時間の短い順に持つスナップショット。
+fn secret_states() -> dashboard.Snapshot {
+  dashboard.Snapshot(
+    ..states(),
+    pending: Ok([
+      dashboard.PendingRow(
+        token: "tok-1",
+        signer: "abcd",
+        client: "ef01",
+        age_seconds: 12,
+        secret_mismatch: False,
+      ),
+      dashboard.PendingRow(
+        token: "tok-2",
+        signer: "abcd",
+        client: "ef01",
+        age_seconds: 48,
+        secret_mismatch: True,
+      ),
+    ]),
   )
 }
 
@@ -104,6 +128,37 @@ pub fn japanese_states_are_translated_test() {
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
   })
+}
+
+/// 提示なしの承認待ちは secret の行が「Not offered」、不一致は塗りの警告バッジの
+/// 「Mismatch」になる。承認待ちは経過時間の短い順に並ぶ。
+pub fn pending_secret_is_shown_test() {
+  let body = dashboard.render(i18n.English, view.System, secret_states())
+  let assert Ok(#(before, after)) =
+    string.split_once(body, "<dd class=\"break-words\">48s</dd>")
+  assert string.contains(
+    before,
+    "<dd class=\"break-words\">12s</dd><dt class=\"text-base-content/70\">Secret</dt><dd class=\"break-words\">Not offered</dd>",
+  )
+  assert string.contains(
+    after,
+    "<dt class=\"text-base-content/70\">Secret</dt><dd><span class=\"badge badge-sm badge-warning whitespace-nowrap\">Mismatch</span></dd>",
+  )
+}
+
+/// 日本語では secret の見出しと値が訳される。
+pub fn japanese_pending_secret_is_translated_test() {
+  let body = dashboard.render(i18n.Japanese, view.System, secret_states())
+  let assert Ok(#(before, after)) =
+    string.split_once(body, "<dd class=\"break-words\">48 秒</dd>")
+  assert string.contains(
+    before,
+    "<dd class=\"break-words\">12 秒</dd><dt class=\"text-base-content/70\">secret</dt><dd class=\"break-words\">提示なし</dd>",
+  )
+  assert string.contains(
+    after,
+    "<dt class=\"text-base-content/70\">secret</dt><dd><span class=\"badge badge-sm badge-warning whitespace-nowrap\">不一致</span></dd>",
+  )
 }
 
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を

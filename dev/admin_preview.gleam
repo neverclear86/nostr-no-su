@@ -183,7 +183,20 @@ fn context() -> admin.Context {
     revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
     pending: fn() {
       Ok([
-        dashboard.PendingRow(token: "tok-1", signer:, client:, age_seconds: 12),
+        dashboard.PendingRow(
+          token: "tok-1",
+          signer:,
+          client:,
+          age_seconds: 12,
+          secret_mismatch: False,
+        ),
+        dashboard.PendingRow(
+          token: "tok-2",
+          signer:,
+          client:,
+          age_seconds: 48,
+          secret_mismatch: True,
+        ),
       ])
     },
     approve: decide,

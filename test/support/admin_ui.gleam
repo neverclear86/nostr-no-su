@@ -45,6 +45,7 @@ pub fn pages() -> List(String) {
       signer: "abcd",
       client: "ef01",
       age_seconds: 12,
+      secret_mismatch: False,
     )
   let empty =
     dashboard.Snapshot(
@@ -54,10 +55,18 @@ pub fn pages() -> List(String) {
       sessions: Ok([]),
       plugins: [],
     )
+  let pending_mismatch =
+    dashboard.PendingRow(
+      token: "tok2",
+      signer: "abcd",
+      client: "ef01",
+      age_seconds: 48,
+      secret_mismatch: True,
+    )
   let full =
     dashboard.Snapshot(
       accounts: Ok([row]),
-      pending: Ok([pending]),
+      pending: Ok([pending, pending_mismatch]),
       relays: Ok([
         dashboard.RelayRow(
           1,

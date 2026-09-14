@@ -190,6 +190,8 @@ pub type Value {
   Account(npub: String, hex: Option(String))
   /// RFC 3339 の UTC の時刻。折り返さず、数字の幅を揃える。
   Timestamp(String)
+  /// 不一致のように、注意を促す短い語。塗りの警告色のバッジで出し、折り返さない。
+  Flag(String)
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
@@ -551,6 +553,13 @@ fn summary_value(value: Value) -> Element(msg) {
             attribute.attribute("datetime", text),
             attribute.class("whitespace-nowrap tabular-nums"),
           ],
+          [html.text(text)],
+        ),
+      ])
+    Flag(text) ->
+      html.dd([], [
+        html.span(
+          [attribute.class("badge badge-sm badge-warning whitespace-nowrap")],
           [html.text(text)],
         ),
       ])
