@@ -10,9 +10,7 @@ import gleam/crypto
 import gleam/dict
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/io
-import gleam/list
 import gleam/option.{None}
-import gleam/result
 import gleam/string
 import gleam/uri.{Uri}
 import nostr_no_su
@@ -25,7 +23,6 @@ import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/relay_client
-import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
@@ -133,14 +130,8 @@ fn database_url_with_name(database_url: String, name: String) -> String {
 }
 
 /// `startup` の仕様でツリーを起動し、読み込みが終わるのを待ってから署名者を足し、
-/// リレーをバンカー用途で開いて実際に繋がるまで待つ。仕様とツリーの pid、追加した
-/// 署名者の接続 secret を返す。
-///
-/// 接続を待つのは、バンカー側の接続を待たずにテストのクライアント側を同じ
-/// strfry（`ghcr.io/hoytech/strfry@sha256:36f1886d18…`）へ繋ぐと、内部の
-/// assertion（`phmap.h: set_ctrl`）で strfry が落ちることを作業ツリーで複数回
-/// 確認したため。原因は特定していない。この待ち合わせを入れると再現しなかった
-/// （直接接続で 3 回連続、CI の `nip46-e2e` ジョブでも確認済み）。
+/// リレーをバンカー用途で開く。仕様とツリーの pid、追加した署名者の接続 secret を
+/// 返す。
 fn start_tree(
   database_url: String,
   relay_url: String,
@@ -164,7 +155,6 @@ fn start_tree(
       relay_url,
       relay_list.Roles(monitor: False, bunker: True),
     )
-  assert await(fn() { relay_connected(started.spec, relay_url) }, 5000)
   let assert Ok([listing]) = bunker.accounts(started.spec.bunker.name)
   #(started.spec, tree.pid, listing.secret)
 }
@@ -244,22 +234,8 @@ fn call(
   nip46_client.decrypt_response(client, signer, response)
 }
 
-/// `relay_url` へのバンカー用途の接続が `Connected` かどうか。
-fn relay_connected(spec: app.Spec, relay_url: String) -> Bool {
-  case relay_list.entries(spec.relay_list) {
-    Error(Nil) -> False
-    Ok(entries) ->
-      relay_list.connections(entries, relay_list.Bunker)
-      |> list.find(fn(connection) { connection.url == relay_url })
-      |> result.map(fn(connection) {
-        relay_connection.status(connection.name) == relay_connection.Connected
-      })
-      |> result.unwrap(False)
-  }
-}
-
 /// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
-/// `start_tree` が `bunker.accounts` の `Ok` と、リレー接続の確立を待つのに使う。
+/// `start_tree` が `bunker.accounts` の `Ok` を待つのに使う。
 fn await(check: fn() -> Bool, remaining: Int) -> Bool {
   case check(), remaining <= 0 {
     True, _ -> True
