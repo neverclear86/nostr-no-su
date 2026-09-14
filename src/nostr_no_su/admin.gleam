@@ -2,7 +2,8 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard` と `admin/account_pages`）に閉じ込められる。
+//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、`admin/relay_pages`）に
+//// 閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
