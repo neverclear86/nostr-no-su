@@ -1,9 +1,9 @@
 //// 実際のリレーと Postgres の上で、本番の仕様のツリーに NIP-46 の
 //// connect → get_public_key → sign_event を往復させる E2E。
 ////
-//// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走る。CI では
-//// `nip46-e2e` ジョブが両方を渡す。他のジョブは `TEST_RELAY_URL` を渡さないので
-//// このテストはスキップされる。
+//// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走る。PR の CI は
+//// どちらも渡さないのでスキップされ、手動のワークフロー（manual.yml の
+//// `nip46-e2e`）が両方を渡す。
 
 import envoy
 import gleam/dict
@@ -99,8 +99,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
   process.kill(tree)
 }
 
-/// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定なら、`test` ジョブはリレーを
-/// 立てないので、CI かどうかに関わらずスキップの 1 行を出す。
+/// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定ならスキップの 1 行を出す。
 fn with_test_relay_url(run: fn(String) -> Nil) -> Nil {
   case envoy.get("TEST_RELAY_URL") {
     Ok(url) if url != "" -> run(url)

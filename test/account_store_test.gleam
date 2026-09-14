@@ -1,6 +1,5 @@
 //// `bunker/account_store` のテスト。純粋な部分は常に、実際の Postgres に対する
-//// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する（CI では未設定なら
-//// 失敗する）。
+//// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する。
 ////
 //// 同じテーブルには過去の実行が残した行（別の乱数のマスターキーで暗号化された
 //// もの）がありうるので、読み込みの結果はどれも自分が入れた pubkey に絞ってから
@@ -280,7 +279,7 @@ pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。CI では未設定なら失敗する。同じ DB に対して `gleam test`
+/// ときだけ実行する。同じ DB に対して `gleam test`
 /// を並行実行することは想定していない。
 pub fn postgres_round_trip_test() {
   use database_url <- postgres.with_test_database_url("account_store")
@@ -288,7 +287,7 @@ pub fn postgres_round_trip_test() {
 }
 
 /// 版の記録より前に作られた DB が版 1 として取り込まれ、版が新しい DB は拒否される。
-/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_schema_version_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   schema_version_round_trip(database_url)
@@ -296,7 +295,7 @@ pub fn postgres_schema_version_test() {
 
 /// 同じ番号の advisory lock は、同じセッションからは再入で取れ、別のセッションから
 /// は取れない。セッションが解放すると別のセッションが取れる。`TEST_DATABASE_URL`
-/// があるときだけ実行する。CI では未設定なら失敗する。同じ DB に対して
+/// があるときだけ実行する。同じ DB に対して
 /// `gleam test` を並行実行することは想定していない。
 pub fn postgres_instance_lock_test() {
   use database_url <- postgres.with_test_database_url("account_store")
@@ -367,7 +366,7 @@ pub fn postgres_resume_store_test() {
 
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
 /// テーブルは無い）に版 3 の移行が適用でき、読み込んだ `sessions` と `pending` は
-/// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+/// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migrates_a_version_two_database_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   let schema = "account_store_schema_" <> random.hex(8)
@@ -397,7 +396,7 @@ pub fn postgres_migrates_a_version_two_database_test() {
 /// セッションと承認待ちの読み書きを一巡させる。空の DB への版 3 の適用、書いた値を
 /// 読み直すと同じ内容で戻ること、同じ主キーの 2 回の挿入がエラーにならないこと、
 /// `approve`、アカウントの削除でその署名者の行が消えることを確かめる。
-/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_bunker_state_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   bunker_state_round_trip(database_url)
@@ -610,7 +609,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
 }
 
 /// トランザクションの中の `run` が `Error` を返すと、先に行った書き込みが残らない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_transaction_rolls_back_on_error_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   transaction_rolls_back_on_error(database_url)
@@ -651,7 +650,7 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
 }
 
 /// `relay_store` の一覧・追加・用途の更新・削除。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。CI では未設定なら失敗する。
+/// 実行する。
 pub fn postgres_relay_store_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   relay_store_round_trip(database_url)
@@ -730,7 +729,7 @@ fn relay_store_round_trip(database_url: String) -> Nil {
 /// `relays` を読み、登録の順に並べる。advisory lock を通す
 /// `account_store_operations` の `load` はロックが取れなければ VM を止めるので
 /// （`nostr_no_su.gleam` の `halt_if_cannot_continue`）ここでは使わない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。CI では未設定なら失敗する。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_load_snapshot_reads_relays_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   load_snapshot_reads_relays(database_url)
@@ -805,7 +804,7 @@ fn session_tuple(
 /// 実際の Postgres に対する統合テスト。`connect`（セッションと承認待ち、
 /// 再登録）、`logout`、承認・拒否・取り消しが成功したときだけ `account_store` の
 /// 行が書かれる（`start_bunker` の経路）。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。CI では未設定なら失敗する。
+/// 実行する。
 pub fn postgres_bunker_session_writes_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   bunker_session_writes(database_url)
@@ -902,7 +901,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
 
 /// 実際の Postgres に対する統合テスト。`InsertPending` の写しは、`replaced` の
 /// 削除と挿入を 1 トランザクションで行う。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。CI では未設定なら失敗する。
+/// 実行する。
 pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   replacing_a_pending_request_is_one_transaction(database_url)
@@ -1094,7 +1093,7 @@ fn connect_clients(
 /// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
 /// 順に `connect` すると、DB の行数も `session_capacity` で頭打ちになり、行の
 /// クライアントの集合はエンジンのセッションと一致する。`TEST_DATABASE_URL` が
-/// あるときだけ実行する。CI では未設定なら失敗する。
+/// あるときだけ実行する。
 pub fn postgres_sessions_stay_within_the_capacity_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   sessions_stay_within_the_capacity(database_url)

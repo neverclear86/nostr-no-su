@@ -33,14 +33,12 @@ pub fn run_statement(db: pog.Connection, statement: String) -> Nil {
 }
 
 /// `TEST_DATABASE_URL` が空でなければその値で `run` を呼ぶ。未設定または空の
-/// とき、`CI` が空でなければ panic し、そうでなければスキップを 1 行ログに
-/// 出す。`label` はログと panic の行頭に付ける識別子。
+/// ときはスキップを 1 行ログに出す（PR の CI は渡さず、手動のワークフローと
+/// 手元の実行だけが渡す）。`label` はログの行頭に付ける識別子。
 pub fn with_test_database_url(label: String, run: fn(String) -> Nil) -> Nil {
-  case envoy.get("TEST_DATABASE_URL"), envoy.get("CI") {
-    Ok(url), _ if url != "" -> run(url)
-    _, Ok(ci) if ci != "" ->
-      panic as { "[" <> label <> "] TEST_DATABASE_URL is not set on CI" }
-    _, _ ->
+  case envoy.get("TEST_DATABASE_URL") {
+    Ok(url) if url != "" -> run(url)
+    _ ->
       io.println(
         "["
         <> label
