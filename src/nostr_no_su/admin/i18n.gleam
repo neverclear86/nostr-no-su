@@ -271,6 +271,8 @@ pub type Message {
   BackUpNow
   GeneratedKeyNotice
   RegisterThisKey
+  RegistrationNotAccepted
+  RegistrationNotConfirmed
   AccountRegistered
   Account
   BackUpIfNotAlready
@@ -403,6 +405,10 @@ fn english(message: Message) -> String {
     GeneratedKeyNotice ->
       "The account is not registered until you press \"Register this key\". After registration, the key is shown only when you re-enter the admin password."
     RegisterThisKey -> "Register this key"
+    RegistrationNotAccepted ->
+      "The key was not registered because accounts are not available right now. Wait a moment, then press \"Register this key\" again."
+    RegistrationNotConfirmed ->
+      "The registration was not confirmed. Back up this key, then press \"Register this key\" again: it is registered if it was not, or \"account is already registered\" is shown if it was."
     AccountRegistered -> "Account registered"
     Account -> "Account"
     BackUpIfNotAlready -> "Back up this private key if you have not already."
@@ -530,6 +536,12 @@ fn japanese(message: Message) -> String {
     GeneratedKeyNotice ->
       "「この鍵を登録する」を押すまで、アカウントは登録されません。登録した後は、管理パスワードを入力し直したときにだけ表示します。"
     RegisterThisKey -> "この鍵を登録する"
+    RegistrationNotAccepted ->
+      "アカウントを利用できない状態のため、登録していません。しばらく待ってから、もう一度「この鍵を登録する」を押してください。"
+    // 引用する理由（account is already registered）はバンカーから英語のまま届くので、
+    // 画面に出る文言と一致させるために英語で引用する。
+    RegistrationNotConfirmed ->
+      "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「account is already registered」と表示します。"
     AccountRegistered -> "アカウントを登録しました"
     Account -> "アカウント"
     BackUpIfNotAlready -> "まだバックアップしていなければ、この秘密鍵をバックアップしてください。"

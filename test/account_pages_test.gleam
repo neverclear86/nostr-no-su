@@ -300,3 +300,29 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
   )
   assert string.contains(delete, ">アカウントを削除する</button>")
 }
+
+/// 日本語の確認ページでは、409 の理由に前置きを付け、503 と 202 の案内の文と理由の間を
+/// 区切らない。
+pub fn japanese_generated_key_page_explains_the_failure_test() {
+  let render = fn(problem) {
+    account_pages.generated_key_page(
+      i18n.Japanese,
+      view.System,
+      "nsec1example",
+      "main",
+      Some(problem),
+    )
+  }
+  assert string.contains(
+    render(account_pages.NotApplied("account is already registered")),
+    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+  )
+  assert string.contains(
+    render(account_pages.NotAccepted("accounts are not loaded yet")),
+    "もう一度「この鍵を登録する」を押してください。<span lang=\"en\">accounts are not loaded yet</span>",
+  )
+  assert string.contains(
+    render(account_pages.NotConfirmed(i18n.StoreDidNotConfirm)),
+    "と表示します。データベースが変更を確定しませんでした。",
+  )
+}

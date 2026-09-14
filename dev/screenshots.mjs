@@ -87,6 +87,9 @@ const shots = [
   { name: "41-language-system", url: `${base}/language`, form: { language: "system", return: "/" } },
   { name: "42-import-empty-label", url: `${base}/accounts/import`, form: { nsec: specNsec, label: "" }, status: 400 },
   { name: "43-edit-label-empty", url: account("label"), form: { label: "" }, status: 400 },
+  { name: "44-generated-not-applied", url: `${base}/accounts/register-generated`, form: { nsec: signerNsec, label: "work" }, status: 409 },
+  { name: "45-generated-not-ready", url: `${base}/accounts/register-generated`, form: { nsec: specNsec, label: "not-ready" }, status: 503 },
+  { name: "46-generated-not-confirmed", url: `${base}/accounts/register-generated`, form: { nsec: specNsec, label: "maybe" }, status: 202 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り

@@ -996,7 +996,7 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// ラベルの欄を持つフォームを再描画する 6 つの経路は、送られた値から制御文字を除き、
+/// ラベルの欄を持つフォームを再描画する 5 つの経路は、送られた値から制御文字を除き、
 /// trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
 /// 出し、欄に `input-error` と `aria-invalid` を付けない。送った nsec は反射しない。
 pub fn invalid_input_keeps_the_label_on_every_path_test() {
@@ -1056,16 +1056,6 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
     ),
     #(
       post_form(context(), "/accounts/import", [
-        #("nsec", signer_nsec),
-        #("label", " work "),
-      ]),
-      409,
-      "account is already registered",
-      " work ",
-      Some(signer_nsec),
-    ),
-    #(
-      post_form(context(), "/accounts/register-generated", [
         #("nsec", signer_nsec),
         #("label", " work "),
       ]),
@@ -1195,44 +1185,44 @@ pub fn generated_key_can_be_registered_test() {
     == Ok(Added(nsec_signer(generated), "fresh"))
 }
 
-/// 生成した鍵の登録は、nsec 入力による登録と同じ失敗の経路を通り、どの本文にも nsec を
-/// 出さない。
-pub fn register_generated_shares_the_failure_paths_test() {
+/// 生成した鍵の登録でバンカーが失敗すると、生成した鍵を失わないよう、送られた nsec の
+/// 確認ページを理由付きで返す。状態コードは nsec 入力による登録と同じで、ラベルの欄には
+/// 送られた値を入れる。
+pub fn register_generated_bunker_failure_keeps_the_key_test() {
   let path = "/accounts/register-generated"
-  let spec = [#("nsec", spec_nsec), #("label", "work")]
-  let responses = [
-    #(post_form(context(), path, [#("nsec", "nsec1invalid")]), 400),
+  let label = " work "
+  let cases = [
     #(
-      post_form(context(), path, [
-        #("nsec", signer_nsec),
-        #("label", "work"),
-      ]),
+      context(),
+      signer_nsec,
       409,
+      "<div class=\"alert alert-error\" role=\"alert\"><span><span lang=\"en\">account is already registered</span></span></div>",
     ),
     #(
-      post_form(
-        failing_context(bunker.NotReady("accounts are not loaded yet")),
-        path,
-        spec,
-      ),
+      failing_context(bunker.NotReady("accounts are not loaded yet")),
+      spec_nsec,
       503,
+      "<div class=\"alert alert-warning\" role=\"alert\"><span>The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
     ),
     #(
-      post_form(
-        failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
-        path,
-        spec,
-      ),
+      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+      spec_nsec,
       202,
+      "<div class=\"alert alert-warning\" role=\"alert\"><span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied, so open the dashboard to check</span></div>",
     ),
   ]
-  list.each(responses, fn(entry) {
-    let #(response, status) = entry
-    assert response.status == status
-    let body = simulate.read_body(response)
-    assert !string.contains(body, spec_nsec)
-    assert !string.contains(body, signer_nsec)
-  })
+  use #(ctx, nsec, status, alert) <- list.each(cases)
+  let response = post_form(ctx, path, [#("nsec", nsec), #("label", label)])
+  assert response.status == status
+  let body = simulate.read_body(response)
+  assert hidden_nsec(body) == nsec
+  assert string.contains(body, "action=\"/accounts/register-generated\"")
+  assert string.contains(body, alert)
+  assert string.contains(
+    body,
+    "name=\"label\" required type=\"text\" value=\" work \"",
+  )
+  assert header(response, "cache-control") == "no-store"
 }
 
 /// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた

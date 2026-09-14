@@ -111,7 +111,7 @@ pub fn pages() -> List(String) {
         view.System,
         "nsec1example",
         "",
-        Some(i18n.LabelHasControlCharacters),
+        Some(account_pages.InvalidLabel(i18n.LabelHasControlCharacters)),
       ),
       account_pages.registered_page(
         language,
@@ -122,6 +122,22 @@ pub fn pages() -> List(String) {
       ),
       account_pages.private_key_page(language, view.System, row, "nsec1example"),
     ],
+    list.map(
+      [
+        account_pages.NotApplied("reason"),
+        account_pages.NotAccepted("reason"),
+        account_pages.NotConfirmed(i18n.StoreDidNotConfirm),
+      ],
+      fn(problem) {
+        account_pages.generated_key_page(
+          language,
+          view.System,
+          "nsec1example",
+          "main",
+          Some(problem),
+        )
+      },
+    ),
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure],
       dashboard.notice_page(
