@@ -5,10 +5,19 @@
 //// 直接叩くテスト（`bunker_engine_test`）と、スーパービジョンツリー越しに叩く
 //// テスト（`app_test`）が同じ手順を共有するために置く。
 
+import gleam/int
+import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, Event}
+
+/// n（1 以上）の 10 進表記を 64 桁に 0 詰めする。数字だけの文字列なので 16 進
+/// としても読め、secp256k1 の秘密鍵として有効な、テスト用クライアントの鍵を
+/// 大量に作るのに使う。
+pub fn padded_hex(n: Int) -> String {
+  string.pad_start(int.to_string(n), 64, "0")
+}
 
 /// テスト用 16 進鍵に対応するアカウント。テストの鍵は正しい前提なので、読めない
 /// のはテスト自体の誤りとして扱う。

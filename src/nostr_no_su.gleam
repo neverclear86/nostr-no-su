@@ -375,12 +375,13 @@ fn write_session_state(
         client:,
         now: last_used_at,
       )
-    engine.InsertPending(pending:, replaced:) ->
+    engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,
         timeouts,
         pending: stored_pending(pending),
         replaced: replaced,
+        evicted: evicted,
       )
     engine.DeletePending(token:) ->
       account_store.delete_pending(db, timeouts, token:)

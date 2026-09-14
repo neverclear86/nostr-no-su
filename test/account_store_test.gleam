@@ -940,7 +940,9 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
       secret_mismatch: False,
       created_at: 1,
     )
-  assert write(engine.InsertPending(pending: old_pending, replaced: []))
+  assert write(
+      engine.InsertPending(pending: old_pending, replaced: [], evicted: []),
+    )
     == Ok(Nil)
   let new_pending =
     engine.Pending(
@@ -952,7 +954,9 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
       secret_mismatch: False,
       created_at: 2,
     )
-  assert write(engine.InsertPending(pending: new_pending, replaced: ["old"]))
+  assert write(
+      engine.InsertPending(pending: new_pending, replaced: ["old"], evicted: []),
+    )
     == Ok(Nil)
   let assert Ok(after_replace) = account_store.load(pool, key, generous)
   assert list.map(after_replace.pending, fn(row) { row.token }) == ["new"]
@@ -971,7 +975,11 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
     )
   let assert Error(bunker.NotWritten(_reason)) =
     write(
-      engine.InsertPending(pending: unregistered_pending, replaced: ["new"]),
+      engine.InsertPending(
+        pending: unregistered_pending,
+        replaced: ["new"],
+        evicted: [],
+      ),
     )
 
   let assert Ok(after_failed_replace) = account_store.load(pool, key, generous)
@@ -1047,11 +1055,41 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
-/// n（1 以上）の 10 進表記を 64 桁に 0 詰めする。数字だけの文字列なので 16 進
-/// としても読め、secp256k1 の秘密鍵として有効な、テスト用クライアントの鍵を
-/// 大量に作るのに使う。
-fn padded_hex(n: Int) -> String {
-  string.pad_start(int.to_string(n), 64, "0")
+/// エンジンだけで `count` 件の別々のクライアント鍵からの `connect`（secret は
+/// `secret_arg`）を順に処理し、`Persist` の書き込みをそのつど `write` で DB に
+/// 反映して次のエンジンで続ける。n 件目は時刻 1000 + n、token `tok-<n>` で送る。
+fn connect_clients(
+  state: engine.Engine,
+  write: fn(engine.Write) -> Result(Nil, bunker.WriteFailure),
+  entry: StoredAccount,
+  secret_arg: String,
+  count: Int,
+) -> engine.Engine {
+  list.repeat(Nil, count)
+  |> list.index_map(fn(_, index) { index + 1 })
+  |> list.fold(state, fn(state, n) {
+    let client = nip46_client.account_for(nip46_client.padded_hex(n))
+    let incoming =
+      nip46_client.request_event(
+        client,
+        entry.account,
+        nip46_client.connect_body(entry.account, secret_arg, "c1"),
+        1000 + n,
+      )
+    let #(_seen, outcome) =
+      engine.handle_event(
+        state,
+        signed_event.verified(incoming),
+        engine.Inputs(
+          now: 1000 + n,
+          token: "tok-" <> int.to_string(n),
+          not_before: 0,
+        ),
+      )
+    let assert engine.Persist(write: change, next:, ..) = outcome
+    let assert Ok(Nil) = write(change)
+    next
+  })
 }
 
 /// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
@@ -1083,32 +1121,13 @@ fn sessions_stay_within_the_capacity(database_url: String) -> Nil {
       generous,
     ).write
 
-  // エンジンだけで session_capacity + 1 件の connect を順に処理し、Persist の
-  // 書き込みをそのつど DB に反映して次のエンジンで続ける。
   let final_engine =
-    list.fold(
-      list.repeat(Nil, engine.session_capacity + 1)
-        |> list.index_map(fn(_, index) { index + 1 }),
+    connect_clients(
       engine.new([#(entry.account, entry.secret)], None),
-      fn(state, n) {
-        let client = nip46_client.account_for(padded_hex(n))
-        let incoming =
-          nip46_client.request_event(
-            client,
-            entry.account,
-            nip46_client.connect_body(entry.account, entry.secret, "c1"),
-            1000,
-          )
-        let #(_seen, outcome) =
-          engine.handle_event(
-            state,
-            signed_event.verified(incoming),
-            engine.Inputs(now: 1000, token: "unused", not_before: 0),
-          )
-        let assert engine.Persist(write: change, next:, ..) = outcome
-        let assert Ok(Nil) = write(change)
-        next
-      },
+      write,
+      entry,
+      entry.secret,
+      engine.session_capacity + 1,
     )
 
   let assert Ok(after) = account_store.load(pool, key, generous)
@@ -1117,6 +1136,57 @@ fn sessions_stay_within_the_capacity(database_url: String) -> Nil {
     |> list.sort(string.compare)
     == engine.sessions(final_engine)
     |> list.map(fn(session) { session.client })
+    |> list.sort(string.compare)
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
+/// secret 無しで順に `connect` すると、DB の承認待ちの行数も `pending_capacity`
+/// で頭打ちになり、最も古い `tok-1` を含まず、行の token の集合はエンジンの
+/// 承認待ちと一致する。`TEST_DATABASE_URL` があるときだけ実行する。CI では
+/// 未設定なら失敗する。
+pub fn postgres_pending_stays_within_the_capacity_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  pending_stays_within_the_capacity(database_url)
+}
+
+fn pending_stays_within_the_capacity(database_url: String) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("pending-capacity")
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_pending_capacity_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  let final_engine =
+    connect_clients(
+      engine.new([#(entry.account, entry.secret)], Some(fn(token) { token })),
+      write,
+      entry,
+      "",
+      engine.pending_capacity + 1,
+    )
+
+  let assert Ok(after) = account_store.load(pool, key, generous)
+  assert list.length(after.pending) == engine.pending_capacity
+  assert !list.any(after.pending, fn(row) { row.token == "tok-1" })
+  assert list.map(after.pending, fn(row) { row.token })
+    |> list.sort(string.compare)
+    == engine.pending(final_engine, 1017)
+    |> list.map(fn(pending) { pending.token })
     |> list.sort(string.compare)
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")

@@ -10,7 +10,8 @@ import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
-  account_for, connect_body, decrypt_response, request_body, request_event,
+  account_for, connect_body, decrypt_response, padded_hex, request_body,
+  request_event,
 }
 import support/signed_event
 
@@ -1357,6 +1358,7 @@ pub fn connect_for_approval_writes_the_pending_test() {
         created_at: 1000,
       ),
       replaced: [],
+      evicted: [],
     )
 }
 
@@ -1366,8 +1368,7 @@ pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
   let client = account_for(client_key)
   let #(_state, outcome) =
     connect_with_perms(auth_engine(), client, signer, "wrong", "", 1000)
-  let assert Persist(write: engine.InsertPending(pending:, replaced: _), ..) =
-    outcome
+  let assert Persist(write: engine.InsertPending(pending:, ..), ..) = outcome
   assert pending.secret_mismatch
 }
 
@@ -1388,8 +1389,7 @@ pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
       )),
       engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
-  let assert Persist(write: engine.InsertPending(pending: _, replaced:), ..) =
-    outcome
+  let assert Persist(write: engine.InsertPending(replaced:, ..), ..) = outcome
   assert replaced == [token]
 }
 
@@ -1611,6 +1611,70 @@ pub fn approving_an_open_session_at_the_capacity_evicts_nothing_test() {
   let assert Ok(#(next, _ack, write)) = engine.approve(state, token, 2000)
   let assert engine.ApprovePending(evicted: [], ..) = write
   assert list.length(engine.sessions(next)) == engine.session_capacity
+}
+
+// --- 承認待ちの並びと件数の上限 ---
+
+/// `pending` は失効していない承認待ちを、作成の新しい順、token の昇順に並べる。
+pub fn pending_lists_the_newest_first_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let entry = fn(token: String, created_at: Int) {
+    engine.Pending(
+      token: token,
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: created_at,
+    )
+  }
+  let state =
+    engine.restore(
+      auth_engine(),
+      [],
+      [entry("b", 1000), entry("c", 1001), entry("a", 1000)],
+      1500,
+    )
+  assert list.map(engine.pending(state, 1500), fn(pending) { pending.token })
+    == ["c", "a", "b"]
+}
+
+/// 上限ちょうどより 1 件多いクライアントが secret 無しで順に `connect` すると、
+/// 作成の最も古い承認待ちを押し出す。
+pub fn pending_stays_within_the_capacity_test() {
+  let signer = account_for(signer_key)
+  let #(final, last_write) =
+    list.repeat(Nil, engine.pending_capacity + 1)
+    |> list.index_map(fn(_, index) { index + 1 })
+    |> list.fold(#(auth_engine(), None), fn(acc, n) {
+      let #(state, _) = acc
+      let client = account_for(padded_hex(n))
+      let incoming =
+        request_event(client, signer, connect_body(signer, "", "c1"), 1000 + n)
+      let #(_seen, outcome) =
+        engine.handle_event(
+          state,
+          signed_event.verified(incoming),
+          engine.Inputs(
+            now: 1000 + n,
+            token: "tok-" <> int.to_string(n),
+            not_before: 0,
+          ),
+        )
+      let assert Persist(write:, next:, ..) = outcome
+      #(next, Some(write))
+    })
+  let assert Some(engine.InsertPending(evicted:, ..)) = last_write
+  assert evicted == ["tok-1"]
+  let expected_tokens =
+    list.repeat(Nil, engine.pending_capacity)
+    |> list.index_map(fn(_, index) {
+      "tok-" <> int.to_string(engine.pending_capacity + 1 - index)
+    })
+  assert list.map(engine.pending(final, 1017), fn(pending) { pending.token })
+    == expected_tokens
 }
 
 /// `deny` は、削除する承認待ちの token を書き込みの値として返す。

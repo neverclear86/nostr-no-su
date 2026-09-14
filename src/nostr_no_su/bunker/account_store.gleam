@@ -733,17 +733,22 @@ pub fn approve(
   })
 }
 
-/// 同じ組の古い承認待ち `replaced` を消し、`pending` を登録する。1 トランザクション
-/// で行うので、削除だけが残ることは無い。
+/// 同じ組の古い承認待ち `replaced` と、上限で押し出す承認待ち `evicted` を消し、
+/// `pending` を登録する。1 トランザクションで行うので、削除だけが残ることは無い。
 pub fn insert_pending_replacing(
   pool: Name(pog.Message),
   timeouts: Timeouts,
   pending pending: StoredPending,
   replaced replaced: List(String),
+  evicted evicted: List(String),
 ) -> Result(Nil, StoreError) {
   transaction(pool, timeouts.write_ms, fn(db) {
     use Nil <- result.try(
-      list.try_each(replaced, delete_pending(db, timeouts, token: _)),
+      list.try_each(list.append(replaced, evicted), delete_pending(
+        db,
+        timeouts,
+        token: _,
+      )),
     )
     insert_pending(db, pending, timeouts)
   })
