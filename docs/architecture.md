@@ -552,6 +552,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/accounts/<signer>/rotate` | secret の作り直しの確認 / 実行 |
 | GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
 | GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
+| GET / POST | `/relays/new` | リレーの追加のフォーム / 登録。303 でダッシュボードへ戻す |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
 承認、拒否、セッションの取り消しは、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
@@ -614,6 +615,7 @@ nostr-no-su/
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
+│       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
