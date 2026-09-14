@@ -20,10 +20,10 @@ pub fn stylesheet_defines_every_rendered_class_test() {
 }
 
 /// フォーカスできるボタン（`a`、`button`、`summary` の `btn`）はフォーカスの輪郭を、入力欄
-/// （`input` の `input`）は枠を、`base-content` の色にする（デザイン方針 6 節の規則）。daisyUI
-/// の既定では輪郭が塗りの色になり、枠は薄いので、付け忘れるとコントラストが足りなくなる。
-/// 付け忘れてもクラスはほかの文字列で CSS に出力されるので、定義の検査では見つからない。
-/// フォーカスできない要素の `btn` は対象にしない。
+/// （`input` の `input`、`checkbox`）は枠を、`base-content` の色にする（デザイン方針 6 節の
+/// 規則）。daisyUI の既定では輪郭が塗りの色になり、枠は薄いので、付け忘れるとコントラストが
+/// 足りなくなる。付け忘れてもクラスはほかの文字列で CSS に出力されるので、定義の検査では
+/// 見つからない。フォーカスできない要素の `btn` は対象にしない。
 pub fn buttons_and_inputs_follow_the_color_rules_test() {
   let violations =
     admin_ui.pages()
@@ -36,7 +36,10 @@ pub fn buttons_and_inputs_follow_the_color_rules_test() {
           list.contains(classes, "btn")
           && !list.contains(classes, "focus-visible:outline-base-content")
         "input" ->
-          list.contains(classes, "input")
+          {
+            list.contains(classes, "input")
+            || list.contains(classes, "checkbox")
+          }
           && !list.contains(classes, "border-base-content/60")
         _ -> False
       }

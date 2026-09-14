@@ -97,4 +97,6 @@ pub fn leads_are_only_for_other_languages_test() {
   assert i18n.lead(i18n.Japanese, i18n.CouldNotRegister) == Some("登録できませんでした。")
   assert i18n.lead(i18n.Japanese, i18n.CouldNotListRelays)
     == Some("リレーの一覧を表示できません。")
+  assert i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
+    == Some("リレーを登録できませんでした。")
 }
