@@ -20,7 +20,7 @@ import nostr_no_su/admin/view
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
 /// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
-/// 開き直す。`label` は欄に入れる値。GET では空、入力の誤りで戻したときは送られた値。
+/// 開き直す。`label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
   theme: view.Theme,
