@@ -136,10 +136,11 @@ fn database_url_with_name(database_url: String, name: String) -> String {
 /// リレーをバンカー用途で開いて実際に繋がるまで待つ。仕様とツリーの pid、追加した
 /// 署名者の接続 secret を返す。
 ///
-/// 接続を待つのは、テストのクライアント側の接続がバンカー側より先に同じリレーへ
-/// 繋がると、strfry がほぼ同時刻の 2 本の接続で内部の assertion に落ちて落ちる
-/// ため（`ghcr.io/hoytech/strfry@sha256:36f1886d18…` で確認済み。connect と
-/// client の接続を数百 ms ずらすだけで再現しなくなる）。
+/// 接続を待つのは、バンカー側の接続を待たずにテストのクライアント側を同じ
+/// strfry（`ghcr.io/hoytech/strfry@sha256:36f1886d18…`）へ繋ぐと、内部の
+/// assertion（`phmap.h: set_ctrl`）で strfry が落ちることを作業ツリーで複数回
+/// 確認したため。原因は特定していない。この待ち合わせを入れると再現しなかった
+/// （直接接続で 3 回連続、CI の `nip46-e2e` ジョブでも確認済み）。
 fn start_tree(
   database_url: String,
   relay_url: String,
@@ -258,7 +259,7 @@ fn relay_connected(spec: app.Spec, relay_url: String) -> Bool {
 }
 
 /// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
-/// `start_tree` が `bunker.accounts` の `Ok` を待つのに使う。
+/// `start_tree` が `bunker.accounts` の `Ok` と、リレー接続の確立を待つのに使う。
 fn await(check: fn() -> Bool, remaining: Int) -> Bool {
   case check(), remaining <= 0 {
     True, _ -> True
