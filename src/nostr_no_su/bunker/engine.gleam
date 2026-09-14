@@ -925,15 +925,10 @@ fn execute_in_session(
     "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
     "ping" -> rpc.ok(request.id, "pong")
     "sign_event" -> sign_event(account, perms, request, now)
-    "nip44_encrypt" ->
-      case grants(perms, "nip44_encrypt") {
-        True -> nip44_op(account, request, True)
-        False -> rpc.error(request.id, denial("nip44_encrypt"))
-      }
-    "nip44_decrypt" ->
-      case grants(perms, "nip44_decrypt") {
-        True -> nip44_op(account, request, False)
-        False -> rpc.error(request.id, denial("nip44_decrypt"))
+    "nip44_encrypt" | "nip44_decrypt" ->
+      case grants(perms, request.method) {
+        True -> nip44_op(account, request, request.method == "nip44_encrypt")
+        False -> rpc.error(request.id, denial(request.method))
       }
     "nip04_encrypt" | "nip04_decrypt" ->
       rpc.error(request.id, "nip04 is not supported")

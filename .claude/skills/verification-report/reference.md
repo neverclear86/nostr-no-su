@@ -215,8 +215,8 @@ const signer = BunkerSigner.fromBunker(generateSecretKey(), pointer!, {
 const withTimeout = <T>(p: Promise<T>, ms = 15000) =>
   Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject("timeout"), ms))]);
 
-// nostr-tools 2.25.2 の BunkerSigner.connect() は params[2]（perms）を常に空文字列
-// で送るため、perms を宣言するには sendRequest で connect を直接組み立てる
+// nostr-tools の BunkerSigner.connect() は perms（params[2]）を渡す引数を持たない
+// ため、perms を宣言するには sendRequest で connect を直接組み立てる
 try {
   await withTimeout(
     signer.sendRequest("connect", [
