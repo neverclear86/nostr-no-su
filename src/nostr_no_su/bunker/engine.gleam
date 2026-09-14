@@ -67,6 +67,10 @@ const seen_capacity = 16_384
 /// 最終利用の古い順（`sessions` の並びの末尾）に押し出す。
 pub const session_capacity = 32
 
+/// 承認待ちの件数の上限（全署名者で 1 つ）。新しい承認待ちを登録すると、作成の
+/// 古い順（`pending` の並びの末尾）に押し出す。
+pub const pending_capacity = 16
+
 /// バンカーが持つ状態のすべて。プロセスも時計も持たない純粋な値で、`bunker` の
 /// アクターがこれを保持して受信のたびに更新する。
 pub type Engine {
@@ -116,7 +120,8 @@ pub type Inputs {
 /// 同じものを持つ（一覧に出すときに鍵を持ち回らずに済む）。`request_id` は承認後
 /// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は `connect` の
 /// `params[2]`（無ければ空文字列）、`secret_mismatch` は空でない secret が一致
-/// しなかったかどうかを表す。
+/// しなかったかどうかを表す。`pending_capacity` を超えると作成の古い順に押し出さ
+/// れる。
 pub type Pending {
   Pending(
     token: String,
@@ -154,9 +159,10 @@ pub type Write {
   DeleteSession(signer: String, client: String)
   /// `touch_session`。組の最終利用を `last_used_at` に進める。
   TouchSession(signer: String, client: String, last_used_at: Int)
-  /// 同じ組の古い承認待ち `replaced` を `delete_pending` で消し、`insert_pending` で
-  /// 登録する。
-  InsertPending(pending: Pending, replaced: List(String))
+  /// 同じ組の古い承認待ち `replaced` と、`pending_capacity` で押し出す承認待ち
+  /// `evicted` を `delete_pending` で消し、`insert_pending` で登録する
+  /// （`insert_pending_replacing`）。
+  InsertPending(pending: Pending, replaced: List(String), evicted: List(String))
   /// `delete_pending`（拒否）。
   DeletePending(token: String)
   /// `approve`（承認待ちの削除とセッションの挿入、押し出しの削除を 1
@@ -330,14 +336,20 @@ pub fn revoke(
   }
 }
 
-/// 失効していない承認待ちの一覧。表示が安定するよう古い順に並べる。失効した要求
-/// は状態からすぐに消えるわけではないが、この一覧にも `approve` / `deny` にも
-/// 現れず、次の登録か成功した承認・拒否のときにまとめて捨てられる。
+/// 失効していない承認待ちの一覧。表示が安定し、押し出される要求が末尾に来るよう、
+/// 作成の新しい順、token の昇順に並べる。失効した要求は状態からすぐに消えるわけ
+/// ではないが、この一覧にも `approve` / `deny` にも現れず、次の登録か成功した
+/// 承認・拒否のときにまとめて捨てられる。
 pub fn pending(engine: Engine, now: Int) -> List(Pending) {
-  live_pending(engine, now)
+  live_pending(engine, now) |> newest_pending
+}
+
+/// 承認待ちの辞書の値を、作成の新しい順、token の昇順に並べる。
+fn newest_pending(entries: Dict(String, Pending)) -> List(Pending) {
+  entries
   |> dict.values
   |> list.sort(fn(left, right) {
-    int.compare(left.created_at, right.created_at)
+    int.compare(right.created_at, left.created_at)
     |> order.break_tie(string.compare(left.token, right.token))
   })
 }
@@ -870,7 +882,9 @@ fn new_session(
 /// id で送られてしまう。失効の基準になる現在時刻は、いま作った要求の作成時刻が
 /// そのまま使える。書き込みの `replaced` には、消える同じ組の失効していない
 /// token だけを載せる（失効した要求の削除は書き込みに出さない。DB に残った
-/// 失効行は `restore` が読み飛ばす）。
+/// 失効行は `restore` が読み飛ばす）。同じ組と失効した要求を除いた後の一覧
+/// （作成の新しい順）で `pending_capacity - 1` 件より後ろの要求を押し出し、その
+/// token を `evicted` に載せる。
 fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
   let live = live_pending(engine, entry.created_at)
   let replaced =
@@ -883,8 +897,13 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
     dict.filter(live, fn(_token, existing) {
       existing.signer != entry.signer || existing.client != entry.client
     })
+  let evicted =
+    newest_pending(kept)
+    |> list.drop(pending_capacity - 1)
+    |> list.map(fn(evictee) { evictee.token })
+  let kept = list.fold(evicted, kept, dict.delete)
   let updated = Engine(..engine, pending: dict.insert(kept, entry.token, entry))
-  #(updated, InsertPending(pending: entry, replaced: replaced))
+  #(updated, InsertPending(pending: entry, replaced:, evicted:))
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。

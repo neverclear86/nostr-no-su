@@ -2106,7 +2106,7 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
   // DB の作成時刻だけをずらし、メモリではなく DB から読み込んだことを見分ける。
   let shifted = engine.Pending(..entry, created_at: entry.created_at - 300)
   process.call(database, 1000, ApplyWrite(
-    engine.InsertPending(pending: shifted, replaced: [entry.token]),
+    engine.InsertPending(pending: shifted, replaced: [entry.token], evicted: []),
     _,
   ))
 
@@ -3456,9 +3456,9 @@ fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 /// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。挿入の後に
 /// `evicted` の組を除く。`DeleteSession` は組で除く。`TouchSession` は組の行の
 /// `last_used_at` を `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。
-/// `InsertPending` は `replaced` の token を除いてから足す。`DeletePending` は token
-/// で除く。`ApprovePending` は `DeletePending` の後に `InsertSession` と同じ規則で
-/// セッションを足す。
+/// `InsertPending` は `replaced` と `evicted` の token を除いてから足す。
+/// `DeletePending` は token で除く。`ApprovePending` は `DeletePending` の後に
+/// `InsertSession` と同じ規則でセッションを足す。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
     engine.InsertSession(session:, evicted:) ->
@@ -3487,11 +3487,12 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
           }
         }),
       )
-    engine.InsertPending(pending:, replaced:) ->
+    engine.InsertPending(pending:, replaced:, evicted:) ->
       Database(..database, pending: [
         pending,
         ..list.filter(database.pending, fn(entry) {
           !list.contains(replaced, entry.token)
+          && !list.contains(evicted, entry.token)
         })
       ])
     engine.DeletePending(token:) ->
