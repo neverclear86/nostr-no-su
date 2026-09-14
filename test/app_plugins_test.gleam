@@ -1,7 +1,6 @@
 //// 偽リレーの上のツリーで、監視の接続とリレーの増減、プラグイン（ランナー、
 //// プラグインの子）の障害の分離を確かめるテスト。
 
-import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -18,9 +17,7 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
-import nostr_no_su/bunker/vault
 import nostr_no_su/dedup
-import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
@@ -45,6 +42,7 @@ import support/app_tree.{
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
 import support/postgres
+import support/random_account.{random_master_key}
 import support/signed_event
 
 /// 実行時のリレーの増減のテストで、3 人目として追加する署名者の鍵。
@@ -1221,13 +1219,6 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
 
   stop_tree(tree)
   postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
-}
-
-/// 乱数のマスターキー。実行のたびに違う鍵を使う。
-fn random_master_key() -> vault.MasterKey {
-  let assert Ok(key) =
-    vault.master_key_from_hex(hex.encode(crypto.strong_random_bytes(32)))
-  key
 }
 
 /// `open_relay` / `change_relay_roles` / `close_relay` の直後、`relay_list` の

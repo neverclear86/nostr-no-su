@@ -1,4 +1,4 @@
-//// アカウントストアの統合テストが共有する、実行のたびに違うマスターキーとアカウント。
+//// 実行のたびに違うマスターキーとアカウント。
 
 import gleam/crypto
 import nostr_no_su/bunker/account
