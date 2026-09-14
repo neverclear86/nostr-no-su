@@ -414,9 +414,9 @@ fn children(
           plugin_children.export_label(list.length(args))
             <> " rejected the configuration ("
             <> reason
-            <> "); 設定は "
+            <> "); configure it with "
             <> plugin_config.prefix(plugin_name)
-            <> "* で渡す",
+            <> "*",
         )
     }
   })

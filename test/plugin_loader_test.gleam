@@ -720,7 +720,7 @@ pub fn load_all_example_plugin_test() {
   assert string.contains(
     reason,
     "plugin_children/1 rejected the configuration (path is required); "
-      <> "設定は PLUGIN_FILE_LOGGER_* で渡す",
+      <> "configure it with PLUGIN_FILE_LOGGER_*",
   )
 }
 
@@ -779,7 +779,7 @@ pub fn load_all_rejected_config_test() {
   assert has_note(
     notes,
     "plugin_children/1 rejected the configuration (path is required); "
-      <> "設定は PLUGIN_REJECTED_CONFIG_PLUGIN_* で渡す",
+      <> "configure it with PLUGIN_REJECTED_CONFIG_PLUGIN_*",
   )
   assert has_note(notes, "(1 skipped)")
 }
