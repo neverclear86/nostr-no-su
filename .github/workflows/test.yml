@@ -3,7 +3,8 @@ name: test
 # PR でだけ走る、軽い検査だけの 1 ジョブ。Postgres と strfry を使う統合テスト、
 # docker イメージ、shipment、README のビルド手順の検査は manual.yml に置き、
 # 手で起動する（#305）。main への push では走らない。PR の checkout は
-# main とのマージのツリーなので、PR で通ればマージ後の main も同じ検査を通る。
+# その時点の main とのマージのツリーなので、PR の最後の実行からマージまでに
+# main が進んでいなければ、マージ後の main も同じ検査を通る。
 #
 # ジョブを 1 本にしているのは、GitHub Actions がジョブごとに分単位で切り上げて
 # 課金するため。数秒の検査を別ジョブにすると 1 分ずつ取られる。
@@ -36,7 +37,9 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -eu
-          files=$(git diff --name-only "$BASE" "$HEAD")
+          # base...head は merge-base からの差分。base との 2 点の diff だと、ブランチの後に
+          # main が進んだ分まで数え、docs だけの PR でも検査が走る。
+          files=$(git diff --name-only "$BASE...$HEAD")
           echo "$files"
           code=$(echo "$files" | grep -Ev '^(docs/|\.claude/|LICENSE$|.*\.md$)' || true)
           plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|\.github/)' || true)
@@ -103,6 +106,7 @@ jobs:
             !plugins-src/event_logger/build/dev/erlang/event_logger
           key: gleam-build-event_logger-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/event_logger/manifest.toml') }}
       - if: steps.changed.outputs.plugin == 'true'
+        name: event_logger を build、test、format --check する
         working-directory: plugins-src/event_logger
         run: |
           set -eu
