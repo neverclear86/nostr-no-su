@@ -11,7 +11,7 @@ import nostr_no_su/hex
 import nostr_no_su/nostr/nip19
 
 /// 秘密鍵のバイト数。
-const privkey_bytes = 32
+pub const privkey_bytes = 32
 
 /// バンカーが代理で署名する 1 つのアイデンティティ。x-only 公開鍵は署名にも
 /// ルーティングにも使うため、バイト列と 16 進表現の両方を持つ。

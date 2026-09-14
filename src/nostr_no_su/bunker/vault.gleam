@@ -17,9 +17,6 @@ import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/hex
 
-/// 秘密鍵のバイト数。
-const privkey_bytes = 32
-
 /// x-only 公開鍵のバイト数。
 const pubkey_bytes = 32
 
@@ -142,7 +139,7 @@ pub fn open_row(key: MasterKey, row: Row) -> Result(StoredAccount, RowError) {
   use pubkey <- result.try(decode_pubkey(row.pubkey))
   use <- bool.guard(
     bit_array.byte_size(row.encrypted_privkey)
-      != aes_gcm.nonce_bytes + privkey_bytes + aes_gcm.tag_bytes,
+      != aes_gcm.nonce_bytes + account.privkey_bytes + aes_gcm.tag_bytes,
     Error(UndecryptablePrivateKey),
   )
   use privkey <- result.try(
