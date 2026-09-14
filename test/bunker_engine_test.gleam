@@ -188,6 +188,21 @@ pub fn get_public_key_requires_connect_test() {
   )
 }
 
+/// `get_public_key` に限らず、`connect` より前に送られたリクエストは未認可として
+/// 拒否される。
+pub fn methods_other_than_get_public_key_require_connect_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[]}"
+  let #(_state, outcome) =
+    handle(new_engine(), request_event(client, signer, body, 1000), 1000)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "unauthorized: send connect first",
+  )
+}
+
 /// 接続後は `get_public_key` が署名者の pubkey を返す。
 pub fn get_public_key_after_connect_test() {
   let signer = account_for(signer_key)
@@ -362,6 +377,33 @@ pub fn undecryptable_content_ignored_test() {
     )
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(_) = outcome
+}
+
+/// p タグの無いリクエストは理由を添えて無視する。
+pub fn requests_without_a_p_tag_are_ignored_test() {
+  let client = account_for(client_key)
+  let signer = account_for(signer_key)
+  let request =
+    nip46_client.request_event_with_tags(
+      client,
+      signer,
+      connect_body(signer, secret, "c1"),
+      [],
+      1000,
+    )
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Ignore(reason) = outcome
+  assert reason == "no p tag"
+}
+
+/// JSON-RPC としてデコードできない content は理由を添えて無視する。
+pub fn a_malformed_request_payload_is_ignored_test() {
+  let client = account_for(client_key)
+  let signer = account_for(signer_key)
+  let request = request_event(client, signer, "not json", 1000)
+  let #(_state, outcome) = handle(new_engine(), request, 1000)
+  let assert Ignore(reason) = outcome
+  assert reason == "malformed request payload"
 }
 
 /// 未知のメソッドはクラッシュではなくエラー応答で返す。
@@ -1040,6 +1082,30 @@ pub fn connect_with_an_empty_signer_param_test() {
     ]
 }
 
+/// `connect` の params[3] 以降は無視し、params[2] までで perms を決める。
+pub fn connect_ignores_params_after_the_perms_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body =
+    nip46_client.connect_body_of(
+      [account.pubkey_hex(signer), secret, "nip44_encrypt", "extra"],
+      "c1",
+    )
+  let #(state, outcome) =
+    handle(new_engine(), request_event(client, signer, body, 1000), 1000)
+  let assert Reply(_response) = outcome
+  assert engine.sessions(state)
+    == [
+      engine.Session(
+        signer: account.pubkey_hex(signer),
+        client: account.pubkey_hex(client),
+        perms: "nip44_encrypt",
+        created_at: 1000,
+        last_used_at: 1000,
+      ),
+    ]
+}
+
 /// 16 進として読めない相手 pubkey には、エラー応答を返す。
 pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
   let signer = account_for(signer_key)
@@ -1056,6 +1122,40 @@ pub fn nip44_rejects_an_invalid_third_party_pubkey_test() {
     |> written
   let body =
     "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\"zz\",\"hi\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "invalid third-party pubkey",
+  )
+}
+
+/// text を欠いた `nip44_encrypt` はエラー応答を返す。
+pub fn nip44_without_a_text_param_is_rejected_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state = granted_session("nip44_encrypt")
+  let body = "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\"aa\"]}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  assert string.contains(
+    decrypt_response(client, signer, response),
+    "nip44 requires [pubkey, text]",
+  )
+}
+
+/// 曲線上に無い相手 pubkey には、エラー応答を返す。
+pub fn nip44_rejects_a_third_party_pubkey_off_the_curve_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state = granted_session("nip44_encrypt")
+  let off_curve = string.repeat("f", 64)
+  let body =
+    "{\"id\":\"e1\",\"method\":\"nip44_encrypt\",\"params\":[\""
+    <> off_curve
+    <> "\",\"hi\"]}"
   let #(_state, outcome) =
     handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
@@ -2055,6 +2155,42 @@ pub fn restored_pending_can_be_approved_test() {
     engine.approve(state, "restored-token", 1000)
   assert decrypt_response(client, signer, ack)
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
+}
+
+/// 16 進として読めない client を持つ承認待ちは承認できない。
+pub fn approving_a_pending_with_a_non_hex_client_fails_test() {
+  let signer = account_for(signer_key)
+  let pending =
+    engine.Pending(
+      token: "restored-token",
+      signer: account.pubkey_hex(signer),
+      client: "zz",
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 900,
+    )
+  let state = engine.restore(auth_engine(), [], [pending], 1000)
+  let assert Error(reason) = engine.approve(state, "restored-token", 1000)
+  assert reason == "invalid client pubkey"
+}
+
+/// 曲線上に無い client を持つ承認待ちは承認できない。
+pub fn approving_a_pending_with_an_off_curve_client_fails_test() {
+  let signer = account_for(signer_key)
+  let pending =
+    engine.Pending(
+      token: "restored-token",
+      signer: account.pubkey_hex(signer),
+      client: string.repeat("f", 64),
+      request_id: "c1",
+      perms: "",
+      secret_mismatch: False,
+      created_at: 900,
+    )
+  let state = engine.restore(auth_engine(), [], [pending], 1000)
+  let assert Error(reason) = engine.approve(state, "restored-token", 1000)
+  assert reason == "cannot derive conversation key"
 }
 
 /// `restore` は、失効した承認待ちを読み飛ばす。境界のちょうど 600 秒前は残る。
