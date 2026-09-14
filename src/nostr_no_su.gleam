@@ -322,7 +322,8 @@ fn bunker_spec(loaded: Config) -> Result(#(app.Bunker, List(String)), String) {
 /// アクターには戻らない。
 ///
 /// `write` はエンジンのセッションと承認待ちの書き込み 1 件を `account_store` の
-/// 関数に写す（`write_session_state`）。
+/// 関数に写す（`write_session_state`）。`load` はアカウントと一緒にセッションと
+/// 承認待ちを返す（`bunker_snapshot`）。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
@@ -340,9 +341,9 @@ pub fn account_store_operations(
       )
       |> result.try(fn(_locked) {
         account_store.load(pool, master_key, timeouts)
-        |> result.map(fn(stored) { stored.accounts })
       })
       |> halt_if_cannot_continue
+      |> result.map(bunker_snapshot)
       |> result.map_error(account_store.describe)
     },
     insert: fn(entry) {
@@ -418,6 +419,33 @@ fn write_session_state(
   }
 }
 
+/// DB から読んだ行を、バンカーの読み込みの結果（エンジンの型）にする。
+fn bunker_snapshot(stored: account_store.Stored) -> bunker.Snapshot {
+  bunker.Snapshot(
+    accounts: stored.accounts,
+    sessions: list.map(stored.sessions, fn(session) {
+      engine.Session(
+        signer: session.signer,
+        client: session.client,
+        perms: session.perms,
+        created_at: session.created_at,
+        last_used_at: session.last_used_at,
+      )
+    }),
+    pending: list.map(stored.pending, fn(pending) {
+      engine.Pending(
+        token: pending.token,
+        signer: pending.signer,
+        client: pending.client,
+        request_id: pending.request_id,
+        perms: pending.perms,
+        secret_mismatch: pending.secret_mismatch,
+        created_at: pending.created_at,
+      )
+    }),
+  )
+}
+
 /// エンジンの承認待ちを DB の行の型にする。
 fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
   account_store.StoredPending(
@@ -436,8 +464,8 @@ fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
 /// を 1 行出して終了コード 1 で VM を止める（`exit_with_failure`）。それ以外の
 /// 結果はそのまま返る。
 fn halt_if_cannot_continue(
-  loaded: Result(vault.Loaded, account_store.StoreError),
-) -> Result(vault.Loaded, account_store.StoreError) {
+  loaded: Result(account_store.Stored, account_store.StoreError),
+) -> Result(account_store.Stored, account_store.StoreError) {
   case loaded {
     Error(account_store.SchemaTooNew(..) as error)
     | Error(account_store.HeldByAnotherInstance(..) as error) -> {
