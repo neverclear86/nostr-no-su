@@ -187,7 +187,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose」の節）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
-| `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要 |
+| `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要。`"localhost"` と IPv4 / IPv6 以外の値は理由をログに出して管理 UI を無効にする |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
 | `DEDUP_CAPACITY` | `4096` | 監視の重複排除が記憶する直近のイベント id の件数（実際に記憶するのはこの 1〜2 倍）。1 以上の整数。未設定か空なら既定。0 以下や数値でない値は起動しない |

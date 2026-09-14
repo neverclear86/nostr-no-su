@@ -26,16 +26,17 @@ const default_admin_bind = "127.0.0.1"
 /// （実際に記憶するのはこの 1〜2 倍。`dedup/window`）。
 const default_dedup_capacity = 4096
 
-/// `ADMIN_PORT` と `ADMIN_PASSWORD` の解釈結果。無効化には「明示的に空にした」と
-/// 「ポートが不正だった」の 2 通りがあり、後者だけ起動時に理由を報告する。
-/// 待ち受けるのにパスワードが無ければ、無効化ではなく起動を中止する。
-/// `password` は秘密なので、表示やログに入れないこと。
+/// `ADMIN_BIND` / `ADMIN_PORT` / `ADMIN_PASSWORD` の解釈結果。無効化には
+/// 「明示的に空にした」と「bind かポートが不正だった」の 2 通りがあり、後者だけ
+/// 起動時に理由を報告する。待ち受けるのにパスワードが無ければ、無効化ではなく
+/// 起動を中止する。`password` は秘密なので、表示やログに入れないこと。
 pub type AdminUi {
-  /// このポートとパスワードで管理 UI を待ち受ける。
-  Listen(port: Int, password: String)
+  /// この bind・ポート・パスワードで管理 UI を待ち受ける。
+  Listen(bind: String, port: Int, password: String)
   /// `ADMIN_PORT` の空文字列で明示的に無効化された。
   Disabled
-  /// `ADMIN_PORT` が不正なので無効にし、起動は続ける。理由は呼び出し側が報告する。
+  /// `ADMIN_PORT` か `ADMIN_BIND` が不正なので無効にし、起動は続ける。理由は
+  /// 呼び出し側が報告する。
   Invalid(reason: String)
   /// 待ち受けるのに `ADMIN_PASSWORD` が得られないので起動を中止する。理由は
   /// 値を含まない。
@@ -65,7 +66,6 @@ pub type Config {
     /// 絞り込んだままの形で持つ。
     plugin_env: Dict(String, String),
     admin_ui: AdminUi,
-    admin_bind: String,
     admin_base_url: Option(String),
     /// `PLUGIN_CONSOLE_LOGGER_ENABLED` の解析結果。`Error` は起動を中止する理由。
     console_logger_enabled: Result(Bool, String),
@@ -84,7 +84,6 @@ pub fn load() -> Config {
       plugin_dir: optional("PLUGIN_DIR"),
       plugin_env: plugin_env(),
       admin_ui: admin_ui(),
-      admin_bind: optional("ADMIN_BIND") |> option.unwrap(default_admin_bind),
       admin_base_url: optional("ADMIN_BASE_URL")
         |> option.map(strip_trailing(_, "/")),
       console_logger_enabled: parse_enabled(
@@ -241,7 +240,8 @@ fn plugin_env() -> Dict(String, String) {
 /// 管理 UI の設定。`ADMIN_PORT` が未設定なら既定ポートを使う。他の任意設定と違い
 /// 未設定と空文字列で意味が分かれるのは、既定で有効な設定を明示的に切れるように
 /// するため。範囲外の値をそのまま渡すと待ち受け開始時に badarg でクラッシュする
-/// ので、ここで弾く。待ち受けるときのパスワードは `listening_admin_ui` が読む。
+/// ので、ここで弾く。待ち受けるときの bind とパスワードは `listening_admin_ui`
+/// が読む。
 fn admin_ui() -> AdminUi {
   case envoy.get("ADMIN_PORT") {
     Error(Nil) -> listening_admin_ui(default_admin_port)
@@ -262,19 +262,47 @@ fn admin_ui() -> AdminUi {
   }
 }
 
-/// `port` で待ち受ける管理 UI の設定。`ADMIN_PASSWORD` が未設定か空、または
-/// `ADMIN_PASSWORD_FILE` を読めなければ、起動を中止する理由を返す。パスワードは
-/// 自動生成しない。
+/// `port` で待ち受ける管理 UI の設定。`ADMIN_BIND` が不正なら、`ADMIN_PASSWORD`
+/// を求めずに理由付きで無効にする。bind が有効でも `ADMIN_PASSWORD` が未設定か
+/// 空、または `ADMIN_PASSWORD_FILE` を読めなければ、起動を中止する理由を返す。
+/// パスワードは自動生成しない。
 fn listening_admin_ui(port: Int) -> AdminUi {
-  case secret("ADMIN_PASSWORD") {
-    Ok(Some(password)) -> Listen(port:, password:)
-    Ok(None) ->
+  case admin_bind(), secret("ADMIN_PASSWORD") {
+    Error(reason), _ -> Invalid(reason)
+    Ok(bind), Ok(Some(password)) -> Listen(bind:, port:, password:)
+    Ok(_), Ok(None) ->
       MissingPassword(
         "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",
       )
-    Error(reason) -> MissingPassword(reason)
+    Ok(_), Error(reason) -> MissingPassword(reason)
   }
 }
+
+/// 管理 UI が bind するアドレス。未設定と空文字列（`optional/1` が `None` に
+/// する）は既定のループバックにする。前後の空白は落とす。空白だけの値を含め、
+/// `"localhost"` と IPv4 / IPv6 のアドレス以外は待ち受け開始時に panic するので、
+/// ここで理由にして弾く。値は秘密ではないので理由に含めてよい。
+fn admin_bind() -> Result(String, String) {
+  case optional("ADMIN_BIND") {
+    None -> Ok(default_admin_bind)
+    Some(value) -> {
+      let raw = string.trim(value)
+      case raw == "localhost" || is_ip_address(raw) {
+        True -> Ok(raw)
+        False ->
+          Error(
+            "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \""
+            <> raw
+            <> "\"",
+          )
+      }
+    }
+  }
+}
+
+/// `value` が IPv4 か IPv6 のアドレスとして読めるか。
+@external(erlang, "nostr_no_su_ffi", "is_ip_address")
+fn is_ip_address(value: String) -> Bool
 
 /// 監視の購読 id。
 const monitor_subscription_id = "nostr-no-su"

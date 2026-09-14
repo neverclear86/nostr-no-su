@@ -530,7 +530,7 @@ fn admin_spec(
       )
     config.Invalid(reason) ->
       Ok(#(None, [log.line(admin.log_prefix, reason <> "; admin UI disabled")]))
-    config.Listen(port:, password:) ->
-      Ok(#(Some(app.Admin(bind: loaded.admin_bind, port:, password:)), []))
+    config.Listen(bind:, port:, password:) ->
+      Ok(#(Some(app.Admin(bind:, port:, password:)), []))
   }
 }
