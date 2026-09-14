@@ -1,6 +1,6 @@
 ---
 name: issue-workflow
-description: nostr-no-su の GitHub issue を、分割の判定（opus low）→ プラン作成（opus low）→ プランレビュー（opus medium）の往復 → 実装と PR 作成（opus low）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージ（opus low）まで、Workflow ツールのスクリプト `.claude/workflows/issue-workflow.js` で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」「/issue-pipeline 57 83」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
+description: nostr-no-su の GitHub issue を、分割の判定（opus low）→ プラン作成（opus low）→ プランレビュー（opus medium）の往復 → 実装と PR 作成（sonnet high）→ PR レビュー（opus medium）の往復 → 最終確認（fable low）→ squash マージ（opus low）まで、Workflow ツールのスクリプト `.claude/workflows/issue-workflow.js` で進める手順。「#64 を進めて」「issue を実装してマージまで」「プランからマージまで回して」「いつもの流れで」「must-fix を順に片付けて」「/issue-pipeline 57 83」のように、issue 番号を挙げて実装や対応を頼まれたときは、プランや実装だけを頼まれたように見えても必ずこのスキルを使う。
 ---
 
 # issue ごとの分業パイプライン（nostr-no-su）
@@ -14,7 +14,7 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus low）→
 | デザイン（UI を変える issue だけ） | `issue-designer` | opus / medium | issue コメント（デザインの方針）。分割した親でも 1 回だけで、サブ issue は親の URL を継ぐ |
 | プラン作成 | `issue-planner` | opus / low | `<scratchpad>/plans/{{N}}-v{{V}}.md` |
 | プランレビュー | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿 |
-| 実装 | `issue-implementer` | opus / low | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる。09-14 から試行中（それまで sonnet / high。実装 1 件 $4.00、PR レビューのラウンド 1 で APPROVE 5/19 と比べる） |
+| 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる |
 | PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」 |
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」。diff とレビューの経緯だけを読み、再現はしない |
 | マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
@@ -26,6 +26,12 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus low）→
 
 進行役を opus low のセッションにしていた 09-13 のセッションでは、28 件で $718、うち 22%（$159）が進行役だった。進行役の文脈はエージェントの受け渡し（252 回）のたびに 3.9k ずつ伸びて 95 万トークンに達し、費用は受け渡し回数の 2 乗で効いていた。モデルを混ぜたことによるキャッシュの損は $5 で、無視できる。
 スクリプトにすると、受け渡しは変数で行われて LLM の文脈に入らず、待機中のエージェントのキャッシュ失効（$39）も無くなる。判断が要る箇所（質問、逸脱、収束しない往復）だけがこのセッションに戻る。
+
+## なぜ網羅をスクリプトと手順に任せるか（2026-09-13 の実測）
+
+09-13 のプランレビュー 28 件と PR レビュー 21 件の指摘を分類すると、往復の大半は文書・Doc コメントの追随漏れ、手順の再現性、PR 本文の数値の転記という「網羅」の失敗で、「判断」の失敗ではなかった。
+プランレビューのラウンド 1 で APPROVE は 3 / 28 で、must 0・should 1 だけで往復した件が 9 件あった。PR レビューのラウンド 1 の指摘 25 件のうちコードの動作の誤りは 1 件で、ラウンド 3 以上になった 6 件はすべてコード以外が原因だった。
+網羅は effort を上げるより `dev/sweep_refs.sh`、`dev/pr_facts.sh`、`dev/check_procedure.sh` に任せるほうが確実で安く、置換文で直る should は条件付き承認で往復せずに済ませる。定義は「手順（機械的）→ 判断」の順に組み、モデルには判断だけを残す。
 
 ## 前提と守ること
 
