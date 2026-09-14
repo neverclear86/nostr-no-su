@@ -11,6 +11,18 @@ import gleam/int
 import gleam/string
 import nostr_no_su/crypto/secp256k1
 
+/// message key のバイト数（chacha_key 32 + nonce 12 + hmac_key 32）。
+const message_keys_bytes = 76
+
+/// 平文のバイト数の上限。
+const max_plaintext_bytes = 65_535
+
+/// ペイロード（`version || nonce || ciphertext || mac`）のバイト数の下限。
+const min_payload_bytes = 99
+
+/// ペイロード（`version || nonce || ciphertext || mac`）のバイト数の上限。
+const max_payload_bytes = 65_603
+
 /// 暗号化・復号を拒否した理由。
 pub type Nip44Error {
   InvalidKey
@@ -67,8 +79,12 @@ pub fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
     crypto.hmac(<<t1:bits, nonce:bits, 2>>, crypto.Sha256, conversation_key)
   let t3 =
     crypto.hmac(<<t2:bits, nonce:bits, 3>>, crypto.Sha256, conversation_key)
-  // HMAC-SHA256 を 3 回連結した 96 バイトから、先頭 76 バイトを取る。
-  let assert <<keys:bytes-size(76), _rest:bits>> = <<t1:bits, t2:bits, t3:bits>>
+  // HMAC-SHA256 を 3 回連結した 96 バイトから、先頭の message key を取る。
+  let assert <<keys:bytes-size(message_keys_bytes), _rest:bits>> = <<
+    t1:bits,
+    t2:bits,
+    t3:bits,
+  >>
     as "hkdf-expand output must be 96 bytes"
   keys
 }
@@ -94,7 +110,7 @@ pub fn encrypt_with_nonce(
 ) -> Result(String, Nip44Error) {
   let pt = <<plaintext:utf8>>
   let len = bit_array.byte_size(pt)
-  case len >= 1 && len <= 65_535 {
+  case len >= 1 && len <= max_plaintext_bytes {
     False -> Error(InvalidPlaintextLength)
     True ->
       case message_keys(conversation_key, nonce) {
@@ -145,7 +161,7 @@ fn decrypt_bytes(
   conversation_key: BitArray,
 ) -> Result(String, Nip44Error) {
   let total = bit_array.byte_size(decoded)
-  case total >= 99 && total <= 65_603 {
+  case total >= min_payload_bytes && total <= max_payload_bytes {
     False -> Error(InvalidPayload)
     True ->
       case decoded {
@@ -201,7 +217,7 @@ fn unpad(padded: BitArray) -> Result(String, Nip44Error) {
       let rest_len = bit_array.byte_size(rest)
       let valid =
         unpadded_len >= 1
-        && unpadded_len <= 65_535
+        && unpadded_len <= max_plaintext_bytes
         && unpadded_len <= rest_len
         && bit_array.byte_size(padded) == 2 + calc_padded_len(unpadded_len)
       case valid {
