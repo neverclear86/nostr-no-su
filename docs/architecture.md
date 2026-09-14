@@ -68,7 +68,7 @@ flowchart LR
 ```
 root (one_for_one, 3/60)
 ├── relay_list   (worker)              実行時のリレーの一覧と connections の子の起動・停止
-├── plugins      (one_for_one, 5/10)   プラグインごとのランナー
+├── plugins      (one_for_one, 5/10)   プラグインごとのランナー（内蔵と外部を合わせてプラグインが 1 つ以上あるときだけ）
 │   ├── children(<plugin>) (one_for_one, 5/10, Temporary)  子仕様を持つプラグインだけ
 │   │   └── <プラグインが申告した子プロセス>
 │   └── runner(<plugin>)   (worker, Permanent)
@@ -83,7 +83,7 @@ root (one_for_one, 3/60)
 │   ├── connections (factory, 5/10)    監視リレーの用途の relay_connection
 │   │   └── relay_connection × 監視リレーの数
 │   └── resume_saver
-└── admin        (mist)                管理 UI の HTTP サーバー
+└── admin        (mist)                管理 UI の HTTP サーバー（ADMIN_PORT が有効なときだけ）
 ```
 
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
@@ -189,7 +189,8 @@ sequenceDiagram
 
 重複排除は有界なスライディングウィンドウで行う。
 複数のリレーが同じイベントを配信し、再接続のたびに保存済みイベントが再送されるため、同じ id を 2 度プラグインへ渡さないようにしている。
-ウィンドウは有限なので、配信は at-least-once であって exactly-once ではない。
+ウィンドウは有限なので、同じイベントが 2 度渡ることがある。
+ランナーの過負荷、無効化、再起動の間のイベントは捨てるので、配信は best-effort である（[プラグイン API v1](plugin-api.md) の第 4 章）。
 
 プラグインが受け取るのは Gleam のレコードではなく binary キーの Erlang map である。
 レコードはランタイムではタプルなので、フィールドを 1 つ足すだけで既存のプラグインが黙って壊れる。
@@ -430,7 +431,8 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 
 `MaybeApplied` を 409 にしないのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
 アカウント 1 件の操作は変更の前に一覧を引くので、一覧に無い署名者（削除済みの署名者への再送など）はバンカーに届く前に 404 になる。
-`require_registered` の拒否（409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
+`require_registered` の拒否（409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。
+利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 
 承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）とセッションの取り消し（`POST /sessions/revoke`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。
@@ -605,7 +607,7 @@ flowchart TD
 nostr-no-su/
 ├── src/                          本体
 │   ├── nostr_no_su.gleam         エントリポイント（設定の読み込みとツリー仕様の組み立て）
-│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process）
+│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process / application / ssl / logger / supervisor / pgo）
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
@@ -684,8 +686,10 @@ nostr-no-su/
 │   ├── operations.md             バックアップと復旧
 │   └── development.md            ローカルでの実行とテスト、CSS のビルドと画面の撮影
 │
+├── .github/workflows/            CI（test.yml）とリリース（release.yml）
 ├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
 ├── gleam.toml
+├── manifest.toml                 本体の依存の版の固定（plugins-src/event_logger と共有パッケージの版を揃える）
 ├── package.json                  CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 ├── Dockerfile
 ├── docker-compose.yml
