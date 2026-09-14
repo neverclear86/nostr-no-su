@@ -32,9 +32,6 @@ import support/postgres
 /// テスト用の署名者の 16 進秘密鍵。他のテストと同じ固定値。
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
 
-/// テスト用のクライアントの 16 進秘密鍵。他のテストと同じ固定値。
-const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
-
 /// 発行したリクエストへの OK を待つ時間。
 const ack_timeout_ms = 5000
 
@@ -49,7 +46,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
   use scoped_database_url <- with_database(database_url)
 
   let signer = account_for(signer_key)
-  let client = account_for(client_key)
+  let client = account_for(random.hex(32))
   let #(_spec, tree, secret) =
     start_tree(scoped_database_url, relay_url, signer)
   let events = process.new_subject()
