@@ -535,6 +535,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       plugins: fn() { plugin_rows(spec.plugins) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
       relays: fn() { relay_rows(spec) },
+      add_relay: fn(url, roles) { add_relay(spec, url, roles) },
       sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
@@ -644,13 +645,47 @@ pub fn relay_rows(spec: Spec) -> Result(List(dashboard.RelayRow), String) {
     |> result.replace_error("relay list did not answer"),
   )
   use relays <- result.map(
-    relay_store.list(
-      pog.named_connection(spec.bunker.pool.pool_name),
-      account_store.default_timeouts,
-    )
+    relay_store.list(store_connection(spec), account_store.default_timeouts)
     |> result.map_error(account_store.describe),
   )
   merge_relay_rows(relays, entries, relay_connection.status)
+}
+
+/// バンカーの接続プールへの名前つき接続。`relay_rows` と `add_relay` が共有する。
+fn store_connection(spec: Spec) -> pog.Connection {
+  pog.named_connection(spec.bunker.pool.pool_name)
+}
+
+/// リレーを DB に登録してから接続を開く。DB に書けなければ接続を開かない。管理 UI の
+/// Context が使う。
+pub fn add_relay(
+  spec: Spec,
+  url: String,
+  roles: relay_list.Roles,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  use _row <- result.try(
+    relay_store.insert(
+      store_connection(spec),
+      url,
+      roles,
+      account_store.default_timeouts,
+    )
+    |> result.map_error(store_failure),
+  )
+  open_relay(spec, url, roles)
+  |> result.replace_error(admin.ConnectionsNotConfirmed)
+}
+
+/// `account_store.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
+fn store_failure(error: account_store.StoreError) -> admin.RelayChangeFailure {
+  case error {
+    account_store.RelayAlreadyRegistered -> admin.DuplicateRelay
+    _ ->
+      case account_store.may_have_been_written(error) {
+        True -> admin.RelayMaybeSaved
+        False -> admin.RelayNotSaved(account_store.describe(error))
+      }
+  }
 }
 
 /// DB の行ごとに、用途の状態を `relay_list` の項目から求める。行の順は `relays`

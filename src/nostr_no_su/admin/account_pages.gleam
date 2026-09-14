@@ -39,7 +39,7 @@ pub fn new_account_page(
       view.error_message(language, Some(i18n.CouldNotRegister), error),
       view.card([
         view.heading(text(i18n.ImportPrivateKey)),
-        form_description(text(i18n.ImportDescription)),
+        view.form_description(text(i18n.ImportDescription)),
         view.secret_post_form(
           view.segments_path(dashboard.import_account_segments),
           [
@@ -56,7 +56,7 @@ pub fn new_account_page(
       ]),
       view.card([
         view.heading(text(i18n.GenerateNewKey)),
-        form_description(text(i18n.GenerateDescription)),
+        view.form_description(text(i18n.GenerateDescription)),
         view.post_form(
           view.segments_path(dashboard.generate_account_segments),
           [],
@@ -341,11 +341,6 @@ fn emphasized(
   ]
 }
 
-/// カードの見出しの下に置く、フォームの説明。
-fn form_description(text: String) -> Element(msg) {
-  html.p([attribute.class("text-sm")], [html.text(text)])
-}
-
 /// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
 const label_hint_id = "label-hint"
 
@@ -353,9 +348,11 @@ const label_hint_id = "label-hint"
 /// 鍵の確認、編集）のどれでも必須にする。
 fn label_fieldset(language: Language, value: String) -> Element(msg) {
   let caption = i18n.text(language, i18n.Label)
-  html.div([attribute.class("fieldset")], [
-    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
-    html.input([
+  view.hinted_input(
+    caption,
+    label_hint_id,
+    i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points)),
+    [
       attribute.type_("text"),
       attribute.name(dashboard.label_field),
       attribute.autocomplete("off"),
@@ -364,15 +361,6 @@ fn label_fieldset(language: Language, value: String) -> Element(msg) {
       attribute.class("input w-full border-base-content/60"),
       attribute.aria_label(caption),
       attribute.aria_describedby(label_hint_id),
-    ]),
-    html.p(
-      [attribute.id(label_hint_id), attribute.class("text-base-content/70")],
-      [
-        html.text(i18n.text(
-          language,
-          i18n.LabelHint(max: dashboard.max_label_code_points),
-        )),
-      ],
-    ),
-  ])
+    ],
+  )
 }

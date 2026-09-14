@@ -12,9 +12,9 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更の 202 と、承認・拒否・
-//// 取り消しの 503）は、バンカーが原因を型で返すので訳す。プラグインの再有効化の 503 は
-//// 英語のまま。
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更とリレーの追加の 202 と、
+//// 承認・拒否・取り消しの 503）は、バンカーと管理 UI の Context が原因を型で返すので訳す。
+//// プラグインの再有効化の 503 は英語のまま。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -162,6 +162,7 @@ pub type Lead {
   CouldNotListPending
   CouldNotListSessions
   CouldNotListRelays
+  CouldNotAddRelay
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -178,6 +179,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotListPending -> "承認待ちの一覧を表示できません。"
         CouldNotListSessions -> "セッションの一覧を表示できません。"
         CouldNotListRelays -> "リレーの一覧を表示できません。"
+        CouldNotAddRelay -> "リレーを登録できませんでした。"
       })
   }
 }
@@ -227,13 +229,23 @@ pub type Message {
   NoApprovedSessions
   Revoke
   Relays
-  RoleColumn
+  Role
   StateColumn
   MonitorRole
   BunkerRole
   RelayConnected
   RelayDisconnected
   NoBunkerRelay
+  AddRelay
+  RelayUrl
+  RelayUrlHint
+  UseForMonitoring
+  UseForBunker
+  AddRelayDescription
+  InvalidRelayUrl
+  RelayAlreadyRegistered
+  RelayRoleRequired
+  RelayConnectionsNotConfirmed
   Plugins
   NameColumn
   PluginRunning
@@ -355,7 +367,7 @@ fn english(message: Message) -> String {
     NoApprovedSessions -> "No approved sessions."
     Revoke -> "Revoke"
     Relays -> "Relays"
-    RoleColumn -> "Role"
+    Role -> "Role"
     StateColumn -> "State"
     MonitorRole -> "monitor"
     BunkerRole -> "bunker"
@@ -363,6 +375,18 @@ fn english(message: Message) -> String {
     RelayDisconnected -> "disconnected"
     NoBunkerRelay ->
       "No relay is used for the bunker. Clients cannot connect to any account until you add one."
+    AddRelay -> "Add relay"
+    RelayUrl -> "Relay URL"
+    RelayUrlHint -> "Starts with ws:// or wss://."
+    UseForMonitoring -> "Use for monitoring"
+    UseForBunker -> "Use for the bunker"
+    AddRelayDescription ->
+      "Relays used for monitoring are subscribed to for events written by the registered accounts. Relays used for the bunker are listed as relay= in every connection URI. Use NIP-46-only relays, which refuse subscriptions other than kind 24133, for the bunker only."
+    InvalidRelayUrl -> "relay url must be a valid ws:// or wss:// url"
+    RelayAlreadyRegistered -> "relay is already registered"
+    RelayRoleRequired -> "choose monitoring, the bunker, or both"
+    RelayConnectionsNotConfirmed ->
+      "the change was saved, but the relay connections did not confirm it"
     Plugins -> "Plugins"
     NameColumn -> "Name"
     PluginRunning -> "running"
@@ -495,13 +519,24 @@ fn japanese(message: Message) -> String {
     NoApprovedSessions -> "承認済みのセッションはありません。"
     Revoke -> "承認を取り消す"
     Relays -> "リレー"
-    RoleColumn -> "用途"
+    Role -> "用途"
     StateColumn -> "状態"
     MonitorRole -> "監視"
     BunkerRole -> "バンカー"
     RelayConnected -> "接続中"
     RelayDisconnected -> "未接続"
     NoBunkerRelay -> "バンカーに使うリレーがありません。リレーを追加するまで、クライアントはどのアカウントにも接続できません。"
+    AddRelay -> "リレーを追加"
+    RelayUrl -> "リレーの URL"
+    RelayUrlHint -> "ws:// か wss:// で始まる URL。"
+    UseForMonitoring -> "監視に使う"
+    UseForBunker -> "バンカーに使う"
+    AddRelayDescription ->
+      "監視に使うリレーでは、登録したアカウントが書いたイベントを購読します。バンカーに使うリレーは、すべての接続 URI の relay= に入ります。kind 24133 以外の購読を拒否する NIP-46 専用のリレーは、バンカーにだけ使ってください。"
+    InvalidRelayUrl -> "ws:// か wss:// で始まる正しい URL を入力してください。"
+    RelayAlreadyRegistered -> "このリレーはすでに登録されています。"
+    RelayRoleRequired -> "監視とバンカーの少なくとも一方を選んでください。"
+    RelayConnectionsNotConfirmed -> "変更は保存しましたが、リレーの接続に反映されたかを確認できませんでした。"
     Plugins -> "プラグイン"
     NameColumn -> "名前"
     PluginRunning -> "動作中"

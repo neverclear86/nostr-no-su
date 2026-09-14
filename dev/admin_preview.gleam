@@ -20,6 +20,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
 
 /// 使い捨ての管理パスワード。
 const password = "preview-password"
@@ -83,6 +84,23 @@ fn revocation(revoked_client: String) -> Result(Nil, bunker.SessionFailure) {
     "not-applied" -> Error(bunker.SessionNotApplied("not written"))
     "not-ready" -> Error(bunker.SessionNotReady("accounts are not loaded yet"))
     "no-answer" -> Error(bunker.SessionMaybeApplied(bunker.BunkerDidNotRespond))
+    _ -> Ok(Nil)
+  }
+}
+
+/// URL の値で、リレーの追加の結果を選ぶ。用途は撮影に使わない。
+fn adding_relay(
+  url: String,
+  _roles: relay_list.Roles,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  case url {
+    "wss://duplicate.example" -> Error(admin.DuplicateRelay)
+    "wss://not-saved.example" ->
+      Error(admin.RelayNotSaved(
+        "database is unreachable or rejected the connection",
+      ))
+    "wss://maybe.example" -> Error(admin.RelayMaybeSaved)
+    "wss://unconfirmed.example" -> Error(admin.ConnectionsNotConfirmed)
     _ -> Ok(Nil)
   }
 }
@@ -163,6 +181,7 @@ fn context() -> admin.Context {
         dashboard.PluginRow("slow", None),
       ]
     },
+    add_relay: adding_relay,
     reenable_plugin: reenabling,
     sessions: fn() {
       Ok([

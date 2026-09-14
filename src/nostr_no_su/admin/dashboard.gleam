@@ -102,8 +102,14 @@ const account_actions = [
 /// アカウントのページのパスの先頭のセグメント。
 const accounts_segment = "accounts"
 
+/// リレーのページのパスの先頭のセグメント。
+const relays_segment = "relays"
+
 /// アカウントの登録画面のパスセグメント。
 pub const new_account_segments = [accounts_segment, "new"]
+
+/// リレーの追加画面のパスセグメント。
+pub const new_relay_segments = [relays_segment, "new"]
 
 /// 鍵の生成の POST 先のパスセグメント。
 pub const generate_account_segments = [accounts_segment, "generate"]
@@ -125,6 +131,15 @@ pub const nsec_field = "nsec"
 
 /// ラベルを送る欄の名前。
 pub const label_field = "label"
+
+/// リレーの追加のフォームで URL を送る欄の名前。
+pub const relay_url_field = "url"
+
+/// リレーの追加のフォームで監視に使うかを送る欄の名前。
+pub const monitor_field = "monitor"
+
+/// リレーの追加のフォームでバンカーに使うかを送る欄の名前。
+pub const bunker_field = "bunker"
 
 /// 秘密鍵の再表示で管理パスワードを送る欄の名前。
 pub const password_field = "password"
@@ -175,19 +190,13 @@ fn accounts_section(
   accounts: Result(List(AccountRow), String),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let add_link = case accounts {
-    Ok(_) ->
-      view.button_link(
-        view.segments_path(new_account_segments),
-        text(i18n.AddAccount),
-        view.Primary,
-      )
-    Error(_) -> element.none()
-  }
   view.card([
-    html.div(
-      [attribute.class("flex flex-wrap items-center justify-between gap-2")],
-      [view.heading(text(i18n.Accounts)), add_link],
+    section_heading(
+      language,
+      accounts,
+      i18n.Accounts,
+      view.segments_path(new_account_segments),
+      i18n.AddAccount,
     ),
     listed_body(
       language,
@@ -197,6 +206,25 @@ fn accounts_section(
       fn(rows) { item_list(list.map(rows, account_item(language, _))) },
     ),
   ])
+}
+
+/// 節の見出しと、一覧を得たときだけ出す追加のリンク（Primary）の行。アカウントと
+/// リレーの節が使う。
+fn section_heading(
+  language: Language,
+  listing: Result(a, String),
+  title: i18n.Message,
+  href: String,
+  link: i18n.Message,
+) -> Element(msg) {
+  let add_link = case listing {
+    Ok(_) -> view.button_link(href, i18n.text(language, link), view.Primary)
+    Error(_) -> element.none()
+  }
+  html.div(
+    [attribute.class("flex flex-wrap items-center justify-between gap-2")],
+    [view.heading(i18n.text(language, title)), add_link],
+  )
 }
 
 /// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした理由の囲みを、
@@ -401,14 +429,20 @@ fn pending_content(
 }
 
 /// リレーの一覧。1 件は `relays` の 1 行で、使っている用途ごとに用途の語と状態を並べる。
-/// バンカーに使う行が無ければ警告を、一覧を得られないときは理由を出す。
+/// 一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が無ければ警告を、
+/// 一覧を得られないときは理由を出す。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), String),
 ) -> Element(msg) {
-  let text = i18n.text(language, _)
   view.card([
-    view.heading(text(i18n.Relays)),
+    section_heading(
+      language,
+      relays,
+      i18n.Relays,
+      view.segments_path(new_relay_segments),
+      i18n.AddRelay,
+    ),
     no_bunker_relay_warning(language, relays),
     listed_body(
       language,

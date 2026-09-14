@@ -27,8 +27,8 @@
 //// CSS が変わることがあるので、これらのファイルを変えたらビルドし直す。クラス名は文字列の
 //// 連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。80 桁を超えても、
 //// クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
-//// `focus-visible:outline-base-content`、`input` の文字列には `border-base-content/60` を
-//// 付ける（デザイン方針 6 節。`stylesheet_test` が検査する）。
+//// `focus-visible:outline-base-content`、`input` と `checkbox` の文字列には
+//// `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が検査する）。
 
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -482,6 +482,11 @@ pub fn hint(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm text-base-content/70")], [html.text(text)])
 }
 
+/// カードの中でフォームの前に置く、フォームの説明。
+pub fn form_description(text: String) -> Element(msg) {
+  html.p([attribute.class("text-sm")], [html.text(text)])
+}
+
 /// 見出し行付きの表。行は `td` の並びで渡す。枠より広い値は枠の中で横に送る。
 pub fn table(
   headers: List(String),
@@ -654,6 +659,23 @@ pub fn labelled(caption: String, input: Element(msg)) -> Element(msg) {
   html.label([attribute.class("fieldset")], [
     html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
     input,
+  ])
+}
+
+/// 見出し、入力欄、案内をまとめた囲み。入力欄に `aria-label` と、案内の `id` を指す
+/// `aria-describedby` を付ける。`attributes` にクラスを含む入力欄の属性を渡す。
+pub fn hinted_input(
+  caption: String,
+  hint_id: String,
+  hint: String,
+  attributes: List(Attribute(msg)),
+) -> Element(msg) {
+  html.div([attribute.class("fieldset")], [
+    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    html.input(attributes),
+    html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
+      html.text(hint),
+    ]),
   ])
 }
 
