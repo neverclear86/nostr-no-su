@@ -135,7 +135,8 @@ pub type Context {
     /// 再表示のために、署名者の秘密鍵を nsec の文字列で問い合わせる。`Ok` の値は
     /// 秘密鍵そのもの。
     nsec: fn(String) -> Result(String, String),
-    relays: fn() -> List(dashboard.RelayRow),
+    /// リレーの一覧。`relay_list` が応答しない、DB を読めないときは表示する理由を返す。
+    relays: fn() -> Result(List(dashboard.RelayRow), String),
     plugins: fn() -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),

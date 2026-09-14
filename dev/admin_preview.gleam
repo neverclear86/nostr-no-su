@@ -122,23 +122,26 @@ fn context() -> admin.Context {
     update_label: fn(_, label) { change(label) },
     nsec: fn(_) { Ok(signer_nsec) },
     relays: fn() {
-      [
+      Ok([
         dashboard.RelayRow(
-          dashboard.MonitorRelay,
+          1,
           "wss://relay.example",
-          relay_connection.Connected,
+          Some(relay_connection.Connected),
+          Some(relay_connection.Disconnected),
         ),
         dashboard.RelayRow(
-          dashboard.MonitorRelay,
+          2,
           "ws://evil/\"><b>xss</b>",
-          relay_connection.Disconnected,
+          Some(relay_connection.Disconnected),
+          None,
         ),
         dashboard.RelayRow(
-          dashboard.BunkerRelay,
+          3,
           "ws://127.0.0.1:7801",
-          relay_connection.Connected,
+          None,
+          Some(relay_connection.Connected),
         ),
-      ]
+      ])
     },
     plugins: fn() {
       [
@@ -208,7 +211,7 @@ pub fn main() -> Nil {
     admin.Context(
       ..context(),
       accounts: fn() { Ok([]) },
-      relays: fn() { [] },
+      relays: fn() { Ok([]) },
       plugins: fn() { [] },
       sessions: fn() { Ok([]) },
       pending: fn() { Ok([]) },
