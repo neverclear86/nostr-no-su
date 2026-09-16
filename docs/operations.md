@@ -19,7 +19,7 @@
 
 - ダンプの `encrypted_privkey` と `encrypted_secret` はマスターキーで暗号化されている（[設計上の判断と既知の制約](design-decisions.md)）。マスターキーを失うとダンプからは戻せない。マスターキーは自動生成されず、ほかに写しは無い。
 - ダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。そのため両者は別の場所に置く（例: ダンプはバックアップ先のストレージ、マスターキーはパスワードマネージャー）。
-- 別のマスターキーで起動すると、行は消えずに飛ばされ、ログが `[bunker] skipped account <pubkey>: <理由>` と `loaded 0 of N account(s)` になる。この場合は正しいマスターキーに直して読み直させれば戻る。**管理 UI から同じ鍵を登録し直そうとしない**（`account is already registered` になる）。
+- 別のマスターキーで起動すると、行は消えずに飛ばされ、ログが `[bunker] skipped account <pubkey>: <理由>` と `loaded 0 of N account(s)` になる。管理 UI のダッシュボードにも「読み込めなかったアカウント」（`Unreadable accounts`）のカードとして出る。この場合は正しいマスターキーに直して読み直させれば戻る。**管理 UI から同じ鍵を登録し直そうとしない**（`account is already registered` になる）。
 
 ファイルで渡す構成では、そのファイルと `docker-compose.override.yml` の写しをダンプと別の場所に保つ。作り方と権限は [README](../README.md) の「秘密をファイルで渡す」にある（ホストの uid が 1000 でなく `chown` した場合は、写しを取るのに `sudo` が要る）。
 

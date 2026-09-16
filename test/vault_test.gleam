@@ -193,7 +193,11 @@ pub fn a_malformed_pubkey_is_not_echoed_test() {
   let row = Row(..row_a(), pubkey: "not-a-pubkey-marker")
   assert open_error(row) == vault.MalformedPubkey
   let described =
-    vault.describe_skipped(Skipped("not-a-pubkey-marker", vault.MalformedPubkey))
+    vault.describe_skipped(Skipped(
+      "not-a-pubkey-marker",
+      "",
+      vault.MalformedPubkey,
+    ))
   assert !string.contains(described, "not-a-pubkey-marker")
 }
 
@@ -246,7 +250,11 @@ pub fn open_rows_skips_only_the_broken_rows_test() {
 /// 飛ばした行の説明は、公開鍵と理由だけを含む。
 pub fn skipped_rows_are_described_by_pubkey_and_reason_test() {
   let pubkey = account.pubkey_hex(signer(privkey_a))
-  assert vault.describe_skipped(Skipped(pubkey, vault.UndecryptablePrivateKey))
+  assert vault.describe_skipped(Skipped(
+      pubkey,
+      "",
+      vault.UndecryptablePrivateKey,
+    ))
     == "skipped account "
     <> pubkey
     <> ": private key could not be decrypted (wrong ACCOUNT_MASTER_KEY or tampered row)"

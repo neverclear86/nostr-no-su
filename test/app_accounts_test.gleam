@@ -24,11 +24,11 @@ import support/app_tree.{
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_from, deliver_and_expect, discard_resume_points,
   drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, load_signer, memory_store, monotonic_ms, named_relay,
-  other_client_key, other_signer_key, receive_until, request, response_body,
-  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_tree, stop_tree, store_failure, store_with_load, stored_signer,
-  test_relay, test_relay_url,
+  forwarding_spec, idle_monitor, load_signer, memory_store, monotonic_ms,
+  named_relay, other_client_key, other_signer_key, receive_until, request,
+  response_body, secret, signed_request, signer_key, start_database,
+  start_loading_bunker_tree, start_tree, stop_tree, store_failure,
+  store_with_load, stored_signer, test_relay, test_relay_url,
 }
 import support/nip46_client.{account_for}
 
@@ -1006,6 +1006,7 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
             accounts: Loaded(accounts: [], skipped: [
               vault.Skipped(
                 pubkey: skipped,
+                label: "",
                 reason: vault.UndecryptablePrivateKey,
               ),
             ]),
@@ -1027,6 +1028,49 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
     assert process.receive(loads, 0) == Ok(Nil)
     assert bunker.accounts(name) == Ok([])
   })
+  stop_tree(tree)
+}
+
+/// 直近の読み込みで飛ばされた行は `app.skipped_rows` でも取れ、管理 UI の行
+/// （npub とラベルを持つ）になる。
+pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let skipped_pubkey = account.pubkey_hex(account_for(other_signer_key))
+  let store =
+    store_with_load(fn() {
+      Ok(
+        bunker.Snapshot(
+          ..accounts_only([]),
+          accounts: Loaded(accounts: [], skipped: [
+            vault.Skipped(
+              pubkey: skipped_pubkey,
+              label: "old wallet",
+              reason: vault.UndecryptablePrivateKey,
+            ),
+          ]),
+        ),
+      )
+    })
+  let spec =
+    app.Spec(
+      plugins: [],
+      monitor: idle_monitor(),
+      bunker: bunker_spec(name, store, [test_relay()], fixed_retry_delay),
+      admin: None,
+      open: fake_open(reports, None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list"),
+    )
+  let tree = start_tree(spec)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+
+  let assert Ok([row]) = app.skipped_rows(spec)
+  assert row.pubkey == skipped_pubkey
+  assert row.npub == account.npub(account_for(other_signer_key))
+  assert row.label == "old wallet"
+  assert row.reason == vault.UndecryptablePrivateKey
   stop_tree(tree)
 }
 

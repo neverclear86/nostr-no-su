@@ -10,6 +10,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
@@ -54,6 +55,7 @@ pub fn pages() -> List(String) {
   let empty =
     dashboard.Snapshot(
       accounts: Ok([]),
+      skipped: Ok([]),
       pending: Ok([]),
       relays: Ok([]),
       sessions: Ok([]),
@@ -71,6 +73,20 @@ pub fn pages() -> List(String) {
   let full =
     dashboard.Snapshot(
       accounts: Ok([row]),
+      skipped: Ok([
+        dashboard.SkippedRow(
+          pubkey: "cdef",
+          npub: "npub1unreadable",
+          label: "old wallet",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+        dashboard.SkippedRow(
+          pubkey: "not-a-pubkey",
+          npub: "",
+          label: "",
+          reason: vault.MalformedPubkey,
+        ),
+      ]),
       pending: Ok([pending, pending_mismatch]),
       relays: Ok([
         dashboard.RelayRow(

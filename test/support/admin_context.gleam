@@ -96,6 +96,7 @@ pub fn test_context(
   admin.Context(
     password: password,
     accounts: fn() { Ok([account_row(label)]) },
+    skipped: fn() { Ok([]) },
     add_account: fn(added, added_label) {
       let added_signer = account.pubkey_hex(added)
       process.send(reports, Added(added_signer, added_label))

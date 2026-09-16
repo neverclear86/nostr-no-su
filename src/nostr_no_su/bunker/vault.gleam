@@ -75,9 +75,9 @@ pub type Loaded {
 }
 
 /// 飛ばした行 1 件。pubkey は列の値のまま持ち、ログに出すかどうかは
-/// `describe_skipped` が決める。
+/// `describe_skipped` が決める。ラベルは平文の列から取り、ログには出さない。
 pub type Skipped {
-  Skipped(pubkey: String, reason: RowError)
+  Skipped(pubkey: String, label: String, reason: RowError)
 }
 
 /// 64 桁の 16 進からマスターキーを作る。前後の空白は無視し、大文字も受け付ける。
@@ -172,7 +172,7 @@ pub fn open_rows(key: MasterKey, rows: List(Row)) -> Loaded {
   let #(accounts, skipped) =
     rows
     |> list.map(fn(row) {
-      open_row(key, row) |> result.map_error(Skipped(row.pubkey, _))
+      open_row(key, row) |> result.map_error(Skipped(row.pubkey, row.label, _))
     })
     |> result.partition
   // `result.partition` は元の順序を逆にして返す。

@@ -16,7 +16,8 @@
 //// 承認・拒否・取り消しの 503）は、バンカーと管理 UI の Context が原因を型で返すので訳す。
 //// 承認待ちの一覧に無いトークンの承認ページの 404 の本文も訳す。これは外から届いた文字列
 //// ではなく、管理 UI が一覧との照合で自分で決めている判定だからである。プラグインの
-//// 再有効化の 503 は英語のまま。
+//// 再有効化の 503 は英語のまま。読み込みで飛ばされた行の理由は `vault.RowError` の型で
+//// 届くので訳す。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -27,6 +28,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/nip19
 
 /// 管理 UI を表示する言語。
@@ -231,6 +233,9 @@ pub type Message {
   Accounts
   AddAccount
   NoAccounts
+  UnreadableAccounts
+  UnreadableAccountsWarning
+  UnreadableReason(reason: vault.RowError)
   ConnectionUri
   ConnectionUriForApproval
   EditLabel
@@ -389,6 +394,10 @@ fn english(message: Message) -> String {
     Accounts -> "Accounts"
     AddAccount -> "Add account"
     NoAccounts -> "No accounts registered."
+    UnreadableAccounts -> "Unreadable accounts"
+    UnreadableAccountsWarning ->
+      "The current ACCOUNT_MASTER_KEY cannot decrypt these rows."
+    UnreadableReason(reason) -> english_row_error(reason)
     ConnectionUri -> "Connection URI"
     ConnectionUriForApproval -> "Connection URI (approval)"
     EditLabel -> "Edit label"
@@ -564,6 +573,9 @@ fn japanese(message: Message) -> String {
     Accounts -> "アカウント"
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。"
+    UnreadableAccounts -> "読み込めなかったアカウント"
+    UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
+    UnreadableReason(reason) -> japanese_row_error(reason)
     ConnectionUri -> "接続 URI"
     ConnectionUriForApproval -> "接続 URI（要承認）"
     EditLabel -> "ラベルを編集"
@@ -694,6 +706,23 @@ fn japanese(message: Message) -> String {
   }
 }
 
+/// 飛ばされた行を読み込めなかった理由の英語。
+fn english_row_error(reason: vault.RowError) -> String {
+  case reason {
+    vault.MalformedPubkey -> "The pubkey column cannot be read."
+    vault.UndecryptablePrivateKey ->
+      "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row)."
+    vault.InvalidPrivateKey ->
+      "The decrypted private key is not a valid secp256k1 key."
+    vault.PublicKeyMismatch ->
+      "The decrypted private key does not match the pubkey."
+    vault.UndecryptableSecret ->
+      "The connection secret cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row)."
+    vault.InvalidSecret ->
+      "The decrypted connection secret is empty or not valid UTF-8."
+  }
+}
+
 /// nsec を復号できなかった理由の日本語。
 fn japanese_nip19(error: nip19.Nip19Error) -> String {
   case error {
@@ -708,5 +737,19 @@ fn japanese_nip19(error: nip19.Nip19Error) -> String {
       "接頭辞が " <> nip19.prefix_text(expected) <> " ではありません。"
     nip19.InvalidPadding -> "bech32 のパディングが正しくありません。"
     nip19.InvalidLength -> "鍵の長さが 32 バイトではありません。"
+  }
+}
+
+/// 飛ばされた行を読み込めなかった理由の日本語。
+fn japanese_row_error(reason: vault.RowError) -> String {
+  case reason {
+    vault.MalformedPubkey -> "pubkey の列を読めない行です。"
+    vault.UndecryptablePrivateKey ->
+      "秘密鍵を復号できません（ACCOUNT_MASTER_KEY 違いか、行の改ざん）。"
+    vault.InvalidPrivateKey -> "復号した秘密鍵が secp256k1 の鍵として不正です。"
+    vault.PublicKeyMismatch -> "復号した秘密鍵が pubkey と一致しません。"
+    vault.UndecryptableSecret ->
+      "接続 secret を復号できません（ACCOUNT_MASTER_KEY 違いか、行の改ざん）。"
+    vault.InvalidSecret -> "復号した接続 secret が空か、UTF-8 として不正です。"
   }
 }

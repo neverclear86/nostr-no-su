@@ -320,6 +320,9 @@ pub type Msg {
   )
   /// 管理 UI に出すアカウントの一覧を問い合わせる。
   GetAccounts(reply: Subject(Result(List(Listing), String)))
+  /// 読み込みで飛ばされた行の一覧を問い合わせる。読み込み前、読み直しの前は理由を
+  /// 返す。
+  GetSkipped(reply: Subject(Result(List(vault.Skipped), String)))
   /// 署名者の秘密鍵を nsec の文字列で問い合わせる。管理 UI の再表示だけが使う。
   /// 要求は公開鍵と返信先しか持たないので、処理の途中で落ちてもクラッシュレポートに
   /// 秘密は出ない。
@@ -418,6 +421,13 @@ pub fn update_label(
 /// 返す。
 pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
   named.call(name, call_timeout_ms, GetAccounts)
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// 直近の読み込みで飛ばされた行の一覧。読み込めていない、あるいはアクターが
+/// 応答しないときは理由を返す。
+pub fn skipped(name: Name(Msg)) -> Result(List(vault.Skipped), String) {
+  named.call(name, call_timeout_ms, GetSkipped)
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -616,8 +626,8 @@ fn rejected_line(id: String, delivery: Delivery) -> String {
 
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
 /// 署名者ごとのラベルと、生きた接続の送信手段と、自分が起動した時刻と、読み込みの
-/// 進み具合と、OK を待っている応答の一覧だけを持つ。`not_before` はエンジンでは
-/// なくここに置き、アクターの起動時刻を刻む。
+/// 進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧だけを
+/// 持つ。`not_before` はエンジンではなくここに置き、アクターの起動時刻を刻む。
 type State {
   State(
     engine: engine.Engine,
@@ -637,6 +647,9 @@ type State {
     open_relays: fn(List(relay_list.Registered)) -> Nil,
     /// OK を待っている応答の一覧。
     deliveries: Deliveries,
+    /// 直近の読み込みで飛ばされた行。読み込みのたびに入れ替わり、書き込みでは
+    /// 変わらない。
+    skipped: List(vault.Skipped),
   )
 }
 
@@ -707,6 +720,7 @@ fn initialise(
     resubscribe: resubscribe,
     open_relays: open_relays,
     deliveries: new_deliveries(),
+    skipped: [],
   )
   |> actor.initialised
   |> actor.selecting(selector)
@@ -714,8 +728,8 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・セッション・
-/// 承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件を
+/// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・飛ばされた行・
+/// セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件を
 /// エンジンに通して生成された応答の全接続への送信、発行した応答への OK の反映、
 /// リレーの AUTH に返す認証イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
@@ -727,6 +741,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     GetAccounts(reply) -> {
       process.send(reply, listings(state))
+      actor.continue(state)
+    }
+    GetSkipped(reply) -> {
+      process.send(reply, when_loaded(state, fn() { state.skipped }))
       actor.continue(state)
     }
     GetNsec(signer:, reply:) -> {
@@ -1026,7 +1044,7 @@ fn listings(state: State) -> Result(List(Listing), String) {
 }
 
 /// 読み込み済みなら `read` の値を、読み込みか読み直しが終わっていなければ一覧の
-/// 代わりの理由を返す。アカウント、承認待ち、セッションの一覧が使う。
+/// 代わりの理由を返す。アカウント、飛ばされた行、承認待ち、セッションの一覧が使う。
 fn when_loaded(state: State, read: fn() -> a) -> Result(a, String) {
   case state.accounts {
     Ready -> Ok(read())
@@ -1071,6 +1089,7 @@ fn reconcile(state: State, snapshot: Snapshot, now: Int) -> State {
       snapshot.pending,
       now,
     ),
+    skipped: loaded.skipped,
   )
 }
 
