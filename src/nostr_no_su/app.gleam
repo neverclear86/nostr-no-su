@@ -139,6 +139,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
@@ -239,6 +240,16 @@ pub type Spec {
     reconnect_delay: backoff.Backoff,
     relay_list: Name(relay_list.Msg),
   )
+}
+
+/// `nostrconnect://` の接続が成立しなかった理由。
+pub type NostrconnectFailure {
+  /// URI のリレーを DB に登録できなかった、または接続を開けなかった。
+  RelayNotRegistered(failure: admin.RelayChangeFailure)
+  /// 上限まで待っても、URI のリレーがどれも応答の発行先にならなかった。
+  RelayNotConnected
+  /// セッションを開けなかった。
+  SessionNotOpened(failure: bunker.SessionFailure)
 }
 
 /// ツリーを起動する。子は互いに独立しているためルートは `one_for_one`。
@@ -587,8 +598,7 @@ fn monitor_urls(spec: Spec) -> List(String) {
   |> result.unwrap([])
 }
 
-/// リレー 1 件の接続を開き、起動の依頼を終えてから返す。#125 はこれでバンカーの
-/// リレーを足す。
+/// リレー 1 件の接続を開き、起動の依頼を終えてから返す。
 pub fn open_relay(
   spec: Spec,
   url: String,
@@ -816,6 +826,110 @@ fn role_status(
         Some(value) -> dashboard.Reported(value)
         None -> dashboard.Unanswered
       }
+  }
+}
+
+/// URI のリレーが応答の発行先に現れたかを確かめる間隔。
+const publisher_poll_interval_ms = 100
+
+/// URI のリレーが応答の発行先に現れるのを待つ上限。超えたら `RelayNotConnected`
+/// を返す。
+const nostrconnect_publisher_timeout_ms = 15_000
+
+/// 解釈済みの `nostrconnect://` のリレーをバンカーの用途で登録し、応答の発行先に
+/// なるのを待ってから、署名者とクライアントのセッションを開いて `connect` の
+/// 応答を発行する。
+pub fn connect_nostrconnect(
+  spec: Spec,
+  request: nostrconnect.ConnectRequest,
+  signer: String,
+) -> Result(Nil, NostrconnectFailure) {
+  use _nil <- result.try(
+    list.try_each(request.relays, ensure_bunker_relay(spec, _))
+    |> result.map_error(RelayNotRegistered),
+  )
+  use _nil <- result.try(
+    case
+      await_publisher(spec, request.relays, nostrconnect_publisher_timeout_ms)
+    {
+      True -> Ok(Nil)
+      False -> Error(RelayNotConnected)
+    },
+  )
+  bunker.open_client_session(
+    spec.bunker.name,
+    signer,
+    request.client,
+    request.perms,
+    request.secret,
+  )
+  |> result.map_error(SessionNotOpened)
+}
+
+/// URI のリレー 1 件をバンカーの用途で使えるようにする。DB の行が無ければ登録し、
+/// あって用途にバンカーが無ければ用途を足す。すでにバンカーの用途なら何もしない。
+fn ensure_bunker_relay(
+  spec: Spec,
+  url: String,
+) -> Result(Nil, admin.RelayChangeFailure) {
+  use registered <- result.try(
+    registered_relays(spec) |> result.map_error(admin.RelayNotSaved),
+  )
+  case bunker_relay_plan(registered, url) {
+    RegisterRelay ->
+      add_relay(spec, url, relay_list.Roles(monitor: False, bunker: True))
+    GrantBunkerRole(relay) ->
+      update_relay_roles(
+        spec,
+        relay,
+        relay_list.Roles(monitor: relay.roles.monitor, bunker: True),
+      )
+    AlreadyBunker -> Ok(Nil)
+  }
+}
+
+/// URI のリレー 1 件を、バンカーの用途で使えるようにするために要る変更。
+pub type RelayPlan {
+  /// 登録済みで用途にバンカーがある。変更は要らない。
+  AlreadyBunker
+  /// DB に行が無い。バンカー用途で登録する。
+  RegisterRelay
+  /// 登録済みだが用途にバンカーが無い。用途を足す。
+  GrantBunkerRole(relay: relay_store.Relay)
+}
+
+/// DB の行から `url` の変更を決める。行が無ければ `RegisterRelay`、あって用途に
+/// バンカーが無ければ `GrantBunkerRole`、あれば `AlreadyBunker`。
+/// 単体テストが呼べるよう公開する。
+pub fn bunker_relay_plan(
+  registered: List(relay_store.Relay),
+  url: String,
+) -> RelayPlan {
+  case list.find(registered, fn(relay) { relay.url == url }) {
+    Error(Nil) -> RegisterRelay
+    Ok(relay) ->
+      case relay.roles.bunker {
+        True -> AlreadyBunker
+        False -> GrantBunkerRole(relay)
+      }
+  }
+}
+
+/// URI のリレーの URL が応答の発行先に現れるまで待つ。応答は発行先として配られた
+/// 送信関数から出ていくため、接続の状態ではなく発行先そのものを見る。アクターが
+/// 答えなければ未到達として次の周期へ回す。残りが尽きたら `False`。
+fn await_publisher(spec: Spec, urls: List(String), remaining_ms: Int) -> Bool {
+  let reached = case bunker.publisher_urls(spec.bunker.name) {
+    Some(publishers) -> list.any(urls, list.contains(publishers, _))
+    None -> False
+  }
+  case reached, remaining_ms <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(publisher_poll_interval_ms)
+      await_publisher(spec, urls, remaining_ms - publisher_poll_interval_ms)
+    }
   }
 }
 

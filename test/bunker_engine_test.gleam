@@ -1784,6 +1784,96 @@ pub fn approve_writes_the_approval_test() {
     )
 }
 
+// --- nostrconnect:// のセッション ---
+
+/// 解釈済みの `nostrconnect://` の情報から開くセッションは、URI の secret を
+/// `result` に入れた応答をクライアント宛に返す。
+pub fn open_client_session_replies_with_the_uri_secret_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let assert Ok(#(_state, response, _write)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "",
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  assert response.kind == event.nip46_kind
+  assert response.tags == [["p", account.pubkey_hex(client)]]
+  assert response.pubkey == account.pubkey_hex(signer)
+  assert event.verify_signature(response)
+  assert decrypt_response(client, signer, response)
+    == "{\"id\":\"req-1\",\"result\":\"uri-secret\"}"
+}
+
+/// 開いたセッションは承認済みとして `engine.sessions` に現れ、書き込みの値は
+/// `InsertSession` になる。
+pub fn open_client_session_opens_an_approved_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let assert Ok(#(state, _response, write)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event:1",
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  let session =
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "sign_event:1",
+      created_at: 1000,
+      last_used_at: 1000,
+    )
+  assert write == engine.InsertSession(session: session, evicted: [])
+  assert engine.sessions(state) == [session]
+}
+
+/// `max_perms_bytes` を超える perms は `connect` と同じくトークンの境で切る。
+pub fn open_client_session_bounds_the_perms_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
+  let over_limit = long_prefix <> ",sign_event:12"
+  let assert Ok(#(state, _response, write)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      over_limit,
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  let assert engine.InsertSession(session:, ..) = write
+  assert session.perms == long_prefix
+  let assert [session] = engine.sessions(state)
+  assert session.perms == long_prefix
+}
+
+/// 登録されていない署名者とのセッションは開けない。
+pub fn open_client_session_rejects_an_unknown_signer_test() {
+  let client = account_for(client_key)
+  let stranger = account_for(other_signer_key)
+  assert engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(stranger),
+      account.pubkey_hex(client),
+      "",
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+    == Error("no matching account for " <> account.pubkey_hex(stranger))
+}
+
 // --- セッションの件数の上限 ---
 
 /// 上限ちょうどの 32 件のセッション。`client-0` は最終利用が最も古く、作成は

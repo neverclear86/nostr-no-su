@@ -419,7 +419,8 @@ pub fn approve(
   let #(engine, evicted) = open_session(engine, session)
   use #(engine, reply) <- result.map(respond(
     engine,
-    entry,
+    entry.signer,
+    entry.client,
     rpc.ok(entry.request_id, "ack"),
     now,
   ))
@@ -428,6 +429,34 @@ pub fn approve(
     reply,
     ApprovePending(token: token, session: session, evicted: evicted),
   )
+}
+
+/// クライアントが出した `nostrconnect://` に応じて、（署名者, クライアント）の組を
+/// 承認済みにする。承認待ちを作らずに直接セッションを開き、URI の `secret` を
+/// `result` に入れた応答イベントを返す。`perms` は `bounded_perms` で切る。
+/// 書き込みの値は `InsertSession`（押し出す組つき）。組がすでに承認済みなら
+/// 既存のセッションの値を保ち、応答だけを返す（クライアントは secret の受領を
+/// 待っているため）。署名者が登録されていないか、会話鍵か署名を作れないときは
+/// 理由を返す。
+pub fn open_client_session(
+  engine: Engine,
+  signer: String,
+  client: String,
+  perms: String,
+  secret: String,
+  request_id: String,
+  now: Int,
+) -> Result(#(Engine, Event, Write), String) {
+  let session = new_session(signer, client, bounded_perms(perms), now)
+  let #(engine, evicted) = open_session(engine, session)
+  use #(engine, reply) <- result.map(respond(
+    engine,
+    signer,
+    client,
+    rpc.ok(request_id, secret),
+    now,
+  ))
+  #(engine, reply, InsertSession(session: session, evicted: evicted))
 }
 
 /// 承認待ちの接続要求を拒否する。承認済みにはせず、元の `connect` と同じ id の
@@ -441,7 +470,8 @@ pub fn deny(
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
   use #(engine, reply) <- result.map(respond(
     engine,
-    entry,
+    entry.signer,
+    entry.client,
     rpc.error(entry.request_id, "connection denied"),
     now,
   ))
@@ -475,26 +505,24 @@ fn expired(entry: Pending, now: Int) -> Bool {
   entry.created_at < now - pending_ttl_seconds
 }
 
-/// 承認・拒否の結果を、待たせているクライアント宛の応答イベントにする。会話鍵は
-/// 署名者の秘密鍵とクライアント pubkey から導出し直す。
+/// 応答をクライアント宛の kind 24133 イベントにする。会話鍵は署名者の秘密鍵と
+/// クライアント pubkey から導出する。
 fn respond(
   engine: Engine,
-  entry: Pending,
+  signer: String,
+  client: String,
   response: rpc.Response,
   now: Int,
 ) -> Result(#(Engine, Event), String) {
   use #(account, _secret) <- result.try(
-    dict.get(engine.accounts, entry.signer)
-    |> result.replace_error("no matching account for " <> entry.signer),
+    dict.get(engine.accounts, signer)
+    |> result.replace_error("no matching account for " <> signer),
   )
-  use conversation_key <- result.try(client_conversation_key(
-    account,
-    entry.client,
-  ))
+  use conversation_key <- result.try(client_conversation_key(account, client))
   use reply <- result.map(build_reply(
     account,
     conversation_key,
-    entry.client,
+    client,
     response,
     now,
   ))
