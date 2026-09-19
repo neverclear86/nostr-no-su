@@ -32,9 +32,9 @@ PR レビューの承認は `test("^<!-- nns kind=pr-review .* verdict=APPROVE")
 gh api repos/$R/issues/<PR>/comments --jq '.[] | select((.body | split("\n")[0] | test("^<!-- nns ")) | not) | select(.body | test("(^|\n)## (レビュー|最終確認|まとめ|.*への対応)")) | .html_url'
 ```
 
-上の列挙が 1 件でもあれば、見出しで代替せずに not_ready にし、problem に「マーカーが無いコメント」としてその URL を書く。
 APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（rebase の後も、その前のコミットはローカルの object DB に残る。無ければ `gh api repos/$R/commits/<その SHA> --jq .commit.committer.date` で時刻を得る）。PR の `commits[-1].committedDate` は現在の head の時刻なので、rebase の後の比較には使わない。
 
+- 上の列挙が 1 件でもあれば、見出しで代替せずに not_ready にし、problem に「マーカーが無いコメント」としてその URL を書く
 - 指示された head が PR の head と一致する
 - 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
 - `kind=pr-review` の最後のコメントと `kind=gate` の最後のコメントが、どちらも `verdict=APPROVE` である
