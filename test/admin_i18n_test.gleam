@@ -127,36 +127,47 @@ pub fn language_switch_returns_only_within_the_site_test() {
 }
 
 /// 対応していない言語、GET、別のオリジンからの切り替え、資格情報の無い切り替えは受け付けず、
-/// cookie を保存しない。
+/// cookie を保存せず、それぞれの理由の本文を返す。
 pub fn language_switch_rejects_invalid_requests_test() {
+  let form_not_readable = i18n.text(i18n.English, i18n.FormNotReadable)
   let rejected = [
     #(
       language_switch_request([#("language", "fr"), #("return", "/")])
         |> admin.handle_request(context(), _),
       400,
+      form_not_readable,
     ),
     #(
       language_switch_request([#("return", "/")])
         |> admin.handle_request(context(), _),
       400,
+      form_not_readable,
     ),
-    #(get(context(), "/language"), 405),
+    #(
+      get(context(), "/language"),
+      405,
+      i18n.text(i18n.English, i18n.MethodNotAllowedDetail),
+    ),
     #(
       language_switch_request([#("language", "ja"), #("return", "/")])
         |> request.set_header("origin", "http://evil.example")
         |> admin.handle_request(context(), _),
       400,
+      i18n.text(i18n.English, i18n.OriginMismatch),
     ),
     #(
       simulate.browser_request(http.Post, "/language")
         |> simulate.form_body([#("language", "ja"), #("return", "/")])
         |> admin.handle_request(context(), _),
       401,
+      "Unauthorized",
     ),
   ]
-  use #(response, status) <- list.each(rejected)
+  use #(response, status, expected) <- list.each(rejected)
   assert response.status == status
   assert list.key_find(response.headers, "set-cookie") == Error(Nil)
+  assert #(expected, string.contains(simulate.read_body(response), expected))
+    == #(expected, True)
 }
 
 /// 切り替えた言語は、GET のページにも、ブラウザーから送った POST の応答のページにも保たれる。
