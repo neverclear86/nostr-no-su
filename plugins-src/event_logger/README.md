@@ -84,11 +84,13 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 | `DATABASE_URL=postgres://…` | `PLUGIN_EVENT_LOGGER_DATABASE_URL=postgres://…` |
 | `DATABASE_URL=`（空）で保存を無効化 | **プラグインを置かないことが無効化である** |
 
-**空文字列の意味が変わった。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は本体が空値を落とすため、プラグインには**キーごと届かない**。結果は「設定が足りない」であり、起動のたびに上の 1 行が出る。保存をやめるなら `plugins/event_logger` を置かないこと。
+**DB はそのまま使える。** 旧構成で作られた `events` テーブルと 2 つのインデックスは、現在の移行 1 と同じ DDL で作られている。移行の文はすべて `IF NOT EXISTS` なので、旧構成の DB を `PLUGIN_EVENT_LOGGER_DATABASE_URL` に向けても行と定義は触られないまま `event_logger_schema_version` に版 1 が記録される（確認は「確認」の節の `schema ready` の行、版の仕組みは同じ文書の「スキーマの版」にある）。
+
+**空文字列の意味が変わった。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は本体が空値を落とすため、プラグインには**キーごと届かない**。起動のたびに出る行と保存をやめる方法は [README](../../README.md) の「環境変数」にある。
 
 **`DATABASE_URL` は本体の設定として別の意味で復活している。** 現在の `DATABASE_URL` はバンカーがアカウント（暗号化した秘密鍵と接続 secret）を保存する先で、イベント保存とは関係しない。旧構成の `.env` をそのまま使うと、イベント保存用だった URL がアカウントストアの接続先として読まれる。
 
-管理 UI の「Event storage」欄も無くなった。代わりに Plugins 欄の `event_logger` 行が、置いていなければ出ず、動いていれば `running`、子を諦めていれば `disabled: …` を示す。真偽 2 値だった旧欄より情報量は増えている。
+管理 UI の「Event storage」欄も無くなった。代わりは Plugins 欄の `event_logger` 行である（状態の語の意味は [管理 UI](../../docs/admin-ui.md) にある）。
 
 ## `pgo` のアプリケーションを自分で起動していること
 
