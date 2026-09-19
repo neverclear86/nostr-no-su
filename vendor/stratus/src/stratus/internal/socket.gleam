@@ -44,6 +44,12 @@ pub type SocketReason {
   // variant the conversion in stratus.gleam crashes the actor with a
   // case_clause during the handshake.
   Nxdomain
+  // VENDORED PATCH (nostr-no-su): ssl returns
+  // {error, {tls_alert, {Alert, Description}}} when a TLS alert is raised.
+  // This variant carries the pair as-is, and stratus.gleam maps it to the
+  // alert name. Without this variant the conversion in stratus.gleam
+  // crashes the actor with a case_clause during the handshake.
+  TlsAlert(#(Atom, Dynamic))
 }
 
 pub type TcpOption =

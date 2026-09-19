@@ -108,6 +108,27 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
     == Error("WebSocket handshake failed: Sock(Nxdomain)")
 }
 
+/// 平文の TCP サーバーに `wss://` で繋ぐと、TLS でない応答の先頭のバイトが
+/// レコードの型として不正なので、`ssl:connect` は `unexpected_message` の
+/// アラートで失敗する。TLS のアラート（vendor のパッチ 0007 が扱う
+/// `tls_alert`）を安定して再現できる。この経路が回帰すると、写像が
+/// `case_clause` で落ちてこの文が返らない。
+pub fn start_reports_a_tls_alert_as_a_handshake_failure_test() {
+  let port = listen_on_plain_tcp()
+  assert relay_client.start(
+      "wss://127.0.0.1:" <> int.to_string(port),
+      fn() { Ok([]) },
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
+    )
+    == Error(
+      "WebSocket handshake failed: Sock(TlsAlert(\"unexpected_message\"))",
+    )
+}
+
 // --- handle_text の単体テスト ---
 
 /// リレーが購読 `sub` に配信する EVENT メッセージ。
@@ -874,6 +895,11 @@ fn failing_once(evaluations: Subject(Int)) -> Subscriptions {
 /// 評価の回数を 0 から数え、呼ぶ前の値を返す。
 @external(erlang, "subscription_counter", "next")
 fn next_evaluation() -> Int
+
+/// 平文の TCP の待ち受けを立て、そのポート番号を返す。TLS のアラートの
+/// 再現に使う。
+@external(erlang, "plain_tcp_server", "listen")
+fn listen_on_plain_tcp() -> Int
 
 /// 本物の `relay_client` を接続する。
 fn connect(
