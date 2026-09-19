@@ -3,6 +3,7 @@ import gleam/bit_array
 import gleam/bool
 import gleam/bytes_tree.{type BytesTree}
 import gleam/crypto
+import gleam/erlang/atom
 import gleam/erlang/charlist
 import gleam/erlang/process.{type Selector, type Subject}
 import gleam/http.{Http, Https}
@@ -74,6 +75,8 @@ pub type SocketReason {
   // VENDORED PATCH (nostr-no-su): the host name could not be resolved. See
   // socket.SocketReason.
   Nxdomain
+  // VENDORED PATCH (nostr-no-su): a TLS alert. See socket.SocketReason.
+  TlsAlert(String)
 }
 
 pub type CustomCloseError {
@@ -117,6 +120,8 @@ fn convert_socket_reason(reason: socket.SocketReason) -> SocketReason {
     socket.Timeout -> Timeout
     // VENDORED PATCH (nostr-no-su): see socket.SocketReason.
     socket.Nxdomain -> Nxdomain
+    // VENDORED PATCH (nostr-no-su): see socket.SocketReason.
+    socket.TlsAlert(#(alert, _description)) -> TlsAlert(atom.to_string(alert))
   }
 }
 
