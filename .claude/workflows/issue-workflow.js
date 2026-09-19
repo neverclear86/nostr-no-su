@@ -221,7 +221,7 @@ ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメ�
   plan1: (e, issue, designUrl, prReviewUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
-${prReviewUrl ? `- この issue はプラン無しで実装され、PR レビューが設計に起因する must を出した（${prReviewUrl}。本文は \`gh api\` で読む）。その must を解く設計を「決めたこと」に書き、すでに実装済みの箇所は前提として扱う。分割はしない\n` : ''}${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
+${prReviewUrl ? `- この issue はプラン無しで実装され、PR レビューが設計に起因する must を出した（${prReviewUrl}。本文は \`gh api\` で読む）。その must を解く設計を「決めたこと」に書き、すでに実装済みの箇所は前提として扱う。分割はしない\n` : ''}${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : prReviewUrl || issue.noSplit ? 'この issue は分割しない（実装が途中まで進んでいる）。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
   // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
@@ -284,7 +284,7 @@ ${SAFETY}
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}PR 本文に「## 設計メモ」を置く（「## 概要」の次）。承認済みプランが無いので、レビュアーと最終確認はこの節を設計の記録として読む。内容は次の 2 つだけである。
 1. 決めたこと: 判断が分かれた点ごとに、決定・理由・捨てた案。判断が無ければ「無し」
 2. 受け入れ条件 → 満たす変更 → 検証の手順の表（issue の受け入れ条件 1 件 1 行）
-調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、実装を続けずに status を deviation にし、その見込みと理由を ${PLANS}/${e.n}-deviation.md に書いて返す（スクリプトが light に切り替えてプランを書かせ、途中の作業ツリーから続きを実装させる）。途中の変更はコミットせずに作業ツリーに残してよい。
+調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、実装を続けずに status を deviation にし、その見込みと理由を ${PLANS}/${e.n}-deviation.md に書いて返す（スクリプトがプランを書かせ、途中の作業ツリーから続きを実装させる）。途中の変更はコミットせずに作業ツリーに残してよい。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
@@ -326,9 +326,11 @@ ${issue.ui ? '- UI を変える PR なので、スクリーンショットと CS
 レビューを PR コメントに投稿してほしい。
 ${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは conditions、must が設計メモに起因するか（designMust）。`,
-  prReviewNext: (e, pr, r, responseUrl, head, prevUrl, prevKind) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）のレビューをしてほしい（ラウンド ${r}）。
+  prReviewNext: (e, pr, r, responseUrl, head, prevUrl, prevKind, postUrl) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）のレビューをしてほしい（ラウンド ${r}）。
 実装側が${prevKind}（${prevUrl}）の指摘に対応した（${responseUrl}、head ${head}）。
-- 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${e.reviewWt} fetch origin ${e.branch} && git -C ${e.reviewWt} checkout --detach origin/${e.branch}\` で進める。無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
+${postUrl ? `- 照合の相手はこの承認済みのプランである: ${postUrl}
+` : `- 承認済みのプランは無い（tier none）。照合の相手は issue #${e.n} の受け入れ条件と、PR 本文の「## 設計メモ」である
+`}- 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${e.reviewWt} fetch origin ${e.branch} && git -C ${e.reviewWt} checkout --detach origin/${e.branch}\` で進める。無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
 前のラウンドの指摘ごとに直ったかを照合し、対応コミットの差分がその範囲に収まっているかを確かめて、再判定してほしい。
 ${SAFETY}
@@ -351,12 +353,14 @@ ${SAFETY}
 - PR レビューが APPROVE を出した head: ${state.reviewApprovedHead}
 ${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（対応後の head ${state.head}）。\`gh api repos/${REPO}/compare/${state.reviewApprovedHead}...${state.head}\` で、対応の差分が条件 ${state.prConditionCount} 件の範囲に収まっているかも見る。範囲を超える変更があれば must にする\n` : ''}`,
   gate1: (e, state, issue) => `PR #${state.pr}（issue #${e.n}、head ${state.head}）の最終確認をしてほしい。
+- 最終確認のラウンド: ${state.gateRounds}（コメントのマーカーの round に使う）
 - ${state.postUrl ? `承認済みのプラン: ${state.postUrl}` : `承認済みのプランは無い（tier none）。照合の相手は issue #${e.n} の受け入れ条件と、PR 本文の「## 設計メモ」である`}
 - PR レビューの APPROVE: ${state.approveUrl}（ラウンド ${state.prRounds}）
 ${P.gateCourse(state)}再現はせず、diff とレビューの経緯と受け入れ条件の照合だけを行い、「## 最終確認」を PR コメントに投稿してほしい。
 判定が APPROVE なら、続けて「## まとめ」を別のコメントとして 1 本投稿する（上の経緯と、学びを 0〜3 件）。
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは lessons。`,
   gateNext: (e, state, responseUrl, prevGateUrl) => `PR #${state.pr}（issue #${e.n}、head ${state.head}）の最終確認の再確認をしてほしい。
+- 最終確認のラウンド: ${state.gateRounds}（コメントのマーカーの round に使う）
 前回の最終確認（${prevGateUrl}）の指摘に実装側が対応し（${responseUrl}）、PR レビュアーも再レビューで APPROVE を出した（${state.approveUrl}）。
 ${P.gateCourse(state)}前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。見出しは再確認でも「## 最終確認」だけにする（マーカーは kind=gate）。
 判定が APPROVE なら、続けて「## まとめ」を別のコメントとして 1 本投稿する（上の経緯と、学びを 0〜3 件）。
@@ -364,7 +368,7 @@ ${P.gateCourse(state)}前回の指摘ごとに直ったかを照合し、再確�
   merge: (e, pr, head, approvedHead, reviewApprovedHead, conditionsUrl) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
 - PR レビューが APPROVE を出した head: ${reviewApprovedHead}
 - 最終確認が APPROVE を出した head: ${approvedHead}${head !== approvedHead ? '（その後に rebase で head が変わった。差分が rebase だけであることを確かめてからマージする）' : ''}
-${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が 1 回入っている（${conditionsUrl}。マーカー kind=fix）\n` : '- レビューの APPROVE の後に条件への対応は無い\n'}
+${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が入っている（最後の対応コメント: ${conditionsUrl}。マーカー kind=fix）\n` : '- レビューの APPROVE の後に条件への対応は無い\n'}
 - 作業ツリー（マージの前に消す）: ${e.wt}、${e.reviewWt}、${e.planWt}
 - squash コミットの本文（トレーラー 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -473,18 +477,17 @@ async function implementStage(e, issue, state) {
     { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
   let replans = 0
   while (impl.status === 'deviation') {
-    // tier none には上げるプランが無いので、見込みが外れたら light に切り替えてプランを書かせ、途中の作業ツリーから続きを実装させる
+    // tier none には上げるプランが無いので、見込みが外れたらプランを書かせ、途中の作業ツリーから続きを実装させる（tier の記録は none のまま残す）
     if (noPlan) {
       noPlan = false
-      state.tier = 'light'
-      log(`#${e.n}: tier none の見込みを超えた（${impl.reason || impl.reportFile}）。light に切り替えてプランを書く`)
-      const noted = { ...issue, note: `${issue.note ? `${issue.note}\n` : ''}tier none で実装を始めたが見込みを超えた（報告: ${impl.reportFile || `${PLANS}/${e.n}-deviation.md`}）。作業ツリー ${e.wt} の途中の差分は前提にしてよい` }
+      log(`#${e.n}: tier none の見込みを超えた（${impl.reason || impl.reportFile}）。プランを書いてから続きを実装する`)
+      const noted = { ...issue, noSplit: true, note: `${issue.note ? `${issue.note}\n` : ''}tier none で実装を始めたが見込みを超えた（報告: ${impl.reportFile || `${PLANS}/${e.n}-deviation.md`}）。作業ツリー ${e.wt} の途中の差分は前提にしてよい` }
       const pl = await planStage(e, noted, state)
       if (pl.blocked || pl.stalled) return pl
       if (pl.split) return { blocked: { stage: 'plan', questions: [`#${e.n} は tier none で実装を始めた後にプランが分割を求めた。途中の作業ツリー ${e.wt} を捨てて分割するか、1 件で進めるかを決める`] } }
       state.postUrl = pl.postUrl
       state.version = pl.version
-      impl = await call('implement', `Implement #${e.n} (続き light)`, P.implementContinue(e, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
+      impl = await call('implement', `Implement #${e.n} (続き プラン)`, P.implementContinue(e, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
       continue
     }
     if (replans >= MAX_REPLANS) return { stalled: { stage: 'implement', reason: `逸脱でプランを ${replans} 回上げても実装が終わらない: ${impl.reason || ''}` } }
@@ -517,7 +520,8 @@ async function applyPrConditions(e, state, rev, phase) {
   state.reviewApprovedHead = state.head
   state.nits += rev.nit || 0
   const conds = rev.conditions || []
-  if (!conds.length) return {}
+  // 条件が無い再レビューでは、前のラウンドの対応コメントを残さない（最終確認とマージに古い URL が渡る）
+  if (!conds.length) { state.conditionsUrl = null; return {} }
   state.prConditionCount += conds.length
   log(`#${e.n}: PR #${state.pr} のレビューは APPROVE だが条件が ${conds.length} 件ある。再レビューせずに直させる`)
   const fix = await fixRound(e, state, `Fix conditions PR #${state.pr}`, P.fixConditions(e, state.pr, rev.commentUrl, conds), phase)
@@ -529,13 +533,14 @@ async function applyPrConditions(e, state, rev, phase) {
 
 /** PR レビューと修正の往復。APPROVE のコメント URL を返す */
 async function prReviewStage(e, issue, state) {
-  const noPlan = state.tier === 'none'
+  // tier none でも deviation でプランが作られていることがあるので、プランの有無は postUrl で見る
+  const noPlan = !state.postUrl
   let responseUrl = null, prevUrl = null, designReplanned = false
   while (true) {
     state.prRounds++
     const r = state.prRounds
     const rev = await call('pr-review', `PR review #${state.pr} r${r}`,
-      r > 1 ? P.prReviewNext(e, state.pr, r, responseUrl, state.head, prevUrl, `ラウンド ${r - 1} のレビュー`)
+      r > 1 ? P.prReviewNext(e, state.pr, r, responseUrl, state.head, prevUrl, `ラウンド ${r - 1} のレビュー`, state.postUrl)
         : noPlan ? P.prReviewNoPlan(e, state.pr, state.head, issue)
           : P.prReview1(e, state.pr, state.head, state.postUrl, issue, state.conditions),
       { agentType: 'issue-pr-reviewer', phase: 'PR レビュー', schema: S.prReviewer })
@@ -545,7 +550,7 @@ async function prReviewStage(e, issue, state) {
     // 設計に起因する must は実装起因に数えない（まとめの材料）
     if (!rev.designMust) state.implMusts += rev.must || 0
     // tier none で 2 回目の設計 must は、その場のプランでも収束していないのでユーザーに戻す
-    if (rev.designMust && designReplanned) return { stalled: { stage: 'pr-review', reason: `#${e.n} は tier none で設計に起因する must が 2 回出た（プランを作っても収束しない）` } }
+    if (rev.designMust && designReplanned) return { stalled: { stage: 'pr-review', reason: `#${e.n} は設計に起因する must が 2 回出た（プランを作り直しても収束しない）` } }
     if (r >= MAX_PR_ROUNDS) return { stalled: { stage: 'pr-review', reason: `PR レビューが ${r} ラウンドで収束しない（最後は must ${rev.must}、should ${rev.should}）` } }
     let planNote = ''
     if (rev.designMust && !designReplanned) {
@@ -589,13 +594,11 @@ async function gateStage(e, issue, state) {
     responseUrl = fix.commentUrl
     state.head = fix.head
     state.prRounds++
-    const rev = await call('pr-review', `PR review #${state.pr} r${state.prRounds}`, P.prReviewNext(e, state.pr, state.prRounds, responseUrl, state.head, gate.commentUrl, '最終確認'), { agentType: 'issue-pr-reviewer', phase: '最終確認', schema: S.prReviewer })
+    const rev = await call('pr-review', `PR review #${state.pr} r${state.prRounds}`, P.prReviewNext(e, state.pr, state.prRounds, responseUrl, state.head, gate.commentUrl, '最終確認', state.postUrl), { agentType: 'issue-pr-reviewer', phase: '最終確認', schema: S.prReviewer })
     if (rev.verdict !== 'APPROVE') return { stalled: { stage: 'gate', reason: `最終確認の指摘への対応が PR レビューで APPROVE にならない（must ${rev.must}、should ${rev.should}）` } }
-    const prevConditionsUrl = state.conditionsUrl
+    // 条件への対応は gateCourse が別の行で渡すので、再確認に渡す responseUrl（最終確認の指摘への対応）は差し替えない
     const ac = await applyPrConditions(e, state, rev, '最終確認')
     if (ac.blocked) return ac
-    // この再レビューでも条件が付いたときだけ、再確認に渡す対応コメントを差し替える
-    if (state.conditionsUrl !== prevConditionsUrl) responseUrl = state.conditionsUrl
   }
   return { stalled: { stage: 'gate', reason: `最終確認が ${MAX_GATE_ROUNDS} 回で APPROVE にならない` } }
 }
@@ -681,7 +684,7 @@ async function runIssue(issue, idx) {
     const stages = [
       // 判定 → デザイン → プラン。承認済みのプランがあれば 3 つとも飛ばす。サブ issue は判定を飛ばし、デザインは親の URL を継ぐ
       async () => {
-        if (issue.planUrl) { state.postUrl = issue.planUrl; state.tier = state.tier || 'light'; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
+        if (issue.planUrl) { state.postUrl = issue.planUrl; state.tier = 'light'; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
         // args.issues[].tier で固定されていれば判定を飛ばす（A/B と再開のため）。サブ issue も同じ経路で light になる
         if (!issue.depth && !state.tier) {
           const t = await triageStage(e, issue, state)
@@ -752,7 +755,7 @@ function fake(label, opts) {
     // plan-split: 判定は plan だったが調査で大きいと分かった / child-split: サブ issue のプランが再分割を求める（blocked になる）
     if ((sc === 'plan-split' || sc === 'child-split') && v === '1') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [] }], summary: '調査で 600 行と分かった' }
     if (sc === 'replan-question' && (label.includes('revise') || Number(v) >= 2)) return { status: 'question', questions: ['逸脱の代案はどちらにするか'] }
-    return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}${opts.effort ? ` (effort ${opts.effort})` : ''}` }
+    return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}` }
   }
   if (t === 'issue-plan-reviewer') {
     if (sc === 'needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, questions: ['A 案と B 案のどちらか'] }
