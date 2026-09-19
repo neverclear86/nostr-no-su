@@ -544,6 +544,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
+| GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI での接続。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | POST | `/accounts/reload` | DB からのアカウントの読み直しの要求。303 でダッシュボードへ戻す |
 | GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
@@ -559,7 +560,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/relays/<id>/delete` | 削除の確認 / 実行。303 でダッシュボードへ戻す |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
-承認、拒否、セッションの取り消しは、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
+承認、拒否、セッションの取り消し、クライアントの接続は、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
 再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
 `<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
