@@ -33,6 +33,7 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 | `fix` | 指摘または条件への対応（PR） | 対応したラウンド | `-` | push した head |
 | `gate` | 最終確認（PR） | 何回目か | 判定 | 見た head |
 | `summary` | まとめ（PR） | 最終確認の回 | `-` | 見た head |
+| `retro` | ふりかえりの issue の精査（issue） | `1` | `-` | `-` |
 
 マージ担当は承認の検出をこのマーカーで行う（`kind=pr-review` と `kind=gate` の最後の 1 件の `verdict`）。見出しの完全一致は使わない。
 `round` に `-` は使わない。段階に番号が無いもの（`design`、`split`）は `1` にする。

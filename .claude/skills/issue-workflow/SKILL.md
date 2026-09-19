@@ -19,7 +19,7 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus low）→
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」と、APPROVE のとき「## まとめ」。diff とレビューの経緯だけを読み、再現はしない |
 | マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
 
-ふりかえり（`retrospective`、opus / medium）は 1 件の issue の段階ではなく、この表の全 issue が終わった実行の後に 1 回だけ回す（「### 2. 結果の処理」の「実行の後: ふりかえり」）。
+ふりかえり（`retrospective`）は 1 件の issue の段階ではなく、この表の全 issue が終わった実行の後に 1 回だけ回す（「### 2. 結果の処理」の「実行の後: ふりかえり」）。`issue-retrospective`（opus / medium）が学びを分類して改善の issue を 1 本起票し、続けて `issue-retro-implementer`（fable / medium）がその issue の主張を裏取りして実装し、PR を作るところまでを 1 回の実行で行う。マージはユーザーが判断する。
 
 tier は判定が決める。`none`（追加 100 行未満・3 ファイル以下・決めたこと 0〜1 件）はデザインとプランを飛ばし、`light`（300 行以下）と `full`（300 行超か決めたこと 2 件以上。まず分割する）は同じ流れでプランを書く。
 
@@ -55,7 +55,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 - **tier**（判定が決め、スクリプトが流れを分ける）：`none` はデザインもプランも書かず、実装者が issue を直接読んで実装し、PR 本文に「## 設計メモ」（決めたこと／受け入れ条件 → 満たす変更 → 検証の手順の表）を書く。PR レビューはプランの代わりにこの節と issue に照合する。`light` と `full` の流れは同じで、違うのは判定の意味（`full` はまず分割を試み、分割できない理由があるときだけそのまま進む）だけである。分割で生まれたサブ issue は判定を飛ばして `light` 固定。A/B や再開で tier を固定したいときは `issues[].tier` に書くと判定を飛ばす
 - **往復の上限**（スクリプトが行う）：プランレビューも PR レビューも 2 ラウンドで、APPROVE にならなければ `stalled`。最終確認は 3 回のままである。effort の昇格は行わない（モデルと effort は定義で固定）。PR レビューがプランの設計に起因する must（`designMust`）を出したら、プランの版を上げて再承認させてから直す。`tier none` でこれが出たら、その PR レビューのコメントを根拠にその場でプランを作らせる（2 回目の `designMust` は `stalled`）。実装がプランどおりに作れないと報告したら（`deviation`）同じ手順で版を上げ、新しいエージェントに続きを実装させる（`tier none` には上げるプランが無いので、その場でプラン v1 を書かせ、途中の作業ツリーから続きを実装させる。tier の記録は判定が付けた `none` のまま残す）
 - **PR レビューの条件付き承認**：PR レビューは must が 0 件なら APPROVE にし、残った should を全部 `conditions`（置換文か 1 行の直し方）で返す。条件が 1 件以上あれば、スクリプトが実装者に直させて push させ（対応コメントのマーカーは `kind=fix`）、**再レビューはせずに**最終確認へ進む。最終確認は、対応コメントのマーカーの head のコミットだけを見て、条件の範囲に収まっているかも見る。PR レビューの must には直し方の案を書かせない（説明と修正案を同時に求めると誤判定が増えるため）。must は再現か差分の読解で確かめたものだけで、推測は should に落とす
-- **コメントのマーカー**：ワークフローが投稿するコメントは 1 行目を `<!-- nns kind=<plan|plan-review|pr-review|fix|gate|summary|design|split> round=<N> verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER|-> head=<SHA|-> -->` にし、見出しは 2 行目以降に置く。マーカーは `dev/post_comment.sh` が引数から作るので、エージェントは本文だけを書く（プランレビューのファイルの 1 行目を除く）。マージ担当は承認の検出をこのマーカーで行う（見出しの完全一致は使わない）。長い本文（プランの全文、指摘、確認したこと）は `<details>` に畳む
+- **コメントのマーカー**：ワークフローが投稿するコメントは 1 行目を `<!-- nns kind=<plan|plan-review|pr-review|fix|gate|summary|design|split|retro> round=<N> verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER|-> head=<SHA|-> -->` にし、見出しは 2 行目以降に置く。マーカーは `dev/post_comment.sh` が引数から作るので、エージェントは本文だけを書く（プランレビューのファイルの 1 行目を除く）。マージ担当は承認の検出をこのマーカーで行う（見出しの完全一致は使わない）。長い本文（プランの全文、指摘、確認したこと）は `<details>` に畳む
 - **まとめ**：最終確認が APPROVE を出すと、同じエージェントが続けて「## まとめ」を 1 本投稿する（tier、プランと PR レビューのラウンド数、条件の件数、実装起因の must の件数、学び 0〜3 件）。学びは `lessons` で返り、`results` と最後の `log` に集計が出る。次の改修の材料なので、実行の後に `retrospective` が拾う。ラウンド数はその実行で数えた分で、`planUrl` で引き継いだ issue の表には前の実行のプランレビューを含まない旨の断りが付く（`results[].planInherited`）
 - **往復は新しいエージェント**で行う。プランの往復も、PR レビューの往復も、修正も、前のファイルや PR コメントの URL を渡して新しいエージェントを立てる（同じエージェントに戻す `SendMessage` は使わない。待機中にキャッシュが切れて文脈全体を書き直すため）。引き継ぎは、プランの「指摘への対応」の表、レビューの「前ラウンドの指摘の照合」の表、PR の対応コメントで行う
 - **レビューの「承認」は PR コメントで表す**：全エージェントが同じ GitHub アカウントで動くので、自分の PR に `gh pr review --approve` は使えない。PR レビューは `判定: APPROVE`（must が 0 件）を承認とみなす。should は条件として残り、nit は残っていてもよい
@@ -138,7 +138,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 #### 実行の後: ふりかえり
 
-この実行に含めた issue が全部終わったら（`blocked` や `stalled` が残っていてもよい）、`retrospective` を 1 回回す。
+この実行に含めた issue が全部終わったら（`blocked` や `stalled` が残っていてもよい）、`retrospective` を 1 回回す。起票から PR までが 1 回の実行で進む。
 
 1. このセッションの journal のパスを `ls -tr <セッションの subagents/workflows>/wf_*/journal.jsonl` で mtime の昇順に集める（`aggregate` は後の run の値で上書きするため）。mtime が `since` より前のものと、`result` イベントが 1 件も無いものは `runs` に入れない
 2. journal ごとに次の jq を通し、`events` を組み立てる。
@@ -158,13 +158,19 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 }
 ```
 
-学びが 0 件なら issue は起票されない。起票された issue は次の実行の `issues` に入れる。
+学びが 0 件なら issue は起票されない。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
+
+- `implementation.status: pr`：PR ができた。`pr` と `prUrl` をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
+- `rejected`：精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue に「## 精査」（`commentUrl`）を投稿して閉じた。`reason` を報告する
+- `blocked`：直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを添えて issue を issue-workflow の `issues` に入れて進める
+
+起票された issue を issue-workflow の `issues` に入れて回さない（同じ issue を 2 回実装する）。
 
 ### 3. ユーザーへの報告
 
 1 件ごとに、issue 番号、tier、プランのラウンド数、PR 番号、PR レビューのラウンド数と条件の件数、最終確認の結果、マージのコミット、残した nit と後続の issue にした事項を短くまとめる。
 止まった issue は、どの段階で、何が決まらなかったかを書く。
-最後に `retrospective` を回し、起票された issue の番号とその根拠の表をユーザーに渡す（学びが 0 件なら起票されない）。
+最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びが 0 件なら起票されない）。
 
 ## dry run（スクリプトを変えたとき）
 
@@ -176,4 +182,4 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 スクリプトを変えたら、上の `args` の `dryRun` のシナリオ名を 1 つずつ差し替えて全シナリオを回し、`results` の `status` が期待どおりであることを確かめる。`planurl-deviation` は `issues[0]` に `planUrl` を、`child-split` はサブ issue の番号（親が `split` のとき `n * 100 + 1`）に付ける。`issues[].tier` を足した `args` も 1 回回し、判定が飛んで tier が固定されることを見る。`implementer: "devin"` と `devin` シナリオの組も 1 回回し、最後の `log` の実装者の内訳に devin が数えられることを見る。
 
-`retrospective` は `args.dryRun: true` を渡すとエージェントを立てずに集計だけ返す。
+`retrospective` は `args.dryRun: true` を渡すとエージェントを立てずに集計だけ返す（精査と実装も立たない）。
