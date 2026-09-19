@@ -425,7 +425,7 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 | 結果 | アクターのどの分岐から来るか | 管理 UI の応答 |
 | --- | --- | --- |
 | `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ（nsec 入力による登録は 200 の完了ページ） |
-| `NotApplied` | 登録済み・未登録の検査（`require_unregistered` / `require_registered`）、`NotWritten`、`AlreadyStored` | 409 でフォームに理由を出す |
+| `NotApplied` | 登録済み・未登録の検査（`require_unregistered` / `require_registered` / `require_registered_or_skipped`）、`NotWritten`、`AlreadyStored` | 409 でフォームに理由を出す |
 | `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
 | `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
 
