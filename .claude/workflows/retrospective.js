@@ -1,0 +1,228 @@
+export const meta = {
+  name: 'retrospective',
+  description: '実行の「まとめ」の学びを集めて、改善の issue を 1 本起票する',
+  phases: [
+    { title: '集計' },
+    { title: 'ふりかえり' },
+  ],
+  whenToUse: 'スキル issue-workflow の「結果の処理」で、実行の後に args を組み立ててから呼ぶ',
+}
+
+// ---------------------------------------------------------------------------
+// args の契約（スキル issue-workflow の「結果の処理」で組み立てる）
+//   runs:       journal の絶対パスの配列（mtime の昇順）。表示と起票する issue の根拠にだけ使う
+//   events:     { "<runs[i] と同じパス>": [<抽出済みの result イベント>...] }。journal の中身はここで渡す
+//               各要素は { label, phase, status?, tier?, pr?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
+//               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
+//   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
+//   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
+//   scratchpad: このセッションのスクラッチパッドの絶対パス
+//   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
+//   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
+// ---------------------------------------------------------------------------
+
+const REPO = 'neverclear86/nostr-no-su'
+const TIERS = ['none', 'light', 'full']
+
+const a = args || {}
+if (typeof a !== 'object') throw new Error('args はオブジェクトで渡す')
+if (!Array.isArray(a.runs) || a.runs.length === 0) throw new Error('args.runs が空である')
+if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
+for (const k of ['since', 'scratchpad', 'trailers', 'base']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+const dry = a.dryRun === true
+
+// --- スキーマ -----------------------------------------------------------
+const S = {
+  retro: {
+    type: 'object',
+    properties: {
+      issueNumber: { type: 'integer' },
+      issueUrl: { type: 'string' },
+      adopted: { type: 'integer', description: '定義に足す 1〜3 行にした件数' },
+      scriptChanges: { type: 'integer', description: 'dev/ のスクリプトの変更にした件数' },
+      rejected: { type: 'integer', description: '採らなかった件数' },
+      reason: { type: 'string', description: '起票しなかったときの理由' },
+    },
+    required: ['adopted', 'scriptChanges', 'rejected'],
+  },
+}
+
+/**
+ * エージェントの label を { kind, n, round } に分解する。
+ * kind は triage / plan / planReview / implement / prReview / gate / merge / other で、
+ * n は issue 番号か PR 番号（prReview / gate / merge は PR 番号のまま返し、collectRun が pr → issue の表で引き直す）。
+ */
+function parseLabel(label) {
+  let m
+  if ((m = label.match(/^Triage #(\d+)$/))) return { kind: 'triage', n: Number(m[1]), round: null }
+  if ((m = label.match(/^Plan #(\d+)(?: v\d+| revise \d+)$/))) return { kind: 'plan', n: Number(m[1]), round: null }
+  if ((m = label.match(/^Review plan #(\d+) r(\d+)$/))) return { kind: 'planReview', n: Number(m[1]), round: Number(m[2]) }
+  if ((m = label.match(/^Implement #(\d+)(?: \(続き.*\))?$/))) return { kind: 'implement', n: Number(m[1]), round: null }
+  if ((m = label.match(/^PR review #(\d+) r(\d+)$/))) return { kind: 'prReview', n: Number(m[1]), round: Number(m[2]) }
+  if ((m = label.match(/^Final gate PR #(\d+)(?: r(\d+))?$/))) return { kind: 'gate', n: Number(m[1]), round: Number(m[2] || 1) }
+  if ((m = label.match(/^Merge PR #(\d+)( \(retry \d+( recheck)?\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
+  return { kind: 'other', n: null, round: null }
+}
+
+// PR 番号だけを持つ kind。issue 番号への引き直しが要る
+const VIA_PR = new Set(['prReview', 'gate', 'merge'])
+// issue 番号を直接持つ kind。集計の対象にする（plan は値には寄与しないが、触れた issue として記録する）
+const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
+
+/**
+ * 1 本の run の抽出済みイベントから issue ごとの記録を Map<issue 番号, 記録> にする。
+ * PR 番号しか持たない label は Implement の結果で issue 番号に引き直す（pr → issue の表は
+ * 呼び出し側から受け取り、run をまたいで合併できるようにその場で更新する）。
+ * どの行も、源になる result がその run に 1 件も無ければ未設定のまま返す（既定は aggregate が全 run の合併の後に埋める）。
+ *
+ * | 値 | 導出 |
+ * | --- | --- |
+ * | tier | Triage の結果の tier |
+ * | planRounds | Review plan の round の最大 |
+ * | prRounds | PR review の round の最大 |
+ * | prConditionCount | すべての PR review の verdict: 'APPROVE' の conditions の合計（phase で絞らない） |
+ * | implMusts | phase が 'PR レビュー' の PR review で、verdict: 'REQUEST CHANGES' かつ designMust が真でないものの must の合計 |
+ * | lessons | Final gate の verdict: 'APPROVE' の lessons |
+ * | status | その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
+ * | pr | Implement の結果の pr |
+ *
+ * 同じ label が 2 回以上あれば先のものを採る（後のものを採ると、再開で走り直した結果に上書きされる）。
+ * Merge だけは retry で label が変わるので、複数の label の「いずれか」が merged なら merged とする。
+ */
+function collectRun(events, prToIssue) {
+  const seenLabels = new Set()
+  const dedup = events.filter((ev) => (seenLabels.has(ev.label) ? false : (seenLabels.add(ev.label), true)))
+
+  // Implement の結果から pr → issue の表を更新する（呼び出し側の Map をそのまま使い、run をまたいで合併する）
+  for (const ev of dedup) {
+    const { kind, n } = parseLabel(ev.label)
+    if (kind === 'implement' && ev.pr) prToIssue.set(ev.pr, n)
+  }
+
+  const issues = new Map()
+  const get = (n) => {
+    if (!issues.has(n)) issues.set(n, { n })
+    return issues.get(n)
+  }
+  let dropped = 0
+  for (const ev of dedup) {
+    const { kind, n, round } = parseLabel(ev.label)
+    if (!DIRECT.has(kind) && !VIA_PR.has(kind)) continue // Fix / Fix conditions / Rebase / Design はどの値にも寄与しない
+    const issueN = VIA_PR.has(kind) ? prToIssue.get(n) : n
+    if (issueN === undefined) { dropped++; continue }
+    const rec = get(issueN)
+    if (kind === 'triage') { if (ev.tier) rec.tier = ev.tier }
+    else if (kind === 'implement') { if (ev.pr) rec.pr = ev.pr }
+    else if (kind === 'planReview') { rec.planRounds = Math.max(rec.planRounds || 0, round) }
+    else if (kind === 'prReview') {
+      rec.prRounds = Math.max(rec.prRounds || 0, round)
+      if (ev.verdict === 'APPROVE') rec.prConditionCount = (rec.prConditionCount || 0) + (ev.conditions || 0)
+      if (ev.phase === 'PR レビュー' && ev.verdict === 'REQUEST CHANGES' && !ev.designMust) rec.implMusts = (rec.implMusts || 0) + (ev.must || 0)
+    } else if (kind === 'gate') {
+      if (ev.verdict === 'APPROVE') rec.lessons = ev.lessons || []
+    } else if (kind === 'merge') {
+      if (ev.status === 'merged') rec.status = 'merged'
+    }
+  }
+  if (dropped) log(`collectRun: PR 番号を issue 番号に引けなかったイベントを ${dropped} 件捨てた`)
+  return issues
+}
+
+/**
+ * 全 run をまとめる。run ごとの記録を 1 つの表にし、tier 別の件数、ラウンド数と条件の平均、
+ * 実装起因の must の合計、学びの件数を出す。runs は mtime の昇順で渡される前提。
+ */
+function aggregate(runs, events) {
+  const issues = new Map() // issue 番号 → 記録
+  const prToIssue = new Map() // pr → issue 番号。collectRun 側で run をまたいで更新される
+  for (const path of runs) {
+    const run = collectRun(events[path], prToIssue)
+    for (const [n, rec] of run) {
+      // その run で値が定まった項目だけを上書きする（丸ごと置き換えると再開の run で飛ばされた値が潰れる）
+      issues.set(n, { ...(issues.get(n) || { n }), ...rec })
+    }
+  }
+  // 全 run の合併の後に既定を埋める
+  for (const rec of issues.values()) {
+    rec.tier = rec.tier || 'light'
+    rec.planRounds = rec.planRounds || 0
+    rec.prRounds = rec.prRounds || 0
+    rec.prConditionCount = rec.prConditionCount || 0
+    rec.implMusts = rec.implMusts || 0
+    rec.status = rec.status === 'merged' ? 'merged' : 'unfinished'
+  }
+
+  const list = [...issues.values()]
+  const merged = list.filter((i) => i.status === 'merged')
+  const round2 = (x) => Math.round(x * 100) / 100
+  const avg = (key) => (merged.length ? round2(merged.reduce((s, i) => s + (i[key] || 0), 0) / merged.length) : 0)
+  const byTier = TIERS.reduce((acc, t) => { acc[t] = list.filter((i) => i.tier === t).length; return acc }, {})
+  const totals = {
+    runCount: runs.length,
+    byTier,
+    planRoundsAvg: avg('planRounds'),
+    prRoundsAvg: avg('prRounds'),
+    conditionAvg: avg('prConditionCount'),
+    implMusts: list.reduce((s, i) => s + (i.implMusts || 0), 0),
+    lessonCount: list.reduce((s, i) => s + (i.lessons || []).length, 0),
+    merged: merged.length,
+    unfinished: list.length - merged.length,
+  }
+  return { issues: list, totals }
+}
+
+/** 集計の要約を、起票する issue の冒頭にそのまま貼る Markdown の表にする */
+function summaryMarkdown(totals, since) {
+  const tierRow = TIERS.map((t) => `${t} ${totals.byTier[t]}`).join(' / ')
+  return `| 項目 | 値 |
+| --- | --- |
+| 対象期間 | ${since} 以降 |
+| run 数 | ${totals.runCount} |
+| マージ件数 | ${totals.merged}（未完了 ${totals.unfinished}） |
+| tier 別の件数 | ${tierRow} |
+| プランと PR レビューのラウンド数の平均 | プラン ${totals.planRoundsAvg} / PR ${totals.prRoundsAvg} |
+| 条件の平均 | ${totals.conditionAvg} |
+| 実装起因の must の合計 | ${totals.implMusts} |
+| 学びの件数 | ${totals.lessonCount} |
+
+- run の選別は journal の mtime による（\`since\` より前に始まって後に終わった run は丸ごと含まれる）
+- tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える`
+}
+
+// --- 依頼文 -----------------------------------------------------------------
+const P = {
+  retro: (agg, table, runs) => {
+    const lessonList = agg.issues
+      .filter((i) => (i.lessons || []).length)
+      .map((i) => `#${i.n}\n${i.lessons.map((l) => `- ${l}`).join('\n')}`)
+      .join('\n\n')
+    return `実行の「まとめ」で集まった学びを分類し、改善の issue を 1 本起票してほしい。対象のリポジトリは ${REPO}。
+
+${table}
+
+### 学び
+${lessonList}
+
+- 根拠にした run: ${runs.map((r) => `\`${r}\``).join('、')}
+- 土台: origin/main の ${a.base}
+- コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
+- 起票する issue の本文の書き先: ${a.scratchpad}/retro-issue.md
+返答（構造化出力）: issueNumber、issueUrl、adopted、scriptChanges、rejected。起票しなかったときは issueNumber を省いて reason に理由を書く。`
+  },
+}
+
+// --- 実行 -------------------------------------------------------------------
+log(`${a.runs.length} 件の journal から集計する${dry ? '（dry run）' : ''}`)
+const agg = aggregate(a.runs, a.events)
+log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished}、学び ${agg.totals.lessonCount} 件`)
+
+if (dry || agg.totals.lessonCount === 0) {
+  log(dry ? 'dry run なので集計だけ返す' : '学びが 0 件なので issue を起票しない')
+  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びが 0 件' }
+}
+
+const table = summaryMarkdown(agg.totals, a.since)
+const retro = await agent(P.retro(agg, table, a.runs), { label: 'Retrospective', agentType: 'issue-retrospective', phase: 'ふりかえり', schema: S.retro })
+if (!retro) throw new Error('Retrospective が結果を返さなかった')
+return { ...agg, ...retro }
