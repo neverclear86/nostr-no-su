@@ -12,7 +12,7 @@ import support/admin_ui
 pub fn stylesheet_defines_every_rendered_class_test() {
   let css = admin_ui.static_file(view.stylesheet_segments)
   let undefined =
-    admin_ui.pages()
+    admin_ui.all_pages()
     |> list.flat_map(classes)
     |> list.unique
     |> list.filter(fn(class) { !defines(css, class) })
@@ -26,7 +26,7 @@ pub fn stylesheet_defines_every_rendered_class_test() {
 /// 見つからない。フォーカスできない要素の `btn` は対象にしない。
 pub fn buttons_and_inputs_follow_the_color_rules_test() {
   let violations =
-    admin_ui.pages()
+    admin_ui.all_pages()
     |> list.flat_map(tagged_classes)
     |> list.unique
     |> list.filter(fn(element) {

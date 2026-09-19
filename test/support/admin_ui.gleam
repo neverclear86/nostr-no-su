@@ -1,5 +1,6 @@
-//// 描画した管理 UI のページと、配信する静的ファイル（`priv/static/`）を突き合わせる検査
-//// （`stylesheet_test` と `script_test`）が共有する、ページと静的ファイルの読み出し。
+//// 描画した管理 UI のページを使う検査が共有する、ページと静的ファイルの読み出し。配信する
+//// 静的ファイル（`priv/static/`）と突き合わせる `stylesheet_test` と `script_test`、日本語の
+//// ページの英文を見る `japanese_pages_test` が使う。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -29,25 +30,25 @@ pub fn static_file(segments: List(String)) -> String {
   content
 }
 
-/// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。言語ごとに描画し、
-/// 言語の切り替えの項目（表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを
-/// 通す。テーマの一覧の項目（`view.themes` ごとの表示中の項目の 3 通り）は、ダッシュボードを
-/// テーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に状態の分岐を
-/// 足したら、ここにもその状態のページを足す。
-pub fn pages() -> List(String) {
+/// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。渡された言語で
+/// 描画し、言語の切り替えの項目（表示している言語とそれ以外）と、切り替えを出さない秘密鍵の
+/// ページを通す。テーマの一覧の項目（`view.themes` ごとの表示中の項目の 3 通り）は、
+/// ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
+/// 状態の分岐を足したら、ここにもその状態のページを足す。
+pub fn pages(language: i18n.Language) -> List(String) {
   let row =
     dashboard.AccountRow(
-      signer: "abcd",
+      signer: "0123",
       npub: "npub1example",
-      label: "main",
-      uri: "bunker://abcd?relay=x&secret=s",
-      auth_uri: "bunker://abcd?relay=x",
+      label: "label-a",
+      uri: "bunker://0123?relay=x&secret=s",
+      auth_uri: "bunker://0123?relay=x",
     )
   let pending =
     dashboard.PendingRow(
       token: "tok",
-      signer: "abcd",
-      client: "ef01",
+      signer: "0123",
+      client: "4567",
       expires_in_seconds: 540,
       secret_mismatch: False,
       perms: "sign_event:1",
@@ -64,8 +65,8 @@ pub fn pages() -> List(String) {
   let pending_mismatch =
     dashboard.PendingRow(
       token: "tok2",
-      signer: "abcd",
-      client: "ef01",
+      signer: "0123",
+      client: "4567",
       expires_in_seconds: 45,
       secret_mismatch: True,
       perms: "",
@@ -75,9 +76,9 @@ pub fn pages() -> List(String) {
       accounts: Ok([row]),
       skipped: Ok([
         dashboard.SkippedRow(
-          pubkey: "cdef",
-          npub: "npub1unreadable",
-          label: "old wallet",
+          pubkey: "8901",
+          npub: "npub1example",
+          label: "label-b",
           reason: vault.UndecryptablePrivateKey,
         ),
         dashboard.SkippedRow(
@@ -99,27 +100,26 @@ pub fn pages() -> List(String) {
       ]),
       sessions: Ok([
         dashboard.SessionRow(
-          signer: "abcd",
-          client: "ef01",
+          signer: "0123",
+          client: "4567",
           perms: "",
           created_at: 1000,
           last_used_at: 1000,
         ),
       ]),
       plugins: [
-        dashboard.PluginRow("running", Some(plugin_runner.Running)),
+        dashboard.PluginRow("plugin-a", Some(plugin_runner.Running)),
         dashboard.PluginRow(
-          "overloaded",
+          "plugin-b",
           Some(plugin_runner.Overloaded(dropped: 1)),
         ),
         dashboard.PluginRow(
-          "disabled",
+          "plugin-c",
           Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
         ),
-        dashboard.PluginRow("unavailable", None),
+        dashboard.PluginRow("plugin-d", None),
       ],
     )
-  use language <- list.flat_map(i18n.languages)
   let reason = i18n.Untranslated("reason")
   list.flatten([
     list.map(view.themes, dashboard.render(language, _, full)),
@@ -164,7 +164,7 @@ pub fn pages() -> List(String) {
         language,
         view.System,
         "npub1example",
-        "main",
+        "label-a",
         "nsec1example",
       ),
       account_pages.private_key_page(language, view.System, row, "nsec1example"),
@@ -210,7 +210,7 @@ pub fn pages() -> List(String) {
           language,
           view.System,
           "nsec1example",
-          "main",
+          "label-a",
           Some(problem),
         )
       },
@@ -235,7 +235,7 @@ pub fn pages() -> List(String) {
         i18n.ChangeNotConfirmed,
         reason,
         view.Warning,
-        [view.hint("hint")],
+        [view.hint("ヒント")],
       ),
       dashboard.notice_page(
         language,
@@ -256,4 +256,9 @@ pub fn pages() -> List(String) {
       Some(reason),
     )),
   ])
+}
+
+/// すべての言語のページ。言語に依らない検査（CSS、スクリプト）が使う。
+pub fn all_pages() -> List(String) {
+  list.flat_map(i18n.languages, pages)
 }

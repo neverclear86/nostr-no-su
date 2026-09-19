@@ -13,7 +13,7 @@ const script_element = "<script src=\"/static/admin.js\" type=\"module\"></scrip
 /// 動かなくなる。テキストと属性値はエスケープされて `<` と `"` を含まないので、`<script` は
 /// 要素の開始タグで、`="` を含む語は属性の始まりである。
 pub fn pages_have_no_inline_scripts_test() {
-  use page <- list.each(admin_ui.pages())
+  use page <- list.each(admin_ui.all_pages())
   assert string.contains(page, script_element)
   assert !string.contains(string.replace(page, script_element, ""), "<script")
   assert list.filter(string.split(page, " "), is_event_attribute) == []
@@ -24,7 +24,7 @@ pub fn pages_have_no_inline_scripts_test() {
 pub fn script_handles_every_rendered_action_test() {
   let script = admin_ui.static_file(view.script_segments)
   let rendered =
-    admin_ui.pages()
+    admin_ui.all_pages()
     |> list.flat_map(actions)
     |> list.unique
   assert rendered != []
