@@ -284,7 +284,7 @@ ${SAFETY}
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}PR 本文に「## 設計メモ」を置く（「## 概要」の次）。承認済みプランが無いので、レビュアーと最終確認はこの節を設計の記録として読む。内容は次の 2 つだけである。
 1. 決めたこと: 判断が分かれた点ごとに、決定・理由・捨てた案。判断が無ければ「無し」
 2. 受け入れ条件 → 満たす変更 → 検証の手順の表（issue の受け入れ条件 1 件 1 行）
-調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、実装を続けずに status を deviation にし、その見込みと理由を ${PLANS}/${e.n}-deviation.md に書いて返す（スクリプトがユーザーに戻す）。
+調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、実装を続けずに status を deviation にし、その見込みと理由を ${PLANS}/${e.n}-deviation.md に書いて返す（スクリプトが light に切り替えてプランを書かせ、途中の作業ツリーから続きを実装させる）。途中の変更はコミットせずに作業ツリーに残してよい。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
@@ -467,14 +467,26 @@ async function revisePlan(e, state, reportFile, why) {
 
 /** 実装と PR 作成。逸脱はプランの版を上げてから続きを実装させる */
 async function implementStage(e, issue, state) {
-  const noPlan = state.tier === 'none'
+  let noPlan = state.tier === 'none'
   let impl = await call('implement', `Implement #${e.n}`,
     noPlan ? P.implementNoPlan(e, issue) : P.implement(e, issue, state.postUrl, state.conditions),
     { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
   let replans = 0
   while (impl.status === 'deviation') {
-    // tier none には上げるプランが無いので、見込みが外れた時点でユーザーに戻す
-    if (noPlan) return { blocked: { stage: 'implement', questions: [`#${e.n} は tier none で始めたが、実装が none の見込みを超えた（${impl.reason || impl.reportFile}）。tier を light にして作り直すかを決める`] } }
+    // tier none には上げるプランが無いので、見込みが外れたら light に切り替えてプランを書かせ、途中の作業ツリーから続きを実装させる
+    if (noPlan) {
+      noPlan = false
+      state.tier = 'light'
+      log(`#${e.n}: tier none の見込みを超えた（${impl.reason || impl.reportFile}）。light に切り替えてプランを書く`)
+      const noted = { ...issue, note: `${issue.note ? `${issue.note}\n` : ''}tier none で実装を始めたが見込みを超えた（報告: ${impl.reportFile || `${PLANS}/${e.n}-deviation.md`}）。作業ツリー ${e.wt} の途中の差分は前提にしてよい` }
+      const pl = await planStage(e, noted, state)
+      if (pl.blocked || pl.stalled) return pl
+      if (pl.split) return { blocked: { stage: 'plan', questions: [`#${e.n} は tier none で実装を始めた後にプランが分割を求めた。途中の作業ツリー ${e.wt} を捨てて分割するか、1 件で進めるかを決める`] } }
+      state.postUrl = pl.postUrl
+      state.version = pl.version
+      impl = await call('implement', `Implement #${e.n} (続き light)`, P.implementContinue(e, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
+      continue
+    }
     if (replans >= MAX_REPLANS) return { stalled: { stage: 'implement', reason: `逸脱でプランを ${replans} 回上げても実装が終わらない: ${impl.reason || ''}` } }
     replans++
     log(`#${e.n}: 実装がプランから逸脱した（${impl.reason || impl.reportFile}）。プランの版を上げる`)
@@ -757,7 +769,7 @@ function fake(label, opts) {
     if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
     if (sc === 'null') return null
     if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
-    if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: '関数が無い' }
+    if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question', 'tier-none-deviation'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: sc === 'tier-none-deviation' ? '見込み 260 行' : '関数が無い' }
     return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true }
   }
   if (t === 'issue-pr-reviewer') {
