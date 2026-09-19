@@ -299,11 +299,24 @@ pub type Msg {
   /// 承認待ちの接続要求を拒否する。書き込みが成功したときだけ状態に反映するほかは
   /// `Approve` と同じ。
   Deny(token: String, reply: Subject(Result(Nil, SessionFailure)))
+  /// 解釈済みの `nostrconnect://` の情報から（署名者, クライアント）のセッションを
+  /// 開く。書き込みが成功したときだけ状態に反映し、登録済みの接続へ応答イベントを
+  /// 送る。読み込み前、署名者が未登録、あるいは書き込みが成功しなかったときは
+  /// `SessionFailure` で理由を返す。
+  OpenClientSession(
+    signer: String,
+    client: String,
+    perms: String,
+    secret: String,
+    reply: Subject(Result(Nil, SessionFailure)),
+  )
   /// ストアからアカウントを読み込む。initialiser と再試行のタイマーが、アクター
   /// ごとに作る名前なしの subject へ送る。名前付き subject へは誰も送らない。
   LoadAccounts
   /// 現在の署名者 pubkey の一覧を問い合わせる。バンカーリレーの購読が使う。
   GetSigners(reply: Subject(List(String)))
+  /// 応答の発行先として配られているリレーの URL を問い合わせる。
+  GetPublishers(reply: Subject(List(String)))
   /// アカウントを追加する。secret はアクターが生成する。
   AddAccount(
     account: Account,
@@ -378,11 +391,31 @@ pub fn deny(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
   call_session_change(name, Deny(token, _))
 }
 
+/// 解釈済みの `nostrconnect://` の情報からセッションを開き、書き込みが成功した
+/// ときだけ応答イベントを送り出すまで待つ。読み込み前は `SessionNotReady`、
+/// 署名者が登録されていなければ `SessionNotFound`、書き込みの失敗は `approve`
+/// と同じ。
+pub fn open_client_session(
+  name: Name(Msg),
+  signer: String,
+  client: String,
+  perms: String,
+  secret: String,
+) -> Result(Nil, SessionFailure) {
+  call_session_change(name, OpenClientSession(signer, client, perms, secret, _))
+}
+
 /// 現在の署名者 pubkey の一覧。読み込みの前は空。アクターが応答しなければ
 /// `None` を返し、署名者が 0 件であることと区別する（購読は応答が無いときに開いて
 /// いる購読を閉じてはならない）。
 pub fn signers(name: Name(Msg)) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSigners)
+}
+
+/// 応答の発行先として配られているリレーの URL。アクターが応答しなければ `None`
+/// を返し、発行先が 0 件であることと区別する。
+pub fn publisher_urls(name: Name(Msg)) -> Option(List(String)) {
+  named.call(name, call_timeout_ms, GetPublishers)
 }
 
 /// アカウントを追加し、反映されるまで待つ。
@@ -741,6 +774,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, engine.signers(state.engine))
       actor.continue(state)
     }
+    GetPublishers(reply) -> {
+      process.send(reply, dict.keys(state.publishers))
+      actor.continue(state)
+    }
     GetAccounts(reply) -> {
       process.send(reply, listings(state))
       actor.continue(state)
@@ -838,6 +875,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       apply_decision(state, reply, Approval, token, engine.approve)
     Deny(token, reply) ->
       apply_decision(state, reply, Denial, token, engine.deny)
+    OpenClientSession(signer:, client:, perms:, secret:, reply:) ->
+      open_client_session_for(state, reply, signer, client, perms, secret)
     GetSessions(reply) -> {
       process.send(
         reply,
@@ -1440,22 +1479,95 @@ fn apply_decision(
           process.send(reply, Error(SessionNotFound(reason)))
           actor.continue(state)
         }
-        Ok(#(next, response, write)) -> {
-          let #(written_state, outcome) =
-            write_session_change(state, change, target, write)
-          case outcome {
-            Ok(Nil) -> {
-              let published = publish(written_state, response)
-              process.send(reply, Ok(Nil))
-              actor.continue(State(..published, engine: next))
-            }
-            Error(failure) -> {
-              process.send(reply, Error(session_write_failure(failure)))
-              actor.continue(written_state)
-            }
-          }
-        }
+        Ok(#(next, response, write)) ->
+          apply_session_write(
+            state,
+            reply,
+            change,
+            target,
+            next,
+            response,
+            write,
+          )
       }
+  }
+}
+
+/// 読み込み済みのときだけエンジンで（署名者, クライアント）のセッションを開き、
+/// 書き込みが成功したときだけ応答を発行する。読み込み前は `SessionNotReady`、
+/// 署名者が登録されていなければ `SessionNotFound`、書き込みの失敗は
+/// `session_write_failure` が `SessionFailure` に写す。
+fn open_client_session_for(
+  state: State,
+  reply: Subject(Result(Nil, SessionFailure)),
+  signer: String,
+  client: String,
+  perms: String,
+  secret: String,
+) -> actor.Next(State, Msg) {
+  case state.accounts {
+    Loading(..) -> {
+      log_session_failure(
+        SessionOpening,
+        session_target(state.engine, signer, client),
+        accounts_not_loaded,
+      )
+      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
+      actor.continue(state)
+    }
+    Ready ->
+      case
+        engine.open_client_session(
+          state.engine,
+          signer,
+          client,
+          perms,
+          secret,
+          random.hex(token_bytes),
+          time.now_seconds(),
+        )
+      {
+        Error(reason) -> {
+          process.send(reply, Error(SessionNotFound(reason)))
+          actor.continue(state)
+        }
+        Ok(#(next, response, write)) ->
+          apply_session_write(
+            state,
+            reply,
+            SessionOpening,
+            Some(#(signer, client)),
+            next,
+            response,
+            write,
+          )
+      }
+  }
+}
+
+/// 書き込みが成功したときだけ応答を発行し、成功を返す。失敗は
+/// `session_write_failure` に写す。
+fn apply_session_write(
+  state: State,
+  reply: Subject(Result(Nil, SessionFailure)),
+  change: SessionChange,
+  target: Option(#(String, String)),
+  next: engine.Engine,
+  response: Event,
+  write: engine.Write,
+) -> actor.Next(State, Msg) {
+  let #(written_state, outcome) =
+    write_session_change(state, change, target, write)
+  case outcome {
+    Ok(Nil) -> {
+      let published = publish(written_state, response)
+      process.send(reply, Ok(Nil))
+      actor.continue(State(..published, engine: next))
+    }
+    Error(failure) -> {
+      process.send(reply, Error(session_write_failure(failure)))
+      actor.continue(written_state)
+    }
   }
 }
 
