@@ -222,13 +222,21 @@ function summaryMarkdown(totals, since) {
 - tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える`
 }
 
+/** journal のパスから run id（`wf_*` のディレクトリ名）を取る。取れないパスはそのまま返す */
+function runId(path) {
+  const m = path.match(/wf_[^/]+/)
+  return m ? m[0] : path
+}
+
 // --- 依頼文 -----------------------------------------------------------------
 const P = {
+  // 集計の表と学びの一覧に、dev/wfstats.py の実測（--brief）を issue に貼る指示を添える。run id は runs のパスから取る
   retro: (agg, table, runs) => {
     const lessonList = agg.issues
       .filter((i) => (i.lessons || []).length)
       .map((i) => `#${i.n}\n${i.lessons.map((l) => `- ${l}`).join('\n')}`)
       .join('\n\n')
+    const stats = `python3 ${REPO_DIR}/dev/wfstats.py --runs ${runs.map(runId).join(',')} --brief`
     return `実行の「まとめ」で集まった学びを分類し、改善の issue を 1 本起票してほしい。対象のリポジトリは ${REPO}。
 
 ${table}
@@ -236,6 +244,7 @@ ${table}
 ### 学び
 ${lessonList}
 
+- 実測: \`${stats}\` を実行し、その出力を起票する issue の集計の表の直後に「## 実測（wfstats）」として貼る
 - 根拠にした run: ${runs.map((r) => `\`${r}\``).join('、')}
 - 土台: origin/main の ${a.base}
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}

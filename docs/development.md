@@ -98,6 +98,7 @@ sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付き
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
 sh dev/devin_prompt.sh <issue> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]  # 実装を devin CLI に任せるときの自己完結な依頼文を組む（実装エージェントが使う）
 sh dev/devin_wait.sh <clone> [最大秒数]                                              # devin CLI の完了を前景で待ち、終了コード 0（報告あり）/ 1（報告なしで終了）/ 2（まだ実行中。呼び直す）で返す（実装エージェントが使う）
+python3 dev/wfstats.py [--base <dir>] [--runs <run id>,...] [--brief]              # Workflow の実行ログから費用・速度・品質の実測を出す。--brief の要約を retrospective が issue に貼る
 ```
 
 実装エージェントの定義（`.claude/agents/issue-implementer.md`）の frontmatter の `hooks` は、定義の「PR を作る前の検査」の一部（format と PR 本文の書式）を機械的に行う。エージェントが直接呼ぶものではなく、stdin に hook の JSON を受け取る:
