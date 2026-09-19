@@ -72,7 +72,8 @@ pub type SkippedRow {
 }
 
 /// プラグイン 1 つの表示内容。`status` が `None` なのは、ランナーが再起動中か、
-/// 遅いプラグインの実行中で問い合わせに応答しなかったことを意味する。
+/// 遅いプラグインの実行中で問い合わせに応答しなかったか、共通の締め切りまでに
+/// 答えなかったことを意味する。
 pub type PluginRow {
   PluginRow(name: String, status: Option(plugin_runner.Status))
 }
