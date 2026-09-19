@@ -389,7 +389,7 @@ pub fn sessions_show_created_and_last_used_times_test() {
 }
 
 /// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub・16 進の
-/// pubkey）・理由が出る。日本語でも見出しが訳される。
+/// pubkey）・理由・削除のリンクが出る。日本語でも見出しが訳される。
 pub fn skipped_rows_are_listed_with_their_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -416,13 +416,15 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
     english,
     "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row).",
   )
+  assert string.contains(english, "href=\"/accounts/abcd1234/delete\"")
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "読み込めなかったアカウント",
   )
 }
 
-/// `pubkey` 列を読めない行は、識別を出さず理由の 1 文だけを出す。
+/// `pubkey` 列を読めない行は、識別も削除のリンクも出さず、理由の 1 文に削除でき
+/// ない旨を続けて出す。
 pub fn malformed_pubkey_rows_show_only_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -438,6 +440,10 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
     )
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(body, "The pubkey column cannot be read.")
+  assert string.contains(
+    body,
+    "This row cannot be deleted here because its pubkey cannot be read.",
+  )
   assert !string.contains(body, "not-a-valid-pubkey-value")
 }
 

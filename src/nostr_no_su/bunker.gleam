@@ -43,7 +43,9 @@
 //// 追加はもう一度追加すれば、ストアが登録済みを返したときに応答の前に読み直すので
 //// 一致し、secret の作り直しはもう一度作り直せば一致する。読み込みで飛ばされる行
 //// （別のマスターキーで暗号化されているなど）の公開鍵の追加は、読み直してもメモリに
-//// 入らず、登録済みとして拒否される。その行は DB から直接消す必要がある。
+//// 入らず、登録済みとして拒否される。その行は管理 UI のダッシュボードの
+//// 「読み込めなかったアカウント」のカードから削除できる。`pubkey` の列を読めない
+//// 行（`MalformedPubkey`）は画面からは消せず、DB から直接消す。
 ////
 //// **待ち**：書き込みと読み込みの間は NIP-46 の処理が待たされる（届いたリクエストは
 //// メールボックスに積まれて捨てられない）。書き込み 1 件は最長で約 3 秒（DB に到達
@@ -790,9 +792,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         reply,
         Removed,
         signer,
-        require_registered(state, signer),
+        require_registered_or_skipped(state, signer),
         fn() { state.settings.store.delete(signer) },
-        without_account(_, signer),
+        fn(current) { without_account(current, signer) |> drop_skipped(signer) },
       )
     RotateSecret(signer:, reply:) -> {
       let secret = random.hex(connection_secret_bytes)
@@ -1115,6 +1117,14 @@ fn without_account(state: State, signer: String) -> State {
   )
 }
 
+/// 削除が書き込まれた行を、直近の読み込みで飛ばされた行の一覧から外す。
+fn drop_skipped(state: State, signer: String) -> State {
+  State(
+    ..state,
+    skipped: list.filter(state.skipped, fn(row) { row.pubkey != signer }),
+  )
+}
+
 /// 追加の前の検査。登録済みの公開鍵ならストアへの往復を省いて拒否する。
 fn require_unregistered(
   state: State,
@@ -1126,8 +1136,8 @@ fn require_unregistered(
   }
 }
 
-/// 削除・secret の作り直し・ラベルの差し替えの前の検査。署名者は呼び出し側が渡す
-/// 文字列なので、メモリに無い署名者はストアにもログにも渡さずに拒否する。
+/// secret の作り直し・ラベルの差し替えの前の検査。署名者は呼び出し側が渡す文字列
+/// なので、メモリに無い署名者はストアにもログにも渡さずに拒否する。
 fn require_registered(
   state: State,
   signer: String,
@@ -1135,6 +1145,23 @@ fn require_registered(
   case engine.has_account(state.engine, signer) {
     True -> Ok(Nil)
     False -> Error(NotApplied(account_not_registered))
+  }
+}
+
+/// 削除の前の検査。登録済みの署名者か、読み込みで飛ばされて状態に残っている行の
+/// 公開鍵なら通す。署名者は呼び出し側が渡す文字列なので、どちらにも無い値は
+/// ストアにもログにも渡さずに拒否する。
+fn require_registered_or_skipped(
+  state: State,
+  signer: String,
+) -> Result(Nil, ChangeFailure) {
+  case engine.has_account(state.engine, signer) {
+    True -> Ok(Nil)
+    False ->
+      case list.any(state.skipped, fn(row) { row.pubkey == signer }) {
+        True -> Ok(Nil)
+        False -> Error(NotApplied(account_not_registered))
+      }
   }
 }
 

@@ -7,6 +7,7 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/nip19
 import support/account_actions
 
@@ -24,6 +25,16 @@ fn row(label: String) -> dashboard.AccountRow {
     label: label,
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+  )
+}
+
+/// 指定したラベルを持つ、読み込みで飛ばされた行（`MalformedPubkey` 以外）。
+fn skipped_row(label: String) -> dashboard.SkippedRow {
+  dashboard.SkippedRow(
+    pubkey: "abcd",
+    npub: "npub1example",
+    label: label,
+    reason: vault.UndecryptablePrivateKey,
   )
 }
 
@@ -60,6 +71,12 @@ pub fn account_pages_escape_the_label_test() {
       Some(hostile),
       None,
     ),
+    account_pages.unreadable_delete_page(
+      i18n.English,
+      view.System,
+      skipped_row(hostile),
+      None,
+    ),
     ..list.map(account_actions.all, account_pages.account_action_page(
       i18n.English,
       view.System,
@@ -86,6 +103,12 @@ pub fn error_reasons_are_escaped_test() {
       row("main"),
       dashboard.EditLabel,
       None,
+      reason,
+    ),
+    account_pages.unreadable_delete_page(
+      i18n.English,
+      view.System,
+      skipped_row("main"),
       reason,
     ),
   ]
@@ -179,6 +202,12 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
   ]
   let shown = [
     account_pages.new_account_page(language, view.System, "", None),
+    account_pages.unreadable_delete_page(
+      language,
+      view.System,
+      skipped_row("main"),
+      None,
+    ),
     ..list.map(account_actions.all, account_pages.account_action_page(
       language,
       view.System,
@@ -227,6 +256,17 @@ pub fn language_switch_returns_to_the_page_test() {
         <> "\">",
     )
   })
+  assert string.contains(
+    account_pages.unreadable_delete_page(
+      i18n.English,
+      view.System,
+      skipped_row("main"),
+      reason,
+    ),
+    "<input name=\"return\" type=\"hidden\" value=\""
+      <> dashboard.account_action_path("abcd", dashboard.DeleteAccount)
+      <> "\">",
+  )
 }
 
 /// 日本語のページでは、管理 UI が訳す理由を日本語で出し、英語のまま届いた理由は前置きの
