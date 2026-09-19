@@ -102,4 +102,4 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 
 ## 関連
 
-マスターキーを交換する手順はまだ無い。
+マスターキーを交換する手順は [README](../README.md) の「マスターキーの交換」にある。

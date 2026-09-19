@@ -65,7 +65,7 @@ docker compose up --build
 
 空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
 
-> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。取り方と戻し方は [バックアップと復旧](docs/operations.md) にある。
+> ⚠️ **マスターキーの扱い**: マスターキーを失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと同じ場所に置かず、バージョン管理に含めない `.env` などで渡すこと。環境変数で渡した値はホスト上で `docker inspect` や `/proc/<pid>/environ` から読めるので、ファイルで渡すか（後述の「秘密をファイルで渡す」）、ホストの権限を絞ること。取り方と戻し方は [バックアップと復旧](docs/operations.md) にあり、交換の手順は後述の「マスターキーの交換」にある。
 
 > ⚠️ **アカウントの削除と秘密鍵の表示**: 削除するとバンカーからも DB からも鍵が消え、DB 以外に保存していない鍵は戻らない。秘密鍵を表示すると、ログに `[admin] revealed the private key of <npub>` が残る。管理パスワードの再入力が違うときは `[admin] rejected a private key reveal for <npub>: incorrect password` が残る。コピーした nsec や接続 URI はクリップボードに残るので、貼り付けた後は消すこと。
 
@@ -110,6 +110,19 @@ secrets:
 `DATABASE_URL_FILE` を compose で使うときは、`.env` に `DATABASE_URL=` と空で書く。同梱の compose は `${DATABASE_URL-...}` で、未設定なら同梱の Postgres の URL を渡すので、書かないと両方が設定された扱いで起動しない。
 
 パーミッション: compose の `secrets:` はホストのファイルをそのままマウントするので、swarm でなければ `uid` や `mode` の指定は効かない。`chown` を忘れると `[main] cannot start: ACCOUNT_MASTER_KEY_FILE could not be read (eacces)` で終了する。`secrets/` は `.gitignore` に入っている。
+
+#### マスターキーの交換
+
+`ACCOUNT_MASTER_KEY` を別の値に変えると、それまでのキーで暗号化した行はすべて復号できなくなる。暗号文を別のキーで暗号化し直す機能は持たないため、交換は控えた nsec でアカウントを登録し直す形で行う。
+
+1. 交換の前に、全アカウントの nsec を控える。ダッシュボードの各行の「秘密鍵を表示」（`Show private key`）で管理パスワードを再入力して表示する。控え忘れに気づいたときは、手順 3 で行を消す前に、以前の `ACCOUNT_MASTER_KEY` に戻して起動し直せば表示して控えられる。
+2. 新しいマスターキーを `openssl rand -hex 32` で作って渡し直し、起動し直す。マスターキーは起動時に読むので再起動が要る。docker compose では、`.env` の値を変えたときは `docker compose up -d`、ファイルの中身を変えたときは `docker compose restart nostr-no-su` で読み直させる。起動すると全行が飛ばされ、ログに `loaded 0 of N account(s)` と `skipped account <pubkey>: <理由>` が出て、ダッシュボードに「読み込めなかったアカウント」（`Unreadable accounts`）のカードが出る。
+3. そのカードの各行の「アカウントを削除」（`Delete account`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、`account is already registered` について述べた上の段落にあるとおり DB から直接消す。
+4. 「アカウントを追加」（`Add account`）から控えた nsec で登録し直す。飛ばされた行が残っていると `account is already registered` で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
+
+交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
+
+リレーの登録、監視の再開点、プラグインが保存したイベントはマスターキーに依らず変わらない。同じ nsec で登録し直せば公開鍵も同じなので、`bunker://` URI で変わるのは `secret=` だけである。
 
 #### 対応クライアントと相互運用
 
