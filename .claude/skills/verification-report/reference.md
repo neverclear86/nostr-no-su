@@ -13,8 +13,8 @@
 # docker ps --filter name=nostr-no-su- は部分一致で nns-verify-nostr-no-su-1 にも当たるので、grep で先頭を合わせる
 docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' > "$V/baseline-docker-ps.txt" || true
 
-git -C /home/lina/workspace/projects/nostr-no-su fetch origin
-git -C /home/lina/workspace/projects/nostr-no-su worktree add "$W" origin/main
+git fetch origin
+git worktree add "$W" origin/main
 ```
 
 ```sh
@@ -356,7 +356,7 @@ done
 docker images --format '{{.Repository}}:{{.Tag}}' | grep nns-verify || true   # 残っていれば docker rmi で消す
 docker run --rm -v "$W/plugins:/p" --entrypoint sh ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
   -c 'rm -rf /p/event_logger'
-git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force "$W"
+git worktree remove --force "$W"
 cat "$V/baseline-docker-ps.txt"
 docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' || true
 ```

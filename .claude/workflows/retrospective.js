@@ -18,6 +18,7 @@ export const meta = {
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
+//   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
 //   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
@@ -26,12 +27,13 @@ export const meta = {
 // ---------------------------------------------------------------------------
 
 const REPO = 'neverclear86/nostr-no-su'
-const REPO_DIR = '/home/lina/workspace/projects/nostr-no-su'
 const TIERS = ['none', 'light', 'full']
 
 const a = args || {}
 if (typeof a !== 'object') throw new Error('args はオブジェクトで渡す')
-for (const k of ['scratchpad', 'trailers', 'base']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+for (const k of ['scratchpad', 'trailers', 'base', 'repoDir']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+if (typeof a.repoDir !== 'string' || !a.repoDir.startsWith('/')) throw new Error('args.repoDir はユーザーの作業ツリーの絶対パスで渡す（git rev-parse --show-toplevel）')
+const REPO_DIR = a.repoDir
 // blocked の再開。集計に要る args は検査しない
 const reentry = a.retroIssue && typeof a.retroIssue === 'object' ? a.retroIssue : null
 if (reentry) {

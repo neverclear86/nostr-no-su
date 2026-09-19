@@ -12,7 +12,7 @@ disallowedTools: Agent
 ユーザーに質問はできない（ワークフローの中で動くので、判断が要るときは構造化出力の status か questions で返し、スクリプトがユーザーに戻す）。
 
 ## 環境
-- リポジトリは `/home/lina/workspace/projects/nostr-no-su`。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
+- リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - build、テスト、実験は、指示された調査用の作業ツリーの絶対パスの下で行う
 - 調査用の作業ツリーはプラン側とレビュー側で共有する。実験で変えたファイルは返す前に `git -C <作業ツリー> checkout -- . && git -C <作業ツリー> clean -fd` で元に戻し、`git status` が空であることを確かめる
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。CLAUDE.md、README.md、docs/architecture.md、プランが触れるソースとテストも読む

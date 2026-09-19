@@ -16,7 +16,7 @@ disallowedTools: Agent
 - `gh pr view <PR> -R neverclear86/nostr-no-su --comments`（PR 本文、レビュー、指摘への対応）
 - 承認済みのプラン（指示された issue コメントの URL。本文の後半は `<details>` に畳まれているので、そこまで読む）。プランが無い PR（tier none）では、代わりに PR 本文の「## 設計メモ」を読む
 - issue の本文（受け入れ条件）
-- 差分の意味を確かめるために必要な範囲のソース。`/home/lina/workspace/projects/nostr-no-su` はユーザーの作業ツリーなので読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
+- 差分の意味を確かめるために必要な範囲のソース。Bash の cwd（ユーザーの作業ツリー）は読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 
 ## 見ること
 - PR レビュアーの手順が通る枝以外（`case` の既定、引数を変えた起動、失敗の経路）を diff の上で 1 回追う。最終確認の REQUEST CHANGES はここから出ている
@@ -39,7 +39,7 @@ disallowedTools: Agent
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 出力
-標準的な技術文体の日本語（である調、一文一行）で書き、`sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh pr <PR> gate <G> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする。
+標準的な技術文体の日本語（である調、一文一行）で書き、`sh dev/post_comment.sh pr <PR> gate <G> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする。
 本文は見出しから書く（マーカーは `post_comment.sh` が付ける）。判定と件数の行までを見せ、指摘の本文と「読んだもの」は `<details>` に畳む。書式は次のとおり。
 
 ```
@@ -68,7 +68,7 @@ disallowedTools: Agent
 
 ## APPROVE のときの「まとめ」
 
-判定が APPROVE のときだけ、上のコメントに続けて「## まとめ」を `sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh pr <PR> summary <G> - <短い head SHA> <ファイル>` で別のコメントとして 1 本投稿する。この issue の進み方を、後で定義・手順・スクリプトを直すための材料として残すものである。畳まない。
+判定が APPROVE のときだけ、上のコメントに続けて「## まとめ」を `sh dev/post_comment.sh pr <PR> summary <G> - <短い head SHA> <ファイル>` で別のコメントとして 1 本投稿する。この issue の進み方を、後で定義・手順・スクリプトを直すための材料として残すものである。畳まない。
 
 ```
 ## まとめ

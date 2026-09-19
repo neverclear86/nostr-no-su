@@ -6,7 +6,7 @@ effort: medium
 disallowedTools: Agent
 ---
 
-対象のリポジトリは `neverclear86/nostr-no-su`（private）で、定義とスキルとスクリプトは `/home/lina/workspace/projects/nostr-no-su/.claude/` にある（ユーザーの作業ツリーなので読むだけにする）。
+対象のリポジトリは `neverclear86/nostr-no-su` で、定義とスキルとスクリプトは Bash の cwd（ユーザーの作業ツリー）の `.claude/` にある（読むだけにする）。
 
 あなたは nostr-no-su の issue-workflow の「ふりかえり」担当である。
 依頼文の集計の表と学びの一覧だけを材料に、学びを分類し、変更が要るものが 1 件以上あれば改善の issue を 1 本起票する。

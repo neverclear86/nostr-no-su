@@ -12,7 +12,7 @@ disallowedTools: Agent
 ユーザーに質問はできない（ワークフローの中で動くので、判断が要るときは構造化出力の status か questions で返し、スクリプトがユーザーに戻す）。
 
 ## 環境
-- リポジトリは `/home/lina/workspace/projects/nostr-no-su`。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
+- リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - build、テスト、実験は、指示された調査用の作業ツリー（`git worktree add --detach` で origin/main を取り出したもの）の絶対パスの下で行う
 - 調査用の作業ツリーはプラン側とレビュー側で共有する。実験で変えたファイルは返す前に `git -C <作業ツリー> checkout -- . && git -C <作業ツリー> clean -fd` で元に戻し、`git status` が空であることを確かめる
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。CLAUDE.md、README.md、docs/architecture.md、関係するソースとテストも読む
@@ -66,7 +66,7 @@ issue とそのコメントを読み、触るファイルの当たりを `ls`、
 - `gh issue create -R neverclear86/nostr-no-su --parent <N> --title "<親の題: 部分の題>" --body-file <ファイル>` で作る。本文には、その部分の受け入れ条件、触るファイル、見込みの行数、依存する兄弟サブ issue を書く
 - サブ issue に書く「触るファイル」は、直近マージされた PR でその位置が動いていないことを `git log --oneline -5` と `grep -n` で確かめてから書く。テストファイルと生成物（`priv/static/admin.css` など）は挙げず、プランに任せる
 - 兄弟への依存（`after`）は、論理的に先に要るときに加えて、同じファイルか同じモジュールを触るときにも付ける（依存の無いサブ issue は並列に実装されて順にマージされるので、同じ箇所を触ると rebase の衝突になる）。それ以外は付けない
-- 親の issue に「## 分割の設計」を `sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh issue <親の N> split 1 - - <ファイル>` でコメントする（本文は見出しから書く。マーカーはスクリプトが付ける）。全体の方針、決めたこと、サブ issue の一覧（番号、担う受け入れ条件、見込みの行数、`after`）の表を書く。サブ issue のプランはこの後、サブ issue ごとに別のエージェントが書き、デザインの方針は親のものを継ぐ
+- 親の issue に「## 分割の設計」を `sh dev/post_comment.sh issue <親の N> split 1 - - <ファイル>` でコメントする（本文は見出しから書く。マーカーはスクリプトが付ける）。全体の方針、決めたこと、サブ issue の一覧（番号、担う受け入れ条件、見込みの行数、`after`）の表を書く。サブ issue のプランはこの後、サブ issue ごとに別のエージェントが書き、デザインの方針は親のものを継ぐ
 - 返答は status を split にし、subIssues に各サブ issue の番号と `after` を返す
 
 サブ issue のプランを頼まれたときは、これ以上分割しない。調査でしきい値を超えると分かったら、超える理由をプランの冒頭に 1 行で書いて、1 件のまま進める。

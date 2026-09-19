@@ -11,7 +11,7 @@ disallowedTools: Agent
 ユーザーに質問はできない（ワークフローの中で動くので、判断が分かれる点は方針の中で決め、捨てた案と理由を書く）。
 
 ## 環境
-- リポジトリは `/home/lina/workspace/projects/nostr-no-su`。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
+- リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。管理 UI は `src/nostr_no_su/admin/`（lustre の SSR、Tailwind CSS と daisyUI、日英の切り替え、テーマの切り替え）にある。既存の画面の構成と部品を読んでから決める
 - 対象のブラウザーは Chromium 系だけでよい
 
@@ -30,7 +30,7 @@ disallowedTools: Agent
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 出力
-標準的な技術文体の日本語（である調、一文一行）で書き、`sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh issue <N> design 1 - - <スクラッチパッドのファイル>` で投稿する。
+標準的な技術文体の日本語（である調、一文一行）で書き、`sh dev/post_comment.sh issue <N> design 1 - - <スクラッチパッドのファイル>` で投稿する。
 本文は見出し「## デザインの方針」から書く（マーカーは `post_comment.sh` が付ける）。
 
 決めたことごとに、決定、理由、捨てた案を書く。根拠の無い形容（「見やすい」「適切に」）を避け、既存の画面のどこに合わせたかを `ファイル:行` で示す。

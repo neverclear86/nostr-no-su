@@ -69,7 +69,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 - **UI を変える issue** は `ui: true` を付ける。スクリプトがデザインエージェントを先に立て、プランに取り込ませ、実装エージェントに変更前（main）と変更後のスクリーンショットを PR に貼らせる（変えた画面だけを日本語で。英語は英語画面の修正が主題の issue のときだけ。見た目が変わらないリファクタリングでも貼る）。`ui` を付けない issue ではスクリーンショットは撮らない。管理 UI の `.gleam` を変えたら `npm run build:css` の結果をコミットする（CI が差分を検査する）
 - **文書を動かす issue は先に単独で**：README の分割など、他の PR が触る文書の置き場所を変える issue は、並行させずに 1 件だけの実行でマージしてから次を始める（09-13 の #149 は並行した 4 件と衝突して 4 ラウンドかかった）
 - **コミットのトレーラー**：サブエージェントはこのセッションの system-reminder を見ないので、`Co-Authored-By` と `Claude-Session` の行と Claude-Session の URL を `trailers` で渡す
-- **実装者の定義の hooks**：`issue-implementer` の frontmatter の `hooks`（`.gleam` の整形、PR 本文の必須の節、push 前の `gleam format --check`。`dev/hook_*.sh`）は、その subagent が動いている間だけ発火する。project の subagent の frontmatter の hooks は、ワークスペースの trust を受け入れたフォルダー（`/home/lina/workspace/projects/nostr-no-su`）から起動した対話セッションでだけ動き、`claude -p` は trust の受け入れに数えられない（動かないときは debug ログに残るだけで、実行は止まらない）
+- **実装者の定義の hooks**：`issue-implementer` の frontmatter の `hooks`（`.gleam` の整形、PR 本文の必須の節、push 前の `gleam format --check`。`dev/hook_*.sh`）は、その subagent が動いている間だけ発火する。project の subagent の frontmatter の hooks は、ワークスペースの trust を受け入れたフォルダー（ユーザーの作業ツリー）から起動した対話セッションでだけ動き、`claude -p` は trust の受け入れに数えられない（動かないときは debug ログに残るだけで、実行は止まらない）
 - **キャッシュ**：ワークフローのエージェントのキャッシュは既定 5 分で切れる。1 issue の段階は続けて動くので通常は足りるが、待ちが長くなるなら設定 `subagentPromptCacheTtl` を `1h` にする（書き込みの単価が上がる）
 
 ## 手順
@@ -81,13 +81,15 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 ```sh
 R=neverclear86/nostr-no-su
 gh issue view {{N}} -R $R --comments          # issue ごとに本文とコメントを読む
-git -C /home/lina/workspace/projects/nostr-no-su fetch origin main
-git -C /home/lina/workspace/projects/nostr-no-su rev-parse origin/main   # base
+git rev-parse --show-toplevel                                          # repoDir
+git fetch origin main
+git rev-parse origin/main                                              # base
 ss -ltn | awk 'NR>1 {print $4}' | sed 's/.*://' | sort -n | uniq        # 使用中のポート
 mkdir -p <scratchpad>/plans <scratchpad>/runs
 ```
 
 - **base**：`origin/main` の先頭。全 issue で同じ
+- **repoDir**：ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` の出力。スクリプトはエージェントへの依頼文の `git -C` と `dev/*.sh` の呼び出しに使う
 - **issues**：issue ごとに `n`、`branch`（`feat/…`、`fix/…`、`docs/…`、`refactor/…` の形で英語）、UI を変えるなら `ui: true`、依存があれば `after: [n]`、issue コメントで決まった事項や補足があれば `note`
 - **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
 - **trailers**：このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
@@ -113,6 +115,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
   ],
   "base": "ad787b6…",
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
+  "repoDir": "/path/to/nostr-no-su",
   "portBase": 5600,
   "window": 4,
   "implementer": "devin",
@@ -180,7 +183,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 `args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`tier-none`（判定が none → プラン無しで実装 → PR レビュー APPROVE → 最終確認 → マージ）、`tier-none-design-must`（none で PR ラウンド 1 が `designMust` → その場でプラン v1 / r1 → 修正 → ラウンド 2 で APPROVE）、`tier-none-deviation`（none の実装が見込みを超えて `deviation` → その場でプラン v1 / r1 → 続きを実装 → マージ）、`pr-conditions`（PR ラウンド 1 が APPROVE ＋ 条件 2 件 → 条件対応 → 再レビュー無しで最終確認）、`approve-with-conditions`（プランレビューがラウンド 1 で条件 2 件つきの APPROVE。実装の依頼文に条件が入る）、`plan2`（プラン 2 ラウンド）、`plan-stall`（2 ラウンドで `stalled`）、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`devin`（`implementer: "devin"` と組み合わせる。実装が `implementedBy: devin` を返し、集計に出る）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
 
 ```json
-{ "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }
+{ "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "repoDir": "/tmp/dry/repo", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }
 ```
 
 スクリプトを変えたら、上の `args` の `dryRun` のシナリオ名を 1 つずつ差し替えて全シナリオを回し、`results` の `status` が期待どおりであることを確かめる。`planurl-deviation` は `issues[0]` に `planUrl` を、`child-split` はサブ issue の番号（親が `split` のとき `n * 100 + 1`）に付ける。`issues[].tier` を足した `args` も 1 回回し、判定が飛んで tier が固定されることを見る。`implementer: "devin"` と `devin` シナリオの組も 1 回回し、最後の `log` の実装者の内訳に devin が数えられることを見る。

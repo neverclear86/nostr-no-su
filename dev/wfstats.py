@@ -11,7 +11,7 @@ nostr-no-su の Claude Code Workflow 実行ログ（journal.jsonl + agent-*.json
   python3 dev/wfstats.py --runs wf_a22397c8-55c --brief    # 1 run の要約（60 行以内。retrospective が issue に貼る）
   python3 dev/wfstats.py --base <dir> --runs <id>,<id>     # 対象のディレクトリと run を指定する
 
-  --base   Claude Code のプロジェクトのディレクトリ。省略時は DEFAULT_BASE
+  --base   Claude Code のプロジェクトのディレクトリ。省略時は cwd のリポジトリから導く（~/.claude/projects/<パスの / を - にした名前>）
   --runs   対象の run id（wf_* のディレクトリ名）をコンマ区切りで。省略時は全 run
   --brief  run ごとの表・agentType 別の $・レビューの r1 の集計・クリティカルパスだけを出す
 
@@ -19,10 +19,19 @@ nostr-no-su の Claude Code Workflow 実行ログ（journal.jsonl + agent-*.json
 出力はすべて標準出力に書く。呼び出し側で `python3 dev/wfstats.py > report.txt` する。
 リポジトリ側には一切書き込まない（読み取りのみ）。
 """
-import argparse, json, glob, os, re, sys, statistics, collections
+import argparse, json, glob, os, re, subprocess, sys, statistics, collections
 from datetime import datetime, timezone
 
-DEFAULT_BASE = "/home/lina/.claude/projects/-home-lina-workspace-projects-nostr-no-su"
+
+def default_base():
+    """Claude Code のプロジェクトのディレクトリ（~/.claude/projects/<cwd の / を - にした名前>）を、
+    cwd が属するリポジトリの最上位から導く。git の外で呼ばれたら cwd で代用する。"""
+    try:
+        root = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        root = os.getcwd()
+    return os.path.join(os.path.expanduser('~'), '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', root))
+
 
 # model -> (input $/Mtok, cache_creation $/Mtok, cache_read $/Mtok, output $/Mtok)
 PRICE = {
@@ -718,7 +727,7 @@ def section_brief(runs_data):
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Claude Code Workflow の実行ログの統計")
-    ap.add_argument('--base', default=DEFAULT_BASE, help="Claude Code のプロジェクトのディレクトリ")
+    ap.add_argument('--base', default=default_base(), help="Claude Code のプロジェクトのディレクトリ")
     ap.add_argument('--runs', default=None, help="対象の run id（wf_*）をコンマ区切りで。省略時は全 run")
     ap.add_argument('--brief', action='store_true', help="要約だけを出す（60 行以内）")
     return ap.parse_args()
