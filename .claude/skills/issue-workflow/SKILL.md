@@ -47,7 +47,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 
 - **このセッションの仕事**は、段階 0 の準備、Workflow の起動、結果の処理（質問への回答、止まった issue の報告、再開）である。エージェントの結果を自分で読み直したり、段階を自分で実行したりしない。モデルは何でもよい（受け渡しをしないので文脈は小さいまま）
 - **ワークフローの中ではユーザーに質問できない**。プランエージェントが `status: question`、レビュアーが `NEEDS_USER` を返すと、その issue は `blocked` で戻る。ユーザーに聞いてから `decisions` に答えを入れて再開する。事前に決められる論点は、起動の前にまとめて聞く（段階 0）
-- **再開は `Workflow` に `scriptPath` と `resumeFromRunId` を渡して行う**（起動の結果に出る Run ID）。完了したエージェントの結果は、起動順の接頭辞で依頼文が変わっていない範囲まで再利用される（公式文書: 「最初に依頼文が変わったエージェントと、それ以降は走り直す」）。`base` と `portBase` と `trailers` は再開でも同じ値を渡す（変えると依頼文が変わり、全部やり直しになる）。同じ Claude Code のセッションの中でしか再開できない（Agent SDK リファレンスの `resumeFromRunId` の項の「Same session only」）
+- **再開は `blocked` / `stalled` の issue だけを新しい実行（新しい `base`）で回す**。依頼文は自己完結（`planUrl`、既存 PR の検知）なので、完了済みの段階を走り直す必要が無い。`resumeFromRunId`（起動の結果に出る Run ID。同じ Claude Code のセッションの中でしか使えない）は、実行が 1 件だけのときか、起動直後の失敗のときに限る。並列の実行を `resumeFromRunId` で再開すると、起動順で最初に依頼文が変わったエージェント以降が全部走り直り、完了済みの issue にまで再ディスパッチされる（2026-09-19 の実行で 31 体）
 - **同時に進める issue は `window` 件**（既定 4）。1 issue につき動くエージェントは常に 1 体なので、同時のエージェント数も `window` になる。マージは 1 件ずつ直列で、衝突は実装エージェントの rebase で解く
 - **依存する issue** は `after` に書く。依存先がマージされてから、そのマージのコミットを土台にして始まる。依存先が失敗すると `blocked` になり、`after` が循環していれば待たずに `blocked` になる
 - **CI が通るまでレビューしない**：実装エージェントは push の前に origin/main に rebase して CI と同じ検査を手元で通し（push のやり直しは CI の実行を増やす。#305）、PR を作ったら（指摘への対応や rebase の push でも）`gh pr checks --watch` で CI の `test` ジョブの pass を待ち、fail は直してから返す（`ciPassed`）。通らないまま返ると `blocked`。PR の CI は軽い検査（build、単体テスト、format、CSS、vendor、プラグイン、.env.example）だけで、Postgres の統合テストと E2E は実装エージェントが手元で通して PR 本文に貼る。PR レビュアーはどちらも再現せず、CI にも PR 本文にも無い検証だけを再現する。docker イメージと strfry の E2E は手動のワークフロー（`manual.yml`）で、リリースの前にオーナーが起動する
@@ -93,7 +93,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **tier の固定**：A/B を取るときや、判定をやり直したくない再開のときは `issues[].tier` に `none` / `light` / `full` を書く。判定の段階が飛ぶ
 - **既存のプラン**：issue にすでに承認済みの「## 実装プラン（版 N）」が投稿されていれば、そのコメントの URL を `planUrl` に書く。スクリプトはプランの段階を飛ばして実装から始める。土台が古びていて作れない箇所があれば、実装エージェントが `deviation` を返し、スクリプトがプランの版を上げる
 - **事前に聞く論点**：issue の本文とコメントに未決の設計判断（どの鍵で応答するか、既定値をどうするか、など）があれば、起動の前に `AskUserQuestion` でまとめて聞き、`decisions[n]` に書く。09-13 の実績では 28 件で 9 件の質問があり、すべてプラン段階の設計判断だった
-- **`args` を保存する**：組み立てた `args` を `<scratchpad>/runs/<base の短い SHA>-<連番>.json` に書いてから起動する。再開はそのファイルを読んで同じ `args` を渡し、`decisions` だけを足す（`base`、`portBase`、`trailers` を組み直すと依頼文が変わって全部やり直しになる）
+- **`args` を保存する**：組み立てた `args` を `<scratchpad>/runs/<base の短い SHA>-<連番>.json` に書いてから起動する。再開はそのファイルを読み、`blocked` / `stalled` / `failed` の issue だけを新しい実行の `args` の元にする（`planUrl`、`tier`、`decisions` を引き継ぎ、`base` は新しい `origin/main` に更新する）
 
 ### 1. 起動
 
@@ -128,11 +128,11 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 - `split`：親が分割された。`subIssues`（番号の配列）と `children` の各結果を、それぞれ上の分類で扱う。`children` が全部 `merged` なら親の issue は閉じているはずなので、開いたままなら閉じる
 - `merged`：PR 番号、マージのコミット、tier、プランのラウンド数、PR レビューのラウンド数、条件の件数（`prConditionCount`）、最終確認の回数、残した nit の数、最終確認の学び（`lessons`）を報告に載せる
-- `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れて、同じ `args` に `resumeFromRunId` を付けて再開する。依存先の失敗（`stage: deps`）は依存先を先に直す
-- `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて再開、実装が難しいなら issue を分ける）
-- `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、同じ `args` で再開する。走り直したエージェントが済んだ副作用に出会う場合（PR がある、ブランチがある、マージ済み）は、実装エージェントと merger の定義がそれを検知して続きから進める（失敗したエージェントとその後が走る。issue を並行させていると起動順が揺れるので、それより前に完了した他の issue の段階も走り直すことがある。最初の実運用で `journal.jsonl` の再利用の実績を確かめて、ここに書き足す）
+- `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れ、その issue だけを新しい実行の `issues` に入れて再開する（`planUrl` と `tier` を引き継ぐ）。依存先の失敗（`stage: deps`）は依存先を先に直す
+- `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて新しい実行に載せる、実装が難しいなら issue を分ける）
+- `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、その issue だけを新しい実行の `issues` に入れて再開する。走り直したエージェントが済んだ副作用に出会う場合（PR がある、ブランチがある、マージ済み）は、実装エージェントと merger の定義がそれを検知して続きから進める
 
-再開のときは `args` を変えない（`decisions` の追加だけ）。`base` を今の `origin/main` に更新すると全 issue の依頼文が変わり、完了した結果が再利用されない。main が進んで土台が古びた issue は、次の実行で新しい `base` から始める。
+再開する新しい実行の `args` は、`blocked` / `stalled` / `failed` の issue だけを `issues` に入れ、`base` を今の `origin/main` に更新して組み立てる（完了済みの issue は依頼文が自己完結しているので、`planUrl` で始めるか既存 PR を検知して続きから進み、走り直す必要が無い）。各 issue には、既存のプランがあれば `planUrl`、判定を飛ばしたければ `tier`、聞いた答えの `decisions[n]` を引き継ぐ。
 
 #### 実行の後: ふりかえり
 
