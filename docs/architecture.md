@@ -620,6 +620,7 @@ nostr-no-su/
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/relay_pages.gleam リレーのページの描画
+│       ├── admin/connect_pages.gleam クライアントの接続のページの描画
 │       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー

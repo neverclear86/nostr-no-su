@@ -71,7 +71,7 @@ NIP-44 の復号成功が送信者認証になる + 受信イベントの BIP-34
 
 ### 未対応の機能
 
-`nostrconnect://`（クライアント起点フロー）/ NIP-04 / `switch_relays` は未対応
+NIP-04 / `switch_relays` は未対応
 
 ## アカウントの保存
 
