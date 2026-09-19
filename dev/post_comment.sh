@@ -34,7 +34,7 @@ case "$number" in
 esac
 
 case "$kind" in
-  design | split | plan | plan-review | pr-review | fix | gate | summary) ;;
+  design | split | plan | plan-review | pr-review | fix | gate | summary | retro) ;;
   *) echo "invalid kind: $kind" >&2; exit 1 ;;
 esac
 
