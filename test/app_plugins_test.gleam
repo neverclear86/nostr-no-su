@@ -27,6 +27,7 @@ import nostr_no_su/random
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/task
 import nostr_no_su/time
 import pog
 import support/app_tree.{
@@ -34,10 +35,9 @@ import support/app_tree.{
   accounts_only, authenticator_recording_open, await_connection, bunker_spec,
   call_counter, connect_request, deliver_and_expect, discard_resume_points,
   drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, monotonic_ms,
-  named_relay, note, other_signer_key, receive_until, secret, signer_key,
-  start_tree, stop_tree, store_failure, store_with_load, test_relay,
-  test_relay_url,
+  forwarding_spec, idle_monitor, load_signer, memory_store, named_relay, note,
+  other_signer_key, receive_until, secret, signer_key, start_tree, stop_tree,
+  store_failure, store_with_load, test_relay, test_relay_url,
 }
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
@@ -854,17 +854,17 @@ pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
     ))
   let assert Ok(first) = process.receive(subscribed, 2000)
   assert first == Retrying(test_relay_url)
-  assert_never_requests(subscribed, monotonic_ms() + 500)
+  assert_never_requests(subscribed, time.monotonic_ms() + 500)
   stop_tree(tree)
 }
 
-/// `deadline`（`monotonic_ms` の単位）まで、`subscribed` に届く報告が `Retrying` か
-/// 空の `Subscribed` だけであることを検査する。
+/// `deadline`（`time.monotonic_ms` の単位）まで、`subscribed` に届く報告が
+/// `Retrying` か空の `Subscribed` だけであることを検査する。
 fn assert_never_requests(
   subscribed: Subject(SubscriptionReport),
   deadline: Int,
 ) -> Nil {
-  case process.receive(subscribed, int.max(deadline - monotonic_ms(), 0)) {
+  case process.receive(subscribed, int.max(deadline - time.monotonic_ms(), 0)) {
     Error(Nil) -> Nil
     Ok(report) -> {
       assert report == Retrying(test_relay_url)
@@ -972,11 +972,12 @@ fn role_url_pairs(spec: app.Spec) -> List(#(relay_list.Role, String)) {
 }
 
 /// `merge_relay_rows` は DB の行の順を保ち、`relay_list` にだけある URL を出さない。
-/// 用途を使っていて接続があれば `status` の結果を、無ければ未接続を、用途を
-/// 使っていなければ `None` を返す。
+/// 用途を使っていて接続があれば `status` の結果（`None` なら `Unanswered`）を、
+/// 無ければ未接続を、用途を使っていなければ `Unused` を返す。
 pub fn merged_relay_rows_follow_the_store_test() {
   let monitor_a = process.new_name("test_merge_monitor_a")
   let bunker_a = process.new_name("test_merge_bunker_a")
+  let monitor_d = process.new_name("test_merge_monitor_d")
   let relays = [
     relay_store.Relay(
       id: 1,
@@ -993,6 +994,11 @@ pub fn merged_relay_rows_follow_the_store_test() {
       url: "wss://c",
       roles: relay_list.Roles(monitor: False, bunker: True),
     ),
+    relay_store.Relay(
+      id: 4,
+      url: "wss://d",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
   ]
   let entries = [
     relay_list.Entry(
@@ -1000,6 +1006,7 @@ pub fn merged_relay_rows_follow_the_store_test() {
       monitor: Some(monitor_a),
       bunker: Some(bunker_a),
     ),
+    relay_list.Entry(url: "wss://d", monitor: Some(monitor_d), bunker: None),
     relay_list.Entry(
       url: "wss://only-in-relay-list",
       monitor: Some(process.new_name("test_merge_extra")),
@@ -1007,10 +1014,11 @@ pub fn merged_relay_rows_follow_the_store_test() {
     ),
   ]
   let status = fn(name) {
-    case name == monitor_a, name == bunker_a {
-      True, _ -> relay_connection.Connected
-      _, True -> relay_connection.Disconnected
-      _, _ -> panic as "unexpected name"
+    case name == monitor_a, name == bunker_a, name == monitor_d {
+      True, _, _ -> Some(relay_connection.Connected)
+      _, True, _ -> Some(relay_connection.Disconnected)
+      _, _, True -> None
+      _, _, _ -> panic as "unexpected name"
     }
   }
   assert app.merge_relay_rows(relays, entries, status)
@@ -1018,20 +1026,26 @@ pub fn merged_relay_rows_follow_the_store_test() {
       dashboard.RelayRow(
         id: 1,
         url: "wss://a",
-        monitor: Some(relay_connection.Connected),
-        bunker: Some(relay_connection.Disconnected),
+        monitor: dashboard.Reported(relay_connection.Connected),
+        bunker: dashboard.Reported(relay_connection.Disconnected),
       ),
       dashboard.RelayRow(
         id: 2,
         url: "wss://b",
-        monitor: Some(relay_connection.Disconnected),
-        bunker: None,
+        monitor: dashboard.Reported(relay_connection.Disconnected),
+        bunker: dashboard.Unused,
       ),
       dashboard.RelayRow(
         id: 3,
         url: "wss://c",
-        monitor: None,
-        bunker: Some(relay_connection.Disconnected),
+        monitor: dashboard.Unused,
+        bunker: dashboard.Reported(relay_connection.Disconnected),
+      ),
+      dashboard.RelayRow(
+        id: 4,
+        url: "wss://d",
+        monitor: dashboard.Unanswered,
+        bunker: dashboard.Unused,
       ),
     ]
 }
@@ -1048,7 +1062,54 @@ pub fn relay_rows_without_the_relay_list_test() {
       reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
       relay_list: process.new_name("test_relay_list_unanswered"),
     )
-  assert app.relay_rows(spec) == Error("relay list did not answer")
+  assert app.relay_rows(spec, task.deadline_in(5000))
+    == Error("relay list did not answer")
+}
+
+/// `GetStatus` を無視し続けるだけの接続。`relay_connection.status` は
+/// `status_timeout_ms`（5 秒）まで応答を待ち続けるので、締め切りの短い
+/// `relay_statuses` の問い合わせは間に合わない。
+fn spawn_unanswering_connection(name: Name(relay_connection.Msg)) -> Nil {
+  process.spawn_unlinked(fn() {
+    let assert Ok(Nil) = process.register(process.self(), name)
+    process.sleep(2000)
+  })
+  await_named_registration(name, 1000)
+}
+
+/// 名前が登録されるまで待つ。
+fn await_named_registration(name: Name(a), timeout_ms: Int) -> Nil {
+  case process.named(name), timeout_ms <= 0 {
+    Ok(_), _ -> Nil
+    _, True -> Nil
+    _, False -> {
+      process.sleep(10)
+      await_named_registration(name, timeout_ms - 10)
+    }
+  }
+}
+
+/// 応答しない接続を 4 本、300ms の期限で問い合わせると、全て `None`（応答なし）
+/// になり、名前を持つプロセスの無いものは即座に `Some(Disconnected)` になる。
+/// 合計の経過は締め切りに収まる（1 秒未満）。
+pub fn relay_statuses_give_up_on_unanswering_connections_test() {
+  let unanswering = [
+    process.new_name("test_relay_statuses_unanswering_1"),
+    process.new_name("test_relay_statuses_unanswering_2"),
+    process.new_name("test_relay_statuses_unanswering_3"),
+    process.new_name("test_relay_statuses_unanswering_4"),
+  ]
+  list.each(unanswering, spawn_unanswering_connection)
+  let unregistered = process.new_name("test_relay_statuses_unregistered")
+  let started_at = time.monotonic_ms()
+  let results =
+    app.relay_statuses([unregistered, ..unanswering], task.deadline_in(300))
+  assert time.monotonic_ms() - started_at < 1000
+  let assert Ok(unregistered_status) = list.key_find(results, unregistered)
+  assert unregistered_status == Some(relay_connection.Disconnected)
+  use name <- list.each(unanswering)
+  let assert Ok(status) = list.key_find(results, name)
+  assert status == None
 }
 
 /// 監視のリレー 0 本の木で `open_relay` を呼ぶと、後から足したリレーで受信した

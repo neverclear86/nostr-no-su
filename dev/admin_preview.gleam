@@ -198,29 +198,29 @@ fn context() -> admin.Context {
     rotate_secret: fn(_) { Ok(Nil) },
     update_label: fn(_, label) { change(label) },
     nsec: fn(_) { Ok(signer_nsec) },
-    relays: fn() {
+    relays: fn(_deadline) {
       Ok([
         dashboard.RelayRow(
           1,
           "wss://relay.example",
-          Some(relay_connection.Connected),
-          Some(relay_connection.Disconnected),
+          dashboard.Reported(relay_connection.Connected),
+          dashboard.Reported(relay_connection.Disconnected),
         ),
         dashboard.RelayRow(
           2,
           "ws://evil/\"><b>xss</b>",
-          Some(relay_connection.Disconnected),
-          None,
+          dashboard.Unanswered,
+          dashboard.Unused,
         ),
         dashboard.RelayRow(
           3,
           "ws://127.0.0.1:7801",
-          None,
-          Some(relay_connection.Connected),
+          dashboard.Unused,
+          dashboard.Reported(relay_connection.Connected),
         ),
       ])
     },
-    plugins: fn() {
+    plugins: fn(_deadline) {
       [
         dashboard.PluginRow("console_logger", Some(plugin_runner.Running)),
         dashboard.PluginRow(
@@ -317,8 +317,8 @@ pub fn main() -> Nil {
       ..context(),
       accounts: fn() { Ok([]) },
       skipped: fn() { Ok([]) },
-      relays: fn() { Ok([]) },
-      plugins: fn() { [] },
+      relays: fn(_deadline) { Ok([]) },
+      plugins: fn(_deadline) { [] },
       sessions: fn() { Ok([]) },
       pending: fn() { Ok([]) },
     )

@@ -24,11 +24,11 @@ import support/app_tree.{
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_from, deliver_and_expect, discard_resume_points,
   drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, monotonic_ms,
-  named_relay, other_client_key, other_signer_key, receive_until, request,
-  response_body, secret, signed_request, signer_key, start_database,
-  start_loading_bunker_tree, start_tree, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay, test_relay_url,
+  forwarding_spec, idle_monitor, load_signer, memory_store, named_relay,
+  other_client_key, other_signer_key, receive_until, request, response_body,
+  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
+  start_tree, stop_tree, store_failure, store_with_load, stored_signer,
+  test_relay, test_relay_url,
 }
 import support/nip46_client.{account_for}
 
@@ -37,12 +37,12 @@ const slow_signer_key = "0000000000000000000000000000000000000000000000000000000
 
 /// `duration_ms` の間に届いたメッセージの件数。
 fn count_within(subject: Subject(Nil), duration_ms: Int) -> Int {
-  count_until(subject, monotonic_ms() + duration_ms, 0)
+  count_until(subject, time.monotonic_ms() + duration_ms, 0)
 }
 
 /// 期限までに届いたメッセージを数える。
 fn count_until(subject: Subject(Nil), deadline: Int, count: Int) -> Int {
-  let remaining = deadline - monotonic_ms()
+  let remaining = deadline - time.monotonic_ms()
   case remaining > 0 && process.receive(subject, remaining) == Ok(Nil) {
     True -> count_until(subject, deadline, count + 1)
     False -> count
@@ -369,11 +369,11 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   let assert Ok(bunker_before) = process.named(bunker_name)
 
   deliver_and_expect(deliver, seen, event_labels("while-failing", 3), 2000)
-  let asked_at = monotonic_ms()
+  let asked_at = time.monotonic_ms()
   // 読み込めていない間 `bunker.sessions` は理由を返すので、応答したことは
   // `named.call` の `Some` で確かめる。
   let assert Some(_) = named.call(bunker_name, 5000, bunker.GetSessions)
-  assert monotonic_ms() - asked_at < 5000
+  assert time.monotonic_ms() - asked_at < 5000
   assert process.named(bunker_name) == Ok(bunker_before)
   assert process.is_alive(tree)
   stop_tree(tree)

@@ -3,7 +3,6 @@
 //// eunit に渡すので、関数名を `_test` で終わらせないこと（`beam_fixture.gleam` 冒頭と
 //// 同じ注意）。
 
-import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -28,7 +27,6 @@ import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
-import support/erl.{monotonic_time}
 import support/nip46_client.{account_for}
 import support/signed_event
 
@@ -430,11 +428,6 @@ pub fn deliver_and_expect(
   assert process.receive(seen, timeout_ms) == Ok(sent)
 }
 
-/// 単調増加する時計の現在値（ミリ秒）。
-pub fn monotonic_ms() -> Int {
-  monotonic_time(atom.create("millisecond"))
-}
-
 /// 呼ぶたびに 0, 1, 2, ... を返す関数。`load` はバンカーアクターの中で呼ばれ、
 /// Gleam には可変の変数が無いので、回数は別のアクターで数える。
 pub fn call_counter() -> fn() -> Int {
@@ -488,7 +481,7 @@ pub fn receive_until(
   wanted: fn(SubscriptionReport) -> Bool,
   timeout_ms: Int,
 ) -> #(List(SubscriptionReport), Result(SubscriptionReport, Nil)) {
-  collect_until(subscribed, wanted, monotonic_ms() + timeout_ms, [])
+  collect_until(subscribed, wanted, time.monotonic_ms() + timeout_ms, [])
 }
 
 /// `receive_until` の本体。読み飛ばした報告を逆順に積む。
@@ -498,7 +491,7 @@ fn collect_until(
   deadline: Int,
   skipped: List(SubscriptionReport),
 ) -> #(List(SubscriptionReport), Result(SubscriptionReport, Nil)) {
-  case process.receive(subscribed, int.max(deadline - monotonic_ms(), 0)) {
+  case process.receive(subscribed, int.max(deadline - time.monotonic_ms(), 0)) {
     Error(Nil) -> #(list.reverse(skipped), Error(Nil))
     Ok(report) ->
       case wanted(report) {

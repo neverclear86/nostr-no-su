@@ -7,7 +7,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
@@ -121,19 +121,19 @@ pub fn test_context(
       process.send(reports, NsecRequested(requested))
       Ok(signer_nsec)
     },
-    relays: fn() {
+    relays: fn(_deadline) {
       Ok([
         dashboard.RelayRow(
           id: 1,
           url: monitor_relay_url,
-          monitor: Some(relay_connection.Connected),
-          bunker: None,
+          monitor: dashboard.Reported(relay_connection.Connected),
+          bunker: dashboard.Unused,
         ),
         dashboard.RelayRow(
           id: 2,
           url: "wss://bunker.example",
-          monitor: None,
-          bunker: Some(relay_connection.Disconnected),
+          monitor: dashboard.Unused,
+          bunker: dashboard.Reported(relay_connection.Disconnected),
         ),
       ])
     },
@@ -166,7 +166,7 @@ pub fn test_context(
       process.send(reports, RelayDeleted(relay.id))
       Ok(Nil)
     },
-    plugins: fn() {
+    plugins: fn(_deadline) {
       [
         dashboard.PluginRow(
           name: "console_logger",

@@ -7,10 +7,6 @@ import gleam/erlang/atom.{type Atom}
 @external(erlang, "erlang", "unique_integer")
 pub fn unique_integer(options: List(Atom)) -> Int
 
-/// 単調増加する時計の現在値。
-@external(erlang, "erlang", "monotonic_time")
-pub fn monotonic_time(unit: Atom) -> Int
-
 /// 登録名が使われているか。
 @external(erlang, "child_fixture", "is_registered")
 pub fn is_registered(name: Atom) -> Bool

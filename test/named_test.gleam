@@ -1,8 +1,7 @@
-import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/named
-import support/erl.{monotonic_time}
+import nostr_no_su/time
 
 /// 問い合わせに使うメッセージ。宛先の振る舞いを模す。
 type Msg {
@@ -122,9 +121,9 @@ pub fn a_late_reply_does_not_reach_the_caller_test() {
 pub fn call_returns_early_when_the_target_exits_test() {
   let name = process.new_name("test_named")
   spawn_named(name)
-  let started = monotonic_time(atom.create("millisecond"))
+  let started = time.monotonic_ms()
   assert named.call(name, 3000, Exit) == None
-  assert monotonic_time(atom.create("millisecond")) - started < 500
+  assert time.monotonic_ms() - started < 500
 }
 
 /// 応答を受け取った後に宛先が終了しても、監視の `DOWN` は呼び出し側に残らない。

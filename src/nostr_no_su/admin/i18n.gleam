@@ -303,6 +303,7 @@ pub type Message {
   OriginMismatch
   BunkerDidNotRespond
   StoreDidNotConfirm
+  NotAvailable
   // アカウントの登録画面
   ImportPrivateKey
   ImportDescription
@@ -480,6 +481,7 @@ fn english(message: Message) -> String {
     BunkerDidNotRespond -> "the bunker did not respond"
     StoreDidNotConfirm ->
       "the store did not confirm the change; it may have been applied"
+    NotAvailable -> "Not available right now."
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
@@ -651,6 +653,7 @@ fn japanese(message: Message) -> String {
       "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
     BunkerDidNotRespond -> "バンカーが応答しませんでした。"
     StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
+    NotAvailable -> "今は取得できません。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"

@@ -29,15 +29,20 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
-/// `relays` の 1 行の表示内容。用途ごとに、使っていればその接続の状態を `Some` で、
-/// 使っていなければ `None` を持つ。
+/// `relays` の 1 行の表示内容。用途ごとに、使っていなければ `Unused`、状態を得られたら
+/// `Reported`、締め切りまでに接続が答えなければ `Unanswered` を持つ。
 pub type RelayRow {
-  RelayRow(
-    id: Int,
-    url: String,
-    monitor: Option(Status),
-    bunker: Option(Status),
-  )
+  RelayRow(id: Int, url: String, monitor: RoleState, bunker: RoleState)
+}
+
+/// リレー 1 件の、用途 1 つぶんの状態。
+pub type RoleState {
+  /// この用途には使っていない。
+  Unused
+  /// 接続の状態を得られた。
+  Reported(Status)
+  /// 締め切りまでに接続が答えなかった。
+  Unanswered
 }
 
 /// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
@@ -67,7 +72,8 @@ pub type SkippedRow {
 }
 
 /// プラグイン 1 つの表示内容。`status` が `None` なのは、ランナーが再起動中か、
-/// 遅いプラグインの実行中で問い合わせに応答しなかったことを意味する。
+/// 遅いプラグインの実行中で問い合わせに応答しなかったか、共通の締め切りまでに
+/// 答えなかったことを意味する。
 pub type PluginRow {
   PluginRow(name: String, status: Option(plugin_runner.Status))
 }
@@ -101,17 +107,22 @@ pub type SessionRow {
 /// ダッシュボードが表示する状態の一式。
 pub type Snapshot {
   Snapshot(
-    /// アカウントの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
-    accounts: Result(List(AccountRow), String),
-    /// 直近の読み込みで飛ばされた行の一覧。得られないときはカードごと描かない。
-    skipped: Result(List(SkippedRow), String),
-    /// 承認待ちの一覧。得られないとき（読み込み中、応答なし）は表示する理由。
-    pending: Result(List(PendingRow), String),
-    /// リレーの一覧。得られないとき（`relay_list` の応答なし、DB の障害）は表示する理由。
-    relays: Result(List(RelayRow), String),
-    /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし）は表示する
-    /// 理由。
-    sessions: Result(List(SessionRow), String),
+    /// アカウントの一覧。得られないとき（読み込み中、応答なし、締め切り超過）は
+    /// 表示する理由。
+    accounts: Result(List(AccountRow), i18n.Reason),
+    /// 直近の読み込みで飛ばされた行の一覧。得られないとき（読み込み中、応答なし、
+    /// 締め切り超過）はカードごと描かない。
+    skipped: Result(List(SkippedRow), i18n.Reason),
+    /// 承認待ちの一覧。得られないとき（読み込み中、応答なし、締め切り超過）は
+    /// 表示する理由。
+    pending: Result(List(PendingRow), i18n.Reason),
+    /// リレーの一覧。得られないとき（`relay_list` の応答なし、DB の障害）は表示する
+    /// 理由。この一覧自体は締め切りの外で得るが、行ごとの用途の状態は締め切りまでに
+    /// 答えなければ `RoleState.Unanswered` になる。
+    relays: Result(List(RelayRow), i18n.Reason),
+    /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし、締め切り
+    /// 超過）は表示する理由。
+    sessions: Result(List(SessionRow), i18n.Reason),
     plugins: List(PluginRow),
   )
 }
@@ -211,7 +222,7 @@ const refresh_seconds = 30
 /// ダッシュボードを自動で読み込み直すかどうか。承認待ちを 1 件以上得たときだけ更新し、
 /// 空のときと一覧を得られないときは、コピー中の選択を壊さないために更新しない。
 fn dashboard_refresh(
-  pending: Result(List(PendingRow), String),
+  pending: Result(List(PendingRow), i18n.Reason),
 ) -> view.Refresh {
   case pending {
     Ok([_, ..]) -> view.RefreshEverySeconds(refresh_seconds)
@@ -261,7 +272,7 @@ pub fn render(
 /// 一覧を得られないときは、一覧の代わりにその理由を出し、登録のリンクも出さない。
 fn accounts_section(
   language: Language,
-  accounts: Result(List(AccountRow), String),
+  accounts: Result(List(AccountRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
@@ -283,10 +294,10 @@ fn accounts_section(
 }
 
 /// 直近の読み込みで飛ばされた行。1 件以上あるときだけカードを描く。一覧を
-/// 得られないとき（読み込み中、応答なし）も描かない。
+/// 得られないとき（読み込み中、応答なし、締め切り超過）も描かない。
 fn skipped_section(
   language: Language,
-  skipped: Result(List(SkippedRow), String),
+  skipped: Result(List(SkippedRow), i18n.Reason),
 ) -> Element(msg) {
   case skipped {
     Ok([_, ..] as rows) ->
@@ -324,7 +335,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
 /// リレーの節が使う。
 fn section_heading(
   language: Language,
-  listing: Result(a, String),
+  listing: Result(a, i18n.Reason),
   title: i18n.Message,
   href: String,
   link: i18n.Message,
@@ -349,7 +360,7 @@ fn heading_row(title: String, trailing: Element(msg)) -> Element(msg) {
 /// 節が使う。
 fn listed_body(
   language: Language,
-  listing: Result(List(a), String),
+  listing: Result(List(a), i18n.Reason),
   lead: i18n.Lead,
   empty: Element(msg),
   render: fn(List(a)) -> Element(msg),
@@ -359,7 +370,7 @@ fn listed_body(
     Error(reason) ->
       view.alert(
         view.Neutral,
-        view.reason_content(language, Some(lead), i18n.Untranslated(reason)),
+        view.reason_content(language, Some(lead), reason),
       )
   }
 }
@@ -425,7 +436,7 @@ fn account_action_link_weight(action: AccountAction) -> view.Weight {
 /// 代わりにその理由を出す。
 fn pending_section(
   language: Language,
-  pending: Result(List(PendingRow), String),
+  pending: Result(List(PendingRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   let refresh_hint = case dashboard_refresh(pending) {
@@ -652,7 +663,7 @@ fn perms_value(language: Language, perms: String) -> view.Value {
 /// 一覧を得られないときは理由を出す。
 fn relays_section(
   language: Language,
-  relays: Result(List(RelayRow), String),
+  relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
   view.card([
     section_heading(
@@ -676,11 +687,11 @@ fn relays_section(
 /// 一覧を得て、バンカーに使う行が 1 件も無いときの警告。
 fn no_bunker_relay_warning(
   language: Language,
-  relays: Result(List(RelayRow), String),
+  relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
   case relays {
     Ok(rows) ->
-      case list.any(rows, fn(row) { option.is_some(row.bunker) }) {
+      case list.any(rows, fn(row) { row.bunker != Unused }) {
         True -> element.none()
         False ->
           view.alert(view.Warning, [
@@ -692,7 +703,7 @@ fn no_bunker_relay_warning(
 }
 
 /// リレー 1 件。URL と、使っている用途の語と状態の組を監視、バンカーの順に並べ、
-/// 操作のリンク（用途の編集、削除）を続ける。
+/// 操作のリンク（用途の編集、削除）を続ける。使っていない用途（`Unused`）は出さない。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   entry_item([
     html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
@@ -701,10 +712,9 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
       ]),
       html.div(
         [attribute.class("flex flex-wrap gap-x-4 gap-y-1 text-sm")],
-        option.values([
-          option.map(row.monitor, relay_role(language, i18n.MonitorRole, _)),
-          option.map(row.bunker, relay_role(language, i18n.BunkerRole, _)),
-        ]),
+        [#(i18n.MonitorRole, row.monitor), #(i18n.BunkerRole, row.bunker)]
+          |> list.filter(fn(role) { role.1 != Unused })
+          |> list.map(fn(role) { relay_role(language, role.0, role.1) }),
       ),
     ]),
     button_row(
@@ -719,17 +729,25 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   ])
 }
 
-/// 用途の語と、その用途の接続の状態のバッジの組。
+/// 用途の語と、その用途の状態のバッジの組。呼び出し元が `Unused` を除いてから渡す。
 fn relay_role(
   language: Language,
   role: i18n.Message,
-  status: Status,
+  state: RoleState,
 ) -> Element(msg) {
   html.span([attribute.class("flex items-center gap-2")], [
     html.span([attribute.class("whitespace-nowrap")], [
       html.text(i18n.text(language, role)),
     ]),
-    relay_status(language, status),
+    case state {
+      Reported(status) -> relay_status(language, status)
+      Unanswered ->
+        html.span(
+          [attribute.class("badge badge-sm badge-ghost whitespace-nowrap")],
+          [html.text(i18n.text(language, i18n.PluginUnavailable))],
+        )
+      Unused -> element.none()
+    },
   ])
 }
 
@@ -737,7 +755,7 @@ fn relay_role(
 /// 代わりにその理由を出す。
 fn sessions_section(
   language: Language,
-  sessions: Result(List(SessionRow), String),
+  sessions: Result(List(SessionRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
