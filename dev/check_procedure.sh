@@ -16,6 +16,7 @@
 #          ことを確かめる。コマンドが実行できない状態でも通ってしまう）
 #   環境   プロジェクト名 nostr-no-su、127.0.0.1:8080、ホストの 5432、作業ツリーの .env、
 #          ユーザーの作業ツリー、-f の無い docker compose（cwd の compose と .env を読む）
+#   引用   psql -c "…" の中の二重引用符（シェルで外れる。ヒアドキュメントで渡す）
 # 指摘があれば表にして 1 で、無ければ「指摘なし」を出して 0 で終わる。作業ツリーは
 # 作業ツリーの絶対パスを直し方の案に使うだけで、読み書きしない。
 #
@@ -109,6 +110,8 @@ function check(c,  t, i, name, args, k, last) {
   # 否定の検査。
   if (c ~ /(^|[;&|(][ \t]*)!([ \t]|$)/) report("否定", code(c), "`!` の検査は set -e でも止まらず、コマンドが実行できない状態でも通る。`if ...; then exit 1; fi` の形にし、土台で陽性になることを確かめる")
   if (c ~ /\$\?/) report("否定", code(c), "終了コードの検査。失敗を期待する側は、コマンドが実行できない状態（コンテナーが無い等）でも同じ値になる。土台で陽性になることを確かめ、実行できたことの肯定の判定を添える")
+  if (c ~ /psql/ && match(c, /-c[ \t]+"/)) { args = substr(c, RSTART)
+    if (args ~ /\\"/ || args ~ /""/) report("引用", code(c), "psql -c の二重引用符はシェルで外れる。ヒアドキュメント（`psql <<\047SQL\047`）で渡す") }
   # ユーザーの環境。
   if (c ~ /(-p|--project-name|--name|project)[= ]nostr-no-su([^-A-Za-z0-9_]|$)/) report("環境", code(c), "ユーザーの compose のプロジェクト名。固有の名前（nns-issue<N>）にする")
   if (c ~ /\/home\/lina\/workspace\/projects\/nostr-no-su/) report("環境", code(c), "ユーザーの作業ツリー。読むだけでも " tree " にする")
