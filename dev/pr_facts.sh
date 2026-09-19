@@ -1,7 +1,8 @@
 #!/bin/sh
 # PR の事実（head と base の SHA、差分の行数、閉じる issue、CI の各ジョブ）を gh で集め、
-# 1 枚の Markdown の表にする。実装者が PR 本文の「テストと検証」に貼り、PR レビュアーと
-# マージ担当が同じ表で照合する。SHA と数値をモデルが転記しないためのもの。
+# 1 枚の Markdown の表にする。実装者が PR 本文の「## テストと検証」の直下に貼るので、
+# 見出しは「###」で出す。PR レビュアーとマージ担当が同じ表で照合する。SHA と数値を
+# モデルが転記しないためのもの。
 #
 # 差分の行数は GitHub の files API（git diff --numstat 相当）の合計とファイルごとの内訳。
 # CI は gh pr checks の各ジョブの状態で、pending や fail があってもそのまま表に出す。
@@ -20,7 +21,7 @@ files=$(gh api --paginate "repos/$repo/pulls/$pr/files?per_page=100" --jq '.[]')
 # gh pr checks は fail や pending があると 0 以外で終わるので、出力だけを使う。
 checks=$(gh pr checks "$pr" -R "$repo" --json name,state,bucket,link 2>/dev/null) || true
 
-echo "## PR #$pr の事実（$(date -u +%Y-%m-%dT%H:%MZ) 時点）"
+echo "### PR #$pr の事実（$(date -u +%Y-%m-%dT%H:%MZ) 時点）"
 echo
 echo "| 項目 | 値 |"
 echo "|--|--|"
