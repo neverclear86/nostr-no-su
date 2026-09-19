@@ -68,6 +68,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 - **UI を変える issue** は `ui: true` を付ける。スクリプトがデザインエージェントを先に立て、プランに取り込ませ、実装エージェントに変更前（main）と変更後のスクリーンショットを PR に貼らせる（変えた画面だけを日本語で。英語は英語画面の修正が主題の issue のときだけ。見た目が変わらないリファクタリングでも貼る）。`ui` を付けない issue ではスクリーンショットは撮らない。管理 UI の `.gleam` を変えたら `npm run build:css` の結果をコミットする（CI が差分を検査する）
 - **文書を動かす issue は先に単独で**：README の分割など、他の PR が触る文書の置き場所を変える issue は、並行させずに 1 件だけの実行でマージしてから次を始める（09-13 の #149 は並行した 4 件と衝突して 4 ラウンドかかった）
 - **コミットのトレーラー**：サブエージェントはこのセッションの system-reminder を見ないので、`Co-Authored-By` と `Claude-Session` の行と Claude-Session の URL を `trailers` で渡す
+- **実装者の定義の hooks**：`issue-implementer` の frontmatter の `hooks`（`.gleam` の整形、PR 本文の必須の節、push 前の `gleam format --check`。`dev/hook_*.sh`）は、その subagent が動いている間だけ発火する。project の subagent の frontmatter の hooks は、ワークスペースの trust を受け入れたフォルダー（`/home/lina/workspace/projects/nostr-no-su`）から起動した対話セッションでだけ動き、`claude -p` は trust の受け入れに数えられない（動かないときは debug ログに残るだけで、実行は止まらない）
 - **キャッシュ**：ワークフローのエージェントのキャッシュは既定 5 分で切れる。1 issue の段階は続けて動くので通常は足りるが、待ちが長くなるなら設定 `subagentPromptCacheTtl` を `1h` にする（書き込みの単価が上がる）
 
 ## 手順
