@@ -358,8 +358,9 @@ ${conditions.map((c, i) => `  ${i + 1}. ${c}`).join('\n')}
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
 返答（構造化出力）: status は fixed、対応コメントの URL、head のコミット、ciPassed。`,
-  // 経緯（tier、ラウンド数、条件）は「## まとめ」の材料でもあるので、最終確認の依頼文でそのまま渡す
-  gateCourse: (state) => `- この実行の経緯: tier ${state.tier}、プランのラウンド数 ${state.planRounds}、PR レビューのラウンド数 ${state.prRounds}、APPROVE に付いた条件 ${state.prConditionCount} 件、実装起因の must ${state.implMusts} 件
+  // 経緯（tier、ラウンド数、条件）は「## まとめ」の材料でもあるので、最終確認の依頼文でそのまま渡す。
+  // ラウンド数はこの実行で数えた分だけなので、planUrl で引き継いだ issue は前の実行のプランレビューが含まれない旨を添える
+  gateCourse: (state) => `- この実行の経緯: tier ${state.tier}、プランのラウンド数 ${state.planRounds}${state.planInherited ? '（承認済みのプランを引き継いだので、前の実行のプランレビューは含まない）' : ''}、PR レビューのラウンド数 ${state.prRounds}、APPROVE に付いた条件 ${state.prConditionCount} 件、実装起因の must ${state.implMusts} 件
 - PR レビューが APPROVE を出した head: ${state.reviewApprovedHead}
 ${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（対応後の head ${state.head}）。対応コメントのマーカーの head のコミットを \`gh api repos/${REPO}/commits/<その head> --jq '.files[] | .filename, .patch'\` で見て、対応の差分が条件 ${state.prConditionCount} 件の範囲に収まっているかも見る。範囲を超える変更があれば must にする\n` : ''}`,
   gate1: (e, state, issue) => `PR #${state.pr}（issue #${e.n}、head ${state.head}）の最終確認をしてほしい。
@@ -679,7 +680,7 @@ async function runIssue(issue, idx) {
   const e = env(issue, idx)
   const state = {
     n: issue.n, base: e.base, tier: TIERS.includes(issue.tier) ? issue.tier : null,
-    planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, prConditionCount: 0, implMusts: 0, lessons: [],
+    planRounds: 0, planInherited: false, version: 0, prRounds: 0, gateRounds: 0, nits: 0, prConditionCount: 0, implMusts: 0, lessons: [],
     implementer: null, implementedBy: null,
     designUrl: issue.designUrl || null, postUrl: null, postFile: null, conditions: null,
     pr: null, head: null, approveUrl: null, reviewApprovedHead: null, conditionsUrl: null,
@@ -705,7 +706,7 @@ async function runIssue(issue, idx) {
     const stages = [
       // 判定 → デザイン → プラン。承認済みのプランがあれば 3 つとも飛ばす。サブ issue は判定を飛ばし、デザインは親の URL を継ぐ
       async () => {
-        if (issue.planUrl) { state.postUrl = issue.planUrl; state.tier = 'light'; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
+        if (issue.planUrl) { state.postUrl = issue.planUrl; state.tier = 'light'; state.planInherited = true; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
         // args.issues[].tier で固定されていれば判定を飛ばす（A/B と再開のため）。サブ issue も同じ経路で light になる
         if (!issue.depth && !state.tier) {
           const t = await triageStage(e, issue, state)
