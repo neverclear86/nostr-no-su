@@ -90,11 +90,12 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **issues**：issue ごとに `n`、`branch`（`feat/…`、`fix/…`、`docs/…`、`refactor/…` の形で英語）、UI を変えるなら `ui: true`、依存があれば `after: [n]`、issue コメントで決まった事項や補足があれば `note`
 - **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
 - **trailers**：このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
-- **window**：同時に進める件数。既定 4。文書を動かす issue や大きい issue は 1。5 時間枠の残量を見て決める。残りが 30% 未満なら `window` を 2 にし、新しい issue を足さない（枠切れで止まったエージェントの再開は、途中の副作用を確かめる分だけ高くつく）
+- **window**：同時に進める件数。既定 4。文書を動かす issue や大きい issue は 1。枠切れは Claude Code の一時停止に任せる（対話セッションから起動したときだけ効く。リセットが 24 時間以内のときだけで、週の枠は解けない）
 - **implementer**：`"devin"` にすると、tier none / light で UI を変えない issue の最初の実装で、コードを書く部分だけを devin CLI（モデル swe-2-max。`~/.claude/scripts/devin-box.sh` の jail で動き、トークンの消費は Claude の枠に入らない）に任せる。検査・コミット・PR・CI の確認と、指摘への対応・条件への対応・rebase は今までどおり `issue-implementer`（sonnet）が行う。**2026-10-10 まで**（swe-2 の無料期間）は既定を `"devin"` にし、それ以降は省く（既定 `"claude"`）。`issues[].implementer` で issue ごとに上書きできる。効果の比較は結果の `implementedBy`（devin が失敗して sonnet が書いたら `claude`）で分け、実装の費用（devin 分は $0）・クリティカルパス・PR ラウンド 1 の判定・実装起因の must・deviation・devin の失敗回数を 09-19 の A/B（none $5.9、light $7.0、PR r1 APPROVE 10/10、実装起因の must 0）と比べる
 - **tier の固定**：A/B を取るときや、判定をやり直したくない再開のときは `issues[].tier` に `none` / `light` / `full` を書く。判定の段階が飛ぶ
 - **既存のプラン**：issue にすでに承認済みの「## 実装プラン（版 N）」が投稿されていれば、そのコメントの URL を `planUrl` に書く。スクリプトはプランの段階を飛ばして実装から始める。土台が古びていて作れない箇所があれば、実装エージェントが `deviation` を返し、スクリプトがプランの版を上げる
 - **事前に聞く論点**：issue の本文とコメントに未決の設計判断（どの鍵で応答するか、既定値をどうするか、など）があれば、起動の前に `AskUserQuestion` でまとめて聞き、`decisions[n]` に書く。09-13 の実績では 28 件で 9 件の質問があり、すべてプラン段階の設計判断だった
+- **対話セッションから起動する**：実行は対話セッション（claude.ai のサブスクリプションでログイン、`autoContinueAtUsageLimit` は既定の on）から起動し、`claude -p` やバックグラウンドセッション、Remote Control に移さない。エージェントが usage limit に当たったとき、対話セッションなら run は失敗せず一時停止してリセット後に続くが、それ以外ではそのエージェントが失敗する（https://code.claude.com/docs/en/workflows#when-a-run-hits-your-usage-limit）
 - **`args` を保存する**：組み立てた `args` を `<scratchpad>/runs/<base の短い SHA>-<連番>.json` に書いてから起動する。再開はそのファイルを読み、`blocked` / `stalled` / `failed` の issue だけを新しい実行の `args` の元にする（`planUrl`、`tier`、`decisions` を引き継ぎ、`base` は新しい `origin/main` に更新する）
 
 ### 1. 起動
