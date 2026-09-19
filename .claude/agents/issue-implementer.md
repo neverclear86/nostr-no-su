@@ -88,6 +88,21 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 
 調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、そのまま実装を続けない。見込みと理由を指示されたファイルに書き、status を deviation にして返す（スクリプトが light に切り替えてプランを書かせ、途中の作業ツリーから続きを実装させる。途中の変更はコミットせずに作業ツリーに残してよい）。
 
+## devin に実装を任せるとき（依頼文が「実装のコードは devin に書かせる」と言うとき）
+
+コードを書く部分だけを devin CLI（モデル `swe-2-max`。2026-10-10 まで無料）に任せ、検査・コミット・PR・CI の確認は自分で行う。devin はこのセッションの文脈もこの定義も読まないので、依頼文は `dev/devin_prompt.sh` で自己完結に組む。
+1. 作業ツリーとブランチは「コミットと PR」のとおりに作る（origin にすでにブランチと PR があるときは devin を使わず、続きを自分で進める）
+2. 仕様を 1 ファイルに保存する。tier none は `gh issue view <N> -R neverclear86/nostr-no-su --comments` の出力、light は `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` のプランの本文。依頼文に実装時の条件があれば 1 行 1 件のファイルにも書く
+3. devin 用の clone を作る: `git clone -q --shared /home/lina/workspace/projects/nostr-no-su <スクラッチパッド>/devin-<N> && git -C <スクラッチパッド>/devin-<N> checkout -q --detach <土台の SHA>`（jail は /tmp の下の独立 clone だけ受け付ける。worktree は使えない）
+4. `sh <作業ツリー>/dev/devin_prompt.sh <N> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル] > <スクラッチパッド>/devin-<N>.txt` で依頼文を組む。Postgres のポートは依頼文の実装用のものを渡す（devin の Postgres は `pg-devin-<N>` の名前で立つ）
+5. `~/.claude/scripts/devin-box.sh <clone> <依頼文> > <スクラッチパッド>/devin-<N>.out 2>&1` を Bash の `run_in_background` で起動し、完了の通知を待つ（10 分を超える。待つ間に `pgrep -f` で devin を探すときは `pgrep -fc '^devin -p'` を使う。緩いパターンは自分の bash に一致する）。clone の中の `DEVIN_REPORT.md` を読む。無い、または `status: failed` なら、その出力を添えて同じ手順でもう 1 回だけ devin に頼む。2 回とも失敗したら devin をやめ、自分で実装する（返答の `implementedBy` を `claude` にし、reason に devin の失敗を書く）
+6. `status: deviation` なら、報告の見込みと理由を指示された逸脱のファイルに写し、status を deviation にして返す（途中の差分は clone に残る。続きの依頼では clone を捨てて作業ツリーで自分で進める）
+7. `status: done` なら `git -C <clone> add -A && git -C <clone> diff --cached -- . ':!DEVIN_REPORT.md' > <スクラッチパッド>/devin-<N>.patch` で差分を取り、`git -C <作業ツリー> apply --index <patch>` で作業ツリーに取り込む。差分は取り込む前に「実装の基準」の観点で 1 回読む
+8. 取り込んだら「PR を作る前の検査」を手順 1 から全部自分で回す（devin の報告は鵜呑みにしない。検査が通らなければ自分で直す）。PR 本文は報告ファイルの「変更点」「テストと検証」「設計メモ」「プランからの変更」を元に、自分の検査の結果で書き直す。「## 概要」に「実装: devin（swe-2-max）、検査と PR: Claude」の 1 行を置く
+9. 返答の `implementedBy` を `devin` にする
+
+devin に任せるのは最初の実装だけである。指摘への対応、条件への対応、続き、rebase は自分で行う。
+
 ## 文体
 コミット、PR、コード内コメントは標準的な技術文体の日本語（である調）。ギャル口調や口語は使わない。
 
@@ -95,7 +110,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 PR 本文と対応コメントは、レビュアーが次に取る行動を変える情報だけで組む。プランの言い直しや定型文で膨らませない。ツール呼び出しの間の文は 1 文までにする。
 
 ## 返すもの
-構造化出力で、status（pr）、PR の番号と URL、head のコミット、ciPassed を返す。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（失敗や飛ばした検査もそのまま書く）。
+構造化出力で、status（pr）、PR の番号と URL、head のコミット、ciPassed を返す。最初の実装では implementedBy（devin か claude）も返す。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（失敗や飛ばした検査もそのまま書く）。
 
 ## レビューの指摘を受け取ったら
 - 指摘は、指示されたレビューコメントの URL の本文を `gh api` で読む。本文は判定と件数の行だけが見えていて、指摘は `<details>` に畳まれているので、そこまで読む

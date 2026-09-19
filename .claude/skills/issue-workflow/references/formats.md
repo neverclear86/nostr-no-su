@@ -80,6 +80,7 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 
 ```
 ## 概要
+（devin にコードを書かせたときは「実装: devin（swe-2-max）、検査と PR: Claude」の 1 行を置く）
 ## 設計メモ
 （プランが無いとき（tier none）だけ。「### 決めたこと」と「### 受け入れ条件」の表）
 ## 変更点

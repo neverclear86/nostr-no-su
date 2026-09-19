@@ -24,6 +24,8 @@ export const meta = {
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   portBase:   issue ごとに 10 個ずつ使う空きポートの先頭（ss -ltn で確かめてから渡す）
 //   window:     同時に進める issue の数（既定 4）
+//   implementer: 'claude' | 'devin'（既定 claude）。devin は tier none / light で UI を変えない issue の最初の実装だけを
+//               devin CLI（swe-2-max、2026-10-10 まで無料）に書かせる。issues[].implementer で issue ごとに上書きできる
 //   decisions:  { [n]: 'ユーザーの決定の文' }。planner が質問を返した issue に、再開のとき渡す
 //   dryRun:     { [n]: シナリオ名 } を渡すとエージェントを立てずに制御の流れだけ確かめる
 // ---------------------------------------------------------------------------
@@ -42,6 +44,8 @@ if (typeof a !== 'object') throw new Error('args はオブジェクトで渡す�
 if (!Array.isArray(a.issues) || a.issues.length === 0) throw new Error('args.issues が空である')
 for (const k of ['base', 'scratchpad', 'trailers', 'portBase']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
 const WINDOW = a.window || 4
+const IMPLEMENTERS = ['claude', 'devin']
+if (a.implementer !== undefined && !IMPLEMENTERS.includes(a.implementer)) throw new Error(`args.implementer は ${IMPLEMENTERS.join(' / ')} のどれか`)
 const PLANS = `${a.scratchpad}/plans`
 const decisions = a.decisions || {}
 const dry = a.dryRun || null
@@ -88,6 +92,7 @@ const S = {
       reportFile: { type: 'string', description: 'deviation のとき、逸脱の箇所と理由を書いたファイル' },
       reason: { type: 'string', description: 'deviation / blocked の理由、または rebase で解けなかった衝突' },
       ciPassed: { type: 'boolean', description: 'PR の head で CI の全ジョブが pass したか（pr / fixed / rebased のとき必須）' },
+      implementedBy: { type: 'string', enum: IMPLEMENTERS, description: '最初の実装で、コードを書いたのが devin か claude か（devin を頼まれても失敗して自分で書いたら claude）' },
     },
     required: ['status'],
   },
@@ -176,7 +181,7 @@ function inCycle(start) {
 
 /** エージェントを 1 体立て、null（打ち切りや落ちた）を段階つきの例外にする */
 async function call(stage, label, prompt, opts) {
-  const result = dry ? fake(label, opts) : await agent(prompt, { ...opts, label })
+  const result = dry ? fake(label, opts, prompt) : await agent(prompt, { ...opts, label })
   if (result === null || result === undefined) throw new StageError(stage, `${label} が結果を返さなかった`)
   return result
 }
@@ -191,6 +196,7 @@ function env(issue, idx) {
     planWt: `${a.scratchpad}/wt-${issue.n}-plan`,
     wt: `${a.scratchpad}/wt-${issue.n}`,
     reviewWt: `${a.scratchpad}/wt-${issue.n}-review`,
+    devinWs: `${a.scratchpad}/devin-${issue.n}`,
     pgPort: p, ports: `${p + 1}（アプリ）、${p + 2}（strfry）`, project: `nns-issue${issue.n}`,
     reviewPgPort: p + 5, reviewPorts: `${p + 6}（アプリ）、${p + 7}（strfry）`, reviewProject: `nns-review${issue.n}`,
   }
@@ -203,6 +209,10 @@ const common = (e) => `- 土台: origin/main の ${e.base}
 /** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
 const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
 - issue と PR のコメントは \`dev/post_comment.sh\` で投稿する（マーカーを機械的に付ける）。既存のコメントは編集しない`
+/** devin にコードを書かせる指示。実装エージェントの定義の「devin に実装を任せるとき」の手順を指す */
+const devinNote = (e, by) => by === 'devin'
+  ? `- 実装のコードは devin に書かせる（定義の「devin に実装を任せるとき」の手順。clone は ${e.devinWs}、依頼文は \`dev/devin_prompt.sh\` で組む）。検査・コミット・PR・CI の確認は自分で行う\n`
+  : ''
 /** プランレビューが APPROVE に添えた実装時の条件を依頼文にする。null は planUrl で始めた issue（条件は投稿済みのプランにしか無い） */
 const conditionsNote = (conditions) => conditions === null
   ? '- 実装時の条件: 投稿済みのプランの冒頭の「### 実装時の条件」を読み、あれば取り込んで PR 本文の「プランからの変更」に書く\n'
@@ -255,9 +265,9 @@ ${common(e)}
 ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。' : '対応の表の各項目が前の版の決定と矛盾しないか、逸脱の解き方が issue の受け入れ条件を満たすかを見て判定してほしい。'}
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md。先頭の「指摘への対応」の表は含めない）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
-  implement: (e, issue, postUrl, conditions) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
+  implement: (e, issue, postUrl, conditions, by) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
 - 土台: origin/main の ${e.base}
-${conditionsNote(conditions)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
+${conditionsNote(conditions)}${devinNote(e, by)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -268,12 +278,12 @@ ${conditionsNote(conditions)}- 作業ツリー: ${e.wt}、ブランチ: ${e.bran
 ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーンショットを PR に貼る\n' : ''}プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、逸脱の箇所と理由を ${PLANS}/${e.n}-deviation.md に書き、status を deviation にして返す。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
-返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
+返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed、implementedBy。`,
   // tier none（追加 100 行未満、3 ファイル以下、決めたこと 0〜1 件）はプランを書かず、実装者が issue を読んで直接作る
-  implementNoPlan: (e, issue) => `issue #${e.n} を実装し、PR を作ってほしい。この issue は小さいので実装プランを書かない段階に振り分けられた（tier none）。プランの代わりに issue を直接読む。
+  implementNoPlan: (e, issue, by) => `issue #${e.n} を実装し、PR を作ってほしい。この issue は小さいので実装プランを書かない段階に振り分けられた（tier none）。プランの代わりに issue を直接読む。
 - issue: \`gh issue view ${e.n} -R ${REPO} --comments\`。受け入れ条件はここにしか無い
 - 土台: origin/main の ${e.base}
-- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く）
+${devinNote(e, by)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -287,7 +297,7 @@ ${issue.ui ? '- UI を変えるので、変更前と変更後のスクリーン�
 調べてみて追加が 100 行を大きく超える、または「決めたこと」が 2 件以上になると分かったら、実装を続けずに status を deviation にし、その見込みと理由を ${PLANS}/${e.n}-deviation.md に書いて返す（スクリプトがプランを書かせ、途中の作業ツリーから続きを実装させる）。途中の変更はコミットせずに作業ツリーに残してよい。
 PR を作ったら \`gh pr checks <PR> -R ${REPO} --watch\` で CI の全ジョブが pass するのを待ち、fail なら直して push してから返す。
 ${SAFETY}
-返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed。`,
+返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed、implementedBy。`,
   implementContinue: (e, postUrl, conditions) => `issue #${e.n} の実装プランが版を上げて承認された（${postUrl}）。前の実装エージェントが途中まで進めたブランチ ${e.branch} と作業ツリー ${e.wt} がすでにある。
 新しい版のプランとの差分だけを直して実装を仕上げ、PR を作ってほしい（すでに PR があれば push して本文を直す）。
 ${conditionsNote(conditions)}- テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
@@ -469,12 +479,22 @@ async function revisePlan(e, state, reportFile, why) {
   return {}
 }
 
+/** 最初の実装を誰に書かせるか。devin は tier none / light で UI を変えない issue だけ（スクリーンショットと full の規模は未検証） */
+function implementerOf(issue, state) {
+  const want = issue.implementer || a.implementer || 'claude'
+  if (!IMPLEMENTERS.includes(want)) throw new StageError('implement', `#${issue.n} の implementer が不正（${want}）`)
+  return want === 'devin' && ['none', 'light'].includes(state.tier) && !issue.ui ? 'devin' : 'claude'
+}
+
 /** 実装と PR 作成。逸脱はプランの版を上げてから続きを実装させる */
 async function implementStage(e, issue, state) {
   let noPlan = state.tier === 'none'
+  state.implementer = implementerOf(issue, state)
+  if (state.implementer === 'devin') log(`#${e.n}: 実装のコードは devin に書かせる（tier ${state.tier}）`)
   let impl = await call('implement', `Implement #${e.n}`,
-    noPlan ? P.implementNoPlan(e, issue) : P.implement(e, issue, state.postUrl, state.conditions),
+    noPlan ? P.implementNoPlan(e, issue, state.implementer) : P.implement(e, issue, state.postUrl, state.conditions, state.implementer),
     { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
+  state.implementedBy = impl.implementedBy || state.implementer
   let replans = 0
   while (impl.status === 'deviation') {
     // tier none には上げるプランが無いので、見込みが外れたらプランを書かせ、途中の作業ツリーから続きを実装させる（tier の記録は none のまま残す）
@@ -660,6 +680,7 @@ async function runIssue(issue, idx) {
   const state = {
     n: issue.n, base: e.base, tier: TIERS.includes(issue.tier) ? issue.tier : null,
     planRounds: 0, version: 0, prRounds: 0, gateRounds: 0, nits: 0, prConditionCount: 0, implMusts: 0, lessons: [],
+    implementer: null, implementedBy: null,
     designUrl: issue.designUrl || null, postUrl: null, postFile: null, conditions: null,
     pr: null, head: null, approveUrl: null, reviewApprovedHead: null, conditionsUrl: null,
   }
@@ -731,7 +752,7 @@ async function runIssue(issue, idx) {
 }
 
 // --- dry run（エージェントを立てずに制御の流れを確かめる） --------------------
-function fake(label, opts) {
+function fake(label, opts, prompt) {
   // ラベルの番号は issue 番号か PR 番号（dry run では PR 番号 = issue 番号 + 1000）
   const num = Number((label.match(/#(\d+)/) || [])[1])
   const n = String(/PR #|PR review #/.test(label) ? num - 1000 : num)
@@ -767,13 +788,15 @@ function fake(label, opts) {
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 1, postUrl: `https://example/issue/${n}#plan-r${r}` } : { verdict: 'REQUEST CHANGES', must: 1, should: 1, nit: 0, headings: ['x'] }
   }
   if (t === 'issue-implementer') {
+    // 依頼文が devin を指定していれば devin が書いたと報告する（implementerOf の振り分けを dry run で確かめる）
+    const implementedBy = prompt.includes('devin に書かせる') ? 'devin' : 'claude'
     if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased`, ciPassed: true }
     if (sc === 'ci-fail') return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: false, reason: 'test が fail' }
     if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
     if (sc === 'null') return null
     if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
     if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question', 'tier-none-deviation'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: sc === 'tier-none-deviation' ? '見込み 260 行' : '関数が無い' }
-    return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true }
+    return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true, implementedBy }
   }
   if (t === 'issue-pr-reviewer') {
     if (sc === 'pr-needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#needs-user`, questions: ['エラーを握るか落とすか'] }
@@ -811,5 +834,6 @@ const flatten = (rs) => rs.flatMap((r) => (r.status === 'split' ? flatten(r.chil
 const merged = flatten(results).filter((r) => r.status === 'merged')
 const byTier = TIERS.map((t) => `${t} ${merged.filter((r) => r.tier === t).length}`).join(' / ')
 log(`merged ${count('merged')} / split ${count('split')} / blocked ${count('blocked')} / stalled ${count('stalled')} / failed ${count('failed')}`)
-log(`マージの tier の内訳: ${byTier}（子を含めて ${merged.length} 件）。条件 ${merged.reduce((s, r) => s + (r.prConditionCount || 0), 0)} 件、学び ${merged.reduce((s, r) => s + (r.lessons || []).length, 0)} 件`)
+const byImpl = IMPLEMENTERS.map((t) => `${t} ${merged.filter((r) => r.implementedBy === t).length}`).join(' / ')
+log(`マージの tier の内訳: ${byTier}、実装者の内訳: ${byImpl}（子を含めて ${merged.length} 件）。条件 ${merged.reduce((s, r) => s + (r.prConditionCount || 0), 0)} 件、学び ${merged.reduce((s, r) => s + (r.lessons || []).length, 0)} 件`)
 return { base: a.base, results }
