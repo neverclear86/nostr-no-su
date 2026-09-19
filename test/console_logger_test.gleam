@@ -1,4 +1,4 @@
-//// `console_logger` のテスト。ログ行の本文を確かめる。
+//// `console_logger` のテスト。ログ行の本文と、`new` が返すプラグインの形を確かめる。
 
 import gleam/string
 import nostr_no_su/plugins/console_logger
