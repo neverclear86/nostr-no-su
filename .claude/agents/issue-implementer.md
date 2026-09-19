@@ -24,6 +24,7 @@ disallowedTools: Agent
 - Doc コメントは、この PR がマージされた時点の動作だけを書く。行番号、issue 番号、後続 issue で配線される動作は書かない。プランが文言を指定していればそのまま使う
 - v0.1 未満で非公開なので、後方互換、廃止ログ、移行案内、互換レイヤーは作らない。消すものは痕跡ごと消す
 - README、docs/architecture.md、.env.example など、変更に関係する文書も同じ PR で直す
+- テストを足す、移す、消したときは、そのファイルのモジュール Doc（`////`）の列挙も同じコミットで直す
 
 ## PR を作る前の検査（この順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く）
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
@@ -55,7 +56,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文の書式は次のとおり。末尾に `Closes #<N>`（issue の「依存」節がこの PR で閉じると書く issue はすべて並べる）と、指示された生成表記の行を置く
 - 指摘への対応や rebase で push するときも、上の「PR を作る前の検査」を通してから push する
 - PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の `test` ジョブが pass するのを待つ。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
-- CI が pass したら `sh <作業ツリー>/dev/pr_facts.sh <PR>` を回し、その表を「テストと検証」に貼り、`Closes` が表の closingIssuesReferences と一致することを確かめて `gh pr edit <PR> -R neverclear86/nostr-no-su --body-file <ファイル>` で本文を更新する（push のたびに貼り直す）
+- CI が pass したら `sh <作業ツリー>/dev/pr_facts.sh <PR>` を回し、その表を「テストと検証」に貼り、`Closes` が表の closingIssuesReferences と一致することを確かめて `gh pr edit <PR> -R neverclear86/nostr-no-su --body-file <ファイル>` で本文を更新する（push のたびに貼り直す）。`pr_facts.sh` は `gh pr create` の後に回すこと。表の「閉じる issue」が「無し」のときは `Closes` の連携がまだなので、回し直して表を貼り直す
 
 ```
 ## 概要
@@ -74,7 +75,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 ## プランが無いとき（tier none）
 
 依頼文が「実装プランを書かない段階に振り分けられた」と言うときは、承認済みプランが無い。
-受け入れ条件は issue の本文とコメントにしか無いので、そこから取る。プランの代わりに PR 本文の「## 設計メモ」が設計の記録になり、PR レビュアーと最終確認はこの節に照合する。内容は次の 2 つだけで、プランの体裁（方針の要約、変更するファイルの節）は作らない。
+受け入れ条件は issue の本文とコメントにしか無いので、そこから取る。行番号とファイルの位置は起票時の参考値として扱い、土台で引き直してから設計メモに書く。プランの代わりに PR 本文の「## 設計メモ」が設計の記録になり、PR レビュアーと最終確認はこの節に照合する。内容は次の 2 つだけで、プランの体裁（方針の要約、変更するファイルの節）は作らない。
 
 ```
 ## 設計メモ
@@ -101,7 +102,7 @@ PR 本文と対応コメントは、レビュアーが次に取る行動を変�
 - PR レビューの must には「直し方の案」が付かない（レビュアーは該当・問題・根拠だけを書く決まりである）。直し方は自分で決める。根拠が指すコマンドや `path:行` を自分で確かめてから直す
 - must と should は、直すか、事実に反するかプランと矛盾する根拠を示すかのどちらかにする。nit は直さなくてよい（直したら対応コメントに書く）。投稿済みのコメントの文言は指摘されても直さない
 - 直したコミット（メッセージは `fix:` や `docs:` で「レビューの指摘に合わせて…」の形）を push する
-- PR にコメントを投稿する。1 行目はマーカー `<!-- nns kind=fix round=R verdict=- head=<短い SHA> -->`、2 行目以降が見出し「## レビュー（ラウンド R）の指摘への対応（<短い SHA>）」である。冒頭にレビューの URL と直した件数（must M、should S、nit K）を出し、指摘ごとの本文（見出し must 1、should 2 …、変えたファイルと行、変えた内容、確かめ方）は `<details><summary>指摘ごとの対応</summary>` に畳む
+- PR にコメントを投稿する。1 行目はマーカー `<!-- nns kind=fix round=R verdict=- head=<短い SHA> -->`、2 行目以降が見出し「## レビュー（ラウンド R）の指摘への対応（<短い SHA>）」である。冒頭にレビューの URL と直した件数（must M、should S、nit K）を出し、指摘ごとの本文（見出し must 1、should 2 …、変えたファイルと行、変えた内容、確かめ方）は `<details><summary>指摘ごとの対応</summary>` に畳む。指摘ごとの見出しの重さ（must / should / nit）はレビューの表記をそのまま写し、自分で読み替えない
 - 対応コメントの URL と新しい head のコミットを、status を fixed にして返す
 
 ## APPROVE に付いた条件を受け取ったら

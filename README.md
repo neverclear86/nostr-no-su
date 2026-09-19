@@ -200,7 +200,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 - [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
 - [バックアップと復旧](docs/operations.md)：DB のダンプと復元、マスターキーの保管、復旧後の確認
-- [開発](docs/development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
+- [開発](docs/development.md)：ローカルでの実行とテスト、テストの流儀、管理 UI の CSS のビルドと画面の撮影
 - [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
 - [貢献の手引き](CONTRIBUTING.md)：変更の出し方、版数の方針、リリースの手順
 - [変更履歴](CHANGELOG.md)：リリースごとの変更
