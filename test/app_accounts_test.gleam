@@ -1,5 +1,6 @@
 //// 偽のストアを持つバンカーで、アカウントの読み込みと再試行、実行中の変更、結果が
-//// 曖昧な書き込みの後の読み直し、秘密鍵の問い合わせを確かめるテスト。
+//// 曖昧な書き込みの後の読み直しと管理 UI からの読み直しの要求、秘密鍵の問い合わせを
+//// 確かめるテスト。
 
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -161,6 +162,70 @@ pub fn retries_do_not_multiply_across_restarts_test() {
   drain(calls)
   let after = count_within(calls, 1000)
   assert after * 2 <= before * 3
+  stop_tree(tree)
+}
+
+/// 読み込めていない間に読み直しを要求しても、読み込みの系列は増えない。既に進行中の
+/// 読み込みに積み増さないので、失敗し続けるストアへの読み込みの回数はほぼ変わらない。
+pub fn a_reload_during_loading_adds_no_series_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store_with_load(fn() {
+        process.send(calls, Nil)
+        Error("database is unreachable or timed out")
+      }),
+      fixed_retry_delay,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  let before = count_within(calls, 1000)
+  assert before >= 5
+
+  assert bunker.reload_accounts(name) == Ok(Nil)
+  assert bunker.reload_accounts(name) == Ok(Nil)
+  drain(calls)
+  let after = count_within(calls, 1000)
+  assert after * 2 <= before * 3
+  stop_tree(tree)
+}
+
+/// 管理 UI からの読み直しの要求は、読み込み済みの状態からストアの最新の内容に
+/// メモリを合わせる。
+pub fn a_requested_reload_picks_up_the_database_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let next_call = call_counter()
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      store_with_load(fn() {
+        case next_call() {
+          0 -> load_signer(signer_key)
+          _ -> load_signer(other_signer_key)
+        }
+      }),
+      fixed_retry_delay,
+    )
+  assert await_signers(
+    name,
+    [account.pubkey_hex(account_for(signer_key))],
+    2000,
+  )
+
+  assert bunker.reload_accounts(name) == Ok(Nil)
+  assert await_signers(
+    name,
+    [account.pubkey_hex(account_for(other_signer_key))],
+    2000,
+  )
   stop_tree(tree)
 }
 

@@ -29,7 +29,8 @@
 //// 呼び出し側には反映されたかもしれない旨を返す（`MaybeApplied(StoreDidNotConfirm)`）。
 //// ストアの読み込みは、実行中の書き込みの終了をテーブルのロックで待ってから読む
 //// （`account_store.load`）。読み直しは起動時の読み込みと同じ `LoadAccounts` の経路で
-//// 行い、失敗すれば同じく名前なしの subject へ再試行を予約する。読み直しが成功する
+//// 行い（契機は結果が曖昧な書き込みの後と管理 UI からの要求）、失敗すれば同じく
+//// 名前なしの subject へ再試行を予約する。読み直しが成功する
 //// までの間はメモリが DB と食い違っていることがあり、その間の変更は起動時の読み込みの
 //// 前と同じく `accounts are not loaded yet` で拒否し、一覧は理由を返す。NIP-46 の処理は
 //// その間もメモリのアカウントで続け、`connect`、`logout`、セッション内のリクエストの
@@ -313,6 +314,9 @@ pub type Msg {
   /// ストアからアカウントを読み込む。initialiser と再試行のタイマーが、アクター
   /// ごとに作る名前なしの subject へ送る。名前付き subject へは誰も送らない。
   LoadAccounts
+  /// 管理 UI からの読み直しの要求。読み込み済みなら読み直しを積み、読み込めていなければ
+  /// 何もしない。どちらも `Nil` で応答する。
+  ReloadAccounts(reply: Subject(Nil))
   /// 現在の署名者 pubkey の一覧を問い合わせる。バンカーリレーの購読が使う。
   GetSigners(reply: Subject(List(String)))
   /// 応答の発行先として配られているリレーの URL を問い合わせる。
@@ -459,6 +463,13 @@ pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
   |> option.unwrap(Error(query_not_answered))
 }
 
+/// DB からの読み直しを要求する。読み込めていない間は既に読み直しが進んでいるので
+/// 何もしない。アクターが応答しないときは理由を返す。
+pub fn reload_accounts(name: Name(Msg)) -> Result(Nil, String) {
+  named.call(name, call_timeout_ms, ReloadAccounts)
+  |> option.to_result(query_not_answered)
+}
+
 /// 直近の読み込みで飛ばされた行の一覧。読み込めていない、あるいはアクターが
 /// 応答しないときは理由を返す。
 pub fn skipped(name: Name(Msg)) -> Result(List(vault.Skipped), String) {
@@ -512,7 +523,8 @@ fn call_change(
 /// メモリがストアの内容を反映しているかどうか。
 type Accounts {
   /// ストアの内容を読み込めていない。起動直後の読み込みの前か、結果が曖昧な書き込みの
-  /// 後の読み直しの前。`LoadAccounts` の送信か再試行のタイマーが、常にちょうど 1 つ
+  /// 後の読み直しの前、または管理 UI からの読み直しの要求の前。`LoadAccounts` の
+  /// 送信か再試行のタイマーが、常にちょうど 1 つ
   /// 未処理で残っている。`failure` は最後の失敗の理由（まだ失敗していなければ
   /// `None`）、`retry_delay_ms` はこの状態での読み込みが失敗したときの、次の再試行
   /// までの待ち時間。
@@ -763,13 +775,21 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込みと変更、publisher の登録、署名者・アカウント・飛ばされた行・
-/// セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件を
-/// エンジンに通して生成された応答の全接続への送信、発行した応答への OK の反映、
-/// リレーの AUTH に返す認証イベントの署名を行う。
+/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、署名者・アカウント・
+/// 飛ばされた行・セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、
+/// 受信イベント 1 件をエンジンに通して生成された応答の全接続への送信、発行した応答への
+/// OK の反映、リレーの AUTH に返す認証イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
+    ReloadAccounts(reply) -> {
+      let next = case state.accounts {
+        Ready -> reload(state)
+        Loading(..) -> state
+      }
+      process.send(reply, Nil)
+      actor.continue(next)
+    }
     GetSigners(reply) -> {
       process.send(reply, engine.signers(state.engine))
       actor.continue(state)
@@ -1286,8 +1306,8 @@ fn change_line(
 
 /// 読み直しの `LoadAccounts` を積み、読み込めていない状態に移る。読み込み済みの
 /// 状態からだけ呼ぶ（`write_session_change` は `Loading` の間は呼ばない）。
-/// 読み込みの系列は 1 本のままになる。`apply_change` の `MaybeWritten` の枝も
-/// これを使う。
+/// 読み込みの系列は 1 本のままになる。`apply_change` の `MaybeWritten` の枝と
+/// `ReloadAccounts` の枝もこれを使う。
 fn reload(state: State) -> State {
   process.send(state.retry, LoadAccounts)
   State(..state, accounts: loading(state.settings))

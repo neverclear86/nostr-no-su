@@ -548,6 +548,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
         bunker.update_label(bunker_name, signer, label)
       },
       nsec: bunker.nsec(bunker_name, _),
+      reload_accounts: fn() { bunker.reload_accounts(bunker_name) },
       plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
       relays: fn(deadline) { relay_rows(spec, deadline) },

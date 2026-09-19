@@ -159,6 +159,8 @@ pub type Context {
     /// 再表示のために、署名者の秘密鍵を nsec の文字列で問い合わせる。`Ok` の値は
     /// 秘密鍵そのもの。
     nsec: fn(String) -> Result(String, String),
+    /// DB からの読み直しを要求する。バンカーが応答しないときは表示する理由を返す。
+    reload_accounts: fn() -> Result(Nil, String),
     /// リレーの一覧。締め切りを渡す。`relay_list` が応答しない、DB を読めないときは
     /// 表示する理由を返し、期限内に用途の状態を得られない接続は応答なしとして返す。
     relays: fn(task.Deadline) -> Result(List(dashboard.RelayRow), String),
@@ -308,6 +310,8 @@ fn route(
       revoke_session(context, request, language, theme)
     segments if segments == dashboard.reenable_plugin_segments ->
       reenable_plugin(context, request, language, theme)
+    segments if segments == dashboard.reload_accounts_segments ->
+      reload_accounts(context, request, language, theme)
     segments if segments == dashboard.new_account_segments ->
       show_new_account(request, language, theme)
     segments if segments == dashboard.new_relay_segments ->
@@ -876,6 +880,22 @@ fn reenable_failure_response(
       not_found_notice(language, theme, i18n.Untranslated(reason))
     PluginNotAnswered(reason) ->
       not_confirmed_notice(language, theme, i18n.Untranslated(reason), 503)
+  }
+}
+
+/// DB からの読み直しを要求してダッシュボードへ戻す。再読み込みで再送されないよう
+/// 303。バンカーが応答しないときは 503 の「バンカーを利用できません」。
+fn reload_accounts(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
+  use <- require_method(request, http.Post, language, theme)
+  case context.reload_accounts() {
+    Ok(Nil) -> wisp.redirect(to: "/")
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
   }
 }
 

@@ -20,12 +20,13 @@ pub fn japanese_pages_have_no_english_words_test() {
 /// （nostr、no、su）、Nostr と NIP-46 の用語（nsec、npub、pubkey、relay、kind、secret、
 /// ws、wss、URI、URL、NIP）、環境変数と文書の名前（ACCOUNT、MASTER、KEY、README）、HTTP
 /// の語（Origin、Host）、操作の案内（Ctrl、C、macOS）、日付の区切り（T、Z）、NIP-46 の
-/// 権限の名前（sign、event）、日本語文中に引用する英語のメッセージ（account is already
-/// registered）、言語の自名（English）、固定値（example、label、plugin、a〜d）。
+/// 権限の名前（sign、event）、日本語文中でも英字で書く略語（DB）、日本語文中に引用する
+/// 英語のメッセージ（account is already registered）、言語の自名（English）、固定値
+/// （example、label、plugin、a〜d）。
 const allowed_words = [
   "nostr", "no", "su", "nsec", "npub", "pubkey", "relay", "kind", "secret", "ws",
   "wss", "URI", "URL", "NIP", "ACCOUNT", "MASTER", "KEY", "README", "Origin",
-  "Host", "Ctrl", "C", "macOS", "T", "Z", "sign", "event", "account", "is",
+  "Host", "Ctrl", "C", "macOS", "T", "Z", "sign", "event", "DB", "account", "is",
   "already", "registered", "English", "example", "label", "plugin", "a", "b",
   "c", "d",
 ]
