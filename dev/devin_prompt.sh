@@ -41,10 +41,12 @@ cat <<PROMPT
 
 ## してはいけないこと
 - \`git commit\`、\`git push\`、\`gh pr\`、\`gh issue comment\`、\`gh api\` の書き込み（POST / PATCH / DELETE）は行わない。コミットと PR は別の担当が行う
+- \`git fetch\`、\`pull\`、\`checkout\`、\`reset\`、\`stash\` で HEAD と作業ツリーの状態を動かさない（origin はローカルのリポジトリで、差分は HEAD からの \`git diff\` で回収される）
 - \`/home\` の下と、この clone の外のリポジトリには書き込まない（この clone、/tmp、docker だけを使う）
 - docker は自分が作った \`pg-devin-$n\` だけを使い、それ以外のコンテナー、volume、ネットワーク、イメージに触れない。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除と \`prune\` は使わない
 - 後方互換、廃止ログ、移行案内、互換レイヤーは作らない（v0.1 未満で非公開。消すものは痕跡ごと消す）
 - スクリーンショットは撮らない
+- 受け入れ条件の外の変更（ついでの整理、体裁の統一）は入れない。受け入れ条件がすでに満たされていて変えるものが無ければ、何も変えずに報告ファイルにそう書く
 
 ## 仕様
 PROMPT

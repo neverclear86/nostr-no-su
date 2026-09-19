@@ -93,11 +93,11 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 コードを書く部分だけを devin CLI（モデル `swe-2-max`。2026-10-10 まで無料）に任せ、検査・コミット・PR・CI の確認は自分で行う。devin はこのセッションの文脈もこの定義も読まないので、依頼文は `dev/devin_prompt.sh` で自己完結に組む。
 1. 作業ツリーとブランチは「コミットと PR」のとおりに作る（origin にすでにブランチと PR があるときは devin を使わず、続きを自分で進める）
 2. 仕様を 1 ファイルに保存する。tier none は `gh issue view <N> -R neverclear86/nostr-no-su --comments` の出力、light は `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` のプランの本文。依頼文に実装時の条件があれば 1 行 1 件のファイルにも書く
-3. devin 用の clone を作る: `git clone -q --shared /home/lina/workspace/projects/nostr-no-su <スクラッチパッド>/devin-<N> && git -C <スクラッチパッド>/devin-<N> checkout -q --detach <土台の SHA>`（jail は /tmp の下の独立 clone だけ受け付ける。worktree は使えない）
+3. devin 用の clone を作る: `git clone -q --shared /home/lina/workspace/projects/nostr-no-su <スクラッチパッド>/devin-<N> && git -C <スクラッチパッド>/devin-<N> checkout -q --detach $(git -C <作業ツリー> rev-parse HEAD)`（作業ツリーと同じコミットにする。土台の SHA ではない。並列のマージで origin/main が進んでいると差分が当たらない。jail は /tmp の下の独立 clone だけ受け付ける。worktree は使えない）
 4. `sh <作業ツリー>/dev/devin_prompt.sh <N> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル] > <スクラッチパッド>/devin-<N>.txt` で依頼文を組む。Postgres のポートは依頼文の実装用のものを渡す（devin の Postgres は `pg-devin-<N>` の名前で立つ）
-5. `~/.claude/scripts/devin-box.sh <clone> <依頼文> > <スクラッチパッド>/devin-<N>.out 2>&1` を Bash の `run_in_background` で起動し、完了の通知を待つ（10 分を超える。待つ間に `pgrep -f` で devin を探すときは `pgrep -fc '^devin -p'` を使う。緩いパターンは自分の bash に一致する）。clone の中の `DEVIN_REPORT.md` を読む。無い、または `status: failed` なら、その出力を添えて同じ手順でもう 1 回だけ devin に頼む。2 回とも失敗したら devin をやめ、自分で実装する（返答の `implementedBy` を `claude` にし、reason に devin の失敗を書く）
+5. `~/.claude/scripts/devin-box.sh <clone> <依頼文> > <スクラッチパッド>/devin-<N>.out 2>&1` を Bash の `run_in_background` で起動し、完了の通知を待つ（10 分を超える。待つ間に `pgrep -f` で devin を探すときは `pgrep -fc '^devin -p'` を使う。緩いパターンは自分の bash に一致する）。clone の中の `DEVIN_REPORT.md` を読む。無い、または `status: failed` なら、依頼文の末尾に「## 前回の失敗」として報告ファイルと出力の要点を `cat >>` で足し、同じ clone でもう 1 回だけ devin に頼む。2 回とも失敗したら devin をやめ、自分で実装する（返答の `implementedBy` を `claude` にし、reason に devin の失敗を書く）
 6. `status: deviation` なら、報告の見込みと理由を指示された逸脱のファイルに写し、status を deviation にして返す（途中の差分は clone に残る。続きの依頼では clone を捨てて作業ツリーで自分で進める）
-7. `status: done` なら `git -C <clone> add -A && git -C <clone> diff --cached -- . ':!DEVIN_REPORT.md' > <スクラッチパッド>/devin-<N>.patch` で差分を取り、`git -C <作業ツリー> apply --index <patch>` で作業ツリーに取り込む。差分は取り込む前に「実装の基準」の観点で 1 回読む
+7. `status: done` なら `git -C <clone> add -A && git -C <clone> diff --cached --binary -- . ':!DEVIN_REPORT.md' > <スクラッチパッド>/devin-<N>.patch` で差分を取り、`git -C <作業ツリー> apply --index <patch>` で作業ツリーに取り込む。差分は取り込む前に「実装の基準」の観点で 1 回読む
 8. 取り込んだら「PR を作る前の検査」を手順 1 から全部自分で回す（devin の報告は鵜呑みにしない。検査が通らなければ自分で直す）。PR 本文は報告ファイルの「変更点」「テストと検証」「設計メモ」「プランからの変更」を元に、自分の検査の結果で書き直す。「## 概要」に「実装: devin（swe-2-max）、検査と PR: Claude」の 1 行を置く
 9. 返答の `implementedBy` を `devin` にする
 
