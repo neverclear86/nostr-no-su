@@ -938,8 +938,8 @@ fn reenable_form(language: Language, name: String) -> Element(msg) {
   )
 }
 
-/// DB からの読み直しのフォーム。メモリを DB の内容に合わせ直すだけで取り消せる
-/// 操作ではないので、状態を変えない `Normal` より重い注意の重さにする。
+/// DB からの読み直しのフォーム。読み直しはメモリから DB に無いアカウントを取り除き、
+/// セッションと承認待ちも置き換えるので、接続中のクライアントに影響する `Caution` にする。
 fn reload_form(language: Language) -> Element(msg) {
   view.post_form(
     view.segments_path(reload_accounts_segments),
