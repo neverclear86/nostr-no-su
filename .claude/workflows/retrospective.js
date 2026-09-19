@@ -12,7 +12,7 @@ export const meta = {
 // args の契約（スキル issue-workflow の「結果の処理」で組み立てる）
 //   runs:       journal の絶対パスの配列（mtime の昇順）。表示と起票する issue の根拠にだけ使う
 //   events:     { "<runs[i] と同じパス>": [<抽出済みの result イベント>...] }。journal の中身はここで渡す
-//               各要素は { label, phase, status?, tier?, pr?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
+//               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
 //               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
@@ -86,6 +86,7 @@ const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
  * | lessons | Final gate の verdict: 'APPROVE' の lessons |
  * | status | その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
  * | pr | Implement の結果の pr |
+ * | implementedBy | Implement の結果の implementedBy（devin か claude。無ければ claude） |
  *
  * 同じ label が 2 回以上あれば先のものを採る（後のものを採ると、再開で走り直した結果に上書きされる）。
  * Merge だけは retry で label が変わるので、複数の label の「いずれか」が merged なら merged とする。
@@ -113,7 +114,7 @@ function collectRun(events, prToIssue) {
     if (issueN === undefined) { dropped++; continue }
     const rec = get(issueN)
     if (kind === 'triage') { if (ev.tier) rec.tier = ev.tier }
-    else if (kind === 'implement') { if (ev.pr) rec.pr = ev.pr }
+    else if (kind === 'implement') { if (ev.pr) rec.pr = ev.pr; if (ev.implementedBy) rec.implementedBy = ev.implementedBy }
     else if (kind === 'planReview') { rec.planRounds = Math.max(rec.planRounds || 0, round) }
     else if (kind === 'prReview') {
       rec.prRounds = Math.max(rec.prRounds || 0, round)
@@ -146,6 +147,7 @@ function aggregate(runs, events) {
   // 全 run の合併の後に既定を埋める
   for (const rec of issues.values()) {
     rec.tier = rec.tier || 'light'
+    rec.implementedBy = rec.implementedBy || 'claude'
     rec.planRounds = rec.planRounds || 0
     rec.prRounds = rec.prRounds || 0
     rec.prConditionCount = rec.prConditionCount || 0
@@ -158,9 +160,11 @@ function aggregate(runs, events) {
   const round2 = (x) => Math.round(x * 100) / 100
   const avg = (key) => (merged.length ? round2(merged.reduce((s, i) => s + (i[key] || 0), 0) / merged.length) : 0)
   const byTier = TIERS.reduce((acc, t) => { acc[t] = list.filter((i) => i.tier === t).length; return acc }, {})
+  const byImplementer = ['claude', 'devin'].reduce((acc, t) => { acc[t] = list.filter((i) => i.implementedBy === t).length; return acc }, {})
   const totals = {
     runCount: runs.length,
     byTier,
+    byImplementer,
     planRoundsAvg: avg('planRounds'),
     prRoundsAvg: avg('prRounds'),
     conditionAvg: avg('prConditionCount'),
@@ -175,12 +179,14 @@ function aggregate(runs, events) {
 /** 集計の要約を、起票する issue の冒頭にそのまま貼る Markdown の表にする */
 function summaryMarkdown(totals, since) {
   const tierRow = TIERS.map((t) => `${t} ${totals.byTier[t]}`).join(' / ')
+  const implRow = ['claude', 'devin'].map((t) => `${t} ${totals.byImplementer[t]}`).join(' / ')
   return `| 項目 | 値 |
 | --- | --- |
 | 対象期間 | ${since} 以降 |
 | run 数 | ${totals.runCount} |
 | マージ件数 | ${totals.merged}（未完了 ${totals.unfinished}） |
 | tier 別の件数 | ${tierRow} |
+| 実装者別の件数 | ${implRow} |
 | プランと PR レビューのラウンド数の平均 | プラン ${totals.planRoundsAvg} / PR ${totals.prRoundsAvg} |
 | 条件の平均 | ${totals.conditionAvg} |
 | 実装起因の must の合計 | ${totals.implMusts} |

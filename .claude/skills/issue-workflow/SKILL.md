@@ -14,7 +14,7 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus low）→
 | デザイン（UI を変える issue で tier が light 以上） | `issue-designer` | opus / medium | issue コメント（デザインの方針）。分割した親でも 1 回だけで、サブ issue は親の URL を継ぐ |
 | プラン作成（tier が light 以上） | `issue-planner` | opus / low | `<scratchpad>/plans/{{N}}-v{{V}}.md` |
 | プランレビュー（tier が light 以上） | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/{{N}}-r{{R}}.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿。最大 2 ラウンド |
-| 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。tier none では PR 本文の「## 設計メモ」がプランの代わり。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる |
+| 実装 | `issue-implementer` | sonnet / high | ブランチ、コミット、PR。tier none では PR 本文の「## 設計メモ」がプランの代わり。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる。`implementer: "devin"` のときは、コードを書く部分だけを devin CLI（swe-2-max）に任せ、検査・コミット・PR は同じエージェントが行う |
 | PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」。最大 2 ラウンド。must 0 なら条件付きで APPROVE |
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」と、APPROVE のとき「## まとめ」。diff とレビューの経緯だけを読み、再現はしない |
 | マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
@@ -90,6 +90,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
 - **trailers**：このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
 - **window**：同時に進める件数。既定 4。文書を動かす issue や大きい issue は 1。5 時間枠の残量を見て決める。残りが 30% 未満なら `window` を 2 にし、新しい issue を足さない（枠切れで止まったエージェントの再開は、途中の副作用を確かめる分だけ高くつく）
+- **implementer**：`"devin"` にすると、tier none / light で UI を変えない issue の最初の実装で、コードを書く部分だけを devin CLI（モデル swe-2-max。`~/.claude/scripts/devin-box.sh` の jail で動き、トークンの消費は Claude の枠に入らない）に任せる。検査・コミット・PR・CI の確認と、指摘への対応・条件への対応・rebase は今までどおり `issue-implementer`（sonnet）が行う。**2026-10-10 まで**（swe-2 の無料期間）は既定を `"devin"` にし、それ以降は省く（既定 `"claude"`）。`issues[].implementer` で issue ごとに上書きできる。効果の比較は結果の `implementedBy`（devin が失敗して sonnet が書いたら `claude`）で分け、実装の費用（devin 分は $0）・クリティカルパス・PR ラウンド 1 の判定・実装起因の must・deviation・devin の失敗回数を 09-19 の A/B（none $5.9、light $7.0、PR r1 APPROVE 10/10、実装起因の must 0）と比べる
 - **tier の固定**：A/B を取るときや、判定をやり直したくない再開のときは `issues[].tier` に `none` / `light` / `full` を書く。判定の段階が飛ぶ
 - **既存のプラン**：issue にすでに承認済みの「## 実装プラン（版 N）」が投稿されていれば、そのコメントの URL を `planUrl` に書く。スクリプトはプランの段階を飛ばして実装から始める。土台が古びていて作れない箇所があれば、実装エージェントが `deviation` を返し、スクリプトがプランの版を上げる
 - **事前に聞く論点**：issue の本文とコメントに未決の設計判断（どの鍵で応答するか、既定値をどうするか、など）があれば、起動の前に `AskUserQuestion` でまとめて聞き、`decisions[n]` に書く。09-13 の実績では 28 件で 9 件の質問があり、すべてプラン段階の設計判断だった
@@ -111,6 +112,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
   "portBase": 5600,
   "window": 4,
+  "implementer": "devin",
   "trailers": {
     "coAuthoredBy": "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>",
     "claudeSession": "Claude-Session: https://claude.ai/code/session_…",
@@ -141,7 +143,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 1. このセッションの journal のパスを `ls -tr <セッションの subagents/workflows>/wf_*/journal.jsonl` で mtime の昇順に集める（`aggregate` は後の run の値で上書きするため）。mtime が `since` より前のものと、`result` イベントが 1 件も無いものは `runs` に入れない
 2. journal ごとに次の jq を通し、`events` を組み立てる。
    ```sh
-   jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
+   jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
    ```
 3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。
 
@@ -166,12 +168,12 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 ## dry run（スクリプトを変えたとき）
 
-`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`tier-none`（判定が none → プラン無しで実装 → PR レビュー APPROVE → 最終確認 → マージ）、`tier-none-design-must`（none で PR ラウンド 1 が `designMust` → その場でプラン v1 / r1 → 修正 → ラウンド 2 で APPROVE）、`tier-none-deviation`（none の実装が見込みを超えて `deviation` → その場でプラン v1 / r1 → 続きを実装 → マージ）、`pr-conditions`（PR ラウンド 1 が APPROVE ＋ 条件 2 件 → 条件対応 → 再レビュー無しで最終確認）、`approve-with-conditions`（プランレビューがラウンド 1 で条件 2 件つきの APPROVE。実装の依頼文に条件が入る）、`plan2`（プラン 2 ラウンド）、`plan-stall`（2 ラウンドで `stalled`）、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
+`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`tier-none`（判定が none → プラン無しで実装 → PR レビュー APPROVE → 最終確認 → マージ）、`tier-none-design-must`（none で PR ラウンド 1 が `designMust` → その場でプラン v1 / r1 → 修正 → ラウンド 2 で APPROVE）、`tier-none-deviation`（none の実装が見込みを超えて `deviation` → その場でプラン v1 / r1 → 続きを実装 → マージ）、`pr-conditions`（PR ラウンド 1 が APPROVE ＋ 条件 2 件 → 条件対応 → 再レビュー無しで最終確認）、`approve-with-conditions`（プランレビューがラウンド 1 で条件 2 件つきの APPROVE。実装の依頼文に条件が入る）、`plan2`（プラン 2 ラウンド）、`plan-stall`（2 ラウンドで `stalled`）、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`devin`（`implementer: "devin"` と組み合わせる。実装が `implementedBy: devin` を返し、集計に出る）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
 
 ```json
 { "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }
 ```
 
-スクリプトを変えたら、上の `args` の `dryRun` のシナリオ名を 1 つずつ差し替えて全シナリオを回し、`results` の `status` が期待どおりであることを確かめる。`planurl-deviation` は `issues[0]` に `planUrl` を、`child-split` はサブ issue の番号（親が `split` のとき `n * 100 + 1`）に付ける。`issues[].tier` を足した `args` も 1 回回し、判定が飛んで tier が固定されることを見る。
+スクリプトを変えたら、上の `args` の `dryRun` のシナリオ名を 1 つずつ差し替えて全シナリオを回し、`results` の `status` が期待どおりであることを確かめる。`planurl-deviation` は `issues[0]` に `planUrl` を、`child-split` はサブ issue の番号（親が `split` のとき `n * 100 + 1`）に付ける。`issues[].tier` を足した `args` も 1 回回し、判定が飛んで tier が固定されることを見る。`implementer: "devin"` と `devin` シナリオの組も 1 回回し、最後の `log` の実装者の内訳に devin が数えられることを見る。
 
 `retrospective` は `args.dryRun: true` を渡すとエージェントを立てずに集計だけ返す。
