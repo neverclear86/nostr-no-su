@@ -1,3 +1,4 @@
+import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
@@ -57,11 +58,31 @@ pub fn serialize_for_id_test() {
     == "[0,\"3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d\",1700000000,1,[],\"hello nostr\"]"
 }
 
+/// タグの JSON 表現は文字列配列の配列で、タグが無ければ空配列になる。
+pub fn tags_json_test() {
+  assert event.tags_json(sample_event()) |> json.to_string == "[]"
+  let with_tags =
+    Event(..sample_event(), tags: [
+      ["e", "xyz"],
+      ["p", "abc", "wss://relay"],
+    ])
+  assert event.tags_json(with_tags) |> json.to_string
+    == "[[\"e\",\"xyz\"],[\"p\",\"abc\",\"wss://relay\"]]"
+}
+
 /// 正規シリアライズの sha256 が、手で計算した id と一致する。
 pub fn compute_id_synthetic_vector_test() {
   // 期待値はシェルで独立に計算したもの:
   // printf '%s' '[0,"3bf0…59d",1700000000,1,[],"hello nostr"]' | sha256sum
   assert event.compute_id(sample_event())
+    == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
+}
+
+/// 署名対象のハッシュは 32 バイトの sha256 で、16 進化すると id と一致する。
+pub fn hash_for_signing_test() {
+  let hash = event.hash_for_signing(sample_event())
+  assert bit_array.byte_size(hash) == 32
+  assert hex.encode(hash)
     == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
 }
 

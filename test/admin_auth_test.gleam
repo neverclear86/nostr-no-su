@@ -1,5 +1,5 @@
 //// Basic 認証、CSRF の検査（`Origin` と `Host` の照合）、認証済みの応答の
-//// ヘッダーのテスト。
+//// ヘッダー、認証の前に置く `/healthz` のテスト。
 
 import gleam/bit_array
 import gleam/erlang/process
@@ -127,6 +127,26 @@ pub fn healthz_needs_no_credentials_test() {
   assert response.status == 200
   assert simulate.read_body(response) == "ok"
   assert header(response, "content-type") == "text/plain"
+}
+
+/// `/healthz` は GET 以外を 405 で拒否する。認証より前に判定するため、資格情報を
+/// 付けなくても 401 にはならない。
+pub fn healthz_rejects_methods_other_than_get_test() {
+  let response =
+    simulate.request(http.Post, "/healthz")
+    |> admin.handle_request(context(), _)
+  assert response.status == 405
+  assert header(response, "allow") == "GET"
+  assert simulate.read_body(response) == "Method not allowed"
+}
+
+/// `handle_head` が HEAD を GET に読み替えるため、`/healthz` は HEAD にも認証なしで
+/// 200 を返す。
+pub fn healthz_accepts_head_test() {
+  let response =
+    simulate.request(http.Head, "/healthz")
+    |> admin.handle_request(context(), _)
+  assert response.status == 200
 }
 
 /// 別オリジンのフォームから送られた POST は 400 で弾く。Basic 認証の資格情報は
