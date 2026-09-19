@@ -17,19 +17,21 @@ disallowedTools: Agent
 ```sh
 R=neverclear86/nostr-no-su
 gh pr view <PR> -R $R --json headRefOid,mergeable,mergeStateStatus,commits --jq '{head: .headRefOid, mergeable, mergeStateStatus, last: .commits[-1].committedDate}'
-gh api repos/$R/issues/<PR>/comments --jq '.[] | select((.body | split("\n")[0]) | test("^## (レビュー（ラウンド [0-9]+）|最終確認(（再確認）)?)$")) | "\(.created_at) \(.body | split("\n")[0]) \(.body | split("\n") | map(select(startswith("判定"))) | .[0])"'
+gh api repos/$R/issues/<PR>/comments --jq '.[] | (.body | split("\n")[0]) as $m | select($m | test("^<!-- nns kind=(pr-review|gate|fix) ")) | "\(.created_at) \($m) \(.html_url)"'
 git -C /home/lina/workspace/projects/nostr-no-su fetch origin main <ブランチ>
 git -C /home/lina/workspace/projects/nostr-no-su show -s --format=%cI <APPROVE を出した head>
 gh pr checks <PR> -R $R
 ```
 
-コメントの絞り込みは見出し行（1 行目）の完全一致で行う（本文に「指摘への対応」の語が引用されていても落とさないため）。
+コメントの絞り込みは 1 行目の HTML コメントのマーカーで行う。書式は `<!-- nns kind=<種別> round=<N> verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER|-> head=<SHA|-> -->` である。
+PR レビューの承認は `test("^<!-- nns kind=pr-review .* verdict=APPROVE")`、最終確認の承認は `test("^<!-- nns kind=gate .* verdict=APPROVE")` で絞る。見出しの完全一致は使わない（本文に見出しの語が引用されていても落とさないため）。
 APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（rebase の後も、その前のコミットはローカルの object DB に残る。無ければ `gh api repos/$R/commits/<その SHA> --jq .commit.committer.date` で時刻を得る）。PR の `commits[-1].committedDate` は現在の head の時刻なので、rebase の後の比較には使わない。
 
 - 指示された head が PR の head と一致する
-- 指示された「APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
-- 「## レビュー」の最後の `判定: APPROVE` と「## 最終確認」の最後の `判定: APPROVE` が、どちらも APPROVE を出した head のコミットより後の時刻である
-- APPROVE の後の push が rebase 以外に無い（あれば not_ready）
+- 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
+- `kind=pr-review` の最後のコメントと `kind=gate` の最後のコメントが、どちらも `verdict=APPROVE` である
+- 最終確認の APPROVE のコメントが、指示された「最終確認が APPROVE を出した head」のコミットより後の時刻である（`git show -s --format=%cI <その head>` と比べる。現在の head とは比べない。rebase で head が変わっていても、その差分は下の range-diff で見る）
+- PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。`git -C <リポジトリ> log --oneline <PR レビューが APPROVE を出した head>..<最終確認が APPROVE を出した head>` で入った push を並べ、その範囲の各コミットが、APPROVE の後の `kind=fix` のマーカーの `head`（短い SHA なので前方一致で見る）までの範囲に収まることを確かめる。どの `kind=fix` にも対応しないコミットがあれば not_ready にする（レビューが要る）
 - CI の `test` ジョブが pass である（pending なら `gh pr checks <PR> -R $R --watch` で待つ）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す
 

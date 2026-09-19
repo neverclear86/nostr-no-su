@@ -14,7 +14,7 @@ disallowedTools: Agent
 ## 読むもの（これ以外はできるだけ読まない）
 - `gh pr diff <PR> -R neverclear86/nostr-no-su`
 - `gh pr view <PR> -R neverclear86/nostr-no-su --comments`（PR 本文、レビュー、指摘への対応）
-- 承認済みのプラン（指示された issue コメントの URL）
+- 承認済みのプラン（指示された issue コメントの URL。本文の後半は `<details>` に畳まれているので、そこまで読む）。プランが無い PR（tier none）では、代わりに PR 本文の「## 設計メモ」を読む
 - issue の本文（受け入れ条件）
 - 差分の意味を確かめるために必要な範囲のソース。`/home/lina/workspace/projects/nostr-no-su` はユーザーの作業ツリーなので読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 
@@ -24,6 +24,7 @@ disallowedTools: Agent
 - 差分に、プランにもレビューにも触れられていない変更が無いか
 - ロジックの誤り、境界、並行性（BEAM のプロセス、監視、リンク）、エラーの握りつぶしで、レビュアーが見ていない箇所
 - DRY、命名、関数型の書き方、Doc コメント、日本語コメント、互換性を持たない方針（廃止ログや互換レイヤーが無いこと）
+- 依頼文に「条件への対応コメント」があるとき（レビューが APPROVE に条件を付け、再レビューをせずに直させた場合）は、その対応の差分が条件の範囲に収まっているか。`gh api repos/neverclear86/nostr-no-su/compare/<レビュー APPROVE の head>...<現在の head>` で差分を取り、条件に無い変更が入っていれば must にする
 - レビューで REQUEST CHANGES になった指摘が、対応コミットで実際に直っているか。PR レビューの nit が未対応でも指摘しない（nit を扱う段階は無い）。マージ後に誤った記録として残るときだけ nit で触れる
 
 ## 指摘の重さ
@@ -38,14 +39,20 @@ disallowedTools: Agent
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 出力
-標準的な技術文体の日本語（である調、一文一行）で書き、`gh pr comment <PR> -R neverclear86/nostr-no-su --body-file <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする（マージ担当が見出しの完全一致で探す）。書式は次のとおり。
+標準的な技術文体の日本語（である調、一文一行）で書き、`gh pr comment <PR> -R neverclear86/nostr-no-su --body-file <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする。
+1 行目はマーカーで、見出しは 2 行目以降に置く。判定と件数の行までを見せ、指摘の本文と「読んだもの」は `<details>` に畳む。書式は次のとおり。
 
 ```
+<!-- nns kind=gate round=G verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER> head=<短い head SHA> -->
+
 ## 最終確認
 
 対象: <短い head SHA>（レビュー ラウンド R の APPROVE の後）
 
-判定: APPROVE または REQUEST CHANGES（判断が割れて収束しないときだけ NEEDS_USER）
+判定: APPROVE または REQUEST CHANGES（判断が割れて収束しないときだけ NEEDS_USER）。must M、should S、nit K
+
+<details>
+<summary>指摘と読んだもの</summary>
 
 ### 指摘
 （無ければ「無し」）
@@ -55,13 +62,36 @@ disallowedTools: Agent
 
 ### 読んだもの
 （diff、PR のコメント、プラン、issue、ソースの範囲を 3 行以内で）
+
+</details>
 ```
 
 指摘と「読んだもの」以外は書かない。レビュアーが確かめた事項や、問題の無かった観点を言い直さない。
+
+## APPROVE のときの「まとめ」
+
+判定が APPROVE のときだけ、上のコメントに続けて「## まとめ」を別のコメントとして 1 本投稿する。この issue の進み方を、後で定義・手順・スクリプトを直すための材料として残すものである。畳まない。
+
+```
+<!-- nns kind=summary round=G verdict=- head=<短い head SHA> -->
+
+## まとめ
+
+| tier | プランのラウンド | PR レビューのラウンド | 条件 | 実装起因の must |
+| --- | --- | --- | --- | --- |
+| <none/light/full> | <N> | <N> | <N> 件 | <N> 件 |
+
+### 学び
+（定義・手順・スクリプトの改善に効く気づきを 0〜3 件、1 件 1〜2 行。無ければ「無し」）
+```
+
+表の値は依頼文の「この実行の経緯」をそのまま使う。
+学びは、この issue で実際に起きたことから書く（どの段階で何に時間を使ったか、どの指摘が前の段階で防げたか、依頼文や定義のどの記述が足りなかったか）。定型の言い直し、一般論、「特に問題は無かった」の類は書かない。無ければ「無し」と書く。
+学びは構造化出力の lessons にも同じ件数で返す。
 
 判定は must と should が 0 件のときだけ APPROVE にする。REQUEST CHANGES にするときは、その指摘が PR レビュアーの再現の範囲外だった理由を 1 行添える。
 再確認を頼まれたら、前回の指摘ごとに「直った / 直っていない」を表で示し、新しい指摘は対応コミットで入った箇所に限る。
 
 判断が割れて収束しないと感じたら、論点と両案を整理して判定を NEEDS_USER にし、questions に論点を書いて返す。
 
-返すもの: 構造化出力で、判定、must と should と nit の件数、投稿したコメントの URL、NEEDS_USER のときは questions。
+返すもの: 構造化出力で、判定、must と should と nit の件数、投稿した「## 最終確認」のコメントの URL、APPROVE のときは lessons（「## まとめ」の学び。無ければ空）、NEEDS_USER のときは questions。
