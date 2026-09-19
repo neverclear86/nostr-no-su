@@ -12,13 +12,17 @@ import gleam/string
 import nostr_no_su/crypto/secp256k1
 
 /// 平文のバイト数の上限。
-const max_plaintext_bytes = 65_535
+const max_plaintext_bytes = 4_294_967_295
+
+/// 拡張長さプレフィックスに切り替わる平文のバイト数。これ以上の平文は 2 バイトの
+/// 0 に続く u32 で長さを表す。
+const extended_prefix_threshold = 65_536
 
 /// ペイロード（`version || nonce || ciphertext || mac`）のバイト数の下限。
 const min_payload_bytes = 99
 
 /// ペイロード（`version || nonce || ciphertext || mac`）のバイト数の上限。
-const max_payload_bytes = 65_603
+const max_payload_bytes = 4_294_967_367
 
 /// 暗号化・復号を拒否した理由。
 pub type Nip44Error {
@@ -52,7 +56,7 @@ pub fn conversation_key(
   }
 }
 
-/// パディング後の平文のバイト数（先頭 2 バイトの長さプレフィックスを除く）。
+/// パディング後の平文のバイト数（先頭の長さプレフィックスを除く）。
 pub fn calc_padded_len(unpadded_len: Int) -> Int {
   case unpadded_len <= 32 {
     True -> 32
@@ -122,7 +126,11 @@ pub fn encrypt_with_nonce(
       let MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
         message_keys(conversation_key, nonce)
       let pad_bytes = calc_padded_len(len) - len
-      let padded = <<len:size(16), pt:bits, 0:size(pad_bytes)-unit(8)>>
+      let prefix = case len < extended_prefix_threshold {
+        True -> <<len:size(16)>>
+        False -> <<0:size(16), len:size(32)>>
+      }
+      let padded = <<prefix:bits, pt:bits, 0:size(pad_bytes)-unit(8)>>
       let ciphertext = ffi_chacha20(chacha_key, chacha_nonce, padded)
       let mac =
         crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
@@ -198,30 +206,44 @@ fn decrypt_verified(
   }
 }
 
-/// 長さプレフィックス付きのパディングを外す。宣言された長さと、パディング後の
-/// 全長が仕様どおりであることを確かめる。
+/// 長さプレフィックス付きのパディングを外す。先頭 2 バイトが 0 のものは 6 バイト
+/// の拡張プレフィックスとして読む。
 fn unpad(padded: BitArray) -> Result(String, Nip44Error) {
   case padded {
-    <<unpadded_len:size(16), rest:bits>> -> {
-      let rest_len = bit_array.byte_size(rest)
-      let valid =
-        unpadded_len >= 1
-        && unpadded_len <= max_plaintext_bytes
-        && unpadded_len <= rest_len
-        && bit_array.byte_size(padded) == 2 + calc_padded_len(unpadded_len)
-      case valid {
-        False -> Error(InvalidPayload)
-        True ->
-          case bit_array.slice(rest, 0, unpadded_len) {
-            Ok(message) ->
-              case bit_array.to_string(message) {
-                Ok(text) -> Ok(text)
-                Error(_) -> Error(InvalidPayload)
-              }
+    <<0:size(16), unpadded_len:size(32), rest:bits>> ->
+      unpad_body(padded, rest, unpadded_len, 6, extended_prefix_threshold)
+    <<unpadded_len:size(16), rest:bits>> ->
+      unpad_body(padded, rest, unpadded_len, 2, 1)
+    _ -> Error(InvalidPayload)
+  }
+}
+
+/// プレフィックスを読んだ後の検証と取り出し。宣言された長さが `min_len` 以上で、
+/// パディング後の全長が仕様どおりであることを確かめる。
+fn unpad_body(
+  padded: BitArray,
+  rest: BitArray,
+  unpadded_len: Int,
+  prefix_bytes: Int,
+  min_len: Int,
+) -> Result(String, Nip44Error) {
+  let rest_len = bit_array.byte_size(rest)
+  let valid =
+    unpadded_len >= min_len
+    && unpadded_len <= max_plaintext_bytes
+    && unpadded_len <= rest_len
+    && bit_array.byte_size(padded)
+    == prefix_bytes + calc_padded_len(unpadded_len)
+  case valid {
+    False -> Error(InvalidPayload)
+    True ->
+      case bit_array.slice(rest, 0, unpadded_len) {
+        Ok(message) ->
+          case bit_array.to_string(message) {
+            Ok(text) -> Ok(text)
             Error(_) -> Error(InvalidPayload)
           }
+        Error(_) -> Error(InvalidPayload)
       }
-    }
-    _ -> Error(InvalidPayload)
   }
 }
