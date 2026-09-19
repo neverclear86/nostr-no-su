@@ -37,10 +37,12 @@
 ////   設定の切り出し → `plugin_children` で、最初に失敗したところで止まる。
 ////   **設定の切り出しは `plugin_name/0` の後にしかできない**
 ////   （環境変数の接頭辞がプラグイン名から決まるため）。
-//// - メタデータの呼び出し（`plugin_api_version/0`、`plugin_required_versions/0`、
-////   `plugin_name/0`、`plugin_children/0,1`）は `main` のプロセスで起動時に
-////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で
-////   打ち切る。戻らないプラグインは理由の 1 行で読み込まれず、起動は続く。
+//// - モジュールの読み込み（`code:ensure_loaded/1`）とメタデータの呼び出し
+////   （`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_name/0`、
+////   `plugin_children/0,1`）は `main` のプロセスで起動時に同期に行われるので、
+////   1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で打ち切る。戻らない
+////   `-on_load` や戻らないメタデータの関数を持つプラグインは理由の 1 行で
+////   読み込まれず、起動は続く。
 //// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
 ////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
 ////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
@@ -73,8 +75,8 @@ import nostr_no_su/plugin_config
 pub const api_version: Int = 1
 
 /// メタデータ用のエクスポート 1 回の呼び出しを待つ上限（ミリ秒）で、`main` が
-/// 渡す既定値。メタデータの関数は即座に戻る約束で、これは戻らないことを検出
-/// するための期限である。
+/// 渡す既定値。モジュールの読み込みとメタデータの関数は即座に戻る約束で、これは
+/// 戻らないことを検出するための期限である。
 pub const default_call_timeout_ms: Int = 5000
 
 /// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
@@ -104,10 +106,11 @@ pub type Plugin {
   )
 }
 
-/// 期限付きで呼んだエクスポートが値を返さなかった理由。FFI の
-/// `{crashed, Reason}` と `timed_out` に対応する。
+/// 期限付きの呼び出し（メタデータ用のエクスポートとモジュールの読み込み）が
+/// 値を返さなかった理由。FFI の `{crashed, Reason}` と `timed_out` に対応する。
 type CallFailure {
-  /// 例外を投げたか、呼び出しのプロセスが異常終了した。理由は 1 行。
+  /// 例外を投げたか、呼び出しのプロセスが異常終了したか、呼び出し自身が理由を
+  /// 返した（`code:ensure_loaded/1` の `nofile` など）。理由は 1 行。
   Crashed(reason: String)
   /// 期限までに戻らなかった。
   TimedOut
@@ -133,8 +136,8 @@ pub fn has_export(module: Atom, name: String, arity: Int) -> Bool {
 /// 決まった時点でそのプラグインぶんだけを切り出す。切り出し済みの map を渡せない
 /// のは、接頭辞の元になるプラグイン名がこの関数の中でしか分からないためである。
 ///
-/// `call_timeout_ms` はメタデータ用のエクスポート 1 回ごとの期限で、本番は
-/// `default_call_timeout_ms`。
+/// `call_timeout_ms` はモジュールの読み込みとメタデータ用のエクスポート 1 回
+/// ごとの期限で、本番は `default_call_timeout_ms`。
 pub fn load(
   module: Atom,
   env: Dict(String, String),
@@ -142,8 +145,12 @@ pub fn load(
 ) -> Result(Plugin, String) {
   let name = atom.to_string(module)
   use _ <- result.try(
-    ensure_module_loaded(module)
-    |> result.map_error(fn(reason) {
+    ensure_module_loaded_within(module, call_timeout_ms)
+    |> result.map_error(fn(failure) {
+      let reason = case failure {
+        Crashed(reason) -> reason
+        TimedOut -> "timed out after " <> int.to_string(call_timeout_ms) <> "ms"
+      }
       prefix(name, "cannot load module (" <> reason <> ")")
     }),
   )
@@ -453,7 +460,7 @@ fn prefix(module_name: String, reason: String) -> String {
 }
 
 /// 未読み込みのモジュールに対しては常に `False` を返すため、`load` の入口で
-/// `ensure_module_loaded` を通してから使う。3 引数すべてが atom でなければ
+/// `ensure_module_loaded_within` を通してから使う。3 引数すべてが atom でなければ
 /// `badarg` で落ちるので、関数名は `atom.create` を通す。
 @external(erlang, "erlang", "function_exported")
 fn function_exported(module: Atom, function: Atom, arity: Int) -> Bool
@@ -463,9 +470,13 @@ fn function_exported(module: Atom, function: Atom, arity: Int) -> Bool
 @external(erlang, "erlang", "apply")
 fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 
-/// モジュールをコードパスから読み込む。失敗理由（`nofile` など）は文字列で返る。
-@external(erlang, "nostr_no_su_ffi", "ensure_module_loaded")
-fn ensure_module_loaded(module: Atom) -> Result(Nil, String)
+/// モジュールをコードパスから期限付きで読み込む。`-on_load` が戻らない
+/// モジュールを検出するため、使い捨てのプロセスで動かす。
+@external(erlang, "nostr_no_su_ffi", "ensure_module_loaded_within")
+fn ensure_module_loaded_within(
+  module: Atom,
+  timeout_ms: Int,
+) -> Result(Nil, CallFailure)
 
 /// 例外と戻らない呼び出しを `CallFailure` にしてエクスポートを呼ぶ。
 @external(erlang, "nostr_no_su_ffi", "call_export_within")
