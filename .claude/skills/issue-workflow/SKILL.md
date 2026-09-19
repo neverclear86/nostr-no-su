@@ -138,7 +138,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 この実行に含めた issue が全部終わったら（`blocked` や `stalled` が残っていてもよい）、`retrospective` を 1 回回す。
 
-1. このセッションの journal のパスを `<セッションの subagents/workflows/wf_*/journal.jsonl>` から mtime で集める。`runs` は journal の mtime の昇順で並べる（`aggregate` は後の run の値で上書きするため）
+1. このセッションの journal のパスを `ls -tr <セッションの subagents/workflows>/wf_*/journal.jsonl` で mtime の昇順に集める（`aggregate` は後の run の値で上書きするため）。mtime が `since` より前のものと、`result` イベントが 1 件も無いものは `runs` に入れない
 2. journal ごとに次の jq を通し、`events` を組み立てる。
    ```sh
    jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
