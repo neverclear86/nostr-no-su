@@ -72,7 +72,7 @@ fn bit_length(x: Int) -> Int {
   }
 }
 
-/// HKDF-expand で `MessageKeys`（chacha_key 32 バイト、nonce 12 バイト、
+/// HKDF-expand で `MessageKeys`（chacha_key 32 バイト、chacha_nonce 12 バイト、
 /// hmac_key 32 バイト）を導出する。テストが公式ベクターの
 /// `valid.get_message_keys` と照合するため公開する。
 pub fn message_keys(
