@@ -171,11 +171,17 @@ const connect_timeout_ms = 3000
 
 /// リレー URL を stratus が期待する http(s) リクエストに変換する。gleam_http は
 /// http(s) スキームしかパースせず、stratus は Https を wss/TLS に対応付ける。
+/// ホストが空の URL（`wss://` など）は `request.to` が通すので、ここで
+/// `Error(Nil)` にする。
 pub fn to_request(url: String) -> Result(Request(String), Nil) {
-  case string.split_once(url, "://") {
+  let parsed = case string.split_once(url, "://") {
     Ok(#("wss", rest)) -> request.to("https://" <> rest)
     Ok(#("ws", rest)) -> request.to("http://" <> rest)
     _ -> request.to(url)
+  }
+  case parsed {
+    Ok(req) if req.host != "" -> Ok(req)
+    _ -> Error(Nil)
   }
 }
 
