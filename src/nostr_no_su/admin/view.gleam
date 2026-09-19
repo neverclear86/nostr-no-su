@@ -17,9 +17,9 @@
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/account_pages`、`admin/relay_pages`）には文言を文字列リテラルで書かない。型もテストも、
-//// 書き足した英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルの
-//// まま出すのは製品名（`nostr-no-su`）だけである。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）には文言を文字列
+//// リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
+//// 検出しないためである。文字列リテラルのまま出すのは製品名（`nostr-no-su`）だけである。
 ////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
 //// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
@@ -27,8 +27,9 @@
 //// CSS が変わることがあるので、これらのファイルを変えたらビルドし直す。クラス名は文字列の
 //// 連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。80 桁を超えても、
 //// クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
-//// `focus-visible:outline-base-content`、`input` と `checkbox` の文字列には
-//// `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が検査する）。
+//// `focus-visible:outline-base-content`、`input`、`checkbox`、`textarea`、`select` の
+//// 文字列には `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が
+//// 検査する）。
 
 import gleam/int
 import gleam/list
@@ -694,6 +695,35 @@ pub fn labelled(caption: String, input: Element(msg)) -> Element(msg) {
   ])
 }
 
+/// 見出しを付けた選択欄。`options` は `#(値, 表示)` の並び順で出し、`selected` と等しい
+/// 値の項目を選択済みにする。
+pub fn select_field(
+  caption: String,
+  name: String,
+  options: List(#(String, String)),
+  selected: String,
+) -> Element(msg) {
+  labelled(
+    caption,
+    html.select(
+      [
+        attribute.name(name),
+        attribute.class("select w-full border-base-content/60"),
+      ],
+      list.map(options, option_item(_, selected)),
+    ),
+  )
+}
+
+/// 選択欄の項目 1 件。値が `selected` と等しければ選択済みにする。
+fn option_item(option: #(String, String), selected: String) -> Element(msg) {
+  let #(value, caption) = option
+  html.option(
+    [attribute.value(value), attribute.selected(value == selected)],
+    caption,
+  )
+}
+
 /// 見出し、入力欄、案内をまとめた囲み。入力欄に `aria-label` と、案内の `id` を指す
 /// `aria-describedby` を付ける。`attributes` にクラスを含む入力欄の属性を渡す。
 pub fn hinted_input(
@@ -709,6 +739,32 @@ pub fn hinted_input(
       attribute.aria_describedby(hint_id),
       ..attributes
     ]),
+    html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
+      html.text(hint),
+    ]),
+  ])
+}
+
+/// 見出し、複数行の入力欄、案内をまとめた囲み。`hinted_input` と同じ構造で、欄だけ
+/// `textarea` にする。値は `html.textarea` の内容で出す（`input` の `default_value` では
+/// ない）。
+pub fn hinted_textarea(
+  caption: String,
+  hint_id: String,
+  hint: String,
+  value: String,
+  attributes: List(Attribute(msg)),
+) -> Element(msg) {
+  html.div([attribute.class("fieldset")], [
+    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    html.textarea(
+      [
+        attribute.aria_label(caption),
+        attribute.aria_describedby(hint_id),
+        ..attributes
+      ],
+      value,
+    ),
     html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
       html.text(hint),
     ]),

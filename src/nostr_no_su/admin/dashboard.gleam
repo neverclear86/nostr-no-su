@@ -8,7 +8,8 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`、`admin/relay_pages`）が同じ定義を見るようここに置く。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）が同じ定義を見る
+//// ようここに置く。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
@@ -186,6 +187,9 @@ pub const register_generated_segments = [accounts_segment, "register-generated"]
 /// セッション取り消しの POST 先のパスセグメント。
 pub const revoke_segments = ["sessions", "revoke"]
 
+/// クライアントの接続画面のパスセグメント。
+pub const connect_segments = ["sessions", "connect"]
+
 /// プラグインの再有効化の POST 先のパスセグメント。
 pub const reenable_plugin_segments = ["plugins", "reenable"]
 
@@ -204,10 +208,13 @@ pub const monitor_field = "monitor"
 /// リレーの追加と用途の編集のフォームでバンカーに使うかを送る欄の名前。
 pub const bunker_field = "bunker"
 
+/// クライアントの接続のフォームで `nostrconnect://` の URI を送る欄の名前。
+pub const nostrconnect_uri_field = "uri"
+
 /// 秘密鍵の再表示で管理パスワードを送る欄の名前。
 pub const password_field = "password"
 
-/// セッション取り消しのフォームで署名者を送る欄の名前。
+/// セッション取り消しとクライアントの接続のフォームで署名者を送る欄の名前。
 pub const signer_field = "signer"
 
 /// セッション取り消しのフォームでクライアントを送る欄の名前。
@@ -350,7 +357,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 節の見出しと、一覧を得たときだけ出す操作の行。アカウントとリレーの節が使う。
+/// 節の見出しと、一覧を得たときだけ出す操作の行。アカウント、セッション、リレーの節が使う。
 fn section_heading(
   language: Language,
   listing: Result(a, i18n.Reason),
@@ -776,7 +783,13 @@ fn sessions_section(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
-    view.heading(text(i18n.ApprovedSessions)),
+    section_heading(language, sessions, i18n.ApprovedSessions, [
+      view.button_link(
+        view.segments_path(connect_segments),
+        text(i18n.ConnectClient),
+        view.Primary,
+      ),
+    ]),
     listed_body(
       language,
       sessions,

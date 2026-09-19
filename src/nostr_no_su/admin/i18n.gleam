@@ -12,8 +12,9 @@
 //// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
 //// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
 //// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更とリレーの変更の 202 と、
-//// 承認・拒否・取り消しの 503）は、バンカーと管理 UI の Context が原因を型で返すので訳す。
+//// 例外として、変更を確認できなかったときの本文（アカウントの変更、リレーの変更、
+//// クライアントの接続の 202 と、承認・拒否・取り消しの 503）は、バンカーと管理 UI の
+//// Context が原因を型で返すので訳す。
 //// 承認待ちの一覧に無いトークンの承認ページの 404 の本文も訳す。これは外から届いた文字列
 //// ではなく、管理 UI が一覧との照合で自分で決めている判定だからである。プラグインの
 //// 再有効化の 503 は英語のまま。読み込みで飛ばされた行の理由は `vault.RowError` の型で
@@ -169,6 +170,7 @@ pub type Lead {
   CouldNotAddRelay
   CouldNotSaveRelay
   CouldNotDeleteRelay
+  CouldNotStartConnection
 }
 
 /// 英語のまま届いた理由の前置き。英語のページでは理由と同じ言語なので置かない。
@@ -188,6 +190,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotAddRelay -> "リレーを登録できませんでした。"
         CouldNotSaveRelay -> "用途を保存できませんでした。"
         CouldNotDeleteRelay -> "リレーを削除できませんでした。"
+        CouldNotStartConnection -> "接続を開始できませんでした。"
       })
   }
 }
@@ -273,6 +276,20 @@ pub type Message {
   DeleteRelayDescription
   RelaysNotAvailable
   RelayNotFound
+  ConnectClient
+  ConnectClientDescription
+  NostrconnectUri
+  NostrconnectUriHint
+  SigningAccount
+  Connect
+  NoAccountsForConnect
+  SigningAccountNotFound
+  NostrconnectRelayNotConnected
+  NotNostrconnectUri
+  NostrconnectClientInvalid
+  NostrconnectQueryInvalid
+  NostrconnectRelayInvalid
+  NostrconnectSecretMissing
   Plugins
   NameColumn
   PluginRunning
@@ -449,6 +466,24 @@ fn english(message: Message) -> String {
     RelaysNotAvailable -> "Relays are not available"
     RelayNotFound ->
       "This relay is not registered. It may have been deleted already; check the dashboard."
+    ConnectClient -> "Connect a client"
+    ConnectClientDescription ->
+      "Paste the nostrconnect:// URI shown by the client and choose the account that signs for it. The relays in the URI are added for the bunker."
+    NostrconnectUri -> "nostrconnect:// URI"
+    NostrconnectUriHint -> "Starts with nostrconnect://."
+    SigningAccount -> "Signing account"
+    Connect -> "Connect"
+    NoAccountsForConnect -> "Register an account before connecting a client."
+    SigningAccountNotFound -> "the signing account is not registered"
+    NostrconnectRelayNotConnected ->
+      "could not connect to any relay in the uri in time"
+    NotNostrconnectUri -> "the uri must start with nostrconnect://"
+    NostrconnectClientInvalid ->
+      "the client public key in the uri must be 32 bytes of hex"
+    NostrconnectQueryInvalid -> "the query of the uri could not be read"
+    NostrconnectRelayInvalid ->
+      "the uri must carry at least one relay with a ws:// or wss:// url"
+    NostrconnectSecretMissing -> "the uri must carry a secret"
     Plugins -> "Plugins"
     NameColumn -> "Name"
     PluginRunning -> "running"
@@ -634,6 +669,21 @@ fn japanese(message: Message) -> String {
       "このリレーへの接続を閉じ、登録から削除します。バンカーに使っていた場合、このリレーだけで接続しているクライアントは応答を受け取れなくなるので、ダッシュボードから新しい接続 URI を貼り付け直してください。"
     RelaysNotAvailable -> "リレーを利用できません"
     RelayNotFound -> "このリレーは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
+    ConnectClient -> "クライアントを接続"
+    ConnectClientDescription ->
+      "クライアントが出した nostrconnect:// URI を貼り付け、署名するアカウントを選んでください。URI のリレーはバンカーの用途で登録します。"
+    NostrconnectUri -> "nostrconnect:// の URI"
+    NostrconnectUriHint -> "nostrconnect:// で始まる URI。"
+    SigningAccount -> "署名するアカウント"
+    Connect -> "接続"
+    NoAccountsForConnect -> "クライアントを接続する前に、アカウントを登録してください。"
+    SigningAccountNotFound -> "署名するアカウントが登録されていません。"
+    NostrconnectRelayNotConnected -> "URI のリレーのどれにも接続できませんでした。時間をおいて試してください。"
+    NotNostrconnectUri -> "nostrconnect:// で始まる URI を貼り付けてください。"
+    NostrconnectClientInvalid -> "URI のクライアント公開鍵が 32 バイトの 16 進ではありません。"
+    NostrconnectQueryInvalid -> "URI のクエリーを読み取れませんでした。"
+    NostrconnectRelayInvalid -> "URI に ws:// か wss:// で始まるリレーが 1 件も含まれていません。"
+    NostrconnectSecretMissing -> "URI に secret が含まれていません。"
     Plugins -> "プラグイン"
     NameColumn -> "名前"
     PluginRunning -> "動作中"
