@@ -93,7 +93,9 @@ pub fn sanitize(text: String, max: Int) -> String {
 
 /// UTF-8 のビット列 `rest` の先頭から最大 `remaining` 個のコードポイントを読み、
 /// 制御文字を空白 1 文字に置き換えた本文と、まだ残りがあるか（切ったか）を
-/// 返す。末尾再帰で、読むのは先頭の `remaining` 個だけである。
+/// 返す。末尾再帰で、読むのは先頭の `remaining` 個だけである。UTF-8 として
+/// 読めない残りに対する分岐はパターンの網羅のために必要なだけで、`String` から
+/// 作ったビット列では到達せず、到達しても切っていないものとして本文を返す。
 fn sanitize_prefix(
   rest: BitArray,
   remaining: Int,
@@ -111,8 +113,6 @@ fn sanitize_prefix(
             codepoint:utf8_codepoint,
           >>)
       }
-    // UTF-8 として妥当な String から作ったビット列なので到達しない。ビット配列
-    // パターンの網羅のための分岐であり、切ってはいないものとして扱う。
     _ -> #(acc, False)
   }
 }
