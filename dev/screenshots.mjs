@@ -110,6 +110,10 @@ const shots = [
   { name: "58-delete-relay-not-saved", url: `${base}/relays/2/delete`, form: {}, status: 409 },
   { name: "59-delete-relay-unconfirmed", url: `${base}/relays/3/delete`, form: {}, status: 202 },
   { name: "60-relay-not-found", url: `${base}/relays/99/edit`, status: 404 },
+  { name: "61-connect-client", url: `${base}/sessions/connect` },
+  { name: "62-connect-client-empty", url: `${empty}/sessions/connect` },
+  { name: "63-connect-client-accounts-unavailable", url: `${unavailable}/sessions/connect` },
+  { name: "64-connect-client-invalid-uri", url: `${base}/sessions/connect`, form: { uri: "not-a-uri", signer }, status: 400 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り

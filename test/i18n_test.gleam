@@ -120,6 +120,8 @@ pub fn leads_are_only_for_other_languages_test() {
     == Some("用途を保存できませんでした。")
   assert i18n.lead(i18n.Japanese, i18n.CouldNotDeleteRelay)
     == Some("リレーを削除できませんでした。")
+  assert i18n.lead(i18n.Japanese, i18n.CouldNotStartConnection)
+    == Some("接続を開始できませんでした。")
 }
 
 /// `i18n.Message` の宣言順で次の構築子を返す。最後の構築子では `None`。構築子を網羅する
@@ -195,7 +197,21 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.EditRelayRolesDescription -> Some(i18n.DeleteRelayDescription)
     i18n.DeleteRelayDescription -> Some(i18n.RelaysNotAvailable)
     i18n.RelaysNotAvailable -> Some(i18n.RelayNotFound)
-    i18n.RelayNotFound -> Some(i18n.Plugins)
+    i18n.RelayNotFound -> Some(i18n.ConnectClient)
+    i18n.ConnectClient -> Some(i18n.ConnectClientDescription)
+    i18n.ConnectClientDescription -> Some(i18n.NostrconnectUri)
+    i18n.NostrconnectUri -> Some(i18n.NostrconnectUriHint)
+    i18n.NostrconnectUriHint -> Some(i18n.SigningAccount)
+    i18n.SigningAccount -> Some(i18n.Connect)
+    i18n.Connect -> Some(i18n.NoAccountsForConnect)
+    i18n.NoAccountsForConnect -> Some(i18n.SigningAccountNotFound)
+    i18n.SigningAccountNotFound -> Some(i18n.NostrconnectRelayNotConnected)
+    i18n.NostrconnectRelayNotConnected -> Some(i18n.NotNostrconnectUri)
+    i18n.NotNostrconnectUri -> Some(i18n.NostrconnectClientInvalid)
+    i18n.NostrconnectClientInvalid -> Some(i18n.NostrconnectQueryInvalid)
+    i18n.NostrconnectQueryInvalid -> Some(i18n.NostrconnectRelayInvalid)
+    i18n.NostrconnectRelayInvalid -> Some(i18n.NostrconnectSecretMissing)
+    i18n.NostrconnectSecretMissing -> Some(i18n.Plugins)
     i18n.Plugins -> Some(i18n.NameColumn)
     i18n.NameColumn -> Some(i18n.PluginRunning)
     i18n.PluginRunning -> Some(i18n.PluginOverloaded)
@@ -293,12 +309,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 144 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 158 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 144
+  assert list.length(messages) == 158
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

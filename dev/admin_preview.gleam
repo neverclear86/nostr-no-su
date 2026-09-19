@@ -242,6 +242,7 @@ fn context() -> admin.Context {
     registered_relays: fn() { Ok(db_relays()) },
     update_relay_roles: fn(relay, _roles) { changing_relay(relay) },
     delete_relay: changing_relay,
+    connect_client: fn(_request, _signer) { Error(admin.RelayNotConnected) },
     reenable_plugin: reenabling,
     sessions: fn() {
       Ok([

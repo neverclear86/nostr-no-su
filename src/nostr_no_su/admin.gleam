@@ -2,8 +2,8 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、`admin/relay_pages`）に
-//// 閉じ込められる。
+//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、`admin/relay_pages`、
+//// `admin/connect_pages`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
@@ -55,6 +55,7 @@ import gleam/string
 import gleam/uri
 import mist
 import nostr_no_su/admin/account_pages
+import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/relay_pages
@@ -62,6 +63,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
@@ -137,6 +139,16 @@ pub type RelayChangeFailure {
   UnregisteredRelay
 }
 
+/// `nostrconnect://` の接続が成立しなかった理由。
+pub type NostrconnectFailure {
+  /// URI のリレーを DB に登録できなかった、または接続を開けなかった。
+  RelayNotRegistered(failure: RelayChangeFailure)
+  /// 上限まで待っても、URI のリレーがどれも応答の発行先にならなかった。
+  RelayNotConnected
+  /// セッションを開けなかった。
+  SessionNotOpened(failure: SessionFailure)
+}
+
 /// ハンドラーが必要とするものすべて。パスワード以外の状態（アカウント、リレー、
 /// プラグイン、セッション、承認待ち）はアクターに問い合わせる関数で受け取り、
 /// 表示のたびに現在の値を読む。
@@ -173,6 +185,9 @@ pub type Context {
       Result(Nil, RelayChangeFailure),
     /// 行を DB から消し、接続を閉じる。
     delete_relay: fn(relay_store.Relay) -> Result(Nil, RelayChangeFailure),
+    /// 解釈済みの `nostrconnect://` の情報から、URI のリレーを登録してセッションを開く。
+    connect_client: fn(nostrconnect.ConnectRequest, String) ->
+      Result(Nil, NostrconnectFailure),
     /// プラグインの一覧。締め切りを渡す。期限内に状態を得られないプラグインは
     /// 応答なしとして返す。
     plugins: fn(task.Deadline) -> List(dashboard.PluginRow),
@@ -308,6 +323,8 @@ fn route(
       deny_connection(context, request, language, theme, token)
     segments if segments == dashboard.revoke_segments ->
       revoke_session(context, request, language, theme)
+    segments if segments == dashboard.connect_segments ->
+      connect_client(context, request, language, theme)
     segments if segments == dashboard.reenable_plugin_segments ->
       reenable_plugin(context, request, language, theme)
     segments if segments == dashboard.reload_accounts_segments ->
@@ -724,6 +741,7 @@ pub type SessionChange {
   ConnectionApproved
   ConnectionDenied
   SessionRevoked
+  ClientConnected
 }
 
 /// プラグインの再有効化が失敗する 2 通り。
@@ -735,8 +753,8 @@ pub type ReenableFailure {
   PluginNotAnswered(reason: String)
 }
 
-/// 承認・拒否・取り消し 1 件のログ行の本文（接頭辞を除く）。値は署名者とクライアントの
-/// 公開鍵だけで、承認ページのトークンを含めない。
+/// 承認・拒否・取り消し・クライアントの接続 1 件のログ行の本文（接頭辞を除く）。値は
+/// 署名者とクライアントの公開鍵だけで、承認ページのトークンを含めない。
 pub fn session_change_line(
   change: SessionChange,
   signer: String,
@@ -746,6 +764,7 @@ pub fn session_change_line(
     ConnectionApproved -> "approved the connection of client "
     ConnectionDenied -> "denied the connection of client "
     SessionRevoked -> "revoked the session of client "
+    ClientConnected -> "connected client "
   }
   done <> client <> " to signer " <> signer
 }
@@ -843,6 +862,129 @@ fn session_failure_response(
         theme,
         i18n.Translated(not_confirmed_message(cause)),
         503,
+      )
+  }
+}
+
+/// クライアントの接続ページと、その送信。GET はフォームを 200 で出す（アカウントの
+/// 一覧を引けなくてもカードの中に理由を出す）。POST は一覧を引けなければ同じページを
+/// 503 で返し、引けたら URI を解釈し、選ばれた署名者が一覧にあることを確かめてから
+/// セッションを開く。
+fn connect_client(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
+  case request.method {
+    http.Get -> {
+      let accounts = result.map_error(context.accounts(), i18n.Untranslated)
+      connect_pages.connect_client_page(language, theme, accounts, "", "", None)
+      |> wisp.html_response(200)
+    }
+    http.Post -> {
+      use form <- wisp.require_form(request)
+      let raw_uri = form_value(form, dashboard.nostrconnect_uri_field)
+      let signer = form_value(form, dashboard.signer_field)
+      let echoed_uri = without_control_characters(raw_uri)
+      case context.accounts() {
+        Error(reason) ->
+          connect_pages.connect_client_page(
+            language,
+            theme,
+            Error(i18n.Untranslated(reason)),
+            echoed_uri,
+            signer,
+            None,
+          )
+          |> wisp.html_response(503)
+        Ok(rows) -> {
+          let redraw = fn(reason) {
+            connect_pages.connect_client_page(
+              language,
+              theme,
+              Ok(rows),
+              echoed_uri,
+              signer,
+              Some(reason),
+            )
+          }
+          case nostrconnect.parse(string.trim(raw_uri)) {
+            Error(error) ->
+              redraw(i18n.Translated(parse_message(error)))
+              |> wisp.html_response(400)
+            Ok(connect_request) ->
+              case list.any(rows, fn(row) { row.signer == signer }) {
+                False ->
+                  redraw(i18n.Translated(i18n.SigningAccountNotFound))
+                  |> wisp.html_response(400)
+                True ->
+                  connect_failure_response(
+                    language,
+                    theme,
+                    context.connect_client(connect_request, signer),
+                    signer,
+                    connect_request.client,
+                    redraw,
+                  )
+              }
+          }
+        }
+      }
+    }
+    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
+  }
+}
+
+/// `nostrconnect.parse` の失敗を、フォームに出す文言に写す。`NoRelay` と
+/// `InvalidRelayUrl` は直し方が同じなので同じ文言にまとめる。
+fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
+  case error {
+    nostrconnect.NotNostrconnect -> i18n.NotNostrconnectUri
+    nostrconnect.MalformedClientPubkey -> i18n.NostrconnectClientInvalid
+    nostrconnect.MalformedQuery -> i18n.NostrconnectQueryInvalid
+    nostrconnect.NoRelay | nostrconnect.InvalidRelayUrl(_) ->
+      i18n.NostrconnectRelayInvalid
+    nostrconnect.NoSecret -> i18n.NostrconnectSecretMissing
+  }
+}
+
+/// クライアントの接続の結果。成功ならログを 1 行出し、ダッシュボードへ 303 で戻す。
+/// 失敗はリレーの登録の失敗を `relay_failure_response` に渡し、それ以外は状態コードごとに
+/// フォームを描き直すか「変更を確認できませんでした」の通知ページにする。
+fn connect_failure_response(
+  language: Language,
+  theme: view.Theme,
+  outcome: Result(Nil, NostrconnectFailure),
+  signer: String,
+  client: String,
+  redraw: fn(i18n.Reason) -> String,
+) -> Response {
+  case outcome {
+    Ok(Nil) -> {
+      log.write(
+        log.Notice,
+        log_prefix,
+        session_change_line(ClientConnected, signer, client),
+      )
+      wisp.redirect(to: "/")
+    }
+    Error(RelayNotRegistered(failure)) ->
+      relay_failure_response(language, theme, failure, redraw)
+    Error(RelayNotConnected) ->
+      redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected))
+      |> wisp.html_response(503)
+    Error(SessionNotOpened(bunker.SessionNotFound(reason)))
+    | Error(SessionNotOpened(bunker.SessionNotApplied(reason))) ->
+      redraw(i18n.Untranslated(reason)) |> wisp.html_response(409)
+    Error(SessionNotOpened(bunker.SessionNotReady(reason))) ->
+      redraw(i18n.Untranslated(reason)) |> wisp.html_response(503)
+    Error(SessionNotOpened(bunker.SessionMaybeApplied(cause))) ->
+      not_confirmed_notice(
+        language,
+        theme,
+        i18n.Translated(not_confirmed_message(cause)),
+        202,
       )
   }
 }
@@ -1557,9 +1699,9 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
 }
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更とリレーの変更は 202、承認・拒否・取り消しと再有効化は
-/// 503）。本文は呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめるよう
-/// 促す一文を添える。
+/// 決める（アカウントの変更、リレーの変更、クライアントの接続は 202、承認・拒否・取り消しと
+/// 再有効化は 503）。本文は呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめる
+/// よう促す一文を添える。
 fn not_confirmed_notice(
   language: Language,
   theme: view.Theme,

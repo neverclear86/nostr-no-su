@@ -242,16 +242,6 @@ pub type Spec {
   )
 }
 
-/// `nostrconnect://` の接続が成立しなかった理由。
-pub type NostrconnectFailure {
-  /// URI のリレーを DB に登録できなかった、または接続を開けなかった。
-  RelayNotRegistered(failure: admin.RelayChangeFailure)
-  /// 上限まで待っても、URI のリレーがどれも応答の発行先にならなかった。
-  RelayNotConnected
-  /// セッションを開けなかった。
-  SessionNotOpened(failure: bunker.SessionFailure)
-}
-
 /// ツリーを起動する。子は互いに独立しているためルートは `one_for_one`。
 /// バンカーや DB が壊れても監視を止めてはならず、その逆も同様。
 ///
@@ -558,6 +548,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
         update_relay_roles(spec, relay, roles)
       },
       delete_relay: fn(relay) { delete_relay(spec, relay) },
+      connect_client: fn(request, signer) {
+        connect_nostrconnect(spec, request, signer)
+      },
       sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
@@ -844,17 +837,17 @@ pub fn connect_nostrconnect(
   spec: Spec,
   request: nostrconnect.ConnectRequest,
   signer: String,
-) -> Result(Nil, NostrconnectFailure) {
+) -> Result(Nil, admin.NostrconnectFailure) {
   use _nil <- result.try(
     list.try_each(request.relays, ensure_bunker_relay(spec, _))
-    |> result.map_error(RelayNotRegistered),
+    |> result.map_error(admin.RelayNotRegistered),
   )
   use _nil <- result.try(
     case
       await_publisher(spec, request.relays, nostrconnect_publisher_timeout_ms)
     {
       True -> Ok(Nil)
-      False -> Error(RelayNotConnected)
+      False -> Error(admin.RelayNotConnected)
     },
   )
   bunker.open_client_session(
@@ -864,7 +857,7 @@ pub fn connect_nostrconnect(
     request.perms,
     request.secret,
   )
-  |> result.map_error(SessionNotOpened)
+  |> result.map_error(admin.SessionNotOpened)
 }
 
 /// URI のリレー 1 件をバンカーの用途で使えるようにする。DB の行が無ければ登録し、
