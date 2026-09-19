@@ -12,6 +12,7 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
@@ -75,6 +76,7 @@ pub type Report {
   RelayAdded(url: String, roles: relay_list.Roles)
   RelayRolesUpdated(id: Int, roles: relay_list.Roles)
   RelayDeleted(id: Int)
+  ClientConnectRequested(request: nostrconnect.ConnectRequest, signer: String)
 }
 
 /// 指定したラベルを持つ、登録済みのアカウントの行。
@@ -170,6 +172,10 @@ pub fn test_context(
     },
     delete_relay: fn(relay) {
       process.send(reports, RelayDeleted(relay.id))
+      Ok(Nil)
+    },
+    connect_client: fn(request, connecting_signer) {
+      process.send(reports, ClientConnectRequested(request, connecting_signer))
       Ok(Nil)
     },
     plugins: fn(_deadline) {

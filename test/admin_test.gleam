@@ -1,7 +1,7 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消し、
-//// プラグインの再有効化、承認と拒否、リレーの追加・編集・削除、静的ファイルと通知の色、
-//// 表示のテーマを対象にする。
+//// クライアントの接続、プラグインの再有効化、承認と拒否、リレーの追加・編集・削除、
+//// 静的ファイルと通知の色、表示のテーマを対象にする。
 
 import gleam/erlang/process
 
@@ -21,11 +21,12 @@ import nostr_no_su/task
 import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
-  AccountsReloaded, Approved, Denied, Reenabled, RelayAdded, RelayDeleted,
-  RelayRolesUpdated, Revoked, action_path, auth_uri, client, context,
-  failing_context, get, header, in_japanese, not_answering_context, password,
-  post, post_form, reporting_context, session_not_approved, signer, spec_nsec,
-  test_context, token, unavailable, with_accounts, with_credentials,
+  AccountsReloaded, Approved, ClientConnectRequested, Denied, Reenabled,
+  RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path, auth_uri,
+  client, context, failing_context, get, header, in_japanese,
+  not_answering_context, password, post, post_form, reporting_context,
+  session_not_approved, signer, spec_nsec, test_context, token, unavailable,
+  with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -421,7 +422,8 @@ pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
   assert !string.contains(simulate.read_body(not_found), hint)
 }
 
-/// 承認・拒否・取り消しのログ行は、署名者とクライアントの公開鍵を含む。
+/// 承認・拒否・取り消し・クライアントの接続のログ行は、署名者とクライアントの公開鍵を
+/// 含む。
 pub fn session_change_lines_name_the_signer_and_the_client_test() {
   assert admin.session_change_line(admin.ConnectionApproved, signer, client)
     == "approved the connection of client " <> client <> " to signer " <> signer
@@ -429,6 +431,8 @@ pub fn session_change_lines_name_the_signer_and_the_client_test() {
     == "denied the connection of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.SessionRevoked, signer, client)
     == "revoked the session of client " <> client <> " to signer " <> signer
+  assert admin.session_change_line(admin.ClientConnected, signer, client)
+    == "connected client " <> client <> " to signer " <> signer
 }
 
 /// 拒否は POST でしか受け付けない。
@@ -849,6 +853,123 @@ pub fn relay_change_failures_test() {
     }
     _ -> Nil
   }
+}
+
+// --- クライアントの接続 ---
+
+/// 有効な `nostrconnect://` の URI。クライアント公開鍵は 32 バイトの 16 進、`relay` と
+/// `secret` を 1 つずつ持つ。
+const connect_uri = "nostrconnect://1111111111111111111111111111111111111111111111111111111111111111?relay=wss://relay.example&secret=abcdef"
+
+/// URI に現れるクライアント公開鍵。
+const connect_client_pubkey = "1111111111111111111111111111111111111111111111111111111111111111"
+
+/// GET は 200 で、署名者の選択欄に登録済みの署名者が選択済みで出る。
+pub fn connect_client_page_lists_accounts_test() {
+  let response = get(context(), "/sessions/connect")
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "name=\"" <> dashboard.nostrconnect_uri_field <> "\"",
+  )
+  assert string.contains(body, "<option selected value=\"" <> signer <> "\">")
+}
+
+/// `nostrconnect://` で始まらない URI の POST は 400 で、送った URI をフォームに残し、
+/// Context を呼ばない。
+pub fn connect_client_rejects_a_bad_uri_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect", [
+      #("uri", "not-a-uri"),
+      #("signer", signer),
+    ])
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.NotNostrconnectUri))
+  assert string.contains(body, ">not-a-uri</textarea>")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 一覧に無い署名者への POST は 400 で、Context の `connect_client` を呼ばない。
+pub fn connect_client_rejects_an_unknown_signer_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", unknown_client),
+    ])
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.SigningAccountNotFound),
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 正しい URI の POST は Context の `connect_client` を呼び、303 でダッシュボードへ
+/// 戻る。渡す値は URI のクライアント公開鍵と、フォームで選んだ署名者。
+pub fn connect_client_opens_the_session_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", signer),
+    ])
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  let assert Ok(ClientConnectRequested(request: connect_request, signer: sent)) =
+    process.receive(reports, 1000)
+  assert connect_request.client == connect_client_pubkey
+  assert sent == signer
+}
+
+/// `connect_client` が受け付けなかった、または反映されていない失敗は、フォームを
+/// 描き直す状態コードになる。`RelayNotRegistered` はリレーの変更の失敗と同じ
+/// `relay_failure_response` に渡る。
+pub fn connect_client_redraws_on_failure_test() {
+  let failures = [
+    #(admin.RelayNotConnected, 503),
+    #(admin.RelayNotRegistered(admin.DuplicateRelay), 409),
+  ]
+  use #(failure, status) <- list.each(failures)
+  let failing =
+    admin.Context(..context(), connect_client: fn(_request, _signer) {
+      Error(failure)
+    })
+  let response =
+    post_form(failing, "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", signer),
+    ])
+  assert response.status == status
+  assert string.contains(
+    simulate.read_body(response),
+    "name=\"" <> dashboard.nostrconnect_uri_field <> "\"",
+  )
+}
+
+/// バンカーが反映されたか確かめられなかったときは、202 の「変更を確認できませんでした」の
+/// ページになる。
+pub fn connect_client_reports_an_unconfirmed_change_test() {
+  let failing =
+    admin.Context(..context(), connect_client: fn(_request, _signer) {
+      Error(
+        admin.SessionNotOpened(bunker.SessionMaybeApplied(
+          bunker.StoreDidNotConfirm,
+        )),
+      )
+    })
+  let response =
+    post_form(failing, "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", signer),
+    ])
+  assert response.status == 202
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.ChangeNotConfirmed))
+  assert string.contains(body, i18n.text(i18n.English, i18n.StoreDidNotConfirm))
 }
 
 // --- 静的ファイルと通知の色 ---

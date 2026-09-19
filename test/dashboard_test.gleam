@@ -610,6 +610,20 @@ pub fn relays_heading_links_to_add_a_relay_test() {
   assert !string.contains(unavailable, "/relays/new")
 }
 
+/// セッションの節の見出しの行は、一覧を得たときだけクライアントの接続へのリンクを出す。
+pub fn sessions_heading_links_to_connect_a_client_test() {
+  let ok = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(ok, "href=\"/sessions/connect\">Connect a client</a>")
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), sessions: Error(i18n.Untranslated("boom"))),
+    )
+  assert !string.contains(unavailable, "/sessions/connect")
+}
+
 /// アカウントの節の見出しの行には、追加のリンクと並んで読み直しのフォームが出る。
 pub fn accounts_heading_has_a_reload_form_test() {
   let body = dashboard.render(i18n.English, view.System, states())

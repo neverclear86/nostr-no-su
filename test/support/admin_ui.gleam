@@ -7,6 +7,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/admin/account_pages
+import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/relay_pages
@@ -213,6 +214,38 @@ pub fn pages(language: i18n.Language) -> List(String) {
         dashboard.DeleteRelay,
         None,
         Some(reason),
+      ),
+      connect_pages.connect_client_page(
+        language,
+        view.System,
+        Ok([row]),
+        "",
+        "",
+        None,
+      ),
+      connect_pages.connect_client_page(
+        language,
+        view.System,
+        Ok([row]),
+        "nostrconnect://0123",
+        row.signer,
+        Some(i18n.Translated(i18n.NotNostrconnectUri)),
+      ),
+      connect_pages.connect_client_page(
+        language,
+        view.System,
+        Ok([]),
+        "",
+        "",
+        None,
+      ),
+      connect_pages.connect_client_page(
+        language,
+        view.System,
+        Error(reason),
+        "",
+        "",
+        None,
       ),
     ],
     list.map(
