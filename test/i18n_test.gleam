@@ -154,7 +154,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Deny -> Some(i18n.Accounts)
     i18n.Accounts -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
-    i18n.NoAccounts -> Some(i18n.UnreadableAccounts)
+    i18n.NoAccounts -> Some(i18n.ReloadAccounts)
+    i18n.ReloadAccounts -> Some(i18n.UnreadableAccounts)
     i18n.UnreadableAccounts -> Some(i18n.UnreadableAccountsWarning)
     i18n.UnreadableAccountsWarning ->
       Some(i18n.UnreadableReason(vault.PublicKeyMismatch))
@@ -292,12 +293,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 143 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 144 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 143
+  assert list.length(messages) == 144
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

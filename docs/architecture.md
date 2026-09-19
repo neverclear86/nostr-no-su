@@ -401,6 +401,7 @@ sequenceDiagram
 書き込みが期限を過ぎたとき、途中で接続が切れたとき、DB のクライアントが例外を投げたときは、サーバー側でコミットされていることがあるので、メモリを変えずに読み直して合わせる。
 合わせる処理はエンジンを作り直さず、ストアに無い署名者を取り除いて読み込んだアカウントを足す。アカウントを合わせた後に、読み込んだセッションと承認待ちでエンジンのものを置き換える（`engine.restore`）。
 読み直しに失敗したら起動時の読み込みと同じく名前なしの subject へ再試行を予約し、成功するまでの間は変更を拒否する。
+読み直しは管理 UI の「DB から読み直す」（`POST /accounts/reload`）からも要求でき、読み込めていない間の要求は既に読み直しが進んでいるので何もしない。
 読み込みは 1 本のトランザクションで `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE` を取ってから一覧を読む。
 PostgreSQL は列挙の順に 1 つずつロックを取るので、書き手の順（承認は `bunker_pending` の DELETE の後に `bunker_sessions` へ INSERT する）に合わせ、アカウントの削除（連鎖を含む）が最初に触る `bunker_accounts` を先頭に置く。
 SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので、期限を過ぎた後もサーバー側で実行を続けている書き込みがあれば、その終了を待ってから読む。
@@ -544,6 +545,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
+| POST | `/accounts/reload` | DB からのアカウントの読み直しの要求。303 でダッシュボードへ戻す |
 | GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
 | POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
 | POST | `/accounts/import` | nsec 入力による登録。完了ページで nsec を 1 回表示する |

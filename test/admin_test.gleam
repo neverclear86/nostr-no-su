@@ -1,6 +1,6 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
-//// 応答を確かめる。ダッシュボードの状態、セッションの取り消し、プラグインの
-//// 再有効化、承認と拒否、リレーの追加・編集・削除、静的ファイルと通知の色、
+//// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消し、
+//// プラグインの再有効化、承認と拒否、リレーの追加・編集・削除、静的ファイルと通知の色、
 //// 表示のテーマを対象にする。
 
 import gleam/erlang/process
@@ -21,11 +21,11 @@ import nostr_no_su/task
 import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
-  Approved, Denied, Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated,
-  Revoked, action_path, auth_uri, client, context, failing_context, get, header,
-  in_japanese, not_answering_context, password, post, post_form,
-  reporting_context, session_not_approved, signer, spec_nsec, test_context,
-  token, unavailable, with_accounts, with_credentials,
+  AccountsReloaded, Approved, Denied, Reenabled, RelayAdded, RelayDeleted,
+  RelayRolesUpdated, Revoked, action_path, auth_uri, client, context,
+  failing_context, get, header, in_japanese, not_answering_context, password,
+  post, post_form, reporting_context, session_not_approved, signer, spec_nsec,
+  test_context, token, unavailable, with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -218,6 +218,28 @@ pub fn reenable_without_a_name_is_a_bad_request_test() {
 pub fn reenable_rejects_other_methods_test() {
   let response = get(context(), "/plugins/reenable")
   assert response.status == 405
+}
+
+/// 読み直しフォームは Context の `reload_accounts` を呼び、ダッシュボードへ 303 で戻す。
+pub fn reloading_redirects_to_the_dashboard_test() {
+  let reloaded = process.new_subject()
+  let response = post(reporting_context(reloaded), "/accounts/reload")
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reloaded, 1000) == Ok(AccountsReloaded)
+}
+
+/// バンカーが応答しない読み直しは 503 で、理由とダッシュボードへのリンクを出す。
+pub fn reloading_without_a_bunker_is_unavailable_test() {
+  let context =
+    admin.Context(..context(), reload_accounts: fn() {
+      Error("bunker is not responding")
+    })
+  let response = post(context, "/accounts/reload")
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "bunker is not responding")
+  assert string.contains(body, "Back to dashboard")
 }
 
 /// ダッシュボードには承認待ちと、承認を経る接続 URI も出る。

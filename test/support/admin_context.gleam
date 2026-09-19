@@ -71,6 +71,7 @@ pub type Report {
   Relabeled(signer: String, label: String)
   NsecRequested(signer: String)
   Reenabled(name: String)
+  AccountsReloaded
   RelayAdded(url: String, roles: relay_list.Roles)
   RelayRolesUpdated(id: Int, roles: relay_list.Roles)
   RelayDeleted(id: Int)
@@ -121,6 +122,10 @@ pub fn test_context(
     nsec: fn(requested) {
       process.send(reports, NsecRequested(requested))
       Ok(signer_nsec)
+    },
+    reload_accounts: fn() {
+      process.send(reports, AccountsReloaded)
+      Ok(Nil)
     },
     relays: fn(_deadline) {
       Ok([

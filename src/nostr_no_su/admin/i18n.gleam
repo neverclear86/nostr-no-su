@@ -233,6 +233,7 @@ pub type Message {
   Accounts
   AddAccount
   NoAccounts
+  ReloadAccounts
   UnreadableAccounts
   UnreadableAccountsWarning
   UnreadableReason(reason: vault.RowError)
@@ -400,6 +401,7 @@ fn english(message: Message) -> String {
     Accounts -> "Accounts"
     AddAccount -> "Add account"
     NoAccounts -> "No accounts registered."
+    ReloadAccounts -> "Reload from database"
     UnreadableAccounts -> "Unreadable accounts"
     UnreadableAccountsWarning ->
       "The current ACCOUNT_MASTER_KEY cannot decrypt these rows."
@@ -589,6 +591,7 @@ fn japanese(message: Message) -> String {
     Accounts -> "アカウント"
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。"
+    ReloadAccounts -> "DB から読み直す"
     UnreadableAccounts -> "読み込めなかったアカウント"
     UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
     UnreadableReason(reason) -> japanese_row_error(reason)

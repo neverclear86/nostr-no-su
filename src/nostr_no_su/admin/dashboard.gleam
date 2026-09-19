@@ -168,6 +168,9 @@ pub const deny_segment = "deny"
 /// アカウントの登録画面のパスセグメント。
 pub const new_account_segments = [accounts_segment, "new"]
 
+/// アカウントの読み直しの POST 先のパスセグメント。
+pub const reload_accounts_segments = [accounts_segment, "reload"]
+
 /// リレーの追加画面のパスセグメント。
 pub const new_relay_segments = [relays_segment, "new"]
 
@@ -276,13 +279,14 @@ fn accounts_section(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
-    section_heading(
-      language,
-      accounts,
-      i18n.Accounts,
-      view.segments_path(new_account_segments),
-      i18n.AddAccount,
-    ),
+    section_heading(language, accounts, i18n.Accounts, [
+      view.button_link(
+        view.segments_path(new_account_segments),
+        text(i18n.AddAccount),
+        view.Primary,
+      ),
+      reload_form(language),
+    ]),
     listed_body(
       language,
       accounts,
@@ -346,20 +350,18 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 節の見出しと、一覧を得たときだけ出す追加のリンク（Primary）の行。アカウントと
-/// リレーの節が使う。
+/// 節の見出しと、一覧を得たときだけ出す操作の行。アカウントとリレーの節が使う。
 fn section_heading(
   language: Language,
   listing: Result(a, i18n.Reason),
   title: i18n.Message,
-  href: String,
-  link: i18n.Message,
+  actions: List(Element(msg)),
 ) -> Element(msg) {
-  let add_link = case listing {
-    Ok(_) -> view.button_link(href, i18n.text(language, link), view.Primary)
+  let row = case listing {
+    Ok(_) -> button_row(actions)
     Error(_) -> element.none()
   }
-  heading_row(i18n.text(language, title), add_link)
+  heading_row(i18n.text(language, title), row)
 }
 
 /// 節の見出しと、それに並べる要素の行。要素は幅が余れば右に寄る（狭い幅では下に落ちる）。
@@ -681,13 +683,13 @@ fn relays_section(
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
   view.card([
-    section_heading(
-      language,
-      relays,
-      i18n.Relays,
-      view.segments_path(new_relay_segments),
-      i18n.AddRelay,
-    ),
+    section_heading(language, relays, i18n.Relays, [
+      view.button_link(
+        view.segments_path(new_relay_segments),
+        i18n.text(language, i18n.AddRelay),
+        view.Primary,
+      ),
+    ]),
     no_bunker_relay_warning(language, relays),
     listed_body(
       language,
@@ -931,6 +933,18 @@ fn reenable_form(language: Language, name: String) -> Element(msg) {
     view.segments_path(reenable_plugin_segments),
     [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
+    view.Caution,
+    view.InRow,
+  )
+}
+
+/// DB からの読み直しのフォーム。読み直しはメモリから DB に無いアカウントを取り除き、
+/// セッションと承認待ちも置き換えるので、接続中のクライアントに影響する `Caution` にする。
+fn reload_form(language: Language) -> Element(msg) {
+  view.post_form(
+    view.segments_path(reload_accounts_segments),
+    [],
+    i18n.text(language, i18n.ReloadAccounts),
     view.Caution,
     view.InRow,
   )

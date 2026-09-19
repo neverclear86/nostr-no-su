@@ -198,6 +198,7 @@ fn context() -> admin.Context {
     rotate_secret: fn(_) { Ok(Nil) },
     update_label: fn(_, label) { change(label) },
     nsec: fn(_) { Ok(signer_nsec) },
+    reload_accounts: fn() { Ok(Nil) },
     relays: fn(_deadline) {
       Ok([
         dashboard.RelayRow(

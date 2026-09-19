@@ -535,7 +535,7 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     no_rows,
-    "Relays</h2><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
+    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
   )
   let monitor_only =
     dashboard.render(
@@ -555,7 +555,7 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     monitor_only,
-    "Relays</h2><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-sm btn-primary focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-warning\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -608,6 +608,26 @@ pub fn relays_heading_links_to_add_a_relay_test() {
       dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
     )
   assert !string.contains(unavailable, "/relays/new")
+}
+
+/// アカウントの節の見出しの行には、追加のリンクと並んで読み直しのフォームが出る。
+pub fn accounts_heading_has_a_reload_form_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    body,
+    "<form action=\"/accounts/reload\" method=\"post\">",
+  )
+}
+
+/// 一覧を得られないときはアカウントの節の見出しに読み直しのフォームも出さない。
+pub fn no_reload_form_without_the_account_list_test() {
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
+    )
+  assert !string.contains(unavailable, "/accounts/reload")
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。
