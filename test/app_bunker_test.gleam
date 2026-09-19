@@ -1,5 +1,6 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
-//// 読み直しを確かめるテスト。
+//// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
+//// 問い合わせ、URI のリレーの用途の決定もここで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -14,6 +15,8 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
+import nostr_no_su/relay_store
 import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, Inserted, Opened, Published, Wrote,
@@ -274,6 +277,61 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
   assert string.contains(response_body(denied), "unauthorized")
   stop_tree(tree)
+}
+
+/// `nostrconnect://` から開いたセッションは、応答がバンカーのリレーから発行され、
+/// その `result` は URI の secret になる。セッションは承認済みとして残る。
+pub fn a_nostrconnect_session_is_published_to_the_bunker_relay_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  assert bunker.open_client_session(
+      name,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "",
+      "uri-secret",
+    )
+    == Ok(Nil)
+  let assert Ok(Published(_socket, response)) = process.receive(reports, 2000)
+  assert string.contains(response_body(response), "\"result\":\"uri-secret\"")
+  let assert Ok([session]) = bunker.sessions(name)
+  assert session.signer == account.pubkey_hex(signer)
+  assert session.client == account.pubkey_hex(client)
+  stop_tree(tree)
+}
+
+/// `publisher_urls` は、応答の発行先として登録されているリレーの URL を返す。
+pub fn publisher_urls_lists_the_connected_relay_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert bunker.publisher_urls(name) == Some([test_relay_url])
+  stop_tree(tree)
+}
+
+/// DB の行から、URI のリレーをバンカーの用途にする変更が決まる。
+pub fn bunker_relay_plan_test() {
+  let url = "ws://relay.test"
+  let relay = fn(monitor: Bool, bunker_role: Bool) {
+    relay_store.Relay(
+      id: 1,
+      url: url,
+      roles: relay_list.Roles(monitor: monitor, bunker: bunker_role),
+    )
+  }
+  assert app.bunker_relay_plan([], url) == app.RegisterRelay
+  let monitor_only = relay(True, False)
+  assert app.bunker_relay_plan([monitor_only], url)
+    == app.GrantBunkerRole(monitor_only)
+  assert app.bunker_relay_plan([relay(False, True), relay(True, True)], url)
+    == app.AlreadyBunker
 }
 
 /// 管理 UI が使う経路。シークレット無しの `connect` は承認待ちになり、承認すると

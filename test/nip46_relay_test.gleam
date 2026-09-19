@@ -1,5 +1,6 @@
 //// 実際のリレーと Postgres の上で、本番の仕様のツリーに NIP-46 の
-//// connect → get_public_key → sign_event を往復させる E2E。
+//// connect → get_public_key → sign_event を往復させ、`nostrconnect://` からの
+//// 接続も試す E2E。
 ////
 //// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走る。PR の CI は
 //// どちらも渡さないのでスキップされ、手動のワークフロー（manual.yml の
@@ -9,6 +10,7 @@ import envoy
 import gleam/dict
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/io
+import gleam/list
 import gleam/option.{None}
 import gleam/string
 import gleam/uri.{Uri}
@@ -16,6 +18,7 @@ import nostr_no_su
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account.{type Account}
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/config
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
@@ -46,7 +49,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
   let signer = account_for(signer_key)
   let client = account_for(random.hex(32))
   let #(_spec, tree, secret) =
-    start_tree(scoped_database_url, relay_url, signer)
+    start_tree_with_relay(scoped_database_url, relay_url, signer)
   let events = process.new_subject()
   let acks = process.new_subject()
   let connection = connect_client(relay_url, client, events, acks)
@@ -99,6 +102,63 @@ pub fn nip46_round_trip_over_a_relay_test() {
   process.kill(tree)
 }
 
+/// `nostrconnect://` の接続は、URI のリレーをバンカー用途で DB に登録してから開き、
+/// 応答の `result` に URI の secret を入れて返す。開いたセッションは以降の
+/// リクエストを処理できる。
+pub fn nostrconnect_client_initiated_connection_test() {
+  use relay_url <- with_test_relay_url
+  use database_url <- postgres.with_test_database_url("nip46_relay")
+  use scoped_database_url <- with_database(database_url)
+
+  let signer = account_for(signer_key)
+  let client = account_for(random.hex(32))
+  let #(spec, tree, _secret) = start_tree(scoped_database_url, signer)
+  let events = process.new_subject()
+  let acks = process.new_subject()
+  let connection = connect_client(relay_url, client, events, acks)
+
+  let uri_secret = "nostrconnect-secret"
+  let request =
+    nostrconnect.ConnectRequest(
+      client: account.pubkey_hex(client),
+      relays: [relay_url],
+      secret: uri_secret,
+      perms: "sign_event:1",
+      name: None,
+    )
+  assert app.connect_nostrconnect(spec, request, account.pubkey_hex(signer))
+    == Ok(Nil)
+
+  // 応答はクライアントの購読から届き、`result` は URI の secret になる。
+  let assert Ok(response) = process.receive(events, response_timeout_ms)
+  let body = nip46_client.decrypt_response(client, signer, response)
+  assert string.contains(body, "\"result\":\"" <> uri_secret <> "\"")
+
+  // 開いたセッションで `sign_event` が署名を返す。
+  let signed =
+    call(
+      connection,
+      client,
+      signer,
+      nip46_client.request_body(
+        "sign-1",
+        "sign_event",
+        "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]",
+      ),
+      events,
+      acks,
+    )
+  assert string.contains(signed, "\\\"sig\\\":\\\"")
+
+  // URI のリレーはバンカー用途の行として DB に残る。
+  let assert Ok(relays) = app.registered_relays(spec)
+  let assert [row] = list.filter(relays, fn(row) { row.url == relay_url })
+  assert row.roles.bunker
+
+  process.unlink(tree)
+  process.kill(tree)
+}
+
 /// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定ならスキップの 1 行を出す。
 fn with_test_relay_url(run: fn(String) -> Nil) -> Nil {
   case envoy.get("TEST_RELAY_URL") {
@@ -128,12 +188,11 @@ fn database_url_with_name(database_url: String, name: String) -> String {
   uri.to_string(Uri(..parsed, path: "/" <> name))
 }
 
-/// `startup` の仕様でツリーを起動し、読み込みが終わるのを待ってから署名者を足し、
-/// リレーをバンカー用途で開く。仕様とツリーの pid、追加した署名者の接続 secret を
-/// 返す。
+/// `startup` の仕様でツリーを起動し、読み込みが終わるのを待ってから署名者を足す。
+/// 仕様とツリーの pid、追加した署名者の接続 secret を返す。リレーは呼び出し側が
+/// 開く。
 fn start_tree(
   database_url: String,
-  relay_url: String,
   signer: Account,
 ) -> #(app.Spec, Pid, String) {
   let assert Ok(started) = nostr_no_su.startup(test_config(database_url))
@@ -148,14 +207,24 @@ fn start_tree(
     5000,
   )
   let assert Ok(Nil) = app.add_account(started.spec, signer, "e2e")
+  let assert Ok([listing]) = bunker.accounts(started.spec.bunker.name)
+  #(started.spec, tree.pid, listing.secret)
+}
+
+/// `start_tree` で起動し、`relay_url` をバンカー用途で開く。
+fn start_tree_with_relay(
+  database_url: String,
+  relay_url: String,
+  signer: Account,
+) -> #(app.Spec, Pid, String) {
+  let #(spec, tree, secret) = start_tree(database_url, signer)
   let assert Ok(Nil) =
     app.open_relay(
-      started.spec,
+      spec,
       relay_url,
       relay_list.Roles(monitor: False, bunker: True),
     )
-  let assert Ok([listing]) = bunker.accounts(started.spec.bunker.name)
-  #(started.spec, tree.pid, listing.secret)
+  #(spec, tree, secret)
 }
 
 /// `database_url` を使い、他はすべて無効・最小に揃えた設定。管理 UI とプラグインを
