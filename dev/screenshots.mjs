@@ -33,6 +33,8 @@ const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
 const signerNsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re";
 const specNsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5";
 const account = (action) => `${base}/accounts/${signer}/${action}`;
+const unreadablePubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444";
+const unreadableAccount = (action) => `${base}/accounts/${unreadablePubkey}/${action}`;
 
 const viewports = [
   { name: "w1280", width: 1280, height: 800, deviceScaleFactor: 1 },
@@ -64,11 +66,13 @@ const shots = [
   { name: "18-accounts-not-ready", url: account("label"), form: { label: "not-ready" }, status: 503 },
   { name: "19-rotate-confirm", url: account("rotate") },
   { name: "20-delete-confirm", url: account("delete") },
+  { name: "20b-unreadable-delete-confirm", url: unreadableAccount("delete") },
   { name: "21-private-key-form", url: account("private-key") },
   { name: "22-private-key-wrong-password", url: account("private-key"), form: { password: "wrong" }, status: 403 },
   { name: "23-private-key", url: account("private-key"), form: { password } },
   { name: "24-account-page-unavailable", url: `${unavailable}/accounts/${signer}/label`, status: 503 },
   { name: "25-delete-not-applied", url: account("delete"), form: {}, status: 409 },
+  { name: "25b-unreadable-delete-not-applied", url: unreadableAccount("delete"), form: {}, status: 409 },
   { name: "26-dashboard-copied", url: `${base}/`, copy: true },
   { name: "27-revoke-not-found", url: `${base}/sessions/revoke`, form: { signer, client: "not-approved" }, status: 404 },
   { name: "27b-revoke-not-applied", url: `${base}/sessions/revoke`, form: { signer, client: "not-applied" }, status: 409 },

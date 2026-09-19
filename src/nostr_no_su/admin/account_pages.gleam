@@ -295,6 +295,68 @@ pub fn account_action_page(
   )
 }
 
+/// 読み込みで飛ばされた行の削除の確認ページ。`pubkey` 列を読めない行
+/// （`MalformedPubkey`）はここには来ない（画面からは削除できない）。
+pub fn unreadable_delete_page(
+  language: Language,
+  theme: view.Theme,
+  row: dashboard.SkippedRow,
+  error: Option(i18n.Reason),
+) -> String {
+  let text = i18n.text(language, _)
+  let path = dashboard.account_action_path(row.pubkey, dashboard.DeleteAccount)
+  let gap = i18n.sentence_gap(language)
+  view.page(
+    language,
+    theme,
+    dashboard.account_action_title(dashboard.DeleteAccount),
+    view.Narrow,
+    view.SwitchReturningTo(path),
+    view.NoRefresh,
+    [
+      view.card([
+        unreadable_summary(language, row),
+        view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
+        html.p([], [
+          html.text(text(i18n.DeleteUnreadableDescription) <> gap),
+          html.strong([], [html.text(text(i18n.DeleteUnreadableWarning))]),
+          html.text(
+            gap
+            <> text(i18n.DeleteUnreadableRecover)
+            <> gap
+            <> text(i18n.DeleteAlsoRemoves),
+          ),
+        ]),
+        view.post_form(
+          path,
+          [],
+          text(i18n.DeleteAccountSubmit),
+          view.Destructive,
+          view.InForm,
+        ),
+      ]),
+      view.back_link(language),
+    ],
+  )
+}
+
+/// 削除の対象の、読み込みで飛ばされた行（ラベルと、npub と 16 進の公開鍵、飛ばした
+/// 理由）。
+fn unreadable_summary(
+  language: Language,
+  row: dashboard.SkippedRow,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.summary_list([
+    #(text(i18n.Label), view.Plain(row.label)),
+    #(text(i18n.Account), view.Account(npub: row.npub, hex: Some(row.pubkey))),
+    #(
+      text(i18n.ReasonLabel),
+      view.Plain(text(i18n.UnreadableReason(row.reason))),
+    ),
+  ])
+}
+
 /// 操作のページで、バンカーから英語のまま届いた理由の前に置く前置き。秘密鍵の表示の
 /// フォームに出る理由は管理パスワードの誤り（訳す理由）だけなので、前置きを持たない。
 fn action_lead(action: dashboard.AccountAction) -> Option(i18n.Lead) {

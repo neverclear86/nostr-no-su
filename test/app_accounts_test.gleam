@@ -1074,6 +1074,97 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
   stop_tree(tree)
 }
 
+/// 読み込みで飛ばされた行の公開鍵の削除は、ストアの `delete` に届き、
+/// `bunker.skipped` からその行が消える。署名者の集合は変わらないので、購読は
+/// 張り直されない。
+pub fn removing_a_skipped_row_deletes_it_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let skipped_pubkey = account.pubkey_hex(account_for(other_signer_key))
+  let store =
+    bunker.Store(
+      ..store_with_load(fn() {
+        Ok(
+          bunker.Snapshot(
+            ..accounts_only([stored_signer(signer_key)]),
+            accounts: Loaded(accounts: [stored_signer(signer_key)], skipped: [
+              vault.Skipped(
+                pubkey: skipped_pubkey,
+                label: "old wallet",
+                reason: vault.UndecryptablePrivateKey,
+              ),
+            ]),
+          ),
+        )
+      }),
+      delete: fn(deleted) {
+        process.send(calls, Deleted(deleted))
+        Ok(Nil)
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      Some(subscribed),
+      name,
+      store,
+      fixed_retry_delay,
+    )
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  drain_subscriptions(subscribed, 200)
+  let assert Ok([skipped_row]) = bunker.skipped(name)
+  assert skipped_row.pubkey == skipped_pubkey
+
+  assert bunker.remove_account(name, skipped_pubkey) == Ok(Nil)
+  assert process.receive(calls, 1000) == Ok(Deleted(skipped_pubkey))
+  assert bunker.skipped(name) == Ok([])
+  assert process.receive(subscribed, 300) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// 登録済みでも、読み込みで飛ばされた行にも無い公開鍵の削除は、ストアを呼ばずに
+/// 拒否する。
+pub fn removing_an_unlisted_signer_does_not_reach_the_store_test() {
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let skipped_pubkey = account.pubkey_hex(account_for(other_signer_key))
+  let stranger = account.pubkey_hex(account_for(other_client_key))
+  let store =
+    bunker.Store(
+      ..store_with_load(fn() {
+        Ok(
+          bunker.Snapshot(
+            ..accounts_only([stored_signer(signer_key)]),
+            accounts: Loaded(accounts: [stored_signer(signer_key)], skipped: [
+              vault.Skipped(
+                pubkey: skipped_pubkey,
+                label: "",
+                reason: vault.UndecryptablePrivateKey,
+              ),
+            ]),
+          ),
+        )
+      }),
+      delete: fn(deleted) {
+        process.send(calls, Deleted(deleted))
+        Ok(Nil)
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+
+  assert bunker.remove_account(name, stranger)
+    == Error(bunker.NotApplied("account is not registered"))
+  assert process.receive(calls, 100) == Error(Nil)
+  stop_tree(tree)
+}
+
 // --- 秘密鍵の再表示の問い合わせ ---
 
 /// 読み込みの前は、秘密鍵の問い合わせを拒否し、ストアを呼ばない。

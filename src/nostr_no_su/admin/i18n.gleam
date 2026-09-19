@@ -236,6 +236,8 @@ pub type Message {
   UnreadableAccounts
   UnreadableAccountsWarning
   UnreadableReason(reason: vault.RowError)
+  UnreadableNotDeletable
+  ReasonLabel
   ConnectionUri
   ConnectionUriForApproval
   EditLabel
@@ -335,6 +337,9 @@ pub type Message {
   DeleteDescription
   DeleteWarning
   DeleteAlsoRemoves
+  DeleteUnreadableDescription
+  DeleteUnreadableWarning
+  DeleteUnreadableRecover
   ShowPrivateKeyDescription
   AdminPassword
   // 秘密鍵の表示ページ
@@ -399,6 +404,9 @@ fn english(message: Message) -> String {
     UnreadableAccountsWarning ->
       "The current ACCOUNT_MASTER_KEY cannot decrypt these rows."
     UnreadableReason(reason) -> english_row_error(reason)
+    UnreadableNotDeletable ->
+      "This row cannot be deleted here because its pubkey cannot be read."
+    ReasonLabel -> "Reason"
     ConnectionUri -> "Connection URI"
     ConnectionUriForApproval -> "Connection URI (approval)"
     EditLabel -> "Edit label"
@@ -524,6 +532,12 @@ fn english(message: Message) -> String {
       "If you have not saved this key anywhere else, the account is lost."
     DeleteAlsoRemoves ->
       "Its sessions and pending connections are removed as well."
+    DeleteUnreadableDescription ->
+      "This removes the row from the bunker and the database."
+    DeleteUnreadableWarning ->
+      "If you have not saved the nsec, the account is lost."
+    DeleteUnreadableRecover ->
+      "Restart with the previous ACCOUNT_MASTER_KEY to show the private key and save it first."
     ShowPrivateKeyDescription ->
       "Re-enter the admin password to show the private key. Showing it is logged with the npub."
     AdminPassword -> "Admin password"
@@ -578,6 +592,8 @@ fn japanese(message: Message) -> String {
     UnreadableAccounts -> "読み込めなかったアカウント"
     UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
     UnreadableReason(reason) -> japanese_row_error(reason)
+    UnreadableNotDeletable -> "この行は pubkey を読めないため、画面からは削除できません。"
+    ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"
     ConnectionUriForApproval -> "接続 URI（要承認）"
     EditLabel -> "ラベルを編集"
@@ -693,6 +709,10 @@ fn japanese(message: Message) -> String {
     DeleteDescription -> "秘密鍵をバンカーとデータベースから削除します。"
     DeleteWarning -> "この鍵を他の場所に保存していなければ、アカウントは失われます。"
     DeleteAlsoRemoves -> "このアカウントのセッションと承認待ちの接続も削除します。"
+    DeleteUnreadableDescription -> "この行をバンカーとデータベースから削除します。"
+    DeleteUnreadableWarning -> "nsec を控えていなければ、アカウントは失われます。"
+    DeleteUnreadableRecover ->
+      "以前の ACCOUNT_MASTER_KEY に戻して起動し直すと、秘密鍵を表示して控えられます。"
     ShowPrivateKeyDescription ->
       "秘密鍵を表示するには、管理パスワードを入力し直してください。表示したことは npub とともにログに記録します。"
     AdminPassword -> "管理パスワード"

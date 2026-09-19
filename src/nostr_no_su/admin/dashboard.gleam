@@ -312,20 +312,35 @@ fn skipped_section(
   }
 }
 
-/// 飛ばした行 1 件。識別と理由の 1 文を縦に並べる。`pubkey` 列が形式不正の行は
-/// 識別を描かず、理由の 1 文だけを出す。
+/// 飛ばした行 1 件。識別と理由の 1 文を縦に並べ、削除のリンクを右に置く。`pubkey`
+/// 列が形式不正の行は識別も削除のリンクも出さず、理由の 1 文に削除できない旨を
+/// 続けて出す。
 fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
-  let reason =
-    html.p([attribute.class("text-sm")], [
-      html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
-    ])
   case row.reason {
-    vault.MalformedPubkey -> entry_item([reason])
+    vault.MalformedPubkey ->
+      entry_item([
+        html.p([attribute.class("text-sm")], [
+          html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
+          html.text(
+            i18n.sentence_gap(language)
+            <> i18n.text(language, i18n.UnreadableNotDeletable),
+          ),
+        ]),
+      ])
     _ ->
       entry_item([
         html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
           identity(row.label, row.npub, row.pubkey),
-          reason,
+          html.p([attribute.class("text-sm")], [
+            html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
+          ]),
+        ]),
+        button_row([
+          view.button_link(
+            account_action_path(row.pubkey, DeleteAccount),
+            i18n.text(language, account_action_title(DeleteAccount)),
+            view.Destructive,
+          ),
         ]),
       ])
   }

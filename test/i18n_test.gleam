@@ -158,7 +158,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UnreadableAccounts -> Some(i18n.UnreadableAccountsWarning)
     i18n.UnreadableAccountsWarning ->
       Some(i18n.UnreadableReason(vault.PublicKeyMismatch))
-    i18n.UnreadableReason(_) -> Some(i18n.ConnectionUri)
+    i18n.UnreadableReason(_) -> Some(i18n.UnreadableNotDeletable)
+    i18n.UnreadableNotDeletable -> Some(i18n.ReasonLabel)
+    i18n.ReasonLabel -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
     i18n.ConnectionUriForApproval -> Some(i18n.EditLabel)
     i18n.EditLabel -> Some(i18n.ShowPrivateKey)
@@ -253,7 +255,10 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.RotateSecretDescription -> Some(i18n.DeleteDescription)
     i18n.DeleteDescription -> Some(i18n.DeleteWarning)
     i18n.DeleteWarning -> Some(i18n.DeleteAlsoRemoves)
-    i18n.DeleteAlsoRemoves -> Some(i18n.ShowPrivateKeyDescription)
+    i18n.DeleteAlsoRemoves -> Some(i18n.DeleteUnreadableDescription)
+    i18n.DeleteUnreadableDescription -> Some(i18n.DeleteUnreadableWarning)
+    i18n.DeleteUnreadableWarning -> Some(i18n.DeleteUnreadableRecover)
+    i18n.DeleteUnreadableRecover -> Some(i18n.ShowPrivateKeyDescription)
     i18n.ShowPrivateKeyDescription -> Some(i18n.AdminPassword)
     i18n.AdminPassword -> Some(i18n.PrivateKey)
     i18n.PrivateKey -> Some(i18n.CloseTabAfterCopying)
@@ -287,12 +292,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 138 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 143 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 138
+  assert list.length(messages) == 143
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

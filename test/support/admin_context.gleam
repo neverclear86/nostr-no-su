@@ -12,6 +12,7 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -317,6 +318,29 @@ pub fn with_accounts(
   accounts: Result(List(dashboard.AccountRow), String),
 ) -> admin.Context {
   admin.Context(..context(), accounts: fn() { accounts })
+}
+
+/// 読み込みで飛ばされた行の公開鍵。登録済みの `signer` とは違う値。
+pub const skipped_pubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+
+/// `skipped_pubkey` の npub。
+pub const skipped_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
+
+/// 読み込みで飛ばされた行 1 件（`MalformedPubkey` 以外）。
+pub fn skipped_row() -> dashboard.SkippedRow {
+  dashboard.SkippedRow(
+    pubkey: skipped_pubkey,
+    npub: skipped_npub,
+    label: "old wallet",
+    reason: vault.UndecryptablePrivateKey,
+  )
+}
+
+/// 指定した、読み込みで飛ばされた行の一覧を返す Context。
+pub fn with_skipped(
+  skipped: Result(List(dashboard.SkippedRow), String),
+) -> admin.Context {
+  admin.Context(..context(), skipped: fn() { skipped })
 }
 
 /// `Accept-Language` で日本語を求めるリクエスト。

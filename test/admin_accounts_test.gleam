@@ -12,13 +12,15 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/nip19
 import support/account_actions
 import support/admin_context.{
   Added, NsecRequested, Relabeled, Removed, Rotated, account_row, action_path,
   context, failing_context, get, header, in_japanese, label, password, post,
-  post_form, reporting_context, signer, signer_npub, signer_nsec, spec_nsec,
-  unavailable, uri, with_accounts, with_credentials,
+  post_form, reporting_context, signer, signer_npub, signer_nsec, skipped_npub,
+  skipped_pubkey, skipped_row, spec_nsec, unavailable, uri, with_accounts,
+  with_credentials, with_skipped,
 }
 import support/nip46_client.{account_for}
 import wisp
@@ -888,6 +890,117 @@ pub fn account_pages_need_the_account_list_test() {
     assert string.contains(body, unavailable)
     assert string.contains(body, "Back to dashboard")
   })
+}
+
+// --- 読み込みで飛ばされた行の削除 ---
+
+/// 飛ばされた行の削除のパス。
+fn skipped_delete_path() -> String {
+  dashboard.account_action_path(skipped_pubkey, dashboard.DeleteAccount)
+}
+
+/// 飛ばされた行の削除の GET は、その行用の確認ページを 200 で返す。ラベル・npub・
+/// 16 進の公開鍵・理由・3 部の説明・フォームの宛先が出る。
+pub fn unreadable_delete_page_shows_the_row_test() {
+  let response = get(with_skipped(Ok([skipped_row()])), skipped_delete_path())
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, "Delete account")
+  assert string.contains(body, "old wallet")
+  assert string.contains(body, skipped_npub)
+  assert string.contains(body, skipped_pubkey)
+  assert string.contains(
+    body,
+    i18n.text(
+      i18n.English,
+      i18n.UnreadableReason(vault.UndecryptablePrivateKey),
+    ),
+  )
+  assert string.contains(
+    body,
+    "This removes the row from the bunker and the database.",
+  )
+  assert string.contains(body, "action=\"" <> skipped_delete_path() <> "\"")
+}
+
+/// 飛ばされた行の削除の POST は Context を呼び、ダッシュボードへ 303 で戻す。
+pub fn unreadable_delete_calls_the_context_and_redirects_test() {
+  let reports = process.new_subject()
+  let response =
+    post(
+      admin.Context(..reporting_context(reports), skipped: fn() {
+        Ok([skipped_row()])
+      }),
+      skipped_delete_path(),
+    )
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000) == Ok(Removed(skipped_pubkey))
+}
+
+/// どちらの一覧にも無い pubkey と、`MalformedPubkey` の行の生の値への削除の
+/// GET / POST は 404 で、Context の変更を呼ばない。
+pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test() {
+  let reports = process.new_subject()
+  let malformed_pubkey = "not-a-valid-pubkey"
+  let with_malformed =
+    admin.Context(..reporting_context(reports), skipped: fn() {
+      Ok([
+        dashboard.SkippedRow(
+          pubkey: malformed_pubkey,
+          npub: "",
+          label: "",
+          reason: vault.MalformedPubkey,
+        ),
+      ])
+    })
+  let unlisted_path =
+    dashboard.account_action_path("unknown-pubkey", dashboard.DeleteAccount)
+  let malformed_path =
+    dashboard.account_action_path(malformed_pubkey, dashboard.DeleteAccount)
+  list.each([unlisted_path, malformed_path], fn(path) {
+    assert get(with_malformed, path).status == 404
+    assert post(with_malformed, path).status == 404
+  })
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 飛ばされた行の一覧を得られなければ、削除の GET と POST は 503 で理由を出す。
+pub fn unreadable_delete_needs_the_skipped_list_test() {
+  let failing = with_skipped(Error(unavailable))
+  let responses = [
+    get(failing, skipped_delete_path()),
+    post(failing, skipped_delete_path()),
+  ]
+  list.each(responses, fn(response) {
+    assert response.status == 503
+    assert string.contains(simulate.read_body(response), unavailable)
+  })
+}
+
+/// 飛ばされた行の削除の POST の失敗は、登録済みの削除と同じ対応で状態コードが
+/// 決まる。
+pub fn unreadable_delete_failures_map_to_status_codes_test() {
+  let not_applied_reason = "account is not registered"
+  let not_ready_reason = "accounts are not loaded yet"
+  let failures = [
+    #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
+    #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
+    #(
+      bunker.MaybeApplied(bunker.StoreDidNotConfirm),
+      202,
+      i18n.text(i18n.English, i18n.StoreDidNotConfirm),
+    ),
+  ]
+  use #(failure, status, reason) <- list.each(failures)
+  let failing =
+    admin.Context(
+      ..with_skipped(Ok([skipped_row()])),
+      remove_account: fn(_signer) { Error(failure) },
+    )
+  let response = post(failing, skipped_delete_path())
+  assert response.status == status
+  assert string.contains(simulate.read_body(response), reason)
 }
 
 // --- ダッシュボードのアカウントの節 ---

@@ -173,6 +173,17 @@ pub fn pages(language: i18n.Language) -> List(String) {
         "nsec1example",
       ),
       account_pages.private_key_page(language, view.System, row, "nsec1example"),
+      account_pages.unreadable_delete_page(
+        language,
+        view.System,
+        dashboard.SkippedRow(
+          pubkey: "8901",
+          npub: "npub1example",
+          label: "label-b",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+        Some(reason),
+      ),
       relay_pages.new_relay_page(
         language,
         view.System,

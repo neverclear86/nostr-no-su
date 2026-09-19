@@ -62,6 +62,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
 import nostr_no_su/relay_client
@@ -1285,8 +1286,10 @@ fn relay_action(
   }
 }
 
-/// アカウント 1 件への操作。一覧から行を引いてから、GET は操作のページを、POST は
-/// 操作を実行する。
+/// アカウント 1 件への操作。アカウントの一覧に署名者があれば従来どおりの操作を、
+/// 無ければ削除に限って読み込みで飛ばされた行の一覧から探す。一覧を得られなければ
+/// 503。以降のログとバンカーへの呼び出しには、呼び出し側が渡した文字列ではなく、
+/// 一覧の行の値を使う。
 fn account_action(
   context: Context,
   request: Request,
@@ -1295,7 +1298,43 @@ fn account_action(
   signer: String,
   action: dashboard.AccountAction,
 ) -> Response {
-  use row <- with_account(context, language, theme, signer)
+  case context.accounts() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
+    Ok(rows) ->
+      case list.find(rows, fn(row) { row.signer == signer }) {
+        Ok(row) ->
+          registered_account_action(
+            context,
+            request,
+            language,
+            theme,
+            row,
+            action,
+          )
+        Error(Nil) ->
+          unregistered_account_action(
+            context,
+            request,
+            language,
+            theme,
+            signer,
+            action,
+          )
+      }
+  }
+}
+
+/// アカウントの一覧にある署名者への操作。GET は操作のページを、POST は操作を
+/// 実行する。
+fn registered_account_action(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  row: dashboard.AccountRow,
+  action: dashboard.AccountAction,
+) -> Response {
   case request.method, action {
     http.Get, _ ->
       account_pages.account_action_page(
@@ -1313,19 +1352,15 @@ fn account_action(
       apply_account_change(
         language,
         theme,
-        row,
-        action,
-        None,
         context.rotate_secret(row.signer),
+        account_pages.account_action_page(language, theme, row, action, None, _),
       )
     http.Post, dashboard.DeleteAccount ->
       apply_account_change(
         language,
         theme,
-        row,
-        action,
-        None,
         context.remove_account(row.signer),
+        account_pages.account_action_page(language, theme, row, action, None, _),
       )
     http.Post, dashboard.RevealPrivateKey ->
       reveal_private_key(context, request, language, theme, row)
@@ -1333,29 +1368,63 @@ fn account_action(
   }
 }
 
-/// 一覧から署名者の行を引く。一覧を得られなければ 503、無ければ 404。どちらも
-/// `signer` を応答に含めない。以降のログとバンカーへの呼び出しには、呼び出し側が
-/// 渡した文字列ではなく、一覧の行の値を使う。
-fn with_account(
+/// アカウントの一覧に無い署名者への操作。読み込めない行（`MalformedPubkey`）を除く
+/// 飛ばされた行の削除だけを扱い、それ以外の操作と、どちらの一覧にも無い署名者は
+/// 404 にする。
+fn unregistered_account_action(
   context: Context,
+  request: Request,
   language: Language,
   theme: view.Theme,
   signer: String,
-  next: fn(dashboard.AccountRow) -> Response,
+  action: dashboard.AccountAction,
 ) -> Response {
-  case context.accounts() {
-    Error(reason) ->
-      unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
-    Ok(rows) ->
-      case list.find(rows, fn(row) { row.signer == signer }) {
-        Ok(row) -> next(row)
-        Error(Nil) ->
-          not_found_notice(
-            language,
-            theme,
-            i18n.Translated(i18n.AccountNotFound),
-          )
+  case action {
+    dashboard.DeleteAccount ->
+      case context.skipped() {
+        Error(reason) ->
+          unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
+        Ok(rows) ->
+          case
+            list.find(rows, fn(row) {
+              row.pubkey == signer && row.reason != vault.MalformedPubkey
+            })
+          {
+            Ok(row) ->
+              unreadable_account_action(context, request, language, theme, row)
+            Error(Nil) ->
+              not_found_notice(
+                language,
+                theme,
+                i18n.Translated(i18n.AccountNotFound),
+              )
+          }
       }
+    _ ->
+      not_found_notice(language, theme, i18n.Translated(i18n.AccountNotFound))
+  }
+}
+
+/// 読み込みで飛ばされた行の削除。GET は確認ページを、POST は削除を実行する。
+fn unreadable_account_action(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  row: dashboard.SkippedRow,
+) -> Response {
+  case request.method {
+    http.Get ->
+      account_pages.unreadable_delete_page(language, theme, row, None)
+      |> wisp.html_response(200)
+    http.Post ->
+      apply_account_change(
+        language,
+        theme,
+        context.remove_account(row.pubkey),
+        account_pages.unreadable_delete_page(language, theme, row, _),
+      )
+    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
   }
 }
 
@@ -1386,37 +1455,33 @@ fn update_label(
       apply_account_change(
         language,
         theme,
-        row,
-        dashboard.EditLabel,
-        echoed_label,
         context.update_label(row.signer, label),
+        account_pages.account_action_page(
+          language,
+          theme,
+          row,
+          dashboard.EditLabel,
+          echoed_label,
+          _,
+        ),
       )
   }
 }
 
 /// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
-/// 失敗なら `change_failure_response` に渡す。`label` は失敗を再描画するときの欄の値
-/// （`None` は保存済みのラベル）。
+/// 失敗なら `change_failure_response` に渡す。`render` は失敗を再描画するページ
+/// （`account_action_page` か `unreadable_delete_page` の部分適用）。
 fn apply_account_change(
   language: Language,
   theme: view.Theme,
-  row: dashboard.AccountRow,
-  action: dashboard.AccountAction,
-  label: Option(String),
   outcome: Result(Nil, ChangeFailure),
+  render: fn(Option(i18n.Reason)) -> String,
 ) -> Response {
   case outcome {
     Ok(Nil) -> wisp.redirect(to: "/")
     Error(failure) ->
       change_failure_response(language, theme, failure, fn(reason) {
-        account_pages.account_action_page(
-          language,
-          theme,
-          row,
-          action,
-          label,
-          Some(reason),
-        )
+        render(Some(reason))
       })
   }
 }
