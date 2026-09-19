@@ -52,6 +52,22 @@ pub fn name(fixture: Fixture, label: String) -> String {
   label <> "_" <> fixture.token
 }
 
+/// 戻らない `-on_load` を持つプラグインのソース。モジュールの読み込みが戻らない
+/// 形の検証に使う。
+pub fn hanging_on_load_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-on_load(init/0).
+-export([plugin_api_version/0, plugin_name/0, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+init() ->
+    receive after infinity -> ok end.
+"
+}
+
 /// 必須 3 関数を持ち、`plugin_name/0` の本体を `body`（Erlang の式）にした
 /// プラグインのソース。メタデータの呼び出しが戻らない、プロセスごと終わると
 /// いった形の検証に使う。

@@ -12,7 +12,7 @@
     aes_256_gcm_seal/4,
     aes_256_gcm_open/5,
     int_from_bytes/1,
-    ensure_module_loaded/1,
+    ensure_module_loaded_within/2,
     call_export_within/4,
     list_dir/1,
     read_file/1,
@@ -159,6 +159,19 @@ ensure_module_loaded(Module) ->
         {error, Reason} -> {error, atom_to_binary(Reason)}
     end.
 
+%% ensure_module_loaded/1 を使い捨てのプロセスで呼び、TimeoutMs で打ち切る。
+%% `-on_load` が戻らないモジュールは code:ensure_loaded/1 が戻らないので、
+%% メタデータの呼び出しと同じ期限で打ち切る。
+%%
+%% 打ち切っても `-on_load` を走らせているプロセスは生き続けるが、その後の他の
+%% モジュールの読み込みは戻る（erl 上の実験で確認した。code:ensure_loaded/1 の
+%% 呼び出し側を kill した後もプロセス数は 1 増えたままで、当該プロセスは
+%% timer:sleep/1 に留まる。同じ VM で別のモジュールを読むと {ok,{module,okmod}}
+%% が返り、同じモジュールを読み直すと再び timed_out になる）。
+%% -> {ok, nil} | {error, {crashed, ReasonBinary}} | {error, timed_out}
+ensure_module_loaded_within(Module, TimeoutMs) ->
+    run_within(fun() -> ensure_module_loaded(Module) end, TimeoutMs).
+
 %% 子仕様の start（plugin_children/0 が申告した MFA）と call_export_within/4 の
 %% 中で、例外を 1 行の理由にするために使う。壊れたモジュールが本体の起動を
 %% 止めないよう、例外を捕捉して文字列にする。
@@ -182,6 +195,12 @@ call_export(Module, Function, Args) ->
 %% main プロセスが起動時に同期に呼ぶので、戻らないプラグインが起動を止めないように
 %% する。
 %%
+%% 子仕様の start には使わない。start はスーパーバイザーのプロセスで呼び、子と
+%% リンクさせる必要がある（check_linked/1）。
+%% -> {ok, Value} | {error, {crashed, ReasonBinary}} | {error, timed_out}
+call_export_within(Module, Function, Args, TimeoutMs) ->
+    run_within(fun() -> call_export(Module, Function, Args) end, TimeoutMs).
+
 %% 生成と監視は run_isolated/1 と同じ理由で spawn_monitor/1 により不可分に行う。
 %% 結果は終了理由に載せて DOWN で受け取る。exit/1 の終了は error report を出さず、
 %% 別のメッセージも送らないので、打ち切りの後に遅れた応答がメールボックスに残らない。
@@ -193,13 +212,11 @@ call_export(Module, Function, Args) ->
 %% 使い捨てのプロセスの終了理由は normal ではない（打ち切りでは kill）ので、
 %% 呼び出しの中でリンクして起こしたプロセスは、exit を trap していなければ一緒に
 %% 終わる。これは意図した挙動で、exit(normal) に変えるとリンクしたプロセスが残る。
-%%
-%% 子仕様の start には使わない。start はスーパーバイザーのプロセスで呼び、子と
-%% リンクさせる必要がある（check_linked/1）。
+%% Fun は {ok, Value} | {error, ReasonBinary} を返すこと。
 %% -> {ok, Value} | {error, {crashed, ReasonBinary}} | {error, timed_out}
-call_export_within(Module, Function, Args, TimeoutMs) ->
+run_within(Fun, TimeoutMs) ->
     {Pid, Ref} = erlang:spawn_monitor(fun() ->
-        exit({nostr_no_su_export_result, call_export(Module, Function, Args)})
+        exit({nostr_no_su_export_result, Fun()})
     end),
     receive
         {'DOWN', Ref, process, Pid, {nostr_no_su_export_result, {ok, Value}}} ->

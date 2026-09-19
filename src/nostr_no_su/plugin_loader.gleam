@@ -59,8 +59,8 @@ const shadow_sample_size = 3
 /// `plugin_env` には `PLUGIN_*` の環境変数（`config.plugin_env`）を渡す。走査・
 /// コードパス・影の判定には一切関与せず、`plugin.load` へそのまま渡すだけである。
 ///
-/// `call_timeout_ms` は `plugin.load` へそのまま渡す、メタデータ用のエクスポート
-/// 1 回ごとの期限。
+/// `call_timeout_ms` は `plugin.load` へそのまま渡す、モジュールの読み込みと
+/// メタデータ用のエクスポート 1 回ごとの期限。
 ///
 /// `Plugin` は任意エクスポート `plugin_children/0` `plugin_children/1` から
 /// 解決した子仕様（`children`）を持って返る。モジュール atom は `Plugin` に載せない（任意

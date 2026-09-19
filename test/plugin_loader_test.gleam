@@ -892,6 +892,35 @@ pub fn load_all_hanging_metadata_test() {
   assert !process.is_alive(beam_fixture.last_pid(hanging))
 }
 
+/// 戻らない `-on_load` を持つプラグインは、モジュールの読み込みの時点で理由付き
+/// で読み込まれず、起動は続いて同じディレクトリーの他のプラグインが読み込まれる
+/// （受け入れ条件）。
+pub fn load_all_hanging_on_load_test() {
+  let fixture = beam_fixture.new("hanging_on_load")
+  let hanging = beam_fixture.name(fixture, "aaa")
+  let good = beam_fixture.name(fixture, "bbb")
+  beam_fixture.compile(
+    beam_fixture.hanging_on_load_source(hanging, hanging),
+    hanging,
+    fixture.root,
+  )
+  put_plugin(good, "survivor_plugin", fixture.root)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      short_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "survivor_plugin"
+  assert has_note(
+    notes,
+    hanging <> ": cannot load module (timed out after 100ms)",
+  )
+  assert has_note(notes, "(1 skipped)")
+}
+
 /// `plugin_name/0` が自プロセスを kill するプラグインは、印の無い DOWN として
 /// `crashed` の理由になる（`killed`）。
 pub fn load_all_killed_metadata_test() {
