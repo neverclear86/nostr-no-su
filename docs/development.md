@@ -97,4 +97,5 @@ sh dev/pr_facts.sh <PR 番号>                     # head と base の SHA、差
 sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付きの手順を「1 つずつ別の Bash で実行される」前提で静的に検査する
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
 sh dev/devin_prompt.sh <issue> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]  # 実装を devin CLI に任せるときの自己完結な依頼文を組む（実装エージェントが使う）
+sh dev/devin_wait.sh <clone> [最大秒数]                                              # devin CLI の完了を前景で待ち、終了コード 0（報告あり）/ 1（報告なしで終了）/ 2（まだ実行中。呼び直す）で返す（実装エージェントが使う）
 ```
