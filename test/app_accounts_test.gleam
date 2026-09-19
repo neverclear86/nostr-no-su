@@ -25,10 +25,10 @@ import support/app_tree.{
   connect_request_from, deliver_and_expect, discard_resume_points,
   drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
   forwarding_spec, idle_monitor, load_signer, memory_store, named_relay,
-  other_client_key, other_signer_key, receive_until, request,
-  response_body, secret, signed_request, signer_key, start_database,
-  start_loading_bunker_tree, start_tree, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay, test_relay_url,
+  other_client_key, other_signer_key, receive_until, request, response_body,
+  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
+  start_tree, stop_tree, store_failure, store_with_load, stored_signer,
+  test_relay, test_relay_url,
 }
 import support/nip46_client.{account_for}
 

@@ -444,7 +444,8 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
 /// 飛ばされた行が 0 件、あるいは一覧を得られないときはカードを描かない。
 pub fn no_skipped_rows_draws_no_card_test() {
   let empty = dashboard.Snapshot(..states(), skipped: Ok([]))
-  let unavailable = dashboard.Snapshot(..states(), skipped: Error("boom"))
+  let unavailable =
+    dashboard.Snapshot(..states(), skipped: Error(i18n.Untranslated("boom")))
   use language <- list.each([i18n.English, i18n.Japanese])
   assert !string.contains(
     dashboard.render(language, view.System, empty),
@@ -642,7 +643,7 @@ pub fn dashboard_refreshes_only_when_pending_exists_test() {
     dashboard.render(
       i18n.English,
       view.System,
-      dashboard.Snapshot(..states(), pending: Error("boom")),
+      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
     ),
     "http-equiv=\"refresh\"",
   )

@@ -104,6 +104,7 @@ pub fn the_dashboard_gives_up_on_slow_sections_at_the_deadline_test() {
   let started_at = time.monotonic_ms()
   let snapshot = admin.snapshot(slow_context, task.deadline_in(300))
   assert snapshot.accounts == Error(i18n.Translated(i18n.NotAvailable))
+  let assert Ok(_) = snapshot.skipped
   let assert Ok(_) = snapshot.pending
   let assert Ok(_) = snapshot.sessions
   assert time.monotonic_ms() - started_at < 1000

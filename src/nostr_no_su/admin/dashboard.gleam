@@ -221,7 +221,7 @@ const refresh_seconds = 30
 /// ダッシュボードを自動で読み込み直すかどうか。承認待ちを 1 件以上得たときだけ更新し、
 /// 空のときと一覧を得られないときは、コピー中の選択を壊さないために更新しない。
 fn dashboard_refresh(
-  pending: Result(List(PendingRow), String),
+  pending: Result(List(PendingRow), i18n.Reason),
 ) -> view.Refresh {
   case pending {
     Ok([_, ..]) -> view.RefreshEverySeconds(refresh_seconds)
