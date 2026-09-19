@@ -11,9 +11,6 @@ import gleam/int
 import gleam/string
 import nostr_no_su/crypto/secp256k1
 
-/// message key のバイト数（chacha_key 32 + nonce 12 + hmac_key 32）。
-const message_keys_bytes = 76
-
 /// 平文のバイト数の上限。
 const max_plaintext_bytes = 65_535
 
@@ -30,6 +27,11 @@ pub type Nip44Error {
   InvalidPayload
   UnsupportedVersion
   MacVerificationFailed
+}
+
+/// HKDF-expand で導いた 3 つの message key。
+pub type MessageKeys {
+  MessageKeys(chacha_key: BitArray, chacha_nonce: BitArray, hmac_key: BitArray)
 }
 
 /// ブロックカウンター 0、12 バイト nonce の ChaCha20。ストリーム暗号なので
@@ -70,23 +72,27 @@ fn bit_length(x: Int) -> Int {
   }
 }
 
-/// HKDF-expand で 76 バイトの message key を導出する:
-/// chacha_key(32) || nonce(12) || hmac_key(32)。テストが公式ベクターの
+/// HKDF-expand で `MessageKeys`（chacha_key 32 バイト、nonce 12 バイト、
+/// hmac_key 32 バイト）を導出する。テストが公式ベクターの
 /// `valid.get_message_keys` と照合するため公開する。
-pub fn message_keys(conversation_key: BitArray, nonce: BitArray) -> BitArray {
+pub fn message_keys(
+  conversation_key: BitArray,
+  nonce: BitArray,
+) -> MessageKeys {
   let t1 = crypto.hmac(<<nonce:bits, 1>>, crypto.Sha256, conversation_key)
   let t2 =
     crypto.hmac(<<t1:bits, nonce:bits, 2>>, crypto.Sha256, conversation_key)
   let t3 =
     crypto.hmac(<<t2:bits, nonce:bits, 3>>, crypto.Sha256, conversation_key)
-  // HMAC-SHA256 を 3 回連結した 96 バイトから、先頭の message key を取る。
-  let assert <<keys:bytes-size(message_keys_bytes), _rest:bits>> = <<
-    t1:bits,
-    t2:bits,
-    t3:bits,
-  >>
+  // HMAC-SHA256 を 3 回連結した 96 バイトから、先頭 76 バイトの message key を取る。
+  let assert <<
+    chacha_key:bytes-size(32),
+    chacha_nonce:bytes-size(12),
+    hmac_key:bytes-size(32),
+    _rest:bits,
+  >> = <<t1:bits, t2:bits, t3:bits>>
     as "hkdf-expand output must be 96 bytes"
-  keys
+  MessageKeys(chacha_key:, chacha_nonce:, hmac_key:)
 }
 
 /// 新たに生成したランダムな nonce で暗号化する。
@@ -112,29 +118,19 @@ pub fn encrypt_with_nonce(
   let len = bit_array.byte_size(pt)
   case len >= 1 && len <= max_plaintext_bytes {
     False -> Error(InvalidPlaintextLength)
-    True ->
-      case message_keys(conversation_key, nonce) {
-        <<
-          chacha_key:bytes-size(32),
-          chacha_nonce:bytes-size(12),
-          hmac_key:bytes-size(32),
-        >> -> {
-          let pad_bytes = calc_padded_len(len) - len
-          let padded = <<len:size(16), pt:bits, 0:size(pad_bytes)-unit(8)>>
-          let ciphertext = ffi_chacha20(chacha_key, chacha_nonce, padded)
-          let mac =
-            crypto.hmac(
-              <<nonce:bits, ciphertext:bits>>,
-              crypto.Sha256,
-              hmac_key,
-            )
-          Ok(bit_array.base64_encode(
-            <<2, nonce:bits, ciphertext:bits, mac:bits>>,
-            True,
-          ))
-        }
-        _ -> Error(InvalidKey)
-      }
+    True -> {
+      let MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
+        message_keys(conversation_key, nonce)
+      let pad_bytes = calc_padded_len(len) - len
+      let padded = <<len:size(16), pt:bits, 0:size(pad_bytes)-unit(8)>>
+      let ciphertext = ffi_chacha20(chacha_key, chacha_nonce, padded)
+      let mac =
+        crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
+      Ok(bit_array.base64_encode(
+        <<2, nonce:bits, ciphertext:bits, mac:bits>>,
+        True,
+      ))
+    }
   }
 }
 
@@ -192,20 +188,13 @@ fn decrypt_verified(
   ciphertext: BitArray,
   mac: BitArray,
 ) -> Result(String, Nip44Error) {
-  case message_keys(conversation_key, nonce) {
-    <<
-      chacha_key:bytes-size(32),
-      chacha_nonce:bytes-size(12),
-      hmac_key:bytes-size(32),
-    >> -> {
-      let expected_mac =
-        crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
-      case crypto.secure_compare(mac, expected_mac) {
-        False -> Error(MacVerificationFailed)
-        True -> unpad(ffi_chacha20(chacha_key, chacha_nonce, ciphertext))
-      }
-    }
-    _ -> Error(InvalidKey)
+  let MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
+    message_keys(conversation_key, nonce)
+  let expected_mac =
+    crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
+  case crypto.secure_compare(mac, expected_mac) {
+    False -> Error(MacVerificationFailed)
+    True -> unpad(ffi_chacha20(chacha_key, chacha_nonce, ciphertext))
   }
 }
 
