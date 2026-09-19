@@ -176,6 +176,10 @@ pub fn open_all_skips_listed_invalid_and_roleless_relays_test() {
       roles: relay_list.Roles(monitor: True, bunker: False),
     ),
     relay_list.Registered(
+      url: "wss://",
+      roles: relay_list.Roles(monitor: True, bunker: False),
+    ),
+    relay_list.Registered(
       url: "wss://no-role",
       roles: relay_list.Roles(monitor: False, bunker: False),
     ),
@@ -185,6 +189,7 @@ pub fn open_all_skips_listed_invalid_and_roleless_relays_test() {
   assert rejections
     == [
       #("relay.damus.io", relay_list.InvalidUrl),
+      #("wss://", relay_list.InvalidUrl),
       #("wss://no-role", relay_list.NoRole),
     ]
 }

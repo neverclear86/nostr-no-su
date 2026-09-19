@@ -60,6 +60,13 @@ pub fn to_request_leaves_other_schemes_alone_test() {
   assert req.host == "relay.example"
 }
 
+/// ホストが空の URL は `request.to` を通ってしまうので、`to_request` が拒否する。
+pub fn to_request_rejects_an_empty_host_test() {
+  assert relay_client.to_request("wss://") == Error(Nil)
+  assert relay_client.to_request("ws:///path") == Error(Nil)
+  assert relay_client.to_request("wss:///") == Error(Nil)
+}
+
 // --- 接続の失敗の理由 ---
 
 /// ハンドシェイクの失敗は stratus が組み立てた文をそのまま使う。
