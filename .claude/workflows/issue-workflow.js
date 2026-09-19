@@ -1,7 +1,7 @@
 export const meta = {
   name: 'issue-pipeline',
   description: 'nostr-no-su の issue を、プラン → プランレビュー → 実装 → PR レビュー → 最終確認 → squash マージまで、役割別のエージェントで進める',
-  whenToUse: 'スキル issue-workflow の段階 0 で args（issues、base、scratchpad、portBase、trailers）を組み立ててから呼ぶ。issue 番号だけでは動かない',
+  whenToUse: 'スキル issue-workflow の段階 0 で args（issues、base、scratchpad、repoDir、portBase、trailers）を組み立ててから呼ぶ。issue 番号だけでは動かない',
   phases: [
     { title: '判定', detail: 'issue だけ読んで分割の要否と tier（none / light / full）を決める。大きければサブ issue を作る' },
     { title: 'デザイン', detail: 'UI を変える issue だけ（tier が light 以上）。方針を issue にコメントする。分割した親でも 1 回だけ' },
@@ -21,6 +21,8 @@ export const meta = {
 //               分割で生まれたサブ issue はスクリプトが足す（designUrl を親から継ぎ、depth 1、tier は light。再分割はしない）
 //   base:       origin/main の SHA。再開のときも同じ値を渡す（変えるとプロンプトが変わり、結果の再利用が効かない）
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
+//   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る。
+//               エージェントへの依頼文の `git -C` と `dev/*.sh` の呼び出しに使う
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   portBase:   issue ごとに 10 個ずつ使う空きポートの先頭（ss -ltn で確かめてから渡す）
 //   window:     同時に進める issue の数（既定 4）
@@ -31,7 +33,6 @@ export const meta = {
 // ---------------------------------------------------------------------------
 
 const REPO = 'neverclear86/nostr-no-su'
-const REPO_DIR = '/home/lina/workspace/projects/nostr-no-su'
 // 自己修正の改善はラウンド 1〜2 に集中するので、プランレビューと PR レビューの往復は 2 ラウンドで打ち切る
 const MAX_PLAN_ROUNDS = 2
 const MAX_PR_ROUNDS = 2
@@ -42,7 +43,9 @@ const MAX_REBASES = 2
 const a = args || {}
 if (typeof a !== 'object') throw new Error('args はオブジェクトで渡す（issue 番号だけを受け取ったときは、スキル issue-workflow の段階 0 で base・trailers・portBase を集めてから呼ぶ）')
 if (!Array.isArray(a.issues) || a.issues.length === 0) throw new Error('args.issues が空である')
-for (const k of ['base', 'scratchpad', 'trailers', 'portBase']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+for (const k of ['base', 'scratchpad', 'trailers', 'portBase', 'repoDir']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+if (typeof a.repoDir !== 'string' || !a.repoDir.startsWith('/')) throw new Error('args.repoDir はユーザーの作業ツリーの絶対パスで渡す（git rev-parse --show-toplevel）')
+const REPO_DIR = a.repoDir
 const WINDOW = a.window || 4
 const IMPLEMENTERS = ['claude', 'devin']
 if (a.implementer !== undefined && !IMPLEMENTERS.includes(a.implementer)) throw new Error(`args.implementer は ${IMPLEMENTERS.join(' / ')} のどれか`)

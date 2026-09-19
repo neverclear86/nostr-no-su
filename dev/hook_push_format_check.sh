@@ -11,10 +11,12 @@
 #   format --check が通る                                                  何も出力せず 0 で終わる
 #   format --check が失敗                                                  deny（理由に出力の要点）
 #
+# ユーザーの作業ツリーは Claude Code が hook に渡す CLAUDE_PROJECT_DIR（無ければ cwd）から取る。
+#
 # 使い方: echo '{"tool_input":{"command":"git -C /path/wt push -u origin x"}}' | sh dev/hook_push_format_check.sh
 set -u
 
-user_tree=/home/lina/workspace/projects/nostr-no-su
+user_tree=${CLAUDE_PROJECT_DIR:-$(pwd)}
 
 # deny の JSON を出して終わる。理由は jq で引用する。
 deny() {

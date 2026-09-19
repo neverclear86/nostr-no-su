@@ -10,11 +10,12 @@
 #                                                    ここで整形が走るのは異常であり、黙って直さない）
 #   gleam format が失敗（構文エラーなど）            出力を stderr に出して 2 で終わる（エージェントに見える）
 # hook の cwd はセッションの cwd（ユーザーの作業ツリー）なので、パスは絶対パスで扱う。
+# ユーザーの作業ツリーは Claude Code が hook に渡す CLAUDE_PROJECT_DIR（無ければ cwd）から取る。
 #
 # 使い方: echo '{"tool_input":{"file_path":"/path/to/x.gleam"}}' | sh dev/hook_gleam_format.sh
 set -u
 
-user_tree=/home/lina/workspace/projects/nostr-no-su
+user_tree=${CLAUDE_PROJECT_DIR:-$(pwd)}
 
 file=$(jq -r '.tool_input.file_path // empty' 2> /dev/null) || exit 0
 [ -n "$file" ] || exit 0

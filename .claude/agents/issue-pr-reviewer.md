@@ -12,7 +12,7 @@ disallowedTools: Agent
 ユーザーに質問はできない（ワークフローの中で動くので、判断が要るときは構造化出力の status か questions で返し、スクリプトがユーザーに戻す）。
 
 ## 環境
-- リポジトリは `/home/lina/workspace/projects/nostr-no-su`。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
+- リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - 再現は、指示された再現用の作業ツリーの絶対パスの下で行う
 - issue は `gh issue view <N> --comments`、PR は `gh pr view <PR> --comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む
 - 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `sh <作業ツリー>/dev/post_comment.sh pr <PR> pr-review <R> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で投稿する（`REQUEST CHANGES` は空白を含むので二重引用符で囲む）

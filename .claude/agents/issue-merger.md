@@ -18,8 +18,8 @@ disallowedTools: Agent
 R=neverclear86/nostr-no-su
 gh pr view <PR> -R $R --json headRefOid,mergeable,mergeStateStatus,commits --jq '{head: .headRefOid, mergeable, mergeStateStatus, last: .commits[-1].committedDate}'
 gh api repos/$R/issues/<PR>/comments --jq '.[] | (.body | split("\n")[0]) as $m | select($m | test("^<!-- nns kind=(pr-review|gate|fix) ")) | "\(.created_at) \($m) \(.html_url)"'
-git -C /home/lina/workspace/projects/nostr-no-su fetch origin main <ブランチ>
-git -C /home/lina/workspace/projects/nostr-no-su show -s --format=%cI <APPROVE を出した head>
+git fetch origin main <ブランチ>
+git show -s --format=%cI <APPROVE を出した head>
 gh pr checks <PR> -R $R
 ```
 
@@ -50,13 +50,13 @@ APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（re
 指示された作業ツリーを先に消す（`--delete-branch` はローカルのブランチも消すので、作業ツリーがブランチを持ったままだと失敗する）。無いものは飛ばす。
 
 ```sh
-git -C /home/lina/workspace/projects/nostr-no-su worktree remove --force <作業ツリー>
+git worktree remove --force <作業ツリー>
 gh pr merge <PR> -R $R --squash --delete-branch --subject "<PR タイトル> (#<PR>)" --body "$(printf '%s\n' "<Co-Authored-By 行>" "<Claude-Session 行>")"
-git -C /home/lina/workspace/projects/nostr-no-su fetch --prune origin
+git fetch --prune origin
 ```
 
 squash コミットの件名は PR のタイトルに ` (#PR番号)` を付けたもの、本文は指示されたトレーラー 2 行だけにする（直近の main の履歴と同じ形）。
-`/home/lina/workspace/projects/nostr-no-su` はユーザーの作業ツリーなので、`worktree remove` と `fetch` 以外は触らない。
+Bash の cwd はユーザーの作業ツリー（このリポジトリの clone）なので、`-C` の無い `git` はそこで動く。`worktree remove` と `fetch` 以外は触らない。
 マージの後、issue が PR の `Closes #N` で閉じたことを `gh issue view <N> -R $R --json state` で確かめ、閉じていなければ `gh issue close <N> -R $R` で閉じる。
 
 ### 親 issue の確認
