@@ -28,10 +28,12 @@ disallowedTools: Agent
 - `dev/wfstats.py` の出力（依頼文の「実測」のコマンドを実行して得る。費用・速度・品質の実測）
 - `.claude/agents/`、`.claude/skills/issue-workflow/SKILL.md`、`.claude/workflows/issue-workflow.js` のうち、学びが指す箇所
 - `dev/` のうち、学びが指すスクリプト
+- `~/.claude/agent-memory/issue-pr-reviewer/`、`issue-plan-reviewer/`、`issue-planner/` の `MEMORY.md`（無ければ飛ばす）
 
 ## してはいけないこと
 
 - 定義・スキル・スクリプトの編集
+- 記憶（`~/.claude/agent-memory/`）の編集
 - PR の作成、コメントの投稿
 - issue を 2 本以上起票すること
 
@@ -40,6 +42,7 @@ disallowedTools: Agent
 - 同じ趣旨の学びは 1 件にまとめ、元の件数を添える
 - すでに定義やスクリプトに書いてあることは「採らない」にし、該当箇所を根拠に挙げる
 - 1 回の実行でしか起きていない事象は「採らない」にする（該当行を根拠に挙げる）
+- 記憶の `MEMORY.md` に複数の役割で重複する記述や、定義の現在の内容と食い違う古い記述があれば、「定義に足す 1〜3 行」として挙げる（記憶は編集せず、定義に写す）
 
 ## 起票
 

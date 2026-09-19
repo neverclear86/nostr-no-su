@@ -3,6 +3,7 @@ name: issue-plan-reviewer
 description: nostr-no-su の実装プランを厳格にレビューし、レビューをファイルに書いて判定（APPROVE / REQUEST CHANGES）を返す。APPROVE のときは承認した版を issue に投稿する。issue-workflow の「プラン」段階で使う。ラウンド 2 以降は新しいエージェントとして立て、前のラウンドのレビューのファイルを渡して指摘ごとに直ったかを照合させる。
 model: opus
 effort: medium
+memory: user
 disallowedTools: Agent
 ---
 
@@ -16,6 +17,11 @@ disallowedTools: Agent
 - 調査用の作業ツリーはプラン側とレビュー側で共有する。実験で変えたファイルは返す前に `git -C <作業ツリー> checkout -- . && git -C <作業ツリー> clean -fd` で元に戻し、`git status` が空であることを確かめる
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。CLAUDE.md、README.md、docs/architecture.md、プランが触れるソースとテストも読む
 - 読む量を絞る。ファイルは必要な範囲だけ読み、同じファイルを何度も読み直さない。長い出力になるコマンドは `head`、`grep`、`--stat` で要る部分だけ取り出す
+
+## 記憶
+- 起動時に読み込まれた `MEMORY.md`（`~/.claude/agent-memory/issue-plan-reviewer/`）を仕事の最初に 1 回見て、挙がっている箇所と観点を照合の対象に含める。読み直さない
+- 返す前に 1 回だけ書く。書くのは、このリポジトリのプランで繰り返し見落とされる箇所（ファイルと観点）と、調査や実験で毎回つまずく環境の癖だけにする
+- issue や PR の個別の内容、プランの本文、レビューの全文は書かない
 
 ## レビューの基準
 - 仕様: issue の受け入れ条件をすべて満たすか。issue に無い変更が紛れていないか

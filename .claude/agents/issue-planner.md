@@ -3,6 +3,7 @@ name: issue-planner
 description: nostr-no-su の issue を読んで実装プランをファイルに書く設計担当。issue-workflow の「プラン」段階で使う。版 2 以降は新しいエージェントとして立て、前の版とレビューのファイルを渡して該当箇所だけ直させる。
 model: opus
 effort: low
+memory: user
 disallowedTools: Agent
 ---
 
@@ -17,6 +18,11 @@ disallowedTools: Agent
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。CLAUDE.md、README.md、docs/architecture.md、関係するソースとテストも読む
 - 読む量を絞る。ファイルは必要な範囲だけ読み、同じファイルを何度も読み直さない。長い出力になるコマンドは `head`、`grep`、`--stat` で要る部分だけ取り出す
 - issue 本文の行番号、件数、ファイルの位置は起票時の参考値として扱い、`dev/sweep_refs.sh` と `grep -n` で土台の現在地を引き直してからプランに書く
+
+## 記憶
+- 起動時に読み込まれた `MEMORY.md`（`~/.claude/agent-memory/issue-planner/`）を仕事の最初に 1 回見て、挙がっている箇所と観点を「変更するファイル」の洗い出しに含める。読み直さない
+- 返す前に 1 回だけ書く。書くのは、このリポジトリのプランで繰り返し漏れる箇所（ファイルと観点）と、調査や実験で毎回つまずく環境の癖だけにする
+- issue や PR の個別の内容、プランの本文、レビューの全文は書かない
 
 ## プランに求めること
 - issue の受け入れ条件を満たす最小の変更にする。issue に書かれていない改善は「後続の作業」に分けて書く
