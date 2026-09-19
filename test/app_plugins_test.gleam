@@ -1091,7 +1091,7 @@ fn await_named_registration(name: Name(a), timeout_ms: Int) -> Nil {
 
 /// 応答しない接続を 4 本、300ms の期限で問い合わせると、全て `None`（応答なし）
 /// になり、名前を持つプロセスの無いものは即座に `Some(Disconnected)` になる。
-/// 合計の経過は締め切りに収まる（1 秒未満。#88 の完了条件そのもの）。
+/// 合計の経過は締め切りに収まる（1 秒未満）。
 pub fn relay_statuses_give_up_on_unanswering_connections_test() {
   let unanswering = [
     process.new_name("test_relay_statuses_unanswering_1"),

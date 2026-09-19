@@ -23,8 +23,7 @@ pub fn await_gives_up_at_the_deadline_test() {
 }
 
 /// 3 秒眠る仕事 3 件を 1 つの締め切りで待つと、全て `Error(Nil)` になり、合計の
-/// 経過は 1 秒未満に収まる（#88 の完了条件の骨格：締め切りは待ちの合計ではなく、
-/// 仕事の数によらず一定）。
+/// 経過は 1 秒未満に収まる（締め切りは待ちの合計ではなく、仕事の数によらず一定）。
 pub fn a_shared_deadline_bounds_the_total_wait_test() {
   let sleeper = fn() {
     process.sleep(3000)
