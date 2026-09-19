@@ -160,6 +160,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
   "since": "2026-09-13T00:00:00Z",
   "base": "2f0a2ebff249f5b995a6647a1b0476549ede24d7",
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
+  "repoDir": "/path/to/nostr-no-su",
   "trailers": { "coAuthoredBy": "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>", "claudeSession": "Claude-Session: https://claude.ai/code/session_…", "sessionUrl": "https://claude.ai/code/session_…" }
 }
 ```

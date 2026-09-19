@@ -9,14 +9,14 @@ hooks:
     - matcher: "Edit|Write"
       hooks:
         - type: command
-          command: sh "$CLAUDE_PROJECT_DIR"/dev/hook_gleam_format.sh
+          command: sh "${CLAUDE_PROJECT_DIR:-.}"/dev/hook_gleam_format.sh
   PreToolUse:
     - matcher: Bash
       hooks:
         - type: command
-          command: sh "$CLAUDE_PROJECT_DIR"/dev/hook_pr_body_gate.sh
+          command: sh "${CLAUDE_PROJECT_DIR:-.}"/dev/hook_pr_body_gate.sh
         - type: command
-          command: sh "$CLAUDE_PROJECT_DIR"/dev/hook_push_format_check.sh
+          command: sh "${CLAUDE_PROJECT_DIR:-.}"/dev/hook_push_format_check.sh
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）の実装担当である。
