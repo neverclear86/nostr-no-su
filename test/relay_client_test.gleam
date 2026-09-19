@@ -7,6 +7,7 @@ import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
@@ -21,8 +22,8 @@ import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
   type SubscriptionState, type Subscriptions, Acknowledge, Acknowledgement,
-  Closed, Report, Requested, Reservation, Retried, SubscriptionState, Sync,
-  Synchronise,
+  Closed, Deliver, Report, Requested, Reservation, Retried, SubscriptionState,
+  Sync, Synchronise,
 }
 import nostr_no_su/relay_connection
 import stratus
@@ -147,60 +148,73 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
 /// NOTICE の本文にログ行を偽造しうる長さと改行があっても、1 行に収まる。
 pub fn interpret_keeps_a_large_notice_on_one_line_test() {
   let body = string.repeat("x", 10_000) <> "\n[bunker] forged"
-  let notice =
-    json.preprocessed_array([json.string("NOTICE"), json.string(body)])
-    |> json.to_string
 
-  let assert Report(line) = relay_client.interpret(notice)
+  let assert Report(line) = relay_client.interpret(notice_frame(body))
   assert !string.contains(line, "\n")
   assert string.length(line)
     <= string.length("notice: ") + log.max_external_chars + 3
 }
 
-/// CLOSED の理由は改行を含む制御文字を空白に置き換えて正規化するが、契機に積む id は
-/// 照合に使うため正規化しない生の値のままにする。
-pub fn interpret_sanitizes_the_reason_of_a_closed_subscription_test() {
-  let closed = closed_frame("sub\nx", "bye\n[bunker] forged")
+/// `interpret` の解釈を、リレーメッセージの種類ごとに 1 つの表で固定する。外部由来の
+/// 値は正規化し、照合と署名に使う id と challenge は正規化しないことも、同じ表で
+/// 表す。
+pub fn interpret_covers_every_relay_message_test() {
+  let genuine = signed_event.new(1, "genuine")
+  let other = signed_event.new(1, "other")
+  let mismatched_id = Event(..genuine, id: other.id)
+  let invalid_signature = Event(..genuine, sig: other.sig)
 
-  assert relay_client.interpret(closed)
-    == Synchronise(
-      Closed("sub\nx"),
-      "subscription sub x closed: bye [bunker] forged",
-    )
-}
-
-/// OK は受理・拒否とも `Acknowledge` にし、値は正規化する。
-pub fn interpret_turns_an_ok_into_an_acknowledgement_test() {
-  let rejected =
-    json.preprocessed_array([
-      json.string("OK"),
-      json.string("e1"),
-      json.bool(False),
-      json.string("blocked\n[bunker] forged"),
-    ])
-    |> json.to_string
-  assert relay_client.interpret(rejected)
-    == Acknowledge(Acknowledgement("e1", False, "blocked [bunker] forged"))
-
-  let accepted =
-    json.preprocessed_array([
-      json.string("OK"),
-      json.string("e1"),
-      json.bool(True),
-      json.string(""),
-    ])
-    |> json.to_string
-  assert relay_client.interpret(accepted)
-    == Acknowledge(Acknowledgement("e1", True, ""))
-}
-
-/// AUTH は `Authenticate` にし、challenge は照合の契機の id と同じく正規化しない
-/// （署名に使うため）。
-pub fn interpret_turns_an_auth_into_authenticate_test() {
-  let auth = auth_frame("c1\n[bunker] forged")
-
-  assert relay_client.interpret(auth)
-    == relay_client.Authenticate("c1\n[bunker] forged")
+  [
+    #("event", event_frame(genuine), Deliver(signed_event.verified(genuine))),
+    #(
+      "event with a mismatched id",
+      event_frame(mismatched_id),
+      Report("dropped event with invalid id: " <> mismatched_id.id),
+    ),
+    #(
+      "event with an invalid signature",
+      event_frame(invalid_signature),
+      Report("dropped event with invalid signature: " <> genuine.id),
+    ),
+    #("eose", eose_frame("sub\nx"), Report("end of stored events for sub x")),
+    #(
+      "ok accepted",
+      ok_frame("e1", True, ""),
+      Acknowledge(Acknowledgement("e1", True, "")),
+    ),
+    #(
+      "ok rejected",
+      ok_frame("e1", False, "blocked\n[bunker] forged"),
+      Acknowledge(Acknowledgement("e1", False, "blocked [bunker] forged")),
+    ),
+    #(
+      "notice",
+      notice_frame("busy\n[bunker] forged"),
+      Report("notice: busy [bunker] forged"),
+    ),
+    #(
+      "closed",
+      closed_frame("sub\nx", "bye\n[bunker] forged"),
+      Synchronise(
+        Closed("sub\nx"),
+        "subscription sub x closed: bye [bunker] forged",
+      ),
+    ),
+    #(
+      "auth",
+      auth_frame("c1\n[bunker] forged"),
+      relay_client.Authenticate("c1\n[bunker] forged"),
+    ),
+    #(
+      "undecodable",
+      json.preprocessed_array([json.string("EVENT")]) |> json.to_string,
+      Report("unrecognised message: [\"EVENT\"]"),
+    ),
+  ]
+  |> list.each(fn(row) {
+    let #(name, frame, expected) = row
+    assert #(name, relay_client.interpret(frame)) == #(name, expected)
+  })
 }
 
 /// CLOSED は照合の契機を返し、それ以外のメッセージは返さない。
@@ -216,12 +230,9 @@ pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
     )
     == Some(Closed("bunker"))
 
-  let notice =
-    json.preprocessed_array([json.string("NOTICE"), json.string("x")])
-    |> json.to_string
   assert relay_client.handle_text(
       "test",
-      notice,
+      notice_frame("x"),
       fn(_event) { Nil },
       fn(_ack) { Nil },
       None,
@@ -254,6 +265,29 @@ fn closed_frame(subscription_id: String, reason: String) -> String {
   json.preprocessed_array([
     json.string("CLOSED"),
     json.string(subscription_id),
+    json.string(reason),
+  ])
+  |> json.to_string
+}
+
+/// リレーからの EOSE を購読 id で組み立てた JSON フレーム。
+fn eose_frame(subscription_id: String) -> String {
+  json.preprocessed_array([json.string("EOSE"), json.string(subscription_id)])
+  |> json.to_string
+}
+
+/// リレーからの NOTICE を本文で組み立てた JSON フレーム。
+fn notice_frame(body: String) -> String {
+  json.preprocessed_array([json.string("NOTICE"), json.string(body)])
+  |> json.to_string
+}
+
+/// リレーからの OK をイベント id、受理の可否、理由で組み立てた JSON フレーム。
+fn ok_frame(event_id: String, accepted: Bool, reason: String) -> String {
+  json.preprocessed_array([
+    json.string("OK"),
+    json.string(event_id),
+    json.bool(accepted),
     json.string(reason),
   ])
   |> json.to_string
@@ -1120,14 +1154,7 @@ fn start_relay_replying_ok(ok: String) -> Relay {
 
 /// リレーが発行したイベントに返した OK は `handle_ok` に届く。
 pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
-  let ok =
-    json.preprocessed_array([
-      json.string("OK"),
-      json.string("e1"),
-      json.bool(False),
-      json.string("rate-limited: slow down"),
-    ])
-    |> json.to_string
+  let ok = ok_frame("e1", False, "rate-limited: slow down")
   let relay = start_relay_replying_ok(ok)
   let acks = process.new_subject()
   let assert Ok(client) =
