@@ -162,9 +162,9 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 - `implementation.status: pr`：PR ができた。`pr` と `prUrl` をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
 - `rejected`：精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue に「## 精査」（`commentUrl`）を投稿して閉じた。`reason` を報告する
-- `blocked`：直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを添えて issue を issue-workflow の `issues` に入れて進める
+- `blocked`：直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを `retroIssue: { "number": <N>, "url": "<issue の URL>", "decisions": ["<答え>"] }` に入れて `retrospective` をもう一度回す（`runs` と `events` は要らない。集計と起票は飛び、精査と実装だけが fable で走る）
 
-起票された issue を issue-workflow の `issues` に入れて回さない（同じ issue を 2 回実装する）。
+起票された issue を issue-workflow の `issues` に入れて回さない（同じ issue を 2 回実装するうえ、精査と実装が fable でなくなる）。
 
 ### 3. ユーザーへの報告
 

@@ -20,6 +20,8 @@ export const meta = {
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
+//   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
+//               集計と起票は飛ばし、精査と実装だけを回す（runs / events / since は要らない）
 // 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked）
 // ---------------------------------------------------------------------------
 
@@ -29,10 +31,17 @@ const TIERS = ['none', 'light', 'full']
 
 const a = args || {}
 if (typeof a !== 'object') throw new Error('args はオブジェクトで渡す')
-if (!Array.isArray(a.runs) || a.runs.length === 0) throw new Error('args.runs が空である')
-if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
-for (const k of ['since', 'scratchpad', 'trailers', 'base']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
-for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+for (const k of ['scratchpad', 'trailers', 'base']) if (a[k] === undefined) throw new Error(`args.${k} が無い`)
+// blocked の再開。集計に要る args は検査しない
+const reentry = a.retroIssue && typeof a.retroIssue === 'object' ? a.retroIssue : null
+if (reentry) {
+  if (!Number.isInteger(reentry.number) || typeof reentry.url !== 'string') throw new Error('args.retroIssue は { number, url, decisions? } で渡す')
+} else {
+  if (!Array.isArray(a.runs) || a.runs.length === 0) throw new Error('args.runs が空である')
+  if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
+  if (a.since === undefined) throw new Error('args.since が無い')
+  for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+}
 const dry = a.dryRun === true
 
 // --- スキーマ -----------------------------------------------------------
@@ -233,8 +242,9 @@ ${lessonList}
 - 起票する issue の本文の書き先: ${a.scratchpad}/retro-issue.md
 返答（構造化出力）: issueNumber、issueUrl、adopted、scriptChanges、rejected。起票しなかったときは issueNumber を省いて reason に理由を書く。`
   },
-  // 起票された issue の精査と実装。作業ツリーとブランチは issue 番号で決める（issue-workflow の実装エージェントと同じ流儀）
-  impl: (n, url) => {
+  // 起票された issue の精査と実装。作業ツリーとブランチは issue 番号で決める（issue-workflow の実装エージェントと同じ流儀）。
+  // decisions は blocked の再開でユーザーが決めた論点の答え
+  impl: (n, url, decisions) => {
     const wt = `${a.scratchpad}/wt-retro-${n}`
     const branch = `retro/${n}`
     return `ふりかえりで起票された issue #${n}（${url}）を精査し、直すべきものなら実装して PR を作ってほしい。対象のリポジトリは ${REPO}。
@@ -243,19 +253,34 @@ ${lessonList}
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
 - PR 本文の末尾の生成表記: 🤖 Generated with [Claude Code](https://claude.com/claude-code) と、その次の行に ${a.trailers.sessionUrl}
 - PR 本文と issue のコメントの下書きの置き場: ${a.scratchpad}/retro-${n}-*.md
-issue の主張は定義の「精査」の手順で裏を取ってから直す。マージと \`gh pr review\` はしない。
+${decisions && decisions.length ? `- 前回の精査で blocked にした論点へのユーザーの決定（これに従って実装する）:\n${decisions.map((d) => `  - ${d}`).join('\n')}\n` : ''}issue の主張は定義の「精査」の手順で裏を取ってから直す。マージと \`gh pr review\` はしない。
 返答（構造化出力）: status（pr / rejected / blocked）。pr のときは pr、prUrl、head、ciPassed。rejected のときは commentUrl と reason。blocked のときは commentUrl と questions。`
   },
 }
 
+/** 起票された issue を issue-retro-implementer に精査・実装させ、結果（status は pr / rejected / blocked）を返す */
+async function implement(n, url, decisions) {
+  log(`issue #${n} を精査して実装する${decisions && decisions.length ? `（ユーザーの決定 ${decisions.length} 件つき）` : ''}`)
+  const impl = await agent(P.impl(n, url, decisions), { label: `Retro implement #${n}`, agentType: 'issue-retro-implementer', phase: '精査と実装', schema: S.impl })
+  if (!impl) throw new Error(`Retro implement #${n} が結果を返さなかった`)
+  log(`精査と実装: ${impl.status}${impl.status === 'pr' ? `（PR #${impl.pr}）` : ''}`)
+  return impl
+}
+
 // --- 実行 -------------------------------------------------------------------
+if (reentry) {
+  log(`blocked の再開: issue #${reentry.number}（集計と起票は飛ばす）${dry ? '（dry run）' : ''}`)
+  if (dry) return { issueNumber: reentry.number, issueUrl: reentry.url, implementation: null, reason: 'dry run' }
+  return { issueNumber: reentry.number, issueUrl: reentry.url, implementation: await implement(reentry.number, reentry.url, reentry.decisions || []) }
+}
+
 log(`${a.runs.length} 件の journal から集計する${dry ? '（dry run）' : ''}`)
 const agg = aggregate(a.runs, a.events)
 log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished}、学び ${agg.totals.lessonCount} 件`)
 
 if (dry || agg.totals.lessonCount === 0) {
   log(dry ? 'dry run なので集計だけ返す' : '学びが 0 件なので issue を起票しない')
-  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びが 0 件' }
+  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びが 0 件', implementation: null }
 }
 
 const table = summaryMarkdown(agg.totals, a.since)
@@ -266,8 +291,4 @@ if (!retro.issueNumber) {
   return { ...agg, ...retro, implementation: null }
 }
 
-log(`issue #${retro.issueNumber} を精査して実装する`)
-const impl = await agent(P.impl(retro.issueNumber, retro.issueUrl), { label: `Retro implement #${retro.issueNumber}`, agentType: 'issue-retro-implementer', phase: '精査と実装', schema: S.impl })
-if (!impl) throw new Error(`Retro implement #${retro.issueNumber} が結果を返さなかった`)
-log(`精査と実装: ${impl.status}${impl.status === 'pr' ? `（PR #${impl.pr}）` : ''}`)
-return { ...agg, ...retro, implementation: impl }
+return { ...agg, ...retro, implementation: await implement(retro.issueNumber, retro.issueUrl, []) }
