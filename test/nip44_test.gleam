@@ -67,7 +67,7 @@ pub fn message_keys_vectors_test() {
         use chacha_key <- decode.field("chacha_key", hex_bytes())
         use chacha_nonce <- decode.field("chacha_nonce", hex_bytes())
         use hmac_key <- decode.field("hmac_key", hex_bytes())
-        let keys = <<chacha_key:bits, chacha_nonce:bits, hmac_key:bits>>
+        let keys = nip44.MessageKeys(chacha_key:, chacha_nonce:, hmac_key:)
         decode.success(#(nonce, keys))
       }),
     )
