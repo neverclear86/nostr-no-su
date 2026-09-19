@@ -89,10 +89,11 @@ PR の CI（`.github/workflows/test.yml`）は、build、単体テスト、forma
 
 ## レビューの前の機械的な検査
 
-プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りだけのスクリプトを置いている。CI では実行しない。エージェント（プラン、実装、レビュー）が手元で回し、出力をプランや PR 本文に貼る:
+プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りの検査と、コメントの投稿を機械化するスクリプトを置いている。CI では実行しない。エージェント（プラン、実装、レビュー）が手元で回し、出力をプランや PR 本文に貼る:
 
 ```sh
 sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（code / doc-comment / test / docs / config）を表にする。0 件も出す
 sh dev/pr_facts.sh <PR 番号>                     # head と base の SHA、差分の行数、閉じる issue、CI のジョブを 1 枚の表にする
 sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付きの手順を「1 つずつ別の Bash で実行される」前提で静的に検査する
+sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
 ```

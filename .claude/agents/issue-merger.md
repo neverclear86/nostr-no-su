@@ -24,14 +24,22 @@ gh pr checks <PR> -R $R
 ```
 
 コメントの絞り込みは 1 行目の HTML コメントのマーカーで行う。書式は `<!-- nns kind=<種別> round=<N> verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER|-> head=<SHA|-> -->` である。
-PR レビューの承認は `test("^<!-- nns kind=pr-review .* verdict=APPROVE")`、最終確認の承認は `test("^<!-- nns kind=gate .* verdict=APPROVE")` で絞る。見出しの完全一致は使わない（本文に見出しの語が引用されていても落とさないため）。
+PR レビューの承認は `test("^<!-- nns kind=pr-review .* verdict=APPROVE")`、最終確認の承認は `test("^<!-- nns kind=gate .* verdict=APPROVE")` で絞る。見出しの完全一致は使わない（本文に見出しの語が引用されていても落とさないため）。マーカーの無い投稿の検出（下）がこの代替になる。
+
+マーカーの無い投稿を次で列挙する。1 行目が `<!-- nns ` で始まらず、行頭の見出しが `## レビュー`、`## 最終確認`、`## まとめ`、`## …への対応` のいずれかであるコメントである。
+
+```sh
+gh api repos/$R/issues/<PR>/comments --jq '.[] | select((.body | split("\n")[0] | test("^<!-- nns ")) | not) | select(.body | test("(^|\n)## (レビュー|最終確認|まとめ|.*への対応)")) | .html_url'
+```
+
+上の列挙が 1 件でもあれば、見出しで代替せずに not_ready にし、problem に「マーカーが無いコメント」としてその URL を書く。
 APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（rebase の後も、その前のコミットはローカルの object DB に残る。無ければ `gh api repos/$R/commits/<その SHA> --jq .commit.committer.date` で時刻を得る）。PR の `commits[-1].committedDate` は現在の head の時刻なので、rebase の後の比較には使わない。
 
 - 指示された head が PR の head と一致する
 - 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
 - `kind=pr-review` の最後のコメントと `kind=gate` の最後のコメントが、どちらも `verdict=APPROVE` である
 - 最終確認の APPROVE のコメントが、指示された「最終確認が APPROVE を出した head」のコミットより後の時刻である（`git show -s --format=%cI <その head>` と比べる。現在の head とは比べない。rebase で head が変わっていても、その差分は下の range-diff で見る）
-- PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。`git -C <リポジトリ> log --oneline <PR レビューが APPROVE を出した head>..<最終確認が APPROVE を出した head>` で入った push を並べ、その範囲の各コミットが、APPROVE の後の `kind=fix` のマーカーの `head`（短い SHA なので前方一致で見る）までの範囲に収まることを確かめる。どの `kind=fix` にも対応しないコミットがあれば not_ready にする（レビューが要る）
+- PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。`git -C <リポジトリ> range-diff origin/main <PR レビューが APPROVE を出した head> <最終確認が APPROVE を出した head>` の `>` の行（レビューの後に増えたコミット）を見て、その各コミットが、APPROVE の後に投稿された `kind=fix` のマーカーの `head`（短い SHA なので前方一致で見る）のいずれかと一致することを確かめる。`=` の行は rebase で写ったコミットなので見ない。一致しないコミットがあれば not_ready にする（レビューが要る）
 - CI の `test` ジョブが pass である（pending なら `gh pr checks <PR> -R $R --watch` で待つ）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す
 

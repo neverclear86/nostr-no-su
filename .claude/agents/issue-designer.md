@@ -30,12 +30,8 @@ disallowedTools: Agent
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 出力
-標準的な技術文体の日本語（である調、一文一行）で書き、`gh issue comment <N> -R neverclear86/nostr-no-su --body-file <スクラッチパッドのファイル>` で投稿する。
-本文の 1 行目は次のマーカーにし、見出し「## デザインの方針」は 2 行目以降に置く（ワークフローの各段階がマーカーでコメントを探す）。
-
-```
-<!-- nns kind=design round=1 verdict=- head=- -->
-```
+標準的な技術文体の日本語（である調、一文一行）で書き、`sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh issue <N> design 1 - - <スクラッチパッドのファイル>` で投稿する。
+本文は見出し「## デザインの方針」から書く（マーカーは `post_comment.sh` が付ける）。
 
 決めたことごとに、決定、理由、捨てた案を書く。根拠の無い形容（「見やすい」「適切に」）を避け、既存の画面のどこに合わせたかを `ファイル:行` で示す。
 
