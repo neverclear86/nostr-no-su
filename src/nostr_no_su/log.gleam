@@ -104,11 +104,14 @@ pub fn sanitize_external(text: String) -> String {
 
 /// ログ行を分けたり端末の表示を変えたりしうるコードポイントか。C0
 /// （U+0000〜U+001F）、DEL と C1（U+007F〜U+009F）、行区切りと段落区切り
-/// （U+2028、U+2029）が対象である。
+/// （U+2028、U+2029）、双方向テキストの埋め込みと上書き（U+202A〜U+202E）、
+/// 分離（U+2066〜U+2069）が対象である。
 fn is_control(codepoint: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(codepoint)
   code < 0x20
   || { code >= 0x7f && code < 0xa0 }
   || code == 0x2028
   || code == 0x2029
+  || { code >= 0x202a && code <= 0x202e }
+  || { code >= 0x2066 && code <= 0x2069 }
 }

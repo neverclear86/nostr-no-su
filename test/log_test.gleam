@@ -26,3 +26,9 @@ pub fn sanitize_caps_the_bytes_of_combining_marks_test() {
   let text = "x" <> string.repeat("\u{0301}", 10_000)
   assert string.byte_size(log.sanitize(text, 200)) <= 4 * 200 + 3
 }
+
+/// 双方向テキストの制御文字は、それぞれ空白 1 文字に置き換わる。
+pub fn sanitize_replaces_bidi_controls_with_spaces_test() {
+  let text = "a\u{202A}b\u{202E}c\u{2066}d\u{2069}e"
+  assert log.sanitize(text, 200) == "a b c d e"
+}
