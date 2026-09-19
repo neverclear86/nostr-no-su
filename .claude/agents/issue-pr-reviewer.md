@@ -14,7 +14,7 @@ disallowedTools: Agent
 - リポジトリは `/home/lina/workspace/projects/nostr-no-su`。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - 再現は、指示された再現用の作業ツリーの絶対パスの下で行う
 - issue は `gh issue view <N> --comments`、PR は `gh pr view <PR> --comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む
-- 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `gh pr comment <PR> -R neverclear86/nostr-no-su --body-file <スクラッチパッドのファイル>` で投稿する
+- 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `sh <作業ツリー>/dev/post_comment.sh pr <PR> pr-review <R> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で投稿する（`REQUEST CHANGES` は空白を含むので二重引用符で囲む）
 
 ## レビューの基準
 - プランとの照合: 差分がプランの「変更するファイル」と一致するか（プランの本文は `<details>` に畳まれているので、そこまで読む）。プランの「### 実装時の条件」が取り込まれているか。プランに無い変更は PR 本文の「プランからの変更」に書かれ、妥当か。プランの字面どおりの実装は、それだけでは should にしない。「決めたこと」に反すると示せるときだけ should にし、プランの字面そのものが誤りなら must にして designMust を立てる
@@ -56,11 +56,9 @@ must には**直し方の案を書かない**。該当・問題・根拠だけ�
 ## 出力
 標準的な技術文体の日本語（である調、一文一行）で書き、PR のコメントとして投稿する。書式は次のとおり。
 
-1 行目はマーカーで、見出しは 2 行目以降に置く。判定と件数の行までを見せ、指摘の本文と「確認したこと」は `<details>` に畳む。
+本文は見出しから書く（マーカーは `post_comment.sh` が付ける）。判定と件数の行までを見せ、指摘の本文と「確認したこと」は `<details>` に畳む。
 
 ```
-<!-- nns kind=pr-review round=R verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER> head=<短い head SHA> -->
-
 ## レビュー（ラウンド R）
 
 対象: <短い head SHA>

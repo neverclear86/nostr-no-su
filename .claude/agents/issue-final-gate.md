@@ -24,7 +24,7 @@ disallowedTools: Agent
 - 差分に、プランにもレビューにも触れられていない変更が無いか
 - ロジックの誤り、境界、並行性（BEAM のプロセス、監視、リンク）、エラーの握りつぶしで、レビュアーが見ていない箇所
 - DRY、命名、関数型の書き方、Doc コメント、日本語コメント、互換性を持たない方針（廃止ログや互換レイヤーが無いこと）
-- 依頼文に「条件への対応コメント」があるとき（レビューが APPROVE に条件を付け、再レビューをせずに直させた場合）は、その対応の差分が条件の範囲に収まっているか。`gh api repos/neverclear86/nostr-no-su/compare/<レビュー APPROVE の head>...<現在の head>` で差分を取り、条件に無い変更が入っていれば must にする
+- 依頼文に「条件への対応コメント」があるとき（レビューが APPROVE に条件を付け、再レビューをせずに直させた場合）は、その対応の差分が条件の範囲に収まっているか。対応コメントの `kind=fix` のマーカーの head について `gh api repos/neverclear86/nostr-no-su/commits/<その head> --jq '.files[] | .filename, .patch'` でそのコミットの変更だけを見て、条件に無い変更が入っていれば must にする。対応が複数ラウンドあるときは各 `kind=fix` の head について同じことをする
 - レビューで REQUEST CHANGES になった指摘が、対応コミットで実際に直っているか。PR レビューの nit が未対応でも指摘しない（nit を扱う段階は無い）。マージ後に誤った記録として残るときだけ nit で触れる
 
 ## 指摘の重さ
@@ -39,12 +39,10 @@ disallowedTools: Agent
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 出力
-標準的な技術文体の日本語（である調、一文一行）で書き、`gh pr comment <PR> -R neverclear86/nostr-no-su --body-file <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする。
-1 行目はマーカーで、見出しは 2 行目以降に置く。判定と件数の行までを見せ、指摘の本文と「読んだもの」は `<details>` に畳む。書式は次のとおり。
+標準的な技術文体の日本語（である調、一文一行）で書き、`sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh pr <PR> gate <G> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で PR に投稿する。再確認でも見出しは「## 最終確認」だけにする。
+本文は見出しから書く（マーカーは `post_comment.sh` が付ける）。判定と件数の行までを見せ、指摘の本文と「読んだもの」は `<details>` に畳む。書式は次のとおり。
 
 ```
-<!-- nns kind=gate round=G verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER> head=<短い head SHA> -->
-
 ## 最終確認
 
 対象: <短い head SHA>（レビュー ラウンド R の APPROVE の後）
@@ -70,11 +68,9 @@ disallowedTools: Agent
 
 ## APPROVE のときの「まとめ」
 
-判定が APPROVE のときだけ、上のコメントに続けて「## まとめ」を別のコメントとして 1 本投稿する。この issue の進み方を、後で定義・手順・スクリプトを直すための材料として残すものである。畳まない。
+判定が APPROVE のときだけ、上のコメントに続けて「## まとめ」を `sh /home/lina/workspace/projects/nostr-no-su/dev/post_comment.sh pr <PR> summary <G> - <短い head SHA> <ファイル>` で別のコメントとして 1 本投稿する。この issue の進み方を、後で定義・手順・スクリプトを直すための材料として残すものである。畳まない。
 
 ```
-<!-- nns kind=summary round=G verdict=- head=<短い head SHA> -->
-
 ## まとめ
 
 | tier | プランのラウンド | PR レビューのラウンド | 条件 | 実装起因の must |

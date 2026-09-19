@@ -202,7 +202,7 @@ const common = (e) => `- 土台: origin/main の ${e.base}
 - docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
 /** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
 const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
-- issue と PR のコメントは \`--body-file <ファイル>\` で投稿する。\`--body @file\` はファイル名がそのまま本文になる。既存のコメントは編集しない`
+- issue と PR のコメントは \`dev/post_comment.sh\` で投稿する（マーカーを機械的に付ける）。既存のコメントは編集しない`
 /** プランレビューが APPROVE に添えた実装時の条件を依頼文にする。null は planUrl で始めた issue（条件は投稿済みのプランにしか無い） */
 const conditionsNote = (conditions) => conditions === null
   ? '- 実装時の条件: 投稿済みのプランの冒頭の「### 実装時の条件」を読み、あれば取り込んで PR 本文の「プランからの変更」に書く\n'
@@ -216,7 +216,7 @@ ${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザ�
 返答（構造化出力）: status、tier、split のときは subIssues（各サブ issue の番号と、先にマージされている必要がある兄弟の番号 after）、summary に見込みの行数とファイル数と「決めたこと」の件数。`,
   design: (e, issue) => `issue #${e.n} は管理 UI を変える。プランの前にデザインの方針を決めて、issue にコメントしてほしい。
 issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。管理 UI のソースは ${REPO_DIR}/src/nostr_no_su/admin/ にある（ユーザーの作業ツリーなので読むだけにする）。
-画面構成、使うコンポーネント（daisyUI）、テーマ、狭い幅（375px）、空とエラーの状態の方針を、標準的な技術文体の日本語（である調、一文一行）で \`gh issue comment ${e.n} -R ${REPO} --body-file <スクラッチパッドのファイル>\` で投稿する。
+画面構成、使うコンポーネント（daisyUI）、テーマ、狭い幅（375px）、空とエラーの状態の方針を、標準的な技術文体の日本語（である調、一文一行）で \`sh ${REPO_DIR}/dev/post_comment.sh issue ${e.n} design 1 - - <スクラッチパッドのファイル>\` で投稿する。
 ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメントの URL。`,
   plan1: (e, issue, designUrl, prReviewUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
@@ -351,7 +351,7 @@ ${SAFETY}
   // 経緯（tier、ラウンド数、条件）は「## まとめ」の材料でもあるので、最終確認の依頼文でそのまま渡す
   gateCourse: (state) => `- この実行の経緯: tier ${state.tier}、プランのラウンド数 ${state.planRounds}、PR レビューのラウンド数 ${state.prRounds}、APPROVE に付いた条件 ${state.prConditionCount} 件、実装起因の must ${state.implMusts} 件
 - PR レビューが APPROVE を出した head: ${state.reviewApprovedHead}
-${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（対応後の head ${state.head}）。\`gh api repos/${REPO}/compare/${state.reviewApprovedHead}...${state.head}\` で、対応の差分が条件 ${state.prConditionCount} 件の範囲に収まっているかも見る。範囲を超える変更があれば must にする\n` : ''}`,
+${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（対応後の head ${state.head}）。対応コメントのマーカーの head のコミットを \`gh api repos/${REPO}/commits/<その head> --jq '.files[] | .filename, .patch'\` で見て、対応の差分が条件 ${state.prConditionCount} 件の範囲に収まっているかも見る。範囲を超える変更があれば must にする\n` : ''}`,
   gate1: (e, state, issue) => `PR #${state.pr}（issue #${e.n}、head ${state.head}）の最終確認をしてほしい。
 - 最終確認のラウンド: ${state.gateRounds}（コメントのマーカーの round に使う）
 - ${state.postUrl ? `承認済みのプラン: ${state.postUrl}` : `承認済みのプランは無い（tier none）。照合の相手は issue #${e.n} の受け入れ条件と、PR 本文の「## 設計メモ」である`}

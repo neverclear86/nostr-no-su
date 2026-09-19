@@ -1,6 +1,7 @@
 # 書式
 
 下の「マーカー」以降がこの文書の定める今の書式である。迷ったらそちらに従う。
+下の各節のブロックは本文ファイルの中身で、投稿されたコメントの 1 行目には `dev/post_comment.sh` が付けるマーカーが入る。
 改修前の形の手本として issue #56 のコメント（プラン 4 版とプランレビュー 4 ラウンド）と PR #61 のコメント（レビュー 2 ラウンドと対応 2 件）がある。
 これらはマーカーも畳み込みも往復の上限 2 も無い時期のものなので、節の構成だけを参考にし、書式は写さない。
 改修後の手本は、最初の実行の PR を後で足す。
@@ -19,6 +20,8 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 ```
 <!-- nns kind=<種別> round=<N> verdict=<APPROVE|REQUEST CHANGES|NEEDS_USER|-> head=<短い SHA|-> -->
 ```
+
+投稿は `sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>` で行う。マーカー行はスクリプトが引数から機械的に作るので、本文ファイルには書かない。引数の `kind` / `round` / `verdict` / `head` は下の表の欄がそのまま対応する。
 
 | kind | 投稿するもの | round | verdict | head |
 | --- | --- | --- | --- | --- |
@@ -49,8 +52,6 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 ## issue に投稿するプラン（プランレビュアーが APPROVE のときに投稿）
 
 ```
-<!-- nns kind=plan round=R verdict=APPROVE head=- -->
-
 ## 実装プラン（版 N）
 
 #N の実装プランである。土台は origin/main の `SHA` で、…。
@@ -98,8 +99,6 @@ Closes #N
 ## PR レビュー（PR レビュアーが投稿）
 
 ```
-<!-- nns kind=pr-review round=R verdict=APPROVE head=<短い SHA> -->
-
 ## レビュー（ラウンド R）
 
 対象: <短い SHA>
@@ -130,8 +129,6 @@ Closes #N
 ## 最終確認（issue-final-gate が投稿）
 
 ```
-<!-- nns kind=gate round=G verdict=APPROVE head=<短い SHA> -->
-
 ## 最終確認
 
 対象: <短い SHA>（レビュー ラウンド R の APPROVE の後）
@@ -152,8 +149,6 @@ Closes #N
 ## まとめ（issue-final-gate が APPROVE の後に 1 本投稿）
 
 ```
-<!-- nns kind=summary round=G verdict=- head=<短い SHA> -->
-
 ## まとめ
 
 | tier | プランのラウンド | PR レビューのラウンド | 条件 | 実装起因の must |
@@ -171,8 +166,6 @@ Closes #N
 最終確認の指摘への対応は見出しを「## 最終確認の指摘への対応（<短い SHA>）」、レビューの条件への対応は「## レビューの条件への対応（<短い SHA>）」にする。マーカーはどれも `kind=fix` である（マージ担当がこれで「条件への対応の push」を判別する）。
 
 ```
-<!-- nns kind=fix round=R verdict=- head=<短い SHA> -->
-
 ## レビュー（ラウンド R）の指摘への対応（<短い SHA>）
 
 レビュー: <コメントの URL>
