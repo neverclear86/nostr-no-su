@@ -278,6 +278,22 @@ pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
   stop(pid)
 }
 
+/// バンカーアクターが動いていなければ、アカウントの変更はどれも
+/// `MaybeApplied(BunkerDidNotRespond)` を返す（打ち切った後にアクターが処理し
+/// うるため）。
+pub fn account_changes_without_a_bunker_are_not_answered_test() {
+  let name = process.new_name("account_store_test_missing_bunker")
+  let entry = random_entry("missing-bunker")
+  assert bunker.add_account(name, entry.account, entry.label)
+    == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.remove_account(name, "signer")
+    == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.rotate_secret(name, "signer")
+    == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
+  assert bunker.update_label(name, "signer", "label")
+    == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
+}
+
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
 /// ときだけ実行する。同じ DB に対して `gleam test`
 /// を並行実行することは想定していない。
