@@ -12,8 +12,9 @@
 //// リレーやイベントなど外部由来の文字列は、改行や制御文字を含みうるので、
 //// ログ行に入れる前に必ず `sanitize`（または `sanitize_external`）を通す。
 
+import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
-import gleam/list
+import gleam/result
 import gleam/string
 
 /// リレーやイベント由来の値をログに入れるときの既定の上限（コードポイントの数）。
@@ -78,22 +79,41 @@ pub fn plugin_prefix(name: String) -> String {
 /// 外部由来の文字列を 1 行に収める。先頭の `max` コードポイントだけを取り、
 /// 改行と端末の制御を含む制御文字を空白 1 文字に置き換え、切った場合は `...`
 /// を付ける。書記素ではなくコードポイントで数えるので、戻り値は UTF-8 で
-/// `4 * max + 3` バイト以下になる。
+/// `4 * max + 3` バイト以下になる。入力の先頭だけを読むので、処理時間は
+/// 入力の長さによらない。
 pub fn sanitize(text: String, max: Int) -> String {
-  let codepoints = string.to_utf_codepoints(text)
-  let body =
-    codepoints
-    |> list.take(max)
-    |> list.map(fn(codepoint) {
-      case is_control(codepoint) {
-        True -> " "
-        False -> string.from_utf_codepoints([codepoint])
-      }
-    })
-    |> string.concat
-  case list.length(codepoints) > max {
+  let #(body, truncated) =
+    sanitize_prefix(bit_array.from_string(text), max, <<>>)
+  let body = result.unwrap(bit_array.to_string(body), "")
+  case truncated {
     True -> body <> "..."
     False -> body
+  }
+}
+
+/// UTF-8 のビット列 `rest` の先頭から最大 `remaining` 個のコードポイントを読み、
+/// 制御文字を空白 1 文字に置き換えた本文と、まだ残りがあるか（切ったか）を
+/// 返す。末尾再帰で、読むのは先頭の `remaining` 個だけである。
+fn sanitize_prefix(
+  rest: BitArray,
+  remaining: Int,
+  acc: BitArray,
+) -> #(BitArray, Bool) {
+  case rest {
+    <<>> -> #(acc, False)
+    _ if remaining <= 0 -> #(acc, True)
+    <<codepoint:utf8_codepoint, tail:bits>> ->
+      case is_control(codepoint) {
+        True -> sanitize_prefix(tail, remaining - 1, <<acc:bits, " ":utf8>>)
+        False ->
+          sanitize_prefix(tail, remaining - 1, <<
+            acc:bits,
+            codepoint:utf8_codepoint,
+          >>)
+      }
+    // UTF-8 として妥当な String から作ったビット列なので到達しない。ビット配列
+    // パターンの網羅のための分岐であり、切ってはいないものとして扱う。
+    _ -> #(acc, False)
   }
 }
 
