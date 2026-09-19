@@ -38,6 +38,11 @@ fn sha256_hex(text: String) -> String {
   hex.encode(crypto.hash(crypto.Sha256, bit_array.from_string(text)))
 }
 
+/// ブロックカウンター 0、12 バイト nonce の ChaCha20。`nip44.message_keys` から
+/// 得た鍵で、非正規のペイロードを組み立てるために直接呼ぶ。
+@external(erlang, "nostr_no_su_ffi", "chacha20")
+fn chacha20(key: BitArray, nonce: BitArray, data: BitArray) -> BitArray
+
 /// valid.get_conversation_key: 秘密鍵と公開鍵から同じ conversation key を導く。
 pub fn conversation_key_vectors_test() {
   let vectors =
@@ -141,14 +146,92 @@ pub fn encrypt_decrypt_long_msg_vectors_test() {
   assert nip44.decrypt(payload, key) == Ok(plaintext)
 }
 
-/// invalid.encrypt_msg_lengths: 1〜65535 バイトの範囲外の平文は暗号化しない。
-pub fn encrypt_rejects_invalid_length_vectors_test() {
+/// invalid.encrypt_msg_lengths: ベクターが挙げる長さのうち 1 バイト未満のものは
+/// 拒否する。65536 以上の 3 件は拡張長さプレフィックスで暗号化でき、復号で元に
+/// 戻る。上流のベクターは拡張長さプレフィックスの導入に追従しておらず、これらを
+/// いまだ invalid として挙げている。
+pub fn encrypt_msg_lengths_vectors_test() {
   let lengths =
     section(["invalid", "encrypt_msg_lengths"], decode.list(decode.int))
   use length <- list.each(lengths)
-  let result =
-    nip44.encrypt_with_nonce(string.repeat("a", length), <<1:256>>, <<1:256>>)
-  assert #(length, result) == #(length, Error(nip44.InvalidPlaintextLength))
+  let plaintext = string.repeat("a", length)
+  case length >= 1 {
+    False -> {
+      let result = nip44.encrypt_with_nonce(plaintext, <<1:256>>, <<1:256>>)
+      assert #(length, result) == #(length, Error(nip44.InvalidPlaintextLength))
+    }
+    True -> {
+      let assert Ok(payload) =
+        nip44.encrypt_with_nonce(plaintext, <<1:256>>, <<1:256>>)
+      assert #(length, nip44.decrypt(payload, <<1:256>>))
+        == #(length, Ok(plaintext))
+    }
+  }
+}
+
+/// NIP-44 の「Extended length prefix test vectors」の表。2 バイトと 6 バイトの
+/// プレフィックスの境目で、padded_len と平文・ペイロードの SHA-256 が表と一致
+/// する。取得元は `nostr-protocol/nips` の commit
+/// `733a0471804116e1e3958a895435c2f08ce800fa`（`44.md` を最後に変えた commit）の
+/// `44.md` の「Extended length prefix test vectors」の節、URL は
+/// https://raw.githubusercontent.com/nostr-protocol/nips/733a0471804116e1e3958a895435c2f08ce800fa/44.md、
+/// そのファイルの SHA-256 は
+/// `b5f89374e4e1dbdee7881e8573b4313b6a89430a9c8d518471599ae0660cf0e2`。
+pub fn extended_length_prefix_vectors_test() {
+  let key =
+    bytes("c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d")
+  let nonce =
+    bytes("0000000000000000000000000000000000000000000000000000000000000001")
+  let rows = [
+    #(
+      65_535,
+      65_536,
+      "6e1bebca6a8229364a162a72ef064826c4cd7457bf54f190ef782bd9deff3e42",
+      "6d8c2810d1e870fbaa1f0a0937126cca837a15f9260e27060c331d70a3c0bc84",
+    ),
+    #(
+      65_536,
+      65_536,
+      "bf718b6f653bebc184e1479f1935b8da974d701b893afcf49e701f3e2f9f9c5a",
+      "b7b4edb36ba92e267d322d56d9aebc22e7fa96ff52e3c12adc07f07a43cbc616",
+    ),
+    #(
+      65_537,
+      81_920,
+      "008ffc88d3c96a9f307524eb361e47c5222a887fc45fa0c1fb8d429c5c23b430",
+      "eeb7c7c5373894ea2c1547cfd3ccb15d5a0b2d619da852e5c79df792dcc9e435",
+    ),
+  ]
+  use #(length, padded_len, plaintext_sha256, payload_sha256) <- list.each(rows)
+  let plaintext = string.repeat("a", length)
+  assert #(length, sha256_hex(plaintext)) == #(length, plaintext_sha256)
+  assert #(length, nip44.calc_padded_len(length)) == #(length, padded_len)
+  let assert Ok(payload) = nip44.encrypt_with_nonce(plaintext, key, nonce)
+  assert #(length, sha256_hex(payload)) == #(length, payload_sha256)
+  assert #(length, nip44.decrypt(payload, key)) == #(length, Ok(plaintext))
+}
+
+/// 65536 未満の長さを 6 バイトの拡張プレフィックスで表した非正規のペイロードは、
+/// 全長が calc_padded_len と合っていても復号しない。
+pub fn decrypt_rejects_non_canonical_extended_prefix_test() {
+  let key = <<1:256>>
+  let nonce = <<1:256>>
+  let nip44.MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
+    nip44.message_keys(key, nonce)
+  let padded_len = nip44.calc_padded_len(100)
+  let pad_bytes = padded_len - 100
+  let padded = <<
+    0:size(16),
+    100:size(32),
+    string.repeat("a", 100):utf8,
+    0:size(pad_bytes)-unit(8),
+  >>
+  let ciphertext = chacha20(chacha_key, chacha_nonce, padded)
+  let mac =
+    crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
+  let payload =
+    bit_array.base64_encode(<<2, nonce:bits, ciphertext:bits, mac:bits>>, True)
+  assert nip44.decrypt(payload, key) == Error(nip44.InvalidPayload)
 }
 
 /// invalid.get_conversation_key: 範囲外の秘密鍵や、曲線上に無い公開鍵からは

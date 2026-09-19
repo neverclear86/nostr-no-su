@@ -2180,25 +2180,6 @@ pub fn a_failed_touch_still_thins_the_next_write_test() {
   let assert Reply(_) = outcome_restored
 }
 
-/// `response` は組めても `on_failure` が上限（65535 バイト、`nip44.gleam:97`）を
-/// 超えて組めないときは、`Ignore` になり書き込みも状態の変更も残らない。71 は
-/// `auth_url` 応答の id 以外のバイト数（`{"id":"","result":"auth_url","error":`
-/// `"http://admin.test/approve/tok-1"}`）で、id をこの長さにすると `response`
-/// はちょうど 65535 バイト、`on_failure`（`connection_not_saved` の分 id + 83
-/// バイト）は上限を超え、要求本体（id + 40 バイト）は上限に収まる。
-pub fn unbuildable_on_failure_is_ignored_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let huge_id = string.repeat("x", 65_535 - 71)
-  let request =
-    request_event(client, signer, request_body(huge_id, "connect", "[]"), 1000)
-  let #(state, outcome) = handle(auth_engine(), request, 1000)
-  assert outcome == Ignore("failed to encrypt response")
-  assert engine.pending(state, 1000) == []
-  let #(_state, replayed) = handle(state, request, 1000)
-  assert replayed == Duplicate
-}
-
 // --- 復元 ---
 
 /// `restore` したセッションのクライアントは、`connect` なしで `sign_event`
