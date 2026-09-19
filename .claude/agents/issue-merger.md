@@ -30,7 +30,7 @@ APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（re
 - 指示された head が PR の head と一致する
 - 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
 - `kind=pr-review` の最後のコメントと `kind=gate` の最後のコメントが、どちらも `verdict=APPROVE` である
-- 最終確認の APPROVE のコメントが、現在の head のコミットより後の時刻である（`git show -s --format=%cI <head>` と比べる）
+- 最終確認の APPROVE のコメントが、指示された「最終確認が APPROVE を出した head」のコミットより後の時刻である（`git show -s --format=%cI <その head>` と比べる。現在の head とは比べない。rebase で head が変わっていても、その差分は下の range-diff で見る）
 - PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。どちらでもない push があれば not_ready にする（レビューが要る）
 - CI の `test` ジョブが pass である（pending なら `gh pr checks <PR> -R $R --watch` で待つ）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す

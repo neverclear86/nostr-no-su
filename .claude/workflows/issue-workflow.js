@@ -579,9 +579,11 @@ async function gateStage(e, issue, state) {
     state.prRounds++
     const rev = await call('pr-review', `PR review #${state.pr} r${state.prRounds}`, P.prReviewNext(e, state.pr, state.prRounds, responseUrl, state.head, gate.commentUrl, '最終確認'), { agentType: 'issue-pr-reviewer', phase: '最終確認', schema: S.prReviewer })
     if (rev.verdict !== 'APPROVE') return { stalled: { stage: 'gate', reason: `最終確認の指摘への対応が PR レビューで APPROVE にならない（must ${rev.must}、should ${rev.should}）` } }
+    const prevConditionsUrl = state.conditionsUrl
     const ac = await applyPrConditions(e, state, rev, '最終確認')
     if (ac.blocked) return ac
-    if (state.conditionsUrl) responseUrl = state.conditionsUrl
+    // この再レビューでも条件が付いたときだけ、再確認に渡す対応コメントを差し替える
+    if (state.conditionsUrl !== prevConditionsUrl) responseUrl = state.conditionsUrl
   }
   return { stalled: { stage: 'gate', reason: `最終確認が ${MAX_GATE_ROUNDS} 回で APPROVE にならない` } }
 }
