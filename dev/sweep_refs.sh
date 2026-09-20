@@ -3,12 +3,12 @@
 # git grep で列挙し、プランや PR 本文にそのまま貼れる Markdown の表にする。
 # 変更する語の追随先（Doc コメント、文書、設定、テスト）の洗い出しに使う。
 #
-# 探す範囲は src、test、dev、docs、README.md、CLAUDE.md、.env.example、.claude、
-# plugins-src、docker の追跡されたファイル（build/ と node_modules は除く）。
+# 探す範囲は src、test、dev、docs、README.md、CLAUDE.md、NOTICE、LICENSE、.env.example、
+# .claude、plugins-src、docker の追跡されたファイル（build/ と node_modules は除く）。
 # 語は大文字小文字を区別し、単語の境界で一致させる（git grep -w -F）。
 # `Persist` は `Persisted` に一致しないので、部分一致が要るときは語を分けて渡す。
 #
-# 種別は次のとおり。doc-comment: `///` の行（test/ の下でも）、test: test/ の下、docs: docs/ と *.md、
+# 種別は次のとおり。doc-comment: `///` の行（test/ の下でも）、test: test/ の下、docs: docs/ と *.md と NOTICE と LICENSE、
 # config: .env.example、.claude、docker、*.toml、*.yml、code: それ以外。
 # 0 件の語も「0 件」と出す（確かめたことの証拠になる）。作業ツリーには書き込まない。
 #
@@ -21,7 +21,7 @@ shift
 git -C "$tree" rev-parse --show-toplevel > /dev/null
 
 # 探す範囲。存在しないパスは git grep が黙って 0 件にする。
-paths='src test dev docs README.md CLAUDE.md .env.example .claude plugins-src docker'
+paths='src test dev docs README.md CLAUDE.md NOTICE LICENSE .env.example .claude plugins-src docker'
 
 echo "| 語 | ファイル:行 | 種別 | 行の内容 |"
 echo "|--|--|--|--|"
@@ -46,7 +46,7 @@ for word in "$@"; do
         kind = "code"
         if (text ~ /^\/\/\//) kind = "doc-comment"
         else if (file ~ /^test\//) kind = "test"
-        else if (file ~ /^docs\// || file ~ /\.md$/) kind = "docs"
+        else if (file ~ /^docs\// || file ~ /\.md$/ || file ~ /^(NOTICE|LICENSE)$/) kind = "docs"
         else if (file ~ /^(\.env\.example|\.claude\/|docker\/)/ || file ~ /\.(toml|yml|yaml)$/) kind = "config"
         if (length(text) > 80) text = substr(text, 1, 77) "..."
         gsub(/\|/, "\\|", text); gsub(/`/, "\047", text)
