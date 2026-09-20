@@ -96,12 +96,14 @@ pub fn relay_action_page(
   }
   let delete_link = case action {
     dashboard.EditRelayRoles -> [
-      view.icon_button_link(
-        dashboard.relay_action_path(relay.id, dashboard.DeleteRelay),
-        view.trash_icon(),
-        text(i18n.Delete),
-        view.Destructive,
-      ),
+      html.div([], [
+        view.icon_button_link(
+          dashboard.relay_action_path(relay.id, dashboard.DeleteRelay),
+          view.trash_icon(),
+          text(i18n.Delete),
+          view.Destructive,
+        ),
+      ]),
     ]
     dashboard.DeleteRelay -> []
   }
