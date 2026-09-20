@@ -4,6 +4,7 @@ import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner.{
@@ -188,7 +189,10 @@ pub fn record_delivery_reports_the_count_when_the_runner_is_back_test() {
   assert plugin_runner.record_delivery(target, True)
     == #(
       Target(..target, undelivered: 0),
-      Some("runner is back; dropped 4 events while it was unavailable"),
+      Some(
+        "runner is back; dropped 4 events while it was unavailable; "
+        <> "it will re-request them if it has a resume point",
+      ),
     )
 }
 
@@ -241,7 +245,10 @@ pub fn reenable_returns_a_disabled_plugin_to_running_test() {
   assert plugin_runner.reenable(Disabled(reason: "error:badarg", dropped: 12))
     == #(
       Running,
-      Some("re-enabled by the operator; dropped 12 events while disabled"),
+      Some(
+        "re-enabled by the operator; dropped 12 events while disabled; "
+        <> "it will re-request them if it has a resume point",
+      ),
     )
 }
 
@@ -407,6 +414,35 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
 pub fn a_missing_runner_has_no_catchup_test() {
   let name = process.new_name("test_plugin_runner")
   assert plugin_runner.catchup(name) == Error(Nil)
+}
+
+/// 無効化の間に届いた取り直しのイベントは捨てるだけで、重複排除の `seen` にも
+/// 残さない。再有効化のあとに同じ id が届けば実行される。捨てた時点で `seen`
+/// に残すと、次の取り直しで弾かれて二度と渡らないためである。
+pub fn a_catchup_event_dropped_while_disabled_is_not_marked_as_seen_test() {
+  let handled = process.new_subject()
+  let name =
+    start_runner(
+      fn(incoming: Event) {
+        case incoming.id {
+          "bad" -> panic as "boom"
+          id -> process.send(handled, id)
+        }
+      },
+      Limits(..limits, max_failures: 3),
+    )
+  let targets = [plugin_runner.target("runner_test", name)]
+  list.each(list.repeat(Nil, 3), fn(_unit) {
+    plugin_runner.dispatch(targets, test_event("bad"))
+  })
+  let assert Some(Disabled(..)) = plugin_runner.status(name)
+
+  named.send(name, plugin_runner.HandleCatchup(test_event("missed")))
+  assert plugin_runner.request_reenable(name) == Some(Nil)
+  named.send(name, plugin_runner.HandleCatchup(test_event("missed")))
+
+  assert process.receive(handled, 1000) == Ok("missed")
+  assert process.receive(handled, 200) == Error(Nil)
 }
 
 /// `Overloaded` からの復帰（`admit` がキューの減りで `Running` に戻す遷移）は

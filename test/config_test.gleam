@@ -522,6 +522,14 @@ pub fn catchup_subscriptions_test() {
     ]
 }
 
+/// 取り直しの購読 id からはプラグイン名が戻る。監視の購読 id とそれ以外は
+/// `None` になる。
+pub fn catchup_plugin_test() {
+  assert config.catchup_plugin("nostr-no-su-catchup-a") == Some("a")
+  assert config.catchup_plugin("nostr-no-su") == None
+  assert config.catchup_plugin("other") == None
+}
+
 /// 署名者がいれば `#p` に入れて購読し、いなければ購読そのものを開かない。
 pub fn bunker_subscriptions_test() {
   assert config.bunker_subscriptions([], 1000) == []

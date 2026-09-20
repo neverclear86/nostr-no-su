@@ -118,7 +118,10 @@ pub fn fake_open(
     process.send(
       reports,
       Opened(relay_url, process.self(), socket, fn(sent) {
-        handle_event(signed_event.verified(sent))
+        handle_event(relay_client.ReceivedEvent(
+          config.monitor_subscription_id,
+          signed_event.verified(sent),
+        ))
       }),
     )
     Ok(
