@@ -18,11 +18,15 @@ const hostile = "<script>\"x\"</script>"
 /// `hostile` をエスケープした表記。
 const escaped = "&lt;script&gt;&quot;x&quot;&lt;/script&gt;"
 
+/// 実寸の npub（63 文字）。`view.shorten` が省略することを検査できるよう、`"npub1example"`
+/// のような短い値は使わない。
+const example_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+
 /// 指定したラベルを持つアカウントの行。
 fn row(label: String) -> dashboard.AccountRow {
   dashboard.AccountRow(
     signer: "abcd",
-    npub: "npub1example",
+    npub: example_npub,
     label: label,
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
@@ -33,7 +37,7 @@ fn row(label: String) -> dashboard.AccountRow {
 fn skipped_row(label: String) -> dashboard.SkippedRow {
   dashboard.SkippedRow(
     pubkey: "abcd",
-    npub: "npub1example",
+    npub: example_npub,
     label: label,
     reason: vault.UndecryptablePrivateKey,
   )
@@ -60,6 +64,7 @@ pub fn account_pages_escape_the_label_test() {
     account_pages.generated_key_page(
       i18n.English,
       view.System,
+      example_npub,
       "nsec1example",
       hostile,
       None,
@@ -139,7 +144,10 @@ pub fn edit_label_page_uses_the_given_label_test() {
       None,
     )
   assert string.contains(unset, "value=\"saved\"")
-  assert string.contains(unset, "<dd class=\"break-words\">saved</dd>")
+  assert string.contains(
+    unset,
+    "<p class=\"font-semibold break-words\">saved</p>",
+  )
   let overridden =
     account_pages.account_action_page(
       i18n.English,
@@ -150,7 +158,98 @@ pub fn edit_label_page_uses_the_given_label_test() {
       None,
     )
   assert string.contains(overridden, "value=\"sent\"")
-  assert string.contains(overridden, "<dd class=\"break-words\">saved</dd>")
+  assert string.contains(
+    overridden,
+    "<p class=\"font-semibold break-words\">saved</p>",
+  )
+}
+
+/// 登録の完了ページは、対象のアカウントをラベルと省略した npub で示す。
+pub fn registered_page_shows_the_shortened_npub_test() {
+  let page =
+    account_pages.registered_page(
+      i18n.English,
+      view.System,
+      example_npub,
+      "main",
+      "nsec1example",
+    )
+  assert string.contains(
+    page,
+    "<p class=\"font-semibold break-words\">main</p>",
+  )
+  assert string.contains(page, view.shorten(example_npub))
+}
+
+/// 秘密鍵の表示ページは、対象のアカウントをラベルと省略した npub で示す。
+pub fn private_key_page_shows_the_shortened_npub_test() {
+  let page =
+    account_pages.private_key_page(
+      i18n.English,
+      view.System,
+      row("main"),
+      "nsec1example",
+    )
+  assert string.contains(
+    page,
+    "<p class=\"font-semibold break-words\">main</p>",
+  )
+  assert string.contains(page, view.shorten(example_npub))
+}
+
+/// 生成した鍵の確認ページは、生成した鍵の省略した npub を出す。
+pub fn generated_key_page_shows_the_shortened_npub_test() {
+  let page =
+    account_pages.generated_key_page(
+      i18n.English,
+      view.System,
+      example_npub,
+      "nsec1example",
+      "",
+      None,
+    )
+  assert string.contains(page, view.shorten(example_npub))
+}
+
+/// アカウント 1 件への操作の確認ページと、読み込めなかった行の削除の確認ページは、
+/// 対象のアカウントをラベルと省略した npub で示す。
+pub fn account_action_pages_show_the_shortened_npub_test() {
+  use action <- list.each(account_actions.all)
+  let page =
+    account_pages.account_action_page(
+      i18n.English,
+      view.System,
+      row("main"),
+      action,
+      None,
+      None,
+    )
+  assert string.contains(
+    page,
+    "<p class=\"font-semibold break-words\">main</p>",
+  )
+  assert string.contains(page, view.shorten(example_npub))
+  let unreadable_page =
+    account_pages.unreadable_delete_page(
+      i18n.English,
+      view.System,
+      skipped_row("main"),
+      None,
+    )
+  assert string.contains(
+    unreadable_page,
+    "<p class=\"font-semibold break-words\">main</p>",
+  )
+  assert string.contains(unreadable_page, view.shorten(example_npub))
+}
+
+/// アカウントの追加の画面では、既存の秘密鍵の登録だけが主操作の重さで、生成は既定の
+/// 重さになる。
+pub fn generate_is_not_a_primary_button_test() {
+  let page = account_pages.new_account_page(i18n.English, view.System, "", None)
+  let occurrences =
+    { string.split(page, "btn btn-primary self-start") |> list.length } - 1
+  assert occurrences == 1
 }
 
 /// コピーのボタンは値を持たず、スクリプトの `copy` の処理を名前で指す。値は `name` の無い読み取り
@@ -185,6 +284,7 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
     account_pages.generated_key_page(
       language,
       view.System,
+      example_npub,
       "nsec1example",
       "",
       None,
@@ -312,6 +412,7 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
     account_pages.generated_key_page(
       i18n.English,
       view.System,
+      example_npub,
       "nsec1example",
       "",
       None,
@@ -322,6 +423,7 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
     account_pages.generated_key_page(
       i18n.Japanese,
       view.System,
+      example_npub,
       "nsec1example",
       "",
       None,
@@ -351,6 +453,7 @@ pub fn japanese_generated_key_page_explains_the_failure_test() {
     account_pages.generated_key_page(
       i18n.Japanese,
       view.System,
+      example_npub,
       "nsec1example",
       "main",
       Some(problem),

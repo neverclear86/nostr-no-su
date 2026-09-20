@@ -6,7 +6,7 @@
 //// （`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引き、文字列
 //// リテラルで書かない（同じく `admin/view` の規則）。
 
-import gleam/option.{type Option, Some}
+import gleam/option.{type Option, None, Some}
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -43,7 +43,7 @@ pub fn new_relay_page(
         view.form_description(text(i18n.AddRelayDescription)),
         view.post_form(
           path,
-          [url_field(language, url), roles_fieldset(language, roles)],
+          [url_field(language, url), roles_fieldset(language, roles, None)],
           text(i18n.Register),
           view.Primary,
           view.InForm,
@@ -56,14 +56,16 @@ pub fn new_relay_page(
 
 /// リレー 1 件への操作のページ。カードの上に URL を出す。用途の編集のチェックは、GET
 /// では保存済みの用途を、描き直すときは送られた用途（`roles`）を出す。送信のボタンは
-/// 編集が主操作、削除が注意。テーマか言語を切り替えた後は、この操作のページを GET で
-/// 開き直す。
+/// 編集が主操作、削除が破壊。`states` はその用途の今の接続状態で、得られないときは
+/// `None`。編集のページにだけ渡す。テーマか言語を切り替えた後は、この操作のページを
+/// GET で開き直す。
 pub fn relay_action_page(
   language: Language,
   theme: view.Theme,
   relay: Relay,
   action: dashboard.RelayAction,
   roles: Option(Roles),
+  states: Option(dashboard.RelayRow),
   error: Option(i18n.Reason),
 ) -> String {
   let text = i18n.text(language, _)
@@ -74,7 +76,7 @@ pub fn relay_action_page(
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
       view.post_form(
         path,
-        [roles_fieldset(language, option.unwrap(roles, relay.roles))],
+        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
         text(i18n.Save),
         view.Primary,
         view.InForm,
@@ -87,10 +89,21 @@ pub fn relay_action_page(
         path,
         [],
         text(i18n.DeleteRelaySubmit),
-        view.Caution,
+        view.Destructive,
         view.InForm,
       ),
     )
+  }
+  let delete_link = case action {
+    dashboard.EditRelayRoles -> [
+      view.icon_button_link(
+        dashboard.relay_action_path(relay.id, dashboard.DeleteRelay),
+        view.trash_icon(),
+        text(i18n.Delete),
+        view.Destructive,
+      ),
+    ]
+    dashboard.DeleteRelay -> []
   }
   view.page(
     language,
@@ -105,6 +118,7 @@ pub fn relay_action_page(
         view.error_message(language, Some(lead), error),
         description,
         form,
+        ..delete_link
       ]),
       view.back_link(language),
     ],
@@ -131,25 +145,55 @@ fn url_field(language: Language, url: String) -> Element(msg) {
   )
 }
 
-/// 用途（監視・バンカー）のチェックボックスの囲み。
-fn roles_fieldset(language: Language, roles: Roles) -> Element(msg) {
+/// 用途（監視・バンカー）のチェックの囲み。`states` はその用途の今の接続状態で、`None`
+/// ならバッジを出さない。
+fn roles_fieldset(
+  language: Language,
+  roles: Roles,
+  states: Option(dashboard.RelayRow),
+) -> Element(msg) {
   let text = i18n.text(language, _)
   html.fieldset([attribute.class("fieldset")], [
     html.legend([attribute.class("fieldset-legend")], [
       html.text(text(i18n.Role)),
     ]),
-    role_checkbox(
+    role_row(
+      language,
       dashboard.monitor_field,
+      view.eye_icon(),
       text(i18n.UseForMonitoring),
+      text(i18n.MonitorRoleDescription),
       roles.monitor,
+      option.map(states, fn(row) { row.monitor }),
     ),
-    role_checkbox(dashboard.bunker_field, text(i18n.UseForBunker), roles.bunker),
+    role_row(
+      language,
+      dashboard.bunker_field,
+      view.key_icon(),
+      text(i18n.UseForBunker),
+      text(i18n.BunkerRoleDescription),
+      roles.bunker,
+      option.map(states, fn(row) { row.bunker }),
+    ),
   ])
 }
 
-/// 用途 1 つぶんのチェックボックス。
-fn role_checkbox(name: String, caption: String, checked: Bool) -> Element(msg) {
-  html.label([attribute.class("flex items-center gap-2 text-sm")], [
+/// 用途 1 つぶんの大きなチェック。チェック、アイコン、語、説明、あれば接続状態のバッジを
+/// 1 行に並べる。
+fn role_row(
+  language: Language,
+  name: String,
+  icon: Element(msg),
+  caption: String,
+  description: String,
+  checked: Bool,
+  state: Option(dashboard.RoleState),
+) -> Element(msg) {
+  let badge = case state {
+    Some(state) -> [dashboard.role_state_badge(language, state)]
+    None -> []
+  }
+  html.label([attribute.class("flex items-center gap-3 text-sm")], [
     html.input([
       attribute.type_("checkbox"),
       attribute.name(name),
@@ -157,6 +201,13 @@ fn role_checkbox(name: String, caption: String, checked: Bool) -> Element(msg) {
       attribute.class("checkbox border-base-content/60"),
       attribute.checked(checked),
     ]),
-    html.span([], [html.text(caption)]),
+    icon,
+    html.div([attribute.class("flex min-w-0 flex-col")], [
+      html.span([], [html.text(caption)]),
+      html.span([attribute.class("text-sm text-base-content/70")], [
+        html.text(description),
+      ]),
+    ]),
+    ..badge
   ])
 }

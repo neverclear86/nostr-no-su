@@ -39,7 +39,7 @@ pub fn new_account_page(
     [
       view.error_message(language, Some(i18n.CouldNotRegister), error),
       view.card([
-        view.heading(text(i18n.ImportPrivateKey)),
+        view.icon_heading(view.key_icon(), text(i18n.ImportPrivateKey)),
         view.form_description(text(i18n.ImportDescription)),
         view.secret_post_form(
           view.segments_path(dashboard.import_account_segments),
@@ -56,13 +56,13 @@ pub fn new_account_page(
         ),
       ]),
       view.card([
-        view.heading(text(i18n.GenerateNewKey)),
+        view.icon_heading(view.plus_icon(), text(i18n.GenerateNewKey)),
         view.form_description(text(i18n.GenerateDescription)),
         view.post_form(
           view.segments_path(dashboard.generate_account_segments),
           [],
           text(i18n.Generate),
-          view.Primary,
+          view.Normal,
           view.InForm,
         ),
       ]),
@@ -85,12 +85,13 @@ pub type GeneratedKeyProblem {
 }
 
 /// 生成した鍵の確認ページ。生成した nsec を表示する唯一のページで、ここではまだ
-/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`label` は欄に入れる値
-/// （生成の直後は空、ラベルが規則に反するかバンカーが登録に失敗して再描画するときは
-/// 送られた値）。`problem` は再描画の理由。
+/// 登録しない。登録のフォームは nsec を隠しフィールドで送り返す。`npub` は生成した鍵の
+/// 公開鍵で、省略して出す。`label` は欄に入れる値（生成の直後は空、ラベルが規則に反する
+/// かバンカーが登録に失敗して再描画するときは送られた値）。`problem` は再描画の理由。
 pub fn generated_key_page(
   language: Language,
   theme: view.Theme,
+  npub: String,
   nsec: String,
   label: String,
   problem: Option(GeneratedKeyProblem),
@@ -107,6 +108,7 @@ pub fn generated_key_page(
       option.map(problem, problem_alert(language, _))
         |> option.unwrap(element.none()),
       view.card([
+        view.truncated_id(language, npub, text(i18n.CopyNpub)),
         view.warning(view.emphasized(
           language,
           i18n.BackUpNow,
@@ -189,10 +191,7 @@ pub fn registered_page(
     view.NoRefresh,
     [
       view.card([
-        view.summary_list([
-          #(text(i18n.Label), view.Plain(label)),
-          #(text(i18n.Account), view.Account(npub:, hex: None)),
-        ]),
+        view.identity(language, label, npub),
         view.warning(view.emphasized(
           language,
           i18n.BackUpIfNotAlready,
@@ -340,20 +339,20 @@ pub fn unreadable_delete_page(
   )
 }
 
-/// 削除の対象の、読み込みで飛ばされた行（ラベルと、npub と 16 進の公開鍵、飛ばした
-/// 理由）。
+/// 削除の対象の、読み込みで飛ばされた行（省略した npub と、飛ばした理由）。
 fn unreadable_summary(
   language: Language,
   row: dashboard.SkippedRow,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.summary_list([
-    #(text(i18n.Label), view.Plain(row.label)),
-    #(text(i18n.Account), view.Account(npub: row.npub, hex: Some(row.pubkey))),
-    #(
-      text(i18n.ReasonLabel),
-      view.Plain(text(i18n.UnreadableReason(row.reason))),
-    ),
+  html.div([attribute.class("flex flex-col gap-3")], [
+    view.identity(language, row.label, row.npub),
+    view.summary_list([
+      #(
+        text(i18n.ReasonLabel),
+        view.Plain(text(i18n.UnreadableReason(row.reason))),
+      ),
+    ]),
   ])
 }
 
@@ -401,16 +400,12 @@ pub fn private_key_page(
   )
 }
 
-/// 操作の対象のアカウント（ラベルと、npub と 16 進の公開鍵）。
+/// 操作の対象のアカウントの、ラベルと省略した npub。
 fn account_summary(
   language: Language,
   row: dashboard.AccountRow,
 ) -> Element(msg) {
-  let text = i18n.text(language, _)
-  view.summary_list([
-    #(text(i18n.Label), view.Plain(row.label)),
-    #(text(i18n.Account), view.Account(npub: row.npub, hex: Some(row.signer))),
-  ])
+  view.identity(language, row.label, row.npub)
 }
 
 /// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。

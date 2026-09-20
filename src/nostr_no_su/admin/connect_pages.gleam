@@ -105,7 +105,7 @@ fn uri_field(language: Language, uri: String) -> Element(msg) {
 }
 
 /// 署名するアカウントの選択欄。`rows` の順に並べ、`selected` が空文字列なら先頭を
-/// 選ぶ。
+/// 選ぶ。表示はラベルと省略した npub を並べる。
 fn signer_field(
   language: Language,
   rows: List(dashboard.AccountRow),
@@ -118,7 +118,9 @@ fn signer_field(
   view.select_field(
     i18n.text(language, i18n.SigningAccount),
     dashboard.signer_field,
-    list.map(rows, fn(row) { #(row.signer, row.label) }),
+    list.map(rows, fn(row) {
+      #(row.signer, row.label <> " " <> view.shorten(row.npub))
+    }),
     selected,
   )
 }
