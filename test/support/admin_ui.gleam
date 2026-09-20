@@ -9,6 +9,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{None, Some}
 import lustre/element
+import lustre/element/html
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
@@ -348,7 +349,9 @@ pub fn components(language: i18n.Language) -> List(String) {
     [
       element.to_string(view.section_card("anchor", [view.hint("content")])),
       element.to_string(view.warning_card("anchor", [view.hint("content")])),
-      element.to_string(view.detail_list([#("term", view.hint("value"))])),
+      element.to_string(
+        view.detail_list([#("term", html.dd([], [view.hint("value")]))]),
+      ),
       element.to_string(view.alert(view.Info, [view.hint("content")])),
     ],
     list.map(
