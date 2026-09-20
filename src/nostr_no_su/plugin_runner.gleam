@@ -49,6 +49,7 @@ import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/time
 
 /// 実行時の歯止め。テストから小さい値を渡せるよう注入する。プラグイン固有の
 /// 設定から与えられるようにする余地もここにある。
@@ -100,6 +101,8 @@ pub type Msg {
   GetStatus(reply: Subject(Status))
   /// 管理 UI からの再有効化の要求。応答はランナーが要求を処理したことだけを伝える。
   Reenable(reply: Subject(Nil))
+  /// 再開点の保存のための、このプラグインの再開点の問い合わせ。
+  GetResume(reply: Subject(Option(Int)))
 }
 
 /// ディスパッチャーがイベントを送る宛先 1 つ。`plugin` はログの接頭辞に使う
@@ -110,8 +113,16 @@ pub type Target {
 }
 
 /// ランナーが保持する状態。`failures` は連続失敗数で、成功すると 0 に戻る。
+/// `resume` はこのプラグインの再開点で、処理したイベントの `created_at` で
+/// 前進する（`advance`）。
 type State {
-  State(plugin: Plugin, limits: Limits, status: Status, failures: Int)
+  State(
+    plugin: Plugin,
+    limits: Limits,
+    status: Status,
+    failures: Int,
+    resume: Option(Int),
+  )
 }
 
 /// スーパービジョンツリー用の子仕様。
@@ -130,7 +141,13 @@ pub fn start(
   plugin: Plugin,
   limits: Limits,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new(State(plugin: plugin, limits: limits, status: Running, failures: 0))
+  actor.new(State(
+    plugin: plugin,
+    limits: limits,
+    status: Running,
+    failures: 0,
+    resume: None,
+  ))
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
@@ -166,12 +183,24 @@ pub fn request_reenable(name: Name(Msg)) -> Option(Nil) {
   named.call(name, status_timeout_ms, Reenable)
 }
 
-/// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、実行した
-/// ものは `record` が状態へ反映する。
+/// このプラグインの再開点。`status` と同じく、再起動中や遅い実行の最中は応答が
+/// 無く `Error(Nil)` を返す。その周期の保存にはこのプラグインを入れない。
+pub fn resume(name: Name(Msg)) -> Result(Option(Int), Nil) {
+  named.call(name, status_timeout_ms, GetResume)
+  |> option.to_result(Nil)
+}
+
+/// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、その
+/// 結果で再開点を前進させ（`advance`）、実行したものは `record` が状態へ
+/// 反映する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     GetStatus(reply) -> {
       process.send(reply, state.status)
+      actor.continue(state)
+    }
+    GetResume(reply) -> {
+      process.send(reply, state.resume)
       actor.continue(state)
     }
     Reenable(reply) -> {
@@ -184,15 +213,19 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let #(status, should_run, note) =
         admit(state.status, message_queue_len(), state.limits)
       report(state.plugin.name, note)
+      let resume =
+        advance(status, state.resume, incoming.created_at, time.now_seconds())
       case should_run {
-        False -> actor.continue(State(..state, status: status))
+        False -> actor.continue(State(..state, status: status, resume: resume))
         True -> {
           let outcome =
             run(state.plugin, incoming, state.limits.handle_timeout_ms)
           let #(status, failures, note) =
             record(status, state.failures, outcome, state.limits)
           report(state.plugin.name, note)
-          actor.continue(State(..state, status: status, failures: failures))
+          actor.continue(
+            State(..state, status: status, failures: failures, resume: resume),
+          )
         }
       }
     }
@@ -252,6 +285,31 @@ pub fn admit(
         <> " events while overloaded",
       ),
     )
+  }
+}
+
+/// 処理したイベントの `created_at` で再開点を前進させる。`status` には `admit`
+/// が返した状態を渡す。`Disabled`（無効化の間のイベント）は捨てるだけなので
+/// 前進せず `current` のまま返す。実行した（`Running`）ものも切り捨てた
+/// （`Overloaded`）ものも前進させる。切り捨ては取り直しの対象外であり、失敗した
+/// 実行でもそのイベントはプラグインに届いているためである。`now` より未来の
+/// `created_at` は `now` に切り詰め、値は小さくしない（`dedup/resume.observe`
+/// と同じ規則）。
+pub fn advance(
+  status: Status,
+  current: Option(Int),
+  created_at: Int,
+  now: Int,
+) -> Option(Int) {
+  case status {
+    Disabled(..) -> current
+    Running | Overloaded(..) -> {
+      let at = int.min(created_at, now)
+      case current {
+        Some(existing) -> Some(int.max(existing, at))
+        None -> Some(at)
+      }
+    }
   }
 }
 

@@ -134,6 +134,27 @@ pub fn admit_drops_while_disabled_test() {
     == #(Disabled(reason: "error:badarg", dropped: 3), False, None)
 }
 
+/// 実行したイベントの `created_at` で再開点が前進する。小さい `created_at` では
+/// 下がらず、`now` より未来の `created_at` は `now` に切り詰める。
+pub fn advance_moves_the_resume_point_forward_test() {
+  assert plugin_runner.advance(Running, None, 100, 1000) == Some(100)
+  assert plugin_runner.advance(Running, Some(100), 50, 1000) == Some(100)
+  assert plugin_runner.advance(Running, Some(100), 2000, 1000) == Some(1000)
+}
+
+/// 切り捨てたイベントでも再開点は前進する（切り捨ては取り直しの対象外）。
+pub fn an_overloaded_runner_advances_the_resume_point_test() {
+  assert plugin_runner.advance(Overloaded(dropped: 1), None, 100, 1000)
+    == Some(100)
+}
+
+/// 無効化の間のイベントは捨てるだけなので、再開点は前進しない。
+pub fn a_disabled_runner_does_not_advance_the_resume_point_test() {
+  let status = Disabled(reason: "error:badarg", dropped: 1)
+  assert plugin_runner.advance(status, Some(100), 200, 1000) == Some(100)
+  assert plugin_runner.advance(status, None, 200, 1000) == None
+}
+
 /// 届いている間は宛先も変えず、何も出さない。
 pub fn record_delivery_is_silent_while_delivered_test() {
   let target = test_target()
@@ -290,6 +311,26 @@ pub fn a_reenabled_runner_handles_events_again_test() {
 pub fn request_reenable_without_a_runner_is_none_test() {
   let name = process.new_name("test_plugin_runner")
   assert plugin_runner.request_reenable(name) == None
+}
+
+/// ランナーが処理したイベントの `created_at` が再開点になる。起動直後は
+/// 再開点を持たない。
+pub fn a_handled_event_advances_the_runner_resume_point_test() {
+  let name = start_runner(fn(_incoming) { Nil }, limits)
+  assert plugin_runner.resume(name) == Ok(None)
+  let targets = [plugin_runner.target("runner_test", name)]
+  plugin_runner.dispatch(
+    targets,
+    Event(..test_event("e1"), created_at: 1_700_000_000),
+  )
+  assert plugin_runner.resume(name) == Ok(Some(1_700_000_000))
+}
+
+/// 名前にランナーが居なければ再開点の問い合わせも応答が無い。再起動中の
+/// ランナーがその周期の保存の対象にならないことの根拠である。
+pub fn a_missing_runner_has_no_resume_point_test() {
+  let name = process.new_name("test_plugin_runner")
+  assert plugin_runner.resume(name) == Error(Nil)
 }
 
 /// ワーカーの終了理由は短い 1 行に整えられる。FFI のラッパーが例外クラスと理由

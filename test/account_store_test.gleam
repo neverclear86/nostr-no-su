@@ -24,6 +24,7 @@ import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
 import nostr_no_su/dedup/resume_store
 import nostr_no_su/named
 import nostr_no_su/nostr/event
+import nostr_no_su/plugin_resume_store
 import nostr_no_su/random
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
@@ -342,12 +343,12 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (5)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (6)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 5, supported: 4))
+    == Error(account_store.SchemaTooNew(found: 6, supported: 5))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -380,6 +381,35 @@ pub fn postgres_resume_store_test() {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
+/// 読み書きできることは、`plugin_resume` が版 5 の移行で作られることの確認を
+/// 兼ねる。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_plugin_resume_store_test() {
+  use database_url <- postgres.with_test_database_url("plugin_resume_store")
+  let schema = "plugin_resume_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  assert plugin_resume_store.load(db, "logger") == Ok(None)
+  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 200)])
+  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+
+  // 値を小さくする保存は無視する（GREATEST）。
+  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 100)])
+  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+
+  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 300)])
+  assert plugin_resume_store.load(db, "logger") == Ok(Some(300))
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
 /// テーブルは無い）に版 3 の移行が適用でき、読み込んだ `sessions` と `pending` は
 /// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。
@@ -402,7 +432,7 @@ pub fn postgres_migrates_a_version_two_database_test() {
 
   let assert Ok(loaded) =
     account_store.load(pool, random_master_key(), generous)
-  assert recorded_versions(db) == [1, 2, 3, 4]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5]
   assert loaded.sessions == []
   assert loaded.pending == []
 
@@ -427,9 +457,9 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   let key = random_master_key()
   let now = 1_700_000_000
 
-  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4] になる。
+  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5] になる。
   let assert Ok(empty) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5]
   assert empty.sessions == []
   assert empty.pending == []
 

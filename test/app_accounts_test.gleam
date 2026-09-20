@@ -406,6 +406,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
         relays: [monitor_relay],
         subscriptions: fn(_relay_url) { fn() { Ok([]) } },
         save_resume: discard_resume_points,
+        save_plugin_resume: discard_resume_points,
         excludes_kind: event.is_ephemeral,
       ),
       bunker: bunker_spec(

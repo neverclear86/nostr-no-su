@@ -15,7 +15,7 @@
 //// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
 //// ビルドより新しければ `SchemaTooNew` を返す。移行は `bunker_accounts` のほかに、
 //// 監視の再開点のテーブル（`monitor_resume`）、セッションと承認待ちのテーブル、
-//// リレーの一覧（`relays`）も作る。
+//// リレーの一覧（`relays`）、プラグインの再開点（`plugin_resume`）も作る。
 ////
 //// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
 //// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
@@ -134,6 +134,15 @@ pub const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
   bunker boolean NOT NULL
 )"
 
+/// プラグインごとの再開点を保存するテーブル。`since` は Unix 秒。主キーは
+/// プラグイン名（`plugin_name/0` の値）。書き込みは値を小さくしない
+/// （`plugin_resume_store`）。
+pub const create_plugin_resume_table = "CREATE TABLE IF NOT EXISTS plugin_resume (
+  plugin text PRIMARY KEY,
+  since bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+)"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -153,6 +162,7 @@ pub const migrations = [
     statements: [create_sessions_table, create_pending_table],
   ),
   Migration(version: 4, statements: [create_relays_table]),
+  Migration(version: 5, statements: [create_plugin_resume_table]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
