@@ -3,8 +3,15 @@
 import gleam/list
 import gleam/result
 import gleam/string
+import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import support/admin_ui
+
+/// 検査の対象にするページ。ページに埋め込まれる部品と、`components` にしか出ない部品の
+/// 両方を通す。
+fn pages() -> List(String) {
+  list.append(admin_ui.all_pages(), admin_ui.components(i18n.English))
+}
 
 /// 描画しうるページのクラスは、どれもビルドした CSS に定義がある。Tailwind はソースに完全な
 /// 文字列で書かれたクラスしか出力しないので、連結で組み立てたクラス、綴りの誤り、CSS の
@@ -12,7 +19,7 @@ import support/admin_ui
 pub fn stylesheet_defines_every_rendered_class_test() {
   let css = admin_ui.static_file(view.stylesheet_segments)
   let undefined =
-    admin_ui.all_pages()
+    pages()
     |> list.flat_map(classes)
     |> list.unique
     |> list.filter(fn(class) { !defines(css, class) })
@@ -26,7 +33,7 @@ pub fn stylesheet_defines_every_rendered_class_test() {
 /// 出力されるので、定義の検査では見つからない。フォーカスできない要素の `btn` は対象にしない。
 pub fn buttons_and_inputs_follow_the_color_rules_test() {
   let violations =
-    admin_ui.all_pages()
+    pages()
     |> list.flat_map(tagged_classes)
     |> list.unique
     |> list.filter(fn(element) {

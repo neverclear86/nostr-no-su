@@ -1011,36 +1011,42 @@ pub fn only_the_static_files_are_served_test() {
 pub fn notices_are_colored_by_outcome_test() {
   let rotate = action_path(dashboard.RotateSecret)
   let notices = [
-    #(post(context(), "/approve/" <> token), "alert alert-success"),
-    #(post(context(), "/deny/" <> token), "alert"),
-    #(post(context(), "/approve/other-token"), "alert alert-error"),
+    #(
+      post(context(), "/approve/" <> token),
+      "alert alert-soft alert-success text-base-content",
+    ),
+    #(post(context(), "/deny/" <> token), "alert alert-soft text-base-content"),
+    #(
+      post(context(), "/approve/other-token"),
+      "alert alert-soft alert-error text-base-content",
+    ),
     #(
       post(
         failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
         rotate,
       ),
-      "alert alert-warning",
+      "alert alert-soft alert-warning text-base-content",
     ),
     #(
       post(
         failing_context(bunker.NotReady("accounts are not loaded yet")),
         rotate,
       ),
-      "alert alert-warning",
+      "alert alert-soft alert-warning text-base-content",
     ),
     #(
       post_form(context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", unknown_client),
       ]),
-      "alert alert-error",
+      "alert alert-soft alert-error text-base-content",
     ),
     #(
       post_form(not_answering_context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", client),
       ]),
-      "alert alert-warning",
+      "alert alert-soft alert-warning text-base-content",
     ),
   ]
   list.each(notices, fn(entry) {

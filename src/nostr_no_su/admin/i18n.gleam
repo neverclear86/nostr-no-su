@@ -215,6 +215,8 @@ pub type Message {
   Copy
   Copied
   SelectedPressCtrlC
+  CopyNpub
+  CopyClient
   // ダッシュボード
   Dashboard
   PendingConnections
@@ -393,6 +395,8 @@ fn english(message: Message) -> String {
     Copy -> "Copy"
     Copied -> "Copied"
     SelectedPressCtrlC -> "Selected. Press Ctrl+C (⌘C on macOS) to copy."
+    CopyNpub -> "Copy npub"
+    CopyClient -> "Copy client"
     Dashboard -> "Dashboard"
     PendingConnections -> "Pending connections"
     NoPendingConnections(minutes:) ->
@@ -605,6 +609,8 @@ fn japanese(message: Message) -> String {
     Copy -> "コピー"
     Copied -> "コピー済み"
     SelectedPressCtrlC -> "選択しました。Ctrl+C（macOS では ⌘C）でコピーしてください。"
+    CopyNpub -> "npub をコピー"
+    CopyClient -> "クライアントをコピー"
     Dashboard -> "ダッシュボード"
     PendingConnections -> "承認待ちの接続"
     NoPendingConnections(minutes:) ->

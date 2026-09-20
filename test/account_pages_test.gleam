@@ -115,7 +115,7 @@ pub fn error_reasons_are_escaped_test() {
   use page <- list.each(pages)
   assert string.contains(
     page,
-    "<div class=\"alert alert-error\" role=\"alert\"><span><span lang=\"en\">"
+    "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\"><span><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
   )

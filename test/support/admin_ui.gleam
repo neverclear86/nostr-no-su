@@ -1,11 +1,14 @@
 //// 描画した管理 UI のページを使う検査が共有する、ページと静的ファイルの読み出し。配信する
 //// 静的ファイル（`priv/static/`）と突き合わせる `stylesheet_test` と `script_test`、日本語の
 //// ページの英文を見る `japanese_pages_test` が使う。
+////
+//// `view.gleam` に部品を足したら `components` にもその部品を足す。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{None, Some}
+import lustre/element
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
@@ -310,4 +313,71 @@ pub fn pages(language: i18n.Language) -> List(String) {
 /// すべての言語のページ。言語に依らない検査（CSS、スクリプト）が使う。
 pub fn all_pages() -> List(String) {
   list.flat_map(i18n.languages, pages)
+}
+
+/// ページに埋め込まれずに使う `view.gleam` の部品を、状態の分岐をすべて通して描いた文字列。
+/// `view.gleam` に部品を足したらここにも足す。
+pub fn components(language: i18n.Language) -> List(String) {
+  list.flatten([
+    list.map([view.Neutral, view.Success, view.Warning, view.Failure], fn(tone) {
+      element.to_string(view.status_badge(tone, "text"))
+    }),
+    [element.to_string(view.count_pill(3))],
+    [
+      element.to_string(
+        view.details_panel("summary", [
+          view.hint("content"),
+        ]),
+      ),
+    ],
+    [
+      element.to_string(view.truncated_id(language, "0123456789abcdef", "copy")),
+    ],
+    list.map(
+      [view.Normal, view.Primary, view.Caution, view.Destructive],
+      fn(weight) {
+        element.to_string(view.icon_button_link(
+          "/",
+          view.plus_icon(),
+          "text",
+          weight,
+        ))
+      },
+    ),
+    list.map(
+      [view.Normal, view.Primary, view.Caution, view.Destructive],
+      fn(weight) {
+        element.to_string(view.icon_only_link(
+          "/",
+          view.trash_icon(),
+          "label",
+          weight,
+        ))
+      },
+    ),
+    list.map([view.Neutral, view.Success, view.Warning, view.Failure], fn(tone) {
+      element.to_string(view.tone_icon(tone))
+    }),
+    list.map(
+      [
+        view.logo_icon(),
+        view.theme_icon(),
+        view.language_icon(),
+        view.info_icon(),
+        view.check_circle_icon(),
+        view.warning_triangle_icon(),
+        view.x_circle_icon(),
+        view.copy_icon(),
+        view.plus_icon(),
+        view.trash_icon(),
+        view.pencil_icon(),
+        view.plug_icon(),
+        view.key_icon(),
+        view.users_icon(),
+        view.clock_icon(),
+        view.puzzle_icon(),
+      ],
+      element.to_string,
+    ),
+  ])
 }
