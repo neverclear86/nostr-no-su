@@ -75,6 +75,17 @@ pub fn pages(language: i18n.Language) -> List(String) {
       secret_mismatch: True,
       perms: "",
     )
+  // アカウント一覧に無い署名者。`japanese_pages_have_no_english_words_test` が
+  // 短縮した 16 進の英字を未知語として拾うので、数字だけの値にする。
+  let pending_unknown_signer =
+    dashboard.PendingRow(
+      token: "tok3",
+      signer: "9999888877776666555544443333222211110000999988887777666655554444",
+      client: "4567",
+      expires_in_seconds: 540,
+      secret_mismatch: False,
+      perms: "",
+    )
   let full =
     dashboard.Snapshot(
       accounts: Ok([row]),
@@ -92,7 +103,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
           reason: vault.MalformedPubkey,
         ),
       ]),
-      pending: Ok([pending, pending_mismatch]),
+      pending: Ok([pending, pending_mismatch, pending_unknown_signer]),
       relays: Ok([
         dashboard.RelayRow(
           1,
@@ -160,7 +171,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ),
       ),
-      dashboard.approval_page(language, view.System, pending),
+      dashboard.approval_page(language, view.System, Ok([row]), pending),
       account_pages.new_account_page(language, view.System, "", Some(reason)),
       account_pages.generated_key_page(
         language,
@@ -319,9 +330,10 @@ pub fn all_pages() -> List(String) {
 /// `view.gleam` に部品を足したらここにも足す。
 pub fn components(language: i18n.Language) -> List(String) {
   list.flatten([
-    list.map([view.Neutral, view.Success, view.Warning, view.Failure], fn(tone) {
-      element.to_string(view.status_badge(tone, "text"))
-    }),
+    list.map(
+      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
+      fn(tone) { element.to_string(view.status_badge(tone, "text")) },
+    ),
     [element.to_string(view.count_pill(3))],
     [
       element.to_string(
@@ -332,6 +344,12 @@ pub fn components(language: i18n.Language) -> List(String) {
     ],
     [
       element.to_string(view.truncated_id(language, "0123456789abcdef", "copy")),
+    ],
+    [
+      element.to_string(view.section_card("anchor", [view.hint("content")])),
+      element.to_string(view.warning_card("anchor", [view.hint("content")])),
+      element.to_string(view.detail_list([#("term", view.hint("value"))])),
+      element.to_string(view.alert(view.Info, [view.hint("content")])),
     ],
     list.map(
       [view.Normal, view.Primary, view.Caution, view.Destructive],
@@ -355,9 +373,10 @@ pub fn components(language: i18n.Language) -> List(String) {
         ))
       },
     ),
-    list.map([view.Neutral, view.Success, view.Warning, view.Failure], fn(tone) {
-      element.to_string(view.tone_icon(tone))
-    }),
+    list.map(
+      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
+      fn(tone) { element.to_string(view.tone_icon(tone)) },
+    ),
     list.map(
       [
         view.logo_icon(),

@@ -10,7 +10,8 @@
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
-//// `theme_segments` から組み立てた値だけを渡す（lustre は URL を検査しない）。
+//// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
+//// 付けた値だけを渡す（lustre は URL を検査しない）。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
@@ -175,14 +176,17 @@ pub type Placement {
 /// 通知や理由の囲みと、状態のバッジの色。
 pub type Tone {
   /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウント、
-  /// 承認待ち、セッションの一覧を得られない）。
+  /// セッションの一覧を得られない）。
   Neutral
   /// 求めた操作が反映された結果（接続の承認）。
   Success
   /// 反映されたか分からない変更、今は受け付けられない変更、秘密鍵のバックアップの注意。
   Warning
-  /// 処理できなかった操作と、フォームの上の失敗の理由。
+  /// 処理できなかった操作、フォームの上の失敗の理由、承認待ちの一覧を得られない理由
+  /// （0 件と読み違えさせない）。
   Failure
+  /// 承認の意味の説明など、危険を伴わない補足。
+  Info
 }
 
 /// ページを自動で読み込み直すかどうか。`RefreshEverySeconds` のページだけ
@@ -202,8 +206,6 @@ pub type Value {
   Account(npub: String, hex: Option(String))
   /// RFC 3339 の UTC の時刻。折り返さず、数字の幅を揃える。
   Timestamp(String)
-  /// 不一致のように、注意を促す短い語。警告色の薄い塗りのバッジで出し、折り返さない。
-  Flag(String)
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
@@ -531,10 +533,45 @@ fn main_class(layout: Layout) -> String {
 
 /// 節やページの内容を包むカード。
 pub fn card(content: List(Element(msg))) -> Element(msg) {
-  html.section(
-    [attribute.class("card border border-base-300 bg-base-100 shadow-sm")],
-    [html.div([attribute.class("card-body gap-4 p-4 sm:p-6")], content)],
+  card_element(
+    None,
+    "card border border-base-300 bg-base-100 shadow-sm",
+    content,
   )
+}
+
+/// タイルのリンク先の `id` を持つ節のカード。
+pub fn section_card(id: String, content: List(Element(msg))) -> Element(msg) {
+  card_element(
+    Some(id),
+    "card border border-base-300 bg-base-100 shadow-sm",
+    content,
+  )
+}
+
+/// 承認待ちの節の warning 色の枠のカード。
+pub fn warning_card(id: String, content: List(Element(msg))) -> Element(msg) {
+  card_element(
+    Some(id),
+    "card border border-warning bg-base-100 shadow-sm",
+    content,
+  )
+}
+
+/// `card`、`section_card`、`warning_card` が共有するカードの組み立て。`id` があれば要素に
+/// 付ける。
+fn card_element(
+  id: Option(String),
+  class: String,
+  content: List(Element(msg)),
+) -> Element(msg) {
+  let id_attribute = case id {
+    Some(id) -> [attribute.id(id)]
+    None -> []
+  }
+  html.section([attribute.class(class), ..id_attribute], [
+    html.div([attribute.class("card-body gap-4 p-4 sm:p-6")], content),
+  ])
 }
 
 /// カードの見出し（h2）。
@@ -572,8 +609,9 @@ pub fn table(
   ])
 }
 
-/// 見出しと値の組の一覧（`dl`）。見出しを値の左に置くので、狭い画面でも横に伸びない。
-pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
+/// 見出しと `dd` 要素の組の一覧（`dl`）。見出しを値の左に置くので、狭い画面でも横に伸びない。
+/// 値には `html.dd` で包んだ要素を渡す。
+pub fn detail_list(entries: List(#(String, Element(msg)))) -> Element(msg) {
   html.dl(
     [
       attribute.class(
@@ -584,9 +622,16 @@ pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
       let #(term, value) = entry
       [
         html.dt([attribute.class("text-base-content/70")], [html.text(term)]),
-        summary_value(value),
+        value,
       ]
     }),
+  )
+}
+
+/// 見出しと値の組の一覧（`dl`）。見出しを値の左に置くので、狭い画面でも横に伸びない。
+pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
+  detail_list(
+    list.map(entries, fn(entry) { #(entry.0, summary_value(entry.1)) }),
   )
 }
 
@@ -624,7 +669,6 @@ fn summary_value(value: Value) -> Element(msg) {
           [html.text(text)],
         ),
       ])
-    Flag(text) -> html.dd([], [status_badge(Warning, text)])
   }
 }
 
@@ -980,17 +1024,20 @@ fn alert_class(tone: Tone) -> String {
     Success -> "alert alert-soft alert-success text-base-content"
     Warning -> "alert alert-soft alert-warning text-base-content"
     Failure -> "alert alert-soft alert-error text-base-content"
+    Info -> "alert alert-soft alert-info text-base-content"
   }
 }
 
-/// トーンごとのアイコン。`Neutral` は情報、ほかはトーンの色（`text-success` など）を付けた
-/// 丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有する。
+/// トーンごとのアイコン。`Neutral` と `Info` は情報、ほかはトーンの色（`text-success` など）を
+/// 付けた丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有
+/// する。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
     Neutral -> lucide_icon("size-4", info_icon_paths)
     Success -> lucide_icon("size-4 text-success", check_circle_icon_paths)
     Warning -> lucide_icon("size-4 text-warning", warning_triangle_icon_paths)
     Failure -> lucide_icon("size-4 text-error", x_circle_icon_paths)
+    Info -> lucide_icon("size-4 text-info", info_icon_paths)
   }
 }
 
@@ -1001,6 +1048,7 @@ pub fn status_badge(tone: Tone, text: String) -> Element(msg) {
     Success -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-success"
     Warning -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning"
     Failure -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-error"
+    Info -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-info"
   }
   html.span([attribute.class(class)], [tone_icon(tone), html.text(text)])
 }

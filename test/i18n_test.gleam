@@ -71,11 +71,27 @@ pub fn messages_with_values_follow_each_language_test() {
   let cases = [
     #(i18n.ExpiresInSeconds(12), "12s", "12 秒"),
     #(
-      i18n.NoPendingConnections(10),
-      "No pending connections. Pending connections expire after 10 minutes.",
-      "承認待ちの接続はありません。承認待ちは 10 分で失効します。",
+      i18n.AwaitingDecision(30),
+      "Awaiting your decision · refreshes every 30 s",
+      "承認を待っています · 30 秒ごとに更新",
     ),
-    #(i18n.AutoRefreshingEverySeconds(30), "Refreshing every 30s", "30 秒ごとに更新中"),
+    #(
+      i18n.PendingExpireAfterMinutes(10),
+      "Expire after 10 minutes",
+      "10 分で失効します",
+    ),
+    #(i18n.UnreadableRowCount(3), "3 unreadable rows", "読み込めない行 3"),
+    #(
+      i18n.RelayIssueCounts(1, 2),
+      "1 disconnected · 2 unanswered",
+      "未接続 1 · 応答なし 2",
+    ),
+    #(i18n.PluginsRunningOfTotal(1, 2), "1 / 2 running", "1 / 2 動作中"),
+    #(
+      i18n.PluginIssueCounts(1, 2, 3),
+      "1 overloaded · 2 disabled · 3 unavailable",
+      "過負荷 1 · 無効 2 · 応答なし 3",
+    ),
     #(
       i18n.ApprovalRequestGone(10),
       "This connection request was not found. It may have expired (requests expire after 10 minutes) or already been approved or denied. Connect again from the client.",
@@ -139,23 +155,36 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.SelectedPressCtrlC -> Some(i18n.CopyNpub)
     i18n.CopyNpub -> Some(i18n.CopyClient)
     i18n.CopyClient -> Some(i18n.Dashboard)
-    i18n.Dashboard -> Some(i18n.PendingConnections)
-    i18n.PendingConnections -> Some(i18n.NoPendingConnections(10))
-    i18n.NoPendingConnections(_) -> Some(i18n.AutoRefreshingEverySeconds(30))
-    i18n.AutoRefreshingEverySeconds(_) -> Some(i18n.Signer)
+    i18n.Dashboard -> Some(i18n.Pending)
+    i18n.Pending -> Some(i18n.AwaitingDecision(30))
+    i18n.AwaitingDecision(_) -> Some(i18n.PendingExpireAfterMinutes(10))
+    i18n.PendingExpireAfterMinutes(_) -> Some(i18n.TileNotAvailable)
+    i18n.TileNotAvailable -> Some(i18n.UnreadableRowCount(3))
+    i18n.UnreadableRowCount(_) -> Some(i18n.AllAccountsLoaded)
+    i18n.AllAccountsLoaded -> Some(i18n.Sessions)
+    i18n.Sessions -> Some(i18n.ApprovedClients)
+    i18n.ApprovedClients -> Some(i18n.RelayIssueCounts(1, 2))
+    i18n.RelayIssueCounts(_, _) -> Some(i18n.AllRelaysConnected)
+    i18n.AllRelaysConnected -> Some(i18n.NoBunkerRelayShort)
+    i18n.NoBunkerRelayShort -> Some(i18n.PluginsRunningOfTotal(1, 2))
+    i18n.PluginsRunningOfTotal(_, _) -> Some(i18n.PluginIssueCounts(1, 2, 3))
+    i18n.PluginIssueCounts(_, _, _) -> Some(i18n.NoPluginsEnabledShort)
+    i18n.NoPluginsEnabledShort -> Some(i18n.PendingConnections)
+    i18n.PendingConnections -> Some(i18n.PendingSecretNotOffered)
+    i18n.PendingSecretNotOffered -> Some(i18n.PendingSecretMismatch)
+    i18n.PendingSecretMismatch -> Some(i18n.NoPermissionsRequestedBadge)
+    i18n.NoPermissionsRequestedBadge -> Some(i18n.Signer)
     i18n.Signer -> Some(i18n.Client)
     i18n.Client -> Some(i18n.ExpiresIn)
     i18n.ExpiresIn -> Some(i18n.ExpiresInSeconds(12))
-    i18n.ExpiresInSeconds(_) -> Some(i18n.SecretLabel)
-    i18n.SecretLabel -> Some(i18n.SecretNotOffered)
-    i18n.SecretNotOffered -> Some(i18n.SecretMismatch)
-    i18n.SecretMismatch -> Some(i18n.Permissions)
+    i18n.ExpiresInSeconds(_) -> Some(i18n.Permissions)
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
     i18n.NoPermissionsRequested -> Some(i18n.Created)
     i18n.Created -> Some(i18n.LastUsed)
     i18n.LastUsed -> Some(i18n.Approve)
     i18n.Approve -> Some(i18n.Deny)
-    i18n.Deny -> Some(i18n.Accounts)
+    i18n.Deny -> Some(i18n.ApprovalExplanation)
+    i18n.ApprovalExplanation -> Some(i18n.Accounts)
     i18n.Accounts -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
     i18n.NoAccounts -> Some(i18n.ReloadAccounts)
@@ -311,12 +340,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 160 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 173 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 160
+  assert list.length(messages) == 173
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
