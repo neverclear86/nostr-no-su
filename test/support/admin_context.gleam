@@ -2,6 +2,7 @@
 //// リクエストを組み立てるヘルパー。関数名の注意は `app_tree` と同じ。
 
 import gleam/bit_array
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject}
 import gleam/http
 import gleam/http/request
@@ -14,6 +15,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
+import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -45,6 +47,43 @@ pub const session_not_approved = "session is not approved"
 /// 無効化されたプラグインの理由。プラグイン由来の文字列なので HTML への埋め込み
 /// でエスケープされなければならない。
 const disabled_reason = "error:<script>alert(1)</script>"
+
+/// `console_logger` の `settings` ページの中身の呼び出しが返す理由。
+pub const plugin_page_unavailable_reason = "settings unavailable"
+
+/// `console_logger` の `status` ページの記述。節 1 つ、ブロック 1 つ（`text`）を持つ。
+fn console_logger_status_description() -> Dynamic {
+  dynamic.properties([
+    #(
+      dynamic.string("sections"),
+      dynamic.list([
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("section")),
+          #(dynamic.string("title"), dynamic.string("Queue")),
+          #(
+            dynamic.string("blocks"),
+            dynamic.list([
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("text")),
+                #(dynamic.string("text"), dynamic.string("processed 3 events")),
+              ]),
+            ]),
+          ),
+        ]),
+      ]),
+    ),
+  ])
+}
+
+/// プラグインのページの中身。`console_logger` の `status` は記述を返し、`settings`
+/// は理由を返す（応答の失敗を試すため）。それ以外は名前が引けないという理由を返す。
+fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
+  case name, key {
+    "console_logger", "status" -> Ok(console_logger_status_description())
+    "console_logger", "settings" -> Error(plugin_page_unavailable_reason)
+    _, _ -> Error("plugin not found")
+  }
+}
 
 /// 承認待ちのトークン。フェイクの一覧（`pending`）はこれだけを持つ。
 pub const token = "tok-1"
@@ -183,14 +222,20 @@ pub fn test_context(
         dashboard.PluginRow(
           name: "console_logger",
           status: Some(plugin_runner.Running),
+          pages: [
+            plugin.PluginPage(key: "status", title: "Status"),
+            plugin.PluginPage(key: "settings", title: "Settings"),
+          ],
         ),
         // 無効化の理由はプラグイン由来の文字列なので、素のまま出てはならない。
+        // ページを供給しないので、404 の検査にも使う。
         dashboard.PluginRow(
           name: "broken",
           status: Some(plugin_runner.Disabled(
             reason: disabled_reason,
             dropped: 3,
           )),
+          pages: [],
         ),
       ]
     },
@@ -198,6 +243,7 @@ pub fn test_context(
       process.send(reports, Reenabled(name))
       Ok(Nil)
     },
+    plugin_page_content: plugin_page_content,
     sessions: fn() {
       Ok([
         dashboard.SessionRow(

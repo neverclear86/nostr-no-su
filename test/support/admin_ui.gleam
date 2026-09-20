@@ -14,9 +14,11 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
+import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
@@ -130,16 +132,18 @@ pub fn pages(language: i18n.Language) -> List(String) {
         ),
       ]),
       plugins: [
-        dashboard.PluginRow("plugin-a", Some(plugin_runner.Running)),
+        dashboard.PluginRow("plugin-a", Some(plugin_runner.Running), pages: []),
         dashboard.PluginRow(
           "plugin-b",
           Some(plugin_runner.Overloaded(dropped: 1)),
+          pages: [],
         ),
         dashboard.PluginRow(
           "plugin-c",
           Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
+          pages: [],
         ),
-        dashboard.PluginRow("plugin-d", None),
+        dashboard.PluginRow("plugin-d", None, pages: []),
       ],
       now: 2000,
     )
@@ -330,6 +334,101 @@ pub fn pages(language: i18n.Language) -> List(String) {
       None,
       Some(reason),
     )),
+    [
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [plugin_section("a", [plugin_text_block("example")])],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_two_pages,
+        plugin_status_page,
+        [plugin_section("b", [plugin_text_block("label")])],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [
+          plugin_section("c", [plugin_text_block("plugin")]),
+          plugin_missing_title_section(),
+        ],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_disabled,
+        plugin_status_page,
+        [plugin_section("d", [plugin_text_block("a")])],
+      ),
+    ],
+  ])
+}
+
+/// ページを 1 件だけ供給するプラグインの行（タブ無しを撮るため）。表示名は
+/// `allowed_words`（`test/japanese_pages_test.gleam`）に無い語にし、`view.untranslated`
+/// の包み忘れを検査できるようにする。
+const plugin_row_one_page = dashboard.PluginRow(
+  "plugin-a",
+  Some(plugin_runner.Running),
+  pages: [plugin.PluginPage(key: "status", title: "Status")],
+)
+
+/// ページを 2 件供給するプラグインの行（タブを撮るため）。
+const plugin_row_two_pages = dashboard.PluginRow(
+  "plugin-b",
+  Some(plugin_runner.Running),
+  pages: [
+    plugin.PluginPage(key: "status", title: "Status"),
+    plugin.PluginPage(key: "settings", title: "Settings"),
+  ],
+)
+
+/// 無効になったプラグインの行（ページの注意の囲みを撮るため）。
+const plugin_row_disabled = dashboard.PluginRow(
+  "plugin-c",
+  Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
+  pages: [plugin.PluginPage(key: "status", title: "Status")],
+)
+
+/// 上の 3 行がいずれも持つ最初のページ。
+const plugin_status_page = plugin.PluginPage(key: "status", title: "Status")
+
+/// 節の記述。タイトルとブロックの文字列は `allowed_words` にある語だけで組む
+/// （`japanese_pages_test` を通すため）。
+fn plugin_section(title: String, blocks: List(Dynamic)) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
+/// ブロック（`text`）。
+fn plugin_text_block(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `title` を持たない、変換に失敗する節の記述。
+fn plugin_missing_title_section() -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("blocks"), dynamic.list([])),
   ])
 }
 
@@ -411,6 +510,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.users_icon(),
         view.clock_icon(),
         view.puzzle_icon(),
+        view.file_text_icon(),
       ],
       element.to_string,
     ),

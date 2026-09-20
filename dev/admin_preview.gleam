@@ -9,6 +9,7 @@
 //// 管理パスワードは固定の値で、鍵は公開のテストベクター、secret はダミーの値である。
 
 import envoy
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/int
 import gleam/option.{None, Some}
@@ -19,6 +20,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault
+import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -160,6 +162,112 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
   }
 }
 
+/// `console_logger` の `status` ページの記述。`pairs` の節、`table` の節に加え、
+/// 変換に失敗する節を 1 つ持つ（失敗した節だけを囲みに差し替えて出す画面を撮るため）。
+fn console_logger_status_description() -> Dynamic {
+  let text_inline = fn(text: String) {
+    dynamic.properties([
+      #(dynamic.string("type"), dynamic.string("text")),
+      #(dynamic.string("text"), dynamic.string(text)),
+    ])
+  }
+  dynamic.properties([
+    #(
+      dynamic.string("sections"),
+      dynamic.list([
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("section")),
+          #(dynamic.string("title"), dynamic.string("Queue")),
+          #(
+            dynamic.string("blocks"),
+            dynamic.list([
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("pairs")),
+                #(
+                  dynamic.string("items"),
+                  dynamic.list([
+                    dynamic.properties([
+                      #(dynamic.string("term"), dynamic.string("processed")),
+                      #(dynamic.string("value"), text_inline("42")),
+                    ]),
+                  ]),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("section")),
+          #(dynamic.string("title"), dynamic.string("Recent events")),
+          #(
+            dynamic.string("blocks"),
+            dynamic.list([
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("table")),
+                #(
+                  dynamic.string("headers"),
+                  dynamic.list([dynamic.string("kind"), dynamic.string("id")]),
+                ),
+                #(
+                  dynamic.string("rows"),
+                  dynamic.list([
+                    dynamic.list([text_inline("1"), text_inline("abcd1234")]),
+                  ]),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+        dynamic.properties([#(dynamic.string("type"), dynamic.string("nope"))]),
+      ]),
+    ),
+  ])
+}
+
+/// `console_logger` の `settings` ページの記述。節を 0 件にし、ページ全体の空の状態の
+/// 文を撮る。
+fn console_logger_settings_description() -> Dynamic {
+  dynamic.properties([#(dynamic.string("sections"), dynamic.list([]))])
+}
+
+/// `broken` の `status` ページの記述。`Disabled` の注意の囲みと並べて撮る。
+fn broken_status_description() -> Dynamic {
+  dynamic.properties([
+    #(
+      dynamic.string("sections"),
+      dynamic.list([
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("section")),
+          #(dynamic.string("title"), dynamic.string("Status")),
+          #(
+            dynamic.string("blocks"),
+            dynamic.list([
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("text")),
+                #(
+                  dynamic.string("text"),
+                  dynamic.string("last known state before it was disabled"),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+      ]),
+    ),
+  ])
+}
+
+/// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。
+fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
+  case name, key {
+    "console_logger", "status" -> Ok(console_logger_status_description())
+    "console_logger", "settings" -> Ok(console_logger_settings_description())
+    "broken", "status" -> Ok(broken_status_description())
+    "slow", "status" -> Error("plugin did not answer in time")
+    _, _ -> Error("plugin not found")
+  }
+}
+
 /// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。登録は
 /// `signer` の鍵なら「反映されていない」（409）、ラベルが `not-ready` / `maybe` なら
 /// それぞれ 503 / 202 を返す（生成した鍵の確認ページの撮影用）。
@@ -228,10 +336,18 @@ fn context() -> admin.Context {
     },
     plugins: fn(_deadline) {
       [
-        dashboard.PluginRow("console_logger", Some(plugin_runner.Running)),
+        dashboard.PluginRow(
+          "console_logger",
+          Some(plugin_runner.Running),
+          pages: [
+            plugin.PluginPage(key: "status", title: "Status"),
+            plugin.PluginPage(key: "settings", title: "Settings"),
+          ],
+        ),
         dashboard.PluginRow(
           "event_logger",
           Some(plugin_runner.Overloaded(dropped: 42)),
+          pages: [],
         ),
         dashboard.PluginRow(
           "broken",
@@ -239,8 +355,11 @@ fn context() -> admin.Context {
             reason: "error:<script>alert(1)</script>",
             dropped: 3,
           )),
+          pages: [plugin.PluginPage(key: "status", title: "Status")],
         ),
-        dashboard.PluginRow("slow", None),
+        dashboard.PluginRow("slow", None, pages: [
+          plugin.PluginPage(key: "status", title: "Status"),
+        ]),
       ]
     },
     add_relay: adding_relay,
@@ -249,6 +368,7 @@ fn context() -> admin.Context {
     delete_relay: changing_relay,
     connect_client: fn(_request, _signer) { Error(admin.RelayNotConnected) },
     reenable_plugin: reenabling,
+    plugin_page_content: plugin_page_content,
     sessions: fn() {
       let now = time.now_seconds()
       Ok([

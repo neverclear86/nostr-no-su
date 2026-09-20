@@ -266,7 +266,13 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.PluginUnavailable -> Some(i18n.Dropped(3))
     i18n.Dropped(_) -> Some(i18n.NoPlugins)
     i18n.NoPlugins -> Some(i18n.PluginSectionEmpty)
-    i18n.PluginSectionEmpty -> Some(i18n.ApproveConnection)
+    i18n.PluginSectionEmpty -> Some(i18n.PluginPage)
+    i18n.PluginPage -> Some(i18n.OpenPluginPage)
+    i18n.OpenPluginPage -> Some(i18n.PluginPageEmpty)
+    i18n.PluginPageEmpty -> Some(i18n.PluginSectionFailed)
+    i18n.PluginSectionFailed -> Some(i18n.PluginPageUnavailable)
+    i18n.PluginPageUnavailable -> Some(i18n.PluginPageWhileDisabled)
+    i18n.PluginPageWhileDisabled -> Some(i18n.ApproveConnection)
     i18n.ApproveConnection -> Some(i18n.WrongSecretOffered)
     i18n.WrongSecretOffered -> Some(i18n.WrongSecretNotice)
     i18n.WrongSecretNotice -> Some(i18n.Approved)
@@ -354,12 +360,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 184 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 190 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 184
+  assert list.length(messages) == 190
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
