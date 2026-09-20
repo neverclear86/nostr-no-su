@@ -288,6 +288,8 @@ pub type Message {
   RelayUrlHint
   UseForMonitoring
   UseForBunker
+  MonitorRoleDescription
+  BunkerRoleDescription
   AddRelayDescription
   InvalidRelayUrl
   RelayAlreadyRegistered
@@ -367,7 +369,6 @@ pub type Message {
   RegistrationNotAccepted
   RegistrationNotConfirmed
   AccountRegistered
-  Account
   BackUpIfNotAlready
   RegisteredKeyNotice
   // アカウントの操作のページ
@@ -510,6 +511,9 @@ fn english(message: Message) -> String {
     RelayUrlHint -> "Starts with ws:// or wss://."
     UseForMonitoring -> "Use for monitoring"
     UseForBunker -> "Use for the bunker"
+    MonitorRoleDescription ->
+      "Subscribes to registered accounts' events and passes them to plugins"
+    BunkerRoleDescription -> "Accepts NIP-46 requests"
     AddRelayDescription ->
       "Relays used for monitoring are subscribed to for events written by the registered accounts. Relays used for the bunker are listed as relay= in every connection URI. Use NIP-46-only relays, which refuse subscriptions other than kind 24133, for the bunker only."
     InvalidRelayUrl -> "relay url must be a valid ws:// or wss:// url"
@@ -614,7 +618,6 @@ fn english(message: Message) -> String {
     RegistrationNotConfirmed ->
       "The registration was not confirmed. Back up this key, then press \"Register this key\" again: it is registered if it was not, or \"account is already registered\" is shown if it was."
     AccountRegistered -> "Account registered"
-    Account -> "Account"
     BackUpIfNotAlready -> "Back up this private key if you have not already."
     RegisteredKeyNotice ->
       "It is shown again only when you re-enter the admin password. The connection URI is on the dashboard."
@@ -751,6 +754,8 @@ fn japanese(message: Message) -> String {
     RelayUrlHint -> "ws:// か wss:// で始まる URL。"
     UseForMonitoring -> "監視に使う"
     UseForBunker -> "バンカーに使う"
+    MonitorRoleDescription -> "登録アカウントのイベントを購読してプラグインに渡す"
+    BunkerRoleDescription -> "NIP-46 のリクエストを受け付ける"
     AddRelayDescription ->
       "監視に使うリレーでは、登録したアカウントが書いたイベントを購読します。バンカーに使うリレーは、すべての接続 URI の relay= に入ります。kind 24133 以外の購読を拒否する NIP-46 専用のリレーは、バンカーにだけ使ってください。"
     InvalidRelayUrl -> "ws:// か wss:// で始まる正しい URL を入力してください。"
@@ -847,7 +852,6 @@ fn japanese(message: Message) -> String {
     RegistrationNotConfirmed ->
       "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「account is already registered」と表示します。"
     AccountRegistered -> "アカウントを登録しました"
-    Account -> "アカウント"
     BackUpIfNotAlready -> "まだバックアップしていなければ、この秘密鍵をバックアップしてください。"
     RegisteredKeyNotice -> "もう一度表示するには、管理パスワードの入力が必要です。接続 URI はダッシュボードにあります。"
     Save -> "保存する"

@@ -228,7 +228,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.RelayUrl -> Some(i18n.RelayUrlHint)
     i18n.RelayUrlHint -> Some(i18n.UseForMonitoring)
     i18n.UseForMonitoring -> Some(i18n.UseForBunker)
-    i18n.UseForBunker -> Some(i18n.AddRelayDescription)
+    i18n.UseForBunker -> Some(i18n.MonitorRoleDescription)
+    i18n.MonitorRoleDescription -> Some(i18n.BunkerRoleDescription)
+    i18n.BunkerRoleDescription -> Some(i18n.AddRelayDescription)
     i18n.AddRelayDescription -> Some(i18n.InvalidRelayUrl)
     i18n.InvalidRelayUrl -> Some(i18n.RelayAlreadyRegistered)
     i18n.RelayAlreadyRegistered -> Some(i18n.RelayRoleRequired)
@@ -304,8 +306,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.RegisterThisKey -> Some(i18n.RegistrationNotAccepted)
     i18n.RegistrationNotAccepted -> Some(i18n.RegistrationNotConfirmed)
     i18n.RegistrationNotConfirmed -> Some(i18n.AccountRegistered)
-    i18n.AccountRegistered -> Some(i18n.Account)
-    i18n.Account -> Some(i18n.BackUpIfNotAlready)
+    i18n.AccountRegistered -> Some(i18n.BackUpIfNotAlready)
     i18n.BackUpIfNotAlready -> Some(i18n.RegisteredKeyNotice)
     i18n.RegisteredKeyNotice -> Some(i18n.Save)
     i18n.Save -> Some(i18n.RotateSecretSubmit)
@@ -352,12 +353,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 182 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 183 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 182
+  assert list.length(messages) == 183
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

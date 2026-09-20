@@ -742,7 +742,7 @@ pub fn label_update_rejects_an_invalid_label_test() {
 
 /// 編集のページを再描画しても、カードの上の要約は保存済みのラベルのまま。
 pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
-  let saved = "<dd class=\"break-words\">" <> label <> "</dd>"
+  let saved = "<p class=\"font-semibold break-words\">" <> label <> "</p>"
   let invalid_input =
     simulate.read_body(
       post_form(context(), action_path(dashboard.EditLabel), [

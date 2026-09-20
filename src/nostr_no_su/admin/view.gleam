@@ -202,8 +202,6 @@ pub type Value {
   Code(String)
   /// ラベルや残り秒のように、単語の区切りで折り返す値。
   Plain(String)
-  /// npub と、あれば 16 進の公開鍵を縦に並べたアカウント。
-  Account(npub: String, hex: Option(String))
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
@@ -641,23 +639,28 @@ fn summary_value(value: Value) -> Element(msg) {
         html.text(text),
       ])
     Plain(text) -> html.dd([attribute.class("break-words")], [html.text(text)])
-    Account(npub:, hex:) -> {
-      let hex = case hex {
-        Some(hex) -> [
-          html.span([attribute.class("text-base-content/70")], [html.text(hex)]),
-        ]
-        None -> []
-      }
-      html.dd(
-        [
-          attribute.class(
-            "flex min-w-0 flex-col gap-1 font-mono text-xs break-all",
-          ),
-        ],
-        [html.span([], [html.text(npub)]), ..hex],
-      )
-    }
   }
+}
+
+/// アカウントを識別する、ラベルと省略した npub。アカウントの一覧、読み込みで飛ばされた
+/// 行、アカウントのサブページが使う。16 進の公開鍵はここには出さない。
+pub fn identity(
+  language: Language,
+  label: String,
+  npub: String,
+) -> Element(msg) {
+  html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
+    truncated_id(language, npub, i18n.text(language, i18n.CopyNpub)),
+  ])
+}
+
+/// アイコンを添えたカードの見出し。
+pub fn icon_heading(icon: Element(msg), title: String) -> Element(msg) {
+  html.div([attribute.class("flex items-center gap-2")], [
+    icon,
+    heading(title),
+  ])
 }
 
 /// 指定した宛先へ POST で送るフォーム。欄を並べ、最後に送信のボタンを置く。

@@ -179,6 +179,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       account_pages.generated_key_page(
         language,
         view.System,
+        "npub1example",
         "nsec1example",
         "",
         Some(account_pages.InvalidLabel(i18n.LabelHasControlCharacters)),
@@ -222,6 +223,12 @@ pub fn pages(language: i18n.Language) -> List(String) {
         relay_store.Relay(1, "wss://a", Roles(True, True)),
         dashboard.EditRelayRoles,
         Some(Roles(False, False)),
+        Some(dashboard.RelayRow(
+          1,
+          "wss://a",
+          dashboard.Reported(relay_connection.Connected),
+          dashboard.Unused,
+        )),
         Some(i18n.Translated(i18n.RelayRoleRequired)),
       ),
       relay_pages.relay_action_page(
@@ -229,6 +236,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         relay_store.Relay(1, "wss://a", Roles(True, True)),
         dashboard.DeleteRelay,
+        None,
         None,
         Some(reason),
       ),
@@ -275,6 +283,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         account_pages.generated_key_page(
           language,
           view.System,
+          "npub1example",
           "nsec1example",
           "label-a",
           Some(problem),

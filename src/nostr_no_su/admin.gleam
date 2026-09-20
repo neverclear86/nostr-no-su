@@ -1068,9 +1068,15 @@ fn generate_account(
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
-  account.generate(crypto.strong_random_bytes)
-  |> account.nsec
-  |> account_pages.generated_key_page(language, theme, _, "", None)
+  let generated = account.generate(crypto.strong_random_bytes)
+  account_pages.generated_key_page(
+    language,
+    theme,
+    account.npub(generated),
+    account.nsec(generated),
+    "",
+    None,
+  )
   |> wisp.html_response(200)
 }
 
@@ -1126,6 +1132,7 @@ fn register_generated_account(
     account_pages.generated_key_page(
       language,
       theme,
+      account.npub(generated),
       account.nsec(generated),
       label,
       Some(account_pages.InvalidLabel(reason)),
@@ -1136,6 +1143,7 @@ fn register_generated_account(
     account_pages.generated_key_page(
       language,
       theme,
+      account.npub(generated),
       account.nsec(generated),
       label,
       Some(problem),
@@ -1406,8 +1414,27 @@ fn relay_action(
 ) -> Response {
   use relay <- with_relay(context, language, theme, id)
   case request.method, action {
-    http.Get, _ ->
-      relay_pages.relay_action_page(language, theme, relay, action, None, None)
+    http.Get, dashboard.EditRelayRoles ->
+      relay_pages.relay_action_page(
+        language,
+        theme,
+        relay,
+        dashboard.EditRelayRoles,
+        None,
+        relay_states(context, id),
+        None,
+      )
+      |> wisp.html_response(200)
+    http.Get, dashboard.DeleteRelay ->
+      relay_pages.relay_action_page(
+        language,
+        theme,
+        relay,
+        dashboard.DeleteRelay,
+        None,
+        None,
+        None,
+      )
       |> wisp.html_response(200)
     http.Post, dashboard.EditRelayRoles -> {
       use form <- wisp.require_form(request)
@@ -1419,6 +1446,7 @@ fn relay_action(
           relay,
           dashboard.EditRelayRoles,
           Some(roles),
+          relay_states(context, id),
           Some(reason),
         )
       }
@@ -1447,11 +1475,21 @@ fn relay_action(
             relay,
             dashboard.DeleteRelay,
             None,
+            None,
             Some(reason),
           )
         },
       )
     _, _ -> method_not_allowed(language, theme, [http.Get, http.Post])
+  }
+}
+
+/// リレー 1 件の用途の接続状態。一覧を得られないときと行が無いときは `None` にし、
+/// 用途の編集のページはバッジを出さない。
+fn relay_states(context: Context, id: Int) -> Option(dashboard.RelayRow) {
+  case context.relays(task.deadline_in(snapshot_deadline_ms)) {
+    Ok(rows) -> list.find(rows, fn(row) { row.id == id }) |> option.from_result
+    Error(_) -> None
   }
 }
 

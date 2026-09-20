@@ -726,7 +726,7 @@ pub fn update_relay_roles_requires_a_role_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 削除のページは URL を `dd` で出し、送信ボタンは注意の重さ。POST は id を Context に
+/// 削除のページは URL を `dd` で出し、送信ボタンは破壊の重さ。POST は id を Context に
 /// 渡し、ダッシュボードへ 303 で戻す。
 pub fn delete_relay_page_and_submit_test() {
   let path = dashboard.relay_action_path(2, dashboard.DeleteRelay)
@@ -735,13 +735,48 @@ pub fn delete_relay_page_and_submit_test() {
     body,
     "<dd class=\"font-mono text-xs break-all\">wss://bunker.example</dd>",
   )
-  assert string.contains(body, "btn-warning")
+  assert string.contains(body, "btn-error")
 
   let reports = process.new_subject()
   let response = post(reporting_context(reports), path)
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000) == Ok(RelayDeleted(2))
+}
+
+/// 削除の確認の送信ボタンは破壊の重さ（`btn-error`）で、編集の主操作（`btn-primary`）
+/// とは異なる。
+pub fn relay_delete_confirmation_uses_the_destructive_button_test() {
+  let body =
+    simulate.read_body(get(
+      context(),
+      dashboard.relay_action_path(2, dashboard.DeleteRelay),
+    ))
+  assert string.contains(
+    body,
+    "btn btn-error self-start focus-visible:outline-base-content",
+  )
+}
+
+/// 用途の編集の画面は、用途ごとの説明と、`states` が `Some` のときはその用途の今の
+/// 接続状態のバッジを出す。
+pub fn relay_edit_page_describes_and_reports_each_role_test() {
+  let body =
+    simulate.read_body(get(
+      context(),
+      dashboard.relay_action_path(1, dashboard.EditRelayRoles),
+    ))
+  // アポストロフィは `houdini.escape` が `&#39;` にするので、その形で照合する。
+  assert string.contains(
+    body,
+    "Subscribes to registered accounts&#39; events and passes them to plugins",
+  )
+  assert string.contains(
+    body,
+    i18n.text(i18n.English, i18n.BunkerRoleDescription),
+  )
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelayConnected))
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleUnused))
 }
 
 /// 一覧に無い id への操作の GET と POST は 404 で `RelayNotFound` を出し、Context の

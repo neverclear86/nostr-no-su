@@ -634,7 +634,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
     _ ->
       entry_item([
         html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-          identity(language, row.label, row.npub),
+          view.identity(language, row.label, row.npub),
           html.p([attribute.class("text-sm")], [
             html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
           ]),
@@ -711,18 +711,9 @@ fn listed_body(
 /// アカウント 1 件。識別、接続 URI と公開鍵の畳み、操作のリンクを縦に並べる。
 fn account_item(language: Language, account: AccountRow) -> Element(msg) {
   html.li([attribute.class("flex flex-col gap-3 py-4 first:pt-0 last:pb-0")], [
-    identity(language, account.label, account.npub),
+    view.identity(language, account.label, account.npub),
     uri_details(language, account),
     account_action_links(language, account.signer),
-  ])
-}
-
-/// アカウントを識別する、ラベルと省略した npub。読み込みで飛ばされた行の一覧からも使う。
-/// 16 進の公開鍵はここには出さず、接続 URI の畳みの中だけに出す。
-fn identity(language: Language, label: String, npub: String) -> Element(msg) {
-  html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
-    view.truncated_id(language, npub, i18n.text(language, i18n.CopyNpub)),
   ])
 }
 
@@ -1181,16 +1172,22 @@ fn relay_role(
   state: RoleState,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let badge = case state {
+  html.span([attribute.class("flex items-center gap-2")], [
+    icon,
+    html.span([attribute.class("whitespace-nowrap")], [html.text(text(role))]),
+    role_state_badge(language, state),
+  ])
+}
+
+/// 用途 1 つぶんの接続状態のバッジ。ダッシュボードの行とリレーの用途の編集のページが
+/// 使う。
+pub fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
+  let text = i18n.text(language, _)
+  case state {
     Reported(status) -> relay_status(language, status)
     Unanswered -> view.status_badge(view.Neutral, text(i18n.PluginUnavailable))
     Unused -> view.status_badge(view.Neutral, text(i18n.RelayRoleUnused))
   }
-  html.span([attribute.class("flex items-center gap-2")], [
-    icon,
-    html.span([attribute.class("whitespace-nowrap")], [html.text(text(role))]),
-    badge,
-  ])
 }
 
 /// 承認済みセッションと、その取り消しボタン。一覧を得られないときは、一覧の
