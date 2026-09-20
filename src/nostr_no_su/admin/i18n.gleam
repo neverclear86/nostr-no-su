@@ -325,6 +325,7 @@ pub type Message {
   PluginUnavailable
   Dropped(count: Int)
   NoPlugins
+  PluginSectionEmpty
   // 承認ページと通知ページ
   ApproveConnection
   WrongSecretOffered
@@ -558,6 +559,7 @@ fn english(message: Message) -> String {
     PluginUnavailable -> "unavailable"
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
     NoPlugins -> "No plugins enabled."
+    PluginSectionEmpty -> "Nothing to show."
     ApproveConnection -> "Approve connection"
     WrongSecretOffered -> "The connection secret does not match."
     WrongSecretNotice ->
@@ -795,6 +797,7 @@ fn japanese(message: Message) -> String {
     PluginUnavailable -> "応答なし"
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。"
+    PluginSectionEmpty -> "表示する内容はありません。"
     ApproveConnection -> "接続を承認"
     WrongSecretOffered -> "接続 secret が一致しません。"
     WrongSecretNotice ->

@@ -1,0 +1,264 @@
+//// プラグインの記述 map から `admin/view` の部品への変換（`admin/plugin_view`）の
+//// 単体テスト。
+////
+//// 記述 map は `dynamic.properties` / `dynamic.string` / `dynamic.list` で組む
+//// （`test/event_test.gleam` と同じ形）。
+
+import gleam/dynamic.{type Dynamic}
+import gleam/list
+import gleam/string
+import lustre/element
+import lustre/element/html
+import nostr_no_su/admin/i18n
+import nostr_no_su/admin/plugin_view.{Context}
+import nostr_no_su/admin/view
+
+/// binary キーの map をキーと値の組から組み立てる。
+fn map_(entries: List(#(String, Dynamic))) -> Dynamic {
+  dynamic.properties(
+    entries |> list.map(fn(entry) { #(dynamic.string(entry.0), entry.1) }),
+  )
+}
+
+/// インライン（`text`）。
+fn text_inline(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
+}
+
+/// インライン（`code`）。
+fn code_inline(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("code")), #("text", dynamic.string(text))])
+}
+
+/// インライン（`badge`）。
+fn badge_inline(text: String, tone: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("badge")),
+    #("text", dynamic.string(text)),
+    #("tone", dynamic.string(tone)),
+  ])
+}
+
+/// ブロック（`text`）。
+fn text_block(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
+}
+
+/// ブロック（`note`）。
+fn note_block(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("note")), #("text", dynamic.string(text))])
+}
+
+/// ブロック（`pairs`）。`items` は `#(term, value)` の並び。
+fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
+  map_([
+    #("type", dynamic.string("pairs")),
+    #(
+      "items",
+      dynamic.list(
+        list.map(items, fn(item) {
+          map_([#("term", dynamic.string(item.0)), #("value", item.1)])
+        }),
+      ),
+    ),
+  ])
+}
+
+/// ブロック（`table`）。
+fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
+  map_([
+    #("type", dynamic.string("table")),
+    #("headers", dynamic.list(list.map(headers, dynamic.string))),
+    #("rows", dynamic.list(list.map(rows, dynamic.list))),
+  ])
+}
+
+/// ブロック（`alert`）。
+fn alert_block(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("alert")), #("text", dynamic.string(text))])
+}
+
+/// ブロック（`link`）。
+fn link_block(page: String, text: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("link")),
+    #("page", dynamic.string(page)),
+    #("text", dynamic.string(text)),
+  ])
+}
+
+/// 節。
+fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
+  map_([
+    #("type", dynamic.string("section")),
+    #("title", dynamic.string(title)),
+    #("blocks", dynamic.list(blocks)),
+  ])
+}
+
+/// テストが使う文脈。ページのキー `settings` だけを解決できる。
+fn context() -> plugin_view.Context {
+  Context(language: i18n.English, page_href: fn(key) {
+    case key {
+      "settings" -> Ok("/plugins/example/settings")
+      _ -> Error(Nil)
+    }
+  })
+}
+
+/// 対応する種別ごとの部品で、対応する文字列とクラスで描かれる。
+pub fn section_renders_every_block_type_test() {
+  let raw =
+    section_("Settings", [
+      text_block("A plain paragraph."),
+      note_block("A quieter note."),
+      pairs_block([
+        #("state", text_inline("running")),
+        #("id", code_inline("abc123")),
+      ]),
+      table_block(["Name", "Status"], [
+        [text_inline("worker"), badge_inline("ok", "success")],
+      ]),
+      alert_block("Something happened."),
+      link_block("settings", "Open settings"),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+
+  assert string.contains(
+    body,
+    element.to_string(view.form_description("A plain paragraph.")),
+  )
+  assert string.contains(body, element.to_string(view.hint("A quieter note.")))
+  assert string.contains(
+    body,
+    element.to_string(
+      view.summary_list([
+        #("state", view.Plain("running")),
+        #("id", view.Code("abc123")),
+      ]),
+    ),
+  )
+  assert string.contains(body, "worker")
+  assert string.contains(
+    body,
+    element.to_string(view.status_badge(view.Success, "ok")),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.alert(view.Info, [html.text("Something happened.")])),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.button_link(
+      "/plugins/example/settings",
+      "Open settings",
+      view.Normal,
+    )),
+  )
+}
+
+/// 未知の種別は、節の見出しとブロックの位置を添えた 1 行の `Error` になる。
+pub fn unknown_type_is_an_error_test() {
+  let raw = section_("設定", [map_([#("type", dynamic.string("chart"))])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == "section \"設定\": block #0: unknown type \"chart\""
+}
+
+/// 節の `type` が `"section"` でなければ `Error` になる（決めたこと 10）。
+pub fn section_type_mismatch_is_an_error_test() {
+  let raw =
+    map_([
+      #("type", dynamic.string("note")),
+      #("title", dynamic.string("設定")),
+      #("blocks", dynamic.list([])),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == "unknown type \"note\""
+}
+
+/// 型の合わない値は `Error` になる。
+pub fn wrong_value_type_is_an_error_test() {
+  let bad_value =
+    map_([#("type", dynamic.string("text")), #("text", dynamic.int(1))])
+  let raw = section_("Values", [pairs_block([#("state", bad_value)])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "text must be a String, got Int")
+}
+
+/// 節をブロックとして入れ子にすると、種別が閉じた段に合わないので `Error`
+/// になる。
+pub fn nested_section_is_an_error_test() {
+  let nested =
+    map_([
+      #("type", dynamic.string("section")),
+      #("title", dynamic.string("Inner")),
+      #("blocks", dynamic.list([])),
+    ])
+  let raw = section_("Outer", [nested])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "unknown type \"section\"")
+}
+
+/// `table` のセルにブロックを置くと、インラインの段に合わないので `Error` に
+/// なる。
+pub fn block_in_a_cell_is_an_error_test() {
+  let raw = section_("Cells", [table_block(["A"], [[table_block(["B"], [])]])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "unknown type \"table\"")
+}
+
+/// `sections` が返す節はそれぞれ独立に描画される。壊れた節が 1 つあっても、
+/// 他の節は `Ok` になる。
+pub fn other_sections_still_render_test() {
+  let description =
+    map_([
+      #(
+        "sections",
+        dynamic.list([
+          section_("Broken", [map_([#("type", dynamic.string("mystery"))])]),
+          section_("Fine", [text_block("ok")]),
+        ]),
+      ),
+    ])
+  let assert Ok(raw_sections) = plugin_view.sections(description)
+  let assert [Error(_), Ok(_)] =
+    list.map(raw_sections, plugin_view.section(_, context()))
+}
+
+/// 節のカードの中身（見出しとブロック）は `lang="en"` の 1 つの祖先の中にある。
+pub fn plugin_text_is_marked_english_test() {
+  let raw = section_("English Only", [text_block("Some plugin text.")])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  let assert [_, after] = string.split(body, "<div lang=\"en\">")
+  assert string.contains(after, "English Only")
+  assert string.contains(after, "Some plugin text.")
+}
+
+/// `blocks` が空の節には翻訳した空の状態の文が出て、それは `lang="en"` の外に
+/// 置かれる。
+pub fn empty_section_shows_the_translated_line_test() {
+  let raw = section_("Empty", [])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  let translated = i18n.text(i18n.English, i18n.PluginSectionEmpty)
+  let assert [before_close, ..] = string.split(body, "</div>")
+  assert !string.contains(before_close, translated)
+  assert string.contains(body, translated)
+}
+
+/// `pairs` の `items` が 0 件の節には翻訳した空の状態の文が出る。
+pub fn empty_pairs_shows_the_translated_line_test() {
+  let raw = section_("Has Pairs", [pairs_block([])])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(body, i18n.text(i18n.English, i18n.PluginSectionEmpty))
+}
+
+/// `page_href` が `Error(Nil)` を返すキーの `link` は節の `Error` になる。
+pub fn unknown_page_key_is_an_error_test() {
+  let raw = section_("Links", [link_block("missing", "Go")])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "unknown page \"missing\"")
+}
