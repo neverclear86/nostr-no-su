@@ -674,7 +674,8 @@ fn kill_registered(name: Atom) -> Nil
 /// 持たせないのは、購読の報告（`subscribed`）がすべて監視の接続のものになる
 /// ようにするためである。プラグインを載せると、その取り直しの要求も本番と同じ
 /// `app.plugin_catchups` から購読へ現れる。`load_plugin_resume` はプラグインの
-/// 保存済みの再開点を読む操作。
+/// 保存済みの再開点を読む操作。`catchups` は取り直しの要求を問い合わせる操作で、
+/// 呼び出し側は通常 `app.plugin_catchups(plugins)` を渡す。
 fn monitored_accounts_spec(
   reports: Subject(Report),
   subscribed: Subject(SubscriptionReport),
@@ -684,6 +685,7 @@ fn monitored_accounts_spec(
   load_resume: fn(String) -> Result(Option(Int), String),
   plugins: List(app.PluginSpec),
   load_plugin_resume: fn(String) -> Result(Option(Int), String),
+  catchups: fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
 ) -> app.Spec {
   let dedup_name = process.new_name("test_dedup")
   app.Spec(
@@ -697,7 +699,7 @@ fn monitored_accounts_spec(
         dedup_name,
         load_resume,
         load_plugin_resume,
-        app.plugin_catchups(plugins),
+        catchups,
         _,
       ),
       save_resume: discard_resume_points,
@@ -741,6 +743,7 @@ pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
       fixed_resume_point(Ok(Some(1234))),
       [],
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
     ))
   let assert Ok(Subscribed(_relay_url, [message.Req("nostr-no-su", filter)])) =
     process.receive(subscribed, 2000)
@@ -773,6 +776,7 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
       fixed_resume_point(Ok(None)),
       [],
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
     )
   let tree = start_tree(spec)
   assert process.receive(subscribed, 2000) == Ok(Subscribed(test_relay_url, []))
@@ -826,6 +830,7 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
       fixed_resume_point(Ok(None)),
       [],
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
     ))
   let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
     await_connection(reports)
@@ -876,7 +881,34 @@ pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
       fixed_resume_point(Error("unavailable")),
       [],
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
     ))
+  let assert Ok(first) = process.receive(subscribed, 2000)
+  assert first == Retrying(test_relay_url)
+  assert_never_requests(subscribed, time.monotonic_ms() + 500)
+  stop_tree(tree)
+}
+
+/// 取り直しの要求の問い合わせに失敗すると、購読の定義全体を得られなかった
+/// ことになり、監視の購読も張らずに再試行を続ける（開いている購読を閉じない）。
+pub fn catchups_that_fail_keep_the_definition_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let tree =
+    start_tree(
+      monitored_accounts_spec(
+        reports,
+        subscribed,
+        bunker_name,
+        store_with_load(fn() { load_signer(signer_key) }),
+        [test_relay()],
+        fixed_resume_point(Ok(None)),
+        [],
+        fixed_resume_point(Ok(None)),
+        fn() { Error(Nil) },
+      ),
+    )
   let assert Ok(first) = process.receive(subscribed, 2000)
   assert first == Retrying(test_relay_url)
   assert_never_requests(subscribed, time.monotonic_ms() + 500)
@@ -930,6 +962,7 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   let bunker_name = process.new_name("test_bunker")
   let runner = process.new_name("test_plugin_forwarding")
   let signer = account.pubkey_hex(account_for(signer_key))
+  let plugins = [forwarding_spec(runner, process.new_subject())]
   let before_start = time.now_seconds()
   let tree =
     start_tree(monitored_accounts_spec(
@@ -939,8 +972,9 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
       store_with_load(fn() { load_signer(signer_key) }),
       [test_relay()],
       fixed_resume_point(Ok(None)),
-      [forwarding_spec(runner, process.new_subject())],
+      plugins,
       fixed_resume_point(Ok(Some(1234))),
+      app.plugin_catchups(plugins),
     ))
   let #(_skipped, first) =
     receive_until(subscribed, requests_a_catchup(_, test_relay_url), 2000)
@@ -977,6 +1011,12 @@ pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
   let bunker_name = process.new_name("test_bunker")
+  let plugins = [
+    forwarding_spec(
+      process.new_name("test_plugin_forwarding"),
+      process.new_subject(),
+    ),
+  ]
   let tree =
     start_tree(monitored_accounts_spec(
       reports,
@@ -985,13 +1025,9 @@ pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
       store_with_load(fn() { load_signer(signer_key) }),
       [test_relay()],
       fixed_resume_point(Ok(None)),
-      [
-        forwarding_spec(
-          process.new_name("test_plugin_forwarding"),
-          process.new_subject(),
-        ),
-      ],
+      plugins,
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups(plugins),
     ))
   let #(_skipped, first) =
     receive_until(subscribed, requests_on(_, test_relay_url), 2000)
@@ -1546,6 +1582,7 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
       fixed_resume_point(Ok(None)),
       [],
       fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
     )
   let tree = start_tree(spec)
   let r = "ws://runtime-monitor.test"
