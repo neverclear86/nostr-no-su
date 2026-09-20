@@ -82,7 +82,8 @@ root (one_for_one, 3/60)
 │   ├── dedup
 │   ├── connections (factory, 5/10)    監視リレーの用途の relay_connection
 │   │   └── relay_connection × 監視リレーの数
-│   └── resume_saver
+│   ├── resume_saver
+│   └── plugin_resume_saver
 └── admin        (mist)                管理 UI の HTTP サーバー（ADMIN_PORT が有効なときだけ）
 ```
 
@@ -287,6 +288,7 @@ DB が起動時に到達可能なら、どの接続も読み込み済みの署�
 版 2 は監視の購読の再開点のテーブル（`monitor_resume`）である。監視はバンカーの署名者が 1 件以上のときだけこのテーブルを読むので、読むのは読み込みが 1 回成功した後になる（「監視の購読」の節）。
 版 3 は承認済みのセッション（`bunker_sessions`）と承認待ち（`bunker_pending`）のテーブルで、読み込みは同じトランザクションでこれらも読む。どれかが読めなければ読み込み全体が失敗する。
 版 4 は登録したリレーのテーブル（`relays`）である。読み込みは同じトランザクションでこれも読み、読み込みが成功するたびに行を `relay_list` へ渡す（「実行時のリレーの増減」の節）。
+版 5 はプラグインごとの再開点のテーブル（`plugin_resume`）である。ランナーが処理したイベントの `created_at` で前進し、保存のアクターが 5 秒ごとに書く。
 
 再試行を名前なしの subject へ予約するのは、名前付き subject へのタイマーが名前宛てになり、再起動した後の同じ名前のアクターに届いて再試行が重複するためである。
 名前なしの subject は pid 宛てなので、アクターが終了するとランタイムがタイマーを取り消す。
@@ -607,6 +609,10 @@ flowchart TD
 サンドボックスは無く、秘密鍵を持つアクターの状態にも到達できる。
 信頼できるものだけを置くこと（[プラグイン API v1](plugin-api.md) の第 1 章）。
 
+ランナーはプラグインごとの再開点をメモリに持ち、処理したイベントの `created_at` で前進させる。
+無効化（`Disabled`）の間のイベントは捨てるだけなので前進せず、過負荷（`Overloaded`）の切り捨てでは前進する。
+保存は `plugin_resume_saver` が 5 秒ごとに各ランナーへ問い合わせ、前回の写しと違うプラグインだけを `plugin_resume` に値を小さくせずに書く。
+
 ## ディレクトリ構造
 
 ```
@@ -628,11 +634,12 @@ nostr-no-su/
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）
 │       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
-│       ├── dedup/resume_store.gleam 再開点の SQL
+│       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
+│       ├── plugin_resume_store.gleam プラグインごとの再開点の SQL
 │       ├── plugin_runner.gleam   プラグイン 1 つぶんの実行プロセス
 │       ├── plugins/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
