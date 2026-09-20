@@ -30,6 +30,9 @@
 //// `focus-visible:outline-base-content`、`input`、`checkbox`、`textarea`、`select` の
 //// 文字列には `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が
 //// 検査する）。
+////
+//// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
+//// で色を継ぐ飾りである。
 
 import gleam/int
 import gleam/list
@@ -169,7 +172,7 @@ pub type Placement {
   InForm
 }
 
-/// 通知や理由の囲みの色。
+/// 通知や理由の囲みと、状態のバッジの色。
 pub type Tone {
   /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウント、
   /// 承認待ち、セッションの一覧を得られない）。
@@ -199,7 +202,7 @@ pub type Value {
   Account(npub: String, hex: Option(String))
   /// RFC 3339 の UTC の時刻。折り返さず、数字の幅を揃える。
   Timestamp(String)
-  /// 不一致のように、注意を促す短い語。塗りの警告色のバッジで出し、折り返さない。
+  /// 不一致のように、注意を促す短い語。警告色の薄い塗りのバッジで出し、折り返さない。
   Flag(String)
 }
 
@@ -305,10 +308,10 @@ fn navbar(
           [
             attribute.href("/"),
             attribute.class(
-              "btn btn-ghost px-2 text-lg font-bold focus-visible:outline-base-content",
+              "btn btn-ghost gap-2 px-2 text-lg font-bold focus-visible:outline-base-content",
             ),
           ],
-          [html.text("nostr-no-su")],
+          [logo_icon(), html.text("nostr-no-su")],
         ),
       ]),
       html.div([attribute.class("navbar-end w-auto gap-2")], end),
@@ -323,6 +326,7 @@ fn theme_switch(
   return_to: String,
 ) -> Element(msg) {
   dropdown(
+    theme_icon(),
     i18n.text(language, i18n.ThemeSwitchLabel),
     theme_segments,
     return_to,
@@ -352,6 +356,7 @@ fn theme_label(theme: Theme) -> i18n.Message {
 /// （描画は cookie の有無を知らないため、表示中の判定は常に表示している言語につく）。
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
   dropdown(
+    language_icon(),
     i18n.text(current, i18n.LanguageSwitchLabel),
     language_segments,
     return_to,
@@ -383,6 +388,7 @@ fn language_switch(current: Language, return_to: String) -> Element(msg) {
 /// `action` へ POST する送信ボタンにする。JS なしで動き、外側のクリックと Esc では閉じない
 /// （`details` の仕様）。ARIA のメニューにしない（矢印キーの移動を実装しないため）。
 fn dropdown(
+  icon: Element(msg),
   label: String,
   action: List(String),
   return_to: String,
@@ -392,8 +398,15 @@ fn dropdown(
     [attribute.name(navbar_menu_name), attribute.class("dropdown dropdown-end")],
     [
       html.summary(
-        [attribute.class("btn btn-sm focus-visible:outline-base-content")],
-        [html.text(label), chevron_icon()],
+        [
+          attribute.aria_label(label),
+          attribute.class("btn btn-sm gap-1 focus-visible:outline-base-content"),
+        ],
+        [
+          icon,
+          html.span([attribute.class("hidden sm:inline")], [html.text(label)]),
+          chevron_icon(),
+        ],
       ),
       html.form(
         [
@@ -452,18 +465,44 @@ fn dropdown_item(
   )
 }
 
-/// 線で描く 16 × 16 の飾りのアイコン。読み上げない。
-fn icon(class: String, path: String) -> Element(msg) {
+/// 線で描く飾りの SVG アイコン。読み上げず、`currentColor` で線を描く。`extra` は既定の属性の
+/// 並びの末尾に足す。
+fn icon_svg(
+  class: String,
+  view_box: String,
+  extra: List(Attribute(msg)),
+  paths: List(String),
+) -> Element(msg) {
   svg.svg(
     [
       attribute.aria_hidden(True),
-      attribute.attribute("viewBox", "0 0 16 16"),
+      attribute.attribute("viewBox", view_box),
       attribute.attribute("fill", "none"),
       attribute.attribute("stroke", "currentColor"),
       attribute.attribute("stroke-width", "2"),
       attribute.class(class),
+      ..extra
     ],
-    [svg.path([attribute.attribute("d", path)])],
+    list.map(paths, fn(path) { svg.path([attribute.attribute("d", path)]) }),
+  )
+}
+
+/// 線で描く 16 × 16 の飾りのアイコン。読み上げない。
+fn icon(class: String, path: String) -> Element(msg) {
+  icon_svg(class, "0 0 16 16", [], [path])
+}
+
+/// Lucide（ISC）の 24 × 24 のストロークアイコン。`currentColor` で描き、読み上げない飾りに
+/// する。
+pub fn lucide_icon(class: String, paths: List(String)) -> Element(msg) {
+  icon_svg(
+    class,
+    "0 0 24 24",
+    [
+      attribute.attribute("stroke-linecap", "round"),
+      attribute.attribute("stroke-linejoin", "round"),
+    ],
+    paths,
   )
 }
 
@@ -585,13 +624,7 @@ fn summary_value(value: Value) -> Element(msg) {
           [html.text(text)],
         ),
       ])
-    Flag(text) ->
-      html.dd([], [
-        html.span(
-          [attribute.class("badge badge-sm badge-warning whitespace-nowrap")],
-          [html.text(text)],
-        ),
-      ])
+    Flag(text) -> html.dd([], [status_badge(Warning, text)])
   }
 }
 
@@ -670,13 +703,12 @@ pub fn button_link(href: String, text: String, weight: Weight) -> Element(msg) {
 /// 操作の重さと置き場所の組ごとのボタンのクラス。
 fn button_class(weight: Weight, placement: Placement) -> String {
   case placement, weight {
-    InRow, Normal -> "btn btn-sm focus-visible:outline-base-content"
+    InRow, Normal -> "btn btn-ghost btn-sm focus-visible:outline-base-content"
     InRow, Primary ->
-      "btn btn-sm btn-primary focus-visible:outline-base-content"
-    InRow, Caution ->
-      "btn btn-sm btn-warning focus-visible:outline-base-content"
+      "btn btn-primary btn-sm focus-visible:outline-base-content"
+    InRow, Caution -> "btn btn-ghost btn-sm focus-visible:outline-base-content"
     InRow, Destructive ->
-      "btn btn-sm btn-error focus-visible:outline-base-content"
+      "btn btn-ghost btn-sm text-error focus-visible:outline-base-content"
     InForm, Normal -> "btn self-start focus-visible:outline-base-content"
     InForm, Primary ->
       "btn btn-primary self-start focus-visible:outline-base-content"
@@ -864,14 +896,19 @@ pub fn copyable_field(
   ])
 }
 
-/// 通知や理由を、トーンの色の囲みで出す。
+/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(tone))], [html.span([], content)])
+  html.div([attribute.class(alert_class(tone))], [
+    tone_icon(tone),
+    html.span([], content),
+  ])
 }
 
-/// フォームの上に出す理由の囲み。`role="alert"` で伝え、色を `tone` にする。
+/// フォームの上に出す理由の囲み。`role="alert"` で伝え、先頭のトーンのアイコンと薄い塗りで
+/// `tone` を伝える。
 pub fn reason_alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
   html.div([attribute.role("alert"), attribute.class(alert_class(tone))], [
+    tone_icon(tone),
     html.span([], content),
   ])
 }
@@ -913,9 +950,13 @@ pub fn untranslated(text: String) -> Element(msg) {
   html.span([attribute.lang("en")], [html.text(text)])
 }
 
-/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。
+/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。先頭に警告の
+/// アイコンを置く。
 pub fn warning(content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(Warning))], [html.p([], content)])
+  html.div([attribute.class(alert_class(Warning))], [
+    tone_icon(Warning),
+    html.p([], content),
+  ])
 }
 
 /// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に
@@ -931,14 +972,286 @@ pub fn emphasized(
   ]
 }
 
-/// トーンごとの囲みのクラス。
+/// トーンごとの囲みのクラス。薄い塗り（`alert-soft`）に本文色の文字を合わせる
+/// （`alert-soft` は既定で状態色の文字にするため）。
 fn alert_class(tone: Tone) -> String {
   case tone {
-    Neutral -> "alert"
-    Success -> "alert alert-success"
-    Warning -> "alert alert-warning"
-    Failure -> "alert alert-error"
+    Neutral -> "alert alert-soft text-base-content"
+    Success -> "alert alert-soft alert-success text-base-content"
+    Warning -> "alert alert-soft alert-warning text-base-content"
+    Failure -> "alert alert-soft alert-error text-base-content"
   }
+}
+
+/// トーンごとのアイコン。`Neutral` は情報、ほかはトーンの色（`text-success` など）を付けた
+/// 丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有する。
+pub fn tone_icon(tone: Tone) -> Element(msg) {
+  case tone {
+    Neutral -> lucide_icon("size-4", info_icon_paths)
+    Success -> lucide_icon("size-4 text-success", check_circle_icon_paths)
+    Warning -> lucide_icon("size-4 text-warning", warning_triangle_icon_paths)
+    Failure -> lucide_icon("size-4 text-error", x_circle_icon_paths)
+  }
+}
+
+/// アイコン＋語の状態バッジ。`Neutral` は無色の ghost、ほかはトーンの色の薄い塗り。
+pub fn status_badge(tone: Tone, text: String) -> Element(msg) {
+  let class = case tone {
+    Neutral -> "badge badge-ghost badge-sm whitespace-nowrap gap-1"
+    Success -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-success"
+    Warning -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning"
+    Failure -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-error"
+  }
+  html.span([attribute.class(class)], [tone_icon(tone), html.text(text)])
+}
+
+/// 件数のピル。
+pub fn count_pill(count: Int) -> Element(msg) {
+  html.span([attribute.class("badge badge-ghost badge-sm tabular-nums")], [
+    html.text(int.to_string(count)),
+  ])
+}
+
+/// `<details>` の畳み。`summary` はボタンの見た目で、開閉の矢印と語を置く。本文は開いたときに
+/// 上へ余白を空ける。JS なしで動く。
+pub fn details_panel(
+  summary_text: String,
+  content: List(Element(msg)),
+) -> Element(msg) {
+  html.details([], [
+    html.summary(
+      [
+        attribute.class(
+          "btn btn-ghost btn-sm focus-visible:outline-base-content",
+        ),
+      ],
+      [chevron_icon(), html.text(summary_text)],
+    ),
+    html.div([attribute.class("pt-2")], content),
+  ])
+}
+
+/// 16 進や npub を先頭 10 桁と末尾 6 桁に短くし、間を `…` にした文字列。17 文字以下はそのまま
+/// 返す。
+pub fn shorten(value: String) -> String {
+  case string.length(value) <= 17 {
+    True -> value
+    False -> string.slice(value, 0, 10) <> "…" <> string.slice(value, -6, 6)
+  }
+}
+
+/// 省略した識別子。`shorten` した表示（`title` に全文）、コピー用の読み取り専用の全文の
+/// `input`、コピーボタンを並べ、`copyable_field` と同じ `role="status"` の案内を添える。
+/// ボタンは `priv/static/admin.js` の `copy` の処理を指し、その処理が読む構造
+/// （欄はボタンの直前の兄弟、囲みはボタンの親の親）に合わせている。
+pub fn truncated_id(
+  language: Language,
+  value: String,
+  copy_label: String,
+) -> Element(msg) {
+  let copied = i18n.text(language, i18n.Copied)
+  html.div([attribute.class("group")], [
+    html.div([attribute.class("flex items-center gap-1")], [
+      html.span([attribute.class("font-mono text-xs"), attribute.title(value)], [
+        html.text(shorten(value)),
+      ]),
+      html.input([
+        attribute.type_("text"),
+        attribute.readonly(True),
+        attribute.default_value(value),
+        attribute.class("sr-only"),
+      ]),
+      html.button(
+        [
+          attribute.type_("button"),
+          attribute.data("action", "copy"),
+          attribute.aria_label(copy_label),
+          attribute.class(
+            "btn btn-ghost btn-sm group-data-copied:btn-success focus-visible:outline-base-content",
+          ),
+        ],
+        [copy_icon()],
+      ),
+    ]),
+    html.span(
+      [
+        attribute.role("status"),
+        attribute.class("sr-only group-data-selected:not-sr-only"),
+      ],
+      [
+        html.span([attribute.class("hidden group-data-copied:inline")], [
+          html.text(copied),
+        ]),
+        html.span(
+          [attribute.class("hidden group-data-selected:inline text-sm")],
+          [html.text(i18n.text(language, i18n.SelectedPressCtrlC))],
+        ),
+      ],
+    ),
+  ])
+}
+
+/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作に使う。
+pub fn icon_button_link(
+  href: String,
+  icon: Element(msg),
+  text: String,
+  weight: Weight,
+) -> Element(msg) {
+  html.a([attribute.href(href), attribute.class(button_class(weight, InRow))], [
+    icon,
+    html.text(text),
+  ])
+}
+
+/// アイコンだけのボタンのリンク。語は読み上げのための `aria-label` に置く。
+pub fn icon_only_link(
+  href: String,
+  icon: Element(msg),
+  label: String,
+  weight: Weight,
+) -> Element(msg) {
+  html.a(
+    [
+      attribute.href(href),
+      attribute.aria_label(label),
+      attribute.class(button_class(weight, InRow)),
+    ],
+    [icon],
+  )
+}
+
+/// 上部バーのロゴの飾り（Lucide の shield）。
+pub fn logo_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+  ])
+}
+
+/// テーマの切り替えのアイコン（Lucide の sun-moon）。
+pub fn theme_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4", "M12 2v2", "M12 20v2",
+    "m4.9 4.9 1.4 1.4", "m17.7 17.7 1.4 1.4", "M2 12h2", "M20 12h2",
+    "m6.3 17.7-1.4 1.4", "m19.1 4.9-1.4 1.4",
+  ])
+}
+
+/// 言語の切り替えのアイコン（Lucide の languages）。
+pub fn language_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1", "m22 22-5-10-5 10",
+    "M14 18h6",
+  ])
+}
+
+/// `info_icon` のストローク（Lucide の info）。
+const info_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
+]
+
+/// `check_circle_icon` のストローク（Lucide の circle-check）。
+const check_circle_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
+]
+
+/// `warning_triangle_icon` のストローク（Lucide の triangle-alert）。
+const warning_triangle_icon_paths = [
+  "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
+  "M12 9v4", "M12 17h.01",
+]
+
+/// `x_circle_icon` のストローク（Lucide の circle-x）。
+const x_circle_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
+]
+
+/// `Neutral` のトーンのアイコン（Lucide の info）。
+pub fn info_icon() -> Element(msg) {
+  lucide_icon("size-4", info_icon_paths)
+}
+
+/// `Success` のトーンのアイコン（Lucide の circle-check）。
+pub fn check_circle_icon() -> Element(msg) {
+  lucide_icon("size-4", check_circle_icon_paths)
+}
+
+/// `Warning` のトーンのアイコン（Lucide の triangle-alert）。
+pub fn warning_triangle_icon() -> Element(msg) {
+  lucide_icon("size-4", warning_triangle_icon_paths)
+}
+
+/// `Failure` のトーンのアイコン（Lucide の circle-x）。
+pub fn x_circle_icon() -> Element(msg) {
+  lucide_icon("size-4", x_circle_icon_paths)
+}
+
+/// コピーボタンのアイコン（Lucide の copy）。
+pub fn copy_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
+    "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2",
+  ])
+}
+
+/// 追加のボタンのアイコン（Lucide の plus）。
+pub fn plus_icon() -> Element(msg) {
+  lucide_icon("size-4", ["M5 12h14", "M12 5v14"])
+}
+
+/// 削除のボタンのアイコン（Lucide の trash-2）。
+pub fn trash_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M3 6h18", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+    "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", "M10 11v6", "M14 11v6",
+  ])
+}
+
+/// 編集のボタンのアイコン（Lucide の pencil）。
+pub fn pencil_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+    "m15 5 4 4",
+  ])
+}
+
+/// 接続のボタンのアイコン（Lucide の plug）。
+pub fn plug_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M12 22v-5", "M9 8V2", "M15 8V2",
+    "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z",
+  ])
+}
+
+/// 秘密鍵の節のアイコン（Lucide の key）。
+pub fn key_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4",
+    "m21 2-9.6 9.6", "M2 15.5a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0 -11 0",
+  ])
+}
+
+/// アカウントの節のアイコン（Lucide の users）。
+pub fn users_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
+    "M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M22 21v-2a4 4 0 0 0-3-3.87",
+    "M16 3.13a4 4 0 0 1 0 7.75",
+  ])
+}
+
+/// セッションの節のアイコン（Lucide の clock）。
+pub fn clock_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
+  ])
+}
+
+/// プラグインの節のアイコン（Lucide の puzzle）。
+pub fn puzzle_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.5 2.5 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 2 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z",
+  ])
 }
 
 /// ダッシュボードへ戻るリンクの段落。

@@ -3,6 +3,7 @@
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import lustre/element
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -115,7 +116,9 @@ pub fn error_reasons_are_escaped_test() {
   use page <- list.each(pages)
   assert string.contains(
     page,
-    "<div class=\"alert alert-error\" role=\"alert\"><span><span lang=\"en\">"
+    "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
+      <> element.to_string(view.tone_icon(view.Failure))
+      <> "<span><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
   )

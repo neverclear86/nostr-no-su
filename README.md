@@ -234,3 +234,4 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 このリポジトリのライセンスは [MIT License](LICENSE) である。
 `vendor/stratus/` は Apache License 2.0 の stratus を改変したもので、帰属は [NOTICE](NOTICE)、改変の記録は [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md) にある。
+管理 UI のアイコンは ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもので、帰属は [NOTICE](NOTICE) にある。
