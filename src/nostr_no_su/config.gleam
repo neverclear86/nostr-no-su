@@ -305,10 +305,23 @@ fn admin_bind() -> Result(String, String) {
 fn is_ip_address(value: String) -> Bool
 
 /// 監視の購読 id。
-const monitor_subscription_id = "nostr-no-su"
+pub const monitor_subscription_id = "nostr-no-su"
 
 /// プラグインの取り直しの購読 id の接頭辞。プラグイン名を繋げて使う。
 const catchup_subscription_prefix = "nostr-no-su-catchup-"
+
+/// 購読 id が取り直しのものなら、そのプラグイン名。`catchup_subscriptions` が
+/// 組み立てる id の逆である。
+pub fn catchup_plugin(subscription_id: String) -> Option(String) {
+  case string.starts_with(subscription_id, catchup_subscription_prefix) {
+    True ->
+      Some(string.drop_start(
+        subscription_id,
+        string.length(catchup_subscription_prefix),
+      ))
+    False -> None
+  }
+}
 
 /// 登録アカウントが書いたイベントの購読。署名者がいなければ購読を定義せず、継続
 /// を評価しない（開いている購読は照合で CLOSE になる、`relay_client.sync`）。継続

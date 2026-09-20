@@ -142,17 +142,18 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
+import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
 import nostr_no_su/hex
 import nostr_no_su/log
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Verified}
+import nostr_no_su/nostr/event
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{
-  type Acknowledgement, type Authenticator, type Subscriptions,
+  type Acknowledgement, type Authenticator, type Received, type Subscriptions,
 }
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
@@ -163,13 +164,14 @@ import pog
 
 /// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
 /// ネットワークなしでもツリー全体を動かせるようにする。ハンドラーが受け取るのは
-/// 接続のプロセスで id と署名を確かめたイベントと、発行したイベントへの OK
-/// （受理・拒否とも）である。AUTH の受け口（応答しない接続は `None`）も渡す。
+/// 接続のプロセスで id と署名を確かめたイベントか保存済みイベントの終わり
+/// （`relay_client.Received`）と、発行したイベントへの OK（受理・拒否とも）
+/// である。AUTH の受け口（応答しない接続は `None`）も渡す。
 pub type Open =
   fn(
     String,
     Subscriptions,
-    fn(Verified) -> Nil,
+    fn(Received) -> Nil,
     fn(Acknowledgement) -> Nil,
     Option(Authenticator),
   ) -> Result(Socket, String)
@@ -292,7 +294,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
 pub fn open_websocket(
   url: String,
   subscriptions: Subscriptions,
-  handle_event: fn(Verified) -> Nil,
+  handle_event: fn(Received) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
   authenticator: Option(Authenticator),
 ) -> Result(Socket, String) {
@@ -427,6 +429,16 @@ fn plugin_targets(specs: List(PluginSpec)) -> List(plugin_runner.Target) {
   plugin_runner.target(spec.plugin.name, spec.name)
 }
 
+/// プラグイン名から、そのランナーの登録名への対応。取り直しの購読 id の
+/// 振り分けに使う。
+fn plugin_runner_names(
+  specs: List(PluginSpec),
+) -> Dict(String, Name(plugin_runner.Msg)) {
+  specs
+  |> list.map(fn(spec) { #(spec.plugin.name, spec.name) })
+  |> dict.from_list
+}
+
 /// 各ランナーへ `plugin_runner.resume` で問い合わせ、応答があって再開点を持つ
 /// ものだけをプラグイン名をキーに集めた辞書を返す操作を作る。応答が無い
 /// ランナー（再起動中、遅い実行の最中）はその周期では入れない。プラグインが
@@ -496,7 +508,11 @@ fn monitor_tree(
       factories,
       relay_list.Monitor,
       config.subscriptions,
-      monitor_handler(config.name, config.excludes_kind),
+      monitor_handler(
+        config.name,
+        config.excludes_kind,
+        plugin_runner_names(spec.plugins),
+      ),
       fn(_relay_url, _ack) { Nil },
       fn(_relay_url) { None },
       fn(_relay_url, _socket) { Nil },
@@ -517,20 +533,56 @@ fn monitor_tree(
   ))
 }
 
-/// 監視接続が受信したイベントをディスパッチャーへ渡すハンドラー。`excludes_kind`
-/// が真の kind のイベントはここで落とす。監視とバンカーが同じリレーを使うと
-/// バンカーの応答（kind 24133）も監視の購読に届くので、呼び出し側はそれを含む
-/// 述語を渡す。
-fn monitor_handler(
+/// 監視接続が受信したものを振り分けるハンドラー。取り直しの購読
+/// （`config.catchup_plugin`）のイベントはそのプラグインのランナーへ直接送り、
+/// 終わり（EOSE）はランナーに取り直しの完了として伝える。それ以外のイベントは
+/// ディスパッチャーへ渡す。`excludes_kind` が真の kind のイベントはここで
+/// 落とす。監視とバンカーが同じリレーを使うとバンカーの応答（kind 24133）も
+/// 監視の購読に届くので、呼び出し側はそれを含む述語を渡す。
+/// テストが購読 id ごとの振り分けを直接確かめられるよう公開する。
+pub fn monitor_handler(
   name: Name(dedup.Msg),
   excludes_kind: fn(Int) -> Bool,
-) -> fn(String, Verified) -> Nil {
-  fn(relay_url: String, verified: Verified) {
-    let incoming = event.verified_event(verified)
-    case excludes_kind(incoming.kind) {
-      True -> Nil
-      False -> named.send(name, dedup.Incoming(relay_url, incoming))
+  runners: Dict(String, Name(plugin_runner.Msg)),
+) -> fn(String, Received) -> Nil {
+  fn(relay_url: String, received: Received) {
+    case received {
+      relay_client.ReceivedEvent(subscription_id, verified) -> {
+        let incoming = event.verified_event(verified)
+        case
+          excludes_kind(incoming.kind),
+          config.catchup_plugin(subscription_id)
+        {
+          True, _ -> Nil
+          False, Some(plugin) ->
+            send_to_runner(
+              runners,
+              plugin,
+              plugin_runner.HandleCatchup(incoming),
+            )
+          False, None -> named.send(name, dedup.Incoming(relay_url, incoming))
+        }
+      }
+      relay_client.ReceivedEose(subscription_id) ->
+        case config.catchup_plugin(subscription_id) {
+          Some(plugin) ->
+            send_to_runner(runners, plugin, plugin_runner.CatchupEnded)
+          None -> Nil
+        }
     }
+  }
+}
+
+/// 取り直しの購読 id の振り分け先のランナーへメッセージを送る。ランナーが
+/// 居なければ捨てる。
+fn send_to_runner(
+  runners: Dict(String, Name(plugin_runner.Msg)),
+  plugin: String,
+  message: plugin_runner.Msg,
+) -> Nil {
+  case dict.get(runners, plugin) {
+    Ok(name) -> named.send(name, message)
+    Error(Nil) -> Nil
   }
 }
 
@@ -565,8 +617,12 @@ fn bunker_tree(
       factories,
       relay_list.Bunker,
       fn(_relay_url) { config.subscriptions },
-      fn(_relay_url, incoming) {
-        named.send(config.name, bunker.Incoming(incoming))
+      fn(_relay_url, received) {
+        case received {
+          relay_client.ReceivedEvent(_, verified) ->
+            named.send(config.name, bunker.Incoming(verified))
+          relay_client.ReceivedEose(_) -> Nil
+        }
       },
       fn(relay_url, ack) {
         named.send(config.name, bunker.Acknowledged(relay_url, ack))
@@ -1073,7 +1129,7 @@ fn subtree() -> Builder {
 }
 
 /// 用途 `role` の接続を `relay_list` の `connections` factory の子として組む。
-/// 購読の定義、受信したイベントのハンドラー、発行した応答への OK のハンドラー、
+/// 購読の定義、受信のハンドラー、発行した応答への OK のハンドラー、
 /// AUTH の受け口、接続・切断の通知には、その接続の URL を渡す。テンプレートは
 /// `Connection` を受け取るたびに URL から `Settings` を組み立てる閉包にし、
 /// `relay_list.connections_child` へ渡す。
@@ -1082,7 +1138,7 @@ fn relay_connections_child(
   factories: relay_list.Factories,
   role: relay_list.Role,
   subscriptions: fn(String) -> Subscriptions,
-  handle_event: fn(String, Verified) -> Nil,
+  handle_event: fn(String, Received) -> Nil,
   handle_ok: fn(String, Acknowledgement) -> Nil,
   authenticator: fn(String) -> Option(Authenticator),
   on_connect: fn(String, Socket) -> Nil,

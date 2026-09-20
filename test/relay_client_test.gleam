@@ -22,8 +22,8 @@ import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
   type SubscriptionState, type Subscriptions, Acknowledge, Acknowledgement,
-  Closed, Deliver, Report, Requested, Reservation, Retried, SubscriptionState,
-  Sync, Synchronise,
+  Closed, Deliver, Ended, Report, Requested, Reservation, Retried,
+  SubscriptionState, Sync, Synchronise,
 }
 import nostr_no_su/relay_connection
 import stratus
@@ -141,11 +141,18 @@ fn event_frame(sent: Event) -> String {
   |> json.to_string
 }
 
-/// 署名の合わないイベントは `handle_event` に渡さず、正しいイベントは渡す。署名は
-/// 別のイベントのものに差し替えるので、形式と id は正しいまま署名だけが合わない。
+/// 署名の合わないイベントは `handle_incoming` に渡さず、正しいイベントは渡す。
+/// 署名は別のイベントのものに差し替えるので、形式と id は正しいまま署名だけが
+/// 合わない。
 pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   let delivered = process.new_subject()
-  let deliver = process.send(delivered, _)
+  let deliver = fn(received) {
+    case received {
+      relay_client.ReceivedEvent(_, verified) ->
+        process.send(delivered, verified)
+      relay_client.ReceivedEose(_) -> Nil
+    }
+  }
   let genuine = signed_event.new(1, "genuine")
   let forged = Event(..genuine, sig: signed_event.new(1, "other").sig)
 
@@ -173,6 +180,36 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   assert event.verified_event(verified) == genuine
 }
 
+/// EVENT は届いた購読の id を持つ `ReceivedEvent`、EOSE は `ReceivedEose` として
+/// `handle_incoming` に届く。
+pub fn handle_text_passes_events_and_eose_with_the_subscription_id_test() {
+  let received = process.new_subject()
+  let sent = signed_event.new(1, "delivered")
+
+  assert relay_client.handle_text(
+      "test",
+      event_frame(sent),
+      process.send(received, _),
+      fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
+    )
+    == None
+  assert relay_client.handle_text(
+      "test",
+      eose_frame("sub"),
+      process.send(received, _),
+      fn(_ack) { Nil },
+      None,
+      fn(_sent) { Nil },
+    )
+    == None
+
+  assert process.receive(received, 0)
+    == Ok(relay_client.ReceivedEvent("sub", signed_event.verified(sent)))
+  assert process.receive(received, 0) == Ok(relay_client.ReceivedEose("sub"))
+}
+
 /// NOTICE の本文にログ行を偽造しうる長さと改行があっても、1 行に収まる。
 pub fn interpret_keeps_a_large_notice_on_one_line_test() {
   let body = string.repeat("x", 10_000) <> "\n[bunker] forged"
@@ -193,7 +230,11 @@ pub fn interpret_covers_every_relay_message_test() {
   let invalid_signature = Event(..genuine, sig: other.sig)
 
   [
-    #("event", event_frame(genuine), Deliver(signed_event.verified(genuine))),
+    #(
+      "event",
+      event_frame(genuine),
+      Deliver("sub", signed_event.verified(genuine)),
+    ),
     #(
       "event with a mismatched id",
       event_frame(mismatched_id),
@@ -204,7 +245,11 @@ pub fn interpret_covers_every_relay_message_test() {
       event_frame(invalid_signature),
       Report("dropped event with invalid signature: " <> genuine.id),
     ),
-    #("eose", eose_frame("sub\nx"), Report("end of stored events for sub x")),
+    #(
+      "eose",
+      eose_frame("sub\nx"),
+      Ended("sub\nx", "end of stored events for sub x"),
+    ),
     #(
       "ok accepted",
       ok_frame("e1", True, ""),
@@ -1154,7 +1199,13 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
     relay_client.start(
       relay.url,
       fn() { Ok([#(bunker, filter.new())]) },
-      process.send(received, _),
+      fn(received_msg) {
+        case received_msg {
+          relay_client.ReceivedEvent(_, verified) ->
+            process.send(received, verified)
+          relay_client.ReceivedEose(_) -> Nil
+        }
+      },
       fn(_ack) { Nil },
       None,
       relay_client.subscription_retry_delay,

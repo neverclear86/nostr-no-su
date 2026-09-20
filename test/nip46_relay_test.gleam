@@ -267,7 +267,13 @@ fn connect_client(
     relay_client.start(
       relay_url,
       subscriptions,
-      fn(verified) { process.send(events, event.verified_event(verified)) },
+      fn(received) {
+        case received {
+          relay_client.ReceivedEvent(_, verified) ->
+            process.send(events, event.verified_event(verified))
+          relay_client.ReceivedEose(_) -> Nil
+        }
+      },
       fn(ack) { process.send(acks, ack) },
       None,
       relay_client.subscription_retry_delay,

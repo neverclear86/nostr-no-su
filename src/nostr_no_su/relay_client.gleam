@@ -207,10 +207,11 @@ pub fn new_subscription_state(
   )
 }
 
-/// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントを
-/// `handle_event` へ渡す。発行したイベントへの OK は受理・拒否とも `handle_ok`
-/// へ渡す。検証はこの接続のプロセスの中で行う。`retry_delay` は購読の定義を
-/// 得られなかったとき、およびリレーが購読を閉じたときの再試行の待ち時間。
+/// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントと、
+/// 保存済みイベントの終わり（EOSE）を `handle_incoming` へ渡す。発行した
+/// イベントへの OK は受理・拒否とも `handle_ok` へ渡す。検証はこの接続の
+/// プロセスの中で行う。`retry_delay` は購読の定義を得られなかったとき、
+/// およびリレーが購読を閉じたときの再試行の待ち時間。
 /// `interval_ms` は生存確認の刻みの間隔で、本番は `keepalive_interval_ms` を
 /// 渡す。接続アクターは呼び出し元にリンクされるため呼び出し元と一緒に死に、
 /// exit を trap している呼び出し元にはその死がメッセージとして届く。
@@ -218,7 +219,7 @@ pub fn new_subscription_state(
 pub fn start(
   url: String,
   subscriptions: Subscriptions,
-  handle_event: fn(event.Verified) -> Nil,
+  handle_incoming: fn(Received) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
   authenticator: Option(Authenticator),
   retry_delay: backoff.Backoff,
@@ -277,7 +278,7 @@ pub fn start(
             handle_text(
               prefix,
               text,
-              handle_event,
+              handle_incoming,
               handle_ok,
               authenticator,
               send_message(conn, prefix, _),
@@ -630,20 +631,31 @@ fn describe_outgoing(outgoing: message.ClientMessage) -> String {
   }
 }
 
+/// リレーの接続からハンドラーへ渡る受信 1 件。`ReceivedEvent` は購読 id と
+/// 検証済みのイベント、`ReceivedEose` は保存済みイベントの終わりを告げた
+/// 購読 id。
+pub type Received {
+  ReceivedEvent(subscription_id: String, event: event.Verified)
+  ReceivedEose(subscription_id: String)
+}
+
 /// リレーが発行したイベントに返した OK 1 件。受理・拒否のどちらも表す。値は
 /// 外部由来で、正規化済み（`log.sanitize_external`）。
 pub type Acknowledgement {
   Acknowledgement(event_id: String, accepted: Bool, message: String)
 }
 
-/// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベント、
+/// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベントと、
+/// それが届いた購読の id、`Ended` は保存済みイベントの終わり（EOSE）を告げた
+/// 購読の id とログ行の本文で、どちらの id も振り分けに使うため正規化しない。
 /// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Acknowledge` は
 /// 発行したイベントへの OK（受理・拒否とも）、`Synchronise` は購読の状態を変える
 /// 応答（CLOSED）で、ログ行の本文と照合の契機を持つ。契機の id は照合に使うため
 /// 正規化しない。ログ行の本文は正規化済み。`Authenticate` は AUTH の challenge で、
 /// 署名に使うため正規化しない。
 pub type Interpretation {
-  Deliver(event.Verified)
+  Deliver(subscription_id: String, event: event.Verified)
+  Ended(subscription_id: String, line: String)
   Report(String)
   Acknowledge(Acknowledgement)
   Synchronise(trigger: Trigger, line: String)
@@ -651,15 +663,16 @@ pub type Interpretation {
 }
 
 /// リレーメッセージ 1 件を解釈する。EVENT は `event.verify` で id と署名を
-/// 確かめ、通ったものを配送に回す。OK は受理・拒否とも `Acknowledge` にする。
-/// CLOSED は購読の状態を変えるため `Synchronise` にする。AUTH は `Authenticate`
-/// にする。それ以外のメッセージと落としたイベントは、外部由来の値を
-/// `log.sanitize_external` で 1 行に収めたログ行の本文にする。
+/// 確かめ、通ったものを配送に回す。EOSE は届いた購読の id を残して `Ended`
+/// にする。OK は受理・拒否とも `Acknowledge` にする。CLOSED は購読の状態を
+/// 変えるため `Synchronise` にする。AUTH は `Authenticate` にする。それ以外の
+/// メッセージと落としたイベントは、外部由来の値を `log.sanitize_external` で
+/// 1 行に収めたログ行の本文にする。
 pub fn interpret(text: String) -> Interpretation {
   case message.decode_relay_message(text) {
-    Ok(message.RelayEvent(_, received)) ->
+    Ok(message.RelayEvent(subscription, received)) ->
       case event.verify(received) {
-        Ok(verified) -> Deliver(verified)
+        Ok(verified) -> Deliver(subscription, verified)
         Error(error) ->
           Report(
             "dropped event with "
@@ -669,7 +682,10 @@ pub fn interpret(text: String) -> Interpretation {
           )
       }
     Ok(message.RelayEose(subscription)) ->
-      Report("end of stored events for " <> log.sanitize_external(subscription))
+      Ended(
+        subscription,
+        "end of stored events for " <> log.sanitize_external(subscription),
+      )
     Ok(message.RelayOk(id, accepted, reason)) ->
       Acknowledge(Acknowledgement(
         log.sanitize_external(id),
@@ -692,22 +708,28 @@ pub fn interpret(text: String) -> Interpretation {
 }
 
 /// リレーメッセージを 1 件処理する。解釈は `interpret` にあり、ここはその
-/// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。`start` の
-/// 受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否とも `handle_ok` に
-/// 渡し、拒否だけそのリレーのログ行も出す。購読の状態を変える応答は契機を返し、
-/// ループが照合に渡す。AUTH は受け口があれば得たイベントを `send` で送り、結果を
-/// ログに出す。
+/// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。id と署名を
+/// 確かめたイベントと、保存済みイベントの終わり（EOSE）を `handle_incoming`
+/// へ渡す。`start` の受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否
+/// とも `handle_ok` に渡し、拒否だけそのリレーのログ行も出す。購読の状態を
+/// 変える応答は契機を返し、ループが照合に渡す。AUTH は受け口があれば得た
+/// イベントを `send` で送り、結果をログに出す。
 pub fn handle_text(
   prefix: String,
   text: String,
-  handle_event: fn(event.Verified) -> Nil,
+  handle_incoming: fn(Received) -> Nil,
   handle_ok: fn(Acknowledgement) -> Nil,
   authenticator: Option(Authenticator),
   send: fn(message.ClientMessage) -> Nil,
 ) -> Option(Trigger) {
   case interpret(text) {
-    Deliver(verified) -> {
-      handle_event(verified)
+    Deliver(subscription_id, verified) -> {
+      handle_incoming(ReceivedEvent(subscription_id, verified))
+      None
+    }
+    Ended(subscription_id, line) -> {
+      log.write(log.Notice, prefix, line)
+      handle_incoming(ReceivedEose(subscription_id))
       None
     }
     Report(line) -> {

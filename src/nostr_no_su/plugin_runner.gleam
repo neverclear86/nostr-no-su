@@ -24,7 +24,10 @@
 //// - **ランナーが居ない間（再起動中）に送られたイベントはその場では届かない。**
 ////   ディスパッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
 ////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。戻ったランナーは再開点からの
-////   取り直しを要求するので、その分は後から届きうる（`catchup`）。
+////   取り直しを要求し、その購読のイベントはディスパッチャーを通さずこのランナー
+////   にだけ届く（`HandleCatchup`）。同じ id は `seen` のウィンドウで弾き、リレーが
+////   保存済みイベントの終わりを告げたら（`CatchupEnded`）件数を出して要求を
+////   落とす。
 ////
 //// ワーカーの中では例外を捕まえるが、目的は隔離ではなく**終了理由を短い 1 行に
 //// 整えること**である。隔離そのものはプロセスの境界が担っており、捕捉を外しても
@@ -46,6 +49,7 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
+import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -76,6 +80,11 @@ const max_detail_chars = 400
 /// ことは「状態不明」として正しく描画できるので、短く切って諦める。
 const status_timeout_ms = 1000
 
+/// 取り直しの購読で届いたイベントの重複排除に使うウィンドウの容量。取り直しの
+/// 購読は監視のリレーごとに張られるので、同じ範囲のイベントがリレーの数だけ
+/// 大域のウィンドウを迂回して届く。
+const catchup_window_capacity = 1000
+
 /// プラグイン 1 つの現在の状態。ダッシュボードにもこのまま出す。
 pub type Status {
   /// イベントを受け取って実行している。
@@ -105,6 +114,11 @@ pub type Catchup {
 pub type Msg {
   /// 重複排除を通ったイベント 1 件。
   Handle(event: Event)
+  /// 取り直しの購読で届いたイベント 1 件。大域の重複排除を通らないので、ここで
+  /// `seen` に照らす。
+  HandleCatchup(event: Event)
+  /// 取り直しの購読が保存済みイベントの終わりに達したこと（EOSE）の知らせ。
+  CatchupEnded
   /// 管理 UI からの状態の問い合わせ。
   GetStatus(reply: Subject(Status))
   /// 管理 UI からの再有効化の要求。応答はランナーが要求を処理したことだけを伝える。
@@ -125,7 +139,8 @@ pub type Target {
 /// ランナーが保持する状態。`failures` は連続失敗数で、成功すると 0 に戻る。
 /// `resume` はこのプラグインの再開点で、処理したイベントの `created_at` で
 /// 前進する（`advance`）。`catchup` は取り直しの要求で、起動時と `Disabled`
-/// からの再有効化で立つ。
+/// からの再有効化で立ち、`CatchupEnded` で落ちる。`seen` は取り直しで渡した
+/// id のウィンドウ、`caught_up` は今の取り直しで渡した件数である。
 type State {
   State(
     plugin: Plugin,
@@ -135,6 +150,8 @@ type State {
     failures: Int,
     resume: Option(Int),
     catchup: Option(Catchup),
+    seen: Window,
+    caught_up: Int,
   )
 }
 
@@ -168,6 +185,8 @@ pub fn start(
       failures: 0,
       resume: None,
       catchup: Some(Catchup(since: None, until: time.now_seconds())),
+      seen: window.new(catchup_window_capacity),
+      caught_up: 0,
     ))
     |> actor.named(name)
     |> actor.on_message(handle)
@@ -188,7 +207,8 @@ pub fn target(plugin: String, name: Name(Msg)) -> Target {
 /// 戻るので、ディスパッチャーはプラグインの実行時間の影響を受けない。名前の
 /// 宛先が居なければ（ランナーの再起動中）そのイベントはその場では届かず、
 /// `record_delivery` が数える。届けられなかった分は、戻ったランナーの取り直しの
-/// 要求で後から届きうる（`catchup`）。
+/// 要求で後から届きうる（`catchup`）。取り直しのイベントはこの関数を通らない
+/// ので、`undelivered` には数えない。
 pub fn dispatch(targets: List(Target), incoming: Event) -> List(Target) {
   use target <- list.map(targets)
   let delivered = result.is_ok(named.try_send(target.name, Handle(incoming)))
@@ -264,24 +284,67 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         _, _ -> actor.continue(State(..state, status: status))
       }
     }
-    Handle(incoming) -> {
-      let #(status, should_run, note) =
-        admit(state.status, message_queue_len(), state.limits)
-      report(state.plugin.name, note)
-      let resume =
-        advance(status, state.resume, incoming.created_at, time.now_seconds())
-      case should_run {
-        False -> actor.continue(State(..state, status: status, resume: resume))
-        True -> {
-          let outcome =
-            run(state.plugin, incoming, state.limits.handle_timeout_ms)
-          let #(status, failures, note) =
-            record(status, state.failures, outcome, state.limits)
-          report(state.plugin.name, note)
-          actor.continue(
-            State(..state, status: status, failures: failures, resume: resume),
+    Handle(incoming) -> actor.continue(run_incoming(state, incoming, None))
+    HandleCatchup(incoming) ->
+      case window.insert(state.seen, incoming.id) {
+        Error(Nil) -> actor.continue(state)
+        Ok(next) -> actor.continue(run_incoming(state, incoming, Some(next)))
+      }
+    CatchupEnded ->
+      case state.catchup {
+        None -> actor.continue(state)
+        Some(_) -> {
+          log.write(
+            log.Notice,
+            log.plugin_prefix(state.plugin.name),
+            "catch-up finished; re-delivered "
+              <> int.to_string(state.caught_up)
+              <> " events",
           )
+          let next = State(..state, caught_up: 0, catchup: None)
+          state.resubscribe()
+          actor.continue(next)
         }
+      }
+  }
+}
+
+/// イベント 1 件を処理する。`admit` が実行の可否を決め、その結果で再開点を
+/// 前進させ（`advance`）、実行したものは `record` が状態へ反映する。
+/// `catchup_seen` は取り直しで届いたイベントについて、id を挿したあとの
+/// ウィンドウ。実行を許した（`should_run` が真の）ときだけ `seen` に反映して
+/// `caught_up` を 1 増やす。無効化や過負荷で捨てた分を取り直しの完了の行に
+/// 数えないためで、捨てた id は次の取り直しで再び届きうる。通常の配信
+/// （`Handle`）は `None` を渡し、ウィンドウと件数に触れない。
+fn run_incoming(
+  state: State,
+  incoming: Event,
+  catchup_seen: Option(Window),
+) -> State {
+  let #(status, should_run, note) =
+    admit(state.status, message_queue_len(), state.limits)
+  report(state.plugin.name, note)
+  let resume =
+    advance(status, state.resume, incoming.created_at, time.now_seconds())
+  case should_run {
+    False -> State(..state, status: status, resume: resume)
+    True -> {
+      let outcome = run(state.plugin, incoming, state.limits.handle_timeout_ms)
+      let #(status, failures, note) =
+        record(status, state.failures, outcome, state.limits)
+      report(state.plugin.name, note)
+      case catchup_seen {
+        Some(next) ->
+          State(
+            ..state,
+            status: status,
+            failures: failures,
+            resume: resume,
+            seen: next,
+            caught_up: state.caught_up + 1,
+          )
+        None ->
+          State(..state, status: status, failures: failures, resume: resume)
       }
     }
   }
@@ -381,7 +444,7 @@ pub fn reenable(status: Status) -> #(Status, Option(String)) {
       Some(
         "re-enabled by the operator; dropped "
         <> int.to_string(dropped)
-        <> " events while disabled",
+        <> " events while disabled; it will re-request them if it has a resume point",
       ),
     )
     Running | Overloaded(..) -> #(status, None)
@@ -448,7 +511,7 @@ pub fn record_delivery(
       Some(
         "runner is back; dropped "
         <> int.to_string(undelivered)
-        <> " events while it was unavailable",
+        <> " events while it was unavailable; it will re-request them if it has a resume point",
       ),
     )
     False, 0 -> #(

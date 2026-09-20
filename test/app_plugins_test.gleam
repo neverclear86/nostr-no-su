@@ -1,6 +1,7 @@
 //// 偽リレーの上のツリーで、監視の接続とリレーの増減、プラグイン（ランナー、
 //// プラグインの子）の障害の分離を確かめるテスト。
 
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -17,6 +18,7 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
+import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter
@@ -25,6 +27,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
 import nostr_no_su/random
+import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
@@ -1034,6 +1037,131 @@ pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
   let assert Ok(Subscribed(_relay_url, messages)) = first
   assert catchup_filters(messages) == []
   stop_tree(tree)
+}
+
+/// 取り直しの振り分けを確かめるために、ツリーは張らずランナーだけを起こす。
+/// `resubscribe` の呼び出しは `resubscribed` へ報告する（起動時に 1 度呼ばれる）。
+fn start_bare_runner(
+  runner_name: Name(plugin_runner.Msg),
+  plugin_name: String,
+  seen: Subject(Event),
+  resubscribed: Subject(Nil),
+) -> Nil {
+  let assert Ok(_started) =
+    plugin_runner.start(
+      runner_name,
+      plugin.Plugin(
+        name: plugin_name,
+        children: [],
+        ui: None,
+        handle: process.send(seen, _),
+      ),
+      fn() { process.send(resubscribed, Nil) },
+      plugin_runner.default_limits,
+    )
+  Nil
+}
+
+/// 取り直しの購読 id のイベントは、そのプラグインのランナーにだけ届く。他の
+/// プラグインにもディスパッチャーにも渡らず、監視の購読 id のイベントだけが
+/// ディスパッチャーへ渡る。
+pub fn a_catchup_event_reaches_only_the_target_plugin_test() {
+  let seen_a = process.new_subject()
+  let seen_b = process.new_subject()
+  let dedup_seen = process.new_subject()
+  let dedup_name = process.new_name("test_dedup")
+  let runner_a = process.new_name("test_plugin_a")
+  let runner_b = process.new_name("test_plugin_b")
+  start_bare_runner(runner_a, "plugin_a", seen_a, process.new_subject())
+  start_bare_runner(runner_b, "plugin_b", seen_b, process.new_subject())
+  let assert Ok(_) =
+    dedup.start(
+      dedup_name,
+      Nil,
+      fn(_targets, incoming) {
+        process.send(dedup_seen, incoming)
+        Nil
+      },
+      8,
+    )
+  let handle =
+    app.monitor_handler(
+      dedup_name,
+      event.is_ephemeral,
+      dict.from_list([#("plugin_a", runner_a), #("plugin_b", runner_b)]),
+    )
+
+  let catchup = note("catch-up")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      "nostr-no-su-catchup-plugin_a",
+      signed_event.verified(catchup),
+    ),
+  )
+  assert process.receive(seen_a, 2000) == Ok(catchup)
+  assert process.receive(seen_b, 200) == Error(Nil)
+  assert process.receive(dedup_seen, 200) == Error(Nil)
+
+  let normal = note("normal")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(normal),
+    ),
+  )
+  assert process.receive(dedup_seen, 2000) == Ok(normal)
+}
+
+/// 同じ取り直しの購読 id で同じイベントが 2 度届いても、ランナーの `seen`
+/// ウィンドウが弾くのでプラグインは 1 回しか呼ばれない。複数のリレーが同じ
+/// 範囲を返すときの重複排除である。
+pub fn a_catchup_event_is_delivered_once_per_id_test() {
+  let seen = process.new_subject()
+  let runner = process.new_name("test_plugin_a")
+  start_bare_runner(runner, "plugin_a", seen, process.new_subject())
+  let handle =
+    app.monitor_handler(
+      process.new_name("test_dedup"),
+      event.is_ephemeral,
+      dict.from_list([#("plugin_a", runner)]),
+    )
+  let sent = note("catch-up")
+  let received =
+    relay_client.ReceivedEvent(
+      "nostr-no-su-catchup-plugin_a",
+      signed_event.verified(sent),
+    )
+
+  handle(test_relay_url, received)
+  handle(test_relay_url, received)
+  assert process.receive(seen, 2000) == Ok(sent)
+  assert process.receive(seen, 200) == Error(Nil)
+}
+
+/// 取り直しの購読の EOSE はそのランナーへ取り直しの完了として伝わり、要求を
+/// 落として購読の張り直しを呼ぶ。
+pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
+  let resubscribed = process.new_subject()
+  let runner = process.new_name("test_plugin_a")
+  start_bare_runner(runner, "plugin_a", process.new_subject(), resubscribed)
+  // 起動時の張り直しの呼び出しを読み捨てる。
+  assert process.receive(resubscribed, 1000) == Ok(Nil)
+  let assert Ok(Some(_catchup)) = plugin_runner.catchup(runner)
+  let handle =
+    app.monitor_handler(
+      process.new_name("test_dedup"),
+      event.is_ephemeral,
+      dict.from_list([#("plugin_a", runner)]),
+    )
+
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEose("nostr-no-su-catchup-plugin_a"),
+  )
+  assert process.receive(resubscribed, 1000) == Ok(Nil)
+  assert plugin_runner.catchup(runner) == Ok(None)
 }
 
 // --- 登録されたリレー ---
