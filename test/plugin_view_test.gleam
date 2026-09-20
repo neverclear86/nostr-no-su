@@ -186,6 +186,36 @@ pub fn wrong_value_type_is_an_error_test() {
   assert string.contains(reason, "text must be a String, got Int")
 }
 
+/// `pairs` の `items` の 2 件目に型の合わない値があると、理由に何件目かが
+/// 付く。
+pub fn wrong_value_type_reports_item_index_test() {
+  let good = text_inline("ok")
+  let bad = map_([#("type", dynamic.string("text")), #("text", dynamic.int(1))])
+  let raw = section_("Values", [pairs_block([#("a", good), #("b", bad)])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "item #1: text must be a String, got Int")
+}
+
+/// `table` の `rows` の 2 件目がリストでないと、理由に何件目かが付く。
+pub fn row_not_a_list_reports_row_index_test() {
+  let raw =
+    section_("Cells", [
+      map_([
+        #("type", dynamic.string("table")),
+        #("headers", dynamic.list([dynamic.string("A")])),
+        #(
+          "rows",
+          dynamic.list([
+            dynamic.list([text_inline("ok")]),
+            dynamic.string("nope"),
+          ]),
+        ),
+      ]),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "row #1: must be a List")
+}
+
 /// 節をブロックとして入れ子にすると、種別が閉じた段に合わないので `Error`
 /// になる。
 pub fn nested_section_is_an_error_test() {
@@ -254,6 +284,19 @@ pub fn empty_pairs_shows_the_translated_line_test() {
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(body, i18n.text(i18n.English, i18n.PluginSectionEmpty))
+}
+
+/// `pairs` の `items` が 0 件のときの訳した文は、プラグイン由来の文字列を包む
+/// `lang="en"` の中ではなく、表示の言語を持つ `div` に包まれる。
+pub fn empty_pairs_translated_line_has_display_language_test() {
+  let raw = section_("Has Pairs", [pairs_block([])])
+  let japanese_context =
+    Context(language: i18n.Japanese, page_href: fn(_) { Error(Nil) })
+  let assert Ok(el) = plugin_view.section(raw, japanese_context)
+  let body = element.to_string(el)
+  let translated = i18n.text(i18n.Japanese, i18n.PluginSectionEmpty)
+  let assert [_, after_ja] = string.split(body, "<div lang=\"ja\">")
+  assert string.contains(after_ja, translated)
 }
 
 /// `page_href` が `Error(Nil)` を返すキーの `link` は節の `Error` になる。

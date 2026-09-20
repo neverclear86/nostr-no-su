@@ -325,6 +325,7 @@ pub type Message {
   PluginUnavailable
   Dropped(count: Int)
   NoPlugins
+  /// 節とブロックの空の状態に共通で使う。
   PluginSectionEmpty
   // 承認ページと通知ページ
   ApproveConnection

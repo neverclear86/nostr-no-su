@@ -122,13 +122,26 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         decode.list(decode.dynamic),
         "a List",
       ))
-      use items <- result.try(list.try_map(items_raw, pair))
+      use items <- result.try(
+        items_raw
+        |> list.index_map(fn(raw_item, index) { #(raw_item, index) })
+        |> list.try_map(fn(indexed) {
+          pair(indexed.0)
+          |> result.map_error(fn(reason) {
+            "item #" <> int.to_string(indexed.1) <> ": " <> reason
+          })
+        }),
+      )
       case items {
         [] ->
-          Ok(view.empty_state(
-            view.puzzle_icon(),
-            i18n.text(context.language, i18n.PluginSectionEmpty),
-          ))
+          Ok(
+            html.div([attribute.lang(i18n.code(context.language))], [
+              view.empty_state(
+                view.puzzle_icon(),
+                i18n.text(context.language, i18n.PluginSectionEmpty),
+              ),
+            ]),
+          )
         _ -> Ok(view.summary_list(items))
       }
     }
@@ -146,14 +159,22 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         "a List",
       ))
       use rows <- result.try(
-        list.try_map(rows_raw, fn(row_raw) {
-          use cells_raw <- result.try(
-            decode.run(row_raw, decode.list(decode.dynamic))
-            |> result.replace_error("row must be a List"),
-          )
-          list.try_map(cells_raw, fn(cell) {
-            use element <- result.try(inline(cell))
-            Ok(html.td([], [element]))
+        rows_raw
+        |> list.index_map(fn(row_raw, index) { #(row_raw, index) })
+        |> list.try_map(fn(indexed) {
+          let #(row_raw, index) = indexed
+          {
+            use cells_raw <- result.try(
+              decode.run(row_raw, decode.list(decode.dynamic))
+              |> result.replace_error("must be a List"),
+            )
+            list.try_map(cells_raw, fn(cell) {
+              use element <- result.try(inline(cell))
+              Ok(html.td([], [element]))
+            })
+          }
+          |> result.map_error(fn(reason) {
+            "row #" <> int.to_string(index) <> ": " <> reason
           })
         }),
       )

@@ -973,6 +973,56 @@ pub fn invalid_page_key_test() {
   assert has_note(notes, "page key \"A b\" must match [a-z0-9_-]+")
 }
 
+/// `key` を読んだ後の検査（`title` の不足）は `page key "<key>"` で位置を示す。
+/// `page #<index>` には戻らない（`plugin_children.spec` と同じ考え方）。
+pub fn page_title_missing_reports_page_key_test() {
+  let fixture = beam_fixture.new("pages_no_title")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_no_title_plugin",
+      "[#{<<\"key\">> => <<\"status\">>}]",
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "page key \"status\": missing title")
+}
+
+/// ページの記述の要素が map でないと、キーが読めないことを「`key` が無い」
+/// ではなく形そのものの誤りとして報告する。
+pub fn page_element_must_be_a_map_test() {
+  let fixture = beam_fixture.new("pages_not_map")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_not_map_plugin",
+      "[{a, b}]",
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "page #0: must be a page map, got Array")
+}
+
 /// `plugin_pages/0` の戻り値がリストでなければ読み込まれない。
 pub fn pages_wrong_shape_test() {
   let fixture = beam_fixture.new("pages_wrong_shape")

@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、バンカーに登録したアカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）にある。
 
 ## 1. 目的と信頼モデル
 
@@ -431,9 +431,11 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_page_content/1 but no plugin_pages/0 or /1` | 中身のエクスポートはあるが一覧が無い |
 | `<mod>: plugin_pages/1 must return a list of page maps, got Dict` | 一覧の戻り値がリストでない |
 | `<mod>: plugin_pages/1 must return at least one page` | 一覧が 0 件 |
+| `<mod>: plugin_pages/1: page #0: must be a page map, got Array` | ページの記述が map でない。素の `{key, title}` のようなタプルはここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
 | `<mod>: plugin_pages/1: page #0: missing key` | ページの記述に `key` が無い。番号は 0 起点のリストの位置 |
 | `<mod>: plugin_pages/1: duplicate page key "settings"` | ページのキーが重複している |
 | `<mod>: plugin_pages/1: page key "A b" must match [a-z0-9_-]+` | ページのキーが許された文字集合の外 |
+| `<mod>: plugin_pages/1: page key "status": missing title` | `key` を読んだ後の検査は `page #<index>` ではなく `page key "<key>"` で位置を示す |
 
 子仕様の行の `got` の後は受け取った値の `dynamic.classify` の分類名、`unsupported …` の括弧の中は受け取った値そのもの（`~0p` で 1 行にしたもの）で、表の値は例示である。
 

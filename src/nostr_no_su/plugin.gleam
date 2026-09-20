@@ -593,14 +593,27 @@ fn decode_page(
   label: String,
 ) -> Result(PluginPage, String) {
   let unlabelled = label <> ": page #" <> int.to_string(index)
+  use _ <- result.try(check_page_map(raw, unlabelled))
   use key <- result.try(required_page_field(raw, "key", unlabelled))
   case page_key_ok(key) {
     False ->
       Error(label <> ": page key \"" <> key <> "\" must match [a-z0-9_-]+")
     True -> {
-      use title <- result.try(required_page_field(raw, "title", unlabelled))
+      let labelled = label <> ": page key \"" <> key <> "\""
+      use title <- result.try(required_page_field(raw, "title", labelled))
       Ok(PluginPage(key: key, title: title))
     }
+  }
+}
+
+/// ページの記述が map であることを先に確かめる。map でない要素（例えば
+/// `{key, title}` のタプル）を渡されたとき、キーが 1 つも読めないことを
+/// 「`key` が無い」と報告すると作者が原因にたどり着けない
+/// （`plugin_children.check_map` と同じ考え方）。
+fn check_page_map(raw: Dynamic, label: String) -> Result(Nil, String) {
+  case dynamic.classify(raw) {
+    "Dict" -> Ok(Nil)
+    other -> Error(label <> ": must be a page map, got " <> other)
   }
 }
 
