@@ -858,6 +858,202 @@ pub fn load_all_bad_children_test() {
   assert has_note(notes, "(1 skipped)")
 }
 
+/// `plugin_pages` だけを持ち `plugin_page_content` を持たないプラグインは、
+/// 片方だけの宣言として読み込まれない（決めたこと 3）。
+pub fn pages_without_content_export_test() {
+  let fixture = beam_fixture.new("pages_only")
+  beam_fixture.compile(
+    beam_fixture.pages_only_source(fixture.module, "pages_only_plugin"),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_pages/0 but no plugin_page_content/1 or /2")
+}
+
+/// `plugin_page_content` だけを持ち `plugin_pages` を持たないプラグインも、
+/// 逆向きに同じ理由で読み込まれない。
+pub fn page_content_without_pages_export_test() {
+  let fixture = beam_fixture.new("content_only")
+  beam_fixture.compile(
+    beam_fixture.page_content_only_source(fixture.module, "content_only_plugin"),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_page_content/1 but no plugin_pages/0 or /1")
+}
+
+/// `plugin_pages/0` が 0 件を返すと読み込まれない。
+pub fn pages_must_not_be_empty_test() {
+  let fixture = beam_fixture.new("pages_empty")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_empty_plugin",
+      "[]",
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_pages/0 must return at least one page")
+}
+
+/// ページのキーが重複していると読み込まれない。
+pub fn duplicate_page_key_test() {
+  let fixture = beam_fixture.new("pages_dup")
+  let pages_body =
+    "[#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"A\">>}, "
+    <> "#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"B\">>}]"
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_dup_plugin",
+      pages_body,
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "duplicate page key \"settings\"")
+}
+
+/// `[a-z0-9_-]+` に一致しないキーは読み込まれない。
+pub fn invalid_page_key_test() {
+  let fixture = beam_fixture.new("pages_bad_key")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_bad_key_plugin",
+      "[#{<<\"key\">> => <<\"A b\">>, <<\"title\">> => <<\"A\">>}]",
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "page key \"A b\" must match [a-z0-9_-]+")
+}
+
+/// `plugin_pages/0` の戻り値がリストでなければ読み込まれない。
+pub fn pages_wrong_shape_test() {
+  let fixture = beam_fixture.new("pages_wrong_shape")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_wrong_shape_plugin",
+      "#{}",
+      "#{<<\"sections\">> => []}",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    "plugin_pages/0 must return a list of page maps, got Dict",
+  )
+}
+
+/// `plugin_page_content` の例外は、一覧の検証に影響せず読み込みには成功し、
+/// `ui.content` の呼び出しの `Error` として現れる（決めたこと 8）。
+pub fn page_content_crash_test() {
+  let fixture = beam_fixture.new("pages_content_crash")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_content_crash_plugin",
+      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+      "erlang:error(boom)",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  let assert Some(ui) = loaded.ui
+  let assert Error(reason) = ui.content("status")
+  assert string.contains(reason, "plugin_page_content/1 crashed")
+}
+
+/// 戻らない `plugin_page_content` は、読み込みには成功し、`ui.content` の
+/// 呼び出しが期限で打ち切られて `Error` になる。
+pub fn page_content_timeout_test() {
+  let fixture = beam_fixture.new("pages_content_timeout")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_content_timeout_plugin",
+      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+      "receive after infinity -> ok end",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, _notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      short_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  let assert Some(ui) = loaded.ui
+  let assert Error(reason) = ui.content("status")
+  assert string.contains(reason, "timed out after 100ms")
+}
+
 /// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
 /// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる（受け入れ条件）。
 /// 打ち切られた呼び出しのプロセスも残らない。

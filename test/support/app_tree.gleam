@@ -347,6 +347,7 @@ pub fn forwarding_spec(
     plugin: plugin.Plugin(
       name: "forwarding",
       children: [],
+      ui: None,
       handle: process.send(seen, _),
     ),
     limits: plugin_runner.default_limits,

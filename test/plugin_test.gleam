@@ -3,11 +3,13 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
 import support/plugin_valid
 import support/plugin_with_config
+import support/plugin_with_pages
 
 /// 読み込みの検証に使うサンプルイベント。
 fn sample_event() -> event.Event {
@@ -273,6 +275,44 @@ pub fn children_rejecting_config_with_bad_reason_test() {
     ]),
     "plugin_children/1: error reason must be a String, got Atom",
   )
+}
+
+/// `plugin_pages` と `plugin_page_content` のどちらも無いプラグインは今までどおり
+/// 読み込まれ、`ui` は `None`。
+pub fn load_without_ui_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("support@plugin_valid"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert loaded.ui == None
+}
+
+/// `plugin_pages/1` と `plugin_page_content/2` を持つプラグインは、`ui` に検証
+/// 済みのページの一覧が載り、`content(key)` がそのページの記述を返す。
+pub fn load_with_pages_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("support@plugin_with_pages"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  assert ui.pages
+    == [
+      plugin.PluginPage(
+        key: plugin_with_pages.page_key,
+        title: plugin_with_pages.page_title,
+      ),
+    ]
+  let assert Ok(description) = ui.content(plugin_with_pages.page_key)
+  let assert Ok(sections) =
+    decode.run(
+      description,
+      decode.field("sections", decode.list(decode.dynamic), decode.success),
+    )
+  assert list.length(sections) == 1
 }
 
 /// fixture が退避した値を読む。キーが無ければ例外になる。

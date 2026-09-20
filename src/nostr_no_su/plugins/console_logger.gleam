@@ -1,4 +1,5 @@
 import gleam/int
+import gleam/option.{None}
 import gleam/string
 import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event}
@@ -10,7 +11,7 @@ pub const name = "console_logger"
 
 /// 受信したイベントの概要を標準出力に書くプラグイン。
 pub fn new() -> Plugin {
-  Plugin(name: name, children: [], handle: log_event)
+  Plugin(name: name, children: [], handle: log_event, ui: None)
 }
 
 /// イベント 1 件の概要をこのプラグインの接頭辞を付けて出力する。
