@@ -1,8 +1,9 @@
 //// NIP-01 の REQ に載せる購読フィルター。
 ////
-//// 持つのは `authors`、`kinds`、`#p`、`since`、`limit` の 5 つだけで、`ids` や
-//// `#e`、`until` は必要になるまで足さない。本体が設定するのは前の 4 つで、
-//// `limit` は今のところテストだけが使う。
+//// 持つのは `authors`、`kinds`、`#p`、`since`、`until`、`limit` の 6 つだけで、
+//// `ids` や `#e` は必要になるまで足さない。本体が設定するのは `limit` 以外の
+//// 5 つで、`limit` は今のところテストだけが使う。`until` を設定するのは
+//// プラグインの取り直しの購読だけである。
 
 import gleam/json.{type Json}
 import gleam/list
@@ -16,13 +17,21 @@ pub type Filter {
     kinds: Option(List(Int)),
     p_tags: Option(List(String)),
     since: Option(Int),
+    until: Option(Int),
     limit: Option(Int),
   )
 }
 
 /// 何も絞り込まない空のフィルター。ここから必要なフィールドだけを設定する。
 pub fn new() -> Filter {
-  Filter(authors: None, kinds: None, p_tags: None, since: None, limit: None)
+  Filter(
+    authors: None,
+    kinds: None,
+    p_tags: None,
+    since: None,
+    until: None,
+    limit: None,
+  )
 }
 
 /// フィルターを REQ に載せる JSON オブジェクトにする。未設定のフィールドは
@@ -33,6 +42,7 @@ pub fn to_json(filter: Filter) -> Json {
     #("kinds", option.map(filter.kinds, json.array(_, of: json.int))),
     #("#p", option.map(filter.p_tags, json.array(_, of: json.string))),
     #("since", option.map(filter.since, json.int)),
+    #("until", option.map(filter.until, json.int)),
     #("limit", option.map(filter.limit, json.int)),
   ]
   |> list.filter_map(fn(field) {

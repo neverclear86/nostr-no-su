@@ -21,9 +21,10 @@
 ////   件数だけ数え、**プロセスは生かしたまま**にするので、名前は登録されたままで
 ////   管理 UI から状態を問い合わせられる。復帰の手段は本体の再起動か、管理 UI
 ////   からの再有効化の 2 つである。
-//// - **ランナーが居ない間（再起動中）に送られたイベントは届かない。** ディス
-////   パッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
-////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。
+//// - **ランナーが居ない間（再起動中）に送られたイベントはその場では届かない。**
+////   ディスパッチャーは宛先ごとにその件数を数え、取りこぼしの始まりと、ランナーが
+////   戻ったときの件数を 1 行ずつ出す（`dispatch`）。戻ったランナーは再開点からの
+////   取り直しを要求するので、その分は後から届きうる（`catchup`）。
 ////
 //// ワーカーの中では例外を捕まえるが、目的は隔離ではなく**終了理由を短い 1 行に
 //// 整えること**である。隔離そのものはプロセスの境界が担っており、捕捉を外しても
@@ -93,6 +94,13 @@ pub type Outcome {
   Failed(reason: String, detail: Option(String))
 }
 
+/// プラグインの取り直しの要求 1 件。`since` はランナーのメモリの再開点で、
+/// `None` なら保存済みの値を使う（`nostr_no_su.catchup_since`）。`until` は
+/// 要求を立てた時刻で、これより後のイベントは通常の監視の購読が運ぶ。
+pub type Catchup {
+  Catchup(since: Option(Int), until: Int)
+}
+
 /// ランナーが受け取るメッセージ。
 pub type Msg {
   /// 重複排除を通ったイベント 1 件。
@@ -103,6 +111,8 @@ pub type Msg {
   Reenable(reply: Subject(Nil))
   /// 再開点の保存のための、このプラグインの再開点の問い合わせ。
   GetResume(reply: Subject(Option(Int)))
+  /// 購読の定義のための、このプラグインの取り直しの要求の問い合わせ。
+  GetCatchup(reply: Subject(Option(Catchup)))
 }
 
 /// ディスパッチャーがイベントを送る宛先 1 つ。`plugin` はログの接頭辞に使う
@@ -114,43 +124,59 @@ pub type Target {
 
 /// ランナーが保持する状態。`failures` は連続失敗数で、成功すると 0 に戻る。
 /// `resume` はこのプラグインの再開点で、処理したイベントの `created_at` で
-/// 前進する（`advance`）。
+/// 前進する（`advance`）。`catchup` は取り直しの要求で、起動時と `Disabled`
+/// からの再有効化で立つ。
 type State {
   State(
     plugin: Plugin,
     limits: Limits,
+    resubscribe: fn() -> Nil,
     status: Status,
     failures: Int,
     resume: Option(Int),
+    catchup: Option(Catchup),
   )
 }
 
-/// スーパービジョンツリー用の子仕様。
+/// スーパービジョンツリー用の子仕様。`resubscribe` は復帰したときに監視の
+/// 購読を張り直させる操作。
 pub fn supervised(
   name: Name(Msg),
   plugin: Plugin,
+  resubscribe: fn() -> Nil,
   limits: Limits,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, plugin, limits) })
+  supervision.worker(fn() { start(name, plugin, resubscribe, limits) })
 }
 
 /// プラグイン 1 つのランナーを起動する。`name` で登録するため、再起動後も
-/// ディスパッチャーと管理 UI が同じ名前で到達できる。
+/// ディスパッチャーと管理 UI が同じ名前で到達できる。起動は本体の再起動か
+/// ランナーのクラッシュからの復帰なので、必ず取り直しを要求する。保存済みの
+/// 再開点が無ければ購読は定義されない。
 pub fn start(
   name: Name(Msg),
   plugin: Plugin,
+  resubscribe: fn() -> Nil,
   limits: Limits,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new(State(
-    plugin: plugin,
-    limits: limits,
-    status: Running,
-    failures: 0,
-    resume: None,
-  ))
-  |> actor.named(name)
-  |> actor.on_message(handle)
-  |> actor.start
+  let started =
+    actor.new(State(
+      plugin: plugin,
+      limits: limits,
+      resubscribe: resubscribe,
+      status: Running,
+      failures: 0,
+      resume: None,
+      catchup: Some(Catchup(since: None, until: time.now_seconds())),
+    ))
+    |> actor.named(name)
+    |> actor.on_message(handle)
+    |> actor.start
+  case started {
+    Ok(_) -> resubscribe()
+    Error(_) -> Nil
+  }
+  started
 }
 
 /// まだ 1 件も取りこぼしていない宛先を作る。
@@ -160,8 +186,9 @@ pub fn target(plugin: String, name: Name(Msg)) -> Target {
 
 /// イベント 1 件を全ランナーへ送り、取りこぼしを数えた宛先を返す。送るだけで
 /// 戻るので、ディスパッチャーはプラグインの実行時間の影響を受けない。名前の
-/// 宛先が居なければ（ランナーの再起動中）そのイベントは届かず、
-/// `record_delivery` が数える。
+/// 宛先が居なければ（ランナーの再起動中）そのイベントはその場では届かず、
+/// `record_delivery` が数える。届けられなかった分は、戻ったランナーの取り直しの
+/// 要求で後から届きうる（`catchup`）。
 pub fn dispatch(targets: List(Target), incoming: Event) -> List(Target) {
   use target <- list.map(targets)
   let delivered = result.is_ok(named.try_send(target.name, Handle(incoming)))
@@ -190,6 +217,13 @@ pub fn resume(name: Name(Msg)) -> Result(Option(Int), Nil) {
   |> option.to_result(Nil)
 }
 
+/// このプラグインの取り直しの要求。`resume` と同じく、再起動中や遅い実行の
+/// 最中は応答が無く `Error(Nil)` を返す。
+pub fn catchup(name: Name(Msg)) -> Result(Option(Catchup), Nil) {
+  named.call(name, status_timeout_ms, GetCatchup)
+  |> option.to_result(Nil)
+}
+
 /// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、その
 /// 結果で再開点を前進させ（`advance`）、実行したものは `record` が状態へ
 /// 反映する。
@@ -203,11 +237,32 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, state.resume)
       actor.continue(state)
     }
+    GetCatchup(reply) -> {
+      process.send(reply, state.catchup)
+      actor.continue(state)
+    }
     Reenable(reply) -> {
       let #(status, note) = reenable(state.status)
       report(state.plugin.name, note)
       process.send(reply, Nil)
-      actor.continue(State(..state, status: status))
+      case state.status, status {
+        // `Disabled` からの復帰は取り直しを要求する。`Running` と `Overloaded`
+        // のままの再有効化は状態も要求も変えない。
+        Disabled(..), Running -> {
+          state.resubscribe()
+          actor.continue(
+            State(
+              ..state,
+              status: status,
+              catchup: Some(Catchup(
+                since: state.resume,
+                until: time.now_seconds(),
+              )),
+            ),
+          )
+        }
+        _, _ -> actor.continue(State(..state, status: status))
+      }
     }
     Handle(incoming) -> {
       let #(status, should_run, note) =

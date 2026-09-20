@@ -274,7 +274,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   ))
   // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
   // 未登録の名前へ送られて届かない（件数はディスパッチャーがログに出す）。
-  |> add_plugins(spec.plugins)
+  |> add_plugins(spec)
   // バンカーは監視より先に起動する。監視の接続が購読を組み立てるために送る
   // `GetSigners` を、バンカーの名前の登録と最初の読み込みの後に処理させるため。
   |> supervisor.add(
@@ -330,10 +330,10 @@ fn add_child(
 
 /// プラグインが 1 つも無ければサブツリーごと置かない。空のスーパーバイザーを
 /// 足しても害は無いが、ツリーの形が構成を素直に映すほうがよい。
-fn add_plugins(builder: Builder, specs: List(PluginSpec)) -> Builder {
-  case specs {
+fn add_plugins(builder: Builder, spec: Spec) -> Builder {
+  case spec.plugins {
     [] -> builder
-    specs -> supervisor.add(builder, supervisor.supervised(plugins_tree(specs)))
+    _specs -> supervisor.add(builder, supervisor.supervised(plugins_tree(spec)))
   }
 }
 
@@ -342,15 +342,18 @@ fn add_plugins(builder: Builder, specs: List(PluginSpec)) -> Builder {
 /// 終了・ハングはランナーの中で完結して**プロセスの死にならない**ため、この
 /// 回数はプラグインの不調では消費されない。消費されるのは外部からの強制終了の
 /// ような、イベントストリームでは誘発できない事象だけである（冒頭の doc も
-/// 参照）。
-fn plugins_tree(specs: List(PluginSpec)) -> Builder {
-  use builder, spec <- list.fold(specs, plugins_supervisor())
+/// 参照）。ランナーには、復帰したときに監視の購読を評価し直させる張り直しの
+/// 操作を渡す。
+fn plugins_tree(spec: Spec) -> Builder {
+  let resubscribe = fn() { relay_list.resubscribe_all(spec.relay_list) }
+  use builder, plugin_spec <- list.fold(spec.plugins, plugins_supervisor())
   builder
-  |> add_plugin_children(spec.plugin)
+  |> add_plugin_children(plugin_spec.plugin)
   |> supervisor.add(plugin_runner.supervised(
-    spec.name,
-    spec.plugin,
-    spec.limits,
+    plugin_spec.name,
+    plugin_spec.plugin,
+    resubscribe,
+    plugin_spec.limits,
   ))
 }
 
@@ -440,6 +443,33 @@ fn plugin_resume_points(
       }
     })
     |> dict.from_list
+    |> Ok
+  }
+}
+
+/// 各ランナーへ `plugin_runner.catchup` で問い合わせ、応答があって取り直しの
+/// 要求を持つものだけをプラグイン名と組にして返す操作を作る。1 つでも答えない
+/// ランナーがあれば `Error(Nil)` にする。答えないランナーを黙って落とすと、その
+/// プラグインの取り直しの購読が定義から消え、開いている購読へ照合で CLOSE を
+/// 送ってしまうためである（`relay_client.sync`）。この問い合わせは監視のリレー
+/// 接続のプロセスが購読を評価するたびに呼ばれ、呼び出し側を最大
+/// `1000ms × プラグイン数` だけ塞ぐ（`plugin_runner` の問い合わせの期限）。
+pub fn plugin_catchups(
+  specs: List(PluginSpec),
+) -> fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil) {
+  fn() {
+    use answered <- result.try(
+      list.try_map(specs, fn(spec) {
+        use catchup <- result.map(plugin_runner.catchup(spec.name))
+        #(spec.plugin.name, catchup)
+      }),
+    )
+    list.filter_map(answered, fn(pair) {
+      case pair.1 {
+        Some(catchup) -> Ok(#(pair.0, catchup))
+        None -> Error(Nil)
+      }
+    })
     |> Ok
   }
 }

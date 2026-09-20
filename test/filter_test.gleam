@@ -14,6 +14,13 @@ pub fn unset_fields_are_omitted_test() {
     == "{\"kinds\":[1,7],\"since\":123}"
 }
 
+/// `until` は閉じた範囲の終端としてエンコードされる。取り直しの購読が使う。
+pub fn until_encodes_test() {
+  let query = Filter(..filter.new(), since: Some(100), until: Some(456))
+  assert filter.to_json(query) |> json.to_string
+    == "{\"since\":100,\"until\":456}"
+}
+
 /// `p_tags` は NIP-01 の `#p` キーとしてエンコードされる。
 pub fn p_tags_encode_test() {
   let query =

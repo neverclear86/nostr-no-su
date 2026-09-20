@@ -464,21 +464,62 @@ pub fn dedup_capacity_rejects_invalid_values_test() {
   let assert Error(_) = dedup_capacity_for(Some("abc"))
 }
 
-/// 署名者が 0 件なら購読を定義せず、`since` を評価しない。署名者がいれば `since`
-/// を呼び、フィルターに `authors` と `since` を入れる。`since` が `Error(Nil)` なら
-/// 定義を得られなかったことにする。
+/// 署名者が 0 件なら購読を定義せず、継続を評価しない。署名者がいれば継続を呼び、
+/// 監視のフィルターに `authors` と `since` を入れて、足す購読をそのまま後ろに並べる。
+/// 継続が `Error(Nil)` なら定義を得られなかったことにする。
 pub fn monitor_subscriptions_test() {
   assert config.monitor_subscriptions([], fn() { panic as "must not be called" })
     == Ok([])
-  assert config.monitor_subscriptions(["pk1", "pk2"], fn() { Ok(None) })
+  assert config.monitor_subscriptions(["pk1", "pk2"], fn() { Ok(#(None, [])) })
     == Ok([
       #("nostr-no-su", Filter(..filter.new(), authors: Some(["pk1", "pk2"]))),
     ])
   let assert Ok([#(_id, with_since)]) =
-    config.monitor_subscriptions(["pk1"], fn() { Ok(Some(1000)) })
+    config.monitor_subscriptions(["pk1"], fn() { Ok(#(Some(1000), [])) })
   assert with_since.since == Some(1000)
+  assert config.monitor_subscriptions(["pk1"], fn() {
+      Ok(#(Some(1000), [#("nostr-no-su-catchup-a", filter.new())]))
+    })
+    == Ok([
+      #(
+        "nostr-no-su",
+        Filter(..filter.new(), authors: Some(["pk1"]), since: Some(1000)),
+      ),
+      #("nostr-no-su-catchup-a", filter.new()),
+    ])
   assert config.monitor_subscriptions(["pk1"], fn() { Error(Nil) })
     == Error(Nil)
+}
+
+/// 署名者が 0 件なら取り直しの購読も定義しない。署名者がいれば、要求ごとに
+/// プラグイン名を繋げた id で、`authors` と閉じた範囲 `since`〜`until` を持つ
+/// フィルターを作る。
+pub fn catchup_subscriptions_test() {
+  assert config.catchup_subscriptions([], [#("a", 100, 200)]) == []
+  assert config.catchup_subscriptions(["pk1"], [
+      #("logger", 100, 200),
+      #("echo", 300, 400),
+    ])
+    == [
+      #(
+        "nostr-no-su-catchup-logger",
+        Filter(
+          ..filter.new(),
+          authors: Some(["pk1"]),
+          since: Some(100),
+          until: Some(200),
+        ),
+      ),
+      #(
+        "nostr-no-su-catchup-echo",
+        Filter(
+          ..filter.new(),
+          authors: Some(["pk1"]),
+          since: Some(300),
+          until: Some(400),
+        ),
+      ),
+    ]
 }
 
 /// 署名者がいれば `#p` に入れて購読し、いなければ購読そのものを開かない。

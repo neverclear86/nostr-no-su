@@ -109,7 +109,7 @@ pub fn startup(loaded: Config) -> Result(Startup, String) {
   Startup(
     spec: app.Spec(
       plugins: specs,
-      monitor: monitor_spec(bunker, dedup_capacity),
+      monitor: monitor_spec(bunker, dedup_capacity, specs),
       bunker: bunker,
       admin: admin,
       open: app.open_websocket,
@@ -135,10 +135,15 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 /// 監視サブツリー。起動時のリレーは常に空で、行はバンカーの読み込みから
 /// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
 /// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
-/// 同じ DB に保存する。除外する kind の既定は ephemeral 全般
+/// 同じ DB に保存する。復帰したランナーの要求に応じて、プラグインごとの
+/// 取り直しの購読も足される。除外する kind の既定は ephemeral 全般
 /// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。`dedup_capacity` は
 /// `DEDUP_CAPACITY` から読んだ値である。
-fn monitor_spec(bunker: app.Bunker, dedup_capacity: Int) -> app.Monitor {
+fn monitor_spec(
+  bunker: app.Bunker,
+  dedup_capacity: Int,
+  specs: List(app.PluginSpec),
+) -> app.Monitor {
   let name = process.new_name("nostr_no_su_dedup")
   app.Monitor(
     name: name,
@@ -148,6 +153,8 @@ fn monitor_spec(bunker: app.Bunker, dedup_capacity: Int) -> app.Monitor {
       bunker.name,
       name,
       resume_point_loader(bunker.pool.pool_name),
+      plugin_resume_point_loader(bunker.pool.pool_name),
+      app.plugin_catchups(specs),
       _,
     ),
     save_resume: resume_point_saver(bunker.pool.pool_name),
@@ -158,13 +165,18 @@ fn monitor_spec(bunker: app.Bunker, dedup_capacity: Int) -> app.Monitor {
 
 /// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から
 /// 組み立て、署名者がいれば `since` をディスパッチャーのメモリの再開点から、無ければ
-/// 保存済みの再開点（`load`）から決める。どれかに応答が無ければ定義を得られなかった
-/// ことにし、開いている購読を閉じない。テストが本番と同じ定義でツリーを動かせるよう
-/// 公開する。
+/// 保存済みの再開点（`load`）から決める。署名者がいれば、各ランナーの取り直しの
+/// 要求（`catchups`）からプラグインごとの取り直しの購読を足す。その `since` は
+/// ランナーのメモリの再開点か保存済みの値（`load_plugin`）から決め、再開点の無い
+/// 要求は落とす。取り直しの解決に失敗したら定義全体を得られなかったことにする。
+/// どれかに応答が無ければ定義を得られなかったことにし、開いている購読を閉じない。
+/// テストが本番と同じ定義でツリーを動かせるよう公開する。
 pub fn monitor_subscriptions(
   bunker_name: Name(bunker.Msg),
   dedup_name: Name(dedup.Msg),
   load: fn(String) -> Result(Option(Int), String),
+  load_plugin: fn(String) -> Result(Option(Int), String),
+  catchups: fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
   relay_url: String,
 ) -> relay_client.Subscriptions {
   fn() {
@@ -173,11 +185,45 @@ pub fn monitor_subscriptions(
     )
     use <- config.monitor_subscriptions(signers)
     use in_memory <- result.try(dedup.since(dedup_name, relay_url))
-    case in_memory {
-      Some(_) -> Ok(in_memory)
-      None -> load(relay_url) |> result.replace_error(Nil)
-    }
+    use since <- result.try(resume_since(in_memory, fn() { load(relay_url) }))
+    use requests <- result.try(catchups())
+    use resolved <- result.map(catchup_since(requests, load_plugin))
+    #(since, config.catchup_subscriptions(signers, resolved))
   }
+}
+
+/// メモリの再開点があればそれを、無ければ保存済みの値を使う。読めなければ
+/// 定義を得られなかったことにする。監視の購読と取り直しの購読で共用する。
+fn resume_since(
+  in_memory: Option(Int),
+  load: fn() -> Result(Option(Int), String),
+) -> Result(Option(Int), Nil) {
+  case in_memory {
+    Some(_) -> Ok(in_memory)
+    None -> load() |> result.replace_error(Nil)
+  }
+}
+
+/// 取り直しの要求ごとに `since` を解決し、購読を定義する `#(プラグイン名,
+/// since, until)` の一覧にする。`since` はランナーのメモリの再開点があれば
+/// それを、無ければ `load_plugin` で読む保存済みの値を使う。再開点が未保存の
+/// 要求は落とす（取り直す範囲が決まらない）。1 つでも読めなければ全体を
+/// `Error(Nil)` にする。テストが直接呼べるよう公開する。
+pub fn catchup_since(
+  catchups: List(#(String, plugin_runner.Catchup)),
+  load_plugin: fn(String) -> Result(Option(Int), String),
+) -> Result(List(#(String, Int, Int)), Nil) {
+  list.try_fold(catchups, [], fn(acc, request) {
+    let #(plugin, catchup) = request
+    use since <- result.map(
+      resume_since(catchup.since, fn() { load_plugin(plugin) }),
+    )
+    case since {
+      Some(at) -> [#(plugin, at, catchup.until), ..acc]
+      None -> acc
+    }
+  })
+  |> result.map(list.reverse)
 }
 
 /// リレーの保存済みの再開点を読む操作（`resume_store.load`）。購読の評価の再試行の
@@ -209,6 +255,26 @@ fn resume_point_saver(
     let db = pog.named_connection(pool)
     resume_store.save(db, points)
     |> result.map_error(account_store.describe)
+  }
+}
+
+/// プラグインの保存済みの再開点を読む操作（`plugin_resume_store.load`）。
+/// `resume_point_loader` と同じく、失敗の理由はここで 1 行出してから返す。
+fn plugin_resume_point_loader(
+  pool: Name(pog.Message),
+) -> fn(String) -> Result(Option(Int), String) {
+  fn(plugin: String) {
+    let db = pog.named_connection(pool)
+    plugin_resume_store.load(db, plugin)
+    |> result.map_error(fn(error) {
+      let reason = account_store.describe(error)
+      log.write(
+        log.Warning,
+        log.plugin_prefix(plugin),
+        "could not load resume point: " <> reason,
+      )
+      reason
+    })
   }
 }
 
