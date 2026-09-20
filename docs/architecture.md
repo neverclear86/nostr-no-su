@@ -558,6 +558,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | POST | `/sessions/revoke` | セッションの取り消し |
 | GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI での接続。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
+| GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
 | POST | `/accounts/reload` | DB からのアカウントの読み直しの要求。303 でダッシュボードへ戻す |
 | GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
 | POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
@@ -644,6 +645,7 @@ nostr-no-su/
 │       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── admin/plugin_view.gleam プラグインが返す要素の記述から管理 UI の部品への変換（純粋）
+│       ├── admin/plugin_pages.gleam プラグインのページの描画（ページ枠、タブ、節の並び）
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）

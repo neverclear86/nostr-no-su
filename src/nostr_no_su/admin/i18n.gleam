@@ -327,6 +327,19 @@ pub type Message {
   NoPlugins
   /// 節とブロックの空の状態に共通で使う。
   PluginSectionEmpty
+  /// プラグインのページの `<title>` と `<h1>`。プラグイン名はここに混ぜない
+  /// （`view.untranslated` で別に出す）。
+  PluginPage
+  /// ダッシュボードのプラグインの節から、ページを供給するプラグインへのリンクの文言。
+  OpenPluginPage
+  /// プラグインのページの `sections` が 0 件のときの案内。
+  PluginPageEmpty
+  /// 節 1 つの記述が変換できなかったときの案内。理由はこれに続けて英語のまま出す。
+  PluginSectionFailed
+  /// プラグインのページの応答が得られなかったときの見出し。
+  PluginPageUnavailable
+  /// 無効になったプラグインのページに出す注意。
+  PluginPageWhileDisabled
   // 承認ページと通知ページ
   ApproveConnection
   WrongSecretOffered
@@ -561,6 +574,13 @@ fn english(message: Message) -> String {
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
     NoPlugins -> "No plugins enabled."
     PluginSectionEmpty -> "Nothing to show."
+    PluginPage -> "Plugin page"
+    OpenPluginPage -> "Open"
+    PluginPageEmpty -> "This plugin page has nothing to show."
+    PluginSectionFailed -> "This section could not be displayed."
+    PluginPageUnavailable -> "Plugin page not available"
+    PluginPageWhileDisabled ->
+      "This plugin is disabled and is not handling events."
     ApproveConnection -> "Approve connection"
     WrongSecretOffered -> "The connection secret does not match."
     WrongSecretNotice ->
@@ -799,6 +819,12 @@ fn japanese(message: Message) -> String {
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。"
     PluginSectionEmpty -> "表示する内容はありません。"
+    PluginPage -> "プラグインのページ"
+    OpenPluginPage -> "ページを開く"
+    PluginPageEmpty -> "このプラグインのページに表示する内容はありません。"
+    PluginSectionFailed -> "この節は表示できませんでした。"
+    PluginPageUnavailable -> "プラグインのページを利用できません"
+    PluginPageWhileDisabled -> "このプラグインは無効で、イベントを処理していません。"
     ApproveConnection -> "接続を承認"
     WrongSecretOffered -> "接続 secret が一致しません。"
     WrongSecretNotice ->

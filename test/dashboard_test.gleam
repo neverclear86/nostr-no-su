@@ -8,6 +8,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
+import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import support/account_actions
@@ -27,6 +28,31 @@ pub fn unknown_account_action_paths_are_rejected_test() {
   assert dashboard.parse_account_action_path(["sessions", "abcd", "delete"])
     == Error(Nil)
   assert dashboard.parse_account_action_path(dashboard.new_account_segments)
+    == Error(Nil)
+}
+
+/// プラグインのページへのリンク（`plugin_page_href`）を `/` で分けて解析すると、
+/// 元のプラグイン名とページのキーに戻る。名前に空白、`/`、非 ASCII を含んでいてもよい。
+pub fn plugin_page_path_round_trips_test() {
+  use #(name, key) <- list.each([
+    #("console_logger", "status"),
+    #("a b", "status"),
+    #("a/b", "status"),
+    #("★", "status"),
+  ])
+  let assert "/" <> path = dashboard.plugin_page_href(name, key)
+  assert dashboard.parse_plugin_page_path(string.split(path, "/"))
+    == Ok(#(name, key))
+}
+
+/// プラグインの再有効化のパス、2 セグメントのパス、percent-decode に失敗する名前は
+/// プラグインのページのパスにならない。
+pub fn plugin_page_path_rejects_other_paths_test() {
+  assert dashboard.parse_plugin_page_path(dashboard.reenable_plugin_segments)
+    == Error(Nil)
+  assert dashboard.parse_plugin_page_path(["plugins", "console_logger"])
+    == Error(Nil)
+  assert dashboard.parse_plugin_page_path(["plugins", "%ZZ", "status"])
     == Error(Nil)
 }
 
@@ -61,13 +87,20 @@ fn states() -> dashboard.Snapshot {
       ),
     ]),
     plugins: [
-      dashboard.PluginRow("a", Some(plugin_runner.Running)),
-      dashboard.PluginRow("b", Some(plugin_runner.Overloaded(dropped: 4))),
+      dashboard.PluginRow("a", Some(plugin_runner.Running), pages: [
+        plugin.PluginPage(key: "status", title: "Status"),
+      ]),
+      dashboard.PluginRow(
+        "b",
+        Some(plugin_runner.Overloaded(dropped: 4)),
+        pages: [],
+      ),
       dashboard.PluginRow(
         "c",
         Some(plugin_runner.Disabled(reason: "boom", dropped: 2)),
+        pages: [],
       ),
-      dashboard.PluginRow("d", None),
+      dashboard.PluginRow("d", None, pages: []),
     ],
     now: 1_789_276_354,
   )
@@ -361,6 +394,15 @@ pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
     ))
       <> "</dd>",
   )
+}
+
+/// ページを供給するプラグインの行にだけ、ページを開くリンクが出る。
+pub fn only_plugins_with_a_page_have_a_link_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(body, dashboard.plugin_page_href("a", "status"))
+  assert !string.contains(body, "/plugins/b/")
+  assert !string.contains(body, "/plugins/c/")
+  assert !string.contains(body, "/plugins/d/")
 }
 
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を

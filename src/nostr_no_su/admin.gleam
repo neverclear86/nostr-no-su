@@ -41,6 +41,7 @@
 import gleam/bit_array
 import gleam/bool
 import gleam/crypto
+import gleam/dynamic.{type Dynamic}
 import gleam/http
 import gleam/http/cookie
 import gleam/http/request
@@ -58,6 +59,8 @@ import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/plugin_pages
+import nostr_no_su/admin/plugin_view
 import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
@@ -194,6 +197,9 @@ pub type Context {
     plugins: fn(task.Deadline) -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
+    /// プラグイン名とページのキーで、そのページの記述を取る。失敗は 1 行の理由で、
+    /// ページは 503 になる。
+    plugin_page_content: fn(String, String) -> Result(Dynamic, String),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
     sessions: fn() -> Result(List(dashboard.SessionRow), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
@@ -343,13 +349,16 @@ fn route(
     segments ->
       case
         dashboard.parse_account_action_path(segments),
-        dashboard.parse_relay_action_path(segments)
+        dashboard.parse_relay_action_path(segments),
+        dashboard.parse_plugin_page_path(segments)
       {
-        Ok(#(signer, action)), _ ->
+        Ok(#(signer, action)), _, _ ->
           account_action(context, request, language, theme, signer, action)
-        _, Ok(#(id, action)) ->
+        _, Ok(#(id, action)), _ ->
           relay_action(context, request, language, theme, id, action)
-        Error(Nil), Error(Nil) ->
+        _, _, Ok(#(name, key)) ->
+          plugin_page(context, request, language, theme, name, key)
+        Error(Nil), Error(Nil), Error(Nil) ->
           not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
       }
   }
@@ -656,6 +665,55 @@ fn show_dashboard(
   snapshot(context, task.deadline_in(snapshot_deadline_ms))
   |> dashboard.render(language, theme, _)
   |> wisp.html_response(200)
+}
+
+/// プラグインが供給するページ。名前がプラグインの一覧に無い、一覧にあってもキーが
+/// そのプラグインのページに無ければ 404。応答の失敗、最上位の記述の形の誤りは 503。
+///
+/// プラグインの一覧の問い合わせ（`snapshot_deadline_ms`、既定 5 秒）とページの中身の
+/// 呼び出し（`call_timeout_ms`、既定 5 秒）が直列なので、最悪 10 秒かかる。
+fn plugin_page(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  name: String,
+  key: String,
+) -> Response {
+  use <- require_method(request, http.Get, language, theme)
+  let rows = context.plugins(task.deadline_in(snapshot_deadline_ms))
+  case list.find(rows, fn(row) { row.name == name }) {
+    Error(Nil) ->
+      not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
+    Ok(row) ->
+      case list.find(row.pages, fn(page) { page.key == key }) {
+        Error(Nil) ->
+          not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
+        Ok(page) ->
+          case context.plugin_page_content(name, key) {
+            Error(reason) ->
+              unavailable_notice(
+                language,
+                theme,
+                i18n.PluginPageUnavailable,
+                reason,
+              )
+            Ok(description) ->
+              case plugin_view.sections(description) {
+                Error(reason) ->
+                  unavailable_notice(
+                    language,
+                    theme,
+                    i18n.PluginPageUnavailable,
+                    reason,
+                  )
+                Ok(sections) ->
+                  plugin_pages.plugin_page(language, theme, row, page, sections)
+                  |> wisp.html_response(200)
+              }
+          }
+      }
+  }
 }
 
 /// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは

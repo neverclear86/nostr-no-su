@@ -21,6 +21,7 @@ import gleam/result
 import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp
+import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -28,6 +29,7 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
+import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
@@ -75,9 +77,14 @@ pub type SkippedRow {
 
 /// プラグイン 1 つの表示内容。`status` が `None` なのは、ランナーが再起動中か、
 /// 遅いプラグインの実行中で問い合わせに応答しなかったか、共通の締め切りまでに
-/// 答えなかったことを意味する。
+/// 答えなかったことを意味する。`pages` は読み込み時に検証済みの一覧で、空なら
+/// このプラグインは管理 UI のページを供給しない。
 pub type PluginRow {
-  PluginRow(name: String, status: Option(plugin_runner.Status))
+  PluginRow(
+    name: String,
+    status: Option(plugin_runner.Status),
+    pages: List(plugin.PluginPage),
+  )
 }
 
 /// 承認待ちの行と承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
@@ -187,6 +194,9 @@ const accounts_segment = "accounts"
 /// リレーのページのパスの先頭のセグメント。
 const relays_segment = "relays"
 
+/// プラグインのページのパスの先頭のセグメント。
+const plugins_segment = "plugins"
+
 /// 承認ページのパスの先頭のセグメント。
 pub const approve_segment = "approve"
 
@@ -218,7 +228,7 @@ pub const revoke_segments = ["sessions", "revoke"]
 pub const connect_segments = ["sessions", "connect"]
 
 /// プラグインの再有効化の POST 先のパスセグメント。
-pub const reenable_plugin_segments = ["plugins", "reenable"]
+pub const reenable_plugin_segments = [plugins_segment, "reenable"]
 
 /// 登録のフォームで nsec を送る欄の名前。
 pub const nsec_field = "nsec"
@@ -968,6 +978,36 @@ pub fn parse_relay_action_path(
   }
 }
 
+/// プラグインのページのパス（`/plugins/<プラグイン名>/<ページのキー>`）。符号化しない
+/// 素のパスで、`view.SwitchReturningTo` に渡す値。リンクの `href` には
+/// `plugin_page_href` を使う。
+pub fn plugin_page_path(plugin: String, page: String) -> String {
+  view.segments_path([plugins_segment, plugin, page])
+}
+
+/// プラグインのページへのリンクのパス。`plugin_name/0` は任意の文字列でよく
+/// `wisp.path_segments` は percent-decode しないため、プラグイン名だけを
+/// percent-encode する（ページのキーは `[a-z0-9_-]+` に限られているので符号化
+/// しない）。`return` には `plugin_page_path` を渡すこと。`admin.return_path`
+/// が自分でセグメントを符号化するため、符号化済みの値を渡すと二重になる。
+pub fn plugin_page_href(plugin: String, page: String) -> String {
+  view.segments_path([plugins_segment, uri.percent_encode(plugin), page])
+}
+
+/// パスセグメントから、プラグインのページのプラグイン名とキーを引く。プラグイン名は
+/// percent-decode し、失敗すれば `Error(Nil)`。一覧との照合は呼び出し側が行う。
+pub fn parse_plugin_page_path(
+  segments: List(String),
+) -> Result(#(String, String), Nil) {
+  case segments {
+    [first, name, key] if first == plugins_segment -> {
+      use name <- result.try(uri.percent_decode(name))
+      Ok(#(name, key))
+    }
+    _ -> Error(Nil)
+  }
+}
+
 /// 操作のページへのリンクの重さ。編集は開くだけなので通常、削除は接続中のクライアントに
 /// 影響するので、error 色の文字にする。
 fn relay_action_link_weight(action: RelayAction) -> view.Weight {
@@ -1315,7 +1355,10 @@ fn plugins_section(
               html.td([], [plugin_state(language, plugin)]),
               html.td(
                 [attribute.class("whitespace-nowrap")],
-                reenable_form_if_disabled(language, plugin),
+                list.append(
+                  plugin_page_link(language, plugin),
+                  reenable_form_if_disabled(language, plugin),
+                ),
               ),
             ]
           }),
@@ -1443,7 +1486,7 @@ fn relay_status(language: Language, status: Status) -> Element(msg) {
 
 /// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
 /// 一時的な状態なので、異常の色にしない。
-fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
+pub fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
   let tone = case plugin.status {
     None -> view.Neutral
     Some(plugin_runner.Running) -> view.Success
@@ -1459,6 +1502,25 @@ fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
       ])
+  }
+}
+
+/// ページを供給するプラグインへのリンクを 1 要素のリストで返す。`pages` の先頭のページを
+/// 指す。供給が無ければ空。
+fn plugin_page_link(
+  language: Language,
+  plugin: PluginRow,
+) -> List(Element(msg)) {
+  case plugin.pages {
+    [first, ..] -> [
+      view.icon_button_link(
+        plugin_page_href(plugin.name, first.key),
+        view.file_text_icon(),
+        i18n.text(language, i18n.OpenPluginPage),
+        view.Normal,
+      ),
+    ]
+    [] -> []
   }
 }
 

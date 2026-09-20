@@ -114,6 +114,10 @@ const shots = [
   { name: "62-connect-client-empty", url: `${empty}/sessions/connect` },
   { name: "63-connect-client-accounts-unavailable", url: `${unavailable}/sessions/connect` },
   { name: "64-connect-client-invalid-uri", url: `${base}/sessions/connect`, form: { uri: "not-a-uri", signer }, status: 400 },
+  { name: "65-plugin-page", url: `${base}/plugins/console_logger/status` },
+  { name: "66-plugin-page-disabled", url: `${base}/plugins/broken/status` },
+  { name: "67-plugin-page-not-found", url: `${base}/plugins/console_logger/nope`, status: 404 },
+  { name: "68-plugin-page-unavailable", url: `${base}/plugins/slow/status`, status: 503 },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り

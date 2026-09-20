@@ -125,6 +125,7 @@
 ////   1 行に出る。
 
 import gleam/dict.{type Dict}
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -659,6 +660,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       reload_accounts: fn() { bunker.reload_accounts(bunker_name) },
       plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
+      plugin_page_content: fn(plugin, key) {
+        plugin_page_content(spec.plugins, plugin, key)
+      },
       relays: fn(deadline) { relay_rows(spec, deadline) },
       add_relay: fn(url, roles) { add_relay(spec, url, roles) },
       registered_relays: fn() { registered_relays(spec) },
@@ -745,13 +749,26 @@ fn plugin_rows(
 ) -> List(dashboard.PluginRow) {
   let tasks =
     list.map(specs, fn(spec) {
-      #(spec.plugin.name, task.start(fn() { plugin_runner.status(spec.name) }))
+      #(
+        spec.plugin.name,
+        plugin_ui_pages(spec.plugin.ui),
+        task.start(fn() { plugin_runner.status(spec.name) }),
+      )
     })
-  use #(name, status) <- list.map(tasks)
+  use #(name, pages, status) <- list.map(tasks)
   dashboard.PluginRow(
     name:,
     status: task.await(status, deadline) |> result.unwrap(None),
+    pages:,
   )
+}
+
+/// プラグインが供給するページの一覧。UI を持たないプラグインは空。
+fn plugin_ui_pages(ui: Option(plugin.PluginUi)) -> List(plugin.PluginPage) {
+  case ui {
+    Some(ui) -> ui.pages
+    None -> []
+  }
 }
 
 /// 管理 UI の再有効化。名前でランナーを引き、応答を待つ。名前で引いてよいのは、
@@ -768,6 +785,25 @@ pub fn reenable_plugin(
   )
   plugin_runner.request_reenable(spec.name)
   |> option.to_result(admin.PluginNotAnswered("plugin runner did not answer"))
+}
+
+/// 管理 UI のプラグインのページの中身。名前で引いてよい理由は `reenable_plugin` と
+/// 同じ（読み込みが同名のプラグインを 2 つ目以降で捨てる）。UI を持たないプラグイン、
+/// または一覧に無い名前は 1 行の理由を返す（`admin.plugin_page` が行の一覧で先に
+/// 404 にするので、名前で引けないことは通常起きない）。
+pub fn plugin_page_content(
+  specs: List(PluginSpec),
+  plugin: String,
+  key: String,
+) -> Result(Dynamic, String) {
+  use spec <- result.try(
+    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    |> result.replace_error("plugin not found"),
+  )
+  case spec.plugin.ui {
+    Some(ui) -> ui.content(key)
+    None -> Error("plugin has no pages")
+  }
 }
 
 /// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を

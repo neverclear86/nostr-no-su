@@ -1317,6 +1317,14 @@ pub fn puzzle_icon() -> Element(msg) {
   ])
 }
 
+/// プラグインのページへのリンクのアイコン（Lucide の file-text）。
+pub fn file_text_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z",
+    "M14 2v4a2 2 0 0 0 2 2h4", "M10 9H8", "M16 13H8", "M16 17H8",
+  ])
+}
+
 /// ダッシュボードへ戻るリンクの段落。
 pub fn back_link(language: Language) -> Element(msg) {
   html.p([], [

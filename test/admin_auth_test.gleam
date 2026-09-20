@@ -402,6 +402,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
           with_password,
         ),
         post(context, action_path(dashboard.DeleteAccount)),
+        get(context, "/plugins/console_logger/status"),
         get(context, "/nope"),
       ],
     )
@@ -409,7 +410,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
   assert list.map(responses, fn(response) { response.status })
     == [
       200, 200, 200, 303, 200, 200, 200, 200, 400, 409, 202, 503, 303, 405, 400,
-      200, 200, 200, 200, 200, 403, 503, 303, 404,
+      200, 200, 200, 200, 200, 403, 503, 303, 200, 404,
     ]
   list.each(responses, fn(response) {
     assert header(response, "cache-control") == "no-store"

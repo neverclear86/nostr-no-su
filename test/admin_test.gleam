@@ -1,7 +1,7 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消し、
-//// クライアントの接続、プラグインの再有効化、承認と拒否、リレーの追加・編集・削除、
-//// 静的ファイルと通知の色、表示のテーマを対象にする。
+//// クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの追加・編集・
+//// 削除、静的ファイルと通知の色、表示のテーマを対象にする。
 
 import gleam/erlang/process
 
@@ -221,6 +221,42 @@ pub fn reenable_without_a_name_is_a_bad_request_test() {
 pub fn reenable_rejects_other_methods_test() {
   let response = get(context(), "/plugins/reenable")
   assert response.status == 405
+}
+
+/// プラグインのページは 200 で、ページ枠の中に節の中身を描き、2 件のタブを持つ
+/// （テストの Context の `console_logger` は `status` と `settings` を供給する）。
+pub fn plugin_page_renders_test() {
+  let body =
+    simulate.read_body(get(context(), "/plugins/console_logger/status"))
+  assert string.contains(body, "processed 3 events")
+  assert string.contains(body, "class=\"tabs tabs-border\"")
+  assert string.contains(body, "tab-active")
+  assert string.contains(body, "<span lang=\"en\">console_logger</span>")
+}
+
+/// 供給の無いプラグイン名、そのプラグインに無いページのキーはどちらも 404 で、
+/// 名前を本文に含めない。
+pub fn plugin_page_for_an_unknown_plugin_or_page_is_not_found_test() {
+  let unknown_plugin = get(context(), "/plugins/does-not-exist/status")
+  assert unknown_plugin.status == 404
+  assert !string.contains(simulate.read_body(unknown_plugin), "does-not-exist")
+
+  let unknown_page = get(context(), "/plugins/console_logger/nope")
+  assert unknown_page.status == 404
+}
+
+/// ページの中身の呼び出しが失敗すれば 503 で、理由を英語のまま出す。
+pub fn plugin_page_content_failure_is_unavailable_test() {
+  let response = get(context(), "/plugins/console_logger/settings")
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, admin_context.plugin_page_unavailable_reason)
+}
+
+/// UI を供給しないプラグイン（ページの一覧が空）へのページは 404 になる。
+pub fn plugin_page_without_ui_is_not_found_test() {
+  let response = get(context(), "/plugins/broken/status")
+  assert response.status == 404
 }
 
 /// 読み直しフォームは Context の `reload_accounts` を呼び、ダッシュボードへ 303 で戻す。
@@ -458,7 +494,7 @@ pub fn unknown_paths_are_not_found_test() {
 /// メソッドが違うリクエストは 405 の HTML で、`allow` を持ちメソッドとパスを本文に
 /// 含めない。
 pub fn method_not_allowed_pages_test() {
-  let get_only_paths = ["/", "/accounts/new"]
+  let get_only_paths = ["/", "/accounts/new", "/plugins/console_logger/status"]
   let post_only_paths = [
     "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
     "/accounts/generate", "/accounts/import", "/accounts/register-generated",
