@@ -87,7 +87,7 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 ## 変更点
 ### `path`（何をしたかを 1〜3 行。行数は書かない）
 ## テストと検証
-（`dev/pr_facts.sh <PR>` の表。検証の手順の出力の抜粋。掃き出した語）
+（`dev/pr_facts.sh <PR>` の表。検証の手順の出力の抜粋。`dev/check_plan_tests.sh` の表。掃き出した語）
 ## プランからの変更
 ## 後続の作業
 
