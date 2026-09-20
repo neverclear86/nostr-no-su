@@ -61,6 +61,10 @@ const earlier_client = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111
 /// 接続してきたクライアントの公開鍵（ダミー）。
 const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
 
+/// アカウント一覧に無い署名者（ダミー）。承認待ちのタイルに省略した 16 進の署名者を
+/// 写すために使う。
+const unknown_signer = "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
+
 /// 接続 URI の relay= の部分。
 const relay = "relay=ws%3A%2F%2F127.0.0.1%3A7801"
 
@@ -280,6 +284,14 @@ fn context() -> admin.Context {
           expires_in_seconds: 45,
           secret_mismatch: True,
           perms: "",
+        ),
+        dashboard.PendingRow(
+          token: "tok-3",
+          signer: unknown_signer,
+          client:,
+          expires_in_seconds: 540,
+          secret_mismatch: False,
+          perms: "sign_event:1",
         ),
       ])
     },

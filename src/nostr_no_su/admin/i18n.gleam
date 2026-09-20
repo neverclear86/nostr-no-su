@@ -219,22 +219,35 @@ pub type Message {
   CopyClient
   // ダッシュボード
   Dashboard
+  Pending
+  AwaitingDecision(seconds: Int)
+  PendingExpireAfterMinutes(minutes: Int)
+  TileNotAvailable
+  UnreadableRowCount(count: Int)
+  AllAccountsLoaded
+  Sessions
+  ApprovedClients
+  RelayIssueCounts(disconnected: Int, unanswered: Int)
+  AllRelaysConnected
+  NoBunkerRelayShort
+  PluginsRunningOfTotal(running: Int, total: Int)
+  PluginIssueCounts(overloaded: Int, disabled: Int, unavailable: Int)
+  NoPluginsEnabledShort
   PendingConnections
-  NoPendingConnections(minutes: Int)
-  AutoRefreshingEverySeconds(seconds: Int)
+  PendingSecretNotOffered
+  PendingSecretMismatch
+  NoPermissionsRequestedBadge
   Signer
   Client
   ExpiresIn
   ExpiresInSeconds(seconds: Int)
-  SecretLabel
-  SecretNotOffered
-  SecretMismatch
   Permissions
   NoPermissionsRequested
   Created
   LastUsed
   Approve
   Deny
+  ApprovalExplanation
   Accounts
   AddAccount
   NoAccounts
@@ -398,20 +411,43 @@ fn english(message: Message) -> String {
     CopyNpub -> "Copy npub"
     CopyClient -> "Copy client"
     Dashboard -> "Dashboard"
+    Pending -> "Pending"
+    AwaitingDecision(seconds:) ->
+      "Awaiting your decision · refreshes every "
+      <> int.to_string(seconds)
+      <> " s"
+    PendingExpireAfterMinutes(minutes:) ->
+      "Expire after " <> int.to_string(minutes) <> " minutes"
+    TileNotAvailable -> "Not available"
+    UnreadableRowCount(count:) -> int.to_string(count) <> " unreadable rows"
+    AllAccountsLoaded -> "All loaded"
+    Sessions -> "Sessions"
+    ApprovedClients -> "Approved clients"
+    RelayIssueCounts(disconnected:, unanswered:) ->
+      int.to_string(disconnected)
+      <> " disconnected · "
+      <> int.to_string(unanswered)
+      <> " unanswered"
+    AllRelaysConnected -> "All connected"
+    NoBunkerRelayShort -> "No bunker relay"
+    PluginsRunningOfTotal(running:, total:) ->
+      int.to_string(running) <> " / " <> int.to_string(total) <> " running"
+    PluginIssueCounts(overloaded:, disabled:, unavailable:) ->
+      int.to_string(overloaded)
+      <> " overloaded · "
+      <> int.to_string(disabled)
+      <> " disabled · "
+      <> int.to_string(unavailable)
+      <> " unavailable"
+    NoPluginsEnabledShort -> "No plugins enabled"
     PendingConnections -> "Pending connections"
-    NoPendingConnections(minutes:) ->
-      "No pending connections. Pending connections expire after "
-      <> int.to_string(minutes)
-      <> " minutes."
-    AutoRefreshingEverySeconds(seconds:) ->
-      "Refreshing every " <> int.to_string(seconds) <> "s"
+    PendingSecretNotOffered -> "Secret not offered"
+    PendingSecretMismatch -> "Secret mismatch"
+    NoPermissionsRequestedBadge -> "No permissions requested"
     Signer -> "Signer"
     Client -> "Client"
     ExpiresIn -> "Expires in"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
-    SecretLabel -> "Secret"
-    SecretNotOffered -> "Not offered"
-    SecretMismatch -> "Mismatch"
     Permissions -> "Permissions"
     NoPermissionsRequested ->
       "None requested. Signing and encryption are refused."
@@ -419,6 +455,8 @@ fn english(message: Message) -> String {
     LastUsed -> "Last used"
     Approve -> "Approve"
     Deny -> "Deny"
+    ApprovalExplanation ->
+      "Approving lets this client request signing and encryption within the permissions above. The permissions are fixed at approval."
     Accounts -> "Accounts"
     AddAccount -> "Add account"
     NoAccounts -> "No accounts registered."
@@ -612,23 +650,48 @@ fn japanese(message: Message) -> String {
     CopyNpub -> "npub をコピー"
     CopyClient -> "クライアントをコピー"
     Dashboard -> "ダッシュボード"
+    Pending -> "承認待ち"
+    AwaitingDecision(seconds:) ->
+      "承認を待っています · " <> int.to_string(seconds) <> " 秒ごとに更新"
+    PendingExpireAfterMinutes(minutes:) -> int.to_string(minutes) <> " 分で失効します"
+    TileNotAvailable -> "取得できません"
+    UnreadableRowCount(count:) -> "読み込めない行 " <> int.to_string(count)
+    AllAccountsLoaded -> "すべて読み込み済み"
+    Sessions -> "セッション"
+    ApprovedClients -> "承認済みのクライアント"
+    RelayIssueCounts(disconnected:, unanswered:) ->
+      "未接続 "
+      <> int.to_string(disconnected)
+      <> " · 応答なし "
+      <> int.to_string(unanswered)
+    AllRelaysConnected -> "すべて接続中"
+    NoBunkerRelayShort -> "バンカー用が未登録"
+    PluginsRunningOfTotal(running:, total:) ->
+      int.to_string(running) <> " / " <> int.to_string(total) <> " 動作中"
+    PluginIssueCounts(overloaded:, disabled:, unavailable:) ->
+      "過負荷 "
+      <> int.to_string(overloaded)
+      <> " · 無効 "
+      <> int.to_string(disabled)
+      <> " · 応答なし "
+      <> int.to_string(unavailable)
+    NoPluginsEnabledShort -> "有効なプラグインなし"
     PendingConnections -> "承認待ちの接続"
-    NoPendingConnections(minutes:) ->
-      "承認待ちの接続はありません。承認待ちは " <> int.to_string(minutes) <> " 分で失効します。"
-    AutoRefreshingEverySeconds(seconds:) -> int.to_string(seconds) <> " 秒ごとに更新中"
+    PendingSecretNotOffered -> "secret 提示なし"
+    PendingSecretMismatch -> "secret 不一致"
+    NoPermissionsRequestedBadge -> "権限の要求なし"
     Signer -> "署名者"
     Client -> "クライアント"
     ExpiresIn -> "失効まで"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
-    SecretLabel -> "secret"
-    SecretNotOffered -> "提示なし"
-    SecretMismatch -> "不一致"
     Permissions -> "権限"
     NoPermissionsRequested -> "要求なし。署名と暗号化は拒否します。"
     Created -> "作成"
     LastUsed -> "最終利用"
     Approve -> "承認する"
     Deny -> "拒否する"
+    ApprovalExplanation ->
+      "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は後から変わりません。"
     Accounts -> "アカウント"
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。"

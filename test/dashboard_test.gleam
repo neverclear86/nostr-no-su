@@ -7,7 +7,6 @@ import lustre/element
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
@@ -112,7 +111,7 @@ pub fn states_are_shown_as_badges_test() {
     "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">overloaded</span><span class=\"text-xs break-words\">(dropped 4)</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disabled</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
     "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">unavailable</span>",
-    "<dd class=\"break-words\">540s</dd>",
+    "<dd><span>540s</span></dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
@@ -132,49 +131,34 @@ pub fn japanese_states_are_translated_test() {
     "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">過負荷</span><span class=\"text-xs break-words\">（破棄 4 件）</span>",
     "<span class=\"badge badge-sm badge-error whitespace-nowrap\">無効</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
     "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">応答なし</span>",
-    "<dd class=\"break-words\">540 秒</dd>",
+    "<dd><span>540 秒</span></dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
   })
 }
 
-/// 提示なしの承認待ちは secret の行が「Not offered」、不一致は塗りの警告バッジの
-/// 「Mismatch」になる。承認待ちは失効までが長い順に並ぶ。残り 60 秒未満の `tok-2` は
-/// 失効までの値も警告のバッジになる。
-pub fn pending_secret_is_shown_test() {
-  let body = dashboard.render(i18n.English, view.System, secret_states())
-  let assert Ok(#(before, after)) =
-    string.split_once(
-      body,
-      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45s</span></dd>",
-    )
+/// 提示なしの承認待ちは secret のバッジが「Secret not offered」、不一致は警告色の
+/// 「Secret mismatch」になる。日本語ではそれぞれ「secret 提示なし」「secret 不一致」に
+/// なる。
+pub fn secret_state_is_shown_as_a_badge_test() {
+  let english = dashboard.render(i18n.English, view.System, secret_states())
   assert string.contains(
-    before,
-    "<dd class=\"break-words\">540s</dd><dt class=\"text-base-content/70\">Secret</dt><dd class=\"break-words\">Not offered</dd>",
+    english,
+    "<span class=\"badge badge-ghost badge-sm whitespace-nowrap gap-1\">"
+      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "Secret not offered</span>",
   )
   assert string.contains(
-    after,
-    "<dt class=\"text-base-content/70\">Secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>Mismatch</span></dd>",
+    english,
+    "<span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\">"
+      <> element.to_string(view.tone_icon(view.Warning))
+      <> "Secret mismatch</span>",
   )
-}
 
-/// 日本語では secret の見出しと値が訳される。
-pub fn japanese_pending_secret_is_translated_test() {
-  let body = dashboard.render(i18n.Japanese, view.System, secret_states())
-  let assert Ok(#(before, after)) =
-    string.split_once(
-      body,
-      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45 秒</span></dd>",
-    )
-  assert string.contains(
-    before,
-    "<dd class=\"break-words\">540 秒</dd><dt class=\"text-base-content/70\">secret</dt><dd class=\"break-words\">提示なし</dd>",
-  )
-  assert string.contains(
-    after,
-    "<dt class=\"text-base-content/70\">secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>不一致</span></dd>",
-  )
+  let japanese = dashboard.render(i18n.Japanese, view.System, secret_states())
+  assert string.contains(japanese, "secret 提示なし")
+  assert string.contains(japanese, "secret 不一致")
 }
 
 /// secret が一致しない承認待ちの承認ページにだけ警告が出て、提示が無い承認待ちの承認
@@ -183,24 +167,24 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   let assert Ok([not_offered, mismatched]) = secret_states().pending
 
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, mismatched),
+    dashboard.approval_page(i18n.English, view.System, Ok([]), mismatched),
     "<div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
       <> "<p><strong>The connection secret does not match.</strong> This happens when",
   )
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, mismatched),
+    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), mismatched),
     "<div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
       <> "<p><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
   )
 
   assert !string.contains(
-    dashboard.approval_page(i18n.English, view.System, not_offered),
+    dashboard.approval_page(i18n.English, view.System, Ok([]), not_offered),
     "alert-warning",
   )
   assert !string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, not_offered),
+    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), not_offered),
     "alert-warning",
   )
 
@@ -214,19 +198,32 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   )
 }
 
-/// 要求された権限は、承認待ちの行と承認ページの両方で secret の行の直後に等幅で出る。
-pub fn pending_perms_are_shown_on_rows_and_approval_page_test() {
-  let assert Ok([offered, ..]) = secret_states().pending
-  let expected =
-    "<dd class=\"break-words\">Not offered</dd><dt class=\"text-base-content/70\">Permissions</dt><dd class=\"font-mono text-xs break-all\">sign_event:1,nip44_encrypt</dd>"
-
+/// 要求された権限は、承認待ちの行と承認ページの両方でチップになる。空なら「権限の
+/// 要求なし」のバッジ 1 つを出す。
+pub fn permissions_are_shown_as_chips_test() {
+  let assert Ok([offered, not_requested]) = secret_states().pending
+  let chips =
+    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:1</span><span class=\"badge badge-outline badge-sm font-mono\">nip44_encrypt</span></div>"
   assert string.contains(
     dashboard.render(i18n.English, view.System, secret_states()),
-    expected,
+    chips,
   )
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, offered),
-    expected,
+    dashboard.approval_page(i18n.English, view.System, Ok([]), offered),
+    chips,
+  )
+
+  let no_perms_badge =
+    "<span class=\"badge badge-ghost badge-sm whitespace-nowrap gap-1\">"
+    <> element.to_string(view.tone_icon(view.Neutral))
+    <> "No permissions requested</span>"
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, secret_states()),
+    no_perms_badge,
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, Ok([]), not_requested),
+    no_perms_badge,
   )
 }
 
@@ -252,10 +249,9 @@ pub fn sessions_show_perms_test() {
   )
 }
 
-/// 権限が空のときは、承認待ちの行と承認ページ、セッションの行のいずれも「署名と暗号化は
-/// 拒否します」の旨の文が出る（値は等幅にしない）。
-pub fn empty_perms_say_signing_and_encryption_are_refused_test() {
-  let assert Ok([_, not_requested]) = secret_states().pending
+/// 権限が空のとき、セッションの行は「署名と暗号化は拒否します」の旨の文が出る（値は
+/// 等幅にしない）。
+pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
   let snapshot =
     dashboard.Snapshot(
       ..states(),
@@ -278,14 +274,6 @@ pub fn empty_perms_say_signing_and_encryption_are_refused_test() {
   assert string.contains(
     sessions,
     "<dt class=\"text-base-content/70\">Permissions</dt><dd class=\"break-words\">None requested. Signing and encryption are refused.</dd>",
-  )
-  assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, not_requested),
-    "<dd class=\"break-words\">None requested. Signing and encryption are refused.</dd>",
-  )
-  assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, not_requested),
-    "<dt class=\"text-base-content/70\">権限</dt><dd class=\"break-words\">要求なし。署名と暗号化は拒否します。</dd>",
   )
 }
 
@@ -330,7 +318,8 @@ pub fn table_headers_scope_their_columns_test() {
 }
 
 /// 承認待ちとセッションを得られないときは、「0 件」の代わりに理由を出し、
-/// 承認・拒否や取り消しのフォームも出さない。日本語では前置きも出る。
+/// 承認・拒否や取り消しのフォームも出さない。承認待ちの理由の囲みは error 色、
+/// セッションの理由の囲みは中立の色になる。日本語では前置きも出る。
 pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -339,15 +328,13 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
       sessions: Error(i18n.Untranslated("sessions reason")),
     )
   let english = dashboard.render(i18n.English, view.System, snapshot)
-  assert string.contains(english, "<span lang=\"en\">pending reason</span>")
-  assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
-  assert !string.contains(
+  assert string.contains(
     english,
-    i18n.text(
-      i18n.English,
-      i18n.NoPendingConnections(engine.pending_ttl_minutes()),
-    ),
+    "alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
+      <> "<span><span lang=\"en\">pending reason</span></span>",
   )
+  assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
   assert !string.contains(
     english,
     i18n.text(i18n.English, i18n.NoApprovedSessions),
@@ -661,7 +648,7 @@ pub fn no_reload_form_without_the_account_list_test() {
 pub fn language_switch_return_paths_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, pending),
+    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
     "<input name=\"return\" type=\"hidden\" value=\"/approve/tok\">",
   )
   assert string.contains(
@@ -702,11 +689,11 @@ pub fn dashboard_refreshes_only_when_pending_exists_test() {
   )
 }
 
-/// 承認待ちの節の見出しは、自動更新中のときだけ更新の間隔を伝える注記を出す。
-pub fn pending_heading_shows_auto_refresh_note_only_when_refreshing_test() {
+/// 承認待ちのタイルの補足は、自動更新中のときだけ更新の間隔を伝える。
+pub fn pending_tile_shows_the_refresh_note_only_when_refreshing_test() {
   assert string.contains(
     dashboard.render(i18n.English, view.System, states()),
-    "Refreshing every 30s",
+    "Awaiting your decision · refreshes every 30 s",
   )
   assert !string.contains(
     dashboard.render(
@@ -714,7 +701,7 @@ pub fn pending_heading_shows_auto_refresh_note_only_when_refreshing_test() {
       view.System,
       dashboard.Snapshot(..states(), pending: Ok([])),
     ),
-    "Refreshing every",
+    "Awaiting your decision",
   )
 }
 
@@ -722,7 +709,8 @@ pub fn pending_heading_shows_auto_refresh_note_only_when_refreshing_test() {
 /// 読み込みを繰り返さない。
 pub fn approval_page_refreshes_automatically_test() {
   let assert Ok([pending]) = states().pending
-  let approval = dashboard.approval_page(i18n.English, view.System, pending)
+  let approval =
+    dashboard.approval_page(i18n.English, view.System, Ok([]), pending)
   assert string.contains(approval, "http-equiv=\"refresh\"")
   assert string.contains(approval, "content=\"30\"")
   assert !string.contains(
@@ -744,10 +732,205 @@ pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
     dashboard.render(i18n.English, view.System, states()),
-    "<dt class=\"text-base-content/70\">Expires in</dt><dd class=\"break-words\">540s</dd>",
+    "<dt class=\"text-base-content/70\">Expires in</dt><dd><span>540s</span></dd>",
   )
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, pending),
-    "<dt class=\"text-base-content/70\">失効まで</dt><dd class=\"break-words\">540 秒</dd>",
+    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
+    "<dt class=\"text-base-content/70\">失効まで</dt><dd><span>540 秒</span></dd>",
+  )
+}
+
+/// 概要のタイルは、5 つの節へのリンク（`href="#…"`）になっており、各節のカードは
+/// 同じアンカーの `id` を持つ。
+pub fn overview_tiles_link_to_each_section_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  let anchors = ["pending", "accounts", "sessions", "relays", "plugins"]
+  use anchor <- list.each(anchors)
+  assert string.contains(body, "href=\"#" <> anchor <> "\"")
+  assert string.contains(body, "id=\"" <> anchor <> "\"")
+}
+
+/// 承認待ちのタイルは、1 件以上あるときだけ狭い画面で全幅を占める。
+pub fn pending_tile_is_full_width_only_when_pending_exists_test() {
+  let wide_class =
+    "card card-border col-span-2 border-warning bg-warning/15 text-warning lg:col-span-1"
+  let with_pending = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(with_pending, wide_class)
+
+  let empty =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    )
+  assert !string.contains(empty, wide_class)
+}
+
+/// 承認待ちのタイルは、0 件のときは節が無いのでリンクにしない。1 件以上あるとき、
+/// 一覧を得られないときはリンクにする。
+pub fn pending_tile_is_not_a_link_when_no_pending_test() {
+  let anchor = "href=\"#pending\""
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    anchor,
+  )
+  assert !string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    ),
+    anchor,
+  )
+  assert string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
+    ),
+    anchor,
+  )
+}
+
+/// 承認待ち・アカウント・セッションの一覧を得られないとき、対応するタイルの値は
+/// 「—」、補足は「取得できません」になる。
+pub fn tiles_say_not_available_when_lists_are_missing_test() {
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(
+        ..states(),
+        accounts: Error(i18n.Untranslated("boom")),
+        pending: Error(i18n.Untranslated("boom")),
+        sessions: Error(i18n.Untranslated("boom")),
+      ),
+    )
+  let value = "<p class=\"text-2xl font-bold\">—</p>"
+  let note = "<p class=\"text-xs\">Not available</p>"
+  assert list.length(string.split(unavailable, value)) == 4
+  assert list.length(string.split(unavailable, note)) == 4
+}
+
+/// 承認待ちの節は 1 件以上あるとき、または一覧を得られないときだけ描く。0 件のときは
+/// 節ごと出さない。
+pub fn empty_pending_section_is_not_rendered_test() {
+  let empty =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    )
+  assert !string.contains(empty, "Pending connections")
+
+  let present = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(present, "Pending connections")
+  assert !string.contains(present, "alert-error")
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
+    )
+  assert string.contains(unavailable, "Pending connections")
+  assert string.contains(unavailable, "alert-soft alert-error")
+}
+
+/// 承認待ちの行のクライアントは省略した表示とコピーボタンで出る。
+pub fn pending_row_shows_the_client_shortened_with_a_copy_button_test() {
+  let long_client = "cccc3333cccc3333cccc3333cccc3333"
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      pending: Ok([
+        dashboard.PendingRow(
+          token: "tok",
+          signer: "abcd",
+          client: long_client,
+          expires_in_seconds: 540,
+          secret_mismatch: False,
+          perms: "",
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, view.shorten(long_client))
+  assert string.contains(body, "data-action=\"copy\"")
+}
+
+/// 署名者は、アカウント一覧にあればラベルと省略した npub、無ければ省略した 16 進で出る。
+/// アカウント一覧を得られないときも省略した 16 進になる。
+pub fn signer_is_shown_as_label_and_npub_test() {
+  let known_signer = "abcd-known-signer-0123456789"
+  let unknown_signer = "unknown-signer-0123456789abcd"
+  let known_npub = "npub1exampleexampleexampleexampleexampleexampleexamplex"
+  let known_account =
+    dashboard.AccountRow(
+      signer: known_signer,
+      npub: known_npub,
+      label: "main",
+      uri: "bunker://x",
+      auth_uri: "bunker://x",
+    )
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([known_account]),
+      pending: Ok([
+        dashboard.PendingRow(
+          token: "tok-known",
+          signer: known_signer,
+          client: "ef01",
+          expires_in_seconds: 540,
+          secret_mismatch: False,
+          perms: "",
+        ),
+        dashboard.PendingRow(
+          token: "tok-unknown",
+          signer: unknown_signer,
+          client: "ef02",
+          expires_in_seconds: 540,
+          secret_mismatch: False,
+          perms: "",
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "<span>main</span>")
+  assert string.contains(body, view.shorten(known_npub))
+  assert string.contains(body, view.shorten(unknown_signer))
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..snapshot, accounts: Error(i18n.Untranslated("boom"))),
+    )
+  assert string.contains(unavailable, view.shorten(known_signer))
+  assert !string.contains(unavailable, "<span>main</span>")
+}
+
+/// 承認ページには、承認の意味の説明が info の囲みで出る。権限が空のときだけ、既存の
+/// 「署名と暗号化は拒否します」の一文が続く。
+pub fn approval_page_explains_what_approval_means_test() {
+  let assert Ok([with_perms, without_perms]) = secret_states().pending
+  let with_perms_page =
+    dashboard.approval_page(i18n.English, view.System, Ok([]), with_perms)
+  assert string.contains(with_perms_page, "alert-info")
+  assert string.contains(
+    with_perms_page,
+    "Approving lets this client request signing and encryption within the permissions above. The permissions are fixed at approval.",
+  )
+  assert !string.contains(
+    with_perms_page,
+    "None requested. Signing and encryption are refused.",
+  )
+
+  let without_perms_page =
+    dashboard.approval_page(i18n.English, view.System, Ok([]), without_perms)
+  assert string.contains(
+    without_perms_page,
+    "The permissions are fixed at approval. None requested. Signing and encryption are refused.",
   )
 }

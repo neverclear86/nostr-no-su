@@ -14,6 +14,7 @@ import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/engine
 import nostr_no_su/relay_list
@@ -23,10 +24,10 @@ import support/account_actions
 import support/admin_context.{
   AccountsReloaded, Approved, ClientConnectRequested, Denied, Reenabled,
   RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path, auth_uri,
-  client, context, failing_context, get, header, in_japanese,
+  client, context, failing_context, get, header, in_japanese, label,
   not_answering_context, password, post, post_form, reporting_context,
-  session_not_approved, signer, spec_nsec, test_context, token, unavailable,
-  with_accounts, with_credentials,
+  session_not_approved, signer, signer_npub, spec_nsec, test_context, token,
+  unavailable, with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -249,17 +250,19 @@ pub fn dashboard_shows_pending_connections_test() {
   assert string.contains(body, "value=\"" <> auth_uri <> "\"")
   assert string.contains(body, "action=\"/approve/" <> token <> "\"")
   assert string.contains(body, "action=\"/deny/" <> token <> "\"")
-  assert string.contains(body, "<dd class=\"break-words\">540s</dd>")
+  assert string.contains(body, "<dd><span>540s</span></dd>")
 }
 
-/// 承認ページには、誰が誰に接続しようとしているかが出る。
+/// 承認ページには、誰が誰に接続しようとしているかが出る。署名者はアカウント一覧と
+/// 突き合わせてラベルと省略した npub で出るので、16 進の署名者は出ない。
 pub fn approval_page_shows_the_request_test() {
   let response = get(context(), "/approve/" <> token)
   assert response.status == 200
   let body = simulate.read_body(response)
-  assert string.contains(body, signer)
+  assert string.contains(body, label)
+  assert string.contains(body, view.shorten(signer_npub))
   assert string.contains(body, client)
-  assert string.contains(body, "<dd class=\"break-words\">540s</dd>")
+  assert string.contains(body, "<dd><span>540s</span></dd>")
 }
 
 /// 知らない、あるいは失効したトークンの承認ページは 404 の HTML で、理由を出し

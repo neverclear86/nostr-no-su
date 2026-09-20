@@ -667,7 +667,11 @@ fn approve_connection(
   case request.method {
     http.Get -> {
       use entry <- with_pending(context, language, theme, token)
-      wisp.html_response(dashboard.approval_page(language, theme, entry), 200)
+      let accounts = result.map_error(context.accounts(), i18n.Untranslated)
+      wisp.html_response(
+        dashboard.approval_page(language, theme, accounts, entry),
+        200,
+      )
     }
     http.Post -> {
       use entry <- with_pending(context, language, theme, token)
