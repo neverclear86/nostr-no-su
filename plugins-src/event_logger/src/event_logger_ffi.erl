@@ -7,8 +7,9 @@
 -export([child_specs/2, error_tuple/1, identity/1, ensure_pgo_started/0,
          message_queue_len/0]).
 
-%% 接続プールと保存アクターの子仕様。プール名と Config は呼び出し側が 1 度だけ
-%% 作ったものを引数に焼き込む（再起動でも同じ引数で呼ばれるので名前が安定する）。
+%% 接続プールと保存アクターの子仕様。Config は呼び出し側が 1 度だけ作ったものを
+%% 引数に焼き込み、プール名は event_logger:pool_name/0 の固定の atom を受け取る
+%% （再起動でも同じ名前を指す）。
 %%
 %% プールは pog:supervised/1 に合わせて type => supervisor にする。本体は
 %% supervisor の子に有限の shutdown を許さないので infinity を書く。

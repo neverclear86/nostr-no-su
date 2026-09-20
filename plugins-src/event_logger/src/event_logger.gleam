@@ -6,10 +6,10 @@
 ////
 //// **設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの接頭辞に
 //// 一致する環境変数を集め、`database_url` をキーとする map として
-//// `plugin_children/1` に渡す。未設定・不正なら `{error, Reason}` を返し、この
-//// プラグインだけを読み込ませない。
+//// `plugin_children/1` と `plugin_page_content/2` に渡す。未設定・不正なら
+//// `{error, Reason}` を返し、このプラグインだけを読み込ませない。
 ////
-//// 押さえておくべき点が 3 つある。
+//// 押さえておくべき点が 4 つある。
 ////
 //// - **同梱したアプリケーションはプラグインが自分で起動する。** 本体のローダーは
 ////   コードパスを足すだけでアプリケーションを起動しない（`docs/plugin-api.md`
@@ -21,10 +21,14 @@
 ////   `{ok, {started, Pid, Conn}}` を返すため、そのままでは弾かれる。プールと
 ////   保存アクターのどちらにも `{ok, Pid}` へ潰す薄い起動シムを用意する
 ////   （`docs/plugin-api.md` 第 5.2 節）。
-//// - **名前で配線する。** プール名は `plugin_children/1` で 1 度だけ作って子仕様の
-////   MFA 引数に焼き込み、保存アクターの登録名は固定の atom にする。どちらの子が
-////   再起動しても宛先は変わらない（`docs/plugin-api.md` 第 5.3 節）。
+//// - **名前で配線する。** プールの登録名は `pool_name/0`、保存アクターの登録名は
+////   `store_name/0` の固定の atom である。プール名だけは子仕様の MFA 引数にも
+////   焼き込む。どちらの子が再起動しても宛先は変わらず、管理 UI のページも同じ
+////   名前で生存を引ける（`docs/plugin-api.md` 第 5.3 節）。
+//// - **`plugin_page_content/2` は期限内に戻らなければならない。** DB へ問い合わせ
+////   ず、外から観測できる値（登録名の生存、未処理メッセージ数）だけを返す。
 
+import event_logger/page
 import event_logger/store
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -32,8 +36,14 @@ import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid}
 import gleam/otp/actor
+import gleam/result
 import gleam/string
 import pog
+
+/// 接続プールの接続数。書き込むのは保存アクター 1 つだけで逐次実行なので、
+/// 既定の 10 本は DB 側の接続枠と idle ping を無駄に使う。表示側にもこの値を
+/// 渡し、数を書き写さない。
+const pool_size = 2
 
 /// 保存アクターが再起動している間、登録名が戻るのを待つ上限。本体のランナーが
 /// 1 件を打ち切る 30 秒より十分短くする。
@@ -56,8 +66,9 @@ pub fn plugin_name() -> String {
 /// 接続プールと保存アクターの子仕様。設定が無い・URL として解釈できないときは
 /// `{error, Reason}` を返してこのプラグインだけを無効にする。
 ///
-/// **プール名と Config はここで 1 度だけ作り、子仕様の MFA 引数に焼き込む。**
-/// 再起動でも同じ引数で呼ばれるので、プールの登録名が変わらない。
+/// **Config はここで 1 度だけ作り、子仕様の MFA 引数に焼き込む。** プール名は
+/// `pool_name/0` の固定の atom なので、再起動でも管理 UI のページからも同じ
+/// 名前を指す。
 ///
 /// 戻り値が `Dynamic` なのは、成功側を素のリストにするためである。Gleam の
 /// `Ok(list)` は `{ok, List}` になり、素のリストを期待する本体には渡せない。
@@ -75,15 +86,13 @@ pub fn plugin_children(config: Dynamic) -> Dynamic {
 
 /// 接続プールと保存アクターの子仕様。URL が解釈できなければ設定を拒否する。
 fn pool_children(database_url: String) -> Dynamic {
-  case pog.url_config(process.new_name("event_logger_pool"), database_url) {
+  case pog.url_config(pool_name(), database_url) {
     Error(Nil) ->
       error_tuple(
         "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL",
       )
     Ok(pool_config) ->
-      // 書き込むのは保存アクター 1 つだけで逐次実行なので、接続は少なく保つ。
-      // 既定の 10 本は DB 側の接続枠と idle ping を無駄に使う。
-      child_specs(pog.pool_size(pool_config, 2), pool_config.pool_name)
+      child_specs(pog.pool_size(pool_config, pool_size), pool_config.pool_name)
   }
 }
 
@@ -152,12 +161,81 @@ fn started_pid(
   }
 }
 
+/// 保存アクターの登録名の atom 文字列。
+const store_name_label = "event_logger_store"
+
+/// 接続プールの登録名の atom 文字列。
+const pool_name_label = "event_logger_pool"
+
 /// 保存アクターの登録名。VM 全体で一意にするためプラグイン名を接頭辞にする
-/// （`docs/plugin-api.md` 第 5.3 節）。再起動をまたいで同じでなければならない
-/// ので、`process.new_name` ではなく固定の atom から作る。`handle_event/1` の
-/// テストもこの名前で宛先を立てる。
+/// （`docs/plugin-api.md` 第 5.3 節）。`handle_event/1` の宛先であり、
+/// `plugin_page_content/2` が生存を確かめる名前でもある。
 pub fn store_name() -> Name(store.Msg) {
-  coerce_name(atom.create("event_logger_store"))
+  fixed_name(store_name_label)
+}
+
+/// 接続プールの登録名。`plugin_children/1` が子仕様の MFA 引数に焼き込み、
+/// `plugin_page_content/2` が同じ名前で生存を確かめる。
+pub fn pool_name() -> Name(pog.Message) {
+  fixed_name(pool_name_label)
+}
+
+/// 固定の atom から作る登録名。再起動をまたいで同じでなければならないので、
+/// 呼ぶたびに新しい atom を作る `process.new_name` ではなくこちらを使う
+/// （`docs/plugin-api.md` 第 5.3 節）。
+fn fixed_name(label: String) -> Name(msg) {
+  coerce_name(atom.create(label))
+}
+
+/// 指定したプロセスの未処理メッセージ数。プロセスが居なければ `Error(Nil)`。
+pub fn pending_messages(pid: Pid) -> Result(Int, Nil) {
+  decode.run(process_info(pid, atom.create("message_queue_len")), {
+    use length <- decode.field(1, decode.int)
+    decode.success(length)
+  })
+  |> result.replace_error(Nil)
+}
+
+/// 管理 UI に供給するページの一覧。本体は読み込み時に 1 度だけ検証する。中身は
+/// `plugin_page_content/2` が返す。
+pub fn plugin_pages() -> Dynamic {
+  page.pages()
+}
+
+/// 管理 UI のページの記述。本体は `/1` より `/2` を優先し、ページの表示のたびに
+/// これを呼んでページの `key` と、`database_url` を含む設定 map（`plugin_children/1`
+/// と同じ形）を渡す。期限（既定 5 秒）を超えると 503 になるので、DB へは問い合わせ
+/// ず、登録名の生存と未処理メッセージ数だけを観測する。`{error, Reason}` を返す
+/// 約束は無い（`docs/plugin-api.md` 第 13.4 節）。
+pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
+  let page_key = decode.run(key, decode.string) |> result.unwrap("")
+  let settings =
+    decode.run(config, decode.dict(decode.string, decode.string))
+    |> result.unwrap(dict.new())
+  let database =
+    dict.get(settings, "database_url")
+    |> result.map(page.masked_url(pool_name(), _))
+  page.content(page_key, database, pool_size, [
+    process_status("connection pool", pool_name_label, pool_name()),
+    process_status("store actor", store_name_label, store_name()),
+  ])
+}
+
+/// 登録名 1 つの観測結果。生きていれば未処理メッセージ数も添える。
+fn process_status(
+  label: String,
+  registered_name: String,
+  name: Name(message),
+) -> page.ProcessStatus {
+  let mailbox = case process.named(name) {
+    Ok(pid) -> pending_messages(pid)
+    Error(Nil) -> Error(Nil)
+  }
+  page.ProcessStatus(
+    label: label,
+    registered_name: registered_name,
+    mailbox: mailbox,
+  )
 }
 
 /// 接続プールと保存アクターの子仕様（OTP の `supervisor:child_spec()` の map）。
@@ -175,4 +253,8 @@ fn ensure_pgo_started() -> Nil
 /// atom を登録名として扱う。gleam_erlang の `Name` は外部型で、実体は登録名の
 /// atom である。
 @external(erlang, "event_logger_ffi", "identity")
-fn coerce_name(name: Atom) -> Name(store.Msg)
+fn coerce_name(name: Atom) -> Name(msg)
+
+/// プロセスの情報を 1 項目だけ問い合わせる。
+@external(erlang, "erlang", "process_info")
+fn process_info(pid: Pid, key: Atom) -> Dynamic
