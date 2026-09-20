@@ -584,8 +584,8 @@ flowchart TD
     shadow -->|"いいえ"| addpath["コードパスへ追加"]
     addpath --> validate{"API v1 を<br/>満たすか"}
     validate -->|"いいえ"| reject2["1 行の理由を出して飛ばす"]
-    validate -->|"はい"| config["設定を切り出して<br/>plugin_children を呼ぶ"]
-    config --> accepted{"子仕様を<br/>組み立てられたか"}
+    validate -->|"はい"| config["設定を切り出して<br/>plugin_children と<br/>plugin_pages を呼ぶ"]
+    config --> accepted{"子仕様と UI の一覧を<br/>組み立てられたか"}
     accepted -->|"いいえ"| reject3["1 行の理由を出して飛ばす"]
     accepted -->|"はい"| dup{"プラグイン名が<br/>すでに使われているか"}
     dup -->|"はい"| reject4["1 行の理由を出して飛ばす<br/>（先に読んだ側が残る）"]
@@ -604,6 +604,8 @@ flowchart TD
 設定は `PLUGIN_<NAME>_<KEY>` の環境変数を集め、プラグイン名が確定した時点で接頭辞に一致するものだけを切り出して渡す。
 設定が足りないときは、プラグインの `plugin_children/0` または `/1` が `{error, Reason}` を返して読み込みを拒否できる。
 値の妥当性（接続文字列として解釈できるか、など）は本体には判断できないので、そこをプラグインに委ねている。
+
+管理 UI のページを供給するプラグインは `plugin_pages` でページの一覧を申告し、本体は読み込み時に検証する（[プラグイン API v1](plugin-api.md) の第 13 章）。
 
 読み込んだ BEAM は本体と同じ VM で同じ権限で動く。
 サンドボックスは無く、秘密鍵を持つアクターの状態にも到達できる。
@@ -630,6 +632,7 @@ nostr-no-su/
 │       ├── admin/connect_pages.gleam クライアントの接続のページの描画
 │       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
+│       ├── admin/plugin_view.gleam プラグインが返す要素の記述から管理 UI の部品への変換（純粋）
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）
