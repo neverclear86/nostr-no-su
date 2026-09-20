@@ -1145,19 +1145,23 @@ pub fn language_icon() -> Element(msg) {
   ])
 }
 
+/// `info_icon` のストローク（Lucide の info）。
 const info_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
 ]
 
+/// `check_circle_icon` のストローク（Lucide の circle-check）。
 const check_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
 ]
 
+/// `warning_triangle_icon` のストローク（Lucide の triangle-alert）。
 const warning_triangle_icon_paths = [
   "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
   "M12 9v4", "M12 17h.01",
 ]
 
+/// `x_circle_icon` のストローク（Lucide の circle-x）。
 const x_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
 ]
