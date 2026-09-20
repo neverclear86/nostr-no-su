@@ -702,6 +702,7 @@ nostr-no-su/
 │       │   ├── event_logger.gleam       API v1 の関数と起動シム
 │       │   ├── event_logger/store.gleam 保存アクターとスキーマ
 │       │   ├── event_logger/log.gleam   ログ 1 行を OTP logger へ出力（本体の log.gleam とは別実装）
+│       │   ├── event_logger/page.gleam  管理 UI のページの記述の組み立て（純粋）
 │       │   └── event_logger_ffi.erl     子仕様 map の組み立て
 │       └── test/
 │

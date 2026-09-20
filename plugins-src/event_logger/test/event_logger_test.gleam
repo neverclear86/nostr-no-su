@@ -1,5 +1,6 @@
 import envoy
 import event_logger
+import event_logger/page
 import event_logger/store
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -313,7 +314,7 @@ const drop_timeout_ms = 1000
 /// メールボックスが空になるまで待つ。プロセスが死んだら即座に `False` を返す
 /// （落ちない性質を見るテストなので、待ち続けても意味がない）。
 fn await_drained(pid: Pid, remaining: Int) -> Bool {
-  case message_queue_len(pid) {
+  case event_logger.pending_messages(pid) {
     Error(Nil) -> False
     Ok(0) -> True
     Ok(_pending) ->
@@ -326,21 +327,6 @@ fn await_drained(pid: Pid, remaining: Int) -> Bool {
       }
   }
 }
-
-/// 未処理メッセージの件数。プロセスが死んでいれば `Error(Nil)`。
-/// `erlang:process_info/2` は生きていれば `{message_queue_len, N}`、死んでいれば
-/// `undefined` を返すので、タプルの 2 要素目を読めるかどうかで振り分ける。
-fn message_queue_len(pid: Pid) -> Result(Int, Nil) {
-  decode.run(process_info(pid, atom.create("message_queue_len")), {
-    use length <- decode.field(1, decode.int)
-    decode.success(length)
-  })
-  |> result.replace_error(Nil)
-}
-
-/// プロセスの情報を 1 項目だけ問い合わせる。テストからしか使わない。
-@external(erlang, "erlang", "process_info")
-fn process_info(pid: Pid, key: Atom) -> Dynamic
 
 /// 版がこのプラグインより新しい DB では、保存アクターが理由を 1 行出して異常終了する。
 ///
@@ -418,7 +404,7 @@ pub fn a_slow_database_keeps_the_mailbox_bounded_test() {
         started.data,
         store.Store(store.Row(..row, id: int.to_string(n))),
       )
-      let assert Ok(queued) = message_queue_len(started.pid)
+      let assert Ok(queued) = event_logger.pending_messages(started.pid)
       process.sleep(flood_interval_ms)
       int.max(longest, queued)
     })
@@ -589,6 +575,147 @@ pub fn the_pool_shim_flattens_the_start_result_test() {
   assert process.is_alive(pid)
   let assert Error(reason) = event_logger.start_pool(config)
   assert string.contains(reason, "AlreadyStarted")
+}
+
+/// `masked_url` は接続先だけを残し、パスワードを落とす。
+pub fn masked_url_hides_the_password_test() {
+  let pool = process.new_name("test_masked_url_pool")
+  assert page.masked_url(
+      pool,
+      "postgres://nostr:secret@db.example:5432/nostr_no_su",
+    )
+    == "postgres://nostr@db.example:5432/nostr_no_su"
+}
+
+/// `plugin_pages/0` が供給するのはキー `settings` の 1 件だけである。
+pub fn pages_declares_one_settings_page_test() {
+  let decoder = {
+    use key <- decode.field("key", decode.string)
+    use title <- decode.field("title", decode.string)
+    decode.success(#(key, title))
+  }
+  let assert Ok([entry]) = decode.run(page.pages(), decode.list(decoder))
+  assert entry == #("settings", "Settings")
+}
+
+/// `Configuration` 節の `PLUGIN_EVENT_LOGGER_DATABASE_URL` は `code` インラインの
+/// マスク済みの文字列である。
+pub fn page_content_shows_the_masked_database_url_test() {
+  let masked = "postgres://nostr@db.example:5432/nostr_no_su"
+  let description = page.content("settings", Ok(masked), 2, [])
+  let assert [configuration, ..] = page_sections(description)
+  let #(title, blocks) = section_shape(configuration)
+  assert title == "Configuration"
+  let assert [pairs, ..] = blocks
+  let assert Ok(items) =
+    decode.run(
+      pairs,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  let assert Ok(#(_term, kind, text)) =
+    list.find(items, fn(item) { item.0 == "PLUGIN_EVENT_LOGGER_DATABASE_URL" })
+  assert kind == "code"
+  assert text == masked
+}
+
+/// 居ないプロセスの行は `badge`（`failure`）と `Pending messages` の `-` になり、
+/// 生きている行は `success` と件数になる。1 件でも居なければ表の後ろに
+/// `alert`（`warning`）が付く。
+pub fn page_content_marks_missing_processes_test() {
+  let processes = [
+    page.ProcessStatus(
+      label: "connection pool",
+      registered_name: "event_logger_pool",
+      mailbox: Ok(3),
+    ),
+    page.ProcessStatus(
+      label: "store actor",
+      registered_name: "event_logger_store",
+      mailbox: Error(Nil),
+    ),
+  ]
+  let description = page.content("settings", Error(Nil), 2, processes)
+  let assert [_configuration, runtime] = page_sections(description)
+  let #(title, blocks) = section_shape(runtime)
+  assert title == "Runtime"
+  let assert [table, alert] = blocks
+  let assert Ok(rows) =
+    decode.run(
+      table,
+      decode.field(
+        "rows",
+        decode.list(decode.list(decode.dynamic)),
+        decode.success,
+      ),
+    )
+  let assert [pool_row, store_row] = rows
+  assert row_status(pool_row) == #("success", "3")
+  assert row_status(store_row) == #("failure", "-")
+  let assert Ok(#(kind, tone)) =
+    decode.run(alert, {
+      use kind <- decode.field("type", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(kind, tone))
+    })
+  assert kind == "alert"
+  assert tone == "warning"
+}
+
+/// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
+pub fn page_content_of_an_unknown_key_test() {
+  let description = page.content("nope", Error(Nil), 2, [])
+  let assert [only] = page_sections(description)
+  let #(_title, blocks) = section_shape(only)
+  let assert [alert] = blocks
+  let assert Ok(#(kind, tone)) =
+    decode.run(alert, {
+      use kind <- decode.field("type", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(kind, tone))
+    })
+  assert kind == "alert"
+  assert tone == "failure"
+}
+
+/// 記述の `sections` を取り出す。
+fn page_sections(description: Dynamic) -> List(Dynamic) {
+  let assert Ok(sections) =
+    decode.run(
+      description,
+      decode.field("sections", decode.list(decode.dynamic), decode.success),
+    )
+  sections
+}
+
+/// 節の `title` と `blocks`。
+fn section_shape(raw: Dynamic) -> #(String, List(Dynamic)) {
+  let assert Ok(shape) =
+    decode.run(raw, {
+      use title <- decode.field("title", decode.string)
+      use blocks <- decode.field("blocks", decode.list(decode.dynamic))
+      decode.success(#(title, blocks))
+    })
+  shape
+}
+
+/// `pairs` ブロックの 1 項目。`term` と、値の `type` / `text`。
+fn pair_item_decoder() -> decode.Decoder(#(String, String, String)) {
+  use term <- decode.field("term", decode.string)
+  use kind <- decode.subfield(["value", "type"], decode.string)
+  use text <- decode.subfield(["value", "text"], decode.string)
+  decode.success(#(term, kind, text))
+}
+
+/// `Runtime` の表の 1 行から `Status` の `tone` と `Pending messages` の文字列を
+/// 取り出す。セルの並びは `Process` / `Registered name` / `Status` /
+/// `Pending messages`。
+fn row_status(row: List(Dynamic)) -> #(String, String) {
+  let assert [_label, _registered_name, status, pending] = row
+  let assert Ok(tone) =
+    decode.run(status, decode.field("tone", decode.string, decode.success))
+  let assert Ok(pending_text) =
+    decode.run(pending, decode.field("text", decode.string, decode.success))
+  #(tone, pending_text)
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている

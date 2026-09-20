@@ -395,7 +395,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 - `examples/plugins/file_logger/` は受信したイベントを 1 件 1 行でファイルへ追記する。**状態を持たない例**で、処理は `handle_event/2` の中で完結する。同時に**プラグイン固有の設定を受け取る例**でもあり、出力先を `PLUGIN_FILE_LOGGER_PATH` から受け取る。設定が必須なので `handle_event/1` はエクスポートせず、`plugin_children/1` で設定の有無だけを検査する（第 6 章）。
 - `examples/plugins/counter/` は受信件数を gen_server で数える。**状態を持つ例**で、その gen_server を `plugin_children/0` で申告する（第 5 章）。設定を必要としないのでアリティ 0 のままであり、**既存のプラグインが無変更で動くことの実例**にもなっている。
 
-- `plugins-src/event_logger/` は監視で受信したイベントを Postgres へ保存する。例示ではなく**第一級の同梱プラグイン**で、Gleam プロジェクトを `gleam export erlang-shipment` の出力として置く実例である。状態（保存アクター）を持ち、**独自の依存を同梱する**（`pog` / `pgo` ほか。本体も `pog` に依存するので、共有パッケージ 120 モジュールが影に入る）実例でもあり、**同梱アプリケーションを自分で起動する**（第 5.2 節）唯一の例でもある。
+- `plugins-src/event_logger/` は監視で受信したイベントを Postgres へ保存する。例示ではなく**第一級の同梱プラグイン**で、Gleam プロジェクトを `gleam export erlang-shipment` の出力として置く実例である。状態（保存アクター）を持ち、**独自の依存を同梱する**（`pog` / `pgo` ほか。本体も `pog` に依存するので、共有パッケージ 120 モジュールが影に入る）実例でもあり、**同梱アプリケーションを自分で起動する**（第 5.2 節）唯一の例でもある。**管理 UI のページを供給する唯一の同梱の例**でもあり、設定の表示に第 13 章の記述を使う。
 
 上の 2 つが Erlang 1 ファイルなのは、ネストしたビルドディレクトリーと依存管理を `examples/` へ持ち込まないためである。`event_logger` は独自の依存を持つので、`plugins-src/` に独立した Gleam プロジェクトとして置いてある。
 
@@ -482,6 +482,7 @@ handle_event(Event) ->
 
   この `Event` は本体のレコードなので、プラグイン側にも同じフィールドを同じ順で持つ型を宣言しておく（Gleam のレコードは実行時にはタグ付きタプルなので、コンストラクター名（`Event`）とフィールドの並びが一致していれば読める。フィールド名は実行時には残らない）。本体の型に追随する手間を避けたい場合は、`gleam/dynamic/decode` で map を直接読むほうが簡単である。
 - `plugin_required_versions/0` は `dict.from_list([#("gleam_stdlib", "1.0.3")])` のように `Dict(String, String)` を返せばよい。版は自分の `manifest.toml` に書かれた値を使う。
+- 第 13 章の記述は binary キーの map なので、`gleam/dynamic` の `properties` / `list` / `string` で組む（`properties` は Erlang では map になる）。
 
 ## 12. Elixir で書くときの注意
 
@@ -571,3 +572,5 @@ plugin_page_content(<<"status">>) ->
           ]}
     ]}.
 ```
+
+Gleam の実装例は `plugins-src/event_logger/src/event_logger/page.gleam` にあり、秘密のマスク（第 13.4 節）の実例でもある。
