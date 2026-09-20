@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、バンカーに登録したアカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）、`src/nostr_no_su/admin/plugin_pages.gleam`（ページ枠とタブの組み立て）にある。
 
 ## 1. 目的と信頼モデル
 
@@ -517,6 +517,8 @@ plugin_page_content(Key :: binary()) -> description_map().
 | `key` | binary | `[a-z0-9_-]+` に一致すること。URL の path 片になる |
 | `title` | binary | 必須。管理 UI の表示名（プラグイン由来の英語） |
 
+ページの URL は `/plugins/<plugin_name/0 の値を percent-encode したもの>/<key>` である。入口はダッシュボードのプラグインの節の操作列に出るリンクで、一覧の先頭のページを指す。2 ページ以上のプラグインは、ページの上のタブで行き来する。
+
 理由の文字列は第 9 章の表のとおり（`plugin_pages/1 must return at least one page` など）。
 
 ### 13.3 ページの記述
@@ -536,7 +538,7 @@ plugin_page_content(Key :: binary()) -> description_map().
 | インライン | `text` / `code` | `text` | 無し |
 | インライン | `badge` | `text` | `tone`（既定 `neutral`）（`table` のセルだけ） |
 
-`tone` は `neutral`・`success`・`warning`・`failure`・`info` の 5 値のみで、それ以外はその節ひとつぶんの `Error` になる。`pairs` の `items` が 0 件のときと、節の `blocks` が 0 件のときは、空の状態の文（`Nothing to show.` の訳）を出す。`table` の `rows` が 0 件のときは見出し行だけの表になる。
+`tone` は `neutral`・`success`・`warning`・`failure`・`info` の 5 値のみで、それ以外はその節ひとつぶんの `Error` になる。`pairs` の `items` が 0 件のときと、節の `blocks` が 0 件のときは、空の状態の文（`Nothing to show.` の訳）を出す。`sections` そのものが 0 件のときは、ページ全体に表示する内容が無い旨の案内を出す。`table` の `rows` が 0 件のときは見出し行だけの表になる。
 
 未知の種別、型の合わない値、深すぎる入れ子は、その節ひとつぶんの `Error` にする。他の節の描画は止まらない。
 
