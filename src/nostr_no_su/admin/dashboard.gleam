@@ -652,7 +652,8 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
 }
 
 /// 節の見出しと、操作の行。アイコン、題、一覧を得たときだけ出す件数のピルを左に、操作を
-/// 右に置く。一覧を得たときだけ出す操作と、常に出す操作を分けて受け取る。
+/// 右に置く。一覧を得たときだけ出す操作と、常に出す操作を分けて受け取る。操作が無ければ
+/// 右には何も置かない。
 fn section_heading(
   language: Language,
   listing: Result(List(a), i18n.Reason),
@@ -673,7 +674,10 @@ fn section_heading(
   }
   heading_row(
     html.div([attribute.class("flex items-center gap-2")], left),
-    button_row(actions),
+    case actions {
+      [] -> element.none()
+      _ -> button_row(actions)
+    },
   )
 }
 
@@ -1320,7 +1324,10 @@ fn plugins_section(
                 html.text(plugin.name),
               ]),
               html.td([], [plugin_state(language, plugin)]),
-              html.td([], reenable_form_if_disabled(language, plugin)),
+              html.td(
+                [attribute.class("whitespace-nowrap")],
+                reenable_form_if_disabled(language, plugin),
+              ),
             ]
           }),
         )

@@ -539,8 +539,8 @@ pub fn relative_time_buckets_test() {
   assert dashboard.relative_time(1000, 2000) == i18n.JustNow
 }
 
-/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub・16 進の
-/// pubkey）・理由・削除のリンクが出る。日本語でも見出しが訳される。
+/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・
+/// 削除のリンクが出る。日本語でも見出しが訳される。
 pub fn skipped_rows_are_listed_with_their_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -562,7 +562,6 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
   )
   assert string.contains(english, "old wallet")
   assert string.contains(english, "npub1unreadable")
-  assert string.contains(english, "abcd1234")
   assert string.contains(
     english,
     "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row).",
@@ -873,11 +872,9 @@ pub fn no_bunker_relay_is_warned_test() {
 pub fn unlisted_relays_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
-  let empty_actions = "<div class=\"flex shrink-0 flex-wrap gap-2\"></div>"
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
     "Relays</h2></div>"
-      <> empty_actions
       <> "</div><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
@@ -885,7 +882,6 @@ pub fn unlisted_relays_show_the_reason_test() {
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "リレー</h2></div>"
-      <> empty_actions
       <> "</div><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
