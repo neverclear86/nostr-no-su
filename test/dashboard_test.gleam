@@ -766,6 +766,32 @@ pub fn pending_tile_is_full_width_only_when_pending_exists_test() {
   assert !string.contains(empty, wide_class)
 }
 
+/// 承認待ちのタイルは、0 件のときは節が無いのでリンクにしない。1 件以上あるとき、
+/// 一覧を得られないときはリンクにする。
+pub fn pending_tile_is_not_a_link_when_no_pending_test() {
+  let anchor = "href=\"#pending\""
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    anchor,
+  )
+  assert !string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    ),
+    anchor,
+  )
+  assert string.contains(
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
+    ),
+    anchor,
+  )
+}
+
 /// 承認待ち・アカウント・セッションの一覧を得られないとき、対応するタイルの値は
 /// 「—」、補足は「取得できません」になる。
 pub fn tiles_say_not_available_when_lists_are_missing_test() {

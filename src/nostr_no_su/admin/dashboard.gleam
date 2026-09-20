@@ -80,8 +80,8 @@ pub type PluginRow {
   PluginRow(name: String, status: Option(plugin_runner.Status))
 }
 
-/// 承認待ちとセッションの行に出す署名者の表示。アカウント一覧の署名者と突き合わせて
-/// 決める。
+/// 承認待ちの行と承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
+/// npub、そうでなければ 16 進。
 pub type SignerName {
   /// アカウント一覧にある署名者。ラベルと省略した npub で出す。
   KnownSigner(label: String, npub: String)
@@ -332,15 +332,16 @@ fn overview_tiles(language: Language, snapshot: Snapshot) -> Element(msg) {
   ])
 }
 
-/// タイル 1 枚。同じページの節への `href="#…"` のリンクにする。`tone` が `Warning` の
-/// ときだけ警告の色にし、`wide` が真のときだけ狭い画面で全幅を占めさせる。
+/// タイル 1 枚。`anchor` が `Some(a)` なら同じページの節への `href="#" <> a` のリンクにする。
+/// 飛び先の節が出ないときは `None` を渡し、リンクにしない。`tone` が `Warning` のときだけ
+/// 警告の色にし、`wide` が真のときだけ狭い画面で全幅を占めさせる。
 fn tile(
   language: Language,
   tone: view.Tone,
   title: i18n.Message,
   value: String,
   note: Element(msg),
-  anchor: String,
+  anchor: Option(String),
   wide: Bool,
 ) -> Element(msg) {
   let class = case tone, wide {
@@ -351,7 +352,7 @@ fn tile(
     _, True -> "card card-border col-span-2 lg:col-span-1"
     _, False -> "card card-border"
   }
-  html.a([attribute.href("#" <> anchor), attribute.class(class)], [
+  let content = [
     html.div([attribute.class("card-body gap-1 p-4")], [
       html.p([attribute.class("text-sm")], [
         html.text(i18n.text(language, title)),
@@ -359,7 +360,12 @@ fn tile(
       html.p([attribute.class("text-2xl font-bold")], [html.text(value)]),
       note,
     ]),
-  ])
+  ]
+  case anchor {
+    Some(a) ->
+      html.a([attribute.href("#" <> a), attribute.class(class)], content)
+    None -> html.div([attribute.class(class)], content)
+  }
 }
 
 /// タイルの補足 1 行。
@@ -368,36 +374,36 @@ fn tile_note(text: String) -> Element(msg) {
 }
 
 /// 承認待ちのタイル。1 件以上あれば件数と警告の色、無ければ失効までの分数、得られなければ
-/// 「取得できません」を出す。
+/// 「取得できません」を出す。0 件のときは節が出ないので、リンクにしない。
 fn pending_tile(
   language: Language,
   pending: Result(List(PendingRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let #(value, note, tone, wide) = case pending {
-    Error(_) -> #("—", text(i18n.TileNotAvailable), view.Neutral, False)
+  let #(value, note, tone, wide, anchor) = case pending {
+    Error(_) -> #(
+      "—",
+      text(i18n.TileNotAvailable),
+      view.Neutral,
+      False,
+      Some(pending_anchor),
+    )
     Ok([]) -> #(
       "0",
       text(i18n.PendingExpireAfterMinutes(engine.pending_ttl_minutes())),
       view.Neutral,
       False,
+      None,
     )
     Ok(rows) -> #(
       int.to_string(list.length(rows)),
       text(i18n.AwaitingDecision(refresh_seconds)),
       view.Warning,
       True,
+      Some(pending_anchor),
     )
   }
-  tile(
-    language,
-    tone,
-    i18n.Pending,
-    value,
-    tile_note(note),
-    pending_anchor,
-    wide,
-  )
+  tile(language, tone, i18n.Pending, value, tile_note(note), anchor, wide)
 }
 
 /// アカウントのタイル。件数と、読み込めなかった行の有無を補足する。
@@ -421,7 +427,7 @@ fn accounts_tile(
     i18n.Accounts,
     value,
     tile_note(note),
-    accounts_anchor,
+    Some(accounts_anchor),
     False,
   )
 }
@@ -442,7 +448,7 @@ fn sessions_tile(
     i18n.Sessions,
     value,
     tile_note(note),
-    sessions_anchor,
+    Some(sessions_anchor),
     False,
   )
 }
@@ -458,7 +464,7 @@ fn relays_tile(
     Error(_) -> #("—", text(i18n.TileNotAvailable))
     Ok(rows) -> #(
       int.to_string(list.length(rows)),
-      case list.any(rows, fn(row) { row.bunker != Unused }) {
+      case has_bunker_relay(rows) {
         False -> text(i18n.NoBunkerRelayShort)
         True -> {
           let disconnected =
@@ -478,7 +484,7 @@ fn relays_tile(
     i18n.Relays,
     value,
     tile_note(note),
-    relays_anchor,
+    Some(relays_anchor),
     False,
   )
 }
@@ -488,8 +494,14 @@ fn row_has_role_state(row: RelayRow, state: RoleState) -> Bool {
   row.monitor == state || row.bunker == state
 }
 
-/// プラグインのタイル。動作中の件数を値に出し、異常があれば件数を、無効なプラグインが
-/// 0 件なら「有効なプラグインなし」を補足する。
+/// 一覧にバンカーに使う行があるか。
+fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
+  list.any(rows, fn(row) { row.bunker != Unused })
+}
+
+/// プラグインのタイル。値は動作中の件数と全件数で、補足は異常（過負荷・無効・応答なし）が
+/// あればその内訳、プラグインが 1 件も無ければ「有効なプラグインなし」、どちらでもなければ
+/// 出さない。
 fn plugins_tile(language: Language, plugins: List(PluginRow)) -> Element(msg) {
   let text = i18n.text(language, _)
   let total = list.length(plugins)
@@ -524,7 +536,7 @@ fn plugins_tile(language: Language, plugins: List(PluginRow)) -> Element(msg) {
     i18n.Plugins,
     text(i18n.PluginsRunningOfTotal(running, total)),
     note,
-    plugins_anchor,
+    Some(plugins_anchor),
     False,
   )
 }
@@ -1049,7 +1061,7 @@ fn no_bunker_relay_warning(
 ) -> Element(msg) {
   case relays {
     Ok(rows) ->
-      case list.any(rows, fn(row) { row.bunker != Unused }) {
+      case has_bunker_relay(rows) {
         True -> element.none()
         False ->
           view.alert(view.Warning, [
