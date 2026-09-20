@@ -16,6 +16,7 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_loader
+import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_client
@@ -150,6 +151,7 @@ fn monitor_spec(bunker: app.Bunker, dedup_capacity: Int) -> app.Monitor {
       _,
     ),
     save_resume: resume_point_saver(bunker.pool.pool_name),
+    save_plugin_resume: plugin_resume_point_saver(bunker.pool.pool_name),
     excludes_kind: event.is_ephemeral,
   )
 }
@@ -206,6 +208,18 @@ fn resume_point_saver(
   fn(points: List(#(String, Int))) {
     let db = pog.named_connection(pool)
     resume_store.save(db, points)
+    |> result.map_error(account_store.describe)
+  }
+}
+
+/// プラグインの再開点を値を小さくせずに保存する操作（`plugin_resume_store.save`）。
+/// ログは保存のアクターが出す。
+fn plugin_resume_point_saver(
+  pool: Name(pog.Message),
+) -> fn(List(#(String, Int))) -> Result(Nil, String) {
+  fn(points: List(#(String, Int))) {
+    let db = pog.named_connection(pool)
+    plugin_resume_store.save(db, points)
     |> result.map_error(account_store.describe)
   }
 }

@@ -256,6 +256,7 @@ pub fn idle_monitor() -> app.Monitor {
     relays: [],
     subscriptions: fn(_relay_url) { fn() { Ok([]) } },
     save_resume: discard_resume_points,
+    save_plugin_resume: discard_resume_points,
     excludes_kind: event.is_ephemeral,
   )
 }

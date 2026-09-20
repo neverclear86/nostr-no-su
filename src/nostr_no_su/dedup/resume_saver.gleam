@@ -1,15 +1,15 @@
-//// 監視の購読の再開点を周期ごとに保存するアクター。ディスパッチャーから写しを
-//// 取り、前回保存した写しと違うリレーだけを書く。DB の遅さと障害をディスパッチャー
+//// 再開点を周期ごとに保存するアクター。監視の購読（リレーごと）とプラグイン
+//// （プラグインごと）が共用する。写しを取る操作を注入で受け取り、前回保存した
+//// 写しと違う行だけを書く。DB の遅さと障害をディスパッチャー
 //// に持ち込まないため、ディスパッチャーとは別のプロセスで書く。再起動したアクター
 //// は前回の写しを持たないので、最初の周期で全リレーを書く（保存は値を小さくしない
 //// ので害は無い）。
 
 import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Name, type Subject}
+import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
-import nostr_no_su/dedup
 import nostr_no_su/dedup/resume
 import nostr_no_su/log
 
@@ -18,20 +18,19 @@ import nostr_no_su/log
 /// リレーの本数の行」にする値である。
 pub const default_interval_ms = 5000
 
-/// ログの接頭辞。
-const log_prefix = "resume_saver"
-
 /// このアクターが受け取るメッセージ。
 pub type Msg {
   /// 周期ごとの保存を促すタイマー。
   Save
 }
 
-/// アクターの状態。`save` は保存先を表す操作で、値を含まない説明で失敗を返す。
+/// アクターの状態。`points` は再開点の写しを取る操作、`save` は保存先を表す
+/// 操作で、値を含まない説明で失敗を返す。`prefix` はログの接頭辞。
 type State {
   State(
-    dedup: Name(dedup.Msg),
+    points: fn() -> Result(Dict(String, Int), Nil),
     save: fn(List(#(String, Int))) -> Result(Nil, String),
+    prefix: String,
     interval_ms: Int,
     self: Subject(Msg),
     saved: Dict(String, Int),
@@ -41,11 +40,12 @@ type State {
 
 /// スーパービジョンツリー用の子仕様。
 pub fn supervised(
-  dedup: Name(dedup.Msg),
+  points: fn() -> Result(Dict(String, Int), Nil),
   save: fn(List(#(String, Int))) -> Result(Nil, String),
+  prefix: String,
   interval_ms: Int,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(dedup, save, interval_ms) })
+  supervision.worker(fn() { start(points, save, prefix, interval_ms) })
 }
 
 /// アクターを起動する。周期のタイマーは名前の無い自分の subject に送るため、
@@ -53,15 +53,17 @@ pub fn supervised(
 /// の「アカウントの読み込み」の節にある、再試行を名前なしの subject へ予約する
 /// 理由と同じ）を避ける。
 pub fn start(
-  dedup: Name(dedup.Msg),
+  points: fn() -> Result(Dict(String, Int), Nil),
   save: fn(List(#(String, Int))) -> Result(Nil, String),
+  prefix: String,
   interval_ms: Int,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(1000, fn(self) {
     process.send_after(self, interval_ms, Save)
     State(
-      dedup: dedup,
+      points: points,
       save: save,
+      prefix: prefix,
       interval_ms: interval_ms,
       self: self,
       saved: dict.new(),
@@ -83,10 +85,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   actor.continue(save_points(state))
 }
 
-/// ディスパッチャーから写しを取り、変わったリレーだけを保存する。ディスパッチャー
-/// が応答しなければ状態を変えない。保存する対象が無ければ状態を変えない。
+/// 写しを取り、変わった行だけを保存する。写しを取る操作が失敗すれば状態を
+/// 変えない。保存する対象が無ければ状態を変えない。
 fn save_points(state: State) -> State {
-  case dedup.points(state.dedup) {
+  case state.points() {
     Error(Nil) -> state
     Ok(current) ->
       case resume.unsaved(state.saved, current) {
@@ -96,7 +98,11 @@ fn save_points(state: State) -> State {
             Ok(Nil) -> {
               case state.failing {
                 True ->
-                  log.write(log.Notice, log_prefix, "resume points saved again")
+                  log.write(
+                    log.Notice,
+                    state.prefix,
+                    "resume points saved again",
+                  )
                 False -> Nil
               }
               State(..state, saved: current, failing: False)
@@ -106,7 +112,7 @@ fn save_points(state: State) -> State {
                 False ->
                   log.write(
                     log.Warning,
-                    log_prefix,
+                    state.prefix,
                     "could not save resume points: "
                       <> reason
                       <> "; retrying every "

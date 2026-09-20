@@ -19,7 +19,8 @@ import gleeunit
 ///   `[plugin <プラグイン名>]`、`relay_client_test` の中継名の `[test]`、保存の再試行
 ///   を報告する `[resume_saver]`）: 障害や変更を起こすテストが本番と同じログの経路を
 ///   通るため
-/// - `[account_store]`、`[account_reconcile]`、`[app]`、`[resume_store]` の skip の行:
+/// - `[account_store]`、`[account_reconcile]`、`[app]`、`[resume_store]`、
+///   `[plugin_resume_store]` の skip の行:
 ///   `TEST_DATABASE_URL` が無いときに統合テストを飛ばしたことを知らせる
 pub fn main() -> Nil {
   gleeunit.main()

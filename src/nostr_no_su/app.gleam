@@ -124,6 +124,7 @@
 ////   （`start_plugin_children`）。失敗の理由は `plugin_children` が子ごとに出す
 ////   1 行に出る。
 
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -192,8 +193,10 @@ pub type PluginSpec {
 /// `relay_list` の起動時の一覧で、本番は空。行はバンカーの読み込みから
 /// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。
 /// `subscriptions` はリレー URL からそのリレーの購読の定義を返す。`save_resume`
-/// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。`excludes_kind`
-/// が真を返す kind のイベントはプラグインへ渡さない。
+/// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
+/// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、2 本目の
+/// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
+/// プラグインへ渡さない。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
@@ -201,6 +204,7 @@ pub type Monitor {
     relays: List(relay_list.Connection),
     subscriptions: fn(String) -> Subscriptions,
     save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
+    save_plugin_resume: fn(List(#(String, Int))) -> Result(Nil, String),
     excludes_kind: fn(Int) -> Bool,
   )
 }
@@ -420,9 +424,30 @@ fn plugin_targets(specs: List(PluginSpec)) -> List(plugin_runner.Target) {
   plugin_runner.target(spec.plugin.name, spec.name)
 }
 
+/// 各ランナーへ `plugin_runner.resume` で問い合わせ、応答があって再開点を持つ
+/// ものだけをプラグイン名をキーに集めた辞書を返す操作を作る。応答が無い
+/// ランナー（再起動中、遅い実行の最中）はその周期では入れない。プラグインが
+/// 0 件でも空の辞書を返すので、`Result` は常に `Ok`。
+fn plugin_resume_points(
+  specs: List(PluginSpec),
+) -> fn() -> Result(Dict(String, Int), Nil) {
+  fn() {
+    specs
+    |> list.filter_map(fn(spec) {
+      case plugin_runner.resume(spec.name) {
+        Ok(Some(since)) -> Ok(#(spec.plugin.name, since))
+        _ -> Error(Nil)
+      }
+    })
+    |> dict.from_list
+    |> Ok
+  }
+}
+
 /// 監視サブツリー。ディスパッチャー、そこへイベントを流し込む接続群の
-/// `connections` factory、再開点を保存するアクターの順に置く。保存のアクターを
-/// 末尾に置くのは、その異常終了で接続を落とさないためである。
+/// `connections` factory、監視の再開点を保存するアクター、プラグインの再開点を
+/// 保存するアクターの順に置く。保存のアクターを末尾に置くのは、その異常終了で
+/// 接続を落とさないためである。
 fn monitor_tree(
   spec: Spec,
   config: Monitor,
@@ -449,8 +474,15 @@ fn monitor_tree(
     ),
   )
   |> supervisor.add(resume_saver.supervised(
-    config.name,
+    fn() { dedup.points(config.name) },
     config.save_resume,
+    "resume_saver",
+    resume_saver.default_interval_ms,
+  ))
+  |> supervisor.add(resume_saver.supervised(
+    plugin_resume_points(spec.plugins),
+    config.save_plugin_resume,
+    "plugin_resume_saver",
     resume_saver.default_interval_ms,
   ))
 }
