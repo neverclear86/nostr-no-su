@@ -19,6 +19,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/nostr/filter
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
@@ -671,7 +672,9 @@ fn kill_registered(name: Atom) -> Nil
 /// バンカーにリレーを持たせず、監視だけがリレー接続を持つツリー。購読は本番と
 /// 同じ `nostr_no_su.monitor_subscriptions` から組み立てる。バンカーにリレーを
 /// 持たせないのは、購読の報告（`subscribed`）がすべて監視の接続のものになる
-/// ようにするためである。
+/// ようにするためである。プラグインを載せると、その取り直しの要求も本番と同じ
+/// `app.plugin_catchups` から購読へ現れる。`load_plugin_resume` はプラグインの
+/// 保存済みの再開点を読む操作。
 fn monitored_accounts_spec(
   reports: Subject(Report),
   subscribed: Subject(SubscriptionReport),
@@ -679,10 +682,12 @@ fn monitored_accounts_spec(
   store: bunker.Store,
   relays: List(relay_list.Connection),
   load_resume: fn(String) -> Result(Option(Int), String),
+  plugins: List(app.PluginSpec),
+  load_plugin_resume: fn(String) -> Result(Option(Int), String),
 ) -> app.Spec {
   let dedup_name = process.new_name("test_dedup")
   app.Spec(
-    plugins: [],
+    plugins: plugins,
     monitor: app.Monitor(
       name: dedup_name,
       dedup_capacity: 64,
@@ -691,6 +696,8 @@ fn monitored_accounts_spec(
         bunker_name,
         dedup_name,
         load_resume,
+        load_plugin_resume,
+        app.plugin_catchups(plugins),
         _,
       ),
       save_resume: discard_resume_points,
@@ -732,6 +739,8 @@ pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
       }),
       [test_relay()],
       fixed_resume_point(Ok(Some(1234))),
+      [],
+      fixed_resume_point(Ok(None)),
     ))
   let assert Ok(Subscribed(_relay_url, [message.Req("nostr-no-su", filter)])) =
     process.receive(subscribed, 2000)
@@ -761,6 +770,8 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
       bunker_name,
       memory_store(calls, [], False),
       [test_relay()],
+      fixed_resume_point(Ok(None)),
+      [],
       fixed_resume_point(Ok(None)),
     )
   let tree = start_tree(spec)
@@ -813,6 +824,8 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
       store_with_load(fn() { load_signer(signer_key) }),
       [first, second],
       fixed_resume_point(Ok(None)),
+      [],
+      fixed_resume_point(Ok(None)),
     ))
   let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
     await_connection(reports)
@@ -861,6 +874,8 @@ pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
       store_with_load(fn() { load_signer(signer_key) }),
       [test_relay()],
       fixed_resume_point(Error("unavailable")),
+      [],
+      fixed_resume_point(Ok(None)),
     ))
   let assert Ok(first) = process.receive(subscribed, 2000)
   assert first == Retrying(test_relay_url)
@@ -882,6 +897,107 @@ fn assert_never_requests(
       assert_never_requests(subscribed, deadline)
     }
   }
+}
+
+/// 報告が、指定したリレーの接続へのプラグインの取り直しの REQ を含むか。
+fn requests_a_catchup(report: SubscriptionReport, relay_url: String) -> Bool {
+  case report {
+    Subscribed(url, messages) ->
+      url == relay_url && catchup_filters(messages) != []
+    _ -> False
+  }
+}
+
+/// 照合のメッセージから、プラグインの取り直しの REQ のフィルターだけを取り出す。
+fn catchup_filters(
+  messages: List(message.ClientMessage),
+) -> List(filter.Filter) {
+  list.filter_map(messages, fn(msg) {
+    case msg {
+      message.Req("nostr-no-su-catchup-" <> _plugin, query) -> Ok(query)
+      _ -> Error(Nil)
+    }
+  })
+}
+
+/// 起動したランナーは取り直しを要求し、保存済みの再開点があれば監視の接続から
+/// `nostr-no-su-catchup-<プラグイン名>` の REQ が届く。フィルターは現在の署名者を
+/// `authors` に持ち、保存済みの再開点から要求を立てた時刻までの閉じた範囲を持つ。
+/// ランナーを落として復帰させると、新しい `until` で取り直しの REQ が再び届く。
+pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let runner = process.new_name("test_plugin_forwarding")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let before_start = time.now_seconds()
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+      [forwarding_spec(runner, process.new_subject())],
+      fixed_resume_point(Ok(Some(1234))),
+    ))
+  let #(_skipped, first) =
+    receive_until(subscribed, requests_a_catchup(_, test_relay_url), 2000)
+  let after_start = time.now_seconds()
+  let assert Ok(Subscribed(_relay_url, first_messages)) = first
+  let assert [first_catchup] = catchup_filters(first_messages)
+  assert first_catchup.authors == Some([signer])
+  assert first_catchup.since == Some(1234)
+  let assert Some(first_until) = first_catchup.until
+  assert first_until >= before_start && first_until <= after_start
+
+  // 起動時の読み込みによる張り直しで同じ内容の REQ が 1 回余計に届きうるので
+  // （決定 11）、読み捨ててから落とす。残っていると再起動後の `until` ではなく
+  // 古い報告の `until` を拾ってしまう。
+  drain_subscriptions(subscribed, 300)
+  let assert Ok(runner_before) = process.named(runner)
+  let before_restart = time.now_seconds()
+  process.kill(runner_before)
+  let _restarted = await_restart(runner, runner_before, 100)
+  let #(_skipped, second) =
+    receive_until(subscribed, requests_a_catchup(_, test_relay_url), 2000)
+  let after_restart = time.now_seconds()
+  let assert Ok(Subscribed(_relay_url, second_messages)) = second
+  let assert [second_catchup] = catchup_filters(second_messages)
+  assert second_catchup.since == Some(1234)
+  let assert Some(second_until) = second_catchup.until
+  assert second_until >= before_restart && second_until <= after_restart
+  stop_tree(tree)
+}
+
+/// 保存済みの再開点が無いプラグインは、起動しても取り直しの購読を定義しない。
+/// 監視の購読は通常どおり張られる。
+pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+      [
+        forwarding_spec(
+          process.new_name("test_plugin_forwarding"),
+          process.new_subject(),
+        ),
+      ],
+      fixed_resume_point(Ok(None)),
+    ))
+  let #(_skipped, first) =
+    receive_until(subscribed, requests_on(_, test_relay_url), 2000)
+  let assert Ok(Subscribed(_relay_url, messages)) = first
+  assert catchup_filters(messages) == []
+  stop_tree(tree)
 }
 
 // --- 登録されたリレー ---
@@ -1426,6 +1542,8 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
       subscribed,
       bunker_name,
       store_with_load(fn() { load_signer(signer_key) }),
+      [],
+      fixed_resume_point(Ok(None)),
       [],
       fixed_resume_point(Ok(None)),
     )

@@ -1,4 +1,7 @@
+import gleam/option.{None, Some}
 import gleeunit
+import nostr_no_su
+import nostr_no_su/plugin_runner
 
 /// テスト全体のエントリポイント。gleeunit が `*_test` 関数を集めて実行する。
 ///
@@ -24,4 +27,34 @@ import gleeunit
 ///   `TEST_DATABASE_URL` が無いときに統合テストを飛ばしたことを知らせる
 pub fn main() -> Nil {
   gleeunit.main()
+}
+
+/// 取り直しの要求の `since` は、ランナーのメモリの再開点を優先し、無ければ
+/// 保存済みの値を使う。保存済みも無い要求は落とし、要求の順は保つ。
+pub fn catchup_since_resolves_each_request_test() {
+  let stored = fn(plugin: String) {
+    case plugin {
+      "logger" -> Ok(Some(100))
+      _ -> Ok(None)
+    }
+  }
+  assert nostr_no_su.catchup_since(
+      [
+        #("logger", plugin_runner.Catchup(since: None, until: 200)),
+        #("echo", plugin_runner.Catchup(since: Some(50), until: 300)),
+        #("unsaved", plugin_runner.Catchup(since: None, until: 400)),
+      ],
+      stored,
+    )
+    == Ok([#("logger", 100, 200), #("echo", 50, 300)])
+}
+
+/// 保存済みの再開点を 1 つでも読めなければ、解決は全体を失敗にする（その評価では
+/// 購読を 1 本も定義しない）。
+pub fn catchup_since_fails_as_a_whole_on_a_read_error_test() {
+  assert nostr_no_su.catchup_since(
+      [#("logger", plugin_runner.Catchup(since: None, until: 200))],
+      fn(_plugin) { Error("unavailable") },
+    )
+    == Error(Nil)
 }

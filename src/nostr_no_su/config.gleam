@@ -307,25 +307,55 @@ fn is_ip_address(value: String) -> Bool
 /// 監視の購読 id。
 const monitor_subscription_id = "nostr-no-su"
 
-/// 登録アカウントが書いたイベントの購読。署名者がいなければ購読を定義せず、`since`
-/// を評価しない（開いている購読は照合で CLOSE になる、`relay_client.sync`）。`since`
-/// は署名者がいるときだけ呼び、`Ok(None)` なら保存済みのイベントをすべて求め、
-/// `Error(Nil)` なら定義を得られなかったことにする。
+/// プラグインの取り直しの購読 id の接頭辞。プラグイン名を繋げて使う。
+const catchup_subscription_prefix = "nostr-no-su-catchup-"
+
+/// 登録アカウントが書いたイベントの購読。署名者がいなければ購読を定義せず、継続
+/// を評価しない（開いている購読は照合で CLOSE になる、`relay_client.sync`）。継続
+/// は署名者がいるときだけ呼び、`since` と足す購読（プラグインの取り直し、
+/// `catchup_subscriptions`）を返す。`since` が `Ok(None)` なら保存済みのイベントを
+/// すべて求め、`Error(Nil)` なら定義を得られなかったことにする。
 pub fn monitor_subscriptions(
   signer_pubkeys: List(String),
-  since: fn() -> Result(Option(Int), Nil),
+  continuation: fn() -> Result(#(Option(Int), List(#(String, Filter))), Nil),
 ) -> Result(List(#(String, Filter)), Nil) {
   case signer_pubkeys {
     [] -> Ok([])
     signer_pubkeys -> {
-      use since <- result.map(since())
+      use #(since, extra) <- result.map(continuation())
       [
         #(
           monitor_subscription_id,
           Filter(..filter.new(), authors: Some(signer_pubkeys), since: since),
         ),
+        ..extra
       ]
     }
+  }
+}
+
+/// 復帰したプラグインの取り直しの購読。署名者がいなければ購読を定義しない。
+/// 購読 id はプラグイン名で分け、それぞれ `until` で範囲を閉じる（それより後の
+/// イベントは通常の監視の購読が運ぶ）。
+pub fn catchup_subscriptions(
+  signer_pubkeys: List(String),
+  catchups: List(#(String, Int, Int)),
+) -> List(#(String, Filter)) {
+  case signer_pubkeys {
+    [] -> []
+    signer_pubkeys ->
+      list.map(catchups, fn(catchup) {
+        let #(plugin, since, until) = catchup
+        #(
+          catchup_subscription_prefix <> plugin,
+          Filter(
+            ..filter.new(),
+            authors: Some(signer_pubkeys),
+            since: Some(since),
+            until: Some(until),
+          ),
+        )
+      })
   }
 }
 

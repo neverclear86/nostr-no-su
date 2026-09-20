@@ -9,6 +9,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_runner.{
   Completed, Disabled, Failed, Limits, Overloaded, Running, Target,
 }
+import nostr_no_su/time
 
 /// 遷移の検証に使う歯止め。実時間に依存しないよう小さく取る。
 const limits = Limits(handle_timeout_ms: 50, max_queue_len: 10, max_failures: 3)
@@ -34,21 +35,24 @@ fn start_runner(
   limits: plugin_runner.Limits,
 ) -> Name(plugin_runner.Msg) {
   let name = process.new_name("test_plugin_runner")
-  start_named_runner(name, handle, limits)
+  start_named_runner(name, handle, fn() { Nil }, limits)
   name
 }
 
 /// 指定した `handle` を持つプラグインのランナーを、呼び出し側が作った名前で
-/// 起動する。ランナーより先に名前へ送るテストが使う。
+/// 起動する。ランナーより先に名前へ送るテストが使う。`resubscribe` はランナーが
+/// 復帰したときに呼ばれる張り直しの操作。
 fn start_named_runner(
   name: Name(plugin_runner.Msg),
   handle: fn(Event) -> Nil,
+  resubscribe: fn() -> Nil,
   limits: plugin_runner.Limits,
 ) -> Nil {
   let assert Ok(_started) =
     plugin_runner.start(
       name,
       plugin.Plugin(name: "runner_test", children: [], ui: None, handle: handle),
+      resubscribe,
       limits,
     )
   Nil
@@ -333,6 +337,115 @@ pub fn a_missing_runner_has_no_resume_point_test() {
   assert plugin_runner.resume(name) == Error(Nil)
 }
 
+/// 起動したランナーは張り直しを呼び、メモリの再開点を持たない取り直しの要求を
+/// 立てる。`until` は起動した時刻の範囲にある。
+pub fn a_started_runner_requests_a_catchup_test() {
+  let resubscribed = process.new_subject()
+  let before = time.now_seconds()
+  let name = process.new_name("test_plugin_runner")
+  start_named_runner(
+    name,
+    fn(_incoming) { Nil },
+    fn() { process.send(resubscribed, Nil) },
+    limits,
+  )
+  let after = time.now_seconds()
+  assert process.receive(resubscribed, 1000) == Ok(Nil)
+  let assert Ok(Some(plugin_runner.Catchup(since: None, until: until))) =
+    plugin_runner.catchup(name)
+  assert until >= before && until <= after
+}
+
+/// `Disabled` からの再有効化は張り直しを呼び、メモリの再開点を `since` に持つ
+/// 取り直しの要求を立てる。`Running` のままの再有効化は張り直しを呼ばない。
+pub fn a_reenabled_runner_requests_a_catchup_test() {
+  let resubscribed = process.new_subject()
+  let name = process.new_name("test_plugin_runner")
+  start_named_runner(
+    name,
+    fn(incoming: Event) {
+      case incoming.id {
+        "bad" -> panic as "boom"
+        _id -> Nil
+      }
+    },
+    fn() { process.send(resubscribed, Nil) },
+    Limits(..limits, max_failures: 3),
+  )
+  let assert Ok(Nil) = process.receive(resubscribed, 1000)
+  let targets = [plugin_runner.target("runner_test", name)]
+  plugin_runner.dispatch(
+    targets,
+    Event(..test_event("e1"), created_at: 1_700_000_000),
+  )
+  assert plugin_runner.resume(name) == Ok(Some(1_700_000_000))
+
+  // `Running` のままの再有効化は張り直しも要求の更新も起こさない。
+  assert plugin_runner.request_reenable(name) == Some(Nil)
+  assert process.receive(resubscribed, 200) == Error(Nil)
+  let assert Ok(Some(plugin_runner.Catchup(since: None, ..))) =
+    plugin_runner.catchup(name)
+
+  list.each(list.repeat(Nil, 3), fn(_unit) {
+    plugin_runner.dispatch(targets, test_event("bad"))
+  })
+  let assert Some(Disabled(..)) = plugin_runner.status(name)
+
+  let before = time.now_seconds()
+  assert plugin_runner.request_reenable(name) == Some(Nil)
+  let after = time.now_seconds()
+  assert process.receive(resubscribed, 1000) == Ok(Nil)
+  let assert Ok(Some(plugin_runner.Catchup(
+    since: Some(1_700_000_000),
+    until: until,
+  ))) = plugin_runner.catchup(name)
+  assert until >= before && until <= after
+}
+
+/// 名前にランナーが居なければ取り直しの問い合わせも応答が無い。購読の評価が
+/// 失敗に回ることの根拠である。
+pub fn a_missing_runner_has_no_catchup_test() {
+  let name = process.new_name("test_plugin_runner")
+  assert plugin_runner.catchup(name) == Error(Nil)
+}
+
+/// `Overloaded` からの復帰（`admit` がキューの減りで `Running` に戻す遷移）は
+/// `Reenable` を経ないので、張り直しを呼ばず取り直しの要求も変えない。
+pub fn catching_up_from_overload_does_not_request_a_catchup_test() {
+  let gates = process.new_subject()
+  let handled = process.new_subject()
+  let resubscribed = process.new_subject()
+  let name = process.new_name("test_plugin_runner")
+  start_named_runner(
+    name,
+    fn(incoming: Event) {
+      case incoming.id {
+        "gate" -> {
+          let release = process.new_subject()
+          process.send(gates, release)
+          let _ = process.receive(release, 5000)
+          Nil
+        }
+        id -> process.send(handled, id)
+      }
+    },
+    fn() { process.send(resubscribed, Nil) },
+    limits,
+  )
+  let assert Ok(Nil) = process.receive(resubscribed, 1000)
+  let assert Ok(before) = plugin_runner.catchup(name)
+  let targets = [plugin_runner.target("runner_test", name)]
+  plugin_runner.dispatch(targets, test_event("gate"))
+  let assert Ok(release) = process.receive(gates, 1000)
+  let burst = limits.max_queue_len + 2
+  deliver(name, burst - 1)
+  plugin_runner.dispatch(targets, test_event("last"))
+  process.send(release, Nil)
+  let _consumed = count_until(handled, "last", 0)
+  assert plugin_runner.catchup(name) == Ok(before)
+  assert process.receive(resubscribed, 200) == Error(Nil)
+}
+
 /// ワーカーの終了理由は短い 1 行に整えられる。FFI のラッパーが例外クラスと理由
 /// だけを取り出し、スタックトレースを混ぜない経路の回帰テスト。
 pub fn crashing_plugin_reason_is_short_test() {
@@ -418,6 +531,7 @@ pub fn dispatch_counts_events_while_the_runner_is_missing_test() {
   start_named_runner(
     name,
     fn(incoming) { process.send(handled, incoming.id) },
+    fn() { Nil },
     limits,
   )
   assert plugin_runner.dispatch(missing, test_event("delivered"))
