@@ -987,23 +987,10 @@ fn alert_class(tone: Tone) -> String {
 /// 丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有する。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
-    Neutral ->
-      lucide_icon("size-4", [
-        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
-      ])
-    Success ->
-      lucide_icon("size-4 text-success", [
-        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
-      ])
-    Warning ->
-      lucide_icon("size-4 text-warning", [
-        "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
-        "M12 9v4", "M12 17h.01",
-      ])
-    Failure ->
-      lucide_icon("size-4 text-error", [
-        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
-      ])
+    Neutral -> lucide_icon("size-4", info_icon_paths)
+    Success -> lucide_icon("size-4 text-success", check_circle_icon_paths)
+    Warning -> lucide_icon("size-4 text-warning", warning_triangle_icon_paths)
+    Failure -> lucide_icon("size-4 text-error", x_circle_icon_paths)
   }
 }
 
@@ -1158,33 +1145,41 @@ pub fn language_icon() -> Element(msg) {
   ])
 }
 
+const info_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
+]
+
+const check_circle_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
+]
+
+const warning_triangle_icon_paths = [
+  "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
+  "M12 9v4", "M12 17h.01",
+]
+
+const x_circle_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
+]
+
 /// `Neutral` のトーンのアイコン（Lucide の info）。
 pub fn info_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
-  ])
+  lucide_icon("size-4", info_icon_paths)
 }
 
 /// `Success` のトーンのアイコン（Lucide の circle-check）。
 pub fn check_circle_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
-  ])
+  lucide_icon("size-4", check_circle_icon_paths)
 }
 
 /// `Warning` のトーンのアイコン（Lucide の triangle-alert）。
 pub fn warning_triangle_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
-    "M12 9v4", "M12 17h.01",
-  ])
+  lucide_icon("size-4", warning_triangle_icon_paths)
 }
 
 /// `Failure` のトーンのアイコン（Lucide の circle-x）。
 pub fn x_circle_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
-  ])
+  lucide_icon("size-4", x_circle_icon_paths)
 }
 
 /// コピーボタンのアイコン（Lucide の copy）。
