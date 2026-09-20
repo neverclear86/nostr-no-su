@@ -585,6 +585,14 @@ pub fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
+/// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
+pub fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
+  html.div(
+    [attribute.class("flex items-center gap-2 text-sm text-base-content/70")],
+    [icon, html.text(text)],
+  )
+}
+
 /// 見出し行付きの表。行は `td` の並びで渡す。枠より広い値は枠の中で横に送る。
 pub fn table(
   headers: List(String),

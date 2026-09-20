@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、バンカーに登録したアカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）にある。
 
 ## 1. 目的と信頼モデル
 
@@ -28,8 +28,8 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 
 - `plugin_name/0` の値は管理 UI の表示名とログの識別子に使う。**プラグイン間で一意にすること。**
 - **`handle_event` は `/1` と `/2` のどちらか一方があればよい。** `/2` はプラグイン固有の設定を第 2 引数で受け取る形で（第 6 章）、両方あれば本体は `/2` を優先する。**設定が必須のプラグインは `/2` だけをエクスポートしてよい。** 設定が無ければ正しく書けない `handle_event/1` を、形だけ揃えるために持たせる必要はない。
-- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
-- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_required_versions/0` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
+- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
+- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_required_versions/0` `plugin_pages/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
 - **`-on_load` を使うなら即座に戻ること。** 本体はモジュールの読み込み（`code:ensure_loaded/1`）もメタデータの呼び出しと同じ 5 秒の期限で打ち切り、戻らなければそのプラグインを読み込まない（起動は続く）。打ち切っても `-on_load` の処理そのものは VM の中で走り続けるので、その中で待ち合わせをしないこと。
 
 ## 3. イベント map の仕様
@@ -300,7 +300,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
 
-任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。
+任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。**
 
 バージョン番号を上げるのは、次の破壊的変更のときだけである。
 
@@ -405,7 +405,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: missing export handle_event/1 or handle_event/2` | イベント処理関数がどちらのアリティでも無い |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由`。呼び出しのプロセスごと終了した場合は括弧内が終了理由（`killed` など） |
 | `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
-| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1` も同じ形で報告される |
+| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1`、`plugin_pages/0` `/1` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 must return an Int, got Float` | 戻り値が整数でない |
 | `<mod>: unsupported api version 2 (expected 1)` | 本体が対応していないバージョン |
 | `<mod>: plugin_required_versions/0 must return a map of application names to version strings (expected String, got Int at gleam_stdlib)` | 戻り値の形が API に合わない。括弧内は `decode` の最初のエラー |
@@ -427,10 +427,19 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_children/1 crashed (error:badarg)` | 設定を受け取る形の問い合わせが例外を投げた。理由の中のアリティは本体が呼んだ側のもの |
 | `<mod>: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる。`plugin_children/0` が返した場合は `plugin_children/0 rejected the configuration (…); configure it with PLUGIN_<NAME>_*` になる |
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
+| `<mod>: plugin_pages/0 but no plugin_page_content/1 or /2` | 一覧はあるが中身のエクスポートが無い（第 13 章） |
+| `<mod>: plugin_page_content/1 but no plugin_pages/0 or /1` | 中身のエクスポートはあるが一覧が無い |
+| `<mod>: plugin_pages/1 must return a list of page maps, got Dict` | 一覧の戻り値がリストでない |
+| `<mod>: plugin_pages/1 must return at least one page` | 一覧が 0 件 |
+| `<mod>: plugin_pages/1: page #0: must be a page map, got Array` | ページの記述が map でない。素の `{key, title}` のようなタプルはここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
+| `<mod>: plugin_pages/1: page #0: missing key` | ページの記述に `key` が無い。番号は 0 起点のリストの位置 |
+| `<mod>: plugin_pages/1: duplicate page key "settings"` | ページのキーが重複している |
+| `<mod>: plugin_pages/1: page key "A b" must match [a-z0-9_-]+` | ページのキーが許された文字集合の外 |
+| `<mod>: plugin_pages/1: page key "status": missing title` | `key` を読んだ後の検査は `page #<index>` ではなく `page key "<key>"` で位置を示す |
 
 子仕様の行の `got` の後は受け取った値の `dynamic.classify` の分類名、`unsupported …` の括弧の中は受け取った値そのもの（`~0p` で 1 行にしたもの）で、表の値は例示である。
 
-検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
+検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` → `plugin_pages` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
 
 ## 10. Erlang での最小実装例
 
@@ -471,3 +480,83 @@ handle_event(Event) ->
 - 関数は `def` で定義したものだけがエクスポートされる（`defp` は対象外）。
 - 文字列リテラル `"minimal_plugin"` は binary なので、`plugin_name/0` の戻り値としてそのまま使える。
 - イベント map のキーは binary である。`%{"kind" => kind}` でマッチすること。`%{kind: kind}` は atom キーになるためマッチしない。設定 map（第 6 章）も同じく binary キーである。
+
+## 13. 管理 UI のページ（任意エクスポート `plugin_pages` / `plugin_page_content`）
+
+任意エクスポート `plugin_pages` と `plugin_page_content` を**両方**持つプラグインは、管理 UI にページを供給できる。どちらか片方だけでは読み込まない（第 9 章）。両方とも無いプラグインは今までどおり UI を持たずに読み込まれる。**API バージョンは 1 のままである**（第 7 章）。
+
+### 13.1 エクスポート
+
+| 関数 | アリティ | 戻り値 | 本体側の検証 |
+| --- | --- | --- | --- |
+| `plugin_pages` | 0 または 1 | ページの記述のリスト（第 13.2 節） | 読み込み時に 1 度だけ検証する |
+| `plugin_page_content` | 1 または 2 | ページの記述 map（第 13.3 節） | 読み込み時には呼ばない。ページの表示のたびに呼ぶ |
+
+`/1` があれば `plugin_pages/0` より優先し、設定 map（第 6 章）を渡す。`plugin_page_content` も同様に `/2` があれば `/1` より優先し、第 1 引数にページの `key`、第 2 引数に設定 map を渡す。
+
+```erlang
+plugin_pages() -> [page_map(), ...].
+plugin_page_content(Key :: binary()) -> description_map().
+```
+
+`plugin_page_content` の 1 回の呼び出しの期限は `call_timeout_ms`（本番の既定は 5 秒）で、超えたページは 503 になる。第 2 章の「即座に戻ること」の列挙にはこのエクスポートを含めない。起動時ではなく画面の表示のたびに呼ばれるためである。
+
+### 13.2 ページの一覧
+
+`plugin_pages` はページの記述の**リスト**を返す。**1 件以上必要**で、`key` は**重複できない**。
+
+| キー | 型 | 本体側の検証 |
+| --- | --- | --- |
+| `key` | binary | `[a-z0-9_-]+` に一致すること。URL の path 片になる |
+| `title` | binary | 必須。管理 UI の表示名（プラグイン由来の英語） |
+
+理由の文字列は第 9 章の表のとおり（`plugin_pages/1 must return at least one page` など）。
+
+### 13.3 ページの記述
+
+`plugin_page_content` はページ 1 件の記述を返す。記述は**段ごとに種別を閉じた 3 段の binary キーの map**である。段に合わない種別を置くと、その段を読む本体側の decoder が失敗するため、3 段を超える入れ子は構造的に `Error` になる。
+
+最上位は `#{<<"sections">> => [節, ...]}`。
+
+| 段 | 種別 | 必須のキー | 任意のキー |
+| --- | --- | --- | --- |
+| 節 | `section` | `title`、`blocks`（ブロックのリスト） | 無し |
+| ブロック | `text` / `note` | `text` | 無し |
+| ブロック | `pairs` | ``items``（``#{<<"term">> => binary, <<"value">> => `text` か `code` のインライン}``のリスト） | 無し |
+| ブロック | `table` | `headers`（binary のリスト）、`rows`（インラインのリストのリスト） | 無し |
+| ブロック | `alert` | `text` | `tone`（既定 `info`） |
+| ブロック | `link` | `page`（同じプラグインのページのキー）、`text` | 無し |
+| インライン | `text` / `code` | `text` | 無し |
+| インライン | `badge` | `text` | `tone`（既定 `neutral`）（`table` のセルだけ） |
+
+`tone` は `neutral`・`success`・`warning`・`failure`・`info` の 5 値のみで、それ以外はその節ひとつぶんの `Error` になる。`pairs` の `items` が 0 件のときと、節の `blocks` が 0 件のときは、空の状態の文（`Nothing to show.` の訳）を出す。`table` の `rows` が 0 件のときは見出し行だけの表になる。
+
+未知の種別、型の合わない値、深すぎる入れ子は、その節ひとつぶんの `Error` にする。他の節の描画は止まらない。
+
+### 13.4 制約
+
+- **プラグインが選べるのは文字列・種別・`tone` だけである。** クラス名、`href`、生の HTML、色は渡せない。すべて管理 UI の共通部品（`src/nostr_no_su/admin/view.gleam`）にだけ写す。
+- **秘密はプラグインが返す前に自分でマスクする。本体は値をマスクしない**（第 1 章の信頼モデルと同じ理由）。
+- 返す文字列はすべて `lang="en"` で出る。表示の言語（日本語・英語）には訳さない。
+- `plugin_page_content` に `{error, Reason}` を返す約束は無い。描けない事情はページの記述の `alert` で自分で表すこと。返しても中身の形の誤りとして扱われ、例外・期限超過と同じ 503 になる。
+
+### 13.5 Erlang の例
+
+```erlang
+plugin_pages() ->
+    [#{<<"key">> => <<"status">>, <<"title">> => <<"Status">>}].
+
+plugin_page_content(<<"status">>) ->
+    #{<<"sections">> => [
+        #{<<"type">> => <<"section">>,
+          <<"title">> => <<"Queue">>,
+          <<"blocks">> => [
+              #{<<"type">> => <<"pairs">>,
+                <<"items">> => [
+                    #{<<"term">> => <<"pending">>,
+                      <<"value">> => #{<<"type">> => <<"text">>,
+                                       <<"text">> => <<"3">>}}
+                ]}
+          ]}
+    ]}.
+```

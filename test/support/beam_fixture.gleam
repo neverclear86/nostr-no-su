@@ -167,6 +167,57 @@ handle_event(_Event) -> ok.
 "
 }
 
+/// `plugin_pages/0` だけを持ち、`plugin_page_content` を持たないプラグインの
+/// Erlang ソース。片方だけの宣言の検証に使う。
+pub fn pages_only_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_pages/0, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_pages() -> [#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}].
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
+/// `plugin_page_content/1` だけを持ち、`plugin_pages` を持たないプラグインの
+/// Erlang ソース。片方だけの宣言の検証に使う。
+pub fn page_content_only_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_page_content/1, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_page_content(_Key) -> #{<<\"sections\">> => []}.
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
+/// `plugin_pages/0` と `plugin_page_content/1` を持つプラグインの Erlang
+/// ソース。`plugin_pages` の本体を `pages_body`、`plugin_page_content` の本体を
+/// `content_body`（どちらも Erlang の式）にする。一覧の検証（0 件、重複、形の
+/// 不一致、キーの文字集合）と、`plugin_page_content` が落ちる・戻らない形の
+/// 検証に使う。
+pub fn pages_source(
+  module: String,
+  name: String,
+  pages_body: String,
+  content_body: String,
+) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_pages/0, plugin_page_content/1, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_pages() -> " <> pages_body <> ".
+plugin_page_content(_Key) -> " <> content_body <> ".
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
 /// 定数を返す関数 1 つだけを持つモジュールの Erlang ソース。プラグインが同梱する
 /// 依存を模したもので、影（モジュール名前空間の衝突）の検証に使う。
 pub fn value_source(module: String, value: Int) -> String {

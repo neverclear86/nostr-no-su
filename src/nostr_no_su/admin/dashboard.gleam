@@ -576,18 +576,10 @@ fn accounts_section(
       view.Neutral,
       accounts,
       i18n.CouldNotListAccounts,
-      empty_state(view.users_icon(), text(i18n.NoAccounts)),
+      view.empty_state(view.users_icon(), text(i18n.NoAccounts)),
       fn(rows) { item_list(list.map(rows, account_item(language, _))) },
     ),
   ])
-}
-
-/// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
-fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
-  html.div(
-    [attribute.class("flex items-center gap-2 text-sm text-base-content/70")],
-    [icon, html.text(text)],
-  )
 }
 
 /// 直近の読み込みで飛ばされた行。1 件以上あるときだけカードを描く。一覧を
@@ -1220,7 +1212,7 @@ fn sessions_section(
       view.Neutral,
       sessions,
       i18n.CouldNotListSessions,
-      empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),
+      view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),
       fn(rows) {
         item_list(list.map(rows, session_item(language, accounts, now, _)))
       },
@@ -1311,7 +1303,7 @@ fn plugins_section(
       [],
     ),
     case plugins {
-      [] -> empty_state(view.puzzle_icon(), text(i18n.NoPlugins))
+      [] -> view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins))
       rows ->
         view.table(
           [text(i18n.NameColumn), text(i18n.StateColumn), ""],

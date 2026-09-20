@@ -189,9 +189,12 @@ fn crashing_spec(
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(name: "crashing", children: [], handle: fn(_incoming) {
-      panic as "boom"
-    }),
+    plugin: plugin.Plugin(
+      name: "crashing",
+      children: [],
+      ui: None,
+      handle: fn(_incoming) { panic as "boom" },
+    ),
     limits: limits,
   )
 }
@@ -204,9 +207,12 @@ fn hanging_spec(
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(name: "hanging", children: [], handle: fn(_incoming) {
-      process.sleep_forever()
-    }),
+    plugin: plugin.Plugin(
+      name: "hanging",
+      children: [],
+      ui: None,
+      handle: fn(_incoming) { process.sleep_forever() },
+    ),
     limits: limits,
   )
 }
@@ -432,6 +438,7 @@ fn counting_spec(
     plugin: plugin.Plugin(
       name: "counting",
       children: children,
+      ui: None,
       handle: fn(_incoming) {
         store_bump(store)
         Nil

@@ -5,8 +5,9 @@
 //// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`
 ////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
 ////   エクスポートする。未知のエクスポートは読み込みに影響しない。本体が使う
-////   任意エクスポート（`plugin_children`、`plugin_required_versions`）は存在
-////   するときだけ呼ばれ、その結果で読み込まれないことがある。
+////   任意エクスポート（`plugin_children`、`plugin_required_versions`、
+////   `plugin_pages`、`plugin_page_content`）は存在するときだけ呼ばれ、その
+////   結果で読み込まれないことがある。
 //// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
 //// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
@@ -32,15 +33,24 @@
 ////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
 ////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
 ////   プラグインを読み込まない。
+//// - 任意エクスポート `plugin_pages/0` `plugin_pages/1`（ページの一覧）と
+////   `plugin_page_content/1` `plugin_page_content/2`（1 ページの記述）が
+////   あれば、そのプラグインは管理 UI のページを供給できる。どちらも無ければ
+////   UI を持たない。片方だけでは読み込まない（`plugin_children` の不備と
+////   同じ扱い）。`/1` `/2` があればそちらを優先し、設定 map を渡す。
+////   `plugin_pages` は読み込み時に 1 度だけ検証するが、`plugin_page_content`
+////   はページの表示のたびに期限付きで呼ぶ（起動時のメタデータの呼び出しには
+////   含まれない）。仕様の全文は `docs/plugin-api.md` の第 13 章にある。
 //// - 検証の順序はモジュールの読み込み → 必須エクスポート →
 ////   `plugin_api_version` → `plugin_required_versions` → `plugin_name` →
-////   設定の切り出し → `plugin_children` で、最初に失敗したところで止まる。
-////   **設定の切り出しは `plugin_name/0` の後にしかできない**
+////   設定の切り出し → `plugin_children` → `plugin_pages` で、最初に失敗した
+////   ところで止まる。**設定の切り出しは `plugin_name/0` の後にしかできない**
 ////   （環境変数の接頭辞がプラグイン名から決まるため）。
 //// - モジュールの読み込み（`code:ensure_loaded/1`）とメタデータの呼び出し
 ////   （`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_name/0`、
-////   `plugin_children/0,1`）は `main` のプロセスで起動時に同期に行われるので、
-////   1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms` で打ち切る。戻らない
+////   `plugin_children/0,1`、`plugin_pages/0,1`）は `main` のプロセスで起動時に
+////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms`
+////   で打ち切る。戻らない
 ////   `-on_load` や戻らないメタデータの関数を持つプラグインは理由の 1 行で
 ////   読み込まれず、起動は続く。
 //// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
@@ -63,8 +73,10 @@ import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
+import gleam/set
 import gleam/string
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
@@ -85,6 +97,16 @@ const handle_event_name = "handle_event"
 /// 本体が読み込み時に照合する任意エクスポートの名前。
 const required_versions_name = "plugin_required_versions"
 
+/// 本体が問い合わせる、管理 UI のページ一覧を返す任意エクスポートの名前。
+const pages_export_name = "plugin_pages"
+
+/// 本体が問い合わせる、管理 UI の 1 ページの記述を返す任意エクスポートの名前。
+const page_content_export_name = "plugin_page_content"
+
+/// UI のページのキーに許す文字。`plugin_config.gleam` の `normalize` と同じく、
+/// 許す文字を並べた定数と `string.contains` で判定する。
+const page_key_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_-"
+
 /// プラグインはバンカーに登録したアカウントから受信したすべてのイベントを処理する。
 /// 状態を持つプラグインは、`handle` クロージャーの中で自前のアクターへの
 /// `Subject` を捕捉できる。
@@ -103,6 +125,25 @@ pub type Plugin {
     /// 起動時に 1 度だけ解決した子プロセスの仕様。内蔵プラグインは空。
     children: List(ChildSpecification(Pid)),
     handle: fn(Event) -> Nil,
+    /// 管理 UI のページの供給。`plugin_pages` と `plugin_page_content` の両方を
+    /// 持たないプラグインは `None`。
+    ui: Option(PluginUi),
+  )
+}
+
+/// プラグインが供給するページ 1 つの識別。`key` は URL の path 片、`title` は
+/// プラグイン由来の英語の表示名。
+pub type PluginPage {
+  PluginPage(key: String, title: String)
+}
+
+/// プラグインが供給する管理 UI。`pages` は読み込み時に検証した一覧（1 件以上、
+/// キーは重複しない）。`content` はページのキーを受け取り、そのページの記述を
+/// 期限付きで取る。失敗は 1 行の理由。
+pub type PluginUi {
+  PluginUi(
+    pages: List(PluginPage),
+    content: fn(String) -> Result(Dynamic, String),
   )
 }
 
@@ -170,6 +211,7 @@ pub fn load(
     config_map,
     call_timeout_ms,
   ))
+  use ui <- result.try(read_ui(module, name, config_map, call_timeout_ms))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
   let handle_event = atom.create(handle_event_name)
   let args = case takes_config {
@@ -177,7 +219,7 @@ pub fn load(
     False -> fn(event_map) { [event_map] }
   }
   Ok(
-    Plugin(name: plugin_name, children: children, handle: fn(incoming) {
+    Plugin(name: plugin_name, children: children, ui: ui, handle: fn(incoming) {
       // 戻り値はプラグインが自由に決めてよいので捨てる。例外はここで捕まえず、
       // ワーカープロセス側（`plugin_runner`）が短い理由に整えて観測する。
       let _ = apply(module, handle_event, args(event.to_map(incoming)))
@@ -428,6 +470,225 @@ fn children(
         )
     }
   })
+}
+
+/// 任意エクスポート `plugin_pages/0` `/1` と `plugin_page_content/1` `/2` の
+/// 有無を見て、管理 UI の供給を読み込む。どちらも無ければ `Ok(None)`、片方だけ
+/// なら `Error`（`read_children` と同じく、症状を真の原因に近い場所で報告する
+/// ため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を検証する。`/1`
+/// `/2` を優先して設定 map を渡す。
+fn read_ui(
+  module: Atom,
+  name: String,
+  config_map: Dynamic,
+  call_timeout_ms: Int,
+) -> Result(Option(PluginUi), String) {
+  let has_pages_0 = has_export(module, pages_export_name, 0)
+  let has_pages_1 = has_export(module, pages_export_name, 1)
+  let has_content_1 = has_export(module, page_content_export_name, 1)
+  let has_content_2 = has_export(module, page_content_export_name, 2)
+  case has_pages_0 || has_pages_1, has_content_1 || has_content_2 {
+    False, False -> Ok(None)
+    False, True ->
+      Error(prefix(
+        name,
+        content_label(has_content_2)
+          <> " but no "
+          <> pages_export_name
+          <> "/0 or /1",
+      ))
+    True, False ->
+      Error(prefix(
+        name,
+        pages_label(has_pages_1)
+          <> " but no "
+          <> page_content_export_name
+          <> "/1 or /2",
+      ))
+    True, True -> {
+      let label = pages_label(has_pages_1)
+      let args = case has_pages_1 {
+        True -> [config_map]
+        False -> []
+      }
+      use value <- result.try(call_export(
+        module,
+        name,
+        pages_export_name,
+        args,
+        call_timeout_ms,
+      ))
+      use pages <- result.try(decode_pages(value, name, label))
+      Ok(
+        Some(PluginUi(
+          pages: pages,
+          content: content_of(
+            module,
+            name,
+            config_map,
+            call_timeout_ms,
+            has_content_2,
+          ),
+        )),
+      )
+    }
+  }
+}
+
+/// `plugin_pages` の理由の文字列に出すラベル。`/1` があればそちらを優先する。
+fn pages_label(has_pages_1: Bool) -> String {
+  case has_pages_1 {
+    True -> pages_export_name <> "/1"
+    False -> pages_export_name <> "/0"
+  }
+}
+
+/// `plugin_page_content` の理由の文字列に出すラベル。`/2` があればそちらを
+/// 優先する。
+fn content_label(has_content_2: Bool) -> String {
+  case has_content_2 {
+    True -> page_content_export_name <> "/2"
+    False -> page_content_export_name <> "/1"
+  }
+}
+
+/// `plugin_pages` の戻り値をページの一覧に変換する。決めたこと 3 の検査
+/// （形、0 件、重複、文字集合）を順に当てる。
+fn decode_pages(
+  value: Dynamic,
+  name: String,
+  label: String,
+) -> Result(List(PluginPage), String) {
+  use raw <- result.try(
+    decode.run(value, decode.list(decode.dynamic))
+    |> result.replace_error(prefix(
+      name,
+      label
+        <> " must return a list of page maps, got "
+        <> dynamic.classify(value),
+    )),
+  )
+  use pages <- result.try(
+    raw
+    |> list.index_map(fn(page, index) { #(page, index) })
+    |> list.try_map(fn(pair) { decode_page(pair.0, pair.1, label) })
+    |> result.map_error(fn(reason) { prefix(name, reason) }),
+  )
+  case pages {
+    [] -> Error(prefix(name, label <> " must return at least one page"))
+    _ ->
+      case find_duplicate_page_key(pages) {
+        Some(key) ->
+          Error(prefix(name, label <> ": duplicate page key \"" <> key <> "\""))
+        None -> Ok(pages)
+      }
+  }
+}
+
+/// ページの記述 1 件を検証する。`key` が読める前は `page #<index>`、読めた後は
+/// `page key "<key>"` で位置を示す（`plugin_children.spec` と同じ考え方）。
+fn decode_page(
+  raw: Dynamic,
+  index: Int,
+  label: String,
+) -> Result(PluginPage, String) {
+  let unlabelled = label <> ": page #" <> int.to_string(index)
+  use _ <- result.try(check_page_map(raw, unlabelled))
+  use key <- result.try(required_page_field(raw, "key", unlabelled))
+  case page_key_ok(key) {
+    False ->
+      Error(label <> ": page key \"" <> key <> "\" must match [a-z0-9_-]+")
+    True -> {
+      let labelled = label <> ": page key \"" <> key <> "\""
+      use title <- result.try(required_page_field(raw, "title", labelled))
+      Ok(PluginPage(key: key, title: title))
+    }
+  }
+}
+
+/// ページの記述が map であることを先に確かめる。map でない要素（例えば
+/// `{key, title}` のタプル）を渡されたとき、キーが 1 つも読めないことを
+/// 「`key` が無い」と報告すると作者が原因にたどり着けない
+/// （`plugin_children.check_map` と同じ考え方）。
+fn check_page_map(raw: Dynamic, label: String) -> Result(Nil, String) {
+  case dynamic.classify(raw) {
+    "Dict" -> Ok(Nil)
+    other -> Error(label <> ": must be a page map, got " <> other)
+  }
+}
+
+/// `page_key_alphabet` だけからなり、空でないこと。
+fn page_key_ok(key: String) -> Bool {
+  key != ""
+  && key
+  |> string.to_graphemes
+  |> list.all(fn(character) { string.contains(page_key_alphabet, character) })
+}
+
+/// ページの一覧の中で最初に重複したキーを探す。
+fn find_duplicate_page_key(pages: List(PluginPage)) -> Option(String) {
+  find_duplicate_page_key_loop(pages, set.new())
+}
+
+/// `find_duplicate_page_key` の実体。`seen` に見たキーを積みながら 1 件ずつ確かめる。
+fn find_duplicate_page_key_loop(
+  pages: List(PluginPage),
+  seen: set.Set(String),
+) -> Option(String) {
+  case pages {
+    [] -> None
+    [page, ..rest] ->
+      case set.contains(seen, page.key) {
+        True -> Some(page.key)
+        False -> find_duplicate_page_key_loop(rest, set.insert(seen, page.key))
+      }
+  }
+}
+
+/// ページの記述の必須フィールドを binary キーの map から読む。欠けていれば
+/// `<label>: missing <key>`、String でなければ型の不一致を報告する。
+fn required_page_field(
+  raw: Dynamic,
+  key: String,
+  label: String,
+) -> Result(String, String) {
+  let decoder =
+    decode.optional_field(
+      key,
+      None,
+      decode.map(decode.dynamic, Some),
+      decode.success,
+    )
+  case decode.run(raw, decoder) |> result.unwrap(None) {
+    None -> Error(label <> ": missing " <> key)
+    Some(value) ->
+      decode.run(value, decode.string)
+      |> result.replace_error(
+        label
+        <> ": "
+        <> key
+        <> " must be a String, got "
+        <> dynamic.classify(value),
+      )
+  }
+}
+
+/// ページの中身を取得するクロージャーを組み立てる。`/2` があれば設定 map も
+/// 渡す。失敗（例外・期限超過）は `call_export` がそのまま 1 行の理由にする。
+fn content_of(
+  module: Atom,
+  name: String,
+  config_map: Dynamic,
+  call_timeout_ms: Int,
+  has_content_2: Bool,
+) -> fn(String) -> Result(Dynamic, String) {
+  fn(key: String) {
+    let args = case has_content_2 {
+      True -> [dynamic.string(key), config_map]
+      False -> [dynamic.string(key)]
+    }
+    call_export(module, name, page_content_export_name, args, call_timeout_ms)
+  }
 }
 
 /// プラグインのエクスポートを使い捨てのプロセスで期限付きで呼ぶ。失敗は
