@@ -13,7 +13,7 @@
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
 
 - **OTP が違う BEAM はローダーが `badfile` で拒否する。**
-- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 514 モジュール。docker ビルドは 124。この数は本体の影に入る前の同梱物の総数である）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
+- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 515 モジュール。docker ビルドは 126。この数は本体の影に入る前の同梱物の総数である）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
 
 ```sh
 mkdir -p plugins/event_logger
@@ -47,6 +47,8 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 | 環境変数 | 必須 | 意味 |
 | --- | --- | --- |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | はい | 保存先の Postgres（`postgres://user:pass@host:5432/db`） |
+
+この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。設定はこの環境変数だけで、この画面から変えることはできない。
 
 設定が無い、あるいは URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
 
@@ -165,4 +167,10 @@ DB を止めると保存だけが止まり、監視は続く。復帰すると�
 ```
 [event_logger] database unavailable: ConnectionUnavailable; retrying every 5000ms
 [event_logger] database is back; dropped 12 events while it was unavailable
+```
+
+管理 UI のページも確認できる。`Configuration` と `Runtime` の見出し、マスクした URL、プールと保存アクターの `running` のバッジが 2 つ出る。
+
+```sh
+curl -s -u admin:<ADMIN_PASSWORD> http://127.0.0.1:8080/plugins/event_logger/settings
 ```
