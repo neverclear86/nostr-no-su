@@ -23,6 +23,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/time
 
 /// 使い捨ての管理パスワード。
 const password = "preview-password"
@@ -249,20 +250,21 @@ fn context() -> admin.Context {
     connect_client: fn(_request, _signer) { Error(admin.RelayNotConnected) },
     reenable_plugin: reenabling,
     sessions: fn() {
+      let now = time.now_seconds()
       Ok([
         dashboard.SessionRow(
           signer:,
           client:,
           perms: "sign_event:1,sign_event:7,nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt",
-          created_at: 1_788_253_200,
-          last_used_at: 1_789_276_354,
+          created_at: now - 30 * 86_400,
+          last_used_at: now - 7 * 86_400,
         ),
         dashboard.SessionRow(
           signer:,
           client: earlier_client,
           perms: "",
-          created_at: 1_789_075_800,
-          last_used_at: 1_789_075_800,
+          created_at: now - 14 * 86_400,
+          last_used_at: now - 14 * 86_400,
         ),
       ])
     },

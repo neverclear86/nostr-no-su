@@ -118,6 +118,9 @@ pub fn messages_with_values_follow_each_language_test() {
       "The decrypted private key does not match the pubkey.",
       "復号した秘密鍵が pubkey と一致しません。",
     ),
+    #(i18n.MinutesAgo(5), "5 min ago", "5 分前"),
+    #(i18n.HoursAgo(5), "5 h ago", "5 時間前"),
+    #(i18n.DaysAgo(5), "5 d ago", "5 日前"),
   ]
   use #(message, english, japanese) <- list.each(cases)
   assert i18n.text(i18n.English, message) == english
@@ -181,11 +184,16 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
     i18n.NoPermissionsRequested -> Some(i18n.Created)
     i18n.Created -> Some(i18n.LastUsed)
-    i18n.LastUsed -> Some(i18n.Approve)
+    i18n.LastUsed -> Some(i18n.JustNow)
+    i18n.JustNow -> Some(i18n.MinutesAgo(30))
+    i18n.MinutesAgo(_) -> Some(i18n.HoursAgo(5))
+    i18n.HoursAgo(_) -> Some(i18n.DaysAgo(5))
+    i18n.DaysAgo(_) -> Some(i18n.Approve)
     i18n.Approve -> Some(i18n.Deny)
     i18n.Deny -> Some(i18n.ApprovalExplanation)
     i18n.ApprovalExplanation -> Some(i18n.Accounts)
-    i18n.Accounts -> Some(i18n.AddAccount)
+    i18n.Accounts -> Some(i18n.Add)
+    i18n.Add -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
     i18n.NoAccounts -> Some(i18n.ReloadAccounts)
     i18n.ReloadAccounts -> Some(i18n.UnreadableAccounts)
@@ -196,11 +204,14 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UnreadableNotDeletable -> Some(i18n.ReasonLabel)
     i18n.ReasonLabel -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
-    i18n.ConnectionUriForApproval -> Some(i18n.EditLabel)
+    i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndPublicKey)
+    i18n.ConnectionUrisAndPublicKey -> Some(i18n.PublicKeyHex)
+    i18n.PublicKeyHex -> Some(i18n.EditLabel)
     i18n.EditLabel -> Some(i18n.ShowPrivateKey)
     i18n.ShowPrivateKey -> Some(i18n.RotateSecret)
     i18n.RotateSecret -> Some(i18n.DeleteAccount)
-    i18n.DeleteAccount -> Some(i18n.ApprovedSessions)
+    i18n.DeleteAccount -> Some(i18n.Delete)
+    i18n.Delete -> Some(i18n.ApprovedSessions)
     i18n.ApprovedSessions -> Some(i18n.NoApprovedSessions)
     i18n.NoApprovedSessions -> Some(i18n.Revoke)
     i18n.Revoke -> Some(i18n.Relays)
@@ -208,7 +219,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Role -> Some(i18n.StateColumn)
     i18n.StateColumn -> Some(i18n.MonitorRole)
     i18n.MonitorRole -> Some(i18n.BunkerRole)
-    i18n.BunkerRole -> Some(i18n.RelayConnected)
+    i18n.BunkerRole -> Some(i18n.RelayRoleUnused)
+    i18n.RelayRoleUnused -> Some(i18n.RelayConnected)
     i18n.RelayConnected -> Some(i18n.RelayDisconnected)
     i18n.RelayDisconnected -> Some(i18n.NoBunkerRelay)
     i18n.NoBunkerRelay -> Some(i18n.AddRelay)
@@ -340,12 +352,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 173 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 182 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 173
+  assert list.length(messages) == 182
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

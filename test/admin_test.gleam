@@ -11,6 +11,7 @@ import gleam/http/response.{type Response}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import lustre/element
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -59,7 +60,7 @@ pub fn dashboard_shows_the_current_state_test() {
   )
   assert string.contains(
     body,
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
+    element.to_string(view.status_badge(view.Success, "connected")),
   )
   assert string.contains(
     body,
@@ -67,12 +68,12 @@ pub fn dashboard_shows_the_current_state_test() {
   )
   assert string.contains(
     body,
-    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span>",
+    element.to_string(view.status_badge(view.Failure, "disconnected")),
   )
   assert string.contains(body, "<td class=\"break-words\">console_logger</td>")
   assert string.contains(
     body,
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">running</span>",
+    element.to_string(view.status_badge(view.Success, "running")),
   )
 }
 

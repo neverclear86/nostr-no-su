@@ -66,6 +66,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       relays: Ok([]),
       sessions: Ok([]),
       plugins: [],
+      now: 2000,
     )
   let pending_mismatch =
     dashboard.PendingRow(
@@ -140,6 +141,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         ),
         dashboard.PluginRow("plugin-d", None),
       ],
+      now: 2000,
     )
   let reason = i18n.Untranslated("reason")
   list.flatten([
@@ -394,7 +396,9 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.trash_icon(),
         view.pencil_icon(),
         view.plug_icon(),
+        view.eye_icon(),
         view.key_icon(),
+        view.rotate_icon(),
         view.users_icon(),
         view.clock_icon(),
         view.puzzle_icon(),

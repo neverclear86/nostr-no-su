@@ -1050,7 +1050,7 @@ pub fn dashboard_escapes_a_uri_attribute_test() {
 /// 一覧を得られないときは登録のリンクを出さない。
 pub fn dashboard_hides_add_account_without_accounts_test() {
   let failing = simulate.read_body(get(with_accounts(Error(unavailable)), "/"))
-  assert !string.contains(failing, "Add account")
+  assert !string.contains(failing, "href=\"/accounts/new\"")
   let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
-  assert string.contains(empty, "Add account")
+  assert string.contains(empty, "href=\"/accounts/new\"")
 }

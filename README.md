@@ -49,19 +49,19 @@ docker compose up --build
 
 アカウントは管理 UI（次節）から登録する。
 
-1. ダッシュボードのアカウントの節の「アカウントを追加」（`Add account`）を開き、nsec を貼り付けて「登録する」（`Register`）を押すか、「生成する」（`Generate`）でサーバーに鍵を作らせる。
+1. ダッシュボードのアカウントの節の「追加」（`Add`）を開き、nsec を貼り付けて「登録する」（`Register`）を押すか、「生成する」（`Generate`）でサーバーに鍵を作らせる。
 2. nsec を貼り付けた場合は、完了ページに出る nsec を確かめる。生成した場合は、確認ページの nsec をバックアップしてから「この鍵を登録する」（`Register this key`）を押す（登録するとダッシュボードに戻り、nsec は再び表示されない）。どちらも、以後は管理パスワードを再入力したときにしか表示しない。
-3. ダッシュボードの「接続 URI」（`Connection URI`）をコピーしてクライアントに貼り付ける。secret を持たない「接続 URI（要承認）」（`Connection URI (approval)`）で接続すると、管理 UI での承認を経る。
+3. ダッシュボードのアカウントの行の「接続 URI と公開鍵」（`Connection URIs and public key`）を開き、「接続 URI」（`Connection URI`）をコピーしてクライアントに貼り付ける。secret を持たない「接続 URI（要承認）」（`Connection URI (approval)`）で接続すると、管理 UI での承認を経る。
 
 登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。
 
 いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。同じ DB を別のインスタンスが使っているときは、`[main] cannot continue: another instance is using this database (advisory lock 7237235 is held by another session)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](docs/design-decisions.md) の「同じ DB に対して動けるのは 1 インスタンスだけである」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間もプラグインは止まらない。リレーの接続は DB から行を読めた後に開く。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
 
-登録で `account is already registered` と出るのにダッシュボードのアカウントの節にそのアカウントが無いときは、起動時の読み込みで飛ばされた行が `bunker_accounts` に残っている（ダッシュボードの「読み込めなかったアカウント」（`Unreadable accounts`）のカードに出る。ログは `[bunker] skipped account <pubkey>: <理由>`）。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときは、その行の「アカウントを削除」（`Delete account`）から消してから登録し直す。「pubkey の列を読めない行です。」で始まる行は pubkey を読めないため画面からは消せず、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey 列の値>'"`）。
+登録で `account is already registered` と出るのにダッシュボードのアカウントの節にそのアカウントが無いときは、起動時の読み込みで飛ばされた行が `bunker_accounts` に残っている（ダッシュボードの「読み込めなかったアカウント」（`Unreadable accounts`）のカードに出る。ログは `[bunker] skipped account <pubkey>: <理由>`）。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときは、その行の「削除」（`Delete`）から消してから登録し直す。「pubkey の列を読めない行です。」で始まる行は pubkey を読めないため画面からは消せず、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey 列の値>'"`）。
 
 バンカーは監視とは別に専用の接続をリレーごとに張り、NIP-46 の購読だけを開く。`relay.nsec.app` のような NIP-46 専用リレー（kind 24133 以外の購読を拒否する）もバンカー用にはそのまま使える。複数登録すると `bunker://` URI に `relay=` が複数入り、どれか 1 つでも生きていれば署名の往復が成立する（応答は全バンカーリレーへ発行、リクエストの重複受信はエンジンが排除）。リレーは `relays` テーブルの行（URL、監視用かどうか、バンカー用かどうか）で決まり、環境変数では設定しない。登録の手順は次の段落を参照。
 
-リレーは管理 UI のダッシュボードの「リレーを追加」（`Add relay`）から登録する。`ws://` か `wss://` で始まる URL を入力し、監視・バンカーの用途を選んで「登録する」（`Register`）を押す（既定は両方にチェックが入っており、少なくとも一方を選ぶ必要がある）。登録すると DB に書き込まれてから再起動なしで接続が開く。画面の詳細は [管理 UI](docs/admin-ui.md) の「リレーの追加」にある。
+リレーは管理 UI のダッシュボードのリレーの節の「追加」（`Add`）から登録する。`ws://` か `wss://` で始まる URL を入力し、監視・バンカーの用途を選んで「登録する」（`Register`）を押す（既定は両方にチェックが入っており、少なくとも一方を選ぶ必要がある）。登録すると DB に書き込まれてから再起動なしで接続が開く。画面の詳細は [管理 UI](docs/admin-ui.md) の「リレーの追加」にある。
 
 空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
 
@@ -117,8 +117,8 @@ secrets:
 
 1. 交換の前に、全アカウントの nsec を控える。ダッシュボードの各行の「秘密鍵を表示」（`Show private key`）で管理パスワードを再入力して表示する。控え忘れに気づいたときは、手順 3 で行を消す前に、以前の `ACCOUNT_MASTER_KEY` に戻して起動し直せば表示して控えられる。
 2. 新しいマスターキーを `openssl rand -hex 32` で作って渡し直し、起動し直す。マスターキーは起動時に読むので再起動が要る。docker compose では、`.env` の値を変えたときは `docker compose up -d`、ファイルの中身を変えたときは `docker compose restart nostr-no-su` で読み直させる。起動すると全行が飛ばされ、ログに `loaded 0 of N account(s)` と `skipped account <pubkey>: <理由>` が出て、ダッシュボードに「読み込めなかったアカウント」（`Unreadable accounts`）のカードが出る。
-3. そのカードの各行の「アカウントを削除」（`Delete account`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、`account is already registered` について述べた上の段落にあるとおり DB から直接消す。
-4. 「アカウントを追加」（`Add account`）から控えた nsec で登録し直す。飛ばされた行が残っていると `account is already registered` で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
+3. そのカードの各行の「削除」（`Delete`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、`account is already registered` について述べた上の段落にあるとおり DB から直接消す。
+4. アカウントの節の「追加」（`Add`）から控えた nsec で登録し直す。飛ばされた行が残っていると `account is already registered` で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
 
 交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
 
