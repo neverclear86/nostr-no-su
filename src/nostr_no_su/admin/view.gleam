@@ -204,8 +204,6 @@ pub type Value {
   Plain(String)
   /// npub と、あれば 16 進の公開鍵を縦に並べたアカウント。
   Account(npub: String, hex: Option(String))
-  /// RFC 3339 の UTC の時刻。折り返さず、数字の幅を揃える。
-  Timestamp(String)
 }
 
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
@@ -659,16 +657,6 @@ fn summary_value(value: Value) -> Element(msg) {
         [html.span([], [html.text(npub)]), ..hex],
       )
     }
-    Timestamp(text) ->
-      html.dd([], [
-        html.time(
-          [
-            attribute.attribute("datetime", text),
-            attribute.class("whitespace-nowrap tabular-nums"),
-          ],
-          [html.text(text)],
-        ),
-      ])
   }
 }
 
@@ -1139,7 +1127,7 @@ pub fn truncated_id(
   ])
 }
 
-/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作に使う。
+/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作と、アカウントの行の操作に使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),
@@ -1271,11 +1259,27 @@ pub fn plug_icon() -> Element(msg) {
   ])
 }
 
-/// 秘密鍵の節のアイコン（Lucide の key）。
+/// 監視の用途と、秘密鍵の表示のアイコン（Lucide の eye）。
+pub fn eye_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0",
+    "M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+  ])
+}
+
+/// 秘密鍵の節と、バンカーの用途のアイコン（Lucide の key）。
 pub fn key_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4",
     "m21 2-9.6 9.6", "M2 15.5a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0 -11 0",
+  ])
+}
+
+/// secret の再生成のアイコン（Lucide の refresh-cw）。
+pub fn rotate_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5",
+    "M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16", "M16 16h5v5",
   ])
 }
 

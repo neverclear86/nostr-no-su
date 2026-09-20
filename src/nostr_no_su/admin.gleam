@@ -71,6 +71,7 @@ import nostr_no_su/relay_client
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
 import nostr_no_su/task
+import nostr_no_su/time
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
@@ -610,7 +611,8 @@ const snapshot_deadline_ms = 5000
 /// 複数の問い合わせを同じ締め切りで待つため、これらも別プロセスにすると内側の
 /// 締め切りと外側の `await` が同時に切れる競争になり、間に合った行だけを出す
 /// （`dashboard.RoleState` の `Unanswered` など）動きが観測できなくなる。呼び出し元で
-/// 実行すればこの競争は無い。単体テストが呼べるよう公開する。
+/// 実行すればこの競争は無い。描画時点の時刻（相対表示に使う）もここで取る。単体テストが
+/// 呼べるよう公開する。
 pub fn snapshot(
   context: Context,
   deadline: task.Deadline,
@@ -628,6 +630,7 @@ pub fn snapshot(
     relays: result.map_error(relays, i18n.Untranslated),
     sessions: within(task.await(sessions, deadline)),
     plugins:,
+    now: time.now_seconds(),
   )
 }
 

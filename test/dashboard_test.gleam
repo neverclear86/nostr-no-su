@@ -69,6 +69,7 @@ fn states() -> dashboard.Snapshot {
       ),
       dashboard.PluginRow("d", None),
     ],
+    now: 1_789_276_354,
   )
 }
 
@@ -105,12 +106,14 @@ pub fn states_are_shown_as_badges_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let badges = [
     "<span class=\"whitespace-nowrap\">monitor</span>",
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span>",
-    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span>",
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">running</span>",
-    "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">overloaded</span><span class=\"text-xs break-words\">(dropped 4)</span>",
-    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">disabled</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
-    "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">unavailable</span>",
+    element.to_string(view.status_badge(view.Success, "connected")),
+    element.to_string(view.status_badge(view.Failure, "disconnected")),
+    element.to_string(view.status_badge(view.Success, "running")),
+    element.to_string(view.status_badge(view.Warning, "overloaded"))
+      <> "<span class=\"text-xs break-words\">(dropped 4)</span>",
+    element.to_string(view.status_badge(view.Failure, "disabled"))
+      <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
+    element.to_string(view.status_badge(view.Neutral, "unavailable")),
     "<dd><span>540s</span></dd>",
   ]
   list.each(badges, fn(badge) {
@@ -125,12 +128,14 @@ pub fn japanese_states_are_translated_test() {
   let badges = [
     "<span class=\"whitespace-nowrap\">監視</span>",
     "<span class=\"whitespace-nowrap\">バンカー</span>",
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">接続中</span>",
-    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">未接続</span>",
-    "<span class=\"badge badge-sm badge-success whitespace-nowrap\">動作中</span>",
-    "<span class=\"badge badge-sm badge-warning whitespace-nowrap\">過負荷</span><span class=\"text-xs break-words\">（破棄 4 件）</span>",
-    "<span class=\"badge badge-sm badge-error whitespace-nowrap\">無効</span><span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
-    "<span class=\"badge badge-sm badge-ghost whitespace-nowrap\">応答なし</span>",
+    element.to_string(view.status_badge(view.Success, "接続中")),
+    element.to_string(view.status_badge(view.Failure, "未接続")),
+    element.to_string(view.status_badge(view.Success, "動作中")),
+    element.to_string(view.status_badge(view.Warning, "過負荷"))
+      <> "<span class=\"text-xs break-words\">（破棄 4 件）</span>",
+    element.to_string(view.status_badge(view.Failure, "無効"))
+      <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
+    element.to_string(view.status_badge(view.Neutral, "応答なし")),
     "<dd><span>540 秒</span></dd>",
   ]
   list.each(badges, fn(badge) {
@@ -227,7 +232,84 @@ pub fn permissions_are_shown_as_chips_test() {
   )
 }
 
-/// セッションの行は、クライアントの直後に権限を出し、続けて作成の時刻が並ぶ。
+/// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者が
+/// `<details>` の外（畳みを開く前に見える範囲）には出ない。
+pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
+  let account =
+    dashboard.AccountRow(
+      signer: "abcdhex1234567890abcdef1234567890",
+      npub: "npub1examplenpubvalueabcdefghijklmno",
+      label: "main account",
+      uri: "bunker://x?secret=s",
+      auth_uri: "bunker://x",
+    )
+  let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let assert Ok(#(_, after_accounts)) =
+    string.split_once(body, "id=\"accounts\"")
+  let assert Ok(#(before_details, after_details)) =
+    string.split_once(after_accounts, "<details>")
+  assert !string.contains(before_details, account.signer)
+  assert string.contains(after_details, "Connection URIs and public key")
+  assert string.contains(after_details, "Connection URI</span>")
+  assert string.contains(after_details, "Connection URI (approval)</span>")
+  assert string.contains(after_details, "Public key (hex)</span>")
+  assert string.contains(after_details, account.signer)
+}
+
+/// アカウントの行の 4 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
+/// `Delete account` は出ない）で `text-error` が付く。
+pub fn account_row_actions_are_icons_with_short_delete_test() {
+  let account =
+    dashboard.AccountRow(
+      signer: "abcd",
+      npub: "npub1x",
+      label: "main",
+      uri: "bunker://x",
+      auth_uri: "bunker://x",
+    )
+  let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(
+    body,
+    element.to_string(view.icon_button_link(
+      "/accounts/abcd/label",
+      view.pencil_icon(),
+      "Edit label",
+      view.Normal,
+    )),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.icon_button_link(
+      "/accounts/abcd/private-key",
+      view.eye_icon(),
+      "Show private key",
+      view.Normal,
+    )),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.icon_button_link(
+      "/accounts/abcd/rotate",
+      view.rotate_icon(),
+      "Rotate secret",
+      view.Normal,
+    )),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.icon_button_link(
+      "/accounts/abcd/delete",
+      view.trash_icon(),
+      "Delete",
+      view.Destructive,
+    )),
+  )
+  assert !string.contains(body, "Delete account")
+}
+
+/// セッションの行は、権限をチップで出す。
 pub fn sessions_show_perms_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -245,12 +327,11 @@ pub fn sessions_show_perms_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-base-content/70\">Client</dt><dd class=\"font-mono text-xs break-all\">ef01</dd><dt class=\"text-base-content/70\">Permissions</dt><dd class=\"font-mono text-xs break-all\">sign_event:7</dd><dt class=\"text-base-content/70\">Created</dt>",
+    "<dt class=\"text-base-content/70\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:7</span></div></dd>",
   )
 }
 
-/// 権限が空のとき、セッションの行は「署名と暗号化は拒否します」の旨の文が出る（値は
-/// 等幅にしない）。
+/// 権限が空のとき、セッションの行は「権限の要求なし」のバッジを出す。
 pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -273,7 +354,12 @@ pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
     )
   assert string.contains(
     sessions,
-    "<dt class=\"text-base-content/70\">Permissions</dt><dd class=\"break-words\">None requested. Signing and encryption are refused.</dd>",
+    "<dt class=\"text-base-content/70\">Permissions</dt><dd>"
+      <> element.to_string(view.status_badge(
+      view.Neutral,
+      "No permissions requested",
+    ))
+      <> "</dd>",
   )
 }
 
@@ -353,8 +439,7 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   )
 }
 
-/// 承認済みセッションの行は、作成と最終利用を Unix 秒から RFC 3339 の UTC で出し、`time`
-/// の `datetime` 属性にも同じ値を入れる。
+/// 承認済みセッションの行は、最終利用の `title` に作成と最終利用を RFC 3339 の UTC で出す。
 pub fn sessions_show_created_and_last_used_times_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -372,12 +457,86 @@ pub fn sessions_show_created_and_last_used_times_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-base-content/70\">Created</dt><dd><time class=\"whitespace-nowrap tabular-nums\" datetime=\"2026-09-01T09:00:00Z\">2026-09-01T09:00:00Z</time></dd>",
+    "title=\"Last used: 2026-09-13T05:12:34Z · Created: 2026-09-01T09:00:00Z\"",
   )
+}
+
+/// セッションの行に署名者のラベルと省略した npub、権限のチップ、クライアントの
+/// コピーボタンが出る。
+pub fn session_row_shows_the_signer_and_permission_chips_test() {
+  let known_signer = "abcd-known-signer-0123456789"
+  let known_npub = "npub1sessionexampleabcdefghijklmno"
+  let account =
+    dashboard.AccountRow(
+      signer: known_signer,
+      npub: known_npub,
+      label: "main",
+      uri: "bunker://x",
+      auth_uri: "bunker://x",
+    )
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([account]),
+      sessions: Ok([
+        dashboard.SessionRow(
+          signer: known_signer,
+          client: "ef01",
+          perms: "sign_event:1",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "<span>main</span>")
+  assert string.contains(body, view.shorten(known_npub))
   assert string.contains(
     body,
-    "<dt class=\"text-base-content/70\">Last used</dt><dd><time class=\"whitespace-nowrap tabular-nums\" datetime=\"2026-09-13T05:12:34Z\">2026-09-13T05:12:34Z</time></dd>",
+    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:1</span></div>",
   )
+  assert string.contains(body, "data-action=\"copy\"")
+}
+
+/// `now` を固定したスナップショットで、最終利用が相対時刻（「7 d ago」の形）になり、
+/// `title` に最終利用と作成の UTC の全文が入る。
+pub fn last_used_is_shown_as_a_relative_time_test() {
+  let last_used_at = 1_789_276_354
+  let created_at = 1_788_253_200
+  let now = last_used_at + 7 * 86_400
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      now:,
+      sessions: Ok([
+        dashboard.SessionRow(
+          signer: "abcd",
+          client: "ef01",
+          perms: "",
+          created_at:,
+          last_used_at:,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "7 d ago")
+  assert string.contains(
+    body,
+    "title=\"Last used: 2026-09-13T05:12:34Z · Created: 2026-09-01T09:00:00Z\"",
+  )
+}
+
+/// `dashboard.relative_time` は、境界の秒数ごとに正しい文言を返す。未来の時刻は
+/// 「たった今」（`JustNow`）にする。
+pub fn relative_time_buckets_test() {
+  assert dashboard.relative_time(1000, 1000) == i18n.JustNow
+  assert dashboard.relative_time(1059, 1000) == i18n.JustNow
+  assert dashboard.relative_time(1060, 1000) == i18n.MinutesAgo(1)
+  assert dashboard.relative_time(1000 + 3599, 1000) == i18n.MinutesAgo(59)
+  assert dashboard.relative_time(1000 + 3600, 1000) == i18n.HoursAgo(1)
+  assert dashboard.relative_time(1000 + 86_399, 1000) == i18n.HoursAgo(23)
+  assert dashboard.relative_time(1000 + 86_400, 1000) == i18n.DaysAgo(1)
+  assert dashboard.relative_time(1000, 2000) == i18n.JustNow
 }
 
 /// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub・16 進の
@@ -439,6 +598,39 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
   assert !string.contains(body, "not-a-valid-pubkey-value")
 }
 
+/// 読み込めなかった行にラベルと省略した npub、「削除」が出て、16 進の pubkey は
+/// 削除のリンクの宛先にだけ使われ、識別としては出ない。
+pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
+  let pubkey = "deadbeef00112233445566778899aabbccddeeff0011223344"
+  let npub = "npub1skippedexamplevalueabcdefghijklmno"
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      skipped: Ok([
+        dashboard.SkippedRow(
+          pubkey:,
+          npub:,
+          label: "old wallet",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "old wallet")
+  assert string.contains(body, view.shorten(npub))
+  assert string.contains(
+    body,
+    element.to_string(view.icon_button_link(
+      dashboard.account_action_path(pubkey, dashboard.DeleteAccount),
+      view.trash_icon(),
+      "Delete",
+      view.Destructive,
+    )),
+  )
+  // pubkey の唯一の出現は削除のリンクの宛先である。
+  assert list.length(string.split(body, pubkey)) == 2
+}
+
 /// 飛ばされた行が 0 件、あるいは一覧を得られないときはカードを描かない。
 pub fn no_skipped_rows_draws_no_card_test() {
   let empty = dashboard.Snapshot(..states(), skipped: Ok([]))
@@ -463,27 +655,88 @@ pub fn no_skipped_rows_draws_no_card_test() {
   )
 }
 
-/// リレーは 1 行につき `<li>` 1 件で、使っている用途を監視、バンカーの順に並べ、操作の
-/// リンク（用途の編集、削除）を続ける。使っていない用途は出さず、URL は `break-all`、
-/// 用途の語とバッジは `whitespace-nowrap`。
+/// リレーは 1 行につき `<li>` 1 件で、監視、バンカーの順に用途のアイコン・語・状態の
+/// バッジを並べ、アイコンだけの操作のリンク（用途の編集、削除）を続ける。使っていない
+/// 用途は「未使用」のバッジで出し、URL は `break-all`。
 pub fn relays_are_listed_one_item_per_row_test() {
   let body = dashboard.render(i18n.English, view.System, states())
+  let role = fn(icon, label, badge) {
+    "<span class=\"flex items-center gap-2\">"
+    <> element.to_string(icon)
+    <> "<span class=\"whitespace-nowrap\">"
+    <> label
+    <> "</span>"
+    <> element.to_string(badge)
+    <> "</span>"
+  }
+  let actions = fn(id) {
+    "<div class=\"flex shrink-0 flex-wrap gap-2\">"
+    <> element.to_string(view.icon_only_link(
+      "/relays/" <> id <> "/edit",
+      view.pencil_icon(),
+      "Edit roles",
+      view.Normal,
+    ))
+    <> element.to_string(view.icon_only_link(
+      "/relays/" <> id <> "/delete",
+      view.trash_icon(),
+      "Delete relay",
+      view.Destructive,
+    ))
+    <> "</div>"
+  }
   assert string.contains(
     body,
-    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-success whitespace-nowrap\">connected</span></span><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">bunker</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/1/edit\">Edit roles</a><a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/1/delete\">Delete relay</a></div></li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\"><span class=\"flex items-center gap-2\"><span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-error whitespace-nowrap\">disconnected</span></span></div></div><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/2/edit\">Edit roles</a><a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/2/delete\">Delete relay</a></div></li></ul>",
+    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
+      <> role(
+      view.eye_icon(),
+      "monitor",
+      view.status_badge(view.Success, "connected"),
+    )
+      <> role(
+      view.key_icon(),
+      "bunker",
+      view.status_badge(view.Failure, "disconnected"),
+    )
+      <> "</div></div>"
+      <> actions("1")
+      <> "</li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
+      <> role(
+      view.eye_icon(),
+      "monitor",
+      view.status_badge(view.Failure, "disconnected"),
+    )
+      <> role(
+      view.key_icon(),
+      "bunker",
+      view.status_badge(view.Neutral, "Unused"),
+    )
+      <> "</div></div>"
+      <> actions("2")
+      <> "</li></ul>",
   )
 }
 
-/// リレーの行のリンクは、用途の編集が通常の重さ、削除が注意の重さ。
+/// リレーの行のリンクは、用途の編集が通常の重さ、削除が error 色の文字。
 pub fn relay_rows_link_to_edit_and_delete_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    "<a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/1/edit\">Edit roles</a>",
+    element.to_string(view.icon_only_link(
+      "/relays/1/edit",
+      view.pencil_icon(),
+      "Edit roles",
+      view.Normal,
+    )),
   )
   assert string.contains(
     body,
-    "<a class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" href=\"/relays/1/delete\">Delete relay</a>",
+    element.to_string(view.icon_only_link(
+      "/relays/1/delete",
+      view.trash_icon(),
+      "Delete relay",
+      view.Destructive,
+    )),
   )
 }
 
@@ -508,17 +761,66 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
     )
   assert string.contains(
     body,
-    "<span class=\"whitespace-nowrap\">monitor</span><span class=\"badge badge-sm badge-ghost whitespace-nowrap\">unavailable</span>",
+    "<span class=\"whitespace-nowrap\">monitor</span>"
+      <> element.to_string(view.status_badge(view.Neutral, "unavailable")),
   )
   assert string.contains(body, "wss://a")
-  assert string.contains(body, "href=\"/relays/1/edit\">Edit roles</a>")
-  assert string.contains(body, "href=\"/relays/1/delete\">Delete relay</a>")
+  assert string.contains(body, "href=\"/relays/1/edit\"")
+  assert string.contains(body, "href=\"/relays/1/delete\"")
+}
+
+/// 用途 2 つ（監視、バンカー）は必ず並び、使っていない側は「未使用」のバッジで出す。
+pub fn unused_relay_roles_are_shown_as_unused_test() {
+  let body =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(
+        ..states(),
+        relays: Ok([
+          dashboard.RelayRow(
+            1,
+            "wss://a",
+            dashboard.Reported(relay_connection.Connected),
+            dashboard.Unused,
+          ),
+        ]),
+      ),
+    )
+  assert string.contains(
+    body,
+    "<span class=\"whitespace-nowrap\">monitor</span>",
+  )
+  assert string.contains(
+    body,
+    "<span class=\"whitespace-nowrap\">bunker</span>"
+      <> element.to_string(view.status_badge(view.Neutral, "Unused")),
+  )
+}
+
+/// リレーの行の用途の編集と削除のリンクは、アイコンだけで `aria-label` を持ち、語は
+/// ボタンの中身には出ない。
+pub fn relay_actions_are_icon_only_with_labels_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(body, "aria-label=\"Edit roles\"")
+  assert string.contains(body, "aria-label=\"Delete relay\"")
+  assert !string.contains(body, ">Edit roles<")
+  assert !string.contains(body, ">Delete relay<")
 }
 
 /// バンカーに使う行が 1 件も無ければ、見出しの直後に警告が出て一覧は出さない。監視だけの
 /// 行があれば警告の後に一覧を出し、バンカーの行が 1 件でもあれば警告を出さない
 /// （`states()` はバンカーの行を持つので、上のテストの描画に警告が無いことで確かめる）。
 pub fn no_bunker_relay_is_warned_test() {
+  let add_action =
+    "<div class=\"flex shrink-0 flex-wrap gap-2\">"
+    <> element.to_string(view.icon_button_link(
+      "/relays/new",
+      view.plus_icon(),
+      "Add",
+      view.Primary,
+    ))
+    <> "</div>"
   let no_rows =
     dashboard.render(
       i18n.English,
@@ -527,7 +829,10 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     no_rows,
-    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\">"
+    "Relays</h2>"
+      <> "</div>"
+      <> add_action
+      <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
   )
@@ -549,7 +854,11 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     monitor_only,
-    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\">"
+    "Relays</h2>"
+      <> element.to_string(view.count_pill(1))
+      <> "</div>"
+      <> add_action
+      <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
@@ -564,15 +873,20 @@ pub fn no_bunker_relay_is_warned_test() {
 pub fn unlisted_relays_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
+  let empty_actions = "<div class=\"flex shrink-0 flex-wrap gap-2\"></div>"
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
-    "Relays</h2></div><div class=\"alert alert-soft text-base-content\">"
+    "Relays</h2></div>"
+      <> empty_actions
+      <> "</div><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
-    "リレー</h2></div><div class=\"alert alert-soft text-base-content\">"
+    "リレー</h2></div>"
+      <> empty_actions
+      <> "</div><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
@@ -599,7 +913,7 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
 /// リレーの節の見出しの行は、一覧を得たときだけ追加のリンクを出す。
 pub fn relays_heading_links_to_add_a_relay_test() {
   let ok = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(ok, "href=\"/relays/new\">Add relay</a>")
+  assert string.contains(ok, "href=\"/relays/new\"")
 
   let unavailable =
     dashboard.render(
@@ -613,7 +927,7 @@ pub fn relays_heading_links_to_add_a_relay_test() {
 /// セッションの節の見出しの行は、一覧を得たときだけクライアントの接続へのリンクを出す。
 pub fn sessions_heading_links_to_connect_a_client_test() {
   let ok = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(ok, "href=\"/sessions/connect\">Connect a client</a>")
+  assert string.contains(ok, "href=\"/sessions/connect\"")
 
   let unavailable =
     dashboard.render(
@@ -633,15 +947,67 @@ pub fn accounts_heading_has_a_reload_form_test() {
   )
 }
 
-/// 一覧を得られないときはアカウントの節の見出しに読み直しのフォームも出さない。
-pub fn no_reload_form_without_the_account_list_test() {
+/// 一覧を得られないときも、アカウントの節の見出しの読み直しのフォームは出したままにする
+/// （追加のリンクは一覧を得たときだけ出す）。
+pub fn the_reload_form_stays_without_the_account_list_test() {
   let unavailable =
     dashboard.render(
       i18n.English,
       view.System,
       dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
     )
-  assert !string.contains(unavailable, "/accounts/reload")
+  assert string.contains(unavailable, "/accounts/reload")
+  assert !string.contains(unavailable, "/accounts/new")
+}
+
+/// アカウント・セッション・リレーの見出しは、一覧を得て 1 件以上あるときだけ題の直後に
+/// 件数のピルを出す。一覧を得られない節にはピルを出さない。
+pub fn section_headings_show_the_count_pill_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    body,
+    "Relays</h2>" <> element.to_string(view.count_pill(2)),
+  )
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(
+        ..states(),
+        accounts: Error(i18n.Untranslated("boom")),
+        sessions: Error(i18n.Untranslated("boom")),
+        relays: Error(i18n.Untranslated("boom")),
+      ),
+    )
+  assert !string.contains(unavailable, "Accounts</h2><span class=\"badge")
+  assert !string.contains(
+    unavailable,
+    "Approved sessions</h2><span class=\"badge",
+  )
+  assert !string.contains(unavailable, "Relays</h2><span class=\"badge")
+}
+
+/// 空のアカウント・セッション・プラグインの節は、アイコンと 1 文を出し、件数のピルは
+/// 出さない。
+pub fn empty_sections_show_an_icon_and_a_sentence_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([]),
+      sessions: Ok([]),
+      plugins: [],
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(
+    body,
+    "No accounts registered. Use &quot;Add&quot; to import an nsec or generate a key.",
+  )
+  assert string.contains(body, "No approved sessions.")
+  assert string.contains(body, "No plugins enabled.")
+  assert !string.contains(body, "Accounts</h2><span class=\"badge")
+  assert !string.contains(body, "Approved sessions</h2><span class=\"badge")
+  assert !string.contains(body, "Plugins</h2><span class=\"badge")
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。

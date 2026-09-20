@@ -150,6 +150,8 @@ pub type Snapshot {
     /// 超過）は表示する理由。
     sessions: Result(List(SessionRow), i18n.Reason),
     plugins: List(PluginRow),
+    /// 描画時点の Unix 秒。セッションの最終利用を相対で出すために使う。
+    now: Int,
   )
 }
 
@@ -305,7 +307,12 @@ pub fn render(
           [
             accounts_section(language, snapshot.accounts),
             skipped_section(language, snapshot.skipped),
-            sessions_section(language, snapshot.sessions),
+            sessions_section(
+              language,
+              snapshot.accounts,
+              snapshot.now,
+              snapshot.sessions,
+            ),
           ],
         ),
         html.div(
@@ -549,23 +556,38 @@ fn accounts_section(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_card(accounts_anchor, [
-    section_heading(language, accounts, i18n.Accounts, [
-      view.button_link(
-        view.segments_path(new_account_segments),
-        text(i18n.AddAccount),
-        view.Primary,
-      ),
-      reload_form(language),
-    ]),
+    section_heading(
+      language,
+      accounts,
+      view.users_icon(),
+      i18n.Accounts,
+      [
+        view.icon_button_link(
+          view.segments_path(new_account_segments),
+          view.plus_icon(),
+          text(i18n.Add),
+          view.Primary,
+        ),
+      ],
+      [reload_form(language)],
+    ),
     listed_body(
       language,
       view.Neutral,
       accounts,
       i18n.CouldNotListAccounts,
-      view.hint(text(i18n.NoAccounts)),
+      empty_state(view.users_icon(), text(i18n.NoAccounts)),
       fn(rows) { item_list(list.map(rows, account_item(language, _))) },
     ),
   ])
+}
+
+/// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
+fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
+  html.div(
+    [attribute.class("flex items-center gap-2 text-sm text-base-content/70")],
+    [icon, html.text(text)],
+  )
 }
 
 /// 直近の読み込みで飛ばされた行。1 件以上あるときだけカードを描く。一覧を
@@ -577,7 +599,14 @@ fn skipped_section(
   case skipped {
     Ok([_, ..] as rows) ->
       view.card([
-        view.heading(i18n.text(language, i18n.UnreadableAccounts)),
+        heading_row(
+          html.div([attribute.class("flex items-center gap-2")], [
+            view.warning_triangle_icon(),
+            view.heading(i18n.text(language, i18n.UnreadableAccounts)),
+            view.count_pill(list.length(rows)),
+          ]),
+          element.none(),
+        ),
         view.alert(view.Warning, [
           html.text(i18n.text(language, i18n.UnreadableAccountsWarning)),
         ]),
@@ -605,15 +634,16 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
     _ ->
       entry_item([
         html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-          identity(row.label, row.npub, row.pubkey),
+          identity(language, row.label, row.npub),
           html.p([attribute.class("text-sm")], [
             html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
           ]),
         ]),
         button_row([
-          view.button_link(
+          view.icon_button_link(
             account_action_path(row.pubkey, DeleteAccount),
-            i18n.text(language, account_action_title(DeleteAccount)),
+            view.trash_icon(),
+            i18n.text(language, i18n.Delete),
             view.Destructive,
           ),
         ]),
@@ -621,25 +651,38 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 節の見出しと、一覧を得たときだけ出す操作の行。アカウント、セッション、リレーの節が使う。
+/// 節の見出しと、操作の行。アイコン、題、一覧を得たときだけ出す件数のピルを左に、操作を
+/// 右に置く。一覧を得たときだけ出す操作と、常に出す操作を分けて受け取る。
 fn section_heading(
   language: Language,
-  listing: Result(a, i18n.Reason),
+  listing: Result(List(a), i18n.Reason),
+  icon: Element(msg),
   title: i18n.Message,
-  actions: List(Element(msg)),
+  listed_actions: List(Element(msg)),
+  always_actions: List(Element(msg)),
 ) -> Element(msg) {
-  let row = case listing {
-    Ok(_) -> button_row(actions)
-    Error(_) -> element.none()
+  let base = [icon, view.heading(i18n.text(language, title))]
+  let left = case listing {
+    Ok([_, ..] as rows) ->
+      list.append(base, [view.count_pill(list.length(rows))])
+    Ok([]) | Error(_) -> base
   }
-  heading_row(i18n.text(language, title), row)
+  let actions = case listing {
+    Ok(_) -> list.append(listed_actions, always_actions)
+    Error(_) -> always_actions
+  }
+  heading_row(
+    html.div([attribute.class("flex items-center gap-2")], left),
+    button_row(actions),
+  )
 }
 
-/// 節の見出しと、それに並べる要素の行。要素は幅が余れば右に寄る（狭い幅では下に落ちる）。
-fn heading_row(title: String, trailing: Element(msg)) -> Element(msg) {
+/// 節の見出しの左側の要素と、それに並べる要素の行。要素は幅が余れば右に寄る
+/// （狭い幅では下に落ちる）。
+fn heading_row(left: Element(msg), trailing: Element(msg)) -> Element(msg) {
   html.div(
     [attribute.class("flex flex-wrap items-center justify-between gap-2")],
-    [view.heading(title), trailing],
+    [left, trailing],
   )
 }
 
@@ -661,59 +704,79 @@ fn listed_body(
   }
 }
 
-/// アカウント 1 件。識別、2 つの接続 URI、操作のリンクを縦に並べる。
+/// アカウント 1 件。識別、接続 URI と公開鍵の畳み、操作のリンクを縦に並べる。
 fn account_item(language: Language, account: AccountRow) -> Element(msg) {
-  let text = i18n.text(language, _)
   html.li([attribute.class("flex flex-col gap-3 py-4 first:pt-0 last:pb-0")], [
-    identity(account.label, account.npub, account.signer),
+    identity(language, account.label, account.npub),
+    uri_details(language, account),
+    account_action_links(language, account.signer),
+  ])
+}
+
+/// アカウントを識別する、ラベルと省略した npub。読み込みで飛ばされた行の一覧からも使う。
+/// 16 進の公開鍵はここには出さず、接続 URI の畳みの中だけに出す。
+fn identity(language: Language, label: String, npub: String) -> Element(msg) {
+  html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
+    view.truncated_id(language, npub, i18n.text(language, i18n.CopyNpub)),
+  ])
+}
+
+/// 接続 URI と公開鍵の畳み。secret 入りの URI、要承認の URI、16 進の公開鍵の 3 つの
+/// コピー欄を `view.details_panel` の中に置く。
+fn uri_details(language: Language, account: AccountRow) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.details_panel(text(i18n.ConnectionUrisAndPublicKey), [
     view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
     view.copyable_field(
       language,
       text(i18n.ConnectionUriForApproval),
       account.auth_uri,
     ),
-    account_action_links(language, account.signer),
+    view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
   ])
 }
 
-/// アカウントを識別する、ラベル、npub、16 進の公開鍵。アカウントと、読み込みで
-/// 飛ばされた行のどちらの一覧からも使う。
-fn identity(label: String, npub: String, pubkey: String) -> Element(msg) {
-  html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
-    html.p([attribute.class("font-mono text-xs break-all")], [
-      html.text(npub),
-    ]),
-    html.p(
-      [attribute.class("font-mono text-xs break-all text-base-content/70")],
-      [
-        html.text(pubkey),
-      ],
-    ),
-  ])
-}
-
-/// アカウント 1 件への操作のページへのリンク。
+/// アカウント 1 件への操作のリンク。すべてアイコン＋語の ghost にし、削除だけ短い語と
+/// `text-error` にする。
 fn account_action_links(language: Language, signer: String) -> Element(msg) {
   html.div(
     [attribute.class("flex flex-wrap gap-2")],
     list.map(account_actions, fn(action) {
-      view.button_link(
+      view.icon_button_link(
         account_action_path(signer, action),
-        i18n.text(language, account_action_title(action)),
+        account_action_icon(action),
+        i18n.text(language, account_action_row_title(action)),
         account_action_link_weight(action),
       )
     }),
   )
 }
 
-/// 操作のページへのリンクの重さ。行き先の操作の重さを付けるが、秘密鍵の表示は開くだけでは
-/// 何も起きず（管理パスワードの再入力が要る）、色付きのボタンが並ぶと削除の色が埋もれるので
-/// 通常にする。
+/// アカウント 1 件への操作のアイコン。
+fn account_action_icon(action: AccountAction) -> Element(msg) {
+  case action {
+    EditLabel -> view.pencil_icon()
+    RevealPrivateKey -> view.eye_icon()
+    RotateSecret -> view.rotate_icon()
+    DeleteAccount -> view.trash_icon()
+  }
+}
+
+/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。行き先のページの題は
+/// `account_action_title` のまま変えない。
+fn account_action_row_title(action: AccountAction) -> i18n.Message {
+  case action {
+    DeleteAccount -> i18n.Delete
+    EditLabel | RevealPrivateKey | RotateSecret -> account_action_title(action)
+  }
+}
+
+/// アカウント 1 件への操作のボタンの重さ。行の操作はすべて ghost にし、削除だけ error 色の
+/// 文字にする。
 fn account_action_link_weight(action: AccountAction) -> view.Weight {
   case action {
-    EditLabel | RevealPrivateKey -> view.Normal
-    RotateSecret -> view.Caution
+    EditLabel | RevealPrivateKey | RotateSecret -> view.Normal
     DeleteAccount -> view.Destructive
   }
 }
@@ -734,7 +797,7 @@ fn pending_section(
         Error(_) -> element.none()
       }
       view.warning_card(pending_anchor, [
-        heading_row(text(i18n.PendingConnections), pill),
+        heading_row(view.heading(text(i18n.PendingConnections)), pill),
         listed_body(
           language,
           view.Failure,
@@ -919,11 +982,19 @@ pub fn parse_relay_action_path(
 }
 
 /// 操作のページへのリンクの重さ。編集は開くだけなので通常、削除は接続中のクライアントに
-/// 影響するので注意にする。
+/// 影響するので、error 色の文字にする。
 fn relay_action_link_weight(action: RelayAction) -> view.Weight {
   case action {
     EditRelayRoles -> view.Normal
-    DeleteRelay -> view.Caution
+    DeleteRelay -> view.Destructive
+  }
+}
+
+/// リレー 1 件への操作のアイコン。
+fn relay_action_icon(action: RelayAction) -> Element(msg) {
+  case action {
+    EditRelayRoles -> view.pencil_icon()
+    DeleteRelay -> view.trash_icon()
   }
 }
 
@@ -1018,30 +1089,30 @@ fn perms_chips(language: Language, perms: String) -> Element(msg) {
   }
 }
 
-/// 要求された権限の値。空なら署名と暗号化を拒否する旨の文を本文の書体で、空でなければ
-/// 値をそのまま等幅で出す。承認済みセッションの節が使う。
-fn perms_value(language: Language, perms: String) -> view.Value {
-  case perms {
-    "" -> view.Plain(i18n.text(language, i18n.NoPermissionsRequested))
-    _ -> view.Code(perms)
-  }
-}
-
-/// リレーの一覧。1 件は `relays` の 1 行で、使っている用途ごとに用途の語と状態を並べる。
+/// リレーの一覧。1 件は `relays` の 1 行で、監視、バンカーの順に用途の語と状態を並べる。
 /// 一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が無ければ警告を、
 /// 一覧を得られないときは理由を出す。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
+  let text = i18n.text(language, _)
   view.section_card(relays_anchor, [
-    section_heading(language, relays, i18n.Relays, [
-      view.button_link(
-        view.segments_path(new_relay_segments),
-        i18n.text(language, i18n.AddRelay),
-        view.Primary,
-      ),
-    ]),
+    section_heading(
+      language,
+      relays,
+      view.plug_icon(),
+      i18n.Relays,
+      [
+        view.icon_button_link(
+          view.segments_path(new_relay_segments),
+          view.plus_icon(),
+          text(i18n.Add),
+          view.Primary,
+        ),
+      ],
+      [],
+    ),
     no_bunker_relay_warning(language, relays),
     listed_body(
       language,
@@ -1072,25 +1143,24 @@ fn no_bunker_relay_warning(
   }
 }
 
-/// リレー 1 件。URL と、使っている用途の語と状態の組を監視、バンカーの順に並べ、
-/// 操作のリンク（用途の編集、削除）を続ける。使っていない用途（`Unused`）は出さない。
+/// リレー 1 件。URL と、用途の語と状態の組を監視、バンカーの順に並べ、アイコンだけの
+/// 操作のリンク（用途の編集、削除）を続ける。使っていない用途は「未使用」のバッジで出す。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   entry_item([
     html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
       html.p([attribute.class("font-mono text-xs break-all")], [
         html.text(row.url),
       ]),
-      html.div(
-        [attribute.class("flex flex-wrap gap-x-4 gap-y-1 text-sm")],
-        [#(i18n.MonitorRole, row.monitor), #(i18n.BunkerRole, row.bunker)]
-          |> list.filter(fn(role) { role.1 != Unused })
-          |> list.map(fn(role) { relay_role(language, role.0, role.1) }),
-      ),
+      html.div([attribute.class("flex flex-wrap gap-x-4 gap-y-1 text-sm")], [
+        relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
+        relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
+      ]),
     ]),
     button_row(
       list.map(relay_actions, fn(action) {
-        view.button_link(
+        view.icon_only_link(
           relay_action_path(row.id, action),
+          relay_action_icon(action),
           i18n.text(language, relay_action_title(action)),
           relay_action_link_weight(action),
         )
@@ -1099,25 +1169,23 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   ])
 }
 
-/// 用途の語と、その用途の状態のバッジの組。呼び出し元が `Unused` を除いてから渡す。
+/// 用途のアイコンと語、その用途の状態のバッジの組。
 fn relay_role(
   language: Language,
+  icon: Element(msg),
   role: i18n.Message,
   state: RoleState,
 ) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let badge = case state {
+    Reported(status) -> relay_status(language, status)
+    Unanswered -> view.status_badge(view.Neutral, text(i18n.PluginUnavailable))
+    Unused -> view.status_badge(view.Neutral, text(i18n.RelayRoleUnused))
+  }
   html.span([attribute.class("flex items-center gap-2")], [
-    html.span([attribute.class("whitespace-nowrap")], [
-      html.text(i18n.text(language, role)),
-    ]),
-    case state {
-      Reported(status) -> relay_status(language, status)
-      Unanswered ->
-        html.span(
-          [attribute.class("badge badge-sm badge-ghost whitespace-nowrap")],
-          [html.text(i18n.text(language, i18n.PluginUnavailable))],
-        )
-      Unused -> element.none()
-    },
+    icon,
+    html.span([attribute.class("whitespace-nowrap")], [html.text(text(role))]),
+    badge,
   ])
 }
 
@@ -1125,47 +1193,99 @@ fn relay_role(
 /// 代わりにその理由を出す。
 fn sessions_section(
   language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  now: Int,
   sessions: Result(List(SessionRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_card(sessions_anchor, [
-    section_heading(language, sessions, i18n.ApprovedSessions, [
-      view.button_link(
-        view.segments_path(connect_segments),
-        text(i18n.ConnectClient),
-        view.Primary,
-      ),
-    ]),
+    section_heading(
+      language,
+      sessions,
+      view.clock_icon(),
+      i18n.ApprovedSessions,
+      [
+        view.icon_button_link(
+          view.segments_path(connect_segments),
+          view.plus_icon(),
+          text(i18n.ConnectClient),
+          view.Primary,
+        ),
+      ],
+      [],
+    ),
     listed_body(
       language,
       view.Neutral,
       sessions,
       i18n.CouldNotListSessions,
-      view.hint(text(i18n.NoApprovedSessions)),
+      empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),
       fn(rows) {
-        item_list(
-          list.map(rows, fn(session) {
-            entry_item([
-              view.summary_list([
-                #(text(i18n.Signer), view.Code(session.signer)),
-                #(text(i18n.Client), view.Code(session.client)),
-                #(text(i18n.Permissions), perms_value(language, session.perms)),
-                #(
-                  text(i18n.Created),
-                  view.Timestamp(utc_time(session.created_at)),
-                ),
-                #(
-                  text(i18n.LastUsed),
-                  view.Timestamp(utc_time(session.last_used_at)),
-                ),
-              ]),
-              button_row([revoke_form(language, session)]),
-            ])
-          }),
-        )
+        item_list(list.map(rows, session_item(language, accounts, now, _)))
       },
     ),
   ])
+}
+
+/// 承認済みセッション 1 件。クライアントの省略 id、署名者、権限のチップ、最終利用の相対
+/// 時刻と、取り消しのボタンを並べる。
+fn session_item(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  now: Int,
+  session: SessionRow,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  entry_item([
+    view.detail_list([
+      #(
+        text(i18n.Client),
+        html.dd([], [
+          view.truncated_id(language, session.client, text(i18n.CopyClient)),
+        ]),
+      ),
+      #(
+        text(i18n.Signer),
+        html.dd([], [signer_value(signer_name(accounts, session.signer))]),
+      ),
+      #(
+        text(i18n.Permissions),
+        html.dd([], [perms_chips(language, session.perms)]),
+      ),
+      #(
+        text(i18n.LastUsed),
+        html.dd([], [
+          html.span([attribute.title(session_time_title(language, session))], [
+            html.text(text(relative_time(now, session.last_used_at))),
+          ]),
+        ]),
+      ),
+    ]),
+    button_row([revoke_form(language, session)]),
+  ])
+}
+
+/// 最終利用の `title` に出す、UTC の全文と作成時刻。
+fn session_time_title(language: Language, session: SessionRow) -> String {
+  let text = i18n.text(language, _)
+  text(i18n.LastUsed)
+  <> ": "
+  <> utc_time(session.last_used_at)
+  <> " · "
+  <> text(i18n.Created)
+  <> ": "
+  <> utc_time(session.created_at)
+}
+
+/// 描画時点から見た相対表示の文言。60 秒未満は「たった今」、1 時間未満は分、1 日未満は
+/// 時間、それ以上は日で出す。未来の時刻は「たった今」にする。
+pub fn relative_time(now: Int, at: Int) -> i18n.Message {
+  case int.max(now - at, 0) {
+    diff if diff < 60 -> i18n.JustNow
+    diff if diff < 3600 -> i18n.MinutesAgo(diff / 60)
+    diff if diff < 86_400 -> i18n.HoursAgo(diff / 3600)
+    diff -> i18n.DaysAgo(diff / 86_400)
+  }
 }
 
 /// Unix 秒を RFC 3339 の UTC の文字列（`2026-09-13T05:12:34Z`）にする。
@@ -1180,34 +1300,31 @@ fn plugins_section(
   plugins: List(PluginRow),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  use rows <- section(
-    plugins_anchor,
-    text(i18n.Plugins),
-    plugins,
-    text(i18n.NoPlugins),
-  )
-  view.table(
-    [text(i18n.NameColumn), text(i18n.StateColumn)],
-    list.map(rows, fn(plugin) {
-      [
-        html.td([attribute.class("break-words")], [html.text(plugin.name)]),
-        html.td([], [plugin_state(language, plugin)]),
-      ]
-    }),
-  )
-}
-
-/// 見出しと本文からなる 1 節。行が無いときは本文の代わりに一言を出す。
-fn section(
-  id: String,
-  title: String,
-  rows: List(a),
-  empty: String,
-  render: fn(List(a)) -> Element(msg),
-) -> Element(msg) {
-  view.section_card(id, [
-    view.heading(title),
-    section_body(rows, view.hint(empty), render),
+  view.section_card(plugins_anchor, [
+    section_heading(
+      language,
+      Ok(plugins),
+      view.puzzle_icon(),
+      i18n.Plugins,
+      [],
+      [],
+    ),
+    case plugins {
+      [] -> empty_state(view.puzzle_icon(), text(i18n.NoPlugins))
+      rows ->
+        view.table(
+          [text(i18n.NameColumn), text(i18n.StateColumn), ""],
+          list.map(rows, fn(plugin) {
+            [
+              html.td([attribute.class("break-words")], [
+                html.text(plugin.name),
+              ]),
+              html.td([], [plugin_state(language, plugin)]),
+              html.td([], reenable_form_if_disabled(language, plugin)),
+            ]
+          }),
+        )
+    },
   ])
 }
 
@@ -1321,38 +1438,30 @@ fn reload_form(language: Language) -> Element(msg) {
 
 /// リレーの接続状態のバッジ。
 fn relay_status(language: Language, status: Status) -> Element(msg) {
-  let class = case status {
-    Connected -> "badge badge-sm badge-success whitespace-nowrap"
-    Disconnected -> "badge badge-sm badge-error whitespace-nowrap"
+  let tone = case status {
+    Connected -> view.Success
+    Disconnected -> view.Failure
   }
-  html.span([attribute.class(class)], [
-    html.text(i18n.text(language, status_label(status))),
-  ])
+  view.status_badge(tone, i18n.text(language, status_label(status)))
 }
 
 /// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
-/// 一時的な状態なので、異常の色にしない。`Disabled` のときだけ、詳細の下に再有効化の
-/// ボタンを並べる。
+/// 一時的な状態なので、異常の色にしない。
 fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
-  let status = plugin.status
-  let class = case status {
-    None -> "badge badge-sm badge-ghost whitespace-nowrap"
-    Some(plugin_runner.Running) ->
-      "badge badge-sm badge-success whitespace-nowrap"
-    Some(plugin_runner.Overloaded(..)) ->
-      "badge badge-sm badge-warning whitespace-nowrap"
-    Some(plugin_runner.Disabled(..)) ->
-      "badge badge-sm badge-error whitespace-nowrap"
+  let tone = case plugin.status {
+    None -> view.Neutral
+    Some(plugin_runner.Running) -> view.Success
+    Some(plugin_runner.Overloaded(..)) -> view.Warning
+    Some(plugin_runner.Disabled(..)) -> view.Failure
   }
-  let #(word, detail) = plugin_state_label(language, status)
-  let badge = html.span([attribute.class(class)], [html.text(word)])
+  let #(word, detail) = plugin_state_label(language, plugin.status)
+  let badge = view.status_badge(tone, word)
   case detail {
     None -> badge
     Some(detail) ->
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
-        ..reenable_form_if_disabled(language, plugin)
       ])
   }
 }

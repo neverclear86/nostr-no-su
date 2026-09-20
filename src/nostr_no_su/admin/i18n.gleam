@@ -245,10 +245,15 @@ pub type Message {
   NoPermissionsRequested
   Created
   LastUsed
+  JustNow
+  MinutesAgo(minutes: Int)
+  HoursAgo(hours: Int)
+  DaysAgo(days: Int)
   Approve
   Deny
   ApprovalExplanation
   Accounts
+  Add
   AddAccount
   NoAccounts
   ReloadAccounts
@@ -259,10 +264,13 @@ pub type Message {
   ReasonLabel
   ConnectionUri
   ConnectionUriForApproval
+  ConnectionUrisAndPublicKey
+  PublicKeyHex
   EditLabel
   ShowPrivateKey
   RotateSecret
   DeleteAccount
+  Delete
   ApprovedSessions
   NoApprovedSessions
   Revoke
@@ -271,6 +279,7 @@ pub type Message {
   StateColumn
   MonitorRole
   BunkerRole
+  RelayRoleUnused
   RelayConnected
   RelayDisconnected
   NoBunkerRelay
@@ -453,13 +462,19 @@ fn english(message: Message) -> String {
       "None requested. Signing and encryption are refused."
     Created -> "Created"
     LastUsed -> "Last used"
+    JustNow -> "just now"
+    MinutesAgo(minutes:) -> int.to_string(minutes) <> " min ago"
+    HoursAgo(hours:) -> int.to_string(hours) <> " h ago"
+    DaysAgo(days:) -> int.to_string(days) <> " d ago"
     Approve -> "Approve"
     Deny -> "Deny"
     ApprovalExplanation ->
       "Approving lets this client request signing and encryption within the permissions above. The permissions are fixed at approval."
     Accounts -> "Accounts"
+    Add -> "Add"
     AddAccount -> "Add account"
-    NoAccounts -> "No accounts registered."
+    NoAccounts ->
+      "No accounts registered. Use \"Add\" to import an nsec or generate a key."
     ReloadAccounts -> "Reload from database"
     UnreadableAccounts -> "Unreadable accounts"
     UnreadableAccountsWarning ->
@@ -470,10 +485,13 @@ fn english(message: Message) -> String {
     ReasonLabel -> "Reason"
     ConnectionUri -> "Connection URI"
     ConnectionUriForApproval -> "Connection URI (approval)"
+    ConnectionUrisAndPublicKey -> "Connection URIs and public key"
+    PublicKeyHex -> "Public key (hex)"
     EditLabel -> "Edit label"
     ShowPrivateKey -> "Show private key"
     RotateSecret -> "Rotate secret"
     DeleteAccount -> "Delete account"
+    Delete -> "Delete"
     ApprovedSessions -> "Approved sessions"
     NoApprovedSessions -> "No approved sessions."
     Revoke -> "Revoke"
@@ -482,6 +500,7 @@ fn english(message: Message) -> String {
     StateColumn -> "State"
     MonitorRole -> "monitor"
     BunkerRole -> "bunker"
+    RelayRoleUnused -> "Unused"
     RelayConnected -> "connected"
     RelayDisconnected -> "disconnected"
     NoBunkerRelay ->
@@ -688,13 +707,18 @@ fn japanese(message: Message) -> String {
     NoPermissionsRequested -> "要求なし。署名と暗号化は拒否します。"
     Created -> "作成"
     LastUsed -> "最終利用"
+    JustNow -> "たった今"
+    MinutesAgo(minutes:) -> int.to_string(minutes) <> " 分前"
+    HoursAgo(hours:) -> int.to_string(hours) <> " 時間前"
+    DaysAgo(days:) -> int.to_string(days) <> " 日前"
     Approve -> "承認する"
     Deny -> "拒否する"
     ApprovalExplanation ->
       "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は後から変わりません。"
     Accounts -> "アカウント"
+    Add -> "追加"
     AddAccount -> "アカウントを追加"
-    NoAccounts -> "登録されたアカウントはありません。"
+    NoAccounts -> "登録されたアカウントはありません。「追加」から nsec の登録か鍵の生成ができます。"
     ReloadAccounts -> "DB から読み直す"
     UnreadableAccounts -> "読み込めなかったアカウント"
     UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
@@ -703,10 +727,13 @@ fn japanese(message: Message) -> String {
     ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"
     ConnectionUriForApproval -> "接続 URI（要承認）"
+    ConnectionUrisAndPublicKey -> "接続 URI と公開鍵"
+    PublicKeyHex -> "公開鍵（16 進）"
     EditLabel -> "ラベルを編集"
     ShowPrivateKey -> "秘密鍵を表示"
     RotateSecret -> "secret を再生成"
     DeleteAccount -> "アカウントを削除"
+    Delete -> "削除"
     ApprovedSessions -> "承認済みのセッション"
     NoApprovedSessions -> "承認済みのセッションはありません。"
     Revoke -> "承認を取り消す"
@@ -715,6 +742,7 @@ fn japanese(message: Message) -> String {
     StateColumn -> "状態"
     MonitorRole -> "監視"
     BunkerRole -> "バンカー"
+    RelayRoleUnused -> "未使用"
     RelayConnected -> "接続中"
     RelayDisconnected -> "未接続"
     NoBunkerRelay -> "バンカーに使うリレーがありません。リレーを追加するまで、クライアントはどのアカウントにも接続できません。"
