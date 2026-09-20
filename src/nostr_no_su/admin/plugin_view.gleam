@@ -19,7 +19,9 @@
 //// `table` のセルの `code` インラインだけである。
 ////
 //// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて `lang="en"`
-//// の祖先 1 つで包む。翻訳した文（空の節の案内）はその外に置く。
+//// の祖先 1 つで包む。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
+//// その外に置き、`pairs` の `items` が 0 件のときの案内は `lang="en"` の中で
+//// 表示の言語の `lang` を持つ `div` で上書きする。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
