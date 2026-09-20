@@ -6,6 +6,7 @@ import gleam/http
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import lustre/element
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -69,7 +70,9 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
   assert string.contains(
     failing,
-    "<div class=\"alert alert-soft text-base-content\"><span><span lang=\"en\">"
+    "<div class=\"alert alert-soft text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "<span><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
   )
@@ -368,7 +371,9 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
   let assert Ok(#(_before, after_alert)) =
     string.split_once(
       body,
-      "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\"><span>",
+      "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
+        <> element.to_string(view.tone_icon(view.Failure))
+        <> "<span>",
     )
   let assert Ok(#(reason_text, after_reason)) =
     string.split_once(after_alert, "</div>")
@@ -468,19 +473,25 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       context(),
       signer_nsec,
       409,
-      "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\"><span><span lang=\"en\">account is already registered</span></span></div>",
+      "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
+        <> element.to_string(view.tone_icon(view.Failure))
+        <> "<span><span lang=\"en\">account is already registered</span></span></div>",
     ),
     #(
       failing_context(bunker.NotReady("accounts are not loaded yet")),
       spec_nsec,
       503,
-      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\"><span>The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
+      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
+        <> element.to_string(view.tone_icon(view.Warning))
+        <> "<span>The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
     ),
     #(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       spec_nsec,
       202,
-      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\"><span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
+      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
+        <> element.to_string(view.tone_icon(view.Warning))
+        <> "<span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
     ),
   ]
   use #(ctx, nsec, status, alert) <- list.each(cases)
@@ -515,7 +526,9 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   assert string.contains(body, "action=\"/accounts/register-generated\"")
   assert string.contains(
     body,
-    "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\"><span>label must not contain control characters</span></div>",
+    "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
+      <> element.to_string(view.tone_icon(view.Failure))
+      <> "<span>label must not contain control characters</span></div>",
   )
   assert string.contains(body, "value=\"ab\"")
   assert !string.contains(body, "a\tb")

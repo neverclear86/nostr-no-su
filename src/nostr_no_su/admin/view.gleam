@@ -172,7 +172,7 @@ pub type Placement {
   InForm
 }
 
-/// 通知や理由の囲みの色。
+/// 通知や理由の囲みと、状態のバッジの色。
 pub type Tone {
   /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウント、
   /// 承認待ち、セッションの一覧を得られない）。
@@ -465,10 +465,12 @@ fn dropdown_item(
   )
 }
 
-/// 線で描く飾りの SVG アイコン。読み上げず、`currentColor` で線を描く。
+/// 線で描く飾りの SVG アイコン。読み上げず、`currentColor` で線を描く。`extra` は既定の属性の
+/// 並びの末尾に足す。
 fn icon_svg(
   class: String,
   view_box: String,
+  extra: List(Attribute(msg)),
   paths: List(String),
 ) -> Element(msg) {
   svg.svg(
@@ -479,6 +481,7 @@ fn icon_svg(
       attribute.attribute("stroke", "currentColor"),
       attribute.attribute("stroke-width", "2"),
       attribute.class(class),
+      ..extra
     ],
     list.map(paths, fn(path) { svg.path([attribute.attribute("d", path)]) }),
   )
@@ -486,24 +489,20 @@ fn icon_svg(
 
 /// 線で描く 16 × 16 の飾りのアイコン。読み上げない。
 fn icon(class: String, path: String) -> Element(msg) {
-  icon_svg(class, "0 0 16 16", [path])
+  icon_svg(class, "0 0 16 16", [], [path])
 }
 
 /// Lucide（ISC）の 24 × 24 のストロークアイコン。`currentColor` で描き、読み上げない飾りに
 /// する。
 pub fn lucide_icon(class: String, paths: List(String)) -> Element(msg) {
-  svg.svg(
+  icon_svg(
+    class,
+    "0 0 24 24",
     [
-      attribute.aria_hidden(True),
-      attribute.attribute("viewBox", "0 0 24 24"),
-      attribute.attribute("fill", "none"),
-      attribute.attribute("stroke", "currentColor"),
-      attribute.attribute("stroke-width", "2"),
       attribute.attribute("stroke-linecap", "round"),
       attribute.attribute("stroke-linejoin", "round"),
-      attribute.class(class),
     ],
-    list.map(paths, fn(path) { svg.path([attribute.attribute("d", path)]) }),
+    paths,
   )
 }
 
@@ -897,14 +896,19 @@ pub fn copyable_field(
   ])
 }
 
-/// 通知や理由を、トーンの色の囲みで出す。
+/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(tone))], [html.span([], content)])
+  html.div([attribute.class(alert_class(tone))], [
+    tone_icon(tone),
+    html.span([], content),
+  ])
 }
 
-/// フォームの上に出す理由の囲み。`role="alert"` で伝え、色を `tone` にする。
+/// フォームの上に出す理由の囲み。`role="alert"` で伝え、先頭のトーンのアイコンと薄い塗りで
+/// `tone` を伝える。
 pub fn reason_alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
   html.div([attribute.role("alert"), attribute.class(alert_class(tone))], [
+    tone_icon(tone),
     html.span([], content),
   ])
 }
@@ -946,9 +950,13 @@ pub fn untranslated(text: String) -> Element(msg) {
   html.span([attribute.lang("en")], [html.text(text)])
 }
 
-/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。
+/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。先頭に警告の
+/// アイコンを置く。
 pub fn warning(content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(Warning))], [html.p([], content)])
+  html.div([attribute.class(alert_class(Warning))], [
+    tone_icon(Warning),
+    html.p([], content),
+  ])
 }
 
 /// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に
@@ -975,13 +983,27 @@ fn alert_class(tone: Tone) -> String {
   }
 }
 
-/// トーンごとのアイコン。`alert` と `status_badge` が同じ対応で使う。
+/// トーンごとのアイコン。`Neutral` は情報、ほかはトーンの色（`text-success` など）を付けた
+/// 丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有する。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
-    Neutral -> info_icon()
-    Success -> check_circle_icon()
-    Warning -> warning_triangle_icon()
-    Failure -> x_circle_icon()
+    Neutral ->
+      lucide_icon("size-4", [
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
+      ])
+    Success ->
+      lucide_icon("size-4 text-success", [
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
+      ])
+    Warning ->
+      lucide_icon("size-4 text-warning", [
+        "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
+        "M12 9v4", "M12 17h.01",
+      ])
+    Failure ->
+      lucide_icon("size-4 text-error", [
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
+      ])
   }
 }
 

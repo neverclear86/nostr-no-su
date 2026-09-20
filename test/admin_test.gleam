@@ -1055,7 +1055,7 @@ pub fn notices_are_colored_by_outcome_test() {
       simulate.read_body(response),
       "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\""
         <> class
-        <> "\"><span>",
+        <> "\">",
     )
   })
 }

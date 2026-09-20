@@ -3,6 +3,7 @@
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import lustre/element
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
@@ -146,7 +147,7 @@ pub fn pending_secret_is_shown_test() {
   let assert Ok(#(before, after)) =
     string.split_once(
       body,
-      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45s</span></dd>",
+      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45s</span></dd>",
     )
   assert string.contains(
     before,
@@ -154,7 +155,7 @@ pub fn pending_secret_is_shown_test() {
   )
   assert string.contains(
     after,
-    "<dt class=\"text-base-content/70\">Secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>Mismatch</span></dd>",
+    "<dt class=\"text-base-content/70\">Secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>Mismatch</span></dd>",
   )
 }
 
@@ -164,7 +165,7 @@ pub fn japanese_pending_secret_is_translated_test() {
   let assert Ok(#(before, after)) =
     string.split_once(
       body,
-      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45 秒</span></dd>",
+      "<dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>45 秒</span></dd>",
     )
   assert string.contains(
     before,
@@ -172,7 +173,7 @@ pub fn japanese_pending_secret_is_translated_test() {
   )
   assert string.contains(
     after,
-    "<dt class=\"text-base-content/70\">secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>不一致</span></dd>",
+    "<dt class=\"text-base-content/70\">secret</dt><dd><span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\"><svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-4 text-warning\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"></path><path d=\"M12 9v4\"></path><path d=\"M12 17h.01\"></path></svg>不一致</span></dd>",
   )
 }
 
@@ -183,11 +184,15 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
 
   assert string.contains(
     dashboard.approval_page(i18n.English, view.System, mismatched),
-    "<div class=\"alert alert-soft alert-warning text-base-content\"><p><strong>The connection secret does not match.</strong> This happens when",
+    "<div class=\"alert alert-soft alert-warning text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Warning))
+      <> "<p><strong>The connection secret does not match.</strong> This happens when",
   )
   assert string.contains(
     dashboard.approval_page(i18n.Japanese, view.System, mismatched),
-    "<div class=\"alert alert-soft alert-warning text-base-content\"><p><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
+    "<div class=\"alert alert-soft alert-warning text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Warning))
+      <> "<p><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
   )
 
   assert !string.contains(
@@ -535,7 +540,9 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     no_rows,
-    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
+    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Warning))
+      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
   )
   let monitor_only =
     dashboard.render(
@@ -555,7 +562,9 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     monitor_only,
-    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\"><span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+    "Relays</h2><div class=\"flex shrink-0 flex-wrap gap-2\"><a class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" href=\"/relays/new\">Add relay</a></div></div><div class=\"alert alert-soft alert-warning text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Warning))
+      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -570,11 +579,15 @@ pub fn unlisted_relays_show_the_reason_test() {
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
-    "Relays</h2></div><div class=\"alert alert-soft text-base-content\"><span><span lang=\"en\">boom</span></span></div></div></section>",
+    "Relays</h2></div><div class=\"alert alert-soft text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
-    "リレー</h2></div><div class=\"alert alert-soft text-base-content\"><span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+    "リレー</h2></div><div class=\"alert alert-soft text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
 }
 
