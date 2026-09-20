@@ -127,7 +127,7 @@ fn runtime_section(processes: List(ProcessStatus)) -> Dynamic {
       section("Runtime", [
         table,
         alert_block(
-          "A process with no pending messages may be restarting or have "
+          "A process shown as not running may be restarting or have "
             <> "been given up on; see plugin-api.md section 5.4.",
           "warning",
         ),
