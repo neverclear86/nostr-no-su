@@ -154,7 +154,7 @@ pub type Pending {
 /// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
 /// 経っていれば更新する。`perms` はセッション内の `sign_event` と
 /// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
-/// の値から変わらない。
+/// の値から変わらない。空のときは既定の集合（`default_perms`）で照合する。
 pub type Session {
   Session(
     signer: String,
@@ -190,6 +190,12 @@ pub type Write {
     session: Session,
     evicted: List(#(String, String)),
   )
+}
+
+/// `handle_event` の結果。`notice` はログに出す 1 行で、出すものが無ければ
+/// `None`。
+pub type Handled {
+  Handled(engine: Engine, outcome: Outcome, notice: Option(String))
 }
 
 /// 受信イベント 1 件を処理した結果。
@@ -536,17 +542,18 @@ fn respond(
 
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
-/// `event.verify` で確かめてあり、エンジンは検証しない。第 1 要素は受理した
+/// `event.verify` で確かめてあり、エンジンは検証しない。`engine` は受理した
 /// イベントの id と、`TouchSession` を書こうとした組の試行の時刻を記録した
 /// エンジンで、セッションと承認待ちの変更は `Persist` の `next` に載せる。
+/// 権限の不足で拒否したときだけ `notice` にログの 1 行を入れる。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
   inputs: Inputs,
-) -> #(Engine, Outcome) {
+) -> Handled {
   let incoming = event.verified_event(verified)
   case accept(engine, incoming, inputs) {
-    Error(outcome) -> #(engine, outcome)
+    Error(outcome) -> Handled(engine: engine, outcome: outcome, notice: None)
     Ok(#(engine, account, secret)) ->
       handle_request(engine, account, secret, incoming, inputs)
   }
@@ -621,10 +628,11 @@ fn handle_request(
   secret: ConnectionSecret,
   incoming: Event,
   inputs: Inputs,
-) -> #(Engine, Outcome) {
+) -> Handled {
   let client_pk_hex = incoming.pubkey
   case decode_request(account, incoming) {
-    Error(reason) -> #(engine, Ignore(reason))
+    Error(reason) ->
+      Handled(engine: engine, outcome: Ignore(reason), notice: None)
     Ok(#(conversation_key, request)) -> {
       let execution =
         execute(engine, account, secret, client_pk_hex, request, inputs)
@@ -637,7 +645,11 @@ fn handle_request(
           inputs.now,
         )
       }
-      #(attempted(engine, execution), outcome(execution, build))
+      Handled(
+        engine: attempted(engine, execution),
+        outcome: outcome(execution, build),
+        notice: denial_notice(execution, pubkey_hex(account), client_pk_hex),
+      )
     }
   }
 }
@@ -948,8 +960,8 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
 }
 
 /// 接続済みクライアントからのリクエストを 1 件実行する。`sign_event` と
-/// `nip44_encrypt` / `nip44_decrypt` は `perms` が許すときだけ実行し、
-/// `get_public_key` と `ping` は `perms` に関わらず答える。
+/// `nip44_encrypt` / `nip44_decrypt` は `perms`（空なら既定の集合）が許すとき
+/// だけ実行し、`get_public_key` と `ping` は `perms` に関わらず答える。
 fn execute_in_session(
   account: Account,
   perms: String,
@@ -1015,7 +1027,8 @@ fn connect_perms(params: List(String)) -> String {
 
 /// `perms` が `max_perms_bytes` 以下ならそのまま、超えればカンマで分けたトークン
 /// を先頭から上限に収まる所まで残す。トークンの途中では切らない
-/// （`sign_event:12` を `sign_event:1` にしないため）。
+/// （`sign_event:12` を `sign_event:1` にしないため）。先頭のトークンだけで上限を
+/// 超える `connect` は空になり、無宣言として扱われる。
 fn bounded_perms(perms: String) -> String {
   let #(kept, _) =
     string.split(perms, ",")
@@ -1030,14 +1043,56 @@ fn bounded_perms(perms: String) -> String {
 }
 
 /// カンマ区切りの `perms` に `permission` と完全に一致するトークンがあるか。前後
-/// の空白は除かない。
+/// の空白は除かない。`perms` が空（`connect` で宣言しなかった）のセッションは
+/// `default_perms` と照合する。
 fn grants(perms: String, permission: String) -> Bool {
-  string.split(perms, ",") |> list.contains(permission)
+  case perms {
+    "" -> list.contains(default_perms, permission)
+    _ -> string.split(perms, ",") |> list.contains(permission)
+  }
 }
+
+/// 無宣言のセッションに既定で許す権限。kind 24133 の署名は `sign_event` の検査が
+/// 別に拒否する。
+const default_perms = ["sign_event", "nip44_encrypt", "nip44_decrypt"]
+
+/// `permission` が許されていないことを示すエラーの文言の接頭辞。
+const denial_prefix = "permission denied: "
 
 /// `permission` が許されていないことを示すエラーの文言。
 fn denial(permission: String) -> String {
-  "permission denied: " <> permission
+  denial_prefix <> permission
+}
+
+/// 権限の不足で拒否した実行のログ 1 行。それ以外の結果では `None`。
+fn denial_notice(
+  execution: Execution,
+  signer: String,
+  client: String,
+) -> Option(String) {
+  let response = case execution {
+    Respond(response:) -> response
+    Record(response:, ..) -> response
+  }
+  case response.error {
+    Some(reason) ->
+      case string.starts_with(reason, denial_prefix) {
+        True -> {
+          let permission =
+            string.drop_start(reason, string.length(denial_prefix))
+          Some(
+            "permission denied for client "
+            <> client
+            <> " on signer "
+            <> signer
+            <> ": "
+            <> permission,
+          )
+        }
+        False -> None
+      }
+    None -> None
+  }
 }
 
 /// 実行の結果を、同じ id の成功応答か失敗応答にする。
@@ -1049,9 +1104,10 @@ fn response_of(id: String, outcome: Result(String, String)) -> rpc.Response {
 }
 
 /// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。`perms` が
-/// `sign_event` か `sign_event:<kind>` を含むときだけ署名する。別の pubkey を
-/// 指すドラフトと、NIP-46 の応答と同じ kind（24133）のドラフトは、perms で
-/// 宣言されていても拒否する。空の pubkey は指定無しとして扱う。
+/// `sign_event` か `sign_event:<kind>` を含むとき（`perms` が空なら常に）署名
+/// する。別の pubkey を指すドラフトと、NIP-46 の応答と同じ kind（24133）の
+/// ドラフトは、perms で宣言されていても拒否する。空の pubkey は指定無しとして
+/// 扱う。
 fn sign_event(
   account: Account,
   perms: String,

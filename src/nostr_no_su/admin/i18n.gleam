@@ -475,7 +475,7 @@ fn english(message: Message) -> String {
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
     Permissions -> "Permissions"
     NoPermissionsRequested ->
-      "None requested. Signing and encryption are refused."
+      "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed."
     Created -> "Created"
     LastUsed -> "Last used"
     JustNow -> "just now"
@@ -730,7 +730,7 @@ fn japanese(message: Message) -> String {
     ExpiresIn -> "失効まで"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
     Permissions -> "権限"
-    NoPermissionsRequested -> "要求なし。署名と暗号化は拒否します。"
+    NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
     Created -> "作成"
     LastUsed -> "最終利用"
     JustNow -> "たった今"
