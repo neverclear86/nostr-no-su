@@ -20,7 +20,7 @@
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
 //// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）には文言を文字列
 //// リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
-//// 検出しないためである。文字列リテラルのまま出すのは製品名（`nostr-no-su`）だけである。
+//// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
 ////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
 //// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
@@ -277,7 +277,7 @@ pub fn page(
         attribute.content("width=device-width,initial-scale=1"),
       ]),
       refresh_meta(refresh),
-      html.title([], "nostr-no-su — " <> title),
+      html.title([], "Nostr-no-Su — " <> title),
       favicon_link(),
       html.link([
         attribute.rel("stylesheet"),
@@ -360,7 +360,7 @@ fn navbar(
               "btn btn-ghost gap-2 px-2 text-lg font-bold focus-visible:outline-base-content",
             ),
           ],
-          [logo_icon(), html.text("nostr-no-su")],
+          [logo_icon(), html.text("Nostr-no-Su")],
         ),
       ]),
       html.div([attribute.class("navbar-end w-auto gap-2")], end),
