@@ -42,6 +42,12 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          # v0.1.0 から 0.1.0、0.1、latest を付ける。0.x の間は minor が破壊的変更を
+          # 含むので、major だけのタグ（0）は付けない。
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
           # 既定では実行時刻が入り、同じコミットでも config が変わってしまうため、
           # created ラベルもコミット時刻にする（同じイメージの定義は #181 のプラン、
           # 検査は ci.yml の docker-image ジョブ）。
@@ -103,7 +109,7 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.target."docker-metadata-action".tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
       - name: 両方の platform が付いたことを確かめる
         run: |
