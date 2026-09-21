@@ -26,7 +26,7 @@
 
 ## 🚀 はじめる
 
-必要なのは docker（compose v2）だけである。公開イメージ `ghcr.io/neverclear86/nostr-no-su` は `linux/amd64` と `linux/arm64` の両方を含むので、x86_64 のサーバーでも Raspberry Pi や Apple Silicon でも同じ手順で動く。
+必要なのは docker（compose v2）と、ファイルを取る `curl`、`setup-env.sh` が鍵を生成するのに使う `openssl` である。公開イメージ `ghcr.io/neverclear86/nostr-no-su` は `linux/amd64` と `linux/arm64` の両方を含むので、x86_64 のサーバーでも Raspberry Pi や Apple Silicon でも同じ手順で動く。
 
 ### 公開イメージから動かす
 
@@ -43,7 +43,7 @@ sh setup-env.sh
 docker compose -f docker-compose.release.yml up -d
 ```
 
-`setup-env.sh` は `.env.example` を `.env` に複製し、必須の 2 つ（マスターキー `ACCOUNT_MASTER_KEY` と管理パスワード `ADMIN_PASSWORD`）を生成した値で埋めて `.env` を 600 にする。`mkdir -p plugins` は自作プラグインの置き場所で、空でもよい。取るイメージのタグは `latest` で、`curl` した版に固定するときは `.env` に `NOSTR_NO_SU_VERSION=<version>` を書く。この構成では `logs` や `exec` も毎回 `-f docker-compose.release.yml` が要る。
+`setup-env.sh` は `.env.example` を `.env` に複製し、必須の 2 つ（マスターキー `ACCOUNT_MASTER_KEY` と管理パスワード `ADMIN_PASSWORD`）を生成した値で埋めて `.env` を 600 にする。`mkdir -p plugins` は自作プラグインの置き場所で、空でもよい（compose がマウントするので、無いと docker が root 所有で作る）。取るイメージのタグは `latest` で、`curl` した版に固定するときは `.env` に `NOSTR_NO_SU_VERSION=<version>` を書く。この構成では `logs` や `exec` も毎回 `-f docker-compose.release.yml` が要る。
 
 ### ソースからビルドして動かす
 
@@ -66,13 +66,13 @@ docker compose up --build -d
 
 ## ⚙️ 設定
 
-設定はすべて環境変数で、docker compose では `.env` に書く。`.env` に書く必要があるのはマスターキーと管理パスワードだけで、ほかは既定値で動く。よく変えるものは次の 3 つで、`.env.example` の該当の行の「# 」を外して書き換える。
+設定はすべて環境変数で、docker compose では `.env` に書く。`.env` に書く必要があるのはマスターキーと管理パスワードだけで、ほかは既定値で動く。よく変えるものは次のとおりで、`.env.example` の該当の行の「# 」を外して書き換える。
 
 | 変数 | 既定 | 用途 |
 | --- | --- | --- |
 | `ADMIN_PORT` | `8080` | 管理 UI のポート。空にすると管理 UI を無効にする |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台。リバースプロキシーで公開するときはその公開 URL |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | 同梱の Postgres の資格情報。初回の起動の前にだけ変えられる |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | 同梱の Postgres の資格情報。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの接続が拒否される |
 
 全部の変数の表、秘密をファイルで渡す方法（`<変数>_FILE`）、リバースプロキシーの置き方、コンテナーの構成（読み取り専用のルート、`/tmp`、remsh、ログ）は [設定](docs/configuration.md) にある。
 
@@ -81,14 +81,14 @@ docker compose up --build -d
 - **マスターキーを失うと鍵が戻らない**: `ACCOUNT_MASTER_KEY` を失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと別の場所に保管し、バージョン管理に含めないこと（[運用](docs/operations.md) の「マスターキーの保管」、交換の手順は同じ文書の「マスターキーの交換」）。
 - **管理 UI は平文 HTTP**: Basic 認証の資格情報も、署名権限そのものである secret 入りの `bunker://` URI も暗号化されずに流れる。同梱の compose はホストのループバック（`127.0.0.1:8080`）にだけ公開する。外部から使うときは TLS を終端するリバースプロキシーを前に置くこと（[設定](docs/configuration.md) の「リバースプロキシーの設定」）。認証の試行回数の制限は持たないので、推測されにくいパスワードを使う。
 - **プラグインは本体と同じ権限で動く**: `PLUGIN_DIR` に置いた BEAM は本体と同じ VM で動き、秘密鍵を持つプロセスにも到達できる。サンドボックスは無い。信頼できるものだけを置き、第三者から受け取ったプラグインはソースを読んでから置く。
-- **秘密鍵の表示と削除**: 管理 UI で秘密鍵を表示するとログに `[admin] revealed the private key of <npub>` が残る。アカウントを削除すると DB からも鍵が消え、ほかに保存していない鍵は戻らない。
-- **`REMSH_ENABLED=true` は開発用**: コンテナーに exec できる者が復号した秘密鍵を含む VM の全てに到達できる。既定は無効で、使うときだけ有効にする。
+- **秘密鍵の表示と削除**: 管理 UI で秘密鍵を表示するとログに `[admin] revealed the private key of <npub>` が残る。アカウントを削除すると DB からも鍵が消え、ほかに保存していない鍵は戻らない。コピーした nsec や接続 URI はクリップボードに残るので、貼り付けた後は消す。
+- **`REMSH_ENABLED=true` は使うときだけ**: コンテナーに exec できる者が復号した秘密鍵を含む VM の全てに到達できる。既定は無効で、使うときだけ有効にする。
 
 v0.1 でのセキュリティの前提と、あえて対策していない項目は [設計上の判断と既知の制約](docs/design-decisions.md) の「v0.1 のセキュリティの前提」にある。
 
 ## 🔄 更新とバックアップ
 
-データは compose の `postgres-data` volume にあり、イメージを入れ替えても消えない。DB のスキーマの移行は起動時に自動で進む（前へ戻す移行は無い）。上げる前にダンプを取る。
+データは compose の `postgres-data` volume にあり、イメージを入れ替えても消えない。DB のスキーマの移行は起動時に自動で進む（前へ戻す移行は無い）。上げる前にダンプを取る。ソースからビルドして動かしている構成では `-f docker-compose.release.yml` を外し、`up -d` に `--build` を付ける（`pull` は `git pull` に読み替える）。
 
 ```sh
 docker compose -f docker-compose.release.yml exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-su-$(date +%Y%m%d).dump
@@ -102,7 +102,7 @@ docker compose -f docker-compose.release.yml up -d
 
 同梱の `event_logger` は、監視で受信したイベントを Postgres の `events` テーブルに保存する（NIP-01 の全フィールド、`tags` は jsonb、取り込み時刻。同じイベントを複数のリレーから受け取っても 1 行）。compose の既定の構成ではそのまま動き、保存の状態は管理 UI の `/plugins/event_logger/settings` で見られる。ソースと改造版のビルドは [`plugins-src/event_logger/`](plugins-src/event_logger/README.md) にある。
 
-自作のプラグインは Erlang か Gleam で `plugin_api_version/0`、`plugin_name/0`、`handle_event/1`（設定を受け取るなら `/2`）をエクスポートするモジュールを書き、`./plugins` に置く。仕様は [プラグイン API v1](docs/plugin-api.md)、例は [`examples/plugins/`](examples/plugins/)（状態を持たない `file_logger` と、状態を持つ `counter`）にある。
+自作のプラグインは Erlang か Gleam で `plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `handle_event/2`（設定を受け取る形。どちらか一方でよい）をエクスポートするモジュールを書き、`./plugins` に置く。仕様は [プラグイン API v1](docs/plugin-api.md)、例は [`examples/plugins/`](examples/plugins/)（状態を持たない `file_logger` と、状態を持つ `counter`）にある。
 
 ## 📚 文書
 
