@@ -1,7 +1,7 @@
 services:
   nostr-no-su:
     image: ghcr.io/neverclear86/nostr-no-su:${NOSTR_NO_SU_VERSION:-latest}
-    # 変数の意味は README の「環境変数」の表にある。${...} の値は .env
+    # 変数の意味は docs/configuration.md の「環境変数」の表にある。${...} の値は .env
     # （.env.example を複製して作る）で変える。秘密（ACCOUNT_MASTER_KEY と
     # ADMIN_PASSWORD）の値はこのファイルに書かないこと。${...} の変数を足す、
     # 消す、既定値を変えるときは、.env.example の行も合わせ、
@@ -10,7 +10,7 @@ services:
     # 取り方の 1 行だけである（sh dev/check_release_compose.sh が確かめる）。
     # その 1 行だけが参照する NOSTR_NO_SU_VERSION は例外で、.env.example に
     # 行を持たず、sh dev/check_env_example.sh の検査の対象にもならない
-    # （README の「環境変数」の表）。
+    # （docs/configuration.md の「環境変数」の表）。
     environment:
       DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
@@ -28,7 +28,7 @@ services:
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
       DEDUP_CAPACITY: ${DEDUP_CAPACITY-4096}
       # true にすると VM の全て（復号した秘密鍵を含む）に到達できる。
-      # 使い方は README の「docker compose」の節。
+      # 使い方は docs/configuration.md の「docker compose の構成」。
       REMSH_ENABLED: ${REMSH_ENABLED-false}
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に

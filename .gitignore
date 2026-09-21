@@ -14,5 +14,5 @@ plugins-src/*/build
 plugins/*
 !plugins/.gitkeep
 
-# 秘密をファイルで渡すときの置き場所の例（README の「秘密をファイルで渡す」）。
+# 秘密をファイルで渡すときの置き場所の例（docs/configuration.md の「秘密をファイルで渡す」）。
 /secrets/

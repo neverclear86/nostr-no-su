@@ -308,7 +308,7 @@ pub fn cross_origin_post_is_an_origin_mismatch_page_test() {
 
 /// `Origin`（無ければ `Referer`）がある POST は、そのホストとポートが `Host` と一致するときだけ
 /// 通す。リバースプロキシーが `Host` を上流のアドレスに書き換えるか、ポートを落とすと 400 になり、
-/// 公開ホスト名とポートのまま渡せば通る（README のリバースプロキシーの節の根拠）。検査は
+/// 公開ホスト名とポートのまま渡せば通る（docs/configuration.md の「リバースプロキシーの設定」の根拠）。検査は
 /// ルーティングの前にあるので、Context の関数を呼ばない言語の切り替えで確かめる。
 pub fn posts_need_a_host_that_matches_the_origin_test() {
   let cases = [

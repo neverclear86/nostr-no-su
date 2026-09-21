@@ -610,7 +610,7 @@ fn english(message: Message) -> String {
     FormNotReadable ->
       "The form was incomplete. Go back to the dashboard and try again."
     OriginMismatch ->
-      "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see the README."
+      "The Origin of the request does not match the Host. If a reverse proxy is in front of the admin UI, pass the Host header through unchanged; see docs/configuration.md."
     BunkerDidNotRespond -> "the bunker did not respond"
     StoreDidNotConfirm ->
       "the store did not confirm the change; it may have been applied"
@@ -630,7 +630,7 @@ fn english(message: Message) -> String {
       "Generate a new private key on the server. It is shown for backup before it is registered."
     Generate -> "Generate"
     SkippedRowNote ->
-      "If registration reports \"account is already registered\" for an account that is not on the dashboard, a row encrypted with a different master key is left in the database; see the README for how to remove it."
+      "If registration reports \"account is already registered\" for an account that is not on the dashboard, a row encrypted with a different master key is left in the database; see docs/operations.md for how to remove it."
     GeneratedKey -> "Generated key"
     BackUpNow -> "Back up this private key now."
     GeneratedKeyNotice ->
@@ -851,7 +851,7 @@ fn japanese(message: Message) -> String {
       "この URL は管理 UI のボタンから送る操作のもので、直接は開けません。ダッシュボードから操作してください。"
     FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
     OriginMismatch ->
-      "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（README の「リバースプロキシーの設定」）。"
+      "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（docs/configuration.md の「リバースプロキシーの設定」）。"
     BunkerDidNotRespond -> "バンカーが応答しませんでした。"
     StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
     NotAvailable -> "今は取得できません。"
@@ -869,7 +869,7 @@ fn japanese(message: Message) -> String {
     // 引用する理由（account is already registered）はバンカーから英語のまま届くので、
     // 画面に出る文言と一致させるために英語で引用する。
     SkippedRowNote ->
-      "ダッシュボードに無いアカウントの登録で「account is already registered」と表示される場合は、別のマスターキーで暗号化された行がデータベースに残っています。削除の方法は README を参照してください。"
+      "ダッシュボードに無いアカウントの登録で「account is already registered」と表示される場合は、別のマスターキーで暗号化された行がデータベースに残っています。削除の方法は docs/operations.md を参照してください。"
     GeneratedKey -> "生成した秘密鍵"
     BackUpNow -> "この秘密鍵を今すぐバックアップしてください。"
     GeneratedKeyNotice ->
