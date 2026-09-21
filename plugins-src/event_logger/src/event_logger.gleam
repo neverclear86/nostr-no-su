@@ -31,9 +31,10 @@
 ////   `store_name/0` の固定の atom である。プール名だけは子仕様の MFA 引数にも
 ////   焼き込む。どちらの子が再起動しても宛先は変わらず、管理 UI のページも同じ
 ////   名前で生存を引ける（`docs/plugin-api.md` 第 5.3 節）。
-//// - **`plugin_page_content/2` は期限内に戻らなければならない。** DB へ問い合わせ
-////   ず、外から観測できる値（登録名の生存、未処理メッセージ数、保存アクターが
-////   持つ監視対象の集合）だけを返す。
+//// - **`plugin_page_content/2` は期限内に戻らなければならない。** `settings` は
+////   DB へ問い合わせず、外から観測できる値（登録名の生存、未処理メッセージ数、
+////   保存アクターが持つ監視対象の集合）だけを返す。`timeline` だけは直近 20 件を
+////   DB から読み、問い合わせにページの期限より短い期限を付ける。
 
 import event_logger/page
 import event_logger/store
@@ -215,9 +216,11 @@ pub fn plugin_pages() -> Dynamic {
 /// 管理 UI のページの記述。本体は `/1` より `/2` を優先し、ページの表示のたびに
 /// これを呼んでページの `key` と、`database_url` と `Accounts` を含む設定 map
 /// （`plugin_children/1` と同じ形に `Accounts` を足したもの）を渡す。期限
-/// （既定 5 秒）を超えると 503 になるので、DB へは問い合わせず、登録名の生存と
-/// 未処理メッセージ数、保存アクターが持つ監視対象の集合だけを観測する。
-/// `{error, Reason}` を返す約束は無い（`docs/plugin-api.md` 第 13.4 節）。
+/// （既定 5 秒）を超えると 503 になるので、`settings` では DB へ問い合わせず、
+/// 登録名の生存と未処理メッセージ数、保存アクターが持つ監視対象の集合だけを
+/// 観測する。`timeline` だけは `store.recent_events/2` で直近 20 件を読み、
+/// 問い合わせに 2 秒の期限を付ける。`{error, Reason}` を返す約束は無い
+/// （`docs/plugin-api.md` 第 13.4 節）。
 pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
   let page_key = decode.run(key, decode.string) |> result.unwrap("")
   let settings =
@@ -226,6 +229,10 @@ pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
   let database =
     dict.get(settings, "database_url")
     |> result.map(page.masked_url(pool_name(), _))
+  let #(events, monitored) = case page_key {
+    "timeline" -> #(recent_events(), Error(Nil))
+    _ -> #(Ok([]), monitored_state())
+  }
   page.content(
     page_key,
     database,
@@ -235,8 +242,22 @@ pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
       process_status("store actor", store_name_label, store_name()),
     ],
     accounts_from_config(settings),
-    monitored_state(),
+    monitored,
+    events,
   )
+}
+
+/// タイムラインに出す直近のイベント。プールが居ない・問い合わせが失敗したとき
+/// は、節の `alert` に出す英語の理由を返す。
+fn recent_events() -> Result(List(store.Row), String) {
+  case process.named(pool_name()) {
+    Error(Nil) -> Error("connection pool is not running")
+    Ok(_pid) ->
+      store.recent_events(pog.named_connection(pool_name()), store.recent_limit)
+      |> result.map_error(fn(error) {
+        "could not read stored events: " <> string.inspect(error)
+      })
+  }
 }
 
 /// 設定 map の予約キー `Accounts`（`docs/plugin-api.md` 第 13.5 節）から登録
