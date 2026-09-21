@@ -104,8 +104,9 @@ const realm = "nostr-no-su"
 
 /// 認証済みの応答に付ける CSP。スクリプトは管理 UI のオリジンのファイル（`/static/admin.js`）だけを
 /// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
-/// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）を読ませるためである（テーマの `--noise`
-/// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。
+/// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、ページの `<head>` に埋め込む favicon の
+/// data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise` が 0 なので描画には出ないが、
+/// 禁じると読み込みのたびに CSP の違反が報告される）。
 const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 /// 秘密鍵の再表示で、再入力したパスワードが違うときにログに出す理由。画面の文言は

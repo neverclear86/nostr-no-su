@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/nostr-no-su-white.svg">
+    <img alt="Nostr-no-Su" src="assets/logo/nostr-no-su-color.svg" width="96">
+  </picture>
+</p>
+
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
@@ -124,4 +131,4 @@ Gleam 1.17.0 / OTP 29 で開発している。ローカルでの実行とテス�
 
 このリポジトリのライセンスは [MIT License](LICENSE) である。
 `vendor/stratus/` は Apache License 2.0 の stratus を改変したもので、帰属は [NOTICE](NOTICE)、改変の記録は [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md) にある。
-管理 UI のアイコンは ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもので、帰属は [NOTICE](NOTICE) にある。
+管理 UI のアイコンは、上部バーと favicon の製品のロゴを除いて、ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもので、帰属は [NOTICE](NOTICE) にある。ロゴはこのリポジトリのもので、[MIT License](LICENSE) に従う。

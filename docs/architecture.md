@@ -694,7 +694,7 @@ nostr-no-su/
 │   ├── support/                  テスト用の fixture
 │   └── vectors/                  BIP-340 と NIP-44 の公式テストベクター（取得元のまま）
 │
-├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）
+├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）と、README に載せる製品のロゴ（logo/）
 ├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
 ├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、リリースの版の検査、イメージに入れるライセンスの収集（成果物には入らない）
 │
