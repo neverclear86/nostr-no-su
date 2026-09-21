@@ -27,7 +27,9 @@ import support/beam_fixture.{type Fixture}
 const short_call_timeout_ms = 1000
 
 /// `short_call_timeout_ms` で打ち切られた呼び出しの理由に入る文言。
-const timed_out = "timed out after 1000ms"
+fn timed_out() -> String {
+  "timed out after " <> int.to_string(short_call_timeout_ms) <> "ms"
+}
 
 /// 配信の確認に使うサンプルイベント。
 fn sample_event() -> Event {
@@ -556,7 +558,7 @@ pub fn load_all_required_versions_timeout_test() {
   assert plugins == []
   assert has_note(
     notes,
-    fixture.module <> ": plugin_required_versions/0 " <> timed_out,
+    fixture.module <> ": plugin_required_versions/0 " <> timed_out(),
   )
 }
 
@@ -1106,7 +1108,7 @@ pub fn page_content_timeout_test() {
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
   let assert Error(reason) = ui.content("status")
-  assert string.contains(reason, timed_out)
+  assert string.contains(reason, timed_out())
 }
 
 /// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
@@ -1138,7 +1140,7 @@ pub fn load_all_hanging_metadata_test() {
     )
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
-  assert has_note(notes, hanging <> ": plugin_name/0 " <> timed_out)
+  assert has_note(notes, hanging <> ": plugin_name/0 " <> timed_out())
   assert has_note(notes, "(1 skipped)")
   assert !process.is_alive(beam_fixture.last_pid(hanging))
 }
@@ -1167,7 +1169,7 @@ pub fn load_all_hanging_on_load_test() {
   assert loaded.name == "survivor_plugin"
   assert has_note(
     notes,
-    hanging <> ": cannot load module (" <> timed_out <> ")",
+    hanging <> ": cannot load module (" <> timed_out() <> ")",
   )
   assert has_note(notes, "(1 skipped)")
 }

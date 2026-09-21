@@ -8,8 +8,9 @@ import nostr_no_su/plugin_runner
 /// 入れない。
 const ordered_modules = ["account_store_test", "account_reconcile_test"]
 
-/// モジュールを同時に走らせるレーンの数。上げると壁時間は縮むが、CPU の取り合いで
-/// 「N ms 以内に応答する」の検査（TLS の接続の期限など）が落ちやすくなる。
+/// モジュールを同時に走らせるレーンの数。壁時間はいちばん長いモジュールで決まるので、
+/// これ以上増やしても縮まらず、CPU の取り合いで「N ms 以内に応答する」の検査（TLS の
+/// 接続の期限など）が落ちやすくなるだけである。
 const lanes = 8
 
 /// テスト全体のエントリポイント。test/ 配下の全モジュールの `*_test` 関数を eunit で
