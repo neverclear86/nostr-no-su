@@ -56,7 +56,7 @@ USER nostr
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD sh -c 'set -f; port=$(echo ${ADMIN_PORT-8080}); [ -z "$port" ] \
     || wget -q -O /dev/null "http://127.0.0.1:$port/healthz"'
-# start.sh は REMSH_ENABLED を読んでから entrypoint.sh を実行する（README の
-# 「docker compose」の節）。
+# start.sh は REMSH_ENABLED を読んでから entrypoint.sh を実行する（docs/configuration.md の
+# 「docker compose の構成」）。
 ENTRYPOINT ["/app/start.sh"]
 CMD ["run"]

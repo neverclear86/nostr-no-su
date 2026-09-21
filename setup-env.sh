@@ -3,7 +3,7 @@
 #
 # .env が無ければ .env.example を複製し、必須の 2 つ（ACCOUNT_MASTER_KEY と
 # ADMIN_PASSWORD）を openssl で生成した値で埋める。ほかの変数は .env.example の
-# とおり「# 」付きの既定値のまま写す（README の「環境変数」の表を見て、変える
+# とおり「# 」付きの既定値のまま写す（docs/configuration.md の「環境変数」の表を見て、変える
 # ものだけ「# 」を外す）。
 #
 # .env があれば上書きしない（書いてあるマスターキーを失うと、保存したアカウントの

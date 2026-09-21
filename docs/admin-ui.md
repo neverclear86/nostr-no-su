@@ -1,7 +1,7 @@
 # 管理 UI
 
 この文書は、管理 UI の画面、アカウントの操作と変更の結果の見え方、リレーの追加・用途の編集・削除、クライアントの接続（`nostrconnect://`）、接続の承認（auth_url フロー）、状態を変えるリクエストの守り方を説明する。
-起動、認証、待ち受けのアドレスとポート、リバースプロキシーの設定は [README](../README.md) の「管理 UI」に、環境変数は同じく「環境変数」にある。
+起動、認証、待ち受けのアドレスとポート、リバースプロキシーの設定は [設定](configuration.md) の「管理 UI の待ち受けと認証」と「リバースプロキシーの設定」に、環境変数は同じく「環境変数」にある。
 
 ## 画面
 
@@ -121,6 +121,6 @@ secret を持たない `bunker://` URI（ダッシュボードの「接続 URI�
 
 ## 状態を変えるリクエストと枠への埋め込み
 
-GET と HEAD 以外のリクエストは、ルーティングの前ですべて `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでいる（ルートごとの検査ではない）。`Origin` も `Referer` も送らないクライアント（curl など）は、cookie を取り除いたうえでそのまま通る。前段にリバースプロキシーを置くときの `Host` の渡し方は、[README](../README.md) の「リバースプロキシーの設定」にある。
+GET と HEAD 以外のリクエストは、ルーティングの前ですべて `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでいる（ルートごとの検査ではない）。`Origin` も `Referer` も送らないクライアント（curl など）は、cookie を取り除いたうえでそのまま通る。前段にリバースプロキシーを置くときの `Host` の渡し方は、[設定](configuration.md) の「リバースプロキシーの設定」にある。
 
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じる `x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付けている。どのページも secret か秘密鍵を含みうるためと、削除やローテーションの確認ページを他のサイトの枠に読み込んでボタンを押させる操作（枠の中の POST は同じオリジンから送られるので CSRF の検査では防げない）を防ぐためである。CSP（`default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`）は、管理 UI が配信するファイルのスクリプトだけを実行させ、HTML に何かが注入されてもインラインのスクリプトとイベント属性を実行させない。`referrer-policy` を `no-referrer` にしないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査がすべての POST を 400 にするためである。

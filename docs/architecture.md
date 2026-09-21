@@ -721,7 +721,8 @@ nostr-no-su/
 │   ├── architecture.md           この文書
 │   ├── design-decisions.md       設計上の判断と既知の制約
 │   ├── admin-ui.md               管理 UI の画面と操作
-│   ├── operations.md             更新、バックアップと復旧
+│   ├── configuration.md          環境変数、.env、秘密をファイルで渡す、リバースプロキシー、compose の構成
+│   ├── operations.md             起動時のログ、更新、バックアップと復旧、マスターキーの交換
 │   └── development.md            ローカルでの実行とテスト、CSS のビルドと画面の撮影
 │
 ├── .github/workflows/            CI（ci.yml）、リリース（release.yml）
@@ -747,7 +748,7 @@ nostr-no-su/
 
 環境変数はすべて `config.gleam` の 1 か所で読む。
 `DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD` は `<変数>_FILE` のファイルからも読み、読み込みの後にプロセスの環境から消す。
-既定値、空文字列の意味、書き方は [README](../README.md) の「環境変数」にあり、この表は読み手だけを示す。
+既定値、空文字列の意味、書き方は [設定](configuration.md) の「環境変数」にあり、この表は読み手だけを示す。
 
 | 変数 | 読み手 |
 | --- | --- |
@@ -771,7 +772,8 @@ nostr-no-su/
 - [プラグイン API v1 の仕様](plugin-api.md)：プラグインを書く人向け。必須エクスポート、イベント map、実行モデル、設定、配置と読み込み
 - [設計上の判断と既知の制約](design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [管理 UI](admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認
-- [バックアップと復旧](operations.md)：DB のダンプと復元、版の更新、マスターキーの保管、復旧後の確認
+- [設定](configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
+- [運用](operations.md)：起動時のログ、DB のダンプと復元、版の更新、マスターキーの保管と交換、復旧後の確認
 - [開発](development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
-- [README](../README.md)：導入、docker compose、環境変数
+- [README](../README.md)：導入と最初の設定
 - `plugins-src/event_logger/README.md`：同梱プラグインのビルドと配置
