@@ -95,7 +95,7 @@ sudo chown 1000 secrets/*
 # sudo cat secrets/admin_password で確かめる
 ```
 
-次の `docker-compose.override.yml`（`docker compose up` が自動で重ねる）を置き、`.env` の `ACCOUNT_MASTER_KEY=` と `ADMIN_PASSWORD=` は空のままにする。
+次の `docker-compose.override.yml`（`docker compose up` が自動で重ねる。`-f` でファイルを指定する「イメージから動かす」の構成では自動では重ならない）を置き、`.env` の `ACCOUNT_MASTER_KEY=` と `ADMIN_PASSWORD=` は空のままにする。
 
 ```yaml
 services:
@@ -171,9 +171,30 @@ server {
 
 承認ページの URL の土台にする公開 URL（上の例なら `https://admin.example`）は、`ADMIN_BASE_URL` に設定する（[管理 UI](docs/admin-ui.md) の「接続の承認（auth_url フロー）」）。
 
+### イメージから動かす
+
+リリースで公開するイメージ（`ghcr.io/neverclear86/nostr-no-su`）と 3 つのファイルだけで始められる。clone は要らない。`<version>` は公開済みのリリースの版（`X.Y.Z`）に置き換える（リリースがまだ無い間はこの手順は使えないので、次の「docker compose」の節で clone して動かす）。
+
+```sh
+mkdir nostr-no-su && cd nostr-no-su
+base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v<version>
+curl -fsSLO "$base/docker-compose.release.yml"
+curl -fsSLO "$base/.env.example"
+curl -fsSLO "$base/setup-env.sh"
+mkdir -p plugins
+sh setup-env.sh
+docker compose -f docker-compose.release.yml up -d
+```
+
+`setup-env.sh` は `.env.example` を `.env` に複製し、`ACCOUNT_MASTER_KEY` と `ADMIN_PASSWORD` を生成した値で埋めて `.env` を 600 にする（手で作る場合の手順は「バンカーとして使う」にある）。管理 UI は `http://127.0.0.1:8080`、ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD` の値である。`mkdir -p plugins` は自作プラグインの置き場所で、空でもよい（compose がマウントするので、無いと docker が root 所有で作る）。
+
+`docker-compose.release.yml` は `docker-compose.yml` と、イメージをソースからビルドする代わりに公開イメージから取る 1 行だけが違う（CI が `dev/check_release_compose.sh` で確かめる）ので、次の「docker compose」の節の説明はそのまま当てはまる。イベントを Postgres に保存する `event_logger` はイメージに同梱されているのでビルドは要らず、既定の構成では `PLUGIN_EVENT_LOGGER_DATABASE_URL` が同梱の Postgres を指す（自作・改造版の置き方は次の節と `plugins-src/event_logger/README.md`）。取るタグは `${NOSTR_NO_SU_VERSION:-latest}` で、`curl` したタグと同じ版のイメージに固定するときは `.env` に `NOSTR_NO_SU_VERSION=<version>` を書く。
+
+この構成では、起動と停止だけでなく `logs` や `exec` も毎回 `-f docker-compose.release.yml` が要る。`-f` を付けると `docker-compose.override.yml` は自動では重ならないので、「秘密をファイルで渡す」の override を使うときは `-f docker-compose.release.yml -f docker-compose.override.yml` と 2 つ並べる。この文書と [バックアップと復旧](docs/operations.md) のほかの `docker compose ...` のコマンドも同じように読み替える。
+
 ### docker compose
 
-compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。リリースで公開するイメージ（`ghcr.io/neverclear86/nostr-no-su`）は `linux/amd64` と `linux/arm64` の両方を含むマルチアーキテクチャのマニフェストで、x86_64 のホストでも、Raspberry Pi や ARM の VPS、Apple Silicon の docker でも同じタグで動く。
+この節は、リポジトリを clone して `docker-compose.yml` からソースをビルドする構成を説明する（公開イメージで始める手順は前の節の「イメージから動かす」にある）。compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。リリースで公開するイメージ（`ghcr.io/neverclear86/nostr-no-su`）は `linux/amd64` と `linux/arm64` の両方を含むマルチアーキテクチャのマニフェストで、x86_64 のホストでも、Raspberry Pi や ARM の VPS、Apple Silicon の docker でも同じタグで動く。
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。`ADMIN_PORT=` と空にすると管理 UI は無効になるが、公開は `127.0.0.1:8080` のまま残る。
 
@@ -181,7 +202,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 同梱の `event_logger` はイメージの `/app/plugins` に入っており、自作のプラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）を参照。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、左から順に読む。`./plugins` に同梱と同じ名前のプラグインを置くと、先に並べた `/app/plugins` の同梱版が勝つので、改造版を試すときは `PLUGIN_DIR=/plugins` を渡して同梱版を外す。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
 
-プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml` に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
+プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml`（公開イメージで動かしているなら `docker-compose.release.yml`）に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
 
 アプリのコンテナーはルートを読み取り専用（`read_only`）にし、ケーパビリティーを全部落として（`cap_drop: [ALL]`、`no-new-privileges`）動く。書けるのは `/tmp` だけで、メモリ上の tmpfs なのでコンテナーの再起動（クラッシュの後の自動再起動を含む）で消え、書いた分だけメモリを使う。自作のプラグインも `/tmp` 以外には書けない。`file_logger` の既定の出力先（`PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log`）と BEAM のクラッシュダンプ（`ERL_CRASH_DUMP=/tmp/erl_crash.dump`）もここに書かれるので、クラッシュダンプは既定では自動再起動で消える。どちらも残したいときは、`docker-compose.override.yml` で volume をマウントし（uid 1000 が書けること）、`PLUGIN_FILE_LOGGER_PATH` と `ERL_CRASH_DUMP` をその下に上書きする。
 
@@ -193,7 +214,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/app/plugins:/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/app/plugins:/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED`、`NOSTR_NO_SU_VERSION` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は compose が渡す既定値で、`NOSTR_NO_SU_VERSION` は `docker-compose.release.yml` が渡す）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
@@ -207,6 +228,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose」の節）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
+| `NOSTR_NO_SU_VERSION` | `latest` | `docker-compose.release.yml` 専用（アプリ自身は読まない）。取る公開イメージのタグ。`latest` は版の大小によらず最後に公開したタグに付くので（[貢献の手引き](CONTRIBUTING.md) の「リリース」）、版を固定するときは `X.Y.Z` か `X.Y` を書く。`docker-compose.yml` は参照しないので `.env.example` にも行が無い |
 | `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要。`"localhost"` と IPv4 / IPv6 以外の値は理由をログに出して管理 UI を無効にする |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
@@ -220,7 +242,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 - [管理 UI](docs/admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認（auth_url フロー）
 - [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
-- [バックアップと復旧](docs/operations.md)：DB のダンプと復元、マスターキーの保管、復旧後の確認
+- [バックアップと復旧](docs/operations.md)：DB のダンプと復元、版の更新、マスターキーの保管、復旧後の確認
 - [開発](docs/development.md)：ローカルでの実行とテスト、テストの流儀、管理 UI の CSS のビルドと画面の撮影
 - [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
 - [貢献の手引き](CONTRIBUTING.md)：変更の出し方、版数の方針、リリースの手順

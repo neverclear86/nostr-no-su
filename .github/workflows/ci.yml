@@ -63,7 +63,7 @@ jobs:
           code=$(echo "$files" | grep -Ev '^(docs/|\.claude/|LICENSE$|.*\.md$)' || true)
           plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|\.github/)' || true)
           css=$(echo "$code" | grep -E '^(src/nostr_no_su/admin/|assets/|priv/static/admin\.css$|package(-lock)?\.json$|\.github/)' || true)
-          docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|plugins-src/|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
+          docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|docker-compose\.release\.yml$|plugins-src/|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
           # プラグインの README のビルド手順は README の中の sh ブロックを実行するので、
           # *.md でも plugins-src/ と examples/ の README は数える。
           readme=$(echo "$files" | grep -E '^(plugins-src/|examples/|\.github/)' || true)
@@ -150,6 +150,8 @@ jobs:
       - run: sh dev/check_vendor_stratus.sh
       # docker-compose.yml の ${...} の変数と既定値が、.env.example の変数の行と一致するかを検査する。
       - run: sh dev/check_env_example.sh
+      # docker-compose.release.yml と docker-compose.yml の差分がイメージの取り方の 1 行だけであることを検査する。
+      - run: sh dev/check_release_compose.sh
       # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
       - run: gleam export erlang-shipment
 
