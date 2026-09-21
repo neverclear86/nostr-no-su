@@ -926,8 +926,12 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           token: random.hex(token_bytes),
           not_before: state.not_before,
         )
-      let #(accepted, outcome) =
+      let engine.Handled(engine: accepted, outcome:, notice:) =
         engine.handle_event(state.engine, incoming, inputs)
+      case notice {
+        Some(line) -> log.write(log.Notice, log_prefix, line)
+        None -> Nil
+      }
       let #(published, next) = case outcome {
         engine.Reply(response) -> #(publish(state, response), accepted)
         engine.Persist(write:, next:, response:, on_failure:) -> {

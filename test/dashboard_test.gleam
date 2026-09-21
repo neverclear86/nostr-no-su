@@ -1315,8 +1315,8 @@ pub fn signer_is_shown_as_label_and_npub_test() {
   assert !string.contains(unavailable, "<span>main</span>")
 }
 
-/// 承認ページには、承認の意味の説明が info の囲みで出る。権限が空のときだけ、既存の
-/// 「署名と暗号化は拒否します」の一文が続く。
+/// 承認ページには、承認の意味の説明が info の囲みで出る。権限が空のときだけ、既定で
+/// 許す範囲を述べる一文が続く。
 pub fn approval_page_explains_what_approval_means_test() {
   let assert Ok([with_perms, without_perms]) = secret_states().pending
   let with_perms_page =
@@ -1328,13 +1328,13 @@ pub fn approval_page_explains_what_approval_means_test() {
   )
   assert !string.contains(
     with_perms_page,
-    "None requested. Signing and encryption are refused.",
+    "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
 
   let without_perms_page =
     dashboard.approval_page(i18n.English, view.System, Ok([]), without_perms)
   assert string.contains(
     without_perms_page,
-    "The permissions are fixed at approval. None requested. Signing and encryption are refused.",
+    "The permissions are fixed at approval. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
 }
