@@ -1,6 +1,6 @@
 # システム構成
 
-この文書は、nostr-no-su が何をどう組み立てて動いているかを示す。
+この文書は、Nostr-no-Su が何をどう組み立てて動いているかを示す。
 読み手として想定するのは、この本体のコードに手を入れる開発者である。
 プラグインを書くだけなら [プラグイン API v1 の仕様](plugin-api.md) を読めばよく、この文書は要らない。
 
@@ -20,7 +20,7 @@ flowchart LR
         browser["ブラウザー"]
     end
 
-    subgraph host["nostr-no-su"]
+    subgraph host["Nostr-no-Su"]
         monitor["監視<br/>受信したイベントを<br/>重複排除してプラグインへ"]
         bunker["バンカー<br/>NIP-46 の署名要求を<br/>検証して応答"]
         plugins["プラグイン<br/>プラグインごとの<br/>実行プロセス"]
