@@ -1,7 +1,8 @@
 # Gleam の依存（Hex）は dependabot が追えないので手で上げる。
 # tailwindcss、@tailwindcss/cli、daisyui を上げると priv/static/admin.css が変わり、
 # dependabot は作り直さないので CI の css ジョブが落ちる。patch の更新は追わず
-# （ignore）、minor 以上が来たら `npm run build:css` の結果を commit に足す（#382）。
+# （ignore）、minor 以上が来たら `npm ci && npm run build:css` の結果を commit に足す（#382）。
+# 生成物をコミットせず CI と Dockerfile でビルドする案は採らない（docs/design-decisions.md）。
 version: 2
 updates:
   - package-ecosystem: npm

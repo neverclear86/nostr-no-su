@@ -220,12 +220,16 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+      # 生成物は 1 行の minified な CSS なので、差分の本文は出さず、直し方だけを出す。
       - name: ビルドした CSS がコミットされたものと一致することを確かめる
         run: |
           set -eu
           npm ci
           npm run build:css
-          git diff --exit-code -- priv/static/admin.css
+          if ! git diff --quiet -- priv/static/admin.css; then
+            echo "priv/static/admin.css がコミットと一致しない。npm ci && npm run build:css を実行して priv/static/admin.css をコミットする（docs/development.md の「管理 UI の CSS と画面の撮影」）"
+            exit 1
+          fi
 
   # プラグインの README のビルド手順が、非 root の利用者が貼ったとおりに最後まで通ることと、
   # event_logger の成果物にビルド環境の違いが混ざらないことを確かめる。ビルドは本体と同じ
