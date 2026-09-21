@@ -17,6 +17,8 @@
 #   環境   プロジェクト名 nostr-no-su、127.0.0.1:8080、ホストの 5432、作業ツリーの .env、
 #          ユーザーの作業ツリー、-f の無い docker compose（cwd の compose と .env を読む）
 #   引用   psql -c "…" の中の二重引用符（シェルで外れる。ヒアドキュメントで渡す）
+#   資格   接続文字列（postgres://user:pass@）の 6 文字以下のパスワード（伏せ字は登録した値の
+#          全出現を置き換えるので、短い値はログの無関係な語まで壊す。<名前> と $VAR は除く）
 # 指摘があれば表にして 1 で、無ければ「指摘なし」を出して 0 で終わる。作業ツリーは
 # 作業ツリーの絶対パスを直し方の案に使うだけで、読み書きしない。
 #
@@ -113,6 +115,9 @@ function check(c,  t, i, name, args, k, last) {
   # 引用の検査。
   if (c ~ /psql/ && match(c, /-c[ \t]+"/)) { args = substr(c, RSTART)
     if (args ~ /\\"/ || args ~ /""/) report("引用", code(c), "psql -c の二重引用符はシェルで外れる。ヒアドキュメント（`psql <<\047SQL\047`）で渡す") }
+  # 資格情報の検査。
+  if (match(c, /postgres(ql)?:\/\/[^:\/@ \t]+:[^@\/ \t]*@/)) { args = substr(c, RSTART, RLENGTH); name = args; sub(/^[^:]*:\/\/[^:]*:/, "", name); sub(/@$/, "", name)
+    if (name !~ /^[<$]/ && length(name) <= 6) report("資格", code(args), "接続文字列のパスワードが 6 文字以下。伏せ字は登録した値の全出現を [redacted] に置き換えるので、短い値はログの無関係な語まで壊し、grep が 0 行になる。7 文字以上のランダムな値にする") }
   # ユーザーの環境。
   if (c ~ /(-p|--project-name|--name|project)[= ]nostr-no-su([^-A-Za-z0-9_]|$)/) report("環境", code(c), "ユーザーの compose のプロジェクト名。固有の名前（nns-issue<N>）にする")
   if (c ~ /\/home\/lina\/workspace\/projects\/nostr-no-su/) report("環境", code(c), "ユーザーの作業ツリー。読むだけでも " tree " にする")
