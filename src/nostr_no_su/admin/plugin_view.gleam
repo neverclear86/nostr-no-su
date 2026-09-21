@@ -252,7 +252,7 @@ fn form_field(raw: Dynamic) -> Result(Element(msg), String) {
       use label <- result.try(text_field(raw, "label"))
       use hint <- result.try(optional_text_field(raw, "hint"))
       use checked <- result.try(bool_field(raw, "checked", False))
-      Ok(view.checkbox_row(name, label, hint, checked))
+      Ok(view.plugin_checkbox_row(name, label, hint, checked))
     }
     other -> Error("unknown type \"" <> other <> "\"")
   }

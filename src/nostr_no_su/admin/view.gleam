@@ -636,10 +636,10 @@ pub fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
-/// チェック 1 件の行。チェック、ラベル、あれば説明を並べる。送信値は `on` に
-/// 固定する。`relay_pages.role_row` と似た形だが、あちらはアイコンと接続状態の
+/// プラグインのフォームが宣言するチェック 1 件の行。チェック、ラベル、あれば説明を
+/// 並べる。送信値は `on` に固定する。`checkbox_row` と似た形だが、あちらはアイコンと
 /// バッジを同じ行に挟むため、この部品と共通化しない。
-pub fn checkbox_row(
+pub fn plugin_checkbox_row(
   name: String,
   label: String,
   hint: Option(String),

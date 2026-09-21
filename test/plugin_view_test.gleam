@@ -368,8 +368,8 @@ pub fn form_block_renders_checkboxes_test() {
     element.to_string(view.post_form(
       "/plugins/example/settings",
       [
-        view.checkbox_row("main", "Main account", Some("f9308a…"), True),
-        view.checkbox_row("bot", "Bot account", None, False),
+        view.plugin_checkbox_row("main", "Main account", Some("f9308a…"), True),
+        view.plugin_checkbox_row("bot", "Bot account", None, False),
       ],
       "Save",
       view.Primary,
@@ -419,7 +419,7 @@ pub fn form_field_checked_defaults_to_false_test() {
   let body = element.to_string(el)
   assert string.contains(
     body,
-    element.to_string(view.checkbox_row("main", "Main", None, False)),
+    element.to_string(view.plugin_checkbox_row("main", "Main", None, False)),
   )
 
   let bad_checked =
