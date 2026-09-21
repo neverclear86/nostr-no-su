@@ -12,6 +12,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -21,8 +22,15 @@ import nostr_no_su/plugin_loader
 import support/beam_fixture.{type Fixture}
 
 /// 戻らない・異常終了するメタデータ呼び出しのテストに使う短い期限。実時間に
-/// 依存しないよう小さく取る（`plugin_runner_test.gleam` の `limits` と同じ形）。
-const short_call_timeout_ms = 100
+/// 依存しないよう小さく取る（`plugin_runner_test.gleam` の `limits` と同じ形）が、
+/// 同じ呼び出しで正常なプラグインも読み込むテストがあるので、並列に走る他の
+/// モジュールと CPU を取り合っても正常な読み込みが収まる長さにする。
+const short_call_timeout_ms = 1000
+
+/// `short_call_timeout_ms` で打ち切られた呼び出しの理由に入る文言。
+fn timed_out() -> String {
+  "timed out after " <> int.to_string(short_call_timeout_ms) <> "ms"
+}
 
 /// 配信の確認に使うサンプルイベント。
 fn sample_event() -> Event {
@@ -551,7 +559,7 @@ pub fn load_all_required_versions_timeout_test() {
   assert plugins == []
   assert has_note(
     notes,
-    fixture.module <> ": plugin_required_versions/0 timed out after 100ms",
+    fixture.module <> ": plugin_required_versions/0 " <> timed_out(),
   )
 }
 
@@ -1101,15 +1109,15 @@ pub fn page_content_timeout_test() {
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
   let assert Error(reason) = ui.content("status")
-  assert string.contains(reason, "timed out after 100ms")
+  assert string.contains(reason, timed_out())
 }
 
 /// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
 /// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる（受け入れ条件）。
 /// 打ち切られた呼び出しのプロセスも残らない。
 ///
-/// 期限 100ms は、使い捨てのプロセスが `plugin_name/0` の先頭で Pid を退避する
-/// より十分長い（退避の前に打ち切ると `last_pid` が `badarg` で落ちる）。
+/// 期限（`short_call_timeout_ms`）は、使い捨てのプロセスが `plugin_name/0` の先頭で
+/// Pid を退避するより十分長い（退避の前に打ち切ると `last_pid` が `badarg` で落ちる）。
 pub fn load_all_hanging_metadata_test() {
   let fixture = beam_fixture.new("hanging_metadata")
   let hanging = beam_fixture.name(fixture, "aaa")
@@ -1133,7 +1141,7 @@ pub fn load_all_hanging_metadata_test() {
     )
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
-  assert has_note(notes, hanging <> ": plugin_name/0 timed out after 100ms")
+  assert has_note(notes, hanging <> ": plugin_name/0 " <> timed_out())
   assert has_note(notes, "(1 skipped)")
   assert !process.is_alive(beam_fixture.last_pid(hanging))
 }
@@ -1162,7 +1170,7 @@ pub fn load_all_hanging_on_load_test() {
   assert loaded.name == "survivor_plugin"
   assert has_note(
     notes,
-    hanging <> ": cannot load module (timed out after 100ms)",
+    hanging <> ": cannot load module (" <> timed_out() <> ")",
   )
   assert has_note(notes, "(1 skipped)")
 }

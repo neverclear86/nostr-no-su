@@ -36,6 +36,24 @@ import support/nip46_client.{account_for}
 /// 書き込みが遅いストアで、書き込みの途中に積まれる追加の対象になる署名者の鍵。
 const slow_signer_key = "0000000000000000000000000000000000000000000000000000000000000055"
 
+/// 読み込みの再試行の回数を数えるテストの待ち時間。`counted_retries_window_ms` の
+/// 窓に、ジッターを入れても 10 回以上の再試行が収まる。
+const counted_retry_delay = Backoff(initial_ms: 20, max_ms: 20)
+
+/// 読み込みの再試行の回数を数える窓。
+const counted_retries_window_ms = 300
+
+/// ストアの遅い読み書きを、実時間を待たずに模す。呼び出し側（バンカーアクター）の
+/// プロセスで作った門の subject を `gates` へ渡し、テストがそこへ `Nil` を送るまで
+/// 呼び出し側を止める。subject は所有するプロセスでしか受信できないので、門は
+/// テストのプロセスではなく呼び出し側で作る。テストが途中で落ちれば、止まっている
+/// アクターはツリーごと終了する。
+fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
+  let gate = process.new_subject()
+  process.send(gates, gate)
+  process.receive_forever(gate)
+}
+
 /// `duration_ms` の間に届いたメッセージの件数。
 fn count_within(subject: Subject(Nil), duration_ms: Int) -> Int {
   count_until(subject, time.monotonic_ms() + duration_ms, 0)
@@ -113,7 +131,7 @@ pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
         }
       }),
       // 失敗の間にリクエストを確実に届けられるよう、再試行を遅めにする。
-      Backoff(initial_ms: 500, max_ms: 500),
+      Backoff(initial_ms: 300, max_ms: 300),
     )
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
@@ -148,11 +166,11 @@ pub fn retries_do_not_multiply_across_restarts_test() {
         process.send(calls, Nil)
         Error("database is unreachable or timed out")
       }),
-      fixed_retry_delay,
+      counted_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
-  let before = count_within(calls, 1000)
+  let before = count_within(calls, counted_retries_window_ms)
   assert before >= 5
 
   let assert Ok(killed) = process.named(name)
@@ -160,7 +178,7 @@ pub fn retries_do_not_multiply_across_restarts_test() {
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
   drain(calls)
-  let after = count_within(calls, 1000)
+  let after = count_within(calls, counted_retries_window_ms)
   assert after * 2 <= before * 3
   stop_tree(tree)
 }
@@ -180,17 +198,17 @@ pub fn a_reload_during_loading_adds_no_series_test() {
         process.send(calls, Nil)
         Error("database is unreachable or timed out")
       }),
-      fixed_retry_delay,
+      counted_retry_delay,
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
-  let before = count_within(calls, 1000)
+  let before = count_within(calls, counted_retries_window_ms)
   assert before >= 5
 
   assert bunker.reload_accounts(name) == Ok(Nil)
   assert bunker.reload_accounts(name) == Ok(Nil)
   drain(calls)
-  let after = count_within(calls, 1000)
+  let after = count_within(calls, counted_retries_window_ms)
   assert after * 2 <= before * 3
   stop_tree(tree)
 }
@@ -387,12 +405,15 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
   stop_tree(tree)
 }
 
-/// ストアの読み込みに失敗し続けても、監視のプラグインにはイベントが届き続け、
-/// バンカーもルートも再起動しない。読み込みでアクターのループが止まっていても、
-/// 問い合わせは `named.call` のタイムアウトより前に応答する。
+/// ストアの読み込みが戻らず、その後も失敗し続けても、監視のプラグインにはイベントが
+/// 届き続け、バンカーもルートも再起動しない。読み込みでアクターのループが止まって
+/// いる間の問い合わせは、読み込みが戻った後に `named.call` のタイムアウトより前に
+/// 応答する。
 pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
+  let gates = process.new_subject()
+  let next_call = call_counter()
   let bunker_name = process.new_name("test_bunker")
   let monitor_relay = test_relay()
   let tree =
@@ -412,8 +433,12 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
       bunker: bunker_spec(
         bunker_name,
         store_with_load(fn() {
-          // 到達できない DB に対するチェックアウト待ちを模す。
-          process.sleep(1500)
+          // 最初の読み込みは、到達できない DB に対するチェックアウト待ちを模して、
+          // テストが開けるまで戻らない。以後の再試行は待たずに失敗する。
+          case next_call() {
+            0 -> hold_until_released(gates)
+            _ -> Nil
+          }
           Error("database is unreachable or timed out")
         }),
         [named_relay("ws://bunker.test")],
@@ -434,7 +459,10 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   }
   let assert Ok(bunker_before) = process.named(bunker_name)
 
+  // 読み込みで止まっている間にイベントを届ける。
+  let assert Ok(gate) = process.receive(gates, 2000)
   deliver_and_expect(deliver, seen, event_labels("while-failing", 3), 2000)
+  process.send(gate, Nil)
   let asked_at = time.monotonic_ms()
   // 読み込めていない間 `bunker.sessions` は理由を返すので、応答したことは
   // `named.call` の `Some` で確かめる。
@@ -663,17 +691,20 @@ pub fn changes_before_loading_do_not_reach_the_store_test() {
   stop_tree(tree)
 }
 
-/// 遅い書き込みの間に届いたリクエストは捨てられず、書き込みの応答の後に処理される。
+/// 書き込みの応答を待っている間に届いたリクエストは捨てられず、書き込みの応答の
+/// 後に処理される。
 pub fn requests_during_a_slow_write_are_not_dropped_test() {
   let reports = process.new_subject()
   let calls = process.new_subject()
   let results = process.new_subject()
+  let gates = process.new_subject()
   let name = process.new_name("test_bunker")
   let store = memory_store(calls, [stored_signer(signer_key)], False)
   let slow =
     bunker.Store(..store, insert: fn(entry) {
       let written = store.insert(entry)
-      process.sleep(1500)
+      // 書き込みの応答を、テストが開けるまで遅らせる。
+      hold_until_released(gates)
       written
     })
   let tree =
@@ -693,8 +724,10 @@ pub fn requests_during_a_slow_write_are_not_dropped_test() {
     )
   })
   let assert Ok(Inserted(..)) = process.receive(calls, 1000)
+  let assert Ok(gate) = process.receive(gates, 1000)
   deliver(request("p1", "ping", "[]"))
-  assert process.receive(reports, 1000) == Error(Nil)
+  assert process.receive(reports, 300) == Error(Nil)
+  process.send(gate, Nil)
   assert process.receive(results, 2000) == Ok(Ok(Nil))
   let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
   assert string.contains(response_body(pong), "\"result\":\"pong\"")

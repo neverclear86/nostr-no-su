@@ -575,7 +575,7 @@ pub fn unconfirmed_nip46_writes_reload_once_and_not_while_loading_test() {
   deliver(connect_request("c2", ""))
   let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
   assert string.contains(response_body(refused), engine.connection_not_saved)
-  assert process.receive(loads, 500) == Error(Nil)
+  assert process.receive(loads, 300) == Error(Nil)
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
   assert bunker.sessions(name)

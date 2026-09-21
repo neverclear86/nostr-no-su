@@ -11,6 +11,8 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
+`gleam test` は test/ 配下のモジュールを 8 本のレーンで同時に走らせる（`test/nostr_no_su_test.gleam` の `lanes`。空いたレーンが次のモジュールを取る。実行器は `test/support/eunit_runner.erl`）。同じモジュールの中のテストは順に走り、同じ DB の advisory lock を取り合う `account_store_test` と `account_reconcile_test` だけは 1 本のレーンでこの順に走る（同じファイルの `ordered_modules`）。gleeunit の main は使っていないが、報告（進捗の点と失敗の一覧）は gleeunit のものをそのまま使う。出力のログの行は別のモジュールのテストのものと入り混じる。壁時間は Postgres と strfry つきで 20 秒ほどで、いちばん長いモジュール（`account_reconcile_test` と `app_accounts_test`）で決まる。
+
 本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。CI の `test` ジョブは Postgres を立てて渡す。CI の失敗で push をやり直さないよう、push の前に手元でも通す:
 
 ```sh
@@ -27,6 +29,10 @@ docker rm -f nns-pg-test
 表駆動のテストでは行に名前（`name` のようなラベル）を付け、比較の両辺に名前を含めて、どの行が落ちたかが出力で分かるようにする。同じ status を返す case が複数あるときは、status ではなく鍵（対象を一意に決める値）を期待値にする。
 
 到達しない分岐を消すときは、`case` の潰しではなく不可反駁な `let` に置き換える。残す `Error` の分岐は、`grep` の件数を検証の手順に載せて、レビューと最終確認が同じ根拠を辿れるようにする。
+
+テストのモジュールは並列に走るので、モジュールをまたいで共有する状態を使わない。プロセスの名前は `process.new_name`、DB はテストごとのスキーマか database、BEAM のモジュール名と一時ディレクトリーは `support/beam_fixture` で一意にする。環境変数（`config_test` だけが使う）や同じ DB の advisory lock のように共有せざるを得ない状態を新しいモジュールで使うなら、そのモジュールを `test/nostr_no_su_test.gleam` の `ordered_modules` に足して、干渉する相手と同じレーンで走らせる。
+
+時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
 
 ## 管理 UI の CSS と画面の撮影
 
@@ -85,7 +91,7 @@ docker rm -f nns-pg-test
 | `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |
 | `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 | `Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |
 
-`.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（Postgres と strfry つきで約 90 秒）で決まり、PR 全体で 2 分半ほどかかる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
+`.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（Postgres と strfry つきで約 20 秒。手元でも 20 秒ほど）とコンテナーの起動やビルドで決まり、`test` ジョブが 1 分 10 秒、PR 全体で 1 分半ほどかかる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
 
 ## レビューの前の機械的な検査
 

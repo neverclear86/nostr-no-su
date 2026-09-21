@@ -9,8 +9,8 @@ pub fn await_returns_the_value_test() {
   assert task.await(job, task.deadline_in(1000)) == Ok(7)
 }
 
-/// 3 秒眠る仕事を 300ms の期限で待つと `Error(Nil)` になり、経過は期限に収まる
-/// （1 秒未満）。
+/// 3 秒眠る仕事を 100ms の期限で待つと `Error(Nil)` になり、経過は期限に収まる
+/// （1 秒未満）。仕事の眠りは待たずに終わるので、テストの時間は期限だけである。
 pub fn await_gives_up_at_the_deadline_test() {
   let job =
     task.start(fn() {
@@ -18,7 +18,7 @@ pub fn await_gives_up_at_the_deadline_test() {
       7
     })
   let started_at = time.monotonic_ms()
-  assert task.await(job, task.deadline_in(300)) == Error(Nil)
+  assert task.await(job, task.deadline_in(100)) == Error(Nil)
   assert time.monotonic_ms() - started_at < 1000
 }
 
@@ -30,7 +30,7 @@ pub fn a_shared_deadline_bounds_the_total_wait_test() {
     7
   }
   let jobs = [task.start(sleeper), task.start(sleeper), task.start(sleeper)]
-  let deadline = task.deadline_in(300)
+  let deadline = task.deadline_in(100)
   let started_at = time.monotonic_ms()
   let results = list.map(jobs, task.await(_, deadline))
   assert results == [Error(Nil), Error(Nil), Error(Nil)]
@@ -48,6 +48,6 @@ pub fn a_result_that_already_arrived_is_taken_after_the_deadline_test() {
 /// `await` も動く。
 pub fn a_crashed_task_does_not_kill_the_caller_test() {
   let job = task.start(fn() { panic as "boom" })
-  assert task.await(job, task.deadline_in(300)) == Error(Nil)
+  assert task.await(job, task.deadline_in(100)) == Error(Nil)
   assert task.await(task.start(fn() { 1 }), task.deadline_in(300)) == Ok(1)
 }
