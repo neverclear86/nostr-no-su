@@ -50,7 +50,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 | --- | --- | --- |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | はい | 保存先の Postgres（`postgres://user:pass@host:5432/db`） |
 
-この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先はこの環境変数だけで決まり、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts` の節から選べ、プラグイン自身の DB に保存される（初期値は全アカウント）。
+この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先はこの環境変数だけで決まり、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts` の節から選べ、プラグイン自身の DB に保存される（初期値は全アカウント）。管理 UI にはもう 1 つ `/plugins/event_logger/timeline` があり、保存済みのイベントの直近 20 件を新しい順に出す。
 
 設定が無い、あるいは URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
 
@@ -106,12 +106,12 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 ## スキーマの版
 
-`events` とインデックス（版 1）、監視対象の `monitored_accounts`（版 2）は版つきの移行で作り、適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
+`events` とインデックス（版 1）、監視対象の `monitored_accounts`（版 2）、タイムラインが読む `events_received_at` のインデックス（版 3）は版つきの移行で作り、適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
 
 記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある（取り方と戻し方は [バックアップと復旧](../../docs/operations.md) にある）。
 
 ```
-[event_logger] database schema version 3 is newer than this plugin supports (up to version 2); stopping the store
+[event_logger] database schema version 4 is newer than this plugin supports (up to version 3); stopping the store
 ```
 
 ## 開発
@@ -172,8 +172,9 @@ DB を止めると保存だけが止まり、監視は続く。復帰すると�
 [event_logger] database is back; dropped 12 events while it was unavailable
 ```
 
-管理 UI のページも確認できる。`Monitored accounts`・`Configuration`・`Runtime` の 3 つの見出し、登録アカウントごとのチェックと `Save` のボタン、マスクした URL、プールと保存アクターの `running` のバッジが 2 つ出る。登録が 0 件のときは `Monitored accounts` の節に空の状態の文だけが出る。
+管理 UI のページも確認できる。`Monitored accounts`・`Configuration`・`Runtime` の 3 つの見出し、登録アカウントごとのチェックと `Save` のボタン、マスクした URL、プールと保存アクターの `running` のバッジが 2 つ出る。登録が 0 件のときは `Monitored accounts` の節に空の状態の文だけが出る。`Timeline` のタブを開くと、保存済みのイベントが 1 件 1 枚のカードで最大 20 枚出る。見出しは `kind 1 · 2026-09-22T10:00:00Z` の形で、`tags`・`content`・`signature` は畳まれている。0 件のときは空の状態の文だけが出る。
 
 ```sh
 curl -s -u admin:<ADMIN_PASSWORD> http://127.0.0.1:8080/plugins/event_logger/settings
+curl -s -u admin:<ADMIN_PASSWORD> http://127.0.0.1:8080/plugins/event_logger/timeline
 ```
