@@ -74,13 +74,10 @@ docker run -d --name nns-verify-testpg -p 127.0.0.1:5533:5432 \
 docker rm -f -v nns-verify-testpg
 ```
 
-### event_logger のビルドと起動
+### 本体の起動
 
 ```sh
 ./dc.sh up -d postgres strfry-a strfry-b
-docker run --rm -v "$W/plugins-src/event_logger:/src:ro" -v "$W/plugins/event_logger:/out" \
-  ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine sh -c 'cp -r /src /work && rm -rf /work/build && cd /work \
-  && gleam deps download && gleam export erlang-shipment && cp -r build/erlang-shipment/. /out/ && chmod -R a+rX /out'
 ./dc.sh build nostr-no-su
 ./dc.sh up -d nostr-no-su
 ```
@@ -354,8 +351,6 @@ done
 ```sh
 ./dc.sh down -v --rmi local
 docker images --format '{{.Repository}}:{{.Tag}}' | grep nns-verify || true   # 残っていれば docker rmi で消す
-docker run --rm -v "$W/plugins:/p" --entrypoint sh ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
-  -c 'rm -rf /p/event_logger'
 git worktree remove --force "$W"
 cat "$V/baseline-docker-ps.txt"
 docker ps -a --format '{{.Names}} {{.State}} {{.Status}}' | grep '^nostr-no-su-' || true

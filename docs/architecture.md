@@ -714,7 +714,7 @@ nostr-no-su/
 │   ├── file_logger/              状態を持たず、設定を受け取る（Erlang 1 ファイル）
 │   └── counter/                  子プロセスを申告する（Erlang 1 ファイル）
 │
-├── plugins/                      ビルド済みプラグインの置き場所（追跡しない）
+├── plugins/                      自作プラグインの置き場所（追跡しない。同梱の event_logger はイメージの /app/plugins にある）
 │
 ├── docs/
 │   ├── plugin-api.md             プラグイン API v1 の仕様（プラグイン作者向け）
@@ -739,8 +739,8 @@ nostr-no-su/
 同じ名前のモジュールは本体の版が優先される（プラグイン側は影に入る）ので、共有するパッケージの版は両方の `manifest.toml` で揃え、CI で一致を検査している。
 
 `plugins/` は追跡しない。
-`plugins-src/` や `examples/` のソースを本体と同じ docker イメージの中でビルドし、その成果物をここへ置く。
-ホスト環境でビルドすると同梱物が変わってしまうので、ビルド手順は各プラグインの README に従う。
+`plugins-src/event_logger` は Dockerfile の `plugin-build` ステージが本体と同じ toolchain の中でビルドし、イメージの `/app/plugins/event_logger` に入るので、ここへ置く必要はない。
+`examples/` のソースや改造版の `event_logger` をここへ置くときは、ホスト環境でビルドすると同梱物が変わってしまうので、各プラグインの README のビルド手順に従う。
 
 ## 環境変数と読み手
 

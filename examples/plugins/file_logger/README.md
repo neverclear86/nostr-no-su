@@ -32,7 +32,7 @@ chmod -R a+rX plugins
 plugins/file_logger/ebin/file_logger.beam
 ```
 
-同梱の `docker-compose.yml` は `./plugins` を `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡す。コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限にしておくこと。
+同梱の `docker-compose.yml` は `./plugins` を `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡す（同梱の `event_logger` と併せて読み込まれる）。コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限にしておくこと。
 
 起動ログに次の行が出れば読み込まれている。
 

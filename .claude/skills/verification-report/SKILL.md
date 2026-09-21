@@ -43,8 +43,8 @@ compose は worktree の `docker-compose.yml` に、strfry 2 台を足す overri
 
 - strfry のイメージは既定の設定で 127.0.0.1 に bind するので、そのままでは他のコンテナーから届かない。`bind = "0.0.0.0"` に書き換えた設定ファイルをマウントする
 - `ADMIN_PORT` はアプリの待ち受けとホストへの公開の両方に効く。`ADMIN_BASE_URL` も同じポートで設定すると、`auth_url` をホストのブラウザーでそのまま開ける
-- `event_logger` プラグインは本体と同じ gleam イメージの中でビルドし、worktree の `plugins/event_logger` に出力する。出力は root 所有になるので、`chmod -R a+rX` もコンテナーの中で行う
-- 起動の順序は、Postgres と strfry、プラグインのビルド、本体のイメージのビルド、本体の順にする
+- `event_logger` プラグインはイメージに同梱されている（`/app/plugins/event_logger`）ので、`plugins/` へは置かない。同名を置くと同梱版に負ける
+- 起動の順序は、Postgres と strfry、本体のイメージのビルド、本体の順にする
 - `gleam test` は worktree で、使い捨ての Postgres を `TEST_DATABASE_URL` に渡して実行し、件数を検証環境の節に書く。`build` は `.dockerignore` で除かれるので、本体のイメージのビルドと並行してよい
 
 ### 3. 検証する

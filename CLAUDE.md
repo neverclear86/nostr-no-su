@@ -30,7 +30,7 @@ cd plugins-src/event_logger && gleam build --warnings-as-errors && TEST_DATABASE
 npm ci && npm run build:css && git diff --exit-code -- priv/static/admin.css   # 管理 UI の .gleam、assets/、package*.json を変えた PR だけ
 ```
 
-これに加えて、プラグインの README のビルド手順（`plugins-src/`、`examples/` を変えた PR）と docker イメージ（`Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた PR）のジョブがある（docs/development.md の「CI」）。CI の失敗で push をやり直さないよう、push の前に手元で統合テストまで通すこと（起動は docs/development.md の「実行とテスト」「event_logger プラグインのテスト」）。
+これに加えて、プラグインの README のビルド手順（`plugins-src/`、`examples/` を変えた PR）と docker イメージ（`Dockerfile`、`docker/`、`docker-compose.yml`、`plugins-src/`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた PR）のジョブがある（docs/development.md の「CI」）。CI の失敗で push をやり直さないよう、push の前に手元で統合テストまで通すこと（起動は docs/development.md の「実行とテスト」「event_logger プラグインのテスト」）。
 
 - 描画のモジュール（`src/nostr_no_su/admin/` の `.gleam`。`admin/i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` をやり直して `priv/static/admin.css` を一緒にコミットする（古い `node_modules` のままでは違う CSS ができる）。クラスを変えなくても CSS が変わることがある。
 - `plugins-src/event_logger` の `manifest.toml` の共有パッケージ（`gleam_stdlib`、`pog` など）の版は本体と同時に上げる。ずれると CI の版の検査で落ちる。

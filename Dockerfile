@@ -1,4 +1,6 @@
-FROM ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine@sha256:e0b22aa9dc1c38ae564106e1d6c97c11caf592b25736f53a62900eccd79827cd AS build
+FROM ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine@sha256:e0b22aa9dc1c38ae564106e1d6c97c11caf592b25736f53a62900eccd79827cd AS toolchain
+
+FROM toolchain AS build
 WORKDIR /build
 # ソースだけを変えた再ビルドで依存の取得をキャッシュから使うため、マニフェストを先にコピーする。
 # path 依存の stratus は gleam.toml が無いと解決できない。
@@ -14,10 +16,19 @@ RUN gleam export erlang-shipment \
   && mv build/erlang-shipment /app \
   && install -m 0755 docker/start.sh /app/start.sh
 
+# 同梱プラグイン event_logger を本体と同じ toolchain の中でビルドする（OTP を揃え、
+# ホストの Elixir を混ぜないため）。写すのはソースとマニフェストだけにする。
+FROM toolchain AS plugin-build
+WORKDIR /build/event_logger
+COPY plugins-src/event_logger/gleam.toml plugins-src/event_logger/manifest.toml ./
+RUN gleam deps download
+COPY plugins-src/event_logger/src src
+RUN gleam export erlang-shipment
+
 # gleam のビルドイメージは erlang:29.0.1-alpine の上に /bin/gleam を足したものなので、
 # BEAM ファイルをコンパイルした OTP と実行する OTP を一致させるため、実行ステージには
 # その基底イメージを使う（一致は CI の docker-image ジョブが確かめる）。
-# gleam の版を上げるときは、上の FROM のタグとダイジェストに合わせて、下のタグと
+# gleam の版を上げるときは、toolchain の FROM のタグとダイジェストに合わせて、下のタグと
 # ダイジェストも一緒に変える（取り違えは docker-image ジョブの OTP の検査で落ちる）。
 FROM erlang:29.0.1-alpine@sha256:3ab831e65c5d398281e00d24bae3901b4cfdc1b49f79fadfd2562a1a9a17aabd
 # 実行に rebar3 は要らないので消す。利用者を adduser で作ると /etc/shadow に
@@ -29,6 +40,10 @@ RUN rm /usr/local/bin/rebar3 \
   && echo 'nostr:x:1000:' >> /etc/group
 WORKDIR /app
 COPY --from=build --chown=nostr:nostr /app /app
+# ローダーが受け付ける <PLUGIN_DIR>/<name>/<app>/ebin/ のレイアウトのまま置く
+# （docs/plugin-api.md 第 8.1 節）。同名なら先の /app/plugins の同梱版が勝つ。
+COPY --from=plugin-build --chown=nostr:nostr /build/event_logger/build/erlang-shipment /app/plugins/event_logger
+ENV PLUGIN_DIR=/app/plugins
 # 秘密鍵を暗号化するマスターキーを環境変数かファイルで受け取り、復号した秘密鍵を
 # メモリに持つプロセスなので、root では動かさない。
 USER nostr
