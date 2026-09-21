@@ -203,7 +203,7 @@ pub type Outcome {
   /// クライアントへ送り返す応答イベント。
   Reply(response: Event)
   /// DB への書き込みが要る応答。書けたら `response` を送って `next` で続け、
-  /// 書けなかったら `on_failure` を送って `handle_event` の第 1 要素で続ける。
+  /// 書けなかったら `on_failure` を送って `handle_event` の `engine` で続ける。
   Persist(write: Write, next: Engine, response: Event, on_failure: Event)
   /// 処理済みのリクエスト。2 つ目のバンカーリレーから同じものが届いた場合など。
   /// 複数リレー構成では想定内なので、呼び出し側はログを出さない。
