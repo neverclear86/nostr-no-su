@@ -11,11 +11,12 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
+import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
-  Removed, Revoked, action_path, client, context, failing_context, get, header,
-  in_japanese, password, post, post_form, reporting_context, signer, signer_nsec,
-  spec_nsec, token, with_credentials,
+  Removed, Revoked, action_path, client, client_address, context,
+  failing_context, get, header, in_japanese, password, post, post_form,
+  reporting_context, signer, signer_nsec, spec_nsec, token, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -104,14 +105,30 @@ pub fn authentication_failures_are_classified_test() {
   assert admin.authenticate(password, correct |> lowercase_scheme) == Ok(Nil)
 }
 
-/// 401 のログ行は理由だけを含む。
+/// 401 のログ行は理由と接続元の IP だけを含む。
 pub fn unauthorized_lines_name_the_failure_test() {
-  assert admin.unauthorized_line(admin.NoCredentials)
-    == "rejected a request without credentials"
-  assert admin.unauthorized_line(admin.MalformedCredentials)
-    == "rejected a request with malformed credentials"
-  assert admin.unauthorized_line(admin.WrongCredentials)
-    == "rejected a request with wrong credentials"
+  assert admin.unauthorized_line(admin.NoCredentials, client_address)
+    == "rejected a request without credentials from 203.0.113.5"
+  assert admin.unauthorized_line(admin.MalformedCredentials, client_address)
+    == "rejected a request with malformed credentials from 203.0.113.5"
+  assert admin.unauthorized_line(admin.WrongCredentials, client_address)
+    == "rejected a request with wrong credentials from 203.0.113.5"
+  assert admin.unauthorized_line(
+      admin.NoCredentials,
+      admin.unknown_client_address,
+    )
+    == "rejected a request without credentials from an unknown address"
+}
+
+/// Basic 認証に失敗した応答は、Context の遅延の分だけ待ってから返る。
+pub fn failed_authentication_is_delayed_test() {
+  let context = admin.Context(..context(), authentication_delay: 200)
+  let started_at = time.monotonic_ms()
+  let response =
+    simulate.request(http.Get, "/")
+    |> admin.handle_request(context, _)
+  assert response.status == 401
+  assert time.monotonic_ms() - started_at >= 200
 }
 
 /// secret 入りの URI を含むダッシュボードは、どこにも保存させない。

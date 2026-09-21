@@ -274,6 +274,8 @@ fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
 fn context() -> admin.Context {
   admin.Context(
     password:,
+    client_address: admin.unknown_client_address,
+    authentication_delay: 0,
     accounts: fn() {
       Ok([
         row(signer, signer_npub, "main account"),

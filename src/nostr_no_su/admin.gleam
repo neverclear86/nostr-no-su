@@ -30,9 +30,11 @@
 //// `Accept-Language` から決められるので、通知ページの HTML にする
 //// （`require_same_origin`）。
 ////
-//// 認証に失敗した要求（401）は、理由だけを `[admin]` の 1 行でログに出し、資格情報、
-//// パス、送信元は出さない。遅延やロックアウトは入れない（単一利用者がループバックか
-//// VPN の内側で使う前提）。
+//// 認証に失敗した要求（401）は、理由と接続元の IP を `[admin]` の 1 行でログに出し、
+//// 資格情報とパス（承認ページのトークンを含みうる）は出さない。IP は TCP の接続元
+//// （`client_address`）で、`X-Forwarded-For` は見ない。応答は固定の遅延
+//// （`authentication_failure_delay`）の後に返す。ロックアウトと IP ごとの回数制限は
+//// 入れない（必要なら前段のリバースプロキシーで行う）。
 ////
 //// テーマは言語と同じく認証の後に、切り替えで保存した cookie から決め（`request_theme`）、
 //// 無ければブラウザーの設定に従う。CSRF の 400 のページだけ、認証の前に cookie から
@@ -42,6 +44,7 @@ import gleam/bit_array
 import gleam/bool
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
+import gleam/erlang/process
 import gleam/http
 import gleam/http/cookie
 import gleam/http/request
@@ -88,6 +91,13 @@ const return_to_dashboard = view.SwitchReturningTo("/")
 
 /// Basic 認証のユーザー名。設定するのはパスワードだけにする。
 const username = "admin"
+
+/// 接続元の IP が分からないときにログ行に入れる表示。ツリーに渡す `Context` の初期値
+/// にも使う。
+pub const unknown_client_address = "an unknown address"
+
+/// 本番で Basic 認証の失敗の後に挟む遅延（ミリ秒）。テストとプレビューは 0 を入れる。
+pub const authentication_failure_delay = 1000
 
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
@@ -159,6 +169,11 @@ pub type NostrconnectFailure {
 pub type Context {
   Context(
     password: String,
+    /// この要求の接続元の IP の表示。401 のログ行だけが使う。`server` が要求ごとに
+    /// 入れ替えるので、ツリーに渡す値は `unknown_client_address` でよい。
+    client_address: String,
+    /// Basic 認証の失敗の後に挟む固定の遅延（ミリ秒）。
+    authentication_delay: Int,
     /// アカウントの一覧。読み込み中、応答なしのときは表示する理由を返す。
     accounts: fn() -> Result(List(dashboard.AccountRow), String),
     /// 直近の読み込みで飛ばされた行の一覧。読み込み中、応答なしのときは表示する
@@ -223,14 +238,18 @@ pub fn supervised(
 
 /// 指定のアドレスとポートで待ち受ける mist の設定。secret_key_base は wisp が
 /// 要求するが、cookie の署名も暗号化も使わない（言語とテーマの cookie も署名しない）
-/// ため起動ごとの乱数でよい。
+/// ため起動ごとの乱数でよい。要求ごとに接続元の IP を `Context` に入れてから wisp の
+/// ハンドラーへ渡す。
 fn server(
   bind: String,
   port: Int,
   context: Context,
 ) -> mist.Builder(mist.Connection, mist.ResponseData) {
-  handle_request(context, _)
-  |> wisp_mist.handler(wisp.random_string(64))
+  let secret_key_base = wisp.random_string(64)
+  fn(request) {
+    let context = Context(..context, client_address: client_address(request))
+    wisp_mist.handler(handle_request(context, _), secret_key_base)(request)
+  }
   |> mist.new
   |> mist.bind(bind)
   |> mist.port(port)
@@ -241,6 +260,16 @@ fn server(
       "listening on " <> listening_url(address, port),
     )
   })
+}
+
+/// 接続元の IP の表示。`mist.get_connection_info` が返す TCP の接続元だけを使い、
+/// `X-Forwarded-For` などのヘッダーは見ない（前段のプロキシーが付けた値は偽れる）。
+/// 取れなければ `unknown_client_address`。
+fn client_address(request: request.Request(mist.Connection)) -> String {
+  case mist.get_connection_info(request.body) {
+    Ok(info) -> mist.ip_address_to_string(info.ip_address)
+    Error(Nil) -> unknown_client_address
+  }
 }
 
 /// 実際に待ち受けているアドレスの表示。IPv6 アドレスは URL 内で角括弧に入れる。
@@ -1906,7 +1935,8 @@ pub type AuthenticationFailure {
 }
 
 /// Basic 認証を要求する。資格情報が無い、あるいは一致しないときは、失敗の理由を
-/// 1 行ログに出してから 401 を返す。
+/// 1 行ログに出し、固定の遅延（`authentication_delay`）の後に 401 を返す。遅延は
+/// その接続を処理しているプロセスだけを止める。
 fn require_password(
   context: Context,
   request: Request,
@@ -1915,7 +1945,12 @@ fn require_password(
   case authenticate(context.password, request) {
     Ok(Nil) -> next()
     Error(failure) -> {
-      log.write(log.Warning, log_prefix, unauthorized_line(failure))
+      log.write(
+        log.Warning,
+        log_prefix,
+        unauthorized_line(failure, context.client_address),
+      )
+      process.sleep(context.authentication_delay)
       unauthorized()
     }
   }
@@ -1960,15 +1995,19 @@ fn is_admin_password(offered: String, password: String) -> Bool {
   )
 }
 
-/// Basic 認証に失敗した要求（401）1 件のログ行の本文（接頭辞を除く）。理由だけを
-/// 含め、資格情報、パス、メソッド、送信元は含めない。パスは承認ページのトークンを
+/// Basic 認証に失敗した要求（401）1 件のログ行の本文（接頭辞を除く）。理由と接続元の
+/// IP だけを含め、資格情報、パス、メソッドは含めない。パスは承認ページのトークンを
 /// 含みうるからである。
-pub fn unauthorized_line(failure: AuthenticationFailure) -> String {
-  case failure {
+pub fn unauthorized_line(
+  failure: AuthenticationFailure,
+  client_address: String,
+) -> String {
+  let reason = case failure {
     NoCredentials -> "rejected a request without credentials"
     MalformedCredentials -> "rejected a request with malformed credentials"
     WrongCredentials -> "rejected a request with wrong credentials"
   }
+  reason <> " from " <> client_address
 }
 
 /// 401。ブラウザーに資格情報の入力を促すため `WWW-Authenticate` を付ける。
