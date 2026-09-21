@@ -1,4 +1,4 @@
-//// ビルドした管理 UI のスタイルシート（`priv/static/admin.css`）の検査。
+//// ビルドした管理 UI のスタイルシート（`priv/static/admin.css`）と、ページの中のスタイルの検査。
 
 import gleam/list
 import gleam/result
@@ -54,6 +54,16 @@ pub fn buttons_and_inputs_follow_the_color_rules_test() {
       }
     })
   assert violations == []
+}
+
+/// どのページも `<style>` 要素と `style` 属性を持たない。CSP（`style-src 'self'`）は
+/// インラインのスタイルを適用させないので、書き足すと指定が黙って効かなくなる。
+/// テキストと属性値はエスケープされて `<` と `"` を含まないので、`<style` は要素の
+/// 開始タグで、` style="` は属性の始まりである。
+pub fn pages_have_no_inline_styles_test() {
+  use page <- list.each(pages())
+  assert !string.contains(page, "<style")
+  assert !string.contains(page, " style=\"")
 }
 
 /// ページの `class` 属性に現れるクラス名。値はエスケープされて `"` を含まないので、次の `"` までが

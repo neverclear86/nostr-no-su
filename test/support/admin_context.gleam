@@ -26,6 +26,9 @@ import wisp/simulate
 /// 管理 UI のパスワード。`test_context` が Context に入れ、Basic 認証と再表示の入力に使う。
 pub const password = "s3cr3t-password"
 
+/// 認証の失敗のログ行に入る接続元。本物のサーバーは mist の接続情報から入れる。
+pub const client_address = "203.0.113.5"
+
 /// 登録済みのアカウントの署名者。BIP-340 の公式ベクター 0 の公開鍵。
 pub const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 
@@ -138,6 +141,8 @@ pub fn test_context(
 ) -> admin.Context {
   admin.Context(
     password: password,
+    client_address: client_address,
+    authentication_delay: 0,
     accounts: fn() { Ok([account_row(label)]) },
     skipped: fn() { Ok([]) },
     add_account: fn(added, added_label) {

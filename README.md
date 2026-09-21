@@ -140,7 +140,7 @@ kind 24133 のペイロードは **NIP-44** で暗号化する（現行仕様）
 
 起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードで、承認待ちの接続要求の承認と拒否、アカウントの登録と操作、承認済みのセッションの取り消し、リレーの追加・用途の編集・削除を行い、リレーとプラグインの状態を確かめる。画面の構成、操作ごとの結果と状態コード、接続の承認（auth_url フロー）、CSRF の防ぎ方は [管理 UI](docs/admin-ui.md) にある。
 
-認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。`ADMIN_PORT=` で管理 UI を無効にした構成では要らない。パスワードは自動生成しない。認証に失敗した要求は `[admin] rejected a request with wrong credentials` のように理由だけを 1 行ログに出す（資格情報なしの `without credentials`、形式が壊れた `with malformed credentials` もある）。ブラウザーは最初に資格情報なしで要求するので、`without credentials` の行は正規の利用でも出る。試行の回数の制限や遅延は無いので、推測されにくいパスワードを使い、公開範囲をループバックか VPN の内側に絞ること。
+認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。`ADMIN_PORT=` で管理 UI を無効にした構成では要らない。パスワードは自動生成しない。認証に失敗した要求は `[admin] rejected a request with wrong credentials from 127.0.0.1` のように理由と接続元の IP だけを 1 行ログに出す（資格情報なしの `without credentials`、形式が壊れた `with malformed credentials` もある）。IP は TCP の接続元で、`X-Forwarded-For` は見ない。ブラウザーは最初に資格情報なしで要求するので、`without credentials` の行は正規の利用でも出る。認証に失敗した応答は 1 秒待ってから返す（ブラウザーが資格情報を覚える前の最初の要求も 1 秒待つ）。試行の回数の制限とロックアウトは無いので、推測されにくいパスワードを使い、公開範囲をループバックか VPN の内側に絞ること。
 
 `ADMIN_PORT` で待ち受けポートを変更でき、空文字列や空白だけの値（`ADMIN_PORT=` など）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` か空白だけの値で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
 
@@ -166,6 +166,8 @@ server {
     }
 }
 ```
+
+管理 UI は Basic 認証の失敗を 1 秒遅らせるだけで、試行の回数の制限とロックアウトは持たない。要求の回数の制限や、失敗の回数による遮断が必要なときは、前段のリバースプロキシーで行うこと。管理 UI のログに出る接続元の IP は TCP の接続元なので、プロキシーの背後ではプロキシーのアドレスになる。
 
 承認ページの URL の土台にする公開 URL（上の例なら `https://admin.example`）は、`ADMIN_BASE_URL` に設定する（[管理 UI](docs/admin-ui.md) の「接続の承認（auth_url フロー）」）。
 
