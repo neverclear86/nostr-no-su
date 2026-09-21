@@ -33,17 +33,23 @@ ADMIN_PASSWORD=<openssl rand -base64 24 の出力> \
 gleam run
 ```
 
-docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーと管理パスワードだけである:
+docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーと管理パスワードだけである。同梱の `setup-env.sh` が、`.env.example` を `.env` に複製してこの 2 つを生成した値で埋め、`.env` を 600 にする:
+
+```sh
+sh setup-env.sh
+docker compose up --build
+```
+
+手で作るなら、同じことを次のように行う:
 
 ```sh
 [ -e .env ] || cp .env.example .env
 chmod 600 .env
 # .env の ACCOUNT_MASTER_KEY= の後に、上の openssl rand -hex 32 の出力を書く
 # .env の ADMIN_PASSWORD= の後に、openssl rand -base64 24 の出力を書く
-docker compose up --build
 ```
 
-すでに `.env` があれば複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。その場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にあり、`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
+すでに `.env` があれば、`setup-env.sh` も手順も複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。`setup-env.sh` はその場合、値の入っている行は変えず、必須の 2 つのうち行が無いか空のものだけを埋め、`.env.example` にあって `.env` に無い変数を `.env.example` の行のまま末尾に足す。手で作る場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にあり、`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
 
 起動するとバンカーはテーブル `bunker_accounts` を作り（すでにあれば何もしない）、保存されたアカウントを読み込んで `[bunker] loaded N account(s)` を出す。起動ログには秘密鍵も `bunker://` URI も出さない。
 

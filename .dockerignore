@@ -16,3 +16,4 @@ assets
 dev/*
 !dev/collect_licenses.sh
 !dev/licenses-overrides.txt
+setup-env.sh
