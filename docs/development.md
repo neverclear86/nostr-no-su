@@ -89,7 +89,7 @@ docker rm -f nns-pg-test
 | `event-logger` | 共有パッケージの版の検査、event_logger の build、Postgres つきの `gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
 | `css` | `npm run build:css` の結果が `priv/static/admin.css` と一致すること | 管理 UI の `.gleam`、`assets/`、`package*.json` を変えた |
 | `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |
-| `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 | `Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |
+| `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口。`linux/amd64`（`ubuntu-latest`）と `linux/arm64`（`ubuntu-24.04-arm`）で 1 回ずつ走る | `Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |
 
 `.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（Postgres と strfry つきで約 20 秒。手元でも 20 秒ほど）とコンテナーの起動やビルドで決まり、`test` ジョブが 1 分 10 秒、PR 全体で 1 分半ほどかかる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
 
