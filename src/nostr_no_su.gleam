@@ -69,6 +69,8 @@ pub fn main() -> Nil {
       exit_with_failure()
     }
     Ok(started) -> {
+      // pgo などに渡る秘密は、ツリーを起動する前に伏せる。
+      log.redact_secrets(app.redactable_secrets(started.spec))
       list.each(started.notes, log.write_line(log.Notice, _))
       // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
       // クラッシュさせる。コンテナーの再起動はプロセスの終了で起き、終了コードは
