@@ -92,7 +92,7 @@ pub fn load_all_missing_directory_test() {
     )
   assert plugins == []
   assert has_note(notes, "cannot read directory (enoent)")
-  assert has_note(notes, "external plugins disabled")
+  assert has_note(notes, "; skipped")
 }
 
 /// ディレクトリーでないパスを指した場合も同じ形で報告する。
@@ -273,6 +273,120 @@ pub fn load_all_rejects_reserved_name_test() {
     )
   assert plugins == []
   assert has_note(notes, "duplicate plugin name \"console_logger\"")
+}
+
+/// `:` 区切りで並べたディレクトリーは左から順に走査する。`first` 側のモジュール
+/// 名が辞書順で後ろでも、並びはディレクトリーの順になる。集計行は
+/// ディレクトリーごとに出る。
+pub fn load_all_multiple_directories_test() {
+  let fixture = beam_fixture.new("multi_dir")
+  let first = fixture.root <> "/first"
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(first)
+  beam_fixture.mkdir(second)
+  put_plugin(beam_fixture.name(fixture, "zzz"), "first_dir_plugin", first)
+  put_plugin(beam_fixture.name(fixture, "aaa"), "second_dir_plugin", second)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(first <> ":" <> second),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert list.map(plugins, fn(item) { item.name })
+    == ["first_dir_plugin", "second_dir_plugin"]
+  assert has_note(notes, first <> ": first_dir_plugin")
+  assert has_note(notes, second <> ": second_dir_plugin")
+}
+
+/// 一覧の中の読めないディレクトリーは飛ばし、後ろのディレクトリーの走査は
+/// 続く。行の末尾は `; skipped` で、読み込み全体を無効にはしない。
+pub fn load_all_skips_unreadable_directory_in_list_test() {
+  let fixture = beam_fixture.new("skip_unreadable")
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(second)
+  put_plugin(fixture.module, "survivor_plugin", second)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root <> "/nope" <> ":" <> second),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "survivor_plugin"
+  assert has_note(notes, "cannot read directory (enoent); skipped")
+  assert !has_note(notes, "external plugins disabled")
+}
+
+/// 同じエントリーモジュール名を 2 つのディレクトリーに置くと、先の
+/// ディレクトリーのものだけが採用され、後ろは影の理由で飛ぶ（先勝ち）。
+pub fn load_all_first_directory_shadows_test() {
+  let fixture = beam_fixture.new("dir_shadow")
+  let first = fixture.root <> "/first"
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(first)
+  beam_fixture.mkdir(second)
+  put_plugin(fixture.module, "first_dir_plugin", first)
+  put_plugin(fixture.module, "second_dir_plugin", second)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(first <> ":" <> second),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "first_dir_plugin"
+  assert has_note(
+    notes,
+    fixture.module
+      <> ": module "
+      <> fixture.module
+      <> " is already provided by the host or another plugin; skipped",
+  )
+}
+
+/// 別のモジュール名で同じ `plugin_name/0` を名乗るプラグインが後ろの
+/// ディレクトリーにあっても採用されない。先のディレクトリーで読み込んだ
+/// 名前が `reserved` へ積まれることの検証。
+pub fn load_all_duplicate_name_across_directories_test() {
+  let fixture = beam_fixture.new("dup_across")
+  let first = fixture.root <> "/first"
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(first)
+  beam_fixture.mkdir(second)
+  let second_module = beam_fixture.name(fixture, "bbb")
+  put_plugin(beam_fixture.name(fixture, "aaa"), "same_name", first)
+  put_plugin(second_module, "same_name", second)
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(first <> ":" <> second),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [loaded] = plugins
+  assert loaded.name == "same_name"
+  assert has_note(
+    notes,
+    second_module <> ": duplicate plugin name \"same_name\"",
+  )
+}
+
+/// `:` だけの指定は有効なディレクトリーを 1 つも含まないので、未設定と同じ
+/// 1 行になる。
+pub fn load_all_only_separators_test() {
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some("::"),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert list.length(notes) == 1
+  assert has_note(notes, "no PLUGIN_DIR set")
 }
 
 /// エントリーモジュール名がホストのモジュールと重なるバンドルは、**エントリーの
