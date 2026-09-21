@@ -228,7 +228,8 @@ pub fn session_permissions_keep_unknown_declarations_test() {
     ))
 }
 
-/// チェックも kinds も無い POST は 400 で描き直す。
+/// チェックも kinds も無い POST は 400 で描き直し、送った通り 3 つとも未チェックの
+/// まま返す（送られていない選択を既定の全許可に化けさせない）。
 pub fn empty_session_permissions_are_rejected_test() {
   let response =
     post_form(
@@ -237,13 +238,46 @@ pub fn empty_session_permissions_are_rejected_test() {
       [],
     )
   assert response.status == 400
-  assert string.contains(
-    simulate.read_body(response),
-    i18n.text(i18n.English, i18n.SelectAtLeastOne),
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.SelectAtLeastOne))
+  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
+  assert !string.contains(
+    body,
+    "checked class=\"checkbox border-base-content/60\" name=\""
+      <> dashboard.sign_event_field
+      <> "\"",
+  )
+  assert !string.contains(
+    body,
+    "checked class=\"checkbox border-base-content/60\" name=\""
+      <> dashboard.nip44_encrypt_field
+      <> "\"",
+  )
+  assert !string.contains(
+    body,
+    "checked class=\"checkbox border-base-content/60\" name=\""
+      <> dashboard.nip44_decrypt_field
+      <> "\"",
   )
 }
 
-/// `kinds` に整数でない項目がある POST は 400。
+/// 無宣言（perms 空）の GET は既定で 3 つとも `checked` が入る。上の描き直しの
+/// テストが探す `checked` の並びが、実際にチェック時の出力と一致することの対照。
+pub fn session_permissions_defaults_to_all_permissions_checked_test() {
+  let response =
+    get(context(), dashboard.session_permissions_path(signer, client))
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "checked class=\"checkbox border-base-content/60\" name=\""
+      <> dashboard.sign_event_field
+      <> "\"",
+  )
+}
+
+/// `kinds` に整数でない項目がある POST は 400 で、kind の欄には送った値がそのまま
+/// 残り、「そのほかの宣言」の隠し欄には移らない（不正な値を保存できる形に落とさない）。
 pub fn invalid_kind_list_is_rejected_test() {
   let response =
     post_form(
@@ -252,10 +286,33 @@ pub fn invalid_kind_list_is_rejected_test() {
       [#(dashboard.perms_kinds_field, "abc")],
     )
   assert response.status == 400
-  assert string.contains(
-    simulate.read_body(response),
-    i18n.text(i18n.English, i18n.InvalidKindList),
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.InvalidKindList))
+  assert string.contains(body, "value=\"abc\"")
+  assert !string.contains(body, "sign_event:abc")
+  assert !string.contains(
+    body,
+    "name=\"" <> dashboard.perms_other_field <> "\"",
   )
+}
+
+/// `kinds` の欄に 0 埋めの整数を入れて保存すると、10 進表記に正規化された値が
+/// 保存される（`docs/design-decisions.md:74` の完全一致の照合に揃えるため）。
+pub fn padded_kinds_are_saved_in_decimal_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [#(dashboard.perms_kinds_field, "01")],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "sign_event:1",
+    ))
 }
 
 /// 一覧を得られない GET は 200 で、フォームを出さず理由を出す。
@@ -266,6 +323,21 @@ pub fn session_permissions_show_the_reason_when_sessions_are_unavailable_test() 
       dashboard.session_permissions_path(signer, declared_client),
     )
   assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, unavailable)
+  assert !string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
+}
+
+/// 一覧を得られない POST は 503 で、フォームを出さず理由を出す（保存していないのに
+/// 200 を返さない。`connect_pages` の POST と同じ扱い）。
+pub fn session_permissions_are_not_saved_when_sessions_are_unavailable_test() {
+  let response =
+    post_form(
+      admin.Context(..context(), sessions: fn() { Error(unavailable) }),
+      dashboard.session_permissions_path(signer, declared_client),
+      [#(dashboard.sign_event_field, "on")],
+    )
+  assert response.status == 503
   let body = simulate.read_body(response)
   assert string.contains(body, unavailable)
   assert !string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")

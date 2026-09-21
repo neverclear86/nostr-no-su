@@ -317,7 +317,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
           created_at: 1000,
           last_used_at: 1000,
         )),
-        Some("sign_event"),
+        Some(session_pages.PermissionsForm(
+          sign_event: True,
+          nip44_encrypt: False,
+          nip44_decrypt: False,
+          kinds: "",
+          other: "",
+        )),
         Some(reason),
       ),
       // 一覧を得られない

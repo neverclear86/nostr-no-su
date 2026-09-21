@@ -21,7 +21,20 @@ import nostr_no_su/admin/view
 /// kind の案内の `id`。kind の欄はこのページに 1 つだけなので固定の値にする。
 const kinds_hint_id = "session-permissions-kinds-hint"
 
+/// 権限の編集フォームの欄の状態。`kinds` と `other` は欄に出す文字列そのままで、
+/// 検証していない値も持つ。
+pub type PermissionsForm {
+  PermissionsForm(
+    sign_event: Bool,
+    nip44_encrypt: Bool,
+    nip44_decrypt: Bool,
+    kinds: String,
+    other: String,
+  )
+}
+
 /// `perms` を 3 つのチェック、kind の一覧、そのほかの宣言に分けたもの。
+/// `form_of_perms` の途中の形で、最後に `PermissionsForm` へまとめる。
 type ParsedPerms {
   ParsedPerms(
     sign_event: Bool,
@@ -33,13 +46,13 @@ type ParsedPerms {
 }
 
 /// セッションの権限の編集ページ。`session` を得られなければ理由の囲みだけを出して
-/// フォームを出さない。`perms` は描き直すときに送られた値で、`None` なら `session` の
-/// 保存済みの値を使う。
+/// フォームを出さない。`form` は描き直すときに送られた欄の状態で、`None` なら
+/// `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。
 pub fn session_permissions_page(
   language: Language,
   theme: view.Theme,
   session: Result(dashboard.SessionRow, i18n.Reason),
-  perms: Option(String),
+  form: Option(PermissionsForm),
   error: Option(i18n.Reason),
 ) -> String {
   let path = case session {
@@ -54,7 +67,7 @@ pub fn session_permissions_page(
     view.SwitchReturningTo(path),
     view.NoRefresh,
     [
-      view.card(card_body(language, path, session, perms, error)),
+      view.card(card_body(language, path, session, form, error)),
       view.back_link(language),
     ],
   )
@@ -66,7 +79,7 @@ fn card_body(
   language: Language,
   path: String,
   session: Result(dashboard.SessionRow, i18n.Reason),
-  perms: Option(String),
+  form: Option(PermissionsForm),
   error: Option(i18n.Reason),
 ) -> List(Element(msg)) {
   case session {
@@ -77,7 +90,7 @@ fn card_body(
       ),
     ]
     Ok(row) -> {
-      let parsed = parse_perms(option.unwrap(perms, row.perms))
+      let fields = option.unwrap(form, form_of_perms(row.perms))
       [
         summary(language, row),
         view.error_message(language, Some(i18n.CouldNotSavePermissions), error),
@@ -87,7 +100,7 @@ fn card_body(
         )),
         view.post_form(
           path,
-          form_fields(language, parsed),
+          form_fields(language, fields),
           i18n.text(language, i18n.Save),
           view.Primary,
           view.InForm,
@@ -140,7 +153,10 @@ fn current_permissions(language: Language, perms: String) -> Element(msg) {
 }
 
 /// フォームの欄。3 つのチェック、kind の欄、あればそのほかの宣言のチップと隠し欄。
-fn form_fields(language: Language, parsed: ParsedPerms) -> List(Element(msg)) {
+fn form_fields(
+  language: Language,
+  fields: PermissionsForm,
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
     html.fieldset([attribute.class("fieldset")], [
@@ -149,7 +165,7 @@ fn form_fields(language: Language, parsed: ParsedPerms) -> List(Element(msg)) {
         view.pencil_icon(),
         text(i18n.AllowSignEvent),
         view.untranslated(dashboard.sign_event_field),
-        parsed.sign_event,
+        fields.sign_event,
         [],
       ),
       html.p([attribute.class("text-sm text-base-content/70")], [
@@ -160,7 +176,7 @@ fn form_fields(language: Language, parsed: ParsedPerms) -> List(Element(msg)) {
         view.key_icon(),
         text(i18n.AllowNip44Encrypt),
         view.untranslated(dashboard.nip44_encrypt_field),
-        parsed.nip44_encrypt,
+        fields.nip44_encrypt,
         [],
       ),
       view.checkbox_row(
@@ -168,7 +184,7 @@ fn form_fields(language: Language, parsed: ParsedPerms) -> List(Element(msg)) {
         view.key_icon(),
         text(i18n.AllowNip44Decrypt),
         view.untranslated(dashboard.nip44_decrypt_field),
-        parsed.nip44_decrypt,
+        fields.nip44_decrypt,
         [],
       ),
     ]),
@@ -179,44 +195,38 @@ fn form_fields(language: Language, parsed: ParsedPerms) -> List(Element(msg)) {
       [
         attribute.name(dashboard.perms_kinds_field),
         attribute.inputmode("numeric"),
-        attribute.default_value(string.join(parsed.kinds, ",")),
+        attribute.default_value(fields.kinds),
         attribute.class("input w-full font-mono border-base-content/60"),
         attribute.maxlength(512),
       ],
     ),
-    ..other_declarations(language, parsed.other)
+    ..other_declarations(language, fields.other)
   ]
 }
 
 /// 「そのほかの宣言」がある場合だけ、読み取り専用のチップと案内、送信のための隠し欄を
 /// 出す。無ければ何も出さない。
-fn other_declarations(
-  language: Language,
-  other: List(String),
-) -> List(Element(msg)) {
+fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
   case other {
-    [] -> []
-    _ -> {
-      let joined = string.join(other, ",")
-      [
-        html.div([attribute.class("flex flex-col gap-1")], [
-          html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
-          dashboard.perms_chips(language, joined),
-          html.p([attribute.class("text-sm text-base-content/70")], [
-            html.text(i18n.text(language, i18n.OtherPermissionsHint)),
-          ]),
+    "" -> []
+    _ -> [
+      html.div([attribute.class("flex flex-col gap-1")], [
+        html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
+        dashboard.perms_chips(language, other),
+        html.p([attribute.class("text-sm text-base-content/70")], [
+          html.text(i18n.text(language, i18n.OtherPermissionsHint)),
         ]),
-        view.hidden_input(dashboard.perms_other_field, joined),
-      ]
-    }
+      ]),
+      view.hidden_input(dashboard.perms_other_field, other),
+    ]
   }
 }
 
-/// `perms` を 3 つのチェック、kind の一覧、そのほかの宣言に分ける。空文字列は 3 つの
-/// チェックを入れる（`engine` の既定の権限に揃える）。`sign_event:<n>`（`n` は 0 以上の
-/// 整数）は kind、それ以外の未知のトークンはそのほかの宣言に落とす。
-fn parse_perms(perms: String) -> ParsedPerms {
-  case perms {
+/// 保存済みの `perms` を欄の状態に写す。3 つの語はチェック、`sign_event:<n>` は
+/// kind の欄、それ以外は「そのほかの宣言」に落とし、空の `perms` は 3 つのチェック
+/// を入れる。
+fn form_of_perms(perms: String) -> PermissionsForm {
+  let parsed = case perms {
     "" ->
       ParsedPerms(
         sign_event: True,
@@ -239,9 +249,16 @@ fn parse_perms(perms: String) -> ParsedPerms {
       )
       |> reverse_lists
   }
+  PermissionsForm(
+    sign_event: parsed.sign_event,
+    nip44_encrypt: parsed.nip44_encrypt,
+    nip44_decrypt: parsed.nip44_decrypt,
+    kinds: string.join(parsed.kinds, ","),
+    other: string.join(parsed.other, ","),
+  )
 }
 
-/// `parse_perms` の 1 トークンぶんの畳み込み。
+/// `form_of_perms` の 1 トークンぶんの畳み込み。
 fn fold_token(acc: ParsedPerms, token: String) -> ParsedPerms {
   case token {
     "sign_event" -> ParsedPerms(..acc, sign_event: True)

@@ -3,7 +3,7 @@
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
 //// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、`admin/relay_pages`、
-//// `admin/connect_pages`）に閉じ込められる。
+//// `admin/connect_pages`、`admin/session_pages`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
@@ -1068,10 +1068,12 @@ fn session_failure_response(
   }
 }
 
-/// セッション 1 件の権限の編集ページと、その送信。GET は編集画面を 200 で返す。POST は
-/// 検証に落ちれば 400 で描き直し、通れば `context.update_perms` を呼ぶ。書き込まれて
-/// いないことが確定した失敗（`SessionNotApplied`）だけ 409 でフォームを描き直し、
-/// それ以外の失敗は `session_failure_response` に渡す。
+/// セッション 1 件の権限の編集ページと、その送信。`request.method` で先に分ける。
+/// GET は編集画面を 200 で返す（一覧を得られないときも 200 でフォームの無いページ
+/// を出す）。POST は一覧を得られないときは 503、検証に落ちれば送られた欄の状態の
+/// まま 400 で描き直し、通れば `context.update_perms` を呼ぶ。書き込まれていない
+/// ことが確定した失敗（`SessionNotApplied`）は 409 でフォームを描き直し、それ以外
+/// の失敗は `session_failure_response` に渡す。
 fn session_permissions(
   context: Context,
   request: Request,
@@ -1080,9 +1082,9 @@ fn session_permissions(
   signer: String,
   client: String,
 ) -> Response {
-  use session <- with_session(context, language, theme, signer, client)
   case request.method {
-    http.Get ->
+    http.Get -> {
+      use session <- with_session(context, language, theme, signer, client, 200)
       session_pages.session_permissions_page(
         language,
         theme,
@@ -1091,21 +1093,23 @@ fn session_permissions(
         None,
       )
       |> wisp.html_response(200)
+    }
     http.Post -> {
       use form <- wisp.require_form(request)
-      let redraw = fn(perms, reason) {
+      use session <- with_session(context, language, theme, signer, client, 503)
+      let submitted = submitted_form(form)
+      let redraw = fn(reason) {
         session_pages.session_permissions_page(
           language,
           theme,
           Ok(session),
-          Some(perms),
+          Some(submitted),
           reason,
         )
       }
-      case session_perms(form) {
+      case assembled_perms(submitted) {
         Error(message) ->
-          redraw(assembled_perms(form), Some(i18n.Translated(message)))
-          |> wisp.html_response(400)
+          redraw(Some(i18n.Translated(message))) |> wisp.html_response(400)
         Ok(perms) ->
           case context.update_perms(signer, client, perms) {
             Ok(Nil) -> {
@@ -1117,8 +1121,7 @@ fn session_permissions(
               wisp.redirect(to: "/")
             }
             Error(bunker.SessionNotApplied(reason)) ->
-              redraw(perms, Some(i18n.Untranslated(reason)))
-              |> wisp.html_response(409)
+              redraw(Some(i18n.Untranslated(reason))) |> wisp.html_response(409)
             Error(failure) -> session_failure_response(language, theme, failure)
           }
       }
@@ -1127,12 +1130,16 @@ fn session_permissions(
   }
 }
 
-/// `kinds` の欄の値をカンマで分けた項目。空文字列なら 0 件。
-fn kind_items(form: wisp.FormData) -> List(String) {
-  case string.trim(form_value(form, dashboard.perms_kinds_field)) {
-    "" -> []
-    trimmed -> string.split(trimmed, ",")
-  }
+/// 送られたフォームを欄の状態に写す。値は検証せず、描き直しでそのまま欄に戻せる
+/// ようにする。
+fn submitted_form(form: wisp.FormData) -> session_pages.PermissionsForm {
+  session_pages.PermissionsForm(
+    sign_event: field_checked(form, dashboard.sign_event_field),
+    nip44_encrypt: field_checked(form, dashboard.nip44_encrypt_field),
+    nip44_decrypt: field_checked(form, dashboard.nip44_decrypt_field),
+    kinds: form_value(form, dashboard.perms_kinds_field),
+    other: form_value(form, dashboard.perms_other_field),
+  )
 }
 
 /// チェックの欄が `on` で送られているか。
@@ -1140,23 +1147,56 @@ fn field_checked(form: wisp.FormData, name: String) -> Bool {
   form_value(form, name) == "on"
 }
 
-/// フォームの値から perms を組み立てる。チェックの入った 3 つ、`sign_event` に
-/// チェックが無いときだけ `kinds` の各項目を `sign_event:<kind>` にしたもの（入力の順、
-/// 同じ kind は最初の 1 つ）、`other` をカンマで分けたトークンの順で繋ぐ。`kinds` の
-/// 項目は検証せずにそのまま使うので、検証に落ちたときの描き直しにも使える。
-fn assembled_perms(form: wisp.FormData) -> String {
-  let sign_event = field_checked(form, dashboard.sign_event_field)
+/// `kinds` の欄をカンマで分け、10 進の整数として正規化する（`01` は `1`）。
+/// `docs/design-decisions.md` の完全一致の照合に揃えるためで、0 以上の整数でない
+/// 項目が 1 つでもあれば `Error(Nil)`。
+fn normalized_kinds(kinds: String) -> Result(List(String), Nil) {
+  case string.trim(kinds) {
+    "" -> Ok([])
+    trimmed ->
+      string.split(trimmed, ",")
+      |> list.try_map(fn(item) {
+        case int.parse(item) {
+          Ok(value) if value >= 0 -> Ok(int.to_string(value))
+          _ -> Error(Nil)
+        }
+      })
+  }
+}
+
+/// 欄の状態から保存する `perms` を組む。検証に落ちた理由は文言で返し、欄の状態は
+/// 呼び出し側が描き直しに使う。
+fn assembled_perms(
+  form: session_pages.PermissionsForm,
+) -> Result(String, i18n.Message) {
+  case normalized_kinds(form.kinds) {
+    Error(Nil) -> Error(i18n.InvalidKindList)
+    Ok(kinds) -> {
+      let meaningful =
+        form.sign_event
+        || form.nip44_encrypt
+        || form.nip44_decrypt
+        || { !form.sign_event && !list.is_empty(kinds) }
+      case meaningful {
+        False -> Error(i18n.SelectAtLeastOne)
+        True -> Ok(perms_string(form, kinds))
+      }
+    }
+  }
+}
+
+/// 欄の状態から保存する perms の文字列を組む。チェックの入った 3 つ →
+/// `sign_event` にチェックが無いときだけ、正規化した `kinds` を重複無しで
+/// `sign_event:<kind>` にしたもの → `other` をカンマで分けたトークン、の順で繋ぐ。
+fn perms_string(
+  form: session_pages.PermissionsForm,
+  kinds: List(String),
+) -> String {
   let checked_tokens =
     [
-      #(sign_event, dashboard.sign_event_field),
-      #(
-        field_checked(form, dashboard.nip44_encrypt_field),
-        dashboard.nip44_encrypt_field,
-      ),
-      #(
-        field_checked(form, dashboard.nip44_decrypt_field),
-        dashboard.nip44_decrypt_field,
-      ),
+      #(form.sign_event, dashboard.sign_event_field),
+      #(form.nip44_encrypt, dashboard.nip44_encrypt_field),
+      #(form.nip44_decrypt, dashboard.nip44_decrypt_field),
     ]
     |> list.filter_map(fn(pair) {
       case pair.0 {
@@ -1164,47 +1204,17 @@ fn assembled_perms(form: wisp.FormData) -> String {
         False -> Error(Nil)
       }
     })
-  let kind_tokens = case sign_event {
+  let kind_tokens = case form.sign_event {
     True -> []
     False ->
-      kind_items(form)
-      |> list.unique
-      |> list.map(fn(item) { "sign_event:" <> item })
+      kinds |> list.unique |> list.map(fn(item) { "sign_event:" <> item })
   }
-  let other_tokens = case
-    string.trim(form_value(form, dashboard.perms_other_field))
-  {
+  let other_tokens = case string.trim(form.other) {
     "" -> []
     trimmed -> string.split(trimmed, ",")
   }
   list.flatten([checked_tokens, kind_tokens, other_tokens])
   |> string.join(",")
-}
-
-/// フォームの値から perms を組み立てて検証する。選択が無ければ
-/// `Error(i18n.SelectAtLeastOne)`、`kinds` に 0 以上の整数でない項目があれば
-/// `Error(i18n.InvalidKindList)`。「そのほかの宣言」だけが残る値も
-/// `SelectAtLeastOne` にする（署名も暗号化も許さない値になるため）。
-fn session_perms(form: wisp.FormData) -> Result(String, i18n.Message) {
-  use <- bool.guard(
-    list.any(kind_items(form), fn(item) {
-      case int.parse(item) {
-        Ok(value) -> value < 0
-        Error(Nil) -> True
-      }
-    }),
-    Error(i18n.InvalidKindList),
-  )
-  let sign_event = field_checked(form, dashboard.sign_event_field)
-  let meaningful =
-    sign_event
-    || field_checked(form, dashboard.nip44_encrypt_field)
-    || field_checked(form, dashboard.nip44_decrypt_field)
-    || { !sign_event && !list.is_empty(kind_items(form)) }
-  case meaningful {
-    False -> Error(i18n.SelectAtLeastOne)
-    True -> Ok(assembled_perms(form))
-  }
 }
 
 /// クライアントの接続ページと、その送信。GET はフォームを 200 で出す（アカウントの
@@ -1736,15 +1746,16 @@ fn with_relay(
   }
 }
 
-/// 承認済みセッションの一覧から（署名者, クライアント）の行を引く。一覧を得られ
-/// なければ、時間をおけば直ることなので 404 にせず、理由を編集ページに 200 で出す
-/// （`connect_pages` と同じ扱い）。一覧にその組が無ければ 404。
+/// 承認済みセッションの一覧から（署名者, クライアント）の組を引く。一覧を得られ
+/// なければフォームの無いページを `unavailable_status` で、組が無ければ 404 を
+/// 返す。一覧を得られないことは時間をおけば直るので 404 にしない。
 fn with_session(
   context: Context,
   language: Language,
   theme: view.Theme,
   signer: String,
   client: String,
+  unavailable_status: Int,
   next: fn(dashboard.SessionRow) -> Response,
 ) -> Response {
   case context.sessions() {
@@ -1756,7 +1767,7 @@ fn with_session(
         None,
         None,
       )
-      |> wisp.html_response(200)
+      |> wisp.html_response(unavailable_status)
     Ok(rows) ->
       case
         list.find(rows, fn(row) { row.signer == signer && row.client == client })

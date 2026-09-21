@@ -8,8 +8,8 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）が同じ定義を見る
-//// ようここに置く。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
+//// `admin/session_pages`）が同じ定義を見るようここに置く。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。

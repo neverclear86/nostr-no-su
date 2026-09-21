@@ -18,9 +18,10 @@
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）には文言を文字列
-//// リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
-//// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
+//// `admin/session_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した
+//// 英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま
+//// 出すのは製品名（`Nostr-no-Su`）だけである。
 ////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
 //// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
