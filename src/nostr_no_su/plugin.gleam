@@ -6,8 +6,8 @@
 ////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
 ////   エクスポートする。未知のエクスポートは読み込みに影響しない。本体が使う
 ////   任意エクスポート（`plugin_children`、`plugin_required_versions`、
-////   `plugin_pages`、`plugin_page_content`）は存在するときだけ呼ばれ、その
-////   結果で読み込まれないことがある。
+////   `plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在する
+////   ときだけ呼ばれ、その結果で読み込まれないことがある。
 //// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
 //// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
@@ -40,7 +40,14 @@
 ////   同じ扱い）。`/1` `/2` があればそちらを優先し、設定 map を渡す。
 ////   `plugin_pages` は読み込み時に 1 度だけ検証するが、`plugin_page_content`
 ////   はページの表示のたびに期限付きで呼ぶ（起動時のメタデータの呼び出しには
-////   含まれない）。仕様の全文は `docs/plugin-api.md` の第 13 章にある。
+////   含まれない）。さらに任意エクスポート `plugin_page_action/2`
+////   `plugin_page_action/3` があれば、そのページはフォームの送信を受け取れる。
+////   `plugin_pages` / `plugin_page_content` を持たずに `plugin_page_action` だけを
+////   持つプラグインは読み込まない。`plugin_page_content` と `plugin_page_action`
+////   に渡す設定 map には、バンカーに登録したアカウントの一覧を予約キー
+////   `Accounts` で足す（`plugin_children` と `plugin_pages` には足さない）。
+////   `plugin_page_action` もページの表示と同じく起動時のメタデータの呼び出しには
+////   含まれない。仕様の全文は `docs/plugin-api.md` の第 13 章にある。
 //// - 検証の順序はモジュールの読み込み → 必須エクスポート →
 ////   `plugin_api_version` → `plugin_required_versions` → `plugin_name` →
 ////   設定の切り出し → `plugin_children` → `plugin_pages` で、最初に失敗した
@@ -103,6 +110,9 @@ const pages_export_name = "plugin_pages"
 /// 本体が問い合わせる、管理 UI の 1 ページの記述を返す任意エクスポートの名前。
 const page_content_export_name = "plugin_page_content"
 
+/// 本体が呼ぶ、管理 UI の 1 ページのフォームの送信を受け取る任意エクスポートの名前。
+const page_action_export_name = "plugin_page_action"
+
 /// UI のページのキーに許す文字。`plugin_config.gleam` の `normalize` と同じく、
 /// 許す文字を並べた定数と `string.contains` で判定する。
 const page_key_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_-"
@@ -138,12 +148,19 @@ pub type PluginPage {
 }
 
 /// プラグインが供給する管理 UI。`pages` は読み込み時に検証した一覧（1 件以上、
-/// キーは重複しない）。`content` はページのキーを受け取り、そのページの記述を
-/// 期限付きで取る。失敗は 1 行の理由。
+/// キーは重複しない）。`content` はページのキーと登録アカウントの一覧を受け取り、
+/// そのページの記述を期限付きで取る。失敗は 1 行の理由。`action` は
+/// `plugin_page_action` を持たなければ `None`。`Ok(Nil)` は `ok`、`Error` は
+/// `{error, Reason}` か呼び出しの失敗の理由。
 pub type PluginUi {
   PluginUi(
     pages: List(PluginPage),
-    content: fn(String) -> Result(Dynamic, String),
+    content: fn(String, List(plugin_config.PageAccount)) ->
+      Result(Dynamic, String),
+    action: Option(
+      fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
+        Result(Nil, String),
+    ),
   )
 }
 
@@ -202,8 +219,8 @@ pub fn load(
   use _ <- result.try(check_api_version(module, name, call_timeout_ms))
   use _ <- result.try(check_required_versions(module, name, call_timeout_ms))
   use plugin_name <- result.try(read_plugin_name(module, name, call_timeout_ms))
-  let config_map =
-    plugin_config.to_map(plugin_config.for_plugin(env, plugin_name))
+  let config = plugin_config.for_plugin(env, plugin_name)
+  let config_map = plugin_config.to_map(config)
   use children <- result.try(read_children(
     module,
     name,
@@ -211,7 +228,13 @@ pub fn load(
     config_map,
     call_timeout_ms,
   ))
-  use ui <- result.try(read_ui(module, name, config_map, call_timeout_ms))
+  use ui <- result.try(read_ui(
+    module,
+    name,
+    config,
+    config_map,
+    call_timeout_ms,
+  ))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
   let handle_event = atom.create(handle_event_name)
   let args = case takes_config {
@@ -472,14 +495,16 @@ fn children(
   })
 }
 
-/// 任意エクスポート `plugin_pages/0` `/1` と `plugin_page_content/1` `/2` の
-/// 有無を見て、管理 UI の供給を読み込む。どちらも無ければ `Ok(None)`、片方だけ
-/// なら `Error`（`read_children` と同じく、症状を真の原因に近い場所で報告する
-/// ため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を検証する。`/1`
-/// `/2` を優先して設定 map を渡す。
+/// 任意エクスポート `plugin_pages/0` `/1`、`plugin_page_content/1` `/2`、
+/// `plugin_page_action/2` `/3` の有無を見て、管理 UI の供給を読み込む。一覧も
+/// 中身も無ければ `Ok(None)`（実行だけあってもこの扱いになる）。一覧か中身の
+/// 片方だけなら `Error`（`read_children` と同じく、症状を真の原因に近い場所で
+/// 報告するため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を検証する。
+/// `/1` `/2` を優先して設定 map を渡す。実行は任意で、無ければ `action: None`。
 fn read_ui(
   module: Atom,
   name: String,
+  config: plugin_config.Config,
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(Option(PluginUi), String) {
@@ -487,8 +512,21 @@ fn read_ui(
   let has_pages_1 = has_export(module, pages_export_name, 1)
   let has_content_1 = has_export(module, page_content_export_name, 1)
   let has_content_2 = has_export(module, page_content_export_name, 2)
+  let has_action_2 = has_export(module, page_action_export_name, 2)
+  let has_action_3 = has_export(module, page_action_export_name, 3)
   case has_pages_0 || has_pages_1, has_content_1 || has_content_2 {
-    False, False -> Ok(None)
+    False, False ->
+      case has_action_2 || has_action_3 {
+        False -> Ok(None)
+        True ->
+          Error(prefix(
+            name,
+            action_label(has_action_3)
+              <> " but no "
+              <> pages_export_name
+              <> "/0 or /1",
+          ))
+      }
     False, True ->
       Error(prefix(
         name,
@@ -519,16 +557,22 @@ fn read_ui(
         call_timeout_ms,
       ))
       use pages <- result.try(decode_pages(value, name, label))
+      let action = case has_action_2 || has_action_3 {
+        False -> None
+        True ->
+          Some(action_of(module, name, config, call_timeout_ms, has_action_3))
+      }
       Ok(
         Some(PluginUi(
           pages: pages,
           content: content_of(
             module,
             name,
-            config_map,
+            config,
             call_timeout_ms,
             has_content_2,
           ),
+          action: action,
         )),
       )
     }
@@ -549,6 +593,15 @@ fn content_label(has_content_2: Bool) -> String {
   case has_content_2 {
     True -> page_content_export_name <> "/2"
     False -> page_content_export_name <> "/1"
+  }
+}
+
+/// `plugin_page_action` の理由の文字列に出すラベル。`/3` があればそちらを
+/// 優先する。
+fn action_label(has_action_3: Bool) -> String {
+  case has_action_3 {
+    True -> page_action_export_name <> "/3"
+    False -> page_action_export_name <> "/2"
   }
 }
 
@@ -673,21 +726,120 @@ fn required_page_field(
   }
 }
 
-/// ページの中身を取得するクロージャーを組み立てる。`/2` があれば設定 map も
+/// ページの中身を取得するクロージャーを組み立てる。`/2` があれば、呼び出しの
+/// たびに `config` と渡された `accounts` から `plugin_config.page_map` を組んで
 /// 渡す。失敗（例外・期限超過）は `call_export` がそのまま 1 行の理由にする。
 fn content_of(
   module: Atom,
   name: String,
-  config_map: Dynamic,
+  config: plugin_config.Config,
   call_timeout_ms: Int,
   has_content_2: Bool,
-) -> fn(String) -> Result(Dynamic, String) {
-  fn(key: String) {
+) -> fn(String, List(plugin_config.PageAccount)) -> Result(Dynamic, String) {
+  fn(key: String, accounts: List(plugin_config.PageAccount)) {
     let args = case has_content_2 {
-      True -> [dynamic.string(key), config_map]
+      True -> [dynamic.string(key), plugin_config.page_map(config, accounts)]
       False -> [dynamic.string(key)]
     }
     call_export(module, name, page_content_export_name, args, call_timeout_ms)
+  }
+}
+
+/// フォームの送信を実行するクロージャーを組み立てる。`/3` があれば、呼び出しの
+/// たびに `config` と渡された `accounts` から `plugin_config.page_map` を組んで
+/// 渡す。送られた値は binary キー・binary 値の map にする。戻り値は
+/// `decode_action_result` で検証する。
+fn action_of(
+  module: Atom,
+  name: String,
+  config: plugin_config.Config,
+  call_timeout_ms: Int,
+  has_action_3: Bool,
+) -> fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
+  Result(Nil, String) {
+  fn(
+    key: String,
+    values: List(#(String, String)),
+    accounts: List(plugin_config.PageAccount),
+  ) {
+    let values_map =
+      values
+      |> list.map(fn(pair) { #(dynamic.string(pair.0), dynamic.string(pair.1)) })
+      |> dynamic.properties
+    let args = case has_action_3 {
+      True -> [
+        dynamic.string(key),
+        values_map,
+        plugin_config.page_map(config, accounts),
+      ]
+      False -> [dynamic.string(key), values_map]
+    }
+    use value <- result.try(call_export(
+      module,
+      name,
+      page_action_export_name,
+      args,
+      call_timeout_ms,
+    ))
+    decode_action_result(value, name, action_label(has_action_3))
+  }
+}
+
+/// `plugin_page_action` の戻り値を検証する。`ok` の atom なら成功、
+/// `{error, Reason}` で `Reason` が binary ならその理由の拒否、それ以外は
+/// 戻り値の形の誤り。
+fn decode_action_result(
+  value: Dynamic,
+  name: String,
+  label: String,
+) -> Result(Nil, String) {
+  let bad_return = fn() {
+    Error(prefix(
+      name,
+      label
+        <> " must return ok or {error, Reason}, got "
+        <> dynamic.classify(value),
+    ))
+  }
+  let is_ok = case decode.run(value, atom.decoder()) {
+    Ok(tag) -> atom.to_string(tag) == "ok"
+    Error(_) -> False
+  }
+  case is_ok {
+    True -> Ok(Nil)
+    False ->
+      case is_error_tuple(value) {
+        False -> bad_return()
+        True ->
+          case decode.run(value, decode.at([1], decode.dynamic)) {
+            Error(_) -> bad_return()
+            Ok(reason_value) ->
+              case decode.run(reason_value, decode.string) {
+                Ok(reason) ->
+                  Error(prefix(
+                    name,
+                    label <> " rejected the request (" <> reason <> ")",
+                  ))
+                Error(_) ->
+                  Error(prefix(
+                    name,
+                    label
+                      <> ": error reason must be a String, got "
+                      <> dynamic.classify(reason_value),
+                  ))
+              }
+          }
+      }
+  }
+}
+
+/// 戻り値が `{error, Reason}` の形かどうか。**判別子は要素 0 が atom の `error`
+/// であることだけ**で、要素数は見ない（`plugin_children.is_error_tuple` と同じ
+/// 考え方）。
+fn is_error_tuple(value: Dynamic) -> Bool {
+  case decode.run(value, decode.at([0], atom.decoder())) {
+    Ok(tag) -> atom.to_string(tag) == "error"
+    Error(_) -> False
   }
 }
 

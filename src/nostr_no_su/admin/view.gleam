@@ -636,6 +636,38 @@ pub fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
+/// チェック 1 件の行。チェック、ラベル、あれば説明を並べる。送信値は `on` に
+/// 固定する。`relay_pages.role_row` と似た形だが、あちらはアイコンと接続状態の
+/// バッジを同じ行に挟むため、この部品と共通化しない。
+pub fn checkbox_row(
+  name: String,
+  label: String,
+  hint: Option(String),
+  checked: Bool,
+) -> Element(msg) {
+  let description = case hint {
+    Some(hint) -> [
+      html.span([attribute.class("text-sm text-base-content/70 break-all")], [
+        html.text(hint),
+      ]),
+    ]
+    None -> []
+  }
+  html.label([attribute.class("flex items-center gap-3 text-sm")], [
+    html.input([
+      attribute.type_("checkbox"),
+      attribute.name(name),
+      attribute.value("on"),
+      attribute.class("checkbox border-base-content/60"),
+      attribute.checked(checked),
+    ]),
+    html.div([attribute.class("flex min-w-0 flex-col")], [
+      html.span([], [html.text(label)]),
+      ..description
+    ]),
+  ])
+}
+
 /// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
 pub fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
   html.div(

@@ -338,6 +338,9 @@ pub type Message {
   PluginSectionFailed
   /// プラグインのページの応答が得られなかったときの見出し。
   PluginPageUnavailable
+  /// プラグインのページのフォームの送信が拒否された、または呼び出しに失敗した
+  /// ときの見出し。
+  PluginActionFailed
   /// 無効になったプラグインのページに出す注意。
   PluginPageWhileDisabled
   // 承認ページと通知ページ
@@ -579,6 +582,7 @@ fn english(message: Message) -> String {
     PluginPageEmpty -> "This plugin page has nothing to show."
     PluginSectionFailed -> "This section could not be displayed."
     PluginPageUnavailable -> "Plugin page not available"
+    PluginActionFailed -> "Plugin action failed"
     PluginPageWhileDisabled ->
       "This plugin is disabled and is not handling events."
     ApproveConnection -> "Approve connection"
@@ -824,6 +828,7 @@ fn japanese(message: Message) -> String {
     PluginPageEmpty -> "このプラグインのページに表示する内容はありません。"
     PluginSectionFailed -> "この節は表示できませんでした。"
     PluginPageUnavailable -> "プラグインのページを利用できません"
+    PluginActionFailed -> "プラグインの操作に失敗しました"
     PluginPageWhileDisabled -> "このプラグインは無効で、イベントを処理していません。"
     ApproveConnection -> "接続を承認"
     WrongSecretOffered -> "接続 secret が一致しません。"

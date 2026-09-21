@@ -12,7 +12,7 @@ import envoy
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/int
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor
 import gleam/result
 import nostr_no_su/admin
@@ -21,6 +21,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
+import nostr_no_su/plugin_config
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -224,10 +225,44 @@ fn console_logger_status_description() -> Dynamic {
   ])
 }
 
-/// `console_logger` の `settings` ページの記述。節を 0 件にし、ページ全体の空の状態の
-/// 文を撮る。
+/// `console_logger` の `settings` ページの記述。`form` の節 1 つ（チェック 2 件と
+/// 送信のボタン）にし、フォームの描画と送信の経路を撮る。
 fn console_logger_settings_description() -> Dynamic {
-  dynamic.properties([#(dynamic.string("sections"), dynamic.list([]))])
+  let checkbox_field = fn(name: String, label: String, checked: Bool) {
+    dynamic.properties([
+      #(dynamic.string("type"), dynamic.string("checkbox")),
+      #(dynamic.string("name"), dynamic.string(name)),
+      #(dynamic.string("label"), dynamic.string(label)),
+      #(dynamic.string("checked"), dynamic.bool(checked)),
+    ])
+  }
+  dynamic.properties([
+    #(
+      dynamic.string("sections"),
+      dynamic.list([
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("section")),
+          #(dynamic.string("title"), dynamic.string("Monitored accounts")),
+          #(
+            dynamic.string("blocks"),
+            dynamic.list([
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("form")),
+                #(
+                  dynamic.string("fields"),
+                  dynamic.list([
+                    checkbox_field("main", "main account", True),
+                    checkbox_field("bot", "<b>bot</b> 🙂", False),
+                  ]),
+                ),
+                #(dynamic.string("submit"), dynamic.string("Save")),
+              ]),
+            ]),
+          ),
+        ]),
+      ]),
+    ),
+  ])
 }
 
 /// `broken` の `status` ページの記述。`Disabled` の注意の囲みと並べて撮る。
@@ -257,8 +292,13 @@ fn broken_status_description() -> Dynamic {
   ])
 }
 
-/// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。
-fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
+/// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。登録
+/// アカウントの一覧は撮影には使わない。
+fn plugin_page_content(
+  name: String,
+  key: String,
+  _accounts: List(plugin_config.PageAccount),
+) -> Result(Dynamic, String) {
   case name, key {
     "console_logger", "status" -> Ok(console_logger_status_description())
     "console_logger", "settings" -> Ok(console_logger_settings_description())
@@ -266,6 +306,38 @@ fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
     "slow", "status" -> Error("plugin did not answer in time")
     _, _ -> Error("plugin not found")
   }
+}
+
+/// フォームの送信を受け取る実行の口。`console_logger` の `settings` だけが持ち、
+/// 常に成功する。ほかのプラグインとページ（`broken/status` など）は `None` を
+/// 返し、405 の経路を撮る。
+fn plugin_page_action(
+  name: String,
+  key: String,
+) -> Option(
+  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
+    Result(Nil, String),
+) {
+  case name, key {
+    "console_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
+    _, _ -> None
+  }
+}
+
+/// プラグインのページと実行の呼び出しに渡す、固定の登録アカウントの一覧。
+fn page_accounts() -> Result(List(plugin_config.PageAccount), String) {
+  Ok([
+    plugin_config.PageAccount(
+      pubkey: signer,
+      npub: signer_npub,
+      label: "main account",
+    ),
+    plugin_config.PageAccount(
+      pubkey: second,
+      npub: second_npub,
+      label: "<b>bot</b> 🙂",
+    ),
+  ])
 }
 
 /// 通常の状態の Context。削除は常に「反映されていない」（409）を返す。登録は
@@ -371,6 +443,8 @@ fn context() -> admin.Context {
     connect_client: fn(_request, _signer) { Error(admin.RelayNotConnected) },
     reenable_plugin: reenabling,
     plugin_page_content: plugin_page_content,
+    page_accounts: page_accounts,
+    plugin_page_action: plugin_page_action,
     sessions: fn() {
       let now = time.now_seconds()
       Ok([

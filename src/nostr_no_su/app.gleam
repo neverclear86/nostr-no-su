@@ -152,6 +152,7 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/plugin_config
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{
   type Acknowledgement, type Authenticator, type Received, type Subscriptions,
@@ -675,8 +676,12 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       reload_accounts: fn() { bunker.reload_accounts(bunker_name) },
       plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
       reenable_plugin: reenable_plugin(spec.plugins, _),
-      plugin_page_content: fn(plugin, key) {
-        plugin_page_content(spec.plugins, plugin, key)
+      plugin_page_content: fn(plugin, key, accounts) {
+        plugin_page_content(spec.plugins, plugin, key, accounts)
+      },
+      page_accounts: fn() { page_accounts(spec) },
+      plugin_page_action: fn(plugin, key) {
+        plugin_page_action(spec.plugins, plugin, key)
       },
       relays: fn(deadline) { relay_rows(spec, deadline) },
       add_relay: fn(url, roles) { add_relay(spec, url, roles) },
@@ -810,15 +815,53 @@ pub fn plugin_page_content(
   specs: List(PluginSpec),
   plugin: String,
   key: String,
+  accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   use spec <- result.try(
     list.find(specs, fn(spec) { spec.plugin.name == plugin })
     |> result.replace_error("plugin not found"),
   )
   case spec.plugin.ui {
-    Some(ui) -> ui.content(key)
+    Some(ui) -> ui.content(key, accounts)
     None -> Error("plugin has no pages")
   }
+}
+
+/// プラグイン名とページのキーで、フォームの送信を受け取る実行の口を探す。
+/// プラグインが見つからない、UI が無い、`plugin_page_action` を持たないの
+/// いずれも `None` に畳む（`admin.plugin_page` はこれで 405 にする）。
+pub fn plugin_page_action(
+  specs: List(PluginSpec),
+  plugin: String,
+  key: String,
+) -> Option(
+  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
+    Result(Nil, String),
+) {
+  use spec <- option.then(
+    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    |> option.from_result,
+  )
+  use ui <- option.then(spec.plugin.ui)
+  use action <- option.map(ui.action)
+  fn(values, accounts) { action(key, values, accounts) }
+}
+
+/// 管理 UI のページと実行の呼び出しに渡す、登録アカウントの一覧。`bunker.accounts`
+/// の一覧を `plugin_config.PageAccount` に写す。
+fn page_accounts(
+  spec: Spec,
+) -> Result(List(plugin_config.PageAccount), String) {
+  use listings <- result.try(bunker.accounts(spec.bunker.name))
+  Ok(
+    list.map(listings, fn(listing) {
+      plugin_config.PageAccount(
+        pubkey: listing.signer,
+        npub: listing.npub,
+        label: listing.label,
+      )
+    }),
+  )
 }
 
 /// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を

@@ -63,3 +63,41 @@ pub fn to_map_test() {
     )
     == Ok(dict.from_list([#("limit", "10")]))
 }
+
+/// アカウント 1 件の map を読む decoder。
+fn account_decoder() -> decode.Decoder(#(String, String, String)) {
+  use pubkey <- decode.field("pubkey", decode.string)
+  use npub <- decode.field("npub", decode.string)
+  use label <- decode.field("label", decode.string)
+  decode.success(#(pubkey, npub, label))
+}
+
+/// `page_map` は `to_map` と同じ形に予約キー `Accounts` を足す。値はアカウント
+/// ごとの map（`pubkey`・`npub`・`label`）のリストである。
+pub fn page_map_adds_the_accounts_key_test() {
+  let config = plugin_config.for_plugin(env(), "counter")
+  let account =
+    plugin_config.PageAccount(pubkey: "abcd", npub: "npub1x", label: "main")
+  let decoder = {
+    use limit <- decode.field("limit", decode.string)
+    use accounts <- decode.field("Accounts", decode.list(account_decoder()))
+    decode.success(#(limit, accounts))
+  }
+  assert decode.run(plugin_config.page_map(config, [account]), decoder)
+    == Ok(#("10", [#("abcd", "npub1x", "main")]))
+}
+
+/// `PLUGIN_X_ACCOUNTS` は小文字の `accounts` のまま残り、`page_map` が足す
+/// `Accounts` とは別のキーである（`for_plugin` がキーを小文字にするため、
+/// 環境変数からは `Accounts` を作れない）。
+pub fn page_map_keeps_env_accounts_key_test() {
+  let config =
+    plugin_config.for_plugin(dict.from_list([#("PLUGIN_X_ACCOUNTS", "3")]), "x")
+  let decoder = {
+    use accounts_env <- decode.field("accounts", decode.string)
+    use accounts <- decode.field("Accounts", decode.list(decode.dynamic))
+    decode.success(#(accounts_env, accounts))
+  }
+  assert decode.run(plugin_config.page_map(config, []), decoder)
+    == Ok(#("3", []))
+}

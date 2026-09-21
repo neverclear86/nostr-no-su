@@ -7,7 +7,10 @@
 ////
 //// **境界に置くのはキーも値も binary の Erlang map** であって Gleam の Dict や
 //// レコードではない。イベント map（`event.to_map`）と同じ理由で、Erlang /
-//// Elixir で書いたプラグインからそのまま読めることを優先する。
+//// Elixir で書いたプラグインからそのまま読めることを優先する。管理 UI の
+//// ページと実行の呼び出し（`plugin_page_content` / `plugin_page_action`）に
+//// 渡す map だけは、これに加えて予約キー `Accounts` の値がリスト（アカウント
+//// ごとの map の並び）になる。
 ////
 //// 値は変換しない。環境変数はすべて文字列であり、整数として読むべきか URL と
 //// して読むべきかを本体は知らない。**変換はプラグインの責任**で、失敗は
@@ -82,7 +85,36 @@ pub fn for_plugin(env: Dict(String, String), plugin_name: String) -> Config {
 /// プラグイン境界へ渡す map。`event.to_map` と同じく `dynamic.properties/1` で
 /// binary キー・binary 値の Erlang map を作る。
 pub fn to_map(config: Config) -> Dynamic {
+  config_entries(config) |> dynamic.properties
+}
+
+/// `config` の binary キー・binary 値の組。`to_map` と `page_map` が共有する。
+fn config_entries(config: Config) -> List(#(Dynamic, Dynamic)) {
   dict.to_list(config)
   |> list.map(fn(entry) { #(dynamic.string(entry.0), dynamic.string(entry.1)) })
+}
+
+/// 管理 UI のページと実行の呼び出しに渡す、バンカーに登録したアカウント 1 件。
+/// `pubkey` は 16 進、`npub` は表示と識別、`label` は利用者が付けた名前である。
+pub type PageAccount {
+  PageAccount(pubkey: String, npub: String, label: String)
+}
+
+/// プラグイン境界へ渡す map。`to_map` と同じ形に、予約キー `Accounts`（アカウント
+/// ごとの binary キーの map のリスト）を足して返す。`Accounts` は値が binary で
+/// ない唯一のキーである。このキーは環境変数由来のキーと衝突しない
+/// （`for_plugin` がキーを小文字にするため、大文字を含むこのキーは環境変数からは
+/// 作れない）。
+pub fn page_map(config: Config, accounts: List(PageAccount)) -> Dynamic {
+  let account_maps =
+    list.map(accounts, fn(account) {
+      dynamic.properties([
+        #(dynamic.string("pubkey"), dynamic.string(account.pubkey)),
+        #(dynamic.string("npub"), dynamic.string(account.npub)),
+        #(dynamic.string("label"), dynamic.string(account.label)),
+      ])
+    })
+  config_entries(config)
+  |> list.append([#(dynamic.string("Accounts"), dynamic.list(account_maps))])
   |> dynamic.properties
 }

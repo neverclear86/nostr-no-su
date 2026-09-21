@@ -6,17 +6,20 @@
 ////
 //// - 最上位: `#{<<"sections">> => [節, ...]}`
 //// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）
-//// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` のいずれか
+//// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form`
+////   のいずれか
 //// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge`
 ////   のいずれか（`badge` は `table` のセルだけ）
+//// - `form` の欄: `checkbox` のみ
 ////
 //// 深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
 //// decoder が失敗するため、深すぎる入れ子は構造的に `Error` になる。
 ////
-//// **プラグインが選べるのは文字列・種別・`tone` だけである。** クラス名も
+//// **プラグインが選べるのは文字列・種別・`tone`・真偽値だけである。** クラス名も
 //// `href` も `id` も持ち込めない（`assets/admin.css` の方針）。描画は必ず
 //// `admin/view` の部品を経由し、このモジュール自身が持つ生のクラス文字列は
-//// `table` のセルの `code` インラインだけである。
+//// `table` のセルの `code` インラインだけである。`form` の宛先は本体が決め
+//// （`Context.form_action`）、プラグインは指定できない。
 ////
 //// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて `lang="en"`
 //// の祖先 1 つで包む。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
@@ -29,6 +32,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -37,9 +41,14 @@ import nostr_no_su/admin/view
 
 /// 節の描画に要る文脈。`page_href` は同じプラグインのページのキーからパスを
 /// 組み立てる（`link` ブロック用）。キーがそのプラグインのページ一覧に無ければ
-/// `Error(Nil)`。
+/// `Error(Nil)`。`form_action` は今開いているページ自身への POST の宛先
+/// （`form` ブロック用）。
 pub type Context {
-  Context(language: Language, page_href: fn(String) -> Result(String, Nil))
+  Context(
+    language: Language,
+    page_href: fn(String) -> Result(String, Nil),
+    form_action: String,
+  )
 }
 
 /// 記述の最上位を読み、節の記述の並びをそのまま返す。最上位が map でない・
@@ -195,7 +204,103 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         Error(Nil) -> Error("unknown page \"" <> page_key <> "\"")
       }
     }
+    "form" -> {
+      use fields_raw <- result.try(typed_field(
+        raw,
+        "fields",
+        decode.list(decode.dynamic),
+        "a List",
+      ))
+      use submit <- result.try(text_field(raw, "submit"))
+      case fields_raw {
+        [] -> Error("fields must not be empty")
+        _ -> {
+          use fields <- result.try(
+            fields_raw
+            |> list.index_map(fn(raw_field, index) { #(raw_field, index) })
+            |> list.try_map(fn(indexed) {
+              form_field(indexed.0)
+              |> result.map_error(fn(reason) {
+                "field #" <> int.to_string(indexed.1) <> ": " <> reason
+              })
+            }),
+          )
+          Ok(view.post_form(
+            context.form_action,
+            fields,
+            submit,
+            view.Primary,
+            view.InForm,
+          ))
+        }
+      }
+    }
     other -> Error("unknown type \"" <> other <> "\"")
+  }
+}
+
+/// `form` の欄 1 つ。今のところ `checkbox` だけを許す。
+fn form_field(raw: Dynamic) -> Result(Element(msg), String) {
+  use kind <- result.try(text_field(raw, "type"))
+  case kind {
+    "checkbox" -> {
+      use name <- result.try(text_field(raw, "name"))
+      use _ <- result.try(case field_name_ok(name) {
+        True -> Ok(Nil)
+        False -> Error("name \"" <> name <> "\" must match [A-Za-z0-9_-]+")
+      })
+      use label <- result.try(text_field(raw, "label"))
+      use hint <- result.try(optional_text_field(raw, "hint"))
+      use checked <- result.try(bool_field(raw, "checked", False))
+      Ok(view.checkbox_row(name, label, hint, checked))
+    }
+    other -> Error("unknown type \"" <> other <> "\"")
+  }
+}
+
+/// `checkbox` の欄に許す `name`。`plugin_config` の `normalize` と同じ考え方で、
+/// 許す文字を並べた定数と `string.contains` で判定する。
+const field_name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+
+/// `name` が `field_name_alphabet` だけからなり、空でないこと。
+fn field_name_ok(name: String) -> Bool {
+  name != ""
+  && name
+  |> string.to_graphemes
+  |> list.all(fn(character) { string.contains(field_name_alphabet, character) })
+}
+
+/// `key` の値。無ければ `default`、真偽値でなければ
+/// `<key> must be a Bool, got <classify>`。
+fn bool_field(
+  raw: Dynamic,
+  key: String,
+  default: Bool,
+) -> Result(Bool, String) {
+  case lookup(raw, key) {
+    None -> Ok(default)
+    Some(value) ->
+      decode.run(value, decode.bool)
+      |> result.replace_error(
+        key <> " must be a Bool, got " <> dynamic.classify(value),
+      )
+  }
+}
+
+/// `key` の任意の値を String として読む。無ければ `None`、型が合わなければ
+/// `<key> must be a String, got <classify>`。
+fn optional_text_field(
+  raw: Dynamic,
+  key: String,
+) -> Result(Option(String), String) {
+  case lookup(raw, key) {
+    None -> Ok(None)
+    Some(value) ->
+      decode.run(value, decode.string)
+      |> result.map(Some)
+      |> result.replace_error(
+        key <> " must be a String, got " <> dynamic.classify(value),
+      )
   }
 }
 
