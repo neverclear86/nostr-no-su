@@ -187,13 +187,23 @@ pub fn deleted_or_absent_treats_a_missing_row_as_deleted_test() {
   assert account_store.deleted_or_absent(Ok(Nil)) == Ok(Nil)
 }
 
-/// 到達できないプールへの読み込みは、例外にならず `Unavailable` を返す。
-pub fn loading_from_an_unreachable_database_is_a_value_test() {
-  let name = process.new_name("account_store_test_unreachable")
+/// 到達できないポートを指すプールを起動し、その名前を返す。待ち行列の目標と間隔は
+/// 既定（50ms と 1000ms）より短くして、接続の無いプールがチェックアウトを諦める
+/// までの待ち（既定では 2〜3 秒）を縮める。諦めたときの失敗の写し方は変わらない。
+fn start_unreachable_pool(label: String) -> Name(pog.Message) {
+  let name = process.new_name(label)
   let assert Ok(_pool) =
     pog.default_config(name)
     |> pog.port(1)
+    |> pog.queue_target(10)
+    |> pog.queue_interval(100)
     |> pog.start
+  name
+}
+
+/// 到達できないプールへの読み込みは、例外にならず `Unavailable` を返す。
+pub fn loading_from_an_unreachable_database_is_a_value_test() {
+  let name = start_unreachable_pool("account_store_test_unreachable")
   assert account_store.load(
       name,
       random_master_key(),
@@ -205,11 +215,7 @@ pub fn loading_from_an_unreachable_database_is_a_value_test() {
 
 /// 到達できないプールでのロックの取得は、例外にならず `Unavailable` を返す。
 pub fn acquiring_a_lock_on_an_unreachable_database_is_a_value_test() {
-  let name = process.new_name("account_store_test_unreachable_lock")
-  let assert Ok(_pool) =
-    pog.default_config(name)
-    |> pog.port(1)
-    |> pog.start
+  let name = start_unreachable_pool("account_store_test_unreachable_lock")
   assert account_store.acquire_lock(
       pog.named_connection(name),
       account_store.instance_lock_key,

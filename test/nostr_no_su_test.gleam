@@ -1,12 +1,30 @@
 import gleam/option.{None, Some}
-import gleeunit
 import nostr_no_su
 import nostr_no_su/plugin_runner
 
-/// テスト全体のエントリポイント。gleeunit が `*_test` 関数を集めて実行する。
+/// 同じ DB の advisory lock（インスタンスのロック）を取り合うモジュール。並列に
+/// 走らせると一方のロックの取得が他方の保持で失敗するので、この順で直列に走らせる。
+/// 専用の database を作る E2E（`nip46_relay_test`）は別の database のロックを取るので
+/// 入れない。
+const ordered_modules = ["account_store_test", "account_reconcile_test"]
+
+/// モジュールを同時に走らせるレーンの数。上げると壁時間は縮むが、CPU の取り合いで
+/// 「N ms 以内に応答する」の検査（TLS の接続の期限など）が落ちやすくなる。
+const lanes = 8
+
+/// テスト全体のエントリポイント。test/ 配下の全モジュールの `*_test` 関数を eunit で
+/// 実行する（`support/eunit_runner`）。モジュールは `lanes` 本のレーンで同時に走り
+/// （空いたレーンが次のモジュールを取る）、`ordered_modules` は 1 本のレーンでその
+/// 順に走る。同じモジュールの中のテストは順に走る。
+///
+/// 並列に走るので、モジュールをまたいで共有する状態（環境変数、固定の名前の
+/// プロセス、固定の名前の BEAM モジュール、同じ DB の advisory lock）を使うテストは
+/// 他のモジュールと干渉する。新しいモジュールでそれらが要るなら、`ordered_modules`
+/// に足す（docs/development.md の「テストの流儀」）。
 ///
 /// 出力には次の行が混ざる。どれも検証したい振る舞いそのものなので、logger の水準を
-/// 下げず、標準出力も抑えずにそのまま出している。
+/// 下げず、標準出力も抑えずにそのまま出している。並列に走るので、行は別の
+/// モジュールのテストのものと入り混じる。
 ///
 /// - `=SUPERVISOR REPORT=`: スーパービジョンツリーの復帰を確かめるテストがアクターや
 ///   プラグインの子を kill するためと、到達できない DB を使うテストでプール
@@ -26,8 +44,13 @@ import nostr_no_su/plugin_runner
 ///   `[plugin_resume_store]` の skip の行:
 ///   `TEST_DATABASE_URL` が無いときに統合テストを飛ばしたことを知らせる
 pub fn main() -> Nil {
-  gleeunit.main()
+  run_tests(ordered_modules, lanes)
 }
+
+/// test/ 配下の全モジュールを eunit で走らせ、失敗があれば終了コード 1 で VM を
+/// 止める。`ordered` は 1 本のレーンでその順に、残りは `lanes` 本のレーンで同時に走る。
+@external(erlang, "eunit_runner", "run")
+fn run_tests(ordered: List(String), lanes: Int) -> Nil
 
 /// 取り直しの要求の `since` は、ランナーのメモリの再開点を優先し、無ければ
 /// 保存済みの値を使う。保存済みも無い要求は落とし、要求の順は保つ。

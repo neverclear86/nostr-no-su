@@ -1001,7 +1001,7 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
     connect(
       relay,
       failing_once(evaluations),
-      Backoff(initial_ms: 500, max_ms: 500),
+      Backoff(initial_ms: 200, max_ms: 200),
       None,
     )
 
@@ -1010,7 +1010,8 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
   assert process.receive(evaluations, 1000) == Ok(1)
   let assert Ok(frame) = process.receive(frames, 1000)
   assert string.starts_with(frame, "[\"REQ\",\"bunker\",")
-  assert process.receive(evaluations, 900) == Error(Nil)
+  // 再試行のタイマー（200ms、ジッター込みで 160〜240ms）が鳴った後まで見る。
+  assert process.receive(evaluations, 400) == Error(Nil)
   assert process.receive(frames, 0) == Error(Nil)
 
   stop_client(client)
@@ -1321,8 +1322,9 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
 
   let assert Ok(first_pid) = process.receive(connection_pids, 2000)
 
-  // mist はアイドルな接続にも ping に自動で pong を返すので、切られない。
-  assert process.receive(disconnects, 1000) == Error(Nil)
+  // mist はアイドルな接続にも ping に自動で pong を返すので、生存確認の間隔
+  // （200ms）を 2 回以上またいでも切られない。
+  assert process.receive(disconnects, 500) == Error(Nil)
 
   let assert True = suspend_process(first_pid)
 
