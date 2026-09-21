@@ -448,7 +448,7 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 
-承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）とセッションの取り消し（`POST /sessions/revoke`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。
+承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）、セッションの取り消し（`POST /sessions/revoke`）、権限の編集（`POST /sessions/<signer>/<client>/permissions`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。権限の編集だけは `SessionNotApplied` を通知ページにせず、送られた値でフォームを描き直す（409 は変わらない）。
 
 | 構築子 | 管理 UI の応答 |
 | --- | --- |
@@ -560,6 +560,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
 | GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI での接続。303 でダッシュボードへ戻す |
+| GET / POST | `/sessions/<signer>/<client>/permissions` | 承認済みのセッションの権限の編集フォーム / 保存。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
 | POST | `/plugins/<プラグイン名>/<ページ>` | プラグインのページのフォームの送信 |
@@ -577,7 +578,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/relays/<id>/delete` | 削除の確認 / 実行。303 でダッシュボードへ戻す |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
-承認、拒否、セッションの取り消し、クライアントの接続は、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンは出さない。
+承認、拒否、セッションの取り消し、セッションの権限の編集、クライアントの接続は、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンと保存した権限の値は出さない。
 再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
 `<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
@@ -648,6 +649,7 @@ nostr-no-su/
 │       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/connect_pages.gleam クライアントの接続のページの描画
+│       ├── admin/session_pages.gleam セッションのページの描画
 │       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── admin/plugin_view.gleam プラグインが返す要素の記述から管理 UI の部品への変換（純粋）
