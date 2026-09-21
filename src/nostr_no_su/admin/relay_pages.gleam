@@ -159,57 +159,27 @@ fn roles_fieldset(
     html.legend([attribute.class("fieldset-legend")], [
       html.text(text(i18n.Role)),
     ]),
-    role_row(
-      language,
+    view.checkbox_row(
       dashboard.monitor_field,
       view.eye_icon(),
       text(i18n.UseForMonitoring),
-      text(i18n.MonitorRoleDescription),
+      html.text(text(i18n.MonitorRoleDescription)),
       roles.monitor,
-      option.map(states, fn(row) { row.monitor }),
+      option.values([
+        option.map(states, fn(row) { row.monitor })
+        |> option.map(dashboard.role_state_badge(language, _)),
+      ]),
     ),
-    role_row(
-      language,
+    view.checkbox_row(
       dashboard.bunker_field,
       view.key_icon(),
       text(i18n.UseForBunker),
-      text(i18n.BunkerRoleDescription),
+      html.text(text(i18n.BunkerRoleDescription)),
       roles.bunker,
-      option.map(states, fn(row) { row.bunker }),
-    ),
-  ])
-}
-
-/// 用途 1 つぶんの大きなチェック。チェック、アイコン、語、説明、あれば接続状態のバッジを
-/// 1 行に並べる。
-fn role_row(
-  language: Language,
-  name: String,
-  icon: Element(msg),
-  caption: String,
-  description: String,
-  checked: Bool,
-  state: Option(dashboard.RoleState),
-) -> Element(msg) {
-  let badge = case state {
-    Some(state) -> [dashboard.role_state_badge(language, state)]
-    None -> []
-  }
-  html.label([attribute.class("flex items-center gap-3 text-sm")], [
-    html.input([
-      attribute.type_("checkbox"),
-      attribute.name(name),
-      attribute.value("on"),
-      attribute.class("checkbox border-base-content/60"),
-      attribute.checked(checked),
-    ]),
-    icon,
-    html.div([attribute.class("flex min-w-0 flex-col")], [
-      html.span([], [html.text(caption)]),
-      html.span([attribute.class("text-sm text-base-content/70")], [
-        html.text(description),
+      option.values([
+        option.map(states, fn(row) { row.bunker })
+        |> option.map(dashboard.role_state_badge(language, _)),
       ]),
-    ]),
-    ..badge
+    ),
   ])
 }

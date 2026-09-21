@@ -65,6 +65,7 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/plugin_view
 import nostr_no_su/admin/relay_pages
+import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
@@ -233,6 +234,8 @@ pub type Context {
     sessions: fn() -> Result(List(dashboard.SessionRow), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
     revoke: fn(String, String) -> Result(Nil, SessionFailure),
+    /// セッション（署名者, クライアント）の権限を差し替える。
+    update_perms: fn(String, String, String) -> Result(Nil, SessionFailure),
     /// 承認待ちの一覧。読み込み中、応答なしのときは表示する理由を返す。
     pending: fn() -> Result(List(dashboard.PendingRow), String),
     approve: fn(String) -> Result(Nil, SessionFailure),
@@ -393,15 +396,18 @@ fn route(
       case
         dashboard.parse_account_action_path(segments),
         dashboard.parse_relay_action_path(segments),
-        dashboard.parse_plugin_page_path(segments)
+        dashboard.parse_plugin_page_path(segments),
+        dashboard.parse_session_permissions_path(segments)
       {
-        Ok(#(signer, action)), _, _ ->
+        Ok(#(signer, action)), _, _, _ ->
           account_action(context, request, language, theme, signer, action)
-        _, Ok(#(id, action)), _ ->
+        _, Ok(#(id, action)), _, _ ->
           relay_action(context, request, language, theme, id, action)
-        _, _, Ok(#(name, key)) ->
+        _, _, Ok(#(name, key)), _ ->
           plugin_page(context, request, language, theme, name, key)
-        Error(Nil), Error(Nil), Error(Nil) ->
+        _, _, _, Ok(#(signer, client)) ->
+          session_permissions(context, request, language, theme, signer, client)
+        Error(Nil), Error(Nil), Error(Nil), Error(Nil) ->
           not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
       }
   }
@@ -935,6 +941,7 @@ pub type SessionChange {
   ConnectionApproved
   ConnectionDenied
   SessionRevoked
+  PermissionsSaved
   ClientConnected
 }
 
@@ -947,8 +954,8 @@ pub type ReenableFailure {
   PluginNotAnswered(reason: String)
 }
 
-/// 承認・拒否・取り消し・クライアントの接続 1 件のログ行の本文（接頭辞を除く）。値は
-/// 署名者とクライアントの公開鍵だけで、承認ページのトークンを含めない。
+/// 承認・拒否・取り消し・権限の編集・クライアントの接続 1 件のログ行の本文（接頭辞
+/// を除く）。値は署名者とクライアントの公開鍵だけで、承認ページのトークンを含めない。
 pub fn session_change_line(
   change: SessionChange,
   signer: String,
@@ -958,6 +965,7 @@ pub fn session_change_line(
     ConnectionApproved -> "approved the connection of client "
     ConnectionDenied -> "denied the connection of client "
     SessionRevoked -> "revoked the session of client "
+    PermissionsSaved -> "updated the permissions of client "
     ClientConnected -> "connected client "
   }
   done <> client <> " to signer " <> signer
@@ -1057,6 +1065,145 @@ fn session_failure_response(
         i18n.Translated(not_confirmed_message(cause)),
         503,
       )
+  }
+}
+
+/// セッション 1 件の権限の編集ページと、その送信。GET は編集画面を 200 で返す。POST は
+/// 検証に落ちれば 400 で描き直し、通れば `context.update_perms` を呼ぶ。書き込まれて
+/// いないことが確定した失敗（`SessionNotApplied`）だけ 409 でフォームを描き直し、
+/// それ以外の失敗は `session_failure_response` に渡す。
+fn session_permissions(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  signer: String,
+  client: String,
+) -> Response {
+  use session <- with_session(context, language, theme, signer, client)
+  case request.method {
+    http.Get ->
+      session_pages.session_permissions_page(
+        language,
+        theme,
+        Ok(session),
+        None,
+        None,
+      )
+      |> wisp.html_response(200)
+    http.Post -> {
+      use form <- wisp.require_form(request)
+      let redraw = fn(perms, reason) {
+        session_pages.session_permissions_page(
+          language,
+          theme,
+          Ok(session),
+          Some(perms),
+          reason,
+        )
+      }
+      case session_perms(form) {
+        Error(message) ->
+          redraw(assembled_perms(form), Some(i18n.Translated(message)))
+          |> wisp.html_response(400)
+        Ok(perms) ->
+          case context.update_perms(signer, client, perms) {
+            Ok(Nil) -> {
+              log.write(
+                log.Notice,
+                log_prefix,
+                session_change_line(PermissionsSaved, signer, client),
+              )
+              wisp.redirect(to: "/")
+            }
+            Error(bunker.SessionNotApplied(reason)) ->
+              redraw(perms, Some(i18n.Untranslated(reason)))
+              |> wisp.html_response(409)
+            Error(failure) -> session_failure_response(language, theme, failure)
+          }
+      }
+    }
+    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
+  }
+}
+
+/// `kinds` の欄の値をカンマで分けた項目。空文字列なら 0 件。
+fn kind_items(form: wisp.FormData) -> List(String) {
+  case string.trim(form_value(form, dashboard.perms_kinds_field)) {
+    "" -> []
+    trimmed -> string.split(trimmed, ",")
+  }
+}
+
+/// チェックの欄が `on` で送られているか。
+fn field_checked(form: wisp.FormData, name: String) -> Bool {
+  form_value(form, name) == "on"
+}
+
+/// フォームの値から perms を組み立てる。チェックの入った 3 つ、`sign_event` に
+/// チェックが無いときだけ `kinds` の各項目を `sign_event:<kind>` にしたもの（入力の順、
+/// 同じ kind は最初の 1 つ）、`other` をカンマで分けたトークンの順で繋ぐ。`kinds` の
+/// 項目は検証せずにそのまま使うので、検証に落ちたときの描き直しにも使える。
+fn assembled_perms(form: wisp.FormData) -> String {
+  let sign_event = field_checked(form, dashboard.sign_event_field)
+  let checked_tokens =
+    [
+      #(sign_event, dashboard.sign_event_field),
+      #(
+        field_checked(form, dashboard.nip44_encrypt_field),
+        dashboard.nip44_encrypt_field,
+      ),
+      #(
+        field_checked(form, dashboard.nip44_decrypt_field),
+        dashboard.nip44_decrypt_field,
+      ),
+    ]
+    |> list.filter_map(fn(pair) {
+      case pair.0 {
+        True -> Ok(pair.1)
+        False -> Error(Nil)
+      }
+    })
+  let kind_tokens = case sign_event {
+    True -> []
+    False ->
+      kind_items(form)
+      |> list.unique
+      |> list.map(fn(item) { "sign_event:" <> item })
+  }
+  let other_tokens = case
+    string.trim(form_value(form, dashboard.perms_other_field))
+  {
+    "" -> []
+    trimmed -> string.split(trimmed, ",")
+  }
+  list.flatten([checked_tokens, kind_tokens, other_tokens])
+  |> string.join(",")
+}
+
+/// フォームの値から perms を組み立てて検証する。選択が無ければ
+/// `Error(i18n.SelectAtLeastOne)`、`kinds` に 0 以上の整数でない項目があれば
+/// `Error(i18n.InvalidKindList)`。「そのほかの宣言」だけが残る値も
+/// `SelectAtLeastOne` にする（署名も暗号化も許さない値になるため）。
+fn session_perms(form: wisp.FormData) -> Result(String, i18n.Message) {
+  use <- bool.guard(
+    list.any(kind_items(form), fn(item) {
+      case int.parse(item) {
+        Ok(value) -> value < 0
+        Error(Nil) -> True
+      }
+    }),
+    Error(i18n.InvalidKindList),
+  )
+  let sign_event = field_checked(form, dashboard.sign_event_field)
+  let meaningful =
+    sign_event
+    || field_checked(form, dashboard.nip44_encrypt_field)
+    || field_checked(form, dashboard.nip44_decrypt_field)
+    || { !sign_event && !list.is_empty(kind_items(form)) }
+  case meaningful {
+    False -> Error(i18n.SelectAtLeastOne)
+    True -> Ok(assembled_perms(form))
   }
 }
 
@@ -1585,6 +1732,42 @@ fn with_relay(
         Ok(row) -> next(row)
         Error(Nil) ->
           not_found_notice(language, theme, i18n.Translated(i18n.RelayNotFound))
+      }
+  }
+}
+
+/// 承認済みセッションの一覧から（署名者, クライアント）の行を引く。一覧を得られ
+/// なければ、時間をおけば直ることなので 404 にせず、理由を編集ページに 200 で出す
+/// （`connect_pages` と同じ扱い）。一覧にその組が無ければ 404。
+fn with_session(
+  context: Context,
+  language: Language,
+  theme: view.Theme,
+  signer: String,
+  client: String,
+  next: fn(dashboard.SessionRow) -> Response,
+) -> Response {
+  case context.sessions() {
+    Error(reason) ->
+      session_pages.session_permissions_page(
+        language,
+        theme,
+        Error(i18n.Untranslated(reason)),
+        None,
+        None,
+      )
+      |> wisp.html_response(200)
+    Ok(rows) ->
+      case
+        list.find(rows, fn(row) { row.signer == signer && row.client == client })
+      {
+        Ok(row) -> next(row)
+        Error(Nil) ->
+          not_found_notice(
+            language,
+            theme,
+            i18n.Translated(i18n.SessionNotFound),
+          )
       }
   }
 }

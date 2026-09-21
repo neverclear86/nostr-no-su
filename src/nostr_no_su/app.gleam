@@ -695,6 +695,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       },
       sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
+      update_perms: fn(signer, client, perms) {
+        bunker.update_perms(bunker_name, signer, client, perms)
+      },
       pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
       approve: bunker.approve(bunker_name, _),
       deny: bunker.deny(bunker_name, _),

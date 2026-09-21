@@ -108,6 +108,20 @@ fn revocation(revoked_client: String) -> Result(Nil, bunker.SessionFailure) {
   }
 }
 
+/// クライアントの値で、権限の更新の結果を選ぶ。`earlier_client` だけ、保存の失敗の
+/// 状態を撮るために書き込まれていないことが確定した失敗にする。
+fn updating_perms(
+  updated_client: String,
+) -> Result(Nil, bunker.SessionFailure) {
+  case updated_client == earlier_client {
+    True ->
+      Error(bunker.SessionNotApplied(
+        "database is unreachable or rejected the connection",
+      ))
+    False -> Ok(Nil)
+  }
+}
+
 /// URL の値で、リレーの追加の結果を選ぶ。用途は撮影に使わない。
 fn adding_relay(
   url: String,
@@ -465,6 +479,9 @@ fn context() -> admin.Context {
       ])
     },
     revoke: fn(_signer, revoked_client) { revocation(revoked_client) },
+    update_perms: fn(_signer, updated_client, _perms) {
+      updating_perms(updated_client)
+    },
     pending: fn() {
       Ok([
         dashboard.PendingRow(

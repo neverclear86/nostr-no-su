@@ -929,6 +929,35 @@ pub fn hinted_textarea(
   ])
 }
 
+/// チェック 1 つぶんの大きな行。チェック、アイコン、語、説明、あればバッジを 1 行に
+/// 並べる。
+pub fn checkbox_row(
+  name: String,
+  icon: Element(msg),
+  caption: String,
+  description: Element(msg),
+  checked: Bool,
+  badge: List(Element(msg)),
+) -> Element(msg) {
+  html.label([attribute.class("flex items-center gap-3 text-sm")], [
+    html.input([
+      attribute.type_("checkbox"),
+      attribute.name(name),
+      attribute.value("on"),
+      attribute.class("checkbox border-base-content/60"),
+      attribute.checked(checked),
+    ]),
+    icon,
+    html.div([attribute.class("flex min-w-0 flex-col")], [
+      html.span([], [html.text(caption)]),
+      html.span([attribute.class("text-sm text-base-content/70")], [
+        description,
+      ]),
+    ]),
+    ..badge
+  ])
+}
+
 /// nsec や管理パスワードのように伏せて入力させる欄。`autocomplete` は欄の自動入力の種類
 /// （nsec は `new-password`、再入力のパスワードは `off`）。
 pub fn secret_input(name: String, autocomplete: String) -> Element(msg) {
