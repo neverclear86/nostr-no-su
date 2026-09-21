@@ -6,10 +6,10 @@
 ////
 //// - 最上位: `#{<<"sections">> => [節, ...]}`
 //// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）
-//// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form`
-////   のいずれか
-//// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge`
-////   のいずれか（`badge` は `table` のセルだけ）
+//// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form` /
+////   `details` のいずれか
+//// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge` / `id`
+////   のいずれか（`badge` は `table` のセルだけ、`id` は `pairs` の値だけ）
 //// - `form` の欄: `checkbox` のみ
 ////
 //// 深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
@@ -137,7 +137,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         items_raw
         |> list.index_map(fn(raw_item, index) { #(raw_item, index) })
         |> list.try_map(fn(indexed) {
-          pair(indexed.0)
+          pair(indexed.0, context)
           |> result.map_error(fn(reason) {
             "item #" <> int.to_string(indexed.1) <> ": " <> reason
           })
@@ -153,7 +153,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
               ),
             ]),
           )
-        _ -> Ok(view.summary_list(items))
+        _ -> Ok(view.detail_list(items))
       }
     }
     "table" -> {
@@ -235,6 +235,11 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         }
       }
     }
+    "details" -> {
+      use summary <- result.try(text_field(raw, "summary"))
+      use text <- result.try(text_field(raw, "text"))
+      Ok(view.details_panel(summary, [view.preformatted(text)]))
+    }
     other -> Error("unknown type \"" <> other <> "\"")
   }
 }
@@ -304,20 +309,34 @@ fn optional_text_field(
   }
 }
 
-/// `pairs` の 1 件。値は `text` か `code` のインラインだけを許す
+/// `pairs` の 1 件。値は `text`・`code`・`id` のインラインだけを許す
 /// （`badge` は `table` のセルだけに置ける）。
-fn pair(raw: Dynamic) -> Result(#(String, view.Value), String) {
+fn pair(
+  raw: Dynamic,
+  context: Context,
+) -> Result(#(String, Element(msg)), String) {
   use term <- result.try(text_field(raw, "term"))
   use value_raw <- result.try(field(raw, "value", "missing value"))
   use kind <- result.try(text_field(value_raw, "type"))
   case kind {
     "text" -> {
       use text <- result.try(text_field(value_raw, "text"))
-      Ok(#(term, view.Plain(text)))
+      Ok(#(term, view.value_cell(view.Plain(text))))
     }
     "code" -> {
       use text <- result.try(text_field(value_raw, "text"))
-      Ok(#(term, view.Code(text)))
+      Ok(#(term, view.value_cell(view.Code(text))))
+    }
+    "id" -> {
+      use text <- result.try(text_field(value_raw, "text"))
+      Ok(#(
+        term,
+        view.identifier_cell(
+          context.language,
+          text,
+          i18n.text(context.language, i18n.Copy),
+        ),
+      ))
     }
     "badge" -> Error("value: type \"badge\" is only allowed in table cells")
     other -> Error("value: unknown type \"" <> other <> "\"")
@@ -325,7 +344,7 @@ fn pair(raw: Dynamic) -> Result(#(String, view.Value), String) {
 }
 
 /// `table` のセル 1 つ。`text`・`code`・`badge` のいずれか。`badge` はここでだけ
-/// 使える。
+/// 使え、`id` はここでは使えない。
 fn inline(raw: Dynamic) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
@@ -346,6 +365,7 @@ fn inline(raw: Dynamic) -> Result(Element(msg), String) {
       use badge_tone <- result.try(tone(raw, view.Neutral))
       Ok(view.status_badge(badge_tone, text))
     }
+    "id" -> Error("type \"id\" is only allowed in pairs values")
     other -> Error("unknown type \"" <> other <> "\"")
   }
 }

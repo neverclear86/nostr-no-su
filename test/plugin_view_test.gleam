@@ -40,6 +40,11 @@ fn badge_inline(text: String, tone: String) -> Dynamic {
   ])
 }
 
+/// インライン（`id`）。
+fn id_inline(text: String) -> Dynamic {
+  map_([#("type", dynamic.string("id")), #("text", dynamic.string(text))])
+}
+
 /// ブロック（`text`）。
 fn text_block(text: String) -> Dynamic {
   map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
@@ -84,6 +89,15 @@ fn link_block(page: String, text: String) -> Dynamic {
   map_([
     #("type", dynamic.string("link")),
     #("page", dynamic.string(page)),
+    #("text", dynamic.string(text)),
+  ])
+}
+
+/// ブロック（`details`）。
+fn details_block(summary: String, text: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("details")),
+    #("summary", dynamic.string(summary)),
     #("text", dynamic.string(text)),
   ])
 }
@@ -432,4 +446,64 @@ pub fn form_field_checked_defaults_to_false_test() {
   let raw2 = section_("Settings", [form_block([bad_checked], "Save")])
   let assert Error(reason) = plugin_view.section(raw2, context())
   assert string.contains(reason, "checked must be a Bool, got String")
+}
+
+/// `details` ブロックは `view.details_panel` に `view.preformatted` した本文を
+/// 渡した出力を含む。
+pub fn details_blocks_are_rendered_test() {
+  let raw =
+    section_("Settings", [details_block("tags (1)", "[[\"p\",\"abc\"]]")])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(
+      view.details_panel("tags (1)", [view.preformatted("[[\"p\",\"abc\"]]")]),
+    ),
+  )
+}
+
+/// `details` ブロックは `summary` と `text` の両方が要る。
+pub fn details_blocks_require_a_summary_and_text_test() {
+  let missing_summary =
+    map_([#("type", dynamic.string("details")), #("text", dynamic.string("x"))])
+  let raw_missing_summary = section_("Settings", [missing_summary])
+  let assert Error(reason_summary) =
+    plugin_view.section(raw_missing_summary, context())
+  assert string.contains(reason_summary, "missing summary")
+
+  let missing_text =
+    map_([
+      #("type", dynamic.string("details")),
+      #("summary", dynamic.string("s")),
+    ])
+  let raw_missing_text = section_("Settings", [missing_text])
+  let assert Error(reason_text) =
+    plugin_view.section(raw_missing_text, context())
+  assert string.contains(reason_text, "missing text")
+}
+
+/// `pairs` の `id` の値は `view.identifier_cell` の出力になり、コピーボタンの
+/// ラベル（`i18n.Copy` の訳語）を含む。
+pub fn id_values_are_truncated_test() {
+  let value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+  let raw = section_("Settings", [pairs_block([#("id", id_inline(value))])])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.identifier_cell(
+      i18n.English,
+      value,
+      i18n.text(i18n.English, i18n.Copy),
+    )),
+  )
+  assert string.contains(body, i18n.text(i18n.English, i18n.Copy))
+}
+
+/// `table` のセルに `id` を置くと `Error`。`id` は `pairs` の値だけに置ける。
+pub fn id_is_rejected_in_table_cells_test() {
+  let raw = section_("Cells", [table_block(["A"], [[id_inline("abc")]])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "type \"id\" is only allowed in pairs values")
 }
