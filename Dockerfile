@@ -6,7 +6,11 @@ WORKDIR /build
 # path 依存の stratus は gleam.toml が無いと解決できない。
 COPY gleam.toml manifest.toml ./
 COPY vendor/stratus/gleam.toml vendor/stratus/
-RUN gleam deps download
+# gleam は path 依存の gleam.toml の指紋を build/ に持ち、新しい checkout ではそれが無いので
+# manifest.toml があっても版の解決をやり直して Hex の API を呼ぶ。Hex の一時的な障害
+# （500 など）で落ちないよう、失敗したら少し待って最大 3 回まで繰り返す。1 回目で指紋が
+# 書かれるので、2 回目以降は解決を飛ばしてパッケージの取得だけを行う。
+RUN for i in 1 2 3; do gleam deps download && break; [ "$i" = 3 ] && exit 1; sleep 10; done
 COPY . ./
 # erlang-shipment にはライセンスのファイルが入らないので、再配布の条件として本体、
 # vendor/stratus、Hex の依存のライセンスを shipment に集める。Hex の依存のファイルは
@@ -21,7 +25,8 @@ RUN gleam export erlang-shipment \
 FROM toolchain AS plugin-build
 WORKDIR /build/event_logger
 COPY plugins-src/event_logger/gleam.toml plugins-src/event_logger/manifest.toml ./
-RUN gleam deps download
+# Hex の一時的な障害に備えて本体と同じく繰り返す。
+RUN for i in 1 2 3; do gleam deps download && break; [ "$i" = 3 ] && exit 1; sleep 10; done
 COPY plugins-src/event_logger/src src
 RUN gleam export erlang-shipment
 
