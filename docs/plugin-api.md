@@ -28,7 +28,7 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 
 - `plugin_name/0` の値は管理 UI の表示名とログの識別子に使う。**プラグイン間で一意にすること。**
 - **`handle_event` は `/1` と `/2` のどちらか一方があればよい。** `/2` はプラグイン固有の設定を第 2 引数で受け取る形で（第 6 章）、両方あれば本体は `/2` を優先する。**設定が必須のプラグインは `/2` だけをエクスポートしてよい。** 設定が無ければ正しく書けない `handle_event/1` を、形だけ揃えるために持たせる必要はない。
-- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
+- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
 - **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_required_versions/0` `plugin_pages/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
 - **`-on_load` を使うなら即座に戻ること。** 本体はモジュールの読み込み（`code:ensure_loaded/1`）もメタデータの呼び出しと同じ 5 秒の期限で打ち切り、戻らなければそのプラグインを読み込まない（起動は続く）。打ち切っても `-on_load` の処理そのものは VM の中で走り続けるので、その中で待ち合わせをしないこと。
 
@@ -223,7 +223,7 @@ PLUGIN_<NAME>_<KEY>=<値>
 ```
 
 - `<NAME>` は `plugin_name/0` の値を大文字にし、`[A-Z0-9]` 以外の文字を `_` に置き換えたものである。`file_logger` なら `PLUGIN_FILE_LOGGER_` が接頭辞になる。
-- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。
+- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。管理 UI のページと実行の呼び出し（第 13 章）に渡す map だけは、これに加えて予約キー `<<"Accounts">>` を持つ。キーを小文字にする規則があるため、大文字を含むこのキーが環境変数から作られることはない。
 
 ```sh
 PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
@@ -251,12 +251,14 @@ PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
 
 ### 6.3 受け取り方
 
-設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。
+設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（登録アカウントの一覧）が加わる。
 
 | エクスポート | 本体の挙動 |
 | --- | --- |
 | `plugin_children/1` | あればこちらを呼び、設定 map を渡す。無ければ `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない |
 | `handle_event/2` | あればこちらを呼び、第 2 引数に設定 map を渡す。無ければ `handle_event/1` を呼ぶ |
+| `plugin_page_content/2` | あればこちらを呼び、第 2 引数に `Accounts` を含む設定 map を渡す。無ければ `plugin_page_content/1` を呼ぶ |
+| `plugin_page_action/3` | あればこちらを呼び、第 3 引数に `Accounts` を含む設定 map を渡す。無ければ `plugin_page_action/2` を呼ぶ |
 
 ```erlang
 plugin_children(Config) -> [child_spec()] | {error, Reason}.
@@ -309,7 +311,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
 
-任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。**
+任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。
 
 バージョン番号を上げるのは、次の破壊的変更のときだけである。
 
@@ -438,6 +440,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
 | `<mod>: plugin_pages/0 but no plugin_page_content/1 or /2` | 一覧はあるが中身のエクスポートが無い（第 13 章） |
 | `<mod>: plugin_page_content/1 but no plugin_pages/0 or /1` | 中身のエクスポートはあるが一覧が無い |
+| `<mod>: plugin_page_action/3 but no plugin_pages/0 or /1` | 実行のエクスポートはあるが一覧が無い |
 | `<mod>: plugin_pages/1 must return a list of page maps, got Dict` | 一覧の戻り値がリストでない |
 | `<mod>: plugin_pages/1 must return at least one page` | 一覧が 0 件 |
 | `<mod>: plugin_pages/1: page #0: must be a page map, got Array` | ページの記述が map でない。素の `{key, title}` のようなタプルはここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
@@ -491,9 +494,9 @@ handle_event(Event) ->
 - 文字列リテラル `"minimal_plugin"` は binary なので、`plugin_name/0` の戻り値としてそのまま使える。
 - イベント map のキーは binary である。`%{"kind" => kind}` でマッチすること。`%{kind: kind}` は atom キーになるためマッチしない。設定 map（第 6 章）も同じく binary キーである。
 
-## 13. 管理 UI のページ（任意エクスポート `plugin_pages` / `plugin_page_content`）
+## 13. 管理 UI のページ（任意エクスポート `plugin_pages` / `plugin_page_content` / `plugin_page_action`）
 
-任意エクスポート `plugin_pages` と `plugin_page_content` を**両方**持つプラグインは、管理 UI にページを供給できる。どちらか片方だけでは読み込まない（第 9 章）。両方とも無いプラグインは今までどおり UI を持たずに読み込まれる。**API バージョンは 1 のままである**（第 7 章）。
+任意エクスポート `plugin_pages` と `plugin_page_content` を**両方**持つプラグインは、管理 UI にページを供給できる。どちらか片方だけでは読み込まない（第 9 章）。両方とも無いプラグインは今までどおり UI を持たずに読み込まれる。**API バージョンは 1 のままである**（第 7 章）。さらに任意エクスポート `plugin_page_action` があれば、そのページはフォーム（第 13.3 節の `form` ブロック）の送信を受け取れる（第 13.6 節）。`plugin_pages` / `plugin_page_content` を持たずに `plugin_page_action` だけを持つプラグインは読み込まない。
 
 ### 13.1 エクスポート
 
@@ -501,15 +504,16 @@ handle_event(Event) ->
 | --- | --- | --- | --- |
 | `plugin_pages` | 0 または 1 | ページの記述のリスト（第 13.2 節） | 読み込み時に 1 度だけ検証する |
 | `plugin_page_content` | 1 または 2 | ページの記述 map（第 13.3 節） | 読み込み時には呼ばない。ページの表示のたびに呼ぶ |
+| `plugin_page_action` | 2 または 3 | `ok` または `{error, Reason}`（第 13.6 節） | 読み込み時には呼ばない。フォームの送信のたびに呼ぶ |
 
-`/1` があれば `plugin_pages/0` より優先し、設定 map（第 6 章）を渡す。`plugin_page_content` も同様に `/2` があれば `/1` より優先し、第 1 引数にページの `key`、第 2 引数に設定 map を渡す。
+`/1` があれば `plugin_pages/0` より優先し、設定 map（第 6 章）を渡す。`plugin_page_content` も同様に `/2` があれば `/1` より優先し、第 1 引数にページの `key`、第 2 引数に設定 map を渡す。`plugin_page_action` も同様に `/3` があれば `/2` より優先し、設定 map を最後の引数で渡す。
 
 ```erlang
 plugin_pages() -> [page_map(), ...].
 plugin_page_content(Key :: binary()) -> description_map().
 ```
 
-`plugin_page_content` の 1 回の呼び出しの期限は `call_timeout_ms`（本番の既定は 5 秒）で、超えたページは 503 になる。第 2 章の「即座に戻ること」の列挙にはこのエクスポートを含めない。起動時ではなく画面の表示のたびに呼ばれるためである。
+`plugin_page_content` と `plugin_page_action` の 1 回の呼び出しの期限は `call_timeout_ms`（本番の既定は 5 秒）で、超えたページと超えた送信は 503 になる。例外も同じ 503 で、理由の文字列に `crashed (error:badarg)` の形で現れる。第 2 章の「即座に戻ること」の列挙にはこの 2 つのエクスポートを含めない。起動時ではなく画面の表示と送信のたびに呼ばれるためである。
 
 ### 13.2 ページの一覧
 
@@ -538,8 +542,15 @@ plugin_page_content(Key :: binary()) -> description_map().
 | ブロック | `table` | `headers`（binary のリスト）、`rows`（インラインのリストのリスト） | 無し |
 | ブロック | `alert` | `text` | `tone`（既定 `info`） |
 | ブロック | `link` | `page`（同じプラグインのページのキー）、`text` | 無し |
+| ブロック | `form` | `fields`（欄の記述のリスト、後掲）、`submit`（送信ボタンの文字列） | 無し |
 | インライン | `text` / `code` | `text` | 無し |
 | インライン | `badge` | `text` | `tone`（既定 `neutral`）（`table` のセルだけ） |
+
+`form` の宛先は本体が決め（`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定）、プラグインは指定できない。`fields` は**1 件以上必要**。
+
+| 欄の種別 | 必須のキー | 任意のキー |
+| --- | --- | --- |
+| `checkbox` | `name`（`[A-Za-z0-9_-]+` に一致する送信名）、`label` | `hint`（説明）、`checked`（真偽値、既定 `false`） |
 
 `tone` は `neutral`・`success`・`warning`・`failure`・`info` の 5 値のみで、それ以外はその節ひとつぶんの `Error` になる。`pairs` の `items` が 0 件のときと、節の `blocks` が 0 件のときは、空の状態の文（`Nothing to show.` の訳）を出す。`sections` そのものが 0 件のときは、ページ全体に表示する内容が無い旨の案内を出す。`table` の `rows` が 0 件のときは見出し行だけの表になる。
 
@@ -547,7 +558,7 @@ plugin_page_content(Key :: binary()) -> description_map().
 
 ### 13.4 制約
 
-- **プラグインが選べるのは文字列・種別・`tone` だけである。** クラス名、`href`、生の HTML、色は渡せない。すべて管理 UI の共通部品（`src/nostr_no_su/admin/view.gleam`）にだけ写す。
+- **プラグインが選べるのは文字列・種別・`tone`・真偽値だけである。** クラス名、`href`、生の HTML、色は渡せない。すべて管理 UI の共通部品（`src/nostr_no_su/admin/view.gleam`）にだけ写す。
 - **秘密はプラグインが返す前に自分でマスクする。本体は値をマスクしない**（第 1 章の信頼モデルと同じ理由）。
 - 返す文字列はすべて `lang="en"` で出る。表示の言語（日本語・英語）には訳さない。
 - `plugin_page_content` に `{error, Reason}` を返す約束は無い。描けない事情はページの記述の `alert` で自分で表すこと。返しても中身の形の誤りとして扱われ、例外・期限超過と同じ 503 になる。
@@ -574,3 +585,33 @@ plugin_page_content(<<"status">>) ->
 ```
 
 Gleam の実装例は `plugins-src/event_logger/src/event_logger/page.gleam` にあり、秘密のマスク（第 13.4 節）の実例でもある。
+
+`plugin_page_content` と `plugin_page_action` に渡す設定 map には、これまでの環境変数由来のキーに加えて予約キー `Accounts` が入る。値はバンカーに登録したアカウントごとの map（`pubkey`・`npub`・`label`、すべて binary）のリストで、登録が 0 件なら空リストである。このキーは `plugin_pages` と `plugin_children` の呼び出しには渡らない。
+
+### 13.6 入力と実行（任意エクスポート `plugin_page_action`）
+
+`form` ブロック（第 13.3 節）を持つページは、任意エクスポート `plugin_page_action` でフォームの送信を受け取れる。宛先は本体が決め、`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定する。プラグインはこの宛先を指定できない。
+
+受け取る `Values` は、チェックされたチェックボックスの `name` → `<<"on">>` だけを持つ binary キー・binary 値の map である（チェックしなかった欄は届かない）。
+
+戻り値は `ok` か `{error, Reason}`（`Reason` は binary）のいずれかである。
+
+- `ok` を返すと、本体はそのページへ 303 でリダイレクトする。
+- `{error, Reason}` を返すと、本体は `Reason` を理由に 503 の通知ページを出す。
+- `ok` でも `{error, Reason}` でもない値を返すと、戻り値の形の誤りとして同じく 503 になる。
+- 呼び出しの例外・期限超過も 503 になる（第 13.1 節）。
+
+`plugin_page_action` を持たないページへの `POST` は、`plugin_page_content` を持つページと同じく `405 Method Not Allowed`（`allow: GET`）になる。持つページは `allow: GET, POST` になる。
+
+```erlang
+plugin_page_action(<<"settings">>, #{<<"main">> := <<"on">>}, _Config) ->
+    ok;
+plugin_page_action(<<"settings">>, _Values, _Config) ->
+    {error, <<"select at least one account">>}.
+```
+
+送信の失敗の理由は次の形で 503 のページに出る。
+
+- `<mod>: plugin_page_action/3 rejected the request (select at least one account)`
+- `<mod>: plugin_page_action/3 must return ok or {error, Reason}, got Atom`
+- `<mod>: plugin_page_action/3: error reason must be a String, got Atom`

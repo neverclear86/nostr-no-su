@@ -463,6 +463,7 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 
 プラグインの再有効化（`POST /plugins/reenable`）は、結果を型 `admin.ReenableFailure` で受け取る。
 成功は 303、名前に一致するプラグインが無い（`PluginNotFound`）は 404、ランナーの無応答（`PluginNotAnswered`）は 503 にする。
+プラグインのページのフォームの送信は `admin.Context` の `plugin_page_action` が返す関数に委ね、その `Error` の理由がそのまま 503 の通知ページに出る（[プラグイン API v1](plugin-api.md) の第 13.6 節）。
 
 ## アカウントの登録と秘密鍵の再表示
 
@@ -561,6 +562,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI での接続。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
+| POST | `/plugins/<プラグイン名>/<ページ>` | プラグインのページのフォームの送信 |
 | POST | `/accounts/reload` | DB からのアカウントの読み直しの要求。303 でダッシュボードへ戻す |
 | GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
 | POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
@@ -620,7 +622,7 @@ flowchart TD
 設定が足りないときは、プラグインの `plugin_children/0` または `/1` が `{error, Reason}` を返して読み込みを拒否できる。
 値の妥当性（接続文字列として解釈できるか、など）は本体には判断できないので、そこをプラグインに委ねている。
 
-管理 UI のページを供給するプラグインは `plugin_pages` でページの一覧を申告し、本体は読み込み時に検証する（[プラグイン API v1](plugin-api.md) の第 13 章）。
+管理 UI のページを供給するプラグインは `plugin_pages` でページの一覧を申告し、本体は読み込み時に検証する（[プラグイン API v1](plugin-api.md) の第 13 章）。入力と実行は任意エクスポート `plugin_page_action` で足し、宛先は本体が決める。
 
 読み込んだ BEAM は本体と同じ VM で同じ権限で動く。
 サンドボックスは無く、秘密鍵を持つアクターの状態にも到達できる。
