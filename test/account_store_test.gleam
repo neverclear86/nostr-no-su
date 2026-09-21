@@ -1126,7 +1126,7 @@ fn connect_clients(
         nip46_client.connect_body(entry.account, secret_arg, "c1"),
         1000 + n,
       )
-    let #(_seen, outcome) =
+    let engine.Handled(engine: _seen, outcome:, ..) =
       engine.handle_event(
         state,
         signed_event.verified(incoming),

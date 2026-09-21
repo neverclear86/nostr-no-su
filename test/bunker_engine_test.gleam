@@ -65,6 +65,11 @@ fn handle(
   handle_after(state, incoming, now, 0)
 }
 
+/// `Handled` からログの 1 行を落とし、エンジンと結果のタプルにする。
+fn tupled(handled: engine.Handled) -> #(engine.Engine, engine.Outcome) {
+  #(handled.engine, handled.outcome)
+}
+
 /// 指定した起点のアクターが受信イベントを 1 件処理する。`Persist` はそのまま
 /// 返すので、書き込みの値や `on_failure` を見るテストが使う。
 fn handle_raw(
@@ -78,6 +83,7 @@ fn handle_raw(
     signed_event.verified(incoming),
     engine.Inputs(now: now, token: token, not_before: not_before),
   )
+  |> tupled
 }
 
 /// `Persist` を、書き込みが成功したものとして畳み込む。アクターの `Incoming`
@@ -904,6 +910,7 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
       )),
       engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
     )
+    |> tupled
     |> written
   let assert Reply(_) = outcome
   let assert [entry] = engine.pending(state, 1001)
@@ -1267,29 +1274,62 @@ pub fn undeclared_encryption_methods_are_denied_test() {
   )
 }
 
-/// perms が空のセッションは署名も暗号化もできないが、`ping` と
+/// perms が空（無宣言）のセッションは、kind 24133 を除く `sign_event` と
+/// `nip44_encrypt` / `nip44_decrypt` を、宣言したのと同じに実行できる。`ping` と
 /// `get_public_key` は perms に関わらず応答する。
-pub fn empty_perms_refuse_signing_and_encryption_test() {
+pub fn empty_perms_allow_signing_and_encryption_test() {
   let signer = account_for(signer_key)
   let state = granted_session("")
   let params =
     "[\"" <> account.pubkey_hex(account_for(other_client_key)) <> "\",\"hi\"]"
-  assert string.contains(
-    session_reply(state, "sign_event", kind_draft_params(1)),
-    "permission denied: sign_event:1",
-  )
-  assert string.contains(
+  let assert Ok(signed) =
+    parse_result_event(session_reply(state, "sign_event", kind_draft_params(1)))
+  assert signed.kind == 1
+  assert !string.contains(
     session_reply(state, "nip44_encrypt", params),
-    "permission denied: nip44_encrypt",
+    "permission denied",
   )
-  assert string.contains(
+  assert !string.contains(
     session_reply(state, "nip44_decrypt", params),
-    "permission denied: nip44_decrypt",
+    "permission denied",
   )
   assert session_reply(state, "ping", "[]")
     == "{\"id\":\"r1\",\"result\":\"pong\"}"
   assert session_reply(state, "get_public_key", "[]")
     == "{\"id\":\"r1\",\"result\":\"" <> account.pubkey_hex(signer) <> "\"}"
+}
+
+/// perms が空のセッションでも、kind 24133（NIP-46 の応答と同じ kind）の
+/// `sign_event` は今までどおり拒否される。
+pub fn empty_perms_still_refuse_kind_24133_test() {
+  let state = granted_session("")
+  assert string.contains(
+    session_reply(state, "sign_event", kind_draft_params(24_133)),
+    "refusing to sign a kind 24133 event",
+  )
+}
+
+/// 権限の不足で拒否した実行は、`Handled.notice` に署名者・クライアント・
+/// 拒否した権限名を含むログの 1 行を持つ。
+pub fn denied_requests_carry_a_notice_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state = granted_session("sign_event:1")
+  let body = request_body("r1", "sign_event", kind_draft_params(7))
+  let engine.Handled(notice:, ..) =
+    engine.handle_event(
+      state,
+      signed_event.verified(request_event(client, signer, body, 1001)),
+      engine.Inputs(now: 1001, token: token, not_before: 0),
+    )
+  assert notice
+    == Some(
+      "permission denied for client "
+      <> account.pubkey_hex(client)
+      <> " on signer "
+      <> account.pubkey_hex(signer)
+      <> ": sign_event:7",
+    )
 }
 
 /// 上限を超える perms はトークンの境で切り、上限ちょうどの perms はそのまま
@@ -1414,6 +1454,7 @@ fn connect_for_approval(
       signed_event.verified(connect_event(client, signer, "", now)),
       engine.Inputs(now: now, token: approval_token, not_before: 0),
     )
+    |> tupled
     |> written
   let assert Reply(_) = outcome
   state
@@ -1685,7 +1726,7 @@ pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
   let client = account_for(client_key)
   let #(state, _) =
     connect_with_perms(auth_engine(), client, signer, "", "", 1000) |> written
-  let #(_state, outcome) =
+  let engine.Handled(engine: _state, outcome:, ..) =
     engine.handle_event(
       state,
       signed_event.verified(request_event(
@@ -2050,7 +2091,7 @@ pub fn pending_stays_within_the_capacity_test() {
       let client = account_for(padded_hex(n))
       let incoming =
         request_event(client, signer, connect_body(signer, "", "c1"), 1000 + n)
-      let #(_seen, outcome) =
+      let engine.Handled(engine: _seen, outcome:, ..) =
         engine.handle_event(
           state,
           signed_event.verified(incoming),
