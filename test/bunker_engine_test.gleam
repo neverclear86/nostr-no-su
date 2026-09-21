@@ -7,6 +7,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply}
+import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
@@ -406,6 +407,22 @@ pub fn a_malformed_request_payload_is_ignored_test() {
   assert reason == "malformed request payload"
 }
 
+/// 上限を超えるリクエストは、応答を組まずに理由を添えて無視する。
+pub fn an_oversized_request_is_ignored_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let body =
+    request_body(
+      "s1",
+      "sign_event",
+      "[\"" <> string.repeat("c", rpc.max_request_bytes + 1) <> "\"]",
+    )
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  assert outcome == Ignore(rpc.limit_exceeded)
+}
+
 /// 未知のメソッドはクラッシュではなくエラー応答で返す。
 pub fn unknown_method_test() {
   let signer = account_for(signer_key)
@@ -419,6 +436,20 @@ pub fn unknown_method_test() {
     decrypt_response(client, signer, response),
     "unsupported method",
   )
+}
+
+/// 未知の方法への応答に、リクエストの方法名は含まれない。
+pub fn an_unknown_method_is_not_echoed_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let body = "{\"id\":\"u1\",\"method\":\"do_the_thing\"}"
+  let #(_state, outcome) =
+    handle(state, request_event(client, signer, body, 1001), 1001)
+  let assert Reply(response) = outcome
+  let decrypted = decrypt_response(client, signer, response)
+  assert string.contains(decrypted, "unsupported method")
+  assert !string.contains(decrypted, "do_the_thing")
 }
 
 /// NIP-04 のメソッドには「未対応」という明示的なエラーを返す。

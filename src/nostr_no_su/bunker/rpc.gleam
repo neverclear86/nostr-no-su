@@ -1,9 +1,13 @@
 //// kind 24133 イベントの（暗号化された）content に載る NIP-46 JSON-RPC の
-//// メッセージ層。暗号処理はここには無く、シリアライズのみを担う。
+//// メッセージ層。暗号処理はここには無く、シリアライズと入力の上限の検査を担う。
 
+import gleam/bool
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
+import gleam/string
 
 /// 接続済みクライアントからのリクエスト。
 pub type Request {
@@ -28,6 +32,29 @@ pub type EventDraft {
     pubkey: Option(String),
   )
 }
+
+/// 復号した content の最大バイト数。JSON を解く前にここで切る。いちばん
+/// 大きい入力は `sign_event` のドラフト JSON である。
+pub const max_request_bytes = 65_536
+
+/// 方法名の最大バイト数。既知の方法名でいちばん長い `get_public_key` は
+/// 14 バイトである。
+pub const max_method_bytes = 64
+
+/// リクエスト id の最大バイト数。id は応答にそのまま載せ直すので、応答の
+/// 大きさも抑える。
+pub const max_id_bytes = 64
+
+/// `params` の最大要素数。既知のリクエストでいちばん要素の多い `connect` は
+/// 3 個である。
+pub const max_params = 8
+
+/// JSON として読めないリクエストを捨てる理由。捨てる理由はこのモジュールに
+/// 集める。
+pub const malformed_request = "malformed request payload"
+
+/// 上限を超えたリクエストを捨てる理由。
+pub const limit_exceeded = "request exceeds the input limits"
 
 /// 成功応答。
 pub fn ok(id: String, result: String) -> Response {
@@ -54,9 +81,30 @@ fn request_decoder() -> decode.Decoder(Request) {
   decode.success(Request(id:, method:, params:))
 }
 
-/// 復号済みの content を JSON-RPC リクエストとしてデコードする。
-pub fn decode_request(text: String) -> Result(Request, json.DecodeError) {
-  json.parse(text, request_decoder())
+/// 復号済みの content を JSON-RPC リクエストとしてデコードする。検査は
+/// 3 段で、全文が `max_request_bytes` を超えれば `limit_exceeded`、JSON と
+/// して読めなければ `malformed_request`、`id` が `max_id_bytes` を超える・
+/// `method` が `max_method_bytes` を超える・`params` の要素数が
+/// `max_params` を超えれば `limit_exceeded` を返す。上限を超えた入力に
+/// JSON のパースを走らせないため、全文の検査を先に置く。
+pub fn decode_request(text: String) -> Result(Request, String) {
+  use <- bool.guard(
+    string.byte_size(text) > max_request_bytes,
+    Error(limit_exceeded),
+  )
+  use request <- result.try(
+    json.parse(text, request_decoder())
+    |> result.replace_error(malformed_request),
+  )
+  use <- bool.guard(!within_limits(request), Error(limit_exceeded))
+  Ok(request)
+}
+
+/// リクエストの各要素が上限に収まっているか。`decode_request` の 3 段目である。
+fn within_limits(request: Request) -> Bool {
+  string.byte_size(request.id) <= max_id_bytes
+  && string.byte_size(request.method) <= max_method_bytes
+  && list.length(request.params) <= max_params
 }
 
 /// 応答をエンコードする。成功時は `error` キー自体を出力しない。`error` キーが
