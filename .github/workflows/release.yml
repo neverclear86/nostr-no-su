@@ -1,7 +1,7 @@
 name: release
 
 # vX.Y.Z のタグの push で、イメージを ghcr.io/<owner>/<repo> に公開する。
-# テストは再実行しないので、manual.yml が通った main のコミットにだけタグを切る（CONTRIBUTING.md の「リリース」）。
+# テストは再実行しないので、ci.yml が通った main のコミットにだけタグを切る（CONTRIBUTING.md の「リリース」）。
 # packages: write を持つので、action はコミット SHA で固定し、版をコメントに添える。
 on:
   push:
@@ -39,7 +39,7 @@ jobs:
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
           # 既定では実行時刻が入り、同じコミットでも config が変わってしまうため、
           # created ラベルもコミット時刻にする（同じイメージの定義は #181 のプラン、
-          # 検査は manual.yml の docker-image ジョブ）。
+          # 検査は ci.yml の docker-image ジョブ）。
           labels: |
             org.opencontainers.image.created={{commit_date 'YYYY-MM-DDTHH:mm:ss.SSS[Z]'}}
       # ビルドの再現性のため、コミット時刻を SOURCE_DATE_EPOCH として以降の step に渡す。

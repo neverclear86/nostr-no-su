@@ -11,7 +11,7 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。PR の CI は渡さないので、push の前に手元で通す:
+本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。CI の `test` ジョブは Postgres を立てて渡す。CI の失敗で push をやり直さないよう、push の前に手元でも通す:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -48,7 +48,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本�
 
 ## NIP-46 の E2E（strfry）
 
-実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（どちらかが未設定ならスキップして 1 行ログを出す。PR の CI はどちらも渡さない）。テストごとに専用の database を作って消す:
+実際のリレー（strfry）と Postgres の上で、本番の仕様のツリーに NIP-46 の connect → get_public_key → sign_event を往復させる E2E は、`TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方が設定されているときだけ走る（どちらかが未設定ならスキップして 1 行ログを出す。CI の `test` ジョブは strfry と Postgres を立てて両方渡す）。テストごとに専用の database を作って消す:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -63,7 +63,7 @@ docker rm -f nns-pg-test nns-strfry-test
 
 ## event_logger プラグインのテスト
 
-`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。PR の CI は渡さない）:
+`event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。CI の `event-logger` ジョブは Postgres を立てて渡す）:
 
 ```sh
 docker run -d --name nns-pg-test -p 127.0.0.1:5433:5432 \
@@ -73,19 +73,19 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test g
 docker rm -f nns-pg-test
 ```
 
-## 手動の検査
+## CI
 
-PR の CI（`.github/workflows/test.yml`）は、build、単体テスト、format、例のプラグインのコンパイル、`vendor/stratus` と `.env.example` と共有パッケージの版の検査、CSS の差分だけを行う。Postgres と strfry を使うテスト、shipment、docker イメージ、プラグインの README のビルド手順は `.github/workflows/manual.yml` にあり、GitHub の Actions で `manual` を選んで「Run workflow」で main に対して起動する。リリースの前（CONTRIBUTING.md の「リリース」）と、Dockerfile、`docker-compose.yml`、`docker/`、リレーとの接続、統合テストに関わる変更をマージしたあとに実行する。ジョブは次のとおり:
+`.github/workflows/ci.yml` が PR と main への push で走る（Actions の `ci` を選んで「Run workflow」で手動でも起動できる）。PR では変えたファイルの種類に応じてジョブを省略し、docs、`.claude/`、`*.md`、LICENSE だけの PR では何も検査しない（ジョブは skipped で終わり、`gh pr checks` は pass を報告する）。main への push では全部のジョブが走るので、リリースの前に手で起動する検査は無い（CONTRIBUTING.md の「リリース」）。ジョブは次のとおり:
 
-| ジョブ | 検査 |
-|--|--|
-| `integration` | Postgres つきの `gleam test` と `gleam export erlang-shipment` |
-| `nip46-e2e` | strfry と Postgres つきの `gleam test`。strfry のログでイベントの保存を確かめる |
-| `plugin-event-logger` | event_logger の Postgres つきの `gleam test` と shipment |
-| `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる |
-| `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 |
+| ジョブ | 検査 | PR で走る条件 |
+|--|--|--|
+| `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。strfry のログでイベントの保存を確かめる）、format、例のプラグインのコンパイル、`vendor/stratus` と `.env.example` の検査、shipment | docs 以外を変えた |
+| `event-logger` | 共有パッケージの版の検査、event_logger の build、Postgres つきの `gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
+| `css` | `npm run build:css` の結果が `priv/static/admin.css` と一致すること | 管理 UI の `.gleam`、`assets/`、`package*.json` を変えた |
+| `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |
+| `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 | `Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |
 
-手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
+`.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（Postgres と strfry つきで約 90 秒）で決まり、PR 全体で 2 分半ほどかかる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
 
 ## レビューの前の機械的な検査
 
