@@ -232,6 +232,9 @@ ON CONFLICT (signer, client) DO NOTHING"
 /// 最終利用の更新。時刻が進むときだけ書き換える。
 const touch_session_sql = "UPDATE bunker_sessions SET last_used_at = $3 WHERE signer = $1 AND client = $2 AND last_used_at < $3"
 
+/// 権限の更新。
+const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3 WHERE signer = $1 AND client = $2"
+
 /// セッションの削除。
 const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
 
@@ -624,6 +627,23 @@ pub fn touch_session(
   |> pog.parameter(pog.text(signer))
   |> pog.parameter(pog.text(client))
   |> pog.parameter(pog.int(now))
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.replace(Nil)
+}
+
+/// セッションの権限を差し替える。行が無ければ何もせず `Ok`。
+pub fn update_session_perms(
+  db: pog.Connection,
+  timeouts: Timeouts,
+  signer signer: String,
+  client client: String,
+  perms perms: String,
+) -> Result(Nil, StoreError) {
+  pog.query(update_session_perms_sql)
+  |> pog.parameter(pog.text(signer))
+  |> pog.parameter(pog.text(client))
+  |> pog.parameter(pog.text(perms))
   |> pog.timeout(timeouts.write_ms)
   |> execute(db)
   |> result.replace(Nil)

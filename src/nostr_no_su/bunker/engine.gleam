@@ -154,7 +154,8 @@ pub type Pending {
 /// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
 /// 経っていれば更新する。`perms` はセッション内の `sign_event` と
 /// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
-/// の値から変わらない。空のときは既定の集合（`default_perms`）で照合する。
+/// の値から、管理 UI の `set_perms` でだけ変わる。空のときは既定の集合
+/// （`default_perms`）で照合する。
 pub type Session {
   Session(
     signer: String,
@@ -174,6 +175,8 @@ pub type Write {
   DeleteSession(signer: String, client: String)
   /// `touch_session`。組の最終利用を `last_used_at` に進める。
   TouchSession(signer: String, client: String, last_used_at: Int)
+  /// `update_session_perms`。組の `perms` を差し替える。
+  UpdateSessionPerms(signer: String, client: String, perms: String)
   /// 同じ組の古い承認待ち `replaced` と、`pending_capacity` で押し出す承認待ち
   /// `evicted` を `delete_pending` で消し、`insert_pending` で登録する
   /// （`insert_pending_replacing`）。
@@ -354,6 +357,28 @@ pub fn revoke(
         DeleteSession(signer: signer, client: client),
       ))
     False -> Error(Nil)
+  }
+}
+
+/// 承認済みセッションの権限を差し替える。`perms` は `bounded_perms` で
+/// `max_perms_bytes` に収める。承認されていない組なら `Error(Nil)` を返す。
+pub fn set_perms(
+  engine: Engine,
+  signer: String,
+  client: String,
+  perms: String,
+) -> Result(#(Engine, Write), Nil) {
+  let pair = #(signer, client)
+  case dict.get(engine.sessions, pair) {
+    Ok(session) -> {
+      let bounded = bounded_perms(perms)
+      let updated = Session(..session, perms: bounded)
+      Ok(#(
+        Engine(..engine, sessions: dict.insert(engine.sessions, pair, updated)),
+        UpdateSessionPerms(signer: signer, client: client, perms: bounded),
+      ))
+    }
+    Error(Nil) -> Error(Nil)
   }
 }
 

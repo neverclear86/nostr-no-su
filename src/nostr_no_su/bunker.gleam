@@ -291,6 +291,17 @@ pub type Msg {
     client: String,
     reply: Subject(Result(Nil, SessionFailure)),
   )
+  /// 承認済みセッションの権限を差し替える。書き込みが成功したときだけ状態に
+  /// 反映して応答する。読み込み前は `SessionNotReady`、読み込み済みで承認済みで
+  /// ない組なら `SessionNotFound`、書き込みの結果が曖昧なときは
+  /// `SessionMaybeApplied`、書き込まれていないことが確定したら
+  /// `SessionNotApplied` を返す。
+  UpdatePerms(
+    signer: String,
+    client: String,
+    perms: String,
+    reply: Subject(Result(Nil, SessionFailure)),
+  )
   /// 承認待ちの接続要求の一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
   GetPending(reply: Subject(Result(List(Pending), String)))
   /// 承認待ちの接続要求を承認する。書き込みが成功したときだけ状態に反映し、
@@ -372,6 +383,19 @@ pub fn revoke(
   client: String,
 ) -> Result(Nil, SessionFailure) {
   call_session_change(name, Revoke(signer, client, _))
+}
+
+/// 承認済みセッションの権限を差し替え、反映されるまで待つ。読み込み前は
+/// `SessionNotReady`、読み込み済みで承認済みでない組なら `SessionNotFound`、
+/// 書き込まれていないことが確定したら `SessionNotApplied`、書き込みの結果が
+/// 曖昧なときとアクターが応答しないときは `SessionMaybeApplied` を返す。
+pub fn update_perms(
+  name: Name(Msg),
+  signer: String,
+  client: String,
+  perms: String,
+) -> Result(Nil, SessionFailure) {
+  call_session_change(name, UpdatePerms(signer, client, perms, _))
 }
 
 /// 承認待ちの接続要求の一覧。読み込み前、読み直しの前、アクターが応答しないときは
@@ -541,14 +565,15 @@ type Change {
   LabelUpdated
 }
 
-/// 承認・拒否・取り消しと、NIP-46 の `connect`（セッションを開く、承認待ちを
-/// 登録する）・`logout`・セッション内のリクエストの最終利用の書き込みの種類。
-/// 失敗のログ行の言い回しを決める。前の 3 つは `admin.SessionChange` と同じ
-/// 区分だが、`bunker` は管理 UI に依存できないので別に持つ。
+/// 承認・拒否・取り消し・権限の編集と、NIP-46 の `connect`（セッションを開く、
+/// 承認待ちを登録する）・`logout`・セッション内のリクエストの最終利用の書き込み
+/// の種類。失敗のログ行の言い回しを決める。前の 4 つは `admin.SessionChange` と
+/// 同じ区分だが、`bunker` は管理 UI に依存できないので別に持つ。
 type SessionChange {
   Approval
   Denial
   Revocation
+  PermissionsUpdate
   SessionOpening
   PendingRecording
   SessionClosing
@@ -906,6 +931,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     Revoke(signer:, client:, reply:) ->
       revoke_session(state, reply, signer, client)
+    UpdatePerms(signer:, client:, perms:, reply:) ->
+      update_session_perms(state, reply, signer, client, perms)
     SetPublisher(relay_url, publish) ->
       actor.continue(
         State(
@@ -1366,6 +1393,7 @@ fn session_failure_line(
     Approval -> "approve the connection of"
     Denial -> "deny the connection of"
     Revocation -> "revoke the session of"
+    PermissionsUpdate -> "update the permissions of the session of"
     SessionOpening -> "open the session of"
     PendingRecording -> "record the pending connection of"
     SessionClosing -> "close the session of"
@@ -1457,6 +1485,10 @@ fn incoming_write_change(
     )
     engine.TouchSession(signer:, client:, ..) -> #(
       SessionUse,
+      Some(#(signer, client)),
+    )
+    engine.UpdateSessionPerms(signer:, client:, ..) -> #(
+      PermissionsUpdate,
       Some(#(signer, client)),
     )
     engine.InsertPending(pending:, ..) -> #(
@@ -1621,6 +1653,48 @@ fn revoke_session(
         Ok(#(next, write)) -> {
           let #(written_state, outcome) =
             write_session_change(state, Revocation, target, write)
+          case outcome {
+            Ok(Nil) -> {
+              process.send(reply, Ok(Nil))
+              actor.continue(State(..written_state, engine: next))
+            }
+            Error(failure) -> {
+              process.send(reply, Error(session_write_failure(failure)))
+              actor.continue(written_state)
+            }
+          }
+        }
+      }
+  }
+}
+
+/// 読み込み済みのときだけエンジンで権限を差し替え、書き込みが成功したときだけ
+/// 状態に反映する。読み込み前は `SessionNotReady`、読み込み済みで承認済みでない
+/// 組なら `SessionNotFound`、書き込みの失敗は `session_write_failure` が
+/// `SessionFailure` に写す。
+fn update_session_perms(
+  state: State,
+  reply: Subject(Result(Nil, SessionFailure)),
+  signer: String,
+  client: String,
+  perms: String,
+) -> actor.Next(State, Msg) {
+  let target = session_target(state.engine, signer, client)
+  case state.accounts {
+    Loading(..) -> {
+      log_session_failure(PermissionsUpdate, target, accounts_not_loaded)
+      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
+      actor.continue(state)
+    }
+    Ready ->
+      case engine.set_perms(state.engine, signer, client, perms) {
+        Error(Nil) -> {
+          process.send(reply, Error(SessionNotFound(session_not_approved)))
+          actor.continue(state)
+        }
+        Ok(#(next, write)) -> {
+          let #(written_state, outcome) =
+            write_session_change(state, PermissionsUpdate, target, write)
           case outcome {
             Ok(Nil) -> {
               process.send(reply, Ok(Nil))
