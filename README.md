@@ -214,7 +214,7 @@ docker compose -f docker-compose.release.yml up -d
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/app/plugins:/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/app/plugins:/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED`、`NOSTR_NO_SU_VERSION` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は compose が渡す既定値で、`NOSTR_NO_SU_VERSION` は `docker-compose.release.yml` が渡す）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
