@@ -1,6 +1,6 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
 //// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
-//// 問い合わせ、URI のリレーの用途の決定もここで確かめる。
+//// 問い合わせ、URI のリレーの用途の決定、セッションの権限の更新もここで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -24,9 +24,9 @@ import support/app_tree.{
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_from, fake_open, fixed_retry_delay, idle_monitor, load_signer,
   memory_store, named_relay, other_client_key, other_signer_key, request,
-  response_body, secret, signer_key, start_database, start_loading_bunker_tree,
-  start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay_url,
+  response_body, secret, signed_request, signer_key, start_database,
+  start_loading_bunker_tree, start_loading_bunker_tree_with_open, start_tree,
+  stop_tree, store_failure, store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 
@@ -276,6 +276,46 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
   assert string.contains(response_body(denied), "unauthorized")
+  stop_tree(tree)
+}
+
+/// #418 の症状。`sign_event:1` のセッションで kind 10002 が `permission denied` に
+/// なり、`bunker.update_perms` で `sign_event:1,sign_event:10002` にすると署名が
+/// 返る。
+pub fn session_permissions_can_be_updated_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree = start_bunker_tree(reports, name)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  deliver(
+    signed_request(nip46_client.connect_body_with_perms(
+      signer,
+      secret,
+      "sign_event:1",
+      "c1",
+    )),
+  )
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+
+  let draft_10002 = "{\\\"kind\\\":10002,\\\"content\\\":\\\"\\\"}"
+  deliver(request("r1", "sign_event", "[\"" <> draft_10002 <> "\"]"))
+  let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
+  assert string.contains(response_body(denied), "permission denied")
+
+  assert bunker.update_perms(
+      name,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event:1,sign_event:10002",
+    )
+    == Ok(Nil)
+
+  deliver(request("r2", "sign_event", "[\"" <> draft_10002 <> "\"]"))
+  let assert Ok(Published(_socket, signed)) = process.receive(reports, 2000)
+  assert string.contains(response_body(signed), "\\\"sig\\\"")
   stop_tree(tree)
 }
 

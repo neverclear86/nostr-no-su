@@ -1105,6 +1105,65 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// `update_session_perms` は `perms` を差し替え、行が無くても `Ok`。
+pub fn postgres_updating_session_perms_writes_the_new_value_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let entry = random_entry("update-perms")
+  let signer_hex = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_update_perms_unreachable_lock"),
+      key,
+      generous,
+    ).write
+
+  assert write(
+      engine.InsertSession(
+        session: engine.Session(
+          signer: signer_hex,
+          client: "client",
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        ),
+        evicted: [],
+      ),
+    )
+    == Ok(Nil)
+  assert write(engine.UpdateSessionPerms(
+      signer: signer_hex,
+      client: "client",
+      perms: "sign_event:1,sign_event:10002",
+    ))
+    == Ok(Nil)
+  // 無い組は何もせず Ok。
+  assert write(engine.UpdateSessionPerms(
+      signer: signer_hex,
+      client: "no-such-client",
+      perms: "sign_event",
+    ))
+    == Ok(Nil)
+
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert list.map(loaded.sessions, fn(session) {
+      #(session.client, session.perms)
+    })
+    == [#("client", "sign_event:1,sign_event:10002")]
+
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// エンジンだけで `count` 件の別々のクライアント鍵からの `connect`（secret は
 /// `secret_arg`）を順に処理し、`Persist` の書き込みをそのつど `write` で DB に
 /// 反映して次のエンジンで続ける。n 件目は時刻 1000 + n、token `tok-<n>` で送る。

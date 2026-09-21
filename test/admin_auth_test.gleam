@@ -249,6 +249,7 @@ pub fn cross_origin_account_changes_are_rejected_test() {
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
+    dashboard.session_permissions_path(signer, client),
     ..list.map(account_actions.all, action_path)
   ]
   list.each(paths, fn(path) {

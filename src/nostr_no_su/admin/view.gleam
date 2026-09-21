@@ -18,9 +18,10 @@
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）には文言を文字列
-//// リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
-//// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
+//// `admin/session_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した
+//// 英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま
+//// 出すのは製品名（`Nostr-no-Su`）だけである。
 ////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
 //// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
@@ -636,10 +637,10 @@ pub fn form_description(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm")], [html.text(text)])
 }
 
-/// チェック 1 件の行。チェック、ラベル、あれば説明を並べる。送信値は `on` に
-/// 固定する。`relay_pages.role_row` と似た形だが、あちらはアイコンと接続状態の
+/// プラグインのフォームが宣言するチェック 1 件の行。チェック、ラベル、あれば説明を
+/// 並べる。送信値は `on` に固定する。`checkbox_row` と似た形だが、あちらはアイコンと
 /// バッジを同じ行に挟むため、この部品と共通化しない。
-pub fn checkbox_row(
+pub fn plugin_checkbox_row(
   name: String,
   label: String,
   hint: Option(String),
@@ -926,6 +927,35 @@ pub fn hinted_textarea(
     html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
       html.text(hint),
     ]),
+  ])
+}
+
+/// チェック 1 つぶんの大きな行。チェック、アイコン、語、説明、あればバッジを 1 行に
+/// 並べる。
+pub fn checkbox_row(
+  name: String,
+  icon: Element(msg),
+  caption: String,
+  description: Element(msg),
+  checked: Bool,
+  badge: List(Element(msg)),
+) -> Element(msg) {
+  html.label([attribute.class("flex items-center gap-3 text-sm")], [
+    html.input([
+      attribute.type_("checkbox"),
+      attribute.name(name),
+      attribute.value("on"),
+      attribute.class("checkbox border-base-content/60"),
+      attribute.checked(checked),
+    ]),
+    icon,
+    html.div([attribute.class("flex min-w-0 flex-col")], [
+      html.span([], [html.text(caption)]),
+      html.span([attribute.class("text-sm text-base-content/70")], [
+        description,
+      ]),
+    ]),
+    ..badge
   ])
 }
 

@@ -45,6 +45,10 @@ pub const spec_nsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laq
 /// セッション一覧に出るクライアント。公開鍵の代わりに短い値を使う。
 pub const client = "bbbb2222"
 
+/// セッション一覧の 2 件目のクライアント。権限を宣言して承認したセッションで、
+/// 権限の編集のテストが使う。
+pub const declared_client = "eeee5555"
+
 /// フェイクの取り消しが、承認済みでない組に返す理由。
 pub const session_not_approved = "session is not approved"
 
@@ -138,6 +142,7 @@ pub const unavailable = "account store unavailable: database is unreachable or r
 /// フェイクのハンドラーがテストへ報告する内容。
 pub type Report {
   Revoked(signer: String, client: String)
+  PermissionsSaved(signer: String, client: String, perms: String)
   Approved(token: String)
   Denied(token: String)
   Added(signer: String, label: String)
@@ -292,6 +297,13 @@ pub fn test_context(
           created_at: 1000,
           last_used_at: 1000,
         ),
+        dashboard.SessionRow(
+          signer: signer,
+          client: declared_client,
+          perms: "sign_event:1,nip04_encrypt",
+          created_at: 1000,
+          last_used_at: 900,
+        ),
       ])
     },
     revoke: fn(revoked_signer, revoked_client) {
@@ -300,6 +312,20 @@ pub fn test_context(
         Revoked(signer: revoked_signer, client: revoked_client),
       )
       case revoked_signer == signer && revoked_client == client {
+        True -> Ok(Nil)
+        False -> Error(bunker.SessionNotFound(session_not_approved))
+      }
+    },
+    update_perms: fn(updated_signer, updated_client, perms) {
+      process.send(
+        reports,
+        PermissionsSaved(
+          signer: updated_signer,
+          client: updated_client,
+          perms: perms,
+        ),
+      )
+      case updated_signer == signer && updated_client == declared_client {
         True -> Ok(Nil)
         False -> Error(bunker.SessionNotFound(session_not_approved))
       }

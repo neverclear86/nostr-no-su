@@ -241,7 +241,7 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
 pub fn permissions_are_shown_as_chips_test() {
   let assert Ok([offered, not_requested]) = secret_states().pending
   let chips =
-    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:1</span><span class=\"badge badge-outline badge-sm font-mono\">nip44_encrypt</span></div>"
+    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:1</span></span><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">nip44_encrypt</span></span></div>"
   assert string.contains(
     dashboard.render(i18n.English, view.System, secret_states()),
     chips,
@@ -360,7 +360,7 @@ pub fn sessions_show_perms_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-base-content/70\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:7</span></div></dd>",
+    "<dt class=\"text-base-content/70\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:7</span></span></div></dd>",
   )
 }
 
@@ -535,7 +535,7 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
   assert string.contains(body, view.shorten(known_npub))
   assert string.contains(
     body,
-    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\">sign_event:1</span></div>",
+    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:1</span></span></div>",
   )
   assert string.contains(body, "data-action=\"copy\"")
 }
@@ -1324,7 +1324,7 @@ pub fn approval_page_explains_what_approval_means_test() {
   assert string.contains(with_perms_page, "alert-info")
   assert string.contains(
     with_perms_page,
-    "Approving lets this client request signing and encryption within the permissions above. The permissions are fixed at approval.",
+    "Approving lets this client request signing and encryption within the permissions above. You can change them later from the approved session.",
   )
   assert !string.contains(
     with_perms_page,
@@ -1335,6 +1335,6 @@ pub fn approval_page_explains_what_approval_means_test() {
     dashboard.approval_page(i18n.English, view.System, Ok([]), without_perms)
   assert string.contains(
     without_perms_page,
-    "The permissions are fixed at approval. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
+    "You can change them later from the approved session. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
 }

@@ -426,8 +426,8 @@ pub fn account_store_operations(
 }
 
 /// エンジンの書き込み 1 件を `account_store` の関数に写す。`touch_session`、
-/// `delete_session`、`delete_pending` は行が無くても `Ok` なので
-/// `deleted_or_absent` は通さない。
+/// `update_session_perms`、`delete_session`、`delete_pending` は行が無くても
+/// `Ok` なので `deleted_or_absent` は通さない。
 fn write_session_state(
   pool: Name(pog.Message),
   db: pog.Connection,
@@ -455,6 +455,8 @@ fn write_session_state(
         client:,
         now: last_used_at,
       )
+    engine.UpdateSessionPerms(signer:, client:, perms:) ->
+      account_store.update_session_perms(db, timeouts, signer:, client:, perms:)
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,

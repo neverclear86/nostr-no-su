@@ -30,6 +30,8 @@ const base = `http://127.0.0.1:${port}`;
 const unavailable = `http://127.0.0.1:${port + 1}`;
 const empty = `http://127.0.0.1:${port + 2}`;
 const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
+const declaredClient = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
+const undeclaredClient = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
 const signerNsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re";
 const specNsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5";
 const account = (action) => `${base}/accounts/${signer}/${action}`;
@@ -118,6 +120,10 @@ const shots = [
   { name: "66-plugin-page-disabled", url: `${base}/plugins/broken/status` },
   { name: "67-plugin-page-not-found", url: `${base}/plugins/console_logger/nope`, status: 404 },
   { name: "68-plugin-page-unavailable", url: `${base}/plugins/slow/status`, status: 503 },
+  { name: "69-session-permissions", url: `${base}/sessions/${signer}/${declaredClient}/permissions` },
+  { name: "70-session-permissions-not-declared", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions` },
+  { name: "71-session-permissions-not-applied", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions`, form: { sign_event: "on" }, status: 409 },
+  { name: "72-session-permissions-unavailable", url: `${unavailable}/sessions/${signer}/${declaredClient}/permissions` },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り

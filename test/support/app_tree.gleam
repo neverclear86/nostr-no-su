@@ -597,7 +597,8 @@ pub fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 /// `last_used_at` を `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。
 /// `InsertPending` は `replaced` と `evicted` の token を除いてから足す。
 /// `DeletePending` は token で除く。`ApprovePending` は `DeletePending` の後に
-/// `InsertSession` と同じ規則でセッションを足す。
+/// `InsertSession` と同じ規則でセッションを足す。`UpdateSessionPerms` は組の
+/// 行の `perms` を差し替え、行が無ければ何もしない。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
     engine.InsertSession(session:, evicted:) ->
@@ -622,6 +623,16 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
                 ..session,
                 last_used_at: int.max(session.last_used_at, last_used_at),
               )
+            False -> session
+          }
+        }),
+      )
+    engine.UpdateSessionPerms(signer:, client:, perms:) ->
+      Database(
+        ..database,
+        sessions: list.map(database.sessions, fn(session) {
+          case #(session.signer, session.client) == #(signer, client) {
+            True -> engine.Session(..session, perms: perms)
             False -> session
           }
         }),

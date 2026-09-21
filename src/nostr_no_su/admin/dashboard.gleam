@@ -8,8 +8,8 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`）が同じ定義を見る
-//// ようここに置く。
+//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
+//// `admin/session_pages`）が同じ定義を見るようここに置く。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
@@ -126,7 +126,8 @@ pub type PendingRow {
 }
 
 /// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。`perms` は承認したときに要求
-/// されていた権限（無ければ空文字列）で、以後 `connect` し直しても変わらない。
+/// されていた権限（無ければ空文字列）で、`connect` し直しても変わらず、管理 UI の
+/// 「権限を編集」でだけ変わる。
 pub type SessionRow {
   SessionRow(
     signer: String,
@@ -221,11 +222,14 @@ pub const import_account_segments = [accounts_segment, "import"]
 /// 生成した鍵の登録の POST 先のパスセグメント。
 pub const register_generated_segments = [accounts_segment, "register-generated"]
 
+/// セッションのページの先頭のセグメント。
+pub const sessions_segment = "sessions"
+
 /// セッション取り消しの POST 先のパスセグメント。
-pub const revoke_segments = ["sessions", "revoke"]
+pub const revoke_segments = [sessions_segment, "revoke"]
 
 /// クライアントの接続画面のパスセグメント。
-pub const connect_segments = ["sessions", "connect"]
+pub const connect_segments = [sessions_segment, "connect"]
 
 /// プラグインの再有効化の POST 先のパスセグメント。
 pub const reenable_plugin_segments = [plugins_segment, "reenable"]
@@ -256,6 +260,21 @@ pub const signer_field = "signer"
 
 /// セッション取り消しのフォームでクライアントを送る欄の名前。
 pub const client_field = "client"
+
+/// 権限の編集のフォームで `sign_event` の可否を送る欄の名前。トークンそのもの。
+pub const sign_event_field = "sign_event"
+
+/// 権限の編集のフォームで `nip44_encrypt` の可否を送る欄の名前。トークンそのもの。
+pub const nip44_encrypt_field = "nip44_encrypt"
+
+/// 権限の編集のフォームで `nip44_decrypt` の可否を送る欄の名前。トークンそのもの。
+pub const nip44_decrypt_field = "nip44_decrypt"
+
+/// 権限の編集のフォームで許す kind の一覧を送る欄の名前。
+pub const perms_kinds_field = "kinds"
+
+/// 権限の編集のフォームでそのほかの宣言を送る隠し欄の名前。
+pub const perms_other_field = "other"
 
 /// プラグインの再有効化のフォームでプラグイン名を送る欄の名前。
 pub const plugin_name_field = "name"
@@ -978,6 +997,32 @@ pub fn parse_relay_action_path(
   }
 }
 
+/// セッションの権限の編集画面のパスの末尾のセグメント。
+pub const session_permissions_segment = "permissions"
+
+/// セッションの権限の編集画面のパス（`/sessions/<signer>/<client>/permissions`）。
+pub fn session_permissions_path(signer: String, client: String) -> String {
+  view.segments_path([
+    sessions_segment,
+    signer,
+    client,
+    session_permissions_segment,
+  ])
+}
+
+/// パスセグメントから、セッションの権限の編集画面の署名者とクライアントを引く。値は
+/// 検査しない（一覧との照合は呼び出し側が行う）。
+pub fn parse_session_permissions_path(
+  segments: List(String),
+) -> Result(#(String, String), Nil) {
+  case segments {
+    [first, signer, client, last]
+      if first == sessions_segment && last == session_permissions_segment
+    -> Ok(#(signer, client))
+    _ -> Error(Nil)
+  }
+}
+
 /// プラグインのページのパス（`/plugins/<プラグイン名>/<ページのキー>`）。符号化しない
 /// 素のパスで、`view.SwitchReturningTo` に渡す値。リンクの `href` には
 /// `plugin_page_href` を使う。
@@ -1094,9 +1139,10 @@ fn expires_in_badge(language: Language, seconds: Int) -> Element(msg) {
   }
 }
 
-/// 要求された権限のチップ。カンマ区切りの値を 1 つずつ等幅のバッジにし、空なら「権限の
-/// 要求なし」のバッジ 1 つを出す。
-fn perms_chips(language: Language, perms: String) -> Element(msg) {
+/// 権限のチップ。カンマ区切りの値を 1 つずつ等幅のバッジにし、空なら「権限の
+/// 要求なし」のバッジ 1 つを出す。承認待ちの行では要求された権限を、承認済みの
+/// セッションでは今の権限を出す。
+pub fn perms_chips(language: Language, perms: String) -> Element(msg) {
   case perms {
     "" ->
       view.status_badge(
@@ -1109,7 +1155,7 @@ fn perms_chips(language: Language, perms: String) -> Element(msg) {
         list.map(string.split(perms, ","), fn(perm) {
           html.span(
             [attribute.class("badge badge-outline badge-sm font-mono")],
-            [html.text(perm)],
+            [view.untranslated(perm)],
           )
         }),
       )
@@ -1261,7 +1307,7 @@ fn sessions_section(
 }
 
 /// 承認済みセッション 1 件。クライアントの省略 id、署名者、権限のチップ、最終利用の相対
-/// 時刻と、取り消しのボタンを並べる。
+/// 時刻と、権限の編集と取り消しのボタンを並べる。
 fn session_item(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -1294,8 +1340,21 @@ fn session_item(
         ]),
       ),
     ]),
-    button_row([revoke_form(language, session)]),
+    button_row([
+      permissions_link(language, session),
+      revoke_form(language, session),
+    ]),
   ])
+}
+
+/// 権限の編集画面へのリンク。
+fn permissions_link(language: Language, session: SessionRow) -> Element(msg) {
+  view.icon_button_link(
+    session_permissions_path(session.signer, session.client),
+    view.pencil_icon(),
+    i18n.text(language, i18n.EditPermissions),
+    view.Normal,
+  )
 }
 
 /// 最終利用の `title` に出す、UTC の全文と作成時刻。

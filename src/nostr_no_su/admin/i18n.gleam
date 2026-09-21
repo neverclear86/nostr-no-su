@@ -170,6 +170,7 @@ pub type Lead {
   CouldNotAddRelay
   CouldNotSaveRelay
   CouldNotDeleteRelay
+  CouldNotSavePermissions
   CouldNotStartConnection
 }
 
@@ -190,6 +191,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotAddRelay -> "リレーを登録できませんでした。"
         CouldNotSaveRelay -> "用途を保存できませんでした。"
         CouldNotDeleteRelay -> "リレーを削除できませんでした。"
+        CouldNotSavePermissions -> "権限を保存できませんでした。"
         CouldNotStartConnection -> "接続を開始できませんでした。"
       })
   }
@@ -243,6 +245,21 @@ pub type Message {
   ExpiresInSeconds(seconds: Int)
   Permissions
   NoPermissionsRequested
+  EditPermissions
+  EditPermissionsDescription
+  CurrentPermissions
+  PermissionsNotDeclared
+  AllowSignEvent
+  SignEventAlwaysRefused
+  AllowNip44Encrypt
+  AllowNip44Decrypt
+  AllowedKinds
+  AllowedKindsHint
+  OtherPermissions
+  OtherPermissionsHint
+  SelectAtLeastOne
+  InvalidKindList
+  SessionNotFound
   Created
   LastUsed
   JustNow
@@ -479,6 +496,26 @@ fn english(message: Message) -> String {
     Permissions -> "Permissions"
     NoPermissionsRequested ->
       "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed."
+    EditPermissions -> "Edit permissions"
+    EditPermissionsDescription ->
+      "Choose the operations this client may request. Declarations this form does not recognize are kept unchanged when you save."
+    CurrentPermissions -> "Current permissions"
+    PermissionsNotDeclared -> "Not declared (default)"
+    AllowSignEvent -> "Allow signing events"
+    SignEventAlwaysRefused ->
+      "Kind 24133 is always refused, even when this is allowed."
+    AllowNip44Encrypt -> "Allow NIP-44 encryption"
+    AllowNip44Decrypt -> "Allow NIP-44 decryption"
+    AllowedKinds -> "Allowed kinds"
+    AllowedKindsHint ->
+      "Used only when signing events is not allowed above. Comma-separated event kinds, such as 1,10002."
+    OtherPermissions -> "Other declared permissions"
+    OtherPermissionsHint ->
+      "Declared by the client but not recognized by this form. Kept unchanged when you save."
+    SelectAtLeastOne -> "choose at least one permission"
+    InvalidKindList ->
+      "kinds must be a comma-separated list of non-negative integers"
+    SessionNotFound -> "this session is not approved"
     Created -> "Created"
     LastUsed -> "Last used"
     JustNow -> "just now"
@@ -488,7 +525,7 @@ fn english(message: Message) -> String {
     Approve -> "Approve"
     Deny -> "Deny"
     ApprovalExplanation ->
-      "Approving lets this client request signing and encryption within the permissions above. The permissions are fixed at approval."
+      "Approving lets this client request signing and encryption within the permissions above. You can change them later from the approved session."
     Accounts -> "Accounts"
     Add -> "Add"
     AddAccount -> "Add account"
@@ -735,6 +772,22 @@ fn japanese(message: Message) -> String {
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
     Permissions -> "権限"
     NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
+    EditPermissions -> "権限を編集"
+    EditPermissionsDescription ->
+      "このクライアントに許す操作を選んでください。このフォームが扱わない宣言は、保存してもそのまま残します。"
+    CurrentPermissions -> "今の権限"
+    PermissionsNotDeclared -> "宣言なし（既定）"
+    AllowSignEvent -> "署名を許可する"
+    SignEventAlwaysRefused -> "kind 24133 はこれを許可していても常に拒否します。"
+    AllowNip44Encrypt -> "NIP-44 の暗号化を許可する"
+    AllowNip44Decrypt -> "NIP-44 の復号を許可する"
+    AllowedKinds -> "許可する kind"
+    AllowedKindsHint -> "上の署名を許可していないときだけ使います。1,10002 のようにカンマ区切りで指定します。"
+    OtherPermissions -> "そのほかの宣言"
+    OtherPermissionsHint -> "クライアントが宣言した、このフォームが扱わない値です。保存してもそのまま残します。"
+    SelectAtLeastOne -> "権限を少なくとも 1 つ選んでください。"
+    InvalidKindList -> "kind はカンマ区切りの 0 以上の整数で入力してください。"
+    SessionNotFound -> "このセッションは承認されていません。"
     Created -> "作成"
     LastUsed -> "最終利用"
     JustNow -> "たった今"
@@ -744,7 +797,7 @@ fn japanese(message: Message) -> String {
     Approve -> "承認する"
     Deny -> "拒否する"
     ApprovalExplanation ->
-      "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は後から変わりません。"
+      "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は、後から「承認済みのセッション」の「権限を編集」で変えられます。"
     Accounts -> "アカウント"
     Add -> "追加"
     AddAccount -> "アカウントを追加"

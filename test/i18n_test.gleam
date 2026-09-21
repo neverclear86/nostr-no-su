@@ -182,7 +182,22 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.ExpiresIn -> Some(i18n.ExpiresInSeconds(12))
     i18n.ExpiresInSeconds(_) -> Some(i18n.Permissions)
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
-    i18n.NoPermissionsRequested -> Some(i18n.Created)
+    i18n.NoPermissionsRequested -> Some(i18n.EditPermissions)
+    i18n.EditPermissions -> Some(i18n.EditPermissionsDescription)
+    i18n.EditPermissionsDescription -> Some(i18n.CurrentPermissions)
+    i18n.CurrentPermissions -> Some(i18n.PermissionsNotDeclared)
+    i18n.PermissionsNotDeclared -> Some(i18n.AllowSignEvent)
+    i18n.AllowSignEvent -> Some(i18n.SignEventAlwaysRefused)
+    i18n.SignEventAlwaysRefused -> Some(i18n.AllowNip44Encrypt)
+    i18n.AllowNip44Encrypt -> Some(i18n.AllowNip44Decrypt)
+    i18n.AllowNip44Decrypt -> Some(i18n.AllowedKinds)
+    i18n.AllowedKinds -> Some(i18n.AllowedKindsHint)
+    i18n.AllowedKindsHint -> Some(i18n.OtherPermissions)
+    i18n.OtherPermissions -> Some(i18n.OtherPermissionsHint)
+    i18n.OtherPermissionsHint -> Some(i18n.SelectAtLeastOne)
+    i18n.SelectAtLeastOne -> Some(i18n.InvalidKindList)
+    i18n.InvalidKindList -> Some(i18n.SessionNotFound)
+    i18n.SessionNotFound -> Some(i18n.Created)
     i18n.Created -> Some(i18n.LastUsed)
     i18n.LastUsed -> Some(i18n.JustNow)
     i18n.JustNow -> Some(i18n.MinutesAgo(30))
@@ -361,12 +376,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 191 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 206 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 191
+  assert list.length(messages) == 206
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
