@@ -1,69 +1,85 @@
-name: manual
+name: ci
 
-# 手で起動する重い検査（#305）。PR の test.yml には載せず、リリースの前や
-# Dockerfile、compose、リレーとの接続、統合テストに関わる変更のあとに
-# main で実行する（CONTRIBUTING.md の「リリース」、docs/development.md の
-# 「手動の検査」）。Actions の manual を選び「Run workflow」で起動する。
+# PR、main への push、手動起動で走る検査（#382）。
+#
+# PR では、変えたファイルの種類（changes ジョブの出力）に応じてジョブを省略し、
+# docs、.claude、*.md、LICENSE だけの PR では何も検査しない（ジョブは skipped で
+# 終わり、gh pr checks は pass を報告する）。main への push と手動起動では、
+# 変えたファイルによらず全部のジョブを走らせる。PR の checkout はその時点の
+# main とのマージのツリーなので、PR の最後の実行からマージまでに main が進んだ
+# 場合に限り、マージ後の main の実行が PR と違う結果になりうる。
+#
+# 実装エージェントは gh pr checks --watch で全ジョブの完了を待つので、PR の
+# 壁時間は最も遅いジョブで決まる。重い docker-image ジョブは PR では docker に
+# 関わるファイルを変えたときだけ走らせ、main では毎回走らせる。
 on:
+  pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# PR に push が続くと古い実行を取り消す。main の実行は取り消さない（マージの
+# 直後に次のマージが来ても、前のコミットの検査を最後まで残す）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # Postgres を使う統合テストと、本体の shipment。
-  integration:
+  # 変えたファイルを分類し、続くジョブの門にする。PR 以外では全部 true にする。
+  changes:
     runs-on: ubuntu-latest
-    services:
-      # アカウントストアの統合テスト用の使い捨て Postgres。
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: nostr_no_su_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d nostr_no_su_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      plugin: ${{ steps.classify.outputs.plugin }}
+      css: ${{ steps.classify.outputs.css }}
+      docker: ${{ steps.classify.outputs.docker }}
+      readme: ${{ steps.classify.outputs.readme }}
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: erlef/setup-beam@v1
-        id: beam
         with:
-          otp-version: "29"
-          gleam-version: "1.17.0"
-          rebar3-version: "3"
-      # 依存のソースとコンパイル済みの依存を戻す。鍵が src/ と test/ を含まないので
-      # 本体の成果物は除く（path は子を列挙しないと ! が効かないので erlang/* と書く）。
-      # 鍵が変われば作り直すので restore-keys は付けない。
-      - uses: actions/cache@v6
-        with:
-          path: |
-            build/packages
-            build/dev/erlang/*
-            !build/dev/erlang/nostr_no_su
-          key: gleam-build-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('manifest.toml', 'vendor/stratus/**') }}
-      - run: gleam deps download
-      # test/ もコンパイルするので、テストの warning もここで失敗する
-      # （gleam test にはこのフラグが無い）。
-      - run: gleam build --warnings-as-errors
-      # TEST_DATABASE_URL を渡すので、Postgres を使う統合テストも走る。
-      - run: gleam test
+          # 変えたファイルの一覧に base との差分が要る（PR のときだけ）。
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+      - id: classify
+        name: 変えたファイルを分類する
         env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
-      # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
-      - run: gleam export erlang-shipment
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT" != pull_request ]; then
+            for k in code plugin css docker readme; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          fi
+          # base...head は merge-base からの差分。base との 2 点の diff だと、ブランチの後に
+          # main が進んだ分まで数え、docs だけの PR でも検査が走る。
+          files=$(git diff --name-only "$BASE...$HEAD")
+          echo "$files"
+          # .github/ を変えた PR は、ワークフロー自身の変更を全部の検査で確かめる。
+          code=$(echo "$files" | grep -Ev '^(docs/|\.claude/|LICENSE$|.*\.md$)' || true)
+          plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|\.github/)' || true)
+          css=$(echo "$code" | grep -E '^(src/nostr_no_su/admin/|assets/|priv/static/admin\.css$|package(-lock)?\.json$|\.github/)' || true)
+          docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
+          # プラグインの README のビルド手順は README の中の sh ブロックを実行するので、
+          # *.md でも plugins-src/ と examples/ の README は数える。
+          readme=$(echo "$files" | grep -E '^(plugins-src/|examples/|\.github/)' || true)
+          for k in code plugin css docker readme; do
+            eval "v=\$$k"
+            echo "$k=$([ -n "$v" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          done
 
-  # 実リレー（strfry）を使う NIP-46 の E2E。`gleam test` は TEST_RELAY_URL が
-  # 無いとこのテストをスキップするので、strfry のログで実際に実行されたことを
-  # 確かめる（後続の step）。
-  nip46-e2e:
+  # 本体。単体テストに加えて、Postgres を使う統合テストと strfry を使う NIP-46 の E2E
+  # も同じ gleam test で走らせ、shipment が組めることまで見る。
+  test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     services:
+      # 統合テストと E2E 用の使い捨て Postgres。
       postgres:
         image: postgres:17-alpine
         env:
@@ -95,6 +111,9 @@ jobs:
           otp-version: "29"
           gleam-version: "1.17.0"
           rebar3-version: "3"
+      # 依存のソースとコンパイル済みの依存を戻す。鍵が src/ と test/ を含まないので
+      # 本体の成果物は除く（path は子を列挙しないと ! が効かないので erlang/* と書く）。
+      # 鍵が変われば作り直すので restore-keys は付けない。
       - uses: actions/cache@v6
         with:
           path: |
@@ -103,24 +122,45 @@ jobs:
             !build/dev/erlang/nostr_no_su
           key: gleam-build-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('manifest.toml', 'vendor/stratus/**') }}
       - run: gleam deps download
+      # test/ もコンパイルするので、テストの warning もここで失敗する
+      # （gleam test にはこのフラグが無い）。
+      - run: gleam build --warnings-as-errors
       - name: strfry が応答するまで待つ
         run: |
           timeout 60 sh -c 'until curl -sf -H "Accept: application/nostr+json" http://127.0.0.1:7777/ >/dev/null; do sleep 1; done'
+      # TEST_DATABASE_URL と TEST_RELAY_URL を渡すので、Postgres を使う統合テストと
+      # strfry を使う E2E も走る（どちらかが無いとスキップされる）。
       - run: gleam test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
           TEST_RELAY_URL: ws://127.0.0.1:7777
+      # E2E がスキップされずに実行されたことを、strfry のログで確かめる。
       - name: E2E がリレーにイベントを書いたことを確かめる
         run: docker logs "${{ job.services.strfry.id }}" 2>&1 | grep -q 'Inserted event'
+      - run: gleam format --check src test dev
+      # 例のプラグイン（examples/plugins/*/src/*.erl）が警告なしでコンパイルできることを確かめる。
+      # -Wall だけでは警告で失敗しないので -Werror を付ける。成果物はリポジトリの外に出す。
+      - name: 例のプラグインを警告なしでコンパイルする
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/examples"
+          erlc -Wall -Werror -o "$RUNNER_TEMP/examples" examples/plugins/*/src/*.erl
+      # vendor/stratus が、hex の上流の tar に vendor/stratus/patches/ のパッチを当てたものと
+      # 一致することを確かめる。パッチを足す手順は vendor/stratus/PATCH.md にある。
+      - run: sh dev/check_vendor_stratus.sh
+      # docker-compose.yml の ${...} の変数と既定値が、.env.example の変数の行と一致するかを検査する。
+      - run: sh dev/check_env_example.sh
+      # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
+      - run: gleam export erlang-shipment
 
-  # event_logger の統合テストと shipment。
-  plugin-event-logger:
+  # event_logger プラグイン。影に入る側は本体の版で実行されるため、版がずれると
+  # 実行時に undef で壊れる（検査の内容は dev/check_shared_versions.sh）。
+  # 統合テストと shipment もここで見る。
+  event-logger:
+    needs: changes
+    if: needs.changes.outputs.plugin == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: plugins-src/event_logger
     services:
-      # 統合テスト用の使い捨て Postgres。
       postgres:
         image: postgres:17-alpine
         env:
@@ -136,15 +176,15 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7.0.1
+      - run: sh dev/check_shared_versions.sh
       - uses: erlef/setup-beam@v1
         id: beam
         with:
           otp-version: "29"
           gleam-version: "1.17.0"
           rebar3-version: "3"
-      # 依存のソースとコンパイル済みの依存を戻す。uses: のステップには working-directory
-      # が効かないので、path はリポジトリのルートからのパスで書く。鍵が変われば
-      # 作り直すので restore-keys は付けない。
+      # uses: のステップには working-directory が効かないので、path はリポジトリの
+      # ルートからのパスで書く。
       - uses: actions/cache@v6
         with:
           path: |
@@ -152,22 +192,47 @@ jobs:
             plugins-src/event_logger/build/dev/erlang/*
             !plugins-src/event_logger/build/dev/erlang/event_logger
           key: gleam-build-event_logger-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/event_logger/manifest.toml') }}
-      - run: gleam deps download
-      # test/ もコンパイルするので、テストの warning もここで失敗する
-      # （gleam test にはこのフラグが無い）。
-      - run: gleam build --warnings-as-errors
-      # TEST_DATABASE_URL を渡すので、Postgres を使う統合テストも走る。
-      - run: gleam test
+      - name: event_logger を build、test、format --check、shipment する
+        working-directory: plugins-src/event_logger
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
-      # 成果物が組めることまで見る。plugins/ に置く成果物はここではなく、
-      # 本体と同じ docker イメージの中で作る（plugins-src/event_logger/README.md）。
-      - run: gleam export erlang-shipment
+        run: |
+          set -eu
+          gleam deps download
+          gleam build --warnings-as-errors
+          gleam test
+          gleam format --check src test
+          # 成果物が組めることまで見る。plugins/ に置く成果物はここではなく、
+          # 本体と同じ docker イメージの中で作る（plugins-src/event_logger/README.md）。
+          gleam export erlang-shipment
+
+  # 管理 UI の CSS。生成物をリポジトリに含めているので、描画のモジュール
+  # （src/nostr_no_su/admin/ の .gleam。文言の i18n.gleam を除く）か assets/admin.css を
+  # 変えたら、ビルドし直してコミットする。クラスを変えなくても、文字列、識別子、
+  # コメントの語がクラスの候補になって CSS が変わることがある。忘れるとここで差分が出る。
+  css:
+    needs: changes
+    if: needs.changes.outputs.css == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: ビルドした CSS がコミットされたものと一致することを確かめる
+        run: |
+          set -eu
+          npm ci
+          npm run build:css
+          git diff --exit-code -- priv/static/admin.css
 
   # プラグインの README のビルド手順が、非 root の利用者が貼ったとおりに最後まで通ることと、
   # event_logger の成果物にビルド環境の違いが混ざらないことを確かめる。ビルドは本体と同じ
   # gleam のイメージの中で行うので、ランナーに elixir があるかどうかに左右されない。
   plugin-readme-build:
+    needs: changes
+    if: needs.changes.outputs.readme == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -201,8 +266,11 @@ jobs:
           [ -z "$extra" ] || { echo "manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }
 
   # 同じコミットから 2 回ビルドして同じイメージになること（#181 の完了条件）と、
-  # 実行イメージの中身を検査する。定義は #181 のプランを参照。
+  # 実行イメージの中身を検査する。定義は #181 のプランを参照。PR では docker に関わる
+  # ファイルを変えたときだけ走り、main と手動起動では毎回走る。
   docker-image:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1

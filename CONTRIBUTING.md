@@ -4,7 +4,7 @@
 
 ## 開発の手順と検査
 
-CI の検査のコマンドと必須の手順は [CLAUDE.md](CLAUDE.md) の「開発」節に、Postgres の起動や CSS のビルドなどローカルでの実行手順は [docs/development.md](docs/development.md) にある。食い違ったら `.github/workflows/test.yml` が正である。
+CI の検査のコマンドと必須の手順は [CLAUDE.md](CLAUDE.md) の「開発」節に、Postgres の起動や CSS のビルドなどローカルでの実行手順は [docs/development.md](docs/development.md) にある。食い違ったら `.github/workflows/ci.yml` が正である。
 
 ## 変更の出し方
 
@@ -45,7 +45,7 @@ sh dev/collect_licenses.sh build/erlang-shipment
 
 1. リリースに含めると決めた issue がすべて閉じていることを確かめる。
 2. リリースの PR を出す。2 つの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
-3. PR を squash マージし、main のそのコミットで `manual` のワークフローを起動して（docs/development.md の「手動の検査」）成功したことを確かめ、そのコミットの SHA を控える。PR の CI（`test`）は統合テストと docker イメージを検査しない。
+3. PR を squash マージし、main のそのコミットの CI（`ci`。main への push では docker イメージの検査を含む全部のジョブが走る。docs/development.md の「CI」）が成功したことを確かめ、そのコミットの SHA を控える。
 4. 手順 3 で控えたコミットに注釈付きのタグを切って push する。
 
    ```sh

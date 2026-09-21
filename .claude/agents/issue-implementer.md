@@ -46,7 +46,7 @@ hooks:
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
 1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）
 2. `gleam build --warnings-as-errors`
-3. `gleam test`。PR の CI は統合テストを走らせないので、ここでは Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す
+3. `gleam test`。CI も Postgres と strfry つきで走らせるが、CI の失敗で push をやり直さないよう、ここでも Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す
 4. `gleam format src test dev`（差分をコミットに含める）と `gleam format --check src test dev`。frontmatter の hook が同じ検査を機械的に行う（Edit / Write した `.gleam` は `dev/hook_gleam_format.sh` が整形し、`git -C <作業ツリー> push` の前に `dev/hook_push_format_check.sh` が `--check` を回して通らなければ止める）。hook は保険であり、この手順は省かない
 5. `examples/` を変えたら `erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl`。`vendor/` を変えたら `sh dev/check_vendor_stratus.sh`。`docker-compose.yml` か `.env.example` を変えたら `sh dev/check_env_example.sh`。`plugins-src/`、`gleam.toml`、`manifest.toml` を変えたら `sh dev/check_shared_versions.sh` と、`plugins-src/event_logger` で `gleam build --warnings-as-errors`、`gleam test`（Postgres つき）、`gleam format --check src test`
 6. `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする
@@ -71,7 +71,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文の書式は次のとおり。末尾に `Closes #<N>`（issue の「依存」節がこの PR で閉じると書く issue はすべて並べる）と、指示された生成表記の行を置く
 - 指摘への対応や rebase で push するときも、上の「PR を作る前の検査」を通してから push する（APPROVE の条件対応は下の節の例外に従う）
-- PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の `test` ジョブが pass するのを待つ。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
+- PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の全ジョブが pass するのを待つ（変えたファイルに応じて省略されたジョブは skipped で、pass と同じ扱い）。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
 - CI が pass したら `sh <作業ツリー>/dev/pr_facts.sh <PR>` を回し、その表を「テストと検証」に貼り、`Closes` が表の closingIssuesReferences と一致することを確かめて `gh pr edit <PR> -R neverclear86/nostr-no-su --body-file <ファイル>` で本文を更新する（push のたびに貼り直す）。`pr_facts.sh` は `gh pr create` の後に回すこと。表の「閉じる issue」が「無し」のときは `Closes` の連携がまだなので、回し直して表を貼り直す
 
 ```

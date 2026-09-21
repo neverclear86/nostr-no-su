@@ -720,7 +720,7 @@ nostr-no-su/
 │   ├── operations.md             バックアップと復旧
 │   └── development.md            ローカルでの実行とテスト、CSS のビルドと画面の撮影
 │
-├── .github/workflows/            PR の CI（test.yml）、手動の検査（manual.yml）、リリース（release.yml）
+├── .github/workflows/            CI（ci.yml）、リリース（release.yml）
 ├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
 ├── gleam.toml
 ├── manifest.toml                 本体の依存の版の固定（plugins-src/event_logger と共有パッケージの版を揃える）

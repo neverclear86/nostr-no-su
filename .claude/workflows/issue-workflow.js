@@ -324,7 +324,7 @@ ${SAFETY}
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
-${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、単体テスト、format、CSS、vendor、プラグイン、.env.example）と、実装エージェントが手元で通した統合テストは再現せず、CI にも PR 本文にも無い検証だけを再現する。
+${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、単体テスト、統合テスト、E2E、format、CSS、vendor、プラグイン、.env.example、shipment）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
 ${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは conditions、must が承認済みプランの設計に起因するか。`,
@@ -335,7 +335,7 @@ ${SAFETY}
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
-${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査と、実装エージェントが手元で通した統合テストは再現せず、CI にも PR 本文にも無い検証だけを再現する。
+${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（統合テストと E2E を含む）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
 ${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは conditions、must が設計メモに起因するか（designMust）。`,
