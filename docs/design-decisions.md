@@ -91,7 +91,7 @@ v0.1 の前に、秘密（アカウントの秘密鍵、接続 secret、マス�
 
 ### 管理 UI の応答ヘッダー
 
-確認した。認証済みの応答には `cache-control: no-store`、`x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` が付いており、インラインの script と style は無い（ヘッダーの値と、`referrer-policy` を `no-referrer` にしない理由は [管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」にある）。
+確認した。認証済みの応答には `cache-control: no-store`、`x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` が付いており、HTML にインラインの script と style は無い（favicon の `data:` の SVG は `<style>` を持つが、画像として隔離して読まれるのでページのスクリプトにもスタイルにもならない。ヘッダーの値と、`referrer-policy` を `no-referrer` にしない理由は [管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」にある）。
 
 ### NIP-46 の入力の検証
 

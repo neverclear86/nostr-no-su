@@ -1,7 +1,7 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消し、
 //// クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの追加・編集・
-//// 削除、静的ファイルと通知の色、表示のテーマを対象にする。
+//// 削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/erlang/process
 
@@ -1047,7 +1047,7 @@ pub fn connect_client_reports_an_unconfirmed_change_test() {
   assert string.contains(body, i18n.text(i18n.English, i18n.StoreDidNotConfirm))
 }
 
-// --- 静的ファイルと通知の色 ---
+// --- 静的ファイルと favicon と通知の色 ---
 
 /// ページはビルドした CSS とスクリプトを読む。どちらも認証の後に置き、ファイルの種類の
 /// `content-type` で返す（`nosniff` の下では、スクリプトは JS の型でないと実行されない）。
@@ -1070,6 +1070,27 @@ pub fn static_files_are_served_behind_authentication_test() {
     simulate.request(http.Get, path)
     |> admin.handle_request(context(), _)
   assert anonymous.status == 401
+}
+
+/// `<head>` に `data:` の SVG の favicon を出す。カラー版の色を符号化した値と、暗い配色への
+/// 切り替えの規則を含み、`href` の値そのものに生の `#` は残らない。上部バーのロゴも単色版の
+/// パスに差し替わっている。
+pub fn pages_declare_an_svg_favicon_test() {
+  let page = simulate.read_body(get(context(), "/"))
+  assert string.contains(page, "rel=\"icon\"")
+  assert string.contains(page, "type=\"image/svg+xml\"")
+  assert string.contains(page, "href=\"data:image/svg+xml,%3Csvg")
+  assert string.contains(page, "%23183965")
+  assert string.contains(page, "%2328B9BE")
+  assert string.contains(page, "prefers-color-scheme")
+  let assert Ok(#(_, after_prefix)) =
+    string.split_once(page, "data:image/svg+xml,")
+  let assert Ok(#(href_value, _)) = string.split_once(after_prefix, "\"")
+  assert !string.contains(href_value, "#")
+  assert string.contains(
+    page,
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-5\" fill=\"currentColor\" viewBox=\"177 86 900 900\">",
+  )
 }
 
 /// 配信するのはスタイルシートとスクリプトだけで、GET 以外は受け付けない。

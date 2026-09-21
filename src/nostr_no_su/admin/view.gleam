@@ -33,7 +33,8 @@
 //// 検査する）。
 ////
 //// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
-//// で色を継ぐ飾りである。
+//// で色を継ぐ飾りである。製品のロゴだけは塗りで描き、上部バーでは単色版を `currentColor`
+//// で、`<head>` の favicon ではカラー版を `data:` の URI にして出す。
 
 import gleam/int
 import gleam/list
@@ -204,6 +205,55 @@ pub type Value {
   Plain(String)
 }
 
+/// favicon にするカラー版のロゴの SVG。`fill` は属性に書き、暗い配色のときだけ `<style>` が
+/// 白版に上書きする（media が効かなければカラー版のまま出る）。
+fn favicon_svg() -> String {
+  "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\""
+  <> logo_view_box
+  <> "\" width=\"900\" height=\"900\"><style>@media (prefers-color-scheme: dark){.ink{fill:#FFFFFF}.face{fill:none}}</style><path fill=\"#FFFFFF\" class=\"face\" d=\""
+  <> logo_face_path
+  <> "\" /><path fill=\"#183965\" fill-rule=\"evenodd\" class=\"ink\" d=\""
+  <> logo_body_path
+  <> "\" /><path fill=\"#28B9BE\" class=\"ink\" d=\""
+  <> logo_tail_path
+  <> "\" /></svg>"
+}
+
+/// SVG の markup を `data:` の URI に入れられるよう百分率符号化する。空白と URL で使えない
+/// 文字だけを 1 文字ずつ写し、ほかはそのまま通す。
+fn percent_encode_svg(markup: String) -> String {
+  markup
+  |> string.to_graphemes
+  |> list.map(fn(grapheme) {
+    case grapheme {
+      " " -> "%20"
+      "\"" -> "%22"
+      "#" -> "%23"
+      "%" -> "%25"
+      "<" -> "%3C"
+      ">" -> "%3E"
+      "{" -> "%7B"
+      "}" -> "%7D"
+      "|" -> "%7C"
+      "\\" -> "%5C"
+      "^" -> "%5E"
+      "`" -> "%60"
+      other -> other
+    }
+  })
+  |> string.concat
+}
+
+/// ページのタブに出すロゴ。`data:` の SVG なので配信するファイルもルートも増えない（CSP の
+/// `img-src data:` が読ませる）。
+fn favicon_link() -> Element(msg) {
+  html.link([
+    attribute.rel("icon"),
+    attribute.type_("image/svg+xml"),
+    attribute.href("data:image/svg+xml," <> percent_encode_svg(favicon_svg())),
+  ])
+}
+
 /// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
 /// `theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
 /// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。ナビゲーションバーと、
@@ -228,6 +278,7 @@ pub fn page(
       ]),
       refresh_meta(refresh),
       html.title([], "nostr-no-su — " <> title),
+      favicon_link(),
       html.link([
         attribute.rel("stylesheet"),
         attribute.href(segments_path(stylesheet_segments)),
@@ -1168,11 +1219,35 @@ pub fn icon_only_link(
   )
 }
 
-/// 上部バーのロゴの飾り（Lucide の shield）。
+/// ロゴの SVG の `viewBox`。ヘッダーのロゴと favicon で共有する。
+const logo_view_box = "177 86 900 900"
+
+/// ビーバーの体の輪郭。目と歯を副パスに持ち、`fill-rule="evenodd"` で穴にする。
+const logo_body_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C 297.2193 784.2514 445 774 552 716  C 619 680 659 629 680 569  C 709 498 762 453 816 430  C 827 432 839 431 847 425  C 867 429 883 414 883 395  L 883 342  C 911 319 921 280 872 262  C 818 175 733 145 620 162  C 614 138 592 120 566 120  C 535 120 510 140 513.0000 164.5029 Z M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
+
+/// ビーバーの尻尾。
+const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  C 1034 499 985 454 908 454  C 826 454 747 506 713 586  C 684 664 632 717 562 750  C 471 794 366 805 293.7269 774.7955 Z"
+
+/// 目と歯。カラー版でだけ白く塗り、単色版では `logo_body_path` の穴のままにする。
+const logo_face_path = "M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
+
+/// 上部バーのロゴの飾り。単色版のロゴを `currentColor` で塗る。読み上げない。
 pub fn logo_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
-  ])
+  svg.svg(
+    [
+      attribute.aria_hidden(True),
+      attribute.attribute("viewBox", logo_view_box),
+      attribute.attribute("fill", "currentColor"),
+      attribute.class("size-5"),
+    ],
+    [
+      svg.path([
+        attribute.attribute("d", logo_body_path),
+        attribute.attribute("fill-rule", "evenodd"),
+      ]),
+      svg.path([attribute.attribute("d", logo_tail_path)]),
+    ],
+  )
 }
 
 /// テーマの切り替えのアイコン（Lucide の sun-moon）。
