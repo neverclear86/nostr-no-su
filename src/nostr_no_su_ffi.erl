@@ -3,6 +3,8 @@
     ensure_ssl_started/0,
     configure_logger/0,
     flush_logger/0,
+    install_log_redaction/1,
+    redact_event/2,
     now_seconds/0,
     monotonic_ms/0,
     ec_point_from_priv/1,
@@ -74,6 +76,94 @@ configure_logger() ->
 flush_logger() ->
     logger_std_h:filesync(default),
     nil.
+
+%% Secrets（binary のリスト）を伏せる primary filter を入れ直す。同じ id を外して
+%% から足すので、何度呼んでも filter は 1 本で、後の呼び出しの値に入れ替わる。
+%% 空の binary は無視する（入れると全部の行が置き換わる）。値が 0 件なら外す
+%% だけで、以後は伏せない。
+%% -> nil
+install_log_redaction(Secrets) ->
+    Values = [S || S <- Secrets, S =/= <<>>],
+    _ = logger:remove_primary_filter(redact_secrets),
+    case Values of
+        [] -> ok;
+        _ ->
+            ok = logger:add_primary_filter(
+                redact_secrets, {fun ?MODULE:redact_event/2, Values})
+    end,
+    nil.
+
+%% primary filter。イベントの `msg` だけを走査して登録した値を `[redacted]` に
+%% 置き換え、`meta` は触らない（プロセス識別子・MFA・`report_cb` の関数しか
+%% 入らず、秘密の値は入らない。走査すると関数を含む項の作り直しになる）。
+%% `msg` を持たないイベントはそのまま返す。
+%%
+%% 一致は部分列にする。整形済みの文字列として届く行（例外を文字列にしてから
+%% logger へ渡す経路）の中の値も置き換えられるためである。
+%%
+%% 走査全体を try で包む。primary filter が例外を出すと logger がその filter を
+%% 外し、以後のイベントは生のまま流れる（伏せたはずの秘密が出る）。壊れた項でも
+%% 秘密を出さない側に倒すため、例外なら本文を捨てる。install_log_redaction は
+%% 空の binary を登録から除くので、通常の経路でこの分岐に達することは無い。
+redact_event(#{msg := Msg} = Event, Values) ->
+    try Event#{msg := redact_term(Msg, Values)}
+    catch _:_ -> Event#{msg := {string, <<"[log redacted: formatting failed]">>}}
+    end;
+redact_event(Event, _Values) ->
+    Event.
+
+%% 項の中の binary と charlist に現れた値を置き換える。binary は部分列として、
+%% charlist は binary に変換できたとき（要素が全て 0〜255 の整数の proper list）
+%% だけ置き換えてリスト形に戻す。255 を超えるコードポイントを含むリストは
+%% charlist としては走査せず、要素ごとの走査に落ちる（文字列としては置き換わら
+%% ない）。tuple と map は要素ごとに、リストは cons セルごとに走査し、improper
+%% list の末尾の項も走査する。それ以外の項はそのまま返す。
+redact_term(Binary, Values) when is_binary(Binary) ->
+    replace_secrets(Binary, Values);
+redact_term(List, Values) when is_list(List) ->
+    case charlist_bytes(List, <<>>) of
+        {ok, Bytes} -> binary_to_list(replace_secrets(Bytes, Values));
+        error -> redact_cons(List, Values)
+    end;
+redact_term(Tuple, Values) when is_tuple(Tuple) ->
+    list_to_tuple([redact_term(E, Values) || E <- tuple_to_list(Tuple)]);
+redact_term(Map, Values) when is_map(Map) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            Acc#{redact_term(K, Values) => redact_term(V, Values)}
+        end,
+        #{},
+        Map);
+redact_term(Other, _Values) ->
+    Other.
+
+%% cons セルごとに走査する。improper list の末尾の項も `redact_term` に渡す。
+redact_cons([Head | Tail], Values) ->
+    [redact_term(Head, Values) | redact_cons(Tail, Values)];
+redact_cons(Other, Values) ->
+    redact_term(Other, Values).
+
+%% 全要素が 0〜255 の整数の proper list なら {ok, Binary}、それ以外（途中に
+%% 非整数や 255 を超えるコードポイントがある、proper list でない）は error。
+%% pgo が `binary_to_list/1` で作る charlist（接続設定の値）に合わせる。
+charlist_bytes([C | Rest], Acc) when is_integer(C), C >= 0, C =< 255 ->
+    charlist_bytes(Rest, <<Acc/binary, C>>);
+charlist_bytes([], Acc) ->
+    {ok, Acc};
+charlist_bytes(_, _) ->
+    error.
+
+%% 値ごとに全出現を `[redacted]` に置き換える。長い値から先に処理する。短い
+%% 値を先に置き換えると、それが別の値の接頭辞であるとき、長い方はもう一致
+%% せず末尾が平文のまま残るためである。
+replace_secrets(Binary, Values) ->
+    Sorted = lists:sort(fun(A, B) -> byte_size(A) >= byte_size(B) end, Values),
+    lists:foldl(
+        fun(Value, Acc) ->
+            binary:replace(Acc, Value, <<"[redacted]">>, [global])
+        end,
+        Binary,
+        Sorted).
 
 %% 現在時刻の Unix タイムスタンプ（秒）。
 now_seconds() ->

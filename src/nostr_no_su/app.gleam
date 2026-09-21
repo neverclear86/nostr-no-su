@@ -249,6 +249,19 @@ pub type Spec {
   )
 }
 
+/// ツリーに渡る秘密のうち、他のライブラリーのプロセスの状態や起動引数に生の
+/// 文字列として入りうるもの（pgo に渡す DB のパスワードと、mist と wisp に渡る
+/// 管理パスワード）。`log.redact_secrets` に渡してログから伏せる。空の値は
+/// 含めない。`lock_pool` は別に集めない。`account_store.lock_pool_config` が
+/// `pool` から `pog.Config(..pool, ...)` で作るため、パスワードは `pool` と
+/// 同じ値である。
+pub fn redactable_secrets(spec: Spec) -> List(String) {
+  let admin_password = option.map(spec.admin, fn(a) { a.password })
+  [spec.bunker.pool.password, admin_password]
+  |> option.values
+  |> list.filter(fn(value) { value != "" })
+}
+
 /// ツリーを起動する。子は互いに独立しているためルートは `one_for_one`。
 /// バンカーや DB が壊れても監視を止めてはならず、その逆も同様。
 ///

@@ -4,6 +4,8 @@
 //// `Notice`（通常）、`Warning`（失敗したが動き続ける）、`Error`（続けられずに止まる。
 //// 起動の中止、`cannot continue`、プラグインの停止）の 3 つで、呼び出し側が渡す。
 //// OTP のクラッシュレポートも `Error` の行として同じ形で出る。
+//// クラッシュレポートには他のライブラリーのプロセスの状態が載るため、起動時に
+//// `redact_secrets` で登録した秘密の値は、出力の前に `[redacted]` へ置き換える。
 ////
 //// 接頭辞は「どのモジュールが出した行か」を示すもので、そのモジュールが定数
 //// として持つ。起動時の報告のように別のモジュールが代わりに出力する行も、
@@ -59,6 +61,16 @@ pub fn configure() -> Nil
 /// ことがある。
 @external(erlang, "nostr_no_su_ffi", "flush_logger")
 pub fn flush() -> Nil
+
+/// 登録した値をログの本文から伏せる。以後、OTP logger を通る行（本体が出す行、
+/// 他のライブラリーの行、クラッシュレポート）の本文に現れた値は `[redacted]` に
+/// 置き換わる。一致は部分列で、連結済みの文字列の中の値も置き換わる。空の値は
+/// 無視する。呼ぶたびに登録は入れ替わり、空のリストで呼ぶと伏せなくなる。
+/// 一致は部分列なので、`nostr` のようなありふれた短い値を秘密にすると、無関係な
+/// 語（購読 id の `nostr-no-su-catchup-…` など）も `[redacted]` になる。秘密を
+/// 出さない側に倒した結果である。
+@external(erlang, "nostr_no_su_ffi", "install_log_redaction")
+pub fn redact_secrets(values: List(String)) -> Nil
 
 /// OTP logger へ 1 行を渡す。binary の本文は書式として解釈されない。戻り値は使わない。
 @external(erlang, "logger", "log")
