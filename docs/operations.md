@@ -1,6 +1,6 @@
 # 運用: バックアップと復旧
 
-この文書は、リポジトリ同梱の `docker-compose.yml`（同梱の Postgres を使う構成）を前提にする。
+この文書は、リポジトリ同梱の `docker-compose.yml`（同梱の Postgres を使う構成）を前提にする。公開イメージで動かしている場合は、以下の `docker compose ...` をすべて `docker compose -f docker-compose.release.yml ...` と読み替える（`-f` を付けると `docker-compose.override.yml` は自動では重ならないので、使っているときは `-f docker-compose.release.yml -f docker-compose.override.yml` と 2 つ並べる。[README](../README.md) の「イメージから動かす」）。
 失うと戻らないものが 2 つある。DB そのものと、DB の暗号文を復号するマスターキーである。
 
 ## 守るもの
@@ -49,6 +49,17 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 ダンプは暗号文を含むので、ダンプ自体も他人に読めない場所に置く（`chmod 600`）。
 
 `PLUGIN_EVENT_LOGGER_DATABASE_URL` を別のデータベースに向けた構成では、そのデータベースも同じ形で取る。
+
+## 更新
+
+新しい版に上げる前にダンプを取る（上の「バックアップ」。戻す移行は無いため）。公開イメージで動かしている構成では次で入れ替える。
+
+```sh
+docker compose -f docker-compose.release.yml pull
+docker compose -f docker-compose.release.yml up -d
+```
+
+`.env` の `NOSTR_NO_SU_VERSION` で版を固定している構成では、`pull` はその値のタグしか取らないので、先に値を上げてから同じ 2 つを実行する。clone してソースから動かしている構成では `git pull` の後に `docker compose up -d --build` を実行する。上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
 
 ## 復旧
 

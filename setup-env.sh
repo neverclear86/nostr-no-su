@@ -93,4 +93,4 @@ else
 fi
 [ -z "$filled" ] || echo "filled with generated values:$filled"
 [ -z "$added" ] || echo "added from .env.example:$added"
-echo "next: review $env_file, then run: docker compose up --build -d"
+echo "next: review $env_file, then run: docker compose up --build -d (from the published image: docker compose -f docker-compose.release.yml up -d)"

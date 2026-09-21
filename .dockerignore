@@ -4,6 +4,7 @@ build
 .github
 *.md
 docker-compose.yml
+docker-compose.release.yml
 Dockerfile
 .env*
 plugins

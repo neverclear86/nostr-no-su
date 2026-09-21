@@ -1,6 +1,6 @@
 services:
   nostr-no-su:
-    build: .
+    image: ghcr.io/neverclear86/nostr-no-su:${NOSTR_NO_SU_VERSION:-latest}
     # 変数の意味は README の「環境変数」の表にある。${...} の値は .env
     # （.env.example を複製して作る）で変える。秘密（ACCOUNT_MASTER_KEY と
     # ADMIN_PASSWORD）の値はこのファイルに書かないこと。${...} の変数を足す、
