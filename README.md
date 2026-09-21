@@ -171,7 +171,7 @@ server {
 
 ### docker compose
 
-compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。
+compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）とプラグイン（イベント、`PLUGIN_EVENT_LOGGER_DATABASE_URL`）の両方が使う。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [バックアップと復旧](docs/operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。リリースで公開するイメージ（`ghcr.io/neverclear86/nostr-no-su`）は `linux/amd64` と `linux/arm64` の両方を含むマルチアーキテクチャのマニフェストで、x86_64 のホストでも、Raspberry Pi や ARM の VPS、Apple Silicon の docker でも同じタグで動く。
 
 管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。`ADMIN_PORT=` と空にすると管理 UI は無効になるが、公開は `127.0.0.1:8080` のまま残る。
 

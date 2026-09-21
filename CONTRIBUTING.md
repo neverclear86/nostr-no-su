@@ -52,7 +52,7 @@ sh dev/collect_licenses.sh build/erlang-shipment
    git fetch origin && git tag -a vX.Y.Z -m vX.Y.Z <手順 3 のコミットの SHA> && git push origin vX.Y.Z
    ```
 
-5. Actions の `release` が成功し、`ghcr.io/neverclear86/nostr-no-su` に `X.Y.Z`、`X.Y`、`latest` が付いたことを確かめる。
+5. Actions の `release` が成功し、`ghcr.io/neverclear86/nostr-no-su` に `X.Y.Z`、`X.Y`、`latest` が付いたことを確かめる。あわせて、`docker buildx imagetools inspect ghcr.io/neverclear86/nostr-no-su:X.Y.Z` の出力に `linux/amd64` と `linux/arm64` の 2 つの Platform が並んでいることを確かめる（`release` の `merge` ジョブも同じ検査を行う）。
 6. 最初の公開のときだけ、パッケージの設定（リポジトリの Packages → nostr-no-su → Package settings）で公開範囲を確かめ、公開する場合は Change visibility で public にする。あわせて、Settings → Actions → General の Workflow permissions などで `packages: write` が制限されていないことを確かめる（`release` が権限エラーで失敗したときの確認先）。
 
 `release` の検査で失敗したときは、イメージは公開されていない。`git push origin :refs/tags/vX.Y.Z` と `git tag -d vX.Y.Z` でタグを消し、手順 2 から直す。

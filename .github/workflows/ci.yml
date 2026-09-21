@@ -275,25 +275,35 @@ jobs:
   docker-image:
     needs: changes
     if: needs.changes.outputs.docker == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: docker/setup-buildx-action@v4
       # ビルドの再現性のため、コミット時刻を SOURCE_DATE_EPOCH として以降の step に渡す。
       - run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      # platform ごとに native のランナーで走らせ、以降の検査を amd64 と arm64 の
+      # 両方で行う（release.yml が公開する platform と同じ組み合わせ）。
       # 同じ条件で 2 回ビルドし、OCI イメージとして書き出す。attestation はビルド時刻を
       # 含み同じイメージの定義の対象外なので provenance は付けない（#181）。
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           no-cache: true
           provenance: false
           outputs: type=oci,dest=${{ runner.temp }}/image1.tar,rewrite-timestamp=true
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           no-cache: true
           provenance: false
           outputs: type=oci,dest=${{ runner.temp }}/image2.tar,rewrite-timestamp=true
