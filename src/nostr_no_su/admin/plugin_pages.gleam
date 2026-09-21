@@ -2,9 +2,10 @@
 //// 戻るリンク）の組み立て。節 1 つの記述から `admin/view` の部品への変換は
 //// `admin/plugin_view` に委ね、このモジュールは節の並びと `Error` の囲みだけを持つ。
 ////
-//// プラグインが持ち込めるのは文字列・種別・`tone` だけで、クラス名は `admin/view` と
-//// このモジュールが決める（Tailwind は `src/nostr_no_su/admin` の中に完全な文字列で
-//// 書かれたクラスしか出力しない。`assets/admin.css` の方針）。
+//// プラグインが持ち込めるのは文字列・種別・`tone`・真偽値だけで、クラス名は
+//// `admin/view` とこのモジュールが決める（Tailwind は `src/nostr_no_su/admin` の中に
+//// 完全な文字列で書かれたクラスしか出力しない。`assets/admin.css` の方針）。
+//// フォームの宛先は今開いているページ自身。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list
@@ -38,7 +39,7 @@ pub fn plugin_page(
     list.flatten([
       [source_row(language, plugin), tabs(plugin, page)],
       disabled_alert(language, plugin),
-      sections(language, plugin, raw_sections),
+      sections(language, plugin, page, raw_sections),
       [view.back_link(language)],
     ]),
   )
@@ -108,6 +109,7 @@ fn disabled_alert(
 fn sections(
   language: Language,
   plugin: dashboard.PluginRow,
+  page: plugin.PluginPage,
   raw: List(Dynamic),
 ) -> List(Element(msg)) {
   case raw {
@@ -117,13 +119,15 @@ fn sections(
         i18n.text(language, i18n.PluginPageEmpty),
       ),
     ]
-    raw_sections ->
+    raw_sections -> {
+      let context = context(language, plugin, page)
       list.map(raw_sections, fn(raw_section) {
-        case plugin_view.section(raw_section, context(language, plugin)) {
+        case plugin_view.section(raw_section, context) {
           Ok(element) -> element
           Error(reason) -> section_failure(language, reason)
         }
       })
+    }
   }
 }
 
@@ -139,15 +143,20 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
 }
 
 /// 節の描画に渡す文脈。`link` ブロックはそのプラグインのページ一覧にあるキーだけを
-/// 解決する。
+/// 解決する。`form_action` は今開いているページ自身への宛先である。
 fn context(
   language: Language,
   plugin: dashboard.PluginRow,
+  page: plugin.PluginPage,
 ) -> plugin_view.Context {
-  plugin_view.Context(language:, page_href: fn(key) {
-    case list.any(plugin.pages, fn(page) { page.key == key }) {
-      True -> Ok(dashboard.plugin_page_href(plugin.name, key))
-      False -> Error(Nil)
-    }
-  })
+  plugin_view.Context(
+    language:,
+    page_href: fn(key) {
+      case list.any(plugin.pages, fn(page) { page.key == key }) {
+        True -> Ok(dashboard.plugin_page_href(plugin.name, key))
+        False -> Error(Nil)
+      }
+    },
+    form_action: dashboard.plugin_page_href(plugin.name, page.key),
+  )
 }

@@ -73,6 +73,8 @@ import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
+import nostr_no_su/plugin
+import nostr_no_su/plugin_config
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
@@ -213,9 +215,20 @@ pub type Context {
     plugins: fn(task.Deadline) -> List(dashboard.PluginRow),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
-    /// プラグイン名とページのキーで、そのページの記述を取る。失敗は 1 行の理由で、
-    /// ページは 503 になる。
-    plugin_page_content: fn(String, String) -> Result(Dynamic, String),
+    /// プラグイン名とページのキーと登録アカウントの一覧で、そのページの記述を
+    /// 取る。失敗は 1 行の理由で、ページは 503 になる。
+    plugin_page_content: fn(String, String, List(plugin_config.PageAccount)) ->
+      Result(Dynamic, String),
+    /// 登録アカウントの一覧。ページの記述とフォームの送信の呼び出しに渡す。
+    /// 読めなければ表示する理由を返す。
+    page_accounts: fn() -> Result(List(plugin_config.PageAccount), String),
+    /// プラグイン名とページのキーで、フォームの送信を受け取る実行の口を探す。
+    /// 無ければ `None`（`plugin_page` はこれで 405 にする）。
+    plugin_page_action: fn(String, String) ->
+      Option(
+        fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
+          Result(Nil, String),
+      ),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
     sessions: fn() -> Result(List(dashboard.SessionRow), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
@@ -697,11 +710,33 @@ fn show_dashboard(
   |> wisp.html_response(200)
 }
 
-/// プラグインが供給するページ。名前がプラグインの一覧に無い、一覧にあってもキーが
-/// そのプラグインのページに無ければ 404。応答の失敗、最上位の記述の形の誤りは 503。
+/// プラグインが供給するページ。GET はページの記述を、POST はフォームの送信を
+/// 扱う。処理の順序は次のとおりで、本文の解釈（`wisp.require_form`）は最後に
+/// 置く。
 ///
-/// プラグインの一覧の問い合わせ（`snapshot_deadline_ms`、既定 5 秒）とページの中身の
-/// 呼び出し（`call_timeout_ms`、既定 5 秒）が直列なので、最悪 10 秒かかる。
+/// 1. プラグイン名とページのキーの照合（合わなければ 404）。土台では
+///    `require_method(request, http.Get, …)` が本体の先頭にあるので、これを外して
+///    照合を先に置く。非 GET で存在しないプラグイン・ページへの要求は 405 から
+///    404 に変わるが、これを固定する既存のテストは無く、検証の手順 3 が新しい側を
+///    確かめる。
+/// 2. POST なら `context.plugin_page_action(name, key)` を呼び、`None` なら
+///    `require_method(request, http.Get, language, theme)` と同じ 405 をここで
+///    返す。
+/// 3. `context.page_accounts()`（`Error(reason)` は
+///    `unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)`）。
+/// 4. GET は `context.plugin_page_content(name, key, accounts)`。
+/// 5. POST は `wisp.require_form` で値を取り、2 で得た関数に `form.values` と
+///    `accounts` を渡す。`Ok(Nil)` は
+///    `wisp.redirect(to: dashboard.plugin_page_href(name, key))`、`Error(reason)`
+///    は `unavailable_notice(..., i18n.PluginActionFailed, reason)`。
+///
+/// GET と POST 以外のメソッドは 405 で、`allow` は
+/// `context.plugin_page_action(name, key)` が `Some` なら `GET, POST`、`None`
+/// なら `GET` にする。
+///
+/// プラグインの一覧の問い合わせ（`snapshot_deadline_ms`、既定 5 秒）とページの
+/// 中身・フォームの送信の呼び出し（`call_timeout_ms`、既定 5 秒）が直列なので、
+/// 最悪 10 秒かかる。
 fn plugin_page(
   context: Context,
   request: Request,
@@ -710,7 +745,6 @@ fn plugin_page(
   name: String,
   key: String,
 ) -> Response {
-  use <- require_method(request, http.Get, language, theme)
   let rows = context.plugins(task.deadline_in(snapshot_deadline_ms))
   case list.find(rows, fn(row) { row.name == name }) {
     Error(Nil) ->
@@ -719,8 +753,57 @@ fn plugin_page(
       case list.find(row.pages, fn(page) { page.key == key }) {
         Error(Nil) ->
           not_found_notice(language, theme, i18n.Translated(i18n.PageNotFound))
-        Ok(page) ->
-          case context.plugin_page_content(name, key) {
+        Ok(page) -> {
+          let action = context.plugin_page_action(name, key)
+          let allowed = case action {
+            Some(_) -> [http.Get, http.Post]
+            None -> [http.Get]
+          }
+          case request.method {
+            http.Get -> plugin_page_get(context, language, theme, row, page)
+            http.Post ->
+              case action {
+                None -> method_not_allowed(language, theme, allowed)
+                Some(action) ->
+                  plugin_page_post(
+                    context,
+                    request,
+                    language,
+                    theme,
+                    name,
+                    key,
+                    action,
+                  )
+              }
+            _ -> method_not_allowed(language, theme, allowed)
+          }
+        }
+      }
+  }
+}
+
+/// プラグインのページの記述を取って描く（処理の順序 3・4）。
+fn plugin_page_get(
+  context: Context,
+  language: Language,
+  theme: view.Theme,
+  row: dashboard.PluginRow,
+  page: plugin.PluginPage,
+) -> Response {
+  case context.page_accounts() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)
+    Ok(accounts) ->
+      case context.plugin_page_content(row.name, page.key, accounts) {
+        Error(reason) ->
+          unavailable_notice(
+            language,
+            theme,
+            i18n.PluginPageUnavailable,
+            reason,
+          )
+        Ok(description) ->
+          case plugin_view.sections(description) {
             Error(reason) ->
               unavailable_notice(
                 language,
@@ -728,21 +811,37 @@ fn plugin_page(
                 i18n.PluginPageUnavailable,
                 reason,
               )
-            Ok(description) ->
-              case plugin_view.sections(description) {
-                Error(reason) ->
-                  unavailable_notice(
-                    language,
-                    theme,
-                    i18n.PluginPageUnavailable,
-                    reason,
-                  )
-                Ok(sections) ->
-                  plugin_pages.plugin_page(language, theme, row, page, sections)
-                  |> wisp.html_response(200)
-              }
+            Ok(sections) ->
+              plugin_pages.plugin_page(language, theme, row, page, sections)
+              |> wisp.html_response(200)
           }
       }
+  }
+}
+
+/// プラグインのページのフォームの送信を実行する（処理の順序 3・5）。成功は同じ
+/// ページへ 303 で戻し、拒否・呼び出しの失敗は 503 で理由を英語のまま出す。
+fn plugin_page_post(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  name: String,
+  key: String,
+  action: fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
+    Result(Nil, String),
+) -> Response {
+  case context.page_accounts() {
+    Error(reason) ->
+      unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)
+    Ok(accounts) -> {
+      use form <- wisp.require_form(request)
+      case action(form.values, accounts) {
+        Ok(Nil) -> wisp.redirect(to: dashboard.plugin_page_href(name, key))
+        Error(reason) ->
+          unavailable_notice(language, theme, i18n.PluginActionFailed, reason)
+      }
+    }
   }
 }
 

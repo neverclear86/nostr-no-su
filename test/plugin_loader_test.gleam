@@ -1020,6 +1020,26 @@ pub fn page_content_without_pages_export_test() {
   assert has_note(notes, "plugin_page_content/1 but no plugin_pages/0 or /1")
 }
 
+/// `plugin_page_action/3` だけを持ち `plugin_pages` を持たないプラグインは、
+/// 実行だけの宣言として読み込まれない（決めたこと 2）。
+pub fn page_action_without_pages_is_not_loaded_test() {
+  let fixture = beam_fixture.new("action_only")
+  beam_fixture.compile(
+    beam_fixture.page_action_only_source(fixture.module, "action_only_plugin"),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_page_action/3 but no plugin_pages/0 or /1")
+}
+
 /// `plugin_pages/0` が 0 件を返すと読み込まれない。
 pub fn pages_must_not_be_empty_test() {
   let fixture = beam_fixture.new("pages_empty")
@@ -1195,7 +1215,7 @@ pub fn page_content_crash_test() {
     )
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status")
+  let assert Error(reason) = ui.content("status", [])
   assert string.contains(reason, "plugin_page_content/1 crashed")
 }
 
@@ -1222,7 +1242,7 @@ pub fn page_content_timeout_test() {
     )
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status")
+  let assert Error(reason) = ui.content("status", [])
   assert string.contains(reason, timed_out())
 }
 

@@ -2,6 +2,7 @@
 
 import gleam/dict
 import gleam/dynamic/decode
+import gleam/json
 import nostr_no_su/plugin_config
 
 /// テストで使う環境変数の集合。
@@ -62,4 +63,68 @@ pub fn to_map_test() {
       decode.dict(decode.string, decode.string),
     )
     == Ok(dict.from_list([#("limit", "10")]))
+}
+
+/// アカウント 1 件の map を読む decoder。
+fn account_decoder() -> decode.Decoder(#(String, String, String)) {
+  use pubkey <- decode.field("pubkey", decode.string)
+  use npub <- decode.field("npub", decode.string)
+  use label <- decode.field("label", decode.string)
+  decode.success(#(pubkey, npub, label))
+}
+
+/// `page_map` は `to_map` と同じ形に予約キー `Accounts` を足す。値はアカウント
+/// の一覧を JSON にした文字列で、`json.parse` で読み戻すとアカウントごとの
+/// オブジェクト（`pubkey`・`npub`・`label`）の配列になる。登録が 0 件なら
+/// `[]` である。
+pub fn page_map_adds_the_accounts_key_test() {
+  let config = plugin_config.for_plugin(env(), "counter")
+  let account =
+    plugin_config.PageAccount(pubkey: "abcd", npub: "npub1x", label: "main")
+  let decoder = {
+    use limit <- decode.field("limit", decode.string)
+    use accounts_json <- decode.field("Accounts", decode.string)
+    decode.success(#(limit, accounts_json))
+  }
+  let assert Ok(#("10", accounts_json)) =
+    decode.run(plugin_config.page_map(config, [account]), decoder)
+  assert json.parse(accounts_json, decode.list(account_decoder()))
+    == Ok([#("abcd", "npub1x", "main")])
+  let assert Ok(#("10", empty_accounts_json)) =
+    decode.run(plugin_config.page_map(config, []), decoder)
+  assert empty_accounts_json == "[]"
+}
+
+/// `page_map` が返す map は `to_map` と同じく binary → binary の辞書として
+/// 読める（`Accounts` の値も binary の JSON 文字列であるため）。既存のページが
+/// `decode.dict(decode.string, decode.string)` で設定を読んでも壊れないことを
+/// 確かめる（PR #427 のレビューの再発防止）。
+pub fn page_map_is_a_binary_to_binary_map_test() {
+  let config = plugin_config.for_plugin(env(), "counter")
+  let account =
+    plugin_config.PageAccount(pubkey: "abcd", npub: "npub1x", label: "main")
+  let assert Ok(settings) =
+    decode.run(
+      plugin_config.page_map(config, [account]),
+      decode.dict(decode.string, decode.string),
+    )
+  assert dict.get(settings, "limit") == Ok("10")
+  let assert Ok(accounts_json) = dict.get(settings, "Accounts")
+  assert json.parse(accounts_json, decode.list(account_decoder()))
+    == Ok([#("abcd", "npub1x", "main")])
+}
+
+/// `PLUGIN_X_ACCOUNTS` は小文字の `accounts` のまま残り、`page_map` が足す
+/// `Accounts` とは別のキーである（`for_plugin` がキーを小文字にするため、
+/// 環境変数からは `Accounts` を作れない）。
+pub fn page_map_keeps_env_accounts_key_test() {
+  let config =
+    plugin_config.for_plugin(dict.from_list([#("PLUGIN_X_ACCOUNTS", "3")]), "x")
+  let decoder = {
+    use accounts_env <- decode.field("accounts", decode.string)
+    use accounts_json <- decode.field("Accounts", decode.string)
+    decode.success(#(accounts_env, accounts_json))
+  }
+  assert decode.run(plugin_config.page_map(config, []), decoder)
+    == Ok(#("3", "[]"))
 }

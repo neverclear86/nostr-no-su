@@ -195,6 +195,20 @@ handle_event(Event) ->
 "
 }
 
+/// `plugin_page_action/3` だけを持ち、`plugin_pages` を持たないプラグインの
+/// Erlang ソース。実行だけの宣言の検証に使う。
+pub fn page_action_only_source(module: String, name: String) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_page_action/3, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_page_action(_Key, _Values, _Config) -> ok.
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
 /// `plugin_pages/0` と `plugin_page_content/1` を持つプラグインの Erlang
 /// ソース。`plugin_pages` の本体を `pages_body`、`plugin_page_content` の本体を
 /// `content_body`（どちらも Erlang の式）にする。一覧の検証（0 件、重複、形の

@@ -8,7 +8,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{type Option, None, Some}
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
@@ -16,6 +16,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
+import nostr_no_su/plugin_config
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -54,6 +55,10 @@ const disabled_reason = "error:<script>alert(1)</script>"
 /// `console_logger` の `settings` ページの中身の呼び出しが返す理由。
 pub const plugin_page_unavailable_reason = "settings unavailable"
 
+/// `console_logger` の `settings` ページの実行への送信で、この欄が送られると
+/// 拒否する。値が拒否の理由になる。
+pub const plugin_action_reject_field = "reject"
+
 /// `console_logger` の `status` ページの記述。節 1 つ、ブロック 1 つ（`text`）を持つ。
 fn console_logger_status_description() -> Dynamic {
   dynamic.properties([
@@ -80,11 +85,38 @@ fn console_logger_status_description() -> Dynamic {
 
 /// プラグインのページの中身。`console_logger` の `status` は記述を返し、`settings`
 /// は理由を返す（応答の失敗を試すため）。それ以外は名前が引けないという理由を返す。
-fn plugin_page_content(name: String, key: String) -> Result(Dynamic, String) {
+/// 登録アカウントの一覧は使わない。
+fn plugin_page_content(
+  name: String,
+  key: String,
+  _accounts: List(plugin_config.PageAccount),
+) -> Result(Dynamic, String) {
   case name, key {
     "console_logger", "status" -> Ok(console_logger_status_description())
     "console_logger", "settings" -> Error(plugin_page_unavailable_reason)
     _, _ -> Error("plugin not found")
+  }
+}
+
+/// フォームの送信を受け取る実行の口。`console_logger` の `settings` だけが持つ。
+/// `plugin_action_reject_field` が送られればその値を理由に拒否し、それ以外は
+/// 成功する。
+fn plugin_page_action(
+  name: String,
+  key: String,
+) -> Option(
+  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
+    Result(Nil, String),
+) {
+  case name, key {
+    "console_logger", "settings" ->
+      Some(fn(values, _accounts) {
+        case list.key_find(values, plugin_action_reject_field) {
+          Ok(reason) -> Error(reason)
+          Error(Nil) -> Ok(Nil)
+        }
+      })
+    _, _ -> None
   }
 }
 
@@ -249,6 +281,8 @@ pub fn test_context(
       Ok(Nil)
     },
     plugin_page_content: plugin_page_content,
+    page_accounts: fn() { Ok([]) },
+    plugin_page_action: plugin_page_action,
     sessions: fn() {
       Ok([
         dashboard.SessionRow(
@@ -380,6 +414,14 @@ pub fn with_accounts(
   accounts: Result(List(dashboard.AccountRow), String),
 ) -> admin.Context {
   admin.Context(..context(), accounts: fn() { accounts })
+}
+
+/// プラグインのページと実行の呼び出しに渡す登録アカウントの一覧を指定した
+/// Context。
+pub fn with_page_accounts(
+  accounts: Result(List(plugin_config.PageAccount), String),
+) -> admin.Context {
+  admin.Context(..context(), page_accounts: fn() { accounts })
 }
 
 /// 読み込みで飛ばされた行の公開鍵。登録済みの `signer` とは違う値。

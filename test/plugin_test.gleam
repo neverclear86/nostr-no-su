@@ -2,11 +2,13 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
+import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
+import nostr_no_su/plugin_config
 import support/plugin_valid
 import support/plugin_with_config
 import support/plugin_with_pages
@@ -306,13 +308,114 @@ pub fn load_with_pages_test() {
         title: plugin_with_pages.page_title,
       ),
     ]
-  let assert Ok(description) = ui.content(plugin_with_pages.page_key)
+  let assert Ok(description) = ui.content(plugin_with_pages.page_key, [])
   let assert Ok(sections) =
     decode.run(
       description,
       decode.field("sections", decode.list(decode.dynamic), decode.success),
     )
   assert list.length(sections) == 1
+}
+
+/// アカウント 1 件の map を読む decoder。
+fn page_account_decoder() -> decode.Decoder(#(String, String, String)) {
+  use pubkey <- decode.field("pubkey", decode.string)
+  use npub <- decode.field("npub", decode.string)
+  use label <- decode.field("label", decode.string)
+  decode.success(#(pubkey, npub, label))
+}
+
+/// `plugin_page_action/3` があればそちらを優先して呼び、送信したキー・値・
+/// 登録アカウントの一覧（`Accounts`）が届く。成功は `Ok(Nil)`。
+pub fn plugin_with_a_page_action_is_loaded_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let accounts = [
+    plugin_config.PageAccount(pubkey: "abcd", npub: "npub1x", label: "main"),
+  ]
+  let assert Ok(Nil) = action("settings", [#("main", "on")], accounts)
+  let stored_decoder = {
+    use key <- decode.field(0, decode.string)
+    use values <- decode.field(1, decode.dict(decode.string, decode.string))
+    use config <- decode.field(2, decode.dynamic)
+    decode.success(#(key, values, config))
+  }
+  let assert Ok(#(key, values, config)) =
+    decode.run(
+      persistent_term_get(atom.create("plugin_with_action")),
+      stored_decoder,
+    )
+  assert key == "settings"
+  assert values == dict.from_list([#("main", "on")])
+  let assert Ok(accounts_json) =
+    decode.run(config, decode.field("Accounts", decode.string, decode.success))
+  let assert Ok(decoded_accounts) =
+    json.parse(accounts_json, decode.list(page_account_decoder()))
+  assert decoded_accounts == [#("abcd", "npub1x", "main")]
+}
+
+/// `plugin_page_action/3` が無く `/2` だけのプラグインは `/2` が呼ばれ、設定 map
+/// を渡さない（fixture が退避した値が `{Key, Values}` の 2 要素であることで
+/// 確かめる）。
+pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action_arity_two"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let assert Ok(Nil) = action("settings", [#("main", "on")], [])
+  let stored_decoder = {
+    use key <- decode.field(0, decode.string)
+    use values <- decode.field(1, decode.dict(decode.string, decode.string))
+    decode.success(#(key, values))
+  }
+  let assert Ok(#(key, values)) =
+    decode.run(
+      persistent_term_get(atom.create("plugin_with_action_arity_two")),
+      stored_decoder,
+    )
+  assert key == "settings"
+  assert values == dict.from_list([#("main", "on")])
+}
+
+/// `{error, Reason}` が拒否の理由になる。
+pub fn page_action_error_tuple_is_a_reason_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let assert Error(reason) =
+    action("settings", [#("reject", "select at least one account")], [])
+  assert reason
+    == "plugin_with_action: plugin_page_action/3 rejected the request (select at least one account)"
+}
+
+/// `ok` でも `{error, _}` でもない戻り値は、その形を報告する理由になる。
+pub fn page_action_with_a_bad_return_is_a_reason_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let assert Error(reason) = action("settings", [#("bad-return", "on")], [])
+  assert reason
+    == "plugin_with_action: plugin_page_action/3 must return ok or {error, Reason}, got Atom"
 }
 
 /// fixture が退避した値を読む。キーが無ければ例外になる。

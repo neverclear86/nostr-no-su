@@ -6,6 +6,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
@@ -87,6 +88,39 @@ fn link_block(page: String, text: String) -> Dynamic {
   ])
 }
 
+/// ブロック（`form`）。`fields` は欄の記述の並び。
+fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("form")),
+    #("fields", dynamic.list(fields)),
+    #("submit", dynamic.string(submit)),
+  ])
+}
+
+/// 欄（`checkbox`）。
+fn checkbox_field(
+  name: String,
+  label: String,
+  hint: Option(String),
+  checked: Bool,
+) -> Dynamic {
+  let hint_entry = case hint {
+    Some(hint) -> [#("hint", dynamic.string(hint))]
+    None -> []
+  }
+  map_(
+    list.flatten([
+      [
+        #("type", dynamic.string("checkbox")),
+        #("name", dynamic.string(name)),
+        #("label", dynamic.string(label)),
+        #("checked", dynamic.bool(checked)),
+      ],
+      hint_entry,
+    ]),
+  )
+}
+
 /// 節。
 fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
   map_([
@@ -98,12 +132,16 @@ fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
 
 /// テストが使う文脈。ページのキー `settings` だけを解決できる。
 fn context() -> plugin_view.Context {
-  Context(language: i18n.English, page_href: fn(key) {
-    case key {
-      "settings" -> Ok("/plugins/example/settings")
-      _ -> Error(Nil)
-    }
-  })
+  Context(
+    language: i18n.English,
+    page_href: fn(key) {
+      case key {
+        "settings" -> Ok("/plugins/example/settings")
+        _ -> Error(Nil)
+      }
+    },
+    form_action: "/plugins/example/settings",
+  )
 }
 
 /// 対応する種別ごとの部品で、対応する文字列とクラスで描かれる。
@@ -291,7 +329,11 @@ pub fn empty_pairs_shows_the_translated_line_test() {
 pub fn empty_pairs_translated_line_has_display_language_test() {
   let raw = section_("Has Pairs", [pairs_block([])])
   let japanese_context =
-    Context(language: i18n.Japanese, page_href: fn(_) { Error(Nil) })
+    Context(
+      language: i18n.Japanese,
+      page_href: fn(_) { Error(Nil) },
+      form_action: "/plugins/example/settings",
+    )
   let assert Ok(el) = plugin_view.section(raw, japanese_context)
   let body = element.to_string(el)
   let translated = i18n.text(i18n.Japanese, i18n.PluginSectionEmpty)
@@ -304,4 +346,90 @@ pub fn unknown_page_key_is_an_error_test() {
   let raw = section_("Links", [link_block("missing", "Go")])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "unknown page \"missing\"")
+}
+
+/// `form` は宛先・チェック・ラベル・説明・送信のボタンを描く。宛先は
+/// `context.form_action`（今開いているページ自身）に固定される。
+pub fn form_block_renders_checkboxes_test() {
+  let raw =
+    section_("Settings", [
+      form_block(
+        [
+          checkbox_field("main", "Main account", Some("f9308a…"), True),
+          checkbox_field("bot", "Bot account", None, False),
+        ],
+        "Save",
+      ),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.post_form(
+      "/plugins/example/settings",
+      [
+        view.checkbox_row("main", "Main account", Some("f9308a…"), True),
+        view.checkbox_row("bot", "Bot account", None, False),
+      ],
+      "Save",
+      view.Primary,
+      view.InForm,
+    )),
+  )
+}
+
+/// `checkbox` 以外の欄は節ひとつぶんの `Error` になる。
+pub fn form_block_rejects_an_unknown_field_type_test() {
+  let raw =
+    section_("Settings", [
+      form_block([map_([#("type", dynamic.string("text"))])], "Save"),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"Settings\": block #0: field #0: unknown type \"text\""
+}
+
+/// `name` が `[A-Za-z0-9_-]+` の外なら `Error`。
+pub fn form_block_rejects_a_bad_field_name_test() {
+  let raw =
+    section_("Settings", [
+      form_block([checkbox_field("bad name", "Label", None, False)], "Save"),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "name \"bad name\" must match [A-Za-z0-9_-]+")
+}
+
+/// `fields` が 0 件なら `Error`。
+pub fn form_block_rejects_empty_fields_test() {
+  let raw = section_("Settings", [form_block([], "Save")])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "fields must not be empty")
+}
+
+/// `checked` が無い欄は未チェック、真偽値でなければ `Error`。
+pub fn form_field_checked_defaults_to_false_test() {
+  let no_checked =
+    map_([
+      #("type", dynamic.string("checkbox")),
+      #("name", dynamic.string("main")),
+      #("label", dynamic.string("Main")),
+    ])
+  let raw = section_("Settings", [form_block([no_checked], "Save")])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.checkbox_row("main", "Main", None, False)),
+  )
+
+  let bad_checked =
+    map_([
+      #("type", dynamic.string("checkbox")),
+      #("name", dynamic.string("main")),
+      #("label", dynamic.string("Main")),
+      #("checked", dynamic.string("yes")),
+    ])
+  let raw2 = section_("Settings", [form_block([bad_checked], "Save")])
+  let assert Error(reason) = plugin_view.section(raw2, context())
+  assert string.contains(reason, "checked must be a Bool, got String")
 }

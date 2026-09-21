@@ -8,6 +8,7 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import lustre/element
 import lustre/element/html
 import nostr_no_su/admin/account_pages
@@ -373,6 +374,17 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         [plugin_section("d", [plugin_text_block("a")])],
       ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [
+          plugin_section("a", [
+            plugin_form_block("example", "label", "plugin", "b"),
+          ]),
+        ],
+      ),
     ],
   ])
 }
@@ -429,6 +441,31 @@ fn plugin_missing_title_section() -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("section")),
     #(dynamic.string("blocks"), dynamic.list([])),
+  ])
+}
+
+/// ブロック（`form`）。チェック 1 件と送信のボタンを持つ。`name`・`label`・
+/// `hint`・`submit` は `allowed_words` にある語だけを使う。
+fn plugin_form_block(
+  name: String,
+  label: String,
+  hint: String,
+  submit: String,
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("form")),
+    #(
+      dynamic.string("fields"),
+      dynamic.list([
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("checkbox")),
+          #(dynamic.string("name"), dynamic.string(name)),
+          #(dynamic.string("label"), dynamic.string(label)),
+          #(dynamic.string("hint"), dynamic.string(hint)),
+        ]),
+      ]),
+    ),
+    #(dynamic.string("submit"), dynamic.string(submit)),
   ])
 }
 
@@ -515,4 +552,24 @@ pub fn components(language: i18n.Language) -> List(String) {
       element.to_string,
     ),
   ])
+}
+
+/// `form` を含むページを `pages()` に足し、`stylesheet_test` と
+/// `japanese_pages_test` の走査に載せる。
+pub fn plugin_page_with_a_form_test() {
+  let body =
+    plugin_pages.plugin_page(
+      i18n.English,
+      view.System,
+      plugin_row_one_page,
+      plugin_status_page,
+      [
+        plugin_section("a", [
+          plugin_form_block("example", "label", "plugin", "b"),
+        ]),
+      ],
+    )
+  assert string.contains(body, "action=\"/plugins/plugin-a/status\"")
+  assert string.contains(body, "type=\"checkbox\"")
+  assert string.contains(body, ">b<")
 }

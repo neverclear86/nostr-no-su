@@ -259,6 +259,58 @@ pub fn plugin_page_without_ui_is_not_found_test() {
   assert response.status == 404
 }
 
+/// 実行の口を持つページへの POST は成功すれば同じページへ 303 で戻る。
+pub fn plugin_page_action_redirects_to_the_page_test() {
+  let response =
+    post_form(context(), "/plugins/console_logger/settings", [
+      #("main", "on"),
+    ])
+  assert response.status == 303
+  assert header(response, "location") == "/plugins/console_logger/settings"
+}
+
+/// 拒否の理由は 503 の本文に英語のまま出る。
+pub fn plugin_page_action_rejection_is_unavailable_test() {
+  let response =
+    post_form(context(), "/plugins/console_logger/settings", [
+      #("reject", "select at least one account"),
+    ])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "select at least one account")
+}
+
+/// 実行の口を持たないページへの POST は 405 で `allow: GET`。本文が無い POST
+/// でも 415 にならない（`require_form` より先に判定するため）。
+pub fn plugin_page_action_without_the_export_is_method_not_allowed_test() {
+  let response = post(context(), "/plugins/console_logger/status")
+  assert response.status == 405
+  assert header(response, "allow") == "GET"
+}
+
+/// 実行の口を持つページへの PUT は 405 で `allow: GET, POST`。
+pub fn plugin_page_action_put_allows_get_and_post_test() {
+  let response =
+    simulate.request(http.Put, "/plugins/console_logger/settings")
+    |> admin_context.with_credentials("admin", password)
+    |> admin.handle_request(context(), _)
+  assert response.status == 405
+  assert header(response, "allow") == "GET, POST"
+}
+
+/// `page_accounts` が理由を返すと、GET も POST も 503 になる。
+pub fn plugin_page_without_accounts_is_unavailable_test() {
+  let unavailable_context = admin_context.with_page_accounts(Error(unavailable))
+  let get_response = get(unavailable_context, "/plugins/console_logger/status")
+  assert get_response.status == 503
+  assert string.contains(simulate.read_body(get_response), unavailable)
+
+  let post_response =
+    post_form(unavailable_context, "/plugins/console_logger/settings", [])
+  assert post_response.status == 503
+  assert string.contains(simulate.read_body(post_response), unavailable)
+}
+
 /// 読み直しフォームは Context の `reload_accounts` を呼び、ダッシュボードへ 303 で戻す。
 pub fn reloading_redirects_to_the_dashboard_test() {
   let reloaded = process.new_subject()
