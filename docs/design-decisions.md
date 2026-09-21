@@ -77,6 +77,34 @@ NIP-44 の復号成功が送信者認証になる + 受信イベントの BIP-34
 
 NIP-04 / `switch_relays` は未対応
 
+## v0.1 のセキュリティの前提
+
+v0.1 の前に、秘密（アカウントの秘密鍵、接続 secret、マスターキー、管理パスワード、DB のパスワード）の扱いと管理 UI の防御を脅威モデルの観点で点検した。この節はその結果で、項目ごとに確かめた内容と、直した場合の PR の番号、残る制約を書く。版と実測の値は 2026-09-21 時点のものである。
+
+### 秘密がログとクラッシュレポートに出る経路
+
+直した（PR #403）。本体のコードが生の秘密をログへ入れる経路は無く、秘密鍵・接続 secret・マスターキーはプロセスの状態で関数に閉じてある（「秘密鍵と接続 secret は暗号化して保存する」）。pgo に渡る DB のパスワードだけは渡し方では避けられないので、OTP logger の primary filter で出力の前に伏せる（「pgo のクラッシュレポートの DB のパスワードは logger の filter で伏せる」）。filter が伏せるのは起動時に登録した値（DB のパスワードと管理パスワード）だけなので、登録していない秘密が本文に載る経路は残る。`nostrconnect://` の secret は `bunker.OpenClientSession` のメッセージに生の文字列で載るので、バンカー actor がその処理中に落ちるとクラッシュレポートの `Last message` に出る（クライアントが URI で一度だけ示した値で、セッションが開いた後は使えない）。`event_logger` が自分で持つ接続情報のパスワードは、本体がプラグインの設定値を解釈しない方針でどのキーが URL かを決めないため filter に登録できず、プラグイン側の pgo のクラッシュレポートには出うる。管理 UI の 500 の行に出る `wisp.rescue_crashes` の例外の詳細（`string.inspect` の整形済み文字列）も、登録した値は伏せるが登録していない値は覆えない。
+
+### 管理 UI の Basic 認証のブルートフォース
+
+直した（PR #404）。認証に失敗した要求は、接続元の IP（TCP の接続元だけを使い、`X-Forwarded-For` は見ない）を理由と一緒にログへ残し、1 秒の固定の遅延の後に 401 を返す。ロックアウトと IP ごとの回数制限は入れない。既定のループバックのみの待ち受けでは過剰で、リバースプロキシーで公開する構成では前段で行う（README の「リバースプロキシーの設定」）。
+
+### 管理 UI の応答ヘッダー
+
+確認した。認証済みの応答には `cache-control: no-store`、`x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` が付いており、インラインの script と style は無い（ヘッダーの値と、`referrer-policy` を `no-referrer` にしない理由は [管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」にある）。
+
+### NIP-46 の入力の検証
+
+直した（PR #406）。サイズと件数の上限、上限違反を破棄にする理由、未知の方法へのエラー応答が方法名を含まないことは「NIP-46 の入力にはサイズと件数の上限がある」にある。
+
+### 復号した秘密鍵は同じ VM から読める
+
+既知の制約。復号した秘密鍵と接続 secret は関数に閉じて `string.inspect` やクラッシュレポートに値が出ないようにしているが、同じ VM で動くコードは `sys:get_state/1` で状態を取り、閉じ込めた関数を呼んで値を読める。プラグインは本体と同じ VM・同じ権限で動くので、信頼できるものだけを置く前提を README の「docker compose」と [プラグイン API v1](plugin-api.md) に明記してある。v0.1 では追加の対策をしない。プラグインを別の VM やサンドボックスに出す設計は、境界を越えるイベントの受け渡しと設定の口を作り直すことになり、プラグイン機構の前提から変わるためである。
+
+### 依存の既知の脆弱性
+
+確認した。`npm audit` は `found 0 vulnerabilities` で、`npm` の依存は管理 UI の CSS のビルドにだけ使い、実行時のイメージには入らない。Hex には audit のコマンドが無いので、主要な依存（`mist` 6.0.3、`wisp` 2.2.2、`pog` 4.1.0、`gleam_crypto` 1.6.0）が最新の安定版であることと、`manifest.toml` に固定した版が Hex で retire されていないことを見た（`wisp` は 2.1.1 と 2.2.0 が `serve_static` のパストラバーサルで retire されており、固定している 2.2.2 はその後の版である）。`gleam_otp` 1.2.0 と `gleam_stdlib` 1.0.3 は最新（1.3.0 と 1.0.5）より遅れているが、該当版の変更は機能の追加と不具合の修正だけでセキュリティの修正が無いので、この点検では上げない。`plugins-src/event_logger` の共有パッケージの版は `dev/check_shared_versions.sh` が本体との一致を検査しているので、この結果がそのまま当たる。
+
 ## アカウントの保存
 
 ### 秘密鍵と接続 secret は暗号化して保存する
@@ -115,9 +143,9 @@ DB の停止はプロセスの死にならない（pgo が再接続を内部で�
 
 メモリは読み込み（起動時と読み直し）と、actor 経由の変更の成功だけで変わる。`psql` などで `bunker_accounts` の行を直接変えた場合は、次の起動、バンカー actor の再起動、または管理 UI の「DB から読み直す」まで反映されない
 
-### pgo のクラッシュレポートには DB のパスワードが出うる
+### pgo のクラッシュレポートの DB のパスワードは logger の filter で伏せる
 
-pgo のプロセス（`pgo_pool`、`pgo_pool_sup`、`pgo_connection` など）は接続設定を状態や起動引数に持ち、`format_status` を定義していない。これは `event_logger` でも同じで、pgo を改変しない限り塞げない。本体は `DATABASE_URL` を理由の文字列やログに入れず、解釈も 1 か所（`account_store.pool_config`）に限っている。マスターキーは pgo に渡さないので影響を受けない
+pgo のプロセス（`pgo_pool`、`pgo_pool_sup`、`pgo_connection` など）は接続設定を状態や起動引数に持ち、`format_status` を定義していない。渡し方では避けられないので、起動時に OTP logger の primary filter（`log.redact_secrets`）へ `DATABASE_URL` のパスワードと管理パスワードを登録し、ログの本文に現れた値を出力の前に `[redacted]` へ置き換える。本体は `DATABASE_URL` を理由の文字列やログに入れず、解釈も 1 か所（`account_store.pool_config`）に限っている。マスターキーは pgo に渡さないので影響を受けない。filter が触るのはイベントの `msg` だけで `meta` は触らず、pgo のプロセスの状態には平文のまま残るので、同じ VM から `sys:get_state/1` では読める。プラグインが自分で持つ接続情報（`event_logger` の `PLUGIN_EVENT_LOGGER_DATABASE_URL`）は登録しないので、そのパスワードは伏せられない
 
 ## プラグイン
 
