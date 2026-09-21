@@ -1,9 +1,9 @@
-//// 管理 UI のページの記述を組み立てる純粋なモジュール。プロセスにもネットワークにも
-//// 触れず、呼び出し元（`event_logger.gleam`）が観測した値を引数で受け取って
-//// `Dynamic` を組み立てるだけである。
+//// 管理 UI のページの記述を組み立て、フォームの送信を正規化する純粋なモジュール。
+//// プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）が観測した値と
+//// 受け取った送信を引数で受け取って、記述の `Dynamic` と選択の結果を組み立てるだけである。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
-//// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone` だけで**、
+//// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・真偽値だけで**、
 //// クラス名も `href` も持ち込めない。秘密（接続先 URL のパスワード）は本体に渡す前に
 //// ここでマスクする（`masked_url/2`。同文書第 13.4 節の実例でもある）。
 ////
@@ -11,9 +11,12 @@
 //// Erlang では binary キーの map になる。
 
 import event_logger/store
+import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Name}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/result
 import pog
@@ -35,6 +38,44 @@ pub type ProcessStatus {
   )
 }
 
+/// 本体から `Accounts`（`docs/plugin-api.md` 第 13.5 節）で届く登録アカウント 1 件。
+pub type Account {
+  Account(pubkey: String, npub: String, label: String)
+}
+
+/// `Accounts` の値（アカウントの一覧を JSON にした文字列）を読む。JSON として
+/// 読めなければ `[]` を返す。`plugin_page_content` に `{error, Reason}` を返す
+/// 約束が無いため（`docs/plugin-api.md` 第 13.4 節）。
+pub fn accounts(accounts_json: String) -> List(Account) {
+  json.parse(accounts_json, decode.list(account_decoder()))
+  |> result.unwrap([])
+}
+
+/// 登録アカウント 1 件のデコーダー。
+fn account_decoder() -> decode.Decoder(Account) {
+  use pubkey <- decode.field("pubkey", decode.string)
+  use npub <- decode.field("npub", decode.string)
+  use label <- decode.field("label", decode.string)
+  decode.success(Account(pubkey: pubkey, npub: npub, label: label))
+}
+
+/// フォームの送信を正規化する。`values` はチェックされたチェックボックスの
+/// `name`（= `pubkey`）だけを持つ。1 件も選ばれていなければ拒否し、登録の
+/// 全件が選ばれていれば絞らないことを表す空リストにする。`values` に含まれる
+/// 未知の名前（登録に無い `pubkey`）は無視する。
+pub fn selected_pubkeys(
+  accounts: List(Account),
+  values: Dict(String, String),
+) -> Result(List(String), String) {
+  let chosen =
+    list.filter(accounts, fn(account) { dict.has_key(values, account.pubkey) })
+  case list.length(chosen), list.length(accounts) {
+    0, _ -> Error("select at least one account")
+    selected, total if selected == total -> Ok([])
+    _, _ -> Ok(list.map(chosen, fn(account) { account.pubkey }))
+  }
+}
+
 /// `plugin_pages/0` が返すページの一覧。キー `settings` の 1 件だけを供給する。
 pub fn pages() -> Dynamic {
   dynamic.list([
@@ -45,23 +86,27 @@ pub fn pages() -> Dynamic {
   ])
 }
 
-/// ページ 1 件の記述。`key` が `settings` なら設定と状態を 2 節で示し、それ以外
-/// （キー未知、または binary として読めなかった呼び出し元が渡す仮の文字列）は
-/// `alert` 1 つだけの節を返す。`plugin_page_content` に `{error, Reason}` を返す
-/// 約束は無いため（`docs/plugin-api.md` 第 13.4 節）。
+/// ページ 1 件の記述。`key` が `settings` なら監視対象・設定・状態を 3 節で示し、
+/// それ以外（キー未知、または binary として読めなかった呼び出し元が渡す仮の
+/// 文字列）は `alert` 1 つだけの節を返す。`plugin_page_content` に
+/// `{error, Reason}` を返す約束は無いため（`docs/plugin-api.md` 第 13.4 節）。
 ///
 /// `database` は `masked_url/2` で組んだ表示用の文字列（未設定なら `Error(Nil)`）、
 /// `pool_size` は接続プールの接続数、`processes` は保存アクターと接続プールの
-/// 観測結果。
+/// 観測結果、`accounts` は登録アカウントの一覧、`monitored` は保存アクターへ
+/// 問い合わせた今の監視対象（問い合わせが届かなければ `Error(Nil)`）。
 pub fn content(
   key: String,
   database: Result(String, Nil),
   pool_size: Int,
   processes: List(ProcessStatus),
+  accounts: List(Account),
+  monitored: Result(store.Monitored, Nil),
 ) -> Dynamic {
   case key {
     k if k == page_key ->
       page_sections([
+        monitored_section(accounts, monitored),
         configuration_section(database, pool_size),
         runtime_section(processes),
       ])
@@ -88,7 +133,7 @@ pub fn masked_url(pool: Name(pog.Message), database_url: String) -> String {
 }
 
 /// `Configuration` の節。マスク済みの URL、プール接続数、保存待ちの上限を
-/// `pairs` で示し、設定はこの環境変数だけで実行時には変えられない旨を注記する。
+/// `pairs` で示し、接続先はこの環境変数だけで実行時には変えられない旨を注記する。
 fn configuration_section(
   database: Result(String, Nil),
   pool_size: Int,
@@ -108,10 +153,51 @@ fn configuration_section(
     ]),
     note_block(
       "This plugin strips the password before showing the URL above. "
-      <> "The setting comes only from this environment variable and cannot "
-      <> "be changed from this page.",
+      <> "The connection URL comes only from this environment variable and "
+      <> "cannot be changed from this page. Only the accounts to store "
+      <> "events for are chosen above.",
     ),
   ])
+}
+
+/// `Monitored accounts` の節。保存アクターへ問い合わせた今の監視対象が
+/// `Error(Nil)`（問い合わせが届かなかった）なら `alert`（`failure`）1 つだけに
+/// する。登録アカウントが 0 件なら、本体が出す空の状態の文に任せて `blocks` を
+/// 空にする（`docs/plugin-api.md` 第 13.3 節）。それ以外はチェックボックスの
+/// `form` を、登録アカウントごとに 1 行で出す。
+fn monitored_section(
+  accounts: List(Account),
+  monitored: Result(store.Monitored, Nil),
+) -> Dynamic {
+  case monitored, accounts {
+    Error(Nil), _ ->
+      section("Monitored accounts", [
+        alert_block(
+          "monitored accounts are unavailable: the store actor did not answer",
+          "failure",
+        ),
+      ])
+    Ok(_), [] -> section("Monitored accounts", [])
+    Ok(current), _ ->
+      section("Monitored accounts", [
+        text_block("Events are stored only for the accounts checked here."),
+        note_block(
+          "All accounts checked means every account, including ones you "
+          <> "register later.",
+        ),
+        form_block(
+          list.map(accounts, fn(account) {
+            checkbox_field(
+              name: account.pubkey,
+              label: account.label,
+              hint: account.npub,
+              checked: store.is_monitored(current, account.pubkey),
+            )
+          }),
+          "Save",
+        ),
+      ])
+  }
 }
 
 /// `Runtime` の節。プロセスごとに 1 行の表を出し、居ないプロセスが 1 つでも
@@ -206,6 +292,41 @@ fn note_block(text: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("note")),
     #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `text` ブロック。
+fn text_block(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `form` ブロック。`fields` は `checkbox_field/4` などで組んだ欄の記述、
+/// `submit` は送信ボタンの文字列。
+fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("form")),
+    #(dynamic.string("fields"), dynamic.list(fields)),
+    #(dynamic.string("submit"), dynamic.string(submit)),
+  ])
+}
+
+/// `checkbox` の欄。`name` が送信名（`docs/plugin-api.md` 13.3 節の
+/// `[A-Za-z0-9_-]+`）で、この節では登録アカウントの `pubkey`（16 進）を使う。
+fn checkbox_field(
+  name name: String,
+  label label: String,
+  hint hint: String,
+  checked checked: Bool,
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("checkbox")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("hint"), dynamic.string(hint)),
+    #(dynamic.string("checked"), dynamic.bool(checked)),
   ])
 }
 

@@ -2,6 +2,7 @@ import envoy
 import event_logger
 import event_logger/page
 import event_logger/store
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
@@ -11,6 +12,7 @@ import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/set
 import gleam/string
 import gleeunit
 import pog
@@ -116,6 +118,20 @@ pub fn a_database_newer_than_the_migrations_is_refused_test() {
   ]
   assert store.pending_migrations(migrations, 3)
     == Error(store.SchemaTooNew(found: 3, supported: 2))
+}
+
+/// `monitored_accounts` の行が 0 件なら絞らず、全アカウントが対象になる。
+pub fn no_monitored_rows_mean_every_account_test() {
+  assert store.monitored_from_rows([]) == store.AllAccounts
+  assert store.is_monitored(store.AllAccounts, "anything")
+}
+
+/// 行があれば、その pubkey だけが保存の対象になる。
+pub fn monitored_rows_limit_storing_test() {
+  let monitored = store.monitored_from_rows(["aa", "bb"])
+  assert monitored == store.OnlyPubkeys(set.from_list(["aa", "bb"]))
+  assert store.is_monitored(monitored, "aa")
+  assert !store.is_monitored(monitored, "cc")
 }
 
 /// 挿入する列とプレースホルダーが、`insert` がパラメーターを積む順序と対応して
@@ -339,6 +355,7 @@ pub fn a_newer_schema_stops_the_store_test() {
     store.Database(
       ensure_schema: fn() { Error(store.SchemaTooNew(found: 2, supported: 1)) },
       insert: fn(_row) { Ok(1) },
+      load_monitored: fn() { Ok([]) },
     )
   let reply = process.new_subject()
   process.spawn_unlinked(fn() {
@@ -412,6 +429,66 @@ pub fn a_slow_database_keeps_the_mailbox_bounded_test() {
   assert await_inserted(inserted, int.to_string(flood_len), insert_timeout_ms)
 }
 
+/// 監視対象の外の pubkey のイベントは保存されない。`insert` は対象内の 1 件
+/// だけを受ける。
+pub fn events_outside_the_monitored_set_are_not_stored_test() {
+  let inserted = process.new_subject()
+  let assert Ok(started) =
+    store.start(
+      process.new_name("test_monitored_store"),
+      monitored_database(inserted, ["aa"]),
+      store.default_max_queue_len,
+    )
+  let assert Ok(row) = store.to_row(sample_event("in"))
+  process.send(
+    started.data,
+    store.Store(store.Row(..row, id: "outside", pubkey: "bb")),
+  )
+  process.send(
+    started.data,
+    store.Store(store.Row(..row, id: "inside", pubkey: "aa")),
+  )
+  assert process.receive(inserted, insert_timeout_ms) == Ok("inside")
+}
+
+/// `ReloadMonitored` を送ると `load_monitored` が呼ばれ、`GetMonitored` の答えが
+/// 新しい集合になる。スタブの `load_monitored` は `requests` へ答えの宛先を
+/// 送って問い合わせ、テストが `[]` → `["aa"]` の順に答える
+/// （`process.receive` は宛先の所有プロセスでしか受けられないため、
+/// `process.call` で往復させる）。
+pub fn saving_monitored_accounts_reloads_the_store_test() {
+  let requests = process.new_subject()
+  let assert Ok(started) =
+    store.start(
+      process.new_name("test_reload_store"),
+      store.Database(
+        ensure_schema: fn() { Ok(Nil) },
+        insert: fn(_row) { Ok(1) },
+        load_monitored: fn() {
+          Ok(
+            process.call(
+              requests,
+              waiting: insert_timeout_ms,
+              sending: fn(reply) { reply },
+            ),
+          )
+        },
+      ),
+      store.default_max_queue_len,
+    )
+  let assert Ok(initial_reply) = process.receive(requests, insert_timeout_ms)
+  process.send(initial_reply, [])
+
+  process.send(started.data, store.ReloadMonitored)
+  let assert Ok(reload_reply) = process.receive(requests, insert_timeout_ms)
+  process.send(reload_reply, ["aa"])
+
+  let answer = process.new_subject()
+  process.send(started.data, store.GetMonitored(reply_to: answer))
+  assert process.receive(answer, insert_timeout_ms)
+    == Ok(store.OnlyPubkeys(set.from_list(["aa"])))
+}
+
 /// 遅い DB のテストで保存アクターに渡す上限。
 const slow_queue_limit = 20
 
@@ -430,23 +507,47 @@ const insert_timeout_ms = 1000
 /// 挿入を試みた行の id を `attempts` へ知らせ、id が `rejected` の行だけを権限
 /// 不足で拒否する DB。
 fn rejecting_database(attempts: process.Subject(String)) -> store.Database {
-  store.Database(ensure_schema: fn() { Ok(Nil) }, insert: fn(row: store.Row) {
-    process.send(attempts, row.id)
-    case row.id {
-      "rejected" -> Error(insufficient_privilege())
-      _ -> Ok(1)
-    }
-  })
+  store.Database(
+    ensure_schema: fn() { Ok(Nil) },
+    insert: fn(row: store.Row) {
+      process.send(attempts, row.id)
+      case row.id {
+        "rejected" -> Error(insufficient_privilege())
+        _ -> Ok(1)
+      }
+    },
+    load_monitored: fn() { Ok([]) },
+  )
 }
 
 /// 1 行の挿入に `slow_insert_ms` かけ、挿入した行の id を `inserted` へ知らせる
 /// DB。
 fn slow_database(inserted: process.Subject(String)) -> store.Database {
-  store.Database(ensure_schema: fn() { Ok(Nil) }, insert: fn(row: store.Row) {
-    process.sleep(slow_insert_ms)
-    process.send(inserted, row.id)
-    Ok(1)
-  })
+  store.Database(
+    ensure_schema: fn() { Ok(Nil) },
+    insert: fn(row: store.Row) {
+      process.sleep(slow_insert_ms)
+      process.send(inserted, row.id)
+      Ok(1)
+    },
+    load_monitored: fn() { Ok([]) },
+  )
+}
+
+/// 監視対象が固定の `monitored_pubkeys` だけの DB。挿入した行の id を
+/// `inserted` へ知らせる。
+fn monitored_database(
+  inserted: process.Subject(String),
+  monitored_pubkeys: List(String),
+) -> store.Database {
+  store.Database(
+    ensure_schema: fn() { Ok(Nil) },
+    insert: fn(row: store.Row) {
+      process.send(inserted, row.id)
+      Ok(1)
+    },
+    load_monitored: fn() { Ok(monitored_pubkeys) },
+  )
 }
 
 /// `id` が届くまで `inserted` を読み進める。次の id が `timeout_ms` の間に
@@ -598,12 +699,118 @@ pub fn pages_declares_one_settings_page_test() {
   assert entry == #("settings", "Settings")
 }
 
+/// `Accounts` の値（JSON 文字列）から `pubkey`・`npub`・`label` を読む。壊れた
+/// JSON なら `[]`。
+pub fn accounts_are_read_from_the_config_json_test() {
+  let json_text =
+    "[{\"pubkey\":\"aa\",\"npub\":\"npub1aa\",\"label\":\"Alice\"}]"
+  assert page.accounts(json_text)
+    == [page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice")]
+  assert page.accounts("not json") == []
+}
+
+/// 登録アカウントの全件が選ばれていれば、絞らない状態を表す空リストになる。
+pub fn selecting_every_account_stores_no_rows_test() {
+  let accounts = [
+    page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice"),
+    page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+  ]
+  let values = dict.from_list([#("aa", "on"), #("bb", "on")])
+  assert page.selected_pubkeys(accounts, values) == Ok([])
+}
+
+/// 一部だけ選ばれていれば、選んだ pubkey だけを返す。登録に無い名前は無視する。
+pub fn selecting_some_accounts_stores_them_test() {
+  let accounts = [
+    page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice"),
+    page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+  ]
+  let values = dict.from_list([#("aa", "on"), #("unknown", "on")])
+  assert page.selected_pubkeys(accounts, values) == Ok(["aa"])
+}
+
+/// 1 件も選ばれていない送信は拒否する。
+pub fn selecting_no_account_is_rejected_test() {
+  let accounts = [page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice")]
+  assert page.selected_pubkeys(accounts, dict.new())
+    == Error("select at least one account")
+}
+
+/// `Monitored accounts` の節はアカウントごとに 1 つの `checkbox` を持つ
+/// `form` を出し、`checked` は今の監視対象に一致する。
+pub fn the_monitored_section_lists_every_account_test() {
+  let accounts = [
+    page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice"),
+    page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+  ]
+  let monitored = Ok(store.OnlyPubkeys(set.from_list(["aa"])))
+  let description =
+    page.content("settings", Error(Nil), 2, [], accounts, monitored)
+  let assert [monitored_section, ..] = page_sections(description)
+  let #(title, blocks) = section_shape(monitored_section)
+  assert title == "Monitored accounts"
+  let assert [_text, _note, form] = blocks
+  let assert Ok(#(fields, submit)) =
+    decode.run(form, {
+      use fields <- decode.field("fields", decode.list(decode.dynamic))
+      use submit <- decode.field("submit", decode.string)
+      decode.success(#(fields, submit))
+    })
+  assert submit == "Save"
+  let assert [aa_field, bb_field] = fields
+  assert checkbox_field_shape(aa_field) == #("aa", "Alice", "npub1aa", True)
+  assert checkbox_field_shape(bb_field) == #("bb", "Bob", "npub1bb", False)
+}
+
+/// `checkbox` フィールドの `name`・`label`・`hint`・`checked`。
+fn checkbox_field_shape(raw: Dynamic) -> #(String, String, String, Bool) {
+  let assert Ok(shape) =
+    decode.run(raw, {
+      use name <- decode.field("name", decode.string)
+      use label <- decode.field("label", decode.string)
+      use hint <- decode.field("hint", decode.string)
+      use checked <- decode.field("checked", decode.bool)
+      decode.success(#(name, label, hint, checked))
+    })
+  shape
+}
+
+/// 登録アカウントが 0 件のときは、本体が出す空の状態の文に任せて `blocks` を
+/// 空にする。
+pub fn the_monitored_section_is_empty_without_accounts_test() {
+  let description =
+    page.content("settings", Error(Nil), 2, [], [], Ok(store.AllAccounts))
+  let assert [monitored_section, ..] = page_sections(description)
+  let #(_title, blocks) = section_shape(monitored_section)
+  assert blocks == []
+}
+
+/// 保存アクターへの問い合わせが届かなければ `alert`（`failure`）1 つだけになる。
+pub fn the_monitored_section_reports_an_unreachable_store_test() {
+  let description = page.content("settings", Error(Nil), 2, [], [], Error(Nil))
+  let assert [monitored_section, ..] = page_sections(description)
+  let #(_title, blocks) = section_shape(monitored_section)
+  let assert [alert] = blocks
+  let assert Ok(#(kind, text, tone)) =
+    decode.run(alert, {
+      use kind <- decode.field("type", decode.string)
+      use text <- decode.field("text", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(kind, text, tone))
+    })
+  assert kind == "alert"
+  assert text
+    == "monitored accounts are unavailable: the store actor did not answer"
+  assert tone == "failure"
+}
+
 /// `Configuration` 節の `PLUGIN_EVENT_LOGGER_DATABASE_URL` は `code` インラインの
 /// マスク済みの文字列である。
 pub fn page_content_shows_the_masked_database_url_test() {
   let masked = "postgres://nostr@db.example:5432/nostr_no_su"
-  let description = page.content("settings", Ok(masked), 2, [])
-  let assert [configuration, ..] = page_sections(description)
+  let description =
+    page.content("settings", Ok(masked), 2, [], [], Ok(store.AllAccounts))
+  let assert [_monitored, configuration, ..] = page_sections(description)
   let #(title, blocks) = section_shape(configuration)
   assert title == "Configuration"
   let assert [pairs, ..] = blocks
@@ -634,8 +841,16 @@ pub fn page_content_marks_missing_processes_test() {
       mailbox: Error(Nil),
     ),
   ]
-  let description = page.content("settings", Error(Nil), 2, processes)
-  let assert [_configuration, runtime] = page_sections(description)
+  let description =
+    page.content(
+      "settings",
+      Error(Nil),
+      2,
+      processes,
+      [],
+      Ok(store.AllAccounts),
+    )
+  let assert [_monitored, _configuration, runtime] = page_sections(description)
   let #(title, blocks) = section_shape(runtime)
   assert title == "Runtime"
   let assert [table, alert] = blocks
@@ -663,7 +878,8 @@ pub fn page_content_marks_missing_processes_test() {
 
 /// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
 pub fn page_content_of_an_unknown_key_test() {
-  let description = page.content("nope", Error(Nil), 2, [])
+  let description =
+    page.content("nope", Error(Nil), 2, [], [], Ok(store.AllAccounts))
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   let assert [alert] = blocks
@@ -786,18 +1002,47 @@ fn schema_version_round_trip(database_url: String) -> Nil {
   run_statement(db, store.create_pubkey_index)
   run_statement(db, store.create_kind_index)
 
-  // 移行の後、もう一度実行しても版は 1 のまま（移行を二重に適用しない）。
+  // 移行の後、もう一度実行しても版は増えない（移行を二重に適用しない）。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
-  assert recorded_versions(db) == [1]
+  assert recorded_versions(db) == [1, 2]
 
   // 記録された版が新しい DB は拒否する。
   run_statement(
     db,
-    "INSERT INTO event_logger_schema_version (version) VALUES (2)",
+    "INSERT INTO event_logger_schema_version (version) VALUES (3)",
   )
   assert store.ensure_schema(db)
-    == Error(store.SchemaTooNew(found: 2, supported: 1))
+    == Error(store.SchemaTooNew(found: 3, supported: 2))
+
+  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。`ensure_schema` の後に `monitored_accounts` があり、
+/// `replace_monitored` で書いた pubkey が `load_monitored` で読め、
+/// `replace_monitored(db, [])` で 0 件に戻ることを確かめる。
+pub fn postgres_monitored_accounts_test() {
+  use database_url <- with_test_database_url
+  monitored_accounts_round_trip(database_url)
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。
+fn monitored_accounts_round_trip(database_url: String) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  let db = connect(database_url, Some(schema))
+
+  let assert Ok(Nil) = store.ensure_schema(db)
+  assert store.load_monitored(db) == Ok([])
+
+  let assert Ok(Nil) = store.replace_monitored(db, ["aa", "bb"])
+  let assert Ok(rows) = store.load_monitored(db)
+  assert set.from_list(rows) == set.from_list(["aa", "bb"])
+
+  let assert Ok(Nil) = store.replace_monitored(db, [])
+  assert store.load_monitored(db) == Ok([])
 
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
