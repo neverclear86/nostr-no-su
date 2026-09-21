@@ -497,10 +497,11 @@ fn children(
 
 /// 任意エクスポート `plugin_pages/0` `/1`、`plugin_page_content/1` `/2`、
 /// `plugin_page_action/2` `/3` の有無を見て、管理 UI の供給を読み込む。一覧も
-/// 中身も無ければ `Ok(None)`（実行だけあってもこの扱いになる）。一覧か中身の
-/// 片方だけなら `Error`（`read_children` と同じく、症状を真の原因に近い場所で
-/// 報告するため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を検証する。
-/// `/1` `/2` を優先して設定 map を渡す。実行は任意で、無ければ `action: None`。
+/// 中身も無ければ `Ok(None)`。実行だけを持つモジュールは `Error` で読み込まない。
+/// 一覧か中身の片方だけなら `Error`（`read_children` と同じく、症状を真の原因に
+/// 近い場所で報告するため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を
+/// 検証する。`/1` `/2` を優先して設定 map を渡す。実行は任意で、無ければ
+/// `action: None`。
 fn read_ui(
   module: Atom,
   name: String,

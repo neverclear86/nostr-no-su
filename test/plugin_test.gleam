@@ -2,6 +2,7 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
+import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -352,20 +353,16 @@ pub fn plugin_with_a_page_action_is_loaded_test() {
     )
   assert key == "settings"
   assert values == dict.from_list([#("main", "on")])
+  let assert Ok(accounts_json) =
+    decode.run(config, decode.field("Accounts", decode.string, decode.success))
   let assert Ok(decoded_accounts) =
-    decode.run(
-      config,
-      decode.field(
-        "Accounts",
-        decode.list(page_account_decoder()),
-        decode.success,
-      ),
-    )
+    json.parse(accounts_json, decode.list(page_account_decoder()))
   assert decoded_accounts == [#("abcd", "npub1x", "main")]
 }
 
-/// `plugin_page_action/3` が無く `/2` だけのプラグインは `/2` が呼ばれる（設定
-/// map を渡さない）。
+/// `plugin_page_action/3` が無く `/2` だけのプラグインは `/2` が呼ばれ、設定 map
+/// を渡さない（fixture が退避した値が `{Key, Values}` の 2 要素であることで
+/// 確かめる）。
 pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
   let assert Ok(loaded) =
     plugin.load(
@@ -376,6 +373,18 @@ pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
   let assert Some(ui) = loaded.ui
   let assert Some(action) = ui.action
   let assert Ok(Nil) = action("settings", [#("main", "on")], [])
+  let stored_decoder = {
+    use key <- decode.field(0, decode.string)
+    use values <- decode.field(1, decode.dict(decode.string, decode.string))
+    decode.success(#(key, values))
+  }
+  let assert Ok(#(key, values)) =
+    decode.run(
+      persistent_term_get(atom.create("plugin_with_action_arity_two")),
+      stored_decoder,
+    )
+  assert key == "settings"
+  assert values == dict.from_list([#("main", "on")])
 }
 
 /// `{error, Reason}` が拒否の理由になる。

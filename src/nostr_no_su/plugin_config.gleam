@@ -9,8 +9,8 @@
 //// レコードではない。イベント map（`event.to_map`）と同じ理由で、Erlang /
 //// Elixir で書いたプラグインからそのまま読めることを優先する。管理 UI の
 //// ページと実行の呼び出し（`plugin_page_content` / `plugin_page_action`）に
-//// 渡す map だけは、これに加えて予約キー `Accounts` の値がリスト（アカウント
-//// ごとの map の並び）になる。
+//// 渡す map だけは、これに加えて予約キー `Accounts` が加わり、その値はアカウント
+//// の一覧を JSON にした文字列である。
 ////
 //// 値は変換しない。環境変数はすべて文字列であり、整数として読むべきか URL と
 //// して読むべきかを本体は知らない。**変換はプラグインの責任**で、失敗は
@@ -22,6 +22,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
+import gleam/json
 import gleam/list
 import gleam/string
 
@@ -100,21 +101,26 @@ pub type PageAccount {
   PageAccount(pubkey: String, npub: String, label: String)
 }
 
-/// プラグイン境界へ渡す map。`to_map` と同じ形に、予約キー `Accounts`（アカウント
-/// ごとの binary キーの map のリスト）を足して返す。`Accounts` は値が binary で
-/// ない唯一のキーである。このキーは環境変数由来のキーと衝突しない
-/// （`for_plugin` がキーを小文字にするため、大文字を含むこのキーは環境変数からは
-/// 作れない）。
+/// プラグイン境界へ渡す map。`to_map` と同じ形に、予約キー `Accounts`（値は
+/// アカウントの一覧を JSON にした文字列）を足して返す。中身はアカウントごとの
+/// オブジェクト（`pubkey`・`npub`・`label`、すべて文字列）の配列で、0 件なら
+/// `[]` である。値は JSON の文字列なので、map は `to_map` と同じく binary
+/// キー・binary 値である。このキーは環境変数由来のキーと衝突しない
+/// （`for_plugin` がキーを小文字にするため、大文字を含むこのキーは環境変数
+/// からは作れない）。
 pub fn page_map(config: Config, accounts: List(PageAccount)) -> Dynamic {
-  let account_maps =
-    list.map(accounts, fn(account) {
-      dynamic.properties([
-        #(dynamic.string("pubkey"), dynamic.string(account.pubkey)),
-        #(dynamic.string("npub"), dynamic.string(account.npub)),
-        #(dynamic.string("label"), dynamic.string(account.label)),
+  let accounts_json =
+    json.array(accounts, fn(account) {
+      json.object([
+        #("pubkey", json.string(account.pubkey)),
+        #("npub", json.string(account.npub)),
+        #("label", json.string(account.label)),
       ])
     })
+    |> json.to_string
   config_entries(config)
-  |> list.append([#(dynamic.string("Accounts"), dynamic.list(account_maps))])
+  |> list.append([
+    #(dynamic.string("Accounts"), dynamic.string(accounts_json)),
+  ])
   |> dynamic.properties
 }

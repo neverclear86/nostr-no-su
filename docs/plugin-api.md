@@ -223,7 +223,7 @@ PLUGIN_<NAME>_<KEY>=<値>
 ```
 
 - `<NAME>` は `plugin_name/0` の値を大文字にし、`[A-Z0-9]` 以外の文字を `_` に置き換えたものである。`file_logger` なら `PLUGIN_FILE_LOGGER_` が接頭辞になる。
-- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。管理 UI のページと実行の呼び出し（第 13 章）に渡す map だけは、これに加えて予約キー `<<"Accounts">>` を持つ。キーを小文字にする規則があるため、大文字を含むこのキーが環境変数から作られることはない。
+- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。管理 UI のページと実行の呼び出し（第 13 章）に渡す map だけは、これに加えて予約キー `<<"Accounts">>` を持つ。キーを小文字にする規則があるため、大文字を含むこのキーが環境変数から作られることはない。この値もアカウントの一覧を JSON にした binary なので、設定 map を binary → binary の辞書として読む書き方はそのまま通る。
 
 ```sh
 PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
@@ -251,7 +251,7 @@ PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
 
 ### 6.3 受け取り方
 
-設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（登録アカウントの一覧）が加わる。
+設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（値はアカウントの一覧を JSON にした文字列）が加わる。
 
 | エクスポート | 本体の挙動 |
 | --- | --- |
@@ -586,7 +586,11 @@ plugin_page_content(<<"status">>) ->
 
 Gleam の実装例は `plugins-src/event_logger/src/event_logger/page.gleam` にあり、秘密のマスク（第 13.4 節）の実例でもある。
 
-`plugin_page_content` と `plugin_page_action` に渡す設定 map には、これまでの環境変数由来のキーに加えて予約キー `Accounts` が入る。値はバンカーに登録したアカウントごとの map（`pubkey`・`npub`・`label`、すべて binary）のリストで、登録が 0 件なら空リストである。このキーは `plugin_pages` と `plugin_children` の呼び出しには渡らない。
+`plugin_page_content` と `plugin_page_action` に渡す設定 map には、これまでの環境変数由来のキーに加えて予約キー `Accounts` が入る。値はバンカーに登録したアカウントの一覧を JSON にした binary で、要素は `pubkey`（16 進）・`npub`・`label`（すべて文字列）のオブジェクトであり、登録が 0 件なら `[]` である。このキーは `plugin_pages` と `plugin_children` の呼び出しには渡らない。読み方は次のとおり（`json` は OTP 27 以降の標準モジュールで、`gleam_json` も同じものを使う）。
+
+```erlang
+Accounts = json:decode(maps:get(<<"Accounts">>, Config)).
+```
 
 ### 13.6 入力と実行（任意エクスポート `plugin_page_action`）
 

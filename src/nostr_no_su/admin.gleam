@@ -717,7 +717,7 @@ fn show_dashboard(
 /// 1. プラグイン名とページのキーの照合（合わなければ 404）。土台では
 ///    `require_method(request, http.Get, …)` が本体の先頭にあるので、これを外して
 ///    照合を先に置く。非 GET で存在しないプラグイン・ページへの要求は 405 から
-///    404 に変わるが、これを固定する既存のテストは無く、検証の手順 6 が新しい側を
+///    404 に変わるが、これを固定する既存のテストは無く、検証の手順 3 が新しい側を
 ///    確かめる。
 /// 2. POST なら `context.plugin_page_action(name, key)` を呼び、`None` なら
 ///    `require_method(request, http.Get, language, theme)` と同じ 405 をここで
