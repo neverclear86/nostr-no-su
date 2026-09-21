@@ -1,5 +1,5 @@
 name = "event_logger"
-version = "0.0.0"
+version = "0.1.0"
 description = "Nostr-no-Su event logger plugin (stores monitored events into Postgres)"
 
 # 本体（nostr_no_su）の VM に読み込まれて動くプラグインなので、Hex には公開しない。
