@@ -321,7 +321,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ## 8. 配置と読み込み
 
-本体は起動時に `PLUGIN_DIR` を 1 度だけ走査し、見つけたプラグインをコードパスへ足して読み込む。`PLUGIN_DIR` が未設定（空文字列を含む）なら外部プラグインの読み込みは行わない。
+本体は起動時に `PLUGIN_DIR` を 1 度だけ走査し、見つけたプラグインをコードパスへ足して読み込む。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、**左から順に**走査する（以下で `<PLUGIN_DIR>` と書くのはそのうちの 1 つである）。`PLUGIN_DIR` が未設定（空文字列や `:` だけの指定を含む）なら外部プラグインの読み込みは行わない。
 
 ### 8.1 受け付けるレイアウト
 
@@ -349,7 +349,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ### 8.3 読み込み順
 
-プラグインの**読み込み**は**モジュール名の昇順**で行い、`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら置かない）は `PLUGIN_DIR` から読み込むのではなく本体に組み込まれており、プラグインの並びの先頭に置かれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
+プラグインの**読み込み**は**`PLUGIN_DIR` に並べた順**にディレクトリーを処理し、ディレクトリーの中では**モジュール名の昇順**で行う。`file:list_dir/1` が返す順序には依存しない。内蔵プラグイン（`console_logger`。`PLUGIN_CONSOLE_LOGGER_ENABLED=false` なら置かない）は `PLUGIN_DIR` から読み込むのではなく本体に組み込まれており、プラグインの並びの先頭に置かれる。ただしイベント処理関数の**呼び出し順はプラグイン間では保証されない**（第 4 章）。
 
 `plugin_name/0` の値が内蔵プラグインや既に読み込んだ外部プラグインと重なった場合、後から来た方は採用されない。名前はダッシュボードとログの識別子なので、内蔵・外部を区別せず一意にする。内蔵プラグインを無効にしても名前 `console_logger` は予約されたままで、外部プラグインは使えない。
 
@@ -358,7 +358,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 BEAM のモジュール名前空間はグローバルで、同じ名前のモジュールは VM 全体で 1 つしか存在できない。本体はプラグインの ebin を `code:add_pathz/1`（**末尾追加**）でコードパスへ足すため、次のようになる。
 
 - **本体と本体の依存が常に優先される。** プラグインが新しい `gleam_stdlib` を同梱しても、使われるのは本体の版である。
-- プラグイン同士では、名前順で先に読み込まれた側が勝つ。
+- プラグイン同士では、先に読み込まれた側（先に並べたディレクトリー、同じディレクトリーなら名前順で先）が勝つ。
 
 食い違いは、`plugin_required_versions/0` で依存の版を宣言すれば読み込み時に弾かれる（第 7 章）。宣言しなければ**読み込み時ではなくイベント処理関数の実行時に `undef` として現れる。** 本体の版に無い関数を呼んだ時点で初めて失敗するので、`plugin.load` の検証では検出できない。したがって **プラグインは Dockerfile と同じ Gleam / OTP でビルドすること。** OTP が違う BEAM は `badfile` で拒否される。
 
@@ -370,15 +370,15 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 
 ### 8.5 読み込みの失敗
 
-**読み込みの失敗で本体の起動は止まらない。** 理由を 1 行出して、そのプラグインだけを無効にする。走査の最後には必ず集計行が出る。
+**読み込みの失敗で本体の起動は止まらない。** 理由を 1 行出して、そのプラグインだけを無効にする。走査したディレクトリーごとに必ず集計行が出る。
 
 | 行 | 意味 |
 | --- | --- |
-| `no PLUGIN_DIR set; external plugins disabled` | `PLUGIN_DIR` が未設定（または空文字列） |
-| `<dir>: cannot read directory (enoent); external plugins disabled` | `PLUGIN_DIR` が読めない（`enotdir` / `eacces` も同じ形） |
+| `no PLUGIN_DIR set; external plugins disabled` | `PLUGIN_DIR` が未設定（空文字列や `:` だけで、有効なパスを 1 つも含まないときも同じ） |
+| `<dir>: cannot read directory (enoent); skipped` | `PLUGIN_DIR` のディレクトリーが読めない（`enotdir` / `eacces` も同じ形）。他のディレクトリーの走査は続く |
 | `<name>: cannot read directory (eacces); skipped` | プラグインのディレクトリーが読めない |
 | `<name>: no ebin directory found (expected <name>/ebin or <name>/*/ebin)` | ディレクトリーはあるが ebin が見つからない |
-| `<dir>: cannot add to code path (bad_directory); skipped` | `PLUGIN_DIR` 自身をコードパスへ足せなかった（ルート直下の `.beam` が対象） |
+| `<dir>: cannot add to code path (bad_directory); skipped` | `PLUGIN_DIR` のディレクトリー自身をコードパスへ足せなかった（ルート直下の `.beam` が対象） |
 | `<name>: cannot add <ebin> to code path (bad_directory); skipped` | プラグインの ebin をコードパスへ足せなかった |
 | `<name>: module <name> is already provided by the host or another plugin; skipped` | エントリーモジュール名が本体か他のプラグインと重なる |
 | `<name>: N module(s) already provided by the host or another plugin are ignored (gleam_stdlib 1.0.3, ...)` | 同梱した依存が影に入った（読み込みは続行する） |

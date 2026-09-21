@@ -1,5 +1,7 @@
 //// 外部プラグインの走査と読み込み。`PLUGIN_DIR` の中身を見て、プラグインの
-//// BEAM をコードパスへ足し、`plugin.load` で検証したものを返す。
+//// BEAM をコードパスへ足し、`plugin.load` で検証したものを返す。`PLUGIN_DIR`
+//// は `:` 区切りで複数のディレクトリーを並べられ、以下の `<PLUGIN_DIR>` は
+//// そのうちの 1 つを指す。
 ////
 //// 受け付けるレイアウトは 3 つで、`gleam export erlang-shipment` の出力を
 //// そのまま置ける（同梱アプリの `.app` ファイルを壊さないよう flatten しない）。
@@ -18,10 +20,12 @@
 //// （末尾追加）なので、本体と本体の依存、そして先に読み込まれたプラグインが常に
 //// 勝つ。エントリーモジュールが既にコードパス上にある候補は、コードパスに何も
 //// 足さずに丸ごと飛ばす。同梱された依存が影に入る場合は、バンドルごとに 1 行
-//// 集約して報告する。報告には提供元のアプリと版を添える。
+//// 集約して報告する。報告には提供元のアプリと版を添える。ディレクトリーを
+//// またいでも同じで、`PLUGIN_DIR` に先に並べたディレクトリーが勝つ。
 ////
-//// **順序。** 読み込みはモジュール名の昇順で行い、`file:list_dir/1` の不定な
-//// 順序に依存しない。ただしコードパスへ足す順序だけは別で、ルート直下の
+//// **順序。** 読み込みはディレクトリーを指定された順に処理し、ディレクトリー
+//// の中ではモジュール名の昇順で行い、`file:list_dir/1` の不定な順序に依存
+//// しない。ただしコードパスへ足す順序だけは別で、ルート直下の
 //// `.beam` が名前順に関係なく常にバンドルより先に入る。なおイベント処理関数の
 //// 実行順はこれとは無関係である。プラグインはそれぞれ独立したランナープロセスで
 //// 動くため、プラグイン間の実行順序は保証されない（`plugin_runner`）。
@@ -50,8 +54,9 @@ pub const log_prefix = "plugin_loader"
 /// `shadow_sources` がすべて挙げる。
 const shadow_sample_size = 3
 
-/// `PLUGIN_DIR` を走査して外部プラグインを読み込む。読み込めたプラグインと、
-/// 起動ログに出す報告行を返す。**失敗しても Error を返さない。**
+/// `PLUGIN_DIR`（`:` 区切りの 1 つ以上のディレクトリー）を左から順に走査して
+/// 外部プラグインを読み込む。読み込めたプラグインと、起動ログに出す報告行を
+/// 返す。**失敗しても Error を返さない。**
 ///
 /// `reserved` には内蔵プラグインの名前を渡す。プラグイン名はダッシュボードと
 /// ログの識別子なので、内蔵と衝突する外部プラグインもここで弾く。
@@ -74,16 +79,53 @@ pub fn load_all(
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
 ) -> #(List(Plugin), List(String)) {
-  case plugin_dir {
-    None -> #([], [
+  let dirs = case plugin_dir {
+    None -> []
+    Some(raw) -> directories(raw)
+  }
+  case dirs {
+    [] -> #([], [
       log.line(log_prefix, "no PLUGIN_DIR set; external plugins disabled"),
     ])
-    Some(raw) -> scan(absolute_path(raw), reserved, plugin_env, call_timeout_ms)
+    _ -> scan_all(dirs, reserved, plugin_env, call_timeout_ms)
   }
 }
 
+/// `PLUGIN_DIR` の生の値を、走査するディレクトリーの絶対パスの一覧にする。
+/// `:` で分け、空の要素を落とす（`:` だけの指定は空リストになる）。
+fn directories(raw: String) -> List(String) {
+  string.split(raw, ":")
+  |> list.filter(fn(part) { part != "" })
+  |> list.map(absolute_path)
+}
+
+/// ディレクトリーを左から順に `scan` へ渡し、読み込めたプラグインと報告行を
+/// 連結して返す。**順番に処理することが重要で**、`reserved` にはその時点で
+/// 読み込めたプラグインの名前を足して渡す。これがないと 2 つ目以降の
+/// ディレクトリーの同名プラグインが採用され、先勝ちが破れる。
+fn scan_all(
+  dirs: List(String),
+  reserved: List(String),
+  plugin_env: Dict(String, String),
+  call_timeout_ms: Int,
+) -> #(List(Plugin), List(String)) {
+  let #(plugins, notes) =
+    list.fold(dirs, #([], []), fn(acc: #(List(Plugin), List(String)), dir) {
+      let #(plugins, notes) = acc
+      let taken =
+        list.append(reserved, list.map(plugins, fn(item) { item.name }))
+      let #(found, dir_notes) = scan(dir, taken, plugin_env, call_timeout_ms)
+      #(
+        list.append(list.reverse(found), plugins),
+        list.append(list.reverse(dir_notes), notes),
+      )
+    })
+  #(list.reverse(plugins), list.reverse(notes))
+}
+
 /// 正規化済みのディレクトリーを走査して読み込む。ディレクトリーそのものが読め
-/// なければ、理由を 1 行報告して読み込みを無効にする（起動は続く）。
+/// なければ、理由を 1 行報告してこのディレクトリーだけを飛ばす（起動と他の
+/// ディレクトリーの走査は続く）。
 fn scan(
   dir: String,
   reserved: List(String),
@@ -94,10 +136,7 @@ fn scan(
     Error(reason) -> #([], [
       log.line(
         log_prefix,
-        dir
-          <> ": cannot read directory ("
-          <> reason
-          <> "); external plugins disabled",
+        dir <> ": cannot read directory (" <> reason <> "); skipped",
       ),
     ])
     Ok(names) -> {
@@ -441,7 +480,7 @@ fn list_dir(path: String) -> Result(List(String), String)
 fn is_directory(path: String) -> Bool
 
 /// 相対パスを絶対パスにする。ログ行とコードパスの内容を食い違わせないため、
-/// `PLUGIN_DIR` は最初に 1 度だけこれを通す。
+/// `PLUGIN_DIR` の各ディレクトリーは `directories` で 1 度だけこれを通す。
 @external(erlang, "nostr_no_su_ffi", "absolute_path")
 fn absolute_path(path: String) -> String
 

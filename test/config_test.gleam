@@ -221,7 +221,8 @@ pub fn load_keeps_secret_file_variables_test() {
 }
 
 /// `PLUGIN_DIR` は未設定・空文字列なら None（外部プラグインの読み込みを無効に
-/// する）。値があればそのまま走査対象のディレクトリーになる。
+/// する）。値があれば素の文字列のまま持ち、`:` の分割と絶対パス化は
+/// `plugin_loader` が行う。
 pub fn plugin_dir_test() {
   assert config_without("PLUGIN_DIR").plugin_dir == None
   assert config_with([#("PLUGIN_DIR", "")]).plugin_dir == None
