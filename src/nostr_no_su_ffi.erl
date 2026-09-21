@@ -153,14 +153,17 @@ charlist_bytes([], Acc) ->
 charlist_bytes(_, _) ->
     error.
 
-%% 値ごとに全出現を `[redacted]` に置き換える。
+%% 値ごとに全出現を `[redacted]` に置き換える。長い値から先に処理する。短い
+%% 値を先に置き換えると、それが別の値の接頭辞であるとき、長い方はもう一致
+%% せず末尾が平文のまま残るためである。
 replace_secrets(Binary, Values) ->
+    Sorted = lists:sort(fun(A, B) -> byte_size(A) >= byte_size(B) end, Values),
     lists:foldl(
         fun(Value, Acc) ->
             binary:replace(Acc, Value, <<"[redacted]">>, [global])
         end,
         Binary,
-        Values).
+        Sorted).
 
 %% 現在時刻の Unix タイムスタンプ（秒）。
 now_seconds() ->

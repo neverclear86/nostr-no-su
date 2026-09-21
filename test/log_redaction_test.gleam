@@ -125,6 +125,12 @@ pub fn replaces_multiple_and_duplicate_secret_values_test() {
     == "a [redacted] b [redacted] c [redacted]"
 }
 
+/// 登録値の一方が他方の接頭辞のとき、短い方が先に一致しても、長い方の出現全体が
+/// `[redacted]` に置き換わる（末尾が平文で残らない）。
+pub fn redacts_the_longer_value_even_when_a_shorter_one_is_its_prefix_test() {
+  assert probe_redact("x abcdef y", ["abc", "abcdef"]) == "x [redacted] y"
+}
+
 /// meta は `=:=` で変わらず、msg だけが置き換わる。
 pub fn leaves_meta_unchanged_and_changes_only_msg_test() {
   assert probe_meta_intact("s3cr3t")
