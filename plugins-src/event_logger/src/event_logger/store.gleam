@@ -18,6 +18,11 @@
 //// 上限の半分に減るまで数えて捨てる。取り出すときに見るので、1 件の挿入の間に
 //// 届いた分だけは上限を超えうる。
 ////
+//// 保存の対象とするアカウントの集合はこのアクターが状態として持つ。移行の後に
+//// DB から読み込み、設定の保存の後は `ReloadMonitored` で読み直す。`persist` は
+//// 保存の前にこの集合で `pubkey` を弾き、集合が空なら絞らずに全アカウントを
+//// 保存する。
+////
 //// テーブルとインデックスは版つきの移行として持ち、`event_logger_schema_version` に
 //// 記録する。記録された版がこのプラグインより新しければ、理由を 1 行出してアクターを
 //// 異常終了させる。待っても直らず、生かしたまま捨て続けると管理 UI に止まっている
@@ -33,6 +38,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/set
 import gleam/string
 import pog
 
@@ -68,6 +74,11 @@ pub const create_pubkey_index = "CREATE INDEX IF NOT EXISTS events_pubkey_create
 /// kind で絞り込むためのインデックス。
 pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events (kind)"
 
+/// 保存の対象とするアカウント。行が 1 件も無ければ絞らず、全アカウントを保存する。
+pub const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
+  pubkey text PRIMARY KEY
+)"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `event_logger_schema_version` に記録する。
 pub type Migration {
@@ -85,6 +96,7 @@ pub const migrations = [
     version: 1,
     statements: [create_events_table, create_pubkey_index, create_kind_index],
   ),
+  Migration(version: 2, statements: [create_monitored_accounts_table]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -115,6 +127,15 @@ pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, 
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
 
+/// 保存の対象とするアカウントの読み込み。
+const select_monitored_sql = "SELECT pubkey FROM monitored_accounts"
+
+/// 保存の対象とするアカウントの入れ替え（`replace_monitored` が使う 1 文目）。
+const delete_monitored_sql = "DELETE FROM monitored_accounts"
+
+/// 保存の対象とするアカウントの 1 件の追加（`replace_monitored` が使う 2 文目）。
+const insert_monitored_sql = "INSERT INTO monitored_accounts (pubkey) VALUES ($1)"
+
 /// `events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
 /// テストできる。
 pub type Row {
@@ -129,6 +150,29 @@ pub type Row {
   )
 }
 
+/// 保存の対象。`AllAccounts` は表の行が 0 件の状態で、絞らずに全部保存する。
+pub type Monitored {
+  AllAccounts
+  OnlyPubkeys(pubkeys: set.Set(String))
+}
+
+/// `monitored_accounts` の行から `Monitored` を作る。行が無ければ `AllAccounts`。
+pub fn monitored_from_rows(rows: List(String)) -> Monitored {
+  case rows {
+    [] -> AllAccounts
+    _ -> OnlyPubkeys(set.from_list(rows))
+  }
+}
+
+/// `pubkey` が保存の対象かどうか。`AllAccounts` は常に対象、`OnlyPubkeys` は
+/// 集合に含まれるかどうかで決める。
+pub fn is_monitored(monitored: Monitored, pubkey: String) -> Bool {
+  case monitored {
+    AllAccounts -> True
+    OnlyPubkeys(pubkeys:) -> set.contains(pubkeys, pubkey)
+  }
+}
+
 /// 保存アクターが受け取るメッセージ。
 pub type Msg {
   /// 保存する 1 行。イベント map からの変換は送り手（使い捨てプロセス）が
@@ -137,14 +181,19 @@ pub type Msg {
   /// スキーマの移行を試みる。初期化時と、保存を止めたあとの再試行タイマーから
   /// 送られる。
   EnsureSchema
+  /// 保存の対象とするアカウントを DB から読み直す。設定の保存の後に届く。
+  ReloadMonitored
+  /// 今の保存の対象を答える。設定ページの描画に答える。
+  GetMonitored(reply_to: Subject(Monitored))
 }
 
-/// 保存アクターが DB に対して行う 2 つの操作。本番は `postgres/1` が pog の
+/// 保存アクターが DB に対して行う 3 つの操作。本番は `postgres/1` が pog の
 /// プールから作り、テストは遅い DB や失敗する DB を模した関数を渡す。
 pub type Database {
   Database(
     ensure_schema: fn() -> Result(Nil, SchemaError),
     insert: fn(Row) -> Result(Int, pog.QueryError),
+    load_monitored: fn() -> Result(List(String), pog.QueryError),
   )
 }
 
@@ -168,6 +217,7 @@ type State {
     self: Subject(Msg),
     max_queue_len: Int,
     availability: Availability,
+    monitored: Monitored,
   )
 }
 
@@ -175,7 +225,11 @@ type State {
 /// 名前を指し続ける。
 pub fn postgres(pool: Name(pog.Message)) -> Database {
   let db = pog.named_connection(pool)
-  Database(ensure_schema: fn() { ensure_schema(db) }, insert: insert(db, _))
+  Database(
+    ensure_schema: fn() { ensure_schema(db) },
+    insert: insert(db, _),
+    load_monitored: fn() { load_monitored(db) },
+  )
 }
 
 /// 保存アクターを起動する。`max_queue_len` は保存を待つメッセージの上限で、
@@ -207,19 +261,22 @@ fn initialise(
     self: self,
     max_queue_len: max_queue_len,
     availability: Unavailable(dropped: 0, reported: False),
+    monitored: AllAccounts,
   )
   |> actor.initialised
   |> actor.returning(self)
   |> Ok
 }
 
-/// スキーマを用意するか、イベントを 1 件保存する。スキーマの版がこのプラグインより
-/// 新しければ、理由を 1 行出してアクターを異常終了させる。
+/// スキーマを用意するか、イベントを 1 件保存するか、監視対象を読み直すか、今の
+/// 監視対象を答える。スキーマの版がこのプラグインより新しければ、理由を 1 行出して
+/// アクターを異常終了させる。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     EnsureSchema ->
       case prepare(state) {
-        Ok(availability) -> actor.continue(State(..state, availability:))
+        Ok(#(availability, monitored)) ->
+          actor.continue(State(..state, availability:, monitored:))
         Error(reason) -> {
           log.write(log.Error, reason)
           actor.stop_abnormal(reason)
@@ -229,18 +286,44 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(
         State(..state, availability: persist(state, row, message_queue_len())),
       )
+    ReloadMonitored ->
+      case state.database.load_monitored() {
+        Ok(rows) ->
+          actor.continue(State(..state, monitored: monitored_from_rows(rows)))
+        Error(error) -> {
+          log.write(
+            log.Warning,
+            "monitored accounts could not be reloaded: "
+              <> string.inspect(error),
+          )
+          actor.continue(state)
+        }
+      }
+    GetMonitored(reply_to:) -> {
+      process.send(reply_to, state.monitored)
+      actor.continue(state)
+    }
   }
 }
 
-/// スキーマを最新の版に移行し、次の可用性を返す。クエリーの失敗ではクラッシュせず、
-/// 保存を止めたまま再試行を予約する（DB がアプリより後に立ち上がる、あるいは一時的に
-/// 落ちている状況が普通にあるため）。版がこのプラグインより新しければ、待っても
-/// 直らないので止める理由を返す。
-fn prepare(state: State) -> Result(Availability, String) {
+/// スキーマを最新の版に移行し、次の可用性と監視対象を返す。監視対象の読み込みが
+/// 失敗したときもスキーマの失敗と同じく保存を止めて再試行する。クエリーの失敗では
+/// クラッシュせず、保存を止めたまま再試行を予約する（DB がアプリより後に立ち上がる、
+/// あるいは一時的に落ちている状況が普通にあるため）。版がこのプラグインより新しければ、
+/// 待っても直らないので止める理由を返す。
+fn prepare(state: State) -> Result(#(Availability, Monitored), String) {
   case state.database.ensure_schema() {
-    Ok(Nil) -> Ok(resume(state.availability))
+    Ok(Nil) ->
+      case state.database.load_monitored() {
+        Ok(rows) -> Ok(#(resume(state.availability), monitored_from_rows(rows)))
+        Error(error) ->
+          Ok(#(
+            suspend(state, error, dropped(state.availability)),
+            state.monitored,
+          ))
+      }
     Error(SchemaQueryFailed(error)) ->
-      Ok(suspend(state, error, dropped(state.availability)))
+      Ok(#(suspend(state, error, dropped(state.availability)), state.monitored))
     Error(SchemaTooNew(found:, supported:)) ->
       Error(
         "database schema version "
@@ -254,36 +337,41 @@ fn prepare(state: State) -> Result(Availability, String) {
 
 /// 1 行を保存する。`queue_len` はこの行を取り出したあとに残っている未処理の
 /// メッセージ数である。保存を止めている間と、積まれすぎている間は数えて捨てる
-/// だけにして、DB を待たずにメールボックスを減らす。
+/// だけにして、DB を待たずにメールボックスを減らす。対象外のイベントは保存も
+/// せず、破棄の件数にも数えない。
 fn persist(state: State, row: Row, queue_len: Int) -> Availability {
-  case state.availability {
-    Unavailable(dropped:, reported:) ->
-      Unavailable(dropped: dropped + 1, reported:)
-    // 上限の半分まで減るまで捨て続ける。上限そのものを復帰条件にすると、
-    // 境界で捨て始めと再開のログが 1 件ごとに交互に出る。
-    Overloaded(dropped:) if queue_len > state.max_queue_len / 2 ->
-      Overloaded(dropped: dropped + 1)
-    Overloaded(dropped:) -> {
-      log.write(
-        log.Notice,
-        "caught up; dropped "
-          <> int.to_string(dropped)
-          <> " events while overloaded",
-      )
-      write(state, row)
-    }
-    Ready if queue_len > state.max_queue_len -> {
-      log.write(
-        log.Warning,
-        "too slow: "
-          <> int.to_string(queue_len)
-          <> " events queued (limit "
-          <> int.to_string(state.max_queue_len)
-          <> "); dropping until it catches up",
-      )
-      Overloaded(dropped: 1)
-    }
-    Ready -> write(state, row)
+  case is_monitored(state.monitored, row.pubkey) {
+    False -> state.availability
+    True ->
+      case state.availability {
+        Unavailable(dropped:, reported:) ->
+          Unavailable(dropped: dropped + 1, reported:)
+        // 上限の半分まで減るまで捨て続ける。上限そのものを復帰条件にすると、
+        // 境界で捨て始めと再開のログが 1 件ごとに交互に出る。
+        Overloaded(dropped:) if queue_len > state.max_queue_len / 2 ->
+          Overloaded(dropped: dropped + 1)
+        Overloaded(dropped:) -> {
+          log.write(
+            log.Notice,
+            "caught up; dropped "
+              <> int.to_string(dropped)
+              <> " events while overloaded",
+          )
+          write(state, row)
+        }
+        Ready if queue_len > state.max_queue_len -> {
+          log.write(
+            log.Warning,
+            "too slow: "
+              <> int.to_string(queue_len)
+              <> " events queued (limit "
+              <> int.to_string(state.max_queue_len)
+              <> "); dropping until it catches up",
+          )
+          Overloaded(dropped: 1)
+        }
+        Ready -> write(state, row)
+      }
   }
 }
 
@@ -469,6 +557,34 @@ pub fn insert(db: pog.Connection, row: Row) -> Result(Int, pog.QueryError) {
   |> pog.parameter(pog.text(row.sig))
   |> pog.execute(on: db)
   |> result.map(fn(returned) { returned.count })
+}
+
+/// 保存の対象とするアカウントの pubkey の一覧を読み込む。
+pub fn load_monitored(
+  db: pog.Connection,
+) -> Result(List(String), pog.QueryError) {
+  pog.query(select_monitored_sql)
+  |> pog.returning(decode.at([0], decode.string))
+  |> pog.execute(on: db)
+  |> result.map(fn(returned) { returned.rows })
+}
+
+/// 保存の対象とするアカウントを `pubkeys` に入れ替える。全部消してから 1 件ずつ
+/// 入れ直すだけで、トランザクションは使わない（`ensure_schema` と同じく、
+/// `pog.transaction` は 5 秒で打ち切られるため）。消してから書き直すので、
+/// 途中で失敗すると行が減ったままになる。次の保存で直る。
+pub fn replace_monitored(
+  db: pog.Connection,
+  pubkeys: List(String),
+) -> Result(Nil, pog.QueryError) {
+  use _deleted <- result.try(
+    pog.query(delete_monitored_sql) |> pog.execute(on: db),
+  )
+  use pubkey <- list.try_each(pubkeys)
+  pog.query(insert_monitored_sql)
+  |> pog.parameter(pog.text(pubkey))
+  |> pog.execute(on: db)
+  |> result.replace(Nil)
 }
 
 /// プラグイン境界のイベント map（binary キーの Erlang map）を挿入する 1 行に

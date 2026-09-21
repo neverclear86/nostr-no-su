@@ -6,10 +6,14 @@
 //// `PLUGIN_DIR` の下へ置くこともできる。置き方とビルド手順は同ディレクトリーの
 //// README を参照すること。
 ////
-//// **設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの接頭辞に
-//// 一致する環境変数を集め、`database_url` をキーとする map として
+//// **接続先の設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの
+//// 接頭辞に一致する環境変数を集め、`database_url` をキーとする map として
 //// `plugin_children/1` と `plugin_page_content/2` に渡す。未設定・不正なら
-//// `{error, Reason}` を返し、このプラグインだけを読み込ませない。
+//// `{error, Reason}` を返し、このプラグインだけを読み込ませない。保存の対象と
+//// するアカウントは環境変数ではなく設定ページから決め、プラグイン自身の DB に
+//// 持つ。設定 map は `plugin_page_action/3` にも渡る。管理 UI のページと実行の
+//// 呼び出しに渡る map には、本体がこれに加えて予約キー `Accounts`（登録アカウント
+//// の一覧を JSON にした文字列）を入れる（`docs/plugin-api.md` 第 13.5 節）。
 ////
 //// 押さえておくべき点が 4 つある。
 ////
@@ -28,7 +32,8 @@
 ////   焼き込む。どちらの子が再起動しても宛先は変わらず、管理 UI のページも同じ
 ////   名前で生存を引ける（`docs/plugin-api.md` 第 5.3 節）。
 //// - **`plugin_page_content/2` は期限内に戻らなければならない。** DB へ問い合わせ
-////   ず、外から観測できる値（登録名の生存、未処理メッセージ数）だけを返す。
+////   ず、外から観測できる値（登録名の生存、未処理メッセージ数、保存アクターが
+////   持つ監視対象の集合）だけを返す。
 
 import event_logger/page
 import event_logger/store
@@ -53,6 +58,9 @@ const store_wait_ms = 1000
 
 /// 保存アクターの登録名を問い合わせ直す間隔。
 const store_poll_ms = 10
+
+/// 設定ページが保存アクターの答えを待つ上限。ページの期限（既定 5 秒）に収める。
+const monitored_reply_ms = 1000
 
 /// このプラグインが実装するプラグイン API のバージョン。
 pub fn plugin_api_version() -> Int {
@@ -205,10 +213,11 @@ pub fn plugin_pages() -> Dynamic {
 }
 
 /// 管理 UI のページの記述。本体は `/1` より `/2` を優先し、ページの表示のたびに
-/// これを呼んでページの `key` と、`database_url` を含む設定 map（`plugin_children/1`
-/// と同じ形）を渡す。期限（既定 5 秒）を超えると 503 になるので、DB へは問い合わせ
-/// ず、登録名の生存と未処理メッセージ数だけを観測する。`{error, Reason}` を返す
-/// 約束は無い（`docs/plugin-api.md` 第 13.4 節）。
+/// これを呼んでページの `key` と、`database_url` と `Accounts` を含む設定 map
+/// （`plugin_children/1` と同じ形に `Accounts` を足したもの）を渡す。期限
+/// （既定 5 秒）を超えると 503 になるので、DB へは問い合わせず、登録名の生存と
+/// 未処理メッセージ数、保存アクターが持つ監視対象の集合だけを観測する。
+/// `{error, Reason}` を返す約束は無い（`docs/plugin-api.md` 第 13.4 節）。
 pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
   let page_key = decode.run(key, decode.string) |> result.unwrap("")
   let settings =
@@ -217,10 +226,97 @@ pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
   let database =
     dict.get(settings, "database_url")
     |> result.map(page.masked_url(pool_name(), _))
-  page.content(page_key, database, pool_size, [
-    process_status("connection pool", pool_name_label, pool_name()),
-    process_status("store actor", store_name_label, store_name()),
-  ])
+  page.content(
+    page_key,
+    database,
+    pool_size,
+    [
+      process_status("connection pool", pool_name_label, pool_name()),
+      process_status("store actor", store_name_label, store_name()),
+    ],
+    accounts_from_config(settings),
+    monitored_state(),
+  )
+}
+
+/// 設定 map の予約キー `Accounts`（`docs/plugin-api.md` 第 13.5 節）から登録
+/// アカウントの一覧を読む。キーが無い・JSON として読めなければ `[]`。
+fn accounts_from_config(
+  settings: dict.Dict(String, String),
+) -> List(page.Account) {
+  dict.get(settings, "Accounts")
+  |> result.map(page.accounts)
+  |> result.unwrap([])
+}
+
+/// 保存アクターへ問い合わせた今の監視対象。宛先が居なければ問い合わせない
+/// （`monitored_reply_ms` の期限で待っても戻らなければ `Error(Nil)`）。
+fn monitored_state() -> Result(store.Monitored, Nil) {
+  case process.named(store_name()) {
+    Error(Nil) -> Error(Nil)
+    Ok(_pid) -> {
+      let reply = process.new_subject()
+      process.send(
+        process.named_subject(store_name()),
+        store.GetMonitored(reply_to: reply),
+      )
+      process.receive(reply, monitored_reply_ms)
+    }
+  }
+}
+
+/// `settings` ページのフォームの送信を受け取る。`key` が `settings` でなければ
+/// `error_tuple("unknown page")`。戻り値は `ok` か `{error, Reason}` である
+/// （`docs/plugin-api.md` 第 13.6 節）。全アカウントを選んだ送信は行を 0 件に
+/// して保存し（絞らない状態を表す）、0 件の送信は拒否する。
+///
+/// 保存の問い合わせはこの呼び出しのプロセスで行うので、DB が遅い・落ちている
+/// ときは期限（既定 5 秒）の超過か問い合わせの失敗になり、どちらも 503 になる
+/// （`docs/plugin-api.md` 第 13.1 節）。
+pub fn plugin_page_action(
+  key: Dynamic,
+  values: Dynamic,
+  config: Dynamic,
+) -> Dynamic {
+  let page_key = decode.run(key, decode.string) |> result.unwrap("")
+  case page_key {
+    "settings" -> save_monitored(values, config)
+    _ -> error_tuple("unknown page")
+  }
+}
+
+/// 送信を正規化し、保存アクターの DB へ書き込む。成功すれば保存アクターへ
+/// `ReloadMonitored` を送って読み直させる。
+fn save_monitored(values: Dynamic, config: Dynamic) -> Dynamic {
+  let values =
+    decode.run(values, decode.dict(decode.string, decode.string))
+    |> result.unwrap(dict.new())
+  let settings =
+    decode.run(config, decode.dict(decode.string, decode.string))
+    |> result.unwrap(dict.new())
+  case page.selected_pubkeys(accounts_from_config(settings), values) {
+    Error(reason) -> error_tuple(reason)
+    Ok(pubkeys) ->
+      case store.replace_monitored(pog.named_connection(pool_name()), pubkeys) {
+        Error(error) ->
+          error_tuple(
+            "could not save monitored accounts: " <> string.inspect(error),
+          )
+        Ok(Nil) -> {
+          reload_monitored()
+          ok_atom()
+        }
+      }
+  }
+}
+
+/// 保存アクターが生きていれば `ReloadMonitored` を送って読み直させる。
+fn reload_monitored() -> Nil {
+  case process.named(store_name()) {
+    Ok(_pid) ->
+      process.send(process.named_subject(store_name()), store.ReloadMonitored)
+    Error(Nil) -> Nil
+  }
 }
 
 /// 登録名 1 つの観測結果。生きていれば未処理メッセージ数も添える。
@@ -247,6 +343,10 @@ fn child_specs(config: pog.Config, pool: Name(pog.Message)) -> Dynamic
 /// 設定を拒否する `{error, Reason}`。
 @external(erlang, "event_logger_ffi", "error_tuple")
 fn error_tuple(reason: String) -> Dynamic
+
+/// 実行の成功を表す `ok`。
+@external(erlang, "event_logger_ffi", "ok_atom")
+fn ok_atom() -> Dynamic
 
 /// `pgo` とその依存アプリケーションを起動する。冪等。
 @external(erlang, "event_logger_ffi", "ensure_pgo_started")

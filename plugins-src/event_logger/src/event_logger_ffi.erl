@@ -5,7 +5,7 @@
 %% atom:create/1 で引く）ため、map の組み立てはこちらに置く。
 -module(event_logger_ffi).
 -export([child_specs/2, error_tuple/1, identity/1, ensure_pgo_started/0,
-         message_queue_len/0]).
+         message_queue_len/0, ok_atom/0]).
 
 %% 接続プールと保存アクターの子仕様。Config は呼び出し側が 1 度だけ作ったものを
 %% 引数に焼き込み、プール名は event_logger:pool_name/0 の固定の atom を受け取る
@@ -48,3 +48,7 @@ ensure_pgo_started() ->
 message_queue_len() ->
     {message_queue_len, Len} = erlang:process_info(self(), message_queue_len),
     Len.
+
+%% 実行の成功を表す戻り値。Gleam からは atom をそのまま Dynamic として返せないため、
+%% ここで作る。
+ok_atom() -> ok.
