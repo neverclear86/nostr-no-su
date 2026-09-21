@@ -17,6 +17,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/relay_pages
+import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -277,6 +278,56 @@ pub fn pages(language: i18n.Language) -> List(String) {
         "",
         None,
       ),
+      // 無宣言（既定）
+      session_pages.session_permissions_page(
+        language,
+        view.System,
+        Ok(dashboard.SessionRow(
+          signer: "0123",
+          client: "4567",
+          perms: "",
+          created_at: 1000,
+          last_used_at: 1000,
+        )),
+        None,
+        None,
+      ),
+      // 宣言あり、そのほかの宣言も含む
+      session_pages.session_permissions_page(
+        language,
+        view.System,
+        Ok(dashboard.SessionRow(
+          signer: "0123",
+          client: "4567",
+          perms: "sign_event:1,nip04_encrypt",
+          created_at: 1000,
+          last_used_at: 1000,
+        )),
+        None,
+        None,
+      ),
+      // 保存の失敗（409 の描き直し）
+      session_pages.session_permissions_page(
+        language,
+        view.System,
+        Ok(dashboard.SessionRow(
+          signer: "0123",
+          client: "4567",
+          perms: "sign_event",
+          created_at: 1000,
+          last_used_at: 1000,
+        )),
+        Some("sign_event"),
+        Some(reason),
+      ),
+      // 一覧を得られない
+      session_pages.session_permissions_page(
+        language,
+        view.System,
+        Error(reason),
+        None,
+        None,
+      ),
     ],
     list.map(
       [
@@ -483,6 +534,28 @@ pub fn components(language: i18n.Language) -> List(String) {
       fn(tone) { element.to_string(view.status_badge(tone, "text")) },
     ),
     [element.to_string(view.count_pill(3))],
+    [
+      element.to_string(
+        view.checkbox_row(
+          "name",
+          view.key_icon(),
+          "caption",
+          view.hint("description"),
+          True,
+          [view.status_badge(view.Success, "badge")],
+        ),
+      ),
+      element.to_string(
+        view.checkbox_row(
+          "name",
+          view.key_icon(),
+          "caption",
+          view.hint("description"),
+          False,
+          [],
+        ),
+      ),
+    ],
     [
       element.to_string(
         view.details_panel("summary", [

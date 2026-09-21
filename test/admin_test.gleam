@@ -1,7 +1,7 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
-//// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消し、
-//// クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの追加・編集・
-//// 削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
+//// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消しと
+//// 権限の編集、クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの
+//// 追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/erlang/process
 
@@ -23,12 +23,12 @@ import nostr_no_su/task
 import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
-  AccountsReloaded, Approved, ClientConnectRequested, Denied, Reenabled,
-  RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path, auth_uri,
-  client, context, failing_context, get, header, in_japanese, label,
-  not_answering_context, password, post, post_form, reporting_context,
-  session_not_approved, signer, signer_npub, spec_nsec, test_context, token,
-  unavailable, with_accounts, with_credentials,
+  AccountsReloaded, Approved, ClientConnectRequested, Denied, PermissionsSaved,
+  Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path,
+  auth_uri, client, context, declared_client, failing_context, get, header,
+  in_japanese, label, not_answering_context, password, post, post_form,
+  reporting_context, session_not_approved, signer, signer_npub, spec_nsec,
+  test_context, token, unavailable, with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -163,6 +163,131 @@ pub fn revoke_without_fields_is_a_bad_request_test() {
 pub fn revoke_rejects_other_methods_test() {
   let response = get(context(), "/sessions/revoke")
   assert response.status == 405
+}
+
+/// GET は編集画面を 200 で返し、フォームと今の権限のチップを含む。
+pub fn session_permissions_page_is_shown_test() {
+  let response =
+    get(context(), dashboard.session_permissions_path(signer, declared_client))
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
+  assert string.contains(body, "sign_event:1")
+  assert string.contains(body, "nip04_encrypt")
+}
+
+/// 承認済みの一覧に無い組は GET も POST も 404。
+pub fn unknown_session_permissions_are_not_found_test() {
+  let path = dashboard.session_permissions_path(signer, unknown_client)
+  assert get(context(), path).status == 404
+  assert post_form(context(), path, [#(dashboard.sign_event_field, "on")]).status
+    == 404
+}
+
+/// POST は 303 でダッシュボードへ戻り、Context に報告された perms はチェック、
+/// 未チェックのときの kinds、その他の宣言の順に繋いだ文字列になる。
+pub fn session_permissions_are_saved_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.sign_event_field, "on"),
+        #(dashboard.nip44_encrypt_field, "on"),
+      ],
+    )
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "sign_event,nip44_encrypt",
+    ))
+}
+
+/// フォームの隠し欄に残る未知の宣言（`nip04_encrypt`）は、保存の値の末尾に残る。
+pub fn session_permissions_keep_unknown_declarations_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.sign_event_field, "on"),
+        #(dashboard.perms_other_field, "nip04_encrypt"),
+      ],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "sign_event,nip04_encrypt",
+    ))
+}
+
+/// チェックも kinds も無い POST は 400 で描き直す。
+pub fn empty_session_permissions_are_rejected_test() {
+  let response =
+    post_form(
+      context(),
+      dashboard.session_permissions_path(signer, declared_client),
+      [],
+    )
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.SelectAtLeastOne),
+  )
+}
+
+/// `kinds` に整数でない項目がある POST は 400。
+pub fn invalid_kind_list_is_rejected_test() {
+  let response =
+    post_form(
+      context(),
+      dashboard.session_permissions_path(signer, declared_client),
+      [#(dashboard.perms_kinds_field, "abc")],
+    )
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.InvalidKindList),
+  )
+}
+
+/// 一覧を得られない GET は 200 で、フォームを出さず理由を出す。
+pub fn session_permissions_show_the_reason_when_sessions_are_unavailable_test() {
+  let response =
+    get(
+      admin.Context(..context(), sessions: fn() { Error(unavailable) }),
+      dashboard.session_permissions_path(signer, declared_client),
+    )
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, unavailable)
+  assert !string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
+}
+
+/// 書き込まれていないことが確定した失敗（`SessionNotApplied`）は 409 でフォームを
+/// 描き直す。
+pub fn session_permissions_are_not_saved_when_the_bunker_did_not_apply_test() {
+  let failing =
+    admin.Context(..context(), update_perms: fn(_signer, _client, _perms) {
+      Error(bunker.SessionNotApplied("not applied reason"))
+    })
+  let response =
+    post_form(
+      failing,
+      dashboard.session_permissions_path(signer, declared_client),
+      [#(dashboard.sign_event_field, "on")],
+    )
+  assert response.status == 409
+  let body = simulate.read_body(response)
+  assert string.contains(body, "not applied reason")
+  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
 }
 
 /// 再有効化フォームは Context の `reenable_plugin` を名前で呼び、ダッシュボードへ
@@ -523,6 +648,8 @@ pub fn session_change_lines_name_the_signer_and_the_client_test() {
     == "denied the connection of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.SessionRevoked, signer, client)
     == "revoked the session of client " <> client <> " to signer " <> signer
+  assert admin.session_change_line(admin.PermissionsSaved, signer, client)
+    == "updated the permissions of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.ClientConnected, signer, client)
     == "connected client " <> client <> " to signer " <> signer
 }

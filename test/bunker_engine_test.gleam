@@ -721,6 +721,66 @@ pub fn revoke_of_an_unknown_session_is_an_error_test() {
     == Error(Nil)
 }
 
+/// `set_perms` は承認済みセッションの `perms` を差し替え、`UpdateSessionPerms` を
+/// 書き込みとして返す。
+pub fn set_perms_replaces_the_permissions_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let assert Ok(#(state, write)) =
+    engine.set_perms(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event:1,sign_event:10002",
+    )
+  assert write
+    == engine.UpdateSessionPerms(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "sign_event:1,sign_event:10002",
+    )
+  let assert [session] = engine.sessions(state)
+  assert session.perms == "sign_event:1,sign_event:10002"
+}
+
+/// 承認されていない組の `set_perms` は `Error(Nil)`。
+pub fn set_perms_of_an_unapproved_pair_is_an_error_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  assert engine.set_perms(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event",
+    )
+    == Error(Nil)
+}
+
+/// `set_perms` も `connect` と同じくトークンの境で `max_perms_bytes` に切る。
+pub fn set_perms_bounds_the_permissions_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
+  let over_limit = long_prefix <> ",sign_event:12"
+  let assert Ok(#(state, write)) =
+    engine.set_perms(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      over_limit,
+    )
+  assert write
+    == engine.UpdateSessionPerms(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: long_prefix,
+    )
+  let assert [session] = engine.sessions(state)
+  assert session.perms == long_prefix
+}
+
 /// 承認されていないクライアントの `logout` も ack を返し、他のセッションを残す。
 /// NIP-46 との相互運用のための挙動を固定する（`execute` の Doc コメントを参照）。
 pub fn logout_without_a_session_is_acknowledged_test() {
