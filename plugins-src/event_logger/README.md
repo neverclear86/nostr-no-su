@@ -8,6 +8,8 @@
 
 ## ビルド
 
+このプラグインは docker イメージに同梱されており（`/app/plugins/event_logger`）、同梱版を使うだけならビルドは要らない。以下は改造版のための手順である。
+
 <!-- この節の最初の sh ブロックは、CI（.github/workflows/ci.yml の plugin-readme-build）がリポジトリーのルートでそのまま実行する。 -->
 
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
@@ -40,7 +42,7 @@ plugins/event_logger/pog/ebin/…  pgo/ebin/…  pg_types/ebin/…
 plugins/event_logger/entrypoint.sh                          -- ローダーは黙って無視する
 ```
 
-エントリーモジュール名はディレクトリー名と一致させる（`plugins/event_logger` → モジュール `event_logger`）。同梱の `docker-compose.yml` は `./plugins` を `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡す。コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限にしておくこと。
+エントリーモジュール名はディレクトリー名と一致させる（`plugins/event_logger` → モジュール `event_logger`）。同梱の `docker-compose.yml` は `./plugins` を `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡す。同名のプラグインはイメージの `/app/plugins` の同梱版が勝つので、ここへ置いた改造版を読ませるには `PLUGIN_DIR=/plugins` を渡す。コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限にしておくこと。
 
 ## 設定
 
@@ -84,7 +86,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 | 旧 | 新 |
 | --- | --- |
 | `DATABASE_URL=postgres://…` | `PLUGIN_EVENT_LOGGER_DATABASE_URL=postgres://…` |
-| `DATABASE_URL=`（空）で保存を無効化 | **プラグインを置かないことが無効化である** |
+| `DATABASE_URL=`（空）で保存を無効化 | **同梱版を読み込ませないことが無効化である（`PLUGIN_DIR=/plugins` か `PLUGIN_DIR=`）** |
 
 **DB はそのまま使える。** 旧構成で作られた `events` テーブルと 2 つのインデックスは、現在の移行 1 と同じ DDL で作られている。移行の文はすべて `IF NOT EXISTS` なので、旧構成の DB を `PLUGIN_EVENT_LOGGER_DATABASE_URL` に向けても行と定義は触られないまま `event_logger_schema_version` に版 1 が記録される（確認は「確認」の節の `schema ready` の行、版の仕組みは同じ文書の「スキーマの版」にある）。
 
@@ -142,10 +144,11 @@ docker compose logs nostr-no-su | grep plugin_loader
 
 ```
 [plugin_loader] event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_stdlib 1.0.3, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
-[plugin_loader] loaded 1 plugin(s) from /plugins: event_logger
+[plugin_loader] loaded 1 plugin(s) from /app/plugins: event_logger
+[plugin_loader] loaded no plugins from /plugins
 ```
 
-影の件数が数百なら Elixir が混入している（ローカルでビルドしている）。上のビルド手順で作り直すこと。
+影の件数が数百なら Elixir が混入している（ローカルでビルドしている）。上のビルド手順で作り直すこと。上は `./plugins` が空のとき（同梱版だけ）の出力である。改造版を `./plugins` に置いて `PLUGIN_DIR=/plugins` を渡した構成では、1 行目が出ず `[plugin_loader] loaded 1 plugin(s) from /plugins: event_logger` になる。`PLUGIN_DIR` を既定のまま改造版を置くと、同梱版が勝って `[plugin_loader] event_logger: module event_logger is already provided by the host or another plugin; skipped` と `[plugin_loader] loaded no plugins from /plugins (1 skipped)` が出る。
 
 ```sh
 docker compose logs nostr-no-su | grep -e '\[event_logger\]' -e '\[plugin event_logger\]'

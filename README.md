@@ -12,7 +12,7 @@ NIP-46 リモート署名バンカーが動作する。クライアント（nsec
 - **暗号**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を自前実装（公式テストベクターに一致）。プリミティブは OTP の `crypto`（OpenSSL）を利用し、NIF は不要
 - **イベント監視**: 複数リレーへ同時接続（管理 UI のリレーの一覧（DB）で監視用に登録したもの）。監視するのはバンカーに登録した全アカウントが作ったイベントで、管理 UI でのアカウントの追加と削除は再起動なしで購読に反映する。ephemeral イベント（kind 20000〜29999。バンカーの NIP-46 の通信を含む）はプラグインに渡さない。登録アカウント以外のイベントを受け取るプラグインは想定しない。NIP-01 のコーデック、イベントの ID と署名の検証（リレーの接続ごとのプロセスで行う）、リレー横断の重複排除、プラグイン機構（[プラグイン API v1](docs/plugin-api.md)）、プラグインの障害隔離、コンソールロガー、`PLUGIN_DIR` からの外部プラグイン読み込み
 - 接続が切れたリレーは個別に自動再接続（セッション状態は再接続をまたいで保持。基準の間隔は 5 秒から倍に延び 5 分で頭打ちで、実際の間隔はそれを ±20% ずらす）
-- **イベントロガー**: 外部プラグイン `event_logger` を `PLUGIN_DIR` に置き、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。設定と保存の状態は管理 UI の `/plugins/event_logger/settings` で見られる（パスワードは伏せて表示する）。ソースとビルド手順は `plugins-src/event_logger/`
+- **イベントロガー**: 外部プラグイン `event_logger` は docker イメージに同梱されており、`PLUGIN_EVENT_LOGGER_DATABASE_URL` を設定すると、監視で受信したイベントを `events` テーブルへ保存する（NIP-01 の全フィールド + `tags` は jsonb + 取り込み時刻）。同じイベントを複数のリレーから受け取っても 1 行だけ残る。設定と保存の状態は管理 UI の `/plugins/event_logger/settings` で見られる（パスワードは伏せて表示する）。ソースと、改造版を自分でビルドする手順は `plugins-src/event_logger/`
 - **管理 UI**: `http://127.0.0.1:8080/` でアカウントとその `bunker://` 接続 URI、リレーの接続状態、承認待ちの接続要求（承認・拒否）、承認済みセッション（取り消し可）、有効なプラグインとその状態（無効なら再有効化可）を確認できる。アカウントの登録（nsec の入力とサーバー側での鍵の生成）、削除、接続 secret のローテーション、ラベルの編集、管理パスワードの再入力による秘密鍵の再表示、リレーの追加、用途の編集、削除もここで行う。HTTP Basic 認証（ユーザー名 `admin`）で、既定はループバックのみで待ち受ける
 - **スーパービジョンツリー**: 全プロセスを `static_supervisor` の下で管理。バンカー actor や重複排除ディスパッチャーが落ちても再起動し、後続のリレー接続も張り直されて配線が復旧する
 
@@ -177,7 +177,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 **`PLUGIN_DIR` に置いた BEAM は本体と同じ VM・同じ権限で動く。サンドボックスは無く、秘密鍵を持つプロセスにも到達できる（`sys:get_state/1`）。信頼できるものだけを置くこと。** 第三者から受け取ったプラグインはソースを読んでから置く。
 
-外部プラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）を参照。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、左から順に読む。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
+同梱の `event_logger` はイメージの `/app/plugins` に入っており、自作のプラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](docs/plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）を参照。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、左から順に読む。`./plugins` に同梱と同じ名前のプラグインを置くと、先に並べた `/app/plugins` の同梱版が勝つので、改造版を試すときは `PLUGIN_DIR=/plugins` を渡して同梱版を外す。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
 
 プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml` に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](docs/plugin-api.md) の第 6 章）。
 
@@ -191,7 +191,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 ### 環境変数
 
-表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
+表のデフォルトは、アプリが未設定のときに使う値である。docker compose で起動するときは `docker-compose.yml` が一部の変数に別の値を渡す（同梱の Postgres の URL、`PLUGIN_DIR=/app/plugins:/plugins` など）。`docker-compose.yml` の `${...}` の既定値は `.env.example` の変数の行と同じで、CI が一致を検査する（`dev/check_env_example.sh`）。`POSTGRES_*` の 3 変数と `REMSH_ENABLED` は例外で、アプリ自身は読まず、`POSTGRES_*` は docker compose が同梱の Postgres に渡し、`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値の組み立てにも使う（デフォルトの欄は `docker-compose.yml` が渡す既定値）。
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
@@ -200,8 +200,8 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 | `POSTGRES_USER` | `nostr` | docker compose 専用。同梱の Postgres の接続ユーザー名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
 | `POSTGRES_PASSWORD` | `nostr` | docker compose 専用。同梱の Postgres の接続パスワード（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
 | `POSTGRES_DB` | `nostr_no_su` | docker compose 専用。同梱の Postgres のデータベース名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose」の節） |
-| `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。プラグインを置いていなければ誰も読まない。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときは空にせず、プラグインを置かない。docker compose では同梱の Postgres を指す |
-| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。`:` 区切りで複数書くと左から順に読み、名前が重なったら先のディレクトリーが勝つ。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章） |
+| `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。docker イメージには同梱されているので、compose の既定の構成では常に読まれる。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときはこの変数を空にせず、`PLUGIN_DIR=/plugins`（自作プラグインだけを読む）か `PLUGIN_DIR=`（全部無効）にして同梱の `event_logger` を読み込ませない。docker compose では同梱の Postgres を指す |
+| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。`:` 区切りで複数書くと左から順に読み、名前が重なったら先のディレクトリーが勝つ。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](docs/plugin-api.md) の第 8 章）。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持つので、compose を使わない `docker run` でも同梱の `event_logger` が読まれる |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](docs/plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose」の節）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |

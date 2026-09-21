@@ -19,7 +19,7 @@ services:
       ERL_CRASH_DUMP: /tmp/erl_crash.dump
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
-      PLUGIN_DIR: ${PLUGIN_DIR-/plugins}
+      PLUGIN_DIR: ${PLUGIN_DIR-/app/plugins:/plugins}
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
       DEDUP_CAPACITY: ${DEDUP_CAPACITY-4096}
       # true にすると VM の全て（復号した秘密鍵を含む）に到達できる。
@@ -28,7 +28,8 @@ services:
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
       # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない
-      # ので読み取り専用でマウントする。
+      # ので読み取り専用でマウントする。同梱の event_logger はイメージの
+      # /app/plugins に入っているので、ここへ置き直す必要はない。
       - ./plugins:/plugins:ro
     ports:
       # ホストのループバックにだけ公開する。管理 UI は平文 HTTP で、接続

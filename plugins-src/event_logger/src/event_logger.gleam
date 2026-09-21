@@ -1,8 +1,10 @@
 //// 監視で受信したイベントを Postgres へ保存する外部プラグイン（API v1）。
 ////
-//// 本体（nostr_no_su）とは別のプロジェクトとしてビルドし、`gleam export
-//// erlang-shipment` の出力を `PLUGIN_DIR/event_logger/` へ置いて使う。置き方と
-//// ビルド手順は同ディレクトリーの README を参照すること。
+//// 本体（nostr_no_su）とは別のプロジェクトとしてビルドする。docker イメージでは
+//// Dockerfile の `plugin-build` ステージがビルドし、`gleam export erlang-shipment`
+//// の出力が `/app/plugins/event_logger/` に入る。改造版を自分でビルドして
+//// `PLUGIN_DIR` の下へ置くこともできる。置き方とビルド手順は同ディレクトリーの
+//// README を参照すること。
 ////
 //// **設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの接頭辞に
 //// 一致する環境変数を集め、`database_url` をキーとする map として

@@ -63,7 +63,7 @@ jobs:
           code=$(echo "$files" | grep -Ev '^(docs/|\.claude/|LICENSE$|.*\.md$)' || true)
           plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|\.github/)' || true)
           css=$(echo "$code" | grep -E '^(src/nostr_no_su/admin/|assets/|priv/static/admin\.css$|package(-lock)?\.json$|\.github/)' || true)
-          docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
+          docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|plugins-src/|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
           # プラグインの README のビルド手順は README の中の sh ブロックを実行するので、
           # *.md でも plugins-src/ と examples/ の README は数える。
           readme=$(echo "$files" | grep -E '^(plugins-src/|examples/|\.github/)' || true)
@@ -346,6 +346,15 @@ jobs:
           if docker run --rm --entrypoint sh nostr-no-su:ci -c 'command -v gleam || command -v rebar3'; then
             echo "実行イメージに gleam か rebar3 が残っている"
             exit 1
+          fi
+      - name: 同梱の event_logger がローダーのレイアウトで入っていることを確かめる
+        run: |
+          set -eu
+          docker run --rm --entrypoint sh nostr-no-su:ci -c 'test -f /app/plugins/event_logger/event_logger/ebin/event_logger.beam'
+          docker image inspect nostr-no-su:ci --format '{{json .Config.Env}}' | grep -q '"PLUGIN_DIR=/app/plugins"'
+          if docker run --rm --entrypoint sh nostr-no-su:ci \
+              -c 'test -e /app/plugins/event_logger/elixir || test -e /app/plugins/event_logger/mix'; then
+            echo "同梱プラグインに Elixir が混ざっている"; exit 1
           fi
       - name: ADMIN_PORT が空白だけのとき healthcheck が待ち受けを叩かずに成功することを確かめる
         run: |

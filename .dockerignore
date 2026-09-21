@@ -7,7 +7,7 @@ docker-compose.yml
 Dockerfile
 .env*
 plugins
-plugins-src
+plugins-src/*/build
 examples
 node_modules
 test
