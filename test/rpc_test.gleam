@@ -1,4 +1,6 @@
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import nostr_no_su/bunker/rpc.{EventDraft, Request}
 
 /// リクエストは id・メソッド・params に分解される。
@@ -22,6 +24,44 @@ pub fn decode_request_without_params_test() {
 pub fn decode_request_rejects_garbage_test() {
   let assert Error(_) = rpc.decode_request("not json")
   let assert Error(_) = rpc.decode_request("{\"method\":\"ping\"}")
+}
+
+/// 全文が `max_request_bytes` を超える content は、JSON を解く前に捨てる。
+pub fn decode_request_rejects_oversized_payload_test() {
+  let body =
+    "{\"id\":\"x1\",\"method\":\"sign_event\",\"params\":[\""
+    <> string.repeat("c", rpc.max_request_bytes + 1)
+    <> "\"]}"
+  assert rpc.decode_request(body) == Error(rpc.limit_exceeded)
+}
+
+/// `method` が `max_method_bytes` を超えるリクエストは捨てる。
+pub fn decode_request_rejects_long_method_test() {
+  let body =
+    "{\"id\":\"x1\",\"method\":\""
+    <> string.repeat("m", rpc.max_method_bytes + 1)
+    <> "\"}"
+  assert rpc.decode_request(body) == Error(rpc.limit_exceeded)
+}
+
+/// `id` が `max_id_bytes` を超えるリクエストは捨てる。
+pub fn decode_request_rejects_long_id_test() {
+  let body =
+    "{\"id\":\""
+    <> string.repeat("i", rpc.max_id_bytes + 1)
+    <> "\",\"method\":\"ping\"}"
+  assert rpc.decode_request(body) == Error(rpc.limit_exceeded)
+}
+
+/// `params` の要素数が `max_params` を超えるリクエストは捨てる。
+pub fn decode_request_rejects_too_many_params_test() {
+  let params_json =
+    list.repeat("p", rpc.max_params + 1)
+    |> list.map(fn(param) { "\"" <> param <> "\"" })
+    |> string.join(",")
+  let body =
+    "{\"id\":\"x1\",\"method\":\"ping\",\"params\":[" <> params_json <> "]}"
+  assert rpc.decode_request(body) == Error(rpc.limit_exceeded)
 }
 
 /// 成功応答には `error` キーを出さない。キーの存在だけで失敗とみなす実装が

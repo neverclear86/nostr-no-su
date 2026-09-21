@@ -50,6 +50,11 @@ pub const approval_request_not_found = "unknown or expired approval request"
 /// 理由は含めない。
 pub const connection_not_saved = "could not save the connection; try connecting again"
 
+/// 未知の方法へ返すエラーの理由。リクエストの方法名は含めない。応答は署名して
+/// kind 24133 としてリレーへ載せるので、その内容をクライアントに決めさせない
+/// ためである。
+pub const unsupported_method = "unsupported method"
+
 /// リプレイ防止のために記憶するリクエスト id の件数。
 ///
 /// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
@@ -656,7 +661,8 @@ fn attempted(engine: Engine, execution: Execution) -> Engine {
 }
 
 /// リクエストの content を復号し、JSON-RPC としてデコードする。同じ会話鍵で応答を
-/// 暗号化するため、鍵も一緒に返す。
+/// 暗号化するため、鍵も一緒に返す。上限を超えたリクエストは `rpc` が理由を返す
+/// ので、ここでは応答を組まない。
 fn decode_request(
   account: Account,
   incoming: Event,
@@ -669,10 +675,7 @@ fn decode_request(
     nip44.decrypt(incoming.content, conversation_key)
     |> result.replace_error(undecryptable(incoming.content)),
   )
-  use request <- result.map(
-    rpc.decode_request(plaintext)
-    |> result.replace_error("malformed request payload"),
-  )
+  use request <- result.map(rpc.decode_request(plaintext))
   #(conversation_key, request)
 }
 
@@ -964,7 +967,7 @@ fn execute_in_session(
       }
     "nip04_encrypt" | "nip04_decrypt" ->
       rpc.error(request.id, "nip04 is not supported")
-    method -> rpc.error(request.id, "unsupported method: " <> method)
+    _ -> rpc.error(request.id, unsupported_method)
   }
 }
 

@@ -664,7 +664,7 @@ nostr-no-su/
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
 │       ├── bunker/connection_secret.gleam 接続 secret（閉じ込め、定数時間の比較）
-│       ├── bunker/rpc.gleam      JSON-RPC コーデック
+│       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
