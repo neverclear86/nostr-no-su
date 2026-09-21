@@ -85,7 +85,7 @@ docker rm -f nns-pg-test
 | `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |
 | `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口 | `Dockerfile`、`docker/`、`docker-compose.yml`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |
 
-`.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（約 70 秒）で決まる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
+`.github/` を変えた PR では全部のジョブが走る。壁時間は `test` ジョブの `gleam test`（Postgres と strfry つきで約 90 秒）で決まり、PR 全体で 2 分半ほどかかる。手元で同じことを確かめる手順は、この文書の各節と `plugins-src/event_logger/README.md` の「ビルド」にある。
 
 ## レビューの前の機械的な検査
 
