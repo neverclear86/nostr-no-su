@@ -127,10 +127,6 @@ fn checkbox_field(
   hint: Option(String),
   checked: Bool,
 ) -> Dynamic {
-  let hint_entry = case hint {
-    Some(hint) -> [#("hint", dynamic.string(hint))]
-    None -> []
-  }
   map_(
     list.flatten([
       [
@@ -139,7 +135,7 @@ fn checkbox_field(
         #("label", dynamic.string(label)),
         #("checked", dynamic.bool(checked)),
       ],
-      hint_entry,
+      optional_entry("hint", hint),
     ]),
   )
 }

@@ -603,8 +603,8 @@ fn plugin_id_inline(text: String) -> Dynamic {
 }
 
 /// ブロック（`form`）。チェック 1 件、`text` の欄 1 件、`textarea` の欄 1 件と送信の
-/// ボタンを持つ。`name`・`label`・`hint`・`submit`・`text`/`textarea` の欄の値は
-/// `allowed_words` にある語だけを使う。
+/// ボタンを持つ。`textarea` の初期値は要素の内容＝テキストノードなので `allowed_words`
+/// の語だけを使う。`text` の初期値は属性なので制約を受けない。
 fn plugin_form_block(
   name: String,
   label: String,
