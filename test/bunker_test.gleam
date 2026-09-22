@@ -4,7 +4,9 @@
 //// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
 //// どう組み立てるかを確かめる。`bunker.sign_event`（`SignEvent`）のテストは、
 //// プラグインからの送信の口（`plugin_api`）が使う署名の要求を、読み込み前と
-//// 登録済みの署名者のそれぞれで確かめる。
+//// 登録済みの署名者のそれぞれで確かめる。`bunker.check_account`（`CheckAccount`）の
+//// テストは、プラグインからの取得の口が使う登録の確認を、読み込み前・未登録・
+//// 登録済みのそれぞれで確かめる。
 
 import gleam/erlang/process
 import gleam/list
@@ -350,6 +352,54 @@ pub fn sign_event_signs_with_the_registered_account_test() {
   assert signed.tags == [["a", "b"]]
   assert signed.content == "hi"
   let assert Ok(_verified) = event.verify(signed)
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 読み込みが常に失敗する（＝いつまでも `Loading` のままの）バンカーは、
+/// `CheckAccount` を理由で拒む。
+pub fn check_account_returns_the_reason_before_accounts_are_loaded_test() {
+  let name = process.new_name("bunker_check_account_not_loaded_test")
+  start_bunker_with_load(name, fn() { Error("boom") })
+
+  assert bunker.check_account(name, "s1")
+    == Error("accounts are not loaded yet")
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 登録済みの署名者は `Ok(Nil)`。
+pub fn check_account_accepts_a_registered_signer_test() {
+  let name = process.new_name("bunker_check_account_accepts_test")
+  let stored = one_account()
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+  let signer = account.pubkey_hex(stored.account)
+
+  assert bunker.check_account(name, signer) == Ok(Nil)
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 未登録の署名者は理由を返す。
+pub fn check_account_rejects_an_unregistered_signer_test() {
+  let name = process.new_name("bunker_check_account_rejects_test")
+  let stored = one_account()
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+
+  assert bunker.check_account(name, "not-registered")
+    == Error("account is not registered")
 
   let assert Ok(pid) = process.named(name)
   process.unlink(pid)
