@@ -13,7 +13,8 @@
 //// 扱う。秘密鍵（nsec）はクエリー文字列にもリダイレクト先にもログにも載せず、POST の
 //// 本文と、その応答の本文だけで運ぶ。サーバーは生成した鍵を保持しない。認証済みの
 //// 応答はどれも secret か秘密鍵を含みうるので、`protect` で保存と枠への埋め込みを
-//// 禁じる。
+//// 禁じる。プラグインのページの GET だけ、記述の `image` ブロックのために CSP の
+//// `img-src` を広げる。
 ////
 //// ページの言語は、認証を通った後に、言語の切り替えで保存した cookie、
 //// `Accept-Language`、既定の言語（英語）の順に決める（`request_language`）。次は
@@ -109,8 +110,14 @@ const realm = "nostr-no-su"
 /// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
 /// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、ページの `<head>` に埋め込む favicon の
 /// data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise` が 0 なので描画には出ないが、
-/// 禁じると読み込みのたびに CSP の違反が報告される）。
+/// 禁じると読み込みのたびに CSP の違反が報告される）。プラグインのページの GET だけは
+/// `plugin_page_content_security_policy` で `img-src` を広げる。
 const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+/// プラグインのページの GET の応答に付ける CSP。`content_security_policy` の `img-src` に
+/// `https:` と `http:` を足したもので、プラグインの記述の `image` ブロックが指す遠隔の画像を
+/// 読ませる。鍵と secret を扱う他のページは `content_security_policy` のままにする。
+const plugin_page_content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https: http:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 /// 秘密鍵の再表示で、再入力したパスワードが違うときにログに出す理由。画面の文言は
 /// `i18n.IncorrectPassword` で、ログは英語のままにする。
@@ -317,7 +324,7 @@ pub fn handle_request(context: Context, request: Request) -> Response {
         request_theme(request),
         segments,
       )
-      |> protect
+      |> protect(response_content_security_policy(request, segments))
     }
   }
 }
@@ -347,7 +354,7 @@ fn require_same_origin(
         [],
       )
       |> wisp.html_response(400)
-      |> protect
+      |> protect(content_security_policy)
     _ -> wisp.csrf_known_header_protection(request, next)
   }
 }
@@ -416,17 +423,31 @@ fn route(
 /// 認証済みの応答すべてに付けるヘッダー。どのページも secret か秘密鍵を含みうるので
 /// 保存させず、状態を変えるボタンを他のサイトの枠に埋め込ませない。枠の中の POST は
 /// 管理 UI と同じオリジンから送られるので、CSRF の検査では防げない。実行するスクリプトを
-/// CSP（`content_security_policy`）で管理 UI のファイルに限り、`content-type` を推測させない。
+/// CSP（呼び出し側が渡す `content_security_policy` か `plugin_page_content_security_policy`）で
+/// 管理 UI のファイルに限り、`content-type` を推測させない。
 /// URL（承認の token、署名者の公開鍵）を `Referer` で別のオリジンへ渡さない。`no-referrer` に
 /// しないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査
 /// （`wisp.csrf_known_header_protection`）がすべての POST を拒否するからである。
-fn protect(response: Response) -> Response {
+fn protect(response: Response, policy: String) -> Response {
   response
   |> wisp.set_header("cache-control", "no-store")
   |> wisp.set_header("x-frame-options", "DENY")
-  |> wisp.set_header("content-security-policy", content_security_policy)
+  |> wisp.set_header("content-security-policy", policy)
   |> wisp.set_header("x-content-type-options", "nosniff")
   |> wisp.set_header("referrer-policy", "same-origin")
+}
+
+/// 応答に付ける CSP を選ぶ。プラグインのページの GET（`image` ブロックが遠隔の画像を
+/// 指しうる唯一のページ）だけ `plugin_page_content_security_policy` で、ほかは
+/// `content_security_policy`。HEAD は `wisp.handle_head` が GET にしてから届く。
+fn response_content_security_policy(
+  request: Request,
+  segments: List(String),
+) -> String {
+  case request.method, dashboard.parse_plugin_page_path(segments) {
+    http.Get, Ok(_) -> plugin_page_content_security_policy
+    _, _ -> content_security_policy
+  }
 }
 
 /// 処理できなかった要求の通知ページの HTML。トーンは `view.Failure` にし、切り替えた

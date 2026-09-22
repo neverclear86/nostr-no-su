@@ -669,6 +669,42 @@ pub fn plugin_checkbox_row(
   ])
 }
 
+/// プラグインのページの画像 1 枚。プラグインは URL と代替文だけを渡し、大きさもクラスも
+/// 選べないので、縦横とも実寸のまま高さ 192px と枠の幅の 2 つの上限に収め、比の違う画像は
+/// 切らずに余白を枠の中に入れる。別のオリジンへ Referer を出さない。
+pub fn plugin_image(url: String, alt: String) -> Element(msg) {
+  html.img([
+    attribute.src(url),
+    attribute.alt(alt),
+    attribute.loading("lazy"),
+    attribute.decoding("async"),
+    attribute.referrerpolicy("no-referrer"),
+    attribute.class(
+      "block h-auto w-auto max-h-48 max-w-full rounded-lg border border-base-300 bg-base-200 object-contain",
+    ),
+  ])
+}
+
+/// `http` / `https` 以外の URL の画像の代わりに出す破線の枠。理由は表示の言語に訳した文を
+/// 受け取り、代替文はプラグインの英語のまま出す。
+pub fn plugin_image_placeholder(
+  language: Language,
+  reason: String,
+  alt: String,
+) -> Element(msg) {
+  html.div(
+    [
+      attribute.class(
+        "flex flex-col gap-1 rounded-lg border border-dashed border-base-300 bg-base-200 p-4 text-sm text-base-content/70",
+      ),
+    ],
+    [
+      html.span([attribute.lang(i18n.code(language))], [html.text(reason)]),
+      untranslated(alt),
+    ],
+  )
+}
+
 /// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
 pub fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
   html.div(

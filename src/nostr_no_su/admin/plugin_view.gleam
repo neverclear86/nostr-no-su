@@ -7,7 +7,7 @@
 //// - 最上位: `#{<<"sections">> => [節, ...]}`
 //// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）
 //// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form` /
-////   `details` のいずれか
+////   `details` / `image` のいずれか
 //// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge` / `id`
 ////   のいずれか（`badge` は `table` のセルだけ、`id` は `pairs` の値だけ）
 //// - `form` の欄: `checkbox` のみ
@@ -19,13 +19,15 @@
 //// `href` も `id` も持ち込めない（`assets/admin.css` の方針）。描画は必ず
 //// `admin/view` の部品を経由し、このモジュール自身が持つ生のクラス文字列は
 //// `table` のセルの `code` インラインだけである。`form` の宛先は本体が決め
-//// （`Context.form_action`）、プラグインは指定できない。
+//// （`Context.form_action`）、プラグインは指定できない。`image` の `url` も
+//// 同じで、`http` / `https` 以外の scheme は描かずに代替文だけを出す。
 ////
 //// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて `lang="en"`
 //// の祖先 1 つで包む。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
 //// その外に置き、`pairs` の `items` が 0 件のときの案内と、`pairs` の値の
-//// `id` が出すコピーのラベルと案内（`view.identifier_cell`）は、`lang="en"`
-//// の中で表示の言語の `lang` を持つ要素で上書きする。
+//// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、`image` の
+//// `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
+//// `lang="en"` の中で表示の言語の `lang` を持つ要素で上書きする。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -34,6 +36,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -115,7 +118,8 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
 }
 
 /// ブロック 1 つを対応する部品にする。`pairs` の `items` が 0 件のときは空の
-/// 状態の文にする。
+/// 状態の文にする。`image` の `url` の scheme が `http` / `https` でなければ、
+/// 画像の代わりに代替文だけの枠にする。
 fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
@@ -241,7 +245,30 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       use text <- result.try(text_field(raw, "text"))
       Ok(view.details_panel(summary, [view.preformatted(text)]))
     }
+    "image" -> {
+      use url <- result.try(text_field(raw, "url"))
+      use alt <- result.try(text_field(raw, "alt"))
+      case image_source_allowed(url) {
+        True -> Ok(view.plugin_image(url, alt))
+        False ->
+          Ok(view.plugin_image_placeholder(
+            context.language,
+            i18n.text(context.language, i18n.PluginImageNotShown),
+            alt,
+          ))
+      }
+    }
     other -> Error("unknown type \"" <> other <> "\"")
+  }
+}
+
+/// 画像の `url` を `<img>` で読ませてよいか。`http` と `https` だけを許し、別の
+/// scheme も scheme の無い URL も解釈できない文字列も許さない。
+fn image_source_allowed(url: String) -> Bool {
+  case uri.parse(url) {
+    Ok(uri.Uri(scheme: Some("http"), ..)) -> True
+    Ok(uri.Uri(scheme: Some("https"), ..)) -> True
+    _ -> False
   }
 }
 
