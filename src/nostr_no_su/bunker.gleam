@@ -71,12 +71,14 @@
 //// 残し、次の書き込みまでの間隔に数える）。結果が曖昧な書き込みの後は同じ読み直しに
 //// 移る。
 ////
-//// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ購読の
-//// 張り直しを依頼する。追加と削除のほか、読み込みの失敗からの復帰でも張り直しが
-//// 起き、secret やラベルの差し替えでは起きない。メモリはこのアクター経由の変更
+//// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ、監視が
+//// 作者の照合に読む写し（`is_signer`）を置き直して購読の張り直しを依頼する。追加と
+//// 削除のほか、読み込みの失敗からの復帰でも張り直しが起き、secret やラベルの差し替え
+//// では起きない。メモリはこのアクター経由の変更
 //// だけで変わるので、DB の行を外から直接変えた場合は次の起動まで反映されない。
 
 import gleam/dict.{type Dict}
+import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
 import gleam/list
@@ -461,6 +463,21 @@ pub fn signers(name: Name(Msg)) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSigners)
 }
 
+/// `pubkey` が `name` のアクターの署名者か。アクターへ問い合わせず、署名者の集合が
+/// 変わるたびに `transition` が置き直す写しを読むので、監視のイベント 1 件ごとに
+/// 呼べる。写しは `signers` と同じ集合である。署名者が 1 件以上になるまでは写しが
+/// 無く、偽を返す。アクターが再起動しても写しは残り、読み込みで集合が変わったときに
+/// 置き直される。
+pub fn is_signer(name: Name(Msg), pubkey: String) -> Bool {
+  set.contains(persistent_term_get(signers_key(name), set.new()), pubkey)
+}
+
+/// `name` のアクターの署名者の集合の写しを置く persistent_term のキー。テストは
+/// アクターごとに別の名前を使うので、写しも名前ごとに分ける。
+fn signers_key(name: Name(Msg)) -> #(Atom, Name(Msg)) {
+  #(atom.create("nostr_no_su_bunker_signers"), name)
+}
+
 /// 応答の発行先として配られているリレーの URL。アクターが応答しなければ `None`
 /// を返し、発行先が 0 件であることと区別する。
 pub fn publisher_urls(name: Name(Msg)) -> Option(List(String)) {
@@ -744,6 +761,8 @@ fn rejected_line(id: String, delivery: Delivery) -> String {
 /// 持つ。`not_before` はエンジンではなくここに置き、アクターの起動時刻を刻む。
 type State {
   State(
+    /// このアクターの登録名。署名者の集合の写し（`is_signer`）のキーに使う。
+    name: Name(Msg),
     engine: engine.Engine,
     /// 署名者ごとのラベル。鍵はエンジンのアカウントと同じ集合に保つ。ラベルは
     /// NIP-46 のどの判断にも使わないのでエンジンに入れない。2 つを同じ集合に保つ
@@ -794,7 +813,7 @@ pub fn start(
   open_relays: fn(List(relay_list.Registered)) -> Nil,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(init_timeout_ms, fn(self) {
-    initialise(settings, resubscribe, open_relays, self)
+    initialise(name, settings, resubscribe, open_relays, self)
   })
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -810,6 +829,7 @@ pub fn start(
 /// たびに増える。名前なしの subject は pid 宛てなので、プロセスが終了すると
 /// ランタイムがタイマーを取り消す。
 fn initialise(
+  name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
   open_relays: fn(List(relay_list.Registered)) -> Nil,
@@ -824,6 +844,7 @@ fn initialise(
     |> process.select(self)
     |> process.select(retry)
   State(
+    name: name,
     engine: engine.new([], settings.auth_url),
     labels: dict.new(),
     publishers: dict.new(),
@@ -1430,13 +1451,21 @@ fn reload(state: State) -> State {
   State(..state, accounts: loading(state.settings))
 }
 
-/// 次の状態に移る。署名者の集合が変わっていれば購読の張り直しを依頼する。依頼は
-/// 接続アクターへ送るだけで待たないので、接続が張り直しで送る `GetSigners` は
-/// この処理が返った後に処理され、変更後の署名者を読む。
+/// 次の状態に移る。署名者の集合が変わっていれば、その写しを `is_signer` が読む
+/// persistent_term に置き直してから、購読の張り直しを依頼する。写しを先に置くので、
+/// 張り直した購読で届くイベントは変更後の署名者で照合される。依頼は接続アクターへ
+/// 送るだけで待たないので、接続が張り直しで送る `GetSigners` はこの処理が返った後に
+/// 処理され、変更後の署名者を読む。
 fn transition(from: State, to: State) -> State {
   case engine.signers(from.engine) == engine.signers(to.engine) {
     True -> Nil
-    False -> to.resubscribe()
+    False -> {
+      persistent_term_put(
+        signers_key(to.name),
+        set.from_list(engine.signers(to.engine)),
+      )
+      to.resubscribe()
+    }
   }
   to
 }
@@ -1823,3 +1852,15 @@ fn publish(state: State, response: Event) -> State {
     }
   }
 }
+
+/// `persistent_term:put/2` の型を付けた薄いラッパー。
+@external(erlang, "persistent_term", "put")
+fn persistent_term_put(key: #(Atom, Name(Msg)), value: Set(String)) -> Atom
+
+/// `persistent_term:get/2` の型を付けた薄いラッパー。既定値の版を使うので、
+/// キーが無いときも `badarg` で落ちない。
+@external(erlang, "persistent_term", "get")
+fn persistent_term_get(
+  key: #(Atom, Name(Msg)),
+  default: Set(String),
+) -> Set(String)

@@ -262,6 +262,7 @@ pub fn idle_monitor() -> app.Monitor {
     save_resume: discard_resume_points,
     save_plugin_resume: discard_resume_points,
     excludes_kind: event.is_ephemeral,
+    accepts_author: fn(_pubkey) { True },
   )
 }
 
@@ -409,7 +410,10 @@ pub fn response_body(response: Event) -> String {
 }
 
 /// 監視に流す kind 1 の署名済みイベント。`label` を content に入れるので、label が
-/// 違えば id も違う（ディスパッチャーは id しか見ない）。
+/// 違えば id も違う（ディスパッチャーは id しか見ない）。作者は登録アカウント
+/// （`signer_key`）ではない鍵なので、作者を照合するツリー（`accepts_author` に
+/// `bunker.is_signer` を渡すもの）へ登録アカウントのイベントとして流すときは、
+/// `signed_event.by(signer_key, …)` を使う。
 pub fn note(label: String) -> Event {
   signed_event.new(1, label)
 }
