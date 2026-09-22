@@ -551,11 +551,13 @@ plugin_page_content(Key :: binary()) -> description_map().
 
 `details` はブロックの中にブロックを置けない。`summary` は折りたたみのボタンの文字列、`text` は開いたときに出す整形済みのテキスト（改行はそのまま、長い行は折り返す）である。`id` は 64 桁の 16 進のような識別子を先頭 10 桁と末尾 6 桁に省略し、コピーのボタンを添えて出す。`image` は URL の指す画像を枠の幅と高さ 192px に収めて出し、`url` の scheme が `http` / `https` でないときは画像を描かず、代替文だけを枠に出す（節の描画は止まらない）。
 
-`form` の宛先は本体が決め（`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定）、プラグインは指定できない。`fields` は**1 件以上必要**。
+`form` の宛先は本体が決め（`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定）、プラグインは指定できない。`fields` は**1 件以上必要**。`text` は 1 行、`textarea` は 4 行の入力欄になる。大きさも書体もプラグインは選べない。
 
 | 欄の種別 | 必須のキー | 任意のキー |
 | --- | --- | --- |
 | `checkbox` | `name`（`[A-Za-z0-9_-]+` に一致する送信名）、`label` | `hint`（説明）、`checked`（真偽値、既定 `false`） |
+| `text` | `name`（`[A-Za-z0-9_-]+` に一致する送信名）、`label` | `hint`（説明）、`value`（初期値、既定は空文字列） |
+| `textarea` | `name`（`[A-Za-z0-9_-]+` に一致する送信名）、`label` | `hint`（説明）、`value`（初期値、既定は空文字列） |
 
 `tone` は `neutral`・`success`・`warning`・`failure`・`info` の 5 値のみで、それ以外はその節ひとつぶんの `Error` になる。`pairs` の `items` が 0 件のときと、節の `blocks` が 0 件のときは、空の状態の文（`Nothing to show.` の訳）を出す。`sections` そのものが 0 件のときは、ページ全体に表示する内容が無い旨の案内を出す。`table` の `rows` が 0 件のときは見出し行だけの表になる。
 
@@ -603,7 +605,7 @@ Accounts = json:decode(maps:get(<<"Accounts">>, Config)).
 
 `form` ブロック（第 13.3 節）を持つページは、任意エクスポート `plugin_page_action` でフォームの送信を受け取れる。宛先は本体が決め、`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定する。プラグインはこの宛先を指定できない。
 
-受け取る `Values` は、チェックされたチェックボックスの `name` → `<<"on">>` だけを持つ binary キー・binary 値の map である（チェックしなかった欄は届かない）。
+受け取る `Values` は、欄の `name` → 送信された値の binary キー・binary 値の map である。`checkbox` はチェックされた欄だけが `<<"on">>` で届き、チェックしなかった欄は届かない。`text` と `textarea` は常に届き、空のまま送られた欄は `<<>>` になる（本体は空の値を落とさない）。
 
 戻り値は `ok` か `{error, Reason}`（`Reason` は binary）のいずれかである。
 
