@@ -34,8 +34,8 @@
 //// 検査する）。
 ////
 //// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
-//// で色を継ぐ飾りである。製品のロゴだけは塗りで描き、上部バーではテーマの primary と accent
-//// のユーティリティで、`<head>` の favicon ではカラー版を `data:` の URI にして出す。
+//// で色を継ぐ飾りである。製品のロゴだけは固定の色で塗った板つきの SVG で、上部バーと
+//// `<head>` の favicon のどちらにも同じ文書を `data:` の URI にして出す。
 
 import gleam/int
 import gleam/list
@@ -206,18 +206,25 @@ pub type Value {
   Plain(String)
 }
 
-/// favicon にするカラー版のロゴの SVG。`fill` は属性に書き、暗い配色のときだけ `<style>` が
-/// 体を明るい青に上書きする（media が効かなければライトの色のまま出る）。
-fn favicon_svg() -> String {
+/// 板つきのロゴの SVG の文書。`assets/logo/nostr-no-su-plate.svg` はこの文字列に改行を 1 つ
+/// 足したものである。図形の色はテーマに関係なく固定で、体は紺、尻尾は青緑、目と歯は白にする。
+/// 図形は白い丸い板に載り、板の内側に灰色の縁が付く。図形は板の直径の 85% の大きさで、縁の幅は
+/// 板の直径の 1.5/46（46px の板で 1.5px）にする。
+pub fn logo_svg() -> String {
   "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\""
   <> logo_view_box
-  <> "\" width=\"900\" height=\"900\"><style>@media (prefers-color-scheme: dark){.body{fill:#3B70BA}}</style><path fill=\"#FFFFFF\" d=\""
+  <> "\" width=\"900\" height=\"900\" role=\"img\" aria-labelledby=\"title\"><title id=\"title\">Nostr no Su — beaver logo</title><circle cx=\"627\" cy=\"536\" r=\"512.1483\" fill=\"#FFFFFF\" stroke=\"#C3CCD8\" stroke-width=\"34.5269\" /><path fill=\"#FFFFFF\" d=\""
   <> logo_face_path
-  <> "\" /><path fill=\"#183965\" fill-rule=\"evenodd\" class=\"body\" d=\""
+  <> "\" /><path fill=\"#183965\" fill-rule=\"evenodd\" d=\""
   <> logo_body_path
   <> "\" /><path fill=\"#28B9BE\" d=\""
   <> logo_tail_path
   <> "\" /></svg>"
+}
+
+/// `logo_svg` を `data:` の URI にしたもの。上部バーのロゴと favicon で共有する。
+fn logo_data_uri() -> String {
+  "data:image/svg+xml," <> percent_encode_svg(logo_svg())
 }
 
 /// SVG の markup を `data:` の URI に入れられるよう百分率符号化する。空白と URL で使えない
@@ -251,7 +258,7 @@ fn favicon_link() -> Element(msg) {
   html.link([
     attribute.rel("icon"),
     attribute.type_("image/svg+xml"),
-    attribute.href("data:image/svg+xml," <> percent_encode_svg(favicon_svg())),
+    attribute.href(logo_data_uri()),
   ])
 }
 
@@ -358,7 +365,7 @@ fn navbar(
           [
             attribute.href("/"),
             attribute.class(
-              "btn btn-ghost gap-2 px-2 text-lg font-bold focus-visible:outline-base-content",
+              "btn btn-ghost h-auto gap-2 px-2 py-1 text-lg font-bold focus-visible:outline-base-content",
             ),
           ],
           [logo_icon(), html.text("Nostr-no-Su")],
@@ -1415,8 +1422,9 @@ pub fn icon_only_link(
   )
 }
 
-/// ロゴの SVG の `viewBox`。ヘッダーのロゴと favicon で共有する。
-const logo_view_box = "177 86 900 900"
+/// ロゴの SVG の `viewBox`。板の外接の正方形で、図形の枠（`177 86 900 900`）が板の直径の 85% に
+/// なるよう、同じ中心（627, 536）で広げたもの。
+const logo_view_box = "97.5882 6.5882 1058.8235 1058.8235"
 
 /// ビーバーの体の輪郭。目と歯を副パスに持ち、`fill-rule="evenodd"` で穴にする。
 const logo_body_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C 297.2193 784.2514 445 774 552 716  C 619 680 659 629 680 569  C 709 498 762 453 816 430  C 827 432 839 431 847 425  C 867 429 883 414 883 395  L 883 342  C 911 319 921 280 872 262  C 818 175 733 145 620 162  C 614 138 592 120 566 120  C 535 120 510 140 513.0000 164.5029 Z M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
@@ -1424,30 +1432,17 @@ const logo_body_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C
 /// ビーバーの尻尾。
 const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  C 1034 499 985 454 908 454  C 826 454 747 506 713 586  C 684 664 632 717 562 750  C 471 794 366 805 293.7269 774.7955 Z"
 
-/// 目と歯。favicon では白く塗り、上部バーでは `logo_body_path` の穴のままにする。
+/// 目と歯。白く塗り、`logo_body_path` の穴に重ねる。
 const logo_face_path = "M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
 
-/// 上部バーのロゴの飾り。体をテーマの primary、尻尾を accent で塗り、目と歯は
-/// `logo_body_path` の穴のまま下地を透かす。読み上げない。
+/// 上部バーのロゴ。favicon と同じ板つきのロゴ（`logo_svg`）を `data:` の URI の画像にして、
+/// 板の直径 46px で出す。隣に製品名の文字があるので、代替文を空にして読み上げない。
 pub fn logo_icon() -> Element(msg) {
-  svg.svg(
-    [
-      attribute.aria_hidden(True),
-      attribute.attribute("viewBox", logo_view_box),
-      attribute.class("size-5"),
-    ],
-    [
-      svg.path([
-        attribute.attribute("d", logo_body_path),
-        attribute.attribute("fill-rule", "evenodd"),
-        attribute.class("fill-primary"),
-      ]),
-      svg.path([
-        attribute.attribute("d", logo_tail_path),
-        attribute.class("fill-accent"),
-      ]),
-    ],
-  )
+  html.img([
+    attribute.src(logo_data_uri()),
+    attribute.alt(""),
+    attribute.class("size-11.5"),
+  ])
 }
 
 /// テーマの切り替えのアイコン（Lucide の sun-moon）。

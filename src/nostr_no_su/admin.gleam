@@ -111,9 +111,9 @@ const realm = "nostr-no-su"
 
 /// 認証済みの応答に付ける CSP。スクリプトは管理 UI のオリジンのファイル（`/static/admin.js`）だけを
 /// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
-/// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、ページの `<head>` に埋め込む favicon の
-/// data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise` が 0 なので描画には出ないが、
-/// 禁じると読み込みのたびに CSP の違反が報告される）。プラグインのページの GET だけは
+/// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、上部バーのロゴと `<head>` の
+/// favicon に埋め込むロゴの data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise`
+/// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。プラグインのページの GET だけは
 /// `plugin_page_content_security_policy` で `img-src` を広げる。
 const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 

@@ -1,6 +1,7 @@
 //// 描画した管理 UI のページを使う検査が共有する、ページと静的ファイルの読み出し。配信する
 //// 静的ファイル（`priv/static/`）と突き合わせる `stylesheet_test` と `script_test`、日本語の
-//// ページの英文を見る `japanese_pages_test` が使う。
+//// ページの英文を見る `japanese_pages_test`、板つきのロゴのファイルと README を読む
+//// `logo_test` が使う。
 ////
 //// `view.gleam` に部品を足したら `components` にもその部品を足す。
 
@@ -35,7 +36,12 @@ fn read_file(path: String) -> Result(BitArray, Dynamic)
 /// URL のパスセグメントが指す静的ファイルの中身。ルーティングが `priv` の下の同じパスから
 /// 配信するので、セグメントの定義（`view.stylesheet_segments` など）から読む。
 pub fn static_file(segments: List(String)) -> String {
-  let assert Ok(bytes) = read_file("priv" <> view.segments_path(segments))
+  text_file("priv" <> view.segments_path(segments))
+}
+
+/// リポジトリの根からの相対パスのテキストファイルの中身。
+pub fn text_file(path: String) -> String {
+  let assert Ok(bytes) = read_file(path)
   let assert Ok(content) = bit_array.to_string(bytes)
   content
 }
