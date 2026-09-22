@@ -76,8 +76,10 @@ const seen_capacity = 16_384
 /// 最終利用の古い順（`sessions` の並びの末尾）に押し出す。
 pub const session_capacity = 32
 
-/// 承認待ちの件数の上限（全署名者で 1 つ）。新しい承認待ちを登録すると、作成の
-/// 古い順（`pending` の並びの末尾）に押し出す。
+/// 承認待ちの件数の上限（全署名者で 1 つ）。新しい承認待ちの登録で上限を超える
+/// ときは、新しい要求と同じクライアントの最も古い承認待ち（署名者は問わない）を
+/// 先に押し出し、同じクライアントの承認待ちが無いときだけ全体で作成の最も古い
+/// ものを押し出す。
 pub const pending_capacity = 16
 
 /// `connect` の perms を保持する上限（バイト）。超える値はカンマの境で切る
@@ -134,7 +136,7 @@ pub type Inputs {
 /// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は
 /// `params[2]` を `max_perms_bytes` で切った値（無ければ空文字列）、
 /// `secret_mismatch` は空でない secret が一致しなかったかどうかを表す。
-/// `pending_capacity` を超えると作成の古い順に押し出される。
+/// `pending_capacity` を超えると、その Doc の規則で押し出される。
 pub type Pending {
   Pending(
     token: String,
@@ -382,10 +384,10 @@ pub fn set_perms(
   }
 }
 
-/// 失効していない承認待ちの一覧。表示が安定し、押し出される要求が末尾に来るよう、
-/// 作成の新しい順、token の昇順に並べる。失効した要求は状態からすぐに消えるわけ
-/// ではないが、この一覧にも `approve` / `deny` にも現れず、次の登録か成功した
-/// 承認・拒否のときにまとめて捨てられる。
+/// 失効していない承認待ちの一覧。表示が安定し、押し出しの対象を決める元の並びに
+/// なるよう、作成の新しい順、token の昇順に並べる。失効した要求は状態からすぐに
+/// 消えるわけではないが、この一覧にも `approve` / `deny` にも現れず、次の登録か
+/// 成功した承認・拒否のときにまとめて捨てられる。
 pub fn pending(engine: Engine, now: Int) -> List(Pending) {
   live_pending(engine, now) |> newest_pending
 }
@@ -961,8 +963,11 @@ fn new_session(
 /// そのまま使える。書き込みの `replaced` には、消える同じ組の失効していない
 /// token だけを載せる（失効した要求の削除は書き込みに出さない。DB に残った
 /// 失効行は `restore` が読み飛ばす）。同じ組と失効した要求を除いた後の一覧
-/// （作成の新しい順）で `pending_capacity - 1` 件より後ろの要求を押し出し、その
-/// token を `evicted` に載せる。
+/// （作成の新しい順）で、新しい要求と同じクライアントの要求（署名者は問わない）
+/// を末尾に回した並びの `pending_capacity - 1` 件より後ろを押し出し、その
+/// token を `evicted` に載せる。つまり上限を超えると同じクライアントの最も古い
+/// 要求が先に押し出され、同じクライアントの要求が無いときだけ全体で最も古い
+/// ものが押し出される。
 fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
   let live = live_pending(engine, entry.created_at)
   let replaced =
@@ -975,8 +980,12 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
     dict.filter(live, fn(_token, existing) {
       existing.signer != entry.signer || existing.client != entry.client
     })
+  let #(same_client, others) =
+    list.partition(newest_pending(kept), fn(existing) {
+      existing.client == entry.client
+    })
   let evicted =
-    newest_pending(kept)
+    list.append(others, same_client)
     |> list.drop(pending_capacity - 1)
     |> list.map(fn(evictee) { evictee.token })
   let kept = list.fold(evicted, kept, dict.delete)
