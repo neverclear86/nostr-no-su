@@ -11,7 +11,7 @@
 %% 503 になりうる。並行にし、この上限で打ち切って失敗を alert に落とすことで、
 %% アカウントの件数にもリレーの応答にもよらず 5 秒の内側でページを返す。
 %% 更新の送信の直前に取り直すときは、同じ呼び出しの中で送信も行うため、呼び出し側が
-%% 短い上限を渡す（profile:action_fetch_timeout_ms/0）。
+%% 短い上限を渡す（profile.gleam の定数 action_fetch_timeout_ms）。
 -define(FETCH_ALL_TIMEOUT_MS, 4000).
 
 %% 公開鍵の順に並んだ取得の結果のリスト。総上限は ?FETCH_ALL_TIMEOUT_MS。
