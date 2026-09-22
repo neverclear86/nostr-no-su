@@ -30,6 +30,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
+import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 
@@ -158,6 +159,8 @@ pub type Snapshot {
     /// 超過）は表示する理由。
     sessions: Result(List(SessionRow), i18n.Reason),
     plugins: List(PluginRow),
+    /// 起動時に読み込めなかったプラグインの一覧。0 件ならカードごと描かない。
+    not_loaded_plugins: List(plugin_loader.NotLoaded),
     /// 描画時点の Unix 秒。セッションの最終利用を相対で出すために使う。
     now: Int,
   )
@@ -317,7 +320,8 @@ fn dashboard_refresh(
 /// スナップショットをダッシュボードのページに描画する。先頭に概要のタイル、続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の節を置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
-/// プラグインの状態を右の列に置く 2 列で、狭い画面ではこの順に 1 列に並ぶ。
+/// プラグインの状態と読み込めなかったプラグインを右の列に置く 2 列で、狭い画面ではこの順に
+/// 1 列に並ぶ。
 pub fn render(
   language: Language,
   theme: view.Theme,
@@ -352,6 +356,7 @@ pub fn render(
           [
             relays_section(language, snapshot.relays),
             plugins_section(language, snapshot.plugins),
+            not_loaded_section(language, snapshot.not_loaded_plugins),
           ],
         ),
       ]),
@@ -367,7 +372,7 @@ fn overview_tiles(language: Language, snapshot: Snapshot) -> Element(msg) {
     accounts_tile(language, snapshot.accounts, snapshot.skipped),
     sessions_tile(language, snapshot.sessions),
     relays_tile(language, snapshot.relays),
-    plugins_tile(language, snapshot.plugins),
+    plugins_tile(language, snapshot.plugins, snapshot.not_loaded_plugins),
   ])
 }
 
@@ -538,10 +543,15 @@ fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
   list.any(rows, fn(row) { row.bunker != Unused })
 }
 
-/// プラグインのタイル。値は動作中の件数と全件数で、補足は異常（過負荷・無効・応答なし）が
-/// あればその内訳、プラグインが 1 件も無ければ「有効なプラグインなし」、どちらでもなければ
-/// 出さない。
-fn plugins_tile(language: Language, plugins: List(PluginRow)) -> Element(msg) {
+/// プラグインのタイル。値は動作中の件数と全件数で、読み込めなかった候補は分母に入れない
+/// （ランナーが無いため）。補足は、読み込めなかった候補があればその件数（このときだけ警告の
+/// 色にする）、無ければ異常（過負荷・無効・応答なし）の内訳、プラグインが 1 件も無ければ
+/// 「有効なプラグインなし」、どれでもなければ出さない。
+fn plugins_tile(
+  language: Language,
+  plugins: List(PluginRow),
+  not_loaded: List(plugin_loader.NotLoaded),
+) -> Element(msg) {
   let text = i18n.text(language, _)
   let total = list.length(plugins)
   let running =
@@ -563,15 +573,31 @@ fn plugins_tile(language: Language, plugins: List(PluginRow)) -> Element(msg) {
       }
     })
   let unavailable = list.count(plugins, fn(plugin) { plugin.status == None })
-  let note = case overloaded, disabled, unavailable, total {
-    0, 0, 0, 0 -> tile_note(text(i18n.NoPluginsEnabledShort))
-    0, 0, 0, _ -> element.none()
-    _, _, _, _ ->
-      tile_note(text(i18n.PluginIssueCounts(overloaded, disabled, unavailable)))
+  let not_loaded_count = list.length(not_loaded)
+  let #(tone, note) = case
+    not_loaded_count,
+    overloaded,
+    disabled,
+    unavailable,
+    total
+  {
+    0, 0, 0, 0, 0 -> #(
+      view.Neutral,
+      tile_note(text(i18n.NoPluginsEnabledShort)),
+    )
+    0, 0, 0, 0, _ -> #(view.Neutral, element.none())
+    0, _, _, _, _ -> #(
+      view.Neutral,
+      tile_note(text(i18n.PluginIssueCounts(overloaded, disabled, unavailable))),
+    )
+    _, _, _, _, _ -> #(
+      view.Warning,
+      tile_note(text(i18n.PluginsNotLoadedShort(not_loaded_count))),
+    )
   }
   tile(
     language,
-    view.Neutral,
+    tone,
     i18n.Plugins,
     text(i18n.PluginsRunningOfTotal(running, total)),
     note,
@@ -1432,6 +1458,48 @@ fn plugins_section(
           }),
         )
     },
+  ])
+}
+
+/// 起動時に読み込めなかったプラグイン。1 件以上あるときだけカードを描く。
+/// `app.Spec` から届く一覧で、起動時に確定するので取得できない状態は無い。
+fn not_loaded_section(
+  language: Language,
+  rows: List(plugin_loader.NotLoaded),
+) -> Element(msg) {
+  case rows {
+    [] -> element.none()
+    rows ->
+      view.card([
+        heading_row(
+          html.div([attribute.class("flex items-center gap-2")], [
+            view.warning_triangle_icon(),
+            view.heading(i18n.text(language, i18n.NotLoadedPlugins)),
+            view.count_pill(list.length(rows)),
+          ]),
+          element.none(),
+        ),
+        view.alert(view.Warning, [
+          html.text(i18n.text(language, i18n.NotLoadedPluginsWarning)),
+        ]),
+        item_list(list.map(rows, not_loaded_item)),
+      ])
+  }
+}
+
+/// 読み込めなかった候補 1 件。識別子と理由を縦に並べる。どちらもローダーと
+/// プラグイン由来の英語なので訳さない。識別子は原因に辿り着く唯一の手掛かり
+/// なので、長くても切らずに折り返して全文を出す。
+fn not_loaded_item(row: plugin_loader.NotLoaded) -> Element(msg) {
+  entry_item([
+    html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+      html.p([attribute.class("font-mono text-sm break-all")], [
+        view.untranslated(row.id),
+      ]),
+      html.p([attribute.class("text-sm break-words")], [
+        view.untranslated(row.reason),
+      ]),
+    ]),
   ])
 }
 

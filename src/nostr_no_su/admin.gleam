@@ -77,6 +77,7 @@ import nostr_no_su/log
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
+import nostr_no_su/plugin_loader
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
@@ -221,6 +222,8 @@ pub type Context {
     /// プラグインの一覧。締め切りを渡す。期限内に状態を得られないプラグインは
     /// 応答なしとして返す。
     plugins: fn(task.Deadline) -> List(dashboard.PluginRow),
+    /// 起動時に読み込めなかったプラグインの一覧。起動時に確定するので問い合わせない。
+    not_loaded_plugins: List(plugin_loader.NotLoaded),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
     /// プラグイン名とページのキーと登録アカウントの一覧で、そのページの記述を
@@ -709,6 +712,7 @@ pub fn snapshot(
     relays: result.map_error(relays, i18n.Untranslated),
     sessions: within(task.await(sessions, deadline)),
     plugins:,
+    not_loaded_plugins: context.not_loaded_plugins,
     now: time.now_seconds(),
   )
 }

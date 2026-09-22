@@ -98,6 +98,7 @@ fn start_monitor_tree_with_open(
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
+    not_loaded_plugins: [],
     monitor: app.Monitor(
       name: name,
       dedup_capacity: 8,
@@ -229,6 +230,7 @@ fn start_plugins_tree(
 ) -> Pid {
   start_tree(app.Spec(
     plugins: plugins,
+    not_loaded_plugins: [],
     monitor: app.Monitor(
       name: dedup_name,
       dedup_capacity: 64,
@@ -693,6 +695,7 @@ fn monitored_accounts_spec(
   let dedup_name = process.new_name("test_dedup")
   app.Spec(
     plugins: plugins,
+    not_loaded_plugins: [],
     monitor: app.Monitor(
       name: dedup_name,
       dedup_capacity: 64,
@@ -1187,6 +1190,7 @@ pub fn registered_relays_open_after_the_first_load_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(name, store, [], fixed_retry_delay),
       admin: None,
@@ -1229,6 +1233,7 @@ pub fn registered_relays_open_after_the_store_recovers_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         name,
@@ -1345,6 +1350,7 @@ pub fn relay_rows_without_the_relay_list_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: idle_bunker(),
       admin: None,
@@ -1412,6 +1418,7 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
       plugins: [
         forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
       ],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: idle_bunker(),
       admin: None,
@@ -1455,6 +1462,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: app.Bunker(..idle_bunker(), pool: config),
       admin: None,
@@ -1526,6 +1534,7 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: app.Bunker(..idle_bunker(), pool: config),
       admin: None,
@@ -1582,6 +1591,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: app.Monitor(
         name: process.new_name("test_dedup"),
         dedup_capacity: 8,
@@ -1655,6 +1665,7 @@ pub fn a_closed_bunker_relay_is_unpublished_and_not_restarted_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
@@ -1766,6 +1777,7 @@ pub fn runtime_relays_are_reopened_when_the_bunker_restarts_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         bunker_name,

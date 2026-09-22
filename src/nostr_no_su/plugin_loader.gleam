@@ -46,6 +46,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/plugin_runner
 
 /// このモジュールが出すログ行の接頭辞。
 pub const log_prefix = "plugin_loader"
@@ -54,9 +55,36 @@ pub const log_prefix = "plugin_loader"
 /// `shadow_sources` がすべて挙げる。
 const shadow_sample_size = 3
 
+/// 走査の報告 1 件。`Info` はログにだけ出す行（集計、影の報告、`PLUGIN_DIR`
+/// 未設定）、`Failure` は候補 1 つを読み込めなかったこと。識別子と理由を分けて
+/// 持つのは、管理 UI に理由だけを出すためである。
+type Note {
+  Info(text: String)
+  Failure(id: String, reason: String)
+}
+
+/// 読み込めなかった候補 1 件。`id` はモジュール名かディレクトリー名で切らない。
+/// `reason` はログに出す理由から `id` の接頭辞を外し、`plugin_runner.max_reason_chars`
+/// に切ったもの。
+pub type NotLoaded {
+  NotLoaded(id: String, reason: String)
+}
+
+/// `load_all` の戻り値。`plugins` は読み込めたプラグイン。`notes` は今までどおり
+/// `log.line` 済みの 1 行で、`not_loaded` は `notes` のうち失敗の行と同じ内容を
+/// 構造にしたものである。
+pub type LoadOutcome {
+  LoadOutcome(
+    plugins: List(Plugin),
+    notes: List(String),
+    not_loaded: List(NotLoaded),
+  )
+}
+
 /// `PLUGIN_DIR`（`:` 区切りの 1 つ以上のディレクトリー）を左から順に走査して
-/// 外部プラグインを読み込む。読み込めたプラグインと、起動ログに出す報告行を
-/// 返す。**失敗しても Error を返さない。**
+/// 外部プラグインを読み込む。読み込めたプラグインと、起動ログに出す報告行と、
+/// 読み込めなかった候補の一覧を `LoadOutcome` で返す。**失敗しても Error を
+/// 返さない。**
 ///
 /// `reserved` には内蔵プラグインの名前を渡す。プラグイン名はダッシュボードと
 /// ログの識別子なので、内蔵と衝突する外部プラグインもここで弾く。
@@ -79,16 +107,53 @@ pub fn load_all(
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(String)) {
+) -> LoadOutcome {
   let dirs = case plugin_dir {
     None -> []
     Some(raw) -> directories(raw)
   }
-  case dirs {
-    [] -> #([], [
-      log.line(log_prefix, "no PLUGIN_DIR set; external plugins disabled"),
-    ])
+  let #(plugins, notes) = case dirs {
+    [] -> #([], [Info("no PLUGIN_DIR set; external plugins disabled")])
     _ -> scan_all(dirs, reserved, plugin_env, call_timeout_ms)
+  }
+  LoadOutcome(
+    plugins: plugins,
+    notes: list.map(notes, note_line),
+    not_loaded: list.filter_map(notes, fn(note) {
+      option.to_result(to_not_loaded(note), Nil)
+    }),
+  )
+}
+
+/// `Note` をログの 1 行にする。`log.line` を呼ぶのはここだけである。
+fn note_line(note: Note) -> String {
+  case note {
+    Info(text) -> log.line(log_prefix, text)
+    Failure(id, reason) -> log.line(log_prefix, id <> ": " <> reason)
+  }
+}
+
+/// `reason` が `id <> ": "` で始まればその分だけ落とし、始まらなければそのまま
+/// 返す（`plugin.load` の理由は現状すべて `plugin.gleam:999` の `prefix` を通る
+/// が、接頭辞を落とせないときもそのまま返す形にして、理由の組み立てが変わって
+/// も壊れないようにする）。
+fn strip_id(id: String, reason: String) -> String {
+  case string.starts_with(reason, id <> ": ") {
+    True -> string.drop_start(reason, string.length(id) + 2)
+    False -> reason
+  }
+}
+
+/// `Failure` を `NotLoaded` にする。`Info` は候補ではないので `None`。理由は
+/// `plugin_runner.max_reason_chars` に切る。
+fn to_not_loaded(note: Note) -> Option(NotLoaded) {
+  case note {
+    Info(_) -> None
+    Failure(id, reason) ->
+      Some(NotLoaded(
+        id: id,
+        reason: plugin_runner.truncate(reason, plugin_runner.max_reason_chars),
+      ))
   }
 }
 
@@ -109,9 +174,9 @@ fn scan_all(
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(String)) {
+) -> #(List(Plugin), List(Note)) {
   let #(plugins, notes) =
-    list.fold(dirs, #([], []), fn(acc: #(List(Plugin), List(String)), dir) {
+    list.fold(dirs, #([], []), fn(acc: #(List(Plugin), List(Note)), dir) {
       let #(plugins, notes) = acc
       let taken =
         list.append(reserved, list.map(plugins, fn(item) { item.name }))
@@ -132,13 +197,10 @@ fn scan(
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(String)) {
+) -> #(List(Plugin), List(Note)) {
   case list_dir(dir) {
     Error(reason) -> #([], [
-      log.line(
-        log_prefix,
-        dir <> ": cannot read directory (" <> reason <> "); skipped",
-      ),
+      Failure(dir, "cannot read directory (" <> reason <> "); skipped"),
     ])
     Ok(names) -> {
       let #(bundles, beams) = entries(dir, list.sort(names, string.compare))
@@ -157,7 +219,7 @@ fn scan(
           flat_notes,
           bundle_notes,
           load_notes,
-          [summary(dir, plugins, candidate_count)],
+          [Info(summary(dir, plugins, candidate_count))],
         ]),
       )
     }
@@ -187,7 +249,7 @@ fn entries(dir: String, names: List(String)) -> #(List(String), List(String)) {
 fn flat_candidates(
   dir: String,
   beams: List(String),
-) -> #(List(String), List(String)) {
+) -> #(List(String), List(Note)) {
   let #(modules, notes) =
     list.fold(beams, #([], []), fn(acc, file) {
       let module = beam_module_name(file)
@@ -206,10 +268,7 @@ fn flat_candidates(
         Error(reason) -> #(
           [],
           list.append(notes, [
-            log.line(
-              log_prefix,
-              dir <> ": cannot add to code path (" <> reason <> "); skipped",
-            ),
+            Failure(dir, "cannot add to code path (" <> reason <> "); skipped"),
           ]),
         )
       }
@@ -222,7 +281,7 @@ fn flat_candidates(
 fn bundle_candidates(
   dir: String,
   bundles: List(String),
-) -> #(List(String), List(String)) {
+) -> #(List(String), List(Note)) {
   let #(modules, notes) =
     list.fold(bundles, #([], []), fn(acc, name) {
       let #(modules, notes) = acc
@@ -239,7 +298,7 @@ fn bundle_candidates(
 
 /// バンドル 1 つをコードパスへ迎え入れる。採用できたら影の報告行（0 行か 1 行）
 /// を、採用しなかったら理由の行を返す。
-fn adopt_bundle(dir: String, name: String) -> Result(List(String), String) {
+fn adopt_bundle(dir: String, name: String) -> Result(List(Note), Note) {
   use _ <- result.try(case entry_available(name) {
     True -> Ok(Nil)
     False -> Error(shadowed_entry_note(name))
@@ -256,14 +315,9 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(String), String) {
       case add_code_path(ebin) {
         Ok(Nil) -> Ok(list.append(shadows, found))
         Error(reason) ->
-          Error(log.line(
-            log_prefix,
-            name
-              <> ": cannot add "
-              <> ebin
-              <> " to code path ("
-              <> reason
-              <> "); skipped",
+          Error(Failure(
+            name,
+            "cannot add " <> ebin <> " to code path (" <> reason <> "); skipped",
           ))
       }
     }),
@@ -278,7 +332,7 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(String), String) {
 /// ディレクトリー」は `PLUGIN_DIR` 自身とは限らないため、黙って
 /// `no ebin directory found` に丸めない。**この分岐は非 root でしか再現できず、
 /// root で走る CI では `chmod 000` でも読めてしまうため単体テストを持たない。**
-fn ebin_dirs(dir: String, name: String) -> Result(List(String), String) {
+fn ebin_dirs(dir: String, name: String) -> Result(List(String), Note) {
   let base = join(dir, name)
   let direct = case is_directory(join(base, "ebin")) {
     True -> [join(base, "ebin")]
@@ -292,17 +346,13 @@ fn ebin_dirs(dir: String, name: String) -> Result(List(String), String) {
     // `filelib:is_dir/1` は真を返す。
     Error(_), [_, ..] -> Ok([])
     Error(reason), [] ->
-      Error(log.line(
-        log_prefix,
-        name <> ": cannot read directory (" <> reason <> "); skipped",
-      ))
+      Error(Failure(name, "cannot read directory (" <> reason <> "); skipped"))
   })
   case list.append(direct, nested) {
     [] ->
-      Error(log.line(
-        log_prefix,
-        name
-          <> ": no ebin directory found (expected "
+      Error(Failure(
+        name,
+        "no ebin directory found (expected "
           <> name
           <> "/ebin or "
           <> name
@@ -336,18 +386,17 @@ fn shadowed(ebin: String) -> List(String) {
 /// 影に入ったモジュールの報告。バンドルにつき 1 行に集約し、提供元のアプリと
 /// 版をすべて、アプリの分からないモジュールは先頭数件の名前を挙げる。1 つも
 /// 無ければ行を出さない。
-fn shadow_note(name: String, modules: List(String)) -> List(String) {
+fn shadow_note(name: String, modules: List(String)) -> List(Note) {
   case modules {
     [] -> []
     _ -> [
-      log.line(
-        log_prefix,
+      Info(
         name
-          <> ": "
-          <> int.to_string(list.length(modules))
-          <> " module(s) already provided by the host or another plugin are ignored ("
-          <> shadow_sources(modules)
-          <> ")",
+        <> ": "
+        <> int.to_string(list.length(modules))
+        <> " module(s) already provided by the host or another plugin are ignored ("
+        <> shadow_sources(modules)
+        <> ")",
       ),
     ]
   }
@@ -376,11 +425,10 @@ fn shadow_sources(modules: List(String)) -> String {
 }
 
 /// エントリーモジュールが影に入っている候補の報告。
-fn shadowed_entry_note(name: String) -> String {
-  log.line(
-    log_prefix,
-    name
-      <> ": module "
+fn shadowed_entry_note(name: String) -> Note {
+  Failure(
+    name,
+    "module "
       <> name
       <> " is already provided by the host or another plugin; skipped",
   )
@@ -405,35 +453,33 @@ fn load_candidates(
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(String)) {
+) -> #(List(Plugin), List(Note)) {
   let #(plugins, notes) =
-    list.fold(
-      modules,
-      #([], []),
-      fn(acc: #(List(Plugin), List(String)), module) {
-        let #(plugins, notes) = acc
-        case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
-          Error(reason) -> #(plugins, [log.line(log_prefix, reason), ..notes])
-          Ok(loaded) -> {
-            let taken =
-              list.append(reserved, list.map(plugins, fn(item) { item.name }))
-            case list.contains(taken, loaded.name) {
-              True -> #(plugins, [
-                log.line(
-                  log_prefix,
-                  module
-                    <> ": duplicate plugin name \""
-                    <> loaded.name
-                    <> "\"; keeping the first",
-                ),
-                ..notes
-              ])
-              False -> #([loaded, ..plugins], notes)
-            }
+    list.fold(modules, #([], []), fn(acc: #(List(Plugin), List(Note)), module) {
+      let #(plugins, notes) = acc
+      case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
+        Error(reason) -> #(plugins, [
+          Failure(module, strip_id(module, reason)),
+          ..notes
+        ])
+        Ok(loaded) -> {
+          let taken =
+            list.append(reserved, list.map(plugins, fn(item) { item.name }))
+          case list.contains(taken, loaded.name) {
+            True -> #(plugins, [
+              Failure(
+                module,
+                "duplicate plugin name \""
+                  <> loaded.name
+                  <> "\"; keeping the first",
+              ),
+              ..notes
+            ])
+            False -> #([loaded, ..plugins], notes)
           }
         }
-      },
-    )
+      }
+    })
   #(list.reverse(plugins), list.reverse(notes))
 }
 
@@ -456,7 +502,7 @@ fn summary(dir: String, plugins: List(Plugin), candidates: Int) -> String {
       <> ": "
       <> string.join(list.map(plugins, fn(item) { item.name }), ", ")
   }
-  log.line(log_prefix, head <> tail)
+  head <> tail
 }
 
 /// パスを結合する。`PLUGIN_DIR` の末尾スラッシュはここで吸収する。

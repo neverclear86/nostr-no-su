@@ -95,7 +95,8 @@ pub fn main() -> Nil {
 /// 外部プラグインの読み込みは監視のリレーの有無に関わらず行う。読み込んだ
 /// プラグインは監視のリレーが 0 本でも動く。ルート直下の `plugins` サブツリーで
 /// 動き、ダッシュボードにも状態が出る。監視のツリーは常に起動し、リレーが無い間は
-/// 配信されるイベントが無いだけである。
+/// 配信されるイベントが無いだけである。読み込めなかった候補は `Spec.not_loaded_plugins`
+/// に載り、ログの 1 行に加えてダッシュボードにも出る。
 ///
 /// テストが本番と同じ仕様でツリーを動かせるよう公開する。
 pub fn startup(loaded: Config) -> Result(Startup, String) {
@@ -104,7 +105,11 @@ pub fn startup(loaded: Config) -> Result(Startup, String) {
   use bunker <- result.try(bunker_spec(loaded))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
-  let #(external, plugin_notes) =
+  let plugin_loader.LoadOutcome(
+    plugins: external,
+    notes: plugin_notes,
+    not_loaded:,
+  ) =
     plugin_loader.load_all(
       loaded.plugin_dir,
       [console_logger.name],
@@ -115,6 +120,7 @@ pub fn startup(loaded: Config) -> Result(Startup, String) {
   Startup(
     spec: app.Spec(
       plugins: specs,
+      not_loaded_plugins: not_loaded,
       monitor: monitor_spec(bunker, dedup_capacity, specs),
       bunker: bunker,
       admin: admin,

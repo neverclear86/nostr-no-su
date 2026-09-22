@@ -25,6 +25,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
+import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -783,6 +784,16 @@ fn context() -> admin.Context {
         ]),
       ]
     },
+    not_loaded_plugins: [
+      plugin_loader.NotLoaded(
+        id: "demo_plugin",
+        reason: "unsupported api version 2 (expected 1)",
+      ),
+      plugin_loader.NotLoaded(
+        id: "broken-bundle",
+        reason: "no ebin directory found (expected broken-bundle/ebin or broken-bundle/*/ebin)",
+      ),
+    ],
     add_relay: adding_relay,
     registered_relays: fn() { Ok(db_relays()) },
     update_relay_roles: fn(relay, _roles) { changing_relay(relay) },
@@ -881,6 +892,7 @@ pub fn main() -> Nil {
       skipped: fn() { Ok([]) },
       relays: fn(_deadline) { Ok([]) },
       plugins: fn(_deadline) { [] },
+      not_loaded_plugins: [],
       sessions: fn() { Ok([]) },
       pending: fn() { Ok([]) },
     )
@@ -912,6 +924,7 @@ pub fn main() -> Nil {
           ),
         ]
       },
+      not_loaded_plugins: [],
       page_accounts: fn() {
         Ok([
           plugin_config.PageAccount(

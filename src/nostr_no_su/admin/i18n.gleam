@@ -235,6 +235,7 @@ pub type Message {
   PluginsRunningOfTotal(running: Int, total: Int)
   PluginIssueCounts(overloaded: Int, disabled: Int, unavailable: Int)
   NoPluginsEnabledShort
+  PluginsNotLoadedShort(count: Int)
   PendingConnections
   PendingSecretNotOffered
   PendingSecretMismatch
@@ -278,6 +279,8 @@ pub type Message {
   UnreadableAccountsWarning
   UnreadableReason(reason: vault.RowError)
   UnreadableNotDeletable
+  NotLoadedPlugins
+  NotLoadedPluginsWarning
   ReasonLabel
   ConnectionUri
   ConnectionUriForApproval
@@ -499,6 +502,7 @@ fn english(message: Message) -> String {
       <> int.to_string(unavailable)
       <> " unavailable"
     NoPluginsEnabledShort -> "No plugins enabled"
+    PluginsNotLoadedShort(count:) -> int.to_string(count) <> " failed to load"
     PendingConnections -> "Pending connections"
     PendingSecretNotOffered -> "Secret not offered"
     PendingSecretMismatch -> "Secret mismatch"
@@ -552,6 +556,9 @@ fn english(message: Message) -> String {
     UnreadableReason(reason) -> english_row_error(reason)
     UnreadableNotDeletable ->
       "This row cannot be deleted here because its pubkey cannot be read."
+    NotLoadedPlugins -> "Plugins that failed to load"
+    NotLoadedPluginsWarning ->
+      "These plugins are not running. Fix the cause below and restart the server."
     ReasonLabel -> "Reason"
     ConnectionUri -> "Connection URI"
     ConnectionUriForApproval -> "Connection URI (approval)"
@@ -797,6 +804,7 @@ fn japanese(message: Message) -> String {
       <> " · 応答なし "
       <> int.to_string(unavailable)
     NoPluginsEnabledShort -> "有効なプラグインなし"
+    PluginsNotLoadedShort(count:) -> "読み込み失敗 " <> int.to_string(count)
     PendingConnections -> "承認待ちの接続"
     PendingSecretNotOffered -> "secret 提示なし"
     PendingSecretMismatch -> "secret 不一致"
@@ -842,6 +850,8 @@ fn japanese(message: Message) -> String {
     UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
     UnreadableReason(reason) -> japanese_row_error(reason)
     UnreadableNotDeletable -> "この行は pubkey を読めないため、画面からは削除できません。"
+    NotLoadedPlugins -> "読み込めなかったプラグイン"
+    NotLoadedPluginsWarning -> "これらのプラグインは動作していません。下の理由を直してサーバーを再起動してください。"
     ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"
     ConnectionUriForApproval -> "接続 URI（要承認）"

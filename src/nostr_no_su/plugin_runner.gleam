@@ -70,7 +70,8 @@ pub const default_limits: Limits = Limits(
 )
 
 /// 理由として保持する文字列の上限。ダッシュボードのセルとログ 1 行に収める。
-const max_reason_chars = 120
+/// `plugin_loader` が読み込めなかった候補の理由を切るのにも使う。
+pub const max_reason_chars = 120
 
 /// ログにだけ出すスタックトレースの上限。状態には持たない。
 const max_detail_chars = 400

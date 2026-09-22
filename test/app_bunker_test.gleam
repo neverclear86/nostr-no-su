@@ -848,6 +848,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   let tree =
     start_tree(app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
