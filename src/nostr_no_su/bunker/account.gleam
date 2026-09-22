@@ -107,3 +107,30 @@ pub fn bunker_uri(
     params -> "bunker://" <> signer <> "?" <> string.join(params, "&")
   }
 }
+
+/// `bunker_uri` が返した URI から、端末のカメラがテキストとして扱う形を作る。先頭の
+/// `bunker://` を外し、`relay=` の値のドットを `%2E` に置き換える。クライアントの入力欄で
+/// 先頭に `bunker://` を打ち直せば元の URI として解析でき、`%2E` は `.` に戻る。入力は
+/// `bunker_uri` の出力に限る（`secret=` と公開鍵は触らない）。
+pub fn camera_copy_text(uri: String) -> String {
+  let body = case string.split_once(uri, "bunker://") {
+    Ok(#("", rest)) -> rest
+    _ -> uri
+  }
+  case string.split_once(body, "?") {
+    Error(Nil) -> body
+    Ok(#(signer, query)) ->
+      signer
+      <> "?"
+      <> {
+        string.split(query, "&")
+        |> list.map(fn(param) {
+          case string.starts_with(param, "relay=") {
+            True -> string.replace(param, ".", "%2E")
+            False -> param
+          }
+        })
+        |> string.join("&")
+      }
+  }
+}

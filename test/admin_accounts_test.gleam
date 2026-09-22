@@ -10,6 +10,7 @@ import lustre/element
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -1057,16 +1058,53 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
 
 // --- 接続 QR コード ---
 
-/// 接続 QR コードのページは、secret 入りの URI と要承認の URI をそれぞれ見出しと
-/// QR コードとコピー欄で出す。
+/// 接続 QR コードのページは、secret 入りの URI と要承認の URI をそれぞれ見出し、カメラ用と
+/// クライアントの読み取り機能用の 2 枚の QR コード、コピー欄で出す。
 pub fn connection_qr_page_shows_both_uris_test() {
   let body =
     simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
   assert string.contains(body, "Connection URI</h2>")
   assert string.contains(body, "Connection URI (approval)</h2>")
-  assert list.length(string.split(body, "role=\"img\"")) == 3
+  assert list.length(string.split(body, "role=\"img\"")) == 5
   assert string.contains(body, "value=\"" <> wisp.escape_html(uri) <> "\"")
   assert string.contains(body, "value=\"" <> wisp.escape_html(auth_uri) <> "\"")
+}
+
+/// 既定の位置の QR は、`account.camera_copy_text` で作ったコピー用の文字列を載せる。
+/// クライアントの読み取り機能で読む語も本文に出る。
+pub fn connection_qr_page_shows_a_camera_code_and_a_scanner_code_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+  let assert Ok(camera_svg) =
+    qr.svg("Connection URI", account.camera_copy_text(uri))
+  assert string.contains(body, element.to_string(camera_svg))
+  assert string.contains(
+    body,
+    wisp.escape_html(i18n.text(i18n.English, i18n.ScanWithClientScanner)),
+  )
+}
+
+/// バンカー用途のリレーがある Context では、その URL と一覧の見出しが本文に出る。
+pub fn connection_qr_page_lists_the_bunker_relays_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+  assert string.contains(body, "wss://bunker.example")
+  assert string.contains(body, i18n.text(i18n.English, i18n.BunkerRelaysForUri))
+}
+
+/// リレーの一覧を得られないときは、一覧の代わりに理由を出す。QR コードの枚数は変わらない。
+pub fn connection_qr_page_notes_relays_that_cannot_be_listed_test() {
+  let unavailable_relays =
+    admin.Context(..context(), relays: fn(_deadline) {
+      Error("relay list did not answer")
+    })
+  let body =
+    simulate.read_body(get(
+      unavailable_relays,
+      action_path(dashboard.ShowConnectionQr),
+    ))
+  assert string.contains(body, "relay list did not answer")
+  assert list.length(string.split(body, "role=\"img\"")) == 5
 }
 
 /// 接続 QR コードのページは GET だけを受け付け、ほかのメソッドは `Allow: GET` の 405

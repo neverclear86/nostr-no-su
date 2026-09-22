@@ -10,6 +10,7 @@
 //// `private_key_page` の 3 つだけである。この 3 つにはテーマと言語の切り替えを出さない
 //// （`view.NoSwitch`）。
 
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import lustre/attribute
 import lustre/element.{type Element}
@@ -18,6 +19,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/account
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
 /// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
@@ -296,10 +298,13 @@ pub fn account_action_page(
   )
 }
 
-/// 接続 URI をスマートフォンへ渡すための QR コードのページ。secret 入りの URI と
-/// 要承認の URI を、それぞれ QR とコピー欄の組で 1 枚ずつのカードに出す。バンカーに使う
-/// リレーが無ければ警告を先に出す。符号化できない URI はその位置に理由を出し、コピー欄は
-/// 残す。
+/// 接続 URI をスマートフォンへ渡すための QR コードのページ。secret 入りの URI と要承認の
+/// URI を 1 枚ずつのカードに出す。各カードは、端末のカメラがテキストとして扱う形
+/// （`bunker://` を外し `relay=` のドットを `%2E` にした形）の QR と貼り方の案内を既定に
+/// 置き、クライアントの読み取り機能が読む完全な `bunker://` の QR を畳みに入れる。続けて、
+/// この URI が使うバンカーのリレーの URL と、クライアント側の `nostrconnect://` で接続する
+/// 経路への案内を出す。バンカーに使うリレーが無ければ警告を先に出す。符号化できない URI は
+/// その位置に理由を出し、コピー欄は残す。
 pub fn connection_qr_page(
   language: Language,
   theme: view.Theme,
@@ -320,37 +325,118 @@ pub fn connection_qr_page(
       view.card([
         account_summary(language, row),
         html.p([], [html.text(text(i18n.ConnectionQrDescription))]),
-        view.warning([html.text(text(i18n.ConnectionQrSecretWarning))]),
       ]),
       dashboard.no_bunker_relay_warning(language, relays),
-      uri_card(language, i18n.ConnectionUri, row.uri),
-      uri_card(language, i18n.ConnectionUriForApproval, row.auth_uri),
+      uri_card(
+        language,
+        i18n.ConnectionUri,
+        row.uri,
+        view.warning([html.text(text(i18n.ConnectionQrSecretWarning))]),
+      ),
+      uri_card(
+        language,
+        i18n.ConnectionUriForApproval,
+        row.auth_uri,
+        approval_note(language),
+      ),
+      bunker_relay_card(language, relays),
+      client_uri_card(language),
       view.back_link(language),
     ],
   )
 }
 
-/// 接続 URI 1 件のカード。見出し、QR コード（か符号化できない理由）、コピー欄を並べる。
+/// 要承認のカードの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
+/// できない旨を伝え、承認待ちの節へのリンクを添える。
+fn approval_note(language: Language) -> Element(msg) {
+  html.p([], [
+    html.text(
+      i18n.text(language, i18n.ApprovalUriNeedsApproval)
+      <> i18n.sentence_gap(language),
+    ),
+    html.a(
+      [
+        attribute.href("/#" <> dashboard.pending_anchor),
+        attribute.class("link"),
+      ],
+      [html.text(i18n.text(language, i18n.PendingConnections))],
+    ),
+  ])
+}
+
+/// 接続 URI 1 件のカード。見出し、`note`、端末のカメラ用のコピー用 QR、貼り方の案内、
+/// コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR の畳みを並べる。
 fn uri_card(
   language: Language,
   title: i18n.Message,
   uri: String,
+  note: Element(msg),
 ) -> Element(msg) {
   let text = i18n.text(language, title)
   view.card([
     view.icon_heading(view.qr_code_icon(), text),
-    qr_or_notice(language, text, uri),
+    note,
+    qr_or_notice(language, text, account.camera_copy_text(uri)),
+    html.p([], [html.text(i18n.text(language, i18n.CameraCopySteps))]),
+    view.hint(i18n.text(language, i18n.CameraCopyNote)),
     view.copyable_field(language, text, uri),
+    view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
+      qr_or_notice(
+        language,
+        text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
+        uri,
+      ),
+    ]),
   ])
 }
 
-/// URI の QR コード。符号化できなければ理由を出す。
+/// この URI が使うバンカーのリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに
+/// 理由を出す。`Unused` でない `bunker` の用途を持つ行だけを出す。
+fn bunker_relay_card(
+  language: Language,
+  relays: Result(List(dashboard.RelayRow), i18n.Reason),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.card([
+    view.icon_heading(view.plug_icon(), text(i18n.BunkerRelaysForUri)),
+    view.hint(text(i18n.BunkerRelaysHint)),
+    case relays {
+      Ok(rows) ->
+        case list.filter(rows, fn(row) { row.bunker != dashboard.Unused }) {
+          [] -> element.none()
+          bunker_rows ->
+            view.code_list(list.map(bunker_rows, fn(row) { row.url }))
+        }
+      Error(reason) ->
+        view.alert(
+          view.Neutral,
+          view.reason_content(language, Some(i18n.CouldNotListRelays), reason),
+        )
+    },
+  ])
+}
+
+/// クライアント側の `nostrconnect://` で接続する経路への案内。
+fn client_uri_card(language: Language) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.card([
+    view.icon_heading(view.plug_icon(), text(i18n.ConnectWithClientUri)),
+    view.hint(text(i18n.ConnectWithClientUriHint)),
+    view.button_link(
+      view.segments_path(dashboard.connect_segments),
+      text(i18n.ConnectClient),
+      view.Primary,
+    ),
+  ])
+}
+
+/// QR コードに載せる文字列 1 つ。完全な `bunker://` URI と、カメラ用のコピー用の文字列のどちらも受ける。符号化できなければ理由を出す。
 fn qr_or_notice(
   language: Language,
   label: String,
-  uri: String,
+  text: String,
 ) -> Element(msg) {
-  case qr.svg(label, uri) {
+  case qr.svg(label, text) {
     Ok(svg) -> svg
     Error(Nil) ->
       view.alert(view.Neutral, [

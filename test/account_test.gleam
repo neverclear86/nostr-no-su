@@ -3,6 +3,7 @@ import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import gleam/uri
 import nostr_no_su/bunker/account
 import nostr_no_su/nostr/nip19
 import support/vector.{bytes}
@@ -49,6 +50,53 @@ pub fn bunker_uri_without_relays_test() {
     == "bunker://" <> account.pubkey_hex(signer) <> "?secret=s3cret"
   assert account.bunker_uri(account.pubkey_hex(signer), [], None)
     == "bunker://" <> account.pubkey_hex(signer)
+}
+
+/// `camera_copy_text` は先頭の `bunker://` を外し、`relay=` の値のドットを `%2E` に
+/// 置き換える。リレーが 0 件の URI（`secret=` だけ、クエリーも無し）でも `bunker://` だけが
+/// 落ちる。
+pub fn camera_copy_text_encodes_relay_dots_test() {
+  let assert Ok(signer) = account.from_privkey(bytes(key))
+  let signer_hex = account.pubkey_hex(signer)
+  let with_relays =
+    account.bunker_uri(
+      signer_hex,
+      ["wss://relay.one", "ws://127.0.0.1:7777"],
+      Some("s3cret"),
+    )
+  assert account.camera_copy_text(with_relays)
+    == signer_hex
+    <> "?relay=wss%3A%2F%2Frelay%2Eone"
+    <> "&relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A7777"
+    <> "&secret=s3cret"
+
+  let secret_only = account.bunker_uri(signer_hex, [], Some("s3cret"))
+  assert account.camera_copy_text(secret_only) == signer_hex <> "?secret=s3cret"
+
+  let no_query = account.bunker_uri(signer_hex, [], None)
+  assert account.camera_copy_text(no_query) == signer_hex
+}
+
+/// `"bunker://" <> camera_copy_text(uri)` は元の URI として解析でき、`%2E` は `.` に
+/// 戻る。
+pub fn camera_copy_text_parses_back_with_the_bunker_scheme_test() {
+  let assert Ok(signer) = account.from_privkey(bytes(key))
+  let original_uri =
+    account.bunker_uri(
+      account.pubkey_hex(signer),
+      ["wss://relay.one", "ws://127.0.0.1:7777"],
+      Some("s3cret"),
+    )
+  let assert Ok(parsed) =
+    uri.parse("bunker://" <> account.camera_copy_text(original_uri))
+  let assert Some(query) = parsed.query
+  let assert Ok(parsed_query) = uri.parse_query(query)
+  assert parsed_query
+    == [
+      #("relay", "wss://relay.one"),
+      #("relay", "ws://127.0.0.1:7777"),
+      #("secret", "s3cret"),
+    ]
 }
 
 /// BIP-340 の公式ベクター 0 の秘密鍵から、同じベクターの公開鍵を導く。閉じ込めた
