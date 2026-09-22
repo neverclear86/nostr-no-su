@@ -115,6 +115,7 @@ fn start_connection(
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { Nil },
       reconnect_delay: long_reconnect_delay,
+      stable_after_ms: relay_connection.default_stable_after_ms,
     ))
   started.pid
 }

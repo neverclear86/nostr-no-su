@@ -1273,6 +1273,7 @@ fn relay_connections_child(
         on_connect: on_connect(connection.url, _),
         on_disconnect: fn() { on_disconnect(connection.url) },
         reconnect_delay: spec.reconnect_delay,
+        stable_after_ms: relay_connection.default_stable_after_ms,
       ))
     },
   )
