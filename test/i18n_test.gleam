@@ -220,7 +220,11 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.ReasonLabel -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
     i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndPublicKey)
-    i18n.ConnectionUrisAndPublicKey -> Some(i18n.PublicKeyHex)
+    i18n.ConnectionUrisAndPublicKey -> Some(i18n.ConnectionQr)
+    i18n.ConnectionQr -> Some(i18n.ConnectionQrDescription)
+    i18n.ConnectionQrDescription -> Some(i18n.ConnectionQrSecretWarning)
+    i18n.ConnectionQrSecretWarning -> Some(i18n.CouldNotEncodeQr)
+    i18n.CouldNotEncodeQr -> Some(i18n.PublicKeyHex)
     i18n.PublicKeyHex -> Some(i18n.EditLabel)
     i18n.EditLabel -> Some(i18n.ShowPrivateKey)
     i18n.ShowPrivateKey -> Some(i18n.RotateSecret)
@@ -376,12 +380,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 206 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 210 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 206
+  assert list.length(messages) == 210
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

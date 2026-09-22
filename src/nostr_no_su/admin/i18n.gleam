@@ -282,6 +282,10 @@ pub type Message {
   ConnectionUri
   ConnectionUriForApproval
   ConnectionUrisAndPublicKey
+  ConnectionQr
+  ConnectionQrDescription
+  ConnectionQrSecretWarning
+  CouldNotEncodeQr
   PublicKeyHex
   EditLabel
   ShowPrivateKey
@@ -542,6 +546,13 @@ fn english(message: Message) -> String {
     ConnectionUri -> "Connection URI"
     ConnectionUriForApproval -> "Connection URI (approval)"
     ConnectionUrisAndPublicKey -> "Connection URIs and public key"
+    ConnectionQr -> "Connection QR code"
+    ConnectionQrDescription ->
+      "Scan this code with the phone's camera or with the client's scanner to carry the connection URI to the phone."
+    ConnectionQrSecretWarning ->
+      "The first code contains the connection secret. Do not show it where others can see the screen."
+    CouldNotEncodeQr ->
+      "The URI is too long for a QR code. Copy it from the field below."
     PublicKeyHex -> "Public key (hex)"
     EditLabel -> "Edit label"
     ShowPrivateKey -> "Show private key"
@@ -811,6 +822,12 @@ fn japanese(message: Message) -> String {
     ConnectionUri -> "接続 URI"
     ConnectionUriForApproval -> "接続 URI（要承認）"
     ConnectionUrisAndPublicKey -> "接続 URI と公開鍵"
+    ConnectionQr -> "接続 QR コード"
+    ConnectionQrDescription ->
+      "スマートフォンのカメラかクライアントの読み取り機能でこのコードを読み取ると、接続 URI をスマートフォンへ渡せます。"
+    ConnectionQrSecretWarning ->
+      "最初のコードには接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
+    CouldNotEncodeQr -> "この URI は QR コードにするには長すぎます。下の欄からコピーしてください。"
     PublicKeyHex -> "公開鍵（16 進）"
     EditLabel -> "ラベルを編集"
     ShowPrivateKey -> "秘密鍵を表示"

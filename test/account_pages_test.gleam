@@ -83,7 +83,7 @@ pub fn account_pages_escape_the_label_test() {
       skipped_row(hostile),
       None,
     ),
-    ..list.map(account_actions.all, account_pages.account_action_page(
+    ..list.map(account_actions.with_form, account_pages.account_action_page(
       i18n.English,
       view.System,
       row(hostile),
@@ -214,7 +214,7 @@ pub fn generated_key_page_shows_the_shortened_npub_test() {
 /// アカウント 1 件への操作の確認ページと、読み込めなかった行の削除の確認ページは、
 /// 対象のアカウントをラベルと省略した npub で示す。
 pub fn account_action_pages_show_the_shortened_npub_test() {
-  use action <- list.each(account_actions.all)
+  use action <- list.each(account_actions.with_form)
   let page =
     account_pages.account_action_page(
       i18n.English,
@@ -311,7 +311,7 @@ pub fn only_pages_with_a_private_key_hide_the_switches_test() {
       skipped_row("main"),
       None,
     ),
-    ..list.map(account_actions.all, account_pages.account_action_page(
+    ..list.map(account_actions.with_form, account_pages.account_action_page(
       language,
       view.System,
       row("main"),
@@ -344,7 +344,7 @@ pub fn language_switch_returns_to_the_page_test() {
     account_pages.new_account_page(i18n.English, view.System, "", reason),
     "<input name=\"return\" type=\"hidden\" value=\"/accounts/new\">",
   )
-  list.each(account_actions.all, fn(action) {
+  list.each(account_actions.with_form, fn(action) {
     assert string.contains(
       account_pages.account_action_page(
         i18n.English,

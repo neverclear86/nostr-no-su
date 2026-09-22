@@ -384,7 +384,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         [],
       ),
     ],
-    list.map(account_actions.all, account_pages.account_action_page(
+    list.map(account_actions.with_form, account_pages.account_action_page(
       language,
       view.System,
       row,
@@ -392,6 +392,34 @@ pub fn pages(language: i18n.Language) -> List(String) {
       None,
       Some(reason),
     )),
+    [
+      account_pages.connection_qr_page(
+        language,
+        view.System,
+        row,
+        Ok([
+          dashboard.RelayRow(
+            1,
+            "wss://a",
+            dashboard.Unused,
+            dashboard.Reported(relay_connection.Connected),
+          ),
+        ]),
+      ),
+      account_pages.connection_qr_page(language, view.System, row, Ok([])),
+      account_pages.connection_qr_page(
+        language,
+        view.System,
+        row,
+        Error(i18n.Untranslated("relay list did not answer")),
+      ),
+      account_pages.connection_qr_page(
+        language,
+        view.System,
+        dashboard.AccountRow(..row, uri: string.repeat("0", 3000)),
+        Ok([]),
+      ),
+    ],
     [
       plugin_pages.plugin_page(
         language,
@@ -663,6 +691,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.logo_icon(),
         view.theme_icon(),
         view.language_icon(),
+        view.qr_code_icon(),
         view.info_icon(),
         view.check_circle_icon(),
         view.warning_triangle_icon(),
