@@ -201,7 +201,8 @@ pub type PluginSpec {
 /// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
 /// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、2 本目の
 /// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
-/// プラグインへ渡さない。
+/// プラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
+/// アカウントのものかを返す述語で、偽になるイベントはプラグインへ渡さない。
 pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
@@ -211,6 +212,7 @@ pub type Monitor {
     save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
     save_plugin_resume: fn(List(#(String, Int))) -> Result(Nil, String),
     excludes_kind: fn(Int) -> Bool,
+    accepts_author: fn(String) -> Bool,
   )
 }
 
@@ -530,6 +532,7 @@ fn monitor_tree(
       monitor_handler(
         config.name,
         config.excludes_kind,
+        config.accepts_author,
         plugin_runner_names(spec.plugins),
       ),
       fn(_relay_url, _ack) { Nil },
@@ -552,16 +555,21 @@ fn monitor_tree(
   ))
 }
 
-/// 監視接続が受信したものを振り分けるハンドラー。取り直しの購読
-/// （`config.catchup_plugin`）のイベントはそのプラグインのランナーへ直接送り、
-/// 終わり（EOSE）はランナーに取り直しの完了として伝える。それ以外のイベントは
-/// ディスパッチャーへ渡す。`excludes_kind` が真の kind のイベントはここで
-/// 落とす。監視とバンカーが同じリレーを使うとバンカーの応答（kind 24133）も
-/// 監視の購読に届くので、呼び出し側はそれを含む述語を渡す。
-/// テストが購読 id ごとの振り分けを直接確かめられるよう公開する。
+/// 監視接続が受信したものを振り分けるハンドラー。イベントは kind、購読 id、
+/// 作者の順に照合する。`excludes_kind` が真の kind のイベントは数えずに落とす。
+/// 監視とバンカーが同じリレーを使うとバンカーの応答（kind 24133）も監視の購読に
+/// 届くので、呼び出し側はそれを含む述語を渡す。購読 id が監視の購読
+/// （`config.monitor_subscription_id`）でも取り直しの購読（`config.catchup_plugin`）
+/// でもないイベントと、作者が `accepts_author` に通らないイベントは落とし、
+/// ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
+/// 取り直しの購読のものならそのプラグインのランナーへ直接送り、監視の購読のもの
+/// ならディスパッチャーへ渡す。終わり（EOSE）は、取り直しの購読のものだけを
+/// ランナーに取り直しの完了として伝える。テストが購読 id ごとの振り分けを直接
+/// 確かめられるよう公開する。
 pub fn monitor_handler(
   name: Name(dedup.Msg),
   excludes_kind: fn(Int) -> Bool,
+  accepts_author: fn(String) -> Bool,
   runners: Dict(String, Name(plugin_runner.Msg)),
 ) -> fn(String, Received) -> Nil {
   fn(relay_url: String, received: Received) {
@@ -570,16 +578,21 @@ pub fn monitor_handler(
         let incoming = event.verified_event(verified)
         case
           excludes_kind(incoming.kind),
-          config.catchup_plugin(subscription_id)
+          subscription_id == config.monitor_subscription_id,
+          config.catchup_plugin(subscription_id),
+          accepts_author(incoming.pubkey)
         {
-          True, _ -> Nil
-          False, Some(plugin) ->
+          True, _, _, _ -> Nil
+          False, _, _, False | False, False, None, _ ->
+            named.send(name, dedup.Rejected(relay_url))
+          False, _, Some(plugin), True ->
             send_to_runner(
               runners,
               plugin,
               plugin_runner.HandleCatchup(incoming),
             )
-          False, None -> named.send(name, dedup.Incoming(relay_url, incoming))
+          False, True, None, True ->
+            named.send(name, dedup.Incoming(relay_url, incoming))
         }
       }
       relay_client.ReceivedEose(subscription_id) ->

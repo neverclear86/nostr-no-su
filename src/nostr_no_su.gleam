@@ -149,10 +149,11 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 /// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
 /// 同じ DB に保存する。復帰したランナーの要求に応じて、プラグインごとの
 /// 取り直しの購読も足される。除外する kind の既定は ephemeral 全般
-/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。`dedup_capacity` は
+/// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。作者の照合は、購読の
+/// `authors` と同じバンカーの署名者で行う（`bunker.is_signer`）。`dedup_capacity` は
 /// `DEDUP_CAPACITY` から読んだ値である。
 fn monitor_spec(
-  bunker: app.Bunker,
+  config: app.Bunker,
   dedup_capacity: Int,
   specs: List(app.PluginSpec),
 ) -> app.Monitor {
@@ -162,16 +163,17 @@ fn monitor_spec(
     dedup_capacity: dedup_capacity,
     relays: [],
     subscriptions: monitor_subscriptions(
-      bunker.name,
+      config.name,
       name,
-      resume_point_loader(bunker.pool.pool_name),
-      plugin_resume_point_loader(bunker.pool.pool_name),
+      resume_point_loader(config.pool.pool_name),
+      plugin_resume_point_loader(config.pool.pool_name),
       app.plugin_catchups(specs),
       _,
     ),
-    save_resume: resume_point_saver(bunker.pool.pool_name),
-    save_plugin_resume: plugin_resume_point_saver(bunker.pool.pool_name),
+    save_resume: resume_point_saver(config.pool.pool_name),
+    save_plugin_resume: plugin_resume_point_saver(config.pool.pool_name),
     excludes_kind: event.is_ephemeral,
+    accepts_author: bunker.is_signer(config.name, _),
   )
 }
 

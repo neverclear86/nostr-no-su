@@ -430,6 +430,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
         save_resume: discard_resume_points,
         save_plugin_resume: discard_resume_points,
         excludes_kind: event.is_ephemeral,
+        accepts_author: fn(_pubkey) { True },
       ),
       bunker: bunker_spec(
         bunker_name,

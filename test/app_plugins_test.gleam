@@ -107,6 +107,7 @@ fn start_monitor_tree_with_open(
       save_resume: discard_resume_points,
       save_plugin_resume: discard_resume_points,
       excludes_kind: excludes_kind,
+      accepts_author: fn(_pubkey) { True },
     ),
     bunker: idle_bunker(),
     admin: None,
@@ -239,6 +240,7 @@ fn start_plugins_tree(
       save_resume: discard_resume_points,
       save_plugin_resume: discard_resume_points,
       excludes_kind: event.is_ephemeral,
+      accepts_author: fn(_pubkey) { True },
     ),
     bunker: idle_bunker(),
     admin: None,
@@ -680,7 +682,8 @@ fn kill_registered(name: Atom) -> Nil
 /// ようにするためである。プラグインを載せると、その取り直しの要求も本番と同じ
 /// `app.plugin_catchups` から購読へ現れる。`load_plugin_resume` はプラグインの
 /// 保存済みの再開点を読む操作。`catchups` は取り直しの要求を問い合わせる操作で、
-/// 呼び出し側は通常 `app.plugin_catchups(plugins)` を渡す。
+/// 呼び出し側は通常 `app.plugin_catchups(plugins)` を渡す。作者の照合も本番と同じ
+/// `bunker.is_signer` で行う。
 fn monitored_accounts_spec(
   reports: Subject(Report),
   subscribed: Subject(SubscriptionReport),
@@ -711,6 +714,7 @@ fn monitored_accounts_spec(
       save_resume: discard_resume_points,
       save_plugin_resume: discard_resume_points,
       excludes_kind: event.is_ephemeral,
+      accepts_author: bunker.is_signer(bunker_name, _),
     ),
     bunker: bunker_spec(bunker_name, store, [], fixed_retry_delay),
     admin: None,
@@ -817,6 +821,74 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
   stop_tree(tree)
 }
 
+/// `monitored_accounts_spec`（本番の配線）に転送するプラグインを載せ、`signer_key`
+/// を読み込んで REQ を待つ。他人と登録アカウントのイベントを流し、後者だけが届く
+pub fn the_monitor_delivers_only_events_of_registered_accounts_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let seen = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let plugins = [
+    forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+  ]
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+      plugins,
+      fixed_resume_point(Ok(None)),
+      app.plugin_catchups(plugins),
+    ))
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  // REQ が来るまで待つ。署名者の読み込みと、その写しの配置が済んでから流す。
+  let #(_skipped, requested) =
+    receive_until(subscribed, requests_on(_, test_relay_url), 2000)
+  let assert Ok(Subscribed(_relay_url, [message.Req(_id, _filter)])) = requested
+
+  deliver(note("other"))
+  let own = signed_event.by(signer_key, 1, "own")
+  deliver(own)
+  assert process.receive(seen, 2000) == Ok(own)
+  assert process.receive(seen, 200) == Error(Nil)
+  stop_tree(tree)
+}
+
+/// `memory_store` のツリーで `is_signer` が、追加前は偽、`app.add_account` の後は
+/// 真、`bunker.remove_account` の後は偽になる
+pub fn the_registered_authors_follow_account_changes_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let calls = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let spec =
+    monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      memory_store(calls, [], False),
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+      [],
+      fixed_resume_point(Ok(None)),
+      app.plugin_catchups([]),
+    )
+  let tree = start_tree(spec)
+  assert bunker.is_signer(bunker_name, signer) == False
+
+  assert app.add_account(spec, account_for(signer_key), "main") == Ok(Nil)
+  assert bunker.is_signer(bunker_name, signer) == True
+
+  assert bunker.remove_account(bunker_name, signer) == Ok(Nil)
+  assert bunker.is_signer(bunker_name, signer) == False
+  stop_tree(tree)
+}
+
 /// 再接続したリレーは、切断前にそのリレーで受け取った最新イベントの `created_at`
 /// から購読し直す。イベントを受け取っていないリレーは保存済みの再開点（無ければ
 /// `None`）から購読する。
@@ -852,7 +924,7 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
   // 読み捨ててから、切断後の張り直しだけを見る。
   drain_subscriptions(subscribed, 300)
 
-  let received = note("received")
+  let received = signed_event.by(signer_key, 1, "received")
   deliver_first(received)
 
   process.kill(first_socket)
@@ -1065,6 +1137,23 @@ fn start_bare_runner(
   Nil
 }
 
+/// 送られたイベントを `seen` へ転送するディスパッチャーを起動し、その名前を返す。
+/// 監視のハンドラーを直接試すテストが使う。
+fn forwarding_dedup(seen: Subject(Event)) -> Name(dedup.Msg) {
+  let name = process.new_name("test_dedup")
+  let assert Ok(_) =
+    dedup.start(
+      name,
+      Nil,
+      fn(_targets, incoming) {
+        process.send(seen, incoming)
+        Nil
+      },
+      8,
+    )
+  name
+}
+
 /// 取り直しの購読 id のイベントは、そのプラグインのランナーにだけ届く。他の
 /// プラグインにもディスパッチャーにも渡らず、監視の購読 id のイベントだけが
 /// ディスパッチャーへ渡る。
@@ -1072,25 +1161,16 @@ pub fn a_catchup_event_reaches_only_the_target_plugin_test() {
   let seen_a = process.new_subject()
   let seen_b = process.new_subject()
   let dedup_seen = process.new_subject()
-  let dedup_name = process.new_name("test_dedup")
   let runner_a = process.new_name("test_plugin_a")
   let runner_b = process.new_name("test_plugin_b")
   start_bare_runner(runner_a, "plugin_a", seen_a, process.new_subject())
   start_bare_runner(runner_b, "plugin_b", seen_b, process.new_subject())
-  let assert Ok(_) =
-    dedup.start(
-      dedup_name,
-      Nil,
-      fn(_targets, incoming) {
-        process.send(dedup_seen, incoming)
-        Nil
-      },
-      8,
-    )
+  let dedup_name = forwarding_dedup(dedup_seen)
   let handle =
     app.monitor_handler(
       dedup_name,
       event.is_ephemeral,
+      fn(_pubkey) { True },
       dict.from_list([#("plugin_a", runner_a), #("plugin_b", runner_b)]),
     )
 
@@ -1128,6 +1208,7 @@ pub fn a_catchup_event_is_delivered_once_per_id_test() {
     app.monitor_handler(
       process.new_name("test_dedup"),
       event.is_ephemeral,
+      fn(_pubkey) { True },
       dict.from_list([#("plugin_a", runner)]),
     )
   let sent = note("catch-up")
@@ -1156,6 +1237,7 @@ pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
     app.monitor_handler(
       process.new_name("test_dedup"),
       event.is_ephemeral,
+      fn(_pubkey) { True },
       dict.from_list([#("plugin_a", runner)]),
     )
 
@@ -1165,6 +1247,152 @@ pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
   )
   assert process.receive(resubscribed, 1000) == Ok(Nil)
   assert plugin_runner.catchup(runner) == Ok(None)
+}
+
+/// 監視の購読 id で、他人の kind 1 はディスパッチャーへ届かず、登録アカウントの
+/// kind 1 だけが届く
+pub fn a_monitor_event_from_an_unregistered_author_is_dropped_test() {
+  let dedup_seen = process.new_subject()
+  let dedup_name = forwarding_dedup(dedup_seen)
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let handle =
+    app.monitor_handler(
+      dedup_name,
+      event.is_ephemeral,
+      fn(pubkey) { pubkey == signer },
+      dict.from_list([]),
+    )
+
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(note("other")),
+    ),
+  )
+  // 照合で落としたイベントは、ディスパッチャーの再開点を動かさない。
+  assert dedup.since(dedup_name, test_relay_url) == Ok(None)
+
+  let own = signed_event.by(signer_key, 1, "own")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(own),
+    ),
+  )
+  assert process.receive(dedup_seen, 2000) == Ok(own)
+  assert process.receive(dedup_seen, 200) == Error(Nil)
+  assert dedup.since(dedup_name, test_relay_url) == Ok(Some(own.created_at))
+}
+
+/// 違う kind。他人の kind 0 は落ち、登録アカウントの kind 24133 は ephemeral
+/// として落ち、登録アカウントの kind 0 だけが届く
+pub fn the_monitor_checks_the_author_whatever_the_kind_test() {
+  let dedup_seen = process.new_subject()
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let handle =
+    app.monitor_handler(
+      forwarding_dedup(dedup_seen),
+      event.is_ephemeral,
+      fn(pubkey) { pubkey == signer },
+      dict.from_list([]),
+    )
+
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(signed_event.new(0, "other")),
+    ),
+  )
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(signed_event.by(
+        signer_key,
+        event.nip46_kind,
+        "nip46",
+      )),
+    ),
+  )
+  let own = signed_event.by(signer_key, 0, "own")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(own),
+    ),
+  )
+  assert process.receive(dedup_seen, 2000) == Ok(own)
+  assert process.receive(dedup_seen, 200) == Error(Nil)
+}
+
+/// 取り直しの購読 id の他人のイベントはランナーへ届かず、登録アカウントのものは届く
+pub fn a_catchup_event_from_an_unregistered_author_is_dropped_test() {
+  let seen = process.new_subject()
+  let dedup_seen = process.new_subject()
+  let runner = process.new_name("test_plugin_a")
+  start_bare_runner(runner, "plugin_a", seen, process.new_subject())
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let handle =
+    app.monitor_handler(
+      forwarding_dedup(dedup_seen),
+      event.is_ephemeral,
+      fn(pubkey) { pubkey == signer },
+      dict.from_list([#("plugin_a", runner)]),
+    )
+
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      "nostr-no-su-catchup-plugin_a",
+      signed_event.verified(note("other")),
+    ),
+  )
+  let own = signed_event.by(signer_key, 1, "own")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      "nostr-no-su-catchup-plugin_a",
+      signed_event.verified(own),
+    ),
+  )
+  assert process.receive(seen, 2000) == Ok(own)
+  assert process.receive(seen, 200) == Error(Nil)
+  assert process.receive(dedup_seen, 200) == Error(Nil)
+}
+
+/// id `bunker` のイベントは届かず、監視の購読 id のイベントは届く
+pub fn an_event_on_an_unknown_subscription_is_dropped_test() {
+  let dedup_seen = process.new_subject()
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let handle =
+    app.monitor_handler(
+      forwarding_dedup(dedup_seen),
+      event.is_ephemeral,
+      fn(pubkey) { pubkey == signer },
+      dict.from_list([]),
+    )
+
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      "bunker",
+      signed_event.verified(signed_event.by(signer_key, 1, "unknown")),
+    ),
+  )
+  let normal = signed_event.by(signer_key, 1, "normal")
+  handle(
+    test_relay_url,
+    relay_client.ReceivedEvent(
+      config.monitor_subscription_id,
+      signed_event.verified(normal),
+    ),
+  )
+  assert process.receive(dedup_seen, 2000) == Ok(normal)
+  assert process.receive(dedup_seen, 200) == Error(Nil)
 }
 
 // --- 登録されたリレー ---
@@ -1600,6 +1828,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
         save_resume: discard_resume_points,
         save_plugin_resume: discard_resume_points,
         excludes_kind: event.is_ephemeral,
+        accepts_author: fn(_pubkey) { True },
       ),
       bunker: bunker_spec(
         process.new_name("test_bunker"),

@@ -8,11 +8,11 @@ import nostr_no_su/nostr/event.{type Event, type Verified, Event}
 /// 署名に使うテスト用の秘密鍵。
 const key = "0000000000000000000000000000000000000000000000000000000000000003"
 
-/// テスト用の鍵で署名した、指定した kind と content のイベント。署名は補助乱数を
-/// 引くので、同じ引数でも呼ぶたびに `sig` が変わる。比べるときは 1 度作った値を
-/// 使い回す。
-pub fn new(kind: Int, content: String) -> Event {
-  let assert Ok(privkey) = hex.decode(key)
+/// 秘密鍵 `private_key`（16 進）で署名した、指定した kind と content のイベント。
+/// 登録アカウントと登録していないアカウントのイベントを作り分けるのに使う。署名は
+/// 補助乱数を引くので、同じ引数でも呼ぶたびに `sig` が変わる。
+pub fn by(private_key: String, kind: Int, content: String) -> Event {
+  let assert Ok(privkey) = hex.decode(private_key)
   let assert Ok(pubkey) = secp256k1.xonly_pubkey(privkey)
   let draft =
     Event(
@@ -26,6 +26,13 @@ pub fn new(kind: Int, content: String) -> Event {
     )
   let assert Ok(signed) = event.finalize(draft, privkey)
   signed
+}
+
+/// テスト用の鍵で署名した、指定した kind と content のイベント。署名は補助乱数を
+/// 引くので、同じ引数でも呼ぶたびに `sig` が変わる。比べるときは 1 度作った値を
+/// 使い回す。
+pub fn new(kind: Int, content: String) -> Event {
+  by(key, kind, content)
 }
 
 /// 署名済みのイベントを検証済みにする。検証に通らないのはテスト自体の誤りとして
