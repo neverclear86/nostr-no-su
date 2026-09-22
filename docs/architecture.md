@@ -441,13 +441,15 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 | 結果 | アクターのどの分岐から来るか | 管理 UI の応答 |
 | --- | --- | --- |
 | `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ（nsec 入力による登録は 200 の完了ページ） |
-| `NotApplied` | 登録済み・未登録の検査（`require_unregistered` / `require_registered` / `require_registered_or_skipped`）、`NotWritten`、`AlreadyStored` | 409 でフォームに理由を出す |
+| `NotApplied` | `NotWritten` | 409 でフォームに英語の理由を出す |
+| `AccountAlreadyRegistered` | 登録済みの検査（`require_unregistered`）、`AlreadyStored` | 409 でフォームに訳した理由を出す |
+| `AccountNotRegistered` | 未登録の検査（`require_registered` / `require_registered_or_skipped`） | 409 でフォームに訳した理由を出す（一覧に無い署名者の 404 と同じ文言） |
 | `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
 | `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
 
 `MaybeApplied` を 409 にしないのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
 アカウント 1 件の操作は変更の前に一覧を引くので、一覧に無い署名者（削除済みの署名者への再送など）はバンカーに届く前に 404 になる。
-`require_registered` の拒否（409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。
+`require_registered` の拒否（`AccountNotRegistered`、409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。
 利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 

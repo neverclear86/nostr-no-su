@@ -79,8 +79,9 @@ pub fn new_account_page(
 pub type GeneratedKeyProblem {
   /// ラベルが規則に反した（400）。
   InvalidLabel(i18n.Message)
-  /// バンカーが登録を反映しなかった（409）。英語のまま届いた理由を持つ。
-  NotApplied(String)
+  /// バンカーが登録を反映しなかった（409）。画面に出す理由を持つ（登録済みは訳した
+  /// 文言、ストアの失敗は英語のまま届いた理由）。
+  NotApplied(i18n.Reason)
   /// バンカーが今は登録を受け付けられない（503）。英語のまま届いた理由を持つ。
   NotAccepted(String)
   /// 登録が反映されたか分からない（202）。確かめられなかった原因の文言を持つ。
@@ -143,11 +144,7 @@ fn problem_alert(
     InvalidLabel(reason) ->
       view.error_message(language, None, Some(i18n.Translated(reason)))
     NotApplied(reason) ->
-      view.error_message(
-        language,
-        Some(i18n.CouldNotRegister),
-        Some(i18n.Untranslated(reason)),
-      )
+      view.error_message(language, Some(i18n.CouldNotRegister), Some(reason))
     NotAccepted(reason) ->
       guided_warning(
         language,

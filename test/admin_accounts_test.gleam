@@ -476,7 +476,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       409,
       "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Failure))
-        <> "<span><span lang=\"en\">account is already registered</span></span></div>",
+        <> "<span>account is already registered</span></div>",
     ),
     #(
       failing_context(bunker.NotReady("accounts are not loaded yet")),
@@ -851,6 +851,11 @@ pub fn account_change_failures_map_to_status_codes_test() {
   let not_ready_reason = "accounts are not loaded yet"
   let failures = [
     #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
+    #(
+      bunker.AccountNotRegistered,
+      409,
+      i18n.text(i18n.English, i18n.AccountNotFound),
+    ),
     #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
     #(
       bunker.MaybeApplied(bunker.StoreDidNotConfirm),
@@ -1022,6 +1027,11 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
   let not_ready_reason = "accounts are not loaded yet"
   let failures = [
     #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
+    #(
+      bunker.AccountNotRegistered,
+      409,
+      i18n.text(i18n.English, i18n.AccountNotFound),
+    ),
     #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
     #(
       bunker.MaybeApplied(bunker.StoreDidNotConfirm),

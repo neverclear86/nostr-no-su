@@ -717,16 +717,14 @@ fn context() -> admin.Context {
     },
     add_account: fn(added, label) {
       case account.pubkey_hex(added) == signer, label {
-        True, _ -> Error(bunker.NotApplied("account is already registered"))
+        True, _ -> Error(bunker.AccountAlreadyRegistered)
         False, "not-ready" ->
           Error(bunker.NotReady("accounts are not loaded yet"))
         False, "maybe" -> Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
         False, _ -> Ok(Nil)
       }
     },
-    remove_account: fn(_) {
-      Error(bunker.NotApplied("account is not registered"))
-    },
+    remove_account: fn(_) { Error(bunker.AccountNotRegistered) },
     rotate_secret: fn(_) { Ok(Nil) },
     update_label: fn(_, label) { change(label) },
     nsec: fn(_) { Ok(signer_nsec) },
