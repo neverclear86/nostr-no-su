@@ -18,10 +18,12 @@ services:
       PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
       ADMIN_PORT: ${ADMIN_PORT-8080}
       ADMIN_BIND: 0.0.0.0
-      # ルートが読み取り専用なので、クラッシュダンプは tmpfs の /tmp に書く。
-      # コンテナーの再起動で消えるので、残すときは override で volume を
-      # マウントし、この値をその下を指すように上書きする。
+      # クラッシュダンプには管理パスワードと DB のパスワードが載るので、既定では
+      # 書かない（ERL_CRASH_DUMP_BYTES が 0）。ルートが読み取り専用なので、書く
+      # ように戻したときは tmpfs の /tmp に書き、コンテナーの再起動で消える。
+      # 残す手順は docs/configuration.md の「docker compose の構成」にある。
       ERL_CRASH_DUMP: /tmp/erl_crash.dump
+      ERL_CRASH_DUMP_BYTES: 0
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
       PLUGIN_DIR: ${PLUGIN_DIR-/app/plugins:/plugins}
@@ -54,7 +56,8 @@ services:
     restart: unless-stopped
     # ルートは読み取り専用にし、書き込みは /tmp（メモリ上の tmpfs、再起動で
     # 消える）だけにする。wisp の一時ファイルと PLUGIN_FILE_LOGGER_PATH の
-    # 既定値、ERL_CRASH_DUMP がここに書く。
+    # 既定値、書くように戻したときのクラッシュダンプ（ERL_CRASH_DUMP）が
+    # ここに書く。
     read_only: true
     tmpfs:
       - /tmp
