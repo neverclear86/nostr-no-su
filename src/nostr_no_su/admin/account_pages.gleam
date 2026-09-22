@@ -1,6 +1,6 @@
 //// 管理 UI のアカウントのページ（登録画面、生成した鍵の確認、登録の完了、操作、
-//// 秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を `admin/view` の部品で
-//// HTML 文字列にするだけで、プロセスにも IO にも触れない。
+//// 接続 QR コード、秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を
+//// `admin/view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（ラベル、表示する理由、nsec）はテキストか属性値として lustre に渡し、
 //// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
@@ -16,6 +16,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 
 /// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
@@ -274,6 +275,7 @@ pub fn account_action_page(
         view.InForm,
       ),
     )
+    dashboard.ShowConnectionQr -> #(element.none(), element.none())
   }
   view.page(
     language,
@@ -292,6 +294,69 @@ pub fn account_action_page(
       view.back_link(language),
     ],
   )
+}
+
+/// 接続 URI をスマートフォンへ渡すための QR コードのページ。secret 入りの URI と
+/// 要承認の URI を、それぞれ QR とコピー欄の組で 1 枚ずつのカードに出す。バンカーに使う
+/// リレーが無ければ警告を先に出す。符号化できない URI はその位置に理由を出し、コピー欄は
+/// 残す。
+pub fn connection_qr_page(
+  language: Language,
+  theme: view.Theme,
+  row: dashboard.AccountRow,
+  relays: Result(List(dashboard.RelayRow), i18n.Reason),
+) -> String {
+  let text = i18n.text(language, _)
+  let path =
+    dashboard.account_action_path(row.signer, dashboard.ShowConnectionQr)
+  view.page(
+    language,
+    theme,
+    i18n.ConnectionQr,
+    view.Narrow,
+    view.SwitchReturningTo(path),
+    view.NoRefresh,
+    [
+      view.card([
+        account_summary(language, row),
+        html.p([], [html.text(text(i18n.ConnectionQrDescription))]),
+        view.warning([html.text(text(i18n.ConnectionQrSecretWarning))]),
+      ]),
+      dashboard.no_bunker_relay_warning(language, relays),
+      uri_card(language, i18n.ConnectionUri, row.uri),
+      uri_card(language, i18n.ConnectionUriForApproval, row.auth_uri),
+      view.back_link(language),
+    ],
+  )
+}
+
+/// 接続 URI 1 件のカード。見出し、QR コード（か符号化できない理由）、コピー欄を並べる。
+fn uri_card(
+  language: Language,
+  title: i18n.Message,
+  uri: String,
+) -> Element(msg) {
+  let text = i18n.text(language, title)
+  view.card([
+    view.icon_heading(view.qr_code_icon(), text),
+    qr_or_notice(language, text, uri),
+    view.copyable_field(language, text, uri),
+  ])
+}
+
+/// URI の QR コード。符号化できなければ理由を出す。
+fn qr_or_notice(
+  language: Language,
+  label: String,
+  uri: String,
+) -> Element(msg) {
+  case qr.svg(label, uri) {
+    Ok(svg) -> svg
+    Error(Nil) ->
+      view.alert(view.Neutral, [
+        html.text(i18n.text(language, i18n.CouldNotEncodeQr)),
+      ])
+  }
 }
 
 /// 読み込みで飛ばされた行の削除の確認ページ。`pubkey` 列を読めない行
@@ -364,6 +429,7 @@ fn action_lead(action: dashboard.AccountAction) -> Option(i18n.Lead) {
     dashboard.RotateSecret -> Some(i18n.CouldNotRotateSecret)
     dashboard.DeleteAccount -> Some(i18n.CouldNotDeleteAccount)
     dashboard.RevealPrivateKey -> None
+    dashboard.ShowConnectionQr -> None
   }
 }
 

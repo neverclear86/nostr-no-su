@@ -169,11 +169,13 @@ pub type AccountAction {
   RotateSecret
   DeleteAccount
   RevealPrivateKey
+  ShowConnectionQr
 }
 
 /// 操作の一覧。ダッシュボードのリンクはこの順（重さの軽い順）に並べ、セグメントとの
 /// 対応もここから引く。
 const account_actions = [
+  ShowConnectionQr,
   EditLabel,
   RevealPrivateKey,
   RotateSecret,
@@ -776,6 +778,7 @@ fn account_action_icon(action: AccountAction) -> Element(msg) {
     RevealPrivateKey -> view.eye_icon()
     RotateSecret -> view.rotate_icon()
     DeleteAccount -> view.trash_icon()
+    ShowConnectionQr -> view.qr_code_icon()
   }
 }
 
@@ -784,7 +787,8 @@ fn account_action_icon(action: AccountAction) -> Element(msg) {
 fn account_action_row_title(action: AccountAction) -> i18n.Message {
   case action {
     DeleteAccount -> i18n.Delete
-    EditLabel | RevealPrivateKey | RotateSecret -> account_action_title(action)
+    EditLabel | RevealPrivateKey | RotateSecret | ShowConnectionQr ->
+      account_action_title(action)
   }
 }
 
@@ -792,7 +796,8 @@ fn account_action_row_title(action: AccountAction) -> i18n.Message {
 /// 文字にする。
 fn account_action_link_weight(action: AccountAction) -> view.Weight {
   case action {
-    EditLabel | RevealPrivateKey | RotateSecret -> view.Normal
+    EditLabel | RevealPrivateKey | RotateSecret | ShowConnectionQr ->
+      view.Normal
     DeleteAccount -> view.Destructive
   }
 }
@@ -924,6 +929,7 @@ pub fn account_action_title(action: AccountAction) -> i18n.Message {
     RotateSecret -> i18n.RotateSecret
     DeleteAccount -> i18n.DeleteAccount
     RevealPrivateKey -> i18n.ShowPrivateKey
+    ShowConnectionQr -> i18n.ConnectionQr
   }
 }
 
@@ -934,6 +940,7 @@ fn account_action_segment(action: AccountAction) -> String {
     RotateSecret -> "rotate"
     DeleteAccount -> "delete"
     RevealPrivateKey -> "private-key"
+    ShowConnectionQr -> "qr"
   }
 }
 
@@ -1198,8 +1205,9 @@ fn relays_section(
   ])
 }
 
-/// 一覧を得て、バンカーに使う行が 1 件も無いときの警告。
-fn no_bunker_relay_warning(
+/// 一覧を得て、バンカーに使う行が 1 件も無いときの警告。リレーの節と接続 QR コードの
+/// ページで使う。
+pub fn no_bunker_relay_warning(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {

@@ -1913,8 +1913,8 @@ fn account_action(
   }
 }
 
-/// アカウントの一覧にある署名者への操作。GET は操作のページを、POST は操作を
-/// 実行する。
+/// アカウントの一覧にある署名者への操作。GET は操作のページを、POST は操作を実行する。
+/// 接続 QR コードは GET だけで、ほかのメソッドは `Allow: GET` の 405 にする。
 fn registered_account_action(
   context: Context,
   request: Request,
@@ -1924,6 +1924,17 @@ fn registered_account_action(
   action: dashboard.AccountAction,
 ) -> Response {
   case request.method, action {
+    http.Get, dashboard.ShowConnectionQr ->
+      account_pages.connection_qr_page(
+        language,
+        theme,
+        row,
+        context.relays(task.deadline_in(snapshot_deadline_ms))
+          |> result.map_error(i18n.Untranslated),
+      )
+      |> wisp.html_response(200)
+    _, dashboard.ShowConnectionQr ->
+      method_not_allowed(language, theme, [http.Get])
     http.Get, _ ->
       account_pages.account_action_page(
         language,

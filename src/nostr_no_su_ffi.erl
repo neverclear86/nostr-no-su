@@ -34,7 +34,8 @@
     reply_alias/1,
     pool_transaction/3,
     execute_catching/2,
-    is_ip_address/1
+    is_ip_address/1,
+    qr_dark_modules/1
 ]).
 
 %% stratus は wss:// 接続に ssl アプリケーションを必要とする。本体の依存
@@ -677,3 +678,26 @@ describe_raise(Class, _) ->
 %% コードポイントを含む整形結果でも落ちない。
 format_line(Format, Args) ->
     unicode:characters_to_binary(io_lib:format(Format, Args)).
+
+%% Text を誤り訂正レベル L・byte モードで QR コードに符号化し、静寂域を含む一辺の
+%% モジュール数と、暗モジュールの座標の一覧を返す。nitro_qrcode:choose_version/4 は
+%% 版 40 に収まらない入力で function_clause を投げるので try で捕まえる。
+qr_dark_modules(Text) ->
+    Bin = unicode:characters_to_binary(Text),
+    try nitro_qrcode:encode(Bin, 'L') of
+        {qrcode, _Version, _Ecc, Dim, Data} -> {ok, {Dim, dark_modules(Data, Dim, 0, [])}}
+    catch
+        _:_ -> {error, nil}
+    end.
+
+%% Data をビットごとに読み、暗モジュール（ビットが立っている位置）の座標を
+%% 逆順に積む。X は列、Y は行で、どちらも Dim で割った余りと商から求める。
+dark_modules(<<Bit:1, Rest/bits>>, Dim, I, Acc) ->
+    Acc0 =
+        case Bit of
+            1 -> [{I rem Dim, I div Dim} | Acc];
+            0 -> Acc
+        end,
+    dark_modules(Rest, Dim, I + 1, Acc0);
+dark_modules(<<>>, _Dim, _I, Acc) ->
+    lists:reverse(Acc).

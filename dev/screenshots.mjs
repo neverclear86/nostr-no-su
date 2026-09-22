@@ -85,6 +85,7 @@ const shots = [
   { name: "16-edit-label-not-applied", url: account("label"), form: { label: "not-applied" }, status: 409 },
   { name: "17-change-not-confirmed", url: account("label"), form: { label: "maybe" }, status: 202 },
   { name: "18-accounts-not-ready", url: account("label"), form: { label: "not-ready" }, status: 503 },
+  { name: "18b-connection-qr", url: account("qr") },
   { name: "19-rotate-confirm", url: account("rotate") },
   { name: "20-delete-confirm", url: account("delete") },
   { name: "20b-unreadable-delete-confirm", url: unreadableAccount("delete") },

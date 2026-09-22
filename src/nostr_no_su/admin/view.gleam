@@ -1356,6 +1356,18 @@ pub fn language_icon() -> Element(msg) {
   ])
 }
 
+/// QR のページへのリンクのアイコン（Lucide の qr-code）。
+pub fn qr_code_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M4 3h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1",
+    "M17 3h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H17a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1",
+    "M4 16h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V17a1 1 0 0 1 1-1",
+    "M21 16h-3a2 2 0 0 0-2 2v3", "M21 21v.01", "M12 7v3a2 2 0 0 1-2 2H7",
+    "M3 12h.01", "M12 3h.01", "M12 16v.01", "M16 12h1", "M21 12v.01",
+    "M12 21v-1",
+  ])
+}
+
 /// `info_icon` のストローク（Lucide の info）。
 const info_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
