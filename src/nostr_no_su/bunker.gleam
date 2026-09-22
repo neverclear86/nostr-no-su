@@ -1021,7 +1021,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             )
           }
         }
-        engine.Duplicate -> #(state, accepted)
+        engine.Duplicate | engine.Throttled -> #(state, accepted)
         engine.Ignore(reason) -> {
           log.write(
             log.Notice,
