@@ -68,6 +68,8 @@ docker compose up --build -d
 `http://127.0.0.1:8080/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD`。
 最初の流れは、リレーとアカウントを登録 → 接続 URI をクライアントに貼る、の 2 段階（他人の端末に渡すときだけ承認が挟まる）。詳しい手順は [使い方](docs/usage.md) にある。
 
+VPS や自宅サーバーなどリモートのホストで動かすときは、管理 UI はそのホストのループバックにだけ公開されるので、`ssh -L 8080:127.0.0.1:8080 <ホスト>` でポートを転送してから手元のブラウザーで `http://127.0.0.1:8080/` を開く。受信用にポートを開ける必要は無い（バンカーと監視はリレーへの外向きの WebSocket だけで動く）。secret 無しの接続 URI を別の端末のクライアントに渡すときは、その端末のブラウザーから管理 UI の承認ページに到達できる必要があるため、TLS のリバースプロキシーを前に置いて `ADMIN_BASE_URL` に公開 URL を設定する（[設定](docs/configuration.md) の「リバースプロキシーの設定」）。メモリとディスクの目安は [運用](docs/operations.md) の「リソース」にある。
+
 ## ⚙️ 設定
 
 設定は `.env` の環境変数。必須はマスターキーと管理パスワードだけで、`setup-env.sh` が生成する。
@@ -93,7 +95,7 @@ docker compose up --build -d
 
 - [使い方](docs/usage.md)：リレーとアカウントの登録、クライアントの接続と承認、権限、event_logger
 - [設定](docs/configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
-- [運用](docs/operations.md)：起動時のログ、バックアップ、版の更新、復旧、マスターキーの保管と交換
+- [運用](docs/operations.md)：起動時のログ、バックアップ、版の更新、復旧、マスターキーの保管と交換、リソースの目安
 - [管理 UI](docs/admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認（auth_url フロー）
 - [プラグイン API v1](docs/plugin-api.md)：自作プラグインの仕様。例は [`examples/plugins/`](examples/plugins/)、同梱のプラグインは [`plugins-src/`](plugins-src/)
 - [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約

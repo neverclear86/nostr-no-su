@@ -68,6 +68,8 @@ docker compose up --build -d
 Open `http://127.0.0.1:8080/`. The username is `admin` and the password is `ADMIN_PASSWORD` in `.env`.
 First steps: register a relay and an account, then paste the connection URI into a client (approval only comes into play when you hand the URI to someone else). Details are in [Usage](docs/usage.md) (Japanese).
 
+Running on a remote host such as a VPS or a home server? The admin UI is published only on that host's loopback, so forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 <host>`) and open `http://127.0.0.1:8080/` in your local browser. No inbound port needs to be opened: the bunker and the monitor only make outbound WebSocket connections to relays. To hand a connection URI without a secret to a client on another device, the browser on that device must reach the approval page, so put a TLS-terminating reverse proxy in front and set `ADMIN_BASE_URL` to the public URL (the 「リバースプロキシーの設定」 section of [Configuration](docs/configuration.md)). Memory and disk estimates are in the 「リソース」 section of [Operations](docs/operations.md).
+
 ## ⚙️ Configuration
 
 Everything is configured by environment variables in `.env`. Only the master key and the admin password are required, and `setup-env.sh` generates them.
@@ -95,7 +97,7 @@ The documents below are written in Japanese.
 
 - [Usage](docs/usage.md): registering relays and accounts, connecting and approving clients, permissions, event_logger
 - [Configuration](docs/configuration.md): environment variable table, `.env`, passing secrets via files, reverse proxy, docker compose setup
-- [Operations](docs/operations.md): startup logs, backups, version upgrades, recovery, storing and rotating the master key
+- [Operations](docs/operations.md): startup logs, backups, version upgrades, recovery, storing and rotating the master key, resource usage
 - [Admin UI](docs/admin-ui.md): screen layout, account operations and results, connection approval (the auth_url flow)
 - [Plugin API v1](docs/plugin-api.md): the spec for writing plugins. Examples are in [`examples/plugins/`](examples/plugins/), and the bundled plugins are in [`plugins-src/`](plugins-src/)
 - [Design decisions and known limitations](docs/design-decisions.md): the decisions that shaped the app and their reasons, and the remaining limitations
