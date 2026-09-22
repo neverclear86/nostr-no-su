@@ -696,7 +696,9 @@ nostr-no-su/
 │       ├── crypto/bip340.gleam   BIP-340 Schnorr 署名と検証
 │       ├── crypto/nip44.gleam    NIP-44 v2 暗号化
 │       ├── crypto/aes_gcm.gleam  AES-256-GCM の箱（nonce、暗号文、タグ）
+│       ├── backoff.gleam         再試行の待ち時間（失敗のたびに倍にして上限で頭打ち、±20% のジッター）
 │       ├── hex.gleam             16 進文字列とバイト列の相互変換
+│       ├── keepalive.gleam       WebSocket 接続の生存確認の判定（ping を送る時機と切る時機。純粋）
 │       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
