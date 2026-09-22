@@ -1,5 +1,8 @@
 //// ビルドした管理 UI のスタイルシート（`priv/static/admin.css`）と、ページの中のスタイルの検査。
 
+import gleam/dict.{type Dict}
+import gleam/float
+import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
@@ -24,6 +27,80 @@ pub fn stylesheet_defines_every_rendered_class_test() {
     |> list.unique
     |> list.filter(fn(class) { !defines(css, class) })
   assert undefined == []
+}
+
+/// ライトとダークのどちらのテーマでも、文字と地の組み合わせが WCAG 2 の AA のコントラスト比を
+/// 満たす。本文（`base-content`、`muted`）と状態色の文字は面（`base-100`）とページの地
+/// （`base-200`）に対して 4.5、各色の `-content` はその色の塗りに対して 4.5、入力とボタンの枠
+/// （`field`）は面とページの地に対して 3 である。`accent` は飾りだけに使うので文字の色としては
+/// 数えず、`base-300` は文字を載せない区切りの線なので数えない。
+pub fn the_themes_meet_the_contrast_minimums_test() {
+  let css = admin_ui.static_file(view.stylesheet_segments)
+  let surfaces = ["base-100", "base-200"]
+  let text_on_surfaces =
+    list.flat_map(
+      [
+        "base-content", "muted", "primary", "secondary", "info", "success",
+        "warning", "error",
+      ],
+      fn(text) { list.map(surfaces, fn(surface) { #(text, surface, 4.5) }) },
+    )
+  let content_on_fills =
+    list.map(
+      [
+        "primary", "secondary", "accent", "neutral", "info", "success",
+        "warning", "error",
+      ],
+      fn(fill) { #(fill <> "-content", fill, 4.5) },
+    )
+  let field_on_surfaces =
+    list.map(surfaces, fn(surface) { #("field", surface, 3.0) })
+  let pairs =
+    list.flatten([text_on_surfaces, content_on_fills, field_on_surfaces])
+  let failures =
+    list.flat_map(["light", "dark"], fn(theme) {
+      let variables = theme_variables(css, theme)
+      list.filter_map(pairs, fn(pair) {
+        let #(foreground, background, minimum) = pair
+        let assert Ok(fg) = dict.get(variables, "--color-" <> foreground)
+        let assert Ok(bg) = dict.get(variables, "--color-" <> background)
+        let ratio = contrast_ratio(fg, bg)
+        case ratio <. minimum {
+          True -> Ok(#(theme, foreground, background, ratio))
+          False -> Error(Nil)
+        }
+      })
+    })
+  assert failures == []
+}
+
+/// ライトとダークのテーマが、デザインの半径（切り替え 999px、入力とボタン 9px、面 14px）と
+/// 面の影（`shadow-lift` の 2 層）を運び、本文と等幅の文字が OS のフォントの並びである。
+/// Web フォントは同梱しないので、`@font-face` は無い。
+pub fn the_themes_carry_the_radii_shadow_and_fonts_test() {
+  let css = admin_ui.static_file(view.stylesheet_segments)
+  let shadows = [
+    #("light", "0 1px 2px #0e213b0f", "0 12px 28px -14px #0e213b47"),
+    #("dark", "0 0 0 1px #ffffff05", "0 16px 34px -16px #000000bf"),
+  ]
+  list.each(shadows, fn(theme) {
+    let #(name, near, far) = theme
+    let variables = theme_variables(css, name)
+    assert dict.get(variables, "--radius-selector") == Ok("999px")
+    assert dict.get(variables, "--radius-field") == Ok("9px")
+    assert dict.get(variables, "--radius-box") == Ok("14px")
+    assert dict.get(variables, "--shadow-lift-near") == Ok(near)
+    assert dict.get(variables, "--shadow-lift-far") == Ok(far)
+  })
+  assert string.contains(
+    css,
+    "--font-sans:\"Hiragino Sans\", \"Hiragino Kaku Gothic ProN\", \"Noto Sans CJK JP\", \"Noto Sans JP\", \"Yu Gothic UI\", Meiryo, system-ui, sans-serif;",
+  )
+  assert string.contains(
+    css,
+    "--font-mono:ui-monospace, \"SF Mono\", \"Cascadia Mono\", \"Noto Sans Mono CJK JP\", monospace;",
+  )
+  assert !string.contains(css, "@font-face")
 }
 
 /// フォーカスできるボタン（`a`、`button`、`summary` の `btn`）はフォーカスの輪郭を、入力欄
@@ -120,5 +197,53 @@ fn continues_class_name(rest: String) -> Bool {
         char,
       )
     Error(Nil) -> False
+  }
+}
+
+/// ビルドした CSS の `[data-theme=<name>]` のブロックの宣言を、変数名から値への表にする。
+/// ブロックは入れ子を持たないので、開始から次の `}` までが宣言の並びである。
+fn theme_variables(css: String, name: String) -> Dict(String, String) {
+  let assert Ok(#(_, rest)) =
+    string.split_once(css, "[data-theme=" <> name <> "]{")
+  let assert Ok(#(block, _)) = string.split_once(rest, "}")
+  block
+  |> string.split(";")
+  |> list.filter_map(fn(declaration) { string.split_once(declaration, ":") })
+  |> dict.from_list
+}
+
+/// 2 つの色（`#rgb` か `#rrggbb`）の WCAG 2 のコントラスト比。明るいほうを分子に置く。
+fn contrast_ratio(a: String, b: String) -> Float {
+  let la = relative_luminance(a)
+  let lb = relative_luminance(b)
+  { float.max(la, lb) +. 0.05 } /. { float.min(la, lb) +. 0.05 }
+}
+
+/// 色（`#rgb` か `#rrggbb`）の WCAG 2 の相対輝度。
+fn relative_luminance(color: String) -> Float {
+  let assert "#" <> hex = color
+  let channels = case string.length(hex) {
+    3 -> string.to_graphemes(hex) |> list.map(fn(digit) { digit <> digit })
+    6 -> [
+      string.slice(hex, 0, 2),
+      string.slice(hex, 2, 2),
+      string.slice(hex, 4, 2),
+    ]
+    _ -> panic as { "not a hex color: " <> color }
+  }
+  let assert [r, g, b] = list.map(channels, linear_channel)
+  0.2126 *. r +. 0.7152 *. g +. 0.0722 *. b
+}
+
+/// 2 桁の 16 進の値を、sRGB の成分から線形の成分に直す。
+fn linear_channel(pair: String) -> Float {
+  let assert Ok(value) = int.base_parse(pair, 16)
+  let c = int.to_float(value) /. 255.0
+  case c <=. 0.04045 {
+    True -> c /. 12.92
+    False -> {
+      let assert Ok(linear) = float.power({ c +. 0.055 } /. 1.055, 2.4)
+      linear
+    }
   }
 }
