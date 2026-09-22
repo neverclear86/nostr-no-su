@@ -25,6 +25,8 @@ README の手順で `docker compose up -d` したら、ログに次の行が出�
 
 `http://127.0.0.1:8080/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD`。
 
+この文書の `docker compose ...` は `.env` のあるディレクトリーで実行する。公開イメージの構成でも、README の手順で `.env` に書いた `COMPOSE_FILE` があるので `-f` は要らない。
+
 ## 最初の設定
 
 クライアントがつながるまでに要るのは、リレーとアカウントの登録の 2 つ。
@@ -232,7 +234,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 
 ## 設定の早見表
 
-`.env` で変える値のうち、利用者が触るもの。全部の変数は [設定](configuration.md)。
+`.env` で変える値のうち、利用者が触るもの。全部の変数は [設定](configuration.md) の「環境変数」にあり、`COMPOSE_FILE` は同じ文書の「docker compose の構成」にある。
 
 | 変数 | 既定 | 意味 |
 | --- | --- | --- |
@@ -242,3 +244,5 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台 |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 受信したイベントを 1 件 1 行でログに出す内蔵プラグイン |
 | `REMSH_ENABLED` | `false` | デバッグ用のリモートシェル。通常は触らない |
+| `NOSTR_NO_SU_VERSION` | `latest` | 公開イメージの版。README の手順が取った版を書く。patch も追うなら `X.Y` |
+| `COMPOSE_FILE` | （空） | docker compose が読むファイル。README の手順が `docker-compose.release.yml` を書く。override を重ねるなら `docker-compose.release.yml:docker-compose.override.yml` |
