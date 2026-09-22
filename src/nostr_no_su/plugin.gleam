@@ -5,9 +5,10 @@
 //// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`
 ////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
 ////   エクスポートする。未知のエクスポートは読み込みに影響しない。本体が使う
-////   任意エクスポート（`plugin_children`、`plugin_required_versions`、
-////   `plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在する
-////   ときだけ呼ばれ、その結果で読み込まれないことがある。
+////   任意エクスポート（`plugin_children`、`plugin_min_host_version`、
+////   `plugin_required_versions`、`plugin_pages`、`plugin_page_content`、
+////   `plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれ
+////   ないことがある。
 //// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
 ////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
 //// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
@@ -29,6 +30,10 @@
 ////   `plugin_children` が行い、結果は `Plugin.children` に載る。子仕様の代わりに
 ////   `{error, Reason}` を返すと「設定が足りないので読み込まないでほしい」という
 ////   申告になり、そのプラグインだけが無効になる。
+//// - 任意エクスポート `plugin_min_host_version/0` があれば、そのプラグインが
+////   要求する本体の版の下限（`X.Y.Z` の binary）を宣言できる。読み込み時に
+////   本体の版（`nostr_no_su.app` の `vsn`）と `MAJOR.MINOR.PATCH` の数値比較で
+////   照合し、本体のほうが小さければそのプラグインを読み込まない。
 //// - 任意エクスポート `plugin_required_versions/0` があれば、依存する本体側の
 ////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
 ////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
@@ -49,13 +54,15 @@
 ////   `plugin_page_action` もページの表示と同じく起動時のメタデータの呼び出しには
 ////   含まれない。仕様の全文は `docs/plugin-api.md` の第 13 章にある。
 //// - 検証の順序はモジュールの読み込み → 必須エクスポート →
-////   `plugin_api_version` → `plugin_required_versions` → `plugin_name` →
-////   設定の切り出し → `plugin_children` → `plugin_pages` で、最初に失敗した
-////   ところで止まる。**設定の切り出しは `plugin_name/0` の後にしかできない**
-////   （環境変数の接頭辞がプラグイン名から決まるため）。
+////   `plugin_api_version` → `plugin_min_host_version` →
+////   `plugin_required_versions` → `plugin_name` → 設定の切り出し →
+////   `plugin_children` → `plugin_pages` で、最初に失敗したところで止まる。
+////   **設定の切り出しは `plugin_name/0` の後にしかできない**（環境変数の
+////   接頭辞がプラグイン名から決まるため）。
 //// - モジュールの読み込み（`code:ensure_loaded/1`）とメタデータの呼び出し
-////   （`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_name/0`、
-////   `plugin_children/0,1`、`plugin_pages/0,1`）は `main` のプロセスで起動時に
+////   （`plugin_api_version/0`、`plugin_min_host_version/0`、
+////   `plugin_required_versions/0`、`plugin_name/0`、`plugin_children/0,1`、
+////   `plugin_pages/0,1`）は `main` のプロセスで起動時に
 ////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms`
 ////   で打ち切る。戻らない
 ////   `-on_load` や戻らないメタデータの関数を持つプラグインは理由の 1 行で
@@ -81,6 +88,7 @@ import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/set
@@ -101,8 +109,19 @@ pub const default_call_timeout_ms: Int = 5000
 /// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
 const handle_event_name = "handle_event"
 
-/// 本体が読み込み時に照合する任意エクスポートの名前。
+/// 本体が読み込み時に照合する、依存する本体側アプリケーションの版を宣言する
+/// 任意エクスポートの名前。
 const required_versions_name = "plugin_required_versions"
+
+/// 本体が読み込み時に照合する、本体の版の下限を宣言する任意エクスポートの
+/// 名前。
+const min_host_version_name = "plugin_min_host_version"
+
+/// 本体の版を載せた `.app` のアプリケーション名。
+const host_app_name = "nostr_no_su"
+
+/// 理由の文字列に出す本体の名前。
+const host_display_name = "nostr-no-su"
 
 /// 本体が問い合わせる、管理 UI のページ一覧を返す任意エクスポートの名前。
 const pages_export_name = "plugin_pages"
@@ -217,6 +236,11 @@ pub fn load(
   let takes_config = has_export(module, handle_event_name, 2)
   use _ <- result.try(require_exports(module, name, takes_config))
   use _ <- result.try(check_api_version(module, name, call_timeout_ms))
+  use _ <- result.try(check_min_host_version_export(
+    module,
+    name,
+    call_timeout_ms,
+  ))
   use _ <- result.try(check_required_versions(module, name, call_timeout_ms))
   use plugin_name <- result.try(read_plugin_name(module, name, call_timeout_ms))
   let config = plugin_config.for_plugin(env, plugin_name)
@@ -320,6 +344,109 @@ fn check_api_version(
           <> ")",
       ))
   }
+}
+
+/// 任意エクスポート `plugin_min_host_version/0` があれば期限付きで呼び、宣言
+/// された下限と本体の版を比べる。エクスポートが無ければ照合しない。
+fn check_min_host_version_export(
+  module: Atom,
+  name: String,
+  call_timeout_ms: Int,
+) -> Result(Nil, String) {
+  case has_export(module, min_host_version_name, 0) {
+    False -> Ok(Nil)
+    True -> {
+      use value <- result.try(call_export(
+        module,
+        name,
+        min_host_version_name,
+        [],
+        call_timeout_ms,
+      ))
+      use declared <- result.try(
+        decode.run(value, decode.string)
+        |> result.replace_error(prefix(
+          name,
+          min_host_version_name
+            <> "/0 must return a version string like \"0.1.0\", got "
+            <> dynamic.classify(value),
+        )),
+      )
+      use host <- result.try(
+        application_version(host_app_name)
+        |> result.replace_error(prefix(
+          name,
+          "requires "
+            <> host_display_name
+            <> " "
+            <> declared
+            <> " or later, but no "
+            <> host_app_name
+            <> ".app is on the code path",
+        )),
+      )
+      check_min_host_version(declared, host)
+      |> result.map_error(prefix(name, _))
+    }
+  }
+}
+
+/// 宣言された本体の版の下限 `declared` を、本体の版 `host` と比べる。どちらも
+/// `MAJOR.MINOR.PATCH` の 3 つの十進整数で、`MAJOR` → `MINOR` → `PATCH` の
+/// 順の数値比較で順序を決める。戻りは 4 通りで、`declared` が読めなければ
+/// `plugin_min_host_version/0 must return …` の理由、`host` が読めなければ
+/// `… but the host version …` の理由、`host` が `declared` より小さければ
+/// `requires … or later, but this is …` の理由、それ以外は `Ok(Nil)` である。
+/// 理由にモジュール名は付かない（呼び出し側が付ける）。
+pub fn check_min_host_version(
+  declared: String,
+  host: String,
+) -> Result(Nil, String) {
+  let requires =
+    "requires " <> host_display_name <> " " <> declared <> " or later"
+  use wanted <- result.try(
+    parse_version(declared)
+    |> result.replace_error(
+      min_host_version_name
+      <> "/0 must return a version string like \"0.1.0\", got \""
+      <> declared
+      <> "\"",
+    ),
+  )
+  use found <- result.try(
+    parse_version(host)
+    |> result.replace_error(
+      requires
+      <> ", but the host version \""
+      <> host
+      <> "\" is not MAJOR.MINOR.PATCH",
+    ),
+  )
+  case compare_versions(found, wanted) {
+    order.Lt -> Error(requires <> ", but this is " <> host)
+    order.Eq | order.Gt -> Ok(Nil)
+  }
+}
+
+/// `MAJOR.MINOR.PATCH` を 3 つの整数に読む。要素が 3 つでない、十進整数でない
+/// （pre-release と build metadata を含む）文字列は `Error(Nil)`。
+fn parse_version(value: String) -> Result(#(Int, Int, Int), Nil) {
+  case string.split(value, ".") {
+    [major, minor, patch] -> {
+      use major <- result.try(int.parse(major))
+      use minor <- result.try(int.parse(minor))
+      use patch <- result.try(int.parse(patch))
+      Ok(#(major, minor, patch))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+/// 2 つの版の順序。`MAJOR` → `MINOR` → `PATCH` の順に数値で比べる。
+fn compare_versions(a: #(Int, Int, Int), b: #(Int, Int, Int)) -> order.Order {
+  int.compare(a.0, b.0)
+  |> order.break_tie(int.compare(a.1, b.1))
+  |> order.break_tie(int.compare(a.2, b.2))
 }
 
 /// 任意エクスポート `plugin_required_versions/0` があれば期限付きで呼び、宣言
