@@ -1,6 +1,6 @@
 # 運用
 
-この文書は、起動時のログの読み方、バックアップ、版の更新、復旧、マスターキーの交換をまとめる。リポジトリ同梱の `docker-compose.yml`（同梱の Postgres を使う構成）を前提にする。公開イメージで動かしている場合は、以下の `docker compose ...` をすべて `docker compose -f docker-compose.release.yml ...` と読み替える（`-f` を付けると `docker-compose.override.yml` は自動では重ならないので、使っているときは `-f docker-compose.release.yml -f docker-compose.override.yml` と 2 つ並べる。[設定](configuration.md) の「docker compose の構成」）。
+この文書は、起動時のログの読み方、バックアップ、版の更新、復旧、マスターキーの交換、リソースの目安をまとめる。リポジトリ同梱の `docker-compose.yml`（同梱の Postgres を使う構成）を前提にする。公開イメージで動かしている場合は、以下の `docker compose ...` をすべて `docker compose -f docker-compose.release.yml ...` と読み替える（`-f` を付けると `docker-compose.override.yml` は自動では重ならないので、使っているときは `-f docker-compose.release.yml -f docker-compose.override.yml` と 2 つ並べる。[設定](configuration.md) の「docker compose の構成」）。
 失うと戻らないものが 2 つある。DB そのものと、DB の暗号文を復号するマスターキーである。
 
 ## 起動時のログ
@@ -153,3 +153,18 @@ sh setup-env.sh
 交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
 
 リレーの登録、監視の再開点、プラグインが保存したイベントはマスターキーに依らず変わらない。同じ nsec で登録し直せば公開鍵も同じなので、`bunker://` URI で変わるのは `secret=` だけである。
+
+## リソース
+
+小さな VPS や Raspberry Pi で動かすときの目安として、x86_64 のホスト（docker 29.6）でリポジトリの `docker-compose.yml` を起動して測ったメモリ（`docker stats` の `MEM USAGE`）を次に挙げる。起動直後は起動の約 1 分後、アカウントありはリレー 1 つ（バンカーと監視の両方）と 5 アカウントを登録した約 1 分半後の値である。
+
+| 状態 | アプリ | Postgres |
+| --- | --- | --- |
+| 起動直後 | 81 MiB | 35 MiB |
+| 5 アカウントとリレー 1 つ | 83 MiB | 36 MiB |
+
+動かしている構成の値は `docker stats --no-stream` で確かめられる。起動直後の Postgres のデータベースの大きさは約 8 MB である。`event_logger` が保存する `events` テーブルには保持期間が無く、保存の対象にしたアカウントのイベントが届くたびに増え続ける。`events` の大きさは次で確かめられる。
+
+```sh
+docker compose exec -T postgres psql -U nostr -d nostr_no_su -c "SELECT pg_size_pretty(pg_total_relation_size('events'))"
+```
