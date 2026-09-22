@@ -29,7 +29,7 @@ flowchart LR
 
     subgraph ext_plugins["外部プラグイン（PLUGIN_DIR）"]
         event_logger["event_logger<br/>Postgres へ保存"]
-        profile["profile<br/>プロフィールの表示"]
+        profile["profile<br/>プロフィールの表示と更新"]
         others["その他"]
     end
 
@@ -719,13 +719,14 @@ nostr-no-su/
 │   │   │   ├── event_logger/page.gleam  管理 UI のページの記述の組み立て（純粋）
 │   │   │   └── event_logger_ffi.erl     子仕様 map の組み立て
 │   │   └── test/
-│   └── profile/                  プロフィール（kind 0）を管理 UI に出す（状態も DB も持たない）
+│   └── profile/                  プロフィール（kind 0）の表示と更新（DB を持たない）
 │       ├── gleam.toml
 │       ├── manifest.toml
 │       ├── src/
 │       │   ├── profile.gleam         API v1 の関数
 │       │   ├── profile/page.gleam    管理 UI のページの記述の組み立て（純粋）
-│       │   └── profile_ffi.erl       取得の並行化と時刻の整形
+│       │   ├── profile_ffi.erl       取得の並行化、更新の JSON の組み立てと送信、時刻の整形
+│       │   └── profile_store.erl     直前の送信の結果を 1 回の描画まで保持する gen_server
 │       └── test/
 │
 ├── examples/plugins/             プラグインの書き方の例

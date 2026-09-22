@@ -6,11 +6,14 @@
 //// binary キーの map である。値は `gleam/dynamic` の `properties` / `list` /
 //// `string` で組む。`properties` は Erlang では binary キーの map になる。
 
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 
 /// プロフィールのページのキー。URL の path 片にもなる。
 const profile_page_key = "profile"
@@ -133,6 +136,160 @@ fn string_or_empty() -> decode.Decoder(String) {
   decode.one_of(decode.string, [decode.success("")])
 }
 
+/// kind 0 の 8 項目の項目名（`form` の欄の `name` の後半、`submitted/1` が読む
+/// キー）。この並びが `submitted_fields/1` と `profile_form_block/2` の欄の順に
+/// なる。
+const profile_field_names = [
+  "name", "display_name", "about", "picture", "banner", "nip05", "website",
+  "lud16",
+]
+
+/// `plugin_page_action` に届いたフォームの送信から取り出した 1 件。`pubkey` は
+/// 欄の `name` の前半（決めたこと 5 で検証済み）。
+pub type Submitted {
+  Submitted(pubkey: String, profile: Profile)
+}
+
+/// 送信された欄の `name`（`<公開鍵>-<項目名>`）を割り、公開鍵が 1 つに定まる
+/// ことと、8 項目のうち 1 つ以上が届いていることを確かめる。届かなかった項目は
+/// 空文字列。`values` に無い名前（8 項目のいずれでもない、または `-` を含まない）
+/// の欄は無視する。
+pub fn submitted(
+  values: dict.Dict(String, String),
+) -> Result(Submitted, String) {
+  let fields = dict.to_list(values) |> list.filter_map(parse_submitted_field)
+  let pubkeys = fields |> list.map(fn(field) { field.0 }) |> list.unique
+  case pubkeys {
+    [] -> Error("the submitted form has no profile field")
+    [pubkey] ->
+      Ok(Submitted(pubkey: pubkey, profile: profile_of_fields(fields)))
+    _ -> Error("the submitted form mixes several accounts")
+  }
+}
+
+/// `values` の 1 項目を `#(公開鍵, 項目名, 値)` にする。`name` に `-` が無い、
+/// または項目名が 8 項目のいずれでもなければ `Error(Nil)`（`submitted/1` が
+/// `filter_map` で捨てる）。
+fn parse_submitted_field(
+  entry: #(String, String),
+) -> Result(#(String, String, String), Nil) {
+  let #(name, value) = entry
+  case string.split_once(name, "-") {
+    Ok(#(pubkey, field)) ->
+      case list.contains(profile_field_names, field) {
+        True -> Ok(#(pubkey, field, value))
+        False -> Error(Nil)
+      }
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+/// `parse_submitted_field/1` が返した組から `Profile` を組み立てる。届かなかった
+/// 項目は空文字列。
+fn profile_of_fields(fields: List(#(String, String, String))) -> Profile {
+  let value_of = fn(field) {
+    fields
+    |> list.find(fn(entry) { entry.1 == field })
+    |> result.map(fn(entry) { entry.2 })
+    |> result.unwrap("")
+  }
+  Profile(
+    name: value_of("name"),
+    display_name: value_of("display_name"),
+    about: value_of("about"),
+    picture: value_of("picture"),
+    banner: value_of("banner"),
+    nip05: value_of("nip05"),
+    website: value_of("website"),
+    lud16: value_of("lud16"),
+  )
+}
+
+/// `submitted/1` が返した `Submitted` の 8 項目を、項目名と値の対で返す
+/// （`merged_content/2` の `fields` と `profile_store` へ保持する `values` に使う）。
+pub fn submitted_fields(submitted: Submitted) -> List(#(String, String)) {
+  let Submitted(profile:, ..) = submitted
+  [
+    #("name", profile.name),
+    #("display_name", profile.display_name),
+    #("about", profile.about),
+    #("picture", profile.picture),
+    #("banner", profile.banner),
+    #("nip05", profile.nip05),
+    #("website", profile.website),
+    #("lud16", profile.lud16),
+  ]
+}
+
+/// kind 0 の `content`（JSON 文字列）に `fields` の項目を差し替えた JSON 文字列を
+/// 返す。未知のキーはそのまま残す。空の値の項目はキーごと消す。
+/// `profile_ffi:merge_content/2` の `@external`。純粋なのでこのモジュールに置き、
+/// テストから直接呼べるようにする。
+@external(erlang, "profile_ffi", "merge_content")
+pub fn merged_content(
+  content: String,
+  fields: List(#(String, String)),
+) -> String
+
+/// 直前の更新の送信の結果。`profile_store` が 1 回の描画まで保持する
+/// （`profile.gleam` の `plugin_children/0` を参照）。
+pub type Submission {
+  /// 送信に成功した。
+  Succeeded(message: String)
+  /// 送信に失敗した。`values` はフォームへ戻す送信された値
+  /// （`Fetched.Failed` と名前が衝突するため `SubmitFailed` にする）。
+  SubmitFailed(message: String, values: Profile)
+}
+
+/// `profile_store:take/1` が返す map（`status`・`message`・`values` を持つ
+/// binary キーの map、または結果が無いときの `none`）を読む。`none`、型の誤り、
+/// 未知の `status` は `None`。
+pub fn submission(raw: Dynamic) -> Option(Submission) {
+  case decode.run(raw, submission_decoder()) {
+    Ok(submission) -> Some(submission)
+    Error(_errors) -> None
+  }
+}
+
+/// `submission/1` のデコーダー。
+fn submission_decoder() -> decode.Decoder(Submission) {
+  use status <- decode.field("status", decode.string)
+  case status {
+    "ok" -> {
+      use message <- decode.field("message", decode.string)
+      decode.success(Succeeded(message: message))
+    }
+    "error" -> {
+      use message <- decode.field("message", decode.string)
+      use values <- decode.field("values", submitted_values_decoder())
+      decode.success(SubmitFailed(message: message, values: values))
+    }
+    _ -> decode.failure(Succeeded(""), "Submission")
+  }
+}
+
+/// `profile_store` に保持した `values`（8 項目の binary キーの map）のデコーダー。
+fn submitted_values_decoder() -> decode.Decoder(Profile) {
+  use name <- decode.field("name", decode.string)
+  use display_name <- decode.field("display_name", decode.string)
+  use about <- decode.field("about", decode.string)
+  use picture <- decode.field("picture", decode.string)
+  use banner <- decode.field("banner", decode.string)
+  use nip05 <- decode.field("nip05", decode.string)
+  use website <- decode.field("website", decode.string)
+  use lud16 <- decode.field("lud16", decode.string)
+  decode.success(Profile(
+    name:,
+    display_name:,
+    about:,
+    picture:,
+    banner:,
+    nip05:,
+    website:,
+    lud16:,
+  ))
+}
+
 /// `plugin_pages/0` が返すページの一覧。プロフィールのページ 1 件だけを持つ。
 pub fn pages() -> Dynamic {
   dynamic.list([
@@ -144,19 +301,31 @@ pub fn pages() -> Dynamic {
 }
 
 /// ページの記述。`accounts` が空なら `alert`（`info`）1 つだけの節を返す。
-/// それ以外はアカウントと取得の結果を組にし、1 件につき `account_section/2` を
-/// 返す（`accounts` と `fetched` は同じ順序・同じ件数である前提。呼び出し元
-/// （`profile.gleam`）が同じ公開鍵の並びで作る）。
-pub fn content(accounts: List(Account), fetched: List(Fetched)) -> Dynamic {
+/// それ以外はアカウント・取得の結果・直前の送信の結果を組にし、1 件につき
+/// `account_section/3` を返す（`accounts`・`fetched`・`submissions` は同じ順序・
+/// 同じ件数である前提。呼び出し元（`profile.gleam`）が同じ公開鍵の並びで作る）。
+pub fn content(
+  accounts: List(Account),
+  fetched: List(Fetched),
+  submissions: List(Option(Submission)),
+) -> Dynamic {
   case accounts {
     [] -> page_sections([no_accounts_section()])
     _ ->
       page_sections(
-        list.map2(accounts, fetched, fn(account, fetched) {
-          account_section(account, fetched)
+        list.map(zip3(accounts, fetched, submissions), fn(row) {
+          account_section(row.0, row.1, row.2)
         }),
       )
   }
+}
+
+/// 3 つのリストを同じ添字で組にする。`accounts`・`fetched`・`submissions` を
+/// まとめて `content/3` から渡すためだけに使う。
+fn zip3(a: List(a), b: List(b), c: List(c)) -> List(#(a, b, c)) {
+  list.zip(a, b)
+  |> list.zip(c)
+  |> list.map(fn(pair) { #(pair.0.0, pair.0.1, pair.1) })
 }
 
 /// 登録アカウントが 0 件のときの節。
@@ -169,50 +338,122 @@ fn no_accounts_section() -> Dynamic {
   ])
 }
 
-/// アカウント 1 件の節。`title` はアカウントの `label`。ブロックは取得の結果に
-/// 応じて `account_blocks/2` が組む。
-fn account_section(account: Account, fetched: Fetched) -> Dynamic {
-  section(account.label, account_blocks(account, fetched))
+/// アカウント 1 件の節。`title` はアカウントの `label`。ブロックは取得の結果と
+/// 直前の送信の結果に応じて `account_blocks/3` が組む。
+fn account_section(
+  account: Account,
+  fetched: Fetched,
+  submission: Option(Submission),
+) -> Dynamic {
+  section(account.label, account_blocks(account, fetched, submission))
 }
 
-/// アカウント 1 件のブロックの並び。上から `alert`（`failure`。content が JSON の
-/// オブジェクトとして読めないときだけ）、`npub`・`updated` の `pairs`、画像
-/// （`picture` / `banner` が空でなければ）、8 項目の `pairs` の順。`NotFound` は
-/// `npub` と空の `updated`、8 項目は空の値で出す。`content` が JSON のオブジェクト
-/// として読めないときも 8 項目は空の値で出す。`Failed` は `npub` だけを出す。
-fn account_blocks(account: Account, fetched: Fetched) -> List(Dynamic) {
+/// アカウント 1 件のブロックの並び。
+///
+/// 1. `submission` が `Some` なら、その `message` を `alert`（成功は `success`、
+///    失敗は `failure`）で先頭に出す。
+/// 2. `Failed` は理由の `alert`（`failure`）と `npub` の `pairs` だけで終わり、
+///    `form` は出さない（現在のプロフィールが分からないまま編集させないため）。
+/// 3. `NotFound` は `warning` の `alert` に続けて `npub` と空の `updated` の
+///    `pairs`、そして `form` を出す。
+/// 4. `content` が JSON のオブジェクトとして読めないときは、既存の `alert`
+///    （`failure`）に続けて `npub`・`updated` の `pairs` と `form` を出す。
+/// 5. それ以外（`Found` で読めた）は `npub`・`updated` の `pairs`、画像
+///    （`picture` / `banner` が空でなければ）、`form` の順。
+///
+/// `form` の初期値は、直前の送信が `SubmitFailed` ならその `values`、それ以外は
+/// 取得した `Profile`（`NotFound` と読めない `content` は `empty_profile`）。
+fn account_blocks(
+  account: Account,
+  fetched: Fetched,
+  submission: Option(Submission),
+) -> List(Dynamic) {
+  list.append(
+    submission_alert(submission),
+    fetched_blocks(account, fetched, submission),
+  )
+}
+
+/// `submission` を先頭に出す `alert` 0〜1 件。
+fn submission_alert(submission: Option(Submission)) -> List(Dynamic) {
+  case submission {
+    Some(Succeeded(message:)) -> [alert_block(message, "success")]
+    Some(SubmitFailed(message:, ..)) -> [alert_block(message, "failure")]
+    None -> []
+  }
+}
+
+/// `submission_alert/1` に続くブロック（取得の結果ごとの並び。`account_blocks/3`
+/// の Doc を参照）。
+fn fetched_blocks(
+  account: Account,
+  fetched: Fetched,
+  submission: Option(Submission),
+) -> List(Dynamic) {
   case fetched {
+    Failed(reason:) -> [
+      alert_block(
+        "Could not fetch the profile from the relays: "
+          <> reason
+          <> " The edit form is not shown because the current profile is unknown.",
+        "failure",
+      ),
+      pairs_block([npub_item(account)]),
+    ]
+    NotFound ->
+      [
+        alert_block(
+          "No kind 0 event was found on the relays. Sending this form publishes a new profile with only the fields below.",
+          "warning",
+        ),
+        pairs_block([npub_item(account), #("updated", code_inline(""))]),
+      ]
+      |> list.append([
+        profile_form_block(
+          account.pubkey,
+          initial_profile(submission, empty_profile),
+        ),
+      ])
     Found(content:, created_at:) ->
       case profile_of_json(content) {
         Ok(profile) ->
           [pairs_block([npub_item(account), updated_item(created_at)])]
           |> list.append(image_blocks(account, profile))
-          |> list.append([profile_fields_block(profile)])
+          |> list.append([
+            profile_form_block(
+              account.pubkey,
+              initial_profile(submission, profile),
+            ),
+          ])
         Error(Nil) -> [
           alert_block(
             "The latest kind 0 event has a content that is not a JSON object.",
             "failure",
           ),
           pairs_block([npub_item(account), updated_item(created_at)]),
-          profile_fields_block(empty_profile),
+          profile_form_block(
+            account.pubkey,
+            initial_profile(submission, empty_profile),
+          ),
         ]
       }
-    NotFound -> [
-      pairs_block([npub_item(account), #("updated", code_inline(""))]),
-      profile_fields_block(empty_profile),
-    ]
-    Failed(reason:) -> [
-      alert_block(
-        "Could not fetch the profile from the relays: " <> reason,
-        "failure",
-      ),
-      pairs_block([npub_item(account)]),
-    ]
+  }
+}
+
+/// `form` の初期値。`submission` が `SubmitFailed` ならその `values`（送信された
+/// 値をそのまま返す）、それ以外は `fallback`（取得した現在のプロフィール）。
+fn initial_profile(
+  submission: Option(Submission),
+  fallback: Profile,
+) -> Profile {
+  case submission {
+    Some(SubmitFailed(values:, ..)) -> values
+    _ -> fallback
   }
 }
 
 /// 8 項目すべてが空文字列の `Profile`。`NotFound` と `content` が読めないときの
-/// 8 項目の `pairs` に使う。
+/// `form` の初期値に使う。
 const empty_profile = Profile(
   name: "",
   display_name: "",
@@ -251,18 +492,60 @@ fn image_with_note(url: String, label: String, alt: String) -> List(Dynamic) {
   }
 }
 
-/// kind 0 の 8 項目の `pairs`。`picture`・`banner`・`website`・`lud16` は `code`
-/// インライン、他は `text` インライン。
-fn profile_fields_block(profile: Profile) -> Dynamic {
-  pairs_block([
-    #("name", text_inline(profile.name)),
-    #("display_name", text_inline(profile.display_name)),
-    #("about", text_inline(profile.about)),
-    #("picture", code_inline(profile.picture)),
-    #("banner", code_inline(profile.banner)),
-    #("nip05", text_inline(profile.nip05)),
-    #("website", code_inline(profile.website)),
-    #("lud16", code_inline(profile.lud16)),
+/// プロフィールを編集する `form` ブロック。欄は `name` / `display_name` / `about`
+/// （`textarea`）/ `picture` / `banner` / `nip05` / `website` / `lud16` の順、
+/// 送信ボタンは `"Save"`。欄の `name` は `field_name/2` で組み立てる。
+fn profile_form_block(pubkey: String, profile: Profile) -> Dynamic {
+  form_block(
+    [
+      text_field(field_name(pubkey, "name"), "name", profile.name),
+      text_field(
+        field_name(pubkey, "display_name"),
+        "display_name",
+        profile.display_name,
+      ),
+      textarea_field(field_name(pubkey, "about"), "about", profile.about),
+      text_field(field_name(pubkey, "picture"), "picture", profile.picture),
+      text_field(field_name(pubkey, "banner"), "banner", profile.banner),
+      text_field(field_name(pubkey, "nip05"), "nip05", profile.nip05),
+      text_field(field_name(pubkey, "website"), "website", profile.website),
+      text_field(field_name(pubkey, "lud16"), "lud16", profile.lud16),
+    ],
+    "Save",
+  )
+}
+
+/// 欄の送信名。`<公開鍵>-<項目名>` の形（`parse_submitted_field/1` の分解と対）。
+fn field_name(pubkey: String, field: String) -> String {
+  pubkey <> "-" <> field
+}
+
+/// `text` 欄の記述。
+fn text_field(name: String, label: String, value: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("value"), dynamic.string(value)),
+  ])
+}
+
+/// `textarea` 欄の記述。
+fn textarea_field(name: String, label: String, value: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("textarea")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("value"), dynamic.string(value)),
+  ])
+}
+
+/// `form` ブロック。
+fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("form")),
+    #(dynamic.string("fields"), dynamic.list(fields)),
+    #(dynamic.string("submit"), dynamic.string(submit)),
   ])
 }
 
@@ -285,7 +568,7 @@ fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
 }
 
 /// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` のインライン
-/// （`text_inline`・`code_inline`・`id_inline`）の対。
+/// （`code_inline`・`id_inline`）の対。
 fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("pairs")),
@@ -326,14 +609,6 @@ fn alert_block(text: String, tone: String) -> Dynamic {
     #(dynamic.string("type"), dynamic.string("alert")),
     #(dynamic.string("text"), dynamic.string(text)),
     #(dynamic.string("tone"), dynamic.string(tone)),
-  ])
-}
-
-/// `text` インライン。
-fn text_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
   ])
 }
 
