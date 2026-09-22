@@ -418,6 +418,49 @@ pub fn page_action_with_a_bad_return_is_a_reason_test() {
     == "plugin_with_action: plugin_page_action/3 must return ok or {error, Reason}, got Atom"
 }
 
+/// 宣言した下限より本体の版が小さいと読み込まず、要求と実際の版を並べた
+/// 理由になる。`0.1.9` のように patch が違うだけの版でも同じく落ちる。
+pub fn min_host_version_older_host_test() {
+  assert plugin.check_min_host_version("0.2.0", "0.1.0")
+    == Error("requires nostr-no-su 0.2.0 or later, but this is 0.1.0")
+  assert plugin.check_min_host_version("0.2.0", "0.1.9")
+    == Error("requires nostr-no-su 0.2.0 or later, but this is 0.1.9")
+}
+
+/// 本体の版が下限と等しいか大きければ読み込まれる。`0.10.0` は `0.2.0` より
+/// 辞書順では小さいが数値比較では大きいので、文字列比較でないことを固定する。
+pub fn min_host_version_new_enough_host_test() {
+  assert plugin.check_min_host_version("0.2.0", "0.2.0") == Ok(Nil)
+  assert plugin.check_min_host_version("0.2.0", "0.2.1") == Ok(Nil)
+  assert plugin.check_min_host_version("0.2.0", "0.10.0") == Ok(Nil)
+  assert plugin.check_min_host_version("0.2.0", "1.0.0") == Ok(Nil)
+}
+
+/// 宣言が `MAJOR.MINOR.PATCH` に読めないと形の誤りの理由になる。
+/// pre-release と build metadata もここで弾かれる。
+pub fn min_host_version_malformed_declaration_test() {
+  let expected = fn(declared: String) {
+    Error(
+      "plugin_min_host_version/0 must return a version string like \"0.1.0\", got \""
+      <> declared
+      <> "\"",
+    )
+  }
+  assert plugin.check_min_host_version("0.2", "0.1.0") == expected("0.2")
+  assert plugin.check_min_host_version("0.2.0-rc.1", "0.1.0")
+    == expected("0.2.0-rc.1")
+  assert plugin.check_min_host_version("0.2.0+build.1", "0.1.0")
+    == expected("0.2.0+build.1")
+}
+
+/// 本体の版が `MAJOR.MINOR.PATCH` に読めないときも読み込まない。
+pub fn min_host_version_malformed_host_test() {
+  assert plugin.check_min_host_version("0.2.0", "dev")
+    == Error(
+      "requires nostr-no-su 0.2.0 or later, but the host version \"dev\" is not MAJOR.MINOR.PATCH",
+    )
+}
+
 /// fixture が退避した値を読む。キーが無ければ例外になる。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic

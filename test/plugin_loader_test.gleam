@@ -713,6 +713,78 @@ pub fn load_all_required_versions_broken_app_test() {
   assert has_note(notes, "(1 skipped)")
 }
 
+/// 宣言した本体の版の下限より本体が古いと、そのプラグインは読み込まれない。
+/// 本体の版はテストの中で読むので、リリースで `gleam.toml` の版が上がっても
+/// 固定値がずれない。
+pub fn load_all_min_host_version_too_old_test() {
+  let fixture = beam_fixture.new("min_host_old")
+  beam_fixture.compile(
+    beam_fixture.min_host_version_source(
+      fixture.module,
+      "min_host_old_plugin",
+      "<<\"99.0.0\">>",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    fixture.module
+      <> ": requires nostr-no-su 99.0.0 or later, but this is "
+      <> beam_fixture.loaded_app_version("nostr_no_su"),
+  )
+  assert has_note(notes, "(1 skipped)")
+}
+
+/// `plugin_min_host_version/0` の戻り値の形が合わないと読み込まれない。
+/// binary でない値は分類名が、`X.Y.Z` に読めない binary は値そのものが理由に
+/// 出る。
+pub fn load_all_min_host_version_bad_shape_test() {
+  let fixture = beam_fixture.new("min_host_bad")
+  let bad_int = beam_fixture.name(fixture, "aaa")
+  let bad_pre = beam_fixture.name(fixture, "bbb")
+  beam_fixture.compile(
+    beam_fixture.min_host_version_source(bad_int, "bad_int_plugin", "1"),
+    bad_int,
+    fixture.root,
+  )
+  beam_fixture.compile(
+    beam_fixture.min_host_version_source(
+      bad_pre,
+      "bad_pre_plugin",
+      "<<\"0.2.0-rc.1\">>",
+    ),
+    bad_pre,
+    fixture.root,
+  )
+  let #(plugins, notes) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    bad_int
+      <> ": plugin_min_host_version/0 must return a version string like \"0.1.0\", got Int",
+  )
+  assert has_note(
+    notes,
+    bad_pre
+      <> ": plugin_min_host_version/0 must return a version string like \"0.1.0\", got \"0.2.0-rc.1\"",
+  )
+}
+
 /// 影の提供元の ebin にある `.app` が形の崩れたものでも、影の行はアプリ不明の
 /// 分岐（モジュール名）に落ち、両方のプラグインの読み込みは続く。
 pub fn load_all_shadow_broken_app_test() {

@@ -28,8 +28,8 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 
 - `plugin_name/0` の値は管理 UI の表示名とログの識別子に使う。**プラグイン間で一意にすること。**
 - **`handle_event` は `/1` と `/2` のどちらか一方があればよい。** `/2` はプラグイン固有の設定を第 2 引数で受け取る形で（第 6 章）、両方あれば本体は `/2` を優先する。**設定が必須のプラグインは `/2` だけをエクスポートしてよい。** 設定が無ければ正しく書けない `handle_event/1` を、形だけ揃えるために持たせる必要はない。
-- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
-- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_required_versions/0` `plugin_pages/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
+- 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_min_host_version`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
+- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_min_host_version/0` `plugin_required_versions/0` `plugin_pages/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
 - **`-on_load` を使うなら即座に戻ること。** 本体はモジュールの読み込み（`code:ensure_loaded/1`）もメタデータの呼び出しと同じ 5 秒の期限で打ち切り、戻らなければそのプラグインを読み込まない（起動は続く）。打ち切っても `-on_load` の処理そのものは VM の中で走り続けるので、その中で待ち合わせをしないこと。
 
 ## 3. イベント map の仕様
@@ -267,7 +267,7 @@ handle_event(Event, Config) -> term().
 
 `plugin_children/0` と `handle_event/1` しか持たないプラグインは**従来どおり動く**。設定を必要としないプラグインは何も変えなくてよい。
 
-**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証はモジュールの読み込み → 必須エクスポート → `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
+**設定 map は `plugin_name/0` の後にしか決まらない。** 接頭辞がプラグイン名から決まるため、本体の検証はモジュールの読み込み → 必須エクスポート → `plugin_api_version` → `plugin_min_host_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` の順に進む。
 
 ### 6.4 設定が足りないことの申告
 
@@ -297,6 +297,8 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 > `handle_event/2` だけをエクスポートするプラグインは、この機能を持つ本体でしか読み込めない。どの v1 本体でも動かしたいプラグインは `handle_event/1` もエクスポートすること。
 
+この節の症状は版の下限の宣言では変わらない。必須エクスポートの検査は `plugin_min_host_version/0` の照合より先に走り、`handle_event/2` を知らない本体はこの任意エクスポートも知らないので、`missing export handle_event/1` のまま弾かれる。`plugin_min_host_version/0`（第 7 章）が効くのは、この照合を持つ本体より後に足した機能に依存するプラグインで、そのときは理由が `requires nostr-no-su 0.2.0 or later, but this is 0.1.0` の 1 行になり、原因が版であることが読める。
+
 ### 6.6 接頭辞は隔離ではない
 
 接頭辞は、何がどのプラグインへ渡るのかをログと文書と `docker-compose.yml` の上で読めるようにするための規約である。**プラグインを他の環境変数から隔離する仕組みではない。** プラグインは本体と同じ VM で動くので `os:getenv/1` を自由に呼べる（第 1 章の信頼モデル）。ただし本体の秘密（`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD`）は起動時に読んだ後で環境から消すので、`os:getenv/1` では読めない。これも隔離ではない（第 1 章）。
@@ -312,6 +314,14 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
 
 任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。プラグインが本体を呼ぶ口（第 14 章）は任意エクスポートですらなく本体側の関数の追加なので、第 2 章のエクスポート仕様は変わらず、**API バージョンは 1 のまま**である。
+
+任意エクスポートで足した機能は、古い本体では単に無視される。そこで**プラグインの側から本体の版の下限を宣言できる**ようにしてある。`plugin_min_host_version/0` が `X.Y.Z` の binary を返すと、本体は読み込み時に自分の版と `MAJOR.MINOR.PATCH` の数値比較で照合し、本体のほうが小さければそのプラグインを読み込まない（理由は第 9 章）。pre-release（`0.2.0-rc.1`）と build metadata（`0.2.0+build.1`）は扱わず、形の誤りとして読み込まない。0.x の間は minor が破壊的変更を表すので、新しい任意エクスポートや新しい本体側の関数（第 14 章）に依存するプラグインは、その機能が入った版を下限に書けばよい。この照合そのものを持たない本体はこのエクスポートを無視するので、下限の宣言が効くのは照合が入った版以降の本体である。この照合もバージョンを上げずに足したので、**API バージョンは 1 のまま**である。
+
+```erlang
+plugin_min_host_version() -> <<"0.2.0">>.
+```
+
+**依存の版の照合（`plugin_required_versions/0`）と用途を分けること。** 本体の版の下限にはこの節の `plugin_min_host_version/0` を使い、`plugin_required_versions/0` は影に入る依存（第 8.4 節）の版の照合に使う。後者は完全一致なので、本体の版をそこに書くと本体が上がるたびに宣言も上げ直すことになる。
 
 バージョン番号を上げるのは、次の破壊的変更のときだけである。
 
@@ -417,9 +427,12 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: missing export handle_event/1 or handle_event/2` | イベント処理関数がどちらのアリティでも無い |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由`。呼び出しのプロセスごと終了した場合は括弧内が終了理由（`killed` など） |
 | `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
-| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1`、`plugin_pages/0` `/1` も同じ形で報告される |
+| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_min_host_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1`、`plugin_pages/0` `/1` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 must return an Int, got Float` | 戻り値が整数でない |
 | `<mod>: unsupported api version 2 (expected 1)` | 本体が対応していないバージョン |
+| `<mod>: plugin_min_host_version/0 must return a version string like "0.1.0", got Int` | 戻り値が文字列（binary）でない |
+| `<mod>: plugin_min_host_version/0 must return a version string like "0.1.0", got "0.2.0-rc.1"` | 戻り値が `MAJOR.MINOR.PATCH` に読めない。pre-release と build metadata はここで弾かれる |
+| `<mod>: requires nostr-no-su 0.2.0 or later, but this is 0.1.0` | 宣言した本体の版の下限より本体が古い |
 | `<mod>: plugin_required_versions/0 must return a map of application names to version strings (expected String, got Int at gleam_stdlib)` | 戻り値の形が API に合わない。括弧内は `decode` の最初のエラー |
 | `<mod>: requires gleam_stdlib 1.0.2, but the code path provides 1.0.3` | 宣言した版がコードパス上の版と食い違う |
 | `<mod>: requires foo 1.0.0, but no foo.app is on the code path` | 宣言したアプリケーションがコードパスに無い |
@@ -452,7 +465,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 
 子仕様の行の `got` の後は受け取った値の `dynamic.classify` の分類名、`unsupported …` の括弧の中は受け取った値そのもの（`~0p` で 1 行にしたもの）で、表の値は例示である。
 
-検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` → `plugin_pages` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
+検証はモジュールの読み込み → 必須エクスポート（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `/2`）→ `plugin_api_version` → `plugin_min_host_version` → `plugin_required_versions` → `plugin_name` → 設定の切り出し → `plugin_children` → `plugin_pages` の順で進み、最初に失敗したところで止まる。子仕様の誤りは 1 件だけ報告する。
 
 ## 10. Erlang での最小実装例
 
@@ -486,6 +499,7 @@ handle_event(Event) ->
 
   この `Event` は本体のレコードなので、プラグイン側にも同じフィールドを同じ順で持つ型を宣言しておく（Gleam のレコードは実行時にはタグ付きタプルなので、コンストラクター名（`Event`）とフィールドの並びが一致していれば読める。フィールド名は実行時には残らない）。本体の型に追随する手間を避けたい場合は、`gleam/dynamic/decode` で map を直接読むほうが簡単である。
 - `plugin_required_versions/0` は `dict.from_list([#("gleam_stdlib", "1.0.3")])` のように `Dict(String, String)` を返せばよい。版は自分の `manifest.toml` に書かれた値を使う。
+- `plugin_min_host_version/0` は `pub fn plugin_min_host_version() -> String { "0.2.0" }` のように binary を返す。
 - 第 13 章の記述は binary キーの map なので、`gleam/dynamic` の `properties` / `list` / `string` で組む（`properties` は Erlang では map になる）。
 
 ## 12. Elixir で書くときの注意
@@ -630,6 +644,10 @@ plugin_page_action(<<"settings">>, _Values, _Config) ->
 - `<mod>: plugin_page_action/3 must return ok or {error, Reason}, got Atom`
 - `<mod>: plugin_page_action/3: error reason must be a String, got Atom`
 
+### 13.7 古い本体との互換性
+
+`plugin_pages` / `plugin_page_content` / `plugin_page_action` は、これらを知らない古い本体では**黙って無視される**。ページを持つプラグインは読み込まれ、管理 UI にページが出ないだけになるので、症状から原因が読めない。ページが前提のプラグインは `plugin_min_host_version/0`（第 7 章）でこの機能が入った本体の版を下限に宣言し、古い本体では理由つきで読み込まれないようにすること。
+
 ## 14. プラグインから本体を呼ぶ（イベントの送信と取得）
 
 この口はサンドボックスではない。第 1 章のとおりプラグインは本体と同じ VM で動くので、この口は秘密鍵に触れずに送信と取得を行うための**簡便な手段**であって、権限の境界ではない。送信は第 14.1〜14.4 節と第 14.6 節、取得は第 14.7〜14.9 節で、第 14.5 節の古い本体との互換性は両方に当てはまる。
@@ -685,7 +703,7 @@ end.
 
 ### 14.5 古い本体との互換性
 
-この章の 2 つの口はどちらも本体側の関数なので、`plugin_api_version/0` では有無を判定できない。持たない本体に置いたプラグインは読み込みまでは成功し、呼んだ時点で `undef` になって第 4 章の 1 件の失敗として数えられる（連続 5 回で無効化）。読み込み時に弾きたいプラグインは `plugin_required_versions/0` で `nostr_no_su` の版を宣言すること（第 8.4 節）。照合は**完全一致**なので、宣言したプラグインは本体の版が上がるたびに宣言も上げ直すことになる。
+この章の 2 つの口はどちらも本体側の関数なので、`plugin_api_version/0` では有無を判定できない。持たない本体に置いたプラグインは読み込みまでは成功し、呼んだ時点で `undef` になって第 4 章の 1 件の失敗として数えられる（連続 5 回で無効化）。読み込み時に弾きたいプラグインは `plugin_min_host_version/0` でこの口が入った本体の版を下限に宣言すること（第 7 章）。照合は下限との比較なので、本体の版が上がっても宣言を上げ直す必要は無い。
 
 ### 14.6 送ったイベントの配信
 

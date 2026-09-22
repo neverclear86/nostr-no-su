@@ -86,6 +86,24 @@ handle_event(Event) ->
 "
 }
 
+/// 必須 3 関数と `plugin_min_host_version/0` を持ち、その本体を `body`
+/// （Erlang の式）にしたプラグインのソース。本体の版の下限の検証に使う。
+pub fn min_host_version_source(
+  module: String,
+  name: String,
+  body: String,
+) -> String {
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_min_host_version/0, handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_min_host_version() -> " <> body <> ".
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
 /// 必須 3 関数と `plugin_required_versions/0` を持ち、その本体を `body`
 /// （Erlang の式）にしたプラグインのソース。版の照合の検証に使う。
 pub fn required_versions_source(
