@@ -1,3 +1,5 @@
+<p align="right">English | <a href="docs/readme-ja.md">日本語</a></p>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo/nostr-no-su-color-dark.svg">
@@ -8,36 +10,36 @@
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
-  Nostr のリモート署名バンカー（NIP-46）兼、自分のイベントを処理するユーティリティサーバー。Gleam / BEAM 製。
+  A NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
 </p>
 
 <p align="center">
-  <a href="https://github.com/neverclear86/nostr-no-su/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/neverclear86/nostr-no-su/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/neverclear86/nostr-no-su/releases"><img alt="Release" src="https://img.shields.io/github/v/tag/neverclear86/nostr-no-su?label=release&sort=semver"></a>
-  <a href="https://github.com/neverclear86/nostr-no-su/pkgs/container/nostr-no-su"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-nostr--no--su-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Gleam 1.17" src="https://img.shields.io/badge/Gleam-1.17-ffaff3?logo=gleam&logoColor=black">
-  <img alt="OTP 29" src="https://img.shields.io/badge/Erlang%2FOTP-29-A90533?logo=erlang&logoColor=white">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="https://github.com/neverclear86/nostr-no-su/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/neverclear86/nostr-no-su/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white&style=for-the-badge"></a>
+  <a href="https://github.com/neverclear86/nostr-no-su/releases"><img alt="Release" src="https://img.shields.io/github/v/tag/neverclear86/nostr-no-su?label=release&sort=semver&style=for-the-badge"></a>
+  <a href="https://github.com/neverclear86/nostr-no-su/pkgs/container/nostr-no-su"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-nostr--no--su-2496ED?logo=docker&logoColor=white&style=for-the-badge"></a>
+  <img alt="Gleam 1.17" src="https://img.shields.io/badge/Gleam-1.17-ffaff3?logo=gleam&logoColor=black&style=for-the-badge">
+  <img alt="OTP 29" src="https://img.shields.io/badge/Erlang%2FOTP-29-A90533?logo=erlang&logoColor=white&style=for-the-badge">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge"></a>
 </p>
 
-秘密鍵をクライアントに渡さず、`bunker://` URI で接続したクライアント（nsec.app、noStrudel など）からの署名要求にサーバーが応える。あわせて、登録したアカウントのイベントをリレーから監視し、プラグインで処理する（同梱の `event_logger` は Postgres に保存する）。docker compose で Postgres ごと立ち上がり、管理 UI から鍵とリレーを操作する。
+The server answers signing requests from clients connected over a `bunker://` URI (nsec.app, noStrudel, etc.) without ever handing them your private key. It also watches relays for events from your registered accounts and processes them with plugins (the bundled `event_logger` stores them in Postgres). It comes up together with Postgres via docker compose, and you operate keys and relays from the admin UI.
 
-## ✨ 特徴
+## ✨ Features
 
-- **NIP-46 バンカー**: `connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout` に応える。複数アカウントの鍵を 1 台で預かり、複数のリレーに専用の接続を張る（どれか 1 つ生きていれば署名できる）。secret を持たないクライアントは管理 UI の承認（`auth_url` フロー）を経て接続する
-- **鍵は暗号化して保存**: 秘密鍵と接続 secret はマスターキー（`ACCOUNT_MASTER_KEY`）で AES-256-GCM により暗号化して Postgres に置く。署名と暗号化は `connect` で宣言された権限（管理 UI で編集できる perms）の範囲だけを許し、perms を宣言しないクライアントには kind 24133 を除く署名と NIP-44 の暗号化・復号を許す
-- **自前の暗号実装**: BIP-340 Schnorr 署名と NIP-44 v2 暗号化を Gleam で実装し、公式のテストベクターに一致する。プリミティブは OTP の `crypto`（OpenSSL）で、NIF は要らない
-- **イベント監視とプラグイン**: 登録した全アカウントのイベントを複数リレーから集め、検証と重複排除をしてプラグインに渡す。プラグインは専用プロセスで動き、落ちても本体を巻き込まない。BEAM のモジュールを置くだけで自作のプラグインを足せる（[プラグイン API v1](docs/plugin-api.md)）
-- **管理 UI**: アカウントの登録（nsec の入力かサーバーでの生成）、接続 URI の表示、接続の承認、セッションの権限の編集と取り消し、リレーの追加と用途の編集、プラグインの状態を 1 画面で扱う。日本語と英語、ライトとダークに対応し、外部のファイルは読まない
-- **止まらない**: OTP のスーパービジョンツリーの下で、リレーの接続は個別に自動再接続し、DB が落ちてもバンカーは再試行を続け、アカウントの追加と削除は再起動なしで反映する
+- **NIP-46 bunker**: Answers `connect` / `get_public_key` / `sign_event` / `ping` / `nip44_encrypt` / `nip44_decrypt` / `logout`. One instance holds the keys of multiple accounts and keeps dedicated connections to multiple relays (as long as any one of them is alive, it can sign). Clients without a secret connect through an approval in the admin UI (the `auth_url` flow)
+- **Keys are stored encrypted**: Private keys and connection secrets are encrypted with the master key (`ACCOUNT_MASTER_KEY`) using AES-256-GCM and kept in Postgres. Signing and encryption are allowed only within the permissions declared in `connect` (perms, editable in the admin UI); clients that declare no perms are allowed signing—except for kind 24133—and NIP-44 encryption and decryption
+- **Own crypto implementation**: BIP-340 Schnorr signatures and NIP-44 v2 encryption are implemented in Gleam and match the official test vectors. Primitives come from OTP's `crypto` (OpenSSL); no NIFs needed
+- **Event monitoring and plugins**: Events of all registered accounts are collected from multiple relays, verified and deduplicated, then handed to plugins. Plugins run in dedicated processes and do not take the app down when they crash. Add your own plugin just by placing a BEAM module ([Plugin API v1](docs/plugin-api.md))
+- **Admin UI**: A single screen covers account registration (entering an nsec or generating one on the server), connection URI display, connection approval, session permission editing and revocation, relay addition and role editing, and plugin status. Japanese and English, light and dark are supported, and no external files are loaded
+- **Keeps running**: Under an OTP supervision tree, relay connections reconnect individually and automatically, the bunker keeps retrying even when the DB is down, and account additions and removals take effect without a restart
 
-## 🚀 はじめる
+## 🚀 Getting started
 
-必要なのは docker（compose v2）と、ファイルを取る `curl`、`setup-env.sh` が鍵を生成するのに使う `openssl` である。公開イメージ `ghcr.io/neverclear86/nostr-no-su` は `linux/amd64` と `linux/arm64` の両方を含むので、x86_64 のサーバーでも Raspberry Pi や Apple Silicon でも同じ手順で動く。
+You need docker (compose v2), `curl` to fetch files, and `openssl`, which `setup-env.sh` uses to generate keys. The published image `ghcr.io/neverclear86/nostr-no-su` contains both `linux/amd64` and `linux/arm64`, so the same steps work on an x86_64 server, a Raspberry Pi, or Apple Silicon.
 
-### 公開イメージから動かす
+### Run the published image
 
-リポジトリの clone は要らない。3 つのファイルを取り、`.env` を作って起動する。`<version>` は公開済みのリリースの版（`X.Y.Z`。[Releases](https://github.com/neverclear86/nostr-no-su/releases)）に置き換える。
+Cloning the repository is not needed. Fetch three files, create `.env`, and start. Replace `<version>` with a published release version (`X.Y.Z`; see [Releases](https://github.com/neverclear86/nostr-no-su/releases)).
 
 ```sh
 mkdir nostr-no-su && cd nostr-no-su
@@ -50,9 +52,9 @@ sh setup-env.sh
 docker compose -f docker-compose.release.yml up -d
 ```
 
-`setup-env.sh` は `.env.example` を `.env` に複製し、必須の 2 つ（マスターキー `ACCOUNT_MASTER_KEY` と管理パスワード `ADMIN_PASSWORD`）を生成した値で埋めて `.env` を 600 にする。`mkdir -p plugins` は自作プラグインの置き場所で、空でもよい（compose がマウントするので、無いと docker が root 所有で作る）。取るイメージのタグは `latest` で、`curl` した版に固定するときは `.env` に `NOSTR_NO_SU_VERSION=<version>` を書く。この構成では `logs` や `exec` も毎回 `-f docker-compose.release.yml` が要る。
+`setup-env.sh` copies `.env.example` to `.env`, fills the two required values (the master key `ACCOUNT_MASTER_KEY` and the admin password `ADMIN_PASSWORD`) with generated ones, and sets `.env` to mode 600. `mkdir -p plugins` is where your own plugins go, and it may stay empty (compose mounts it, so if it is missing docker creates it owned by root). The image tag pulled is `latest`; to pin it to the version you fetched, write `NOSTR_NO_SU_VERSION=<version>` in `.env`. With this setup, `logs` and `exec` also need `-f docker-compose.release.yml` every time.
 
-### ソースからビルドして動かす
+### Build from source
 
 ```sh
 git clone https://github.com/neverclear86/nostr-no-su.git && cd nostr-no-su
@@ -60,42 +62,42 @@ sh setup-env.sh
 docker compose up --build -d
 ```
 
-### 最初の設定
+### First run
 
-1. ブラウザーで `http://127.0.0.1:8080/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD` の値である。
-2. ダッシュボードのリレーの節の「追加」から、バンカーに使うリレー（`wss://relay.nsec.app` などの NIP-46 向けのリレーを推奨）と、監視に使うリレーを登録する。登録すると再起動なしで接続が開く。
-3. アカウントの節の「追加」で、nsec を貼り付けて登録するか、サーバーに鍵を生成させる。生成した場合は、確認ページの nsec をバックアップしてから登録する（以後は管理パスワードを再入力したときにしか表示しない）。
-4. アカウントの行の「接続 URI と公開鍵」を開き、「接続 URI」をコピーしてクライアントに貼り付ける。secret を持たない「接続 URI（要承認）」で接続すると、管理 UI での承認を経る。
+1. Open `http://127.0.0.1:8080/` in a browser. The username is `admin`, and the password is the value of `ADMIN_PASSWORD` in `.env`.
+2. From "Add" in the Relays section of the dashboard, register the relays the bunker will use (NIP-46-capable relays such as `wss://relay.nsec.app` are recommended) and the relays used for monitoring. The connections open without a restart.
+3. From "Add" in the Accounts section, paste an nsec to register, or have the server generate a key. If you generate one, back up the nsec shown on the confirmation page before registering (afterwards it is only shown when you re-enter the admin password).
+4. Open "Connection URIs and public key" on the account's row, copy the "Connection URI", and paste it into your client. Connecting with the "Connection URI (approval)", which carries no secret, goes through approval in the admin UI.
 
-登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。画面の構成と操作ごとの結果は [管理 UI](docs/admin-ui.md)、起動時のログの読み方は [運用](docs/operations.md) の「起動時のログ」にある。
+Registered accounts accept connections without a restart. Secrets are stored encrypted too, so the connection URI does not change across restarts. The screen layout and the result of each operation are in [Admin UI](docs/admin-ui.md), and how to read the startup log is in the 「起動時のログ」 section of [Operations](docs/operations.md).
 
-ローカルで `gleam run` する場合は、Postgres を用意して `DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD` を環境変数で渡す（[開発](docs/development.md)）。
+To run locally with `gleam run`, provide Postgres and pass `DATABASE_URL`, `ACCOUNT_MASTER_KEY`, and `ADMIN_PASSWORD` as environment variables ([Development](docs/development.md)).
 
-## ⚙️ 設定
+## ⚙️ Configuration
 
-設定はすべて環境変数で、docker compose では `.env` に書く。`.env` に書く必要があるのはマスターキーと管理パスワードだけで、ほかは既定値で動く。よく変えるものは次のとおりで、`.env.example` の該当の行の「# 」を外して書き換える。
+All configuration is via environment variables, written to `.env` with docker compose. The only values that must go into `.env` are the master key and the admin password; everything else works with the defaults. Frequently changed ones are below; uncomment the corresponding lines in `.env.example` (remove the leading `# `) and edit them.
 
-| 変数 | 既定 | 用途 |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `ADMIN_PORT` | `8080` | 管理 UI のポート。空にすると管理 UI を無効にする |
-| `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台。リバースプロキシーで公開するときはその公開 URL |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | 同梱の Postgres の資格情報。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの接続が拒否される |
+| `ADMIN_PORT` | `8080` | Port of the admin UI. Leave it empty to disable the admin UI |
+| `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | Base URL of the approval page. Use the public URL when serving through a reverse proxy |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | Credentials of the bundled Postgres. They only take effect while the `postgres-data` volume is empty; changing them after the first start makes the app's connection fail |
 
-全部の変数の表、秘密をファイルで渡す方法（`<変数>_FILE`）、リバースプロキシーの置き方、コンテナーの構成（読み取り専用のルート、`/tmp`、remsh、ログ）は [設定](docs/configuration.md) にある。
+The full table of variables, how to pass secrets via files (`<variable>_FILE`), reverse proxy placement, and the container setup (read-only root, `/tmp`, remsh, logging) are in [Configuration](docs/configuration.md).
 
-## 🔐 安全に使うために
+## 🔐 Security
 
-- **マスターキーを失うと鍵が戻らない**: `ACCOUNT_MASTER_KEY` を失うと、保存した全アカウントの秘密鍵を復号できなくなる（DB だけでは戻せない）。逆に、DB のダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。マスターキーはバックアップと別の場所に保管し、バージョン管理に含めないこと（[運用](docs/operations.md) の「マスターキーの保管」、交換の手順は同じ文書の「マスターキーの交換」）。
-- **管理 UI は平文 HTTP**: Basic 認証の資格情報も、署名権限そのものである secret 入りの `bunker://` URI も暗号化されずに流れる。同梱の compose はホストのループバック（`127.0.0.1:8080`）にだけ公開する。外部から使うときは TLS を終端するリバースプロキシーを前に置くこと（[設定](docs/configuration.md) の「リバースプロキシーの設定」）。認証の試行回数の制限は持たないので、推測されにくいパスワードを使う。
-- **プラグインは本体と同じ権限で動く**: `PLUGIN_DIR` に置いた BEAM は本体と同じ VM で動き、秘密鍵を持つプロセスにも到達できる。サンドボックスは無い。信頼できるものだけを置き、第三者から受け取ったプラグインはソースを読んでから置く。
-- **秘密鍵の表示と削除**: 管理 UI で秘密鍵を表示するとログに `[admin] revealed the private key of <npub>` が残る。アカウントを削除すると DB からも鍵が消え、ほかに保存していない鍵は戻らない。コピーした nsec や接続 URI はクリップボードに残るので、貼り付けた後は消す。
-- **`REMSH_ENABLED=true` は使うときだけ**: コンテナーに exec できる者が復号した秘密鍵を含む VM の全てに到達できる。既定は無効で、使うときだけ有効にする。
+- **Losing the master key loses the keys**: If you lose `ACCOUNT_MASTER_KEY`, the private keys of all stored accounts can no longer be decrypted (the DB alone cannot restore them). Conversely, a DB dump together with the master key leaks the private keys of every account. Keep the master key somewhere separate from backups and out of version control (the 「マスターキーの保管」 section of [Operations](docs/operations.md); the rotation procedure is in 「マスターキーの交換」 in the same document).
+- **The admin UI is plain HTTP**: Both the Basic-auth credentials and the `bunker://` URIs containing a secret—signing authority itself—flow unencrypted. The bundled compose publishes only to the host's loopback (`127.0.0.1:8080`). When using it from outside, put a TLS-terminating reverse proxy in front (the 「リバースプロキシーの設定」 section of [Configuration](docs/configuration.md)). There is no limit on authentication attempts, so use a hard-to-guess password.
+- **Plugins run with the same privileges as the app**: BEAM modules placed in `PLUGIN_DIR` run in the same VM as the app and can reach the processes holding private keys. There is no sandbox. Place only ones you trust, and read the source of any plugin received from a third party before placing it.
+- **Revealing and deleting private keys**: Revealing a private key in the admin UI leaves `[admin] revealed the private key of <npub>` in the log. Deleting an account removes the key from the DB as well, and keys not stored elsewhere cannot be recovered. Copied nsecs and connection URIs remain in the clipboard, so clear it after pasting.
+- **`REMSH_ENABLED=true` only when in use**: Anyone who can exec into the container can reach everything in the VM, including decrypted private keys. It is disabled by default; enable it only while you use it.
 
-v0.1 でのセキュリティの前提と、あえて対策していない項目は [設計上の判断と既知の制約](docs/design-decisions.md) の「v0.1 のセキュリティの前提」にある。
+The security assumptions in v0.1 and the items deliberately not mitigated are in the 「v0.1 のセキュリティの前提」 section of [Design decisions and known limitations](docs/design-decisions.md).
 
-## 🔄 更新とバックアップ
+## 🔄 Updating and backing up
 
-データは compose の `postgres-data` volume にあり、イメージを入れ替えても消えない。DB のスキーマの移行は起動時に自動で進む（前へ戻す移行は無い）。上げる前にダンプを取る。ソースからビルドして動かしている構成では `-f docker-compose.release.yml` を外し、`up -d` に `--build` を付ける（`pull` は `git pull` に読み替える）。
+Data lives in the compose `postgres-data` volume and is not lost when the image is replaced. DB schema migrations run automatically at startup (there are no backward migrations). Take a dump before upgrading. In a build-from-source setup, drop `-f docker-compose.release.yml` and add `--build` to `up -d` (read `pull` as `git pull`).
 
 ```sh
 docker compose -f docker-compose.release.yml exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-su-$(date +%Y%m%d).dump
@@ -103,32 +105,40 @@ docker compose -f docker-compose.release.yml pull
 docker compose -f docker-compose.release.yml up -d
 ```
 
-新しい版で `docker-compose.release.yml` や `.env.example` が変わっているときの取り直し、volume の名前の決まり、ダンプからの復旧と復旧後の確認は [運用](docs/operations.md) にある。版ごとの変更は [変更履歴](CHANGELOG.md) に書く。
+Re-fetching files when a new version changes `docker-compose.release.yml` or `.env.example`, how volume names are determined, and restoring from a dump with the post-restore checks are in [Operations](docs/operations.md). Changes for each version are recorded in the [Changelog](CHANGELOG.md).
 
-## 🧩 プラグイン
+## 🧩 Plugins
 
-同梱の `event_logger` は、監視で受信したイベントを Postgres の `events` テーブルに保存する（NIP-01 の全フィールド、`tags` は jsonb、取り込み時刻。同じイベントを複数のリレーから受け取っても 1 行）。compose の既定の構成ではそのまま動き、保存済みのイベントの直近 20 件は管理 UI の `/plugins/event_logger/timeline`、保存の状態は `/plugins/event_logger/settings` で見られる。保存の対象とするアカウントは `/plugins/event_logger/settings` で選べる（初期値は全アカウント）。ソースと改造版のビルドは [`plugins-src/event_logger/`](plugins-src/event_logger/README.md) にある。
+The bundled `event_logger` stores the events received by the monitor into the `events` table in Postgres (all NIP-01 fields, `tags` as jsonb, and the ingestion time; the same event received from multiple relays still becomes one row). It works as-is in the default compose setup; the latest 20 stored events are shown at `/plugins/event_logger/timeline` in the admin UI, and the storage status at `/plugins/event_logger/settings`. The accounts to store can be selected at `/plugins/event_logger/settings` (default: all accounts). The source and how to build a modified version are in [`plugins-src/event_logger/`](plugins-src/event_logger/README.md).
 
-自作のプラグインは Erlang か Gleam で `plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `handle_event/2`（設定を受け取る形。どちらか一方でよい）をエクスポートするモジュールを書き、`./plugins` に置く。仕様は [プラグイン API v1](docs/plugin-api.md)、例は [`examples/plugins/`](examples/plugins/)（状態を持たない `file_logger` と、状態を持つ `counter`）にある。
+To write your own plugin, write a module in Erlang or Gleam that exports `plugin_api_version/0`, `plugin_name/0`, and `handle_event/1` or `handle_event/2` (the form that receives the config; either is fine), and place it in `./plugins`. The spec is [Plugin API v1](docs/plugin-api.md), and examples are in [`examples/plugins/`](examples/plugins/) (the stateless `file_logger` and the stateful `counter`).
 
-## 📚 文書
+## 🪺 Why “Nostr-no-Su”?
 
-- [設定](docs/configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
-- [運用](docs/operations.md)：起動時のログ、バックアップ、版の更新、復旧、マスターキーの保管と交換
-- [管理 UI](docs/admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認（auth_url フロー）
-- [プラグイン API v1](docs/plugin-api.md)：プラグインを書くための仕様
-- [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
-- [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
-- [開発](docs/development.md)：ローカルでの実行とテスト、テストの流儀、管理 UI の CSS のビルドと画面の撮影
-- [貢献の手引き](CONTRIBUTING.md)：変更の出し方、版数の方針、リリースの手順
-- [変更履歴](CHANGELOG.md)：リリースごとの変更
+“Nostr no su” means “Nostr’s nest” in Japanese—a home for your keys and events.
 
-## 🛠 開発に参加する
+There’s also a little wordplay: No Secret Uploads—your Nostr clients request signatures, not your private key.
 
-Gleam 1.17.0 / OTP 29 で開発している。ローカルでの実行とテスト、CI の検査は [開発](docs/development.md) と [貢献の手引き](CONTRIBUTING.md) にある。issue と PR を歓迎する。
+## 📚 Documentation
 
-## ライセンス
+The documents below are written in Japanese.
 
-このリポジトリのライセンスは [MIT License](LICENSE) である。
-`vendor/stratus/` は Apache License 2.0 の stratus を改変したもので、帰属は [NOTICE](NOTICE)、改変の記録は [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md) にある。
-管理 UI のアイコンは、上部バーと favicon の製品のロゴを除いて、ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもので、帰属は [NOTICE](NOTICE) にある。ロゴはこのリポジトリのもので、[MIT License](LICENSE) に従う。
+- [Configuration](docs/configuration.md): environment variable table, `.env`, passing secrets via files, reverse proxy, docker compose setup
+- [Operations](docs/operations.md): startup logs, backups, version upgrades, recovery, storing and rotating the master key
+- [Admin UI](docs/admin-ui.md): screen layout, account operations and results, connection approval (the auth_url flow)
+- [Plugin API v1](docs/plugin-api.md): the spec for writing plugins
+- [Design decisions and known limitations](docs/design-decisions.md): the decisions that shaped the app and their reasons, and the remaining limitations
+- [Architecture](docs/architecture.md): processes, the paths of events and requests, directory structure, configuration readers
+- [Development](docs/development.md): running and testing locally, testing conventions, building the admin UI's CSS and taking screenshots
+- [Contributing](CONTRIBUTING.md): how to submit changes, versioning policy, release procedure
+- [Changelog](CHANGELOG.md): changes per release
+
+## 🛠 Contributing
+
+Developed on Gleam 1.17.0 / OTP 29. Running and testing locally and the CI checks are in [Development](docs/development.md) and [Contributing](CONTRIBUTING.md). Issues and PRs are welcome.
+
+## License
+
+This repository is licensed under the [MIT License](LICENSE).
+`vendor/stratus/` is a modified copy of stratus, licensed under the Apache License 2.0; attribution is in [NOTICE](NOTICE) and the modifications are recorded in [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md).
+The icons of the admin UI, except the product logo in the top bar and the favicon, are traced from [Lucide](https://lucide.dev) strokes under the ISC license; attribution is in [NOTICE](NOTICE). The logo belongs to this repository and follows the [MIT License](LICENSE).
