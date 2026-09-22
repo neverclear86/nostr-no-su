@@ -87,7 +87,7 @@ secrets:
 
 `DATABASE_URL_FILE` を compose で使うときは、`.env` に `DATABASE_URL=` と空で書く。同梱の compose は `${DATABASE_URL-...}` で、未設定なら同梱の Postgres の URL を渡すので、書かないと両方が設定された扱いで起動しない。
 
-パーミッション: compose の `secrets:` はホストのファイルをそのままマウントするので、swarm でなければ `uid` や `mode` の指定は効かない。`chown` を忘れると `[main] cannot start: ACCOUNT_MASTER_KEY_FILE could not be read (eacces)` で終了する。`secrets/` は `.gitignore` に入っている。
+パーミッション: compose の `secrets:` はホストのファイルをそのままマウントするので、swarm でなければ `uid` や `mode` の指定は効かない。`chown` を忘れると `[main] cannot start: ACCOUNT_MASTER_KEY_FILE could not be read (eacces)` で終了する。`secrets/` は `.gitignore` と `.dockerignore` に入っている。
 
 ## 管理 UI の待ち受けと認証
 
