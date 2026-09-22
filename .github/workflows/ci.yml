@@ -129,14 +129,18 @@ jobs:
         run: |
           timeout 60 sh -c 'until curl -sf -H "Accept: application/nostr+json" http://127.0.0.1:7777/ >/dev/null; do sleep 1; done'
       # TEST_DATABASE_URL と TEST_RELAY_URL を渡すので、Postgres を使う統合テストと
-      # strfry を使う E2E も走る（どちらかが無いとスキップされる）。
+      # strfry を使う E2E も走る（どちらかが無いとスキップされる）。COVERAGE を渡すと
+      # カバレッジを計測して build/coverage.txt に書く。
       - run: gleam test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nostr_no_su_test
           TEST_RELAY_URL: ws://127.0.0.1:7777
+          COVERAGE: "1"
       # E2E がスキップされずに実行されたことを、strfry のログで確かめる。
       - name: E2E がリレーにイベントを書いたことを確かめる
         run: docker logs "${{ job.services.strfry.id }}" 2>&1 | grep -q 'Inserted event'
+      # README のカバレッジのバッジが計測値から 1 ポイントを超えてずれていたら落とす。
+      - run: sh dev/check_coverage_badge.sh
       - run: gleam format --check src test dev
       # 例のプラグイン（examples/plugins/*/src/*.erl）が警告なしでコンパイルできることを確かめる。
       # -Wall だけでは警告で失敗しないので -Werror を付ける。成果物はリポジトリの外に出す。

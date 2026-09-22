@@ -3,6 +3,7 @@
 # 依頼文は自己完結にする（devin はこのセッションの文脈もエージェント定義も読まない）。
 # 実装の基準と検査の手順は .claude/agents/issue-implementer.md と同じ内容を写している。
 # 変えるときは両方を同時に直す。
+# 検査の手順 2 のカバレッジの文だけは環境の違い（strfry が無い）で issue-implementer.md と文言を変えている（写しではない）。
 #
 # 使い方: sh dev/devin_prompt.sh <issue 番号> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]
 #   仕様のファイル: tier none では issue の本文とコメント（gh issue view --comments の出力）、
@@ -99,7 +100,7 @@ cat <<PROMPT
 
 ## 終わる前の検査（この順に、機械的に。すべて通るまで直す）
 1. \`gleam build --warnings-as-errors\`
-2. \`gleam test\` を統合テストまで通す。Postgres は \`docker run --rm -d --name pg-devin-$n -p 127.0.0.1:$pgport:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine\` で立て、\`docker exec pg-devin-$n pg_isready\` を待ってから \`TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:$pgport/nostr_no_su_test gleam test\` を実行し、終わったら \`docker rm -f pg-devin-$n\` で消す
+2. \`gleam test\` を統合テストまで通す。Postgres は \`docker run --rm -d --name pg-devin-$n -p 127.0.0.1:$pgport:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine\` で立て、\`docker exec pg-devin-$n pg_isready\` を待ってから \`TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:$pgport/nostr_no_su_test gleam test\` を実行し、終わったら \`docker rm -f pg-devin-$n\` で消す。\`COVERAGE=1\` も付けて回し、そのあと \`sh dev/check_coverage_badge.sh\` を通す。この環境には strfry が無く計測値が CI より低く出るので、落ちても \`--update\` はせず、\`build/coverage.txt\` の \`total\` の行を報告ファイルに書いて終わる。
 3. \`gleam format src test dev\` を実行し、\`gleam format --check src test dev\` が通ることを確かめる
 4. \`examples/\` を変えたら \`erlc -Wall -Werror -o "\$(mktemp -d)" examples/plugins/*/src/*.erl\`。\`vendor/\` を変えたら \`sh dev/check_vendor_stratus.sh\`。\`docker-compose.yml\`、\`docker-compose.release.yml\`、\`.env.example\` のどれかを変えたら \`sh dev/check_env_example.sh\` と \`sh dev/check_release_compose.sh\`。\`plugins-src/\`、\`gleam.toml\`、\`manifest.toml\` を変えたら \`sh dev/check_shared_versions.sh\` と、\`plugins-src/event_logger\` で \`gleam build --warnings-as-errors\`、\`gleam test\`（同じ Postgres を使う）、\`gleam format --check src test\`
 5. \`src/nostr_no_su/admin/\` の \`.gleam\`（\`i18n.gleam\` を除く）か \`assets/admin.css\` を変えたら、\`npm ci && npm run build:css\` を実行して \`priv/static/admin.css\` の差分を残す

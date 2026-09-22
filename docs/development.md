@@ -1,6 +1,6 @@
 # 開発
 
-この文書は、本体とプラグインをローカルで実行、テストする手順、テストの流儀、管理 UI の CSS のビルドと画面の撮影の手順をまとめる。
+この文書は、本体とプラグインをローカルで実行、テストする手順、テストの流儀、カバレッジの計測、管理 UI の CSS のビルドと画面の撮影の手順をまとめる。
 
 ## 実行とテスト
 
@@ -33,6 +33,23 @@ docker rm -f nns-pg-test
 テストのモジュールは並列に走るので、モジュールをまたいで共有する状態を使わない。プロセスの名前は `process.new_name`、DB はテストごとのスキーマか database、BEAM のモジュール名と一時ディレクトリーは `support/beam_fixture` で一意にする。環境変数（`config_test` だけが使う）や同じ DB の advisory lock のように共有せざるを得ない状態を新しいモジュールで使うなら、そのモジュールを `test/nostr_no_su_test.gleam` の `ordered_modules` に足して、干渉する相手と同じレーンで走らせる。
 
 時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
+
+## カバレッジ
+
+`gleam test` に `COVERAGE=1` を付けると、本体の `src/` のモジュールのカバレッジを Erlang の `cover` で計測する。結果は実行の最後に標準出力へ 1 行（`coverage: <実行された行>/<行の合計> lines (<百分率>%)`）出るほか、モジュールごとの内訳と合計を `build/coverage.txt` に書く。手元で測るときは Postgres と strfry を上げた状態（この文書の「実行とテスト」と「NIP-46 の E2E（strfry）」）で行う。E2E が走るかどうかで数値が動くので、両方を立てる CI と同じ条件でないとずれが溜まる。`COVERAGE` を付けない `gleam test` は今までどおり計測しない:
+
+```sh
+COVERAGE=1 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test \
+  TEST_RELAY_URL=ws://127.0.0.1:7777 gleam test
+```
+
+対象は本体の `src/` のモジュールだけで、`vendor/`、hex の依存、`plugins-src/event_logger`、`test/`、`dev/` は入れない。バッジが名乗るのは本体のカバレッジであり、`event_logger` は別の `gleam test` で走る別のプロジェクトなので、1 つの数値にはまとめない。
+
+README（`README.md` と `docs/readme-ja.md`）のバッジは整数の百分率で、`sh dev/check_coverage_badge.sh` が計測値との差が 1 ポイントを超えたら落ちる（CI の `test` ジョブも同じ検査を行う）。ずれを直すときは `--update` で両方の README を直す:
+
+```sh
+sh dev/check_coverage_badge.sh --update
+```
 
 ## 管理 UI の CSS と画面の撮影
 
@@ -91,7 +108,7 @@ docker rm -f nns-pg-test
 
 | ジョブ | 検査 | PR で走る条件 |
 |--|--|--|
-| `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。strfry のログでイベントの保存を確かめる）、format、例のプラグインのコンパイル、`vendor/stratus`、`.env.example`、2 つの compose の一致の検査、shipment | docs 以外を変えた |
+| `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。カバレッジの計測つき。strfry のログでイベントの保存を確かめる）、README のカバレッジのバッジの検査、format、例のプラグインのコンパイル、`vendor/stratus`、`.env.example`、2 つの compose の一致の検査、shipment | docs 以外を変えた |
 | `event-logger` | 共有パッケージの版の検査、event_logger の build、Postgres つきの `gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
 | `css` | `npm run build:css` の結果が `priv/static/admin.css` と一致すること | 管理 UI の `.gleam`、`assets/`、`package*.json` を変えた |
 | `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |

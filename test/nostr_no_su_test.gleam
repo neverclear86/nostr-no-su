@@ -44,6 +44,9 @@ const lanes = 8
 /// - `[account_store]`、`[account_reconcile]`、`[app]`、`[resume_store]`、
 ///   `[plugin_resume_store]` の skip の行:
 ///   `TEST_DATABASE_URL` が無いときに統合テストを飛ばしたことを知らせる
+/// - `coverage:` の行: `COVERAGE` を設定して走らせたときだけ、実行の最後に
+///   `src/` のカバレッジの合計を 1 行出すため（`docs/development.md` の
+///   「カバレッジ」）
 pub fn main() -> Nil {
   run_tests(ordered_modules, lanes)
 }

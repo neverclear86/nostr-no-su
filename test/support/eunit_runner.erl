@@ -41,11 +41,13 @@ run(Ordered, Lanes) ->
         {report, {gleeunit_progress, [{colored, true}]}},
         {scale_timeouts, 10}
     ],
+    Covered = start_cover(),
     Code =
         case eunit:test(Tests, Options) of
             ok -> 0;
             _ -> 1
         end,
+    report_cover(Covered),
     erlang:halt(Code).
 
 %% 1 本のレーン。順番が来るたびにキューから 1 つ取って走らせる。取り出しの回数は
@@ -98,3 +100,62 @@ module_name(Path) ->
             ".erl" -> filename:basename(Path, ".erl")
         end,
     list_to_atom(lists:flatten(Name)).
+
+%% 環境変数 COVERAGE が設定されているときだけ、src/ のモジュールを cover で
+%% instrument してその一覧を返す。テストの実行の前に instrument しなければ計測が
+%% 始まらないので、eunit:test/2 の直前に呼ぶ。COVERAGE が無いときは false を返し、
+%% instrument も集計も行わない（実行は今までどおり）。instrument に失敗した
+%% モジュールがあれば error/1 で落とす（黙って対象が欠けないように）。
+start_cover() ->
+    case os:getenv("COVERAGE") of
+        false ->
+            false;
+        _ ->
+            case cover:start() of
+                {ok, _} -> ok;
+                StartError -> error({cover_start_failed, StartError})
+            end,
+            Modules = src_modules(),
+            lists:foreach(
+                fun(M) ->
+                    case cover:compile_beam(M) of
+                        {ok, _} -> ok;
+                        CompileError -> error({cover_compile_failed, M, CompileError})
+                    end
+                end,
+                Modules),
+            Modules
+    end.
+
+%% start_cover/0 が instrument したモジュールのカバレッジを集計する。cover の
+%% データは VM が止まると失われるので、erlang:halt/1 の前でなければ届かない。
+%% モジュールごとの行と合計の行を build/coverage.txt に書き、合計の 1 行を
+%% 標準出力にも出す。build/coverage.txt の書式（dev/check_coverage_badge.sh が
+%% 読む契約）は 1 行 1 モジュールで「<モジュール名> <実行された行> <行の合計>」、
+%% 最後に「total <実行された行> <行の合計>」。
+report_cover(false) ->
+    ok;
+report_cover(Modules) ->
+    Counts = [count_cover(M) || M <- Modules],
+    {Cov, Total} =
+        lists:foldl(
+            fun({_M, C, T}, {AccC, AccT}) -> {AccC + C, AccT + T} end,
+            {0, 0},
+            Counts),
+    Lines =
+        [io_lib:format("~s ~b ~b~n", [M, C, T]) || {M, C, T} <- Counts]
+        ++ [io_lib:format("total ~b ~b~n", [Cov, Total])],
+    ok = file:write_file("build/coverage.txt", Lines),
+    io:format("coverage: ~b/~b lines (~.1f%)~n", [Cov, Total, 100 * Cov / Total]),
+    ok.
+
+%% 1 モジュールの {モジュール名, 実行された行, 行の合計}。
+count_cover(M) ->
+    {ok, {M, {Cov, NotCov}}} = cover:analyse(M, coverage, module),
+    {M, Cov, Cov + NotCov}.
+
+%% src/ 配下の .gleam と .erl のモジュール名（計測の対象）。build の ebin には
+%% test/ と dev/（admin_preview）の BEAM も混ざるので、ディレクトリーごと
+%% instrument するのではなく src の走査から導く。名付けの規則は test/ と同じ。
+src_modules() ->
+    [module_name(Path) || Path <- filelib:wildcard("**/*.{erl,gleam}", "src")].
