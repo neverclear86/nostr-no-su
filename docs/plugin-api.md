@@ -323,7 +323,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ## 8. 配置と読み込み
 
-本体は起動時に `PLUGIN_DIR` を 1 度だけ走査し、見つけたプラグインをコードパスへ足して読み込む。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、**左から順に**走査する（以下で `<PLUGIN_DIR>` と書くのはそのうちの 1 つである）。`PLUGIN_DIR` が未設定（空文字列や `:` だけの指定を含む）なら外部プラグインの読み込みは行わない。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持ち、同梱の `event_logger` をそこに置いている。
+本体は起動時に `PLUGIN_DIR` を 1 度だけ走査し、見つけたプラグインをコードパスへ足して読み込む。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、**左から順に**走査する（以下で `<PLUGIN_DIR>` と書くのはそのうちの 1 つである）。`PLUGIN_DIR` が未設定（空文字列や `:` だけの指定を含む）なら外部プラグインの読み込みは行わない。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持ち、同梱の `event_logger` と `profile` をそこに置いている。
 
 ### 8.1 受け付けるレイアウト
 
