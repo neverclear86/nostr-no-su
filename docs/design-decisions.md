@@ -107,6 +107,10 @@ v0.1 の前に、秘密（アカウントの秘密鍵、接続 secret、マス�
 
 既知の制約。復号した秘密鍵と接続 secret は関数に閉じて `string.inspect` やクラッシュレポートに値が出ないようにしているが、同じ VM で動くコードは `sys:get_state/1` で状態を取り、閉じ込めた関数を呼んで値を読める。プラグインは本体と同じ VM・同じ権限で動くので、信頼できるものだけを置く前提を [README（日本語）](../README.ja.md) の「安全に使うために」、[設定](configuration.md) の「docker compose の構成」、[プラグイン API v1](plugin-api.md) に明記してある。v0.1 では追加の対策をしない。プラグインを別の VM やサンドボックスに出す設計は、境界を越えるイベントの受け渡しと設定の口を作り直すことになり、プラグイン機構の前提から変わるためである。
 
+### 同梱の Postgres のパスワード
+
+直した（PR #561）。`setup-env.sh` は `.env` を新しく作るときだけ、`POSTGRES_PASSWORD` を 64 文字の 16 進（`openssl rand -hex 32`）で生成して埋める。パスワードは `DATABASE_URL` の userinfo にそのまま入り、アプリはそれをパーセントデコードしないので `@ : / ? # %` を含められず、16 進にしている。既存の `.env` では生成も書き換えもしない。`postgres-data` volume は初回の起動時のパスワードで初期化済みで、後から変えると接続が拒否されるためである。そのため、既存の構成と、`setup-env.sh` を使わずに `.env` を作った構成では既定の `nostr` のまま残る。同梱の Postgres は compose のネットワークの内側でだけ待ち受け、ホストにはポートを公開していない（`docker-compose.yml` の `postgres` サービスに `ports` は無い）。
+
 ### 依存の既知の脆弱性
 
 確認した。`npm audit` は `found 0 vulnerabilities` で、`npm` の依存は管理 UI の CSS のビルドにだけ使い、実行時のイメージには入らない。Hex には audit のコマンドが無いので、主要な依存（`mist` 6.0.3、`wisp` 2.2.2、`pog` 4.1.0、`gleam_crypto` 1.6.0）が最新の安定版であることと、`manifest.toml` に固定した版が Hex で retire されていないことを見た（`wisp` は 2.1.1 と 2.2.0 が `serve_static` のパストラバーサルで retire されており、固定している 2.2.2 はその後の版である）。`gleam_otp` 1.2.0 と `gleam_stdlib` 1.0.3 は最新（1.3.0 と 1.0.5）より遅れているが、該当版の変更は機能の追加と不具合の修正だけでセキュリティの修正が無いので、この点検では上げない。`plugins-src/event_logger` の共有パッケージの版は `dev/check_shared_versions.sh` が本体との一致を検査しているので、この結果がそのまま当たる。

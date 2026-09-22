@@ -110,7 +110,7 @@ docker rm -f nns-pg-test
 
 | ジョブ | 検査 | PR で走る条件 |
 |--|--|--|
-| `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。カバレッジの計測つき。strfry のログでイベントの保存を確かめる）、README のカバレッジのバッジの検査、format、例のプラグインのコンパイル、`vendor/stratus`、`.env.example`、2 つの compose の一致の検査、shipment | docs 以外を変えた |
+| `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。カバレッジの計測つき。strfry のログでイベントの保存を確かめる）、README のカバレッジのバッジの検査、format、例のプラグインのコンパイル、`vendor/stratus`、`.env.example`、`setup-env.sh`、2 つの compose の一致の検査、shipment | docs 以外を変えた |
 | `event-logger` | 共有パッケージの版の検査、event_logger の build、Postgres つきの `gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
 | `profile` | profile の build、`gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
 | `css` | `npm run build:css` の結果が `priv/static/admin.css` と一致すること | 管理 UI の `.gleam`、`assets/`、`package*.json` を変えた |

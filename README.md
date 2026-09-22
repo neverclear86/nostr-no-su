@@ -72,13 +72,13 @@ Running on a remote host such as a VPS or a home server? The admin UI is publish
 
 ## ⚙️ Configuration
 
-Everything is configured by environment variables in `.env`. Only the master key and the admin password are required, and `setup-env.sh` generates them.
+Everything is configured by environment variables in `.env`. Only the master key and the admin password are required, and `setup-env.sh` generates them (a newly created `.env` also gets a generated password for the bundled Postgres).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ADMIN_PORT` | `8080` | Port of the admin UI. Empty disables it |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | Base URL of the approval page. The public URL behind a reverse proxy |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | Credentials of the bundled Postgres. Only take effect on the first start |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | Credentials of the bundled Postgres. Only take effect on the first start. `setup-env.sh` puts a generated password in the `.env` it creates |
 
 All variables, passing secrets via files and reverse proxies are in [Configuration](docs/configuration.md).
 

@@ -2,15 +2,18 @@
 # docker compose で起動するための .env を用意する。
 #
 # .env が無ければ .env.example を複製し、必須の 2 つ（ACCOUNT_MASTER_KEY と
-# ADMIN_PASSWORD）を openssl で生成した値で埋める。ほかの変数は .env.example の
-# とおり「# 」付きの既定値のまま写す（docs/configuration.md の「環境変数」の表を見て、変える
-# ものだけ「# 」を外す）。
+# ADMIN_PASSWORD）と同梱の Postgres のパスワード（POSTGRES_PASSWORD。写した
+# 「# POSTGRES_PASSWORD=nostr」の行を置き換える）を openssl で生成した値で埋める。
+# ほかの変数は .env.example のとおり「# 」付きの既定値のまま写す
+# （docs/configuration.md の「環境変数」の表を見て、変えるものだけ「# 」を外す）。
 #
 # .env があれば上書きしない（書いてあるマスターキーを失うと、保存したアカウントの
 # 秘密鍵を復号できなくなる）。そのときは次の 2 つだけを行う。
 #   - 必須の 2 つのうち、行が無いか値が空のものを生成した値で埋める
 #   - .env.example にあって .env に無い変数を、.env.example の行のまま末尾に足す
-# 値の入っている行は必須の 2 つを含めて変えない。
+# 値の入っている行は必須の 2 つを含めて変えない。POSTGRES_PASSWORD も変えない
+# （postgres-data volume は初回の起動時のパスワードで初期化済みで、変えると
+# 接続できなくなる）。
 #
 # どちらの場合も .env を 600 にする。生成した値は画面に出さない。
 #
@@ -33,9 +36,18 @@ trap 'rm -f "$tmp"' EXIT
 # 変数の名前と値を 1 行にして返す。名前ごとに生成の方法が違う。
 generate() {
   case "$1" in
-    ACCOUNT_MASTER_KEY) printf 'ACCOUNT_MASTER_KEY=%s\n' "$(openssl rand -hex 32)" ;;
+    ACCOUNT_MASTER_KEY | POSTGRES_PASSWORD) printf '%s=%s\n' "$1" "$(openssl rand -hex 32)" ;;
     ADMIN_PASSWORD) printf 'ADMIN_PASSWORD=%s\n' "$(openssl rand -base64 24)" ;;
   esac
+}
+
+# .env の中で正規表現 $1 に合う最初の行を、行 $2 に置き換える。
+replace_first() {
+  awk -v re="$1" -v line="$2" '
+    $0 ~ re && !done { print line; done = 1; next }
+    { print }
+  ' "$env_file" > "$tmp"
+  cat "$tmp" > "$env_file"
 }
 
 # 「NAME=値」か「# NAME=値」の行の NAME を列挙する（dev/check_env_example.sh と同じ形）。
@@ -58,17 +70,21 @@ filled=""
 for name in ACCOUNT_MASTER_KEY ADMIN_PASSWORD; do
   line=$(generate "$name")
   if grep -q "^$name=[[:space:]]*$" "$env_file"; then
-    awk -v name="$name" -v line="$line" '
-      $0 ~ "^" name "=[[:space:]]*$" && !done { print line; done = 1; next }
-      { print }
-    ' "$env_file" > "$tmp"
-    cat "$tmp" > "$env_file"
+    replace_first "^$name=[[:space:]]*\$" "$line"
     filled="$filled $name"
   elif ! grep -q "^$name=" "$env_file"; then
     printf '%s\n' "$line" >> "$env_file"
     filled="$filled $name"
   fi
 done
+
+# 新しく作った .env では、写した「# POSTGRES_PASSWORD=…」の行を生成した値の行に
+# 置き換える（既定の nostr のままにしない）。既存の .env の POSTGRES_PASSWORD の
+# 行は変えず、行が無ければ下の処理が .env.example の行のまま末尾に足す。
+if [ "$created" = 1 ] && grep -q '^# POSTGRES_PASSWORD=' "$env_file"; then
+  replace_first '^# POSTGRES_PASSWORD=' "$(generate POSTGRES_PASSWORD)"
+  filled="$filled POSTGRES_PASSWORD"
+fi
 
 # .env.example にあって .env に無い変数を、.env.example の行のまま足す。
 added=""
