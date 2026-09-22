@@ -79,23 +79,6 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 タグの値に NUL があるときは `PostgresqlError("22P05", "untranslatable_character", "unsupported Unicode escape sequence")` になる。NUL を取り除いて保存しないのは、イベントの id と署名が元の `content` と `tags` から計算されており、書き換えた行は元のイベントとして検証できなくなるためである。
 
-## `DATABASE_URL` からの移行
-
-イベント保存はかつて本体に内蔵され、`DATABASE_URL` で設定していた。
-
-| 旧 | 新 |
-| --- | --- |
-| `DATABASE_URL=postgres://…` | `PLUGIN_EVENT_LOGGER_DATABASE_URL=postgres://…` |
-| `DATABASE_URL=`（空）で保存を無効化 | **同梱版を読み込ませないことが無効化である（`PLUGIN_DIR=/plugins` か `PLUGIN_DIR=`）** |
-
-**DB はそのまま使える。** 旧構成で作られた `events` テーブルと 2 つのインデックスは、現在の移行 1 と同じ DDL で作られている。移行の文はすべて `IF NOT EXISTS` なので、旧構成の DB を `PLUGIN_EVENT_LOGGER_DATABASE_URL` に向けても行と定義は触られないまま `event_logger_schema_version` に版 1 が記録される（確認は「確認」の節の `schema ready` の行、版の仕組みは同じ文書の「スキーマの版」にある）。
-
-**空文字列の意味が変わった。** 旧構成では `DATABASE_URL=` で保存を黙って無効にできたが、`PLUGIN_EVENT_LOGGER_DATABASE_URL=` は本体が空値を落とすため、プラグインには**キーごと届かない**。起動のたびに出る行と保存をやめる方法は [設定](../../docs/configuration.md) の「環境変数」にある。
-
-**`DATABASE_URL` は本体の設定として別の意味で復活している。** 現在の `DATABASE_URL` はバンカーがアカウント（暗号化した秘密鍵と接続 secret）を保存する先で、イベント保存とは関係しない。旧構成の `.env` をそのまま使うと、イベント保存用だった URL がアカウントストアの接続先として読まれる。
-
-管理 UI の「Event storage」欄も無くなった。代わりは Plugins 欄の `event_logger` 行である（状態の語の意味は [管理 UI](../../docs/admin-ui.md) にある）。
-
 ## `pgo` のアプリケーションを自分で起動していること
 
 本体のローダーは**コードパスを足すだけでアプリケーションを起動しない**（[プラグイン API v1](../../docs/plugin-api.md) 第 8.1 節）。したがって同梱したアプリケーションの起動はプラグインの責任である。このプラグインは接続プールの起動シム `event_logger:start_pool/1` の先頭で `application:ensure_all_started(pgo)` を呼ぶ（冪等なので子の再起動のたびに呼ばれても害はない）。
@@ -144,11 +127,12 @@ docker compose logs nostr-no-su | grep plugin_loader
 
 ```
 [plugin_loader] event_logger: 120 module(s) already provided by the host or another plugin are ignored (backoff 1.1.6, exception 2.1.1, gleam_erlang 1.3.0, gleam_json 3.1.0, gleam_otp 1.2.0, gleam_stdlib 1.0.3, gleam_time 1.10.0, opentelemetry_api 1.5.0, pg_types 0.6.0, pgo 0.20.0, pog 4.1.0)
-[plugin_loader] loaded 1 plugin(s) from /app/plugins: event_logger
+[plugin_loader] profile: 22 module(s) already provided by the host or another plugin are ignored (gleam_json 3.1.0, gleam_stdlib 1.0.3)
+[plugin_loader] loaded 2 plugin(s) from /app/plugins: event_logger, profile
 [plugin_loader] loaded no plugins from /plugins
 ```
 
-影の件数が数百なら Elixir が混入している（ローカルでビルドしている）。上のビルド手順で作り直すこと。上は `./plugins` が空のとき（同梱版だけ）の出力である。改造版を `./plugins` に置いて `PLUGIN_DIR=/plugins` を渡した構成では、1 行目が出ず `[plugin_loader] loaded 1 plugin(s) from /plugins: event_logger` になる。`PLUGIN_DIR` を既定のまま改造版を置くと、同梱版が勝って `[plugin_loader] event_logger: module event_logger is already provided by the host or another plugin; skipped` と `[plugin_loader] loaded no plugins from /plugins (1 skipped)` が出る。
+影の件数が数百なら Elixir が混入している（ローカルでビルドしている）。上のビルド手順で作り直すこと。上は `./plugins` が空のとき（同梱の `event_logger` と `profile` だけ）の出力である。改造版を `./plugins` に置いて `PLUGIN_DIR=/plugins` を渡した構成では、`/app/plugins` を走査しないので 2 行目と 3 行目が出ず、4 行目が `[plugin_loader] loaded 1 plugin(s) from /plugins: event_logger` になる（1 行目の影の行は改造版でも出る）。`PLUGIN_DIR` を既定のまま改造版を置くと、同梱版が勝って `[plugin_loader] event_logger: module event_logger is already provided by the host or another plugin; skipped` と `[plugin_loader] loaded no plugins from /plugins (1 skipped)` が出る。
 
 ```sh
 docker compose logs nostr-no-su | grep -e '\[event_logger\]' -e '\[plugin event_logger\]'

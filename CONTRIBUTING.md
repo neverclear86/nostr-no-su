@@ -16,7 +16,7 @@ issue を立ててから PR を出す。PR は main に squash マージする�
 
 開発中の `version` は前のリリースの版のまま変えない（最初のリリースまでは `0.0.0`）。版を上げるのはリリースの PR だけで、未リリースの変更は `CHANGELOG.md` の `[Unreleased]` が表す。本体（`gleam.toml`）と `plugins-src/` の各プラグインの `gleam.toml` の版は常に同じ値にする。
 
-イメージには、本体、`vendor/stratus`、Hex の依存のライセンスが `dev/collect_licenses.sh` で入る。同梱プラグイン `event_logger` と `profile` の依存は本体の依存の部分集合なので、この収集でそのまま覆われる（検証の手順 2）。
+イメージには、本体、`vendor/stratus`、Hex の依存のライセンスが `dev/collect_licenses.sh` で入る。同梱プラグイン `event_logger` と `profile` の依存は本体の依存の部分集合なので、この収集でそのまま覆われる。
 
 ## 依存のライセンス
 

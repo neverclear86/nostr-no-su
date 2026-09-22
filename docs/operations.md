@@ -20,10 +20,12 @@
 | 対象 | 中身 | 失ったとき |
 | --- | --- | --- |
 | `bunker_accounts` | 公開鍵、ラベル、暗号化した秘密鍵と接続 secret | 全アカウントを登録し直す必要があり、`bunker://` URI の secret も変わる |
+| `bunker_sessions` | 承認済みのクライアントのセッション（署名者、クライアント、許可した権限、最終利用の時刻） | 失うと承認済みだったクライアントの要求が `unauthorized: send connect first` で拒否され、そのクライアントは接続をやり直す（承認を経る URI で接続したクライアントは承認もやり直す） |
+| `bunker_pending` | 承認待ちの接続要求 | 失うと承認待ちだった要求が消え、そのクライアントは接続をやり直す。承認待ちは 10 分で失効するので、失って困るのは取った時点で待っていた分だけである |
 | `monitor_resume` | 監視の購読の再開点（リレーごとの `since`） | 失うと次の購読が保存済みのイベントをすべて求め、`dedup` のウィンドウを超える分がプラグインへもう一度届く |
 | `plugin_resume` | プラグインごとの再開点（プラグイン名ごとの `since`） | 失うとそのプラグインの再開点が無い状態に戻り、復帰時の取り直しの購読も定義されない |
 | `relays` | 登録したリレーの URL と用途（監視・バンカー） | 失うと `bunker://` URI の `relay=` が変わり、下の「復旧後の確認」の 2 が一致しなくなる |
-| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`、`relays`、`plugin_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
+| `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`、`bunker_sessions`、`bunker_pending`、`relays`、`plugin_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
 | `events` | `event_logger` が保存したイベント（docker イメージに同梱されているので、compose の既定の構成では常に存在する） | プラグインが保存した履歴が失われる |
 | `monitored_accounts` | `event_logger` が保存の対象とするアカウント（行が 0 件なら全アカウントが対象） | 失うと保存の対象が全アカウントに戻る |
 | `event_logger_schema_version` | `event_logger` の移行の版 | `events`・`monitored_accounts` と対で戻す必要がある |

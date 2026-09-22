@@ -171,12 +171,16 @@ NIP-04 だけを使う古いクライアントには対応していない。
 - **無効**：連続して失敗したので止めた。原因を直してから「再有効化」
 - **応答なし**：状態の問い合わせに間に合わなかった。読み込み直して変わらなければログを見る
 
+起動時に読み込めなかったプラグインがあると、プラグインのタイルが警告色になって補足が「読み込み失敗 N」に変わり、プラグインの節の下に「読み込めなかったプラグイン」のカードが出る。
+カードには候補のモジュール名かディレクトリー名と理由が英語のまま並ぶ（ログの `[plugin_loader]` の行と同じ文）。
+理由を直してから再起動する（`.env` の設定を直したときは `docker compose up -d`、`./plugins` の中身を直したときは `docker compose restart nostr-no-su`）。
+
 ## イベントを保存する（event_logger）
 
 同梱の `event_logger` は、監視で受け取った自分のイベントを同じ Postgres の `events` テーブルに保存する。
 compose の既定の構成ではそのまま動き、設定は要らない。
 
-プラグインの節の「開く」から 2 つのページに行ける。
+プラグインの節の `event_logger` の行にあるアイコンのボタン「ページを開く」で「Timeline」が開き、ページの上のタブで「Settings」に移れる。
 
 ![event_logger のタイムライン](images/usage/event-logger-timeline.png)
 
@@ -217,6 +221,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 | 「変更を確認できませんでした」のページ | DB に書けたか確かめられなかった。再読み込みで再送せず、ダッシュボードで反映を見る |
 | DB を止めた、落ちた | 署名と監視は続く。変更の操作だけが通らない。戻れば最長 2 分で `account store is back` が出る |
 | プラグインが「無効」 | ログの `[plugin <名前>]` の行に理由がある。直してから「再有効化」 |
+| 「読み込めなかったプラグイン」が出る。タイルに「読み込み失敗 N」 | 起動時にそのプラグインを読み込めなかった。カードの理由（ログの `[plugin_loader]` の行）を直して、`.env` なら `docker compose up -d`、`./plugins` の中身なら `docker compose restart nostr-no-su` |
 
 ![読み込めなかったアカウントのカード](images/usage/unreadable.png)
 
