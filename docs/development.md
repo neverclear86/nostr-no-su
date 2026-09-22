@@ -45,7 +45,7 @@ COVERAGE=1 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_n
 
 対象は本体の `src/` のモジュールだけで、`vendor/`、hex の依存、`plugins-src/event_logger`、`test/`、`dev/` は入れない。バッジが名乗るのは本体のカバレッジであり、`event_logger` は別の `gleam test` で走る別のプロジェクトなので、1 つの数値にはまとめない。
 
-README（`README.md` と `docs/readme-ja.md`）のバッジは整数の百分率で、`sh dev/check_coverage_badge.sh` が計測値との差が 1 ポイントを超えたら落ちる（CI の `test` ジョブも同じ検査を行う）。ずれを直すときは `--update` で両方の README を直す:
+README（`README.md` と `README.ja.md`）のバッジは整数の百分率で、`sh dev/check_coverage_badge.sh` が計測値との差が 1 ポイントを超えたら落ちる（CI の `test` ジョブも同じ検査を行う）。ずれを直すときは `--update` で両方の README を直す:
 
 ```sh
 sh dev/check_coverage_badge.sh --update
@@ -69,7 +69,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # shots �
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本語の画面を撮る
 ```
 
-README に載せる画像は `dev/readme_shots.sh` で撮り直す。撮影用のサーバーの起動から停止まで行い、`docs/images/usage/` に英語と日本語の 8 枚ずつを上書きする（幅 1280px、ライト）。撮り直した画像はコミットに含める。
+README と `docs/usage.md` に載せる画像は `dev/readme_shots.sh` で撮り直す。撮影用のサーバーの起動から停止まで行い、`docs/images/usage/` に英語と日本語のダッシュボード 1 枚ずつと、`docs/usage.md` に載せる要素の切り出し画像 18 枚（日本語）を上書きする（幅 1280px、ライト）。撮り直した画像はコミットに含める。
 
 ```sh
 sh dev/readme_shots.sh

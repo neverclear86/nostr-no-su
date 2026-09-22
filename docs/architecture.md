@@ -721,8 +721,8 @@ nostr-no-su/
 ├── plugins/                      自作プラグインの置き場所（追跡しない。同梱の event_logger はイメージの /app/plugins にある）
 │
 ├── docs/
-│   ├── readme-ja.md              README の日本語版（トップの README.md は同じ内容の英語版）
-│   ├── images/usage/             README に載せる管理 UI のスクリーンショット（dev/readme_shots.sh で撮る）
+│   ├── usage.md                  利用者向けの使い方（管理 UI の手順）
+│   ├── images/usage/             README と docs/usage.md に載せる管理 UI のスクリーンショット（dev/readme_shots.sh で撮る）
 │   ├── plugin-api.md             プラグイン API v1 の仕様（プラグイン作者向け）
 │   ├── architecture.md           この文書
 │   ├── design-decisions.md       設計上の判断と既知の制約
@@ -739,6 +739,7 @@ nostr-no-su/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.release.yml    利用者向け（公開イメージから取る。docker-compose.yml との差はイメージの 1 行）
+├── README.md                     英語の README（README.ja.md は同じ内容の日本語版）
 └── .env.example                  docker compose で使う .env の雛形
 ```
 
@@ -781,5 +782,6 @@ nostr-no-su/
 - [設定](configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
 - [運用](operations.md)：起動時のログ、DB のダンプと復元、版の更新、マスターキーの保管と交換、復旧後の確認
 - [開発](development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
-- [README（日本語）](readme-ja.md)：導入と最初の設定（トップの [README.md](../README.md) は同じ内容の英語版）
+- [使い方](usage.md)：管理 UI でのリレーとアカウントの登録、クライアントの接続と承認、権限、event_logger
+- [README（日本語）](../README.ja.md)：導入と最初の設定（トップの [README.md](../README.md) は同じ内容の英語版）
 - `plugins-src/event_logger/README.md`：同梱プラグインのビルドと配置

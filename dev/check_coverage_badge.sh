@@ -1,5 +1,5 @@
 #!/bin/sh
-# README.md と docs/readme-ja.md のカバレッジのバッジ（coverage-<整数>%25-<色>）を、
+# README.md と README.ja.md のカバレッジのバッジ（coverage-<整数>%25-<色>）を、
 # COVERAGE=1 を付けた gleam test の計測値（build/coverage.txt の total の行から
 # 整数に丸めた百分率）と突き合わせる。どちらの差も 1 ポイント以内なら 0、超えて
 # いれば食い違いを出して 1 で終わる。
@@ -26,7 +26,7 @@ esac
 
 root="$(git rev-parse --show-toplevel)"
 report="$root/build/coverage.txt"
-readmes="$root/README.md $root/docs/readme-ja.md"
+readmes="$root/README.md $root/README.ja.md"
 
 if [ ! -f "$report" ]; then
   echo "build/coverage.txt is missing; run: COVERAGE=1 gleam test" >&2

@@ -13,7 +13,7 @@ BEAMの並列処理や安定性を活かして効率的にNostrのイベント�
 
 ## 開発
 
-仕様と設計の文書は [README（日本語）](docs/readme-ja.md) の「文書」節から辿る（トップの [README.md](README.md) は同じ内容の英語版）。
+仕様と設計の文書は [README（日本語）](README.ja.md) の「文書」節から辿る（トップの [README.md](README.md) は同じ内容の英語版）。
 
 CI（`.github/workflows/ci.yml`。食い違ったら `ci.yml` が正）は、PR と main への push で次を検査する（Gleam 1.17.0 / OTP 29）。PR では変えたファイルに応じてジョブを省略し、docs、`.claude/`、`*.md`、LICENSE だけの PR では何も検査しない。main への push では全部のジョブが走る。
 

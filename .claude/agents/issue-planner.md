@@ -90,7 +90,7 @@ issue とそのコメントを読み、触るファイルの当たりを `ls`、
    - 管理 UI に英語の文字列を新しく出すプランは、その文字列を `view.untranslated` で包むことと、`test/support/admin_ui.gleam` のスタブの語が `test/japanese_pages_test.gleam` の `allowed_words` に収まるかを「変更するファイル」に書く
    - 新しく足す識別子に hit が出たら、既存の名前との衝突として扱い、名前を変えるか、衝突しない理由を「決めたこと」に書く
    - 表に行を足す変更では、その表を説明する直前の段落（例外の列挙、既定値の出どころ）も追随の対象に含める
-   - 表示の場所を動かす変更（要素を `<details>` に移すなど）は語が変わらず掃き出しに出ないので、動かす要素の表示名（日本語と英語）で README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）と `docs/` を掃き、その場所を説明する文を「変更するファイル」に入れる
+   - 表示の場所を動かす変更（要素を `<details>` に移すなど）は語が変わらず掃き出しに出ないので、動かす要素の表示名（日本語と英語）で README.md と README.ja.md（同じ内容の英語版と日本語版）と `docs/` を掃き、その場所を説明する文を「変更するファイル」に入れる
    - `test/` の hit は「テスト」の節に「落ちる既存テスト」として列挙する。テストのファイルを「触らない」と書けるのは、回した語の `test/` の hit が 0 件のときだけである
    - `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）の文字列リテラルは Tailwind の走査対象である（`assets/admin.css` の `@import "tailwindcss" source(none)` と `@source`）。プランが指定する文言や理由の文字列に CSS のクラス名（`block` など）を含めない
    - 管理 UI の描画を足す・変えるプランは、`docs/architecture.md` のディレクトリ構造の一覧、`test/support/admin_ui.gleam` の `pages()`（新しいページだけでなく、変えた既存の節の状態も）、`dev/admin_preview.gleam` の固定名を「変更するファイル」に入れる

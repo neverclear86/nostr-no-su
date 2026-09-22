@@ -3,7 +3,9 @@
 // （prefers-color-scheme のエミュレーション）で、ページ全体を撮る。
 // 使い方: PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots [locale]
 //        PREVIEW_PORT=18461 node dev/screenshots.mjs --readme docs/images/usage [locale]
+//        PREVIEW_PORT=18461 node dev/screenshots.mjs --usage docs/images/usage [locale]
 // --readme のときは readme 印のある画面だけを 1280px・ライトで撮り、出力名を <readme>-<en|ja>.png にする。
+// --usage のときは usage の要素だけを 1280px・ライトで切り出して撮り、出力名を <name>.png にする。
 // そのときダッシュボードと event_logger のページは PREVIEW_PORT + 3 の状態から撮る。
 // 撮影用のサーバー（PREVIEW_PORT=18461 gleam run -m admin_preview）は終了しないので、別の端末で先に起動しておく。
 // 初回は npx playwright-core install chromium で、playwright-core の版が使う chromium を入れる。
@@ -20,10 +22,17 @@ import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
 const readmeMode = process.argv[2] === "--readme";
-const out = readmeMode ? process.argv[3] : process.argv[2];
-const locale = readmeMode ? process.argv[4] : process.argv[3];
+const usageMode = process.argv[2] === "--usage";
+const named = readmeMode || usageMode;
+const out = named ? process.argv[3] : process.argv[2];
+// --usage の出力名は言語の接尾辞を持たないので、locale を省略したときは日本語に倒す。
+const locale = named
+  ? (process.argv[4] ?? (usageMode ? "ja-JP" : undefined))
+  : process.argv[3];
 if (!out) {
-  console.error("usage: node dev/screenshots.mjs [--readme] <output directory> [locale]");
+  console.error(
+    "usage: node dev/screenshots.mjs [--readme|--usage] <output directory> [locale]",
+  );
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -43,28 +52,29 @@ const account = (action) => `${base}/accounts/${signer}/${action}`;
 const unreadablePubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444";
 const unreadableAccount = (action) => `${base}/accounts/${unreadablePubkey}/${action}`;
 
-// --readme のときは README に載せる 1 組だけを撮るので、広い画面とライトに絞る。
-const viewports = readmeMode
+// --readme と --usage のときは文書に載せる組だけを撮るので、広い画面とライトに絞る。
+const viewports = named
   ? [{ name: "w1280", width: 1280, height: 800, deviceScaleFactor: 1 }]
   : [
       { name: "w1280", width: 1280, height: 800, deviceScaleFactor: 1 },
       { name: "w375", width: 375, height: 812, deviceScaleFactor: 2 },
     ];
-const colorSchemes = readmeMode ? ["light"] : ["light", "dark"];
+const colorSchemes = named ? ["light"] : ["light", "dark"];
 
 // 撮る画面。form を持つものは POST で開く。status は応答の状態コードの期待値で、無ければ 200。
 // mask は乱数で変わる値を伏せる。copy を持つものは、開いた後に最初のコピーのボタンを押してから撮る。
 // click と keys は、開いた後に順にクリックするセレクターと、順に押すキーの配列。
+// open は、開いた後に open = true にして開く <details> のセレクター。
 // readme は --readme のときの出力名（<readme>-<en|ja>.png）で、印の無い画面は --readme では撮らない。
 const shots = [
   { name: "01-dashboard", url: `${base}/` },
   { name: "02-dashboard-empty", url: `${empty}/` },
   { name: "03-dashboard-accounts-unavailable", url: `${unavailable}/` },
-  { name: "04-approve-page", url: `${base}/approve/tok-1`, readme: "approve" },
+  { name: "04-approve-page", url: `${base}/approve/tok-1` },
   { name: "05-approved", url: `${base}/approve/tok-1`, form: {} },
   { name: "06-denied", url: `${base}/deny/tok-1`, form: {} },
   { name: "07-decision-not-found", url: `${base}/approve/unknown`, form: {}, status: 404 },
-  { name: "08-new-account", url: `${base}/accounts/new`, readme: "new-account" },
+  { name: "08-new-account", url: `${base}/accounts/new` },
   { name: "09-import-invalid-nsec", url: `${base}/accounts/import`, form: { nsec: "nsec1invalid", label: "x" }, status: 400 },
   { name: "10-import-duplicate", url: `${base}/accounts/import`, form: { nsec: signerNsec, label: "dup" }, status: 409 },
   { name: "11-registered", url: `${base}/accounts/import`, form: { nsec: specNsec, label: "<i>imported</i>" } },
@@ -114,7 +124,7 @@ const shots = [
   { name: "51-add-relay-not-saved", url: `${base}/relays/new`, form: { url: "wss://not-saved.example", monitor: "on" }, status: 409 },
   { name: "52-add-relay-maybe", url: `${base}/relays/new`, form: { url: "wss://maybe.example", monitor: "on" }, status: 202 },
   { name: "53-add-relay-unconfirmed", url: `${base}/relays/new`, form: { url: "wss://unconfirmed.example", monitor: "on" }, status: 202 },
-  { name: "54-edit-relay", url: `${base}/relays/1/edit`, readme: "edit-relay" },
+  { name: "54-edit-relay", url: `${base}/relays/1/edit` },
   { name: "55-edit-relay-role-required", url: `${base}/relays/1/edit`, form: {}, status: 400 },
   { name: "56-edit-relay-not-saved", url: `${base}/relays/2/edit`, form: { monitor: "on" }, status: 409 },
   { name: "57-delete-relay", url: `${base}/relays/1/delete` },
@@ -129,14 +139,69 @@ const shots = [
   { name: "66-plugin-page-disabled", url: `${base}/plugins/broken/status` },
   { name: "67-plugin-page-not-found", url: `${base}/plugins/console_logger/nope`, status: 404 },
   { name: "68-plugin-page-unavailable", url: `${base}/plugins/slow/status`, status: 503 },
-  { name: "69-session-permissions", url: `${base}/sessions/${signer}/${declaredClient}/permissions`, readme: "session-permissions" },
+  { name: "69-session-permissions", url: `${base}/sessions/${signer}/${declaredClient}/permissions` },
   { name: "70-session-permissions-not-declared", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions` },
   { name: "71-session-permissions-not-applied", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions`, form: { sign_event: "on" }, status: 409 },
   { name: "72-session-permissions-unavailable", url: `${unavailable}/sessions/${signer}/${declaredClient}/permissions` },
-  { name: "73-readme-dashboard", url: `${readmeBase}/`, click: ["summary >> nth=2"], readme: "dashboard-uri" },
-  { name: "74-event-logger-timeline", url: `${readmeBase}/plugins/event_logger/timeline`, readme: "event-logger-timeline" },
-  { name: "75-event-logger-settings", url: `${readmeBase}/plugins/event_logger/settings`, readme: "event-logger-settings" },
+  { name: "73-readme-dashboard", url: `${readmeBase}/`, open: "#accounts li:first-child details" },
+  { name: "74-event-logger-timeline", url: `${readmeBase}/plugins/event_logger/timeline` },
+  { name: "75-event-logger-settings", url: `${readmeBase}/plugins/event_logger/settings` },
   { name: "76-readme-dashboard-plain", url: `${readmeBase}/`, readme: "dashboard" },
+];
+
+// --usage で撮る要素。selector は開いたページの中で 1 つの要素にだけ一致させる
+// （一致しないか複数に一致すると strict で失敗する）。url、form、status、open は
+// shots と同じ意味。出力名は <name>.png で、言語の接尾辞は付けない。
+const usage = [
+  { name: "tiles", url: `${readmeBase}/`, selector: "main > div.grid-cols-2" },
+  { name: "navbar", url: `${readmeBase}/`, selector: "header" },
+  { name: "relays", url: `${readmeBase}/`, selector: "#relays" },
+  { name: "new-relay", url: `${base}/relays/new`, selector: "main > section" },
+  { name: "edit-relay", url: `${base}/relays/1/edit`, selector: "main > section" },
+  {
+    name: "accounts",
+    url: `${readmeBase}/`,
+    selector: "#accounts",
+    open: "#accounts li:first-child details",
+  },
+  { name: "new-account", url: `${base}/accounts/new`, selector: "main" },
+  { name: "pending", url: `${base}/`, selector: "#pending" },
+  { name: "approve", url: `${base}/approve/tok-1`, selector: "main > section" },
+  { name: "sessions", url: `${readmeBase}/`, selector: "#sessions" },
+  {
+    name: "session-permissions",
+    url: `${base}/sessions/${signer}/${declaredClient}/permissions`,
+    selector: "main > section",
+  },
+  {
+    name: "private-key-form",
+    url: account("private-key"),
+    selector: "main > section",
+  },
+  { name: "rotate", url: account("rotate"), selector: "main > section" },
+  { name: "plugins", url: `${readmeBase}/`, selector: "#plugins" },
+  {
+    name: "event-logger-timeline",
+    url: `${readmeBase}/plugins/event_logger/timeline`,
+    selector: "main",
+  },
+  {
+    name: "event-logger-settings",
+    url: `${readmeBase}/plugins/event_logger/settings`,
+    selector: "main > section.card:has(form)",
+  },
+  {
+    name: "unreadable",
+    url: `${base}/`,
+    selector: "section.card:has(.alert-warning)",
+  },
+  {
+    name: "not-confirmed",
+    url: account("label"),
+    form: { label: "maybe" },
+    status: 202,
+    selector: "main > section",
+  },
 ];
 
 // 画面を開いて応答を返す。POST は送信先と同じオリジンのページにフォームを作って送り
@@ -175,13 +240,18 @@ async function open(page, shot) {
   return response;
 }
 
-// 撮る前の操作。クリックの後に押すキーを送る。
+// 撮る前の操作。クリックの後に押すキーを送り、open の <details> を開く。
 async function prepare(page, shot) {
   for (const selector of shot.click ?? []) {
     await page.locator(selector).click();
   }
   for (const key of shot.keys ?? []) {
     await page.keyboard.press(key);
+  }
+  if (shot.open) {
+    await page.locator(shot.open).evaluate((el) => {
+      el.open = true;
+    });
   }
 }
 
@@ -203,8 +273,12 @@ async function copy(page, manual) {
     .then(() => true, () => false);
 }
 
-// --readme のときは readme の出力名を持つ画面だけを撮る。
-const wanted = readmeMode ? shots.filter((shot) => shot.readme) : shots;
+// --readme のときは readme の出力名を持つ画面だけ、--usage のときは usage の要素を撮る。
+const wanted = usageMode
+  ? usage
+  : readmeMode
+    ? shots.filter((shot) => shot.readme)
+    : shots;
 // README の画像の言語の接尾辞。locale を指定しなければ英語。
 const lang = locale?.startsWith("ja") ? "ja" : "en";
 // 画面の応答の content-type が始まるべき値。
@@ -232,12 +306,26 @@ try {
         const copied = shot.copy
           ? ` ${copyLabel}=${await copy(page, shot.copy === "manual")}`
           : "";
-        const file = readmeMode
-          ? `${out}/${shot.readme}-${lang}.png`
-          : `${out}/${shot.name}-${viewport.name}-${colorScheme}.png`;
+        const file = usageMode
+          ? `${out}/${shot.name}.png`
+          : readmeMode
+            ? `${out}/${shot.readme}-${lang}.png`
+            : `${out}/${shot.name}-${viewport.name}-${colorScheme}.png`;
         const mask = shot.mask ? [page.locator(shot.mask)] : [];
         // animations: "disabled" は、ボタンの色の遷移を終わった状態にしてから撮る。
-        await page.screenshot({ path: file, fullPage: true, mask, animations: "disabled" });
+        // selector を持つものは、その要素だけを切り出して撮る。
+        if (shot.selector) {
+          await page
+            .locator(shot.selector)
+            .screenshot({ path: file, mask, animations: "disabled" });
+        } else {
+          await page.screenshot({
+            path: file,
+            fullPage: true,
+            mask,
+            animations: "disabled",
+          });
+        }
         const status = response.status();
         const type = response.headers()["content-type"] ?? "";
         const expected = shot.status ?? 200;
