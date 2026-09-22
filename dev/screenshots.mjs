@@ -9,7 +9,7 @@
 // 初回は npx playwright-core install chromium で、playwright-core の版が使う chromium を入れる。
 // locale（ja-JP など）を渡すと、ブラウザーがその言語の Accept-Language を送り、管理 UI はその言語で出す。
 // 渡さなければ Accept-Language を送らず、管理 UI は既定の英語で出す。
-// 出力先をリポジトリの中にするときは、.gitignore と .dockerignore が除く build/ の下にする。
+// 出力先をリポジトリの中にするときは、.gitignore と .dockerignore が除く build/ の下にする（--readme の docs/images/usage/ だけは例外で、撮り直した画像をコミットする）。
 // CHROMIUM に chromium の実行ファイルを渡すと、playwright-core が既定で探すものの代わりに使う。
 // 応答の状態コードが画面ごとの期待値と違うか、応答が HTML でない画面があれば、撮り終えた後にその一覧を出して
 // 終了コード 1 で終える。
