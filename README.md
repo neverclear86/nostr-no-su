@@ -10,7 +10,7 @@
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
-  Nostr-no-Su - "Nostr's nest" in Japanese - is a NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
+  Nostr-no-Su - <em>"Nostr's nest" in Japanese</em> - is a NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
 </p>
 
 <p align="center">

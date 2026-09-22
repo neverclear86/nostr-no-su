@@ -10,7 +10,7 @@
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
-  Nostr-no-Su - Nostr の巣 - は、Nostr のリモート署名バンカー（NIP-46）兼、自分のイベントを処理するユーティリティサーバー。Gleam / BEAM 製。
+  Nostr-no-Su - <em>Nostr の巣</em> - は、Nostr のリモート署名バンカー（NIP-46）兼、自分のイベントを処理するユーティリティサーバー。Gleam / BEAM 製。
 </p>
 
 <p align="center">
