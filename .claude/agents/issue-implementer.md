@@ -1,8 +1,8 @@
 ---
 name: issue-implementer
 description: nostr-no-su の承認済み実装プランをブランチで実装し、検査を通して PR を作る。issue-workflow の「実装」段階で使う。レビューの指摘への対応と rebase も、新しいエージェントとしてこの定義で立てる。
-model: sonnet
-effort: high
+model: opus
+effort: medium
 disallowedTools: Agent
 hooks:
   PostToolUse:
@@ -28,6 +28,7 @@ hooks:
 - 作業はすべて、指示された作業ツリーの絶対パスの下で行う。Bash の cwd は呼び出しごとにユーザーの作業ツリーに戻るので、相対パスで書き込みをしない
 - プランは、指示された issue コメントの URL の本文を `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` で読む。本文の後半は `<details>` に畳まれているので、そこまで読む。依頼文の「実装時の条件」（無ければプランの冒頭の「### 実装時の条件」）を取り込み、PR 本文の「プランからの変更」に取り込んだ旨を書く
 - 小さい issue（tier none）はプランが無く、依頼文が issue を直接読めと言う。このときは受け入れ条件を issue から取り、PR 本文に「## 設計メモ」を置く（下の「プランが無いとき」）
+- 読む量を絞る。大きいファイルは Read の offset と limit で要る範囲だけ読み、一度読んだファイルを全文で読み直さない。build、テスト、CI の出力は全文を流さず、失敗の箇所と最後の要約だけを `tail`、`grep` で取り出す（この段階の費用の大半は、伸びた文脈をリクエストのたびに読み直す分である）
 - プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、その箇所と理由と代案を指示されたファイルに書き、status を deviation にして返す（小さな表記の違いは PR 本文の「プランからの変更」に書けばよい）。プランの版が上がって「続き」を頼まれたら、作業ツリーとブランチはそのまま使い、新しい版との差分だけを直す
 
 ## 実装の基準

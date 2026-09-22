@@ -18,7 +18,8 @@ export const meta = {
 //   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier? }]
 //               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あれば判定・デザイン・プランの段階を飛ばす
 //               tier:    'none' | 'light' | 'full'。あれば判定の tier の代わりに使う（A/B と再開で固定するため）
-//               分割で生まれたサブ issue はスクリプトが足す（designUrl を親から継ぎ、depth 1、tier は light。再分割はしない）
+//               分割で生まれたサブ issue はスクリプトが足す（designUrl を親から継ぎ、depth 1、tier は親の判定が決めた none か light。再分割はしない）
+//               after: 判定からプランまでは依存先のプランの承認を待って進め、実装は依存先のマージを待つ（待つ間は window の枠を使わない）
 //   base:       origin/main の SHA。再開のときも同じ値を渡す（変えるとプロンプトが変わり、結果の再利用が効かない）
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る。
@@ -65,7 +66,7 @@ const S = {
       tier: { type: 'string', enum: ['none', 'light', 'full'], description: '判定の依頼のとき、プランの段階の重さ。none はプランを書かずに実装する' },
       subIssues: {
         type: 'array',
-        items: { type: 'object', properties: { n: { type: 'integer' }, after: { type: 'array', items: { type: 'integer' }, description: '先にマージされている必要がある兄弟サブ issue の番号。無ければ空' } }, required: ['n'] },
+        items: { type: 'object', properties: { n: { type: 'integer' }, after: { type: 'array', items: { type: 'integer' }, description: '兄弟が足す関数・型・ルートなどを使うため、先にマージされている必要がある兄弟サブ issue の番号。同じファイルを触るだけなら入れない。無ければ空' }, tier: { type: 'string', enum: ['none', 'light'], description: 'サブ issue の tier（定義の判定の表の基準）' } }, required: ['n'] },
         description: 'status が split のとき、作ったサブ issue。after が無いもの同士は並列に進む',
       },
       file: { type: 'string', description: '書いたプランのファイル' },
@@ -175,9 +176,17 @@ const slots = limiter(WINDOW)
 let nextIdx = a.issues.length
 const mergeLock = mutex()
 const done = new Map(a.issues.map((i) => [String(i.n), deferred()]))
+/** issue 番号 → 判定からプランまでを終えたかの Promise の表。値は { plans: [{ n, url }] }（承認済みプラン。tier none は空）か { ended: 状態 }（プランの前に終わった） */
+const planned = new Map(a.issues.map((i) => [String(i.n), deferred()]))
 /** issue 番号 → after の表。分割で生まれたサブ issue は runSplit が足す */
 const afterOf = new Map(a.issues.map((i) => [String(i.n), (i.after || []).map(String)]))
 let mergeSeq = 0
+
+/** issue の結果を依存する issue に知らせる。プランを知らせる前に終わった issue は ended にする（先に知らせていれば何もしない） */
+function settle(n, res) {
+  planned.get(String(n)).resolve(['merged', 'split'].includes(res.status) ? { plans: [] } : { ended: res.status })
+  done.get(String(n)).resolve(res)
+}
 
 /** after の依存関係に循環（自己参照を含む）があるかを調べる */
 function inCycle(start) {
@@ -213,13 +222,24 @@ function env(issue, idx) {
     devinWs: `${a.scratchpad}/devin-${issue.n}`,
     pgPort: p, ports: `${p + 1}（アプリ）、${p + 2}（strfry）`, project: `nns-issue${issue.n}`,
     reviewPgPort: p + 5, reviewPorts: `${p + 6}（アプリ）、${p + 7}（strfry）`, reviewProject: `nns-review${issue.n}`,
+    depPlans: [], depsMerged: false,
   }
 }
 
 // --- 依頼文 -----------------------------------------------------------------
+/** 調査用の作業ツリーの取り出し方。依存先のマージで土台が進んだ後は、既存の作業ツリーも新しい土台に合わせさせる */
+const planWtNote = (e) => `${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る${e.depsMerged ? `。あれば \`git -C ${e.planWt} fetch -q origin main && git -C ${e.planWt} checkout -q --detach ${e.base}\` で土台に合わせる` : ''}）`
+/** 依存先の承認済みプラン。依存先がマージされる前のプランとプランレビューの依頼文に添える */
+const depPlansNote = (e) => e.depPlans.length && !e.depsMerged
+  ? `- 依存先の承認済みプラン: ${e.depPlans.map((d) => `#${d.n} ${d.url}`).join('、')}（本文は \`gh api\` で読む）。依存先はまだマージされておらず、この issue の実装は依存先のマージの後に始まる。依存先のプランが足す関数・型・ルートなどは、土台に無くてもそのプランの記述どおりにあるものとして扱い、どの記述を前提にしたかをプランに書く\n`
+  : ''
+/** 依存先のマージの前に書かれたプランを実装するときの注意 */
+const depMergedNote = (e) => e.depPlans.length && e.depsMerged
+  ? `- このプランは依存先（${e.depPlans.map((d) => `#${d.n}`).join('、')}）のマージの前に、そのプランを前提に書かれた。土台にマージされた依存先の実装がプランの前提と食い違う箇所は、下の逸脱の手順で返す\n`
+  : ''
 const common = (e) => `- 土台: origin/main の ${e.base}
-- 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
-- docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
+- 調査用の作業ツリー: ${planWtNote(e)}
+${depPlansNote(e)}- docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
 /** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
 const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
 - issue と PR のコメントは \`dev/post_comment.sh\` で投稿する（マーカーを機械的に付ける）。既存のコメントは編集しない`
@@ -271,21 +291,21 @@ ${common(e)}
 - プラン: ${PLANS}/${e.n}-v1.md
 - 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${e.planWt}（すでにあるので、実行はこの下で行う）
-- レビューの書き先: ${PLANS}/${e.n}-r1.md
+${depPlansNote(e)}- レビューの書き先: ${PLANS}/${e.n}-r1.md
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
   reviewNext: (e, v, r, planFile, prevReview) => `issue #${e.n} の実装プラン（${v ? `版 ${v}` : '版を上げたもの'}）をレビューしてほしい（ラウンド ${r}）。
 - プラン: ${planFile}（先頭に前ラウンドの指摘、または逸脱への対応の表がある）
 - ${prevReview ? `前のラウンドのレビュー: ${prevReview}` : '前のラウンドのレビューは無い（承認済みの版を、逸脱または PR レビューの must を受けて上げた）'}
 - 土台: origin/main の ${e.base}
-- 調査用の作業ツリー: ${e.planWt}（無ければ \`git -C ${REPO_DIR} worktree add --detach ${e.planWt} ${e.base}\` で作る）
-- レビューの書き先: ${PLANS}/${e.n}-r${r}.md
+- 調査用の作業ツリー: ${planWtNote(e)}
+${depPlansNote(e)}- レビューの書き先: ${PLANS}/${e.n}-r${r}.md
 ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。' : '対応の表の各項目が前の版の決定と矛盾しないか、逸脱の解き方が issue の受け入れ条件を満たすかを見て判定してほしい。'}
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md。先頭の「指摘への対応」の表は含めない）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
   implement: (e, issue, postUrl, conditions, by) => `issue #${e.n} を、承認済みの実装プラン（${postUrl}）のとおりに実装し、PR を作ってほしい。プランは \`gh api\` でその URL のコメント本文を読む。
 - 土台: origin/main の ${e.base}
-${conditionsNote(conditions)}${devinNote(e, by)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
+${conditionsNote(conditions)}${depMergedNote(e)}${devinNote(e, by)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く。PR がすでにあれば新しく作らずに push して本文を直す）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 - コミットのトレーラー（本文の最後に 2 行）:
   ${a.trailers.coAuthoredBy}
@@ -416,10 +436,10 @@ ${SAFETY}
 }
 
 // --- 段階 -------------------------------------------------------------------
-/** subIssues を { n, after } の形にそろえる（番号だけの要素は依存無し） */
+/** subIssues を { n, after, tier } の形にそろえる（番号だけの要素は依存無し） */
 function normalizeSubIssues(stage, n, subIssues) {
   if (!Array.isArray(subIssues) || subIssues.length === 0) throw new StageError(stage, `#${n} は split だがサブ issue の番号が無い`)
-  const subs = subIssues.map((s) => (typeof s === 'number' ? { n: s, after: [] } : { n: s.n, after: s.after || [] }))
+  const subs = subIssues.map((s) => (typeof s === 'number' ? { n: s, after: [] } : { n: s.n, after: s.after || [], tier: s.tier }))
   const nums = new Set(subs.map((s) => s.n))
   for (const s of subs) {
     if (!Number.isInteger(s.n)) throw new StageError(stage, `#${n} のサブ issue の番号が整数でない: ${JSON.stringify(s)}`)
@@ -681,22 +701,27 @@ async function mergeStage(e, state) {
   })
 }
 
-/** 分割で生まれたサブ issue を並列に進める。after を宣言した子だけが兄弟のマージを待つ */
+/** 分割で生まれたサブ issue を並列に進める。after を宣言した子は、兄弟のプランの承認を待ってプランを書き、兄弟のマージを待って実装する */
 async function runSplit(parent, subs, designUrl) {
-  // 兄弟の完了の表と after の表は、どの子を始めるより前に全部そろえる（後の兄弟に依存する子が「依存先がいない」で止まらないように）
+  // 兄弟の完了とプランの表と after の表は、どの子を始めるより前に全部そろえる（後の兄弟に依存する子が「依存先がいない」で止まらないように）
   for (const s of subs) {
     if (!done.has(String(s.n))) done.set(String(s.n), deferred())
+    if (!planned.has(String(s.n))) planned.set(String(s.n), deferred())
     afterOf.set(String(s.n), (s.after.length ? s.after : (parent.after || [])).map(String))
   }
+  // 親に依存する issue は、サブ issue のプランが全部そろった時点で、それらを前提にプランを書き始める
+  Promise.all(subs.map((s) => planned.get(String(s.n)).promise)).then((ps) => {
+    planned.get(String(parent.n)).resolve(ps.find((p) => p.ended) || { plans: ps.flatMap((p) => p.plans) })
+  })
   return Promise.all(subs.map(async (s) => {
     const child = {
-      // サブ issue は単独でしきい値に収まる粒度で切られているので、判定を飛ばして light 固定で進める
-      n: s.n, branch: `${parent.branch}-${s.n}`, ui: parent.ui, designUrl, depth: (parent.depth || 0) + 1, parent: parent.n, tier: 'light',
+      // サブ issue は単独でしきい値に収まる粒度で切られているので、判定を飛ばして親の判定が決めた tier（無ければ light）で進める
+      n: s.n, branch: `${parent.branch}-${s.n}`, ui: parent.ui, designUrl, depth: (parent.depth || 0) + 1, parent: parent.n, tier: s.tier === 'none' ? 'none' : 'light',
       after: afterOf.get(String(s.n)).map(Number),
       note: `#${parent.n} を分割したサブ issue。親の issue のコメント「## 分割の設計」に全体の方針と兄弟との分担がある`,
     }
     const res = await runIssue(child, nextIdx++)
-    done.get(String(s.n)).resolve(res)
+    settle(s.n, res)
     return res
   }))
 }
@@ -718,21 +743,19 @@ async function runIssue(issue, idx) {
     pr: null, head: null, approveUrl: null, reviewApprovedHead: null, conditionsUrl: null,
   }
   const finish = (extra) => ({ ...state, ...extra })
+  const deps = (issue.after || []).map(String)
   let acquired = false
   try {
-    // 依存する issue のマージを待つ。循環は待つ前に弾く
+    // 循環と、この実行にいない依存先は、待つ前に弾く
     if (inCycle(issue.n)) return finish({ status: 'blocked', stage: 'deps', questions: [`#${issue.n} の after が循環している`] })
-    let latestDep = null
-    for (const dep of issue.after || []) {
-      const d = done.get(String(dep))
-      if (!d) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
-      // 分割された依存先は、サブ issue が全部マージされていれば最後にマージされたサブ issue を依存先とみなす
-      const res = resolveSplitDep(await d.promise)
-      if (res.status !== 'merged') return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] })
-      if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
+    const missing = deps.find((dep) => !done.has(dep))
+    if (missing) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${missing} がこの実行に含まれていない（すでにマージ済みなら after から外す）`] })
+    // 判定からプランまでは、依存先のマージを待たずに、依存先のプランの承認を待って進める（#442）。待つ間は枠を持たない
+    for (const dep of deps) {
+      const p = await planned.get(dep).promise
+      if (p.ended) return finish({ status: 'blocked', stage: 'deps', questions: [`依存先の #${dep} がプランの前に ${p.ended} で終わった`] })
+      e.depPlans.push(...p.plans)
     }
-    // should 4: 依存先を取り込んだ main を土台にする（マージは直列なので、最後にマージされた依存先が他を含む）
-    if (latestDep) { e.base = latestDep.mergeSha; state.base = e.base }
     await slots.acquire()
     acquired = true
     const stages = [
@@ -758,6 +781,23 @@ async function runIssue(issue, idx) {
         if (r.postUrl) { state.postUrl = r.postUrl; state.version = r.version }
         return r
       },
+      // 依存する issue にプランを知らせ、依存先のマージを待つ。待つ間は枠を返し、最後にマージされた依存先を土台にする
+      async () => {
+        planned.get(String(issue.n)).resolve({ plans: state.postUrl ? [{ n: issue.n, url: state.postUrl }] : [] })
+        if (!deps.length) return {}
+        slots.release(); acquired = false
+        let latestDep = null
+        for (const dep of deps) {
+          // 分割された依存先は、サブ issue が全部マージされていれば最後にマージされたサブ issue を依存先とみなす
+          const res = resolveSplitDep(await done.get(dep).promise)
+          if (res.status !== 'merged') return { blocked: { stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] } }
+          if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
+        }
+        // マージは直列なので、最後にマージされた依存先が他の依存先を含む
+        e.base = latestDep.mergeSha; state.base = e.base; e.depsMerged = true
+        await slots.acquire(); acquired = true
+        return {}
+      },
       () => implementStage(e, issue, state),
       () => prReviewStage(e, issue, state),
       () => gateStage(e, issue, state),
@@ -770,7 +810,7 @@ async function runIssue(issue, idx) {
       if (r.split) {
         // 親の枠を返してから、サブ issue を同じ実行に足す。after の無い子は並列に進む
         slots.release(); acquired = false
-        log(`#${issue.n}: 大きいのでサブ issue ${r.split.map((s) => `#${s.n}${s.after.length ? `（${s.after.map((d) => `#${d}`).join(' ')} の後）` : ''}`).join(' ')} に分けた`)
+        log(`#${issue.n}: 大きいのでサブ issue ${r.split.map((s) => `#${s.n}${s.tier === 'none' ? '（tier none）' : ''}${s.after.length ? `（${s.after.map((d) => `#${d}`).join(' ')} の後）` : ''}`).join(' ')} に分けた`)
         const children = await runSplit(issue, r.split, state.designUrl)
         return finish({ status: 'split', subIssues: r.split.map((s) => s.n), children })
       }
@@ -802,6 +842,8 @@ function fake(label, opts, prompt) {
       // split: 2 番目が 1 番目の後 / split-parallel: 依存無し / triage-question: 判定で質問
       if (sc === 'split') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [] }, { n: Number(n) * 100 + 2, after: [Number(n) * 100 + 1] }], summary: '見込み 500 行 / 8 ファイル' }
       if (sc === 'split-parallel') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1 }, { n: Number(n) * 100 + 2 }], summary: '見込み 400 行' }
+      // split-tier: 1 番目は tier none（プラン無し）、2 番目は 1 番目の後の light
+      if (sc === 'split-tier') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [], tier: 'none' }, { n: Number(n) * 100 + 2, after: [Number(n) * 100 + 1], tier: 'light' }], summary: '見込み 350 行' }
       if (sc === 'triage-question') return { status: 'question', questions: ['issue の前提の A は今の main に無い'] }
       // tier-none 系は判定が none を返し、プランの段階が飛ぶ
       if (sc.startsWith('tier-none')) return { status: 'plan', tier: 'none', summary: '見込み 40 行 / 2 ファイル、決めたこと 0 件' }
@@ -861,7 +903,7 @@ function fake(label, opts, prompt) {
 log(`${a.issues.length} 件の issue を、同時 ${WINDOW} 件で進める（土台 ${a.base}${dry ? '、dry run' : ''}）`)
 const results = await Promise.all(a.issues.map(async (issue, idx) => {
   const res = await runIssue(issue, idx)
-  done.get(String(issue.n)).resolve(res)
+  settle(issue.n, res)
   return res
 }))
 const count = (s) => results.filter((r) => r.status === s).length
