@@ -177,12 +177,19 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
   }
 }
 
-/// `console_logger` の `status` ページの記述。`pairs` の節、`table` の節に加え、
-/// 変換に失敗する節を 1 つ持つ（失敗した節だけを囲みに差し替えて出す画面を撮るため）。
+/// `console_logger` の `status` ページの記述。`pairs` の節、`table` と `details` と `id`
+/// インラインの `pairs` を持つ節に加え、変換に失敗する節を 1 つ持つ（失敗した節だけを
+/// 囲みに差し替えて出す画面を撮るため）。
 fn console_logger_status_description() -> Dynamic {
   let text_inline = fn(text: String) {
     dynamic.properties([
       #(dynamic.string("type"), dynamic.string("text")),
+      #(dynamic.string("text"), dynamic.string(text)),
+    ])
+  }
+  let id_inline = fn(text: String) {
+    dynamic.properties([
+      #(dynamic.string("type"), dynamic.string("id")),
       #(dynamic.string("text"), dynamic.string(text)),
     ])
   }
@@ -227,6 +234,26 @@ fn console_logger_status_description() -> Dynamic {
                   dynamic.string("rows"),
                   dynamic.list([
                     dynamic.list([text_inline("1"), text_inline("abcd1234")]),
+                  ]),
+                ),
+              ]),
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("details")),
+                #(dynamic.string("summary"), dynamic.string("tags (1)")),
+                #(
+                  dynamic.string("text"),
+                  dynamic.string("[[\"e\",\"abcd1234\"]]"),
+                ),
+              ]),
+              dynamic.properties([
+                #(dynamic.string("type"), dynamic.string("pairs")),
+                #(
+                  dynamic.string("items"),
+                  dynamic.list([
+                    dynamic.properties([
+                      #(dynamic.string("term"), dynamic.string("id")),
+                      #(dynamic.string("value"), id_inline("abcd1234")),
+                    ]),
                   ]),
                 ),
               ]),

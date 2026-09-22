@@ -442,6 +442,20 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ],
       ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [
+          plugin_section("a", [
+            plugin_details_block("example", "label"),
+            plugin_pairs_block([
+              #("plugin", plugin_id_inline("01234567890123456789")),
+            ]),
+          ]),
+        ],
+      ),
     ],
   ])
 }
@@ -498,6 +512,43 @@ fn plugin_missing_title_section() -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("section")),
     #(dynamic.string("blocks"), dynamic.list([])),
+  ])
+}
+
+/// ブロック（`details`）。`summary`・`text` は `allowed_words` にある語だけを
+/// 使う。
+fn plugin_details_block(summary: String, text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("details")),
+    #(dynamic.string("summary"), dynamic.string(summary)),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// ブロック（`pairs`）。`items` は `#(term, value)` の並び。
+fn plugin_pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("pairs")),
+    #(
+      dynamic.string("items"),
+      dynamic.list(
+        list.map(items, fn(item) {
+          dynamic.properties([
+            #(dynamic.string("term"), dynamic.string(item.0)),
+            #(dynamic.string("value"), item.1),
+          ])
+        }),
+      ),
+    ),
+  ])
+}
+
+/// インライン（`id`）。値は数字だけにする（`japanese_pages_test` の
+/// `allowed_words` は識別子の英字を許さないため）。
+fn plugin_id_inline(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("id")),
+    #(dynamic.string("text"), dynamic.string(text)),
   ])
 }
 
@@ -572,6 +623,7 @@ pub fn components(language: i18n.Language) -> List(String) {
     [
       element.to_string(view.truncated_id(language, "0123456789abcdef", "copy")),
     ],
+    [element.to_string(view.preformatted("[[0,1]]"))],
     [
       element.to_string(view.section_card("anchor", [view.hint("content")])),
       element.to_string(view.warning_card("anchor", [view.hint("content")])),

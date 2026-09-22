@@ -688,15 +688,15 @@ pub fn masked_url_hides_the_password_test() {
     == "postgres://nostr@db.example:5432/nostr_no_su"
 }
 
-/// `plugin_pages/0` が供給するのはキー `settings` の 1 件だけである。
-pub fn pages_declares_one_settings_page_test() {
+/// `plugin_pages/0` は `timeline`、`settings` の順に 2 件を供給する。
+pub fn pages_declares_timeline_then_settings_test() {
   let decoder = {
     use key <- decode.field("key", decode.string)
     use title <- decode.field("title", decode.string)
     decode.success(#(key, title))
   }
-  let assert Ok([entry]) = decode.run(page.pages(), decode.list(decoder))
-  assert entry == #("settings", "Settings")
+  let assert Ok(entries) = decode.run(page.pages(), decode.list(decoder))
+  assert entries == [#("timeline", "Timeline"), #("settings", "Settings")]
 }
 
 /// `Accounts` の値（JSON 文字列）から `pubkey`・`npub`・`label` を読む。壊れた
@@ -745,7 +745,7 @@ pub fn the_monitored_section_lists_every_account_test() {
   ]
   let monitored = Ok(store.OnlyPubkeys(set.from_list(["aa"])))
   let description =
-    page.content("settings", Error(Nil), 2, [], accounts, monitored)
+    page.content("settings", Error(Nil), 2, [], accounts, monitored, Ok([]))
   let assert [monitored_section, ..] = page_sections(description)
   let #(title, blocks) = section_shape(monitored_section)
   assert title == "Monitored accounts"
@@ -779,7 +779,15 @@ fn checkbox_field_shape(raw: Dynamic) -> #(String, String, String, Bool) {
 /// 空にする。
 pub fn the_monitored_section_is_empty_without_accounts_test() {
   let description =
-    page.content("settings", Error(Nil), 2, [], [], Ok(store.AllAccounts))
+    page.content(
+      "settings",
+      Error(Nil),
+      2,
+      [],
+      [],
+      Ok(store.AllAccounts),
+      Ok([]),
+    )
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
   assert blocks == []
@@ -787,7 +795,8 @@ pub fn the_monitored_section_is_empty_without_accounts_test() {
 
 /// 保存アクターへの問い合わせが届かなければ `alert`（`failure`）1 つだけになる。
 pub fn the_monitored_section_reports_an_unreachable_store_test() {
-  let description = page.content("settings", Error(Nil), 2, [], [], Error(Nil))
+  let description =
+    page.content("settings", Error(Nil), 2, [], [], Error(Nil), Ok([]))
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
   let assert [alert] = blocks
@@ -809,7 +818,15 @@ pub fn the_monitored_section_reports_an_unreachable_store_test() {
 pub fn page_content_shows_the_masked_database_url_test() {
   let masked = "postgres://nostr@db.example:5432/nostr_no_su"
   let description =
-    page.content("settings", Ok(masked), 2, [], [], Ok(store.AllAccounts))
+    page.content(
+      "settings",
+      Ok(masked),
+      2,
+      [],
+      [],
+      Ok(store.AllAccounts),
+      Ok([]),
+    )
   let assert [_monitored, configuration, ..] = page_sections(description)
   let #(title, blocks) = section_shape(configuration)
   assert title == "Configuration"
@@ -849,6 +866,7 @@ pub fn page_content_marks_missing_processes_test() {
       processes,
       [],
       Ok(store.AllAccounts),
+      Ok([]),
     )
   let assert [_monitored, _configuration, runtime] = page_sections(description)
   let #(title, blocks) = section_shape(runtime)
@@ -879,7 +897,7 @@ pub fn page_content_marks_missing_processes_test() {
 /// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
 pub fn page_content_of_an_unknown_key_test() {
   let description =
-    page.content("nope", Error(Nil), 2, [], [], Ok(store.AllAccounts))
+    page.content("nope", Error(Nil), 2, [], [], Ok(store.AllAccounts), Ok([]))
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   let assert [alert] = blocks
@@ -891,6 +909,141 @@ pub fn page_content_of_an_unknown_key_test() {
     })
   assert kind == "alert"
   assert tone == "failure"
+}
+
+/// `timeline` は行ごとに 1 つの節にする。見出しは `kind <n> · <RFC 3339>`、
+/// `pairs` の `id`・`pubkey` は `id` インライン、`details` は
+/// `tags (n)` / `content (n bytes)` / `signature` の 3 つになる。
+pub fn the_timeline_lists_stored_events_test() {
+  let first =
+    store.Row(
+      id: "id1",
+      pubkey: "pub1",
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: "[[\"p\",\"abc\"]]",
+      content: "hello",
+      sig: "sig1",
+    )
+  let second =
+    store.Row(
+      id: "id2",
+      pubkey: "pub2",
+      created_at: 1_700_000_001,
+      kind: 7,
+      tags: "[]",
+      content: "hi",
+      sig: "sig2",
+    )
+  let description =
+    page.content(
+      "timeline",
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([first, second]),
+    )
+  let assert [first_section, second_section] = page_sections(description)
+  assert_event_section(first_section, first, "tags (1)", "content (5 bytes)")
+  assert_event_section(second_section, second, "tags (0)", "content (2 bytes)")
+}
+
+/// 節 1 つが `event_section/1` の形（見出し・`pairs`・`details` 3 つ）を満たす
+/// ことを確かめる。
+fn assert_event_section(
+  raw: Dynamic,
+  row: store.Row,
+  tags_summary: String,
+  content_summary: String,
+) -> Nil {
+  let #(title, blocks) = section_shape(raw)
+  assert string.starts_with(title, "kind " <> int.to_string(row.kind) <> " · ")
+  let assert [pairs, tags_details, content_details, sig_details] = blocks
+  let assert Ok(items) =
+    decode.run(
+      pairs,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  assert items == [#("id", "id", row.id), #("pubkey", "id", row.pubkey)]
+  assert details_summary(tags_details) == tags_summary
+  assert details_summary(content_details) == content_summary
+  assert details_summary(sig_details) == "signature"
+  Nil
+}
+
+/// `details` ブロックの `summary`。
+fn details_summary(raw: Dynamic) -> String {
+  let assert Ok(summary) =
+    decode.run(raw, decode.field("summary", decode.string, decode.success))
+  summary
+}
+
+/// 保存済みイベントが 0 件なら、本体が出す空の状態の文に任せて `blocks` を
+/// 空にする。
+pub fn the_timeline_is_empty_without_events_test() {
+  let description =
+    page.content("timeline", Error(Nil), 2, [], [], Error(Nil), Ok([]))
+  let assert [only] = page_sections(description)
+  let #(_title, blocks) = section_shape(only)
+  assert blocks == []
+}
+
+/// 直近のイベントの問い合わせが失敗すると `alert`（`failure`）1 つだけになる。
+pub fn the_timeline_reports_a_failed_query_test() {
+  let description =
+    page.content(
+      "timeline",
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Error("could not read stored events: timeout"),
+    )
+  let assert [only] = page_sections(description)
+  let #(_title, blocks) = section_shape(only)
+  let assert [alert] = blocks
+  let assert Ok(#(kind, text, tone)) =
+    decode.run(alert, {
+      use kind <- decode.field("type", decode.string)
+      use text <- decode.field("text", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(kind, text, tone))
+    })
+  assert kind == "alert"
+  assert text == "could not read stored events: timeout"
+  assert tone == "failure"
+}
+
+/// calendar の範囲外の `created_at` でも節は返り、見出しは秒をそのまま文字に
+/// した値になる。
+pub fn out_of_range_timestamps_fall_back_to_the_number_test() {
+  let row =
+    store.Row(
+      id: "id1",
+      pubkey: "pub1",
+      created_at: 10_000_000_000_000_000,
+      kind: 1,
+      tags: "[]",
+      content: "hi",
+      sig: "sig1",
+    )
+  let description =
+    page.content("timeline", Error(Nil), 2, [], [], Error(Nil), Ok([row]))
+  let assert [only] = page_sections(description)
+  let #(title, _blocks) = section_shape(only)
+  assert title == "kind 1 · 10000000000000000"
+}
+
+/// `store.migrations` に版 3 があり、その文は `create_received_at_index` の
+/// 1 件だけで、`events_received_at` を含む。
+pub fn the_received_at_index_is_created_test() {
+  let assert Ok(migration) =
+    list.find(store.migrations, fn(migration) { migration.version == 3 })
+  assert migration.statements == [store.create_received_at_index]
+  assert string.contains(store.create_received_at_index, "events_received_at")
 }
 
 /// 記述の `sections` を取り出す。
@@ -954,7 +1107,10 @@ fn round_trip(database_url: String) -> Nil {
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
   assert index_names(db)
-    == ["events_kind", "events_pkey", "events_pubkey_created_at"]
+    == [
+      "events_kind", "events_pkey", "events_pubkey_created_at",
+      "events_received_at",
+    ]
 
   let assert Ok(stored) = store.to_row(sample_event(random_id()))
   assert store.insert(db, stored) == Ok(1)
@@ -989,7 +1145,7 @@ pub fn postgres_schema_version_test() {
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
 /// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外（テーブルと
-/// インデックスの直接実行、`ensure_schema`、版 2 の挿入、版の読み込み）は専用
+/// インデックスの直接実行、`ensure_schema`、版 4 の挿入、版の読み込み）は専用
 /// スキーマへ向けた接続で実行する。
 fn schema_version_round_trip(database_url: String) -> Nil {
   let schema = "event_logger_schema_" <> random_id()
@@ -1005,15 +1161,15 @@ fn schema_version_round_trip(database_url: String) -> Nil {
   // 移行の後、もう一度実行しても版は増えない（移行を二重に適用しない）。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
-  assert recorded_versions(db) == [1, 2]
+  assert recorded_versions(db) == [1, 2, 3]
 
   // 記録された版が新しい DB は拒否する。
   run_statement(
     db,
-    "INSERT INTO event_logger_schema_version (version) VALUES (3)",
+    "INSERT INTO event_logger_schema_version (version) VALUES (4)",
   )
   assert store.ensure_schema(db)
-    == Error(store.SchemaTooNew(found: 3, supported: 2))
+    == Error(store.SchemaTooNew(found: 4, supported: 3))
 
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -1043,6 +1199,45 @@ fn monitored_accounts_round_trip(database_url: String) -> Nil {
 
   let assert Ok(Nil) = store.replace_monitored(db, [])
   assert store.load_monitored(db) == Ok([])
+
+  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。専用スキーマに 21 行入れ、`recent_events(db, store.recent_limit)`
+/// が直近の 20 行を返し、最初に入れた行だけが欠けることを確かめる。
+pub fn postgres_recent_events_test() {
+  use database_url <- with_test_database_url
+  recent_events_round_trip(database_url)
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。21 行の id は挿入順に
+/// 昇順の文字列（`"00"`〜`"20"`）にする。
+fn recent_events_round_trip(database_url: String) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  let db = connect(database_url, Some(schema))
+  let assert Ok(Nil) = store.ensure_schema(db)
+
+  let ids =
+    list.repeat(Nil, 21)
+    |> list.index_map(fn(_, sequence) {
+      let id = case sequence < 10 {
+        True -> "0" <> int.to_string(sequence)
+        False -> int.to_string(sequence)
+      }
+      let assert Ok(row) = store.to_row(sample_event(id))
+      let assert Ok(1) = store.insert(db, row)
+      id
+    })
+
+  let assert Ok(rows) = store.recent_events(db, store.recent_limit)
+  let returned_ids = list.map(rows, fn(row) { row.id })
+  assert list.length(returned_ids) == 20
+  assert !list.contains(returned_ids, "00")
+  let assert [_first, ..rest] = ids
+  assert list.all(rest, list.contains(returned_ids, _))
 
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }

@@ -107,7 +107,7 @@ docker compose -f docker-compose.release.yml up -d
 
 ## 🧩 プラグイン
 
-同梱の `event_logger` は、監視で受信したイベントを Postgres の `events` テーブルに保存する（NIP-01 の全フィールド、`tags` は jsonb、取り込み時刻。同じイベントを複数のリレーから受け取っても 1 行）。compose の既定の構成ではそのまま動き、保存の状態は管理 UI の `/plugins/event_logger/settings` で見られる。同じ画面で保存の対象とするアカウントを選べる（初期値は全アカウント）。ソースと改造版のビルドは [`plugins-src/event_logger/`](plugins-src/event_logger/README.md) にある。
+同梱の `event_logger` は、監視で受信したイベントを Postgres の `events` テーブルに保存する（NIP-01 の全フィールド、`tags` は jsonb、取り込み時刻。同じイベントを複数のリレーから受け取っても 1 行）。compose の既定の構成ではそのまま動き、保存済みのイベントの直近 20 件は管理 UI の `/plugins/event_logger/timeline`、保存の状態は `/plugins/event_logger/settings` で見られる。保存の対象とするアカウントは `/plugins/event_logger/settings` で選べる（初期値は全アカウント）。ソースと改造版のビルドは [`plugins-src/event_logger/`](plugins-src/event_logger/README.md) にある。
 
 自作のプラグインは Erlang か Gleam で `plugin_api_version/0`、`plugin_name/0`、`handle_event/1` か `handle_event/2`（設定を受け取る形。どちらか一方でよい）をエクスポートするモジュールを書き、`./plugins` に置く。仕様は [プラグイン API v1](docs/plugin-api.md)、例は [`examples/plugins/`](examples/plugins/)（状態を持たない `file_logger` と、状態を持つ `counter`）にある。
 

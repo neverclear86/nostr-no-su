@@ -19,13 +19,20 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/result
+import gleam/string
 import pog
 
-/// このプラグインが供給する唯一のページのキー。URL の path 片にもなる。
-const page_key = "settings"
+/// 設定ページのキー。URL の path 片にもなる。
+const settings_page_key = "settings"
 
-/// ページの表示名。
-const page_title = "Settings"
+/// 設定ページの表示名。
+const settings_page_title = "Settings"
+
+/// タイムラインのページのキー。URL の path 片にもなる。
+const timeline_page_key = "timeline"
+
+/// タイムラインのページの表示名。
+const timeline_page_title = "Timeline"
 
 /// プロセス 1 つの観測結果。`label` は表に出す名前（例: `connection pool`）、
 /// `registered_name` は登録名の文字列、`mailbox` は未処理メッセージ数で、
@@ -76,25 +83,33 @@ pub fn selected_pubkeys(
   }
 }
 
-/// `plugin_pages/0` が返すページの一覧。キー `settings` の 1 件だけを供給する。
+/// `plugin_pages/0` が返すページの一覧。`timeline` を先頭に置く（ダッシュボード
+/// のリンクは先頭のページを指す）。
 pub fn pages() -> Dynamic {
   dynamic.list([
     dynamic.properties([
-      #(dynamic.string("key"), dynamic.string(page_key)),
-      #(dynamic.string("title"), dynamic.string(page_title)),
+      #(dynamic.string("key"), dynamic.string(timeline_page_key)),
+      #(dynamic.string("title"), dynamic.string(timeline_page_title)),
+    ]),
+    dynamic.properties([
+      #(dynamic.string("key"), dynamic.string(settings_page_key)),
+      #(dynamic.string("title"), dynamic.string(settings_page_title)),
     ]),
   ])
 }
 
-/// ページ 1 件の記述。`key` が `settings` なら監視対象・設定・状態を 3 節で示し、
-/// それ以外（キー未知、または binary として読めなかった呼び出し元が渡す仮の
-/// 文字列）は `alert` 1 つだけの節を返す。`plugin_page_content` に
-/// `{error, Reason}` を返す約束は無いため（`docs/plugin-api.md` 第 13.4 節）。
+/// ページ 1 件の記述。`key` が `timeline` なら保存済みイベントの直近の一覧を、
+/// `settings` なら監視対象・設定・状態を 3 節で示し、それ以外（キー未知、または
+/// binary として読めなかった呼び出し元が渡す仮の文字列）は `alert` 1 つだけの
+/// 節を返す。`plugin_page_content` に `{error, Reason}` を返す約束は無いため
+/// （`docs/plugin-api.md` 第 13.4 節）。
 ///
 /// `database` は `masked_url/2` で組んだ表示用の文字列（未設定なら `Error(Nil)`）、
 /// `pool_size` は接続プールの接続数、`processes` は保存アクターと接続プールの
 /// 観測結果、`accounts` は登録アカウントの一覧、`monitored` は保存アクターへ
-/// 問い合わせた今の監視対象（問い合わせが届かなければ `Error(Nil)`）。
+/// 問い合わせた今の監視対象（問い合わせが届かなければ `Error(Nil)`）。`events`
+/// はタイムラインに出す直近のイベント（読めなければ `alert` に出す理由の
+/// 文字列）。
 pub fn content(
   key: String,
   database: Result(String, Nil),
@@ -102,9 +117,11 @@ pub fn content(
   processes: List(ProcessStatus),
   accounts: List(Account),
   monitored: Result(store.Monitored, Nil),
+  events: Result(List(store.Row), String),
 ) -> Dynamic {
   case key {
-    k if k == page_key ->
+    k if k == timeline_page_key -> page_sections(timeline_sections(events))
+    k if k == settings_page_key ->
       page_sections([
         monitored_section(accounts, monitored),
         configuration_section(database, pool_size),
@@ -113,6 +130,55 @@ pub fn content(
     _ -> page_sections([error_section()])
   }
 }
+
+/// `Timeline` の節。`Error(reason)` なら `alert`（`failure`）1 つだけ、
+/// `Ok([])` なら空の状態の文に任せて `blocks` を空にする、`Ok(rows)` なら
+/// 行ごとに 1 つの節（`event_section/1`）にする。
+fn timeline_sections(events: Result(List(store.Row), String)) -> List(Dynamic) {
+  case events {
+    Error(reason) -> [section("Timeline", [alert_block(reason, "failure")])]
+    Ok([]) -> [section("Timeline", [])]
+    Ok(rows) -> list.map(rows, event_section)
+  }
+}
+
+/// イベント 1 件の節。見出しは `kind` と保存された `created_at` の時刻、
+/// `pairs` に `id`・`pubkey`、`details` に `tags`・`content`・`signature` を
+/// 畳んで持つ。
+fn event_section(row: store.Row) -> Dynamic {
+  section(
+    "kind "
+      <> int.to_string(row.kind)
+      <> " · "
+      <> format_timestamp(row.created_at),
+    [
+      pairs_block([
+        #("id", id_inline(row.id)),
+        #("pubkey", id_inline(row.pubkey)),
+      ]),
+      details_block(
+        "tags (" <> int.to_string(tag_count(row.tags)) <> ")",
+        row.tags,
+      ),
+      details_block(
+        "content (" <> int.to_string(string.byte_size(row.content)) <> " bytes)",
+        row.content,
+      ),
+      details_block("signature", row.sig),
+    ],
+  )
+}
+
+/// `tags` の JSON 文字列に含まれるタグの件数。読めなければ 0。
+fn tag_count(tags: String) -> Int {
+  json.parse(tags, decode.list(decode.dynamic))
+  |> result.map(list.length)
+  |> result.unwrap(0)
+}
+
+/// Unix 秒を UTC の RFC 3339（`2026-09-22T10:00:00Z`）にする。
+@external(erlang, "event_logger_ffi", "format_timestamp")
+fn format_timestamp(seconds: Int) -> String
 
 /// 接続先だけを残した表示用の文字列。パスワードは含めない。`database_url` が
 /// postgres の URL として解釈できなければ、その旨の 1 文を返す。`pool` は
@@ -257,7 +323,7 @@ fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
 }
 
 /// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` のインライン
-/// （`text_inline` か `code_inline`）の対。
+/// （`text_inline`・`code_inline`・`id_inline`）の対。
 fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("pairs")),
@@ -291,6 +357,15 @@ fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
 fn note_block(text: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("note")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `details` ブロック。`text` は開いたときに出す整形済みのテキスト。
+fn details_block(summary: String, text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("details")),
+    #(dynamic.string("summary"), dynamic.string(summary)),
     #(dynamic.string("text"), dynamic.string(text)),
   ])
 }
@@ -361,5 +436,13 @@ fn badge_inline(text: String, tone: String) -> Dynamic {
     #(dynamic.string("type"), dynamic.string("badge")),
     #(dynamic.string("text"), dynamic.string(text)),
     #(dynamic.string("tone"), dynamic.string(tone)),
+  ])
+}
+
+/// `id` インライン。`pairs` の値だけで使える。
+fn id_inline(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("id")),
+    #(dynamic.string("text"), dynamic.string(text)),
   ])
 }

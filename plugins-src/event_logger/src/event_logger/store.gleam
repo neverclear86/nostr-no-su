@@ -27,6 +27,9 @@
 //// 記録する。記録された版がこのプラグインより新しければ、理由を 1 行出してアクターを
 //// 異常終了させる。待っても直らず、生かしたまま捨て続けると管理 UI に止まっている
 //// ことが見えないため（`docs/plugin-api.md` 第 5.4 節）。
+////
+//// タイムラインのページはこのアクターを通さず `recent_events/2` で直接読み出す
+//// （読み出しは保存の順序に影響しないため）。
 
 import event_logger/log
 import gleam/dynamic.{type Dynamic}
@@ -55,6 +58,13 @@ const schema_timeout_ms = 30_000
 /// 保存を待つ `Store` の上限の既定値。本体のランナーの上限と同じ件数にする。
 pub const default_max_queue_len = 1000
 
+/// タイムラインのページが出す件数。
+pub const recent_limit = 20
+
+/// タイムラインの問い合わせの期限。ページの期限より短くし、失敗しても節を
+/// 描けるようにする。
+const recent_timeout_ms = 2000
+
 /// イベントを保存するテーブル。`received_at` は取り込んだ時刻で、イベント自身の
 /// `created_at`（リレーが配送する Unix 秒）とは別に持つ。
 pub const create_events_table = "CREATE TABLE IF NOT EXISTS events (
@@ -73,6 +83,10 @@ pub const create_pubkey_index = "CREATE INDEX IF NOT EXISTS events_pubkey_create
 
 /// kind で絞り込むためのインデックス。
 pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events (kind)"
+
+/// タイムラインが読む保存順のインデックス。`select_recent_sql` の並びと同じ
+/// 向きにする。
+pub const create_received_at_index = "CREATE INDEX IF NOT EXISTS events_received_at ON events (received_at DESC, id DESC)"
 
 /// 保存の対象とするアカウント。行が 1 件も無ければ絞らず、全アカウントを保存する。
 pub const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
@@ -97,6 +111,7 @@ pub const migrations = [
     statements: [create_events_table, create_pubkey_index, create_kind_index],
   ),
   Migration(version: 2, statements: [create_monitored_accounts_table]),
+  Migration(version: 3, statements: [create_received_at_index]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -126,6 +141,9 @@ pub type SchemaError {
 pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
+
+/// 保存順の直近のイベント。`tags` は jsonb なので text にキャストして読む。
+pub const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM events ORDER BY received_at DESC, id DESC LIMIT $1"
 
 /// 保存の対象とするアカウントの読み込み。
 const select_monitored_sql = "SELECT pubkey FROM monitored_accounts"
@@ -557,6 +575,40 @@ pub fn insert(db: pog.Connection, row: Row) -> Result(Int, pog.QueryError) {
   |> pog.parameter(pog.text(row.sig))
   |> pog.execute(on: db)
   |> result.map(fn(returned) { returned.count })
+}
+
+/// 保存順の直近のイベントを `limit` 件まで読む。タイムラインのページの組み立て
+/// から直接呼ばれ、ページの期限より短い `recent_timeout_ms` で打ち切る。
+pub fn recent_events(
+  db: pog.Connection,
+  limit: Int,
+) -> Result(List(Row), pog.QueryError) {
+  pog.query(select_recent_sql)
+  |> pog.parameter(pog.int(limit))
+  |> pog.returning(recent_row_decoder())
+  |> pog.timeout(recent_timeout_ms)
+  |> pog.execute(on: db)
+  |> result.map(fn(returned) { returned.rows })
+}
+
+/// `select_recent_sql` の列の並びと 1 対 1 に対応する `Row` のデコーダー。
+fn recent_row_decoder() -> decode.Decoder(Row) {
+  use id <- decode.field(0, decode.string)
+  use pubkey <- decode.field(1, decode.string)
+  use created_at <- decode.field(2, decode.int)
+  use kind <- decode.field(3, decode.int)
+  use tags <- decode.field(4, decode.string)
+  use content <- decode.field(5, decode.string)
+  use sig <- decode.field(6, decode.string)
+  decode.success(Row(
+    id: id,
+    pubkey: pubkey,
+    created_at: created_at,
+    kind: kind,
+    tags: tags,
+    content: content,
+    sig: sig,
+  ))
 }
 
 /// 保存の対象とするアカウントの pubkey の一覧を読み込む。

@@ -718,13 +718,12 @@ pub fn detail_list(entries: List(#(String, Element(msg)))) -> Element(msg) {
 
 /// 見出しと値の組の一覧（`dl`）。見出しを値の左に置くので、狭い画面でも横に伸びない。
 pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
-  detail_list(
-    list.map(entries, fn(entry) { #(entry.0, summary_value(entry.1)) }),
-  )
+  detail_list(list.map(entries, fn(entry) { #(entry.0, value_cell(entry.1)) }))
 }
 
-/// `summary_list` の値（`dd`）。
-fn summary_value(value: Value) -> Element(msg) {
+/// `Value` 1 つを `dl` の値（`dd`）にする。`summary_list` と `admin/plugin_view` の
+/// `pairs` が使う。
+pub fn value_cell(value: Value) -> Element(msg) {
   case value {
     Code(text) ->
       html.dd([attribute.class("font-mono text-xs break-all")], [
@@ -732,6 +731,18 @@ fn summary_value(value: Value) -> Element(msg) {
       ])
     Plain(text) -> html.dd([attribute.class("break-words")], [html.text(text)])
   }
+}
+
+/// 省略した識別子を `dl` の値（`dd`）にする。値の列が潰れないよう `min-w-0` を付け、
+/// `truncated_id` が出す訳文のために表示言語の `lang` を付ける。
+pub fn identifier_cell(
+  language: Language,
+  value: String,
+  copy_label: String,
+) -> Element(msg) {
+  html.dd([attribute.class("min-w-0"), attribute.lang(i18n.code(language))], [
+    truncated_id(language, value, copy_label),
+  ])
 }
 
 /// アカウントを識別する、ラベルと省略した npub。アカウントの一覧、読み込みで飛ばされた
@@ -1170,6 +1181,18 @@ pub fn count_pill(count: Int) -> Element(msg) {
   html.span([attribute.class("badge badge-ghost badge-sm tabular-nums")], [
     html.text(int.to_string(count)),
   ])
+}
+
+/// 折りたたみの中に出す整形済みのテキスト。長い 16 進と JSON を横スクロールなしで折り返す。
+pub fn preformatted(text: String) -> Element(msg) {
+  html.pre(
+    [
+      attribute.class(
+        "font-mono text-xs whitespace-pre-wrap break-all rounded bg-base-200 p-2",
+      ),
+    ],
+    [html.text(text)],
+  )
 }
 
 /// `<details>` の畳み。`summary` はボタンの見た目で、開閉の矢印と語を置く。本文は開いたときに

@@ -538,13 +538,17 @@ plugin_page_content(Key :: binary()) -> description_map().
 | --- | --- | --- | --- |
 | 節 | `section` | `title`、`blocks`（ブロックのリスト） | 無し |
 | ブロック | `text` / `note` | `text` | 無し |
-| ブロック | `pairs` | ``items``（``#{<<"term">> => binary, <<"value">> => `text` か `code` のインライン}``のリスト） | 無し |
+| ブロック | `pairs` | ``items``（``#{<<"term">> => binary, <<"value">> => `text`・`code`・`id` のインライン}``のリスト） | 無し |
 | ブロック | `table` | `headers`（binary のリスト）、`rows`（インラインのリストのリスト） | 無し |
 | ブロック | `alert` | `text` | `tone`（既定 `info`） |
 | ブロック | `link` | `page`（同じプラグインのページのキー）、`text` | 無し |
 | ブロック | `form` | `fields`（欄の記述のリスト、後掲）、`submit`（送信ボタンの文字列） | 無し |
+| ブロック | `details` | `summary`、`text` | 無し |
 | インライン | `text` / `code` | `text` | 無し |
 | インライン | `badge` | `text` | `tone`（既定 `neutral`）（`table` のセルだけ） |
+| インライン | `id` | `text` | 無し（`pairs` の値だけ） |
+
+`details` はブロックの中にブロックを置けない。`summary` は折りたたみのボタンの文字列、`text` は開いたときに出す整形済みのテキスト（改行はそのまま、長い行は折り返す）である。`id` は 64 桁の 16 進のような識別子を先頭 10 桁と末尾 6 桁に省略し、コピーのボタンを添えて出す。
 
 `form` の宛先は本体が決め（`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定）、プラグインは指定できない。`fields` は**1 件以上必要**。
 
@@ -562,6 +566,7 @@ plugin_page_content(Key :: binary()) -> description_map().
 - **秘密はプラグインが返す前に自分でマスクする。本体は値をマスクしない**（第 1 章の信頼モデルと同じ理由）。
 - 返す文字列はすべて `lang="en"` で出る。表示の言語（日本語・英語）には訳さない。
 - `plugin_page_content` に `{error, Reason}` を返す約束は無い。描けない事情はページの記述の `alert` で自分で表すこと。返しても中身の形の誤りとして扱われ、例外・期限超過と同じ 503 になる。
+- **`plugin_page_content` の中で自前の DB に問い合わせてもよい。** 1 回の呼び出しの期限（既定 5 秒、第 13.1 節）に収めるため問い合わせ側にも期限を付け、失敗は `alert` のブロックで自分で表すこと（同梱の `event_logger` は 2 秒である）。
 
 ### 13.5 Erlang の例
 
