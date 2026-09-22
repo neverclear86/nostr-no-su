@@ -348,6 +348,8 @@ pub type Message {
   NoPlugins
   /// 節とブロックの空の状態に共通で使う。
   PluginSectionEmpty
+  /// `image` ブロックの `url` の scheme が `http` / `https` でないときの理由。
+  PluginImageNotShown
   /// プラグインのページの `<title>` と `<h1>`。プラグイン名はここに混ぜない
   /// （`view.untranslated` で別に出す）。
   PluginPage
@@ -625,6 +627,7 @@ fn english(message: Message) -> String {
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
     NoPlugins -> "No plugins enabled."
     PluginSectionEmpty -> "Nothing to show."
+    PluginImageNotShown -> "Image not shown: the URL is not http or https."
     PluginPage -> "Plugin page"
     OpenPluginPage -> "Open"
     PluginPageEmpty -> "This plugin page has nothing to show."
@@ -893,6 +896,7 @@ fn japanese(message: Message) -> String {
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。"
     PluginSectionEmpty -> "表示する内容はありません。"
+    PluginImageNotShown -> "画像を表示していません。URL が http でも https でもありません。"
     PluginPage -> "プラグインのページ"
     OpenPluginPage -> "ページを開く"
     PluginPageEmpty -> "このプラグインのページに表示する内容はありません。"

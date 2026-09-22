@@ -484,6 +484,18 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ],
       ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        [
+          plugin_section("a", [
+            plugin_image_block("http://example.com/a.png", "example"),
+            plugin_image_block("data:image/png;base64,AAA", "picture"),
+          ]),
+        ],
+      ),
     ],
   ])
 }
@@ -550,6 +562,16 @@ fn plugin_details_block(summary: String, text: String) -> Dynamic {
     #(dynamic.string("type"), dynamic.string("details")),
     #(dynamic.string("summary"), dynamic.string(summary)),
     #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// ブロック（`image`）。`alt` は `<img>` の属性値か `view.untranslated` の中に出るので、
+/// `allowed_words` の制約を受けない。
+fn plugin_image_block(url: String, alt: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("image")),
+    #(dynamic.string("url"), dynamic.string(url)),
+    #(dynamic.string("alt"), dynamic.string(alt)),
   ])
 }
 
