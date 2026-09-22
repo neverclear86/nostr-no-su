@@ -774,7 +774,7 @@ type State {
     /// このアクターのプロセスだけが持つ、読み込み用の名前なしの subject。
     retry: Subject(Msg),
     accounts: Accounts,
-    /// バンカーリレーの購読の張り直しを依頼する関数。送るだけで待たない。
+    /// 署名者の集合が変わったときに購読の張り直しを依頼する関数。送るだけで待たない。宛先の接続はツリーを組む側が決める。
     resubscribe: fn() -> Nil,
     /// 読み込みに成功するたびに、登録されたリレーを渡す関数。送るだけで待たない。
     open_relays: fn(List(relay_list.Registered)) -> Nil,
