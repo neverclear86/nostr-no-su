@@ -1,7 +1,8 @@
 //// 管理 UI を固定の状態で起動する撮影用のサーバー。`admin.handle_request` を本物のまま
 //// 使い、`Context` の関数だけを固定の値に差し替える。待ち受けるのは `PREVIEW_PORT`
-//// （既定は 18461）から続く 3 つのポートで、順に通常の状態、アカウント・飛ばされた行・
-//// 承認待ち・セッションの一覧を得られない状態、すべての一覧が空の状態である。
+//// （既定は 18461）から続く 4 つのポートで、順に通常の状態、アカウント・飛ばされた行・
+//// 承認待ち・セッションの一覧を得られない状態、すべての一覧が空の状態、README に載せる
+//// 画像を撮るための、失敗の状態を含まない状態である。
 //// `gleam run -m admin_preview` で起動し、`dev/screenshots.mjs` で撮る。
 ////
 //// `dev/` は `gleam build` と `gleam test` でコンパイルされるので、`Context` を変えて
@@ -12,9 +13,11 @@ import envoy
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/int
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor
 import gleam/result
+import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/bunker
@@ -333,25 +336,257 @@ fn broken_status_description() -> Dynamic {
   ])
 }
 
+/// `event_logger` の `timeline` ページの記述。実装の
+/// `plugins-src/event_logger/src/event_logger/page.gleam` が `event_section/1` で
+/// 組む節を写した固定の 2 件で、あちらを変えたらここも直す。id と署名は実在の値を
+/// 避けた繰り返しのダミー。
+fn event_logger_timeline_description() -> Dynamic {
+  let event = fn(
+    title: String,
+    id: String,
+    tags: String,
+    content: String,
+    sig: String,
+  ) {
+    section(title, [
+      pairs_block([
+        #("id", id_inline(id)),
+        #("pubkey", id_inline(signer)),
+      ]),
+      details_block("tags (1)", tags),
+      details_block(
+        "content (" <> int.to_string(string.byte_size(content)) <> " bytes)",
+        content,
+      ),
+      details_block("signature", sig),
+    ])
+  }
+  page_sections([
+    event(
+      "kind 1 · 2026-09-20T09:41:00Z",
+      "eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555",
+      "[[\"e\",\"dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666\"]]",
+      "hello, nostr!",
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ),
+    event(
+      "kind 10002 · 2026-09-20T09:12:07Z",
+      "ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666",
+      "[[\"e\",\"cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777\"]]",
+      "",
+      "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    ),
+  ])
+}
+
+/// `event_logger` の `settings` ページの記述。実装の
+/// `plugins-src/event_logger/src/event_logger/page.gleam` が `settings` に組む
+/// 3 節を写した固定値で、あちらを変えたらここも直す。チェックボックスは渡された
+/// 登録アカウントの一覧から組むので、状態ごとのアカウントに追随する。
+fn event_logger_settings_description(
+  accounts: List(plugin_config.PageAccount),
+) -> Dynamic {
+  let checkbox = fn(account: plugin_config.PageAccount, index: Int) {
+    checkbox_field(
+      name: account.pubkey,
+      label: account.label,
+      hint: account.npub,
+      checked: index == 0,
+    )
+  }
+  let running_row = fn(label: String, registered_name: String) {
+    [
+      text_inline(label),
+      code_inline(registered_name),
+      badge_inline("running", "success"),
+      text_inline("0"),
+    ]
+  }
+  page_sections([
+    section("Monitored accounts", [
+      text_block("Events are stored only for the accounts checked here."),
+      note_block(
+        "All accounts checked means every account, including ones you register later.",
+      ),
+      form_block(list.index_map(accounts, checkbox), "Save"),
+    ]),
+    section("Configuration", [
+      pairs_block([
+        #(
+          "PLUGIN_EVENT_LOGGER_DATABASE_URL",
+          code_inline("postgres://nostr@postgres:5432/nostr_no_su"),
+        ),
+        #("pool size", text_inline("2")),
+        #("max queue length", text_inline("1000")),
+      ]),
+      note_block(
+        "This plugin strips the password before showing the URL above. "
+        <> "The connection URL comes only from this environment variable and "
+        <> "cannot be changed from this page. Only the accounts to store "
+        <> "events for are chosen above.",
+      ),
+    ]),
+    section("Runtime", [
+      table_block(["Process", "Registered name", "Status", "Pending messages"], [
+        running_row("connection pool", "event_logger_pool"),
+        running_row("store actor", "event_logger_store"),
+      ]),
+    ]),
+  ])
+}
+
+/// 記述の最上位。`#{"sections" => [節, ...]}`。
+fn page_sections(sections: List(Dynamic)) -> Dynamic {
+  dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
+}
+
+/// 節（`type` = `"section"`）。
+fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
+/// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` の
+/// インラインの対。
+fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("pairs")),
+    #(
+      dynamic.string("items"),
+      dynamic.list(
+        list.map(items, fn(item) {
+          dynamic.properties([
+            #(dynamic.string("term"), dynamic.string(item.0)),
+            #(dynamic.string("value"), item.1),
+          ])
+        }),
+      ),
+    ),
+  ])
+}
+
+/// `table` ブロック。`rows` の各セルはすでに組み立てたインライン。
+fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("table")),
+    #(
+      dynamic.string("headers"),
+      dynamic.list(list.map(headers, dynamic.string)),
+    ),
+    #(dynamic.string("rows"), dynamic.list(list.map(rows, dynamic.list))),
+  ])
+}
+
+/// `details` ブロック。`text` は開いたときに出す整形済みのテキスト。
+fn details_block(summary: String, text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("details")),
+    #(dynamic.string("summary"), dynamic.string(summary)),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `text` ブロック。
+fn text_block(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `note` ブロック。
+fn note_block(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("note")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `form` ブロック。`fields` は `checkbox_field/4` で組んだ欄の記述、`submit`
+/// は送信ボタンの文字列。
+fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("form")),
+    #(dynamic.string("fields"), dynamic.list(fields)),
+    #(dynamic.string("submit"), dynamic.string(submit)),
+  ])
+}
+
+/// `checkbox` の欄。`name` が送信名、`hint` が欄の下の説明。
+fn checkbox_field(
+  name name: String,
+  label label: String,
+  hint hint: String,
+  checked checked: Bool,
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("checkbox")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("hint"), dynamic.string(hint)),
+    #(dynamic.string("checked"), dynamic.bool(checked)),
+  ])
+}
+
+/// `text` インライン。
+fn text_inline(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `code` インライン。
+fn code_inline(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("code")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `badge` インライン。`table` のセルだけで使える。
+fn badge_inline(text: String, tone: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("badge")),
+    #(dynamic.string("text"), dynamic.string(text)),
+    #(dynamic.string("tone"), dynamic.string(tone)),
+  ])
+}
+
+/// `id` インライン。`pairs` の値だけで使える。
+fn id_inline(text: String) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("id")),
+    #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
 /// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。登録
-/// アカウントの一覧は撮影には使わない。
+/// アカウントの一覧は `event_logger` の `settings` の記述のチェックボックスに
+/// 使う。
 fn plugin_page_content(
   name: String,
   key: String,
-  _accounts: List(plugin_config.PageAccount),
+  accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   case name, key {
     "console_logger", "status" -> Ok(console_logger_status_description())
     "console_logger", "settings" -> Ok(console_logger_settings_description())
+    "event_logger", "timeline" -> Ok(event_logger_timeline_description())
+    "event_logger", "settings" ->
+      Ok(event_logger_settings_description(accounts))
     "broken", "status" -> Ok(broken_status_description())
     "slow", "status" -> Error("plugin did not answer in time")
     _, _ -> Error("plugin not found")
   }
 }
 
-/// フォームの送信を受け取る実行の口。`console_logger` の `settings` だけが持ち、
-/// 常に成功する。ほかのプラグインとページ（`broken/status` など）は `None` を
-/// 返し、405 の経路を撮る。
+/// フォームの送信を受け取る実行の口。`console_logger` と `event_logger` の
+/// `settings` が持ち、常に成功する。ほかのプラグインとページ（`broken/status`
+/// など）は `None` を返し、405 の経路を撮る。
 fn plugin_page_action(
   name: String,
   key: String,
@@ -361,6 +596,7 @@ fn plugin_page_action(
 ) {
   case name, key {
     "console_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
+    "event_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
     _, _ -> None
   }
 }
@@ -462,7 +698,10 @@ fn context() -> admin.Context {
         dashboard.PluginRow(
           "event_logger",
           Some(plugin_runner.Overloaded(dropped: 42)),
-          pages: [],
+          pages: [
+            plugin.PluginPage(key: "timeline", title: "Timeline"),
+            plugin.PluginPage(key: "settings", title: "Settings"),
+          ],
         ),
         dashboard.PluginRow(
           "broken",
@@ -555,7 +794,7 @@ fn base_port() -> Int {
   |> result.unwrap(default_port)
 }
 
-/// 3 つの状態の管理 UI を、先頭のポートから順に起動して待ち続ける。
+/// 4 つの状態の管理 UI を、先頭のポートから順に起動して待ち続ける。
 pub fn main() -> Nil {
   let port = base_port()
   let unavailable_reason =
@@ -578,6 +817,44 @@ pub fn main() -> Nil {
       sessions: fn() { Ok([]) },
       pending: fn() { Ok([]) },
     )
+  let readme =
+    admin.Context(
+      ..context(),
+      accounts: fn() { Ok([row(signer, signer_npub, "main account")]) },
+      skipped: fn() { Ok([]) },
+      pending: fn() { Ok([]) },
+      relays: fn(_deadline) {
+        Ok([
+          dashboard.RelayRow(
+            1,
+            "wss://relay.example",
+            dashboard.Reported(relay_connection.Connected),
+            dashboard.Reported(relay_connection.Connected),
+          ),
+        ])
+      },
+      plugins: fn(_deadline) {
+        [
+          dashboard.PluginRow(
+            "event_logger",
+            Some(plugin_runner.Running),
+            pages: [
+              plugin.PluginPage(key: "timeline", title: "Timeline"),
+              plugin.PluginPage(key: "settings", title: "Settings"),
+            ],
+          ),
+        ]
+      },
+      page_accounts: fn() {
+        Ok([
+          plugin_config.PageAccount(
+            pubkey: signer,
+            npub: signer_npub,
+            label: "main account",
+          ),
+        ])
+      },
+    )
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.add(admin.supervised("127.0.0.1", port, context()))
@@ -587,6 +864,7 @@ pub fn main() -> Nil {
       unavailable,
     ))
     |> static_supervisor.add(admin.supervised("127.0.0.1", port + 2, empty))
+    |> static_supervisor.add(admin.supervised("127.0.0.1", port + 3, readme))
     |> static_supervisor.start
   process.sleep_forever()
 }

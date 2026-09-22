@@ -65,9 +65,19 @@ docker compose up --build -d
 ### First run
 
 1. Open `http://127.0.0.1:8080/` in a browser. The username is `admin`, and the password is the value of `ADMIN_PASSWORD` in `.env`.
+   ![The dashboard of the admin UI](docs/images/usage/dashboard-en.png)
 2. From "Add" in the Relays section of the dashboard, register the relays the bunker will use (NIP-46-capable relays such as `wss://relay.nsec.app` are recommended) and the relays used for monitoring. The connections open without a restart.
+   ![Editing the roles of a relay](docs/images/usage/edit-relay-en.png)
 3. From "Add" in the Accounts section, paste an nsec to register, or have the server generate a key. If you generate one, back up the nsec shown on the confirmation page before registering (afterwards it is only shown when you re-enter the admin password).
+   ![Registering an account by pasting an nsec](docs/images/usage/new-account-en.png)
 4. Open "Connection URIs and public key" on the account's row, copy the "Connection URI", and paste it into your client. Connecting with the "Connection URI (approval)", which carries no secret, goes through approval in the admin UI.
+   ![The connection URIs of an account, expanded on the dashboard](docs/images/usage/dashboard-uri-en.png)
+   ![Approving a connection from a client](docs/images/usage/approve-en.png)
+5. After a client connects, "Edit permissions" on its row in "Approved sessions" changes what it may request. Tick signing and NIP-44 encryption or decryption; to allow only some event kinds, leave signing unticked and list the kinds in "Allowed kinds". The change takes effect on the next request, and the client does not need to reconnect.
+   ![Editing the permissions of a session](docs/images/usage/session-permissions-en.png)
+6. The bundled `event_logger` plugin adds two pages under Plugins. "Timeline" lists the events it has stored, and "Settings" chooses the accounts to store events for and shows the connection and the running processes.
+   ![The timeline page of the event_logger plugin](docs/images/usage/event-logger-timeline-en.png)
+   ![The settings page of the event_logger plugin](docs/images/usage/event-logger-settings-en.png)
 
 Registered accounts accept connections without a restart. Secrets are stored encrypted too, so the connection URI does not change across restarts. The screen layout and the result of each operation are in [Admin UI](docs/admin-ui.md), and how to read the startup log is in the 「起動時のログ」 section of [Operations](docs/operations.md).
 

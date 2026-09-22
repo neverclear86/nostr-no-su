@@ -722,6 +722,7 @@ nostr-no-su/
 │
 ├── docs/
 │   ├── readme-ja.md              README の日本語版（トップの README.md は同じ内容の英語版）
+│   ├── images/usage/             README に載せる管理 UI のスクリーンショット（dev/readme_shots.sh で撮る）
 │   ├── plugin-api.md             プラグイン API v1 の仕様（プラグイン作者向け）
 │   ├── architecture.md           この文書
 │   ├── design-decisions.md       設計上の判断と既知の制約
