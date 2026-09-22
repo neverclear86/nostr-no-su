@@ -205,6 +205,10 @@ Tailwind CSS 4 と daisyUI 5 の CSS を `npm run build:css` でビルドし、�
 
 nsec と管理パスワードの欄には `autocomplete="off"` を付けているが、ブラウザーのパスワード管理機能はこれを無視することがある。管理パスワードを保存すると再入力の欄が自動入力されて再入力の意味が薄れ、nsec の欄も保存を促されうる。表示用の欄（接続 URI、nsec）には `name` を付けないので、送信にも入力履歴にも含まれない
 
+### 接続 QR コードはカメラ用とスキャナー用の 2 通りを出す
+
+`bunker://` を先頭に持つ文字列は Android 15（Google レンズ）と iPad の標準カメラが知らないスキームの URL として扱い、開けもコピーもできない。先頭に空白や改行を足しても trim されて同じで、ゼロ幅スペースや NBSP を足すとコピーは出るが nostr-tools の `parseBunkerInput`（`^bunker://` 固定の正規表現、trim 無し）が弾く。`data:`、`sms:`、`mailto:`、MATMSG も実測で使えなかった。`bunker://` を外した残りはコピーできるが、`relay=` の値に `relay.example.com` の並びが残ると iPad がドメインと見なしてブラウザーで開く。ドットも `%2E` に符号化すると Android と iPad の両方でテキストとしてコピーでき、`URLSearchParams` が `%2E` を `.` に戻すので先頭に `bunker://` を打ち直せばクライアント側の解析は通る。アプリ内にスキャナーを持つクライアントのために、完全な `bunker://` の QR コードは畳みに残す。中継する外部のページを経由する案は採らない。
+
 ## vendor/stratus
 
 WebSocket クライアントの stratus は、hex で公開された版を改変して `vendor/stratus/` に同梱している。

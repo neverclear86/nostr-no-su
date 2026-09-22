@@ -287,8 +287,9 @@ pub const max_label_code_points = 100
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
 
-/// 承認待ちの節のアンカー。タイルの `href="#…"` と節の `id` が同じ値を見る。
-const pending_anchor = "pending"
+/// 承認待ちの節のアンカー。タイルの `href="#…"` と節の `id` が同じ値を見る。接続 QR
+/// コードのページからのリンクも同じ値を見る。
+pub const pending_anchor = "pending"
 
 /// アカウントの節のアンカー。
 const accounts_anchor = "accounts"

@@ -286,6 +286,14 @@ pub type Message {
   ConnectionQrDescription
   ConnectionQrSecretWarning
   CouldNotEncodeQr
+  ScanWithClientScanner
+  CameraCopySteps
+  CameraCopyNote
+  BunkerRelaysForUri
+  BunkerRelaysHint
+  ApprovalUriNeedsApproval
+  ConnectWithClientUri
+  ConnectWithClientUriHint
   PublicKeyHex
   EditLabel
   ShowPrivateKey
@@ -550,11 +558,24 @@ fn english(message: Message) -> String {
     ConnectionUrisAndPublicKey -> "Connection URIs and public key"
     ConnectionQr -> "Connection QR code"
     ConnectionQrDescription ->
-      "Scan this code with the phone's camera or with the client's scanner to carry the connection URI to the phone."
+      "The code at the top of each card is meant to be scanned and copied with the phone's camera. To use the client's own scanner instead, open the panel below it and scan the code inside."
     ConnectionQrSecretWarning ->
-      "The first code contains the connection secret. Do not show it where others can see the screen."
+      "The codes on this card contain the connection secret. Do not show them where others can see the screen."
     CouldNotEncodeQr ->
       "The URI is too long for a QR code. Copy it from the field below."
+    ScanWithClientScanner -> "Scan with the client's own scanner"
+    CameraCopySteps ->
+      "Scan this code with the camera, copy the text, type bunker:// in the client's input field, and paste the text after it."
+    CameraCopyNote ->
+      "As long as it starts with bunker://, leave the %2E in relay= as it is; the client turns it back into a dot."
+    BunkerRelaysForUri -> "Relays this URI uses"
+    BunkerRelaysHint ->
+      "If the phone cannot reach these relays, the connection fails even when the code scans."
+    ApprovalUriNeedsApproval ->
+      "A client that connects with this URI cannot sign until you approve it under pending connections on the dashboard."
+    ConnectWithClientUri -> "Connect with the client's own URI"
+    ConnectWithClientUriHint ->
+      "If the client can show its own nostrconnect:// URI or QR code, pasting that into this admin UI is more reliable: the phone copies it from the client itself, so the camera's limits do not apply."
     PublicKeyHex -> "Public key (hex)"
     EditLabel -> "Edit label"
     ShowPrivateKey -> "Show private key"
@@ -827,10 +848,22 @@ fn japanese(message: Message) -> String {
     ConnectionUrisAndPublicKey -> "接続 URI と公開鍵"
     ConnectionQr -> "接続 QR コード"
     ConnectionQrDescription ->
-      "スマートフォンのカメラかクライアントの読み取り機能でこのコードを読み取ると、接続 URI をスマートフォンへ渡せます。"
+      "各カードの上のコードは、端末のカメラで読み取ってコピーするためのものです。クライアント自身の読み取り機能を使うときは、下の畳みを開いてその中のコードを読み取ってください。"
     ConnectionQrSecretWarning ->
-      "最初のコードには接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
+      "このカードのコードには接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
     CouldNotEncodeQr -> "この URI は QR コードにするには長すぎます。下の欄からコピーしてください。"
+    ScanWithClientScanner -> "クライアントの読み取り機能で読み取る"
+    CameraCopySteps ->
+      "このコードをカメラで読み取ってテキストをコピーし、クライアントの入力欄に bunker:// と打ってから、その後ろに貼り付けます。"
+    CameraCopyNote ->
+      "先頭が bunker:// で始まっていれば、relay= の中の %2E はそのままで構いません。クライアントが . に戻します。"
+    BunkerRelaysForUri -> "この URI が使うリレー"
+    BunkerRelaysHint -> "スマートフォンからこれらのリレーに接続できないと、読み取れても接続は成立しません。"
+    ApprovalUriNeedsApproval ->
+      "この URI で接続したクライアントは、ダッシュボードの承認待ちで承認するまで署名できません。"
+    ConnectWithClientUri -> "クライアント側の URI で接続する"
+    ConnectWithClientUriHint ->
+      "クライアントが nostrconnect:// の URI や QR コードを出せるなら、それを管理画面に貼る方が確実です。スマートフォン側でコピーできるので、カメラの制約を受けません。"
     PublicKeyHex -> "公開鍵（16 進）"
     EditLabel -> "ラベルを編集"
     ShowPrivateKey -> "秘密鍵を表示"

@@ -1294,6 +1294,18 @@ pub fn preformatted(text: String) -> Element(msg) {
   )
 }
 
+/// 等幅の 1 行を並べる箇条書き。URL のように長く、行ごとに区切りたい値に使う。
+pub fn code_list(values: List(String)) -> Element(msg) {
+  html.ul(
+    [attribute.class("list-disc pl-5 space-y-1")],
+    list.map(values, fn(v) {
+      html.li([attribute.class("font-mono text-xs break-all")], [
+        html.text(v),
+      ])
+    }),
+  )
+}
+
 /// `<details>` の畳み。`summary` はボタンの見た目で、開閉の矢印と語を置く。本文は開いたときに
 /// 上へ余白を空ける。JS なしで動く。
 pub fn details_panel(
