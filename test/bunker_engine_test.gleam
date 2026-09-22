@@ -2175,6 +2175,44 @@ pub fn pending_stays_within_the_capacity_test() {
     == expected_tokens
 }
 
+/// 1 つのクライアントが署名者を変えて上限の件数以上 `connect` しても、押し出さ
+/// れるのはそのクライアント自身の最も古い承認待ちで、先にあった別のクライアント
+/// の承認待ちは残る。
+pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
+  let client_a = account_for(client_key)
+  let client_b = account_for(other_client_key)
+  // 署名者を変えた `connect` で上限を超えられるよう、件数ぶんの署名者を登録する
+  let signers =
+    list.repeat(Nil, engine.pending_capacity + 2)
+    |> list.index_map(fn(_, index) { account_for(padded_hex(100 + index)) })
+  let assert [first_signer, ..] = signers
+  let state =
+    engine.new(
+      list.map(signers, fn(signer) { #(signer, secret) }),
+      Some(approval_url),
+    )
+  // 先に別のクライアントの承認待ちを 1 件作っておく
+  let state = connect_for_approval(state, client_b, first_signer, "tok-b", 1000)
+  let final =
+    list.index_fold(signers, state, fn(state, signer, index) {
+      let n = index + 1
+      connect_for_approval(
+        state,
+        client_a,
+        signer,
+        "tok-a" <> int.to_string(n),
+        1000 + n,
+      )
+    })
+  let expected_tokens =
+    list.repeat(Nil, engine.pending_capacity - 1)
+    |> list.index_map(fn(_, index) {
+      "tok-a" <> int.to_string(engine.pending_capacity + 2 - index)
+    })
+  assert list.map(engine.pending(final, 1018), fn(pending) { pending.token })
+    == list.append(expected_tokens, ["tok-b"])
+}
+
 /// `deny` は、削除する承認待ちの token を書き込みの値として返す。
 pub fn deny_writes_the_pending_deletion_test() {
   let signer = account_for(signer_key)
