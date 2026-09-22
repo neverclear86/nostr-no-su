@@ -5,7 +5,7 @@ description: nostr-no-su の main を docker compose 上で実機検証し、iss
 
 # 動作確認レポート（nostr-no-su）
 
-対象のリポジトリは `neverclear86/nostr-no-su`（private）である。
+対象のリポジトリは `neverclear86/nostr-no-su`（public）である。
 レポートの手本は #45 と #54 で、どちらも issue 本文に概要を、最初のコメントに詳細レポートを置いている（最初のレポートは #16）。
 #54 は管理 UI の刷新（#29）の後のレポートで、日本語の画面を撮り、表示の言語や画面の幅の確認を含む。
 作業を始める前に直近のレポートを読み、構成を合わせる。

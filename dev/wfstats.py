@@ -13,7 +13,7 @@ nostr-no-su の Claude Code Workflow 実行ログ（journal.jsonl + agent-*.json
 
   --base   Claude Code のプロジェクトのディレクトリ。省略時は cwd のリポジトリから導く（~/.claude/projects/<パスの / を - にした名前>）
   --runs   対象の run id（wf_* のディレクトリ名）をコンマ区切りで。省略時は全 run
-  --brief  run ごとの表・agentType 別の $・レビューの r1 の集計・クリティカルパスだけを出す
+  --brief  run ごとの表・agentType 別の $・レビューの r1 の集計・クリティカルパス・agentType 別のモデルだけを出す
 
 金額は PRICE の価格表（API の公開価格）による見積もりで、サブスクリプションの実費ではない。
 出力はすべて標準出力に書く。呼び出し側で `python3 dev/wfstats.py > report.txt` する。
@@ -38,6 +38,8 @@ PRICE = {
     'claude-fable-5-1': (10, 12.5, 0.25, 50),
     'claude-opus-5': (5, 6.25, 0.5, 25),
     'claude-opus-5[1m]': (5, 6.25, 0.5, 25),
+    'claude-opus-5-5': (4, 5, 0.2, 20),
+    'claude-opus-5-5[1m]': (4, 5, 0.2, 20),
     'claude-sonnet-5': (2, 2.5, 0.2, 10),
 }
 DEFAULT_PRICE = (5, 6.25, 0.5, 25)
@@ -692,7 +694,7 @@ def section_orchestrator_cost(runs_data, base):
 # ---------------------------------------------------------------------------
 
 def section_brief(runs_data):
-    """retrospective が issue に貼る要約。run ごとの表、agentType 別の $、レビューの r1、クリティカルパス。"""
+    """retrospective が issue に貼る要約。run ごとの表、agentType 別の $、レビューの r1、クリティカルパス、agentType 別のモデル。"""
     print("| run | 期間（UTC） | 壁時計 | マージ | stalled | 総額 | $/マージ済み issue |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
     by_type_all = collections.defaultdict(float)
@@ -722,7 +724,24 @@ def section_brief(runs_data):
     else:
         print("マージ済み issue のクリティカルパス: マージ済みなし")
     print()
+    print_models_by_type(runs_data)
+    print()
     print("金額は API の公開価格による見積もり（dev/wfstats.py の PRICE）")
+
+
+def print_models_by_type(runs_data):
+    """agentType ごとのモデル別リクエスト数を出す。1 つの agentType に 2 つ以上のモデルがあれば印を付ける
+    （安全策のフォールバックで古いモデルが答えたか、別名の解決先が実行の途中で変わった）。"""
+    models = collections.defaultdict(collections.Counter)
+    for run in runs_data:
+        for a in run['agents'].values():
+            for r in a.requests:
+                models[a.agent_type][r['model']] += 1
+    print("agentType 別のモデル（リクエスト数）")
+    for t in sorted(models):
+        c = models[t]
+        mark = "  ⚠ モデルが混在" if len(c) > 1 else ""
+        print(f"    {t:22} " + ", ".join(f"{m} {n}" for m, n in c.most_common()) + mark)
 
 
 def parse_args():
