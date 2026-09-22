@@ -521,7 +521,7 @@ sequenceDiagram
     bk-->>ui: 一覧の行（npub）
     Note over ui: 管理パスワードと<br/>定数時間で照合
     alt 一致しない
-        Note over ui: ログ: rejected a private key reveal
+        Note over ui: ログ: rejected a private key reveal<br/>1 秒の遅延
         ui-->>browser: 403
     else 一致する
         ui->>bk: GetNsec(signer)
@@ -541,8 +541,9 @@ sequenceDiagram
 `/healthz` 以外はすべて Basic 認証を要する。
 認証に失敗した要求は、理由（資格情報なし、形式の誤り、資格情報の不一致）と接続元の IP を `[admin]` の 1 行でログに出す。
 資格情報とパス（承認ページのトークンを含みうる）は出さない。IP は TCP の接続元で、`X-Forwarded-For` は見ない。
-応答は 1 秒の固定の遅延の後に返し、ロックアウトと IP ごとの回数制限は入れない（必要なら前段のリバースプロキシーで行う）。
+応答は 1 秒の固定の遅延の後に返し（秘密鍵の再表示で管理パスワードの再入力が一致しない 403 も同じ）、ロックアウトと IP ごとの回数制限は入れない（必要なら前段のリバースプロキシーで行う）。
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
+`Host`、`Origin`、`Referer` のどれかに制御文字を含む要求は、メソッドによらずその検査の前に text/plain の 400 で弾く（検査が不一致のときにログへ出す生の値に、端末の制御を入れさせないため）。
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
 ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、テーマと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
