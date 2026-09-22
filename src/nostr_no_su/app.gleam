@@ -29,9 +29,10 @@
 //// **アカウントの変更はバンカーアクターを再起動しない。** 再起動すると
 //// `rest_for_one` で接続も落ち、インメモリのセッションが消えるためである。署名者の
 //// 集合が変わったら、アクターは `relay_list` に `ResubscribeAll` を送り、
-//// `relay_list` が現在の全接続へ購読の張り直しを依頼し、各接続アクターが生きた
-//// ソケットへ転送する。接続アクターを経由するので、接続の途中や再接続を待って
-//// いる間の依頼も、変更後の署名者で購読することになる。
+//// `relay_list` が監視とバンカーの両方の用途の現在の全接続へ購読の張り直しを
+//// 依頼し、各接続アクターが生きたソケットへ転送する。接続アクターを経由する
+//// ので、接続の途中や再接続を待っている間の依頼も、変更後の署名者で購読する
+//// ことになる。
 ////
 //// **アカウントストアの接続プールはバンカーのサブツリーの先頭に置く。** pgo は
 //// チェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で
@@ -79,10 +80,12 @@
 //// `relay_list` は再起動後に届く `Repopulate` で一覧から起動し直す。止めた
 //// 接続（バンカーの用途）は `on_disconnect` を経て `RemovePublisher` が送られ、
 //// バンカーの送信先から外れる。署名者の変化による張り直しは、`relay_list` の
-//// `ResubscribeAll` が現在の全接続へ送る。**起動時のリレーは `relays` テーブルの
-//// 行から決まる。** バンカーが読み込みに成功するたびに `OpenRegistered` で
-//// `relay_list` へ渡り、一覧に無い URL だけが足される。詳細と既知の窓は
-//// `relay_list` のモジュール doc を参照。
+//// `ResubscribeAll` が監視とバンカーの両方の用途の現在の全接続へ送り、
+//// プラグインのランナーの起動・再有効化・取り直しの完了による張り直しは監視の
+//// 用途の接続だけへ送る（バンカーの購読はプラグインに関わらないため）。
+//// **起動時のリレーは `relays` テーブルの行から決まる。** バンカーが読み込みに
+//// 成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけが
+//// 足される。詳細と既知の窓は `relay_list` のモジュール doc を参照。
 ////
 //// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
 //// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
@@ -365,10 +368,14 @@ fn add_plugins(builder: Builder, spec: Spec) -> Builder {
 /// 終了・ハングはランナーの中で完結して**プロセスの死にならない**ため、この
 /// 回数はプラグインの不調では消費されない。消費されるのは外部からの強制終了の
 /// ような、イベントストリームでは誘発できない事象だけである（冒頭の doc も
-/// 参照）。ランナーには、復帰したときに監視の購読を評価し直させる張り直しの
-/// 操作を渡す。
+/// 参照）。ランナーには、起動・再有効化・取り直しの完了のたびに監視の購読を
+/// 評価し直させる張り直しの操作を渡す。この張り直しは監視の用途の接続だけへ
+/// 送り、バンカーの接続には送らない（バンカーの購読はプラグインに関わらない
+/// ため）。
 fn plugins_tree(spec: Spec) -> Builder {
-  let resubscribe = fn() { relay_list.resubscribe_all(spec.relay_list) }
+  let resubscribe = fn() {
+    relay_list.resubscribe_all(spec.relay_list, [relay_list.Monitor])
+  }
   use builder, plugin_spec <- list.fold(spec.plugins, plugins_supervisor())
   builder
   |> add_plugin_children(plugin_spec.plugin)
@@ -639,7 +646,12 @@ fn bunker_tree(
     bunker.supervised(
       config.name,
       config.settings,
-      fn() { relay_list.resubscribe_all(spec.relay_list) },
+      fn() {
+        relay_list.resubscribe_all(spec.relay_list, [
+          relay_list.Monitor,
+          relay_list.Bunker,
+        ])
+      },
       relay_list.open_registered(spec.relay_list, _),
     ),
   )

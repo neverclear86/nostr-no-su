@@ -1114,6 +1114,66 @@ pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
   stop_tree(tree)
 }
 
+/// 報告が、指定したリレーの接続の照合か（送る REQ と CLOSE の有無を問わない）。
+fn reports_on(report: SubscriptionReport, relay_url: String) -> Bool {
+  case report {
+    Subscribed(url, _) -> url == relay_url
+    Retrying(url) -> url == relay_url
+  }
+}
+
+/// ランナーの復帰による張り直しは監視の接続だけに届き、バンカーの接続は購読を
+/// 照合し直さない。
+pub fn a_restarted_runner_resubscribes_only_the_monitor_relays_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let runner = process.new_name("test_plugin_forwarding")
+  let bunker_relay_url = "ws://bunker.test"
+  let store = store_with_load(fn() { load_signer(signer_key) })
+  let plugins = [forwarding_spec(runner, process.new_subject())]
+  let spec =
+    monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store,
+      [test_relay()],
+      fixed_resume_point(Ok(None)),
+      plugins,
+      fixed_resume_point(Ok(None)),
+      app.plugin_catchups(plugins),
+    )
+  let tree =
+    start_tree(
+      app.Spec(
+        ..spec,
+        bunker: bunker_spec(
+          bunker_name,
+          store,
+          [named_relay(bunker_relay_url)],
+          fixed_retry_delay,
+        ),
+      ),
+    )
+  let #(_started_skipped, bunker_started) =
+    receive_until(subscribed, reports_on(_, bunker_relay_url), 2000)
+  let assert Ok(_) = bunker_started
+  drain_subscriptions(subscribed, 300)
+
+  let assert Ok(runner_before) = process.named(runner)
+  process.kill(runner_before)
+  let _restarted = await_restart(runner, runner_before, 100)
+  let #(skipped, monitor_synced) =
+    receive_until(subscribed, reports_on(_, test_relay_url), 2000)
+  let assert Ok(_) = monitor_synced
+  assert !list.any(skipped, reports_on(_, bunker_relay_url))
+  let #(_later, bunker_synced) =
+    receive_until(subscribed, reports_on(_, bunker_relay_url), 500)
+  assert bunker_synced == Error(Nil)
+  stop_tree(tree)
+}
+
 /// 取り直しの振り分けを確かめるために、ツリーは張らずランナーだけを起こす。
 /// `resubscribe` の呼び出しは `resubscribed` へ報告する（起動時に 1 度呼ばれる）。
 fn start_bare_runner(

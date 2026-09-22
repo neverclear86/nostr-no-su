@@ -119,8 +119,8 @@ pub type Msg {
   /// ストアに登録されたリレーを、一覧に無い URL だけ足す（`open_all`）。バンカーが
   /// 読み込みに成功するたびに送る。
   OpenRegistered(relays: List(Registered))
-  /// 全接続（両用途）へ購読の張り直しを依頼する。
-  ResubscribeAll
+  /// 用途 `roles` の現在の全接続へ購読の張り直しを依頼する。
+  ResubscribeAll(roles: List(Role))
 }
 
 /// アクターが保持する状態。
@@ -383,9 +383,9 @@ pub fn entries(name: Name(Msg)) -> Result(List(Entry), Nil) {
   |> option.to_result(Nil)
 }
 
-/// 現在の全接続へ購読の張り直しを依頼する。送るだけで待たない。
-pub fn resubscribe_all(name: Name(Msg)) -> Nil {
-  named.send(name, ResubscribeAll)
+/// 用途 `roles` の現在の全接続へ購読の張り直しを依頼する。送るだけで待たない。
+pub fn resubscribe_all(name: Name(Msg), roles: List(Role)) -> Nil {
+  named.send(name, ResubscribeAll(roles))
 }
 
 /// ストアに登録されたリレーを一覧へ足す。送るだけで待たない。
@@ -417,8 +417,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       })
       actor.continue(apply_entries(state, next))
     }
-    ResubscribeAll -> {
-      list.each([Monitor, Bunker], fn(role) {
+    ResubscribeAll(roles) -> {
+      list.each(roles, fn(role) {
         list.each(connections(state.entries, role), fn(connection) {
           relay_connection.resubscribe(connection.name)
         })
