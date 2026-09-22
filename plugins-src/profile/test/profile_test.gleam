@@ -255,6 +255,11 @@ pub fn fetched_reads_the_three_statuses_test() {
       ]),
     )
     == page.Failed("timeout")
+  // status が 3 つのいずれでもない map も、map として読めない値も、同じ理由の Failed。
+  assert page.fetched(
+      dynamic.properties([#(dynamic.string("status"), dynamic.string("weird"))]),
+    )
+    == page.Failed("the plugin API returned an unexpected value")
   assert page.fetched(dynamic.string("nope"))
     == page.Failed("the plugin API returned an unexpected value")
 }
