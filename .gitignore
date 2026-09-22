@@ -5,6 +5,10 @@
 node_modules
 erl_crash.dump
 .env
+# dev/wfstats.py など Python スクリプトの実行でできるキャッシュ。
+__pycache__/
+# Playwright の MCP が作業ツリーに作る撮影のログと画像。
+.playwright-mcp/
 
 # 外部プラグインのソース側のビルド成果物。*.beam は上の行が拾うが、.app や
 # erlang-shipment の中身は拾えない。
