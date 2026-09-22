@@ -569,6 +569,7 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
 | POST | `/accounts/import` | nsec 入力による登録。完了ページで nsec を 1 回表示する |
 | POST | `/accounts/register-generated` | 生成した鍵の登録。303 でダッシュボードへ戻す |
+| GET | `/accounts/<signer>/qr` | 接続 URI の QR コード |
 | GET / POST | `/accounts/<signer>/label` | ラベルの編集フォーム / 差し替え |
 | GET / POST | `/accounts/<signer>/rotate` | secret の作り直しの確認 / 実行 |
 | GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
@@ -640,13 +641,14 @@ flowchart TD
 nostr-no-su/
 ├── src/                          本体
 │   ├── nostr_no_su.gleam         エントリポイント（設定の読み込みとツリー仕様の組み立て）
-│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process / application / ssl / logger / supervisor / pgo）
+│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process / application / ssl / logger / supervisor / pgo / QR）
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
+│       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/connect_pages.gleam クライアントの接続のページの描画
 │       ├── admin/session_pages.gleam セッションのページの描画
