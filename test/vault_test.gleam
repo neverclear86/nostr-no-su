@@ -7,7 +7,8 @@ import gleam/list
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/vault.{
-  type MasterKey, Loaded, Row, Skipped, StoredAccount,
+  type MasterKey, Loaded, PendingMacRow, Row, SessionMacRow, Skipped,
+  StoredAccount,
 }
 import nostr_no_su/hex
 import support/vector.{bytes, contains_bytes}
@@ -258,4 +259,92 @@ pub fn skipped_rows_are_described_by_pubkey_and_reason_test() {
     == "skipped account "
     <> pubkey
     <> ": private key could not be decrypted (wrong ACCOUNT_MASTER_KEY or tampered row)"
+}
+
+/// MAC を計算するセッションの行。
+fn session_mac_row() -> vault.MacRow {
+  SessionMacRow(
+    signer: "signer-a",
+    client: "client-a",
+    perms: "sign_event",
+    created_at: 1_700_000_000,
+    last_used_at: 1_700_000_100,
+  )
+}
+
+/// MAC を計算する承認待ちの行。共通の列は `session_mac_row` と同じ値にしてある。
+fn pending_mac_row() -> vault.MacRow {
+  PendingMacRow(
+    token: "token-a",
+    signer: "signer-a",
+    client: "client-a",
+    request_id: "req-1",
+    perms: "sign_event",
+    secret_mismatch: False,
+    created_at: 1_700_000_000,
+  )
+}
+
+/// 同じ行と同じ鍵では検証が通り、MAC は 32 バイトである。
+pub fn the_same_row_and_key_verify_test() {
+  let key = master_key(master_key_hex)
+  use row <- list.each([session_mac_row(), pending_mac_row()])
+  let mac = vault.row_mac(key, row)
+  assert bit_array.byte_size(mac) == 32
+  assert vault.verify_row_mac(key, row, mac)
+}
+
+/// 行の各列を 1 つずつ変えた行の一覧。列を 1 つ変えると検証が通らないことを
+/// 全列について確かめるために使う。
+fn tampered_mac_rows(row: vault.MacRow) -> List(vault.MacRow) {
+  case row {
+    SessionMacRow(..) -> [
+      SessionMacRow(..row, signer: "tampered"),
+      SessionMacRow(..row, client: "tampered"),
+      SessionMacRow(..row, perms: "tampered"),
+      SessionMacRow(..row, created_at: row.created_at + 1),
+      SessionMacRow(..row, last_used_at: row.last_used_at + 1),
+    ]
+    PendingMacRow(..) -> [
+      PendingMacRow(..row, token: "tampered"),
+      PendingMacRow(..row, signer: "tampered"),
+      PendingMacRow(..row, client: "tampered"),
+      PendingMacRow(..row, request_id: "tampered"),
+      PendingMacRow(..row, perms: "tampered"),
+      PendingMacRow(..row, secret_mismatch: !row.secret_mismatch),
+      PendingMacRow(..row, created_at: row.created_at + 1),
+    ]
+  }
+}
+
+/// どの列を 1 つ変えても検証は通らない。
+pub fn changing_one_column_fails_verification_test() {
+  let key = master_key(master_key_hex)
+  use row <- list.each([session_mac_row(), pending_mac_row()])
+  let mac = vault.row_mac(key, row)
+  use tampered <- list.each(tampered_mac_rows(row))
+  assert !vault.verify_row_mac(key, tampered, mac)
+}
+
+/// 共通の列が同じ値でも、セッションの MAC は承認待ちの行として検証できない。
+pub fn a_session_mac_does_not_verify_as_a_pending_row_test() {
+  let key = master_key(master_key_hex)
+  let mac = vault.row_mac(key, session_mac_row())
+  assert !vault.verify_row_mac(key, pending_mac_row(), mac)
+}
+
+/// 別のマスターキーでは検証が通らない。
+pub fn a_different_master_key_does_not_verify_a_row_test() {
+  use row <- list.each([session_mac_row(), pending_mac_row()])
+  let mac = vault.row_mac(master_key(master_key_hex), row)
+  assert !vault.verify_row_mac(master_key(other_master_key_hex), row, mac)
+}
+
+/// 固定の行の MAC は、鍵の導出と入力の形から独立に計算した既知の値に一致する。
+pub fn row_macs_match_the_known_answers_test() {
+  let key = master_key(master_key_hex)
+  assert vault.row_mac(key, session_mac_row())
+    == bytes("02738cc4cc3b744edc8073364047ca8b7c5ff7e91ebc07e669b172d70263ffdc")
+  assert vault.row_mac(key, pending_mac_row())
+    == bytes("21c41e6ab89127133b42af4ae99d8569bce978aa7c7964eec8b688c929af8100")
 }

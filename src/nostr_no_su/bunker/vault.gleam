@@ -1,15 +1,23 @@
-//// バンカーアカウントの暗号化された保存形式。
+//// バンカーの保存形式のうち、マスターキーで守る部分。
 ////
-//// マスターキー、用途ラベルと AAD、DB の行と `Account` の相互変換を持つ。DB にも
-//// プロセスにも触れない純粋なモジュールで、nonce は呼び出し側が渡す。
+//// マスターキー、用途ラベルと AAD、DB の行と `Account` の相互変換、セッションと
+//// 承認待ちの行の MAC を持つ。DB にもプロセスにも触れない純粋なモジュールで、
+//// nonce は呼び出し側が渡す。
 ////
 //// 秘密鍵も接続 secret も、AES-256-GCM の「nonce(12) || 暗号文 || タグ(16)」の
 //// 箱として保存する。AAD は用途ラベル、NUL 1 バイト、x-only 公開鍵の 32 バイトを
 //// この順に連結したもので、ある行の暗号文を別の列や別の行へ移す改ざんはタグの
 //// 検証で失敗する。ラベル末尾の `v1` は形式の版である。
+////
+//// セッション（`bunker_sessions`）と承認待ち（`bunker_pending`）の行には
+//// HMAC-SHA256 の MAC を付ける。MAC の鍵は用途の文字列をマスターキーで HMAC して
+//// 導き、アカウントの暗号化の鍵（マスターキーそのもの）と用途を分ける。入力は
+//// テーブル名と主キーを含む全列を、それぞれバイト数を前に付けて連結したもので、
+//// 列の値を書き換えた行や、別のテーブルの行へ移した MAC は検証で失敗する。
 
 import gleam/bit_array
 import gleam/bool
+import gleam/crypto
 import gleam/list
 import gleam/result
 import gleam/string
@@ -78,6 +86,42 @@ pub type Loaded {
 /// `describe_skipped` が決める。ラベルは平文の列から取り、ログには出さない。
 pub type Skipped {
   Skipped(pubkey: String, label: String, reason: RowError)
+}
+
+/// MAC の対象になる行。`bunker_sessions` と `bunker_pending` の 1 行ぶんの値を
+/// 持ち、変種がテーブルの区別になる。
+pub type MacRow {
+  /// `bunker_sessions` の 1 行（承認済みのセッション）。
+  SessionMacRow(
+    /// 署名者の公開鍵（16 進、小文字）。
+    signer: String,
+    /// クライアントの公開鍵（16 進、小文字）。
+    client: String,
+    /// セッション内の要求を照合する権限。空文字列は既定の集合（engine の
+    /// `default_perms`）で照合する。
+    perms: String,
+    /// 作成した Unix 秒。
+    created_at: Int,
+    /// 最後に使った Unix 秒。挿入では `created_at` と同じ値。
+    last_used_at: Int,
+  )
+  /// `bunker_pending` の 1 行（承認待ちの接続要求）。
+  PendingMacRow(
+    /// 承認ページの URL に入るトークン。
+    token: String,
+    /// 署名者の公開鍵（16 進、小文字）。
+    signer: String,
+    /// クライアントの公開鍵（16 進、小文字）。
+    client: String,
+    /// 元の `connect` リクエストの id。
+    request_id: String,
+    /// 要求された権限。空文字列は要求なし。
+    perms: String,
+    /// secret が一致しなかったか。
+    secret_mismatch: Bool,
+    /// 作成した Unix 秒。
+    created_at: Int,
+  )
 }
 
 /// 64 桁の 16 進からマスターキーを作る。前後の空白は無視し、大文字も受け付ける。
@@ -189,6 +233,19 @@ pub fn describe_skipped(skipped: Skipped) -> String {
   }
 }
 
+/// 1 行の MAC（HMAC-SHA256、32 バイト）を計算する。MAC の鍵は呼び出しのたびに
+/// マスターキーから導く。
+pub fn row_mac(key: MasterKey, row: MacRow) -> BitArray {
+  crypto.hmac(mac_input(row), crypto.Sha256, mac_key(key))
+}
+
+/// `mac` が 1 行の MAC と一致するか。一致した長さが応答時間に現れないよう
+/// `crypto.secure_compare` で比べる。長さが違えば早く `False` になるが、MAC は
+/// 32 バイト固定なので長さで漏れる情報は無い。
+pub fn verify_row_mac(key: MasterKey, row: MacRow, mac: BitArray) -> Bool {
+  crypto.secure_compare(row_mac(key, row), mac)
+}
+
 /// 読み込めなかった理由の説明。GCM の失敗からはマスターキー違いと改ざんを
 /// 区別できないので、両方の可能性を併記する。
 fn describe_row_error(reason: RowError) -> String {
@@ -230,5 +287,67 @@ fn purpose_label(purpose: Purpose) -> String {
   case purpose {
     PrivateKey -> "nostr-no-su:bunker-account:privkey:v1"
     ConnectionSecret -> "nostr-no-su:bunker-account:secret:v1"
+  }
+}
+
+/// MAC 用の鍵。アカウントの暗号化の鍵（マスターキーそのもの）と用途を分けるため、
+/// 用途の文字列をマスターキーで HMAC して導く。ラベル末尾の `v1` は形式の版である。
+fn mac_key(key: MasterKey) -> BitArray {
+  crypto.hmac(
+    <<"nostr-no-su:bunker-row-mac:v1":utf8>>,
+    crypto.Sha256,
+    key.bytes(),
+  )
+}
+
+/// 行の MAC の入力。テーブル名を先頭に、主キーを含む全列を表の列の順で
+/// `length_prefixed` で連結する。文字列は UTF-8、Int は 8 バイトのビッグ
+/// エンディアン、Bool は `bool_byte` の 1 バイトにする。
+fn mac_input(row: MacRow) -> BitArray {
+  case row {
+    SessionMacRow(signer:, client:, perms:, created_at:, last_used_at:) ->
+      length_prefixed([
+        <<"bunker_sessions":utf8>>,
+        <<signer:utf8>>,
+        <<client:utf8>>,
+        <<perms:utf8>>,
+        <<created_at:size(64)>>,
+        <<last_used_at:size(64)>>,
+      ])
+    PendingMacRow(
+      token:,
+      signer:,
+      client:,
+      request_id:,
+      perms:,
+      secret_mismatch:,
+      created_at:,
+    ) ->
+      length_prefixed([
+        <<"bunker_pending":utf8>>,
+        <<token:utf8>>,
+        <<signer:utf8>>,
+        <<client:utf8>>,
+        <<request_id:utf8>>,
+        <<perms:utf8>>,
+        bool_byte(secret_mismatch),
+        <<created_at:size(64)>>,
+      ])
+  }
+}
+
+/// 各要素の前にバイト数（4 バイトのビッグエンディアン）を付けて連結する。要素の
+/// 境界が一意に決まるので、区切り位置だけが違う入力は同じバイト列にならない。
+fn length_prefixed(fields: List(BitArray)) -> BitArray {
+  fields
+  |> list.map(fn(field) { <<bit_array.byte_size(field):size(32), field:bits>> })
+  |> bit_array.concat
+}
+
+/// Bool を 1 バイトの 0 / 1 にする。
+fn bool_byte(value: Bool) -> BitArray {
+  case value {
+    True -> <<1>>
+    False -> <<0>>
   }
 }
