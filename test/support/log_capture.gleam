@@ -1,4 +1,4 @@
-//// `log_redaction_test` が OTP logger を通る行を捕まえるためのハンドラーの宣言。
+//// `log_redaction_test` と `admin_auth_test` が OTP logger を通る行を捕まえるためのハンドラーの宣言。
 //// 行は本番と同じ 1 行形式に整形され、積んだ順に読める。
 ////
 //// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で

@@ -1,4 +1,4 @@
-//// `log` のテスト。外部由来の文字列の正規化を確かめる。
+//// `log` のテスト。外部由来の文字列の正規化と、制御文字の判定を確かめる。
 
 import gleam/string
 import gleam/time/duration
@@ -33,6 +33,14 @@ pub fn sanitize_caps_the_bytes_of_combining_marks_test() {
 pub fn sanitize_replaces_bidi_controls_with_spaces_test() {
   let text = "a\u{202A}b\u{202E}c\u{2066}d\u{2069}e"
   assert log.sanitize(text, 200) == "a b c d e"
+}
+
+/// `has_control` は `sanitize` が空白に置き換えるコードポイント（ESC、双方向
+/// テキストの制御）を見つけ、印刷可能な値は `False` を返す。
+pub fn has_control_finds_what_sanitize_replaces_test() {
+  assert log.has_control("http://evil.example\u{1b}[2J")
+  assert log.has_control("https://admin.example/\u{202E}accounts")
+  assert !log.has_control("https://admin.example:8443/accounts?x=1")
 }
 
 /// 4 MiB の入力でも、先頭の上限までしか読まないので 0.05 秒未満で終わる。

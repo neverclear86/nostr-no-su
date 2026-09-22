@@ -667,7 +667,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
     admin.Context(
       password: config.password,
       client_address: admin.unknown_client_address,
-      authentication_delay: admin.authentication_failure_delay,
+      authentication_delay: fn() {
+        process.sleep(admin.authentication_failure_delay)
+      },
       accounts: fn() { account_rows(spec) },
       skipped: fn() { skipped_rows(spec) },
       add_account: fn(added, label) { add_account(spec, added, label) },
