@@ -1,5 +1,5 @@
-//// 管理 UI のページ枠と、`admin/i18n` 以外の本体のモジュールに依存しない HTML の部品。lustre の
-//// 要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
+//// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
+//// モジュールに依存しない HTML の部品。lustre の要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
 //// components は使わない。部品は `Element` を返し、HTML 文書の文字列にするのは
 //// `page` だけである。
 ////
@@ -36,6 +36,9 @@
 //// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
 //// で色を継ぐ飾りである。製品のロゴだけは固定の色で塗った板つきの SVG で、上部バーと
 //// `<head>` の favicon のどちらにも同じ文書を `data:` の URI にして出す。
+//// 上部バーの製品名は `admin/wordmark` の M PLUS 2 の字形のパスを塗りで描き、「Nostr」と「Su」を
+//// base-content、「-no-」を primary のユーティリティで塗る。字形は読み上げず、同じ語を
+//// `sr-only` の文字で出す。
 
 import gleam/int
 import gleam/list
@@ -46,6 +49,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import lustre/element/svg
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/wordmark
 
 /// ビルドした管理 UI のスタイルシートの URL のパスセグメント。ルーティング（`admin`）と
 /// ページ枠の `link` が同じ定義を見る。配信する `wisp.serve_static` はこの定数ではなく要求の
@@ -338,9 +342,8 @@ fn theme_attributes(theme: Theme) -> List(Attribute(msg)) {
   }
 }
 
-/// 全ページ共通のナビゲーションバー。サイト名はダッシュボードへのリンクにし、右端
-/// （`navbar-end`）にテーマと言語の切り替えを置く。切り替えを出さないページでも右端の
-/// 枠は残す。
+/// 全ページ共通のナビゲーションバー。左端に `brand_link` のロゴを置き、右端（`navbar-end`）に
+/// テーマと言語の切り替えを置く。切り替えを出さないページでも右端の枠は残す。
 fn navbar(
   language: Language,
   theme: Theme,
@@ -361,15 +364,7 @@ fn navbar(
     ],
     [
       html.div([attribute.class("navbar-start flex-1")], [
-        html.a(
-          [
-            attribute.href("/"),
-            attribute.class(
-              "btn btn-ghost h-auto gap-2 px-2 py-1 text-lg font-bold focus-visible:outline-base-content",
-            ),
-          ],
-          [logo_icon(), html.text("Nostr-no-Su")],
-        ),
+        brand_link(language),
       ]),
       html.div([attribute.class("navbar-end w-auto gap-2")], end),
     ],
@@ -1434,6 +1429,55 @@ const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  
 
 /// 目と歯。白く塗り、`logo_body_path` の穴に重ねる。
 const logo_face_path = "M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
+
+/// 上部のロゴ。図形（`logo_icon`）の右に、製品名の字形（`wordmark_svg`）、読み上げ用の製品名、
+/// 表示の言語の副題（`LogoSubtitle`）を縦に並べ、全体をダッシュボード（`/`）への 1 つのリンクに
+/// する。リンクは「Nostr-no-Su」と副題の順に読み上げられる。
+fn brand_link(language: Language) -> Element(msg) {
+  html.a(
+    [
+      attribute.href("/"),
+      attribute.class(
+        "flex items-center gap-3 rounded-box focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-base-content",
+      ),
+    ],
+    [
+      logo_icon(),
+      html.span([attribute.class("grid gap-1")], [
+        wordmark_svg(),
+        html.span([attribute.class("sr-only")], [html.text("Nostr-no-Su")]),
+        html.span(
+          [attribute.class("text-xs tracking-widest text-base-content/70")],
+          [html.text(i18n.text(language, i18n.LogoSubtitle))],
+        ),
+      ]),
+    ],
+  )
+}
+
+/// 製品名「Nostr-no-Su」の字形の飾り。`admin/wordmark` のパスを、「Nostr」と「Su」は文字の色
+/// （`fill-base-content`）、「-no-」は primary（`fill-primary`）で塗るので、テーマに従う。高さは
+/// `h-4` で、幅は `viewBox` の比で決まる。読み上げない（`brand_link` が同じ語を `sr-only` の
+/// 文字で出す）。
+fn wordmark_svg() -> Element(msg) {
+  svg.svg(
+    [
+      attribute.aria_hidden(True),
+      attribute.attribute("viewBox", wordmark.view_box),
+      attribute.class("h-4 w-auto"),
+    ],
+    [
+      svg.path([
+        attribute.attribute("d", wordmark.heavy_path),
+        attribute.class("fill-base-content"),
+      ]),
+      svg.path([
+        attribute.attribute("d", wordmark.medium_path),
+        attribute.class("fill-primary"),
+      ]),
+    ],
+  )
+}
 
 /// 上部バーのロゴ。favicon と同じ板つきのロゴ（`logo_svg`）を `data:` の URI の画像にして、
 /// 板の直径 46px で出す。隣に製品名の文字があるので、代替文を空にして読み上げない。

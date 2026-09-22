@@ -211,6 +211,7 @@ pub fn sentence_gap(language: Language) -> String {
 pub type Message {
   // ページの枠と共通の部品
   BackToDashboard
+  LogoSubtitle
   LanguageSwitchLabel
   ThemeSwitchLabel
   FollowBrowser
@@ -465,6 +466,7 @@ pub fn text(language: Language, message: Message) -> String {
 fn english(message: Message) -> String {
   case message {
     BackToDashboard -> "Back to dashboard"
+    LogoSubtitle -> "Admin"
     LanguageSwitchLabel -> "Language"
     ThemeSwitchLabel -> "Theme"
     FollowBrowser -> "Browser setting"
@@ -771,6 +773,7 @@ fn english(message: Message) -> String {
 fn japanese(message: Message) -> String {
   case message {
     BackToDashboard -> "ダッシュボードに戻る"
+    LogoSubtitle -> "管理画面"
     LanguageSwitchLabel -> "言語"
     ThemeSwitchLabel -> "テーマ"
     FollowBrowser -> "ブラウザーの設定"
