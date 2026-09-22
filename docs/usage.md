@@ -1,7 +1,7 @@
 # 使い方
 
 docker compose で立ち上げた Nostr-no-Su を、管理 UI で日々使うまでの手引き。
-起動と `.env` の作り方は [README](../README.ja.md) の「はじめる」にある。
+起動と `.env` の作り方は [README](../README.ja.md) の「インストール」にある。
 画面の細かい仕様は [管理 UI](admin-ui.md)、バックアップと復旧は [運用](operations.md)。
 
 ## 何ができるか

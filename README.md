@@ -10,7 +10,7 @@
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
-  A NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
+  Nostr-no-Su - "Nostr's nest" in Japanese - is a NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
 </p>
 
 <p align="center">
@@ -25,23 +25,19 @@
 
 The server answers signing requests from clients connected over a `bunker://` URI (nsec.app, noStrudel, etc.) without ever handing them your private key. It also watches relays for events from your registered accounts and processes them with plugins (the bundled `event_logger` stores them in Postgres). It comes up together with Postgres via docker compose, and you operate keys and relays from the admin UI.
 
-Nostr-no-Su - means "Nostr's nest" in Japanese - answers signing requests from clients connected over `bunker://` (nsec.app, noStrudel, etc.) without ever handing them your private key.
-It also collects events of your registered accounts from relays and processes them with plugins.
-It comes up together with Postgres via docker compose, and keys and relays are managed in the admin UI.
-
 ![The dashboard of the admin UI](docs/images/usage/dashboard-en.png)
 
 ## ✨ Features
 
-- **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays, approval flow (auth_url)
-- **Keys stored encrypted**: AES-256-GCM with a master key, in Postgres
-- **Permission management**: per client, which kinds it may sign and whether it may use NIP-44, editable in the admin UI
-- **Own crypto implementation**: BIP-340 / NIP-44 v2. No NIFs
-- **Event monitoring and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. Add one by placing a BEAM module
-- **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external files
-- **Keeps running**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
+- 🔐 **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays, approval flow (auth_url)
+- 🗝️ **Keys stored encrypted**: AES-256-GCM with a master key, in Postgres
+- 🛂 **Permission management**: per client, which kinds it may sign and whether it may use NIP-44, editable in the admin UI
+- 🔏 **Own crypto implementation**: BIP-340 / NIP-44 v2. No NIFs
+- 📡 **Event monitoring and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. Add one by placing a BEAM module
+- 🖥️ **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external files
+- 🔁 **Keeps running**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
 
-## 🚀 Getting started
+## 🚀 Installation
 
 Requirements: docker (compose v2), `curl`, `openssl`. The image ships `linux/amd64` and `linux/arm64`.
 
