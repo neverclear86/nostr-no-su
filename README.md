@@ -10,7 +10,11 @@
 <h1 align="center">Nostr-no-Su</h1>
 
 <p align="center">
-  Nostr-no-Su - <em>"Nostr's nest" in Japanese</em> - is a NIP-46 remote signing bunker for Nostr, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
+  Keep your Nostr private keys off every client and manage them from one server you run. Approving connections and collecting your own posts, all in one nest.
+</p>
+
+<p align="center">
+  Nostr-no-Su - <em>"Nostr's nest" in Japanese</em> - is a NIP-46 remote signing bunker for multiple accounts, plus a utility server that processes your own events. Written in Gleam, running on the BEAM.
 </p>
 
 <p align="center">
@@ -24,16 +28,17 @@
 </p>
 
 ![The dashboard of the admin UI](docs/images/usage/dashboard-en.png)
+*Accounts, connection approvals and relays, managed from one screen.*
 
 ## ✨ Features
 
 - 🔐 **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays, approval flow (auth_url)
+- 🛂 **Connection approval and permissions**: approve each client's connection, and edit which kinds it may sign and whether it may use NIP-44 in the admin UI
 - 🗝️ **Keys stored encrypted**: AES-256-GCM with a master key, in Postgres
-- 🛂 **Permission management**: per client, which kinds it may sign and whether it may use NIP-44, editable in the admin UI
-- 🔏 **Own crypto implementation**: BIP-340 / NIP-44 v2. No NIFs
-- 📡 **Event monitoring and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. Add one by placing a BEAM module
+- 📡 **Event collection and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. The bundled `event_logger` stores them in Postgres, viewable as a timeline in the admin UI. Add your own by placing a BEAM module
 - 🖥️ **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external files
-- 🔁 **Keeps running**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
+- 🔁 **Automatic recovery from failures**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
+- 🔏 **Own crypto implementation, checked against the official test vectors**: BIP-340 / NIP-44 v2. No NIFs. Assumptions and known limitations are in the "v0.1 security assumptions" section of [Design decisions and known limitations](docs/design-decisions.md)
 
 ## 🚀 Installation
 
@@ -61,7 +66,7 @@ docker compose up --build -d
 ```
 
 Open `http://127.0.0.1:8080/`. The username is `admin` and the password is `ADMIN_PASSWORD` in `.env`.
-Registering relays and accounts and connecting a client are in [Usage](docs/usage.md) (Japanese).
+First steps: register a relay and an account, connect a client, then approve it. Details are in [Usage](docs/usage.md) (Japanese).
 
 ## ⚙️ Configuration
 
