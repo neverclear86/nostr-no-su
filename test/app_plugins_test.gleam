@@ -733,7 +733,7 @@ fn requests_on(report: SubscriptionReport, relay_url: String) -> Bool {
 }
 
 /// 起動直後の監視の購読は、読み込みに時間がかかっても読み込み済みの署名者を含み、
-/// 読み込みの成功による張り直しで同じ内容の REQ が 1 回余計に送られる（決定 11）。
+/// 読み込みの成功による張り直しでは定義が同じなので REQ を送り直さない。
 pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
@@ -760,10 +760,7 @@ pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
   assert filter.authors == Some([signer])
   assert filter.since == Some(1234)
 
-  let #(_skipped, second) =
-    receive_until(subscribed, requests_on(_, test_relay_url), 2000)
-  assert second
-    == Ok(Subscribed(test_relay_url, [message.Req("nostr-no-su", filter)]))
+  assert process.receive(subscribed, 2000) == Ok(Subscribed(test_relay_url, []))
   stop_tree(tree)
 }
 
@@ -920,7 +917,7 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
     True -> #(socket_1, socket_2, deliver_1)
     False -> #(socket_2, socket_1, deliver_2)
   }
-  // 接続直後の評価（起動時の読み込みによる張り直しの分を含む、決定 11）を
+  // 接続直後の評価と起動時の読み込みによる張り直しの報告を
   // 読み捨ててから、切断後の張り直しだけを見る。
   drain_subscriptions(subscribed, 300)
 
@@ -1064,10 +1061,11 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   let assert Some(first_until) = first_catchup.until
   assert first_until >= before_start && first_until <= after_start
 
-  // 起動時の読み込みによる張り直しで同じ内容の REQ が 1 回余計に届きうるので
-  // （決定 11）、読み捨ててから落とす。残っていると再起動後の `until` ではなく
-  // 古い報告の `until` を拾ってしまう。
+  // 起動時の読み込みによる張り直しの報告を読み捨て、`until`（秒）が最初の
+  // 要求より進むまで待ってから落とす。同じ秒に落とすと復帰後の要求が
+  // 開いている取り直しと同じ範囲になり、REQ が出ない。
   drain_subscriptions(subscribed, 300)
+  process.sleep(1000)
   let assert Ok(runner_before) = process.named(runner)
   let before_restart = time.now_seconds()
   process.kill(runner_before)
@@ -2022,9 +2020,8 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
 
   assert app.add_account(spec, account_for(other_signer_key), "second")
     == Ok(Nil)
-  // 張り直しの評価は、変更前の一覧を含む古い内容が 1 回余計に届きうる
-  // （読み込みの成功による張り直しで同じ内容の REQ が 1 回余計に送られるのと
-  // 同じ理由である）。両方揃った内容が届くまで読み飛ばす。
+  // 張り直しの評価が変更前の一覧で先に行われると、開いている購読と同じ定義なので
+  // 空の報告が届きうる。両方揃った内容が届くまで読み飛ばす。
   let both_signers = Some(list.sort([signer, other_signer], string.compare))
   let assert Ok(Subscribed(_relay_url, [message.Req(_id, added_filter)])) =
     receive_until(
