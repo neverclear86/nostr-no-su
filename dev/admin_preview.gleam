@@ -291,8 +291,9 @@ fn console_logger_status_description() -> Dynamic {
   ])
 }
 
-/// `console_logger` の `settings` ページの記述。`form` の節 1 つ（チェック 2 件と
-/// 送信のボタン）にし、フォームの描画と送信の経路を撮る。
+/// `console_logger` の `settings` ページの記述。`form` の節 1 つ（チェック 2 件、
+/// 1 行の文字列の欄、複数行の文字列の欄、送信のボタン）にし、フォームの描画と送信の
+/// 経路を撮る。
 fn console_logger_settings_description() -> Dynamic {
   let checkbox_field = fn(name: String, label: String, checked: Bool) {
     dynamic.properties([
@@ -319,6 +320,18 @@ fn console_logger_settings_description() -> Dynamic {
                   dynamic.list([
                     checkbox_field("main", "main account", True),
                     checkbox_field("bot", "<b>bot</b> 🙂", False),
+                    text_field(
+                      name: "label",
+                      label: "Label",
+                      hint: "Shown in the dashboard.",
+                      value: "console logger",
+                    ),
+                    textarea_field(
+                      name: "note",
+                      label: "Note",
+                      hint: "Free-form note, kept as-is.",
+                      value: "line one\nline two",
+                    ),
                   ]),
                 ),
                 #(dynamic.string("submit"), dynamic.string("Save")),
@@ -550,6 +563,38 @@ fn checkbox_field(
     #(dynamic.string("label"), dynamic.string(label)),
     #(dynamic.string("hint"), dynamic.string(hint)),
     #(dynamic.string("checked"), dynamic.bool(checked)),
+  ])
+}
+
+/// `text` の欄。`name` が送信名、`hint` が欄の下の説明、`value` が初期値。
+fn text_field(
+  name name: String,
+  label label: String,
+  hint hint: String,
+  value value: String,
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("hint"), dynamic.string(hint)),
+    #(dynamic.string("value"), dynamic.string(value)),
+  ])
+}
+
+/// `textarea` の欄。キーの意味は `text_field` と同じ。
+fn textarea_field(
+  name name: String,
+  label label: String,
+  hint hint: String,
+  value value: String,
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("textarea")),
+    #(dynamic.string("name"), dynamic.string(name)),
+    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("hint"), dynamic.string(hint)),
+    #(dynamic.string("value"), dynamic.string(value)),
   ])
 }
 

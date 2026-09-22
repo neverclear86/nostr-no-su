@@ -602,8 +602,9 @@ fn plugin_id_inline(text: String) -> Dynamic {
   ])
 }
 
-/// ブロック（`form`）。チェック 1 件と送信のボタンを持つ。`name`・`label`・
-/// `hint`・`submit` は `allowed_words` にある語だけを使う。
+/// ブロック（`form`）。チェック 1 件、`text` の欄 1 件、`textarea` の欄 1 件と送信の
+/// ボタンを持つ。`name`・`label`・`hint`・`submit`・`text`/`textarea` の欄の値は
+/// `allowed_words` にある語だけを使う。
 fn plugin_form_block(
   name: String,
   label: String,
@@ -620,6 +621,20 @@ fn plugin_form_block(
           #(dynamic.string("name"), dynamic.string(name)),
           #(dynamic.string("label"), dynamic.string(label)),
           #(dynamic.string("hint"), dynamic.string(hint)),
+        ]),
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("text")),
+          #(dynamic.string("name"), dynamic.string("a")),
+          #(dynamic.string("label"), dynamic.string("b")),
+          #(dynamic.string("hint"), dynamic.string("c")),
+          #(dynamic.string("value"), dynamic.string("d")),
+        ]),
+        dynamic.properties([
+          #(dynamic.string("type"), dynamic.string("textarea")),
+          #(dynamic.string("name"), dynamic.string("b")),
+          #(dynamic.string("label"), dynamic.string("c")),
+          #(dynamic.string("hint"), dynamic.string("d")),
+          #(dynamic.string("value"), dynamic.string("a")),
         ]),
       ]),
     ),
@@ -753,5 +768,7 @@ pub fn plugin_page_with_a_form_test() {
     )
   assert string.contains(body, "action=\"/plugins/plugin-a/status\"")
   assert string.contains(body, "type=\"checkbox\"")
+  assert string.contains(body, "type=\"text\"")
+  assert string.contains(body, "</textarea>")
   assert string.contains(body, ">b<")
 }
