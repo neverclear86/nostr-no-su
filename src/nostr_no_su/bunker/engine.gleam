@@ -1199,7 +1199,7 @@ fn nip44_op(
 }
 
 /// アカウントの鍵で署名したイベント。`id` と `sig` は `event.finalize` が埋める。
-fn sign_as(
+pub fn sign_as(
   account: Account,
   kind: Int,
   tags: List(List(String)),

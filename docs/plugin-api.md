@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、バンカーに登録したアカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）、`src/nostr_no_su/admin/plugin_pages.gleam`（ページ枠とタブの組み立て）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）、`src/nostr_no_su/admin/plugin_pages.gleam`（ページ枠とタブの組み立て）、`src/nostr_no_su/plugin_api.gleam`（プラグインが呼ぶ本体側の口）にある。
 
 ## 1. 目的と信頼モデル
 
@@ -311,7 +311,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
 
-任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。
+任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。プラグインが本体を呼ぶ口（第 14 章）は任意エクスポートですらなく本体側の関数の追加なので、第 2 章のエクスポート仕様は変わらず、**API バージョンは 1 のまま**である。
 
 バージョン番号を上げるのは、次の破壊的変更のときだけである。
 
@@ -626,3 +626,64 @@ plugin_page_action(<<"settings">>, _Values, _Config) ->
 - `<mod>: plugin_page_action/3 rejected the request (select at least one account)`
 - `<mod>: plugin_page_action/3 must return ok or {error, Reason}, got Atom`
 - `<mod>: plugin_page_action/3: error reason must be a String, got Atom`
+
+## 14. プラグインから本体を呼ぶ（イベントの送信）
+
+この口はサンドボックスではない。第 1 章のとおりプラグインは本体と同じ VM で動くので、この口は秘密鍵に触れずに送信するための**簡便な手段**であって、権限の境界ではない。
+
+### 14.1 呼び出しの形
+
+プラグインは `nostr_no_su@plugin_api:publish_event(Pubkey, Draft)` を外部関数として呼ぶ。
+
+| 引数・戻り値 | 型 | 意味 |
+| --- | --- | --- |
+| `Pubkey` | binary | 64 桁 16 進の公開鍵。登録アカウントのものであること |
+| `Draft` | binary キーの map | `kind`（整数）・`tags`（binary のリストのリスト）・`content`（binary） |
+| 戻り値（成功） | `{ok, EventMap}` | `EventMap` は `nostr_no_su@nostr@event:to_map/1` と同じ形 |
+| 戻り値（失敗） | `{error, Reason}` | `Reason` は binary |
+
+```erlang
+Draft = #{<<"kind">> => 1, <<"tags">> => [], <<"content">> => <<"hello">>},
+case nostr_no_su@plugin_api:publish_event(Pubkey, Draft) of
+    {ok, #{<<"id">> := Id}} -> Id;
+    {error, Reason} -> {error, Reason}
+end.
+```
+
+`created_at` と `id` と `sig` は本体が入れる。プラグインが指定する余地は無い。
+
+### 14.2 送信先とリレーの応答
+
+送信先は**監視の用途**のリレーである。バンカーの用途のリレーは kind 24133 以外の購読を拒みうるため（第 1 章の信頼モデルとは別に、`docs/architecture.md` の用途の分離を参照）、送信先には使わない。
+
+リレーの OK（NIP-01 の `["OK", ...]`）は待たない。`{ok, _}` は「生きた監視リレーの接続に少なくとも 1 本渡した」ことだけを意味し、リレーが保存したことは意味しない。
+
+### 14.3 理由の文字列
+
+| 理由の文字列 | 意味 |
+| --- | --- |
+| `the plugin API is not installed` | 本体がこの口を有効にしていない |
+| `pubkey must be a String` | `Pubkey` が binary でない |
+| `no monitor relay is registered` | 監視の用途のリレーが一覧に無い |
+| `no monitor relay is connected` | 監視の用途のリレーはあるが、生きたソケットに 1 本も渡せなかった |
+| `the relay list is not responding` | リレーの一覧を持つアクターが応答しない |
+| `accounts are not loaded yet` | バンカーがまだアカウントを読み込んでいない |
+| `account is not registered` | `Pubkey` が登録アカウントに無い |
+| `failed to sign the event` | 署名に失敗した |
+| `bunker is not responding` | バンカーが応答しない |
+
+`Draft` の記述が誤っているときの理由は、`nostr_no_su@nostr@event:from_map/1`（第 11 章）と同じ整形（`describe_decode_errors`）で、欠けているフィールドや型の不一致を 1 行にまとめたものになる。
+
+### 14.4 期限
+
+通常は数ミリ秒から 1 秒で戻る。バンカーが応答しないときは最悪 6 秒かかる。**`plugin_page_content` の中では呼ばないこと。** ページを表示するたびに送信することになる。`plugin_page_action` から呼ぶのは想定内で、バンカーが応答しないときに限って第 13.1 節の 5 秒を超えて 503 になる（そのときは管理 UI の他のページも同時に失敗している）。
+
+リレーごとの応答は本体が起こす使い捨てのプロセスで集めるので、期限の後に届いた応答が呼び出し元のプロセスに残ることはない。集計の結果 1 件だけは、呼び出し元（イベント処理やページの送信のたびに使い捨てられるプロセス）が受け取る。
+
+### 14.5 古い本体との互換性
+
+この口は本体側の関数なので、`plugin_api_version/0` では有無を判定できない。持たない本体に置いたプラグインは読み込みまでは成功し、呼んだ時点で `undef` になって第 4 章の 1 件の失敗として数えられる（連続 5 回で無効化）。読み込み時に弾きたいプラグインは `plugin_required_versions/0` で `nostr_no_su` の版を宣言すること（第 8.4 節）。照合は**完全一致**なので、宣言したプラグインは本体の版が上がるたびに宣言も上げ直すことになる。
+
+### 14.6 送ったイベントの配信
+
+送ったイベントは監視の購読で戻ってくる。登録アカウントが作ったイベントなので、自分を含む全プラグインの `handle_event` に渡る（第 4 章）。`handle_event` の中から呼ぶプラグインは、自分の送信でもう一度呼ばれることを前提に、送る条件を `kind` や `tags` で絞ること。

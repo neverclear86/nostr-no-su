@@ -15,6 +15,7 @@ import nostr_no_su/dedup/resume_store
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/plugin_api
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
@@ -72,6 +73,9 @@ pub fn main() -> Nil {
       // pgo などに渡る秘密は、ツリーを起動する前に伏せる。
       log.redact_secrets(app.redactable_secrets(started.spec))
       list.each(started.notes, log.write_line(log.Notice, _))
+      // プラグインが呼ぶ口に、バンカーと一覧の名前を渡す。ツリーの起動より前で
+      // よい（口は呼ばれた時点で名前を引く）。
+      plugin_api.install(started.spec.bunker.name, started.spec.relay_list)
       // ツリーが起動しないのはバグか設定の不備なので、中途半端な状態で待機せず
       // クラッシュさせる。コンテナーの再起動はプロセスの終了で起き、終了コードは
       // 失敗を示す。

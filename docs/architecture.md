@@ -36,6 +36,7 @@ flowchart LR
     monitor --> plugins
     plugins --> event_logger
     plugins --> others
+    plugins -.->|"プラグインからの送信"| relays
     client <-->|"kind 24133"| relays
     relays <--> bunker
     browser --> admin
@@ -662,6 +663,7 @@ nostr-no-su/
 │       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
 │       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
+│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（署名して監視リレーへ送信）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
