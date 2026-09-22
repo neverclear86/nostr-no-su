@@ -669,6 +669,69 @@ pub fn plugin_checkbox_row(
   ])
 }
 
+/// 文字列の欄 2 種が共有する囲み。`label` が欄を包むので `id` が要らない。
+fn plugin_field(
+  label: String,
+  hint: Option(String),
+  input: Element(msg),
+) -> Element(msg) {
+  let description = case hint {
+    Some(hint) -> [
+      html.span([attribute.class("text-sm text-base-content/70 break-all")], [
+        html.text(hint),
+      ]),
+    ]
+    None -> []
+  }
+  html.label([attribute.class("fieldset")], [
+    html.span([attribute.class("fieldset-legend")], [html.text(label)]),
+    input,
+    ..description
+  ])
+}
+
+/// プラグインのフォームが宣言する 1 行の文字列の欄。`hinted_input` と違って案内の `id`
+/// を使わないのは、プラグインが選ぶ `name` の一意性を本体が保証できないためである。
+pub fn plugin_text_field(
+  name: String,
+  label: String,
+  hint: Option(String),
+  value: String,
+) -> Element(msg) {
+  plugin_field(
+    label,
+    hint,
+    html.input([
+      attribute.type_("text"),
+      attribute.name(name),
+      attribute.default_value(value),
+      attribute.autocomplete("off"),
+      attribute.class("input w-full border-base-content/60"),
+    ]),
+  )
+}
+
+/// 同じ囲みの複数行版。値は要素の内容で出す。
+pub fn plugin_textarea_field(
+  name: String,
+  label: String,
+  hint: Option(String),
+  value: String,
+) -> Element(msg) {
+  plugin_field(
+    label,
+    hint,
+    html.textarea(
+      [
+        attribute.name(name),
+        attribute.rows(4),
+        attribute.class("textarea w-full text-sm border-base-content/60"),
+      ],
+      value,
+    ),
+  )
+}
+
 /// プラグインのページの画像 1 枚。プラグインは URL と代替文だけを渡し、大きさもクラスも
 /// 選べないので、縦横とも実寸のまま高さ 192px と枠の幅の 2 つの上限に収め、比の違う画像は
 /// 切らずに余白を枠の中に入れる。別のオリジンへ Referer を出さない。
