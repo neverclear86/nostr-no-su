@@ -1,10 +1,7 @@
 <p align="right"><a href="README.md">English</a> | 日本語</p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/nostr-no-su-color-dark.svg">
-    <img alt="Nostr-no-Su" src="assets/logo/nostr-no-su-color.svg" width="96">
-  </picture>
+  <img alt="Nostr-no-Su" src="assets/logo/nostr-no-su-plate.svg" width="96">
 </p>
 
 <h1 align="center">Nostr-no-Su</h1>
