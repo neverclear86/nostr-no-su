@@ -2194,6 +2194,9 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
     )
   // 先に別のクライアントの承認待ちを 1 件作っておく
   let state = connect_for_approval(state, client_b, first_signer, "tok-b", 1000)
+  // pubkey ごとの上限（`rate_limit.client_limit`）に掛からないよう、補充の間隔
+  // ごとに送る
+  let interval = rate_limit.client_limit.refill_seconds
   let final =
     list.index_fold(signers, state, fn(state, signer, index) {
       let n = index + 1
@@ -2202,7 +2205,7 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
         client_a,
         signer,
         "tok-a" <> int.to_string(n),
-        1000 + n,
+        1000 + n * interval,
       )
     })
   let expected_tokens =
@@ -2210,7 +2213,8 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
     |> list.index_map(fn(_, index) {
       "tok-a" <> int.to_string(engine.pending_capacity + 2 - index)
     })
-  assert list.map(engine.pending(final, 1018), fn(pending) { pending.token })
+  let last = 1000 + { engine.pending_capacity + 2 } * interval
+  assert list.map(engine.pending(final, last), fn(pending) { pending.token })
     == list.append(expected_tokens, ["tok-b"])
 }
 
