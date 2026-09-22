@@ -687,7 +687,7 @@ nostr-no-su/
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
-│       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
+│       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証、セッションと承認待ちの行の MAC（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
 │       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
