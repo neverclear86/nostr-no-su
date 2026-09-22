@@ -751,7 +751,7 @@ fn english(message: Message) -> String {
     PrivateKey -> "Private key"
     CloseTabAfterCopying -> "Close this tab after copying the key."
     ResendNotice ->
-      "Reloading this page or coming back to it with the back button can resend the form, which shows the key again and logs it again."
+      "Reloading this page or coming back to it with the back button can resend the form, which shows the key again and logs again that it was shown."
     IncorrectPassword -> "incorrect password"
     LabelEmpty -> "label must not be empty"
     LabelTooLong(max:) ->
@@ -1025,7 +1025,7 @@ fn japanese(message: Message) -> String {
     PrivateKey -> "秘密鍵"
     CloseTabAfterCopying -> "鍵をコピーしたら、このタブを閉じてください。"
     ResendNotice ->
-      "このページを再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示されてログにも再び記録されることがあります。"
+      "このページを再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示され、表示したことが再びログに記録されることがあります。"
     IncorrectPassword -> "管理パスワードが違います。"
     LabelEmpty -> "ラベルを入力してください。"
     LabelTooLong(max:) -> "ラベルは " <> int.to_string(max) <> " 文字以内にしてください。"
