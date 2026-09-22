@@ -1,4 +1,4 @@
-%% `log_redaction_test` と `admin_auth_test` が OTP logger を通る行を捕まえるための logger ハンドラー。
+%% テストが OTP logger を通る行を捕まえるための logger ハンドラー。
 %% 本番と同じ formatter の設定（`configure_logger` の template）で 1 行に整形し、
 %% ets の表に積む。ハンドラーの `log/2` はログを出したプロセスの上で呼ばれる
 %% ため、表は public にする。

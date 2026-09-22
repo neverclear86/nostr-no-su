@@ -1,6 +1,7 @@
 //// `relay_client` のテスト。URL の変換、購読の照合の判断（`sync`）、および
 //// ループバックの WebSocket サーバーへ本物の `relay_client` を接続した再試行の配線、
-//// CLOSED の後の張り直し、生存確認によるハーフオープンの検知を確かめる。
+//// CLOSED の理由による購読の張り直しと停止、生存確認によるハーフオープンの検知を
+//// 確かめる。
 
 import gleam/dynamic
 import gleam/erlang/process.{type Pid, type Subject}
@@ -22,11 +23,13 @@ import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_client.{
   type SubscriptionState, type Subscriptions, Acknowledge, Acknowledgement,
-  Closed, Deliver, Ended, Report, Requested, Reservation, Retried,
-  SubscriptionState, Sync, Synchronise,
+  AuthRequired, Blocked, Closed, Deliver, Ended, OtherReason, RateLimited,
+  Report, Requested, Reservation, Restricted, Retried, SubscriptionState, Sync,
+  Synchronise,
 }
 import nostr_no_su/relay_connection
 import stratus
+import support/log_capture
 import support/signed_event
 
 /// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
@@ -294,7 +297,7 @@ pub fn interpret_covers_every_relay_message_test() {
       "closed",
       closed_frame("sub\nx", "bye\n[bunker] forged"),
       Synchronise(
-        Closed("sub\nx"),
+        Closed("sub\nx", OtherReason),
         "subscription sub x closed: bye [bunker] forged",
       ),
     ),
@@ -315,7 +318,28 @@ pub fn interpret_covers_every_relay_message_test() {
   })
 }
 
-/// CLOSED は照合の契機を返し、それ以外のメッセージは返さない。
+/// CLOSED の理由の接頭辞の読み分け。最初の `:` の前の完全一致でだけ変種に読み、
+/// `:` が無い、大文字違い、決まっていない接頭辞は `OtherReason` にする。
+pub fn interpret_classifies_the_prefix_of_a_closed_test() {
+  [
+    #("blocked: not allowed", Blocked),
+    #("restricted: not allowed", Restricted),
+    #("auth-required: sign in", AuthRequired),
+    #("rate-limited: slow down", RateLimited),
+    #("error: shutting down", OtherReason),
+    #("no colon", OtherReason),
+    #("Blocked: capitalised", OtherReason),
+  ]
+  |> list.each(fn(row) {
+    let #(reason, expected) = row
+    let assert Synchronise(trigger, _line) =
+      relay_client.interpret(closed_frame("sub", reason))
+    assert #(reason, trigger) == #(reason, Closed("sub", expected))
+  })
+}
+
+/// CLOSED は理由の接頭辞を読んだ照合の契機を返し、それ以外のメッセージは
+/// 返さない。
 pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
   let closed = closed_frame("bunker", "rate-limited: slow down")
   assert relay_client.handle_text(
@@ -326,7 +350,7 @@ pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
       None,
       fn(_sent) { Nil },
     )
-    == Some(Closed("bunker"))
+    == Some(Closed("bunker", RateLimited))
 
   assert relay_client.handle_text(
       "test",
@@ -465,6 +489,8 @@ fn state_with(
     next_generation: 5,
     delay_ms: 100,
     closed_delay_ms: 100,
+    suspended: set.new(),
+    answers_auth: False,
   )
 }
 
@@ -619,6 +645,8 @@ pub fn sync_a_failed_retry_reserves_a_new_generation_test() {
         next_generation: 6,
         delay_ms: 200,
         closed_delay_ms: 100,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -658,6 +686,8 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
         next_generation: 6,
         delay_ms: 200,
         closed_delay_ms: 100,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -684,7 +714,7 @@ pub fn sync_ignores_the_timer_of_an_old_generation_test() {
 
   let first =
     relay_client.sync(
-      relay_client.new_subscription_state(retry),
+      relay_client.new_subscription_state(retry, False),
       Requested,
       failing,
       retry,
@@ -736,6 +766,8 @@ pub fn sync_a_successful_evaluation_resets_the_delay_test() {
       next_generation: 5,
       delay_ms: 400,
       closed_delay_ms: 400,
+      suspended: set.new(),
+      answers_auth: False,
     )
   let synced =
     relay_client.sync(state, Requested, reporting(calls, Ok([])), retry)
@@ -743,14 +775,14 @@ pub fn sync_a_successful_evaluation_resets_the_delay_test() {
   assert synced.state.closed_delay_ms == 100
 }
 
-/// CLOSED を受けたら、その id を開いている購読から外し、新しい世代で再試行を
-/// 1 つ予約する。
+/// 接頭辞の決まっていない理由の CLOSED を受けたら、その id を開いている購読から
+/// 外し、新しい世代で再試行を 1 つ予約する。
 pub fn sync_a_closed_subscription_is_removed_and_reserved_test() {
   let calls = process.new_subject()
   let synced =
     relay_client.sync(
       state_with([bunker], None),
-      Closed(bunker),
+      Closed(bunker, OtherReason),
       reporting(calls, Ok([])),
       retry,
     )
@@ -762,6 +794,8 @@ pub fn sync_a_closed_subscription_is_removed_and_reserved_test() {
         next_generation: 6,
         delay_ms: 100,
         closed_delay_ms: 200,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -775,7 +809,7 @@ pub fn sync_a_closed_subscription_keeps_the_current_reservation_test() {
   let synced =
     relay_client.sync(
       state_with([bunker], Some(1)),
-      Closed(bunker),
+      Closed(bunker, OtherReason),
       reporting(calls, Ok([])),
       retry,
     )
@@ -787,6 +821,8 @@ pub fn sync_a_closed_subscription_keeps_the_current_reservation_test() {
         next_generation: 5,
         delay_ms: 100,
         closed_delay_ms: 100,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       messages: [],
       schedule_retry: None,
@@ -800,7 +836,12 @@ pub fn sync_ignores_a_closed_subscription_that_is_not_open_test() {
   let calls = process.new_subject()
   let state = state_with([], None)
   let synced =
-    relay_client.sync(state, Closed(bunker), reporting(calls, Ok([])), retry)
+    relay_client.sync(
+      state,
+      Closed(bunker, OtherReason),
+      reporting(calls, Ok([])),
+      retry,
+    )
   assert synced == Sync(state: state, messages: [], schedule_retry: None)
   assert !evaluated(calls)
 }
@@ -812,7 +853,7 @@ pub fn sync_a_subscription_closed_again_doubles_the_delay_test() {
   let closed_once =
     relay_client.sync(
       state_with([bunker], None),
-      Closed(bunker),
+      Closed(bunker, OtherReason),
       reporting(calls, Ok([])),
       retry,
     )
@@ -831,7 +872,7 @@ pub fn sync_a_subscription_closed_again_doubles_the_delay_test() {
   let closed_again =
     relay_client.sync(
       resubscribed.state,
-      Closed(bunker),
+      Closed(bunker, OtherReason),
       reporting(calls, Ok([])),
       retry,
     )
@@ -851,6 +892,8 @@ pub fn sync_a_successful_retry_keeps_the_closed_delay_test() {
         next_generation: 5,
         delay_ms: 400,
         closed_delay_ms: 400,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       Retried(1),
       reporting(calls, Ok([#(bunker, bunker_filter())])),
@@ -873,6 +916,8 @@ pub fn sync_a_failed_definition_after_closes_uses_its_own_delay_test() {
         next_generation: 5,
         delay_ms: 100,
         closed_delay_ms: 400,
+        suspended: set.new(),
+        answers_auth: False,
       ),
       Retried(1),
       reporting(calls, Error(Nil)),
@@ -882,6 +927,154 @@ pub fn sync_a_failed_definition_after_closes_uses_its_own_delay_test() {
     == Some(Reservation(generation: 5, delay_ms: 100))
   assert synced.state.delay_ms == 200
   assert synced.state.closed_delay_ms == 400
+}
+
+/// `answers_auth` の受け口を持つ、購読 `bunker` を開いた状態へ `reason` の
+/// CLOSED を照合した結果。
+fn refused(
+  reason: relay_client.ClosedReason,
+  answers_auth: Bool,
+) -> relay_client.Sync {
+  relay_client.sync(
+    SubscriptionState(..state_with([bunker], None), answers_auth: answers_auth),
+    Closed(bunker, reason),
+    fn() { Ok([]) },
+    retry,
+  )
+}
+
+/// `blocked:` で閉じられた購読は開いている購読から外れて止めた購読に入り、
+/// 再照合を予約しない。
+pub fn sync_a_blocked_subscription_is_not_resubscribed_test() {
+  assert refused(Blocked, False)
+    == Sync(
+      state: SubscriptionState(
+        ..state_with([], None),
+        suspended: set.from_list([bunker]),
+      ),
+      messages: [],
+      schedule_retry: None,
+    )
+}
+
+/// `restricted:` で閉じられた購読も、`blocked:` と同じく張り直さない。
+pub fn sync_a_restricted_subscription_is_not_resubscribed_test() {
+  assert refused(Restricted, False)
+    == Sync(
+      state: SubscriptionState(
+        ..state_with([], None),
+        suspended: set.from_list([bunker]),
+      ),
+      messages: [],
+      schedule_retry: None,
+    )
+}
+
+/// 受け口の無い接続で `auth-required:` で閉じられた購読も張り直さない。
+pub fn sync_an_auth_required_subscription_without_an_authenticator_is_not_resubscribed_test() {
+  assert refused(AuthRequired, False)
+    == Sync(
+      state: SubscriptionState(
+        ..state_with([], None),
+        suspended: set.from_list([bunker]),
+      ),
+      messages: [],
+      schedule_retry: None,
+    )
+}
+
+/// 受け口のある接続では、`auth-required:` の CLOSED も初期の待ちで張り直す。
+pub fn sync_an_auth_required_subscription_with_an_authenticator_is_resubscribed_test() {
+  assert refused(AuthRequired, True)
+    == Sync(
+      state: SubscriptionState(
+        ..state_with([], None),
+        retry: Some(5),
+        next_generation: 6,
+        closed_delay_ms: 200,
+        answers_auth: True,
+      ),
+      messages: [],
+      schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
+    )
+}
+
+/// `rate-limited:` の CLOSED は、CLOSED の待ちを上限に上げてから予約する。
+pub fn sync_a_rate_limited_subscription_waits_the_maximum_delay_test() {
+  assert refused(RateLimited, False)
+    == Sync(
+      state: SubscriptionState(
+        ..state_with([], None),
+        retry: Some(5),
+        next_generation: 6,
+        closed_delay_ms: 400,
+      ),
+      messages: [],
+      schedule_retry: Some(Reservation(generation: 5, delay_ms: 400)),
+    )
+}
+
+/// `rate-limited:` の CLOSED で予約が残っていれば置き換えず、上げた待ちは
+/// 次の CLOSED の予約から効く。
+pub fn sync_a_rate_limited_subscription_keeps_the_current_reservation_test() {
+  let synced =
+    relay_client.sync(
+      state_with([bunker], Some(1)),
+      Closed(bunker, RateLimited),
+      fn() { Ok([]) },
+      retry,
+    )
+  assert synced
+    == Sync(
+      state: SubscriptionState(..state_with([], Some(1)), closed_delay_ms: 400),
+      messages: [],
+      schedule_retry: None,
+    )
+}
+
+/// 予約した再試行は、止めた購読が定義にあっても REQ を送らない。他の購読には
+/// 送る。
+pub fn sync_a_retry_does_not_resubscribe_a_suspended_subscription_test() {
+  let calls = process.new_subject()
+  let state =
+    SubscriptionState(
+      ..state_with([], Some(1)),
+      suspended: set.from_list([bunker]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Retried(1),
+      reporting(
+        calls,
+        Ok([#(bunker, bunker_filter()), #("other", filter.new())]),
+      ),
+      retry,
+    )
+  assert synced.messages == [message.Req("other", filter.new())]
+  assert synced.state.open == set.from_list(["other"])
+  assert synced.state.suspended == set.from_list([bunker])
+}
+
+/// 張り直しの依頼は止めた購読を空にしてから照合するので、その id にも
+/// REQ を送る。
+pub fn sync_a_request_resubscribes_a_suspended_subscription_test() {
+  let calls = process.new_subject()
+  let state =
+    SubscriptionState(
+      ..state_with([], None),
+      suspended: set.from_list([bunker]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
+    )
+  assert synced.messages == [message.Req(bunker, bunker_filter())]
+  assert synced.state.suspended == set.new()
+  assert synced.state.open == set.from_list([bunker])
 }
 
 // --- ループバックの WebSocket サーバーを使うテスト ---
@@ -1044,9 +1237,9 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
 }
 
 /// `REQ` で始まるテキストを受けるたびに `frames` へ転送し、その購読を CLOSED で
-/// 閉じるリレー。
+/// 閉じるリレー。理由は接頭辞の決まっていない `error:` で、張り直しの対象にする。
 fn start_relay_closing_subscriptions(frames: Subject(String)) -> Relay {
-  let closed = closed_frame("bunker", "rate-limited: slow down")
+  let closed = closed_frame("bunker", "error: shutting down")
   start_relay_with(fn() { Nil }, fn(connection, text) {
     case string.starts_with(text, "[\"REQ\"") {
       True -> {
@@ -1082,6 +1275,53 @@ pub fn a_closed_subscription_is_resubscribed_test() {
 
   stop_client(client)
   stop_relay(relay)
+}
+
+/// `REQ` で始まるテキストを受けるたびに `frames` へ転送し、`refused-once` の
+/// 購読を `blocked:` の CLOSED で閉じるリレー。
+fn start_relay_blocking(frames: Subject(String)) -> Relay {
+  let closed = closed_frame("refused-once", "blocked: not allowed")
+  start_relay_with(fn() { Nil }, fn(connection, text) {
+    case string.starts_with(text, "[\"REQ\"") {
+      True -> {
+        process.send(frames, text)
+        let _ = mist.send_text_frame(connection, closed)
+        Nil
+      }
+      False -> Nil
+    }
+  })
+}
+
+/// `blocked:` で断られた購読は、次の接続まで張り直さない。1 本目の REQ の後は
+/// 何も送らず、断った購読の Warning のログは 1 行だけ出る。新しい接続では
+/// REQ を送り直す。
+pub fn a_refused_subscription_is_requested_again_on_a_new_connection_test() {
+  let frames = process.new_subject()
+  let relay = start_relay_blocking(frames)
+  let capture = log_capture.install()
+  let subscriptions = fn() { Ok([#("refused-once", filter.new())]) }
+  let client =
+    connect(relay, subscriptions, Backoff(initial_ms: 50, max_ms: 50), None)
+
+  let assert Ok(first) = process.receive(frames, 2000)
+  assert string.starts_with(first, "[\"REQ\",\"refused-once\",")
+  assert process.receive(frames, 500) == Error(Nil)
+  assert list.count(log_capture.lines(capture), string.contains(
+      _,
+      "subscription refused-once was refused by the relay",
+    ))
+    == 1
+
+  stop_client(client)
+  let client =
+    connect(relay, subscriptions, Backoff(initial_ms: 50, max_ms: 50), None)
+  let assert Ok(again) = process.receive(frames, 2000)
+  assert string.starts_with(again, "[\"REQ\",\"refused-once\",")
+
+  stop_client(client)
+  stop_relay(relay)
+  log_capture.remove(capture)
 }
 
 /// `REQ` で始まるテキストのたびに AUTH の challenge を送り、続けて `auth-required`
@@ -1128,9 +1368,10 @@ pub fn start_answers_an_auth_before_resubscribing_test() {
   stop_relay(relay)
 }
 
-/// 受け口が無ければ AUTH には応答しない。受けたフレームはすべて `frames` へ転送
-/// されるので、1 本目の次に届くのが 2 本目の REQ であること自体が、間に AUTH の
-/// 応答が無かった証拠になる。
+/// 受け口が無ければ AUTH に応答せず、`auth-required:` の CLOSED の購読も張り直しの
+/// 依頼まで張り直さない。受けたフレームはすべて `frames` へ転送されるので、
+/// 500ms 何も届かないこと自体が、AUTH の応答も REQ の張り直しも無かった証拠に
+/// なる。
 pub fn start_does_not_answer_an_auth_without_an_authenticator_test() {
   let frames = process.new_subject()
   let relay = start_relay_requiring_auth(frames)
@@ -1144,6 +1385,9 @@ pub fn start_does_not_answer_an_auth_without_an_authenticator_test() {
 
   let assert Ok(first) = process.receive(frames, 2000)
   assert string.starts_with(first, "[\"REQ\",\"bunker\",")
+  assert process.receive(frames, 500) == Error(Nil)
+
+  relay_client.resubscribe(client)
   let assert Ok(second) = process.receive(frames, 2000)
   assert string.starts_with(second, "[\"REQ\",\"bunker\",")
 
