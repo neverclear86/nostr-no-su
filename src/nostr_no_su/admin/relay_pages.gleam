@@ -19,8 +19,8 @@ import nostr_no_su/relay_store.{type Relay}
 /// URL の案内の `id`。URL の欄は追加のページに 1 つだけなので固定の値にする。
 const relay_url_hint_id = "relay-url-hint"
 
-/// リレーの追加のページ。GET では URL が空で両方にチェック、失敗して描き直すときは
-/// 送られた URL とチェックを出す。
+/// リレーの追加のページ。GET では URL が空でバンカーだけにチェック、失敗して
+/// 描き直すときは送られた URL とチェックを出す。
 pub fn new_relay_page(
   language: Language,
   theme: view.Theme,

@@ -846,8 +846,8 @@ pub fn kept_plain_text_responses_test() {
 
 // --- リレーの追加 ---
 
-/// GET は URL の欄が空で、両方のチェックボックスにチェックが入った状態で返す。
-pub fn new_relay_page_checks_both_roles_test() {
+/// GET は URL の欄が空で、バンカーだけにチェックが入った状態で返す。
+pub fn new_relay_page_checks_only_bunker_test() {
   let body = simulate.read_body(get(context(), "/relays/new"))
   assert string.contains(
     body,
@@ -862,7 +862,7 @@ pub fn new_relay_page_checks_both_roles_test() {
   assert string.contains(body, "aria-describedby=\"relay-url-hint\"")
   assert string.contains(
     body,
-    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+    "<input class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
   )
   assert string.contains(
     body,
