@@ -102,19 +102,23 @@ fn tags_dynamic(event: Event) -> Dynamic {
 /// `json.DecodeError` を型のまま伝播しているが、ここだけ方針が違う。
 pub fn from_map(value: Dynamic) -> Result(Event, String) {
   decode.run(value, decoder())
-  |> result.map_error(fn(errors) {
-    // map でない値は 7 フィールドすべてで同じエラーになるので重複を落とす。
-    list.map(errors, describe_error) |> list.unique |> string.join("; ")
-  })
+  |> result.map_error(describe_decode_errors)
+}
+
+/// デコードエラーの一覧を 1 行にする。値そのものが map でないときは全フィールドで
+/// 同じ行になるので、重複を落とす。`from_map` と `plugin_api` の記述のデコードが
+/// 共有する。
+pub fn describe_decode_errors(errors: List(decode.DecodeError)) -> String {
+  list.map(errors, describe_error) |> list.unique |> string.join("; ")
 }
 
 /// デコードエラー 1 件を人が読める 1 行にする。欠損キーは
 /// `DecodeError("Field", "Nothing", ["kind"])` になるため、`expected` と `found`
 /// をそのまま差し込むと意味の通らない行になる。専用の分岐で振り分ける。
 ///
-/// `path` が空になるのは値そのものが map でないときで、この場合はキー名を書か
-/// ない（同じ行がフィールドの数だけ繰り返されるのを避けるため、`from_map` 側で
-/// 重複を落とす）。
+/// `path` が空になるのは値そのものが map でないときで、この場合はキー名を書かない
+/// （同じ行がフィールドの数だけ繰り返されるのを避けるため、
+/// `describe_decode_errors` が重複を落とす）。
 fn describe_error(error: decode.DecodeError) -> String {
   let decode.DecodeError(expected:, found:, path:) = error
   let mismatch = "expected " <> expected <> ", found " <> found

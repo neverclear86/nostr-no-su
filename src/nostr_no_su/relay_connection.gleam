@@ -72,6 +72,10 @@ pub type Msg {
   /// 生きたソケットに購読を合わせ直させる。接続していなければ何もしない
   /// （次の接続が購読を評価し直すため）。
   Resubscribe
+  /// 生きたソケットからこのイベントを送信し、渡したかどうかを `reply` に返す。
+  /// 接続していなければ `False` を返す（`Resubscribe` と違い、次の接続で送り
+  /// 直すことはしない）。
+  Publish(event: Event, reply: Subject(Bool))
 }
 
 /// 接続アクターに現在の状態を問い合わせる。名前を保持するプロセスがない
@@ -87,6 +91,16 @@ pub fn status(name: Name(Msg)) -> Status {
 /// 接続が購読を評価し直すことで満たされる。
 pub fn resubscribe(name: Name(Msg)) -> Nil {
   named.send(name, Resubscribe)
+}
+
+/// 接続アクターにイベントの送信を依頼する。名前を保持するプロセスがなければ
+/// `False` を返し、そのときは応答も来ない。応答は呼び出し側が集める。ここでは
+/// 待たない。
+pub fn publish(name: Name(Msg), event: Event, reply: Subject(Bool)) -> Bool {
+  case named.try_send(name, Publish(event, reply)) {
+    Ok(Nil) -> True
+    Error(Nil) -> False
+  }
 }
 
 /// 接続アクターが保持する状態。生きたソケットを持つかどうかが、外から見た
@@ -168,6 +182,16 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case state.socket {
         Some(socket) -> socket.resubscribe()
         None -> Nil
+      }
+      actor.continue(state)
+    }
+    Publish(event:, reply:) -> {
+      case state.socket {
+        Some(socket) -> {
+          socket.publish(event)
+          process.send(reply, True)
+        }
+        None -> process.send(reply, False)
       }
       actor.continue(state)
     }

@@ -2,7 +2,9 @@
 //// 状態に接続 secret が出ないことのテスト。読み込みの結果に対して、どのログ行を
 //// 出すかと、再試行の待ち時間の延び方を確かめる。`bunker.track` / `bunker.acknowledge`
 //// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
-//// どう組み立てるかを確かめる。
+//// どう組み立てるかを確かめる。`bunker.sign_event`（`SignEvent`）のテストは、
+//// プラグインからの送信の口（`plugin_api`）が使う署名の要求を、読み込み前と
+//// 登録済みの署名者のそれぞれで確かめる。
 
 import gleam/erlang/process
 import gleam/list
@@ -290,4 +292,66 @@ pub fn authentication_events_are_signed_by_each_account_test() {
     let assert Ok(_verified) = event.verify(e)
     Nil
   })
+}
+
+/// 偽のストアと再試行の待ち時間で、`Store` を組み立てるだけのバンカーを起動する。
+fn start_bunker_with_load(
+  name: process.Name(bunker.Msg),
+  load: fn() -> Result(bunker.Snapshot, String),
+) -> Nil {
+  let assert Ok(_started) =
+    bunker.start(
+      name,
+      bunker.Settings(
+        store: bunker.Store(
+          load: load,
+          insert: fn(_account) { Ok(Nil) },
+          delete: fn(_signer) { Ok(Nil) },
+          update_secret: fn(_signer, _secret) { Ok(Nil) },
+          update_label: fn(_signer, _label) { Ok(Nil) },
+          write: fn(_write) { Ok(Nil) },
+        ),
+        auth_url: None,
+        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
+      ),
+      fn() { Nil },
+      fn(_relays) { Nil },
+    )
+  Nil
+}
+
+/// 読み込みが常に失敗する（＝いつまでも `Loading` のままの）バンカーは、
+/// `SignEvent` を理由で拒む。
+pub fn sign_event_returns_the_reason_before_accounts_are_loaded_test() {
+  let name = process.new_name("bunker_sign_event_not_loaded_test")
+  start_bunker_with_load(name, fn() { Error("boom") })
+
+  assert bunker.sign_event(name, "s1", 1, [], "hello")
+    == Error("accounts are not loaded yet")
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 登録済みの署名者の鍵で署名し、検証を通るイベントを返す。
+pub fn sign_event_signs_with_the_registered_account_test() {
+  let name = process.new_name("bunker_sign_event_signs_test")
+  let stored = one_account()
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+  let signer = account.pubkey_hex(stored.account)
+
+  let assert Ok(signed) = bunker.sign_event(name, signer, 1, [["a", "b"]], "hi")
+  assert signed.pubkey == signer
+  assert signed.kind == 1
+  assert signed.tags == [["a", "b"]]
+  assert signed.content == "hi"
+  let assert Ok(_verified) = event.verify(signed)
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
 }

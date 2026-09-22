@@ -1,6 +1,7 @@
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/option.{None, Some}
 import nostr_no_su/backoff.{Backoff}
+import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/relay_connection.{type Socket, Socket}
 
 /// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
@@ -19,15 +20,20 @@ type Report {
   Unwired
   /// 生きた偽ソケットが購読の張り直しを依頼された。
   Resubscribed
+  /// 生きた偽ソケットにイベントの送信が渡された。
+  Published(event: event.Event)
 }
 
 /// 偽ソケット。stratus プロセスと同じく、接続アクターにリンクした待機プロセス。
-/// これを kill すると切断とまったく同じに見える。張り直しの依頼はテストへ報告する。
+/// これを kill すると切断とまったく同じに見える。張り直しの依頼と送信の依頼は
+/// テストへ報告する。
 fn spawn_socket(reports: Subject(Report)) -> Socket {
   let pid = process.spawn(fn() { process.sleep_forever() })
-  Socket(pid: pid, publish: fn(_event) { Nil }, resubscribe: fn() {
-    process.send(reports, Resubscribed)
-  })
+  Socket(
+    pid: pid,
+    publish: fn(sent) { process.send(reports, Published(sent)) },
+    resubscribe: fn() { process.send(reports, Resubscribed) },
+  )
 }
 
 /// 常に新しいソケットを返し、それを報告する connect 関数。
@@ -379,4 +385,48 @@ pub fn reconnect_report_is_silent_while_the_reason_repeats_test() {
       10_000,
     )
     == Some("failed to connect: y; reconnecting in 10000ms")
+}
+
+/// テスト用の送信対象のイベント。中身は問わない。
+fn draft_event() -> event.Event {
+  Event(
+    id: "",
+    pubkey: "s1",
+    created_at: 0,
+    kind: 1,
+    tags: [],
+    content: "hi",
+    sig: "",
+  )
+}
+
+/// 接続中は `True` を返し、注入したソケットの `publish` にイベントが渡る。
+pub fn publish_hands_the_event_to_the_live_socket_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, connects(reports))
+  let assert Ok(Connected(_socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+
+  let reply = process.new_subject()
+  let sent = draft_event()
+  assert relay_connection.publish(name, sent, reply) == True
+  assert process.receive(reports, 1000) == Ok(Published(sent))
+  assert process.receive(reply, 1000) == Ok(True)
+  stop(actor)
+}
+
+/// ソケットが無いときは `False`。
+pub fn publish_returns_false_while_disconnected_test() {
+  let reports = process.new_subject()
+  let name = process.new_name("test_relay")
+  let actor = start_named(name, reports, refuses(reports))
+  assert process.receive(reports, 1000) == Ok(Refused)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+
+  let reply = process.new_subject()
+  assert relay_connection.publish(name, draft_event(), reply) == True
+  assert process.receive(reply, 1000) == Ok(False)
+  assert process.receive(reports, 200) == Error(Nil)
+  stop(actor)
 }

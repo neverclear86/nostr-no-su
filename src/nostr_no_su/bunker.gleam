@@ -153,6 +153,9 @@ const account_already_registered = "account is already registered"
 /// 問い合わせに応答が無いときの理由。
 const query_not_answered = "bunker is not responding"
 
+/// `engine.sign_as` が失敗した（`bip340.sign` が失敗した）ときの理由。
+const sign_failed = "failed to sign the event"
+
 /// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。
 const session_not_approved = "session is not approved"
 
@@ -364,6 +367,17 @@ pub type Msg {
     challenge: String,
     reply: Subject(Result(List(Event), String)),
   )
+  /// プラグインからの送信の口（`plugin_api`）が使う、登録アカウントの鍵で署名した
+  /// イベントの要求。NIP-46 の `sign_event` と違い、セッションの `perms` は見ない
+  /// （要求元はクライアントではなく同じ VM のプラグインである）。アカウントの
+  /// 読み込み前は理由を返す。
+  SignEvent(
+    signer: String,
+    kind: Int,
+    tags: List(List(String)),
+    content: String,
+    reply: Subject(Result(Event, String)),
+  )
 }
 
 /// バンカーが保持する承認済みセッションの一覧。読み込み前、読み直しの前、
@@ -521,6 +535,20 @@ pub fn authenticate(
   challenge: String,
 ) -> Result(List(Event), String) {
   named.call(name, call_timeout_ms, Authenticate(relay_url, challenge, _))
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// 登録アカウントの鍵で署名したイベント。プラグインからの送信の口（`plugin_api`）
+/// が使う。アカウントの読み込み前、署名者が未登録、署名に失敗、あるいはアクターが
+/// 応答しないときは理由を返す。
+pub fn sign_event(
+  name: Name(Msg),
+  signer: String,
+  kind: Int,
+  tags: List(List(String)),
+  content: String,
+) -> Result(Event, String) {
+  named.call(name, call_timeout_ms, SignEvent(signer, kind, tags, content, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -850,6 +878,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       )
       actor.continue(state)
     }
+    SignEvent(signer:, kind:, tags:, content:, reply:) -> {
+      process.send(reply, sign_for(state, signer, kind, tags, content))
+      actor.continue(state)
+    }
     AddAccount(account: added, label:, reply:) -> {
       let signer = account.pubkey_hex(added)
       let stored =
@@ -1156,6 +1188,28 @@ fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
       engine.find_account(state.engine, signer)
       |> result.map(account.nsec)
       |> result.replace_error(account_not_registered)
+  }
+}
+
+/// `signer` の鍵で署名したイベント。読み込み前は `accounts_not_loaded`、署名者が
+/// 未登録なら `account_not_registered`、署名に失敗したら `sign_failed` を返す。
+fn sign_for(
+  state: State,
+  signer: String,
+  kind: Int,
+  tags: List(List(String)),
+  content: String,
+) -> Result(Event, String) {
+  case state.accounts {
+    Loading(..) -> Error(accounts_not_loaded)
+    Ready -> {
+      use account <- result.try(
+        engine.find_account(state.engine, signer)
+        |> result.replace_error(account_not_registered),
+      )
+      engine.sign_as(account, kind, tags, content, time.now_seconds())
+      |> result.replace_error(sign_failed)
+    }
   }
 }
 
