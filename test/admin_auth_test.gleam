@@ -1,5 +1,6 @@
-//// Basic 認証、CSRF の検査（`Origin` と `Host` の照合）、認証済みの応答の
-//// ヘッダー、認証の前に置く `/healthz` のテスト。
+//// Basic 認証、制御文字を含む `Host`・`Origin`・`Referer` の拒否、CSRF の検査
+//// （`Origin` と `Host` の照合）、認証済みの応答のヘッダー、認証の前に置く
+//// `/healthz` のテスト。
 
 import gleam/bit_array
 import gleam/erlang/process
@@ -11,13 +12,13 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
-import nostr_no_su/time
 import support/account_actions
 import support/admin_context.{
   Removed, Revoked, action_path, client, client_address, context,
   failing_context, get, header, in_japanese, password, post, post_form,
   reporting_context, signer, signer_nsec, spec_nsec, token, with_credentials,
 }
+import support/log_capture
 import wisp
 import wisp/simulate
 
@@ -120,15 +121,18 @@ pub fn unauthorized_lines_name_the_failure_test() {
     == "rejected a request without credentials from an unknown address"
 }
 
-/// Basic 認証に失敗した応答は、Context の遅延の分だけ待ってから返る。
+/// Basic 認証に失敗した応答は、Context の `authentication_delay` を呼んでから返る。
 pub fn failed_authentication_is_delayed_test() {
-  let context = admin.Context(..context(), authentication_delay: 200)
-  let started_at = time.monotonic_ms()
+  let waited = process.new_subject()
+  let context =
+    admin.Context(..context(), authentication_delay: fn() {
+      process.send(waited, Nil)
+    })
   let response =
     simulate.request(http.Get, "/")
     |> admin.handle_request(context, _)
   assert response.status == 401
-  assert time.monotonic_ms() - started_at >= 200
+  assert process.receive(waited, 0) == Ok(Nil)
 }
 
 /// secret 入りの URI を含むダッシュボードは、どこにも保存させない。
@@ -366,6 +370,32 @@ pub fn posts_need_a_host_that_matches_the_origin_test() {
       )
     }
   }
+}
+
+/// `Host`、`Origin`、`Referer` のどれかに制御文字を含む要求は、メソッドによらず
+/// text/plain の 400 で弾き、生の値はログに出ない。OTP logger の行は VM 全体から
+/// 捕まり、並列に走る他のモジュールの行も混ざるが、ESC の並びの有無だけを見るので
+/// 干渉しない。
+pub fn control_characters_in_origin_headers_are_not_logged_test() {
+  let capture = log_capture.install()
+  let cases = [
+    [#("origin", "http://evil.example\u{1b}[2J")],
+    [#("referer", "http://evil.example\u{1b}[2J")],
+    [#("host", "evil.example\u{1b}[2J"), #("origin", "http://localhost")],
+  ]
+  list.each(cases, fn(headers) {
+    let response =
+      list.fold(
+        headers,
+        simulate.request(http.Post, "/language"),
+        fn(request, header) { request.set_header(request, header.0, header.1) },
+      )
+      |> admin.handle_request(context(), _)
+    assert response.status == 400
+    assert header(response, "content-type") == "text/plain"
+  })
+  assert !list.any(log_capture.lines(capture), string.contains(_, "\u{1b}[2J"))
+  log_capture.remove(capture)
 }
 
 /// 認証済みの応答はどれも、保存の禁止、枠への埋め込みの禁止、CSP、`nosniff`、

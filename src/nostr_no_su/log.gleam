@@ -16,6 +16,7 @@
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
+import gleam/list
 import gleam/result
 import gleam/string
 
@@ -132,6 +133,13 @@ fn sanitize_prefix(
 /// リレーやイベント由来の値を既定の上限 `max_external_chars` で `sanitize` する。
 pub fn sanitize_external(text: String) -> String {
   sanitize(text, max_external_chars)
+}
+
+/// `sanitize` が空白に置き換えるコードポイント（`is_control`）を 1 つでも含むか。
+/// 値をログに入れずに捨てる側が、`sanitize` と同じ規則で判定するために使う。
+pub fn has_control(text: String) -> Bool {
+  string.to_utf_codepoints(text)
+  |> list.any(is_control)
 }
 
 /// ログ行を分けたり端末の表示を変えたりしうるコードポイントか。C0

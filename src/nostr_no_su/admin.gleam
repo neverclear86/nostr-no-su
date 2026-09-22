@@ -26,6 +26,7 @@
 //// - 静的ファイル（CSS、JS）への GET 以外の 405
 //// - `wisp.require_form` の 400 / 413 / 415（管理 UI のフォームの操作では届かない）
 //// - `wisp.rescue_crashes` の 500（不具合でしか起きず、詳細はログにある）
+//// - `Host`、`Origin`、`Referer` に制御文字を含む要求の 400（`reject_control_headers`。ブラウザーはこれらのヘッダーに制御文字を送らない）
 ////
 //// CSRF の検査で弾いた 400 は認証の前で返るが、言語とテーマは cookie と
 //// `Accept-Language` から決められるので、通知ページの HTML にする
@@ -34,8 +35,9 @@
 //// 認証に失敗した要求（401）は、理由と接続元の IP を `[admin]` の 1 行でログに出し、
 //// 資格情報とパス（承認ページのトークンを含みうる）は出さない。IP は TCP の接続元
 //// （`client_address`）で、`X-Forwarded-For` は見ない。応答は固定の遅延
-//// （`authentication_failure_delay`）の後に返す。ロックアウトと IP ごとの回数制限は
-//// 入れない（必要なら前段のリバースプロキシーで行う）。
+//// （`authentication_failure_delay`）の後に返す。秘密鍵の再表示で管理パスワードの
+//// 再入力が一致しない応答（403）も、同じ遅延の後に返す。ロックアウトと IP ごとの
+//// 回数制限は入れない（必要なら前段のリバースプロキシーで行う）。
 ////
 //// テーマは言語と同じく認証の後に、切り替えで保存した cookie から決め（`request_theme`）、
 //// 無ければブラウザーの設定に従う。CSRF の 400 のページだけ、認証の前に cookie から
@@ -45,7 +47,6 @@ import gleam/bit_array
 import gleam/bool
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process
 import gleam/http
 import gleam/http/cookie
 import gleam/http/request
@@ -101,7 +102,8 @@ const username = "admin"
 /// にも使う。
 pub const unknown_client_address = "an unknown address"
 
-/// 本番で Basic 認証の失敗の後に挟む遅延（ミリ秒）。テストとプレビューは 0 を入れる。
+/// 本番で管理パスワードの照合に失敗した応答の前に挟む遅延（ミリ秒）。`app` が
+/// `Context` の `authentication_delay` でこの長さだけ眠る。
 pub const authentication_failure_delay = 1000
 
 /// 401 応答で提示する認証領域。
@@ -184,8 +186,10 @@ pub type Context {
     /// この要求の接続元の IP の表示。401 のログ行だけが使う。`server` が要求ごとに
     /// 入れ替えるので、ツリーに渡す値は `unknown_client_address` でよい。
     client_address: String,
-    /// Basic 認証の失敗の後に挟む固定の遅延（ミリ秒）。
-    authentication_delay: Int,
+    /// 管理パスワードの照合に失敗した応答（Basic 認証の 401、秘密鍵の再表示の
+    /// 403）を返す前に呼ぶ待ち。本番は `authentication_failure_delay` だけ眠り、
+    /// テストとプレビューは待たない。
+    authentication_delay: fn() -> Nil,
     /// アカウントの一覧。読み込み中、応答なしのときは表示する理由を返す。
     accounts: fn() -> Result(List(dashboard.AccountRow), String),
     /// 直近の読み込みで飛ばされた行の一覧。読み込み中、応答なしのときは表示する
@@ -308,13 +312,15 @@ fn listening_url(address: mist.IpAddress, port: Int) -> String {
   "http://" <> host <> ":" <> int.to_string(port)
 }
 
-/// リクエストを 1 件処理する。`/healthz` だけ認証なしで通し、それ以外は Basic
-/// 認証を通ってから、表示の言語を決めてルーティングする。Basic 認証の資格情報は
-/// ブラウザーが自動送信するため、別オリジンのフォームからの POST は通知ページの 400 で
-/// 弾く（`require_same_origin`）。
+/// リクエストを 1 件処理する。`Host`、`Origin`、`Referer` に制御文字を含む要求は
+/// 最初に text/plain の 400 で弾く（`reject_control_headers`）。`/healthz` だけ認証
+/// なしで通し、それ以外は Basic 認証を通ってから、表示の言語を決めてルーティングする。
+/// Basic 認証の資格情報はブラウザーが自動送信するため、別オリジンのフォームからの
+/// POST は通知ページの 400 で弾く（`require_same_origin`）。
 pub fn handle_request(context: Context, request: Request) -> Response {
   use <- wisp.rescue_crashes
   use request <- wisp.handle_head(request)
+  use <- reject_control_headers(request)
   use request <- require_same_origin(request)
   case wisp.path_segments(request) {
     ["healthz"] -> healthz(request)
@@ -359,6 +365,28 @@ fn require_same_origin(
       |> wisp.html_response(400)
       |> protect(content_security_policy)
     _ -> wisp.csrf_known_header_protection(request, next)
+  }
+}
+
+/// `Host`、`Origin`、`Referer` のどれかに制御文字（`log.has_control`）を含む要求を、
+/// メソッドによらず text/plain の 400 で弾く。CSRF の検査（`require_same_origin` が
+/// 使う wisp の検査）は不一致のときに `Host` と `Origin`（または `Referer`）の生の
+/// 値をログに出すので、その前に置いて端末の制御をログに入れさせない。ブラウザーは
+/// これらのヘッダーに制御文字を送らないので、通知ページにせず、ログにも出さない。
+fn reject_control_headers(
+  request: Request,
+  next: fn() -> Response,
+) -> Response {
+  let rejected =
+    list.any(["host", "origin", "referer"], fn(name) {
+      case request.get_header(request, name) {
+        Ok(value) -> log.has_control(value)
+        Error(Nil) -> False
+      }
+    })
+  case rejected {
+    True -> wisp.bad_request("")
+    False -> next()
   }
 }
 
@@ -2203,7 +2231,9 @@ fn unavailable_notice(
 }
 
 /// 管理パスワードの再入力を照合し、一致したときだけ nsec を問い合わせて表示する。
-/// ログに出すのは一覧の行の npub だけで、パスワードも nsec も出さない。
+/// 一致しないときは Basic 認証の失敗と同じく `authentication_delay` を呼んで待ってから
+/// 403 を返し、覚えた資格情報で並列に送る総当たりを遅くする。ログに出すのは一覧の
+/// 行の npub だけで、パスワードも nsec も出さない。
 fn reveal_private_key(
   context: Context,
   request: Request,
@@ -2227,6 +2257,7 @@ fn reveal_private_key(
           <> ": "
           <> incorrect_password,
       )
+      context.authentication_delay()
       account_pages.account_action_page(
         language,
         theme,
@@ -2265,7 +2296,7 @@ pub type AuthenticationFailure {
 }
 
 /// Basic 認証を要求する。資格情報が無い、あるいは一致しないときは、失敗の理由を
-/// 1 行ログに出し、固定の遅延（`authentication_delay`）の後に 401 を返す。遅延は
+/// 1 行ログに出し、`authentication_delay` を呼んで待ってから 401 を返す。待ちは
 /// その接続を処理しているプロセスだけを止める。
 fn require_password(
   context: Context,
@@ -2280,7 +2311,7 @@ fn require_password(
         log_prefix,
         unauthorized_line(failure, context.client_address),
       )
-      process.sleep(context.authentication_delay)
+      context.authentication_delay()
       unauthorized()
     }
   }

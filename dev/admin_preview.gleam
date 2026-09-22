@@ -692,7 +692,7 @@ fn context() -> admin.Context {
   admin.Context(
     password:,
     client_address: admin.unknown_client_address,
-    authentication_delay: 0,
+    authentication_delay: fn() { Nil },
     accounts: fn() {
       Ok([
         row(signer, signer_npub, "main account"),

@@ -626,6 +626,29 @@ pub fn reveal_with_a_wrong_password_is_forbidden_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
+/// 再入力が一致しない応答は、Context の `authentication_delay` を呼んでから返る。
+/// 一致するときは呼ばない。
+pub fn reveal_with_a_wrong_password_waits_test() {
+  let waited = process.new_subject()
+  let context =
+    admin.Context(..context(), authentication_delay: fn() {
+      process.send(waited, Nil)
+    })
+  let wrong =
+    post_form(context, action_path(dashboard.RevealPrivateKey), [
+      #("password", "wrong-guess"),
+    ])
+  assert wrong.status == 403
+  assert process.receive(waited, 0) == Ok(Nil)
+
+  let correct =
+    post_form(context, action_path(dashboard.RevealPrivateKey), [
+      #("password", password),
+    ])
+  assert correct.status == 200
+  assert process.receive(waited, 0) == Error(Nil)
+}
+
 /// 正しいパスワードなら、一覧の署名者の nsec を問い合わせて表示する。
 pub fn reveal_with_the_password_shows_the_nsec_test() {
   let reports = process.new_subject()

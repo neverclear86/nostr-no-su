@@ -179,7 +179,7 @@ pub fn test_context(
   admin.Context(
     password: password,
     client_address: client_address,
-    authentication_delay: 0,
+    authentication_delay: fn() { Nil },
     accounts: fn() { Ok([account_row(label)]) },
     skipped: fn() { Ok([]) },
     add_account: fn(added, added_label) {
