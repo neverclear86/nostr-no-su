@@ -154,6 +154,8 @@ jobs:
       - run: sh dev/check_vendor_stratus.sh
       # docker-compose.yml の ${...} の変数と既定値が、.env.example の変数の行と一致するかを検査する。
       - run: sh dev/check_env_example.sh
+      # setup-env.sh が新しく作る .env に生成した POSTGRES_PASSWORD を入れ、既存の .env の行を変えないことを検査する。
+      - run: sh dev/check_setup_env.sh
       # docker-compose.release.yml と docker-compose.yml の差分がイメージの取り方の 1 行だけであることを検査する。
       - run: sh dev/check_release_compose.sh
       # 本体の成果物が組めることまで見る。配布するイメージの成果物は Dockerfile の中で作る。
