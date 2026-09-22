@@ -329,6 +329,7 @@ sequenceDiagram
     rc->>bk: Incoming(event)
     bk->>eng: リクエストと現在時刻、乱数
     Note over eng: kind、受付ウィンドウ、<br/>起動時刻、宛先、<br/>処理済みの id を検査
+    Note over eng: セッションも一致する secret も無ければ、<br/>pubkey ごとと全体の上限を数え、<br/>超えたら応答せずに捨てる
     alt method が connect
         Note over eng: secret が定数時間で一致、または<br/>承認済みの組なら ack
         opt どちらでもない
@@ -680,6 +681,7 @@ nostr-no-su/
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
 │       ├── bunker/connection_secret.gleam 接続 secret（閉じ込め、定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
+│       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア

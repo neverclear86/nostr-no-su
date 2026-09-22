@@ -14,6 +14,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/bunker/account.{type Account, privkey, pubkey_hex}
 import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
+import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/dedup/window
@@ -103,6 +104,8 @@ pub type Engine {
     /// #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
     /// 間も `touch` の間引きに使う。
     touch_attempts: Dict(#(String, String), Int),
+    /// セッションの外のリクエストを数える上限の状態（`rate_limit`）。
+    limiter: rate_limit.Limiter,
   )
 }
 
@@ -215,6 +218,10 @@ pub type Outcome {
   Duplicate
   /// リクエストを破棄した。ログに出す理由を伴う。
   Ignore(reason: String)
+  /// セッションの外のリクエストが上限（`rate_limit`）を超えたので、実行も応答の
+  /// 組み立てもせずに捨てた。捨てた件数は `Handled.notice` が間引いて報告する
+  /// ので、呼び出し側はログを出さない。
+  Throttled
 }
 
 /// リクエストを実行した結果（暗号化の前）。状態を変える実行は必ず書き込みを
@@ -248,6 +255,7 @@ pub fn new(
       pending: dict.new(),
       auth_url: auth_url,
       touch_attempts: dict.new(),
+      limiter: rate_limit.new(),
     )
   use engine, pair <- list.fold(accounts, empty)
   add_account(engine, pair.0, pair.1)
@@ -404,7 +412,7 @@ fn newest_pending(entries: Dict(String, Pending)) -> List(Pending) {
 
 /// DB から読んだセッションと承認待ちで `sessions` と `pending` を置き換える。
 /// DB の型に依存しないよう、値はエンジンの型（`Session`・`Pending`）で受け取る。
-/// `accounts`、`seen`、`auth_url` は変えない。DB が正なので既存の値には足さず
+/// `accounts`、`seen`、`auth_url`、`limiter` は変えない。DB が正なので既存の値には足さず
 /// 置き換える。署名者が登録されていないセッションと承認待ちは、
 /// `remove_account` と揃えて読み飛ばす。失効した承認待ち（`expired`）も同じく
 /// 読み飛ばす。`touch_attempts` は読み込んだセッションに組がある項目だけ残す
@@ -570,9 +578,11 @@ fn respond(
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
 /// すべき応答があれば生成する。id と署名は受信した接続のプロセスが
 /// `event.verify` で確かめてあり、エンジンは検証しない。`engine` は受理した
-/// イベントの id と、`TouchSession` を書こうとした組の試行の時刻を記録した
-/// エンジンで、セッションと承認待ちの変更は `Persist` の `next` に載せる。
-/// 権限の不足で拒否したときだけ `notice` にログの 1 行を入れる。
+/// イベントの id、セッションの外のリクエストを数えた上限の状態（`limiter`）、
+/// `TouchSession` を書こうとした組の試行の時刻を記録したエンジンで、セッション
+/// と承認待ちの変更は `Persist` の `next` に載せる。`notice` にログの 1 行を
+/// 入れるのは、権限の不足で拒否したときと、上限を超えて捨てた件数を報告するとき
+/// だけである。
 pub fn handle_event(
   engine: Engine,
   verified: Verified,
@@ -648,7 +658,9 @@ pub fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
   }
 }
 
-/// リクエストを復号・デコードし、実行結果を暗号化した応答にする。
+/// リクエストを復号・デコードし、セッションの外のリクエストを上限に数えてから
+/// （`admit`）実行し、実行結果を暗号化した応答にする。上限を超えたリクエストは
+/// 実行せずに `Throttled` にする。
 fn handle_request(
   engine: Engine,
   account: Account,
@@ -660,24 +672,89 @@ fn handle_request(
   case decode_request(account, incoming) {
     Error(reason) ->
       Handled(engine: engine, outcome: Ignore(reason), notice: None)
-    Ok(#(conversation_key, request)) -> {
-      let execution =
-        execute(engine, account, secret, client_pk_hex, request, inputs)
-      let build = fn(response) {
-        build_reply(
-          account,
-          conversation_key,
+    Ok(#(conversation_key, request)) ->
+      case
+        admit(
+          engine,
+          pubkey_hex(account),
+          secret,
           client_pk_hex,
-          response,
+          request,
           inputs.now,
         )
+      {
+        Error(#(limited, report)) ->
+          Handled(engine: limited, outcome: Throttled, notice: report)
+        Ok(engine) -> {
+          let execution =
+            execute(engine, account, secret, client_pk_hex, request, inputs)
+          let build = fn(response) {
+            build_reply(
+              account,
+              conversation_key,
+              client_pk_hex,
+              response,
+              inputs.now,
+            )
+          }
+          Handled(
+            engine: attempted(engine, execution),
+            outcome: outcome(execution, build),
+            notice: denial_notice(execution, pubkey_hex(account), client_pk_hex),
+          )
+        }
       }
-      Handled(
-        engine: attempted(engine, execution),
-        outcome: outcome(execution, build),
-        notice: denial_notice(execution, pubkey_hex(account), client_pk_hex),
-      )
-    }
+  }
+}
+
+/// セッションの外のリクエスト（`outside_session`）を `rate_limit.admit` で
+/// 数える。通すなら数えた後のエンジンを、捨てるなら数えた後のエンジンと報告の
+/// 1 行を `Error` で返す。セッションの中のリクエストは数えずにそのまま通す。
+fn admit(
+  engine: Engine,
+  signer: String,
+  secret: ConnectionSecret,
+  client: String,
+  request: rpc.Request,
+  now: Int,
+) -> Result(Engine, #(Engine, Option(String))) {
+  case outside_session(engine, signer, secret, client, request) {
+    False -> Ok(engine)
+    True ->
+      case rate_limit.admit(engine.limiter, client, now) {
+        rate_limit.Admitted(limiter) -> Ok(Engine(..engine, limiter: limiter))
+        rate_limit.Refused(limiter:, report:) ->
+          Error(#(Engine(..engine, limiter: limiter), report))
+      }
+  }
+}
+
+/// セッションの外のリクエストか。（署名者, クライアント）の組が承認済みでなく、
+/// 接続 secret の一致する `connect` でもなければ真。secret の一致する `connect`
+/// を外すのは、上限を使い切られている間も secret を持つ利用者が接続できるように
+/// するためである。
+fn outside_session(
+  engine: Engine,
+  signer: String,
+  secret: ConnectionSecret,
+  client: String,
+  request: rpc.Request,
+) -> Bool {
+  case dict.has_key(engine.sessions, #(signer, client)) {
+    True -> False
+    False ->
+      case request.method {
+        "connect" -> !offers_secret(secret, request.params)
+        _ -> True
+      }
+  }
+}
+
+/// `connect` の `params[1]` が接続 secret と一致するか。secret が無ければ偽。
+fn offers_secret(secret: ConnectionSecret, params: List(String)) -> Bool {
+  case connect_secret(params) {
+    Some(value) -> connection_secret.matches(secret, value)
+    None -> False
   }
 }
 
@@ -870,10 +947,7 @@ fn connect(
     False -> {
       let offered = connect_secret(request.params)
       let perms = connect_perms(request.params)
-      let offered_matches = case offered {
-        Some(value) -> connection_secret.matches(secret, value)
-        None -> False
-      }
+      let offered_matches = offers_secret(secret, request.params)
       let not_saved = rpc.error(request.id, connection_not_saved)
       case offered_matches {
         True -> {
