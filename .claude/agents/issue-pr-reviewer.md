@@ -14,7 +14,7 @@ disallowedTools: Agent
 ## 環境
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - 再現は、指示された再現用の作業ツリーの絶対パスの下で行う
-- issue は `gh issue view <N> --comments`、PR は `gh pr view <PR> --comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む
+- issue は `gh issue view <N> --json title,body,comments`、PR は `gh pr view <PR> --json title,body,comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む（`--comments` は本文を落とす、または rc=0 のまま空で返ることがあるので使わない）
 - 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `sh <作業ツリー>/dev/post_comment.sh pr <PR> pr-review <R> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で投稿する（`REQUEST CHANGES` は空白を含むので二重引用符で囲む）
 
 ## レビューの基準
@@ -27,7 +27,7 @@ disallowedTools: Agent
 - 文書: README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example などが変更と整合するか
 - 文体: PR 本文とコミットメッセージが標準的な技術文体の日本語か
 - CI: `gh pr checks <PR> -R neverclear86/nostr-no-su` の全ジョブが head で pass か skipped か（実装エージェントが待ってから返す決まりなので、fail していれば must）。CI の `test` ジョブは Postgres の統合テストと strfry の E2E も走らせるので、PR 本文に手元の出力が無くても指摘しない
-- UI を変える PR: 実装エージェントが PR に貼った変更前（main）と変更後のスクリーンショット（`gh api repos/<R>/issues/<PR>/comments` の画像 URL を `curl -L` でスクラッチパッドに落とし、Read で見る）が、デザインの方針と issue の受け入れ条件に合うか。貼られるのは変えた画面の日本語だけで、英語は英語画面の修正が主題の issue のときだけ貼られる決まりなので、変えていない画面や英語が無いことは指摘しない。見た目の変わった画面が無い PR では貼られず、代わりに PR 本文の「テストと検証」に変更前と変更後の一式を比べた 1 行がある決まりなので、その 1 行があれば貼られていないことは指摘しない。自分で撮り直すのは、貼られた画像に無い状態（狭い幅、ダーク、エラー表示など）を確かめたいときと、その 1 行を疑うときだけ。スクリーンショットのコメントは画像が出ていて変更前と変更後の対応が分かることだけを見て、説明文の文言は指摘しない。`priv/static/admin.css` が再ビルドされているか
+- UI を変える PR: 実装エージェントが PR に貼った変更前（main）と変更後のスクリーンショット（`gh api repos/<R>/issues/<PR>/comments` の画像 URL を `curl -L` でスクラッチパッドに落とし、Read で見る）が、デザインの方針と issue の受け入れ条件に合うか。貼られるのは変えた画面の日本語だけで、英語は英語画面の修正が主題の issue のときだけ貼られる決まりなので、変えていない画面や英語が無いことは指摘しない。見た目の変わった画面が無い PR では貼られず、代わりに PR 本文の「テストと検証」に変更前と変更後の一式を比べた 1 行がある決まりなので、その 1 行があれば貼られていないことは指摘しない。依頼文に「UI を変えない issue なので、スクリーンショットは貼られない」の行がある PR（`ui` の無い issue）ではスクリーンショットを撮らない決まりなので、管理 UI の `.gleam` を変えていても貼られていないことを指摘しない。自分で撮り直すのは、貼られた画像に無い状態（狭い幅、ダーク、エラー表示など）を確かめたいときと、その 1 行を疑うときだけ。スクリーンショットのコメントは画像が出ていて変更前と変更後の対応が分かることだけを見て、説明文の文言は指摘しない。`priv/static/admin.css` が再ビルドされているか
 
 ## 再現
 - CI（`gh pr checks <PR> -R neverclear86/nostr-no-su`）が head で pass していることを確かめる。CI が行う検査（build、単体テスト、統合テスト、E2E、format、CSS の差分、vendor、プラグイン、.env.example、shipment）は再現しない。再実行するのは差分を読んで疑わしいと思ったときだけ。CI の結果は「確認したこと」の表に 1 行で書く

@@ -13,7 +13,7 @@ disallowedTools: Agent
 
 ## 読むもの（これ以外はできるだけ読まない）
 - `gh pr diff <PR> -R neverclear86/nostr-no-su`
-- `gh pr view <PR> -R neverclear86/nostr-no-su --comments`（PR 本文、レビュー、指摘への対応）
+- `gh pr view <PR> -R neverclear86/nostr-no-su --json title,body,comments`（PR 本文、レビュー、指摘への対応。`--comments` は本文を落とすことがあるので使わない）
 - 承認済みのプラン（指示された issue コメントの URL。本文の後半は `<details>` に畳まれているので、そこまで読む）。プランが無い PR（tier none）では、代わりに PR 本文の「## 設計メモ」を読む
 - issue の本文（受け入れ条件）
 - 差分の意味を確かめるために必要な範囲のソース。Bash の cwd（ユーザーの作業ツリー）は読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない

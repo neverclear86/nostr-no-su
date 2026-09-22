@@ -90,14 +90,25 @@ const S = {
     type: 'object',
     properties: {
       status: { type: 'string', enum: ['pr', 'fixed', 'rebased', 'deviation', 'blocked'], description: 'pr: PR を作った / fixed: 指摘に対応して push した / rebased: rebase して push した / deviation: プランどおりに作れない / blocked: 進められない' },
-      pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string', description: 'push した head のコミット' },
+      pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string', description: 'push した head のコミット（deviation / blocked では作業ツリーの HEAD）' },
       commentUrl: { type: 'string', description: 'fixed のとき、投稿した対応コメントの URL' },
       reportFile: { type: 'string', description: 'deviation のとき、逸脱の箇所と理由を書いたファイル' },
       reason: { type: 'string', description: 'deviation / blocked の理由、または rebase で解けなかった衝突' },
-      ciPassed: { type: 'boolean', description: 'PR の head で CI の全ジョブが pass したか（pr / fixed / rebased のとき必須）' },
+      ciPassed: { type: 'boolean', description: 'PR の head で CI の全ジョブが pass したか（deviation / blocked では false）' },
       implementedBy: { type: 'string', enum: IMPLEMENTERS, description: '最初の実装で、コードを書いたのが devin か claude か（devin を頼まれても失敗して自分で書いたら claude）' },
     },
-    required: ['status'],
+    // status だけの返答（schema 違反を弾かれた直後の送り直しで起きた）を弾き、全部入りで送り直させる
+    required: ['status', 'head', 'ciPassed'],
+  },
+  // 実装が PR の番号か head を返さなかったときに、gh で PR を引いて補う小さなエージェントの返答
+  prLookup: {
+    type: 'object',
+    properties: {
+      found: { type: 'boolean', description: 'ブランチに open の PR があるか' },
+      pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string', description: 'PR の headRefOid' },
+      ciPassed: { type: 'boolean', description: 'gh pr checks の全ジョブが pass か skipping か' },
+    },
+    required: ['found'],
   },
   prReviewer: {
     type: 'object',
@@ -216,6 +227,10 @@ const SAFETY = `- docker の後片付けは、自分が作ったコンテナー�
 const devinNote = (e, by) => by === 'devin'
   ? `- 実装のコードは devin に書かせる（定義の「devin に実装を任せるとき」の手順。clone は ${e.devinWs}、依頼文は \`dev/devin_prompt.sh\` で組む）。検査・コミット・PR・CI の確認は自分で行う\n`
   : ''
+/** issue の ui の値を PR レビューの依頼文にする。無い issue ではスクリーンショットを撮らない決まりなので、無いことを指摘させない */
+const uiNote = (issue) => issue.ui
+  ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n'
+  : '- UI を変えない issue なので、スクリーンショットは貼られない（無いことを指摘しない）\n'
 /** プランレビューが APPROVE に添えた実装時の条件を依頼文にする。null は planUrl で始めた issue（条件は投稿済みのプランにしか無い） */
 const conditionsNote = (conditions) => conditions === null
   ? '- 実装時の条件: 投稿済みのプランの冒頭の「### 実装時の条件」を読み、あれば取り込んで PR 本文の「プランからの変更」に書く\n'
@@ -224,17 +239,17 @@ const conditionsNote = (conditions) => conditions === null
     : ''
 const P = {
   triage: (e, issue) => `issue #${e.n} の tier を判定し、full なら分割するかどうかを決めてほしい（定義の「分割の判定」）。プランはまだ書かない。
-issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。触るファイルの当たりは ${REPO_DIR} を \`ls\`、\`grep -n\`、\`wc -l\` で読むだけにし、build や実行はしない。
+issue は \`gh issue view ${e.n} -R ${REPO} --json title,body,comments\` で読む。触るファイルの当たりは ${REPO_DIR} を \`ls\`、\`grep -n\`、\`wc -l\` で読むだけにし、build や実行はしない。
 ${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}定義の「分割の判定」の基準で tier を none / light / full のいずれかにする。full のときはまず分割を試み、サブ issue を作って status を split にする。分割できない理由があるときだけ tier を full のまま status を plan にし、その理由を summary に書く。none と light は status を plan にして返す（何も投稿しない）。issue の前提が間違っているときは status を question にする。
 返答（構造化出力）: status、tier、split のときは subIssues（各サブ issue の番号と、先にマージされている必要がある兄弟の番号 after）、summary に見込みの行数とファイル数と「決めたこと」の件数。`,
   design: (e, issue) => `issue #${e.n} は管理 UI を変える。プランの前にデザインの方針を決めて、issue にコメントしてほしい。
-issue は \`gh issue view ${e.n} -R ${REPO} --comments\` で読む。管理 UI のソースは ${REPO_DIR}/src/nostr_no_su/admin/ にある（ユーザーの作業ツリーなので読むだけにする）。
+issue は \`gh issue view ${e.n} -R ${REPO} --json title,body,comments\` で読む。管理 UI のソースは ${REPO_DIR}/src/nostr_no_su/admin/ にある（ユーザーの作業ツリーなので読むだけにする）。
 画面構成、使うコンポーネント（daisyUI）、テーマ、狭い幅（375px）、空とエラーの状態の方針を、標準的な技術文体の日本語（である調、一文一行）で \`sh ${REPO_DIR}/dev/post_comment.sh issue ${e.n} design 1 - - <スクラッチパッドのファイル>\` で投稿する。
 ${issue.note ? `補足: ${issue.note}\n` : ''}返すもの: 投稿したコメントの URL。`,
   plan1: (e, issue, designUrl, prReviewUrl) => `issue #${e.n} の実装プラン（版 1）を書いてほしい。
 ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
-${prReviewUrl ? `- この issue はプラン無しで実装され、PR レビューが設計に起因する must を出した（${prReviewUrl}。本文は \`gh api\` で読む）。その must を解く設計を「決めたこと」に書き、すでに実装済みの箇所は前提として扱う。分割はしない\n` : ''}${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}issue の前提が間違っている、またはユーザーにしか決められない選択があるときは、プランを書かずに status を question にして質問を返す。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : prReviewUrl || issue.noSplit ? 'この issue は分割しない（実装が途中まで進んでいる）。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
+${prReviewUrl ? `- この issue はプラン無しで実装され、PR レビューが設計に起因する must を出した（${prReviewUrl}。本文は \`gh api\` で読む）。その must を解く設計を「決めたこと」に書き、すでに実装済みの箇所は前提として扱う。分割はしない\n` : ''}${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}設計の選択は推奨案で決めて「決めたこと」に書き、status を question にするのは issue の前提が事実に反するときだけにする。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : prReviewUrl || issue.noSplit ? 'この issue は分割しない（実装が途中まで進んでいる）。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
   // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
   planNext: (e, v, r) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
@@ -284,7 +299,7 @@ ${SAFETY}
 返答（構造化出力）: status、PR の番号と URL、head のコミット、ciPassed、implementedBy。`,
   // tier none（追加 100 行未満、3 ファイル以下、決めたこと 0〜1 件）はプランを書かず、実装者が issue を読んで直接作る
   implementNoPlan: (e, issue, by) => `issue #${e.n} を実装し、PR を作ってほしい。この issue は小さいので実装プランを書かない段階に振り分けられた（tier none）。プランの代わりに issue を直接読む。
-- issue: \`gh issue view ${e.n} -R ${REPO} --comments\`。受け入れ条件はここにしか無い
+- issue: \`gh issue view ${e.n} -R ${REPO} --json title,body,comments\`。受け入れ条件はここにしか無い
 - 土台: origin/main の ${e.base}
 ${devinNote(e, by)}- 作業ツリー: ${e.wt}、ブランチ: ${e.branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${e.branch} ${e.wt} origin/main\` で作る。ブランチがすでに origin にあり、その PR が \`Closes #${e.n}\` を持つか PR がまだ無ければ、それを取り出して続きから進める。別の issue の PR が付いているブランチなら status を blocked にして reason に書く）
 - テスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
@@ -324,18 +339,18 @@ ${SAFETY}
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
-${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（build、単体テスト、統合テスト、E2E、format、CSS、vendor、プラグイン、.env.example、shipment）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
+${uiNote(issue)}CI は head で pass している。CI が行う検査（build、単体テスト、統合テスト、E2E、format、CSS、vendor、プラグイン、.env.example、shipment）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
 ${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは conditions、must が承認済みプランの設計に起因するか。`,
   // tier none の PR。承認済みプランが無いので、issue の受け入れ条件と PR 本文の「## 設計メモ」に照合する
   prReviewNoPlan: (e, pr, head, issue) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をレビューしてほしい（ラウンド 1）。
-- この PR には承認済みの実装プランが無い（tier none でプランの段階を飛ばした）。照合の相手は issue の受け入れ条件（\`gh issue view ${e.n} -R ${REPO} --comments\`）と、PR 本文の「## 設計メモ」である
+- この PR には承認済みの実装プランが無い（tier none でプランの段階を飛ばした）。照合の相手は issue の受け入れ条件（\`gh issue view ${e.n} -R ${REPO} --json title,body,comments\`）と、PR 本文の「## 設計メモ」である
 - 「## 設計メモ」の「決めたこと」が issue の受け入れ条件と既存のコードの流儀に反していないか、受け入れ条件の表に抜けが無いか、表の「検証の手順」が実際に再現できるかを見る。設計メモそのものが誤っているときは must にして designMust を立てる（スクリプトがその場でプランを作らせる）
 - 土台: origin/main の ${e.base}
 - 再現用の作業ツリー: ${e.reviewWt}（\`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add --detach ${e.reviewWt} origin/${e.branch}\` で作る）
 - テスト用 Postgres のポート: ${e.reviewPgPort}。docker のプロジェクト名: ${e.reviewProject}、ポート: ${e.reviewPorts}
-${issue.ui ? '- UI を変える PR なので、スクリーンショットと CSS の再ビルドも見る\n' : ''}CI は head で pass している。CI が行う検査（統合テストと E2E を含む）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
+${uiNote(issue)}CI は head で pass している。CI が行う検査（統合テストと E2E を含む）は再現せず、CI にも PR 本文にも無い検証だけを再現する。
 レビューを PR コメントに投稿してほしい。
 ${SAFETY}
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは conditions、must が設計メモに起因するか（designMust）。`,
@@ -388,6 +403,11 @@ ${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が�
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
 返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、問題があればその内容。`,
+  // 実装が status だけを返したとき（schema 違反の送り直し）に、PR の有無を gh で引く。実装を走り直すより安い
+  lookupPr: (e) => `ブランチ ${e.branch} の PR を調べて返してほしい（コードは変えず、何も投稿しない）。
+\`gh pr list -R ${REPO} --head ${e.branch} --state open --json number,url,headRefOid\` で PR を引く。無ければ found を false にする。
+あれば \`gh pr checks <番号> -R ${REPO} --json bucket\` を見て、全部が pass か skipping なら ciPassed を true、それ以外（fail、pending、cancel）なら false にする。
+返答（構造化出力）: found、PR の番号と URL、head（headRefOid）、ciPassed。`,
   rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
 rebase 以外の変更を入れない。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待つ。
@@ -522,11 +542,20 @@ async function implementStage(e, issue, state) {
     impl = await call('implement', `Implement #${e.n} (続き ${replans})`, P.implementContinue(e, state.postUrl, state.conditions), { agentType: 'issue-implementer', phase: '実装', schema: S.implementer })
   }
   if (impl.status === 'blocked') return { blocked: { stage: 'implement', questions: [impl.reason || '実装が進められない'] } }
+  if (!impl.pr || !impl.head) impl = { ...impl, ...(await lookupPr(e)) }
   if (!impl.pr || !impl.head) throw new StageError('implement', `#${e.n} の実装が PR の番号か head を返さなかった`)
   if (impl.ciPassed !== true) return { blocked: { stage: 'implement', questions: [`PR #${impl.pr} の CI が通っていない（${impl.reason || '理由の報告なし'}）`] } }
   state.pr = impl.pr
   state.head = impl.head
   return {}
+}
+
+/** 実装が PR の番号か head を返さなかったとき、ブランチの PR を gh で引いて補う（無ければ空。PR が完成しているのに実装を走り直すのを避ける） */
+async function lookupPr(e) {
+  log(`#${e.n}: 実装が PR の番号か head を返さなかった。ブランチ ${e.branch} の PR を gh で引いて補う`)
+  const found = await call('implement', `Lookup #${e.n}`, P.lookupPr(e), { phase: '実装', schema: S.prLookup, effort: 'low' })
+  if (!found.found) return {}
+  return { pr: found.pr, prUrl: found.prUrl, head: found.head, ciPassed: found.ciPassed }
 }
 
 /** 指摘への対応を新しい実装エージェントにさせる */
@@ -765,6 +794,8 @@ function fake(label, opts, prompt) {
   const r = Number((label.match(/ r(\d+)/) || [])[1] || 1)
   const t = opts.agentType
   if (sc === 'null-fix' && label.startsWith('Fix')) return null
+  // status-only: 実装が status だけを返し、スクリプトが gh で PR を引いて補う（agentType の無い呼び出し）
+  if (label.startsWith('Lookup')) return { found: true, pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true }
   if (t === 'issue-designer') return { commentUrl: `https://example/issue/${n}#design` }
   if (t === 'issue-planner') {
     if (label.startsWith('Triage')) {
@@ -796,10 +827,11 @@ function fake(label, opts, prompt) {
     const implementedBy = prompt.includes('devin に書かせる') ? 'devin' : 'claude'
     if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased`, ciPassed: true }
     if (sc === 'ci-fail') return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: false, reason: 'test が fail' }
-    if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する' } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
+    if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する', head: `head-${n}-wip`, ciPassed: false } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
     if (sc === 'null') return null
-    if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない' }
-    if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question', 'tier-none-deviation'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: sc === 'tier-none-deviation' ? '見込み 260 行' : '関数が無い' }
+    if (sc === 'status-only') return { status: 'pr' }
+    if (sc === 'impl-blocked') return { status: 'blocked', reason: 'テスト用の DB が立たない', head: `head-${n}-wip`, ciPassed: false }
+    if (['deviation', 'planurl-deviation', 'replan-reject', 'replan-question', 'tier-none-deviation'].includes(sc) && !label.includes('続き')) return { status: 'deviation', reportFile: `${PLANS}/${n}-deviation.md`, reason: sc === 'tier-none-deviation' ? '見込み 260 行' : '関数が無い', head: `head-${n}-wip`, ciPassed: false }
     return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: true, implementedBy }
   }
   if (t === 'issue-pr-reviewer') {

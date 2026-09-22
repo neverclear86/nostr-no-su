@@ -6,7 +6,7 @@
 # 検査の手順 2 のカバレッジの文だけは環境の違い（strfry が無い）で issue-implementer.md と文言を変えている（写しではない）。
 #
 # 使い方: sh dev/devin_prompt.sh <issue 番号> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]
-#   仕様のファイル: tier none では issue の本文とコメント（gh issue view --comments の出力）、
+#   仕様のファイル: tier none では issue の本文とコメント（gh issue view --json title,body,comments を --jq で散文にした出力）、
 #                   light では承認済みプランのコメント本文
 #   条件のファイル: プランレビューが APPROVE に添えた実装時の条件（1 行 1 件）。無ければ省く
 set -eu
@@ -104,7 +104,7 @@ cat <<PROMPT
 3. \`gleam format src test dev\` を実行し、\`gleam format --check src test dev\` が通ることを確かめる
 4. \`examples/\` を変えたら \`erlc -Wall -Werror -o "\$(mktemp -d)" examples/plugins/*/src/*.erl\`。\`vendor/\` を変えたら \`sh dev/check_vendor_stratus.sh\`。\`docker-compose.yml\`、\`docker-compose.release.yml\`、\`.env.example\` のどれかを変えたら \`sh dev/check_env_example.sh\` と \`sh dev/check_release_compose.sh\`。\`plugins-src/\`、\`gleam.toml\`、\`manifest.toml\` を変えたら \`sh dev/check_shared_versions.sh\` と、\`plugins-src/event_logger\` で \`gleam build --warnings-as-errors\`、\`gleam test\`（同じ Postgres を使う）、\`gleam format --check src test\`
 5. \`src/nostr_no_su/admin/\` の \`.gleam\`（\`i18n.gleam\` を除く）か \`assets/admin.css\` を変えたら、\`npm ci && npm run build:css\` を実行して \`priv/static/admin.css\` の差分を残す
-6. 仕様の「検証の手順」（プランにあるもの、または issue の受け入れ条件から自分で組んだもの）をすべて実行し、出力の抜粋を報告ファイルに書く
+6. 仕様の「検証の手順」（プランにあるもの、または issue の受け入れ条件から自分で組んだもの）をすべて実行し、手順の番号ごとに結果を 1 行ずつ報告ファイルに書く（シェルコマンドでない手順も結果を書く）
 7. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに \`sh dev/sweep_refs.sh . <語>...\` を回し、README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる（0 件でも報告ファイルに語を書く）
 8. 自己レビュー: \`git diff\` を受け入れ条件、動作の誤り、DRY、命名、文書の食い違いの観点で 1 回読み、見つけたものは直す
 
