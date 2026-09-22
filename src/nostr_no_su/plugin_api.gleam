@@ -97,7 +97,8 @@ pub fn publish_event(
 }
 
 /// `pubkey` の名義で書かれた `kind` のイベントのうち `created_at` が最新の 1 件を、
-/// 監視の用途のリレーへ問い合わせて返す。戻り値は `{ok, EventMap}`（`event.to_map`
+/// 監視の用途のリレーへ問い合わせて返す。問い合わせた `pubkey` と `kind` の両方に
+/// 一致するイベントだけを候補にする。戻り値は `{ok, EventMap}`（`event.to_map`
 /// の形）、1 件も無ければ `{ok, none}`、失敗は `{error, Reason}`。詳細は
 /// `docs/plugin-api.md` 第 14 章。
 pub fn fetch_event(pubkey: Dynamic, kind: Dynamic) -> Result(Dynamic, String) {
@@ -154,7 +155,8 @@ pub fn publish_with(
 /// で登録を確かめる、(4) `relay_list.entries` を引く（失敗は
 /// `relay_list_not_responding`）、(5) `relay_list.urls(entries, relay_list.Monitor)`
 /// が空なら `no_monitor_relay_registered`、(6) 1 本ごとに `task.start` で問い合わせて
-/// 共通の期限まで待つ、(7) 1 本も応答しなかった（`relay_client.start` が失敗した本と、
+/// 共通の期限まで待つ（届くイベントは `pubkey` と `kind` の両方に一致するものだけを
+/// 集める）、(7) 1 本も応答しなかった（`relay_client.start` が失敗した本と、
 /// 期限までに EOSE が届かなかった本を数える）なら `no_monitor_relay_connected`、
 /// (8) 集めたイベントを `newest` に渡し、`Some` なら `event.to_map`、`None` なら
 /// `none` の atom を `Ok` で返す。
@@ -182,10 +184,9 @@ pub fn fetch_with(
     urls -> {
       let deadline = task.deadline_in(fetch_timeout_ms)
       let await_deadline = task.deadline_in(fetch_timeout_ms + gather_margin_ms)
-      let filter = fetch_filter(pubkey, kind)
       let outcomes =
         list.map(urls, fn(url) {
-          task.start(fn() { query(url, filter, deadline) })
+          task.start(fn() { query(url, pubkey, kind, deadline) })
         })
         |> list.map(task.await(_, await_deadline))
         |> list.map(result.flatten)
@@ -225,15 +226,18 @@ fn fetch_filter(pubkey: String, kind: Int) -> Filter {
   )
 }
 
-/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`filter` の REQ を
-/// 送って `Ended`（EOSE）を受けるか期限に達するまで集め、接続を閉じる。`collect` が
-/// `Ended` を受けずに期限に達したときは、集めたイベントを捨てて `Error(Nil)` を
-/// 返す（`limit: 1` の問い合わせではイベントの直後に EOSE が届くので、期限までに
+/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`pubkey` の名義の
+/// `kind` のイベントを求める REQ（`fetch_filter`）を送り、`Ended`（EOSE）を受けるか
+/// 期限に達するまで集め、接続を閉じる。届くイベントは `handle_incoming` が
+/// `pubkey` と `kind` に一致するものだけを `Found` にする。`collect` が `Ended` を
+/// 受けずに期限に達したときは、集めたイベントを捨てて `Error(Nil)` を返す
+/// （`limit: 1` の問い合わせではイベントの直後に EOSE が届くので、期限までに
 /// EOSE が無い本は応答しなかった本として数える）。`relay_client.start` が失敗した
 /// ときも `Error(Nil)`。
 fn query(
   url: String,
-  filter: Filter,
+  pubkey: String,
+  kind: Int,
   deadline: task.Deadline,
 ) -> Result(List(Event), Nil) {
   // `stratus.start` は呼び出し元（この使い捨てプロセス）にリンクするので、EOSE の
@@ -242,19 +246,11 @@ fn query(
   // メッセージは下の `process.receive` に一致しないので、そのまま放置する。
   process.trap_exits(True)
   let reply = process.new_subject()
-  let handle_incoming = fn(received: relay_client.Received) {
-    case received {
-      relay_client.ReceivedEvent(subscription_id: _, event: verified) ->
-        process.send(reply, Found(event.verified_event(verified)))
-      relay_client.ReceivedEose(subscription_id: _) ->
-        process.send(reply, Ended)
-    }
-  }
   use client <- result.try(
     relay_client.start(
       url,
-      fn() { Ok([#(fetch_subscription_id, filter)]) },
-      handle_incoming,
+      fn() { Ok([#(fetch_subscription_id, fetch_filter(pubkey, kind))]) },
+      handle_incoming(_, pubkey, kind, reply),
       fn(_ack) { Nil },
       None,
       relay_client.subscription_retry_delay,
@@ -277,8 +273,32 @@ fn query(
   collected
 }
 
-/// `query` の中の合図。
-type Incoming {
+/// `query` の `handle_incoming`。届いたイベントのうち、問い合わせた `pubkey` と
+/// `kind` の両方に一致するものだけを `Found` として `reply` に送る。一致しない
+/// イベントは捨てる（リレーが返すイベントは REQ のフィルターと一致するとは
+/// 限らない）。EOSE は `Ended` を送る。`fetch_event` の照合のテストが `reply` を
+/// 読んで確かめるため公開する。
+pub fn handle_incoming(
+  received: relay_client.Received,
+  pubkey: String,
+  kind: Int,
+  reply: Subject(Incoming),
+) -> Nil {
+  case received {
+    relay_client.ReceivedEvent(subscription_id: _, event: verified) -> {
+      let candidate = event.verified_event(verified)
+      case candidate.pubkey == pubkey && candidate.kind == kind {
+        True -> process.send(reply, Found(candidate))
+        False -> Nil
+      }
+    }
+    relay_client.ReceivedEose(subscription_id: _) -> process.send(reply, Ended)
+  }
+}
+
+/// `query` の中の合図。`handle_incoming` が `reply` に送り、`collect` が受け取る。
+/// `handle_incoming` のテストが参照するため公開する。
+pub type Incoming {
   Found(event: Event)
   Ended
 }
