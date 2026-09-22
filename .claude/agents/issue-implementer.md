@@ -38,7 +38,7 @@ hooks:
 - プランの「差し替え後の文」と文書への追記の文は逐語で写し、PR を作る前に原文と照合する。要旨で書き換えない
 - プランの「テスト」の表が指す検査の対象（属性、包み、文言）は受け入れ条件として扱い、粒度を落とさない（表が「理由が `lang="en"`」なら、理由の文字列だけを `string.contains` で見ない）
 - v0.1 未満で非公開なので、後方互換、廃止ログ、移行案内、互換レイヤーは作らない。消すものは痕跡ごと消す
-- README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example など、変更に関係する文書も同じ PR で直す
+- README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example など、変更に関係する文書も同じ PR で直す
 - 手順書や runbook に節を足すときは、依存する既存の節（前提を述べている段落）を読み直し、その前提を引き継ぐ
 - テストを足す、移す、消したときは、そのファイルのモジュール Doc（`////`）の列挙も同じコミットで直す
 
@@ -51,7 +51,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 5. `examples/` を変えたら `erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl`。`vendor/` を変えたら `sh dev/check_vendor_stratus.sh`。`docker-compose.yml`、`docker-compose.release.yml`、`.env.example` のどれかを変えたら `sh dev/check_env_example.sh` と `sh dev/check_release_compose.sh`。`plugins-src/`、`gleam.toml`、`manifest.toml` を変えたら `sh dev/check_shared_versions.sh` と、`plugins-src/event_logger` で `gleam build --warnings-as-errors`、`gleam test`（Postgres つき）、`gleam format --check src test`
 6. `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする
 7. プランの「検証の手順」をすべて実行し、出力を保存する。手順の番号ごとに結果を PR 本文の「テストと検証」へ 1 行ずつ写す（画面や GitHub の描画の確認など、シェルコマンドでない手順も結果を書く。欠けた番号があると PR レビューの指摘になる）。プランがあるとき（tier none では回さない）は、プランの本文を保存したファイルで `sh <作業ツリー>/dev/check_plan_tests.sh <プランのファイル> <作業ツリー>` を回し、表を「テストと検証」に貼る。「無し」と出た名前は足すか、改名したなら「プランからの変更」に対応表（プランの名前 → 実際の名前）を書く
-8. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる。確かめた語を「テストと検証」に書く（0 件でも）。`gh pr create` の前に `dev/hook_pr_body_gate.sh` が本文の必須の節（「## 概要」「## 変更点」「## テストと検証」、「掃き出した語」の行、`Closes #`、設計メモの「### 決めたこと」と受け入れ条件の表）を機械的に確かめ、欠けていれば止める。hook は保険であり、この手順は省かない
+8. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる。確かめた語を「テストと検証」に書く（0 件でも）。`gh pr create` の前に `dev/hook_pr_body_gate.sh` が本文の必須の節（「## 概要」「## 変更点」「## テストと検証」、「掃き出した語」の行、`Closes #`、設計メモの「### 決めたこと」と受け入れ条件の表）を機械的に確かめ、欠けていれば止める。hook は保険であり、この手順は省かない
 9. 自己レビュー: push の前に差分を PR レビュアーの must と should の観点（受け入れ条件、動作の誤り、DRY、命名、文書の食い違い）で 1 回読み、見つけたものは直す
 - UI を変える issue（`ui: true`）でだけ、`dev/screenshots.mjs` で main と作業ブランチの両方の画面を撮り（幅 1280 と 375、ライトとダーク。同じ初期状態を作ってから）、PR を作った直後に `gh pr comment <PR> --attach <png>` で「変更前」「変更後」を貼る。貼るのは変えた画面だけで、全画面の一式は貼らない（撮影は一式でよいが、貼るのは差分のある画面に絞る）。言語は日本語（`ja-JP`）で撮り、英語は貼らない。英語画面の修正が主題の issue のときだけ英語で撮る。変えた画面の状態（空、エラー、承認待ちなど）は漏らさない。見た目の変わった画面が 1 つも無いとき（リファクタリングなど）は貼らず、「テストと検証」に「変更前と変更後の一式を撮って比べ、見た目の変わった画面は無い」と 1 行書く（`cmp` で一致した枚数と、一致しなかった画面を Read で見比べた結果）。UI を変えない issue では撮らない
 

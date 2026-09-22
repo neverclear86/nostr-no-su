@@ -1,9 +1,11 @@
 #!/bin/sh
-# README に載せる管理 UI のスクリーンショット（docs/images/usage/）を撮り直す。
-# 撮影用のサーバー（dev/admin_preview.gleam）を起動し、dev/screenshots.mjs の
-# --readme モードで英語と日本語の 8 枚ずつを出力先（既定は docs/images/usage）に
-# 上書きしてから止める。chromium は npx playwright-core install chromium で先に
-# 入れておく（docs/development.md の「管理 UI の CSS と画面の撮影」）。
+# README に載せる管理 UI のスクリーンショットと、docs/usage.md に載せる要素の
+# 切り出し画像（ともに docs/images/usage/）を撮り直す。撮影用のサーバー
+# （dev/admin_preview.gleam）を起動し、dev/screenshots.mjs の --readme モードで
+# 英語と日本語のダッシュボード 1 枚ずつを、--usage モードで日本語の切り出し 18 枚を
+# 出力先（既定は docs/images/usage）に上書きしてから止める。chromium は
+# npx playwright-core install chromium で先に入れておく（docs/development.md の
+# 「管理 UI の CSS と画面の撮影」）。
 #
 # 使い方: sh dev/readme_shots.sh [出力先]
 set -eu
@@ -25,3 +27,4 @@ curl -s -o /dev/null -u admin:preview-password "http://127.0.0.1:$((port + 3))/"
 }
 node dev/screenshots.mjs --readme "$out"
 node dev/screenshots.mjs --readme "$out" ja-JP
+node dev/screenshots.mjs --usage "$out" ja-JP

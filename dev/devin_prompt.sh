@@ -94,7 +94,7 @@ cat <<PROMPT
 - 関数型の書き方（不変データ、Result、パターンマッチ、小さな純粋関数）。既存のモジュールの流儀に合わせる
 - 全関数に簡潔な Doc コメント（\`///\`）を書く。コード内コメントは日本語で書く（ログ文字列、識別子、エラーメッセージは英語）
 - Doc コメントは、この変更がマージされた時点の動作だけを書く。行番号、issue 番号、後続 issue で配線される動作は書かない。プランが文言を指定していればそのまま使う
-- README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example など、変更に関係する文書も同じ変更で直す
+- README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example など、変更に関係する文書も同じ変更で直す
 - 手順書や runbook に節を足すときは、依存する既存の節（前提を述べている段落）を読み直し、その前提を引き継ぐ
 - テストを足す、移す、消したときは、そのファイルのモジュール Doc（\`////\`）の列挙も直す
 
@@ -105,7 +105,7 @@ cat <<PROMPT
 4. \`examples/\` を変えたら \`erlc -Wall -Werror -o "\$(mktemp -d)" examples/plugins/*/src/*.erl\`。\`vendor/\` を変えたら \`sh dev/check_vendor_stratus.sh\`。\`docker-compose.yml\`、\`docker-compose.release.yml\`、\`.env.example\` のどれかを変えたら \`sh dev/check_env_example.sh\` と \`sh dev/check_release_compose.sh\`。\`plugins-src/\`、\`gleam.toml\`、\`manifest.toml\` を変えたら \`sh dev/check_shared_versions.sh\` と、\`plugins-src/event_logger\` で \`gleam build --warnings-as-errors\`、\`gleam test\`（同じ Postgres を使う）、\`gleam format --check src test\`
 5. \`src/nostr_no_su/admin/\` の \`.gleam\`（\`i18n.gleam\` を除く）か \`assets/admin.css\` を変えたら、\`npm ci && npm run build:css\` を実行して \`priv/static/admin.css\` の差分を残す
 6. 仕様の「検証の手順」（プランにあるもの、または issue の受け入れ条件から自分で組んだもの）をすべて実行し、手順の番号ごとに結果を 1 行ずつ報告ファイルに書く（シェルコマンドでない手順も結果を書く）
-7. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに \`sh dev/sweep_refs.sh . <語>...\` を回し、README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる（0 件でも報告ファイルに語を書く）
+7. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに \`sh dev/sweep_refs.sh . <語>...\` を回し、README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる（0 件でも報告ファイルに語を書く）
 8. 自己レビュー: \`git diff\` を受け入れ条件、動作の誤り、DRY、命名、文書の食い違いの観点で 1 回読み、見つけたものは直す
 
 ## 報告ファイル

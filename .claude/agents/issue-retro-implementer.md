@@ -37,7 +37,7 @@ disallowedTools: Agent
 2. `.claude/workflows/*.js` を変えたら `node --check` を通し、`.claude/skills/issue-workflow/SKILL.md` の「dry run」の節のシナリオのうち変えた経路を通るものを `Workflow` ツールで回して `results` を確かめる。`Workflow` ツールが使えなければ、変えた関数を `node -e` で描画して確かめ、PR 本文に「dry run はこのセッションが回す」と書く
 3. `dev/` のスクリプトを変えたら `sh -n` と、仮のファイルでの実行
 4. `.gleam` を変えたときだけ `gleam build --warnings-as-errors`、`gleam test`、`gleam format --check src test dev`
-5. 変えた語ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/、`.claude/` に古い記述が残っていないことを確かめる
+5. 変えた語ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/、`.claude/` に古い記述が残っていないことを確かめる
 6. 自己レビュー: 差分を DRY、命名、文書の食い違いの観点で 1 回読む
 
 ## GitHub への書き込み
