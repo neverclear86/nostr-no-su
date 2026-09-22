@@ -153,6 +153,7 @@ import nostr_no_su/nostr/event
 import nostr_no_su/nostr/nip19
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_config
+import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client.{
   type Acknowledgement, type Authenticator, type Received, type Subscriptions,
@@ -236,11 +237,14 @@ pub type Admin {
   Admin(bind: String, port: Int, password: String)
 }
 
-/// 動かすプラグインとバンカーと監視、管理 UI を動かすかどうか、接続をどう開くか、
-/// 接続の再接続の待ち時間、実行時のリレーの一覧を持つ `relay_list` の名前。
+/// 動かすプラグインと、起動時に読み込めなかったプラグインの一覧と、バンカーと
+/// 監視、管理 UI を動かすかどうか、接続をどう開くか、接続の再接続の待ち時間、
+/// 実行時のリレーの一覧を持つ `relay_list` の名前。`not_loaded_plugins` は
+/// 起動時に確定し、管理 UI がそのまま出す。
 pub type Spec {
   Spec(
     plugins: List(PluginSpec),
+    not_loaded_plugins: List(plugin_loader.NotLoaded),
     monitor: Monitor,
     bunker: Bunker,
     admin: Option(Admin),
@@ -675,6 +679,7 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       nsec: bunker.nsec(bunker_name, _),
       reload_accounts: fn() { bunker.reload_accounts(bunker_name) },
       plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
+      not_loaded_plugins: spec.not_loaded_plugins,
       reenable_plugin: reenable_plugin(spec.plugins, _),
       plugin_page_content: fn(plugin, key, accounts) {
         plugin_page_content(spec.plugins, plugin, key, accounts)

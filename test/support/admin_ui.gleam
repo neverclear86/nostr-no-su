@@ -21,6 +21,7 @@ import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
+import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
@@ -70,6 +71,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       relays: Ok([]),
       sessions: Ok([]),
       plugins: [],
+      not_loaded_plugins: [],
       now: 2000,
     )
   let pending_mismatch =
@@ -146,6 +148,16 @@ pub fn pages(language: i18n.Language) -> List(String) {
           pages: [],
         ),
         dashboard.PluginRow("plugin-d", None, pages: []),
+      ],
+      not_loaded_plugins: [
+        plugin_loader.NotLoaded(
+          id: "demo_plugin",
+          reason: "unsupported api version 2 (expected 1)",
+        ),
+        plugin_loader.NotLoaded(
+          id: "broken-bundle",
+          reason: "no ebin directory found (expected broken-bundle/ebin or broken-bundle/*/ebin)",
+        ),
       ],
       now: 2000,
     )

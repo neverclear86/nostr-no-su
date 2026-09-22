@@ -92,6 +92,7 @@ pub fn messages_with_values_follow_each_language_test() {
       "1 overloaded · 2 disabled · 3 unavailable",
       "過負荷 1 · 無効 2 · 応答なし 3",
     ),
+    #(i18n.PluginsNotLoadedShort(2), "2 failed to load", "読み込み失敗 2"),
     #(
       i18n.ApprovalRequestGone(10),
       "This connection request was not found. It may have expired (requests expire after 10 minutes) or already been approved or denied. Connect again from the client.",
@@ -172,7 +173,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NoBunkerRelayShort -> Some(i18n.PluginsRunningOfTotal(1, 2))
     i18n.PluginsRunningOfTotal(_, _) -> Some(i18n.PluginIssueCounts(1, 2, 3))
     i18n.PluginIssueCounts(_, _, _) -> Some(i18n.NoPluginsEnabledShort)
-    i18n.NoPluginsEnabledShort -> Some(i18n.PendingConnections)
+    i18n.NoPluginsEnabledShort -> Some(i18n.PluginsNotLoadedShort(2))
+    i18n.PluginsNotLoadedShort(_) -> Some(i18n.PendingConnections)
     i18n.PendingConnections -> Some(i18n.PendingSecretNotOffered)
     i18n.PendingSecretNotOffered -> Some(i18n.PendingSecretMismatch)
     i18n.PendingSecretMismatch -> Some(i18n.NoPermissionsRequestedBadge)
@@ -216,7 +218,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UnreadableAccountsWarning ->
       Some(i18n.UnreadableReason(vault.PublicKeyMismatch))
     i18n.UnreadableReason(_) -> Some(i18n.UnreadableNotDeletable)
-    i18n.UnreadableNotDeletable -> Some(i18n.ReasonLabel)
+    i18n.UnreadableNotDeletable -> Some(i18n.NotLoadedPlugins)
+    i18n.NotLoadedPlugins -> Some(i18n.NotLoadedPluginsWarning)
+    i18n.NotLoadedPluginsWarning -> Some(i18n.ReasonLabel)
     i18n.ReasonLabel -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
     i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndPublicKey)
@@ -389,12 +393,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 219 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 222 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 219
+  assert list.length(messages) == 222
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

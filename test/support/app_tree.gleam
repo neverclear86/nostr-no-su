@@ -207,6 +207,7 @@ pub fn start_loading_bunker_tree_with_open(
 ) -> Pid {
   start_tree(app.Spec(
     plugins: [],
+    not_loaded_plugins: [],
     monitor: idle_monitor(),
     bunker: bunker_spec(name, store, [test_relay()], retry_delay),
     admin: None,

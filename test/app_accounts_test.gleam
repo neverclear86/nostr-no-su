@@ -421,6 +421,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
       plugins: [
         forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
       ],
+      not_loaded_plugins: [],
       monitor: app.Monitor(
         name: process.new_name("test_dedup"),
         dedup_capacity: 8,
@@ -1154,6 +1155,7 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
   let spec =
     app.Spec(
       plugins: [],
+      not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(name, store, [test_relay()], fixed_retry_delay),
       admin: None,

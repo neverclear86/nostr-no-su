@@ -73,7 +73,7 @@ fn put_plugin(module: String, name: String, outdir: String) -> Nil {
 
 /// `PLUGIN_DIR` が未設定なら、プラグインは 0 件で「無効」の行だけが出る。
 pub fn load_all_without_plugin_dir_test() {
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(None, [], dict.new(), plugin.default_call_timeout_ms)
   assert plugins == []
   assert list.length(notes) == 1
@@ -83,7 +83,7 @@ pub fn load_all_without_plugin_dir_test() {
 /// 存在しないディレクトリーを指しても起動は続き、理由が 1 行出る。
 pub fn load_all_missing_directory_test() {
   let fixture = beam_fixture.new("missing")
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root <> "/nope"),
       [],
@@ -100,7 +100,7 @@ pub fn load_all_not_a_directory_test() {
   let fixture = beam_fixture.new("not_a_dir")
   let path = fixture.root <> "/file.txt"
   beam_fixture.write(path, "not a directory")
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(path),
       [],
@@ -115,7 +115,7 @@ pub fn load_all_not_a_directory_test() {
 pub fn load_all_flat_beam_test() {
   let fixture = beam_fixture.new("flat")
   put_plugin(fixture.module, "flat_plugin", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -135,7 +135,7 @@ pub fn load_all_bundle_ebin_test() {
     "bundle_plugin",
     ebin_in(fixture, [fixture.module]),
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -152,7 +152,7 @@ pub fn load_all_shipment_layout_test() {
   let fixture = beam_fixture.new("shipment")
   let ebin = ebin_in(fixture, [fixture.module, "some_app"])
   put_plugin(fixture.module, "shipment_plugin", ebin)
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -171,7 +171,7 @@ pub fn load_all_broken_beam_test() {
   let good = beam_fixture.name(fixture, "bbb")
   beam_fixture.write_garbage(fixture.root <> "/" <> broken <> ".beam")
   put_plugin(good, "survivor_plugin", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -192,7 +192,7 @@ pub fn load_all_api_mismatch_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -203,12 +203,41 @@ pub fn load_all_api_mismatch_test() {
   assert has_note(notes, "unsupported api version 2")
 }
 
+/// `not_loaded` に、読み込めなかった候補が識別子と理由の構造で乗る。理由から
+/// モジュール名の接頭辞は外れるが、ログの行には接頭辞付きのまま残る。
+pub fn load_all_reports_not_loaded_test() {
+  let fixture = beam_fixture.new("not_loaded")
+  beam_fixture.compile(
+    beam_fixture.plugin_source(fixture.module, 2, "not_loaded_plugin"),
+    fixture.module,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(not_loaded:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: fixture.module,
+        reason: "unsupported api version 2 (expected 1)",
+      ),
+    ]
+  assert has_note(
+    notes,
+    fixture.module <> ": unsupported api version 2 (expected 1)",
+  )
+}
+
 /// ebin を持たないディレクトリーは、期待する置き場所を添えて 1 行報告する。
 pub fn load_all_directory_without_ebin_test() {
   let fixture = beam_fixture.new("no_ebin")
   let bundle = beam_fixture.name(fixture, "empty")
   beam_fixture.mkdir(fixture.root <> "/" <> bundle)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -216,8 +245,43 @@ pub fn load_all_directory_without_ebin_test() {
       plugin.default_call_timeout_ms,
     )
   assert plugins == []
-  assert has_note(notes, "no ebin directory found")
-  assert has_note(notes, bundle <> "/ebin or " <> bundle <> "/*/ebin")
+  // 完全一致で検査し、報告の文面が静かに変わらないことを確かめる。
+  assert list.contains(
+    notes,
+    "[plugin_loader] "
+      <> bundle
+      <> ": no ebin directory found (expected "
+      <> bundle
+      <> "/ebin or "
+      <> bundle
+      <> "/*/ebin)",
+  )
+}
+
+/// ebin の無いディレクトリーでは、`not_loaded` の `id` がディレクトリー名、
+/// `reason` が期待する置き場所を添えた文になる。
+pub fn load_all_not_loaded_uses_directory_id_test() {
+  let fixture = beam_fixture.new("not_loaded_dir")
+  let bundle = beam_fixture.name(fixture, "empty")
+  beam_fixture.mkdir(fixture.root <> "/" <> bundle)
+  let plugin_loader.LoadOutcome(not_loaded:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: bundle,
+        reason: "no ebin directory found (expected "
+          <> bundle
+          <> "/ebin or "
+          <> bundle
+          <> "/*/ebin)",
+      ),
+    ]
 }
 
 /// プラグインでないエントリーは黙って無視する。報告行は集計の 1 行だけで、
@@ -226,7 +290,7 @@ pub fn load_all_ignores_non_plugin_entries_test() {
   let fixture = beam_fixture.new("junk")
   beam_fixture.write(fixture.root <> "/.gitkeep", "")
   beam_fixture.write(fixture.root <> "/README.md", "# plugins")
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -239,6 +303,25 @@ pub fn load_all_ignores_non_plugin_entries_test() {
   assert !has_note(notes, "skipped")
 }
 
+/// 集計行・影の報告・`PLUGIN_DIR` 未設定はログにだけ出て、`not_loaded` には
+/// 入らない。
+pub fn load_all_not_loaded_excludes_info_notes_test() {
+  let fixture = beam_fixture.new("not_loaded_ok")
+  put_plugin(fixture.module, "ok_plugin", fixture.root)
+  let plugin_loader.LoadOutcome(not_loaded:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert not_loaded == []
+
+  let plugin_loader.LoadOutcome(not_loaded: without_dir, ..) =
+    plugin_loader.load_all(None, [], dict.new(), plugin.default_call_timeout_ms)
+  assert without_dir == []
+}
+
 /// `plugin_name/0` が重なるプラグインは、名前順で先に読み込んだ方を残す。
 pub fn load_all_duplicate_name_test() {
   let fixture = beam_fixture.new("duplicate")
@@ -246,7 +329,7 @@ pub fn load_all_duplicate_name_test() {
   let second = beam_fixture.name(fixture, "bbb")
   put_plugin(first, "same_name", fixture.root)
   put_plugin(second, "same_name", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -259,12 +342,49 @@ pub fn load_all_duplicate_name_test() {
   assert !has_note(notes, first <> ": duplicate")
 }
 
+/// 理由が 120 文字を超えるときは、`not_loaded` の `reason` だけ末尾に省略記号を
+/// 付けて切る。ログの行は切らない。
+pub fn load_all_not_loaded_truncates_long_reason_test() {
+  let fixture = beam_fixture.new("long_reason")
+  let long_name = string.repeat("a", times: 130)
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  beam_fixture.compile(
+    beam_fixture.plugin_source(first, 1, long_name),
+    first,
+    fixture.root,
+  )
+  beam_fixture.compile(
+    beam_fixture.plugin_source(second, 1, long_name),
+    second,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(not_loaded:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert [plugin_loader.NotLoaded(id:, reason:)] = not_loaded
+  assert id == second
+  assert string.length(reason) == 123
+  assert string.ends_with(reason, "...")
+  assert has_note(
+    notes,
+    second
+      <> ": duplicate plugin name \""
+      <> long_name
+      <> "\"; keeping the first",
+  )
+}
+
 /// 内蔵プラグインと同名の外部プラグインは採用しない。プラグイン名はダッシュ
 /// ボードとログの識別子なので、内蔵・外部を区別せず一意にする。
 pub fn load_all_rejects_reserved_name_test() {
   let fixture = beam_fixture.new("reserved")
   put_plugin(fixture.module, "console_logger", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       ["console_logger"],
@@ -286,7 +406,7 @@ pub fn load_all_multiple_directories_test() {
   beam_fixture.mkdir(second)
   put_plugin(beam_fixture.name(fixture, "zzz"), "first_dir_plugin", first)
   put_plugin(beam_fixture.name(fixture, "aaa"), "second_dir_plugin", second)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(first <> ":" <> second),
       [],
@@ -306,7 +426,7 @@ pub fn load_all_skips_unreadable_directory_in_list_test() {
   let second = fixture.root <> "/second"
   beam_fixture.mkdir(second)
   put_plugin(fixture.module, "survivor_plugin", second)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root <> "/nope" <> ":" <> second),
       [],
@@ -329,7 +449,7 @@ pub fn load_all_first_directory_shadows_test() {
   beam_fixture.mkdir(second)
   put_plugin(fixture.module, "first_dir_plugin", first)
   put_plugin(fixture.module, "second_dir_plugin", second)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(first <> ":" <> second),
       [],
@@ -359,7 +479,7 @@ pub fn load_all_duplicate_name_across_directories_test() {
   let second_module = beam_fixture.name(fixture, "bbb")
   put_plugin(beam_fixture.name(fixture, "aaa"), "same_name", first)
   put_plugin(second_module, "same_name", second)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(first <> ":" <> second),
       [],
@@ -377,7 +497,7 @@ pub fn load_all_duplicate_name_across_directories_test() {
 /// `:` だけの指定は有効なディレクトリーを 1 つも含まないので、未設定と同じ
 /// 1 行になる。
 pub fn load_all_only_separators_test() {
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some("::"),
       [],
@@ -398,7 +518,7 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
   let ebin = ebin_in(fixture, ["minimal_plugin"])
   let unrelated = beam_fixture.name(fixture, "unrelated")
   beam_fixture.compile(beam_fixture.value_source(unrelated, 1), unrelated, ebin)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -423,7 +543,7 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
 pub fn load_all_skips_shadowed_entry_module_flat_test() {
   let fixture = beam_fixture.new("shadow_flat")
   beam_fixture.write_garbage(fixture.root <> "/minimal_plugin.beam")
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -457,7 +577,7 @@ pub fn load_all_reports_shadowed_modules_test() {
     second_ebin,
   )
 
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -484,7 +604,7 @@ pub fn load_all_reports_shadowed_module_versions_test() {
   let ebin = ebin_in(fixture, [fixture.module])
   beam_fixture.write_garbage(ebin <> "/lists.beam")
   put_plugin(fixture.module, "shadow_versions_plugin", ebin)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -515,7 +635,7 @@ pub fn load_all_required_versions_match_test() {
     fixture.module,
     ebin,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -544,7 +664,7 @@ pub fn load_all_required_versions_host_wins_test() {
     fixture.module,
     ebin,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -570,7 +690,7 @@ pub fn load_all_required_versions_mismatch_test() {
     fixture.module,
     ebin,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -598,7 +718,7 @@ pub fn load_all_required_versions_missing_app_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -630,7 +750,7 @@ pub fn load_all_required_versions_bad_shape_test() {
     bad_list,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -663,7 +783,7 @@ pub fn load_all_required_versions_timeout_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -700,7 +820,7 @@ pub fn load_all_required_versions_broken_app_test() {
     ebin,
   )
   put_plugin(good, "survivor_plugin", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -727,7 +847,7 @@ pub fn load_all_min_host_version_too_old_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -765,7 +885,7 @@ pub fn load_all_min_host_version_bad_shape_test() {
     bad_pre,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -807,7 +927,7 @@ pub fn load_all_shadow_broken_app_test() {
   )
   put_plugin(second, "second_plugin", second_ebin)
 
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -840,7 +960,7 @@ pub fn load_all_shadow_dedup_and_mixed_test() {
   )
   put_plugin(second, "second_plugin", second_ebin)
 
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -865,7 +985,7 @@ pub fn load_all_shadow_dedup_and_mixed_test() {
 pub fn load_all_dispatches_event_test() {
   let fixture = beam_fixture.new("dispatch")
   put_plugin(fixture.module, "dispatch_plugin", fixture.root)
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -893,7 +1013,7 @@ pub fn load_all_example_plugin_test() {
     "examples/plugins/file_logger/src/file_logger.erl",
     fixture.root,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -927,7 +1047,7 @@ pub fn load_all_passes_config_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -961,7 +1081,7 @@ pub fn load_all_rejected_config_test() {
     good,
     ebin_in(fixture, [good]),
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -989,7 +1109,7 @@ pub fn load_all_counter_example_test() {
     "examples/plugins/counter/src/counter.erl",
     fixture.root,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1013,7 +1133,7 @@ pub fn load_all_plugin_with_children_test() {
     fixture.module,
     ebin_in(fixture, [fixture.module]),
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1039,7 +1159,7 @@ pub fn load_all_bad_children_test() {
     good,
     ebin_in(fixture, [good]),
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1061,7 +1181,7 @@ pub fn pages_without_content_export_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1081,7 +1201,7 @@ pub fn page_content_without_pages_export_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1101,7 +1221,7 @@ pub fn page_action_without_pages_is_not_loaded_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1125,7 +1245,7 @@ pub fn pages_must_not_be_empty_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1152,7 +1272,7 @@ pub fn duplicate_page_key_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1176,7 +1296,7 @@ pub fn invalid_page_key_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1201,7 +1321,7 @@ pub fn page_title_missing_reports_page_key_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1226,7 +1346,7 @@ pub fn page_element_must_be_a_map_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1250,7 +1370,7 @@ pub fn pages_wrong_shape_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1278,7 +1398,7 @@ pub fn page_content_crash_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1305,7 +1425,7 @@ pub fn page_content_timeout_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, _notes) =
+  let plugin_loader.LoadOutcome(plugins:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1338,7 +1458,7 @@ pub fn load_all_hanging_metadata_test() {
     fixture.root,
   )
   put_plugin(good, "survivor_plugin", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1365,7 +1485,7 @@ pub fn load_all_hanging_on_load_test() {
     fixture.root,
   )
   put_plugin(good, "survivor_plugin", fixture.root)
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],
@@ -1394,7 +1514,7 @@ pub fn load_all_killed_metadata_test() {
     fixture.module,
     fixture.root,
   )
-  let #(plugins, notes) =
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
     plugin_loader.load_all(
       Some(fixture.root),
       [],

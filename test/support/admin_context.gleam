@@ -281,6 +281,7 @@ pub fn test_context(
         ),
       ]
     },
+    not_loaded_plugins: [],
     reenable_plugin: fn(name) {
       process.send(reports, Reenabled(name))
       Ok(Nil)

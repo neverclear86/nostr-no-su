@@ -9,6 +9,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
+import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import support/account_actions
@@ -102,6 +103,7 @@ fn states() -> dashboard.Snapshot {
       ),
       dashboard.PluginRow("d", None, pages: []),
     ],
+    not_loaded_plugins: [],
     now: 1_789_276_354,
   )
 }
@@ -420,6 +422,47 @@ pub fn only_disabled_plugins_have_a_reenable_button_test() {
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, states()),
     "再有効化",
+  )
+}
+
+/// 読み込めなかったプラグインは、識別子と理由つきでカードに出る。理由は英語のまま
+/// `lang="en"` で包む。
+pub fn dashboard_shows_not_loaded_plugins_test() {
+  let snapshot =
+    dashboard.Snapshot(..states(), not_loaded_plugins: [
+      plugin_loader.NotLoaded(
+        id: "demo_plugin",
+        reason: "unsupported api version 2 (expected 1)",
+      ),
+      plugin_loader.NotLoaded(
+        id: "broken-bundle",
+        reason: "no ebin directory found (expected broken-bundle/ebin or broken-bundle/*/ebin)",
+      ),
+    ])
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(english, "Plugins that failed to load")
+  assert string.contains(
+    english,
+    "These plugins are not running. Fix the cause below and restart the server.",
+  )
+  assert string.contains(english, "<span lang=\"en\">demo_plugin</span>")
+  assert string.contains(
+    english,
+    "<span lang=\"en\">unsupported api version 2 (expected 1)</span>",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, snapshot),
+    "読み込めなかったプラグイン",
+  )
+}
+
+/// `not_loaded_plugins` が 0 件のときはカードごと出さない。
+pub fn dashboard_hides_not_loaded_plugins_when_empty_test() {
+  let snapshot = dashboard.Snapshot(..states(), not_loaded_plugins: [])
+  use language <- list.each([i18n.English, i18n.Japanese])
+  assert !string.contains(
+    dashboard.render(language, view.System, snapshot),
+    "Plugins that failed to load",
   )
 }
 
@@ -1046,6 +1089,36 @@ pub fn empty_sections_show_an_icon_and_a_sentence_test() {
   assert !string.contains(body, "Accounts</h2><span class=\"badge")
   assert !string.contains(body, "Approved sessions</h2><span class=\"badge")
   assert !string.contains(body, "Plugins</h2><span class=\"badge")
+}
+
+/// プラグインのタイルは、読み込めなかった候補が 1 件以上あるとき補足をその件数にし
+/// （警告の色になる）、過負荷・無効・応答なしの内訳より優先する。0 件のときは今までどおり
+/// その内訳を出す。
+pub fn plugins_tile_notes_not_loaded_test() {
+  let with_not_loaded =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), not_loaded_plugins: [
+        plugin_loader.NotLoaded(id: "demo_plugin", reason: "boom"),
+      ]),
+    )
+  assert string.contains(with_not_loaded, "1 failed to load")
+  assert !string.contains(
+    with_not_loaded,
+    "1 overloaded · 1 disabled · 1 unavailable",
+  )
+  assert string.contains(
+    with_not_loaded,
+    "card card-border border-warning bg-warning/15 text-warning",
+  )
+
+  let without_not_loaded = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    without_not_loaded,
+    "1 overloaded · 1 disabled · 1 unavailable",
+  )
+  assert !string.contains(without_not_loaded, "failed to load")
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。

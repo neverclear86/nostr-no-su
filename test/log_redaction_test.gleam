@@ -250,6 +250,7 @@ pub fn redacts_the_database_password_in_a_pgo_crash_report_test() {
 fn spec(pool: pog.Config, admin: Option(app.Admin)) -> app.Spec {
   app.Spec(
     plugins: [],
+    not_loaded_plugins: [],
     monitor: app_tree.idle_monitor(),
     bunker: app.Bunker(
       ..app_tree.bunker_spec(
