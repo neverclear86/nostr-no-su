@@ -108,7 +108,7 @@ pub fn fake_open(
               relay_url,
               subscriptions,
               triggers,
-              relay_client.new_subscription_state(fake_retry_delay),
+              relay_client.new_subscription_state(fake_retry_delay, False),
             )
           }
           None -> process.sleep_forever()
