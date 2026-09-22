@@ -564,7 +564,7 @@ sequenceDiagram
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする。
 見た目は daisyUI のクラスで付け、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
-ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。言語の一覧の「ブラウザーの設定」は cookie を消す。
+ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。言語の切り替えの「ブラウザーの設定」のボタンは cookie を消す。
 テーマは切り替えで保存した cookie から決め、無ければブラウザーの設定に従う。
 
 | メソッド | パス | 役割 |
