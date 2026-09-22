@@ -36,7 +36,7 @@ flowchart LR
     monitor --> plugins
     plugins --> event_logger
     plugins --> others
-    plugins -.->|"プラグインからの送信"| relays
+    plugins -.->|"プラグインからの送信と取得"| relays
     client <-->|"kind 24133"| relays
     relays <--> bunker
     browser --> admin
@@ -61,10 +61,10 @@ flowchart LR
 ツリーの形は起動時に 1 度だけ組む。
 リレーの接続だけは例外で、用途（監視・バンカー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
-ツリーの外で動くプロセスが 2 種類ある。
-プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスである。
-前者は監視だけを張り、後者はリンクを張ったうえで exit を trap する。
-どちらも所有者が死を検知するので、スーパーバイザーの再起動許容回数を消費しない。
+ツリーの外で動くプロセスが 3 種類ある。
+プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、プラグインからの取得の口（`plugin_api`）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
+1 つ目は監視だけを張り、2 つ目はリンクを張ったうえで exit を trap する。3 つ目は問い合わせを集める使い捨てプロセスが、集め終えた時点でリンクを解いて kill する。
+いずれも所有者が死を検知するので、スーパーバイザーの再起動許容回数を消費しない。
 
 ```
 root (one_for_one, 3/60)
@@ -663,7 +663,7 @@ nostr-no-su/
 │       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
 │       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
-│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（署名して監視リレーへ送信）
+│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加

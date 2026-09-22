@@ -629,9 +629,9 @@ plugin_page_action(<<"settings">>, _Values, _Config) ->
 - `<mod>: plugin_page_action/3 must return ok or {error, Reason}, got Atom`
 - `<mod>: plugin_page_action/3: error reason must be a String, got Atom`
 
-## 14. プラグインから本体を呼ぶ（イベントの送信）
+## 14. プラグインから本体を呼ぶ（イベントの送信と取得）
 
-この口はサンドボックスではない。第 1 章のとおりプラグインは本体と同じ VM で動くので、この口は秘密鍵に触れずに送信するための**簡便な手段**であって、権限の境界ではない。
+この口はサンドボックスではない。第 1 章のとおりプラグインは本体と同じ VM で動くので、この口は秘密鍵に触れずに送信と取得を行うための**簡便な手段**であって、権限の境界ではない。送信は第 14.1〜14.4 節と第 14.6 節、取得は第 14.7〜14.9 節で、第 14.5 節の古い本体との互換性は両方に当てはまる。
 
 ### 14.1 呼び出しの形
 
@@ -684,8 +684,52 @@ end.
 
 ### 14.5 古い本体との互換性
 
-この口は本体側の関数なので、`plugin_api_version/0` では有無を判定できない。持たない本体に置いたプラグインは読み込みまでは成功し、呼んだ時点で `undef` になって第 4 章の 1 件の失敗として数えられる（連続 5 回で無効化）。読み込み時に弾きたいプラグインは `plugin_required_versions/0` で `nostr_no_su` の版を宣言すること（第 8.4 節）。照合は**完全一致**なので、宣言したプラグインは本体の版が上がるたびに宣言も上げ直すことになる。
+この章の 2 つの口はどちらも本体側の関数なので、`plugin_api_version/0` では有無を判定できない。持たない本体に置いたプラグインは読み込みまでは成功し、呼んだ時点で `undef` になって第 4 章の 1 件の失敗として数えられる（連続 5 回で無効化）。読み込み時に弾きたいプラグインは `plugin_required_versions/0` で `nostr_no_su` の版を宣言すること（第 8.4 節）。照合は**完全一致**なので、宣言したプラグインは本体の版が上がるたびに宣言も上げ直すことになる。
 
 ### 14.6 送ったイベントの配信
 
 送ったイベントは監視の購読で戻ってくる。登録アカウントが作ったイベントなので、自分を含む全プラグインの `handle_event` に渡る（第 4 章）。`handle_event` の中から呼ぶプラグインは、自分の送信でもう一度呼ばれることを前提に、送る条件を `kind` や `tags` で絞ること。
+
+### 14.7 取得の呼び出しの形
+
+プラグインは `nostr_no_su@plugin_api:fetch_event(Pubkey, Kind)` を外部関数として呼ぶ。
+
+| 引数・戻り値 | 型 | 意味 |
+| --- | --- | --- |
+| `Pubkey` | binary | 64 桁 16 進の公開鍵。登録アカウントのものであること |
+| `Kind` | 整数 | 取得するイベントの kind |
+| 戻り値（成功） | `{ok, EventMap}` | `EventMap` は `nostr_no_su@nostr@event:to_map/1` と同じ形で、`created_at` が最新の 1 件 |
+| 戻り値（該当なし） | `{ok, none}` | どのリレーにも無かった |
+| 戻り値（失敗） | `{error, Reason}` | `Reason` は binary |
+
+```erlang
+case nostr_no_su@plugin_api:fetch_event(Pubkey, 0) of
+    {ok, none} -> none;
+    {ok, #{<<"content">> := Content}} -> Content;
+    {error, Reason} -> {error, Reason}
+end.
+```
+
+複数のリレーが違うイベントを返したときは `created_at` が最大の 1 件を選ぶ。同じ `created_at` が複数あるときは、リレーの一覧で先のもの（同じリレーの中では先に届いたもの）を選ぶ。
+
+### 14.8 問い合わせ先と期限
+
+問い合わせ先は**監視の用途**のリレーである。**リレー 1 本につき新しい接続を 1 本開いて閉じる**。常駐の監視接続の購読には載せないので、`fetch_event` を呼ぶたびにリレーの本数だけハンドシェイクが増える。
+
+NIP-42 の AUTH には応答しないので、読み取りに AUTH を要求するリレーは `auth-required` の CLOSED を返す。EOSE が届かないまま期限に達するので、応答しなかった本として数えられる（そのリレーしか無ければ `{error, <<"no monitor relay is connected">>}` になり、`{ok, none}` にはならない）。
+
+期限は 3.2 秒で、それを超えたら `{error, Reason}` を返す。**第 14.4 節と違って、`plugin_page_content` の中から呼ぶのが想定の用途である**（ページを開いたときに現在の値を取るため）。バンカーが応答しないときは 5 秒、リレーの一覧が応答しないときは 15 秒まで延び、第 13.1 節の 5 秒を超えて 503 になりうる。
+
+### 14.9 取得の理由の文字列
+
+| 理由の文字列 | 意味 |
+| --- | --- |
+| `the plugin API is not installed` | 本体がこの口を有効にしていない |
+| `pubkey must be a String` | `Pubkey` が binary でない |
+| `kind must be an Int` | `Kind` が整数でない |
+| `accounts are not loaded yet` | バンカーがまだアカウントを読み込んでいない |
+| `account is not registered` | `Pubkey` が登録アカウントに無い |
+| `bunker is not responding` | バンカーが応答しない |
+| `the relay list is not responding` | リレーの一覧を持つアクターが応答しない |
+| `no monitor relay is registered` | 監視の用途のリレーが一覧に無い |
+| `no monitor relay is connected` | 監視の用途のリレーはあるが、どの 1 本とも接続できなかったか、期限までに応答しなかった |
