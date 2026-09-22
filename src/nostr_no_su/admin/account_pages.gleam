@@ -430,13 +430,13 @@ fn client_uri_card(language: Language) -> Element(msg) {
   ])
 }
 
-/// URI の QR コード。符号化できなければ理由を出す。
+/// QR コードに載せる文字列 1 つ。完全な `bunker://` URI と、カメラ用のコピー用の文字列のどちらも受ける。符号化できなければ理由を出す。
 fn qr_or_notice(
   language: Language,
   label: String,
-  uri: String,
+  text: String,
 ) -> Element(msg) {
-  case qr.svg(label, uri) {
+  case qr.svg(label, text) {
     Ok(svg) -> svg
     Error(Nil) ->
       view.alert(view.Neutral, [
