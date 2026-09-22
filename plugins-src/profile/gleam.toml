@@ -1,0 +1,16 @@
+name = "profile"
+version = "0.0.0"
+description = "Nostr-no-Su profile plugin (shows the current kind 0 profile of each registered account)"
+
+# 本体（nostr_no_su）の VM に読み込まれて動くプラグインなので、Hex には公開しない。
+# 共有パッケージ（gleam_stdlib / gleam_json）の制約は本体の gleam.toml と一致させること。
+# 影に入る側は本体の版で実行されるため、版がずれると読み込み時には何も起きず、実行時に
+# undef で壊れる。制約を揃えるだけでは版の一致は保証されないので、manifest.toml をコミット
+# し、本体との一致を CI で検査している。
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

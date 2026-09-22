@@ -22,12 +22,22 @@ RUN gleam export erlang-shipment \
 
 # 同梱プラグイン event_logger を本体と同じ toolchain の中でビルドする（OTP を揃え、
 # ホストの Elixir を混ぜないため）。写すのはソースとマニフェストだけにする。
-FROM toolchain AS plugin-build
+FROM toolchain AS plugin-build-event-logger
 WORKDIR /build/event_logger
 COPY plugins-src/event_logger/gleam.toml plugins-src/event_logger/manifest.toml ./
 # Hex の一時的な障害に備えて本体と同じく繰り返す。
 RUN for i in 1 2 3; do gleam deps download && break; [ "$i" = 3 ] && exit 1; sleep 10; done
 COPY plugins-src/event_logger/src src
+RUN gleam export erlang-shipment
+
+# 同梱プラグイン profile を本体と同じ toolchain の中でビルドする（OTP を揃え、
+# ホストの Elixir を混ぜないため）。写すのはソースとマニフェストだけにする。
+FROM toolchain AS plugin-build-profile
+WORKDIR /build/profile
+COPY plugins-src/profile/gleam.toml plugins-src/profile/manifest.toml ./
+# Hex の一時的な障害に備えて本体と同じく繰り返す。
+RUN for i in 1 2 3; do gleam deps download && break; [ "$i" = 3 ] && exit 1; sleep 10; done
+COPY plugins-src/profile/src src
 RUN gleam export erlang-shipment
 
 # gleam のビルドイメージは erlang:29.0.1-alpine の上に /bin/gleam を足したものなので、
@@ -47,7 +57,8 @@ WORKDIR /app
 COPY --from=build --chown=nostr:nostr /app /app
 # ローダーが受け付ける <PLUGIN_DIR>/<name>/<app>/ebin/ のレイアウトのまま置く
 # （docs/plugin-api.md 第 8.1 節）。同名なら先の /app/plugins の同梱版が勝つ。
-COPY --from=plugin-build --chown=nostr:nostr /build/event_logger/build/erlang-shipment /app/plugins/event_logger
+COPY --from=plugin-build-event-logger --chown=nostr:nostr /build/event_logger/build/erlang-shipment /app/plugins/event_logger
+COPY --from=plugin-build-profile --chown=nostr:nostr /build/profile/build/erlang-shipment /app/plugins/profile
 ENV PLUGIN_DIR=/app/plugins
 # 秘密鍵を暗号化するマスターキーを環境変数かファイルで受け取り、復号した秘密鍵を
 # メモリに持つプロセスなので、root では動かさない。

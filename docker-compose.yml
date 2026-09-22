@@ -33,7 +33,7 @@ services:
     volumes:
       # コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限に
       # しておくこと（chmod -R a+rX plugins）。プラグインがここへ書くことはない
-      # ので読み取り専用でマウントする。同梱の event_logger はイメージの
+      # ので読み取り専用でマウントする。同梱の event_logger と profile はイメージの
       # /app/plugins に入っているので、ここへ置き直す必要はない。
       - ./plugins:/plugins:ro
     ports:

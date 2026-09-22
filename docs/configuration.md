@@ -14,7 +14,7 @@
 | `POSTGRES_PASSWORD` | `nostr` | docker compose 専用。同梱の Postgres の接続パスワード（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」） |
 | `POSTGRES_DB` | `nostr_no_su` | docker compose 専用。同梱の Postgres のデータベース名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」） |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。docker イメージには同梱されているので、compose の既定の構成では常に読まれる。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときはこの変数を空にせず、`PLUGIN_DIR=/plugins`（自作プラグインだけを読む）か `PLUGIN_DIR=`（全部無効）にして同梱の `event_logger` を読み込ませない。docker compose では同梱の Postgres を指す |
-| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。`:` 区切りで複数書くと左から順に読み、名前が重なったら先のディレクトリーが勝つ。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](plugin-api.md) の第 8 章）。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持つので、compose を使わない `docker run` でも同梱の `event_logger` が読まれる |
+| `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。`:` 区切りで複数書くと左から順に読み、名前が重なったら先のディレクトリーが勝つ。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](plugin-api.md) の第 8 章）。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持つので、compose を使わない `docker run` でも同梱の `event_logger` と `profile` が読まれる |
 | `PLUGIN_<NAME>_<KEY>` | （空） | プラグイン固有の設定。`<NAME>` は `plugin_name/0` の値を大文字化し `[A-Z0-9]` 以外を `_` にしたもの。プラグインには `<KEY>` を小文字にした binary キーの map として届く（[プラグイン API v1](plugin-api.md) の第 6 章） |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose の構成」）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
@@ -134,7 +134,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 **`PLUGIN_DIR` に置いた BEAM は本体と同じ VM・同じ権限で動く。サンドボックスは無く、秘密鍵を持つプロセスにも到達できる（`sys:get_state/1`）。信頼できるものだけを置くこと。** 第三者から受け取ったプラグインはソースを読んでから置く。
 
-同梱の `event_logger` はイメージの `/app/plugins` に入っており、自作のプラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）を参照。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、左から順に読む。`./plugins` に同梱と同じ名前のプラグインを置くと、先に並べた `/app/plugins` の同梱版が勝つので、改造版を試すときは `PLUGIN_DIR=/plugins` を渡して同梱版を外す。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
+同梱の `event_logger` と `profile` はイメージの `/app/plugins` に入っており、自作のプラグインは `./plugins` に置くと読み込まれる（コンテナー内の `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡している）。コンテナーは非 root（uid 1000）で動くため、**置いたあとに `chmod -R a+rX plugins` が必要**である。プラグインの置き方は [プラグイン API v1](plugin-api.md) の第 8 章、動作確認用の例は `examples/plugins/file_logger/`（状態を持たない例）と `examples/plugins/counter/`（状態を持つ例）、実プラグインは `plugins-src/event_logger/`（イベントを Postgres へ保存する）と `plugins-src/profile/`（プロフィールを管理 UI に出す）を参照。`PLUGIN_DIR` は `:` 区切りで複数のディレクトリーを並べられ、左から順に読む。`./plugins` に同梱と同じ名前のプラグインを置くと、先に並べた `/app/plugins` の同梱版が勝つので、改造版を試すときは `PLUGIN_DIR=/plugins` を渡して同梱版を外す。`PLUGIN_DIR=` と空にすると読み込みを無効にできる。
 
 プラグイン固有の設定は `PLUGIN_<NAME>_<KEY>` の形の環境変数で渡す（`file_logger` の出力先なら `PLUGIN_FILE_LOGGER_PATH`）。compose の `environment:` は明示的な列挙なので、自分のプラグインの分は `docker-compose.yml`（公開イメージで動かしているなら `docker-compose.release.yml`）に書き足すこと。設定が足りないプラグインは読み込み時に理由を 1 行出して**そのプラグインだけが無効になり**、本体の起動と他のプラグインには影響しない（[プラグイン API v1](plugin-api.md) の第 6 章）。
 

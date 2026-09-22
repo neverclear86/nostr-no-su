@@ -160,8 +160,8 @@ jobs:
       - run: gleam export erlang-shipment
 
   # event_logger プラグイン。影に入る側は本体の版で実行されるため、版がずれると
-  # 実行時に undef で壊れる（検査の内容は dev/check_shared_versions.sh）。
-  # 統合テストと shipment もここで見る。
+  # 実行時に undef で壊れる（検査の内容は dev/check_shared_versions.sh。
+  # plugins-src/ の全プラグインを見る）。統合テストと shipment もここで見る。
   event-logger:
     needs: changes
     if: needs.changes.outputs.plugin == 'true'
@@ -212,6 +212,40 @@ jobs:
           # 本体と同じ docker イメージの中で作る（plugins-src/event_logger/README.md）。
           gleam export erlang-shipment
 
+  # profile プラグイン。DB を使わないので services は無い。
+  profile:
+    needs: changes
+    if: needs.changes.outputs.plugin == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      # uses: のステップには working-directory が効かないので、path はリポジトリの
+      # ルートからのパスで書く。
+      - uses: actions/cache@v6
+        with:
+          path: |
+            plugins-src/profile/build/packages
+            plugins-src/profile/build/dev/erlang/*
+            !plugins-src/profile/build/dev/erlang/profile
+          key: gleam-build-profile-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.gleam-version }}-${{ hashFiles('plugins-src/profile/manifest.toml') }}
+      - name: profile を build、test、format --check、shipment する
+        working-directory: plugins-src/profile
+        run: |
+          set -eu
+          gleam deps download
+          gleam build --warnings-as-errors
+          gleam test
+          gleam format --check src test
+          # 成果物が組めることまで見る。plugins/ に置く成果物はここではなく、
+          # 本体と同じ docker イメージの中で作る（plugins-src/profile/README.md）。
+          gleam export erlang-shipment
+
   # 管理 UI の CSS。生成物をリポジトリに含めているので、描画のモジュール
   # （src/nostr_no_su/admin/ の .gleam。文言の i18n.gleam を除く）か assets/admin.css を
   # 変えたら、ビルドし直してコミットする。クラスを変えなくても、文字列、識別子、
@@ -252,7 +286,7 @@ jobs:
       - name: プラグインの README のビルド手順を実行する
         run: |
           set -eu
-          for readme in plugins-src/event_logger/README.md \
+          for readme in plugins-src/event_logger/README.md plugins-src/profile/README.md \
             examples/plugins/file_logger/README.md examples/plugins/counter/README.md; do
             awk '/^## / { in_section = /^## ビルド$/ }
                  in_section && /^```sh$/ { in_block = 1; next }
@@ -265,15 +299,17 @@ jobs:
       # （plugins-src/event_logger/README.md の「ビルド」）。.beam の数は共有パッケージの版を
       # 上げるたびに変わるので、同梱したアプリの名前を manifest.toml と突き合わせる。
       # manifest.toml には同梱されない dev の依存（gleeunit、envoy）も載るので、包含で比べる。
-      - name: event_logger の成果物に manifest.toml に無いアプリが無いことを確かめる
+      - name: 同梱プラグインの成果物に manifest.toml に無いアプリが無いことを確かめる
         run: |
           set -eu
           export LC_ALL=C
-          test -f plugins/event_logger/event_logger/ebin/event_logger.beam
-          allowed=$( { echo event_logger; grep -o '^  { name = "[^"]*"' plugins-src/event_logger/manifest.toml | cut -d '"' -f 2; } | sort)
-          bundled=$(find plugins/event_logger -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
-          extra=$(comm -13 <(echo "$allowed") <(echo "$bundled"))
-          [ -z "$extra" ] || { echo "manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }
+          for p in event_logger profile; do
+            test -f "plugins/$p/$p/ebin/$p.beam"
+            allowed=$( { echo "$p"; grep -o '^  { name = "[^"]*"' "plugins-src/$p/manifest.toml" | cut -d '"' -f 2; } | sort)
+            bundled=$(find "plugins/$p" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+            extra=$(comm -13 <(echo "$allowed") <(echo "$bundled"))
+            [ -z "$extra" ] || { echo "$p: manifest.toml に無いアプリが同梱されている:" $extra; exit 1; }
+          done
 
   # 同じコミットから 2 回ビルドして同じイメージになること（#181 の完了条件）と、
   # 実行イメージの中身を検査する。定義は #181 のプランを参照。PR では docker に関わる
@@ -353,15 +389,18 @@ jobs:
             echo "実行イメージに gleam か rebar3 が残っている"
             exit 1
           fi
-      - name: 同梱の event_logger がローダーのレイアウトで入っていることを確かめる
+      - name: 同梱のプラグインがローダーのレイアウトで入っていることを確かめる
         run: |
           set -eu
           docker run --rm --entrypoint sh nostr-no-su:ci -c 'test -f /app/plugins/event_logger/event_logger/ebin/event_logger.beam'
+          docker run --rm --entrypoint sh nostr-no-su:ci -c 'test -f /app/plugins/profile/profile/ebin/profile.beam'
           docker image inspect nostr-no-su:ci --format '{{json .Config.Env}}' | grep -q '"PLUGIN_DIR=/app/plugins"'
-          if docker run --rm --entrypoint sh nostr-no-su:ci \
-              -c 'test -e /app/plugins/event_logger/elixir || test -e /app/plugins/event_logger/mix'; then
-            echo "同梱プラグインに Elixir が混ざっている"; exit 1
-          fi
+          for p in event_logger profile; do
+            if docker run --rm --entrypoint sh nostr-no-su:ci \
+                -c "test -e /app/plugins/$p/elixir || test -e /app/plugins/$p/mix"; then
+              echo "$p に Elixir が混ざっている"; exit 1
+            fi
+          done
       - name: ADMIN_PORT が空白だけのとき healthcheck が待ち受けを叩かずに成功することを確かめる
         run: |
           set -eu
