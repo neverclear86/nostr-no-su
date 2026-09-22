@@ -47,9 +47,7 @@ pub fn text_file(path: String) -> String {
 }
 
 /// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。渡された言語で
-/// 描画し、言語の切り替えの項目（表示している言語とそれ以外）と、切り替えを出さない秘密鍵の
-/// ページを通す。テーマの一覧の項目（`view.themes` ごとの表示中の項目の 3 通り）は、
-/// ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
+/// 描画し、言語の切り替えのボタン（押した状態の表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを通す。テーマの切り替えのボタン（`view.themes` ごとに押した状態のボタンが違う 3 通り）は、ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
 /// 状態の分岐を足したら、ここにもその状態のページを足す。
 pub fn pages(language: i18n.Language) -> List(String) {
   let row =
@@ -745,8 +743,6 @@ pub fn components(language: i18n.Language) -> List(String) {
     list.map(
       [
         view.logo_icon(),
-        view.theme_icon(),
-        view.language_icon(),
         view.qr_code_icon(),
         view.info_icon(),
         view.check_circle_icon(),
