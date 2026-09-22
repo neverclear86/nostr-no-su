@@ -102,6 +102,15 @@ fn details_block(summary: String, text: String) -> Dynamic {
   ])
 }
 
+/// ブロック（`image`）。
+fn image_block(url: String, alt: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("image")),
+    #("url", dynamic.string(url)),
+    #("alt", dynamic.string(alt)),
+  ])
+}
+
 /// ブロック（`form`）。`fields` は欄の記述の並び。
 fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
   map_([
@@ -506,4 +515,90 @@ pub fn id_is_rejected_in_table_cells_test() {
   let raw = section_("Cells", [table_block(["A"], [[id_inline("abc")]])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "type \"id\" is only allowed in pairs values")
+}
+
+/// `image` ブロックは `url` の scheme が `http` / `https` なら `view.plugin_image`
+/// の出力を含む。
+pub fn image_block_renders_image_test() {
+  let cases = [
+    #("https://example.com/a.png", "A picture"),
+    #("http://example.com/a.png", "A picture"),
+  ]
+  use #(url, alt) <- list.each(cases)
+  let raw = section_("Media", [image_block(url, alt)])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(body, element.to_string(view.plugin_image(url, alt)))
+}
+
+/// `url` の scheme が `http` / `https` でない（別の scheme、scheme の無い相対
+/// URL、`uri.parse` が `Error` を返す文字列）と、画像を描かずに
+/// `view.plugin_image_placeholder` の出力になり、`<img` の開始タグを含まない。
+pub fn image_block_with_other_scheme_renders_alt_only_test() {
+  let urls = [
+    "data:image/png;base64,AAA", "javascript:alert(1)", "//example.com/a.png",
+    "not a url at all",
+  ]
+  use url <- list.each(urls)
+  let raw = section_("Media", [image_block(url, "A picture")])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.plugin_image_placeholder(
+      i18n.English,
+      i18n.text(i18n.English, i18n.PluginImageNotShown),
+      "A picture",
+    )),
+  )
+  assert !string.contains(body, "<img")
+}
+
+/// `image` ブロックは `url` と `alt` の両方が要り、`url` は String でなければ
+/// ならない。
+pub fn image_block_requires_url_and_alt_test() {
+  let missing_url =
+    map_([#("type", dynamic.string("image")), #("alt", dynamic.string("x"))])
+  let raw_missing_url = section_("Media", [missing_url])
+  let assert Error(reason_url) = plugin_view.section(raw_missing_url, context())
+  assert string.contains(reason_url, "missing url")
+
+  let missing_alt =
+    map_([
+      #("type", dynamic.string("image")),
+      #("url", dynamic.string("https://example.com/a.png")),
+    ])
+  let raw_missing_alt = section_("Media", [missing_alt])
+  let assert Error(reason_alt) = plugin_view.section(raw_missing_alt, context())
+  assert string.contains(reason_alt, "missing alt")
+
+  let bad_url =
+    map_([
+      #("type", dynamic.string("image")),
+      #("url", dynamic.int(1)),
+      #("alt", dynamic.string("x")),
+    ])
+  let raw_bad_url = section_("Media", [bad_url])
+  let assert Error(reason_bad_url) = plugin_view.section(raw_bad_url, context())
+  assert string.contains(reason_bad_url, "url must be a String, got Int")
+}
+
+/// `image` は `table` のセルにも `pairs` の値にも置けない。段が違うので、それぞれ
+/// のインラインの decoder が読む種別の一覧に無い `unknown type "image"` になる。
+pub fn image_is_not_an_inline_test() {
+  let table_raw =
+    section_("Cells", [
+      table_block(["A"], [
+        [image_block("https://example.com/a.png", "x")],
+      ]),
+    ])
+  let assert Error(table_reason) = plugin_view.section(table_raw, context())
+  assert string.contains(table_reason, "unknown type \"image\"")
+
+  let pairs_raw =
+    section_("Values", [
+      pairs_block([#("a", image_block("https://example.com/a.png", "x"))]),
+    ])
+  let assert Error(pairs_reason) = plugin_view.section(pairs_raw, context())
+  assert string.contains(pairs_reason, "value: unknown type \"image\"")
 }
