@@ -1598,13 +1598,13 @@ fn incoming_write_change(
       SessionOpening,
       Some(#(session.signer, session.client)),
     )
-    engine.TouchSession(signer:, client:, ..) -> #(
+    engine.TouchSession(session:) -> #(
       SessionUse,
-      Some(#(signer, client)),
+      Some(#(session.signer, session.client)),
     )
-    engine.UpdateSessionPerms(signer:, client:, ..) -> #(
+    engine.UpdateSessionPerms(session:) -> #(
       PermissionsUpdate,
-      Some(#(signer, client)),
+      Some(#(session.signer, session.client)),
     )
     engine.InsertPending(pending:, ..) -> #(
       PendingRecording,

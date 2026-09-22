@@ -599,11 +599,12 @@ pub fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 /// 反映する。`InsertSession` は同じ（signer, client）の行が無いときだけ末尾に足し、
 /// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。挿入の後に
 /// `evicted` の組を除く。`DeleteSession` は組で除く。`TouchSession` は組の行の
-/// `last_used_at` を `int.max(現在の値, last_used_at)` にし、行が無ければ何もしない。
-/// `InsertPending` は `replaced` と `evicted` の token を除いてから足す。
-/// `DeletePending` は token で除く。`ApprovePending` は `DeletePending` の後に
-/// `InsertSession` と同じ規則でセッションを足す。`UpdateSessionPerms` は組の
-/// 行の `perms` を差し替え、行が無ければ何もしない。
+/// `last_used_at` を `int.max(現在の値, 書き込みのセッションの last_used_at)` にし、
+/// 行が無ければ何もしない。`InsertPending` は `replaced` と `evicted` の token を
+/// 除いてから足す。`DeletePending` は token で除く。`ApprovePending` は
+/// `DeletePending` の後に `InsertSession` と同じ規則でセッションを足す。
+/// `UpdateSessionPerms` は組の行の `perms` を書き込みのセッションの値に差し替え、
+/// 行が無ければ何もしない。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
     engine.InsertSession(session:, evicted:) ->
@@ -618,26 +619,35 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
           #(session.signer, session.client) != #(signer, client)
         }),
       )
-    engine.TouchSession(signer:, client:, last_used_at:) ->
+    engine.TouchSession(session: touched) ->
       Database(
         ..database,
         sessions: list.map(database.sessions, fn(session) {
-          case #(session.signer, session.client) == #(signer, client) {
+          case
+            #(session.signer, session.client)
+            == #(touched.signer, touched.client)
+          {
             True ->
               engine.Session(
                 ..session,
-                last_used_at: int.max(session.last_used_at, last_used_at),
+                last_used_at: int.max(
+                  session.last_used_at,
+                  touched.last_used_at,
+                ),
               )
             False -> session
           }
         }),
       )
-    engine.UpdateSessionPerms(signer:, client:, perms:) ->
+    engine.UpdateSessionPerms(session: updated) ->
       Database(
         ..database,
         sessions: list.map(database.sessions, fn(session) {
-          case #(session.signer, session.client) == #(signer, client) {
-            True -> engine.Session(..session, perms: perms)
+          case
+            #(session.signer, session.client)
+            == #(updated.signer, updated.client)
+          {
+            True -> engine.Session(..session, perms: updated.perms)
             False -> session
           }
         }),

@@ -1061,39 +1061,25 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
       key,
       generous,
     ).write
+  let session = fn(client: String, last_used_at: Int) {
+    engine.Session(
+      signer: signer_hex,
+      client: client,
+      perms: "",
+      created_at: 1000,
+      last_used_at: last_used_at,
+    )
+  }
 
   assert write(
-      engine.InsertSession(
-        session: engine.Session(
-          signer: signer_hex,
-          client: "client",
-          perms: "",
-          created_at: 1000,
-          last_used_at: 1000,
-        ),
-        evicted: [],
-      ),
+      engine.InsertSession(session: session("client", 1000), evicted: []),
     )
     == Ok(Nil)
-  assert write(engine.TouchSession(
-      signer: signer_hex,
-      client: "client",
-      last_used_at: 1060,
-    ))
-    == Ok(Nil)
+  assert write(engine.TouchSession(session: session("client", 1060))) == Ok(Nil)
   // 後退はしない。
-  assert write(engine.TouchSession(
-      signer: signer_hex,
-      client: "client",
-      last_used_at: 1030,
-    ))
-    == Ok(Nil)
+  assert write(engine.TouchSession(session: session("client", 1030))) == Ok(Nil)
   // 無い組は何もせず Ok。
-  assert write(engine.TouchSession(
-      signer: signer_hex,
-      client: "no-such-client",
-      last_used_at: 1090,
-    ))
+  assert write(engine.TouchSession(session: session("no-such-client", 1090)))
     == Ok(Nil)
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)
@@ -1127,32 +1113,31 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
       key,
       generous,
     ).write
+  let session = fn(client: String, perms: String) {
+    engine.Session(
+      signer: signer_hex,
+      client: client,
+      perms: perms,
+      created_at: 1000,
+      last_used_at: 1000,
+    )
+  }
 
   assert write(
-      engine.InsertSession(
-        session: engine.Session(
-          signer: signer_hex,
-          client: "client",
-          perms: "",
-          created_at: 1000,
-          last_used_at: 1000,
-        ),
-        evicted: [],
-      ),
+      engine.InsertSession(session: session("client", ""), evicted: []),
     )
     == Ok(Nil)
-  assert write(engine.UpdateSessionPerms(
-      signer: signer_hex,
-      client: "client",
-      perms: "sign_event:1,sign_event:10002",
-    ))
+  assert write(
+      engine.UpdateSessionPerms(session: session(
+        "client",
+        "sign_event:1,sign_event:10002",
+      )),
+    )
     == Ok(Nil)
   // 無い組は何もせず Ok。
-  assert write(engine.UpdateSessionPerms(
-      signer: signer_hex,
-      client: "no-such-client",
-      perms: "sign_event",
-    ))
+  assert write(
+      engine.UpdateSessionPerms(session: session("no-such-client", "sign_event")),
+    )
     == Ok(Nil)
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)

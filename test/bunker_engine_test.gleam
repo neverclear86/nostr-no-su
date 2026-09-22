@@ -605,22 +605,16 @@ pub fn requests_in_a_session_write_the_last_use_test() {
   let #(_unwritten, outcome2) =
     handle_raw(state, request_event(client, signer, ping, 1060), 1060, 0)
   let assert Persist(write:, next:, ..) = outcome2
-  assert write
-    == engine.TouchSession(
+  let touched =
+    engine.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
+      perms: "",
+      created_at: 1000,
       last_used_at: 1060,
     )
-  assert engine.sessions(next)
-    == [
-      engine.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        perms: "",
-        created_at: 1000,
-        last_used_at: 1060,
-      ),
-    ]
+  assert write == engine.TouchSession(session: touched)
+  assert engine.sessions(next) == [touched]
 }
 
 /// 時刻が同じ一覧は署名者・クライアントの順に並ぶため、辞書の走査順に左右されない。
@@ -735,14 +729,16 @@ pub fn set_perms_replaces_the_permissions_test() {
       account.pubkey_hex(client),
       "sign_event:1,sign_event:10002",
     )
-  assert write
-    == engine.UpdateSessionPerms(
+  let updated =
+    engine.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "sign_event:1,sign_event:10002",
+      created_at: 1000,
+      last_used_at: 1000,
     )
-  let assert [session] = engine.sessions(state)
-  assert session.perms == "sign_event:1,sign_event:10002"
+  assert write == engine.UpdateSessionPerms(session: updated)
+  assert engine.sessions(state) == [updated]
 }
 
 /// 承認されていない組の `set_perms` は `Error(Nil)`。
@@ -772,14 +768,16 @@ pub fn set_perms_bounds_the_permissions_test() {
       account.pubkey_hex(client),
       over_limit,
     )
-  assert write
-    == engine.UpdateSessionPerms(
+  let updated =
+    engine.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: long_prefix,
+      created_at: 1000,
+      last_used_at: 1000,
     )
-  let assert [session] = engine.sessions(state)
-  assert session.perms == long_prefix
+  assert write == engine.UpdateSessionPerms(session: updated)
+  assert engine.sessions(state) == [updated]
 }
 
 /// 承認されていないクライアントの `logout` も ack を返し、他のセッションを残す。
