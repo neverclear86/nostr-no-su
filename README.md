@@ -23,8 +23,6 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge"></a>
 </p>
 
-The server answers signing requests from clients connected over a `bunker://` URI (nsec.app, noStrudel, etc.) without ever handing them your private key. It also watches relays for events from your registered accounts and processes them with plugins (the bundled `event_logger` stores them in Postgres). It comes up together with Postgres via docker compose, and you operate keys and relays from the admin UI.
-
 ![The dashboard of the admin UI](docs/images/usage/dashboard-en.png)
 
 ## ✨ Features
