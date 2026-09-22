@@ -209,7 +209,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 | --- | --- |
 | ログに `[main] cannot start: …` が繰り返し出る | `.env` の必須の値が空か形式違い。直して `docker compose up -d` |
 | 「読み込めなかったアカウント」が出る。ログに `skipped account` | 今のマスターキーで復号できない行がある。マスターキーを変えていないかを先に疑う。意図して変えたなら [運用](operations.md) の「マスターキーの交換」 |
-| 登録で「account is already registered」なのに一覧に無い | 上と同じ行が残っている。「読み込めなかったアカウント」の「削除」で消してから登録し直す |
+| 登録で「このアカウントはすでに登録されています。」（`account is already registered`）なのに一覧に無い | 上と同じ行が残っている。「読み込めなかったアカウント」の「削除」で消してから登録し直す |
 | クライアントが接続できない | バンカー用のリレーが無いか未接続。secret を再生成する前の URI を使っている（承認待ちに「secret 不一致」で出る） |
 | 接続はできるが署名や DM が拒否される | 権限が足りない。セッションの「権限を編集」で足す。NIP-04 のみのクライアントは非対応 |
 | 承認ページの URL が開けない | `ADMIN_BASE_URL` がクライアントの端末から到達できる URL になっていない |
