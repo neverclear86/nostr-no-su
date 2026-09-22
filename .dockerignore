@@ -20,7 +20,7 @@ dev/*
 !dev/licenses-overrides.txt
 setup-env.sh
 secrets
-erl_crash.dump
+**/erl_crash.dump
 .playwright-mcp
 .devin
 **/__pycache__
