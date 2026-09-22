@@ -1,0 +1,32 @@
+diff --git a/src/stratus.gleam b/src/stratus.gleam
+index bd5fd70..f89b644 100644
+--- a/src/stratus.gleam
++++ b/src/stratus.gleam
+@@ -273,8 +273,10 @@ pub fn on_close(
+ }
+ 
+ // VENDORED PATCH (nostr-no-su): upper bound on the bytes a connection keeps
+-// before they decode into frames. A frame whose length including its header
+-// exceeds this stops the actor abnormally.
++// before they decode into frames, and on the body length that a handshake
++// response may declare. A frame whose length including its header exceeds this
++// stops the actor abnormally, and a handshake response whose content-length
++// exceeds this fails with UpgradeFailed.
+ pub const max_buffer_bytes = 4_194_304
+ 
+ type State(state, user_message) {
+@@ -928,6 +930,14 @@ fn perform_handshake(
+       |> list.key_find("content-length")
+       |> result.try(int.parse)
+       |> result.unwrap(0)
++    // VENDORED PATCH (nostr-no-su): fail before reading the body when its
++    // content-length is negative or exceeds max_buffer_bytes. Upstream reads
++    // up to any declared length, and a negative length never matches, so a
++    // relay could make the handshake buffer bytes without bound.
++    use <- bool.guard(
++      body_size < 0 || body_size > max_buffer_bytes,
++      Error(UpgradeFailed(response.set_body(resp, <<>>))),
++    )
+     case read_body(transport, socket, timeout, body_size, body) {
+       Ok(#(body, rest)) -> {
+         Ok(#(response.set_body(resp, body), rest))
