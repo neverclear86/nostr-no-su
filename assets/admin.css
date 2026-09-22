@@ -13,9 +13,22 @@
  *   ダークのブロックの prefersdark: true は @media (prefers-color-scheme: dark) に入る条件で、
  *   どちらも必須である。data-theme の切り替えは両方のブロックから出る
  *   [data-theme=light] / [data-theme=dark] が受ける。
- * - ブロックに書かない変数はテーマ名（light、dark）の組み込みの値で埋まる。配色の変数は
- *   すべて書く。primary はロゴの体の色、secondary と accent はロゴの尻尾の色、neutral は
- *   ドロップダウンの選択中の項目と選択肢の塗りに使う紺で、いずれも組み込みの値は使わない。
+ * - ブロックに書かない変数（--size-*、--border、--depth、--noise）はテーマ名（light、dark）の
+ *   組み込みの値で埋まる。配色と半径の変数はすべて書く。primary は主の操作、リンク、承認待ちの
+ *   青緑、secondary はブランドの紺、accent はブランドの青緑で飾りだけに使い、neutral は
+ *   ドロップダウンの選択中の項目と選択肢の塗りに使う、面と明暗が逆の地（ライトは濃い紺、
+ *   ダークは明るい灰青）で、いずれも組み込みの値は使わない。
+ *   値は文字と地の組み合わせが WCAG 2 の AA のコントラスト比を満たすように選んであり、
+ *   stylesheet_test がビルドした CSS から比を計算して検査する。
+ * - muted（補助の文字）と field（入力とボタンの枠）は daisyUI に無い配色の変数で、同じ
+ *   ブロックに書き、末尾の @theme inline reference で text-muted、border-field などの
+ *   ユーティリティにする。reference を付けないと、:root に自分を指す宣言
+ *   （--color-muted: var(--color-muted)）が出力される。
+ * - 面の影は --shadow-lift-near と --shadow-lift-far の 2 層に分けてブロックに書き、
+ *   @theme inline reference で shadow-lift のユーティリティに合成する。@plugin のブロックに
+ *   カンマで区切った 2 層の影を 1 つの変数で書くと、最後の層だけが出力される。
+ * - 本文と等幅のフォントの並びはテーマに関係しないので、@theme の --font-sans と --font-mono
+ *   に書く。Web フォントは同梱せず、OS のフォントを使う。
  */
 @import "tailwindcss" source(none);
 @source "../src/nostr_no_su/admin";
@@ -29,49 +42,74 @@
 @plugin "daisyui/theme" {
   name: "light";
   default: true;
-  --color-base-100: #ffffff;
-  --color-base-200: #F2F5F9;
-  --color-base-300: #CFD6E1;
-  --color-base-content: #1A212B;
-  --color-primary: #183965;
-  --color-primary-content: #ffffff;
-  --color-secondary: #28B9BE;
-  --color-secondary-content: #0B2A2C;
+  --color-base-100: #FFFFFF;
+  --color-base-200: #EDF2F4;
+  --color-base-300: #D3DDE3;
+  --color-base-content: #0E213B;
+  --color-muted: #4B5D74;
+  --color-field: #7C8DA3;
+  --color-primary: #0A6B72;
+  --color-primary-content: #FFFFFF;
+  --color-secondary: #183965;
+  --color-secondary-content: #FFFFFF;
   --color-accent: #28B9BE;
-  --color-accent-content: #0B2A2C;
-  --color-neutral: #183965;
-  --color-neutral-content: #ffffff;
-  --color-info: #1D4F96;
-  --color-info-content: #ffffff;
-  --color-success: #176b3f;
-  --color-success-content: #ffffff;
-  --color-warning: #8a5a00;
-  --color-warning-content: #ffffff;
-  --color-error: #b8253a;
-  --color-error-content: #ffffff;
+  --color-accent-content: #062A2E;
+  --color-neutral: #14263F;
+  --color-neutral-content: #EEF3F8;
+  --color-info: #2458A6;
+  --color-info-content: #FFFFFF;
+  --color-success: #16733F;
+  --color-success-content: #FFFFFF;
+  --color-warning: #945400;
+  --color-warning-content: #FFFFFF;
+  --color-error: #B3261E;
+  --color-error-content: #FFFFFF;
+  --radius-selector: 999px;
+  --radius-field: 9px;
+  --radius-box: 14px;
+  --shadow-lift-near: 0 1px 2px rgb(14 33 59 / .06);
+  --shadow-lift-far: 0 12px 28px -14px rgb(14 33 59 / .28);
 }
 
 @plugin "daisyui/theme" {
   name: "dark";
   prefersdark: true;
-  --color-base-100: #171B22;
-  --color-base-200: #101319;
-  --color-base-300: #313743;
-  --color-base-content: #D7DBE3;
-  --color-primary: #3B70BA;
-  --color-primary-content: #ffffff;
-  --color-secondary: #28B9BE;
-  --color-secondary-content: #06262A;
+  --color-base-100: #111C2B;
+  --color-base-200: #0A121E;
+  --color-base-300: #22324A;
+  --color-base-content: #E2EAF3;
+  --color-muted: #97A7BC;
+  --color-field: #5E718A;
+  --color-primary: #3BC4C9;
+  --color-primary-content: #04272B;
+  --color-secondary: #8FB3E8;
+  --color-secondary-content: #0A1628;
   --color-accent: #28B9BE;
-  --color-accent-content: #06262A;
-  --color-neutral: #223A5E;
-  --color-neutral-content: #E6ECF5;
-  --color-info: #8FB4E8;
-  --color-info-content: #0a1526;
-  --color-success: #6fd39a;
-  --color-success-content: #08160e;
-  --color-warning: #f5c451;
-  --color-warning-content: #1b1400;
-  --color-error: #ff7386;
-  --color-error-content: #1b0004;
+  --color-accent-content: #062A2E;
+  --color-neutral: #C9D5E3;
+  --color-neutral-content: #0A121E;
+  --color-info: #86B4F5;
+  --color-info-content: #071A33;
+  --color-success: #4DCB8A;
+  --color-success-content: #04210F;
+  --color-warning: #F2B544;
+  --color-warning-content: #2A1800;
+  --color-error: #FF8A7E;
+  --color-error-content: #3A0703;
+  --radius-selector: 999px;
+  --radius-field: 9px;
+  --radius-box: 14px;
+  --shadow-lift-near: 0 0 0 1px rgb(255 255 255 / .02);
+  --shadow-lift-far: 0 16px 34px -16px rgb(0 0 0 / .75);
+}
+
+@theme inline reference {
+  --color-muted: var(--color-muted);
+  --color-field: var(--color-field);
+  --shadow-lift: var(--shadow-lift-near), var(--shadow-lift-far);
+}
+
+@theme {
+  --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Noto Sans Mono CJK JP", monospace;
 }
