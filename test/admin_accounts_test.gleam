@@ -1,5 +1,5 @@
 //// アカウント管理（登録、鍵の生成、秘密鍵の再表示、削除、secret の作り直し、
-//// ラベル、ダッシュボードのアカウントの節）のテスト。
+//// ラベル、接続 QR コードのページ、ダッシュボードのアカウントの節）のテスト。
 
 import gleam/erlang/process
 import gleam/http
@@ -18,10 +18,10 @@ import nostr_no_su/nostr/nip19
 import support/account_actions
 import support/admin_context.{
   Added, NsecRequested, Relabeled, Removed, Rotated, account_row, action_path,
-  context, failing_context, get, header, in_japanese, label, password, post,
-  post_form, reporting_context, signer, signer_npub, signer_nsec, skipped_npub,
-  skipped_pubkey, skipped_row, spec_nsec, unavailable, uri, with_accounts,
-  with_credentials, with_skipped,
+  auth_uri, context, failing_context, get, header, in_japanese, label, password,
+  post, post_form, reporting_context, signer, signer_npub, signer_nsec,
+  skipped_npub, skipped_pubkey, skipped_row, spec_nsec, unavailable, uri,
+  with_accounts, with_credentials, with_skipped,
 }
 import support/nip46_client.{account_for}
 import wisp
@@ -1018,7 +1018,7 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
 
 // --- ダッシュボードのアカウントの節 ---
 
-/// アカウントの節には、npub、読み取り専用の欄の URI、4 つの操作のリンク、登録の
+/// アカウントの節には、npub、読み取り専用の欄の URI、5 つの操作のリンク、登録の
 /// リンクが出る。
 pub fn dashboard_lists_account_actions_test() {
   let body = simulate.read_body(get(context(), "/"))
@@ -1053,4 +1053,72 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
   assert !string.contains(failing, "href=\"/accounts/new\"")
   let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
   assert string.contains(empty, "href=\"/accounts/new\"")
+}
+
+// --- 接続 QR コード ---
+
+/// 接続 QR コードのページは、secret 入りの URI と要承認の URI をそれぞれ見出しと
+/// QR コードとコピー欄で出す。
+pub fn connection_qr_page_shows_both_uris_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+  assert string.contains(body, "Connection URI</h2>")
+  assert string.contains(body, "Connection URI (approval)</h2>")
+  assert list.length(string.split(body, "role=\"img\"")) == 3
+  assert string.contains(body, "value=\"" <> wisp.escape_html(uri) <> "\"")
+  assert string.contains(body, "value=\"" <> wisp.escape_html(auth_uri) <> "\"")
+}
+
+/// 接続 QR コードのページは GET だけを受け付け、ほかのメソッドは `Allow: GET` の 405
+/// にする。
+pub fn connection_qr_page_allows_only_get_test() {
+  let path = action_path(dashboard.ShowConnectionQr)
+  let post_response = post(context(), path)
+  assert post_response.status == 405
+  assert header(post_response, "allow") == "GET"
+  let put_response =
+    simulate.request(http.Put, path)
+    |> with_credentials("admin", password)
+    |> admin.handle_request(context(), _)
+  assert put_response.status == 405
+  assert header(put_response, "allow") == "GET"
+}
+
+/// バンカーに使うリレーが 1 件も無ければ警告を出す。バンカー用途のリレーがある
+/// Context と、一覧を得られない Context では出ない。
+pub fn connection_qr_page_warns_without_a_bunker_relay_test() {
+  let path = action_path(dashboard.ShowConnectionQr)
+  let warning =
+    i18n.text(i18n.English, i18n.NoBunkerRelay)
+    |> string.slice(0, 30)
+  let without_relay =
+    admin.Context(..context(), relays: fn(_deadline) { Ok([]) })
+  assert string.contains(simulate.read_body(get(without_relay, path)), warning)
+  assert string.contains(simulate.read_body(get(context(), path)), warning)
+    == False
+  let unavailable_relays =
+    admin.Context(..context(), relays: fn(_deadline) {
+      Error("relay list did not answer")
+    })
+  assert string.contains(
+      simulate.read_body(get(unavailable_relays, path)),
+      warning,
+    )
+    == False
+}
+
+/// 符号化できない長さの URI は、その位置に理由を出し、コピー欄は残す。
+pub fn connection_qr_page_notes_an_unencodable_uri_test() {
+  let unencodable_uri = string.repeat("0", 3000)
+  let row = dashboard.AccountRow(..account_row(label), uri: unencodable_uri)
+  let body =
+    simulate.read_body(get(
+      with_accounts(Ok([row])),
+      action_path(dashboard.ShowConnectionQr),
+    ))
+  assert string.contains(
+    body,
+    string.slice(i18n.text(i18n.English, i18n.CouldNotEncodeQr), 0, 20),
+  )
+  assert string.contains(body, "value=\"" <> unencodable_uri <> "\"")
 }

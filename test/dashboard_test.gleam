@@ -290,7 +290,7 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   assert string.contains(after_details, account.signer)
 }
 
-/// アカウントの行の 4 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
+/// アカウントの行の 5 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
 /// `Delete account` は出ない）で `text-error` が付く。
 pub fn account_row_actions_are_icons_with_short_delete_test() {
   let account =

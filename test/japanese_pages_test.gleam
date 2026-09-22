@@ -20,15 +20,15 @@ pub fn japanese_pages_have_no_english_words_test() {
 /// （Nostr、no、Su）、Nostr と NIP-46 の用語（nsec、npub、pubkey、relay、kind、secret、
 /// ws、wss、URI、URL、NIP、nostrconnect）、環境変数と文書の名前（ACCOUNT、MASTER、KEY、
 /// docs、configuration、operations、md）、HTTP の語（Origin、Host）、操作の案内（Ctrl、C、macOS）、日付の区切り（T、Z）、
-/// NIP-46 の権限の名前（sign、event）、日本語文中でも英字で書く略語（DB）、日本語文中に
-/// 引用する英語のメッセージ（account is already registered）、言語の自名（English）、
-/// 固定値（example、label、plugin、a〜d）。
+/// NIP-46 の権限の名前（sign、event）、日本語文中でも英字で書く略語（DB、画面に出す略語
+/// QR）、日本語文中に引用する英語のメッセージ（account is already registered）、言語の
+/// 自名（English）、固定値（example、label、plugin、a〜d）。
 const allowed_words = [
   "Nostr", "no", "Su", "nsec", "npub", "pubkey", "relay", "kind", "secret", "ws",
   "wss", "URI", "URL", "NIP", "nostrconnect", "ACCOUNT", "MASTER", "KEY", "docs",
   "configuration", "operations", "md", "Origin", "Host", "Ctrl", "C", "macOS",
-  "T", "Z", "sign", "event", "DB", "account", "is", "already", "registered",
-  "English", "example", "label", "plugin", "a", "b", "c", "d",
+  "T", "Z", "sign", "event", "DB", "QR", "account", "is", "already",
+  "registered", "English", "example", "label", "plugin", "a", "b", "c", "d",
 ]
 
 /// ページのテキストノードに現れる英字の連なり。テキストと属性値はエスケープされて `<` と

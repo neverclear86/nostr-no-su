@@ -745,7 +745,12 @@ pub fn unknown_paths_are_not_found_test() {
 /// メソッドが違うリクエストは 405 の HTML で、`allow` を持ちメソッドとパスを本文に
 /// 含めない。
 pub fn method_not_allowed_pages_test() {
-  let get_only_paths = ["/", "/accounts/new", "/plugins/console_logger/status"]
+  let get_only_paths = [
+    "/",
+    "/accounts/new",
+    "/plugins/console_logger/status",
+    action_path(dashboard.ShowConnectionQr),
+  ]
   let post_only_paths = [
     "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
     "/accounts/generate", "/accounts/import", "/accounts/register-generated",
