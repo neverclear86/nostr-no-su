@@ -85,18 +85,35 @@ pub fn content_shows_all_profile_fields_test() {
     ]
 }
 
-/// `NotFound` は `npub` と空の `updated` だけを出し、`alert` は出さない。
+/// `NotFound` は `npub` と空の `updated` の `pairs`、続けて 8 項目を空の値で出し、
+/// `alert` は出さない。
 pub fn content_leaves_fields_empty_when_not_found_test() {
   let description = page.content([sample_account()], [page.NotFound])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
-  let assert [pairs] = blocks
-  let assert Ok(items) =
+  let assert [pairs, fields] = blocks
+  let assert Ok(top_items) =
     decode.run(
       pairs,
       decode.field("items", decode.list(pair_item_decoder()), decode.success),
     )
-  assert items == [#("npub", "id", "npub1aa"), #("updated", "text", "")]
+  assert top_items == [#("npub", "id", "npub1aa"), #("updated", "code", "")]
+  let assert Ok(field_items) =
+    decode.run(
+      fields,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  assert field_items
+    == [
+      #("name", "text", ""),
+      #("display_name", "text", ""),
+      #("about", "text", ""),
+      #("picture", "code", ""),
+      #("banner", "code", ""),
+      #("nip05", "text", ""),
+      #("website", "code", ""),
+      #("lud16", "code", ""),
+    ]
 }
 
 /// `Failed` は `npub` だけの `pairs` と、理由を含む `alert`（`failure`）を出し、
@@ -143,18 +160,34 @@ pub fn content_keeps_other_accounts_when_one_failed_test() {
 }
 
 /// `content` が JSON のオブジェクトとして読めないと、その旨の `alert`（`failure`）
-/// を出し、8 項目は出さない。
+/// を出し、8 項目は空の値で出す。
 pub fn content_shows_alert_when_content_is_not_json_test() {
   let description =
     page.content([sample_account()], [page.Found("[1,2,3]", 1_700_000_000)])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
-  let assert [alert, _pairs] = blocks
+  let assert [alert, _pairs, fields] = blocks
   let #(kind, text, tone) = alert_shape(alert)
   assert kind == "alert"
   assert text
     == "The latest kind 0 event has a content that is not a JSON object."
   assert tone == "failure"
+  let assert Ok(field_items) =
+    decode.run(
+      fields,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  assert field_items
+    == [
+      #("name", "text", ""),
+      #("display_name", "text", ""),
+      #("about", "text", ""),
+      #("picture", "code", ""),
+      #("banner", "code", ""),
+      #("nip05", "text", ""),
+      #("website", "code", ""),
+      #("lud16", "code", ""),
+    ]
 }
 
 /// `picture` だけが空のとき、`banner` の `note` と `image` だけが 1 件ずつ出る。

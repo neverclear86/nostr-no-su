@@ -15,8 +15,18 @@
 %% 起こし、総上限まで待って集める。上限に達した分は打ち切って失敗として扱う。
 fetch_profiles(Pubkeys) ->
     Deadline = erlang:monotonic_time(millisecond) + ?FETCH_ALL_TIMEOUT_MS,
-    Workers = [{spawn_monitor(fun() -> exit({fetched, fetch_one(P)}) end), P} || P <- Pubkeys],
+    Workers = [{spawn_monitor(fun() -> run_worker(P) end), P} || P <- Pubkeys],
     [collect(Ref, Pid, Deadline) || {{Pid, Ref}, _P} <- Workers].
+
+%% ワーカー本体。fetch_one/1 が例外を投げたら、DOWN の理由をスタックトレース抜きの
+%% Class と Reason だけにして collect/3 に渡す（そのまま届くと ~p で数百文字に
+%% なりうる）。
+run_worker(Pubkey) ->
+    try fetch_one(Pubkey) of
+        Result -> exit({fetched, Result})
+    catch
+        Class:Reason:Stack -> exit({Class, Reason, Stack})
+    end.
 
 %% 公開鍵 1 件の取得。status / content / created_at / reason（すべて binary キー）
 %% の map にする。
@@ -47,6 +57,10 @@ collect(Ref, Pid, Deadline) ->
     receive
         {'DOWN', Ref, process, _Pid, {fetched, Result}} ->
             Result;
+        {'DOWN', Ref, process, _Pid, {Class, Reason, _Stack}} ->
+            error_result(
+                list_to_binary(io_lib:format("crashed (~0p:~0p)", [Class, Reason]))
+            );
         {'DOWN', Ref, process, _Pid, Other} ->
             error_result(list_to_binary(io_lib:format("crashed (~p)", [Other])))
     after Remaining ->

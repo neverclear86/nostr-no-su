@@ -178,7 +178,8 @@ fn account_section(account: Account, fetched: Fetched) -> Dynamic {
 /// アカウント 1 件のブロックの並び。上から `alert`（`failure`。content が JSON の
 /// オブジェクトとして読めないときだけ）、`npub`・`updated` の `pairs`、画像
 /// （`picture` / `banner` が空でなければ）、8 項目の `pairs` の順。`NotFound` は
-/// `npub` と空の `updated` だけ、`Failed` は `npub` だけを出す。
+/// `npub` と空の `updated`、8 項目は空の値で出す。`content` が JSON のオブジェクト
+/// として読めないときも 8 項目は空の値で出す。`Failed` は `npub` だけを出す。
 fn account_blocks(account: Account, fetched: Fetched) -> List(Dynamic) {
   case fetched {
     Found(content:, created_at:) ->
@@ -193,10 +194,12 @@ fn account_blocks(account: Account, fetched: Fetched) -> List(Dynamic) {
             "failure",
           ),
           pairs_block([npub_item(account), updated_item(created_at)]),
+          profile_fields_block(empty_profile),
         ]
       }
     NotFound -> [
-      pairs_block([npub_item(account), #("updated", text_inline(""))]),
+      pairs_block([npub_item(account), #("updated", code_inline(""))]),
+      profile_fields_block(empty_profile),
     ]
     Failed(reason:) -> [
       alert_block(
@@ -207,6 +210,19 @@ fn account_blocks(account: Account, fetched: Fetched) -> List(Dynamic) {
     ]
   }
 }
+
+/// 8 項目すべてが空文字列の `Profile`。`NotFound` と `content` が読めないときの
+/// 8 項目の `pairs` に使う。
+const empty_profile = Profile(
+  name: "",
+  display_name: "",
+  about: "",
+  picture: "",
+  banner: "",
+  nip05: "",
+  website: "",
+  lud16: "",
+)
 
 /// `pairs` の `npub` の項。
 fn npub_item(account: Account) -> #(String, Dynamic) {
