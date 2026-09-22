@@ -1324,8 +1324,8 @@ pub fn static_files_are_served_behind_authentication_test() {
 }
 
 /// `<head>` に `data:` の SVG の favicon を出す。カラー版の色を符号化した値と、暗い配色への
-/// 切り替えの規則を含み、`href` の値そのものに生の `#` は残らない。上部バーのロゴも単色版の
-/// パスに差し替わっている。
+/// 切り替えの規則を含み、`href` の値そのものに生の `#` は残らない。上部バーのロゴは体を
+/// primary、尻尾を accent のユーティリティで塗る。
 pub fn pages_declare_an_svg_favicon_test() {
   let page = simulate.read_body(get(context(), "/"))
   assert string.contains(page, "rel=\"icon\"")
@@ -1333,6 +1333,7 @@ pub fn pages_declare_an_svg_favicon_test() {
   assert string.contains(page, "href=\"data:image/svg+xml,%3Csvg")
   assert string.contains(page, "%23183965")
   assert string.contains(page, "%2328B9BE")
+  assert string.contains(page, "%233B70BA")
   assert string.contains(page, "prefers-color-scheme")
   let assert Ok(#(_, after_prefix)) =
     string.split_once(page, "data:image/svg+xml,")
@@ -1340,8 +1341,9 @@ pub fn pages_declare_an_svg_favicon_test() {
   assert !string.contains(href_value, "#")
   assert string.contains(
     page,
-    "<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-5\" fill=\"currentColor\" viewBox=\"177 86 900 900\">",
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" class=\"size-5\" viewBox=\"177 86 900 900\"><path class=\"fill-primary\"",
   )
+  assert string.contains(page, "class=\"fill-accent\"")
 }
 
 /// 配信するのはスタイルシートとスクリプトだけで、GET 以外は受け付けない。
