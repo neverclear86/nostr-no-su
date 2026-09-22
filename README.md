@@ -32,13 +32,13 @@
 
 ## ✨ Features
 
-- 🔐 **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays, approval flow (auth_url)
+- 🔐 **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays
 - 🛂 **Connection approval and permissions**: approve each client's connection, and edit which kinds it may sign and whether it may use NIP-44 in the admin UI
 - 🗝️ **Keys stored encrypted**: AES-256-GCM with a master key, in Postgres
 - 📡 **Event collection and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. The bundled `event_logger` stores them in Postgres, viewable as a timeline in the admin UI. Add your own by placing a BEAM module
 - 🖥️ **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external files
 - 🔁 **Automatic recovery from failures**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
-- 🔏 **Own crypto implementation, checked against the official test vectors**: BIP-340 / NIP-44 v2. No NIFs. Assumptions and known limitations are in the "v0.1 security assumptions" section of [Design decisions and known limitations](docs/design-decisions.md)
+- 🔏 **Own crypto implementation, checked against the official test vectors**: BIP-340 / NIP-44 v2. No NIFs. Assumptions and known limitations are in the 「v0.1 のセキュリティの前提」 section of [Design decisions and known limitations](docs/design-decisions.md)
 
 ## 🚀 Installation
 
@@ -66,7 +66,7 @@ docker compose up --build -d
 ```
 
 Open `http://127.0.0.1:8080/`. The username is `admin` and the password is `ADMIN_PASSWORD` in `.env`.
-First steps: register a relay and an account, connect a client, then approve it. Details are in [Usage](docs/usage.md) (Japanese).
+First steps: register a relay and an account, then paste the connection URI into a client (approval only comes into play when you hand the URI to someone else). Details are in [Usage](docs/usage.md) (Japanese).
 
 ## ⚙️ Configuration
 
