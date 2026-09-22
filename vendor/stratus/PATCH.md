@@ -83,6 +83,13 @@ tar の中の `contents.tar.gz` を展開し、hex への公開のときに Glea
 - 理由: `ssl` は TLS のアラートで `{error, {tls_alert, {Alert, Description}}}` を返す。上流の `SocketReason` にこの形は無く、`perform_handshake` の中の `convert_socket_reason` が `case_clause` で落ちる。アクターの初期化の中で落ちるので、試行ごとにクラッシュレポートが出て、`start` はスタックトレースを含む `InitExited` を返す。説明文は複数行で `ssl` 自身が同じ内容をログに出すので、アラート名だけを持たせる（nostr-no-su の #158）。
 - 戻す条件: 上流の stratus が TLS のアラートで落ちない版を hex に出し、その版に上げるとき。2026-09-20 の時点で hex の最新は 3.0.0 で、rawhat/stratus の main の `src/stratus.gleam` にも `tls_alert` の扱いは無い（`grep -c tls_alert` が 0 件）。
 
+### 0008 ハンドシェイクの応答本文の長さに上限を設ける
+
+- ファイル: `patches/0008-handshake-body-limit.patch`
+- 変更: `src/stratus.gleam` の `perform_handshake` で、応答の `content-length` が負か `max_buffer_bytes`（4 MiB）を超えるときは、本文を読まずに空の本文の `UpgradeFailed` を返す。状態コードが 101 でも同じである。`max_buffer_bytes` のコメントにこの用途を足す。
+- 理由: 上流の `read_body` は `content-length` の値まで本文を読み続け、上限が無い。負の値は本文のパターンに一致しないので、読み終わらない。巨大な `content-length` を付けて本文を送り続けるリレーが、接続のプロセスのメモリを使い尽くしうる（nostr-no-su の #486）。`UpgradeFailed` は `start` が `InitFailed` で返すので、nostr-no-su の `relay_connection` が張り直す。
+- 戻す条件: 上流の stratus がハンドシェイクの応答本文に上限を持つ版を hex に出し、その版に上げるとき。2026-09-23 の時点で hex の最新は 3.0.0 で、rawhat/stratus の main の `src/stratus.gleam` の `read_body` にも上限は無い。
+
 ## パッチを足す手順
 
 1. このディレクトリーの中のファイルを直し、直した箇所に `VENDORED PATCH (nostr-no-su):` で始まるコメントで変更と理由を書く。README のような文書は、0002 のように冒頭に注記を置く。Apache License 2.0 の 4 (b) が、改変したファイルに改変した旨を示すことを求めるためである。
