@@ -3,14 +3,12 @@ services:
     build: .
     # 変数の意味は docs/configuration.md の「環境変数」の表にある。${...} の値は .env
     # （.env.example を複製して作る）で変える。秘密（ACCOUNT_MASTER_KEY と
-    # ADMIN_PASSWORD）の値はこのファイルに書かないこと。${...} の変数を足す、
-    # 消す、既定値を変えるときは、.env.example の行も合わせ、
-    # sh dev/check_env_example.sh で確かめること。
-    # 利用者向けの写しは docker-compose.release.yml で、違うのはイメージの
-    # 取り方の 1 行だけである（sh dev/check_release_compose.sh が確かめる）。
-    # その 1 行だけが参照する NOSTR_NO_SU_VERSION は例外で、.env.example に
-    # 行を持たず、sh dev/check_env_example.sh の検査の対象にもならない
-    # （docs/configuration.md の「環境変数」の表）。
+    # ADMIN_PASSWORD）の値はこのファイルに書かないこと。
+    # compose は docker-compose.yml（ソースからビルドする）と
+    # docker-compose.release.yml（公開イメージを取る）の 2 つで、違うのはイメージの
+    # 取り方の 1 行だけである。
+    # In English: see "Configuration" in README.md. Set the values in .env, not in
+    # this file, and never write the secrets in this file.
     environment:
       DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
