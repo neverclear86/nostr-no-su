@@ -6,7 +6,8 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
-import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply}
+import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply, Throttled}
+import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
@@ -2506,4 +2507,134 @@ pub fn restore_replaces_sessions_and_pending_test() {
   // seen は変わらないので、置き換え前と同じイベントの再送は重複として扱う
   let #(_state, replayed) = handle(state, request, 1000)
   assert replayed == Duplicate
+}
+
+// --- セッションの外のリクエストの上限 ---
+
+/// 1 から `count` までの整数の一覧。別々のクライアント鍵やリクエスト id を
+/// 並べるために使う。
+fn up_to(count: Int) -> List(Int) {
+  list.repeat(Nil, count) |> list.index_map(fn(_, index) { index + 1 })
+}
+
+/// セッションの無いクライアントからの `get_public_key` リクエストイベント。id を
+/// 変えて、同じクライアントや同じ時刻から何件も送れるようにする。
+fn get_public_key_event(
+  client: Account,
+  signer: Account,
+  id: String,
+  now: Int,
+) -> Event {
+  request_event(client, signer, request_body(id, "get_public_key", "[]"), now)
+}
+
+/// 時刻 `now` に、別々のクライアントから `count` 件の `get_public_key` を
+/// 処理する。全部 `Reply` になることを確かめながらエンジンを畳むので、全体の
+/// 上限を使い切った状態にするために使う。
+fn exhaust_global_limit(
+  state: engine.Engine,
+  signer: Account,
+  count: Int,
+  now: Int,
+) -> engine.Engine {
+  list.fold(up_to(count), state, fn(state, n) {
+    let client = account_for(padded_hex(200 + n))
+    let #(state, outcome) =
+      handle(
+        state,
+        get_public_key_event(client, signer, "u" <> int.to_string(n), now),
+        now,
+      )
+    let assert Reply(_) = outcome
+    state
+  })
+}
+
+/// セッションの無いリクエストが pubkey ごとの上限を超えると、応答を組まずに
+/// 捨て、捨てた件数を `notice` で報告する。
+pub fn requests_without_a_session_over_the_client_limit_get_no_reply_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state =
+    list.fold(
+      up_to(rate_limit.client_limit.capacity),
+      new_engine(),
+      fn(state, n) {
+        let #(state, outcome) =
+          handle(
+            state,
+            get_public_key_event(client, signer, "g" <> int.to_string(n), 1000),
+            1000,
+          )
+        let assert Reply(_) = outcome
+        state
+      },
+    )
+  let handled =
+    engine.handle_event(
+      state,
+      signed_event.verified(get_public_key_event(client, signer, "g-over", 1000)),
+      engine.Inputs(now: 1000, token: token, not_before: 0),
+    )
+  assert handled.outcome == Throttled
+  assert handled.notice == Some(rate_limit.report(1))
+}
+
+/// 別々のクライアントが全体の上限を使い切ると、まだ 1 件も送っていない新しい
+/// クライアントのリクエストも捨てる。
+pub fn requests_without_a_session_over_the_global_limit_get_no_reply_test() {
+  let signer = account_for(signer_key)
+  let state =
+    exhaust_global_limit(
+      new_engine(),
+      signer,
+      rate_limit.global_limit.capacity,
+      1000,
+    )
+  let #(_state, outcome) =
+    handle(
+      state,
+      get_public_key_event(account_for(client_key), signer, "g-over", 1000),
+      1000,
+    )
+  assert outcome == Throttled
+}
+
+/// セッションのあるクライアントのリクエストは上限に数えず、全体の上限を
+/// 使い切られていても応答する。
+pub fn requests_in_a_session_are_not_limited_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  // 別々のクライアントで全体の上限を使い切る
+  let state =
+    exhaust_global_limit(state, signer, rate_limit.global_limit.capacity, 1000)
+  // 全体が空でも、セッション内のリクエストは上限を超える件数でも応答する
+  list.fold(up_to(rate_limit.global_limit.capacity + 1), state, fn(state, n) {
+    let #(state, outcome) =
+      handle(
+        state,
+        get_public_key_event(client, signer, "g" <> int.to_string(n), 1000),
+        1000,
+      )
+    let assert Reply(_) = outcome
+    state
+  })
+}
+
+/// 全体の上限を使い切られていても、接続 secret の一致する `connect` は上限に
+/// 数えず処理する。流入が続く間も、secret を持つ利用者は接続できる。
+pub fn connect_with_the_secret_is_not_limited_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let state =
+    exhaust_global_limit(
+      new_engine(),
+      signer,
+      rate_limit.global_limit.capacity,
+      1000,
+    )
+  let #(_state, outcome) =
+    handle_raw(state, connect_event(client, signer, secret, 1000), 1000, 0)
+  let assert Persist(..) = outcome
 }
