@@ -181,9 +181,9 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
 }
 
 /// `console_logger` の `status` ページの記述。`pairs` の節、`table` と `details` と `id`
-/// インラインの `pairs` を持つ節に加え、`image` のブロックを 2 件（`https:` の URL と、
-/// scheme が `http` / `https` でない URL）持つ節に加え、変換に失敗する節を 1 つ持つ
-/// （失敗した節だけを囲みに差し替えて出す画面を撮るため）。
+/// インラインの `pairs` を持つ節、`image` のブロックを 2 件（`https:` の URL と、scheme が
+/// `http` / `https` でない URL）持つ節に加え、変換に失敗する節を 1 つ持つ（失敗した節だけを
+/// 囲みに差し替えて出す画面を撮るため）。
 fn console_logger_status_description() -> Dynamic {
   let text_inline = fn(text: String) {
     dynamic.properties([

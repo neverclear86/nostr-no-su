@@ -565,9 +565,8 @@ fn plugin_details_block(summary: String, text: String) -> Dynamic {
   ])
 }
 
-/// ブロック（`image`）。`alt` は `<img>` の属性値になるときは `allowed_words` に
-/// 無くてもよいが、scheme が合わず `view.plugin_image_placeholder` になるときは
-/// `view.untranslated` で包まれるので、`alt` の値は制約を受けない。
+/// ブロック（`image`）。`alt` は `<img>` の属性値か `view.untranslated` の中に出るので、
+/// `allowed_words` の制約を受けない。
 fn plugin_image_block(url: String, alt: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("image")),
