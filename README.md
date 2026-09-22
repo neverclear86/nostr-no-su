@@ -48,14 +48,18 @@ From the published image:
 
 ```sh
 mkdir nostr-no-su && cd nostr-no-su
-base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v<version>   # X.Y.Z from Releases
+version=X.Y.Z   # from Releases
+base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v$version
 curl -fsSLO "$base/docker-compose.release.yml"
 curl -fsSLO "$base/.env.example"
 curl -fsSLO "$base/setup-env.sh"
 mkdir -p plugins
 sh setup-env.sh
-docker compose -f docker-compose.release.yml up -d
+printf 'COMPOSE_FILE=docker-compose.release.yml\nNOSTR_NO_SU_VERSION=%s\n' "$version" >> .env
+docker compose up -d
 ```
+
+`NOSTR_NO_SU_VERSION` pins the image to that version, and with `COMPOSE_FILE` every `docker compose ...` in the docs runs without `-f` in this directory. To also receive patch releases, change `NOSTR_NO_SU_VERSION` in `.env` to `X.Y`. Upgrading is in the 「更新」 section of [Operations](docs/operations.md) (Japanese).
 
 From source:
 

@@ -48,14 +48,18 @@
 
 ```sh
 mkdir nostr-no-su && cd nostr-no-su
-base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v<version>   # X.Y.Z は Releases から
+version=X.Y.Z   # Releases から
+base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v$version
 curl -fsSLO "$base/docker-compose.release.yml"
 curl -fsSLO "$base/.env.example"
 curl -fsSLO "$base/setup-env.sh"
 mkdir -p plugins
 sh setup-env.sh
-docker compose -f docker-compose.release.yml up -d
+printf 'COMPOSE_FILE=docker-compose.release.yml\nNOSTR_NO_SU_VERSION=%s\n' "$version" >> .env
+docker compose up -d
 ```
+
+`NOSTR_NO_SU_VERSION` がイメージを取った版に固定する。`.env` に `COMPOSE_FILE` があるので、このディレクトリーでは文書の `docker compose ...` が `-f` 無しで動く。patch も追うなら、`.env` の `NOSTR_NO_SU_VERSION` を `X.Y` に書き換える。版の上げ方は [運用](docs/operations.md) の「更新」。
 
 ソースから:
 

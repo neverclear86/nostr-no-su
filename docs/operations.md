@@ -1,6 +1,6 @@
 # 運用
 
-この文書は、起動時のログの読み方、バックアップ、版の更新、復旧、マスターキーの交換、リソースの目安をまとめる。リポジトリ同梱の `docker-compose.yml`（同梱の Postgres を使う構成）を前提にする。公開イメージで動かしている場合は、以下の `docker compose ...` をすべて `docker compose -f docker-compose.release.yml ...` と読み替える（`-f` を付けると `docker-compose.override.yml` は自動では重ならないので、使っているときは `-f docker-compose.release.yml -f docker-compose.override.yml` と 2 つ並べる。[設定](configuration.md) の「docker compose の構成」）。
+この文書は、起動時のログの読み方、バックアップ、版の更新、復旧、マスターキーの交換、リソースの目安をまとめる。同梱の Postgres を使う compose の構成（clone してビルドする `docker-compose.yml` と、公開イメージの `docker-compose.release.yml`）を前提にする。公開イメージの構成では README の手順で `.env` に `COMPOSE_FILE=docker-compose.release.yml` を書いているので、以下の `docker compose ...` は `.env` のあるディレクトリーでそのまま動く（`docker-compose.override.yml` を重ねるときは `COMPOSE_FILE=docker-compose.release.yml:docker-compose.override.yml` と `:` で並べる。[設定](configuration.md) の「docker compose の構成」）。
 失うと戻らないものが 2 つある。DB そのものと、DB の暗号文を復号するマスターキーである。
 
 ## 起動時のログ
@@ -67,26 +67,23 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 
 ## 更新
 
-新しい版に上げる前にダンプを取る（上の「バックアップ」。戻す移行は無いため）。公開イメージで動かしている構成では次で入れ替える。
+新しい版に上げる前にダンプを取る（上の「バックアップ」。戻す移行は無いため）。公開イメージで動かしている構成では、新しい版の 3 つのファイルを取り直して `setup-env.sh` を実行し直し、`.env` の `NOSTR_NO_SU_VERSION` を新しい版に書き換えてから入れ替える。新しい版は `docker-compose.release.yml` や `.env.example` を変えていることがある（[変更履歴](../CHANGELOG.md) の「変更」と、**破壊的変更** の行）。`setup-env.sh` は既にある `.env` の値（マスターキー、`POSTGRES_PASSWORD`、`COMPOSE_FILE`、`NOSTR_NO_SU_VERSION` を含む）を変えず、`.env.example` に増えた変数だけを既定値のまま末尾に足す（[設定](configuration.md) の「`.env` と `setup-env.sh`」）。
 
 ```sh
-docker compose -f docker-compose.release.yml pull
-docker compose -f docker-compose.release.yml up -d
-```
-
-`.env` の `NOSTR_NO_SU_VERSION` で版を固定している構成では、`pull` はその値のタグしか取らないので、先に値を上げてから同じ 2 つを実行する。clone してソースから動かしている構成では `git pull` の後に `docker compose up -d --build` を実行する。
-
-上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
-
-新しい版が `docker-compose.release.yml` や `.env.example` を変えていることがある（[変更履歴](../CHANGELOG.md) の「変更」と、**破壊的変更** の行）。公開イメージで動かしている構成では、`pull` の前に新しい版の 3 つのファイルを取り直し、`setup-env.sh` を実行し直す。`setup-env.sh` は既にある `.env` の値（マスターキーと `POSTGRES_PASSWORD` を含む）を変えず、`.env.example` に増えた変数だけを既定値のまま末尾に足す（[設定](configuration.md) の「`.env` と `setup-env.sh`」）。
-
-```sh
-base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v<version>
+version=X.Y.Z   # 上げる先の版（Releases から）
+base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v$version
 curl -fsSLO "$base/docker-compose.release.yml"
 curl -fsSLO "$base/.env.example"
 curl -fsSLO "$base/setup-env.sh"
 sh setup-env.sh
+sed -i.bak "s/^NOSTR_NO_SU_VERSION=.*/NOSTR_NO_SU_VERSION=$version/" .env && rm .env.bak
+docker compose pull
+docker compose up -d
 ```
+
+`NOSTR_NO_SU_VERSION` を `X.Y` にしている構成では、同じ minor の patch は `docker compose pull` と `docker compose up -d` の 2 つだけで上がる。minor を上げるときは上のブロックで `X.Y.Z` を取り、`sed` の後に値を新しい `X.Y` に書き換える。clone してソースから動かしている構成では `git pull` の後に `docker compose up -d --build` を実行する。
+
+上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
 
 データは compose の `postgres-data` volume にあり、`pull` と `up -d` は volume に触れない。volume の名前は compose のプロジェクト名（既定はディレクトリーの名前）で決まるので、ディレクトリーの名前を変えたり別のディレクトリーで起動したりすると、空の volume で新しく始まる（古い volume は `docker volume ls` に `<旧プロジェクト名>_postgres-data` として残る。戻すときはディレクトリーの名前を戻すか、`docker compose -p <旧プロジェクト名> ...` で起動する）。`docker compose down -v` だけが volume を消す。
 
