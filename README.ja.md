@@ -72,13 +72,13 @@ VPS や自宅サーバーなどリモートのホストで動かすときは、�
 
 ## ⚙️ 設定
 
-設定は `.env` の環境変数。必須はマスターキーと管理パスワードだけで、`setup-env.sh` が生成する。
+設定は `.env` の環境変数。必須はマスターキーと管理パスワードだけで、`setup-env.sh` が生成する（新しく作る `.env` には同梱 Postgres のパスワードも生成した値が入る）。
 
 | 変数 | 既定 | 用途 |
 | --- | --- | --- |
 | `ADMIN_PORT` | `8080` | 管理 UI のポート。空で無効 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台。リバースプロキシーの公開 URL |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | 同梱 Postgres の資格情報。効くのは初回起動だけ |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | 同梱 Postgres の資格情報。効くのは初回起動だけ。`setup-env.sh` が作る `.env` ではパスワードは生成した値 |
 
 全部の変数、秘密をファイルで渡す方法、リバースプロキシーは [設定](docs/configuration.md)。
 

@@ -78,7 +78,7 @@ docker compose -f docker-compose.release.yml up -d
 
 上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
 
-新しい版が `docker-compose.release.yml` や `.env.example` を変えていることがある（[変更履歴](../CHANGELOG.md) の「変更」と、**破壊的変更** の行）。公開イメージで動かしている構成では、`pull` の前に新しい版の 3 つのファイルを取り直し、`setup-env.sh` を実行し直す。`setup-env.sh` は既にある `.env` の値（マスターキーを含む）を変えず、`.env.example` に増えた変数だけを既定値のまま末尾に足す（[設定](configuration.md) の「`.env` と `setup-env.sh`」）。
+新しい版が `docker-compose.release.yml` や `.env.example` を変えていることがある（[変更履歴](../CHANGELOG.md) の「変更」と、**破壊的変更** の行）。公開イメージで動かしている構成では、`pull` の前に新しい版の 3 つのファイルを取り直し、`setup-env.sh` を実行し直す。`setup-env.sh` は既にある `.env` の値（マスターキーと `POSTGRES_PASSWORD` を含む）を変えず、`.env.example` に増えた変数だけを既定値のまま末尾に足す（[設定](configuration.md) の「`.env` と `setup-env.sh`」）。
 
 ```sh
 base=https://raw.githubusercontent.com/neverclear86/nostr-no-su/v<version>

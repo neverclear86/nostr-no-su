@@ -11,7 +11,7 @@
 | `DATABASE_URL` | （空） | バンカーのアカウントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`。`postgresql://` も可）。必須で、空なら起動しない。docker compose では同梱の Postgres を指す（注 1）。`DATABASE_URL_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ACCOUNT_MASTER_KEY` | （空） | アカウントの秘密鍵と接続 secret を暗号化するマスターキー（64 文字の 16 進 = 32 バイト、`openssl rand -hex 32`）。必須で、空か不正なら起動しない。自動生成はしない。`ACCOUNT_MASTER_KEY_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `POSTGRES_USER` | `nostr` | docker compose 専用。同梱の Postgres の接続ユーザー名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」） |
-| `POSTGRES_PASSWORD` | `nostr` | docker compose 専用。同梱の Postgres の接続パスワード（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」） |
+| `POSTGRES_PASSWORD` | `nostr` | docker compose 専用。同梱の Postgres の接続パスワード（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」）。`setup-env.sh` が新しく作る `.env` では、既定ではなく生成した 64 文字の 16 進の値が入る（「`.env` と `setup-env.sh`」） |
 | `POSTGRES_DB` | `nostr_no_su` | docker compose 専用。同梱の Postgres のデータベース名（アプリ自身は読まない）。効くのは `postgres-data` volume が空の初回だけ（「docker compose の構成」） |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | （空） | 外部プラグイン `event_logger` 固有の設定。イベントを保存する Postgres の URL（`postgres://user:pass@host:5432/db`）。docker イメージには同梱されているので、compose の既定の構成では常に読まれる。空にすると設定不足として拒否されてプラグインが読み込まれず、イベントは保存されない（起動のたびに理由が 1 行出る）。保存をやめるときはこの変数を空にせず、`PLUGIN_DIR=/plugins`（自作プラグインだけを読む）か `PLUGIN_DIR=`（全部無効）にして同梱の `event_logger` を読み込ませない。docker compose では同梱の Postgres を指す |
 | `PLUGIN_DIR` | （空） | 外部プラグインを探すディレクトリー。`:` 区切りで複数書くと左から順に読み、名前が重なったら先のディレクトリーが勝つ。空なら読み込まない。ここに置いた BEAM は本体と同じ VM で動くため、信頼できるものだけを置くこと（[プラグイン API v1](plugin-api.md) の第 8 章）。docker イメージは `ENV PLUGIN_DIR=/app/plugins` を持つので、compose を使わない `docker run` でも同梱の `event_logger` と `profile` が読まれる |
@@ -29,14 +29,14 @@
 
 ## `.env` と `setup-env.sh`
 
-docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーと管理パスワードだけである。同梱の `setup-env.sh` が、`.env.example` を `.env` に複製してこの 2 つを生成した値で埋め、`.env` を 600 にする:
+docker compose では `DATABASE_URL` が同梱の Postgres を指しているので、`.env` に書く必要があるのはマスターキーと管理パスワードだけである。同梱の `setup-env.sh` が、`.env.example` を `.env` に複製してこの 2 つを生成した値で埋め、あわせて同梱の Postgres のパスワード（`POSTGRES_PASSWORD`）も既定の `nostr` から生成した 64 文字の 16 進の値に置き換え、`.env` を 600 にする:
 
 ```sh
 sh setup-env.sh
 docker compose up --build -d   # 公開イメージなら docker compose -f docker-compose.release.yml up -d
 ```
 
-手で作るなら、同じことを次のように行う:
+手で作るなら、複製と必須の 2 つの生成を次のように行う（`POSTGRES_PASSWORD` は既定の `nostr` のままになる）:
 
 ```sh
 [ -e .env ] || cp .env.example .env
@@ -45,7 +45,7 @@ chmod 600 .env
 # .env の ADMIN_PASSWORD= の後に、openssl rand -base64 24 の出力を書く
 ```
 
-すでに `.env` があれば、`setup-env.sh` も手順も複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。`setup-env.sh` はその場合、値の入っている行は変えず、必須の 2 つのうち行が無いか空のものだけを埋め、`.env.example` にあって `.env` に無い変数を `.env.example` の行のまま末尾に足す。手で作る場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にあり、`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
+すでに `.env` があれば、`setup-env.sh` も手順も複製しない（書いてあるマスターキーを失うと、保存したアカウントの秘密鍵を復号できなくなる）。`setup-env.sh` はその場合、値の入っている行は変えず、必須の 2 つのうち行が無いか空のものだけを埋め、`.env.example` にあって `.env` に無い変数を `.env.example` の行のまま末尾に足す。`POSTGRES_PASSWORD` も新たな生成はしない（`postgres-data` volume は初回の起動時のパスワードで初期化済みで、後から変えると接続が拒否される）。行が無ければ `.env.example` の `# POSTGRES_PASSWORD=nostr` の行が足される。手で作る場合は `.env.example` と見比べて、足りない変数を書き足す。変数の意味は「環境変数」の表にあり、`.env` に書くときの注意と、compose が渡す既定値は `.env.example` にある。`chmod 600 .env` は、複製したかどうかにかかわらず、マスターキーと管理パスワードを書く `.env` をホストのほかのユーザーから読めないようにする。
 
 ## 秘密をファイルで渡す
 
@@ -144,7 +144,7 @@ compose には Postgres（`postgres:17-alpine` をダイジェストで固定し
 
 **`REMSH_ENABLED=true` にするとコンテナーに exec できる者が VM の全て（復号した秘密鍵を含む）に到達できる。既定は無効で、使うときだけ有効にして再作成すること。** 入り方は `docker compose exec nostr-no-su /app/start.sh remsh`、式を流すだけなら `printf '式.\n' | docker compose exec -T nostr-no-su /app/start.sh remsh`。抜けるときは `q().` と `init:stop().` は本体を止めてしまうので使わず、Ctrl+G の後に `q` と入力する。`-T` で式を流した場合は入力の終わりで抜ける。ノード名は `nostr_no_su@localhost`、cookie は起動ごとの乱数で `/tmp/nostr-no-su-remsh.cookie`（0600）に置き、`remsh` はこのファイルから読む。epmd と分散ノードはコンテナー内のループバックにだけ bind する。ポートは公開しない。
 
-同梱の Postgres の資格情報は `.env` の `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変える（既定は `nostr` / `nostr` / `nostr_no_su`）。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値はここから組み立てるので、ほかを書き換える必要は無い。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの URL だけが変わって接続が拒否される。パスワードは URL にそのまま入り、アプリは userinfo をパーセントデコードしない（注 1）ので、`@ : / ? # %` などを含めないこと。この文書、[運用](operations.md)、`plugins-src/event_logger/README.md` のコマンドの `-U nostr -d nostr_no_su` は既定値なので、変えたときは読み替えること。
+同梱の Postgres の資格情報は `.env` の `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` で変える（既定は `nostr` / `nostr` / `nostr_no_su`）。`setup-env.sh` が新しく作る `.env` では、`POSTGRES_PASSWORD` には既定ではなく生成した 64 文字の 16 進の値が入る。`DATABASE_URL` と `PLUGIN_EVENT_LOGGER_DATABASE_URL` の既定値はここから組み立てるので、ほかを書き換える必要は無い。効くのは `postgres-data` volume が空の初回だけで、起動した後に変えるとアプリの URL だけが変わって接続が拒否される。パスワードは URL にそのまま入り、アプリは userinfo をパーセントデコードしない（注 1）ので、`@ : / ? # %` などを含めないこと（生成する値が 16 進なのはこのため）。この文書、[運用](operations.md)、`plugins-src/event_logger/README.md` のコマンドの `-U nostr -d nostr_no_su` は既定値なので、変えたときは読み替えること。
 
 ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る。本体と同梱プラグインが出す行の水準は notice（通常）、warning（失敗したが動き続ける）、error（続けられずに止まる。起動の中止、`cannot continue`、プラグインの停止）の 3 つで、OTP のクラッシュレポートも error の行として同じ形で出る。本文中の引用はこの先頭を省いて書いている。docker のログは `json-file` の 10 MB × 3 世代で打ち切られ、`docker compose logs` で見えるのはその範囲だけである。
 
