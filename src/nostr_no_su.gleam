@@ -459,16 +459,22 @@ fn write_session_state(
       )
     engine.DeleteSession(signer:, client:) ->
       account_store.delete_session(db, timeouts, signer:, client:)
-    engine.TouchSession(signer:, client:, last_used_at:) ->
+    engine.TouchSession(session:) ->
       account_store.touch_session(
         db,
         timeouts,
-        signer:,
-        client:,
-        now: last_used_at,
+        signer: session.signer,
+        client: session.client,
+        now: session.last_used_at,
       )
-    engine.UpdateSessionPerms(signer:, client:, perms:) ->
-      account_store.update_session_perms(db, timeouts, signer:, client:, perms:)
+    engine.UpdateSessionPerms(session:) ->
+      account_store.update_session_perms(
+        db,
+        timeouts,
+        signer: session.signer,
+        client: session.client,
+        perms: session.perms,
+      )
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,

@@ -178,10 +178,10 @@ pub type Write {
   InsertSession(session: Session, evicted: List(#(String, String)))
   /// `delete_session`。
   DeleteSession(signer: String, client: String)
-  /// `touch_session`。組の最終利用を `last_used_at` に進める。
-  TouchSession(signer: String, client: String, last_used_at: Int)
-  /// `update_session_perms`。組の `perms` を差し替える。
-  UpdateSessionPerms(signer: String, client: String, perms: String)
+  /// `touch_session`。`session` は最終利用を進めた後の行の全列。
+  TouchSession(session: Session)
+  /// `update_session_perms`。`session` は `perms` を差し替えた後の行の全列。
+  UpdateSessionPerms(session: Session)
   /// 同じ組の古い承認待ち `replaced` と、`pending_capacity` で押し出す承認待ち
   /// `evicted` を `delete_pending` で消し、`insert_pending` で登録する
   /// （`insert_pending_replacing`）。
@@ -385,7 +385,7 @@ pub fn set_perms(
       let updated = Session(..session, perms: bounded)
       Ok(#(
         Engine(..engine, sessions: dict.insert(engine.sessions, pair, updated)),
-        UpdateSessionPerms(signer: signer, client: client, perms: bounded),
+        UpdateSessionPerms(session: updated),
       ))
     }
     Error(Nil) -> Error(Nil)
@@ -763,13 +763,13 @@ fn offers_secret(secret: ConnectionSecret, params: List(String)) -> Bool {
 /// `touch_attempts` に残し、それ以外は `engine` をそのまま返す。
 fn attempted(engine: Engine, execution: Execution) -> Engine {
   case execution {
-    Record(write: TouchSession(signer:, client:, last_used_at:), ..) ->
+    Record(write: TouchSession(session:), ..) ->
       Engine(
         ..engine,
         touch_attempts: dict.insert(
           engine.touch_attempts,
-          #(signer, client),
-          last_used_at,
+          #(session.signer, session.client),
+          session.last_used_at,
         ),
       )
     _ -> engine
@@ -899,22 +899,15 @@ fn touch(
   {
     True -> Respond(response)
     False -> {
+      let updated = Session(..session, last_used_at: now)
       let next =
         Engine(
           ..engine,
-          sessions: dict.insert(
-            engine.sessions,
-            pair,
-            Session(..session, last_used_at: now),
-          ),
+          sessions: dict.insert(engine.sessions, pair, updated),
           touch_attempts: dict.delete(engine.touch_attempts, pair),
         )
       Record(
-        write: TouchSession(
-          signer: session.signer,
-          client: session.client,
-          last_used_at: now,
-        ),
+        write: TouchSession(session: updated),
         next:,
         response:,
         on_failure: response,
