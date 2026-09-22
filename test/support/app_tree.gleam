@@ -513,7 +513,7 @@ fn collect_until(
 }
 
 /// 購読の報告が `quiet_ms` の間途切れるまで読み捨てる。起動時の読み込みが 1 件
-/// 以上だと、接続直後の照合に続いて同じ内容の張り直しが 1 回届きうるので、変更の
+/// 以上だと、接続直後の照合に続いて張り直しの報告が 1 回届きうるので、変更の
 /// 前にそれを片付ける。
 pub fn drain_subscriptions(
   subscribed: Subject(SubscriptionReport),

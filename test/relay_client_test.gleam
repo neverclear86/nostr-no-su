@@ -3,6 +3,7 @@
 //// CLOSED の理由による購読の張り直しと停止、生存確認によるハーフオープンの検知を
 //// 確かめる。
 
+import gleam/dict
 import gleam/dynamic
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http
@@ -477,14 +478,14 @@ fn other_bunker_filter() -> filter.Filter {
   Filter(..filter.new(), kinds: Some([24_133]), limit: Some(1))
 }
 
-/// 開いている購読と予約から作った状態。世代は 5 から数え、2 つの待ち時間はどちらも
-/// 100ms から数える。
+/// 開いている購読（フィルターはどれも `bunker_filter()`）と予約から作った状態。
+/// 世代は 5 から数え、2 つの待ち時間はどちらも 100ms から数える。
 fn state_with(
   open: List(String),
   retry: option.Option(Int),
 ) -> SubscriptionState {
   SubscriptionState(
-    open: set.from_list(open),
+    open: dict.from_list(list.map(open, fn(id) { #(id, bunker_filter()) })),
     retry: retry,
     next_generation: 5,
     delay_ms: 100,
@@ -570,7 +571,150 @@ pub fn sync_replaces_an_open_subscription_without_closing_it_test() {
       retry,
     )
   assert synced.messages == [message.Req(bunker, other_bunker_filter())]
-  assert synced.state == state_with([bunker], None)
+  assert dict.get(synced.state.open, bunker) == Ok(other_bunker_filter())
+}
+
+/// 開いている購読と同じフィルターの定義には REQ を送らず、送ったフィルターを
+/// 残す。
+pub fn sync_skips_an_open_subscription_with_the_same_filter_test() {
+  let calls = process.new_subject()
+  let state = state_with([bunker], None)
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
+    )
+  assert synced == Sync(state: state, messages: [], schedule_retry: None)
+}
+
+/// `since` だけが後ろへ動いた定義は開いている購読が覆うので、REQ を送らず、
+/// 開いている購読は最後に送ったフィルターを残す。
+pub fn sync_skips_a_later_since_test() {
+  let calls = process.new_subject()
+  let sent = Filter(..bunker_filter(), since: Some(100))
+  let state =
+    SubscriptionState(
+      ..state_with([], None),
+      open: dict.from_list([#(bunker, sent)]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(
+        calls,
+        Ok([#(bunker, Filter(..bunker_filter(), since: Some(200)))]),
+      ),
+      retry,
+    )
+  assert synced.messages == []
+  assert dict.get(synced.state.open, bunker) == Ok(sent)
+}
+
+/// `since` が前へ戻った定義は開いている購読が覆わないので、同じ id の REQ を
+/// 送り、開いている購読のフィルターを定義に更新する。
+pub fn sync_requests_an_earlier_since_test() {
+  let calls = process.new_subject()
+  let wanted = Filter(..bunker_filter(), since: Some(100))
+  let state =
+    SubscriptionState(
+      ..state_with([], None),
+      open: dict.from_list([
+        #(bunker, Filter(..bunker_filter(), since: Some(200))),
+      ]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(calls, Ok([#(bunker, wanted)])),
+      retry,
+    )
+  assert synced.messages == [message.Req(bunker, wanted)]
+  assert dict.get(synced.state.open, bunker) == Ok(wanted)
+}
+
+/// `since` の無い開いている購読は、`since` の付いた定義を覆う。
+pub fn sync_skips_a_since_under_an_open_subscription_without_one_test() {
+  let calls = process.new_subject()
+  let synced =
+    relay_client.sync(
+      state_with([bunker], None),
+      Requested,
+      reporting(
+        calls,
+        Ok([#(bunker, Filter(..bunker_filter(), since: Some(100)))]),
+      ),
+      retry,
+    )
+  assert synced.messages == []
+  assert dict.get(synced.state.open, bunker) == Ok(bunker_filter())
+}
+
+/// 定義から `since` が消えたら、開いている購読は覆わないので REQ を送る。
+pub fn sync_requests_a_definition_without_since_test() {
+  let calls = process.new_subject()
+  let state =
+    SubscriptionState(
+      ..state_with([], None),
+      open: dict.from_list([
+        #(bunker, Filter(..bunker_filter(), since: Some(100))),
+      ]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(calls, Ok([#(bunker, bunker_filter())])),
+      retry,
+    )
+  assert synced.messages == [message.Req(bunker, bunker_filter())]
+  assert dict.get(synced.state.open, bunker) == Ok(bunker_filter())
+}
+
+/// 取り直しが定義から消えた張り直しは、その id の CLOSE だけを送る。監視の購読は
+/// `since` が後ろへ動いただけ、バンカーの購読は同じフィルターなので REQ を
+/// 送らない。
+pub fn sync_a_finished_catchup_sends_only_its_close_test() {
+  let calls = process.new_subject()
+  let monitor_sent =
+    Filter(..filter.new(), authors: Some(["a"]), since: Some(100))
+  let monitor_wanted =
+    Filter(..filter.new(), authors: Some(["a"]), since: Some(200))
+  let catchup =
+    Filter(
+      ..filter.new(),
+      authors: Some(["a"]),
+      since: Some(50),
+      until: Some(150),
+    )
+  let state =
+    SubscriptionState(
+      ..state_with([], None),
+      open: dict.from_list([
+        #("nostr-no-su", monitor_sent),
+        #(bunker, bunker_filter()),
+        #("nostr-no-su-catchup-p", catchup),
+      ]),
+    )
+  let synced =
+    relay_client.sync(
+      state,
+      Requested,
+      reporting(
+        calls,
+        Ok([#("nostr-no-su", monitor_wanted), #(bunker, bunker_filter())]),
+      ),
+      retry,
+    )
+  assert synced.messages == [message.Close("nostr-no-su-catchup-p")]
+  assert synced.state.open
+    == dict.from_list([
+      #("nostr-no-su", monitor_sent),
+      #(bunker, bunker_filter()),
+    ])
 }
 
 /// 何も開いておらず定義も空なら、何も送らない。
@@ -640,7 +784,7 @@ pub fn sync_a_failed_retry_reserves_a_new_generation_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: set.from_list([bunker]),
+        open: dict.from_list([#(bunker, bunker_filter())]),
         retry: Some(5),
         next_generation: 6,
         delay_ms: 200,
@@ -681,7 +825,7 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: set.from_list([bunker]),
+        open: dict.from_list([#(bunker, bunker_filter())]),
         retry: Some(5),
         next_generation: 6,
         delay_ms: 200,
@@ -761,7 +905,7 @@ pub fn sync_a_successful_evaluation_resets_the_delay_test() {
   let calls = process.new_subject()
   let state =
     SubscriptionState(
-      open: set.new(),
+      open: dict.new(),
       retry: None,
       next_generation: 5,
       delay_ms: 400,
@@ -789,7 +933,7 @@ pub fn sync_a_closed_subscription_is_removed_and_reserved_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: set.new(),
+        open: dict.new(),
         retry: Some(5),
         next_generation: 6,
         delay_ms: 100,
@@ -816,7 +960,7 @@ pub fn sync_a_closed_subscription_keeps_the_current_reservation_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: set.new(),
+        open: dict.new(),
         retry: Some(1),
         next_generation: 5,
         delay_ms: 100,
@@ -887,7 +1031,7 @@ pub fn sync_a_successful_retry_keeps_the_closed_delay_test() {
   let synced =
     relay_client.sync(
       SubscriptionState(
-        open: set.new(),
+        open: dict.new(),
         retry: Some(1),
         next_generation: 5,
         delay_ms: 400,
@@ -911,7 +1055,7 @@ pub fn sync_a_failed_definition_after_closes_uses_its_own_delay_test() {
   let synced =
     relay_client.sync(
       SubscriptionState(
-        open: set.new(),
+        open: dict.new(),
         retry: Some(1),
         next_generation: 5,
         delay_ms: 100,
@@ -1052,7 +1196,7 @@ pub fn sync_a_retry_does_not_resubscribe_a_suspended_subscription_test() {
       retry,
     )
   assert synced.messages == [message.Req("other", filter.new())]
-  assert synced.state.open == set.from_list(["other"])
+  assert synced.state.open == dict.from_list([#("other", filter.new())])
   assert synced.state.suspended == set.from_list([bunker])
 }
 
@@ -1074,7 +1218,7 @@ pub fn sync_a_request_resubscribes_a_suspended_subscription_test() {
     )
   assert synced.messages == [message.Req(bunker, bunker_filter())]
   assert synced.state.suspended == set.new()
-  assert synced.state.open == set.from_list([bunker])
+  assert synced.state.open == dict.from_list([#(bunker, bunker_filter())])
 }
 
 // --- ループバックの WebSocket サーバーを使うテスト ---

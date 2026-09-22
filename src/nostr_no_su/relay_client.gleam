@@ -1,10 +1,13 @@
 //// リレーへの WebSocket 接続 1 本（stratus）。
 ////
 //// 購読は「現在の定義に合わせる」照合で開く。契機は接続直後、張り直しの依頼、
-//// 予約した再試行、リレーの CLOSED である。接続直後と張り直しの依頼では定義を評価し、
-//// 定義にある購読には REQ（同じ id は NIP-01 で置き換え）を、開いていて定義から
-//// 消えた購読には CLOSE を送る。定義を得られなかったときは開いている購読を変えずに
-//// 再試行を 1 つだけ予約する。CLOSED を受けたら、その id を開いている購読から外し、
+//// 予約した再試行、リレーの CLOSED である。接続は開いている購読ごとに最後に送った
+//// フィルターを覚える。接続直後と張り直しの依頼では定義を評価し、開いている購読が
+//// 覆わない定義の購読には REQ（同じ id は NIP-01 で置き換え）を、開いていて定義から
+//// 消えた購読には CLOSE を送る。覆うのは `since` 以外が同じで、送った `since` が
+//// 無いか定義の `since` 以下のときで、評価のたびに後ろへ動く `since` では送り直さない。
+//// 定義を得られなかったときは開いている購読を変えずに再試行を 1 つだけ予約する。
+//// CLOSED を受けたら、その id を開いている購読から外し、
 //// 理由の NIP-01 の接頭辞で扱いを分ける。`blocked:`、`restricted:`、AUTH の受け口の
 //// 無い接続での `auth-required:` は、次の再接続（この接続の状態ごと作り直す）か
 //// 張り直しの依頼まで張り直さない。`rate-limited:` は CLOSED の待ちを上限に上げてから、
@@ -14,6 +17,7 @@
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 //// AUTH（NIP-42）は受け口があれば応答し、無ければ応答せずログに出す。
 
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/int
@@ -27,15 +31,15 @@ import nostr_no_su/backoff
 import nostr_no_su/keepalive
 import nostr_no_su/log
 import nostr_no_su/nostr/event
-import nostr_no_su/nostr/filter.{type Filter}
+import nostr_no_su/nostr/filter.{type Filter, Filter}
 import nostr_no_su/nostr/message
 import stratus
 
 /// リレー接続に対する指示。stratus のユーザーメッセージとして送る。
 pub type Msg {
-  /// 購読を現在の定義に合わせる。定義にある購読には REQ を送り（同じ id は置き換え
-  /// になる）、開いていて定義から消えた購読には CLOSE を送る。接続直後と、張り直しの
-  /// 依頼で送る。
+  /// 購読を現在の定義に合わせる。開いている購読が覆わない定義の購読には REQ を
+  /// 送り（同じ id は置き換えになる）、開いていて定義から消えた購読には CLOSE
+  /// を送る。接続直後と、張り直しの依頼で送る。
   Subscribe
   /// 定義を得られなかった照合か、リレーが閉じた購読の張り直しをやり直す。
   /// relay_client が自分宛てに予約する。generation は予約の世代。
@@ -51,8 +55,9 @@ pub type Msg {
 pub type Client =
   Subject(stratus.InternalMessage(Msg))
 
-/// 開くべき購読を生成するサンク。接続と張り直しのたびに評価するため、時刻に
-/// 依存するフィルター（`since` など）が常に最新に保たれる。定義を得られないとき
+/// 開くべき購読を生成するサンク。接続と張り直しのたびに評価するので、時刻に
+/// 依存するフィルター（`since` など）は評価のたびに新しい値になるが、開いて
+/// いる購読が覆う間は REQ を送り直さない（`sync`）。定義を得られないとき
 /// （署名者の問い合わせの失敗など）は `Error`。`Ok([])` は「購読しない」を意味し、
 /// 開いている購読を閉じる。
 pub type Subscriptions =
@@ -101,8 +106,8 @@ pub type ClosedReason {
 /// 購読の照合の状態。stratus のプロセスが持つ。
 pub type SubscriptionState {
   SubscriptionState(
-    /// 開いている購読 id。
-    open: Set(String),
+    /// 開いている購読 id と、その購読に最後に送ったフィルター。
+    open: Dict(String, Filter),
     /// 予約中の再試行の世代。予約が無ければ None。予約は常に 1 つだけにする。
     retry: Option(Int),
     /// 次に予約するときに使う世代。予約するたびに 1 つ進める。
@@ -226,7 +231,7 @@ pub fn new_subscription_state(
   answers_auth: Bool,
 ) -> SubscriptionState {
   SubscriptionState(
-    open: set.new(),
+    open: dict.new(),
     retry: None,
     next_generation: 1,
     delay_ms: retry_delay.initial_ms,
@@ -383,11 +388,11 @@ type Cause {
 /// 照合 1 回ぶんの判断。現在の予約と世代が一致しない再試行は定義を評価せずに
 /// 捨てる。CLOSED は定義を評価せず、開いている id だけ外して理由の接頭辞で
 /// 扱いを決める（`forget_closed`）。それ以外は定義を評価し、得られれば止めた
-/// 購読を除いて REQ と CLOSE を作って予約を解き、得られなければ何も送らず、
-/// 予約が無ければ新しい世代で予約する。張り直しの依頼は評価の前に止めた購読を
-/// 空にする。定義を得られたら定義失敗の待ち時間を初期値に戻し、張り直しの依頼で
-/// 得たときは CLOSED の待ち時間も戻し、新しく予約するたびにその原因の待ち時間を
-/// 延ばす。
+/// 購読を除き、開いている購読が覆わない購読の REQ と定義から消えた購読の CLOSE を
+/// 作って（`reconcile`）予約を解き、得られなければ何も送らず、予約が無ければ新しい
+/// 世代で予約する。張り直しの依頼は評価の前に止めた購読を空にする。定義を得られたら
+/// 定義失敗の待ち時間を初期値に戻し、張り直しの依頼で得たときは CLOSED の待ち時間も
+/// 戻し、新しく予約するたびにその原因の待ち時間を延ばす。
 ///
 /// 定義をサンクで受け取るのは、捨てる再試行で定義を評価しない（バンカーへの
 /// 問い合わせを送らない）ためである。
@@ -436,16 +441,16 @@ fn evaluate(
         list.filter(wanted, fn(entry) {
           !set.contains(state.suspended, entry.0)
         })
-      let wanted_ids = set.from_list(list.map(wanted, fn(entry) { entry.0 }))
+      let #(open, messages) = reconcile(state.open, wanted)
       Sync(
         state: SubscriptionState(
           ..state,
-          open: wanted_ids,
+          open: open,
           retry: None,
           delay_ms: retry_delay.initial_ms,
           closed_delay_ms: closed_delay_after_success,
         ),
-        messages: reconcile(state.open, wanted, wanted_ids),
+        messages: messages,
         schedule_retry: None,
       )
     }
@@ -502,13 +507,13 @@ fn forget_closed(
   reason: ClosedReason,
   retry_delay: backoff.Backoff,
 ) -> Sync {
-  case set.contains(state.open, subscription_id) {
+  case dict.has_key(state.open, subscription_id) {
     False -> Sync(state: state, messages: [], schedule_retry: None)
     True -> {
       let removed =
         SubscriptionState(
           ..state,
-          open: set.delete(state.open, subscription_id),
+          open: dict.delete(state.open, subscription_id),
         )
       case reason, state.answers_auth {
         Blocked, _ | Restricted, _ | AuthRequired, False ->
@@ -533,20 +538,54 @@ fn forget_closed(
   }
 }
 
-/// 定義にある購読の REQ と、開いていて定義から消えた購読の CLOSE。CLOSE は表示と
-/// テストが安定するよう id の順に並べる。
+/// 定義にある購読のうち開いている購読が覆わないものの REQ と、開いていて定義
+/// から消えた購読の CLOSE と、照合の後に開いている購読。覆う購読は最後に送った
+/// フィルターを残す。REQ は定義の順に、CLOSE は表示とテストが安定するよう id の
+/// 順に並べる。
 fn reconcile(
-  open: Set(String),
+  open: Dict(String, Filter),
   wanted: List(#(String, Filter)),
-  wanted_ids: Set(String),
-) -> List(message.ClientMessage) {
-  let requests = list.map(wanted, fn(entry) { message.Req(entry.0, entry.1) })
+) -> #(Dict(String, Filter), List(message.ClientMessage)) {
+  let decided = list.map(wanted, reconcile_one(open, _))
+  let next = dict.from_list(list.map(decided, fn(d) { d.0 }))
+  let requests = list.filter_map(decided, fn(d) { option.to_result(d.1, Nil) })
   let closes =
-    set.difference(open, wanted_ids)
-    |> set.to_list
+    dict.drop(open, dict.keys(next))
+    |> dict.keys
     |> list.sort(string.compare)
     |> list.map(message.Close)
-  list.append(requests, closes)
+  #(next, list.append(requests, closes))
+}
+
+/// 定義の購読 1 件の照合。開いている購読が覆えば、送ったフィルターを残して
+/// 何も送らない。覆わないか開いていなければ、定義のフィルターを残してその REQ
+/// を送る。
+fn reconcile_one(
+  open: Dict(String, Filter),
+  entry: #(String, Filter),
+) -> #(#(String, Filter), Option(message.ClientMessage)) {
+  let #(id, wanted) = entry
+  case dict.get(open, id) {
+    Ok(sent) ->
+      case covers(sent, wanted) {
+        True -> #(#(id, sent), None)
+        False -> #(entry, Some(message.Req(id, wanted)))
+      }
+    Error(Nil) -> #(entry, Some(message.Req(id, wanted)))
+  }
+}
+
+/// 送ったフィルター `sent` の開いている購読が、定義のフィルター `wanted` の
+/// 購読を覆うか。`since` 以外のフィールドが同じで、`sent` の `since` が無いか
+/// `wanted` の `since` 以下なら覆う（`sent` の購読は `wanted` の範囲をすべて
+/// 運ぶ）。`wanted` だけ `since` が無ければ覆わない。
+fn covers(sent: Filter, wanted: Filter) -> Bool {
+  let since_covered = case sent.since, wanted.since {
+    None, _ -> True
+    Some(sent_since), Some(wanted_since) -> sent_since <= wanted_since
+    Some(_), None -> False
+  }
+  since_covered && Filter(..sent, since: wanted.since) == wanted
 }
 
 /// 照合を 1 回行い、その結果を送信と再試行の予約に移す。照合で新しく止めた
