@@ -99,7 +99,7 @@ const shots = [
   { name: "27-revoke-not-found", url: `${base}/sessions/revoke`, form: { signer, client: "not-approved" }, status: 404 },
   { name: "27b-revoke-not-applied", url: `${base}/sessions/revoke`, form: { signer, client: "not-applied" }, status: 409 },
   { name: "28-revoke-not-answered", url: `${base}/sessions/revoke`, form: { signer, client: "no-answer" }, status: 503 },
-  { name: "28b-approve-page-pending-unavailable", url: `${unavailable}/approve/tok-1` },
+  { name: "28b-approve-page-pending-unavailable", url: `${unavailable}/approve/tok-1`, status: 503 },
   { name: "29-reenable-not-found", url: `${base}/plugins/reenable`, form: { name: "missing" }, status: 404 },
   { name: "30-reenable-not-answered", url: `${base}/plugins/reenable`, form: { name: "no-answer" }, status: 503 },
   { name: "31-theme-menu", url: `${base}/`, click: ["summary >> nth=0"] },
