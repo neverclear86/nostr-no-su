@@ -26,6 +26,16 @@ pub fn stylesheet_defines_every_rendered_class_test() {
   assert undefined == []
 }
 
+/// ビルドした CSS がロゴの 2 色（体の紺、尻尾の青緑）を運ぶ。ロゴの色がテーマに入ったことを
+/// 自動で表す唯一の検査で、CSS の差分検査（`stylesheet_defines_every_rendered_class_test`）は
+/// ビルドの新しさしか見ない。
+pub fn the_themes_carry_the_logo_colors_test() {
+  let css = admin_ui.static_file(view.stylesheet_segments)
+  assert string.contains(css, "--color-primary:#183965")
+  assert string.contains(css, "--color-primary:#3b70ba")
+  assert string.contains(css, "--color-accent:#28b9be")
+}
+
 /// フォーカスできるボタン（`a`、`button`、`summary` の `btn`）はフォーカスの輪郭を、入力欄
 /// （`input` の `input`、`checkbox`、`textarea`、`select`）は枠を、`base-content` の色にする
 /// （デザイン方針 6 節の規則）。daisyUI の既定では輪郭が塗りの色になり、枠は薄いので、

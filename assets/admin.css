@@ -14,7 +14,8 @@
  *   どちらも必須である。data-theme の切り替えは両方のブロックから出る
  *   [data-theme=light] / [data-theme=dark] が受ける。
  * - ブロックに書かない変数はテーマ名（light、dark）の組み込みの値で埋まる。配色の変数は
- *   すべて書き、neutral・secondary・accent だけを組み込みのままにしている。
+ *   すべて書く。primary はロゴの体の色、secondary と accent はロゴの尻尾の色、neutral は
+ *   ドロップダウンの選択中の項目と選択肢の塗りに使う紺で、いずれも組み込みの値は使わない。
  */
 @import "tailwindcss" source(none);
 @source "../src/nostr_no_su/admin";
@@ -29,12 +30,18 @@
   name: "light";
   default: true;
   --color-base-100: #ffffff;
-  --color-base-200: #f3f4f6;
-  --color-base-300: #d4d8de;
-  --color-base-content: #22252b;
-  --color-primary: #2f62c9;
+  --color-base-200: #F2F5F9;
+  --color-base-300: #CFD6E1;
+  --color-base-content: #1A212B;
+  --color-primary: #183965;
   --color-primary-content: #ffffff;
-  --color-info: #2f62c9;
+  --color-secondary: #28B9BE;
+  --color-secondary-content: #0B2A2C;
+  --color-accent: #28B9BE;
+  --color-accent-content: #0B2A2C;
+  --color-neutral: #183965;
+  --color-neutral-content: #ffffff;
+  --color-info: #1D4F96;
   --color-info-content: #ffffff;
   --color-success: #176b3f;
   --color-success-content: #ffffff;
@@ -47,13 +54,19 @@
 @plugin "daisyui/theme" {
   name: "dark";
   prefersdark: true;
-  --color-base-100: #181b1f;
-  --color-base-200: #111217;
-  --color-base-300: #33373d;
-  --color-base-content: #d8d9df;
-  --color-primary: #3d6fd6;
+  --color-base-100: #171B22;
+  --color-base-200: #101319;
+  --color-base-300: #313743;
+  --color-base-content: #D7DBE3;
+  --color-primary: #3B70BA;
   --color-primary-content: #ffffff;
-  --color-info: #8fb5ff;
+  --color-secondary: #28B9BE;
+  --color-secondary-content: #06262A;
+  --color-accent: #28B9BE;
+  --color-accent-content: #06262A;
+  --color-neutral: #223A5E;
+  --color-neutral-content: #E6ECF5;
+  --color-info: #8FB4E8;
   --color-info-content: #0a1526;
   --color-success: #6fd39a;
   --color-success-content: #08160e;

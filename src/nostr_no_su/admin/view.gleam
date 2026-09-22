@@ -34,8 +34,8 @@
 //// 検査する）。
 ////
 //// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
-//// で色を継ぐ飾りである。製品のロゴだけは塗りで描き、上部バーでは単色版を `currentColor`
-//// で、`<head>` の favicon ではカラー版を `data:` の URI にして出す。
+//// で色を継ぐ飾りである。製品のロゴだけは塗りで描き、上部バーではテーマの primary と accent
+//// のユーティリティで、`<head>` の favicon ではカラー版を `data:` の URI にして出す。
 
 import gleam/int
 import gleam/list
@@ -207,15 +207,15 @@ pub type Value {
 }
 
 /// favicon にするカラー版のロゴの SVG。`fill` は属性に書き、暗い配色のときだけ `<style>` が
-/// 白版に上書きする（media が効かなければカラー版のまま出る）。
+/// 体を明るい青に上書きする（media が効かなければライトの色のまま出る）。
 fn favicon_svg() -> String {
   "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\""
   <> logo_view_box
-  <> "\" width=\"900\" height=\"900\"><style>@media (prefers-color-scheme: dark){.ink{fill:#FFFFFF}.face{fill:none}}</style><path fill=\"#FFFFFF\" class=\"face\" d=\""
+  <> "\" width=\"900\" height=\"900\"><style>@media (prefers-color-scheme: dark){.body{fill:#3B70BA}}</style><path fill=\"#FFFFFF\" d=\""
   <> logo_face_path
-  <> "\" /><path fill=\"#183965\" fill-rule=\"evenodd\" class=\"ink\" d=\""
+  <> "\" /><path fill=\"#183965\" fill-rule=\"evenodd\" class=\"body\" d=\""
   <> logo_body_path
-  <> "\" /><path fill=\"#28B9BE\" class=\"ink\" d=\""
+  <> "\" /><path fill=\"#28B9BE\" d=\""
   <> logo_tail_path
   <> "\" /></svg>"
 }
@@ -1313,24 +1313,28 @@ const logo_body_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C
 /// ビーバーの尻尾。
 const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  C 1034 499 985 454 908 454  C 826 454 747 506 713 586  C 684 664 632 717 562 750  C 471 794 366 805 293.7269 774.7955 Z"
 
-/// 目と歯。カラー版でだけ白く塗り、単色版では `logo_body_path` の穴のままにする。
+/// 目と歯。favicon では白く塗り、上部バーでは `logo_body_path` の穴のままにする。
 const logo_face_path = "M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
 
-/// 上部バーのロゴの飾り。単色版のロゴを `currentColor` で塗る。読み上げない。
+/// 上部バーのロゴの飾り。体をテーマの primary、尻尾を accent で塗り、目と歯は
+/// `logo_body_path` の穴のまま下地を透かす。読み上げない。
 pub fn logo_icon() -> Element(msg) {
   svg.svg(
     [
       attribute.aria_hidden(True),
       attribute.attribute("viewBox", logo_view_box),
-      attribute.attribute("fill", "currentColor"),
       attribute.class("size-5"),
     ],
     [
       svg.path([
         attribute.attribute("d", logo_body_path),
         attribute.attribute("fill-rule", "evenodd"),
+        attribute.class("fill-primary"),
       ]),
-      svg.path([attribute.attribute("d", logo_tail_path)]),
+      svg.path([
+        attribute.attribute("d", logo_tail_path),
+        attribute.class("fill-accent"),
+      ]),
     ],
   )
 }
