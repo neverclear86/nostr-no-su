@@ -182,9 +182,11 @@ fn monitor_spec(
 /// 保存済みの再開点（`load`）から決める。署名者がいれば、各ランナーの取り直しの
 /// 要求（`catchups`）からプラグインごとの取り直しの購読を足す。その `since` は
 /// ランナーのメモリの再開点か保存済みの値（`load_plugin`）から決め、再開点の無い
-/// 要求は落とす。取り直しの解決に失敗したら定義全体を得られなかったことにする。
-/// どれかに応答が無ければ定義を得られなかったことにし、開いている購読を閉じない。
-/// テストが本番と同じ定義でツリーを動かせるよう公開する。
+/// 要求は落とす。`until` は監視の購読の `since` までに切り詰め、範囲が残らない
+/// 要求はこのリレーでは定義しない（`config.catchup_subscriptions`）。取り直しの
+/// 解決に失敗したら定義全体を得られなかったことにする。どれかに応答が無ければ
+/// 定義を得られなかったことにし、開いている購読を閉じない。テストが本番と同じ
+/// 定義でツリーを動かせるよう公開する。
 pub fn monitor_subscriptions(
   bunker_name: Name(bunker.Msg),
   dedup_name: Name(dedup.Msg),
@@ -202,7 +204,7 @@ pub fn monitor_subscriptions(
     use since <- result.try(resume_since(in_memory, fn() { load(relay_url) }))
     use requests <- result.try(catchups())
     use resolved <- result.map(catchup_since(requests, load_plugin))
-    #(since, config.catchup_subscriptions(signers, resolved))
+    #(since, config.catchup_subscriptions(signers, since, resolved))
   }
 }
 

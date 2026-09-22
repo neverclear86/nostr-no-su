@@ -496,8 +496,8 @@ pub fn monitor_subscriptions_test() {
 /// プラグイン名を繋げた id で、`authors` と閉じた範囲 `since`〜`until` を持つ
 /// フィルターを作る。
 pub fn catchup_subscriptions_test() {
-  assert config.catchup_subscriptions([], [#("a", 100, 200)]) == []
-  assert config.catchup_subscriptions(["pk1"], [
+  assert config.catchup_subscriptions([], None, [#("a", 100, 200)]) == []
+  assert config.catchup_subscriptions(["pk1"], None, [
       #("logger", 100, 200),
       #("echo", 300, 400),
     ])
@@ -521,6 +521,33 @@ pub fn catchup_subscriptions_test() {
         ),
       ),
     ]
+}
+
+/// 監視の購読の `since` が `until` より前なら、`until` をそれに切り詰める。
+/// 切り詰めた範囲は監視の購読が運ぶ。
+pub fn catchup_subscriptions_trims_until_to_the_monitor_since_test() {
+  let assert [#(_id, query)] =
+    config.catchup_subscriptions(["pk1"], Some(150), [#("logger", 100, 200)])
+  assert query.since == Some(100)
+  assert query.until == Some(150)
+}
+
+/// 監視の購読の `since` が `until` 以降なら、取り直しの範囲は変えない。
+pub fn catchup_subscriptions_keeps_until_before_the_monitor_since_test() {
+  let assert [#(_id, query)] =
+    config.catchup_subscriptions(["pk1"], Some(250), [#("logger", 100, 200)])
+  assert query.since == Some(100)
+  assert query.until == Some(200)
+}
+
+/// 取り直しの範囲がすべて監視の購読に含まれるときは、その接続では取り直しを
+/// 定義しない。境界は両端を含むので、`since` と監視の `since` が同じなら残る。
+pub fn catchup_subscriptions_drops_a_range_the_monitor_covers_test() {
+  assert config.catchup_subscriptions(["pk1"], Some(90), [#("logger", 100, 200)])
+    == []
+  let assert [#(_id, query)] =
+    config.catchup_subscriptions(["pk1"], Some(100), [#("logger", 100, 200)])
+  assert query.until == Some(100)
 }
 
 /// 取り直しの購読 id からはプラグイン名が戻る。監視の購読 id とそれ以外は

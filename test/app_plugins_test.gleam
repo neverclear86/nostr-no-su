@@ -1081,6 +1081,40 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   stop_tree(tree)
 }
 
+/// 取り直しの購読の `until` は、その接続の監視の購読の `since` に切り詰められる。
+/// 監視の再開点が 1500、プラグインの保存済みの再開点が 1234 なら、取り直しの
+/// REQ は `since` が 1234、`until` が 1500 の範囲を持つ。
+pub fn a_catchup_subscription_ends_at_the_monitor_resume_point_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let bunker_name = process.new_name("test_bunker")
+  let plugins = [
+    forwarding_spec(
+      process.new_name("test_plugin_forwarding"),
+      process.new_subject(),
+    ),
+  ]
+  let tree =
+    start_tree(monitored_accounts_spec(
+      reports,
+      subscribed,
+      bunker_name,
+      store_with_load(fn() { load_signer(signer_key) }),
+      [test_relay()],
+      fixed_resume_point(Ok(Some(1500))),
+      plugins,
+      fixed_resume_point(Ok(Some(1234))),
+      app.plugin_catchups(plugins),
+    ))
+  let #(_skipped, first) =
+    receive_until(subscribed, requests_a_catchup(_, test_relay_url), 2000)
+  let assert Ok(Subscribed(_relay_url, messages)) = first
+  let assert [catchup] = catchup_filters(messages)
+  assert catchup.since == Some(1234)
+  assert catchup.until == Some(1500)
+  stop_tree(tree)
+}
+
 /// 保存済みの再開点が無いプラグインは、起動しても取り直しの購読を定義しない。
 /// 監視の購読は通常どおり張られる。
 pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
