@@ -14,9 +14,9 @@ issue を立ててから PR を出す。PR は main に squash マージする�
 
 [Semantic Versioning](https://semver.org/lang/ja/) に従う。0.x の間は、破壊的変更（環境変数、compose、DB のスキーマ、プラグイン API の非互換）を含むリリースは minor を、それ以外は patch を上げる。
 
-開発中の `version` は前のリリースの版のまま変えない（最初のリリースまでは `0.0.0`）。版を上げるのはリリースの PR だけで、未リリースの変更は `CHANGELOG.md` の `[Unreleased]` が表す。本体（`gleam.toml`）と `plugins-src/event_logger/gleam.toml` の版は常に同じ値にする。
+開発中の `version` は前のリリースの版のまま変えない（最初のリリースまでは `0.0.0`）。版を上げるのはリリースの PR だけで、未リリースの変更は `CHANGELOG.md` の `[Unreleased]` が表す。本体（`gleam.toml`）と `plugins-src/` の各プラグインの `gleam.toml` の版は常に同じ値にする。
 
-イメージには、本体、`vendor/stratus`、Hex の依存のライセンスが `dev/collect_licenses.sh` で入る。同梱プラグイン `event_logger` の依存は本体の依存の部分集合なので、この収集でそのまま覆われる（検証の手順 2）。
+イメージには、本体、`vendor/stratus`、Hex の依存のライセンスが `dev/collect_licenses.sh` で入る。同梱プラグイン `event_logger` と `profile` の依存は本体の依存の部分集合なので、この収集でそのまま覆われる（検証の手順 2）。
 
 ## 依存のライセンス
 
@@ -44,7 +44,7 @@ sh dev/collect_licenses.sh build/erlang-shipment
 以下はオーナーが行う手順である。
 
 1. リリースに含めると決めた issue がすべて閉じていることを確かめる。
-2. リリースの PR を出す。2 つの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
+2. リリースの PR を出す。本体と `plugins-src/` の各プラグインの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
 3. PR を squash マージし、main のそのコミットの CI（`ci`。main への push では docker イメージの検査を含む全部のジョブが走る。docs/development.md の「CI」）が成功したことを確かめ、そのコミットの SHA を控える。
 4. 手順 3 で控えたコミットに注釈付きのタグを切って push する。
 

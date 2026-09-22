@@ -43,7 +43,7 @@ COVERAGE=1 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_n
   TEST_RELAY_URL=ws://127.0.0.1:7777 gleam test
 ```
 
-対象は本体の `src/` のモジュールだけで、`vendor/`、hex の依存、`plugins-src/event_logger`、`test/`、`dev/` は入れない。バッジが名乗るのは本体のカバレッジであり、`event_logger` は別の `gleam test` で走る別のプロジェクトなので、1 つの数値にはまとめない。
+対象は本体の `src/` のモジュールだけで、`vendor/`、hex の依存、`plugins-src/`、`test/`、`dev/` は入れない。バッジが名乗るのは本体のカバレッジであり、同梱プラグインはそれぞれ別の `gleam test` で走る別のプロジェクトなので、1 つの数値にはまとめない。
 
 README（`README.md` と `README.ja.md`）のバッジは整数の百分率で、`sh dev/check_coverage_badge.sh` が計測値との差が 1 ポイントを超えたら落ちる（CI の `test` ジョブも同じ検査を行う）。ずれを直すときは `--update` で両方の README を直す:
 
@@ -90,7 +90,7 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test \
 docker rm -f nns-pg-test nns-strfry-test
 ```
 
-## event_logger プラグインのテスト
+## 同梱プラグインのテスト
 
 `event_logger` プラグインは独立した Gleam プロジェクトなので、テストもそちらで実行する。統合テストは `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す。CI の `event-logger` ジョブは Postgres を立てて渡す）:
 
@@ -102,6 +102,8 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/nostr_no_su_test g
 docker rm -f nns-pg-test
 ```
 
+`profile` プラグインのテストは DB を使わず、`cd plugins-src/profile && gleam test` で走る。
+
 ## CI
 
 `.github/workflows/ci.yml` が PR と main への push で走る（Actions の `ci` を選んで「Run workflow」で手動でも起動できる）。PR では変えたファイルの種類に応じてジョブを省略し、docs、`.claude/`、`*.md`、LICENSE だけの PR では何も検査しない（ジョブは skipped で終わり、`gh pr checks` は pass を報告する）。main への push では全部のジョブが走るので、リリースの前に手で起動する検査は無い（CONTRIBUTING.md の「リリース」）。ジョブは次のとおり:
@@ -110,6 +112,7 @@ docker rm -f nns-pg-test
 |--|--|--|
 | `test` | build、Postgres と strfry つきの `gleam test`（単体、統合、E2E。カバレッジの計測つき。strfry のログでイベントの保存を確かめる）、README のカバレッジのバッジの検査、format、例のプラグインのコンパイル、`vendor/stratus`、`.env.example`、2 つの compose の一致の検査、shipment | docs 以外を変えた |
 | `event-logger` | 共有パッケージの版の検査、event_logger の build、Postgres つきの `gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
+| `profile` | profile の build、`gleam test`、format、shipment | `plugins-src/`、`gleam.toml`、`manifest.toml` を変えた |
 | `css` | `npm run build:css` の結果が `priv/static/admin.css` と一致すること | 管理 UI の `.gleam`、`assets/`、`package*.json` を変えた |
 | `plugin-readme-build` | プラグインの README の「ビルド」の手順をそのまま実行し、同梱アプリを `manifest.toml` と突き合わせる | `plugins-src/`、`examples/` を変えた |
 | `docker-image` | 同じコミットから 2 回ビルドして同じイメージになること、実行イメージの中身、healthcheck、remsh の口、同梱プラグインの位置。`linux/amd64`（`ubuntu-latest`）と `linux/arm64`（`ubuntu-24.04-arm`）で 1 回ずつ走る | `Dockerfile`、`docker/`、`docker-compose.yml`、`docker-compose.release.yml`、`plugins-src/`、`vendor/`、`gleam.toml`、`manifest.toml` を変えた |

@@ -29,12 +29,14 @@ flowchart LR
 
     subgraph ext_plugins["外部プラグイン（PLUGIN_DIR）"]
         event_logger["event_logger<br/>Postgres へ保存"]
+        profile["profile<br/>プロフィールの表示"]
         others["その他"]
     end
 
     relays -->|"ephemeral（20000〜29999）以外"| monitor
     monitor --> plugins
     plugins --> event_logger
+    plugins --> profile
     plugins --> others
     plugins -.->|"プラグインからの送信と取得"| relays
     client <-->|"kind 24133"| relays
@@ -707,22 +709,30 @@ nostr-no-su/
 ├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、リリースの版の検査、イメージに入れるライセンスの収集（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
-│   └── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
-│       ├── gleam.toml            本体とは独立した Gleam プロジェクト
-│       ├── manifest.toml         共有パッケージの版を本体に合わせて固定する
+│   ├── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
+│   │   ├── gleam.toml            本体とは独立した Gleam プロジェクト
+│   │   ├── manifest.toml         共有パッケージの版を本体に合わせて固定する
+│   │   ├── src/
+│   │   │   ├── event_logger.gleam       API v1 の関数と起動シム
+│   │   │   ├── event_logger/store.gleam 保存アクターとスキーマ
+│   │   │   ├── event_logger/log.gleam   ログ 1 行を OTP logger へ出力（本体の log.gleam とは別実装）
+│   │   │   ├── event_logger/page.gleam  管理 UI のページの記述の組み立て（純粋）
+│   │   │   └── event_logger_ffi.erl     子仕様 map の組み立て
+│   │   └── test/
+│   └── profile/                  プロフィール（kind 0）を管理 UI に出す（状態も DB も持たない）
+│       ├── gleam.toml
+│       ├── manifest.toml
 │       ├── src/
-│       │   ├── event_logger.gleam       API v1 の関数と起動シム
-│       │   ├── event_logger/store.gleam 保存アクターとスキーマ
-│       │   ├── event_logger/log.gleam   ログ 1 行を OTP logger へ出力（本体の log.gleam とは別実装）
-│       │   ├── event_logger/page.gleam  管理 UI のページの記述の組み立て（純粋）
-│       │   └── event_logger_ffi.erl     子仕様 map の組み立て
+│       │   ├── profile.gleam         API v1 の関数
+│       │   ├── profile/page.gleam    管理 UI のページの記述の組み立て（純粋）
+│       │   └── profile_ffi.erl       取得の並行化と時刻の整形
 │       └── test/
 │
 ├── examples/plugins/             プラグインの書き方の例
 │   ├── file_logger/              状態を持たず、設定を受け取る（Erlang 1 ファイル）
 │   └── counter/                  子プロセスを申告する（Erlang 1 ファイル）
 │
-├── plugins/                      自作プラグインの置き場所（追跡しない。同梱の event_logger はイメージの /app/plugins にある）
+├── plugins/                      自作プラグインの置き場所（追跡しない。同梱の event_logger と profile はイメージの /app/plugins にある）
 │
 ├── docs/
 │   ├── usage.md                  利用者向けの使い方（管理 UI の手順）
@@ -738,7 +748,7 @@ nostr-no-su/
 ├── .github/workflows/            CI（ci.yml）、リリース（release.yml）
 ├── vendor/stratus/               パッチ済み stratus（由来とパッチは PATCH.md）
 ├── gleam.toml
-├── manifest.toml                 本体の依存の版の固定（plugins-src/event_logger と共有パッケージの版を揃える）
+├── manifest.toml                 本体の依存の版の固定（plugins-src/ の各プラグインと共有パッケージの版を揃える）
 ├── package.json                  CSS のビルドと撮影に使う npm のパッケージ（版は package-lock.json で固定する）
 ├── Dockerfile
 ├── docker-compose.yml
@@ -752,7 +762,7 @@ nostr-no-su/
 同じ名前のモジュールは本体の版が優先される（プラグイン側は影に入る）ので、共有するパッケージの版は両方の `manifest.toml` で揃え、CI で一致を検査している。
 
 `plugins/` は追跡しない。
-`plugins-src/event_logger` は Dockerfile の `plugin-build` ステージが本体と同じ toolchain の中でビルドし、イメージの `/app/plugins/event_logger` に入るので、ここへ置く必要はない。
+`plugins-src/` の各プラグインは Dockerfile のプラグインごとのビルドステージが本体と同じ toolchain の中でビルドし、イメージの `/app/plugins/<名前>` に入るので、ここへ置く必要はない。
 `examples/` のソースや改造版の `event_logger` をここへ置くときは、ホスト環境でビルドすると同梱物が変わってしまうので、各プラグインの README のビルド手順に従う。
 
 ## 環境変数と読み手

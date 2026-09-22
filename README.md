@@ -97,7 +97,7 @@ The documents below are written in Japanese.
 - [Configuration](docs/configuration.md): environment variable table, `.env`, passing secrets via files, reverse proxy, docker compose setup
 - [Operations](docs/operations.md): startup logs, backups, version upgrades, recovery, storing and rotating the master key
 - [Admin UI](docs/admin-ui.md): screen layout, account operations and results, connection approval (the auth_url flow)
-- [Plugin API v1](docs/plugin-api.md): the spec for writing plugins. Examples are in [`examples/plugins/`](examples/plugins/), and the bundled event_logger is in [`plugins-src/event_logger/`](plugins-src/event_logger/README.md)
+- [Plugin API v1](docs/plugin-api.md): the spec for writing plugins. Examples are in [`examples/plugins/`](examples/plugins/), and the bundled plugins are in [`plugins-src/`](plugins-src/)
 - [Design decisions and known limitations](docs/design-decisions.md): the decisions that shaped the app and their reasons, and the remaining limitations
 - [Architecture](docs/architecture.md): processes, the paths of events and requests, directory structure, configuration readers
 - [Development](docs/development.md): running and testing locally, testing conventions, building the admin UI's CSS and taking screenshots

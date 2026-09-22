@@ -95,7 +95,7 @@ docker compose up --build -d
 - [設定](docs/configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
 - [運用](docs/operations.md)：起動時のログ、バックアップ、版の更新、復旧、マスターキーの保管と交換
 - [管理 UI](docs/admin-ui.md)：画面の構成、アカウントの操作と結果、接続の承認（auth_url フロー）
-- [プラグイン API v1](docs/plugin-api.md)：自作プラグインの仕様。例は [`examples/plugins/`](examples/plugins/)、同梱の event_logger は [`plugins-src/event_logger/`](plugins-src/event_logger/README.md)
+- [プラグイン API v1](docs/plugin-api.md)：自作プラグインの仕様。例は [`examples/plugins/`](examples/plugins/)、同梱のプラグインは [`plugins-src/`](plugins-src/)
 - [設計上の判断と既知の制約](docs/design-decisions.md)：本体の形を決めた判断とその理由、残っている制約
 - [システム構成](docs/architecture.md)：プロセス、イベントとリクエストの経路、ディレクトリ構造、設定の読み手
 - [開発](docs/development.md)：ローカルでの実行とテスト、テストの流儀、管理 UI の CSS のビルドと画面の撮影
