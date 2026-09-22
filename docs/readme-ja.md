@@ -65,9 +65,19 @@ docker compose up --build -d
 ### 最初の設定
 
 1. ブラウザーで `http://127.0.0.1:8080/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD` の値である。
+   ![管理 UI のダッシュボード](images/usage/dashboard-ja.png)
 2. ダッシュボードのリレーの節の「追加」から、バンカーに使うリレー（`wss://relay.nsec.app` などの NIP-46 向けのリレーを推奨）と、監視に使うリレーを登録する。登録すると再起動なしで接続が開く。
+   ![リレーの役割の編集](images/usage/edit-relay-ja.png)
 3. アカウントの節の「追加」で、nsec を貼り付けて登録するか、サーバーに鍵を生成させる。生成した場合は、確認ページの nsec をバックアップしてから登録する（以後は管理パスワードを再入力したときにしか表示しない）。
+   ![nsec を貼り付けてアカウントを登録する画面](images/usage/new-account-ja.png)
 4. アカウントの行の「接続 URI と公開鍵」を開き、「接続 URI」をコピーしてクライアントに貼り付ける。secret を持たない「接続 URI（要承認）」で接続すると、管理 UI での承認を経る。
+   ![ダッシュボードで接続 URI を開いたところ](images/usage/dashboard-uri-ja.png)
+   ![クライアントからの接続の承認](images/usage/approve-ja.png)
+5. クライアントが接続した後は、「承認済みのセッション」の行の「権限を編集」から、そのクライアントに許す操作を変えられる。署名と NIP-44 の暗号化・復号のチェックで選び、一部の種別だけ署名を許すときは署名のチェックを外して「許可する kind」に種別を並べる。書き換えは次のリクエストから効き、クライアントは接続し直さなくてよい。
+   ![セッションの権限の編集](images/usage/session-permissions-ja.png)
+6. 同梱の `event_logger` プラグインは、プラグインの節に 2 つのページを足す。「Timeline」は保存したイベントの一覧、「Settings」はイベントを保存するアカウントの選択と、接続先と動いているプロセスの状態である。
+   ![event_logger のタイムラインのページ](images/usage/event-logger-timeline-ja.png)
+   ![event_logger の設定のページ](images/usage/event-logger-settings-ja.png)
 
 登録したアカウントには再起動なしで接続できる。secret も暗号化して保存するので、再起動しても接続 URI は変わらない。画面の構成と操作ごとの結果は [管理 UI](admin-ui.md)、起動時のログの読み方は [運用](operations.md) の「起動時のログ」にある。
 

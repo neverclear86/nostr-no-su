@@ -43,13 +43,19 @@ npm ci             # Tailwind CSS、daisyUI、playwright-core を package-lock.j
 npm run build:css  # assets/admin.css から priv/static/admin.css を作る
 ```
 
-管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 3 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である。サーバーは終了しないので、1 つの端末で起動したまま別の端末で撮る。初回は `npx playwright-core install chromium` で、`playwright-core` の版が使う chromium を入れる（ブラウザーが無いときのエラーが勧める `npx playwright install` は、別のパッケージとその版のブラウザーを入れるので、必要な版が入るとは限らない）:
+管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 4 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態、README に載せる画像のための失敗の状態を含まない状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である。サーバーは終了しないので、1 つの端末で起動したまま別の端末で撮る。初回は `npx playwright-core install chromium` で、`playwright-core` の版が使う chromium を入れる（ブラウザーが無いときのエラーが勧める `npx playwright install` は、別のパッケージとその版のブラウザーを入れるので、必要な版が入るとは限らない）:
 
 ```sh
 PREVIEW_PORT=18461 gleam run -m admin_preview                          # 端末 1（終了しない）
 npx playwright-core install chromium                                   # 端末 2。初回だけ
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # shots の全画面を 1280px と 375px、ライトとダークで撮る
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本語の画面を撮る
+```
+
+README に載せる画像は `dev/readme_shots.sh` で撮り直す。撮影用のサーバーの起動から停止まで行い、`docs/images/usage/` に英語と日本語の 8 枚ずつを上書きする（幅 1280px、ライト）。撮り直した画像はコミットに含める。
+
+```sh
+sh dev/readme_shots.sh
 ```
 
 ## NIP-46 の E2E（strfry）

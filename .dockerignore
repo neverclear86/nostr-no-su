@@ -3,6 +3,7 @@ build
 .claude
 .github
 *.md
+docs
 docker-compose.yml
 docker-compose.release.yml
 Dockerfile
