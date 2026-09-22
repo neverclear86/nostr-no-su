@@ -367,6 +367,9 @@ pub type Msg {
     challenge: String,
     reply: Subject(Result(List(Event), String)),
   )
+  /// プラグインからの取得の口（`plugin_api`）が使う、公開鍵が登録アカウントかどうか
+  /// の確認。読み込み前は理由を返す。
+  CheckAccount(signer: String, reply: Subject(Result(Nil, String)))
   /// プラグインからの送信の口（`plugin_api`）が使う、登録アカウントの鍵で署名した
   /// イベントの要求。NIP-46 の `sign_event` と違い、セッションの `perms` は見ない
   /// （要求元はクライアントではなく同じ VM のプラグインである）。アカウントの
@@ -549,6 +552,13 @@ pub fn sign_event(
   content: String,
 ) -> Result(Event, String) {
   named.call(name, call_timeout_ms, SignEvent(signer, kind, tags, content, _))
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// `signer` が登録アカウントか。プラグインからの取得の口（`plugin_api`）が使う。
+/// 読み込み前、未登録、あるいはアクターが応答しないときは理由を返す。
+pub fn check_account(name: Name(Msg), signer: String) -> Result(Nil, String) {
+  named.call(name, call_timeout_ms, CheckAccount(signer, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -878,6 +888,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       )
       actor.continue(state)
     }
+    CheckAccount(signer:, reply:) -> {
+      process.send(reply, registered(state, signer))
+      actor.continue(state)
+    }
     SignEvent(signer:, kind:, tags:, content:, reply:) -> {
       process.send(reply, sign_for(state, signer, kind, tags, content))
       actor.continue(state)
@@ -1188,6 +1202,18 @@ fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
       engine.find_account(state.engine, signer)
       |> result.map(account.nsec)
       |> result.replace_error(account_not_registered)
+  }
+}
+
+/// `signer` が登録アカウントか。読み込み前は `accounts_not_loaded`、未登録なら
+/// `account_not_registered` を返す。
+fn registered(state: State, signer: String) -> Result(Nil, String) {
+  case state.accounts {
+    Loading(..) -> Error(accounts_not_loaded)
+    Ready ->
+      engine.find_account(state.engine, signer)
+      |> result.replace_error(account_not_registered)
+      |> result.replace(Nil)
   }
 }
 

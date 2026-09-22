@@ -1,5 +1,5 @@
 //// 仕事を別プロセスで走らせ、共通の締め切りまで待つ。管理 UI のダッシュボードの
-//// 複数の問い合わせと、`plugin_api` の送信の集計が使う。
+//// 複数の問い合わせと、`plugin_api` の送信の集計と取得の問い合わせが使う。
 
 import gleam/erlang/process.{type Subject}
 import gleam/int

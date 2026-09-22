@@ -1,9 +1,9 @@
 //// NIP-01 の REQ に載せる購読フィルター。
 ////
 //// 持つのは `authors`、`kinds`、`#p`、`since`、`until`、`limit` の 6 つだけで、
-//// `ids` や `#e` は必要になるまで足さない。本体が設定するのは `limit` 以外の
-//// 5 つで、`limit` は今のところテストだけが使う。`until` を設定するのは
-//// プラグインの取り直しの購読だけである。
+//// `ids` や `#e` は必要になるまで足さない。`until` を設定するのはプラグインの
+//// 取り直しの購読だけで、`limit` を設定するのはプラグインからの取得の口
+//// （`plugin_api.fetch_event`）の問い合わせだけである。
 
 import gleam/json.{type Json}
 import gleam/list
