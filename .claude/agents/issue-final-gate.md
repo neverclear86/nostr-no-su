@@ -18,6 +18,7 @@ disallowedTools: Agent
 - issue の本文（受け入れ条件）
 - 差分の意味を確かめるために必要な範囲のソース。Bash の cwd（ユーザーの作業ツリー）は読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
   - cwd が PR の head より古いとき（並列にマージが進む実行では常態）は、`gh api -H 'Accept: application/vnd.github.raw' 'repos/neverclear86/nostr-no-su/contents/<path>?ref=<head>'` で PR の head から読む
+  - 語の掃き出しや `grep` も cwd ではなく PR の head から取る。cwd に無いディレクトリーは `gh api 'repos/neverclear86/nostr-no-su/git/trees/<head>?recursive=1' --jq '.tree[].path'` で一覧してから同じ `gh api` で読み、cwd の 0 件を「無し」の根拠にしない
 
 ## 見ること
 - PR レビュアーの手順が通る枝以外（`case` の既定、引数を変えた起動、失敗の経路）を diff の上で 1 回追う。最終確認の REQUEST CHANGES はここから出ている
