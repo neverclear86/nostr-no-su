@@ -1,6 +1,9 @@
-//// `plugin_api.publish_with` と `fetch_with` のテスト。バンカーと監視・バンカー
-//// 用途の偽リレー接続を直接組み立て、名前を渡す経路を叩く（`install` はこの
-//// モジュールの対象外で、`publish_event_without_install_returns_the_reason_test`
+//// `plugin_api.publish_with` と `fetch_with` のテストに、取得で届くイベントを
+//// 絞る `handle_incoming` のテストを加えたもの。経路のテストはバンカーと監視・
+//// バンカー用途の偽リレー接続を直接組み立て、名前を渡す経路を叩き、
+//// `handle_incoming` のテストは `Received` の値を直接渡して `reply` の合図を見る
+//// （`install` はこのモジュールの対象外で、
+//// `publish_event_without_install_returns_the_reason_test`
 //// と `fetch_event_without_install_returns_the_reason_test` の 2 件だけが
 //// persistent_term を読む経路を確かめる。どのテストも `install` を呼ばないため、
 //// 実行順によらず「置いていない」状態が保たれる）。
@@ -12,12 +15,15 @@ import gleam/string
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin_api
+import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import support/nip46_client.{account_for}
+import support/signed_event
 
 /// テスト用の署名者の秘密鍵（16 進）。
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
@@ -354,6 +360,63 @@ pub fn newest_picks_the_greatest_created_at_test() {
   assert plugin_api.newest([oldest, first_newest, second_newest])
     == Some(first_newest)
   assert plugin_api.newest([]) == None
+}
+
+/// 問い合わせた `pubkey` と `kind` の両方に一致するイベントは `Found` になる。
+pub fn fetch_event_keeps_an_event_matching_the_query_test() {
+  let reply = process.new_subject()
+  let matching = signed_event.new(0, "matching")
+
+  plugin_api.handle_incoming(
+    relay_client.ReceivedEvent("sub", signed_event.verified(matching)),
+    matching.pubkey,
+    0,
+    reply,
+  )
+
+  assert process.receive(reply, 0) == Ok(plugin_api.Found(matching))
+}
+
+/// 問い合わせたものと違う kind のイベントは、作者が一致しても捨てる。
+pub fn fetch_event_drops_an_event_with_a_different_kind_test() {
+  let reply = process.new_subject()
+  let other_kind = signed_event.new(1, "other kind")
+
+  plugin_api.handle_incoming(
+    relay_client.ReceivedEvent("sub", signed_event.verified(other_kind)),
+    other_kind.pubkey,
+    0,
+    reply,
+  )
+
+  assert process.receive(reply, 0) == Error(Nil)
+}
+
+/// 他人の作者のイベントは捨てる。問い合わせた kind と同じ kind 0 で、正しい
+/// イベントより大きい `created_at` を付けても `Found` にしないので、`newest`
+/// の候補に入らない。
+pub fn fetch_event_drops_an_event_from_another_author_test() {
+  let reply = process.new_subject()
+  let wanted = signed_event.new(0, "wanted")
+  // 正しいイベントより大きい `created_at` の、他人の作者の kind 0。
+  let assert Ok(attacker) =
+    engine.sign_as(
+      account_for(other_key),
+      0,
+      [],
+      "attacker",
+      wanted.created_at + 1,
+    )
+  let handle = fn(received) {
+    plugin_api.handle_incoming(received, wanted.pubkey, 0, reply)
+  }
+
+  handle(relay_client.ReceivedEvent("sub", signed_event.verified(attacker)))
+  handle(relay_client.ReceivedEvent("sub", signed_event.verified(wanted)))
+
+  // `Found` になるのは正しいイベントだけで、他人のイベントは届かない。
+  assert process.receive(reply, 0) == Ok(plugin_api.Found(wanted))
+  assert process.receive(reply, 0) == Error(Nil)
 }
 
 /// 未登録の公開鍵は理由を返す。
