@@ -93,7 +93,7 @@ root (one_for_one, 3/60)
 監視とバンカーのサブツリーが `rest_for_one` なのは、先頭のアクターが再起動したときに後続の接続もまとめて落とすためである。
 接続は復帰の過程で購読を張り直し publisher を登録し直すので、再起動したアクターが再び生きたソケットに配線される。
 一方、アカウントの変更ではバンカーアクターを再起動しない（再起動すると接続が落ち、リプレイ防止の `seen` が空になる）。
-署名者の集合が変わったら、アクターは `relay_list` に `ResubscribeAll` を送るだけで、`relay_list` が現在の全接続へ購読の張り直しを依頼し、各接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
+署名者の集合が変わったら、アクターは `relay_list` に監視とバンカーの両方の用途を指定した `ResubscribeAll` を送るだけで、`relay_list` がその用途の現在の全接続へ購読の張り直しを依頼し、各接続アクターが生きたソケットに購読を合わせ直させる（「アカウントの変更」の節）。監視の購読も署名者から組み立てるためである。
 アクターは `ResubscribeAll` を送る前に、監視が作者の照合に読む署名者の写し（`bunker.is_signer`）を persistent_term に置き直す。
 
 バンカーのサブツリーだけは、アクターの前に接続プールを置く。
@@ -224,6 +224,7 @@ map なら Erlang や Elixir で書いたプラグインも載せられる。
 `until` は復帰の時刻で、それより後のイベントは通常の購読が運ぶ。
 監視の購読の `since` は変えない。
 要求はリレーが保存済みイベントの終わり（EOSE）を告げるまで残り、最初に告げたリレーの時点でランナーが要求を落として購読を張り直させるので、他のリレーの取り直しは照合の CLOSE で閉じる（その範囲を持たないリレーが先に EOSE を返すと、取り直しはそこで終わる）。
+ランナーの起動、再有効化、取り直しの完了による張り直しは、`relay_list` が監視の用途の接続だけへ送り、バンカーの接続には送らない（バンカーの購読はプラグインに関わらず、kind 24133 を保存するリレーは REQ のたびに直近 60 秒のリクエストを送り直すため）。
 取り直しで届いたイベントはディスパッチャーを通さず、購読 id のプラグインのランナーへ直接渡る。
 
 保存は `resume_saver` が 5 秒ごとに写しを取り、変わったリレーだけを値を小さくせずに書く。
@@ -243,7 +244,7 @@ sequenceDiagram
     ui->>dedup: AddingAccount(現在時刻, 監視リレーの URL)（送るだけ）
     ui->>bk: AddAccount
     Note over bk: 書き込みに成功し、<br/>署名者の集合が変わる
-    bk->>list: ResubscribeAll（送るだけ）
+    bk->>list: ResubscribeAll([Monitor, Bunker])（送るだけ）
     bk-->>ui: Ok
     list->>conn: Resubscribe
     conn->>sock: resubscribe
@@ -396,7 +397,7 @@ sequenceDiagram
         store-->>bk: Ok
         Note over bk: 状態を変える
         opt 署名者の集合が変わった
-            bk->>list: ResubscribeAll（送るだけ）
+            bk->>list: ResubscribeAll([Monitor, Bunker])（送るだけ）
             list->>conn: Resubscribe
         end
         bk-->>ui: Ok
