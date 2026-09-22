@@ -111,4 +111,4 @@ The documents below are written in Japanese.
 
 [MIT License](LICENSE).
 `vendor/stratus/` is a modified copy of stratus under the Apache License 2.0 (attribution in [NOTICE](NOTICE), modifications in [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md)).
-The icons of the admin UI are traced from [Lucide](https://lucide.dev) strokes under the ISC license (attribution in [NOTICE](NOTICE)). The logo belongs to this repository and follows the MIT License.
+The icons of the admin UI are traced from [Lucide](https://lucide.dev) strokes under the ISC license (attribution in [NOTICE](NOTICE)). The logo belongs to this repository and follows the MIT License, except that the product name in the admin UI logo is drawn from the glyphs of [M PLUS 2](https://github.com/coz-m/MPLUS_FONTS) under the SIL Open Font License 1.1 (attribution in [NOTICE](NOTICE)).
