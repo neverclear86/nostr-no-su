@@ -489,6 +489,15 @@ pub fn plugin_page_action_rejection_is_unavailable_test() {
   assert string.contains(body, "select at least one account")
 }
 
+/// 空の値の欄も実行の口に届く。本体はフォームの空の値を落とさない。
+pub fn plugin_page_action_receives_an_empty_value_test() {
+  let response =
+    post_form(context(), "/plugins/console_logger/settings", [
+      #("reject", ""),
+    ])
+  assert response.status == 503
+}
+
 /// 実行の口を持たないページへの POST は 405 で `allow: GET`。本文が無い POST
 /// でも 415 にならない（`require_form` より先に判定するため）。
 pub fn plugin_page_action_without_the_export_is_method_not_allowed_test() {

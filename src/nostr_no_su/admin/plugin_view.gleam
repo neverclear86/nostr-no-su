@@ -10,7 +10,7 @@
 ////   `details` / `image` のいずれか
 //// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge` / `id`
 ////   のいずれか（`badge` は `table` のセルだけ、`id` は `pairs` の値だけ）
-//// - `form` の欄: `checkbox` のみ
+//// - `form` の欄: `checkbox` / `text` / `textarea` のいずれか
 ////
 //// 深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
 //// decoder が失敗するため、深すぎる入れ子は構造的に `Error` になる。
@@ -272,27 +272,48 @@ fn image_source_allowed(url: String) -> Bool {
   }
 }
 
-/// `form` の欄 1 つ。今のところ `checkbox` だけを許す。
+/// `form` の欄 1 つ。`checkbox` は真偽値、`text` は 1 行、`textarea` は複数行の文字列の欄
+/// にする。ほかの種別はその節ひとつぶんの `Error` にする。
 fn form_field(raw: Dynamic) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
     "checkbox" -> {
-      use name <- result.try(text_field(raw, "name"))
-      use _ <- result.try(case field_name_ok(name) {
-        True -> Ok(Nil)
-        False -> Error("name \"" <> name <> "\" must match [A-Za-z0-9_-]+")
-      })
+      use name <- result.try(field_name(raw))
       use label <- result.try(text_field(raw, "label"))
       use hint <- result.try(optional_text_field(raw, "hint"))
       use checked <- result.try(bool_field(raw, "checked", False))
       Ok(view.plugin_checkbox_row(name, label, hint, checked))
     }
+    "text" -> {
+      use name <- result.try(field_name(raw))
+      use label <- result.try(text_field(raw, "label"))
+      use hint <- result.try(optional_text_field(raw, "hint"))
+      use value <- result.try(optional_text_field(raw, "value"))
+      Ok(view.plugin_text_field(name, label, hint, option.unwrap(value, "")))
+    }
+    "textarea" -> {
+      use name <- result.try(field_name(raw))
+      use label <- result.try(text_field(raw, "label"))
+      use hint <- result.try(optional_text_field(raw, "hint"))
+      use value <- result.try(optional_text_field(raw, "value"))
+      Ok(view.plugin_textarea_field(name, label, hint, option.unwrap(value, "")))
+    }
     other -> Error("unknown type \"" <> other <> "\"")
   }
 }
 
-/// `checkbox` の欄に許す `name`。`plugin_config` の `normalize` と同じ考え方で、
-/// 許す文字を並べた定数と `string.contains` で判定する。
+/// 欄の `name` を読み、`field_name_alphabet` だけからなることを確かめる。外れていれば
+/// `name "<name>" must match [A-Za-z0-9_-]+`。
+fn field_name(raw: Dynamic) -> Result(String, String) {
+  use name <- result.try(text_field(raw, "name"))
+  case field_name_ok(name) {
+    True -> Ok(name)
+    False -> Error("name \"" <> name <> "\" must match [A-Za-z0-9_-]+")
+  }
+}
+
+/// 欄の `name` に許す文字。`plugin_config` の `normalize` と同じ考え方で、許す文字を
+/// 並べた定数と `string.contains` で判定する。
 const field_name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
 /// `name` が `field_name_alphabet` だけからなり、空でないこと。

@@ -127,10 +127,6 @@ fn checkbox_field(
   hint: Option(String),
   checked: Bool,
 ) -> Dynamic {
-  let hint_entry = case hint {
-    Some(hint) -> [#("hint", dynamic.string(hint))]
-    None -> []
-  }
   map_(
     list.flatten([
       [
@@ -139,9 +135,60 @@ fn checkbox_field(
         #("label", dynamic.string(label)),
         #("checked", dynamic.bool(checked)),
       ],
-      hint_entry,
+      optional_entry("hint", hint),
     ]),
   )
+}
+
+/// 欄（`text`）。
+fn text_field(
+  name: String,
+  label: String,
+  hint: Option(String),
+  value: Option(String),
+) -> Dynamic {
+  map_(
+    list.flatten([
+      [
+        #("type", dynamic.string("text")),
+        #("name", dynamic.string(name)),
+        #("label", dynamic.string(label)),
+      ],
+      optional_entry("hint", hint),
+      optional_entry("value", value),
+    ]),
+  )
+}
+
+/// 欄（`textarea`）。キーの意味は `text_field` と同じ。
+fn textarea_field(
+  name: String,
+  label: String,
+  hint: Option(String),
+  value: Option(String),
+) -> Dynamic {
+  map_(
+    list.flatten([
+      [
+        #("type", dynamic.string("textarea")),
+        #("name", dynamic.string(name)),
+        #("label", dynamic.string(label)),
+      ],
+      optional_entry("hint", hint),
+      optional_entry("value", value),
+    ]),
+  )
+}
+
+/// `key` の任意の値の組。無ければ空のリスト。
+fn optional_entry(
+  key: String,
+  value: Option(String),
+) -> List(#(String, Dynamic)) {
+  case value {
+    Some(value) -> [#(key, dynamic.string(value))]
+    None -> []
+  }
 }
 
 /// 節。
@@ -401,15 +448,88 @@ pub fn form_block_renders_checkboxes_test() {
   )
 }
 
-/// `checkbox` 以外の欄は節ひとつぶんの `Error` になる。
+/// `text` と `textarea` の欄が、それぞれの部品の描画と一致する（`hint` あり・なしの
+/// 両方を並べる）。
+pub fn form_block_renders_text_fields_test() {
+  let raw =
+    section_("Settings", [
+      form_block(
+        [
+          text_field("name", "Name", Some("displayed publicly"), Some("Alice")),
+          textarea_field("about", "About", None, Some("Hello.")),
+        ],
+        "Save",
+      ),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.post_form(
+      "/plugins/example/settings",
+      [
+        view.plugin_text_field(
+          "name",
+          "Name",
+          Some("displayed publicly"),
+          "Alice",
+        ),
+        view.plugin_textarea_field("about", "About", None, "Hello."),
+      ],
+      "Save",
+      view.Primary,
+      view.InForm,
+    )),
+  )
+}
+
+/// `value` を省いた `text` の欄は、初期値 `""` の `view.plugin_text_field` と一致する。
+pub fn form_block_text_field_defaults_to_an_empty_value_test() {
+  let raw =
+    section_("Settings", [
+      form_block([text_field("name", "Name", None, None)], "Save"),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(
+    body,
+    element.to_string(view.plugin_text_field("name", "Name", None, "")),
+  )
+}
+
+/// `textarea` の初期値は `>…</textarea>` の内容に出る（属性ではない）。
+pub fn form_block_textarea_shows_the_value_as_its_content_test() {
+  let raw =
+    section_("Settings", [
+      form_block(
+        [textarea_field("about", "About", None, Some("Hello."))],
+        "Save",
+      ),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  let body = element.to_string(el)
+  assert string.contains(body, ">Hello.</textarea>")
+}
+
+/// `text` の欄の `name` が `[A-Za-z0-9_-]+` の外なら `Error`。
+pub fn form_block_rejects_a_bad_text_field_name_test() {
+  let raw =
+    section_("Settings", [
+      form_block([text_field("bad name", "Label", None, None)], "Save"),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, "name \"bad name\" must match [A-Za-z0-9_-]+")
+}
+
+/// `checkbox` / `text` / `textarea` 以外の欄は節ひとつぶんの `Error` になる。
 pub fn form_block_rejects_an_unknown_field_type_test() {
   let raw =
     section_("Settings", [
-      form_block([map_([#("type", dynamic.string("text"))])], "Save"),
+      form_block([map_([#("type", dynamic.string("select"))])], "Save"),
     ])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert reason
-    == "section \"Settings\": block #0: field #0: unknown type \"text\""
+    == "section \"Settings\": block #0: field #0: unknown type \"select\""
 }
 
 /// `name` が `[A-Za-z0-9_-]+` の外なら `Error`。
