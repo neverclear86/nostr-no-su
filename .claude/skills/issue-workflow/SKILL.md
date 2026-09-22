@@ -80,7 +80,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 
 ```sh
 R=neverclear86/nostr-no-su
-gh issue view {{N}} -R $R --comments          # issue ごとに本文とコメントを読む
+gh issue view {{N}} -R $R --json title,body,comments   # issue ごとに本文とコメントを読む（--comments は本文を落とすことがある）
 git rev-parse --show-toplevel                                          # repoDir
 git fetch origin main
 git rev-parse origin/main                                              # base
@@ -181,7 +181,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 ## dry run（スクリプトを変えたとき）
 
-`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`tier-none`（判定が none → プラン無しで実装 → PR レビュー APPROVE → 最終確認 → マージ）、`tier-none-design-must`（none で PR ラウンド 1 が `designMust` → その場でプラン v1 / r1 → 修正 → ラウンド 2 で APPROVE）、`tier-none-deviation`（none の実装が見込みを超えて `deviation` → その場でプラン v1 / r1 → 続きを実装 → マージ）、`pr-conditions`（PR ラウンド 1 が APPROVE ＋ 条件 2 件 → 条件対応 → 再レビュー無しで最終確認）、`approve-with-conditions`（プランレビューがラウンド 1 で条件 2 件つきの APPROVE。実装の依頼文に条件が入る）、`plan2`（プラン 2 ラウンド）、`plan-stall`（2 ラウンドで `stalled`）、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`devin`（`implementer: "devin"` と組み合わせる。実装が `implementedBy: devin` を返し、集計に出る）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
+`args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオは `happy`、`tier-none`（判定が none → プラン無しで実装 → PR レビュー APPROVE → 最終確認 → マージ）、`tier-none-design-must`（none で PR ラウンド 1 が `designMust` → その場でプラン v1 / r1 → 修正 → ラウンド 2 で APPROVE）、`tier-none-deviation`（none の実装が見込みを超えて `deviation` → その場でプラン v1 / r1 → 続きを実装 → マージ）、`pr-conditions`（PR ラウンド 1 が APPROVE ＋ 条件 2 件 → 条件対応 → 再レビュー無しで最終確認）、`approve-with-conditions`（プランレビューがラウンド 1 で条件 2 件つきの APPROVE。実装の依頼文に条件が入る）、`plan2`（プラン 2 ラウンド）、`plan-stall`（2 ラウンドで `stalled`）、`question`、`needs-user`（プランレビュアーが判断を求める）、`pr-needs-user`、`gate-needs-user`、`null`（実装が結果を返さない）、`status-only`（実装が status だけを返し、スクリプトが `gh pr list` で PR を引いて補ってからレビューに進む）、`null-fix`（修正が結果を返さない）、`impl-blocked`、`fix-blocked`、`deviation`、`planurl-deviation`（`planUrl` と組み合わせる）、`replan-reject`（版上げが承認されない）、`replan-question`、`pr2`、`design-must`、`gate`（最終確認で差し戻し）、`split`（判定で 2 件に分割、2 番目は 1 番目の後）、`split-parallel`（判定で依存の無い 2 件に分割）、`triage-question`（判定で質問）、`plan-split`（判定は plan だったがプランの調査で分割）、`child-split`（サブ issue の番号に付ける。サブ issue のプランが再分割を求めて `blocked`）、`devin`（`implementer: "devin"` と組み合わせる。実装が `implementedBy: devin` を返し、集計に出る）、`ci-fail`（CI が通らず blocked）、`conflict`（マージで rebase）、`not-ready`（マージの条件を 1 回だけ確かめ直す）、`not-ready-twice`。
 
 ```json
 { "issues": [{ "n": 1, "branch": "x" }, { "n": 2, "branch": "y", "after": [1] }], "base": "0000000", "scratchpad": "/tmp/dry", "repoDir": "/tmp/dry/repo", "portBase": 5600, "trailers": { "coAuthoredBy": "a", "claudeSession": "b", "sessionUrl": "c" }, "dryRun": { "1": "plan2", "2": "conflict" } }

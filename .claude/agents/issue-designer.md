@@ -12,7 +12,7 @@ disallowedTools: Agent
 
 ## 環境
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
-- issue は `gh issue view <N> -R neverclear86/nostr-no-su --comments` で読む。管理 UI は `src/nostr_no_su/admin/`（lustre の SSR、Tailwind CSS と daisyUI、日英の切り替え、テーマの切り替え）にある。既存の画面の構成と部品を読んでから決める
+- issue は `gh issue view <N> -R neverclear86/nostr-no-su --json title,body,comments` で読む（`--comments` は本文を落とすことがあるので使わない）。管理 UI は `src/nostr_no_su/admin/`（lustre の SSR、Tailwind CSS と daisyUI、日英の切り替え、テーマの切り替え）にある。既存の画面の構成と部品を読んでから決める
 - 対象のブラウザーは Chromium 系だけでよい
 
 ## 決めること

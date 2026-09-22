@@ -44,13 +44,13 @@ hooks:
 
 ## PR を作る前の検査（この順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く）
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
-1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）
+1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）。rebase の後、プランが足す新しい識別子（関数、型、CSS のクラス）を作業ツリーで `git grep` し、土台より後にマージされた変更と同じ名前が無いことを確かめる（プランの衝突の検査は土台に対して回されている）
 2. `gleam build --warnings-as-errors`
 3. `gleam test`。CI も Postgres と strfry つきで走らせるが、CI の失敗で push をやり直さないよう、ここでも Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す。`COVERAGE=1` も付けて回し、そのあと `sh dev/check_coverage_badge.sh` を通す。計測値は環境で変わるので、`--update` でバッジを書き換えるときは、Postgres だけでなく strfry も立てて `TEST_RELAY_URL` を渡した状態（`docs/development.md` の「NIP-46 の E2E（strfry）」）で測り直してから行う（CI は両方を立てて測るので、E2E 抜きの値を書くとずれが溜まる）。
 4. `gleam format src test dev`（差分をコミットに含める）と `gleam format --check src test dev`。frontmatter の hook が同じ検査を機械的に行う（Edit / Write した `.gleam` は `dev/hook_gleam_format.sh` が整形し、`git -C <作業ツリー> push` の前に `dev/hook_push_format_check.sh` が `--check` を回して通らなければ止める）。hook は保険であり、この手順は省かない
 5. `examples/` を変えたら `erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl`。`vendor/` を変えたら `sh dev/check_vendor_stratus.sh`。`docker-compose.yml`、`docker-compose.release.yml`、`.env.example` のどれかを変えたら `sh dev/check_env_example.sh` と `sh dev/check_release_compose.sh`。`plugins-src/`、`gleam.toml`、`manifest.toml` を変えたら `sh dev/check_shared_versions.sh` と、`plugins-src/event_logger` で `gleam build --warnings-as-errors`、`gleam test`（Postgres つき）、`gleam format --check src test`
 6. `src/nostr_no_su/admin/` の `.gleam`（`i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` を実行して `priv/static/admin.css` をコミットする
-7. プランの「検証の手順」をすべて実行し、出力を保存する。プランがあるとき（tier none では回さない）は、プランの本文を保存したファイルで `sh <作業ツリー>/dev/check_plan_tests.sh <プランのファイル> <作業ツリー>` を回し、表を「テストと検証」に貼る。「無し」と出た名前は足すか、改名したなら「プランからの変更」に対応表（プランの名前 → 実際の名前）を書く
+7. プランの「検証の手順」をすべて実行し、出力を保存する。手順の番号ごとに結果を PR 本文の「テストと検証」へ 1 行ずつ写す（画面や GitHub の描画の確認など、シェルコマンドでない手順も結果を書く。欠けた番号があると PR レビューの指摘になる）。プランがあるとき（tier none では回さない）は、プランの本文を保存したファイルで `sh <作業ツリー>/dev/check_plan_tests.sh <プランのファイル> <作業ツリー>` を回し、表を「テストと検証」に貼る。「無し」と出た名前は足すか、改名したなら「プランからの変更」に対応表（プランの名前 → 実際の名前）を書く
 8. 意味が変わった語（識別子、環境変数、kind、表、画面の数）ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、README.md と docs/readme-ja.md（同じ内容の英語版と日本語版）、docs/、.env.example に古い記述が残っていないことを確かめる。確かめた語を「テストと検証」に書く（0 件でも）。`gh pr create` の前に `dev/hook_pr_body_gate.sh` が本文の必須の節（「## 概要」「## 変更点」「## テストと検証」、「掃き出した語」の行、`Closes #`、設計メモの「### 決めたこと」と受け入れ条件の表）を機械的に確かめ、欠けていれば止める。hook は保険であり、この手順は省かない
 9. 自己レビュー: push の前に差分を PR レビュアーの must と should の観点（受け入れ条件、動作の誤り、DRY、命名、文書の食い違い）で 1 回読み、見つけたものは直す
 - UI を変える issue（`ui: true`）でだけ、`dev/screenshots.mjs` で main と作業ブランチの両方の画面を撮り（幅 1280 と 375、ライトとダーク。同じ初期状態を作ってから）、PR を作った直後に `gh pr comment <PR> --attach <png>` で「変更前」「変更後」を貼る。貼るのは変えた画面だけで、全画面の一式は貼らない（撮影は一式でよいが、貼るのは差分のある画面に絞る）。言語は日本語（`ja-JP`）で撮り、英語は貼らない。英語画面の修正が主題の issue のときだけ英語で撮る。変えた画面の状態（空、エラー、承認待ちなど）は漏らさない。見た目の変わった画面が 1 つも無いとき（リファクタリングなど）は貼らず、「テストと検証」に「変更前と変更後の一式を撮って比べ、見た目の変わった画面は無い」と 1 行書く（`cmp` で一致した枚数と、一致しなかった画面を Read で見比べた結果）。UI を変えない issue では撮らない
@@ -108,7 +108,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 
 コードを書く部分だけを devin CLI（モデル `swe-2-max`。2026-10-10 まで無料）に任せ、検査・コミット・PR・CI の確認は自分で行う。devin はこのセッションの文脈もこの定義も読まないので、依頼文は `dev/devin_prompt.sh` で自己完結に組む。devin の完了待ちは `dev/devin_wait.sh` の呼び出しでだけ行う（手順 5）。
 1. 作業ツリーとブランチは「コミットと PR」のとおりに作る（origin にすでにブランチと PR があるときは devin を使わず、続きを自分で進める）
-2. 仕様を 1 ファイルに保存する。tier none は `gh issue view <N> -R neverclear86/nostr-no-su --comments` の出力、light は `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` のプランの本文。依頼文に実装時の条件があれば 1 行 1 件のファイルにも書く
+2. 仕様を 1 ファイルに保存する。tier none は `gh issue view <N> -R neverclear86/nostr-no-su --json title,body,comments --jq '.title, .body, (.comments[].body)'` の出力（`--comments` は本文を落とすことがあるので使わない）、light は `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` のプランの本文。依頼文に実装時の条件があれば 1 行 1 件のファイルにも書く
 3. devin 用の clone を作る: `git clone -q --shared "$(git rev-parse --show-toplevel)" <スクラッチパッド>/devin-<N> && git -C <スクラッチパッド>/devin-<N> checkout -q --detach $(git -C <作業ツリー> rev-parse HEAD)`（作業ツリーと同じコミットにする。土台の SHA ではない。並列のマージで origin/main が進んでいると差分が当たらない。jail は /tmp の下の独立 clone だけ受け付ける。worktree は使えない）。clone がすでにあれば（前の実行が待ちきれずに打ち切られた跡。その devin はまだ動いていることがある）、作り直す前に `sh <作業ツリー>/dev/devin_wait.sh <clone>` を手順 5 の「待ち」と同じに呼び、終了コード 0 ならその報告で手順 6 へ、1 なら `<clone>.exit` と clone を消して作り直す
 4. `sh <作業ツリー>/dev/devin_prompt.sh <N> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル] > <スクラッチパッド>/devin-<N>.txt` で依頼文を組む。Postgres のポートは依頼文の実装用のものを渡す（devin の Postgres は `pg-devin-<N>` の名前で立つ）
 5. 起動: `(~/.claude/scripts/devin-box.sh <clone> <依頼文> > <スクラッチパッド>/devin-<N>.out 2>&1; echo $? > <スクラッチパッド>/devin-<N>.exit)` を Bash の `run_in_background` で起動する（subshell と `.exit` の書き込みまでが 1 つのコマンド。依頼文は `<スクラッチパッド>/devin-<N>.txt`、clone は `<スクラッチパッド>/devin-<N>` で、`dev/devin_wait.sh` はこの名前の対応から報告・依頼文・マーカーの場所を導く）。待ち: `sh <作業ツリー>/dev/devin_wait.sh <clone>` を**前景の Bash で**呼ぶ。終了コード 2（`running:`）なら同じ呼び出しをそのまま繰り返す（10 分を超えることが普通なので、10 回以上になってよい）。出力の `elapsed` が 3600 を超えたら `pkill -f "^devin .*--prompt-file <clone>.txt"` で止め、終了コード 1 と同じ扱いにする。この待ちの間に、Monitor、`sleep`、background の完了通知待ち、ツールを呼ばずに「待つ」と述べるだけの応答をしない（サブエージェントには通知が届かず、ターンを終えた時点で強制終了される）。判定: 終了コード 0 なら `<clone>/DEVIN_REPORT.md` を読んで手順 6 か 7 へ。終了コード 1（報告が無い）または報告が `status: failed` なら、依頼文の末尾に「## 前回の失敗」として報告ファイルと出力の要点を `cat >>` で足し、`<スクラッチパッド>/devin-<N>.exit` を消してから、同じ clone でもう 1 回だけ起動と待ちをやり直す。2 回とも失敗したら devin をやめ、自分で実装する（返答の `implementedBy` を `claude` にし、reason に devin の失敗を書く）
@@ -126,7 +126,7 @@ devin に任せるのは最初の実装だけである。指摘への対応、�
 PR 本文と対応コメントは、レビュアーが次に取る行動を変える情報だけで組む。プランの言い直しや定型文で膨らませない。ツール呼び出しの間の文は 1 文までにする。
 
 ## 返すもの
-構造化出力で、status（pr）、PR の番号と URL、head のコミット、ciPassed を返す。最初の実装では implementedBy（devin か claude）も返す。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（失敗や飛ばした検査もそのまま書く）。
+構造化出力で、status（pr）、PR の番号と URL、head のコミット、ciPassed を返す。最初の実装では implementedBy（devin か claude）も返す。構造化出力は JSON のオブジェクトをそのまま渡し、文字列にしない（`{"input": "<JSON の文字列>"}` の形は schema 違反で弾かれ、直後に status だけを送り直すと実行が failed になる）。head と ciPassed は status に関わらず必須で、deviation と blocked では head に作業ツリーの HEAD、ciPassed に false を入れる。報告する事実は、このセッションのコマンドの出力で確かめたものだけにする（失敗や飛ばした検査もそのまま書く）。
 
 ## レビューの指摘を受け取ったら
 - 指摘は、指示されたレビューコメントの URL の本文を `gh api` で読む。本文は判定と件数の行だけが見えていて、指摘は `<details>` に畳まれているので、そこまで読む
