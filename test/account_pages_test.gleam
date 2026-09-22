@@ -446,8 +446,8 @@ pub fn japanese_pages_follow_the_japanese_style_test() {
   assert string.contains(delete, ">アカウントを削除する</button>")
 }
 
-/// 日本語の確認ページでは、409 の理由に前置きを付け、503 と 202 の案内の文と理由の間を
-/// 区切らない。
+/// 日本語の確認ページでは、英語のまま届いた 409 の理由に前置きを付け、503 と 202 の
+/// 案内の文と理由の間を区切らない。
 pub fn japanese_generated_key_page_explains_the_failure_test() {
   let render = fn(problem) {
     account_pages.generated_key_page(
@@ -460,7 +460,11 @@ pub fn japanese_generated_key_page_explains_the_failure_test() {
     )
   }
   assert string.contains(
-    render(account_pages.NotApplied("account is already registered")),
+    render(
+      account_pages.NotApplied(i18n.Untranslated(
+        "account is already registered",
+      )),
+    ),
     "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(

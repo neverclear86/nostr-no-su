@@ -18,7 +18,9 @@
 //// 承認待ちの一覧に無いトークンの承認ページの 404 の本文も訳す。これは外から届いた文字列
 //// ではなく、管理 UI が一覧との照合で自分で決めている判定だからである。プラグインの
 //// 再有効化の 503 は英語のまま。読み込みで飛ばされた行の理由は `vault.RowError` の型で
-//// 届くので訳す。
+//// 届くので訳す。アカウントの登録済みと未登録の理由も、バンカーが
+//// `bunker.ChangeFailure` の型で返すので訳す（未登録は `AccountNotFound` の文言を
+//// 使う）。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -396,6 +398,7 @@ pub type Message {
   PageNotFound
   ApprovalRequestGone(minutes: Int)
   AccountNotFound
+  AccountAlreadyRegistered
   MethodNotAllowedDetail
   FormNotReadable
   OriginMismatch
@@ -688,6 +691,7 @@ fn english(message: Message) -> String {
       <> " minutes) or already been approved or denied. Connect again from the client."
     AccountNotFound ->
       "This account is not registered. It may have been deleted already; check the dashboard."
+    AccountAlreadyRegistered -> "account is already registered"
     MethodNotAllowedDetail ->
       "This URL is for a button in the admin UI and cannot be opened directly. Use the dashboard instead."
     FormNotReadable ->
@@ -969,6 +973,7 @@ fn japanese(message: Message) -> String {
       <> int.to_string(minutes)
       <> " 分で失効するため時間切れになったか、すでに承認か拒否がされた可能性があります。クライアントから接続し直してください。"
     AccountNotFound -> "このアカウントは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
+    AccountAlreadyRegistered -> "このアカウントはすでに登録されています。"
     MethodNotAllowedDetail ->
       "この URL は管理 UI のボタンから送る操作のもので、直接は開けません。ダッシュボードから操作してください。"
     FormNotReadable -> "フォームの値が足りません。ダッシュボードからやり直してください。"
@@ -988,10 +993,8 @@ fn japanese(message: Message) -> String {
     GenerateNewKey -> "新しい秘密鍵を生成"
     GenerateDescription -> "サーバーで新しい秘密鍵を生成します。登録する前に、バックアップのために表示します。"
     Generate -> "生成する"
-    // 引用する理由（account is already registered）はバンカーから英語のまま届くので、
-    // 画面に出る文言と一致させるために英語で引用する。
     SkippedRowNote ->
-      "ダッシュボードに無いアカウントの登録で「account is already registered」と表示される場合は、別のマスターキーで暗号化された行がデータベースに残っています。削除の方法は docs/operations.md を参照してください。"
+      "ダッシュボードに無いアカウントの登録で「このアカウントはすでに登録されています。」と表示される場合は、別のマスターキーで暗号化された行がデータベースに残っています。削除の方法は docs/operations.md を参照してください。"
     GeneratedKey -> "生成した秘密鍵"
     BackUpNow -> "この秘密鍵を今すぐバックアップしてください。"
     GeneratedKeyNotice ->
@@ -999,10 +1002,8 @@ fn japanese(message: Message) -> String {
     RegisterThisKey -> "この鍵を登録する"
     RegistrationNotAccepted ->
       "アカウントを利用できない状態のため、登録していません。しばらく待ってから、もう一度「この鍵を登録する」を押してください。"
-    // 引用する理由（account is already registered）はバンカーから英語のまま届くので、
-    // 画面に出る文言と一致させるために英語で引用する。
     RegistrationNotConfirmed ->
-      "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「account is already registered」と表示します。"
+      "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「このアカウントはすでに登録されています。」と表示します。"
     AccountRegistered -> "アカウントを登録しました"
     BackUpIfNotAlready -> "まだバックアップしていなければ、この秘密鍵をバックアップしてください。"
     RegisteredKeyNotice -> "もう一度表示するには、管理パスワードの入力が必要です。接続 URI はダッシュボードにあります。"

@@ -349,7 +349,8 @@ pub fn pages(language: i18n.Language) -> List(String) {
     ],
     list.map(
       [
-        account_pages.NotApplied("reason"),
+        account_pages.NotApplied(i18n.Untranslated("reason")),
+        account_pages.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
         account_pages.NotAccepted("reason"),
         account_pages.NotConfirmed(i18n.StoreDidNotConfirm),
       ],

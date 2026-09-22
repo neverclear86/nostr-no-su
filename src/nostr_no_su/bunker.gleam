@@ -147,9 +147,6 @@ const accounts_not_loaded = "accounts are not loaded yet"
 /// 署名者がメモリに無いときの理由。
 const account_not_registered = "account is not registered"
 
-/// 公開鍵がすでに登録されているときの理由。
-const account_already_registered = "account is already registered"
-
 /// 問い合わせに応答が無いときの理由。
 const query_not_answered = "bunker is not responding"
 
@@ -165,11 +162,18 @@ const reloading_after_unconfirmed_write = "; the change may have been applied, r
 
 /// アカウントの変更が成功しなかった理由。`NotApplied` と `NotReady` の理由は値
 /// （鍵、secret、ラベル）を含まない固定の英文、`MaybeApplied` は原因を
-/// `NotConfirmed` で表す。管理 UI は型で応答を分け、理由は本文に出すだけにする。
+/// `NotConfirmed` で表す。登録済みと未登録は、管理 UI が表示の言語の文言に写せるよう
+/// 理由を持たない構築子で返す。管理 UI は型で応答を分け、理由は本文に出すだけにする。
 pub type ChangeFailure {
-  /// 変更は反映されていない（登録済み、未登録、書き込まれていないことが確定した
-  /// ストアの失敗）。
+  /// 変更は反映されていない（書き込まれていないことが確定したストアの失敗。DB に行が
+  /// 無い更新の `account is not registered` を含む）。
   NotApplied(reason: String)
+  /// 追加しようとした公開鍵が登録済み（メモリにあるか、DB に行がある）。変更は反映されて
+  /// いない。
+  AccountAlreadyRegistered
+  /// 変更の対象の署名者が登録されていない（secret の作り直しとラベルの差し替えはメモリに
+  /// 無い、削除はメモリにも読み込みで飛ばされた行にも無い）。変更は反映されていない。
+  AccountNotRegistered
   /// 変更を受け付けられる状態に無い（読み込み前、結果が曖昧な書き込みの後の読み直しの
   /// 前）。時間をおけば同じ変更を受け付けうる。
   NotReady(reason: String)
@@ -1301,7 +1305,7 @@ fn require_unregistered(
   signer: String,
 ) -> Result(Nil, ChangeFailure) {
   case engine.has_account(state.engine, signer) {
-    True -> Error(NotApplied(account_already_registered))
+    True -> Error(AccountAlreadyRegistered)
     False -> Ok(Nil)
   }
 }
@@ -1314,7 +1318,7 @@ fn require_registered(
 ) -> Result(Nil, ChangeFailure) {
   case engine.has_account(state.engine, signer) {
     True -> Ok(Nil)
-    False -> Error(NotApplied(account_not_registered))
+    False -> Error(AccountNotRegistered)
   }
 }
 
@@ -1330,14 +1334,16 @@ fn require_registered_or_skipped(
     False ->
       case list.any(state.skipped, fn(row) { row.pubkey == signer }) {
         True -> Ok(Nil)
-        False -> Error(NotApplied(account_not_registered))
+        False -> Error(AccountNotRegistered)
       }
   }
 }
 
 /// 読み込み済みで、かつ `check` が `Ok` のときだけストアへ書き込み、成功したら
-/// 状態を変えてから応答する。読み込みの前は `NotReady`、拒否や、書き込まれていない
-/// ことが確定した失敗のときは `NotApplied` で、状態を変えずに理由を返す。
+/// 状態を変えてから応答する。読み込みの前は `NotReady`、`check` の拒否はその失敗、
+/// 書き込まれていないことが確定した失敗のときは `NotApplied` で、状態を変えずに返す。
+/// DB に行があった追加（`AlreadyStored`）は、読み直しを積んでから
+/// `AccountAlreadyRegistered` を返す。
 ///
 /// 書き込まれたかどうか分からない失敗のときは、メモリを変えずに読み込めていない状態へ
 /// 移り、読み直しの `LoadAccounts` を積んでから `MaybeApplied` で応答する。応答を
@@ -1373,9 +1379,9 @@ fn apply_change(
         // 行ならメモリには入らないが、どちらでも行が DB にあることは確かなので、
         // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
         // 管理 UI は読み直した後の一覧を読む。
-        Error(AlreadyStored(reason)) -> #(
+        Error(AlreadyStored(_reason)) -> #(
           load_accounts(State(..state, accounts: loading(state.settings))),
-          Error(NotApplied(reason)),
+          Error(AccountAlreadyRegistered),
         )
         Error(MaybeWritten(_reason)) -> #(
           reload(state),

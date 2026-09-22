@@ -766,12 +766,12 @@ pub fn labels_and_registration_checks_test() {
       ),
     ])
 
-  let not_registered = Error(bunker.NotApplied("account is not registered"))
+  let not_registered = Error(bunker.AccountNotRegistered)
   assert bunker.update_label(name, stranger, "x") == not_registered
   assert bunker.rotate_secret(name, stranger) == not_registered
   assert bunker.remove_account(name, stranger) == not_registered
   assert bunker.add_account(name, account_for(signer_key), "again")
-    == Error(bunker.NotApplied("account is already registered"))
+    == Error(bunker.AccountAlreadyRegistered)
   assert process.receive(calls, 100) == Error(Nil)
   stop_tree(tree)
 }
@@ -959,7 +959,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   assert string.contains(response_body(pong), "\"result\":\"pong\"")
 
   assert bunker.add_account(name, account_for(other_signer_key), "again")
-    == Error(bunker.NotApplied("account is already registered"))
+    == Error(bunker.AccountAlreadyRegistered)
   assert bunker.remove_account(name, other)
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   assert list.map(database_listings(database), fn(listing) { listing.signer })
@@ -1082,7 +1082,7 @@ pub fn adding_a_row_that_only_the_store_has_reads_it_back_test() {
     _,
   ))
   assert bunker.add_account(name, account_for(other_signer_key), "")
-    == Error(bunker.NotApplied("account is already registered"))
+    == Error(bunker.AccountAlreadyRegistered)
   let stored = database_listings(database)
   assert list.length(stored) == 2
   assert bunker.accounts(name) == Ok(stored)
@@ -1123,7 +1123,7 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
 
   list.each([1, 2], fn(_attempt) {
     assert bunker.add_account(name, account_for(other_signer_key), "")
-      == Error(bunker.NotApplied("account is already registered"))
+      == Error(bunker.AccountAlreadyRegistered)
     // 追加のたびに読み直している。
     assert process.receive(loads, 0) == Ok(Nil)
     assert bunker.accounts(name) == Ok([])
@@ -1261,7 +1261,7 @@ pub fn removing_an_unlisted_signer_does_not_reach_the_store_test() {
     await_connection(reports)
 
   assert bunker.remove_account(name, stranger)
-    == Error(bunker.NotApplied("account is not registered"))
+    == Error(bunker.AccountNotRegistered)
   assert process.receive(calls, 100) == Error(Nil)
   stop_tree(tree)
 }

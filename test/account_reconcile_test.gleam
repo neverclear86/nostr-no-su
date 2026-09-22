@@ -111,7 +111,7 @@ fn reconcile_with_postgres(
   assert bunker.accounts(name) == Ok(rotated)
 
   assert bunker.add_account(name, other.account, "again")
-    == Error(bunker.NotApplied("account is already registered"))
+    == Error(bunker.AccountAlreadyRegistered)
   // 削除にはトリガーが無いので、期限の内に終わる。
   assert bunker.remove_account(name, other_pubkey) == Ok(Nil)
   let removed = database_listings(pool, key)

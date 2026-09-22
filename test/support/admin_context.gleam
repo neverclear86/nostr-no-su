@@ -186,7 +186,7 @@ pub fn test_context(
       let added_signer = account.pubkey_hex(added)
       process.send(reports, Added(added_signer, added_label))
       case added_signer == signer {
-        True -> Error(bunker.NotApplied("account is already registered"))
+        True -> Error(bunker.AccountAlreadyRegistered)
         False -> Ok(Nil)
       }
     },

@@ -2142,8 +2142,9 @@ fn apply_account_change(
 /// 受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
 /// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が
 /// 同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
-/// 反映されたか分からない原因は訳す。ほかの理由は英語の文字列で届くので、
-/// 訳さずに出す。
+/// 登録済みと未登録の理由、反映されたか分からない原因は、バンカーが型で返すので訳す。
+/// 未登録は一覧に無い署名者の 404 と同じ文言にする。ほかの理由は英語の文字列で届く
+/// ので、訳さずに出す。
 fn change_failure_response(
   language: Language,
   theme: view.Theme,
@@ -2153,6 +2154,12 @@ fn change_failure_response(
   case failure {
     bunker.NotApplied(reason) ->
       render(i18n.Untranslated(reason)) |> wisp.html_response(409)
+    bunker.AccountAlreadyRegistered ->
+      render(i18n.Translated(i18n.AccountAlreadyRegistered))
+      |> wisp.html_response(409)
+    bunker.AccountNotRegistered ->
+      render(i18n.Translated(i18n.AccountNotFound))
+      |> wisp.html_response(409)
     bunker.NotReady(reason) ->
       unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     bunker.MaybeApplied(cause) ->
@@ -2165,13 +2172,24 @@ fn change_failure_response(
   }
 }
 
-/// 生成した鍵の登録のバンカーの失敗を、確認ページの理由と状態コードに写す。状態コードは
-/// `change_failure_response` と同じ対応にする。
+/// 生成した鍵の登録のバンカーの失敗を、確認ページの理由と状態コードに写す。状態コードと
+/// 理由の訳し方は `change_failure_response` と同じ対応にする。
 fn generated_key_problem(
   failure: ChangeFailure,
 ) -> #(account_pages.GeneratedKeyProblem, Int) {
   case failure {
-    bunker.NotApplied(reason) -> #(account_pages.NotApplied(reason), 409)
+    bunker.NotApplied(reason) -> #(
+      account_pages.NotApplied(i18n.Untranslated(reason)),
+      409,
+    )
+    bunker.AccountAlreadyRegistered -> #(
+      account_pages.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
+      409,
+    )
+    bunker.AccountNotRegistered -> #(
+      account_pages.NotApplied(i18n.Translated(i18n.AccountNotFound)),
+      409,
+    )
     bunker.NotReady(reason) -> #(account_pages.NotAccepted(reason), 503)
     bunker.MaybeApplied(cause) -> #(
       account_pages.NotConfirmed(not_confirmed_message(cause)),

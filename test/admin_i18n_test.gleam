@@ -213,19 +213,19 @@ pub fn posts_without_origin_ignore_the_language_cookie_test() {
     |> string.contains("bech32 のチェックサムが一致しません。")
 }
 
-/// 日本語のページでも、バンカーから届く理由は英語のまま `lang="en"` で出す。フォームの上と
-/// アカウントの節では、何ができなかったかを日本語で前に置く。
+/// 日本語のページでも、バンカーから英語の文字列で届く理由は英語のまま `lang="en"` で
+/// 出す。フォームの上とアカウントの節では、何ができなかったかを日本語で前に置く。
 pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
-  let registered =
-    simulate.request(http.Post, "/accounts/import")
+  let conflict =
+    simulate.request(http.Post, action_path(dashboard.EditLabel))
     |> with_credentials("admin", password)
     |> in_japanese
-    |> simulate.form_body([#("nsec", signer_nsec), #("label", "work")])
-    |> admin.handle_request(context(), _)
-  assert registered.status == 409
+    |> simulate.form_body([#("label", "new")])
+    |> admin.handle_request(failing_context(bunker.NotApplied(unavailable)), _)
+  assert conflict.status == 409
   assert string.contains(
-    simulate.read_body(registered),
-    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+    simulate.read_body(conflict),
+    "<span>ラベルを保存できませんでした。<span lang=\"en\">" <> unavailable <> "</span></span>",
   )
   let unavailable_body =
     simulate.request(http.Get, "/")
@@ -288,6 +288,45 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
     body,
     "<span>" <> i18n.text(i18n.Japanese, message) <> "</span>",
   )
+  assert !string.contains(body, "<span lang=\"en\">")
+}
+
+/// 日本語のページで、アカウントの登録済みと未登録の理由が日本語になる（`lang="en"` の
+/// `span` が無い）。nsec 入力による登録と生成した鍵の登録の登録済み、ラベルの編集の
+/// 未登録のどれも対象。
+pub fn japanese_pages_translate_account_registration_reasons_test() {
+  let already_registered =
+    i18n.text(i18n.Japanese, i18n.AccountAlreadyRegistered)
+  let cases = [
+    #(
+      context(),
+      "/accounts/import",
+      [#("nsec", signer_nsec), #("label", "work")],
+      already_registered,
+    ),
+    #(
+      context(),
+      "/accounts/register-generated",
+      [#("nsec", signer_nsec), #("label", "work")],
+      already_registered,
+    ),
+    #(
+      failing_context(bunker.AccountNotRegistered),
+      action_path(dashboard.EditLabel),
+      [#("label", "new")],
+      i18n.text(i18n.Japanese, i18n.AccountNotFound),
+    ),
+  ]
+  use #(failing, path, fields, expected) <- list.each(cases)
+  let response =
+    simulate.request(http.Post, path)
+    |> with_credentials("admin", password)
+    |> in_japanese
+    |> simulate.form_body(fields)
+    |> admin.handle_request(failing, _)
+  assert response.status == 409
+  let body = simulate.read_body(response)
+  assert string.contains(body, "<span>" <> expected <> "</span>")
   assert !string.contains(body, "<span lang=\"en\">")
 }
 
