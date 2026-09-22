@@ -1200,6 +1200,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { Nil },
       reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      stable_after_ms: relay_connection.default_stable_after_ms,
     ))
 
   assert process.receive(connections, 2000) == Ok(Nil)
@@ -1273,6 +1274,7 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { Nil },
       reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      stable_after_ms: relay_connection.default_stable_after_ms,
     ))
 
   assert process.receive(connections, 2000) == Ok(Nil)
@@ -1378,6 +1380,7 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { process.send(disconnects, Nil) },
       reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      stable_after_ms: relay_connection.default_stable_after_ms,
     ))
 
   let assert Ok(first_pid) = process.receive(connection_pids, 2000)

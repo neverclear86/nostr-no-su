@@ -69,15 +69,18 @@ fn start_named(
     reports,
     connect,
     Backoff(initial_ms: delay_ms, max_ms: delay_ms),
+    relay_connection.default_stable_after_ms,
   )
 }
 
-/// 指定した名前と待ち時間の延ばし方で接続アクターを起動する。
+/// 指定した名前と待ち時間の延ばし方、待ち時間を初期値に戻すのに要る接続の
+/// 継続時間で接続アクターを起動する。
 fn start_with_delay(
   name: Name(relay_connection.Msg),
   reports: Subject(Report),
   connect: relay_connection.Connector,
   reconnect_delay: backoff.Backoff,
+  stable_after_ms: Int,
 ) -> Pid {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
@@ -87,6 +90,7 @@ fn start_with_delay(
       on_connect: fn(_socket) { process.send(reports, Rewired) },
       on_disconnect: fn() { process.send(reports, Unwired) },
       reconnect_delay: reconnect_delay,
+      stable_after_ms: stable_after_ms,
     ))
   started.pid
 }
@@ -316,6 +320,7 @@ pub fn the_reconnect_delay_grows_while_connecting_fails_test() {
       reports,
       refuses(reports),
       Backoff(initial_ms: 100, max_ms: 1600),
+      relay_connection.default_stable_after_ms,
     )
   assert process.receive(reports, 1000) == Ok(Refused)
   let assert Ok(Unwired) = process.receive(reports, 1000)
@@ -328,8 +333,36 @@ pub fn the_reconnect_delay_grows_while_connecting_fails_test() {
   stop(actor)
 }
 
-/// 接続できると、再接続までの待ち時間は初期値に戻る。
-pub fn a_successful_connect_resets_the_reconnect_delay_test() {
+/// 接続の直後に切られる繰り返しは失敗として数え、再接続までの待ち時間が延びる。
+pub fn the_reconnect_delay_grows_while_connections_drop_right_away_test() {
+  let reports = process.new_subject()
+  let actor =
+    start_with_delay(
+      process.new_name("test_relay"),
+      reports,
+      connects(reports),
+      Backoff(initial_ms: 100, max_ms: 1600),
+      relay_connection.default_stable_after_ms,
+    )
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
+  let assert Ok(Rewired) = process.receive(reports, 1000)
+  process.kill(socket)
+  let assert Ok(Unwired) = process.receive(reports, 1000)
+  // 3 回目の後の待ちの基準値は 400ms（下限 320ms）なので、250ms 以内には来ない。
+  assert process.receive(reports, 250) == Error(Nil)
+  stop(actor)
+}
+
+/// 接続が一定の時間続いた後に切れると、再接続までの待ち時間は初期値に戻る。
+pub fn a_lasting_connection_resets_the_reconnect_delay_test() {
   let reports = process.new_subject()
   let connect = fn() {
     case next_attempt() {
@@ -350,6 +383,7 @@ pub fn a_successful_connect_resets_the_reconnect_delay_test() {
       reports,
       connect,
       Backoff(initial_ms: 100, max_ms: 3200),
+      200,
     )
   assert process.receive(reports, 1000) == Ok(Refused)
   let assert Ok(Unwired) = process.receive(reports, 1000)
@@ -360,6 +394,7 @@ pub fn a_successful_connect_resets_the_reconnect_delay_test() {
   let assert Ok(Connected(socket)) = process.receive(reports, 2000)
   let assert Ok(Rewired) = process.receive(reports, 1000)
 
+  process.sleep(400)
   process.kill(socket)
   let assert Ok(Unwired) = process.receive(reports, 1000)
   // 待ち時間が初期値に戻っていれば 400ms 以内に再接続する

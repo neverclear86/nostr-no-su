@@ -5,6 +5,11 @@
 //// バイザーの再起動許容回数を消費することがない。これには exit の trap が必要で、
 //// その結果、ツリー停止時にスーパーバイザーが送る exit シグナルもメッセージとして
 //// 届くようになる。`handle` は pid で両者を区別し、後者は再送出する。
+////
+//// 再接続の待ちは失敗のたびに延ばし、接続が `stable_after_ms` 以上続いた後に
+//// 切れたときだけ初期値から数え直す。ハンドシェイクが通った時点で戻すと、接続を
+//// 受け入れてすぐに切るリレーを初期値の間隔で叩き続けるので、それより前の切断は
+//// 接続の失敗と同じく失敗として数える。
 
 import gleam/erlang/process.{type ExitMessage, type Name, type Pid, type Subject}
 import gleam/int
@@ -15,13 +20,19 @@ import nostr_no_su/backoff
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/time
 
 /// 接続が切れた、あるいは拒否された後の再接続の待ち時間。5 秒から倍にして 5 分で
-/// 頭打ちにし、接続できたら 5 秒から数え直す。
+/// 頭打ちにし、接続が `default_stable_after_ms`（60 秒）以上続いた後に切れた
+/// ときだけ 5 秒から数え直す。
 pub const default_reconnect_delay = backoff.Backoff(
   initial_ms: 5000,
   max_ms: 300_000,
 )
+
+/// 再接続の待ちを初期値に戻すのに要る、接続が続いた時間（60 秒）。これより前に
+/// 切れた接続は失敗として数える。
+pub const default_stable_after_ms = 60_000
 
 /// 状態の問い合わせを待つ時間。接続試行はアクターのループをブロックするため、
 /// `relay_client` の connect タイムアウト（3 秒）より長く取る。
@@ -48,7 +59,8 @@ pub type Status {
 /// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
 /// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、ソケットを
 /// 失ったとき（再接続を待つ間、および親（スーパーバイザー）からの停止）に
-/// 行う処理、再接続の待ち時間の延ばし方。
+/// 行う処理、再接続の待ち時間の延ばし方、待ち時間を初期値に戻すのに要る接続の
+/// 継続時間（ミリ秒）。
 pub type Settings {
   Settings(
     name: Name(Msg),
@@ -57,6 +69,7 @@ pub type Settings {
     on_connect: fn(Socket) -> Nil,
     on_disconnect: fn() -> Nil,
     reconnect_delay: backoff.Backoff,
+    stable_after_ms: Int,
   )
 }
 
@@ -113,8 +126,12 @@ type State {
     socket: Option(Socket),
     /// 直前の失敗の理由。接続中や未失敗なら `None`。
     failure: Option(String),
-    /// 次に失敗したときの、ジッターを掛ける前の待ち時間。
+    /// 次に失敗したときの、ジッターを掛ける前の待ち時間。`stable_after_ms` 以上
+    /// 続いた接続が切れたときは使わず、初期値を使う。
     delay_ms: Int,
+    /// 生きたソケットを開いた時刻（`time.monotonic_ms` の目盛り）。ソケットを
+    /// 持たない間は `None`。
+    connected_at_ms: Option(Int),
   )
 }
 
@@ -162,6 +179,7 @@ fn initialise(
     socket: None,
     failure: None,
     delay_ms: settings.reconnect_delay.initial_ms,
+    connected_at_ms: None,
   )
   |> actor.initialised
   |> actor.selecting(selector)
@@ -221,9 +239,10 @@ fn socket_pid(state: State) -> Option(Pid) {
   option.map(state.socket, fn(socket) { socket.pid })
 }
 
-/// ソケットを開き、新しいソケットを `on_connect` に渡す。リレーに到達できない
-/// ときは再試行を予約する。失敗の後に接続できたらその旨を 1 行出し、待ち時間を
-/// 初期値に戻す。
+/// ソケットを開き、新しいソケットを `on_connect` に渡して開いた時刻を覚える。
+/// 失敗の後に接続できたらその旨を 1 行出す。リレーに到達できないときは再試行を
+/// 予約する。待ち時間はここでは戻さず、切れたときに `reconnect` が接続の続いた
+/// 時間から決める。
 fn open(state: State) -> actor.Next(State, Msg) {
   case state.settings.connect() {
     Ok(socket) -> {
@@ -242,7 +261,7 @@ fn open(state: State) -> actor.Next(State, Msg) {
           ..state,
           socket: Some(socket),
           failure: None,
-          delay_ms: state.settings.reconnect_delay.initial_ms,
+          connected_at_ms: Some(time.monotonic_ms()),
         ),
       )
     }
@@ -253,10 +272,12 @@ fn open(state: State) -> actor.Next(State, Msg) {
 /// ソケットが失われた理由をログ出力し、`on_connect` で配った送信手段を撤回して
 /// もらったうえで、次の試行を予約する。接続そのものに失敗した場合も通るが、
 /// 配っていない送信手段の撤回は何も起こさないため区別しない。同じ理由の失敗が
-/// 続く間はログを出さない。待ち時間は失敗のたびに延ばす。
+/// 続く間はログを出さない。待ち時間は `base_delay` の値にジッターを掛けて使い、
+/// 次の失敗に向けてその値を倍にする（上限で頭打ち）。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
-  let delay = backoff.jittered(state.delay_ms)
+  let base_ms = base_delay(state)
+  let delay = backoff.jittered(base_ms)
   case reconnect_report(state.failure, reason, delay) {
     Some(line) ->
       log.write(log.Warning, log.relay_prefix(state.settings.relay), line)
@@ -268,9 +289,24 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
       ..state,
       socket: None,
       failure: Some(reason),
-      delay_ms: backoff.next(state.settings.reconnect_delay, state.delay_ms),
+      delay_ms: backoff.next(state.settings.reconnect_delay, base_ms),
+      connected_at_ms: None,
     ),
   )
+}
+
+/// 次の試行までの、ジッターを掛ける前の待ち時間。`stable_after_ms` 以上続いた
+/// ソケットを失ったときは初期値から数え直し、それ以外（接続の失敗と、それより
+/// 早い切断）は失敗が続いているものとして今の待ち時間を使う。
+fn base_delay(state: State) -> Int {
+  let lasted = case state.connected_at_ms {
+    Some(at_ms) -> time.monotonic_ms() - at_ms >= state.settings.stable_after_ms
+    None -> False
+  }
+  case lasted {
+    True -> state.settings.reconnect_delay.initial_ms
+    False -> state.delay_ms
+  }
 }
 
 /// 再接続を予約するときに出すログ行。直前の失敗と同じ理由なら `None`、それ以外は
