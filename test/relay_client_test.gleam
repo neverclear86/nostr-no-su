@@ -92,19 +92,30 @@ pub fn describe_start_error_reports_a_timeout_test() {
     == "WebSocket handshake timed out"
 }
 
+/// 購読の無い `relay_client` を既定の再試行と生存確認の間隔で `url` へ
+/// 起動する。接続の失敗を見るテストが使う。
+fn start_unsubscribed(url: String) -> Result(relay_client.Client, String) {
+  relay_client.start(
+    url,
+    fn() { Ok([]) },
+    fn(_event) { Nil },
+    fn(_ack) { Nil },
+    None,
+    relay_client.subscription_retry_delay,
+    relay_client.keepalive_interval_ms,
+  )
+}
+
+/// `Content-Length` に `length` を宣言し、本文を送らない 400 の応答。
+fn oversized_response(length: String) -> String {
+  "HTTP/1.1 400 Bad Request\r\nContent-Length: " <> length <> "\r\n\r\n"
+}
+
 /// `.invalid` は RFC 6761 で名前解決に必ず失敗することが定められた予約ドメインで、
 /// 名前解決の失敗（vendor のパッチ 0003 が扱う `nxdomain`）を安定して再現できる。
 /// この経路が回帰すると、`InitExited` のスタックトレースを含む文が返る。
 pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
-  assert relay_client.start(
-      "ws://relay.invalid:7777",
-      fn() { Ok([]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
-    )
+  assert start_unsubscribed("ws://relay.invalid:7777")
     == Error("WebSocket handshake failed: Sock(Nxdomain)")
 }
 
@@ -114,19 +125,33 @@ pub fn start_reports_an_unresolvable_host_as_a_handshake_failure_test() {
 /// `tls_alert`）を安定して再現できる。この経路が回帰すると、写像が
 /// `case_clause` で落ちてこの文が返らない。
 pub fn start_reports_a_tls_alert_as_a_handshake_failure_test() {
-  let port = listen_on_plain_tcp()
-  assert relay_client.start(
-      "wss://127.0.0.1:" <> int.to_string(port),
-      fn() { Ok([]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
-    )
+  let port =
+    listen_on_plain_tcp("HTTP/1.1 400 Bad Request\r\n\r\n", fn() { Nil })
+  assert start_unsubscribed("wss://127.0.0.1:" <> int.to_string(port))
     == Error(
       "WebSocket handshake failed: Sock(TlsAlert(\"unexpected_message\"))",
     )
+}
+
+/// ハンドシェイクの応答が `content-length` に受信の上限
+/// （`stratus.max_buffer_bytes`）を超える本文の長さを宣言すると、本文を
+/// 読まずにハンドシェイクの失敗になる。
+pub fn start_rejects_a_handshake_body_over_the_receive_limit_test() {
+  let port =
+    listen_on_plain_tcp(
+      oversized_response(int.to_string(stratus.max_buffer_bytes + 1)),
+      fn() { Nil },
+    )
+  assert start_unsubscribed("ws://127.0.0.1:" <> int.to_string(port))
+    == Error("WebSocket handshake failed with status 400")
+}
+
+/// 負の `content-length` も同じ失敗になる。負の長さは本文のパターンに
+/// 一致しないので、上限の検査が無ければ本文を読み続ける。
+pub fn start_rejects_a_negative_handshake_content_length_test() {
+  let port = listen_on_plain_tcp(oversized_response("-1"), fn() { Nil })
+  assert start_unsubscribed("ws://127.0.0.1:" <> int.to_string(port))
+    == Error("WebSocket handshake failed with status 400")
 }
 
 // --- handle_text の単体テスト ---
@@ -941,10 +966,10 @@ fn failing_once(evaluations: Subject(Int)) -> Subscriptions {
 @external(erlang, "subscription_counter", "next")
 fn next_evaluation() -> Int
 
-/// 平文の TCP の待ち受けを立て、そのポート番号を返す。TLS のアラートの
-/// 再現に使う。
+/// 平文の TCP の待ち受けを立て、そのポート番号を返す。接続を受けるたびに
+/// `on_accept` を呼び、`response` を送って相手が閉じるまで保つ。
 @external(erlang, "plain_tcp_server", "listen")
-fn listen_on_plain_tcp() -> Int
+fn listen_on_plain_tcp(response: String, on_accept: fn() -> Nil) -> Int
 
 /// 本物の `relay_client` を接続する。
 fn connect(
@@ -1220,6 +1245,41 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
 
   stop_client(client)
   stop_relay(relay)
+}
+
+/// ハンドシェイクの応答が宣言する本文の長さが上限を超えると接続は失敗し、
+/// `relay_connection` が張り直す。
+pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
+  let connections = process.new_subject()
+  let port =
+    listen_on_plain_tcp(
+      oversized_response(int.to_string(stratus.max_buffer_bytes + 1)),
+      fn() { process.send(connections, Nil) },
+    )
+  let url = "ws://127.0.0.1:" <> int.to_string(port)
+  let assert Ok(started) =
+    relay_connection.start(relay_connection.Settings(
+      name: process.new_name("handshake_body_limit"),
+      relay: relay_client.label(url),
+      connect: fn() {
+        app.open_websocket(
+          url,
+          fn() { Ok([#(bunker, filter.new())]) },
+          fn(_event) { Nil },
+          fn(_ack) { Nil },
+          None,
+        )
+      },
+      on_connect: fn(_socket) { Nil },
+      on_disconnect: fn() { Nil },
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+    ))
+
+  assert process.receive(connections, 2000) == Ok(Nil)
+  assert process.receive(connections, 2000) == Ok(Nil)
+
+  process.unlink(started.pid)
+  process.kill(started.pid)
 }
 
 // --- 発行結果の通知 ---
