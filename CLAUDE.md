@@ -19,7 +19,8 @@ CI（`.github/workflows/ci.yml`。食い違ったら `ci.yml` が正）は、PR 
 
 ```sh
 gleam build --warnings-as-errors
-TEST_DATABASE_URL=... TEST_RELAY_URL=... gleam test   # Postgres の統合テストと strfry の E2E も走る（起動は docs/development.md）
+COVERAGE=1 TEST_DATABASE_URL=... TEST_RELAY_URL=... gleam test   # 統合テストと E2E も走る。COVERAGE=1 でカバレッジを計測（起動は docs/development.md）
+sh dev/check_coverage_badge.sh                                   # README のカバレッジのバッジと計測値の突き合わせ
 gleam format --check src test dev
 erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl
 sh dev/check_vendor_stratus.sh
