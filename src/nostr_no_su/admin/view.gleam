@@ -1831,7 +1831,7 @@ const clock_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
 ]
 
-/// セッションの節のアイコン（Lucide の clock）。
+/// セッションの節と、承認待ちの帯の更新の間隔のアイコン（Lucide の clock）。
 pub fn clock_icon() -> Element(msg) {
   lucide_icon("size-4", clock_icon_paths)
 }
