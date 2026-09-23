@@ -794,9 +794,10 @@ pub fn hint(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm text-muted")], [html.text(text)])
 }
 
-/// カードの中でフォームの前に置く、フォームの説明。
+/// カードの中でフォームの前に置く、フォームの説明。プラグインの `text` ブロックも
+/// この部品で描く。空白の無い長い語（URL など）は枠の幅で折り返す。
 pub fn form_description(text: String) -> Element(msg) {
-  html.p([attribute.class("text-sm")], [html.text(text)])
+  html.p([attribute.class("text-sm break-words")], [html.text(text)])
 }
 
 /// プラグインのフォームが宣言するチェック 1 件の行。チェック、ラベル、あれば説明を

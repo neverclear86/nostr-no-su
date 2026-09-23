@@ -311,6 +311,16 @@ pub fn section_renders_every_block_type_test() {
   )
 }
 
+/// `text` ブロックは、空白の無い長い語を枠の幅で折り返す段落になる。
+pub fn text_block_breaks_long_words_test() {
+  let raw = section_("Timeline", [text_block("https://example.com/aaaa")])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  assert string.contains(
+    element.to_string(el),
+    "<p class=\"text-sm break-words\">https://example.com/aaaa</p>",
+  )
+}
+
 /// 未知の種別は、節の見出しとブロックの位置を添えた 1 行の `Error` になる。
 pub fn unknown_type_is_an_error_test() {
   let raw = section_("設定", [map_([#("type", dynamic.string("chart"))])])

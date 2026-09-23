@@ -936,8 +936,8 @@ pub fn page_content_of_an_unknown_key_test() {
 }
 
 /// `timeline` は行ごとに 1 つの節にする。見出しは `kind <n> · <RFC 3339>`、
-/// `pairs` の `id`・`pubkey` は `id` インライン、`details` は
-/// `tags (n)` / `content (n bytes)` / `signature` の 3 つになる。
+/// `pairs` は登録に無い `pubkey` と `id` の `id` インライン、短い本文は `text`
+/// ブロックで、その後に `tags (n)` と `signature` の `details` が続く。
 pub fn the_timeline_lists_stored_events_test() {
   let first =
     store.Row(
@@ -971,38 +971,148 @@ pub fn the_timeline_lists_stored_events_test() {
       Ok([first, second]),
     )
   let assert [first_section, second_section] = page_sections(description)
-  assert_event_section(first_section, first, "tags (1)", "content (5 bytes)")
-  assert_event_section(second_section, second, "tags (0)", "content (2 bytes)")
+  assert_event_section(first_section, first, [#("text", "hello")], "tags (1)")
+  assert_event_section(second_section, second, [#("text", "hi")], "tags (0)")
 }
 
-/// 節 1 つが `event_section/2` の形（見出し・`pairs`・`details` 3 つ）を満たす
-/// ことを確かめる。
+/// 節 1 つが、登録に無いアカウントの書いたイベントの `event_section/3` の形
+/// （見出し・`pubkey` と `id` の `pairs`・`body` の本文のブロック・`tags` と
+/// `signature` の畳み）を満たすことを確かめる。
 fn assert_event_section(
   raw: Dynamic,
   row: store.Row,
+  body: List(#(String, String)),
   tags_summary: String,
-  content_summary: String,
 ) -> Nil {
   let #(title, blocks) = section_shape(raw)
   assert string.starts_with(title, "kind " <> int.to_string(row.kind) <> " · ")
-  let assert [pairs, tags_details, content_details, sig_details] = blocks
-  let assert Ok(items) =
-    decode.run(
-      pairs,
-      decode.field("items", decode.list(pair_item_decoder()), decode.success),
-    )
-  assert items == [#("id", "id", row.id), #("pubkey", "id", row.pubkey)]
-  assert details_summary(tags_details) == tags_summary
-  assert details_summary(content_details) == content_summary
-  assert details_summary(sig_details) == "signature"
+  let assert [pairs, ..rest] = blocks
+  assert pair_items(pairs)
+    == [#("pubkey", "id", row.pubkey), #("id", "id", row.id)]
+  assert list.map(rest, block_label)
+    == list.append(body, [
+      #("details", tags_summary),
+      #("details", "signature"),
+    ])
   Nil
 }
 
-/// `details` ブロックの `summary`。
-fn details_summary(raw: Dynamic) -> String {
-  let assert Ok(summary) =
-    decode.run(raw, decode.field("summary", decode.string, decode.success))
-  summary
+/// 本文の出し方は 280 書記素を境に変わる。以下なら全文、超えれば先頭の 280
+/// 書記素に `…` を付けて切り、空なら出さない。
+pub fn content_view_cuts_after_280_graphemes_test() {
+  let at_limit = string.repeat("あ", 280)
+  assert page.content_view(1, at_limit) == page.WholeContent(at_limit)
+  assert page.content_view(1, at_limit <> "あ")
+    == page.ContentExcerpt(at_limit <> "…")
+  assert page.content_view(1, "") == page.NoContent
+}
+
+/// 本文が JSON の kind（0、3、6、16、10002）は中身によらず畳み、同じ本文でも
+/// ほかの kind はそのまま出す。空の本文は JSON の kind でも出さない。
+pub fn content_view_folds_json_kinds_test() {
+  let body = "{\"name\":\"alice\"}"
+  assert list.map([0, 3, 6, 16, 10_002], page.content_view(_, body))
+    == list.repeat(page.FoldedContent, 5)
+  assert page.content_view(1, body) == page.WholeContent(body)
+  assert page.content_view(0, "") == page.NoContent
+}
+
+/// 長い本文は切った先頭を `text` に、全文を `content` の畳みに置き、JSON の kind
+/// は畳みだけ、空の本文は本文のブロックを持たない。どれも `tags` と `signature`
+/// の畳みが本文の後ろに続く。
+pub fn the_timeline_folds_long_and_json_bodies_test() {
+  let long_body = string.repeat("a", 281)
+  let row = fn(id: String, kind: Int, content: String) {
+    store.Row(
+      id: id,
+      pubkey: "pub1",
+      created_at: 1_700_000_000,
+      kind: kind,
+      tags: "[]",
+      content: content,
+      sig: "sig1",
+    )
+  }
+  let long = row("id1", 1, long_body)
+  let profile = row("id2", 0, "{}")
+  let contacts = row("id3", 3, "")
+  let description =
+    page.content(
+      "timeline",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([long, profile, contacts]),
+    )
+  let assert [long_section, profile_section, contacts_section] =
+    page_sections(description)
+  assert_event_section(
+    long_section,
+    long,
+    [
+      #("text", string.repeat("a", 280) <> "…"),
+      #("details", "content (281 bytes)"),
+    ],
+    "tags (0)",
+  )
+  let assert [_pairs, _text, long_details, ..] = section_shape(long_section).1
+  assert block_text(long_details) == long_body
+  assert_event_section(
+    profile_section,
+    profile,
+    [#("details", "content (2 bytes)")],
+    "tags (0)",
+  )
+  assert_event_section(contacts_section, contacts, [], "tags (0)")
+}
+
+/// 登録アカウントが書いたイベントはラベルと npub の 2 項目、登録に無い pubkey は
+/// 16 進の `pubkey` の 1 項目を `pairs` の先頭に出す。ラベルの項目名だけが表示の
+/// 言語に従う。
+pub fn the_timeline_names_registered_authors_test() {
+  let row = fn(pubkey: String) {
+    store.Row(
+      id: "id1",
+      pubkey: pubkey,
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: "[]",
+      content: "hello",
+      sig: "sig1",
+    )
+  }
+  let accounts = [page.Account(pubkey: "aa", npub: "npub1aa", label: "main")]
+  let first_pairs = fn(language: i18n.Language) {
+    page.content(
+      "timeline",
+      language,
+      Error(Nil),
+      2,
+      [],
+      accounts,
+      Error(Nil),
+      Ok([row("aa"), row("bb")]),
+    )
+    |> page_sections
+    |> list.map(fn(raw) {
+      let assert [pairs, ..] = section_shape(raw).1
+      pair_items(pairs)
+    })
+  }
+  assert first_pairs(i18n.English)
+    == [
+      [
+        #("account", "text", "main"),
+        #("npub", "id", "npub1aa"),
+        #("id", "id", "id1"),
+      ],
+      [#("pubkey", "id", "bb"), #("id", "id", "id1")],
+    ]
+  let assert [[#(term, _, _), ..], _] = first_pairs(i18n.Japanese)
+  assert term == "アカウント"
 }
 
 /// 保存済みイベントが 0 件なら、本体が出す空の状態の文に任せて `blocks` を
@@ -1278,7 +1388,7 @@ pub fn the_timeline_details_are_in_japanese_test() {
       id: "id1",
       pubkey: "pub1",
       created_at: 1_700_000_000,
-      kind: 1,
+      kind: 0,
       tags: "[[\"p\",\"abc\"]]",
       content: "hello",
       sig: "sig1",
@@ -1295,7 +1405,7 @@ pub fn the_timeline_details_are_in_japanese_test() {
       Ok([row]),
     )
   let assert [only] = page_sections(description)
-  assert_event_section(only, row, "tags（1 件）", "content（5 バイト）")
+  assert_event_section(only, row, [#("details", "content（5 バイト）")], "tags（1 件）")
 }
 
 /// postgres の URL として読めない値の代わりの文は、表示の言語の文になる。
@@ -1326,6 +1436,32 @@ fn section_shape(raw: Dynamic) -> #(String, List(Dynamic)) {
       decode.success(#(title, blocks))
     })
   shape
+}
+
+/// `pairs` ブロックの `items` を、項目名・値のインラインの種別・値の文字列の組にする。
+fn pair_items(raw: Dynamic) -> List(#(String, String, String)) {
+  let assert Ok(items) =
+    decode.run(
+      raw,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  items
+}
+
+/// ブロックの種別と、`details` なら `summary`、`text` なら `text`、それ以外は
+/// 空文字列の組。
+fn block_label(raw: Dynamic) -> #(String, String) {
+  let assert Ok(kind) =
+    decode.run(raw, decode.field("type", decode.string, decode.success))
+  case kind {
+    "details" -> {
+      let assert Ok(summary) =
+        decode.run(raw, decode.field("summary", decode.string, decode.success))
+      #(kind, summary)
+    }
+    "text" -> #(kind, block_text(raw))
+    _ -> #(kind, "")
+  }
 }
 
 /// `pairs` ブロックの 1 項目。`term` と、値の `type` / `text`。

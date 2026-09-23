@@ -503,7 +503,7 @@ pub fn nsec_field_folds_the_import_description_test() {
   )
   assert !string.contains(
     page,
-    "<p class=\"text-sm\">" <> text(i18n.ImportDescription),
+    element.to_string(view.form_description(text(i18n.ImportDescription))),
   )
 }
 
