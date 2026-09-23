@@ -1677,7 +1677,7 @@ fn new_relay(
         language,
         theme,
         "",
-        relay_list.Roles(monitor: False, bunker: True),
+        dashboard.new_relay_roles,
         None,
       )
       |> wisp.html_response(200)

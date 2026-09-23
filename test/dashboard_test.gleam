@@ -1,5 +1,6 @@
-//// 管理 UI のパスの定義と、状態の見せ方（`admin/dashboard`）の単体テスト。
+//// 管理 UI のパスの定義、状態の見せ方、ダイアログとページが共用するフォームの中身（`admin/dashboard`）の単体テスト。
 
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -9,6 +10,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
+import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/vault
@@ -16,6 +18,8 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list.{Roles}
+import nostr_no_su/relay_store.{type Relay, Relay}
 import support/account_actions
 
 /// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作に戻る。
@@ -1189,9 +1193,10 @@ pub fn no_skipped_rows_draws_no_frame_test() {
   )
 }
 
-/// リレーは 1 行につき `<li>` 1 件で、1 段目に URL とアイコンだけの操作のリンク（用途の編集、削除）を
-/// 並べ、2 段目に監視、バンカーの順に用途のアイコン・語・状態のバッジのマスを並べる。使っていない
-/// 用途は「未使用」のバッジで出し、URL は `break-all`。
+/// リレーは 1 行につき `<li>` 1 件で、1 段目に URL と、操作（用途の編集、削除）のダイアログを開く
+/// アイコンだけのボタンとそのダイアログ、用途の編集のページへの予備のリンクを並べ、2 段目に監視、
+/// バンカーの順に用途のアイコン・語・状態のバッジのマスを並べる。使っていない用途は「未使用」の
+/// バッジで出し、URL は `break-all`。
 pub fn relays_are_listed_one_item_per_row_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let role = fn(icon, label, badge) {
@@ -1202,27 +1207,66 @@ pub fn relays_are_listed_one_item_per_row_test() {
     <> element.to_string(badge)
     <> "</dd></div>"
   }
-  let actions = fn(id) {
+  let dialog = fn(relay: Relay, row, action, icon, label, kind) {
+    view.dialog_button(
+      i18n.English,
+      view.dialog_id([
+        "relay",
+        int.to_string(relay.id),
+        case action {
+          dashboard.EditRelayRoles -> "edit"
+          dashboard.DeleteRelay -> "delete"
+        },
+      ]),
+      view.IconOnlyTrigger(icon, label),
+      kind,
+      label,
+      [
+        view.summary_list([#("Relay URL", view.Code(relay.url))]),
+        ..dashboard.relay_action_form(
+          i18n.English,
+          relay,
+          action,
+          None,
+          Some(row),
+        )
+      ],
+    )
+  }
+  let actions = fn(relay: Relay, row) {
     "<div class=\"flex shrink-0 flex-wrap gap-2\">"
-    <> element.to_string(view.icon_only_link(
-      "/relays/" <> id <> "/edit",
-      view.pencil_icon(),
-      "Edit roles",
-      view.GhostButton,
+    <> string.concat(list.map(
+      list.append(
+        dialog(
+          relay,
+          row,
+          dashboard.EditRelayRoles,
+          view.pencil_icon(),
+          "Edit roles",
+          view.GhostButton,
+        ),
+        dialog(
+          relay,
+          row,
+          dashboard.DeleteRelay,
+          view.trash_icon(),
+          "Delete relay",
+          view.DangerGhostButton,
+        ),
+      ),
+      element.to_string,
     ))
-    <> element.to_string(view.icon_only_link(
-      "/relays/" <> id <> "/delete",
-      view.trash_icon(),
-      "Delete relay",
-      view.DangerGhostButton,
+    <> element.to_string(view.fallback_link(
+      i18n.English,
+      "/relays/" <> int.to_string(relay.id) <> "/edit",
     ))
     <> "</div>"
   }
-  let row = fn(id, url, monitor, bunker) {
+  let row = fn(relay: Relay, states, monitor, bunker) {
     "<li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><p class=\"min-w-0 flex-1 font-mono text-sm break-all\">"
-    <> url
+    <> relay.url
     <> "</p>"
-    <> actions(id)
+    <> actions(relay, states)
     <> "<dl class=\"grid basis-full grid-cols-2 gap-1.5\">"
     <> role(view.eye_icon(), "monitor", monitor)
     <> role(view.key_icon(), "bunker", bunker)
@@ -1232,14 +1276,14 @@ pub fn relays_are_listed_one_item_per_row_test() {
     body,
     "<ul class=\"list rounded-box border border-base-300 bg-base-100\">"
       <> row(
-      "1",
-      "wss://a",
+      Relay(1, "wss://a", Roles(True, True)),
+      relay_row(1),
       view.status_chip(view.ActiveChip, "connected"),
       view.status_chip(view.DisconnectedChip, "disconnected"),
     )
       <> row(
-      "2",
-      "wss://b",
+      Relay(2, "wss://b", Roles(True, False)),
+      relay_row(2),
       view.status_chip(view.DisconnectedChip, "disconnected"),
       view.status_chip(view.UnusedChip, "Unused"),
     )
@@ -1247,31 +1291,127 @@ pub fn relays_are_listed_one_item_per_row_test() {
   )
 }
 
-/// リレーの行のリンクは、用途の編集が地味なボタン、削除が error の文字色。
-pub fn relay_rows_link_to_edit_and_delete_test() {
+/// リレーの行の予備のリンクは用途の編集のページを開き、削除のページへのリンクは行に置かない。
+pub fn relay_rows_link_to_the_edit_page_as_a_fallback_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    element.to_string(view.icon_only_link(
-      "/relays/1/edit",
-      view.pencil_icon(),
-      "Edit roles",
-      view.GhostButton,
-    )),
+    element.to_string(view.fallback_link(i18n.English, "/relays/1/edit")),
   )
   assert string.contains(
     body,
-    element.to_string(view.icon_only_link(
-      "/relays/1/delete",
-      view.trash_icon(),
-      "Delete relay",
-      view.DangerGhostButton,
-    )),
+    element.to_string(view.fallback_link(i18n.English, "/relays/2/edit")),
+  )
+  assert !string.contains(body, "href=\"/relays/1/delete\"")
+}
+
+/// `states()` の描画で、ダイアログの開閉が組になっている: `dialog-relay-new` と行 1・2 の編集・削除の
+/// ダイアログはそれぞれ、同じ `id` を `commandfor` で指す開くボタンと、中の閉じるボタンを持つ。
+pub fn relay_dialogs_open_from_matching_triggers_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  use id <- list.each([
+    "dialog-relay-new",
+    "dialog-relay-1-edit",
+    "dialog-relay-1-delete",
+    "dialog-relay-2-edit",
+    "dialog-relay-2-delete",
+  ])
+  assert string.contains(
+    body,
+    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    body,
+    "<dialog aria-labelledby=\""
+      <> id
+      <> "-title\" class=\"modal\" id=\""
+      <> id
+      <> "\">",
+  )
+  assert string.contains(
+    dialog_html(body, id),
+    "command=\"close\" commandfor=\"" <> id <> "\"",
   )
 }
 
+/// 追加、行 1 の用途の編集と削除のダイアログのフォームは、同じ操作のページのフォームと同じ宛先へ POST する。
+pub fn relay_dialog_forms_match_the_page_forms_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  let relay = Relay(1, "wss://a", Roles(True, True))
+  let page = fn(action) {
+    relay_pages.relay_action_page(
+      i18n.English,
+      view.System,
+      relay,
+      action,
+      None,
+      None,
+      None,
+    )
+  }
+  assert relay_form_tag(dialog_html(body, "dialog-relay-new"))
+    == relay_form_tag(relay_pages.new_relay_page(
+      i18n.English,
+      view.System,
+      "",
+      dashboard.new_relay_roles,
+      None,
+    ))
+  assert relay_form_tag(dialog_html(body, "dialog-relay-1-edit"))
+    == relay_form_tag(page(dashboard.EditRelayRoles))
+  assert relay_form_tag(dialog_html(body, "dialog-relay-1-delete"))
+    == relay_form_tag(page(dashboard.DeleteRelay))
+}
+
+/// 用途の編集のダイアログは、行の今の用途にチェックを入れ、用途の接続状態のバッジを付ける。
+pub fn relay_edit_dialogs_check_the_current_roles_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  let checkbox = fn(name, checked) {
+    case checked {
+      True -> "<input checked class="
+      False -> "<input class="
+    }
+    <> "\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
+    <> name
+    <> "\""
+  }
+  let first = dialog_html(body, "dialog-relay-1-edit")
+  assert string.contains(first, "wss://a")
+  assert string.contains(first, checkbox("bunker", True))
+  let second = dialog_html(body, "dialog-relay-2-edit")
+  assert string.contains(second, "wss://b")
+  assert string.contains(second, checkbox("monitor", True))
+  assert string.contains(second, checkbox("bunker", False))
+  assert string.contains(
+    second,
+    element.to_string(view.status_chip(view.UnusedChip, "Unused")),
+  )
+}
+
+/// 描画から `id` のダイアログの開始タグの後から `</dialog>` の前までを取り出す。
+fn dialog_html(body: String, id: String) -> String {
+  let assert Ok(#(_, rest)) =
+    string.split_once(body, "class=\"modal\" id=\"" <> id <> "\">")
+  let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
+  inner
+}
+
+/// 最初の `<form action="/relays/` から `>` の前までを取り出す。ページ枠の切り替えのフォームを避けて宛先で探す。
+fn relay_form_tag(html: String) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(html, "<form action=\"/relays/")
+  let assert Ok(#(tag, _)) = string.split_once(rest, ">")
+  tag
+}
+
+/// `states()` の `id` のリレーの行。
+fn relay_row(id: Int) -> dashboard.RelayRow {
+  let assert Ok(rows) = states().relays
+  let assert Ok(row) = list.find(rows, fn(row) { row.id == id })
+  row
+}
+
 /// 締め切りまでに答えなかった用途（`Unanswered`）は「応答なし」のバッジになり、
-/// URL と操作のリンク（用途の編集、削除）は残る。
+/// URL と操作のボタン（用途の編集、削除）は残る。
 pub fn a_relay_role_without_a_status_shows_unavailable_test() {
   let body =
     dashboard.render(
@@ -1295,8 +1435,8 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
       <> element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
   )
   assert string.contains(body, "wss://a")
-  assert string.contains(body, "href=\"/relays/1/edit\"")
-  assert string.contains(body, "href=\"/relays/1/delete\"")
+  assert string.contains(body, "commandfor=\"dialog-relay-1-edit\"")
+  assert string.contains(body, "commandfor=\"dialog-relay-1-delete\"")
 }
 
 /// 用途 2 つ（監視、バンカー）は必ず並び、使っていない側は「未使用」のバッジで出す。
@@ -1325,14 +1465,22 @@ pub fn unused_relay_roles_are_shown_as_unused_test() {
   )
 }
 
-/// リレーの行の用途の編集と削除のリンクは、アイコンだけで `aria-label` を持ち、語は
-/// ボタンの中身には出ない。
+/// リレーの行の用途の編集と削除のダイアログを開くボタンは、アイコンだけで `aria-label` を持ち、
+/// 語はボタンの中身には出ない。
 pub fn relay_actions_are_icon_only_with_labels_test() {
   let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(body, "aria-label=\"Edit roles\"")
-  assert string.contains(body, "aria-label=\"Delete relay\"")
-  assert !string.contains(body, ">Edit roles<")
-  assert !string.contains(body, ">Delete relay<")
+  assert string.contains(
+    body,
+    "<button aria-label=\"Edit roles\" class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-relay-1-edit\" type=\"button\">"
+      <> element.to_string(view.pencil_icon())
+      <> "</button>",
+  )
+  assert string.contains(
+    body,
+    "<button aria-label=\"Delete relay\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-relay-1-delete\" type=\"button\">"
+      <> element.to_string(view.trash_icon())
+      <> "</button>",
+  )
 }
 
 /// バンカーに使う行が 1 件も無ければ、見出しと凡例の直後にエラーの色の囲みが出て一覧は出さない。監視だけの
@@ -1341,12 +1489,18 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_action =
     "<div class=\"ml-auto flex flex-wrap justify-end gap-2\">"
-    <> element.to_string(view.icon_button_link(
-      "/relays/new",
-      view.plus_icon(),
-      "Add",
-      view.PrimaryButton,
+    <> string.concat(list.map(
+      view.dialog_button(
+        i18n.English,
+        "dialog-relay-new",
+        view.IconTextTrigger(view.plus_icon(), "Add"),
+        view.PrimaryButton,
+        "Add relay",
+        dashboard.new_relay_form(i18n.English, "", dashboard.new_relay_roles),
+      ),
+      element.to_string,
     ))
+    <> element.to_string(view.fallback_link(i18n.English, "/relays/new"))
     <> "</div>"
   let legend =
     legend_html(
@@ -1516,7 +1670,7 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
   )
 }
 
-/// リレーの節の見出しの行は、一覧を得たときだけ追加のリンクを出す。
+/// リレーの節の見出しの行は、一覧を得たときだけ追加のボタンと予備のリンクを出す。
 pub fn relays_heading_links_to_add_a_relay_test() {
   let ok = dashboard.render(i18n.English, view.System, states())
   assert string.contains(ok, "href=\"/relays/new\"")
@@ -2445,4 +2599,48 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
       auth_uri: "bunker://x",
     )
   assert !string.contains(render([account], [bunker_relay]), "Getting started")
+}
+
+/// 追加のフォームの中身は `/relays/new` へ POST し、URL の欄の補足を欄の下の 1 行で結び付ける。
+/// ページの枠は含めない。
+pub fn new_relay_form_describes_the_url_field_test() {
+  let html =
+    dashboard.new_relay_form(i18n.English, "", dashboard.new_relay_roles)
+    |> element.fragment
+    |> element.to_string
+  assert string.contains(
+    html,
+    "<form action=\"/relays/new\" class=\"flex flex-col gap-4\" method=\"post\">",
+  )
+  assert string.contains(html, "aria-describedby=\"relay-url-hint\"")
+  assert string.contains(html, "<p class=\"text-muted\" id=\"relay-url-hint\">")
+  assert !string.contains(html, "<header")
+}
+
+/// 用途の編集と削除の中身は、結果の注意の段落を畳まずにフォームの直前に出す。
+pub fn relay_action_form_keeps_the_description_visible_test() {
+  let edit = action_form(dashboard.EditRelayRoles)
+  let delete = action_form(dashboard.DeleteRelay)
+  assert string.contains(
+    edit,
+    "<p>"
+      <> i18n.text(i18n.English, i18n.EditRelayRolesDescription)
+      <> "</p><form action=\"/relays/7/edit\"",
+  )
+  assert string.contains(
+    delete,
+    "<p>"
+      <> i18n.text(i18n.English, i18n.DeleteRelayDescription)
+      <> "</p><form action=\"/relays/7/delete\"",
+  )
+  assert !string.contains(edit, "popover")
+  assert !string.contains(delete, "popover")
+}
+
+/// id 7 のリレーへの `action` の英語のフォームの中身を HTML 文字列にする。
+fn action_form(action: dashboard.RelayAction) -> String {
+  let relay = Relay(id: 7, url: "wss://relay.example", roles: Roles(True, True))
+  dashboard.relay_action_form(i18n.English, relay, action, None, None)
+  |> element.fragment
+  |> element.to_string
 }

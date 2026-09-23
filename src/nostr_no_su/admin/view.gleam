@@ -12,6 +12,7 @@
 //// 時刻に直す。欄の補足を ⓘ で開く部品（`FieldHint` の `FoldedHint`）は、`popover` 属性の段落と
 //// `popovertarget` のボタンで開閉し、位置は CSS の anchor positioning（`position-area`）で決める。
 //// JS も `data-action` も使わない。
+//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉し、JS を使わない（`dialog_button`）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
@@ -1768,6 +1769,91 @@ pub fn truncated_id(
     ]),
     copy_status(language),
   ])
+}
+
+/// ダイアログを開くボタンの見た目。
+pub type DialogTrigger(msg) {
+  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作に使う。
+  IconTextTrigger(icon: Element(msg), text: String)
+  /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
+  IconOnlyTrigger(icon: Element(msg), label: String)
+}
+
+/// ダイアログの `id`。`dialog-` に `parts` を `-` で繋ぐ。`parts` には節の語、行の DB の id か 16 進の pubkey、操作のセグメントのような決まった形の値だけを渡し、ラベルのような利用者の文字列を渡さない。
+pub fn dialog_id(parts: List(String)) -> String {
+  string.join(["dialog", ..parts], "-")
+}
+
+/// ダイアログを開くボタンと、そのダイアログの 2 要素。ボタンは `commandfor` で `id` のダイアログを指し、`command="show-modal"` で開く（`type="button"` で、何も送らない）。ダイアログは題（`id` に `-title` を付けた `id` の `h2`。ダイアログの `aria-labelledby` が指す）、`content`、「キャンセル」のボタンを縦に並べる。キャンセルは同じダイアログを `command="close"` で閉じるだけで、開いたときにフォーカスを受ける（`autofocus`）。Esc でも閉じる。
+pub fn dialog_button(
+  language: Language,
+  id: String,
+  trigger: DialogTrigger(msg),
+  kind: ButtonKind,
+  title: String,
+  content: List(Element(msg)),
+) -> List(Element(msg)) {
+  let title_id = id <> "-title"
+  let command = fn(name) {
+    [
+      attribute.type_("button"),
+      attribute.attribute("commandfor", id),
+      attribute.attribute("command", name),
+    ]
+  }
+  let button = case trigger {
+    IconTextTrigger(icon:, text:) ->
+      html.button(
+        [attribute.class(button_class(kind, InRow)), ..command("show-modal")],
+        [icon, html.text(text)],
+      )
+    IconOnlyTrigger(icon:, label:) ->
+      html.button(
+        [
+          attribute.aria_label(label),
+          attribute.class(button_class(kind, InRow)),
+          ..command("show-modal")
+        ],
+        [icon],
+      )
+  }
+  let dialog =
+    html.dialog(
+      [
+        attribute.id(id),
+        attribute.class("modal"),
+        attribute.aria_labelledby(title_id),
+      ],
+      [
+        html.div([attribute.class("modal-box flex flex-col gap-4")], [
+          html.h2([attribute.id(title_id), attribute.class("card-title")], [
+            html.text(title),
+          ]),
+          ..list.append(content, [
+            html.button(
+              [
+                attribute.autofocus(True),
+                attribute.class(button_class(GhostButton, InForm)),
+                ..command("close")
+              ],
+              [html.text(i18n.text(language, i18n.Cancel))],
+            ),
+          ])
+        ]),
+      ],
+    )
+  [button, dialog]
+}
+
+/// ダイアログを開けないブラウザー（`commandfor` に対応しないもの）のための、今の操作のページへのリンク。ダイアログのボタンの並びの末尾に 1 つ置く。
+pub fn fallback_link(language: Language, href: String) -> Element(msg) {
+  html.a(
+    [
+      attribute.href(href),
+      attribute.class("link link-hover self-center text-xs text-muted"),
+    ],
+    [html.text(i18n.text(language, i18n.OpenAsPage))],
+  )
 }
 
 /// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作、空の節の操作と、アカウントの行の操作に使う。

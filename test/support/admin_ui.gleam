@@ -888,6 +888,18 @@ pub fn components(language: i18n.Language) -> List(String) {
       fn(tone) { element.to_string(view.notice_mark(tone)) },
     ),
     [element.to_string(view.band("anchor", [view.hint("content")]))],
+    list.map(
+      view.dialog_button(
+        language,
+        "dialog-x",
+        view.IconTextTrigger(view.plus_icon(), "text"),
+        view.PrimaryButton,
+        "title",
+        [],
+      ),
+      element.to_string,
+    ),
+    [element.to_string(view.fallback_link(language, "/"))],
     [
       element.to_string(view.compact_icon_button_link(
         "/href",

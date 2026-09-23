@@ -668,7 +668,7 @@ nostr-no-su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
-│       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダッシュボードと承認と通知のページの描画
+│       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログとページが共用するフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
