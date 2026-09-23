@@ -1782,11 +1782,12 @@ fn relays_section(
 }
 
 /// リレーの節の凡例。監視、バンカーの順に、太字の用途の語と説明の組を 1 行に並べ、幅が足りなければ組ごとに折り返す。
+/// 組の中では説明だけが折り返し、用途の語は割らない。
 fn role_legend(language: Language) -> Element(msg) {
   let text = i18n.text(language, _)
   let pair = fn(role, description) {
     html.span([attribute.class("inline-flex gap-1.5")], [
-      html.b([attribute.class("font-semibold text-base-content")], [
+      html.b([attribute.class("shrink-0 font-semibold text-base-content")], [
         html.text(text(role)),
       ]),
       html.text(text(description)),

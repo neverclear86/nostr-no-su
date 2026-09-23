@@ -1265,7 +1265,7 @@ fn legend_html(
   bunker_description: String,
 ) -> String {
   let pair = fn(role, description) {
-    "<span class=\"inline-flex gap-1.5\"><b class=\"font-semibold text-base-content\">"
+    "<span class=\"inline-flex gap-1.5\"><b class=\"shrink-0 font-semibold text-base-content\">"
     <> role
     <> "</b>"
     <> description
