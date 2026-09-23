@@ -682,7 +682,10 @@ pub fn section_heading(
   let action_row = case actions {
     [] -> element.none()
     _ ->
-      html.div([attribute.class("flex flex-wrap justify-end gap-2")], actions)
+      html.div(
+        [attribute.class("ml-auto flex flex-wrap justify-end gap-2")],
+        actions,
+      )
   }
   html.div(
     [

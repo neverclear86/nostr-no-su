@@ -155,7 +155,7 @@ pub fn section_heading_shows_the_count_description_and_actions_test() {
   )
   assert string.contains(
     html,
-    "<div class=\"flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
+    "<div class=\"ml-auto flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
   )
 }
 

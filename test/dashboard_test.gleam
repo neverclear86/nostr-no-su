@@ -1340,7 +1340,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 /// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_action =
-    "<div class=\"flex flex-wrap justify-end gap-2\">"
+    "<div class=\"ml-auto flex flex-wrap justify-end gap-2\">"
     <> element.to_string(view.icon_button_link(
       "/relays/new",
       view.plus_icon(),
