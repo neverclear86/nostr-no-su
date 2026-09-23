@@ -1091,30 +1091,71 @@ pub fn dashboard_hides_add_account_without_accounts_test() {
 
 // --- 接続 QR コード ---
 
-/// 接続 QR コードのページは、secret 入りの URI と要承認の URI をそれぞれ見出し、カメラ用と
-/// クライアントの読み取り機能用の 2 枚の QR コード、コピー欄で出す。
+/// 接続 QR コードのページは、secret 入りの URI と要承認の URI を、それぞれカメラ用と
+/// クライアントの読み取り機能用の 2 枚の QR コードとコピー欄で出す。
 pub fn connection_qr_page_shows_both_uris_test() {
   let body =
     simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
-  assert string.contains(body, "Connection URI</h2>")
-  assert string.contains(body, "Connection URI (approval)</h2>")
   assert list.length(string.split(body, "role=\"img\"")) == 5
   assert string.contains(body, "value=\"" <> wisp.escape_html(uri) <> "\"")
   assert string.contains(body, "value=\"" <> wisp.escape_html(auth_uri) <> "\"")
 }
 
-/// 既定の位置の QR は、`account.camera_copy_text` で作ったコピー用の文字列を載せる。
-/// クライアントの読み取り機能で読む語も本文に出る。
+/// 各タブの QR は、カメラ用に `account.camera_copy_text` で作ったコピー用の文字列を、
+/// 畳みの中に完全な URI を載せる。クライアントの読み取り機能で読む語も本文に出る。
 pub fn connection_qr_page_shows_a_camera_code_and_a_scanner_code_test() {
   let body =
     simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
-  let assert Ok(camera_svg) =
-    qr.svg("Connection URI", account.camera_copy_text(uri))
-  assert string.contains(body, element.to_string(camera_svg))
+  let scanner = i18n.text(i18n.English, i18n.ScanWithClientScanner)
+  list.each(
+    [#("Connection URI", uri), #("Connection URI (approval)", auth_uri)],
+    fn(pair) {
+      let #(title, full) = pair
+      let assert Ok(camera_svg) = qr.svg(title, account.camera_copy_text(full))
+      let assert Ok(scanner_svg) = qr.svg(title <> " / " <> scanner, full)
+      assert string.contains(body, element.to_string(camera_svg))
+      assert string.contains(body, element.to_string(scanner_svg))
+    },
+  )
+  assert string.contains(body, wisp.escape_html(scanner))
+}
+
+/// 2 つの接続 URI は、同じ名前のラジオボタンを入れた `tab` のラベルと、その直後の
+/// `tab-content` の組で切り替える。CSS の `:checked` で切り替わるので JS は要らない。
+/// 既定で選ぶのは secret 入りの URI である。
+pub fn connection_qr_page_switches_the_uris_with_radio_tabs_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
   assert string.contains(
     body,
-    wisp.escape_html(i18n.text(i18n.English, i18n.ScanWithClientScanner)),
+    "<label class=\"tab\"><input checked name=\"connection-uri\" type=\"radio\">Connection URI</label><div class=\"tab-content",
   )
+  assert string.contains(
+    body,
+    "<label class=\"tab\"><input name=\"connection-uri\" type=\"radio\">Connection URI (approval)</label><div class=\"tab-content",
+  )
+  assert list.length(string.split(body, "type=\"radio\"")) == 3
+}
+
+/// secret 入りの URI のタブの警告は、既定で選ぶタブの中にあり、畳み（`details`）に入れない。
+pub fn connection_qr_page_keeps_the_secret_warning_open_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+  let warning =
+    wisp.escape_html(i18n.text(i18n.English, i18n.ConnectionQrSecretWarning))
+  let assert Ok(#(before, _)) = string.split_once(body, warning)
+  assert list.length(string.split(before, "<details"))
+    == list.length(string.split(before, "</details>"))
+  assert string.contains(before, "<input checked name=\"connection-uri\"")
+  assert !string.contains(before, "Connection URI (approval)</label>")
+}
+
+/// カメラ用のコードの貼り方の案内は、タブの外に 1 回だけ出す。
+pub fn connection_qr_page_shows_the_camera_steps_once_test() {
+  let body =
+    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+  let steps = wisp.escape_html(i18n.text(i18n.English, i18n.CameraCopySteps))
+  assert list.length(string.split(body, steps)) == 2
 }
 
 /// バンカー用途のリレーがある Context では、その URL と一覧の見出しが本文に出る。
