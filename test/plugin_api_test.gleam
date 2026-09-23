@@ -1,32 +1,44 @@
-//// `plugin_api.publish_with` と `fetch_with` のテストに、取得で届くイベントを
-//// 絞る `handle_incoming` のテストを加えたもの。経路のテストはバンカーと監視・
-//// バンカー用途の偽リレー接続を直接組み立て、名前を渡す経路を叩き、
-//// `handle_incoming` のテストは `Received` の値を直接渡して `reply` の合図を見る
-//// （`install` はこのモジュールの対象外で、
-//// `publish_event_without_install_returns_the_reason_test`
-//// と `fetch_event_without_install_returns_the_reason_test` の 2 件だけが
+//// `plugin_api.publish_with`・`fetch_with`・`fetch_events_with` のテストに、
+//// 取得で届くイベントを絞る `handle_incoming` のテストを加えたもの。経路の
+//// テストはバンカーと監視・バンカー用途の偽リレー接続を直接組み立て、名前を
+//// 渡す経路を叩く。リレーへ実際に REQ を送るテストはループバックの
+//// WebSocket のリレー（`support/loopback_relay`）で REQ を数える。
+//// `handle_incoming` のテストは `Received` の値を直接渡して `reply` の合図を
+//// 見る（`install` はこのモジュールの対象外で、
+//// `publish_event_without_install_returns_the_reason_test`・
+//// `fetch_event_without_install_returns_the_reason_test`・
+//// `fetch_events_without_install_returns_the_reason_test` の 3 件だけが
 //// persistent_term を読む経路を確かめる。どのテストも `install` を呼ばないため、
 //// 実行順によらず「置いていない」状態が保たれる）。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
+import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import mist
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/nostr/filter.{Filter}
+import nostr_no_su/nostr/message
 import nostr_no_su/plugin_api
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import support/loopback_relay
 import support/nip46_client.{account_for}
 import support/signed_event
 
 /// テスト用の署名者の秘密鍵（16 進）。
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
+
+/// 2 人目の署名者の秘密鍵（16 進）。複数の公開鍵の取得のテストに使う。
+const second_signer_key = "0000000000000000000000000000000000000000000000000000000000000043"
 
 /// 登録しない鍵。未登録の公開鍵のテストに使う。
 const other_key = "0000000000000000000000000000000000000000000000000000000000000077"
@@ -43,17 +55,19 @@ type Signal {
   Refused
 }
 
-/// 署名者 1 名を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
-fn start_signed_in_bunker() -> Name(bunker.Msg) {
+/// `keys` の署名者を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
+fn start_bunker_signed_in_as(keys: List(String)) -> Name(bunker.Msg) {
   let name = process.new_name("test_plugin_api_bunker")
   let stored =
-    StoredAccount(account: account_for(signer_key), secret: "s3cret", label: "")
+    list.map(keys, fn(key) {
+      StoredAccount(account: account_for(key), secret: "s3cret", label: "")
+    })
   let assert Ok(_started) =
     bunker.start(
       name,
       bunker.Settings(
         store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
+          load: fn() { Ok(bunker.Snapshot(Loaded(stored, []), [], [], [])) },
           insert: fn(_account) { Ok(Nil) },
           delete: fn(_signer) { Ok(Nil) },
           update_secret: fn(_signer, _secret) { Ok(Nil) },
@@ -67,8 +81,58 @@ fn start_signed_in_bunker() -> Name(bunker.Msg) {
       fn(_relays) { Nil },
     )
   // 読み込みの完了を待つ。`bunker_test.gleam` と同じ理由で `accounts` を使う。
-  let assert Ok([_]) = bunker.accounts(name)
+  let assert Ok(loaded) = bunker.accounts(name)
+  assert list.length(loaded) == list.length(keys)
   name
+}
+
+/// 署名者 1 名を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
+fn start_signed_in_bunker() -> Name(bunker.Msg) {
+  start_bunker_signed_in_as([signer_key])
+}
+
+/// 取得の問い合わせに答えるループバックのリレー。接続ごとに `connections` へ
+/// 送り、受けたテキストフレームを `frames` へ転送し、REQ には `events` を
+/// `fetch_subscription_id` の EVENT で返してから EOSE を返す。
+fn start_fetch_relay(
+  frames: Subject(String),
+  connections: Subject(Nil),
+  events: List(Event),
+) -> loopback_relay.Relay {
+  loopback_relay.start_relay_with(
+    fn() { process.send(connections, Nil) },
+    fn(connection, text) {
+      process.send(frames, text)
+      case string.starts_with(text, "[\"REQ\"") {
+        True -> {
+          list.each(events, fn(stored) {
+            let _ =
+              mist.send_text_frame(
+                connection,
+                json.preprocessed_array([
+                  json.string("EVENT"),
+                  json.string(plugin_api.fetch_subscription_id),
+                  event.to_json(stored),
+                ])
+                  |> json.to_string,
+              )
+            Nil
+          })
+          let _ =
+            mist.send_text_frame(
+              connection,
+              json.preprocessed_array([
+                json.string("EOSE"),
+                json.string(plugin_api.fetch_subscription_id),
+              ])
+                |> json.to_string,
+            )
+          Nil
+        }
+        False -> Nil
+      }
+    },
+  )
 }
 
 /// リレーへの接続を開いたことにする偽ソケット。送信されたイベントを
@@ -370,7 +434,7 @@ pub fn fetch_event_keeps_an_event_matching_the_query_test() {
 
   plugin_api.handle_incoming(
     relay_client.ReceivedEvent("sub", signed_event.verified(matching)),
-    matching.pubkey,
+    [matching.pubkey],
     0,
     reply,
   )
@@ -385,7 +449,7 @@ pub fn fetch_event_drops_an_event_with_a_different_kind_test() {
 
   plugin_api.handle_incoming(
     relay_client.ReceivedEvent("sub", signed_event.verified(other_kind)),
-    other_kind.pubkey,
+    [other_kind.pubkey],
     0,
     reply,
   )
@@ -409,7 +473,7 @@ pub fn fetch_event_drops_an_event_from_another_author_test() {
       wanted.created_at + 1,
     )
   let handle = fn(received) {
-    plugin_api.handle_incoming(received, wanted.pubkey, 0, reply)
+    plugin_api.handle_incoming(received, [wanted.pubkey], 0, reply)
   }
 
   handle(relay_client.ReceivedEvent("sub", signed_event.verified(attacker)))
@@ -515,5 +579,149 @@ pub fn fetch_event_rejects_when_no_monitor_relay_is_reachable_test() {
 /// `install` を呼ぶ前は、置いていない理由を返す。
 pub fn fetch_event_without_install_returns_the_reason_test() {
   assert plugin_api.fetch_event(dynamic.string("x"), dynamic.int(0))
+    == Error("the plugin API is not installed")
+}
+
+/// 複数の公開鍵の取得は、リレー 1 本につき接続 1 本・REQ 1 件にまとめる。REQ の
+/// `authors` は登録済みの公開鍵を問い合わせた順で重複を除いたもの、`limit` は
+/// その件数。各公開鍵の要素は、その作者の `created_at` が最大の 1 件か、未登録
+/// なら理由を持つ `Error`。
+pub fn fetch_events_sends_one_req_per_relay_test() {
+  let signer_a = account_for(signer_key)
+  let signer_b = account_for(second_signer_key)
+  let pubkey_a = account.pubkey_hex(signer_a)
+  let pubkey_b = account.pubkey_hex(signer_b)
+  let pubkey_c = account.pubkey_hex(account_for(other_key))
+  let bunker_name = start_bunker_signed_in_as([signer_key, second_signer_key])
+  let assert Ok(a_100) = engine.sign_as(signer_a, 0, [], "a", 100)
+  let assert Ok(b_50) = engine.sign_as(signer_b, 0, [], "b", 50)
+  let assert Ok(b_80) = engine.sign_as(signer_b, 0, [], "b", 80)
+  let frames_a = process.new_subject()
+  let frames_b = process.new_subject()
+  let connections_a = process.new_subject()
+  let connections_b = process.new_subject()
+  let relay_a = start_fetch_relay(frames_a, connections_a, [a_100, b_50])
+  let relay_b = start_fetch_relay(frames_b, connections_b, [b_80])
+  let relay_list_name =
+    start_relay_list([
+      relay_list.Entry(
+        url: relay_a.url,
+        monitor: Some(process.new_name("test_plugin_api_fetch_a")),
+        bunker: None,
+      ),
+      relay_list.Entry(
+        url: relay_b.url,
+        monitor: Some(process.new_name("test_plugin_api_fetch_b")),
+        bunker: None,
+      ),
+    ])
+
+  let result =
+    plugin_api.fetch_events_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.list([
+        dynamic.string(pubkey_a),
+        dynamic.string(pubkey_b),
+        dynamic.string(pubkey_c),
+      ]),
+      dynamic.int(0),
+    )
+
+  assert result
+    == Ok([
+      Ok(event.to_map(a_100)),
+      Ok(event.to_map(b_80)),
+      Error("account is not registered"),
+    ])
+  let expected_req =
+    message.encode_client_message(message.Req(
+      plugin_api.fetch_subscription_id,
+      Filter(
+        ..filter.new(),
+        authors: Some([pubkey_a, pubkey_b]),
+        kinds: Some([0]),
+        limit: Some(2),
+      ),
+    ))
+  assert process.receive(connections_a, 2000) == Ok(Nil)
+  assert process.receive(frames_a, 2000) == Ok(expected_req)
+  assert process.receive(connections_a, 200) == Error(Nil)
+  assert process.receive(frames_a, 200) == Error(Nil)
+  assert process.receive(connections_b, 2000) == Ok(Nil)
+  assert process.receive(frames_b, 2000) == Ok(expected_req)
+  assert process.receive(connections_b, 200) == Error(Nil)
+  assert process.receive(frames_b, 200) == Error(Nil)
+
+  loopback_relay.stop_relay(relay_a)
+  loopback_relay.stop_relay(relay_b)
+}
+
+/// 登録済みの公開鍵が 1 件も無い問い合わせは、リレーの一覧を引かずに要素ごとの
+/// 結果を返す（登録されていない一覧の名前でも失敗しない）。空のリストは
+/// `Ok([])`。
+pub fn fetch_events_answers_unregistered_pubkeys_without_asking_relays_test() {
+  let bunker_name = start_signed_in_bunker()
+  let unregistered =
+    process.new_name("test_plugin_api_fetch_events_missing_relay_list")
+
+  assert plugin_api.fetch_events_with(
+      bunker_name,
+      unregistered,
+      dynamic.list([
+        dynamic.string(account_for(other_key) |> account.pubkey_hex),
+      ]),
+      dynamic.int(0),
+    )
+    == Ok([Error("account is not registered")])
+  assert plugin_api.fetch_events_with(
+      bunker_name,
+      unregistered,
+      dynamic.list([]),
+      dynamic.int(0),
+    )
+    == Ok([])
+}
+
+/// `pubkeys` が文字列のリストでないときは専用の理由を返す。
+pub fn fetch_events_rejects_pubkeys_that_are_not_a_list_of_strings_test() {
+  let bunker_name = start_signed_in_bunker()
+  let relay_list_name = start_relay_list([])
+
+  assert plugin_api.fetch_events_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.string("not-a-list"),
+      dynamic.int(0),
+    )
+    == Error("pubkeys must be a List of Strings")
+  assert plugin_api.fetch_events_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.list([dynamic.int(1)]),
+      dynamic.int(0),
+    )
+    == Error("pubkeys must be a List of Strings")
+}
+
+/// `kind` が整数でないときは専用の理由を返す。
+pub fn fetch_events_rejects_a_kind_that_is_not_an_int_test() {
+  let bunker_name = start_signed_in_bunker()
+  let relay_list_name = start_relay_list([])
+
+  assert plugin_api.fetch_events_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.list([
+        dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      ]),
+      dynamic.string("not-an-int"),
+    )
+    == Error("kind must be an Int")
+}
+
+/// `install` を呼ぶ前は、置いていない理由を返す。
+pub fn fetch_events_without_install_returns_the_reason_test() {
+  assert plugin_api.fetch_events(dynamic.list([]), dynamic.int(0))
     == Error("the plugin API is not installed")
 }

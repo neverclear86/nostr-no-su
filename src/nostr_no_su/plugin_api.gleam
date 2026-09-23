@@ -42,6 +42,9 @@ const pubkey_not_a_string = "pubkey must be a String"
 /// `kind` が整数でないときの理由。
 const kind_not_an_int = "kind must be an Int"
 
+/// `pubkeys` が文字列のリストでないときの理由。
+const pubkeys_not_a_list = "pubkeys must be a List of Strings"
+
 /// 監視の用途のリレーが一覧に無いときの理由。
 const no_monitor_relay_registered = "no monitor relay is registered"
 
@@ -49,8 +52,9 @@ const no_monitor_relay_registered = "no monitor relay is registered"
 /// 1 本とも接続できず、または期限までに応答しなかったときの理由。
 const no_monitor_relay_connected = "no monitor relay is connected"
 
-/// 使い捨ての接続の上だけで使う購読 id。
-const fetch_subscription_id = "nostr-no-su-plugin-fetch"
+/// 使い捨ての接続の上だけで使う購読 id。`fetch_events_sends_one_req_per_relay_test`
+/// が偽のリレーの EOSE と期待する REQ を組むため公開する。
+pub const fetch_subscription_id = "nostr-no-su-plugin-fetch"
 
 /// リレーの一覧を持つアクターが応答しないときの理由。
 const relay_list_not_responding = "the relay list is not responding"
@@ -109,6 +113,22 @@ pub fn fetch_event(pubkey: Dynamic, kind: Dynamic) -> Result(Dynamic, String) {
   }
 }
 
+/// `pubkeys` の各公開鍵の名義で書かれた `kind` のイベントのうち `created_at` が
+/// 最新の 1 件を、監視の用途のリレー 1 本につき REQ 1 件で問い合わせて返す。
+/// 戻り値は `pubkeys` と同じ順の結果のリストを持つ `{ok, Results}` で、各要素は
+/// `fetch_event` の戻り値と同じ形（未登録の公開鍵は `{error, Reason}`）。
+/// 公開鍵によらない失敗は `{error, Reason}`。詳細は `docs/plugin-api.md` 第 14 章。
+pub fn fetch_events(
+  pubkeys: Dynamic,
+  kind: Dynamic,
+) -> Result(List(Result(Dynamic, String)), String) {
+  case installed() {
+    Error(Nil) -> Error(not_installed)
+    Ok(Installed(bunker:, relay_list:)) ->
+      fetch_events_with(bunker, relay_list, pubkeys, kind)
+  }
+}
+
 /// `publish_event` の中身。名前を引数で受けるのでテストは `install` を経ずに
 /// 直接叩ける。手順は (1) `pubkey` を文字列として読む、(2) `draft` を
 /// デコードする、(3) バンカーに署名させる、(4) リレーの一覧を引く、(5) 監視の
@@ -152,14 +172,8 @@ pub fn publish_with(
 /// `fetch_event` の中身。名前を引数で受けるのでテストは `install` を経ずに直接
 /// 叩ける。手順は (1) `pubkey` を文字列として読む（失敗は `pubkey_not_a_string`）、
 /// (2) `kind` を整数として読む（失敗は `kind_not_an_int`）、(3) `bunker.check_account`
-/// で登録を確かめる、(4) `relay_list.entries` を引く（失敗は
-/// `relay_list_not_responding`）、(5) `relay_list.urls(entries, relay_list.Monitor)`
-/// が空なら `no_monitor_relay_registered`、(6) 1 本ごとに `task.start` で問い合わせて
-/// 共通の期限まで待つ（届くイベントは `pubkey` と `kind` の両方に一致するものだけを
-/// 集める）、(7) 1 本も応答しなかった（`relay_client.start` が失敗した本と、
-/// 期限までに EOSE が届かなかった本を数える）なら `no_monitor_relay_connected`、
-/// (8) 集めたイベントを `newest` に渡し、`Some` なら `event.to_map`、`None` なら
-/// `none` の atom を `Ok` で返す。
+/// で登録を確かめる、(4) `ask_monitor_relays` で `pubkey` だけを作者に問い合わせる、
+/// (5) 集めたイベントを `newest` に渡し、`fetched` の形で `Ok` にする。
 pub fn fetch_with(
   bunker_name: Name(bunker.Msg),
   relay_list_name: Name(relay_list.Msg),
@@ -175,6 +189,76 @@ pub fn fetch_with(
     |> result.replace_error(kind_not_an_int),
   )
   use _ <- result.try(bunker.check_account(bunker_name, pubkey))
+  use found <- result.try(ask_monitor_relays(relay_list_name, [pubkey], kind))
+  Ok(fetched(newest(found)))
+}
+
+/// `fetch_events` の中身。名前を引数で受けるのでテストは `install` を経ずに直接
+/// 叩ける。手順は (1) `pubkeys` を文字列のリストとして読む（失敗は
+/// `pubkeys_not_a_list`）、(2) `kind` を整数として読む（失敗は
+/// `kind_not_an_int`）、(3) `bunker.check_accounts` で登録を確かめる（読み込み前と
+/// バンカーの無応答は全体の失敗）、(4) 登録済みの公開鍵を重複を除いて `pubkeys`
+/// の順に並べ、1 件も無ければ問い合わせない、(5) 1 件以上なら
+/// `ask_monitor_relays` でまとめて問い合わせる、(6) 公開鍵ごとに、未登録なら
+/// 確認の理由を `Error` に、登録済みなら作者がその公開鍵のイベントを `newest`
+/// に渡して `fetched` の形を `Ok` にし、`pubkeys` の順に並べる。
+pub fn fetch_events_with(
+  bunker_name: Name(bunker.Msg),
+  relay_list_name: Name(relay_list.Msg),
+  pubkeys: Dynamic,
+  kind: Dynamic,
+) -> Result(List(Result(Dynamic, String)), String) {
+  use pubkeys <- result.try(
+    decode.run(pubkeys, decode.list(decode.string))
+    |> result.replace_error(pubkeys_not_a_list),
+  )
+  use kind <- result.try(
+    decode.run(kind, decode.int)
+    |> result.replace_error(kind_not_an_int),
+  )
+  use registrations <- result.try(bunker.check_accounts(bunker_name, pubkeys))
+  let checks = list.zip(pubkeys, registrations)
+  let authors =
+    checks
+    |> list.filter_map(fn(pair) {
+      case pair {
+        #(pubkey, Ok(Nil)) -> Ok(pubkey)
+        #(_pubkey, Error(_reason)) -> Error(Nil)
+      }
+    })
+    |> list.unique
+  use found <- result.try(case authors {
+    [] -> Ok([])
+    _ -> ask_monitor_relays(relay_list_name, authors, kind)
+  })
+  Ok(
+    list.map(checks, fn(pair) {
+      case pair {
+        #(pubkey, Ok(Nil)) ->
+          Ok(
+            fetched(
+              newest(
+                list.filter(found, fn(candidate) { candidate.pubkey == pubkey }),
+              ),
+            ),
+          )
+        #(_pubkey, Error(reason)) -> Error(reason)
+      }
+    }),
+  )
+}
+
+/// 監視の用途のリレー 1 本ごとに `query` を 1 回、`task.start` で並行に行い、
+/// 共通の期限まで待つ。一覧が引けなければ `relay_list_not_responding`、監視の
+/// 用途のリレーが無ければ `no_monitor_relay_registered`、1 本も応答しなかった
+/// （`relay_client.start` が失敗した本と、期限までに EOSE が届かなかった本を
+/// 数える）なら `no_monitor_relay_connected` を返す。成功のときは、応答した本の
+/// イベントをリレーの一覧の順に、同じリレーの中では届いた順に並べて返す。
+fn ask_monitor_relays(
+  relay_list_name: Name(relay_list.Msg),
+  authors: List(String),
+  kind: Int,
+) -> Result(List(Event), String) {
   use entries <- result.try(
     relay_list.entries(relay_list_name)
     |> result.replace_error(relay_list_not_responding),
@@ -186,25 +270,31 @@ pub fn fetch_with(
       let await_deadline = task.deadline_in(fetch_timeout_ms + gather_margin_ms)
       let outcomes =
         list.map(urls, fn(url) {
-          task.start(fn() { query(url, pubkey, kind, deadline) })
+          task.start(fn() { query(url, authors, kind, deadline) })
         })
         |> list.map(task.await(_, await_deadline))
         |> list.map(result.flatten)
       case result.values(outcomes) {
         [] -> Error(no_monitor_relay_connected)
-        found ->
-          Ok(case newest(list.flatten(found)) {
-            Some(found_event) -> event.to_map(found_event)
-            None -> atom.to_dynamic(atom.create("none"))
-          })
+        found -> Ok(list.flatten(found))
       }
     }
   }
 }
 
+/// `newest` の結果をプラグインへ返す値にする。見つかれば `event.to_map` の形、
+/// 無ければ `none` の atom。
+fn fetched(found: Option(Event)) -> Dynamic {
+  case found {
+    Some(found_event) -> event.to_map(found_event)
+    None -> atom.to_dynamic(atom.create("none"))
+  }
+}
+
 /// `created_at` が最大の 1 件。同じ `created_at` が複数あるときは `events` で先に
 /// 現れたものを返す（厳密な `>` の比較）。`events` の並びはリレーの一覧の順で、
-/// 同じリレーの中では届いた順であることが前提（`fetch_with` と `query` が保つ）。
+/// 同じリレーの中では届いた順であることが前提（`ask_monitor_relays` と `query`
+/// が保つ。`fetch_events_with` は作者で絞るだけで並びを変えない）。
 /// `newest_picks_the_greatest_created_at_test` が参照するため公開する。
 pub fn newest(events: List(Event)) -> Option(Event) {
   list.fold(events, None, fn(current: Option(Event), candidate: Event) {
@@ -216,27 +306,29 @@ pub fn newest(events: List(Event)) -> Option(Event) {
   })
 }
 
-/// `pubkey` の名義で書かれた `kind` のイベントを最大 1 件返す REQ のフィルター。
-fn fetch_filter(pubkey: String, kind: Int) -> Filter {
+/// `authors` の名義で書かれた `kind` のイベントを求める REQ のフィルター。
+/// `limit` は `authors` の件数で、1 件の取得では 1 になる。replaceable の kind
+/// ではリレーが作者ごとに最新の 1 件だけを持つので、作者ごとの最新がすべて返る。
+fn fetch_filter(authors: List(String), kind: Int) -> Filter {
   Filter(
     ..filter.new(),
-    authors: Some([pubkey]),
+    authors: Some(authors),
     kinds: Some([kind]),
-    limit: Some(1),
+    limit: Some(list.length(authors)),
   )
 }
 
-/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`pubkey` の名義の
-/// `kind` のイベントを求める REQ（`fetch_filter`）を送り、`Ended`（EOSE）を受けるか
-/// 期限に達するまで集め、接続を閉じる。届くイベントは `handle_incoming` が
-/// `pubkey` と `kind` に一致するものだけを `Found` にする。`collect` が `Ended` を
-/// 受けずに期限に達したときは、集めたイベントを捨てて `Error(Nil)` を返す
-/// （`limit: 1` の問い合わせではイベントの直後に EOSE が届くので、期限までに
-/// EOSE が無い本は応答しなかった本として数える）。`relay_client.start` が失敗した
-/// ときも `Error(Nil)`。
+/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`authors` の
+/// 名義の `kind` のイベントを求める REQ（`fetch_filter`）を 1 件送り、`Ended`
+/// （EOSE）を受けるか期限に達するまで集め、接続を閉じる。届くイベントは
+/// `handle_incoming` が作者が `authors` にあり `kind` が一致するものだけを
+/// `Found` にする。`collect` が `Ended` を受けずに期限に達したときは、集めた
+/// イベントを捨てて `Error(Nil)` を返す（保存済みのイベントの直後に EOSE が届く
+/// ので、期限までに EOSE が無い本は応答しなかった本として数える）。
+/// `relay_client.start` が失敗したときも `Error(Nil)`。
 fn query(
   url: String,
-  pubkey: String,
+  authors: List(String),
   kind: Int,
   deadline: task.Deadline,
 ) -> Result(List(Event), Nil) {
@@ -249,8 +341,8 @@ fn query(
   use client <- result.try(
     relay_client.start(
       url,
-      fn() { Ok([#(fetch_subscription_id, fetch_filter(pubkey, kind))]) },
-      handle_incoming(_, pubkey, kind, reply),
+      fn() { Ok([#(fetch_subscription_id, fetch_filter(authors, kind))]) },
+      handle_incoming(_, authors, kind, reply),
       fn(_ack) { Nil },
       None,
       relay_client.subscription_retry_delay,
@@ -273,21 +365,21 @@ fn query(
   collected
 }
 
-/// `query` の `handle_incoming`。届いたイベントのうち、問い合わせた `pubkey` と
-/// `kind` の両方に一致するものだけを `Found` として `reply` に送る。一致しない
-/// イベントは捨てる（リレーが返すイベントは REQ のフィルターと一致するとは
-/// 限らない）。EOSE は `Ended` を送る。`fetch_event` の照合のテストが `reply` を
+/// `query` の `handle_incoming`。届いたイベントのうち、作者が問い合わせた
+/// `authors` にあり、`kind` が一致するものだけを `Found` として `reply` に送る。
+/// 一致しないイベントは捨てる（リレーが返すイベントは REQ のフィルターと一致
+/// するとは限らない）。EOSE は `Ended` を送る。取得の照合のテストが `reply` を
 /// 読んで確かめるため公開する。
 pub fn handle_incoming(
   received: relay_client.Received,
-  pubkey: String,
+  authors: List(String),
   kind: Int,
   reply: Subject(Incoming),
 ) -> Nil {
   case received {
     relay_client.ReceivedEvent(subscription_id: _, event: verified) -> {
       let candidate = event.verified_event(verified)
-      case candidate.pubkey == pubkey && candidate.kind == kind {
+      case list.contains(authors, candidate.pubkey) && candidate.kind == kind {
         True -> process.send(reply, Found(candidate))
         False -> Nil
       }

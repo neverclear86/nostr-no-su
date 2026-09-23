@@ -385,6 +385,12 @@ pub type Msg {
   /// プラグインからの取得の口（`plugin_api`）が使う、公開鍵が登録アカウントかどうか
   /// の確認。読み込み前は理由を返す。
   CheckAccount(signer: String, reply: Subject(Result(Nil, String)))
+  /// プラグインからの複数の公開鍵の取得（`plugin_api`）が使う、公開鍵ごとの登録の
+  /// 確認。読み込み前は全体の理由を返す。
+  CheckAccounts(
+    signers: List(String),
+    reply: Subject(Result(List(Result(Nil, String)), String)),
+  )
   /// プラグインからの送信の口（`plugin_api`）が使う、登録アカウントの鍵で署名した
   /// イベントの要求。NIP-46 の `sign_event` と違い、セッションの `perms` は見ない
   /// （要求元はクライアントではなく同じ VM のプラグインである）。アカウントの
@@ -589,6 +595,18 @@ pub fn sign_event(
 /// 読み込み前、未登録、あるいはアクターが応答しないときは理由を返す。
 pub fn check_account(name: Name(Msg), signer: String) -> Result(Nil, String) {
   named.call(name, call_timeout_ms, CheckAccount(signer, _))
+  |> option.unwrap(Error(query_not_answered))
+}
+
+/// `signers` のそれぞれが登録アカウントか。結果は `signers` と同じ順で、未登録の
+/// 署名者は理由を持つ。1 回の問い合わせで確かめるので、件数によらずアクターを
+/// 1 度しか待たない。読み込み前、あるいはアクターが応答しないときは全体の理由を
+/// 返す。
+pub fn check_accounts(
+  name: Name(Msg),
+  signers: List(String),
+) -> Result(List(Result(Nil, String)), String) {
+  named.call(name, call_timeout_ms, CheckAccounts(signers, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -1021,6 +1039,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
     CheckAccount(signer:, reply:) -> {
       process.send(reply, registered(state, signer))
+      actor.continue(state)
+    }
+    CheckAccounts(signers:, reply:) -> {
+      let answer = case state.accounts {
+        Loading(..) -> Error(accounts_not_loaded)
+        Ready -> Ok(list.map(signers, registered(state, _)))
+      }
+      process.send(reply, answer)
       actor.continue(state)
     }
     SignEvent(signer:, kind:, tags:, content:, reply:) -> {
