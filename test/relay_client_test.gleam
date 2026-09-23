@@ -31,6 +31,9 @@ import nostr_no_su/relay_client.{
 import nostr_no_su/relay_connection
 import stratus
 import support/log_capture
+import support/loopback_relay.{
+  type Relay, start_relay, start_relay_with, stop_relay,
+}
 import support/signed_event
 
 /// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
@@ -1223,67 +1226,11 @@ pub fn sync_a_request_resubscribes_a_suspended_subscription_test() {
 
 // --- ループバックの WebSocket サーバーを使うテスト ---
 
-/// `127.0.0.1` の OS が割り当てたポートで待ち受けるテスト用の WebSocket サーバー。
-type Relay {
-  Relay(server: Pid, url: String)
-}
-
-/// `127.0.0.1` の OS が割り当てたポートで WebSocket サーバーを立てる。接続を
-/// 受け入れるたびに `on_connect` を、テキストフレームを受け取るたびに `on_text` を
-/// 呼ぶ。
-fn start_relay_with(
-  on_connect: fn() -> Nil,
-  on_text: fn(mist.WebsocketConnection, String) -> Nil,
-) -> Relay {
-  let ports = process.new_subject()
-  let assert Ok(started) =
-    mist.new(fn(request) {
-      mist.websocket(
-        request: request,
-        handler: fn(state, received, connection) {
-          case received {
-            mist.Text(text) -> on_text(connection, text)
-            _ -> Nil
-          }
-          mist.continue(state)
-        },
-        on_init: fn(_connection) {
-          on_connect()
-          #(Nil, None)
-        },
-        on_close: fn(_state) { Nil },
-      )
-    })
-    |> mist.bind("127.0.0.1")
-    |> mist.port(0)
-    |> mist.after_start(fn(port, _scheme, _address) {
-      process.send(ports, port)
-    })
-    |> mist.start
-  let assert Ok(port) = process.receive(ports, 2000)
-  Relay(server: started.pid, url: "ws://127.0.0.1:" <> int.to_string(port))
-}
-
-/// `127.0.0.1` の OS が割り当てたポートで WebSocket サーバーを立てる。受け取った
-/// テキストフレームをテストへ転送する。
-fn start_relay(frames: Subject(String)) -> Relay {
-  start_relay_with(fn() { Nil }, fn(_connection, text) {
-    process.send(frames, text)
-  })
-}
-
 /// テストプロセスにリンクしたクライアントを、テストを巻き込まずに止める。
 fn stop_client(client: relay_client.Client) -> Nil {
   let assert Ok(pid) = process.subject_owner(client)
   process.unlink(pid)
   process.kill(pid)
-}
-
-/// サーバーを親プロセスと同じ方法で止める。スーパーバイザーは親からの normal な
-/// exit を順序立った停止に変えるので、kill と違ってクラッシュレポートを出さない。
-fn stop_relay(relay: Relay) -> Nil {
-  process.unlink(relay.server)
-  process.send_exit(relay.server)
 }
 
 /// 1 回目の評価だけ定義を得られず、2 回目以降は `bunker` を返すサンク。評価の
