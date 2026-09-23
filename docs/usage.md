@@ -182,7 +182,7 @@ NIP-04 だけを使う古いクライアントには対応していない。
 
 ## イベントを保存する（event_logger）
 
-同梱の `event_logger` は、監視で受け取った自分のイベントを同じ Postgres の `events` テーブルに保存する。
+同梱の `event_logger` は、監視で受け取った自分のイベントを同じ Postgres の `event_logger_events` テーブルに保存する。
 compose の既定の構成ではそのまま動き、設定は要らない。
 
 プラグインの節の `event_logger` の行にあるアイコンのボタン「ページを開く」で「Timeline」が開き、ページの上のタブで「Settings」に移れる。
