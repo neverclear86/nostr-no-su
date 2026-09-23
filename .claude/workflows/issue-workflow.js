@@ -15,10 +15,11 @@ export const meta = {
 
 // ---------------------------------------------------------------------------
 // args の契約（スキル issue-workflow の段階 0 で組み立てる）
-//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier? }]
+//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier?, depth?, parent?, designUrl? }]
 //               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あれば判定・デザイン・プランの段階を飛ばす
 //               tier:    'none' | 'light' | 'full'。あれば判定の tier の代わりに使う（A/B と再開で固定するため）
-//               分割で生まれたサブ issue はスクリプトが足す（designUrl を親から継ぎ、depth 1、tier は親の判定が決めた none か light。再分割はしない）
+//               分割で生まれたサブ issue はスクリプトが足す（ui と designUrl を親から継ぎ、depth 1、parent、tier は親の判定が決めた none か light、note に親の「## 分割の設計」への案内。再分割はしない）。
+//               別の実行で子を回し直すときは、同じ depth / parent / tier / ui / designUrl / note を issues に直接書く（スキル issue-workflow の「結果の処理」）
 //               after: 判定からプランまでは依存先のプランの承認を待って進め、実装は依存先のマージを待つ（待つ間は window の枠を使わない）
 //   base:       origin/main の SHA。再開のときも同じ値を渡す（変えるとプロンプトが変わり、結果の再利用が効かない）
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
