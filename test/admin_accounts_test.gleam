@@ -51,7 +51,9 @@ pub fn dashboard_shows_account_labels_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(
     body,
-    "<p class=\"font-semibold break-words\">" <> label <> "</p>",
+    "<p class=\"text-lg font-bold leading-snug break-words\">"
+      <> label
+      <> "</p>",
   )
 }
 
@@ -64,7 +66,9 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
     simulate.read_body(get(with_accounts(Ok([account_row(script)])), "/"))
   assert string.contains(
     labelled,
-    "<p class=\"font-semibold break-words\">" <> escaped <> "</p>",
+    "<p class=\"text-lg font-bold leading-snug break-words\">"
+      <> escaped
+      <> "</p>",
   )
   assert !string.contains(labelled, script)
 
@@ -1064,7 +1068,9 @@ pub fn dashboard_lists_account_actions_test() {
   assert string.contains(body, signer_npub)
   assert string.contains(
     body,
-    "<input aria-label=\"Connection URI\" class=\"input w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
+    "<input aria-describedby=\"account-"
+      <> signer
+      <> "-uri-hint\" aria-label=\"Connection URI\" class=\"input w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
       <> wisp.escape_html(uri)
       <> "\">",
   )

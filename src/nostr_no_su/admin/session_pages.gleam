@@ -68,7 +68,13 @@ fn card_body(
     Ok(row) -> [
       summary(language, row),
       view.error_message(language, Some(i18n.CouldNotSavePermissions), error),
-      ..dashboard.permissions_form(language, row, form, kinds_hint_id)
+      ..dashboard.permissions_form(
+        language,
+        row,
+        form,
+        kinds_hint_id,
+        view.InForm,
+      )
     ]
   }
 }

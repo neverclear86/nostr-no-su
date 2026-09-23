@@ -53,7 +53,13 @@ pub fn connect_client_page(
     view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotStartConnection), error),
-      view.card(dashboard.connect_content(language, accounts, uri, signer)),
+      view.card(dashboard.connect_content(
+        language,
+        accounts,
+        uri,
+        signer,
+        view.InForm,
+      )),
       view.back_link(language),
     ],
   )

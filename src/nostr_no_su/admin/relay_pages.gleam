@@ -36,7 +36,7 @@ pub fn new_relay_page(
     view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotAddRelay), error),
-      view.card(dashboard.new_relay_form(language, url, roles)),
+      view.card(dashboard.new_relay_form(language, url, roles, view.InForm)),
       view.back_link(language),
     ],
   )
@@ -87,7 +87,14 @@ pub fn relay_action_page(
         view.summary_list([#(text(i18n.RelayUrl), view.Code(relay.url))]),
         view.error_message(language, Some(lead), error),
         ..list.append(
-          dashboard.relay_action_form(language, relay, action, roles, states),
+          dashboard.relay_action_form(
+            language,
+            relay,
+            action,
+            roles,
+            states,
+            view.InForm,
+          ),
           delete_link,
         )
       ]),

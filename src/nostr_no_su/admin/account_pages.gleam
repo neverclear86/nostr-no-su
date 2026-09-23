@@ -52,20 +52,20 @@ pub fn new_account_page(
           view.key_icon(),
           text(i18n.ImportPrivateKey),
           None,
-          None,
+          [],
           [],
         ),
-        ..dashboard.import_form(language, label)
+        ..dashboard.import_form(language, label, view.InForm)
       ]),
       view.card([
         view.section_heading(
           view.plus_icon(),
           text(i18n.GenerateNewKey),
           None,
-          None,
+          [],
           [],
         ),
-        ..dashboard.generate_form(language)
+        ..dashboard.generate_form(language, view.InForm)
       ]),
       view.hint(text(i18n.SkippedRowNote)),
       view.back_link(language),
@@ -188,7 +188,7 @@ pub fn registered_page(
     view.NoRefresh,
     [
       view.card([
-        view.identity(language, label, npub),
+        view.identity(language, view.PlainIdentity, label, npub),
         view.alert(
           view.Warning,
           view.emphasized(
@@ -236,6 +236,7 @@ pub fn account_action_page(
           action,
           label,
           dashboard.label_hint_id,
+          view.InForm,
         )
       ]),
       dashboard.other_action_links(language, row.signer, action),
@@ -355,7 +356,7 @@ fn bunker_relay_card(
       view.plug_icon(),
       text(i18n.BunkerRelaysForUri),
       None,
-      None,
+      [],
       [],
     ),
     view.hint(text(i18n.BunkerRelaysHint)),
@@ -383,7 +384,7 @@ fn client_uri_card(language: Language) -> Element(msg) {
       view.plug_icon(),
       text(i18n.ConnectWithClientUri),
       None,
-      None,
+      [],
       [],
     ),
     view.hint(text(i18n.ConnectWithClientUriHint)),
@@ -430,7 +431,7 @@ pub fn unreadable_delete_page(
       view.card([
         unreadable_summary(language, row),
         view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
-        ..dashboard.unreadable_delete_form(language, row)
+        ..dashboard.unreadable_delete_form(language, row, view.InForm)
       ]),
       view.back_link(language),
     ],
@@ -444,7 +445,7 @@ fn unreadable_summary(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   html.div([attribute.class("flex flex-col gap-3")], [
-    view.identity(language, row.label, row.npub),
+    view.identity(language, view.PlainIdentity, row.label, row.npub),
     view.summary_list([
       #(
         text(i18n.ReasonLabel),
@@ -507,5 +508,5 @@ fn account_summary(
   language: Language,
   row: dashboard.AccountRow,
 ) -> Element(msg) {
-  view.identity(language, row.label, row.npub)
+  view.identity(language, view.PlainIdentity, row.label, row.npub)
 }

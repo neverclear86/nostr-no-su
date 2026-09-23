@@ -497,9 +497,9 @@ pub fn nsec_field_folds_the_import_description_test() {
   assert string.contains(page, "popovertarget=\"nsec-hint\"")
   assert string.contains(
     page,
-    "id=\"nsec-hint\" popover=\"auto\">"
+    "id=\"nsec-hint\" popover=\"hint\">"
       <> text(i18n.ImportDescription)
-      <> "</p>",
+      <> "</div>",
   )
   assert !string.contains(
     page,
@@ -579,7 +579,7 @@ pub fn account_warnings_are_not_folded_test() {
       Some(i18n.Translated(i18n.LabelTooLong(max: 100))),
     )
   assert string.contains(rejected, "role=\"alert\"")
-  assert list.length(string.split(rejected, "popover=\"auto\"")) == 2
+  assert list.length(string.split(rejected, "popover=\"hint\"")) == 2
   assert !string.contains(rejected, "<details")
 }
 
@@ -593,9 +593,12 @@ pub fn account_forms_are_the_card_content_test() {
     account_pages.new_account_page(language, view.System, "typed", None)
   assert string.contains(
     new_account,
-    html(dashboard.import_form(language, "typed")),
+    html(dashboard.import_form(language, "typed", view.InForm)),
   )
-  assert string.contains(new_account, html(dashboard.generate_form(language)))
+  assert string.contains(
+    new_account,
+    html(dashboard.generate_form(language, view.InForm)),
+  )
   list.each(account_actions.with_form, fn(action) {
     let page =
       account_pages.account_action_page(
@@ -614,6 +617,7 @@ pub fn account_forms_are_the_card_content_test() {
         action,
         Some("typed"),
         dashboard.label_hint_id,
+        view.InForm,
       )),
     )
   })
@@ -624,7 +628,11 @@ pub fn account_forms_are_the_card_content_test() {
       skipped_row("main"),
       None,
     ),
-    html(dashboard.unreadable_delete_form(language, skipped_row("main"))),
+    html(dashboard.unreadable_delete_form(
+      language,
+      skipped_row("main"),
+      view.InForm,
+    )),
   )
 }
 
