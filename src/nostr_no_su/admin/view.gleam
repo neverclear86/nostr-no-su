@@ -894,7 +894,8 @@ pub fn plugin_image(url: String, alt: String) -> Element(msg) {
 }
 
 /// `http` / `https` 以外の URL の画像の代わりに出す破線の枠。理由は表示の言語に訳した文を
-/// 受け取り、代替文はプラグインの英語のまま出す。
+/// 受け取り、その言語の `lang` で出す。代替文はプラグイン由来の文字列なので `lang` を付けず、
+/// 祖先（`plugin_view` の節の包み）の `lang` を引き継ぐ。
 pub fn plugin_image_placeholder(
   language: Language,
   reason: String,
@@ -908,7 +909,7 @@ pub fn plugin_image_placeholder(
     ],
     [
       html.span([attribute.lang(i18n.code(language))], [html.text(reason)]),
-      untranslated(alt),
+      html.span([], [html.text(alt)]),
     ],
   )
 }

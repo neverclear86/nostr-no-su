@@ -28,7 +28,8 @@
 //// その外に置き、`pairs` の `items` が 0 件のときの案内と、`pairs` の値の
 //// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、`image` の
 //// `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
-//// その祖先の中で表示の言語の `lang` を持つ要素で上書きする。
+//// その祖先の中で表示の言語の `lang` を持つ要素で上書きする。`image` の代替文は
+//// プラグイン由来の文字列なので上書きせず、祖先の `lang` を引き継ぐ。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode

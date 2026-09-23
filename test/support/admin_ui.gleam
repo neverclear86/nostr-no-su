@@ -550,7 +550,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         [
           plugin_section("a", [
             plugin_image_block("http://example.com/a.png", "example"),
-            plugin_image_block("data:image/png;base64,AAA", "picture"),
+            plugin_image_block("data:image/png;base64,AAA", "label"),
           ]),
         ],
       ),
@@ -650,8 +650,8 @@ fn plugin_details_block(summary: String, text: String) -> Dynamic {
   ])
 }
 
-/// ブロック（`image`）。`alt` は `<img>` の属性値か `view.untranslated` の中に出るので、
-/// `allowed_words` の制約を受けない。
+/// ブロック（`image`）。`alt` は `<img>` の属性値か、節の包みの `lang` を引き継ぐテキストに
+/// 出る。後者は他のプラグイン由来の文字列と同じく `allowed_words` の語で組む。
 fn plugin_image_block(url: String, alt: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("image")),

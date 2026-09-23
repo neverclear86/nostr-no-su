@@ -676,6 +676,24 @@ pub fn image_block_with_other_scheme_renders_alt_only_test() {
   assert !string.contains(body, "<img")
 }
 
+/// 表示の言語を受け取るプラグインの `image` ブロックの代替文は、`url` を描かないとき、
+/// `en` で上書きせず、節の包みの表示の言語の `lang` を引き継ぐ。
+pub fn image_placeholder_alt_inherits_the_plugin_language_test() {
+  let japanese_context =
+    Context(
+      language: i18n.Japanese,
+      plugin_language: "ja",
+      page_href: fn(_) { Error(Nil) },
+      form_action: "/plugins/example/status",
+    )
+  let raw = section_("キュー", [image_block("data:image/png;base64,AAA", "猫の写真")])
+  let assert Ok(el) = plugin_view.section(raw, japanese_context)
+  let body = element.to_string(el)
+  let assert [_, inside] = string.split(body, "<div lang=\"ja\">")
+  assert string.contains(inside, "<span>猫の写真</span>")
+  assert !string.contains(body, "lang=\"en\"")
+}
+
 /// `image` ブロックは `url` と `alt` の両方が要り、`url` は String でなければ
 /// ならない。
 pub fn image_block_requires_url_and_alt_test() {
