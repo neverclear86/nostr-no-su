@@ -388,8 +388,9 @@ fn bunker_spec(loaded: Config) -> Result(app.Bunker, String) {
 /// アクターには戻らない。
 ///
 /// `write` はエンジンのセッションと承認待ちの書き込み 1 件を `account_store` の
-/// 関数に写す（`write_session_state`）。`load` はアカウントと一緒にセッション、
-/// 承認待ち、登録されたリレーを返す（`load_snapshot`）。
+/// 関数に写し、行の MAC を `master_key` で付ける（`write_session_state`）。
+/// `load` はアカウントと一緒にセッション、承認待ち、登録されたリレーを返す
+/// （`load_snapshot`）。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
@@ -433,18 +434,19 @@ pub fn account_store_operations(
       |> result.map_error(write_failure)
     },
     write: fn(change) {
-      write_session_state(pool, db, timeouts, change)
+      write_session_state(pool, db, master_key, timeouts, change)
       |> result.map_error(write_failure)
     },
   )
 }
 
-/// エンジンの書き込み 1 件を `account_store` の関数に写す。`touch_session`、
-/// `update_session_perms`、`delete_session`、`delete_pending` は行が無くても
-/// `Ok` なので `deleted_or_absent` は通さない。
+/// エンジンの書き込み 1 件を `account_store` の関数に写し、行の MAC を `key` で
+/// 付ける。`touch_session`、`update_session_perms`、`delete_session`、
+/// `delete_pending` は行が無くても `Ok` なので `deleted_or_absent` は通さない。
 fn write_session_state(
   pool: Name(pog.Message),
   db: pog.Connection,
+  key: vault.MasterKey,
   timeouts: account_store.Timeouts,
   change: engine.Write,
 ) -> Result(Nil, account_store.StoreError) {
@@ -452,11 +454,9 @@ fn write_session_state(
     engine.InsertSession(session:, evicted:) ->
       account_store.insert_session_evicting(
         pool,
+        key,
         timeouts,
-        signer: session.signer,
-        client: session.client,
-        perms: session.perms,
-        now: session.created_at,
+        session: stored_session(session),
         evicted: evicted,
       )
     engine.DeleteSession(signer:, client:) ->
@@ -464,22 +464,21 @@ fn write_session_state(
     engine.TouchSession(session:) ->
       account_store.touch_session(
         db,
+        key,
         timeouts,
-        signer: session.signer,
-        client: session.client,
-        now: session.last_used_at,
+        session: stored_session(session),
       )
     engine.UpdateSessionPerms(session:) ->
       account_store.update_session_perms(
         db,
+        key,
         timeouts,
-        signer: session.signer,
-        client: session.client,
-        perms: session.perms,
+        session: stored_session(session),
       )
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,
+        key,
         timeouts,
         pending: stored_pending(pending),
         replaced: replaced,
@@ -490,12 +489,10 @@ fn write_session_state(
     engine.ApprovePending(token:, session:, evicted:) ->
       account_store.approve(
         pool,
+        key,
         timeouts,
         token: token,
-        signer: session.signer,
-        client: session.client,
-        perms: session.perms,
-        now: session.created_at,
+        session: stored_session(session),
         evicted: evicted,
       )
   }
@@ -503,17 +500,26 @@ fn write_session_state(
 
 /// 1 つのトランザクション（`account_store.transaction`、期限 `load_ms`）で、
 /// 移行を含む `load_within` の後に `relay_store.list` を読み（`relays` は移行で
-/// 作られるので順を変えない）、バンカーの読み込みの結果にする。統合テストが
-/// ロックを通さずに呼べるよう公開する。
+/// 作られるので順を変えない）、バンカーの読み込みの結果にする。MAC の合わない行
+/// （`Stored.rejected`）は使わず、トランザクションを抜けた後に 1 行ずつ warning
+/// で出す（`vault.describe_rejected`）。統合テストがロックを通さずに呼べるよう
+/// 公開する。
 pub fn load_snapshot(
   pool: Name(pog.Message),
   key: vault.MasterKey,
   timeouts: account_store.Timeouts,
 ) -> Result(bunker.Snapshot, account_store.StoreError) {
-  use db <- account_store.transaction(pool, timeouts.load_ms)
-  use stored <- result.try(account_store.load_within(db, key, timeouts))
-  use relays <- result.try(relay_store.list(db, timeouts))
-  Ok(bunker_snapshot(stored, relays))
+  use #(stored, relays) <- result.map(
+    account_store.transaction(pool, timeouts.load_ms, fn(db) {
+      use stored <- result.try(account_store.load_within(db, key, timeouts))
+      use relays <- result.map(relay_store.list(db, timeouts))
+      #(stored, relays)
+    }),
+  )
+  list.each(stored.rejected, fn(row) {
+    log.write(log.Warning, bunker.log_prefix, vault.describe_rejected(row))
+  })
+  bunker_snapshot(stored, relays)
 }
 
 /// DB から読んだ行を、バンカーの読み込みの結果（エンジンの型）にする。
@@ -546,6 +552,17 @@ fn bunker_snapshot(
     relays: list.map(relays, fn(relay) {
       relay_list.Registered(url: relay.url, roles: relay.roles)
     }),
+  )
+}
+
+/// エンジンのセッションを DB の行の型にする。
+fn stored_session(session: engine.Session) -> account_store.StoredSession {
+  account_store.StoredSession(
+    signer: session.signer,
+    client: session.client,
+    perms: session.perms,
+    created_at: session.created_at,
+    last_used_at: session.last_used_at,
   )
 }
 

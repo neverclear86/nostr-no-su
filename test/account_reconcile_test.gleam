@@ -162,15 +162,20 @@ fn reconcile_sessions_with_postgres(
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
+      key,
       generous,
-      signer: signer,
-      client: client,
-      perms: "",
-      now: now - 60,
+      session: account_store.StoredSession(
+        signer: signer,
+        client: client,
+        perms: "",
+        created_at: now - 60,
+        last_used_at: now - 60,
+      ),
     )
   let assert Ok(Nil) =
     account_store.insert_pending(
       db,
+      key,
       account_store.StoredPending(
         token: random.hex(16),
         signer: signer,

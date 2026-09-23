@@ -1902,6 +1902,35 @@ pub fn approving_an_approved_client_keeps_the_session_test() {
     ]
 }
 
+/// すでに承認済みの組を承認したとき、書き込みの値はメモリに残した最初の
+/// セッションになる（DB の行をその値で上書きするため）。
+pub fn approving_an_approved_client_writes_the_kept_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let kept =
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "a",
+      created_at: 1000,
+      last_used_at: 1500,
+    )
+  let pending =
+    engine.Pending(
+      token: token,
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "b",
+      secret_mismatch: False,
+      created_at: 1900,
+    )
+  let state = engine.restore(auth_engine(), [kept], [pending], 2000)
+  let assert Ok(#(_state, _ack, write)) = engine.approve(state, token, 2000)
+  assert write
+    == engine.ApprovePending(token: token, session: kept, evicted: [])
+}
+
 /// `approve` は、承認の時刻と承認待ちの `perms` を持つセッションを書き込みの
 /// 値として返す。
 pub fn approve_writes_the_approval_test() {
@@ -1975,6 +2004,37 @@ pub fn open_client_session_opens_an_approved_session_test() {
     )
   assert write == engine.InsertSession(session: session, evicted: [])
   assert engine.sessions(state) == [session]
+}
+
+/// すでに承認済みの組に `nostrconnect://` で開き直しても、書き込みの値はメモリに
+/// 残した最初のセッションになり（DB の行をその値で上書きするため）、
+/// `engine.sessions` の値も変わらない。
+pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let assert Ok(#(state, _response, first)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event:1",
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  let assert Ok(#(state, _response, second)) =
+    engine.open_client_session(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "nip44_encrypt",
+      "uri-secret",
+      "req-2",
+      2000,
+    )
+  let assert engine.InsertSession(session: kept, ..) = first
+  assert second == first
+  assert engine.sessions(state) == [kept]
 }
 
 /// `max_perms_bytes` を超える perms は `connect` と同じくトークンの境で切る。
