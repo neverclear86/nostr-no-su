@@ -5,7 +5,7 @@
 //// （理由、アカウントのラベル）は値を持つ構築子にし、語順と記号を含めて言語
 //// ごとに文全体を返す。
 //// 本体や取得から英語の 1 文で届く理由は訳さず、そのまま文に埋め込む。`npub` と
-//// フォームの 8 欄のラベル（kind 0 のキー名）は識別子なので、ここに置かずに
+//// フォームの 8 欄の補足（kind 0 のキー名）は識別子なので、ここに置かずに
 //// どの言語でも同じ文字で出す。
 
 /// ページを表示する言語。
@@ -22,6 +22,18 @@ pub fn from_code(code: String) -> Language {
     "ja" -> Japanese
     _ -> English
   }
+}
+
+/// フォームの欄（kind 0 の 8 項目）。欄のラベルの文言を選ぶ。
+pub type Field {
+  Name
+  DisplayName
+  About
+  Picture
+  Banner
+  Nip05
+  Website
+  Lud16
 }
 
 /// ページに出す文言。
@@ -46,6 +58,8 @@ pub type Message {
   PictureAlt(label: String)
   /// `banner` の画像の代替テキスト。`label` はアカウントのラベル。
   BannerAlt(label: String)
+  /// フォームの欄のラベル（人の読める名前）。
+  FieldLabel(field: Field)
   /// フォームの送信ボタン。
   SaveButton
   /// 更新の送信に成功したときの `alert`。
@@ -69,9 +83,9 @@ fn english(message: Message) -> String {
     NoAccounts ->
       "No account is registered. Register an account first, then reload this page."
     FetchFailed(reason:) ->
-      "Could not fetch the profile from the relays: "
+      "Could not fetch the profile from the relays (reason: "
       <> reason
-      <> " The edit form is not shown because the current profile is unknown."
+      <> "). The edit form is not shown because the current profile is unknown."
     NoProfileEvent ->
       "No kind 0 event was found on the relays. Sending this form publishes a new profile with only the fields below."
     ContentNotObject ->
@@ -81,6 +95,7 @@ fn english(message: Message) -> String {
     BannerNote -> "Banner"
     PictureAlt(label:) -> "Picture of " <> label
     BannerAlt(label:) -> "Banner of " <> label
+    FieldLabel(field:) -> english_field_label(field)
     SaveButton -> "Save"
     ProfileUpdated -> "Profile updated."
     UpdateFailed(reason:) -> "Could not update the profile: " <> reason
@@ -104,8 +119,37 @@ fn japanese(message: Message) -> String {
     BannerNote -> "バナー画像"
     PictureAlt(label:) -> label <> " のアイコン画像"
     BannerAlt(label:) -> label <> " のバナー画像"
+    FieldLabel(field:) -> japanese_field_label(field)
     SaveButton -> "保存する"
     ProfileUpdated -> "プロフィールを更新しました。"
     UpdateFailed(reason:) -> "プロフィールを更新できませんでした（理由: " <> reason <> "）。"
+  }
+}
+
+/// 英語の欄のラベル。
+fn english_field_label(field: Field) -> String {
+  case field {
+    Name -> "Name"
+    DisplayName -> "Display name"
+    About -> "About"
+    Picture -> "Icon image URL"
+    Banner -> "Banner image URL"
+    Nip05 -> "Verified identifier (NIP-05)"
+    Website -> "Website"
+    Lud16 -> "Lightning address"
+  }
+}
+
+/// 日本語の欄のラベル。
+fn japanese_field_label(field: Field) -> String {
+  case field {
+    Name -> "名前"
+    DisplayName -> "表示名"
+    About -> "自己紹介"
+    Picture -> "アイコンの画像の URL"
+    Banner -> "バナーの画像の URL"
+    Nip05 -> "認証の識別子（NIP-05）"
+    Website -> "ウェブサイト"
+    Lud16 -> "Lightning アドレス"
   }
 }
