@@ -29,7 +29,7 @@ Nostr-no-Su は、バンカーに登録したアカウントのイベントを�
 - `plugin_name/0` の値は管理 UI の表示名とログの識別子に使う。**プラグイン間で一意にすること。**
 - **`handle_event` は `/1` と `/2` のどちらか一方があればよい。** `/2` はプラグイン固有の設定を第 2 引数で受け取る形で（第 6 章）、両方あれば本体は `/2` を優先する。**設定が必須のプラグインは `/2` だけをエクスポートしてよい。** 設定が無ければ正しく書けない `handle_event/1` を、形だけ揃えるために持たせる必要はない。
 - 上記以外のエクスポートは自由に増やしてよい。未知のエクスポートは読み込みに影響しない。本体が使う任意エクスポート（`plugin_children`、`plugin_min_host_version`、`plugin_required_versions`、`plugin_pages`、`plugin_page_content`、`plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれないことがある。
-- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_min_host_version/0` `plugin_required_versions/0` `plugin_pages/0` `/1` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
+- **`plugin_api_version/0` と `plugin_name/0`、任意エクスポートの `plugin_children/0` `/1` `plugin_min_host_version/0` `plugin_required_versions/0` `plugin_pages/0` `/1` `/2` は即座に戻ること。** 本体は起動時にこれらを 1 回ずつ（`plugin_pages/2` は表示の言語ごとに 1 回ずつ）使い捨てのプロセスで呼び、5 秒以内に戻らなければそのプロセスを kill して、そのプラグインを読み込まない（起動は続く）。定数を返すか、受け取った設定を検査するだけにし、時間のかかる準備は子プロセス（第 5 章）に任せる。呼び出しのプロセスは戻るとすぐに正常でない理由で終わる（打ち切りでは `killed`）。そこでリンクして起こしたプロセス（`spawn_link` や `*_start_link`）は、exit を trap していなければ一緒に終わり、trap していれば `{'EXIT', Pid, Reason}` を受け取る。そこで作った登録名、プロセス辞書、ETS テーブル、ポートは所有者の終了で消える。プロセスは子仕様（第 5 章）で起こすこと。
 - **`-on_load` を使うなら即座に戻ること。** 本体はモジュールの読み込み（`code:ensure_loaded/1`）もメタデータの呼び出しと同じ 5 秒の期限で打ち切り、戻らなければそのプラグインを読み込まない（起動は続く）。打ち切っても `-on_load` の処理そのものは VM の中で走り続けるので、その中で待ち合わせをしないこと。
 
 ## 3. イベント map の仕様
@@ -252,13 +252,13 @@ PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
 
 ### 6.3 受け取り方
 
-設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（値はアカウントの一覧を JSON にした文字列）が加わる。
+設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。表示の言語（第 13.1 節）はさらに 1 つ大きいアリティで受け取る。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（値はアカウントの一覧を JSON にした文字列）が加わる。
 
 | エクスポート | 本体の挙動 |
 | --- | --- |
 | `plugin_children/1` | あればこちらを呼び、設定 map を渡す。無ければ `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない |
 | `handle_event/2` | あればこちらを呼び、第 2 引数に設定 map を渡す。無ければ `handle_event/1` を呼ぶ |
-| `plugin_page_content/2` | あればこちらを呼び、第 2 引数に `Accounts` を含む設定 map を渡す。無ければ `plugin_page_content/1` を呼ぶ |
+| `plugin_page_content/2` `/3` | `/3` か `/2` があればそちら（`/3` を優先）を呼び、第 2 引数に `Accounts` を含む設定 map を渡す。どちらも無ければ `plugin_page_content/1` を呼ぶ |
 | `plugin_page_action/3` | あればこちらを呼び、第 3 引数に `Accounts` を含む設定 map を渡す。無ければ `plugin_page_action/2` を呼ぶ |
 
 ```erlang
@@ -314,7 +314,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 このとき**必須側の判定を「`handle_event/1` または `handle_event/2`」に緩めたが、これは破壊的変更にあたらない。** `handle_event/1` を持つ既存のプラグインは 1 つも落ちず、必須エクスポートの削除でもアリティの変更でもないためである。**API バージョンは 1 のままである。** ただし逆方向、つまり `handle_event/2` だけを持つ新しいプラグインを古い本体で読むことはできない（第 6.5 節）。
 
-任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。プラグインが本体を呼ぶ口（第 14 章）は任意エクスポートですらなく本体側の関数の追加なので、第 2 章のエクスポート仕様は変わらず、**API バージョンは 1 のまま**である。複数の公開鍵の取得（`fetch_events/2`、第 14.10 節）も後から足した本体側の関数で、**API バージョンは 1 のまま**である。
+任意エクスポートで足した機能のもう 1 つの実例が、依存する本体側アプリケーションの版の照合である。プラグインは `plugin_required_versions/0` で、アプリケーション名から版文字列への map（binary キー・binary 値）を返せる。本体は読み込み時に、宣言された各アプリケーションの版をコードパス上の `.app` の版と**完全一致**で照合し、1 件でも合わなければそのプラグインを読み込まない。比較の相手は「実行時に実際に使われる版」（第 8.4 節）であり、宣言しなければ照合しない。この機能もバージョンを上げずに任意エクスポートとして足したので、**API バージョンは 1 のまま**である。管理 UI のページ（第 13 章）も同じ形の追加で、`plugin_pages` と `plugin_page_content` を持たないプラグインは UI を持たないものとして今までどおり読み込まれる。**API バージョンは 1 のままである。** 入力と実行（`plugin_page_action`）も同じ形の追加で、**API バージョンは 1 のまま**である。表示の言語を受け取る `plugin_pages/2` と `plugin_page_content/3`（第 13.1 節）も、既存の関数のアリティを変えずに足した任意エクスポートで、持たないプラグインは今までどおり英語のページとして動くので、**API バージョンは 1 のまま**である。プラグインが本体を呼ぶ口（第 14 章）は任意エクスポートですらなく本体側の関数の追加なので、第 2 章のエクスポート仕様は変わらず、**API バージョンは 1 のまま**である。複数の公開鍵の取得（`fetch_events/2`、第 14.10 節）も後から足した本体側の関数で、**API バージョンは 1 のまま**である。
 
 任意エクスポートで足した機能は、古い本体では単に無視される。そこで**プラグインの側から本体の版の下限を宣言できる**ようにしてある。`plugin_min_host_version/0` が `X.Y.Z` の binary を返すと、本体は読み込み時に自分の版と `MAJOR.MINOR.PATCH` の数値比較で照合し、本体のほうが小さければそのプラグインを読み込まない（理由は第 9 章）。pre-release（`0.2.0-rc.1`）と build metadata（`0.2.0+build.1`）は扱わず、形の誤りとして読み込まない。0.x の間は minor が破壊的変更を表すので、新しい任意エクスポートや新しい本体側の関数（第 14 章）に依存するプラグインは、その機能が入った版を下限に書けばよい。この照合そのものを持たない本体はこのエクスポートを無視するので、下限の宣言が効くのは照合が入った版以降の本体である。この照合もバージョンを上げずに足したので、**API バージョンは 1 のまま**である。
 
@@ -433,7 +433,7 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: missing export handle_event/1 or handle_event/2` | イベント処理関数がどちらのアリティでも無い |
 | `<mod>: plugin_api_version/0 crashed (error:badarg)` | メタデータの関数が例外を投げた。括弧内は `クラス:理由`。呼び出しのプロセスごと終了した場合は括弧内が終了理由（`killed` など） |
 | `<mod>: plugin_name/0 crashed (error:badarg)` | 同上。`plugin_name/0` が例外を投げた場合 |
-| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_min_host_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1`、`plugin_pages/0` `/1` も同じ形で報告される |
+| `<mod>: plugin_name/0 timed out after 5000ms` | メタデータの関数が 5 秒以内に戻らなかった（第 2 章）。`plugin_api_version/0`、`plugin_min_host_version/0`、`plugin_required_versions/0`、`plugin_children/0` `/1`、`plugin_pages/0` `/1` `/2` も同じ形で報告される |
 | `<mod>: plugin_api_version/0 must return an Int, got Float` | 戻り値が整数でない |
 | `<mod>: unsupported api version 2 (expected 1)` | 本体が対応していないバージョン |
 | `<mod>: plugin_min_host_version/0 must return a version string like "0.1.0", got Int` | 戻り値が文字列（binary）でない |
@@ -458,9 +458,12 @@ event_logger: 120 module(s) already provided by the host or another plugin are i
 | `<mod>: plugin_children/1 crashed (error:badarg)` | 設定を受け取る形の問い合わせが例外を投げた。理由の中のアリティは本体が呼んだ側のもの |
 | `<mod>: plugin_children/1 rejected the configuration (path is required); configure it with PLUGIN_FILE_LOGGER_*` | プラグインが設定を受け付けなかった（第 6.4 節）。子を持たないプラグインでもこの行になる。`plugin_children/0` が返した場合は `plugin_children/0 rejected the configuration (…); configure it with PLUGIN_<NAME>_*` になる |
 | `<mod>: plugin_children/1: error reason must be a String, got Atom` | `{error, Reason}` の `Reason` が binary でない |
-| `<mod>: plugin_pages/0 but no plugin_page_content/1 or /2` | 一覧はあるが中身のエクスポートが無い（第 13 章） |
-| `<mod>: plugin_page_content/1 but no plugin_pages/0 or /1` | 中身のエクスポートはあるが一覧が無い |
-| `<mod>: plugin_page_action/3 but no plugin_pages/0 or /1` | 実行のエクスポートはあるが一覧が無い |
+| `<mod>: plugin_pages/0 but no plugin_page_content/1, /2 or /3` | 一覧はあるが中身のエクスポートが無い（第 13 章） |
+| `<mod>: plugin_page_content/1 but no plugin_pages/0, /1 or /2` | 中身のエクスポートはあるが一覧が無い |
+| `<mod>: plugin_page_action/3 but no plugin_pages/0, /1 or /2` | 実行のエクスポートはあるが一覧が無い |
+| `<mod>: plugin_pages/2 but no plugin_page_content/3` | 表示の言語を受け取る一覧はあるが、言語を受け取る中身のエクスポートが無い（第 13.1 節） |
+| `<mod>: plugin_page_content/3 but no plugin_pages/2` | 表示の言語を受け取る中身はあるが、言語を受け取る一覧が無い |
+| `<mod>: plugin_pages/2: page keys for "ja" differ from "en"` | `plugin_pages/2` が言語によって違うキーの並びを返した |
 | `<mod>: plugin_pages/1 must return a list of page maps, got Dict` | 一覧の戻り値がリストでない |
 | `<mod>: plugin_pages/1 must return at least one page` | 一覧が 0 件 |
 | `<mod>: plugin_pages/1: page #0: must be a page map, got Array` | ページの記述が map でない。素の `{key, title}` のようなタプルはここで弾かれる（`dynamic.classify` はタプルを `Array` と呼ぶ） |
@@ -523,11 +526,11 @@ handle_event(Event) ->
 
 | 関数 | アリティ | 戻り値 | 本体側の検証 |
 | --- | --- | --- | --- |
-| `plugin_pages` | 0 または 1 | ページの記述のリスト（第 13.2 節） | 読み込み時に 1 度だけ検証する |
-| `plugin_page_content` | 1 または 2 | ページの記述 map（第 13.3 節） | 読み込み時には呼ばない。ページの表示のたびに呼ぶ |
+| `plugin_pages` | 0、1 または 2 | ページの記述のリスト（第 13.2 節） | 読み込み時に検証する。`/2` は言語ごとに 1 度ずつ呼ぶ |
+| `plugin_page_content` | 1、2 または 3 | ページの記述 map（第 13.3 節） | 読み込み時には呼ばない。ページの表示のたびに呼ぶ |
 | `plugin_page_action` | 2 または 3 | `ok` または `{error, Reason}`（第 13.6 節） | 読み込み時には呼ばない。フォームの送信のたびに呼ぶ |
 
-`/1` があれば `plugin_pages/0` より優先し、設定 map（第 6 章）を渡す。`plugin_page_content` も同様に `/2` があれば `/1` より優先し、第 1 引数にページの `key`、第 2 引数に設定 map を渡す。`plugin_page_action` も同様に `/3` があれば `/2` より優先し、設定 map を最後の引数で渡す。
+`/1` があれば `plugin_pages/0` より優先し、設定 map（第 6 章）を渡す。`plugin_page_content` も同様に `/2` があれば `/1` より優先し、第 1 引数にページの `key`、第 2 引数に設定 map を渡す。`plugin_page_action` も同様に `/3` があれば `/2` より優先し、設定 map を最後の引数で渡す。**表示の言語を受け取るには `plugin_pages/2` と `plugin_page_content/3` を両方持つ。** どちらも最後の引数が管理 UI の表示の言語のコード（`<<"en">>` か `<<"ja">>` の binary）で、あれば `/1`・`/2` より優先して呼ぶ。片方だけでは読み込まない（第 9 章）。`plugin_pages/2` は読み込み時に言語ごとに 1 度ずつ呼ぶので、どの言語でも同じキーを同じ順に返すこと（変わるのは表示名だけである）。`plugin_page_content/3` はページの表示のたびに、その時の表示の言語で呼ぶ。返す文字列はその言語で書き、知らない言語のコードには英語で返すこと。言語が増えても API バージョンは上げない。
 
 ```erlang
 plugin_pages() -> [page_map(), ...].
@@ -543,7 +546,7 @@ plugin_page_content(Key :: binary()) -> description_map().
 | キー | 型 | 本体側の検証 |
 | --- | --- | --- |
 | `key` | binary | `[a-z0-9_-]+` に一致すること。URL の path 片になる |
-| `title` | binary | 必須。管理 UI の表示名（プラグイン由来の英語） |
+| `title` | binary | 必須。管理 UI の表示名。`plugin_pages/2` では受け取った言語の文字列、それ以外では英語 |
 
 ページの URL は `/plugins/<plugin_name/0 の値を percent-encode したもの>/<key>` である。入口はダッシュボードのプラグインの節の行に出る「ページを開く」のリンクで、一覧の先頭のページを指す。2 ページ以上のプラグインは、ページの上のタブで行き来する。
 
@@ -588,7 +591,7 @@ plugin_page_content(Key :: binary()) -> description_map().
 
 - **プラグインが選べるのは文字列・種別・`tone`・真偽値だけである。** クラス名、`href`、生の HTML、色は渡せない。すべて管理 UI の共通部品（`src/nostr_no_su/admin/view.gleam`）にだけ写す。`image` も渡せるのは URL と代替文だけで、大きさ・枠・配置は選べない。
 - **秘密はプラグインが返す前に自分でマスクする。本体は値をマスクしない**（第 1 章の信頼モデルと同じ理由）。
-- 返す文字列はすべて `lang="en"` で出る。表示の言語（日本語・英語）には訳さない。
+- `plugin_pages/2` と `plugin_page_content/3` を持つプラグインが返す文字列は、表示の言語の `lang` で出る。持たないプラグインが返す文字列はすべて英語として `lang="en"` で出る。本体はどちらの文字列も訳さない。
 - `plugin_page_content` に `{error, Reason}` を返す約束は無い。描けない事情はページの記述の `alert` で自分で表すこと。返しても中身の形の誤りとして扱われ、例外・期限超過と同じ 503 になる。
 - **`plugin_page_content` の中で自前の DB に問い合わせてもよい。** 1 回の呼び出しの期限（既定 5 秒、第 13.1 節）に収めるため問い合わせ側にも期限を付け、失敗は `alert` のブロックで自分で表すこと（同梱の `event_logger` は 2 秒である）。
 - **`image` の URL は管理者のブラウザーが直接取りに行く。** 本体は中継せず、取得の可否も内容も検査しない。プラグインのページの GET の応答だけ CSP の `img-src` を `data: https: http:` に広げている（[管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」）。管理 UI を https で配信している場合、`http` の画像は混在内容としてブラウザーが遮る。
@@ -652,7 +655,7 @@ plugin_page_action(<<"settings">>, _Values, _Config) ->
 
 ### 13.7 古い本体との互換性
 
-`plugin_pages` / `plugin_page_content` / `plugin_page_action` は、これらを知らない古い本体では**黙って無視される**。ページを持つプラグインは読み込まれ、管理 UI にページが出ないだけになるので、症状から原因が読めない。ページが前提のプラグインは `plugin_min_host_version/0`（第 7 章）でこの機能が入った本体の版を下限に宣言し、古い本体では理由つきで読み込まれないようにすること。
+`plugin_pages` / `plugin_page_content` / `plugin_page_action` は、これらを知らない古い本体では**黙って無視される**。ページを持つプラグインは読み込まれ、管理 UI にページが出ないだけになるので、症状から原因が読めない。ページが前提のプラグインは `plugin_min_host_version/0`（第 7 章）でこの機能が入った本体の版を下限に宣言し、古い本体では理由つきで読み込まれないようにすること。表示の言語を受け取る `plugin_pages/2` と `plugin_page_content/3` だけを持つプラグインは、これらを知らない本体では UI を持たないものとして読み込まれる。ただし `plugin_page_action` も持つなら、これらを知らない本体は一覧の無い実行として読み込まない（第 9 章）。古い本体でもページを出したいプラグインは `plugin_pages/1` と `plugin_page_content/2` も併せて持てばよい（新しい本体は言語を受け取るほうを優先する）。
 
 ## 14. プラグインから本体を呼ぶ（イベントの送信と取得）
 
