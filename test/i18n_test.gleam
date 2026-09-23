@@ -225,7 +225,16 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Accounts -> Some(i18n.Add)
     i18n.Add -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
-    i18n.NoAccounts -> Some(i18n.ReloadAccounts)
+    i18n.NoAccounts -> Some(i18n.GettingStarted)
+    i18n.GettingStarted -> Some(i18n.GettingStartedDescription)
+    i18n.GettingStartedDescription -> Some(i18n.SetupBunkerRelay)
+    i18n.SetupBunkerRelay -> Some(i18n.SetupBunkerRelayDescription)
+    i18n.SetupBunkerRelayDescription -> Some(i18n.SetupAccount)
+    i18n.SetupAccount -> Some(i18n.SetupAccountDescription)
+    i18n.SetupAccountDescription -> Some(i18n.SetupConnectionUri)
+    i18n.SetupConnectionUri -> Some(i18n.SetupConnectionUriDescription)
+    i18n.SetupConnectionUriDescription -> Some(i18n.SetupStepDone)
+    i18n.SetupStepDone -> Some(i18n.ReloadAccounts)
     i18n.ReloadAccounts -> Some(i18n.UnreadableAccounts)
     i18n.UnreadableAccounts -> Some(i18n.UnreadableAccountsWarning)
     i18n.UnreadableAccountsWarning ->
@@ -409,12 +418,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 243 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 252 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 243
+  assert list.length(messages) == 252
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

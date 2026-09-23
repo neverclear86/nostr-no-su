@@ -207,6 +207,21 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ),
       ),
+      dashboard.render(
+        language,
+        view.System,
+        dashboard.Snapshot(
+          ..empty,
+          relays: Ok([
+            dashboard.RelayRow(
+              1,
+              "wss://a",
+              dashboard.Unused,
+              dashboard.Reported(relay_connection.Connected),
+            ),
+          ]),
+        ),
+      ),
       dashboard.approval_page(language, view.System, Ok([row]), pending),
       account_pages.new_account_page(language, view.System, "", Some(reason)),
       account_pages.generated_key_page(
@@ -835,6 +850,8 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.users_icon(),
         view.clock_icon(),
         view.door_open_icon(),
+        view.sparkle_icon(),
+        view.check_icon(),
         view.puzzle_icon(),
         view.file_text_icon(),
       ],
