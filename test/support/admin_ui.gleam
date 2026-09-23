@@ -19,7 +19,6 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
-import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
@@ -28,7 +27,6 @@ import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
-import nostr_no_su/relay_store
 import support/account_actions
 
 /// ファイルの中身を読む。
@@ -175,6 +173,11 @@ pub fn pages(language: i18n.Language) -> List(String) {
       now: 2000,
     )
   let reason = i18n.Untranslated("reason")
+  let opened = fn(dialog) {
+    let assert Ok(html) =
+      dashboard.render_open(language, view.System, full, dialog)
+    html
+  }
   list.flatten([
     list.map(view.themes, dashboard.render(language, _, full)),
     [
@@ -266,43 +269,17 @@ pub fn pages(language: i18n.Language) -> List(String) {
         ),
         Some(reason),
       ),
-      relay_pages.new_relay_page(
-        language,
-        view.System,
-        "",
-        Roles(True, True),
-        None,
-      ),
-      relay_pages.new_relay_page(
-        language,
-        view.System,
-        "https://relay.example",
+      opened(dashboard.NewRelayOpen(
+        "wss://relay-with-a-very-long-host-name-for-layout-checks.example/path/segment/that/keeps/going/without/breaking",
         Roles(False, True),
-        Some(reason),
-      ),
-      relay_pages.relay_action_page(
-        language,
-        view.System,
-        relay_store.Relay(1, "wss://a", Roles(True, True)),
+        reason,
+      )),
+      opened(dashboard.RelayActionOpen(
+        1,
         dashboard.EditRelayRoles,
         Some(Roles(False, False)),
-        Some(dashboard.RelayRow(
-          1,
-          "wss://a",
-          dashboard.Reported(relay_connection.Connected),
-          dashboard.Unused,
-        )),
-        Some(i18n.Translated(i18n.RelayRoleRequired)),
-      ),
-      relay_pages.relay_action_page(
-        language,
-        view.System,
-        relay_store.Relay(1, "wss://a", Roles(True, True)),
-        dashboard.DeleteRelay,
-        None,
-        None,
-        Some(reason),
-      ),
+        i18n.Translated(i18n.RelayRoleRequired),
+      )),
       connect_pages.connect_client_page(
         language,
         view.System,
@@ -987,15 +964,22 @@ pub fn components(language: i18n.Language) -> List(String) {
         [],
         "text",
         kind,
-        view.InDialog(id: "dialog-x", cancel: "text"),
+        view.InDialog(
+          id: "dialog-x",
+          cancel: "text",
+          opening: view.OpensOnTrigger,
+        ),
       ))
     }),
-    list.map(
-      view.dialog_actions(view.InDialog(id: "dialog-x", cancel: "text"), [
-        view.hint("content"),
-      ]),
-      element.to_string,
-    ),
+    list.flat_map([view.OpensOnTrigger, view.OpenedByResponse], fn(opening) {
+      list.map(
+        view.dialog_actions(
+          view.InDialog(id: "dialog-x", cancel: "text", opening:),
+          [view.hint("content")],
+        ),
+        element.to_string,
+      )
+    }),
     [
       element.to_string(view.hinted_copyable_field(
         language,

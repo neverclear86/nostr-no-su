@@ -2,8 +2,7 @@
 //// カードの中身（登録への案内、理由の囲み、フォーム）はダッシュボードのダイアログと共用するので
 //// `admin/dashboard`（`connect_content`）にあり、ここはそれを入力の誤りと一緒にページの枠に入れる。確認の
 //// ページは URI を解釈した内容を並べ、`/sessions/connect/confirm` へ送り直すフォームを出す。
-//// `admin/relay_pages` と同じく `admin/dashboard` と `admin/view` の部品で HTML 文字列にするだけで、
-//// プロセスにも IO にも触れない。
+//// `admin/dashboard` と `admin/view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（URI、署名者、クライアントの名乗る名前と公開鍵、権限、URI のリレー）は `admin/dashboard` がテキストか属性値として lustre に渡し、エスケープを
 //// 文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引き、文字列

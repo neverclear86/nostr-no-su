@@ -13,9 +13,10 @@
 //// キーボードのフォーカス）と `popovertarget`（クリックとタップ）で開き、位置は CSS の anchor
 //// positioning（`position-area`）で決める。欄、節の見出し、コピー欄の見出しが使う。JS も
 //// `data-action` も使わない。
-//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉し、JS を使わない
-//// （`dialog_button`）。送信とキャンセルはフォームの末尾の 1 行に並べる（`InDialog`）。
-//// ダイアログの中のタブもラジオと CSS で切り替え、JS を使わない（`radio_tabs`）。
+//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉する（`dialog_trigger`、
+//// `dialog`、`dialog_button`）。POST の応答で開いた状態で描いたダイアログは、`admin.js` がモーダルに開き直す。
+//// 送信とキャンセルはフォームの末尾の 1 行に並べる（`InDialog`）。
+//// ダイアログの中のタブはラジオと CSS で切り替え、JS を使わない（`radio_tabs`）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
@@ -26,7 +27,7 @@
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
+//// `admin/account_pages`、`admin/connect_pages`、
 //// `admin/session_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した
 //// 英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま
 //// 出すのは製品名（`Nostr-no-Su`）だけである。
@@ -189,8 +190,8 @@ pub type Placement {
   /// 操作のページのように、欄を縦に並べたフォームの末尾に置く。
   InForm
   /// ダイアログのフォームの末尾の 1 行に、送信の右に `id` のダイアログを閉じる「キャンセル」（語は
-  /// `cancel`）を並べる。`dialog_button` が中身の関数に渡す。
-  InDialog(id: String, cancel: String)
+  /// `cancel`、閉じ方は `opening`）を並べる。`dialog` が中身の関数に渡す。
+  InDialog(id: String, cancel: String, opening: DialogOpening)
 }
 
 /// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
@@ -1117,29 +1118,40 @@ fn form_with(
 
 /// ダイアログの操作の行。`placement` が `InDialog` なら、`buttons` の後に同じダイアログを閉じる
 /// 「キャンセル」を足して 1 行に並べる（幅が足りなければ折り返す）。キャンセルは送信せず、開いたときに
-/// フォーカスを受ける。ほかの置き場所では `buttons` をそのまま返す。
+/// フォーカスを受ける。`OpensOnTrigger` では `command="close"` のボタン、`OpenedByResponse` では `/` への
+/// リンクにする。ほかの置き場所では `buttons` をそのまま返す。
 pub fn dialog_actions(
   placement: Placement,
   buttons: List(Element(msg)),
 ) -> List(Element(msg)) {
   case placement {
-    InDialog(id:, cancel:) -> [
-      html.div(
-        [attribute.class("flex flex-wrap items-center gap-2")],
-        list.append(buttons, [
+    InDialog(id:, cancel:, opening:) -> {
+      let cancel_class = attribute.class(button_class(GhostButton, placement))
+      let cancel_button = case opening {
+        OpensOnTrigger ->
           html.button(
             [
               attribute.type_("button"),
               attribute.autofocus(True),
               attribute.attribute("commandfor", id),
               attribute.attribute("command", "close"),
-              attribute.class(button_class(GhostButton, placement)),
+              cancel_class,
             ],
             [html.text(cancel)],
-          ),
-        ]),
-      ),
-    ]
+          )
+        OpenedByResponse ->
+          html.a(
+            [attribute.href("/"), attribute.autofocus(True), cancel_class],
+            [html.text(cancel)],
+          )
+      }
+      [
+        html.div(
+          [attribute.class("flex flex-wrap items-center gap-2")],
+          list.append(buttons, [cancel_button]),
+        ),
+      ]
+    }
     InRow | InForm -> buttons
   }
 }
@@ -1937,11 +1949,16 @@ pub fn dialog_id(parts: List(String)) -> String {
   string.join(["dialog", ..parts], "-")
 }
 
-/// ダイアログを開くボタンと、そのダイアログの 2 要素。ボタンは `commandfor` で `id` のダイアログを指し、
-/// `command="show-modal"` で開く（`type="button"` で、何も送らない）。ダイアログは題（`id` に `-title` を
-/// 付けた `id` の `h2`。ダイアログの `aria-labelledby` が指す）と、`content` に `InDialog` を渡した中身を
-/// 縦に並べる。中身はフォームの `InDialog` か `dialog_actions` で、閉じる「キャンセル」の行を末尾に置く。
-/// Esc でも閉じる。
+/// ダイアログの開き方。
+pub type DialogOpening {
+  /// 閉じた状態で描き、`dialog_trigger` のボタンで開く。キャンセルは `command="close"` で閉じる。
+  OpensOnTrigger
+  /// POST の応答で `open` 属性を付けて描く。キャンセルは `/` へのリンクにし、Esc でも閉じる。
+  OpenedByResponse
+}
+
+/// ダイアログを開くボタン（`dialog_trigger`）と、閉じた状態のダイアログ（`dialog` の
+/// `OpensOnTrigger`）の 2 要素。
 pub fn dialog_button(
   language: Language,
   id: String,
@@ -1950,52 +1967,77 @@ pub fn dialog_button(
   title: String,
   content: fn(Placement) -> List(Element(msg)),
 ) -> List(Element(msg)) {
-  let title_id = id <> "-title"
-  let command = fn(name) {
-    [
-      attribute.type_("button"),
-      attribute.attribute("commandfor", id),
-      attribute.attribute("command", name),
-    ]
-  }
-  let button = case trigger {
+  [
+    dialog_trigger(id, trigger, kind),
+    dialog(language, id, title, content, OpensOnTrigger),
+  ]
+}
+
+/// `id` のダイアログを開くボタン。`commandfor` で `id` を指し、`command="show-modal"` で開く
+/// （`type="button"` で、何も送らない）。同じダイアログを開くボタンは複数あってよい。
+pub fn dialog_trigger(
+  id: String,
+  trigger: DialogTrigger(msg),
+  kind: ButtonKind,
+) -> Element(msg) {
+  let command = [
+    attribute.type_("button"),
+    attribute.attribute("commandfor", id),
+    attribute.attribute("command", "show-modal"),
+  ]
+  case trigger {
     IconTextTrigger(icon:, text:) ->
-      html.button(
-        [attribute.class(button_class(kind, InRow)), ..command("show-modal")],
-        [icon, html.text(text)],
-      )
+      html.button([attribute.class(button_class(kind, InRow)), ..command], [
+        icon,
+        html.text(text),
+      ])
     IconOnlyTrigger(icon:, label:) ->
       html.button(
         [
           attribute.aria_label(label),
           attribute.class(button_class(kind, InRow)),
-          ..command("show-modal")
+          ..command
         ],
         [icon],
       )
     TextTrigger(text:) ->
-      html.button(
-        [attribute.class(button_class(kind, InRow)), ..command("show-modal")],
-        [html.text(text)],
-      )
+      html.button([attribute.class(button_class(kind, InRow)), ..command], [
+        html.text(text),
+      ])
   }
-  let dialog =
-    html.dialog(
-      [
-        attribute.id(id),
-        attribute.class("modal"),
-        attribute.aria_labelledby(title_id),
-      ],
-      [
-        html.div([attribute.class("modal-box flex flex-col gap-4")], [
-          html.h2([attribute.id(title_id), attribute.class("card-title")], [
-            html.text(title),
-          ]),
-          ..content(InDialog(id:, cancel: i18n.text(language, i18n.Cancel)))
+}
+
+/// ダイアログ。題（`id` に `-title` を付けた `id` の `h2`。`aria-labelledby` が指す）と、`content` に
+/// `InDialog` を渡した中身を縦に並べる。中身はフォームの `InDialog` か `dialog_actions` で、閉じる
+/// 「キャンセル」の行を末尾に置く。閉じ方は `opening` で決め、`InDialog` でキャンセルに渡す。
+pub fn dialog(
+  language: Language,
+  id: String,
+  title: String,
+  content: fn(Placement) -> List(Element(msg)),
+  opening: DialogOpening,
+) -> Element(msg) {
+  let title_id = id <> "-title"
+  html.dialog(
+    [
+      attribute.id(id),
+      attribute.class("modal"),
+      attribute.aria_labelledby(title_id),
+      attribute.open(opening == OpenedByResponse),
+    ],
+    [
+      html.div([attribute.class("modal-box flex flex-col gap-4")], [
+        html.h2([attribute.id(title_id), attribute.class("card-title")], [
+          html.text(title),
         ]),
-      ],
-    )
-  [button, dialog]
+        ..content(InDialog(
+          id:,
+          cancel: i18n.text(language, i18n.Cancel),
+          opening:,
+        ))
+      ]),
+    ],
+  )
 }
 
 /// ダイアログを開けないブラウザー（`commandfor` に対応しないもの）のための、今の操作のページへのリンク。ダイアログのボタンの並びごとに 1 つ、並びの末尾か、並びの幅を保つときはその下の行に置く。

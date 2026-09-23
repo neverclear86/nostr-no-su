@@ -1,8 +1,7 @@
 //// 管理 UI のセッションの権限の編集ページ（`/sessions/<signer>/<client>/permissions`）の描画。
 //// フォームの中身はダッシュボードのダイアログと共用するので `admin/dashboard`（`permissions_form`）
-//// にあり、ここはそれを要約と入力の誤りと一緒にページの枠に入れる。`admin/relay_pages` と同じく
-//// `admin/dashboard` と、`admin/view` と `admin/permission_view` の部品で HTML 文字列にするだけで、
-//// プロセスにも IO にも触れない。
+//// にあり、ここはそれを要約と入力の誤りと一緒にページの枠に入れる。`admin/dashboard` と、`admin/view` と
+//// `admin/permission_view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（署名者・クライアントの公開鍵、権限のトークン）はテキストか属性値として
 //// lustre に渡し、エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は

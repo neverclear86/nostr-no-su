@@ -871,17 +871,20 @@ pub fn method_not_allowed_pages_test() {
     action_path(dashboard.ShowConnectionQr),
   ]
   let post_only_paths = [
-    "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
-    "/accounts/generate", "/accounts/import", "/accounts/register-generated",
+    "/language",
+    "/theme",
+    "/deny/tok",
+    "/sessions/revoke",
+    "/plugins/reenable",
+    "/accounts/generate",
+    "/accounts/import",
+    "/accounts/register-generated",
     "/sessions/connect/confirm",
-  ]
-  let both_methods_paths = [
-    "/approve/tok",
-    action_path(dashboard.EditLabel),
     "/relays/new",
     dashboard.relay_action_path(1, dashboard.EditRelayRoles),
     dashboard.relay_action_path(1, dashboard.DeleteRelay),
   ]
+  let both_methods_paths = ["/approve/tok", action_path(dashboard.EditLabel)]
   let cases =
     list.flatten([
       list.map(post_only_paths, fn(path) { #(get(context(), path), "POST") }),
@@ -945,30 +948,6 @@ pub fn kept_plain_text_responses_test() {
 
 // --- リレーの追加 ---
 
-/// GET は URL の欄が空で、バンカーだけにチェックが入った状態で返す。
-pub fn new_relay_page_checks_only_bunker_test() {
-  let body = simulate.read_body(get(context(), "/relays/new"))
-  assert string.contains(
-    body,
-    "<form action=\"/relays/new\" class=\"flex flex-col gap-4\" method=\"post\">",
-  )
-  assert string.contains(
-    body,
-    "<input name=\"return\" type=\"hidden\" value=\"/relays/new\">",
-  )
-  assert string.contains(body, "name=\"url\"")
-  assert string.contains(body, "value=\"\"")
-  assert string.contains(body, "aria-describedby=\"relay-url-hint\"")
-  assert string.contains(
-    body,
-    "<input class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
-  )
-  assert string.contains(
-    body,
-    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
-  )
-}
-
 /// トリムした URL でリレーを追加し、ダッシュボードへ 303 で戻す。
 pub fn add_relay_saves_the_trimmed_url_test() {
   let reports = process.new_subject()
@@ -998,7 +977,7 @@ pub fn add_relay_rejects_an_invalid_url_test() {
       #("monitor", "on"),
     ])
   assert response.status == 400
-  let body = simulate.read_body(response)
+  let body = opened_dialog(simulate.read_body(response), "dialog-relay-new")
   assert string.contains(body, i18n.text(i18n.English, i18n.InvalidRelayUrl))
   assert string.contains(body, "value=\"" <> invalid_url <> "\"")
   assert string.contains(
@@ -1017,7 +996,7 @@ pub fn add_relay_requires_a_role_test() {
       #("url", "wss://relay.example"),
     ])
   assert response.status == 400
-  let body = simulate.read_body(response)
+  let body = opened_dialog(simulate.read_body(response), "dialog-relay-new")
   assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
   assert string.contains(body, "value=\"wss://relay.example\"")
   assert !string.contains(body, "checked class=\"checkbox")
@@ -1075,37 +1054,6 @@ pub fn add_relay_failures_test() {
 
 // --- リレーの用途の編集と削除 ---
 
-/// 用途の編集の GET は 200 で、フォームの action と return は自分のパス、URL を `dd` で
-/// 出し、保存済みの用途（監視だけ）にチェックが入る。
-pub fn edit_relay_page_checks_the_saved_roles_test() {
-  let path = dashboard.relay_action_path(1, dashboard.EditRelayRoles)
-  let response = get(context(), path)
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    "<form action=\""
-      <> path
-      <> "\" class=\"flex flex-col gap-4\" method=\"post\">",
-  )
-  assert string.contains(
-    body,
-    "<input name=\"return\" type=\"hidden\" value=\"" <> path <> "\">",
-  )
-  assert string.contains(
-    body,
-    "<dd class=\"font-mono text-xs break-all\">wss://relay.example</dd>",
-  )
-  assert string.contains(
-    body,
-    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
-  )
-  assert !string.contains(
-    body,
-    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
-  )
-}
-
 /// 用途の編集の POST は id とチェックを Context に渡し、ダッシュボードへ 303 で戻す。
 pub fn update_relay_roles_saves_the_roles_test() {
   let reports = process.new_subject()
@@ -1132,23 +1080,15 @@ pub fn update_relay_roles_requires_a_role_test() {
       [],
     )
   assert response.status == 400
-  let body = simulate.read_body(response)
+  let body = opened_dialog(simulate.read_body(response), "dialog-relay-1-edit")
   assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
   assert !string.contains(body, "checked class=\"checkbox")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 削除のページは URL を `dd` で出し、送信ボタンは危険のボタン。POST は id を Context に
-/// 渡し、ダッシュボードへ 303 で戻す。
-pub fn delete_relay_page_and_submit_test() {
+/// 削除の POST は id を Context に渡し、ダッシュボードへ 303 で戻す。
+pub fn delete_relay_submits_the_id_test() {
   let path = dashboard.relay_action_path(2, dashboard.DeleteRelay)
-  let body = simulate.read_body(get(context(), path))
-  assert string.contains(
-    body,
-    "<dd class=\"font-mono text-xs break-all\">wss://bunker.example</dd>",
-  )
-  assert string.contains(body, "btn-error")
-
   let reports = process.new_subject()
   let response = post(reporting_context(reports), path)
   assert response.status == 303
@@ -1156,43 +1096,7 @@ pub fn delete_relay_page_and_submit_test() {
   assert process.receive(reports, 1000) == Ok(RelayDeleted(2))
 }
 
-/// 削除の確認の送信ボタンは危険のボタン（`btn-error`）で、編集の主操作（`btn-primary`）
-/// とは異なる。
-pub fn relay_delete_confirmation_uses_the_destructive_button_test() {
-  let body =
-    simulate.read_body(get(
-      context(),
-      dashboard.relay_action_path(2, dashboard.DeleteRelay),
-    ))
-  assert string.contains(
-    body,
-    "btn btn-error self-start focus-visible:outline-base-content",
-  )
-}
-
-/// 用途の編集の画面は、用途ごとの説明と、`states` が `Some` のときはその用途の今の
-/// 接続状態のバッジを出す。
-pub fn relay_edit_page_describes_and_reports_each_role_test() {
-  let body =
-    simulate.read_body(get(
-      context(),
-      dashboard.relay_action_path(1, dashboard.EditRelayRoles),
-    ))
-  // アポストロフィは `houdini.escape` が `&#39;` にするので、その形で照合する。
-  assert string.contains(
-    body,
-    "Subscribes to registered accounts&#39; events and passes them to plugins",
-  )
-  assert string.contains(
-    body,
-    i18n.text(i18n.English, i18n.BunkerRoleDescription),
-  )
-  assert string.contains(body, i18n.text(i18n.English, i18n.RelayConnected))
-  assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleUnused))
-}
-
-/// 一覧に無い id への操作の GET と POST は 404 で `RelayNotFound` を出し、Context の
-/// 変更を呼ばない。
+/// 一覧に無い id への操作の POST は 404 で `RelayNotFound` を出し、Context の変更を呼ばない。
 pub fn relay_action_for_an_unknown_id_is_not_found_test() {
   let reports = process.new_subject()
   let paths = [
@@ -1200,14 +1104,28 @@ pub fn relay_action_for_an_unknown_id_is_not_found_test() {
     dashboard.relay_action_path(99, dashboard.DeleteRelay),
   ]
   use path <- list.each(paths)
-  let get_response = get(reporting_context(reports), path)
-  assert #(path, get_response.status) == #(path, 404)
-  assert string.contains(
-    simulate.read_body(get_response),
-    i18n.text(i18n.English, i18n.RelayNotFound),
-  )
   let post_response = post(reporting_context(reports), path)
   assert #(path, post_response.status) == #(path, 404)
+  assert string.contains(
+    simulate.read_body(post_response),
+    i18n.text(i18n.English, i18n.RelayNotFound),
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 入力の誤りで開き直すダイアログを描くためのリレーの一覧を得られなければ、400 ではなく 503 で
+/// `RelaysNotAvailable` と理由を出し、Context を呼ばない。
+pub fn relay_redraw_without_the_relay_list_is_unavailable_test() {
+  let reports = process.new_subject()
+  let failing =
+    admin.Context(..reporting_context(reports), relays: fn(_deadline) {
+      Error("boom")
+    })
+  let response = post_form(failing, "/relays/1/edit", [])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.RelaysNotAvailable))
+  assert string.contains(body, "boom")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -1223,7 +1141,7 @@ pub fn relay_action_with_a_non_integer_id_is_not_found_test() {
   )
 }
 
-/// DB の一覧を得られなければ、操作の GET は 503 で `RelaysNotAvailable` と理由を出す。
+/// DB の一覧を得られなければ、操作の POST は 503 で `RelaysNotAvailable` と理由を出す。
 pub fn relay_action_without_registered_relays_is_unavailable_test() {
   let failing =
     admin.Context(..context(), registered_relays: fn() { Error("boom") })
@@ -1232,7 +1150,7 @@ pub fn relay_action_without_registered_relays_is_unavailable_test() {
     dashboard.relay_action_path(1, dashboard.DeleteRelay),
   ]
   use path <- list.each(paths)
-  let response = get(failing, path)
+  let response = post(failing, path)
   assert #(path, response.status) == #(path, 503)
   let body = simulate.read_body(response)
   assert string.contains(body, i18n.text(i18n.English, i18n.RelaysNotAvailable))
@@ -1788,4 +1706,12 @@ pub fn pages_with_a_private_key_have_no_switches_test() {
     assert string.contains(body, "action=\"/theme\"")
     assert string.contains(body, "action=\"/language\"")
   })
+}
+
+/// `body` の中の、開いた状態で描いたダイアログ `id` の中身。無ければ落ちる。
+fn opened_dialog(body: String, id: String) -> String {
+  let assert Ok(#(_, rest)) =
+    string.split_once(body, "class=\"modal\" id=\"" <> id <> "\" open>")
+  let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
+  inner
 }
