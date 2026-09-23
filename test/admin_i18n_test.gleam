@@ -286,7 +286,9 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
   )
   assert string.contains(
     body,
-    "<span>" <> i18n.text(i18n.Japanese, message) <> "</span>",
+    "<p class=\"min-w-0 self-center\">"
+      <> i18n.text(i18n.Japanese, message)
+      <> "</p>",
   )
   assert !string.contains(body, "<span lang=\"en\">")
 }

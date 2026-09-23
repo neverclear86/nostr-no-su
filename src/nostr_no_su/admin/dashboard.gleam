@@ -1313,9 +1313,9 @@ fn refresh_note(
   }
 }
 
-/// 承認待ち 1 件のカード。左に残り時間の円、右にクライアントの公開鍵（指紋、省略、コピー）と secret の
-/// 提示の区別、署名者、失効までを置き、下に権限のチップと承認・拒否のボタンを並べる。secret が一致しない
-/// ときは枠を warning の色にし、署名者の上に `WrongSecretNotice` の囲みを置く。
+/// 承認待ち 1 件のカード。ダッシュボードの承認待ちの帯と承認ページが使う。左に残り時間の円、右にクライアントの
+/// 公開鍵（指紋、省略、コピー）と secret の提示の区別、署名者、失効までを置き、下に権限のチップと承認・拒否のボタンを
+/// 並べる。secret が一致しないときは枠を warning の色にし、署名者の上に `WrongSecretNotice` の囲みを置く。
 fn pending_card(
   language: Language,
   signer: SignerName,
@@ -1474,12 +1474,14 @@ fn expiry_value(language: Language, now: Int, seconds: Int) -> Element(msg) {
   ])
 }
 
-/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。テーマか言語を
-/// 切り替えた後は同じ承認ページを開き直す。
+/// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。ダッシュボードと同じ承認待ちのカード
+/// （`pending_card`）の下に、承認の意味の説明を畳まずに置く。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに
+/// 使う。テーマか言語を切り替えた後は同じ承認ページを開き直す。
 pub fn approval_page(
   language: Language,
   theme: view.Theme,
   accounts: Result(List(AccountRow), i18n.Reason),
+  now: Int,
   pending: PendingRow,
 ) -> String {
   view.page(
@@ -1489,35 +1491,18 @@ pub fn approval_page(
     view.Narrow,
     view.SwitchReturningTo(approve_path(pending.token)),
     view.RefreshEverySeconds(refresh_seconds),
-    [view.card(approval_content(language, accounts, pending))],
-  )
-}
-
-/// 承認ページのカードの中身。secret が一致しなかった承認待ちでは、判断の前に読ませる
-/// 警告を先頭に置く。末尾に、承認の意味の説明を info の囲みで置く。
-fn approval_content(
-  language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  pending: PendingRow,
-) -> List(Element(msg)) {
-  let mismatch_warning = case pending.secret_mismatch {
-    True -> [
-      view.alert(
-        view.Warning,
-        view.emphasized(
+    [
+      html.section([attribute.class("flex flex-col gap-4")], [
+        pending_card(
           language,
-          i18n.WrongSecretOffered,
-          i18n.WrongSecretNotice,
+          signer_name(accounts, pending.signer),
+          now,
+          pending,
         ),
-      ),
-    ]
-    False -> []
-  }
-  list.flatten([
-    mismatch_warning,
-    pending_content(language, signer_name(accounts, pending.signer), pending),
-    [approval_explanation(language, pending.perms)],
-  ])
+        approval_explanation(language, pending.perms),
+      ]),
+    ],
+  )
 }
 
 /// 承認の意味の説明。権限が空のときは、署名と暗号化を拒否する旨の一文を続ける。
@@ -1535,13 +1520,11 @@ fn approval_explanation(language: Language, perms: String) -> Element(msg) {
   view.alert(view.Info, content)
 }
 
-/// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、
-/// 変更が反映されたか分からないとき、404 / 405 / 400 の通知に使う。`tone` は理由の
-/// 囲みの色で、呼び出し側が結果に応じて決める。理由はほかのページと同じくカードに入れる
-/// （中立の囲みはページの背景と同じ色なので、カードの外では見えない）。`below` は
-/// 囲みの直後にカードの中へ並べる要素で、無ければ空リストを渡す。ダッシュボードで
-/// 状態を確かめられるようリンクを置く。切り替えを出すか、切り替えた後にどこを開くかは
-/// 呼び出し側が `switch` で決める。
+/// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、変更が反映されたか分からないとき、
+/// 404 / 405 / 400 の通知に使う。カードの先頭に `tone` の結果の印（`view.notice_mark`）と理由を横に並べる。`tone` は
+/// 呼び出し側が結果に応じて決める。`below` は印と理由の直後にカードの中へ並べる要素で、無ければ空リストを渡す。
+/// ダッシュボードで状態を確かめられるようリンクを置く。切り替えを出すか、切り替えた後にどこを開くかは呼び出し側が
+/// `switch` で決める。
 pub fn notice_page(
   language: Language,
   theme: view.Theme,
@@ -1553,7 +1536,13 @@ pub fn notice_page(
 ) -> String {
   view.page(language, theme, title, view.Narrow, switch, view.NoRefresh, [
     view.card([
-      view.alert(tone, view.reason_content(language, None, message)),
+      html.div([attribute.class("flex items-start gap-3")], [
+        view.notice_mark(tone),
+        html.p(
+          [attribute.class("min-w-0 self-center")],
+          view.reason_content(language, None, message),
+        ),
+      ]),
       ..below
     ]),
     view.back_link(language),
@@ -1715,37 +1704,6 @@ fn relay_action_icon(action: RelayAction) -> Element(msg) {
   }
 }
 
-/// 承認待ち 1 件の、クライアント・secret の提示の区別・失効までの時間・署名者・権限と、
-/// 承認・拒否ボタン。承認ページが使う。
-fn pending_content(
-  language: Language,
-  signer: SignerName,
-  pending: PendingRow,
-) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.detail_list([
-      #(
-        text(i18n.Client),
-        html.dd([attribute.class("flex flex-wrap items-center gap-2")], [
-          view.truncated_id(language, pending.client, text(i18n.CopyClient)),
-          secret_badge(language, pending.secret_mismatch),
-        ]),
-      ),
-      #(
-        text(i18n.ExpiresIn),
-        html.dd([], [expires_in_badge(language, pending.expires_in_seconds)]),
-      ),
-      #(text(i18n.Signer), html.dd([], [signer_value(signer)])),
-      #(
-        text(i18n.Permissions),
-        html.dd([], [permission_view.chips(language, pending.perms)]),
-      ),
-    ]),
-    button_row(decision_forms(language, pending.token, pending.secret_mismatch)),
-  ]
-}
-
 /// 署名者の表示。アカウント一覧にある署名者はラベルと省略した npub を縦に、無い署名者は
 /// 省略した 16 進の pubkey だけを出す。
 fn signer_value(signer: SignerName) -> Element(msg) {
@@ -1779,16 +1737,6 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
         view.SecretNotOfferedChip,
         text(i18n.PendingSecretNotOffered),
       )
-  }
-}
-
-/// 失効までの残り秒。60 秒未満なら、承認しても失敗しうることを示す警告色のバッジに、
-/// それ以外は本文の書体の文字にする。
-fn expires_in_badge(language: Language, seconds: Int) -> Element(msg) {
-  let text = i18n.text(language, i18n.ExpiresInSeconds(seconds))
-  case seconds < 60 {
-    True -> view.status_chip(view.ToneChip(view.Warning), text)
-    False -> html.span([], [html.text(text)])
   }
 }
 
@@ -2170,7 +2118,7 @@ fn section_body(
   }
 }
 
-/// 行と承認ページのボタンの並び。
+/// 行のボタンの並び。
 fn button_row(buttons: List(Element(msg))) -> Element(msg) {
   html.div([attribute.class("flex shrink-0 flex-wrap gap-2")], buttons)
 }

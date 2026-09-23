@@ -222,7 +222,14 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ),
       ),
-      dashboard.approval_page(language, view.System, Ok([row]), pending),
+      dashboard.approval_page(language, view.System, Ok([row]), 2000, pending),
+      dashboard.approval_page(
+        language,
+        view.System,
+        Ok([row]),
+        2000,
+        pending_mismatch,
+      ),
       account_pages.new_account_page(language, view.System, "", Some(reason)),
       account_pages.generated_key_page(
         language,
@@ -840,6 +847,10 @@ pub fn components(language: i18n.Language) -> List(String) {
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
       fn(tone) { element.to_string(view.tone_icon(tone)) },
+    ),
+    list.map(
+      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
+      fn(tone) { element.to_string(view.notice_mark(tone)) },
     ),
     [element.to_string(view.band("anchor", [view.hint("content")]))],
     list.map(

@@ -4,6 +4,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
+import lustre/element/html
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
@@ -206,41 +207,44 @@ pub fn secret_state_is_shown_as_a_badge_test() {
   assert string.contains(japanese, "secret 不一致")
 }
 
-/// secret が一致しない承認待ちの承認ページにだけ警告が出て、提示が無い承認待ちの承認
-/// ページとダッシュボードのカードには出ない（カードには説明の文だけを出す）。
+/// secret が一致しない承認待ちの承認ページには `WrongSecretNotice` の警告の囲みが 1 つだけ出て、提示が無い
+/// 承認待ちの承認ページには警告の囲みが出ない。
 pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   let assert Ok([not_offered, mismatched]) = secret_states().pending
+  let page = fn(language, pending) {
+    dashboard.approval_page(
+      language,
+      view.System,
+      Ok([]),
+      states().now,
+      pending,
+    )
+  }
+  list.each([i18n.English, i18n.Japanese], fn(language) {
+    let notice =
+      element.to_string(
+        view.alert(view.Warning, [
+          html.text(i18n.text(language, i18n.WrongSecretNotice)),
+        ]),
+      )
+    assert list.length(string.split(page(language, mismatched), notice)) == 2
+    assert !string.contains(page(language, not_offered), "alert-warning")
+  })
+}
 
-  assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), mismatched),
-    "<div class=\"alert alert-soft alert-warning text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Warning))
-      <> "<span><strong>The connection secret does not match.</strong> This happens when",
-  )
-  assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), mismatched),
-    "<div class=\"alert alert-soft alert-warning text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Warning))
-      <> "<span><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
-  )
-
-  assert !string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), not_offered),
-    "alert-warning",
-  )
-  assert !string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), not_offered),
-    "alert-warning",
-  )
-
-  assert !string.contains(
-    dashboard.render(i18n.English, view.System, secret_states()),
-    "The connection secret does not match.",
-  )
-  assert !string.contains(
-    dashboard.render(i18n.Japanese, view.System, secret_states()),
-    "接続 secret が一致しません。",
-  )
+/// 承認ページは、ダッシュボードと同じ承認待ちのカードを出し、残り時間を円で描く。
+pub fn approval_page_draws_the_pending_card_test() {
+  let assert Ok([pending]) = states().pending
+  let page =
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      pending,
+    )
+  assert string.contains(page, "pathLength=\"600\"")
+  assert string.contains(page, "aria-label=\"Expires in 9:00\"")
 }
 
 /// 要求された権限は、承認待ちのカードと承認ページの両方でチップになる。空なら「権限の
@@ -257,7 +261,13 @@ pub fn permissions_are_shown_as_chips_test() {
     chips,
   )
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), offered),
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      offered,
+    ),
     chips,
   )
 
@@ -271,7 +281,13 @@ pub fn permissions_are_shown_as_chips_test() {
     no_perms_badge,
   )
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), not_requested),
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      not_requested,
+    ),
     no_perms_badge,
   )
 }
@@ -1374,7 +1390,13 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
 pub fn language_switch_return_paths_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
+    dashboard.approval_page(
+      i18n.Japanese,
+      view.System,
+      Ok([]),
+      states().now,
+      pending,
+    ),
     "<input name=\"return\" type=\"hidden\" value=\"/approve/tok\">",
   )
   assert string.contains(
@@ -1420,7 +1442,13 @@ pub fn dashboard_refreshes_only_when_pending_exists_test() {
 pub fn approval_page_refreshes_automatically_test() {
   let assert Ok([pending]) = states().pending
   let approval =
-    dashboard.approval_page(i18n.English, view.System, Ok([]), pending)
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      pending,
+    )
   assert string.contains(approval, "http-equiv=\"refresh\"")
   assert string.contains(approval, "content=\"30\"")
   assert !string.contains(
@@ -1437,7 +1465,7 @@ pub fn approval_page_refreshes_automatically_test() {
   )
 }
 
-/// 承認待ちのカードと承認ページには「失効まで」の欄が出る。カードは残りの「分:秒」と失効の時刻を、承認ページは残りの秒数を出す。
+/// 承認待ちのカードには「失効まで」の欄が出て、残りの「分:秒」と失効の時刻を出す。承認ページも同じカードを使う。
 pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
@@ -1449,8 +1477,14 @@ pub fn pending_shows_time_until_expiry_test() {
     "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
   assert string.contains(
-    dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
-    "<dt class=\"text-muted\">失効まで</dt><dd><span>540 秒</span></dd>",
+    dashboard.approval_page(
+      i18n.Japanese,
+      view.System,
+      Ok([]),
+      states().now,
+      pending,
+    ),
+    "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
 }
 
@@ -1476,11 +1510,23 @@ pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
     == 2
 
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), mismatched),
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      mismatched,
+    ),
     mismatched_forms,
   )
   assert string.contains(
-    dashboard.approval_page(i18n.English, view.System, Ok([]), not_offered),
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      not_offered,
+    ),
     offered_forms,
   )
 }
@@ -1809,24 +1855,46 @@ pub fn signer_is_shown_as_label_and_npub_test() {
   assert !string.contains(unavailable, "<span>main</span>")
 }
 
-/// 承認ページには、承認の意味の説明が info の囲みで出る。権限が空のときだけ、既定で
+/// 承認ページには、カードの直後に承認の意味の説明が info の囲みで畳まずに出る。権限が空のときだけ、既定で
 /// 許す範囲を述べる一文が続く。
 pub fn approval_page_explains_what_approval_means_test() {
   let assert Ok([with_perms, without_perms]) = secret_states().pending
   let with_perms_page =
-    dashboard.approval_page(i18n.English, view.System, Ok([]), with_perms)
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      with_perms,
+    )
   assert string.contains(with_perms_page, "alert-info")
   assert string.contains(
     with_perms_page,
     "Approving lets this client request signing and encryption within the permissions above. You can change them later from the approved session.",
   )
+  assert string.contains(
+    with_perms_page,
+    "</article>"
+      <> element.to_string(
+      view.alert(view.Info, [
+        html.text(i18n.text(i18n.English, i18n.ApprovalExplanation)),
+      ]),
+    ),
+  )
+  assert !string.contains(with_perms_page, "<details")
   assert !string.contains(
     with_perms_page,
     "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
 
   let without_perms_page =
-    dashboard.approval_page(i18n.English, view.System, Ok([]), without_perms)
+    dashboard.approval_page(
+      i18n.English,
+      view.System,
+      Ok([]),
+      states().now,
+      without_perms,
+    )
   assert string.contains(
     without_perms_page,
     "You can change them later from the approved session. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",

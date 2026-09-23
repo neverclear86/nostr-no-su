@@ -574,7 +574,7 @@ pub fn approval_page_shows_the_request_test() {
   assert string.contains(body, label)
   assert string.contains(body, view.shorten(signer_npub))
   assert string.contains(body, client)
-  assert string.contains(body, "<dd><span>540s</span></dd>")
+  assert string.contains(body, "9:00 (expires at <time datetime=\"")
 }
 
 /// 知らない、あるいは失効したトークンの承認ページは 404 の HTML で、理由を出し
@@ -1380,56 +1380,49 @@ pub fn only_the_static_files_are_served_test() {
   assert post(context(), "/static/admin.js").status == 405
 }
 
-/// 通知ページの理由の囲みは、カードの中に結果ごとの色で出す。承認と拒否はどちらも 200
+/// 通知ページの結果の印は、カードの先頭に結果ごとの色とアイコンで出る。承認と拒否はどちらも 200
 /// なので、状態コードではなく経路で色が決まる。
 pub fn notices_are_colored_by_outcome_test() {
   let rotate = action_path(dashboard.RotateSecret)
   let notices = [
-    #(
-      post(context(), "/approve/" <> token),
-      "alert alert-soft alert-success text-base-content",
-    ),
-    #(post(context(), "/deny/" <> token), "alert alert-soft text-base-content"),
-    #(
-      post(context(), "/approve/other-token"),
-      "alert alert-soft alert-error text-base-content",
-    ),
+    #(post(context(), "/approve/" <> token), view.Success),
+    #(post(context(), "/deny/" <> token), view.Neutral),
+    #(post(context(), "/approve/other-token"), view.Failure),
     #(
       post(
         failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
         rotate,
       ),
-      "alert alert-soft alert-warning text-base-content",
+      view.Warning,
     ),
     #(
       post(
         failing_context(bunker.NotReady("accounts are not loaded yet")),
         rotate,
       ),
-      "alert alert-soft alert-warning text-base-content",
+      view.Warning,
     ),
     #(
       post_form(context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", unknown_client),
       ]),
-      "alert alert-soft alert-error text-base-content",
+      view.Failure,
     ),
     #(
       post_form(not_answering_context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", client),
       ]),
-      "alert alert-soft alert-warning text-base-content",
+      view.Warning,
     ),
   ]
   list.each(notices, fn(entry) {
-    let #(response, class) = entry
+    let #(response, tone) = entry
     assert string.contains(
       simulate.read_body(response),
-      "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\""
-        <> class
-        <> "\">",
+      "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\"flex items-start gap-3\">"
+        <> element.to_string(view.notice_mark(tone)),
     )
   })
 }
