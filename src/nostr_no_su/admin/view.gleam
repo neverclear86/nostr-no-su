@@ -80,10 +80,6 @@ pub const theme_field = "theme"
 /// テーマと言語の切り替えで、切り替えた後に開くパスを送る欄の名前。
 pub const return_field = "return"
 
-/// ナビゲーションバーの 2 つのドロップダウン（`details`）に付ける名前。同じ名前の
-/// `details` は Chromium で 1 つだけ開くので、片方を開くともう片方が閉じる。
-pub const navbar_menu_name = "navbar-menu"
-
 /// ページの本文の幅。
 pub type Layout {
   /// 節を 2 列に並べるダッシュボード。
@@ -100,7 +96,7 @@ pub type Theme {
   Dark
 }
 
-/// 対応するテーマ。ナビゲーションバーのドロップダウンはこの順に並べる。
+/// 対応するテーマ。ナビゲーションバーのテーマの切り替えは、この順にボタンを並べる。
 pub const themes = [System, Light, Dark]
 
 /// テーマと言語の切り替えで、ブラウザーの設定を表すフォームの値。
@@ -127,7 +123,7 @@ pub type LanguageChoice {
   ChosenLanguage(language: Language)
 }
 
-/// 言語の一覧に並べる順。ブラウザーの設定を先頭に置き、続けて `i18n.languages` の順。
+/// 言語の切り替えに並べるボタンの順。ブラウザーの設定を先頭に置き、続けて `i18n.languages` の順。
 pub fn language_choices() -> List(LanguageChoice) {
   [BrowserLanguage, ..list.map(i18n.languages, ChosenLanguage)]
 }
@@ -342,8 +338,10 @@ fn theme_attributes(theme: Theme) -> List(Attribute(msg)) {
   }
 }
 
-/// 全ページ共通のナビゲーションバー。左端に `brand_link` のロゴを置き、右端（`navbar-end`）に
-/// テーマと言語の切り替えを置く。切り替えを出さないページでも右端の枠は残す。
+/// 全ページ共通のナビゲーションバー。帯の地と下の線を付けず、ページの地の上に置く。
+/// 左端に `brand_link` のロゴを置き、右端（`navbar-end`）にテーマと言語の切り替えを置く。
+/// 1 行に収まらない幅では、切り替えを次の行の右端に送る。切り替えを出さないページでも
+/// 右端の枠は残す。
 fn navbar(
   language: Language,
   theme: Theme,
@@ -358,9 +356,7 @@ fn navbar(
   }
   html.header(
     [
-      attribute.class(
-        "navbar gap-2 border-b border-base-300 bg-base-100 px-4 sm:px-6",
-      ),
+      attribute.class("navbar flex-wrap justify-end gap-2 px-4 sm:px-6"),
     ],
     [
       html.div([attribute.class("navbar-start flex-1")], [
@@ -371,24 +367,25 @@ fn navbar(
   )
 }
 
-/// テーマの切り替え。テーマは `themes` の順（ブラウザーの設定、ライト、ダーク）に並べる。
+/// テーマの切り替え。テーマは `themes` の順（ブラウザーの設定、ライト、ダーク）に、
+/// モニター、太陽、月のアイコンだけのボタンで並べる。語は `aria-label` と `title` に出す。
 fn theme_switch(
   language: Language,
   current: Theme,
   return_to: String,
 ) -> Element(msg) {
-  dropdown(
-    theme_icon(),
+  switch_group(
     i18n.text(language, i18n.ThemeSwitchLabel),
     theme_segments,
     return_to,
     list.map(themes, fn(theme) {
-      dropdown_item(
+      let label = i18n.text(language, theme_label(theme))
+      switch_button(
         theme_field,
         theme_code(theme),
         theme == current,
-        None,
-        i18n.text(language, theme_label(theme)),
+        [attribute.aria_label(label), attribute.title(label)],
+        [theme_choice_icon(theme)],
       )
     }),
   )
@@ -403,117 +400,106 @@ fn theme_label(theme: Theme) -> i18n.Message {
   }
 }
 
-/// 言語の切り替え。先頭にブラウザーの設定を置き、続けて `i18n.languages` の順に並べ、
-/// 言語名はその言語自身で書き `lang` を付ける。ブラウザーの設定は選択の印を付けない
-/// （描画は cookie の有無を知らないため、表示中の判定は常に表示している言語につく）。
+/// テーマの項目のアイコン。
+fn theme_choice_icon(theme: Theme) -> Element(msg) {
+  case theme {
+    System -> monitor_icon()
+    Light -> sun_icon()
+    Dark -> moon_icon()
+  }
+}
+
+/// 言語の切り替え。先頭にブラウザーの設定を地球のアイコンだけのボタンで置き（語は
+/// `aria-label` と `title` に出す）、続けて `i18n.languages` の順に、言語名をその言語自身で
+/// 書いて `lang` を付けたボタンを並べる。ブラウザーの設定は押した状態にしない（描画は
+/// cookie の有無を知らないため、押した状態は常に表示している言語につく）。
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
-  dropdown(
-    language_icon(),
+  switch_group(
     i18n.text(current, i18n.LanguageSwitchLabel),
     language_segments,
     return_to,
     list.map(language_choices(), fn(choice) {
-      let #(selected, lang, label) = case choice {
-        BrowserLanguage -> #(
-          False,
-          None,
-          i18n.text(current, i18n.FollowBrowser),
-        )
+      let #(pressed, extra, content) = case choice {
+        BrowserLanguage -> {
+          let label = i18n.text(current, i18n.FollowBrowser)
+          #(False, [attribute.aria_label(label), attribute.title(label)], [
+            globe_icon(),
+          ])
+        }
         ChosenLanguage(language) -> #(
           language == current,
-          Some(i18n.code(language)),
-          i18n.native_name(language),
+          [attribute.lang(i18n.code(language))],
+          [html.text(i18n.native_name(language))],
         )
       }
-      dropdown_item(
+      switch_button(
         language_field,
         language_choice_code(choice),
-        selected,
-        lang,
-        label,
+        pressed,
+        extra,
+        content,
       )
     }),
   )
 }
 
-/// ナビゲーションバーの切り替えのドロップダウン。`details` で開閉し、一覧の各項目を
-/// `action` へ POST する送信ボタンにする。JS なしで動き、外側のクリックと Esc では閉じない
-/// （`details` の仕様）。ARIA のメニューにしない（矢印キーの移動を実装しないため）。
-fn dropdown(
-  icon: Element(msg),
+/// 上部の切り替えの 1 つ。`action` へ POST するフォームで、戻り先を隠し欄で送り、送信ボタンを
+/// daisyUI の `join` で 1 つの枠に並べる。隠し欄は枠の外に置く（`join` は角の丸めを最初と
+/// 最後の子で決めるため）。枠は `role="group"` にし、`label` を読み上げの名前にする。JS なしで
+/// 動く。
+fn switch_group(
   label: String,
   action: List(String),
   return_to: String,
-  items: List(Element(msg)),
+  buttons: List(Element(msg)),
 ) -> Element(msg) {
-  html.details(
-    [attribute.name(navbar_menu_name), attribute.class("dropdown dropdown-end")],
+  html.form(
+    [attribute.method("post"), attribute.action(segments_path(action))],
     [
-      html.summary(
+      hidden_input(return_field, return_to),
+      html.div(
         [
+          attribute.role("group"),
           attribute.aria_label(label),
-          attribute.class("btn btn-sm gap-1 focus-visible:outline-base-content"),
+          attribute.class("join"),
         ],
-        [
-          icon,
-          html.span([attribute.class("hidden sm:inline")], [html.text(label)]),
-          chevron_icon(),
-        ],
-      ),
-      html.form(
-        [
-          attribute.method("post"),
-          attribute.action(segments_path(action)),
-          attribute.class("dropdown-content z-10 mt-1"),
-        ],
-        [
-          hidden_input(return_field, return_to),
-          html.ul(
-            [
-              attribute.class(
-                "menu w-48 rounded-box border border-base-300 bg-base-100 shadow-sm",
-              ),
-            ],
-            list.map(items, fn(item) { html.li([], [item]) }),
-          ),
-        ],
+        buttons,
       ),
     ],
   )
 }
 
-/// ドロップダウンの一覧の項目 1 つ。表示中の項目は `aria-current` と `menu-active` と
-/// チェックで示し、押すと同じ値を送り直す。
-fn dropdown_item(
+/// 切り替えの送信ボタン 1 つ。押すと `field` に `value` を送る。今の値（`pressed`）は
+/// `aria-pressed="true"` と `btn-neutral` の塗りで示し、ほかは `aria-pressed="false"` にする。
+/// 今の値のボタンも押せて、同じ値を送り直す。`extra` は語や `lang` の属性、`content` は
+/// アイコンか言語名である。
+fn switch_button(
   field: String,
   value: String,
-  selected: Bool,
-  lang: Option(String),
-  text: String,
+  pressed: Bool,
+  extra: List(Attribute(msg)),
+  content: List(Element(msg)),
 ) -> Element(msg) {
-  let lang_attribute = case lang {
-    Some(code) -> [attribute.lang(code)]
-    None -> []
-  }
-  let class = case selected {
-    True ->
-      "menu-active focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-neutral-content"
-    False ->
-      "focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-base-content"
-  }
-  let current = case selected {
-    True -> [attribute.aria_current("true")]
-    False -> []
+  let #(aria_pressed, class) = case pressed {
+    True -> #(
+      "true",
+      "join-item btn btn-sm btn-neutral focus-visible:outline-base-content",
+    )
+    False -> #(
+      "false",
+      "join-item btn btn-sm focus-visible:outline-base-content",
+    )
   }
   html.button(
     [
       attribute.type_("submit"),
       attribute.name(field),
       attribute.value(value),
+      attribute.aria_pressed(aria_pressed),
       attribute.class(class),
-      ..list.append(lang_attribute, current)
+      ..extra
     ],
-    [check_icon(selected), html.span([], [html.text(text)])],
+    content,
   )
 }
 
@@ -556,16 +542,6 @@ pub fn lucide_icon(class: String, paths: List(String)) -> Element(msg) {
     ],
     paths,
   )
-}
-
-/// 表示中の項目のチェック。表示中でない項目にも同じ大きさの見えない枠を置き、文字の
-/// 位置を揃える。
-fn check_icon(shown: Bool) -> Element(msg) {
-  let class = case shown {
-    True -> "size-4"
-    False -> "invisible size-4"
-  }
-  icon(class, "M3 8.5l3 3 7-7")
 }
 
 /// 開閉のボタンの下向きの矢印。
@@ -1489,20 +1465,33 @@ pub fn logo_icon() -> Element(msg) {
   ])
 }
 
-/// テーマの切り替えのアイコン（Lucide の sun-moon）。
-pub fn theme_icon() -> Element(msg) {
+/// テーマの切り替えのブラウザーの設定のアイコン（Lucide の monitor）。
+fn monitor_icon() -> Element(msg) {
   lucide_icon("size-4", [
-    "M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4", "M12 2v2", "M12 20v2",
-    "m4.9 4.9 1.4 1.4", "m17.7 17.7 1.4 1.4", "M2 12h2", "M20 12h2",
-    "m6.3 17.7-1.4 1.4", "m19.1 4.9-1.4 1.4",
+    "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2",
+    "M8 21h8", "M12 17v4",
   ])
 }
 
-/// 言語の切り替えのアイコン（Lucide の languages）。
-pub fn language_icon() -> Element(msg) {
+/// テーマの切り替えのライトのアイコン（Lucide の sun）。
+fn sun_icon() -> Element(msg) {
   lucide_icon("size-4", [
-    "m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1", "m22 22-5-10-5 10",
-    "M14 18h6",
+    "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M12 2v2", "M12 20v2",
+    "m4.93 4.93 1.41 1.41", "m17.66 17.66 1.41 1.41", "M2 12h2", "M20 12h2",
+    "m6.34 17.66-1.41 1.41", "m19.07 4.93-1.41 1.41",
+  ])
+}
+
+/// テーマの切り替えのダークのアイコン（Lucide の moon）。
+fn moon_icon() -> Element(msg) {
+  lucide_icon("size-4", ["M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"])
+}
+
+/// 言語の切り替えのブラウザーの設定のアイコン（Lucide の globe）。
+fn globe_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+    "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20", "M2 12h20",
   ])
 }
 

@@ -63,7 +63,7 @@ const colorSchemes = named ? ["light"] : ["light", "dark"];
 
 // 撮る画面。form を持つものは POST で開く。status は応答の状態コードの期待値で、無ければ 200。
 // mask は乱数で変わる値を伏せる。copy を持つものは、開いた後に最初のコピーのボタンを押してから撮る。
-// click と keys は、開いた後に順にクリックするセレクターと、順に押すキーの配列。
+// keys は、開いた後に順に押すキーの配列。
 // open は、開いた後に open = true にして開く <details> のセレクター。
 // readme は --readme のときの出力名（<readme>-<en|ja>.png）で、印の無い画面は --readme では撮らない。
 const shots = [
@@ -102,11 +102,8 @@ const shots = [
   { name: "28b-approve-page-pending-unavailable", url: `${unavailable}/approve/tok-1`, status: 503 },
   { name: "29-reenable-not-found", url: `${base}/plugins/reenable`, form: { name: "missing" }, status: 404 },
   { name: "30-reenable-not-answered", url: `${base}/plugins/reenable`, form: { name: "no-answer" }, status: 503 },
-  { name: "31-theme-menu", url: `${base}/`, click: ["summary >> nth=0"] },
-  { name: "32-language-menu", url: `${base}/`, click: ["summary >> nth=0", "summary >> nth=1"] },
-  { name: "33-summary-focus", url: `${base}/`, keys: ["Tab", "Tab"] },
-  { name: "34-current-item-focus", url: `${base}/`, keys: ["Tab", "Tab", "Enter", "Tab"] },
-  { name: "35-item-focus", url: `${base}/`, keys: ["Tab", "Tab", "Enter", "Tab", "Tab"] },
+  { name: "33-switch-pressed-focus", url: `${base}/`, keys: ["Tab", "Tab"] },
+  { name: "34-switch-focus", url: `${base}/`, keys: ["Tab", "Tab", "Tab"] },
   { name: "36-theme-dark", url: `${base}/theme`, form: { theme: "dark", return: "/" } },
   { name: "37-theme-light", url: `${base}/theme`, form: { theme: "light", return: "/" } },
   { name: "38-theme-system", url: `${base}/theme`, form: { theme: "system", return: "/" } },
@@ -241,11 +238,8 @@ async function open(page, shot) {
   return response;
 }
 
-// 撮る前の操作。クリックの後に押すキーを送り、open の <details> を開く。
+// 撮る前の操作。押すキーを送り、open の <details> を開く。
 async function prepare(page, shot) {
-  for (const selector of shot.click ?? []) {
-    await page.locator(selector).click();
-  }
   for (const key of shot.keys ?? []) {
     await page.keyboard.press(key);
   }
