@@ -142,6 +142,27 @@ pub fn localized_plugin_page_is_in_the_display_language_test() {
   assert string.contains(english, "<div lang=\"en\">")
 }
 
+/// 表示の言語を受け取るプラグインのページは、見出し（h1）と `<title>` のページの表示名を
+/// 表示の言語で引き、その言語の `lang` で出す。
+pub fn localized_heading_is_in_the_display_language_test() {
+  let body =
+    plugin_pages.plugin_page(
+      i18n.Japanese,
+      view.System,
+      localized_row(),
+      localized_status_page(),
+      [section_("Queue")],
+    )
+  assert string.contains(
+    body,
+    "<h1 class=\"text-2xl font-bold\"><span lang=\"ja\">example — 状態</span></h1>",
+  )
+  assert string.contains(
+    body,
+    "<title lang=\"ja\">Nostr-no-Su — example — 状態</title>",
+  )
+}
+
 /// 節が 0 件のときは、ページ全体の空の状態の文を出す。
 pub fn no_sections_shows_the_empty_state_test() {
   let body =

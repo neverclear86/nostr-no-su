@@ -21,7 +21,8 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 
 /// プラグインのページ 1 枚を HTML 文書の文字列にする。見出しと `<title>` は `page_heading` で、
-/// プラグイン由来の英語なので `view.untranslated_page` で出す。`raw_sections` は
+/// プラグイン由来の文字列なので、`view.page_in_language` で `plugin.text_language` の言語として
+/// 出す。`raw_sections` は
 /// `plugin_view.sections` が最上位の記述から取り出した節の記述の並び。
 pub fn plugin_page(
   language: Language,
@@ -30,10 +31,12 @@ pub fn plugin_page(
   page: plugin.PluginPage,
   raw_sections: List(Dynamic),
 ) -> String {
-  view.untranslated_page(
+  let code = i18n.code(language)
+  view.page_in_language(
     language,
     theme,
-    page_heading(plugin, page),
+    plugin.text_language(page, code),
+    page_heading(plugin, page, code),
     view.Narrow,
     view.SwitchReturningTo(dashboard.plugin_page_path(plugin.name, page.key)),
     view.NoRefresh,
@@ -46,12 +49,14 @@ pub fn plugin_page(
   )
 }
 
-/// ページの見出し。プラグイン名とページの表示名を ` — ` でつなぐ（例: `event_logger — Settings`）。
+/// ページの見出し。プラグイン名と、言語のコード `code` で引いたページの表示名
+/// （`plugin.title_in`）を ` — ` でつなぐ（例: `event_logger — Settings`）。
 fn page_heading(
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
+  code: String,
 ) -> String {
-  plugin.name <> " — " <> page.title
+  plugin.name <> " — " <> plugin.title_in(page, code)
 }
 
 /// プラグイン名と現在の状態の行。
