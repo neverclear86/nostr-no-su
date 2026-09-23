@@ -11,11 +11,12 @@
 //// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge` / `id`
 ////   のいずれか（`badge` は `table` のセルだけ、`id` は `pairs` の値だけ）
 //// - `form` の欄: `checkbox` / `text` / `textarea` のいずれか
+//// - `image` の見た目（`variant`）: `icon` / `banner` のいずれか（無ければ既定の見た目）
 ////
 //// 深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
 //// decoder が失敗するため、深すぎる入れ子は構造的に `Error` になる。
 ////
-//// **プラグインが選べるのは文字列・種別・`tone`・真偽値だけである。** クラス名も
+//// **プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値だけである。** クラス名も
 //// `href` も `id` も持ち込めない（`assets/admin.css` の方針）。描画は必ず
 //// `admin/view` の部品を経由し、このモジュール自身が持つ生のクラス文字列は
 //// `table` のセルの `code` インラインだけである。`form` の宛先は本体が決め
@@ -128,8 +129,9 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
 }
 
 /// ブロック 1 つを対応する部品にする。`pairs` の `items` が 0 件のときは空の
-/// 状態の文にする。`image` の `url` の scheme が `http` / `https` でなければ、
-/// 画像の代わりに代替文だけの枠にする。
+/// 状態の文にする。`image` の見た目は `variant` で選ぶ（`image_shape`）。`image` の
+/// `url` の scheme が `http` / `https` でなければ、見た目に関係なく、画像の代わりに
+/// 代替文だけの枠にする。
 fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
@@ -259,8 +261,9 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     "image" -> {
       use url <- result.try(text_field(raw, "url"))
       use alt <- result.try(text_field(raw, "alt"))
+      use shape <- result.try(image_shape(raw))
       case image_source_allowed(url) {
-        True -> Ok(view.plugin_image(url, alt))
+        True -> Ok(view.plugin_image(url, alt, shape))
         False ->
           Ok(view.plugin_image_placeholder(
             context.language,
@@ -427,6 +430,22 @@ fn inline(raw: Dynamic) -> Result(Element(msg), String) {
     }
     "id" -> Error("type \"id\" is only allowed in pairs values")
     other -> Error("unknown type \"" <> other <> "\"")
+  }
+}
+
+/// `image` の `variant` フィールド。無ければ `view.ContainedImage`。`icon` と
+/// `banner` 以外は `Error`。
+fn image_shape(raw: Dynamic) -> Result(view.ImageShape, String) {
+  case lookup(raw, "variant") {
+    None -> Ok(view.ContainedImage)
+    Some(value) ->
+      case decode.run(value, decode.string) {
+        Error(_) ->
+          Error("variant must be a String, got " <> dynamic.classify(value))
+        Ok("icon") -> Ok(view.IconImage)
+        Ok("banner") -> Ok(view.BannerImage)
+        Ok(other) -> Error("unknown variant \"" <> other <> "\"")
+      }
   }
 }
 

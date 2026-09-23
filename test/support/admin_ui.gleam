@@ -9,7 +9,7 @@ import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
@@ -549,8 +549,18 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         [
           plugin_section("a", [
-            plugin_image_block("http://example.com/a.png", "example"),
-            plugin_image_block("data:image/png;base64,AAA", "label"),
+            plugin_image_block("http://example.com/a.png", "example", None),
+            plugin_image_block("data:image/png;base64,AAA", "label", None),
+            plugin_image_block(
+              "http://example.com/a.png",
+              "example",
+              Some("icon"),
+            ),
+            plugin_image_block(
+              "http://example.com/b.png",
+              "example",
+              Some("banner"),
+            ),
           ]),
         ],
       ),
@@ -650,14 +660,25 @@ fn plugin_details_block(summary: String, text: String) -> Dynamic {
   ])
 }
 
-/// ブロック（`image`）。`alt` は `<img>` の属性値か、節の包みの `lang` を引き継ぐテキストに
-/// 出る。後者は他のプラグイン由来の文字列と同じく `allowed_words` の語で組む。
-fn plugin_image_block(url: String, alt: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("image")),
-    #(dynamic.string("url"), dynamic.string(url)),
-    #(dynamic.string("alt"), dynamic.string(alt)),
-  ])
+/// ブロック（`image`）。`variant` が `Some` なら見た目の種類のキーを足す。`alt` は `<img>` の
+/// 属性値か、節の包みの `lang` を引き継ぐテキストに出る。後者は他のプラグイン由来の文字列と
+/// 同じく `allowed_words` の語で組む。
+fn plugin_image_block(
+  url: String,
+  alt: String,
+  variant: Option(String),
+) -> Dynamic {
+  dynamic.properties(
+    [
+      #(dynamic.string("type"), dynamic.string("image")),
+      #(dynamic.string("url"), dynamic.string(url)),
+      #(dynamic.string("alt"), dynamic.string(alt)),
+    ]
+    |> list.append(case variant {
+      Some(value) -> [#(dynamic.string("variant"), dynamic.string(value))]
+      None -> []
+    }),
+  )
 }
 
 /// ブロック（`pairs`）。`items` は `#(term, value)` の並び。

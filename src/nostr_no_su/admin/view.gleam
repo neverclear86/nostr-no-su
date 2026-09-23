@@ -878,19 +878,39 @@ pub fn plugin_textarea_field(
   )
 }
 
-/// プラグインのページの画像 1 枚。プラグインは URL と代替文だけを渡し、大きさもクラスも
-/// 選べないので、縦横とも実寸のまま高さ 192px と枠の幅の 2 つの上限に収め、比の違う画像は
-/// 切らずに余白を枠の中に入れる。別のオリジンへ Referer を出さない。
-pub fn plugin_image(url: String, alt: String) -> Element(msg) {
+/// プラグインのページの画像の見た目。プラグインが `image` ブロックの `variant` で選ぶ。
+pub type ImageShape {
+  /// `variant` が無いときの見た目。縦横とも実寸のまま高さ 192px と枠の幅の 2 つの
+  /// 上限に収め、比の違う画像は切らずに余白を枠の中に入れる。
+  ContainedImage
+  /// `icon`。64px の正方形の丸に切り抜く（プロフィールのアイコン）。
+  IconImage
+  /// `banner`。枠の幅いっぱいの 3:1 の帯に切り抜き、高さは 192px までにする
+  /// （プロフィールのバナー）。
+  BannerImage
+}
+
+/// プラグインのページの画像 1 枚。プラグインは URL と代替文と見た目の種類（`shape`）だけを
+/// 渡し、大きさもクラスも選べない。別のオリジンへ Referer を出さない。
+pub fn plugin_image(
+  url: String,
+  alt: String,
+  shape: ImageShape,
+) -> Element(msg) {
   html.img([
     attribute.src(url),
     attribute.alt(alt),
     attribute.loading("lazy"),
     attribute.decoding("async"),
     attribute.referrerpolicy("no-referrer"),
-    attribute.class(
-      "block h-auto w-auto max-h-48 max-w-full rounded-lg border border-base-300 bg-base-200 object-contain",
-    ),
+    attribute.class(case shape {
+      ContainedImage ->
+        "block h-auto w-auto max-h-48 max-w-full rounded-lg border border-base-300 bg-base-200 object-contain"
+      IconImage ->
+        "block size-16 rounded-full border border-base-300 bg-base-200 object-cover"
+      BannerImage ->
+        "block aspect-3/1 w-full max-h-48 rounded-lg border border-base-300 bg-base-200 object-cover"
+    }),
   ])
 }
 

@@ -240,6 +240,31 @@ pub fn content_labels_form_fields_in_each_language_test() {
     ]
 }
 
+/// `Found` の節の `picture` の `image` は `url` が `https://example.com/p.png` で
+/// `variant` が `icon`、`banner` の `image` は `url` が `https://example.com/b.png` で
+/// `variant` が `banner`。
+pub fn content_shows_picture_as_icon_and_banner_as_banner_test() {
+  let description =
+    page.content(
+      i18n.English,
+      [sample_account()],
+      [page.Found(sample_content, 1_700_000_000)],
+      [None],
+    )
+  let assert [section] = page_sections(description)
+  let #(_title, blocks) = section_shape(section)
+  let assert [_, _, picture_image, _, banner_image, _] = blocks
+  let decoder = {
+    use url <- decode.field("url", decode.string)
+    use variant <- decode.field("variant", decode.string)
+    decode.success(#(url, variant))
+  }
+  assert decode.run(picture_image, decoder)
+    == Ok(#("https://example.com/p.png", "icon"))
+  assert decode.run(banner_image, decoder)
+    == Ok(#("https://example.com/b.png", "banner"))
+}
+
 /// `NotFound` の節には `warning` の `alert`、`npub` だけの `pairs`（`updated` の
 /// 項は出ない）と、値がすべて空の `form` が出る。
 pub fn content_shows_empty_form_when_not_found_test() {

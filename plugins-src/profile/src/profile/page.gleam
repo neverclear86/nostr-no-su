@@ -490,7 +490,8 @@ fn updated_item(language: Language, created_at: Int) -> #(String, Dynamic) {
 }
 
 /// `picture` / `banner` が空でなければ、`language` の文言の `note` と、代替
-/// テキストを持つ `image` を続けて出す。両方空なら空リスト。
+/// テキストを持つ `image` を続けて出す。`image` の見た目は、`picture` が `icon`
+/// （小さい丸のアイコン）、`banner` が `banner`（横長の帯）である。両方空なら空リスト。
 fn image_blocks(
   language: Language,
   account: Account,
@@ -501,20 +502,28 @@ fn image_blocks(
       profile.picture,
       i18n.text(language, i18n.PictureNote),
       i18n.text(language, i18n.PictureAlt(account.label)),
+      "icon",
     ),
     image_with_note(
       profile.banner,
       i18n.text(language, i18n.BannerNote),
       i18n.text(language, i18n.BannerAlt(account.label)),
+      "banner",
     ),
   ])
 }
 
-/// 1 枚の画像の `note` と `image`。`url` が空なら出さない。
-fn image_with_note(url: String, label: String, alt: String) -> List(Dynamic) {
+/// 1 枚の画像の `note` と、見た目の種類 `variant`（`docs/plugin-api.md` 第 13.3 節）を
+/// 持つ `image`。`url` が空なら出さない。
+fn image_with_note(
+  url: String,
+  label: String,
+  alt: String,
+  variant: String,
+) -> List(Dynamic) {
   case url {
     "" -> []
-    _ -> [note_block(label), image_block(url, alt)]
+    _ -> [note_block(label), image_block(url, alt, variant)]
   }
 }
 
@@ -643,12 +652,13 @@ fn note_block(text: String) -> Dynamic {
   ])
 }
 
-/// `image` ブロック。
-fn image_block(url: String, alt: String) -> Dynamic {
+/// `image` ブロック。`variant` は見た目の種類（`icon` か `banner`）。
+fn image_block(url: String, alt: String, variant: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("image")),
     #(dynamic.string("url"), dynamic.string(url)),
     #(dynamic.string("alt"), dynamic.string(alt)),
+    #(dynamic.string("variant"), dynamic.string(variant)),
   ])
 }
 

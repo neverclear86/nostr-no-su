@@ -406,3 +406,25 @@ pub fn fallback_link_opens_the_page_test() {
   assert element.to_string(view.fallback_link(i18n.Japanese, "/relays/1/edit"))
     == "<a class=\"link link-hover self-center text-xs text-muted\" href=\"/relays/1/edit\">ページで開く</a>"
 }
+
+/// プラグインのページの画像は、見た目の種類ごとに決まった完全なクラスの文字列で描く。
+pub fn plugin_image_shapes_test() {
+  let cases = [
+    #(
+      view.ContainedImage,
+      "block h-auto w-auto max-h-48 max-w-full rounded-lg border border-base-300 bg-base-200 object-contain",
+    ),
+    #(
+      view.IconImage,
+      "block size-16 rounded-full border border-base-300 bg-base-200 object-cover",
+    ),
+    #(
+      view.BannerImage,
+      "block aspect-3/1 w-full max-h-48 rounded-lg border border-base-300 bg-base-200 object-cover",
+    ),
+  ]
+  use #(shape, class) <- list.each(cases)
+  let html =
+    element.to_string(view.plugin_image("https://example.com/a.png", "a", shape))
+  assert string.contains(html, "class=\"" <> class <> "\"")
+}
