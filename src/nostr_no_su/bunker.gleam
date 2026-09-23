@@ -281,8 +281,9 @@ pub type RelayScope {
   /// 基本のバンカーリレー（`relay_list` のバンカーの用途の項目）の接続。全署名者の
   /// `#p` を購読し、全アカウントで AUTH し、すべての応答を出す。
   BaseRelay
-  /// 基本のバンカーリレーに無い、セッションのリレーの接続。その URL を持つ
-  /// セッションの署名者だけで購読と AUTH を行い、そのセッションへの応答だけを出す。
+  /// 基本のバンカーリレーに無い、セッションのリレー（接続の前の取り置きを含む）の
+  /// 接続。その URL を持つセッションと取り置きの署名者だけで購読と AUTH を行い、
+  /// そのセッションへの応答だけを出す。
   SessionRelay
 }
 
@@ -313,9 +314,17 @@ pub type Msg {
   Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
   GetSessions(reply: Subject(Result(List(Session), String)))
-  /// `relay_url` を持つセッションの署名者を問い合わせる。セッションのリレーの
-  /// 接続の購読が使う。
+  /// `relay_url` を持つセッションと取り置きの署名者を問い合わせる。セッションの
+  /// リレーの接続の購読が使う。
   GetSessionSigners(relay_url: String, reply: Subject(List(String)))
+  /// `nostrconnect://` の接続の前に、（署名者, クライアント）の組に URI のリレーを
+  /// 取り置く。取り置いたリレーはセッションのリレーと同じく `relay_map` に入り、
+  /// その署名者で購読と AUTH を行う接続が開く。同じ組を取り置き直すと一覧を
+  /// 置き換える。
+  ReserveSessionRelays(signer: String, client: String, relays: List(String))
+  /// 組の取り置きを外す。取り置きが無ければ何もしない。同じリレーを持つセッションが
+  /// あれば、そのリレーの接続は残る。
+  ReleaseSessionRelays(signer: String, client: String)
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
   /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
@@ -394,8 +403,9 @@ pub type Msg {
   /// 秘密は出ない。
   GetNsec(signer: String, reply: Subject(Result(String, String)))
   /// リレーの AUTH（NIP-42）に返す署名済みイベントを問い合わせる。`BaseRelay` の
-  /// 接続は登録アカウントごと、`SessionRelay` の接続はその URL を持つセッションの
-  /// 署名者ごとに署名する。バンカーリレーの接続が challenge を受けたときに使う。
+  /// 接続は登録アカウントごと、`SessionRelay` の接続はその URL を持つセッションと
+  /// 取り置きの署名者ごとに署名する。バンカーリレーの接続が challenge を受けたときに
+  /// 使う。
   Authenticate(
     relay_url: String,
     scope: RelayScope,
@@ -506,14 +516,34 @@ pub fn signers(name: Name(Msg)) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSigners)
 }
 
-/// `relay_url` を持つ承認済みセッションの署名者（昇順）。読み込みの前は空。
-/// アクターが応答しなければ `None` を返し、0 件と区別する（`signers` と同じく、
-/// 購読は応答が無いときに開いている購読を閉じてはならない）。
+/// `relay_url` を持つ承認済みセッションと取り置きの署名者（昇順）。読み込みの前は
+/// 取り置きの署名者だけ。アクターが応答しなければ `None` を返し、0 件と区別する
+/// （`signers` と同じく、購読は応答が無いときに開いている購読を閉じてはならない）。
 pub fn session_signers(
   name: Name(Msg),
   relay_url: String,
 ) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSessionSigners(relay_url, _))
+}
+
+/// `ReserveSessionRelays` を送る。送るだけで待たない。同じプロセスが後に送る
+/// 問い合わせより先に処理される。
+pub fn reserve_session_relays(
+  name: Name(Msg),
+  signer: String,
+  client: String,
+  relays: List(String),
+) -> Nil {
+  named.send(name, ReserveSessionRelays(signer, client, relays))
+}
+
+/// `ReleaseSessionRelays` を送る。送るだけで待たない。
+pub fn release_session_relays(
+  name: Name(Msg),
+  signer: String,
+  client: String,
+) -> Nil {
+  named.send(name, ReleaseSessionRelays(signer, client))
 }
 
 /// `pubkey` が `name` のアクターの署名者か。アクターへ問い合わせず、署名者の集合が
@@ -605,9 +635,9 @@ pub fn nsec(name: Name(Msg), signer: String) -> Result(String, String) {
 }
 
 /// リレーの AUTH に返す、署名済みの kind 22242。`BaseRelay` の接続は登録アカウント
-/// ごと、`SessionRelay` の接続はその URL を持つセッションの署名者ごとに署名する。
-/// アクターが応答しないときは理由を返す。`relay_client.Authenticator` として接続に
-/// 渡す。
+/// ごと、`SessionRelay` の接続はその URL を持つセッションと取り置きの署名者ごとに
+/// 署名する。アクターが応答しないときは理由を返す。`relay_client.Authenticator` と
+/// して接続に渡す。
 pub fn authenticate(
   name: Name(Msg),
   relay_url: String,
@@ -939,16 +969,23 @@ pub fn response_relays(
   }
 }
 
-/// エンジンの承認済みセッションの `session_relay_signers`。
-fn relay_map(eng: engine.Engine) -> Dict(String, List(String)) {
-  engine.sessions(eng)
+/// 承認済みのセッションと取り置き（`reserved`）の `session_relay_signers`。
+fn relay_map(state: State) -> Dict(String, List(String)) {
+  engine.sessions(state.engine)
   |> list.map(fn(session) { #(session.signer, session.relays) })
+  |> list.append(
+    dict.to_list(state.reserved)
+    |> list.map(fn(reservation) {
+      let #(#(signer, _client), relays) = reservation
+      #(signer, relays)
+    }),
+  )
   |> session_relay_signers
 }
 
-/// `relay_url` を持つ承認済みセッションの署名者（昇順）。無ければ空。
+/// `relay_url` を持つ承認済みセッションと取り置きの署名者（昇順）。無ければ空。
 fn session_relay_signers_of(state: State, relay_url: String) -> List(String) {
-  dict.get(relay_map(state.engine), relay_url) |> result.unwrap([])
+  dict.get(relay_map(state), relay_url) |> result.unwrap([])
 }
 
 /// 応答の（署名者, 宛先）の組のセッションを `engines` の順に探し、最初に見つかった
@@ -979,10 +1016,11 @@ pub fn pause_report(relay_url: String, dropped: Int) -> String {
 }
 
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
-/// 署名者ごとのラベルと、生きた接続の送信手段とその範囲と、自分が起動した時刻と、
-/// 読み込みの進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧と、
-/// セッションの外の応答を止めているリレーの一覧だけを持つ。`not_before` は
-/// エンジンではなくここに置き、アクターの起動時刻を刻む。
+/// 署名者ごとのラベルと、生きた接続の送信手段とその範囲と、接続の前に取り置いた
+/// セッションのリレーと、自分が起動した時刻と、読み込みの進み具合と、直近の読み込みで
+/// 飛ばされた行と、OK を待っている応答の一覧と、セッションの外の応答を止めている
+/// リレーの一覧だけを持つ。`not_before` はエンジンではなくここに置き、アクターの
+/// 起動時刻を刻む。
 type State {
   State(
     /// このアクターの登録名。署名者の集合の写し（`is_signer`）のキーに使う。
@@ -1012,6 +1050,9 @@ type State {
     /// 直近の読み込みで飛ばされた行。読み込みのたびに入れ替わり、書き込みでは
     /// 変わらない。
     skipped: List(vault.Skipped),
+    /// 接続の前に取り置いた（署名者, クライアント）ごとの URI のリレー。セッションの
+    /// リレーと合わせて `relay_map` を作る。
+    reserved: Dict(#(String, String), List(String)),
   )
 }
 
@@ -1098,6 +1139,7 @@ fn initialise(
     deliveries: new_deliveries(),
     pauses: new_pauses(),
     skipped: [],
+    reserved: dict.new(),
   )
   |> actor.initialised
   |> actor.selecting(selector)
@@ -1105,11 +1147,12 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、署名者・
-/// セッションのリレーの署名者・アカウント・飛ばされた行・セッション・承認待ちの
-/// 照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件をエンジンに
-/// 通して生成された応答の送信、発行した応答への OK の反映と `rate-limited:` を
-/// 返したリレーの停止、リレーの AUTH に返す認証イベントの署名を行う。
+/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、セッションの
+/// リレーの取り置きと取り外し、署名者・セッションのリレーの署名者・アカウント・
+/// 飛ばされた行・セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と
+/// 拒否、受信イベント 1 件をエンジンに通して生成された応答の送信、発行した
+/// 応答への OK の反映と `rate-limited:` を返したリレーの停止、リレーの AUTH に返す
+/// 認証イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -1266,6 +1309,19 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, session_relay_signers_of(state, relay_url))
       actor.continue(state)
     }
+    ReserveSessionRelays(signer:, client:, relays:) ->
+      actor.continue(transition(
+        state,
+        State(
+          ..state,
+          reserved: dict.insert(state.reserved, #(signer, client), relays),
+        ),
+      ))
+    ReleaseSessionRelays(signer:, client:) ->
+      actor.continue(transition(
+        state,
+        State(..state, reserved: dict.delete(state.reserved, #(signer, client))),
+      ))
     Revoke(signer:, client:, reply:) ->
       revoke_session(state, reply, signer, client)
     UpdatePerms(signer:, client:, perms:, reply:) ->
@@ -1774,8 +1830,8 @@ fn transition(from: State, to: State) -> State {
       to.resubscribe()
     }
   }
-  let relays = relay_map(to.engine)
-  case relay_map(from.engine) == relays {
+  let relays = relay_map(to)
+  case relay_map(from) == relays {
     True -> Nil
     False -> to.session_relays(dict.keys(relays) |> list.sort(string.compare))
   }

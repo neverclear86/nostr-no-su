@@ -148,8 +148,8 @@ fn review_list(
   )
 }
 
-/// 接続の意味の説明。権限が空のときは、許す操作の一文を続ける。URI のリレーが登録されることを
-/// 末尾に書く。
+/// 接続の意味の説明。権限が空のときは、許す操作の一文を続ける。URI のリレーに届く
+/// 情報を末尾に書く。
 fn connect_explanation(language: Language, perms: String) -> Element(msg) {
   let text = i18n.text(language, _)
   let permissions = case perms {
@@ -158,7 +158,7 @@ fn connect_explanation(language: Language, perms: String) -> Element(msg) {
   }
   let sentences =
     [i18n.ConnectExplanation, ..permissions]
-    |> list.append([i18n.ConnectRelaysRegistered])
+    |> list.append([i18n.ConnectRelaysScope])
     |> list.map(text)
   view.alert(view.Info, [
     html.text(string.join(sentences, i18n.sentence_gap(language))),

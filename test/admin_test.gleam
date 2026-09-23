@@ -1470,12 +1470,14 @@ pub fn connect_confirm_opens_the_session_test() {
 }
 
 /// `connect_client` が受け付けなかった、または反映されていない失敗は、確認のページを
-/// 描き直す状態コードになる。`RelayNotRegistered` はリレーの変更の失敗と同じ
-/// `relay_failure_response` に渡る。
+/// 描き直す状態コードになる。
 pub fn connect_client_redraws_on_failure_test() {
   let failures = [
     #(admin.RelayNotConnected, 503),
-    #(admin.RelayNotRegistered(admin.DuplicateRelay), 409),
+    #(
+      admin.SessionNotOpened(bunker.SessionNotFound("signer is not registered")),
+      409,
+    ),
   ]
   use #(failure, status) <- list.each(failures)
   let failing =

@@ -169,8 +169,6 @@ pub type RelayChangeFailure {
 
 /// `nostrconnect://` の接続が成立しなかった理由。
 pub type NostrconnectFailure {
-  /// URI のリレーを DB に登録できなかった、または接続を開けなかった。
-  RelayNotRegistered(failure: RelayChangeFailure)
   /// 上限まで待っても、URI のリレーがどれも応答の発行先にならなかった。
   RelayNotConnected
   /// セッションを開けなかった。
@@ -220,7 +218,7 @@ pub type Context {
       Result(Nil, RelayChangeFailure),
     /// 行を DB から消し、接続を閉じる。
     delete_relay: fn(relay_store.Relay) -> Result(Nil, RelayChangeFailure),
-    /// 解釈済みの `nostrconnect://` の情報から、URI のリレーを登録してセッションを開く。
+    /// 解釈済みの `nostrconnect://` の情報から、URI のリレーへの接続を待ってセッションを開く。
     connect_client: fn(nostrconnect.ConnectRequest, String) ->
       Result(Nil, NostrconnectFailure),
     /// プラグインの一覧。締め切りを渡す。期限内に状態を得られないプラグインは
@@ -1483,8 +1481,8 @@ fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
 }
 
 /// クライアントの接続の結果。成功ならログを 1 行出し、ダッシュボードへ 303 で戻す。
-/// 失敗はリレーの登録の失敗を `relay_failure_response` に渡し、それ以外は状態コードごとに
-/// 確認のページを描き直すか「変更を確認できませんでした」の通知ページにする。
+/// 失敗は状態コードごとに確認のページを描き直すか「変更を確認できませんでした」の
+/// 通知ページにする。
 fn connect_failure_response(
   language: Language,
   theme: view.Theme,
@@ -1502,8 +1500,6 @@ fn connect_failure_response(
       )
       wisp.redirect(to: "/")
     }
-    Error(RelayNotRegistered(failure)) ->
-      relay_failure_response(language, theme, failure, redraw)
     Error(RelayNotConnected) ->
       redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected))
       |> wisp.html_response(503)

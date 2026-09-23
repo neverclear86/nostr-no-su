@@ -387,7 +387,7 @@ pub type Message {
   ClientName
   UriRelays
   ConnectExplanation
-  ConnectRelaysRegistered
+  ConnectRelaysScope
   ConnectWaitHint(seconds: Int)
   PasteAnotherUri
   NoAccountsForConnect
@@ -726,8 +726,8 @@ fn english(message: Message) -> String {
     UriRelays -> "Relays in the URI"
     ConnectExplanation ->
       "Connecting makes the bunker connect to the relays above and send its responses to this client there. The client can then request signing and encryption within the permissions above."
-    ConnectRelaysRegistered ->
-      "The relays above are registered for the bunker and from then on receive the responses to every client and the subscriptions and AUTH of every account."
+    ConnectRelaysScope ->
+      "For this connection, the bunker sends only this signer's subscription and AUTH and the responses to this client to the relays above that are not registered for the bunker."
     ConnectWaitHint(seconds:) ->
       "Connecting can take up to " <> int.to_string(seconds) <> " seconds."
     PasteAnotherUri -> "Paste another URI"
@@ -1059,8 +1059,8 @@ fn japanese(message: Message) -> String {
     UriRelays -> "URI のリレー"
     ConnectExplanation ->
       "接続すると、バンカーは上のリレーに接続し、このクライアントへの応答をそこへ出します。クライアントは上の権限の範囲で署名と暗号化を依頼できます。"
-    ConnectRelaysRegistered ->
-      "上のリレーはバンカーの用途で登録され、以後すべてのクライアントへの応答と、全アカウントの購読と AUTH が届きます。"
+    ConnectRelaysScope ->
+      "上のリレーのうちバンカーの用途で登録していないものへは、この接続について、この署名者の購読と AUTH と、このクライアントへの応答だけを出します。"
     ConnectWaitHint(seconds:) ->
       "接続できるまで最大 " <> int.to_string(seconds) <> " 秒待ちます。"
     PasteAnotherUri -> "URI を貼り直す"
