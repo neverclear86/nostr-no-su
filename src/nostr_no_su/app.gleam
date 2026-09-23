@@ -1088,7 +1088,7 @@ const nostrconnect_publisher_timeout_ms = 15_000
 
 /// 解釈済みの `nostrconnect://` のリレーをバンカーの用途で登録し、応答の発行先に
 /// なるのを待ってから、署名者とクライアントのセッションを開いて `connect` の
-/// 応答を発行する。
+/// 応答を発行する。開いたセッションは URI のリレーの一覧を持つ。
 pub fn connect_nostrconnect(
   spec: Spec,
   request: nostrconnect.ConnectRequest,
@@ -1111,6 +1111,7 @@ pub fn connect_nostrconnect(
     signer,
     request.client,
     request.perms,
+    request.relays,
     request.secret,
   )
   |> result.map_error(admin.SessionNotOpened)

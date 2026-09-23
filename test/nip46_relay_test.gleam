@@ -103,8 +103,8 @@ pub fn nip46_round_trip_over_a_relay_test() {
 }
 
 /// `nostrconnect://` の接続は、URI のリレーをバンカー用途で DB に登録してから開き、
-/// 応答の `result` に URI の secret を入れて返す。開いたセッションは以降の
-/// リクエストを処理できる。
+/// 応答の `result` に URI の secret を入れて返す。開いたセッションは URI のリレーを
+/// 持ち、以降のリクエストを処理できる。
 pub fn nostrconnect_client_initiated_connection_test() {
   use relay_url <- with_test_relay_url
   use database_url <- postgres.with_test_database_url("nip46_relay")
@@ -133,6 +133,10 @@ pub fn nostrconnect_client_initiated_connection_test() {
   let assert Ok(response) = process.receive(events, response_timeout_ms)
   let body = nip46_client.decrypt_response(client, signer, response)
   assert string.contains(body, "\"result\":\"" <> uri_secret <> "\"")
+
+  // 開いたセッションは URI のリレーを持つ。
+  let assert Ok([session]) = bunker.sessions(spec.bunker.name)
+  assert session.relays == [relay_url]
 
   // 開いたセッションで `sign_event` が署名を返す。
   let signed =

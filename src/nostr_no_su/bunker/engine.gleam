@@ -160,7 +160,10 @@ pub type Pending {
 /// 経っていれば更新する。`perms` はセッション内の `sign_event` と
 /// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
 /// の値から、管理 UI の `set_perms` でだけ変わる。空のときは既定の集合
-/// （`default_perms`）で照合する。
+/// （`default_perms`）で照合する。`relays` は `nostrconnect://` で開いたときの
+/// URI のリレー（URI の順）で、`bunker://` の `connect` と承認で開いたセッション
+/// では空である。承認済みの組を `nostrconnect://` で開き直すと、`relays` だけが
+/// 新しい URI の一覧に変わる。
 pub type Session {
   Session(
     signer: String,
@@ -168,6 +171,7 @@ pub type Session {
     perms: String,
     created_at: Int,
     last_used_at: Int,
+    relays: List(String),
   )
 }
 
@@ -468,7 +472,7 @@ pub fn approve(
   now: Int,
 ) -> Result(#(Engine, Event, Write), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  let session = new_session(entry.signer, entry.client, entry.perms, now)
+  let session = new_session(entry.signer, entry.client, entry.perms, [], now)
   let #(engine, kept, evicted) = open_session(engine, session)
   use #(engine, reply) <- result.map(respond(
     engine,
@@ -486,22 +490,30 @@ pub fn approve(
 
 /// クライアントが出した `nostrconnect://` に応じて、（署名者, クライアント）の組を
 /// 承認済みにする。承認待ちを作らずに直接セッションを開き、URI の `secret` を
-/// `result` に入れた応答イベントを返す。`perms` は `bounded_perms` で切る。
-/// 書き込みの値は `InsertSession`（押し出す組つき）。組がすでに承認済みなら
-/// 既存のセッションの値を保ち、書き込みの値もその値にして応答を返す（クライアントは
-/// secret の受領を待っているため）。署名者が登録されていないか、会話鍵か署名を
-/// 作れないときは理由を返す。
+/// `result` に入れた応答イベントを返す。`perms` は `bounded_perms` で切り、
+/// `relays`（URI のリレー）はセッションに持たせる。書き込みの値は
+/// `InsertSession`（押し出す組つき）。組がすでに承認済みなら、既存のセッションの
+/// 権限と時刻を保ち、`relays` だけを今回の値にして、書き込みの値もその値にして
+/// 応答を返す（クライアントは secret の受領を待っているため）。署名者が登録
+/// されていないか、会話鍵か署名を作れないときは理由を返す。
 pub fn open_client_session(
   engine: Engine,
   signer: String,
   client: String,
   perms: String,
+  relays: List(String),
   secret: String,
   request_id: String,
   now: Int,
 ) -> Result(#(Engine, Event, Write), String) {
-  let session = new_session(signer, client, bounded_perms(perms), now)
+  let session = new_session(signer, client, bounded_perms(perms), relays, now)
   let #(engine, kept, evicted) = open_session(engine, session)
+  let kept = Session(..kept, relays: relays)
+  let engine =
+    Engine(
+      ..engine,
+      sessions: dict.insert(engine.sessions, #(signer, client), kept),
+    )
   use #(engine, reply) <- result.map(respond(
     engine,
     signer,
@@ -968,7 +980,8 @@ fn connect(
       let not_saved = rpc.error(request.id, connection_not_saved)
       case offered_matches {
         True -> {
-          let session = new_session(signer, client_pk_hex, perms, inputs.now)
+          let session =
+            new_session(signer, client_pk_hex, perms, [], inputs.now)
           let #(next, kept, evicted) = open_session(engine, session)
           Record(
             write: InsertSession(session: kept, evicted:),
@@ -1037,10 +1050,13 @@ fn open_session(
 }
 
 /// `now` に作成したセッション。`last_used_at` は `created_at` と同じ値にする。
+/// `relays` は `nostrconnect://` の URI のリレーで、`bunker://` の `connect` と
+/// 承認で開くときは空。
 fn new_session(
   signer: String,
   client: String,
   perms: String,
+  relays: List(String),
   now: Int,
 ) -> Session {
   Session(
@@ -1049,6 +1065,7 @@ fn new_session(
     perms: perms,
     created_at: now,
     last_used_at: now,
+    relays: relays,
   )
 }
 

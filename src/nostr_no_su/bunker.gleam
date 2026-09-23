@@ -337,6 +337,7 @@ pub type Msg {
     signer: String,
     client: String,
     perms: String,
+    relays: List(String),
     secret: String,
     reply: Subject(Result(Nil, SessionFailure)),
   )
@@ -458,17 +459,25 @@ pub fn deny(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
 }
 
 /// 解釈済みの `nostrconnect://` の情報からセッションを開き、書き込みが成功した
-/// ときだけ応答イベントを送り出すまで待つ。読み込み前は `SessionNotReady`、
-/// 署名者が登録されていなければ `SessionNotFound`、書き込みの失敗は `approve`
-/// と同じ。
+/// ときだけ応答イベントを送り出すまで待つ。`relays` は URI のリレーで、
+/// セッションに保存する。読み込み前は `SessionNotReady`、署名者が登録されて
+/// いなければ `SessionNotFound`、書き込みの失敗は `approve` と同じ。
 pub fn open_client_session(
   name: Name(Msg),
   signer: String,
   client: String,
   perms: String,
+  relays: List(String),
   secret: String,
 ) -> Result(Nil, SessionFailure) {
-  call_session_change(name, OpenClientSession(signer, client, perms, secret, _))
+  call_session_change(name, OpenClientSession(
+    signer,
+    client,
+    perms,
+    relays,
+    secret,
+    _,
+  ))
 }
 
 /// 現在の署名者 pubkey の一覧。読み込みの前は空。アクターが応答しなければ
@@ -1123,8 +1132,16 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       apply_decision(state, reply, Approval, token, engine.approve)
     Deny(token, reply) ->
       apply_decision(state, reply, Denial, token, engine.deny)
-    OpenClientSession(signer:, client:, perms:, secret:, reply:) ->
-      open_client_session_for(state, reply, signer, client, perms, secret)
+    OpenClientSession(signer:, client:, perms:, relays:, secret:, reply:) ->
+      open_client_session_for(
+        state,
+        reply,
+        signer,
+        client,
+        perms,
+        relays,
+        secret,
+      )
     GetSessions(reply) -> {
       process.send(
         reply,
@@ -1823,6 +1840,7 @@ fn open_client_session_for(
   signer: String,
   client: String,
   perms: String,
+  relays: List(String),
   secret: String,
 ) -> actor.Next(State, Msg) {
   case state.accounts {
@@ -1842,6 +1860,7 @@ fn open_client_session_for(
           signer,
           client,
           perms,
+          relays,
           secret,
           random.hex(token_bytes),
           time.now_seconds(),

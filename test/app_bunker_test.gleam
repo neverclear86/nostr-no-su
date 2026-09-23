@@ -334,6 +334,7 @@ pub fn a_nostrconnect_session_is_published_to_the_bunker_relay_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       "",
+      [],
       "uri-secret",
     )
     == Ok(Nil)
@@ -926,6 +927,7 @@ pub fn session_rows_keep_times_and_perms_test() {
       perms: "sign_event:1",
       created_at: 10,
       last_used_at: 20,
+      relays: [],
     ),
   ]
   assert app.session_rows(sessions)

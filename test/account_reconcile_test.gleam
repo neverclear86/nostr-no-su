@@ -170,6 +170,7 @@ fn reconcile_sessions_with_postgres(
         perms: "",
         created_at: now - 60,
         last_used_at: now - 60,
+        relays: [],
       ),
     )
   let assert Ok(Nil) =
@@ -200,6 +201,7 @@ fn reconcile_sessions_with_postgres(
       perms: "",
       created_at: now - 60,
       last_used_at: now - 60,
+      relays: [],
     )
   assert await(fn() { bunker.sessions(name) == Ok([session]) }, 10_000)
   let assert Ok([pending]) = bunker.pending(name)

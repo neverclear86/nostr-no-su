@@ -104,7 +104,8 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
 /// 削除でその署名者のセッションも消える。時刻は Unix 秒。新しい組では
 /// `created_at` と `last_used_at` が同じ値で入る（`engine` の `new_session`）。
 /// `last_used_at` は `touch_session` で進める。行の MAC の列 `mac` は版 6 の移行
-/// （`add_row_macs`）で足す。
+/// （`add_row_macs`）で足す。URI のリレーの列 `relays` は版 7 の移行
+/// （`add_session_relays`）で足す。
 pub const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
   client text NOT NULL,
@@ -158,6 +159,11 @@ const add_row_macs = [
   "ALTER TABLE bunker_pending ADD COLUMN IF NOT EXISTS mac bytea NOT NULL",
 ]
 
+/// 版 7 の移行。セッションの行に、`nostrconnect://` の URI に現れたリレーの
+/// 一覧の列を足す。既存の行は空の一覧になり、空の一覧は MAC の入力に含めない
+/// （`vault.mac_input`）ので、版 6 で付けた MAC のまま読める。
+const add_session_relays = "ALTER TABLE bunker_sessions ADD COLUMN IF NOT EXISTS relays text[] NOT NULL DEFAULT '{}'"
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -180,6 +186,7 @@ pub const migrations = [
   Migration(version: 4, statements: [create_relays_table]),
   Migration(version: 5, statements: [create_plugin_resume_table]),
   Migration(version: 6, statements: add_row_macs),
+  Migration(version: 7, statements: [add_session_relays]),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -231,7 +238,7 @@ const update_secret_sql = "UPDATE bunker_accounts SET encrypted_secret = $2 WHER
 const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
 
 /// セッションの一覧。テストの安定のための順。
-const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at, mac
+const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at, mac, relays
 FROM bunker_sessions
 ORDER BY created_at, signer, client"
 
@@ -242,16 +249,16 @@ ORDER BY created_at, token"
 
 /// セッションの挿入。同じ（signer, client）があれば全列と MAC をこの値で
 /// 上書きする。
-const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac)
-VALUES ($1, $2, $3, $4, $5, $6)
+const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac, relays)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (signer, client) DO UPDATE
-SET perms = EXCLUDED.perms, created_at = EXCLUDED.created_at, last_used_at = EXCLUDED.last_used_at, mac = EXCLUDED.mac"
+SET perms = EXCLUDED.perms, created_at = EXCLUDED.created_at, last_used_at = EXCLUDED.last_used_at, mac = EXCLUDED.mac, relays = EXCLUDED.relays"
 
 /// 最終利用の更新。時刻が進むときだけ、全列と MAC を書き換える。
-const touch_session_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6 WHERE signer = $1 AND client = $2 AND last_used_at < $5"
+const touch_session_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2 AND last_used_at < $5"
 
 /// 権限の更新。全列と MAC を書き換える。
-const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6 WHERE signer = $1 AND client = $2"
+const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2"
 
 /// セッションの削除。
 const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
@@ -277,6 +284,9 @@ pub type StoredSession {
     created_at: Int,
     /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
     last_used_at: Int,
+    /// `nostrconnect://` の URI に現れたリレー（URI の順）。`bunker://` の
+    /// `connect` と承認で開いたセッションは空。
+    relays: List(String),
   )
 }
 
@@ -673,6 +683,7 @@ fn write_session_row(
   |> pog.parameter(pog.int(session.created_at))
   |> pog.parameter(pog.int(session.last_used_at))
   |> pog.parameter(pog.bytea(vault.row_mac(key, session_mac_row(session))))
+  |> pog.parameter(pog.array(pog.text, session.relays))
   |> pog.timeout(timeouts.write_ms)
   |> execute(db)
   |> result.replace(Nil)
@@ -954,8 +965,9 @@ fn session_decoder() -> decode.Decoder(#(StoredSession, BitArray)) {
   use created_at <- decode.field(3, decode.int)
   use last_used_at <- decode.field(4, decode.int)
   use mac <- decode.field(5, decode.bit_array)
+  use relays <- decode.field(6, decode.list(decode.string))
   decode.success(#(
-    StoredSession(signer:, client:, perms:, created_at:, last_used_at:),
+    StoredSession(signer:, client:, perms:, created_at:, last_used_at:, relays:),
     mac,
   ))
 }
@@ -1010,6 +1022,7 @@ fn session_mac_row(session: StoredSession) -> vault.MacRow {
     perms: session.perms,
     created_at: session.created_at,
     last_used_at: session.last_used_at,
+    relays: session.relays,
   )
 }
 

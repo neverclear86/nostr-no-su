@@ -356,12 +356,12 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (7)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (8)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 7, supported: 6))
+    == Error(account_store.SchemaTooNew(found: 8, supported: 7))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -445,7 +445,7 @@ pub fn postgres_migrates_a_version_two_database_test() {
 
   let assert Ok(loaded) =
     account_store.load(pool, random_master_key(), generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
   assert loaded.sessions == []
   assert loaded.pending == []
 
@@ -470,9 +470,9 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   let key = random_master_key()
   let now = 1_700_000_000
 
-  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5, 6] になる。
+  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5, 6, 7] になる。
   let assert Ok(empty) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
   assert empty.sessions == []
   assert empty.pending == []
 
@@ -517,6 +517,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
           perms: "",
           created_at: now,
           last_used_at: now,
+          relays: [],
         ),
       )
     let assert Ok(Nil) =
@@ -530,6 +531,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
           perms: "sign_event:1",
           created_at: now + 1,
           last_used_at: now + 1,
+          relays: [],
         ),
       )
     let assert Ok(Nil) = account_store.insert_pending(db, key, pa, generous)
@@ -550,6 +552,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "",
         created_at: now,
         last_used_at: now,
+        relays: [],
       ),
       account_store.StoredSession(
         signer: b_pubkey,
@@ -557,6 +560,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "sign_event:1",
         created_at: now + 1,
         last_used_at: now + 1,
+        relays: [],
       ),
     ]
   assert loaded.pending == [pa, pb]
@@ -574,6 +578,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "",
         created_at: now + 2,
         last_used_at: now + 2,
+        relays: [],
       ),
     )
   let pa2 =
@@ -635,6 +640,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: pa3.perms,
         created_at: now + 4,
         last_used_at: now + 4,
+        relays: [],
       ),
       evicted: [],
     )
@@ -648,6 +654,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "",
         created_at: now,
         last_used_at: now,
+        relays: [],
       ),
       account_store.StoredSession(
         signer: b_pubkey,
@@ -655,6 +662,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "sign_event:1",
         created_at: now + 1,
         last_used_at: now + 1,
+        relays: [],
       ),
       account_store.StoredSession(
         signer: a_pubkey,
@@ -662,6 +670,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: pa3.perms,
         created_at: now + 4,
         last_used_at: now + 4,
+        relays: [],
       ),
     ]
 
@@ -676,6 +685,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
         perms: "sign_event:1",
         created_at: now + 1,
         last_used_at: now + 1,
+        relays: [],
       ),
     ]
   assert after_account_delete.pending == [pb]
@@ -718,6 +728,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
       perms: "",
       created_at: 1,
       last_used_at: 1,
+      relays: [],
     )
   let assert Ok(Nil) =
     account_store.insert_session(db, key, generous, session: ok_session)
@@ -732,6 +743,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         perms: "",
         created_at: 2,
         last_used_at: 2,
+        relays: [],
       ),
     )
   let assert Ok(Nil) =
@@ -745,6 +757,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         perms: "",
         created_at: 3,
         last_used_at: 3,
+        relays: [],
       ),
     )
   // 列の値を書き換えると、残っている MAC と合わなくなる。
@@ -794,6 +807,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         perms: "forged",
         created_at: 2,
         last_used_at: 2,
+        relays: [],
       ),
       vault.SessionMacRow(
         signer:,
@@ -801,6 +815,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         perms: "",
         created_at: 3,
         last_used_at: 3,
+        relays: [],
       ),
       vault.PendingMacRow(
         token: "token-" <> mark,
@@ -836,6 +851,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
         perms: "a",
         created_at: 1,
         last_used_at: 1,
+        relays: [],
       ),
     )
   postgres.run_statement(
@@ -849,6 +865,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
       perms: "b",
       created_at: 5,
       last_used_at: 7,
+      relays: [],
     )
   let assert Ok(Nil) =
     account_store.approve(
@@ -887,6 +904,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
         perms: "",
         created_at: 1,
         last_used_at: 1,
+        relays: [],
       ),
     )
   let assert Ok(Nil) =
@@ -916,6 +934,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
       perms: "sign_event:1",
       created_at: 2,
       last_used_at: 2,
+      relays: [],
     )
   let assert Ok(Nil) =
     account_store.insert_session(db, new_key, generous, session: session)
@@ -963,7 +982,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
 
   // 版 6 の移行が既存の行を消してから `mac` 列を足す。
   let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
   assert loaded.sessions == []
   assert loaded.pending == []
   assert loaded.rejected == []
@@ -976,11 +995,71 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
       perms: "",
       created_at: 2,
       last_used_at: 2,
+      relays: [],
     )
   let assert Ok(Nil) =
     account_store.insert_session(db, key, generous, session: session)
   let assert Ok(after) = account_store.load(pool, key, generous)
   assert after.sessions == [session]
+}
+
+/// 版 7 の移行は既存のセッションの行を消さずに `relays` 列を足し、版 6 で MAC を
+/// 付けた行は空の一覧のまま、同じ MAC で読める。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let key = random_master_key()
+
+  // 版 6 の DB を再現する。
+  postgres.run_statement(db, account_store.create_version_table)
+  account_store.migrations
+  |> list.filter(fn(migration) { migration.version <= 6 })
+  |> list.each(fn(migration) {
+    list.each(migration.statements, postgres.run_statement(db, _))
+  })
+  postgres.run_statement(
+    db,
+    "INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6)",
+  )
+  let entry = random_entry("relays")
+  let signer = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+  let mac =
+    vault.row_mac(
+      key,
+      vault.SessionMacRow(
+        signer:,
+        client: "client",
+        perms: "sign_event",
+        created_at: 1,
+        last_used_at: 2,
+        relays: [],
+      ),
+    )
+  postgres.run_statement(
+    db,
+    "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac) VALUES ('"
+      <> signer
+      <> "', 'client', 'sign_event', 1, 2, decode('"
+      <> bit_array.base16_encode(mac)
+      <> "', 'hex'))",
+  )
+
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert loaded.rejected == []
+  assert loaded.sessions
+    == [
+      account_store.StoredSession(
+        signer:,
+        client: "client",
+        perms: "sign_event",
+        created_at: 1,
+        last_used_at: 2,
+        relays: [],
+      ),
+    ]
 }
 
 /// トランザクションの中の `run` が `Error` を返すと、先に行った書き込みが残らない。
@@ -1016,6 +1095,7 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
           perms: "",
           created_at: 1,
           last_used_at: 1,
+          relays: [],
         ),
       ))
       Error(account_store.QueryFailed("forced"))
@@ -1172,8 +1252,8 @@ fn client_request(
   verified
 }
 
-/// `StoredSession` から作成・最終利用時刻を除いた組。行の内容だけを比べるために
-/// 使う。
+/// `StoredSession` から作成・最終利用時刻とリレーを除いた組。行の内容だけを
+/// 比べるために使う。
 fn session_tuple(
   session: account_store.StoredSession,
 ) -> #(String, String, String) {
@@ -1395,6 +1475,7 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
       perms: "",
       created_at: 1000,
       last_used_at: last_used_at,
+      relays: [],
     )
   }
 
@@ -1416,6 +1497,41 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
     == [#("client", 1000, 1060)]
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// `nostrconnect://` で開いたセッションの URI のリレーは、`InsertSession` と
+/// `TouchSession` の書き込みの後も、`nostr_no_su.load_snapshot` で読み直した
+/// セッションに同じ順で残る。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_session_relays_survive_a_reload_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+  let entry = random_entry("reload")
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  let write =
+    nostr_no_su.account_store_operations(
+      pool,
+      process.new_name("account_store_test_relays_unreachable_lock"),
+      key,
+      generous,
+    ).write
+  let session =
+    engine.Session(
+      signer: account.pubkey_hex(entry.account),
+      client: "client",
+      perms: "",
+      created_at: 1000,
+      last_used_at: 1000,
+      relays: ["wss://b.example", "wss://a.example"],
+    )
+  assert write(engine.InsertSession(session: session, evicted: [])) == Ok(Nil)
+  let touched = engine.Session(..session, last_used_at: 1060)
+  assert write(engine.TouchSession(session: touched)) == Ok(Nil)
+
+  let assert Ok(snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
+  assert snapshot.sessions == [touched]
 }
 
 /// `update_session_perms` は `perms` を差し替え、行が無くても `Ok`。
@@ -1447,6 +1563,7 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
       perms: perms,
       created_at: 1000,
       last_used_at: 1000,
+      relays: [],
     )
   }
 
@@ -1665,6 +1782,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     )
   let pending =
@@ -1692,6 +1810,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
           perms: "",
           created_at: 1001,
           last_used_at: 1001,
+          relays: [],
         ),
         evicted: [#(signer_hex, "old")],
       ),
@@ -1709,6 +1828,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
           perms: "",
           created_at: 1002,
           last_used_at: 1002,
+          relays: [],
         ),
         evicted: [#(signer_hex, "old")],
       ),
