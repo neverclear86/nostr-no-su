@@ -1,25 +1,21 @@
-//// 管理 UI のリレーのページ（追加、用途の編集、削除）と、それぞれのフォームの中身
-//// （`new_relay_form`、`relay_action_form`）の描画。`admin/account_pages` と同じく
-//// `admin/dashboard` のパスの定義と `admin/view` の部品で HTML 文字列か要素にするだけで、
-//// プロセスにも IO にも触れない。
+//// 管理 UI のリレーのページ（追加、用途の編集、削除）の描画。フォームの中身はダッシュボードの
+//// ダイアログと共用するので `admin/dashboard`（`new_relay_form`、`relay_action_form`）にあり、
+//// ここはそれを要約、入力の誤り、削除のページへのリンクと一緒にページの枠に入れる。
+//// `admin/account_pages` と同じく `admin/dashboard` と `admin/view` の部品で HTML 文字列に
+//// するだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（URL）はテキストか属性値として lustre に渡し、エスケープを文字列化に任せる
 //// （`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引き、文字列
 //// リテラルで書かない（同じく `admin/view` の規則）。
 
 import gleam/list
-import gleam/option.{type Option, None, Some}
-import lustre/attribute
-import lustre/element.{type Element}
+import gleam/option.{type Option, Some}
 import lustre/element/html
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 import nostr_no_su/relay_list.{type Roles}
 import nostr_no_su/relay_store.{type Relay}
-
-/// URL の補足の `id`。URL の欄は追加のページに 1 つだけなので固定の値にする。
-const relay_url_hint_id = "relay-url-hint"
 
 /// リレーの追加のページ。GET では URL が空でバンカーだけにチェック、失敗して
 /// 描き直すときは送られた URL とチェックを出す。
@@ -40,7 +36,7 @@ pub fn new_relay_page(
     view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotAddRelay), error),
-      view.card(new_relay_form(language, url, roles)),
+      view.card(dashboard.new_relay_form(language, url, roles)),
       view.back_link(language),
     ],
   )
@@ -91,127 +87,11 @@ pub fn relay_action_page(
         view.summary_list([#(text(i18n.RelayUrl), view.Code(relay.url))]),
         view.error_message(language, Some(lead), error),
         ..list.append(
-          relay_action_form(language, relay, action, roles, states),
+          dashboard.relay_action_form(language, relay, action, roles, states),
           delete_link,
         )
       ]),
       view.back_link(language),
     ],
   )
-}
-
-/// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
-/// 用途のチェック）を並べる。ページの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
-/// 用途の接続状態のバッジは出さない。
-pub fn new_relay_form(
-  language: Language,
-  url: String,
-  roles: Roles,
-) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.form_description(text(i18n.AddRelayDescription)),
-    view.post_form(
-      view.segments_path(dashboard.new_relay_segments),
-      [url_field(language, url), roles_fieldset(language, roles, None)],
-      text(i18n.Register),
-      view.PrimaryButton,
-      view.InForm,
-    ),
-  ]
-}
-
-/// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
-/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
-/// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
-/// 使わない。URL の要約、入力の誤り、削除のページへのリンクは含めない。
-pub fn relay_action_form(
-  language: Language,
-  relay: Relay,
-  action: dashboard.RelayAction,
-  roles: Option(Roles),
-  states: Option(dashboard.RelayRow),
-) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  let path = dashboard.relay_action_path(relay.id, action)
-  case action {
-    dashboard.EditRelayRoles -> [
-      html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
-      view.post_form(
-        path,
-        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
-        text(i18n.Save),
-        view.PrimaryButton,
-        view.InForm,
-      ),
-    ]
-    dashboard.DeleteRelay -> [
-      html.p([], [html.text(text(i18n.DeleteRelayDescription))]),
-      view.post_form(
-        path,
-        [],
-        text(i18n.DeleteRelaySubmit),
-        view.DangerButton,
-        view.InForm,
-      ),
-    ]
-  }
-}
-
-/// リレーの URL の欄。
-fn url_field(language: Language, url: String) -> Element(msg) {
-  let text = i18n.text(language, _)
-  view.hinted_input(
-    language,
-    text(i18n.RelayUrl),
-    relay_url_hint_id,
-    view.LineHint(text(i18n.RelayUrlHint)),
-    [
-      attribute.type_("text"),
-      attribute.name(dashboard.relay_url_field),
-      attribute.required(True),
-      attribute.autocomplete("off"),
-      attribute.spellcheck(False),
-      attribute.inputmode("url"),
-      attribute.default_value(url),
-      attribute.class("input w-full font-mono border-base-content/60"),
-    ],
-  )
-}
-
-/// 用途（監視・バンカー）のチェックの囲み。`states` はその用途の今の接続状態で、`None`
-/// ならバッジを出さない。
-fn roles_fieldset(
-  language: Language,
-  roles: Roles,
-  states: Option(dashboard.RelayRow),
-) -> Element(msg) {
-  let text = i18n.text(language, _)
-  html.fieldset([attribute.class("fieldset")], [
-    html.legend([attribute.class("fieldset-legend")], [
-      html.text(text(i18n.Role)),
-    ]),
-    view.checkbox_row(
-      dashboard.monitor_field,
-      view.eye_icon(),
-      text(i18n.UseForMonitoring),
-      html.text(text(i18n.MonitorRoleDescription)),
-      roles.monitor,
-      option.values([
-        option.map(states, fn(row) { row.monitor })
-        |> option.map(dashboard.role_state_badge(language, _)),
-      ]),
-    ),
-    view.checkbox_row(
-      dashboard.bunker_field,
-      view.key_icon(),
-      text(i18n.UseForBunker),
-      html.text(text(i18n.BunkerRoleDescription)),
-      roles.bunker,
-      option.values([
-        option.map(states, fn(row) { row.bunker })
-        |> option.map(dashboard.role_state_badge(language, _)),
-      ]),
-    ),
-  ])
 }

@@ -226,6 +226,8 @@ pub type Message {
   CopyNpub
   CopyClient
   ShowFieldHint
+  Cancel
+  OpenAsPage
   // ダッシュボード
   Dashboard
   Pending
@@ -509,6 +511,8 @@ fn english(message: Message) -> String {
     CopyNpub -> "Copy npub"
     CopyClient -> "Copy client"
     ShowFieldHint -> "Show help"
+    Cancel -> "Cancel"
+    OpenAsPage -> "Open as a page"
     Dashboard -> "Dashboard"
     Pending -> "Pending"
     OverviewLabel -> "Overview"
@@ -849,6 +853,8 @@ fn japanese(message: Message) -> String {
     CopyNpub -> "npub をコピー"
     CopyClient -> "クライアントをコピー"
     ShowFieldHint -> "補足を表示"
+    Cancel -> "キャンセル"
+    OpenAsPage -> "ページで開く"
     Dashboard -> "ダッシュボード"
     Pending -> "承認待ち"
     OverviewLabel -> "概要"

@@ -1,6 +1,7 @@
 //// 管理 UI のダッシュボード、承認ページ、通知ページの描画と、表示する状態の型、パスと
-//// フォームの欄の名前の定義。描画は状態のスナップショット（純粋なデータ）から HTML
-//// 文字列を組み立てるだけで、プロセスにも IO にも触れない。
+//// フォームの欄の名前の定義と、ダイアログとページが共用するフォームの中身。描画は状態の
+//// スナップショット（純粋なデータ）から HTML 文字列を組み立てるだけで、プロセスにも IO にも
+//// 触れない。
 ////
 //// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey、
 //// アカウントのラベル、表示する理由）ため、テキストか属性値として lustre に渡し、
@@ -10,6 +11,9 @@
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
 //// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
 //// `admin/session_pages`）が同じ定義を見るようここに置く。
+//// ダッシュボードのダイアログと操作のページの両方に出すフォームの中身（リレーの
+//// `new_relay_form`、`relay_action_form`）もここに置く。ページのモジュールがここを
+//// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
 //// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
@@ -33,6 +37,8 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
+import nostr_no_su/relay_list.{type Roles, Roles}
+import nostr_no_su/relay_store.{type Relay}
 
 /// `relays` の 1 行の表示内容。用途ごとに、使っていなければ `Unused`、状態を得られたら
 /// `Reported`、締め切りまでに接続が答えなければ `Unanswered` を持つ。
@@ -213,7 +219,7 @@ pub type RelayAction {
   DeleteRelay
 }
 
-/// 操作の一覧。ダッシュボードのリンクはこの順に並べ、セグメントとの対応もここから引く。
+/// 操作の一覧。ダッシュボードのボタンとダイアログはこの順に並べ、セグメントとの対応もここから引く。
 const relay_actions = [EditRelayRoles, DeleteRelay]
 
 /// アカウントのページのパスの先頭のセグメント。
@@ -1654,7 +1660,7 @@ pub fn parse_account_action_path(
   }
 }
 
-/// 操作の見出しと、ダッシュボードのリンクの文言。
+/// 操作の見出し（ページとダイアログの題）と、ダッシュボードのボタンの語。
 pub fn relay_action_title(action: RelayAction) -> i18n.Message {
   case action {
     EditRelayRoles -> i18n.EditRelayRoles
@@ -1751,9 +1757,9 @@ pub fn parse_plugin_page_path(
   }
 }
 
-/// 操作のページへのリンクの種類。編集は開くだけなので地味なボタン、削除は接続中のクライアントに
+/// 操作のダイアログを開くボタンの種類。編集は開くだけなので地味なボタン、削除は接続中のクライアントに
 /// 影響するので error の文字色にする。
-fn relay_action_link_kind(action: RelayAction) -> view.ButtonKind {
+fn relay_action_button_kind(action: RelayAction) -> view.ButtonKind {
   case action {
     EditRelayRoles -> view.GhostButton
     DeleteRelay -> view.DangerGhostButton
@@ -1805,8 +1811,9 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 }
 
 /// リレーの一覧。見出しの直後に、監視とバンカーの語と説明を並べた凡例（`role_legend`）を常に置く。
-/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が
-/// 無ければエラーの色の囲みを、一覧を得られないときは理由を出す。
+/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に、追加のダイアログを開くボタンと、
+/// 追加のページへの予備のリンクを出す。バンカーに使う行が無ければエラーの色の囲みを、一覧を得られない
+/// ときは理由を出す。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
@@ -1820,14 +1827,17 @@ fn relays_section(
         view.plug_icon(),
         i18n.Relays,
         None,
-        [
-          view.icon_button_link(
-            view.segments_path(new_relay_segments),
-            view.plus_icon(),
-            text(i18n.Add),
+        list.append(
+          view.dialog_button(
+            language,
+            view.dialog_id(["relay", "new"]),
+            view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
             view.PrimaryButton,
+            text(i18n.AddRelay),
+            new_relay_form(language, "", new_relay_roles),
           ),
-        ],
+          [view.fallback_link(language, view.segments_path(new_relay_segments))],
+        ),
         [],
       ),
       role_legend(language),
@@ -1888,27 +1898,179 @@ pub fn no_bunker_relay_alert(
   }
 }
 
-/// リレー 1 件。1 段目に URL とアイコンだけの操作のリンク（用途の編集、削除）を並べ、2 段目に用途のマス
-/// （`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」のバッジで出す。
+/// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンと、
+/// 用途の編集のページへの予備のリンクを並べ、2 段目に用途のマス（`relay_role`）を監視、バンカーの順に
+/// 2 つ並べる。使っていない用途は「未使用」のバッジで出す。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   view.list_row(view.InlineRow, [
     html.p([attribute.class("min-w-0 flex-1 font-mono text-sm break-all")], [
       html.text(row.url),
     ]),
     button_row(
-      list.map(relay_actions, fn(action) {
-        view.icon_only_link(
-          relay_action_path(row.id, action),
-          relay_action_icon(action),
-          i18n.text(language, relay_action_title(action)),
-          relay_action_link_kind(action),
+      list.flat_map(relay_actions, fn(action) {
+        let title = i18n.text(language, relay_action_title(action))
+        view.dialog_button(
+          language,
+          view.dialog_id([
+            "relay",
+            int.to_string(row.id),
+            relay_action_segment(action),
+          ]),
+          view.IconOnlyTrigger(relay_action_icon(action), title),
+          relay_action_button_kind(action),
+          title,
+          [
+            view.summary_list([
+              #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+            ]),
+            ..relay_action_form(
+              language,
+              relay_store.Relay(id: row.id, url: row.url, roles: row_roles(row)),
+              action,
+              None,
+              Some(row),
+            )
+          ],
         )
-      }),
+      })
+      |> list.append([
+        view.fallback_link(language, relay_action_path(row.id, EditRelayRoles)),
+      ]),
     ),
     html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
       relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
       relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
     ]),
+  ])
+}
+
+/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。追加のページの GET と
+/// 追加のダイアログが使う。
+pub const new_relay_roles = Roles(monitor: False, bunker: True)
+
+/// URL の補足の `id`。URL の欄は追加のページと、ダッシュボードの追加のダイアログに 1 つずつで、
+/// 1 つのページに 2 つ現れないので固定の値にする。
+const relay_url_hint_id = "relay-url-hint"
+
+/// 行の今の用途。`Unused` でない用途を使っているとみなす（`app.merge_relay_rows` は使っていない
+/// 用途だけを `Unused` にする）。
+fn row_roles(row: RelayRow) -> Roles {
+  Roles(monitor: row.monitor != Unused, bunker: row.bunker != Unused)
+}
+
+/// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
+/// 用途のチェック）を並べる。ページの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
+/// 用途の接続状態のバッジは出さない。
+pub fn new_relay_form(
+  language: Language,
+  url: String,
+  roles: Roles,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.AddRelayDescription)),
+    view.post_form(
+      view.segments_path(new_relay_segments),
+      [url_field(language, url), roles_fieldset(language, roles, None)],
+      text(i18n.Register),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
+/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
+/// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
+/// 使わない。URL の要約、入力の誤り、削除のページへのリンクは含めない。
+pub fn relay_action_form(
+  language: Language,
+  relay: Relay,
+  action: RelayAction,
+  roles: Option(Roles),
+  states: Option(RelayRow),
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let path = relay_action_path(relay.id, action)
+  case action {
+    EditRelayRoles -> [
+      html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
+      view.post_form(
+        path,
+        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
+        text(i18n.Save),
+        view.PrimaryButton,
+        view.InForm,
+      ),
+    ]
+    DeleteRelay -> [
+      html.p([], [html.text(text(i18n.DeleteRelayDescription))]),
+      view.post_form(
+        path,
+        [],
+        text(i18n.DeleteRelaySubmit),
+        view.DangerButton,
+        view.InForm,
+      ),
+    ]
+  }
+}
+
+/// リレーの URL の欄。
+fn url_field(language: Language, url: String) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.hinted_input(
+    language,
+    text(i18n.RelayUrl),
+    relay_url_hint_id,
+    view.LineHint(text(i18n.RelayUrlHint)),
+    [
+      attribute.type_("text"),
+      attribute.name(relay_url_field),
+      attribute.required(True),
+      attribute.autocomplete("off"),
+      attribute.spellcheck(False),
+      attribute.inputmode("url"),
+      attribute.default_value(url),
+      attribute.class("input w-full font-mono border-base-content/60"),
+    ],
+  )
+}
+
+/// 用途（監視・バンカー）のチェックの囲み。`states` はその用途の今の接続状態で、`None`
+/// ならバッジを出さない。
+fn roles_fieldset(
+  language: Language,
+  roles: Roles,
+  states: Option(RelayRow),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  html.fieldset([attribute.class("fieldset")], [
+    html.legend([attribute.class("fieldset-legend")], [
+      html.text(text(i18n.Role)),
+    ]),
+    view.checkbox_row(
+      monitor_field,
+      view.eye_icon(),
+      text(i18n.UseForMonitoring),
+      html.text(text(i18n.MonitorRoleDescription)),
+      roles.monitor,
+      option.values([
+        option.map(states, fn(row) { row.monitor })
+        |> option.map(role_state_badge(language, _)),
+      ]),
+    ),
+    view.checkbox_row(
+      bunker_field,
+      view.key_icon(),
+      text(i18n.UseForBunker),
+      html.text(text(i18n.BunkerRoleDescription)),
+      roles.bunker,
+      option.values([
+        option.map(states, fn(row) { row.bunker })
+        |> option.map(role_state_badge(language, _)),
+      ]),
+    ),
   ])
 }
 
@@ -1939,9 +2101,9 @@ fn relay_role(
   )
 }
 
-/// 用途 1 つぶんの接続状態のバッジ。ダッシュボードの行とリレーの用途の編集のページが
-/// 使う。
-pub fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
+/// 用途 1 つぶんの接続状態のバッジ。ダッシュボードの行と、用途の編集のフォーム（ダイアログと
+/// ページ）の用途のチェックが使う。
+fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   let text = i18n.text(language, _)
   case state {
     Reported(status) -> relay_status(language, status)

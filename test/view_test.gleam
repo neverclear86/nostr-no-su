@@ -342,3 +342,52 @@ pub fn compact_icon_button_link_hides_the_text_on_narrow_screens_test() {
     "<span class=\"max-sm:sr-only\">Connection QR code</span>",
   )
 }
+
+/// アイコンと語のダイアログのボタンは `commandfor` で `id` のダイアログを指して開き、ダイアログは
+/// 題、中身、`autofocus` のキャンセル（`command="close"`）の順に並べる。
+pub fn dialog_button_opens_the_dialog_it_names_test() {
+  let html =
+    view.dialog_button(
+      i18n.English,
+      "dialog-x",
+      view.IconTextTrigger(view.plus_icon(), "Add"),
+      view.PrimaryButton,
+      "Title",
+      [html.p([], [html.text("body")])],
+    )
+    |> list.map(element.to_string)
+    |> string.concat
+  assert html
+    == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
+    <> element.to_string(view.plus_icon())
+    <> "Add</button>"
+    <> "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\"><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><p>body</p><button autofocus class=\"btn btn-ghost self-start focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-x\" type=\"button\">Cancel</button></div></dialog>"
+}
+
+/// アイコンだけのダイアログのボタンは、語を `aria-label` に置き、中身はアイコンだけにする。
+pub fn icon_only_dialog_button_names_itself_by_label_test() {
+  let assert [button, _] =
+    view.dialog_button(
+      i18n.English,
+      "dialog-x",
+      view.IconOnlyTrigger(view.trash_icon(), "Delete"),
+      view.DangerGhostButton,
+      "Title",
+      [],
+    )
+  assert element.to_string(button)
+    == "<button aria-label=\"Delete\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
+    <> element.to_string(view.trash_icon())
+    <> "</button>"
+}
+
+/// ダイアログの `id` は `dialog-` の後に部品を `-` で繋ぐ。
+pub fn dialog_id_joins_the_parts_after_the_prefix_test() {
+  assert view.dialog_id(["relay", "7", "edit"]) == "dialog-relay-7-edit"
+}
+
+/// 予備のリンクは今の操作のページを開き、表示の言語で「ページで開く」と書く。
+pub fn fallback_link_opens_the_page_test() {
+  assert element.to_string(view.fallback_link(i18n.Japanese, "/relays/1/edit"))
+    == "<a class=\"link link-hover self-center text-xs text-muted\" href=\"/relays/1/edit\">ページで開く</a>"
+}
