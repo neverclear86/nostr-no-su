@@ -75,7 +75,7 @@ PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots          # shots �
 PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots-ja ja-JP # 日本語の画面を撮る
 ```
 
-README と `docs/usage.md` に載せる画像は `dev/readme_shots.sh` で撮り直す。撮影用のサーバーの起動から停止まで行い、`docs/images/usage/` に英語と日本語のダッシュボード 1 枚ずつと、`docs/usage.md` に載せる要素の切り出し画像 18 枚（日本語）を上書きする（幅 1280px、ライト）。撮り直した画像はコミットに含める。
+README と `docs/usage.md` に載せる画像は `dev/readme_shots.sh` で撮り直す。撮影用のサーバーの起動から停止まで行い、`docs/images/usage/` に英語と日本語のダッシュボード 1 枚ずつと、`docs/usage.md` に載せる要素の切り出し画像 19 枚（日本語）を上書きする（幅 1280px、ライト）。撮り直した画像はコミットに含める。
 
 ```sh
 sh dev/readme_shots.sh

@@ -2,7 +2,7 @@
 # README に載せる管理 UI のスクリーンショットと、docs/usage.md に載せる要素の
 # 切り出し画像（ともに docs/images/usage/）を撮り直す。撮影用のサーバー
 # （dev/admin_preview.gleam）を起動し、dev/screenshots.mjs の --readme モードで
-# 英語と日本語のダッシュボード 1 枚ずつを、--usage モードで日本語の切り出し 18 枚を
+# 英語と日本語のダッシュボード 1 枚ずつを、--usage モードで日本語の切り出し 19 枚を
 # 出力先（既定は docs/images/usage）に上書きしてから止める。chromium は
 # npx playwright-core install chromium で先に入れておく（docs/development.md の
 # 「管理 UI の CSS と画面の撮影」）。
