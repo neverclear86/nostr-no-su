@@ -1,12 +1,13 @@
 // 管理 UI の全ページを、固定状態のサーバー（dev/admin_preview.gleam）から撮る。
 // 広い画面（1280px）と狭い画面（375px、2 倍の解像度）の、ライトとダーク
 // （prefers-color-scheme のエミュレーション）で、ページ全体を撮る。
+// ダイアログを開いた画面は、開いている間だけ画面の高さを 1200px 以上にして撮る（.modal-box の高さは画面の高さまで）。
 // 使い方: PREVIEW_PORT=18461 node dev/screenshots.mjs build/screenshots [locale]
 //        PREVIEW_PORT=18461 node dev/screenshots.mjs --readme docs/images/usage [locale]
 //        PREVIEW_PORT=18461 node dev/screenshots.mjs --usage docs/images/usage [locale]
 // --readme のときは readme 印のある画面だけを 1280px・ライトで撮り、出力名を <readme>-<en|ja>.png にする。
 // --usage のときは usage の要素だけを 1280px・ライトで切り出して撮り、出力名を <name>.png にする。
-// そのときダッシュボードと event_logger のページは PREVIEW_PORT + 3 の状態から撮る。
+// そのとき、承認待ちと読み込めなかった行を除くダッシュボードの切り出し、ダイアログ、event_logger のページは PREVIEW_PORT + 3 の状態から撮る。
 // 撮影用のサーバー（PREVIEW_PORT=18461 gleam run -m admin_preview）は終了しないので、別の端末で先に起動しておく。
 // 初回は npx playwright-core install chromium で、playwright-core の版が使う chromium を入れる。
 // locale（ja-JP など）を渡すと、ブラウザーがその言語の Accept-Language を送り、管理 UI はその言語で出す。
@@ -43,6 +44,7 @@ const base = `http://127.0.0.1:${port}`;
 const unavailable = `http://127.0.0.1:${port + 1}`;
 const empty = `http://127.0.0.1:${port + 2}`;
 const readmeBase = `http://127.0.0.1:${port + 3}`;
+const partlySetUp = `http://127.0.0.1:${port + 4}`;
 const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
 const declaredClient = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
 const undeclaredClient = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
@@ -68,6 +70,7 @@ const colorSchemes = named ? ["light"] : ["light", "dark"];
 // mask は乱数で変わる値を伏せる。copy を持つものは、開いた後に最初のコピーのボタンを押してから撮る。
 // keys は、開いた後に順に押すキーの配列。
 // open は、開いた後に open = true にして開く <details> のセレクター。
+// dialog は、open の後に押して開くダイアログの id（トリガーは button[commandfor=id][command=show-modal]）。
 // readme は --readme のときの出力名（<readme>-<en|ja>.png）で、印の無い画面は --readme では撮らない。
 const shots = [
   { name: "01-dashboard", url: `${base}/` },
@@ -158,38 +161,50 @@ const shots = [
   { name: "74-event-logger-timeline", url: `${readmeBase}/plugins/event_logger/timeline` },
   { name: "75-event-logger-settings", url: `${readmeBase}/plugins/event_logger/settings` },
   { name: "76-readme-dashboard-plain", url: `${readmeBase}/`, readme: "dashboard" },
+  { name: "77-dashboard-getting-started-partly-set-up", url: `${partlySetUp}/` },
+  { name: "78-dialog-account-new", url: `${readmeBase}/`, dialog: "dialog-account-new" },
+  { name: "79-dialog-unreadable-delete", url: `${base}/`, dialog: `dialog-unreadable-${unreadablePubkey}-delete` },
+  { name: "80-dialog-relay-delete", url: `${readmeBase}/`, dialog: "dialog-relay-1-delete" },
+  { name: "81-dialog-session-connect", url: `${readmeBase}/`, dialog: "dialog-session-connect" },
 ];
 
 // --usage で撮る要素。selector は開いたページの中で 1 つの要素にだけ一致させる
-// （一致しないか複数に一致すると strict で失敗する）。url、form、status、open は
-// shots と同じ意味。出力名は <name>.png で、言語の接尾辞は付けない。
+// （一致しないか複数に一致すると strict で失敗する）。url、form、status、open、dialog は
+// shots と同じ意味で、dialog を持つものは selector を省き、#<dialog> > .modal-box を切り出す。
+// 出力名は <name>.png で、言語の接尾辞は付けない。
 const usage = [
-  { name: "tiles", url: `${readmeBase}/`, selector: "main > nav" },
+  { name: "overview", url: `${readmeBase}/`, selector: "main > nav" },
   { name: "navbar", url: `${readmeBase}/`, selector: "header" },
   { name: "relays", url: `${readmeBase}/`, selector: "#relays" },
-  { name: "new-relay", url: `${base}/relays/new`, selector: "main > section" },
-  { name: "edit-relay", url: `${base}/relays/1/edit`, selector: "main > section" },
+  { name: "new-relay", url: `${readmeBase}/`, dialog: "dialog-relay-new" },
+  { name: "edit-relay", url: `${readmeBase}/`, dialog: "dialog-relay-1-edit" },
   {
     name: "accounts",
     url: `${readmeBase}/`,
     selector: "#accounts",
     open: "#accounts li:first-child details",
   },
-  { name: "new-account", url: `${base}/accounts/new`, selector: "main" },
+  { name: "new-account", url: `${readmeBase}/`, dialog: "dialog-account-new" },
   { name: "pending", url: `${base}/`, selector: "#pending" },
   { name: "approve", url: `${base}/approve/tok-1`, selector: "main > section" },
   { name: "sessions", url: `${readmeBase}/`, selector: "#sessions" },
   {
     name: "session-permissions",
-    url: `${base}/sessions/${signer}/${declaredClient}/permissions`,
-    selector: "main > section",
+    url: `${readmeBase}/`,
+    dialog: `dialog-session-${signer}-${declaredClient}-permissions`,
   },
   {
     name: "private-key-form",
-    url: account("private-key"),
-    selector: "main > section",
+    url: `${readmeBase}/`,
+    open: "#accounts li:first-child details",
+    dialog: `dialog-account-${signer}-private-key`,
   },
-  { name: "rotate", url: account("rotate"), selector: "main > section" },
+  {
+    name: "rotate",
+    url: `${readmeBase}/`,
+    open: "#accounts li:first-child details",
+    dialog: `dialog-account-${signer}-rotate`,
+  },
   { name: "plugins", url: `${readmeBase}/`, selector: "#plugins" },
   {
     name: "event-logger-timeline",
@@ -204,7 +219,7 @@ const usage = [
   {
     name: "unreadable",
     url: `${base}/`,
-    selector: "section.card:has(.alert-warning)",
+    selector: "#accounts .alert-error",
   },
   {
     name: "not-confirmed",
@@ -251,7 +266,7 @@ async function open(page, shot) {
   return response;
 }
 
-// 撮る前の操作。押すキーを送り、open の <details> を開く。
+// 撮る前の操作。押すキーを送り、open の <details> を開き、dialog のトリガーを押して開くまで待つ。
 async function prepare(page, shot) {
   for (const key of shot.keys ?? []) {
     await page.keyboard.press(key);
@@ -260,6 +275,17 @@ async function prepare(page, shot) {
     await page.locator(shot.open).evaluate((el) => {
       el.open = true;
     });
+  }
+  if (shot.dialog) {
+    const size = page.viewportSize();
+    await page.setViewportSize({
+      width: size.width,
+      height: Math.max(size.height, 1200),
+    });
+    await page
+      .locator(`button[commandfor="${shot.dialog}"][command="show-modal"]`)
+      .click();
+    await page.locator(`dialog#${shot.dialog}[open]`).waitFor();
   }
 }
 
@@ -322,9 +348,12 @@ try {
         const mask = shot.mask ? [page.locator(shot.mask)] : [];
         // animations: "disabled" は、ボタンの色の遷移を終わった状態にしてから撮る。
         // selector を持つものは、その要素だけを切り出して撮る。
-        if (shot.selector) {
+        const selector =
+          shot.selector ??
+          (usageMode && shot.dialog ? `#${shot.dialog} > .modal-box` : undefined);
+        if (selector) {
           await page
-            .locator(shot.selector)
+            .locator(selector)
             .screenshot({ path: file, mask, animations: "disabled" });
         } else {
           await page.screenshot({
@@ -332,6 +361,17 @@ try {
             fullPage: true,
             mask,
             animations: "disabled",
+          });
+        }
+        if (shot.dialog) {
+          // ダイアログの中身が .modal-box の高さを超えてスクロールしていれば、切り出しから欠ける。
+          const clipped = await page
+            .locator(`#${shot.dialog} > .modal-box`)
+            .evaluate((el) => el.scrollHeight > el.clientHeight);
+          if (clipped) unexpected.push(`clipped dialog ${file}`);
+          await page.setViewportSize({
+            width: viewport.width,
+            height: viewport.height,
           });
         }
         const status = response.status();

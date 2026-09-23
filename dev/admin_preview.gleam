@@ -1,8 +1,9 @@
 //// 管理 UI を固定の状態で起動する撮影用のサーバー。`admin.handle_request` を本物のまま
 //// 使い、`Context` の関数だけを固定の値に差し替える。待ち受けるのは `PREVIEW_PORT`
-//// （既定は 18461）から続く 4 つのポートで、順に通常の状態、アカウント・飛ばされた行・
+//// （既定は 18461）から続く 5 つのポートで、順に通常の状態、アカウント・飛ばされた行・
 //// 承認待ち・セッションの一覧を得られない状態、すべての一覧が空の状態、README に載せる
-//// 画像を撮るための、失敗の状態を含まない状態である。
+//// 画像を撮るための、失敗の状態を含まない状態、すべての一覧が空でバンカー用のリレーだけを
+//// 登録した状態（「はじめに」の帯の済んだ段）である。
 //// `gleam run -m admin_preview` で起動し、`dev/screenshots.mjs` で撮る。
 ////
 //// `dev/` は `gleam build` と `gleam test` でコンパイルされるので、`Context` を変えて
@@ -889,7 +890,7 @@ fn base_port() -> Int {
   |> result.unwrap(default_port)
 }
 
-/// 4 つの状態の管理 UI を、先頭のポートから順に起動して待ち続ける。
+/// 5 つの状態の管理 UI を、先頭のポートから順に起動して待ち続ける。
 pub fn main() -> Nil {
   let port = base_port()
   let unavailable_reason =
@@ -952,6 +953,17 @@ pub fn main() -> Nil {
         ])
       },
     )
+  let partly_set_up =
+    admin.Context(..empty, relays: fn(_deadline) {
+      Ok([
+        dashboard.RelayRow(
+          1,
+          "wss://relay.example",
+          dashboard.Unused,
+          dashboard.Reported(relay_connection.Connected),
+        ),
+      ])
+    })
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.add(admin.supervised("127.0.0.1", port, context()))
@@ -962,6 +974,11 @@ pub fn main() -> Nil {
     ))
     |> static_supervisor.add(admin.supervised("127.0.0.1", port + 2, empty))
     |> static_supervisor.add(admin.supervised("127.0.0.1", port + 3, readme))
+    |> static_supervisor.add(admin.supervised(
+      "127.0.0.1",
+      port + 4,
+      partly_set_up,
+    ))
     |> static_supervisor.start
   process.sleep_forever()
 }
