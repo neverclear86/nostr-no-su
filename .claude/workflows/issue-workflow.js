@@ -137,6 +137,8 @@ const S = {
     properties: {
       status: { type: 'string', enum: ['merged', 'conflict', 'not_ready'], description: 'merged: マージした / conflict: main と衝突していて rebase が要る / not_ready: 承認や CI の条件を満たさない' },
       sha: { type: 'string', description: 'マージのコミット' }, issueClosed: { type: 'boolean' }, problem: { type: 'string' },
+      closedParents: { type: 'array', items: { type: 'integer' }, description: '兄弟がすべて閉じたので閉じた親 issue の番号。無ければ空' },
+      openParent: { type: 'integer', description: '兄弟がすべて閉じたのに gh issue close が拒否されて閉じられなかった親 issue の番号' },
     },
     required: ['status'],
   },
@@ -422,7 +424,7 @@ ${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が�
 - squash コミットの本文（トレーラー 2 行）:
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
-返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、問題があればその内容。`,
+返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、閉じた親 issue（closedParents）、閉じられなかった親 issue（openParent）、問題があればその内容。`,
   // 実装が status だけを返したとき（schema 違反の送り直し）に、PR の有無を gh で引く。実装を走り直すより安い
   lookupPr: (e) => `ブランチ ${e.branch} の PR を調べて返してほしい（コードは変えず、何も投稿しない）。
 \`gh pr list -R ${REPO} --head ${e.branch} --state open --json number,url,headRefOid\` で PR を引く。無ければ found を false にする。
@@ -676,13 +678,18 @@ async function gateStage(e, issue, state) {
   return { stalled: { stage: 'gate', reason: `最終確認が ${MAX_GATE_ROUNDS} 回で APPROVE にならない` } }
 }
 
-/** マージ。衝突なら rebase させて再試行。1 件ずつ */
+/** マージ。衝突なら rebase させて再試行。1 件ずつ。閉じられなかった親 issue は log に出して結果に残す */
 async function mergeStage(e, state) {
   return mergeLock(async () => {
     let notReady = false
     for (let t = 0; t <= MAX_REBASES; t++) {
       const m = await call('merge', t === 0 && !notReady ? `Merge PR #${state.pr}` : `Merge PR #${state.pr} (retry ${t}${notReady ? ' recheck' : ''})`, P.merge(e, state.pr, state.head, state.approvedHead, state.reviewApprovedHead, state.conditionsUrl), { agentType: 'issue-merger', phase: 'マージ', schema: S.merger })
-      if (m.status === 'merged') { state.mergeSha = m.sha; state.issueClosed = m.issueClosed !== false; state.mergeSeq = ++mergeSeq; return {} }
+      if (m.status === 'merged') {
+        state.mergeSha = m.sha; state.issueClosed = m.issueClosed !== false; state.mergeSeq = ++mergeSeq
+        state.closedParents = m.closedParents || []; state.openParent = m.openParent || null
+        if (state.openParent) log(`#${e.n}: 親 issue #${state.openParent} はサブ issue がすべて閉じたが、gh issue close が拒否されて閉じられなかった（${m.problem || ''}）。手で閉じる`)
+        return {}
+      }
       if (m.status === 'not_ready') {
         if (notReady) return { stalled: { stage: 'merge', reason: m.problem || 'マージの条件を満たさない' } }
         notReady = true
@@ -741,6 +748,7 @@ async function runIssue(issue, idx) {
     implementer: null, implementedBy: null,
     designUrl: issue.designUrl || null, postUrl: null, postFile: null, conditions: null,
     pr: null, head: null, approveUrl: null, reviewApprovedHead: null, conditionsUrl: null,
+    mergeSha: null, issueClosed: null, closedParents: [], openParent: null,
   }
   const finish = (extra) => ({ ...state, ...extra })
   const deps = (issue.after || []).map(String)
