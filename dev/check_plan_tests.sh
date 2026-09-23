@@ -6,7 +6,8 @@
 # 読むのは「### テスト」の見出しから次の `##` の見出しまでにある表の行（`|` で始まる行）の
 # 1 列目だけで、そこにある `名前_test` のバッククォート内の語をテスト名、`dev/名前.sh` を shell の
 # 検査のスクリプトとする。取り消し線で囲んだ名前（~~`名前_test`~~。取り消し線の内側に括弧の補足が
-# あってもよい）は「消す」テストで、実装に無いことを確かめる。テストのモジュール名（test/ と
+# あってもよい）は「消す」テストで、実装に無いことを確かめる。取り消し線の中の `dev/名前.sh` は読まない
+# （消す対象はテストだけ）。テストのモジュール名（test/ と
 # plugins-src/*/test/ 以下に `<名前>.gleam` があり、その名前の `pub fn` が無い語。`dashboard_test`
 # など）は、1 列目にあってもテスト名として数えない。
 # 同じ節の文（表の外）に出る `名前_test` のうち、モジュール名でも作業ツリーにあるテスト名でもない
@@ -112,6 +113,7 @@ $removed" -v t="$actual_names" '
 echo "| プランのテスト名・スクリプト | 実装 |"
 echo "|--|--|"
 missing=0
+absent=0
 total=0
 for name in $planned; do
   total=$((total + 1))
@@ -124,6 +126,7 @@ for name in $planned; do
   else
     echo "| \`$name\` | 無し |"
     missing=$((missing + 1))
+    absent=$((absent + 1))
   fi
 done
 for name in $removed; do
@@ -143,6 +146,8 @@ done
 if [ "$missing" -eq 0 ]; then
   echo "プランのテスト $total 件はすべて実装と揃っている"
 else
-  echo "プランのテスト $total 件のうち $missing 件が実装と揃っていない（改名したなら PR 本文の「プランからの変更」に対応表を書く）"
+  # 「無し」があるときだけ改名の案内を添える（「まだある」だけのときは消す対応で、対応表は要らない）
+  if [ "$absent" -gt 0 ]; then hint="（改名したなら PR 本文の「プランからの変更」に対応表を書く）"; else hint=""; fi
+  echo "プランのテスト $total 件のうち $missing 件が実装と揃っていない$hint"
   exit 1
 fi
