@@ -2,6 +2,7 @@
 //// リクエストを組み立てるヘルパーと、本文からダイアログを切り出すヘルパー（`dashboard_test` も使う）。関数名の注意は `app_tree` と同じ。
 
 import gleam/bit_array
+import gleam/bool
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject}
 import gleam/http
@@ -442,6 +443,22 @@ pub fn action_dialog_id(action: dashboard.AccountAction) -> String {
 /// `body` の中の、開いた状態で描いたダイアログ `id` の中身。無ければ落ちる。
 pub fn opened_dialog(body: String, id: String) -> String {
   dialog_after(body, "id=\"" <> id <> "\" open>")
+}
+
+/// `body` の中の、開いた状態で描いた `<dialog>` の `id` と、開始タグの後から `</dialog>` の手前までの
+/// 中身を現れた順に返す。開いたダイアログが無ければ空のリスト。
+pub fn opened_dialogs(body: String) -> List(#(String, String)) {
+  // lustre は属性を名前順に出し、真偽の属性 `open` を名前だけで開始タグの末尾に置く
+  string.split(body, "<dialog ")
+  |> list.drop(1)
+  |> list.filter_map(fn(piece) {
+    let assert Ok(#(attributes, rest)) = string.split_once(piece, ">")
+    use <- bool.guard(!string.ends_with(attributes, " open"), Error(Nil))
+    let assert Ok(#(_, from_id)) = string.split_once(attributes, " id=\"")
+    let assert Ok(#(id, _)) = string.split_once(from_id, "\"")
+    let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
+    Ok(#(id, inner))
+  })
 }
 
 /// `body` の中の、閉じた状態で描いたダイアログ `id` の中身。無ければ落ちる。
