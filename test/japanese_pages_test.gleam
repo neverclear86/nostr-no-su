@@ -33,8 +33,8 @@ const allowed_words = [
 
 /// ページのテキストノードに現れる英字の連なり。テキストと属性値はエスケープされて `<` と
 /// `>` を含まないので、`<` から次の `>` までが開始タグ、その先が次の `<` までのテキストで
-/// ある。訳さない英語は `view.untranslated` が `lang="en"` の開始タグで包む決まりなので、
-/// そのテキストは対象から外す。
+/// ある。訳さない英語は、`view.untranslated` の `span` と `view.untranslated_page` の
+/// `<title>` が `lang="en"` の開始タグで出す決まりなので、そのテキストは対象から外す。
 fn words(page: String) -> List(String) {
   page
   |> string.split("<")

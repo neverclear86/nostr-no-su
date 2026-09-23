@@ -395,9 +395,6 @@ pub type Message {
   PluginSectionEmpty
   /// `image` ブロックの `url` の scheme が `http` / `https` でないときの理由。
   PluginImageNotShown
-  /// プラグインのページの `<title>` と `<h1>`。プラグイン名はここに混ぜない
-  /// （`view.untranslated` で別に出す）。
-  PluginPage
   /// ダッシュボードのプラグインの節から、ページを供給するプラグインへのリンクの文言。
   OpenPluginPage
   /// プラグインのページの `sections` が 0 件のときの案内。
@@ -720,7 +717,6 @@ fn english(message: Message) -> String {
       "No plugins enabled. Plugins placed in the plugin directory are loaded when the server restarts."
     PluginSectionEmpty -> "Nothing to show."
     PluginImageNotShown -> "Image not shown: the URL is not http or https."
-    PluginPage -> "Plugin page"
     OpenPluginPage -> "Open"
     PluginPageEmpty -> "This plugin page has nothing to show."
     PluginSectionFailed -> "This section could not be displayed."
@@ -1024,7 +1020,6 @@ fn japanese(message: Message) -> String {
     NoPlugins -> "有効なプラグインはありません。プラグインのディレクトリーに置いたプラグインは、サーバーの再起動で読み込まれます。"
     PluginSectionEmpty -> "表示する内容はありません。"
     PluginImageNotShown -> "画像を表示していません。URL が http でも https でもありません。"
-    PluginPage -> "プラグインのページ"
     OpenPluginPage -> "ページを開く"
     PluginPageEmpty -> "このプラグインのページに表示する内容はありません。"
     PluginSectionFailed -> "この節は表示できませんでした。"

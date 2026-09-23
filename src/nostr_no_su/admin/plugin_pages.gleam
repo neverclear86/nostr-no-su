@@ -1,5 +1,5 @@
-//// プラグインが供給する管理 UI のページのページ枠（出どころの行、タブ、節の並び、
-//// 戻るリンク）の組み立て。節 1 つの記述から `admin/view` の部品への変換は
+//// プラグインが供給する管理 UI のページのページ枠（見出し、出どころの行、タブ、節の
+//// 並び、戻るリンク）の組み立て。節 1 つの記述から `admin/view` の部品への変換は
 //// `admin/plugin_view` に委ね、このモジュールは節の並びと `Error` の囲みだけを持つ。
 ////
 //// プラグインが持ち込めるのは文字列・種別・`tone`・真偽値だけで、クラス名は
@@ -20,7 +20,8 @@ import nostr_no_su/admin/view
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 
-/// プラグインのページ 1 枚を HTML 文書の文字列にする。`raw_sections` は
+/// プラグインのページ 1 枚を HTML 文書の文字列にする。見出しと `<title>` は `page_heading` で、
+/// プラグイン由来の英語なので `view.untranslated_page` で出す。`raw_sections` は
 /// `plugin_view.sections` が最上位の記述から取り出した節の記述の並び。
 pub fn plugin_page(
   language: Language,
@@ -29,10 +30,10 @@ pub fn plugin_page(
   page: plugin.PluginPage,
   raw_sections: List(Dynamic),
 ) -> String {
-  view.page(
+  view.untranslated_page(
     language,
     theme,
-    i18n.PluginPage,
+    page_heading(plugin, page),
     view.Narrow,
     view.SwitchReturningTo(dashboard.plugin_page_path(plugin.name, page.key)),
     view.NoRefresh,
@@ -43,6 +44,14 @@ pub fn plugin_page(
       [view.back_link(language)],
     ]),
   )
+}
+
+/// ページの見出し。プラグイン名とページの表示名を ` — ` でつなぐ（例: `event_logger — Settings`）。
+fn page_heading(
+  plugin: dashboard.PluginRow,
+  page: plugin.PluginPage,
+) -> String {
+  plugin.name <> " — " <> page.title
 }
 
 /// プラグイン名と現在の状態の行。
