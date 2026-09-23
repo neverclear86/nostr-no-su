@@ -1,4 +1,4 @@
-//// 実行時のリレーの一覧と、それに合わせて用途（監視・バンカー）ごとの
+//// 実行時のリレーの一覧と、それに合わせて用途（監視・バンカー・セッションのリレー）ごとの
 //// `factory_supervisor` の子を起動・停止するアクター。
 ////
 //// **接続は用途ごとの factory の子にする。** `static_supervisor` には実行時に
@@ -22,7 +22,8 @@
 //// **既知の窓 2**: このアクター自身が落ちると一覧は起動時の値（本番は空）に戻り、
 //// 動いている接続とずれる。次にバンカーが読み込みに成功するまで、行は
 //// `OpenRegistered` で戻らない。ハンドラーが呼ぶ FFI は落ちる経路（`exit`）を
-//// 値にしているため、落ちるのはバグに限られる。
+//// 値にしているため、落ちるのはバグに限られる。セッションのリレーの接続も、次に
+//// バンカーのセッションのリレーが変わるまで戻らない。
 ////
 //// **既知の窓 3**: ハンドラーは `terminate_dynamic_child` で、接続の停止のタイム
 //// アウト（`factory_supervisor.worker_child` の既定 5000ms）まで待ちうる。変更が
@@ -72,6 +73,9 @@ pub type Roles {
 pub type Role {
   Monitor
   Bunker
+  /// セッションのリレーのうち、バンカーの用途の項目に無い URL の接続。項目
+  /// （`Entry`）には載らないので、`connections` と `urls` はこの用途では空を返す。
+  SessionOnly
 }
 
 /// ストアに登録されたリレー 1 件。DB に依存しないための形。
@@ -98,9 +102,9 @@ pub type ChangeError {
 pub type FactoryName =
   Name(factory_supervisor.Message(Connection, Subject(relay_connection.Msg)))
 
-/// 監視用とバンカー用、それぞれの factory の名前。
+/// 監視用、バンカー用、セッションのリレー用、それぞれの factory の名前。
 pub type Factories {
-  Factories(monitor: FactoryName, bunker: FactoryName)
+  Factories(monitor: FactoryName, bunker: FactoryName, session: FactoryName)
 }
 
 /// このアクターが受け取るメッセージ。
@@ -121,11 +125,20 @@ pub type Msg {
   OpenRegistered(relays: List(Registered))
   /// 用途 `roles` の現在の全接続へ購読の張り直しを依頼する。
   ResubscribeAll(roles: List(Role))
+  /// バンカーのセッションのリレーの URL を差し替え、`SessionOnly` の接続を開閉し、
+  /// 残った接続の購読を張り直す。バンカーがセッションのリレーの変化のたびに送る。
+  SyncSessionRelays(urls: List(String))
 }
 
-/// アクターが保持する状態。
+/// アクターが保持する状態。`session_urls` はバンカーから届いたセッションのリレーの
+/// URL、`sessions` はそのうち `SessionOnly` の用途で開いている接続。
 type State {
-  State(entries: List(Entry), factories: Factories)
+  State(
+    entries: List(Entry),
+    factories: Factories,
+    session_urls: List(String),
+    sessions: List(Connection),
+  )
 }
 
 /// 起動時の一覧を、監視の一覧を先に、その後にバンカーの一覧のうち未出の URL を
@@ -239,6 +252,27 @@ pub fn urls(entries: List(Entry), role: Role) -> List(String) {
   list.map(connections(entries, role), fn(connection) { connection.url })
 }
 
+/// `session_urls` のうち、バンカーの用途の項目に無い URL の接続を、重複を除いて
+/// `session_urls` の順に並べる。`current` に同じ URL の接続があれば名前を保ち、
+/// 無ければ新しい名前を作る。
+pub fn session_connections(
+  entries: List(Entry),
+  session_urls: List(String),
+  current: List(Connection),
+) -> List(Connection) {
+  let base = urls(entries, Bunker)
+  session_urls
+  |> list.unique
+  |> list.filter(fn(url) { !list.contains(base, url) })
+  |> list.map(fn(url) {
+    case list.find(current, fn(connection) { connection.url == url }) {
+      Ok(connection) -> connection
+      Error(Nil) ->
+        Connection(name: process.new_name("nostr_no_su_relay"), url: url)
+    }
+  })
+}
+
 /// URL の形を `relay_client.to_request` と同じ判定で確かめる。
 fn check_url(url: String) -> Result(Nil, ChangeError) {
   case relay_client.to_request(url) {
@@ -303,6 +337,7 @@ fn name_for_role(
   case role {
     Monitor -> entry.monitor
     Bunker -> entry.bunker
+    SessionOnly -> None
   }
 }
 
@@ -311,6 +346,7 @@ fn factory_for_role(factories: Factories, role: Role) -> FactoryName {
   case role {
     Monitor -> factories.monitor
     Bunker -> factories.bunker
+    SessionOnly -> factories.session
   }
 }
 
@@ -330,7 +366,14 @@ pub fn start(
   initial: List(Entry),
   factories: Factories,
 ) -> actor.StartResult(Subject(Msg)) {
-  actor.new(State(entries: initial, factories: factories))
+  actor.new(
+    State(
+      entries: initial,
+      factories: factories,
+      session_urls: [],
+      sessions: [],
+    ),
+  )
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
@@ -393,6 +436,11 @@ pub fn open_registered(name: Name(Msg), relays: List(Registered)) -> Nil {
   named.send(name, OpenRegistered(relays))
 }
 
+/// バンカーのセッションのリレーの URL を渡す。送るだけで待たない。
+pub fn sync_session_relays(name: Name(Msg), urls: List(String)) -> Nil {
+  named.send(name, SyncSessionRelays(urls))
+}
+
 /// メッセージの種類ごとに処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
@@ -415,49 +463,85 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           "skipped registered relay: " <> skipped_reason(error),
         )
       })
-      actor.continue(apply_entries(state, next))
+      actor.continue(apply(state, next, state.session_urls))
     }
     ResubscribeAll(roles) -> {
       list.each(roles, fn(role) {
-        list.each(connections(state.entries, role), fn(connection) {
+        list.each(role_connections(state, role), fn(connection) {
           relay_connection.resubscribe(connection.name)
         })
       })
       actor.continue(state)
     }
+    SyncSessionRelays(urls) -> {
+      let updated = apply(state, state.entries, urls)
+      // 前後の両方にある接続は、その URL を持つセッションの署名者が変わりうるので
+      // 購読を張り直す。新しく開いた接続は起動時に購読する。
+      updated.sessions
+      |> list.filter(fn(connection) {
+        list.any(state.sessions, fn(kept) { kept.name == connection.name })
+      })
+      |> list.each(fn(connection) {
+        relay_connection.resubscribe(connection.name)
+      })
+      actor.continue(updated)
+    }
   }
 }
 
-/// `apply` を現在の一覧に適用し、用途ごとに名前の差分を取って先に止めてから
+/// `compute` を現在の一覧に適用し、用途ごとに名前の差分を取って先に止めてから
 /// 起動する。同じメールボックスで直列に行うため、最後に処理した変更と一覧が
 /// 一致する。
 fn handle_change(
   state: State,
-  apply: fn(List(Entry)) -> Result(List(Entry), ChangeError),
+  compute: fn(List(Entry)) -> Result(List(Entry), ChangeError),
   reply: Subject(Result(Nil, ChangeError)),
 ) -> actor.Next(State, Msg) {
-  case apply(state.entries) {
+  case compute(state.entries) {
     Error(error) -> {
       process.send(reply, Error(error))
       actor.continue(state)
     }
     Ok(next) -> {
-      let updated = apply_entries(state, next)
+      let updated = apply(state, next, state.session_urls)
       process.send(reply, Ok(Nil))
       actor.continue(updated)
     }
   }
 }
 
-/// 用途ごとの名前の差分を取って先に止めてから起動し、一覧を `next` に差し替える。
-fn apply_entries(state: State, next: List(Entry)) -> State {
-  list.each([Monitor, Bunker], fn(role) {
-    let before = connections(state.entries, role)
-    let after = connections(next, role)
-    list.each(missing_from(before, after), stop_connection(state, role, _))
-    list.each(missing_from(after, before), start_connection(state, role, _))
+/// 一覧を `next`、セッションのリレーを `session_urls` に差し替える。3 つの用途の
+/// 名前の差分を取り、止める接続をすべて止めてから起動する（URL が `SessionOnly` と
+/// `Bunker` の間を移るとき、先に古い側を止めるため）。
+fn apply(state: State, next: List(Entry), session_urls: List(String)) -> State {
+  let updated =
+    State(
+      ..state,
+      entries: next,
+      session_urls: session_urls,
+      sessions: session_connections(next, session_urls, state.sessions),
+    )
+  let changes =
+    list.map([Monitor, Bunker, SessionOnly], fn(role) {
+      let before = role_connections(state, role)
+      let after = role_connections(updated, role)
+      #(role, missing_from(before, after), missing_from(after, before))
+    })
+  list.each(changes, fn(change) {
+    list.each(change.1, stop_connection(state, change.0, _))
   })
-  State(..state, entries: next)
+  list.each(changes, fn(change) {
+    list.each(change.2, start_connection(state, change.0, _))
+  })
+  updated
+}
+
+/// 用途の現在の接続。`SessionOnly` は `state.sessions`、それ以外は項目から。
+fn role_connections(state: State, role: Role) -> List(Connection) {
+  case role {
+    SessionOnly -> state.sessions
+    Monitor | Bunker -> connections(state.entries, role)
+  }
 }
 
 /// 登録されたリレーを飛ばした理由の説明。`open_all` が返す拒否は `InvalidUrl` か
@@ -484,7 +568,7 @@ fn missing_from(
 /// `rest_for_one` の再起動で子を失ったときの補充と、起動直後の初期一覧の反映を
 /// 兼ねる。
 fn repopulate(state: State, role: Role) -> Nil {
-  connections(state.entries, role)
+  role_connections(state, role)
   |> list.filter(fn(connection) { process.named(connection.name) == Error(Nil) })
   |> list.each(start_connection(state, role, _))
 }

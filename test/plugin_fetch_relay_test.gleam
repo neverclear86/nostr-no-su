@@ -124,6 +124,7 @@ fn start_signed_in_bunker(signers: List(Account)) -> process.Name(bunker.Msg) {
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      fn(_urls) { Nil },
     )
   let assert Ok(loaded) = bunker.accounts(name)
   assert list.length(loaded) == list.length(signers)
@@ -147,6 +148,7 @@ fn start_relay_list(relay_url: String) -> process.Name(relay_list.Msg) {
       relay_list.Factories(
         monitor: process.new_name("plugin_fetch_relay_factory_monitor"),
         bunker: process.new_name("plugin_fetch_relay_factory_bunker"),
+        session: process.new_name("plugin_fetch_relay_factory_session"),
       ),
     )
   name

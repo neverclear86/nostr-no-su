@@ -2055,6 +2055,7 @@ fn start_bunker(
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      fn(_urls) { Nil },
     )
   #(name, started.pid)
 }

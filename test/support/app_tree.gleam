@@ -223,8 +223,8 @@ pub const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
 /// バンカーサブツリーの仕様。接続プールとロックのプールは到達できないポートを指し、
 /// 偽のストアを使うテストでもサブツリーの形（プール、ロックのプール、アクター、
-/// 接続の順）は本番と同じにする。購読は本番と同じく、接続と張り直しのたびに現在の
-/// 署名者から組み立て、署名者を問い合わせられなければ定義を得られなかったことにする。
+/// 接続の順）は本番と同じにする。購読は本番と同じく、接続と張り直しのたびに接続の
+/// 範囲の現在の署名者から組み立て、署名者を問い合わせられなければ定義を得られなかったことにする。
 pub fn bunker_spec(
   name: Name(bunker.Msg),
   store: bunker.Store,
@@ -243,10 +243,12 @@ pub fn bunker_spec(
       retry_delay: retry_delay,
     ),
     relays: relays,
-    subscriptions: fn() {
-      bunker.signers(name)
-      |> option.to_result(Nil)
-      |> result.map(config.bunker_subscriptions(_, 0))
+    subscriptions: fn(signers) {
+      fn() {
+        signers()
+        |> option.to_result(Nil)
+        |> result.map(config.bunker_subscriptions(_, 0))
+      }
     },
   )
 }

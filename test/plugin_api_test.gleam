@@ -83,6 +83,7 @@ fn start_bunker_signed_in_as(keys: List(String)) -> Name(bunker.Msg) {
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      fn(_urls) { Nil },
     )
   // 読み込みの完了を待つ。`bunker_test.gleam` と同じ理由で `accounts` を使う。
   let assert Ok(loaded) = bunker.accounts(name)
@@ -210,6 +211,7 @@ fn start_relay_list(entries: List(relay_list.Entry)) -> Name(relay_list.Msg) {
       relay_list.Factories(
         monitor: process.new_name("test_plugin_api_factory_monitor"),
         bunker: process.new_name("test_plugin_api_factory_bunker"),
+        session: process.new_name("test_plugin_api_factory_session"),
       ),
     )
   name

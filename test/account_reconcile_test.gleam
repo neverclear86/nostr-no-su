@@ -260,6 +260,7 @@ fn start_store_bunker(
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      fn(_urls) { Nil },
     )
   started.pid
 }
