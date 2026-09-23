@@ -73,28 +73,18 @@ pub fn messages_with_values_follow_each_language_test() {
     #(i18n.UtcTimeOfDay("05:12:34"), "05:12:34 UTC", "05:12:34（UTC）"),
     #(i18n.ExpiryBeforeTime("8:12"), "8:12 (expires at ", "8:12（"),
     #(i18n.RefreshesEverySeconds(30), "Refreshes every 30 s", "30 秒ごとに更新"),
-    #(
-      i18n.AwaitingDecision(30),
-      "Awaiting your decision · refreshes every 30 s",
-      "承認を待っています · 30 秒ごとに更新",
-    ),
+    #(i18n.SoonestExpiry("0:44"), "Soonest expires in 0:44", "最短 0:44 で失効"),
     #(
       i18n.PendingExpireAfterMinutes(10),
       "Expire after 10 minutes",
       "10 分で失効します",
     ),
     #(i18n.UnreadableRowCount(3), "3 unreadable rows", "読み込めない行 3"),
-    #(
-      i18n.RelayIssueCounts(1, 2),
-      "1 disconnected · 2 unanswered",
-      "未接続 1 · 応答なし 2",
-    ),
-    #(i18n.PluginsRunningOfTotal(1, 2), "1 / 2 running", "1 / 2 動作中"),
-    #(
-      i18n.PluginIssueCounts(1, 2, 3),
-      "1 overloaded · 2 disabled · 3 unavailable",
-      "過負荷 1 · 無効 2 · 応答なし 3",
-    ),
+    #(i18n.DisconnectedRelayCount(1), "1 disconnected", "未接続 1"),
+    #(i18n.UnansweredRelayCount(2), "2 unanswered", "応答なし 2"),
+    #(i18n.OverloadedPluginCount(1), "1 overloaded", "過負荷 1"),
+    #(i18n.DisabledPluginCount(2), "2 disabled", "無効 2"),
+    #(i18n.UnavailablePluginCount(3), "3 unavailable", "応答なし 3"),
     #(i18n.PluginsNotLoadedShort(2), "2 failed to load", "読み込み失敗 2"),
     #(
       i18n.ApprovalRequestGone(10),
@@ -164,19 +154,24 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.CopyNpub -> Some(i18n.CopyClient)
     i18n.CopyClient -> Some(i18n.Dashboard)
     i18n.Dashboard -> Some(i18n.Pending)
-    i18n.Pending -> Some(i18n.AwaitingDecision(30))
-    i18n.AwaitingDecision(_) -> Some(i18n.PendingExpireAfterMinutes(10))
-    i18n.PendingExpireAfterMinutes(_) -> Some(i18n.TileNotAvailable)
-    i18n.TileNotAvailable -> Some(i18n.UnreadableRowCount(3))
+    i18n.Pending -> Some(i18n.OverviewLabel)
+    i18n.OverviewLabel -> Some(i18n.AwaitingDecision)
+    i18n.AwaitingDecision -> Some(i18n.SoonestExpiry("0:44"))
+    i18n.SoonestExpiry(_) -> Some(i18n.PendingExpireAfterMinutes(10))
+    i18n.PendingExpireAfterMinutes(_) -> Some(i18n.OverviewNotAvailable)
+    i18n.OverviewNotAvailable -> Some(i18n.UnreadableRowCount(3))
     i18n.UnreadableRowCount(_) -> Some(i18n.AllAccountsLoaded)
     i18n.AllAccountsLoaded -> Some(i18n.Sessions)
     i18n.Sessions -> Some(i18n.ApprovedClients)
-    i18n.ApprovedClients -> Some(i18n.RelayIssueCounts(1, 2))
-    i18n.RelayIssueCounts(_, _) -> Some(i18n.AllRelaysConnected)
+    i18n.ApprovedClients -> Some(i18n.DisconnectedRelayCount(1))
+    i18n.DisconnectedRelayCount(_) -> Some(i18n.UnansweredRelayCount(2))
+    i18n.UnansweredRelayCount(_) -> Some(i18n.AllRelaysConnected)
     i18n.AllRelaysConnected -> Some(i18n.NoBunkerRelayShort)
-    i18n.NoBunkerRelayShort -> Some(i18n.PluginsRunningOfTotal(1, 2))
-    i18n.PluginsRunningOfTotal(_, _) -> Some(i18n.PluginIssueCounts(1, 2, 3))
-    i18n.PluginIssueCounts(_, _, _) -> Some(i18n.NoPluginsEnabledShort)
+    i18n.NoBunkerRelayShort -> Some(i18n.RunningOfTotal)
+    i18n.RunningOfTotal -> Some(i18n.OverloadedPluginCount(1))
+    i18n.OverloadedPluginCount(_) -> Some(i18n.DisabledPluginCount(2))
+    i18n.DisabledPluginCount(_) -> Some(i18n.UnavailablePluginCount(3))
+    i18n.UnavailablePluginCount(_) -> Some(i18n.NoPluginsEnabledShort)
     i18n.NoPluginsEnabledShort -> Some(i18n.PluginsNotLoadedShort(2))
     i18n.PluginsNotLoadedShort(_) -> Some(i18n.PendingConnections)
     i18n.PendingConnections -> Some(i18n.PendingConnectionsDescription)
@@ -411,12 +406,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 237 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 242 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 237
+  assert list.length(messages) == 242
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

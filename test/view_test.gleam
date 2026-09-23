@@ -50,6 +50,24 @@ pub fn status_chip_follows_the_state_vocabulary_test() {
   assert string.contains(html, path)
 }
 
+/// 状態の注記は、チップと同じアイコンを付け、語をチップのトーンの色の文字で出す（中立と
+/// 未使用は色を付けない）。
+pub fn status_note_colors_the_text_like_the_chip_test() {
+  let base = "inline-flex items-center gap-1"
+  let cases = [
+    #(view.ActiveChip, base <> " text-success", "m9 12 2 2 4-4"),
+    #(view.DisconnectedChip, base <> " text-warning", "m19 5 3-3"),
+    #(view.UnusedChip, base, "M8 12h8"),
+    #(view.LoadFailedChip, base <> " text-error", "M15.312 2a2 2 0 0 1"),
+    #(view.SecretNotOfferedChip, base, "M20 13c0 5-3.5 7.5-7.66 8.95"),
+    #(view.ToneChip(view.Info), base <> " text-info", "M12 16v-4"),
+  ]
+  use #(chip, class, path) <- list.each(cases)
+  let html = element.to_string(view.status_note(chip, "t"))
+  assert string.contains(html, "<span class=\"" <> class <> "\">")
+  assert string.contains(html, path)
+}
+
 /// ボタンの種類と置き場所の組ごとに、daisyUI のクラスが決まる。行は `button_link`、
 /// フォームは `post_form` の送信ボタンで確かめる。
 pub fn button_kinds_map_to_daisyui_classes_test() {

@@ -199,7 +199,7 @@ pub type Tone {
   Info
 }
 
-/// 状態のチップの種類。色とアイコンを決め、語は呼び出し側が渡す。
+/// 状態のチップと状態の注記（`status_note`）の種類。色とアイコンを決め、語は呼び出し側が渡す。
 pub type Chip {
   /// 接続中、動作中。success の色と circle-check。
   ActiveChip
@@ -213,13 +213,13 @@ pub type Chip {
   OverloadedChip
   /// プラグインの無効。error の色と ban。
   DisabledChip
-  /// 起動時に読み込めなかったプラグイン。error の色と octagon-alert。
+  /// 起動時に読み込めなかったプラグインと、読み込みで飛ばされたアカウントの行。error の色と octagon-alert。
   LoadFailedChip
   /// 承認待ちの secret の提示なし。色を付けず shield。
   SecretNotOfferedChip
   /// 承認待ちの secret の不一致。warning の色と shield-alert。
   SecretMismatchChip
-  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし）。
+  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし）。
   /// 色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
   ToneChip(tone: Tone)
 }
@@ -598,7 +598,7 @@ pub fn card(content: List(Element(msg))) -> Element(msg) {
   )
 }
 
-/// ダッシュボードの節。枠を持たず、節の見出し（`section_heading`）と本文を縦に並べる。`id` は概要のタイルのリンク先である。
+/// ダッシュボードの節。枠を持たず、節の見出し（`section_heading`）と本文を縦に並べる。`id` は概要の帯の項目のリンク先である。
 pub fn section_block(id: String, content: List(Element(msg))) -> Element(msg) {
   html.section(
     [attribute.id(id), attribute.class("flex flex-col gap-3")],
@@ -1386,13 +1386,33 @@ pub fn status_chip(chip: Chip, text: String) -> Element(msg) {
 fn chip_class(chip: Chip) -> String {
   case chip {
     UnusedChip -> "badge badge-dash badge-sm whitespace-nowrap gap-1"
-    ActiveChip -> tone_chip_class(Success)
-    DisconnectedChip | UnansweredChip | OverloadedChip | SecretMismatchChip ->
-      tone_chip_class(Warning)
-    DisabledChip | LoadFailedChip -> tone_chip_class(Failure)
-    SecretNotOfferedChip -> tone_chip_class(Neutral)
-    ToneChip(tone) -> tone_chip_class(tone)
+    _ -> tone_chip_class(chip_tone(chip))
   }
+}
+
+/// 状態のチップの色のトーン。未使用は色を付けないので `Neutral` にする。
+fn chip_tone(chip: Chip) -> Tone {
+  case chip {
+    ActiveChip -> Success
+    DisconnectedChip | UnansweredChip | OverloadedChip | SecretMismatchChip ->
+      Warning
+    DisabledChip | LoadFailedChip -> Failure
+    UnusedChip | SecretNotOfferedChip -> Neutral
+    ToneChip(tone) -> tone
+  }
+}
+
+/// アイコン＋語の状態の注記。チップと同じアイコンを付け、語をチップと同じ色の文字で出す。
+/// 塗りも枠も付けないので、面の中の短い補足に使う。
+pub fn status_note(chip: Chip, text: String) -> Element(msg) {
+  let class = case chip_tone(chip) {
+    Neutral -> "inline-flex items-center gap-1"
+    Success -> "inline-flex items-center gap-1 text-success"
+    Warning -> "inline-flex items-center gap-1 text-warning"
+    Failure -> "inline-flex items-center gap-1 text-error"
+    Info -> "inline-flex items-center gap-1 text-info"
+  }
+  html.span([attribute.class(class)], [chip_icon(chip), html.text(text)])
 }
 
 /// トーンごとのチップのクラス。どれも薄い塗り（`badge-soft`）で、`Neutral` だけ色の修飾を

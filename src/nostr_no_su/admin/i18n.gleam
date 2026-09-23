@@ -226,18 +226,23 @@ pub type Message {
   // ダッシュボード
   Dashboard
   Pending
-  AwaitingDecision(seconds: Int)
+  OverviewLabel
+  AwaitingDecision
+  SoonestExpiry(remaining: String)
   PendingExpireAfterMinutes(minutes: Int)
-  TileNotAvailable
+  OverviewNotAvailable
   UnreadableRowCount(count: Int)
   AllAccountsLoaded
   Sessions
   ApprovedClients
-  RelayIssueCounts(disconnected: Int, unanswered: Int)
+  DisconnectedRelayCount(count: Int)
+  UnansweredRelayCount(count: Int)
   AllRelaysConnected
   NoBunkerRelayShort
-  PluginsRunningOfTotal(running: Int, total: Int)
-  PluginIssueCounts(overloaded: Int, disabled: Int, unavailable: Int)
+  RunningOfTotal
+  OverloadedPluginCount(count: Int)
+  DisabledPluginCount(count: Int)
+  UnavailablePluginCount(count: Int)
   NoPluginsEnabledShort
   PluginsNotLoadedShort(count: Int)
   PendingConnections
@@ -493,33 +498,24 @@ fn english(message: Message) -> String {
     CopyClient -> "Copy client"
     Dashboard -> "Dashboard"
     Pending -> "Pending"
-    AwaitingDecision(seconds:) ->
-      "Awaiting your decision · refreshes every "
-      <> int.to_string(seconds)
-      <> " s"
+    OverviewLabel -> "Overview"
+    AwaitingDecision -> "Awaiting your decision"
+    SoonestExpiry(remaining:) -> "Soonest expires in " <> remaining
     PendingExpireAfterMinutes(minutes:) ->
       "Expire after " <> int.to_string(minutes) <> " minutes"
-    TileNotAvailable -> "Not available"
+    OverviewNotAvailable -> "Not available"
     UnreadableRowCount(count:) -> int.to_string(count) <> " unreadable rows"
     AllAccountsLoaded -> "All loaded"
     Sessions -> "Sessions"
     ApprovedClients -> "Approved clients"
-    RelayIssueCounts(disconnected:, unanswered:) ->
-      int.to_string(disconnected)
-      <> " disconnected · "
-      <> int.to_string(unanswered)
-      <> " unanswered"
+    DisconnectedRelayCount(count:) -> int.to_string(count) <> " disconnected"
+    UnansweredRelayCount(count:) -> int.to_string(count) <> " unanswered"
     AllRelaysConnected -> "All connected"
     NoBunkerRelayShort -> "No bunker relay"
-    PluginsRunningOfTotal(running:, total:) ->
-      int.to_string(running) <> " / " <> int.to_string(total) <> " running"
-    PluginIssueCounts(overloaded:, disabled:, unavailable:) ->
-      int.to_string(overloaded)
-      <> " overloaded · "
-      <> int.to_string(disabled)
-      <> " disabled · "
-      <> int.to_string(unavailable)
-      <> " unavailable"
+    RunningOfTotal -> "Running / total"
+    OverloadedPluginCount(count:) -> int.to_string(count) <> " overloaded"
+    DisabledPluginCount(count:) -> int.to_string(count) <> " disabled"
+    UnavailablePluginCount(count:) -> int.to_string(count) <> " unavailable"
     NoPluginsEnabledShort -> "No plugins enabled"
     PluginsNotLoadedShort(count:) -> int.to_string(count) <> " failed to load"
     PendingConnections -> "Pending connections"
@@ -821,30 +817,23 @@ fn japanese(message: Message) -> String {
     CopyClient -> "クライアントをコピー"
     Dashboard -> "ダッシュボード"
     Pending -> "承認待ち"
-    AwaitingDecision(seconds:) ->
-      "承認を待っています · " <> int.to_string(seconds) <> " 秒ごとに更新"
+    OverviewLabel -> "概要"
+    AwaitingDecision -> "承認を待っています"
+    SoonestExpiry(remaining:) -> "最短 " <> remaining <> " で失効"
     PendingExpireAfterMinutes(minutes:) -> int.to_string(minutes) <> " 分で失効します"
-    TileNotAvailable -> "取得できません"
+    OverviewNotAvailable -> "取得できません"
     UnreadableRowCount(count:) -> "読み込めない行 " <> int.to_string(count)
     AllAccountsLoaded -> "すべて読み込み済み"
     Sessions -> "セッション"
     ApprovedClients -> "承認済みのクライアント"
-    RelayIssueCounts(disconnected:, unanswered:) ->
-      "未接続 "
-      <> int.to_string(disconnected)
-      <> " · 応答なし "
-      <> int.to_string(unanswered)
+    DisconnectedRelayCount(count:) -> "未接続 " <> int.to_string(count)
+    UnansweredRelayCount(count:) -> "応答なし " <> int.to_string(count)
     AllRelaysConnected -> "すべて接続中"
     NoBunkerRelayShort -> "バンカー用が未登録"
-    PluginsRunningOfTotal(running:, total:) ->
-      int.to_string(running) <> " / " <> int.to_string(total) <> " 動作中"
-    PluginIssueCounts(overloaded:, disabled:, unavailable:) ->
-      "過負荷 "
-      <> int.to_string(overloaded)
-      <> " · 無効 "
-      <> int.to_string(disabled)
-      <> " · 応答なし "
-      <> int.to_string(unavailable)
+    RunningOfTotal -> "動作中 / 全件数"
+    OverloadedPluginCount(count:) -> "過負荷 " <> int.to_string(count)
+    DisabledPluginCount(count:) -> "無効 " <> int.to_string(count)
+    UnavailablePluginCount(count:) -> "応答なし " <> int.to_string(count)
     NoPluginsEnabledShort -> "有効なプラグインなし"
     PluginsNotLoadedShort(count:) -> "読み込み失敗 " <> int.to_string(count)
     PendingConnections -> "承認待ちの接続"
