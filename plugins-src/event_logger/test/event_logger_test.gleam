@@ -85,12 +85,15 @@ pub fn unknown_event_keys_are_ignored_test() {
   assert row.id == "a3"
 }
 
-/// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
-/// よい。
+/// 移行の文はすべて作る文なら `IF NOT EXISTS`、改名する文なら `IF EXISTS` 付きで、途中で
+/// 失敗した移行を頭から実行し直してよい。
 pub fn migration_statements_can_be_re_run_test() {
   let statements =
     list.flat_map(store.migrations, fn(migration) { migration.statements })
-  assert list.all(statements, string.contains(_, "IF NOT EXISTS"))
+  assert list.all(statements, fn(statement) {
+    string.contains(statement, "IF NOT EXISTS")
+    || string.contains(statement, "IF EXISTS")
+  })
 }
 
 /// `store.migrations` の版は 1 から欠番なく昇順に並ぶ。
@@ -121,7 +124,7 @@ pub fn a_database_newer_than_the_migrations_is_refused_test() {
     == Error(store.SchemaTooNew(found: 3, supported: 2))
 }
 
-/// `monitored_accounts` の行が 0 件なら絞らず、全アカウントが対象になる。
+/// `event_logger_monitored_accounts` の行が 0 件なら絞らず、全アカウントが対象になる。
 pub fn no_monitored_rows_mean_every_account_test() {
   assert store.monitored_from_rows([]) == store.AllAccounts
   assert store.is_monitored(store.AllAccounts, "anything")
@@ -1505,9 +1508,9 @@ fn first_cell_text(row: List(Dynamic)) -> String {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。スキーマの移行・挿入・
-/// 重複無視・jsonb としての読み戻し・インデックスの作成・NUL を含む行の拒否を
-/// 一巡して確かめる。
+/// ときだけ実行する。スキーマの移行・挿入・重複無視・jsonb としての読み戻し・
+/// インデックスの作成（接頭辞の付いた名前で、接頭辞の無い `events` は残らない）・NUL を
+/// 含む行の拒否を一巡して確かめる。
 ///
 /// 同じ DB に対して `gleam test` を並行実行することは想定していない
 /// （版の記録の挿入やテーブルの作成が競合しうる）。CI は専用の service を
@@ -1523,11 +1526,12 @@ fn round_trip(database_url: String) -> Nil {
   // 2 回続けて実行しても失敗しない。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
-  assert index_names(db)
+  assert index_names(db, "event_logger_events")
     == [
-      "events_kind", "events_pkey", "events_pubkey_created_at",
-      "events_received_at",
+      "event_logger_events_kind", "event_logger_events_pkey",
+      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
     ]
+  assert index_names(db, "events") == []
 
   let assert Ok(stored) = store.to_row(sample_event(random_id()))
   assert store.insert(db, stored) == Ok(1)
@@ -1553,8 +1557,8 @@ fn round_trip(database_url: String) -> Nil {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。版の記録より前に作られた
-/// テーブルが版 1 として取り込まれ、版が新しい DB は拒否されることを確かめる。
+/// ときだけ実行する。版の記録より前に作られたテーブルが版 1 として取り込まれて
+/// 版 4 で接頭辞の付いた名前に改まり、版が新しい DB は拒否されることを確かめる。
 pub fn postgres_schema_version_test() {
   use database_url <- with_test_database_url
   schema_version_round_trip(database_url)
@@ -1562,7 +1566,7 @@ pub fn postgres_schema_version_test() {
 
 /// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
 /// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外（テーブルと
-/// インデックスの直接実行、`ensure_schema`、版 4 の挿入、版の読み込み）は専用
+/// インデックスの直接実行、`ensure_schema`、版 5 の挿入、版の読み込み）は専用
 /// スキーマへ向けた接続で実行する。
 fn schema_version_round_trip(database_url: String) -> Nil {
   let schema = "event_logger_schema_" <> random_id()
@@ -1578,21 +1582,27 @@ fn schema_version_round_trip(database_url: String) -> Nil {
   // 移行の後、もう一度実行しても版は増えない（移行を二重に適用しない）。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
-  assert recorded_versions(db) == [1, 2, 3]
+  assert recorded_versions(db) == [1, 2, 3, 4]
+  assert index_names(db, "event_logger_events")
+    == [
+      "event_logger_events_kind", "event_logger_events_pkey",
+      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
+    ]
+  assert index_names(db, "events") == []
 
   // 記録された版が新しい DB は拒否する。
   run_statement(
     db,
-    "INSERT INTO event_logger_schema_version (version) VALUES (4)",
+    "INSERT INTO event_logger_schema_version (version) VALUES (5)",
   )
   assert store.ensure_schema(db)
-    == Error(store.SchemaTooNew(found: 4, supported: 3))
+    == Error(store.SchemaTooNew(found: 5, supported: 4))
 
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。`ensure_schema` の後に `monitored_accounts` があり、
+/// ときだけ実行する。`ensure_schema` の後に `event_logger_monitored_accounts` があり、
 /// `replace_monitored` で書いた pubkey が `load_monitored` で読め、
 /// `replace_monitored(db, [])` で 0 件に戻ることを確かめる。
 pub fn postgres_monitored_accounts_test() {
@@ -1659,6 +1669,56 @@ fn recent_events_round_trip(database_url: String) -> Nil {
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。版 3 まで適用した DB に入れた行が、版 4 の改名の後も
+/// `recent_events` と `load_monitored` で読め、テーブルとインデックスが接頭辞の付いた
+/// 名前になり、接頭辞の無い名前が残らないことを確かめる。
+pub fn postgres_version_3_rows_survive_the_prefixing_test() {
+  use database_url <- with_test_database_url
+  prefixing_round_trip(database_url)
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。版 3 の DB は
+/// `store.apply_migrations` に `store.migrations` の先頭 3 件を渡して作り、行は
+/// 接頭辞の無い名前のテーブルへ SQL で直接入れる。
+fn prefixing_round_trip(database_url: String) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  let db = connect(database_url, Some(schema))
+
+  let assert Ok(Nil) =
+    store.apply_migrations(db, list.take(store.migrations, 3))
+  run_statement(
+    db,
+    "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+VALUES ('old1', 'pk1', 1700000000, 1, '[]', 'kept', 'sig1')",
+  )
+  run_statement(db, "INSERT INTO monitored_accounts (pubkey) VALUES ('pk1')")
+
+  // 改名は冪等なので、2 回続けて実行しても失敗しない。
+  let assert Ok(Nil) = store.ensure_schema(db)
+  let assert Ok(Nil) = store.ensure_schema(db)
+  assert recorded_versions(db) == [1, 2, 3, 4]
+
+  let assert Ok(rows) = store.recent_events(db, store.recent_limit)
+  assert list.map(rows, fn(row) { #(row.id, row.content) })
+    == [#("old1", "kept")]
+  assert store.load_monitored(db) == Ok(["pk1"])
+
+  assert index_names(db, "event_logger_events")
+    == [
+      "event_logger_events_kind", "event_logger_events_pkey",
+      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
+    ]
+  assert index_names(db, "event_logger_monitored_accounts")
+    == ["event_logger_monitored_accounts_pkey"]
+  assert index_names(db, "events") == []
+  assert index_names(db, "monitored_accounts") == []
+
+  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
 /// 結果を読まない文を 1 つ実行する。
 fn run_statement(db: pog.Connection, statement: String) -> Nil {
   let assert Ok(_returned) =
@@ -1701,10 +1761,10 @@ fn random_id() -> String {
   int.to_base16(int.random(1_000_000_000))
 }
 
-/// `events` に張られているインデックスの名前（主キーを含む）。現在の
+/// `table` に張られているインデックスの名前（主キーを含む）。現在の
 /// `search_path` が解決するスキーマに絞る。専用のスキーマが後片付けの失敗で
 /// 残っていても、他のスキーマの同名のインデックスを拾わないためである。
-fn index_names(db: pog.Connection) -> List(String) {
+fn index_names(db: pog.Connection, table: String) -> List(String) {
   let decoder = {
     use name <- decode.field(0, decode.string)
     decode.success(name)
@@ -1712,9 +1772,10 @@ fn index_names(db: pog.Connection) -> List(String) {
   let assert Ok(returned) =
     pog.query(
       "SELECT indexname FROM pg_indexes
-WHERE tablename = 'events' AND schemaname = ANY(current_schemas(false))
+WHERE tablename = $1 AND schemaname = ANY(current_schemas(false))
 ORDER BY indexname",
     )
+    |> pog.parameter(pog.text(table))
     |> pog.returning(decoder)
     |> pog.execute(on: db)
   returned.rows
@@ -1723,7 +1784,7 @@ ORDER BY indexname",
 /// 指定した id で保存されている行数。
 fn count_rows(db: pog.Connection, id: String) -> Int {
   let assert Ok(returned) =
-    pog.query("SELECT id FROM events WHERE id = $1")
+    pog.query("SELECT id FROM event_logger_events WHERE id = $1")
     |> pog.parameter(pog.text(id))
     |> pog.execute(on: db)
   returned.count
@@ -1736,7 +1797,7 @@ fn first_tag_name(db: pog.Connection, id: String) -> Result(String, Nil) {
     decode.success(name)
   }
   let assert Ok(returned) =
-    pog.query("SELECT tags->0->>0 FROM events WHERE id = $1")
+    pog.query("SELECT tags->0->>0 FROM event_logger_events WHERE id = $1")
     |> pog.parameter(pog.text(id))
     |> pog.returning(decoder)
     |> pog.execute(on: db)
@@ -1749,7 +1810,7 @@ fn first_tag_name(db: pog.Connection, id: String) -> Result(String, Nil) {
 /// テストが入れた行を消す。
 fn delete_row(db: pog.Connection, id: String) -> Nil {
   let assert Ok(_deleted) =
-    pog.query("DELETE FROM events WHERE id = $1")
+    pog.query("DELETE FROM event_logger_events WHERE id = $1")
     |> pog.parameter(pog.text(id))
     |> pog.execute(on: db)
   Nil
