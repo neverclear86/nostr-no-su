@@ -1,7 +1,8 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消しと
-//// 権限の編集、クライアントの接続、プラグインの再有効化とページ（フォームの値の改行の正規化を含む）、承認と拒否、リレーの
-//// 追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
+//// 権限の編集、クライアントの接続、プラグインの再有効化とページ（フォームの値の
+//// 改行の正規化を含む）、承認と拒否、リレーの追加・編集・削除、静的ファイルと
+//// favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/dynamic
 import gleam/erlang/process
@@ -547,10 +548,13 @@ pub fn plugin_page_action_receives_values_with_lf_newlines_test() {
   assert !string.contains(body, "first\r\nsecond")
 }
 
-/// CRLF と単独の CR は LF になり、LF と改行の無い値はそのまま残る。
+/// CRLF と単独の CR は LF になり、LF と改行の無い値はそのまま残る。CRLF の直前の
+/// CR も LF になる。
 pub fn normalize_newlines_test() {
   assert admin.normalize_newlines("a\r\nb\r\n") == "a\nb\n"
   assert admin.normalize_newlines("a\rb\r") == "a\nb\n"
+  assert admin.normalize_newlines("a\r\r\nb") == "a\n\nb"
+  assert admin.normalize_newlines("x\r\r\r\ny") == "x\n\n\ny"
   assert admin.normalize_newlines("a\nb\n") == "a\nb\n"
   assert admin.normalize_newlines("ab") == "ab"
 }

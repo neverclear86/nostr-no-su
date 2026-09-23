@@ -919,9 +919,13 @@ fn plugin_page_post(
 /// ブラウザーは `textarea` の改行を CRLF で送るので、プラグインが改行の違いを
 /// 扱わずに済むようにする。
 pub fn normalize_newlines(value: String) -> String {
+  // `string.replace` は書記素の単位で一致を取るので、CRLF を先に LF へ置き換えると
+  // 直前の CR と新しい LF が 1 つの書記素 CRLF になり、残りの CR が置き換わらない。
+  // CRLF で分けてから各片の CR を置き換え、LF で結び直す
   value
-  |> string.replace("\r\n", "\n")
-  |> string.replace("\r", "\n")
+  |> string.split("\r\n")
+  |> list.map(string.replace(_, "\r", "\n"))
+  |> string.join("\n")
 }
 
 /// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは
