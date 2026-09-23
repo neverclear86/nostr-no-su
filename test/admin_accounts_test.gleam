@@ -168,8 +168,9 @@ pub fn import_rejects_a_registered_account_test() {
   assert string.contains(body, "different master key")
   assert string.contains(
     body,
-    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
   )
+  assert string.contains(body, "</svg>Back to dashboard</a>")
   assert !string.contains(body, signer_nsec)
 }
 
@@ -877,8 +878,9 @@ pub fn account_change_failures_map_to_status_codes_test() {
   assert string.contains(body, reason)
   assert string.contains(
     body,
-    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
   )
+  assert string.contains(body, "</svg>Back to dashboard</a>")
 }
 
 /// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 で、

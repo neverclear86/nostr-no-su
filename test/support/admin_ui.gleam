@@ -758,6 +758,16 @@ pub fn components(language: i18n.Language) -> List(String) {
         ),
       ),
     ],
+    list.flat_map([view.LineHint("hint"), view.FoldedHint("hint")], fn(hint) {
+      [
+        element.to_string(
+          view.hinted_input(language, "caption", "hint-id", hint, []),
+        ),
+        element.to_string(
+          view.hinted_textarea(language, "caption", "hint-id", hint, "", []),
+        ),
+      ]
+    }),
     [
       element.to_string(
         view.details_panel("summary", [

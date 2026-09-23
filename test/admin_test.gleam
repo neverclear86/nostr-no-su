@@ -144,8 +144,9 @@ pub fn revoking_an_unknown_session_is_not_found_test() {
   assert string.contains(body, session_not_approved)
   assert string.contains(
     body,
-    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
   )
+  assert string.contains(body, "</svg>Back to dashboard</a>")
   assert !string.contains(body, unknown_client)
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: unknown_client))
@@ -246,19 +247,19 @@ pub fn empty_session_permissions_are_rejected_test() {
   assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
   assert !string.contains(
     body,
-    "checked class=\"checkbox border-base-content/60\" name=\""
+    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
       <> dashboard.sign_event_field
       <> "\"",
   )
   assert !string.contains(
     body,
-    "checked class=\"checkbox border-base-content/60\" name=\""
+    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
       <> dashboard.nip44_encrypt_field
       <> "\"",
   )
   assert !string.contains(
     body,
-    "checked class=\"checkbox border-base-content/60\" name=\""
+    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
       <> dashboard.nip44_decrypt_field
       <> "\"",
   )
@@ -273,7 +274,7 @@ pub fn session_permissions_defaults_to_all_permissions_checked_test() {
   let body = simulate.read_body(response)
   assert string.contains(
     body,
-    "checked class=\"checkbox border-base-content/60\" name=\""
+    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
       <> dashboard.sign_event_field
       <> "\"",
   )
@@ -390,8 +391,9 @@ pub fn reenabling_an_unknown_plugin_is_not_found_test() {
   assert string.contains(body, plugin_not_found)
   assert string.contains(
     body,
-    "<a class=\"link\" href=\"/\">Back to dashboard</a>",
+    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
   )
+  assert string.contains(body, "</svg>Back to dashboard</a>")
 }
 
 /// ランナーが応答しない再有効化は 503 で、理由とダッシュボードへのリンクを出す。
@@ -865,11 +867,11 @@ pub fn new_relay_page_checks_only_bunker_test() {
   assert string.contains(body, "aria-describedby=\"relay-url-hint\"")
   assert string.contains(
     body,
-    "<input class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+    "<input class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
   )
   assert string.contains(
     body,
-    "<input checked class=\"checkbox border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
+    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
   )
 }
 
@@ -907,7 +909,7 @@ pub fn add_relay_rejects_an_invalid_url_test() {
   assert string.contains(body, "value=\"" <> invalid_url <> "\"")
   assert string.contains(
     body,
-    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
   )
   assert process.receive(reports, 100) == Error(Nil)
 }
@@ -1002,11 +1004,11 @@ pub fn edit_relay_page_checks_the_saved_roles_test() {
   )
   assert string.contains(
     body,
-    "<input checked class=\"checkbox border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
+    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
   )
   assert !string.contains(
     body,
-    "<input checked class=\"checkbox border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
+    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"bunker\" type=\"checkbox\" value=\"on\">",
   )
 }
 

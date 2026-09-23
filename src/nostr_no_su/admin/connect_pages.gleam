@@ -14,7 +14,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 
-/// URI の案内の `id`。URI の欄はこのページに 1 つだけなので固定の値にする。
+/// URI の補足の `id`。URI の欄はこのページに 1 つだけなので固定の値にする。
 const nostrconnect_uri_hint_id = "nostrconnect-uri-hint"
 
 /// クライアントの接続のページ。アカウントの一覧を得られたときだけフォームを出し、
@@ -86,9 +86,10 @@ fn card_body(
 fn uri_field(language: Language, uri: String) -> Element(msg) {
   let text = i18n.text(language, _)
   view.hinted_textarea(
+    language,
     text(i18n.NostrconnectUri),
     nostrconnect_uri_hint_id,
-    text(i18n.NostrconnectUriHint),
+    view.LineHint(text(i18n.NostrconnectUriHint)),
     uri,
     [
       attribute.name(dashboard.nostrconnect_uri_field),

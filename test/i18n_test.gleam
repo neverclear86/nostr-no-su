@@ -154,7 +154,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Copied -> Some(i18n.SelectedPressCtrlC)
     i18n.SelectedPressCtrlC -> Some(i18n.CopyNpub)
     i18n.CopyNpub -> Some(i18n.CopyClient)
-    i18n.CopyClient -> Some(i18n.Dashboard)
+    i18n.CopyClient -> Some(i18n.ShowFieldHint)
+    i18n.ShowFieldHint -> Some(i18n.Dashboard)
     i18n.Dashboard -> Some(i18n.Pending)
     i18n.Pending -> Some(i18n.OverviewLabel)
     i18n.OverviewLabel -> Some(i18n.AwaitingDecision)
@@ -418,12 +419,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 252 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 253 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 252
+  assert list.length(messages) == 253
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

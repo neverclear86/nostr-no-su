@@ -19,7 +19,7 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
 
-/// kind の案内の `id`。kind の欄はこのページに 1 つだけなので固定の値にする。
+/// kind の補足の `id`。kind の欄はこのページに 1 つだけなので固定の値にする。
 const kinds_hint_id = "session-permissions-kinds-hint"
 
 /// 権限の編集フォームの欄の状態。`kinds` と `other` は欄に出す文字列そのままで、
@@ -190,9 +190,10 @@ fn form_fields(
       ),
     ]),
     view.hinted_input(
+      language,
       text(i18n.AllowedKinds),
       kinds_hint_id,
-      text(i18n.AllowedKindsHint),
+      view.LineHint(text(i18n.AllowedKindsHint)),
       [
         attribute.name(dashboard.perms_kinds_field),
         attribute.inputmode("numeric"),
