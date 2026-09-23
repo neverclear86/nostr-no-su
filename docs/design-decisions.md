@@ -103,7 +103,7 @@ v0.1 の前に、秘密（アカウントの秘密鍵、接続 secret、マス�
 
 ### 管理 UI の応答ヘッダー
 
-確認した。認証済みの応答には `cache-control: no-store`、`x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` が付いており、HTML にインラインの script と style は無い（ヘッダーの値と、`referrer-policy` を `no-referrer` にしない理由は [管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」にある）。プラグインのページの GET の応答だけ、記述の `image` ブロックのために `img-src` を `data: https: http:` に広げている（[プラグイン API](plugin-api.md) の第 13.4 節）。
+確認した。認証済みの応答には `cache-control: no-store`、`x-frame-options: DENY`、`content-security-policy`、`x-content-type-options: nosniff`、`referrer-policy: same-origin` が付いており、HTML にインラインの script と style は無い（ヘッダーの値と、`referrer-policy` を `no-referrer` にしない理由は [管理 UI](admin-ui.md) の「状態を変えるリクエストと枠への埋め込み」にある）。`img-src` はアカウントのアイコンのために `data: https:` にしており、プラグインのページの GET の応答だけ、記述の `image` ブロックのために `http:` も足している（[プラグイン API](plugin-api.md) の第 13.4 節）。
 
 ### NIP-46 の入力の検証
 
@@ -195,7 +195,7 @@ mist（HTTP サーバー）は監視・バンカー・保存のどれにも依�
 
 ### 管理 UI はサーバー側で描画する
 
-ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を URL としてそのまま解釈させる経路は、パスの定義から作る `href`、`action`、`src` に限る。lustre は URL を検査しないので、これらにはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す。インラインのスクリプトとイベント属性は書かず、CSP でも実行させない）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS は `priv/static/admin.js` のコピーのボタンの処理（要素の `data-action` の名前で処理を選ぶ）と、UTC で描いた `<time datetime>` を閲覧者のローカルの時刻に直す処理だけで、フォームの送信と画面の遷移は JS なしで動く
+ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を URL としてそのまま解釈させる経路は、パスの定義から作る `href`、`action`、`src` に限る。lustre は URL を検査しないので、これらにはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す。例外は `<img>` の `src` で、アカウントのアイコン（`https` だけ）とプラグインのページの `image` ブロック（`http` / `https`）には、scheme を検査した遠隔の URL を渡す。インラインのスクリプトとイベント属性は書かず、CSP でも実行させない）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS は `priv/static/admin.js` のコピーのボタンの処理（要素の `data-action` の名前で処理を選ぶ）と、UTC で描いた `<time datetime>` を閲覧者のローカルの時刻に直す処理と、読み込めたアカウントのアイコン（`img[data-avatar]`）に `data-loaded` を付けて見せる処理だけで、フォームの送信と画面の遷移は JS なしで動く
 
 ### 管理 UI の CSS はビルドしてリポジトリに含め、自前で配信する
 
