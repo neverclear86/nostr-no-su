@@ -837,6 +837,7 @@ pub fn method_not_allowed_pages_test() {
   let post_only_paths = [
     "/language", "/theme", "/deny/tok", "/sessions/revoke", "/plugins/reenable",
     "/accounts/generate", "/accounts/import", "/accounts/register-generated",
+    "/sessions/connect/confirm",
   ]
   let both_methods_paths = [
     "/approve/tok",
@@ -1354,12 +1355,73 @@ pub fn connect_client_rejects_relays_it_must_not_connect_to_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 正しい URI の POST は Context の `connect_client` を呼び、303 でダッシュボードへ
-/// 戻る。渡す値は URI のクライアント公開鍵と、フォームで選んだ署名者。
-pub fn connect_client_opens_the_session_test() {
+/// 正しい URI の `POST /sessions/connect` は確認のページを 200 で返し、URI のリレーを並べて
+/// 確認のパスへ送るフォームを出す。Context の `connect_client` は呼ばない。
+pub fn connect_client_reviews_before_connecting_test() {
   let reports = process.new_subject()
   let response =
     post_form(reporting_context(reports), "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", signer),
+    ])
+  assert response.status == 200
+  let body = simulate.read_body(response)
+  assert string.contains(body, "action=\"/sessions/connect/confirm\"")
+  assert string.contains(body, ">wss://relay.example</li>")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 確認のパスでも URI と署名者をもう一度確かめる。解釈できない URI と一覧に無い署名者は
+/// どちらも 400 で、理由と 1 段目のフォームを出し、Context の `connect_client` を呼ばない。
+pub fn connect_confirm_rechecks_the_input_test() {
+  let reports = process.new_subject()
+  let cases = [
+    #([#("uri", "not-a-uri"), #("signer", signer)], i18n.NotNostrconnectUri),
+    #(
+      [#("uri", connect_uri), #("signer", unknown_client)],
+      i18n.SigningAccountNotFound,
+    ),
+  ]
+  use #(fields, message) <- list.each(cases)
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect/confirm", fields)
+  assert response.status == 400
+  let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, message))
+  assert string.contains(body, "action=\"/sessions/connect\"")
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// 確認のページの名乗る名前は制御文字を除き、ラベルの上限を超えるぶんを切って末尾を `…` に
+/// する。除いた後に空なら名前の行を出さない。
+pub fn connect_client_cleans_the_client_name_test() {
+  let long_name = "a%07" <> string.repeat("b", 100)
+  let response =
+    post_form(context(), "/sessions/connect", [
+      #("uri", connect_uri <> "&name=" <> long_name),
+      #("signer", signer),
+    ])
+  assert string.contains(
+    simulate.read_body(response),
+    "<dd class=\"break-words\">a" <> string.repeat("b", 99) <> "…</dd>",
+  )
+  let response =
+    post_form(context(), "/sessions/connect", [
+      #("uri", connect_uri <> "&name=%07"),
+      #("signer", signer),
+    ])
+  assert !string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, i18n.ClientName),
+  )
+}
+
+/// 確認のページの「接続する」は Context の `connect_client` を呼び、303 でダッシュボードへ
+/// 戻る。渡す値は URI のクライアント公開鍵と、フォームで選んだ署名者。
+pub fn connect_confirm_opens_the_session_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect/confirm", [
       #("uri", connect_uri),
       #("signer", signer),
     ])
@@ -1371,7 +1433,7 @@ pub fn connect_client_opens_the_session_test() {
   assert sent == signer
 }
 
-/// `connect_client` が受け付けなかった、または反映されていない失敗は、フォームを
+/// `connect_client` が受け付けなかった、または反映されていない失敗は、確認のページを
 /// 描き直す状態コードになる。`RelayNotRegistered` はリレーの変更の失敗と同じ
 /// `relay_failure_response` に渡る。
 pub fn connect_client_redraws_on_failure_test() {
@@ -1385,14 +1447,14 @@ pub fn connect_client_redraws_on_failure_test() {
       Error(failure)
     })
   let response =
-    post_form(failing, "/sessions/connect", [
+    post_form(failing, "/sessions/connect/confirm", [
       #("uri", connect_uri),
       #("signer", signer),
     ])
   assert response.status == status
   assert string.contains(
     simulate.read_body(response),
-    "name=\"" <> dashboard.nostrconnect_uri_field <> "\"",
+    "action=\"/sessions/connect/confirm\"",
   )
 }
 
@@ -1408,7 +1470,7 @@ pub fn connect_client_reports_an_unconfirmed_change_test() {
       )
     })
   let response =
-    post_form(failing, "/sessions/connect", [
+    post_form(failing, "/sessions/connect/confirm", [
       #("uri", connect_uri),
       #("signer", signer),
     ])

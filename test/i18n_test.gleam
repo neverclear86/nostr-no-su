@@ -126,6 +126,11 @@ pub fn messages_with_values_follow_each_language_test() {
       "the relay URL ws://10.0.0.1 in the uri points to an internal address",
       "URI のリレー URL（ws://10.0.0.1）は内部のアドレスを指しているので使えません。",
     ),
+    #(
+      i18n.ConnectWaitHint(seconds: 15),
+      "Connecting can take up to 15 seconds.",
+      "接続できるまで最大 15 秒待ちます。",
+    ),
   ]
   use #(message, english, japanese) <- list.each(cases)
   assert i18n.text(i18n.English, message) == english
@@ -319,7 +324,16 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NostrconnectUri -> Some(i18n.NostrconnectUriHint)
     i18n.NostrconnectUriHint -> Some(i18n.SigningAccount)
     i18n.SigningAccount -> Some(i18n.Connect)
-    i18n.Connect -> Some(i18n.NoAccountsForConnect)
+    i18n.Connect -> Some(i18n.ReviewConnection)
+    i18n.ReviewConnection -> Some(i18n.ConfirmConnection)
+    i18n.ConfirmConnection -> Some(i18n.ConnectConfirmDescription)
+    i18n.ConnectConfirmDescription -> Some(i18n.ClientName)
+    i18n.ClientName -> Some(i18n.UriRelays)
+    i18n.UriRelays -> Some(i18n.ConnectExplanation)
+    i18n.ConnectExplanation -> Some(i18n.ConnectRelaysRegistered)
+    i18n.ConnectRelaysRegistered -> Some(i18n.ConnectWaitHint(15))
+    i18n.ConnectWaitHint(_) -> Some(i18n.PasteAnotherUri)
+    i18n.PasteAnotherUri -> Some(i18n.NoAccountsForConnect)
     i18n.NoAccountsForConnect -> Some(i18n.SigningAccountNotFound)
     i18n.SigningAccountNotFound -> Some(i18n.NostrconnectRelayNotConnected)
     i18n.NostrconnectRelayNotConnected -> Some(i18n.NotNostrconnectUri)
@@ -436,12 +450,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 258 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 267 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 258
+  assert list.length(messages) == 267
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

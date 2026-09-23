@@ -379,6 +379,15 @@ pub type Message {
   NostrconnectUriHint
   SigningAccount
   Connect
+  ReviewConnection
+  ConfirmConnection
+  ConnectConfirmDescription
+  ClientName
+  UriRelays
+  ConnectExplanation
+  ConnectRelaysRegistered
+  ConnectWaitHint(seconds: Int)
+  PasteAnotherUri
   NoAccountsForConnect
   SigningAccountNotFound
   NostrconnectRelayNotConnected
@@ -706,11 +715,24 @@ fn english(message: Message) -> String {
       "This relay is not registered. It may have been deleted already; check the dashboard."
     ConnectClient -> "Connect a client"
     ConnectClientDescription ->
-      "Paste the URI shown by the client. Its relays are added for the bunker."
+      "Paste the nostrconnect:// URI shown by the client and choose the account that signs for it. You review the relays and permissions on the next page before connecting."
     NostrconnectUri -> "nostrconnect:// URI"
     NostrconnectUriHint -> "Starts with nostrconnect://."
     SigningAccount -> "Signing account"
     Connect -> "Connect"
+    ReviewConnection -> "Review"
+    ConfirmConnection -> "Review the connection"
+    ConnectConfirmDescription ->
+      "The client will be connected as follows. Check the relays and permissions, then press Connect."
+    ClientName -> "Claimed name"
+    UriRelays -> "Relays in the URI"
+    ConnectExplanation ->
+      "Connecting makes the bunker connect to the relays above and send its responses to this client there. The client can then request signing and encryption within the permissions above."
+    ConnectRelaysRegistered ->
+      "The relays above are registered for the bunker and from then on receive the responses to every client and the subscriptions and AUTH of every account."
+    ConnectWaitHint(seconds:) ->
+      "Connecting can take up to " <> int.to_string(seconds) <> " seconds."
+    PasteAnotherUri -> "Paste another URI"
     NoAccountsForConnect -> "Register an account before connecting a client."
     SigningAccountNotFound -> "the signing account is not registered"
     NostrconnectRelayNotConnected ->
@@ -1025,11 +1047,24 @@ fn japanese(message: Message) -> String {
     RelaysNotAvailable -> "リレーを利用できません"
     RelayNotFound -> "このリレーは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
     ConnectClient -> "クライアントを接続"
-    ConnectClientDescription -> "クライアントが出した URI を貼り付けます。URI のリレーはバンカーの用途で登録します。"
+    ConnectClientDescription ->
+      "クライアントが出した nostrconnect:// URI を貼り付け、署名するアカウントを選んでください。次の画面で、URI のリレーと権限を確かめてから接続します。"
     NostrconnectUri -> "nostrconnect:// の URI"
     NostrconnectUriHint -> "nostrconnect:// で始まる URI。"
     SigningAccount -> "署名するアカウント"
-    Connect -> "接続"
+    Connect -> "接続する"
+    ReviewConnection -> "確認へ進む"
+    ConfirmConnection -> "接続の内容を確認"
+    ConnectConfirmDescription -> "次の内容で接続します。リレーと権限を確かめてから「接続する」を押してください。"
+    ClientName -> "名乗る名前"
+    UriRelays -> "URI のリレー"
+    ConnectExplanation ->
+      "接続すると、バンカーは上のリレーに接続し、このクライアントへの応答をそこへ出します。クライアントは上の権限の範囲で署名と暗号化を依頼できます。"
+    ConnectRelaysRegistered ->
+      "上のリレーはバンカーの用途で登録され、以後すべてのクライアントへの応答と、全アカウントの購読と AUTH が届きます。"
+    ConnectWaitHint(seconds:) ->
+      "接続できるまで最大 " <> int.to_string(seconds) <> " 秒待ちます。"
+    PasteAnotherUri -> "URI を貼り直す"
     NoAccountsForConnect -> "クライアントを接続する前に、アカウントを登録してください。"
     SigningAccountNotFound -> "署名するアカウントが登録されていません。"
     NostrconnectRelayNotConnected -> "URI のリレーのどれにも接続できませんでした。時間をおいて試してください。"

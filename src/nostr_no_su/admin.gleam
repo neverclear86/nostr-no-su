@@ -420,6 +420,8 @@ fn route(
       revoke_session(context, request, language, theme)
     segments if segments == dashboard.connect_segments ->
       connect_client(context, request, language, theme)
+    segments if segments == dashboard.connect_confirm_segments ->
+      confirm_connection(context, request, language, theme)
     segments if segments == dashboard.reenable_plugin_segments ->
       reenable_plugin(context, request, language, theme)
     segments if segments == dashboard.reload_accounts_segments ->
@@ -1301,9 +1303,8 @@ fn perms_string(
 }
 
 /// クライアントの接続ページと、その送信。GET はフォームを 200 で出す（アカウントの
-/// 一覧を引けなくてもカードの中に理由を出す）。POST は一覧を引けなければ同じページを
-/// 503 で返し、引けたら URI を解釈し、選ばれた署名者が一覧にあることを確かめてから
-/// セッションを開く。
+/// 一覧を引けなくてもカードの中に理由を出す）。POST は入力を `with_connect_input` で確かめ、
+/// 通れば確認のページを 200 で返す。この時点ではセッションもリレーの接続も作らない。
 fn connect_client(
   context: Context,
   request: Request,
@@ -1317,56 +1318,143 @@ fn connect_client(
       |> wisp.html_response(200)
     }
     http.Post -> {
-      use form <- wisp.require_form(request)
-      let raw_uri = form_value(form, dashboard.nostrconnect_uri_field)
-      let signer = form_value(form, dashboard.signer_field)
-      let echoed_uri = without_control_characters(raw_uri)
-      case context.accounts() {
-        Error(reason) ->
-          connect_pages.connect_client_page(
-            language,
-            theme,
-            Error(i18n.Untranslated(reason)),
-            echoed_uri,
-            signer,
-            None,
-          )
-          |> wisp.html_response(503)
-        Ok(rows) -> {
-          let redraw = fn(reason) {
-            connect_pages.connect_client_page(
-              language,
-              theme,
-              Ok(rows),
-              echoed_uri,
-              signer,
-              Some(reason),
-            )
-          }
-          case nostrconnect.parse(string.trim(raw_uri)) {
-            Error(error) ->
-              redraw(i18n.Translated(parse_message(error)))
-              |> wisp.html_response(400)
-            Ok(connect_request) ->
-              case list.any(rows, fn(row) { row.signer == signer }) {
-                False ->
-                  redraw(i18n.Translated(i18n.SigningAccountNotFound))
-                  |> wisp.html_response(400)
-                True ->
-                  connect_failure_response(
-                    language,
-                    theme,
-                    context.connect_client(connect_request, signer),
-                    signer,
-                    connect_request.client,
-                    redraw,
-                  )
-              }
-          }
-        }
-      }
+      use rows, review, _connect_request <- with_connect_input(
+        context,
+        request,
+        language,
+        theme,
+      )
+      connect_pages.connect_review_page(language, theme, rows, review, None)
+      |> wisp.html_response(200)
     }
     _ -> method_not_allowed(language, theme, [http.Get, http.Post])
+  }
+}
+
+/// 確認のページの「接続する」。隠し欄で送り直された URI と署名者を `with_connect_input` で
+/// もう一度確かめてからセッションを開く。接続の段の失敗は確認のページを描き直して理由を出す。
+fn confirm_connection(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
+  use <- require_method(request, http.Post, language, theme)
+  use rows, review, connect_request <- with_connect_input(
+    context,
+    request,
+    language,
+    theme,
+  )
+  connect_failure_response(
+    language,
+    theme,
+    context.connect_client(connect_request, review.signer),
+    review.signer,
+    connect_request.client,
+    fn(reason) {
+      connect_pages.connect_review_page(
+        language,
+        theme,
+        rows,
+        review,
+        Some(reason),
+      )
+    },
+  )
+}
+
+/// 接続の 2 つの POST が共有する入力の検査。一覧を引けなければ 1 段目のページを 503 で、URI を
+/// 解釈できないか署名者が一覧に無ければ理由を付けて 400 で返す（送られた URI と署名者を戻す）。
+/// 通れば、一覧と確認のページに出す内容と解釈した接続を `next` に渡す。
+fn with_connect_input(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+  next: fn(
+    List(dashboard.AccountRow),
+    connect_pages.ConnectReview,
+    nostrconnect.ConnectRequest,
+  ) -> Response,
+) -> Response {
+  use form <- wisp.require_form(request)
+  let raw_uri = form_value(form, dashboard.nostrconnect_uri_field)
+  let signer = form_value(form, dashboard.signer_field)
+  let echoed_uri = without_control_characters(raw_uri)
+  case context.accounts() {
+    Error(reason) ->
+      connect_pages.connect_client_page(
+        language,
+        theme,
+        Error(i18n.Untranslated(reason)),
+        echoed_uri,
+        signer,
+        None,
+      )
+      |> wisp.html_response(503)
+    Ok(rows) -> {
+      let redraw = fn(message) {
+        connect_pages.connect_client_page(
+          language,
+          theme,
+          Ok(rows),
+          echoed_uri,
+          signer,
+          Some(i18n.Translated(message)),
+        )
+        |> wisp.html_response(400)
+      }
+      let uri = string.trim(raw_uri)
+      case nostrconnect.parse(uri) {
+        Error(error) -> redraw(parse_message(error))
+        Ok(connect_request) ->
+          case list.any(rows, fn(row) { row.signer == signer }) {
+            False -> redraw(i18n.SigningAccountNotFound)
+            True ->
+              next(
+                rows,
+                connect_review(connect_request, uri, signer),
+                connect_request,
+              )
+          }
+      }
+    }
+  }
+}
+
+/// 確認のページに出す内容。名乗る名前は `client_display_name` で整える。
+fn connect_review(
+  request: nostrconnect.ConnectRequest,
+  uri: String,
+  signer: String,
+) -> connect_pages.ConnectReview {
+  connect_pages.ConnectReview(
+    uri:,
+    signer:,
+    client: request.client,
+    client_name: option.then(request.name, client_display_name),
+    perms: request.perms,
+    relays: request.relays,
+  )
+}
+
+/// クライアントが URI の `name` で名乗る名前の表示。制御文字を除き、ラベルの上限
+/// （`dashboard.max_label_code_points`）の符号位置を超えるぶんは切って末尾に `…` を付ける。
+/// 除いた後に空なら出さない。
+fn client_display_name(name: String) -> Option(String) {
+  let code_points = string.to_utf_codepoints(without_control_characters(name))
+  case list.length(code_points) {
+    0 -> None
+    length if length > dashboard.max_label_code_points ->
+      Some(
+        string.from_utf_codepoints(list.take(
+          code_points,
+          dashboard.max_label_code_points,
+        ))
+        <> "…",
+      )
+    _ -> Some(string.from_utf_codepoints(code_points))
   }
 }
 
@@ -1389,7 +1477,7 @@ fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
 
 /// クライアントの接続の結果。成功ならログを 1 行出し、ダッシュボードへ 303 で戻す。
 /// 失敗はリレーの登録の失敗を `relay_failure_response` に渡し、それ以外は状態コードごとに
-/// フォームを描き直すか「変更を確認できませんでした」の通知ページにする。
+/// 確認のページを描き直すか「変更を確認できませんでした」の通知ページにする。
 fn connect_failure_response(
   language: Language,
   theme: view.Theme,
@@ -1673,7 +1761,8 @@ fn parse_label(raw: String) -> Result(String, i18n.Message) {
 
 /// 入力の誤りで戻したフォームの欄に入れる値を作る。制御文字は欄で見えず、残すと同じに
 /// 見える欄を送り直して同じ 400 を繰り返すので除く。前後の空白は利用者が打った値として
-/// 残す（サーバーが trim するので変える必要が無い）。
+/// 残す（サーバーが trim するので変える必要が無い）。`client_display_name` も、クライアントの
+/// 名乗る名前から見えない文字を除くのに使う。
 fn without_control_characters(raw: String) -> String {
   string.to_utf_codepoints(raw)
   |> list.filter(fn(code_point) { !is_control_character(code_point) })

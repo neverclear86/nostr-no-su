@@ -18,17 +18,17 @@ pub fn japanese_pages_have_no_english_words_test() {
 /// 日本語のページでも英字のまま出す語。大文字小文字は区別する。`-` と `_` は連なりを
 /// 区切るので、`Nostr-no-Su` や `sign_event` はそれぞれの語に分けて持つ。内訳は、ブランド
 /// （Nostr、no、Su）、Nostr と NIP-46 の用語（nsec、npub、pubkey、relay、kind、secret、
-/// ws、wss、URI、URL、NIP、nostrconnect、bunker）、環境変数と文書の名前（ACCOUNT、MASTER、
+/// ws、wss、URI、URL、NIP、nostrconnect、bunker、AUTH）、環境変数と文書の名前（ACCOUNT、MASTER、
 /// KEY、docs、configuration、operations、md）、HTTP の語（Origin、Host、http、https）、操作の案内（Ctrl、C、macOS）、日付の区切り（T、Z）、時刻の表記（UTC）、
 /// NIP-46 の権限の名前（sign、event）、日本語文中でも英字で書く略語（DB、画面に出す略語
 /// QR）、言語の自名（English）、固定値（example、label、plugin、a〜e）、パーセント
 /// 符号化の `E`（`%2E`）。
 const allowed_words = [
   "Nostr", "no", "Su", "nsec", "npub", "pubkey", "relay", "kind", "secret", "ws",
-  "wss", "URI", "URL", "NIP", "nostrconnect", "bunker", "ACCOUNT", "MASTER",
-  "KEY", "docs", "http", "https", "configuration", "operations", "md", "Origin",
-  "Host", "Ctrl", "C", "macOS", "T", "Z", "UTC", "sign", "event", "DB", "QR",
-  "English", "example", "label", "plugin", "a", "b", "c", "d", "e", "E",
+  "wss", "URI", "URL", "NIP", "nostrconnect", "bunker", "AUTH", "ACCOUNT",
+  "MASTER", "KEY", "docs", "http", "https", "configuration", "operations", "md",
+  "Origin", "Host", "Ctrl", "C", "macOS", "T", "Z", "UTC", "sign", "event", "DB",
+  "QR", "English", "example", "label", "plugin", "a", "b", "c", "d", "e", "E",
 ]
 
 /// ページのテキストノードに現れる英字の連なり。テキストと属性値はエスケープされて `<` と
