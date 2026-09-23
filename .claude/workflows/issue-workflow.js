@@ -15,8 +15,10 @@ export const meta = {
 
 // ---------------------------------------------------------------------------
 // args の契約（スキル issue-workflow の段階 0 で組み立てる）
-//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier?, noMerge?, depth?, parent?, designUrl? }]
+//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, prevPlan?, prevReview?, tier?, noMerge?, depth?, parent?, designUrl? }]
 //               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あれば判定・デザイン・プランの段階を飛ばす
+//               prevPlan / prevReview: 前の実行でプランレビューの往復の上限で stalled になった issue を続けるときの、最後の版（{n}-v{V}.md の形）とそのレビューのファイル。
+//               両方渡す。判定と版 1 を飛ばし、版 V+1 から往復を始める（ラウンドはこの実行で 1 から数える）。デザインは designUrl で継ぐ
 //               tier:    'none' | 'light' | 'full'。あれば判定の tier の代わりに使う（A/B と再開で固定するため）
 //               noMerge: true なら最終確認の APPROVE の後にマージの段階を飛ばし、stalled（stage merge、reason に noMerge とマージはユーザーが行う旨）で返す（リリースの PR など。サブ issue には継がない）
 //               分割で生まれたサブ issue はスクリプトが足す（ui と designUrl を親から継ぎ、depth 1、parent、tier は親の判定が決めた none か light、note に親の「## 分割の設計」への案内。再分割はしない）。
@@ -53,6 +55,10 @@ const REPO_DIR = a.repoDir
 const WINDOW = a.window || 4
 const IMPLEMENTERS = ['claude', 'devin']
 if (a.implementer !== undefined && !IMPLEMENTERS.includes(a.implementer)) throw new Error(`args.implementer は ${IMPLEMENTERS.join(' / ')} のどれか`)
+for (const i of a.issues) {
+  if (!!i.prevPlan !== !!i.prevReview) throw new Error(`issues[].prevPlan と prevReview は両方渡す（#${i.n}）`)
+  if (i.prevPlan && !/-v\d+\.md$/.test(i.prevPlan)) throw new Error(`issues[].prevPlan は {n}-v{V}.md の形のファイルで渡す（#${i.n}: ${i.prevPlan}）`)
+}
 const PLANS = `${a.scratchpad}/plans`
 const decisions = a.decisions || {}
 const dry = a.dryRun || null
@@ -278,11 +284,11 @@ ${common(e)}
 - プランの書き先: ${PLANS}/${e.n}-v1.md
 ${prReviewUrl ? `- この issue はプラン無しで実装され、PR レビューが設計に起因する must を出した（${prReviewUrl}。本文は \`gh api\` で読む）。その must を解く設計を「決めたこと」に書き、すでに実装済みの箇所は前提として扱う。分割はしない\n` : ''}${designUrl ? `- デザインの方針: ${designUrl}。プランはこれを取り込む\n` : ''}${issue.note ? `- 補足: ${issue.note}\n` : ''}${decisions[e.n] ? `- ユーザーの決定: ${decisions[e.n]}\n` : ''}設計の選択は推奨案で決めて「決めたこと」に書き、status を question にするのは issue の前提が事実に反するときだけにする。${issue.depth ? 'この issue は分割で生まれたサブ issue なので、これ以上分割しない。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : prReviewUrl || issue.noSplit ? 'この issue は分割しない（実装が途中まで進んでいる）。変更の見込みがしきい値を超えるなら、超える理由をプランの冒頭に 1 行で書く。' : '分割の判定は済んでいる（分けずに進めると決めた）。調査でしきい値を大きく超えると分かったときだけ、定義の「分割の判定」に従ってサブ issue を作り、status を split にして返す。'}
 返答（構造化出力）: status、プランのファイル、方針の要約と決めたことの見出し。プランの全文は返さない。`,
-  // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む
-  planNext: (e, v, r) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
-- 前の版: ${PLANS}/${e.n}-v${v - 1}.md
-- レビュー（ラウンド ${r}）: ${PLANS}/${e.n}-r${r}.md
-${common(e)}
+  // 版 2 以降は、前の版とレビューのファイル名を規約（{n}-v{v-1}.md、{n}-r{r}.md）で組む。前の実行の版から続けるとき（r が 0）は渡されたファイルを使う
+  planNext: (e, v, r, prevPlan = `${PLANS}/${e.n}-v${v - 1}.md`, prevReview = `${PLANS}/${e.n}-r${r}.md`) => `issue #${e.n} の実装プラン（版 ${v}）を書いてほしい。前の版のレビューは REQUEST CHANGES だった。
+- 前の版: ${prevPlan}
+- ${r ? `レビュー（ラウンド ${r}）` : '前の版のレビュー（前の実行の最後のラウンド）'}: ${prevReview}
+${r ? '' : '- 前の版とレビューは前の実行のもので、土台はそれから進んでいる。前の版の行番号と前提は今の土台で引き直す\n'}${common(e)}
 - 書き先: ${PLANS}/${e.n}-v${v}.md（前の版をコピーしてから直す）
 前の版の「決めたこと」は変えず、レビューの指摘の該当箇所だけ直す。指摘が「決めたこと」の変更を求めているときだけ、その 1 件を直す。
 読むのは、issue と、レビューの「該当」と「根拠」が指すファイルに絞る。
@@ -486,14 +492,18 @@ async function designStage(e, issue, state) {
   return {}
 }
 
-/** プランとプランレビューの往復。承認された版の issue コメント URL と、その版が前提にした兄弟の番号（after）を返す */
+/** issues[].prevPlan の版の番号（ファイル名の {n}-v{V}.md から取る。args の検査で形は確かめてある） */
+const prevVersion = (issue) => Number(/-v(\d+)\.md$/.exec(issue.prevPlan)[1])
+
+/** プランとプランレビューの往復。承認された版の issue コメント URL と、その版が前提にした兄弟の番号（after）を返す。
+ * issues[].prevPlan があれば、前の実行の最後の版とレビューから版 V+1 で続け、ラウンドは 1 から数える */
 async function planStage(e, issue, state, prReviewUrl) {
   const designUrl = issue.designUrl || state.designUrl || null
-  let v = 0, r = 0
+  let v = issue.prevPlan ? prevVersion(issue) : 0, r = 0
   while (true) {
     v++
     const plan = await call('plan', `Plan #${e.n} v${v}`,
-      v === 1 ? P.plan1(e, issue, designUrl, prReviewUrl) : P.planNext(e, v, r),
+      v === 1 ? P.plan1(e, issue, designUrl, prReviewUrl) : r === 0 ? P.planNext(e, v, r, issue.prevPlan, issue.prevReview) : P.planNext(e, v, r),
       { agentType: 'issue-planner', phase: 'プラン', schema: S.planner })
     if (plan.status === 'question') return { blocked: { stage: 'plan', questions: plan.questions || [plan.summary] } }
     if (plan.status === 'split') {
@@ -504,8 +514,9 @@ async function planStage(e, issue, state, prReviewUrl) {
       return { split: normalizeSubIssues('plan', e.n, plan.subIssues) }
     }
     r++
+    // 前の実行から続けるとき、ラウンド 1 のレビューは前の実行の最後のレビューとの照合になる
     const rev = await call('plan-review', `Review plan #${e.n} r${r}`,
-      r === 1 ? P.review1(e) : P.reviewNext(e, v, r, plan.file || `${PLANS}/${e.n}-v${v}.md`, `${PLANS}/${e.n}-r${r - 1}.md`),
+      r === 1 && !issue.prevPlan ? P.review1(e) : P.reviewNext(e, v, r, plan.file || `${PLANS}/${e.n}-v${v}.md`, r === 1 ? issue.prevReview : `${PLANS}/${e.n}-r${r - 1}.md`),
       { agentType: 'issue-plan-reviewer', phase: 'プラン', schema: S.planReviewer })
     state.planRounds = r
     if (rev.verdict === 'NEEDS_USER') return { blocked: { stage: 'plan-review', questions: rev.questions || rev.headings } }
@@ -815,6 +826,8 @@ async function runIssue(issue, idx) {
       // 判定 → デザイン → プラン。承認済みのプランがあれば 3 つとも飛ばす。サブ issue は判定を飛ばし、デザインは親の URL を継ぐ
       async () => {
         if (issue.planUrl) { state.postUrl = issue.planUrl; state.tier = 'light'; state.planInherited = true; log(`#${issue.n}: 承認済みのプラン ${issue.planUrl} を使い、プランの段階を飛ばす`); return {} }
+        // 前の実行の版から続ける issue は判定を飛ばす（プランの版は planStage が prevPlan の次から数える）
+        if (issue.prevPlan) { state.tier = 'light'; log(`#${issue.n}: 前の実行のプラン ${issue.prevPlan} とレビュー ${issue.prevReview} から版 ${prevVersion(issue) + 1} で続ける`) }
         // args.issues[].tier で固定されていれば判定を飛ばす（A/B と再開のため）。サブ issue も同じ経路で light になる
         if (!issue.depth && !state.tier) {
           const t = await triageStage(e, issue, state)
@@ -942,7 +955,8 @@ function fake(label, opts, prompt) {
   if (t === 'issue-plan-reviewer') {
     if (sc === 'needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, questions: ['A 案と B 案のどちらか'] }
     if (sc === 'replan-reject' && r >= 2) return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, headings: ['逸脱の解き方が受け入れ条件を満たさない'] }
-    const rounds = sc === 'plan2' ? 2 : sc === 'plan-stall' ? 99 : 1
+    // prev-plan: issues[].prevPlan と組み、前の実行の版の次から始めて 2 ラウンドで APPROVE
+    const rounds = ['plan2', 'prev-plan'].includes(sc) ? 2 : sc === 'plan-stall' ? 99 : 1
     const ok = r >= rounds || ((sc === 'deviation' || sc === 'design-must') && r >= 2) || sc === 'planurl-deviation'
     // approve-with-conditions: r1 で APPROVE し、置換文で直る should 2 件を実装時の条件として返す
     if (sc === 'approve-with-conditions') return { verdict: 'APPROVE', must: 0, should: 0, nit: 0, conditions: ['`src/x.gleam` の Doc を「…」にする', 'README の環境変数の表に 1 行足す'], postUrl: `https://example/issue/${n}#plan-r${r}` }
