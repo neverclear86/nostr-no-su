@@ -935,9 +935,10 @@ pub fn page_content_of_an_unknown_key_test() {
   assert tone == "failure"
 }
 
-/// `timeline` は行ごとに 1 つの節にする。見出しは `kind <n> · <RFC 3339>`、
-/// `pairs` は登録に無い `pubkey` と `id` の `id` インライン、短い本文は `text`
-/// ブロックで、その後に `tags (n)` と `signature` の `details` が続く。
+/// `timeline` は行ごとに 1 つの節にする。見出しは題が空で、`meta` に `kind`（行の kind）と
+/// `time`（`created_at`）のインラインを並べる。`pairs` は登録に無い `pubkey` と `id` の
+/// `id` インライン、短い本文は `text` ブロックで、その後に `tags (n)` と `signature` の
+/// `details` が続く。
 pub fn the_timeline_lists_stored_events_test() {
   let first =
     store.Row(
@@ -976,8 +977,8 @@ pub fn the_timeline_lists_stored_events_test() {
 }
 
 /// 節 1 つが、登録に無いアカウントの書いたイベントの `event_section/3` の形
-/// （見出し・`pubkey` と `id` の `pairs`・`body` の本文のブロック・`tags` と
-/// `signature` の畳み）を満たすことを確かめる。
+/// （空の題、`kind` と `time` の `meta`、`pubkey` と `id` の `pairs`、`body` の本文の
+/// ブロック、`tags` と `signature` の畳み）を満たすことを確かめる。
 fn assert_event_section(
   raw: Dynamic,
   row: store.Row,
@@ -985,7 +986,8 @@ fn assert_event_section(
   tags_summary: String,
 ) -> Nil {
   let #(title, blocks) = section_shape(raw)
-  assert string.starts_with(title, "kind " <> int.to_string(row.kind) <> " · ")
+  assert title == ""
+  assert section_meta(raw) == [#("kind", row.kind), #("time", row.created_at)]
   let assert [pairs, ..rest] = blocks
   assert pair_items(pairs)
     == [#("pubkey", "id", row.pubkey), #("id", "id", row.id)]
@@ -1160,35 +1162,6 @@ pub fn the_timeline_reports_a_failed_query_test() {
   assert kind == "alert"
   assert text == "could not read stored events: timeout"
   assert tone == "failure"
-}
-
-/// calendar の範囲外の `created_at` でも節は返り、見出しは秒をそのまま文字に
-/// した値になる。
-pub fn out_of_range_timestamps_fall_back_to_the_number_test() {
-  let row =
-    store.Row(
-      id: "id1",
-      pubkey: "pub1",
-      created_at: 10_000_000_000_000_000,
-      kind: 1,
-      tags: "[]",
-      content: "hi",
-      sig: "sig1",
-    )
-  let description =
-    page.content(
-      "timeline",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([row]),
-    )
-  let assert [only] = page_sections(description)
-  let #(title, _blocks) = section_shape(only)
-  assert title == "kind 1 · 10000000000000000"
 }
 
 /// `store.migrations` に版 3 があり、その文は `create_received_at_index` の
@@ -1380,8 +1353,8 @@ pub fn the_alerts_are_in_japanese_test() {
   assert block_text(timeline_alert) == "保存済みのイベントを読めませんでした: timeout"
 }
 
-/// 日本語のタイムラインでも見出しと NIP-01 のフィールド名は訳さず、`details` の
-/// 見出しの件数とバイト数の書き方だけが日本語になる。
+/// 日本語のタイムラインでも NIP-01 のフィールド名は訳さず、`details` の見出しの件数とバイト数の
+/// 書き方だけが日本語になる。kind と時刻は数のまま `meta` に置き、表示の言語で出すのは本体である。
 pub fn the_timeline_details_are_in_japanese_test() {
   let row =
     store.Row(
@@ -1462,6 +1435,24 @@ fn block_label(raw: Dynamic) -> #(String, String) {
     "text" -> #(kind, block_text(raw))
     _ -> #(kind, "")
   }
+}
+
+/// 節の `meta` の各インラインの `type` と `value`。
+fn section_meta(raw: Dynamic) -> List(#(String, Int)) {
+  let assert Ok(meta) =
+    decode.run(
+      raw,
+      decode.field(
+        "meta",
+        decode.list({
+          use kind <- decode.field("type", decode.string)
+          use value <- decode.field("value", decode.int)
+          decode.success(#(kind, value))
+        }),
+        decode.success,
+      ),
+    )
+  meta
 }
 
 /// `pairs` ブロックの 1 項目。`term` と、値の `type` / `text`。

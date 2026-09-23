@@ -102,9 +102,9 @@ ok_atom() -> ok.
 %% 設定・送信を拒否する戻り値。event_logger_ffi:error_tuple/1 と同じ役割。
 error_tuple(Reason) -> {error, Reason}.
 
-%% Unix 秒を UTC の RFC 3339 の binary にする。別プロジェクトのためモジュールを
-%% 共有できず、event_logger_ffi:format_timestamp/1 と同じ実装を写した。リレー由来の
-%% 秒が calendar の範囲外だと badarg になるので、その場合は秒をそのまま文字にする。
+%% Unix 秒を UTC の RFC 3339 の binary にする。Gleam 側に日時の依存を足さない
+%% ためここに置く。リレー由来の秒が calendar の範囲外だと badarg になるので、
+%% その場合は秒をそのまま文字にする。
 format_timestamp(Seconds) ->
     try
         list_to_binary(
