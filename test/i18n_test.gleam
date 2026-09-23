@@ -197,7 +197,13 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.AllowedKinds -> Some(i18n.AllowedKindsHint)
     i18n.AllowedKindsHint -> Some(i18n.OtherPermissions)
     i18n.OtherPermissions -> Some(i18n.OtherPermissionsHint)
-    i18n.OtherPermissionsHint -> Some(i18n.SelectAtLeastOne)
+    i18n.OtherPermissionsHint -> Some(i18n.PermissionSignAnyKind)
+    i18n.PermissionSignAnyKind -> Some(i18n.PermissionSignKind(1))
+    i18n.PermissionSignKind(_) -> Some(i18n.PermissionNip44Encrypt)
+    i18n.PermissionNip44Encrypt -> Some(i18n.PermissionNip44Decrypt)
+    i18n.PermissionNip44Decrypt -> Some(i18n.PermissionUnsupported)
+    i18n.PermissionUnsupported -> Some(i18n.UnsupportedPermissionsNote)
+    i18n.UnsupportedPermissionsNote -> Some(i18n.SelectAtLeastOne)
     i18n.SelectAtLeastOne -> Some(i18n.InvalidKindList)
     i18n.InvalidKindList -> Some(i18n.SessionNotFound)
     i18n.SessionNotFound -> Some(i18n.Created)
@@ -396,16 +402,32 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 225 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 231 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 225
+  assert list.length(messages) == 231
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
 pub fn every_message_differs_between_languages_test() {
   use message <- list.each(all_messages())
   assert i18n.text(i18n.English, message) != i18n.text(i18n.Japanese, message)
+}
+
+/// 権限のチップの kind の名前は表（0、1、3、6、7、10002）に従い、表に無い kind は番号を出す。
+pub fn kind_names_follow_the_table_test() {
+  let cases = [
+    #(0, "Sign profile", "プロフィールの署名"),
+    #(1, "Sign post", "投稿の署名"),
+    #(3, "Sign follow list", "フォローの署名"),
+    #(6, "Sign repost", "リポストの署名"),
+    #(7, "Sign reaction", "リアクションの署名"),
+    #(10_002, "Sign relay list", "リレーリストの署名"),
+    #(30_023, "Sign kind 30023", "kind 30023 の署名"),
+  ]
+  use #(kind, english, japanese) <- list.each(cases)
+  assert i18n.text(i18n.English, i18n.PermissionSignKind(kind)) == english
+  assert i18n.text(i18n.Japanese, i18n.PermissionSignKind(kind)) == japanese
 }

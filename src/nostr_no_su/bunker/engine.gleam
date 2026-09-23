@@ -1088,6 +1088,7 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
 /// 接続済みクライアントからのリクエストを 1 件実行する。`sign_event` と
 /// `nip44_encrypt` / `nip44_decrypt` は `perms`（空なら既定の集合）が許すとき
 /// だけ実行し、`get_public_key` と `ping` は `perms` に関わらず答える。
+/// `unsupported_methods` の方法には未対応の理由を、ほかの方法には `unsupported_method` を返す。
 fn execute_in_session(
   account: Account,
   perms: String,
@@ -1103,10 +1104,23 @@ fn execute_in_session(
         True -> nip44_op(account, request, request.method == "nip44_encrypt")
         False -> rpc.error(request.id, denial(request.method))
       }
-    "nip04_encrypt" | "nip04_decrypt" ->
-      rpc.error(request.id, "nip04 is not supported")
-    _ -> rpc.error(request.id, unsupported_method)
+    method ->
+      case list.contains(unsupported_methods, method) {
+        True -> rpc.error(request.id, "nip04 is not supported")
+        False -> rpc.error(request.id, unsupported_method)
+      }
   }
+}
+
+/// バンカーが対応していない NIP-46 の方法（NIP-04 の暗号化と復号）。セッション内で受けると
+/// 未対応の理由を返し、管理 UI の権限のチップは `is_unsupported_permission` を通して
+/// これで未対応の印を付ける。
+const unsupported_methods = ["nip04_encrypt", "nip04_decrypt"]
+
+/// 権限のトークンが、バンカーが対応していない方法（`unsupported_methods`）と完全に一致するか。
+/// 管理 UI の権限のチップが使う。
+pub fn is_unsupported_permission(token: String) -> Bool {
+  list.contains(unsupported_methods, token)
 }
 
 /// 指定された pubkey（`connect` の署名者、ドラフトの pubkey）が、`signer` とは

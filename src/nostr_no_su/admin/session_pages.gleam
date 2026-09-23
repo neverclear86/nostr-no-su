@@ -1,6 +1,6 @@
 //// 管理 UI のセッションの権限の編集ページ（`/sessions/<signer>/<client>/permissions`）の
-//// 描画。`admin/relay_pages` と同じく `admin/dashboard` のパスの定義と `admin/view` の
-//// 部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
+//// 描画。`admin/relay_pages` と同じく `admin/dashboard` のパスの定義と、`admin/view` と
+//// `admin/permission_view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（署名者・クライアントの公開鍵、権限のトークン）はテキストか属性値として
 //// lustre に渡し、エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は
@@ -16,6 +16,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
 
 /// kind の案内の `id`。kind の欄はこのページに 1 つだけなので固定の値にする。
@@ -148,7 +149,7 @@ fn current_permissions(language: Language, perms: String) -> Element(msg) {
         view.ToneChip(view.Neutral),
         i18n.text(language, i18n.PermissionsNotDeclared),
       )
-    _ -> dashboard.perms_chips(language, perms)
+    _ -> permission_view.chips(language, perms)
   }
 }
 
@@ -212,7 +213,7 @@ fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
     _ -> [
       html.div([attribute.class("flex flex-col gap-1")], [
         html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
-        dashboard.perms_chips(language, other),
+        permission_view.chips(language, other),
         html.p([attribute.class("text-sm text-muted")], [
           html.text(i18n.text(language, i18n.OtherPermissionsHint)),
         ]),
@@ -265,21 +266,10 @@ fn fold_token(acc: ParsedPerms, token: String) -> ParsedPerms {
     "nip44_encrypt" -> ParsedPerms(..acc, nip44_encrypt: True)
     "nip44_decrypt" -> ParsedPerms(..acc, nip44_decrypt: True)
     _ ->
-      case parse_kind_token(token) {
-        Ok(kind) -> ParsedPerms(..acc, kinds: [kind, ..acc.kinds])
+      case permission_view.signed_kind(token) {
+        Ok(kind) ->
+          ParsedPerms(..acc, kinds: [int.to_string(kind), ..acc.kinds])
         Error(Nil) -> ParsedPerms(..acc, other: [token, ..acc.other])
-      }
-  }
-}
-
-/// `sign_event:<n>`（`n` は 0 以上の整数）なら `n` の文字列表現を返す。
-fn parse_kind_token(token: String) -> Result(String, Nil) {
-  case string.starts_with(token, "sign_event:") {
-    False -> Error(Nil)
-    True ->
-      case int.parse(string.drop_start(token, string.length("sign_event:"))) {
-        Ok(kind) if kind >= 0 -> Ok(int.to_string(kind))
-        _ -> Error(Nil)
       }
   }
 }
