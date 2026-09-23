@@ -749,6 +749,7 @@ nostr-no-su/
 │       ├── manifest.toml
 │       ├── src/
 │       │   ├── profile.gleam         API v1 の関数
+│       │   ├── profile/i18n.gleam    管理 UI のページの表示の言語と、言語ごとの文言
 │       │   ├── profile/page.gleam    管理 UI のページの記述の組み立て（純粋）
 │       │   ├── profile_ffi.erl       取得（`fetch_events` の呼び出しと戻り値の変換）、更新の JSON の組み立てと送信、時刻の整形
 │       │   └── profile_store.erl     直前の送信の結果と取得のキャッシュ（60 秒）を保持する gen_server
