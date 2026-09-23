@@ -91,6 +91,7 @@ import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
@@ -133,6 +134,11 @@ const init_timeout_ms = 1000
 /// OK を待つ期間（秒）。OK は通常すぐ返るので、発行からこの秒数で返らない OK は
 /// 返らないとみなす（値は判定の取りこぼしと保持量の兼ね合いで選んだ）。
 const acknowledgement_timeout_seconds = 60
+
+/// `rate-limited:` の OK を返したリレーへ、セッションの外の応答を止める期間
+/// （秒）。NIP-01 の `rate-limited:` は再開の時刻を持たないので、報告の間隔
+/// （`rate_limit.report_interval_seconds`）と同じ長さにする。
+pub const rate_limited_pause_seconds = 60
 
 /// 承認ページの URL に入るトークンのバイト数。承認・拒否そのものは管理 UI の
 /// 認証が守るが、トークンは保留の識別子なので、認証を通った管理者が別の要求を
@@ -276,17 +282,20 @@ pub type Msg {
   Incoming(event: Verified)
   /// 1 本のリレー接続で応答イベントを送信するための関数を登録する。各接続
   /// アクターは再接続のたびに `on_connect` からこれを送り直すため、応答は生きた
-  /// ソケットから出ていく。応答はすべてのバンカーリレーへ送信する。クライアント
-  /// は URI の `relay=` ヒントすべてを待ち受けており、重複配信の排除はクライアント
-  /// 側の責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
-  /// あれば往復は成立する。
+  /// ソケットから出ていく。応答はすべてのバンカーリレーへ送信する
+  /// （`rate-limited:` を返したリレーへのセッションの外の応答だけは `publish`
+  /// が止める）。クライアントは URI の `relay=` ヒントすべてを待ち受けており、
+  /// 重複配信の排除はクライアント側の責務（こちら側の重複は `engine` が排除
+  /// する）なので、生きたリレーが 1 つあれば往復は成立する。
   SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
   /// 1 本のリレー接続の送信手段を取り下げる。接続アクターが `on_disconnect` から
   /// 送るため、死んだソケットへ応答を渡し続けることがない。接続アクター自身が
   /// クラッシュした場合は `on_disconnect` を経ないため、再起動した接続が
   /// `SetPublisher` で上書きするまでは古い送信手段が残る。
   RemovePublisher(relay_url: String)
-  /// バンカーリレーの接続が、発行した応答への OK を知らせる。
+  /// バンカーリレーの接続が、発行した応答への OK を知らせる。拒否の理由が
+  /// `rate-limited:` なら、そのリレーへのセッションの外の応答をしばらく
+  /// 止める（`pause_on_rate_limit`）。
   Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
   GetSessions(reply: Subject(Result(List(Session), String)))
@@ -755,10 +764,103 @@ fn rejected_line(id: String, delivery: Delivery) -> String {
   <> reasons
 }
 
+/// セッションの外の応答を止めているリレーの一覧。キーはリレーの URL。
+pub opaque type Pauses {
+  Pauses(Dict(String, Pause))
+}
+
+/// リレー 1 本の停止。`until` は止める期限（秒、この時刻から再開する）、
+/// `dropped` は最後の報告の後にこのリレーへ出さなかった応答の件数、
+/// `reported_at` は最後に報告した時刻。
+type Pause {
+  Pause(until: Int, dropped: Int, reported_at: Int)
+}
+
+/// どのリレーも止めていない一覧。
+pub fn new_pauses() -> Pauses {
+  Pauses(dict.new())
+}
+
+/// OK 1 件を反映する。拒否の理由が `rate-limited:` で始まれば、`relay_url` への
+/// セッションの外の応答を `now` から `rate_limited_pause_seconds` 秒止める。
+/// 一覧にあるリレーは期限が過ぎていても期限だけを更新し、件数と報告の時刻を
+/// 引き継ぐ。一覧に無いリレーは、最初に出さなかった 1 件をすぐ報告する状態で
+/// 足す。それ以外の OK では変えない。
+pub fn pause_on_rate_limit(
+  pauses: Pauses,
+  relay_url: String,
+  ack: Acknowledgement,
+  now: Int,
+) -> Pauses {
+  let Pauses(entries) = pauses
+  case ack.accepted, string.starts_with(ack.message, "rate-limited:") {
+    False, True -> {
+      let until = now + rate_limited_pause_seconds
+      let pause = case dict.get(entries, relay_url) {
+        Ok(paused) -> Pause(..paused, until: until)
+        Error(Nil) ->
+          Pause(
+            until: until,
+            dropped: 0,
+            reported_at: now - rate_limit.report_interval_seconds,
+          )
+      }
+      Pauses(dict.insert(entries, relay_url, pause))
+    }
+    _, _ -> pauses
+  }
+}
+
+/// 応答 1 件を送るリレーを `relay_urls` の順に選ぶ。戻り値は数えた後の一覧、
+/// 送るリレー、ログの行。セッションの外の応答（`outside_session` が真）は、
+/// 期限が `now` より後の止めたリレーを飛ばして件数を数え、そのリレーの前の
+/// 報告から `rate_limit.report_interval_seconds` 以上経っていれば件数を報告
+/// して数え直す。セッションの中の応答はすべてのリレーへ送る。
+pub fn recipients(
+  pauses: Pauses,
+  relay_urls: List(String),
+  outside_session: Bool,
+  now: Int,
+) -> #(Pauses, List(String), List(String)) {
+  use #(Pauses(entries), sent, lines), relay_url <- list.fold(
+    list.reverse(relay_urls),
+    #(pauses, [], []),
+  )
+  case outside_session, dict.get(entries, relay_url) {
+    True, Ok(paused) if paused.until > now -> {
+      let dropped = paused.dropped + 1
+      let #(kept, reported) = case
+        now - paused.reported_at >= rate_limit.report_interval_seconds
+      {
+        True -> #(Pause(..paused, dropped: 0, reported_at: now), [
+          pause_report(relay_url, dropped),
+        ])
+        False -> #(Pause(..paused, dropped: dropped), [])
+      }
+      #(
+        Pauses(dict.insert(entries, relay_url, kept)),
+        sent,
+        list.append(reported, lines),
+      )
+    }
+    _, _ -> #(Pauses(entries), [relay_url, ..sent], lines)
+  }
+}
+
+/// 止めたリレーへ出さなかった応答の件数を報告するログの 1 行。
+pub fn pause_report(relay_url: String, dropped: Int) -> String {
+  "dropped "
+  <> int.to_string(dropped)
+  <> " responses without a session to "
+  <> relay_client.label(relay_url)
+  <> " while it is rate-limiting"
+}
+
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
 /// 署名者ごとのラベルと、生きた接続の送信手段と、自分が起動した時刻と、読み込みの
-/// 進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧だけを
-/// 持つ。`not_before` はエンジンではなくここに置き、アクターの起動時刻を刻む。
+/// 進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧と、
+/// セッションの外の応答を止めているリレーの一覧だけを持つ。`not_before` は
+/// エンジンではなくここに置き、アクターの起動時刻を刻む。
 type State {
   State(
     /// このアクターの登録名。署名者の集合の写し（`is_signer`）のキーに使う。
@@ -780,6 +882,8 @@ type State {
     open_relays: fn(List(relay_list.Registered)) -> Nil,
     /// OK を待っている応答の一覧。
     deliveries: Deliveries,
+    /// セッションの外の応答を止めているリレーの一覧。
+    pauses: Pauses,
     /// 直近の読み込みで飛ばされた行。読み込みのたびに入れ替わり、書き込みでは
     /// 変わらない。
     skipped: List(vault.Skipped),
@@ -855,6 +959,7 @@ fn initialise(
     resubscribe: resubscribe,
     open_relays: open_relays,
     deliveries: new_deliveries(),
+    pauses: new_pauses(),
     skipped: [],
   )
   |> actor.initialised
@@ -865,8 +970,9 @@ fn initialise(
 
 /// アカウントの読み込みと変更、読み直しの要求、publisher の登録、署名者・アカウント・
 /// 飛ばされた行・セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、
-/// 受信イベント 1 件をエンジンに通して生成された応答の全接続への送信、発行した応答への
-/// OK の反映、リレーの AUTH に返す認証イベントの署名を行う。
+/// 受信イベント 1 件をエンジンに通して生成された応答の送信、発行した応答への
+/// OK の反映と `rate-limited:` を返したリレーの停止、リレーの AUTH に返す認証
+/// イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -1024,20 +1130,26 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           token: random.hex(token_bytes),
           not_before: state.not_before,
         )
-      let engine.Handled(engine: accepted, outcome:, notice:) =
+      let engine.Handled(engine: accepted, outcome:, notice:, outside_session:) =
         engine.handle_event(state.engine, incoming, inputs)
       case notice {
         Some(line) -> log.write(log.Notice, log_prefix, line)
         None -> Nil
       }
       let #(published, next) = case outcome {
-        engine.Reply(response) -> #(publish(state, response), accepted)
+        engine.Reply(response) -> #(
+          publish(state, response, outside_session),
+          accepted,
+        )
         engine.Persist(write:, next:, response:, on_failure:) -> {
           let #(change, target) = incoming_write_change(write)
           case write_session_change(state, change, target, write) {
-            #(written, Ok(Nil)) -> #(publish(written, response), next)
+            #(written, Ok(Nil)) -> #(
+              publish(written, response, outside_session),
+              next,
+            )
             #(written, Error(_failure)) -> #(
-              publish(written, on_failure),
+              publish(written, on_failure, outside_session),
               accepted,
             )
           }
@@ -1060,7 +1172,18 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Some(text) -> log.write(log.Warning, log_prefix, text)
         None -> Nil
       }
-      actor.continue(State(..state, deliveries: deliveries))
+      actor.continue(
+        State(
+          ..state,
+          deliveries: deliveries,
+          pauses: pause_on_rate_limit(
+            state.pauses,
+            relay_url,
+            ack,
+            time.now_seconds(),
+          ),
+        ),
+      )
     }
   }
 }
@@ -1731,7 +1854,7 @@ fn apply_session_write(
     write_session_change(state, change, target, write)
   case outcome {
     Ok(Nil) -> {
-      let published = publish(written_state, response)
+      let published = publish(written_state, response, False)
       process.send(reply, Ok(Nil))
       actor.continue(State(..published, engine: next))
     }
@@ -1825,10 +1948,13 @@ fn update_session_perms(
   }
 }
 
-/// 応答イベントを全バンカーリレーへ発行する。接続が 1 本も生きていなければ送る
-/// 先が無いので、応答を落としたことをログに残す（クライアントは接続が戻った
-/// あとの再送で回復する）。送った先があれば、送った先を `deliveries` に記録する。
-fn publish(state: State, response: Event) -> State {
+/// 応答イベントをバンカーリレーへ発行する。セッションの外の応答
+/// （`outside_session` が真）は、`rate-limited:` を返して止めているリレーを
+/// 飛ばし（`recipients`）、飛ばした件数を間引いてログに出す。接続が 1 本も
+/// 生きていなければ送る先が無いので、応答を落としたことをログに残す
+/// （クライアントは接続が戻ったあとの再送で回復する）。送った先があれば、
+/// 送った先を `deliveries` に記録する。
+fn publish(state: State, response: Event, outside_session: Bool) -> State {
   case dict.is_empty(state.publishers) {
     True -> {
       log.write(
@@ -1839,16 +1965,23 @@ fn publish(state: State, response: Event) -> State {
       state
     }
     False -> {
-      dict.each(state.publishers, fn(_relay_url, publish) { publish(response) })
-      State(
-        ..state,
-        deliveries: track(
-          state.deliveries,
-          response,
+      let now = time.now_seconds()
+      let #(pauses, sent, lines) =
+        recipients(
+          state.pauses,
           dict.keys(state.publishers),
-          time.now_seconds(),
-        ),
-      )
+          outside_session,
+          now,
+        )
+      list.each(lines, log.write(log.Notice, log_prefix, _))
+      dict.each(dict.take(state.publishers, sent), fn(_relay_url, publish) {
+        publish(response)
+      })
+      let deliveries = case sent {
+        [] -> state.deliveries
+        _ -> track(state.deliveries, response, sent, now)
+      }
+      State(..state, deliveries: deliveries, pauses: pauses)
     }
   }
 }

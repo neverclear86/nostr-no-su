@@ -2640,3 +2640,36 @@ pub fn connect_with_the_secret_is_not_limited_test() {
     handle_raw(state, connect_event(client, signer, secret, 1000), 1000, 0)
   let assert Persist(..) = outcome
 }
+
+/// `Handled.outside_session` は、セッションの無いクライアントのリクエストでだけ
+/// 真になる。セッションのあるクライアントのリクエストと、接続 secret の一致
+/// する `connect` は偽になる。
+pub fn only_requests_outside_a_session_are_marked_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_client_key)
+  let state = granted_session("")
+  let marked = fn(incoming: Event) -> Bool {
+    engine.handle_event(
+      state,
+      signed_event.verified(incoming),
+      engine.Inputs(now: 1001, token: token, not_before: 0),
+    ).outside_session
+  }
+
+  assert marked(request_event(
+      client,
+      signer,
+      request_body("g1", "get_public_key", "[]"),
+      1001,
+    ))
+    == False
+  assert marked(request_event(
+      other,
+      signer,
+      request_body("g2", "get_public_key", "[]"),
+      1001,
+    ))
+    == True
+  assert marked(connect_event(other, signer, secret, 1001)) == False
+}
