@@ -269,6 +269,7 @@ fn session_mac_row() -> vault.MacRow {
     perms: "sign_event",
     created_at: 1_700_000_000,
     last_used_at: 1_700_000_100,
+    relays: [],
   )
 }
 
@@ -304,6 +305,7 @@ fn tampered_mac_rows(row: vault.MacRow) -> List(vault.MacRow) {
       SessionMacRow(..row, perms: "tampered"),
       SessionMacRow(..row, created_at: row.created_at + 1),
       SessionMacRow(..row, last_used_at: row.last_used_at + 1),
+      SessionMacRow(..row, relays: ["wss://tampered.example"]),
     ]
     PendingMacRow(..) -> [
       PendingMacRow(..row, token: "tampered"),
@@ -349,6 +351,20 @@ pub fn row_macs_match_the_known_answers_test() {
     == bytes("21c41e6ab89127133b42af4ae99d8569bce978aa7c7964eec8b688c929af8100")
 }
 
+/// `relays` を持つセッションの行の MAC は、要素をバイト数つきで連結した 1 列を
+/// 末尾に足した入力から独立に計算した既知の値に一致する。
+pub fn a_session_row_mac_with_relays_matches_the_known_answer_test() {
+  let key = master_key(master_key_hex)
+  let assert SessionMacRow(..) as row = session_mac_row()
+  let row =
+    SessionMacRow(..row, relays: [
+      "wss://relay.example",
+      "ws://relay.example:7777",
+    ])
+  assert vault.row_mac(key, row)
+    == bytes("fc0cdc5eae537b4aad240ad88584f0ebd4655a86ba3f891f2e378c68ae5b96af")
+}
+
 /// MAC の合わない行の説明はテーブル名、署名者、1 行に収めたクライアントで行を
 /// 指し、権限と承認待ちのトークンを含めない。
 pub fn rejected_rows_are_described_without_perms_or_token_test() {
@@ -359,6 +375,7 @@ pub fn rejected_rows_are_described_without_perms_or_token_test() {
       perms: "sign_event",
       created_at: 1_700_000_000,
       last_used_at: 1_700_000_100,
+      relays: [],
     )
   assert vault.describe_rejected(forged)
     == "skipped a bunker_sessions row with a mismatched MAC: signer signer-a, client client forged: line"

@@ -12,8 +12,9 @@
 //// セッション（`bunker_sessions`）と承認待ち（`bunker_pending`）の行には
 //// HMAC-SHA256 の MAC を付ける。MAC の鍵は用途の文字列をマスターキーで HMAC して
 //// 導き、アカウントの暗号化の鍵（マスターキーそのもの）と用途を分ける。入力は
-//// テーブル名と主キーを含む全列を、それぞれバイト数を前に付けて連結したもので、
-//// 列の値を書き換えた行や、別のテーブルの行へ移した MAC は検証で失敗する。
+//// テーブル名と主キーを含む全列（セッションの `relays` は空でないときだけ）を、
+//// それぞれバイト数を前に付けて連結したもので、列の値を書き換えた行や、
+//// 別のテーブルの行へ移した MAC は検証で失敗する。
 
 import gleam/bit_array
 import gleam/bool
@@ -105,6 +106,9 @@ pub type MacRow {
     created_at: Int,
     /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
     last_used_at: Int,
+    /// `nostrconnect://` の URI に現れたリレー（URI の順）。`bunker://` の
+    /// `connect` と承認で開いたセッションは空。
+    relays: List(String),
   )
   /// `bunker_pending` の 1 行（承認待ちの接続要求）。
   PendingMacRow(
@@ -321,18 +325,22 @@ fn mac_key(key: MasterKey) -> BitArray {
 
 /// 行の MAC の入力。テーブル名を先頭に、主キーを含む全列を表の列の順で
 /// `length_prefixed` で連結する。文字列は UTF-8、Int は 8 バイトのビッグ
-/// エンディアン、Bool は `bool_byte` の 1 バイトにする。
+/// エンディアン、Bool は `bool_byte` の 1 バイトにする。セッションの `relays` は
+/// `last_used_at` の後に置き、空の一覧のときは列ごと入れない（`relays_field`）。
 fn mac_input(row: MacRow) -> BitArray {
   case row {
-    SessionMacRow(signer:, client:, perms:, created_at:, last_used_at:) ->
-      length_prefixed([
-        <<"bunker_sessions":utf8>>,
-        <<signer:utf8>>,
-        <<client:utf8>>,
-        <<perms:utf8>>,
-        <<created_at:size(64)>>,
-        <<last_used_at:size(64)>>,
-      ])
+    SessionMacRow(signer:, client:, perms:, created_at:, last_used_at:, relays:) ->
+      length_prefixed(list.append(
+        [
+          <<"bunker_sessions":utf8>>,
+          <<signer:utf8>>,
+          <<client:utf8>>,
+          <<perms:utf8>>,
+          <<created_at:size(64)>>,
+          <<last_used_at:size(64)>>,
+        ],
+        relays_field(relays),
+      ))
     PendingMacRow(
       token:,
       signer:,
@@ -352,6 +360,17 @@ fn mac_input(row: MacRow) -> BitArray {
         bool_byte(secret_mismatch),
         <<created_at:size(64)>>,
       ])
+  }
+}
+
+/// セッションの `relays` の MAC の入力の列。空の一覧は列を持たず、それ以外は
+/// 各要素（UTF-8）を `length_prefixed` で連結した 1 列にする。列の有無と要素の
+/// 境界が入力に現れるので、空の一覧と空文字列 1 件、区切りだけが違う一覧は
+/// 別の MAC になる。
+fn relays_field(relays: List(String)) -> List(BitArray) {
+  case relays {
+    [] -> []
+    _ -> [length_prefixed(list.map(relays, bit_array.from_string))]
   }
 }
 

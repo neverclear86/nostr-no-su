@@ -595,6 +595,7 @@ pub fn sessions_lists_connected_clients_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -622,6 +623,7 @@ pub fn requests_in_a_session_write_the_last_use_test() {
       perms: "",
       created_at: 1000,
       last_used_at: 1060,
+      relays: [],
     )
   assert write == engine.TouchSession(session: touched)
   assert engine.sessions(next) == [touched]
@@ -645,6 +647,7 @@ pub fn sessions_are_sorted_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       )
     })
   let state = engine.restore(new_engine(), sessions, [], 1000)
@@ -658,6 +661,7 @@ pub fn sessions_are_sorted_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       )
     })
   assert engine.sessions(state) == expected
@@ -674,6 +678,7 @@ pub fn sessions_are_sorted_by_the_last_use_test() {
       perms: "",
       created_at: created_at,
       last_used_at: last_used_at,
+      relays: [],
     )
   }
   let a = session("a", 100, 300)
@@ -746,6 +751,7 @@ pub fn set_perms_replaces_the_permissions_test() {
       perms: "sign_event:1,sign_event:10002",
       created_at: 1000,
       last_used_at: 1000,
+      relays: [],
     )
   assert write == engine.UpdateSessionPerms(session: updated)
   assert engine.sessions(state) == [updated]
@@ -785,6 +791,7 @@ pub fn set_perms_bounds_the_permissions_test() {
       perms: long_prefix,
       created_at: 1000,
       last_used_at: 1000,
+      relays: [],
     )
   assert write == engine.UpdateSessionPerms(session: updated)
   assert engine.sessions(state) == [updated]
@@ -821,6 +828,7 @@ pub fn logout_without_a_session_is_acknowledged_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -911,6 +919,7 @@ pub fn approve_answers_the_original_request_test() {
         perms: "sign_event:1",
         created_at: 1001,
         last_used_at: 1001,
+        relays: [],
       ),
     ]
   assert engine.pending(state, 1001) == []
@@ -1185,6 +1194,7 @@ pub fn connect_with_an_empty_signer_param_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -1209,6 +1219,7 @@ pub fn connect_ignores_params_after_the_perms_test() {
         perms: "nip44_encrypt",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -1572,6 +1583,7 @@ pub fn remove_account_drops_only_its_sessions_and_pending_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
   let assert [remaining] = engine.pending(state, 1000)
@@ -1672,6 +1684,7 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -1751,6 +1764,7 @@ pub fn connect_with_the_secret_writes_the_session_test() {
         perms: "sign_event:1",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
       evicted: [],
     )
@@ -1835,6 +1849,7 @@ pub fn reconnecting_an_approved_client_writes_nothing_test() {
         perms: "",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -1898,6 +1913,7 @@ pub fn approving_an_approved_client_keeps_the_session_test() {
         perms: "a",
         created_at: 1000,
         last_used_at: 1000,
+        relays: [],
       ),
     ]
 }
@@ -1914,6 +1930,7 @@ pub fn approving_an_approved_client_writes_the_kept_session_test() {
       perms: "a",
       created_at: 1000,
       last_used_at: 1500,
+      relays: [],
     )
   let pending =
     engine.Pending(
@@ -1949,6 +1966,7 @@ pub fn approve_writes_the_approval_test() {
         perms: "sign_event:1",
         created_at: 1001,
         last_used_at: 1001,
+        relays: [],
       ),
       evicted: [],
     )
@@ -1967,6 +1985,7 @@ pub fn open_client_session_replies_with_the_uri_secret_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       "",
+      [],
       "uri-secret",
       "req-1",
       1000,
@@ -1990,6 +2009,7 @@ pub fn open_client_session_opens_an_approved_session_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       "sign_event:1",
+      [],
       "uri-secret",
       "req-1",
       1000,
@@ -2001,13 +2021,14 @@ pub fn open_client_session_opens_an_approved_session_test() {
       perms: "sign_event:1",
       created_at: 1000,
       last_used_at: 1000,
+      relays: [],
     )
   assert write == engine.InsertSession(session: session, evicted: [])
   assert engine.sessions(state) == [session]
 }
 
-/// すでに承認済みの組に `nostrconnect://` で開き直しても、書き込みの値はメモリに
-/// 残した最初のセッションになり（DB の行をその値で上書きするため）、
+/// すでに承認済みの組に同じリレーの `nostrconnect://` で開き直しても、書き込みの
+/// 値はメモリに残した最初のセッションになり（DB の行をその値で上書きするため）、
 /// `engine.sessions` の値も変わらない。
 pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
   let signer = account_for(signer_key)
@@ -2018,6 +2039,7 @@ pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       "sign_event:1",
+      [],
       "uri-secret",
       "req-1",
       1000,
@@ -2028,6 +2050,7 @@ pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       "nip44_encrypt",
+      [],
       "uri-secret",
       "req-2",
       2000,
@@ -2035,6 +2058,69 @@ pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
   let assert engine.InsertSession(session: kept, ..) = first
   assert second == first
   assert engine.sessions(state) == [kept]
+}
+
+/// URI のリレーは、開いたセッションと `InsertSession` の書き込みの値に URI の順の
+/// まま入る。
+pub fn open_client_session_keeps_the_uri_relays_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let relays = ["wss://b.example", "wss://a.example"]
+  let assert Ok(#(state, _response, write)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "",
+      relays,
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  let assert engine.InsertSession(session:, evicted: []) = write
+  assert session.relays == relays
+  assert engine.sessions(state) == [session]
+}
+
+/// 承認済みの組を別のリレーの `nostrconnect://` で開き直すと、権限と作成・最終利用
+/// の時刻は最初の値のまま、`relays` だけが新しい URI の一覧になり、メモリと
+/// 書き込みの値の両方に入る。
+pub fn open_client_session_on_an_approved_pair_replaces_the_relays_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let assert Ok(#(state, _response, _first)) =
+    engine.open_client_session(
+      new_engine(),
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "sign_event:1",
+      ["wss://old.example"],
+      "uri-secret",
+      "req-1",
+      1000,
+    )
+  let assert Ok(#(state, _response, second)) =
+    engine.open_client_session(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+      "nip44_encrypt",
+      ["wss://new.example"],
+      "uri-secret",
+      "req-2",
+      2000,
+    )
+  let session =
+    engine.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "sign_event:1",
+      created_at: 1000,
+      last_used_at: 1000,
+      relays: ["wss://new.example"],
+    )
+  assert second == engine.InsertSession(session: session, evicted: [])
+  assert engine.sessions(state) == [session]
 }
 
 /// `max_perms_bytes` を超える perms は `connect` と同じくトークンの境で切る。
@@ -2049,6 +2135,7 @@ pub fn open_client_session_bounds_the_perms_test() {
       account.pubkey_hex(signer),
       account.pubkey_hex(client),
       over_limit,
+      [],
       "uri-secret",
       "req-1",
       1000,
@@ -2068,6 +2155,7 @@ pub fn open_client_session_rejects_an_unknown_signer_test() {
       account.pubkey_hex(stranger),
       account.pubkey_hex(client),
       "",
+      [],
       "uri-secret",
       "req-1",
       1000,
@@ -2089,6 +2177,7 @@ fn full_sessions(signer: Account) -> List(engine.Session) {
       perms: "",
       created_at: 2000 - index,
       last_used_at: 1000 + index,
+      relays: [],
     )
   })
 }
@@ -2110,6 +2199,7 @@ pub fn connect_at_the_capacity_evicts_the_least_recently_used_session_test() {
         perms: "sign_event:1",
         created_at: 2000,
         last_used_at: 2000,
+        relays: [],
       ),
       evicted: [#(account.pubkey_hex(signer), "client-0")],
     )
@@ -2143,6 +2233,7 @@ pub fn approve_at_the_capacity_evicts_the_least_recently_used_session_test() {
         perms: "sign_event:1",
         created_at: 2000,
         last_used_at: 2000,
+        relays: [],
       ),
       evicted: [#(account.pubkey_hex(signer), "client-0")],
     )
@@ -2437,6 +2528,7 @@ pub fn restored_session_can_sign_without_connect_test() {
       perms: "sign_event:1",
       created_at: 500,
       last_used_at: 500,
+      relays: [],
     )
   let state = engine.restore(new_engine(), [session], [], 1000)
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
@@ -2537,6 +2629,7 @@ pub fn restore_skips_unregistered_signers_test() {
       perms: "",
       created_at: 1000,
       last_used_at: 1000,
+      relays: [],
     )
   let pending =
     engine.Pending(

@@ -536,6 +536,7 @@ fn bunker_snapshot(
         perms: session.perms,
         created_at: session.created_at,
         last_used_at: session.last_used_at,
+        relays: session.relays,
       )
     }),
     pending: list.map(stored.pending, fn(pending) {
@@ -563,6 +564,7 @@ fn stored_session(session: engine.Session) -> account_store.StoredSession {
     perms: session.perms,
     created_at: session.created_at,
     last_used_at: session.last_used_at,
+    relays: session.relays,
   )
 }
 
