@@ -89,8 +89,9 @@ pub type LoadOutcome {
 /// `reserved` には内蔵プラグインの名前を渡す。プラグイン名はダッシュボードと
 /// ログの識別子なので、内蔵と衝突する外部プラグインもここで弾く。
 ///
-/// `plugin_env` には `PLUGIN_*` の環境変数（`config.plugin_env`）を渡す。走査・
-/// コードパス・影の判定には一切関与せず、`plugin.load` へそのまま渡すだけである。
+/// `plugin_env` には `PLUGIN_*` の環境変数（`config.plugin_env`）に本体の接続先を
+/// `plugin_config.with_database_url` で足したものを渡す。走査・コードパス・影の
+/// 判定には一切関与せず、`plugin.load` へそのまま渡すだけである。
 ///
 /// `call_timeout_ms` は `plugin.load` へそのまま渡す、モジュールの読み込みと
 /// メタデータ用のエクスポート 1 回ごとの期限。

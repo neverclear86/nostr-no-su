@@ -16,6 +16,7 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_api
+import nostr_no_su/plugin_config
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
@@ -98,11 +99,15 @@ pub fn main() -> Nil {
 /// 配信されるイベントが無いだけである。読み込めなかった候補は `Spec.not_loaded_plugins`
 /// に載り、ログの 1 行に加えてダッシュボードにも出る。
 ///
+/// 外部プラグインには、アカウントストアの接続先（`DATABASE_URL`）を予約キー
+/// `DatabaseUrl` で渡す（`plugin_config.with_database_url`）。
+///
 /// テストが本番と同じ仕様でツリーを動かせるよう公開する。
 pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use dedup_capacity <- result.try(loaded.dedup_capacity)
-  use bunker <- result.try(bunker_spec(loaded))
+  use #(database_url, master_key) <- result.try(account_store_settings(loaded))
+  use bunker <- result.try(bunker_spec(loaded, database_url, master_key))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
   let plugin_loader.LoadOutcome(
@@ -113,7 +118,7 @@ pub fn startup(loaded: Config) -> Result(Startup, String) {
     plugin_loader.load_all(
       loaded.plugin_dir,
       [console_logger.name],
-      loaded.plugin_env,
+      plugin_config.with_database_url(loaded.plugin_env, database_url),
       plugin.default_call_timeout_ms,
     )
   let specs = plugin_specs(list.append(builtin, external))
@@ -332,7 +337,7 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   fn(token) { base <> dashboard.approve_path(token) }
 }
 
-/// バンカーサブツリー。アカウントストアの設定が揃わないか不正なら、その理由を
+/// バンカーサブツリー。`database_url` を解釈できなければ、その理由を
 /// 返す。アカウントはアクターが起動後にストアから読むので、ここではアカウントの
 /// 件数を知らず、0 件でも起動する。起動時のリレーは常に空で、行はバンカーの
 /// 読み込みから `OpenRegistered` で届く（`app.gleam` の doc）。
@@ -342,8 +347,12 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
 /// 接続と張り直しのたびに、接続の範囲の現在の署名者から組み立て直すため、`since` もその時点の
 /// 現在時刻から決まる。署名者を問い合わせられなければ定義を得られなかったことにし、
 /// 開いている購読を閉じない。
-fn bunker_spec(loaded: Config) -> Result(app.Bunker, String) {
-  use #(pool, lock_pool, master_key) <- result.map(bunker_store(loaded))
+fn bunker_spec(
+  loaded: Config,
+  database_url: String,
+  master_key: vault.MasterKey,
+) -> Result(app.Bunker, String) {
+  use #(pool, lock_pool) <- result.map(bunker_store(database_url))
   let name = process.new_name("nostr_no_su_bunker")
   app.Bunker(
     name: name,
@@ -615,28 +624,35 @@ fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
   }
 }
 
-/// アカウントストアの接続プールの設定、ロック専用のプールの設定、マスターキー。
-/// 設定が揃わない、あるいは `DATABASE_URL` を解釈できなければ理由を返す。理由は
+/// アカウントストアの接続先とマスターキー。設定が揃わなければ理由を返す。理由は
 /// 値を含まない。
-fn bunker_store(
+fn account_store_settings(
   loaded: Config,
-) -> Result(#(pog.Config, pog.Config, vault.MasterKey), String) {
+) -> Result(#(String, vault.MasterKey), String) {
   case loaded.account_store {
     config.AccountStoreUnavailable(reason) -> Error(reason)
     config.AccountStore(database_url:, master_key:) ->
-      account_store.pool_config(
-        process.new_name("nostr_no_su_account_pool"),
-        database_url,
-      )
-      |> result.map(fn(pool) {
-        let lock_pool =
-          account_store.lock_pool_config(
-            process.new_name("nostr_no_su_account_lock_pool"),
-            pool,
-          )
-        #(pool, lock_pool, master_key)
-      })
+      Ok(#(database_url, master_key))
   }
+}
+
+/// アカウントストアの接続プールの設定と、ロック専用のプールの設定。`database_url` を
+/// 解釈できなければ理由を返す。理由は値を含まない。
+fn bunker_store(
+  database_url: String,
+) -> Result(#(pog.Config, pog.Config), String) {
+  account_store.pool_config(
+    process.new_name("nostr_no_su_account_pool"),
+    database_url,
+  )
+  |> result.map(fn(pool) {
+    let lock_pool =
+      account_store.lock_pool_config(
+        process.new_name("nostr_no_su_account_lock_pool"),
+        pool,
+      )
+    #(pool, lock_pool)
+  })
 }
 
 /// 管理 UI の仕様と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、値が不正な
