@@ -10,6 +10,8 @@
 //// 署名の要求を、読み込み前と登録済みの署名者のそれぞれで確かめる。
 //// `bunker.check_account`（`CheckAccount`）のテストは、プラグインからの取得の口が
 //// 使う登録の確認を、読み込み前・未登録・登録済みのそれぞれで確かめる。
+//// `bunker.check_accounts`（`CheckAccounts`）のテストは、複数の公開鍵の取得が使う
+//// 登録の確認を、読み込み前と、登録済みと未登録を混ぜた順のそれぞれで確かめる。
 
 import gleam/erlang/process
 import gleam/list
@@ -521,6 +523,40 @@ pub fn check_account_rejects_an_unregistered_signer_test() {
 
   assert bunker.check_account(name, "not-registered")
     == Error("account is not registered")
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 読み込みが常に失敗する（＝いつまでも `Loading` のままの）バンカーは、
+/// `CheckAccounts` を全体の理由で拒む。
+pub fn check_accounts_returns_the_reason_before_accounts_are_loaded_test() {
+  let name = process.new_name("bunker_check_accounts_not_loaded_test")
+  start_bunker_with_load(name, fn() { Error("boom") })
+
+  assert bunker.check_accounts(name, ["s1"])
+    == Error("accounts are not loaded yet")
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 登録済みと未登録を混ぜた問い合わせは、署名者ごとの結果を問い合わせた順に返す。
+pub fn check_accounts_reports_each_signer_in_order_test() {
+  let name = process.new_name("bunker_check_accounts_in_order_test")
+  let stored = one_account()
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+
+  assert bunker.check_accounts(name, [
+      "not-registered",
+      account.pubkey_hex(stored.account),
+    ])
+    == Ok([Error("account is not registered"), Ok(Nil)])
 
   let assert Ok(pid) = process.named(name)
   process.unlink(pid)

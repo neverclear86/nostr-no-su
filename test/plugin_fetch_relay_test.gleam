@@ -1,4 +1,5 @@
-//// 実際のリレーの上で `plugin_api.fetch_with` を往復させる E2E。
+//// 実際のリレーの上で `plugin_api.fetch_with` と `fetch_events_with` を
+//// 往復させる E2E。
 ////
 //// `TEST_RELAY_URL` があるときだけ走る。PR の CI は渡すので走り、手元では未設定
 //// ならスキップする。Postgres は使わない（バンカーは偽ストアで起動する）。
@@ -8,6 +9,7 @@ import gleam/dynamic
 import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/io
+import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
@@ -32,7 +34,7 @@ const ack_timeout_ms = 5000
 pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
   use relay_url <- with_test_relay_url
   let signer = account_for(random.hex(32))
-  let bunker_name = start_signed_in_bunker(signer)
+  let bunker_name = start_signed_in_bunker([signer])
   let relay_list_name = start_relay_list(relay_url)
   let published = seed_profile(relay_url, signer, "{\"name\":\"lina\"}")
 
@@ -52,7 +54,7 @@ pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
 pub fn fetch_event_returns_none_when_the_relay_has_no_event_test() {
   use relay_url <- with_test_relay_url
   let signer = account_for(random.hex(32))
-  let bunker_name = start_signed_in_bunker(signer)
+  let bunker_name = start_signed_in_bunker([signer])
   let relay_list_name = start_relay_list(relay_url)
 
   assert plugin_api.fetch_with(
@@ -64,17 +66,53 @@ pub fn fetch_event_returns_none_when_the_relay_has_no_event_test() {
     == Ok(atom.to_dynamic(atom.create("none")))
 }
 
-/// 偽のストアで、署名者 1 名を登録したバンカーを起動する。読み込みの完了を待って
-/// 名前を返す。
-fn start_signed_in_bunker(signer: Account) -> process.Name(bunker.Msg) {
+/// 複数の公開鍵の取得は、リレーにある作者ごとの最新の 1 件を、問い合わせた
+/// 公開鍵の順に返す。イベントを書いていない登録アカウントは `{ok, none}`。
+pub fn fetch_events_returns_the_latest_event_per_pubkey_from_the_relay_test() {
+  use relay_url <- with_test_relay_url
+  let signer_a = account_for(random.hex(32))
+  let signer_b = account_for(random.hex(32))
+  let signer_c = account_for(random.hex(32))
+  let bunker_name = start_signed_in_bunker([signer_a, signer_b, signer_c])
+  let relay_list_name = start_relay_list(relay_url)
+  let published_a = seed_profile(relay_url, signer_a, "{\"name\":\"a\"}")
+  let published_b = seed_profile(relay_url, signer_b, "{\"name\":\"b\"}")
+
+  let assert Ok(results) =
+    plugin_api.fetch_events_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.list([
+        dynamic.string(account.pubkey_hex(signer_a)),
+        dynamic.string(account.pubkey_hex(signer_b)),
+        dynamic.string(account.pubkey_hex(signer_c)),
+      ]),
+      dynamic.int(0),
+    )
+  let assert [Ok(map_a), Ok(map_b), Ok(none_c)] = results
+  let assert Ok(decoded_a) = event.from_map(map_a)
+  let assert Ok(decoded_b) = event.from_map(map_b)
+  assert decoded_a.id == published_a.id
+  assert decoded_a.content == "{\"name\":\"a\"}"
+  assert decoded_b.id == published_b.id
+  assert decoded_b.content == "{\"name\":\"b\"}"
+  assert none_c == atom.to_dynamic(atom.create("none"))
+}
+
+/// 偽のストアで、`signers` を登録したバンカーを起動する。読み込みの完了を
+/// 待って名前を返す。
+fn start_signed_in_bunker(signers: List(Account)) -> process.Name(bunker.Msg) {
   let name = process.new_name("plugin_fetch_relay_bunker")
-  let stored = StoredAccount(account: signer, secret: "s3cret", label: "")
+  let stored =
+    list.map(signers, fn(signer) {
+      StoredAccount(account: signer, secret: "s3cret", label: "")
+    })
   let assert Ok(_started) =
     bunker.start(
       name,
       bunker.Settings(
         store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
+          load: fn() { Ok(bunker.Snapshot(Loaded(stored, []), [], [], [])) },
           insert: fn(_account) { Ok(Nil) },
           delete: fn(_signer) { Ok(Nil) },
           update_secret: fn(_signer, _secret) { Ok(Nil) },
@@ -87,7 +125,8 @@ fn start_signed_in_bunker(signer: Account) -> process.Name(bunker.Msg) {
       fn() { Nil },
       fn(_relays) { Nil },
     )
-  let assert Ok([_]) = bunker.accounts(name)
+  let assert Ok(loaded) = bunker.accounts(name)
+  assert list.length(loaded) == list.length(signers)
   name
 }
 

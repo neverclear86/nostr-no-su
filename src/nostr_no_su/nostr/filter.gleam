@@ -3,7 +3,7 @@
 //// 持つのは `authors`、`kinds`、`#p`、`since`、`until`、`limit` の 6 つだけで、
 //// `ids` や `#e` は必要になるまで足さない。`until` を設定するのはプラグインの
 //// 取り直しの購読だけで、`limit` を設定するのはプラグインからの取得の口
-//// （`plugin_api.fetch_event`）の問い合わせだけである。
+//// （`plugin_api.fetch_event` と `fetch_events`）の問い合わせだけである。
 
 import gleam/json.{type Json}
 import gleam/list
