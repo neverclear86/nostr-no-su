@@ -89,7 +89,7 @@ function parseLabel(label) {
   if ((m = label.match(/^Implement #(\d+)(?: \(続き.*\))?$/))) return { kind: 'implement', n: Number(m[1]), round: null }
   if ((m = label.match(/^PR review #(\d+) r(\d+)$/))) return { kind: 'prReview', n: Number(m[1]), round: Number(m[2]) }
   if ((m = label.match(/^Final gate PR #(\d+)(?: r(\d+))?$/))) return { kind: 'gate', n: Number(m[1]), round: Number(m[2] || 1) }
-  if ((m = label.match(/^Merge PR #(\d+)( \(retry \d+( recheck)?\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
+  if ((m = label.match(/^Merge PR #(\d+)( \(retry \d+( recheck)?\)| \(re-review\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
   return { kind: 'other', n: null, round: null }
 }
 

@@ -72,7 +72,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 - コミットは意味のまとまりごとに分け、メッセージは `feat:`、`fix:`、`docs:`、`refactor:`、`test:` の接頭辞と日本語の要約（直近の `git log --oneline` の形）。本文の最後に、指示されたトレーラーの行を付ける
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文の書式は次のとおり。末尾に `Closes #<N>`（issue の「依存」節がこの PR で閉じると書く issue はすべて並べる）と、指示された生成表記の行を置く
-- 指摘への対応や rebase で push するときも、上の「PR を作る前の検査」を通してから push する（APPROVE の条件対応は下の節の例外に従う）
+- 指摘への対応や rebase で push するときも、上の「PR を作る前の検査」を通してから push する
 - PR を作ったら（指摘への対応や rebase で push したときも）`gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI の全ジョブが pass するのを待つ（変えたファイルに応じて省略されたジョブは skipped で、pass と同じ扱い）。fail なら原因を直して push し、pass するまで繰り返す。pass しないまま返すときは ciPassed を false にして reason に fail したジョブと原因を書く
 - CI が pass したら `sh <作業ツリー>/dev/pr_facts.sh <PR>` を回し、その表を「テストと検証」に貼り、`Closes` が表の closingIssuesReferences と一致することを確かめて `gh pr edit <PR> -R neverclear86/nostr-no-su --body-file <ファイル>` で本文を更新する（push のたびに貼り直す）。`pr_facts.sh` は `gh pr create` の後に回すこと。表の「閉じる issue」が「無し」のときは `Closes` の連携がまだなので、回し直して表を貼り直す
 
@@ -144,7 +144,7 @@ PR 本文と対応コメントは、レビュアーが次に取る行動を変�
 レビューが APPROVE で、置換文か 1 行で直る条件だけが付くことがある。このときは再レビューが行われず、次は最終確認に進む。
 - 依頼文に並んだ条件だけを直す。ついでの整理や、条件に無い箇所の変更を入れない（最終確認が対応のコミットと条件を突き合わせ、範囲を超える変更を must にする）
 - 条件が事実に反していて直せないものは、直さずに対応コメントにその根拠を書く
-- 条件への対応は 1 コミットにまとめて push する（最終確認がそのコミットだけを見る）。push の前の検査は「PR を作る前の検査」の手順 2〜9 を行い、手順 1 の origin/main への rebase は行わない（main への追随はマージ段階の rebase に任せる。この段階だけの例外である）
+- 条件への対応は 1 コミットにまとめて push する（最終確認がそのコミットだけを見る）。push の前の検査は「PR を作る前の検査」の手順 1〜9 を行う。手順 1 の origin/main への rebase は対応のコミットの前に行う（rebase せずに push すると、main と衝突している PR では CI が起動せず、兄弟のマージで main とのマージのビルドが落ちる PR では CI が落ちて、どちらも blocked になる）。衝突の解消に設計の判断が要るときは push せず status を blocked にする
 - push して CI が pass したら `dev/pr_facts.sh <PR>` を回し直し、PR 本文の「テストと検証」の表を貼り直す（「コミットと PR」の手順と同じ）
 - 対応コメントは `sh <作業ツリー>/dev/post_comment.sh pr <PR> fix <R> - <短い SHA> <ファイル>` で投稿する（マージ担当がこれで「条件への対応の push」と判別する）。見出しは「## レビューの条件への対応（<短い SHA>）」
 

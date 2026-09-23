@@ -36,10 +36,10 @@ APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（re
 
 - 上の列挙が 1 件でもあれば、見出しで代替せずに not_ready にし、problem に「マーカーが無いコメント」としてその URL を書く
 - 指示された head が PR の head と一致する
-- 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にする（レビューが要る）
+- 指示された「最終確認が APPROVE を出した head」と head が違うとき（rebase の後）は、差分が rebase だけであることを確かめる。`git -C <リポジトリ> fetch origin main <ブランチ>` の後、`git -C <リポジトリ> range-diff origin/main <APPROVE の head> <head>` の各行が `=`（同一）か、`!` でも差分が衝突の解消に限られることを見る。それ以外の変更が入っていれば not_ready にし、`needsReview` を true にして problem にその変更（コミットとファイル、変更の要旨）を書く（スクリプトが最終確認に再確認させ、APPROVE ならもう一度マージを頼む）。依頼文に「rebase の差分は最終確認が再確認して APPROVE を出した」の行があるときは、そこに書かれた範囲の `!` と `>` の行を not_ready の理由にしない
 - `kind=pr-review` の最後のコメントと `kind=gate` の最後のコメントが、どちらも `verdict=APPROVE` である
 - 最終確認の APPROVE のコメントが、指示された「最終確認が APPROVE を出した head」のコミットより後の時刻である（`git show -s --format=%cI <その head>` と比べる。現在の head とは比べない。rebase で head が変わっていても、その差分は下の range-diff で見る）
-- PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。`git -C <リポジトリ> range-diff origin/main <PR レビューが APPROVE を出した head> <最終確認が APPROVE を出した head>` の `>` の行（レビューの後に増えたコミット）を見て、その各コミットが、APPROVE の後に投稿された `kind=fix` のマーカーの `head`（短い SHA なので前方一致で見る）のいずれかと一致することを確かめる。`=` の行は rebase で写ったコミットなので見ない。一致しないコミットがあれば not_ready にする（レビューが要る）
+- PR レビューの APPROVE を出した head 以後に入った push は、rebase か、条件への対応だけである。条件への対応とは、その APPROVE の後に投稿された `kind=fix` のマーカーを持つ対応コメントがあり、その push がそれに対応することを指す。`git -C <リポジトリ> range-diff origin/main <PR レビューが APPROVE を出した head> <最終確認が APPROVE を出した head>` の `>` の行（レビューの後に増えたコミット）を見て、その各コミットが、APPROVE の後に投稿された `kind=fix` のマーカーの `head`（短い SHA なので前方一致で見る）のいずれかと一致することを確かめる。`=` の行は rebase で写ったコミットなので見ない。一致しないコミットがあれば not_ready にし、`needsReview` を true にして problem にそのコミットを書く
 - CI の全ジョブが pass か skipped である（pending なら `gh pr checks <PR> -R $R --watch` で待つ。変えたファイルに応じて省略されたジョブは skipped になる）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す
 
@@ -80,4 +80,4 @@ gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86"
 指摘は重さに関わらず全部書く（絞るのは書式であって件数ではない）。
 
 ## 返すもの
-status（merged / conflict / not_ready）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、閉じた親 issue の番号（`closedParents`。無ければ空）、閉じる条件を満たしたのに閉じられなかった親 issue の番号（`openParent`。無ければ省く）、問題があればその内容。
+status（merged / conflict / not_ready）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、閉じた親 issue の番号（`closedParents`。無ければ空）、閉じる条件を満たしたのに閉じられなかった親 issue の番号（`openParent`。無ければ省く）、not_ready のうち差分にレビューが要るとき `needsReview`、問題があればその内容。
