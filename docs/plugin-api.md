@@ -629,7 +629,7 @@ Accounts = json:decode(maps:get(<<"Accounts">>, Config)).
 
 `form` ブロック（第 13.3 節）を持つページは、任意エクスポート `plugin_page_action` でフォームの送信を受け取れる。宛先は本体が決め、`POST /plugins/<プラグイン名を percent-encode したもの>/<key>` に固定する。プラグインはこの宛先を指定できない。
 
-受け取る `Values` は、欄の `name` → 送信された値の binary キー・binary 値の map である。`checkbox` はチェックされた欄だけが `<<"on">>` で届き、チェックしなかった欄は届かない。`text` と `textarea` は常に届き、空のまま送られた欄は `<<>>` になる（本体は空の値を落とさない）。
+受け取る `Values` は、欄の `name` → 送信された値の binary キー・binary 値の map である。`checkbox` はチェックされた欄だけが `<<"on">>` で届き、チェックしなかった欄は届かない。`text` と `textarea` は常に届き、空のまま送られた欄は `<<>>` になる（本体は空の値を落とさない）。値の改行は本体が LF（`\n`）にそろえてから渡す。ブラウザーが `textarea` の改行として送る CRLF（`\r\n`）と単独の CR（`\r`）は、どちらも LF で届く。
 
 戻り値は `ok` か `{error, Reason}`（`Reason` は binary）のいずれかである。
 
