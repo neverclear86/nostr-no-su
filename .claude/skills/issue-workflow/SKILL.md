@@ -156,7 +156,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 1. このセッションの journal のパスを `ls -tr <セッションの subagents/workflows>/wf_*/journal.jsonl` で mtime の昇順に集める（`aggregate` は後の run の値で上書きするため）。mtime が `since` より前のものと、`result` イベントが 1 件も無いものは `runs` に入れない
 2. journal ごとに次の jq を通し、`events` を組み立てる。
    ```sh
-   jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
+   jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,closedParents,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
    ```
 3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す（`events` に label の形に合わない要素を足しても集計に入らず、`log` に「label が形に合わない」と出るだけである）。
 

@@ -18,6 +18,7 @@ disallowedTools: Agent
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --json title,body,comments` で読む（`--comments` は本文を落とす、または rc=0 のまま空で返ることがあるので使わない）。CLAUDE.md、README.md、docs/architecture.md、プランが触れるソースとテストも読む
 - 読む量を絞る。ファイルは必要な範囲だけ読み、同じファイルを何度も読み直さない。長い出力になるコマンドは `head`、`grep`、`--stat` で要る部分だけ取り出す
 - 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
+- 撮影用サーバー（`PREVIEW_PORT=<port> gleam run -m admin_preview`）は `timeout <秒>` の中で背景に立てる。止めるときは `pkill -f` を使わない（自分の bash の引数に一致して呼び出しごと落ちる）。pid は `ss -ltnpH` のそのポートの行から引き、`/proc/<pid>/cwd` が自分の作業ツリーであることを確かめてから kill する（`timeout` が切れても beam.smp が残ることがある）
 
 ## 記憶
 - 起動時に読み込まれた `MEMORY.md`（`~/.claude/agent-memory/issue-plan-reviewer/`）を仕事の最初に 1 回見て、挙がっている箇所と観点を照合の対象に含める。読み直さない
