@@ -290,7 +290,7 @@ pub const max_label_code_points = 100
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
 
-/// 承認待ちの節のアンカー。タイルの `href="#…"` と節の `id` が同じ値を見る。接続 QR
+/// 承認待ちの節のアンカー。概要の帯の項目の `href="#…"` と節の `id` が同じ値を見る。接続 QR
 /// コードのページからのリンクも同じ値を見る。
 pub const pending_anchor = "pending"
 
@@ -317,7 +317,7 @@ fn dashboard_refresh(
   }
 }
 
-/// スナップショットをダッシュボードのページに描画する。先頭に概要のタイル、続けて
+/// スナップショットをダッシュボードのページに描画する。先頭に概要の帯、続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
 /// プラグインの状態と読み込めなかったプラグインを右の列に置く 2 列で、狭い画面ではこの順に
@@ -335,7 +335,7 @@ pub fn render(
     view.SwitchReturningTo("/"),
     dashboard_refresh(snapshot.pending),
     [
-      overview_tiles(language, snapshot),
+      overview_rail(language, snapshot),
       pending_section(
         language,
         snapshot.accounts,
@@ -369,173 +369,402 @@ pub fn render(
   )
 }
 
-/// 概要のタイル 5 枚。狭い画面では 2 列で、承認待ちが 1 件以上のときは承認待ちのタイルだけ
-/// 全幅にする。
-fn overview_tiles(language: Language, snapshot: Snapshot) -> Element(msg) {
-  html.div([attribute.class("grid grid-cols-2 gap-4 lg:grid-cols-5")], [
-    pending_tile(language, snapshot.pending),
-    accounts_tile(language, snapshot.accounts, snapshot.skipped),
-    sessions_tile(language, snapshot.sessions),
-    relays_tile(language, snapshot.relays),
-    plugins_tile(language, snapshot.plugins, snapshot.not_loaded_plugins),
-  ])
+/// 概要の帯の 1 項目の値。
+pub type OverviewValue {
+  /// 件数。
+  Count(Int)
+  /// 動作中の件数と全件数（プラグイン）。
+  CountOfTotal(count: Int, total: Int)
+  /// 一覧を得られない。「—」を error の色で出す。
+  NoValue
 }
 
-/// タイル 1 枚。`anchor` が `Some(a)` なら同じページの節への `href="#" <> a` のリンクにする。
-/// 飛び先の節が出ないときは `None` を渡し、リンクにしない。`tone` が `Warning` のときだけ
-/// 警告の色にし、`wide` が真のときだけ狭い画面で全幅を占めさせる。
-fn tile(
-  language: Language,
-  tone: view.Tone,
-  title: i18n.Message,
-  value: String,
-  note: Element(msg),
-  anchor: Option(String),
-  wide: Bool,
-) -> Element(msg) {
-  let class = case tone, wide {
-    view.Warning, True ->
-      "card card-border col-span-2 border-warning bg-warning/15 text-warning lg:col-span-1"
-    view.Warning, False ->
-      "card card-border border-warning bg-warning/15 text-warning"
-    _, True -> "card card-border col-span-2 lg:col-span-1"
-    _, False -> "card card-border"
+/// 概要の帯の補足の語 1 つ。`state` が `Some` の語は要対応で、状態のチップと同じ色と
+/// アイコンで出す。`None` の語は補助の文字の色で出す。
+pub type OverviewNote {
+  OverviewNote(state: Option(view.Chip), text: i18n.Message)
+}
+
+/// 概要の帯の 1 項目の見せ方。`linked` が偽なら節へのリンクにしない（飛び先の節が出ない）。
+/// `highlighted` が真なら項目を `primary` で塗る。
+pub type Overview {
+  Overview(
+    value: OverviewValue,
+    notes: List(OverviewNote),
+    linked: Bool,
+    highlighted: Bool,
+  )
+}
+
+/// 概要の帯の 5 項目。
+pub type OverviewRail {
+  OverviewRail(
+    pending: Overview,
+    accounts: Overview,
+    sessions: Overview,
+    relays: Overview,
+    plugins: Overview,
+  )
+}
+
+/// スナップショットから概要の帯の 5 項目の見せ方を決める。
+pub fn overview(snapshot: Snapshot) -> OverviewRail {
+  OverviewRail(
+    pending: pending_overview(snapshot.pending),
+    accounts: accounts_overview(snapshot.accounts, snapshot.skipped),
+    sessions: sessions_overview(snapshot.sessions),
+    relays: relays_overview(snapshot.relays),
+    plugins: plugins_overview(snapshot.plugins, snapshot.not_loaded_plugins),
+  )
+}
+
+/// 一覧を得られない項目。値は「—」、補足は error の色の「取得できません」。
+const not_available = Overview(
+  value: NoValue,
+  notes: [
+    OverviewNote(Some(view.ToneChip(view.Failure)), i18n.OverviewNotAvailable),
+  ],
+  linked: True,
+  highlighted: False,
+)
+
+/// 色を付けない補足の語。
+fn plain_note(text: i18n.Message) -> OverviewNote {
+  OverviewNote(None, text)
+}
+
+/// 件数が 1 以上のときだけ、要対応の補足の語を 1 つ返す。
+fn attention_notes(
+  count: Int,
+  chip: view.Chip,
+  text: fn(Int) -> i18n.Message,
+) -> List(OverviewNote) {
+  case count {
+    0 -> []
+    _ -> [OverviewNote(Some(chip), text(count))]
   }
-  let content = [
-    html.div([attribute.class("card-body gap-1 p-4")], [
-      html.p([attribute.class("text-sm")], [
-        html.text(i18n.text(language, title)),
-      ]),
-      html.p([attribute.class("text-2xl font-bold")], [html.text(value)]),
-      note,
-    ]),
-  ]
-  case anchor {
-    Some(a) ->
-      html.a([attribute.href("#" <> a), attribute.class(class)], content)
-    None -> html.div([attribute.class(class)], content)
-  }
 }
 
-/// タイルの補足 1 行。
-fn tile_note(text: String) -> Element(msg) {
-  html.p([attribute.class("text-xs")], [html.text(text)])
-}
-
-/// 承認待ちのタイル。1 件以上あれば件数と警告の色、無ければ失効までの分数、得られなければ
-/// 「取得できません」を出す。0 件のときは節が出ないので、リンクにしない。
-fn pending_tile(
-  language: Language,
+/// 承認待ちの項目。1 件以上あれば `primary` で塗り、補足に「承認を待っています」と最短の失効を
+/// 出す。0 件なら失効までの分数を出し、節が出ないのでリンクにしない。
+fn pending_overview(
   pending: Result(List(PendingRow), i18n.Reason),
-) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let #(value, note, tone, wide, anchor) = case pending {
-    Error(_) -> #(
-      "—",
-      text(i18n.TileNotAvailable),
-      view.Neutral,
-      False,
-      Some(pending_anchor),
-    )
-    Ok([]) -> #(
-      "0",
-      text(i18n.PendingExpireAfterMinutes(engine.pending_ttl_minutes())),
-      view.Neutral,
-      False,
-      None,
-    )
-    Ok(rows) -> #(
-      int.to_string(list.length(rows)),
-      text(i18n.AwaitingDecision(refresh_seconds)),
-      view.Warning,
-      True,
-      Some(pending_anchor),
-    )
+) -> Overview {
+  case pending {
+    Error(_) -> not_available
+    Ok([]) ->
+      Overview(
+        value: Count(0),
+        notes: [
+          plain_note(
+            i18n.PendingExpireAfterMinutes(engine.pending_ttl_minutes()),
+          ),
+        ],
+        linked: False,
+        highlighted: False,
+      )
+    Ok([first, ..] as rows) -> {
+      let soonest =
+        list.fold(rows, first.expires_in_seconds, fn(soonest, row) {
+          int.min(soonest, row.expires_in_seconds)
+        })
+      Overview(
+        value: Count(list.length(rows)),
+        notes: [
+          plain_note(i18n.AwaitingDecision),
+          plain_note(i18n.SoonestExpiry(view.countdown(soonest))),
+        ],
+        linked: True,
+        highlighted: True,
+      )
+    }
   }
-  tile(language, tone, i18n.Pending, value, tile_note(note), anchor, wide)
 }
 
-/// アカウントのタイル。件数と、読み込めなかった行の有無を補足する。
-fn accounts_tile(
-  language: Language,
+/// アカウントの項目。読み込めなかった行があればその件数を error の色で出す。
+fn accounts_overview(
   accounts: Result(List(AccountRow), i18n.Reason),
   skipped: Result(List(SkippedRow), i18n.Reason),
-) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let #(value, note) = case accounts {
-    Error(_) -> #("—", text(i18n.TileNotAvailable))
-    Ok(rows) -> #(int.to_string(list.length(rows)), case skipped {
-      Error(_) -> text(i18n.TileNotAvailable)
-      Ok([]) -> text(i18n.AllAccountsLoaded)
-      Ok(rows) -> text(i18n.UnreadableRowCount(list.length(rows)))
-    })
+) -> Overview {
+  case accounts {
+    Error(_) -> not_available
+    Ok(rows) ->
+      Overview(
+        value: Count(list.length(rows)),
+        notes: case skipped {
+          Error(_) -> not_available.notes
+          Ok([]) -> [plain_note(i18n.AllAccountsLoaded)]
+          Ok(skipped) ->
+            attention_notes(
+              list.length(skipped),
+              view.LoadFailedChip,
+              i18n.UnreadableRowCount,
+            )
+        },
+        linked: True,
+        highlighted: False,
+      )
   }
-  tile(
-    language,
-    view.Neutral,
-    i18n.Accounts,
-    value,
-    tile_note(note),
-    Some(accounts_anchor),
-    False,
-  )
 }
 
-/// セッションのタイル。承認済みのクライアントの件数を出す。
-fn sessions_tile(
-  language: Language,
+/// セッションの項目。承認済みのクライアントの件数を出す。
+fn sessions_overview(
   sessions: Result(List(SessionRow), i18n.Reason),
-) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let #(value, note) = case sessions {
-    Error(_) -> #("—", text(i18n.TileNotAvailable))
-    Ok(rows) -> #(int.to_string(list.length(rows)), text(i18n.ApprovedClients))
+) -> Overview {
+  case sessions {
+    Error(_) -> not_available
+    Ok(rows) ->
+      Overview(
+        value: Count(list.length(rows)),
+        notes: [plain_note(i18n.ApprovedClients)],
+        linked: True,
+        highlighted: False,
+      )
   }
-  tile(
-    language,
-    view.Neutral,
-    i18n.Sessions,
-    value,
-    tile_note(note),
-    Some(sessions_anchor),
-    False,
+}
+
+/// リレーの項目。バンカー用の行が無いこと、未接続と応答なしの行数を要対応の語で出し、どれも
+/// 無ければ「すべて接続中」を出す。未接続と応答なしは、用途が 2 つある行を二重に数えないよう
+/// 行単位で数える。
+fn relays_overview(relays: Result(List(RelayRow), i18n.Reason)) -> Overview {
+  case relays {
+    Error(_) -> not_available
+    Ok(rows) -> {
+      let no_bunker = case has_bunker_relay(rows) {
+        True -> []
+        False -> [
+          OverviewNote(
+            Some(view.ToneChip(view.Warning)),
+            i18n.NoBunkerRelayShort,
+          ),
+        ]
+      }
+      let issues =
+        list.flatten([
+          no_bunker,
+          attention_notes(
+            list.count(rows, row_has_role_state(_, Reported(Disconnected))),
+            view.DisconnectedChip,
+            i18n.DisconnectedRelayCount,
+          ),
+          attention_notes(
+            list.count(rows, row_has_role_state(_, Unanswered)),
+            view.UnansweredChip,
+            i18n.UnansweredRelayCount,
+          ),
+        ])
+      Overview(
+        value: Count(list.length(rows)),
+        notes: case issues {
+          [] -> [plain_note(i18n.AllRelaysConnected)]
+          _ -> issues
+        },
+        linked: True,
+        highlighted: False,
+      )
+    }
+  }
+}
+
+/// プラグインの項目。値は動作中の件数と全件数で、読み込めなかった候補は分母に入れない
+/// （ランナーが無いため）。補足は過負荷・無効・応答なし・読み込み失敗の件数を要対応の語で出し、
+/// どれも無ければ、プラグインが 1 件も無いとき「有効なプラグインなし」、あれば値の読み方
+/// （「動作中 / 全件数」）を出す。
+fn plugins_overview(
+  plugins: List(PluginRow),
+  not_loaded: List(plugin_loader.NotLoaded),
+) -> Overview {
+  let count = fn(matches: fn(Option(plugin_runner.Status)) -> Bool) {
+    list.count(plugins, fn(plugin) { matches(plugin.status) })
+  }
+  let running = count(fn(status) { status == Some(plugin_runner.Running) })
+  let overloaded =
+    count(fn(status) {
+      case status {
+        Some(plugin_runner.Overloaded(..)) -> True
+        _ -> False
+      }
+    })
+  let disabled =
+    count(fn(status) {
+      case status {
+        Some(plugin_runner.Disabled(..)) -> True
+        _ -> False
+      }
+    })
+  let unavailable = count(fn(status) { status == None })
+  let total = list.length(plugins)
+  let issues =
+    list.flatten([
+      attention_notes(
+        overloaded,
+        view.OverloadedChip,
+        i18n.OverloadedPluginCount,
+      ),
+      attention_notes(disabled, view.DisabledChip, i18n.DisabledPluginCount),
+      attention_notes(
+        unavailable,
+        view.UnansweredChip,
+        i18n.UnavailablePluginCount,
+      ),
+      attention_notes(
+        list.length(not_loaded),
+        view.LoadFailedChip,
+        i18n.PluginsNotLoadedShort,
+      ),
+    ])
+  Overview(
+    value: CountOfTotal(running, total),
+    notes: case issues, total {
+      [], 0 -> [plain_note(i18n.NoPluginsEnabledShort)]
+      [], _ -> [plain_note(i18n.RunningOfTotal)]
+      _, _ -> issues
+    },
+    linked: True,
+    highlighted: False,
   )
 }
 
-/// リレーのタイル。行数と、未接続・応答なしの行数、バンカー用の行の有無を補足する。
-/// 未接続と応答なしは、用途が 2 つある行を二重に数えないよう行単位で数える。
-fn relays_tile(
+/// 概要の帯。5 項目を区切りの線で分けて 1 本の面に並べる。狭い画面では 2 列で、承認待ちの
+/// 項目だけ全幅にする。
+fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
+  let rail = overview(snapshot)
+  html.nav(
+    [
+      attribute.attribute("aria-label", i18n.text(language, i18n.OverviewLabel)),
+      attribute.class(
+        "grid grid-cols-2 gap-px overflow-hidden rounded-box border border-base-300 bg-base-300 lg:grid-cols-5",
+      ),
+    ],
+    [
+      overview_cell(
+        language,
+        view.door_open_icon(),
+        i18n.Pending,
+        pending_anchor,
+        True,
+        rail.pending,
+      ),
+      overview_cell(
+        language,
+        view.users_icon(),
+        i18n.Accounts,
+        accounts_anchor,
+        False,
+        rail.accounts,
+      ),
+      overview_cell(
+        language,
+        view.clock_icon(),
+        i18n.Sessions,
+        sessions_anchor,
+        False,
+        rail.sessions,
+      ),
+      overview_cell(
+        language,
+        view.plug_icon(),
+        i18n.Relays,
+        relays_anchor,
+        False,
+        rail.relays,
+      ),
+      overview_cell(
+        language,
+        view.puzzle_icon(),
+        i18n.Plugins,
+        plugins_anchor,
+        False,
+        rail.plugins,
+      ),
+    ],
+  )
+}
+
+/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.linked` なら同じページの
+/// 節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を占めさせる。塗った項目では
+/// 見出しと補足を補助の文字の色にせず、塗りの上の文字の色を継がせる。リンクにしない項目には、
+/// マウスを重ねたときの色を付けない。
+fn overview_cell(
   language: Language,
-  relays: Result(List(RelayRow), i18n.Reason),
+  icon: Element(msg),
+  title: i18n.Message,
+  anchor: String,
+  wide: Bool,
+  item: Overview,
 ) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let #(value, note) = case relays {
-    Error(_) -> #("—", text(i18n.TileNotAvailable))
-    Ok(rows) -> #(
-      int.to_string(list.length(rows)),
-      case has_bunker_relay(rows) {
-        False -> text(i18n.NoBunkerRelayShort)
-        True -> {
-          let disconnected =
-            list.count(rows, row_has_role_state(_, Reported(Disconnected)))
-          let unanswered = list.count(rows, row_has_role_state(_, Unanswered))
-          case disconnected, unanswered {
-            0, 0 -> text(i18n.AllRelaysConnected)
-            _, _ -> text(i18n.RelayIssueCounts(disconnected, unanswered))
-          }
-        }
-      },
+  let class = case wide, item.highlighted, item.linked {
+    True, True, _ ->
+      "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content hover:bg-primary/90 lg:col-span-1"
+    True, False, True ->
+      "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200 lg:col-span-1"
+    True, False, False ->
+      "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
+    False, _, True ->
+      "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200"
+    False, _, False -> "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5"
+  }
+  let #(label_class, note_class) = case item.highlighted {
+    True -> #(
+      "flex items-center gap-1.5 text-sm font-semibold",
+      "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs",
+    )
+    False -> #(
+      "flex items-center gap-1.5 text-sm font-semibold text-muted",
+      "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted",
     )
   }
-  tile(
-    language,
-    view.Neutral,
-    i18n.Relays,
-    value,
-    tile_note(note),
-    Some(relays_anchor),
-    False,
-  )
+  let content = [
+    html.span([attribute.class(label_class)], [
+      icon,
+      html.text(i18n.text(language, title)),
+    ]),
+    overview_value(item.value),
+    html.span(
+      [attribute.class(note_class)],
+      list.map(item.notes, overview_note(language, _)),
+    ),
+  ]
+  case item.linked {
+    True ->
+      html.a([attribute.href("#" <> anchor), attribute.class(class)], content)
+    False -> html.div([attribute.class(class)], content)
+  }
+}
+
+/// 概要の帯の値。等幅の数字を 1 行で出し、全件数は小さく補助の文字の色で続ける。
+fn overview_value(value: OverviewValue) -> Element(msg) {
+  let class =
+    "whitespace-nowrap font-mono text-3xl font-bold leading-tight tabular-nums"
+  case value {
+    Count(count) ->
+      html.span([attribute.class(class)], [html.text(int.to_string(count))])
+    CountOfTotal(count:, total:) ->
+      html.span([attribute.class(class)], [
+        html.text(int.to_string(count)),
+        html.small([attribute.class("text-lg font-medium text-muted")], [
+          html.text("/" <> int.to_string(total)),
+        ]),
+      ])
+    NoValue ->
+      html.span(
+        [
+          attribute.class(
+            "whitespace-nowrap font-mono text-3xl font-bold leading-tight tabular-nums text-error",
+          ),
+        ],
+        [html.text("—")],
+      )
+  }
+}
+
+/// 概要の帯の補足の語 1 つ。
+fn overview_note(language: Language, note: OverviewNote) -> Element(msg) {
+  let text = i18n.text(language, note.text)
+  case note.state {
+    Some(chip) -> view.status_note(chip, text)
+    None -> html.span([], [html.text(text)])
+  }
 }
 
 /// 行の監視かバンカーの用途のどちらかが `state` と等しいか。
@@ -546,69 +775,6 @@ fn row_has_role_state(row: RelayRow, state: RoleState) -> Bool {
 /// 一覧にバンカーに使う行があるか。
 fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
   list.any(rows, fn(row) { row.bunker != Unused })
-}
-
-/// プラグインのタイル。値は動作中の件数と全件数で、読み込めなかった候補は分母に入れない
-/// （ランナーが無いため）。補足は、読み込めなかった候補があればその件数（このときだけ警告の
-/// 色にする）、無ければ異常（過負荷・無効・応答なし）の内訳、プラグインが 1 件も無ければ
-/// 「有効なプラグインなし」、どれでもなければ出さない。
-fn plugins_tile(
-  language: Language,
-  plugins: List(PluginRow),
-  not_loaded: List(plugin_loader.NotLoaded),
-) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let total = list.length(plugins)
-  let running =
-    list.count(plugins, fn(plugin) {
-      plugin.status == Some(plugin_runner.Running)
-    })
-  let overloaded =
-    list.count(plugins, fn(plugin) {
-      case plugin.status {
-        Some(plugin_runner.Overloaded(..)) -> True
-        _ -> False
-      }
-    })
-  let disabled =
-    list.count(plugins, fn(plugin) {
-      case plugin.status {
-        Some(plugin_runner.Disabled(..)) -> True
-        _ -> False
-      }
-    })
-  let unavailable = list.count(plugins, fn(plugin) { plugin.status == None })
-  let not_loaded_count = list.length(not_loaded)
-  let #(tone, note) = case
-    not_loaded_count,
-    overloaded,
-    disabled,
-    unavailable,
-    total
-  {
-    0, 0, 0, 0, 0 -> #(
-      view.Neutral,
-      tile_note(text(i18n.NoPluginsEnabledShort)),
-    )
-    0, 0, 0, 0, _ -> #(view.Neutral, element.none())
-    0, _, _, _, _ -> #(
-      view.Neutral,
-      tile_note(text(i18n.PluginIssueCounts(overloaded, disabled, unavailable))),
-    )
-    _, _, _, _, _ -> #(
-      view.Warning,
-      tile_note(text(i18n.PluginsNotLoadedShort(not_loaded_count))),
-    )
-  }
-  tile(
-    language,
-    tone,
-    i18n.Plugins,
-    text(i18n.PluginsRunningOfTotal(running, total)),
-    note,
-    Some(plugins_anchor),
-    False,
-  )
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。

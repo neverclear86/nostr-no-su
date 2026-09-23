@@ -1210,36 +1210,6 @@ pub fn empty_sections_show_an_icon_and_a_sentence_test() {
   assert !string.contains(body, "Plugins</h2><span class=\"badge")
 }
 
-/// プラグインのタイルは、読み込めなかった候補が 1 件以上あるとき補足をその件数にし
-/// （警告の色になる）、過負荷・無効・応答なしの内訳より優先する。0 件のときは今までどおり
-/// その内訳を出す。
-pub fn plugins_tile_notes_not_loaded_test() {
-  let with_not_loaded =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), not_loaded_plugins: [
-        plugin_loader.NotLoaded(id: "demo_plugin", reason: "boom"),
-      ]),
-    )
-  assert string.contains(with_not_loaded, "1 failed to load")
-  assert !string.contains(
-    with_not_loaded,
-    "1 overloaded · 1 disabled · 1 unavailable",
-  )
-  assert string.contains(
-    with_not_loaded,
-    "card card-border border-warning bg-warning/15 text-warning",
-  )
-
-  let without_not_loaded = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(
-    without_not_loaded,
-    "1 overloaded · 1 disabled · 1 unavailable",
-  )
-  assert !string.contains(without_not_loaded, "failed to load")
-}
-
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。
 pub fn language_switch_return_paths_test() {
   let assert Ok([pending]) = states().pending
@@ -1282,22 +1252,6 @@ pub fn dashboard_refreshes_only_when_pending_exists_test() {
       dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
     ),
     "http-equiv=\"refresh\"",
-  )
-}
-
-/// 承認待ちのタイルの補足は、自動更新中のときだけ更新の間隔を伝える。
-pub fn pending_tile_shows_the_refresh_note_only_when_refreshing_test() {
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    "Awaiting your decision · refreshes every 30 s",
-  )
-  assert !string.contains(
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    ),
-    "Awaiting your decision",
   )
 }
 
@@ -1421,9 +1375,9 @@ pub fn pending_ring_follows_the_remaining_seconds_test() {
   assert string.contains(body, "text-warning\">0:45</span>")
 }
 
-/// 概要のタイルは、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
+/// 概要の帯の項目は、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
 /// `id` を持つ。
-pub fn overview_tiles_link_to_each_section_test() {
+pub fn overview_rail_links_to_each_section_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let anchors = ["pending", "accounts", "sessions", "relays", "plugins"]
   use anchor <- list.each(anchors)
@@ -1431,25 +1385,9 @@ pub fn overview_tiles_link_to_each_section_test() {
   assert string.contains(body, "id=\"" <> anchor <> "\"")
 }
 
-/// 承認待ちのタイルは、1 件以上あるときだけ狭い画面で全幅を占める。
-pub fn pending_tile_is_full_width_only_when_pending_exists_test() {
-  let wide_class =
-    "card card-border col-span-2 border-warning bg-warning/15 text-warning lg:col-span-1"
-  let with_pending = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(with_pending, wide_class)
-
-  let empty =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    )
-  assert !string.contains(empty, wide_class)
-}
-
-/// 承認待ちのタイルは、0 件のときは節が無いのでリンクにしない。1 件以上あるとき、
+/// 承認待ちの項目は、0 件のときは節が無いのでリンクにしない。1 件以上あるとき、
 /// 一覧を得られないときはリンクにする。
-pub fn pending_tile_is_not_a_link_when_no_pending_test() {
+pub fn overview_pending_is_not_a_link_when_no_pending_test() {
   let anchor = "href=\"#pending\""
   assert string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -1473,9 +1411,9 @@ pub fn pending_tile_is_not_a_link_when_no_pending_test() {
   )
 }
 
-/// 承認待ち・アカウント・セッションの一覧を得られないとき、対応するタイルの値は
-/// 「—」、補足は「取得できません」になる。
-pub fn tiles_say_not_available_when_lists_are_missing_test() {
+/// 承認待ち・アカウント・セッションの一覧を得られないとき、対応する項目の値は error の色の
+/// 「—」、補足は error の色の「取得できません」になる。
+pub fn overview_says_not_available_when_lists_are_missing_test() {
   let unavailable =
     dashboard.render(
       i18n.English,
@@ -1487,8 +1425,13 @@ pub fn tiles_say_not_available_when_lists_are_missing_test() {
         sessions: Error(i18n.Untranslated("boom")),
       ),
     )
-  let value = "<p class=\"text-2xl font-bold\">—</p>"
-  let note = "<p class=\"text-xs\">Not available</p>"
+  let value =
+    "<span class=\"whitespace-nowrap font-mono text-3xl font-bold leading-tight tabular-nums text-error\">—</span>"
+  let note =
+    element.to_string(view.status_note(
+      view.ToneChip(view.Failure),
+      "Not available",
+    ))
   assert list.length(string.split(unavailable, value)) == 4
   assert list.length(string.split(unavailable, note)) == 4
 }
@@ -1643,4 +1586,175 @@ pub fn approval_page_explains_what_approval_means_test() {
     without_perms_page,
     "You can change them later from the approved session. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
+}
+
+/// 承認待ちの項目は、1 件以上あるときだけ `primary` で塗る。狭い画面では件数によらず全幅を
+/// 占める。
+pub fn overview_highlights_pending_only_when_pending_exists_test() {
+  let highlighted =
+    "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content"
+  let plain =
+    "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
+  let with_pending = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(with_pending, highlighted)
+  let empty =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    )
+  assert !string.contains(empty, highlighted)
+  assert string.contains(empty, plain)
+}
+
+/// 概要の帯の色の規則。一覧を得られない項目は値「—」と error の補足、要対応の語だけ状態の
+/// チップの色、承認待ちが 1 件以上なら承認待ちの項目だけを塗る。
+pub fn overview_color_rules_test() {
+  let failure = Some(view.ToneChip(view.Failure))
+  let not_available =
+    dashboard.Overview(
+      dashboard.NoValue,
+      [dashboard.OverviewNote(failure, i18n.OverviewNotAvailable)],
+      linked: True,
+      highlighted: False,
+    )
+  let item = fn(value, notes) {
+    dashboard.Overview(value, notes, linked: True, highlighted: False)
+  }
+  let plain = fn(text) { dashboard.OverviewNote(None, text) }
+  let note = fn(chip, text) { dashboard.OverviewNote(Some(chip), text) }
+  let reason = i18n.Untranslated("boom")
+  let relays = fn(monitor, bunker) {
+    dashboard.Snapshot(
+      ..states(),
+      relays: Ok([dashboard.RelayRow(1, "wss://a", monitor, bunker)]),
+    )
+  }
+  let connected = dashboard.Reported(relay_connection.Connected)
+  let pending = fn(rail: dashboard.OverviewRail) { rail.pending }
+  let accounts = fn(rail: dashboard.OverviewRail) { rail.accounts }
+  let sessions = fn(rail: dashboard.OverviewRail) { rail.sessions }
+  let relay = fn(rail: dashboard.OverviewRail) { rail.relays }
+  let plugins = fn(rail: dashboard.OverviewRail) { rail.plugins }
+  let cases = [
+    #(
+      dashboard.Snapshot(..states(), pending: Error(reason)),
+      pending,
+      not_available,
+    ),
+    #(
+      dashboard.Snapshot(..states(), pending: Ok([])),
+      pending,
+      dashboard.Overview(
+        dashboard.Count(0),
+        [plain(i18n.PendingExpireAfterMinutes(10))],
+        linked: False,
+        highlighted: False,
+      ),
+    ),
+    #(
+      secret_states(),
+      pending,
+      dashboard.Overview(
+        dashboard.Count(2),
+        [plain(i18n.AwaitingDecision), plain(i18n.SoonestExpiry("0:45"))],
+        linked: True,
+        highlighted: True,
+      ),
+    ),
+    #(
+      dashboard.Snapshot(..states(), accounts: Error(reason)),
+      accounts,
+      not_available,
+    ),
+    #(
+      states(),
+      accounts,
+      item(dashboard.Count(0), [plain(i18n.AllAccountsLoaded)]),
+    ),
+    #(
+      dashboard.Snapshot(
+        ..states(),
+        skipped: Ok([
+          dashboard.SkippedRow(
+            pubkey: "abcd1234",
+            npub: "npub1unreadable",
+            label: "old wallet",
+            reason: vault.UndecryptablePrivateKey,
+          ),
+        ]),
+      ),
+      accounts,
+      item(dashboard.Count(0), [
+        note(view.LoadFailedChip, i18n.UnreadableRowCount(1)),
+      ]),
+    ),
+    #(
+      dashboard.Snapshot(..states(), skipped: Error(reason)),
+      accounts,
+      item(dashboard.Count(0), not_available.notes),
+    ),
+    #(
+      dashboard.Snapshot(..states(), sessions: Error(reason)),
+      sessions,
+      not_available,
+    ),
+    #(
+      dashboard.Snapshot(..states(), relays: Error(reason)),
+      relay,
+      not_available,
+    ),
+    #(
+      states(),
+      relay,
+      item(dashboard.Count(2), [
+        note(view.DisconnectedChip, i18n.DisconnectedRelayCount(2)),
+      ]),
+    ),
+    #(
+      relays(dashboard.Unused, dashboard.Unanswered),
+      relay,
+      item(dashboard.Count(1), [
+        note(view.UnansweredChip, i18n.UnansweredRelayCount(1)),
+      ]),
+    ),
+    #(
+      relays(connected, dashboard.Unused),
+      relay,
+      item(dashboard.Count(1), [
+        note(view.ToneChip(view.Warning), i18n.NoBunkerRelayShort),
+      ]),
+    ),
+    #(
+      relays(connected, connected),
+      relay,
+      item(dashboard.Count(1), [plain(i18n.AllRelaysConnected)]),
+    ),
+    #(
+      dashboard.Snapshot(..states(), not_loaded_plugins: [
+        plugin_loader.NotLoaded(id: "demo_plugin", reason: "boom"),
+      ]),
+      plugins,
+      item(dashboard.CountOfTotal(1, 4), [
+        note(view.OverloadedChip, i18n.OverloadedPluginCount(1)),
+        note(view.DisabledChip, i18n.DisabledPluginCount(1)),
+        note(view.UnansweredChip, i18n.UnavailablePluginCount(1)),
+        note(view.LoadFailedChip, i18n.PluginsNotLoadedShort(1)),
+      ]),
+    ),
+    #(
+      dashboard.Snapshot(..states(), plugins: [
+        dashboard.PluginRow("a", Some(plugin_runner.Running), pages: []),
+      ]),
+      plugins,
+      item(dashboard.CountOfTotal(1, 1), [plain(i18n.RunningOfTotal)]),
+    ),
+    #(
+      dashboard.Snapshot(..states(), plugins: []),
+      plugins,
+      item(dashboard.CountOfTotal(0, 0), [plain(i18n.NoPluginsEnabledShort)]),
+    ),
+  ]
+  use #(snapshot, pick, expected) <- list.each(cases)
+  assert pick(dashboard.overview(snapshot)) == expected
 }

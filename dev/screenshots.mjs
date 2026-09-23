@@ -151,7 +151,7 @@ const shots = [
 // （一致しないか複数に一致すると strict で失敗する）。url、form、status、open は
 // shots と同じ意味。出力名は <name>.png で、言語の接尾辞は付けない。
 const usage = [
-  { name: "tiles", url: `${readmeBase}/`, selector: "main > div.grid-cols-2" },
+  { name: "tiles", url: `${readmeBase}/`, selector: "main > nav" },
   { name: "navbar", url: `${readmeBase}/`, selector: "header" },
   { name: "relays", url: `${readmeBase}/`, selector: "#relays" },
   { name: "new-relay", url: `${base}/relays/new`, selector: "main > section" },
