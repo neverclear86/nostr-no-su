@@ -71,11 +71,11 @@ const S = {
       status: { type: 'string', enum: ['pr', 'rejected', 'blocked'] },
       pr: { type: 'integer', description: 'pr のとき、作った PR の番号。複数の PR に分けたときは一番上の段' },
       prUrl: { type: 'string' },
-      head: { type: 'string' },
+      head: { type: 'string', description: 'push した head のコミット。複数の PR に分けたときは一番上の段' },
       ciPassed: { type: 'boolean', description: 'PR の CI が pass したか。複数の PR に分けたときは全部の PR が pass のとき true' },
       prs: {
         type: 'array',
-        items: { type: 'object', properties: { pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' } }, required: ['pr', 'prUrl', 'head'] },
+        items: { type: 'object', properties: { pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string', description: 'その段の push した head のコミット' }, branch: { type: 'string', description: 'その段のブランチ名' } }, required: ['pr', 'prUrl', 'head'] },
         description: '複数の PR に stacked PR で分けたとき、下の段から順の全部の PR。1 本のときは省く',
       },
       commentUrl: { type: 'string', description: 'rejected / blocked のとき、issue に投稿した「## 精査」の URL' },
