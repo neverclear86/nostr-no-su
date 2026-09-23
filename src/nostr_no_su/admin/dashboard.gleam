@@ -317,7 +317,8 @@ fn dashboard_refresh(
   }
 }
 
-/// スナップショットをダッシュボードのページに描画する。先頭に概要の帯、続けて
+/// スナップショットをダッシュボードのページに描画する。先頭に概要の帯を置き、承認待ち、アカウント、セッションの
+/// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
 /// プラグインの状態と読み込めなかったプラグインを右の列に置く 2 列で、狭い画面ではこの順に
@@ -327,6 +328,7 @@ pub fn render(
   theme: view.Theme,
   snapshot: Snapshot,
 ) -> String {
+  let shared = shared_failure(snapshot)
   view.page(
     language,
     theme,
@@ -336,22 +338,25 @@ pub fn render(
     dashboard_refresh(snapshot.pending),
     [
       overview_rail(language, snapshot),
+      shared_failure_alert(language, shared),
       pending_section(
         language,
         snapshot.accounts,
         snapshot.now,
+        shared,
         snapshot.pending,
       ),
       html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
         html.div(
           [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")],
           [
-            accounts_section(language, snapshot.accounts),
+            accounts_section(language, shared, snapshot.accounts),
             skipped_section(language, snapshot.skipped),
             sessions_section(
               language,
               snapshot.accounts,
               snapshot.now,
+              shared,
               snapshot.sessions,
             ),
           ],
@@ -778,9 +783,11 @@ fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。
-/// 一覧を得られないときは、一覧の代わりにその理由を出し、登録のリンクも出さない。
+/// 一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、
+/// 登録のリンクも出さない。
 fn accounts_section(
   language: Language,
+  shared: Option(String),
   accounts: Result(List(AccountRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
@@ -802,7 +809,7 @@ fn accounts_section(
     ),
     listed_body(
       language,
-      view.Neutral,
+      shared,
       accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts)),
@@ -892,23 +899,62 @@ fn listed_section_heading(
   view.section_heading(icon, i18n.text(language, title), count, None, actions)
 }
 
-/// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした `tone` の色の理由の囲みを面
-/// （`view.surface`）に載せて、得られれば `render` の内容を出す。アカウント、承認待ち、セッション、リレーの
-/// 節が使い、承認待ちだけ `Failure`、ほかは `Neutral` を渡す。
+/// 一覧を得たときの節の本文。得られれば `render` の内容を出す。得られず、3 つの一覧に共通の理由（`shared`）が
+/// ページの先頭に出ているときは「上の理由で取得できません。」の 1 文だけを出し、そうでなければ `lead` を前置きに
+/// したエラーの色の理由の囲みを面（`view.surface`）に載せて出す。承認待ち、アカウント、セッション、リレーの節が
+/// 使い、リレーの節は `shared` に `None` を渡す。
 fn listed_body(
   language: Language,
-  tone: view.Tone,
+  shared: Option(String),
   listing: Result(List(a), i18n.Reason),
   lead: i18n.Lead,
   empty: Element(msg),
   render: fn(List(a)) -> Element(msg),
 ) -> Element(msg) {
-  case listing {
-    Ok(rows) -> section_body(rows, empty, render)
-    Error(reason) ->
+  case listing, shared {
+    Ok(rows), _ -> section_body(rows, empty, render)
+    Error(_), Some(_) ->
+      view.hint(i18n.text(language, i18n.NotAvailableForReasonAbove))
+    Error(reason), None ->
       view.surface([
-        view.alert(tone, view.reason_content(language, Some(lead), reason)),
+        view.alert(
+          view.Failure,
+          view.reason_content(language, Some(lead), reason),
+        ),
       ])
+  }
+}
+
+/// 承認待ち、アカウント、セッションの 3 つの一覧が、同じ英語の理由（DB の障害、読み込み中）で得られない
+/// ときのその理由。1 つでも得られたとき、理由が 1 つでも違うとき、締め切り超過（訳した理由）のときは `None`。
+fn shared_failure(snapshot: Snapshot) -> Option(String) {
+  case snapshot.pending, snapshot.accounts, snapshot.sessions {
+    Error(i18n.Untranslated(pending)),
+      Error(i18n.Untranslated(accounts)),
+      Error(i18n.Untranslated(sessions))
+      if pending == accounts && accounts == sessions
+    -> Some(pending)
+    _, _, _ -> None
+  }
+}
+
+/// 3 つの一覧に共通の理由を、エラーの色の囲みで 1 つ出す。日本語のページでは、何を表示できないかの前置きを
+/// 付ける。共通の理由が無ければ何も出さない。
+fn shared_failure_alert(
+  language: Language,
+  shared: Option(String),
+) -> Element(msg) {
+  case shared {
+    Some(detail) ->
+      view.alert(
+        view.Failure,
+        view.reason_content(
+          language,
+          Some(i18n.CouldNotListPendingAccountsSessions),
+          i18n.Untranslated(detail),
+        ),
+      )
+    None -> element.none()
   }
 }
 
@@ -986,10 +1032,12 @@ fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
 /// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に見出し、
 /// 説明、承認待ちのカードを置く。見出しの右には、ダッシュボードを自動で読み込み直すときだけ更新の間隔を出す。
 /// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
+/// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
   now: Int,
+  shared: Option(String),
   pending: Result(List(PendingRow), i18n.Reason),
 ) -> Element(msg) {
   case pending {
@@ -1010,7 +1058,7 @@ fn pending_section(
         ),
         listed_body(
           language,
-          view.Failure,
+          shared,
           pending,
           i18n.CouldNotListPending,
           element.none(),
@@ -1574,7 +1622,7 @@ fn relays_section(
     no_bunker_relay_warning(language, relays),
     listed_body(
       language,
-      view.Neutral,
+      None,
       relays,
       i18n.CouldNotListRelays,
       element.none(),
@@ -1656,11 +1704,12 @@ pub fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
 }
 
 /// 承認済みセッションと、その取り消しボタン。一覧を得られないときは、一覧の
-/// 代わりにその理由を出す。
+/// 代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出す。
 fn sessions_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
   now: Int,
+  shared: Option(String),
   sessions: Result(List(SessionRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
@@ -1682,7 +1731,7 @@ fn sessions_section(
     ),
     listed_body(
       language,
-      view.Neutral,
+      shared,
       sessions,
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),

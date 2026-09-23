@@ -187,6 +187,16 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         dashboard.Snapshot(
           ..empty,
+          accounts: Error(i18n.Translated(i18n.NotAvailable)),
+          pending: Error(i18n.Translated(i18n.NotAvailable)),
+          sessions: Error(i18n.Translated(i18n.NotAvailable)),
+        ),
+      ),
+      dashboard.render(
+        language,
+        view.System,
+        dashboard.Snapshot(
+          ..empty,
           relays: Ok([
             dashboard.RelayRow(
               1,

@@ -609,8 +609,8 @@ pub fn table_headers_scope_their_columns_test() {
 }
 
 /// 承認待ちとセッションを得られないときは、「0 件」の代わりに理由を出し、
-/// 承認・拒否や取り消しのフォームも出さない。承認待ちの理由の囲みは error 色、
-/// セッションの理由の囲みは中立の色になる。日本語では前置きも出る。
+/// 承認・拒否や取り消しのフォームも出さない。承認待ちとセッションの理由の囲みは
+/// どちらも error 色になる。日本語では前置きも出る。
 pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -642,6 +642,79 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
     japanese,
     "<span>セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
   )
+}
+
+/// 承認待ち、アカウント、セッションの 3 つの一覧が同じ英語の理由で得られないときは、承認待ちの
+/// 帯より前にエラーの色の囲みを 1 つ出して理由をそこで 1 回だけ出し、3 つの節には
+/// 「上の理由で取得できません。」の 1 文だけを出す。日本語では囲みに前置きが付く。
+pub fn shared_listing_failure_is_shown_once_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Error(i18n.Untranslated("account store unavailable: boom")),
+      pending: Error(i18n.Untranslated("account store unavailable: boom")),
+      sessions: Error(i18n.Untranslated("account store unavailable: boom")),
+    )
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert list.length(string.split(english, "account store unavailable: boom"))
+    == 2
+  assert list.length(string.split(english, "alert alert-soft alert-error")) == 2
+  assert list.length(string.split(
+      english,
+      "<p class=\"text-sm text-muted\">Not available for the reason above.</p>",
+    ))
+    == 4
+  let assert Ok(#(before_pending, _)) =
+    string.split_once(english, "id=\"pending\"")
+  assert string.contains(
+    before_pending,
+    "<span lang=\"en\">account store unavailable: boom</span>",
+  )
+
+  let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
+  assert string.contains(
+    japanese,
+    "<span>承認待ち、アカウント、セッションの一覧を表示できません。"
+      <> "<span lang=\"en\">account store unavailable: boom</span></span>",
+  )
+  assert list.length(string.split(
+      japanese,
+      "<p class=\"text-sm text-muted\">上の理由で取得できません。</p>",
+    ))
+    == 4
+}
+
+/// 3 つの一覧がどれも締め切りを超えたときは先頭の囲みにまとめず、節ごとにエラーの色の囲みで
+/// 「今は取得できません。」を出す。
+pub fn timed_out_listings_are_not_merged_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Error(i18n.Translated(i18n.NotAvailable)),
+      pending: Error(i18n.Translated(i18n.NotAvailable)),
+      sessions: Error(i18n.Translated(i18n.NotAvailable)),
+    )
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert list.length(string.split(english, "Not available right now.")) == 4
+  assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
+  assert !string.contains(english, "Not available for the reason above.")
+}
+
+/// 3 つの一覧の理由が 1 つでも違うときは先頭の囲みにまとめず、節ごとにエラーの色の囲みで
+/// それぞれの理由を出す。
+pub fn different_listing_failures_stay_in_each_section_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Error(i18n.Untranslated("first reason")),
+      pending: Error(i18n.Untranslated("first reason")),
+      sessions: Error(i18n.Untranslated("second reason")),
+    )
+  let english = dashboard.render(i18n.English, view.System, snapshot)
+  assert list.length(string.split(english, "first reason")) == 3
+  assert list.length(string.split(english, "second reason")) == 2
+  assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
+  assert !string.contains(english, "Not available for the reason above.")
 }
 
 /// 承認済みセッションの行は、最終利用の `title` に作成と最終利用を RFC 3339 の UTC で出す。
@@ -1078,15 +1151,15 @@ pub fn unlisted_relays_show_the_reason_test() {
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
     "Relays</h2></div></div></div>"
-      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
       <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "リレー</h2></div></div></div>"
-      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Neutral))
+      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
 }

@@ -170,6 +170,7 @@ pub type Lead {
   CouldNotListPending
   CouldNotListSessions
   CouldNotListRelays
+  CouldNotListPendingAccountsSessions
   CouldNotAddRelay
   CouldNotSaveRelay
   CouldNotDeleteRelay
@@ -191,6 +192,7 @@ pub fn lead(language: Language, lead: Lead) -> Option(String) {
         CouldNotListPending -> "承認待ちの一覧を表示できません。"
         CouldNotListSessions -> "セッションの一覧を表示できません。"
         CouldNotListRelays -> "リレーの一覧を表示できません。"
+        CouldNotListPendingAccountsSessions -> "承認待ち、アカウント、セッションの一覧を表示できません。"
         CouldNotAddRelay -> "リレーを登録できませんでした。"
         CouldNotSaveRelay -> "用途を保存できませんでした。"
         CouldNotDeleteRelay -> "リレーを削除できませんでした。"
@@ -425,6 +427,7 @@ pub type Message {
   BunkerDidNotRespond
   StoreDidNotConfirm
   NotAvailable
+  NotAvailableForReasonAbove
   // アカウントの登録画面
   ImportPrivateKey
   ImportDescription
@@ -735,6 +738,7 @@ fn english(message: Message) -> String {
     StoreDidNotConfirm ->
       "the store did not confirm the change; it may have been applied"
     NotAvailable -> "Not available right now."
+    NotAvailableForReasonAbove -> "Not available for the reason above."
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
       "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
@@ -1026,6 +1030,7 @@ fn japanese(message: Message) -> String {
     BunkerDidNotRespond -> "バンカーが応答しませんでした。"
     StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
     NotAvailable -> "今は取得できません。"
+    NotAvailableForReasonAbove -> "上の理由で取得できません。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
