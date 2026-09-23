@@ -47,7 +47,7 @@ hooks:
 
 ## PR を作る前の検査（この順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く）
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
-1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）。rebase の後、プランが足す新しい識別子（関数、型、CSS のクラス）を作業ツリーで `git grep` し、土台より後にマージされた変更と同じ名前が無いことを確かめる（プランの衝突の検査は土台に対して回されている）
+1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）。rebase の後、プランが足す新しい識別子（関数、型、CSS のクラス）を作業ツリーで `git grep` し、土台より後にマージされた変更と同じ名前が無いことを確かめる（プランの衝突の検査は土台に対して回されている）。プランの土台（冒頭の SHA）が今の `origin/main` より古いときは、実装の前に `dev/check_plan_tests.sh`、掃き出しの語、土台に依存する測定値（件数、行番号）を今の土台で取り直し、ずれを「プランからの変更」に書く
 2. `gleam build --warnings-as-errors`
 3. `gleam test`。CI も Postgres と strfry つきで走らせるが、CI の失敗で push をやり直さないよう、ここでも Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す。`COVERAGE=1` も付けて回し、そのあと `sh dev/check_coverage_badge.sh` を通す。計測値は環境で変わるので、`--update` でバッジを書き換えるときは、Postgres だけでなく strfry も立てて `TEST_RELAY_URL` を渡した状態（`docs/development.md` の「NIP-46 の E2E（strfry）」）で測り直してから行う（CI は両方を立てて測るので、E2E 抜きの値を書くとずれが溜まる）。
 4. `gleam format src test dev`（差分をコミットに含める）と `gleam format --check src test dev`。frontmatter の hook が同じ検査を機械的に行う（Edit / Write した `.gleam` は `dev/hook_gleam_format.sh` が整形し、`git -C <作業ツリー> push` の前に `dev/hook_push_format_check.sh` が `--check` を回して通らなければ止める）。hook は保険であり、この手順は省かない
@@ -94,7 +94,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 ## プランが無いとき（tier none）
 
 依頼文が「実装プランを書かない段階に振り分けられた」と言うときは、承認済みプランが無い。
-受け入れ条件は issue の本文とコメントにしか無いので、そこから取る。行番号とファイルの位置は起票時の参考値として扱い、土台で引き直してから設計メモに書く。プランの代わりに PR 本文の「## 設計メモ」が設計の記録になり、PR レビュアーと最終確認はこの節に照合する。内容は次の 2 つだけで、プランの体裁（方針の要約、変更するファイルの節）は作らない。
+受け入れ条件は issue の本文とコメントにしか無いので、そこから取る。行番号とファイルの位置は起票時の参考値として扱い、土台で引き直してから設計メモに書く。issue の「プランで決める」「設計で決める」の項は、設計メモの「決めたこと」で決める。プランの代わりに PR 本文の「## 設計メモ」が設計の記録になり、PR レビュアーと最終確認はこの節に照合する。内容は次の 2 つだけで、プランの体裁（方針の要約、変更するファイルの節）は作らない。
 
 ```
 ## 設計メモ
