@@ -68,9 +68,9 @@ issue が分割で生まれたサブ issue なら、兄弟がすべて閉じた�
 gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86",name:"nostr-no-su"){issue(number:$n){parent{number state subIssues(first:100){nodes{number state}}}}}}'
 ```
 
-`subIssuesSummary` の `completed` は使わない（閉じた直後の兄弟が数えられず、実際より少なく出る）。`nodes` の `state` で数え、いま閉じた `<N>` は `state` に関わらず閉じたものとして数える。
+`subIssuesSummary` の `completed` は使わない（いま閉じた `<N>` が数えられず、実際より少なく出る）。`nodes` の `state` で数え、いま閉じた `<N>` は `state` に関わらず閉じたものとして数える。
 `parent` が null なら終わり。親が `OPEN` で `<N>` 以外の `nodes` がすべて `CLOSED` なら、`gh issue close <親> -R neverclear86/nostr-no-su -c "サブ issue がすべて閉じたので閉じる。"` を単独の Bash 呼び出しで実行して閉じ、閉じた親を `<N>` にして同じ確認を繰り返す（親も分割で生まれたサブ issue でありうる）。親が `CLOSED` か、まだ開いている兄弟があれば止める。
-閉じる条件を満たしたのに `gh issue close` が拒否されたら、その親の番号を `openParent` に入れ、`problem` に拒否の文を書いて返す（スクリプトが `log` に出し、結果に残す）。
+閉じる条件を満たしたのに `gh issue close` が拒否されたら、その親の番号を `openParent` に入れ、`problem` に拒否の文を書いて返す（スクリプトが `log` に出し、結果に残す）。拒否されたら、`gh api` の `PATCH` や `gh issue edit` など別の経路で閉じ直さない。
 
 ## 文書の長さ
 書く文書（プラン、レビュー、コメント）は、読む相手が次に取る行動を変える情報だけで組む。
