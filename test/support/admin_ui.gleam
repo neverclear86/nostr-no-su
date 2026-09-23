@@ -3,7 +3,7 @@
 //// ページの英文を見る `japanese_pages_test`、板つきのロゴのファイルと README を読む
 //// `logo_test` が使う。
 ////
-//// `view.gleam` に部品を足したら `components` にもその部品を足す。
+//// `view.gleam` か `admin/fingerprint` に部品を足したら `components` にもその部品を足す。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -15,6 +15,7 @@ import lustre/element/html
 import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/relay_pages
@@ -674,8 +675,8 @@ const button_kinds = [
   view.WarningOutlineButton,
 ]
 
-/// ページに埋め込まれずに使う `view.gleam` の部品を、状態の分岐をすべて通して描いた文字列。
-/// `view.gleam` に部品を足したらここにも足す。
+/// ページに埋め込まれずに使う `view.gleam` と `admin/fingerprint` の部品を、状態の分岐をすべて通して描いた文字列。
+/// `view.gleam` か `admin/fingerprint` に部品を足したらここにも足す。
 pub fn components(language: i18n.Language) -> List(String) {
   list.flatten([
     list.map(
@@ -743,6 +744,21 @@ pub fn components(language: i18n.Language) -> List(String) {
       element.to_string(view.truncated_id(language, "0123456789abcdef", "copy")),
     ],
     [element.to_string(view.preformatted("[[0,1]]"))],
+    // 大きさのクラスは、Tailwind が走査する admin/ の .gleam に現れる size-4 を使う（test/ は走査の外）。
+    list.map([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], fn(hue) {
+      element.to_string(fingerprint.svg(
+        fingerprint.Fingerprint(hue:, cells: [#(0, 0), #(4, 0)]),
+        fingerprint.Colored,
+        "size-4",
+      ))
+    }),
+    [
+      element.to_string(fingerprint.svg(
+        fingerprint.Fingerprint(hue: 0, cells: [#(2, 2)]),
+        fingerprint.Gray,
+        "size-4",
+      )),
+    ],
     [
       element.to_string(view.section_block("anchor", [view.hint("content")])),
       element.to_string(

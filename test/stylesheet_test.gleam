@@ -143,6 +143,21 @@ pub fn pages_have_no_inline_styles_test() {
   assert !string.contains(page, " style=\"")
 }
 
+/// 鍵の指紋の色は、テーマのブロックの明るさと彩度と、`fp` の色相の変数を oklch で合成する。ブロックの値を消すか色の式を変えると、テーマで明るさが切り替わらなくなる。
+pub fn the_themes_carry_the_fingerprint_colors_test() {
+  let css = admin_ui.static_file(view.stylesheet_segments)
+  let light = theme_variables(css, "light")
+  let dark = theme_variables(css, "dark")
+  assert dict.get(light, "--fp-lightness") == Ok(".57")
+  assert dict.get(light, "--fp-chroma") == Ok(".14")
+  assert dict.get(dark, "--fp-lightness") == Ok(".79")
+  assert dict.get(dark, "--fp-chroma") == Ok(".12")
+  assert string.contains(
+    css,
+    ".fp{color:oklch(var(--fp-lightness) var(--fp-chroma) var(--fp-hue))}",
+  )
+}
+
 /// ページの `class` 属性に現れるクラス名。値はエスケープされて `"` を含まないので、次の `"` までが
 /// 属性値である。
 fn classes(page: String) -> List(String) {

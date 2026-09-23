@@ -1,5 +1,5 @@
 //// QR コードの符号化と SVG への変換。純粋で、`admin/i18n` にも `admin/dashboard` にも
-//// 依存しない。
+//// 依存しない。マスの一覧を `path` にする `path_data` は `admin/fingerprint` も使う。
 
 import gleam/int
 import gleam/list
@@ -44,8 +44,8 @@ pub fn svg(label: String, text: String) -> Result(Element(msg), Nil) {
   )
 }
 
-/// 暗モジュールの一覧を、1 マスずつの正方形を連ねた `path` の `d` 属性の値にする。
-fn path_data(modules: List(#(Int, Int))) -> String {
+/// マスの `#(x, y)` の一覧を、1 マスずつの正方形を連ねた `path` の `d` 属性の値にする。QR コードの暗モジュールと、`admin/fingerprint` の指紋の塗るマスが使う。
+pub fn path_data(modules: List(#(Int, Int))) -> String {
   modules
   |> list.map(fn(module) {
     let #(x, y) = module
