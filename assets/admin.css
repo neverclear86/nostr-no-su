@@ -29,6 +29,11 @@
  *   カンマで区切った 2 層の影を 1 つの変数で書くと、最後の層だけが出力される。
  * - 本文と等幅のフォントの並びはテーマに関係しないので、@theme の --font-sans と --font-mono
  *   に書く。Web フォントは同梱せず、OS のフォントを使う。
+ * - 鍵の指紋（admin/fingerprint）の色は、末尾の @layer components の規則で
+ *   oklch(--fp-lightness --fp-chroma --fp-hue) に合成する。色相は fp と h0〜h11 の
+ *   クラスの規則（12 + 30 × 番号の度）に、明るさと彩度はテーマのブロックに書き、灰色の
+ *   fp-gray は彩度を 0 にする。CSP の style-src 'self' がインラインの style 属性を
+ *   適用させないので、鍵ごとの色はクラスで選ぶ。手で書いた規則は走査に関係なく出力される。
  */
 @import "tailwindcss" source(none);
 @source "../src/nostr_no_su/admin";
@@ -69,6 +74,8 @@
   --radius-box: 14px;
   --shadow-lift-near: 0 1px 2px rgb(14 33 59 / .06);
   --shadow-lift-far: 0 12px 28px -14px rgb(14 33 59 / .28);
+  --fp-lightness: .57;
+  --fp-chroma: .14;
 }
 
 @plugin "daisyui/theme" {
@@ -101,6 +108,8 @@
   --radius-box: 14px;
   --shadow-lift-near: 0 0 0 1px rgb(255 255 255 / .02);
   --shadow-lift-far: 0 16px 34px -16px rgb(0 0 0 / .75);
+  --fp-lightness: .79;
+  --fp-chroma: .12;
 }
 
 @theme inline reference {
@@ -112,4 +121,21 @@
 @theme {
   --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Noto Sans Mono CJK JP", monospace;
+}
+
+@layer components {
+  .fp { color: oklch(var(--fp-lightness) var(--fp-chroma) var(--fp-hue)); }
+  .fp.h0 { --fp-hue: 12; }
+  .fp.h1 { --fp-hue: 42; }
+  .fp.h2 { --fp-hue: 72; }
+  .fp.h3 { --fp-hue: 102; }
+  .fp.h4 { --fp-hue: 132; }
+  .fp.h5 { --fp-hue: 162; }
+  .fp.h6 { --fp-hue: 192; }
+  .fp.h7 { --fp-hue: 222; }
+  .fp.h8 { --fp-hue: 252; }
+  .fp.h9 { --fp-hue: 282; }
+  .fp.h10 { --fp-hue: 312; }
+  .fp.h11 { --fp-hue: 342; }
+  .fp.fp-gray { --fp-chroma: 0; --fp-hue: 0; }
 }
