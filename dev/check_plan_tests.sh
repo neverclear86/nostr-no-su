@@ -5,17 +5,20 @@
 #
 # 読むのは「### テスト」の見出しから次の `##` の見出しまでにある表の行（`|` で始まる行）の
 # 1 列目だけで、そこにある `名前_test` のバッククォート内の語をテスト名、`dev/名前.sh` を shell の
-# 検査のスクリプトとする。取り消し線で囲んだ名前（~~`名前_test`~~）は「消す」テストで、実装に
-# 無いことを確かめる。テストのモジュール名（test/ 以下に `<名前>.gleam` があり、その名前の
-# `pub fn` が無い語。`dashboard_test` など）は、1 列目にあってもテスト名として数えない。
-# 同じ節の文（表の外）に出る `名前_test` のうち、モジュール名でも土台にあるテスト名でもないもの
-# （足す名前が表に無い）だけ、「表に載せる」の警告を出す（プランは 1 行に 1 つのテスト名か
-# スクリプトを 1 列目に置く決まり）。文にあるファイルパスと既存のテスト名には警告を出さない。
+# 検査のスクリプトとする。取り消し線で囲んだ名前（~~`名前_test`~~。取り消し線の内側に括弧の補足が
+# あってもよい）は「消す」テストで、実装に無いことを確かめる。テストのモジュール名（test/ と
+# plugins-src/*/test/ 以下に `<名前>.gleam` があり、その名前の `pub fn` が無い語。`dashboard_test`
+# など）は、1 列目にあってもテスト名として数えない。
+# 同じ節の文（表の外）に出る `名前_test` のうち、モジュール名でも作業ツリーにあるテスト名でもない
+# もの（足す名前が表に無い）だけ、「表に載せる」の警告を出す（プランは 1 行に 1 つのテスト名か
+# スクリプトを 1 列目に置く決まり）。文にあるファイルパスと作業ツリーにあるテスト名には警告を
+# 出さない。
 # 「検証の手順」に出る名前は読まない。実装側は、テスト名を作業ツリーの test/ と
 # plugins-src/*/test/ の `pub fn 名前_test()` から、スクリプトを作業ツリーのファイルの実在から取る。
 #
 # 結果は Markdown の表（プランのテスト名 / 実装）で出す。足す名前がすべて実装にあり、消す名前が
 # すべて実装に無ければ 0 で、1 件でも外れれば「無し」か「まだある」の行を出して 1 で終わる。
+# 消す名前が実装に無いときは「実装に無い」と出す（一度も無かった名前と打ち間違いも同じ表示になる）。
 # 警告は終了コードを変えない。
 # 「### テスト」の節が無いとき、表の 1 列目にテスト名もスクリプトも 1 つも無いときも、契約の
 # 形でないので 1 で終わる。ただし節に「テストの表は置かない」の文があれば（文書だけの変更）、
@@ -40,7 +43,8 @@ if printf '%s\n' "$section" | grep -qF 'テストの表は置かない'; then
   exit 0
 fi
 
-# 実装のテスト名と、その位置（ファイル:行）。モジュール名は test/ 以下の .gleam の basename。
+# 実装のテスト名と、その位置（ファイル:行）。モジュール名は test/ と plugins-src/*/test/ 以下の
+# .gleam の basename。
 dirs=""
 for d in "$tree/test" "$tree"/plugins-src/*/test; do
   if [ -d "$d" ]; then dirs="$dirs $d"; fi
@@ -60,22 +64,26 @@ drop_modules() {
     NF && !(($0 in mod) && !($0 in fn))'
 }
 
-# 表の行の 1 列目。取り消し線の名前（~~`名前_test`~~）は「消す」、残りの `名前_test` と
-# `dev/名前.sh` は「足す・変える」（見出し行と区切り行にはバッククォートが無い）。
+# 表の行の 1 列目。取り消し線の範囲（~~…~~。内側に補足があってもよい）にある `名前_test` は「消す」、
+# 範囲の外の `名前_test` と `dev/名前.sh` は「足す・変える」（見出し行と区切り行にはバッククォートが無い）。
 cells=$(printf '%s\n' "$section" | LC_ALL=C awk '/^[ \t]*\|/ { cell = $0; sub(/^[ \t]*\|/, "", cell); sub(/\|.*/, "", cell); print cell }')
 removed=$(printf '%s\n' "$cells" | LC_ALL=C awk '
   {
     cell = $0
-    while (match(cell, /~~`[A-Za-z0-9_]*_test`~~/)) {
-      print substr(cell, RSTART + 3, RLENGTH - 6)
+    while (match(cell, /~~[^~]*~~/)) {
+      range = substr(cell, RSTART, RLENGTH)
       cell = substr(cell, RSTART + RLENGTH)
+      while (match(range, /`[A-Za-z0-9_]*_test`/)) {
+        print substr(range, RSTART + 1, RLENGTH - 2)
+        range = substr(range, RSTART + RLENGTH)
+      }
     }
   }
 ' | sort -u | drop_modules)
 planned=$(printf '%s\n' "$cells" | LC_ALL=C awk '
   {
     cell = $0
-    gsub(/~~`[A-Za-z0-9_]*_test`~~/, "", cell)
+    gsub(/~~[^~]*~~/, "", cell)
     while (match(cell, /`([A-Za-z0-9_]*_test|dev\/[A-Za-z0-9_]+\.sh)`/)) {
       print substr(cell, RSTART + 1, RLENGTH - 2)
       cell = substr(cell, RSTART + RLENGTH)
@@ -84,7 +92,7 @@ planned=$(printf '%s\n' "$cells" | LC_ALL=C awk '
 ' | sort -u | drop_modules)
 [ -n "$planned$removed" ] || { echo "「### テスト」の表の 1 列目にテスト名（\`名前_test\`）も shell の検査（\`dev/名前.sh\`）も無い" >&2; exit 1; }
 
-# 表の外の文にある `名前_test` のうち、表にも土台にも無いもの（足す名前が照合から外れる）。
+# 表の外の文にある `名前_test` のうち、表にも作業ツリーにも無いもの（足す名前が照合から外れる）。
 prose=$(printf '%s\n' "$section" | LC_ALL=C awk '
   /^[ \t]*\|/ { next }
   {
@@ -122,7 +130,7 @@ for name in $removed; do
   total=$((total + 1))
   where=$(printf '%s\n' "$actual" | awk -v n="$name" '$1 == n { print $2 }' | head -1)
   if [ -z "$where" ]; then
-    echo "| ~~\`$name\`~~ | 消した |"
+    echo "| ~~\`$name\`~~ | 実装に無い |"
   else
     echo "| ~~\`$name\`~~ | まだある \`$where\` |"
     missing=$((missing + 1))
