@@ -93,7 +93,12 @@ pub fn notice_mark_follows_the_state_vocabulary_test() {
 /// フォームは `post_form` の送信ボタンで確かめる。ダイアログの行のボタンは左に寄せない。
 pub fn button_kinds_map_to_daisyui_classes_test() {
   let focus = " focus-visible:outline-base-content"
-  let in_dialog = view.InDialog(id: "dialog-x", cancel: "Cancel")
+  let in_dialog =
+    view.InDialog(
+      id: "dialog-x",
+      cancel: "Cancel",
+      opening: view.OpensOnTrigger,
+    )
   let cases = [
     #(view.PrimaryButton, view.InRow, "btn btn-primary btn-sm"),
     #(view.OutlineButton, view.InRow, "btn btn-outline btn-sm"),
@@ -343,7 +348,11 @@ pub fn in_dialog_form_puts_submit_and_cancel_on_one_row_test() {
       [html.p([], [html.text("field")])],
       "Save",
       view.PrimaryButton,
-      view.InDialog(id: "dialog-x", cancel: "Cancel"),
+      view.InDialog(
+        id: "dialog-x",
+        cancel: "Cancel",
+        opening: view.OpensOnTrigger,
+      ),
     ))
   assert html
     == "<form action=\"/relays\" class=\"flex flex-col gap-4\" method=\"post\"><p>field</p><div class=\"flex flex-wrap items-center gap-2\"><button class=\"btn btn-primary focus-visible:outline-base-content\" type=\"submit\">Save</button><button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-x\" type=\"button\">Cancel</button></div></form>"
@@ -357,7 +366,11 @@ pub fn dialog_actions_add_cancel_only_in_a_dialog_test() {
   assert view.dialog_actions(view.InRow, buttons) == buttons
   let assert [row] =
     view.dialog_actions(
-      view.InDialog(id: "dialog-x", cancel: "Cancel"),
+      view.InDialog(
+        id: "dialog-x",
+        cancel: "Cancel",
+        opening: view.OpensOnTrigger,
+      ),
       buttons,
     )
   assert element.to_string(row)
@@ -458,7 +471,12 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
       view.PrimaryButton,
       "Title",
       fn(placement) {
-        assert placement == view.InDialog(id: "dialog-x", cancel: "Cancel")
+        assert placement
+          == view.InDialog(
+            id: "dialog-x",
+            cancel: "Cancel",
+            opening: view.OpensOnTrigger,
+          )
         [html.p([], [html.text("body")])]
       },
     )

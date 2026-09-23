@@ -2,7 +2,7 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、`admin/relay_pages`、
+//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、
 //// `admin/connect_pages`、`admin/session_pages`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
@@ -66,7 +66,6 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/plugin_view
-import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
@@ -1779,49 +1778,32 @@ fn is_control_character(code_point: UtfCodepoint) -> Bool {
   code <= 0x1f || { code >= 0x7f && code <= 0x9f }
 }
 
-/// リレーの追加のページと、その送信。
+/// リレーの追加。POST だけを受ける。URL は前後の空白を除いて保存する。検査の順は URL、用途。
 fn new_relay(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  case request.method {
-    http.Get ->
-      relay_pages.new_relay_page(
-        language,
-        theme,
-        "",
-        dashboard.new_relay_roles,
-        None,
-      )
-      |> wisp.html_response(200)
-    http.Post -> add_relay(context, request, language, theme)
-    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
-  }
-}
-
-/// リレーの追加。URL は前後の空白を除いて保存する。検査の順は URL、用途。
-fn add_relay(
-  context: Context,
-  request: Request,
-  language: Language,
-  theme: view.Theme,
-) -> Response {
+  use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
   let raw_url = form_value(form, dashboard.relay_url_field)
   let roles = relay_roles(form)
   let echoed_url = without_control_characters(raw_url)
-  let redraw = fn(reason) {
-    relay_pages.new_relay_page(language, theme, echoed_url, roles, Some(reason))
+  let redraw = fn(reason, status) {
+    dialog_response(
+      context,
+      language,
+      theme,
+      dashboard.NewRelayOpen(echoed_url, roles, reason),
+      status,
+    )
   }
   case parse_relay_url(raw_url) {
-    Error(reason) -> redraw(i18n.Translated(reason)) |> wisp.html_response(400)
+    Error(reason) -> redraw(i18n.Translated(reason), 400)
     Ok(url) ->
       case roles.monitor || roles.bunker {
-        False ->
-          redraw(i18n.Translated(i18n.RelayRoleRequired))
-          |> wisp.html_response(400)
+        False -> redraw(i18n.Translated(i18n.RelayRoleRequired), 400)
         True ->
           relay_change_response(
             language,
@@ -1856,22 +1838,19 @@ fn relay_roles(form: wisp.FormData) -> relay_list.Roles {
   )
 }
 
-/// リレーの変更の失敗の応答。書き込まれていないことが確定していれば 409、DB には
-/// 書けたが確かめられなければ 202 の通知ページにする。対象の行が DB に無ければ 404。
+/// リレーの変更の失敗の応答。書き込まれていないことが確定していれば、`redraw` で同じダイアログを開き直して
+/// 409、DB には書けたが確かめられなければ 202 の通知ページにする。対象の行が DB に無ければ 404。
 /// 202 にする理由は `change_failure_response` と同じで、確かめられない変更を「拒否された」と
 /// 見せると利用者がやり直してしまうからである。
 fn relay_failure_response(
   language: Language,
   theme: view.Theme,
   failure: RelayChangeFailure,
-  render: fn(i18n.Reason) -> String,
+  redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case failure {
-    DuplicateRelay ->
-      render(i18n.Translated(i18n.RelayAlreadyRegistered))
-      |> wisp.html_response(409)
-    RelayNotSaved(reason) ->
-      render(i18n.Untranslated(reason)) |> wisp.html_response(409)
+    DuplicateRelay -> redraw(i18n.Translated(i18n.RelayAlreadyRegistered), 409)
+    RelayNotSaved(reason) -> redraw(i18n.Untranslated(reason), 409)
     RelayMaybeSaved ->
       not_confirmed_notice(
         language,
@@ -1897,11 +1876,33 @@ fn relay_change_response(
   language: Language,
   theme: view.Theme,
   outcome: Result(Nil, RelayChangeFailure),
-  render: fn(i18n.Reason) -> String,
+  redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case outcome {
     Ok(Nil) -> wisp.redirect(to: "/")
-    Error(failure) -> relay_failure_response(language, theme, failure, render)
+    Error(failure) -> relay_failure_response(language, theme, failure, redraw)
+  }
+}
+
+/// スナップショットを取り直し、`dialog` を開いたダッシュボードを `status` で返す。開くダイアログを描けなければ
+/// （`dashboard.render_open` の `Error`）、その理由の「リレーを利用できません」の 503 の通知ページにする。
+fn dialog_response(
+  context: Context,
+  language: Language,
+  theme: view.Theme,
+  dialog: dashboard.OpenDialog,
+  status: Int,
+) -> Response {
+  let snapshot = snapshot(context, task.deadline_in(snapshot_deadline_ms))
+  case dashboard.render_open(language, theme, snapshot, dialog) {
+    Ok(html) -> wisp.html_response(html, status)
+    Error(reason) ->
+      unavailable_reason_notice(
+        language,
+        theme,
+        i18n.RelaysNotAvailable,
+        reason,
+      )
   }
 }
 
@@ -1962,8 +1963,7 @@ fn with_session(
   }
 }
 
-/// リレー 1 件への操作。DB の行を引いてから、GET は操作のページを、POST は変更を
-/// 実行する。
+/// リレー 1 件への操作。POST だけを受け、DB の行を引いてから変更を実行する。
 fn relay_action(
   context: Context,
   request: Request,
@@ -1972,84 +1972,42 @@ fn relay_action(
   id: Int,
   action: dashboard.RelayAction,
 ) -> Response {
+  use <- require_method(request, http.Post, language, theme)
   use relay <- with_relay(context, language, theme, id)
-  case request.method, action {
-    http.Get, dashboard.EditRelayRoles ->
-      relay_pages.relay_action_page(
+  let redraw = fn(roles) {
+    fn(reason, status) {
+      dialog_response(
+        context,
         language,
         theme,
-        relay,
-        dashboard.EditRelayRoles,
-        None,
-        relay_states(context, id),
-        None,
+        dashboard.RelayActionOpen(id, action, roles, reason),
+        status,
       )
-      |> wisp.html_response(200)
-    http.Get, dashboard.DeleteRelay ->
-      relay_pages.relay_action_page(
-        language,
-        theme,
-        relay,
-        dashboard.DeleteRelay,
-        None,
-        None,
-        None,
-      )
-      |> wisp.html_response(200)
-    http.Post, dashboard.EditRelayRoles -> {
+    }
+  }
+  case action {
+    dashboard.EditRelayRoles -> {
       use form <- wisp.require_form(request)
       let roles = relay_roles(form)
-      let redraw = fn(reason) {
-        relay_pages.relay_action_page(
-          language,
-          theme,
-          relay,
-          dashboard.EditRelayRoles,
-          Some(roles),
-          relay_states(context, id),
-          Some(reason),
-        )
-      }
       case roles.monitor || roles.bunker {
         False ->
-          redraw(i18n.Translated(i18n.RelayRoleRequired))
-          |> wisp.html_response(400)
+          redraw(Some(roles))(i18n.Translated(i18n.RelayRoleRequired), 400)
         True ->
           relay_change_response(
             language,
             theme,
             context.update_relay_roles(relay, roles),
-            redraw,
+            redraw(Some(roles)),
           )
       }
     }
-    http.Post, dashboard.DeleteRelay ->
+    dashboard.DeleteRelay ->
       relay_change_response(
         language,
         theme,
         context.delete_relay(relay),
-        fn(reason) {
-          relay_pages.relay_action_page(
-            language,
-            theme,
-            relay,
-            dashboard.DeleteRelay,
-            None,
-            None,
-            Some(reason),
-          )
-        },
+        redraw(None),
       )
-    _, _ -> method_not_allowed(language, theme, [http.Get, http.Post])
-  }
-}
-
-/// リレー 1 件の用途の接続状態。一覧を得られないときと行が無いときは `None` にし、
-/// 用途の編集のページはバッジを出さない。
-fn relay_states(context: Context, id: Int) -> Option(dashboard.RelayRow) {
-  case context.relays(task.deadline_in(snapshot_deadline_ms)) {
-    Ok(rows) -> list.find(rows, fn(row) { row.id == id }) |> option.from_result
-    Error(_) -> None
   }
 }
 
@@ -2362,12 +2320,22 @@ fn unavailable_notice(
   title: i18n.Message,
   reason: String,
 ) -> Response {
+  unavailable_reason_notice(language, theme, title, i18n.Untranslated(reason))
+}
+
+/// `unavailable_notice` の本体。理由を、訳すかどうかを決めた `i18n.Reason` で受ける。
+fn unavailable_reason_notice(
+  language: Language,
+  theme: view.Theme,
+  title: i18n.Message,
+  reason: i18n.Reason,
+) -> Response {
   dashboard.notice_page(
     language,
     theme,
     return_to_dashboard,
     title,
-    i18n.Untranslated(reason),
+    reason,
     view.Warning,
     [],
   )

@@ -9,7 +9,7 @@
 // 表示を補う処理だけを置く。
 //
 // 押された要素の処理のほかに、読み込み時に `<time datetime>` の本文を閲覧者のローカルの時刻に
-// 直す（サーバーは UTC で描く。view.gleam の time_of_day）。
+// 直す（サーバーは UTC で描く。view.gleam の time_of_day）。開いた状態で描いたダイアログもモーダルに開き直す。
 
 const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
@@ -51,4 +51,11 @@ for (const element of document.querySelectorAll("time[datetime]")) {
   element.textContent = new Date(element.dateTime).toLocaleTimeString(
     document.documentElement.lang,
   );
+}
+
+// POST の応答で open 属性付きで描いたダイアログ（view.gleam の dialog）を、背景を操作できないモーダルに開き直す。
+// showModal() は開いているダイアログには例外を投げるので、閉じてから開き直す。
+for (const dialog of document.querySelectorAll("dialog[open]")) {
+  dialog.close();
+  dialog.showModal();
 }

@@ -12,7 +12,6 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
-import nostr_no_su/admin/relay_pages
 import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
@@ -1345,7 +1344,7 @@ pub fn no_skipped_rows_draws_no_frame_test() {
 }
 
 /// リレーは 1 行につき `<li>` 1 件で、1 段目に URL と、操作（用途の編集、削除）のダイアログを開く
-/// アイコンだけのボタンとそのダイアログ、用途の編集のページへの予備のリンクを並べ、2 段目に監視、
+/// アイコンだけのボタンとそのダイアログを並べ、2 段目に監視、
 /// バンカーの順に用途のアイコン・語・状態のバッジのマスを並べる。使っていない用途は「未使用」の
 /// バッジで出し、URL は `break-all`。
 pub fn relays_are_listed_one_item_per_row_test() {
@@ -1410,10 +1409,6 @@ pub fn relays_are_listed_one_item_per_row_test() {
       ),
       element.to_string,
     ))
-    <> element.to_string(view.fallback_link(
-      i18n.English,
-      "/relays/" <> int.to_string(relay.id) <> "/edit",
-    ))
     <> "</div>"
   }
   let row = fn(relay: Relay, states, monitor, bunker) {
@@ -1445,20 +1440,6 @@ pub fn relays_are_listed_one_item_per_row_test() {
   )
 }
 
-/// リレーの行の予備のリンクは用途の編集のページを開き、削除のページへのリンクは行に置かない。
-pub fn relay_rows_link_to_the_edit_page_as_a_fallback_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(i18n.English, "/relays/1/edit")),
-  )
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(i18n.English, "/relays/2/edit")),
-  )
-  assert !string.contains(body, "href=\"/relays/1/delete\"")
-}
-
 /// `states()` の描画で、ダイアログの開閉が組になっている: `dialog-relay-new` と行 1・2 の編集・削除の
 /// ダイアログはそれぞれ、同じ `id` を `commandfor` で指す開くボタンと、中の閉じるボタンを持つ。
 pub fn relay_dialogs_open_from_matching_triggers_test() {
@@ -1486,38 +1467,6 @@ pub fn relay_dialogs_open_from_matching_triggers_test() {
     dialog_html(body, id),
     "command=\"close\" commandfor=\"" <> id <> "\"",
   )
-}
-
-/// 追加、行 1 の用途の編集と削除のダイアログのフォームは、同じ操作のページのフォームと同じ宛先へ POST する。
-pub fn relay_dialog_forms_match_the_page_forms_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  let relay = Relay(1, "wss://a", Roles(True, True))
-  let page = fn(action) {
-    relay_pages.relay_action_page(
-      i18n.English,
-      view.System,
-      relay,
-      action,
-      None,
-      None,
-      None,
-    )
-  }
-  assert form_tag(dialog_html(body, "dialog-relay-new"), "/relays/")
-    == form_tag(
-      relay_pages.new_relay_page(
-        i18n.English,
-        view.System,
-        "",
-        dashboard.new_relay_roles,
-        None,
-      ),
-      "/relays/",
-    )
-  assert form_tag(dialog_html(body, "dialog-relay-1-edit"), "/relays/")
-    == form_tag(page(dashboard.EditRelayRoles), "/relays/")
-  assert form_tag(dialog_html(body, "dialog-relay-1-delete"), "/relays/")
-    == form_tag(page(dashboard.DeleteRelay), "/relays/")
 }
 
 /// アカウントの追加のボタンは `dialog-account-new` のダイアログを開き、ダイアログはキャンセルで閉じ、並びの末尾に登録画面への予備のリンクがある。
@@ -1567,7 +1516,12 @@ pub fn account_add_dialog_has_import_and_generate_tabs_test() {
       dashboard.render(i18n.English, view.System, states()),
       "dialog-account-new",
     )
-  let in_dialog = view.InDialog(id: "dialog-account-new", cancel: "Cancel")
+  let in_dialog =
+    view.InDialog(
+      id: "dialog-account-new",
+      cancel: "Cancel",
+      opening: view.OpensOnTrigger,
+    )
   assert string.contains(
     dialog,
     element.to_string(
@@ -1882,18 +1836,11 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_action =
     "<div class=\"ml-auto flex flex-wrap justify-end gap-2\">"
-    <> string.concat(list.map(
-      view.dialog_button(
-        i18n.English,
-        "dialog-relay-new",
-        view.IconTextTrigger(view.plus_icon(), "Add"),
-        view.PrimaryButton,
-        "Add relay",
-        dashboard.new_relay_form(i18n.English, "", dashboard.new_relay_roles, _),
-      ),
-      element.to_string,
+    <> element.to_string(view.dialog_trigger(
+      "dialog-relay-new",
+      view.IconTextTrigger(view.plus_icon(), "Add"),
+      view.PrimaryButton,
     ))
-    <> element.to_string(view.fallback_link(i18n.English, "/relays/new"))
     <> "</div>"
   let legend =
     relays_hint_html(
@@ -1917,7 +1864,7 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
       <> add_action
       <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
+      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div>",
   )
   let monitor_only =
     dashboard.render(
@@ -1969,7 +1916,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       <> "</div></div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">boom</span></span></div></div></section>",
+      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">boom</span></span></div></div>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
@@ -1984,7 +1931,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       <> "</div></div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\">リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+      <> "<span class=\"wrap-anywhere\">リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div>",
   )
 }
 
@@ -2076,10 +2023,15 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
   )
 }
 
-/// リレーの節の見出しの行は、一覧を得たときだけ追加のボタンと予備のリンクを出す。
-pub fn relays_heading_links_to_add_a_relay_test() {
+/// リレーの節の見出しの行は、一覧を得たときだけ追加のダイアログを開くボタンを出す。追加のダイアログは
+/// 一覧の有無によらず描く。
+pub fn relays_heading_opens_the_add_dialog_test() {
   let ok = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(ok, "href=\"/relays/new\"")
+  assert string.contains(
+    ok,
+    "command=\"show-modal\" commandfor=\"dialog-relay-new\"",
+  )
+  assert string.contains(ok, "id=\"dialog-relay-new\"")
 
   let unavailable =
     dashboard.render(
@@ -2087,7 +2039,11 @@ pub fn relays_heading_links_to_add_a_relay_test() {
       view.System,
       dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
     )
-  assert !string.contains(unavailable, "/relays/new")
+  assert !string.contains(
+    unavailable,
+    "command=\"show-modal\" commandfor=\"dialog-relay-new\"",
+  )
+  assert string.contains(unavailable, "id=\"dialog-relay-new\"")
 }
 
 /// セッションの節の見出しの行は、一覧を得たときだけ接続のダイアログを開くボタンと予備のリンクを出す。
@@ -2961,7 +2917,7 @@ pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
   assert dashboard.getting_started(Ok([]), Error(reason)) == None
 }
 
-/// 「はじめに」の帯は、まだの段に追加のページへのリンクを、済んだ段に「済み」のチップを出し、
+/// 「はじめに」の帯は、まだの段に追加のダイアログを開くボタンを、済んだ段に「済み」のチップを出し、
 /// 段 3 を点線の枠で出す。リレーとアカウントがそろうと帯ごと出さない。
 pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
   let render = fn(accounts, relays) {
@@ -2971,16 +2927,15 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
       dashboard.Snapshot(..states(), accounts: Ok(accounts), relays: Ok(relays)),
     )
   }
-  let link = fn(href, label) {
-    element.to_string(view.icon_button_link(
-      href,
-      view.plus_icon(),
-      label,
+  let opener = fn(id, label) {
+    element.to_string(view.dialog_trigger(
+      id,
+      view.IconTextTrigger(view.plus_icon(), label),
       view.PrimaryButton,
     ))
   }
-  let add_relay = link("/relays/new", "Add relay")
-  let add_account = link("/accounts/new", "Add account")
+  let add_relay = opener("dialog-relay-new", "Add relay")
+  let add_account = opener("dialog-account-new", "Add account")
   let done_chip =
     element.to_string(view.status_chip(view.ToneChip(view.Success), "Done"))
   let locked_count = fn(html) {
@@ -3348,4 +3303,112 @@ pub fn connect_form_describes_the_uri_field_test() {
     "<p class=\"text-muted\" id=\"nostrconnect-uri-hint\">",
   )
   assert !string.contains(html, "<header")
+}
+
+/// `render_open` は指定したダイアログだけを `open` で描き、先頭に理由を、欄に送られた用途を出し、
+/// キャンセルを `/` へのリンクにする。承認待ちがあっても自動で読み込み直さない。
+pub fn render_open_opens_only_the_named_relay_dialog_test() {
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      states(),
+      dashboard.RelayActionOpen(
+        1,
+        dashboard.EditRelayRoles,
+        Some(Roles(False, False)),
+        i18n.Translated(i18n.RelayRoleRequired),
+      ),
+    )
+  assert list.length(string.split(body, "\" open>")) - 1 == 1
+  let assert Ok(#(_, rest)) =
+    string.split_once(body, "class=\"modal\" id=\"dialog-relay-1-edit\" open>")
+  let assert Ok(#(dialog, _)) = string.split_once(rest, "</dialog>")
+  assert string.contains(
+    dialog,
+    i18n.text(i18n.English, i18n.RelayRoleRequired),
+  )
+  assert !string.contains(dialog, "checked class=\"checkbox")
+  assert string.contains(
+    dialog,
+    "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
+  )
+  assert !string.contains(body, "http-equiv=\"refresh\"")
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    "http-equiv=\"refresh\"",
+  )
+}
+
+/// 追加のダイアログを開いて描くときは、送られた URL と用途を欄に出す。
+pub fn render_open_echoes_the_new_relay_form_test() {
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      states(),
+      dashboard.NewRelayOpen(
+        "wss://typed.example",
+        Roles(True, False),
+        i18n.Translated(i18n.InvalidRelayUrl),
+      ),
+    )
+  let assert Ok(#(_, rest)) =
+    string.split_once(body, "class=\"modal\" id=\"dialog-relay-new\" open>")
+  let assert Ok(#(dialog, _)) = string.split_once(rest, "</dialog>")
+  assert string.contains(dialog, i18n.text(i18n.English, i18n.InvalidRelayUrl))
+  assert string.contains(dialog, "value=\"wss://typed.example\"")
+  assert string.contains(
+    dialog,
+    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\"",
+  )
+}
+
+/// `render_open` は、リレーの一覧を得られなければその理由を、操作するリレーが一覧に無ければ
+/// `RelayNotFound` を `Error` で返す。
+pub fn render_open_needs_the_relay_list_test() {
+  let reason = i18n.Untranslated("boom")
+  let unlisted = dashboard.Snapshot(..states(), relays: Error(reason))
+  let delete = fn(id) {
+    dashboard.RelayActionOpen(
+      id,
+      dashboard.DeleteRelay,
+      None,
+      i18n.Translated(i18n.RelayRoleRequired),
+    )
+  }
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      unlisted,
+      dashboard.NewRelayOpen("", Roles(False, True), reason),
+    )
+  assert string.contains(body, "class=\"modal\" id=\"dialog-relay-new\" open>")
+  assert dashboard.render_open(i18n.English, view.System, unlisted, delete(1))
+    == Error(reason)
+  assert dashboard.render_open(i18n.English, view.System, states(), delete(99))
+    == Error(i18n.Translated(i18n.RelayNotFound))
+}
+
+/// 開いて返すダッシュボードは自動で読み込み直さないので、承認待ちの帯に更新の間隔を出さない。
+pub fn render_open_does_not_announce_the_refresh_test() {
+  let note = i18n.text(i18n.English, i18n.RefreshesEverySeconds(30))
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    note,
+  )
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      states(),
+      dashboard.RelayActionOpen(
+        1,
+        dashboard.EditRelayRoles,
+        Some(Roles(False, False)),
+        i18n.Translated(i18n.RelayRoleRequired),
+      ),
+    )
+  assert !string.contains(body, note)
 }

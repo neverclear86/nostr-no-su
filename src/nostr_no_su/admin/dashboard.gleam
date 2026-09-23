@@ -9,14 +9,13 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
-//// `admin/session_pages`）が同じ定義を見るようここに置く。
-//// ダッシュボードのダイアログと操作のページの両方に出すフォームの中身（リレーの
-//// `new_relay_form`、`relay_action_form`、アカウントの追加の `import_form`、`generate_form`、
+//// `admin/account_pages`、`admin/connect_pages`、`admin/session_pages`）が同じ定義を見るようここに置く。
+//// ダッシュボードのダイアログに出すリレーのフォームの中身（`new_relay_form`、`relay_action_form`）と、
+//// ダイアログと操作のページの両方に出すフォームの中身（アカウントの追加の `import_form`、`generate_form`、
 //// アカウントの `account_action_form`、`unreadable_delete_form`、`label_fieldset`、セッションの
 //// `permissions_form`、クライアントの接続の `connect_content`、`connect_form`）もここに置く。
 //// `label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で送信の置き場所を受け、ページは
-//// `view.InForm` を、ダイアログは `view.dialog_button` が渡す `view.InDialog` を渡す。
+//// `view.InForm` を、ダイアログは `view.dialog` が渡す `view.InDialog` を渡す。
 //// ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
@@ -188,12 +187,25 @@ pub type GettingStarted {
   )
 }
 
+/// POST の応答で、ダッシュボードに開いた状態で描くダイアログ。
+pub type OpenDialog {
+  /// リレーの追加。欄に戻す URL と用途と、先頭に出す理由を持つ。
+  NewRelayOpen(url: String, roles: Roles, error: i18n.Reason)
+  /// リレー `id` への操作。`roles` は用途の編集の欄に戻す用途で、削除では `None`。
+  RelayActionOpen(
+    id: Int,
+    action: RelayAction,
+    roles: Option(Roles),
+    error: i18n.Reason,
+  )
+}
+
 /// 「はじめに」の帯の段 1 つの見せ方。
 type SetupStep {
   /// 済んだ段。済みの印を付け、操作を出さない。
   StepDone
-  /// 今できる段。追加のページへのリンクを出す。
-  StepOpen(href: String, action: i18n.Message)
+  /// 今できる段。追加のダイアログを開くボタンを出す。
+  StepOpen(dialog: String, action: i18n.Message)
   /// 前の段が済むまで開けない段。点線の枠で出し、操作を出さない。
   StepLocked
 }
@@ -232,7 +244,7 @@ const relay_actions = [EditRelayRoles, DeleteRelay]
 /// アカウントのページのパスの先頭のセグメント。
 const accounts_segment = "accounts"
 
-/// リレーのページのパスの先頭のセグメント。
+/// リレーの POST 先のパスの先頭のセグメント。
 const relays_segment = "relays"
 
 /// プラグインのページのパスの先頭のセグメント。
@@ -250,7 +262,7 @@ pub const new_account_segments = [accounts_segment, "new"]
 /// アカウントの読み直しの POST 先のパスセグメント。
 pub const reload_accounts_segments = [accounts_segment, "reload"]
 
-/// リレーの追加画面のパスセグメント。
+/// リレーの追加の POST 先のパスセグメント。
 pub const new_relay_segments = [relays_segment, "new"]
 
 /// 鍵の生成の POST 先のパスセグメント。
@@ -377,14 +389,49 @@ pub fn render(
   theme: view.Theme,
   snapshot: Snapshot,
 ) -> String {
+  render_page(language, theme, snapshot, None)
+}
+
+/// `render` と同じダッシュボードに `dialog` を開いた状態で描く。自動の読み込み直しはしない。
+/// 追加のダイアログは一覧によらず描く。操作のダイアログは、リレーの一覧を得られなければその理由を、
+/// 操作するリレーが一覧に無ければ `RelayNotFound` を `Error` で返す。
+pub fn render_open(
+  language: Language,
+  theme: view.Theme,
+  snapshot: Snapshot,
+  dialog: OpenDialog,
+) -> Result(String, i18n.Reason) {
+  case snapshot.relays, dialog {
+    _, NewRelayOpen(..) ->
+      Ok(render_page(language, theme, snapshot, Some(dialog)))
+    Error(reason), RelayActionOpen(..) -> Error(reason)
+    Ok(rows), RelayActionOpen(id:, ..) ->
+      case list.any(rows, fn(row) { row.id == id }) {
+        True -> Ok(render_page(language, theme, snapshot, Some(dialog)))
+        False -> Error(i18n.Translated(i18n.RelayNotFound))
+      }
+  }
+}
+
+/// `render` と `render_open` の本体。
+fn render_page(
+  language: Language,
+  theme: view.Theme,
+  snapshot: Snapshot,
+  dialog: Option(OpenDialog),
+) -> String {
   let shared = shared_failure(snapshot)
+  let refresh = case dialog {
+    None -> dashboard_refresh(snapshot.pending)
+    Some(_) -> view.NoRefresh
+  }
   view.page(
     language,
     theme,
     i18n.Dashboard,
     view.Wide,
     view.SwitchReturningTo("/"),
-    dashboard_refresh(snapshot.pending),
+    refresh,
     [
       overview_rail(language, snapshot),
       shared_failure_alert(language, shared),
@@ -394,6 +441,7 @@ pub fn render(
         snapshot.now,
         shared,
         snapshot.pending,
+        refresh,
       ),
       getting_started_band(language, snapshot.accounts, snapshot.relays),
       html.div(
@@ -420,7 +468,7 @@ pub fn render(
             ),
           ]),
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            relays_section(language, snapshot.relays),
+            relays_section(language, snapshot.relays, dialog),
             plugins_section(
               language,
               snapshot.plugins,
@@ -887,7 +935,7 @@ fn getting_started_band(
             i18n.SetupBunkerRelayDescription,
             open_unless_done(
               steps.bunker_relay,
-              new_relay_segments,
+              add_relay_dialog_id(),
               i18n.AddRelay,
             ),
           ),
@@ -898,7 +946,7 @@ fn getting_started_band(
             i18n.SetupAccountDescription,
             open_unless_done(
               steps.account,
-              new_account_segments,
+              add_account_dialog_id(),
               i18n.AddAccount,
             ),
           ),
@@ -915,15 +963,15 @@ fn getting_started_band(
   }
 }
 
-/// 済んだ段は `StepDone`、まだの段は `segments` の追加のページへのリンクを持つ `StepOpen` にする。
+/// 済んだ段は `StepDone`、まだの段は `dialog` の追加のダイアログを開く `StepOpen` にする。
 fn open_unless_done(
   done: Bool,
-  segments: List(String),
+  dialog: String,
   action: i18n.Message,
 ) -> SetupStep {
   case done {
     True -> StepDone
-    False -> StepOpen(view.segments_path(segments), action)
+    False -> StepOpen(dialog, action)
   }
 }
 
@@ -980,11 +1028,10 @@ fn setup_step(
     StepOpen(..) | StepLocked -> element.none()
   }
   let action = case step {
-    StepOpen(href, action) ->
-      view.icon_button_link(
-        href,
-        view.plus_icon(),
-        text(action),
+    StepOpen(dialog, action) ->
+      view.dialog_trigger(
+        dialog,
+        view.IconTextTrigger(view.plus_icon(), text(action)),
         view.PrimaryButton,
       )
     StepDone | StepLocked -> element.none()
@@ -1051,7 +1098,7 @@ fn accounts_section(
 /// （「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）、登録画面への予備のリンクの順に並べる。
 fn add_account_actions(language: Language) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let id = view.dialog_id(["account", "new"])
+  let id = add_account_dialog_id()
   list.append(
     view.dialog_button(
       language,
@@ -1619,7 +1666,8 @@ pub fn label_fieldset(
 }
 
 /// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に、
-/// 説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの右には、ダッシュボードを自動で読み込み直すときだけ更新の間隔を出す。
+/// 説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの右には、`refresh` が自動の読み込み直しのときだけ
+/// 更新の間隔を出す。
 /// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
 /// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
@@ -1628,6 +1676,7 @@ fn pending_section(
   now: Int,
   shared: Option(String),
   pending: Result(List(PendingRow), i18n.Reason),
+  refresh: view.Refresh,
 ) -> Element(msg) {
   case pending {
     Ok([]) -> element.none()
@@ -1645,7 +1694,7 @@ fn pending_section(
           view.info_hint(language, pending_anchor <> "-hint", [
             html.text(text(i18n.PendingConnectionsDescription)),
           ]),
-          refresh_note(language, pending),
+          refresh_note(language, refresh),
         ),
         listed_body(
           language,
@@ -1676,13 +1725,13 @@ fn pending_section(
   }
 }
 
-/// 承認待ちの帯の見出しの右に置く、更新の間隔の表示。ダッシュボードを自動で読み込み直すとき
-/// （`dashboard_refresh` が `RefreshEverySeconds` のとき）だけ出す。
+/// 承認待ちの帯の見出しの右に置く、更新の間隔の表示。ページを自動で読み込み直すとき（`refresh` が
+/// `RefreshEverySeconds` のとき）だけ出す。
 fn refresh_note(
   language: Language,
-  pending: Result(List(PendingRow), i18n.Reason),
+  refresh: view.Refresh,
 ) -> List(Element(msg)) {
-  case dashboard_refresh(pending) {
+  case refresh {
     view.RefreshEverySeconds(seconds) -> [
       html.p(
         [
@@ -1978,11 +2027,19 @@ pub fn parse_account_action_path(
   }
 }
 
-/// 操作の見出し（ページとダイアログの題）と、ダッシュボードのボタンの語。
-pub fn relay_action_title(action: RelayAction) -> i18n.Message {
+/// 操作の見出し（ダイアログの題）と、ダッシュボードのボタンの語。
+fn relay_action_title(action: RelayAction) -> i18n.Message {
   case action {
     EditRelayRoles -> i18n.EditRelayRoles
     DeleteRelay -> i18n.DeleteRelay
+  }
+}
+
+/// 操作のダイアログで送信に失敗したときの理由の前置き。
+fn relay_action_lead(action: RelayAction) -> i18n.Lead {
+  case action {
+    EditRelayRoles -> i18n.CouldNotSaveRelay
+    DeleteRelay -> i18n.CouldNotDeleteRelay
   }
 }
 
@@ -2129,14 +2186,24 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 }
 
 /// リレーの一覧。見出しの ⓘ で、監視とバンカーの語と説明の凡例（`role_hint`）を開く。
-/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に、追加のダイアログを開くボタンと、
-/// 追加のページへの予備のリンクを出す。バンカーに使う行が無ければエラーの色の囲みを、一覧を得られない
-/// ときは理由を出す。
+/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に追加のダイアログを開くボタンを出す。バンカー
+/// に使う行が無ければエラーの色の囲みを、一覧を得られないときは理由を出す。節の末尾には追加のダイアログを
+/// 一覧の有無によらず描き、`dialog` が `NewRelayOpen` なら開いた状態で描く。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
+  dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
+  let #(opening, url, roles, error) = case dialog {
+    Some(NewRelayOpen(url:, roles:, error:)) -> #(
+      view.OpenedByResponse,
+      url,
+      roles,
+      Some(error),
+    )
+    _ -> #(view.OpensOnTrigger, "", new_relay_roles, None)
+  }
   view.section_block(relays_anchor, [
     listed_section_heading(
       language,
@@ -2144,17 +2211,13 @@ fn relays_section(
       view.plug_icon(),
       i18n.Relays,
       view.info_hint(language, relays_anchor <> "-hint", role_hint(language)),
-      list.append(
-        view.dialog_button(
-          language,
-          view.dialog_id(["relay", "new"]),
+      [
+        view.dialog_trigger(
+          add_relay_dialog_id(),
           view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
           view.PrimaryButton,
-          text(i18n.AddRelay),
-          new_relay_form(language, "", new_relay_roles, _),
         ),
-        [view.fallback_link(language, view.segments_path(new_relay_segments))],
-      ),
+      ],
       [],
     ),
     no_bunker_relay_alert(language, relays),
@@ -2164,7 +2227,21 @@ fn relays_section(
       relays,
       i18n.CouldNotListRelays,
       element.none(),
-      fn(rows) { view.row_list(list.map(rows, relay_item(language, _))) },
+      fn(rows) {
+        view.row_list(list.map(rows, relay_item(language, _, dialog)))
+      },
+    ),
+    view.dialog(
+      language,
+      add_relay_dialog_id(),
+      text(i18n.AddRelay),
+      fn(placement) {
+        [
+          view.error_message(language, Some(i18n.CouldNotAddRelay), error),
+          ..new_relay_form(language, url, roles, placement)
+        ]
+      },
+      opening,
     ),
   ])
 }
@@ -2208,10 +2285,14 @@ pub fn no_bunker_relay_alert(
   }
 }
 
-/// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンと、
-/// 用途の編集のページへの予備のリンクを並べ、2 段目に用途のマス（`relay_role`）を監視、バンカーの順に
-/// 2 つ並べる。使っていない用途は「未使用」のバッジで出す。
-fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
+/// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンを並べ、
+/// 2 段目に用途のマス（`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」の
+/// バッジで出す。`dialog` が同じ行と操作の `RelayActionOpen` なら、そのダイアログを開いた状態で描く。
+fn relay_item(
+  language: Language,
+  row: RelayRow,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
   view.list_row(view.InlineRow, [
     html.p([attribute.class("min-w-0 flex-1 font-mono text-sm break-all")], [
       html.text(row.url),
@@ -2219,40 +2300,56 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
     button_row(
       list.flat_map(relay_actions, fn(action) {
         let title = i18n.text(language, relay_action_title(action))
-        view.dialog_button(
-          language,
+        let id =
           view.dialog_id([
             "relay",
             int.to_string(row.id),
             relay_action_segment(action),
-          ]),
-          view.IconOnlyTrigger(relay_action_icon(action), title),
-          relay_action_button_kind(action),
-          title,
-          fn(placement) {
-            [
-              view.summary_list([
-                #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
-              ]),
-              ..relay_action_form(
-                language,
-                relay_store.Relay(
-                  id: row.id,
-                  url: row.url,
-                  roles: row_roles(row),
+          ])
+        let #(opening, roles, error) = case dialog {
+          Some(RelayActionOpen(id:, action: opened, roles:, error:))
+            if id == row.id && opened == action
+          -> #(view.OpenedByResponse, roles, Some(error))
+          _ -> #(view.OpensOnTrigger, None, None)
+        }
+        [
+          view.dialog_trigger(
+            id,
+            view.IconOnlyTrigger(relay_action_icon(action), title),
+            relay_action_button_kind(action),
+          ),
+          view.dialog(
+            language,
+            id,
+            title,
+            fn(placement) {
+              [
+                view.error_message(
+                  language,
+                  Some(relay_action_lead(action)),
+                  error,
                 ),
-                action,
-                None,
-                Some(row),
-                placement,
-              )
-            ]
-          },
-        )
-      })
-      |> list.append([
-        view.fallback_link(language, relay_action_path(row.id, EditRelayRoles)),
-      ]),
+                view.summary_list([
+                  #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+                ]),
+                ..relay_action_form(
+                  language,
+                  relay_store.Relay(
+                    id: row.id,
+                    url: row.url,
+                    roles: row_roles(row),
+                  ),
+                  action,
+                  roles,
+                  Some(row),
+                  placement,
+                )
+              ]
+            },
+            opening,
+          ),
+        ]
+      }),
     ),
     html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
       relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
@@ -2261,11 +2358,20 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   ])
 }
 
-/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。追加のページの GET と
-/// 追加のダイアログが使う。
+/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
 pub const new_relay_roles = Roles(monitor: False, bunker: True)
 
-/// URL の補足の `id`。URL の欄は追加のページと、ダッシュボードの追加のダイアログに 1 つずつで、
+/// リレーの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 1 のボタンが開く。
+fn add_relay_dialog_id() -> String {
+  view.dialog_id(["relay", "new"])
+}
+
+/// アカウントの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 2 のボタンが開く。
+fn add_account_dialog_id() -> String {
+  view.dialog_id(["account", "new"])
+}
+
+/// URL の補足の `id`。URL の欄はダッシュボードの追加のダイアログにだけあり、
 /// 1 つのページに 2 つ現れないので固定の値にする。
 const relay_url_hint_id = "relay-url-hint"
 
@@ -2276,7 +2382,7 @@ fn row_roles(row: RelayRow) -> Roles {
 }
 
 /// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
-/// 用途のチェック）を並べる。ページの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
+/// 用途のチェック）を並べる。ダイアログの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
 /// 用途の接続状態のバッジは出さない。
 pub fn new_relay_form(
   language: Language,
@@ -2300,7 +2406,7 @@ pub fn new_relay_form(
 /// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
 /// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
 /// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
-/// 使わない。URL の要約、入力の誤り、削除のページへのリンクは含めない。
+/// 使わない。URL の要約と入力の誤りは含めない。
 pub fn relay_action_form(
   language: Language,
   relay: Relay,
