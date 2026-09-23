@@ -98,6 +98,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **window**：同時に進める件数。既定 4。依存先を待つ issue は枠を使わないので、`after` の連鎖があっても window を下げない（分割の子が多い実行は 6 まで）。文書を動かす issue は 1。枠切れは Claude Code の一時停止に任せる（対話セッションから起動したときだけ効く。リセットが 24 時間以内のときだけで、週の枠は解けない）
 - **implementer**：`"devin"` にすると、tier none / light で UI を変えない issue の最初の実装で、コードを書く部分だけを devin CLI（モデル swe-2-max。`~/.claude/scripts/devin-box.sh` の jail で動き、トークンの消費は Claude の枠に入らない）に任せる。検査・コミット・PR・CI の確認と、指摘への対応・条件への対応・rebase は今までどおり `issue-implementer`（opus）が行う。**2026-10-10 まで**（swe-2 の無料期間）は既定を `"devin"` にし、それ以降は省く（既定 `"claude"`）。`issues[].implementer` で issue ごとに上書きできる。効果の比較は結果の `implementedBy`（devin が失敗して Claude が書いたら `claude`）で分け、実装の費用（devin 分は $0）・クリティカルパス・PR ラウンド 1 の判定・実装起因の must・deviation・devin の失敗回数を 09-19 の A/B（none $5.9、light $7.0、PR r1 APPROVE 10/10、実装起因の must 0）と比べる
 - **tier の固定**：A/B を取るときや、判定をやり直したくない再開のときは `issues[].tier` に `none` / `light` / `full` を書く。判定の段階が飛ぶ
+- **マージをユーザーに残す issue**：リリースの PR（#411 の PR #412 #413 #414、#483 の PR #665）のようにマージとタグ付けをユーザーが行う issue は `issues[].noMerge: true` にする。最終確認の APPROVE の後にマージの段階が飛び、`stalled`（stage `merge`、reason `noMerge: PR #N のマージはユーザーが行う`）で返る。この `stalled` は往復の失敗ではないので、再開の `issues` に入れず、ユーザーに PR のマージを頼む
 - **既存のプラン**：issue にすでに承認済みの「## 実装プラン（版 N）」が投稿されていれば、そのコメントの URL を `planUrl` に書く。スクリプトはプランの段階を飛ばして実装から始める。土台が古びていて作れない箇所があれば、実装エージェントが `deviation` を返し、スクリプトがプランの版を上げる
 - **事前に聞く論点**：issue の本文とコメントに未決の設計判断（どの鍵で応答するか、既定値をどうするか、など）があれば、起動の前に `AskUserQuestion` でまとめて聞き、`decisions[n]` に書く。09-13 の実績では 28 件で 9 件の質問があり、すべてプラン段階の設計判断だった
 - **対話セッションから起動する**：実行は対話セッション（claude.ai のサブスクリプションでログイン、`autoContinueAtUsageLimit` は既定の on）から起動し、`claude -p` やバックグラウンドセッション、Remote Control に移さない。エージェントが usage limit に当たったとき、対話セッションなら run は失敗せず一時停止してリセット後に続くが、それ以外ではそのエージェントが失敗する（https://code.claude.com/docs/en/workflows#when-a-run-hits-your-usage-limit）
@@ -139,7 +140,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - `split`：親が分割された。`subIssues`（番号の配列）と `children` の各結果を、それぞれ上の分類で扱う。`children` が全部 `merged` なら親の issue は閉じているはずなので、開いたままなら閉じる（最後の子の結果の `openParent` と `log` に、拒否されて閉じられなかった親の番号が出る）
 - `merged`：PR 番号、マージのコミット、tier、プランのラウンド数、PR レビューのラウンド数、条件の件数（`prConditionCount`）、最終確認の回数、残した nit の数、最終確認の学び（`lessons`）を報告に載せる
 - `blocked`：`stage` と `questions` がある。`questions` をユーザーに聞き、答えを `decisions[n]` に入れ、その issue だけを新しい実行の `issues` に入れて再開する（`planUrl` と `tier` を引き継ぐ）。依存先の失敗（`stage: deps`）は依存先を先に直す
-- `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて新しい実行に載せる、実装が難しいなら issue を分ける）
+- `stalled`：往復が収束しなかった issue。`reason` を添えてユーザーに報告し、指示を待つ（プランの論点が割れたなら `decisions` で決めて新しい実行に載せる、実装が難しいなら issue を分ける）。`reason` が `noMerge:` で始まるものは失敗ではなく、ユーザーに PR のマージを頼む（段階 0 の「マージをユーザーに残す issue」）
 - `failed`：エージェントが結果を返さなかった（打ち切り、API のエラー、auto モードの分類器による停止）。`stage` を報告し、その issue だけを新しい実行の `issues` に入れて再開する。走り直したエージェントが済んだ副作用に出会う場合（PR がある、ブランチがある、マージ済み）は、実装エージェントと merger の定義がそれを検知して続きから進める
 
 再開する新しい実行の `args` は、`blocked` / `stalled` / `failed` の issue だけを `issues` に入れ、`base` を今の `origin/main` に更新して組み立てる（完了済みの issue は依頼文が自己完結しているので、`planUrl` で始めるか既存 PR を検知して続きから進み、走り直す必要が無い）。各 issue には、既存のプランがあれば `planUrl`、判定を飛ばしたければ `tier`、聞いた答えの `decisions[n]` を引き継ぐ。

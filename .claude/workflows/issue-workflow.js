@@ -15,9 +15,10 @@ export const meta = {
 
 // ---------------------------------------------------------------------------
 // args の契約（スキル issue-workflow の段階 0 で組み立てる）
-//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier?, depth?, parent?, designUrl? }]
+//   issues:     [{ n, branch, ui?, after?: [n, ...], note?, planUrl?, tier?, noMerge?, depth?, parent?, designUrl? }]
 //               planUrl: issue にすでに投稿済みで承認された「## 実装プラン」のコメント URL。あれば判定・デザイン・プランの段階を飛ばす
 //               tier:    'none' | 'light' | 'full'。あれば判定の tier の代わりに使う（A/B と再開で固定するため）
+//               noMerge: true なら最終確認の APPROVE の後にマージの段階を飛ばし、stalled（stage merge、reason に noMerge とマージはユーザーが行う旨）で返す（リリースの PR など。サブ issue には継がない）
 //               分割で生まれたサブ issue はスクリプトが足す（ui と designUrl を親から継ぎ、depth 1、parent、tier は親の判定が決めた none か light、note に親の「## 分割の設計」への案内。再分割はしない）。
 //               別の実行で子を回し直すときは、同じ depth / parent / tier / ui / designUrl / note を issues に直接書く（スキル issue-workflow の「結果の処理」）
 //               after: 判定からプランまでは依存先のプランの承認を待って進め、実装は依存先のマージを待つ（待つ間は window の枠を使わない）
@@ -849,8 +850,13 @@ async function runIssue(issue, idx) {
       () => implementStage(e, issue, state),
       () => prReviewStage(e, issue, state),
       () => gateStage(e, issue, state),
-      // マージ担当が rebase の差分にレビューが要ると判断したら、最終確認に再確認させてから 1 回だけマージをやり直す
+      // マージ担当が rebase の差分にレビューが要ると判断したら、最終確認に再確認させてから 1 回だけマージをやり直す。
+      // issues[].noMerge の issue はマージをユーザーに残すので、mergeStage を呼ばずに stalled で返す（e には無いので issue を見る）
       async () => {
+        if (issue.noMerge) {
+          log(`#${issue.n}: noMerge なので PR #${state.pr} のマージを飛ばす。マージはユーザーが行う`)
+          return { stalled: { stage: 'merge', reason: `noMerge: PR #${state.pr} のマージはユーザーが行う` } }
+        }
         const m = await mergeStage(e, state)
         if (!m.review) return m
         log(`#${issue.n}: PR #${state.pr} の rebase の差分にレビューが要るとマージ担当が判断した（${m.review}）。最終確認に再確認させる`)
