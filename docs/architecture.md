@@ -571,6 +571,7 @@ sequenceDiagram
 見た目は Tailwind CSS と daisyUI のクラスで付け、鍵の指紋の色だけは `assets/admin.css` に手で書いたクラス（`fp`、`h0`〜`h11`、`fp-gray`）とテーマの変数で付けて、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
 時刻はサーバーが `<time datetime>` に UTC で描き（JS が無いときは「05:12:34 UTC」のように UTC と分かる表記）、`admin.js` が読み込み時に閲覧者のローカルの時刻に直す。
+POST の応答で開いた状態で描いたダイアログは、`admin.js` が読み込み時にモーダルとして開き直す。
 ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。言語の切り替えの「ブラウザーの設定」のボタンは cookie を消す。
 テーマは切り替えで保存した cookie から決め、無ければブラウザーの設定に従う。
 
@@ -601,9 +602,9 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/accounts/<signer>/rotate` | secret の作り直しの確認 / 実行 |
 | GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
 | GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
-| GET / POST | `/relays/new` | リレーの追加のフォーム / 登録。303 でダッシュボードへ戻す |
-| GET / POST | `/relays/<id>/edit` | 用途の編集フォーム / 差し替え。303 でダッシュボードへ戻す |
-| GET / POST | `/relays/<id>/delete` | 削除の確認 / 実行。303 でダッシュボードへ戻す |
+| POST | `/relays/new` | リレーの登録。303 でダッシュボードへ戻す（400 と 409 は追加のダイアログを開いたダッシュボードを返す） |
+| POST | `/relays/<id>/edit` | 用途の差し替え。303 でダッシュボードへ戻す（400 と 409 は編集のダイアログを開いたダッシュボードを返す） |
+| POST | `/relays/<id>/delete` | 削除。303 でダッシュボードへ戻す（409 は削除のダイアログを開いたダッシュボードを返す） |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
 承認、拒否、セッションの取り消し、セッションの権限の編集、クライアントの接続は、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンと保存した権限の値は出さない。
@@ -677,7 +678,6 @@ nostr-no-su/
 │       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
-│       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/connect_pages.gleam クライアントの接続のページと確認のページの描画
 │       ├── admin/session_pages.gleam セッションのページの描画
 │       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーのエンジンの定義を使う）
