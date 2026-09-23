@@ -29,7 +29,7 @@
 | `events` | `event_logger` が保存したイベント（docker イメージに同梱されているので、compose の既定の構成では常に存在する） | プラグインが保存した履歴が失われる |
 | `monitored_accounts` | `event_logger` が保存の対象とするアカウント（行が 0 件なら全アカウントが対象） | 失うと保存の対象が全アカウントに戻る |
 | `event_logger_schema_version` | `event_logger` の移行の版 | `events`・`monitored_accounts` と対で戻す必要がある |
-| マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（[設定](configuration.md) の「秘密をファイルで渡す」の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できない |
+| マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（[設定](configuration.md) の「秘密をファイルで渡す」の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できず、`bunker_sessions` と `bunker_pending` の行の MAC も合わなくなる |
 
 ## マスターキーの保管
 
@@ -83,7 +83,7 @@ docker compose up -d
 
 `NOSTR_NO_SU_VERSION` を `X.Y` にしている構成では、同じ minor の patch は `docker compose pull` と `docker compose up -d` の 2 つだけで上がる。minor を上げるときは上のブロックで `X.Y.Z` を取り、`sed` の後に値を新しい `X.Y` に書き換える。clone してソースから動かしている構成では `git pull` の後に `docker compose up -d --build` を実行する。
 
-上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
+上げた後の確認は下の「復旧後の確認」の 1 と 3 と同じで、`[bunker] loaded N account(s)` の `N` が上げる前と同じであることと、`bunker://` URI でクライアントから署名できることを見る。DB の移行は起動時に自動で進む。スキーマの版 6 を含む版へ上げると、移行が既存の承認済みのセッションと承認待ちの行をすべて消すので、接続中のクライアントは接続をやり直す（承認を経る URI で接続したクライアントは承認もやり直す）。移行の内容は [システム構成](architecture.md) の「アカウントの読み込み」にある。記録された版がビルドより新しいときは `[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を出して終了し、compose が再起動を繰り返すたびに同じ行が出るので、前の版のイメージに戻す。
 
 データは compose の `postgres-data` volume にあり、`pull` と `up -d` は volume に触れない。volume の名前は compose のプロジェクト名（既定はディレクトリーの名前）で決まるので、ディレクトリーの名前を変えたり別のディレクトリーで起動したりすると、空の volume で新しく始まる（古い volume は `docker volume ls` に `<旧プロジェクト名>_postgres-data` として残る。戻すときはディレクトリーの名前を戻すか、`docker compose -p <旧プロジェクト名> ...` で起動する）。`docker compose down -v` だけが volume を消す。
 
@@ -149,7 +149,7 @@ docker compose up -d
 3. そのカードの各行の「削除」（`Delete`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、「このアカウントはすでに登録されています。」（`account is already registered`）について述べた上の段落にあるとおり DB から直接消す。
 4. アカウントの節の「追加」（`Add`）から控えた nsec で登録し直す。飛ばされた行が残っていると「このアカウントはすでに登録されています。」（`account is already registered`）で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
 
-交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
+交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。セッションと承認待ちの行の MAC もマスターキーから導く鍵で計算するので、手順 2 の起動から手順 3 で消すまでは、それらの行も読み込みのたびに `skipped a bunker_sessions row with a mismatched MAC`（`bunker_pending` も同じ形）で飛ばされる。行ごと消えるので MAC を付け直す手順は要らない。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
 
 リレーの登録、監視の再開点、プラグインが保存したイベントはマスターキーに依らず変わらない。同じ nsec で登録し直せば公開鍵も同じなので、`bunker://` URI で変わるのは `secret=` だけである。
 
