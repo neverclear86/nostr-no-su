@@ -2224,7 +2224,7 @@ fn globe_icon() -> Element(msg) {
   ])
 }
 
-/// QR のページへのリンクのアイコン（Lucide の qr-code）。
+/// 接続 QR コードのダイアログを開くボタンのアイコン（Lucide の qr-code）。
 pub fn qr_code_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M4 3h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1",
