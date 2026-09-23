@@ -102,7 +102,7 @@ fn card_body(
           path,
           form_fields(language, fields),
           i18n.text(language, i18n.Save),
-          view.Primary,
+          view.PrimaryButton,
           view.InForm,
         ),
       ]
@@ -144,8 +144,8 @@ fn summary(language: Language, session: dashboard.SessionRow) -> Element(msg) {
 fn current_permissions(language: Language, perms: String) -> Element(msg) {
   case perms {
     "" ->
-      view.status_badge(
-        view.Neutral,
+      view.status_chip(
+        view.ToneChip(view.Neutral),
         i18n.text(language, i18n.PermissionsNotDeclared),
       )
     _ -> dashboard.perms_chips(language, perms)

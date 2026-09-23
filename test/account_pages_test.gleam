@@ -243,8 +243,8 @@ pub fn account_action_pages_show_the_shortened_npub_test() {
   assert string.contains(unreadable_page, view.shorten(example_npub))
 }
 
-/// アカウントの追加の画面では、既存の秘密鍵の登録だけが主操作の重さで、生成は既定の
-/// 重さになる。
+/// アカウントの追加の画面では、既存の秘密鍵の登録だけが主のボタンで、生成は枠の
+/// ボタンになる。
 pub fn generate_is_not_a_primary_button_test() {
   let page = account_pages.new_account_page(i18n.English, view.System, "", None)
   let occurrences =

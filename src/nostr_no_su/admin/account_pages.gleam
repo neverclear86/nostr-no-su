@@ -54,7 +54,7 @@ pub fn new_account_page(
             label_fieldset(language, label),
           ],
           text(i18n.Register),
-          view.Primary,
+          view.PrimaryButton,
           view.InForm,
         ),
       ]),
@@ -65,7 +65,7 @@ pub fn new_account_page(
           view.segments_path(dashboard.generate_account_segments),
           [],
           text(i18n.Generate),
-          view.Normal,
+          view.OutlineButton,
           view.InForm,
         ),
       ]),
@@ -126,7 +126,7 @@ pub fn generated_key_page(
             label_fieldset(language, label),
           ],
           text(i18n.RegisterThisKey),
-          view.Primary,
+          view.PrimaryButton,
           view.InForm,
         ),
       ]),
@@ -207,8 +207,8 @@ pub fn registered_page(
 /// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
 /// ラベルの編集フォームの欄には、GET では一覧から得た保存済みのラベルを、入力の誤りか
 /// 409 で再描画するときは送られた値（`label`）を入れる。カードの上の `account_summary`
-/// は保存済みのラベルのままにする。送信のボタンの重さは操作ごとに決める（ラベルの保存は
-/// 主操作、secret の作り直しと秘密鍵の表示は注意、削除は破壊）。送信のボタンの文言は、
+/// は保存済みのラベルのままにする。送信のボタンの種類は操作ごとに決める（ラベルの保存は
+/// 主、secret の作り直しと秘密鍵の表示は warning の枠、削除は危険）。送信のボタンの文言は、
 /// 見出しとリンクの文言（`dashboard.account_action_title`）とは別に持つ。テーマか言語を
 /// 切り替えた後は、この操作のページを GET で開き直す。
 pub fn account_action_page(
@@ -228,7 +228,7 @@ pub fn account_action_page(
         path,
         [label_fieldset(language, option.unwrap(label, row.label))],
         text(i18n.Save),
-        view.Primary,
+        view.PrimaryButton,
         view.InForm,
       ),
     )
@@ -238,7 +238,7 @@ pub fn account_action_page(
         path,
         [],
         text(i18n.RotateSecretSubmit),
-        view.Caution,
+        view.WarningOutlineButton,
         view.InForm,
       ),
     )
@@ -254,7 +254,7 @@ pub fn account_action_page(
           path,
           [],
           text(i18n.DeleteAccountSubmit),
-          view.Destructive,
+          view.DangerButton,
           view.InForm,
         ),
       )
@@ -270,7 +270,7 @@ pub fn account_action_page(
           ),
         ],
         text(i18n.ShowPrivateKeySubmit),
-        view.Caution,
+        view.WarningOutlineButton,
         view.InForm,
       ),
     )
@@ -422,7 +422,7 @@ fn client_uri_card(language: Language) -> Element(msg) {
     view.button_link(
       view.segments_path(dashboard.connect_segments),
       text(i18n.ConnectClient),
-      view.Primary,
+      view.PrimaryButton,
     ),
   ])
 }
@@ -478,7 +478,7 @@ pub fn unreadable_delete_page(
           path,
           [],
           text(i18n.DeleteAccountSubmit),
-          view.Destructive,
+          view.DangerButton,
           view.InForm,
         ),
       ]),

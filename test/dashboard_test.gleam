@@ -142,14 +142,14 @@ pub fn states_are_shown_as_badges_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let badges = [
     "<span class=\"whitespace-nowrap\">monitor</span>",
-    element.to_string(view.status_badge(view.Success, "connected")),
-    element.to_string(view.status_badge(view.Failure, "disconnected")),
-    element.to_string(view.status_badge(view.Success, "running")),
-    element.to_string(view.status_badge(view.Warning, "overloaded"))
+    element.to_string(view.status_chip(view.ActiveChip, "connected")),
+    element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),
+    element.to_string(view.status_chip(view.ActiveChip, "running")),
+    element.to_string(view.status_chip(view.OverloadedChip, "overloaded"))
       <> "<span class=\"text-xs break-words\">(dropped 4)</span>",
-    element.to_string(view.status_badge(view.Failure, "disabled"))
+    element.to_string(view.status_chip(view.DisabledChip, "disabled"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
-    element.to_string(view.status_badge(view.Neutral, "unavailable")),
+    element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
     "<dd><span>540s</span></dd>",
   ]
   list.each(badges, fn(badge) {
@@ -164,14 +164,14 @@ pub fn japanese_states_are_translated_test() {
   let badges = [
     "<span class=\"whitespace-nowrap\">監視</span>",
     "<span class=\"whitespace-nowrap\">バンカー</span>",
-    element.to_string(view.status_badge(view.Success, "接続中")),
-    element.to_string(view.status_badge(view.Failure, "未接続")),
-    element.to_string(view.status_badge(view.Success, "動作中")),
-    element.to_string(view.status_badge(view.Warning, "過負荷"))
+    element.to_string(view.status_chip(view.ActiveChip, "接続中")),
+    element.to_string(view.status_chip(view.DisconnectedChip, "未接続")),
+    element.to_string(view.status_chip(view.ActiveChip, "動作中")),
+    element.to_string(view.status_chip(view.OverloadedChip, "過負荷"))
       <> "<span class=\"text-xs break-words\">（破棄 4 件）</span>",
-    element.to_string(view.status_badge(view.Failure, "無効"))
+    element.to_string(view.status_chip(view.DisabledChip, "無効"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
-    element.to_string(view.status_badge(view.Neutral, "応答なし")),
+    element.to_string(view.status_chip(view.UnansweredChip, "応答なし")),
     "<dd><span>540 秒</span></dd>",
   ]
   list.each(badges, fn(badge) {
@@ -186,15 +186,17 @@ pub fn secret_state_is_shown_as_a_badge_test() {
   let english = dashboard.render(i18n.English, view.System, secret_states())
   assert string.contains(
     english,
-    "<span class=\"badge badge-ghost badge-sm whitespace-nowrap gap-1\">"
-      <> element.to_string(view.tone_icon(view.Neutral))
-      <> "Secret not offered</span>",
+    element.to_string(view.status_chip(
+      view.SecretNotOfferedChip,
+      "Secret not offered",
+    )),
   )
   assert string.contains(
     english,
-    "<span class=\"badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning\">"
-      <> element.to_string(view.tone_icon(view.Warning))
-      <> "Secret mismatch</span>",
+    element.to_string(view.status_chip(
+      view.SecretMismatchChip,
+      "Secret mismatch",
+    )),
   )
 
   let japanese = dashboard.render(i18n.Japanese, view.System, secret_states())
@@ -255,9 +257,10 @@ pub fn permissions_are_shown_as_chips_test() {
   )
 
   let no_perms_badge =
-    "<span class=\"badge badge-ghost badge-sm whitespace-nowrap gap-1\">"
-    <> element.to_string(view.tone_icon(view.Neutral))
-    <> "No permissions requested</span>"
+    element.to_string(view.status_chip(
+      view.ToneChip(view.Neutral),
+      "No permissions requested",
+    ))
   assert string.contains(
     dashboard.render(i18n.English, view.System, secret_states()),
     no_perms_badge,
@@ -312,7 +315,7 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
       "/accounts/abcd/label",
       view.pencil_icon(),
       "Edit label",
-      view.Normal,
+      view.GhostButton,
     )),
   )
   assert string.contains(
@@ -321,7 +324,7 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
       "/accounts/abcd/private-key",
       view.eye_icon(),
       "Show private key",
-      view.Normal,
+      view.GhostButton,
     )),
   )
   assert string.contains(
@@ -330,7 +333,7 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
       "/accounts/abcd/rotate",
       view.rotate_icon(),
       "Rotate secret",
-      view.Normal,
+      view.GhostButton,
     )),
   )
   assert string.contains(
@@ -339,7 +342,7 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
       "/accounts/abcd/delete",
       view.trash_icon(),
       "Delete",
-      view.Destructive,
+      view.DangerGhostButton,
     )),
   )
   assert !string.contains(body, "Delete account")
@@ -391,8 +394,8 @@ pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
   assert string.contains(
     sessions,
     "<dt class=\"text-base-content/70\">Permissions</dt><dd>"
-      <> element.to_string(view.status_badge(
-      view.Neutral,
+      <> element.to_string(view.status_chip(
+      view.ToneChip(view.Neutral),
       "No permissions requested",
     ))
       <> "</dd>",
@@ -426,7 +429,7 @@ pub fn only_disabled_plugins_have_a_reenable_button_test() {
   )
 }
 
-/// 読み込めなかったプラグインは、識別子と理由つきでカードに出る。理由は英語のまま
+/// 読み込めなかったプラグインは、「読み込み失敗」のチップと識別子と理由つきでカードに出る。理由は英語のまま
 /// `lang="en"` で包む。
 pub fn dashboard_shows_not_loaded_plugins_test() {
   let snapshot =
@@ -444,6 +447,10 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
   assert string.contains(english, "Plugins that failed to load")
   assert string.contains(
     english,
+    element.to_string(view.status_chip(view.LoadFailedChip, "failed to load")),
+  )
+  assert string.contains(
+    english,
     "These plugins are not running. Fix the cause below and restart the server.",
   )
   assert string.contains(english, "<span lang=\"en\">demo_plugin</span>")
@@ -451,9 +458,11 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
     english,
     "<span lang=\"en\">unsupported api version 2 (expected 1)</span>",
   )
+  let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
+  assert string.contains(japanese, "読み込めなかったプラグイン")
   assert string.contains(
-    dashboard.render(i18n.Japanese, view.System, snapshot),
-    "読み込めなかったプラグイン",
+    japanese,
+    element.to_string(view.status_chip(view.LoadFailedChip, "読み込み失敗")),
   )
 }
 
@@ -812,7 +821,7 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
       dashboard.account_action_path(pubkey, dashboard.DeleteAccount),
       view.trash_icon(),
       "Delete",
-      view.Destructive,
+      view.DangerGhostButton,
     )),
   )
   // pubkey の唯一の出現は削除のリンクの宛先である。
@@ -863,13 +872,13 @@ pub fn relays_are_listed_one_item_per_row_test() {
       "/relays/" <> id <> "/edit",
       view.pencil_icon(),
       "Edit roles",
-      view.Normal,
+      view.GhostButton,
     ))
     <> element.to_string(view.icon_only_link(
       "/relays/" <> id <> "/delete",
       view.trash_icon(),
       "Delete relay",
-      view.Destructive,
+      view.DangerGhostButton,
     ))
     <> "</div>"
   }
@@ -879,12 +888,12 @@ pub fn relays_are_listed_one_item_per_row_test() {
       <> role(
       view.eye_icon(),
       "monitor",
-      view.status_badge(view.Success, "connected"),
+      view.status_chip(view.ActiveChip, "connected"),
     )
       <> role(
       view.key_icon(),
       "bunker",
-      view.status_badge(view.Failure, "disconnected"),
+      view.status_chip(view.DisconnectedChip, "disconnected"),
     )
       <> "</div></div>"
       <> actions("1")
@@ -892,12 +901,12 @@ pub fn relays_are_listed_one_item_per_row_test() {
       <> role(
       view.eye_icon(),
       "monitor",
-      view.status_badge(view.Failure, "disconnected"),
+      view.status_chip(view.DisconnectedChip, "disconnected"),
     )
       <> role(
       view.key_icon(),
       "bunker",
-      view.status_badge(view.Neutral, "Unused"),
+      view.status_chip(view.UnusedChip, "Unused"),
     )
       <> "</div></div>"
       <> actions("2")
@@ -905,7 +914,7 @@ pub fn relays_are_listed_one_item_per_row_test() {
   )
 }
 
-/// リレーの行のリンクは、用途の編集が通常の重さ、削除が error 色の文字。
+/// リレーの行のリンクは、用途の編集が地味なボタン、削除が error の文字色。
 pub fn relay_rows_link_to_edit_and_delete_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
@@ -914,7 +923,7 @@ pub fn relay_rows_link_to_edit_and_delete_test() {
       "/relays/1/edit",
       view.pencil_icon(),
       "Edit roles",
-      view.Normal,
+      view.GhostButton,
     )),
   )
   assert string.contains(
@@ -923,7 +932,7 @@ pub fn relay_rows_link_to_edit_and_delete_test() {
       "/relays/1/delete",
       view.trash_icon(),
       "Delete relay",
-      view.Destructive,
+      view.DangerGhostButton,
     )),
   )
 }
@@ -950,7 +959,7 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
   assert string.contains(
     body,
     "<span class=\"whitespace-nowrap\">monitor</span>"
-      <> element.to_string(view.status_badge(view.Neutral, "unavailable")),
+      <> element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
   )
   assert string.contains(body, "wss://a")
   assert string.contains(body, "href=\"/relays/1/edit\"")
@@ -982,7 +991,7 @@ pub fn unused_relay_roles_are_shown_as_unused_test() {
   assert string.contains(
     body,
     "<span class=\"whitespace-nowrap\">bunker</span>"
-      <> element.to_string(view.status_badge(view.Neutral, "Unused")),
+      <> element.to_string(view.status_chip(view.UnusedChip, "Unused")),
   )
 }
 
@@ -1006,7 +1015,7 @@ pub fn no_bunker_relay_is_warned_test() {
       "/relays/new",
       view.plus_icon(),
       "Add",
-      view.Primary,
+      view.PrimaryButton,
     ))
     <> "</div>"
   let no_rows =

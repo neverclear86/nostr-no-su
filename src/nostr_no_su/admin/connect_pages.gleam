@@ -60,7 +60,7 @@ fn card_body(
       view.button_link(
         view.segments_path(dashboard.new_account_segments),
         text(i18n.AddAccount),
-        view.Primary,
+        view.PrimaryButton,
       ),
     ]
     Ok(rows) -> [
@@ -69,7 +69,7 @@ fn card_body(
         path,
         [uri_field(language, uri), signer_field(language, rows, signer)],
         text(i18n.Connect),
-        view.Primary,
+        view.PrimaryButton,
         view.InForm,
       ),
     ]

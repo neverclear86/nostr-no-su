@@ -284,6 +284,7 @@ pub type Message {
   UnreadableNotDeletable
   NotLoadedPlugins
   NotLoadedPluginsWarning
+  PluginLoadFailed
   ReasonLabel
   ConnectionUri
   ConnectionUriForApproval
@@ -562,6 +563,7 @@ fn english(message: Message) -> String {
     UnreadableNotDeletable ->
       "This row cannot be deleted here because its pubkey cannot be read."
     NotLoadedPlugins -> "Plugins that failed to load"
+    PluginLoadFailed -> "failed to load"
     NotLoadedPluginsWarning ->
       "These plugins are not running. Fix the cause below and restart the server."
     ReasonLabel -> "Reason"
@@ -858,6 +860,7 @@ fn japanese(message: Message) -> String {
     UnreadableReason(reason) -> japanese_row_error(reason)
     UnreadableNotDeletable -> "この行は pubkey を読めないため、画面からは削除できません。"
     NotLoadedPlugins -> "読み込めなかったプラグイン"
+    PluginLoadFailed -> "読み込み失敗"
     NotLoadedPluginsWarning -> "これらのプラグインは動作していません。下の理由を直してサーバーを再起動してください。"
     ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"

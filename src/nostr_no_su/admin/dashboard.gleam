@@ -624,7 +624,7 @@ fn accounts_section(
           view.segments_path(new_account_segments),
           view.plus_icon(),
           text(i18n.Add),
-          view.Primary,
+          view.PrimaryButton,
         ),
       ],
       [reload_form(language)],
@@ -694,7 +694,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
             account_action_path(row.pubkey, DeleteAccount),
             view.trash_icon(),
             i18n.text(language, i18n.Delete),
-            view.Destructive,
+            view.DangerGhostButton,
           ),
         ]),
       ])
@@ -792,7 +792,7 @@ fn account_action_links(language: Language, signer: String) -> Element(msg) {
         account_action_path(signer, action),
         account_action_icon(action),
         i18n.text(language, account_action_row_title(action)),
-        account_action_link_weight(action),
+        account_action_link_kind(action),
       )
     }),
   )
@@ -819,13 +819,13 @@ fn account_action_row_title(action: AccountAction) -> i18n.Message {
   }
 }
 
-/// アカウント 1 件への操作のボタンの重さ。行の操作はすべて ghost にし、削除だけ error 色の
-/// 文字にする。
-fn account_action_link_weight(action: AccountAction) -> view.Weight {
+/// アカウント 1 件への操作のボタンの種類。行の操作はすべて地味なボタンにし、削除だけ error の
+/// 文字色にする。
+fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
   case action {
     EditLabel | RevealPrivateKey | RotateSecret | ShowConnectionQr ->
-      view.Normal
-    DeleteAccount -> view.Destructive
+      view.GhostButton
+    DeleteAccount -> view.DangerGhostButton
   }
 }
 
@@ -1087,12 +1087,12 @@ pub fn parse_plugin_page_path(
   }
 }
 
-/// 操作のページへのリンクの重さ。編集は開くだけなので通常、削除は接続中のクライアントに
-/// 影響するので、error 色の文字にする。
-fn relay_action_link_weight(action: RelayAction) -> view.Weight {
+/// 操作のページへのリンクの種類。編集は開くだけなので地味なボタン、削除は接続中のクライアントに
+/// 影響するので error の文字色にする。
+fn relay_action_link_kind(action: RelayAction) -> view.ButtonKind {
   case action {
-    EditRelayRoles -> view.Normal
-    DeleteRelay -> view.Destructive
+    EditRelayRoles -> view.GhostButton
+    DeleteRelay -> view.DangerGhostButton
   }
 }
 
@@ -1154,12 +1154,20 @@ fn signer_value(signer: SignerName) -> Element(msg) {
   }
 }
 
-/// secret の提示の区別のバッジ。不一致は警告色、提示なしは無色。
+/// secret の提示の区別のバッジ。不一致は警告色、提示なしは色を付けない。
 fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
   let text = i18n.text(language, _)
   case mismatch {
-    True -> view.status_badge(view.Warning, text(i18n.PendingSecretMismatch))
-    False -> view.status_badge(view.Neutral, text(i18n.PendingSecretNotOffered))
+    True ->
+      view.status_chip(
+        view.SecretMismatchChip,
+        text(i18n.PendingSecretMismatch),
+      )
+    False ->
+      view.status_chip(
+        view.SecretNotOfferedChip,
+        text(i18n.PendingSecretNotOffered),
+      )
   }
 }
 
@@ -1168,7 +1176,7 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 fn expires_in_badge(language: Language, seconds: Int) -> Element(msg) {
   let text = i18n.text(language, i18n.ExpiresInSeconds(seconds))
   case seconds < 60 {
-    True -> view.status_badge(view.Warning, text)
+    True -> view.status_chip(view.ToneChip(view.Warning), text)
     False -> html.span([], [html.text(text)])
   }
 }
@@ -1179,8 +1187,8 @@ fn expires_in_badge(language: Language, seconds: Int) -> Element(msg) {
 pub fn perms_chips(language: Language, perms: String) -> Element(msg) {
   case perms {
     "" ->
-      view.status_badge(
-        view.Neutral,
+      view.status_chip(
+        view.ToneChip(view.Neutral),
         i18n.text(language, i18n.NoPermissionsRequestedBadge),
       )
     _ ->
@@ -1215,7 +1223,7 @@ fn relays_section(
           view.segments_path(new_relay_segments),
           view.plus_icon(),
           text(i18n.Add),
-          view.Primary,
+          view.PrimaryButton,
         ),
       ],
       [],
@@ -1270,7 +1278,7 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
           relay_action_path(row.id, action),
           relay_action_icon(action),
           i18n.text(language, relay_action_title(action)),
-          relay_action_link_weight(action),
+          relay_action_link_kind(action),
         )
       }),
     ),
@@ -1298,8 +1306,9 @@ pub fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   let text = i18n.text(language, _)
   case state {
     Reported(status) -> relay_status(language, status)
-    Unanswered -> view.status_badge(view.Neutral, text(i18n.PluginUnavailable))
-    Unused -> view.status_badge(view.Neutral, text(i18n.RelayRoleUnused))
+    Unanswered ->
+      view.status_chip(view.UnansweredChip, text(i18n.PluginUnavailable))
+    Unused -> view.status_chip(view.UnusedChip, text(i18n.RelayRoleUnused))
   }
 }
 
@@ -1323,7 +1332,7 @@ fn sessions_section(
           view.segments_path(connect_segments),
           view.plus_icon(),
           text(i18n.ConnectClient),
-          view.Primary,
+          view.PrimaryButton,
         ),
       ],
       [],
@@ -1388,7 +1397,7 @@ fn permissions_link(language: Language, session: SessionRow) -> Element(msg) {
     session_permissions_path(session.signer, session.client),
     view.pencil_icon(),
     i18n.text(language, i18n.EditPermissions),
-    view.Normal,
+    view.GhostButton,
   )
 }
 
@@ -1482,17 +1491,24 @@ fn not_loaded_section(
         view.alert(view.Warning, [
           html.text(i18n.text(language, i18n.NotLoadedPluginsWarning)),
         ]),
-        item_list(list.map(rows, not_loaded_item)),
+        item_list(list.map(rows, not_loaded_item(language, _))),
       ])
   }
 }
 
-/// 読み込めなかった候補 1 件。識別子と理由を縦に並べる。どちらもローダーと
-/// プラグイン由来の英語なので訳さない。識別子は原因に辿り着く唯一の手掛かり
+/// 読み込めなかった候補 1 件。「読み込み失敗」のチップ、識別子、理由を縦に並べる。識別子と
+/// 理由はローダーとプラグイン由来の英語なので訳さない。識別子は原因に辿り着く唯一の手掛かり
 /// なので、長くても切らずに折り返して全文を出す。
-fn not_loaded_item(row: plugin_loader.NotLoaded) -> Element(msg) {
+fn not_loaded_item(
+  language: Language,
+  row: plugin_loader.NotLoaded,
+) -> Element(msg) {
   entry_item([
-    html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+    html.div([attribute.class("flex min-w-0 flex-col items-start gap-1")], [
+      view.status_chip(
+        view.LoadFailedChip,
+        i18n.text(language, i18n.PluginLoadFailed),
+      ),
       html.p([attribute.class("font-mono text-sm break-all")], [
         view.untranslated(row.id),
       ]),
@@ -1550,7 +1566,7 @@ fn deny_path(token: String) -> String {
 }
 
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。承認が
-/// この画面の主な操作で、拒否してもクライアントは接続し直せるので通常の重さにする。
+/// この画面の主な操作で、拒否してもクライアントは接続し直せるので地味なボタンにする。
 fn decision_forms(language: Language, token: String) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
@@ -1558,21 +1574,21 @@ fn decision_forms(language: Language, token: String) -> List(Element(msg)) {
       approve_path(token),
       [],
       text(i18n.Approve),
-      view.Primary,
+      view.PrimaryButton,
       view.InRow,
     ),
     view.post_form(
       deny_path(token),
       [],
       text(i18n.Deny),
-      view.Normal,
+      view.GhostButton,
       view.InRow,
     ),
   ]
 }
 
 /// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。確認のページを
-/// 経ずに接続中のクライアントに影響するが、クライアントは接続し直せるので注意の重さにする。
+/// 経ずに接続中のクライアントに影響するが、クライアントは接続し直せるので地味なボタンにする。
 fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
   view.post_form(
     view.segments_path(revoke_segments),
@@ -1581,56 +1597,55 @@ fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
       view.hidden_input(client_field, session.client),
     ],
     i18n.text(language, i18n.Revoke),
-    view.Caution,
+    view.GhostButton,
     view.InRow,
   )
 }
 
 /// 無効になったプラグイン 1 つの再有効化フォーム。イベント処理を再開させ、失敗が
-/// 続けばまた無効になるので、状態を変えない `Normal` でも取り返しの付かない
-/// `Destructive` でもなく注意の重さにする。
+/// 続けばまた無効になる。取り返しの付く操作なので地味なボタンにする。
 fn reenable_form(language: Language, name: String) -> Element(msg) {
   view.post_form(
     view.segments_path(reenable_plugin_segments),
     [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
-    view.Caution,
+    view.GhostButton,
     view.InRow,
   )
 }
 
 /// DB からの読み直しのフォーム。読み直しはメモリから DB に無いアカウントを取り除き、
-/// セッションと承認待ちも置き換えるので、接続中のクライアントに影響する `Caution` にする。
+/// セッションと承認待ちも置き換えるが、DB の内容は変えずやり直せるので地味なボタンにする。
 fn reload_form(language: Language) -> Element(msg) {
   view.post_form(
     view.segments_path(reload_accounts_segments),
     [],
     i18n.text(language, i18n.ReloadAccounts),
-    view.Caution,
+    view.GhostButton,
     view.InRow,
   )
 }
 
 /// リレーの接続状態のバッジ。
 fn relay_status(language: Language, status: Status) -> Element(msg) {
-  let tone = case status {
-    Connected -> view.Success
-    Disconnected -> view.Failure
+  let chip = case status {
+    Connected -> view.ActiveChip
+    Disconnected -> view.DisconnectedChip
   }
-  view.status_badge(tone, i18n.text(language, status_label(status)))
+  view.status_chip(chip, i18n.text(language, status_label(status)))
 }
 
 /// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
-/// 一時的な状態なので、異常の色にしない。
+/// 一時的な状態だが、イベントを処理できていないので警告の色にする。
 pub fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
-  let tone = case plugin.status {
-    None -> view.Neutral
-    Some(plugin_runner.Running) -> view.Success
-    Some(plugin_runner.Overloaded(..)) -> view.Warning
-    Some(plugin_runner.Disabled(..)) -> view.Failure
+  let chip = case plugin.status {
+    None -> view.UnansweredChip
+    Some(plugin_runner.Running) -> view.ActiveChip
+    Some(plugin_runner.Overloaded(..)) -> view.OverloadedChip
+    Some(plugin_runner.Disabled(..)) -> view.DisabledChip
   }
   let #(word, detail) = plugin_state_label(language, plugin.status)
-  let badge = view.status_badge(tone, word)
+  let badge = view.status_chip(chip, word)
   case detail {
     None -> badge
     Some(detail) ->
@@ -1653,7 +1668,7 @@ fn plugin_page_link(
         plugin_page_href(plugin.name, first.key),
         view.file_text_icon(),
         i18n.text(language, i18n.OpenPluginPage),
-        view.Normal,
+        view.GhostButton,
       ),
     ]
     [] -> []

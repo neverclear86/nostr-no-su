@@ -60,7 +60,7 @@ pub fn dashboard_shows_the_current_state_test() {
   )
   assert string.contains(
     body,
-    element.to_string(view.status_badge(view.Success, "connected")),
+    element.to_string(view.status_chip(view.ActiveChip, "connected")),
   )
   assert string.contains(
     body,
@@ -68,12 +68,12 @@ pub fn dashboard_shows_the_current_state_test() {
   )
   assert string.contains(
     body,
-    element.to_string(view.status_badge(view.Failure, "disconnected")),
+    element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),
   )
   assert string.contains(body, "<td class=\"break-words\">console_logger</td>")
   assert string.contains(
     body,
-    element.to_string(view.status_badge(view.Success, "running")),
+    element.to_string(view.status_chip(view.ActiveChip, "running")),
   )
 }
 
@@ -1039,7 +1039,7 @@ pub fn update_relay_roles_requires_a_role_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 削除のページは URL を `dd` で出し、送信ボタンは破壊の重さ。POST は id を Context に
+/// 削除のページは URL を `dd` で出し、送信ボタンは危険のボタン。POST は id を Context に
 /// 渡し、ダッシュボードへ 303 で戻す。
 pub fn delete_relay_page_and_submit_test() {
   let path = dashboard.relay_action_path(2, dashboard.DeleteRelay)
@@ -1057,7 +1057,7 @@ pub fn delete_relay_page_and_submit_test() {
   assert process.receive(reports, 1000) == Ok(RelayDeleted(2))
 }
 
-/// 削除の確認の送信ボタンは破壊の重さ（`btn-error`）で、編集の主操作（`btn-primary`）
+/// 削除の確認の送信ボタンは危険のボタン（`btn-error`）で、編集の主操作（`btn-primary`）
 /// とは異なる。
 pub fn relay_delete_confirmation_uses_the_destructive_button_test() {
   let body =
