@@ -672,6 +672,7 @@ nostr-no-su/
 │       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/connect_pages.gleam クライアントの接続のページの描画
 │       ├── admin/session_pages.gleam セッションのページの描画
+│       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーのエンジンの定義を使う）
 │       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/wordmark.gleam  上部のロゴの製品名の字形のパス（dev/logo_wordmark.sh が生成）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言

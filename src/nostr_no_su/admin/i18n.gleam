@@ -261,6 +261,12 @@ pub type Message {
   AllowedKindsHint
   OtherPermissions
   OtherPermissionsHint
+  PermissionSignAnyKind
+  PermissionSignKind(kind: Int)
+  PermissionNip44Encrypt
+  PermissionNip44Decrypt
+  PermissionUnsupported
+  UnsupportedPermissionsNote
   SelectAtLeastOne
   InvalidKindList
   SessionNotFound
@@ -536,6 +542,18 @@ fn english(message: Message) -> String {
     OtherPermissions -> "Other declared permissions"
     OtherPermissionsHint ->
       "Declared by the client but not recognized by this form. Kept unchanged when you save."
+    PermissionSignAnyKind -> "Sign any kind"
+    PermissionSignKind(kind:) ->
+      "Sign "
+      <> case kind_name(English, kind) {
+        Some(name) -> name
+        None -> "kind " <> int.to_string(kind)
+      }
+    PermissionNip44Encrypt -> "Encrypt with NIP-44"
+    PermissionNip44Decrypt -> "Decrypt with NIP-44"
+    PermissionUnsupported -> "Unsupported"
+    UnsupportedPermissionsNote ->
+      "Unsupported permissions name methods this bunker does not implement. Their requests are refused even when granted."
     SelectAtLeastOne -> "choose at least one permission"
     InvalidKindList ->
       "kinds must be a comma-separated list of non-negative integers"
@@ -837,6 +855,16 @@ fn japanese(message: Message) -> String {
     AllowedKindsHint -> "上の署名を許可していないときだけ使います。1,10002 のようにカンマ区切りで指定します。"
     OtherPermissions -> "そのほかの宣言"
     OtherPermissionsHint -> "クライアントが宣言した、このフォームが扱わない値です。保存してもそのまま残します。"
+    PermissionSignAnyKind -> "すべての kind の署名"
+    PermissionSignKind(kind:) ->
+      case kind_name(Japanese, kind) {
+        Some(name) -> name <> "の署名"
+        None -> "kind " <> int.to_string(kind) <> " の署名"
+      }
+    PermissionNip44Encrypt -> "NIP-44 で暗号化"
+    PermissionNip44Decrypt -> "NIP-44 で復号"
+    PermissionUnsupported -> "未対応"
+    UnsupportedPermissionsNote -> "「未対応」の権限は、このバンカーが実装していない方法です。許可しても要求は拒否します。"
     SelectAtLeastOne -> "権限を少なくとも 1 つ選んでください。"
     InvalidKindList -> "kind はカンマ区切りの 0 以上の整数で入力してください。"
     SessionNotFound -> "このセッションは承認されていません。"
@@ -1087,5 +1115,24 @@ fn japanese_row_error(reason: vault.RowError) -> String {
     vault.UndecryptableSecret ->
       "接続 secret を復号できません（ACCOUNT_MASTER_KEY 違いか、行の改ざん）。"
     vault.InvalidSecret -> "復号した接続 secret が空か、UTF-8 として不正です。"
+  }
+}
+
+/// 権限のチップに出す、よく使う kind の名前。表に無い kind は `None` で、呼び出し側が番号を出す。
+fn kind_name(language: Language, kind: Int) -> Option(String) {
+  case language, kind {
+    English, 0 -> Some("profile")
+    English, 1 -> Some("post")
+    English, 3 -> Some("follow list")
+    English, 6 -> Some("repost")
+    English, 7 -> Some("reaction")
+    English, 10_002 -> Some("relay list")
+    Japanese, 0 -> Some("プロフィール")
+    Japanese, 1 -> Some("投稿")
+    Japanese, 3 -> Some("フォロー")
+    Japanese, 6 -> Some("リポスト")
+    Japanese, 7 -> Some("リアクション")
+    Japanese, 10_002 -> Some("リレーリスト")
+    _, _ -> None
   }
 }

@@ -6,6 +6,7 @@ import gleam/string
 import lustre/element
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/vault
@@ -246,7 +247,10 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
 pub fn permissions_are_shown_as_chips_test() {
   let assert Ok([offered, not_requested]) = secret_states().pending
   let chips =
-    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:1</span></span><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">nip44_encrypt</span></span></div>"
+    element.to_string(permission_view.chips(
+      i18n.English,
+      "sign_event:1,nip44_encrypt",
+    ))
   assert string.contains(
     dashboard.render(i18n.English, view.System, secret_states()),
     chips,
@@ -366,7 +370,9 @@ pub fn sessions_show_perms_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-muted\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:7</span></span></div></dd>",
+    "<dt class=\"text-muted\">Permissions</dt><dd>"
+      <> element.to_string(permission_view.chips(i18n.English, "sign_event:7"))
+      <> "</dd>",
   )
 }
 
@@ -691,7 +697,7 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
   assert string.contains(body, view.shorten(known_npub))
   assert string.contains(
     body,
-    "<div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:1</span></span></div>",
+    element.to_string(permission_view.chips(i18n.English, "sign_event:1")),
   )
   assert string.contains(body, "data-action=\"copy\"")
 }

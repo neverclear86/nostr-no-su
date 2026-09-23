@@ -18,7 +18,6 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp
 import gleam/uri
@@ -26,6 +25,7 @@ import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
@@ -1123,7 +1123,7 @@ fn pending_content(
       #(text(i18n.Signer), html.dd([], [signer_value(signer)])),
       #(
         text(i18n.Permissions),
-        html.dd([], [perms_chips(language, pending.perms)]),
+        html.dd([], [permission_view.chips(language, pending.perms)]),
       ),
     ]),
     button_row(decision_forms(language, pending.token)),
@@ -1173,29 +1173,6 @@ fn expires_in_badge(language: Language, seconds: Int) -> Element(msg) {
   case seconds < 60 {
     True -> view.status_chip(view.ToneChip(view.Warning), text)
     False -> html.span([], [html.text(text)])
-  }
-}
-
-/// 権限のチップ。カンマ区切りの値を 1 つずつ等幅のバッジにし、空なら「権限の
-/// 要求なし」のバッジ 1 つを出す。承認待ちの行では要求された権限を、承認済みの
-/// セッションでは今の権限を出す。
-pub fn perms_chips(language: Language, perms: String) -> Element(msg) {
-  case perms {
-    "" ->
-      view.status_chip(
-        view.ToneChip(view.Neutral),
-        i18n.text(language, i18n.NoPermissionsRequestedBadge),
-      )
-    _ ->
-      html.div(
-        [attribute.class("flex flex-wrap gap-1")],
-        list.map(string.split(perms, ","), fn(perm) {
-          html.span(
-            [attribute.class("badge badge-outline badge-sm font-mono")],
-            [view.untranslated(perm)],
-          )
-        }),
-      )
   }
 }
 
@@ -1368,7 +1345,7 @@ fn session_item(
       ),
       #(
         text(i18n.Permissions),
-        html.dd([], [perms_chips(language, session.perms)]),
+        html.dd([], [permission_view.chips(language, session.perms)]),
       ),
       #(
         text(i18n.LastUsed),
