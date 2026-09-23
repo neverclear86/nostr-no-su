@@ -1773,7 +1773,7 @@ pub fn truncated_id(
 
 /// ダイアログを開くボタンの見た目。
 pub type DialogTrigger(msg) {
-  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作と、セッションの行の権限の編集に使う。
+  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
   IconTextTrigger(icon: Element(msg), text: String)
   /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
   IconOnlyTrigger(icon: Element(msg), label: String)
@@ -1863,7 +1863,7 @@ pub fn fallback_link(language: Language, href: String) -> Element(msg) {
   )
 }
 
-/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作、空の節の操作と、アカウントの行の操作に使う。
+/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作、空の節の操作と、アカウントの操作のページの下のほかの操作へのリンクに使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),
