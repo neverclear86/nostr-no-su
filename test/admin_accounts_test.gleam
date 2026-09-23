@@ -73,7 +73,7 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
     failing,
     "<div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span><span lang=\"en\">"
+      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
   )
@@ -378,7 +378,7 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       body,
       "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Failure))
-        <> "<span>",
+        <> "<span class=\"wrap-anywhere\">",
     )
   let assert Ok(#(reason_text, after_reason)) =
     string.split_once(after_alert, "</div>")
@@ -480,7 +480,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       409,
       "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Failure))
-        <> "<span>account is already registered</span></div>",
+        <> "<span class=\"wrap-anywhere\">account is already registered</span></div>",
     ),
     #(
       failing_context(bunker.NotReady("accounts are not loaded yet")),
@@ -488,7 +488,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       503,
       "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Warning))
-        <> "<span>The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
+        <> "<span class=\"wrap-anywhere\">The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
     ),
     #(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
@@ -496,7 +496,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
       202,
       "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Warning))
-        <> "<span>The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
+        <> "<span class=\"wrap-anywhere\">The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
     ),
   ]
   use #(ctx, nsec, status, alert) <- list.each(cases)
@@ -533,7 +533,7 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
     body,
     "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span>label must not contain control characters</span></div>",
+      <> "<span class=\"wrap-anywhere\">label must not contain control characters</span></div>",
   )
   assert string.contains(body, "value=\"ab\"")
   assert !string.contains(body, "a\tb")

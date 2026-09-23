@@ -1486,7 +1486,7 @@ fn alert_box(
 ) -> Element(msg) {
   html.div([attribute.class(alert_class(tone)), ..attributes], [
     tone_icon(tone),
-    html.span([], content),
+    html.span([attribute.class("wrap-anywhere")], content),
   ])
 }
 

@@ -900,7 +900,7 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
     english,
     "alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span><span lang=\"en\">pending reason</span></span>",
+      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">pending reason</span></span>",
   )
   assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
   assert !string.contains(
@@ -913,11 +913,11 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
   assert string.contains(
     japanese,
-    "<span>承認待ちの一覧を表示できません。<span lang=\"en\">pending reason</span></span>",
+    "<span class=\"wrap-anywhere\">承認待ちの一覧を表示できません。<span lang=\"en\">pending reason</span></span>",
   )
   assert string.contains(
     japanese,
-    "<span>セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
+    "<span class=\"wrap-anywhere\">セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
   )
 }
 
@@ -951,7 +951,7 @@ pub fn shared_listing_failure_is_shown_once_test() {
   let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
   assert string.contains(
     japanese,
-    "<span>承認待ち、アカウント、セッションの一覧を表示できません。"
+    "<span class=\"wrap-anywhere\">承認待ち、アカウント、セッションの一覧を表示できません。"
       <> "<span lang=\"en\">account store unavailable: boom</span></span>",
   )
   assert list.length(string.split(
@@ -1767,7 +1767,7 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
       <> legend
       <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
+      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
   )
   let monitor_only =
     dashboard.render(
@@ -1794,7 +1794,7 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
       <> legend
       <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -1819,7 +1819,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       <> "</div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
+      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
@@ -1833,7 +1833,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       <> "</div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+      <> "<span class=\"wrap-anywhere\">リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
 }
 

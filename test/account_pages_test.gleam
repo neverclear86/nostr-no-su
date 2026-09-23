@@ -123,7 +123,7 @@ pub fn error_reasons_are_escaped_test() {
     page,
     "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
       <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span><span lang=\"en\">"
+      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
   )
@@ -384,15 +384,18 @@ pub fn japanese_pages_translate_reasons_test() {
       "",
       Some(i18n.Translated(i18n.InvalidNsec(nip19.InvalidChecksum))),
     )
-  assert string.contains(invalid, "<span>bech32 のチェックサムが一致しません。</span>")
+  assert string.contains(
+    invalid,
+    "<span class=\"wrap-anywhere\">bech32 のチェックサムが一致しません。</span>",
+  )
   let registered = Some(i18n.Untranslated("account is already registered"))
   assert string.contains(
     account_pages.new_account_page(i18n.Japanese, view.System, "", registered),
-    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+    "<span class=\"wrap-anywhere\">登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(
     account_pages.new_account_page(i18n.English, view.System, "", registered),
-    "<span><span lang=\"en\">account is already registered</span></span>",
+    "<span class=\"wrap-anywhere\"><span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(
     account_pages.account_action_page(
@@ -403,7 +406,7 @@ pub fn japanese_pages_translate_reasons_test() {
       None,
       Some(i18n.Translated(i18n.IncorrectPassword)),
     ),
-    "<span>管理パスワードが違います。</span>",
+    "<span class=\"wrap-anywhere\">管理パスワードが違います。</span>",
   )
 }
 
@@ -467,7 +470,7 @@ pub fn japanese_generated_key_page_explains_the_failure_test() {
         "account is already registered",
       )),
     ),
-    "<span>登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
+    "<span class=\"wrap-anywhere\">登録できませんでした。<span lang=\"en\">account is already registered</span></span>",
   )
   assert string.contains(
     render(account_pages.NotAccepted("accounts are not loaded yet")),

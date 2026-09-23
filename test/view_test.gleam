@@ -307,7 +307,10 @@ pub fn hinted_textarea_describes_the_field_with_either_hint_test() {
 pub fn warning_alert_is_not_folded_test() {
   let html =
     element.to_string(view.alert(view.Warning, [html.text("Back up now.")]))
-  assert string.contains(html, "<span>Back up now.</span>")
+  assert string.contains(
+    html,
+    "<span class=\"wrap-anywhere\">Back up now.</span>",
+  )
   assert !string.contains(html, "<details")
   assert !string.contains(html, "popover")
 }
