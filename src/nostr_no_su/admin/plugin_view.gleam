@@ -44,10 +44,11 @@ import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
 
-/// 節の描画に要る文脈。`page_href` は同じプラグインのページのキーからパスを
-/// 組み立てる（`link` ブロック用）。キーがそのプラグインのページ一覧に無ければ
-/// `Error(Nil)`。`form_action` は今開いているページ自身への POST の宛先
-/// （`form` ブロック用）。
+/// 節の描画に要る文脈。`plugin_language` はプラグイン由来の文字列が書かれている
+/// 言語のコード（`plugin.text_language`）。`page_href` は同じプラグインのページの
+/// キーからパスを組み立てる（`link` ブロック用）。キーがそのプラグインのページ
+/// 一覧に無ければ `Error(Nil)`。`form_action` は今開いているページ自身への POST の
+/// 宛先（`form` ブロック用）。
 pub type Context {
   Context(
     language: Language,
