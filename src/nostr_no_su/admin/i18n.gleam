@@ -247,6 +247,7 @@ pub type Message {
   Client
   ExpiresIn
   ExpiresInSeconds(seconds: Int)
+  UtcTimeOfDay(time: String)
   Permissions
   NoPermissionsRequested
   EditPermissions
@@ -523,6 +524,7 @@ fn english(message: Message) -> String {
     Client -> "Client"
     ExpiresIn -> "Expires in"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
+    UtcTimeOfDay(time:) -> time <> " UTC"
     Permissions -> "Permissions"
     NoPermissionsRequested ->
       "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed."
@@ -840,6 +842,7 @@ fn japanese(message: Message) -> String {
     Client -> "クライアント"
     ExpiresIn -> "失効まで"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
+    UtcTimeOfDay(time:) -> time <> "（UTC）"
     Permissions -> "権限"
     NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
     EditPermissions -> "権限を編集"
