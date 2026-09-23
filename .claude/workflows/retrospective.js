@@ -16,6 +16,8 @@ export const meta = {
 //               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
 //               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
+//   observations: [string]。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
+//               合わないものは集計に入らないので、ここで自由形式のまま渡し、ふりかえりの依頼文に「セッションの観察」として添える
 //   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る
@@ -43,7 +45,9 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+  if (a.observations !== undefined && !Array.isArray(a.observations)) throw new Error('args.observations は文字列の配列で渡す')
 }
+const observations = (a.observations || []).map(String)
 const dry = a.dryRun === true
 
 // --- スキーマ -----------------------------------------------------------
@@ -78,7 +82,8 @@ const S = {
 
 /**
  * エージェントの label を { kind, n, round } に分解する。
- * kind は triage / plan / planReview / implement / prReview / gate / merge / other で、
+ * kind は triage / plan / planReview / implement / prReview / gate / merge / skip / other で、
+ * skip はどの値にも寄与しない既知の label（Fix / Fix conditions / Rebase / Design / Lookup）、other は形に合わない label である。
  * n は issue 番号か PR 番号（prReview / gate / merge は PR 番号のまま返し、collectRun が pr → issue の表で引き直す）。
  */
 function parseLabel(label) {
@@ -90,6 +95,7 @@ function parseLabel(label) {
   if ((m = label.match(/^PR review #(\d+) r(\d+)$/))) return { kind: 'prReview', n: Number(m[1]), round: Number(m[2]) }
   if ((m = label.match(/^Final gate PR #(\d+)(?: r(\d+))?$/))) return { kind: 'gate', n: Number(m[1]), round: Number(m[2] || 1) }
   if ((m = label.match(/^Merge PR #(\d+)(?: \((?:re-review|(?:re-review, )?retry \d+(?: recheck)?)\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
+  if (/^(Fix( conditions)? PR #|Rebase PR #|Design #|Lookup #)/.test(label)) return { kind: 'skip', n: null, round: null }
   return { kind: 'other', n: null, round: null }
 }
 
@@ -99,7 +105,8 @@ const VIA_PR = new Set(['prReview', 'gate', 'merge'])
 const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
 
 /**
- * 1 本の run の抽出済みイベントから issue ごとの記録を Map<issue 番号, 記録> にする。
+ * 1 本の run の抽出済みイベントから issue ごとの記録を Map<issue 番号, 記録> にし、label が形に合わず集計に入らなかった
+ * イベントの件数（unknown）と一緒に返す（黙って捨てると、セッションが足した観察が集計から消える）。
  * PR 番号しか持たない label は Implement の結果で issue 番号に引き直す（pr → issue の表は
  * 呼び出し側から受け取り、run をまたいで合併できるようにその場で更新する）。
  * どの行も、源になる result がその run に 1 件も無ければ未設定のまま返す（既定は aggregate が全 run の合併の後に埋める）。
@@ -135,9 +142,11 @@ function collectRun(events, prToIssue) {
     return issues.get(n)
   }
   let dropped = 0
+  let unknown = 0
   for (const ev of dedup) {
     const { kind, n, round } = parseLabel(ev.label)
-    if (!DIRECT.has(kind) && !VIA_PR.has(kind)) continue // Fix / Fix conditions / Rebase / Design はどの値にも寄与しない
+    if (kind === 'other') { unknown++; log(`collectRun: label が形に合わないので集計に入れない: ${ev.label}`); continue }
+    if (!DIRECT.has(kind) && !VIA_PR.has(kind)) continue // Fix / Fix conditions / Rebase / Design / Lookup はどの値にも寄与しない
     const issueN = VIA_PR.has(kind) ? prToIssue.get(n) : n
     if (issueN === undefined) { dropped++; continue }
     const rec = get(issueN)
@@ -155,18 +164,20 @@ function collectRun(events, prToIssue) {
     }
   }
   if (dropped) log(`collectRun: PR 番号を issue 番号に引けなかったイベントを ${dropped} 件捨てた`)
-  return issues
+  return { issues, unknown }
 }
 
 /**
  * 全 run をまとめる。run ごとの記録を 1 つの表にし、tier 別の件数、ラウンド数と条件の平均、
- * 実装起因の must の合計、学びの件数を出す。runs は mtime の昇順で渡される前提。
+ * 実装起因の must の合計、学びの件数、label が形に合わず集計に入らなかった件数（unknownLabels）を出す。runs は mtime の昇順で渡される前提。
  */
 function aggregate(runs, events) {
   const issues = new Map() // issue 番号 → 記録
   const prToIssue = new Map() // pr → issue 番号。collectRun 側で run をまたいで更新される
+  let unknownLabels = 0
   for (const path of runs) {
-    const run = collectRun(events[path], prToIssue)
+    const { issues: run, unknown } = collectRun(events[path], prToIssue)
+    unknownLabels += unknown
     for (const [n, rec] of run) {
       // その run で値が定まった項目だけを上書きする（丸ごと置き換えると再開の run で飛ばされた値が潰れる）
       issues.set(n, { ...(issues.get(n) || { n }), ...rec })
@@ -200,6 +211,7 @@ function aggregate(runs, events) {
     lessonCount: list.reduce((s, i) => s + (i.lessons || []).length, 0),
     merged: merged.length,
     unfinished: list.length - merged.length,
+    unknownLabels,
   }
   return { issues: list, totals }
 }
@@ -219,9 +231,11 @@ function summaryMarkdown(totals, since) {
 | 条件の平均 | ${totals.conditionAvg} |
 | 実装起因の must の合計 | ${totals.implMusts} |
 | 学びの件数 | ${totals.lessonCount} |
+| label が形に合わず集計に入らなかった events | ${totals.unknownLabels} |
 
 - run の選別は journal の mtime による（\`since\` より前に始まって後に終わった run は丸ごと含まれる）
-- tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える`
+- tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える
+- 集計に入らなかった events は \`log\` に label が出る。セッションの観察は \`args.observations\` で渡す`
 }
 
 /** journal のパスから run id（`wf_*` のディレクトリ名）を取る。取れないパスはそのまま返す */
@@ -232,7 +246,8 @@ function runId(path) {
 
 // --- 依頼文 -----------------------------------------------------------------
 const P = {
-  // 集計の表と学びの一覧に、dev/wfstats.py の実測（--brief）を issue に貼る指示を添える。run id は runs のパスから取る
+  // 集計の表と学びの一覧に、dev/wfstats.py の実測（--brief）を issue に貼る指示を添える。run id は runs のパスから取る。
+  // セッションの観察（args.observations）は学びと同じ扱いで分類させる
   retro: (agg, table, runs) => {
     const lessonList = agg.issues
       .filter((i) => (i.lessons || []).length)
@@ -245,7 +260,10 @@ ${table}
 
 ### 学び
 ${lessonList}
-
+${observations.length ? `
+### セッションの観察（実行の外でセッションが観察した学び。ユーザーの指示を含む。学びと同じ基準で分類する）
+${observations.map((o) => `- ${o}`).join('\n')}
+` : ''}
 - 実測: \`${stats}\` を実行し、その出力を起票する issue の集計の表の直後に「## 実測（wfstats）」として貼る
 - 根拠にした run: ${runs.map((r) => `\`${r}\``).join('、')}
 - 土台: origin/main の ${a.base}

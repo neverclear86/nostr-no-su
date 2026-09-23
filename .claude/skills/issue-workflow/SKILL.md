@@ -157,13 +157,14 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
    ```sh
    jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
    ```
-3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。
+3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す（`events` に label の形に合わない要素を足しても集計に入らず、`log` に「label が形に合わない」と出るだけである）。
 
 ```json
 {
   "runs": ["/tmp/.../wf_a22397c8-55c/journal.jsonl"],
   "events": { "/tmp/.../wf_a22397c8-55c/journal.jsonl": [ { "label": "Triage #157", "phase": "判定", "status": "plan", "tier": "light" } ] },
   "since": "2026-09-13T00:00:00Z",
+  "observations": ["撮影でユーザーの画面に Chrome の窓が開いた（user スコープの Playwright MCP）"],
   "base": "2f0a2ebff249f5b995a6647a1b0476549ede24d7",
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
   "repoDir": "/path/to/nostr-no-su",
