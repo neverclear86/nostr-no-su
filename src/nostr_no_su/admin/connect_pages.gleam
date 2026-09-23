@@ -1,6 +1,6 @@
-//// 管理 UI のクライアントの接続のページ（`/sessions/connect`）の描画。`admin/relay_pages` と
-//// 同じく `admin/dashboard` のパスの定義と `admin/view` の部品で HTML 文字列にする
-//// だけで、プロセスにも IO にも触れない。
+//// 管理 UI のクライアントの接続のページ（`/sessions/connect`）と、そのフォームの中身
+//// （`connect_form`）の描画。`admin/relay_pages` と同じく `admin/dashboard` のパスの定義と
+//// `admin/view` の部品で HTML 文字列か要素にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（URI、署名者）はテキストか属性値として lustre に渡し、エスケープを文字列化に
 //// 任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引き、文字列
@@ -38,17 +38,16 @@ pub fn connect_client_page(
     view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotStartConnection), error),
-      view.card(card_body(language, path, accounts, uri, signer)),
+      view.card(card_body(language, accounts, uri, signer)),
       view.back_link(language),
     ],
   )
 }
 
 /// カードの中身。アカウントの一覧が空なら登録への案内、得られなければ理由の囲みを、
-/// 得られればフォームを出す。
+/// 得られればフォームの中身（`connect_form`）を出す。
 fn card_body(
   language: Language,
-  path: String,
   accounts: Result(List(dashboard.AccountRow), i18n.Reason),
   uri: String,
   signer: String,
@@ -63,16 +62,7 @@ fn card_body(
         view.PrimaryButton,
       ),
     ]
-    Ok(rows) -> [
-      view.form_description(text(i18n.ConnectClientDescription)),
-      view.post_form(
-        path,
-        [uri_field(language, uri), signer_field(language, rows, signer)],
-        text(i18n.Connect),
-        view.PrimaryButton,
-        view.InForm,
-      ),
-    ]
+    Ok(rows) -> connect_form(language, rows, uri, signer)
     Error(reason) -> [
       view.alert(
         view.Neutral,
@@ -80,6 +70,28 @@ fn card_body(
       ),
     ]
   }
+}
+
+/// 接続のフォームの中身。説明の 1 行と、`/sessions/connect` へ POST するフォーム（URI の欄と
+/// 署名するアカウントの選択欄）を並べる。ページの枠と入力の誤りは含めない。`uri` と `signer` は
+/// 描き直すときに送られた値で、`signer` が空文字列なら `accounts` の先頭を選ぶ。
+pub fn connect_form(
+  language: Language,
+  accounts: List(dashboard.AccountRow),
+  uri: String,
+  signer: String,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.ConnectClientDescription)),
+    view.post_form(
+      view.segments_path(dashboard.connect_segments),
+      [uri_field(language, uri), signer_field(language, accounts, signer)],
+      text(i18n.Connect),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
 }
 
 /// URI の欄。

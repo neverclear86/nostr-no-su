@@ -1,6 +1,7 @@
-//// 管理 UI のセッションの権限の編集ページ（`/sessions/<signer>/<client>/permissions`）の
-//// 描画。`admin/relay_pages` と同じく `admin/dashboard` のパスの定義と、`admin/view` と
-//// `admin/permission_view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
+//// 管理 UI のセッションの権限の編集ページ（`/sessions/<signer>/<client>/permissions`）と、
+//// そのフォームの中身（`permissions_form`）の描画。`admin/relay_pages` と同じく
+//// `admin/dashboard` のパスの定義と、`admin/view` と `admin/permission_view` の部品で HTML
+//// 文字列か要素にするだけで、プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（署名者・クライアントの公開鍵、権限のトークン）はテキストか属性値として
 //// lustre に渡し、エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は
@@ -68,17 +69,16 @@ pub fn session_permissions_page(
     view.SwitchReturningTo(path),
     view.NoRefresh,
     [
-      view.card(card_body(language, path, session, form, error)),
+      view.card(card_body(language, session, form, error)),
       view.back_link(language),
     ],
   )
 }
 
-/// カードの中身。`session` を得られなければ理由の囲み 1 つ、得られれば要約とフォームを
-/// 出す。
+/// カードの中身。`session` を得られなければ理由の囲み 1 つ、得られれば要約、入力の誤り、
+/// フォームの中身（`permissions_form`）を出す。
 fn card_body(
   language: Language,
-  path: String,
   session: Result(dashboard.SessionRow, i18n.Reason),
   form: Option(PermissionsForm),
   error: Option(i18n.Reason),
@@ -90,25 +90,33 @@ fn card_body(
         view.reason_content(language, Some(i18n.CouldNotListSessions), reason),
       ),
     ]
-    Ok(row) -> {
-      let fields = option.unwrap(form, form_of_perms(row.perms))
-      [
-        summary(language, row),
-        view.error_message(language, Some(i18n.CouldNotSavePermissions), error),
-        view.form_description(i18n.text(
-          language,
-          i18n.EditPermissionsDescription,
-        )),
-        view.post_form(
-          path,
-          form_fields(language, fields),
-          i18n.text(language, i18n.Save),
-          view.PrimaryButton,
-          view.InForm,
-        ),
-      ]
-    }
+    Ok(row) -> [
+      summary(language, row),
+      view.error_message(language, Some(i18n.CouldNotSavePermissions), error),
+      ..permissions_form(language, row, form)
+    ]
   }
+}
+
+/// 権限の編集フォームの中身。説明の 1 行と、セッションの権限のパスへ POST するフォームを
+/// 並べる。ページの枠、要約、入力の誤りは含めない。`form` は描き直すときに送られた欄の状態で、
+/// `None` なら `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。
+pub fn permissions_form(
+  language: Language,
+  session: dashboard.SessionRow,
+  form: Option(PermissionsForm),
+) -> List(Element(msg)) {
+  let fields = option.unwrap(form, form_of_perms(session.perms))
+  [
+    view.form_description(i18n.text(language, i18n.EditPermissionsDescription)),
+    view.post_form(
+      dashboard.session_permissions_path(session.signer, session.client),
+      form_fields(language, fields),
+      i18n.text(language, i18n.Save),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
 }
 
 /// 要約。クライアントの省略 id、署名者の省略 16 進、今の権限のチップ（無宣言なら
@@ -153,7 +161,8 @@ fn current_permissions(language: Language, perms: String) -> Element(msg) {
   }
 }
 
-/// フォームの欄。3 つのチェック、kind の欄、あればそのほかの宣言のチップと隠し欄。
+/// フォームの欄。3 つのチェック、kind 24133 を拒否する注意の 1 行、ⓘ で補足を開く kind の欄、
+/// あればそのほかの宣言のチップと隠し欄。
 fn form_fields(
   language: Language,
   fields: PermissionsForm,
@@ -193,7 +202,7 @@ fn form_fields(
       language,
       text(i18n.AllowedKinds),
       kinds_hint_id,
-      view.LineHint(text(i18n.AllowedKindsHint)),
+      view.FoldedHint(text(i18n.AllowedKindsHint)),
       [
         attribute.name(dashboard.perms_kinds_field),
         attribute.inputmode("numeric"),
@@ -206,7 +215,7 @@ fn form_fields(
   ]
 }
 
-/// 「そのほかの宣言」がある場合だけ、読み取り専用のチップと案内、送信のための隠し欄を
+/// 「そのほかの宣言」がある場合だけ、読み取り専用のチップと 1 行の補足、送信のための隠し欄を
 /// 出す。無ければ何も出さない。
 fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
   case other {
@@ -215,9 +224,7 @@ fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
       html.div([attribute.class("flex flex-col gap-1")], [
         html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
         permission_view.chips(language, other),
-        html.p([attribute.class("text-sm text-muted")], [
-          html.text(i18n.text(language, i18n.OtherPermissionsHint)),
-        ]),
+        view.hint(i18n.text(language, i18n.OtherPermissionsHint)),
       ]),
       view.hidden_input(dashboard.perms_other_field, other),
     ]

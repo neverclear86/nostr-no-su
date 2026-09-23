@@ -1,11 +1,13 @@
-//// 管理 UI のリレーのページ（追加、用途の編集、削除）の描画。`admin/account_pages` と
-//// 同じく `admin/dashboard` のパスの定義と `admin/view` の部品で HTML 文字列にする
-//// だけで、プロセスにも IO にも触れない。
+//// 管理 UI のリレーのページ（追加、用途の編集、削除）と、それぞれのフォームの中身
+//// （`new_relay_form`、`relay_action_form`）の描画。`admin/account_pages` と同じく
+//// `admin/dashboard` のパスの定義と `admin/view` の部品で HTML 文字列か要素にするだけで、
+//// プロセスにも IO にも触れない。
 ////
 //// 埋め込む値（URL）はテキストか属性値として lustre に渡し、エスケープを文字列化に任せる
 //// （`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引き、文字列
 //// リテラルで書かない（同じく `admin/view` の規則）。
 
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import lustre/attribute
 import lustre/element.{type Element}
@@ -28,7 +30,6 @@ pub fn new_relay_page(
   roles: Roles,
   error: Option(i18n.Reason),
 ) -> String {
-  let text = i18n.text(language, _)
   let path = view.segments_path(dashboard.new_relay_segments)
   view.page(
     language,
@@ -39,16 +40,7 @@ pub fn new_relay_page(
     view.NoRefresh,
     [
       view.error_message(language, Some(i18n.CouldNotAddRelay), error),
-      view.card([
-        view.form_description(text(i18n.AddRelayDescription)),
-        view.post_form(
-          path,
-          [url_field(language, url), roles_fieldset(language, roles, None)],
-          text(i18n.Register),
-          view.PrimaryButton,
-          view.InForm,
-        ),
-      ]),
+      view.card(new_relay_form(language, url, roles)),
       view.back_link(language),
     ],
   )
@@ -70,29 +62,9 @@ pub fn relay_action_page(
 ) -> String {
   let text = i18n.text(language, _)
   let path = dashboard.relay_action_path(relay.id, action)
-  let #(lead, description, form) = case action {
-    dashboard.EditRelayRoles -> #(
-      i18n.CouldNotSaveRelay,
-      html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
-      view.post_form(
-        path,
-        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
-        text(i18n.Save),
-        view.PrimaryButton,
-        view.InForm,
-      ),
-    )
-    dashboard.DeleteRelay -> #(
-      i18n.CouldNotDeleteRelay,
-      html.p([], [html.text(text(i18n.DeleteRelayDescription))]),
-      view.post_form(
-        path,
-        [],
-        text(i18n.DeleteRelaySubmit),
-        view.DangerButton,
-        view.InForm,
-      ),
-    )
+  let lead = case action {
+    dashboard.EditRelayRoles -> i18n.CouldNotSaveRelay
+    dashboard.DeleteRelay -> i18n.CouldNotDeleteRelay
   }
   let delete_link = case action {
     dashboard.EditRelayRoles -> [
@@ -118,13 +90,72 @@ pub fn relay_action_page(
       view.card([
         view.summary_list([#(text(i18n.RelayUrl), view.Code(relay.url))]),
         view.error_message(language, Some(lead), error),
-        description,
-        form,
-        ..delete_link
+        ..list.append(
+          relay_action_form(language, relay, action, roles, states),
+          delete_link,
+        )
       ]),
       view.back_link(language),
     ],
   )
+}
+
+/// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
+/// 用途のチェック）を並べる。ページの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
+/// 用途の接続状態のバッジは出さない。
+pub fn new_relay_form(
+  language: Language,
+  url: String,
+  roles: Roles,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.AddRelayDescription)),
+    view.post_form(
+      view.segments_path(dashboard.new_relay_segments),
+      [url_field(language, url), roles_fieldset(language, roles, None)],
+      text(i18n.Register),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
+/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
+/// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
+/// 使わない。URL の要約、入力の誤り、削除のページへのリンクは含めない。
+pub fn relay_action_form(
+  language: Language,
+  relay: Relay,
+  action: dashboard.RelayAction,
+  roles: Option(Roles),
+  states: Option(dashboard.RelayRow),
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let path = dashboard.relay_action_path(relay.id, action)
+  case action {
+    dashboard.EditRelayRoles -> [
+      html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
+      view.post_form(
+        path,
+        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
+        text(i18n.Save),
+        view.PrimaryButton,
+        view.InForm,
+      ),
+    ]
+    dashboard.DeleteRelay -> [
+      html.p([], [html.text(text(i18n.DeleteRelayDescription))]),
+      view.post_form(
+        path,
+        [],
+        text(i18n.DeleteRelaySubmit),
+        view.DangerButton,
+        view.InForm,
+      ),
+    ]
+  }
 }
 
 /// リレーの URL の欄。

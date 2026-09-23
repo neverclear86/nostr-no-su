@@ -717,7 +717,7 @@ pub fn heading(title: String) -> Element(msg) {
   html.h2([attribute.class("card-title")], [html.text(title)])
 }
 
-/// 本文より控えめな一言。行が無い節の説明や、ページの末尾の案内に使う。
+/// 本文より控えめな一言。行が無い節の説明、ページの末尾の案内、フォームの中の 1 行の補足に使う。
 pub fn hint(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm text-muted")], [html.text(text)])
 }
