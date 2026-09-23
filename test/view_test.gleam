@@ -69,6 +69,26 @@ pub fn status_note_colors_the_text_like_the_chip_test() {
   assert string.contains(html, path)
 }
 
+/// 通知のページの結果の印は、トーンごとに状態の語彙の色とアイコンで描く。
+pub fn notice_mark_follows_the_state_vocabulary_test() {
+  let cases = [
+    #(view.Success, "bg-success/13 text-success", "m9 12 2 2 4-4"),
+    #(view.Warning, "bg-warning/13 text-warning", "M12 6v6l4 2"),
+    #(view.Failure, "bg-error/13 text-error", "M15.312 2a2 2 0 0 1"),
+    #(view.Neutral, "bg-base-200 text-muted", "M8 12h8"),
+    #(view.Info, "bg-info/13 text-info", "M12 16v-4"),
+  ]
+  use #(tone, class, path) <- list.each(cases)
+  let html = element.to_string(view.notice_mark(tone))
+  assert string.contains(
+    html,
+    "class=\"grid size-10 shrink-0 place-items-center rounded-full "
+      <> class
+      <> "\"",
+  )
+  assert string.contains(html, path)
+}
+
 /// ボタンの種類と置き場所の組ごとに、daisyUI のクラスが決まる。行は `button_link`、
 /// フォームは `post_form` の送信ボタンで確かめる。
 pub fn button_kinds_map_to_daisyui_classes_test() {

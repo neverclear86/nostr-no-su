@@ -919,7 +919,13 @@ fn approve_connection(
       use entry <- with_pending(context, language, theme, token)
       let accounts = result.map_error(context.accounts(), i18n.Untranslated)
       wisp.html_response(
-        dashboard.approval_page(language, theme, accounts, entry),
+        dashboard.approval_page(
+          language,
+          theme,
+          accounts,
+          time.now_seconds(),
+          entry,
+        ),
         200,
       )
     }
@@ -2209,7 +2215,7 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
 
 /// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
 /// 決める（アカウントの変更、リレーの変更、クライアントの接続は 202、承認・拒否・取り消しと
-/// 再有効化は 503）。本文は呼び出し側が訳すかを決める。囲みの下に、ダッシュボードで確かめる
+/// 再有効化は 503）。本文は呼び出し側が訳すかを決める。理由の下に、ダッシュボードで確かめる
 /// よう促す一文を添える。
 fn not_confirmed_notice(
   language: Language,

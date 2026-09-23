@@ -69,7 +69,6 @@ fn language_count(language: i18n.Language) -> Int {
 /// 値を埋め込む文言は、言語ごとの語順と記号で文全体を返す。
 pub fn messages_with_values_follow_each_language_test() {
   let cases = [
-    #(i18n.ExpiresInSeconds(12), "12s", "12 秒"),
     #(i18n.UtcTimeOfDay("05:12:34"), "05:12:34 UTC", "05:12:34（UTC）"),
     #(i18n.ExpiryBeforeTime("8:12"), "8:12 (expires at ", "8:12（"),
     #(i18n.RefreshesEverySeconds(30), "Refreshes every 30 s", "30 秒ごとに更新"),
@@ -185,8 +184,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NoPermissionsRequestedBadge -> Some(i18n.Signer)
     i18n.Signer -> Some(i18n.Client)
     i18n.Client -> Some(i18n.ExpiresIn)
-    i18n.ExpiresIn -> Some(i18n.ExpiresInSeconds(12))
-    i18n.ExpiresInSeconds(_) -> Some(i18n.UtcTimeOfDay("05:12:34"))
+    i18n.ExpiresIn -> Some(i18n.UtcTimeOfDay("05:12:34"))
     i18n.UtcTimeOfDay(_) -> Some(i18n.ExpiryBeforeTime("8:12"))
     i18n.ExpiryBeforeTime(_) -> Some(i18n.ExpiryAfterTime)
     i18n.ExpiryAfterTime -> Some(i18n.Permissions)
@@ -330,8 +328,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.PluginPageUnavailable -> Some(i18n.PluginActionFailed)
     i18n.PluginActionFailed -> Some(i18n.PluginPageWhileDisabled)
     i18n.PluginPageWhileDisabled -> Some(i18n.ApproveConnection)
-    i18n.ApproveConnection -> Some(i18n.WrongSecretOffered)
-    i18n.WrongSecretOffered -> Some(i18n.WrongSecretNotice)
+    i18n.ApproveConnection -> Some(i18n.WrongSecretNotice)
     i18n.WrongSecretNotice -> Some(i18n.Approved)
     i18n.Approved -> Some(i18n.Denied)
     i18n.Denied -> Some(i18n.ApprovedCloseWindow)
@@ -419,12 +416,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 253 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 251 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 253
+  assert list.length(messages) == 251
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

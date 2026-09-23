@@ -257,7 +257,6 @@ pub type Message {
   Signer
   Client
   ExpiresIn
-  ExpiresInSeconds(seconds: Int)
   UtcTimeOfDay(time: String)
   ExpiryBeforeTime(remaining: String)
   ExpiryAfterTime
@@ -414,7 +413,6 @@ pub type Message {
   PluginPageWhileDisabled
   // 承認ページと通知ページ
   ApproveConnection
-  WrongSecretOffered
   WrongSecretNotice
   Approved
   Denied
@@ -544,7 +542,6 @@ fn english(message: Message) -> String {
     Signer -> "Signer"
     Client -> "Client"
     ExpiresIn -> "Expires in"
-    ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
     UtcTimeOfDay(time:) -> time <> " UTC"
     ExpiryBeforeTime(remaining:) -> remaining <> " (expires at "
     ExpiryAfterTime -> ")"
@@ -732,7 +729,6 @@ fn english(message: Message) -> String {
     PluginPageWhileDisabled ->
       "This plugin is disabled and is not handling events."
     ApproveConnection -> "Approve connection"
-    WrongSecretOffered -> "The connection secret does not match."
     WrongSecretNotice ->
       "This happens when a client still uses the connection URI from before the secret was rotated, or when someone is guessing the secret. If you do not recognize this client, deny the request."
     Approved -> "Approved"
@@ -878,7 +874,6 @@ fn japanese(message: Message) -> String {
     Signer -> "署名者"
     Client -> "クライアント"
     ExpiresIn -> "失効まで"
-    ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
     UtcTimeOfDay(time:) -> time <> "（UTC）"
     ExpiryBeforeTime(remaining:) -> remaining <> "（"
     ExpiryAfterTime -> " に失効）"
@@ -1039,7 +1034,6 @@ fn japanese(message: Message) -> String {
     PluginActionFailed -> "プラグインの操作に失敗しました"
     PluginPageWhileDisabled -> "このプラグインは無効で、イベントを処理していません。"
     ApproveConnection -> "接続を承認"
-    WrongSecretOffered -> "接続 secret が一致しません。"
     WrongSecretNotice ->
       "secret を再生成する前の接続 URI を使い続けているクライアントか、secret を推測する試みです。心当たりの無いクライアントなら拒否してください。"
     Approved -> "承認しました"

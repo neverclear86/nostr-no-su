@@ -185,7 +185,7 @@ pub type Placement {
   InForm
 }
 
-/// 通知や理由の囲みと、`ToneChip` のチップの色。
+/// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
 pub type Tone {
   /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コード、クライアントの
   /// 接続、権限の編集のページで、リレー、アカウント、セッションを得られない）。
@@ -221,7 +221,7 @@ pub type Chip {
   SecretNotOfferedChip
   /// 承認待ちの secret の不一致。warning の色と shield-alert。
   SecretMismatchChip
-  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし、「はじめに」の帯の済んだ段）。
+  /// 状態の表に無いチップ（プラグインのページの `badge`、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし、「はじめに」の帯の済んだ段）。
   /// 色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
   ToneChip(tone: Tone)
 }
@@ -1490,6 +1490,36 @@ pub fn tone_icon(tone: Tone) -> Element(msg) {
   }
 }
 
+/// 通知のページの先頭に置く結果の印。トーンの色を薄く混ぜた丸い面に、状態の語彙のアイコンを載せる。`Success` は
+/// success の色の circle-check（接続中と同じ）、`Warning` は warning の色の clock（応答なしと同じ）、`Failure` は
+/// error の色の octagon-alert（読み込み失敗と同じ）、`Neutral` は色を付けない circle-minus（未使用と同じ）、`Info` は
+/// info の色の info である。アイコンは飾りで、結果は見出しと理由の文で伝える。
+pub fn notice_mark(tone: Tone) -> Element(msg) {
+  let #(class, paths) = case tone {
+    Success -> #(
+      "grid size-10 shrink-0 place-items-center rounded-full bg-success/13 text-success",
+      check_circle_icon_paths,
+    )
+    Warning -> #(
+      "grid size-10 shrink-0 place-items-center rounded-full bg-warning/13 text-warning",
+      clock_icon_paths,
+    )
+    Failure -> #(
+      "grid size-10 shrink-0 place-items-center rounded-full bg-error/13 text-error",
+      octagon_alert_icon_paths,
+    )
+    Neutral -> #(
+      "grid size-10 shrink-0 place-items-center rounded-full bg-base-200 text-muted",
+      circle_minus_icon_paths,
+    )
+    Info -> #(
+      "grid size-10 shrink-0 place-items-center rounded-full bg-info/13 text-info",
+      info_icon_paths,
+    )
+  }
+  html.span([attribute.class(class)], [lucide_icon("size-5", paths)])
+}
+
 /// アイコン＋語の状態のチップ。色とアイコンは `chip` で決まり、色だけに頼らない。
 pub fn status_chip(chip: Chip, text: String) -> Element(msg) {
   html.span([attribute.class(chip_class(chip))], [
@@ -1845,7 +1875,7 @@ const unplug_icon_paths = [
   "m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z",
 ]
 
-/// `UnusedChip` のストローク（Lucide の circle-minus）。
+/// `UnusedChip` と通知のページの `Neutral` の印のストローク（Lucide の circle-minus）。
 const circle_minus_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M8 12h8",
 ]
@@ -1858,7 +1888,7 @@ const ban_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M4.929 4.929 19.07 19.071",
 ]
 
-/// `LoadFailedChip` のストローク（Lucide の octagon-alert）。
+/// `LoadFailedChip` と通知のページの `Failure` の印のストローク（Lucide の octagon-alert）。
 const octagon_alert_icon_paths = [
   "M12 16h.01", "M12 8v4",
   "M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z",
