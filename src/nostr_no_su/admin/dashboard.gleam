@@ -344,9 +344,9 @@ fn dashboard_refresh(
 /// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置き、アカウントか
 /// バンカーに使うリレーが 0 件のときは「はじめに」の帯をその下に置く。その下は
-/// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
-/// プラグイン（末尾に読み込めなかったプラグインの枠）を右の列に置く 2 列で、狭い画面では
-/// この順に 1 列に並ぶ。
+/// 幅が 1120px を超える画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、
+/// リレーとプラグイン（末尾に読み込めなかったプラグインの枠）を右の列に、1.62 対 1 の幅で置く 2 列で、
+/// 1120px 以下ではこの順に 1 列に並ぶ。
 pub fn render(
   language: Language,
   theme: view.Theme,
@@ -371,10 +371,14 @@ pub fn render(
         snapshot.pending,
       ),
       getting_started_band(language, snapshot.accounts, snapshot.relays),
-      html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
-        html.div(
-          [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")],
-          [
+      html.div(
+        [
+          attribute.class(
+            "grid items-start gap-6 min-[1121px]:grid-cols-[minmax(0,1.62fr)_minmax(0,1fr)]",
+          ),
+        ],
+        [
+          html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
             accounts_section(language, shared, snapshot.accounts),
             skipped_section(language, snapshot.skipped),
             sessions_section(
@@ -384,20 +388,17 @@ pub fn render(
               shared,
               snapshot.sessions,
             ),
-          ],
-        ),
-        html.div(
-          [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-2")],
-          [
+          ]),
+          html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
             relays_section(language, snapshot.relays),
             plugins_section(
               language,
               snapshot.plugins,
               snapshot.not_loaded_plugins,
             ),
-          ],
-        ),
-      ]),
+          ]),
+        ],
+      ),
     ],
   )
 }
@@ -1740,31 +1741,34 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
   }
 }
 
-/// リレーの一覧。1 件は `relays` の 1 行で、監視、バンカーの順に用途の語と状態を並べる。
-/// 一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が無ければ警告を、
-/// 一覧を得られないときは理由を出す。
+/// リレーの一覧。見出しの直後に、監視とバンカーの語と説明を並べた凡例（`role_legend`）を常に置く。
+/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が
+/// 無ければ警告を、一覧を得られないときは理由を出す。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(relays_anchor, [
-    listed_section_heading(
-      language,
-      relays,
-      view.plug_icon(),
-      i18n.Relays,
-      None,
-      [
-        view.icon_button_link(
-          view.segments_path(new_relay_segments),
-          view.plus_icon(),
-          text(i18n.Add),
-          view.PrimaryButton,
-        ),
-      ],
-      [],
-    ),
+    html.div([attribute.class("flex flex-col gap-1")], [
+      listed_section_heading(
+        language,
+        relays,
+        view.plug_icon(),
+        i18n.Relays,
+        None,
+        [
+          view.icon_button_link(
+            view.segments_path(new_relay_segments),
+            view.plus_icon(),
+            text(i18n.Add),
+            view.PrimaryButton,
+          ),
+        ],
+        [],
+      ),
+      role_legend(language),
+    ]),
     no_bunker_relay_alert(language, relays),
     listed_body(
       language,
@@ -1775,6 +1779,30 @@ fn relays_section(
       fn(rows) { view.row_list(list.map(rows, relay_item(language, _))) },
     ),
   ])
+}
+
+/// リレーの節の凡例。監視、バンカーの順に、太字の用途の語と説明の組を 1 行に並べ、幅が足りなければ組ごとに折り返す。
+fn role_legend(language: Language) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let pair = fn(role, description) {
+    html.span([attribute.class("inline-flex gap-1.5")], [
+      html.b([attribute.class("font-semibold text-base-content")], [
+        html.text(text(role)),
+      ]),
+      html.text(text(description)),
+    ])
+  }
+  html.p(
+    [
+      attribute.class(
+        "flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted sm:pl-10",
+      ),
+    ],
+    [
+      pair(i18n.MonitorRole, i18n.MonitorRoleDescription),
+      pair(i18n.BunkerRole, i18n.BunkerRoleDescription),
+    ],
+  )
 }
 
 /// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
@@ -1796,18 +1824,12 @@ pub fn no_bunker_relay_alert(
   }
 }
 
-/// リレー 1 件。URL と、用途の語と状態の組を監視、バンカーの順に並べ、アイコンだけの
-/// 操作のリンク（用途の編集、削除）を続ける。使っていない用途は「未使用」のバッジで出す。
+/// リレー 1 件。1 段目に URL とアイコンだけの操作のリンク（用途の編集、削除）を並べ、2 段目に用途のマス
+/// （`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」のバッジで出す。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
   view.list_row(view.InlineRow, [
-    html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-      html.p([attribute.class("font-mono text-xs break-all")], [
-        html.text(row.url),
-      ]),
-      html.div([attribute.class("flex flex-wrap gap-x-4 gap-y-1 text-sm")], [
-        relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
-        relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
-      ]),
+    html.p([attribute.class("min-w-0 flex-1 font-mono text-sm break-all")], [
+      html.text(row.url),
     ]),
     button_row(
       list.map(relay_actions, fn(action) {
@@ -1819,22 +1841,38 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
         )
       }),
     ),
+    html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
+      relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
+      relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
+    ]),
   ])
 }
 
-/// 用途のアイコンと語、その用途の状態のバッジの組。
+/// 用途 1 つのマス。`dt` にアイコンと用途の語、`dd` にその用途の状態のバッジを置き、幅が足りなければ
+/// バッジを下へ回す。
 fn relay_role(
   language: Language,
   icon: Element(msg),
   role: i18n.Message,
   state: RoleState,
 ) -> Element(msg) {
-  let text = i18n.text(language, _)
-  html.span([attribute.class("flex items-center gap-2")], [
-    icon,
-    html.span([attribute.class("whitespace-nowrap")], [html.text(text(role))]),
-    role_state_badge(language, state),
-  ])
+  html.div(
+    [
+      attribute.class(
+        "flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-field bg-base-200 py-1.5 pr-1.5 pl-2.5",
+      ),
+    ],
+    [
+      html.dt(
+        [attribute.class("flex items-center gap-1.5 text-sm text-muted")],
+        [
+          icon,
+          html.text(i18n.text(language, role)),
+        ],
+      ),
+      html.dd([], [role_state_badge(language, state)]),
+    ],
+  )
 }
 
 /// 用途 1 つぶんの接続状態のバッジ。ダッシュボードの行とリレーの用途の編集のページが

@@ -54,18 +54,12 @@ pub fn dashboard_shows_the_current_state_test() {
   assert string.contains(body, "wss://relay.example")
   assert string.contains(body, "wss://bunker.example")
   // 要素単位で見る。"connected" だけでは "disconnected" にも一致してしまう。
-  assert string.contains(
-    body,
-    "<span class=\"whitespace-nowrap\">monitor</span>",
-  )
+  assert string.contains(body, "monitor</dt>")
   assert string.contains(
     body,
     element.to_string(view.status_chip(view.ActiveChip, "connected")),
   )
-  assert string.contains(
-    body,
-    "<span class=\"whitespace-nowrap\">bunker</span>",
-  )
+  assert string.contains(body, "bunker</dt>")
   assert string.contains(
     body,
     element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),

@@ -144,7 +144,7 @@ fn secret_states() -> dashboard.Snapshot {
 pub fn states_are_shown_as_badges_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let badges = [
-    "<span class=\"whitespace-nowrap\">monitor</span>",
+    "monitor</dt>",
     element.to_string(view.status_chip(view.ActiveChip, "connected")),
     element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),
     element.to_string(view.status_chip(view.ActiveChip, "running")),
@@ -165,8 +165,8 @@ pub fn states_are_shown_as_badges_test() {
 pub fn japanese_states_are_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, states())
   let badges = [
-    "<span class=\"whitespace-nowrap\">監視</span>",
-    "<span class=\"whitespace-nowrap\">バンカー</span>",
+    "監視</dt>",
+    "バンカー</dt>",
     element.to_string(view.status_chip(view.ActiveChip, "接続中")),
     element.to_string(view.status_chip(view.DisconnectedChip, "未接続")),
     element.to_string(view.status_chip(view.ActiveChip, "動作中")),
@@ -982,19 +982,18 @@ pub fn no_skipped_rows_draws_no_card_test() {
   )
 }
 
-/// リレーは 1 行につき `<li>` 1 件で、監視、バンカーの順に用途のアイコン・語・状態の
-/// バッジを並べ、アイコンだけの操作のリンク（用途の編集、削除）を続ける。使っていない
+/// リレーは 1 行につき `<li>` 1 件で、1 段目に URL とアイコンだけの操作のリンク（用途の編集、削除）を
+/// 並べ、2 段目に監視、バンカーの順に用途のアイコン・語・状態のバッジのマスを並べる。使っていない
 /// 用途は「未使用」のバッジで出し、URL は `break-all`。
 pub fn relays_are_listed_one_item_per_row_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let role = fn(icon, label, badge) {
-    "<span class=\"flex items-center gap-2\">"
+    "<div class=\"flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-field bg-base-200 py-1.5 pr-1.5 pl-2.5\"><dt class=\"flex items-center gap-1.5 text-sm text-muted\">"
     <> element.to_string(icon)
-    <> "<span class=\"whitespace-nowrap\">"
     <> label
-    <> "</span>"
+    <> "</dt><dd>"
     <> element.to_string(badge)
-    <> "</span>"
+    <> "</dd></div>"
   }
   let actions = fn(id) {
     "<div class=\"flex shrink-0 flex-wrap gap-2\">"
@@ -1012,35 +1011,32 @@ pub fn relays_are_listed_one_item_per_row_test() {
     ))
     <> "</div>"
   }
+  let row = fn(id, url, monitor, bunker) {
+    "<li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><p class=\"min-w-0 flex-1 font-mono text-sm break-all\">"
+    <> url
+    <> "</p>"
+    <> actions(id)
+    <> "<dl class=\"grid basis-full grid-cols-2 gap-1.5\">"
+    <> role(view.eye_icon(), "monitor", monitor)
+    <> role(view.key_icon(), "bunker", bunker)
+    <> "</dl></li>"
+  }
   assert string.contains(
     body,
-    "<ul class=\"list rounded-box border border-base-300 bg-base-100\"><li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
-      <> role(
-      view.eye_icon(),
-      "monitor",
+    "<ul class=\"list rounded-box border border-base-300 bg-base-100\">"
+      <> row(
+      "1",
+      "wss://a",
       view.status_chip(view.ActiveChip, "connected"),
-    )
-      <> role(
-      view.key_icon(),
-      "bunker",
       view.status_chip(view.DisconnectedChip, "disconnected"),
     )
-      <> "</div></div>"
-      <> actions("1")
-      <> "</li><li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
-      <> role(
-      view.eye_icon(),
-      "monitor",
+      <> row(
+      "2",
+      "wss://b",
       view.status_chip(view.DisconnectedChip, "disconnected"),
-    )
-      <> role(
-      view.key_icon(),
-      "bunker",
       view.status_chip(view.UnusedChip, "Unused"),
     )
-      <> "</div></div>"
-      <> actions("2")
-      <> "</li></ul>",
+      <> "</ul>",
   )
 }
 
@@ -1088,7 +1084,7 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
     )
   assert string.contains(
     body,
-    "<span class=\"whitespace-nowrap\">monitor</span>"
+    "monitor</dt><dd>"
       <> element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
   )
   assert string.contains(body, "wss://a")
@@ -1114,13 +1110,10 @@ pub fn unused_relay_roles_are_shown_as_unused_test() {
         ]),
       ),
     )
+  assert string.contains(body, "monitor</dt><dd>")
   assert string.contains(
     body,
-    "<span class=\"whitespace-nowrap\">monitor</span>",
-  )
-  assert string.contains(
-    body,
-    "<span class=\"whitespace-nowrap\">bunker</span>"
+    "bunker</dt><dd>"
       <> element.to_string(view.status_chip(view.UnusedChip, "Unused")),
   )
 }
@@ -1135,7 +1128,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
   assert !string.contains(body, ">Delete relay<")
 }
 
-/// バンカーに使う行が 1 件も無ければ、見出しの直後にエラーの色の囲みが出て一覧は出さない。監視だけの
+/// バンカーに使う行が 1 件も無ければ、見出しと凡例の直後にエラーの色の囲みが出て一覧は出さない。監視だけの
 /// 行があれば囲みの後に一覧を出し、バンカーの行が 1 件でもあれば囲みを出さない
 /// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
@@ -1148,6 +1141,13 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
       view.PrimaryButton,
     ))
     <> "</div>"
+  let legend =
+    legend_html(
+      "monitor",
+      "Subscribes to registered accounts&#39; events and passes them to plugins",
+      "bunker",
+      "Accepts NIP-46 requests",
+    )
   let no_rows =
     dashboard.render(
       i18n.English,
@@ -1158,6 +1158,8 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
     no_rows,
     "Relays</h2></div></div>"
       <> add_action
+      <> "</div>"
+      <> legend
       <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
@@ -1183,6 +1185,8 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
     "Relays</h2>"
       <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">1</span></div></div>"
       <> add_action
+      <> "</div>"
+      <> legend
       <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
@@ -1201,6 +1205,13 @@ pub fn unlisted_relays_show_the_reason_test() {
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
     "Relays</h2></div></div></div>"
+      <> legend_html(
+      "monitor",
+      "Subscribes to registered accounts&#39; events and passes them to plugins",
+      "bunker",
+      "Accepts NIP-46 requests",
+    )
+      <> "</div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
       <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
@@ -1208,9 +1219,75 @@ pub fn unlisted_relays_show_the_reason_test() {
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "リレー</h2></div></div></div>"
+      <> legend_html(
+      "監視",
+      "登録アカウントのイベントを購読してプラグインに渡す",
+      "バンカー",
+      "NIP-46 のリクエストを受け付ける",
+    )
+      <> "</div>"
       <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
       <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
+  )
+}
+
+/// リレーの節の見出しの直後には、一覧の行があるとき・0 件のとき・一覧を得られないときの
+/// どれでも、監視とバンカーの語と説明を並べた凡例が出る。
+pub fn relays_heading_is_followed_by_the_role_legend_test() {
+  let legend =
+    "</div>"
+    <> legend_html(
+      "monitor",
+      "Subscribes to registered accounts&#39; events and passes them to plugins",
+      "bunker",
+      "Accepts NIP-46 requests",
+    )
+    <> "</div>"
+  let snapshots = [
+    states(),
+    dashboard.Snapshot(..states(), relays: Ok([])),
+    dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
+  ]
+  list.each(snapshots, fn(snapshot) {
+    assert string.contains(
+      dashboard.render(i18n.English, view.System, snapshot),
+      legend,
+    )
+  })
+}
+
+/// リレーの節の凡例の HTML。語と説明の組を監視、バンカーの順に並べる。
+fn legend_html(
+  monitor: String,
+  monitor_description: String,
+  bunker: String,
+  bunker_description: String,
+) -> String {
+  let pair = fn(role, description) {
+    "<span class=\"inline-flex gap-1.5\"><b class=\"font-semibold text-base-content\">"
+    <> role
+    <> "</b>"
+    <> description
+    <> "</span>"
+  }
+  "<p class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted sm:pl-10\">"
+  <> pair(monitor, monitor_description)
+  <> pair(bunker, bunker_description)
+  <> "</p>"
+}
+
+/// 節の格子は 1121px 以上で 1.62 対 1 の 2 列になり、左の列の先頭がアカウント、右の列の
+/// 先頭がリレーの節である。
+pub fn dashboard_columns_split_above_1120px_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(
+    body,
+    "<div class=\"grid items-start gap-6 min-[1121px]:grid-cols-[minmax(0,1.62fr)_minmax(0,1fr)]\"><div class=\"flex min-w-0 flex-col gap-6\"><section class=\"flex flex-col gap-3\" id=\"accounts\"",
+  )
+  assert string.contains(
+    body,
+    "<div class=\"flex min-w-0 flex-col gap-6\"><section class=\"flex flex-col gap-3\" id=\"relays\"",
   )
 }
 
