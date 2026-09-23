@@ -932,6 +932,7 @@ pub fn components(language: i18n.Language) -> List(String) {
       element.to_string,
     ),
     [element.to_string(view.fallback_link(language, "/"))],
+    [element.to_string(view.radio_tabs("tabs", [#("one", []), #("two", [])]))],
     [
       element.to_string(view.compact_icon_button_link(
         "/href",

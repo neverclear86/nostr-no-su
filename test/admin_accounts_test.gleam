@@ -1058,7 +1058,7 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
 // --- ダッシュボードのアカウントの節 ---
 
 /// アカウントの節には、npub、読み取り専用の欄の URI、接続 QR コードのリンク、4 つの操作のダイアログの
-/// フォーム、ラベルの編集のページへの予備のリンク、登録のリンクが出る。
+/// フォーム、ラベルの編集のページへの予備のリンク、登録画面への予備のリンクが出る。
 pub fn dashboard_lists_account_actions_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(body, signer_npub)
@@ -1094,7 +1094,7 @@ pub fn dashboard_escapes_a_uri_attribute_test() {
   assert !string.contains(body, "<b>xss</b>")
 }
 
-/// 一覧を得られないときは登録のリンクを出さない。
+/// 一覧を得られないときは、追加のボタンも登録画面への予備のリンクも出さない。
 pub fn dashboard_hides_add_account_without_accounts_test() {
   let failing = simulate.read_body(get(with_accounts(Error(unavailable)), "/"))
   assert !string.contains(failing, "href=\"/accounts/new\"")

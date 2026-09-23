@@ -428,3 +428,11 @@ pub fn plugin_image_shapes_test() {
     element.to_string(view.plugin_image("https://example.com/a.png", "a", shape))
   assert string.contains(html, "class=\"" <> class <> "\"")
 }
+
+/// タブはラベルの中のラジオと中身の枠を交互に並べ、最初のタブだけを選んだ状態で描く。
+pub fn radio_tabs_check_the_first_tab_test() {
+  assert element.to_string(
+      view.radio_tabs("g", [#("One", [html.p([], [])]), #("Two", [])]),
+    )
+    == "<div class=\"tabs tabs-border\"><label class=\"tab\"><input checked name=\"g\" type=\"radio\">One</label><div class=\"tab-content pt-4\"><div class=\"flex flex-col gap-4\"><p></p></div></div><label class=\"tab\"><input name=\"g\" type=\"radio\">Two</label><div class=\"tab-content pt-4\"><div class=\"flex flex-col gap-4\"></div></div></div>"
+}

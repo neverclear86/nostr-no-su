@@ -13,6 +13,7 @@
 //// `popovertarget` のボタンで開閉し、位置は CSS の anchor positioning（`position-area`）で決める。
 //// JS も `data-action` も使わない。
 //// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉し、JS を使わない（`dialog_button`）。
+//// ダイアログの中のタブもラジオと CSS で切り替え、JS を使わない（`radio_tabs`）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
@@ -1880,6 +1881,34 @@ pub fn fallback_link(language: Language, href: String) -> Element(msg) {
       attribute.class("link link-hover self-center text-xs text-muted"),
     ],
     [html.text(i18n.text(language, i18n.OpenAsPage))],
+  )
+}
+
+/// JS を使わずに切り替えるタブ。`tabs` の語と中身の組ごとに、語を持つ `label` の中のラジオ（`name` は `group`）と中身の枠を交互に並べ、最初のタブを選んだ状態で描く。選んだラジオの `label` の直後の枠だけを daisyUI の `tabs` の CSS が表示する。ラジオが送信されないよう、フォームの中には置かない。`group` はページの中で一意にする。
+pub fn radio_tabs(
+  group: String,
+  tabs: List(#(String, List(Element(msg)))),
+) -> Element(msg) {
+  html.div(
+    [attribute.class("tabs tabs-border")],
+    list.index_map(tabs, fn(tab, index) {
+      let #(label, content) = tab
+      [
+        html.label([attribute.class("tab")], [
+          html.input([
+            attribute.type_("radio"),
+            attribute.name(group),
+            attribute.checked(index == 0),
+          ]),
+          html.text(label),
+        ]),
+        // tab-content に display を変えるクラスを付けると選ばれていない枠も出るので、縦積みは内側の div で行う
+        html.div([attribute.class("tab-content pt-4")], [
+          html.div([attribute.class("flex flex-col gap-4")], content),
+        ]),
+      ]
+    })
+      |> list.flatten,
   )
 }
 

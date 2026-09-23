@@ -2,9 +2,9 @@
 //// 接続 QR コード、秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を
 //// `admin/view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 //// フォームの中身（説明とフォーム）はページの枠を持たない関数で作り、ページはそれをカードに
-//// 入れる。ダッシュボードのダイアログと共用するもの（操作の `account_action_form`、読み込めない
-//// 行の削除の `unreadable_delete_form`、ラベルの欄の `label_fieldset`）は、このモジュールが
-//// `admin/dashboard` を import するので `admin/dashboard` に置く。
+//// 入れる。ダッシュボードのダイアログと共用するもの（登録と生成の `import_form`、`generate_form`、
+//// 操作の `account_action_form`、読み込めない行の削除の `unreadable_delete_form`、ラベルの欄の
+//// `label_fieldset`）は、このモジュールが `admin/dashboard` を import するので `admin/dashboard` に置く。
 ////
 //// 埋め込む値（ラベル、表示する理由、nsec）はテキストか属性値として lustre に渡し、
 //// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
@@ -25,9 +25,10 @@ import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/account
 
-/// アカウントの登録画面。`import_form` と `generate_form` を見出し付きのカードに 1 つずつ
-/// 入れ、末尾に、ダッシュボードに無いアカウントが登録済みと出るときの案内を 1 行出す。失敗の
-/// 理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で開き直す。
+/// アカウントの登録画面。`dashboard.import_form` と `dashboard.generate_form` を見出し付きの
+/// カードに 1 つずつ入れ、末尾に、ダッシュボードに無いアカウントが登録済みと出るときの案内を
+/// 1 行出す。失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
+/// 開き直す。
 /// `label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
@@ -54,7 +55,7 @@ pub fn new_account_page(
           None,
           [],
         ),
-        ..import_form(language, label)
+        ..dashboard.import_form(language, label)
       ]),
       view.card([
         view.section_heading(
@@ -64,53 +65,12 @@ pub fn new_account_page(
           None,
           [],
         ),
-        ..generate_form(language)
+        ..dashboard.generate_form(language)
       ]),
       view.hint(text(i18n.SkippedRowNote)),
       view.back_link(language),
     ],
   )
-}
-
-/// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を
-/// 送る。nsec の欄の説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の
-/// `aria-describedby` から指す。`label` はラベルの欄に入れる値。
-pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.secret_post_form(
-      view.segments_path(dashboard.import_account_segments),
-      [
-        view.hinted_input(
-          language,
-          text(i18n.PrivateKeyNsec),
-          nsec_hint_id,
-          view.FoldedHint(text(i18n.ImportDescription)),
-          view.secret_input_attributes(dashboard.nsec_field, "new-password"),
-        ),
-        dashboard.label_fieldset(language, dashboard.label_hint_id, label),
-      ],
-      text(i18n.Register),
-      view.PrimaryButton,
-      view.InForm,
-    ),
-  ]
-}
-
-/// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、
-/// 送信のボタンは枠のボタンにする。
-pub fn generate_form(language: Language) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.form_description(text(i18n.GenerateDescription)),
-    view.post_form(
-      view.segments_path(dashboard.generate_account_segments),
-      [],
-      text(i18n.Generate),
-      view.OutlineButton,
-      view.InForm,
-    ),
-  ]
 }
 
 /// 生成した鍵の登録に失敗して確認ページを再描画する理由。
@@ -286,9 +246,9 @@ pub fn account_action_page(
 
 /// 接続 URI をスマートフォンへ渡すための QR コードのページ。バンカーに使うリレーが無ければ
 /// 警告を先に出す。続く 1 枚のカードに、アカウントの識別と案内の文、secret 入りの URI と
-/// 要承認の URI を切り替える 2 つのタブ（`uri_tab`。既定で secret 入りの URI を選ぶ）、
-/// カメラ用のコードの貼り方の案内を並べる。タブはラジオボタンと CSS で切り替わり、JS は
-/// 要らない。カードの後に、この URI が使うバンカーのリレーの URL と、クライアント側の
+/// 要承認の URI を切り替える 2 つのタブ（`uri_tab` の組を `view.radio_tabs` に渡す。既定で
+/// secret 入りの URI を選ぶ）、カメラ用のコードの貼り方の案内を並べる。タブはラジオボタンと
+/// CSS で切り替わり、JS は要らない。カードの後に、この URI が使うバンカーのリレーの URL と、クライアント側の
 /// `nostrconnect://` で接続する経路への案内を出す。符号化できない URI はその位置に理由を
 /// 出し、コピー欄は残す。
 pub fn connection_qr_page(
@@ -312,27 +272,22 @@ pub fn connection_qr_page(
       view.card([
         account_summary(language, row),
         html.p([], [html.text(text(i18n.ConnectionQrDescription))]),
-        html.div(
-          [attribute.class("tabs tabs-border")],
-          list.flatten([
-            uri_tab(
-              language,
-              i18n.ConnectionUri,
-              row.uri,
-              True,
-              view.alert(view.Warning, [
-                html.text(text(i18n.ConnectionQrSecretWarning)),
-              ]),
-            ),
-            uri_tab(
-              language,
-              i18n.ConnectionUriForApproval,
-              row.auth_uri,
-              False,
-              approval_note(language),
-            ),
-          ]),
-        ),
+        view.radio_tabs(uri_tab_group, [
+          uri_tab(
+            language,
+            i18n.ConnectionUri,
+            row.uri,
+            view.alert(view.Warning, [
+              html.text(text(i18n.ConnectionQrSecretWarning)),
+            ]),
+          ),
+          uri_tab(
+            language,
+            i18n.ConnectionUriForApproval,
+            row.auth_uri,
+            approval_note(language),
+          ),
+        ]),
         html.p([], [html.text(text(i18n.CameraCopySteps))]),
         view.hint(text(i18n.CameraCopyNote)),
       ]),
@@ -364,44 +319,28 @@ fn approval_note(language: Language) -> Element(msg) {
   ])
 }
 
-/// 接続 URI 1 件のタブ。ラジオボタンを入れた `tab` のラベルと、その直後に置く `tab-content`
-/// の 2 要素を返し、呼び出し側が `tabs` の囲みに並べる。`selected` ならラジオボタンに
-/// `checked` を付ける。daisyUI は選ばれたラベルの直後の `tab-content` だけを出すので、JS は
-/// 要らない。中身は `note`、端末のカメラ用のコピー用 QR、コピー欄、クライアントの読み取り
-/// 機能が読む完全な `bunker://` の QR の畳みの順に並べる。`tab-content` には display を変える
-/// クラスを付けない（付けると選ばれていないタブの中身も出る）ので、縦積みは内側の `div` で行う。
+/// 接続 URI 1 件のタブの語と中身の組（`view.radio_tabs` に渡す）。中身は `note`、端末の
+/// カメラ用のコピー用 QR、コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR
+/// の畳みの順に並べる。
 fn uri_tab(
   language: Language,
   title: i18n.Message,
   uri: String,
-  selected: Bool,
   note: Element(msg),
-) -> List(Element(msg)) {
+) -> #(String, List(Element(msg))) {
   let text = i18n.text(language, title)
-  [
-    html.label([attribute.class("tab")], [
-      html.input([
-        attribute.type_("radio"),
-        attribute.name(uri_tab_group),
-        attribute.checked(selected),
-      ]),
-      html.text(text),
+  #(text, [
+    note,
+    qr_or_notice(language, text, account.camera_copy_text(uri)),
+    view.copyable_field(language, text, uri),
+    view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
+      qr_or_notice(
+        language,
+        text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
+        uri,
+      ),
     ]),
-    html.div([attribute.class("tab-content pt-4")], [
-      html.div([attribute.class("flex flex-col gap-4")], [
-        note,
-        qr_or_notice(language, text, account.camera_copy_text(uri)),
-        view.copyable_field(language, text, uri),
-        view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
-          qr_or_notice(
-            language,
-            text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
-            uri,
-          ),
-        ]),
-      ]),
-    ]),
-  ]
+  ])
 }
 
 /// この URI が使うバンカーのリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに
@@ -570,6 +509,3 @@ fn account_summary(
 ) -> Element(msg) {
   view.identity(language, row.label, row.npub)
 }
-
-/// nsec の欄の補足の `id`。nsec の欄は登録のフォームに 1 つだけなので固定の値にする。
-const nsec_hint_id = "nsec-hint"
