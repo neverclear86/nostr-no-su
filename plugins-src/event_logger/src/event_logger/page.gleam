@@ -454,7 +454,7 @@ fn code_inline(text: String) -> Dynamic {
   ])
 }
 
-/// `badge` インライン。`table` のセルだけで使える。
+/// `badge` インライン。`table` のセルと節の `meta` で使える。
 fn badge_inline(text: String, tone: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("badge")),

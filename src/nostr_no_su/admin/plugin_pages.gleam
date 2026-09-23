@@ -23,11 +23,13 @@ import nostr_no_su/plugin_runner
 /// プラグインのページ 1 枚を HTML 文書の文字列にする。見出しと `<title>` は `page_heading` で、
 /// プラグイン由来の文字列なので、`view.page_in_language` で `plugin.text_language` の言語として
 /// 出す。`raw_sections` は `plugin_view.sections` が最上位の記述から取り出した節の記述の並び。
+/// `now` は描画時点の Unix 秒で、インライン `time` の相対時刻の基準になる。
 pub fn plugin_page(
   language: Language,
   theme: view.Theme,
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
+  now: Int,
   raw_sections: List(Dynamic),
 ) -> String {
   let code = i18n.code(language)
@@ -42,7 +44,7 @@ pub fn plugin_page(
     list.flatten([
       [source_row(language, plugin), tabs(language, plugin, page)],
       disabled_alert(language, plugin),
-      sections(language, plugin, page, raw_sections),
+      sections(language, plugin, page, now, raw_sections),
       [view.back_link(language)],
     ]),
   )
@@ -132,6 +134,7 @@ fn sections(
   language: Language,
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
+  now: Int,
   raw: List(Dynamic),
 ) -> List(Element(msg)) {
   case raw {
@@ -143,7 +146,7 @@ fn sections(
       ),
     ]
     raw_sections -> {
-      let context = context(language, plugin, page)
+      let context = context(language, plugin, page, now)
       list.map(raw_sections, fn(raw_section) {
         case plugin_view.section(raw_section, context) {
           Ok(element) -> element
@@ -167,11 +170,12 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
 
 /// 節の描画に渡す文脈。プラグイン由来の文字列の言語は `plugin.text_language` で
 /// 決める。`link` ブロックはそのプラグインのページ一覧にあるキーだけを解決する。
-/// `form_action` は今開いているページ自身への宛先である。
+/// `form_action` は今開いているページ自身への宛先である。`now` は描画時点の Unix 秒である。
 fn context(
   language: Language,
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
+  now: Int,
 ) -> plugin_view.Context {
   plugin_view.Context(
     language:,
@@ -183,5 +187,6 @@ fn context(
       }
     },
     form_action: dashboard.plugin_page_href(plugin.name, page.key),
+    now:,
   )
 }

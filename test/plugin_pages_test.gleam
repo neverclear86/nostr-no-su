@@ -39,6 +39,21 @@ fn section_(title: String) -> Dynamic {
   ])
 }
 
+/// 見出しの補足（`meta`）に Unix 秒 `at` の `time` を 1 件置いた、ブロックの無い節。
+fn section_with_time(title: String, at: Int) -> Dynamic {
+  map_([
+    #("type", dynamic.string("section")),
+    #("title", dynamic.string(title)),
+    #(
+      "meta",
+      dynamic.list([
+        map_([#("type", dynamic.string("time")), #("value", dynamic.int(at))]),
+      ]),
+    ),
+    #("blocks", dynamic.list([])),
+  ])
+}
+
 /// `title` を欠き、変換に失敗する節。
 fn broken_section() -> Dynamic {
   map_([#("type", dynamic.string("section")), #("blocks", dynamic.list([]))])
@@ -67,6 +82,7 @@ pub fn single_page_has_no_tabs_test() {
       view.System,
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [section_("Queue")],
     )
   assert !string.contains(body, "tabs tabs-border")
@@ -82,6 +98,7 @@ pub fn two_pages_show_tabs_with_the_current_one_active_test() {
       view.System,
       two_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [section_("Queue")],
     )
   assert string.contains(
@@ -124,6 +141,7 @@ pub fn localized_plugin_page_is_in_the_display_language_test() {
       view.System,
       localized_row(),
       localized_status_page(),
+      0,
       [section_("Queue")],
     )
   assert string.contains(japanese, "<span lang=\"ja\">状態</span>")
@@ -136,6 +154,7 @@ pub fn localized_plugin_page_is_in_the_display_language_test() {
       view.System,
       localized_row(),
       localized_status_page(),
+      0,
       [section_("Queue")],
     )
   assert string.contains(english, "<span lang=\"en\">Status</span>")
@@ -151,6 +170,7 @@ pub fn localized_heading_is_in_the_display_language_test() {
       view.System,
       localized_row(),
       localized_status_page(),
+      0,
       [section_("Queue")],
     )
   assert string.contains(
@@ -171,6 +191,7 @@ pub fn no_sections_shows_the_empty_state_test() {
       view.System,
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [],
     )
   assert string.contains(body, i18n.text(i18n.English, i18n.PluginPageEmpty))
@@ -185,6 +206,7 @@ pub fn a_failed_section_does_not_stop_the_others_test() {
       view.System,
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [section_("Queue"), broken_section()],
     )
   assert string.contains(body, "Queue")
@@ -209,6 +231,7 @@ pub fn disabled_plugin_shows_a_warning_test() {
       view.System,
       row,
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [section_("Queue")],
     )
   assert string.contains(
@@ -227,6 +250,7 @@ pub fn heading_shows_the_plugin_and_page_names_test() {
       view.System,
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
+      0,
       [section_("Summary")],
     )
   assert string.contains(
@@ -238,4 +262,18 @@ pub fn heading_shows_the_plugin_and_page_names_test() {
     "<title lang=\"en\">Nostr-no-Su — example — Status</title>",
   )
   assert !string.contains(body, "<title>Nostr-no-Su — プラグインのページ</title>")
+}
+
+/// インライン `time` の相対時刻は `plugin_page` に渡した `now` を基準にする。
+pub fn plugin_page_times_are_relative_to_now_test() {
+  let html =
+    plugin_pages.plugin_page(
+      i18n.English,
+      view.System,
+      one_page_row(),
+      plugin.PluginPage(key: "status", title: "Status"),
+      1000 + 7200,
+      [section_with_time("Queue", 1000)],
+    )
+  assert string.contains(html, ">2 h ago</span>")
 }

@@ -2533,7 +2533,7 @@ fn last_used_value(
       html.text(
         text(i18n.LastUsed)
         <> " "
-        <> text(relative_time(now, session.last_used_at)),
+        <> text(view.relative_time(now, session.last_used_at)),
       ),
     ],
   )
@@ -2619,17 +2619,6 @@ fn session_time_title(language: Language, session: SessionRow) -> String {
   <> text(i18n.Created)
   <> ": "
   <> view.utc_time(session.created_at)
-}
-
-/// 描画時点から見た相対表示の文言。60 秒未満は「たった今」、1 時間未満は分、1 日未満は
-/// 時間、それ以上は日で出す。未来の時刻は「たった今」にする。
-pub fn relative_time(now: Int, at: Int) -> i18n.Message {
-  case int.max(now - at, 0) {
-    diff if diff < 60 -> i18n.JustNow
-    diff if diff < 3600 -> i18n.MinutesAgo(diff / 60)
-    diff if diff < 86_400 -> i18n.HoursAgo(diff / 3600)
-    diff -> i18n.DaysAgo(diff / 86_400)
-  }
 }
 
 /// 権限の編集フォームの欄の状態。`kinds` と `other` は欄に出す文字列そのままで、

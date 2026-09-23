@@ -512,6 +512,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [plugin_section("a", [plugin_text_block("example")])],
       ),
       plugin_pages.plugin_page(
@@ -519,6 +520,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_two_pages,
         plugin_status_page,
+        0,
         [plugin_section("b", [plugin_text_block("label")])],
       ),
       plugin_pages.plugin_page(
@@ -526,6 +528,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [],
       ),
       plugin_pages.plugin_page(
@@ -533,6 +536,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [
           plugin_section("c", [plugin_text_block("plugin")]),
           plugin_missing_title_section(),
@@ -543,6 +547,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_disabled,
         plugin_status_page,
+        0,
         [plugin_section("d", [plugin_text_block("a")])],
       ),
       plugin_pages.plugin_page(
@@ -550,6 +555,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [
           plugin_section("a", [
             plugin_form_block("example", "label", "plugin", "b"),
@@ -561,6 +567,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [
           plugin_section("a", [
             plugin_details_block("example", "label"),
@@ -575,6 +582,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         view.System,
         plugin_row_one_page,
         plugin_status_page,
+        0,
         [
           plugin_section("a", [
             plugin_image_block("http://example.com/a.png", "example", None),
@@ -595,8 +603,23 @@ pub fn pages(language: i18n.Language) -> List(String) {
       plugin_pages.plugin_page(
         language,
         view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        0,
+        [
+          plugin_section_with_meta(
+            "a",
+            [plugin_kind_inline(1), plugin_time_inline(0)],
+            [plugin_pairs_block([#("plugin", plugin_time_inline(0))])],
+          ),
+        ],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
         plugin_row_localized(),
         plugin_localized_status_page(),
+        0,
         [plugin_section("キュー", [plugin_text_block("処理済み")])],
       ),
     ],
@@ -659,6 +682,36 @@ fn plugin_section(title: String, blocks: List(Dynamic)) -> Dynamic {
     #(dynamic.string("type"), dynamic.string("section")),
     #(dynamic.string("title"), dynamic.string(title)),
     #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
+/// `meta` を持つ節の記述。見出しの補足のクラスを `stylesheet_test` に、訳した kind の名前と相対時刻を `japanese_pages_test` に載せる。
+fn plugin_section_with_meta(
+  title: String,
+  meta: List(Dynamic),
+  blocks: List(Dynamic),
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("meta"), dynamic.list(meta)),
+    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
+/// インライン（`kind`）。
+fn plugin_kind_inline(kind: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("kind")),
+    #(dynamic.string("value"), dynamic.int(kind)),
+  ])
+}
+
+/// インライン（`time`）。
+fn plugin_time_inline(at: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("time")),
+    #(dynamic.string("value"), dynamic.int(at)),
   ])
 }
 
@@ -1022,6 +1075,7 @@ pub fn plugin_page_with_a_form_test() {
       view.System,
       plugin_row_one_page,
       plugin_status_page,
+      0,
       [
         plugin_section("a", [
           plugin_form_block("example", "label", "plugin", "b"),

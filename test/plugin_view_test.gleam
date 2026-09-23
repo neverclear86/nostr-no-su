@@ -45,6 +45,16 @@ fn id_inline(text: String) -> Dynamic {
   map_([#("type", dynamic.string("id")), #("text", dynamic.string(text))])
 }
 
+/// インライン（`kind`）。`value` は形の誤りを試すため `Dynamic` で受ける。
+fn kind_inline(value: Dynamic) -> Dynamic {
+  map_([#("type", dynamic.string("kind")), #("value", value)])
+}
+
+/// インライン（`time`）。`value` は形の誤りを試すため `Dynamic` で受ける。
+fn time_inline(value: Dynamic) -> Dynamic {
+  map_([#("type", dynamic.string("time")), #("value", value)])
+}
+
 /// ブロック（`text`）。
 fn text_block(text: String) -> Dynamic {
   map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
@@ -214,6 +224,20 @@ fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
   ])
 }
 
+/// 見出しの補足（`meta`）を持つ節。`meta` は形の誤りを試すため `Dynamic` で受ける。
+fn section_with_meta(
+  title: String,
+  meta: Dynamic,
+  blocks: List(Dynamic),
+) -> Dynamic {
+  map_([
+    #("type", dynamic.string("section")),
+    #("title", dynamic.string(title)),
+    #("meta", meta),
+    #("blocks", dynamic.list(blocks)),
+  ])
+}
+
 /// テストが使う文脈。ページのキー `settings` だけを解決できる。
 fn context() -> plugin_view.Context {
   Context(
@@ -226,7 +250,13 @@ fn context() -> plugin_view.Context {
       }
     },
     form_action: "/plugins/example/settings",
+    now: 0,
   )
+}
+
+/// `now` を固定し、表示の言語を選べる文脈。
+fn at_context(language: i18n.Language) -> plugin_view.Context {
+  Context(..context(), language:, now: 1_789_276_354 + 180)
 }
 
 /// 対応する種別ごとの部品で、対応する文字列とクラスで描かれる。
@@ -419,6 +449,7 @@ pub fn empty_pairs_translated_line_has_display_language_test() {
       plugin_language: "en",
       page_href: fn(_) { Error(Nil) },
       form_action: "/plugins/example/settings",
+      now: 0,
     )
   let assert Ok(el) = plugin_view.section(raw, japanese_context)
   let body = element.to_string(el)
@@ -739,6 +770,7 @@ pub fn image_placeholder_alt_inherits_the_plugin_language_test() {
       plugin_language: "ja",
       page_href: fn(_) { Error(Nil) },
       form_action: "/plugins/example/status",
+      now: 0,
     )
   let raw = section_("キュー", [image_block("data:image/png;base64,AAA", "猫の写真")])
   let assert Ok(el) = plugin_view.section(raw, japanese_context)
@@ -795,4 +827,116 @@ pub fn image_is_not_an_inline_test() {
     ])
   let assert Error(pairs_reason) = plugin_view.section(pairs_raw, context())
   assert string.contains(pairs_reason, "value: unknown type \"image\"")
+}
+
+/// `table` のセルの `kind` は、表にある kind を表示の言語の名前にし、その言語の `lang` を持つ
+/// `span` で出す。
+pub fn kind_inline_shows_the_kind_name_in_the_display_language_test() {
+  let raw =
+    section_("a", [table_block(["Kind"], [[kind_inline(dynamic.int(1))]])])
+  let assert Ok(japanese) = plugin_view.section(raw, at_context(i18n.Japanese))
+  assert string.contains(
+    element.to_string(japanese),
+    "<span lang=\"ja\">投稿</span>",
+  )
+  let assert Ok(english) = plugin_view.section(raw, at_context(i18n.English))
+  assert string.contains(
+    element.to_string(english),
+    "<span lang=\"en\">post</span>",
+  )
+}
+
+/// 表に無い kind は番号（`kind 30023`）で出す。
+pub fn kind_inline_without_a_name_shows_the_number_test() {
+  let raw =
+    section_("a", [
+      table_block(["Kind"], [[kind_inline(dynamic.int(30_023))]]),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, at_context(i18n.Japanese))
+  assert string.contains(
+    element.to_string(el),
+    "<span lang=\"ja\">kind 30023</span>",
+  )
+}
+
+/// `time` は文脈の `now` からの相対時刻を出し、`title` に UTC の時刻を持たせる。
+pub fn time_inline_is_relative_with_a_utc_title_test() {
+  let raw =
+    section_("a", [
+      table_block(["At"], [[time_inline(dynamic.int(1_789_276_354))]]),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, at_context(i18n.English))
+  assert string.contains(
+    element.to_string(el),
+    "<span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span>",
+  )
+}
+
+/// `kind` と `time` の `value` が整数でなければ、その節の `Error` になる。
+pub fn inline_value_must_be_an_int_test() {
+  let raw =
+    section_("a", [table_block(["Kind"], [[kind_inline(dynamic.string("1"))]])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"a\": block #0: row #0: value must be an Int, got String"
+}
+
+/// `kind` と `time` の `value` が負なら、その節の `Error` になる。
+pub fn inline_value_must_not_be_negative_test() {
+  let raw =
+    section_("a", [table_block(["At"], [[time_inline(dynamic.int(-1))]])])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"a\": block #0: row #0: value must not be negative, got -1"
+}
+
+/// 節の `meta` は、`blocks` が 1 件でも 0 件でも、見出しの題の後ろに ` · ` で区切って並ぶ。
+pub fn section_meta_is_placed_in_the_heading_test() {
+  let meta =
+    dynamic.list([
+      kind_inline(dynamic.int(1)),
+      time_inline(dynamic.int(1_789_276_354)),
+    ])
+  let heading =
+    "<h2 class=\"card-title flex-wrap\">Timeline<span class=\"text-sm font-normal text-muted\"><span lang=\"en\">post</span> · <span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span></span></h2>"
+  let with_block = section_with_meta("Timeline", meta, [text_block("body")])
+  let assert Ok(el) = plugin_view.section(with_block, at_context(i18n.English))
+  assert string.contains(element.to_string(el), heading)
+  let empty = section_with_meta("Timeline", meta, [])
+  let assert Ok(el) = plugin_view.section(empty, at_context(i18n.English))
+  assert string.contains(element.to_string(el), heading)
+}
+
+/// `meta` の項目の誤りは何件目かを付け、`meta` がリストでなければその旨の `Error` になる。
+pub fn section_meta_errors_name_the_item_test() {
+  let bad_item =
+    section_with_meta(
+      "a",
+      dynamic.list([kind_inline(dynamic.int(1)), id_inline("abc")]),
+      [],
+    )
+  let assert Error(item_reason) = plugin_view.section(bad_item, context())
+  assert item_reason
+    == "section \"a\": meta #1: type \"id\" is only allowed in pairs values"
+  let not_a_list = section_with_meta("a", dynamic.string("x"), [])
+  let assert Error(list_reason) = plugin_view.section(not_a_list, context())
+  assert list_reason == "section \"a\": meta must be a List, got String"
+}
+
+/// `pairs` の値の `kind` と `time` は `inline` で描いて `dd` で包む。
+pub fn pairs_value_accepts_kind_and_time_test() {
+  let raw =
+    section_("a", [
+      pairs_block([
+        #("kind", kind_inline(dynamic.int(1))),
+        #("at", time_inline(dynamic.int(1_789_276_354))),
+      ]),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, at_context(i18n.English))
+  let body = element.to_string(el)
+  assert string.contains(body, "<dd><span lang=\"en\">post</span></dd>")
+  assert string.contains(
+    body,
+    "<dd><span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span></dd>",
+  )
 }

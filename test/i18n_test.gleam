@@ -222,7 +222,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.OtherPermissions -> Some(i18n.OtherPermissionsHint)
     i18n.OtherPermissionsHint -> Some(i18n.PermissionSignAnyKind)
     i18n.PermissionSignAnyKind -> Some(i18n.PermissionSignKind(1))
-    i18n.PermissionSignKind(_) -> Some(i18n.PermissionNip44Encrypt)
+    i18n.PermissionSignKind(_) -> Some(i18n.EventKind(1))
+    i18n.EventKind(_) -> Some(i18n.PermissionNip44Encrypt)
     i18n.PermissionNip44Encrypt -> Some(i18n.PermissionNip44Decrypt)
     i18n.PermissionNip44Decrypt -> Some(i18n.PermissionUnsupported)
     i18n.PermissionUnsupported -> Some(i18n.UnsupportedPermissionsNote)
@@ -450,12 +451,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 267 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 268 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 267
+  assert list.length(messages) == 268
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
@@ -478,4 +479,13 @@ pub fn kind_names_follow_the_table_test() {
   use #(kind, english, japanese) <- list.each(cases)
   assert i18n.text(i18n.English, i18n.PermissionSignKind(kind)) == english
   assert i18n.text(i18n.Japanese, i18n.PermissionSignKind(kind)) == japanese
+}
+
+/// プラグインのページのインライン `kind` の文言は、表にある kind は表示の言語の名前、無い kind は
+/// 両言語で `kind <番号>` を出す。
+pub fn event_kind_names_follow_the_table_test() {
+  assert i18n.text(i18n.English, i18n.EventKind(1)) == "post"
+  assert i18n.text(i18n.Japanese, i18n.EventKind(1)) == "投稿"
+  assert i18n.text(i18n.English, i18n.EventKind(30_023)) == "kind 30023"
+  assert i18n.text(i18n.Japanese, i18n.EventKind(30_023)) == "kind 30023"
 }

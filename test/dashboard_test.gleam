@@ -1081,19 +1081,6 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
   )
 }
 
-/// `dashboard.relative_time` は、境界の秒数ごとに正しい文言を返す。未来の時刻は
-/// 「たった今」（`JustNow`）にする。
-pub fn relative_time_buckets_test() {
-  assert dashboard.relative_time(1000, 1000) == i18n.JustNow
-  assert dashboard.relative_time(1059, 1000) == i18n.JustNow
-  assert dashboard.relative_time(1060, 1000) == i18n.MinutesAgo(1)
-  assert dashboard.relative_time(1000 + 3599, 1000) == i18n.MinutesAgo(59)
-  assert dashboard.relative_time(1000 + 3600, 1000) == i18n.HoursAgo(1)
-  assert dashboard.relative_time(1000 + 86_399, 1000) == i18n.HoursAgo(23)
-  assert dashboard.relative_time(1000 + 86_400, 1000) == i18n.DaysAgo(1)
-  assert dashboard.relative_time(1000, 2000) == i18n.JustNow
-}
-
 /// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・削除のダイアログを
 /// 開くボタンと、削除の確認のページへの予備のリンクが出る。日本語でも見出しが訳される。
 pub fn skipped_rows_are_listed_with_their_reason_test() {

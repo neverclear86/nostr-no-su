@@ -775,6 +775,20 @@ pub fn heading(title: String) -> Element(msg) {
   html.h2([attribute.class("card-title")], [html.text(title)])
 }
 
+/// 題の後ろに補足（`meta`）を並べた、節やカードの見出し（h2）。補足は補助の文字の色の小さい文字で、間を ` · ` で区切る。幅が足りなければ補足は次の行に回る。
+pub fn heading_with_meta(
+  title: String,
+  meta: List(Element(msg)),
+) -> Element(msg) {
+  html.h2([attribute.class("card-title flex-wrap")], [
+    html.text(title),
+    html.span(
+      [attribute.class("text-sm font-normal text-muted")],
+      list.intersperse(meta, html.text(" · ")),
+    ),
+  ])
+}
+
 /// 本文より控えめな一言。行が無い節の説明、ページの末尾の案内、フォームの中の 1 行の補足に使う。
 pub fn hint(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm text-muted")], [html.text(text)])
@@ -1750,6 +1764,17 @@ pub fn time_of_day(language: Language, seconds: Int) -> Element(msg) {
   html.time([attribute.datetime(utc_time(seconds))], [
     html.text(i18n.text(language, i18n.UtcTimeOfDay(clock))),
   ])
+}
+
+/// 描画時点から見た相対表示の文言。60 秒未満は「たった今」、1 時間未満は分、1 日未満は
+/// 時間、それ以上は日で出す。未来の時刻は「たった今」にする。
+pub fn relative_time(now: Int, at: Int) -> i18n.Message {
+  case int.max(now - at, 0) {
+    diff if diff < 60 -> i18n.JustNow
+    diff if diff < 3600 -> i18n.MinutesAgo(diff / 60)
+    diff if diff < 86_400 -> i18n.HoursAgo(diff / 3600)
+    diff -> i18n.DaysAgo(diff / 86_400)
+  }
 }
 
 /// 秒数を「分:秒」（`8:12`、`0:45`）の残り時間にする。秒は 2 桁に 0 埋めし、負の値は 0 とみなす。
