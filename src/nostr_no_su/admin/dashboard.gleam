@@ -1743,7 +1743,7 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 
 /// リレーの一覧。見出しの直後に、監視とバンカーの語と説明を並べた凡例（`role_legend`）を常に置く。
 /// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に追加のリンクを出す。バンカーに使う行が
-/// 無ければ警告を、一覧を得られないときは理由を出す。
+/// 無ければエラーの色の囲みを、一覧を得られないときは理由を出す。
 fn relays_section(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
