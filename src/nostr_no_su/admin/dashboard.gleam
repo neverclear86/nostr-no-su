@@ -146,7 +146,7 @@ pub type Snapshot {
     /// 表示する理由。
     accounts: Result(List(AccountRow), i18n.Reason),
     /// 直近の読み込みで飛ばされた行の一覧。得られないとき（読み込み中、応答なし、
-    /// 締め切り超過）はカードごと描かない。
+    /// 締め切り超過）は枠ごと描かない。
     skipped: Result(List(SkippedRow), i18n.Reason),
     /// 承認待ちの一覧。得られないとき（読み込み中、応答なし、締め切り超過）は
     /// 表示する理由。
@@ -195,8 +195,7 @@ pub type AccountAction {
   ShowConnectionQr
 }
 
-/// 操作の一覧。ダッシュボードのリンクはこの順（重さの軽い順）に並べ、セグメントとの
-/// 対応もここから引く。
+/// 操作の一覧。セグメントとの対応をここから引く。
 const account_actions = [
   ShowConnectionQr,
   EditLabel,
@@ -204,6 +203,9 @@ const account_actions = [
   RotateSecret,
   DeleteAccount,
 ]
+
+/// アカウントの行の畳みに並べる操作。この順に左から並べ、削除だけ右端に離して置く。
+const detail_actions = [EditLabel, RevealPrivateKey, RotateSecret]
 
 /// リレー 1 件に対する操作。
 pub type RelayAction {
@@ -344,7 +346,7 @@ fn dashboard_refresh(
 /// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置き、アカウントか
 /// バンカーに使うリレーが 0 件のときは「はじめに」の帯をその下に置く。その下は
-/// 幅が 1120px を超える画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、
+/// 幅が 1120px を超える画面では、アカウント（末尾に読み込めなかったアカウントの枠）とセッションを左の列に、
 /// リレーとプラグイン（末尾に読み込めなかったプラグインの枠）を右の列に、1.62 対 1 の幅で置く 2 列で、
 /// 1120px 以下ではこの順に 1 列に並ぶ。
 pub fn render(
@@ -379,8 +381,13 @@ pub fn render(
         ],
         [
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            accounts_section(language, shared, snapshot.accounts),
-            skipped_section(language, snapshot.skipped),
+            accounts_section(
+              language,
+              shared,
+              snapshot.accounts,
+              snapshot.skipped,
+              snapshot.sessions,
+            ),
             sessions_section(
               language,
               snapshot.accounts,
@@ -972,13 +979,15 @@ fn setup_step(
   ])
 }
 
-/// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。
-/// 一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、
-/// 登録のリンクも出さない。
+/// アカウントの節。見出しに件数、1 行の説明、「DB から読み直す」と「アカウントを追加」を置き、行の一覧の後に
+/// 読み込めなかった行の枠を置く。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
+/// 「上の理由で取得できません。」）を出し、追加のリンクも出さない。
 fn accounts_section(
   language: Language,
   shared: Option(String),
   accounts: Result(List(AccountRow), i18n.Reason),
+  skipped: Result(List(SkippedRow), i18n.Reason),
+  sessions: Result(List(SessionRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(accounts_anchor, [
@@ -987,12 +996,12 @@ fn accounts_section(
       accounts,
       view.users_icon(),
       i18n.Accounts,
-      None,
+      Some(i18n.AccountsDescription),
       [
         view.icon_button_link(
           view.segments_path(new_account_segments),
           view.plus_icon(),
-          text(i18n.Add),
+          text(i18n.AddAccount),
           view.PrimaryButton,
         ),
       ],
@@ -1011,38 +1020,35 @@ fn accounts_section(
           view.OutlineButton,
         ),
       ]),
-      fn(rows) { view.row_list(list.map(rows, account_item(language, _))) },
+      fn(rows) {
+        view.row_list(list.map(rows, account_item(language, sessions, _)))
+      },
     ),
+    unreadable_accounts(language, skipped),
   ])
 }
 
-/// 直近の読み込みで飛ばされた行。1 件以上あるときだけカードを描く。一覧を
+/// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を
 /// 得られないとき（読み込み中、応答なし、締め切り超過）も描かない。
-fn skipped_section(
+fn unreadable_accounts(
   language: Language,
   skipped: Result(List(SkippedRow), i18n.Reason),
 ) -> Element(msg) {
   case skipped {
     Ok([_, ..] as rows) ->
-      view.card([
-        view.section_heading(
-          view.warning_triangle_icon(),
-          i18n.text(language, i18n.UnreadableAccounts),
-          Some(list.length(rows)),
-          None,
-          [],
-        ),
-        view.alert(view.Warning, [
-          html.text(i18n.text(language, i18n.UnreadableAccountsWarning)),
-        ]),
-        view.row_list(list.map(rows, skipped_item(language, _))),
-      ])
+      view.failure_frame(
+        view.warning_triangle_icon(),
+        i18n.text(language, i18n.UnreadableAccounts),
+        list.length(rows),
+        i18n.text(language, i18n.UnreadableAccountsWarning),
+        list.map(rows, skipped_item(language, _)),
+      )
     Ok([]) | Error(_) -> element.none()
   }
 }
 
-/// 飛ばした行 1 件。識別と理由の 1 文を縦に並べ、削除のリンクを右に置く。`pubkey`
-/// 列が形式不正の行は識別も削除のリンクも出さず、理由の 1 文に削除できない旨を
+/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、削除のリンクを右に置く。`pubkey`
+/// 列が形式不正の行は指紋も識別も削除のリンクも出さず、理由の 1 文に削除できない旨を
 /// 続けて出す。
 fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   case row.reason {
@@ -1058,10 +1064,13 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
       ])
     _ ->
       view.list_row(view.InlineRow, [
-        html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-          view.identity(language, row.label, row.npub),
-          html.p([attribute.class("text-sm")], [
-            html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
+        html.div([attribute.class("flex min-w-0 items-center gap-3")], [
+          fingerprint.pubkey_svg(row.pubkey, fingerprint.Gray, "size-8"),
+          html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
+            view.identity(language, row.label, row.npub),
+            html.p([attribute.class("text-sm")], [
+              html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
+            ]),
           ]),
         ]),
         button_row([
@@ -1077,7 +1086,8 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
 }
 
 /// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。`description` があれば、一覧の有無に
-/// 関わらず見出しの下に 1 行の説明を出す。一覧を得たときだけ `listed_actions` を出し、`always_actions` は常に出す。
+/// 関わらず見出しの下に 1 行の説明を出す。操作は `always_actions` を常に先に出し、一覧を得たときだけその後ろに
+/// `listed_actions` を出す。
 fn listed_section_heading(
   language: Language,
   listing: Result(List(a), i18n.Reason),
@@ -1092,7 +1102,7 @@ fn listed_section_heading(
     Ok([]) | Error(_) -> None
   }
   let actions = case listing {
-    Ok(_) -> list.append(listed_actions, always_actions)
+    Ok(_) -> list.append(always_actions, listed_actions)
     Error(_) -> always_actions
   }
   view.section_heading(
@@ -1163,43 +1173,96 @@ fn shared_failure_alert(
   }
 }
 
-/// アカウント 1 件。識別、接続 URI と公開鍵の畳み、操作のリンクを縦に並べる。
-fn account_item(language: Language, account: AccountRow) -> Element(msg) {
+/// アカウント 1 件。上の段に鍵の指紋、識別、セッションの件数、「接続 QR コード」のボタンを並べ、下に
+/// 「接続 URI と操作」の畳みを置く。幅が足りなければ件数とボタンを次の行へ回す。
+fn account_item(
+  language: Language,
+  sessions: Result(List(SessionRow), i18n.Reason),
+  account: AccountRow,
+) -> Element(msg) {
   view.list_row(view.StackedRow, [
-    view.identity(language, account.label, account.npub),
-    uri_details(language, account),
-    account_action_links(language, account.signer),
+    html.div([attribute.class("flex flex-wrap items-center gap-x-4 gap-y-2")], [
+      html.div(
+        [attribute.class("flex min-w-0 flex-1 basis-48 items-center gap-3")],
+        [
+          fingerprint.pubkey_svg(account.signer, fingerprint.Colored, "size-10"),
+          view.identity(language, account.label, account.npub),
+        ],
+      ),
+      html.div([attribute.class("ml-auto flex shrink-0 items-center gap-3")], [
+        session_count(language, sessions, account.signer),
+        view.compact_icon_button_link(
+          account_action_path(account.signer, ShowConnectionQr),
+          account_action_icon(ShowConnectionQr),
+          i18n.text(language, account_action_row_title(ShowConnectionQr)),
+          account_action_link_kind(ShowConnectionQr),
+        ),
+      ]),
+    ]),
+    account_details(language, account),
   ])
 }
 
-/// 接続 URI と公開鍵の畳み。secret 入りの URI、要承認の URI、16 進の公開鍵の 3 つの
-/// コピー欄を `view.details_panel` の中に置く。
-fn uri_details(language: Language, account: AccountRow) -> Element(msg) {
+/// 署名者 `signer` の承認済みセッションの件数。セッションの一覧を得られないときは、0 件と読み違えさせないよう
+/// 何も出さない。
+fn session_count(
+  language: Language,
+  sessions: Result(List(SessionRow), i18n.Reason),
+  signer: String,
+) -> Element(msg) {
+  case sessions {
+    Ok(rows) ->
+      html.span([attribute.class("text-sm whitespace-nowrap text-muted")], [
+        html.text(i18n.text(
+          language,
+          i18n.SessionCount(list.count(rows, fn(row) { row.signer == signer })),
+        )),
+      ])
+    Error(_) -> element.none()
+  }
+}
+
+/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI をそれぞれの説明付きで、16 進の公開鍵を
+/// 説明なしでコピー欄に並べ、その下に `detail_actions` の操作と、右端に離した削除を置く。
+fn account_details(language: Language, account: AccountRow) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.details_panel(text(i18n.ConnectionUrisAndPublicKey), [
-    view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
-    view.copyable_field(
-      language,
-      text(i18n.ConnectionUriForApproval),
-      account.auth_uri,
-    ),
-    view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
+  let action_link = account_action_link(language, account.signer, _)
+  view.details_panel(text(i18n.ConnectionUrisAndActions), [
+    html.div([attribute.class("flex flex-col gap-3")], [
+      html.div([], [
+        view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
+        view.hint(text(i18n.SecretUriDescription)),
+      ]),
+      html.div([], [
+        view.copyable_field(
+          language,
+          text(i18n.ConnectionUriForApproval),
+          account.auth_uri,
+        ),
+        view.hint(text(i18n.ApprovalUriNeedsApproval)),
+      ]),
+      view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
+      html.div(
+        [attribute.class("flex flex-wrap items-center gap-2")],
+        list.append(list.map(detail_actions, action_link), [
+          html.div([attribute.class("ml-auto")], [action_link(DeleteAccount)]),
+        ]),
+      ),
+    ]),
   ])
 }
 
-/// アカウント 1 件への操作のリンク。すべてアイコン＋語の ghost にし、削除だけ短い語と
-/// `text-error` にする。
-fn account_action_links(language: Language, signer: String) -> Element(msg) {
-  html.div(
-    [attribute.class("flex flex-wrap gap-2")],
-    list.map(account_actions, fn(action) {
-      view.icon_button_link(
-        account_action_path(signer, action),
-        account_action_icon(action),
-        i18n.text(language, account_action_row_title(action)),
-        account_action_link_kind(action),
-      )
-    }),
+/// アカウント 1 件への操作 1 つのリンク。アイコン＋語のボタンで、語と種類は操作から決める。
+fn account_action_link(
+  language: Language,
+  signer: String,
+  action: AccountAction,
+) -> Element(msg) {
+  view.icon_button_link(
+    account_action_path(signer, action),
+    account_action_icon(action),
+    i18n.text(language, account_action_row_title(action)),
+    account_action_link_kind(action),
   )
 }
 
@@ -1224,12 +1287,12 @@ fn account_action_row_title(action: AccountAction) -> i18n.Message {
   }
 }
 
-/// アカウント 1 件への操作のボタンの種類。行の操作はすべて地味なボタンにし、削除だけ error の
-/// 文字色にする。
+/// アカウント 1 件への操作のボタンの種類。行に出す「接続 QR コード」は主の操作、畳みの操作は地味な
+/// ボタンにし、削除だけ error の文字色にする。
 fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
   case action {
-    EditLabel | RevealPrivateKey | RotateSecret | ShowConnectionQr ->
-      view.GhostButton
+    ShowConnectionQr -> view.PrimaryButton
+    EditLabel | RevealPrivateKey | RotateSecret -> view.GhostButton
     DeleteAccount -> view.DangerGhostButton
   }
 }
@@ -1983,12 +2046,8 @@ fn session_item(
 /// クライアントの公開鍵。鍵の指紋と、省略した表示とコピーのボタンを並べる。16 進の公開鍵でなければ指紋を
 /// 出さない。承認待ちのカードと承認済みのセッションの行が使う。
 fn client_pubkey_line(language: Language, client: String) -> Element(msg) {
-  let mark = case fingerprint.from_pubkey(client) {
-    Ok(mark) -> fingerprint.svg(mark, fingerprint.Colored, "size-6")
-    Error(Nil) -> element.none()
-  }
   html.div([attribute.class("flex min-w-0 items-center gap-2")], [
-    mark,
+    fingerprint.pubkey_svg(client, fingerprint.Colored, "size-6"),
     view.truncated_id(language, client, i18n.text(language, i18n.CopyClient)),
   ])
 }

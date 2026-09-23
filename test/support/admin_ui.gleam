@@ -47,13 +47,20 @@ pub fn text_file(path: String) -> String {
   content
 }
 
+/// `pages()` のアカウントの 64 桁の 16 進の公開鍵。鍵の指紋を描かせるため 32 バイトにし、
+/// `japanese_pages_have_no_english_words_test` が短縮した値の英字を拾わないよう数字だけにする。
+const account_hex = "0123012301230123012301230123012301230123012301230123012301230123"
+
+/// `pages()` の読み込めなかった行の 64 桁の 16 進の公開鍵。`account_hex` と同じ理由で数字だけにする。
+const skipped_hex = "8901890189018901890189018901890189018901890189018901890189018901"
+
 /// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。渡された言語で
 /// 描画し、言語の切り替えのボタン（押した状態の表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを通す。テーマの切り替えのボタン（`view.themes` ごとに押した状態のボタンが違う 3 通り）は、ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
 /// 状態の分岐を足したら、ここにもその状態のページを足す。
 pub fn pages(language: i18n.Language) -> List(String) {
   let row =
     dashboard.AccountRow(
-      signer: "0123",
+      signer: account_hex,
       npub: "npub1example",
       label: "label-a",
       uri: "bunker://0123?relay=x&secret=s",
@@ -62,7 +69,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
   let pending =
     dashboard.PendingRow(
       token: "tok",
-      signer: "0123",
+      signer: account_hex,
       client: "4567456745674567456745674567456745674567456745674567456745674567",
       expires_in_seconds: 540,
       secret_mismatch: False,
@@ -82,7 +89,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
   let pending_mismatch =
     dashboard.PendingRow(
       token: "tok2",
-      signer: "0123",
+      signer: account_hex,
       client: "4567",
       expires_in_seconds: 45,
       secret_mismatch: True,
@@ -104,7 +111,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       accounts: Ok([row]),
       skipped: Ok([
         dashboard.SkippedRow(
-          pubkey: "8901",
+          pubkey: skipped_hex,
           npub: "npub1example",
           label: "label-b",
           reason: vault.UndecryptablePrivateKey,
@@ -133,7 +140,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       ]),
       sessions: Ok([
         dashboard.SessionRow(
-          signer: "0123",
+          signer: account_hex,
           client: "4567",
           perms: "",
           created_at: 1000,
@@ -251,7 +258,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         language,
         view.System,
         dashboard.SkippedRow(
-          pubkey: "8901",
+          pubkey: skipped_hex,
           npub: "npub1example",
           label: "label-b",
           reason: vault.UndecryptablePrivateKey,
@@ -332,7 +339,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         language,
         view.System,
         Ok(dashboard.SessionRow(
-          signer: "0123",
+          signer: account_hex,
           client: "4567",
           perms: "",
           created_at: 1000,
@@ -346,7 +353,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         language,
         view.System,
         Ok(dashboard.SessionRow(
-          signer: "0123",
+          signer: account_hex,
           client: "4567",
           perms: "sign_event:1,nip04_encrypt",
           created_at: 1000,
@@ -360,7 +367,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         language,
         view.System,
         Ok(dashboard.SessionRow(
-          signer: "0123",
+          signer: account_hex,
           client: "4567",
           perms: "sign_event",
           created_at: 1000,
@@ -853,6 +860,30 @@ pub fn components(language: i18n.Language) -> List(String) {
       fn(tone) { element.to_string(view.notice_mark(tone)) },
     ),
     [element.to_string(view.band("anchor", [view.hint("content")]))],
+    [
+      element.to_string(view.compact_icon_button_link(
+        "/href",
+        view.qr_code_icon(),
+        "text",
+        view.PrimaryButton,
+      )),
+      element.to_string(
+        view.failure_frame(
+          view.warning_triangle_icon(),
+          "title",
+          1,
+          "description",
+          [
+            view.list_row(view.InlineRow, [html.text("row")]),
+          ],
+        ),
+      ),
+      element.to_string(fingerprint.pubkey_svg(
+        string.repeat("ab", 32),
+        fingerprint.Gray,
+        "size-8",
+      )),
+    ],
     list.map(
       [
         view.logo_icon(),

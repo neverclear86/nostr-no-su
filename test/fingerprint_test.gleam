@@ -82,3 +82,20 @@ pub fn fingerprint_svg_draws_gray_without_a_hue_test() {
   assert string.contains(rendered, "class=\"size-4 fp fp-gray\"")
   assert !string.contains(rendered, "fp h")
 }
+
+/// `pubkey_svg` は、正しい公開鍵なら `svg` と同じ描画を返し、32 バイトの 16 進でなければ何も描かない。
+pub fn pubkey_svg_draws_only_a_valid_pubkey_test() {
+  let assert Ok(mark) = fingerprint.from_pubkey(known_key)
+  assert element.to_string(fingerprint.pubkey_svg(
+      known_key,
+      fingerprint.Colored,
+      "size-8",
+    ))
+    == element.to_string(fingerprint.svg(mark, fingerprint.Colored, "size-8"))
+  assert element.to_string(fingerprint.pubkey_svg(
+      "abcd",
+      fingerprint.Colored,
+      "size-8",
+    ))
+    == ""
+}

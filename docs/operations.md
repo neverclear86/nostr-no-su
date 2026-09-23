@@ -9,7 +9,7 @@
 
 いずれかが未設定か不正なら、`[main] cannot start: <理由>` を 1 行出して終了コード 1 で終了する（同梱の compose は `restart: unless-stopped` なので、docker が間隔を延ばしながら再起動を繰り返し、そのたびに同じ行が出る）。DB に記録されたスキーマの版がビルドより新しいときは、`[main] cannot continue: database schema version N is newer than this build supports (up to version M)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](design-decisions.md) の「スキーマの版は前向きにだけ自動で進める」）。同じ DB を別のインスタンスが使っているときは、`[main] cannot continue: another instance is using this database (advisory lock 7237235 is held by another session)` を 1 行出して終了コード 1 で終了する（[設計上の判断と既知の制約](design-decisions.md) の「同じ DB に対して動けるのは 1 インスタンスだけである」）。DB に到達できないときはバンカーのサブツリーは起動したまま、`[bunker] account store unavailable: database is unreachable or rejected the connection; retrying in 5000ms` を 1 行出して読み込みを再試行し（間隔は失敗のたびに倍に延び、2 分で頭打ちになる）、戻れば `account store is back; loaded N account(s)` を出す。この間もプラグインは止まらない。リレーの接続は DB から行を読めた後に開く。パスワードやデータベース名の誤りも接続の段階で拒否されるので同じ行になり、理由が変わらない限り 2 行目は出ない。DB が読み込みの期限までに応答しないか、途中で接続が切れたときは、理由が `database did not answer in time or the connection was lost` の行になる。この行が出たままなら、DB の停止だけでなく `DATABASE_URL` の資格情報とデータベース名も確かめること。
 
-登録で「このアカウントはすでに登録されています。」（`account is already registered`）と出るのにダッシュボードのアカウントの節にそのアカウントが無いときは、起動時の読み込みで飛ばされた行が `bunker_accounts` に残っている（ダッシュボードの「読み込めなかったアカウント」（`Unreadable accounts`）のカードに出る。ログは `[bunker] skipped account <pubkey>: <理由>`）。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときは、その行の「削除」（`Delete`）から消してから登録し直す。「pubkey の列を読めない行です。」で始まる行は pubkey を読めないため画面からは消せず、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey 列の値>'"`）。
+登録で「このアカウントはすでに登録されています。」（`account is already registered`）と出るのにダッシュボードのアカウントの節にそのアカウントが無いときは、起動時の読み込みで飛ばされた行が `bunker_accounts` に残っている（ダッシュボードの「読み込めなかったアカウント」（`Unreadable accounts`）の枠に出る。ログは `[bunker] skipped account <pubkey>: <理由>`）。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときは、その行の「削除」（`Delete`）から消してから登録し直す。「pubkey の列を読めない行です。」で始まる行は pubkey を読めないため画面からは消せず、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey 列の値>'"`）。
 
 空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
 
@@ -35,7 +35,7 @@
 
 - ダンプの `encrypted_privkey` と `encrypted_secret` はマスターキーで暗号化されている（[設計上の判断と既知の制約](design-decisions.md)）。マスターキーを失うとダンプからは戻せない。マスターキーは自動生成されず、ほかに写しは無い。
 - ダンプとマスターキーが揃うと全アカウントの秘密鍵が漏れる。そのため両者は別の場所に置く（例: ダンプはバックアップ先のストレージ、マスターキーはパスワードマネージャー）。
-- 別のマスターキーで起動すると、行は消えずに飛ばされ、ログが `[bunker] skipped account <pubkey>: <理由>` と `loaded 0 of N account(s)` になる。管理 UI のダッシュボードにも「読み込めなかったアカウント」（`Unreadable accounts`）のカードとして出る。この場合は正しいマスターキーに直して読み直させれば戻る。**管理 UI から同じ鍵を登録し直そうとしない**（「このアカウントはすでに登録されています。」（`account is already registered`）になる）。
+- 別のマスターキーで起動すると、行は消えずに飛ばされ、ログが `[bunker] skipped account <pubkey>: <理由>` と `loaded 0 of N account(s)` になる。管理 UI のダッシュボードにも「読み込めなかったアカウント」（`Unreadable accounts`）の枠として出る。この場合は正しいマスターキーに直して読み直させれば戻る。**管理 UI から同じ鍵を登録し直そうとしない**（「このアカウントはすでに登録されています。」（`account is already registered`）になる）。
 
 ファイルで渡す構成では、そのファイルと `docker-compose.override.yml` の写しをダンプと別の場所に保つ。作り方と権限は [設定](configuration.md) の「秘密をファイルで渡す」にある（ホストの uid が 1000 でなく `chown` した場合は、写しを取るのに `sudo` が要る）。
 
@@ -145,11 +145,11 @@ docker compose up -d
 `ACCOUNT_MASTER_KEY` を別の値に変えると、それまでのキーで暗号化した行はすべて復号できなくなる。暗号文を別のキーで暗号化し直す機能は持たないため、交換は控えた nsec でアカウントを登録し直す形で行う。
 
 1. 交換の前に、全アカウントの nsec を控える。ダッシュボードの各行の「秘密鍵を表示」（`Show private key`）で管理パスワードを再入力して表示する。控え忘れに気づいたときは、手順 3 で行を消す前に、以前の `ACCOUNT_MASTER_KEY` に戻して起動し直せば表示して控えられる。
-2. 新しいマスターキーを `openssl rand -hex 32` で作って渡し直し、起動し直す。マスターキーは起動時に読むので再起動が要る。docker compose では、`.env` の値を変えたときは `docker compose up -d`、ファイルの中身を変えたときは `docker compose restart nostr-no-su` で読み直させる。起動すると全行が飛ばされ、ログに `loaded 0 of N account(s)` と `skipped account <pubkey>: <理由>` が出て、ダッシュボードに「読み込めなかったアカウント」（`Unreadable accounts`）のカードが出る。
-3. そのカードの各行の「削除」（`Delete`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、「このアカウントはすでに登録されています。」（`account is already registered`）について述べた上の段落にあるとおり DB から直接消す。
-4. アカウントの節の「追加」（`Add`）から控えた nsec で登録し直す。飛ばされた行が残っていると「このアカウントはすでに登録されています。」（`account is already registered`）で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
+2. 新しいマスターキーを `openssl rand -hex 32` で作って渡し直し、起動し直す。マスターキーは起動時に読むので再起動が要る。docker compose では、`.env` の値を変えたときは `docker compose up -d`、ファイルの中身を変えたときは `docker compose restart nostr-no-su` で読み直させる。起動すると全行が飛ばされ、ログに `loaded 0 of N account(s)` と `skipped account <pubkey>: <理由>` が出て、ダッシュボードに「読み込めなかったアカウント」（`Unreadable accounts`）の枠が出る。
+3. その枠の各行の「削除」（`Delete`）から、飛ばされた行を消す。`pubkey` 列を読めない行があるときは、「このアカウントはすでに登録されています。」（`account is already registered`）について述べた上の段落にあるとおり DB から直接消す。
+4. アカウントの節の「アカウントを追加」（`Add account`）から控えた nsec で登録し直す。飛ばされた行が残っていると「このアカウントはすでに登録されています。」（`account is already registered`）で拒否されるので、先に消しておく。登録し直したアカウントは、その時点から再起動なしで署名と監視に戻る。
 
-交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。セッションと承認待ちの行の MAC もマスターキーから導く鍵で計算するので、手順 2 の起動から手順 3 で消すまでは、それらの行も読み込みのたびに `skipped a bunker_sessions row with a mismatched MAC`（`bunker_pending` も同じ形）で飛ばされる。行ごと消えるので MAC を付け直す手順は要らない。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前ならカードに出ている）。
+交換で失われるものは次のとおりである。接続 secret は登録のたびに新しい値が作られるので、secret 入りの `bunker://` URI が変わり、クライアントにはダッシュボードから新しい URI を貼り直す（古い URI での接続は承認なしには通らない）。「secret を再生成」（`Rotate secret`）とは違い、承認済みのセッションと承認待ちの接続要求も行の削除で一緒に消えるので、承認を経るクライアントは接続と承認をやり直す。セッションと承認待ちの行の MAC もマスターキーから導く鍵で計算するので、手順 2 の起動から手順 3 で消すまでは、それらの行も読み込みのたびに `skipped a bunker_sessions row with a mismatched MAC`（`bunker_pending` も同じ形）で飛ばされる。行ごと消えるので MAC を付け直す手順は要らない。ラベルも行と一緒に消えるので、登録し直すときに入れ直す（消す前なら枠に出ている）。
 
 リレーの登録、監視の再開点、プラグインが保存したイベントはマスターキーに依らず変わらない。同じ nsec で登録し直せば公開鍵も同じなので、`bunker://` URI で変わるのは `secret=` だけである。
 

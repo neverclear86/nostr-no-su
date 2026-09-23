@@ -682,7 +682,10 @@ pub fn section_heading(
   let action_row = case actions {
     [] -> element.none()
     _ ->
-      html.div([attribute.class("flex flex-wrap justify-end gap-2")], actions)
+      html.div(
+        [attribute.class("ml-auto flex flex-wrap justify-end gap-2")],
+        actions,
+      )
   }
   html.div(
     [
@@ -1770,6 +1773,23 @@ pub fn icon_button_link(
     icon,
     html.text(text),
   ])
+}
+
+/// アイコン＋語のボタンのリンクで、狭い画面（640px 未満）では語を隠してアイコンだけにする。語は `title` にも置き、隠した後も読み上げとマウスを重ねたときの表示に残す。
+pub fn compact_icon_button_link(
+  href: String,
+  icon: Element(msg),
+  text: String,
+  kind: ButtonKind,
+) -> Element(msg) {
+  html.a(
+    [
+      attribute.href(href),
+      attribute.title(text),
+      attribute.class(button_class(kind, InRow)),
+    ],
+    [icon, html.span([attribute.class("max-sm:sr-only")], [html.text(text)])],
+  )
 }
 
 /// アイコンだけのボタンのリンク。語は読み上げのための `aria-label` に置く。

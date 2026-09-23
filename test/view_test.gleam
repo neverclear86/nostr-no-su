@@ -155,7 +155,7 @@ pub fn section_heading_shows_the_count_description_and_actions_test() {
   )
   assert string.contains(
     html,
-    "<div class=\"flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
+    "<div class=\"ml-auto flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
   )
 }
 
@@ -325,4 +325,20 @@ pub fn navbar_start_keeps_the_width_of_the_logo_test() {
       [],
     )
   assert string.contains(html, "<div class=\"navbar-start w-auto grow\">")
+}
+
+/// 狭い画面で語を隠すボタンのリンクは、語を `title` と `max-sm:sr-only` の `span` に置く。
+pub fn compact_icon_button_link_hides_the_text_on_narrow_screens_test() {
+  let link =
+    element.to_string(view.compact_icon_button_link(
+      "/href",
+      view.qr_code_icon(),
+      "Connection QR code",
+      view.PrimaryButton,
+    ))
+  assert string.contains(link, "title=\"Connection QR code\"")
+  assert string.contains(
+    link,
+    "<span class=\"max-sm:sr-only\">Connection QR code</span>",
+  )
 }

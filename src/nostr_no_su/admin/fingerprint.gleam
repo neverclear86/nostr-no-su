@@ -92,6 +92,14 @@ pub fn svg(
   )
 }
 
+/// 16 進の公開鍵の指紋を `svg` で描く。32 バイトの 16 進でなければ何も描かない。`shade` と `class` は `svg` に渡す。
+pub fn pubkey_svg(pubkey: String, shade: Shade, class: String) -> Element(msg) {
+  case from_pubkey(pubkey) {
+    Ok(fingerprint) -> svg(fingerprint, shade, class)
+    Error(Nil) -> element.none()
+  }
+}
+
 /// 塗り方と色相の番号に当たるクラス。`hue` は `from_pubkey` が 0〜11 にするので、最後の腕は 11 に当たる（`Int` を網羅するための腕である）。
 fn shade_class(hue: Int, shade: Shade) -> String {
   case shade, hue {

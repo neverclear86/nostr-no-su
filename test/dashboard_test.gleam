@@ -292,8 +292,8 @@ pub fn permissions_are_shown_as_chips_test() {
   )
 }
 
-/// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者が
-/// `<details>` の外（畳みを開く前に見える範囲）には出ない。
+/// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者は
+/// `<details>` の外（畳みを開く前に見える範囲）では「接続 QR コード」のリンクの宛先にだけ使われる。
 pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   let account =
     dashboard.AccountRow(
@@ -309,15 +309,19 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
     string.split_once(body, "id=\"accounts\"")
   let assert Ok(#(before_details, after_details)) =
     string.split_once(after_accounts, "<details>")
-  assert !string.contains(before_details, account.signer)
-  assert string.contains(after_details, "Connection URIs and public key")
+  assert list.length(string.split(before_details, account.signer)) == 2
+  assert string.contains(
+    before_details,
+    "href=\"/accounts/" <> account.signer <> "/qr\"",
+  )
+  assert string.contains(after_details, "Connection URIs and actions")
   assert string.contains(after_details, "Connection URI</span>")
   assert string.contains(after_details, "Connection URI (approval)</span>")
   assert string.contains(after_details, "Public key (hex)</span>")
   assert string.contains(after_details, account.signer)
 }
 
-/// アカウントの行の 5 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
+/// アカウントの畳みの 4 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
 /// `Delete account` は出ない）で `text-error` が付く。
 pub fn account_row_actions_are_icons_with_short_delete_test() {
   let account =
@@ -367,6 +371,209 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
     )),
   )
   assert !string.contains(body, "Delete account")
+}
+
+/// 64 桁の 16 進の署名者を持つアカウント。鍵の指紋を描かせるための行である。
+fn fingerprinted_account() -> dashboard.AccountRow {
+  dashboard.AccountRow(
+    signer: string.repeat("0123", 16),
+    npub: "npub1fingerprintedaccountvalueabcdefghij",
+    label: "main",
+    uri: "bunker://x?secret=s",
+    auth_uri: "bunker://x",
+  )
+}
+
+/// 署名者 `signer` の承認済みセッション 1 件。`client` で行を区別する。
+fn session_of(signer: String, client: String) -> dashboard.SessionRow {
+  dashboard.SessionRow(
+    signer:,
+    client:,
+    perms: "",
+    created_at: 1_788_253_200,
+    last_used_at: 1_789_276_354,
+  )
+}
+
+/// ダッシュボードのアカウントの節（`id="accounts"` からセッションの節の前まで）。
+fn accounts_part(body: String) -> String {
+  let assert Ok(#(_, after_accounts)) =
+    string.split_once(body, "id=\"accounts\"")
+  let assert Ok(#(accounts, _)) =
+    string.split_once(after_accounts, "id=\"sessions\"")
+  accounts
+}
+
+/// アカウントの行の畳み（`<details>` から `</details>` まで）の前と中。
+fn split_account_details(body: String) -> #(String, String) {
+  let assert Ok(#(before_details, after_details)) =
+    string.split_once(accounts_part(body), "<details>")
+  let assert Ok(#(details, _)) = string.split_once(after_details, "</details>")
+  #(before_details, details)
+}
+
+/// アカウントの節の見出しに 1 行の説明が出て、「DB から読み直す」が「アカウントを追加」の
+/// リンクより前に並ぶ。
+pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
+  let snapshot =
+    dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()]))
+  let accounts =
+    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+  assert string.contains(
+    accounts,
+    "Your registered private keys. Paste a connection URI into a client to sign with that key.",
+  )
+  let assert Ok(#(before_reload, after_reload)) =
+    string.split_once(accounts, "action=\"/accounts/reload\"")
+  assert !string.contains(before_reload, "Add account")
+  assert string.contains(
+    after_reload,
+    element.to_string(view.icon_button_link(
+      "/accounts/new",
+      view.plus_icon(),
+      "Add account",
+      view.PrimaryButton,
+    )),
+  )
+}
+
+/// アカウントの行の畳みの前に、色つきの鍵の指紋、その署名者のセッションの件数（他の署名者の
+/// セッションは数えない）、「接続 QR コード」の主のボタンが出て、畳みの中に QR のリンクは無い。
+pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
+  let account = fingerprinted_account()
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([account]),
+      sessions: Ok([
+        session_of(account.signer, "ef01"),
+        session_of(account.signer, "ef02"),
+        session_of(string.repeat("4567", 16), "ef03"),
+      ]),
+    )
+  let #(before_details, details) =
+    split_account_details(dashboard.render(i18n.English, view.System, snapshot))
+  assert string.contains(
+    before_details,
+    element.to_string(fingerprint.pubkey_svg(
+      account.signer,
+      fingerprint.Colored,
+      "size-10",
+    )),
+  )
+  assert string.contains(before_details, ">2 sessions</span>")
+  assert string.contains(
+    before_details,
+    element.to_string(view.compact_icon_button_link(
+      dashboard.account_action_path(account.signer, dashboard.ShowConnectionQr),
+      view.qr_code_icon(),
+      "Connection QR code",
+      view.PrimaryButton,
+    )),
+  )
+  assert !string.contains(details, "/qr\"")
+}
+
+/// セッションの件数は、一覧を得たら 0 件でも出し、一覧を得られないときは出さない。
+pub fn account_session_count_follows_the_session_list_test() {
+  let account = fingerprinted_account()
+  let render = fn(sessions) {
+    let snapshot =
+      dashboard.Snapshot(..states(), accounts: Ok([account]), sessions:)
+    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+  }
+  assert string.contains(
+    render(Ok([session_of(account.signer, "ef01")])),
+    ">1 session</span>",
+  )
+  assert string.contains(render(Ok([])), ">0 sessions</span>")
+  let unavailable = render(Error(i18n.Untranslated("boom")))
+  assert !string.contains(unavailable, ">1 session</span>")
+  assert !string.contains(unavailable, ">0 sessions</span>")
+}
+
+/// 畳みの中に 2 つの URI の説明が出て、ラベルの編集・秘密鍵の表示・secret の再生成のリンクの後に、
+/// 右端に離した（`ml-auto` の囲みの）削除のリンクが並ぶ。
+pub fn account_details_hold_the_uris_and_the_actions_test() {
+  let account = fingerprinted_account()
+  let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
+  let #(_, details) =
+    split_account_details(dashboard.render(i18n.English, view.System, snapshot))
+  assert string.contains(
+    details,
+    "Connects without approval. Paste it into your own client.",
+  )
+  assert string.contains(
+    details,
+    "A client that connects with this URI cannot sign until you approve it under pending connections on the dashboard.",
+  )
+  let link = fn(action, icon, text, kind) {
+    element.to_string(view.icon_button_link(
+      dashboard.account_action_path(account.signer, action),
+      icon,
+      text,
+      kind,
+    ))
+  }
+  assert string.contains(
+    details,
+    link(
+      dashboard.EditLabel,
+      view.pencil_icon(),
+      "Edit label",
+      view.GhostButton,
+    )
+      <> link(
+      dashboard.RevealPrivateKey,
+      view.eye_icon(),
+      "Show private key",
+      view.GhostButton,
+    )
+      <> link(
+      dashboard.RotateSecret,
+      view.rotate_icon(),
+      "Rotate secret",
+      view.GhostButton,
+    )
+      <> "<div class=\"ml-auto\">"
+      <> link(
+      dashboard.DeleteAccount,
+      view.trash_icon(),
+      "Delete",
+      view.DangerGhostButton,
+    )
+      <> "</div>",
+  )
+}
+
+/// 読み込めなかった行は、アカウントの節の中で行の一覧の後に error の色の枠として出て、
+/// 行に灰色の鍵の指紋が付く。
+pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
+  let pubkey = string.repeat("8901", 16)
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([fingerprinted_account()]),
+      skipped: Ok([
+        dashboard.SkippedRow(
+          pubkey:,
+          npub: "npub1unreadable",
+          label: "old wallet",
+          reason: vault.UndecryptablePrivateKey,
+        ),
+      ]),
+    )
+  let accounts =
+    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+  let assert Ok(#(before_frame, frame)) =
+    string.split_once(accounts, "alert alert-soft alert-error")
+  assert string.contains(before_frame, "Your registered private keys.")
+  assert string.contains(before_frame, "</details></li></ul>")
+  assert string.contains(frame, "Unreadable accounts")
+  assert string.contains(
+    frame,
+    element.to_string(fingerprint.pubkey_svg(pubkey, fingerprint.Gray, "size-8")),
+  )
 }
 
 /// セッションの行は、権限をチップで出す。
@@ -958,8 +1165,8 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
   assert list.length(string.split(body, pubkey)) == 2
 }
 
-/// 飛ばされた行が 0 件、あるいは一覧を得られないときはカードを描かない。
-pub fn no_skipped_rows_draws_no_card_test() {
+/// 飛ばされた行が 0 件、あるいは一覧を得られないときは枠を描かない。
+pub fn no_skipped_rows_draws_no_frame_test() {
   let empty = dashboard.Snapshot(..states(), skipped: Ok([]))
   let unavailable =
     dashboard.Snapshot(..states(), skipped: Error(i18n.Untranslated("boom")))
@@ -1133,7 +1340,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 /// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_action =
-    "<div class=\"flex flex-wrap justify-end gap-2\">"
+    "<div class=\"ml-auto flex flex-wrap justify-end gap-2\">"
     <> element.to_string(view.icon_button_link(
       "/relays/new",
       view.plus_icon(),
