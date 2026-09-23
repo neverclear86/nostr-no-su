@@ -22,6 +22,8 @@ import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
+import lustre/element/svg
+import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
@@ -86,7 +88,7 @@ pub type PluginRow {
   )
 }
 
-/// 承認待ちの行と承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
+/// 承認待ちのカードと承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
 /// npub、そうでなければ 16 進。
 pub type SignerName {
   /// アカウント一覧にある署名者。ラベルと省略した npub で出す。
@@ -316,7 +318,7 @@ fn dashboard_refresh(
 }
 
 /// スナップショットをダッシュボードのページに描画する。先頭に概要のタイル、続けて
-/// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の節を置く。その下は
+/// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
 /// プラグインの状態と読み込めなかったプラグインを右の列に置く 2 列で、狭い画面ではこの順に
 /// 1 列に並ぶ。
@@ -334,7 +336,12 @@ pub fn render(
     dashboard_refresh(snapshot.pending),
     [
       overview_tiles(language, snapshot),
-      pending_section(language, snapshot.accounts, snapshot.pending),
+      pending_section(
+        language,
+        snapshot.accounts,
+        snapshot.now,
+        snapshot.pending,
+      ),
       html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
         html.div(
           [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")],
@@ -810,11 +817,13 @@ fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
   }
 }
 
-/// 承認待ちの接続要求と、その承認・拒否ボタン。1 件以上あるとき、または一覧を得られないときだけ、
-/// warning の色の囲み（`view.alert_panel`）で全幅に描く。0 件のときは節ごと出さない。
+/// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に見出し、
+/// 説明、承認待ちのカードを置く。見出しの右には、ダッシュボードを自動で読み込み直すときだけ更新の間隔を出す。
+/// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
 fn pending_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
+  now: Int,
   pending: Result(List(PendingRow), i18n.Reason),
 ) -> Element(msg) {
   case pending {
@@ -825,13 +834,13 @@ fn pending_section(
         Ok(rows) -> Some(list.length(rows))
         Error(_) -> None
       }
-      view.alert_panel(pending_anchor, view.Warning, [
+      view.band(pending_anchor, [
         view.section_heading(
           view.door_open_icon(),
           text(i18n.PendingConnections),
           count,
-          None,
-          [],
+          Some(text(i18n.PendingConnectionsDescription)),
+          refresh_note(language, pending),
         ),
         listed_body(
           language,
@@ -840,12 +849,18 @@ fn pending_section(
           i18n.CouldNotListPending,
           element.none(),
           fn(rows) {
-            view.row_list(
+            html.div(
+              [
+                attribute.class(
+                  "grid grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))] gap-3.5",
+                ),
+              ],
               list.map(rows, fn(entry) {
-                let signer = signer_name(accounts, entry.signer)
-                view.list_row(
-                  view.InlineRow,
-                  pending_content(language, signer, entry),
+                pending_card(
+                  language,
+                  signer_name(accounts, entry.signer),
+                  now,
+                  entry,
                 )
               }),
             )
@@ -854,6 +869,198 @@ fn pending_section(
       ])
     }
   }
+}
+
+/// 承認待ちの帯の見出しの右に置く、更新の間隔の表示。ダッシュボードを自動で読み込み直すとき
+/// （`dashboard_refresh` が `RefreshEverySeconds` のとき）だけ出す。
+fn refresh_note(
+  language: Language,
+  pending: Result(List(PendingRow), i18n.Reason),
+) -> List(Element(msg)) {
+  case dashboard_refresh(pending) {
+    view.RefreshEverySeconds(seconds) -> [
+      html.p(
+        [
+          attribute.class(
+            "flex items-center gap-2 rounded-full border border-base-300 bg-base-100 px-3 py-1 text-xs text-muted",
+          ),
+        ],
+        [
+          view.clock_icon(),
+          html.text(i18n.text(language, i18n.RefreshesEverySeconds(seconds))),
+        ],
+      ),
+    ]
+    view.NoRefresh -> []
+  }
+}
+
+/// 承認待ち 1 件のカード。左に残り時間の円、右にクライアントの公開鍵（指紋、省略、コピー）と secret の
+/// 提示の区別、署名者、失効までを置き、下に権限のチップと承認・拒否のボタンを並べる。secret が一致しない
+/// ときは枠を warning の色にし、署名者の上に `WrongSecretNotice` の囲みを置く。
+fn pending_card(
+  language: Language,
+  signer: SignerName,
+  now: Int,
+  pending: PendingRow,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let #(card_class, ring_rows) = case pending.secret_mismatch {
+    True -> #(
+      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-warning/55",
+      "sm:row-span-3",
+    )
+    False -> #(
+      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-primary/22",
+      "sm:row-span-2",
+    )
+  }
+  let mark = case fingerprint.from_pubkey(pending.client) {
+    Ok(mark) -> fingerprint.svg(mark, fingerprint.Colored, "size-6")
+    Error(Nil) -> element.none()
+  }
+  let notice = case pending.secret_mismatch {
+    True ->
+      html.div([attribute.class("col-span-2 sm:col-span-1 sm:col-start-2")], [
+        view.alert(view.Warning, [html.text(text(i18n.WrongSecretNotice))]),
+      ])
+    False -> element.none()
+  }
+  html.article([attribute.class(card_class)], [
+    countdown_ring(language, pending.expires_in_seconds, ring_rows),
+    html.div(
+      [
+        attribute.class("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5"),
+      ],
+      [
+        html.div([attribute.class("flex min-w-0 items-center gap-2")], [
+          mark,
+          view.truncated_id(language, pending.client, text(i18n.CopyClient)),
+        ]),
+        secret_badge(language, pending.secret_mismatch),
+      ],
+    ),
+    notice,
+    html.div([attribute.class("col-span-2 sm:col-span-1 sm:col-start-2")], [
+      view.detail_list([
+        #(text(i18n.Signer), html.dd([], [signer_value(signer)])),
+        #(
+          text(i18n.ExpiresIn),
+          expiry_value(language, now, pending.expires_in_seconds),
+        ),
+      ]),
+    ]),
+    html.div(
+      [
+        attribute.class(
+          "col-span-2 flex flex-col gap-2 border-t border-base-300 pt-3",
+        ),
+      ],
+      [
+        html.p([attribute.class("text-xs font-semibold text-muted")], [
+          html.text(text(i18n.Permissions)),
+        ]),
+        permission_view.chips(language, pending.perms),
+      ],
+    ),
+    html.div(
+      [
+        attribute.class(
+          "col-span-2 grid grid-cols-2 gap-2 *:grid sm:flex sm:justify-end",
+        ),
+      ],
+      decision_forms(language, pending.token, pending.secret_mismatch),
+    ),
+  ])
+}
+
+/// 残り時間の円。600 秒（承認待ちの寿命）を満たんとし、`pathLength="600"` の円に `stroke-dasharray` で
+/// 残りの秒だけの弧を描き、中央に「分:秒」を出す。60 秒未満は弧と数字を warning の色にする。円は飾りにし、
+/// 残り時間は囲みの `aria-label` で読み上げる。`rows` は広い画面で円が跨ぐ行のクラスである。
+fn countdown_ring(
+  language: Language,
+  seconds: Int,
+  rows: String,
+) -> Element(msg) {
+  let remaining = int.clamp(seconds, 0, engine.pending_ttl_seconds)
+  let clock = view.countdown(remaining)
+  let #(arc_class, clock_class) = case remaining < 60 {
+    True -> #(
+      "fill-none stroke-6 stroke-warning",
+      "absolute inset-0 grid place-items-center font-mono text-sm font-bold tabular-nums text-warning",
+    )
+    False -> #(
+      "fill-none stroke-6 stroke-primary",
+      "absolute inset-0 grid place-items-center font-mono text-sm font-bold tabular-nums",
+    )
+  }
+  let circle = fn(attributes) {
+    svg.circle([
+      attribute.attribute("cx", "32"),
+      attribute.attribute("cy", "32"),
+      attribute.attribute("r", "28"),
+      ..attributes
+    ])
+  }
+  html.div(
+    [
+      attribute.role("img"),
+      attribute.aria_label(i18n.text(language, i18n.ExpiresIn) <> " " <> clock),
+      attribute.class("relative size-14 sm:size-17"),
+      attribute.class(rows),
+    ],
+    [
+      svg.svg(
+        [
+          attribute.aria_hidden(True),
+          attribute.attribute("viewBox", "0 0 64 64"),
+          attribute.class("size-full -rotate-90"),
+        ],
+        [
+          circle([attribute.class("fill-none stroke-6 stroke-base-300")]),
+          circle([
+            attribute.attribute(
+              "pathLength",
+              int.to_string(engine.pending_ttl_seconds),
+            ),
+            attribute.attribute(
+              "stroke-dasharray",
+              int.to_string(remaining)
+                <> " "
+                <> int.to_string(engine.pending_ttl_seconds),
+            ),
+            attribute.attribute("stroke-linecap", "round"),
+            attribute.class(arc_class),
+          ]),
+        ],
+      ),
+      html.span([attribute.aria_hidden(True), attribute.class(clock_class)], [
+        html.text(clock),
+      ]),
+    ],
+  )
+}
+
+/// 失効までの値。「8:12（12:12:43 に失効）」の形で、残りの「分:秒」に続けて失効の時刻を `view.time_of_day`
+/// で出す。60 秒未満は先頭に warning の色の三角を置く。
+fn expiry_value(language: Language, now: Int, seconds: Int) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let mark = case seconds < 60 {
+    True ->
+      html.span(
+        [attribute.class("mr-1 inline-block align-[-3px] text-warning")],
+        [
+          view.warning_triangle_icon(),
+        ],
+      )
+    False -> element.none()
+  }
+  html.dd([], [
+    mark,
+    html.text(text(i18n.ExpiryBeforeTime(view.countdown(seconds)))),
+    view.time_of_day(language, now + seconds),
+    html.text(text(i18n.ExpiryAfterTime)),
+  ])
 }
 
 /// 承認ページ。クライアントが `auth_url` で開く、接続要求 1 件の確認画面。テーマか言語を
@@ -1098,7 +1305,7 @@ fn relay_action_icon(action: RelayAction) -> Element(msg) {
 }
 
 /// 承認待ち 1 件の、クライアント・secret の提示の区別・失効までの時間・署名者・権限と、
-/// 承認・拒否ボタン。ダッシュボードの行と承認ページが使う。
+/// 承認・拒否ボタン。承認ページが使う。
 fn pending_content(
   language: Language,
   signer: SignerName,
@@ -1124,7 +1331,7 @@ fn pending_content(
         html.dd([], [permission_view.chips(language, pending.perms)]),
       ),
     ]),
-    button_row(decision_forms(language, pending.token)),
+    button_row(decision_forms(language, pending.token, pending.secret_mismatch)),
   ]
 }
 
@@ -1512,25 +1719,28 @@ fn deny_path(token: String) -> String {
   view.segments_path([deny_segment, token])
 }
 
-/// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送る。承認が
-/// この画面の主な操作で、拒否してもクライアントは接続し直せるので地味なボタンにする。
-fn decision_forms(language: Language, token: String) -> List(Element(msg)) {
+/// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送り、承認、拒否の順に並べる。
+/// secret が一致しないときは拒否を塗りのボタンにし、承認を warning の枠の「それでも承認する」にする。
+/// 一致しないとき以外は承認が主な操作で、拒否してもクライアントは接続し直せるので拒否を地味なボタンにする。
+fn decision_forms(
+  language: Language,
+  token: String,
+  secret_mismatch: Bool,
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
+  let #(approve, approve_kind, deny_kind) = case secret_mismatch {
+    True -> #(i18n.ApproveAnyway, view.WarningOutlineButton, view.PrimaryButton)
+    False -> #(i18n.Approve, view.PrimaryButton, view.GhostButton)
+  }
   [
     view.post_form(
       approve_path(token),
       [],
-      text(i18n.Approve),
-      view.PrimaryButton,
+      text(approve),
+      approve_kind,
       view.InRow,
     ),
-    view.post_form(
-      deny_path(token),
-      [],
-      text(i18n.Deny),
-      view.GhostButton,
-      view.InRow,
-    ),
+    view.post_form(deny_path(token), [], text(i18n.Deny), deny_kind, view.InRow),
   ]
 }
 

@@ -146,15 +146,19 @@ pub fn row_list_frames_the_rows_test() {
     <> "<li class=\"list-row flex flex-col gap-3\">b</li></ul>"
 }
 
-/// 見出しや一覧を持つ囲みは、`id` を付けた `section` に、トーンの薄い塗りと縦に積むクラスを付け、
-/// アイコンを足さない。
-pub fn alert_panel_stacks_its_content_test() {
-  let html =
-    element.to_string(
-      view.alert_panel("pending", view.Warning, [html.text("content")]),
-    )
+/// 全幅の帯は、`id` を付けた `section` に、`primary` を混ぜた地と枠、縦に積むクラスを付ける。
+pub fn band_stacks_its_content_test() {
+  let html = element.to_string(view.band("pending", [html.text("content")]))
   assert html
-    == "<section class=\"alert alert-soft alert-warning flex flex-col items-stretch gap-4 text-base-content\" id=\"pending\">content</section>"
+    == "<section class=\"flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6\" id=\"pending\">content</section>"
+}
+
+/// 残り時間は「分:秒」にし、秒を 2 桁に 0 埋めし、負の値を 0 とみなす。
+pub fn countdown_pads_seconds_test() {
+  assert view.countdown(492) == "8:12"
+  assert view.countdown(45) == "0:45"
+  assert view.countdown(600) == "10:00"
+  assert view.countdown(-3) == "0:00"
 }
 
 /// コピーのボタンは、アイコンだけを見せ、語を `aria-label` と `title` に置き、`copy` の処理を指す。

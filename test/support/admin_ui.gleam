@@ -63,7 +63,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
     dashboard.PendingRow(
       token: "tok",
       signer: "0123",
-      client: "4567",
+      client: "4567456745674567456745674567456745674567456745674567456745674567",
       expires_in_seconds: 540,
       secret_mismatch: False,
       perms: "sign_event:1",
@@ -797,14 +797,7 @@ pub fn components(language: i18n.Language) -> List(String) {
       [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
       fn(tone) { element.to_string(view.tone_icon(tone)) },
     ),
-    list.map(
-      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
-      fn(tone) {
-        element.to_string(
-          view.alert_panel("anchor", tone, [view.hint("content")]),
-        )
-      },
-    ),
+    [element.to_string(view.band("anchor", [view.hint("content")]))],
     list.map(
       [
         view.logo_icon(),
