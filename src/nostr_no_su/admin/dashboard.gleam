@@ -9,10 +9,10 @@
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
 //// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/account_pages`、`admin/connect_pages`、`admin/session_pages`）が同じ定義を見るようここに置く。
-//// ダッシュボードのダイアログに出すリレーのフォームの中身（`new_relay_form`、`relay_action_form`）と、
-//// ダイアログと操作のページの両方に出すフォームの中身（アカウントの追加の `import_form`、`generate_form`、
-//// アカウントの `account_action_form`、`unreadable_delete_form`、`label_fieldset`、セッションの
+//// `admin/connect_pages`、`admin/session_pages`）が同じ定義を見るようここに置く。
+//// ダッシュボードのダイアログにだけ出すリレーとアカウントのフォームの中身（`new_relay_form`、
+//// `relay_action_form`、`import_form`、`generate_form`、`account_action_form`、
+//// `unreadable_delete_form`、`label_fieldset`）と、ダイアログと操作のページの両方に出すフォームの中身（セッションの
 //// `permissions_form`、クライアントの接続の `connect_content`、`connect_form`）もここに置く。
 //// `label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で送信の置き場所を受け、ページは
 //// `view.InForm` を、ダイアログは `view.dialog` が渡す `view.InDialog` を渡す。
@@ -35,7 +35,9 @@ import lustre/element/svg
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
+import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -200,6 +202,39 @@ pub type OpenDialog {
     roles: Option(Roles),
     error: i18n.Reason,
   )
+  /// アカウントの追加（登録のタブ）。`label` は欄に戻すラベル、`error` は先頭に出す理由。
+  AddAccountOpen(label: String, error: i18n.Reason)
+  /// 生成した鍵。`label` は欄に戻すラベル、`problem` は登録に失敗して開き直す理由。
+  GeneratedKeyOpen(
+    npub: String,
+    nsec: String,
+    label: String,
+    problem: Option(GeneratedKeyProblem),
+  )
+  /// アカウント `signer` への操作。`label` はラベルの編集の欄に戻す値で、ほかの操作では `None`。
+  AccountActionOpen(
+    signer: String,
+    action: AccountAction,
+    label: Option(String),
+    error: i18n.Reason,
+  )
+  /// 管理パスワードを照合した後の、`row` の秘密鍵 `nsec`。
+  PrivateKeyOpen(row: AccountRow, nsec: String)
+  /// 読み込めなかった行 `pubkey` の削除。
+  UnreadableDeleteOpen(pubkey: String, error: i18n.Reason)
+}
+
+/// 生成した鍵の登録に失敗して生成した鍵のダイアログを開き直す理由。
+pub type GeneratedKeyProblem {
+  /// ラベルが規則に反した（400）。
+  InvalidLabel(i18n.Message)
+  /// バンカーが登録を反映しなかった（409）。画面に出す理由を持つ（登録済みは訳した
+  /// 文言、ストアの失敗は英語のまま届いた理由）。
+  NotApplied(i18n.Reason)
+  /// バンカーが今は登録を受け付けられない（503）。英語のまま届いた理由を持つ。
+  NotAccepted(String)
+  /// 登録が反映されたか分からない（202）。確かめられなかった原因の文言を持つ。
+  NotConfirmed(i18n.Message)
 }
 
 /// 「はじめに」の帯の段 1 つの見せ方。
@@ -218,20 +253,17 @@ pub type AccountAction {
   RotateSecret
   DeleteAccount
   RevealPrivateKey
-  ShowConnectionQr
 }
 
 /// 操作の一覧。セグメントとの対応をここから引く。
 const account_actions = [
-  ShowConnectionQr,
   EditLabel,
   RevealPrivateKey,
   RotateSecret,
   DeleteAccount,
 ]
 
-/// アカウントの行の畳みにダイアログで並べる操作。この順に左から並べ、削除だけ右端に離して
-/// 置く。操作のページの下のほかの操作へのリンクも、この順の後に削除を置く。
+/// アカウントの行の畳みにダイアログで並べる操作。この順に左から並べ、削除だけ右端に離して置く。
 const detail_actions = [EditLabel, RevealPrivateKey, RotateSecret]
 
 /// リレー 1 件に対する操作。
@@ -257,9 +289,6 @@ pub const approve_segment = "approve"
 
 /// 拒否のパスの先頭のセグメント。
 pub const deny_segment = "deny"
-
-/// アカウントの登録画面のパスセグメント。
-pub const new_account_segments = [accounts_segment, "new"]
 
 /// アカウントの読み直しの POST 先のパスセグメント。
 pub const reload_accounts_segments = [accounts_segment, "reload"]
@@ -349,9 +378,8 @@ pub const nostrconnect_wait_seconds = 15
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
 
-/// 承認待ちの節のアンカー。概要の帯の項目の `href="#…"` と節の `id` が同じ値を見る。接続 QR
-/// コードのページからのリンクも同じ値を見る。
-pub const pending_anchor = "pending"
+/// 承認待ちの節のアンカー。概要の帯の項目の `href="#…"` と節の `id` が同じ値を見る。
+const pending_anchor = "pending"
 
 /// 「はじめに」の帯のアンカー。
 const getting_started_anchor = "getting-started"
@@ -395,23 +423,48 @@ pub fn render(
 }
 
 /// `render` と同じダッシュボードに `dialog` を開いた状態で描く。自動の読み込み直しはしない。
-/// 追加のダイアログは一覧によらず描く。操作のダイアログは、リレーの一覧を得られなければその理由を、
-/// 操作するリレーが一覧に無ければ `RelayNotFound` を `Error` で返す。
+/// 追加、生成した鍵、秘密鍵のダイアログは一覧によらず描く。行の操作のダイアログは、その行の一覧（リレー、
+/// アカウント、読み込めなかった行）を得られなければその理由を、操作する行が一覧に無ければ `RelayNotFound` か
+/// `AccountNotFound` を `Error` で返す。
 pub fn render_open(
   language: Language,
   theme: view.Theme,
   snapshot: Snapshot,
   dialog: OpenDialog,
 ) -> Result(String, i18n.Reason) {
-  case snapshot.relays, dialog {
-    _, NewRelayOpen(..) ->
-      Ok(render_page(language, theme, snapshot, Some(dialog)))
-    Error(reason), RelayActionOpen(..) -> Error(reason)
-    Ok(rows), RelayActionOpen(id:, ..) ->
-      case list.any(rows, fn(row) { row.id == id }) {
-        True -> Ok(render_page(language, theme, snapshot, Some(dialog)))
-        False -> Error(i18n.Translated(i18n.RelayNotFound))
-      }
+  case dialog {
+    NewRelayOpen(..)
+    | AddAccountOpen(..)
+    | GeneratedKeyOpen(..)
+    | PrivateKeyOpen(..) -> Ok(Nil)
+    RelayActionOpen(id:, ..) ->
+      listed_row(snapshot.relays, fn(row) { row.id == id }, i18n.RelayNotFound)
+    AccountActionOpen(signer:, ..) ->
+      listed_row(
+        snapshot.accounts,
+        fn(row) { row.signer == signer },
+        i18n.AccountNotFound,
+      )
+    UnreadableDeleteOpen(pubkey:, ..) ->
+      listed_row(
+        snapshot.skipped,
+        fn(row) { row.pubkey == pubkey },
+        i18n.AccountNotFound,
+      )
+  }
+  |> result.map(fn(_) { render_page(language, theme, snapshot, Some(dialog)) })
+}
+
+/// 開く行が一覧にあるか。一覧を得られなければその理由を、無ければ `missing` を訳す理由で返す。
+fn listed_row(
+  rows: Result(List(a), i18n.Reason),
+  matches: fn(a) -> Bool,
+  missing: i18n.Message,
+) -> Result(Nil, i18n.Reason) {
+  use rows <- result.try(rows)
+  case list.any(rows, matches) {
+    True -> Ok(Nil)
+    False -> Error(i18n.Translated(missing))
   }
 }
 
@@ -460,6 +513,8 @@ fn render_page(
               snapshot.accounts,
               snapshot.skipped,
               snapshot.sessions,
+              snapshot.relays,
+              dialog,
             ),
             sessions_section(
               language,
@@ -479,6 +534,7 @@ fn render_page(
           ]),
         ],
       ),
+      result_dialog(language, dialog),
     ],
   )
 }
@@ -1051,16 +1107,19 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」のダイアログを開くボタンと
-/// 登録画面への予備のリンクを置き、行の一覧の後に読み込めなかった行の枠を置く。一覧を得られないときは、一覧の
-/// 代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンと予備のリンクも
-/// 出さない。
+/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」のダイアログを開く
+/// ボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加のダイアログを置く。一覧を得られない
+/// ときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンも
+/// 出さない。追加のダイアログは一覧の有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。
+/// `relays` は接続 QR コードのダイアログに渡す。
 fn accounts_section(
   language: Language,
   shared: Option(String),
   accounts: Result(List(AccountRow), i18n.Reason),
   skipped: Result(List(SkippedRow), i18n.Reason),
   sessions: Result(List(SessionRow), i18n.Reason),
+  relays: Result(List(RelayRow), i18n.Reason),
+  dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(accounts_anchor, [
@@ -1072,7 +1131,7 @@ fn accounts_section(
       view.info_hint(language, accounts_anchor <> "-hint", [
         html.text(text(i18n.AccountsDescription)),
       ]),
-      add_account_actions(language),
+      [add_account_button(language)],
       [reload_form(language)],
     ),
     listed_body(
@@ -1081,49 +1140,72 @@ fn accounts_section(
       accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts), [
-        view.icon_button_link(
-          view.segments_path(new_account_segments),
-          view.plus_icon(),
-          text(i18n.AddAccount),
+        view.dialog_trigger(
+          add_account_dialog_id(),
+          view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
           view.OutlineButton,
         ),
       ]),
       fn(rows) {
-        view.row_list(list.map(rows, account_item(language, sessions, _)))
+        view.row_list(
+          list.map(rows, account_item(language, sessions, relays, dialog, _)),
+        )
       },
     ),
-    unreadable_accounts(language, skipped),
+    unreadable_accounts(language, skipped, dialog),
+    add_account_dialog(language, dialog),
   ])
 }
 
-/// アカウントの節の見出しの、一覧を得たときに出す操作。「アカウントを追加」のダイアログを開くボタン、そのダイアログ
-/// （「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）、登録画面への予備のリンクの順に並べる。
-fn add_account_actions(language: Language) -> List(Element(msg)) {
+/// アカウントの節の見出しの、一覧を得たときに出す「アカウントを追加」のダイアログを開くボタン。
+fn add_account_button(language: Language) -> Element(msg) {
+  view.dialog_trigger(
+    add_account_dialog_id(),
+    view.IconTextTrigger(view.plus_icon(), i18n.text(language, i18n.AddAccount)),
+    view.PrimaryButton,
+  )
+}
+
+/// 「アカウントを追加」のダイアログ（「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）。`dialog` が
+/// `AddAccountOpen` なら開いた状態で描き、先頭に理由を出して、登録のタブのラベルの欄に送られた値を入れる。
+fn add_account_dialog(
+  language: Language,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
   let text = i18n.text(language, _)
   let id = add_account_dialog_id()
-  list.append(
-    view.dialog_button(
-      language,
-      id,
-      view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
-      view.PrimaryButton,
-      text(i18n.AddAccount),
-      fn(placement) {
-        [
-          view.radio_tabs(id <> "-tab", [
-            #(text(i18n.ImportPrivateKey), import_form(language, "", placement)),
-            #(text(i18n.GenerateNewKey), generate_form(language, placement)),
-          ]),
-        ]
-      },
-    ),
-    [view.fallback_link(language, view.segments_path(new_account_segments))],
+  let #(opening, label, error) = case dialog {
+    Some(AddAccountOpen(label:, error:)) -> #(
+      view.OpenedByResponse,
+      label,
+      Some(error),
+    )
+    _ -> #(view.OpensOnTrigger, "", None)
+  }
+  view.dialog(
+    language,
+    id,
+    text(i18n.AddAccount),
+    fn(placement) {
+      [
+        view.error_message(language, Some(i18n.CouldNotRegister), error),
+        view.radio_tabs(id <> "-tab", [
+          #(
+            text(i18n.ImportPrivateKey),
+            import_form(language, label, placement),
+          ),
+          #(text(i18n.GenerateNewKey), generate_form(language, placement)),
+        ]),
+      ]
+    },
+    i18n.Cancel,
+    opening,
   )
 }
 
 /// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を送る。nsec の欄の
 /// 説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の `aria-describedby` から指す。`label` は
-/// ラベルの欄に入れる値。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
+/// ラベルの欄に入れる値。アカウントの追加のダイアログが使う。
 pub fn import_form(
   language: Language,
   label: String,
@@ -1151,7 +1233,7 @@ pub fn import_form(
 }
 
 /// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、送信のボタンは枠の
-/// ボタンにする。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
+/// ボタンにする。アカウントの追加のダイアログが使う。
 pub fn generate_form(
   language: Language,
   placement: view.Placement,
@@ -1169,15 +1251,15 @@ pub fn generate_form(
   ]
 }
 
-/// nsec の欄の補足の `id`。nsec の欄は登録のフォームに 1 つだけで、登録のフォームは登録画面とダッシュボードの
-/// 追加のダイアログに 1 つずつ（同じページに 2 つ現れない）なので固定の値にする。
+/// nsec の欄の補足の `id`。nsec の欄はアカウントの追加のダイアログに 1 つだけなので固定の値にする。
 const nsec_hint_id = "nsec-hint"
 
-/// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を
-/// 得られないとき（読み込み中、応答なし、締め切り超過）も描かない。
+/// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を得られないとき
+/// （読み込み中、応答なし、締め切り超過）も描かない。`dialog` は行の削除のダイアログに渡す。
 fn unreadable_accounts(
   language: Language,
   skipped: Result(List(SkippedRow), i18n.Reason),
+  dialog: Option(OpenDialog),
 ) -> Element(msg) {
   case skipped {
     Ok([_, ..] as rows) ->
@@ -1186,16 +1268,19 @@ fn unreadable_accounts(
         i18n.text(language, i18n.UnreadableAccounts),
         list.length(rows),
         i18n.text(language, i18n.UnreadableAccountsWarning),
-        list.map(rows, skipped_item(language, _)),
+        list.map(rows, skipped_item(language, _, dialog)),
       )
     Ok([]) | Error(_) -> element.none()
   }
 }
 
-/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開く
-/// ボタンと、削除の確認のページへの予備のリンクを置く。`pubkey` 列が形式不正の行は指紋も
-/// 識別も削除のボタンも出さず、理由の 1 文に削除できない旨を続けて出す。
-fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
+/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを置く。
+/// `pubkey` 列が形式不正の行は指紋も識別も削除のボタンも出さず、理由の 1 文に削除できない旨を続けて出す。
+fn skipped_item(
+  language: Language,
+  row: SkippedRow,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
   case row.reason {
     vault.MalformedPubkey ->
       view.list_row(view.InlineRow, [
@@ -1218,14 +1303,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
             ]),
           ]),
         ]),
-        button_row(
-          list.append(unreadable_dialog(language, row), [
-            view.fallback_link(
-              language,
-              account_action_path(row.pubkey, DeleteAccount),
-            ),
-          ]),
-        ),
+        button_row(unreadable_dialog(language, row, dialog)),
       ])
   }
 }
@@ -1312,13 +1390,20 @@ fn shared_failure_alert(
   }
 }
 
-/// アカウント 1 件。上の段にアイコン（`account_icon`）、識別、セッションの件数、「接続 QR コード」のボタンを並べ、下に
-/// 「接続 URI と操作」の畳みを置く。幅が足りなければ件数とボタンを次の行へ回す。
+/// アカウント 1 件。上の段にアイコン（`account_icon`）、識別、セッションの件数、「接続 QR コード」のダイアログを
+/// 開くボタンを並べ、下に「接続 URI と操作」の畳みを置く。幅が足りなければ件数とボタンを次の行へ回す。畳みの
+/// 後に、行の操作と接続 QR コードのダイアログを置く（閉じた畳みの中では開いた状態で描いても見えない）。
 fn account_item(
   language: Language,
   sessions: Result(List(SessionRow), i18n.Reason),
+  relays: Result(List(RelayRow), i18n.Reason),
+  dialog: Option(OpenDialog),
   account: AccountRow,
 ) -> Element(msg) {
+  let action_dialogs =
+    list.map(list.append(detail_actions, [DeleteAccount]), fn(action) {
+      account_dialog(language, account, action, dialog)
+    })
   view.list_row(view.StackedRow, [
     html.div([attribute.class("flex flex-wrap items-center gap-x-4 gap-y-2")], [
       html.div(
@@ -1335,15 +1420,20 @@ fn account_item(
       ),
       html.div([attribute.class("ml-auto flex shrink-0 items-center gap-3")], [
         session_count(language, sessions, account.signer),
-        view.compact_icon_button_link(
-          account_action_path(account.signer, ShowConnectionQr),
-          account_action_icon(ShowConnectionQr),
-          i18n.text(language, account_action_row_title(ShowConnectionQr)),
-          account_action_link_kind(ShowConnectionQr),
+        view.dialog_trigger(
+          connection_qr_dialog_id(account.signer),
+          view.CompactTrigger(
+            view.qr_code_icon(),
+            i18n.text(language, i18n.ConnectionQr),
+          ),
+          view.PrimaryButton,
         ),
       ]),
     ]),
     account_details(language, account),
+    ..list.append(action_dialogs, [
+      connection_qr_dialog(language, account, relays),
+    ])
   ])
 }
 
@@ -1390,12 +1480,12 @@ fn session_count(
   }
 }
 
-/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI を、説明を見出しの横の ⓘ で開くコピー欄で、16 進の公開鍵を
-/// 説明なしでコピー欄に並べ、その下に、`detail_actions` の操作のダイアログを開くボタン、ラベルの編集の
-/// ページへの予備のリンク、右端に離した削除のダイアログを開くボタンを置く。
+/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI を、説明を見出しの横の ⓘ で開くコピー欄で、
+/// 16 進の公開鍵を説明なしでコピー欄に並べ、その下に、`detail_actions` の操作のダイアログを開くボタンと、
+/// 右端に離した削除のダイアログを開くボタンを置く。ダイアログは畳みの外（`account_item`）に置く。
 fn account_details(language: Language, account: AccountRow) -> Element(msg) {
   let text = i18n.text(language, _)
-  let dialog = account_dialog(language, account, _)
+  let trigger = account_action_trigger(language, account.signer, _)
   view.details_panel(text(i18n.ConnectionUrisAndActions), [
     html.div([attribute.class("flex flex-col gap-3")], [
       view.hinted_copyable_field(
@@ -1415,15 +1505,8 @@ fn account_details(language: Language, account: AccountRow) -> Element(msg) {
       view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
       html.div(
         [attribute.class("flex flex-wrap items-center gap-2")],
-        list.flatten([
-          list.flat_map(detail_actions, dialog),
-          [
-            view.fallback_link(
-              language,
-              account_action_path(account.signer, EditLabel),
-            ),
-            html.div([attribute.class("ml-auto")], dialog(DeleteAccount)),
-          ],
+        list.append(list.map(detail_actions, trigger), [
+          html.div([attribute.class("ml-auto")], [trigger(DeleteAccount)]),
         ]),
       ),
     ]),
@@ -1435,93 +1518,332 @@ fn account_dialog_id(signer: String, action: AccountAction) -> String {
   view.dialog_id(["account", signer, account_action_segment(action)])
 }
 
-/// アカウント 1 件への操作のダイアログを開くボタンと、そのダイアログ。ボタンは行の操作の語と種類、
-/// 題は操作の見出しで、中にラベルと省略した npub、`account_action_form` の説明とフォームを並べる。
-/// ラベルの欄の補足の `id` は、ダイアログの `id` に `-label-hint` を付けて行ごとに変える。
+/// アカウント 1 件への操作のダイアログを開くボタン。語と種類は操作から決める。
+fn account_action_trigger(
+  language: Language,
+  signer: String,
+  action: AccountAction,
+) -> Element(msg) {
+  view.dialog_trigger(
+    account_dialog_id(signer, action),
+    view.IconTextTrigger(
+      account_action_icon(action),
+      i18n.text(language, account_action_row_title(action)),
+    ),
+    account_action_button_kind(action),
+  )
+}
+
+/// アカウント 1 件への操作のダイアログ。題は操作の見出しで、中にラベルと省略した npub、`account_action_form`
+/// の説明とフォームを並べる。ラベルの欄の補足の `id` は、ダイアログの `id` に `-label-hint` を付けて行ごとに
+/// 変える。`dialog` がこの行と操作の `AccountActionOpen` なら開いた状態で描き、要約の後に理由を出して、
+/// ラベルの欄に送られた値を入れる。
 fn account_dialog(
   language: Language,
   account: AccountRow,
   action: AccountAction,
-) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
   let id = account_dialog_id(account.signer, action)
-  view.dialog_button(
+  let #(opening, label, error) = case dialog {
+    Some(AccountActionOpen(signer:, action: opened, label:, error:))
+      if signer == account.signer && opened == action
+    -> #(view.OpenedByResponse, label, Some(error))
+    _ -> #(view.OpensOnTrigger, None, None)
+  }
+  view.dialog(
     language,
     id,
-    view.IconTextTrigger(
-      account_action_icon(action),
-      text(account_action_row_title(action)),
-    ),
-    account_action_link_kind(action),
-    text(account_action_title(action)),
+    i18n.text(language, account_action_title(action)),
     fn(placement) {
       [
         view.identity(language, view.PlainIdentity, account.label, account.npub),
+        view.error_message(language, action_lead(action), error),
         ..account_action_form(
           language,
           account,
           action,
-          None,
+          label,
           id <> "-label-hint",
           placement,
         )
       ]
     },
+    i18n.Cancel,
+    opening,
   )
 }
 
 /// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の error の
 /// 文字色、題はアカウントの削除の見出しで、中にラベルと省略した npub、`unreadable_delete_form` を並べる。
 /// `id` の節の語をアカウントの行と分け、同じ pubkey の行があってもダイアログが重ならないようにする。
+/// `dialog` がこの行の `UnreadableDeleteOpen` なら開いた状態で描き、要約の後に理由を出す。
 fn unreadable_dialog(
   language: Language,
   row: SkippedRow,
+  dialog: Option(OpenDialog),
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  view.dialog_button(
+  let id = view.dialog_id(["unreadable", row.pubkey, "delete"])
+  let #(opening, error) = case dialog {
+    Some(UnreadableDeleteOpen(pubkey:, error:)) if pubkey == row.pubkey -> #(
+      view.OpenedByResponse,
+      Some(error),
+    )
+    _ -> #(view.OpensOnTrigger, None)
+  }
+  [
+    view.dialog_trigger(
+      id,
+      view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
+      view.DangerGhostButton,
+    ),
+    view.dialog(
+      language,
+      id,
+      text(account_action_title(DeleteAccount)),
+      fn(placement) {
+        [
+          view.identity(language, view.PlainIdentity, row.label, row.npub),
+          view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
+          ..unreadable_delete_form(language, row, placement)
+        ]
+      },
+      i18n.Cancel,
+      opening,
+    ),
+  ]
+}
+
+/// 操作のダイアログで、バンカーから英語のまま届いた理由の前に置く前置き。秘密鍵の表示の
+/// フォームに出る理由は管理パスワードの誤り（訳す理由）だけなので、前置きを持たない。
+fn action_lead(action: AccountAction) -> Option(i18n.Lead) {
+  case action {
+    EditLabel -> Some(i18n.CouldNotSaveLabel)
+    RotateSecret -> Some(i18n.CouldNotRotateSecret)
+    DeleteAccount -> Some(i18n.CouldNotDeleteAccount)
+    RevealPrivateKey -> None
+  }
+}
+
+/// 接続 QR コードのダイアログの `id`（`dialog-account-<署名者>-qr`）。
+fn connection_qr_dialog_id(signer: String) -> String {
+  view.dialog_id(["account", signer, "qr"])
+}
+
+/// 接続 QR コードのダイアログ。アカウントの識別、バンカーに使うリレーが無いときの警告、secret 入りの URI と
+/// 要承認の URI のタブ（`uri_tab`。タブの `name` はダイアログの `id` に `-tab` を付ける）、カメラ用のコードの
+/// 貼り方、この URI が使うバンカーのリレーの URL の順に並べる。符号化できない URI はその位置に理由を出し、
+/// コピー欄は残す。
+fn connection_qr_dialog(
+  language: Language,
+  account: AccountRow,
+  relays: Result(List(RelayRow), i18n.Reason),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let id = connection_qr_dialog_id(account.signer)
+  view.dialog(
     language,
-    view.dialog_id(["unreadable", row.pubkey, "delete"]),
-    view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
-    view.DangerGhostButton,
-    text(account_action_title(DeleteAccount)),
+    id,
+    text(i18n.ConnectionQr),
     fn(placement) {
       [
-        view.identity(language, view.PlainIdentity, row.label, row.npub),
-        ..unreadable_delete_form(language, row, placement)
+        view.identity(language, view.PlainIdentity, account.label, account.npub),
+        no_bunker_relay_alert(language, relays),
+        view.radio_tabs(id <> "-tab", [
+          uri_tab(
+            language,
+            i18n.ConnectionUri,
+            account.uri,
+            view.alert(view.Warning, [
+              html.text(text(i18n.ConnectionQrSecretWarning)),
+            ]),
+          ),
+          uri_tab(
+            language,
+            i18n.ConnectionUriForApproval,
+            account.auth_uri,
+            approval_note(language),
+          ),
+        ]),
+        html.p([], [html.text(text(i18n.CameraCopySteps))]),
+        view.hint(text(i18n.CameraCopyNote)),
+        html.h3([attribute.class("font-bold")], [
+          html.text(text(i18n.BunkerRelaysForUri)),
+        ]),
+        view.hint(text(i18n.BunkerRelaysHint)),
+        bunker_relay_list(language, relays),
+        ..view.dialog_actions(placement, [])
       ]
     },
+    i18n.Close,
+    view.OpensOnTrigger,
   )
 }
 
-/// アカウント 1 件への操作のページの下に置く、同じアカウントのほかの操作のページへのリンクの並び。
-/// `detail_actions` と削除の順に、`current` を除いて並べる。ダッシュボードの予備のリンク（ラベルの
-/// 編集のページ）から、ほかの操作のページへ辿るための導線である。
-pub fn other_action_links(
-  language: Language,
-  signer: String,
-  current: AccountAction,
-) -> Element(msg) {
-  html.div(
-    [attribute.class("flex flex-wrap gap-2")],
-    list.append(detail_actions, [DeleteAccount])
-      |> list.filter(fn(action) { action != current })
-      |> list.map(account_action_link(language, signer, _)),
-  )
+/// 要承認のタブの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
+/// できない旨を伝える。
+fn approval_note(language: Language) -> Element(msg) {
+  html.p([], [html.text(i18n.text(language, i18n.ApprovalUriNeedsApproval))])
 }
 
-/// アカウント 1 件への操作 1 つのページへのリンク。アイコン＋語のボタンで、語と種類は操作から決める。
-/// 操作のページの下のほかの操作へのリンク（`other_action_links`）に使う。
-fn account_action_link(
+/// 接続 URI 1 件のタブの語と中身の組（`view.radio_tabs` に渡す）。中身は `note`、端末の
+/// カメラ用のコピー用 QR、コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR
+/// の畳みの順に並べる。
+fn uri_tab(
   language: Language,
-  signer: String,
-  action: AccountAction,
+  title: i18n.Message,
+  uri: String,
+  note: Element(msg),
+) -> #(String, List(Element(msg))) {
+  let text = i18n.text(language, title)
+  #(text, [
+    note,
+    qr_or_notice(language, text, account.camera_copy_text(uri)),
+    view.copyable_field(language, text, uri),
+    view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
+      qr_or_notice(
+        language,
+        text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
+        uri,
+      ),
+    ]),
+  ])
+}
+
+/// この URI が使うバンカーのリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに理由を出す。
+/// `Unused` でない `bunker` の用途を持つ行だけを出す。
+fn bunker_relay_list(
+  language: Language,
+  relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
-  view.icon_button_link(
-    account_action_path(signer, action),
-    account_action_icon(action),
-    i18n.text(language, account_action_row_title(action)),
-    account_action_link_kind(action),
-  )
+  case relays {
+    Ok(rows) ->
+      case list.filter(rows, fn(row) { row.bunker != Unused }) {
+        [] -> element.none()
+        bunker_rows ->
+          view.code_list(list.map(bunker_rows, fn(row) { row.url }))
+      }
+    Error(reason) ->
+      view.alert(
+        view.Neutral,
+        view.reason_content(language, Some(i18n.CouldNotListRelays), reason),
+      )
+  }
+}
+
+/// QR コードに載せる文字列 1 つ。完全な `bunker://` URI と、カメラ用のコピー用の文字列のどちらも受ける。符号化できなければ理由を出す。
+fn qr_or_notice(
+  language: Language,
+  label: String,
+  text: String,
+) -> Element(msg) {
+  case qr.svg(label, text) {
+    Ok(svg) -> svg
+    Error(Nil) ->
+      view.alert(view.Neutral, [
+        html.text(i18n.text(language, i18n.CouldNotEncodeQr)),
+      ])
+  }
+}
+
+/// POST の応答で開く、ダッシュボードに入口の無いダイアログ（生成した鍵、秘密鍵）。`id` は `dialog-result`
+/// で、Esc で閉じず、閉じるとダッシュボード（`/`）へ戻る。
+fn result_dialog(
+  language: Language,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let id = view.dialog_id(["result"])
+  case dialog {
+    Some(GeneratedKeyOpen(npub:, nsec:, label:, problem:)) ->
+      view.dialog(
+        language,
+        id,
+        text(i18n.GeneratedKey),
+        fn(placement) {
+          [
+            option.map(problem, problem_alert(language, _))
+              |> option.unwrap(element.none()),
+            view.truncated_id(language, npub, text(i18n.CopyNpub)),
+            view.alert(
+              view.Warning,
+              view.emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice),
+            ),
+            view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
+            view.post_form(
+              view.segments_path(register_generated_segments),
+              [
+                view.hidden_input(nsec_field, nsec),
+                label_fieldset(language, id <> "-label-hint", label),
+              ],
+              text(i18n.RegisterThisKey),
+              view.PrimaryButton,
+              placement,
+            ),
+          ]
+        },
+        i18n.Cancel,
+        view.OpenedByResponsePinned,
+      )
+    Some(PrivateKeyOpen(row:, nsec:)) ->
+      view.dialog(
+        language,
+        id,
+        text(i18n.PrivateKey),
+        fn(placement) {
+          [
+            view.identity(language, view.PlainIdentity, row.label, row.npub),
+            view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
+            view.alert(
+              view.Warning,
+              view.emphasized(language, i18n.CopyThenClose, i18n.ResendNotice),
+            ),
+            ..view.dialog_actions(placement, [])
+          ]
+        },
+        i18n.Close,
+        view.OpenedByResponsePinned,
+      )
+    _ -> element.none()
+  }
+}
+
+/// 生成した鍵のダイアログの先頭に出す、再描画の理由の囲み。
+fn problem_alert(
+  language: Language,
+  problem: GeneratedKeyProblem,
+) -> Element(msg) {
+  case problem {
+    InvalidLabel(reason) ->
+      view.error_message(language, None, Some(i18n.Translated(reason)))
+    NotApplied(reason) ->
+      view.error_message(language, Some(i18n.CouldNotRegister), Some(reason))
+    NotAccepted(reason) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotAccepted,
+        i18n.Untranslated(reason),
+      )
+    NotConfirmed(cause) ->
+      guided_warning(
+        language,
+        i18n.RegistrationNotConfirmed,
+        i18n.Translated(cause),
+      )
+  }
+}
+
+/// 次の操作の案内の文に理由を続けた、`Warning` の囲み。
+fn guided_warning(
+  language: Language,
+  guide: i18n.Message,
+  reason: i18n.Reason,
+) -> Element(msg) {
+  view.reason_alert(view.Warning, [
+    html.text(i18n.text(language, guide) <> i18n.sentence_gap(language)),
+    ..view.reason_content(language, None, reason)
+  ])
 }
 
 /// アカウント 1 件への操作のアイコン。
@@ -1531,37 +1853,33 @@ fn account_action_icon(action: AccountAction) -> Element(msg) {
     RevealPrivateKey -> view.eye_icon()
     RotateSecret -> view.rotate_icon()
     DeleteAccount -> view.trash_icon()
-    ShowConnectionQr -> view.qr_code_icon()
   }
 }
 
-/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。ダイアログと行き先のページの題は
+/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。ダイアログの題は
 /// `account_action_title` のまま変えない。
 fn account_action_row_title(action: AccountAction) -> i18n.Message {
   case action {
     DeleteAccount -> i18n.Delete
-    EditLabel | RevealPrivateKey | RotateSecret | ShowConnectionQr ->
-      account_action_title(action)
+    EditLabel | RevealPrivateKey | RotateSecret -> account_action_title(action)
   }
 }
 
-/// アカウント 1 件への操作のボタンの種類。行に出す「接続 QR コード」は主の操作、畳みの操作は地味な
-/// ボタンにし、削除だけ error の文字色にする。
-fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
+/// アカウント 1 件への操作のボタンの種類。畳みの操作は地味なボタンにし、削除だけ error の文字色にする。
+fn account_action_button_kind(action: AccountAction) -> view.ButtonKind {
   case action {
-    ShowConnectionQr -> view.PrimaryButton
     EditLabel | RevealPrivateKey | RotateSecret -> view.GhostButton
     DeleteAccount -> view.DangerGhostButton
   }
 }
 
-/// アカウント 1 件への操作の説明と、操作を実行する 1 つのフォーム（ページの枠を含まない）。操作のページと
+/// アカウント 1 件への操作の説明と、操作を実行する 1 つのフォーム（ページの枠を含まない）。
 /// ダッシュボードの操作のダイアログが使う。ラベルの編集の欄には、`label` が `Some` ならその値（入力の誤りか
 /// 409 で再描画するときに送られた値）を、`None` なら `row` の保存済みのラベルを入れ、欄の補足の `id` を
 /// `hint_id` にする。送信のボタンの種類は操作ごとに決める（ラベルの保存は主、secret の作り直しと秘密鍵の
 /// 表示は warning の枠、削除は危険）。送信のボタンの文言は、見出しとボタンの語（`account_action_title`）
-/// とは別に持つ。削除の説明の警告は畳まずに出す。フォームを持たない `ShowConnectionQr` には空を返す。
-pub fn account_action_form(
+/// とは別に持つ。削除の説明の警告は畳まずに出す。
+fn account_action_form(
   language: Language,
   row: AccountRow,
   action: AccountAction,
@@ -1623,15 +1941,14 @@ pub fn account_action_form(
         placement,
       ),
     ]
-    ShowConnectionQr -> []
   }
 }
 
-/// 読み込みで飛ばされた行の削除の説明とフォーム（ページの枠を含まない）。削除の確認のページと、
+/// 読み込みで飛ばされた行の削除の説明とフォーム（ページの枠を含まない）。
 /// ダッシュボードの読み込めなかった行の削除のダイアログが使う。説明は、行を消すこと、nsec を控えて
 /// いなければ失うこと（強調して畳まずに出す）、以前のマスターキーに戻せば控えられること、セッションと
 /// 承認待ちも消えることの順に並べる。送信のボタンは危険のボタンにする。
-pub fn unreadable_delete_form(
+fn unreadable_delete_form(
   language: Language,
   row: SkippedRow,
   placement: view.Placement,
@@ -1659,14 +1976,14 @@ pub fn unreadable_delete_form(
   ]
 }
 
-/// ページとダッシュボードのアカウントの追加のダイアログのラベルの欄の補足の `id`。どちらもラベルの欄が 1 つだけ
-/// なので固定の値にする。ダッシュボードの行ごとのラベルの編集のダイアログは、ダイアログの `id` に `-label-hint`
-/// を付けた値を使う。
-pub const label_hint_id = "label-hint"
+/// アカウントの追加のダイアログのラベルの欄の補足の `id`。ラベルの欄が 1 つだけなので固定の値にする。行ごとの
+/// ラベルの編集のダイアログはダイアログの `id` に `-label-hint` を付けた値を、生成した鍵のダイアログは
+/// `dialog-result-label-hint` を使う。
+const label_hint_id = "label-hint"
 
-/// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。登録画面、生成した鍵の
-/// 確認、ラベルの編集のページとダイアログのどのフォームでも必須にする。
-pub fn label_fieldset(
+/// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。アカウントの追加、生成した鍵、
+/// ラベルの編集のダイアログのどのフォームでも必須にする。
+fn label_fieldset(
   language: Language,
   hint_id: String,
   value: String,
@@ -2011,15 +2328,14 @@ pub fn notice_page(
   ])
 }
 
-/// 操作の見出し（ページとダイアログの題）。削除を除き、ダッシュボードのボタンと操作のページの下の
-/// リンクの語にも使う（`account_action_row_title`）。
-pub fn account_action_title(action: AccountAction) -> i18n.Message {
+/// 操作の見出し（ダイアログの題）。削除を除き、ダッシュボードのボタンの語にも使う
+/// （`account_action_row_title`）。
+fn account_action_title(action: AccountAction) -> i18n.Message {
   case action {
     EditLabel -> i18n.EditLabel
     RotateSecret -> i18n.RotateSecret
     DeleteAccount -> i18n.DeleteAccount
     RevealPrivateKey -> i18n.ShowPrivateKey
-    ShowConnectionQr -> i18n.ConnectionQr
   }
 }
 
@@ -2030,7 +2346,6 @@ fn account_action_segment(action: AccountAction) -> String {
     RotateSecret -> "rotate"
     DeleteAccount -> "delete"
     RevealPrivateKey -> "private-key"
-    ShowConnectionQr -> "qr"
   }
 }
 
@@ -2267,6 +2582,7 @@ fn relays_section(
           ..new_relay_form(language, url, roles, placement)
         ]
       },
+      i18n.Cancel,
       opening,
     ),
   ])
@@ -2293,8 +2609,8 @@ fn role_hint(language: Language) -> List(Element(msg)) {
 }
 
 /// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
-/// アカウントにも接続できないことを伝える。リレーの節と接続 QR コードのページで使う。
-pub fn no_bunker_relay_alert(
+/// アカウントにも接続できないことを伝える。リレーの節と接続 QR コードのダイアログで使う。
+fn no_bunker_relay_alert(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
@@ -2372,6 +2688,7 @@ fn relay_item(
                 )
               ]
             },
+            i18n.Cancel,
             opening,
           ),
         ]
@@ -2982,13 +3299,7 @@ pub fn connect_content(
   case accounts {
     Ok([]) -> [
       view.hint(text(i18n.NoAccountsForConnect)),
-      ..view.dialog_actions(placement, [
-        view.button_link(
-          view.segments_path(new_account_segments),
-          text(i18n.AddAccount),
-          view.PrimaryButton,
-        ),
-      ])
+      ..view.dialog_actions(placement, [])
     ]
     Ok(rows) -> connect_form(language, rows, uri, signer, placement)
     Error(reason) -> [

@@ -3,10 +3,10 @@
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import lustre/element
 import lustre/element/html
-import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
@@ -23,6 +23,7 @@ import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
 import nostr_no_su/relay_store.{type Relay, Relay}
 import support/account_actions
+import support/admin_context.{closed_dialog, opened_dialog}
 
 /// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作に戻る。
 pub fn account_action_paths_round_trip_test() {
@@ -38,8 +39,7 @@ pub fn unknown_account_action_paths_are_rejected_test() {
     == Error(Nil)
   assert dashboard.parse_account_action_path(["sessions", "abcd", "delete"])
     == Error(Nil)
-  assert dashboard.parse_account_action_path(dashboard.new_account_segments)
-    == Error(Nil)
+  assert dashboard.parse_account_action_path(["accounts", "new"]) == Error(Nil)
 }
 
 /// プラグインのページへのリンク（`plugin_page_href`）を `/` で分けて解析すると、
@@ -299,7 +299,7 @@ pub fn permissions_are_shown_as_chips_test() {
 }
 
 /// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者は
-/// `<details>` の外（畳みを開く前に見える範囲）では「接続 QR コード」のリンクの宛先にだけ使われる。
+/// `<details>` の外（畳みを開く前に見える範囲）では「接続 QR コード」のボタンが開くダイアログの `id` にだけ使われる。
 pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   let account =
     dashboard.AccountRow(
@@ -319,7 +319,7 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   assert list.length(string.split(before_details, account.signer)) == 2
   assert string.contains(
     before_details,
-    "href=\"/accounts/" <> account.signer <> "/qr\"",
+    "commandfor=\"dialog-account-" <> account.signer <> "-qr\"",
   )
   assert string.contains(after_details, "Connection URIs and actions")
   assert string.contains(after_details, "Connection URI<button")
@@ -460,7 +460,7 @@ pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
 }
 
 /// アカウントの行の畳みの前に、色つきの鍵の指紋、その署名者のセッションの件数（他の署名者の
-/// セッションは数えない）、「接続 QR コード」の主のボタンが出て、畳みの中に QR のリンクは無い。
+/// セッションは数えない）、「接続 QR コード」のダイアログを開く主のボタンが出て、畳みの中に QR のボタンは無い。
 pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
   let account = fingerprinted_account()
   let snapshot =
@@ -486,14 +486,13 @@ pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
   assert string.contains(before_details, ">2 sessions</span>")
   assert string.contains(
     before_details,
-    element.to_string(view.compact_icon_button_link(
-      dashboard.account_action_path(account.signer, dashboard.ShowConnectionQr),
-      view.qr_code_icon(),
-      "Connection QR code",
+    element.to_string(view.dialog_trigger(
+      "dialog-account-" <> account.signer <> "-qr",
+      view.CompactTrigger(view.qr_code_icon(), "Connection QR code"),
       view.PrimaryButton,
     )),
   )
-  assert !string.contains(details, "/qr\"")
+  assert !string.contains(details, "-qr\"")
 }
 
 /// セッションの件数は、一覧を得たら 0 件でも出し、一覧を得られないときは出さない。
@@ -515,8 +514,7 @@ pub fn account_session_count_follows_the_session_list_test() {
 }
 
 /// 畳みの中に 2 つの URI の説明が出て、ラベルの編集・秘密鍵の表示・secret の再生成のダイアログを開くボタン、
-/// ラベルの編集のページへの予備のリンク、右端に離した（`ml-auto` の囲みの）削除のダイアログを開くボタンの順に
-/// 並ぶ。
+/// 右端に離した（`ml-auto` の囲みの）削除のダイアログを開くボタンの順に並ぶ。
 pub fn account_details_hold_the_uris_and_the_actions_test() {
   let account = fingerprinted_account()
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
@@ -546,14 +544,28 @@ pub fn account_details_hold_the_uris_and_the_actions_test() {
       "Show private key",
       view.GhostButton,
     ),
-    trigger("rotate", view.rotate_icon(), "Rotate secret", view.GhostButton),
-    element.to_string(view.fallback_link(
-      i18n.English,
-      dashboard.account_action_path(account.signer, dashboard.EditLabel),
-    ))
+    trigger("rotate", view.rotate_icon(), "Rotate secret", view.GhostButton)
       <> "<div class=\"ml-auto\">"
       <> trigger("delete", view.trash_icon(), "Delete", view.DangerGhostButton),
   ])
+}
+
+/// 行の 4 つの操作と接続 QR コードのダイアログは、畳み（`<details>`）の中ではなく `</details>` の後に置く。
+pub fn account_row_dialogs_sit_outside_the_details_test() {
+  let account = fingerprinted_account()
+  let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
+  let assert Ok(#(_, after_details)) =
+    string.split_once(
+      accounts_part(dashboard.render(i18n.English, view.System, snapshot)),
+      "</details>",
+    )
+  use segment <- list.each(["label", "private-key", "rotate", "delete", "qr"])
+  let id = "dialog-account-" <> account.signer <> "-" <> segment
+  assert #(
+      segment,
+      string.contains(after_details, "class=\"modal\" id=\"" <> id <> "\">"),
+    )
+    == #(segment, True)
 }
 
 /// `needles` が `haystack` にこの順に重ならずに現れる。
@@ -590,7 +602,7 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
   let assert Ok(#(before_frame, frame)) =
     string.split_once(accounts, "alert alert-soft alert-error")
   assert string.contains(before_frame, "Your registered private keys.")
-  assert string.contains(before_frame, "</details></li></ul>")
+  assert string.contains(before_frame, "</dialog></li></ul>")
   assert string.contains(frame, "Unreadable accounts")
   assert string.contains(
     frame,
@@ -888,8 +900,8 @@ pub fn account_details_open_the_uri_descriptions_from_the_info_buttons_test() {
   )
 }
 
-/// ダッシュボードのどのダイアログも、同じダイアログを閉じるキャンセルを持ち、キャンセルを左に寄せない
-/// （送信の右に並べる）。
+/// ダッシュボードのどのダイアログも、同じダイアログを閉じるボタン（接続 QR コードは「閉じる」、ほかは
+/// 「キャンセル」）を持ち、閉じるボタンを左に寄せない（送信の右に並べる）。
 pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
   let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
   let assert [_, ..dialogs] = string.split(body, "<dialog ")
@@ -898,11 +910,17 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
   let assert Ok(#(dialog, _)) = string.split_once(dialog, "</dialog>")
   let assert Ok(#(_, rest)) = string.split_once(dialog, "id=\"")
   let assert Ok(#(id, _)) = string.split_once(rest, "\"")
+  let dismiss = case string.ends_with(id, "-qr") {
+    True -> "Close"
+    False -> "Cancel"
+  }
   assert string.contains(
     dialog,
     "<button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\""
       <> id
-      <> "\" type=\"button\">Cancel</button></div>",
+      <> "\" type=\"button\">"
+      <> dismiss
+      <> "</button></div>",
   )
   assert !string.contains(
     dialog,
@@ -910,30 +928,20 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
   )
 }
 
-/// アカウントが 0 件のときの接続のダイアログは、「アカウントを追加」とキャンセルを 1 行に並べる。
+/// アカウントが 0 件のときの接続のダイアログも、キャンセルの行を残す。
 /// アカウントの一覧を得られないときは、その行にキャンセルだけを置く。
 pub fn connect_dialog_without_accounts_still_has_cancel_test() {
   let cancel =
     "<button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-session-connect\" type=\"button\">Cancel</button>"
   let row = "<div class=\"flex flex-wrap items-center gap-2\">"
   let empty =
-    dialog_html(
+    closed_dialog(
       dashboard.render(i18n.English, view.System, states()),
       "dialog-session-connect",
     )
-  assert string.contains(
-    empty,
-    row
-      <> element.to_string(view.button_link(
-      "/accounts/new",
-      "Add account",
-      view.PrimaryButton,
-    ))
-      <> cancel
-      <> "</div>",
-  )
+  assert string.contains(empty, row <> cancel <> "</div>")
   let failed =
-    dialog_html(
+    closed_dialog(
       dashboard.render(
         i18n.English,
         view.System,
@@ -1232,7 +1240,7 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
 }
 
 /// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・削除のダイアログを
-/// 開くボタンと、削除の確認のページへの予備のリンクが出る。日本語でも見出しが訳される。
+/// 開くボタンが出る。日本語でも見出しが訳される。
 pub fn skipped_rows_are_listed_with_their_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -1258,14 +1266,17 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
     english,
     "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row).",
   )
-  assert string.contains(english, "href=\"/accounts/abcd1234/delete\"")
+  assert string.contains(
+    english,
+    "commandfor=\"dialog-unreadable-abcd1234-delete\"",
+  )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "読み込めなかったアカウント",
   )
 }
 
-/// `pubkey` 列を読めない行は、識別も削除のボタンも予備のリンクも出さず、理由の 1 文に削除でき
+/// `pubkey` 列を読めない行は、識別も削除のボタンも出さず、理由の 1 文に削除でき
 /// ない旨を続けて出す。
 pub fn malformed_pubkey_rows_show_only_the_reason_test() {
   let snapshot =
@@ -1290,7 +1301,7 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
 }
 
 /// 読み込めなかった行にラベルと省略した npub、「削除」が出て、16 進の pubkey は属性値（ダイアログの
-/// `id`、フォームと予備のリンクの宛先）にだけ使われ、識別としては出ない。
+/// `id`、フォームの宛先）にだけ使われ、識別としては出ない。
 pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
   let pubkey = "deadbeef00112233445566778899aabbccddeeff0011223344"
   let npub = "npub1skippedexamplevalueabcdefghijklmno"
@@ -1318,7 +1329,7 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
       view.DangerGhostButton,
     ),
   )
-  // pubkey は属性値（ダイアログの id、フォームと予備のリンクの宛先）にだけ現れ、テキストとしては出ない。
+  // pubkey は属性値（ダイアログの id、フォームの宛先）にだけ現れ、テキストとしては出ない。
   assert !string.contains(body, ">" <> pubkey)
   assert !string.contains(body, pubkey <> "<")
 }
@@ -1468,12 +1479,12 @@ pub fn relay_dialogs_open_from_matching_triggers_test() {
       <> "\">",
   )
   assert string.contains(
-    dialog_html(body, id),
+    closed_dialog(body, id),
     "command=\"close\" commandfor=\"" <> id <> "\"",
   )
 }
 
-/// アカウントの追加のボタンは `dialog-account-new` のダイアログを開き、ダイアログはキャンセルで閉じ、並びの末尾に登録画面への予備のリンクがある。
+/// アカウントの追加のボタンは `dialog-account-new` のダイアログを開き、ダイアログはキャンセルで閉じる。
 pub fn account_add_dialog_opens_from_the_heading_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let id = "dialog-account-new"
@@ -1490,40 +1501,170 @@ pub fn account_add_dialog_opens_from_the_heading_test() {
       <> "\">",
   )
   assert string.contains(
-    dialog_html(body, id),
+    closed_dialog(body, id),
     "command=\"close\" commandfor=\"" <> id <> "\"",
-  )
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(i18n.English, "/accounts/new")),
   )
 }
 
-/// アカウントの追加のダイアログの登録と生成のフォームは、登録画面のフォームと同じ宛先と送り方を持つ。
-pub fn account_add_dialog_forms_match_the_page_forms_test() {
+/// アカウントの一覧を得られなくても、アカウントの追加のダイアログは描く。
+pub fn add_account_dialog_is_drawn_without_the_account_list_test() {
+  let body =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
+    )
+  assert string.contains(body, "class=\"modal\" id=\"dialog-account-new\">")
+}
+
+/// アカウントの追加のダイアログの nsec の欄は、貼り付けの説明（`ImportDescription`）を ⓘ で開く補足に畳み、
+/// 欄の `aria-describedby` から指す。説明はフォームの前の段落には出さない。
+pub fn add_account_dialog_folds_the_nsec_description_test() {
+  use language <- list.each(i18n.languages)
+  let text = i18n.text(language, _)
   let dialog =
-    dialog_html(
-      dashboard.render(i18n.English, view.System, states()),
+    closed_dialog(
+      dashboard.render(language, view.System, states()),
       "dialog-account-new",
     )
-  let page = account_pages.new_account_page(i18n.English, view.System, "", None)
-  assert form_tag(dialog, "/accounts/import")
-    == form_tag(page, "/accounts/import")
-  assert form_tag(dialog, "/accounts/generate")
-    == form_tag(page, "/accounts/generate")
+  assert string.contains(
+    dialog,
+    "<input aria-describedby=\"nsec-hint\" aria-label=\""
+      <> text(i18n.PrivateKeyNsec)
+      <> "\" autocomplete=\"new-password\"",
+  )
+  assert string.contains(dialog, "popovertarget=\"nsec-hint\"")
+  assert string.contains(
+    dialog,
+    "id=\"nsec-hint\" popover=\"hint\">"
+      <> text(i18n.ImportDescription)
+      <> "</div>",
+  )
+  assert !string.contains(
+    dialog,
+    element.to_string(view.form_description(text(i18n.ImportDescription))),
+  )
+}
+
+/// 生成した鍵のダイアログは、開き直す理由ごとの囲みを先頭に出す。ラベルの誤りと反映されなかった登録は
+/// error の色の理由（英語のまま届いた理由には前置き）、受け付けられない登録と確かめられない登録は案内の文に
+/// 理由を続けた warning の色の囲みにする。
+pub fn generated_key_dialog_shows_each_problem_test() {
+  let render = fn(problem) {
+    let assert Ok(html) =
+      dashboard.render_open(
+        i18n.Japanese,
+        view.System,
+        states(),
+        dashboard.GeneratedKeyOpen(
+          "npub1example",
+          "nsec1example",
+          "main",
+          Some(problem),
+        ),
+      )
+    opened_dialog(html, "dialog-result")
+  }
+  let alert = fn(tone, content) {
+    "<div class=\"alert alert-soft alert-"
+    <> tone
+    <> " text-base-content\" role=\"alert\">"
+    <> element.to_string(
+      view.tone_icon(case tone {
+        "error" -> view.Failure
+        _ -> view.Warning
+      }),
+    )
+    <> "<span class=\"wrap-anywhere\">"
+    <> content
+    <> "</span></div>"
+  }
+  assert string.contains(
+    render(dashboard.InvalidLabel(i18n.LabelEmpty)),
+    alert("error", "ラベルを入力してください。"),
+  )
+  assert string.contains(
+    render(
+      dashboard.NotApplied(i18n.Untranslated("account is already registered")),
+    ),
+    alert(
+      "error",
+      "登録できませんでした。<span lang=\"en\">account is already registered</span>",
+    ),
+  )
+  assert string.contains(
+    render(dashboard.NotAccepted("accounts are not loaded yet")),
+    alert(
+      "warning",
+      i18n.text(i18n.Japanese, i18n.RegistrationNotAccepted)
+        <> "<span lang=\"en\">accounts are not loaded yet</span>",
+    ),
+  )
+  assert string.contains(
+    render(dashboard.NotConfirmed(i18n.StoreDidNotConfirm)),
+    alert(
+      "warning",
+      i18n.text(i18n.Japanese, i18n.RegistrationNotConfirmed)
+        <> i18n.text(i18n.Japanese, i18n.StoreDidNotConfirm),
+    ),
+  )
+}
+
+/// アカウントと読み込めなかった行のダイアログは、その一覧を得られなければ理由を、開く行が無ければ
+/// `AccountNotFound` を返す。追加、生成した鍵、秘密鍵のダイアログは一覧を得られなくても描く。
+pub fn render_open_needs_the_listed_account_test() {
+  let reason = i18n.Untranslated("boom")
+  let failed =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Error(reason),
+      skipped: Error(reason),
+    )
+  let open = fn(snapshot, dialog) {
+    dashboard.render_open(i18n.English, view.System, snapshot, dialog)
+    |> result.map(fn(_) { Nil })
+  }
+  let row_dialogs = [
+    dashboard.AccountActionOpen(
+      dialog_signer,
+      dashboard.RotateSecret,
+      None,
+      reason,
+    ),
+    dashboard.UnreadableDeleteOpen(dialog_skipped, reason),
+  ]
+  list.each(row_dialogs, fn(dialog) {
+    assert open(failed, dialog) == Error(reason)
+    assert open(states(), dialog)
+      == Error(i18n.Translated(i18n.AccountNotFound))
+    assert open(dialog_snapshot(), dialog) == Ok(Nil)
+  })
+  list.each(
+    [
+      dashboard.AddAccountOpen("", reason),
+      dashboard.GeneratedKeyOpen("npub1example", "nsec1example", "", None),
+      dashboard.PrivateKeyOpen(
+        dialog_account(dialog_signer, "main"),
+        "nsec1example",
+      ),
+    ],
+    fn(dialog) {
+      assert open(failed, dialog) == Ok(Nil)
+    },
+  )
 }
 
 /// アカウントの追加のダイアログは、登録、生成の順のタブで 2 つのフォームを出す。
 pub fn account_add_dialog_has_import_and_generate_tabs_test() {
   let dialog =
-    dialog_html(
+    closed_dialog(
       dashboard.render(i18n.English, view.System, states()),
       "dialog-account-new",
     )
   let in_dialog =
     view.InDialog(
       id: "dialog-account-new",
-      cancel: "Cancel",
+      dismiss: "Cancel",
       opening: view.OpensOnTrigger,
     )
   assert string.contains(
@@ -1555,10 +1696,10 @@ pub fn relay_edit_dialogs_check_the_current_roles_test() {
     <> name
     <> "\""
   }
-  let first = dialog_html(body, "dialog-relay-1-edit")
+  let first = closed_dialog(body, "dialog-relay-1-edit")
   assert string.contains(first, "wss://a")
   assert string.contains(first, checkbox("bunker", True))
-  let second = dialog_html(body, "dialog-relay-2-edit")
+  let second = closed_dialog(body, "dialog-relay-2-edit")
   assert string.contains(second, "wss://b")
   assert string.contains(second, checkbox("monitor", True))
   assert string.contains(second, checkbox("bunker", False))
@@ -1566,14 +1707,6 @@ pub fn relay_edit_dialogs_check_the_current_roles_test() {
     second,
     element.to_string(view.status_chip(view.UnusedChip, "Unused")),
   )
-}
-
-/// 描画から `id` のダイアログの開始タグの後から `</dialog>` の前までを取り出す。
-fn dialog_html(body: String, id: String) -> String {
-  let assert Ok(#(_, rest)) =
-    string.split_once(body, "class=\"modal\" id=\"" <> id <> "\">")
-  let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
-  inner
 }
 
 /// 最初の `<form action="<prefix>` から `>` の前までを取り出す。ページ枠の切り替えのフォームを避けて宛先で探す。
@@ -1643,60 +1776,9 @@ pub fn account_dialogs_open_from_matching_triggers_test() {
       <> "\">",
   )
   assert string.contains(
-    dialog_html(body, id),
+    closed_dialog(body, id),
     "command=\"close\" commandfor=\"" <> id <> "\"",
   )
-}
-
-/// 4 つの操作と読み込めなかった行のダイアログの `<form action="/accounts/…">` の開始タグ（`method` を
-/// 含む）が、`account_action_page` と `unreadable_delete_page` の同じ操作のものと等しい。
-pub fn account_dialog_forms_match_the_page_forms_test() {
-  let snapshot = dialog_snapshot()
-  let body = dashboard.render(i18n.English, view.System, snapshot)
-  let account = dialog_account(dialog_signer, "main")
-  list.each(
-    [
-      #(dashboard.EditLabel, "label"),
-      #(dashboard.RevealPrivateKey, "private-key"),
-      #(dashboard.RotateSecret, "rotate"),
-      #(dashboard.DeleteAccount, "delete"),
-    ],
-    fn(pair) {
-      let #(action, segment) = pair
-      assert form_tag(
-          dialog_html(
-            body,
-            "dialog-account-" <> dialog_signer <> "-" <> segment,
-          ),
-          "/accounts/",
-        )
-        == form_tag(
-          account_pages.account_action_page(
-            i18n.English,
-            view.System,
-            account,
-            action,
-            None,
-            None,
-          ),
-          "/accounts/",
-        )
-    },
-  )
-  let assert Ok([skipped]) = snapshot.skipped
-  assert form_tag(
-      dialog_html(body, "dialog-unreadable-" <> dialog_skipped <> "-delete"),
-      "/accounts/",
-    )
-    == form_tag(
-      account_pages.unreadable_delete_page(
-        i18n.English,
-        view.System,
-        skipped,
-        None,
-      ),
-      "/accounts/",
-    )
 }
 
 /// 状態は `dashboard.Snapshot(..dialog_snapshot(), accounts: Ok([dialog_signer の行（ラベル `main`）, "4567" を
@@ -1716,7 +1798,7 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
   use #(signer, label) <- list.each([#(dialog_signer, "main"), #(second, "bot")])
   let account = dialog_account(signer, label)
   let id = "dialog-account-" <> signer <> "-label"
-  let dialog = dialog_html(body, id)
+  let dialog = closed_dialog(body, id)
   assert string.contains(
     dialog,
     element.to_string(view.identity(
@@ -1729,30 +1811,6 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
   assert string.contains(dialog, "value=\"" <> label <> "\"")
   assert string.contains(dialog, "aria-describedby=\"" <> id <> "-label-hint\"")
   assert string.contains(dialog, "id=\"" <> id <> "-label-hint\"")
-}
-
-/// `view.fallback_link(English, "/accounts/<signer>/label")` と `view.fallback_link(English, "/accounts/<pubkey>/delete")`
-/// の文字列があり、`href="/accounts/<signer>/delete"` が無い。
-pub fn account_rows_link_to_the_label_page_as_a_fallback_test() {
-  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(
-      i18n.English,
-      "/accounts/" <> dialog_signer <> "/label",
-    )),
-  )
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(
-      i18n.English,
-      "/accounts/" <> dialog_skipped <> "/delete",
-    )),
-  )
-  assert !string.contains(
-    body,
-    "href=\"/accounts/" <> dialog_signer <> "/delete\"",
-  )
 }
 
 /// `states()` の `id` のリレーの行。
@@ -2075,7 +2133,7 @@ pub fn accounts_heading_has_a_reload_form_test() {
 }
 
 /// 一覧を得られないときも、アカウントの節の見出しの読み直しのフォームは出したままにする
-/// （追加のボタンとダイアログと予備のリンクは一覧を得たときだけ出す）。
+/// （追加のボタンは一覧を得たときだけ出す）。
 pub fn the_reload_form_stays_without_the_account_list_test() {
   let unavailable =
     dashboard.render(
@@ -2084,7 +2142,10 @@ pub fn the_reload_form_stays_without_the_account_list_test() {
       dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
     )
   assert string.contains(unavailable, "/accounts/reload")
-  assert !string.contains(unavailable, "/accounts/new")
+  assert !string.contains(
+    unavailable,
+    "command=\"show-modal\" commandfor=\"dialog-account-new\"",
+  )
 }
 
 /// アカウント・セッション・リレーの見出しは、一覧を得て 1 件以上あるときだけ題の直後に
@@ -2166,10 +2227,9 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
         view.users_icon(),
         "No accounts registered. Import an nsec or generate a new key.",
         [
-          view.icon_button_link(
-            "/accounts/new",
-            view.plus_icon(),
-            "Add account",
+          view.dialog_trigger(
+            "dialog-account-new",
+            view.IconTextTrigger(view.plus_icon(), "Add account"),
             view.OutlineButton,
           ),
         ],
@@ -3105,7 +3165,7 @@ pub fn session_dialogs_open_from_matching_triggers_test() {
     "command=\"show-modal\" commandfor=\"" <> id <> "\"",
   )
   assert string.contains(
-    dialog_html(body, id),
+    closed_dialog(body, id),
     "command=\"close\" commandfor=\"" <> id <> "\"",
   )
 }
@@ -3115,7 +3175,7 @@ pub fn session_dialogs_open_from_matching_triggers_test() {
 pub fn session_dialog_forms_match_the_page_forms_test() {
   let body = dashboard.render(i18n.English, view.System, session_snapshot())
   assert form_tag(
-      dialog_html(body, "dialog-session-connect"),
+      closed_dialog(body, "dialog-session-connect"),
       "/sessions/connect",
     )
     == form_tag(
@@ -3129,7 +3189,7 @@ pub fn session_dialog_forms_match_the_page_forms_test() {
       ),
       "/sessions/connect",
     )
-  let revoke = dialog_html(body, "dialog-session-abcd-ef01-revoke")
+  let revoke = closed_dialog(body, "dialog-session-abcd-ef01-revoke")
   assert form_tag(revoke, "/sessions/revoke")
     == "\" class=\"flex flex-col gap-4\" method=\"post\""
   assert string.contains(
@@ -3157,7 +3217,7 @@ pub fn session_permission_dialogs_match_each_rows_page_test() {
   // 欄は同じで、送信の後にダイアログだけがキャンセルを並べる
   let assert Ok(#(dialog_fields, dialog_actions)) =
     string.split_once(
-      form_html(dialog_html(body, id), path),
+      form_html(closed_dialog(body, id), path),
       "<div class=\"flex flex-wrap items-center gap-2\"><button class=\"btn btn-primary focus-visible:outline-base-content\" type=\"submit\">",
     )
   let assert Ok(#(page_fields, _)) =
@@ -3182,7 +3242,7 @@ pub fn session_rows_revoke_only_from_the_dialog_test() {
   let body = dashboard.render(i18n.English, view.System, session_snapshot())
   assert !string.contains(outside_dialogs(body), "action=\"/sessions/revoke\"")
   assert string.contains(
-    dialog_html(body, "dialog-session-abcd-ef01-revoke"),
+    closed_dialog(body, "dialog-session-abcd-ef01-revoke"),
     "btn btn-outline btn-warning",
   )
 }
@@ -3211,8 +3271,13 @@ pub fn connect_dialog_guides_to_add_an_account_test() {
       view.System,
       dashboard.Snapshot(..session_snapshot(), accounts: Ok([])),
     )
-  let dialog = dialog_html(body, "dialog-session-connect")
-  assert string.contains(dialog, "href=\"/accounts/new\"")
+  let dialog = closed_dialog(body, "dialog-session-connect")
+  assert string.contains(
+    dialog,
+    "Register an account before connecting a client.",
+  )
+  assert !string.contains(dialog, "/accounts/new")
+  assert string.contains(dialog, "command=\"close\"")
   assert !string.contains(dialog, "<form")
 }
 
@@ -3224,7 +3289,11 @@ pub fn connect_content_follows_the_accounts_state_test() {
     |> element.to_string
   }
   let empty = content(Ok([]))
-  assert string.contains(empty, "href=\"/accounts/new\"")
+  assert string.contains(
+    empty,
+    "Register an account before connecting a client.",
+  )
+  assert !string.contains(empty, "/accounts/new")
   assert !string.contains(empty, "<form")
   let failed = content(Error(i18n.Untranslated("boom")))
   assert string.contains(failed, "<span lang=\"en\">boom</span>")

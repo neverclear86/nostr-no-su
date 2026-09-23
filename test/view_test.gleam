@@ -96,7 +96,7 @@ pub fn button_kinds_map_to_daisyui_classes_test() {
   let in_dialog =
     view.InDialog(
       id: "dialog-x",
-      cancel: "Cancel",
+      dismiss: "Cancel",
       opening: view.OpensOnTrigger,
     )
   let cases = [
@@ -350,7 +350,7 @@ pub fn in_dialog_form_puts_submit_and_cancel_on_one_row_test() {
       view.PrimaryButton,
       view.InDialog(
         id: "dialog-x",
-        cancel: "Cancel",
+        dismiss: "Cancel",
         opening: view.OpensOnTrigger,
       ),
     ))
@@ -368,7 +368,7 @@ pub fn dialog_actions_add_cancel_only_in_a_dialog_test() {
     view.dialog_actions(
       view.InDialog(
         id: "dialog-x",
-        cancel: "Cancel",
+        dismiss: "Cancel",
         opening: view.OpensOnTrigger,
       ),
       buttons,
@@ -444,20 +444,34 @@ pub fn navbar_start_keeps_the_width_of_the_logo_test() {
   assert string.contains(html, "<div class=\"navbar-start w-auto grow\">")
 }
 
-/// 狭い画面で語を隠すボタンのリンクは、語を `title` と `max-sm:sr-only` の `span` に置く。
-pub fn compact_icon_button_link_hides_the_text_on_narrow_screens_test() {
-  let link =
-    element.to_string(view.compact_icon_button_link(
-      "/href",
-      view.qr_code_icon(),
-      "Connection QR code",
+/// 狭い画面で語を隠すダイアログのボタンは、`commandfor` で `id` を指し、語を `title` と `max-sm:sr-only` の `span` に置く。
+pub fn compact_dialog_trigger_hides_the_text_on_narrow_screens_test() {
+  let button =
+    element.to_string(view.dialog_trigger(
+      "dialog-x",
+      view.CompactTrigger(view.qr_code_icon(), "Connection QR code"),
       view.PrimaryButton,
     ))
-  assert string.contains(link, "title=\"Connection QR code\"")
-  assert string.contains(
-    link,
-    "<span class=\"max-sm:sr-only\">Connection QR code</span>",
-  )
+  assert button
+    == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" title=\"Connection QR code\" type=\"button\">"
+    <> element.to_string(view.qr_code_icon())
+    <> "<span class=\"max-sm:sr-only\">Connection QR code</span></button>"
+}
+
+/// 応答で開き Esc で閉じないダイアログは、`open` と `closedby="none"` を付けて描き、閉じるボタン（語は
+/// `dismiss`）をダッシュボード（`/`）へのリンクにする。
+pub fn pinned_dialog_ignores_close_requests_test() {
+  let html =
+    element.to_string(view.dialog(
+      i18n.English,
+      "dialog-x",
+      "Title",
+      fn(placement) { view.dialog_actions(placement, []) },
+      i18n.Close,
+      view.OpenedByResponsePinned,
+    ))
+  assert html
+    == "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" closedby=\"none\" id=\"dialog-x\" open><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><div class=\"flex flex-wrap items-center gap-2\"><a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Close</a></div></div></dialog>"
 }
 
 /// アイコンと語のダイアログのボタンは `commandfor` で `id` のダイアログを指して開き、ダイアログは
@@ -474,7 +488,7 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
         assert placement
           == view.InDialog(
             id: "dialog-x",
-            cancel: "Cancel",
+            dismiss: "Cancel",
             opening: view.OpensOnTrigger,
           )
         [html.p([], [html.text("body")])]

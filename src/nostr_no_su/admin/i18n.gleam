@@ -226,6 +226,7 @@ pub type Message {
   CopyClient
   ShowFieldHint
   Cancel
+  Close
   OpenAsPage
   // ダッシュボード
   Dashboard
@@ -317,14 +318,12 @@ pub type Message {
   NotLoadedPlugins
   NotLoadedPluginsWarning
   PluginLoadFailed
-  ReasonLabel
   ConnectionUri
   SecretUriDescription
   ConnectionUriForApproval
   ConnectionUrisAndActions
   SessionCount(count: Int)
   ConnectionQr
-  ConnectionQrDescription
   ConnectionQrSecretWarning
   CouldNotEncodeQr
   ScanWithClientScanner
@@ -333,8 +332,6 @@ pub type Message {
   BunkerRelaysForUri
   BunkerRelaysHint
   ApprovalUriNeedsApproval
-  ConnectWithClientUri
-  ConnectWithClientUriHint
   PublicKeyHex
   EditLabel
   ShowPrivateKey
@@ -449,7 +446,7 @@ pub type Message {
   StoreDidNotConfirm
   NotAvailable
   NotAvailableForReasonAbove
-  // アカウントの登録画面
+  // アカウントの追加のダイアログ
   ImportPrivateKey
   ImportDescription
   PrivateKeyNsec
@@ -459,18 +456,14 @@ pub type Message {
   GenerateNewKey
   GenerateDescription
   Generate
-  SkippedRowNote
-  // 生成した鍵の確認ページ、登録の完了ページ
+  // 生成した鍵のダイアログ
   GeneratedKey
   BackUpNow
   GeneratedKeyNotice
   RegisterThisKey
   RegistrationNotAccepted
   RegistrationNotConfirmed
-  AccountRegistered
-  BackUpIfNotAlready
-  RegisteredKeyNotice
-  // アカウントの操作のページ
+  // アカウントの操作のダイアログ
   Save
   RotateSecretSubmit
   DeleteAccountSubmit
@@ -484,9 +477,9 @@ pub type Message {
   DeleteUnreadableRecover
   ShowPrivateKeyDescription
   AdminPassword
-  // 秘密鍵の表示ページ
+  // 秘密鍵のダイアログ
   PrivateKey
-  CloseTabAfterCopying
+  CopyThenClose
   ResendNotice
   // 管理 UI が検査して返す理由
   IncorrectPassword
@@ -521,6 +514,7 @@ fn english(message: Message) -> String {
     CopyClient -> "Copy client"
     ShowFieldHint -> "Show help"
     Cancel -> "Cancel"
+    Close -> "Close"
     OpenAsPage -> "Open as a page"
     Dashboard -> "Dashboard"
     Pending -> "Pending"
@@ -629,7 +623,6 @@ fn english(message: Message) -> String {
     PluginLoadFailed -> "failed to load"
     NotLoadedPluginsWarning ->
       "These plugins are not running. Fix the cause below and restart the server."
-    ReasonLabel -> "Reason"
     ConnectionUri -> "Connection URI"
     SecretUriDescription ->
       "Connects without approval. Paste it into your own client."
@@ -638,8 +631,6 @@ fn english(message: Message) -> String {
     SessionCount(count: 1) -> "1 session"
     SessionCount(count:) -> int.to_string(count) <> " sessions"
     ConnectionQr -> "Connection QR code"
-    ConnectionQrDescription ->
-      "Choose a connection URI with the tabs. The code shown is meant to be scanned and copied with the phone's camera. To use the client's own scanner instead, open the panel below the code and scan the code inside."
     ConnectionQrSecretWarning ->
       "The codes and the URI on this tab contain the connection secret. Do not show them where others can see the screen."
     CouldNotEncodeQr ->
@@ -654,9 +645,6 @@ fn english(message: Message) -> String {
       "If the phone cannot reach these relays, the connection fails even when the code scans."
     ApprovalUriNeedsApproval ->
       "A client that connects with this URI cannot sign until you approve it under pending connections on the dashboard."
-    ConnectWithClientUri -> "Connect with the client's own URI"
-    ConnectWithClientUriHint ->
-      "If the client can show its own nostrconnect:// URI or QR code, pasting that into this admin UI is more reliable: the phone copies it from the client itself, so the camera's limits do not apply."
     PublicKeyHex -> "Public key (hex)"
     EditLabel -> "Edit label"
     ShowPrivateKey -> "Show private key"
@@ -794,7 +782,7 @@ fn english(message: Message) -> String {
     NotAvailableForReasonAbove -> "Not available for the reason above."
     ImportPrivateKey -> "Import a private key"
     ImportDescription ->
-      "Paste the private key (nsec) of the account. It is shown once after registration, and afterwards only when you re-enter the admin password. If the browser offers to save it as a password, decline."
+      "Paste the private key (nsec) of the account. After registration, it is shown only when you re-enter the admin password. If the browser offers to save it as a password, decline."
     PrivateKeyNsec -> "Private key (nsec)"
     Label -> "Label"
     LabelHint(max:) ->
@@ -806,8 +794,6 @@ fn english(message: Message) -> String {
     GenerateDescription ->
       "Generate a new private key on the server. It is shown for backup before it is registered."
     Generate -> "Generate"
-    SkippedRowNote ->
-      "If an account that is not on the dashboard is reported as already registered, see docs/operations.md."
     GeneratedKey -> "Generated key"
     BackUpNow -> "Back up this private key now."
     GeneratedKeyNotice ->
@@ -817,10 +803,6 @@ fn english(message: Message) -> String {
       "The key was not registered because accounts are not available right now. Wait a moment, then press \"Register this key\" again."
     RegistrationNotConfirmed ->
       "The registration was not confirmed. Back up this key, then press \"Register this key\" again: it is registered if it was not, or \"account is already registered\" is shown if it was."
-    AccountRegistered -> "Account registered"
-    BackUpIfNotAlready -> "Back up this private key if you have not already."
-    RegisteredKeyNotice ->
-      "It is shown again only when you re-enter the admin password. The connection URI is on the dashboard."
     Save -> "Save"
     RotateSecretSubmit -> "Rotate secret"
     DeleteAccountSubmit -> "Delete account"
@@ -843,9 +825,9 @@ fn english(message: Message) -> String {
       "Re-enter the admin password to show the private key. Showing it is logged with the npub."
     AdminPassword -> "Admin password"
     PrivateKey -> "Private key"
-    CloseTabAfterCopying -> "Close this tab after copying the key."
+    CopyThenClose -> "After copying the key, press Close."
     ResendNotice ->
-      "Reloading this page or coming back to it with the back button can resend the form, which shows the key again and logs again that it was shown."
+      "Reloading or coming back with the back button can resend the form, which shows the key again and logs again that it was shown."
     IncorrectPassword -> "incorrect password"
     LabelEmpty -> "label must not be empty"
     LabelTooLong(max:) ->
@@ -873,6 +855,7 @@ fn japanese(message: Message) -> String {
     CopyClient -> "クライアントをコピー"
     ShowFieldHint -> "補足を表示"
     Cancel -> "キャンセル"
+    Close -> "閉じる"
     OpenAsPage -> "ページで開く"
     Dashboard -> "ダッシュボード"
     Pending -> "承認待ち"
@@ -968,15 +951,12 @@ fn japanese(message: Message) -> String {
     NotLoadedPlugins -> "読み込めなかったプラグイン"
     PluginLoadFailed -> "読み込み失敗"
     NotLoadedPluginsWarning -> "これらのプラグインは動作していません。下の理由を直してサーバーを再起動してください。"
-    ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"
     SecretUriDescription -> "承認なしで接続できます。自分のクライアントに貼ってください。"
     ConnectionUriForApproval -> "接続 URI（要承認）"
     ConnectionUrisAndActions -> "接続 URI と操作"
     SessionCount(count:) -> "セッション " <> int.to_string(count) <> " 件"
     ConnectionQr -> "接続 QR コード"
-    ConnectionQrDescription ->
-      "タブで接続 URI を選びます。出ているコードは、端末のカメラで読み取ってコピーするためのものです。クライアント自身の読み取り機能を使うときは、コードの下の畳みを開いてその中のコードを読み取ってください。"
     ConnectionQrSecretWarning ->
       "このタブのコードと URI には接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
     CouldNotEncodeQr -> "この URI は QR コードにするには長すぎます。下の欄からコピーしてください。"
@@ -989,9 +969,6 @@ fn japanese(message: Message) -> String {
     BunkerRelaysHint -> "スマートフォンからこれらのリレーに接続できないと、読み取れても接続は成立しません。"
     ApprovalUriNeedsApproval ->
       "この URI で接続したクライアントは、ダッシュボードの承認待ちで承認するまで署名できません。"
-    ConnectWithClientUri -> "クライアント側の URI で接続する"
-    ConnectWithClientUriHint ->
-      "クライアントが nostrconnect:// の URI や QR コードを出せるなら、それを管理画面に貼る方が確実です。スマートフォン側でコピーできるので、カメラの制約を受けません。"
     PublicKeyHex -> "公開鍵（16 進）"
     EditLabel -> "ラベルを編集"
     ShowPrivateKey -> "秘密鍵を表示"
@@ -1114,7 +1091,7 @@ fn japanese(message: Message) -> String {
     NotAvailableForReasonAbove -> "上の理由で取得できません。"
     ImportPrivateKey -> "既存の秘密鍵を登録"
     ImportDescription ->
-      "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
+      "アカウントの秘密鍵（nsec）を貼り付けてください。登録した秘密鍵は、管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
     PrivateKeyNsec -> "秘密鍵（nsec）"
     Label -> "ラベル"
     LabelHint(max:) -> int.to_string(max) <> " 文字まで（絵文字は数文字分になることがあります）。"
@@ -1122,7 +1099,6 @@ fn japanese(message: Message) -> String {
     GenerateNewKey -> "新しい秘密鍵を生成"
     GenerateDescription -> "サーバーで新しい秘密鍵を生成します。登録する前に、バックアップのために表示します。"
     Generate -> "生成する"
-    SkippedRowNote -> "ダッシュボードに無いアカウントが登録済みと出るときは、docs/operations.md を参照してください。"
     GeneratedKey -> "生成した秘密鍵"
     BackUpNow -> "この秘密鍵を今すぐバックアップしてください。"
     GeneratedKeyNotice ->
@@ -1132,9 +1108,6 @@ fn japanese(message: Message) -> String {
       "アカウントを利用できない状態のため、登録していません。しばらく待ってから、もう一度「この鍵を登録する」を押してください。"
     RegistrationNotConfirmed ->
       "登録されたかを確認できませんでした。秘密鍵をバックアップしてから、もう一度「この鍵を登録する」を押してください。登録されていなければ登録し、登録されていれば「このアカウントはすでに登録されています。」と表示します。"
-    AccountRegistered -> "アカウントを登録しました"
-    BackUpIfNotAlready -> "まだバックアップしていなければ、この秘密鍵をバックアップしてください。"
-    RegisteredKeyNotice -> "もう一度表示するには、管理パスワードの入力が必要です。接続 URI はダッシュボードにあります。"
     Save -> "保存する"
     RotateSecretSubmit -> "secret を再生成する"
     DeleteAccountSubmit -> "アカウントを削除する"
@@ -1152,9 +1125,9 @@ fn japanese(message: Message) -> String {
       "秘密鍵を表示するには、管理パスワードを入力し直してください。表示したことは npub とともにログに記録します。"
     AdminPassword -> "管理パスワード"
     PrivateKey -> "秘密鍵"
-    CloseTabAfterCopying -> "鍵をコピーしたら、このタブを閉じてください。"
+    CopyThenClose -> "鍵をコピーしたら「閉じる」を押してください。"
     ResendNotice ->
-      "このページを再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示され、表示したことが再びログに記録されることがあります。"
+      "再読み込みしたり、戻るボタンで戻ってきたりすると、フォームが再送信され、鍵がもう一度表示され、表示したことが再びログに記録されることがあります。"
     IncorrectPassword -> "管理パスワードが違います。"
     LabelEmpty -> "ラベルを入力してください。"
     LabelTooLong(max:) -> "ラベルは " <> int.to_string(max) <> " 文字以内にしてください。"

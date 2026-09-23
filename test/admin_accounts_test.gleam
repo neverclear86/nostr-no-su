@@ -1,5 +1,5 @@
 //// アカウント管理（登録、鍵の生成、秘密鍵の再表示、削除、secret の作り直し、
-//// ラベル、接続 QR コードのページ、ダッシュボードのアカウントの節）のテスト。
+//// ラベル、接続 QR コードのダイアログ、ダッシュボードのアカウントの節）のテスト。
 
 import gleam/erlang/process
 import gleam/http
@@ -18,8 +18,9 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/nip19
 import support/account_actions
 import support/admin_context.{
-  Added, NsecRequested, Relabeled, Removed, Rotated, account_row, action_path,
-  auth_uri, context, failing_context, get, header, in_japanese, label, password,
+  Added, NsecRequested, Relabeled, Removed, Rotated, account_row,
+  action_dialog_id, action_path, auth_uri, closed_dialog, context,
+  failing_context, get, header, in_japanese, label, opened_dialog, password,
   post, post_form, reporting_context, signer, signer_npub, signer_nsec,
   skipped_npub, skipped_pubkey, skipped_row, spec_nsec, unavailable, uri,
   with_accounts, with_credentials, with_skipped,
@@ -31,7 +32,7 @@ import wisp/simulate
 /// `spec_nsec` の秘密鍵の 16 進。
 const spec_key = "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa"
 
-/// 生成の確認ページの隠しフィールドの nsec。
+/// 生成した鍵のダイアログの隠しフィールドの nsec。
 fn hidden_nsec(body: String) -> String {
   let assert Ok(#(_before, rest)) =
     string.split_once(body, "name=\"nsec\" type=\"hidden\" value=\"")
@@ -92,7 +93,7 @@ pub fn dashboard_shows_that_no_accounts_are_registered_test() {
 
 // --- アカウントの登録 ---
 
-/// nsec とラベルの POST で登録し、完了ページに正規の nsec と npub を 1 回出す。
+/// nsec とラベルの POST で登録し、nsec を描画せずにダッシュボードへ 303 で戻る。
 /// ラベルは前後の空白を除いて渡す。
 pub fn import_registers_an_account_test() {
   let reports = process.new_subject()
@@ -101,27 +102,36 @@ pub fn import_registers_an_account_test() {
       #("nsec", spec_nsec),
       #("label", " work "),
     ])
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  let registered = account_for(spec_key)
-  assert string.contains(body, spec_nsec)
-  assert string.contains(body, account.npub(registered))
+  assert response.status == 303
+  assert header(response, "location") == "/"
+  assert !string.contains(simulate.read_body(response), spec_nsec)
   assert process.receive(reports, 1000)
-    == Ok(Added(account.pubkey_hex(registered), "work"))
+    == Ok(Added(account.pubkey_hex(account_for(spec_key)), "work"))
 }
 
-/// 前後に空白を付けて大文字にした nsec でも、完了ページの nsec は小文字の正規の表記。
+/// 前後に空白を付けて大文字にした nsec でも、正規の表記の nsec と同じ鍵を登録する。
 pub fn import_normalizes_the_nsec_test() {
+  let reports = process.new_subject()
   let sent = " " <> string.uppercase(spec_nsec) <> "\n"
-  let body =
-    simulate.read_body(
-      post_form(context(), "/accounts/import", [
-        #("nsec", sent),
-        #("label", "work"),
-      ]),
-    )
-  assert string.contains(body, spec_nsec)
-  assert !string.contains(body, string.uppercase(spec_nsec))
+  let response =
+    post_form(reporting_context(reports), "/accounts/import", [
+      #("nsec", sent),
+      #("label", "work"),
+    ])
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(Added(account.pubkey_hex(account_for(spec_key)), "work"))
+}
+
+/// 不正な nsec の登録は 400 で、アカウントの追加のダイアログを開いたダッシュボードを返す。
+pub fn import_error_opens_the_add_account_dialog_test() {
+  let response =
+    post_form(context(), "/accounts/import", [#("nsec", "nsec1invalid")])
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    "class=\"modal\" id=\"dialog-account-new\" open>",
+  )
 }
 
 /// チェックサムの壊れた nsec は 400 で、送った文字列を応答に含めず、登録しない。
@@ -158,8 +168,8 @@ pub fn import_rejects_an_out_of_range_key_test() {
   )
 }
 
-/// 登録済みの鍵は 409 で、理由と、ダッシュボードに無いアカウントが登録済みと出るときの
-/// 案内と、ダッシュボードへのリンクを出す。nsec は出さない。
+/// 登録済みの鍵は 409 で、アカウントの追加のダイアログを開き直して理由と、ダッシュボードへ戻る
+/// 「キャンセル」を出す。nsec は出さない。
 pub fn import_rejects_a_registered_account_test() {
   let response =
     post_form(context(), "/accounts/import", [
@@ -168,16 +178,12 @@ pub fn import_rejects_a_registered_account_test() {
     ])
   assert response.status == 409
   let body = simulate.read_body(response)
-  assert string.contains(body, "account is already registered")
+  let dialog = opened_dialog(body, "dialog-account-new")
+  assert string.contains(dialog, "account is already registered")
   assert string.contains(
-    body,
-    "If an account that is not on the dashboard is reported as already registered, see docs/operations.md.",
+    dialog,
+    "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
   )
-  assert string.contains(
-    body,
-    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
-  )
-  assert string.contains(body, "</svg>Back to dashboard</a>")
   assert !string.contains(body, signer_nsec)
 }
 
@@ -408,7 +414,7 @@ pub fn import_accepts_a_label_at_the_code_point_limit_test() {
       #("nsec", spec_nsec),
       #("label", "  " <> limit <> " "),
     ])
-  assert response.status == 200
+  assert response.status == 303
   assert process.receive(reports, 1000)
     == Ok(Added(nsec_signer(spec_nsec), limit))
 }
@@ -423,20 +429,7 @@ pub fn import_without_fields_is_rejected_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 完了ページのラベルはエスケープして出す。
-pub fn registered_page_escapes_the_label_test() {
-  let body =
-    simulate.read_body(
-      post_form(context(), "/accounts/import", [
-        #("nsec", spec_nsec),
-        #("label", "<script>x</script>"),
-      ]),
-    )
-  assert string.contains(body, "&lt;script&gt;x&lt;/script&gt;")
-  assert !string.contains(body, "<script>x</script>")
-}
-
-/// 鍵の生成は登録せず、確認ページの隠しフィールドに有効な nsec を入れて、生成した鍵の
+/// 鍵の生成は登録せず、生成した鍵のダイアログの隠しフィールドに有効な nsec を入れて、生成した鍵の
 /// 登録へ送るフォームを返す。生成のたびに違う鍵になる。本文の無い POST も受け付ける。
 pub fn generate_does_not_register_test() {
   let reports = process.new_subject()
@@ -453,7 +446,7 @@ pub fn generate_does_not_register_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 確認ページの nsec とラベルで生成した鍵を登録すると、nsec を描画せずに
+/// 生成した鍵のダイアログの nsec とラベルで生成した鍵を登録すると、nsec を描画せずに
 /// ダッシュボードへ 303 で戻る。
 pub fn generated_key_can_be_registered_test() {
   let reports = process.new_subject()
@@ -472,7 +465,7 @@ pub fn generated_key_can_be_registered_test() {
 }
 
 /// 生成した鍵の登録でバンカーが失敗すると、生成した鍵を失わないよう、送られた nsec の
-/// 確認ページを理由付きで返す。状態コードは nsec 入力による登録と同じで、ラベルの欄には
+/// ダイアログを理由付きで開いて返す。状態コードは nsec 入力による登録と同じで、ラベルの欄には
 /// 送られた値を入れる。
 pub fn register_generated_bunker_failure_keeps_the_key_test() {
   let path = "/accounts/register-generated"
@@ -518,7 +511,7 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
 }
 
 /// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた
-/// nsec の確認ページを理由付きで 400 で返す。登録はせず、ラベルの欄には制御文字を除いた
+/// nsec のダイアログを理由付きで開いて 400 で返す。登録はせず、ラベルの欄には制御文字を除いた
 /// 値を入れる。
 pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   let reports = process.new_subject()
@@ -545,7 +538,7 @@ pub fn register_generated_with_an_invalid_label_keeps_the_key_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 生成した鍵の登録で nsec が不正なら、ラベルの不正を問わず登録画面を 400 で返す。
+/// 生成した鍵の登録で nsec が不正なら、ラベルの不正を問わずアカウントの追加のダイアログを 400 で開いて返す。
 pub fn register_generated_with_an_invalid_nsec_returns_to_the_registration_page_test() {
   let response =
     post_form(context(), "/accounts/register-generated", [
@@ -554,11 +547,14 @@ pub fn register_generated_with_an_invalid_nsec_returns_to_the_registration_page_
     ])
   assert response.status == 400
   let body = simulate.read_body(response)
-  assert string.contains(body, "action=\"/accounts/import\"")
+  assert string.contains(
+    opened_dialog(body, "dialog-account-new"),
+    "action=\"/accounts/import\"",
+  )
   assert !string.contains(body, "action=\"/accounts/register-generated\"")
 }
 
-/// nsec 入力による登録でラベルが規則に反すると、登録画面を返し、nsec を出さない。
+/// nsec 入力による登録でラベルが規則に反すると、アカウントの追加のダイアログを開いて返し、nsec を出さない。
 pub fn import_with_an_invalid_label_does_not_echo_the_nsec_test() {
   let response =
     post_form(context(), "/accounts/import", [
@@ -567,7 +563,10 @@ pub fn import_with_an_invalid_label_does_not_echo_the_nsec_test() {
     ])
   assert response.status == 400
   let body = simulate.read_body(response)
-  assert string.contains(body, "action=\"/accounts/import\"")
+  assert string.contains(
+    opened_dialog(body, "dialog-account-new"),
+    "action=\"/accounts/import\"",
+  )
   assert !string.contains(body, spec_nsec)
 }
 
@@ -581,11 +580,34 @@ pub fn registration_routes_reject_other_methods_test() {
   })
 }
 
-/// 登録画面の nsec のフォームと欄は伏せ字で、パスワードとして保存させない。
+/// `/accounts/new` の GET は 404 になる（アカウントの追加はダッシュボードのダイアログで行う）。
+pub fn new_account_page_is_not_found_test() {
+  assert get(context(), "/accounts/new").status == 404
+}
+
+/// 鍵の生成は、Esc で閉じない生成した鍵のダイアログ（`dialog-result`）を開いたダッシュボードを返す。
+/// 自動の読み込み直しはせず、テーマと言語の切り替えはダッシュボード（`/`）へ戻る。
+pub fn generate_opens_the_generated_key_dialog_test() {
+  let body = simulate.read_body(post(context(), "/accounts/generate"))
+  assert string.contains(
+    body,
+    "class=\"modal\" closedby=\"none\" id=\"dialog-result\" open>",
+  )
+  assert string.contains(
+    opened_dialog(body, "dialog-result"),
+    "action=\"/accounts/register-generated\"",
+  )
+  assert !string.contains(body, "http-equiv=\"refresh\"")
+  assert string.contains(
+    body,
+    "<input name=\"return\" type=\"hidden\" value=\"/\">",
+  )
+}
+
+/// アカウントの追加のダイアログの nsec のフォームと欄は伏せ字で、パスワードとして保存させない。
 pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
-  let response = get(context(), "/accounts/new")
-  assert response.status == 200
-  let body = simulate.read_body(response)
+  let body =
+    closed_dialog(simulate.read_body(get(context(), "/")), "dialog-account-new")
   assert string.contains(
     body,
     "<input aria-describedby=\"nsec-hint\" aria-label=\"Private key (nsec)\" autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
@@ -600,23 +622,8 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
 
 // --- 秘密鍵の再表示 ---
 
-/// 再表示のページはパスワードを求めるだけで、nsec を問い合わせない。
-pub fn reveal_page_asks_for_the_password_test() {
-  let reports = process.new_subject()
-  let response =
-    get(reporting_context(reports), action_path(dashboard.RevealPrivateKey))
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    "<input autocomplete=\"off\" class=\"input w-full font-mono border-base-content/60\" name=\"password\" required type=\"password\">",
-  )
-  assert !string.contains(body, signer_nsec)
-  assert process.receive(reports, 100) == Error(Nil)
-}
-
-/// パスワードが違えば 403 で、nsec もパスワードも出さず、nsec を問い合わせない。
-/// Basic 認証の入力を促すヘッダーも付けない。
+/// パスワードが違えば 403 で、秘密鍵の表示のダイアログを開き直して理由を出す。nsec もパスワードも出さず、
+/// nsec を問い合わせない。Basic 認証の入力を促すヘッダーも付けない。
 pub fn reveal_with_a_wrong_password_is_forbidden_test() {
   let reports = process.new_subject()
   let response =
@@ -627,7 +634,10 @@ pub fn reveal_with_a_wrong_password_is_forbidden_test() {
     )
   assert response.status == 403
   let body = simulate.read_body(response)
-  assert string.contains(body, "incorrect password")
+  assert string.contains(
+    opened_dialog(body, action_dialog_id(dashboard.RevealPrivateKey)),
+    "incorrect password",
+  )
   assert !string.contains(body, signer_nsec)
   assert !string.contains(body, "wrong-guess")
   assert list.key_find(response.headers, "www-authenticate") == Error(Nil)
@@ -657,7 +667,8 @@ pub fn reveal_with_a_wrong_password_waits_test() {
   assert process.receive(waited, 0) == Error(Nil)
 }
 
-/// 正しいパスワードなら、一覧の署名者の nsec を問い合わせて表示する。
+/// 正しいパスワードなら、一覧の署名者の nsec を問い合わせ、Esc で閉じない秘密鍵のダイアログ
+/// （`dialog-result`）で表示する。
 pub fn reveal_with_the_password_shows_the_nsec_test() {
   let reports = process.new_subject()
   let response =
@@ -667,7 +678,9 @@ pub fn reveal_with_the_password_shows_the_nsec_test() {
       [#("password", password)],
     )
   assert response.status == 200
-  assert string.contains(simulate.read_body(response), signer_nsec)
+  let body = simulate.read_body(response)
+  assert string.contains(body, "closedby=\"none\" id=\"dialog-result\" open>")
+  assert string.contains(opened_dialog(body, "dialog-result"), signer_nsec)
   assert process.receive(reports, 1000) == Ok(NsecRequested(signer))
 }
 
@@ -687,28 +700,27 @@ pub fn reveal_failure_is_unavailable_test() {
   assert string.contains(body, "Back to dashboard")
 }
 
-/// 一覧に無い署名者は GET も POST も 404 で、パスの値を応答に含めず、何も呼ばない。
+/// 一覧に無い署名者への POST は 404 で、パスの値を応答に含めず、何も呼ばない。
 pub fn reveal_for_an_unknown_signer_is_not_found_test() {
   let reports = process.new_subject()
   let path = "/accounts/%3Cscript%3Eunknown/private-key"
-  let responses = [
-    get(reporting_context(reports), path),
-    post_form(reporting_context(reports), path, [#("password", password)]),
-  ]
-  list.each(responses, fn(response) {
-    assert response.status == 404
-    assert !string.contains(simulate.read_body(response), "%3Cscript%3Eunknown")
-  })
+  let response =
+    post_form(reporting_context(reports), path, [#("password", password)])
+  assert response.status == 404
+  assert !string.contains(simulate.read_body(response), "%3Cscript%3Eunknown")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
 // --- 削除、secret の作り直し、ラベル ---
 
-/// 削除のページは、鍵を失うことを伝え、エスケープしたラベルと npub を出す。
+/// 削除のダイアログは、鍵を失うことを伝え、エスケープしたラベルと npub を出す。
 pub fn delete_page_warns_about_losing_the_key_test() {
   let labelled = with_accounts(Ok([account_row("<b>x</b>")]))
   let body =
-    simulate.read_body(get(labelled, action_path(dashboard.DeleteAccount)))
+    closed_dialog(
+      simulate.read_body(get(labelled, "/")),
+      action_dialog_id(dashboard.DeleteAccount),
+    )
   assert string.contains(body, signer_npub)
   assert string.contains(body, "&lt;b&gt;x&lt;/b&gt;")
   assert string.contains(body, "the account is lost")
@@ -725,11 +737,14 @@ pub fn delete_calls_the_context_and_redirects_test() {
   assert process.receive(reports, 1000) == Ok(Removed(signer))
 }
 
-/// secret の作り直しのページは、古い URI での新規の接続が拒否され、承認済みの
+/// secret の作り直しのダイアログは、古い URI での新規の接続が拒否され、承認済みの
 /// セッションが残ることを伝える。
 pub fn rotate_page_explains_the_effect_test() {
   let body =
-    simulate.read_body(get(context(), action_path(dashboard.RotateSecret)))
+    closed_dialog(
+      simulate.read_body(get(context(), "/")),
+      action_dialog_id(dashboard.RotateSecret),
+    )
   assert string.contains(
     body,
     "old connection URI are no longer accepted without approval",
@@ -772,16 +787,17 @@ pub fn label_update_rejects_an_invalid_label_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 編集のページを再描画しても、カードの上の要約は保存済みのラベルのまま。
+/// ラベルの編集のダイアログを開き直しても、要約は保存済みのラベルのまま。
 pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
   let saved = "<p class=\"font-semibold break-words\">" <> label <> "</p>"
+  let id = action_dialog_id(dashboard.EditLabel)
   let invalid_input =
     simulate.read_body(
       post_form(context(), action_path(dashboard.EditLabel), [
         #("label", "a\nb"),
       ]),
     )
-  assert string.contains(invalid_input, saved)
+  assert string.contains(opened_dialog(invalid_input, id), saved)
   let conflict =
     simulate.read_body(
       post_form(
@@ -790,7 +806,29 @@ pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
         [#("label", "new")],
       ),
     )
-  assert string.contains(conflict, saved)
+  assert string.contains(opened_dialog(conflict, id), saved)
+}
+
+/// ラベルの編集の 400 と 409 は、行のラベルの編集のダイアログを開いた状態で返し、中に理由と送った値を出す。
+pub fn account_change_failure_opens_the_row_dialog_test() {
+  let id = action_dialog_id(dashboard.EditLabel)
+  let cases = [
+    #(context(), "a\nb", 400, "label must not contain control characters", "ab"),
+    #(
+      failing_context(bunker.NotApplied("account is not registered")),
+      " new ",
+      409,
+      "account is not registered",
+      " new ",
+    ),
+  ]
+  use #(ctx, sent, status, reason, echoed) <- list.each(cases)
+  let response =
+    post_form(ctx, action_path(dashboard.EditLabel), [#("label", sent)])
+  assert response.status == status
+  let dialog = opened_dialog(simulate.read_body(response), id)
+  assert string.contains(dialog, reason)
+  assert string.contains(dialog, "value=\"" <> echoed <> "\"")
 }
 
 /// 欄に戻したラベルは属性値としてエスケープする。
@@ -806,62 +844,102 @@ pub fn reflected_label_is_escaped_test() {
   assert !string.contains(body, "\"><b>")
 }
 
-/// 3 つのラベルの欄には `maxlength` が無く、欄の下に表示の言語の上限の案内がある。
+/// 3 つのラベルの欄には `maxlength` が無く、欄の下に表示の言語の上限の案内がある。案内の `id` は
+/// ダイアログごとに違う。
 pub fn label_inputs_describe_the_limit_without_maxlength_test() {
-  let hint = fn(language) {
-    "<p class=\"text-muted\" id=\"label-hint\">"
+  let hint = fn(language, hint_id) {
+    "<p class=\"text-muted\" id=\""
+    <> hint_id
+    <> "\">"
     <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
     <> "</p>"
   }
-  let bodies = [
-    simulate.read_body(get(context(), "/accounts/new")),
-    simulate.read_body(post(context(), "/accounts/generate")),
-    simulate.read_body(get(context(), action_path(dashboard.EditLabel))),
+  let edit_id = action_dialog_id(dashboard.EditLabel)
+  let fields = label_dialogs()
+  let hint_ids = [
+    "label-hint",
+    "dialog-result-label-hint",
+    edit_id <> "-label-hint",
   ]
-  list.each(bodies, fn(body) {
-    assert !string.contains(body, "maxlength")
+  list.each(list.zip(fields, hint_ids), fn(entry) {
+    let #(dialog, hint_id) = entry
+    assert !string.contains(dialog, "maxlength")
     assert string.contains(
-      body,
-      "aria-describedby=\"label-hint\" aria-label=\"Label\" autocomplete=\"off\"",
+      dialog,
+      "aria-describedby=\""
+        <> hint_id
+        <> "\" aria-label=\"Label\" autocomplete=\"off\"",
     )
-    assert string.contains(body, hint(i18n.English))
+    assert string.contains(dialog, hint(i18n.English, hint_id))
   })
 
   let japanese_request =
-    simulate.request(http.Get, "/accounts/new")
+    simulate.request(http.Get, "/")
     |> in_japanese
     |> with_credentials("admin", password)
   let japanese_body =
-    simulate.read_body(admin.handle_request(context(), japanese_request))
+    closed_dialog(
+      simulate.read_body(admin.handle_request(context(), japanese_request)),
+      "dialog-account-new",
+    )
   assert string.contains(
     japanese_body,
     "aria-describedby=\"label-hint\" aria-label=\"ラベル\" autocomplete=\"off\"",
   )
-  assert string.contains(japanese_body, hint(i18n.Japanese))
+  assert string.contains(japanese_body, hint(i18n.Japanese, "label-hint"))
 }
 
-/// 登録画面、生成した鍵の確認、ラベルの編集の 3 つの欄はどれも必須。
+/// アカウントの追加、生成した鍵、ラベルの編集のダイアログの 3 つの欄はどれも必須。
 pub fn label_inputs_are_required_test() {
-  let new = simulate.read_body(get(context(), "/accounts/new"))
-  assert string.contains(new, "name=\"label\" required type=\"text\"")
-  let generated = simulate.read_body(post(context(), "/accounts/generate"))
-  assert string.contains(generated, "name=\"label\" required type=\"text\"")
-  let edit =
-    simulate.read_body(get(context(), action_path(dashboard.EditLabel)))
-  assert string.contains(edit, "name=\"label\" required type=\"text\"")
+  list.each(label_dialogs(), fn(dialog) {
+    assert string.contains(dialog, "name=\"label\" required type=\"text\"")
+  })
 }
 
-/// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ 409、
-/// 受け付けられなければ 503、反映されたか分からなければ 202 になり、理由と
-/// ダッシュボードへのリンクを出す。
+/// ラベルの欄を持つ 3 つのダイアログ（アカウントの追加、生成した鍵、ラベルの編集）の中身。
+fn label_dialogs() -> List(String) {
+  let dashboard_body = simulate.read_body(get(context(), "/"))
+  [
+    closed_dialog(dashboard_body, "dialog-account-new"),
+    opened_dialog(
+      simulate.read_body(post(context(), "/accounts/generate")),
+      "dialog-result",
+    ),
+    closed_dialog(dashboard_body, action_dialog_id(dashboard.EditLabel)),
+  ]
+}
+
+/// 削除、secret の作り直し、ラベルの POST の失敗は、反映されていなければ同じダイアログを開き直して 409、
+/// 対象が登録されていなければ 404、受け付けられなければ 503、反映されたか分からなければ 202 になる。
+/// 409 は開いたダイアログに、ほかは通知ページに理由とダッシュボードへのリンクを出す。
 pub fn account_change_failures_map_to_status_codes_test() {
+  let changes = [
+    #(dashboard.DeleteAccount, []),
+    #(dashboard.RotateSecret, []),
+    #(dashboard.EditLabel, [#("label", "new")]),
+  ]
+  use #(failure, status, reason) <- list.each(change_failures())
+  use #(action, fields) <- list.each(changes)
+  let response =
+    post_form(failing_context(failure), action_path(action), fields)
+  assert #(action, response.status) == #(action, status)
+  assert_failure_body(
+    simulate.read_body(response),
+    status,
+    reason,
+    action_dialog_id(action),
+  )
+}
+
+/// 変更の失敗と、その応答の状態コードと理由の組。
+fn change_failures() -> List(#(bunker.ChangeFailure, Int, String)) {
   let not_applied_reason = "account is not registered"
   let not_ready_reason = "accounts are not loaded yet"
-  let failures = [
+  [
     #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
     #(
       bunker.AccountNotRegistered,
-      409,
+      404,
       i18n.text(i18n.English, i18n.AccountNotFound),
     ),
     #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
@@ -871,23 +949,55 @@ pub fn account_change_failures_map_to_status_codes_test() {
       i18n.text(i18n.English, i18n.StoreDidNotConfirm),
     ),
   ]
-  let changes = [
-    #(dashboard.DeleteAccount, []),
-    #(dashboard.RotateSecret, []),
-    #(dashboard.EditLabel, [#("label", "new")]),
-  ]
-  use #(failure, status, reason) <- list.each(failures)
-  use #(action, fields) <- list.each(changes)
-  let response =
-    post_form(failing_context(failure), action_path(action), fields)
-  assert #(action, response.status) == #(action, status)
-  let body = simulate.read_body(response)
-  assert string.contains(body, reason)
+}
+
+/// 変更の失敗の応答の本文。409 はダイアログ `dialog_id` を開き直して理由を出し、ほかは通知ページに
+/// 理由とダッシュボードへのリンクを出す。
+fn assert_failure_body(
+  body: String,
+  status: Int,
+  reason: String,
+  dialog_id: String,
+) -> Nil {
+  case status {
+    409 -> {
+      assert string.contains(opened_dialog(body, dialog_id), reason)
+      Nil
+    }
+    _ -> {
+      assert string.contains(body, reason)
+      assert string.contains(
+        body,
+        "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
+      )
+      assert string.contains(body, "</svg>Back to dashboard</a>")
+      Nil
+    }
+  }
+}
+
+/// 失敗を開き直す行が、スナップショットを取り直す間に一覧から消えていたら、ダイアログを描けないので
+/// 警告の色の 503 の通知ページにする。
+pub fn account_dialog_for_a_vanished_row_is_a_notice_test() {
+  let owner = process.self()
+  let vanishing =
+    admin.Context(
+      ..context(),
+      accounts: fn() {
+        case process.self() == owner {
+          True -> Ok([account_row(label)])
+          False -> Ok([])
+        }
+      },
+      rotate_secret: fn(_signer) { Error(bunker.NotApplied("not applied")) },
+    )
+  let response = post(vanishing, action_path(dashboard.RotateSecret))
+  assert response.status == 503
   assert string.contains(
-    body,
-    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
+    simulate.read_body(response),
+    "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\"flex items-start gap-3\">"
+      <> element.to_string(view.notice_mark(view.Warning)),
   )
-  assert string.contains(body, "</svg>Back to dashboard</a>")
 }
 
 /// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 で、
@@ -909,15 +1019,30 @@ pub fn changes_to_an_unlisted_signer_are_not_found_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
+/// 登録済みの行の操作と読み込めなかった行の削除は POST だけを受け、GET は `Allow: POST` の 405 にする。
+pub fn account_actions_accept_only_post_test() {
+  let paths =
+    list.append(list.map(account_actions.all, action_path), [
+      skipped_delete_path(),
+    ])
+  use path <- list.each(paths)
+  let response = get(with_skipped(Ok([skipped_row()])), path)
+  assert #(path, response.status) == #(path, 405)
+  assert header(response, "allow") == "POST"
+}
+
 /// 知らない操作のセグメントは 404。
 pub fn unknown_account_action_is_not_found_test() {
   assert get(context(), "/accounts/" <> signer <> "/nope").status == 404
   assert post(context(), "/accounts/" <> signer <> "/nope").status == 404
 }
 
-/// 一覧に無い署名者への操作の GET は 404 の HTML で、理由を出し、署名者を含めない。
+/// 一覧に無い署名者への操作の POST は 404 の HTML で、理由を出し、署名者を含めない。
 pub fn unlisted_signer_is_not_found_page_test() {
-  let response = get(with_accounts(Ok([])), action_path(dashboard.EditLabel))
+  let response =
+    post_form(with_accounts(Ok([])), action_path(dashboard.EditLabel), [
+      #("label", "new"),
+    ])
   assert response.status == 404
   let body = simulate.read_body(response)
   assert header(response, "content-type") == "text/html; charset=utf-8"
@@ -925,16 +1050,13 @@ pub fn unlisted_signer_is_not_found_page_test() {
   assert !string.contains(body, signer)
 }
 
-/// アカウントの一覧を得られなければ、操作の GET と POST は 503 で理由を出す。
+/// アカウントの一覧を得られなければ、操作の POST は 503 で理由を出す。
 pub fn account_pages_need_the_account_list_test() {
   let failing = with_accounts(Error(unavailable))
   let responses =
-    list.append(
-      list.map(account_actions.all, fn(action) {
-        get(failing, action_path(action))
-      }),
-      [post(failing, action_path(dashboard.DeleteAccount))],
-    )
+    list.map(account_actions.all, fn(action) {
+      post(failing, action_path(action))
+    })
   list.each(responses, fn(response) {
     assert response.status == 503
     let body = simulate.read_body(response)
@@ -950,16 +1072,15 @@ fn skipped_delete_path() -> String {
   dashboard.account_action_path(skipped_pubkey, dashboard.DeleteAccount)
 }
 
-/// 飛ばされた行の削除の GET は、その行用の確認ページを 200 で返す。ラベル・npub・
-/// 16 進の公開鍵・理由・3 部の説明・フォームの宛先が出る。
+/// 飛ばされた行の削除のダイアログの `id`。
+fn skipped_dialog_id() -> String {
+  "dialog-unreadable-" <> skipped_pubkey <> "-delete"
+}
+
+/// ダッシュボードの飛ばされた行には理由を出し、その行の削除のダイアログにはラベル・npub・説明・
+/// フォームの宛先が出る。
 pub fn unreadable_delete_page_shows_the_row_test() {
-  let response = get(with_skipped(Ok([skipped_row()])), skipped_delete_path())
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(body, "Delete account")
-  assert string.contains(body, "old wallet")
-  assert string.contains(body, skipped_npub)
-  assert string.contains(body, skipped_pubkey)
+  let body = simulate.read_body(get(with_skipped(Ok([skipped_row()])), "/"))
   assert string.contains(
     body,
     i18n.text(
@@ -967,11 +1088,15 @@ pub fn unreadable_delete_page_shows_the_row_test() {
       i18n.UnreadableReason(vault.UndecryptablePrivateKey),
     ),
   )
+  let dialog = closed_dialog(body, skipped_dialog_id())
+  assert string.contains(dialog, "Delete account")
+  assert string.contains(dialog, "old wallet")
+  assert string.contains(dialog, skipped_npub)
   assert string.contains(
-    body,
+    dialog,
     "This removes the row from the bunker and the database.",
   )
-  assert string.contains(body, "action=\"" <> skipped_delete_path() <> "\"")
+  assert string.contains(dialog, "action=\"" <> skipped_delete_path() <> "\"")
 }
 
 /// 飛ばされた行の削除の POST は Context を呼び、ダッシュボードへ 303 で戻す。
@@ -990,7 +1115,7 @@ pub fn unreadable_delete_calls_the_context_and_redirects_test() {
 }
 
 /// どちらの一覧にも無い pubkey と、`MalformedPubkey` の行の生の値への削除の
-/// GET / POST は 404 で、Context の変更を呼ばない。
+/// POST は 404 で、Context の変更を呼ばない。
 pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test() {
   let reports = process.new_subject()
   let malformed_pubkey = "not-a-valid-pubkey"
@@ -1010,45 +1135,22 @@ pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test()
   let malformed_path =
     dashboard.account_action_path(malformed_pubkey, dashboard.DeleteAccount)
   list.each([unlisted_path, malformed_path], fn(path) {
-    assert get(with_malformed, path).status == 404
     assert post(with_malformed, path).status == 404
   })
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 飛ばされた行の一覧を得られなければ、削除の GET と POST は 503 で理由を出す。
+/// 飛ばされた行の一覧を得られなければ、削除の POST は 503 で理由を出す。
 pub fn unreadable_delete_needs_the_skipped_list_test() {
-  let failing = with_skipped(Error(unavailable))
-  let responses = [
-    get(failing, skipped_delete_path()),
-    post(failing, skipped_delete_path()),
-  ]
-  list.each(responses, fn(response) {
-    assert response.status == 503
-    assert string.contains(simulate.read_body(response), unavailable)
-  })
+  let response = post(with_skipped(Error(unavailable)), skipped_delete_path())
+  assert response.status == 503
+  assert string.contains(simulate.read_body(response), unavailable)
 }
 
 /// 飛ばされた行の削除の POST の失敗は、登録済みの削除と同じ対応で状態コードが
-/// 決まる。
+/// 決まる。409 はその行の削除のダイアログを開き直す。
 pub fn unreadable_delete_failures_map_to_status_codes_test() {
-  let not_applied_reason = "account is not registered"
-  let not_ready_reason = "accounts are not loaded yet"
-  let failures = [
-    #(bunker.NotApplied(not_applied_reason), 409, not_applied_reason),
-    #(
-      bunker.AccountNotRegistered,
-      409,
-      i18n.text(i18n.English, i18n.AccountNotFound),
-    ),
-    #(bunker.NotReady(not_ready_reason), 503, not_ready_reason),
-    #(
-      bunker.MaybeApplied(bunker.StoreDidNotConfirm),
-      202,
-      i18n.text(i18n.English, i18n.StoreDidNotConfirm),
-    ),
-  ]
-  use #(failure, status, reason) <- list.each(failures)
+  use #(failure, status, reason) <- list.each(change_failures())
   let failing =
     admin.Context(
       ..with_skipped(Ok([skipped_row()])),
@@ -1056,13 +1158,18 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
     )
   let response = post(failing, skipped_delete_path())
   assert response.status == status
-  assert string.contains(simulate.read_body(response), reason)
+  assert_failure_body(
+    simulate.read_body(response),
+    status,
+    reason,
+    skipped_dialog_id(),
+  )
 }
 
 // --- ダッシュボードのアカウントの節 ---
 
-/// アカウントの節には、npub、読み取り専用の欄の URI、接続 QR コードのリンク、4 つの操作のダイアログの
-/// フォーム、ラベルの編集のページへの予備のリンク、登録画面への予備のリンクが出る。
+/// アカウントの節には、npub、読み取り専用の欄の URI、接続 QR コードのボタン、4 つの操作のダイアログの
+/// フォーム、アカウントの追加のボタンが出る。
 pub fn dashboard_lists_account_actions_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(body, signer_npub)
@@ -1074,16 +1181,9 @@ pub fn dashboard_lists_account_actions_test() {
       <> wisp.escape_html(uri)
       <> "\">",
   )
-  assert string.contains(body, "href=\"/accounts/new\"")
-  assert string.contains(
-    body,
-    "href=\"" <> action_path(dashboard.ShowConnectionQr) <> "\"",
-  )
-  assert string.contains(
-    body,
-    "href=\"" <> action_path(dashboard.EditLabel) <> "\"",
-  )
-  list.each(account_actions.with_form, fn(action) {
+  assert string.contains(body, "commandfor=\"dialog-account-new\"")
+  assert string.contains(body, "commandfor=\"" <> qr_dialog_id <> "\"")
+  list.each(account_actions.all, fn(action) {
     assert string.contains(body, "action=\"" <> action_path(action) <> "\"")
   })
 }
@@ -1100,21 +1200,34 @@ pub fn dashboard_escapes_a_uri_attribute_test() {
   assert !string.contains(body, "<b>xss</b>")
 }
 
-/// 一覧を得られないときは、追加のボタンも登録画面への予備のリンクも出さない。
+/// 一覧を得られないときは、アカウントの追加のボタンを出さない。
 pub fn dashboard_hides_add_account_without_accounts_test() {
   let failing = simulate.read_body(get(with_accounts(Error(unavailable)), "/"))
-  assert !string.contains(failing, "href=\"/accounts/new\"")
+  let trigger = "command=\"show-modal\" commandfor=\"dialog-account-new\""
+  assert !string.contains(failing, trigger)
   let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
-  assert string.contains(empty, "href=\"/accounts/new\"")
+  assert string.contains(empty, trigger)
 }
 
 // --- 接続 QR コード ---
 
-/// 接続 QR コードのページは、secret 入りの URI と要承認の URI を、それぞれカメラ用と
+/// 接続 QR コードのダイアログの `id`。
+const qr_dialog_id = "dialog-account-" <> signer <> "-qr"
+
+/// `context` のダッシュボードの、接続 QR コードのダイアログの中身。
+fn qr_dialog(context: admin.Context) -> String {
+  closed_dialog(simulate.read_body(get(context, "/")), qr_dialog_id)
+}
+
+/// 接続 QR コードの操作のパスは無く、GET は 404 になる。
+pub fn connection_qr_path_is_not_found_test() {
+  assert get(context(), "/accounts/" <> signer <> "/qr").status == 404
+}
+
+/// 接続 QR コードのダイアログは、secret 入りの URI と要承認の URI を、それぞれカメラ用と
 /// クライアントの読み取り機能用の 2 枚の QR コードとコピー欄で出す。
-pub fn connection_qr_page_shows_both_uris_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+pub fn connection_qr_dialog_shows_both_uris_test() {
+  let body = qr_dialog(context())
   assert list.length(string.split(body, "role=\"img\"")) == 5
   assert string.contains(body, "value=\"" <> wisp.escape_html(uri) <> "\"")
   assert string.contains(body, "value=\"" <> wisp.escape_html(auth_uri) <> "\"")
@@ -1122,9 +1235,8 @@ pub fn connection_qr_page_shows_both_uris_test() {
 
 /// 各タブの QR は、カメラ用に `account.camera_copy_text` で作ったコピー用の文字列を、
 /// 畳みの中に完全な URI を載せる。クライアントの読み取り機能で読む語も本文に出る。
-pub fn connection_qr_page_shows_a_camera_code_and_a_scanner_code_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+pub fn connection_qr_dialog_shows_a_camera_code_and_a_scanner_code_test() {
+  let body = qr_dialog(context())
   let scanner = i18n.text(i18n.English, i18n.ScanWithClientScanner)
   list.each(
     [#("Connection URI", uri), #("Connection URI (approval)", auth_uri)],
@@ -1139,114 +1251,86 @@ pub fn connection_qr_page_shows_a_camera_code_and_a_scanner_code_test() {
   assert string.contains(body, wisp.escape_html(scanner))
 }
 
-/// 2 つの接続 URI は、同じ名前のラジオボタンを入れた `tab` のラベルと、その直後の
-/// `tab-content` の組で切り替える。CSS の `:checked` で切り替わるので JS は要らない。
-/// 既定で選ぶのは secret 入りの URI である。
-pub fn connection_qr_page_switches_the_uris_with_radio_tabs_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+/// 2 つの接続 URI は、同じ名前（ダイアログの `id` に `-tab` を付けた値）のラジオボタンを入れた
+/// `tab` のラベルと、その直後の `tab-content` の組で切り替える。CSS の `:checked` で切り替わるので
+/// JS は要らない。既定で選ぶのは secret 入りの URI である。
+pub fn connection_qr_dialog_switches_the_uris_with_radio_tabs_test() {
+  let body = qr_dialog(context())
+  let name = qr_dialog_id <> "-tab"
   assert string.contains(
     body,
-    "<label class=\"tab\"><input checked name=\"connection-uri\" type=\"radio\">Connection URI</label><div class=\"tab-content",
+    "<label class=\"tab\"><input checked name=\""
+      <> name
+      <> "\" type=\"radio\">Connection URI</label><div class=\"tab-content",
   )
   assert string.contains(
     body,
-    "<label class=\"tab\"><input name=\"connection-uri\" type=\"radio\">Connection URI (approval)</label><div class=\"tab-content",
+    "<label class=\"tab\"><input name=\""
+      <> name
+      <> "\" type=\"radio\">Connection URI (approval)</label><div class=\"tab-content",
   )
   assert list.length(string.split(body, "type=\"radio\"")) == 3
 }
 
 /// secret 入りの URI のタブの警告は、既定で選ぶタブの中にあり、畳み（`details`）に入れない。
-pub fn connection_qr_page_keeps_the_secret_warning_open_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+pub fn connection_qr_dialog_keeps_the_secret_warning_open_test() {
+  let body = qr_dialog(context())
   let warning =
     wisp.escape_html(i18n.text(i18n.English, i18n.ConnectionQrSecretWarning))
   let assert Ok(#(before, _)) = string.split_once(body, warning)
   assert list.length(string.split(before, "<details"))
     == list.length(string.split(before, "</details>"))
-  assert string.contains(before, "<input checked name=\"connection-uri\"")
+  assert string.contains(before, "<input checked name=\"" <> qr_dialog_id)
   assert !string.contains(before, "Connection URI (approval)</label>")
 }
 
 /// カメラ用のコードの貼り方の案内は、タブの外に 1 回だけ出す。
-pub fn connection_qr_page_shows_the_camera_steps_once_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+pub fn connection_qr_dialog_shows_the_camera_steps_once_test() {
   let steps = wisp.escape_html(i18n.text(i18n.English, i18n.CameraCopySteps))
-  assert list.length(string.split(body, steps)) == 2
+  assert list.length(string.split(qr_dialog(context()), steps)) == 2
 }
 
-/// バンカー用途のリレーがある Context では、その URL と一覧の見出しが本文に出る。
-pub fn connection_qr_page_lists_the_bunker_relays_test() {
-  let body =
-    simulate.read_body(get(context(), action_path(dashboard.ShowConnectionQr)))
+/// バンカー用途のリレーがある Context では、その URL と一覧の見出しがダイアログに出る。
+pub fn connection_qr_dialog_lists_the_bunker_relays_test() {
+  let body = qr_dialog(context())
   assert string.contains(body, "wss://bunker.example")
   assert string.contains(body, i18n.text(i18n.English, i18n.BunkerRelaysForUri))
 }
 
 /// リレーの一覧を得られないときは、一覧の代わりに理由を出す。QR コードの枚数は変わらない。
-pub fn connection_qr_page_notes_relays_that_cannot_be_listed_test() {
-  let unavailable_relays =
-    admin.Context(..context(), relays: fn(_deadline) {
-      Error("relay list did not answer")
-    })
+pub fn connection_qr_dialog_notes_relays_that_cannot_be_listed_test() {
   let body =
-    simulate.read_body(get(
-      unavailable_relays,
-      action_path(dashboard.ShowConnectionQr),
-    ))
+    qr_dialog(
+      admin.Context(..context(), relays: fn(_deadline) {
+        Error("relay list did not answer")
+      }),
+    )
   assert string.contains(body, "relay list did not answer")
   assert list.length(string.split(body, "role=\"img\"")) == 5
 }
 
-/// 接続 QR コードのページは GET だけを受け付け、ほかのメソッドは `Allow: GET` の 405
-/// にする。
-pub fn connection_qr_page_allows_only_get_test() {
-  let path = action_path(dashboard.ShowConnectionQr)
-  let post_response = post(context(), path)
-  assert post_response.status == 405
-  assert header(post_response, "allow") == "GET"
-  let put_response =
-    simulate.request(http.Put, path)
-    |> with_credentials("admin", password)
-    |> admin.handle_request(context(), _)
-  assert put_response.status == 405
-  assert header(put_response, "allow") == "GET"
-}
-
 /// バンカーに使うリレーが 1 件も無ければエラーの色の囲みを出す。バンカー用途のリレーがある
 /// Context と、一覧を得られない Context では出ない。
-pub fn connection_qr_page_warns_without_a_bunker_relay_test() {
-  let path = action_path(dashboard.ShowConnectionQr)
+pub fn connection_qr_dialog_warns_without_a_bunker_relay_test() {
   let warning =
     i18n.text(i18n.English, i18n.NoBunkerRelay)
     |> string.slice(0, 30)
   let without_relay =
     admin.Context(..context(), relays: fn(_deadline) { Ok([]) })
-  assert string.contains(simulate.read_body(get(without_relay, path)), warning)
-  assert string.contains(simulate.read_body(get(context(), path)), warning)
-    == False
+  assert string.contains(qr_dialog(without_relay), warning)
+  assert string.contains(qr_dialog(context()), warning) == False
   let unavailable_relays =
     admin.Context(..context(), relays: fn(_deadline) {
       Error("relay list did not answer")
     })
-  assert string.contains(
-      simulate.read_body(get(unavailable_relays, path)),
-      warning,
-    )
-    == False
+  assert string.contains(qr_dialog(unavailable_relays), warning) == False
 }
 
 /// 符号化できない長さの URI は、その位置に理由を出し、コピー欄は残す。
-pub fn connection_qr_page_notes_an_unencodable_uri_test() {
+pub fn connection_qr_dialog_notes_an_unencodable_uri_test() {
   let unencodable_uri = string.repeat("0", 3000)
   let row = dashboard.AccountRow(..account_row(label), uri: unencodable_uri)
-  let body =
-    simulate.read_body(get(
-      with_accounts(Ok([row])),
-      action_path(dashboard.ShowConnectionQr),
-    ))
+  let body = qr_dialog(with_accounts(Ok([row])))
   assert string.contains(
     body,
     string.slice(i18n.text(i18n.English, i18n.CouldNotEncodeQr), 0, 20),
