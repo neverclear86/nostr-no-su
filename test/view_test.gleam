@@ -381,6 +381,21 @@ pub fn icon_only_dialog_button_names_itself_by_label_test() {
     <> "</button>"
 }
 
+/// 語だけのダイアログのボタンは、`InRow` の送信ボタンと同じ見た目で語だけを出す。
+pub fn text_dialog_button_shows_only_the_text_test() {
+  let assert [button, _] =
+    view.dialog_button(
+      i18n.English,
+      "dialog-x",
+      view.TextTrigger("Revoke"),
+      view.GhostButton,
+      "Title",
+      [],
+    )
+  assert element.to_string(button)
+    == "<button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">Revoke</button>"
+}
+
 /// ダイアログの `id` は `dialog-` の後に部品を `-` で繋ぐ。
 pub fn dialog_id_joins_the_parts_after_the_prefix_test() {
   assert view.dialog_id(["relay", "7", "edit"]) == "dialog-relay-7-edit"

@@ -1773,10 +1773,12 @@ pub fn truncated_id(
 
 /// ダイアログを開くボタンの見た目。
 pub type DialogTrigger(msg) {
-  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作に使う。
+  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作と、セッションの行の権限の編集に使う。
   IconTextTrigger(icon: Element(msg), text: String)
   /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
   IconOnlyTrigger(icon: Element(msg), label: String)
+  /// 語だけのボタン（`post_form` の `InRow` の送信ボタンと同じ見た目）。セッションの行の承認の取り消しに使う。
+  TextTrigger(text: String)
 }
 
 /// ダイアログの `id`。`dialog-` に `parts` を `-` で繋ぐ。`parts` には節の語、行の DB の id か 16 進の pubkey、操作のセグメントのような決まった形の値だけを渡し、ラベルのような利用者の文字列を渡さない。
@@ -1816,6 +1818,11 @@ pub fn dialog_button(
         ],
         [icon],
       )
+    TextTrigger(text:) ->
+      html.button(
+        [attribute.class(button_class(kind, InRow)), ..command("show-modal")],
+        [html.text(text)],
+      )
   }
   let dialog =
     html.dialog(
@@ -1845,7 +1852,7 @@ pub fn dialog_button(
   [button, dialog]
 }
 
-/// ダイアログを開けないブラウザー（`commandfor` に対応しないもの）のための、今の操作のページへのリンク。ダイアログのボタンの並びの末尾に 1 つ置く。
+/// ダイアログを開けないブラウザー（`commandfor` に対応しないもの）のための、今の操作のページへのリンク。ダイアログのボタンの並びごとに 1 つ、並びの末尾か、並びの幅を保つときはその下の行に置く。
 pub fn fallback_link(language: Language, href: String) -> Element(msg) {
   html.a(
     [

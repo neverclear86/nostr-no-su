@@ -345,6 +345,7 @@ pub type Message {
   ApprovedSessionsDescription
   NoApprovedSessions
   Revoke
+  RevokeSessionDescription
   Relays
   Role
   MonitorRole
@@ -665,6 +666,8 @@ fn english(message: Message) -> String {
       "Clients can request signing and encryption within the permissions shown here."
     NoApprovedSessions -> "No approved sessions."
     Revoke -> "Revoke"
+    RevokeSessionDescription ->
+      "Removes the approved session of this client. To request signing or encryption with this account again, the client must connect again."
     Relays -> "Relays"
     Role -> "Role"
     MonitorRole -> "monitor"
@@ -983,6 +986,8 @@ fn japanese(message: Message) -> String {
     ApprovedSessionsDescription -> "クライアントは、ここに出ている権限の範囲で署名と暗号化を依頼できます。"
     NoApprovedSessions -> "承認済みのセッションはありません。"
     Revoke -> "承認を取り消す"
+    RevokeSessionDescription ->
+      "このクライアントの承認済みのセッションを削除します。このアカウントに署名や暗号化を再び依頼するには、クライアントが接続し直す必要があります。"
     Relays -> "リレー"
     Role -> "用途"
     MonitorRole -> "監視"
