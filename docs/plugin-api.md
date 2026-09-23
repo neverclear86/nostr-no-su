@@ -333,7 +333,7 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 plugin_min_host_version() -> <<"0.2.0">>.
 ```
 
-**照合の相手は本体の `nostr_no_su.app` の `vsn`（`gleam.toml` の `version`）である。** 開発中の本体は前のリリースの版を名乗り（最初のリリースまでは `0.0.0`。[貢献の手引き](../CONTRIBUTING.md) の「版数」）、版を上げるのはリリースの PR だけである。そのため、まだリリースされていない機能が入る版を下限に書いたプラグインは、その機能を含む main のビルドでも `requires nostr-no-su 0.2.0 or later, but this is 0.0.0` の形の理由で読み込まれない。リリース前の main で試すあいだは下限の宣言を外し、その機能を含む版がリリースされてから宣言する。
+**照合の相手は本体の `nostr_no_su.app` の `vsn`（`gleam.toml` の `version`）である。** 開発中の本体は前のリリースの版を名乗り（最初のリリースまでは `0.0.0`。[貢献の手引き](../CONTRIBUTING.md) の「版数」）、版を上げるのはリリースの PR だけである。そのため、まだリリースされていない機能が入る版を下限に書いたプラグインは、その機能を含む main のビルドでも `requires nostr-no-su 0.2.0 or later, but this is 0.1.0` の形の理由で読み込まれない。リリース前の main で試すあいだは下限の宣言を外し、その機能を含む版がリリースされてから宣言する。
 
 **依存の版の照合（`plugin_required_versions/0`）と用途を分けること。** 本体の版の下限にはこの節の `plugin_min_host_version/0` を使い、`plugin_required_versions/0` は影に入る依存（第 8.4 節）の版の照合に使う。後者は完全一致なので、本体の版をそこに書くと本体が上がるたびに宣言も上げ直すことになる。
 
