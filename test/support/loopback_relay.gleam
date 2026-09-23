@@ -1,11 +1,16 @@
 //// `127.0.0.1` の OS が割り当てたポートで待ち受ける、テスト用の WebSocket の
-//// リレー。`relay_client_test` と `plugin_api_test` が、クライアントが送った
+//// リレー。`relay_client_test`、`plugin_api_test`、`avatars_test` が、クライアントが送った
 //// フレームを見るのに使う。
 
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int
+import gleam/json
+import gleam/list
 import gleam/option.{None}
+import gleam/string
 import mist
+import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/plugin_api
 
 /// `127.0.0.1` の OS が割り当てたポートで待ち受けるテスト用の WebSocket サーバー。
 pub type Relay {
@@ -61,4 +66,48 @@ pub fn start_relay(frames: Subject(String)) -> Relay {
 pub fn stop_relay(relay: Relay) -> Nil {
   process.unlink(relay.server)
   process.send_exit(relay.server)
+}
+
+/// 取得の問い合わせに答えるループバックのリレー。接続ごとに `connections` へ
+/// 送り、受けたテキストフレームを `frames` へ転送し、REQ には `events` を
+/// `fetch_subscription_id` の EVENT で返してから EOSE を返す。
+pub fn start_fetch_relay(
+  frames: Subject(String),
+  connections: Subject(Nil),
+  events: List(Event),
+) -> Relay {
+  start_relay_with(
+    fn() { process.send(connections, Nil) },
+    fn(connection, text) {
+      process.send(frames, text)
+      case string.starts_with(text, "[\"REQ\"") {
+        True -> {
+          list.each(events, fn(stored) {
+            let _ =
+              mist.send_text_frame(
+                connection,
+                json.preprocessed_array([
+                  json.string("EVENT"),
+                  json.string(plugin_api.fetch_subscription_id),
+                  event.to_json(stored),
+                ])
+                  |> json.to_string,
+              )
+            Nil
+          })
+          let _ =
+            mist.send_text_frame(
+              connection,
+              json.preprocessed_array([
+                json.string("EOSE"),
+                json.string(plugin_api.fetch_subscription_id),
+              ])
+                |> json.to_string,
+            )
+          Nil
+        }
+        False -> Nil
+      }
+    },
+  )
 }

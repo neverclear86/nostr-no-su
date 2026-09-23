@@ -45,6 +45,7 @@ flowchart LR
     admin -.->|"名前で問い合わせ"| monitor
     admin -.->|"名前で問い合わせ"| bunker
     admin -.->|"名前で問い合わせ"| plugins
+    admin -.->|"アイコンの kind 0 の取得"| relays
     event_logger --> postgres[("Postgres")]
     bunker -->|"暗号化したアカウント"| postgres
 ```
@@ -54,6 +55,7 @@ flowchart LR
 
 管理 UI は他のどの部分にも依存しない。
 表示する状態は名前付きアクター（リレーの一覧は、加えてバンカーの DB のプール）への問い合わせで取るので、UI が再起動しても問い合わせ先が再起動しても、配線をやり直す必要がない。
+ただし、アカウントのアイコンの URL は、名前付きのキャッシュ（`avatars`）の値が古いときに、管理 UI が走らせる使い捨てのプロセスが、監視の用途のリレーへ直接問い合わせて取る（`plugin_api.ask_monitor_relays`）。
 問い合わせが失敗したときはその項目だけを、リレーの接続状態は「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）として描画し、アカウント・承認待ち・セッション・リレーは一覧の代わりにその理由を出す（承認待ち・アカウント・セッションの理由が同じなら、ページの先頭に 1 回だけ出し、各節は「上の理由で取得できません。」の 1 文にする）。ページ全体は失敗させない。
 問い合わせの返信先は OTP の `gen_server:call` と同じく monitor の alias なので、タイムアウトの後に届いた応答（接続 secret を含みうる）はランタイムが捨て、UI のハンドラーのメールボックスにもログにも残らない。
 
@@ -64,7 +66,7 @@ flowchart LR
 リレーの接続だけは例外で、用途（監視・バンカー・セッションのリレー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
 ツリーの外で動くプロセスが 3 種類ある。
-プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、プラグインからの取得の口（`plugin_api`）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
+プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、監視リレーへの取得の問い合わせ（`plugin_api.ask_monitor_relays`。プラグインの取得の口と `avatars` が使う）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
 1 つ目は監視だけを張り、2 つ目はリンクを張ったうえで exit を trap する。3 つ目は問い合わせを集める使い捨てプロセスが、集め終えた時点でリンクを解き、購読の CLOSE と close フレームを送らせて止まるのを短い期限まで待ち、止まらなければ kill する（`relay_client.disconnect`）。
 いずれも所有者が死を検知するので、スーパーバイザーの再起動許容回数を消費しない。
 
@@ -89,6 +91,7 @@ root (one_for_one, 3/60)
 │   │   └── relay_connection × 監視リレーの数
 │   ├── resume_saver
 │   └── plugin_resume_saver
+├── avatars      (worker)              アカウントのアイコンの URL のキャッシュ（ADMIN_PORT が有効なときだけ）
 └── admin        (mist)                管理 UI の HTTP サーバー（ADMIN_PORT が有効なときだけ）
 ```
 
@@ -571,6 +574,7 @@ sequenceDiagram
 見た目は Tailwind CSS と daisyUI のクラスで付け、鍵の指紋の色だけは `assets/admin.css` に手で書いたクラス（`fp`、`h0`〜`h11`、`fp-gray`）とテーマの変数で付けて、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
 時刻はサーバーが `<time datetime>` に UTC で描き（JS が無いときは「05:12:34 UTC」のように UTC と分かる表記）、`admin.js` が読み込み時に閲覧者のローカルの時刻に直す。
+アカウントのアイコン（`img[data-avatar]`）は、読み込めた画像にだけ `admin.js` が `data-loaded` を付けて見せ、読めないときと JS が無いときは下の鍵の指紋が見える。
 POST の応答で開いた状態で描いたダイアログは、`admin.js` が読み込み時にモーダルとして開き直す。
 ページの言語は認証の後に、切り替えで保存した cookie、`Accept-Language`、英語の順に決め、文言は `admin/i18n.gleam` から引く。言語の切り替えの「ブラウザーの設定」のボタンは cookie を消す。
 テーマは切り替えで保存した cookie から決め、無ければブラウザーの設定に従う。
@@ -686,13 +690,14 @@ nostr-no-su/
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── admin/plugin_view.gleam プラグインが返す要素の記述から管理 UI の部品への変換（純粋）
 │       ├── admin/plugin_pages.gleam プラグインのページの描画（ページ枠、タブ、節の並び）
+│       ├── avatars.gleam         アカウントのアイコンの URL（kind 0 の picture）のキャッシュのアクター
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
 │       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）
 │       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
 │       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
-│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
+│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得。取得は `avatars` も使う）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
@@ -727,7 +732,7 @@ nostr-no-su/
 │       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
-│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボードが使う）
+│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボード、`plugin_api`、`avatars` が使う）
 │       └── time.gleam            現在時刻（壁時計・単調時計、FFI）
 │
 ├── test/                         本体のテスト（gleeunit と qcheck）

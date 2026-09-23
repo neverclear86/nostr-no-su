@@ -90,6 +90,7 @@ fn row(signer: String, npub: String, label: String) -> dashboard.AccountRow {
       <> relay
       <> "&secret=0123456789abcdef0123456789abcdef",
     auth_uri: "bunker://" <> signer <> "?" <> relay,
+    picture: None,
   )
 }
 
@@ -822,7 +823,10 @@ fn context() -> admin.Context {
     accounts: fn() {
       Ok([
         row(signer, signer_npub, "main account"),
-        row(second, second_npub, "<b>bot</b> 🙂"),
+        dashboard.AccountRow(
+          ..row(second, second_npub, "<b>bot</b> 🙂"),
+          picture: Some("https://example.invalid/avatar.png"),
+        ),
       ])
     },
     skipped: fn() {

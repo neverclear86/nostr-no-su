@@ -433,8 +433,8 @@ pub fn plugin_page_renders_test() {
   assert string.contains(body, "<span lang=\"en\">console_logger</span>")
 }
 
-/// プラグインのページの GET だけ CSP の `img-src` が遠隔の画像を許し、ダッシュボードの
-/// CSP は今までどおり `data:` だけである。
+/// プラグインのページの GET の CSP の `img-src` は `http:` の遠隔の画像まで許し、ダッシュボードの
+/// CSP は `data:` と `https:` だけを許す。
 pub fn plugin_page_allows_remote_images_test() {
   let plugin_response = get(context(), "/plugins/console_logger/status")
   assert header(plugin_response, "content-security-policy")
@@ -442,7 +442,7 @@ pub fn plugin_page_allows_remote_images_test() {
 
   let dashboard_response = get(context(), "/")
   assert header(dashboard_response, "content-security-policy")
-    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 }
 
 /// 供給の無いプラグイン名、そのプラグインに無いページのキーはどちらも 404 で、

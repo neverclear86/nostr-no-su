@@ -30,6 +30,7 @@ fn row(label: String) -> dashboard.AccountRow {
     label: label,
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+    picture: None,
   )
 }
 

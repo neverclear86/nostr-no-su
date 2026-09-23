@@ -1,6 +1,7 @@
 //// プラグインが呼ぶ本体側の口。プラグイン API v1 の任意エクスポート（本体が
 //// プラグインを呼ぶ側）とは向きが逆で、ここはプラグインが本体を呼ぶ。仕様は
 //// `docs/plugin-api.md` 第 14 章。
+//// 監視リレーへの取得の問い合わせ（`ask_monitor_relays`）は、管理 UI のアカウントのアイコン（`avatars`）も使う。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -57,8 +58,8 @@ const no_monitor_relay_registered = "no monitor relay is registered"
 /// 1 本とも接続できず、または期限までに応答しなかったときの理由。
 const no_monitor_relay_connected = "no monitor relay is connected"
 
-/// 使い捨ての接続の上だけで使う購読 id。`fetch_events_sends_one_req_per_relay_test`
-/// が偽のリレーの EOSE と期待する REQ を組むため公開する。
+/// 使い捨ての接続の上だけで使う購読 id。テストの偽のリレー（`support/loopback_relay` の
+/// `start_fetch_relay`）が EOSE を返し、`fetch_events_sends_one_req_per_relay_test` が期待する REQ を組むため公開する。
 pub const fetch_subscription_id = "nostr-no-su-plugin-fetch"
 
 /// リレーの一覧を持つアクターが応答しないときの理由。
@@ -205,8 +206,8 @@ pub fn fetch_with(
 /// バンカーの無応答は全体の失敗）、(4) 登録済みの公開鍵を重複を除いて `pubkeys`
 /// の順に並べ、1 件も無ければ問い合わせない、(5) 1 件以上なら
 /// `ask_monitor_relays` でまとめて問い合わせる、(6) 公開鍵ごとに、未登録なら
-/// 確認の理由を `Error` に、登録済みなら作者がその公開鍵のイベントを `newest`
-/// に渡して `fetched` の形を `Ok` にし、`pubkeys` の順に並べる。
+/// 確認の理由を `Error` に、登録済みなら `newest_by` で選んだ 1 件を
+/// `fetched` の形で `Ok` にし、`pubkeys` の順に並べる。
 pub fn fetch_events_with(
   bunker_name: Name(bunker.Msg),
   relay_list_name: Name(relay_list.Msg),
@@ -239,14 +240,7 @@ pub fn fetch_events_with(
   Ok(
     list.map(checks, fn(pair) {
       case pair {
-        #(pubkey, Ok(Nil)) ->
-          Ok(
-            fetched(
-              newest(
-                list.filter(found, fn(candidate) { candidate.pubkey == pubkey }),
-              ),
-            ),
-          )
+        #(pubkey, Ok(Nil)) -> Ok(fetched(newest_by(found, pubkey)))
         #(_pubkey, Error(reason)) -> Error(reason)
       }
     }),
@@ -259,7 +253,8 @@ pub fn fetch_events_with(
 /// （`relay_client.start` が失敗した本と、期限までに EOSE が届かなかった本を
 /// 数える）なら `no_monitor_relay_connected` を返す。成功のときは、応答した本の
 /// イベントをリレーの一覧の順に、同じリレーの中では届いた順に並べて返す。
-fn ask_monitor_relays(
+/// `avatars` が kind 0 を取るのにも使うため公開する。
+pub fn ask_monitor_relays(
   relay_list_name: Name(relay_list.Msg),
   authors: List(String),
   kind: Int,
@@ -300,7 +295,7 @@ fn fetched(found: Option(Event)) -> Dynamic {
 /// `created_at` が最大の 1 件。同じ `created_at` が複数あるときは `events` で先に
 /// 現れたものを返す（厳密な `>` の比較）。`events` の並びはリレーの一覧の順で、
 /// 同じリレーの中では届いた順であることが前提（`ask_monitor_relays` と `query`
-/// が保つ。`fetch_events_with` は作者で絞るだけで並びを変えない）。
+/// が保つ。`newest_by` は作者で絞るだけで並びを変えない）。
 /// `newest_picks_the_greatest_created_at_test` が参照するため公開する。
 pub fn newest(events: List(Event)) -> Option(Event) {
   list.fold(events, None, fn(current: Option(Event), candidate: Event) {
@@ -310,6 +305,11 @@ pub fn newest(events: List(Event)) -> Option(Event) {
       Some(_) -> current
     }
   })
+}
+
+/// `events` のうち作者が `author` のものの `newest`。`fetch_events_with` と `avatars` が使う。
+pub fn newest_by(events: List(Event), author: String) -> Option(Event) {
+  newest(list.filter(events, fn(candidate) { candidate.pubkey == author }))
 }
 
 /// `authors` の名義で書かれた `kind` のイベントを求める REQ のフィルター。
