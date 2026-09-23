@@ -48,7 +48,7 @@ disallowedTools: Agent
 - コミットは `feat:`、`fix:`、`docs:` の接頭辞と日本語の要約（直近の `git log --oneline` の形）。本文の最後に、指示されたトレーラーの行を付ける
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文は次の形。末尾に `Closes #<N>` と、指示された生成表記の行を置く
-- 1 つの issue を複数の PR に分けるときは、main に並べず GitHub の stacked PR で積む。依存の下の PR から順にブランチを前のブランチの上に作り、`gh stack init <下のブランチ> ... <上のブランチ>` と `gh stack submit`（PR がすでにあれば `gh stack link <下> ... <上>`）で積む。`Closes #<N>` は 1 本の PR だけに置き、ほかの PR の本文には段の位置（何段目か、下の PR）を書く
+- 1 つの issue を複数の PR に分けるとき（ユーザーの決定で内容ごとに分けるとき、または受け入れ条件ごとに独立に戻せる変更に切れるとき）は、main に並べず GitHub の stacked PR で積む。下の段から順に、ブランチを下の段のブランチの上に `retro/<N>-<部分の短い英語>` で作り（1 段目は `retro/<N>`）、各段を上の `gh pr create` で `--base <下の段のブランチ>`（1 段目は `main`）にして自分の題と本文で作ってから、`gh stack link <下の PR 番号> ... <上の PR 番号>` で積む。`gh stack submit` と、ブランチ名を渡す `gh stack link` は、非対話では題と本文を自動で作って draft の PR にするので使わない（`gh stack merge` は draft を通さない）。`Closes #<N>` は、その issue の受け入れ条件をすべて満たす一番上の段の PR だけに置き（下の段が先にマージされても issue が閉じない）、ほかの PR の本文には段の位置（何段目か、下の PR）を書く
 - PR を作ったら `gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI を待つ（`.claude/` と `*.md` だけの変更では CI は何も検査しないので、すぐ返る）
 
 ```
@@ -65,4 +65,4 @@ disallowedTools: Agent
 ```
 
 ## 返すもの
-構造化出力で、`status`（`pr` / `rejected` / `blocked`）。`pr` のときは `pr`（番号）、`prUrl`、`head`、`ciPassed`。`rejected` のときは `commentUrl` と `reason`。`blocked` のときは `commentUrl` と `questions`。
+構造化出力で、`status`（`pr` / `rejected` / `blocked`）。`pr` のときは `pr`（番号）、`prUrl`、`head`、`ciPassed`（複数の PR に分けたときは一番上の段の値と、下の段から順の全部の PR を `prs` に。`ciPassed` は全部の PR の CI が pass のとき true）。`rejected` のときは `commentUrl` と `reason`。`blocked` のときは `commentUrl` と `questions`。

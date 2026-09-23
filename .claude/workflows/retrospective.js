@@ -25,7 +25,8 @@ export const meta = {
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
 //   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
 //               集計と起票は飛ばし、精査と実装だけを回す（runs / events / since は要らない）
-// 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked）
+// 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
+//         複数の PR に分けたときは pr / prUrl / head が一番上の段で、prs に下の段から順の全部が入る）
 // ---------------------------------------------------------------------------
 
 const REPO = 'neverclear86/nostr-no-su'
@@ -68,10 +69,15 @@ const S = {
     type: 'object',
     properties: {
       status: { type: 'string', enum: ['pr', 'rejected', 'blocked'] },
-      pr: { type: 'integer' },
+      pr: { type: 'integer', description: 'pr のとき、作った PR の番号。複数の PR に分けたときは一番上の段' },
       prUrl: { type: 'string' },
       head: { type: 'string' },
-      ciPassed: { type: 'boolean' },
+      ciPassed: { type: 'boolean', description: 'PR の CI が pass したか。複数の PR に分けたときは全部の PR が pass のとき true' },
+      prs: {
+        type: 'array',
+        items: { type: 'object', properties: { pr: { type: 'integer' }, prUrl: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' } }, required: ['pr', 'prUrl', 'head'] },
+        description: '複数の PR に stacked PR で分けたとき、下の段から順の全部の PR。1 本のときは省く',
+      },
       commentUrl: { type: 'string', description: 'rejected / blocked のとき、issue に投稿した「## 精査」の URL' },
       reason: { type: 'string', description: 'rejected の理由' },
       questions: { type: 'array', items: { type: 'string' }, description: 'blocked のときの論点' },
@@ -278,12 +284,12 @@ ${observations.map((o) => `- ${o}`).join('\n')}
     const branch = `retro/${n}`
     return `ふりかえりで起票された issue #${n}（${url}）を精査し、直すべきものなら実装して PR を作ってほしい。対象のリポジトリは ${REPO}。
 - 土台: origin/main の ${a.base}
-- 作業ツリー: ${wt}、ブランチ: ${branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${branch} ${wt} origin/main\` で作る。ブランチがすでに origin にあれば、それを取り出して続きから進める）
+- 作業ツリー: ${wt}、ブランチ: ${branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${branch} ${wt} origin/main\` で作る。ブランチがすでに origin にあれば、それを取り出して続きから進める）。複数の PR に分けるときは 2 段目以降を \`${branch}-<部分の短い英語>\` で下の段のブランチの上に作り、定義の「コミットと PR」の stacked PR の手順で積む
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
 - PR 本文の末尾の生成表記: 🤖 Generated with [Claude Code](https://claude.com/claude-code) と、その次の行に ${a.trailers.sessionUrl}
 - PR 本文と issue のコメントの下書きの置き場: ${a.scratchpad}/retro-${n}-*.md
 ${decisions && decisions.length ? `- 前回の精査で blocked にした論点へのユーザーの決定（これに従って実装する）:\n${decisions.map((d) => `  - ${d}`).join('\n')}\n` : ''}issue の主張は定義の「精査」の手順で裏を取ってから直す。マージと \`gh pr review\` はしない。
-返答（構造化出力）: status（pr / rejected / blocked）。pr のときは pr、prUrl、head、ciPassed。rejected のときは commentUrl と reason。blocked のときは commentUrl と questions。`
+返答（構造化出力）: status（pr / rejected / blocked）。pr のときは pr、prUrl、head、ciPassed（複数の PR に分けたときは一番上の段の値と、下の段から順の全部を prs に）。rejected のときは commentUrl と reason。blocked のときは commentUrl と questions。`
   },
 }
 
@@ -292,7 +298,7 @@ async function implement(n, url, decisions) {
   log(`issue #${n} を精査して実装する${decisions && decisions.length ? `（ユーザーの決定 ${decisions.length} 件つき）` : ''}`)
   const impl = await agent(P.impl(n, url, decisions), { label: `Retro implement #${n}`, agentType: 'issue-retro-implementer', phase: '精査と実装', schema: S.impl })
   if (!impl) throw new Error(`Retro implement #${n} が結果を返さなかった`)
-  log(`精査と実装: ${impl.status}${impl.status === 'pr' ? `（PR #${impl.pr}）` : ''}`)
+  log(`精査と実装: ${impl.status}${impl.status === 'pr' ? `（PR #${impl.pr}${(impl.prs || []).length ? `。stacked PR: ${impl.prs.map((p) => `#${p.pr}`).join(' → ')}` : ''}）` : ''}`)
   return impl
 }
 
