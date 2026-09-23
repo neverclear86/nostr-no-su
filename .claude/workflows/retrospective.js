@@ -16,7 +16,7 @@ export const meta = {
 //               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
 //               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
-//   observations: [string]。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
+//   observations: [string]。空でない文字列。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
 //               合わないものは集計に入らないので、ここで自由形式のまま渡し、ふりかえりの依頼文に「セッションの観察」として添える
 //   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
@@ -45,7 +45,7 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
-  if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string'))) throw new Error('args.observations は文字列の配列で渡す')
+  if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string' && o.trim() !== ''))) throw new Error('args.observations は空でない文字列の配列で渡す')
 }
 const observations = a.observations || []
 const dry = a.dryRun === true
