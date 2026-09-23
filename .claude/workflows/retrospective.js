@@ -89,7 +89,7 @@ function parseLabel(label) {
   if ((m = label.match(/^Implement #(\d+)(?: \(続き.*\))?$/))) return { kind: 'implement', n: Number(m[1]), round: null }
   if ((m = label.match(/^PR review #(\d+) r(\d+)$/))) return { kind: 'prReview', n: Number(m[1]), round: Number(m[2]) }
   if ((m = label.match(/^Final gate PR #(\d+)(?: r(\d+))?$/))) return { kind: 'gate', n: Number(m[1]), round: Number(m[2] || 1) }
-  if ((m = label.match(/^Merge PR #(\d+)( \(retry \d+( recheck)?\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
+  if ((m = label.match(/^Merge PR #(\d+)(?: \((?:re-review|(?:re-review, )?retry \d+(?: recheck)?)\))?$/))) return { kind: 'merge', n: Number(m[1]), round: null }
   return { kind: 'other', n: null, round: null }
 }
 
@@ -111,7 +111,7 @@ const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
  * | prRounds | PR review の round の最大 |
  * | prConditionCount | すべての PR review の verdict: 'APPROVE' の conditions の合計（phase で絞らない） |
  * | implMusts | phase が 'PR レビュー' の PR review で、verdict: 'REQUEST CHANGES' かつ designMust が真でないものの must の合計 |
- * | lessons | Final gate の verdict: 'APPROVE' の lessons |
+ * | lessons | 最初の Final gate の verdict: 'APPROVE' の lessons（rebase の差分の再確認の APPROVE は lessons を返さないので、後の APPROVE で上書きしない） |
  * | status | その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
  * | pr | Implement の結果の pr |
  * | implementedBy | Implement の結果の implementedBy（devin か claude。無ければ claude） |
@@ -149,7 +149,7 @@ function collectRun(events, prToIssue) {
       if (ev.verdict === 'APPROVE') rec.prConditionCount = (rec.prConditionCount || 0) + (ev.conditions || 0)
       if (ev.phase === 'PR レビュー' && ev.verdict === 'REQUEST CHANGES' && !ev.designMust) rec.implMusts = (rec.implMusts || 0) + (ev.must || 0)
     } else if (kind === 'gate') {
-      if (ev.verdict === 'APPROVE') rec.lessons = ev.lessons || []
+      if (ev.verdict === 'APPROVE' && rec.lessons === undefined) rec.lessons = ev.lessons || []
     } else if (kind === 'merge') {
       if (ev.status === 'merged') rec.status = 'merged'
     }

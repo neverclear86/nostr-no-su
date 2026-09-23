@@ -139,6 +139,7 @@ const S = {
       sha: { type: 'string', description: 'マージのコミット' }, issueClosed: { type: 'boolean' }, problem: { type: 'string' },
       closedParents: { type: 'array', items: { type: 'integer' }, description: '兄弟がすべて閉じたので閉じた親 issue の番号。無ければ空' },
       openParent: { type: 'integer', description: '兄弟がすべて閉じたのに gh issue close が拒否されて閉じられなかった親 issue の番号' },
+      needsReview: { type: 'boolean', description: 'not_ready のうち、最終確認の APPROVE の後の rebase に衝突の解消を超える変更がある、または PR レビューの APPROVE の後のコミットが kind=fix の対応と一致せず、レビューが要るもの（スクリプトが最終確認に再確認させる）' },
     },
     required: ['status'],
   },
@@ -414,17 +415,28 @@ ${P.gateCourse(state)}再現はせず、diff とレビューの経緯と受け�
 - 最終確認のラウンド: ${state.gateRounds}（コメントのマーカーの round に使う）
 前回の最終確認（${prevGateUrl}）の指摘に実装側が対応し（${responseUrl}）、PR レビュアーも再レビューで APPROVE を出した（${state.approveUrl}）。
 ${P.gateCourse(state)}前回の指摘ごとに直ったかを照合し、再確認の結果を PR コメントに投稿してほしい。見出しは再確認でも「## 最終確認」だけにする（マーカーは kind=gate）。
-判定が APPROVE なら、続けて「## まとめ」を別のコメントとして 1 本投稿する（上の経緯と、学びを 0〜3 件）。
-返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは lessons。`,
-  merge: (e, pr, head, approvedHead, reviewApprovedHead, conditionsUrl) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
+${state.gateUrl ? `「## まとめ」は最初の最終確認の APPROVE（${state.gateUrl}）に続けて投稿済みなので投稿しない。
+返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL（lessons は返さない）。` : `判定が APPROVE なら、続けて「## まとめ」を別のコメントとして 1 本投稿する（上の経緯と、学びを 0〜3 件）。
+返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL、APPROVE のときは lessons。`}`,
+  // マージ担当が「rebase に衝突の解消を超える変更がある」か「PR レビューの後のコミットが kind=fix と一致しない」と判断したとき、最終確認にその差分だけを再確認させる。
+  // 範囲の起点は PR レビューが APPROVE を出した head（kind=fix と一致しないコミットはそこから最終確認の head の間にある）。「## まとめ」は投稿済み
+  gateRebase: (e, state, problem) => `PR #${state.pr}（issue #${e.n}、head ${state.head}）の rebase の差分を再確認してほしい（定義の「rebase の差分の再確認」）。
+- 最終確認のラウンド: ${state.gateRounds}（コメントのマーカーの round に使う）
+- PR レビューが APPROVE を出した head: ${state.reviewApprovedHead}
+- 最終確認が APPROVE を出した head: ${state.approvedHead}（${state.gateUrl}）
+${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（マーカー kind=fix。その head のコミットは最初の最終確認が見ている）\n` : ''}- マージ担当の判断: ${problem}
+\`git fetch origin main ${e.branch}\` の後、\`git range-diff origin/main ${state.reviewApprovedHead} ${state.head}\` の \`!\` と \`>\` の行のうち、マージ担当の判断が挙げたコミットの差分だけを読み、その変更が受け入れ条件とレビューの経緯に照らして妥当かを判定し、「## 最終確認」を PR コメントに投稿してほしい（マーカーは kind=gate）。「## まとめ」はすでに投稿済みなので投稿しない。
+返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL（lessons は返さない）。`,
+  // rebaseGateHead は最終確認の再確認が見た head。再確認の後にもう一度 rebase が入ることがあるので、head ではなくこの値を再確認の範囲の終点として渡す
+  merge: (e, pr, head, approvedHead, reviewApprovedHead, conditionsUrl, rebaseGateUrl, rebaseGateHead) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
 - PR レビューが APPROVE を出した head: ${reviewApprovedHead}
 - 最終確認が APPROVE を出した head: ${approvedHead}${head !== approvedHead ? '（その後に rebase で head が変わった。差分が rebase だけであることを確かめてからマージする）' : ''}
-${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が入っている（最後の対応コメント: ${conditionsUrl}。マーカー kind=fix）\n` : '- レビューの APPROVE の後に条件への対応は無い\n'}
+${rebaseGateUrl ? `- rebase の差分は最終確認が再確認して APPROVE を出した（${rebaseGateUrl}。再確認が見た head: ${rebaseGateHead}）。${reviewApprovedHead} から ${rebaseGateHead} までの差分は再確認が見たものなので、rebase だけであることの確認と kind=fix との一致の照合は \`git range-diff origin/main ${rebaseGateHead} ${head}\` に置き換え、そこまでの \`!\` と \`>\` の行を not_ready の理由にしない\n` : ''}${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が入っている（最後の対応コメント: ${conditionsUrl}。マーカー kind=fix）\n` : '- レビューの APPROVE の後に条件への対応は無い\n'}
 - 作業ツリー（マージの前に消す）: ${e.wt}、${e.reviewWt}、${e.planWt}
 - squash コミットの本文（トレーラー 2 行）:
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
-返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、閉じた親 issue（closedParents）、閉じられなかった親 issue（openParent）、問題があればその内容。`,
+返答（構造化出力）: status（merged / conflict / not_ready）、マージのコミット、issue が閉じたか、閉じた親 issue（closedParents）、閉じられなかった親 issue（openParent）、rebase の差分にレビューが要るか（needsReview）、問題があればその内容。`,
   // 実装が status だけを返したとき（schema 違反の送り直し）に、PR の有無を gh で引く。実装を走り直すより安い
   lookupPr: (e) => `ブランチ ${e.branch} の PR を調べて返してほしい（コードは変えず、何も投稿しない）。
 \`gh pr list -R ${REPO} --head ${e.branch} --state open --json number,url,headRefOid\` で PR を引く。無ければ found を false にする。
@@ -652,18 +664,31 @@ async function prReviewStage(e, issue, state) {
   }
 }
 
-/** 最終確認。REQUEST CHANGES なら修正 → PR 再レビュー → 再確認 */
-async function gateStage(e, issue, state) {
+/**
+ * 最終確認。REQUEST CHANGES なら修正 → PR 再レビュー → 再確認。
+ * rebaseProblem があるときは、マージ担当が rebase の差分にレビューが要ると判断した後の再確認で、ラウンドは前回の続きから数える。
+ * 再確認の APPROVE は approvedHead を動かさず（マージ担当の kind=fix の照合が rebase 前の head を要る）、見た head を rebaseGateHead、URL を rebaseGateUrl に残してマージの依頼文で渡す。
+ * 再確認が REQUEST CHANGES なら、修正と PR 再レビューを経た次の APPROVE は head までを両方が見ているので、通常の APPROVE と同じに approvedHead を head に進めて再確認の印を消す
+ * （「## まとめ」は最初の APPROVE で投稿済みなので、gateUrl が立っている間は lessons を上書きしない）
+ */
+async function gateStage(e, issue, state, rebaseProblem = null) {
   let prevGateUrl = null, responseUrl = null
-  for (let g = 1; g <= MAX_GATE_ROUNDS; g++) {
+  const first = state.gateRounds + 1
+  for (let g = first; g < first + MAX_GATE_ROUNDS; g++) {
     state.gateRounds = g
     const gate = await call('gate', g === 1 ? `Final gate PR #${state.pr}` : `Final gate PR #${state.pr} r${g}`,
-      g === 1 ? P.gate1(e, state, issue) : P.gateNext(e, state, responseUrl, prevGateUrl),
+      rebaseProblem && g === first ? P.gateRebase(e, state, rebaseProblem) : g === 1 ? P.gate1(e, state, issue) : P.gateNext(e, state, responseUrl, prevGateUrl),
       { agentType: 'issue-final-gate', phase: '最終確認', schema: S.gate })
     prevGateUrl = gate.commentUrl
-    if (gate.verdict === 'APPROVE') { state.nits += gate.nit || 0; state.lessons = gate.lessons || []; state.approvedHead = state.head; return {} }
+    if (gate.verdict === 'APPROVE') {
+      state.nits += gate.nit || 0
+      if (rebaseProblem && g === first) { state.rebaseGateUrl = gate.commentUrl; state.rebaseGateHead = state.head; return {} }
+      if (!state.gateUrl) state.lessons = gate.lessons || []
+      state.approvedHead = state.head; state.gateUrl = gate.commentUrl; state.rebaseGateUrl = null; state.rebaseGateHead = null
+      return {}
+    }
     if (gate.verdict === 'NEEDS_USER') return { blocked: { stage: 'gate', questions: gate.questions || ['最終確認がユーザーの判断を求めた'] } }
-    if (g === MAX_GATE_ROUNDS) break
+    if (g === first + MAX_GATE_ROUNDS - 1) break
     const fix = await fixRound(e, state, `Fix PR #${state.pr} gate r${g}`, P.fix(e, state.pr, gate.commentUrl, '最終確認', ''), '最終確認')
     if (fix.blocked) return fix
     responseUrl = fix.commentUrl
@@ -678,12 +703,18 @@ async function gateStage(e, issue, state) {
   return { stalled: { stage: 'gate', reason: `最終確認が ${MAX_GATE_ROUNDS} 回で APPROVE にならない` } }
 }
 
-/** マージ。衝突なら rebase させて再試行。1 件ずつ。閉じられなかった親 issue は log に出して結果に残す */
-async function mergeStage(e, state) {
+/**
+ * マージ。衝突なら rebase させて再試行。1 件ずつ。閉じられなかった親 issue は log に出して結果に残す。
+ * マージ担当が rebase の差分にレビューが要ると判断したら（needsReview）、{ review: 理由 } を返して呼び出し側が最終確認に再確認させる。
+ * reReviewed は再確認の後のやり直しで、マージ・確かめ直し・rebase の label に re-review を付けて 1 回目と区別する（retrospective は label で集計し、同じ label は先の結果を採る）
+ */
+async function mergeStage(e, state, reReviewed = false) {
   return mergeLock(async () => {
     let notReady = false
+    const tag = reReviewed ? 're-review' : null
+    const label = (part) => `Merge PR #${state.pr}${tag || part ? ` (${[tag, part].filter(Boolean).join(', ')})` : ''}`
     for (let t = 0; t <= MAX_REBASES; t++) {
-      const m = await call('merge', t === 0 && !notReady ? `Merge PR #${state.pr}` : `Merge PR #${state.pr} (retry ${t}${notReady ? ' recheck' : ''})`, P.merge(e, state.pr, state.head, state.approvedHead, state.reviewApprovedHead, state.conditionsUrl), { agentType: 'issue-merger', phase: 'マージ', schema: S.merger })
+      const m = await call('merge', t === 0 && !notReady ? label(null) : label(`retry ${t}${notReady ? ' recheck' : ''}`), P.merge(e, state.pr, state.head, state.approvedHead, state.reviewApprovedHead, state.conditionsUrl, state.rebaseGateUrl, state.rebaseGateHead), { agentType: 'issue-merger', phase: 'マージ', schema: S.merger })
       if (m.status === 'merged') {
         state.mergeSha = m.sha; state.issueClosed = m.issueClosed !== false; state.mergeSeq = ++mergeSeq
         state.closedParents = m.closedParents || []; state.openParent = m.openParent || null
@@ -691,6 +722,7 @@ async function mergeStage(e, state) {
         return {}
       }
       if (m.status === 'not_ready') {
+        if (m.needsReview) return { review: m.problem || 'rebase の差分にレビューが要る' }
         if (notReady) return { stalled: { stage: 'merge', reason: m.problem || 'マージの条件を満たさない' } }
         notReady = true
         log(`#${e.n}: PR #${state.pr} はまだマージの条件を満たさない（${m.problem || ''}）。1 回だけ確かめ直す`)
@@ -699,7 +731,7 @@ async function mergeStage(e, state) {
       }
       if (t === MAX_REBASES) return { stalled: { stage: 'merge', reason: `rebase を ${t} 回しても衝突が解けない: ${m.problem || ''}` } }
       log(`#${e.n}: PR #${state.pr} が main と衝突しているので rebase させる`)
-      const rb = await call('rebase', `Rebase PR #${state.pr} (${t + 1})`, P.rebase(e, state.pr), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
+      const rb = await call('rebase', `Rebase PR #${state.pr} (${tag ? `${tag}, ` : ''}${t + 1})`, P.rebase(e, state.pr), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
       if (rb.status !== 'rebased' || !rb.head) return { stalled: { stage: 'merge', reason: `rebase の衝突に設計の判断が要る: ${rb.reason || rb.status}` } }
       if (rb.ciPassed !== true) return { stalled: { stage: 'merge', reason: `rebase 後の CI が通っていない: ${rb.reason || ''}` } }
       state.head = rb.head
@@ -733,6 +765,13 @@ async function runSplit(parent, subs, designUrl) {
   }))
 }
 
+/** 依存先が merged で終わらなかった理由。分割された依存先は、merged で終わらなかったサブ issue とその状態を挙げる（子が全部 merged なら resolveSplitDep が最後の子に置き換えるので、ここに来るのは子が残ったとき） */
+function depFailure(dep, res) {
+  if (res.status !== 'split') return `依存先の #${dep} が ${res.status} で終わった`
+  const left = (res.children || []).filter((c) => c.status !== 'merged')
+  return left.length ? `依存先の #${dep} のサブ issue ${left.map((c) => `#${c.n}（${c.status}）`).join(' ')}が merged で終わらなかった` : `依存先の #${dep} が split で終わったがサブ issue の結果が無い`
+}
+
 /** 分割された依存先を、子が全部マージされていれば最後にマージされた子で置き換える */
 function resolveSplitDep(res) {
   if (res.status !== 'split' || !(res.children || []).length || !res.children.every((c) => c.status === 'merged')) return res
@@ -748,7 +787,7 @@ async function runIssue(issue, idx) {
     implementer: null, implementedBy: null,
     designUrl: issue.designUrl || null, postUrl: null, postFile: null, conditions: null,
     pr: null, head: null, approveUrl: null, reviewApprovedHead: null, conditionsUrl: null,
-    mergeSha: null, issueClosed: null, closedParents: [], openParent: null,
+    mergeSha: null, issueClosed: null, closedParents: [], openParent: null, gateUrl: null, rebaseGateUrl: null, rebaseGateHead: null,
   }
   const finish = (extra) => ({ ...state, ...extra })
   const deps = (issue.after || []).map(String)
@@ -798,7 +837,7 @@ async function runIssue(issue, idx) {
         for (const dep of deps) {
           // 分割された依存先は、サブ issue が全部マージされていれば最後にマージされたサブ issue を依存先とみなす
           const res = resolveSplitDep(await done.get(dep).promise)
-          if (res.status !== 'merged') return { blocked: { stage: 'deps', questions: [`依存先の #${dep} が ${res.status} で終わった`] } }
+          if (res.status !== 'merged') return { blocked: { stage: 'deps', questions: [depFailure(dep, res)] } }
           if (!latestDep || res.mergeSeq > latestDep.mergeSeq) latestDep = res
         }
         // マージは直列なので、最後にマージされた依存先が他の依存先を含む
@@ -809,7 +848,16 @@ async function runIssue(issue, idx) {
       () => implementStage(e, issue, state),
       () => prReviewStage(e, issue, state),
       () => gateStage(e, issue, state),
-      () => mergeStage(e, state),
+      // マージ担当が rebase の差分にレビューが要ると判断したら、最終確認に再確認させてから 1 回だけマージをやり直す
+      async () => {
+        const m = await mergeStage(e, state)
+        if (!m.review) return m
+        log(`#${issue.n}: PR #${state.pr} の rebase の差分にレビューが要るとマージ担当が判断した（${m.review}）。最終確認に再確認させる`)
+        const g = await gateStage(e, issue, state, m.review)
+        if (g.blocked || g.stalled) return g
+        const again = await mergeStage(e, state, true)
+        return again.review ? { stalled: { stage: 'merge', reason: `最終確認の再確認の後も rebase の差分にレビューが要るとマージ担当が判断した: ${again.review}` } } : again
+      },
     ]
     for (const stage of stages) {
       const r = await stage()
@@ -875,7 +923,8 @@ function fake(label, opts, prompt) {
   if (t === 'issue-implementer') {
     // 依頼文が devin を指定していれば devin が書いたと報告する（implementerOf の振り分けを dry run で確かめる）
     const implementedBy = prompt.includes('devin に書かせる') ? 'devin' : 'claude'
-    if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased`, ciPassed: true }
+    // rebase の後の head は回ごとに変える（再確認の後の rebase は -rr。マージの依頼文の range の起点と終点が区別できる）
+    if (label.startsWith('Rebase')) return { status: 'rebased', head: `head-${n}-rebased${label.includes('re-review') ? '-rr' : ''}${Number((label.match(/(\d+)\)$/) || [])[1]) > 1 ? `-${(label.match(/(\d+)\)$/) || [])[1]}` : ''}`, ciPassed: true }
     if (sc === 'ci-fail') return { status: 'pr', pr: Number(n) + 1000, prUrl: `https://example/pr/${Number(n) + 1000}`, head: `head-${n}-1`, ciPassed: false, reason: 'test が fail' }
     if (label.startsWith('Fix')) return sc === 'fix-blocked' ? { status: 'blocked', reason: '指摘がプランと矛盾する', head: `head-${n}-wip`, ciPassed: false } : { status: 'fixed', commentUrl: `https://example/pr/${n}#fix-${label}`, head: `head-${n}-fixed-${r}`, ciPassed: true }
     if (sc === 'null') return null
@@ -889,17 +938,24 @@ function fake(label, opts, prompt) {
     const approveAt = ['pr2', 'design-must', 'tier-none-design-must', 'null-fix', 'fix-blocked'].includes(sc) ? 2 : 1
     const inGate = opts.phase === '最終確認'
     // pr-conditions: r1 で APPROVE だが条件が 2 件付く（再レビュー無しで直して最終確認へ）
-    if (sc === 'pr-conditions' && !inGate && r === 1) return { verdict: 'APPROVE', must: 0, should: 2, nit: 0, commentUrl: `https://example/pr#approve-r${r}`, conditions: ['`src/x.gleam` の Doc を「…」にする', 'README の表に 1 行足す'] }
+    if (['pr-conditions', 'not-ready-fix'].includes(sc) && !inGate && r === 1) return { verdict: 'APPROVE', must: 0, should: 2, nit: 0, commentUrl: `https://example/pr#approve-r${r}`, conditions: ['`src/x.gleam` の Doc を「…」にする', 'README の表に 1 行足す'] }
     if (inGate || r >= approveAt) return { verdict: 'APPROVE', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#approve-r${r}` }
     return { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, commentUrl: `https://example/pr#review-r${r}`, designMust: ['design-must', 'tier-none-design-must'].includes(sc) }
   }
   if (t === 'issue-final-gate') {
     if (sc === 'gate-needs-user') return { verdict: 'NEEDS_USER', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#gate-needs-user`, questions: ['受け入れ条件の解釈が 2 通りある'] }
-    const ok = sc !== 'gate' || r >= 2
+    // gate: ラウンド 1 で差し戻し / not-ready-review-reject: rebase の差分の再確認（ラウンド 2）で差し戻し
+    const ok = (sc !== 'gate' || r >= 2) && !(sc === 'not-ready-review-reject' && r === 2)
     return ok ? { verdict: 'APPROVE', must: 0, should: 0, nit: 0, commentUrl: `https://example/pr#gate-${r}`, lessons: ['プランの「検証の手順」に cwd を書かせると再現が 1 回で通る'] } : { verdict: 'REQUEST CHANGES', must: 1, should: 0, nit: 0, commentUrl: `https://example/pr#gate-${r}` }
   }
   if (t === 'issue-merger') {
     if (sc === 'conflict' && !label.includes('retry')) return { status: 'conflict', problem: 'CONFLICTING' }
+    // not-ready-review 系: 最初のマージで衝突 → rebase → 確かめ直しで rebase の差分にレビューが要ると判断し、最終確認の再確認の後（re-review）にマージする。
+    // -conflict は再確認の後のマージでもう一度衝突する / -reject は再確認が差し戻す（gate 側） / not-ready-fix は条件対応の後のコミットが kind=fix と一致しないと判断する
+    if (sc.startsWith('not-ready-review') && !/retry|re-review/.test(label)) return { status: 'conflict', problem: 'CONFLICTING' }
+    if (sc.startsWith('not-ready-review') && label.includes('(retry 1)')) return { status: 'not_ready', needsReview: true, problem: 'rebase で main から来たテスト fetch_events_sends_one_req_per_relay_test に assert が足されている' }
+    if (sc === 'not-ready-review-conflict' && label.endsWith('(re-review)')) return { status: 'conflict', problem: 'CONFLICTING' }
+    if (sc === 'not-ready-fix' && !/retry|re-review/.test(label)) return { status: 'not_ready', needsReview: true, problem: `レビューの後のコミット head-${n}-fixed-1 が kind=fix の対応コメントの head と一致しない` }
     if (sc === 'not-ready' && !label.includes('recheck')) return { status: 'not_ready', problem: 'mergeable が UNKNOWN' }
     if (sc === 'not-ready-twice') return { status: 'not_ready', problem: 'CI が fail' }
     return { status: 'merged', sha: `merged-${n}`, issueClosed: true }
