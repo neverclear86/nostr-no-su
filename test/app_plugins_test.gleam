@@ -1924,6 +1924,50 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
   postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// `account_rows` は全行の署名者を 1 度 `pictures` へ渡し、引いた URL を行の `picture` に入れる。
+pub fn account_rows_carry_the_looked_up_picture_test() {
+  let reports = process.new_subject()
+  let a = "ws://a.test"
+  let b = "ws://b.test"
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let spec =
+    app.Spec(
+      plugins: [],
+      not_loaded_plugins: [],
+      monitor: app.Monitor(
+        name: process.new_name("test_dedup"),
+        dedup_capacity: 8,
+        relays: [named_relay(a)],
+        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
+        save_resume: discard_resume_points,
+        save_plugin_resume: discard_resume_points,
+        excludes_kind: event.is_ephemeral,
+        accepts_author: fn(_pubkey) { True },
+      ),
+      bunker: bunker_spec(
+        process.new_name("test_bunker"),
+        store_with_load(fn() { load_signer(signer_key) }),
+        [named_relay(b)],
+        fixed_retry_delay,
+      ),
+      admin: None,
+      open: fake_open(reports, None),
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list"),
+    )
+  let tree = start_tree(spec)
+  let _pairs = role_url_pairs(spec)
+  let asked = process.new_subject()
+  let assert Ok([row]) =
+    app.account_rows(spec, fn(signers) {
+      process.send(asked, signers)
+      dict.from_list([#(signer, "https://x.test/a.png")])
+    })
+  assert row.picture == Some("https://x.test/a.png")
+  assert process.receive(asked, 100) == Ok([signer])
+  stop_tree(tree)
+}
+
 /// `open_relay` / `change_relay_roles` / `close_relay` の直後、`relay_list` の
 /// 一覧と `relay=` は一覧の順のまま反映される。
 pub fn runtime_relay_changes_are_listed_in_order_test() {
@@ -1995,7 +2039,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
       #(relay_list.Bunker, b),
     ]
 
-  let assert Ok(rows) = app.account_rows(spec)
+  let assert Ok(rows) = app.account_rows(spec, fn(_signers) { dict.new() })
   let assert [row] = rows
   assert row.uri == account.bunker_uri(signer, [a, b], Some(secret))
   stop_tree(tree)

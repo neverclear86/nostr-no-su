@@ -20,6 +20,7 @@ pub fn connect_page_lists_accounts_with_the_shortened_npub_test() {
       label: "main",
       uri: "bunker://abcd?relay=x&secret=s",
       auth_uri: "bunker://abcd?relay=x",
+      picture: None,
     )
   let page =
     connect_pages.connect_client_page(
@@ -56,6 +57,7 @@ fn review_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+    picture: None,
   )
 }
 

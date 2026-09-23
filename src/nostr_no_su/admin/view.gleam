@@ -9,9 +9,10 @@
 //// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
 //// 時刻は `time_of_day` の `<time datetime>` で UTC のまま描き、`admin.js` が閲覧者のローカルの
-//// 時刻に直す。ⓘ の補足（`info_hint`）は、`popover="hint"` の段落を、ボタンの `interestfor`（ホバーと
-//// キーボードのフォーカス）と `popovertarget`（クリックとタップ）で開き、位置は CSS の anchor
-//// positioning（`position-area`）で決める。欄、節の見出し、コピー欄の見出しが使う。JS も
+//// 時刻に直す。アカウントのアイコンの `<img data-avatar>` は、読み込めたものにだけ `admin.js` が
+//// `data-loaded` を付けて見せる。ⓘ の補足（`info_hint`）は、`popover="hint"` の段落を、ボタンの
+//// `interestfor`（ホバーとキーボードのフォーカス）と `popovertarget`（クリックとタップ）で開き、位置は
+//// CSS の anchor positioning（`position-area`）で決める。欄、節の見出し、コピー欄の見出しが使う。JS も
 //// `data-action` も使わない。
 //// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉する（`dialog_trigger`、
 //// `dialog`、`dialog_button`）。POST の応答で開いた状態で描いたダイアログは、`admin.js` がモーダルに開き直す。
@@ -20,7 +21,9 @@
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
-//// 付けた値だけを渡す（lustre は URL を検査しない）。
+//// 付けた値だけを渡す（lustre は URL を検査しない）。例外は `<img>` の `src` で、scheme を
+//// 検査した遠隔の画像の URL（アカウントのアイコンは `https`、プラグインの `image` は `http` /
+//// `https`）を渡す。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。

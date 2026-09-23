@@ -10,6 +10,9 @@
 //
 // 押された要素の処理のほかに、読み込み時に `<time datetime>` の本文を閲覧者のローカルの時刻に
 // 直す（サーバーは UTC で描く。view.gleam の time_of_day）。開いた状態で描いたダイアログもモーダルに開き直す。
+//
+// アカウントのアイコン（img[data-avatar]）は、読み込めた画像にだけ data-loaded を付けて見せる
+// （dashboard.gleam の account_icon）。
 
 const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
@@ -58,4 +61,17 @@ for (const element of document.querySelectorAll("time[datetime]")) {
 for (const dialog of document.querySelectorAll("dialog[open]")) {
   dialog.close();
   dialog.showModal();
+}
+
+// load は泡立たないので捕捉の段階で受ける。リスナーを付けてから読み込み済みの画像を走査する
+// （逆の順では、その間に読み終えた画像を取り逃す）。読めない画像は透明のままで、下の指紋が見える。
+document.addEventListener(
+  "load",
+  (event) => {
+    if (event.target.matches?.("img[data-avatar]")) event.target.dataset.loaded = "";
+  },
+  true,
+);
+for (const image of document.querySelectorAll("img[data-avatar]")) {
+  if (image.complete && image.naturalWidth > 0) image.dataset.loaded = "";
 }

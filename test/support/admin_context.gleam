@@ -168,6 +168,7 @@ pub fn account_row(row_label: String) -> dashboard.AccountRow {
     label: row_label,
     uri: uri,
     auth_uri: auth_uri,
+    picture: None,
   )
 }
 

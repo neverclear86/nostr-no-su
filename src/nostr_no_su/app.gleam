@@ -12,6 +12,7 @@
 //// |                                session_connections (factory)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、
 //// |                                connections (factory)、再開点の保存
+//// |-- avatars      (worker)      : アカウントのアイコンの URL のキャッシュ
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
@@ -144,6 +145,7 @@ import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/avatars
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -295,6 +297,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
       bunker: process.new_name("nostr_no_su_relay_connections_bunker"),
       session: process.new_name("nostr_no_su_relay_connections_session"),
     )
+  let avatars_name = process.new_name("nostr_no_su_avatars")
   supervisor.new(supervisor.OneForOne)
   // サブツリーより意図的に厳しく、期間も長く取る。再起動を諦め続けるサブツリー
   // は復旧不能とみなし、ここでループせず終了することで再起動をコンテナーの
@@ -318,7 +321,14 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> supervisor.add(
     supervisor.supervised(monitor_tree(spec, spec.monitor, factories)),
   )
-  |> add_child(spec.admin, admin_child(spec, _))
+  |> add_child(spec.admin, fn(_config) {
+    avatars.supervised(
+      avatars_name,
+      avatars.default_ttl_ms,
+      avatars.default_retry_ms,
+    )
+  })
+  |> add_child(spec.admin, admin_child(spec, avatars_name, _))
   |> supervisor.start
 }
 
@@ -355,7 +365,7 @@ pub fn open_websocket(
 fn add_child(
   builder: Builder,
   configured: Option(config),
-  child: fn(config) -> ChildSpecification(Supervisor),
+  child: fn(config) -> ChildSpecification(data),
 ) -> Builder {
   case configured {
     None -> builder
@@ -735,7 +745,11 @@ fn bunker_connections_child(
 
 /// 管理 UI。表示する状態は、ツリーの他の仕様から名前を引いて問い合わせる関数
 /// として Context に渡す。
-fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
+fn admin_child(
+  spec: Spec,
+  avatars_name: Name(avatars.Msg),
+  config: Admin,
+) -> ChildSpecification(Supervisor) {
   let bunker_name = spec.bunker.name
   admin.supervised(
     config.bind,
@@ -746,7 +760,9 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       authentication_delay: fn() {
         process.sleep(admin.authentication_failure_delay)
       },
-      accounts: fn() { account_rows(spec) },
+      accounts: fn() {
+        account_rows(spec, avatars.pictures(avatars_name, spec.relay_list, _))
+      },
       skipped: fn() { skipped_rows(spec) },
       add_account: fn(added, label) { add_account(spec, added, label) },
       remove_account: bunker.remove_account(bunker_name, _),
@@ -1192,21 +1208,27 @@ fn await_publisher(spec: Spec, urls: List(String), remaining_ms: Int) -> Bool {
 
 /// Accounts 節の行。`relay_list` が応答しなければその理由を返し
 /// （`Snapshot.accounts` の型に合わせる）、応答すればアカウントを得られない
-/// ときにバンカーの理由を返す。
-pub fn account_rows(spec: Spec) -> Result(List(dashboard.AccountRow), String) {
+/// ときにバンカーの理由を返す。アイコンの URL は、全行の署名者を 1 度に
+/// `pictures` へ渡して引く。
+pub fn account_rows(
+  spec: Spec,
+  pictures: fn(List(String)) -> Dict(String, String),
+) -> Result(List(dashboard.AccountRow), String) {
   use entries <- result.try(
     relay_list.entries(spec.relay_list)
     |> result.replace_error("relay list did not answer"),
   )
   let relay_urls = relay_list.urls(entries, relay_list.Bunker)
-  bunker.accounts(spec.bunker.name)
-  |> result.map(list.map(_, account_row(relay_urls, _)))
+  use listings <- result.map(bunker.accounts(spec.bunker.name))
+  let found = pictures(list.map(listings, fn(listing) { listing.signer }))
+  list.map(listings, account_row(relay_urls, found, _))
 }
 
 /// アカウント 1 件の表示行。接続 URI は、全行に共通のバンカーリレーの URL から
-/// 組み立てる。
+/// 組み立て、アイコンの URL は `found` から引く。
 fn account_row(
   relay_urls: List(String),
+  found: Dict(String, String),
   listing: bunker.Listing,
 ) -> dashboard.AccountRow {
   dashboard.AccountRow(
@@ -1215,6 +1237,7 @@ fn account_row(
     label: listing.label,
     uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
     auth_uri: account.bunker_uri(listing.signer, relay_urls, None),
+    picture: dict.get(found, listing.signer) |> option.from_result,
   )
 }
 

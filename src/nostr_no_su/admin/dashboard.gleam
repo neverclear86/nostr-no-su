@@ -65,6 +65,7 @@ pub type RoleState {
 /// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
 /// クライアントは管理 UI での承認を経てから署名を委任できる。`npub` は画面で
 /// アカウントを識別するための表記。
+/// `picture` は kind 0 の `picture` の検査済みの `https:` の URL で、無ければ `None`。
 pub type AccountRow {
   AccountRow(
     signer: String,
@@ -72,6 +73,7 @@ pub type AccountRow {
     label: String,
     uri: String,
     auth_uri: String,
+    picture: Option(String),
   )
 }
 
@@ -1310,7 +1312,7 @@ fn shared_failure_alert(
   }
 }
 
-/// アカウント 1 件。上の段に鍵の指紋、識別、セッションの件数、「接続 QR コード」のボタンを並べ、下に
+/// アカウント 1 件。上の段にアイコン（`account_icon`）、識別、セッションの件数、「接続 QR コード」のボタンを並べ、下に
 /// 「接続 URI と操作」の畳みを置く。幅が足りなければ件数とボタンを次の行へ回す。
 fn account_item(
   language: Language,
@@ -1322,7 +1324,7 @@ fn account_item(
       html.div(
         [attribute.class("flex min-w-0 flex-1 basis-48 items-center gap-3")],
         [
-          fingerprint.pubkey_svg(account.signer, fingerprint.Colored, "size-10"),
+          account_icon(account),
           view.identity(
             language,
             view.LargeIdentity,
@@ -1342,6 +1344,30 @@ fn account_item(
       ]),
     ]),
     account_details(language, account),
+  ])
+}
+
+/// アカウントの行のアイコン。鍵の指紋を描き、`picture` があればその画像を透明で重ねる。`admin.js` が
+/// 読めた画像に `data-loaded` を付けて見せるので、無い・読めない・JS が無いときは指紋が見える。
+fn account_icon(account: AccountRow) -> Element(msg) {
+  html.div([attribute.class("relative size-10 shrink-0")], [
+    fingerprint.pubkey_svg(account.signer, fingerprint.Colored, "size-10"),
+    case account.picture {
+      Some(url) ->
+        html.img([
+          attribute.src(url),
+          attribute.alt(""),
+          attribute.width(40),
+          attribute.height(40),
+          attribute.attribute("referrerpolicy", "no-referrer"),
+          attribute.attribute("decoding", "async"),
+          attribute.attribute("data-avatar", ""),
+          attribute.class(
+            "absolute inset-0 size-10 rounded-field object-cover border border-base-300 opacity-0 data-loaded:opacity-100",
+          ),
+        ])
+      None -> element.none()
+    },
   ])
 }
 

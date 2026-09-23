@@ -308,6 +308,7 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
       label: "main account",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      picture: None,
     )
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let body = dashboard.render(i18n.English, view.System, snapshot)
@@ -337,6 +338,7 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      picture: None,
     )
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let body = dashboard.render(i18n.English, view.System, snapshot)
@@ -405,6 +407,7 @@ fn fingerprinted_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    picture: None,
   )
 }
 
@@ -1174,6 +1177,7 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      picture: None,
     )
   let snapshot =
     dashboard.Snapshot(
@@ -1610,6 +1614,7 @@ fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
     label:,
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    picture: None,
   )
 }
 
@@ -2631,6 +2636,7 @@ pub fn signer_is_shown_as_label_and_npub_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      picture: None,
     )
   let snapshot =
     dashboard.Snapshot(
@@ -2897,6 +2903,7 @@ pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      picture: None,
     )
   let connected = dashboard.Reported(relay_connection.Connected)
   let bunker_relay =
@@ -2973,6 +2980,7 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      picture: None,
     )
   assert !string.contains(render([account], [bunker_relay]), "Getting started")
 }
@@ -3041,6 +3049,7 @@ fn session_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+    picture: None,
   )
 }
 
@@ -3411,4 +3420,42 @@ pub fn render_open_does_not_announce_the_refresh_test() {
       ),
     )
   assert !string.contains(body, note)
+}
+
+/// `picture` のある行は、鍵の指紋の上に、読めるまで透明な `<img data-avatar>` を重ねる。
+pub fn account_row_overlays_the_picture_on_the_fingerprint_test() {
+  let account =
+    dashboard.AccountRow(
+      ..fingerprinted_account(),
+      picture: Some("https://example.com/a.png"),
+    )
+  let #(before, _details) =
+    split_account_details(dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Ok([account])),
+    ))
+  assert string.contains(
+    before,
+    element.to_string(fingerprint.pubkey_svg(
+      account.signer,
+      fingerprint.Colored,
+      "size-10",
+    )),
+  )
+  assert string.contains(
+    before,
+    "<img alt class=\"absolute inset-0 size-10 rounded-field object-cover border border-base-300 opacity-0 data-loaded:opacity-100\" data-avatar decoding=\"async\" height=\"40\" referrerpolicy=\"no-referrer\" src=\"https://example.com/a.png\" width=\"40\">",
+  )
+}
+
+/// `picture` の無い行は `<img>` を描かず、鍵の指紋だけになる。
+pub fn account_row_without_a_picture_draws_no_image_test() {
+  let #(before, _details) =
+    split_account_details(dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
+    ))
+  assert !string.contains(before, "<img")
 }

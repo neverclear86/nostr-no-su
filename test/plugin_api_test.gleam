@@ -16,11 +16,9 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
-import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
-import mist
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -94,50 +92,6 @@ fn start_bunker_signed_in_as(keys: List(String)) -> Name(bunker.Msg) {
 /// 署名者 1 名を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
 fn start_signed_in_bunker() -> Name(bunker.Msg) {
   start_bunker_signed_in_as([signer_key])
-}
-
-/// 取得の問い合わせに答えるループバックのリレー。接続ごとに `connections` へ
-/// 送り、受けたテキストフレームを `frames` へ転送し、REQ には `events` を
-/// `fetch_subscription_id` の EVENT で返してから EOSE を返す。
-fn start_fetch_relay(
-  frames: Subject(String),
-  connections: Subject(Nil),
-  events: List(Event),
-) -> loopback_relay.Relay {
-  loopback_relay.start_relay_with(
-    fn() { process.send(connections, Nil) },
-    fn(connection, text) {
-      process.send(frames, text)
-      case string.starts_with(text, "[\"REQ\"") {
-        True -> {
-          list.each(events, fn(stored) {
-            let _ =
-              mist.send_text_frame(
-                connection,
-                json.preprocessed_array([
-                  json.string("EVENT"),
-                  json.string(plugin_api.fetch_subscription_id),
-                  event.to_json(stored),
-                ])
-                  |> json.to_string,
-              )
-            Nil
-          })
-          let _ =
-            mist.send_text_frame(
-              connection,
-              json.preprocessed_array([
-                json.string("EOSE"),
-                json.string(plugin_api.fetch_subscription_id),
-              ])
-                |> json.to_string,
-            )
-          Nil
-        }
-        False -> Nil
-      }
-    },
-  )
 }
 
 /// リレーへの接続を開いたことにする偽ソケット。送信されたイベントを
@@ -607,8 +561,10 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
   let frames_b = process.new_subject()
   let connections_a = process.new_subject()
   let connections_b = process.new_subject()
-  let relay_a = start_fetch_relay(frames_a, connections_a, [a_100, b_50])
-  let relay_b = start_fetch_relay(frames_b, connections_b, [b_80])
+  let relay_a =
+    loopback_relay.start_fetch_relay(frames_a, connections_a, [a_100, b_50])
+  let relay_b =
+    loopback_relay.start_fetch_relay(frames_b, connections_b, [b_80])
   let relay_list_name =
     start_relay_list([
       relay_list.Entry(

@@ -13,8 +13,8 @@
 //// 扱う。秘密鍵（nsec）はクエリー文字列にもリダイレクト先にもログにも載せず、POST の
 //// 本文と、その応答の本文だけで運ぶ。サーバーは生成した鍵を保持しない。認証済みの
 //// 応答はどれも secret か秘密鍵を含みうるので、`protect` で保存と枠への埋め込みを
-//// 禁じる。プラグインのページの GET だけ、記述の `image` ブロックのために CSP の
-//// `img-src` を広げる。
+//// 禁じる。CSP の `img-src` は、アカウントのアイコンのために `https:` を許し、
+//// プラグインのページの GET だけ、記述の `image` ブロックのために `http:` も許す。
 ////
 //// ページの言語は、認証を通った後に、言語の切り替えで保存した cookie、
 //// `Accept-Language`、既定の言語（英語）の順に決める（`request_language`）。次は
@@ -112,12 +112,14 @@ const realm = "nostr-no-su"
 /// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
 /// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、上部バーのロゴと `<head>` の
 /// favicon に埋め込むロゴの data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise`
-/// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。プラグインの
-/// ページの GET だけは `plugin_page_content_security_policy` で `img-src` を広げる。
-const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+/// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。
+/// `https:` は、アカウントの行のアイコン（kind 0 の `picture`）を管理者のブラウザーが画像のホストから
+/// 直接読ませるためである。プラグインのページの GET だけは `plugin_page_content_security_policy` で
+/// `http:` も許す。
+const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 /// プラグインのページの GET の応答に付ける CSP。`content_security_policy` の `img-src` に
-/// `https:` と `http:` を足したもので、プラグインの記述の `image` ブロックが指す遠隔の画像を
+/// `http:` を足したもので、プラグインの記述の `image` ブロックが指す遠隔の画像を
 /// 読ませる。鍵と secret を扱う他のページは `content_security_policy` のままにする。
 const plugin_page_content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https: http:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
@@ -471,7 +473,7 @@ fn protect(response: Response, policy: String) -> Response {
   |> wisp.set_header("referrer-policy", "same-origin")
 }
 
-/// 応答に付ける CSP を選ぶ。プラグインのページの GET（`image` ブロックが遠隔の画像を
+/// 応答に付ける CSP を選ぶ。プラグインのページの GET（`image` ブロックが `http:` の画像を
 /// 指しうる唯一のページ）だけ `plugin_page_content_security_policy` で、ほかは
 /// `content_security_policy`。HEAD は `wisp.handle_head` が GET にしてから届く。
 fn response_content_security_policy(
