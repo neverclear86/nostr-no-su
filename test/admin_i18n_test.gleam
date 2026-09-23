@@ -189,7 +189,7 @@ pub fn switched_language_carries_across_pages_test() {
   assert rejected.status == 400
   assert string.contains(
     simulate.read_body(rejected),
-    "<span>bech32 のチェックサムが一致しません。</span>",
+    "<span class=\"wrap-anywhere\">bech32 のチェックサムが一致しません。</span>",
   )
 }
 
@@ -225,7 +225,9 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
   assert conflict.status == 409
   assert string.contains(
     simulate.read_body(conflict),
-    "<span>ラベルを保存できませんでした。<span lang=\"en\">" <> unavailable <> "</span></span>",
+    "<span class=\"wrap-anywhere\">ラベルを保存できませんでした。<span lang=\"en\">"
+      <> unavailable
+      <> "</span></span>",
   )
   let unavailable_body =
     simulate.request(http.Get, "/")
@@ -235,7 +237,7 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
     |> simulate.read_body
   assert string.contains(
     unavailable_body,
-    "<span>アカウントの一覧を表示できません。<span lang=\"en\">"
+    "<span class=\"wrap-anywhere\">アカウントの一覧を表示できません。<span lang=\"en\">"
       <> unavailable
       <> "</span></span>",
   )
@@ -328,7 +330,10 @@ pub fn japanese_pages_translate_account_registration_reasons_test() {
     |> admin.handle_request(failing, _)
   assert response.status == 409
   let body = simulate.read_body(response)
-  assert string.contains(body, "<span>" <> expected <> "</span>")
+  assert string.contains(
+    body,
+    "<span class=\"wrap-anywhere\">" <> expected <> "</span>",
+  )
   assert !string.contains(body, "<span lang=\"en\">")
 }
 

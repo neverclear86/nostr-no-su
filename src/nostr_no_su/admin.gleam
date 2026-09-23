@@ -1371,7 +1371,8 @@ fn connect_client(
 }
 
 /// `nostrconnect.parse` の失敗を、フォームに出す文言に写す。`NoRelay` と
-/// `InvalidRelayUrl` は直し方が同じなので同じ文言にまとめる。
+/// `InvalidRelayUrl` は直し方が同じなので同じ文言にまとめる。`TooManyRelays` には
+/// 上限の件数を、`InternalRelayUrl` には拒んだ URL を添える。
 fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
   case error {
     nostrconnect.NotNostrconnect -> i18n.NotNostrconnectUri
@@ -1379,6 +1380,9 @@ fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
     nostrconnect.MalformedQuery -> i18n.NostrconnectQueryInvalid
     nostrconnect.NoRelay | nostrconnect.InvalidRelayUrl(_) ->
       i18n.NostrconnectRelayInvalid
+    nostrconnect.TooManyRelays ->
+      i18n.NostrconnectTooManyRelays(limit: nostrconnect.max_relays)
+    nostrconnect.InternalRelayUrl(url) -> i18n.NostrconnectRelayInternal(url:)
     nostrconnect.NoSecret -> i18n.NostrconnectSecretMissing
   }
 }
