@@ -79,6 +79,8 @@ pub fn messages_with_values_follow_each_language_test() {
       "10 分で失効します",
     ),
     #(i18n.UnreadableRowCount(3), "3 unreadable rows", "読み込めない行 3"),
+    #(i18n.SessionCount(1), "1 session", "セッション 1 件"),
+    #(i18n.SessionCount(2), "2 sessions", "セッション 2 件"),
     #(i18n.DisconnectedRelayCount(1), "1 disconnected", "未接続 1"),
     #(i18n.UnansweredRelayCount(2), "2 unanswered", "応答なし 2"),
     #(i18n.OverloadedPluginCount(1), "1 overloaded", "過負荷 1"),
@@ -221,7 +223,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Deny -> Some(i18n.ApproveAnyway)
     i18n.ApproveAnyway -> Some(i18n.ApprovalExplanation)
     i18n.ApprovalExplanation -> Some(i18n.Accounts)
-    i18n.Accounts -> Some(i18n.Add)
+    i18n.Accounts -> Some(i18n.AccountsDescription)
+    i18n.AccountsDescription -> Some(i18n.Add)
     i18n.Add -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
     i18n.NoAccounts -> Some(i18n.GettingStarted)
@@ -244,9 +247,11 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NotLoadedPluginsWarning -> Some(i18n.PluginLoadFailed)
     i18n.PluginLoadFailed -> Some(i18n.ReasonLabel)
     i18n.ReasonLabel -> Some(i18n.ConnectionUri)
-    i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
-    i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndPublicKey)
-    i18n.ConnectionUrisAndPublicKey -> Some(i18n.ConnectionQr)
+    i18n.ConnectionUri -> Some(i18n.SecretUriDescription)
+    i18n.SecretUriDescription -> Some(i18n.ConnectionUriForApproval)
+    i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndActions)
+    i18n.ConnectionUrisAndActions -> Some(i18n.SessionCount(0))
+    i18n.SessionCount(_) -> Some(i18n.ConnectionQr)
     i18n.ConnectionQr -> Some(i18n.ConnectionQrDescription)
     i18n.ConnectionQrDescription -> Some(i18n.ConnectionQrSecretWarning)
     i18n.ConnectionQrSecretWarning -> Some(i18n.CouldNotEncodeQr)
@@ -415,12 +420,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 250 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 253 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 250
+  assert list.length(messages) == 253
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

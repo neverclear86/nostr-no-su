@@ -294,6 +294,7 @@ pub type Message {
   ApproveAnyway
   ApprovalExplanation
   Accounts
+  AccountsDescription
   Add
   AddAccount
   NoAccounts
@@ -316,8 +317,10 @@ pub type Message {
   PluginLoadFailed
   ReasonLabel
   ConnectionUri
+  SecretUriDescription
   ConnectionUriForApproval
-  ConnectionUrisAndPublicKey
+  ConnectionUrisAndActions
+  SessionCount(count: Int)
   ConnectionQr
   ConnectionQrDescription
   ConnectionQrSecretWarning
@@ -589,6 +592,8 @@ fn english(message: Message) -> String {
     ApprovalExplanation ->
       "Approving lets this client request signing and encryption within the permissions above. You can change them later from the approved session."
     Accounts -> "Accounts"
+    AccountsDescription ->
+      "Your registered private keys. Paste a connection URI into a client to sign with that key."
     Add -> "Add"
     AddAccount -> "Add account"
     NoAccounts ->
@@ -619,8 +624,12 @@ fn english(message: Message) -> String {
       "These plugins are not running. Fix the cause below and restart the server."
     ReasonLabel -> "Reason"
     ConnectionUri -> "Connection URI"
+    SecretUriDescription ->
+      "Connects without approval. Paste it into your own client."
     ConnectionUriForApproval -> "Connection URI (approval)"
-    ConnectionUrisAndPublicKey -> "Connection URIs and public key"
+    ConnectionUrisAndActions -> "Connection URIs and actions"
+    SessionCount(count: 1) -> "1 session"
+    SessionCount(count:) -> int.to_string(count) <> " sessions"
     ConnectionQr -> "Connection QR code"
     ConnectionQrDescription ->
       "Choose a connection URI with the tabs. The code shown is meant to be scanned and copied with the phone's camera. To use the client's own scanner instead, open the panel below the code and scan the code inside."
@@ -912,6 +921,7 @@ fn japanese(message: Message) -> String {
     ApprovalExplanation ->
       "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は、後から「承認済みのセッション」の「権限を編集」で変えられます。"
     Accounts -> "アカウント"
+    AccountsDescription -> "登録した秘密鍵です。接続 URI をクライアントに貼ると、この鍵で署名します。"
     Add -> "追加"
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。nsec を登録するか、新しい鍵を生成してください。"
@@ -935,8 +945,10 @@ fn japanese(message: Message) -> String {
     NotLoadedPluginsWarning -> "これらのプラグインは動作していません。下の理由を直してサーバーを再起動してください。"
     ReasonLabel -> "理由"
     ConnectionUri -> "接続 URI"
+    SecretUriDescription -> "承認なしで接続できます。自分のクライアントに貼ってください。"
     ConnectionUriForApproval -> "接続 URI（要承認）"
-    ConnectionUrisAndPublicKey -> "接続 URI と公開鍵"
+    ConnectionUrisAndActions -> "接続 URI と操作"
+    SessionCount(count:) -> "セッション " <> int.to_string(count) <> " 件"
     ConnectionQr -> "接続 QR コード"
     ConnectionQrDescription ->
       "タブで接続 URI を選びます。出ているコードは、端末のカメラで読み取ってコピーするためのものです。クライアント自身の読み取り機能を使うときは、コードの下の畳みを開いてその中のコードを読み取ってください。"
