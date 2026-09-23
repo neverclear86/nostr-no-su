@@ -117,6 +117,7 @@ fn sections(
       view.empty_state(
         view.puzzle_icon(),
         i18n.text(language, i18n.PluginPageEmpty),
+        [],
       ),
     ]
     raw_sections -> {

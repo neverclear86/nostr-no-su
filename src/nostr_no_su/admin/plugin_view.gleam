@@ -94,6 +94,7 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
           view.empty_state(
             view.puzzle_icon(),
             i18n.text(context.language, i18n.PluginSectionEmpty),
+            [],
           ),
         ]),
       )
@@ -155,6 +156,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
               view.empty_state(
                 view.puzzle_icon(),
                 i18n.text(context.language, i18n.PluginSectionEmpty),
+                [],
               ),
             ]),
           )

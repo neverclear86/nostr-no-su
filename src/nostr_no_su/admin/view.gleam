@@ -163,7 +163,7 @@ pub type NavbarSwitch {
 pub type ButtonKind {
   /// 主の操作（登録、保存、承認、追加、接続）と、secret が一致しない承認待ちの拒否。塗りの primary。
   PrimaryButton
-  /// 枠だけのボタン。フォームの末尾の、主ではない送信に使う。
+  /// 枠だけのボタン。フォームの末尾の、主ではない送信と、空の節の操作に使う。
   OutlineButton
   /// 地味なボタン。主でも危険でもない操作の入口と、取り消しのきく操作の送信に使う。
   GhostButton
@@ -193,7 +193,7 @@ pub type Tone {
   /// 反映されたか分からない変更、今は受け付けられない変更、秘密鍵のバックアップの注意。
   Warning
   /// 処理できなかった操作、フォームの上の失敗の理由、ダッシュボードの節の一覧を得られない理由
-  /// （0 件と読み違えさせない）。
+  /// （0 件と読み違えさせない）、バンカーに使うリレーが無いこと（クライアントが接続できない）。
   Failure
   /// 承認の意味の説明など、危険を伴わない補足。
   Info
@@ -856,12 +856,21 @@ pub fn plugin_image_placeholder(
   )
 }
 
-/// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
-pub fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
-  html.div([attribute.class("flex items-center gap-2 text-sm text-muted")], [
-    icon,
-    html.text(text),
-  ])
+/// 行が 1 件も無い節の本文。点線の枠の中に、アイコン、説明の文、操作のボタンを縦に積む。
+/// `actions` が空なら、ボタンを置かない。
+pub fn empty_state(
+  icon: Element(msg),
+  text: String,
+  actions: List(Element(msg)),
+) -> Element(msg) {
+  html.div(
+    [
+      attribute.class(
+        "flex flex-col items-start gap-3 rounded-box border border-dashed border-field bg-base-100/60 px-4 py-5 text-sm text-muted",
+      ),
+    ],
+    [icon, html.p([], [html.text(text)]), ..actions],
+  )
 }
 
 /// 見出し行付きの表。行は `td` の並びで渡す。枠より広い値は枠の中で横に送る。
@@ -1583,7 +1592,7 @@ pub fn truncated_id(
   ])
 }
 
-/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作と、アカウントの行の操作に使う。
+/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作、空の節の操作と、アカウントの行の操作に使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),

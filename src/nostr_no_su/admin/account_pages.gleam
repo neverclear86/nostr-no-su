@@ -333,7 +333,7 @@ pub fn connection_qr_page(
     view.SwitchReturningTo(path),
     view.NoRefresh,
     [
-      dashboard.no_bunker_relay_warning(language, relays),
+      dashboard.no_bunker_relay_alert(language, relays),
       view.card([
         account_summary(language, row),
         html.p([], [html.text(text(i18n.ConnectionQrDescription))]),

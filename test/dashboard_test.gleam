@@ -1119,10 +1119,10 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
   assert !string.contains(body, ">Delete relay<")
 }
 
-/// バンカーに使う行が 1 件も無ければ、見出しの直後に警告が出て一覧は出さない。監視だけの
-/// 行があれば警告の後に一覧を出し、バンカーの行が 1 件でもあれば警告を出さない
-/// （`states()` はバンカーの行を持つので、上のテストの描画に警告が無いことで確かめる）。
-pub fn no_bunker_relay_is_warned_test() {
+/// バンカーに使う行が 1 件も無ければ、見出しの直後にエラーの色の囲みが出て一覧は出さない。監視だけの
+/// 行があれば囲みの後に一覧を出し、バンカーの行が 1 件でもあれば囲みを出さない
+/// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
+pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_action =
     "<div class=\"flex flex-wrap justify-end gap-2\">"
     <> element.to_string(view.icon_button_link(
@@ -1142,8 +1142,8 @@ pub fn no_bunker_relay_is_warned_test() {
     no_rows,
     "Relays</h2></div></div>"
       <> add_action
-      <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Warning))
+      <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
   )
   let monitor_only =
@@ -1167,8 +1167,8 @@ pub fn no_bunker_relay_is_warned_test() {
     "Relays</h2>"
       <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">1</span></div></div>"
       <> add_action
-      <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Warning))
+      <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
       <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
   )
   assert !string.contains(
@@ -1295,7 +1295,7 @@ pub fn section_headings_show_the_count_pill_test() {
   assert !string.contains(unavailable, "Relays</h2><span class=\"badge")
 }
 
-/// 空のアカウント・セッション・プラグインの節は、アイコンと 1 文を出し、件数のピルは
+/// 空のアカウント・セッション・プラグインの節は、アイコンと説明の文を出し、件数のピルは
 /// 出さない。
 pub fn empty_sections_show_an_icon_and_a_sentence_test() {
   let snapshot =
@@ -1308,13 +1308,66 @@ pub fn empty_sections_show_an_icon_and_a_sentence_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "No accounts registered. Use &quot;Add&quot; to import an nsec or generate a key.",
+    "No accounts registered. Import an nsec or generate a new key.",
   )
   assert string.contains(body, "No approved sessions.")
   assert string.contains(body, "No plugins enabled.")
   assert !string.contains(body, "Accounts</h2><span class=\"badge")
   assert !string.contains(body, "Approved sessions</h2><span class=\"badge")
   assert !string.contains(body, "Plugins</h2><span class=\"badge")
+}
+
+/// 空のアカウントとセッションの節は、点線の枠の中にそれぞれ追加と接続の枠のボタンを置き、
+/// 空のプラグインの節はボタンを置かない。
+pub fn empty_sections_offer_their_action_in_the_frame_test() {
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([]),
+      sessions: Ok([]),
+      plugins: [],
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(
+    body,
+    element.to_string(
+      view.empty_state(
+        view.users_icon(),
+        "No accounts registered. Import an nsec or generate a new key.",
+        [
+          view.icon_button_link(
+            "/accounts/new",
+            view.plus_icon(),
+            "Add account",
+            view.OutlineButton,
+          ),
+        ],
+      ),
+    ),
+  )
+  assert string.contains(
+    body,
+    element.to_string(
+      view.empty_state(view.clock_icon(), "No approved sessions.", [
+        view.icon_button_link(
+          "/sessions/connect",
+          view.plus_icon(),
+          "Connect a client",
+          view.OutlineButton,
+        ),
+      ]),
+    ),
+  )
+  assert string.contains(
+    body,
+    element.to_string(
+      view.empty_state(
+        view.puzzle_icon(),
+        "No plugins enabled. Plugins placed in the plugin directory are loaded when the server restarts.",
+        [],
+      ),
+    ),
+  )
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。

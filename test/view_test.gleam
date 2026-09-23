@@ -171,6 +171,18 @@ pub fn band_stacks_its_content_test() {
     == "<section class=\"flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6\" id=\"pending\">content</section>"
 }
 
+/// 空の状態は、点線の枠の中にアイコン、説明の文、操作を縦に積む。操作が無ければボタンを置かない。
+pub fn empty_state_stacks_icon_sentence_and_actions_in_a_dashed_frame_test() {
+  let frame =
+    "<div class=\"flex flex-col items-start gap-3 rounded-box border border-dashed border-field bg-base-100/60 px-4 py-5 text-sm text-muted\">"
+  assert element.to_string(
+      view.empty_state(html.text("i"), "sentence", [html.text("button")]),
+    )
+    == frame <> "i<p>sentence</p>button</div>"
+  assert element.to_string(view.empty_state(html.text("i"), "sentence", []))
+    == frame <> "i<p>sentence</p></div>"
+}
+
 /// 残り時間は「分:秒」にし、秒を 2 桁に 0 埋めし、負の値を 0 とみなす。
 pub fn countdown_pads_seconds_test() {
   assert view.countdown(492) == "8:12"
