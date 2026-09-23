@@ -1002,7 +1002,14 @@ fn accounts_section(
       shared,
       accounts,
       i18n.CouldNotListAccounts,
-      view.empty_state(view.users_icon(), text(i18n.NoAccounts)),
+      view.empty_state(view.users_icon(), text(i18n.NoAccounts), [
+        view.icon_button_link(
+          view.segments_path(new_account_segments),
+          view.plus_icon(),
+          text(i18n.AddAccount),
+          view.OutlineButton,
+        ),
+      ]),
       fn(rows) { view.row_list(list.map(rows, account_item(language, _))) },
     ),
   ])
@@ -1810,7 +1817,7 @@ fn relays_section(
       ],
       [],
     ),
-    no_bunker_relay_warning(language, relays),
+    no_bunker_relay_alert(language, relays),
     listed_body(
       language,
       None,
@@ -1822,9 +1829,9 @@ fn relays_section(
   ])
 }
 
-/// 一覧を得て、バンカーに使う行が 1 件も無いときの警告。リレーの節と接続 QR コードの
-/// ページで使う。
-pub fn no_bunker_relay_warning(
+/// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
+/// アカウントにも接続できないことを伝える。リレーの節と接続 QR コードのページで使う。
+pub fn no_bunker_relay_alert(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
@@ -1833,7 +1840,7 @@ pub fn no_bunker_relay_warning(
       case has_bunker_relay(rows) {
         True -> element.none()
         False ->
-          view.alert(view.Warning, [
+          view.alert(view.Failure, [
             html.text(i18n.text(language, i18n.NoBunkerRelay)),
           ])
       }
@@ -1926,7 +1933,14 @@ fn sessions_section(
       shared,
       sessions,
       i18n.CouldNotListSessions,
-      view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),
+      view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions), [
+        view.icon_button_link(
+          view.segments_path(connect_segments),
+          view.plus_icon(),
+          text(i18n.ConnectClient),
+          view.OutlineButton,
+        ),
+      ]),
       fn(rows) {
         view.row_list(list.map(rows, session_item(language, accounts, now, _)))
       },
@@ -2071,7 +2085,7 @@ fn plugins_section(
     ),
     section_body(
       plugins,
-      view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins)),
+      view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins), []),
       fn(rows) { view.row_list(list.map(rows, plugin_item(language, _))) },
     ),
     not_loaded_panel(language, not_loaded),

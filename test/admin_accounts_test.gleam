@@ -1196,7 +1196,7 @@ pub fn connection_qr_page_allows_only_get_test() {
   assert header(put_response, "allow") == "GET"
 }
 
-/// バンカーに使うリレーが 1 件も無ければ警告を出す。バンカー用途のリレーがある
+/// バンカーに使うリレーが 1 件も無ければエラーの色の囲みを出す。バンカー用途のリレーがある
 /// Context と、一覧を得られない Context では出ない。
 pub fn connection_qr_page_warns_without_a_bunker_relay_test() {
   let path = action_path(dashboard.ShowConnectionQr)

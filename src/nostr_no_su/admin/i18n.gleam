@@ -596,7 +596,7 @@ fn english(message: Message) -> String {
     Add -> "Add"
     AddAccount -> "Add account"
     NoAccounts ->
-      "No accounts registered. Use \"Add\" to import an nsec or generate a key."
+      "No accounts registered. Import an nsec or generate a new key."
     GettingStarted -> "Getting started"
     GettingStartedDescription ->
       "Register a relay and an account, then paste the connection URI into your client."
@@ -717,7 +717,8 @@ fn english(message: Message) -> String {
     ReenablePlugin -> "Re-enable"
     PluginUnavailable -> "unavailable"
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
-    NoPlugins -> "No plugins enabled."
+    NoPlugins ->
+      "No plugins enabled. Plugins placed in the plugin directory are loaded when the server restarts."
     PluginSectionEmpty -> "Nothing to show."
     PluginImageNotShown -> "Image not shown: the URL is not http or https."
     PluginPage -> "Plugin page"
@@ -920,7 +921,7 @@ fn japanese(message: Message) -> String {
     Accounts -> "アカウント"
     Add -> "追加"
     AddAccount -> "アカウントを追加"
-    NoAccounts -> "登録されたアカウントはありません。「追加」から nsec の登録か鍵の生成ができます。"
+    NoAccounts -> "登録されたアカウントはありません。nsec を登録するか、新しい鍵を生成してください。"
     GettingStarted -> "はじめに"
     GettingStartedDescription -> "リレーとアカウントを登録し、接続 URI をクライアントに貼ると使えます。"
     SetupBunkerRelay -> "バンカー用のリレーを追加"
@@ -1024,7 +1025,7 @@ fn japanese(message: Message) -> String {
     ReenablePlugin -> "再有効化"
     PluginUnavailable -> "応答なし"
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
-    NoPlugins -> "有効なプラグインはありません。"
+    NoPlugins -> "有効なプラグインはありません。プラグインのディレクトリーに置いたプラグインは、サーバーの再起動で読み込まれます。"
     PluginSectionEmpty -> "表示する内容はありません。"
     PluginImageNotShown -> "画像を表示していません。URL が http でも https でもありません。"
     PluginPage -> "プラグインのページ"
