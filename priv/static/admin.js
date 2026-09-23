@@ -7,6 +7,9 @@
 // 描画のモジュールで要素に data-action を付ける（test/script_test.gleam が、描画しうる名前が
 // すべてここにあることを検査する）。フォームの送信と画面の遷移は JS なしで動くので、ここには
 // 表示を補う処理だけを置く。
+//
+// 押された要素の処理のほかに、読み込み時に `<time datetime>` の本文を閲覧者のローカルの時刻に
+// 直す（サーバーは UTC で描く。view.gleam の time_of_day）。
 
 const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
@@ -41,3 +44,11 @@ document.addEventListener("click", (event) => {
     actions[target.dataset.action](target, event);
   }
 });
+
+// <time datetime> の本文を、datetime 属性の時刻を閲覧者のローカルの時刻で表した時分秒にする。
+// 書式はページの言語（<html lang>）に従う。
+for (const element of document.querySelectorAll("time[datetime]")) {
+  element.textContent = new Date(element.dateTime).toLocaleTimeString(
+    document.documentElement.lang,
+  );
+}

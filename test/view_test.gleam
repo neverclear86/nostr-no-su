@@ -5,6 +5,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
+import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 
 /// 64 桁の 16 進のように長い値は、先頭 10 桁と末尾 6 桁を `…` でつなぐ。
@@ -163,4 +164,16 @@ pub fn copy_button_names_the_copy_action_test() {
     html,
     "<button aria-label=\"Copy client\" class=\"btn btn-ghost btn-sm btn-square text-muted group-data-copied:text-success focus-visible:outline-base-content\" data-action=\"copy\" title=\"Copy client\" type=\"button\">",
   )
+}
+
+/// 時刻の部品は、`datetime` 属性に RFC 3339 の UTC の全文を置き、本文に 0 埋めした UTC の時分秒を
+/// 表示の言語の「UTC」の表記つきで出す（JS が無いときに見える形）。
+pub fn time_of_day_renders_utc_with_datetime_test() {
+  let cases = [
+    #(i18n.English, "05:02:04 UTC"),
+    #(i18n.Japanese, "05:02:04（UTC）"),
+  ]
+  use #(language, text) <- list.each(cases)
+  let html = element.to_string(view.time_of_day(language, 1_789_275_724))
+  assert html == "<time datetime=\"2026-09-13T05:02:04Z\">" <> text <> "</time>"
 }

@@ -70,6 +70,7 @@ fn language_count(language: i18n.Language) -> Int {
 pub fn messages_with_values_follow_each_language_test() {
   let cases = [
     #(i18n.ExpiresInSeconds(12), "12s", "12 秒"),
+    #(i18n.UtcTimeOfDay("05:12:34"), "05:12:34 UTC", "05:12:34（UTC）"),
     #(
       i18n.AwaitingDecision(30),
       "Awaiting your decision · refreshes every 30 s",
@@ -183,7 +184,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Signer -> Some(i18n.Client)
     i18n.Client -> Some(i18n.ExpiresIn)
     i18n.ExpiresIn -> Some(i18n.ExpiresInSeconds(12))
-    i18n.ExpiresInSeconds(_) -> Some(i18n.Permissions)
+    i18n.ExpiresInSeconds(_) -> Some(i18n.UtcTimeOfDay("05:12:34"))
+    i18n.UtcTimeOfDay(_) -> Some(i18n.Permissions)
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
     i18n.NoPermissionsRequested -> Some(i18n.EditPermissions)
     i18n.EditPermissions -> Some(i18n.EditPermissionsDescription)
@@ -402,12 +404,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 231 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 232 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 231
+  assert list.length(messages) == 232
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

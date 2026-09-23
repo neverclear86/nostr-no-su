@@ -18,8 +18,6 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/time/calendar
-import gleam/time/timestamp
 import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
@@ -1378,11 +1376,11 @@ fn session_time_title(language: Language, session: SessionRow) -> String {
   let text = i18n.text(language, _)
   text(i18n.LastUsed)
   <> ": "
-  <> utc_time(session.last_used_at)
+  <> view.utc_time(session.last_used_at)
   <> " · "
   <> text(i18n.Created)
   <> ": "
-  <> utc_time(session.created_at)
+  <> view.utc_time(session.created_at)
 }
 
 /// 描画時点から見た相対表示の文言。60 秒未満は「たった今」、1 時間未満は分、1 日未満は
@@ -1394,12 +1392,6 @@ pub fn relative_time(now: Int, at: Int) -> i18n.Message {
     diff if diff < 86_400 -> i18n.HoursAgo(diff / 3600)
     diff -> i18n.DaysAgo(diff / 86_400)
   }
-}
-
-/// Unix 秒を RFC 3339 の UTC の文字列（`2026-09-13T05:12:34Z`）にする。
-fn utc_time(seconds: Int) -> String {
-  timestamp.from_unix_seconds(seconds)
-  |> timestamp.to_rfc3339(calendar.utc_offset)
 }
 
 /// 監視イベントを処理するプラグインと、その現在の状態。

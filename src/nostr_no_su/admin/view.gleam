@@ -8,6 +8,8 @@
 //// `html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は使わない。JS の処理は
 //// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
+//// 時刻は `time_of_day` の `<time datetime>` で UTC のまま描き、`admin.js` が閲覧者のローカルの
+//// 時刻に直す。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
@@ -44,6 +46,8 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import gleam/time/calendar
+import gleam/time/timestamp
 import lustre/attribute.{type Attribute}
 import lustre/element.{type Element}
 import lustre/element/html
@@ -1479,6 +1483,28 @@ pub fn shorten(value: String) -> String {
     True -> value
     False -> string.slice(value, 0, 10) <> "…" <> string.slice(value, -6, 6)
   }
+}
+
+/// Unix 秒の時刻。`datetime` 属性に RFC 3339 の UTC の全文を置き、本文には UTC の時分秒を
+/// 「05:12:34 UTC」（日本語は「05:12:34（UTC）」）の形で出す。`priv/static/admin.js` が読み込み時に
+/// 本文を閲覧者のローカルの時刻に直すので、「UTC」の表記が残るのは JS が動かないときだけである。
+pub fn time_of_day(language: Language, seconds: Int) -> Element(msg) {
+  let #(_, time) =
+    timestamp.from_unix_seconds(seconds)
+    |> timestamp.to_calendar(calendar.utc_offset)
+  let clock =
+    [time.hours, time.minutes, time.seconds]
+    |> list.map(fn(part) { string.pad_start(int.to_string(part), 2, "0") })
+    |> string.join(":")
+  html.time([attribute.datetime(utc_time(seconds))], [
+    html.text(i18n.text(language, i18n.UtcTimeOfDay(clock))),
+  ])
+}
+
+/// Unix 秒を RFC 3339 の UTC の文字列（`2026-09-13T05:12:34Z`）にする。
+pub fn utc_time(seconds: Int) -> String {
+  timestamp.from_unix_seconds(seconds)
+  |> timestamp.to_rfc3339(calendar.utc_offset)
 }
 
 /// 省略した識別子。`shorten` した表示（`title` に全文）、コピー用の読み取り専用の全文の `input`、
