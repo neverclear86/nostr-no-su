@@ -50,7 +50,7 @@ const declaredClient = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222
 const undeclaredClient = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
 const signerNsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re";
 const specNsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5";
-// 確認のページの場面に送る URI。クライアントの公開鍵は NIP-19 の仕様の値で、secret はダミー。
+// 確認のダイアログの場面に送る URI。クライアントの公開鍵は NIP-19 の仕様の値で、secret はダミー。
 const connectUri =
   "nostrconnect://7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e?relay=wss%3A%2F%2Frelay.example&secret=preview-secret";
 const account = (action) => `${base}/accounts/${signer}/${action}`;
@@ -129,9 +129,6 @@ const shots = [
   { name: "58-delete-relay-not-saved", url: `${base}/relays/2/delete`, form: {}, status: 409 },
   { name: "59-delete-relay-unconfirmed", url: `${base}/relays/3/delete`, form: {}, status: 202 },
   { name: "60-relay-not-found", url: `${base}/relays/99/delete`, form: {}, status: 404 },
-  { name: "61-connect-client", url: `${base}/sessions/connect` },
-  { name: "62-connect-client-empty", url: `${empty}/sessions/connect` },
-  { name: "63-connect-client-accounts-unavailable", url: `${unavailable}/sessions/connect` },
   { name: "64-connect-client-invalid-uri", url: `${base}/sessions/connect`, form: { uri: "not-a-uri", signer }, status: 400 },
   {
     name: "64b-connect-review",
@@ -147,10 +144,7 @@ const shots = [
   { name: "66-plugin-page-disabled", url: `${base}/plugins/broken/status` },
   { name: "67-plugin-page-not-found", url: `${base}/plugins/console_logger/nope`, status: 404 },
   { name: "68-plugin-page-unavailable", url: `${base}/plugins/slow/status`, status: 503 },
-  { name: "69-session-permissions", url: `${base}/sessions/${signer}/${declaredClient}/permissions` },
-  { name: "70-session-permissions-not-declared", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions` },
   { name: "71-session-permissions-not-applied", url: `${base}/sessions/${signer}/${undeclaredClient}/permissions`, form: { sign_event: "on" }, status: 409 },
-  { name: "72-session-permissions-unavailable", url: `${unavailable}/sessions/${signer}/${declaredClient}/permissions` },
   { name: "73-readme-dashboard", url: `${readmeBase}/`, open: "#accounts li:first-child > details" },
   { name: "74-event-logger-timeline", url: `${readmeBase}/plugins/event_logger/timeline` },
   { name: "75-event-logger-settings", url: `${readmeBase}/plugins/event_logger/settings` },

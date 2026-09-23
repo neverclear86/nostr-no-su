@@ -475,7 +475,7 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 
-承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）、セッションの取り消し（`POST /sessions/revoke`）、権限の編集（`POST /sessions/<signer>/<client>/permissions`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。権限の編集だけは `SessionNotApplied` を通知ページにせず、送られた値でフォームを描き直す（409 は変わらない）。
+承認・拒否（`POST /approve/<token>`、`POST /deny/<token>`）、セッションの取り消し（`POST /sessions/revoke`）、権限の編集（`POST /sessions/<signer>/<client>/permissions`）は、結果を同じ型 `bunker.SessionFailure` で受け取り、`admin.session_failure_response` が次の 4 区分に写す。権限の編集だけは `SessionNotApplied` を通知ページにせず、送られた値を欄に戻した権限の編集のダイアログを開いた状態でダッシュボードを返す（409 は変わらない）。
 
 | 構築子 | 管理 UI の応答 |
 | --- | --- |
@@ -586,9 +586,9 @@ POST の応答で開いた状態で描いたダイアログは、`admin.js` が�
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
-| GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI の解釈と署名者の照合。確認のページを 200 で返し、セッションもリレーの接続も作らない |
-| POST | `/sessions/connect/confirm` | 確認のページからの接続。URI と署名者をもう一度確かめてから接続し、303 でダッシュボードへ戻す |
-| GET / POST | `/sessions/<signer>/<client>/permissions` | 承認済みのセッションの権限の編集フォーム / 保存。303 でダッシュボードへ戻す |
+| POST | `/sessions/connect` | `nostrconnect://` URI の解釈と署名者の照合。確認のダイアログを開いたダッシュボードを 200 で返し、セッションもリレーの接続も作らない |
+| POST | `/sessions/connect/confirm` | 確認のダイアログからの接続。URI と署名者をもう一度確かめてから接続し、303 でダッシュボードへ戻す |
+| POST | `/sessions/<signer>/<client>/permissions` | 承認済みのセッションの権限の保存。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
 | POST | `/plugins/<プラグイン名>/<ページ>` | プラグインのページのフォームの送信 |
@@ -675,8 +675,6 @@ nostr-no-su/
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログとページが共用するフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
-│       ├── admin/connect_pages.gleam クライアントの接続のページと確認のページの描画
-│       ├── admin/session_pages.gleam セッションのページの描画
 │       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーのエンジンの定義を使う）
 │       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/wordmark.gleam  上部のロゴの製品名の字形のパス（dev/logo_wordmark.sh が生成）
