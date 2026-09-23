@@ -1,7 +1,7 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
 //// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
-//// 問い合わせ、URI のリレーの用途の決定、セッションの権限の更新、セッションのリレー
-//// だけの接続の購読と取り消しで閉じることもここで確かめる。
+//// 問い合わせ、セッションの権限の更新、セッションのリレーだけの接続の購読と
+//// 取り消しで閉じることもここで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -18,8 +18,6 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_connection
-import nostr_no_su/relay_list
-import nostr_no_su/relay_store
 import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
@@ -359,24 +357,6 @@ pub fn publisher_urls_lists_the_connected_relay_test() {
     await_connection(reports)
   assert bunker.publisher_urls(name) == Some([test_relay_url])
   stop_tree(tree)
-}
-
-/// DB の行から、URI のリレーをバンカーの用途にする変更が決まる。
-pub fn bunker_relay_plan_test() {
-  let url = "ws://relay.test"
-  let relay = fn(monitor: Bool, bunker_role: Bool) {
-    relay_store.Relay(
-      id: 1,
-      url: url,
-      roles: relay_list.Roles(monitor: monitor, bunker: bunker_role),
-    )
-  }
-  assert app.bunker_relay_plan([], url) == app.RegisterRelay
-  let monitor_only = relay(True, False)
-  assert app.bunker_relay_plan([monitor_only], url)
-    == app.GrantBunkerRole(monitor_only)
-  assert app.bunker_relay_plan([relay(False, True), relay(True, True)], url)
-    == app.AlreadyBunker
 }
 
 /// 管理 UI が使う経路。シークレット無しの `connect` は承認待ちになり、承認すると

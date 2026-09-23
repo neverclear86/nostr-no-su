@@ -231,7 +231,8 @@ pub type Monitor {
 /// 起動時の一覧で、本番は空。行はバンカーの読み込みから `OpenRegistered` で届き、
 /// 実行時の増減には `open_relay` などを使う。`subscriptions` は署名者の問い合わせ
 /// （応答が無ければ `None`）から購読の定義を作る関数で、基本の接続には全署名者、
-/// セッションのリレーの接続にはその URL を持つセッションの署名者の問い合わせを渡す。
+/// セッションのリレーの接続にはその URL を持つセッションと取り置きの署名者の問い合わせ
+/// （`bunker.session_signers`）を渡す。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
@@ -1131,91 +1132,47 @@ fn role_status(
 /// URI のリレーが応答の発行先に現れたかを確かめる間隔。
 const publisher_poll_interval_ms = 100
 
-/// 解釈済みの `nostrconnect://` のリレーをバンカーの用途で登録し、応答の発行先に
-/// なるのを待ってから、署名者とクライアントのセッションを開いて `connect` の
-/// 応答を発行する。開いたセッションは URI のリレーの一覧を持つ。
+/// 解釈済みの `nostrconnect://` の（署名者, クライアント）に URI のリレーをバンカーで
+/// 取り置いてそのリレーの接続を開かせ、どれかが応答の発行先になるのを待ってから、
+/// セッションを開いて `connect` の応答を発行する。URI のリレーは `relays` テーブルに
+/// 登録せず、開いたセッションが持つ。取り置きは結果にかかわらず最後に外す（セッション
+/// が開けばそのリレーの接続はセッションのリレーとして残り、開けなければ閉じる）。
 pub fn connect_nostrconnect(
   spec: Spec,
   request: nostrconnect.ConnectRequest,
   signer: String,
 ) -> Result(Nil, admin.NostrconnectFailure) {
-  use _nil <- result.try(
-    list.try_each(request.relays, ensure_bunker_relay(spec, _))
-    |> result.map_error(admin.RelayNotRegistered),
-  )
-  use _nil <- result.try(
-    case
-      await_publisher(
-        spec,
-        request.relays,
-        dashboard.nostrconnect_wait_seconds * 1000,
-      )
-    {
-      True -> Ok(Nil)
-      False -> Error(admin.RelayNotConnected)
-    },
-  )
-  bunker.open_client_session(
+  bunker.reserve_session_relays(
     spec.bunker.name,
     signer,
     request.client,
-    request.perms,
     request.relays,
-    request.secret,
   )
-  |> result.map_error(admin.SessionNotOpened)
-}
-
-/// URI のリレー 1 件をバンカーの用途で使えるようにする。DB の行が無ければ登録し、
-/// あって用途にバンカーが無ければ用途を足す。すでにバンカーの用途なら何もしない。
-fn ensure_bunker_relay(
-  spec: Spec,
-  url: String,
-) -> Result(Nil, admin.RelayChangeFailure) {
-  use registered <- result.try(
-    registered_relays(spec) |> result.map_error(admin.RelayNotSaved),
-  )
-  case bunker_relay_plan(registered, url) {
-    RegisterRelay ->
-      add_relay(spec, url, relay_list.Roles(monitor: False, bunker: True))
-    GrantBunkerRole(relay) ->
-      update_relay_roles(
-        spec,
-        relay,
-        relay_list.Roles(monitor: relay.roles.monitor, bunker: True),
+  let outcome = case
+    await_publisher(
+      spec,
+      request.relays,
+      dashboard.nostrconnect_wait_seconds * 1000,
+    )
+  {
+    False -> Error(admin.RelayNotConnected)
+    True ->
+      bunker.open_client_session(
+        spec.bunker.name,
+        signer,
+        request.client,
+        request.perms,
+        request.relays,
+        request.secret,
       )
-    AlreadyBunker -> Ok(Nil)
+      |> result.map_error(admin.SessionNotOpened)
   }
+  bunker.release_session_relays(spec.bunker.name, signer, request.client)
+  outcome
 }
 
-/// URI のリレー 1 件を、バンカーの用途で使えるようにするために要る変更。
-pub type RelayPlan {
-  /// 登録済みで用途にバンカーがある。変更は要らない。
-  AlreadyBunker
-  /// DB に行が無い。バンカー用途で登録する。
-  RegisterRelay
-  /// 登録済みだが用途にバンカーが無い。用途を足す。
-  GrantBunkerRole(relay: relay_store.Relay)
-}
-
-/// DB の行から `url` の変更を決める。行が無ければ `RegisterRelay`、あって用途に
-/// バンカーが無ければ `GrantBunkerRole`、あれば `AlreadyBunker`。
-/// 単体テストが呼べるよう公開する。
-pub fn bunker_relay_plan(
-  registered: List(relay_store.Relay),
-  url: String,
-) -> RelayPlan {
-  case list.find(registered, fn(relay) { relay.url == url }) {
-    Error(Nil) -> RegisterRelay
-    Ok(relay) ->
-      case relay.roles.bunker {
-        True -> AlreadyBunker
-        False -> GrantBunkerRole(relay)
-      }
-  }
-}
-
-/// URI のリレーの URL が応答の発行先に現れるまで待つ。応答は発行先として配られた
+/// URI のリレーの URL のどれかが応答の発行先に現れるまで待つ。取り置いたリレーの
+/// 接続は、繋がると `SetPublisher` で発行先になる。応答は発行先として配られた
 /// 送信関数から出ていくため、接続の状態ではなく発行先そのものを見る。アクターが
 /// 答えなければ未到達として次の周期へ回す。残りが尽きたら `False`。
 fn await_publisher(spec: Spec, urls: List(String), remaining_ms: Int) -> Bool {

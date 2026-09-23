@@ -15,6 +15,9 @@
 //// 使う登録の確認を、読み込み前・未登録・登録済みのそれぞれで確かめる。
 //// `bunker.check_accounts`（`CheckAccounts`）のテストは、複数の公開鍵の取得が使う
 //// 登録の確認を、読み込み前と、登録済みと未登録を混ぜた順のそれぞれで確かめる。
+//// `bunker.reserve_session_relays` / `bunker.release_session_relays` のテストは、
+//// 取り置いた署名者で開く接続の購読と AUTH と、セッションを開いた後の取り外しで
+//// 接続が残ることを確かめる。
 
 import gleam/dict
 import gleam/erlang/process
@@ -881,6 +884,68 @@ pub fn a_session_relay_is_authenticated_by_its_session_signers_only_test() {
   let assert Ok([_, _]) =
     bunker.authenticate(name, relay_x, bunker.BaseRelay, "challenge-1")
   assert bunker.session_signers(name, relay_x) == Some([first_hex])
+  stop_bunker(name)
+}
+
+/// 取り置いたリレーは、取り置いた署名者で購読と AUTH を行うセッションのリレーに
+/// なり、取り外すと一覧から消える。
+pub fn reserved_session_relays_open_with_the_reserving_signer_test() {
+  let stored = one_account()
+  let signer_hex = account.pubkey_hex(stored.account)
+  let client_hex = account.pubkey_hex(account_for(client_key))
+  let name = process.new_name("bunker_reserved_session_relays_test")
+  let urls = process.new_subject()
+  start_bunker_with_session_relays(
+    name,
+    fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
+    process.send(urls, _),
+  )
+  let assert Ok([_]) = bunker.accounts(name)
+
+  bunker.reserve_session_relays(name, signer_hex, client_hex, [relay_x])
+  let assert Ok(reserved) = process.receive(urls, 1000)
+  assert reserved == [relay_x]
+  assert bunker.session_signers(name, relay_x) == Some([signer_hex])
+  let assert Ok([only]) =
+    bunker.authenticate(name, relay_x, bunker.SessionRelay, "c")
+  assert only.pubkey == signer_hex
+
+  bunker.release_session_relays(name, signer_hex, client_hex)
+  let assert Ok(released) = process.receive(urls, 1000)
+  assert released == []
+  assert bunker.session_signers(name, relay_x) == Some([])
+  stop_bunker(name)
+}
+
+/// 同じ組のセッションを開いた後の取り外しでは、セッションが同じリレーを持つので
+/// 一覧が変わらず、接続は張り直されない。
+pub fn releasing_a_reservation_keeps_the_relays_of_an_opened_session_test() {
+  let stored = one_account()
+  let signer_hex = account.pubkey_hex(stored.account)
+  let client_hex = account.pubkey_hex(account_for(client_key))
+  let name = process.new_name("bunker_release_after_open_test")
+  let urls = process.new_subject()
+  start_bunker_with_session_relays(
+    name,
+    fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
+    process.send(urls, _),
+  )
+  let assert Ok([_]) = bunker.accounts(name)
+
+  bunker.reserve_session_relays(name, signer_hex, client_hex, [relay_x])
+  let assert Ok([_]) = process.receive(urls, 1000)
+  let assert Ok(Nil) =
+    bunker.open_client_session(
+      name,
+      signer_hex,
+      client_hex,
+      "sign_event:1",
+      [relay_x],
+      "reserved-secret",
+    )
+  bunker.release_session_relays(name, signer_hex, client_hex)
+  assert process.receive(urls, 100) == Error(Nil)
+  assert bunker.session_signers(name, relay_x) == Some([signer_hex])
   stop_bunker(name)
 }
 
