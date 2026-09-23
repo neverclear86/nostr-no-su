@@ -309,13 +309,13 @@ pub fn account_action_page(
   )
 }
 
-/// 接続 URI をスマートフォンへ渡すための QR コードのページ。secret 入りの URI と要承認の
-/// URI を 1 枚ずつのカードに出す。各カードは、端末のカメラがテキストとして扱う形
-/// （`bunker://` を外し `relay=` のドットを `%2E` にした形）の QR と貼り方の案内を既定に
-/// 置き、クライアントの読み取り機能が読む完全な `bunker://` の QR を畳みに入れる。続けて、
-/// この URI が使うバンカーのリレーの URL と、クライアント側の `nostrconnect://` で接続する
-/// 経路への案内を出す。バンカーに使うリレーが無ければ警告を先に出す。符号化できない URI は
-/// その位置に理由を出し、コピー欄は残す。
+/// 接続 URI をスマートフォンへ渡すための QR コードのページ。バンカーに使うリレーが無ければ
+/// 警告を先に出す。続く 1 枚のカードに、アカウントの識別と案内の文、secret 入りの URI と
+/// 要承認の URI を切り替える 2 つのタブ（`uri_tab`。既定で secret 入りの URI を選ぶ）、
+/// カメラ用のコードの貼り方の案内を並べる。タブはラジオボタンと CSS で切り替わり、JS は
+/// 要らない。カードの後に、この URI が使うバンカーのリレーの URL と、クライアント側の
+/// `nostrconnect://` で接続する経路への案内を出す。符号化できない URI はその位置に理由を
+/// 出し、コピー欄は残す。
 pub fn connection_qr_page(
   language: Language,
   theme: view.Theme,
@@ -333,25 +333,34 @@ pub fn connection_qr_page(
     view.SwitchReturningTo(path),
     view.NoRefresh,
     [
+      dashboard.no_bunker_relay_warning(language, relays),
       view.card([
         account_summary(language, row),
         html.p([], [html.text(text(i18n.ConnectionQrDescription))]),
+        html.div(
+          [attribute.class("tabs tabs-border")],
+          list.flatten([
+            uri_tab(
+              language,
+              i18n.ConnectionUri,
+              row.uri,
+              True,
+              view.alert(view.Warning, [
+                html.text(text(i18n.ConnectionQrSecretWarning)),
+              ]),
+            ),
+            uri_tab(
+              language,
+              i18n.ConnectionUriForApproval,
+              row.auth_uri,
+              False,
+              approval_note(language),
+            ),
+          ]),
+        ),
+        html.p([], [html.text(text(i18n.CameraCopySteps))]),
+        view.hint(text(i18n.CameraCopyNote)),
       ]),
-      dashboard.no_bunker_relay_warning(language, relays),
-      uri_card(
-        language,
-        i18n.ConnectionUri,
-        row.uri,
-        view.alert(view.Warning, [
-          html.text(text(i18n.ConnectionQrSecretWarning)),
-        ]),
-      ),
-      uri_card(
-        language,
-        i18n.ConnectionUriForApproval,
-        row.auth_uri,
-        approval_note(language),
-      ),
       bunker_relay_card(language, relays),
       client_uri_card(language),
       view.back_link(language),
@@ -359,7 +368,10 @@ pub fn connection_qr_page(
   )
 }
 
-/// 要承認のカードの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
+/// 接続 URI のタブのラジオボタンの `name`。ページに 1 組だけなので固定の値にする。
+const uri_tab_group = "connection-uri"
+
+/// 要承認のタブの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
 /// できない旨を伝え、承認待ちの節へのリンクを添える。
 fn approval_note(language: Language) -> Element(msg) {
   html.p([], [
@@ -377,30 +389,44 @@ fn approval_note(language: Language) -> Element(msg) {
   ])
 }
 
-/// 接続 URI 1 件のカード。見出し、`note`、端末のカメラ用のコピー用 QR、貼り方の案内、
-/// コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR の畳みを並べる。
-fn uri_card(
+/// 接続 URI 1 件のタブ。ラジオボタンを入れた `tab` のラベルと、その直後に置く `tab-content`
+/// の 2 要素を返し、呼び出し側が `tabs` の囲みに並べる。`selected` ならラジオボタンに
+/// `checked` を付ける。daisyUI は選ばれたラベルの直後の `tab-content` だけを出すので、JS は
+/// 要らない。中身は `note`、端末のカメラ用のコピー用 QR、コピー欄、クライアントの読み取り
+/// 機能が読む完全な `bunker://` の QR の畳みの順に並べる。`tab-content` には display を変える
+/// クラスを付けない（付けると選ばれていないタブの中身も出る）ので、縦積みは内側の `div` で行う。
+fn uri_tab(
   language: Language,
   title: i18n.Message,
   uri: String,
+  selected: Bool,
   note: Element(msg),
-) -> Element(msg) {
+) -> List(Element(msg)) {
   let text = i18n.text(language, title)
-  view.card([
-    view.section_heading(view.qr_code_icon(), text, None, None, []),
-    note,
-    qr_or_notice(language, text, account.camera_copy_text(uri)),
-    html.p([], [html.text(i18n.text(language, i18n.CameraCopySteps))]),
-    view.hint(i18n.text(language, i18n.CameraCopyNote)),
-    view.copyable_field(language, text, uri),
-    view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
-      qr_or_notice(
-        language,
-        text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
-        uri,
-      ),
+  [
+    html.label([attribute.class("tab")], [
+      html.input([
+        attribute.type_("radio"),
+        attribute.name(uri_tab_group),
+        attribute.checked(selected),
+      ]),
+      html.text(text),
     ]),
-  ])
+    html.div([attribute.class("tab-content pt-4")], [
+      html.div([attribute.class("flex flex-col gap-4")], [
+        note,
+        qr_or_notice(language, text, account.camera_copy_text(uri)),
+        view.copyable_field(language, text, uri),
+        view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
+          qr_or_notice(
+            language,
+            text <> " / " <> i18n.text(language, i18n.ScanWithClientScanner),
+            uri,
+          ),
+        ]),
+      ]),
+    ]),
+  ]
 }
 
 /// この URI が使うバンカーのリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに

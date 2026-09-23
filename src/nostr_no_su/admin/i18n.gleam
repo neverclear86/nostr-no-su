@@ -605,14 +605,14 @@ fn english(message: Message) -> String {
     ConnectionUrisAndPublicKey -> "Connection URIs and public key"
     ConnectionQr -> "Connection QR code"
     ConnectionQrDescription ->
-      "The code at the top of each card is meant to be scanned and copied with the phone's camera. To use the client's own scanner instead, open the panel below it and scan the code inside."
+      "Choose a connection URI with the tabs. The code shown is meant to be scanned and copied with the phone's camera. To use the client's own scanner instead, open the panel below the code and scan the code inside."
     ConnectionQrSecretWarning ->
-      "The codes on this card contain the connection secret. Do not show them where others can see the screen."
+      "The codes and the URI on this tab contain the connection secret. Do not show them where others can see the screen."
     CouldNotEncodeQr ->
       "The URI is too long for a QR code. Copy it from the field below."
     ScanWithClientScanner -> "Scan with the client's own scanner"
     CameraCopySteps ->
-      "Scan this code with the camera, copy the text, type bunker:// in the client's input field, and paste the text after it."
+      "Scan the first code in the selected tab with the camera, copy the text, type bunker:// in the client's input field, and paste the text after it."
     CameraCopyNote ->
       "As long as it starts with bunker://, leave the %2E in relay= as it is; the client turns it back into a dot."
     BunkerRelaysForUri -> "Relays this URI uses"
@@ -913,13 +913,13 @@ fn japanese(message: Message) -> String {
     ConnectionUrisAndPublicKey -> "接続 URI と公開鍵"
     ConnectionQr -> "接続 QR コード"
     ConnectionQrDescription ->
-      "各カードの上のコードは、端末のカメラで読み取ってコピーするためのものです。クライアント自身の読み取り機能を使うときは、下の畳みを開いてその中のコードを読み取ってください。"
+      "タブで接続 URI を選びます。出ているコードは、端末のカメラで読み取ってコピーするためのものです。クライアント自身の読み取り機能を使うときは、コードの下の畳みを開いてその中のコードを読み取ってください。"
     ConnectionQrSecretWarning ->
-      "このカードのコードには接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
+      "このタブのコードと URI には接続 secret が含まれます。画面を他人に見られる場所では表示しないでください。"
     CouldNotEncodeQr -> "この URI は QR コードにするには長すぎます。下の欄からコピーしてください。"
     ScanWithClientScanner -> "クライアントの読み取り機能で読み取る"
     CameraCopySteps ->
-      "このコードをカメラで読み取ってテキストをコピーし、クライアントの入力欄に bunker:// と打ってから、その後ろに貼り付けます。"
+      "選んだタブの最初のコードをカメラで読み取ってテキストをコピーし、クライアントの入力欄に bunker:// と打ってから、その後ろに貼り付けます。"
     CameraCopyNote ->
       "先頭が bunker:// で始まっていれば、relay= の中の %2E はそのままで構いません。クライアントが . に戻します。"
     BunkerRelaysForUri -> "この URI が使うリレー"
