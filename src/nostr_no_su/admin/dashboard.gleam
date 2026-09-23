@@ -613,8 +613,8 @@ fn accounts_section(
   accounts: Result(List(AccountRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.section_card(accounts_anchor, [
-    section_heading(
+  view.section_block(accounts_anchor, [
+    listed_section_heading(
       language,
       accounts,
       view.users_icon(),
@@ -635,7 +635,7 @@ fn accounts_section(
       accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts)),
-      fn(rows) { item_list(list.map(rows, account_item(language, _))) },
+      fn(rows) { view.row_list(list.map(rows, account_item(language, _))) },
     ),
   ])
 }
@@ -649,18 +649,17 @@ fn skipped_section(
   case skipped {
     Ok([_, ..] as rows) ->
       view.card([
-        heading_row(
-          html.div([attribute.class("flex items-center gap-2")], [
-            view.warning_triangle_icon(),
-            view.heading(i18n.text(language, i18n.UnreadableAccounts)),
-            view.count_pill(list.length(rows)),
-          ]),
-          element.none(),
+        view.section_heading(
+          view.warning_triangle_icon(),
+          i18n.text(language, i18n.UnreadableAccounts),
+          Some(list.length(rows)),
+          None,
+          [],
         ),
         view.alert(view.Warning, [
           html.text(i18n.text(language, i18n.UnreadableAccountsWarning)),
         ]),
-        item_list(list.map(rows, skipped_item(language, _))),
+        view.row_list(list.map(rows, skipped_item(language, _))),
       ])
     Ok([]) | Error(_) -> element.none()
   }
@@ -672,7 +671,7 @@ fn skipped_section(
 fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   case row.reason {
     vault.MalformedPubkey ->
-      entry_item([
+      view.list_row(view.InlineRow, [
         html.p([attribute.class("text-sm")], [
           html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
           html.text(
@@ -682,7 +681,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
         ]),
       ])
     _ ->
-      entry_item([
+      view.list_row(view.InlineRow, [
         html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
           view.identity(language, row.label, row.npub),
           html.p([attribute.class("text-sm")], [
@@ -701,10 +700,9 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 節の見出しと、操作の行。アイコン、題、一覧を得たときだけ出す件数のピルを左に、操作を
-/// 右に置く。一覧を得たときだけ出す操作と、常に出す操作を分けて受け取る。操作が無ければ
-/// 右には何も置かない。
-fn section_heading(
+/// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。一覧を得たときだけ `listed_actions`
+/// を出し、`always_actions` は常に出す。説明の行は出さない。
+fn listed_section_heading(
   language: Language,
   listing: Result(List(a), i18n.Reason),
   icon: Element(msg),
@@ -712,36 +710,19 @@ fn section_heading(
   listed_actions: List(Element(msg)),
   always_actions: List(Element(msg)),
 ) -> Element(msg) {
-  let base = [icon, view.heading(i18n.text(language, title))]
-  let left = case listing {
-    Ok([_, ..] as rows) ->
-      list.append(base, [view.count_pill(list.length(rows))])
-    Ok([]) | Error(_) -> base
+  let count = case listing {
+    Ok([_, ..] as rows) -> Some(list.length(rows))
+    Ok([]) | Error(_) -> None
   }
   let actions = case listing {
     Ok(_) -> list.append(listed_actions, always_actions)
     Error(_) -> always_actions
   }
-  heading_row(
-    html.div([attribute.class("flex items-center gap-2")], left),
-    case actions {
-      [] -> element.none()
-      _ -> button_row(actions)
-    },
-  )
+  view.section_heading(icon, i18n.text(language, title), count, None, actions)
 }
 
-/// 節の見出しの左側の要素と、それに並べる要素の行。要素は幅が余れば右に寄る
-/// （狭い幅では下に落ちる）。
-fn heading_row(left: Element(msg), trailing: Element(msg)) -> Element(msg) {
-  html.div(
-    [attribute.class("flex flex-wrap items-center justify-between gap-2")],
-    [left, trailing],
-  )
-}
-
-/// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした `tone` の色の理由の
-/// 囲みを、得られれば `render` の内容を出す。アカウント、承認待ち、セッション、リレーの
+/// 一覧を得たときの節の本文。得られなければ `lead` を前置きにした `tone` の色の理由の囲みを面
+/// （`view.surface`）に載せて、得られれば `render` の内容を出す。アカウント、承認待ち、セッション、リレーの
 /// 節が使い、承認待ちだけ `Failure`、ほかは `Neutral` を渡す。
 fn listed_body(
   language: Language,
@@ -754,13 +735,15 @@ fn listed_body(
   case listing {
     Ok(rows) -> section_body(rows, empty, render)
     Error(reason) ->
-      view.alert(tone, view.reason_content(language, Some(lead), reason))
+      view.surface([
+        view.alert(tone, view.reason_content(language, Some(lead), reason)),
+      ])
   }
 }
 
 /// アカウント 1 件。識別、接続 URI と公開鍵の畳み、操作のリンクを縦に並べる。
 fn account_item(language: Language, account: AccountRow) -> Element(msg) {
-  html.li([attribute.class("flex flex-col gap-3 py-4 first:pt-0 last:pb-0")], [
+  view.list_row(view.StackedRow, [
     view.identity(language, account.label, account.npub),
     uri_details(language, account),
     account_action_links(language, account.signer),
@@ -829,8 +812,8 @@ fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
   }
 }
 
-/// 承認待ちの接続要求と、その承認・拒否ボタン。1 件以上あるとき、または一覧を得られない
-/// ときだけ、warning 色の枠で全幅に描く。0 件のときは節ごと出さない。
+/// 承認待ちの接続要求と、その承認・拒否ボタン。1 件以上あるとき、または一覧を得られないときだけ、
+/// warning の色の囲み（`view.alert_panel`）で全幅に描く。0 件のときは節ごと出さない。
 fn pending_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -840,12 +823,18 @@ fn pending_section(
     Ok([]) -> element.none()
     _ -> {
       let text = i18n.text(language, _)
-      let pill = case pending {
-        Ok(rows) -> view.count_pill(list.length(rows))
-        Error(_) -> element.none()
+      let count = case pending {
+        Ok(rows) -> Some(list.length(rows))
+        Error(_) -> None
       }
-      view.warning_card(pending_anchor, [
-        heading_row(view.heading(text(i18n.PendingConnections)), pill),
+      view.alert_panel(pending_anchor, view.Warning, [
+        view.section_heading(
+          view.door_open_icon(),
+          text(i18n.PendingConnections),
+          count,
+          None,
+          [],
+        ),
         listed_body(
           language,
           view.Failure,
@@ -853,10 +842,13 @@ fn pending_section(
           i18n.CouldNotListPending,
           element.none(),
           fn(rows) {
-            item_list(
+            view.row_list(
               list.map(rows, fn(entry) {
                 let signer = signer_name(accounts, entry.signer)
-                entry_item(pending_content(language, signer, entry))
+                view.list_row(
+                  view.InlineRow,
+                  pending_content(language, signer, entry),
+                )
               }),
             )
           },
@@ -894,11 +886,14 @@ fn approval_content(
 ) -> List(Element(msg)) {
   let mismatch_warning = case pending.secret_mismatch {
     True -> [
-      view.warning(view.emphasized(
-        language,
-        i18n.WrongSecretOffered,
-        i18n.WrongSecretNotice,
-      )),
+      view.alert(
+        view.Warning,
+        view.emphasized(
+          language,
+          i18n.WrongSecretOffered,
+          i18n.WrongSecretNotice,
+        ),
+      ),
     ]
     False -> []
   }
@@ -1212,8 +1207,8 @@ fn relays_section(
   relays: Result(List(RelayRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.section_card(relays_anchor, [
-    section_heading(
+  view.section_block(relays_anchor, [
+    listed_section_heading(
       language,
       relays,
       view.plug_icon(),
@@ -1235,7 +1230,7 @@ fn relays_section(
       relays,
       i18n.CouldNotListRelays,
       element.none(),
-      fn(rows) { item_list(list.map(rows, relay_item(language, _))) },
+      fn(rows) { view.row_list(list.map(rows, relay_item(language, _))) },
     ),
   ])
 }
@@ -1262,7 +1257,7 @@ pub fn no_bunker_relay_warning(
 /// リレー 1 件。URL と、用途の語と状態の組を監視、バンカーの順に並べ、アイコンだけの
 /// 操作のリンク（用途の編集、削除）を続ける。使っていない用途は「未使用」のバッジで出す。
 fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
-  entry_item([
+  view.list_row(view.InlineRow, [
     html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
       html.p([attribute.class("font-mono text-xs break-all")], [
         html.text(row.url),
@@ -1321,8 +1316,8 @@ fn sessions_section(
   sessions: Result(List(SessionRow), i18n.Reason),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.section_card(sessions_anchor, [
-    section_heading(
+  view.section_block(sessions_anchor, [
+    listed_section_heading(
       language,
       sessions,
       view.clock_icon(),
@@ -1344,7 +1339,7 @@ fn sessions_section(
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions)),
       fn(rows) {
-        item_list(list.map(rows, session_item(language, accounts, now, _)))
+        view.row_list(list.map(rows, session_item(language, accounts, now, _)))
       },
     ),
   ])
@@ -1359,7 +1354,7 @@ fn session_item(
   session: SessionRow,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  entry_item([
+  view.list_row(view.InlineRow, [
     view.detail_list([
       #(
         text(i18n.Client),
@@ -1436,8 +1431,8 @@ fn plugins_section(
   plugins: List(PluginRow),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.section_card(plugins_anchor, [
-    section_heading(
+  view.section_block(plugins_anchor, [
+    listed_section_heading(
       language,
       Ok(plugins),
       view.puzzle_icon(),
@@ -1448,24 +1443,26 @@ fn plugins_section(
     case plugins {
       [] -> view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins))
       rows ->
-        view.table(
-          [text(i18n.NameColumn), text(i18n.StateColumn), ""],
-          list.map(rows, fn(plugin) {
-            [
-              html.td([attribute.class("break-words")], [
-                html.text(plugin.name),
-              ]),
-              html.td([], [plugin_state(language, plugin)]),
-              html.td(
-                [attribute.class("whitespace-nowrap")],
-                list.append(
-                  plugin_page_link(language, plugin),
-                  reenable_form_if_disabled(language, plugin),
+        view.surface([
+          view.table(
+            [text(i18n.NameColumn), text(i18n.StateColumn), ""],
+            list.map(rows, fn(plugin) {
+              [
+                html.td([attribute.class("break-words")], [
+                  html.text(plugin.name),
+                ]),
+                html.td([], [plugin_state(language, plugin)]),
+                html.td(
+                  [attribute.class("whitespace-nowrap")],
+                  list.append(
+                    plugin_page_link(language, plugin),
+                    reenable_form_if_disabled(language, plugin),
+                  ),
                 ),
-              ),
-            ]
-          }),
-        )
+              ]
+            }),
+          ),
+        ])
     },
   ])
 }
@@ -1480,18 +1477,17 @@ fn not_loaded_section(
     [] -> element.none()
     rows ->
       view.card([
-        heading_row(
-          html.div([attribute.class("flex items-center gap-2")], [
-            view.warning_triangle_icon(),
-            view.heading(i18n.text(language, i18n.NotLoadedPlugins)),
-            view.count_pill(list.length(rows)),
-          ]),
-          element.none(),
+        view.section_heading(
+          view.warning_triangle_icon(),
+          i18n.text(language, i18n.NotLoadedPlugins),
+          Some(list.length(rows)),
+          None,
+          [],
         ),
         view.alert(view.Warning, [
           html.text(i18n.text(language, i18n.NotLoadedPluginsWarning)),
         ]),
-        item_list(list.map(rows, not_loaded_item(language, _))),
+        view.row_list(list.map(rows, not_loaded_item(language, _))),
       ])
   }
 }
@@ -1503,7 +1499,7 @@ fn not_loaded_item(
   language: Language,
   row: plugin_loader.NotLoaded,
 ) -> Element(msg) {
-  entry_item([
+  view.list_row(view.InlineRow, [
     html.div([attribute.class("flex min-w-0 flex-col items-start gap-1")], [
       view.status_chip(
         view.LoadFailedChip,
@@ -1529,24 +1525,6 @@ fn section_body(
     [] -> empty
     rows -> render(rows)
   }
-}
-
-/// 項目を区切り線で分けた一覧。
-fn item_list(items: List(Element(msg))) -> Element(msg) {
-  html.ul([attribute.class("divide-y divide-base-300")], items)
-}
-
-/// 承認待ち、飛ばされた行、セッション、リレーの 1 件。値の組とボタンの並びを横に置き、
-/// 収まらなければボタンを下へ回す。
-fn entry_item(content: List(Element(msg))) -> Element(msg) {
-  html.li(
-    [
-      attribute.class(
-        "flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0",
-      ),
-    ],
-    content,
-  )
 }
 
 /// 行と承認ページのボタンの並び。

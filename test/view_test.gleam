@@ -1,8 +1,10 @@
 //// 管理 UI のページ枠と共通の部品（`admin/view`）の単体テスト。
 
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
+import lustre/element/html
 import nostr_no_su/admin/view
 
 /// 64 桁の 16 進のように長い値は、先頭 10 桁と末尾 6 桁を `…` でつなぐ。
@@ -84,4 +86,81 @@ pub fn button_kinds_map_to_daisyui_classes_test() {
       element.to_string(view.post_form("/", [], "t", kind, view.InForm))
   }
   assert string.contains(html, "class=\"" <> class <> focus <> "\"")
+}
+
+/// 節の見出しは、`primary` を薄く混ぜた面のアイコン、題の直後の件数のピル、補助の文字の色の
+/// 説明、右端の操作の並びを出す。
+pub fn section_heading_shows_the_count_description_and_actions_test() {
+  let html =
+    element.to_string(
+      view.section_heading(
+        view.plug_icon(),
+        "Relays",
+        Some(2),
+        Some("Where the bunker listens."),
+        [view.hint("action")],
+      ),
+    )
+  assert string.contains(
+    html,
+    "<span class=\"grid size-7.5 shrink-0 place-items-center rounded-field bg-primary/13 text-primary\"><svg",
+  )
+  assert string.contains(
+    html,
+    "Relays</h2><span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span>",
+  )
+  assert string.contains(
+    html,
+    "<p class=\"text-sm text-muted sm:pl-10\">Where the bunker listens.</p>",
+  )
+  assert string.contains(
+    html,
+    "<div class=\"flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
+  )
+}
+
+/// 件数、説明、操作を渡さなければ、ピル、説明の行、操作の並びを出さない。
+pub fn section_heading_leaves_out_the_absent_parts_test() {
+  let html =
+    element.to_string(
+      view.section_heading(view.plug_icon(), "Relays", None, None, []),
+    )
+  assert !string.contains(html, "badge")
+  assert !string.contains(html, "<p class")
+  assert !string.contains(html, "justify-end")
+}
+
+/// 行の一覧は面と枠線を持つ `list` で、行は並べ方ごとのクラスを `list-row` に重ねる。
+pub fn row_list_frames_the_rows_test() {
+  let html =
+    element.to_string(
+      view.row_list([
+        view.list_row(view.InlineRow, [html.text("a")]),
+        view.list_row(view.StackedRow, [html.text("b")]),
+      ]),
+    )
+  assert html
+    == "<ul class=\"list rounded-box border border-base-300 bg-base-100\">"
+    <> "<li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\">a</li>"
+    <> "<li class=\"list-row flex flex-col gap-3\">b</li></ul>"
+}
+
+/// 見出しや一覧を持つ囲みは、`id` を付けた `section` に、トーンの薄い塗りと縦に積むクラスを付け、
+/// アイコンを足さない。
+pub fn alert_panel_stacks_its_content_test() {
+  let html =
+    element.to_string(
+      view.alert_panel("pending", view.Warning, [html.text("content")]),
+    )
+  assert html
+    == "<section class=\"alert alert-soft alert-warning flex flex-col items-stretch gap-4 text-base-content\" id=\"pending\">content</section>"
+}
+
+/// コピーのボタンは、アイコンだけを見せ、語を `aria-label` と `title` に置き、`copy` の処理を指す。
+pub fn copy_button_names_the_copy_action_test() {
+  let html = element.to_string(view.copy_button("Copy client"))
+  assert string.starts_with(
+    html,
+    "<button aria-label=\"Copy client\" class=\"btn btn-ghost btn-sm btn-square text-muted group-data-copied:text-success focus-visible:outline-base-content\" data-action=\"copy\" title=\"Copy client\" type=\"button\">",
+  )
 }

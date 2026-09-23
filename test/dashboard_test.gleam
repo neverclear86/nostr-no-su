@@ -213,13 +213,13 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
     dashboard.approval_page(i18n.English, view.System, Ok([]), mismatched),
     "<div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
-      <> "<p><strong>The connection secret does not match.</strong> This happens when",
+      <> "<span><strong>The connection secret does not match.</strong> This happens when",
   )
   assert string.contains(
     dashboard.approval_page(i18n.Japanese, view.System, Ok([]), mismatched),
     "<div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
-      <> "<p><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
+      <> "<span><strong>接続 secret が一致しません。</strong>secret を再生成する前の",
   )
 
   assert !string.contains(
@@ -366,7 +366,7 @@ pub fn sessions_show_perms_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-base-content/70\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:7</span></span></div></dd>",
+    "<dt class=\"text-muted\">Permissions</dt><dd><div class=\"flex flex-wrap gap-1\"><span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:7</span></span></div></dd>",
   )
 }
 
@@ -393,7 +393,7 @@ pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
     )
   assert string.contains(
     sessions,
-    "<dt class=\"text-base-content/70\">Permissions</dt><dd>"
+    "<dt class=\"text-muted\">Permissions</dt><dd>"
       <> element.to_string(view.status_chip(
       view.ToneChip(view.Neutral),
       "No permissions requested",
@@ -884,7 +884,7 @@ pub fn relays_are_listed_one_item_per_row_test() {
   }
   assert string.contains(
     body,
-    "<ul class=\"divide-y divide-base-300\"><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
+    "<ul class=\"list rounded-box border border-base-300 bg-base-100\"><li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://a</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
       <> role(
       view.eye_icon(),
       "monitor",
@@ -897,7 +897,7 @@ pub fn relays_are_listed_one_item_per_row_test() {
     )
       <> "</div></div>"
       <> actions("1")
-      <> "</li><li class=\"flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
+      <> "</li><li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><div class=\"flex min-w-0 flex-col gap-1\"><p class=\"font-mono text-xs break-all\">wss://b</p><div class=\"flex flex-wrap gap-x-4 gap-y-1 text-sm\">"
       <> role(
       view.eye_icon(),
       "monitor",
@@ -1010,7 +1010,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 /// （`states()` はバンカーの行を持つので、上のテストの描画に警告が無いことで確かめる）。
 pub fn no_bunker_relay_is_warned_test() {
   let add_action =
-    "<div class=\"flex shrink-0 flex-wrap gap-2\">"
+    "<div class=\"flex flex-wrap justify-end gap-2\">"
     <> element.to_string(view.icon_button_link(
       "/relays/new",
       view.plus_icon(),
@@ -1026,12 +1026,11 @@ pub fn no_bunker_relay_is_warned_test() {
     )
   assert string.contains(
     no_rows,
-    "Relays</h2>"
-      <> "</div>"
+    "Relays</h2></div></div>"
       <> add_action
       <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
-      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></div></section>",
+      <> "<span>No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div></section>",
   )
   let monitor_only =
     dashboard.render(
@@ -1052,8 +1051,7 @@ pub fn no_bunker_relay_is_warned_test() {
   assert string.contains(
     monitor_only,
     "Relays</h2>"
-      <> element.to_string(view.count_pill(1))
-      <> "</div>"
+      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">1</span></div></div>"
       <> add_action
       <> "</div><div class=\"alert alert-soft alert-warning text-base-content\">"
       <> element.to_string(view.tone_icon(view.Warning))
@@ -1072,15 +1070,15 @@ pub fn unlisted_relays_show_the_reason_test() {
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
   assert string.contains(
     dashboard.render(i18n.English, view.System, snapshot),
-    "Relays</h2></div>"
-      <> "</div><div class=\"alert alert-soft text-base-content\">"
+    "Relays</h2></div></div></div>"
+      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span><span lang=\"en\">boom</span></span></div></div></section>",
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
-    "リレー</h2></div>"
-      <> "</div><div class=\"alert alert-soft text-base-content\">"
+    "リレー</h2></div></div></div>"
+      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft text-base-content\">"
       <> element.to_string(view.tone_icon(view.Neutral))
       <> "<span>リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div></section>",
   )
@@ -1160,7 +1158,8 @@ pub fn section_headings_show_the_count_pill_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    "Relays</h2>" <> element.to_string(view.count_pill(2)),
+    "Relays</h2>"
+      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span>",
   )
 
   let unavailable =
@@ -1322,16 +1321,16 @@ pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
     dashboard.render(i18n.English, view.System, states()),
-    "<dt class=\"text-base-content/70\">Expires in</dt><dd><span>540s</span></dd>",
+    "<dt class=\"text-muted\">Expires in</dt><dd><span>540s</span></dd>",
   )
   assert string.contains(
     dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
-    "<dt class=\"text-base-content/70\">失効まで</dt><dd><span>540 秒</span></dd>",
+    "<dt class=\"text-muted\">失効まで</dt><dd><span>540 秒</span></dd>",
   )
 }
 
-/// 概要のタイルは、5 つの節へのリンク（`href="#…"`）になっており、各節のカードは
-/// 同じアンカーの `id` を持つ。
+/// 概要のタイルは、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
+/// `id` を持つ。
 pub fn overview_tiles_link_to_each_section_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   let anchors = ["pending", "accounts", "sessions", "relays", "plugins"]

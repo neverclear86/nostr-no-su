@@ -168,7 +168,7 @@ fn form_fields(
         fields.sign_event,
         [],
       ),
-      html.p([attribute.class("text-sm text-base-content/70")], [
+      html.p([attribute.class("text-sm text-muted")], [
         html.text(text(i18n.SignEventAlwaysRefused)),
       ]),
       view.checkbox_row(
@@ -213,7 +213,7 @@ fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
       html.div([attribute.class("flex flex-col gap-1")], [
         html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
         dashboard.perms_chips(language, other),
-        html.p([attribute.class("text-sm text-base-content/70")], [
+        html.p([attribute.class("text-sm text-muted")], [
           html.text(i18n.text(language, i18n.OtherPermissionsHint)),
         ]),
       ]),
