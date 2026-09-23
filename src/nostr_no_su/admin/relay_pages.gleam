@@ -16,7 +16,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/relay_list.{type Roles}
 import nostr_no_su/relay_store.{type Relay}
 
-/// URL の案内の `id`。URL の欄は追加のページに 1 つだけなので固定の値にする。
+/// URL の補足の `id`。URL の欄は追加のページに 1 つだけなので固定の値にする。
 const relay_url_hint_id = "relay-url-hint"
 
 /// リレーの追加のページ。GET では URL が空でバンカーだけにチェック、失敗して
@@ -131,9 +131,10 @@ pub fn relay_action_page(
 fn url_field(language: Language, url: String) -> Element(msg) {
   let text = i18n.text(language, _)
   view.hinted_input(
+    language,
     text(i18n.RelayUrl),
     relay_url_hint_id,
-    text(i18n.RelayUrlHint),
+    view.LineHint(text(i18n.RelayUrlHint)),
     [
       attribute.type_("text"),
       attribute.name(dashboard.relay_url_field),

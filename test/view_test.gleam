@@ -3,6 +3,7 @@
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import lustre/attribute
 import lustre/element
 import lustre/element/html
 import nostr_no_su/admin/i18n
@@ -220,4 +221,88 @@ pub fn table_headers_scope_their_columns_test() {
     )
   assert string.contains(body, "<th scope=\"col\">Name</th>")
   assert !string.contains(body, "<th>")
+}
+
+/// 1 行の補足は、欄の下の段落に `id` を付けて欄の `aria-describedby` から指し、`popover` にしない。
+pub fn line_hint_describes_the_field_test() {
+  let html =
+    element.to_string(
+      view.hinted_input(
+        i18n.English,
+        "Label",
+        "label-hint",
+        view.LineHint("Up to 64 characters."),
+        [attribute.name("label")],
+      ),
+    )
+  assert string.contains(html, "aria-describedby=\"label-hint\"")
+  assert string.contains(
+    html,
+    "<p class=\"text-muted\" id=\"label-hint\">Up to 64 characters.</p>",
+  )
+  assert !string.contains(html, "popover")
+}
+
+/// ⓘ で開く補足は、送信しないボタンの `popovertarget` で `popover="auto"` の段落を開き、ボタンの
+/// 語を表示の言語で `aria-label` と `title` に置く。段落は閉じていても欄の説明として指され、JS の
+/// 処理（`data-action`）を使わない。
+pub fn folded_hint_opens_from_the_info_button_test() {
+  let html =
+    element.to_string(
+      view.hinted_input(
+        i18n.Japanese,
+        "URL",
+        "relay-url-hint",
+        view.FoldedHint("ws:// か wss:// で始まる URL。"),
+        [attribute.name("url")],
+      ),
+    )
+  assert string.contains(
+    html,
+    "<button aria-label=\"補足を表示\" class=\"btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content\" popovertarget=\"relay-url-hint\" title=\"補足を表示\" type=\"button\">",
+  )
+  assert string.contains(html, "id=\"relay-url-hint\" popover=\"auto\"")
+  assert string.contains(html, "aria-describedby=\"relay-url-hint\"")
+  assert !string.contains(html, "data-action")
+}
+
+/// 複数行の欄も、どちらの補足でも `aria-describedby` で補足の段落を指し、補足の出し方だけが変わる。
+pub fn hinted_textarea_describes_the_field_with_either_hint_test() {
+  let render = fn(hint) {
+    element.to_string(
+      view.hinted_textarea(i18n.English, "URI", "uri-hint", hint, "", [
+        attribute.name("uri"),
+      ]),
+    )
+  }
+  let line = render(view.LineHint("Paste the URI."))
+  let folded = render(view.FoldedHint("Paste the URI."))
+  assert string.contains(line, "<textarea aria-describedby=\"uri-hint\"")
+  assert string.contains(folded, "<textarea aria-describedby=\"uri-hint\"")
+  assert string.contains(line, "<p class=\"text-muted\" id=\"uri-hint\">")
+  assert string.contains(folded, "id=\"uri-hint\" popover=\"auto\"")
+}
+
+/// 警告の通知は畳まずに本文をそのまま出す（`details` にも `popover` にもしない）。
+pub fn warning_alert_is_not_folded_test() {
+  let html =
+    element.to_string(view.alert(view.Warning, [html.text("Back up now.")]))
+  assert string.contains(html, "<span>Back up now.</span>")
+  assert !string.contains(html, "<details")
+  assert !string.contains(html, "popover")
+}
+
+/// 上部のロゴの枠は内容の幅を基準に伸びる（`flex-1` のように基準の幅を 0 にしない）。
+pub fn navbar_start_keeps_the_width_of_the_logo_test() {
+  let html =
+    view.page(
+      i18n.English,
+      view.System,
+      i18n.BackToDashboard,
+      view.Narrow,
+      view.SwitchReturningTo("/"),
+      view.NoRefresh,
+      [],
+    )
+  assert string.contains(html, "<div class=\"navbar-start w-auto grow\">")
 }

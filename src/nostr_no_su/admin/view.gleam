@@ -9,7 +9,9 @@
 //// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
 //// 時刻は `time_of_day` の `<time datetime>` で UTC のまま描き、`admin.js` が閲覧者のローカルの
-//// 時刻に直す。
+//// 時刻に直す。欄の補足を ⓘ で開く部品（`FieldHint` の `FoldedHint`）は、`popover` 属性の段落と
+//// `popovertarget` のボタンで開閉し、位置は CSS の anchor positioning（`position-area`）で決める。
+//// JS も `data-action` も使わない。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
@@ -373,8 +375,8 @@ fn theme_attributes(theme: Theme) -> List(Attribute(msg)) {
 
 /// 全ページ共通のナビゲーションバー。帯の地と下の線を付けず、ページの地の上に置く。
 /// 左端に `brand_link` のロゴを置き、右端（`navbar-end`）にテーマと言語の切り替えを置く。
-/// 1 行に収まらない幅では、切り替えを次の行の右端に送る。切り替えを出さないページでも
-/// 右端の枠は残す。
+/// ロゴの枠（`navbar-start`）は内容の幅を基準に伸びるので、1 行に収まらない幅ではロゴを縮めずに、
+/// 切り替えを次の行の右端に送る。切り替えを出さないページでも右端の枠は残す。
 fn navbar(
   language: Language,
   theme: Theme,
@@ -392,7 +394,7 @@ fn navbar(
       attribute.class("navbar flex-wrap justify-end gap-2 px-4 sm:px-6"),
     ],
     [
-      html.div([attribute.class("navbar-start flex-1")], [
+      html.div([attribute.class("navbar-start w-auto grow")], [
         brand_link(language),
       ]),
       html.div([attribute.class("navbar-end w-auto gap-2")], end),
@@ -778,7 +780,7 @@ fn plugin_field(
   ])
 }
 
-/// プラグインのフォームが宣言する 1 行の文字列の欄。`hinted_input` と違って案内の `id`
+/// プラグインのフォームが宣言する 1 行の文字列の欄。`hinted_input` と違って補足の `id`
 /// を使わないのは、プラグインが選ぶ `name` の一意性を本体が保証できないためである。
 pub fn plugin_text_field(
   name: String,
@@ -1098,39 +1100,55 @@ fn option_item(option: #(String, String), selected: String) -> Element(msg) {
   )
 }
 
-/// 見出し、入力欄、案内をまとめた囲み。入力欄に `aria-label` と、案内の `id` を指す
-/// `aria-describedby` を付ける。`attributes` にクラスを含む入力欄の属性を渡す。
+/// 欄の補足の出し方。どちらも補足の段落に呼び出し側が渡す `id` を付け、欄の
+/// `aria-describedby` から指す。
+pub type FieldHint {
+  /// 欄の下に常に出す、短い 1 行の補足。
+  LineHint(text: String)
+  /// 見出しの横の ⓘ のボタンで開く補足。`popover` の段落なので、閉じていても欄の説明として
+  /// 読まれ、JS 無しで開き、ホバーでは開かない。
+  FoldedHint(text: String)
+}
+
+/// 見出し、入力欄、補足をまとめた囲み。入力欄に `aria-label` と、補足の `id` を指す
+/// `aria-describedby` を付ける。`attributes` にクラスを含む入力欄の属性を渡す。`language` は
+/// ⓘ のボタンの語を引く表示の言語である。
 pub fn hinted_input(
+  language: Language,
   caption: String,
   hint_id: String,
-  hint: String,
+  hint: FieldHint,
   attributes: List(Attribute(msg)),
 ) -> Element(msg) {
-  html.div([attribute.class("fieldset")], [
-    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+  hinted_field(
+    language,
+    caption,
+    hint_id,
+    hint,
     html.input([
       attribute.aria_label(caption),
       attribute.aria_describedby(hint_id),
       ..attributes
     ]),
-    html.p([attribute.id(hint_id), attribute.class("text-muted")], [
-      html.text(hint),
-    ]),
-  ])
+  )
 }
 
-/// 見出し、複数行の入力欄、案内をまとめた囲み。`hinted_input` と同じ構造で、欄だけ
+/// 見出し、複数行の入力欄、補足をまとめた囲み。`hinted_input` と同じ構造で、欄だけ
 /// `textarea` にする。値は `html.textarea` の内容で出す（`input` の `default_value` では
 /// ない）。
 pub fn hinted_textarea(
+  language: Language,
   caption: String,
   hint_id: String,
-  hint: String,
+  hint: FieldHint,
   value: String,
   attributes: List(Attribute(msg)),
 ) -> Element(msg) {
-  html.div([attribute.class("fieldset")], [
-    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+  hinted_field(
+    language,
+    caption,
+    hint_id,
+    hint,
     html.textarea(
       [
         attribute.aria_label(caption),
@@ -1139,14 +1157,65 @@ pub fn hinted_textarea(
       ],
       value,
     ),
-    html.p([attribute.id(hint_id), attribute.class("text-muted")], [
-      html.text(hint),
-    ]),
-  ])
+  )
 }
 
-/// チェック 1 つぶんの大きな行。チェック、アイコン、語、説明、あればバッジを 1 行に
-/// 並べる。
+/// `hinted_input` と `hinted_textarea` が共有する囲み。`LineHint` は見出し、欄、補足の段落の順に
+/// 並べる。`FoldedHint` は見出しの横に、補足を `popovertarget` で指す送信しない ⓘ のボタンを置き、
+/// 欄の後に `popover="auto"` の補足の段落を置く。段落はボタンの上に重ねて開く。
+fn hinted_field(
+  language: Language,
+  caption: String,
+  hint_id: String,
+  hint: FieldHint,
+  control: Element(msg),
+) -> Element(msg) {
+  case hint {
+    LineHint(text:) ->
+      html.div([attribute.class("fieldset")], [
+        html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+        control,
+        html.p([attribute.id(hint_id), attribute.class("text-muted")], [
+          html.text(text),
+        ]),
+      ])
+    FoldedHint(text:) -> {
+      let label = i18n.text(language, i18n.ShowFieldHint)
+      html.div([attribute.class("fieldset")], [
+        html.div([attribute.class("fieldset-legend w-fit justify-start")], [
+          html.text(caption),
+          html.button(
+            [
+              attribute.type_("button"),
+              attribute.popovertarget(hint_id),
+              attribute.aria_label(label),
+              attribute.title(label),
+              attribute.class(
+                "btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content",
+              ),
+            ],
+            [info_icon()],
+          ),
+        ]),
+        control,
+        html.p(
+          [
+            attribute.id(hint_id),
+            attribute.popover("auto"),
+            attribute.class(
+              "inset-auto m-0 mb-1 max-w-80 rounded-box border border-base-300 bg-base-100 p-3 text-sm text-base-content shadow-lift [position-area:top_span-right] [position-try-fallbacks:flip-block,flip-inline]",
+            ),
+          ],
+          [html.text(text)],
+        ),
+      ])
+    }
+  }
+}
+
+/// チェック 1 つぶんの大きな行。ページの地の色の角丸の行に、チェック、アイコン、語、説明、あれば
+/// バッジを並べ、チェックとアイコンは縮めずに語の 1 行目に揃える。説明は `label` の中に置くので、
+/// チェックの名前の一部として読まれる。
 pub fn checkbox_row(
   name: String,
   icon: Element(msg),
@@ -1155,23 +1224,32 @@ pub fn checkbox_row(
   checked: Bool,
   badge: List(Element(msg)),
 ) -> Element(msg) {
-  html.label([attribute.class("flex items-center gap-3 text-sm")], [
-    html.input([
-      attribute.type_("checkbox"),
-      attribute.name(name),
-      attribute.value("on"),
-      attribute.class("checkbox border-base-content/60"),
-      attribute.checked(checked),
-    ]),
-    icon,
-    html.div([attribute.class("flex min-w-0 flex-col")], [
-      html.span([], [html.text(caption)]),
-      html.span([attribute.class("text-sm text-muted")], [
-        description,
+  html.label(
+    [
+      attribute.class(
+        "flex cursor-pointer items-start gap-3 rounded-field bg-base-200 px-3 py-2.5 text-sm",
+      ),
+    ],
+    [
+      html.input([
+        attribute.type_("checkbox"),
+        attribute.name(name),
+        attribute.value("on"),
+        attribute.class(
+          "checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60",
+        ),
+        attribute.checked(checked),
       ]),
-    ]),
-    ..badge
-  ])
+      html.span([attribute.class("mt-0.5 shrink-0")], [icon]),
+      html.div([attribute.class("flex min-w-0 flex-col")], [
+        html.span([], [html.text(caption)]),
+        html.span([attribute.class("text-sm text-muted")], [
+          description,
+        ]),
+      ]),
+      ..badge
+    ],
+  )
 }
 
 /// nsec や管理パスワードのように伏せて入力させる欄。`autocomplete` は欄の自動入力の種類
@@ -1740,6 +1818,9 @@ const info_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
 ]
 
+/// `back_link` の左向きの矢印（Lucide の arrow-left）。
+const arrow_left_icon_paths = ["m12 19-7-7 7-7", "M19 12H5"]
+
 /// `check_circle_icon` のストローク（Lucide の circle-check）。
 const check_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
@@ -1794,7 +1875,7 @@ const shield_alert_icon_paths = [
   "M12 8v4", "M12 16h.01",
 ]
 
-/// `Neutral` のトーンのアイコン（Lucide の info）。
+/// 情報のアイコン（Lucide の info）。欄の補足を開く ⓘ のボタンに使う。
 pub fn info_icon() -> Element(msg) {
   lucide_icon("size-4", info_icon_paths)
 }
@@ -1930,11 +2011,21 @@ pub fn file_text_icon() -> Element(msg) {
   ])
 }
 
-/// ダッシュボードへ戻るリンクの段落。
+/// ダッシュボードへ戻るリンクの段落。左向きの矢印と語を地味なボタンの見た目で出し、ボタンの内側の
+/// 余白のぶん左へずらして矢印を本文の左端に揃える。
 pub fn back_link(language: Language) -> Element(msg) {
   html.p([], [
-    html.a([attribute.href("/"), attribute.class("link")], [
-      html.text(i18n.text(language, i18n.BackToDashboard)),
-    ]),
+    html.a(
+      [
+        attribute.href("/"),
+        attribute.class(
+          "btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content",
+        ),
+      ],
+      [
+        lucide_icon("size-4", arrow_left_icon_paths),
+        html.text(i18n.text(language, i18n.BackToDashboard)),
+      ],
+    ),
   ])
 }

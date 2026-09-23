@@ -225,6 +225,7 @@ pub type Message {
   SelectedPressCtrlC
   CopyNpub
   CopyClient
+  ShowFieldHint
   // ダッシュボード
   Dashboard
   Pending
@@ -509,6 +510,7 @@ fn english(message: Message) -> String {
     SelectedPressCtrlC -> "Selected. Press Ctrl+C (⌘C on macOS) to copy."
     CopyNpub -> "Copy npub"
     CopyClient -> "Copy client"
+    ShowFieldHint -> "Show help"
     Dashboard -> "Dashboard"
     Pending -> "Pending"
     OverviewLabel -> "Overview"
@@ -845,6 +847,7 @@ fn japanese(message: Message) -> String {
     SelectedPressCtrlC -> "選択しました。Ctrl+C（macOS では ⌘C）でコピーしてください。"
     CopyNpub -> "npub をコピー"
     CopyClient -> "クライアントをコピー"
+    ShowFieldHint -> "補足を表示"
     Dashboard -> "ダッシュボード"
     Pending -> "承認待ち"
     OverviewLabel -> "概要"

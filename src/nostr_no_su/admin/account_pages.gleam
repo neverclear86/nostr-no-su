@@ -614,17 +614,21 @@ fn account_summary(
   view.identity(language, row.label, row.npub)
 }
 
-/// ラベルの案内の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
+/// ラベルの補足の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
 const label_hint_id = "label-hint"
 
-/// ラベルの見出し、入力欄、上限の案内をまとめた囲み。3 つのフォーム（登録画面、生成した
+/// ラベルの見出し、入力欄、上限の補足をまとめた囲み。3 つのフォーム（登録画面、生成した
 /// 鍵の確認、編集）のどれでも必須にする。
 fn label_fieldset(language: Language, value: String) -> Element(msg) {
   let caption = i18n.text(language, i18n.Label)
   view.hinted_input(
+    language,
     caption,
     label_hint_id,
-    i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points)),
+    view.LineHint(i18n.text(
+      language,
+      i18n.LabelHint(max: dashboard.max_label_code_points),
+    )),
     [
       attribute.type_("text"),
       attribute.name(dashboard.label_field),
