@@ -69,7 +69,7 @@ const earlier_client = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111
 /// 接続してきたクライアントの公開鍵（ダミー）。
 const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
 
-/// アカウント一覧に無い署名者（ダミー）。承認待ちのタイルに省略した 16 進の署名者を
+/// アカウント一覧に無い署名者（ダミー）。承認待ちの行に省略した 16 進の署名者を
 /// 写すために使う。
 const unknown_signer = "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
 
