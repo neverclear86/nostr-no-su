@@ -1875,7 +1875,7 @@ const unplug_icon_paths = [
   "m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z",
 ]
 
-/// `UnusedChip` のストローク（Lucide の circle-minus）。
+/// `UnusedChip` と通知のページの `Neutral` の印のストローク（Lucide の circle-minus）。
 const circle_minus_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M8 12h8",
 ]
@@ -1888,7 +1888,7 @@ const ban_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M4.929 4.929 19.07 19.071",
 ]
 
-/// `LoadFailedChip` のストローク（Lucide の octagon-alert）。
+/// `LoadFailedChip` と通知のページの `Failure` の印のストローク（Lucide の octagon-alert）。
 const octagon_alert_icon_paths = [
   "M12 16h.01", "M12 8v4",
   "M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z",
