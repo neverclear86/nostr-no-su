@@ -8,7 +8,7 @@ docker compose で立ち上げた Nostr-no-Su を、管理 UI で日々使うま
 
 - **バンカー**：クライアントは `bunker://` URI で接続し、署名と NIP-44 の暗号化を依頼する。秘密鍵はクライアントに渡らない
 - **監視**：登録した全アカウントのイベントを、監視用のリレーから受け取る。複数のリレーから届いても 1 回にまとめる
-- **プラグイン**：受け取ったイベントをプラグインに渡す。同梱の `event_logger` は Postgres に保存する
+- **プラグイン**：受け取ったイベントをプラグインに渡す。同梱の `event_logger` は Postgres に保存する。同梱の `profile` は、登録アカウントのプロフィール（kind 0）を管理 UI で編集して発行する
 
 鍵は Postgres に、起動時に渡すマスターキーで暗号化して保存する。
 失ってはいけないのは DB とマスターキーの 2 つ（[守ること](#守ること)）。
@@ -200,6 +200,33 @@ compose の既定の構成ではそのまま動き、設定は要らない。
 自作のプラグインは `plugins/<名前>/` に置く（[プラグイン API v1](plugin-api.md)）。
 置いた BEAM は本体と同じ VM、同じ権限で動き、秘密鍵を持つプロセスにも到達できる。信頼できるものだけを置く。
 
+## プロフィールを編集する（profile）
+
+同梱の `profile` は、登録アカウントのプロフィール（kind 0）を管理 UI で編集し、そのアカウントの名義でリレーへ発行する。
+compose の既定の構成ではそのまま動き、設定は要らない。
+
+プラグインの節の `profile` の行にあるアイコンのボタン「ページを開く」で「プロフィール」が開く。
+
+![profile のページ](images/usage/profile.png)
+
+アカウントごとの節に、今のプロフィールの 8 項目（「名前」（`name`）、「表示名」（`display_name`）、「自己紹介」（`about`）、「アイコンの画像の URL」（`picture`）、「バナーの画像の URL」（`banner`）、「認証の識別子（NIP-05）」（`nip05`）、「ウェブサイト」（`website`）、「Lightning アドレス」（`lud16`））の欄が並ぶ。欄の下には kind 0 のキー名が出る。
+出るのは監視用のリレーから取った最新の kind 0 で、最大 60 秒前のもの。ほかのクライアントで変えた分は、最大 60 秒遅れて出る。
+
+欄を直して「保存する」を押すと、送る直前に kind 0 を取り直して 8 項目だけを差し替え、アカウントの名義で署名して監視用のリレーへ送る。
+
+- 空欄のまま送った項目は、プロフィールから消える
+- 8 項目以外のキー（ほかのクライアントが入れたもの）は残る
+- kind 0 がまだ無いアカウントには空欄の欄が出て、送ると 8 項目だけの新しいプロフィールになる
+- リレーから取れなかったアカウントには理由だけが出て、欄は出ない（今のプロフィールが分からないまま上書きしないため）
+
+`picture` と `banner` の画像は、管理者のブラウザーが画像のホストから直接読み込む（Nostr-no-Su は中継しない）。
+画像のホストには管理者の IP アドレスが渡る。管理 UI の URL は渡らない（管理 UI は `referrer-policy: same-origin` を付けている）。
+管理 UI を https で配信しているときは、`http://` の画像をブラウザーが読み込まない。
+
+同梱をやめるには、`.env` に `PLUGIN_DIR=/plugins` を書いて `docker compose up -d` する。
+同梱の `event_logger` も一緒に外れ、`./plugins` に置いたものだけを読む。`event_logger` を残すときは、[event_logger の README](../plugins-src/event_logger/README.md) の「ビルド」で作ったものを `./plugins/event_logger` に置く。
+`PLUGIN_DIR=` と空にすると、プラグインを 1 つも読まない。
+
 ## 守ること
 
 - **マスターキー**：`.env` の `ACCOUNT_MASTER_KEY`。DB のどこにも無く、失うと秘密鍵と secret を復号できない。DB のバックアップとは別の場所に置く（両方が揃うと全鍵が漏れる）
@@ -245,6 +272,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 | `ADMIN_PASSWORD` | （必須） | 管理画面のパスワード。ユーザー名は `admin` |
 | `ADMIN_PORT` | `8080` | 管理画面のポート。空にすると管理画面と承認フローが無効 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台 |
+| `PLUGIN_DIR` | `/app/plugins:/plugins` | プラグインを読むディレクトリー（`:` 区切り）。`/plugins` にすると同梱の `event_logger` と `profile` が外れる。空にすると読み込まない |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 受信したイベントを 1 件 1 行でログに出す内蔵プラグイン |
 | `REMSH_ENABLED` | `false` | デバッグ用のリモートシェル。通常は触らない |
 | `NOSTR_NO_SU_VERSION` | `latest` | 公開イメージの版。README の手順が取った版を書く。patch も追うなら `X.Y` |

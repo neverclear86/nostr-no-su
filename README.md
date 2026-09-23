@@ -32,8 +32,8 @@
 - 🔐 **NIP-46 bunker**: keys of multiple accounts in one instance. Multiple relays
 - 🛂 **Connection approval and permissions**: approve each client's connection, and edit which kinds it may sign and whether it may use NIP-44 in the admin UI
 - 🗝️ **Keys stored encrypted**: AES-256-GCM with a master key, in Postgres
-- 📡 **Event collection and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. The bundled `event_logger` stores them in Postgres, viewable as a timeline in the admin UI. Add your own by placing a BEAM module
-- 🖥️ **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external files
+- 📡 **Event collection and plugins**: your own events from multiple relays, verified and deduplicated, then handed to plugins. The bundled `event_logger` stores them in Postgres, viewable as a timeline in the admin UI. The bundled `profile` edits your accounts' profiles (kind 0) in the admin UI and publishes them. Add your own by placing a BEAM module
+- 🖥️ **Admin UI**: accounts, connection approval, sessions, relays and plugins on one screen. Japanese / English, light / dark, no external scripts, CSS or fonts
 - 🔁 **Automatic recovery from failures**: OTP supervision tree. Relays reconnect individually, the bunker retries while the DB is down
 - 🔏 **Own crypto implementation, checked against the official test vectors**: BIP-340 / NIP-44 v2. No NIFs. Assumptions and known limitations are in the 「v0.1 のセキュリティの前提」 section of [Design decisions and known limitations](docs/design-decisions.md)
 
@@ -96,7 +96,7 @@ The assumptions, and what is deliberately not mitigated, are in the 「v0.1 の�
 
 The documents below are written in Japanese.
 
-- [Usage](docs/usage.md): registering relays and accounts, connecting and approving clients, permissions, event_logger
+- [Usage](docs/usage.md): registering relays and accounts, connecting and approving clients, permissions, event_logger, profile
 - [Configuration](docs/configuration.md): environment variable table, `.env`, passing secrets via files, reverse proxy, docker compose setup
 - [Operations](docs/operations.md): startup logs, backups, version upgrades, recovery, storing and rotating the master key, resource usage
 - [Admin UI](docs/admin-ui.md): screen layout, account operations and results, connection approval (the auth_url flow)

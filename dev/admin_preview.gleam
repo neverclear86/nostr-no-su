@@ -11,6 +11,7 @@
 //// 管理パスワードは固定の値で、鍵は公開のテストベクター、secret はダミーの値である。
 
 import envoy
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/int
@@ -490,6 +491,68 @@ fn event_logger_settings_description(
   ])
 }
 
+/// `profile` の `profile` ページの記述。実装の
+/// `plugins-src/profile/src/profile/page.gleam` が `account_section/4` で組む節の
+/// うち、kind 0 を取得できて画像の URL が空のとき（`npub` と更新の時刻の `pairs`、
+/// 8 項目の `form`）を写した固定値で、あちらを変えたらここも直す。節は渡された
+/// 登録アカウントごとに 1 つ組み、`display_name` の初期値はアカウントのラベルにする。
+/// 更新の時刻の見出し、欄のラベル、送信ボタンは `language` の文言（実装の
+/// `plugins-src/profile/src/profile/i18n.gleam` の文言の写し）にする。
+fn profile_description(
+  language: i18n.Language,
+  accounts: List(plugin_config.PageAccount),
+) -> Dynamic {
+  let text = fn(english, japanese) { bilingual(language, english:, japanese:) }
+  page_sections(
+    list.map(accounts, fn(account) {
+      let field = fn(key, english, japanese, value) {
+        let name = account.pubkey <> "-" <> key
+        let label = text(english, japanese)
+        case key {
+          "about" -> textarea_field(name:, label:, hint: key, value:)
+          _ -> text_field(name:, label:, hint: key, value:)
+        }
+      }
+      section(account.label, [
+        pairs_block([
+          #("npub", id_inline(account.npub)),
+          #(text("updated", "更新日時"), code_inline("2026-09-20T09:00:00Z")),
+        ]),
+        form_block(
+          [
+            field("name", "Name", "名前", "alice"),
+            field("display_name", "Display name", "表示名", account.label),
+            field("about", "About", "自己紹介", "Signing with Nostr-no-Su."),
+            field("picture", "Icon image URL", "アイコンの画像の URL", ""),
+            field("banner", "Banner image URL", "バナーの画像の URL", ""),
+            field(
+              "nip05",
+              "Verified identifier (NIP-05)",
+              "認証の識別子（NIP-05）",
+              "alice@example.com",
+            ),
+            field("website", "Website", "ウェブサイト", "https://example.com"),
+            field("lud16", "Lightning address", "Lightning アドレス", ""),
+          ],
+          text("Save", "保存する"),
+        ),
+      ])
+    }),
+  )
+}
+
+/// `language` が英語なら `english`、日本語なら `japanese` を返す。
+fn bilingual(
+  language: i18n.Language,
+  english english: String,
+  japanese japanese: String,
+) -> String {
+  case language {
+    i18n.English -> english
+    i18n.Japanese -> japanese
+  }
+}
+
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
 fn page_sections(sections: List(Dynamic)) -> Dynamic {
   dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
@@ -560,8 +623,7 @@ fn note_block(text: String) -> Dynamic {
   ])
 }
 
-/// `form` ブロック。`fields` は `checkbox_field/4` で組んだ欄の記述、`submit`
-/// は送信ボタンの文字列。
+/// `form` ブロック。`fields` は `checkbox_field/4`、`text_field/4`、`textarea_field/4` で組んだ欄の記述、`submit` は送信ボタンの文字列。
 fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("form")),
@@ -651,13 +713,11 @@ fn id_inline(text: String) -> Dynamic {
   ])
 }
 
-/// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。登録
-/// アカウントの一覧は `event_logger` の `settings` の記述のチェックボックスに
-/// 使う。
+/// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。登録アカウントの一覧は `event_logger` の `settings` の記述のチェックボックスと、`profile` の記述のアカウントごとの節に使う。`language` は `profile` の記述の文言に使う。
 fn plugin_page_content(
   name: String,
   key: String,
-  _language: i18n.Language,
+  language: i18n.Language,
   accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   case name, key {
@@ -666,6 +726,7 @@ fn plugin_page_content(
     "event_logger", "timeline" -> Ok(event_logger_timeline_description())
     "event_logger", "settings" ->
       Ok(event_logger_settings_description(accounts))
+    "profile", "profile" -> Ok(profile_description(language, accounts))
     "broken", "status" -> Ok(broken_status_description())
     "slow", "status" -> Error("plugin did not answer in time")
     _, _ -> Error("plugin not found")
@@ -673,8 +734,8 @@ fn plugin_page_content(
 }
 
 /// フォームの送信を受け取る実行の口。`console_logger` と `event_logger` の
-/// `settings` が持ち、常に成功する。ほかのプラグインとページ（`broken/status`
-/// など）は `None` を返し、405 の経路を撮る。
+/// `settings`、`profile` の `profile` が持ち、常に成功する。ほかのプラグインと
+/// ページ（`broken/status` など）は `None` を返し、405 の経路を撮る。
 fn plugin_page_action(
   name: String,
   key: String,
@@ -685,6 +746,7 @@ fn plugin_page_action(
   case name, key {
     "console_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
     "event_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
+    "profile", "profile" -> Some(fn(_values, _accounts) { Ok(Nil) })
     _, _ -> None
   }
 }
@@ -940,6 +1002,15 @@ pub fn main() -> Nil {
               plugin.PluginPage(key: "settings", title: "Settings"),
             ],
           ),
+          dashboard.PluginRow("profile", Some(plugin_runner.Running), pages: [
+            plugin.LocalizedPage(
+              key: "profile",
+              titles: dict.from_list([
+                #("en", "Profile"),
+                #("ja", "プロフィール"),
+              ]),
+            ),
+          ]),
         ]
       },
       not_loaded_plugins: [],

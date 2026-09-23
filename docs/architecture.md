@@ -826,6 +826,6 @@ nostr-no-su/
 - [設定](configuration.md)：環境変数の表、`.env`、秘密をファイルで渡す、リバースプロキシー、docker compose の構成
 - [運用](operations.md)：起動時のログ、DB のダンプと復元、版の更新、マスターキーの保管と交換、復旧後の確認
 - [開発](development.md)：ローカルでの実行とテスト、管理 UI の CSS のビルドと画面の撮影
-- [使い方](usage.md)：管理 UI でのリレーとアカウントの登録、クライアントの接続と承認、権限、event_logger
+- [使い方](usage.md)：管理 UI でのリレーとアカウントの登録、クライアントの接続と承認、権限、event_logger、profile
 - [README（日本語）](../README.ja.md)：導入と最初の設定（トップの [README.md](../README.md) は同じ内容の英語版）
 - `plugins-src/event_logger/README.md`：同梱プラグインのビルドと配置

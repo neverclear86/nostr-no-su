@@ -7,7 +7,7 @@
 //        PREVIEW_PORT=18461 node dev/screenshots.mjs --usage docs/images/usage [locale]
 // --readme のときは readme 印のある画面だけを 1280px・ライトで撮り、出力名を <readme>-<en|ja>.png にする。
 // --usage のときは usage の要素だけを 1280px・ライトで切り出して撮り、出力名を <name>.png にする。
-// そのとき、承認待ちと読み込めなかった行を除くダッシュボードの切り出し、ダイアログ、event_logger のページは PREVIEW_PORT + 3 の状態から撮る。
+// そのとき、承認待ちと読み込めなかった行を除くダッシュボードの切り出し、ダイアログ、event_logger と profile のページは PREVIEW_PORT + 3 の状態から撮る。
 // 撮影用のサーバー（PREVIEW_PORT=18461 gleam run -m admin_preview）は終了しないので、別の端末で先に起動しておく。
 // 初回は npx playwright-core install chromium で、playwright-core の版が使う chromium を入れる。
 // locale（ja-JP など）を渡すと、ブラウザーがその言語の Accept-Language を送り、管理 UI はその言語で出す。
@@ -166,6 +166,7 @@ const shots = [
   { name: "79-dialog-unreadable-delete", url: `${base}/`, dialog: `dialog-unreadable-${unreadablePubkey}-delete` },
   { name: "80-dialog-relay-delete", url: `${readmeBase}/`, dialog: "dialog-relay-1-delete" },
   { name: "81-dialog-session-connect", url: `${readmeBase}/`, dialog: "dialog-session-connect" },
+  { name: "82-profile", url: `${readmeBase}/plugins/profile/profile` },
 ];
 
 // --usage で撮る要素。selector は開いたページの中で 1 つの要素にだけ一致させる
@@ -215,6 +216,11 @@ const usage = [
     name: "event-logger-settings",
     url: `${readmeBase}/plugins/event_logger/settings`,
     selector: "main > section.card:has(form)",
+  },
+  {
+    name: "profile",
+    url: `${readmeBase}/plugins/profile/profile`,
+    selector: "main",
   },
   {
     name: "unreadable",
