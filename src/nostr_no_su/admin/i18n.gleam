@@ -550,7 +550,7 @@ fn english(message: Message) -> String {
       "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed."
     EditPermissions -> "Edit permissions"
     EditPermissionsDescription ->
-      "Choose the operations this client may request. Declarations this form does not recognize are kept unchanged when you save."
+      "Choose the operations this client may request."
     CurrentPermissions -> "Current permissions"
     PermissionsNotDeclared -> "Not declared (default)"
     AllowSignEvent -> "Allow signing events"
@@ -563,7 +563,7 @@ fn english(message: Message) -> String {
       "Used only when signing events is not allowed above. Comma-separated event kinds, such as 1,10002."
     OtherPermissions -> "Other declared permissions"
     OtherPermissionsHint ->
-      "Declared by the client but not recognized by this form. Kept unchanged when you save."
+      "Not handled by this form. Kept unchanged when you save."
     PermissionSignAnyKind -> "Sign any kind"
     PermissionSignKind(kind:) ->
       "Sign "
@@ -673,7 +673,7 @@ fn english(message: Message) -> String {
       "Subscribes to registered accounts' events and passes them to plugins"
     BunkerRoleDescription -> "Accepts NIP-46 requests"
     AddRelayDescription ->
-      "Relays used for monitoring are subscribed to for events written by the registered accounts. Relays used for the bunker are listed as relay= in every connection URI. Use NIP-46-only relays, which refuse subscriptions other than kind 24133, for the bunker only."
+      "Use NIP-46-only relays, which refuse subscriptions other than kind 24133, for the bunker only."
     InvalidRelayUrl -> "relay url must be a valid ws:// or wss:// url"
     RelayAlreadyRegistered -> "relay is already registered"
     RelayRoleRequired -> "choose monitoring, the bunker, or both"
@@ -691,7 +691,7 @@ fn english(message: Message) -> String {
       "This relay is not registered. It may have been deleted already; check the dashboard."
     ConnectClient -> "Connect a client"
     ConnectClientDescription ->
-      "Paste the nostrconnect:// URI shown by the client and choose the account that signs for it. The relays in the URI are added for the bunker."
+      "Paste the URI shown by the client. Its relays are added for the bunker."
     NostrconnectUri -> "nostrconnect:// URI"
     NostrconnectUriHint -> "Starts with nostrconnect://."
     SigningAccount -> "Signing account"
@@ -880,8 +880,7 @@ fn japanese(message: Message) -> String {
     Permissions -> "権限"
     NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
     EditPermissions -> "権限を編集"
-    EditPermissionsDescription ->
-      "このクライアントに許す操作を選んでください。このフォームが扱わない宣言は、保存してもそのまま残します。"
+    EditPermissionsDescription -> "このクライアントに許す操作を選んでください。"
     CurrentPermissions -> "今の権限"
     PermissionsNotDeclared -> "宣言なし（既定）"
     AllowSignEvent -> "署名を許可する"
@@ -891,7 +890,7 @@ fn japanese(message: Message) -> String {
     AllowedKinds -> "許可する kind"
     AllowedKindsHint -> "上の署名を許可していないときだけ使います。1,10002 のようにカンマ区切りで指定します。"
     OtherPermissions -> "そのほかの宣言"
-    OtherPermissionsHint -> "クライアントが宣言した、このフォームが扱わない値です。保存してもそのまま残します。"
+    OtherPermissionsHint -> "このフォームが扱わない宣言です。保存してもそのまま残します。"
     PermissionSignAnyKind -> "すべての kind の署名"
     PermissionSignKind(kind:) ->
       case kind_name(Japanese, kind) {
@@ -986,7 +985,7 @@ fn japanese(message: Message) -> String {
     MonitorRoleDescription -> "登録アカウントのイベントを購読してプラグインに渡す"
     BunkerRoleDescription -> "NIP-46 のリクエストを受け付ける"
     AddRelayDescription ->
-      "監視に使うリレーでは、登録したアカウントが書いたイベントを購読します。バンカーに使うリレーは、すべての接続 URI の relay= に入ります。kind 24133 以外の購読を拒否する NIP-46 専用のリレーは、バンカーにだけ使ってください。"
+      "kind 24133 以外の購読を拒否する NIP-46 専用のリレーは、バンカーにだけ使ってください。"
     InvalidRelayUrl -> "ws:// か wss:// で始まる正しい URL を入力してください。"
     RelayAlreadyRegistered -> "このリレーはすでに登録されています。"
     RelayRoleRequired -> "監視とバンカーの少なくとも一方を選んでください。"
@@ -1001,8 +1000,7 @@ fn japanese(message: Message) -> String {
     RelaysNotAvailable -> "リレーを利用できません"
     RelayNotFound -> "このリレーは登録されていません。すでに削除された可能性があるので、ダッシュボードで確認してください。"
     ConnectClient -> "クライアントを接続"
-    ConnectClientDescription ->
-      "クライアントが出した nostrconnect:// URI を貼り付け、署名するアカウントを選んでください。URI のリレーはバンカーの用途で登録します。"
+    ConnectClientDescription -> "クライアントが出した URI を貼り付けます。URI のリレーはバンカーの用途で登録します。"
     NostrconnectUri -> "nostrconnect:// の URI"
     NostrconnectUriHint -> "nostrconnect:// で始まる URI。"
     SigningAccount -> "署名するアカウント"
