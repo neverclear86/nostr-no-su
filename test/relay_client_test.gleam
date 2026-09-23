@@ -1,8 +1,10 @@
 //// `relay_client` のテスト。URL の変換、購読の照合の判断（`sync`）、および
 //// ループバックの WebSocket サーバーへ本物の `relay_client` を接続した再試行の配線、
-//// CLOSED の理由による購読の張り直しと停止、生存確認によるハーフオープンの検知を
+//// CLOSED の理由による購読の張り直しと停止、生存確認によるハーフオープンの検知、
+//// `disconnect` が送る CLOSE と close フレームと期限を過ぎた接続の kill を
 //// 確かめる。
 
+import gleam/bit_array
 import gleam/dict
 import gleam/dynamic
 import gleam/erlang/process.{type Pid, type Subject}
@@ -30,6 +32,7 @@ import nostr_no_su/relay_client.{
 }
 import nostr_no_su/relay_connection
 import stratus
+import support/frame_server
 import support/log_capture
 import support/loopback_relay.{
   type Relay, start_relay, start_relay_with, stop_relay,
@@ -1661,7 +1664,9 @@ pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
 
 // --- 生存確認によるハーフオープンの検知 ---
 
-/// mist の接続プロセスを止めて、TCP は開いたまま応答が止まったリレーを再現する。
+/// プロセスを止める。生存確認のテストでは mist の接続プロセスを止めて、
+/// TCP は開いたまま応答が止まったリレーを再現する。`disconnect` のテストでは
+/// 接続のプロセスを止めて、閉じる依頼に応じない接続を再現する。
 @external(erlang, "erlang", "suspend_process")
 fn suspend_process(pid: Pid) -> Bool
 
@@ -1733,4 +1738,67 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
   process.unlink(started.pid)
   process.kill(started.pid)
   stop_relay(relay)
+}
+
+// --- 接続の閉じ方 ---
+
+/// `disconnect` は開いている購読の CLOSE と WebSocket の close フレーム
+/// （状態コード 1000）を送ってから接続を止める。リレーの close フレームは
+/// 待たない。
+pub fn disconnect_sends_close_and_a_close_frame_test() {
+  let frames = process.new_subject()
+  let url = frame_server.start(frames, fn(_text) { [] })
+  let assert Ok(client) =
+    relay_client.start(
+      url,
+      fn() { Ok([#(bunker, filter.new())]) },
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
+    )
+  let assert Ok(frame_server.Frame(1, req)) = process.receive(frames, 2000)
+  let assert Ok(req_text) = bit_array.to_string(req)
+  assert string.starts_with(req_text, "[\"REQ\",\"bunker\",")
+
+  let assert Ok(pid) = process.subject_owner(client)
+  let monitor = process.monitor(pid)
+  relay_client.disconnect(client, 1000)
+
+  assert process.receive(frames, 1000)
+    == Ok(frame_server.Frame(1, bit_array.from_string("[\"CLOSE\",\"bunker\"]")))
+  assert process.receive(frames, 1000) == Ok(frame_server.Frame(8, <<1000:16>>))
+  assert process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(1000)
+    == Ok(process.ProcessDown(monitor, pid, process.Normal))
+}
+
+/// 期限までに止まらない接続は kill される。接続のプロセスを止めて、閉じる依頼に
+/// 応じない状態を再現する。
+pub fn disconnect_kills_a_client_that_does_not_stop_in_time_test() {
+  let frames = process.new_subject()
+  let url = frame_server.start(frames, fn(_text) { [] })
+  let assert Ok(client) =
+    relay_client.start(
+      url,
+      fn() { Ok([#(bunker, filter.new())]) },
+      fn(_event) { Nil },
+      fn(_ack) { Nil },
+      None,
+      relay_client.subscription_retry_delay,
+      relay_client.keepalive_interval_ms,
+    )
+  let assert Ok(frame_server.Frame(1, _req)) = process.receive(frames, 2000)
+
+  let assert Ok(pid) = process.subject_owner(client)
+  let assert True = suspend_process(pid)
+  let monitor = process.monitor(pid)
+  relay_client.disconnect(client, 100)
+
+  assert process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(1000)
+    == Ok(process.ProcessDown(monitor, pid, process.Killed))
 }

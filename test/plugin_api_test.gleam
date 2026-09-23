@@ -1,7 +1,8 @@
 //// `plugin_api.publish_with`・`fetch_with`・`fetch_events_with` のテストに、
-//// 取得で届くイベントを絞る `handle_incoming` のテストを加えたもの。経路の
-//// テストはバンカーと監視・バンカー用途の偽リレー接続を直接組み立て、名前を
-//// 渡す経路を叩く。リレーへ実際に REQ を送るテストはループバックの
+//// 取得で届くイベントを絞る `handle_incoming` のテストと、取得の接続の閉じ方の
+//// テスト（`support/frame_server` の偽リレー）を加えたもの。経路のテストは
+//// バンカーと監視・バンカー用途の偽リレー接続を直接組み立て、名前を渡す経路を
+//// 叩く。リレーへ実際に REQ を送るテストはループバックの
 //// WebSocket のリレー（`support/loopback_relay`）で REQ を数える。
 //// `handle_incoming` のテストは `Received` の値を直接渡して `reply` の合図を
 //// 見る（`install` はこのモジュールの対象外で、
@@ -11,7 +12,9 @@
 //// persistent_term を読む経路を確かめる。どのテストも `install` を呼ばないため、
 //// 実行順によらず「置いていない」状態が保たれる）。
 
+import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/json
 import gleam/list
@@ -30,6 +33,7 @@ import nostr_no_su/plugin_api
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import support/frame_server
 import support/loopback_relay
 import support/nip46_client.{account_for}
 import support/signed_event
@@ -582,7 +586,8 @@ pub fn fetch_event_without_install_returns_the_reason_test() {
     == Error("the plugin API is not installed")
 }
 
-/// 複数の公開鍵の取得は、リレー 1 本につき接続 1 本・REQ 1 件にまとめる。REQ の
+/// 複数の公開鍵の取得は、リレー 1 本につき接続 1 本・REQ 1 件にまとめる（REQ の
+/// 後に届くのは、閉じるときのその購読の CLOSE だけ）。REQ の
 /// `authors` は登録済みの公開鍵を問い合わせた順で重複を除いたもの、`limit` は
 /// その件数。各公開鍵の要素は、その作者の `created_at` が最大の 1 件か、未登録
 /// なら理由を持つ `Error`。
@@ -644,12 +649,18 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
         limit: Some(2),
       ),
     ))
+  let expected_close =
+    message.encode_client_message(message.Close(
+      plugin_api.fetch_subscription_id,
+    ))
   assert process.receive(connections_a, 2000) == Ok(Nil)
   assert process.receive(frames_a, 2000) == Ok(expected_req)
+  assert process.receive(frames_a, 2000) == Ok(expected_close)
   assert process.receive(connections_a, 200) == Error(Nil)
   assert process.receive(frames_a, 200) == Error(Nil)
   assert process.receive(connections_b, 2000) == Ok(Nil)
   assert process.receive(frames_b, 2000) == Ok(expected_req)
+  assert process.receive(frames_b, 2000) == Ok(expected_close)
   assert process.receive(connections_b, 200) == Error(Nil)
   assert process.receive(frames_b, 200) == Error(Nil)
 
@@ -724,4 +735,44 @@ pub fn fetch_events_rejects_a_kind_that_is_not_an_int_test() {
 pub fn fetch_events_without_install_returns_the_reason_test() {
   assert plugin_api.fetch_events(dynamic.list([]), dynamic.int(0))
     == Error("the plugin API is not installed")
+}
+
+/// `fetch_with` の使い捨ての接続は、集め終えた後に購読の CLOSE と WebSocket の
+/// close フレーム（状態コード 1000）を送って閉じる。
+pub fn fetch_event_closes_the_subscription_and_the_websocket_test() {
+  let bunker_name = start_signed_in_bunker()
+  let frames = process.new_subject()
+  let url =
+    frame_server.start(frames, fn(text) {
+      case string.starts_with(text, "[\"REQ\"") {
+        True -> ["[\"EOSE\",\"nostr-no-su-plugin-fetch\"]"]
+        False -> []
+      }
+    })
+  let relay_list_name =
+    start_relay_list([
+      relay_list.Entry(
+        url: url,
+        monitor: Some(process.new_name("test_plugin_api_fetch_frame_relay")),
+        bunker: None,
+      ),
+    ])
+
+  assert plugin_api.fetch_with(
+      bunker_name,
+      relay_list_name,
+      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      dynamic.int(0),
+    )
+    == Ok(atom.to_dynamic(atom.create("none")))
+
+  let assert Ok(frame_server.Frame(1, req)) = process.receive(frames, 2000)
+  let assert Ok(req_text) = bit_array.to_string(req)
+  assert string.starts_with(req_text, "[\"REQ\",\"nostr-no-su-plugin-fetch\",")
+  assert process.receive(frames, 2000)
+    == Ok(frame_server.Frame(
+      1,
+      bit_array.from_string("[\"CLOSE\",\"nostr-no-su-plugin-fetch\"]"),
+    ))
+  assert process.receive(frames, 2000) == Ok(frame_server.Frame(8, <<1000:16>>))
 }

@@ -16,6 +16,9 @@
 //// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 //// AUTH（NIP-42）は受け口があれば応答し、無ければ応答せずログに出す。
+//// 閉じる依頼（`disconnect`）では、開いている購読の CLOSE と WebSocket の
+//// close フレームを送って止まり、リレーの close フレームは待たない。期限までに
+//// 止まらなければ kill する。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
@@ -48,6 +51,9 @@ pub type Msg {
   Publish(event: event.Event)
   /// 生存確認の刻み。relay_client が自分宛てに予約する。
   KeepaliveTick
+  /// 開いている購読の CLOSE と WebSocket の close フレームを送って接続を止める。
+  /// リレーの close フレームは待たない。`disconnect` が送る。
+  Disconnect
 }
 
 /// 起動済みのリレークライアント。イベントの送信は `publish` を通じて行い、
@@ -311,6 +317,7 @@ pub fn start(
         }
         stratus.User(KeepaliveTick) ->
           check_keepalive(session, conn, prefix, interval_ms)
+        stratus.User(Disconnect) -> close_gracefully(session, conn, prefix)
         stratus.Text(text) ->
           case
             handle_text(
@@ -364,6 +371,32 @@ pub fn describe_start_error(error: actor.StartError) -> String {
     actor.InitFailed(reason) -> reason
     actor.InitTimeout -> "WebSocket handshake timed out"
     actor.InitExited(_reason) -> "WebSocket client exited during the handshake"
+  }
+}
+
+/// 接続を閉じ、止まるのを `timeout_ms` まで待つ。呼び出し元とのリンクを解いてから
+/// 接続のプロセスを監視し、開いている購読の CLOSE と WebSocket の close フレーム
+/// （状態コード 1000）を送って止まるよう依頼する。期限までに止まらなければ kill
+/// して戻る。すでに止まっている接続には何もしない。
+pub fn disconnect(client: Client, timeout_ms: Int) -> Nil {
+  case process.subject_owner(client) {
+    Error(Nil) -> Nil
+    Ok(pid) -> {
+      process.unlink(pid)
+      let monitor = process.monitor(pid)
+      process.send(client, stratus.to_user_message(Disconnect))
+      let stopped =
+        process.new_selector()
+        |> process.select_specific_monitor(monitor, fn(_down) { Nil })
+        |> process.selector_receive(timeout_ms)
+      case stopped {
+        Ok(Nil) -> Nil
+        Error(Nil) -> {
+          process.demonitor_process(monitor)
+          process.kill(pid)
+        }
+      }
+    }
   }
 }
 
@@ -707,6 +740,32 @@ fn check_keepalive(
       stratus.stop()
     }
   }
+}
+
+/// `Disconnect` の処理。開いている購読の CLOSE を `reconcile` と同じく id の順に
+/// 送り、close フレーム（状態コード 1000）を送って止まる。close フレームを
+/// 書けなかったときは理由をログに残して止まる。リレーの close フレームを待た
+/// ないのは、待つと `on_close` の Notice のログが問い合わせのたびに出るため
+/// である（ループが返した停止では `on_close` は呼ばれない）。
+fn close_gracefully(
+  session: Session,
+  conn: stratus.Connection,
+  prefix: String,
+) -> stratus.Next(Session, Msg) {
+  session.subscriptions.open
+  |> dict.keys
+  |> list.sort(string.compare)
+  |> list.each(fn(id) { send_message(conn, prefix, message.Close(id)) })
+  case stratus.close(conn, stratus.Normal(<<>>)) {
+    Ok(Nil) -> Nil
+    Error(reason) ->
+      log.write(
+        log.Warning,
+        prefix,
+        "failed to send a close frame: " <> string.inspect(reason),
+      )
+  }
+  stratus.stop()
 }
 
 /// 次の生存確認の刻みを予約し、状態を更新して continue する。
