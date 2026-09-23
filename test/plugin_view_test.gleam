@@ -111,6 +111,20 @@ fn image_block(url: String, alt: String) -> Dynamic {
   ])
 }
 
+/// ブロック（`image`）に見た目の種類 `variant` を足したもの。
+fn image_block_with_variant(
+  url: String,
+  alt: String,
+  variant: Dynamic,
+) -> Dynamic {
+  map_([
+    #("type", dynamic.string("image")),
+    #("url", dynamic.string(url)),
+    #("alt", dynamic.string(alt)),
+    #("variant", variant),
+  ])
+}
+
 /// ブロック（`form`）。`fields` は欄の記述の並び。
 fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
   map_([
@@ -639,8 +653,8 @@ pub fn id_is_rejected_in_table_cells_test() {
   assert string.contains(reason, "type \"id\" is only allowed in pairs values")
 }
 
-/// `image` ブロックは `url` の scheme が `http` / `https` なら `view.plugin_image`
-/// の出力を含む。
+/// `variant` の無い `image` ブロックは、`url` の scheme が `http` / `https` なら
+/// `view.ContainedImage` の `view.plugin_image` の出力（今までの見た目）を含む。
 pub fn image_block_renders_image_test() {
   let cases = [
     #("https://example.com/a.png", "A picture"),
@@ -650,7 +664,47 @@ pub fn image_block_renders_image_test() {
   let raw = section_("Media", [image_block(url, alt)])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
-  assert string.contains(body, element.to_string(view.plugin_image(url, alt)))
+  assert string.contains(
+    body,
+    element.to_string(view.plugin_image(url, alt, view.ContainedImage)),
+  )
+}
+
+/// `variant` が `icon` なら `view.IconImage`、`banner` なら `view.BannerImage` の
+/// `view.plugin_image` の出力を含む。
+pub fn image_block_variants_select_the_shape_test() {
+  let url = "https://example.com/a.png"
+  let cases = [#("icon", view.IconImage), #("banner", view.BannerImage)]
+  use #(variant, shape) <- list.each(cases)
+  let raw =
+    section_("Media", [
+      image_block_with_variant(url, "A picture", dynamic.string(variant)),
+    ])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  assert string.contains(
+    element.to_string(el),
+    element.to_string(view.plugin_image(url, "A picture", shape)),
+  )
+}
+
+/// `variant` が `icon` / `banner` 以外の文字列なら `unknown variant "<値>"`、文字列で
+/// なければ `variant must be a String, got <型>` の `Error` になる。
+pub fn image_block_rejects_an_unknown_variant_test() {
+  let cases = [
+    #(dynamic.string("round"), "unknown variant \"round\""),
+    #(dynamic.int(1), "variant must be a String, got Int"),
+  ]
+  use #(variant, expected) <- list.each(cases)
+  let raw =
+    section_("Media", [
+      image_block_with_variant(
+        "https://example.com/a.png",
+        "A picture",
+        variant,
+      ),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert string.contains(reason, expected)
 }
 
 /// `url` の scheme が `http` / `https` でない（別の scheme、scheme の無い相対

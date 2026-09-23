@@ -183,8 +183,8 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
 }
 
 /// `console_logger` の `status` ページの記述。`pairs` の節、`table` と `details` と `id`
-/// インラインの `pairs` を持つ節、`image` のブロックを 2 件（`https:` の URL と、scheme が
-/// `http` / `https` でない URL）持つ節に加え、変換に失敗する節を 1 つ持つ（失敗した節だけを
+/// インラインの `pairs` を持つ節、`image` のブロックを 4 件（`https:` の URL、scheme が
+/// `http` / `https` でない URL、`variant` が `icon` と `banner` の `https:` の URL）持つ節に加え、変換に失敗する節を 1 つ持つ（失敗した節だけを
 /// 囲みに差し替えて出す画面を撮るため）。
 fn console_logger_status_description() -> Dynamic {
   let text_inline = fn(text: String) {
@@ -199,12 +199,18 @@ fn console_logger_status_description() -> Dynamic {
       #(dynamic.string("text"), dynamic.string(text)),
     ])
   }
-  let image_block = fn(url: String, alt: String) {
-    dynamic.properties([
-      #(dynamic.string("type"), dynamic.string("image")),
-      #(dynamic.string("url"), dynamic.string(url)),
-      #(dynamic.string("alt"), dynamic.string(alt)),
-    ])
+  let image_block = fn(url: String, alt: String, variant: Option(String)) {
+    dynamic.properties(
+      [
+        #(dynamic.string("type"), dynamic.string("image")),
+        #(dynamic.string("url"), dynamic.string(url)),
+        #(dynamic.string("alt"), dynamic.string(alt)),
+      ]
+      |> list.append(case variant {
+        Some(value) -> [#(dynamic.string("variant"), dynamic.string(value))]
+        None -> []
+      }),
+    )
   }
   dynamic.properties([
     #(
@@ -282,8 +288,19 @@ fn console_logger_status_description() -> Dynamic {
               image_block(
                 "https://example.invalid/picture.png",
                 "A picture that fails to load.",
+                None,
               ),
-              image_block("data:image/png;base64,AAA", "A picture."),
+              image_block("data:image/png;base64,AAA", "A picture.", None),
+              image_block(
+                "https://example.invalid/icon.png",
+                "An icon that fails to load.",
+                Some("icon"),
+              ),
+              image_block(
+                "https://example.invalid/banner.png",
+                "A banner that fails to load.",
+                Some("banner"),
+              ),
             ]),
           ),
         ]),
