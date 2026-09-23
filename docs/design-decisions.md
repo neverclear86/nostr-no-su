@@ -185,7 +185,7 @@ mist（HTTP サーバー）は監視・バンカー・保存のどれにも依�
 
 ### 管理 UI はサーバー側で描画する
 
-ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を URL としてそのまま解釈させる経路は、パスの定義から作る `href`、`action`、`src` に限る。lustre は URL を検査しないので、これらにはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す。インラインのスクリプトとイベント属性は書かず、CSP でも実行させない）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS は `priv/static/admin.js` のコピーのボタンの処理だけで（要素の `data-action` の名前で処理を選ぶ）、フォームの送信と画面の遷移は JS なしで動く
+ページは lustre の要素ツリー（`lustre/element`）で組み立て、Erlang 上で HTML 文字列にして返す。値はテキストか属性値として渡し、HTML のエスケープは lustre の文字列化が行うので、値ごとにエスケープを書く必要が無い（値を URL としてそのまま解釈させる経路は、パスの定義から作る `href`、`action`、`src` に限る。lustre は URL を検査しないので、これらにはパスの定義から `/` で始めて組み立てた値か `"/"` だけを渡す。インラインのスクリプトとイベント属性は書かず、CSP でも実行させない）。lustre のクライアント側のアプリ（SPA）や server components にはしない。SPA にすると秘密鍵や secret 入りの URI を返す JSON API が要り、server components にすると Basic 認証の裏に WebSocket と JS のランタイムの配信が要るので、秘密鍵を POST の本文と応答の本文だけで運ぶ前提を作り直すことになるためである。ブラウザーで動く JS は `priv/static/admin.js` のコピーのボタンの処理（要素の `data-action` の名前で処理を選ぶ）と、UTC で描いた `<time datetime>` を閲覧者のローカルの時刻に直す処理だけで、フォームの送信と画面の遷移は JS なしで動く
 
 ### 管理 UI の CSS はビルドしてリポジトリに含め、自前で配信する
 
