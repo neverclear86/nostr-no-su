@@ -61,7 +61,7 @@ flowchart LR
 
 常駐するプロセスはすべて `static_supervisor` の下に置く。
 ツリーの形は起動時に 1 度だけ組む。
-リレーの接続だけは例外で、用途（監視・バンカー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
+リレーの接続だけは例外で、用途（監視・バンカー・セッションのリレー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
 ツリーの外で動くプロセスが 3 種類ある。
 プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、プラグインからの取得の口（`plugin_api`）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
@@ -75,12 +75,14 @@ root (one_for_one, 3/60)
 │   ├── children(<plugin>) (one_for_one, 5/10, Temporary)  子仕様を持つプラグインだけ
 │   │   └── <プラグインが申告した子プロセス>
 │   └── runner(<plugin>)   (worker, Permanent)
-├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次に connections
+├── bunker       (rest_for_one, 5/10)  接続プール、ロックのプール、バンカーアクター、次に connections と session_connections
 │   ├── account_pool      (pog, supervisor)  アカウントストアの接続プール
 │   ├── account_lock_pool (pog, supervisor)  同じ DB に 1 インスタンスだけを許す advisory lock 専用の 1 本のプール
 │   ├── bunker
-│   └── connections (factory, 5/10)    バンカーリレーの用途の relay_connection
-│       └── relay_connection × バンカーリレーの数
+│   ├── connections (factory, 5/10)    バンカーリレーの用途の relay_connection
+│   │   └── relay_connection × バンカーリレーの数
+│   └── session_connections (factory, 5/10)  基本の組に無いセッションのリレーの relay_connection
+│       └── relay_connection × そのリレーの数
 ├── monitor      (rest_for_one, 5/10)  重複排除ディスパッチャー、connections、再開点の保存
 │   ├── dedup
 │   ├── connections (factory, 5/10)    監視リレーの用途の relay_connection
@@ -114,6 +116,7 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 ### 実行時のリレーの増減
 
 `relay_list` は用途（監視・バンカー）ごとの接続の一覧を、加えた順に持つ。
+バンカーのセッションのリレーのうち、バンカーの用途に無い URL は、バンカーが `transition` で送る `SyncSessionRelays` で受け取り、`session_connections` の子として開閉する（取り消し、`logout`、押し出し、アカウントの削除で使われなくなった URL は閉じる）。
 `app.open_relay` / `close_relay` / `change_relay_roles` による一覧の変更と、`connections` の子（`relay_connection`）の起動・停止は、`relay_list` 自身のハンドラーで直列に行う。
 同時に届く変更が重ならず、最後に処理した変更と一覧が一致するようにするためである。
 子を止めるのは `supervisor:terminate_child/2`（`nostr_no_su_ffi` の `terminate_dynamic_child/2`）で、simple_one_for_one のこの関数は子を止めてから仕様ごと消すため、止めた接続は再起動されない。
@@ -122,7 +125,7 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 `rest_for_one` のサブツリー再起動で `connections` ごと落ちると、simple_one_for_one の性質上、動的な子はすべて消える。
 `connections` は起動のたびに `relay_list` へ `Repopulate` を送り、`relay_list` はその用途の一覧のうち未登録の接続だけを起動し直す。
 
-止めたバンカーの接続は、`relay_connection` の `on_disconnect` を経て `RemovePublisher` が送られ、バンカーの送信先から外れる。
+止めたバンカーとセッションのリレーの接続は、`relay_connection` の `on_disconnect` を経て `RemovePublisher` が送られ、バンカーの送信先から外れる。
 監視の再開点の対象（次節）は、`app.add_account` がその時点の監視の一覧から求めて渡すため、閉じたリレーは以後の対象から外れる。
 
 起動時の一覧は `relay_list` の初期値としては空で渡す。
@@ -363,7 +366,7 @@ sequenceDiagram
         Note over eng: logout を除き、<br/>承認済みのセッションが<br/>無ければ unauthorized
         eng-->>bk: 応答イベント
     end
-    bk->>rc: 応答（全バンカーリレーへ。セッションの外の応答は<br/>rate-limited を返したリレーを 60 秒飛ばす）
+    bk->>rc: 応答（基本のバンカーリレーと、そのセッションのリレーへ。<br/>セッションの外の応答は rate-limited を返したリレーを 60 秒飛ばす）
     rc->>relay: 発行
     relay->>client: 応答
 ```
@@ -374,16 +377,16 @@ sequenceDiagram
 アクターが持つのはセッション状態と、乱数や現在時刻のような外界からの入力だけである。
 リレークライアントは切断のたびに再起動されるため、セッション状態をそこに置けない。
 
-応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。
+応答はどのリレーから来たリクエストでも、基本のバンカーリレー（`relays` テーブルでバンカーの用途を持つリレー）と、応答先のセッションのリレーへ発行する（`bunker.response_relays`）。セッションの無い応答と、リレーを持たないセッション（`bunker://`）への応答は基本のバンカーリレーだけへ出る。
 ただし、`rate-limited:` の OK を返したリレーへは、セッションの外のリクエストへの応答を 60 秒出さない（`bunker.recipients`。理由は [設計上の判断と既知の制約](design-decisions.md) の「NIP-46 の入力にはサイズと件数の上限がある」）。
 クライアントは `bunker://` URI の `relay=` をすべて聴くので、リレーが 1 つ生きていれば往復が成立する。
 
 ### リレーの AUTH（NIP-42）への応答
 
 バンカーの接続はリレーからの AUTH（challenge を運ぶ制御メッセージ）にも応答する。
-`relay_client` は challenge を受けると、接続に渡された `Authenticator`（`bunker.authenticate` を relay_url で部分適用したもの）へ同期に問い合わせ、登録アカウントごとに署名した kind 22242 を得て、同じ接続へ `AUTH` で送る。
+`relay_client` は challenge を受けると、接続に渡された `Authenticator`（`bunker.authenticate` を relay_url と接続の範囲で部分適用したもの）へ同期に問い合わせ、基本のバンカーリレーの接続では登録アカウントごと、セッションのリレーの接続ではその URL を持つセッションの署名者ごとに署名した kind 22242 を得て、同じ接続へ `AUTH` で送る。
 監視の接続には `Authenticator` を渡さないため、AUTH には応答せずログに出すだけである。
-リレーが challenge を送るたびに、その時点で読み込み済みのアカウントで応答する。接続ごとの「応答済み」の状態は持たないため、同じ接続で challenge が再送されればそのたびに応答し直す。最初の `Authenticate` は `GetSigners` と同じ理由（「アカウントの読み込み」の不変条件）で必ず最初の `LoadAccounts` の後に処理されるため、DB に到達できれば読み込み済みのアカウントで応答する。最初の読み込みが失敗したときは 0 件で応答する。バンカー側からアカウントの変化を契機に再認証を始める経路は無いため、その後の読み込みの成功や接続確立後のアカウントの追加は、リレーが再び challenge を送るか再接続するまでその接続の認証に反映されない。
+リレーが challenge を送るたびに、その時点で読み込み済みのアカウント（セッションのリレーの接続では、その時点でその URL を持つセッションの署名者）で応答する。接続ごとの「応答済み」の状態は持たないため、同じ接続で challenge が再送されればそのたびに応答し直す。最初の `Authenticate` は `GetSigners` と同じ理由（「アカウントの読み込み」の不変条件）で必ず最初の `LoadAccounts` の後に処理されるため、DB に到達できれば読み込み済みのアカウントで応答する。最初の読み込みが失敗したときは 0 件で応答する。バンカー側からアカウントの変化を契機に再認証を始める経路は無いため、その後の読み込みの成功や接続確立後のアカウントの追加は、リレーが再び challenge を送るか再接続するまでその接続の認証に反映されない。
 
 ## アカウントの変更
 
