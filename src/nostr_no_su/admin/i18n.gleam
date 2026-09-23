@@ -278,6 +278,8 @@ pub type Message {
   OtherPermissionsHint
   PermissionSignAnyKind
   PermissionSignKind(kind: Int)
+  /// プラグインのページのインライン `kind` の文言。表にある kind は名前、無い kind は `kind <番号>`。
+  EventKind(kind: Int)
   PermissionNip44Encrypt
   PermissionNip44Decrypt
   PermissionUnsupported
@@ -581,12 +583,8 @@ fn english(message: Message) -> String {
     OtherPermissionsHint ->
       "Not handled by this form. Kept unchanged when you save."
     PermissionSignAnyKind -> "Sign any kind"
-    PermissionSignKind(kind:) ->
-      "Sign "
-      <> case kind_name(English, kind) {
-        Some(name) -> name
-        None -> "kind " <> int.to_string(kind)
-      }
+    PermissionSignKind(kind:) -> "Sign " <> kind_label(English, kind)
+    EventKind(kind:) -> kind_label(English, kind)
     PermissionNip44Encrypt -> "Encrypt with NIP-44"
     PermissionNip44Decrypt -> "Decrypt with NIP-44"
     PermissionUnsupported -> "Unsupported"
@@ -939,6 +937,7 @@ fn japanese(message: Message) -> String {
         Some(name) -> name <> "の署名"
         None -> "kind " <> int.to_string(kind) <> " の署名"
       }
+    EventKind(kind:) -> kind_label(Japanese, kind)
     PermissionNip44Encrypt -> "NIP-44 で暗号化"
     PermissionNip44Decrypt -> "NIP-44 で復号"
     PermissionUnsupported -> "未対応"
@@ -1225,7 +1224,15 @@ fn japanese_row_error(reason: vault.RowError) -> String {
   }
 }
 
-/// 権限のチップに出す、よく使う kind の名前。表に無い kind は `None` で、呼び出し側が番号を出す。
+/// kind の名前。表に無い kind は `kind <番号>`（`kind 30023`）。
+fn kind_label(language: Language, kind: Int) -> String {
+  case kind_name(language, kind) {
+    Some(name) -> name
+    None -> "kind " <> int.to_string(kind)
+  }
+}
+
+/// 権限のチップとプラグインのページのインライン `kind` に出す、よく使う kind の名前。表に無い kind は `None` で、`kind_label` と日本語の `PermissionSignKind` が番号を出す。
 fn kind_name(language: Language, kind: Int) -> Option(String) {
   case language, kind {
     English, 0 -> Some("profile")

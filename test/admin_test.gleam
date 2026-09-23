@@ -1,7 +1,7 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消しと
 //// 権限の編集、クライアントの接続、プラグインの再有効化とページ（フォームの値の
-//// 改行の正規化を含む）、承認と拒否、リレーの追加・編集・削除、静的ファイルと
+//// 改行の正規化と、インライン `time` の基準の時刻を含む）、承認と拒否、リレーの追加・編集・削除、静的ファイルと
 //// favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/dynamic
@@ -490,6 +490,42 @@ pub fn plugin_page_passes_the_display_language_test() {
   assert string.contains(simulate.read_body(japanese), "language:ja")
   let english = get(echoing, "/plugins/console_logger/status")
   assert string.contains(simulate.read_body(english), "language:en")
+}
+
+/// インライン `time` の相対時刻は、要求を受けた時点を基準にする。スタブは Unix 秒 0 の `time` を
+/// 節の `meta` に置くので、相対時刻は日の単位になる。
+pub fn plugin_page_times_are_relative_to_the_request_time_test() {
+  let stub =
+    admin.Context(
+      ..context(),
+      plugin_page_content: fn(_name, _key, _language, _accounts) {
+        Ok(
+          dynamic.properties([
+            #(
+              dynamic.string("sections"),
+              dynamic.list([
+                dynamic.properties([
+                  #(dynamic.string("type"), dynamic.string("section")),
+                  #(dynamic.string("title"), dynamic.string("a")),
+                  #(
+                    dynamic.string("meta"),
+                    dynamic.list([
+                      dynamic.properties([
+                        #(dynamic.string("type"), dynamic.string("time")),
+                        #(dynamic.string("value"), dynamic.int(0)),
+                      ]),
+                    ]),
+                  ),
+                  #(dynamic.string("blocks"), dynamic.list([])),
+                ]),
+              ]),
+            ),
+          ]),
+        )
+      },
+    )
+  let response = get(stub, "/plugins/console_logger/status")
+  assert string.contains(simulate.read_body(response), " d ago</span>")
 }
 
 /// ページの中身の呼び出しが失敗すれば 503 で、理由を英語のまま出す。

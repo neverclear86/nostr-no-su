@@ -5,11 +5,11 @@
 //// （`docs/plugin-api.md` の第 13 章）。
 ////
 //// - 最上位: `#{<<"sections">> => [節, ...]}`
-//// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）
+//// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）、任意の `meta`（インラインのリスト）
 //// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form` /
 ////   `details` / `image` のいずれか
-//// - インライン（`pairs` の値、`table` のセル）: `text` / `code` / `badge` / `id`
-////   のいずれか（`badge` は `table` のセルだけ、`id` は `pairs` の値だけ）
+//// - インライン（`pairs` の値、`table` のセル、節の `meta`）: `text` / `code` / `badge` / `id` / `kind` / `time`
+////   のいずれか（`badge` は `table` のセルと `meta` だけ、`id` は `pairs` の値だけ）
 //// - `form` の欄: `checkbox` / `text` / `textarea` のいずれか
 //// - `image` の見た目（`variant`）: `icon` / `banner` のいずれか（無ければ既定の見た目）
 ////
@@ -27,8 +27,8 @@
 //// `Context.plugin_language` の `lang` を持つ祖先 1 つで包む。表示の言語を
 //// 受け取らないプラグインでは `en` である。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
 //// その外に置き、`pairs` の `items` が 0 件のときの案内と、`pairs` の値の
-//// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、`image` の
-//// `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
+//// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、インライン `kind` の名前と
+//// `time` の相対時刻と、`image` の `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
 //// その祖先の中で表示の言語の `lang` を持つ要素で上書きする。`image` の代替文は
 //// プラグイン由来の文字列なので上書きせず、祖先の `lang` を引き継ぐ。
 
@@ -50,13 +50,14 @@ import nostr_no_su/admin/view
 /// 言語のコード（`plugin.text_language`）。`page_href` は同じプラグインのページの
 /// キーからパスを組み立てる（`link` ブロック用）。キーがそのプラグインのページ
 /// 一覧に無ければ `Error(Nil)`。`form_action` は今開いているページ自身への POST の
-/// 宛先（`form` ブロック用）。
+/// 宛先（`form` ブロック用）。`now` は描画時点の Unix 秒（`time` インライン用）。
 pub type Context {
   Context(
     language: Language,
     plugin_language: String,
     page_href: fn(String) -> Result(String, Nil),
     form_action: String,
+    now: Int,
   )
 }
 
@@ -74,7 +75,8 @@ pub fn sections(description: Dynamic) -> Result(List(Dynamic), String) {
 }
 
 /// 節 1 つを `view.card` の要素にする。`type` は `"section"` でなければならない
-/// （決めたこと 10）。`blocks` が空なら空の状態の文を出す。未知の種別、型の合わ
+/// （決めたこと 10）。任意の `meta` はインラインのリストで、見出しの題の後ろに並べる
+/// （`meta_heading`）。`blocks` が空なら空の状態の文を出す。未知の種別、型の合わ
 /// ない値、深すぎる入れ子はこの節ひとつぶんの `Error` になり、他の節の描画は
 /// 止めない。
 pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
@@ -85,6 +87,10 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   })
   use title <- result.try(text_field(raw, "title"))
   let label = "section \"" <> title <> "\""
+  use heading <- result.try(
+    meta_heading(raw, title, context)
+    |> result.map_error(fn(reason) { label <> ": " <> reason }),
+  )
   use blocks_raw <- result.try(typed_field(
     raw,
     "blocks",
@@ -96,7 +102,7 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       Ok(
         view.card([
           html.div([attribute.lang(context.plugin_language)], [
-            view.heading(title),
+            heading,
           ]),
           view.empty_state(
             view.puzzle_icon(),
@@ -119,11 +125,43 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       Ok(
         view.card([
           html.div([attribute.lang(context.plugin_language)], [
-            view.heading(title),
+            heading,
             ..elements
           ]),
         ]),
       )
+    }
+  }
+}
+
+/// 節の見出し。`meta` が無ければ題だけの `view.heading`、あれば各項目を `inline` で描いて
+/// `view.heading_with_meta` に渡す。`meta` がリストでなければ `meta must be a List, got <classify>`、
+/// 項目の誤りは `meta #<添字>: <理由>`。
+fn meta_heading(
+  raw: Dynamic,
+  title: String,
+  context: Context,
+) -> Result(Element(msg), String) {
+  case lookup(raw, "meta") {
+    None -> Ok(view.heading(title))
+    Some(_) -> {
+      use meta_raw <- result.try(typed_field(
+        raw,
+        "meta",
+        decode.list(decode.dynamic),
+        "a List",
+      ))
+      use items <- result.try(
+        meta_raw
+        |> list.index_map(fn(raw_item, index) { #(raw_item, index) })
+        |> list.try_map(fn(indexed) {
+          inline(indexed.0, context)
+          |> result.map_error(fn(reason) {
+            "meta #" <> int.to_string(indexed.1) <> ": " <> reason
+          })
+        }),
+      )
+      Ok(view.heading_with_meta(title, items))
     }
   }
 }
@@ -198,7 +236,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
               |> result.replace_error("must be a List"),
             )
             list.try_map(cells_raw, fn(cell) {
-              use element <- result.try(inline(cell))
+              use element <- result.try(inline(cell, context))
               Ok(html.td([], [element]))
             })
           }
@@ -372,8 +410,9 @@ fn optional_text_field(
   }
 }
 
-/// `pairs` の 1 件。値は `text`・`code`・`id` のインラインだけを許す
-/// （`badge` は `table` のセルだけに置ける）。
+/// `pairs` の 1 件。値は `text`・`code`・`id`・`kind`・`time` のインラインだけを許す
+/// （`badge` は `table` のセルと節の `meta` だけに置ける）。`kind` と `time` は `inline` で描き、
+/// `dd` で包む。
 fn pair(
   raw: Dynamic,
   context: Context,
@@ -401,14 +440,24 @@ fn pair(
         ),
       ))
     }
-    "badge" -> Error("value: type \"badge\" is only allowed in table cells")
+    "kind" | "time" -> {
+      use element <- result.try(inline(value_raw, context))
+      Ok(#(term, html.dd([], [element])))
+    }
+    "badge" ->
+      Error(
+        "value: type \"badge\" is only allowed in table cells and section meta",
+      )
     other -> Error("value: unknown type \"" <> other <> "\"")
   }
 }
 
-/// `table` のセル 1 つ。`text`・`code`・`badge` のいずれか。`badge` はここでだけ
-/// 使え、`id` はここでは使えない。
-fn inline(raw: Dynamic) -> Result(Element(msg), String) {
+/// `table` のセルと節の `meta` の 1 件。`text`・`code`・`badge`・`kind`・`time` のいずれかで、
+/// `id` はここでは使えない。`kind` は `i18n.EventKind` の名前、`time` は `view.relative_time` の
+/// 相対時刻を、UTC の時刻（`view.utc_time`）を `title` に持たせて出し、どちらも表示の言語の
+/// `lang` を持つ `span` にする。`value` は 0 以上の整数である。`pairs` の値の `kind` と `time` も
+/// ここで描く。
+fn inline(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
     "text" -> {
@@ -427,6 +476,30 @@ fn inline(raw: Dynamic) -> Result(Element(msg), String) {
       use text <- result.try(text_field(raw, "text"))
       use badge_tone <- result.try(tone(raw, view.Neutral))
       Ok(view.status_chip(view.ToneChip(badge_tone), text))
+    }
+    "kind" -> {
+      use kind <- result.try(non_negative_int_field(raw, "value"))
+      Ok(view.in_language(
+        i18n.code(context.language),
+        i18n.text(context.language, i18n.EventKind(kind)),
+      ))
+    }
+    "time" -> {
+      use at <- result.try(non_negative_int_field(raw, "value"))
+      Ok(
+        html.span(
+          [
+            attribute.lang(i18n.code(context.language)),
+            attribute.title(view.utc_time(at)),
+          ],
+          [
+            html.text(i18n.text(
+              context.language,
+              view.relative_time(context.now, at),
+            )),
+          ],
+        ),
+      )
     }
     "id" -> Error("type \"id\" is only allowed in pairs values")
     other -> Error("unknown type \"" <> other <> "\"")
@@ -464,6 +537,16 @@ fn tone(raw: Dynamic, default: view.Tone) -> Result(view.Tone, String) {
         Ok("info") -> Ok(view.Info)
         Ok(other) -> Error("unknown tone \"" <> other <> "\"")
       }
+  }
+}
+
+/// `key` の値を 0 以上の整数として読む。欠けていれば `missing <key>`、整数でなければ
+/// `<key> must be an Int, got <classify>`、負なら `<key> must not be negative, got <値>`。
+fn non_negative_int_field(raw: Dynamic, key: String) -> Result(Int, String) {
+  use value <- result.try(typed_field(raw, key, decode.int, "an Int"))
+  case value < 0 {
+    True -> Error(key <> " must not be negative, got " <> int.to_string(value))
+    False -> Ok(value)
   }
 }
 

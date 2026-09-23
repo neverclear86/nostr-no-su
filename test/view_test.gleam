@@ -439,3 +439,16 @@ pub fn radio_tabs_check_the_first_tab_test() {
     )
     == "<div class=\"tabs tabs-border\"><label class=\"tab\"><input checked name=\"g\" type=\"radio\">One</label><div class=\"tab-content pt-4\"><div class=\"flex flex-col gap-4\"><p></p></div></div><label class=\"tab\"><input name=\"g\" type=\"radio\">Two</label><div class=\"tab-content pt-4\"><div class=\"flex flex-col gap-4\"></div></div></div>"
 }
+
+/// `view.relative_time` は、境界の秒数ごとに正しい文言を返す。未来の時刻は
+/// 「たった今」（`JustNow`）にする。
+pub fn relative_time_buckets_test() {
+  assert view.relative_time(1000, 1000) == i18n.JustNow
+  assert view.relative_time(1059, 1000) == i18n.JustNow
+  assert view.relative_time(1060, 1000) == i18n.MinutesAgo(1)
+  assert view.relative_time(1000 + 3599, 1000) == i18n.MinutesAgo(59)
+  assert view.relative_time(1000 + 3600, 1000) == i18n.HoursAgo(1)
+  assert view.relative_time(1000 + 86_399, 1000) == i18n.HoursAgo(23)
+  assert view.relative_time(1000 + 86_400, 1000) == i18n.DaysAgo(1)
+  assert view.relative_time(1000, 2000) == i18n.JustNow
+}

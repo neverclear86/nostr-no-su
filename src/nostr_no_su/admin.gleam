@@ -879,7 +879,14 @@ fn plugin_page_get(
                 reason,
               )
             Ok(sections) ->
-              plugin_pages.plugin_page(language, theme, row, page, sections)
+              plugin_pages.plugin_page(
+                language,
+                theme,
+                row,
+                page,
+                time.now_seconds(),
+                sections,
+              )
               |> wisp.html_response(200)
           }
       }
