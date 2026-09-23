@@ -12,7 +12,8 @@
 //// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
 //// `admin/session_pages`）が同じ定義を見るようここに置く。
 //// ダッシュボードのダイアログと操作のページの両方に出すフォームの中身（リレーの
-//// `new_relay_form`、`relay_action_form`、セッションの `permissions_form`、クライアントの接続の
+//// `new_relay_form`、`relay_action_form`、アカウントの `account_action_form`、
+//// `unreadable_delete_form`、`label_fieldset`、セッションの `permissions_form`、クライアントの接続の
 //// `connect_content`、`connect_form`）もここに置く。ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
@@ -212,7 +213,8 @@ const account_actions = [
   DeleteAccount,
 ]
 
-/// アカウントの行の畳みに並べる操作。この順に左から並べ、削除だけ右端に離して置く。
+/// アカウントの行の畳みにダイアログで並べる操作。この順に左から並べ、削除だけ右端に離して
+/// 置く。操作のページの下のほかの操作へのリンクも、この順の後に削除を置く。
 const detail_actions = [EditLabel, RevealPrivateKey, RotateSecret]
 
 /// リレー 1 件に対する操作。
@@ -1058,9 +1060,9 @@ fn unreadable_accounts(
   }
 }
 
-/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、削除のリンクを右に置く。`pubkey`
-/// 列が形式不正の行は指紋も識別も削除のリンクも出さず、理由の 1 文に削除できない旨を
-/// 続けて出す。
+/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開く
+/// ボタンと、削除の確認のページへの予備のリンクを置く。`pubkey` 列が形式不正の行は指紋も
+/// 識別も削除のボタンも出さず、理由の 1 文に削除できない旨を続けて出す。
 fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   case row.reason {
     vault.MalformedPubkey ->
@@ -1084,14 +1086,14 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
             ]),
           ]),
         ]),
-        button_row([
-          view.icon_button_link(
-            account_action_path(row.pubkey, DeleteAccount),
-            view.trash_icon(),
-            i18n.text(language, i18n.Delete),
-            view.DangerGhostButton,
-          ),
-        ]),
+        button_row(
+          list.append(unreadable_dialog(language, row), [
+            view.fallback_link(
+              language,
+              account_action_path(row.pubkey, DeleteAccount),
+            ),
+          ]),
+        ),
       ])
   }
 }
@@ -1234,10 +1236,11 @@ fn session_count(
 }
 
 /// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI をそれぞれの説明付きで、16 進の公開鍵を
-/// 説明なしでコピー欄に並べ、その下に `detail_actions` の操作と、右端に離した削除を置く。
+/// 説明なしでコピー欄に並べ、その下に、`detail_actions` の操作のダイアログを開くボタン、ラベルの編集の
+/// ページへの予備のリンク、右端に離した削除のダイアログを開くボタンを置く。
 fn account_details(language: Language, account: AccountRow) -> Element(msg) {
   let text = i18n.text(language, _)
-  let action_link = account_action_link(language, account.signer, _)
+  let dialog = account_dialog(language, account, _)
   view.details_panel(text(i18n.ConnectionUrisAndActions), [
     html.div([attribute.class("flex flex-col gap-3")], [
       html.div([], [
@@ -1255,15 +1258,97 @@ fn account_details(language: Language, account: AccountRow) -> Element(msg) {
       view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
       html.div(
         [attribute.class("flex flex-wrap items-center gap-2")],
-        list.append(list.map(detail_actions, action_link), [
-          html.div([attribute.class("ml-auto")], [action_link(DeleteAccount)]),
+        list.flatten([
+          list.flat_map(detail_actions, dialog),
+          [
+            view.fallback_link(
+              language,
+              account_action_path(account.signer, EditLabel),
+            ),
+            html.div([attribute.class("ml-auto")], dialog(DeleteAccount)),
+          ],
         ]),
       ),
     ]),
   ])
 }
 
-/// アカウント 1 件への操作 1 つのリンク。アイコン＋語のボタンで、語と種類は操作から決める。
+/// アカウント 1 件への操作のダイアログの `id`（`dialog-account-<署名者>-<セグメント>`）。
+fn account_dialog_id(signer: String, action: AccountAction) -> String {
+  view.dialog_id(["account", signer, account_action_segment(action)])
+}
+
+/// アカウント 1 件への操作のダイアログを開くボタンと、そのダイアログ。ボタンは行の操作の語と種類、
+/// 題は操作の見出しで、中にラベルと省略した npub、`account_action_form` の説明とフォームを並べる。
+/// ラベルの欄の補足の `id` は、ダイアログの `id` に `-label-hint` を付けて行ごとに変える。
+fn account_dialog(
+  language: Language,
+  account: AccountRow,
+  action: AccountAction,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let id = account_dialog_id(account.signer, action)
+  view.dialog_button(
+    language,
+    id,
+    view.IconTextTrigger(
+      account_action_icon(action),
+      text(account_action_row_title(action)),
+    ),
+    account_action_link_kind(action),
+    text(account_action_title(action)),
+    [
+      view.identity(language, account.label, account.npub),
+      ..account_action_form(
+        language,
+        account,
+        action,
+        None,
+        id <> "-label-hint",
+      )
+    ],
+  )
+}
+
+/// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の error の
+/// 文字色、題はアカウントの削除の見出しで、中にラベルと省略した npub、`unreadable_delete_form` を並べる。
+/// `id` の節の語をアカウントの行と分け、同じ pubkey の行があってもダイアログが重ならないようにする。
+fn unreadable_dialog(
+  language: Language,
+  row: SkippedRow,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  view.dialog_button(
+    language,
+    view.dialog_id(["unreadable", row.pubkey, "delete"]),
+    view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
+    view.DangerGhostButton,
+    text(account_action_title(DeleteAccount)),
+    [
+      view.identity(language, row.label, row.npub),
+      ..unreadable_delete_form(language, row)
+    ],
+  )
+}
+
+/// アカウント 1 件への操作のページの下に置く、同じアカウントのほかの操作のページへのリンクの並び。
+/// `detail_actions` と削除の順に、`current` を除いて並べる。ダッシュボードの予備のリンク（ラベルの
+/// 編集のページ）から、ほかの操作のページへ辿るための導線である。
+pub fn other_action_links(
+  language: Language,
+  signer: String,
+  current: AccountAction,
+) -> Element(msg) {
+  html.div(
+    [attribute.class("flex flex-wrap gap-2")],
+    list.append(detail_actions, [DeleteAccount])
+      |> list.filter(fn(action) { action != current })
+      |> list.map(account_action_link(language, signer, _)),
+  )
+}
+
+/// アカウント 1 件への操作 1 つのページへのリンク。アイコン＋語のボタンで、語と種類は操作から決める。
+/// 操作のページの下のほかの操作へのリンク（`other_action_links`）に使う。
 fn account_action_link(
   language: Language,
   signer: String,
@@ -1288,7 +1373,7 @@ fn account_action_icon(action: AccountAction) -> Element(msg) {
   }
 }
 
-/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。行き先のページの題は
+/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。ダイアログと行き先のページの題は
 /// `account_action_title` のまま変えない。
 fn account_action_row_title(action: AccountAction) -> i18n.Message {
   case action {
@@ -1306,6 +1391,139 @@ fn account_action_link_kind(action: AccountAction) -> view.ButtonKind {
     EditLabel | RevealPrivateKey | RotateSecret -> view.GhostButton
     DeleteAccount -> view.DangerGhostButton
   }
+}
+
+/// アカウント 1 件への操作の説明と、操作を実行する 1 つのフォーム（ページの枠を含まない）。操作のページと
+/// ダッシュボードの操作のダイアログが使う。ラベルの編集の欄には、`label` が `Some` ならその値（入力の誤りか
+/// 409 で再描画するときに送られた値）を、`None` なら `row` の保存済みのラベルを入れ、欄の補足の `id` を
+/// `hint_id` にする。送信のボタンの種類は操作ごとに決める（ラベルの保存は主、secret の作り直しと秘密鍵の
+/// 表示は warning の枠、削除は危険）。送信のボタンの文言は、見出しとボタンの語（`account_action_title`）
+/// とは別に持つ。削除の説明の警告は畳まずに出す。フォームを持たない `ShowConnectionQr` には空を返す。
+pub fn account_action_form(
+  language: Language,
+  row: AccountRow,
+  action: AccountAction,
+  label: Option(String),
+  hint_id: String,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let path = account_action_path(row.signer, action)
+  case action {
+    EditLabel -> [
+      view.post_form(
+        path,
+        [label_fieldset(language, hint_id, option.unwrap(label, row.label))],
+        text(i18n.Save),
+        view.PrimaryButton,
+        view.InForm,
+      ),
+    ]
+    RotateSecret -> [
+      html.p([], [html.text(text(i18n.RotateSecretDescription))]),
+      view.post_form(
+        path,
+        [],
+        text(i18n.RotateSecretSubmit),
+        view.WarningOutlineButton,
+        view.InForm,
+      ),
+    ]
+    DeleteAccount -> {
+      let gap = i18n.sentence_gap(language)
+      [
+        html.p([], [
+          html.text(text(i18n.DeleteDescription) <> gap),
+          html.strong([], [html.text(text(i18n.DeleteWarning))]),
+          html.text(gap <> text(i18n.DeleteAlsoRemoves)),
+        ]),
+        view.post_form(
+          path,
+          [],
+          text(i18n.DeleteAccountSubmit),
+          view.DangerButton,
+          view.InForm,
+        ),
+      ]
+    }
+    RevealPrivateKey -> [
+      html.p([], [html.text(text(i18n.ShowPrivateKeyDescription))]),
+      view.post_form(
+        path,
+        [
+          view.labelled(
+            text(i18n.AdminPassword),
+            view.secret_input(password_field, "off"),
+          ),
+        ],
+        text(i18n.ShowPrivateKeySubmit),
+        view.WarningOutlineButton,
+        view.InForm,
+      ),
+    ]
+    ShowConnectionQr -> []
+  }
+}
+
+/// 読み込みで飛ばされた行の削除の説明とフォーム（ページの枠を含まない）。削除の確認のページと、
+/// ダッシュボードの読み込めなかった行の削除のダイアログが使う。説明は、行を消すこと、nsec を控えて
+/// いなければ失うこと（強調して畳まずに出す）、以前のマスターキーに戻せば控えられること、セッションと
+/// 承認待ちも消えることの順に並べる。送信のボタンは危険のボタンにする。
+pub fn unreadable_delete_form(
+  language: Language,
+  row: SkippedRow,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let gap = i18n.sentence_gap(language)
+  [
+    html.p([], [
+      html.text(text(i18n.DeleteUnreadableDescription) <> gap),
+      html.strong([], [html.text(text(i18n.DeleteUnreadableWarning))]),
+      html.text(
+        gap
+        <> text(i18n.DeleteUnreadableRecover)
+        <> gap
+        <> text(i18n.DeleteAlsoRemoves),
+      ),
+    ]),
+    view.post_form(
+      account_action_path(row.pubkey, DeleteAccount),
+      [],
+      text(i18n.DeleteAccountSubmit),
+      view.DangerButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// ページのラベルの欄の補足の `id`。ページにはラベルの欄が 1 つだけなので固定の値にする。ダッシュボードの
+/// 行ごとのラベルの編集のダイアログは、ダイアログの `id` に `-label-hint` を付けた値を使う。
+pub const label_hint_id = "label-hint"
+
+/// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。登録画面、生成した鍵の
+/// 確認、ラベルの編集のページとダイアログのどのフォームでも必須にする。
+pub fn label_fieldset(
+  language: Language,
+  hint_id: String,
+  value: String,
+) -> Element(msg) {
+  let caption = i18n.text(language, i18n.Label)
+  view.hinted_input(
+    language,
+    caption,
+    hint_id,
+    view.LineHint(i18n.text(
+      language,
+      i18n.LabelHint(max: max_label_code_points),
+    )),
+    [
+      attribute.type_("text"),
+      attribute.name(label_field),
+      attribute.autocomplete("off"),
+      attribute.default_value(value),
+      attribute.required(True),
+      attribute.class("input w-full border-base-content/60"),
+    ],
+  )
 }
 
 /// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に見出し、
@@ -1624,7 +1842,8 @@ pub fn notice_page(
   ])
 }
 
-/// 操作の見出しと、ダッシュボードのリンクの文言。
+/// 操作の見出し（ページとダイアログの題）。削除を除き、ダッシュボードのボタンと操作のページの下の
+/// リンクの語にも使う（`account_action_row_title`）。
 pub fn account_action_title(action: AccountAction) -> i18n.Message {
   case action {
     EditLabel -> i18n.EditLabel

@@ -1057,8 +1057,8 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
 
 // --- ダッシュボードのアカウントの節 ---
 
-/// アカウントの節には、npub、読み取り専用の欄の URI、5 つの操作のリンク、登録の
-/// リンクが出る。
+/// アカウントの節には、npub、読み取り専用の欄の URI、接続 QR コードのリンク、4 つの操作のダイアログの
+/// フォーム、ラベルの編集のページへの予備のリンク、登録のリンクが出る。
 pub fn dashboard_lists_account_actions_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(body, signer_npub)
@@ -1069,8 +1069,16 @@ pub fn dashboard_lists_account_actions_test() {
       <> "\">",
   )
   assert string.contains(body, "href=\"/accounts/new\"")
-  list.each(account_actions.all, fn(action) {
-    assert string.contains(body, "href=\"" <> action_path(action) <> "\"")
+  assert string.contains(
+    body,
+    "href=\"" <> action_path(dashboard.ShowConnectionQr) <> "\"",
+  )
+  assert string.contains(
+    body,
+    "href=\"" <> action_path(dashboard.EditLabel) <> "\"",
+  )
+  list.each(account_actions.with_form, fn(action) {
+    assert string.contains(body, "action=\"" <> action_path(action) <> "\"")
   })
 }
 
