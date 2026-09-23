@@ -30,6 +30,13 @@ const settings_page_key = "settings"
 /// タイムラインのページのキー。URL の path 片にもなる。
 const timeline_page_key = "timeline"
 
+/// タイムラインのカードに出す本文の書記素の数の上限。超えた本文はここで切る。
+const excerpt_length = 280
+
+/// 本文が JSON の kind。本文をカードに出さず `content` の畳みにだけ置く。
+/// 0 は NIP-01、3 は NIP-02、6 と 16 は NIP-18、10002 は NIP-65 である。
+const json_content_kinds = [0, 3, 6, 16, 10_002]
+
 /// プロセス 1 つの観測結果。`label` は表に出す名前の文言（例: `i18n.ConnectionPool`）、
 /// `registered_name` は登録名の文字列、`mailbox` は未処理メッセージ数で、
 /// プロセスが居なければ `Error(Nil)`。
@@ -44,6 +51,18 @@ pub type ProcessStatus {
 /// 本体から `Accounts`（`docs/plugin-api.md` 第 13.5 節）で届く登録アカウント 1 件。
 pub type Account {
   Account(pubkey: String, npub: String, label: String)
+}
+
+/// タイムラインのカードに本文をどう出すか。`content_view/2` が決める。
+pub type ContentView {
+  /// 本文が空。本文の `text` ブロックも `content` の畳みも出さない。
+  NoContent
+  /// 本文全体を `text` ブロックに出す。
+  WholeContent(text: String)
+  /// 先頭を `…` 付きで `text` ブロックに出し、全文を `content` の畳みに置く。
+  ContentExcerpt(head: String)
+  /// 本文をカードに出さず、`content` の畳みにだけ置く（本文が JSON の kind）。
+  FoldedContent
 }
 
 /// `Accounts` の値（アカウントの一覧を JSON にした文字列）を読む。JSON として
@@ -109,7 +128,8 @@ pub fn pages(language: Language) -> Dynamic {
 ///
 /// `language` は文言の言語、`database` は `masked_url/3` で組んだ表示用の文字列
 /// （未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、`processes` は
-/// 保存アクターと接続プールの観測結果、`accounts` は登録アカウントの一覧、
+/// 保存アクターと接続プールの観測結果、`accounts` は登録アカウントの一覧
+/// （`settings` のチェックと、`timeline` の書いたアカウントの引き当てに使う）、
 /// `monitored` は保存アクターへ問い合わせた今の監視対象（問い合わせが届かなければ
 /// `Error(Nil)`）。`events` はタイムラインに出す直近のイベント（読めなければ
 /// `alert` に出す文言）。
@@ -125,7 +145,7 @@ pub fn content(
 ) -> Dynamic {
   case key {
     k if k == timeline_page_key ->
-      page_sections(timeline_sections(language, events))
+      page_sections(timeline_sections(language, accounts, events))
     k if k == settings_page_key ->
       page_sections([
         monitored_section(language, accounts, monitored),
@@ -138,9 +158,11 @@ pub fn content(
 
 /// `Timeline` の節。`Error(reason)` なら `reason` を `language` の文にした
 /// `alert`（`failure`）1 つだけ、`Ok([])` なら空の状態の文に任せて `blocks` を
-/// 空にする、`Ok(rows)` なら行ごとに 1 つの節（`event_section/2`）にする。
+/// 空にする、`Ok(rows)` なら行ごとに 1 つの節（`event_section/3`）にする。
+/// `accounts` は書いたアカウントの引き当てに使う。
 fn timeline_sections(
   language: Language,
+  accounts: List(Account),
   events: Result(List(store.Row), i18n.Message),
 ) -> List(Dynamic) {
   let title = i18n.text(language, i18n.TimelineTitle)
@@ -149,36 +171,88 @@ fn timeline_sections(
       section(title, [alert_block(i18n.text(language, reason), "failure")]),
     ]
     Ok([]) -> [section(title, [])]
-    Ok(rows) -> list.map(rows, event_section(language, _))
+    Ok(rows) -> list.map(rows, event_section(language, accounts, _))
   }
 }
 
-/// イベント 1 件の節。見出しは `kind` と保存された `created_at` の時刻、
-/// `pairs` に `id`・`pubkey`、`details` に `tags`・`content`・`signature` を
-/// 畳んで持つ。NIP-01 のフィールド名は訳さず、`details` の見出しの件数と
-/// バイト数の書き方だけを `language` に従わせる。
-fn event_section(language: Language, row: store.Row) -> Dynamic {
+/// イベント 1 件の節。見出しは `kind` と保存された `created_at` の時刻である。
+/// ブロックは、書いたアカウント（`author_items/3`）と `id` の `pairs`、本文
+/// （`content_view/2` の出し方に従う `text` と `content` の畳み）、`tags` と
+/// `signature` の畳みの順に並べる。NIP-01・NIP-19 のフィールド名は訳さず、
+/// `account` の項目名と `details` の見出しの件数とバイト数の書き方だけを
+/// `language` に従わせる。
+fn event_section(
+  language: Language,
+  accounts: List(Account),
+  row: store.Row,
+) -> Dynamic {
+  let content_details =
+    details_block(
+      i18n.text(language, i18n.ContentSummary(string.byte_size(row.content))),
+      row.content,
+    )
+  let body = case content_view(row.kind, row.content) {
+    NoContent -> []
+    WholeContent(text) -> [text_block(text)]
+    ContentExcerpt(head) -> [text_block(head), content_details]
+    FoldedContent -> [content_details]
+  }
   section(
     "kind "
       <> int.to_string(row.kind)
       <> " · "
       <> format_timestamp(row.created_at),
-    [
-      pairs_block([
-        #("id", id_inline(row.id)),
-        #("pubkey", id_inline(row.pubkey)),
-      ]),
-      details_block(
-        i18n.text(language, i18n.TagsSummary(tag_count(row.tags))),
-        row.tags,
-      ),
-      details_block(
-        i18n.text(language, i18n.ContentSummary(string.byte_size(row.content))),
-        row.content,
-      ),
-      details_block("signature", row.sig),
-    ],
+    list.flatten([
+      [
+        pairs_block(
+          list.append(author_items(language, accounts, row.pubkey), [
+            #("id", id_inline(row.id)),
+          ]),
+        ),
+      ],
+      body,
+      [
+        details_block(
+          i18n.text(language, i18n.TagsSummary(tag_count(row.tags))),
+          row.tags,
+        ),
+        details_block("signature", row.sig),
+      ],
+    ]),
   )
+}
+
+/// タイムラインのカードでの本文の出し方。空の本文は出さない。本文が JSON の kind
+/// （`json_content_kinds`）は、中身が JSON として読めるかによらず畳む。それ以外は
+/// `excerpt_length` 書記素までならそのまま出し、超えれば先頭の `excerpt_length`
+/// 書記素に `…` を付けて出し、全文を畳む。
+pub fn content_view(kind: Int, content: String) -> ContentView {
+  case content, list.contains(json_content_kinds, kind) {
+    "", _ -> NoContent
+    _, True -> FoldedContent
+    _, False ->
+      case string.length(content) > excerpt_length {
+        True -> ContentExcerpt(string.slice(content, 0, excerpt_length) <> "…")
+        False -> WholeContent(content)
+      }
+  }
+}
+
+/// `pairs` の先頭に置く、イベントを書いたアカウントの項目。`pubkey` が登録
+/// アカウントなら、ラベル（項目名は `language` の `account`）と省略した npub の
+/// 2 項目、登録に無ければ 16 進の `pubkey` の 1 項目にする。
+fn author_items(
+  language: Language,
+  accounts: List(Account),
+  pubkey: String,
+) -> List(#(String, Dynamic)) {
+  case list.find(accounts, fn(account) { account.pubkey == pubkey }) {
+    Ok(account) -> [
+      #(i18n.text(language, i18n.AccountTerm), text_inline(account.label)),
+      #("npub", id_inline(account.npub)),
+    ]
+    Error(Nil) -> [#("pubkey", id_inline(pubkey))]
+  }
 }
 
 /// `tags` の JSON 文字列に含まれるタグの件数。読めなければ 0。

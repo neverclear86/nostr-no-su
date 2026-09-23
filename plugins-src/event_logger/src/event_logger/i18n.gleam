@@ -40,6 +40,7 @@ pub type Message {
   StoreActor
   TagsSummary(count: Int)
   ContentSummary(bytes: Int)
+  AccountTerm
   PoolNotRunning
   EventsUnreadable(detail: String)
 }
@@ -96,6 +97,7 @@ fn english(message: Message) -> String {
     StoreActor -> "store actor"
     TagsSummary(count:) -> "tags (" <> int.to_string(count) <> ")"
     ContentSummary(bytes:) -> "content (" <> int.to_string(bytes) <> " bytes)"
+    AccountTerm -> "account"
     PoolNotRunning -> "connection pool is not running"
     EventsUnreadable(detail:) -> "could not read stored events: " <> detail
   }
@@ -134,6 +136,7 @@ fn japanese(message: Message) -> String {
     StoreActor -> "保存アクター"
     TagsSummary(count:) -> "tags（" <> int.to_string(count) <> " 件）"
     ContentSummary(bytes:) -> "content（" <> int.to_string(bytes) <> " バイト）"
+    AccountTerm -> "アカウント"
     PoolNotRunning -> "接続プールが動いていません。"
     EventsUnreadable(detail:) -> "保存済みのイベントを読めませんでした: " <> detail
   }

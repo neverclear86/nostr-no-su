@@ -19,7 +19,6 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor
 import gleam/result
-import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -393,8 +392,10 @@ fn broken_status_description() -> Dynamic {
 }
 
 /// `event_logger` の `timeline` ページの記述。実装の
-/// `plugins-src/event_logger/src/event_logger/page.gleam` が `event_section/1` で
-/// 組む節を写した固定の 2 件で、あちらを変えたらここも直す。id と署名は実在の値を
+/// `plugins-src/event_logger/src/event_logger/page.gleam` が `event_section/3` で
+/// 組む節を写した固定の 2 件で、あちらを変えたらここも直す。どちらも登録アカウント
+/// `main account` が書いたイベントで、1 件目は本文を `text` ブロックに出し、2 件目
+/// （kind 10002）は本文が空なので本文のブロックを持たない。id と署名は実在の値を
 /// 避けた繰り返しのダミー。
 fn event_logger_timeline_description() -> Dynamic {
   let event = fn(
@@ -404,18 +405,24 @@ fn event_logger_timeline_description() -> Dynamic {
     content: String,
     sig: String,
   ) {
-    section(title, [
-      pairs_block([
-        #("id", id_inline(id)),
-        #("pubkey", id_inline(signer)),
+    let body = case content {
+      "" -> []
+      _ -> [text_block(content)]
+    }
+    section(
+      title,
+      list.flatten([
+        [
+          pairs_block([
+            #("account", text_inline("main account")),
+            #("npub", id_inline(signer_npub)),
+            #("id", id_inline(id)),
+          ]),
+        ],
+        body,
+        [details_block("tags (1)", tags), details_block("signature", sig)],
       ]),
-      details_block("tags (1)", tags),
-      details_block(
-        "content (" <> int.to_string(string.byte_size(content)) <> " bytes)",
-        content,
-      ),
-      details_block("signature", sig),
-    ])
+    )
   }
   page_sections([
     event(
