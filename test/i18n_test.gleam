@@ -148,7 +148,8 @@ pub fn leads_are_only_for_other_languages_test() {
 /// `case` なので、構築子を足すとテストのビルドが止まる。
 fn next_message(message: i18n.Message) -> Option(i18n.Message) {
   case message {
-    i18n.BackToDashboard -> Some(i18n.LanguageSwitchLabel)
+    i18n.BackToDashboard -> Some(i18n.LogoSubtitle)
+    i18n.LogoSubtitle -> Some(i18n.LanguageSwitchLabel)
     i18n.LanguageSwitchLabel -> Some(i18n.ThemeSwitchLabel)
     i18n.ThemeSwitchLabel -> Some(i18n.FollowBrowser)
     i18n.FollowBrowser -> Some(i18n.ThemeLight)
@@ -394,12 +395,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 223 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 224 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 223
+  assert list.length(messages) == 224
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

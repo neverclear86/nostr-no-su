@@ -671,7 +671,8 @@ nostr-no-su/
 │       ├── admin/relay_pages.gleam リレーのページの描画
 │       ├── admin/connect_pages.gleam クライアントの接続のページの描画
 │       ├── admin/session_pages.gleam セッションのページの描画
-│       ├── admin/view.gleam      ページ枠と、admin/i18n 以外の本体のモジュールに依存しない部品（lustre）
+│       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）
+│       ├── admin/wordmark.gleam  上部のロゴの製品名の字形のパス（dev/logo_wordmark.sh が生成）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
 │       ├── admin/plugin_view.gleam プラグインが返す要素の記述から管理 UI の部品への変換（純粋）
 │       ├── admin/plugin_pages.gleam プラグインのページの描画（ページ枠、タブ、節の並び）
@@ -725,7 +726,7 @@ nostr-no-su/
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）と、README に載せる製品のロゴ（logo/）
 ├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
-├── dev/                          管理 UI の撮影用のサーバーとスクリプト、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、リリースの版の検査、イメージに入れるライセンスの収集（成果物には入らない）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト、ロゴの製品名の字形の生成、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、リリースの版の検査、イメージに入れるライセンスの収集（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
 │   ├── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）

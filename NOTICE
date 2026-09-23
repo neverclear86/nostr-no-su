@@ -9,6 +9,16 @@ https://github.com/rawhat/stratus
 Licensed under the Apache License, Version 2.0. See vendor/stratus/LICENSE.
 The modifications are recorded in vendor/stratus/PATCH.md.
 
+This repository includes glyph outlines of the M PLUS 2 font, converted to
+SVG paths by dev/logo_wordmark.sh, in src/nostr_no_su/admin/wordmark.gleam
+(the product name in the admin UI logo). The font itself is not included.
+
+M PLUS 2
+Copyright 2021 The M+ FONTS Project Authors
+https://github.com/coz-m/MPLUS_FONTS
+Licensed under the SIL Open Font License, Version 1.1.
+https://openfontlicense.org
+
 This repository includes SVG icon strokes copied from Lucide in
 src/nostr_no_su/admin/view.gleam.
 

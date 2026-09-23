@@ -60,6 +60,12 @@ npm ci             # Tailwind CSS、daisyUI、playwright-core を package-lock.j
 npm run build:css  # assets/admin.css から priv/static/admin.css を作る
 ```
 
+上部のロゴの製品名の字形（`src/nostr_no_su/admin/wordmark.gleam`）は `dev/logo_wordmark.sh` が生成する。M PLUS 2 の可変フォントを google/fonts の固定のコミットから取得して SHA-256 を照合し、一時ディレクトリーの venv に入れた fontTools で「Nostr」「Su」を ExtraBold、「-no-」を Medium の字形のパスにして書き出す。フォントはリポジトリに置かない。python3、curl、gleam とネットワークが要る。文字、字間、フォントの版を変えるときにスクリプトを直して実行し、生成したモジュールと作り直した `priv/static/admin.css` を一緒にコミットする。引数に出力先を渡すと、そのパスに書く。
+
+```sh
+sh dev/logo_wordmark.sh
+```
+
 管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 4 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態、README に載せる画像のための失敗の状態を含まない状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である。サーバーは終了しないので、1 つの端末で起動したまま別の端末で撮る。初回は `npx playwright-core install chromium` で、`playwright-core` の版が使う chromium を入れる（ブラウザーが無いときのエラーが勧める `npx playwright install` は、別のパッケージとその版のブラウザーを入れるので、必要な版が入るとは限らない）:
 
 ```sh

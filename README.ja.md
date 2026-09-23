@@ -109,4 +109,4 @@ VPS や自宅サーバーなどリモートのホストで動かすときは、�
 
 [MIT License](LICENSE)。
 `vendor/stratus/` は Apache License 2.0 の stratus の改変版（帰属は [NOTICE](NOTICE)、改変は [vendor/stratus/PATCH.md](vendor/stratus/PATCH.md)）。
-管理 UI のアイコンは ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもの（帰属は [NOTICE](NOTICE)）。ロゴはこのリポジトリのもので MIT License に従う。
+管理 UI のアイコンは ISC ライセンスの [Lucide](https://lucide.dev) のストロークを写したもの（帰属は [NOTICE](NOTICE)）。ロゴはこのリポジトリのもので MIT License に従う。ただし、管理 UI のロゴの製品名は SIL Open Font License 1.1 の [M PLUS 2](https://github.com/coz-m/MPLUS_FONTS) の字形から描いたもの（帰属は [NOTICE](NOTICE)）。
