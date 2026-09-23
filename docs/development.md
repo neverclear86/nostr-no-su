@@ -66,7 +66,7 @@ npm run build:css  # assets/admin.css から priv/static/admin.css を作る
 sh dev/logo_wordmark.sh
 ```
 
-管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 4 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態、README に載せる画像のための失敗の状態を含まない状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である。サーバーは終了しないので、1 つの端末で起動したまま別の端末で撮る。初回は `npx playwright-core install chromium` で、`playwright-core` の版が使う chromium を入れる（ブラウザーが無いときのエラーが勧める `npx playwright install` は、別のパッケージとその版のブラウザーを入れるので、必要な版が入るとは限らない）:
+管理 UI の全ページを固定の状態で確かめるときは、撮影用のサーバーを起動して撮る。サーバーは `PREVIEW_PORT` から続く 5 つのポートで、通常の状態、アカウントの一覧を得られない状態、すべての一覧が空の状態、README に載せる画像のための失敗の状態を含まない状態、すべての一覧が空でバンカー用のリレーだけを登録した状態を出す（ユーザー名は `admin`、パスワードは `preview-password`）。鍵は公開のテストベクター、secret はダミーの値である。サーバーは終了しないので、1 つの端末で起動したまま別の端末で撮る。初回は `npx playwright-core install chromium` で、`playwright-core` の版が使う chromium を入れる（ブラウザーが無いときのエラーが勧める `npx playwright install` は、別のパッケージとその版のブラウザーを入れるので、必要な版が入るとは限らない）:
 
 ```sh
 PREVIEW_PORT=18461 gleam run -m admin_preview                          # 端末 1（終了しない）
