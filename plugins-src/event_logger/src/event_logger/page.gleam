@@ -4,11 +4,11 @@
 //// 組み立てるだけである。文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
-//// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値だけで**、
+//// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値・整数（`kind` と `time` の `value`）だけで**、
 //// クラス名も `href` も持ち込めない。秘密（接続先 URL のパスワード）は本体に渡す前に
 //// ここでマスクする（`masked_url/3`。同文書第 13.4 節の実例でもある）。
 ////
-//// 値は `gleam/dynamic` の `properties` / `list` / `string` で組む。`properties` は
+//// 値は `gleam/dynamic` の `properties` / `list` / `string` / `bool` / `int` で組む。`properties` は
 //// Erlang では binary キーの map になる。
 
 import event_logger/i18n.{type Language}
@@ -175,7 +175,8 @@ fn timeline_sections(
   }
 }
 
-/// イベント 1 件の節。見出しは `kind` と保存された `created_at` の時刻である。
+/// イベント 1 件の節。題は空で、見出しには `meta` に `kind`（`row.kind`）と `time`（保存された
+/// `created_at`）のインラインを置き、本体が kind の名前と相対時刻を表示の言語で出す。
 /// ブロックは、書いたアカウント（`author_items/3`）と `id` の `pairs`、本文
 /// （`content_view/2` の出し方に従う `text` と `content` の畳み）、`tags` と
 /// `signature` の畳みの順に並べる。NIP-01・NIP-19 のフィールド名は訳さず、
@@ -198,11 +199,9 @@ fn event_section(
     ContentExcerpt(head) -> [text_block(head), content_details()]
     FoldedContent -> [content_details()]
   }
-  section(
-    "kind "
-      <> int.to_string(row.kind)
-      <> " · "
-      <> format_timestamp(row.created_at),
+  section_with_meta(
+    "",
+    [kind_inline(row.kind), time_inline(row.created_at)],
     list.flatten([
       [
         pairs_block(
@@ -262,10 +261,6 @@ fn tag_count(tags: String) -> Int {
   |> result.map(list.length)
   |> result.unwrap(0)
 }
-
-/// Unix 秒を UTC の RFC 3339（`2026-09-22T10:00:00Z`）にする。
-@external(erlang, "event_logger_ffi", "format_timestamp")
-fn format_timestamp(seconds: Int) -> String
 
 /// 接続先だけを残した表示用の文字列。パスワードは含めない。`database_url` が
 /// postgres の URL として解釈できなければ、その旨の `language` の 1 文を返す。
@@ -421,6 +416,20 @@ fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
   ])
 }
 
+/// 見出しの題の後ろに `meta`（インラインのリスト）を並べる節。
+fn section_with_meta(
+  title: String,
+  meta: List(Dynamic),
+  blocks: List(Dynamic),
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("meta"), dynamic.list(meta)),
+    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
 /// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` のインライン
 /// （`text_inline`・`code_inline`・`id_inline`）の対。
 fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
@@ -543,5 +552,21 @@ fn id_inline(text: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("id")),
     #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `kind` インライン。本体が kind の名前（無ければ番号）で出す。
+fn kind_inline(kind: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("kind")),
+    #(dynamic.string("value"), dynamic.int(kind)),
+  ])
+}
+
+/// `time` インライン。本体が相対時刻で出し、UTC の時刻を `title` に持たせる。
+fn time_inline(seconds: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("time")),
+    #(dynamic.string("value"), dynamic.int(seconds)),
   ])
 }
