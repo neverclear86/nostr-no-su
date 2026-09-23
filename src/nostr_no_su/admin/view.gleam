@@ -1252,16 +1252,25 @@ pub fn checkbox_row(
   )
 }
 
-/// nsec や管理パスワードのように伏せて入力させる欄。`autocomplete` は欄の自動入力の種類
-/// （nsec は `new-password`、再入力のパスワードは `off`）。
+/// nsec や管理パスワードのように伏せて入力させる欄。属性は `secret_input_attributes` のとおり。
 pub fn secret_input(name: String, autocomplete: String) -> Element(msg) {
-  html.input([
+  html.input(secret_input_attributes(name, autocomplete))
+}
+
+/// 伏せて入力させる欄の属性（伏せ字、必須、等幅）。`hinted_input` に渡すと補足を持つ伏せ字の
+/// 欄になる。`autocomplete` は欄の自動入力の種類（nsec は `new-password`、再入力のパスワードは
+/// `off`）。
+pub fn secret_input_attributes(
+  name: String,
+  autocomplete: String,
+) -> List(Attribute(msg)) {
+  [
     attribute.type_("password"),
     attribute.name(name),
     attribute.autocomplete(autocomplete),
     attribute.required(True),
     attribute.class("input w-full font-mono border-base-content/60"),
-  ])
+  ]
 }
 
 /// フォームで送る隠しフィールド。

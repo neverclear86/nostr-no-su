@@ -154,8 +154,8 @@ pub fn import_rejects_an_out_of_range_key_test() {
   )
 }
 
-/// 登録済みの鍵は 409 で、理由と、別のマスターキーの行についての案内と、
-/// ダッシュボードへのリンクを出す。nsec は出さない。
+/// 登録済みの鍵は 409 で、理由と、ダッシュボードに無いアカウントが登録済みと出るときの
+/// 案内と、ダッシュボードへのリンクを出す。nsec は出さない。
 pub fn import_rejects_a_registered_account_test() {
   let response =
     post_form(context(), "/accounts/import", [
@@ -165,7 +165,10 @@ pub fn import_rejects_a_registered_account_test() {
   assert response.status == 409
   let body = simulate.read_body(response)
   assert string.contains(body, "account is already registered")
-  assert string.contains(body, "different master key")
+  assert string.contains(
+    body,
+    "If an account that is not on the dashboard is reported as already registered, see docs/operations.md.",
+  )
   assert string.contains(
     body,
     "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
@@ -581,7 +584,7 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   let body = simulate.read_body(response)
   assert string.contains(
     body,
-    "<input autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
+    "<input aria-describedby=\"nsec-hint\" aria-label=\"Private key (nsec)\" autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
   )
   assert string.contains(
     body,

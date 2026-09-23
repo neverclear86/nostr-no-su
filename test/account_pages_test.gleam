@@ -478,3 +478,151 @@ pub fn japanese_generated_key_page_explains_the_failure_test() {
     "と表示します。データベースが変更を確定しませんでした。",
   )
 }
+
+/// 登録画面の nsec の欄は、貼り付けの説明（`ImportDescription`）を ⓘ で開く補足に畳み、
+/// 欄の `aria-describedby` から指す。説明はフォームの前の段落には出さない。
+pub fn nsec_field_folds_the_import_description_test() {
+  use language <- list.each(i18n.languages)
+  let text = i18n.text(language, _)
+  let page = account_pages.new_account_page(language, view.System, "", None)
+  assert string.contains(
+    page,
+    "<input aria-describedby=\"nsec-hint\" aria-label=\""
+      <> text(i18n.PrivateKeyNsec)
+      <> "\" autocomplete=\"new-password\"",
+  )
+  assert string.contains(page, "popovertarget=\"nsec-hint\"")
+  assert string.contains(
+    page,
+    "id=\"nsec-hint\" popover=\"auto\">"
+      <> text(i18n.ImportDescription)
+      <> "</p>",
+  )
+  assert !string.contains(
+    page,
+    "<p class=\"text-sm\">" <> text(i18n.ImportDescription),
+  )
+}
+
+/// 警告（生成した鍵と登録の完了のバックアップ、秘密鍵の再送の注意、削除の説明、入力の
+/// 誤り）は畳まずに出す。登録画面で畳むのは nsec の欄の補足 1 つだけである。
+pub fn account_warnings_are_not_folded_test() {
+  use language <- list.each(i18n.languages)
+  let text = i18n.text(language, _)
+  let strong = fn(message) { "<strong>" <> text(message) <> "</strong>" }
+  let warnings = [
+    #(
+      account_pages.generated_key_page(
+        language,
+        view.System,
+        example_npub,
+        "nsec1example",
+        "",
+        None,
+      ),
+      strong(i18n.BackUpNow),
+    ),
+    #(
+      account_pages.registered_page(
+        language,
+        view.System,
+        "npub1example",
+        "main",
+        "nsec1example",
+      ),
+      strong(i18n.BackUpIfNotAlready),
+    ),
+    #(
+      account_pages.private_key_page(
+        language,
+        view.System,
+        row("main"),
+        "nsec1example",
+      ),
+      text(i18n.ResendNotice),
+    ),
+    #(
+      account_pages.account_action_page(
+        language,
+        view.System,
+        row("main"),
+        dashboard.DeleteAccount,
+        None,
+        None,
+      ),
+      strong(i18n.DeleteWarning),
+    ),
+    #(
+      account_pages.unreadable_delete_page(
+        language,
+        view.System,
+        skipped_row("main"),
+        None,
+      ),
+      strong(i18n.DeleteUnreadableWarning),
+    ),
+  ]
+  list.each(warnings, fn(pair) {
+    let #(page, warning) = pair
+    assert string.contains(page, warning)
+    assert !string.contains(page, "popover")
+    assert !string.contains(page, "<details")
+  })
+  let rejected =
+    account_pages.new_account_page(
+      language,
+      view.System,
+      "typed",
+      Some(i18n.Translated(i18n.LabelTooLong(max: 100))),
+    )
+  assert string.contains(rejected, "role=\"alert\"")
+  assert list.length(string.split(rejected, "popover=\"auto\"")) == 2
+  assert !string.contains(rejected, "<details")
+}
+
+/// ページのカードの中身は、ページの枠を持たないフォームの関数の出力そのものである。
+pub fn account_forms_are_the_card_content_test() {
+  use language <- list.each(i18n.languages)
+  let html = fn(elements) {
+    elements |> list.map(element.to_string) |> string.concat
+  }
+  let new_account =
+    account_pages.new_account_page(language, view.System, "typed", None)
+  assert string.contains(
+    new_account,
+    html(account_pages.import_form(language, "typed")),
+  )
+  assert string.contains(
+    new_account,
+    html(account_pages.generate_form(language)),
+  )
+  list.each(account_actions.with_form, fn(action) {
+    let page =
+      account_pages.account_action_page(
+        language,
+        view.System,
+        row("main"),
+        action,
+        Some("typed"),
+        None,
+      )
+    assert string.contains(
+      page,
+      html(account_pages.account_action_form(
+        language,
+        row("main"),
+        action,
+        Some("typed"),
+      )),
+    )
+  })
+  assert string.contains(
+    account_pages.unreadable_delete_page(
+      language,
+      view.System,
+      skipped_row("main"),
+      None,
+    ),
+    html(account_pages.unreadable_delete_form(language, skipped_row("main"))),
+  )
+}
