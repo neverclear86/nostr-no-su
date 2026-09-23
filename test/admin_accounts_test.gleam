@@ -801,7 +801,7 @@ pub fn reflected_label_is_escaped_test() {
 /// 3 つのラベルの欄には `maxlength` が無く、欄の下に表示の言語の上限の案内がある。
 pub fn label_inputs_describe_the_limit_without_maxlength_test() {
   let hint = fn(language) {
-    "<p class=\"text-base-content/70\" id=\"label-hint\">"
+    "<p class=\"text-muted\" id=\"label-hint\">"
     <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
     <> "</p>"
   }
@@ -1059,7 +1059,7 @@ pub fn dashboard_lists_account_actions_test() {
   assert string.contains(body, signer_npub)
   assert string.contains(
     body,
-    "<input aria-label=\"Connection URI\" class=\"input join-item w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
+    "<input aria-label=\"Connection URI\" class=\"input w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
       <> wisp.escape_html(uri)
       <> "\">",
   )

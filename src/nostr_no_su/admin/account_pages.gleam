@@ -42,7 +42,13 @@ pub fn new_account_page(
     [
       view.error_message(language, Some(i18n.CouldNotRegister), error),
       view.card([
-        view.icon_heading(view.key_icon(), text(i18n.ImportPrivateKey)),
+        view.section_heading(
+          view.key_icon(),
+          text(i18n.ImportPrivateKey),
+          None,
+          None,
+          [],
+        ),
         view.form_description(text(i18n.ImportDescription)),
         view.secret_post_form(
           view.segments_path(dashboard.import_account_segments),
@@ -59,7 +65,13 @@ pub fn new_account_page(
         ),
       ]),
       view.card([
-        view.icon_heading(view.plus_icon(), text(i18n.GenerateNewKey)),
+        view.section_heading(
+          view.plus_icon(),
+          text(i18n.GenerateNewKey),
+          None,
+          None,
+          [],
+        ),
         view.form_description(text(i18n.GenerateDescription)),
         view.post_form(
           view.segments_path(dashboard.generate_account_segments),
@@ -113,11 +125,10 @@ pub fn generated_key_page(
         |> option.unwrap(element.none()),
       view.card([
         view.truncated_id(language, npub, text(i18n.CopyNpub)),
-        view.warning(view.emphasized(
-          language,
-          i18n.BackUpNow,
-          i18n.GeneratedKeyNotice,
-        )),
+        view.alert(
+          view.Warning,
+          view.emphasized(language, i18n.BackUpNow, i18n.GeneratedKeyNotice),
+        ),
         view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
         view.post_form(
           view.segments_path(dashboard.register_generated_segments),
@@ -192,11 +203,14 @@ pub fn registered_page(
     [
       view.card([
         view.identity(language, label, npub),
-        view.warning(view.emphasized(
-          language,
-          i18n.BackUpIfNotAlready,
-          i18n.RegisteredKeyNotice,
-        )),
+        view.alert(
+          view.Warning,
+          view.emphasized(
+            language,
+            i18n.BackUpIfNotAlready,
+            i18n.RegisteredKeyNotice,
+          ),
+        ),
         view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
       ]),
       view.back_link(language),
@@ -328,7 +342,9 @@ pub fn connection_qr_page(
         language,
         i18n.ConnectionUri,
         row.uri,
-        view.warning([html.text(text(i18n.ConnectionQrSecretWarning))]),
+        view.alert(view.Warning, [
+          html.text(text(i18n.ConnectionQrSecretWarning)),
+        ]),
       ),
       uri_card(
         language,
@@ -371,7 +387,7 @@ fn uri_card(
 ) -> Element(msg) {
   let text = i18n.text(language, title)
   view.card([
-    view.icon_heading(view.qr_code_icon(), text),
+    view.section_heading(view.qr_code_icon(), text, None, None, []),
     note,
     qr_or_notice(language, text, account.camera_copy_text(uri)),
     html.p([], [html.text(i18n.text(language, i18n.CameraCopySteps))]),
@@ -395,7 +411,13 @@ fn bunker_relay_card(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
-    view.icon_heading(view.plug_icon(), text(i18n.BunkerRelaysForUri)),
+    view.section_heading(
+      view.plug_icon(),
+      text(i18n.BunkerRelaysForUri),
+      None,
+      None,
+      [],
+    ),
     view.hint(text(i18n.BunkerRelaysHint)),
     case relays {
       Ok(rows) ->
@@ -417,7 +439,13 @@ fn bunker_relay_card(
 fn client_uri_card(language: Language) -> Element(msg) {
   let text = i18n.text(language, _)
   view.card([
-    view.icon_heading(view.plug_icon(), text(i18n.ConnectWithClientUri)),
+    view.section_heading(
+      view.plug_icon(),
+      text(i18n.ConnectWithClientUri),
+      None,
+      None,
+      [],
+    ),
     view.hint(text(i18n.ConnectWithClientUriHint)),
     view.button_link(
       view.segments_path(dashboard.connect_segments),
@@ -538,11 +566,14 @@ pub fn private_key_page(
           i18n.text(language, i18n.PrivateKeyNsec),
           nsec,
         ),
-        view.warning(view.emphasized(
-          language,
-          i18n.CloseTabAfterCopying,
-          i18n.ResendNotice,
-        )),
+        view.alert(
+          view.Warning,
+          view.emphasized(
+            language,
+            i18n.CloseTabAfterCopying,
+            i18n.ResendNotice,
+          ),
+        ),
       ]),
       view.back_link(language),
     ],

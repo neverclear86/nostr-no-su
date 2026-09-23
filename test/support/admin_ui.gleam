@@ -696,7 +696,20 @@ pub fn components(language: i18n.Language) -> List(String) {
       ],
       fn(chip) { element.to_string(view.status_chip(chip, "text")) },
     ),
-    [element.to_string(view.count_pill(3))],
+    [
+      element.to_string(
+        view.section_heading(
+          view.plug_icon(),
+          "title",
+          Some(3),
+          Some("description"),
+          [view.hint("action")],
+        ),
+      ),
+      element.to_string(
+        view.section_heading(view.plug_icon(), "title", None, None, []),
+      ),
+    ],
     [
       element.to_string(
         view.checkbox_row(
@@ -731,8 +744,15 @@ pub fn components(language: i18n.Language) -> List(String) {
     ],
     [element.to_string(view.preformatted("[[0,1]]"))],
     [
-      element.to_string(view.section_card("anchor", [view.hint("content")])),
-      element.to_string(view.warning_card("anchor", [view.hint("content")])),
+      element.to_string(view.section_block("anchor", [view.hint("content")])),
+      element.to_string(
+        view.row_list([
+          view.list_row(view.InlineRow, [view.hint("content")]),
+          view.list_row(view.StackedRow, [view.hint("content")]),
+        ]),
+      ),
+      element.to_string(view.surface([view.hint("content")])),
+      element.to_string(view.copy_button("copy")),
       element.to_string(
         view.detail_list([#("term", html.dd([], [view.hint("value")]))]),
       ),
@@ -762,6 +782,14 @@ pub fn components(language: i18n.Language) -> List(String) {
       fn(tone) { element.to_string(view.tone_icon(tone)) },
     ),
     list.map(
+      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
+      fn(tone) {
+        element.to_string(
+          view.alert_panel("anchor", tone, [view.hint("content")]),
+        )
+      },
+    ),
+    list.map(
       [
         view.logo_icon(),
         view.qr_code_icon(),
@@ -769,7 +797,6 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.check_circle_icon(),
         view.warning_triangle_icon(),
         view.x_circle_icon(),
-        view.copy_icon(),
         view.plus_icon(),
         view.trash_icon(),
         view.pencil_icon(),
@@ -779,6 +806,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.rotate_icon(),
         view.users_icon(),
         view.clock_icon(),
+        view.door_open_icon(),
         view.puzzle_icon(),
         view.file_text_icon(),
       ],

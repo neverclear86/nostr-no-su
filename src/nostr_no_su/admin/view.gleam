@@ -588,55 +588,132 @@ fn main_class(layout: Layout) -> String {
 
 /// 節やページの内容を包むカード。
 pub fn card(content: List(Element(msg))) -> Element(msg) {
-  card_element(
-    None,
-    "card border border-base-300 bg-base-100 shadow-sm",
+  html.section(
+    [attribute.class("card border border-base-300 bg-base-100 shadow-sm")],
+    [html.div([attribute.class("card-body gap-4 p-4 sm:p-6")], content)],
+  )
+}
+
+/// ダッシュボードの節。枠を持たず、節の見出し（`section_heading`）と本文を縦に並べる。`id` は概要のタイルのリンク先である。
+pub fn section_block(id: String, content: List(Element(msg))) -> Element(msg) {
+  html.section(
+    [attribute.id(id), attribute.class("flex flex-col gap-3")],
     content,
   )
 }
 
-/// タイルのリンク先の `id` を持つ節のカード。
-pub fn section_card(id: String, content: List(Element(msg))) -> Element(msg) {
-  card_element(
-    Some(id),
-    "card border border-base-300 bg-base-100 shadow-sm",
-    content,
+/// 節の見出し。`primary` を薄く混ぜた地の面に載せたアイコン、題（`h2`）、`count` があれば件数のピルを 1 行に並べ、
+/// `description` があればその下に 1 行の説明を補助の文字の色で出す。`actions` は右端に置き、幅が足りなければ
+/// 下に回る。`actions` が空なら右には何も置かない。
+pub fn section_heading(
+  icon: Element(msg),
+  title: String,
+  count: Option(Int),
+  description: Option(String),
+  actions: List(Element(msg)),
+) -> Element(msg) {
+  let pill = case count {
+    Some(count) -> count_badge(count)
+    None -> element.none()
+  }
+  let description_line = case description {
+    Some(description) ->
+      html.p([attribute.class("text-sm text-muted sm:pl-10")], [
+        html.text(description),
+      ])
+    None -> element.none()
+  }
+  let action_row = case actions {
+    [] -> element.none()
+    _ ->
+      html.div([attribute.class("flex flex-wrap justify-end gap-2")], actions)
+  }
+  html.div(
+    [
+      attribute.class(
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2",
+      ),
+    ],
+    [
+      html.div([attribute.class("flex min-w-0 flex-col gap-0.5")], [
+        html.div([attribute.class("flex items-center gap-2.5")], [
+          html.span(
+            [
+              attribute.class(
+                "grid size-7.5 shrink-0 place-items-center rounded-field bg-primary/13 text-primary",
+              ),
+            ],
+            [icon],
+          ),
+          heading(title),
+          pill,
+        ]),
+        description_line,
+      ]),
+      action_row,
+    ],
   )
 }
 
-/// 承認待ちの節の warning 色の枠のカード。
-pub fn warning_card(id: String, content: List(Element(msg))) -> Element(msg) {
-  card_element(
-    Some(id),
-    "card border border-warning bg-base-100 shadow-sm",
-    content,
+/// 節の見出しの件数のピル。等幅の数字を補助の文字の色で出す。
+fn count_badge(count: Int) -> Element(msg) {
+  html.span(
+    [
+      attribute.class(
+        "badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums",
+      ),
+    ],
+    [html.text(int.to_string(count))],
   )
 }
 
-/// `card`、`section_card`、`warning_card` が共有するカードの組み立て。`id` があれば要素に
-/// 付ける。
-fn card_element(
-  id: Option(String),
-  class: String,
+/// 一覧の 1 行の中身の並べ方。
+pub type RowLayout {
+  /// 値の組と操作を横に並べ、収まらなければ操作を下へ回す。
+  InlineRow
+  /// 中身を縦に積む。
+  StackedRow
+}
+
+/// 行の一覧の枠（daisyUI の `list`）。面の色、枠線、角の丸みを付け、行の間は `list-row` が区切る。行は
+/// `list_row` で作る。
+pub fn row_list(rows: List(Element(msg))) -> Element(msg) {
+  html.ul(
+    [attribute.class("list rounded-box border border-base-300 bg-base-100")],
+    rows,
+  )
+}
+
+/// 一覧の 1 行（`list-row`）。`list-row` の格子の代わりに `layout` の並べ方で中身を置く（Tailwind の
+/// ユーティリティは daisyUI の部品のクラスより優先される）。
+pub fn list_row(
+  layout: RowLayout,
   content: List(Element(msg)),
 ) -> Element(msg) {
-  let id_attribute = case id {
-    Some(id) -> [attribute.id(id)]
-    None -> []
+  let class = case layout {
+    InlineRow ->
+      "list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3"
+    StackedRow -> "list-row flex flex-col gap-3"
   }
-  html.section([attribute.class(class), ..id_attribute], [
-    html.div([attribute.class("card-body gap-4 p-4 sm:p-6")], content),
-  ])
+  html.li([attribute.class(class)], content)
 }
 
-/// カードの見出し（h2）。
+/// 面の色、枠線、角の丸みを持つ囲み。枠を持たない節（`section_block`）の中で、表や中立の囲みをページの地から浮かせる。
+pub fn surface(content: List(Element(msg))) -> Element(msg) {
+  html.div(
+    [attribute.class("rounded-box border border-base-300 bg-base-100")],
+    content,
+  )
+}
+
+/// 節やカードの見出し（h2）。
 pub fn heading(title: String) -> Element(msg) {
   html.h2([attribute.class("card-title")], [html.text(title)])
 }
 
 /// 本文より控えめな一言。行が無い節の説明や、ページの末尾の案内に使う。
 pub fn hint(text: String) -> Element(msg) {
-  html.p([attribute.class("text-sm text-base-content/70")], [html.text(text)])
+  html.p([attribute.class("text-sm text-muted")], [html.text(text)])
 }
 
 /// カードの中でフォームの前に置く、フォームの説明。
@@ -655,7 +732,7 @@ pub fn plugin_checkbox_row(
 ) -> Element(msg) {
   let description = case hint {
     Some(hint) -> [
-      html.span([attribute.class("text-sm text-base-content/70 break-all")], [
+      html.span([attribute.class("text-sm text-muted break-all")], [
         html.text(hint),
       ]),
     ]
@@ -684,7 +761,7 @@ fn plugin_field(
 ) -> Element(msg) {
   let description = case hint {
     Some(hint) -> [
-      html.span([attribute.class("text-sm text-base-content/70 break-all")], [
+      html.span([attribute.class("text-sm text-muted break-all")], [
         html.text(hint),
       ]),
     ]
@@ -765,7 +842,7 @@ pub fn plugin_image_placeholder(
   html.div(
     [
       attribute.class(
-        "flex flex-col gap-1 rounded-lg border border-dashed border-base-300 bg-base-200 p-4 text-sm text-base-content/70",
+        "flex flex-col gap-1 rounded-lg border border-dashed border-base-300 bg-base-200 p-4 text-sm text-muted",
       ),
     ],
     [
@@ -777,10 +854,10 @@ pub fn plugin_image_placeholder(
 
 /// 行が 1 件も無い節の本文。アイコンと 1 文を横に並べる。
 pub fn empty_state(icon: Element(msg), text: String) -> Element(msg) {
-  html.div(
-    [attribute.class("flex items-center gap-2 text-sm text-base-content/70")],
-    [icon, html.text(text)],
-  )
+  html.div([attribute.class("flex items-center gap-2 text-sm text-muted")], [
+    icon,
+    html.text(text),
+  ])
 }
 
 /// 見出し行付きの表。行は `td` の並びで渡す。枠より広い値は枠の中で横に送る。
@@ -815,7 +892,7 @@ pub fn detail_list(entries: List(#(String, Element(msg)))) -> Element(msg) {
     list.flat_map(entries, fn(entry) {
       let #(term, value) = entry
       [
-        html.dt([attribute.class("text-base-content/70")], [html.text(term)]),
+        html.dt([attribute.class("text-muted")], [html.text(term)]),
         value,
       ]
     }),
@@ -861,14 +938,6 @@ pub fn identity(
   html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
     html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
     truncated_id(language, npub, i18n.text(language, i18n.CopyNpub)),
-  ])
-}
-
-/// アイコンを添えたカードの見出し。
-pub fn icon_heading(icon: Element(msg), title: String) -> Element(msg) {
-  html.div([attribute.class("flex items-center gap-2")], [
-    icon,
-    heading(title),
   ])
 }
 
@@ -1031,7 +1100,7 @@ pub fn hinted_input(
       attribute.aria_describedby(hint_id),
       ..attributes
     ]),
-    html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
+    html.p([attribute.id(hint_id), attribute.class("text-muted")], [
       html.text(hint),
     ]),
   ])
@@ -1057,7 +1126,7 @@ pub fn hinted_textarea(
       ],
       value,
     ),
-    html.p([attribute.id(hint_id), attribute.class("text-base-content/70")], [
+    html.p([attribute.id(hint_id), attribute.class("text-muted")], [
       html.text(hint),
     ]),
   ])
@@ -1084,7 +1153,7 @@ pub fn checkbox_row(
     icon,
     html.div([attribute.class("flex min-w-0 flex-col")], [
       html.span([], [html.text(caption)]),
-      html.span([attribute.class("text-sm text-base-content/70")], [
+      html.span([attribute.class("text-sm text-muted")], [
         description,
       ]),
     ]),
@@ -1113,93 +1182,126 @@ pub fn hidden_input(name: String, value: String) -> Element(msg) {
   ])
 }
 
-/// 見出しを付けた読み取り専用の欄と、その値をコピーするボタン。ボタンは `data-action` で
-/// `priv/static/admin.js` の `copy` の処理を指し、値は処理が DOM から読む。欄に name を付けない
-/// （送信にも入力履歴にも含めないため）。処理が囲みをボタンの親の親として読むので、囲みを
-/// 1 つの要素として返す。ボタンの名前は常に「コピー」の文言のままにし、完了は囲みの直下の
-/// `role="status"` で伝える。クリップボードに書けないときの案内も同じ要素に見える形で出す。
+/// 見出しを付けた読み取り専用の欄と、その値をコピーする `copy_button`。欄に name を付けない（送信にも
+/// 入力履歴にも含めないため）。ボタンは欄の直後の兄弟に、囲みはボタンの親の親に置き、完了と
+/// クリップボードに書けないときの案内は囲みの直下の `copy_status` で伝える。
 pub fn copyable_field(
   language: Language,
   caption: String,
   value: String,
 ) -> Element(msg) {
-  let copied = i18n.text(language, i18n.Copied)
   html.div([attribute.class("fieldset group")], [
     html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
-    html.div([attribute.class("join w-full")], [
+    html.div([attribute.class("flex items-center gap-1")], [
       html.input([
         attribute.type_("text"),
         attribute.readonly(True),
         attribute.default_value(value),
         attribute.aria_label(caption),
         attribute.class(
-          "input join-item w-full min-w-0 font-mono text-xs border-base-content/60",
+          "input w-full min-w-0 font-mono text-xs border-base-content/60",
         ),
       ]),
-      html.button(
-        [
-          attribute.type_("button"),
-          attribute.data("action", "copy"),
-          attribute.class(
-            "btn join-item group-data-copied:btn-success focus-visible:outline-base-content",
-          ),
-        ],
-        [
-          html.span([attribute.class("grid")], [
-            html.span(
-              [
-                attribute.class(
-                  "col-start-1 row-start-1 group-data-copied:opacity-0",
-                ),
-              ],
-              [html.text(i18n.text(language, i18n.Copy))],
-            ),
-            html.span(
-              [
-                attribute.aria_hidden(True),
-                attribute.class(
-                  "invisible col-start-1 row-start-1 group-data-copied:visible",
-                ),
-              ],
-              [html.text(copied)],
-            ),
-          ]),
-        ],
-      ),
+      copy_button(i18n.text(language, i18n.Copy)),
     ]),
-    html.span(
-      [
-        attribute.role("status"),
-        attribute.class("sr-only group-data-selected:not-sr-only"),
-      ],
-      [
-        html.span([attribute.class("hidden group-data-copied:inline")], [
-          html.text(copied),
-        ]),
-        html.span(
-          [attribute.class("hidden group-data-selected:inline text-sm")],
-          [html.text(i18n.text(language, i18n.SelectedPressCtrlC))],
-        ),
-      ],
-    ),
+    copy_status(language),
   ])
 }
 
-/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。
+/// コピーのボタン。語は `aria-label` と `title` に置き、アイコンだけを見せる。`data-action` で
+/// `priv/static/admin.js` の `copy` の処理を指し、その処理が読む構造（欄はボタンの直前の兄弟、囲みは
+/// ボタンの親の親）に置いて使う。コピーできると、囲みの `data-copied` でアイコンがチェックに替わり
+/// success の色になる。
+pub fn copy_button(label: String) -> Element(msg) {
+  html.button(
+    [
+      attribute.type_("button"),
+      attribute.data("action", "copy"),
+      attribute.aria_label(label),
+      attribute.title(label),
+      attribute.class(
+        "btn btn-ghost btn-sm btn-square text-muted group-data-copied:text-success focus-visible:outline-base-content",
+      ),
+    ],
+    [
+      html.span([attribute.class("grid")], [
+        lucide_icon(
+          "col-start-1 row-start-1 size-4 group-data-copied:invisible",
+          copy_icon_paths,
+        ),
+        lucide_icon(
+          "invisible col-start-1 row-start-1 size-4 group-data-copied:visible",
+          copied_icon_paths,
+        ),
+      ]),
+    ],
+  )
+}
+
+/// コピーの囲みの直下に置く `role="status"` の案内。完了の語と、クリップボードに書けないときの手動の
+/// コピーの案内を、囲みの `data-copied` と `data-selected` で出し分ける。
+fn copy_status(language: Language) -> Element(msg) {
+  html.span(
+    [
+      attribute.role("status"),
+      attribute.class("sr-only group-data-selected:not-sr-only"),
+    ],
+    [
+      html.span([attribute.class("hidden group-data-copied:inline")], [
+        html.text(i18n.text(language, i18n.Copied)),
+      ]),
+      html.span([attribute.class("hidden group-data-selected:inline text-sm")], [
+        html.text(i18n.text(language, i18n.SelectedPressCtrlC)),
+      ]),
+    ],
+  )
+}
+
+/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。読み飛ばされて
+/// は困る注意（秘密鍵の表示、接続 QR コードの secret、secret が一致しない承認ページ）も `Warning` で出す。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(tone))], [
-    tone_icon(tone),
-    html.span([], content),
-  ])
+  alert_box([], tone, content)
 }
 
 /// フォームの上に出す理由の囲み。`role="alert"` で伝え、先頭のトーンのアイコンと薄い塗りで
 /// `tone` を伝える。
 pub fn reason_alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.role("alert"), attribute.class(alert_class(tone))], [
+  alert_box([attribute.role("alert")], tone, content)
+}
+
+/// `alert` と `reason_alert` が共有する囲みの組み立て。先頭にトーンのアイコンを置き、中身を `span` に
+/// 包む。`attributes` は囲みの要素に足す。
+fn alert_box(
+  attributes: List(Attribute(msg)),
+  tone: Tone,
+  content: List(Element(msg)),
+) -> Element(msg) {
+  html.div([attribute.class(alert_class(tone)), ..attributes], [
     tone_icon(tone),
     html.span([], content),
   ])
+}
+
+/// 見出しや一覧を中に持つ、`tone` の色の薄い塗りの囲み（`alert alert-soft`）。`alert` と違ってアイコンを
+/// 足さず、中身を縦に積んで幅いっぱいに広げる。`id` はページ内のリンク先である。
+pub fn alert_panel(
+  id: String,
+  tone: Tone,
+  content: List(Element(msg)),
+) -> Element(msg) {
+  let class = case tone {
+    Neutral ->
+      "alert alert-soft flex flex-col items-stretch gap-4 text-base-content"
+    Success ->
+      "alert alert-soft alert-success flex flex-col items-stretch gap-4 text-base-content"
+    Warning ->
+      "alert alert-soft alert-warning flex flex-col items-stretch gap-4 text-base-content"
+    Failure ->
+      "alert alert-soft alert-error flex flex-col items-stretch gap-4 text-base-content"
+    Info ->
+      "alert alert-soft alert-info flex flex-col items-stretch gap-4 text-base-content"
+  }
+  html.section([attribute.id(id), attribute.class(class)], content)
 }
 
 /// フォームの上に出す失敗の理由。無ければ何も出さない。`lead` は、英語のまま届いた理由の
@@ -1239,15 +1341,6 @@ pub fn untranslated(text: String) -> Element(msg) {
   html.span([attribute.lang("en")], [html.text(text)])
 }
 
-/// 読み飛ばされては困る注意（秘密鍵の表示と、secret が一致しない承認ページ）。先頭に警告の
-/// アイコンを置く。
-pub fn warning(content: List(Element(msg))) -> Element(msg) {
-  html.div([attribute.class(alert_class(Warning))], [
-    tone_icon(Warning),
-    html.p([], content),
-  ])
-}
-
 /// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に
 /// する。
 pub fn emphasized(
@@ -1274,8 +1367,7 @@ fn alert_class(tone: Tone) -> String {
 }
 
 /// トーンごとのアイコン。`Neutral` と `Info` は情報、ほかはトーンの色（`text-success` など）を
-/// 付けた丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning` と、`status_chip` の
-/// `ToneChip` が共有する。
+/// 付けた丸のチェック・三角・丸の×。`alert_box`（`alert` と `reason_alert`）と状態のチップが共有する。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
     Neutral -> lucide_icon("size-4", info_icon_paths)
@@ -1337,13 +1429,6 @@ fn chip_icon(chip: Chip) -> Element(msg) {
   }
 }
 
-/// 件数のピル。
-pub fn count_pill(count: Int) -> Element(msg) {
-  html.span([attribute.class("badge badge-ghost badge-sm tabular-nums")], [
-    html.text(int.to_string(count)),
-  ])
-}
-
 /// 折りたたみの中に出す整形済みのテキスト。長い 16 進と JSON を横スクロールなしで折り返す。
 pub fn preformatted(text: String) -> Element(msg) {
   html.pre(
@@ -1396,16 +1481,13 @@ pub fn shorten(value: String) -> String {
   }
 }
 
-/// 省略した識別子。`shorten` した表示（`title` に全文）、コピー用の読み取り専用の全文の
-/// `input`、コピーボタンを並べ、`copyable_field` と同じ `role="status"` の案内を添える。
-/// ボタンは `priv/static/admin.js` の `copy` の処理を指し、その処理が読む構造
-/// （欄はボタンの直前の兄弟、囲みはボタンの親の親）に合わせている。
+/// 省略した識別子。`shorten` した表示（`title` に全文）、コピー用の読み取り専用の全文の `input`、
+/// `copy_button` を並べ、`copy_status` の案内を添える。欄はボタンの直前の兄弟、囲みはボタンの親の親に置く。
 pub fn truncated_id(
   language: Language,
   value: String,
   copy_label: String,
 ) -> Element(msg) {
-  let copied = i18n.text(language, i18n.Copied)
   html.div([attribute.class("group")], [
     html.div([attribute.class("flex items-center gap-1")], [
       html.span([attribute.class("font-mono text-xs"), attribute.title(value)], [
@@ -1417,33 +1499,9 @@ pub fn truncated_id(
         attribute.default_value(value),
         attribute.class("sr-only"),
       ]),
-      html.button(
-        [
-          attribute.type_("button"),
-          attribute.data("action", "copy"),
-          attribute.aria_label(copy_label),
-          attribute.class(
-            "btn btn-ghost btn-sm group-data-copied:btn-success focus-visible:outline-base-content",
-          ),
-        ],
-        [copy_icon()],
-      ),
+      copy_button(copy_label),
     ]),
-    html.span(
-      [
-        attribute.role("status"),
-        attribute.class("sr-only group-data-selected:not-sr-only"),
-      ],
-      [
-        html.span([attribute.class("hidden group-data-copied:inline")], [
-          html.text(copied),
-        ]),
-        html.span(
-          [attribute.class("hidden group-data-selected:inline text-sm")],
-          [html.text(i18n.text(language, i18n.SelectedPressCtrlC))],
-        ),
-      ],
-    ),
+    copy_status(language),
   ])
 }
 
@@ -1506,10 +1564,9 @@ fn brand_link(language: Language) -> Element(msg) {
       html.span([attribute.class("grid gap-1")], [
         wordmark_svg(),
         html.span([attribute.class("sr-only")], [html.text("Nostr-no-Su")]),
-        html.span(
-          [attribute.class("text-xs tracking-widest text-base-content/70")],
-          [html.text(i18n.text(language, i18n.LogoSubtitle))],
-        ),
+        html.span([attribute.class("text-xs tracking-widest text-muted")], [
+          html.text(i18n.text(language, i18n.LogoSubtitle)),
+        ]),
       ]),
     ],
   )
@@ -1670,13 +1727,14 @@ pub fn x_circle_icon() -> Element(msg) {
   lucide_icon("size-4", x_circle_icon_paths)
 }
 
-/// コピーボタンのアイコン（Lucide の copy）。
-pub fn copy_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
-    "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2",
-  ])
-}
+/// コピーのアイコンのストローク（Lucide の copy）。
+const copy_icon_paths = [
+  "M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
+  "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2",
+]
+
+/// コピーの完了のアイコンのストローク（Lucide の check）。
+const copied_icon_paths = ["M20 6 9 17l-5-5"]
 
 /// 追加のボタンのアイコン（Lucide の plus）。
 pub fn plus_icon() -> Element(msg) {
@@ -1748,6 +1806,14 @@ const clock_icon_paths = [
 /// セッションの節のアイコン（Lucide の clock）。
 pub fn clock_icon() -> Element(msg) {
   lucide_icon("size-4", clock_icon_paths)
+}
+
+/// 承認待ちの接続の節のアイコン（Lucide の door-open）。
+pub fn door_open_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M13 4h3a2 2 0 0 1 2 2v14", "M2 20h3", "M13 20h9", "M10 12v.01",
+    "M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z",
+  ])
 }
 
 /// プラグインの節のアイコン（Lucide の puzzle）。

@@ -267,7 +267,9 @@ pub fn copy_button_reads_the_value_from_the_page_test() {
     )
   assert string.contains(
     page,
-    "<div class=\"fieldset group\"><span class=\"fieldset-legend\">Private key (nsec)</span><div class=\"join w-full\"><input aria-label=\"Private key (nsec)\" class=\"input join-item w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\"nsec1first&quot;\"><button class=\"btn join-item group-data-copied:btn-success focus-visible:outline-base-content\" data-action=\"copy\" type=\"button\">",
+    "<div class=\"fieldset group\"><span class=\"fieldset-legend\">Private key (nsec)</span><div class=\"flex items-center gap-1\"><input aria-label=\"Private key (nsec)\" class=\"input w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\"nsec1first&quot;\">"
+      <> element.to_string(view.copy_button("Copy"))
+      <> "</div><span class=\"sr-only group-data-selected:not-sr-only\" role=\"status\">",
   )
   assert string.contains(
     page,
