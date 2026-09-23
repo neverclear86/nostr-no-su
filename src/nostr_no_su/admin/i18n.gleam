@@ -771,14 +771,14 @@ fn english(message: Message) -> String {
     LabelHint(max:) ->
       "Up to "
       <> int.to_string(max)
-      <> " characters. A combined emoji can count as several characters."
+      <> " characters (an emoji can count as several)."
     Register -> "Register"
     GenerateNewKey -> "Generate a new key"
     GenerateDescription ->
       "Generate a new private key on the server. It is shown for backup before it is registered."
     Generate -> "Generate"
     SkippedRowNote ->
-      "If registration reports \"account is already registered\" for an account that is not on the dashboard, a row encrypted with a different master key is left in the database; see docs/operations.md for how to remove it."
+      "If an account that is not on the dashboard is reported as already registered, see docs/operations.md."
     GeneratedKey -> "Generated key"
     BackUpNow -> "Back up this private key now."
     GeneratedKeyNotice ->
@@ -1067,14 +1067,12 @@ fn japanese(message: Message) -> String {
       "アカウントの秘密鍵（nsec）を貼り付けてください。秘密鍵は登録の直後に 1 回だけ表示し、その後は管理パスワードを入力し直したときにだけ表示します。ブラウザーがパスワードとして保存するよう勧めても、保存しないでください。"
     PrivateKeyNsec -> "秘密鍵（nsec）"
     Label -> "ラベル"
-    LabelHint(max:) ->
-      int.to_string(max) <> " 文字まで。組み合わせた絵文字は 1 つで数文字分になることがあります。"
+    LabelHint(max:) -> int.to_string(max) <> " 文字まで（絵文字は数文字分になることがあります）。"
     Register -> "登録する"
     GenerateNewKey -> "新しい秘密鍵を生成"
     GenerateDescription -> "サーバーで新しい秘密鍵を生成します。登録する前に、バックアップのために表示します。"
     Generate -> "生成する"
-    SkippedRowNote ->
-      "ダッシュボードに無いアカウントの登録で「このアカウントはすでに登録されています。」と表示される場合は、別のマスターキーで暗号化された行がデータベースに残っています。削除の方法は docs/operations.md を参照してください。"
+    SkippedRowNote -> "ダッシュボードに無いアカウントが登録済みと出るときは、docs/operations.md を参照してください。"
     GeneratedKey -> "生成した秘密鍵"
     BackUpNow -> "この秘密鍵を今すぐバックアップしてください。"
     GeneratedKeyNotice ->

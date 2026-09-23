@@ -1,6 +1,9 @@
 //// 管理 UI のアカウントのページ（登録画面、生成した鍵の確認、登録の完了、操作、
 //// 接続 QR コード、秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を
 //// `admin/view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
+//// 登録、生成、操作、読み込めない行の削除のフォームの中身（説明とフォーム）は、ページの枠を
+//// 持たない関数（`import_form`、`generate_form`、`account_action_form`、
+//// `unreadable_delete_form`）で作り、ページはそれをカードに入れる。
 ////
 //// 埋め込む値（ラベル、表示する理由、nsec）はテキストか属性値として lustre に渡し、
 //// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
@@ -21,9 +24,10 @@ import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/account
 
-/// アカウントの登録画面。nsec の入力による登録と、サーバー側での鍵の生成のフォーム。
-/// 失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
-/// 開き直す。`label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
+/// アカウントの登録画面。`import_form` と `generate_form` を見出し付きのカードに 1 つずつ
+/// 入れ、末尾に、ダッシュボードに無いアカウントが登録済みと出るときの案内を 1 行出す。失敗の
+/// 理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で開き直す。
+/// `label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
   theme: view.Theme,
@@ -49,20 +53,7 @@ pub fn new_account_page(
           None,
           [],
         ),
-        view.form_description(text(i18n.ImportDescription)),
-        view.secret_post_form(
-          view.segments_path(dashboard.import_account_segments),
-          [
-            view.labelled(
-              text(i18n.PrivateKeyNsec),
-              view.secret_input(dashboard.nsec_field, "new-password"),
-            ),
-            label_fieldset(language, label),
-          ],
-          text(i18n.Register),
-          view.PrimaryButton,
-          view.InForm,
-        ),
+        ..import_form(language, label)
       ]),
       view.card([
         view.section_heading(
@@ -72,19 +63,53 @@ pub fn new_account_page(
           None,
           [],
         ),
-        view.form_description(text(i18n.GenerateDescription)),
-        view.post_form(
-          view.segments_path(dashboard.generate_account_segments),
-          [],
-          text(i18n.Generate),
-          view.OutlineButton,
-          view.InForm,
-        ),
+        ..generate_form(language)
       ]),
       view.hint(text(i18n.SkippedRowNote)),
       view.back_link(language),
     ],
   )
+}
+
+/// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を
+/// 送る。nsec の欄の説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の
+/// `aria-describedby` から指す。`label` はラベルの欄に入れる値。
+pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.secret_post_form(
+      view.segments_path(dashboard.import_account_segments),
+      [
+        view.hinted_input(
+          language,
+          text(i18n.PrivateKeyNsec),
+          nsec_hint_id,
+          view.FoldedHint(text(i18n.ImportDescription)),
+          view.secret_input_attributes(dashboard.nsec_field, "new-password"),
+        ),
+        label_fieldset(language, label),
+      ],
+      text(i18n.Register),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、
+/// 送信のボタンは枠のボタンにする。
+pub fn generate_form(language: Language) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.GenerateDescription)),
+    view.post_form(
+      view.segments_path(dashboard.generate_account_segments),
+      [],
+      text(i18n.Generate),
+      view.OutlineButton,
+      view.InForm,
+    ),
+  ]
 }
 
 /// 生成した鍵の登録に失敗して確認ページを再描画する理由。
@@ -218,13 +243,11 @@ pub fn registered_page(
   )
 }
 
-/// アカウント 1 件への操作のページ。操作の説明と、操作を実行する 1 つのフォーム。
-/// ラベルの編集フォームの欄には、GET では一覧から得た保存済みのラベルを、入力の誤りか
-/// 409 で再描画するときは送られた値（`label`）を入れる。カードの上の `account_summary`
-/// は保存済みのラベルのままにする。送信のボタンの種類は操作ごとに決める（ラベルの保存は
-/// 主、secret の作り直しと秘密鍵の表示は warning の枠、削除は危険）。送信のボタンの文言は、
-/// 見出しとリンクの文言（`dashboard.account_action_title`）とは別に持つ。テーマか言語を
-/// 切り替えた後は、この操作のページを GET で開き直す。
+/// アカウント 1 件への操作のページ。対象のアカウント、入力の誤りか失敗の理由、
+/// `account_action_form` の説明とフォームを 1 枚のカードに並べる。カードの上の
+/// `account_summary` は保存済みのラベルのままにする。見出しの文言は
+/// `dashboard.account_action_title` から引く。テーマか言語を切り替えた後は、この操作の
+/// ページを GET で開き直す。
 pub fn account_action_page(
   language: Language,
   theme: view.Theme,
@@ -233,11 +256,42 @@ pub fn account_action_page(
   label: Option(String),
   error: Option(i18n.Reason),
 ) -> String {
+  let path = dashboard.account_action_path(row.signer, action)
+  view.page(
+    language,
+    theme,
+    dashboard.account_action_title(action),
+    view.Narrow,
+    view.SwitchReturningTo(path),
+    view.NoRefresh,
+    [
+      view.card([
+        account_summary(language, row),
+        view.error_message(language, action_lead(action), error),
+        ..account_action_form(language, row, action, label)
+      ]),
+      view.back_link(language),
+    ],
+  )
+}
+
+/// アカウント 1 件への操作の説明と、操作を実行する 1 つのフォーム（ページの枠を含まない）。
+/// ラベルの編集の欄には、`label` が `Some` ならその値（入力の誤りか 409 で再描画するときに
+/// 送られた値）を、`None` なら `row` の保存済みのラベルを入れる。送信のボタンの種類は操作
+/// ごとに決める（ラベルの保存は主、secret の作り直しと秘密鍵の表示は warning の枠、削除は
+/// 危険）。送信のボタンの文言は、見出しとリンクの文言（`dashboard.account_action_title`）
+/// とは別に持つ。削除の説明の警告は畳まずに出す。フォームを持たない `ShowConnectionQr` には
+/// 空を返す。
+pub fn account_action_form(
+  language: Language,
+  row: dashboard.AccountRow,
+  action: dashboard.AccountAction,
+  label: Option(String),
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let path = dashboard.account_action_path(row.signer, action)
-  let #(description, form) = case action {
-    dashboard.EditLabel -> #(
-      element.none(),
+  case action {
+    dashboard.EditLabel -> [
       view.post_form(
         path,
         [label_fieldset(language, option.unwrap(label, row.label))],
@@ -245,8 +299,8 @@ pub fn account_action_page(
         view.PrimaryButton,
         view.InForm,
       ),
-    )
-    dashboard.RotateSecret -> #(
+    ]
+    dashboard.RotateSecret -> [
       html.p([], [html.text(text(i18n.RotateSecretDescription))]),
       view.post_form(
         path,
@@ -255,10 +309,10 @@ pub fn account_action_page(
         view.WarningOutlineButton,
         view.InForm,
       ),
-    )
+    ]
     dashboard.DeleteAccount -> {
       let gap = i18n.sentence_gap(language)
-      #(
+      [
         html.p([], [
           html.text(text(i18n.DeleteDescription) <> gap),
           html.strong([], [html.text(text(i18n.DeleteWarning))]),
@@ -271,9 +325,9 @@ pub fn account_action_page(
           view.DangerButton,
           view.InForm,
         ),
-      )
+      ]
     }
-    dashboard.RevealPrivateKey -> #(
+    dashboard.RevealPrivateKey -> [
       html.p([], [html.text(text(i18n.ShowPrivateKeyDescription))]),
       view.post_form(
         path,
@@ -287,26 +341,9 @@ pub fn account_action_page(
         view.WarningOutlineButton,
         view.InForm,
       ),
-    )
-    dashboard.ShowConnectionQr -> #(element.none(), element.none())
+    ]
+    dashboard.ShowConnectionQr -> []
   }
-  view.page(
-    language,
-    theme,
-    dashboard.account_action_title(action),
-    view.Narrow,
-    view.SwitchReturningTo(path),
-    view.NoRefresh,
-    [
-      view.card([
-        account_summary(language, row),
-        view.error_message(language, action_lead(action), error),
-        description,
-        form,
-      ]),
-      view.back_link(language),
-    ],
-  )
 }
 
 /// 接続 URI をスマートフォンへ渡すための QR コードのページ。バンカーに使うリレーが無ければ
@@ -504,9 +541,7 @@ pub fn unreadable_delete_page(
   row: dashboard.SkippedRow,
   error: Option(i18n.Reason),
 ) -> String {
-  let text = i18n.text(language, _)
   let path = dashboard.account_action_path(row.pubkey, dashboard.DeleteAccount)
-  let gap = i18n.sentence_gap(language)
   view.page(
     language,
     theme,
@@ -518,27 +553,42 @@ pub fn unreadable_delete_page(
       view.card([
         unreadable_summary(language, row),
         view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
-        html.p([], [
-          html.text(text(i18n.DeleteUnreadableDescription) <> gap),
-          html.strong([], [html.text(text(i18n.DeleteUnreadableWarning))]),
-          html.text(
-            gap
-            <> text(i18n.DeleteUnreadableRecover)
-            <> gap
-            <> text(i18n.DeleteAlsoRemoves),
-          ),
-        ]),
-        view.post_form(
-          path,
-          [],
-          text(i18n.DeleteAccountSubmit),
-          view.DangerButton,
-          view.InForm,
-        ),
+        ..unreadable_delete_form(language, row)
       ]),
       view.back_link(language),
     ],
   )
+}
+
+/// 読み込みで飛ばされた行の削除の説明とフォーム（ページの枠を含まない）。説明は、行を消す
+/// こと、nsec を控えていなければ失うこと（強調して畳まずに出す）、以前のマスターキーに戻せば
+/// 控えられること、セッションと承認待ちも消えることの順に並べる。送信のボタンは危険の
+/// ボタンにする。
+pub fn unreadable_delete_form(
+  language: Language,
+  row: dashboard.SkippedRow,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let gap = i18n.sentence_gap(language)
+  [
+    html.p([], [
+      html.text(text(i18n.DeleteUnreadableDescription) <> gap),
+      html.strong([], [html.text(text(i18n.DeleteUnreadableWarning))]),
+      html.text(
+        gap
+        <> text(i18n.DeleteUnreadableRecover)
+        <> gap
+        <> text(i18n.DeleteAlsoRemoves),
+      ),
+    ]),
+    view.post_form(
+      dashboard.account_action_path(row.pubkey, dashboard.DeleteAccount),
+      [],
+      text(i18n.DeleteAccountSubmit),
+      view.DangerButton,
+      view.InForm,
+    ),
+  ]
 }
 
 /// 削除の対象の、読み込みで飛ばされた行（省略した npub と、飛ばした理由）。
@@ -616,6 +666,9 @@ fn account_summary(
 
 /// ラベルの補足の `id`。ラベルの欄は各ページに 1 つだけなので固定の値にする。
 const label_hint_id = "label-hint"
+
+/// nsec の欄の補足の `id`。nsec の欄は登録のフォームに 1 つだけなので固定の値にする。
+const nsec_hint_id = "nsec-hint"
 
 /// ラベルの見出し、入力欄、上限の補足をまとめた囲み。3 つのフォーム（登録画面、生成した
 /// 鍵の確認、編集）のどれでも必須にする。

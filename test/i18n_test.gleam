@@ -97,8 +97,8 @@ pub fn messages_with_values_follow_each_language_test() {
     ),
     #(
       i18n.LabelHint(max: 100),
-      "Up to 100 characters. A combined emoji can count as several characters.",
-      "100 文字まで。組み合わせた絵文字は 1 つで数文字分になることがあります。",
+      "Up to 100 characters (an emoji can count as several).",
+      "100 文字まで（絵文字は数文字分になることがあります）。",
     ),
     #(i18n.Dropped(3), "(dropped 3)", "（破棄 3 件）"),
     #(
