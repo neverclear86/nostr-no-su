@@ -1,6 +1,6 @@
 # event_logger
 
-監視で受信したイベントを Postgres の `events` テーブルへ保存する外部プラグイン。NIP-01 の全フィールド（`tags` は jsonb）と取り込み時刻を 1 行として残し、同じイベントを複数のリレーから受け取っても 1 行だけ保存する。
+監視で受信したイベントを Postgres の `event_logger_events` テーブルへ保存する外部プラグイン。NIP-01 の全フィールド（`tags` は jsonb）と取り込み時刻を 1 行として残し、同じイベントを複数のリレーから受け取っても 1 行だけ保存する。
 
 `examples/plugins/` の 2 つが仕様の例示なのに対し、こちらは**第一級の同梱プラグイン**である。状態（保存アクター）を持ち、独自の依存（pog / pgo）を同梱し、独自の設定（`PLUGIN_EVENT_LOGGER_DATABASE_URL`）を受け取る。プラグイン API v1 が実用的なプラグインに足りることの実証でもある。
 
@@ -89,12 +89,12 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 ## スキーマの版
 
-`events` とインデックス（版 1）、監視対象の `monitored_accounts`（版 2）、タイムラインが読む `events_received_at` のインデックス（版 3）は版つきの移行で作り、適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
+`events` とインデックス（版 1）、監視対象の `monitored_accounts`（版 2）、タイムラインが読む `events_received_at` のインデックス（版 3）は版つきの移行で作り、版 4 でテーブルとインデックスの名前にプラグイン名の接頭辞を付けて `event_logger_events`、`event_logger_monitored_accounts`、`event_logger_events_received_at` などに改める（`docs/plugin-api.md` 第 5.3 節）。適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
 
 記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある（取り方と戻し方は [バックアップと復旧](../../docs/operations.md) にある）。
 
 ```
-[event_logger] database schema version 4 is newer than this plugin supports (up to version 3); stopping the store
+[event_logger] database schema version 5 is newer than this plugin supports (up to version 4); stopping the store
 ```
 
 ## 開発
@@ -146,7 +146,7 @@ docker compose logs nostr-no-su | grep -e '\[event_logger\]' -e '\[plugin event_
 
 ```sh
 docker compose exec postgres psql -U nostr -d nostr_no_su \
-  -c "select id, kind, tags->0->>0 from events order by received_at desc limit 3"
+  -c "select id, kind, tags->0->>0 from event_logger_events order by received_at desc limit 3"
 ```
 
 DB を止めると保存だけが止まり、監視は続く。復帰すると捨てた件数がまとめて報告される。

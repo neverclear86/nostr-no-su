@@ -247,7 +247,7 @@ exec 3>&-
 docker pause nns-verify-postgres-1     # 接続を切らずに止める
 docker unpause nns-verify-postgres-1
 ./dc.sh exec -T postgres pg_dump -U nostr -d nostr_no_su > "$V/pgdump.sql"
-./dc.sh exec -T postgres psql -U nostr -d nostr_no_su -c 'select count(*), count(distinct id) from events'
+./dc.sh exec -T postgres psql -U nostr -d nostr_no_su -c 'select count(*), count(distinct id) from event_logger_events'
 ```
 
 ## 秘密の grep

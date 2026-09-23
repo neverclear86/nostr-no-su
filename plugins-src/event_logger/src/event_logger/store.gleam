@@ -1,4 +1,4 @@
-//// 受信したイベントを Postgres の `events` テーブルへ保存するアクター。
+//// 受信したイベントを Postgres の `event_logger_events` テーブルへ保存するアクター。
 ////
 //// プラグインのイベント処理関数はイベントごとの使い捨てプロセスで動くため、
 //// そこからは DB を触らず、このアクターへ `Store` を送るだけにする。使い捨て
@@ -65,8 +65,9 @@ pub const recent_limit = 20
 /// 描けるようにする。
 const recent_timeout_ms = 2000
 
-/// イベントを保存するテーブル。`received_at` は取り込んだ時刻で、イベント自身の
-/// `created_at`（リレーが配送する Unix 秒）とは別に持つ。
+/// 版 1 でイベントを保存するテーブルを `events` の名前で作る。`received_at` は取り込んだ
+/// 時刻で、イベント自身の `created_at`（リレーが配送する Unix 秒）とは別に持つ。名前は
+/// 版 4 の `prefix_table_names` で `event_logger_events` に変わる。
 pub const create_events_table = "CREATE TABLE IF NOT EXISTS events (
   id text PRIMARY KEY,
   pubkey text NOT NULL,
@@ -88,7 +89,9 @@ pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events 
 /// 向きにする。
 pub const create_received_at_index = "CREATE INDEX IF NOT EXISTS events_received_at ON events (received_at DESC, id DESC)"
 
-/// 保存の対象とするアカウント。行が 1 件も無ければ絞らず、全アカウントを保存する。
+/// 版 2 で保存の対象とするアカウントのテーブルを `monitored_accounts` の名前で作る。行が
+/// 1 件も無ければ絞らず、全アカウントを保存する。名前は版 4 の `prefix_table_names` で
+/// `event_logger_monitored_accounts` に変わる。
 pub const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
   pubkey text PRIMARY KEY
 )"
@@ -102,9 +105,14 @@ pub type Migration {
 /// このプラグインのスキーマの移行。版は 1 から欠番なく昇順に並べ、足すときは末尾に
 /// 置く。
 ///
-/// 移行の文は何度実行してもよい形（`IF NOT EXISTS` など）で書く。途中で失敗した
-/// 移行は版が記録されないので、次の読み込みで頭から実行し直される。`IF NOT EXISTS` で
-/// 書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を見直す。
+/// 移行の文は何度実行してもよい形（作る文は `IF NOT EXISTS`、改名する文は `IF EXISTS`）で
+/// 書く。途中で失敗した移行は版が記録されないので、次の読み込みで頭から実行し直される。
+/// どちらでも書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を
+/// 見直す。
+///
+/// 適用済みの版の文は書き換えない。版 1〜3 は接頭辞の無い名前（`events`、
+/// `monitored_accounts`）で作り、版 4 で改名するので、新しい DB も版 3 までの DB も同じ
+/// 順に同じ名前へ進む。
 pub const migrations = [
   Migration(
     version: 1,
@@ -112,6 +120,21 @@ pub const migrations = [
   ),
   Migration(version: 2, statements: [create_monitored_accounts_table]),
   Migration(version: 3, statements: [create_received_at_index]),
+  Migration(version: 4, statements: prefix_table_names),
+]
+
+/// 版 4 の移行。版 1〜3 が作ったテーブルとインデックス（主キーを含む）の名前に、プラグイン
+/// 名の `event_logger_` を接頭辞として付ける（`docs/plugin-api.md` 第 5.3 節）。主キーの
+/// 制約の名前はインデックスの改名に追随する。どの文も `IF EXISTS` 付きで、改名済みの
+/// 名前には何もしないので、途中で失敗した移行を頭から実行し直してよい。
+const prefix_table_names = [
+  "ALTER TABLE IF EXISTS events RENAME TO event_logger_events",
+  "ALTER INDEX IF EXISTS events_pkey RENAME TO event_logger_events_pkey",
+  "ALTER INDEX IF EXISTS events_pubkey_created_at RENAME TO event_logger_events_pubkey_created_at",
+  "ALTER INDEX IF EXISTS events_kind RENAME TO event_logger_events_kind",
+  "ALTER INDEX IF EXISTS events_received_at RENAME TO event_logger_events_received_at",
+  "ALTER TABLE IF EXISTS monitored_accounts RENAME TO event_logger_monitored_accounts",
+  "ALTER INDEX IF EXISTS monitored_accounts_pkey RENAME TO event_logger_monitored_accounts_pkey",
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -138,23 +161,23 @@ pub type SchemaError {
 
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
-pub const insert_sql = "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+pub const insert_sql = "INSERT INTO event_logger_events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
 
 /// 保存順の直近のイベント。`tags` は jsonb なので text にキャストして読む。
-pub const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM events ORDER BY received_at DESC, id DESC LIMIT $1"
+pub const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM event_logger_events ORDER BY received_at DESC, id DESC LIMIT $1"
 
 /// 保存の対象とするアカウントの読み込み。
-const select_monitored_sql = "SELECT pubkey FROM monitored_accounts"
+const select_monitored_sql = "SELECT pubkey FROM event_logger_monitored_accounts"
 
 /// 保存の対象とするアカウントの入れ替え（`replace_monitored` が使う 1 文目）。
-const delete_monitored_sql = "DELETE FROM monitored_accounts"
+const delete_monitored_sql = "DELETE FROM event_logger_monitored_accounts"
 
 /// 保存の対象とするアカウントの 1 件の追加（`replace_monitored` が使う 2 文目）。
-const insert_monitored_sql = "INSERT INTO monitored_accounts (pubkey) VALUES ($1)"
+const insert_monitored_sql = "INSERT INTO event_logger_monitored_accounts (pubkey) VALUES ($1)"
 
-/// `events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
+/// `event_logger_events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
 /// テストできる。
 pub type Row {
   Row(
@@ -174,7 +197,7 @@ pub type Monitored {
   OnlyPubkeys(pubkeys: set.Set(String))
 }
 
-/// `monitored_accounts` の行から `Monitored` を作る。行が無ければ `AllAccounts`。
+/// `event_logger_monitored_accounts` の行から `Monitored` を作る。行が無ければ `AllAccounts`。
 pub fn monitored_from_rows(rows: List(String)) -> Monitored {
   case rows {
     [] -> AllAccounts
@@ -523,10 +546,19 @@ pub fn pending_migrations(
   }
 }
 
-/// スキーマを `migrations` の最新の版にする。トランザクションは使わない
-/// （`pog.transaction` は 5 秒で打ち切られるため）。記録された版がこのプラグインより
-/// 新しければ `SchemaTooNew`。
+/// スキーマを `migrations` の最新の版にする（`apply_migrations` に `migrations` を渡す）。
 pub fn ensure_schema(db: pog.Connection) -> Result(Nil, SchemaError) {
+  apply_migrations(db, migrations)
+}
+
+/// 版の記録のテーブルを用意し、記録された版より新しい移行を `migrations` の並びの順に適用
+/// して、移行ごとに版を記録する。トランザクションは使わない（`pog.transaction` は 5 秒で
+/// 打ち切られるため）。記録された版が `migrations` の最新の版より新しければ
+/// `SchemaTooNew`。テストは `migrations` の先頭の一部を渡して古い版の DB を作る。
+pub fn apply_migrations(
+  db: pog.Connection,
+  migrations: List(Migration),
+) -> Result(Nil, SchemaError) {
   use _created <- result.try(run_schema_query(
     db,
     pog.query(create_version_table),

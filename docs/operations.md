@@ -26,9 +26,9 @@
 | `plugin_resume` | プラグインごとの再開点（プラグイン名ごとの `since`） | 失うとそのプラグインの再開点が無い状態に戻り、復帰時の取り直しの購読も定義されない |
 | `relays` | 登録したリレーの URL と用途（監視・バンカー） | 失うと `bunker://` URI の `relay=` が変わり、下の「復旧後の確認」の 2 が一致しなくなる |
 | `schema_version` | 本体の移行の版 | データの表（`bunker_accounts`、`monitor_resume`、`bunker_sessions`、`bunker_pending`、`relays`、`plugin_resume`）と対で戻す必要がある。片方だけ戻すと版とデータが食い違う |
-| `events` | `event_logger` が保存したイベント（docker イメージに同梱されているので、compose の既定の構成では常に存在する） | プラグインが保存した履歴が失われる |
-| `monitored_accounts` | `event_logger` が保存の対象とするアカウント（行が 0 件なら全アカウントが対象） | 失うと保存の対象が全アカウントに戻る |
-| `event_logger_schema_version` | `event_logger` の移行の版 | `events`・`monitored_accounts` と対で戻す必要がある |
+| `event_logger_events` | `event_logger` が保存したイベント（docker イメージに同梱されているので、compose の既定の構成では常に存在する） | プラグインが保存した履歴が失われる |
+| `event_logger_monitored_accounts` | `event_logger` が保存の対象とするアカウント（行が 0 件なら全アカウントが対象） | 失うと保存の対象が全アカウントに戻る |
+| `event_logger_schema_version` | `event_logger` の移行の版 | `event_logger_events`・`event_logger_monitored_accounts` と対で戻す必要がある |
 | マスターキー | `.env` の `ACCOUNT_MASTER_KEY`、または `ACCOUNT_MASTER_KEY_FILE` が指すファイル（[設定](configuration.md) の「秘密をファイルで渡す」の例では `secrets/account_master_key`） | DB のどの表にも無い。失うと `bunker_accounts` の秘密鍵と secret を復号できず、`bunker_sessions` と `bunker_pending` の行の MAC も合わなくなる |
 
 ## マスターキーの保管
@@ -162,8 +162,8 @@ docker compose up -d
 | 起動直後 | 81 MiB | 35 MiB |
 | 5 アカウントとリレー 1 つ | 83 MiB | 36 MiB |
 
-動かしている構成の値は `docker stats --no-stream` で確かめられる。起動直後の Postgres のデータベースの大きさは約 8 MB である。`event_logger` が保存する `events` テーブルには保持期間が無く、保存の対象にしたアカウントのイベントが届くたびに増え続ける。`events` の大きさは次で確かめられる。
+動かしている構成の値は `docker stats --no-stream` で確かめられる。起動直後の Postgres のデータベースの大きさは約 8 MB である。`event_logger` が保存する `event_logger_events` テーブルには保持期間が無く、保存の対象にしたアカウントのイベントが届くたびに増え続ける。`event_logger_events` の大きさは次で確かめられる。
 
 ```sh
-docker compose exec -T postgres psql -U nostr -d nostr_no_su -c "SELECT pg_size_pretty(pg_total_relation_size('events'))"
+docker compose exec -T postgres psql -U nostr -d nostr_no_su -c "SELECT pg_size_pretty(pg_total_relation_size('event_logger_events'))"
 ```
