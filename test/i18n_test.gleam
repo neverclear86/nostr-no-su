@@ -116,6 +116,16 @@ pub fn messages_with_values_follow_each_language_test() {
     #(i18n.MinutesAgo(5), "5 min ago", "5 分前"),
     #(i18n.HoursAgo(5), "5 h ago", "5 時間前"),
     #(i18n.DaysAgo(5), "5 d ago", "5 日前"),
+    #(
+      i18n.NostrconnectTooManyRelays(limit: 5),
+      "the uri must carry at most 5 relays",
+      "URI のリレーが多すぎます。5 件までの URI を使ってください。",
+    ),
+    #(
+      i18n.NostrconnectRelayInternal(url: "ws://10.0.0.1"),
+      "the relay URL ws://10.0.0.1 in the uri points to an internal address",
+      "URI のリレー URL（ws://10.0.0.1）は内部のアドレスを指しているので使えません。",
+    ),
   ]
   use #(message, english, japanese) <- list.each(cases)
   assert i18n.text(i18n.English, message) == english
@@ -316,7 +326,10 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NotNostrconnectUri -> Some(i18n.NostrconnectClientInvalid)
     i18n.NostrconnectClientInvalid -> Some(i18n.NostrconnectQueryInvalid)
     i18n.NostrconnectQueryInvalid -> Some(i18n.NostrconnectRelayInvalid)
-    i18n.NostrconnectRelayInvalid -> Some(i18n.NostrconnectSecretMissing)
+    i18n.NostrconnectRelayInvalid -> Some(i18n.NostrconnectTooManyRelays(5))
+    i18n.NostrconnectTooManyRelays(_) ->
+      Some(i18n.NostrconnectRelayInternal("ws://10.0.0.1"))
+    i18n.NostrconnectRelayInternal(_) -> Some(i18n.NostrconnectSecretMissing)
     i18n.NostrconnectSecretMissing -> Some(i18n.Plugins)
     i18n.Plugins -> Some(i18n.PluginsDescription)
     i18n.PluginsDescription -> Some(i18n.PluginRunning)
@@ -423,12 +436,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 256 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 258 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 256
+  assert list.length(messages) == 258
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

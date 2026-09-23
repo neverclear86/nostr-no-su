@@ -386,6 +386,8 @@ pub type Message {
   NostrconnectClientInvalid
   NostrconnectQueryInvalid
   NostrconnectRelayInvalid
+  NostrconnectTooManyRelays(limit: Int)
+  NostrconnectRelayInternal(url: String)
   NostrconnectSecretMissing
   Plugins
   /// ダッシュボードのプラグインの節の見出しの下の 1 行の説明。
@@ -719,6 +721,10 @@ fn english(message: Message) -> String {
     NostrconnectQueryInvalid -> "the query of the uri could not be read"
     NostrconnectRelayInvalid ->
       "the uri must carry at least one relay with a ws:// or wss:// url"
+    NostrconnectTooManyRelays(limit) ->
+      "the uri must carry at most " <> int.to_string(limit) <> " relays"
+    NostrconnectRelayInternal(url) ->
+      "the relay URL " <> url <> " in the uri points to an internal address"
     NostrconnectSecretMissing -> "the uri must carry a secret"
     Plugins -> "Plugins"
     PluginsDescription ->
@@ -1031,6 +1037,10 @@ fn japanese(message: Message) -> String {
     NostrconnectClientInvalid -> "URI のクライアント公開鍵が 32 バイトの 16 進ではありません。"
     NostrconnectQueryInvalid -> "URI のクエリーを読み取れませんでした。"
     NostrconnectRelayInvalid -> "URI に ws:// か wss:// で始まるリレーが 1 件も含まれていません。"
+    NostrconnectTooManyRelays(limit) ->
+      "URI のリレーが多すぎます。" <> int.to_string(limit) <> " 件までの URI を使ってください。"
+    NostrconnectRelayInternal(url) ->
+      "URI のリレー URL（" <> url <> "）は内部のアドレスを指しているので使えません。"
     NostrconnectSecretMissing -> "URI に secret が含まれていません。"
     Plugins -> "プラグイン"
     PluginsDescription -> "登録したアカウントのイベントを受け取って処理します。"

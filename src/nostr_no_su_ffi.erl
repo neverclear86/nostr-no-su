@@ -35,6 +35,7 @@
     pool_transaction/3,
     execute_catching/2,
     is_ip_address/1,
+    parse_ip_address/1,
     qr_dark_modules/1
 ]).
 
@@ -445,9 +446,16 @@ read_file(Path) ->
 %% Address が IPv4 か IPv6 のアドレスとして読めるか。glisten の bind は読めない
 %% 値で panic するので、設定の読み込みで同じ規則で弾くために使う。
 is_ip_address(Address) ->
+    element(1, parse_ip_address(Address)) =:= ok.
+
+%% Address を IPv4 か IPv6 のアドレスとして読み、Gleam の nostrconnect.IpAddress の
+%% 形（{ipv4, …} / {ipv6, …}）で返す。inet:parse_address は 127.1 のような省略形も
+%% 読む。読めなければ {error, nil}。
+parse_ip_address(Address) ->
     case inet:parse_address(unicode:characters_to_list(Address)) of
-        {ok, _} -> true;
-        {error, _} -> false
+        {ok, {A, B, C, D}} -> {ok, {ipv4, A, B, C, D}};
+        {ok, {A, B, C, D, E, F, G, H}} -> {ok, {ipv6, A, B, C, D, E, F, G, H}};
+        {error, _} -> {error, nil}
     end.
 
 %% 相対パスを絶対パスにする。プラグインディレクトリーを最初に 1 度だけ正規化し、

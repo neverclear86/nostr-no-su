@@ -20,6 +20,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/relay_list
 import nostr_no_su/task
 import nostr_no_su/time
@@ -1317,6 +1318,38 @@ pub fn connect_client_rejects_an_unknown_signer_test() {
   assert string.contains(
     simulate.read_body(response),
     i18n.text(i18n.English, i18n.SigningAccountNotFound),
+  )
+  assert process.receive(reports, 100) == Error(Nil)
+}
+
+/// `relay` が上限を 1 件超える URI と、内部のアドレスのリレーを持つ URI の POST は
+/// どちらも 400 で、理由をフォームに出し、Context の `connect_client` を呼ばない。
+pub fn connect_client_rejects_relays_it_must_not_connect_to_test() {
+  let reports = process.new_subject()
+  let too_many =
+    "nostrconnect://"
+    <> connect_client_pubkey
+    <> "?"
+    <> string.repeat("relay=wss://relay.example&", nostrconnect.max_relays + 1)
+    <> "secret=abcdef"
+  let internal =
+    "nostrconnect://"
+    <> connect_client_pubkey
+    <> "?relay=ws://postgres:5432&secret=abcdef"
+  let cases = [
+    #(too_many, i18n.NostrconnectTooManyRelays(limit: nostrconnect.max_relays)),
+    #(internal, i18n.NostrconnectRelayInternal(url: "ws://postgres:5432")),
+  ]
+  use #(uri, message) <- list.each(cases)
+  let response =
+    post_form(reporting_context(reports), "/sessions/connect", [
+      #("uri", uri),
+      #("signer", signer),
+    ])
+  assert response.status == 400
+  assert string.contains(
+    simulate.read_body(response),
+    i18n.text(i18n.English, message),
   )
   assert process.receive(reports, 100) == Error(Nil)
 }
