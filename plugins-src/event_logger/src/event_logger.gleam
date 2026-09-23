@@ -8,12 +8,15 @@
 ////
 //// **接続先の設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの
 //// 接頭辞に一致する環境変数を集め、`database_url` をキーとする map として
-//// `plugin_children/1` と `plugin_page_content/2` に渡す。未設定・不正なら
+//// `plugin_children/1` と `plugin_page_content/3` に渡す。未設定・不正なら
 //// `{error, Reason}` を返し、このプラグインだけを読み込ませない。保存の対象と
 //// するアカウントは環境変数ではなく設定ページから決め、プラグイン自身の DB に
 //// 持つ。設定 map は `plugin_page_action/3` にも渡る。管理 UI のページと実行の
 //// 呼び出しに渡る map には、本体がこれに加えて予約キー `Accounts`（登録アカウント
 //// の一覧を JSON にした文字列）を入れる（`docs/plugin-api.md` 第 13.5 節）。
+//// ページの 2 つのエクスポート（`plugin_pages/2` と `plugin_page_content/3`）には、
+//// 最後の引数で管理 UI の表示の言語のコード（`en` か `ja` の binary）も渡り、
+//// ページの文言をその言語で返す（`event_logger/i18n`）。
 ////
 //// 押さえておくべき点が 4 つある。
 ////
@@ -31,11 +34,12 @@
 ////   `store_name/0` の固定の atom である。プール名だけは子仕様の MFA 引数にも
 ////   焼き込む。どちらの子が再起動しても宛先は変わらず、管理 UI のページも同じ
 ////   名前で生存を引ける（`docs/plugin-api.md` 第 5.3 節）。
-//// - **`plugin_page_content/2` は期限内に戻らなければならない。** `settings` は
+//// - **`plugin_page_content/3` は期限内に戻らなければならない。** `settings` は
 ////   DB へ問い合わせず、外から観測できる値（登録名の生存、未処理メッセージ数、
 ////   保存アクターが持つ監視対象の集合）だけを返す。`timeline` だけは直近 20 件を
 ////   DB から読み、問い合わせにページの期限より短い期限を付ける。
 
+import event_logger/i18n
 import event_logger/page
 import event_logger/store
 import gleam/dict
@@ -180,13 +184,13 @@ const pool_name_label = "event_logger_pool"
 
 /// 保存アクターの登録名。VM 全体で一意にするためプラグイン名を接頭辞にする
 /// （`docs/plugin-api.md` 第 5.3 節）。`handle_event/1` の宛先であり、
-/// `plugin_page_content/2` が生存を確かめる名前でもある。
+/// `plugin_page_content/3` が生存を確かめる名前でもある。
 pub fn store_name() -> Name(store.Msg) {
   fixed_name(store_name_label)
 }
 
 /// 接続プールの登録名。`plugin_children/1` が子仕様の MFA 引数に焼き込み、
-/// `plugin_page_content/2` が同じ名前で生存を確かめる。
+/// `plugin_page_content/3` が同じ名前で生存を確かめる。
 pub fn pool_name() -> Name(pog.Message) {
   fixed_name(pool_name_label)
 }
@@ -207,39 +211,55 @@ pub fn pending_messages(pid: Pid) -> Result(Int, Nil) {
   |> result.replace_error(Nil)
 }
 
-/// 管理 UI に供給するページの一覧。本体は読み込み時に 1 度だけ検証する。中身は
-/// `plugin_page_content/2` が返す。
-pub fn plugin_pages() -> Dynamic {
-  page.pages()
+/// 管理 UI に供給するページの一覧。本体は読み込み時に表示の言語ごとに 1 度ずつ
+/// 呼び、どの言語でもキーの並びが同じことを検証する。`language` は言語のコードの
+/// binary で、表示名をその言語で返す。設定 map は使わない。中身は
+/// `plugin_page_content/3` が返す。
+pub fn plugin_pages(_config: Dynamic, language: Dynamic) -> Dynamic {
+  page.pages(language_of(language))
 }
 
-/// 管理 UI のページの記述。本体は `/1` より `/2` を優先し、ページの表示のたびに
-/// これを呼んでページの `key` と、`database_url` と `Accounts` を含む設定 map
-/// （`plugin_children/1` と同じ形に `Accounts` を足したもの）を渡す。期限
-/// （既定 5 秒）を超えると 503 になるので、`settings` では DB へ問い合わせず、
+/// 本体が渡す言語のコードを `i18n.from_code` で言語にする。binary として
+/// 読めなければ英語にする。
+fn language_of(value: Dynamic) -> i18n.Language {
+  decode.run(value, decode.string)
+  |> result.unwrap("")
+  |> i18n.from_code
+}
+
+/// 管理 UI のページの記述。本体はページの表示のたびにこれを呼び、ページの `key`
+/// と、`database_url` と `Accounts` を含む設定 map（`plugin_children/1` と同じ形に
+/// `Accounts` を足したもの）と、表示の言語のコードを渡す。文言はその言語で組む。
+/// 期限（既定 5 秒）を超えると 503 になるので、`settings` では DB へ問い合わせず、
 /// 登録名の生存と未処理メッセージ数、保存アクターが持つ監視対象の集合だけを
 /// 観測する。`timeline` だけは `store.recent_events/2` で直近 20 件を読み、
 /// 問い合わせに 2 秒の期限を付ける。`{error, Reason}` を返す約束は無い
 /// （`docs/plugin-api.md` 第 13.4 節）。
-pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
+pub fn plugin_page_content(
+  key: Dynamic,
+  config: Dynamic,
+  language: Dynamic,
+) -> Dynamic {
   let page_key = decode.run(key, decode.string) |> result.unwrap("")
+  let language = language_of(language)
   let settings =
     decode.run(config, decode.dict(decode.string, decode.string))
     |> result.unwrap(dict.new())
   let database =
     dict.get(settings, "database_url")
-    |> result.map(page.masked_url(pool_name(), _))
+    |> result.map(page.masked_url(pool_name(), _, language))
   let #(events, monitored) = case page_key {
     "timeline" -> #(recent_events(), Error(Nil))
     _ -> #(Ok([]), monitored_state())
   }
   page.content(
     page_key,
+    language,
     database,
     pool_size,
     [
-      process_status("connection pool", pool_name_label, pool_name()),
-      process_status("store actor", store_name_label, store_name()),
+      process_status(i18n.ConnectionPool, pool_name_label, pool_name()),
+      process_status(i18n.StoreActor, store_name_label, store_name()),
     ],
     accounts_from_config(settings),
     monitored,
@@ -247,15 +267,16 @@ pub fn plugin_page_content(key: Dynamic, config: Dynamic) -> Dynamic {
   )
 }
 
-/// タイムラインに出す直近のイベント。プールが居ない・問い合わせが失敗したとき
-/// は、節の `alert` に出す英語の理由を返す。
-fn recent_events() -> Result(List(store.Row), String) {
+/// タイムラインに出す直近のイベント。プールが居ない・問い合わせが失敗したときは、
+/// 節の `alert` に出す文言（`i18n.PoolNotRunning`、`i18n.EventsUnreadable`）を返す。
+/// 問い合わせの失敗の詳細（`string.inspect` の文字列）は訳さずに文言へ埋め込む。
+fn recent_events() -> Result(List(store.Row), i18n.Message) {
   case process.named(pool_name()) {
-    Error(Nil) -> Error("connection pool is not running")
+    Error(Nil) -> Error(i18n.PoolNotRunning)
     Ok(_pid) ->
       store.recent_events(pog.named_connection(pool_name()), store.recent_limit)
       |> result.map_error(fn(error) {
-        "could not read stored events: " <> string.inspect(error)
+        i18n.EventsUnreadable(string.inspect(error))
       })
   }
 }
@@ -342,7 +363,7 @@ fn reload_monitored() -> Nil {
 
 /// 登録名 1 つの観測結果。生きていれば未処理メッセージ数も添える。
 fn process_status(
-  label: String,
+  label: i18n.Message,
   registered_name: String,
   name: Name(message),
 ) -> page.ProcessStatus {

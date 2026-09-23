@@ -1,5 +1,6 @@
 import envoy
 import event_logger
+import event_logger/i18n
 import event_logger/page
 import event_logger/store
 import gleam/dict
@@ -684,18 +685,20 @@ pub fn masked_url_hides_the_password_test() {
   assert page.masked_url(
       pool,
       "postgres://nostr:secret@db.example:5432/nostr_no_su",
+      i18n.English,
     )
     == "postgres://nostr@db.example:5432/nostr_no_su"
 }
 
-/// `plugin_pages/0` は `timeline`、`settings` の順に 2 件を供給する。
+/// 英語の `page.pages` は `timeline`、`settings` の順に 2 件を供給する。
 pub fn pages_declares_timeline_then_settings_test() {
   let decoder = {
     use key <- decode.field("key", decode.string)
     use title <- decode.field("title", decode.string)
     decode.success(#(key, title))
   }
-  let assert Ok(entries) = decode.run(page.pages(), decode.list(decoder))
+  let assert Ok(entries) =
+    decode.run(page.pages(i18n.English), decode.list(decoder))
   assert entries == [#("timeline", "Timeline"), #("settings", "Settings")]
 }
 
@@ -745,7 +748,16 @@ pub fn the_monitored_section_lists_every_account_test() {
   ]
   let monitored = Ok(store.OnlyPubkeys(set.from_list(["aa"])))
   let description =
-    page.content("settings", Error(Nil), 2, [], accounts, monitored, Ok([]))
+    page.content(
+      "settings",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      accounts,
+      monitored,
+      Ok([]),
+    )
   let assert [monitored_section, ..] = page_sections(description)
   let #(title, blocks) = section_shape(monitored_section)
   assert title == "Monitored accounts"
@@ -781,6 +793,7 @@ pub fn the_monitored_section_is_empty_without_accounts_test() {
   let description =
     page.content(
       "settings",
+      i18n.English,
       Error(Nil),
       2,
       [],
@@ -796,7 +809,16 @@ pub fn the_monitored_section_is_empty_without_accounts_test() {
 /// 保存アクターへの問い合わせが届かなければ `alert`（`failure`）1 つだけになる。
 pub fn the_monitored_section_reports_an_unreachable_store_test() {
   let description =
-    page.content("settings", Error(Nil), 2, [], [], Error(Nil), Ok([]))
+    page.content(
+      "settings",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([]),
+    )
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
   let assert [alert] = blocks
@@ -820,6 +842,7 @@ pub fn page_content_shows_the_masked_database_url_test() {
   let description =
     page.content(
       "settings",
+      i18n.English,
       Ok(masked),
       2,
       [],
@@ -848,12 +871,12 @@ pub fn page_content_shows_the_masked_database_url_test() {
 pub fn page_content_marks_missing_processes_test() {
   let processes = [
     page.ProcessStatus(
-      label: "connection pool",
+      label: i18n.ConnectionPool,
       registered_name: "event_logger_pool",
       mailbox: Ok(3),
     ),
     page.ProcessStatus(
-      label: "store actor",
+      label: i18n.StoreActor,
       registered_name: "event_logger_store",
       mailbox: Error(Nil),
     ),
@@ -861,6 +884,7 @@ pub fn page_content_marks_missing_processes_test() {
   let description =
     page.content(
       "settings",
+      i18n.English,
       Error(Nil),
       2,
       processes,
@@ -872,18 +896,9 @@ pub fn page_content_marks_missing_processes_test() {
   let #(title, blocks) = section_shape(runtime)
   assert title == "Runtime"
   let assert [table, alert] = blocks
-  let assert Ok(rows) =
-    decode.run(
-      table,
-      decode.field(
-        "rows",
-        decode.list(decode.list(decode.dynamic)),
-        decode.success,
-      ),
-    )
-  let assert [pool_row, store_row] = rows
-  assert row_status(pool_row) == #("success", "3")
-  assert row_status(store_row) == #("failure", "-")
+  let assert [pool_row, store_row] = table_rows(table)
+  assert row_status(pool_row) == #("running", "success", "3")
+  assert row_status(store_row) == #("not running", "failure", "-")
   let assert Ok(#(kind, tone)) =
     decode.run(alert, {
       use kind <- decode.field("type", decode.string)
@@ -897,7 +912,16 @@ pub fn page_content_marks_missing_processes_test() {
 /// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
 pub fn page_content_of_an_unknown_key_test() {
   let description =
-    page.content("nope", Error(Nil), 2, [], [], Ok(store.AllAccounts), Ok([]))
+    page.content(
+      "nope",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Ok(store.AllAccounts),
+      Ok([]),
+    )
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   let assert [alert] = blocks
@@ -938,6 +962,7 @@ pub fn the_timeline_lists_stored_events_test() {
   let description =
     page.content(
       "timeline",
+      i18n.English,
       Error(Nil),
       2,
       [],
@@ -950,7 +975,7 @@ pub fn the_timeline_lists_stored_events_test() {
   assert_event_section(second_section, second, "tags (0)", "content (2 bytes)")
 }
 
-/// 節 1 つが `event_section/1` の形（見出し・`pairs`・`details` 3 つ）を満たす
+/// 節 1 つが `event_section/2` の形（見出し・`pairs`・`details` 3 つ）を満たす
 /// ことを確かめる。
 fn assert_event_section(
   raw: Dynamic,
@@ -984,7 +1009,16 @@ fn details_summary(raw: Dynamic) -> String {
 /// 空にする。
 pub fn the_timeline_is_empty_without_events_test() {
   let description =
-    page.content("timeline", Error(Nil), 2, [], [], Error(Nil), Ok([]))
+    page.content(
+      "timeline",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([]),
+    )
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   assert blocks == []
@@ -995,12 +1029,13 @@ pub fn the_timeline_reports_a_failed_query_test() {
   let description =
     page.content(
       "timeline",
+      i18n.English,
       Error(Nil),
       2,
       [],
       [],
       Error(Nil),
-      Error("could not read stored events: timeout"),
+      Error(i18n.EventsUnreadable("timeout")),
     )
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
@@ -1031,7 +1066,16 @@ pub fn out_of_range_timestamps_fall_back_to_the_number_test() {
       sig: "sig1",
     )
   let description =
-    page.content("timeline", Error(Nil), 2, [], [], Error(Nil), Ok([row]))
+    page.content(
+      "timeline",
+      i18n.English,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([row]),
+    )
   let assert [only] = page_sections(description)
   let #(title, _blocks) = section_shape(only)
   assert title == "kind 1 · 10000000000000000"
@@ -1044,6 +1088,223 @@ pub fn the_received_at_index_is_created_test() {
     list.find(store.migrations, fn(migration) { migration.version == 3 })
   assert migration.statements == [store.create_received_at_index]
   assert string.contains(store.create_received_at_index, "events_received_at")
+}
+
+/// 言語のコードは `ja` だけが日本語で、`en` と知らないコードは英語になる。
+pub fn language_codes_fall_back_to_english_test() {
+  assert i18n.from_code("ja") == i18n.Japanese
+  assert i18n.from_code("en") == i18n.English
+  assert i18n.from_code("fr") == i18n.English
+}
+
+/// `plugin_pages/2` の表示名は言語のコードに従い、知らないコードでは英語になる。
+/// キーと並びは言語によらない。
+pub fn plugin_pages_follow_the_display_language_test() {
+  let decoder = {
+    use key <- decode.field("key", decode.string)
+    use title <- decode.field("title", decode.string)
+    decode.success(#(key, title))
+  }
+  let pages = fn(code) {
+    let assert Ok(entries) =
+      decode.run(
+        event_logger.plugin_pages(dynamic.nil(), dynamic.string(code)),
+        decode.list(decoder),
+      )
+    entries
+  }
+  assert pages("ja") == [#("timeline", "タイムライン"), #("settings", "設定")]
+  assert pages("en") == [#("timeline", "Timeline"), #("settings", "Settings")]
+  assert pages("fr") == pages("en")
+}
+
+/// `plugin_page_content/3` は第 3 引数の言語で文言を組む。テストの VM には
+/// プールも保存アクターも居ないので、タイムラインはプールの不在の `alert`、
+/// 設定の表は 2 行とも居ないプロセスになる。
+pub fn plugin_page_content_follows_the_display_language_test() {
+  let config =
+    dynamic.properties([
+      #(
+        dynamic.string("database_url"),
+        dynamic.string("postgres://nostr:secret@db.example:5432/nostr_no_su"),
+      ),
+    ])
+  let timeline = fn(code) {
+    let description =
+      event_logger.plugin_page_content(
+        dynamic.string("timeline"),
+        config,
+        dynamic.string(code),
+      )
+    let assert [only] = page_sections(description)
+    let #(title, blocks) = section_shape(only)
+    let assert [alert] = blocks
+    #(title, block_text(alert))
+  }
+  assert timeline("ja") == #("タイムライン", "接続プールが動いていません。")
+  assert timeline("en") == #("Timeline", "connection pool is not running")
+  let description =
+    event_logger.plugin_page_content(
+      dynamic.string("settings"),
+      config,
+      dynamic.string("ja"),
+    )
+  let assert [_monitored, _configuration, runtime] = page_sections(description)
+  let #(_title, blocks) = section_shape(runtime)
+  let assert [table, ..] = blocks
+  assert list.map(table_rows(table), first_cell_text) == ["接続プール", "保存アクター"]
+}
+
+/// 日本語の `settings` は、節の見出し、説明とボタン、設定の語と注記、表の見出しと
+/// バッジ、居ないプロセスの注意を日本語で出す。環境変数の名前は訳さない。
+pub fn the_settings_page_is_in_japanese_test() {
+  let accounts = [page.Account(pubkey: "aa", npub: "npub1aa", label: "Alice")]
+  let processes = [
+    page.ProcessStatus(
+      label: i18n.ConnectionPool,
+      registered_name: "event_logger_pool",
+      mailbox: Ok(0),
+    ),
+    page.ProcessStatus(
+      label: i18n.StoreActor,
+      registered_name: "event_logger_store",
+      mailbox: Error(Nil),
+    ),
+  ]
+  let description =
+    page.content(
+      "settings",
+      i18n.Japanese,
+      Error(Nil),
+      2,
+      processes,
+      accounts,
+      Ok(store.AllAccounts),
+      Ok([]),
+    )
+  let assert [monitored, configuration, runtime] = page_sections(description)
+  let #(monitored_title, monitored_blocks) = section_shape(monitored)
+  assert monitored_title == "保存するアカウント"
+  let assert [text, note, form] = monitored_blocks
+  assert block_text(text) == "チェックしたアカウントのイベントだけを保存します。"
+  assert block_text(note) == "すべてにチェックすると、あとで登録するアカウントも含めて全アカウントが対象になります。"
+  let assert Ok(submit) =
+    decode.run(form, decode.field("submit", decode.string, decode.success))
+  assert submit == "保存する"
+  let #(configuration_title, configuration_blocks) =
+    section_shape(configuration)
+  assert configuration_title == "接続先と上限"
+  let assert [pairs, configuration_note] = configuration_blocks
+  let assert Ok(items) =
+    decode.run(
+      pairs,
+      decode.field("items", decode.list(pair_item_decoder()), decode.success),
+    )
+  assert list.map(items, fn(item) { #(item.0, item.2) })
+    == [
+      #("PLUGIN_EVENT_LOGGER_DATABASE_URL", "未設定"),
+      #("接続数", "2"),
+      #("保存待ちの上限", int.to_string(store.default_max_queue_len)),
+    ]
+  assert block_text(configuration_note)
+    == "上の URL は、このプラグインがパスワードを取り除いて表示しています。接続先はこの環境変数だけで決まり、このページからは変えられません。このページで選べるのは、イベントを保存するアカウントだけです。"
+  let #(runtime_title, runtime_blocks) = section_shape(runtime)
+  assert runtime_title == "プロセス"
+  let assert [table, warning] = runtime_blocks
+  let assert Ok(headers) =
+    decode.run(
+      table,
+      decode.field("headers", decode.list(decode.string), decode.success),
+    )
+  assert headers == ["プロセス", "登録名", "状態", "未処理のメッセージ"]
+  assert list.map(table_rows(table), fn(row) { row_status(row).0 })
+    == ["動作中", "停止中"]
+  assert block_text(warning)
+    == "停止中のプロセスは、再起動の途中か、再起動を諦められた状態です。plugin-api.md の第 5.4 節を参照してください。"
+}
+
+/// 日本語の `alert` は、保存アクターの無応答、未知のページ、タイムラインの
+/// 読み込みの失敗のどれも日本語の文になる。読み込みの失敗の詳細は訳さない。
+pub fn the_alerts_are_in_japanese_test() {
+  let settings =
+    page.content(
+      "settings",
+      i18n.Japanese,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([]),
+    )
+  let assert [monitored, ..] = page_sections(settings)
+  let assert #(_title, [store_alert]) = section_shape(monitored)
+  assert block_text(store_alert) == "保存アクターが応答しないため、保存するアカウントを表示できません。"
+  let unknown =
+    page.content(
+      "nope",
+      i18n.Japanese,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Ok(store.AllAccounts),
+      Ok([]),
+    )
+  let assert [error_section] = page_sections(unknown)
+  let assert #("エラー", [unknown_alert]) = section_shape(error_section)
+  assert block_text(unknown_alert) == "このページはありません。"
+  let timeline =
+    page.content(
+      "timeline",
+      i18n.Japanese,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Error(i18n.EventsUnreadable("timeout")),
+    )
+  let assert [timeline_section] = page_sections(timeline)
+  let assert #("タイムライン", [timeline_alert]) = section_shape(timeline_section)
+  assert block_text(timeline_alert) == "保存済みのイベントを読めませんでした: timeout"
+}
+
+/// 日本語のタイムラインでも見出しと NIP-01 のフィールド名は訳さず、`details` の
+/// 見出しの件数とバイト数の書き方だけが日本語になる。
+pub fn the_timeline_details_are_in_japanese_test() {
+  let row =
+    store.Row(
+      id: "id1",
+      pubkey: "pub1",
+      created_at: 1_700_000_000,
+      kind: 1,
+      tags: "[[\"p\",\"abc\"]]",
+      content: "hello",
+      sig: "sig1",
+    )
+  let description =
+    page.content(
+      "timeline",
+      i18n.Japanese,
+      Error(Nil),
+      2,
+      [],
+      [],
+      Error(Nil),
+      Ok([row]),
+    )
+  let assert [only] = page_sections(description)
+  assert_event_section(only, row, "tags（1 件）", "content（5 バイト）")
+}
+
+/// postgres の URL として読めない値の代わりの文は、表示の言語の文になる。
+pub fn invalid_database_urls_are_reported_in_the_language_test() {
+  let pool = process.new_name("test_invalid_url_pool")
+  assert page.masked_url(pool, "not a url", i18n.Japanese)
+    == "PLUGIN_EVENT_LOGGER_DATABASE_URL を postgres の URL として読めません。"
+  assert page.masked_url(pool, "not a url", i18n.English)
+    == "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL"
 }
 
 /// 記述の `sections` を取り出す。
@@ -1075,16 +1336,45 @@ fn pair_item_decoder() -> decode.Decoder(#(String, String, String)) {
   decode.success(#(term, kind, text))
 }
 
-/// `Runtime` の表の 1 行から `Status` の `tone` と `Pending messages` の文字列を
-/// 取り出す。セルの並びは `Process` / `Registered name` / `Status` /
-/// `Pending messages`。
-fn row_status(row: List(Dynamic)) -> #(String, String) {
+/// `Runtime` の表の 1 行から `Status` のバッジの文字列と `tone`、
+/// `Pending messages` の文字列を取り出す。セルの並びは `Process` /
+/// `Registered name` / `Status` / `Pending messages`。
+fn row_status(row: List(Dynamic)) -> #(String, String, String) {
   let assert [_label, _registered_name, status, pending] = row
-  let assert Ok(tone) =
-    decode.run(status, decode.field("tone", decode.string, decode.success))
-  let assert Ok(pending_text) =
-    decode.run(pending, decode.field("text", decode.string, decode.success))
-  #(tone, pending_text)
+  let assert Ok(#(status_text, tone)) =
+    decode.run(status, {
+      use text <- decode.field("text", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(text, tone))
+    })
+  #(status_text, tone, block_text(pending))
+}
+
+/// `table` ブロックの `rows`。
+fn table_rows(table: Dynamic) -> List(List(Dynamic)) {
+  let assert Ok(rows) =
+    decode.run(
+      table,
+      decode.field(
+        "rows",
+        decode.list(decode.list(decode.dynamic)),
+        decode.success,
+      ),
+    )
+  rows
+}
+
+/// ブロックかインラインの `text`。
+fn block_text(raw: Dynamic) -> String {
+  let assert Ok(text) =
+    decode.run(raw, decode.field("text", decode.string, decode.success))
+  text
+}
+
+/// 表の 1 行の先頭のセルの文字列。
+fn first_cell_text(row: List(Dynamic)) -> String {
+  let assert [first, ..] = row
+  block_text(first)
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
