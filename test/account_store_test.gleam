@@ -693,17 +693,19 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
-/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。
+/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。スキーマの
+/// 作成と削除も `search_path` をそのスキーマにしたプールで行い、テストが同時に
+/// 持つ接続を 1 プールぶんにする（`search_path` は文の実行時に解決される）。
 fn with_schema(
   database_url: String,
   run: fn(Name(pog.Message), pog.Connection) -> Nil,
 ) -> Nil {
   let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
   let pool = postgres.start_pool(database_url, Some(schema))
-  run(pool, pog.named_connection(pool))
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+  let db = pog.named_connection(pool)
+  postgres.run_statement(db, "CREATE SCHEMA " <> schema)
+  run(pool, db)
+  postgres.run_statement(db, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// MAC の合わない行は読み込みに使われず `Stored.rejected` に分けられ、
