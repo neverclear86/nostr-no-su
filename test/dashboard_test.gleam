@@ -5,6 +5,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
@@ -151,14 +152,14 @@ pub fn states_are_shown_as_badges_test() {
     element.to_string(view.status_chip(view.DisabledChip, "disabled"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
     element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
-    "<dd><span>540s</span></dd>",
+    "<dd>9:00 (expires at <time datetime=\"2026-09-13T05:21:34Z\">05:21:34 UTC</time>)</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
   })
 }
 
-/// 日本語のダッシュボードでは、状態の語、件数、残り秒を日本語の形で出す。バッジの
+/// 日本語のダッシュボードでは、状態の語、件数、失効までを日本語の形で出す。バッジの
 /// クラスは英語と同じである。
 pub fn japanese_states_are_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, states())
@@ -173,7 +174,7 @@ pub fn japanese_states_are_translated_test() {
     element.to_string(view.status_chip(view.DisabledChip, "無効"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
     element.to_string(view.status_chip(view.UnansweredChip, "応答なし")),
-    "<dd><span>540 秒</span></dd>",
+    "<dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
@@ -206,7 +207,7 @@ pub fn secret_state_is_shown_as_a_badge_test() {
 }
 
 /// secret が一致しない承認待ちの承認ページにだけ警告が出て、提示が無い承認待ちの承認
-/// ページとダッシュボードの行には出ない。
+/// ページとダッシュボードのカードには出ない（カードには説明の文だけを出す）。
 pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   let assert Ok([not_offered, mismatched]) = secret_states().pending
 
@@ -242,7 +243,7 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   )
 }
 
-/// 要求された権限は、承認待ちの行と承認ページの両方でチップになる。空なら「権限の
+/// 要求された権限は、承認待ちのカードと承認ページの両方でチップになる。空なら「権限の
 /// 要求なし」のバッジ 1 つを出す。
 pub fn permissions_are_shown_as_chips_test() {
   let assert Ok([offered, not_requested]) = secret_states().pending
@@ -1322,17 +1323,102 @@ pub fn approval_page_refreshes_automatically_test() {
   )
 }
 
-/// 承認待ちの行と承認ページには「失効まで」の欄が出る。
+/// 承認待ちのカードと承認ページには「失効まで」の欄が出る。カードは残りの「分:秒」と失効の時刻を、承認ページは残りの秒数を出す。
 pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
     dashboard.render(i18n.English, view.System, states()),
-    "<dt class=\"text-muted\">Expires in</dt><dd><span>540s</span></dd>",
+    "<dt class=\"text-muted\">Expires in</dt><dd>9:00 (expires at <time datetime=\"2026-09-13T05:21:34Z\">05:21:34 UTC</time>)</dd>",
+  )
+  assert string.contains(
+    dashboard.render(i18n.Japanese, view.System, states()),
+    "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
   assert string.contains(
     dashboard.approval_page(i18n.Japanese, view.System, Ok([]), pending),
     "<dt class=\"text-muted\">失効まで</dt><dd><span>540 秒</span></dd>",
   )
+}
+
+/// secret が一致しないカードは、枠を warning の色にして説明の囲みを 1 つ置き、拒否を塗り、承認を
+/// warning の枠の「それでも承認する」にする。並びは一致するカードと同じ承認、拒否の順で、承認ページも
+/// 同じボタンを出す。
+pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
+  let assert Ok([not_offered, mismatched]) = secret_states().pending
+  let mismatched_forms =
+    "<form action=\"/approve/tok-2\" method=\"post\"><button class=\"btn btn-outline btn-warning btn-sm focus-visible:outline-base-content\" type=\"submit\">Approve anyway</button></form>"
+    <> "<form action=\"/deny/tok-2\" method=\"post\"><button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" type=\"submit\">Deny</button></form>"
+  let offered_forms =
+    "<form action=\"/approve/tok-1\" method=\"post\"><button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" type=\"submit\">Approve</button></form>"
+    <> "<form action=\"/deny/tok-1\" method=\"post\"><button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" type=\"submit\">Deny</button></form>"
+  let body = dashboard.render(i18n.English, view.System, secret_states())
+  assert string.contains(body, mismatched_forms)
+  assert string.contains(body, offered_forms)
+  assert list.length(string.split(body, "border-warning/55")) == 2
+  assert list.length(string.split(
+      body,
+      i18n.text(i18n.English, i18n.WrongSecretNotice),
+    ))
+    == 2
+
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, Ok([]), mismatched),
+    mismatched_forms,
+  )
+  assert string.contains(
+    dashboard.approval_page(i18n.English, view.System, Ok([]), not_offered),
+    offered_forms,
+  )
+}
+
+/// 承認待ちの帯は、見出しに説明を付け、ダッシュボードを自動で読み込み直すとき（1 件以上）だけ
+/// 更新の間隔を出す。一覧を得られないときは帯と説明だけを出し、0 件のときは帯も更新の間隔も出さない。
+pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
+  let band =
+    "<section class=\"flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6\" id=\"pending\">"
+  let description =
+    "Until you approve, this client cannot request signing or encryption."
+  let refresh = "Refreshes every 30 s"
+
+  let present = dashboard.render(i18n.English, view.System, states())
+  assert string.contains(present, band)
+  assert string.contains(present, description)
+  assert string.contains(present, refresh)
+
+  let unavailable =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
+    )
+  assert string.contains(unavailable, band)
+  assert string.contains(unavailable, description)
+  assert !string.contains(unavailable, refresh)
+
+  let empty =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), pending: Ok([])),
+    )
+  assert !string.contains(empty, band)
+  assert !string.contains(empty, refresh)
+}
+
+/// 残り時間の円は、600 を満たんとする弧を残りの秒の長さで描き、60 秒未満は弧と数字を warning の
+/// 色にする。残り時間は囲みの `aria-label` で読み上げる。
+pub fn pending_ring_follows_the_remaining_seconds_test() {
+  let body = dashboard.render(i18n.English, view.System, secret_states())
+  assert string.contains(
+    body,
+    "<circle class=\"fill-none stroke-6 stroke-primary\" cx=\"32\" cy=\"32\" pathLength=\"600\" r=\"28\" stroke-dasharray=\"540 600\" stroke-linecap=\"round\"></circle>",
+  )
+  assert string.contains(
+    body,
+    "<circle class=\"fill-none stroke-6 stroke-warning\" cx=\"32\" cy=\"32\" pathLength=\"600\" r=\"28\" stroke-dasharray=\"45 600\" stroke-linecap=\"round\"></circle>",
+  )
+  assert string.contains(body, "aria-label=\"Expires in 9:00\"")
+  assert string.contains(body, "text-warning\">0:45</span>")
 }
 
 /// 概要のタイルは、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
@@ -1407,8 +1493,8 @@ pub fn tiles_say_not_available_when_lists_are_missing_test() {
   assert list.length(string.split(unavailable, note)) == 4
 }
 
-/// 承認待ちの節は 1 件以上あるとき、または一覧を得られないときだけ描く。0 件のときは
-/// 節ごと出さない。
+/// 承認待ちの帯は 1 件以上あるとき、または一覧を得られないときだけ描く。0 件のときは
+/// 帯ごと出さない。
 pub fn empty_pending_section_is_not_rendered_test() {
   let empty =
     dashboard.render(
@@ -1432,7 +1518,7 @@ pub fn empty_pending_section_is_not_rendered_test() {
   assert string.contains(unavailable, "alert-soft alert-error")
 }
 
-/// 承認待ちの行のクライアントは省略した表示とコピーボタンで出る。
+/// 承認待ちのカードのクライアントは省略した表示とコピーボタンで出る。
 pub fn pending_row_shows_the_client_shortened_with_a_copy_button_test() {
   let long_client = "cccc3333cccc3333cccc3333cccc3333"
   let snapshot =
@@ -1452,6 +1538,35 @@ pub fn pending_row_shows_the_client_shortened_with_a_copy_button_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(body, view.shorten(long_client))
   assert string.contains(body, "data-action=\"copy\"")
+}
+
+/// 承認待ちのカードは、64 桁の 16 進のクライアントの公開鍵なら色付きの指紋を描き、指紋を
+/// 求められない値なら描かない。
+pub fn pending_card_draws_the_client_fingerprint_test() {
+  let client = string.repeat("0123456789abcdef", 4)
+  let assert Ok(mark) = fingerprint.from_pubkey(client)
+  let snapshot =
+    dashboard.Snapshot(
+      ..states(),
+      pending: Ok([
+        dashboard.PendingRow(
+          token: "tok",
+          signer: "abcd",
+          client:,
+          expires_in_seconds: 540,
+          secret_mismatch: False,
+          perms: "",
+        ),
+      ]),
+    )
+  assert string.contains(
+    dashboard.render(i18n.English, view.System, snapshot),
+    element.to_string(fingerprint.svg(mark, fingerprint.Colored, "size-6")),
+  )
+  assert !string.contains(
+    dashboard.render(i18n.English, view.System, states()),
+    "class=\"size-6 fp",
+  )
 }
 
 /// 署名者は、アカウント一覧にあればラベルと省略した npub、無ければ省略した 16 進で出る。

@@ -3,7 +3,8 @@
 //// 文言は `Message` の値で表し、`text` が表示の言語の文字列にする。言語ごとの関数
 //// （`english`、`japanese`）は、どれも `Message` のすべての値を網羅する `case` なので、
 //// どちらかの言語の訳が無いとビルドが通らない。値を埋め込む文言（残り秒、件数、ラベルの
-//// 上限）は値を持つ構築子にし、語順と記号を含めて言語ごとに文全体を返す。
+//// 上限）は値を持つ構築子にし、語順と記号を含めて言語ごとに文全体を返す。文の中に要素（`<time>`）を
+//// 挟む文言だけは、要素の前と後ろを別の構築子（`ExpiryBeforeTime`、`ExpiryAfterTime`）にする。
 ////
 //// 言語を足すときは、`Language` に構築子を、`languages` に値を足し、コンパイラーが示す
 //// `case`（`code`、`native_name`、`text`、`lead`、`sentence_gap`、`i18n_test` の
@@ -240,6 +241,8 @@ pub type Message {
   NoPluginsEnabledShort
   PluginsNotLoadedShort(count: Int)
   PendingConnections
+  PendingConnectionsDescription
+  RefreshesEverySeconds(seconds: Int)
   PendingSecretNotOffered
   PendingSecretMismatch
   NoPermissionsRequestedBadge
@@ -248,6 +251,8 @@ pub type Message {
   ExpiresIn
   ExpiresInSeconds(seconds: Int)
   UtcTimeOfDay(time: String)
+  ExpiryBeforeTime(remaining: String)
+  ExpiryAfterTime
   Permissions
   NoPermissionsRequested
   EditPermissions
@@ -279,6 +284,7 @@ pub type Message {
   DaysAgo(days: Int)
   Approve
   Deny
+  ApproveAnyway
   ApprovalExplanation
   Accounts
   Add
@@ -517,6 +523,10 @@ fn english(message: Message) -> String {
     NoPluginsEnabledShort -> "No plugins enabled"
     PluginsNotLoadedShort(count:) -> int.to_string(count) <> " failed to load"
     PendingConnections -> "Pending connections"
+    PendingConnectionsDescription ->
+      "Until you approve, this client cannot request signing or encryption."
+    RefreshesEverySeconds(seconds:) ->
+      "Refreshes every " <> int.to_string(seconds) <> " s"
     PendingSecretNotOffered -> "Secret not offered"
     PendingSecretMismatch -> "Secret mismatch"
     NoPermissionsRequestedBadge -> "No permissions requested"
@@ -525,6 +535,8 @@ fn english(message: Message) -> String {
     ExpiresIn -> "Expires in"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> "s"
     UtcTimeOfDay(time:) -> time <> " UTC"
+    ExpiryBeforeTime(remaining:) -> remaining <> " (expires at "
+    ExpiryAfterTime -> ")"
     Permissions -> "Permissions"
     NoPermissionsRequested ->
       "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed."
@@ -568,6 +580,7 @@ fn english(message: Message) -> String {
     DaysAgo(days:) -> int.to_string(days) <> " d ago"
     Approve -> "Approve"
     Deny -> "Deny"
+    ApproveAnyway -> "Approve anyway"
     ApprovalExplanation ->
       "Approving lets this client request signing and encryption within the permissions above. You can change them later from the approved session."
     Accounts -> "Accounts"
@@ -835,6 +848,8 @@ fn japanese(message: Message) -> String {
     NoPluginsEnabledShort -> "有効なプラグインなし"
     PluginsNotLoadedShort(count:) -> "読み込み失敗 " <> int.to_string(count)
     PendingConnections -> "承認待ちの接続"
+    PendingConnectionsDescription -> "承認するまで、このクライアントは署名も暗号化も依頼できません。"
+    RefreshesEverySeconds(seconds:) -> int.to_string(seconds) <> " 秒ごとに更新"
     PendingSecretNotOffered -> "secret 提示なし"
     PendingSecretMismatch -> "secret 不一致"
     NoPermissionsRequestedBadge -> "権限の要求なし"
@@ -843,6 +858,8 @@ fn japanese(message: Message) -> String {
     ExpiresIn -> "失効まで"
     ExpiresInSeconds(seconds:) -> int.to_string(seconds) <> " 秒"
     UtcTimeOfDay(time:) -> time <> "（UTC）"
+    ExpiryBeforeTime(remaining:) -> remaining <> "（"
+    ExpiryAfterTime -> " に失効）"
     Permissions -> "権限"
     NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
     EditPermissions -> "権限を編集"
@@ -879,6 +896,7 @@ fn japanese(message: Message) -> String {
     DaysAgo(days:) -> int.to_string(days) <> " 日前"
     Approve -> "承認する"
     Deny -> "拒否する"
+    ApproveAnyway -> "それでも承認する"
     ApprovalExplanation ->
       "承認すると、このクライアントは上の権限の範囲で署名と暗号化を依頼できます。承認したときの権限は、後から「承認済みのセッション」の「権限を編集」で変えられます。"
     Accounts -> "アカウント"

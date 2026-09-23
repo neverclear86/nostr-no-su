@@ -557,7 +557,7 @@ pub fn dashboard_shows_pending_connections_test() {
   assert string.contains(body, "value=\"" <> auth_uri <> "\"")
   assert string.contains(body, "action=\"/approve/" <> token <> "\"")
   assert string.contains(body, "action=\"/deny/" <> token <> "\"")
-  assert string.contains(body, "<dd><span>540s</span></dd>")
+  assert string.contains(body, "9:00 (expires at <time datetime=\"")
 }
 
 /// 承認ページには、誰が誰に接続しようとしているかが出る。署名者はアカウント一覧と

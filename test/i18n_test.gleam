@@ -71,6 +71,8 @@ pub fn messages_with_values_follow_each_language_test() {
   let cases = [
     #(i18n.ExpiresInSeconds(12), "12s", "12 秒"),
     #(i18n.UtcTimeOfDay("05:12:34"), "05:12:34 UTC", "05:12:34（UTC）"),
+    #(i18n.ExpiryBeforeTime("8:12"), "8:12 (expires at ", "8:12（"),
+    #(i18n.RefreshesEverySeconds(30), "Refreshes every 30 s", "30 秒ごとに更新"),
     #(
       i18n.AwaitingDecision(30),
       "Awaiting your decision · refreshes every 30 s",
@@ -177,7 +179,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.PluginIssueCounts(_, _, _) -> Some(i18n.NoPluginsEnabledShort)
     i18n.NoPluginsEnabledShort -> Some(i18n.PluginsNotLoadedShort(2))
     i18n.PluginsNotLoadedShort(_) -> Some(i18n.PendingConnections)
-    i18n.PendingConnections -> Some(i18n.PendingSecretNotOffered)
+    i18n.PendingConnections -> Some(i18n.PendingConnectionsDescription)
+    i18n.PendingConnectionsDescription -> Some(i18n.RefreshesEverySeconds(30))
+    i18n.RefreshesEverySeconds(_) -> Some(i18n.PendingSecretNotOffered)
     i18n.PendingSecretNotOffered -> Some(i18n.PendingSecretMismatch)
     i18n.PendingSecretMismatch -> Some(i18n.NoPermissionsRequestedBadge)
     i18n.NoPermissionsRequestedBadge -> Some(i18n.Signer)
@@ -185,7 +189,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Client -> Some(i18n.ExpiresIn)
     i18n.ExpiresIn -> Some(i18n.ExpiresInSeconds(12))
     i18n.ExpiresInSeconds(_) -> Some(i18n.UtcTimeOfDay("05:12:34"))
-    i18n.UtcTimeOfDay(_) -> Some(i18n.Permissions)
+    i18n.UtcTimeOfDay(_) -> Some(i18n.ExpiryBeforeTime("8:12"))
+    i18n.ExpiryBeforeTime(_) -> Some(i18n.ExpiryAfterTime)
+    i18n.ExpiryAfterTime -> Some(i18n.Permissions)
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
     i18n.NoPermissionsRequested -> Some(i18n.EditPermissions)
     i18n.EditPermissions -> Some(i18n.EditPermissionsDescription)
@@ -216,7 +222,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.HoursAgo(_) -> Some(i18n.DaysAgo(5))
     i18n.DaysAgo(_) -> Some(i18n.Approve)
     i18n.Approve -> Some(i18n.Deny)
-    i18n.Deny -> Some(i18n.ApprovalExplanation)
+    i18n.Deny -> Some(i18n.ApproveAnyway)
+    i18n.ApproveAnyway -> Some(i18n.ApprovalExplanation)
     i18n.ApprovalExplanation -> Some(i18n.Accounts)
     i18n.Accounts -> Some(i18n.Add)
     i18n.Add -> Some(i18n.AddAccount)
@@ -404,12 +411,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 232 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 237 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 232
+  assert list.length(messages) == 237
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

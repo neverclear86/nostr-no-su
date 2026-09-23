@@ -161,7 +161,7 @@ pub type NavbarSwitch {
 
 /// ボタンの種類。daisyUI のボタンのクラスを決める。
 pub type ButtonKind {
-  /// 主の操作（登録、保存、承認、追加、接続）。塗りの primary。
+  /// 主の操作（登録、保存、承認、追加、接続）と、secret が一致しない承認待ちの拒否。塗りの primary。
   PrimaryButton
   /// 枠だけのボタン。フォームの末尾の、主ではない送信に使う。
   OutlineButton
@@ -171,7 +171,7 @@ pub type ButtonKind {
   DangerButton
   /// 取り返しのつかない操作への入口。地味なボタンに error の文字色。
   DangerGhostButton
-  /// 秘密を画面に出す、または接続中のクライアントに影響する操作の送信。warning の枠。
+  /// 秘密を画面に出す、または接続中のクライアントに影響する操作の送信と、secret が一致しない承認待ちの承認。warning の枠。
   WarningOutlineButton
 }
 
@@ -1262,7 +1262,7 @@ fn copy_status(language: Language) -> Element(msg) {
 }
 
 /// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。読み飛ばされて
-/// は困る注意（秘密鍵の表示、接続 QR コードの secret、secret が一致しない承認ページ）も `Warning` で出す。
+/// は困る注意（秘密鍵の表示、接続 QR コードの secret、secret が一致しない承認待ちのカードと承認ページ）も `Warning` で出す。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
   alert_box([], tone, content)
 }
@@ -1286,26 +1286,17 @@ fn alert_box(
   ])
 }
 
-/// 見出しや一覧を中に持つ、`tone` の色の薄い塗りの囲み（`alert alert-soft`）。`alert` と違ってアイコンを
-/// 足さず、中身を縦に積んで幅いっぱいに広げる。`id` はページ内のリンク先である。
-pub fn alert_panel(
-  id: String,
-  tone: Tone,
-  content: List(Element(msg)),
-) -> Element(msg) {
-  let class = case tone {
-    Neutral ->
-      "alert alert-soft flex flex-col items-stretch gap-4 text-base-content"
-    Success ->
-      "alert alert-soft alert-success flex flex-col items-stretch gap-4 text-base-content"
-    Warning ->
-      "alert alert-soft alert-warning flex flex-col items-stretch gap-4 text-base-content"
-    Failure ->
-      "alert alert-soft alert-error flex flex-col items-stretch gap-4 text-base-content"
-    Info ->
-      "alert alert-soft alert-info flex flex-col items-stretch gap-4 text-base-content"
-  }
-  html.section([attribute.id(id), attribute.class(class)], content)
+/// 全幅の帯。`primary` を 8% 混ぜた地と 28% 混ぜた枠の囲みに、見出しや一覧を縦に積む。`id` はページ内のリンク先である。
+pub fn band(id: String, content: List(Element(msg))) -> Element(msg) {
+  html.section(
+    [
+      attribute.id(id),
+      attribute.class(
+        "flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6",
+      ),
+    ],
+    content,
+  )
 }
 
 /// フォームの上に出す失敗の理由。無ければ何も出さない。`lead` は、英語のまま届いた理由の
@@ -1494,11 +1485,22 @@ pub fn time_of_day(language: Language, seconds: Int) -> Element(msg) {
     |> timestamp.to_calendar(calendar.utc_offset)
   let clock =
     [time.hours, time.minutes, time.seconds]
-    |> list.map(fn(part) { string.pad_start(int.to_string(part), 2, "0") })
+    |> list.map(two_digits)
     |> string.join(":")
   html.time([attribute.datetime(utc_time(seconds))], [
     html.text(i18n.text(language, i18n.UtcTimeOfDay(clock))),
   ])
+}
+
+/// 秒数を「分:秒」（`8:12`、`0:45`）の残り時間にする。秒は 2 桁に 0 埋めし、負の値は 0 とみなす。
+pub fn countdown(seconds: Int) -> String {
+  let seconds = int.max(seconds, 0)
+  int.to_string(seconds / 60) <> ":" <> two_digits(seconds % 60)
+}
+
+/// 0〜59 の数を 2 桁に 0 埋めする。
+fn two_digits(value: Int) -> String {
+  string.pad_start(int.to_string(value), 2, "0")
 }
 
 /// Unix 秒を RFC 3339 の UTC の文字列（`2026-09-13T05:12:34Z`）にする。
@@ -1829,7 +1831,7 @@ const clock_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
 ]
 
-/// セッションの節のアイコン（Lucide の clock）。
+/// セッションの節と、承認待ちの帯の更新の間隔のアイコン（Lucide の clock）。
 pub fn clock_icon() -> Element(msg) {
   lucide_icon("size-4", clock_icon_paths)
 }

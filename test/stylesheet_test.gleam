@@ -197,7 +197,7 @@ fn defines(css: String, class: String) -> Bool {
 /// Tailwind がセレクターの中でエスケープする記号を、バックスラッシュでエスケープする。
 fn escape_selector(class: String) -> String {
   list.fold(
-    [":", "/", "[", "]", "(", ")", ",", "."],
+    [":", "/", "[", "]", "(", ")", ",", ".", "%", "*"],
     class,
     fn(escaped, symbol) { string.replace(escaped, symbol, "\\" <> symbol) },
   )
