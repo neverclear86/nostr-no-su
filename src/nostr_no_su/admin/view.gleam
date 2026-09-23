@@ -1,7 +1,7 @@
 //// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
 //// モジュールに依存しない HTML の部品。lustre の要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
 //// components は使わない。部品は `Element` を返し、HTML 文書の文字列にするのは
-//// `page` だけである。
+//// `page` と `untranslated_page` だけである。
 ////
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。エスケープでは防げない経路には決まった値だけを渡す。`html.style`、
@@ -297,10 +297,8 @@ fn favicon_link() -> Element(msg) {
   ])
 }
 
-/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、
-/// `theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
-/// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。ナビゲーションバーと、
-/// `title` を見出し（h1）にした本文を出す。
+/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。`title` を表示の言語で引き、
+/// `<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。枠の残りは `document` が出す。
 pub fn page(
   language: Language,
   theme: Theme,
@@ -311,6 +309,58 @@ pub fn page(
   body: List(Element(msg)),
 ) -> String {
   let title = i18n.text(language, title)
+  document(
+    language,
+    theme,
+    html.title([], "Nostr-no-Su — " <> title),
+    [html.text(title)],
+    layout,
+    switch,
+    refresh,
+    body,
+  )
+}
+
+/// 見出しが訳さない文字列（プラグイン由来の英語）のページ枠を HTML 文書の文字列にする。
+/// 見出し（h1）には `title` を `untranslated` の `span` で出す。`<title>` は子の要素を
+/// 持てないので、`title` を `Nostr-no-Su — ` の後に置いた `<title>` 要素そのものに
+/// `lang="en"` を付ける。枠の残りは `document` が出す。
+pub fn untranslated_page(
+  language: Language,
+  theme: Theme,
+  title: String,
+  layout: Layout,
+  switch: NavbarSwitch,
+  refresh: Refresh,
+  body: List(Element(msg)),
+) -> String {
+  document(
+    language,
+    theme,
+    html.title([attribute.lang("en")], "Nostr-no-Su — " <> title),
+    [untranslated(title)],
+    layout,
+    switch,
+    refresh,
+    body,
+  )
+}
+
+/// `page` と `untranslated_page` が共有するページ枠を HTML 文書の文字列にする。表示の言語を
+/// `<html lang>` にし、`theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
+/// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。`<head>` に
+/// `title`（`<title>` 要素）を置き、ナビゲーションバーと、`h1_content` を見出し（h1）にした
+/// 本文を出す。
+fn document(
+  language: Language,
+  theme: Theme,
+  title: Element(msg),
+  h1_content: List(Element(msg)),
+  layout: Layout,
+  switch: NavbarSwitch,
+  refresh: Refresh,
+  body: List(Element(msg)),
+) -> String {
   let attrs = [attribute.lang(i18n.code(language)), ..theme_attributes(theme)]
   html.html(attrs, [
     html.head([], [
@@ -320,7 +370,7 @@ pub fn page(
         attribute.content("width=device-width,initial-scale=1"),
       ]),
       refresh_meta(refresh),
-      html.title([], "Nostr-no-Su — " <> title),
+      title,
       favicon_link(),
       html.link([
         attribute.rel("stylesheet"),
@@ -338,7 +388,7 @@ pub fn page(
     html.body([attribute.class("min-h-screen bg-base-200 text-base-content")], [
       navbar(language, theme, switch),
       html.main([attribute.class(main_class(layout))], [
-        html.h1([attribute.class("text-2xl font-bold")], [html.text(title)]),
+        html.h1([attribute.class("text-2xl font-bold")], h1_content),
         ..body
       ]),
     ]),

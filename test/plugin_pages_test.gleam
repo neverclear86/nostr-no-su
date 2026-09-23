@@ -148,3 +148,26 @@ pub fn disabled_plugin_shows_a_warning_test() {
     i18n.text(i18n.English, i18n.PluginPageWhileDisabled),
   )
 }
+
+/// 見出し（h1）と `<title>` にプラグイン名とページの表示名を ` — ` でつないで出す。
+/// どちらもプラグイン由来の英語なので、表示の言語が日本語でも `lang="en"` の中に出し、
+/// 訳した「プラグインのページ」は出さない。
+pub fn heading_shows_the_plugin_and_page_names_test() {
+  let body =
+    plugin_pages.plugin_page(
+      i18n.Japanese,
+      view.System,
+      one_page_row(),
+      plugin.PluginPage(key: "status", title: "Status"),
+      [section_("Summary")],
+    )
+  assert string.contains(
+    body,
+    "<h1 class=\"text-2xl font-bold\"><span lang=\"en\">example — Status</span></h1>",
+  )
+  assert string.contains(
+    body,
+    "<title lang=\"en\">Nostr-no-Su — example — Status</title>",
+  )
+  assert !string.contains(body, "<title>Nostr-no-Su — プラグインのページ</title>")
+}
