@@ -21,7 +21,8 @@ export const meta = {
 //               noMerge: true なら最終確認の APPROVE の後にマージの段階を飛ばし、stalled（stage merge、reason に noMerge とマージはユーザーが行う旨）で返す（リリースの PR など。サブ issue には継がない）
 //               分割で生まれたサブ issue はスクリプトが足す（ui と designUrl を親から継ぎ、depth 1、parent、tier は親の判定が決めた none か light、note に親の「## 分割の設計」への案内。再分割はしない）。
 //               別の実行で子を回し直すときは、同じ depth / parent / tier / ui / designUrl / note を issues に直接書く（スキル issue-workflow の「結果の処理」）
-//               after: 判定からプランまでは依存先のプランの承認を待って進め、実装は依存先のマージを待つ（待つ間は window の枠を使わない）
+//               after: 判定からプランまでは依存先のプランの承認を待って進め、実装は依存先のマージを待つ（待つ間は window の枠を使わない）。
+//               プランが土台に無い兄弟の部品を前提にして構造化出力の after を返したときは、承認の後にその番号を依存先に足し、実装だけがそのマージを待つ
 //   base:       origin/main の SHA。再開のときも同じ値を渡す（変えるとプロンプトが変わり、結果の再利用が効かない）
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る。
@@ -72,6 +73,7 @@ const S = {
         description: 'status が split のとき、作ったサブ issue。after が無いもの同士は並列に進む',
       },
       file: { type: 'string', description: '書いたプランのファイル' },
+      after: { type: 'array', items: { type: 'integer' }, description: 'プランの依頼で、土台に無い兄弟サブ issue の関数・型・部品を前提にしたときの、その兄弟の番号（実装がそのマージを待つ）。同じファイルを触るだけなら入れない。無ければ空' },
       summary: { type: 'string', description: '方針の要約。版 2 以降は指摘への対応の表の要旨' },
       questions: { type: 'array', items: { type: 'string' }, description: 'status が question のとき、ユーザーに聞く質問' },
     },
@@ -484,7 +486,7 @@ async function designStage(e, issue, state) {
   return {}
 }
 
-/** プランとプランレビューの往復。承認された版の issue コメント URL を返す */
+/** プランとプランレビューの往復。承認された版の issue コメント URL と、その版が前提にした兄弟の番号（after）を返す */
 async function planStage(e, issue, state, prReviewUrl) {
   const designUrl = issue.designUrl || state.designUrl || null
   let v = 0, r = 0
@@ -512,7 +514,7 @@ async function planStage(e, issue, state, prReviewUrl) {
       state.nits += rev.nit || 0
       state.postFile = `${PLANS}/${e.n}-post.md`
       state.conditions = rev.conditions || []
-      return { postUrl: rev.postUrl, version: v }
+      return { postUrl: rev.postUrl, version: v, after: plan.after || [] }
     }
     if (r >= MAX_PLAN_ROUNDS) return { stalled: { stage: 'plan', reason: `プランレビューが ${r} ラウンドで収束しない（最後は must ${rev.must}、should ${rev.should}）` } }
   }
@@ -792,7 +794,9 @@ async function runIssue(issue, idx) {
     mergeSha: null, issueClosed: null, closedParents: [], openParent: null, gateUrl: null, rebaseGateUrl: null, rebaseGateHead: null,
   }
   const finish = (extra) => ({ ...state, ...extra })
-  const deps = (issue.after || []).map(String)
+  let deps = (issue.after || []).map(String)
+  // 承認されたプランが前提にした兄弟の番号（planner の after）。依存先のマージを待つ段階で deps に合流する
+  let planAfter = []
   let acquired = false
   try {
     // 循環と、この実行にいない依存先は、待つ前に弾く
@@ -827,14 +831,29 @@ async function runIssue(issue, idx) {
         // tier none はデザインもプランも飛ばし、実装者が issue を直接読む
         if (state.tier === 'none') { log(`#${issue.n}: tier none なのでプランを書かずに実装する`); return {} }
         const r = await planStage(e, issue, state)
-        if (r.postUrl) { state.postUrl = r.postUrl; state.version = r.version }
+        if (r.postUrl) { state.postUrl = r.postUrl; state.version = r.version; planAfter = (r.after || []).map(String) }
         return r
       },
-      // 依存する issue にプランを知らせ、依存先のマージを待つ。待つ間は枠を返し、最後にマージされた依存先を土台にする
+      // 依存する issue にプランを知らせ、依存先のマージを待つ。待つ間は枠を返し、最後にマージされた依存先を土台にする。
+      // プランが後から前提にした兄弟は、自分のプランを知らせてから合流する（互いに前提にし合う 2 件は、後に合流した側が循環で blocked になり、先の側はその結果で blocked になる）
       async () => {
         planned.get(String(issue.n)).resolve({ plans: state.postUrl ? [{ n: issue.n, url: state.postUrl }] : [] })
-        if (!deps.length) return {}
+        const added = planAfter.filter((d) => d !== String(issue.n) && !deps.includes(d))
+        if (!deps.length && !added.length) return {}
         slots.release(); acquired = false
+        if (added.length) {
+          deps = [...deps, ...added]
+          afterOf.set(String(issue.n), deps)
+          log(`#${issue.n}: プランが ${added.map((d) => `#${d}`).join(' ')} の部品を前提にしたので、実装はそのマージを待つ`)
+          if (inCycle(issue.n)) return { blocked: { stage: 'deps', questions: [`#${issue.n} のプランが前提にした after が循環している`] } }
+          const missing = added.find((dep) => !done.has(dep))
+          if (missing) return { blocked: { stage: 'deps', questions: [`プランが前提にした #${missing} がこの実行に含まれていない（すでにマージ済みならプランの前提は土台にある）`] } }
+          for (const dep of added) {
+            const p = await planned.get(dep).promise
+            if (p.ended) return { blocked: { stage: 'deps', questions: [`プランが前提にした #${dep} がプランの前に ${p.ended} で終わった`] } }
+            e.depPlans.push(...p.plans)
+          }
+        }
         let latestDep = null
         for (const dep of deps) {
           // 分割された依存先は、サブ issue が全部マージされていれば最後にマージされたサブ issue を依存先とみなす
@@ -916,6 +935,8 @@ function fake(label, opts, prompt) {
     // plan-split: 判定は plan だったが調査で大きいと分かった / child-split: サブ issue のプランが再分割を求める（blocked になる）
     if ((sc === 'plan-split' || sc === 'child-split') && v === '1') return { status: 'split', subIssues: [{ n: Number(n) * 100 + 1, after: [] }], summary: '調査で 600 行と分かった' }
     if (sc === 'replan-question' && (label.includes('revise') || Number(v) >= 2)) return { status: 'question', questions: ['逸脱の代案はどちらにするか'] }
+    // plan-after: プランが兄弟（n - 1）の部品を前提にして after を返す（実装がそのマージを待つ）
+    if (sc === 'plan-after' && label.startsWith('Plan')) return { status: 'plan', file: `${PLANS}/${n}-v${v}.md`, summary: `v${v}`, after: [Number(n) - 1] }
     return { status: 'plan', file: `${PLANS}/${n}-v${v || 'next'}.md`, summary: `v${v}` }
   }
   if (t === 'issue-plan-reviewer') {
