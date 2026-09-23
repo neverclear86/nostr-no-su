@@ -2,6 +2,7 @@
 //// にも触れず、呼び出し元（`profile.gleam`）が読んだ登録アカウント・取得の結果・
 //// 直前の送信の結果を引数で受け取って記述の `Dynamic` を組み立て、送信された欄の
 //// 値の解釈（`submitted/1`）と保持した結果の読み取り（`submission/1`）も担う。
+//// 文言は引数の表示の言語（`profile/i18n` の `Language`）で `i18n.text` から引く。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
 //// binary キーの map である。値は `gleam/dynamic` の `properties` / `list` /
@@ -15,12 +16,10 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import profile/i18n.{type Language}
 
 /// プロフィールのページのキー。URL の path 片にもなる。
 const profile_page_key = "profile"
-
-/// プロフィールのページの表示名。
-const profile_page_title = "Profile"
 
 /// 本体から `Accounts`（`docs/plugin-api.md` 第 13.5 節）で届く登録アカウント 1 件。
 pub type Account {
@@ -138,7 +137,7 @@ fn string_or_empty() -> decode.Decoder(String) {
 }
 
 /// kind 0 の 8 項目の項目名（`form` の欄の `name` の後半、`submitted/1` が読む
-/// キー）。この並びが `submitted_fields/1` と `profile_form_block/2` の欄の順に
+/// キー）。この並びが `submitted_fields/1` と `profile_form_block/3` の欄の順に
 /// なる。
 const profile_field_names = [
   "name", "display_name", "about", "picture", "banner", "nip05", "website",
@@ -236,15 +235,17 @@ pub fn merged_content(
 /// （`profile.gleam` の `plugin_children/0` を参照）。
 pub type Submission {
   /// 送信に成功した。
-  Succeeded(message: String)
-  /// 送信に失敗した。`values` はフォームへ戻す送信された値
-  /// （`Fetched.Failed` と名前が衝突するため `SubmitFailed` にする）。
-  SubmitFailed(message: String, values: Profile)
+  Succeeded
+  /// 送信に失敗した。`reason` は失敗の理由の英語の 1 文、`values` はフォームへ
+  /// 戻す送信された値（`Fetched.Failed` と名前が衝突するため `SubmitFailed` に
+  /// する）。
+  SubmitFailed(reason: String, values: Profile)
 }
 
-/// `profile_store:take/1` が返す map（`status`・`message`・`values` を持つ
-/// binary キーの map、または結果が無いときの `none`）を読む。`none`、型の誤り、
-/// 未知の `status` は `None`。
+/// `profile_store:take/1` が返す map（`status`・`reason`・`values` を持つ
+/// binary キーの map、または結果が無いときの `none`）を読む。`reason` と
+/// `values` は `status` が `error` のときだけ読む。`none`、型の誤り、未知の
+/// `status` は `None`。
 pub fn submission(raw: Dynamic) -> Option(Submission) {
   case decode.run(raw, submission_decoder()) {
     Ok(submission) -> Some(submission)
@@ -256,16 +257,13 @@ pub fn submission(raw: Dynamic) -> Option(Submission) {
 fn submission_decoder() -> decode.Decoder(Submission) {
   use status <- decode.field("status", decode.string)
   case status {
-    "ok" -> {
-      use message <- decode.field("message", decode.string)
-      decode.success(Succeeded(message: message))
-    }
+    "ok" -> decode.success(Succeeded)
     "error" -> {
-      use message <- decode.field("message", decode.string)
+      use reason <- decode.field("reason", decode.string)
       use values <- decode.field("values", submitted_values_decoder())
-      decode.success(SubmitFailed(message: message, values: values))
+      decode.success(SubmitFailed(reason: reason, values: values))
     }
-    _ -> decode.failure(Succeeded(""), "Submission")
+    _ -> decode.failure(Succeeded, "Submission")
   }
 }
 
@@ -291,38 +289,44 @@ fn submitted_values_decoder() -> decode.Decoder(Profile) {
   ))
 }
 
-/// `plugin_pages/0` が返すページの一覧。プロフィールのページ 1 件だけを持つ。
-pub fn pages() -> Dynamic {
+/// `plugin_pages/2` が返すページの一覧。プロフィールのページ 1 件だけを持ち、
+/// 表示名は `language` の文言。
+pub fn pages(language: Language) -> Dynamic {
   dynamic.list([
     dynamic.properties([
       #(dynamic.string("key"), dynamic.string(profile_page_key)),
-      #(dynamic.string("title"), dynamic.string(profile_page_title)),
+      #(
+        dynamic.string("title"),
+        dynamic.string(i18n.text(language, i18n.PageTitle)),
+      ),
     ]),
   ])
 }
 
-/// ページの記述。`accounts` が空なら `alert`（`info`）1 つだけの節を返す。
-/// それ以外はアカウント・取得の結果・直前の送信の結果を組にし、1 件につき
-/// `account_section/3` を返す（`accounts`・`fetched`・`submissions` は同じ順序・
-/// 同じ件数である前提。呼び出し元（`profile.gleam`）が同じ公開鍵の並びで作る）。
+/// ページの記述を `language` の文言で組む。`accounts` が空なら `alert`
+/// （`info`）1 つだけの節を返す。それ以外はアカウント・取得の結果・直前の送信の
+/// 結果を組にし、1 件につき `account_section/4` を返す（`accounts`・`fetched`・
+/// `submissions` は同じ順序・同じ件数である前提。呼び出し元（`profile.gleam`）が
+/// 同じ公開鍵の並びで作る）。
 pub fn content(
+  language: Language,
   accounts: List(Account),
   fetched: List(Fetched),
   submissions: List(Option(Submission)),
 ) -> Dynamic {
   case accounts {
-    [] -> page_sections([no_accounts_section()])
+    [] -> page_sections([no_accounts_section(language)])
     _ ->
       page_sections(
         list.map(zip3(accounts, fetched, submissions), fn(row) {
-          account_section(row.0, row.1, row.2)
+          account_section(language, row.0, row.1, row.2)
         }),
       )
   }
 }
 
 /// 3 つのリストを同じ添字で組にする。`accounts`・`fetched`・`submissions` を
-/// まとめて `content/3` から渡すためだけに使う。
+/// まとめて `content/4` から渡すためだけに使う。
 fn zip3(a: List(a), b: List(b), c: List(c)) -> List(#(a, b, c)) {
   list.zip(a, b)
   |> list.zip(c)
@@ -330,28 +334,27 @@ fn zip3(a: List(a), b: List(b), c: List(c)) -> List(#(a, b, c)) {
 }
 
 /// 登録アカウントが 0 件のときの節。
-fn no_accounts_section() -> Dynamic {
-  section(profile_page_title, [
-    alert_block(
-      "No account is registered. Register an account first, then reload this page.",
-      "info",
-    ),
+fn no_accounts_section(language: Language) -> Dynamic {
+  section(i18n.text(language, i18n.PageTitle), [
+    alert_block(i18n.text(language, i18n.NoAccounts), "info"),
   ])
 }
 
 /// アカウント 1 件の節。`title` はアカウントの `label`。ブロックは取得の結果と
-/// 直前の送信の結果に応じて `account_blocks/3` が組む。
+/// 直前の送信の結果に応じて `account_blocks/4` が組む。
 fn account_section(
+  language: Language,
   account: Account,
   fetched: Fetched,
   submission: Option(Submission),
 ) -> Dynamic {
-  section(account.label, account_blocks(account, fetched, submission))
+  section(account.label, account_blocks(language, account, fetched, submission))
 }
 
 /// アカウント 1 件のブロックの並び。
 ///
-/// 1. `submission` が `Some` なら、その `message` を `alert`（成功は `success`、
+/// 1. `submission` が `Some` なら、`Succeeded` は `i18n.ProfileUpdated`、
+///    `SubmitFailed` は `i18n.UpdateFailed` の文言を `alert`（成功は `success`、
 ///    失敗は `failure`）で先頭に出す。
 /// 2. `Failed` は理由の `alert`（`failure`）と `npub` の `pairs` だけで終わり、
 ///    `form` は出さない（現在のプロフィールが分からないまま編集させないため）。
@@ -365,52 +368,57 @@ fn account_section(
 /// `form` の初期値は、直前の送信が `SubmitFailed` ならその `values`、それ以外は
 /// 取得した `Profile`（`NotFound` と読めない `content` は `empty_profile`）。
 fn account_blocks(
+  language: Language,
   account: Account,
   fetched: Fetched,
   submission: Option(Submission),
 ) -> List(Dynamic) {
   list.append(
-    submission_alert(submission),
-    fetched_blocks(account, fetched, submission),
+    submission_alert(language, submission),
+    fetched_blocks(language, account, fetched, submission),
   )
 }
 
-/// `submission` を先頭に出す `alert` 0〜1 件。
-fn submission_alert(submission: Option(Submission)) -> List(Dynamic) {
+/// `submission` を先頭に出す `alert` 0〜1 件。文言は `language` で組む。
+fn submission_alert(
+  language: Language,
+  submission: Option(Submission),
+) -> List(Dynamic) {
   case submission {
-    Some(Succeeded(message:)) -> [alert_block(message, "success")]
-    Some(SubmitFailed(message:, ..)) -> [alert_block(message, "failure")]
+    Some(Succeeded) -> [
+      alert_block(i18n.text(language, i18n.ProfileUpdated), "success"),
+    ]
+    Some(SubmitFailed(reason:, ..)) -> [
+      alert_block(i18n.text(language, i18n.UpdateFailed(reason)), "failure"),
+    ]
     None -> []
   }
 }
 
-/// `submission_alert/1` に続くブロック（取得の結果ごとの並び。`account_blocks/3`
+/// `submission_alert/2` に続くブロック（取得の結果ごとの並び。`account_blocks/4`
 /// の Doc を参照）。
 fn fetched_blocks(
+  language: Language,
   account: Account,
   fetched: Fetched,
   submission: Option(Submission),
 ) -> List(Dynamic) {
   case fetched {
     Failed(reason:) -> [
-      alert_block(
-        "Could not fetch the profile from the relays: "
-          <> reason
-          <> " The edit form is not shown because the current profile is unknown.",
-        "failure",
-      ),
+      alert_block(i18n.text(language, i18n.FetchFailed(reason)), "failure"),
       pairs_block([npub_item(account)]),
     ]
     NotFound ->
       [
-        alert_block(
-          "No kind 0 event was found on the relays. Sending this form publishes a new profile with only the fields below.",
-          "warning",
-        ),
-        pairs_block([npub_item(account), #("updated", code_inline(""))]),
+        alert_block(i18n.text(language, i18n.NoProfileEvent), "warning"),
+        pairs_block([
+          npub_item(account),
+          #(i18n.text(language, i18n.UpdatedTerm), code_inline("")),
+        ]),
       ]
       |> list.append([
         profile_form_block(
+          language,
           account.pubkey,
           initial_profile(submission, empty_profile),
         ),
@@ -418,21 +426,25 @@ fn fetched_blocks(
     Found(content:, created_at:) ->
       case profile_of_json(content) {
         Ok(profile) ->
-          [pairs_block([npub_item(account), updated_item(created_at)])]
-          |> list.append(image_blocks(account, profile))
+          [
+            pairs_block([
+              npub_item(account),
+              updated_item(language, created_at),
+            ]),
+          ]
+          |> list.append(image_blocks(language, account, profile))
           |> list.append([
             profile_form_block(
+              language,
               account.pubkey,
               initial_profile(submission, profile),
             ),
           ])
         Error(Nil) -> [
-          alert_block(
-            "The latest kind 0 event has a content that is not a JSON object.",
-            "failure",
-          ),
-          pairs_block([npub_item(account), updated_item(created_at)]),
+          alert_block(i18n.text(language, i18n.ContentNotObject), "failure"),
+          pairs_block([npub_item(account), updated_item(language, created_at)]),
           profile_form_block(
+            language,
             account.pubkey,
             initial_profile(submission, empty_profile),
           ),
@@ -471,17 +483,33 @@ fn npub_item(account: Account) -> #(String, Dynamic) {
   #("npub", id_inline(account.npub))
 }
 
-/// `pairs` の `updated` の項（RFC 3339 の UTC、`code` インライン）。
-fn updated_item(created_at: Int) -> #(String, Dynamic) {
-  #("updated", code_inline(format_timestamp(created_at)))
+/// `pairs` の更新の時刻の項。見出しは `language` の `i18n.UpdatedTerm`、値は
+/// RFC 3339 の UTC の `code` インライン。
+fn updated_item(language: Language, created_at: Int) -> #(String, Dynamic) {
+  #(
+    i18n.text(language, i18n.UpdatedTerm),
+    code_inline(format_timestamp(created_at)),
+  )
 }
 
-/// `picture` / `banner` が空でなければ `note` と `image` を続けて出す。両方空なら
-/// 空リスト。
-fn image_blocks(account: Account, profile: Profile) -> List(Dynamic) {
+/// `picture` / `banner` が空でなければ、`language` の文言の `note` と、代替
+/// テキストを持つ `image` を続けて出す。両方空なら空リスト。
+fn image_blocks(
+  language: Language,
+  account: Account,
+  profile: Profile,
+) -> List(Dynamic) {
   list.flatten([
-    image_with_note(profile.picture, "Picture", "Picture of " <> account.label),
-    image_with_note(profile.banner, "Banner", "Banner of " <> account.label),
+    image_with_note(
+      profile.picture,
+      i18n.text(language, i18n.PictureNote),
+      i18n.text(language, i18n.PictureAlt(account.label)),
+    ),
+    image_with_note(
+      profile.banner,
+      i18n.text(language, i18n.BannerNote),
+      i18n.text(language, i18n.BannerAlt(account.label)),
+    ),
   ])
 }
 
@@ -494,9 +522,15 @@ fn image_with_note(url: String, label: String, alt: String) -> List(Dynamic) {
 }
 
 /// プロフィールを編集する `form` ブロック。欄は `name` / `display_name` / `about`
-/// （`textarea`）/ `picture` / `banner` / `nip05` / `website` / `lud16` の順、
-/// 送信ボタンは `"Save"`。欄の `name` は `field_name/2` で組み立てる。
-fn profile_form_block(pubkey: String, profile: Profile) -> Dynamic {
+/// （`textarea`）/ `picture` / `banner` / `nip05` / `website` / `lud16` の順で、
+/// ラベルは項目名のまま（kind 0 のキー名なので訳さない）。送信ボタンは
+/// `language` の `i18n.SaveButton` の文言。欄の `name` は `field_name/2` で
+/// 組み立てる。
+fn profile_form_block(
+  language: Language,
+  pubkey: String,
+  profile: Profile,
+) -> Dynamic {
   form_block(
     [
       text_field(field_name(pubkey, "name"), "name", profile.name),
@@ -512,7 +546,7 @@ fn profile_form_block(pubkey: String, profile: Profile) -> Dynamic {
       text_field(field_name(pubkey, "website"), "website", profile.website),
       text_field(field_name(pubkey, "lud16"), "lud16", profile.lud16),
     ],
-    "Save",
+    i18n.text(language, i18n.SaveButton),
   )
 }
 

@@ -19,8 +19,14 @@
 //// キャッシュを使わずに取得し直す。取得した内容に送信された 8 項目を差し替え、
 //// 未知のキーは残したまま新しい kind 0 として送る。送信に成功したら送った
 //// kind 0 をキャッシュに入れ、送信後のリダイレクトで開き直したページはリレーに
-//// 問い合わせずにそれを出す。送信の成否と文言は `profile_store` に保持し、
-//// 次にこのページを開いたときの `alert` として 1 回だけ出る。
+//// 問い合わせずにそれを出す。送信の成否（失敗なら理由と送信された値）は
+//// `profile_store` に保持し、次にこのページを開いたときに、その時の表示の言語の
+//// `alert` として 1 回だけ出る。
+////
+//// ページの文言（表示名、節の見出し、表の見出し、ボタン、案内、`alert`）は、
+//// 本体が `plugin_pages/2` と `plugin_page_content/3` の最後の引数で渡す表示の
+//// 言語のコード（`docs/plugin-api.md` 第 13.1 節）で出し、訳は `profile/i18n` が
+//// 持つ。本体や取得から英語の 1 文で届く理由は訳さずに文へ埋め込む。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -28,6 +34,7 @@ import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import profile/i18n
 import profile/page
 
 /// このプラグインが実装するプラグイン API のバージョン。
@@ -47,9 +54,11 @@ pub fn handle_event(_event: Dynamic) -> Nil {
   Nil
 }
 
-/// 管理 UI に供給するページの一覧。本体は読み込み時に 1 度だけ検証する。
-pub fn plugin_pages() -> Dynamic {
-  page.pages()
+/// 管理 UI に供給するページの一覧。`language` は表示の言語のコードで、表示名
+/// だけがその言語になる（キーはどの言語でも `profile` の 1 件）。本体は読み込み時
+/// に言語ごとに 1 度ずつ呼んで検証する。設定が要らないので `config` は読まない。
+pub fn plugin_pages(_config: Dynamic, language: String) -> Dynamic {
+  page.pages(i18n.from_code(language))
 }
 
 /// 送信の結果と取得のキャッシュを保持する子（`profile_store`）を申告する。
@@ -62,8 +71,13 @@ pub fn plugin_children() -> Dynamic
 /// 管理 UI のページの記述。`config` の予約キー `Accounts`（`docs/plugin-api.md`
 /// 第 13.5 節）から登録アカウントの一覧を読み、`current_profiles` で公開鍵ごとの
 /// kind 0 を得て、直前の送信の結果（`profile_store:take/1`、取り出しと同時に
-/// 削除）と合わせて `page.content` に渡す。
-pub fn plugin_page_content(_key: Dynamic, config: Dynamic) -> Dynamic {
+/// 削除）と合わせて、`language`（表示の言語のコード）の文言で `page.content` に
+/// 組ませる。
+pub fn plugin_page_content(
+  _key: Dynamic,
+  config: Dynamic,
+  language: String,
+) -> Dynamic {
   let settings =
     decode.run(config, decode.dict(decode.string, decode.string))
     |> result.unwrap(dict.new())
@@ -72,7 +86,7 @@ pub fn plugin_page_content(_key: Dynamic, config: Dynamic) -> Dynamic {
   let fetched = current_profiles(pubkeys)
   let submissions =
     list.map(pubkeys, fn(pubkey) { page.submission(store_take(pubkey)) })
-  page.content(accounts, fetched, submissions)
+  page.content(i18n.from_code(language), accounts, fetched, submissions)
 }
 
 /// `config` の予約キー `Accounts` から登録アカウントの一覧を読む。キーが無い・
@@ -125,7 +139,7 @@ fn handle_submit(values: Dynamic, config: Dynamic) -> Dynamic {
 }
 
 /// 対象アカウントの kind 0 をキャッシュを使わずに取り直し、送信された 8 項目を
-/// 差し替えて送る。結果（成否・文言・送信された値）は `profile_store:put/2` に
+/// 差し替えて送る。結果（成否・失敗の理由・送信された値）は `profile_store:put/2` に
 /// 保持し、常に `ok` を返す（`{error, Reason}` は 503 になり、入力した 8 項目が
 /// 失われるため）。
 fn submit_profile(submitted: page.Submitted) -> Dynamic {
@@ -166,7 +180,8 @@ fn publish_submission(
 /// `Found` としてキャッシュに入れる（送信後のリダイレクトで開き直したページが
 /// リレーに問い合わせずに送った内容を出すため）。失敗ならキャッシュは変えず、
 /// `fields` をフォームへ戻す値として保持する。`profile_test` の
-/// `finish_submission_caches_the_published_profile_test` が参照するため公開する。
+/// `finish_submission_caches_the_published_profile_test` と
+/// `finish_submission_keeps_the_failure_reason_test` が参照するため公開する。
 pub fn finish_submission(
   pubkey: String,
   merged: String,
@@ -181,7 +196,7 @@ pub fn finish_submission(
           page.Found(content: merged, created_at:),
           cache_ttl_ms,
         )
-      store_put(pubkey, ok_result("Profile updated."))
+      store_put(pubkey, ok_result())
       ok_atom()
     }
     Ok(#(_status, reason, _created_at)) ->
@@ -204,34 +219,29 @@ fn publish_result_decoder() -> decode.Decoder(#(String, String, Int)) {
   decode.success(#(status, reason, created_at))
 }
 
-/// 失敗を `profile_store` に保持し、`ok` を返す。`fields` はフォームへ戻す
-/// 送信された値。
+/// 失敗の理由 `reason`（英語の 1 文）と、フォームへ戻す送信された値 `fields` を
+/// `profile_store` に保持し、`ok` を返す。文言は描画の時に表示の言語で組む
+/// （`plugin_page_action` には表示の言語が渡らないため）。
 fn fail_submission(
   pubkey: String,
   fields: List(#(String, String)),
   reason: String,
 ) -> Dynamic {
-  store_put(
-    pubkey,
-    error_result("Could not update the profile: " <> reason, fields),
-  )
+  store_put(pubkey, error_result(reason, fields))
   ok_atom()
 }
 
-/// 成功を `profile_store` に保持する形の Dynamic。
-fn ok_result(message: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("status"), dynamic.string("ok")),
-    #(dynamic.string("message"), dynamic.string(message)),
-  ])
+/// 成功を `profile_store` に保持する形の Dynamic（`status` だけを持つ）。
+fn ok_result() -> Dynamic {
+  dynamic.properties([#(dynamic.string("status"), dynamic.string("ok"))])
 }
 
-/// 失敗を `profile_store` に保持する形の Dynamic。`values` は再送信のために
-/// フォームへ戻す 8 項目。
-fn error_result(message: String, values: List(#(String, String))) -> Dynamic {
+/// 失敗を `profile_store` に保持する形の Dynamic。`reason` は失敗の理由の英語の
+/// 1 文、`values` は再送信のためにフォームへ戻す 8 項目。
+fn error_result(reason: String, values: List(#(String, String))) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("status"), dynamic.string("error")),
-    #(dynamic.string("message"), dynamic.string(message)),
+    #(dynamic.string("reason"), dynamic.string(reason)),
     #(
       dynamic.string("values"),
       dynamic.properties(
