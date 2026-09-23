@@ -174,7 +174,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 学びも `observations` も 0 件なら issue は起票されない（観察だけでも起票に進む）。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
 
-- `implementation.status: pr`：PR ができた。`pr` と `prUrl` をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
+- `implementation.status: pr`：PR ができた。`pr` と `prUrl`（複数の PR に stacked PR で分けたときは `prs` の全部。下の段から順）をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
 - `rejected`：精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue に「## 精査」（`commentUrl`）を投稿して閉じた。`reason` を報告する
 - `blocked`：直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを `retroIssue: { "number": <N>, "url": "<issue の URL>", "decisions": ["<答え>"] }` に入れて `retrospective` をもう一度回す（`runs` と `events` は要らない。集計と起票は飛び、精査と実装だけが fable で走る）
 
