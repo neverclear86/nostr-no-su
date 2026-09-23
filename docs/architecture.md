@@ -361,7 +361,7 @@ sequenceDiagram
         Note over eng: logout を除き、<br/>承認済みのセッションが<br/>無ければ unauthorized
         eng-->>bk: 応答イベント
     end
-    bk->>rc: 応答（全バンカーリレーへ）
+    bk->>rc: 応答（全バンカーリレーへ。セッションの外の応答は<br/>rate-limited を返したリレーを 60 秒飛ばす）
     rc->>relay: 発行
     relay->>client: 応答
 ```
@@ -373,6 +373,7 @@ sequenceDiagram
 リレークライアントは切断のたびに再起動されるため、セッション状態をそこに置けない。
 
 応答はどのリレーから来たリクエストでも全バンカーリレーへ発行する。
+ただし、`rate-limited:` の OK を返したリレーへは、セッションの外のリクエストへの応答を 60 秒出さない（`bunker.recipients`。理由は [設計上の判断と既知の制約](design-decisions.md) の「NIP-46 の入力にはサイズと件数の上限がある」）。
 クライアントは `bunker://` URI の `relay=` をすべて聴くので、リレーが 1 つ生きていれば往復が成立する。
 
 ### リレーの AUTH（NIP-42）への応答
