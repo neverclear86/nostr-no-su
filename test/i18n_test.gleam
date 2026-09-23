@@ -262,8 +262,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NoApprovedSessions -> Some(i18n.Revoke)
     i18n.Revoke -> Some(i18n.Relays)
     i18n.Relays -> Some(i18n.Role)
-    i18n.Role -> Some(i18n.StateColumn)
-    i18n.StateColumn -> Some(i18n.MonitorRole)
+    i18n.Role -> Some(i18n.MonitorRole)
     i18n.MonitorRole -> Some(i18n.BunkerRole)
     i18n.BunkerRole -> Some(i18n.RelayRoleUnused)
     i18n.RelayRoleUnused -> Some(i18n.RelayConnected)
@@ -303,8 +302,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.NostrconnectQueryInvalid -> Some(i18n.NostrconnectRelayInvalid)
     i18n.NostrconnectRelayInvalid -> Some(i18n.NostrconnectSecretMissing)
     i18n.NostrconnectSecretMissing -> Some(i18n.Plugins)
-    i18n.Plugins -> Some(i18n.NameColumn)
-    i18n.NameColumn -> Some(i18n.PluginRunning)
+    i18n.Plugins -> Some(i18n.PluginsDescription)
+    i18n.PluginsDescription -> Some(i18n.PluginRunning)
     i18n.PluginRunning -> Some(i18n.PluginOverloaded)
     i18n.PluginOverloaded -> Some(i18n.PluginDisabled)
     i18n.PluginDisabled -> Some(i18n.ReenablePlugin)
@@ -410,12 +409,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 244 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 243 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 244
+  assert list.length(messages) == 243
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

@@ -783,6 +783,15 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.detail_list([#("term", html.dd([], [view.hint("value")]))]),
       ),
       element.to_string(view.alert(view.Info, [view.hint("content")])),
+      element.to_string(
+        view.failure_frame(
+          view.warning_triangle_icon(),
+          "title",
+          1,
+          "description",
+          [view.list_row(view.InlineRow, [html.text("row")])],
+        ),
+      ),
     ],
     list.map(button_kinds, fn(kind) {
       element.to_string(view.icon_button_link(

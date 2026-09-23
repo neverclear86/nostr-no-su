@@ -436,8 +436,45 @@ pub fn only_disabled_plugins_have_a_reenable_button_test() {
   )
 }
 
-/// 読み込めなかったプラグインは、「読み込み失敗」のチップと識別子と理由つきでカードに出る。理由は英語のまま
-/// `lang="en"` で包む。
+/// プラグインの節の見出しは、題の直後に件数のピルを置き、その下に 1 行の説明を出す。
+pub fn plugins_heading_shows_the_count_and_description_test() {
+  use #(language, title, description) <- list.each([
+    #(
+      i18n.English,
+      "Plugins",
+      "Receives and processes the events of registered accounts.",
+    ),
+    #(i18n.Japanese, "プラグイン", "登録したアカウントのイベントを受け取って処理します。"),
+  ])
+  let body = dashboard.render(language, view.System, states())
+  assert string.contains(
+    body,
+    title
+      <> "</h2><span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">4</span></div><p class=\"text-sm text-muted sm:pl-10\">"
+      <> description
+      <> "</p>",
+  )
+}
+
+/// プラグインは表ではなく行の一覧に並び、各行に名前と状態のチップが入る。応答の無いプラグインは
+/// 「応答なし」のチップで出る。
+pub fn plugin_rows_show_the_name_and_state_chip_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  assert !string.contains(body, "<table")
+  let rows = string.split(body, "<li class=\"list-row ")
+  use #(name, chip, word) <- list.each([
+    #("a", view.ActiveChip, "running"),
+    #("b", view.OverloadedChip, "overloaded"),
+    #("c", view.DisabledChip, "disabled"),
+    #("d", view.UnansweredChip, "unavailable"),
+  ])
+  let name_span =
+    "<span class=\"font-semibold break-words\">" <> name <> "</span>"
+  let assert Ok(row) = list.find(rows, string.contains(_, name_span))
+  assert string.contains(row, element.to_string(view.status_chip(chip, word)))
+}
+
+/// 読み込めなかったプラグインは、プラグインの行の一覧の直後にエラーの色の枠で、「読み込み失敗」のチップと識別子と理由つきで出る。理由は英語のまま `lang="en"` で包む。
 pub fn dashboard_shows_not_loaded_plugins_test() {
   let snapshot =
     dashboard.Snapshot(..states(), not_loaded_plugins: [
@@ -452,6 +489,10 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
     ])
   let english = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(english, "Plugins that failed to load")
+  assert string.contains(
+    english,
+    "</li></ul><div class=\"alert alert-soft alert-error flex flex-col items-stretch gap-3 text-base-content\">",
+  )
   assert string.contains(
     english,
     element.to_string(view.status_chip(view.LoadFailedChip, "failed to load")),
@@ -473,7 +514,7 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
   )
 }
 
-/// `not_loaded_plugins` が 0 件のときはカードごと出さない。
+/// `not_loaded_plugins` が 0 件のときは枠ごと出さない。
 pub fn dashboard_hides_not_loaded_plugins_when_empty_test() {
   let snapshot = dashboard.Snapshot(..states(), not_loaded_plugins: [])
   use language <- list.each([i18n.English, i18n.Japanese])
@@ -599,13 +640,6 @@ fn theme_message(theme: view.Theme) -> i18n.Message {
     view.Light -> i18n.ThemeLight
     view.Dark -> i18n.ThemeDark
   }
-}
-
-/// 表の見出しは列を指す `scope="col"` を持ち、`scope` の無い `th` は出さない。
-pub fn table_headers_scope_their_columns_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(body, "<th scope=\"col\">")
-  assert !string.contains(body, "<th>")
 }
 
 /// 承認待ちとセッションを得られないときは、「0 件」の代わりに理由を出し、

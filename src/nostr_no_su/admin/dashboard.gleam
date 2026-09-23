@@ -159,7 +159,7 @@ pub type Snapshot {
     /// 超過）は表示する理由。
     sessions: Result(List(SessionRow), i18n.Reason),
     plugins: List(PluginRow),
-    /// 起動時に読み込めなかったプラグインの一覧。0 件ならカードごと描かない。
+    /// 起動時に読み込めなかったプラグインの一覧。0 件なら枠ごと描かない。
     not_loaded_plugins: List(plugin_loader.NotLoaded),
     /// 描画時点の Unix 秒。セッションの最終利用を相対で出すために使う。
     now: Int,
@@ -321,8 +321,8 @@ fn dashboard_refresh(
 /// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
 /// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
-/// プラグインの状態と読み込めなかったプラグインを右の列に置く 2 列で、狭い画面ではこの順に
-/// 1 列に並ぶ。
+/// プラグイン（末尾に読み込めなかったプラグインの枠）を右の列に置く 2 列で、狭い画面では
+/// この順に 1 列に並ぶ。
 pub fn render(
   language: Language,
   theme: view.Theme,
@@ -365,8 +365,11 @@ pub fn render(
           [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-2")],
           [
             relays_section(language, snapshot.relays),
-            plugins_section(language, snapshot.plugins),
-            not_loaded_section(language, snapshot.not_loaded_plugins),
+            plugins_section(
+              language,
+              snapshot.plugins,
+              snapshot.not_loaded_plugins,
+            ),
           ],
         ),
       ]),
@@ -1862,10 +1865,12 @@ pub fn relative_time(now: Int, at: Int) -> i18n.Message {
   }
 }
 
-/// 監視イベントを処理するプラグインと、その現在の状態。
+/// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）と 1 行の説明を
+/// 置き、プラグインを行の一覧で並べる。起動時に読み込めなかった候補があれば、節の末尾にエラーの色の枠で出す。
 fn plugins_section(
   language: Language,
   plugins: List(PluginRow),
+  not_loaded: List(plugin_loader.NotLoaded),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(plugins_anchor, [
@@ -1874,59 +1879,59 @@ fn plugins_section(
       Ok(plugins),
       view.puzzle_icon(),
       i18n.Plugins,
-      None,
+      Some(i18n.PluginsDescription),
       [],
       [],
     ),
-    case plugins {
-      [] -> view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins))
-      rows ->
-        view.surface([
-          view.table(
-            [text(i18n.NameColumn), text(i18n.StateColumn), ""],
-            list.map(rows, fn(plugin) {
-              [
-                html.td([attribute.class("break-words")], [
-                  html.text(plugin.name),
-                ]),
-                html.td([], [plugin_state(language, plugin)]),
-                html.td(
-                  [attribute.class("whitespace-nowrap")],
-                  list.append(
-                    plugin_page_link(language, plugin),
-                    reenable_form_if_disabled(language, plugin),
-                  ),
-                ),
-              ]
-            }),
-          ),
-        ])
-    },
+    section_body(
+      plugins,
+      view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins)),
+      fn(rows) { view.row_list(list.map(rows, plugin_item(language, _))) },
+    ),
+    not_loaded_panel(language, not_loaded),
   ])
 }
 
-/// 起動時に読み込めなかったプラグイン。1 件以上あるときだけカードを描く。
-/// `app.Spec` から届く一覧で、起動時に確定するので取得できない状態は無い。
-fn not_loaded_section(
+/// プラグイン 1 件。名前と状態のチップ（破棄の件数、無効の理由）を縦に並べ、ページを開くリンクと
+/// 再有効化のフォームを右に置く。幅が足りなければ操作は下の段に回る。
+fn plugin_item(language: Language, plugin: PluginRow) -> Element(msg) {
+  let actions = case
+    list.append(
+      plugin_page_link(language, plugin),
+      reenable_form_if_disabled(language, plugin),
+    )
+  {
+    [] -> element.none()
+    buttons -> button_row(buttons)
+  }
+  view.list_row(view.InlineRow, [
+    html.div([attribute.class("flex min-w-0 flex-col items-start gap-1")], [
+      html.span([attribute.class("font-semibold break-words")], [
+        html.text(plugin.name),
+      ]),
+      plugin_state(language, plugin),
+    ]),
+    actions,
+  ])
+}
+
+/// 起動時に読み込めなかったプラグインの枠。1 件以上あるときだけ、題と警告の 1 文と行の一覧を
+/// エラーの色の枠（`view.failure_frame`）に入れる。`app.Spec` から届く一覧で、起動時に確定するので
+/// 取得できない状態は無い。
+fn not_loaded_panel(
   language: Language,
   rows: List(plugin_loader.NotLoaded),
 ) -> Element(msg) {
   case rows {
     [] -> element.none()
     rows ->
-      view.card([
-        view.section_heading(
-          view.warning_triangle_icon(),
-          i18n.text(language, i18n.NotLoadedPlugins),
-          Some(list.length(rows)),
-          None,
-          [],
-        ),
-        view.alert(view.Warning, [
-          html.text(i18n.text(language, i18n.NotLoadedPluginsWarning)),
-        ]),
-        view.row_list(list.map(rows, not_loaded_item(language, _))),
-      ])
+      view.failure_frame(
+        view.warning_triangle_icon(),
+        i18n.text(language, i18n.NotLoadedPlugins),
+        list.length(rows),
+        i18n.text(language, i18n.NotLoadedPluginsWarning),
+        list.map(rows, not_loaded_item(language, _)),
+      )
   }
 }
 
