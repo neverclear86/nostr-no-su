@@ -64,10 +64,9 @@ pub fn content_texts_in_english_test() {
       "Could not update the profile: timeout",
       "No kind 0 event was found on the relays. Sending this form publishes a new profile with only the fields below.",
       "npub",
-      "updated",
       "Save",
       "Carol",
-      "Could not fetch the profile from the relays: timeout The edit form is not shown because the current profile is unknown.",
+      "Could not fetch the profile from the relays (reason: timeout). The edit form is not shown because the current profile is unknown.",
       "npub",
       "Dave",
       "The latest kind 0 event has a content that is not a JSON object.",
@@ -97,7 +96,6 @@ pub fn content_texts_in_japanese_test() {
       "プロフィールを更新できませんでした（理由: timeout）。",
       "リレーに kind 0 のイベントがありませんでした。このフォームを送ると、下の項目だけを持つ新しいプロフィールを送信します。",
       "npub",
-      "更新日時",
       "保存する",
       "Carol",
       "リレーからプロフィールを取得できませんでした（理由: timeout）。現在のプロフィールが分からないため、編集のフォームは出しません。",
@@ -195,7 +193,55 @@ pub fn content_uses_textarea_for_about_test() {
     == ["text", "text", "textarea", "text", "text", "text", "text", "text"]
 }
 
-/// `NotFound` の節には `warning` の `alert` と、値がすべて空の `form` が出る。
+/// 欄のラベルは表示の言語の人の読める名前で、補足（`hint`）は kind 0 のキー名。
+pub fn content_labels_form_fields_in_each_language_test() {
+  let labels = fn(language) {
+    let description =
+      page.content(language, [sample_account()], [page.NotFound], [None])
+    let assert [section] = page_sections(description)
+    let #(_title, blocks) = section_shape(section)
+    let assert [_alert, _pairs, form] = blocks
+    let assert Ok(fields) =
+      decode.run(
+        form,
+        decode.field(
+          "fields",
+          decode.list({
+            use label <- decode.field("label", decode.string)
+            use hint <- decode.field("hint", decode.string)
+            decode.success(#(label, hint))
+          }),
+          decode.success,
+        ),
+      )
+    fields
+  }
+  assert labels(i18n.English)
+    == [
+      #("Name", "name"),
+      #("Display name", "display_name"),
+      #("About", "about"),
+      #("Icon image URL", "picture"),
+      #("Banner image URL", "banner"),
+      #("Verified identifier (NIP-05)", "nip05"),
+      #("Website", "website"),
+      #("Lightning address", "lud16"),
+    ]
+  assert labels(i18n.Japanese)
+    == [
+      #("名前", "name"),
+      #("表示名", "display_name"),
+      #("自己紹介", "about"),
+      #("アイコンの画像の URL", "picture"),
+      #("バナーの画像の URL", "banner"),
+      #("認証の識別子（NIP-05）", "nip05"),
+      #("ウェブサイト", "website"),
+      #("Lightning アドレス", "lud16"),
+    ]
+}
+
+/// `NotFound` の節には `warning` の `alert`、`npub` だけの `pairs`（`updated` の
+/// 項は出ない）と、値がすべて空の `form` が出る。
 pub fn content_shows_empty_form_when_not_found_test() {
   let description =
     page.content(i18n.English, [sample_account()], [page.NotFound], [None])
@@ -212,12 +258,13 @@ pub fn content_shows_empty_form_when_not_found_test() {
       pairs,
       decode.field("items", decode.list(pair_item_decoder()), decode.success),
     )
-  assert top_items == [#("npub", "id", "npub1aa"), #("updated", "code", "")]
+  assert top_items == [#("npub", "id", "npub1aa")]
   assert form_fields(form) |> list.map(fn(field) { field.2 })
     == ["", "", "", "", "", "", "", ""]
 }
 
-/// `Failed` の節に `form` が無く、`alert` の文が差し替え後の全文と一致する。
+/// `Failed` の節に `form` が無く、`alert` の文は理由を括弧で区切った全文と一致
+/// する（理由の後で次の文がつながらない）。
 pub fn content_omits_the_form_when_fetch_failed_test() {
   let description =
     page.content(
@@ -232,7 +279,7 @@ pub fn content_omits_the_form_when_fetch_failed_test() {
   let #(kind, text, tone) = alert_shape(alert)
   assert kind == "alert"
   assert text
-    == "Could not fetch the profile from the relays: no monitor relay is connected The edit form is not shown because the current profile is unknown."
+    == "Could not fetch the profile from the relays (reason: no monitor relay is connected). The edit form is not shown because the current profile is unknown."
   assert tone == "failure"
   let assert Ok(items) =
     decode.run(
@@ -873,7 +920,8 @@ fn all_states_texts(language: i18n.Language) -> List(String) {
 
 /// 記述の中の、表示の言語で出る文言を出る順に並べる。節ごとに見出し、続けて
 /// ブロックごとに `alert` と `note` の `text`、`image` の `alt`、`pairs` の各項の
-/// `term`、`form` の `submit` を並べる。
+/// `term`、`form` の `submit` を並べる（欄のラベルは
+/// `content_labels_form_fields_in_each_language_test` で見る）。
 fn page_texts(description: Dynamic) -> List(String) {
   list.flat_map(page_sections(description), fn(raw) {
     let #(title, blocks) = section_shape(raw)

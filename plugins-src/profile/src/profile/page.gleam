@@ -358,8 +358,8 @@ fn account_section(
 ///    失敗は `failure`）で先頭に出す。
 /// 2. `Failed` は理由の `alert`（`failure`）と `npub` の `pairs` だけで終わり、
 ///    `form` は出さない（現在のプロフィールが分からないまま編集させないため）。
-/// 3. `NotFound` は `warning` の `alert` に続けて `npub` と空の `updated` の
-///    `pairs`、そして `form` を出す。
+/// 3. `NotFound` は `warning` の `alert` に続けて `npub` だけの `pairs`、そして
+///    `form` を出す（更新の時刻が無いので `updated` の項は出さない）。
 /// 4. `content` が JSON のオブジェクトとして読めないときは、既存の `alert`
 ///    （`failure`）に続けて `npub`・`updated` の `pairs` と `form` を出す。
 /// 5. それ以外（`Found` で読めた）は `npub`・`updated` の `pairs`、画像
@@ -411,10 +411,7 @@ fn fetched_blocks(
     NotFound ->
       [
         alert_block(i18n.text(language, i18n.NoProfileEvent), "warning"),
-        pairs_block([
-          npub_item(account),
-          #(i18n.text(language, i18n.UpdatedTerm), code_inline("")),
-        ]),
+        pairs_block([npub_item(account)]),
       ]
       |> list.append([
         profile_form_block(
@@ -523,31 +520,51 @@ fn image_with_note(url: String, label: String, alt: String) -> List(Dynamic) {
 
 /// プロフィールを編集する `form` ブロック。欄は `name` / `display_name` / `about`
 /// （`textarea`）/ `picture` / `banner` / `nip05` / `website` / `lud16` の順で、
-/// ラベルは項目名のまま（kind 0 のキー名なので訳さない）。送信ボタンは
-/// `language` の `i18n.SaveButton` の文言。欄の `name` は `field_name/2` で
-/// 組み立てる。
+/// ラベルは `language` の `i18n.FieldLabel` の文言、補足（`hint`）は kind 0 の
+/// キー名（識別子なので訳さない）。送信ボタンは `language` の `i18n.SaveButton`
+/// の文言。欄の `name` は `field_name/2` で組み立てる。
 fn profile_form_block(
   language: Language,
   pubkey: String,
   profile: Profile,
 ) -> Dynamic {
+  let field = fn(kind, which, value) {
+    let key = field_key(which)
+    form_field(
+      kind,
+      field_name(pubkey, key),
+      i18n.text(language, i18n.FieldLabel(which)),
+      key,
+      value,
+    )
+  }
   form_block(
     [
-      text_field(field_name(pubkey, "name"), "name", profile.name),
-      text_field(
-        field_name(pubkey, "display_name"),
-        "display_name",
-        profile.display_name,
-      ),
-      textarea_field(field_name(pubkey, "about"), "about", profile.about),
-      text_field(field_name(pubkey, "picture"), "picture", profile.picture),
-      text_field(field_name(pubkey, "banner"), "banner", profile.banner),
-      text_field(field_name(pubkey, "nip05"), "nip05", profile.nip05),
-      text_field(field_name(pubkey, "website"), "website", profile.website),
-      text_field(field_name(pubkey, "lud16"), "lud16", profile.lud16),
+      field("text", i18n.Name, profile.name),
+      field("text", i18n.DisplayName, profile.display_name),
+      field("textarea", i18n.About, profile.about),
+      field("text", i18n.Picture, profile.picture),
+      field("text", i18n.Banner, profile.banner),
+      field("text", i18n.Nip05, profile.nip05),
+      field("text", i18n.Website, profile.website),
+      field("text", i18n.Lud16, profile.lud16),
     ],
     i18n.text(language, i18n.SaveButton),
   )
+}
+
+/// 欄の kind 0 のキー名（`profile_field_names` の要素）。
+fn field_key(field: i18n.Field) -> String {
+  case field {
+    i18n.Name -> "name"
+    i18n.DisplayName -> "display_name"
+    i18n.About -> "about"
+    i18n.Picture -> "picture"
+    i18n.Banner -> "banner"
+    i18n.Nip05 -> "nip05"
+    i18n.Website -> "website"
+    i18n.Lud16 -> "lud16"
+  }
 }
 
 /// 欄の送信名。`<公開鍵>-<項目名>` の形（`parse_submitted_field/1` の分解と対）。
@@ -555,22 +572,19 @@ fn field_name(pubkey: String, field: String) -> String {
   pubkey <> "-" <> field
 }
 
-/// `text` 欄の記述。
-fn text_field(name: String, label: String, value: String) -> Dynamic {
+/// `kind`（`text` か `textarea`）の欄の記述。
+fn form_field(
+  kind: String,
+  name: String,
+  label: String,
+  hint: String,
+  value: String,
+) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
+    #(dynamic.string("type"), dynamic.string(kind)),
     #(dynamic.string("name"), dynamic.string(name)),
     #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("value"), dynamic.string(value)),
-  ])
-}
-
-/// `textarea` 欄の記述。
-fn textarea_field(name: String, label: String, value: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("textarea")),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
+    #(dynamic.string("hint"), dynamic.string(hint)),
     #(dynamic.string("value"), dynamic.string(value)),
   ])
 }
