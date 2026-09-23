@@ -201,9 +201,17 @@ pub type Write {
 }
 
 /// `handle_event` の結果。`notice` はログに出す 1 行で、出すものが無ければ
-/// `None`。
+/// `None`。`outside_session` はリクエストがセッションの外（（署名者,
+/// クライアント）の組が承認済みでなく、接続 secret の一致する `connect` でも
+/// ない）だったかで、受理しなかったイベントと復号できなかったイベントでは
+/// 偽にする。
 pub type Handled {
-  Handled(engine: Engine, outcome: Outcome, notice: Option(String))
+  Handled(
+    engine: Engine,
+    outcome: Outcome,
+    notice: Option(String),
+    outside_session: Bool,
+  )
 }
 
 /// 受信イベント 1 件を処理した結果。
@@ -590,7 +598,13 @@ pub fn handle_event(
 ) -> Handled {
   let incoming = event.verified_event(verified)
   case accept(engine, incoming, inputs) {
-    Error(outcome) -> Handled(engine: engine, outcome: outcome, notice: None)
+    Error(outcome) ->
+      Handled(
+        engine: engine,
+        outcome: outcome,
+        notice: None,
+        outside_session: False,
+      )
     Ok(#(engine, account, secret)) ->
       handle_request(engine, account, secret, incoming, inputs)
   }
@@ -659,8 +673,10 @@ pub fn p_tag_pubkeys(tags: List(List(String))) -> List(String) {
 }
 
 /// リクエストを復号・デコードし、セッションの外のリクエストを上限に数えてから
-/// （`admit`）実行し、実行結果を暗号化した応答にする。上限を超えたリクエストは
-/// 実行せずに `Throttled` にする。
+/// （`admit`）実行し、実行結果を暗号化した応答にする。セッションの外かどうか
+/// （`outside_session`）は実行の前のエンジンで 1 度だけ判定し、上限と
+/// `Handled.outside_session` の両方に使う。上限を超えたリクエストは実行せずに
+/// `Throttled` にする。
 fn handle_request(
   engine: Engine,
   account: Account,
@@ -671,20 +687,29 @@ fn handle_request(
   let client_pk_hex = incoming.pubkey
   case decode_request(account, incoming) {
     Error(reason) ->
-      Handled(engine: engine, outcome: Ignore(reason), notice: None)
-    Ok(#(conversation_key, request)) ->
-      case
-        admit(
+      Handled(
+        engine: engine,
+        outcome: Ignore(reason),
+        notice: None,
+        outside_session: False,
+      )
+    Ok(#(conversation_key, request)) -> {
+      let outside =
+        outside_session(
           engine,
           pubkey_hex(account),
           secret,
           client_pk_hex,
           request,
-          inputs.now,
         )
-      {
+      case admit(engine, outside, client_pk_hex, inputs.now) {
         Error(#(limited, report)) ->
-          Handled(engine: limited, outcome: Throttled, notice: report)
+          Handled(
+            engine: limited,
+            outcome: Throttled,
+            notice: report,
+            outside_session: outside,
+          )
         Ok(engine) -> {
           let execution =
             execute(engine, account, secret, client_pk_hex, request, inputs)
@@ -701,24 +726,24 @@ fn handle_request(
             engine: attempted(engine, execution),
             outcome: outcome(execution, build),
             notice: denial_notice(execution, pubkey_hex(account), client_pk_hex),
+            outside_session: outside,
           )
         }
       }
+    }
   }
 }
 
-/// セッションの外のリクエスト（`outside_session`）を `rate_limit.admit` で
+/// セッションの外のリクエスト（`outside` が真）を `rate_limit.admit` で
 /// 数える。通すなら数えた後のエンジンを、捨てるなら数えた後のエンジンと報告の
 /// 1 行を `Error` で返す。セッションの中のリクエストは数えずにそのまま通す。
 fn admit(
   engine: Engine,
-  signer: String,
-  secret: ConnectionSecret,
+  outside: Bool,
   client: String,
-  request: rpc.Request,
   now: Int,
 ) -> Result(Engine, #(Engine, Option(String))) {
-  case outside_session(engine, signer, secret, client, request) {
+  case outside {
     False -> Ok(engine)
     True ->
       case rate_limit.admit(engine.limiter, client, now) {

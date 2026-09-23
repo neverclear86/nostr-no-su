@@ -2,11 +2,14 @@
 //// 状態に接続 secret が出ないことのテスト。読み込みの結果に対して、どのログ行を
 //// 出すかと、再試行の待ち時間の延び方を確かめる。`bunker.track` / `bunker.acknowledge`
 //// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
-//// どう組み立てるかを確かめる。`bunker.sign_event`（`SignEvent`）のテストは、
-//// プラグインからの送信の口（`plugin_api`）が使う署名の要求を、読み込み前と
-//// 登録済みの署名者のそれぞれで確かめる。`bunker.check_account`（`CheckAccount`）の
-//// テストは、プラグインからの取得の口が使う登録の確認を、読み込み前・未登録・
-//// 登録済みのそれぞれで確かめる。
+//// どう組み立てるかを確かめる。`bunker.pause_on_rate_limit` / `bunker.recipients`
+//// のテストは、`rate-limited:` を返したリレーへのセッションの外の応答をいつ
+//// 止めて再開し、出さなかった件数をどう報告するかを確かめ、アクターのテストは
+//// `Acknowledged` と `Incoming` から発行までの配線を確かめる。`bunker.sign_event`
+//// （`SignEvent`）のテストは、プラグインからの送信の口（`plugin_api`）が使う
+//// 署名の要求を、読み込み前と登録済みの署名者のそれぞれで確かめる。
+//// `bunker.check_account`（`CheckAccount`）のテストは、プラグインからの取得の口が
+//// 使う登録の確認を、読み込み前・未登録・登録済みのそれぞれで確かめる。
 
 import gleam/erlang/process
 import gleam/list
@@ -16,16 +19,28 @@ import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
+import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/relay_client.{Acknowledgement}
-import support/nip46_client.{account_for}
+import nostr_no_su/time
+import support/nip46_client.{
+  account_for, connect_body, request_body, request_event,
+}
+import support/signed_event
 
 /// テストで使うバンカーリレーの 1 本目。
 const relay_a = "wss://a.example"
 
 /// テストで使うバンカーリレーの 2 本目。
 const relay_b = "wss://b.example"
+
+/// テスト用のクライアントの秘密鍵（16 進）。
+const client_key = "0000000000000000000000000000000000000000000000000000000000000009"
+
+/// 2 人目のクライアントの秘密鍵（16 進）。
+const other_client_key = "0000000000000000000000000000000000000000000000000000000000000005"
 
 /// バンカーが発行する応答イベント 1 件。kind と宛先タグは NIP-46 の応答の形。
 fn response(id: String) -> Event {
@@ -140,6 +155,112 @@ pub fn acknowledgements_after_the_timeout_are_ignored_test() {
       Acknowledgement("e1", False, "invalid: bad"),
     )
   assert second == None
+}
+
+/// `rate-limited:` の拒否を反映した時刻から `rate_limited_pause_seconds` 秒の間、
+/// relay_a を止めた一覧。
+fn pausing_relay_a(at: Int) -> bunker.Pauses {
+  bunker.pause_on_rate_limit(
+    bunker.new_pauses(),
+    relay_a,
+    Acknowledgement("e1", False, "rate-limited: slow down"),
+    at,
+  )
+}
+
+/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない
+/// （受け入れ条件）。飛ばした 1 件はすぐ報告する。
+pub fn a_rate_limited_relay_gets_no_responses_without_a_session_test() {
+  let #(_pauses, sent, lines) =
+    bunker.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
+  assert sent == [relay_b]
+  assert lines == [bunker.pause_report(relay_a, 1)]
+}
+
+/// セッションのあるクライアントへの応答は、止めたリレーにも届く（受け入れ条件）。
+pub fn responses_in_a_session_reach_a_rate_limited_relay_test() {
+  let #(_pauses, sent, lines) =
+    bunker.recipients(pausing_relay_a(1000), [relay_a, relay_b], False, 1001)
+  assert sent == [relay_a, relay_b]
+  assert lines == []
+}
+
+/// 止める期限が過ぎると、そのリレーへの発行が再開する（受け入れ条件）。
+pub fn a_rate_limited_relay_resumes_after_the_pause_test() {
+  let pauses = pausing_relay_a(1000)
+  let #(pauses, sent, _lines) =
+    bunker.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1000 + bunker.rate_limited_pause_seconds - 1,
+    )
+  assert sent == [relay_b]
+  let #(_pauses, sent, _lines) =
+    bunker.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1000 + bunker.rate_limited_pause_seconds,
+    )
+  assert sent == [relay_a, relay_b]
+}
+
+/// `rate-limited:` 以外の理由の拒否と、受理の OK はリレーを止めない。
+pub fn other_rejections_do_not_pause_a_relay_test() {
+  let pauses =
+    bunker.pause_on_rate_limit(
+      bunker.new_pauses(),
+      relay_a,
+      Acknowledgement("e1", False, "invalid: bad"),
+      1000,
+    )
+  let pauses =
+    bunker.pause_on_rate_limit(
+      pauses,
+      relay_a,
+      Acknowledgement("e2", True, "rate-limited: slow down"),
+      1000,
+    )
+  let #(_pauses, sent, _lines) =
+    bunker.recipients(pauses, [relay_a], True, 1001)
+  assert sent == [relay_a]
+}
+
+/// 出さなかった件数はリレーごとに `report_interval_seconds` に 1 回まで報告する。
+/// 新しく止めたリレーの最初の 1 件はすぐ出し、期限が過ぎた後に残った件数は、
+/// 次にそのリレーを止めて出さなかったときに残りと合わせて出す。
+pub fn dropped_responses_are_reported_once_per_interval_test() {
+  // 最初に出さなかった 1 件はすぐ報告する
+  let #(pauses, sent, lines) =
+    bunker.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
+  assert sent == [relay_b]
+  assert lines == [bunker.pause_report(relay_a, 1)]
+
+  // 報告の間隔の内側では件数を数えるだけで報告しない
+  let #(pauses, _sent, lines) =
+    bunker.recipients(pauses, [relay_a, relay_b], True, 1002)
+  assert lines == []
+  let #(pauses, _sent, lines) =
+    bunker.recipients(pauses, [relay_a, relay_b], True, 1003)
+  assert lines == []
+
+  // 止め直してから出さなかった最初の 1 件で、残った 2 件と合わせて 3 件を出す
+  let pauses =
+    bunker.pause_on_rate_limit(
+      pauses,
+      relay_a,
+      Acknowledgement("e3", False, "rate-limited: slow down"),
+      1001 + rate_limit.report_interval_seconds,
+    )
+  let #(_pauses, _sent, lines) =
+    bunker.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1001 + rate_limit.report_interval_seconds,
+    )
+  assert lines == [bunker.pause_report(relay_a, 3)]
 }
 
 /// 読み込めたアカウント 1 件。
@@ -400,6 +521,70 @@ pub fn check_account_rejects_an_unregistered_signer_test() {
 
   assert bunker.check_account(name, "not-registered")
     == Error("account is not registered")
+
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// `rate-limited:` を返したリレーには、セッションの外の応答が届かなくなる
+/// （受け入れ条件）。接続 secret の一致する `connect` の応答は止めたリレーにも
+/// 届く。
+pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_test() {
+  let name = process.new_name("bunker_rate_limited_relay_test")
+  let stored = one_account()
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+
+  // relay_a と relay_b の送信手段として、テストの subject へ送る関数を登録する
+  let inbox_a = process.new_subject()
+  let inbox_b = process.new_subject()
+  named.send(name, bunker.SetPublisher(relay_a, process.send(inbox_a, _)))
+  named.send(name, bunker.SetPublisher(relay_b, process.send(inbox_b, _)))
+  named.send(
+    name,
+    bunker.Acknowledged(
+      relay_a,
+      Acknowledgement("e0", False, "rate-limited: slow down"),
+    ),
+  )
+
+  let signer = stored.account
+  let client = account_for(client_key)
+  let now = time.now_seconds()
+  named.send(
+    name,
+    bunker.Incoming(
+      signed_event.verified(request_event(
+        client,
+        signer,
+        request_body("g1", "get_public_key", "[]"),
+        now,
+      )),
+    ),
+  )
+  // セッションの無いクライアントへの応答は、止めた relay_a を飛ばして relay_b
+  // だけに届く
+  let assert Ok(_response) = process.receive(inbox_b, 1000)
+  assert process.receive(inbox_a, 100) == Error(Nil)
+
+  // 接続 secret の一致する `connect` の応答は、止めた relay_a にも届く
+  let other = account_for(other_client_key)
+  named.send(
+    name,
+    bunker.Incoming(
+      signed_event.verified(request_event(
+        other,
+        signer,
+        connect_body(signer, "s3cret", "c1"),
+        now,
+      )),
+    ),
+  )
+  let assert Ok(_response) = process.receive(inbox_a, 1000)
+  let assert Ok(_response) = process.receive(inbox_b, 1000)
 
   let assert Ok(pid) = process.named(name)
   process.unlink(pid)
