@@ -30,20 +30,24 @@ import nostr_no_su/relay_list
 import nostr_no_su/relay_store
 import nostr_no_su/time
 import pog
+import support/log_capture
 import support/nip46_client
 import support/postgres
 import support/random_account.{random_entry, random_master_key}
 import support/signed_event
 import support/vector.{contains_bytes}
 
-/// 移行の文はすべて `IF NOT EXISTS` 付きで、途中で失敗した移行を頭から実行し直して
-/// よい。
+/// 移行の文はすべて `IF NOT EXISTS` 付きか `DELETE FROM` で、途中で失敗した移行を
+/// 頭から実行し直してよい。
 pub fn migration_statements_can_be_re_run_test() {
   let statements =
     list.flat_map(account_store.migrations, fn(migration) {
       migration.statements
     })
-  assert list.all(statements, string.contains(_, "IF NOT EXISTS"))
+  assert list.all(statements, fn(statement) {
+    string.contains(statement, "IF NOT EXISTS")
+    || string.starts_with(statement, "DELETE FROM ")
+  })
 }
 
 /// `account_store.migrations` の版は 1 から欠番なく昇順に並ぶ。
@@ -264,7 +268,10 @@ pub fn an_unmapped_pog_error_is_reported_with_its_location_test() {
 /// アクターは落ちず、`NotApplied` を返して続く問い合わせに応答する。
 pub fn a_write_to_a_missing_pool_is_not_applied_test() {
   let #(name, pid) =
-    start_bunker(process.new_name("account_store_test_missing"))
+    start_bunker(
+      process.new_name("account_store_test_missing"),
+      random_master_key(),
+    )
   let entry = random_entry("missing")
   assert bunker.add_account(name, entry.account, entry.label)
     == Error(
@@ -277,7 +284,7 @@ pub fn a_write_to_a_missing_pool_is_not_applied_test() {
 /// pog が写せないエラーで `pog.execute` が例外を投げた追加では、バンカーアクターは
 /// 落ちず、`MaybeApplied` を返し、読み直してから続く問い合わせに応答する。
 pub fn a_write_with_an_unmapped_pog_error_may_have_been_applied_test() {
-  let #(name, pid) = start_bunker(start_resetting_pool())
+  let #(name, pid) = start_bunker(start_resetting_pool(), random_master_key())
   let entry = random_entry("resetting")
   assert bunker.add_account(name, entry.account, entry.label)
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
@@ -349,12 +356,12 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (6)")
+  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (7)")
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 6, supported: 5))
+    == Error(account_store.SchemaTooNew(found: 7, supported: 6))
 
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -438,7 +445,7 @@ pub fn postgres_migrates_a_version_two_database_test() {
 
   let assert Ok(loaded) =
     account_store.load(pool, random_master_key(), generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
   assert loaded.sessions == []
   assert loaded.pending == []
 
@@ -463,14 +470,14 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   let key = random_master_key()
   let now = 1_700_000_000
 
-  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5] になる。
+  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5, 6] になる。
   let assert Ok(empty) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5]
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
   assert empty.sessions == []
   assert empty.pending == []
 
   // 2. A, B を登録し、それぞれにセッションと承認待ちを 1 件ずつ挿す。同じ引数の
-  // 挿入をもう一度呼んでも Ok（ON CONFLICT DO NOTHING）。
+  // 挿入をもう一度呼んでも Ok（セッションは ON CONFLICT DO UPDATE、承認待ちは DO NOTHING）。
   let a = random_entry("a")
   let b = random_entry("b")
   let a_pubkey = account.pubkey_hex(a.account)
@@ -502,27 +509,35 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
     let assert Ok(Nil) =
       account_store.insert_session(
         db,
+        key,
         generous,
-        signer: a_pubkey,
-        client: "client-a",
-        perms: "",
-        now: now,
+        session: account_store.StoredSession(
+          signer: a_pubkey,
+          client: "client-a",
+          perms: "",
+          created_at: now,
+          last_used_at: now,
+        ),
       )
     let assert Ok(Nil) =
       account_store.insert_session(
         db,
+        key,
         generous,
-        signer: b_pubkey,
-        client: "client-b",
-        perms: "sign_event:1",
-        now: now + 1,
+        session: account_store.StoredSession(
+          signer: b_pubkey,
+          client: "client-b",
+          perms: "sign_event:1",
+          created_at: now + 1,
+          last_used_at: now + 1,
+        ),
       )
-    let assert Ok(Nil) = account_store.insert_pending(db, pa, generous)
-    let assert Ok(Nil) = account_store.insert_pending(db, pb, generous)
+    let assert Ok(Nil) = account_store.insert_pending(db, key, pa, generous)
+    let assert Ok(Nil) = account_store.insert_pending(db, key, pb, generous)
     Nil
   }
   insert_a_and_b()
-  // 同じ引数でもう一度呼んでも、ON CONFLICT DO NOTHING で Ok になる。
+  // 同じ引数でもう一度呼んでも、セッションは ON CONFLICT DO UPDATE、承認待ちは DO NOTHING で Ok になる。
   insert_a_and_b()
 
   // 3. load の sessions が A, B の 2 件、pending が [pa, pb]。
@@ -551,11 +566,15 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
+      key,
       generous,
-      signer: a_pubkey,
-      client: "client-a-2",
-      perms: "",
-      now: now + 2,
+      session: account_store.StoredSession(
+        signer: a_pubkey,
+        client: "client-a-2",
+        perms: "",
+        created_at: now + 2,
+        last_used_at: now + 2,
+      ),
     )
   let pa2 =
     account_store.StoredPending(
@@ -567,7 +586,7 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
       secret_mismatch: False,
       created_at: now + 2,
     )
-  let assert Ok(Nil) = account_store.insert_pending(db, pa2, generous)
+  let assert Ok(Nil) = account_store.insert_pending(db, key, pa2, generous)
   let assert Ok(Nil) =
     account_store.delete_session(
       db,
@@ -603,16 +622,20 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
       secret_mismatch: False,
       created_at: now + 3,
     )
-  let assert Ok(Nil) = account_store.insert_pending(db, pa3, generous)
+  let assert Ok(Nil) = account_store.insert_pending(db, key, pa3, generous)
   let assert Ok(Nil) =
     account_store.approve(
       pool,
+      key,
       generous,
       token: pa3.token,
-      signer: a_pubkey,
-      client: pa3.client,
-      perms: pa3.perms,
-      now: now + 4,
+      session: account_store.StoredSession(
+        signer: a_pubkey,
+        client: pa3.client,
+        perms: pa3.perms,
+        created_at: now + 4,
+        last_used_at: now + 4,
+      ),
       evicted: [],
     )
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
@@ -660,6 +683,306 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
   postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
+/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。
+fn with_schema(
+  database_url: String,
+  run: fn(Name(pog.Message), pog.Connection) -> Nil,
+) -> Nil {
+  let schema = "account_store_schema_" <> random.hex(8)
+  let admin = pog.named_connection(postgres.start_pool(database_url, None))
+  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
+  let pool = postgres.start_pool(database_url, Some(schema))
+  run(pool, pog.named_connection(pool))
+  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// MAC の合わない行は読み込みに使われず `Stored.rejected` に分けられ、
+/// `load_snapshot` が 1 行ずつ warning で出す。列の改ざん、別の行の MAC の移植、
+/// MAC の無い行（移行前の行が残ったときの形）はどれも使われない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let key = random_master_key()
+  let mark = random.hex(8)
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+  let entry = random_entry("mac")
+  let signer = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+
+  // 正しい MAC の行と、あとで MAC が合わなくなる行 2 件を入れる。
+  let ok_session =
+    account_store.StoredSession(
+      signer:,
+      client: "client-ok-" <> mark,
+      perms: "",
+      created_at: 1,
+      last_used_at: 1,
+    )
+  let assert Ok(Nil) =
+    account_store.insert_session(db, key, generous, session: ok_session)
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      key,
+      generous,
+      session: account_store.StoredSession(
+        signer:,
+        client: "client-tampered-" <> mark,
+        perms: "",
+        created_at: 2,
+        last_used_at: 2,
+      ),
+    )
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      key,
+      generous,
+      session: account_store.StoredSession(
+        signer:,
+        client: "client-copied-" <> mark,
+        perms: "",
+        created_at: 3,
+        last_used_at: 3,
+      ),
+    )
+  // 列の値を書き換えると、残っている MAC と合わなくなる。
+  postgres.run_statement(
+    db,
+    "UPDATE bunker_sessions SET perms = 'forged' WHERE client = 'client-tampered-"
+      <> mark
+      <> "'",
+  )
+  // 別の行の MAC を移植しても、その行の値とは合わない。
+  postgres.run_statement(
+    db,
+    "UPDATE bunker_sessions SET mac = (SELECT mac FROM bunker_sessions WHERE client = 'client-ok-"
+      <> mark
+      <> "') WHERE client = 'client-copied-"
+      <> mark
+      <> "'",
+  )
+  // 移行前の行が残ったときの形（MAC が無い）を再現する。
+  postgres.run_statement(
+    db,
+    "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at, mac) VALUES ('token-"
+      <> mark
+      <> "', '"
+      <> signer
+      <> "', 'client-pending-"
+      <> mark
+      <> "', 'req-"
+      <> mark
+      <> "', '', false, 4, ''::bytea)",
+  )
+
+  let capture = log_capture.install()
+  let assert Ok(_snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
+  let lines = log_capture.lines(capture)
+  log_capture.remove(capture)
+  assert list.length(list.filter(lines, string.contains(_, mark))) == 3
+
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert loaded.sessions == [ok_session]
+  assert loaded.pending == []
+  assert loaded.rejected
+    == [
+      vault.SessionMacRow(
+        signer:,
+        client: "client-tampered-" <> mark,
+        perms: "forged",
+        created_at: 2,
+        last_used_at: 2,
+      ),
+      vault.SessionMacRow(
+        signer:,
+        client: "client-copied-" <> mark,
+        perms: "",
+        created_at: 3,
+        last_used_at: 3,
+      ),
+      vault.PendingMacRow(
+        token: "token-" <> mark,
+        signer:,
+        client: "client-pending-" <> mark,
+        request_id: "req-" <> mark,
+        perms: "",
+        secret_mismatch: False,
+        created_at: 4,
+      ),
+    ]
+}
+
+/// MAC の合わない行が主キーを塞いでいても、承認は正しい値で上書きする
+/// （`insert_session` の `ON CONFLICT DO UPDATE`）。`TEST_DATABASE_URL` がある
+/// ときだけ実行する。
+pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+  let entry = random_entry("approve-mac")
+  let signer = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      key,
+      generous,
+      session: account_store.StoredSession(
+        signer:,
+        client: "client",
+        perms: "a",
+        created_at: 1,
+        last_used_at: 1,
+      ),
+    )
+  postgres.run_statement(
+    db,
+    "UPDATE bunker_sessions SET perms = 'forged' WHERE client = 'client'",
+  )
+  let session =
+    account_store.StoredSession(
+      signer:,
+      client: "client",
+      perms: "b",
+      created_at: 5,
+      last_used_at: 7,
+    )
+  let assert Ok(Nil) =
+    account_store.approve(
+      pool,
+      key,
+      generous,
+      token: "token",
+      session:,
+      evicted: [],
+    )
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert loaded.sessions == [session]
+  assert loaded.pending == []
+  assert loaded.rejected == []
+}
+
+/// アカウントを消すとその署名者のセッションと承認待ちも消える（ON DELETE
+/// CASCADE）ので、マスターキーを変えて登録し直しても、別の鍵で書かれた行は
+/// 残らない。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let old_key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, old_key, generous)
+  let entry = random_entry("rekey")
+  let signer = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, old_key, entry, generous)
+  let assert Ok(Nil) =
+    account_store.insert_session(
+      db,
+      old_key,
+      generous,
+      session: account_store.StoredSession(
+        signer:,
+        client: "old-client",
+        perms: "",
+        created_at: 1,
+        last_used_at: 1,
+      ),
+    )
+  let assert Ok(Nil) =
+    account_store.insert_pending(
+      db,
+      old_key,
+      account_store.StoredPending(
+        token: "old-token",
+        signer:,
+        client: "old-client",
+        request_id: "req",
+        perms: "",
+        secret_mismatch: False,
+        created_at: 1,
+      ),
+      generous,
+    )
+
+  // アカウントを消すと、その署名者のセッションと承認待ちも消える。
+  let assert Ok(Nil) = account_store.delete(db, signer, generous)
+  let new_key = random_master_key()
+  let assert Ok(Nil) = account_store.insert(db, new_key, entry, generous)
+  let session =
+    account_store.StoredSession(
+      signer:,
+      client: "client",
+      perms: "sign_event:1",
+      created_at: 2,
+      last_used_at: 2,
+    )
+  let assert Ok(Nil) =
+    account_store.insert_session(db, new_key, generous, session: session)
+
+  let assert Ok(loaded) = account_store.load(pool, new_key, generous)
+  assert loaded.sessions == [session]
+  assert loaded.pending == []
+  assert loaded.rejected == []
+}
+
+/// 版 6 の移行は、MAC を持たない既存のセッションと承認待ちの行を消してから
+/// `mac` 列を足す。移行の後は MAC つきの行を書き込み、読み込める。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_migration_clears_sessions_and_pending_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- with_schema(database_url)
+  let key = random_master_key()
+
+  // 版 5 の DB を再現する。
+  postgres.run_statement(db, account_store.create_version_table)
+  account_store.migrations
+  |> list.filter(fn(migration) { migration.version <= 5 })
+  |> list.each(fn(migration) {
+    list.each(migration.statements, postgres.run_statement(db, _))
+  })
+  postgres.run_statement(
+    db,
+    "INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5)",
+  )
+  let entry = random_entry("migrate")
+  let signer = account.pubkey_hex(entry.account)
+  let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
+  postgres.run_statement(
+    db,
+    "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at) VALUES ('"
+      <> signer
+      <> "', 'client', '', 1, 1)",
+  )
+  postgres.run_statement(
+    db,
+    "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at) VALUES ('token', '"
+      <> signer
+      <> "', 'client', 'req', '', false, 1)",
+  )
+
+  // 版 6 の移行が既存の行を消してから `mac` 列を足す。
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6]
+  assert loaded.sessions == []
+  assert loaded.pending == []
+  assert loaded.rejected == []
+
+  // 移行の後は MAC つきで書き込みと読み込みができる。
+  let session =
+    account_store.StoredSession(
+      signer:,
+      client: "client",
+      perms: "",
+      created_at: 2,
+      last_used_at: 2,
+    )
+  let assert Ok(Nil) =
+    account_store.insert_session(db, key, generous, session: session)
+  let assert Ok(after) = account_store.load(pool, key, generous)
+  assert after.sessions == [session]
+}
+
 /// トランザクションの中の `run` が `Error` を返すと、先に行った書き込みが残らない。
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_transaction_rolls_back_on_error_test() {
@@ -685,11 +1008,15 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
     account_store.transaction(pool, generous.write_ms, fn(db) {
       use Nil <- result.try(account_store.insert_session(
         db,
+        key,
         generous,
-        signer: pubkey,
-        client: "client",
-        perms: "",
-        now: 1,
+        session: account_store.StoredSession(
+          signer: pubkey,
+          client: "client",
+          perms: "",
+          created_at: 1,
+          last_used_at: 1,
+        ),
       ))
       Error(account_store.QueryFailed("forced"))
     })
@@ -870,7 +1197,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
   let key = random_master_key()
   // 移行してから、書き込みが実際のストアの操作を使うアクターを起動する。
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
-  let #(name, pid) = start_bunker(pool)
+  let #(name, pid) = start_bunker(pool, key)
 
   let entry = random_entry("writes")
   let signer = entry.account
@@ -1330,11 +1657,15 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
+      key,
       generous,
-      signer: signer_hex,
-      client: "old",
-      perms: "",
-      now: 1000,
+      session: account_store.StoredSession(
+        signer: signer_hex,
+        client: "old",
+        perms: "",
+        created_at: 1000,
+        last_used_at: 1000,
+      ),
     )
   let pending =
     account_store.StoredPending(
@@ -1346,7 +1677,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
       secret_mismatch: False,
       created_at: 1000,
     )
-  let assert Ok(Nil) = account_store.insert_pending(db, pending, generous)
+  let assert Ok(Nil) = account_store.insert_pending(db, key, pending, generous)
 
   list.each(reject_session_delete, fn(statement) {
     postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
@@ -1575,14 +1906,17 @@ WHERE pubkey = $1",
 /// バンカーアクターを起動し、その名前と pid を返す。アクターはテストプロセスに
 /// リンクされるので、アクターが落ちればテストも落ちる。承認フローを使う
 /// （`auth_url` を `Some` にする）。
-fn start_bunker(pool: Name(pog.Message)) -> #(Name(bunker.Msg), Pid) {
+fn start_bunker(
+  pool: Name(pog.Message),
+  key: vault.MasterKey,
+) -> #(Name(bunker.Msg), Pid) {
   let name = process.new_name("account_store_test_bunker")
   let store =
     bunker.Store(
       ..nostr_no_su.account_store_operations(
         pool,
         process.new_name("account_store_test_unreachable_lock"),
-        random_master_key(),
+        key,
         account_store.default_timeouts,
       ),
       load: fn() {

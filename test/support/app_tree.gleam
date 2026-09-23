@@ -596,15 +596,15 @@ pub fn start_database(rows: List(vault.StoredAccount)) -> Subject(DatabaseMsg) {
 }
 
 /// 書き込み 1 件を、`account_store` の対応する関数と同じ意味で偽のデータベースに
-/// 反映する。`InsertSession` は同じ（signer, client）の行が無いときだけ末尾に足し、
-/// あれば何もしない（`ON CONFLICT DO NOTHING`。DB では先の値が残る）。挿入の後に
+/// 反映する。`InsertSession` は同じ（signer, client）の行が無ければ末尾に足し、
+/// あれば書き込みのセッションで置き換える（`ON CONFLICT DO UPDATE`）。挿入の後に
 /// `evicted` の組を除く。`DeleteSession` は組で除く。`TouchSession` は組の行の
-/// `last_used_at` を `int.max(現在の値, 書き込みのセッションの last_used_at)` にし、
-/// 行が無ければ何もしない。`InsertPending` は `replaced` と `evicted` の token を
-/// 除いてから足す。`DeletePending` は token で除く。`ApprovePending` は
-/// `DeletePending` の後に `InsertSession` と同じ規則でセッションを足す。
-/// `UpdateSessionPerms` は組の行の `perms` を書き込みのセッションの値に差し替え、
-/// 行が無ければ何もしない。
+/// `last_used_at` が書き込みのセッションの値より小さいときだけ、行を書き込みの
+/// セッションで置き換え、行が無ければ何もしない。`InsertPending` は `replaced` と
+/// `evicted` の token を除いてから足す。`DeletePending` は token で除く。
+/// `ApprovePending` は `DeletePending` の後に `InsertSession` と同じ規則で
+/// セッションを足す。`UpdateSessionPerms` は組の行を書き込みのセッションで
+/// 置き換え、行が無ければ何もしない。
 fn apply_write(database: Database, write: engine.Write) -> Database {
   case write {
     engine.InsertSession(session:, evicted:) ->
@@ -626,15 +626,9 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
           case
             #(session.signer, session.client)
             == #(touched.signer, touched.client)
+            && session.last_used_at < touched.last_used_at
           {
-            True ->
-              engine.Session(
-                ..session,
-                last_used_at: int.max(
-                  session.last_used_at,
-                  touched.last_used_at,
-                ),
-              )
+            True -> touched
             False -> session
           }
         }),
@@ -647,7 +641,7 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
             #(session.signer, session.client)
             == #(updated.signer, updated.client)
           {
-            True -> engine.Session(..session, perms: updated.perms)
+            True -> updated
             False -> session
           }
         }),
@@ -678,17 +672,25 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
   }
 }
 
-/// `ON CONFLICT (signer, client) DO NOTHING` と同じ規則でセッションを足す。
+/// `ON CONFLICT (signer, client) DO UPDATE` と同じ規則でセッションを足す（同じ
+/// 組の行は置き換える）。
 fn insert_session(
   sessions: List(engine.Session),
   session: engine.Session,
 ) -> List(engine.Session) {
+  let pair = #(session.signer, session.client)
   case
     list.any(sessions, fn(existing) {
-      #(existing.signer, existing.client) == #(session.signer, session.client)
+      #(existing.signer, existing.client) == pair
     })
   {
-    True -> sessions
+    True ->
+      list.map(sessions, fn(existing) {
+        case #(existing.signer, existing.client) == pair {
+          True -> session
+          False -> existing
+        }
+      })
     False -> list.append(sessions, [session])
   }
 }

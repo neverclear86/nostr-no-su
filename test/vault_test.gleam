@@ -348,3 +348,20 @@ pub fn row_macs_match_the_known_answers_test() {
   assert vault.row_mac(key, pending_mac_row())
     == bytes("21c41e6ab89127133b42af4ae99d8569bce978aa7c7964eec8b688c929af8100")
 }
+
+/// MAC の合わない行の説明はテーブル名、署名者、1 行に収めたクライアントで行を
+/// 指し、権限と承認待ちのトークンを含めない。
+pub fn rejected_rows_are_described_without_perms_or_token_test() {
+  let forged =
+    SessionMacRow(
+      signer: "signer-a",
+      client: "client\nforged: line",
+      perms: "sign_event",
+      created_at: 1_700_000_000,
+      last_used_at: 1_700_000_100,
+    )
+  assert vault.describe_rejected(forged)
+    == "skipped a bunker_sessions row with a mismatched MAC: signer signer-a, client client forged: line"
+  assert vault.describe_rejected(pending_mac_row())
+    == "skipped a bunker_pending row with a mismatched MAC: signer signer-a, client client-a"
+}

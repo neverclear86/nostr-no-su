@@ -4,6 +4,8 @@
 //// 乱数はこの層で引く。DB へ送るのは暗号文だけで、平文もマスターキーも DB へは
 //// 出ない。承認済みのセッション（`bunker_sessions`）と承認待ちの接続要求
 //// （`bunker_pending`）も同じ DB に保存し、`load` が同じトランザクションで読む。
+//// この 2 表の行には書き込みのたびに `vault.row_mac` の MAC を付け、読み込みでは
+//// MAC の合わない行を使わずに `Stored.rejected` に分ける。
 ////
 //// 失敗はすべて `StoreError` の値で返し、呼び出し側のプロセスを落とさない。
 //// pog と pgo が投げる例外も、クエリーの実行の入口（`execute`）で値に写す。
@@ -99,9 +101,10 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
 /// 承認済みのセッションを保存するテーブル。主キーは（signer, client）。`perms` は
 /// `connect` が要求した値をそのまま保存し、空文字列は要求なしを表す。`signer` は
 /// `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で参照するので、アカウントの
-/// 削除でその署名者のセッションも消える。時刻は Unix 秒。挿入では `created_at` と
-/// `last_used_at` に同じ値を入れる（`insert_session`）。`last_used_at` は
-/// `touch_session` で進める。
+/// 削除でその署名者のセッションも消える。時刻は Unix 秒。新しい組では
+/// `created_at` と `last_used_at` が同じ値で入る（`engine` の `new_session`）。
+/// `last_used_at` は `touch_session` で進める。行の MAC の列 `mac` は版 6 の移行
+/// （`add_row_macs`）で足す。
 pub const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
   client text NOT NULL,
@@ -114,7 +117,8 @@ pub const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
 /// 承認待ちの接続要求を保存するテーブル。`token` が主キーで、承認ページの URL に
 /// 入る値である。`signer` は `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で
 /// 参照するので、アカウントの削除でその署名者の承認待ちも消える。時刻は
-/// Unix 秒。長さの `CHECK` は置かない。
+/// Unix 秒。長さの `CHECK` は置かない。行の MAC の列 `mac` は版 6 の移行
+/// （`add_row_macs`）で足す。
 pub const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
   token text PRIMARY KEY,
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
@@ -143,6 +147,17 @@ pub const create_plugin_resume_table = "CREATE TABLE IF NOT EXISTS plugin_resume
   updated_at timestamptz NOT NULL DEFAULT now()
 )"
 
+/// 版 6 の移行。既存のセッションと承認待ちの行を消してから、行の MAC の列を
+/// 足す。版 5 までの行は MAC を持たないので、残すと読み込みで使えない行になる。
+/// 消したセッションのクライアントは接続と承認をやり直す。`DELETE FROM` は何度
+/// 実行してもよく、表が空なので `NOT NULL` の列を既定値なしで足せる。
+const add_row_macs = [
+  "DELETE FROM bunker_pending",
+  "DELETE FROM bunker_sessions",
+  "ALTER TABLE bunker_sessions ADD COLUMN IF NOT EXISTS mac bytea NOT NULL",
+  "ALTER TABLE bunker_pending ADD COLUMN IF NOT EXISTS mac bytea NOT NULL",
+]
+
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
 pub type Migration {
@@ -151,9 +166,10 @@ pub type Migration {
 
 /// 本体のスキーマの移行。版は 1 から欠番なく昇順に並べ、足すときは末尾に置く。
 ///
-/// 移行の文は何度実行してもよい形（`IF NOT EXISTS` など）で書く。途中で失敗した
-/// 移行は版が記録されないので、次の読み込みで頭から実行し直される。`IF NOT EXISTS` で
-/// 書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を見直す。
+/// 移行の文は何度実行してもよい形（`IF NOT EXISTS` か、表を空にする
+/// `DELETE FROM`）で書く。途中で失敗した移行は版が記録されないので、次の
+/// 読み込みで頭から実行し直される。この 2 つの形で書けない文を足すときは、
+/// `migration_statements_can_be_re_run_test` の条件を見直す。
 pub const migrations = [
   Migration(version: 1, statements: [create_accounts_table]),
   Migration(version: 2, statements: [create_monitor_resume_table]),
@@ -163,6 +179,7 @@ pub const migrations = [
   ),
   Migration(version: 4, statements: [create_relays_table]),
   Migration(version: 5, statements: [create_plugin_resume_table]),
+  Migration(version: 6, statements: add_row_macs),
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
@@ -214,33 +231,34 @@ const update_secret_sql = "UPDATE bunker_accounts SET encrypted_secret = $2 WHER
 const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
 
 /// セッションの一覧。テストの安定のための順。
-const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at
+const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at, mac
 FROM bunker_sessions
 ORDER BY created_at, signer, client"
 
 /// 承認待ちの一覧。テストの安定のための順。
-const select_pending_sql = "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at
+const select_pending_sql = "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at, mac
 FROM bunker_pending
 ORDER BY created_at, token"
 
-/// セッションの挿入。同じ（signer, client）があれば何もしない。`last_used_at` には
-/// `created_at`（`$4`）と同じ値を入れる。
-const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at)
-VALUES ($1, $2, $3, $4, $4)
-ON CONFLICT (signer, client) DO NOTHING"
+/// セッションの挿入。同じ（signer, client）があれば全列と MAC をこの値で
+/// 上書きする。
+const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (signer, client) DO UPDATE
+SET perms = EXCLUDED.perms, created_at = EXCLUDED.created_at, last_used_at = EXCLUDED.last_used_at, mac = EXCLUDED.mac"
 
-/// 最終利用の更新。時刻が進むときだけ書き換える。
-const touch_session_sql = "UPDATE bunker_sessions SET last_used_at = $3 WHERE signer = $1 AND client = $2 AND last_used_at < $3"
+/// 最終利用の更新。時刻が進むときだけ、全列と MAC を書き換える。
+const touch_session_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6 WHERE signer = $1 AND client = $2 AND last_used_at < $5"
 
-/// 権限の更新。
-const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3 WHERE signer = $1 AND client = $2"
+/// 権限の更新。全列と MAC を書き換える。
+const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6 WHERE signer = $1 AND client = $2"
 
 /// セッションの削除。
 const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
 
 /// 承認待ちの挿入。同じ token があれば何もしない。
-const insert_pending_sql = "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+const insert_pending_sql = "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at, mac)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (token) DO NOTHING"
 
 /// 承認待ちの削除。
@@ -257,7 +275,7 @@ pub type StoredSession {
     perms: String,
     /// 作成した Unix 秒。
     created_at: Int,
-    /// 最後に使った Unix 秒。挿入では `created_at` と同じ値。
+    /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
     last_used_at: Int,
   )
 }
@@ -291,6 +309,8 @@ pub type Stored {
     sessions: List(StoredSession),
     /// 承認待ちの接続要求（`created_at`、`token` の順）。
     pending: List(StoredPending),
+    /// MAC の合わない行（セッション、承認待ちの順）。どちらも元の行の順序を保つ。
+    rejected: List(vault.MacRow),
   )
 }
 
@@ -450,9 +470,12 @@ pub fn transaction(
 
 /// スキーマを最新の版に移行してから、アカウント、承認済みのセッション、承認待ちの
 /// 接続要求を読み込む。アカウントは復号できた行と飛ばした行に分ける
-/// （`vault.open_rows`）。3 つのうちどれかの読み込みが `Error` なら全体を `Error`
-/// にする。`transaction` の中で呼ぶ（`load`）。`nostr_no_su.load_snapshot` が
-/// 同じトランザクションで `relay_store.list` も読むために公開する。
+/// （`vault.open_rows`）。セッションと承認待ちは行の MAC を `key` で検証し、
+/// 合わない行（列を書き換えた行、別の行の MAC を移した行、空の MAC の行）は
+/// `sessions` と `pending` に入れずに `rejected` に分ける。3 つのうちどれかの
+/// 読み込みが `Error` なら全体を `Error` にする。`transaction` の中で呼ぶ
+/// （`load`）。`nostr_no_su.load_snapshot` が同じトランザクションで
+/// `relay_store.list` も読むために公開する。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
 /// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の `INSERT` / `UPDATE` /
@@ -498,10 +521,15 @@ pub fn load_within(
     |> pog.returning(pending_decoder())
     |> execute(db),
   )
+  let #(sessions_list, rejected_sessions) =
+    split_by_mac(key, sessions.rows, session_mac_row)
+  let #(pending_list, rejected_pending) =
+    split_by_mac(key, pending.rows, pending_mac_row)
   Ok(Stored(
     accounts: vault.open_rows(key, accounts.rows),
-    sessions: sessions.rows,
-    pending: pending.rows,
+    sessions: sessions_list,
+    pending: pending_list,
+    rejected: list.append(rejected_sessions, rejected_pending),
   ))
 }
 
@@ -593,57 +621,58 @@ pub fn update_label(
   |> execute_on_one_row(db, timeouts, NotRegistered)
 }
 
-/// セッションを 1 件追加する。同じ（signer, client）の組がすでにあれば何もしない
-/// （2 インスタンスが並ぶ窓で、両方が同じ値を挿そうとする場合を吸収する）。
-/// `last_used_at` は `now` と同じ値で入れる。
+/// セッション `session` を 1 件追加する。同じ（signer, client）の組がすでに
+/// あれば、全列と MAC をこの値で上書きする。MAC の合わない行が主キーを塞いで
+/// 正しい承認が保存されなくなるのを防ぐためで、2 インスタンスが並ぶ窓で両方が
+/// 同じ値を挿す場合も吸収する。
 pub fn insert_session(
   db: pog.Connection,
+  key: MasterKey,
   timeouts: Timeouts,
-  signer signer: String,
-  client client: String,
-  perms perms: String,
-  now now: Int,
+  session session: StoredSession,
 ) -> Result(Nil, StoreError) {
-  pog.query(insert_session_sql)
-  |> pog.parameter(pog.text(signer))
-  |> pog.parameter(pog.text(client))
-  |> pog.parameter(pog.text(perms))
-  |> pog.parameter(pog.int(now))
-  |> pog.timeout(timeouts.write_ms)
-  |> execute(db)
-  |> result.replace(Nil)
+  write_session_row(db, key, timeouts, insert_session_sql, session)
 }
 
-/// セッションの最終利用を `now` に進める。行が無いか、すでに `now` 以上なら
+/// セッションの最終利用を `session.last_used_at` に進め、行の全列と MAC を
+/// `session` の値にする。行が無いか、すでに `session.last_used_at` 以上なら
 /// 何もせず `Ok`（2 インスタンスが並ぶ窓で後退させない）。
 pub fn touch_session(
   db: pog.Connection,
+  key: MasterKey,
   timeouts: Timeouts,
-  signer signer: String,
-  client client: String,
-  now now: Int,
+  session session: StoredSession,
 ) -> Result(Nil, StoreError) {
-  pog.query(touch_session_sql)
-  |> pog.parameter(pog.text(signer))
-  |> pog.parameter(pog.text(client))
-  |> pog.parameter(pog.int(now))
-  |> pog.timeout(timeouts.write_ms)
-  |> execute(db)
-  |> result.replace(Nil)
+  write_session_row(db, key, timeouts, touch_session_sql, session)
 }
 
-/// セッションの権限を差し替える。行が無ければ何もせず `Ok`。
+/// セッションの権限を `session.perms` に差し替え、行の全列と MAC を `session` の
+/// 値にする。行が無ければ何もせず `Ok`。
 pub fn update_session_perms(
   db: pog.Connection,
+  key: MasterKey,
   timeouts: Timeouts,
-  signer signer: String,
-  client client: String,
-  perms perms: String,
+  session session: StoredSession,
 ) -> Result(Nil, StoreError) {
-  pog.query(update_session_perms_sql)
-  |> pog.parameter(pog.text(signer))
-  |> pog.parameter(pog.text(client))
-  |> pog.parameter(pog.text(perms))
+  write_session_row(db, key, timeouts, update_session_perms_sql, session)
+}
+
+/// `sql`（`insert_session_sql`、`touch_session_sql`、`update_session_perms_sql`
+/// のどれか）で、（signer, client）の行の全列と MAC を `session` の値にする。
+fn write_session_row(
+  db: pog.Connection,
+  key: MasterKey,
+  timeouts: Timeouts,
+  sql: String,
+  session: StoredSession,
+) -> Result(Nil, StoreError) {
+  pog.query(sql)
+  |> pog.parameter(pog.text(session.signer))
+  |> pog.parameter(pog.text(session.client))
+  |> pog.parameter(pog.text(session.perms))
+  |> pog.parameter(pog.int(session.created_at))
+  |> pog.parameter(pog.int(session.last_used_at))
+  |> pog.parameter(pog.bytea(vault.row_mac(key, session_mac_row(session))))
   |> pog.timeout(timeouts.write_ms)
   |> execute(db)
   |> result.replace(Nil)
@@ -676,26 +705,18 @@ fn delete_sessions(
   })
 }
 
-/// セッションを 1 件追加し、`evicted` の組を消す。1 トランザクションで行うので、
+/// セッション `session` を 1 件追加し（同じ組があれば上書きする。
+/// `insert_session`）、`evicted` の組を消す。1 トランザクションで行うので、
 /// 挿入だけが残ることは無い。
 pub fn insert_session_evicting(
   pool: Name(pog.Message),
+  key: MasterKey,
   timeouts: Timeouts,
-  signer signer: String,
-  client client: String,
-  perms perms: String,
-  now now: Int,
+  session session: StoredSession,
   evicted evicted: List(#(String, String)),
 ) -> Result(Nil, StoreError) {
   transaction(pool, timeouts.write_ms, fn(db) {
-    use Nil <- result.try(insert_session(
-      db,
-      timeouts,
-      signer: signer,
-      client: client,
-      perms: perms,
-      now: now,
-    ))
+    use Nil <- result.try(insert_session(db, key, timeouts, session: session))
     delete_sessions(db, timeouts, evicted)
   })
 }
@@ -704,6 +725,7 @@ pub fn insert_session_evicting(
 /// （2 インスタンスが並ぶ窓を吸収する）。
 pub fn insert_pending(
   db: pog.Connection,
+  key: MasterKey,
   pending: StoredPending,
   timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
@@ -715,6 +737,7 @@ pub fn insert_pending(
   |> pog.parameter(pog.text(pending.perms))
   |> pog.parameter(pog.bool(pending.secret_mismatch))
   |> pog.parameter(pog.int(pending.created_at))
+  |> pog.parameter(pog.bytea(vault.row_mac(key, pending_mac_row(pending))))
   |> pog.timeout(timeouts.write_ms)
   |> execute(db)
   |> result.replace(Nil)
@@ -734,31 +757,22 @@ pub fn delete_pending(
 }
 
 /// 承認待ちの接続要求 `token` を承認する。1 トランザクションでその行を消し、
-/// `signer`、`client`、`perms`、`now` のセッションを追加し、`evicted` の組を消す。
-/// 承認の値の出どころはエンジンのメモリなので、消した行から読み返さない。
-/// `DELETE … RETURNING` で拾うと、2 インスタンスが並ぶ窓で別のインスタンスが先に
-/// 消していた場合にセッションを作れなくなるためである。承認待ちの行が無くても
-/// 追加する。
+/// セッション `session` を追加し（同じ組があれば上書きする。`insert_session`）、
+/// `evicted` の組を消す。承認の値の出どころはエンジンのメモリなので、消した行から
+/// 読み返さない。`DELETE … RETURNING` で拾うと、2 インスタンスが並ぶ窓で別の
+/// インスタンスが先に消していた場合にセッションを作れなくなるためである。承認待ちの
+/// 行が無くても追加する。
 pub fn approve(
   pool: Name(pog.Message),
+  key: MasterKey,
   timeouts: Timeouts,
   token token: String,
-  signer signer: String,
-  client client: String,
-  perms perms: String,
-  now now: Int,
+  session session: StoredSession,
   evicted evicted: List(#(String, String)),
 ) -> Result(Nil, StoreError) {
   transaction(pool, timeouts.write_ms, fn(db) {
     use Nil <- result.try(delete_pending(db, timeouts, token: token))
-    use Nil <- result.try(insert_session(
-      db,
-      timeouts,
-      signer: signer,
-      client: client,
-      perms: perms,
-      now: now,
-    ))
+    use Nil <- result.try(insert_session(db, key, timeouts, session: session))
     delete_sessions(db, timeouts, evicted)
   })
 }
@@ -767,6 +781,7 @@ pub fn approve(
 /// `pending` を登録する。1 トランザクションで行うので、削除だけが残ることは無い。
 pub fn insert_pending_replacing(
   pool: Name(pog.Message),
+  key: MasterKey,
   timeouts: Timeouts,
   pending pending: StoredPending,
   replaced replaced: List(String),
@@ -780,7 +795,7 @@ pub fn insert_pending_replacing(
         token: _,
       )),
     )
-    insert_pending(db, pending, timeouts)
+    insert_pending(db, key, pending, timeouts)
   })
 }
 
@@ -930,24 +945,24 @@ fn row_decoder() -> decode.Decoder(vault.Row) {
   ))
 }
 
-/// `bunker_sessions` の 1 行を読むデコーダー。列の順序は `select_sessions_sql` と同じ。
-fn session_decoder() -> decode.Decoder(StoredSession) {
+/// `bunker_sessions` の 1 行を、値と MAC の組にして読むデコーダー。列の順序は
+/// `select_sessions_sql` と同じ。
+fn session_decoder() -> decode.Decoder(#(StoredSession, BitArray)) {
   use signer <- decode.field(0, decode.string)
   use client <- decode.field(1, decode.string)
   use perms <- decode.field(2, decode.string)
   use created_at <- decode.field(3, decode.int)
   use last_used_at <- decode.field(4, decode.int)
-  decode.success(StoredSession(
-    signer:,
-    client:,
-    perms:,
-    created_at:,
-    last_used_at:,
+  use mac <- decode.field(5, decode.bit_array)
+  decode.success(#(
+    StoredSession(signer:, client:, perms:, created_at:, last_used_at:),
+    mac,
   ))
 }
 
-/// `bunker_pending` の 1 行を読むデコーダー。列の順序は `select_pending_sql` と同じ。
-fn pending_decoder() -> decode.Decoder(StoredPending) {
+/// `bunker_pending` の 1 行を、値と MAC の組にして読むデコーダー。列の順序は
+/// `select_pending_sql` と同じ。
+fn pending_decoder() -> decode.Decoder(#(StoredPending, BitArray)) {
   use token <- decode.field(0, decode.string)
   use signer <- decode.field(1, decode.string)
   use client <- decode.field(2, decode.string)
@@ -955,13 +970,58 @@ fn pending_decoder() -> decode.Decoder(StoredPending) {
   use perms <- decode.field(4, decode.string)
   use secret_mismatch <- decode.field(5, decode.bool)
   use created_at <- decode.field(6, decode.int)
-  decode.success(StoredPending(
-    token:,
-    signer:,
-    client:,
-    request_id:,
-    perms:,
-    secret_mismatch:,
-    created_at:,
+  use mac <- decode.field(7, decode.bit_array)
+  decode.success(#(
+    StoredPending(
+      token:,
+      signer:,
+      client:,
+      request_id:,
+      perms:,
+      secret_mismatch:,
+      created_at:,
+    ),
+    mac,
   ))
+}
+
+/// 読んだ行（値と MAC の組）を、MAC の合う値と、合わない行の MAC の対象に
+/// 分ける。どちらも元の順序を保つ。
+fn split_by_mac(
+  key: MasterKey,
+  rows: List(#(row, BitArray)),
+  mac_row: fn(row) -> vault.MacRow,
+) -> #(List(row), List(vault.MacRow)) {
+  let #(matching, rejected) =
+    list.partition(rows, fn(pair) {
+      vault.verify_row_mac(key, mac_row(pair.0), pair.1)
+    })
+  #(
+    list.map(matching, fn(pair) { pair.0 }),
+    list.map(rejected, fn(pair) { mac_row(pair.0) }),
+  )
+}
+
+/// セッションの行の MAC の対象。
+fn session_mac_row(session: StoredSession) -> vault.MacRow {
+  vault.SessionMacRow(
+    signer: session.signer,
+    client: session.client,
+    perms: session.perms,
+    created_at: session.created_at,
+    last_used_at: session.last_used_at,
+  )
+}
+
+/// 承認待ちの行の MAC の対象。
+fn pending_mac_row(pending: StoredPending) -> vault.MacRow {
+  vault.PendingMacRow(
+    token: pending.token,
+    signer: pending.signer,
+    client: pending.client,
+    request_id: pending.request_id,
+    perms: pending.perms,
+    secret_mismatch: pending.secret_mismatch,
+    created_at: pending.created_at,
+  )
 }

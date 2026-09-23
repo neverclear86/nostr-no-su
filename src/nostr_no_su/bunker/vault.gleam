@@ -24,6 +24,7 @@ import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/hex
+import nostr_no_su/log
 
 /// x-only 公開鍵のバイト数。
 const pubkey_bytes = 32
@@ -102,7 +103,7 @@ pub type MacRow {
     perms: String,
     /// 作成した Unix 秒。
     created_at: Int,
-    /// 最後に使った Unix 秒。挿入では `created_at` と同じ値。
+    /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
     last_used_at: Int,
   )
   /// `bunker_pending` の 1 行（承認待ちの接続要求）。
@@ -231,6 +232,24 @@ pub fn describe_skipped(skipped: Skipped) -> String {
     reason ->
       "skipped account " <> skipped.pubkey <> ": " <> describe_row_error(reason)
   }
+}
+
+/// MAC の合わない行 1 件のログ用の説明。テーブル名、署名者、クライアントで行を
+/// 指し、権限と承認待ちのトークンは含めない。クライアントの列は DB に書ける者が
+/// 任意の文字列にできるので `log.sanitize_external` で 1 行に収める。署名者の列は
+/// `bunker_accounts(pubkey)` の外部キーで 64 桁の 16 進に限られるので、そのまま
+/// 出す。
+pub fn describe_rejected(row: MacRow) -> String {
+  let #(table, signer, client) = case row {
+    SessionMacRow(signer:, client:, ..) -> #("bunker_sessions", signer, client)
+    PendingMacRow(signer:, client:, ..) -> #("bunker_pending", signer, client)
+  }
+  "skipped a "
+  <> table
+  <> " row with a mismatched MAC: signer "
+  <> signer
+  <> ", client "
+  <> log.sanitize_external(client)
 }
 
 /// 1 行の MAC（HMAC-SHA256、32 バイト）を計算する。MAC の鍵は呼び出しのたびに
