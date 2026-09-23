@@ -250,7 +250,7 @@ pub fn section_renders_every_block_type_test() {
   assert string.contains(body, "worker")
   assert string.contains(
     body,
-    element.to_string(view.status_badge(view.Success, "ok")),
+    element.to_string(view.status_chip(view.ToneChip(view.Success), "ok")),
   )
   assert string.contains(
     body,
@@ -261,7 +261,7 @@ pub fn section_renders_every_block_type_test() {
     element.to_string(view.button_link(
       "/plugins/example/settings",
       "Open settings",
-      view.Normal,
+      view.GhostButton,
     )),
   )
 }
@@ -442,7 +442,7 @@ pub fn form_block_renders_checkboxes_test() {
         view.plugin_checkbox_row("bot", "Bot account", None, False),
       ],
       "Save",
-      view.Primary,
+      view.PrimaryButton,
       view.InForm,
     )),
   )
@@ -477,7 +477,7 @@ pub fn form_block_renders_text_fields_test() {
         view.plugin_textarea_field("about", "About", None, "Hello."),
       ],
       "Save",
-      view.Primary,
+      view.PrimaryButton,
       view.InForm,
     )),
   )

@@ -155,16 +155,20 @@ pub type NavbarSwitch {
   NoSwitch
 }
 
-/// 操作の重さ。ボタンの色を決める。
-pub type Weight {
-  /// 状態を変えない、または取り消しても害が無い操作。
-  Normal
-  /// 登録、保存、承認。
-  Primary
-  /// 接続中のクライアントに影響する、または秘密を画面に出す操作。やり直しは効く。
-  Caution
-  /// 取り返しがつかない操作。
-  Destructive
+/// ボタンの種類。daisyUI のボタンのクラスを決める。
+pub type ButtonKind {
+  /// 主の操作（登録、保存、承認、追加、接続）。塗りの primary。
+  PrimaryButton
+  /// 枠だけのボタン。フォームの末尾の、主ではない送信に使う。
+  OutlineButton
+  /// 地味なボタン。主でも危険でもない操作の入口と、取り消しのきく操作の送信に使う。
+  GhostButton
+  /// 取り返しのつかない操作の送信。塗りの error。
+  DangerButton
+  /// 取り返しのつかない操作への入口。地味なボタンに error の文字色。
+  DangerGhostButton
+  /// 秘密を画面に出す、または接続中のクライアントに影響する操作の送信。warning の枠。
+  WarningOutlineButton
 }
 
 /// ボタンを置く場所。
@@ -175,7 +179,7 @@ pub type Placement {
   InForm
 }
 
-/// 通知や理由の囲みと、状態のバッジの色。
+/// 通知や理由の囲みと、`ToneChip` のチップの色。
 pub type Tone {
   /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（アカウント、
   /// セッションの一覧を得られない）。
@@ -189,6 +193,31 @@ pub type Tone {
   Failure
   /// 承認の意味の説明など、危険を伴わない補足。
   Info
+}
+
+/// 状態のチップの種類。色とアイコンを決め、語は呼び出し側が渡す。
+pub type Chip {
+  /// 接続中、動作中。success の色と circle-check。
+  ActiveChip
+  /// リレーの未接続。warning の色と unplug。
+  DisconnectedChip
+  /// 締め切りまでに状態が返らない（リレーの用途、プラグイン）。warning の色と clock。
+  UnansweredChip
+  /// 使っていないリレーの用途。点線の枠で塗らず、circle-minus。
+  UnusedChip
+  /// プラグインの過負荷。warning の色と gauge。
+  OverloadedChip
+  /// プラグインの無効。error の色と ban。
+  DisabledChip
+  /// 起動時に読み込めなかったプラグイン。error の色と octagon-alert。
+  LoadFailedChip
+  /// 承認待ちの secret の提示なし。色を付けず shield。
+  SecretNotOfferedChip
+  /// 承認待ちの secret の不一致。warning の色と shield-alert。
+  SecretMismatchChip
+  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし）。
+  /// 色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
+  ToneChip(tone: Tone)
 }
 
 /// ページを自動で読み込み直すかどうか。`RefreshEverySeconds` のページだけ
@@ -848,10 +877,10 @@ pub fn post_form(
   action: String,
   fields: List(Element(msg)),
   label: String,
-  weight: Weight,
+  kind: ButtonKind,
   placement: Placement,
 ) -> Element(msg) {
-  form_with([], action, fields, label, weight, placement)
+  form_with([], action, fields, label, kind, placement)
 }
 
 /// 秘密を入力させるフォーム。フォームにも `autocomplete="off"` を付け、ブラウザーが
@@ -860,7 +889,7 @@ pub fn secret_post_form(
   action: String,
   fields: List(Element(msg)),
   label: String,
-  weight: Weight,
+  kind: ButtonKind,
   placement: Placement,
 ) -> Element(msg) {
   form_with(
@@ -868,7 +897,7 @@ pub fn secret_post_form(
     action,
     fields,
     label,
-    weight,
+    kind,
     placement,
   )
 }
@@ -879,14 +908,14 @@ fn form_with(
   action: String,
   fields: List(Element(msg)),
   label: String,
-  weight: Weight,
+  kind: ButtonKind,
   placement: Placement,
 ) -> Element(msg) {
   let submit =
     html.button(
       [
         attribute.type_("submit"),
-        attribute.class(button_class(weight, placement)),
+        attribute.class(button_class(kind, placement)),
       ],
       [html.text(label)],
     )
@@ -909,28 +938,44 @@ fn form_layout(placement: Placement) -> List(Attribute(msg)) {
 }
 
 /// ボタンの見た目のリンク。ダッシュボードの行で、操作のページへの入口に使う。
-pub fn button_link(href: String, text: String, weight: Weight) -> Element(msg) {
-  html.a([attribute.href(href), attribute.class(button_class(weight, InRow))], [
+pub fn button_link(
+  href: String,
+  text: String,
+  kind: ButtonKind,
+) -> Element(msg) {
+  html.a([attribute.href(href), attribute.class(button_class(kind, InRow))], [
     html.text(text),
   ])
 }
 
-/// 操作の重さと置き場所の組ごとのボタンのクラス。
-fn button_class(weight: Weight, placement: Placement) -> String {
-  case placement, weight {
-    InRow, Normal -> "btn btn-ghost btn-sm focus-visible:outline-base-content"
-    InRow, Primary ->
+/// ボタンの種類と置き場所の組ごとのクラス。行に置くものは小さく（`btn-sm`）、フォームの末尾に
+/// 置くものは左に寄せる（`self-start`）。
+fn button_class(kind: ButtonKind, placement: Placement) -> String {
+  case placement, kind {
+    InRow, PrimaryButton ->
       "btn btn-primary btn-sm focus-visible:outline-base-content"
-    InRow, Caution -> "btn btn-ghost btn-sm focus-visible:outline-base-content"
-    InRow, Destructive ->
+    InRow, OutlineButton ->
+      "btn btn-outline btn-sm focus-visible:outline-base-content"
+    InRow, GhostButton ->
+      "btn btn-ghost btn-sm focus-visible:outline-base-content"
+    InRow, DangerButton ->
+      "btn btn-error btn-sm focus-visible:outline-base-content"
+    InRow, DangerGhostButton ->
       "btn btn-ghost btn-sm text-error focus-visible:outline-base-content"
-    InForm, Normal -> "btn self-start focus-visible:outline-base-content"
-    InForm, Primary ->
+    InRow, WarningOutlineButton ->
+      "btn btn-outline btn-warning btn-sm focus-visible:outline-base-content"
+    InForm, PrimaryButton ->
       "btn btn-primary self-start focus-visible:outline-base-content"
-    InForm, Caution ->
-      "btn btn-warning self-start focus-visible:outline-base-content"
-    InForm, Destructive ->
+    InForm, OutlineButton ->
+      "btn btn-outline self-start focus-visible:outline-base-content"
+    InForm, GhostButton ->
+      "btn btn-ghost self-start focus-visible:outline-base-content"
+    InForm, DangerButton ->
       "btn btn-error self-start focus-visible:outline-base-content"
+    InForm, DangerGhostButton ->
+      "btn btn-ghost self-start text-error focus-visible:outline-base-content"
+    InForm, WarningOutlineButton ->
+      "btn btn-outline btn-warning self-start focus-visible:outline-base-content"
   }
 }
 
@@ -1229,8 +1274,8 @@ fn alert_class(tone: Tone) -> String {
 }
 
 /// トーンごとのアイコン。`Neutral` と `Info` は情報、ほかはトーンの色（`text-success` など）を
-/// 付けた丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning`、`status_badge` が共有
-/// する。
+/// 付けた丸のチェック・三角・丸の×。`alert`、`reason_alert`、`warning` と、`status_chip` の
+/// `ToneChip` が共有する。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
     Neutral -> lucide_icon("size-4", info_icon_paths)
@@ -1241,16 +1286,55 @@ pub fn tone_icon(tone: Tone) -> Element(msg) {
   }
 }
 
-/// アイコン＋語の状態バッジ。`Neutral` は無色の ghost、ほかはトーンの色の薄い塗り。
-pub fn status_badge(tone: Tone, text: String) -> Element(msg) {
-  let class = case tone {
-    Neutral -> "badge badge-ghost badge-sm whitespace-nowrap gap-1"
+/// アイコン＋語の状態のチップ。色とアイコンは `chip` で決まり、色だけに頼らない。
+pub fn status_chip(chip: Chip, text: String) -> Element(msg) {
+  html.span([attribute.class(chip_class(chip))], [
+    chip_icon(chip),
+    html.text(text),
+  ])
+}
+
+/// チップのクラス。未使用だけ点線の枠にし、ほかは状態をトーンに写して `tone_chip_class` を
+/// 使う。
+fn chip_class(chip: Chip) -> String {
+  case chip {
+    UnusedChip -> "badge badge-dash badge-sm whitespace-nowrap gap-1"
+    ActiveChip -> tone_chip_class(Success)
+    DisconnectedChip | UnansweredChip | OverloadedChip | SecretMismatchChip ->
+      tone_chip_class(Warning)
+    DisabledChip | LoadFailedChip -> tone_chip_class(Failure)
+    SecretNotOfferedChip -> tone_chip_class(Neutral)
+    ToneChip(tone) -> tone_chip_class(tone)
+  }
+}
+
+/// トーンごとのチップのクラス。どれも薄い塗り（`badge-soft`）で、`Neutral` だけ色の修飾を
+/// 付けない。
+fn tone_chip_class(tone: Tone) -> String {
+  case tone {
+    Neutral -> "badge badge-soft badge-sm whitespace-nowrap gap-1"
     Success -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-success"
     Warning -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-warning"
     Failure -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-error"
     Info -> "badge badge-soft badge-sm whitespace-nowrap gap-1 badge-info"
   }
-  html.span([attribute.class(class)], [tone_icon(tone), html.text(text)])
+}
+
+/// チップのアイコン。状態の変種は Lucide のストロークを文字色で描き、`ToneChip` は `tone_icon` を
+/// 使う。
+fn chip_icon(chip: Chip) -> Element(msg) {
+  case chip {
+    ToneChip(tone) -> tone_icon(tone)
+    ActiveChip -> lucide_icon("size-4", check_circle_icon_paths)
+    DisconnectedChip -> lucide_icon("size-4", unplug_icon_paths)
+    UnansweredChip -> lucide_icon("size-4", clock_icon_paths)
+    UnusedChip -> lucide_icon("size-4", circle_minus_icon_paths)
+    OverloadedChip -> lucide_icon("size-4", gauge_icon_paths)
+    DisabledChip -> lucide_icon("size-4", ban_icon_paths)
+    LoadFailedChip -> lucide_icon("size-4", octagon_alert_icon_paths)
+    SecretNotOfferedChip -> lucide_icon("size-4", shield_icon_paths)
+    SecretMismatchChip -> lucide_icon("size-4", shield_alert_icon_paths)
+  }
 }
 
 /// 件数のピル。
@@ -1368,9 +1452,9 @@ pub fn icon_button_link(
   href: String,
   icon: Element(msg),
   text: String,
-  weight: Weight,
+  kind: ButtonKind,
 ) -> Element(msg) {
-  html.a([attribute.href(href), attribute.class(button_class(weight, InRow))], [
+  html.a([attribute.href(href), attribute.class(button_class(kind, InRow))], [
     icon,
     html.text(text),
   ])
@@ -1381,13 +1465,13 @@ pub fn icon_only_link(
   href: String,
   icon: Element(msg),
   label: String,
-  weight: Weight,
+  kind: ButtonKind,
 ) -> Element(msg) {
   html.a(
     [
       attribute.href(href),
       attribute.aria_label(label),
-      attribute.class(button_class(weight, InRow)),
+      attribute.class(button_class(kind, InRow)),
     ],
     [icon],
   )
@@ -1528,6 +1612,44 @@ const x_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
 ]
 
+/// `DisconnectedChip` のストローク（Lucide の unplug）。
+const unplug_icon_paths = [
+  "m19 5 3-3", "m2 22 3-3",
+  "M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z",
+  "M7.5 13.5 10 11", "M10.5 16.5 13 14",
+  "m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z",
+]
+
+/// `UnusedChip` のストローク（Lucide の circle-minus）。
+const circle_minus_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M8 12h8",
+]
+
+/// `OverloadedChip` のストローク（Lucide の gauge）。
+const gauge_icon_paths = ["m12 14 4-4", "M3.34 19a10 10 0 1 1 17.32 0"]
+
+/// `DisabledChip` のストローク（Lucide の ban）。
+const ban_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M4.929 4.929 19.07 19.071",
+]
+
+/// `LoadFailedChip` のストローク（Lucide の octagon-alert）。
+const octagon_alert_icon_paths = [
+  "M12 16h.01", "M12 8v4",
+  "M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z",
+]
+
+/// `SecretNotOfferedChip` のストローク（Lucide の shield）。
+const shield_icon_paths = [
+  "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+]
+
+/// `SecretMismatchChip` のストローク（Lucide の shield-alert）。
+const shield_alert_icon_paths = [
+  "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+  "M12 8v4", "M12 16h.01",
+]
+
 /// `Neutral` のトーンのアイコン（Lucide の info）。
 pub fn info_icon() -> Element(msg) {
   lucide_icon("size-4", info_icon_paths)
@@ -1618,11 +1740,14 @@ pub fn users_icon() -> Element(msg) {
   ])
 }
 
+/// `clock_icon` のストローク（Lucide の clock）。
+const clock_icon_paths = [
+  "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
+]
+
 /// セッションの節のアイコン（Lucide の clock）。
 pub fn clock_icon() -> Element(msg) {
-  lucide_icon("size-4", [
-    "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
-  ])
+  lucide_icon("size-4", clock_icon_paths)
 }
 
 /// プラグインの節のアイコン（Lucide の puzzle）。

@@ -205,7 +205,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       use page_key <- result.try(text_field(raw, "page"))
       use text <- result.try(text_field(raw, "text"))
       case context.page_href(page_key) {
-        Ok(href) -> Ok(view.button_link(href, text, view.Normal))
+        Ok(href) -> Ok(view.button_link(href, text, view.GhostButton))
         Error(Nil) -> Error("unknown page \"" <> page_key <> "\"")
       }
     }
@@ -234,7 +234,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
             context.form_action,
             fields,
             submit,
-            view.Primary,
+            view.PrimaryButton,
             view.InForm,
           ))
         }
@@ -412,7 +412,7 @@ fn inline(raw: Dynamic) -> Result(Element(msg), String) {
     "badge" -> {
       use text <- result.try(text_field(raw, "text"))
       use badge_tone <- result.try(tone(raw, view.Neutral))
-      Ok(view.status_badge(badge_tone, text))
+      Ok(view.status_chip(view.ToneChip(badge_tone), text))
     }
     "id" -> Error("type \"id\" is only allowed in pairs values")
     other -> Error("unknown type \"" <> other <> "\"")

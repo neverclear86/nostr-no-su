@@ -664,13 +664,37 @@ pub fn all_pages() -> List(String) {
   list.flat_map(i18n.languages, pages)
 }
 
+/// ボタンの種類のすべて。`components` がどの置き場所でも全種類を描くのに使う。
+const button_kinds = [
+  view.PrimaryButton,
+  view.OutlineButton,
+  view.GhostButton,
+  view.DangerButton,
+  view.DangerGhostButton,
+  view.WarningOutlineButton,
+]
+
 /// ページに埋め込まれずに使う `view.gleam` の部品を、状態の分岐をすべて通して描いた文字列。
 /// `view.gleam` に部品を足したらここにも足す。
 pub fn components(language: i18n.Language) -> List(String) {
   list.flatten([
     list.map(
-      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
-      fn(tone) { element.to_string(view.status_badge(tone, "text")) },
+      [
+        view.ActiveChip,
+        view.DisconnectedChip,
+        view.UnansweredChip,
+        view.UnusedChip,
+        view.OverloadedChip,
+        view.DisabledChip,
+        view.LoadFailedChip,
+        view.SecretNotOfferedChip,
+        view.SecretMismatchChip,
+        ..list.map(
+          [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
+          view.ToneChip,
+        )
+      ],
+      fn(chip) { element.to_string(view.status_chip(chip, "text")) },
     ),
     [element.to_string(view.count_pill(3))],
     [
@@ -681,7 +705,7 @@ pub fn components(language: i18n.Language) -> List(String) {
           "caption",
           view.hint("description"),
           True,
-          [view.status_badge(view.Success, "badge")],
+          [view.status_chip(view.ActiveChip, "badge")],
         ),
       ),
       element.to_string(
@@ -714,28 +738,25 @@ pub fn components(language: i18n.Language) -> List(String) {
       ),
       element.to_string(view.alert(view.Info, [view.hint("content")])),
     ],
-    list.map(
-      [view.Normal, view.Primary, view.Caution, view.Destructive],
-      fn(weight) {
-        element.to_string(view.icon_button_link(
-          "/",
-          view.plus_icon(),
-          "text",
-          weight,
-        ))
-      },
-    ),
-    list.map(
-      [view.Normal, view.Primary, view.Caution, view.Destructive],
-      fn(weight) {
-        element.to_string(view.icon_only_link(
-          "/",
-          view.trash_icon(),
-          "label",
-          weight,
-        ))
-      },
-    ),
+    list.map(button_kinds, fn(kind) {
+      element.to_string(view.icon_button_link(
+        "/",
+        view.plus_icon(),
+        "text",
+        kind,
+      ))
+    }),
+    list.map(button_kinds, fn(kind) {
+      element.to_string(view.icon_only_link(
+        "/",
+        view.trash_icon(),
+        "label",
+        kind,
+      ))
+    }),
+    list.map(button_kinds, fn(kind) {
+      element.to_string(view.post_form("/", [], "text", kind, view.InForm))
+    }),
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
       fn(tone) { element.to_string(view.tone_icon(tone)) },

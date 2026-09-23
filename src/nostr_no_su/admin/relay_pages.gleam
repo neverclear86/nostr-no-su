@@ -45,7 +45,7 @@ pub fn new_relay_page(
           path,
           [url_field(language, url), roles_fieldset(language, roles, None)],
           text(i18n.Register),
-          view.Primary,
+          view.PrimaryButton,
           view.InForm,
         ),
       ]),
@@ -56,7 +56,7 @@ pub fn new_relay_page(
 
 /// リレー 1 件への操作のページ。カードの上に URL を出す。用途の編集のチェックは、GET
 /// では保存済みの用途を、描き直すときは送られた用途（`roles`）を出す。送信のボタンは
-/// 編集が主操作、削除が破壊。`states` はその用途の今の接続状態で、得られないときは
+/// 編集が主、削除が危険。`states` はその用途の今の接続状態で、得られないときは
 /// `None`。編集のページにだけ渡す。テーマか言語を切り替えた後は、この操作のページを
 /// GET で開き直す。
 pub fn relay_action_page(
@@ -78,7 +78,7 @@ pub fn relay_action_page(
         path,
         [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
         text(i18n.Save),
-        view.Primary,
+        view.PrimaryButton,
         view.InForm,
       ),
     )
@@ -89,7 +89,7 @@ pub fn relay_action_page(
         path,
         [],
         text(i18n.DeleteRelaySubmit),
-        view.Destructive,
+        view.DangerButton,
         view.InForm,
       ),
     )
@@ -101,7 +101,7 @@ pub fn relay_action_page(
           dashboard.relay_action_path(relay.id, dashboard.DeleteRelay),
           view.trash_icon(),
           text(i18n.Delete),
-          view.Destructive,
+          view.DangerGhostButton,
         ),
       ]),
     ]

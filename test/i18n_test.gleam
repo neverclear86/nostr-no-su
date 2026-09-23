@@ -221,7 +221,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UnreadableReason(_) -> Some(i18n.UnreadableNotDeletable)
     i18n.UnreadableNotDeletable -> Some(i18n.NotLoadedPlugins)
     i18n.NotLoadedPlugins -> Some(i18n.NotLoadedPluginsWarning)
-    i18n.NotLoadedPluginsWarning -> Some(i18n.ReasonLabel)
+    i18n.NotLoadedPluginsWarning -> Some(i18n.PluginLoadFailed)
+    i18n.PluginLoadFailed -> Some(i18n.ReasonLabel)
     i18n.ReasonLabel -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.ConnectionUriForApproval)
     i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndPublicKey)
@@ -395,12 +396,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 224 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 225 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 224
+  assert list.length(messages) == 225
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
