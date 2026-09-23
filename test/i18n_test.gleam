@@ -159,8 +159,7 @@ pub fn leads_are_only_for_other_languages_test() {
 /// `case` なので、構築子を足すとテストのビルドが止まる。
 fn next_message(message: i18n.Message) -> Option(i18n.Message) {
   case message {
-    i18n.BackToDashboard -> Some(i18n.LogoSubtitle)
-    i18n.LogoSubtitle -> Some(i18n.LanguageSwitchLabel)
+    i18n.BackToDashboard -> Some(i18n.LanguageSwitchLabel)
     i18n.LanguageSwitchLabel -> Some(i18n.ThemeSwitchLabel)
     i18n.ThemeSwitchLabel -> Some(i18n.FollowBrowser)
     i18n.FollowBrowser -> Some(i18n.ThemeLight)
@@ -246,8 +245,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Add -> Some(i18n.AddAccount)
     i18n.AddAccount -> Some(i18n.NoAccounts)
     i18n.NoAccounts -> Some(i18n.GettingStarted)
-    i18n.GettingStarted -> Some(i18n.GettingStartedDescription)
-    i18n.GettingStartedDescription -> Some(i18n.SetupBunkerRelay)
+    i18n.GettingStarted -> Some(i18n.SetupBunkerRelay)
     i18n.SetupBunkerRelay -> Some(i18n.SetupBunkerRelayDescription)
     i18n.SetupBunkerRelayDescription -> Some(i18n.SetupAccount)
     i18n.SetupAccount -> Some(i18n.SetupAccountDescription)
@@ -346,8 +344,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
       Some(i18n.NostrconnectRelayInternal("ws://10.0.0.1"))
     i18n.NostrconnectRelayInternal(_) -> Some(i18n.NostrconnectSecretMissing)
     i18n.NostrconnectSecretMissing -> Some(i18n.Plugins)
-    i18n.Plugins -> Some(i18n.PluginsDescription)
-    i18n.PluginsDescription -> Some(i18n.PluginRunning)
+    i18n.Plugins -> Some(i18n.PluginRunning)
     i18n.PluginRunning -> Some(i18n.PluginOverloaded)
     i18n.PluginOverloaded -> Some(i18n.PluginDisabled)
     i18n.PluginDisabled -> Some(i18n.ReenablePlugin)
@@ -451,12 +448,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 268 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 265 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 268
+  assert list.length(messages) == 265
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

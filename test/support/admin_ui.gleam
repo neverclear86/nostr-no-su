@@ -872,12 +872,12 @@ pub fn components(language: i18n.Language) -> List(String) {
           view.plug_icon(),
           "title",
           Some(3),
-          Some("description"),
+          view.info_hint(language, "hint-id", [view.hint("hint")]),
           [view.hint("action")],
         ),
       ),
       element.to_string(
-        view.section_heading(view.plug_icon(), "title", None, None, []),
+        view.section_heading(view.plug_icon(), "title", None, [], []),
       ),
     ],
     [
@@ -981,6 +981,33 @@ pub fn components(language: i18n.Language) -> List(String) {
     list.map(button_kinds, fn(kind) {
       element.to_string(view.post_form("/", [], "text", kind, view.InForm))
     }),
+    list.map(button_kinds, fn(kind) {
+      element.to_string(view.post_form(
+        "/",
+        [],
+        "text",
+        kind,
+        view.InDialog(id: "dialog-x", cancel: "text"),
+      ))
+    }),
+    list.map(
+      view.dialog_actions(view.InDialog(id: "dialog-x", cancel: "text"), [
+        view.hint("content"),
+      ]),
+      element.to_string,
+    ),
+    [
+      element.to_string(view.hinted_copyable_field(
+        language,
+        "caption",
+        "hint-id",
+        "hint",
+        "value",
+      )),
+    ],
+    list.map([view.LargeIdentity, view.PlainIdentity], fn(size) {
+      element.to_string(view.identity(language, size, "label", "npub1value"))
+    }),
     list.map(
       [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
       fn(tone) { element.to_string(view.tone_icon(tone)) },
@@ -997,7 +1024,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.IconTextTrigger(view.plus_icon(), "text"),
         view.PrimaryButton,
         "title",
-        [],
+        fn(_) { [] },
       ),
       element.to_string,
     ),
@@ -1008,7 +1035,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.TextTrigger("text"),
         view.GhostButton,
         "title",
-        [],
+        fn(_) { [] },
       ),
       element.to_string,
     ),

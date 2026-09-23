@@ -90,9 +90,10 @@ pub fn notice_mark_follows_the_state_vocabulary_test() {
 }
 
 /// ボタンの種類と置き場所の組ごとに、daisyUI のクラスが決まる。行は `button_link`、
-/// フォームは `post_form` の送信ボタンで確かめる。
+/// フォームは `post_form` の送信ボタンで確かめる。ダイアログの行のボタンは左に寄せない。
 pub fn button_kinds_map_to_daisyui_classes_test() {
   let focus = " focus-visible:outline-base-content"
+  let in_dialog = view.InDialog(id: "dialog-x", cancel: "Cancel")
   let cases = [
     #(view.PrimaryButton, view.InRow, "btn btn-primary btn-sm"),
     #(view.OutlineButton, view.InRow, "btn btn-outline btn-sm"),
@@ -118,28 +119,31 @@ pub fn button_kinds_map_to_daisyui_classes_test() {
       view.InForm,
       "btn btn-outline btn-warning self-start",
     ),
+    #(view.PrimaryButton, in_dialog, "btn btn-primary"),
+    #(view.OutlineButton, in_dialog, "btn btn-outline"),
+    #(view.GhostButton, in_dialog, "btn btn-ghost"),
+    #(view.DangerButton, in_dialog, "btn btn-error"),
+    #(view.DangerGhostButton, in_dialog, "btn btn-ghost text-error"),
+    #(view.WarningOutlineButton, in_dialog, "btn btn-outline btn-warning"),
   ]
   use #(kind, placement, class) <- list.each(cases)
   let html = case placement {
     view.InRow -> element.to_string(view.button_link("/", "t", kind))
-    view.InForm ->
-      element.to_string(view.post_form("/", [], "t", kind, view.InForm))
+    view.InForm | view.InDialog(..) ->
+      element.to_string(view.post_form("/", [], "t", kind, placement))
   }
   assert string.contains(html, "class=\"" <> class <> focus <> "\"")
 }
 
-/// 節の見出しは、`primary` を薄く混ぜた面のアイコン、題の直後の件数のピル、補助の文字の色の
-/// 説明、右端の操作の並びを出す。
-pub fn section_heading_shows_the_count_description_and_actions_test() {
+/// 節の見出しは、`primary` を薄く混ぜた面のアイコン、題、題の直後の ⓘ と補足、件数のピル、右端の操作の
+/// 並びを 1 行に出し、説明の段落を持たない。
+pub fn section_heading_puts_the_hint_between_the_title_and_the_count_test() {
+  let hint = view.info_hint(i18n.English, "relays-hint", [html.text("Where.")])
   let html =
     element.to_string(
-      view.section_heading(
-        view.plug_icon(),
-        "Relays",
-        Some(2),
-        Some("Where the bunker listens."),
-        [view.hint("action")],
-      ),
+      view.section_heading(view.plug_icon(), "Relays", Some(2), hint, [
+        view.hint("action"),
+      ]),
     )
   assert string.contains(
     html,
@@ -147,25 +151,29 @@ pub fn section_heading_shows_the_count_description_and_actions_test() {
   )
   assert string.contains(
     html,
-    "Relays</h2><span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span>",
+    "Relays</h2>"
+      <> string.concat(list.map(hint, element.to_string))
+      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span>",
   )
   assert string.contains(
     html,
-    "<p class=\"text-sm text-muted sm:pl-10\">Where the bunker listens.</p>",
+    "<div class=\"flex min-w-0 items-center gap-2.5\">",
   )
+  assert !string.contains(html, "sm:pl-10")
   assert string.contains(
     html,
     "<div class=\"ml-auto flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
   )
 }
 
-/// 件数、説明、操作を渡さなければ、ピル、説明の行、操作の並びを出さない。
+/// 件数、補足、操作を渡さなければ、ピル、ⓘ、操作の並びを出さない。
 pub fn section_heading_leaves_out_the_absent_parts_test() {
   let html =
     element.to_string(
-      view.section_heading(view.plug_icon(), "Relays", None, None, []),
+      view.section_heading(view.plug_icon(), "Relays", None, [], []),
     )
   assert !string.contains(html, "badge")
+  assert !string.contains(html, "interestfor")
   assert !string.contains(html, "<p class")
   assert !string.contains(html, "justify-end")
 }
@@ -263,9 +271,9 @@ pub fn line_hint_describes_the_field_test() {
   assert !string.contains(html, "popover")
 }
 
-/// ⓘ で開く補足は、送信しないボタンの `popovertarget` で `popover="auto"` の段落を開き、ボタンの
-/// 語を表示の言語で `aria-label` と `title` に置く。段落は閉じていても欄の説明として指され、JS の
-/// 処理（`data-action`）を使わない。
+/// ⓘ で開く補足は `info_hint` を見出しに置き、ボタンの `interestfor` と `popovertarget` で
+/// `popover="hint"` の補足を開く。ボタンの語は表示の言語で、補足は閉じていても欄の説明として指され、
+/// JS の処理（`data-action`）を使わない。
 pub fn folded_hint_opens_from_the_info_button_test() {
   let html =
     element.to_string(
@@ -279,10 +287,18 @@ pub fn folded_hint_opens_from_the_info_button_test() {
     )
   assert string.contains(
     html,
-    "<button aria-label=\"補足を表示\" class=\"btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content\" popovertarget=\"relay-url-hint\" title=\"補足を表示\" type=\"button\">",
+    "<div class=\"fieldset-legend w-fit justify-start\">URL"
+      <> string.concat(list.map(
+      view.info_hint(i18n.Japanese, "relay-url-hint", [
+        html.text("ws:// か wss:// で始まる URL。"),
+      ]),
+      element.to_string,
+    ))
+      <> "</div>",
   )
-  assert string.contains(html, "id=\"relay-url-hint\" popover=\"auto\"")
-  assert string.contains(html, "aria-describedby=\"relay-url-hint\"")
+  assert string.contains(html, "interestfor=\"relay-url-hint\"")
+  assert string.contains(html, "id=\"relay-url-hint\" popover=\"hint\"")
+  assert string.contains(html, "<input aria-describedby=\"relay-url-hint\"")
   assert !string.contains(html, "data-action")
 }
 
@@ -300,7 +316,92 @@ pub fn hinted_textarea_describes_the_field_with_either_hint_test() {
   assert string.contains(line, "<textarea aria-describedby=\"uri-hint\"")
   assert string.contains(folded, "<textarea aria-describedby=\"uri-hint\"")
   assert string.contains(line, "<p class=\"text-muted\" id=\"uri-hint\">")
-  assert string.contains(folded, "id=\"uri-hint\" popover=\"auto\"")
+  assert string.contains(folded, "id=\"uri-hint\" popover=\"hint\"")
+}
+
+/// ⓘ のボタンは送信せず、ホバーとフォーカス（`interestfor`）とクリック（`popovertarget` の `show`）で
+/// 補足を開き、`aria-describedby` で補足を指す。補足は `popover="hint"` の `div` で、見出しの太字を
+/// 継がない（`font-normal`）。
+pub fn info_hint_opens_on_hover_focus_and_click_test() {
+  let assert [button, hint] =
+    view.info_hint(i18n.English, "accounts-hint", [html.text("Keys.")])
+    |> list.map(element.to_string)
+  assert button
+    == "<button aria-describedby=\"accounts-hint\" aria-label=\"Show help\" class=\"btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content\" interestfor=\"accounts-hint\" popovertarget=\"accounts-hint\" popovertargetaction=\"show\" title=\"Show help\" type=\"button\">"
+    <> element.to_string(view.info_icon())
+    <> "</button>"
+  assert hint
+    == "<div class=\"inset-auto m-0 me-4 mb-1 max-w-80 rounded-box border border-base-300 bg-base-100 p-3 text-sm font-normal text-base-content shadow-lift [position-area:top_span-right] [position-try-fallbacks:flip-block,flip-inline]\" id=\"accounts-hint\" popover=\"hint\">Keys.</div>"
+}
+
+/// ダイアログのフォームは、欄の後に送信とキャンセルを折り返せる 1 行に並べる。キャンセルは送信せず、
+/// 開いたときにフォーカスを受け、同じダイアログを閉じる。
+pub fn in_dialog_form_puts_submit_and_cancel_on_one_row_test() {
+  let html =
+    element.to_string(view.post_form(
+      "/relays",
+      [html.p([], [html.text("field")])],
+      "Save",
+      view.PrimaryButton,
+      view.InDialog(id: "dialog-x", cancel: "Cancel"),
+    ))
+  assert html
+    == "<form action=\"/relays\" class=\"flex flex-col gap-4\" method=\"post\"><p>field</p><div class=\"flex flex-wrap items-center gap-2\"><button class=\"btn btn-primary focus-visible:outline-base-content\" type=\"submit\">Save</button><button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-x\" type=\"button\">Cancel</button></div></form>"
+}
+
+/// 操作の行は、ダイアログのときだけボタンの後にキャンセルを足して 1 行にし、ほかの置き場所では
+/// ボタンをそのまま返す。
+pub fn dialog_actions_add_cancel_only_in_a_dialog_test() {
+  let buttons = [html.a([], [html.text("Add")])]
+  assert view.dialog_actions(view.InForm, buttons) == buttons
+  assert view.dialog_actions(view.InRow, buttons) == buttons
+  let assert [row] =
+    view.dialog_actions(
+      view.InDialog(id: "dialog-x", cancel: "Cancel"),
+      buttons,
+    )
+  assert element.to_string(row)
+    == "<div class=\"flex flex-wrap items-center gap-2\"><a>Add</a><button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-x\" type=\"button\">Cancel</button></div>"
+}
+
+/// ⓘ つきのコピー欄は、見出しの横に ⓘ と補足を置き、欄の `aria-describedby` で補足を指す。
+pub fn hinted_copyable_field_opens_the_hint_from_the_legend_test() {
+  let html =
+    element.to_string(view.hinted_copyable_field(
+      i18n.English,
+      "Connection URI",
+      "uri-hint",
+      "Paste it.",
+      "bunker://x",
+    ))
+  assert string.contains(
+    html,
+    "<div class=\"fieldset-legend w-fit justify-start\">Connection URI"
+      <> string.concat(list.map(
+      view.info_hint(i18n.English, "uri-hint", [html.text("Paste it.")]),
+      element.to_string,
+    ))
+      <> "</div>",
+  )
+  assert string.contains(
+    html,
+    "<input aria-describedby=\"uri-hint\" aria-label=\"Connection URI\"",
+  )
+}
+
+/// 識別のラベルは、アカウントの一覧の行では大きい太字、ほかでは今の太さで出す。
+pub fn identity_sizes_the_label_test() {
+  let render = fn(size) {
+    element.to_string(view.identity(i18n.English, size, "Main", "npub1x"))
+  }
+  assert string.contains(
+    render(view.LargeIdentity),
+    "<p class=\"text-lg font-bold leading-snug break-words\">Main</p>",
+  )
+  assert string.contains(
+    render(view.PlainIdentity),
+    "<p class=\"font-semibold break-words\">Main</p>",
+  )
 }
 
 /// 警告の通知は畳まずに本文をそのまま出す（`details` にも `popover` にもしない）。
@@ -347,7 +448,7 @@ pub fn compact_icon_button_link_hides_the_text_on_narrow_screens_test() {
 }
 
 /// アイコンと語のダイアログのボタンは `commandfor` で `id` のダイアログを指して開き、ダイアログは
-/// 題、中身、`autofocus` のキャンセル（`command="close"`）の順に並べる。
+/// 題と、`InDialog` を受けた中身だけを並べる（キャンセルは中身の操作の行が持つ）。
 pub fn dialog_button_opens_the_dialog_it_names_test() {
   let html =
     view.dialog_button(
@@ -356,7 +457,10 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
       view.IconTextTrigger(view.plus_icon(), "Add"),
       view.PrimaryButton,
       "Title",
-      [html.p([], [html.text("body")])],
+      fn(placement) {
+        assert placement == view.InDialog(id: "dialog-x", cancel: "Cancel")
+        [html.p([], [html.text("body")])]
+      },
     )
     |> list.map(element.to_string)
     |> string.concat
@@ -364,7 +468,7 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
     == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
     <> element.to_string(view.plus_icon())
     <> "Add</button>"
-    <> "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\"><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><p>body</p><button autofocus class=\"btn btn-ghost self-start focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-x\" type=\"button\">Cancel</button></div></dialog>"
+    <> "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\"><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><p>body</p></div></dialog>"
 }
 
 /// アイコンだけのダイアログのボタンは、語を `aria-label` に置き、中身はアイコンだけにする。
@@ -376,7 +480,7 @@ pub fn icon_only_dialog_button_names_itself_by_label_test() {
       view.IconOnlyTrigger(view.trash_icon(), "Delete"),
       view.DangerGhostButton,
       "Title",
-      [],
+      fn(_) { [] },
     )
   assert element.to_string(button)
     == "<button aria-label=\"Delete\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
@@ -393,7 +497,7 @@ pub fn text_dialog_button_shows_only_the_text_test() {
       view.TextTrigger("Revoke"),
       view.GhostButton,
       "Title",
-      [],
+      fn(_) { [] },
     )
   assert element.to_string(button)
     == "<button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">Revoke</button>"

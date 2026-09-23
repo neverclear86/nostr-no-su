@@ -214,7 +214,6 @@ pub fn sentence_gap(language: Language) -> String {
 pub type Message {
   // ページの枠と共通の部品
   BackToDashboard
-  LogoSubtitle
   LanguageSwitchLabel
   ThemeSwitchLabel
   FollowBrowser
@@ -303,7 +302,6 @@ pub type Message {
   AddAccount
   NoAccounts
   GettingStarted
-  GettingStartedDescription
   SetupBunkerRelay
   SetupBunkerRelayDescription
   SetupAccount
@@ -401,8 +399,6 @@ pub type Message {
   NostrconnectRelayInternal(url: String)
   NostrconnectSecretMissing
   Plugins
-  /// ダッシュボードのプラグインの節の見出しの下の 1 行の説明。
-  PluginsDescription
   PluginRunning
   PluginOverloaded
   PluginDisabled
@@ -513,7 +509,6 @@ pub fn text(language: Language, message: Message) -> String {
 fn english(message: Message) -> String {
   case message {
     BackToDashboard -> "Back to dashboard"
-    LogoSubtitle -> "Admin"
     LanguageSwitchLabel -> "Language"
     ThemeSwitchLabel -> "Theme"
     FollowBrowser -> "Browser setting"
@@ -613,8 +608,6 @@ fn english(message: Message) -> String {
     NoAccounts ->
       "No accounts registered. Import an nsec or generate a new key."
     GettingStarted -> "Getting started"
-    GettingStartedDescription ->
-      "Register a relay and an account, then paste the connection URI into your client."
     SetupBunkerRelay -> "Add a bunker relay"
     SetupBunkerRelayDescription ->
       "Clients send signing and encryption requests through this relay. You need at least one."
@@ -747,8 +740,6 @@ fn english(message: Message) -> String {
       "the relay URL " <> url <> " in the uri points to an internal address"
     NostrconnectSecretMissing -> "the uri must carry a secret"
     Plugins -> "Plugins"
-    PluginsDescription ->
-      "Receives and processes the events of registered accounts."
     PluginRunning -> "running"
     PluginOverloaded -> "overloaded"
     PluginDisabled -> "disabled"
@@ -870,7 +861,6 @@ fn english(message: Message) -> String {
 fn japanese(message: Message) -> String {
   case message {
     BackToDashboard -> "ダッシュボードに戻る"
-    LogoSubtitle -> "管理画面"
     LanguageSwitchLabel -> "言語"
     ThemeSwitchLabel -> "テーマ"
     FollowBrowser -> "ブラウザーの設定"
@@ -962,7 +952,6 @@ fn japanese(message: Message) -> String {
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。nsec を登録するか、新しい鍵を生成してください。"
     GettingStarted -> "はじめに"
-    GettingStartedDescription -> "リレーとアカウントを登録し、接続 URI をクライアントに貼ると使えます。"
     SetupBunkerRelay -> "バンカー用のリレーを追加"
     SetupBunkerRelayDescription -> "クライアントは、このリレーを通して署名と暗号化を依頼します。1 件以上必要です。"
     SetupAccount -> "アカウントを登録"
@@ -1077,7 +1066,6 @@ fn japanese(message: Message) -> String {
       "URI のリレー URL（" <> url <> "）は内部のアドレスを指しているので使えません。"
     NostrconnectSecretMissing -> "URI に secret が含まれていません。"
     Plugins -> "プラグイン"
-    PluginsDescription -> "登録したアカウントのイベントを受け取って処理します。"
     PluginRunning -> "動作中"
     PluginOverloaded -> "過負荷"
     PluginDisabled -> "無効"

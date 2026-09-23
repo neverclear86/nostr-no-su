@@ -15,6 +15,8 @@
 //// `new_relay_form`、`relay_action_form`、アカウントの追加の `import_form`、`generate_form`、
 //// アカウントの `account_action_form`、`unreadable_delete_form`、`label_fieldset`、セッションの
 //// `permissions_form`、クライアントの接続の `connect_content`、`connect_form`）もここに置く。
+//// `label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で送信の置き場所を受け、ページは
+//// `view.InForm` を、ダイアログは `view.dialog_button` が渡す `view.InDialog` を渡す。
 //// ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
@@ -857,7 +859,7 @@ pub fn getting_started(
   }
 }
 
-/// 「はじめに」の帯。`getting_started` が `Some` のときだけ、全幅の帯に見出しと説明、3 つの段を
+/// 「はじめに」の帯。`getting_started` が `Some` のときだけ、全幅の帯に見出しと 3 つの段を
 /// 番号順に並べる。段 1（バンカー用のリレー）と段 2（アカウント）は済んだかで見せ方が変わり、
 /// 段 3（接続 URI）は両方が済むまで開けないので、帯が出ている間は常に点線の枠で出す。
 fn getting_started_band(
@@ -874,7 +876,7 @@ fn getting_started_band(
           view.sparkle_icon(),
           text(i18n.GettingStarted),
           None,
-          Some(text(i18n.GettingStartedDescription)),
+          [],
           [],
         ),
         html.ol([attribute.class("grid gap-3.5 lg:grid-cols-3")], [
@@ -1000,7 +1002,7 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに件数、1 行の説明、「DB から読み直す」と、「アカウントを追加」のダイアログを開くボタンと
+/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」のダイアログを開くボタンと
 /// 登録画面への予備のリンクを置き、行の一覧の後に読み込めなかった行の枠を置く。一覧を得られないときは、一覧の
 /// 代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンと予備のリンクも
 /// 出さない。
@@ -1018,7 +1020,9 @@ fn accounts_section(
       accounts,
       view.users_icon(),
       i18n.Accounts,
-      Some(i18n.AccountsDescription),
+      view.info_hint(language, accounts_anchor <> "-hint", [
+        html.text(text(i18n.AccountsDescription)),
+      ]),
       add_account_actions(language),
       [reload_form(language)],
     ),
@@ -1055,12 +1059,14 @@ fn add_account_actions(language: Language) -> List(Element(msg)) {
       view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
       view.PrimaryButton,
       text(i18n.AddAccount),
-      [
-        view.radio_tabs(id <> "-tab", [
-          #(text(i18n.ImportPrivateKey), import_form(language, "")),
-          #(text(i18n.GenerateNewKey), generate_form(language)),
-        ]),
-      ],
+      fn(placement) {
+        [
+          view.radio_tabs(id <> "-tab", [
+            #(text(i18n.ImportPrivateKey), import_form(language, "", placement)),
+            #(text(i18n.GenerateNewKey), generate_form(language, placement)),
+          ]),
+        ]
+      },
     ),
     [view.fallback_link(language, view.segments_path(new_account_segments))],
   )
@@ -1069,7 +1075,11 @@ fn add_account_actions(language: Language) -> List(Element(msg)) {
 /// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を送る。nsec の欄の
 /// 説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の `aria-describedby` から指す。`label` は
 /// ラベルの欄に入れる値。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
-pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
+pub fn import_form(
+  language: Language,
+  label: String,
+  placement: view.Placement,
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
     view.secret_post_form(
@@ -1086,14 +1096,17 @@ pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
       ],
       text(i18n.Register),
       view.PrimaryButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
 
 /// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、送信のボタンは枠の
 /// ボタンにする。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
-pub fn generate_form(language: Language) -> List(Element(msg)) {
+pub fn generate_form(
+  language: Language,
+  placement: view.Placement,
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
     view.form_description(text(i18n.GenerateDescription)),
@@ -1102,7 +1115,7 @@ pub fn generate_form(language: Language) -> List(Element(msg)) {
       [],
       text(i18n.Generate),
       view.OutlineButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
@@ -1150,7 +1163,7 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
         html.div([attribute.class("flex min-w-0 items-center gap-3")], [
           fingerprint.pubkey_svg(row.pubkey, fingerprint.Gray, "size-8"),
           html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-            view.identity(language, row.label, row.npub),
+            view.identity(language, view.PlainIdentity, row.label, row.npub),
             html.p([attribute.class("text-sm")], [
               html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
             ]),
@@ -1168,15 +1181,15 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。`description` があれば、一覧の有無に
-/// 関わらず見出しの下に 1 行の説明を出す。操作は `always_actions` を常に先に出し、一覧を得たときだけその後ろに
+/// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。`hint`（ⓘ と補足）は一覧の有無に
+/// 関わらず題の横に出す。操作は `always_actions` を常に先に出し、一覧を得たときだけその後ろに
 /// `listed_actions` を出す。
 fn listed_section_heading(
   language: Language,
   listing: Result(List(a), i18n.Reason),
   icon: Element(msg),
   title: i18n.Message,
-  description: Option(i18n.Message),
+  hint: List(Element(msg)),
   listed_actions: List(Element(msg)),
   always_actions: List(Element(msg)),
 ) -> Element(msg) {
@@ -1188,13 +1201,7 @@ fn listed_section_heading(
     Ok(_) -> list.append(always_actions, listed_actions)
     Error(_) -> always_actions
   }
-  view.section_heading(
-    icon,
-    i18n.text(language, title),
-    count,
-    option.map(description, i18n.text(language, _)),
-    actions,
-  )
+  view.section_heading(icon, i18n.text(language, title), count, hint, actions)
 }
 
 /// 一覧を得たときの節の本文。得られれば `render` の内容を出す。得られず、3 つの一覧に共通の理由（`shared`）が
@@ -1269,7 +1276,12 @@ fn account_item(
         [attribute.class("flex min-w-0 flex-1 basis-48 items-center gap-3")],
         [
           fingerprint.pubkey_svg(account.signer, fingerprint.Colored, "size-10"),
-          view.identity(language, account.label, account.npub),
+          view.identity(
+            language,
+            view.LargeIdentity,
+            account.label,
+            account.npub,
+          ),
         ],
       ),
       html.div([attribute.class("ml-auto flex shrink-0 items-center gap-3")], [
@@ -1305,7 +1317,7 @@ fn session_count(
   }
 }
 
-/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI をそれぞれの説明付きで、16 進の公開鍵を
+/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI を、説明を見出しの横の ⓘ で開くコピー欄で、16 進の公開鍵を
 /// 説明なしでコピー欄に並べ、その下に、`detail_actions` の操作のダイアログを開くボタン、ラベルの編集の
 /// ページへの予備のリンク、右端に離した削除のダイアログを開くボタンを置く。
 fn account_details(language: Language, account: AccountRow) -> Element(msg) {
@@ -1313,18 +1325,20 @@ fn account_details(language: Language, account: AccountRow) -> Element(msg) {
   let dialog = account_dialog(language, account, _)
   view.details_panel(text(i18n.ConnectionUrisAndActions), [
     html.div([attribute.class("flex flex-col gap-3")], [
-      html.div([], [
-        view.copyable_field(language, text(i18n.ConnectionUri), account.uri),
-        view.hint(text(i18n.SecretUriDescription)),
-      ]),
-      html.div([], [
-        view.copyable_field(
-          language,
-          text(i18n.ConnectionUriForApproval),
-          account.auth_uri,
-        ),
-        view.hint(text(i18n.ApprovalUriNeedsApproval)),
-      ]),
+      view.hinted_copyable_field(
+        language,
+        text(i18n.ConnectionUri),
+        "account-" <> account.signer <> "-uri-hint",
+        text(i18n.SecretUriDescription),
+        account.uri,
+      ),
+      view.hinted_copyable_field(
+        language,
+        text(i18n.ConnectionUriForApproval),
+        "account-" <> account.signer <> "-auth-uri-hint",
+        text(i18n.ApprovalUriNeedsApproval),
+        account.auth_uri,
+      ),
       view.copyable_field(language, text(i18n.PublicKeyHex), account.signer),
       html.div(
         [attribute.class("flex flex-wrap items-center gap-2")],
@@ -1367,16 +1381,19 @@ fn account_dialog(
     ),
     account_action_link_kind(action),
     text(account_action_title(action)),
-    [
-      view.identity(language, account.label, account.npub),
-      ..account_action_form(
-        language,
-        account,
-        action,
-        None,
-        id <> "-label-hint",
-      )
-    ],
+    fn(placement) {
+      [
+        view.identity(language, view.PlainIdentity, account.label, account.npub),
+        ..account_action_form(
+          language,
+          account,
+          action,
+          None,
+          id <> "-label-hint",
+          placement,
+        )
+      ]
+    },
   )
 }
 
@@ -1394,10 +1411,12 @@ fn unreadable_dialog(
     view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
     view.DangerGhostButton,
     text(account_action_title(DeleteAccount)),
-    [
-      view.identity(language, row.label, row.npub),
-      ..unreadable_delete_form(language, row)
-    ],
+    fn(placement) {
+      [
+        view.identity(language, view.PlainIdentity, row.label, row.npub),
+        ..unreadable_delete_form(language, row, placement)
+      ]
+    },
   )
 }
 
@@ -1475,6 +1494,7 @@ pub fn account_action_form(
   action: AccountAction,
   label: Option(String),
   hint_id: String,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let path = account_action_path(row.signer, action)
@@ -1485,7 +1505,7 @@ pub fn account_action_form(
         [label_fieldset(language, hint_id, option.unwrap(label, row.label))],
         text(i18n.Save),
         view.PrimaryButton,
-        view.InForm,
+        placement,
       ),
     ]
     RotateSecret -> [
@@ -1495,7 +1515,7 @@ pub fn account_action_form(
         [],
         text(i18n.RotateSecretSubmit),
         view.WarningOutlineButton,
-        view.InForm,
+        placement,
       ),
     ]
     DeleteAccount -> {
@@ -1511,7 +1531,7 @@ pub fn account_action_form(
           [],
           text(i18n.DeleteAccountSubmit),
           view.DangerButton,
-          view.InForm,
+          placement,
         ),
       ]
     }
@@ -1527,7 +1547,7 @@ pub fn account_action_form(
         ],
         text(i18n.ShowPrivateKeySubmit),
         view.WarningOutlineButton,
-        view.InForm,
+        placement,
       ),
     ]
     ShowConnectionQr -> []
@@ -1541,6 +1561,7 @@ pub fn account_action_form(
 pub fn unreadable_delete_form(
   language: Language,
   row: SkippedRow,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let gap = i18n.sentence_gap(language)
@@ -1560,7 +1581,7 @@ pub fn unreadable_delete_form(
       [],
       text(i18n.DeleteAccountSubmit),
       view.DangerButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
@@ -1597,8 +1618,8 @@ pub fn label_fieldset(
   )
 }
 
-/// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に見出し、
-/// 説明、承認待ちのカードを置く。見出しの右には、ダッシュボードを自動で読み込み直すときだけ更新の間隔を出す。
+/// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に、
+/// 説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの右には、ダッシュボードを自動で読み込み直すときだけ更新の間隔を出す。
 /// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
 /// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
@@ -1621,7 +1642,9 @@ fn pending_section(
           view.door_open_icon(),
           text(i18n.PendingConnections),
           count,
-          Some(text(i18n.PendingConnectionsDescription)),
+          view.info_hint(language, pending_anchor <> "-hint", [
+            html.text(text(i18n.PendingConnectionsDescription)),
+          ]),
           refresh_note(language, pending),
         ),
         listed_body(
@@ -2105,7 +2128,7 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
   }
 }
 
-/// リレーの一覧。見出しの直後に、監視とバンカーの語と説明を並べた凡例（`role_legend`）を常に置く。
+/// リレーの一覧。見出しの ⓘ で、監視とバンカーの語と説明の凡例（`role_hint`）を開く。
 /// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に、追加のダイアログを開くボタンと、
 /// 追加のページへの予備のリンクを出す。バンカーに使う行が無ければエラーの色の囲みを、一覧を得られない
 /// ときは理由を出す。
@@ -2115,28 +2138,25 @@ fn relays_section(
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(relays_anchor, [
-    html.div([attribute.class("flex flex-col gap-1")], [
-      listed_section_heading(
-        language,
-        relays,
-        view.plug_icon(),
-        i18n.Relays,
-        None,
-        list.append(
-          view.dialog_button(
-            language,
-            view.dialog_id(["relay", "new"]),
-            view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
-            view.PrimaryButton,
-            text(i18n.AddRelay),
-            new_relay_form(language, "", new_relay_roles),
-          ),
-          [view.fallback_link(language, view.segments_path(new_relay_segments))],
+    listed_section_heading(
+      language,
+      relays,
+      view.plug_icon(),
+      i18n.Relays,
+      view.info_hint(language, relays_anchor <> "-hint", role_hint(language)),
+      list.append(
+        view.dialog_button(
+          language,
+          view.dialog_id(["relay", "new"]),
+          view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
+          view.PrimaryButton,
+          text(i18n.AddRelay),
+          new_relay_form(language, "", new_relay_roles, _),
         ),
-        [],
+        [view.fallback_link(language, view.segments_path(new_relay_segments))],
       ),
-      role_legend(language),
-    ]),
+      [],
+    ),
     no_bunker_relay_alert(language, relays),
     listed_body(
       language,
@@ -2149,29 +2169,24 @@ fn relays_section(
   ])
 }
 
-/// リレーの節の凡例。監視、バンカーの順に、太字の用途の語と説明の組を 1 行に並べ、幅が足りなければ組ごとに折り返す。
-/// 組の中では説明だけが折り返し、用途の語は割らない。
-fn role_legend(language: Language) -> Element(msg) {
+/// リレーの節の ⓘ で開く凡例。監視、バンカーの順に、太字の用途の語と説明を 1 段落ずつ並べる。
+fn role_hint(language: Language) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let pair = fn(role, description) {
-    html.span([attribute.class("inline-flex gap-1.5")], [
-      html.b([attribute.class("shrink-0 font-semibold text-base-content")], [
-        html.text(text(role)),
-      ]),
+  let paragraph = fn(attributes, role, description) {
+    html.p(attributes, [
+      html.b([attribute.class("font-semibold")], [html.text(text(role))]),
+      html.text(" "),
       html.text(text(description)),
     ])
   }
-  html.p(
-    [
-      attribute.class(
-        "flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted sm:pl-10",
-      ),
-    ],
-    [
-      pair(i18n.MonitorRole, i18n.MonitorRoleDescription),
-      pair(i18n.BunkerRole, i18n.BunkerRoleDescription),
-    ],
-  )
+  [
+    paragraph([], i18n.MonitorRole, i18n.MonitorRoleDescription),
+    paragraph(
+      [attribute.class("mt-1")],
+      i18n.BunkerRole,
+      i18n.BunkerRoleDescription,
+    ),
+  ]
 }
 
 /// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
@@ -2214,18 +2229,25 @@ fn relay_item(language: Language, row: RelayRow) -> Element(msg) {
           view.IconOnlyTrigger(relay_action_icon(action), title),
           relay_action_button_kind(action),
           title,
-          [
-            view.summary_list([
-              #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
-            ]),
-            ..relay_action_form(
-              language,
-              relay_store.Relay(id: row.id, url: row.url, roles: row_roles(row)),
-              action,
-              None,
-              Some(row),
-            )
-          ],
+          fn(placement) {
+            [
+              view.summary_list([
+                #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+              ]),
+              ..relay_action_form(
+                language,
+                relay_store.Relay(
+                  id: row.id,
+                  url: row.url,
+                  roles: row_roles(row),
+                ),
+                action,
+                None,
+                Some(row),
+                placement,
+              )
+            ]
+          },
         )
       })
       |> list.append([
@@ -2260,6 +2282,7 @@ pub fn new_relay_form(
   language: Language,
   url: String,
   roles: Roles,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
@@ -2269,7 +2292,7 @@ pub fn new_relay_form(
       [url_field(language, url), roles_fieldset(language, roles, None)],
       text(i18n.Register),
       view.PrimaryButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
@@ -2284,6 +2307,7 @@ pub fn relay_action_form(
   action: RelayAction,
   roles: Option(Roles),
   states: Option(RelayRow),
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let path = relay_action_path(relay.id, action)
@@ -2295,7 +2319,7 @@ pub fn relay_action_form(
         [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
         text(i18n.Save),
         view.PrimaryButton,
-        view.InForm,
+        placement,
       ),
     ]
     DeleteRelay -> [
@@ -2305,7 +2329,7 @@ pub fn relay_action_form(
         [],
         text(i18n.DeleteRelaySubmit),
         view.DangerButton,
-        view.InForm,
+        placement,
       ),
     ]
   }
@@ -2408,7 +2432,7 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   }
 }
 
-/// 承認済みのセッションの節。見出しに件数と 1 行の説明と、接続のダイアログを開く「クライアントを接続」と
+/// 承認済みのセッションの節。見出しに説明を開く ⓘ と件数と、接続のダイアログを開く「クライアントを接続」と
 /// 接続のページへの予備のリンクを置き、行を並べる。一覧を得られないときは、一覧とボタンとリンクの代わりに
 /// その理由を出す。
 fn sessions_section(
@@ -2425,7 +2449,9 @@ fn sessions_section(
       sessions,
       view.clock_icon(),
       i18n.ApprovedSessions,
-      Some(i18n.ApprovedSessionsDescription),
+      view.info_hint(language, sessions_anchor <> "-hint", [
+        html.text(text(i18n.ApprovedSessionsDescription)),
+      ]),
       list.append(
         view.dialog_button(
           language,
@@ -2433,7 +2459,7 @@ fn sessions_section(
           view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
           view.PrimaryButton,
           text(i18n.ConnectClient),
-          connect_content(language, accounts, "", ""),
+          connect_content(language, accounts, "", "", _),
         ),
         [view.fallback_link(language, view.segments_path(connect_segments))],
       ),
@@ -2560,15 +2586,18 @@ fn session_actions(
           view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
           view.GhostButton,
           text(i18n.EditPermissions),
-          [
-            summary,
-            ..permissions_form(
-              language,
-              session,
-              None,
-              permissions_id <> "-kinds-hint",
-            )
-          ],
+          fn(placement) {
+            [
+              summary,
+              ..permissions_form(
+                language,
+                session,
+                None,
+                permissions_id <> "-kinds-hint",
+                placement,
+              )
+            ]
+          },
         ),
         view.dialog_button(
           language,
@@ -2576,7 +2605,9 @@ fn session_actions(
           view.TextTrigger(text(i18n.Revoke)),
           view.GhostButton,
           text(i18n.Revoke),
-          [summary, ..revoke_form(language, session)],
+          fn(placement) {
+            [summary, ..revoke_form(language, session, placement)]
+          },
         ),
       ),
     ),
@@ -2655,6 +2686,7 @@ pub fn permissions_form(
   session: SessionRow,
   form: Option(PermissionsForm),
   kinds_hint_id: String,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let fields = option.unwrap(form, form_of_perms(session.perms))
   [
@@ -2664,7 +2696,7 @@ pub fn permissions_form(
       permissions_fields(language, fields, kinds_hint_id),
       i18n.text(language, i18n.Save),
       view.PrimaryButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
@@ -2812,23 +2844,27 @@ pub fn connect_content(
   accounts: Result(List(AccountRow), i18n.Reason),
   uri: String,
   signer: String,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   case accounts {
     Ok([]) -> [
       view.hint(text(i18n.NoAccountsForConnect)),
-      view.button_link(
-        view.segments_path(new_account_segments),
-        text(i18n.AddAccount),
-        view.PrimaryButton,
-      ),
+      ..view.dialog_actions(placement, [
+        view.button_link(
+          view.segments_path(new_account_segments),
+          text(i18n.AddAccount),
+          view.PrimaryButton,
+        ),
+      ])
     ]
-    Ok(rows) -> connect_form(language, rows, uri, signer)
+    Ok(rows) -> connect_form(language, rows, uri, signer, placement)
     Error(reason) -> [
       view.alert(
         view.Neutral,
         view.reason_content(language, Some(i18n.CouldNotListAccounts), reason),
       ),
+      ..view.dialog_actions(placement, [])
     ]
   }
 }
@@ -2841,6 +2877,7 @@ pub fn connect_form(
   accounts: List(AccountRow),
   uri: String,
   signer: String,
+  placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
@@ -2853,7 +2890,7 @@ pub fn connect_form(
       ],
       text(i18n.ReviewConnection),
       view.PrimaryButton,
-      view.InForm,
+      placement,
     ),
   ]
 }
@@ -2902,7 +2939,7 @@ fn signing_account_select(
   )
 }
 
-/// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）と 1 行の説明を
+/// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）を
 /// 置き、プラグインを行の一覧で並べる。起動時に読み込めなかった候補があれば、節の末尾にエラーの色の枠で出す。
 fn plugins_section(
   language: Language,
@@ -2916,7 +2953,7 @@ fn plugins_section(
       Ok(plugins),
       view.puzzle_icon(),
       i18n.Plugins,
-      Some(i18n.PluginsDescription),
+      [],
       [],
       [],
     ),
@@ -3050,7 +3087,11 @@ fn decision_forms(
 
 /// セッションを 1 件取り消すフォームの中身。取り消しの結果の説明と、`/sessions/revoke` へ POST するフォームを
 /// 並べ、確認のダイアログの中にだけ置く。取り消しは接続中のクライアントに影響するので warning の枠のボタンにする。
-fn revoke_form(language: Language, session: SessionRow) -> List(Element(msg)) {
+fn revoke_form(
+  language: Language,
+  session: SessionRow,
+  placement: view.Placement,
+) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
     view.form_description(text(i18n.RevokeSessionDescription)),
@@ -3062,7 +3103,7 @@ fn revoke_form(language: Language, session: SessionRow) -> List(Element(msg)) {
       ],
       text(i18n.Revoke),
       view.WarningOutlineButton,
-      view.InForm,
+      placement,
     ),
   ]
 }

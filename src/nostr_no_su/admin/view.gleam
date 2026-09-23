@@ -9,10 +9,12 @@
 //// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
 //// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
 //// 時刻は `time_of_day` の `<time datetime>` で UTC のまま描き、`admin.js` が閲覧者のローカルの
-//// 時刻に直す。欄の補足を ⓘ で開く部品（`FieldHint` の `FoldedHint`）は、`popover` 属性の段落と
-//// `popovertarget` のボタンで開閉し、位置は CSS の anchor positioning（`position-area`）で決める。
-//// JS も `data-action` も使わない。
-//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉し、JS を使わない（`dialog_button`）。
+//// 時刻に直す。ⓘ の補足（`info_hint`）は、`popover="hint"` の段落を、ボタンの `interestfor`（ホバーと
+//// キーボードのフォーカス）と `popovertarget`（クリックとタップ）で開き、位置は CSS の anchor
+//// positioning（`position-area`）で決める。欄、節の見出し、コピー欄の見出しが使う。JS も
+//// `data-action` も使わない。
+//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉し、JS を使わない
+//// （`dialog_button`）。送信とキャンセルはフォームの末尾の 1 行に並べる（`InDialog`）。
 //// ダイアログの中のタブもラジオと CSS で切り替え、JS を使わない（`radio_tabs`）。
 //// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
 //// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
@@ -184,8 +186,11 @@ pub type ButtonKind {
 pub type Placement {
   /// ダッシュボードの行や承認ページのように、小さいボタンを横に並べる。
   InRow
-  /// 確認のページのように、欄を縦に並べたフォームの末尾に置く。
+  /// 操作のページのように、欄を縦に並べたフォームの末尾に置く。
   InForm
+  /// ダイアログのフォームの末尾の 1 行に、送信の右に `id` のダイアログを閉じる「キャンセル」（語は
+  /// `cancel`）を並べる。`dialog_button` が中身の関数に渡す。
+  InDialog(id: String, cancel: String)
 }
 
 /// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
@@ -450,7 +455,7 @@ fn navbar(
     ],
     [
       html.div([attribute.class("navbar-start w-auto grow")], [
-        brand_link(language),
+        brand_link(),
       ]),
       html.div([attribute.class("navbar-end w-auto gap-2")], end),
     ],
@@ -663,25 +668,18 @@ pub fn section_block(id: String, content: List(Element(msg))) -> Element(msg) {
   )
 }
 
-/// 節の見出し。`primary` を薄く混ぜた地の面に載せたアイコン、題（`h2`）、`count` があれば件数のピルを 1 行に並べ、
-/// `description` があればその下に 1 行の説明を補助の文字の色で出す。`actions` は右端に置き、幅が足りなければ
+/// 節の見出し。`primary` を薄く混ぜた地の面に載せたアイコン、題（`h2`）、`hint`（`info_hint` の ⓘ と
+/// 補足。無ければ空）、`count` があれば件数のピルを 1 行に並べる。`actions` は右端に置き、幅が足りなければ
 /// 下に回る。`actions` が空なら右には何も置かない。
 pub fn section_heading(
   icon: Element(msg),
   title: String,
   count: Option(Int),
-  description: Option(String),
+  hint: List(Element(msg)),
   actions: List(Element(msg)),
 ) -> Element(msg) {
   let pill = case count {
     Some(count) -> count_badge(count)
-    None -> element.none()
-  }
-  let description_line = case description {
-    Some(description) ->
-      html.p([attribute.class("text-sm text-muted sm:pl-10")], [
-        html.text(description),
-      ])
     None -> element.none()
   }
   let action_row = case actions {
@@ -699,20 +697,17 @@ pub fn section_heading(
       ),
     ],
     [
-      html.div([attribute.class("flex min-w-0 flex-col gap-0.5")], [
-        html.div([attribute.class("flex items-center gap-2.5")], [
-          html.span(
-            [
-              attribute.class(
-                "grid size-7.5 shrink-0 place-items-center rounded-field bg-primary/13 text-primary",
-              ),
-            ],
-            [icon],
-          ),
-          heading(title),
-          pill,
-        ]),
-        description_line,
+      html.div([attribute.class("flex min-w-0 items-center gap-2.5")], [
+        html.span(
+          [
+            attribute.class(
+              "grid size-7.5 shrink-0 place-items-center rounded-field bg-primary/13 text-primary",
+            ),
+          ],
+          [icon],
+        ),
+        heading(title),
+        ..list.append(hint, [pill])
       ]),
       action_row,
     ],
@@ -1037,15 +1032,28 @@ pub fn identifier_cell(
   ])
 }
 
-/// アカウントを識別する、ラベルと省略した npub。アカウントの一覧、読み込みで飛ばされた
-/// 行、アカウントのサブページが使う。16 進の公開鍵はここには出さない。
+/// 識別のラベルの大きさ。
+pub type IdentitySize {
+  /// アカウントの一覧の行。npub と見分けるよう大きい太字にする。
+  LargeIdentity
+  /// ダイアログとページの要約、読み込めなかった行。
+  PlainIdentity
+}
+
+/// アカウントを識別する、ラベルと省略した npub。ラベルの大きさは `size` で決める。アカウントの一覧、
+/// 読み込みで飛ばされた行、アカウントのサブページとダイアログが使う。16 進の公開鍵はここには出さない。
 pub fn identity(
   language: Language,
+  size: IdentitySize,
   label: String,
   npub: String,
 ) -> Element(msg) {
+  let label_class = case size {
+    LargeIdentity -> "text-lg font-bold leading-snug break-words"
+    PlainIdentity -> "font-semibold break-words"
+  }
   html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-    html.p([attribute.class("font-semibold break-words")], [html.text(label)]),
+    html.p([attribute.class(label_class)], [html.text(label)]),
     truncated_id(language, npub, i18n.text(language, i18n.CopyNpub)),
   ])
 }
@@ -1103,15 +1111,44 @@ fn form_with(
       attribute.action(action),
       ..list.append(attributes, form_layout(placement))
     ],
-    list.append(fields, [submit]),
+    list.append(fields, dialog_actions(placement, [submit])),
   )
+}
+
+/// ダイアログの操作の行。`placement` が `InDialog` なら、`buttons` の後に同じダイアログを閉じる
+/// 「キャンセル」を足して 1 行に並べる（幅が足りなければ折り返す）。キャンセルは送信せず、開いたときに
+/// フォーカスを受ける。ほかの置き場所では `buttons` をそのまま返す。
+pub fn dialog_actions(
+  placement: Placement,
+  buttons: List(Element(msg)),
+) -> List(Element(msg)) {
+  case placement {
+    InDialog(id:, cancel:) -> [
+      html.div(
+        [attribute.class("flex flex-wrap items-center gap-2")],
+        list.append(buttons, [
+          html.button(
+            [
+              attribute.type_("button"),
+              attribute.autofocus(True),
+              attribute.attribute("commandfor", id),
+              attribute.attribute("command", "close"),
+              attribute.class(button_class(GhostButton, placement)),
+            ],
+            [html.text(cancel)],
+          ),
+        ]),
+      ),
+    ]
+    InRow | InForm -> buttons
+  }
 }
 
 /// フォームの並べ方。行に置くフォームはボタン 1 つだけなので、クラスを付けない。
 fn form_layout(placement: Placement) -> List(Attribute(msg)) {
   case placement {
     InRow -> []
-    InForm -> [attribute.class("flex flex-col gap-4")]
+    InForm | InDialog(..) -> [attribute.class("flex flex-col gap-4")]
   }
 }
 
@@ -1126,8 +1163,8 @@ pub fn button_link(
   ])
 }
 
-/// ボタンの種類と置き場所の組ごとのクラス。行に置くものは小さく（`btn-sm`）、フォームの末尾に
-/// 置くものは左に寄せる（`self-start`）。
+/// ボタンの種類と置き場所の組ごとのクラス。行に置くものは小さく（`btn-sm`）、ページのフォームの末尾に
+/// 置くものは左に寄せる（`self-start`）。ダイアログの行に置くものは寄せない。
 fn button_class(kind: ButtonKind, placement: Placement) -> String {
   case placement, kind {
     InRow, PrimaryButton ->
@@ -1154,6 +1191,18 @@ fn button_class(kind: ButtonKind, placement: Placement) -> String {
       "btn btn-ghost self-start text-error focus-visible:outline-base-content"
     InForm, WarningOutlineButton ->
       "btn btn-outline btn-warning self-start focus-visible:outline-base-content"
+    InDialog(..), PrimaryButton ->
+      "btn btn-primary focus-visible:outline-base-content"
+    InDialog(..), OutlineButton ->
+      "btn btn-outline focus-visible:outline-base-content"
+    InDialog(..), GhostButton ->
+      "btn btn-ghost focus-visible:outline-base-content"
+    InDialog(..), DangerButton ->
+      "btn btn-error focus-visible:outline-base-content"
+    InDialog(..), DangerGhostButton ->
+      "btn btn-ghost text-error focus-visible:outline-base-content"
+    InDialog(..), WarningOutlineButton ->
+      "btn btn-outline btn-warning focus-visible:outline-base-content"
   }
 }
 
@@ -1199,8 +1248,7 @@ fn option_item(option: #(String, String), selected: String) -> Element(msg) {
 pub type FieldHint {
   /// 欄の下に常に出す、短い 1 行の補足。
   LineHint(text: String)
-  /// 見出しの横の ⓘ のボタンで開く補足。`popover` の段落なので、閉じていても欄の説明として
-  /// 読まれ、JS 無しで開き、ホバーでは開かない。
+  /// 見出しの横の ⓘ（`info_hint`）で開く補足。閉じていても欄の説明として読まれ、JS 無しで開く。
   FoldedHint(text: String)
 }
 
@@ -1255,8 +1303,7 @@ pub fn hinted_textarea(
 }
 
 /// `hinted_input` と `hinted_textarea` が共有する囲み。`LineHint` は見出し、欄、補足の段落の順に
-/// 並べる。`FoldedHint` は見出しの横に、補足を `popovertarget` で指す送信しない ⓘ のボタンを置き、
-/// 欄の後に `popover="auto"` の補足の段落を置く。段落はボタンの上に重ねて開く。
+/// 並べる。`FoldedHint` は見出しの横に `info_hint` の ⓘ と補足を置き、欄を続ける。
 fn hinted_field(
   language: Language,
   caption: String,
@@ -1273,38 +1320,55 @@ fn hinted_field(
           html.text(text),
         ]),
       ])
-    FoldedHint(text:) -> {
-      let label = i18n.text(language, i18n.ShowFieldHint)
+    FoldedHint(text:) ->
       html.div([attribute.class("fieldset")], [
         html.div([attribute.class("fieldset-legend w-fit justify-start")], [
           html.text(caption),
-          html.button(
-            [
-              attribute.type_("button"),
-              attribute.popovertarget(hint_id),
-              attribute.aria_label(label),
-              attribute.title(label),
-              attribute.class(
-                "btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content",
-              ),
-            ],
-            [info_icon()],
-          ),
+          ..info_hint(language, hint_id, [html.text(text)])
         ]),
         control,
-        html.p(
-          [
-            attribute.id(hint_id),
-            attribute.popover("auto"),
-            attribute.class(
-              "inset-auto m-0 mb-1 max-w-80 rounded-box border border-base-300 bg-base-100 p-3 text-sm text-base-content shadow-lift [position-area:top_span-right] [position-try-fallbacks:flip-block,flip-inline]",
-            ),
-          ],
-          [html.text(text)],
-        ),
       ])
-    }
   }
+}
+
+/// ⓘ のボタンと、それが開く補足の 2 要素。ボタンは送信せず、ホバーとキーボードのフォーカスで
+/// （`interestfor`）、クリックとタップで（`popovertarget`、`popovertargetaction="show"`）補足を開き、
+/// `aria-describedby` で補足を指す。語（`ShowFieldHint`）は `aria-label` と `title` に置く。補足は
+/// `id` の `popover="hint"` の `div` で `content` を包み、ボタンの上に重ねて開く。
+pub fn info_hint(
+  language: Language,
+  id: String,
+  content: List(Element(msg)),
+) -> List(Element(msg)) {
+  let label = i18n.text(language, i18n.ShowFieldHint)
+  [
+    html.button(
+      [
+        attribute.type_("button"),
+        attribute.popovertarget(id),
+        attribute.popovertargetaction("show"),
+        // lustre に interestfor の関数が無いので、属性を直に書く
+        attribute.attribute("interestfor", id),
+        attribute.aria_describedby(id),
+        attribute.aria_label(label),
+        attribute.title(label),
+        attribute.class(
+          "btn btn-ghost btn-xs btn-circle text-muted focus-visible:outline-base-content",
+        ),
+      ],
+      [info_icon()],
+    ),
+    html.div(
+      [
+        attribute.id(id),
+        attribute.popover("hint"),
+        attribute.class(
+          "inset-auto m-0 me-4 mb-1 max-w-80 rounded-box border border-base-300 bg-base-100 p-3 text-sm font-normal text-base-content shadow-lift [position-area:top_span-right] [position-try-fallbacks:flip-block,flip-inline]",
+        ),
+      ],
+      content,
+    ),
+  ]
 }
 
 /// チェック 1 つぶんの大きな行。ページの地の色の角丸の行に、チェック、アイコン、語、説明、あれば
@@ -1384,8 +1448,46 @@ pub fn copyable_field(
   caption: String,
   value: String,
 ) -> Element(msg) {
-  html.div([attribute.class("fieldset group")], [
+  copyable_field_with(
+    language,
     html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    caption,
+    value,
+    [],
+  )
+}
+
+/// 見出しの横の ⓘ で補足を開く `copyable_field`。欄は `aria-describedby` で `hint_id` の補足を指す。
+pub fn hinted_copyable_field(
+  language: Language,
+  caption: String,
+  hint_id: String,
+  hint: String,
+  value: String,
+) -> Element(msg) {
+  copyable_field_with(
+    language,
+    html.div([attribute.class("fieldset-legend w-fit justify-start")], [
+      html.text(caption),
+      ..info_hint(language, hint_id, [html.text(hint)])
+    ]),
+    caption,
+    value,
+    [attribute.aria_describedby(hint_id)],
+  )
+}
+
+/// `copyable_field` と `hinted_copyable_field` が共有する囲み。`legend` を見出しに置き、`attributes` を
+/// 欄に足す。
+fn copyable_field_with(
+  language: Language,
+  legend: Element(msg),
+  caption: String,
+  value: String,
+  attributes: List(Attribute(msg)),
+) -> Element(msg) {
+  html.div([attribute.class("fieldset group")], [
+    legend,
     html.div([attribute.class("flex items-center gap-1")], [
       html.input([
         attribute.type_("text"),
@@ -1395,6 +1497,7 @@ pub fn copyable_field(
         attribute.class(
           "input w-full min-w-0 font-mono text-xs border-base-content/60",
         ),
+        ..attributes
       ]),
       copy_button(i18n.text(language, i18n.Copy)),
     ]),
@@ -1834,14 +1937,18 @@ pub fn dialog_id(parts: List(String)) -> String {
   string.join(["dialog", ..parts], "-")
 }
 
-/// ダイアログを開くボタンと、そのダイアログの 2 要素。ボタンは `commandfor` で `id` のダイアログを指し、`command="show-modal"` で開く（`type="button"` で、何も送らない）。ダイアログは題（`id` に `-title` を付けた `id` の `h2`。ダイアログの `aria-labelledby` が指す）、`content`、「キャンセル」のボタンを縦に並べる。キャンセルは同じダイアログを `command="close"` で閉じるだけで、開いたときにフォーカスを受ける（`autofocus`）。Esc でも閉じる。
+/// ダイアログを開くボタンと、そのダイアログの 2 要素。ボタンは `commandfor` で `id` のダイアログを指し、
+/// `command="show-modal"` で開く（`type="button"` で、何も送らない）。ダイアログは題（`id` に `-title` を
+/// 付けた `id` の `h2`。ダイアログの `aria-labelledby` が指す）と、`content` に `InDialog` を渡した中身を
+/// 縦に並べる。中身はフォームの `InDialog` か `dialog_actions` で、閉じる「キャンセル」の行を末尾に置く。
+/// Esc でも閉じる。
 pub fn dialog_button(
   language: Language,
   id: String,
   trigger: DialogTrigger(msg),
   kind: ButtonKind,
   title: String,
-  content: List(Element(msg)),
+  content: fn(Placement) -> List(Element(msg)),
 ) -> List(Element(msg)) {
   let title_id = id <> "-title"
   let command = fn(name) {
@@ -1884,16 +1991,7 @@ pub fn dialog_button(
           html.h2([attribute.id(title_id), attribute.class("card-title")], [
             html.text(title),
           ]),
-          ..list.append(content, [
-            html.button(
-              [
-                attribute.autofocus(True),
-                attribute.class(button_class(GhostButton, InForm)),
-                ..command("close")
-              ],
-              [html.text(i18n.text(language, i18n.Cancel))],
-            ),
-          ])
+          ..content(InDialog(id:, cancel: i18n.text(language, i18n.Cancel)))
         ]),
       ],
     )
@@ -1999,10 +2097,9 @@ const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  
 /// 目と歯。白く塗り、`logo_body_path` の穴に重ねる。
 const logo_face_path = "M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
 
-/// 上部のロゴ。図形（`logo_icon`）の右に、製品名の字形（`wordmark_svg`）、読み上げ用の製品名、
-/// 表示の言語の副題（`LogoSubtitle`）を縦に並べ、全体をダッシュボード（`/`）への 1 つのリンクに
-/// する。リンクは「Nostr-no-Su」と副題の順に読み上げられる。
-fn brand_link(language: Language) -> Element(msg) {
+/// 上部のロゴ。図形（`logo_icon`）の右に製品名の字形（`wordmark_svg`）と読み上げ用の製品名を置き、全体を
+/// ダッシュボード（`/`）への 1 つのリンクにする。リンクは「Nostr-no-Su」と読み上げられる。
+fn brand_link() -> Element(msg) {
   html.a(
     [
       attribute.href("/"),
@@ -2012,13 +2109,8 @@ fn brand_link(language: Language) -> Element(msg) {
     ],
     [
       logo_icon(),
-      html.span([attribute.class("grid gap-1")], [
-        wordmark_svg(),
-        html.span([attribute.class("sr-only")], [html.text("Nostr-no-Su")]),
-        html.span([attribute.class("text-xs tracking-widest text-muted")], [
-          html.text(i18n.text(language, i18n.LogoSubtitle)),
-        ]),
-      ]),
+      wordmark_svg(),
+      html.span([attribute.class("sr-only")], [html.text("Nostr-no-Su")]),
     ],
   )
 }
@@ -2161,7 +2253,7 @@ const shield_alert_icon_paths = [
   "M12 8v4", "M12 16h.01",
 ]
 
-/// 情報のアイコン（Lucide の info）。欄の補足を開く ⓘ のボタンに使う。
+/// 情報のアイコン（Lucide の info）。ⓘ のボタン（`info_hint`）に使う。
 pub fn info_icon() -> Element(msg) {
   lucide_icon("size-4", info_icon_paths)
 }
