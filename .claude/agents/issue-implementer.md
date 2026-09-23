@@ -26,7 +26,7 @@ hooks:
 ## 環境
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない
 - 作業はすべて、指示された作業ツリーの絶対パスの下で行う。Bash の cwd は呼び出しごとにユーザーの作業ツリーに戻るので、相対パスで書き込みをしない
-- プランは、指示された issue コメントの URL の本文を `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` で読む。本文の後半は `<details>` に畳まれているので、そこまで読む。依頼文の「実装時の条件」（無ければプランの冒頭の「### 実装時の条件」）を取り込み、PR 本文の「プランからの変更」に取り込んだ旨を書く
+- プランは、指示された issue コメントの URL の本文を `gh api repos/neverclear86/nostr-no-su/issues/comments/<ID> --jq .body` で読む。本文の後半は `<details>` に畳まれているので、そこまで読む。依頼文の「実装時の条件」（無ければプランの冒頭の「### 実装時の条件」）を取り込み、PR 本文の「プランからの変更」に取り込んだ旨を書く。プランの土台（冒頭の SHA）が今の `origin/main` より古いときは、実装の前に（devin に任せるときも devin を起動する前に）`dev/check_plan_tests.sh`、掃き出しの語、土台に依存する測定値（件数、行番号）を今の土台で取り直し、ずれを「プランからの変更」に書く
 - 小さい issue（tier none）はプランが無く、依頼文が issue を直接読めと言う。このときは受け入れ条件を issue から取り、PR 本文に「## 設計メモ」を置く（下の「プランが無いとき」）
 - 読む量を絞る。大きいファイルは Read の offset と limit で要る範囲だけ読み、一度読んだファイルを全文で読み直さない。build、テスト、CI の出力は全文を流さず、失敗の箇所と最後の要約だけを `tail`、`grep` で取り出す（この段階の費用の大半は、伸びた文脈をリクエストのたびに読み直す分である）
 - プランどおりに作れない箇所が見つかったら、勝手に設計を変えずに、その箇所と理由と代案を指示されたファイルに書き、status を deviation にして返す（小さな表記の違いは PR 本文の「プランからの変更」に書けばよい）。プランの版が上がって「続き」を頼まれたら、作業ツリーとブランチはそのまま使い、新しい版との差分だけを直す
@@ -47,7 +47,7 @@ hooks:
 
 ## PR を作る前の検査（この順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く）
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
-1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）。rebase の後、プランが足す新しい識別子（関数、型、CSS のクラス）を作業ツリーで `git grep` し、土台より後にマージされた変更と同じ名前が無いことを確かめる（プランの衝突の検査は土台に対して回されている）。プランの土台（冒頭の SHA）が今の `origin/main` より古いときは、実装の前に `dev/check_plan_tests.sh`、掃き出しの語、土台に依存する測定値（件数、行番号）を今の土台で取り直し、ずれを「プランからの変更」に書く
+1. `git fetch origin main && git rebase origin/main`。衝突があれば解く（設計の判断が要るときは push せず status を blocked にする）。rebase の後、プランが足す新しい識別子（関数、型、CSS のクラス）を作業ツリーで `git grep` し、土台より後にマージされた変更と同じ名前が無いことを確かめる（プランの衝突の検査は土台に対して回されている）。土台の取り直しは「環境」のとおり済ませておく
 2. `gleam build --warnings-as-errors`
 3. `gleam test`。CI も Postgres と strfry つきで走らせるが、CI の失敗で push をやり直さないよう、ここでも Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポートで `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す。`COVERAGE=1` も付けて回し、そのあと `sh dev/check_coverage_badge.sh` を通す。計測値は環境で変わるので、`--update` でバッジを書き換えるときは、Postgres だけでなく strfry も立てて `TEST_RELAY_URL` を渡した状態（`docs/development.md` の「NIP-46 の E2E（strfry）」）で測り直してから行う（CI は両方を立てて測るので、E2E 抜きの値を書くとずれが溜まる）。
 4. `gleam format src test dev`（差分をコミットに含める）と `gleam format --check src test dev`。frontmatter の hook が同じ検査を機械的に行う（Edit / Write した `.gleam` は `dev/hook_gleam_format.sh` が整形し、`git -C <作業ツリー> push` の前に `dev/hook_push_format_check.sh` が `--check` を回して通らなければ止める）。hook は保険であり、この手順は省かない
