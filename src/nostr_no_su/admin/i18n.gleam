@@ -328,6 +328,7 @@ pub type Message {
   DeleteAccount
   Delete
   ApprovedSessions
+  ApprovedSessionsDescription
   NoApprovedSessions
   Revoke
   Relays
@@ -629,6 +630,8 @@ fn english(message: Message) -> String {
     DeleteAccount -> "Delete account"
     Delete -> "Delete"
     ApprovedSessions -> "Approved sessions"
+    ApprovedSessionsDescription ->
+      "Clients can request signing and encryption within the permissions shown here."
     NoApprovedSessions -> "No approved sessions."
     Revoke -> "Revoke"
     Relays -> "Relays"
@@ -933,6 +936,7 @@ fn japanese(message: Message) -> String {
     DeleteAccount -> "アカウントを削除"
     Delete -> "削除"
     ApprovedSessions -> "承認済みのセッション"
+    ApprovedSessionsDescription -> "クライアントは、ここに出ている権限の範囲で署名と暗号化を依頼できます。"
     NoApprovedSessions -> "承認済みのセッションはありません。"
     Revoke -> "承認を取り消す"
     Relays -> "リレー"

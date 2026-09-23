@@ -797,6 +797,7 @@ fn accounts_section(
       accounts,
       view.users_icon(),
       i18n.Accounts,
+      None,
       [
         view.icon_button_link(
           view.segments_path(new_account_segments),
@@ -878,13 +879,14 @@ fn skipped_item(language: Language, row: SkippedRow) -> Element(msg) {
   }
 }
 
-/// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。一覧を得たときだけ `listed_actions`
-/// を出し、`always_actions` は常に出す。説明の行は出さない。
+/// 一覧を得る節の見出し。一覧を得て 1 件以上あるときだけ件数を出す。`description` があれば、一覧の有無に
+/// 関わらず見出しの下に 1 行の説明を出す。一覧を得たときだけ `listed_actions` を出し、`always_actions` は常に出す。
 fn listed_section_heading(
   language: Language,
   listing: Result(List(a), i18n.Reason),
   icon: Element(msg),
   title: i18n.Message,
+  description: Option(i18n.Message),
   listed_actions: List(Element(msg)),
   always_actions: List(Element(msg)),
 ) -> Element(msg) {
@@ -896,7 +898,13 @@ fn listed_section_heading(
     Ok(_) -> list.append(listed_actions, always_actions)
     Error(_) -> always_actions
   }
-  view.section_heading(icon, i18n.text(language, title), count, None, actions)
+  view.section_heading(
+    icon,
+    i18n.text(language, title),
+    count,
+    option.map(description, i18n.text(language, _)),
+    actions,
+  )
 }
 
 /// 一覧を得たときの節の本文。得られれば `render` の内容を出す。得られず、3 つの一覧に共通の理由（`shared`）が
@@ -1129,10 +1137,6 @@ fn pending_card(
       "sm:row-span-2",
     )
   }
-  let mark = case fingerprint.from_pubkey(pending.client) {
-    Ok(mark) -> fingerprint.svg(mark, fingerprint.Colored, "size-6")
-    Error(Nil) -> element.none()
-  }
   let notice = case pending.secret_mismatch {
     True ->
       html.div([attribute.class("col-span-2 sm:col-span-1 sm:col-start-2")], [
@@ -1147,10 +1151,7 @@ fn pending_card(
         attribute.class("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5"),
       ],
       [
-        html.div([attribute.class("flex min-w-0 items-center gap-2")], [
-          mark,
-          view.truncated_id(language, pending.client, text(i18n.CopyClient)),
-        ]),
+        client_pubkey_line(language, pending.client),
         secret_badge(language, pending.secret_mismatch),
       ],
     ),
@@ -1609,6 +1610,7 @@ fn relays_section(
       relays,
       view.plug_icon(),
       i18n.Relays,
+      None,
       [
         view.icon_button_link(
           view.segments_path(new_relay_segments),
@@ -1703,8 +1705,8 @@ pub fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   }
 }
 
-/// 承認済みセッションと、その取り消しボタン。一覧を得られないときは、一覧の
-/// 代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出す。
+/// 承認済みのセッションの節。見出しに件数と 1 行の説明と「クライアントを接続」を置き、行を並べる。一覧を
+/// 得られないときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出す。
 fn sessions_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -1719,6 +1721,7 @@ fn sessions_section(
       sessions,
       view.clock_icon(),
       i18n.ApprovedSessions,
+      Some(i18n.ApprovedSessionsDescription),
       [
         view.icon_button_link(
           view.segments_path(connect_segments),
@@ -1742,8 +1745,9 @@ fn sessions_section(
   ])
 }
 
-/// 承認済みセッション 1 件。クライアントの省略 id、署名者、権限のチップ、最終利用の相対
-/// 時刻と、権限の編集と取り消しのボタンを並べる。
+/// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
+/// 1 段目に、権限のチップと権限の編集・取り消しのボタンを 2 段目に並べる。幅 720px 以下では、クライアント、
+/// 署名者と最終利用、権限のチップ、ボタンの 4 段に組み替える。
 fn session_item(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -1751,36 +1755,78 @@ fn session_item(
   session: SessionRow,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  view.list_row(view.InlineRow, [
-    view.detail_list([
-      #(
-        text(i18n.Client),
-        html.dd([], [
-          view.truncated_id(language, session.client, text(i18n.CopyClient)),
+  view.list_row(view.StackedRow, [
+    html.div(
+      [
+        attribute.class(
+          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 min-[721px]:grid-cols-[auto_minmax(0,1fr)_auto]",
+        ),
+      ],
+      [
+        html.div(
+          [attribute.class("col-span-2 min-w-0 min-[721px]:col-span-1")],
+          [
+            client_pubkey_line(language, session.client),
+          ],
+        ),
+        html.div([attribute.class("min-w-0 text-sm")], [
+          html.span([attribute.class("sr-only")], [html.text(text(i18n.Signer))]),
+          signer_value(signer_name(accounts, session.signer)),
         ]),
-      ),
-      #(
-        text(i18n.Signer),
-        html.dd([], [signer_value(signer_name(accounts, session.signer))]),
-      ),
-      #(
-        text(i18n.Permissions),
-        html.dd([], [permission_view.chips(language, session.perms)]),
-      ),
-      #(
-        text(i18n.LastUsed),
-        html.dd([], [
-          html.span([attribute.title(session_time_title(language, session))], [
-            html.text(text(relative_time(now, session.last_used_at))),
-          ]),
+        last_used_value(language, now, session),
+        html.div([attribute.class("col-span-2")], [
+          permission_view.chips(language, session.perms),
         ]),
-      ),
-    ]),
-    button_row([
-      permissions_link(language, session),
-      revoke_form(language, session),
-    ]),
+        html.div(
+          [
+            attribute.class(
+              "col-span-2 flex flex-wrap justify-end gap-2 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0",
+            ),
+          ],
+          [permissions_link(language, session), revoke_form(language, session)],
+        ),
+      ],
+    ),
   ])
+}
+
+/// クライアントの公開鍵。鍵の指紋と、省略した表示とコピーのボタンを並べる。16 進の公開鍵でなければ指紋を
+/// 出さない。承認待ちのカードと承認済みのセッションの行が使う。
+fn client_pubkey_line(language: Language, client: String) -> Element(msg) {
+  let mark = case fingerprint.from_pubkey(client) {
+    Ok(mark) -> fingerprint.svg(mark, fingerprint.Colored, "size-6")
+    Error(Nil) -> element.none()
+  }
+  html.div([attribute.class("flex min-w-0 items-center gap-2")], [
+    mark,
+    view.truncated_id(language, client, i18n.text(language, i18n.CopyClient)),
+  ])
+}
+
+/// 最終利用の相対時刻（「最終利用 3 分前」の形）。時計のアイコンを前に置き、`title` に最終利用と作成の
+/// UTC の全文を出す。
+fn last_used_value(
+  language: Language,
+  now: Int,
+  session: SessionRow,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  html.span(
+    [
+      attribute.class(
+        "inline-flex items-center gap-1.5 justify-self-end whitespace-nowrap text-sm text-muted",
+      ),
+      attribute.title(session_time_title(language, session)),
+    ],
+    [
+      view.clock_icon(),
+      html.text(
+        text(i18n.LastUsed)
+        <> " "
+        <> text(relative_time(now, session.last_used_at)),
+      ),
+    ],
+  )
 }
 
 /// 権限の編集画面へのリンク。
@@ -1828,6 +1874,7 @@ fn plugins_section(
       Ok(plugins),
       view.puzzle_icon(),
       i18n.Plugins,
+      None,
       [],
       [],
     ),
