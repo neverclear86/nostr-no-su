@@ -186,16 +186,17 @@ fn event_section(
   accounts: List(Account),
   row: store.Row,
 ) -> Dynamic {
-  let content_details =
+  let content_details = fn() {
     details_block(
       i18n.text(language, i18n.ContentSummary(string.byte_size(row.content))),
       row.content,
     )
+  }
   let body = case content_view(row.kind, row.content) {
     NoContent -> []
     WholeContent(text) -> [text_block(text)]
-    ContentExcerpt(head) -> [text_block(head), content_details]
-    FoldedContent -> [content_details]
+    ContentExcerpt(head) -> [text_block(head), content_details()]
+    FoldedContent -> [content_details()]
   }
   section(
     "kind "
