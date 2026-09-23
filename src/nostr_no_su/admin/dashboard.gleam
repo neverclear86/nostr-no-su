@@ -166,6 +166,26 @@ pub type Snapshot {
   )
 }
 
+/// 「はじめに」の帯の段のうち、済んだかどうかが変わる 2 つ。
+pub type GettingStarted {
+  GettingStarted(
+    /// バンカーに使うリレーが 1 件以上ある。
+    bunker_relay: Bool,
+    /// 読み込めたアカウントが 1 件以上ある。
+    account: Bool,
+  )
+}
+
+/// 「はじめに」の帯の段 1 つの見せ方。
+type SetupStep {
+  /// 済んだ段。済みの印を付け、操作を出さない。
+  StepDone
+  /// 今できる段。追加のページへのリンクを出す。
+  StepOpen(href: String, action: i18n.Message)
+  /// 前の段が済むまで開けない段。点線の枠で出し、操作を出さない。
+  StepLocked
+}
+
 /// アカウント 1 件に対する操作。
 pub type AccountAction {
   EditLabel
@@ -294,6 +314,9 @@ const refresh_seconds = 30
 /// コードのページからのリンクも同じ値を見る。
 pub const pending_anchor = "pending"
 
+/// 「はじめに」の帯のアンカー。
+const getting_started_anchor = "getting-started"
+
 /// アカウントの節のアンカー。
 const accounts_anchor = "accounts"
 
@@ -319,7 +342,8 @@ fn dashboard_refresh(
 
 /// スナップショットをダッシュボードのページに描画する。先頭に概要の帯を置き、承認待ち、アカウント、セッションの
 /// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
-/// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置く。その下は
+/// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置き、アカウントか
+/// バンカーに使うリレーが 0 件のときは「はじめに」の帯をその下に置く。その下は
 /// 広い画面では、アカウントと読み込めなかったアカウントとセッションを左の列に、リレーと
 /// プラグイン（末尾に読み込めなかったプラグインの枠）を右の列に置く 2 列で、狭い画面では
 /// この順に 1 列に並ぶ。
@@ -346,6 +370,7 @@ pub fn render(
         shared,
         snapshot.pending,
       ),
+      getting_started_band(language, snapshot.accounts, snapshot.relays),
       html.div([attribute.class("grid items-start gap-6 xl:grid-cols-5")], [
         html.div(
           [attribute.class("flex min-w-0 flex-col gap-6 xl:col-span-3")],
@@ -783,6 +808,167 @@ fn row_has_role_state(row: RelayRow, state: RoleState) -> Bool {
 /// 一覧にバンカーに使う行があるか。
 fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
   list.any(rows, fn(row) { row.bunker != Unused })
+}
+
+/// アカウントとリレーの一覧から「はじめに」の帯の段の状態を決める。どちらの一覧も得られ、
+/// バンカーに使うリレーと読み込めたアカウントの少なくとも一方が 0 件のときだけ `Some` を返す。
+/// 一覧を得られないときは段が済んだかを決められないので `None` にする。
+pub fn getting_started(
+  accounts: Result(List(AccountRow), i18n.Reason),
+  relays: Result(List(RelayRow), i18n.Reason),
+) -> Option(GettingStarted) {
+  case accounts, relays {
+    Ok(accounts), Ok(relays) ->
+      case has_bunker_relay(relays), accounts {
+        True, [_, ..] -> None
+        bunker_relay, accounts ->
+          Some(GettingStarted(bunker_relay:, account: accounts != []))
+      }
+    _, _ -> None
+  }
+}
+
+/// 「はじめに」の帯。`getting_started` が `Some` のときだけ、全幅の帯に見出しと説明、3 つの段を
+/// 番号順に並べる。段 1（バンカー用のリレー）と段 2（アカウント）は済んだかで見せ方が変わり、
+/// 段 3（接続 URI）は両方が済むまで開けないので、帯が出ている間は常に点線の枠で出す。
+fn getting_started_band(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  relays: Result(List(RelayRow), i18n.Reason),
+) -> Element(msg) {
+  case getting_started(accounts, relays) {
+    None -> element.none()
+    Some(steps) -> {
+      let text = i18n.text(language, _)
+      view.band(getting_started_anchor, [
+        view.section_heading(
+          view.sparkle_icon(),
+          text(i18n.GettingStarted),
+          None,
+          Some(text(i18n.GettingStartedDescription)),
+          [],
+        ),
+        html.ol([attribute.class("grid gap-3.5 lg:grid-cols-3")], [
+          setup_step(
+            language,
+            1,
+            i18n.SetupBunkerRelay,
+            i18n.SetupBunkerRelayDescription,
+            open_unless_done(
+              steps.bunker_relay,
+              new_relay_segments,
+              i18n.AddRelay,
+            ),
+          ),
+          setup_step(
+            language,
+            2,
+            i18n.SetupAccount,
+            i18n.SetupAccountDescription,
+            open_unless_done(
+              steps.account,
+              new_account_segments,
+              i18n.AddAccount,
+            ),
+          ),
+          setup_step(
+            language,
+            3,
+            i18n.SetupConnectionUri,
+            i18n.SetupConnectionUriDescription,
+            StepLocked,
+          ),
+        ]),
+      ])
+    }
+  }
+}
+
+/// 済んだ段は `StepDone`、まだの段は `segments` の追加のページへのリンクを持つ `StepOpen` にする。
+fn open_unless_done(
+  done: Bool,
+  segments: List(String),
+  action: i18n.Message,
+) -> SetupStep {
+  case done {
+    True -> StepDone
+    False -> StepOpen(view.segments_path(segments), action)
+  }
+}
+
+/// 「はじめに」の帯の段 1 つ。番号の丸と見出しを 1 行に並べ、その下に説明と追加の操作を置く。
+/// 済んだ段は丸を success の色のチェックにして見出しの右に「済み」のチップを付け、開けない段は
+/// 枠を点線にして塗らない。
+fn setup_step(
+  language: Language,
+  number: Int,
+  title: i18n.Message,
+  description: i18n.Message,
+  step: SetupStep,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let item_class = case step {
+    StepLocked ->
+      "flex flex-col items-start gap-2 rounded-box border border-dashed border-field p-4"
+    StepDone | StepOpen(..) ->
+      "flex flex-col items-start gap-2 rounded-box border border-primary/22 bg-base-100 p-4"
+  }
+  let number_text = html.text(int.to_string(number))
+  let marker = case step {
+    StepDone ->
+      html.span(
+        [
+          attribute.class(
+            "grid size-7 shrink-0 place-items-center rounded-full bg-success text-success-content",
+          ),
+        ],
+        [view.check_icon()],
+      )
+    StepOpen(..) ->
+      html.span(
+        [
+          attribute.class(
+            "grid size-7 shrink-0 place-items-center rounded-full bg-primary font-mono font-bold text-primary-content",
+          ),
+        ],
+        [number_text],
+      )
+    StepLocked ->
+      html.span(
+        [
+          attribute.class(
+            "grid size-7 shrink-0 place-items-center rounded-full bg-base-300 font-mono font-bold",
+          ),
+        ],
+        [number_text],
+      )
+  }
+  let done_chip = case step {
+    StepDone ->
+      view.status_chip(view.ToneChip(view.Success), text(i18n.SetupStepDone))
+    StepOpen(..) | StepLocked -> element.none()
+  }
+  let action = case step {
+    StepOpen(href, action) ->
+      view.icon_button_link(
+        href,
+        view.plus_icon(),
+        text(action),
+        view.PrimaryButton,
+      )
+    StepDone | StepLocked -> element.none()
+  }
+  html.li([attribute.class(item_class)], [
+    html.div([attribute.class("flex flex-wrap items-center gap-2.5")], [
+      marker,
+      html.h3([attribute.class("font-bold")], [html.text(text(title))]),
+      done_chip,
+    ]),
+    html.p([attribute.class("text-sm text-muted")], [
+      html.text(text(description)),
+    ]),
+    action,
+  ])
 }
 
 /// アカウントと、その `bunker://` 接続 URI（secret 入りと、承認を経るもの）と操作。

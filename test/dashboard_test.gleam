@@ -1950,3 +1950,94 @@ pub fn overview_color_rules_test() {
   use #(snapshot, pick, expected) <- list.each(cases)
   assert pick(dashboard.overview(snapshot)) == expected
 }
+
+/// 「はじめに」の帯の段の状態は、バンカーに使うリレーと読み込めたアカウントの有無から決まり、
+/// 両方がそろうか、どちらかの一覧を得られないときは帯を出さない。
+pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
+  let account =
+    dashboard.AccountRow(
+      signer: "abcd",
+      npub: "npub1x",
+      label: "",
+      uri: "bunker://x?secret=s",
+      auth_uri: "bunker://x",
+    )
+  let connected = dashboard.Reported(relay_connection.Connected)
+  let bunker_relay =
+    dashboard.RelayRow(1, "wss://a", dashboard.Unused, connected)
+  let monitor_relay =
+    dashboard.RelayRow(2, "wss://b", connected, dashboard.Unused)
+  let reason = i18n.Untranslated("reason")
+  assert dashboard.getting_started(Ok([]), Ok([]))
+    == Some(dashboard.GettingStarted(bunker_relay: False, account: False))
+  assert dashboard.getting_started(Ok([]), Ok([bunker_relay]))
+    == Some(dashboard.GettingStarted(bunker_relay: True, account: False))
+  assert dashboard.getting_started(Ok([]), Ok([monitor_relay]))
+    == Some(dashboard.GettingStarted(bunker_relay: False, account: False))
+  assert dashboard.getting_started(Ok([account]), Ok([monitor_relay]))
+    == Some(dashboard.GettingStarted(bunker_relay: False, account: True))
+  assert dashboard.getting_started(Ok([account]), Ok([bunker_relay])) == None
+  assert dashboard.getting_started(Error(reason), Ok([])) == None
+  assert dashboard.getting_started(Ok([]), Error(reason)) == None
+}
+
+/// 「はじめに」の帯は、まだの段に追加のページへのリンクを、済んだ段に「済み」のチップを出し、
+/// 段 3 を点線の枠で出す。リレーとアカウントがそろうと帯ごと出さない。
+pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
+  let render = fn(accounts, relays) {
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Ok(accounts), relays: Ok(relays)),
+    )
+  }
+  let link = fn(href, label) {
+    element.to_string(view.icon_button_link(
+      href,
+      view.plus_icon(),
+      label,
+      view.PrimaryButton,
+    ))
+  }
+  let add_relay = link("/relays/new", "Add relay")
+  let add_account = link("/accounts/new", "Add account")
+  let done_chip =
+    element.to_string(view.status_chip(view.ToneChip(view.Success), "Done"))
+  let locked_count = fn(html) {
+    list.length(string.split(
+      html,
+      "<li class=\"flex flex-col items-start gap-2 rounded-box border border-dashed border-field p-4\">",
+    ))
+    - 1
+  }
+  let bunker_relay =
+    dashboard.RelayRow(
+      1,
+      "wss://a",
+      dashboard.Unused,
+      dashboard.Reported(relay_connection.Connected),
+    )
+
+  let nothing = render([], [])
+  assert string.contains(nothing, "Getting started</h2>")
+  assert string.contains(nothing, add_relay)
+  assert string.contains(nothing, add_account)
+  assert !string.contains(nothing, done_chip)
+  assert locked_count(nothing) == 1
+
+  let relay_only = render([], [bunker_relay])
+  assert string.contains(relay_only, "Add a bunker relay</h3>" <> done_chip)
+  assert !string.contains(relay_only, add_relay)
+  assert string.contains(relay_only, add_account)
+  assert locked_count(relay_only) == 1
+
+  let account =
+    dashboard.AccountRow(
+      signer: "abcd",
+      npub: "npub1x",
+      label: "",
+      uri: "bunker://x?secret=s",
+      auth_uri: "bunker://x",
+    )
+  assert !string.contains(render([account], [bunker_relay]), "Getting started")
+}

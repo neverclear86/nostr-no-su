@@ -219,7 +219,7 @@ pub type Chip {
   SecretNotOfferedChip
   /// 承認待ちの secret の不一致。warning の色と shield-alert。
   SecretMismatchChip
-  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし）。
+  /// 状態の表に無いチップ（プラグインのページの `badge`、失効の残り、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし、「はじめに」の帯の済んだ段）。
   /// 色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
   ToneChip(tone: Tone)
 }
@@ -1583,7 +1583,7 @@ pub fn truncated_id(
   ])
 }
 
-/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作と、アカウントの行の操作に使う。
+/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、「はじめに」の帯の段の追加の操作と、アカウントの行の操作に使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),
@@ -1811,7 +1811,7 @@ const copy_icon_paths = [
   "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2",
 ]
 
-/// コピーの完了のアイコンのストローク（Lucide の check）。
+/// コピーの完了と、「はじめに」の帯の済んだ段の印（`check_icon`）のアイコンのストローク（Lucide の check）。
 const copied_icon_paths = ["M20 6 9 17l-5-5"]
 
 /// 追加のボタンのアイコン（Lucide の plus）。
@@ -1892,6 +1892,18 @@ pub fn door_open_icon() -> Element(msg) {
     "M13 4h3a2 2 0 0 1 2 2v14", "M2 20h3", "M13 20h9", "M10 12v.01",
     "M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z",
   ])
+}
+
+/// 「はじめに」の帯の見出しのアイコン（Lucide の sparkle）。
+pub fn sparkle_icon() -> Element(msg) {
+  lucide_icon("size-4", [
+    "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
+  ])
+}
+
+/// 済んだ段の印のアイコン（Lucide の check）。
+pub fn check_icon() -> Element(msg) {
+  lucide_icon("size-4", copied_icon_paths)
 }
 
 /// プラグインの節のアイコン（Lucide の puzzle）。

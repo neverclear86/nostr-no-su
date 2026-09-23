@@ -297,6 +297,15 @@ pub type Message {
   Add
   AddAccount
   NoAccounts
+  GettingStarted
+  GettingStartedDescription
+  SetupBunkerRelay
+  SetupBunkerRelayDescription
+  SetupAccount
+  SetupAccountDescription
+  SetupConnectionUri
+  SetupConnectionUriDescription
+  SetupStepDone
   ReloadAccounts
   UnreadableAccounts
   UnreadableAccountsWarning
@@ -588,6 +597,19 @@ fn english(message: Message) -> String {
     AddAccount -> "Add account"
     NoAccounts ->
       "No accounts registered. Use \"Add\" to import an nsec or generate a key."
+    GettingStarted -> "Getting started"
+    GettingStartedDescription ->
+      "Register a relay and an account, then paste the connection URI into your client."
+    SetupBunkerRelay -> "Add a bunker relay"
+    SetupBunkerRelayDescription ->
+      "Clients send signing and encryption requests through this relay. You need at least one."
+    SetupAccount -> "Register an account"
+    SetupAccountDescription ->
+      "Import an existing nsec or generate a new private key. Private keys are stored encrypted."
+    SetupConnectionUri -> "Paste the connection URI into a client"
+    SetupConnectionUriDescription ->
+      "Once both are in place, give a client the connection URI or QR code from the Accounts section."
+    SetupStepDone -> "Done"
     ReloadAccounts -> "Reload from database"
     UnreadableAccounts -> "Unreadable accounts"
     UnreadableAccountsWarning ->
@@ -899,6 +921,16 @@ fn japanese(message: Message) -> String {
     Add -> "追加"
     AddAccount -> "アカウントを追加"
     NoAccounts -> "登録されたアカウントはありません。「追加」から nsec の登録か鍵の生成ができます。"
+    GettingStarted -> "はじめに"
+    GettingStartedDescription -> "リレーとアカウントを登録し、接続 URI をクライアントに貼ると使えます。"
+    SetupBunkerRelay -> "バンカー用のリレーを追加"
+    SetupBunkerRelayDescription -> "クライアントは、このリレーを通して署名と暗号化を依頼します。1 件以上必要です。"
+    SetupAccount -> "アカウントを登録"
+    SetupAccountDescription -> "既存の nsec を登録するか、新しい秘密鍵を生成します。秘密鍵は暗号化して保存します。"
+    SetupConnectionUri -> "接続 URI をクライアントに貼る"
+    SetupConnectionUriDescription ->
+      "両方がそろったら、アカウントの節の接続 URI か QR コードをクライアントに渡します。"
+    SetupStepDone -> "済み"
     ReloadAccounts -> "DB から読み直す"
     UnreadableAccounts -> "読み込めなかったアカウント"
     UnreadableAccountsWarning -> "現在の ACCOUNT_MASTER_KEY では、これらの行の秘密鍵を復号できません。"
