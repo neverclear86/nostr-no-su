@@ -24,6 +24,7 @@ pub type Message {
   StoredOnlyForChecked
   AllCheckedMeansEveryAccount
   Save
+  DatabaseUrlTerm
   PoolSizeTerm
   MaxQueueLengthTerm
   NotConfigured
@@ -78,13 +79,13 @@ fn english(message: Message) -> String {
     AllCheckedMeansEveryAccount ->
       "All accounts checked means every account, including ones you register later."
     Save -> "Save"
+    DatabaseUrlTerm -> "database URL"
     PoolSizeTerm -> "pool size"
     MaxQueueLengthTerm -> "max queue length"
     NotConfigured -> "not configured"
-    InvalidDatabaseUrl ->
-      "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL"
+    InvalidDatabaseUrl -> "database URL is not a valid postgres URL"
     ConfigurationNote ->
-      "This plugin strips the password before showing the URL above. The connection URL comes only from this environment variable and cannot be changed from this page. Only the accounts to store events for are chosen above."
+      "This plugin strips the password before showing the URL above. The database is the host's DATABASE_URL unless PLUGIN_EVENT_LOGGER_DATABASE_URL is set, and cannot be changed from this page. Only the accounts to store events for are chosen above."
     ProcessColumn -> "Process"
     RegisteredNameColumn -> "Registered name"
     StatusColumn -> "Status"
@@ -117,13 +118,13 @@ fn japanese(message: Message) -> String {
     StoredOnlyForChecked -> "チェックしたアカウントのイベントだけを保存します。"
     AllCheckedMeansEveryAccount -> "すべてにチェックすると、あとで登録するアカウントも含めて全アカウントが対象になります。"
     Save -> "保存する"
+    DatabaseUrlTerm -> "接続先の URL"
     PoolSizeTerm -> "接続数"
     MaxQueueLengthTerm -> "保存待ちの上限"
     NotConfigured -> "未設定"
-    InvalidDatabaseUrl ->
-      "PLUGIN_EVENT_LOGGER_DATABASE_URL を postgres の URL として読めません。"
+    InvalidDatabaseUrl -> "接続先の URL を postgres の URL として読めません。"
     ConfigurationNote ->
-      "上の URL は、このプラグインがパスワードを取り除いて表示しています。接続先はこの環境変数だけで決まり、このページからは変えられません。このページで選べるのは、イベントを保存するアカウントだけです。"
+      "上の URL は、このプラグインがパスワードを取り除いて表示しています。接続先は本体の DATABASE_URL で、PLUGIN_EVENT_LOGGER_DATABASE_URL を設定したときはそちらになり、このページからは変えられません。このページで選べるのは、イベントを保存するアカウントだけです。"
     ProcessColumn -> "プロセス"
     RegisteredNameColumn -> "登録名"
     StatusColumn -> "状態"

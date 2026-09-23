@@ -482,7 +482,7 @@ fn event_logger_settings_description(
     section("Configuration", [
       pairs_block([
         #(
-          "PLUGIN_EVENT_LOGGER_DATABASE_URL",
+          "database URL",
           code_inline("postgres://nostr@postgres:5432/nostr_no_su"),
         ),
         #("pool size", text_inline("2")),
@@ -490,9 +490,10 @@ fn event_logger_settings_description(
       ]),
       note_block(
         "This plugin strips the password before showing the URL above. "
-        <> "The connection URL comes only from this environment variable and "
-        <> "cannot be changed from this page. Only the accounts to store "
-        <> "events for are chosen above.",
+        <> "The database is the host's DATABASE_URL unless "
+        <> "PLUGIN_EVENT_LOGGER_DATABASE_URL is set, and cannot be changed "
+        <> "from this page. Only the accounts to store events for are "
+        <> "chosen above.",
       ),
     ]),
     section("Runtime", [

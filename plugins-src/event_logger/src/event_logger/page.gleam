@@ -285,7 +285,8 @@ pub fn masked_url(
 }
 
 /// `Configuration` の節。マスク済みの URL、プール接続数、保存待ちの上限を
-/// `pairs` で示し、接続先はこの環境変数だけで実行時には変えられない旨を注記する。
+/// `pairs` で示し、接続先の出どころ（本体の `DATABASE_URL` か
+/// `PLUGIN_EVENT_LOGGER_DATABASE_URL`）と、実行時には変えられない旨を注記する。
 fn configuration_section(
   language: Language,
   database: Result(String, Nil),
@@ -297,7 +298,7 @@ fn configuration_section(
   }
   section(i18n.text(language, i18n.ConfigurationTitle), [
     pairs_block([
-      #("PLUGIN_EVENT_LOGGER_DATABASE_URL", code_inline(masked)),
+      #(i18n.text(language, i18n.DatabaseUrlTerm), code_inline(masked)),
       #(
         i18n.text(language, i18n.PoolSizeTerm),
         text_inline(int.to_string(pool_size)),
