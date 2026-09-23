@@ -26,8 +26,13 @@ const publish_timeout_ms = 1000
 /// 接続を開いてから応答を集め終えるまでの時間の上限（ミリ秒）。`relay_client` の
 /// `connect_timeout_ms`（3000ms）を含む。リレー 1 本ごとに並行に開くので本数には
 /// 比例しない。`plugin_page_content` の 1 回の期限（5 秒）に収まるよう、
-/// `gather_margin_ms` を足しても 5 秒を割る値にする。
+/// `close_timeout_ms` と `gather_margin_ms` を足しても 5 秒を割る値にする。
 const fetch_timeout_ms = 3000
+
+/// 集め終えた使い捨ての接続に購読の CLOSE と close フレームを送らせてから、
+/// そのプロセスが止まるのを待つ時間の上限（ミリ秒）。過ぎたら kill する
+/// （`relay_client.disconnect`）。取得の期限にはこの時間を足す。
+const close_timeout_ms = 100
 
 /// `publish_timeout_ms` と `fetch_timeout_ms` に足す余裕。集計を行う使い捨て
 /// プロセスの結果を取りこぼさないためのもの。
@@ -267,7 +272,8 @@ fn ask_monitor_relays(
     [] -> Error(no_monitor_relay_registered)
     urls -> {
       let deadline = task.deadline_in(fetch_timeout_ms)
-      let await_deadline = task.deadline_in(fetch_timeout_ms + gather_margin_ms)
+      let await_deadline =
+        task.deadline_in(fetch_timeout_ms + close_timeout_ms + gather_margin_ms)
       let outcomes =
         list.map(urls, fn(url) {
           task.start(fn() { query(url, authors, kind, deadline) })
@@ -320,11 +326,13 @@ fn fetch_filter(authors: List(String), kind: Int) -> Filter {
 
 /// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`authors` の
 /// 名義の `kind` のイベントを求める REQ（`fetch_filter`）を 1 件送り、`Ended`
-/// （EOSE）を受けるか期限に達するまで集め、接続を閉じる。届くイベントは
-/// `handle_incoming` が作者が `authors` にあり `kind` が一致するものだけを
-/// `Found` にする。`collect` が `Ended` を受けずに期限に達したときは、集めた
-/// イベントを捨てて `Error(Nil)` を返す（保存済みのイベントの直後に EOSE が届く
-/// ので、期限までに EOSE が無い本は応答しなかった本として数える）。
+/// （EOSE）を受けるか期限に達するまで集め、`relay_client.disconnect` で購読の
+/// CLOSE と close フレームを送って接続を閉じる（`close_timeout_ms` までに止まら
+/// なければ kill する）。届くイベントは `handle_incoming` が作者が `authors` に
+/// あり `kind` が一致するものだけを `Found` にする。`collect` が `Ended` を受けずに
+/// 期限に達したときは、集めたイベントを捨てて `Error(Nil)` を返す（保存済みの
+/// イベントの直後に EOSE が届くので、期限までに EOSE が無い本は応答しなかった本
+/// として数える）。
 /// `relay_client.start` が失敗したときも `Error(Nil)`。
 fn query(
   url: String,
@@ -351,17 +359,7 @@ fn query(
     |> result.replace_error(Nil),
   )
   let collected = collect(reply, deadline, [])
-  // 集め終えたら接続を閉じる。先にリンクを解くのは、kill がリンクを逆流して
-  // このプロセスの終了のしかたを左右しないため（`relay_connection.stop_socket`
-  // と同じ手順）。すでに落ちていて `subject_owner` が `Error(Nil)` のときは
-  // 何もしない。
-  case process.subject_owner(client) {
-    Ok(pid) -> {
-      process.unlink(pid)
-      process.kill(pid)
-    }
-    Error(Nil) -> Nil
-  }
+  relay_client.disconnect(client, close_timeout_ms)
   collected
 }
 
