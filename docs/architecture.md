@@ -462,16 +462,16 @@ SHARE は実行中の書き込みが持つ ROW EXCLUSIVE と衝突するので�
 
 | 結果 | アクターのどの分岐から来るか | 管理 UI の応答 |
 | --- | --- | --- |
-| `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ（nsec 入力による登録は 200 の完了ページ） |
-| `NotApplied` | `NotWritten` | 409 でフォームに英語の理由を出す |
-| `AccountAlreadyRegistered` | 登録済みの検査（`require_unregistered`）、`AlreadyStored` | 409 でフォームに訳した理由を出す |
-| `AccountNotRegistered` | 未登録の検査（`require_registered` / `require_registered_or_skipped`） | 409 でフォームに訳した理由を出す（一覧に無い署名者の 404 と同じ文言） |
-| `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
-| `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ（生成した鍵の登録では、生成した鍵の確認ページに理由を出す） |
+| `Ok(Nil)` | 書き込めた | 303 でダッシュボードへ |
+| `NotApplied` | `NotWritten` | 409 で開き直したダイアログに英語の理由を出す |
+| `AccountAlreadyRegistered` | 登録済みの検査（`require_unregistered`）、`AlreadyStored` | 409 で開き直したダイアログに訳した理由を出す |
+| `AccountNotRegistered` | 未登録の検査（`require_registered` / `require_registered_or_skipped`） | 404 の「見つかりません」の通知ページ（一覧に無い署名者の 404 と同じ文言） |
+| `NotReady` | 読み込みか読み直しの前（`Loading`） | 503 の通知ページ（生成した鍵の登録では、生成した鍵のダイアログに理由を出す） |
+| `MaybeApplied` | `MaybeWritten`、変更の問い合わせのタイムアウト | 202 の通知ページ（生成した鍵の登録では、生成した鍵のダイアログに理由を出す） |
 
 `MaybeApplied` を 409 にしないのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
 アカウント 1 件の操作は変更の前に一覧を引くので、一覧に無い署名者（削除済みの署名者への再送など）はバンカーに届く前に 404 になる。
-`require_registered` の拒否（`AccountNotRegistered`、409）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。
+`require_registered` の拒否（`AccountNotRegistered`、404）が届くのは、管理 UI が一覧を引いてからバンカーが変更を処理するまでの間に削除された場合（同時に送られた削除など）だけである。
 利用者がダッシュボードを開いた後に削除されたアカウントは、操作の時点で一覧に無いので 404 になる。
 `NotReady` を `NotApplied` と分けるのは、時間をおけば同じ変更を受け付けうる一時的な状態だからで、一覧を得られないときの 503 と揃えている。
 
@@ -507,7 +507,7 @@ sequenceDiagram
     alt 鍵を生成する
         browser->>ui: POST /accounts/generate
         Note over ui: 鍵を生成するだけで<br/>登録しない
-        ui-->>browser: 確認ページ（nsec を表示し、<br/>隠しフィールドに持つ）
+        ui-->>browser: 生成した鍵のダイアログ（nsec を表示し、<br/>隠しフィールドに持つ）
         browser->>ui: POST /accounts/register-generated（nsec、ラベル）
     else nsec を貼り付ける
         browser->>ui: POST /accounts/import（nsec、ラベル）
@@ -518,17 +518,17 @@ sequenceDiagram
     alt 生成した鍵の登録に成功
         ui-->>browser: 303 でダッシュボードへ（nsec を描画しない）
     else nsec 入力による登録に成功
-        ui-->>browser: 完了ページ（nsec を 1 回表示）
+        ui-->>browser: 303 でダッシュボードへ
     else nsec 入力による登録に失敗
         ui-->>browser: 409 / 503 / 202（nsec を描画しない）
     else 生成した鍵の登録に失敗
-        ui-->>browser: 409 / 503 / 202（送られた nsec の確認ページを理由付きで返す）
+        ui-->>browser: 409 / 503 / 202（送られた nsec のダイアログを理由付きで開いて返す）
     end
 ```
 
-生成と登録を分けるのは、生成の確認ページ（`POST /accounts/generate` の応答）の再読み込みで POST が再送されても何も登録されないようにするためである。
+生成と登録を分けるのは、生成した鍵のダイアログ（`POST /accounts/generate` の応答）の再読み込みで POST が再送されても何も登録されないようにするためである。
 1 回の POST で生成と登録を行うと、再送のたびに別の鍵のアカウントが登録される。
-生成した鍵の登録でラベルが規則に反したときと、バンカーが登録に失敗したとき（409 / 503 / 202）は、送られた nsec の確認ページを理由付きで返し、生成した鍵を失わないようにする（nsec が不正なら登録画面に戻す）。
+生成した鍵の登録でラベルが規則に反したときと、バンカーが登録に失敗したとき（409 / 503 / 202）は、送られた nsec のダイアログを理由付きで開いて返し、生成した鍵を失わないようにする（nsec が不正ならアカウントの追加のダイアログを開く）。
 
 ```mermaid
 sequenceDiagram
@@ -536,10 +536,6 @@ sequenceDiagram
     participant ui as 管理 UI
     participant bk as bunker
 
-    browser->>ui: GET /accounts/{signer}/private-key
-    ui->>bk: GetAccounts
-    bk-->>ui: 一覧（署名者が無ければ 404）
-    ui-->>browser: パスワードの入力フォーム
     browser->>ui: POST /accounts/{signer}/private-key（password）
     ui->>bk: GetAccounts
     bk-->>ui: 一覧の行（npub）
@@ -551,7 +547,7 @@ sequenceDiagram
         ui->>bk: GetNsec(signer)
         bk-->>ui: nsec の文字列（Account は渡さない）
         Note over ui: ログ: revealed the private key of {npub}
-        ui-->>browser: 表示ページ
+        ui-->>browser: 秘密鍵のダイアログを開いたダッシュボード
     end
 ```
 
@@ -597,15 +593,13 @@ POST の応答で開いた状態で描いたダイアログは、`admin.js` が�
 | GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
 | POST | `/plugins/<プラグイン名>/<ページ>` | プラグインのページのフォームの送信 |
 | POST | `/accounts/reload` | DB からのアカウントの読み直しの要求。303 でダッシュボードへ戻す |
-| GET | `/accounts/new` | 登録画面（nsec の入力と鍵の生成） |
-| POST | `/accounts/generate` | 鍵を生成して確認ページを返す（登録しない） |
-| POST | `/accounts/import` | nsec 入力による登録。完了ページで nsec を 1 回表示する |
-| POST | `/accounts/register-generated` | 生成した鍵の登録。303 でダッシュボードへ戻す |
-| GET | `/accounts/<signer>/qr` | 接続 URI の QR コード |
-| GET / POST | `/accounts/<signer>/label` | ラベルの編集フォーム / 差し替え |
-| GET / POST | `/accounts/<signer>/rotate` | secret の作り直しの確認 / 実行 |
-| GET / POST | `/accounts/<signer>/delete` | 削除の確認 / 実行 |
-| GET / POST | `/accounts/<signer>/private-key` | パスワードの入力フォーム / 秘密鍵の表示 |
+| POST | `/accounts/generate` | 鍵を生成し、生成した鍵のダイアログを開いたダッシュボードを返す（登録しない） |
+| POST | `/accounts/import` | nsec 入力による登録。303 でダッシュボードへ戻す（400 と 409 は追加のダイアログを開いたダッシュボードを返す） |
+| POST | `/accounts/register-generated` | 生成した鍵の登録。303 でダッシュボードへ戻す（400、409、503、202 は生成した鍵のダイアログを開いたダッシュボードを返す） |
+| POST | `/accounts/<signer>/label` | 差し替え。303 でダッシュボードへ戻す（400 と 409 はラベルの編集のダイアログを開いたダッシュボードを返す） |
+| POST | `/accounts/<signer>/rotate` | secret の作り直し。303 でダッシュボードへ戻す（409 は確認のダイアログを開いたダッシュボードを返す） |
+| POST | `/accounts/<signer>/delete` | 削除。303 でダッシュボードへ戻す（409 は削除のダイアログを開いたダッシュボードを返す） |
+| POST | `/accounts/<signer>/private-key` | 秘密鍵の表示。秘密鍵のダイアログを開いたダッシュボードを返す（403 はパスワードのダイアログを開いたダッシュボードを返す） |
 | POST | `/relays/new` | リレーの登録。303 でダッシュボードへ戻す（400 と 409 は追加のダイアログを開いたダッシュボードを返す） |
 | POST | `/relays/<id>/edit` | 用途の差し替え。303 でダッシュボードへ戻す（400 と 409 は編集のダイアログを開いたダッシュボードを返す） |
 | POST | `/relays/<id>/delete` | 削除。303 でダッシュボードへ戻す（409 は削除のダイアログを開いたダッシュボードを返す） |
@@ -615,7 +609,7 @@ POST の応答で開いた状態で描いたダイアログは、`admin.js` が�
 再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
 `<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
-アカウント 1 件の操作は GET でも POST でも先にバンカーの一覧を引き、一覧に無い署名者は 404 にする。
+アカウント 1 件の操作は POST だけを受け、先にバンカーの一覧を引き、一覧に無い署名者は 404 にする。
 以降のログとバンカーへの呼び出しには、パスの値ではなく一覧の行の値を使う。
 
 ## プラグインが読み込まれるまで
@@ -679,7 +673,6 @@ nostr-no-su/
 │       ├── config.gleam          環境変数からの設定読み込み
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログとページが共用するフォームの中身、ダッシュボードと承認と通知のページの描画
-│       ├── admin/account_pages.gleam アカウントのページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
 │       ├── admin/connect_pages.gleam クライアントの接続のページと確認のページの描画

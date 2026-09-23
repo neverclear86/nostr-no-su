@@ -13,7 +13,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
-import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
@@ -54,7 +53,7 @@ const account_hex = "01230123012301230123012301230123012301230123012301230123012
 const skipped_hex = "8901890189018901890189018901890189018901890189018901890189018901"
 
 /// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。渡された言語で
-/// 描画し、言語の切り替えのボタン（押した状態の表示している言語とそれ以外）と、切り替えを出さない秘密鍵のページを通す。テーマの切り替えのボタン（`view.themes` ごとに押した状態のボタンが違う 3 通り）は、ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
+/// 描画し、言語の切り替えのボタン（押した状態の表示している言語とそれ以外）と、切り替えを出さないページを通す。テーマの切り替えのボタン（`view.themes` ごとに押した状態のボタンが違う 3 通り）は、ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
 /// 状態の分岐を足したら、ここにもその状態のページを足す。
 pub fn pages(language: i18n.Language) -> List(String) {
   let row =
@@ -242,34 +241,9 @@ pub fn pages(language: i18n.Language) -> List(String) {
         2000,
         pending_mismatch,
       ),
-      account_pages.new_account_page(language, view.System, "", Some(reason)),
-      account_pages.generated_key_page(
-        language,
-        view.System,
-        "npub1example",
-        "nsec1example",
-        "",
-        Some(account_pages.InvalidLabel(i18n.LabelHasControlCharacters)),
-      ),
-      account_pages.registered_page(
-        language,
-        view.System,
-        "npub1example",
-        "label-a",
-        "nsec1example",
-      ),
-      account_pages.private_key_page(language, view.System, row, "nsec1example"),
-      account_pages.unreadable_delete_page(
-        language,
-        view.System,
-        dashboard.SkippedRow(
-          pubkey: skipped_hex,
-          npub: "npub1example",
-          label: "label-b",
-          reason: vault.UndecryptablePrivateKey,
-        ),
-        Some(reason),
-      ),
+      opened(dashboard.AddAccountOpen("", reason)),
+      opened(dashboard.PrivateKeyOpen(row, "nsec1example")),
+      opened(dashboard.UnreadableDeleteOpen(skipped_hex, reason)),
       opened(dashboard.NewRelayOpen(
         "wss://relay-with-a-very-long-host-name-for-layout-checks.example/path/segment/that/keeps/going/without/breaking",
         Roles(False, True),
@@ -400,20 +374,22 @@ pub fn pages(language: i18n.Language) -> List(String) {
     ],
     list.map(
       [
-        account_pages.NotApplied(i18n.Untranslated("reason")),
-        account_pages.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
-        account_pages.NotAccepted("reason"),
-        account_pages.NotConfirmed(i18n.StoreDidNotConfirm),
+        None,
+        Some(dashboard.InvalidLabel(i18n.LabelHasControlCharacters)),
+        Some(dashboard.NotApplied(i18n.Untranslated("reason"))),
+        Some(
+          dashboard.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
+        ),
+        Some(dashboard.NotAccepted("reason")),
+        Some(dashboard.NotConfirmed(i18n.StoreDidNotConfirm)),
       ],
       fn(problem) {
-        account_pages.generated_key_page(
-          language,
-          view.System,
+        opened(dashboard.GeneratedKeyOpen(
           "npub1example",
           "nsec1example",
           "label-a",
-          Some(problem),
-        )
+          problem,
+        ))
       },
     ),
     list.map(
@@ -448,40 +424,33 @@ pub fn pages(language: i18n.Language) -> List(String) {
         [],
       ),
     ],
-    list.map(account_actions.with_form, account_pages.account_action_page(
-      language,
-      view.System,
-      row,
-      _,
-      None,
-      Some(reason),
-    )),
+    list.map(account_actions.all, fn(action) {
+      opened(dashboard.AccountActionOpen(account_hex, action, None, reason))
+    }),
+    // 接続 QR コードのダイアログのリレーの一覧が空、得られない、URI を符号化できない
     [
-      account_pages.connection_qr_page(
+      dashboard.render(
         language,
         view.System,
-        row,
-        Ok([
-          dashboard.RelayRow(
-            1,
-            "wss://a",
-            dashboard.Unused,
-            dashboard.Reported(relay_connection.Connected),
-          ),
-        ]),
+        dashboard.Snapshot(..full, relays: Ok([])),
       ),
-      account_pages.connection_qr_page(language, view.System, row, Ok([])),
-      account_pages.connection_qr_page(
+      dashboard.render(
         language,
         view.System,
-        row,
-        Error(i18n.Untranslated("relay list did not answer")),
+        dashboard.Snapshot(
+          ..full,
+          relays: Error(i18n.Untranslated("relay list did not answer")),
+        ),
       ),
-      account_pages.connection_qr_page(
+      dashboard.render(
         language,
         view.System,
-        dashboard.AccountRow(..row, uri: string.repeat("0", 3000)),
-        Ok([]),
+        dashboard.Snapshot(
+          ..full,
+          accounts: Ok([
+            dashboard.AccountRow(..row, uri: string.repeat("0", 3000)),
+          ]),
+        ),
       ),
     ],
     [
@@ -967,20 +936,23 @@ pub fn components(language: i18n.Language) -> List(String) {
         kind,
         view.InDialog(
           id: "dialog-x",
-          cancel: "text",
+          dismiss: "text",
           opening: view.OpensOnTrigger,
         ),
       ))
     }),
-    list.flat_map([view.OpensOnTrigger, view.OpenedByResponse], fn(opening) {
-      list.map(
-        view.dialog_actions(
-          view.InDialog(id: "dialog-x", cancel: "text", opening:),
-          [view.hint("content")],
-        ),
-        element.to_string,
-      )
-    }),
+    list.flat_map(
+      [view.OpensOnTrigger, view.OpenedByResponse, view.OpenedByResponsePinned],
+      fn(opening) {
+        list.map(
+          view.dialog_actions(
+            view.InDialog(id: "dialog-x", dismiss: "text", opening:),
+            [view.hint("content")],
+          ),
+          element.to_string,
+        )
+      },
+    ),
     [
       element.to_string(view.hinted_copyable_field(
         language,
@@ -1027,10 +999,9 @@ pub fn components(language: i18n.Language) -> List(String) {
     [element.to_string(view.fallback_link(language, "/"))],
     [element.to_string(view.radio_tabs("tabs", [#("one", []), #("two", [])]))],
     [
-      element.to_string(view.compact_icon_button_link(
-        "/href",
-        view.qr_code_icon(),
-        "text",
+      element.to_string(view.dialog_trigger(
+        "dialog-x",
+        view.CompactTrigger(view.qr_code_icon(), "text"),
         view.PrimaryButton,
       )),
       element.to_string(

@@ -284,7 +284,7 @@ elif awk -F'\t' 'NF < 2 || $1 == "" || $2 == "" || /\r/ || /(^|\t) | (\t|$)/ { p
     count_hits "$name" -F -- "$value" "$V"/log-*.txt "$V"/pgdump*.sql
   done < "$V/targets.txt"
 
-  # 応答本文。bodies/ には鍵を表示するページ（登録の完了、生成した鍵の確認、秘密鍵の表示）を保存しない。
+  # 応答本文。bodies/ には鍵を表示する応答（生成した鍵と秘密鍵のダイアログを開いたダッシュボード）を保存しない。
   # secret の行は飛ばす（理由は SKILL.md の手順 3 の項目 15）。
   awk '!/^secret_/' "$V/targets.txt" | while IFS=$'\t' read -r name value; do
     count_hits "$name" -F -- "$value" "$V"/bodies/*

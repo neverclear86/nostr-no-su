@@ -5,6 +5,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
@@ -12,8 +13,8 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import support/admin_context.{
   action_path, client, context, failing_context, get, header, in_japanese,
-  not_answering_context, password, signer, signer_nsec, spec_nsec, token,
-  unavailable, with_accounts, with_credentials,
+  not_answering_context, opened_dialog, password, post, signer, signer_nsec,
+  spec_nsec, token, unavailable, with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -67,10 +68,13 @@ pub fn language_follows_the_cookie_then_accept_language_test() {
 /// 言語の切り替えは、選んだ言語を cookie に保存し、フォームが送った戻り先へ 303 で戻す。
 pub fn language_switch_saves_the_language_and_returns_test() {
   let response =
-    language_switch_request([#("language", "ja"), #("return", "/accounts/new")])
+    language_switch_request([
+      #("language", "ja"),
+      #("return", "/approve/" <> token),
+    ])
     |> admin.handle_request(context(), _)
   assert response.status == 303
-  assert header(response, "location") == "/accounts/new"
+  assert header(response, "location") == "/approve/" <> token
   assert header(response, "set-cookie")
     == "nostr_no_su_language=ja; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax"
   assert header(response, "cache-control") == "no-store"
@@ -101,8 +105,8 @@ pub fn language_switch_returns_only_within_the_site_test() {
       "/approve/tok-1?next=%2F%2Fevil.example",
     ),
     #(
-      "/accounts/new\r\nSet-Cookie: x=1",
-      "/accounts/new%0D%0ASet-Cookie%3A%20x%3D1",
+      "/approve/tok-1\r\nSet-Cookie: x=1",
+      "/approve/tok-1%0D%0ASet-Cookie%3A%20x%3D1",
     ),
     #("https://evil.example/", "/"),
     #("evil.example", "/"),
@@ -174,12 +178,12 @@ pub fn language_switch_rejects_invalid_requests_test() {
 pub fn switched_language_carries_across_pages_test() {
   let switch = language_switch_request([#("language", "ja"), #("return", "/")])
   let switched = admin.handle_request(context(), switch)
-  let new_account =
-    simulate.browser_request(http.Get, "/accounts/new")
+  let approval =
+    simulate.browser_request(http.Get, "/approve/" <> token)
     |> with_credentials("admin", password)
     |> simulate.session(switch, switched)
     |> admin.handle_request(context(), _)
-  assert page_language(new_account) == "ja"
+  assert page_language(approval) == "ja"
   let rejected =
     simulate.browser_request(http.Post, "/accounts/import")
     |> with_credentials("admin", password)
@@ -296,44 +300,55 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
 }
 
 /// 日本語のページで、アカウントの登録済みと未登録の理由が日本語になる（`lang="en"` の
-/// `span` が無い）。nsec 入力による登録と生成した鍵の登録の登録済み、ラベルの編集の
-/// 未登録のどれも対象。
+/// `span` が無い）。nsec 入力による登録と生成した鍵の登録の登録済み（409 で開き直したダイアログ）、
+/// ラベルの編集の未登録（404 の通知ページ）のどれも対象。
 pub fn japanese_pages_translate_account_registration_reasons_test() {
   let already_registered =
-    i18n.text(i18n.Japanese, i18n.AccountAlreadyRegistered)
+    "<span class=\"wrap-anywhere\">"
+    <> i18n.text(i18n.Japanese, i18n.AccountAlreadyRegistered)
+    <> "</span>"
   let cases = [
     #(
       context(),
       "/accounts/import",
       [#("nsec", signer_nsec), #("label", "work")],
+      409,
+      Some("dialog-account-new"),
       already_registered,
     ),
     #(
       context(),
       "/accounts/register-generated",
       [#("nsec", signer_nsec), #("label", "work")],
+      409,
+      Some("dialog-result"),
       already_registered,
     ),
     #(
       failing_context(bunker.AccountNotRegistered),
       action_path(dashboard.EditLabel),
       [#("label", "new")],
-      i18n.text(i18n.Japanese, i18n.AccountNotFound),
+      404,
+      None,
+      "<p class=\"min-w-0 self-center\">"
+        <> i18n.text(i18n.Japanese, i18n.AccountNotFound)
+        <> "</p>",
     ),
   ]
-  use #(failing, path, fields, expected) <- list.each(cases)
+  use #(failing, path, fields, status, dialog, expected) <- list.each(cases)
   let response =
     simulate.request(http.Post, path)
     |> with_credentials("admin", password)
     |> in_japanese
     |> simulate.form_body(fields)
     |> admin.handle_request(failing, _)
-  assert response.status == 409
-  let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    "<span class=\"wrap-anywhere\">" <> expected <> "</span>",
-  )
+  assert response.status == status
+  // 409 はダッシュボードに開いたダイアログの中だけを見る（ダッシュボードのほかの節は英語の理由を含みうる）
+  let body = case dialog {
+    Some(id) -> opened_dialog(simulate.read_body(response), id)
+    None -> simulate.read_body(response)
+  }
+  assert string.contains(body, expected)
   assert !string.contains(body, "<span lang=\"en\">")
 }
 
@@ -341,7 +356,7 @@ pub fn japanese_pages_translate_account_registration_reasons_test() {
 /// 署名者を戻り先に含めない。
 pub fn notice_pages_return_to_the_dashboard_test() {
   let response =
-    get(
+    post(
       with_accounts(Error(unavailable)),
       "/accounts/%3Cscript%3Eunknown/label",
     )

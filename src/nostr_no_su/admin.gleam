@@ -2,8 +2,7 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard`、`admin/account_pages`、
-//// `admin/connect_pages`、`admin/session_pages`）に閉じ込められる。
+//// HTML」の純粋関数（`admin/dashboard`、`admin/connect_pages`、`admin/session_pages`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
@@ -60,7 +59,6 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import mist
-import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
@@ -425,12 +423,10 @@ fn route(
       reenable_plugin(context, request, language, theme)
     segments if segments == dashboard.reload_accounts_segments ->
       reload_accounts(context, request, language, theme)
-    segments if segments == dashboard.new_account_segments ->
-      show_new_account(request, language, theme)
     segments if segments == dashboard.new_relay_segments ->
       new_relay(context, request, language, theme)
     segments if segments == dashboard.generate_account_segments ->
-      generate_account(request, language, theme)
+      generate_account(context, request, language, theme)
     segments if segments == dashboard.import_account_segments ->
       import_account(context, request, language, theme)
     segments if segments == dashboard.register_generated_segments ->
@@ -1571,39 +1567,32 @@ fn reload_accounts(
   }
 }
 
-/// アカウントの登録画面。
-fn show_new_account(
-  request: Request,
-  language: Language,
-  theme: view.Theme,
-) -> Response {
-  use <- require_method(request, http.Get, language, theme)
-  account_pages.new_account_page(language, theme, "", None)
-  |> wisp.html_response(200)
-}
-
-/// 鍵を生成し、確認ページで nsec を 1 回だけ表示する。ここでは登録しないので、
-/// 再読み込みで再送されても別の鍵の確認ページが出るだけで、何も登録されない。
+/// 鍵を生成し、生成した鍵のダイアログを開いたダッシュボードで nsec を 1 回だけ表示する。ここでは
+/// 登録しないので、再読み込みで再送されても別の鍵のダイアログが出るだけで、何も登録されない。
 /// 本文を読まないので、フォームの本文が無い POST も受け付ける。
 fn generate_account(
+  context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
   let generated = account.generate(crypto.strong_random_bytes)
-  account_pages.generated_key_page(
+  dialog_response(
+    context,
     language,
     theme,
-    account.npub(generated),
-    account.nsec(generated),
-    "",
-    None,
+    dashboard.GeneratedKeyOpen(
+      account.npub(generated),
+      account.nsec(generated),
+      "",
+      None,
+    ),
+    200,
   )
-  |> wisp.html_response(200)
 }
 
-/// nsec 入力によるアカウントの登録。完了ページで nsec を 1 回だけ表示する。
+/// nsec 入力によるアカウントの登録。成功したらダッシュボードへ 303 で戻し、nsec は表示しない。
 fn import_account(
   context: Context,
   request: Request,
@@ -1611,67 +1600,18 @@ fn import_account(
   theme: view.Theme,
 ) -> Response {
   let reject_label = fn(_account, label, reason) {
-    account_pages.new_account_page(
-      language,
-      theme,
-      label,
-      Some(i18n.Translated(reason)),
-    )
+    dashboard.AddAccountOpen(label, i18n.Translated(reason))
   }
   let on_failure = fn(_account, label, failure) {
-    change_failure_response(language, theme, failure, fn(reason) {
-      account_pages.new_account_page(language, theme, label, Some(reason))
+    change_failure_response(language, theme, failure, fn(reason, status) {
+      dialog_response(
+        context,
+        language,
+        theme,
+        dashboard.AddAccountOpen(label, reason),
+        status,
+      )
     })
-  }
-  use account, label <- register(
-    context,
-    request,
-    language,
-    theme,
-    reject_label,
-    on_failure,
-  )
-  account_pages.registered_page(
-    language,
-    theme,
-    account.npub(account),
-    label,
-    account.nsec(account),
-  )
-  |> wisp.html_response(200)
-}
-
-/// 生成の確認ページから送られた鍵の登録。nsec は確認ページで表示済みなので描画せず、
-/// ダッシュボードへ 303 で戻す。ラベルが規則に反するか、バンカーが登録に失敗したときは、
-/// 生成した鍵を失わないよう、送られた nsec の確認ページを理由付きで返す（状態コードは
-/// nsec 入力による登録と同じ。この POST の応答の本文だけに出る）。
-fn register_generated_account(
-  context: Context,
-  request: Request,
-  language: Language,
-  theme: view.Theme,
-) -> Response {
-  let reject_label = fn(generated, label, reason) {
-    account_pages.generated_key_page(
-      language,
-      theme,
-      account.npub(generated),
-      account.nsec(generated),
-      label,
-      Some(account_pages.InvalidLabel(reason)),
-    )
-  }
-  let on_failure = fn(generated, label, failure) {
-    let #(problem, status) = generated_key_problem(failure)
-    account_pages.generated_key_page(
-      language,
-      theme,
-      account.npub(generated),
-      account.nsec(generated),
-      label,
-      Some(problem),
-    )
-    |> wisp.html_response(status)
   }
   use _account, _label <- register(
     context,
@@ -1684,16 +1624,58 @@ fn register_generated_account(
   wisp.redirect(to: "/")
 }
 
-/// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 で登録画面を
-/// 返し、ラベルだけが不正なら 400 で `reject_label` が描画するページを返す。バンカーの
-/// 失敗は `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた値から制御文字を
-/// 除いた値を入れる。nsec のフォームの値はそのまま反射しない。
+/// 生成した鍵のダイアログから送られた鍵の登録。nsec はそこで表示済みなので描画せず、
+/// ダッシュボードへ 303 で戻す。ラベルが規則に反するか、バンカーが登録に失敗したときは、
+/// 生成した鍵を失わないよう、送られた nsec のダイアログを理由付きで開いて返す（状態コードは
+/// nsec 入力による登録と同じ。この POST の応答の本文だけに出る）。
+fn register_generated_account(
+  context: Context,
+  request: Request,
+  language: Language,
+  theme: view.Theme,
+) -> Response {
+  let generated_key_open = fn(generated, label, problem) {
+    dashboard.GeneratedKeyOpen(
+      account.npub(generated),
+      account.nsec(generated),
+      label,
+      Some(problem),
+    )
+  }
+  let reject_label = fn(generated, label, reason) {
+    generated_key_open(generated, label, dashboard.InvalidLabel(reason))
+  }
+  let on_failure = fn(generated, label, failure) {
+    let #(problem, status) = generated_key_problem(failure)
+    dialog_response(
+      context,
+      language,
+      theme,
+      generated_key_open(generated, label, problem),
+      status,
+    )
+  }
+  use _account, _label <- register(
+    context,
+    request,
+    language,
+    theme,
+    reject_label,
+    on_failure,
+  )
+  wisp.redirect(to: "/")
+}
+
+/// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 でアカウントの追加のダイアログを、
+/// ラベルだけが不正なら 400 で `reject_label` が選ぶダイアログを開いて返す。バンカーの失敗は
+/// `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた値から制御文字を除いた値を入れる。
+/// nsec のフォームの値はそのまま反射しない。
 fn register(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
-  reject_label: fn(Account, String, i18n.Message) -> String,
+  reject_label: fn(Account, String, i18n.Message) -> dashboard.OpenDialog,
   on_failure: fn(Account, String, ChangeFailure) -> Response,
   on_success: fn(Account, String) -> Response,
 ) -> Response {
@@ -1701,20 +1683,15 @@ fn register(
   use form <- wisp.require_form(request)
   let raw_label = form_value(form, dashboard.label_field)
   let echoed_label = without_control_characters(raw_label)
+  let reject = fn(dialog) {
+    dialog_response(context, language, theme, dialog, 400)
+  }
   case parse_private_key(form) {
     Error(reason) ->
-      account_pages.new_account_page(
-        language,
-        theme,
-        echoed_label,
-        Some(i18n.Translated(reason)),
-      )
-      |> wisp.html_response(400)
+      reject(dashboard.AddAccountOpen(echoed_label, i18n.Translated(reason)))
     Ok(account) ->
       case parse_label(raw_label) {
-        Error(reason) ->
-          reject_label(account, echoed_label, reason)
-          |> wisp.html_response(400)
+        Error(reason) -> reject(reject_label(account, echoed_label, reason))
         Ok(label) ->
           case context.add_account(account, label) {
             Ok(Nil) -> on_success(account, label)
@@ -1887,7 +1864,7 @@ fn relay_change_response(
 }
 
 /// スナップショットを取り直し、`dialog` を開いたダッシュボードを `status` で返す。開くダイアログを描けなければ
-/// （`dashboard.render_open` の `Error`）、その理由の「リレーを利用できません」の 503 の通知ページにする。
+/// （`dashboard.render_open` の `Error`）、その理由の 503 の通知ページ（題は `dialog_unavailable_title`）にする。
 fn dialog_response(
   context: Context,
   language: Language,
@@ -1902,9 +1879,23 @@ fn dialog_response(
       unavailable_reason_notice(
         language,
         theme,
-        i18n.RelaysNotAvailable,
+        dialog_unavailable_title(dialog),
         reason,
       )
+  }
+}
+
+/// 開くダイアログを描けないときの 503 の通知ページの題。リレーのダイアログは「リレーを利用できません」、
+/// アカウントのダイアログは「アカウントを利用できません」にする。
+fn dialog_unavailable_title(dialog: dashboard.OpenDialog) -> i18n.Message {
+  case dialog {
+    dashboard.NewRelayOpen(..) | dashboard.RelayActionOpen(..) ->
+      i18n.RelaysNotAvailable
+    dashboard.AddAccountOpen(..)
+    | dashboard.GeneratedKeyOpen(..)
+    | dashboard.AccountActionOpen(..)
+    | dashboard.PrivateKeyOpen(..)
+    | dashboard.UnreadableDeleteOpen(..) -> i18n.AccountsNotAvailable
   }
 }
 
@@ -2013,10 +2004,9 @@ fn relay_action(
   }
 }
 
-/// アカウント 1 件への操作。アカウントの一覧に署名者があれば従来どおりの操作を、
-/// 無ければ削除に限って読み込みで飛ばされた行の一覧から探す。一覧を得られなければ
-/// 503。以降のログとバンカーへの呼び出しには、呼び出し側が渡した文字列ではなく、
-/// 一覧の行の値を使う。
+/// アカウント 1 件への操作。POST だけを受け、ほかのメソッドは `Allow: POST` の 405 にする。アカウントの一覧に
+/// 署名者があれば従来どおりの操作を、無ければ削除に限って読み込みで飛ばされた行の一覧から探す。一覧を得られ
+/// なければ 503。以降のログとバンカーへの呼び出しには、呼び出し側が渡した文字列ではなく、一覧の行の値を使う。
 fn account_action(
   context: Context,
   request: Request,
@@ -2025,6 +2015,7 @@ fn account_action(
   signer: String,
   action: dashboard.AccountAction,
 ) -> Response {
+  use <- require_method(request, http.Post, language, theme)
   case context.accounts() {
     Error(reason) ->
       unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
@@ -2040,20 +2031,12 @@ fn account_action(
             action,
           )
         Error(Nil) ->
-          unregistered_account_action(
-            context,
-            request,
-            language,
-            theme,
-            signer,
-            action,
-          )
+          unregistered_account_action(context, language, theme, signer, action)
       }
   }
 }
 
-/// アカウントの一覧にある署名者への操作。GET は操作のページを、POST は操作を実行する。
-/// 接続 QR コードは GET だけで、ほかのメソッドは `Allow: GET` の 405 にする。
+/// アカウントの一覧にある署名者への操作を実行する。
 fn registered_account_action(
   context: Context,
   request: Request,
@@ -2062,47 +2045,36 @@ fn registered_account_action(
   row: dashboard.AccountRow,
   action: dashboard.AccountAction,
 ) -> Response {
-  case request.method, action {
-    http.Get, dashboard.ShowConnectionQr ->
-      account_pages.connection_qr_page(
+  let redraw = fn(label) {
+    fn(reason, status) {
+      dialog_response(
+        context,
         language,
         theme,
-        row,
-        context.relays(task.deadline_in(snapshot_deadline_ms))
-          |> result.map_error(i18n.Untranslated),
+        dashboard.AccountActionOpen(row.signer, action, label, reason),
+        status,
       )
-      |> wisp.html_response(200)
-    _, dashboard.ShowConnectionQr ->
-      method_not_allowed(language, theme, [http.Get])
-    http.Get, _ ->
-      account_pages.account_action_page(
-        language,
-        theme,
-        row,
-        action,
-        None,
-        None,
-      )
-      |> wisp.html_response(200)
-    http.Post, dashboard.EditLabel ->
-      update_label(context, request, language, theme, row)
-    http.Post, dashboard.RotateSecret ->
+    }
+  }
+  case action {
+    dashboard.EditLabel ->
+      update_label(context, request, language, theme, row, redraw)
+    dashboard.RotateSecret ->
       apply_account_change(
         language,
         theme,
         context.rotate_secret(row.signer),
-        account_pages.account_action_page(language, theme, row, action, None, _),
+        redraw(None),
       )
-    http.Post, dashboard.DeleteAccount ->
+    dashboard.DeleteAccount ->
       apply_account_change(
         language,
         theme,
         context.remove_account(row.signer),
-        account_pages.account_action_page(language, theme, row, action, None, _),
+        redraw(None),
       )
-    http.Post, dashboard.RevealPrivateKey ->
+    dashboard.RevealPrivateKey ->
       reveal_private_key(context, request, language, theme, row)
-    _, _ -> method_not_allowed(language, theme, [http.Get, http.Post])
   }
 }
 
@@ -2111,7 +2083,6 @@ fn registered_account_action(
 /// 404 にする。
 fn unregistered_account_action(
   context: Context,
-  request: Request,
   language: Language,
   theme: view.Theme,
   signer: String,
@@ -2128,8 +2099,7 @@ fn unregistered_account_action(
               row.pubkey == signer && row.reason != vault.MalformedPubkey
             })
           {
-            Ok(row) ->
-              unreadable_account_action(context, request, language, theme, row)
+            Ok(row) -> unreadable_account_action(context, language, theme, row)
             Error(Nil) ->
               not_found_notice(
                 language,
@@ -2143,89 +2113,71 @@ fn unregistered_account_action(
   }
 }
 
-/// 読み込みで飛ばされた行の削除。GET は確認ページを、POST は削除を実行する。
+/// 読み込みで飛ばされた行の削除を実行する。
 fn unreadable_account_action(
   context: Context,
-  request: Request,
   language: Language,
   theme: view.Theme,
   row: dashboard.SkippedRow,
 ) -> Response {
-  case request.method {
-    http.Get ->
-      account_pages.unreadable_delete_page(language, theme, row, None)
-      |> wisp.html_response(200)
-    http.Post ->
-      apply_account_change(
+  apply_account_change(
+    language,
+    theme,
+    context.remove_account(row.pubkey),
+    fn(reason, status) {
+      dialog_response(
+        context,
         language,
         theme,
-        context.remove_account(row.pubkey),
-        account_pages.unreadable_delete_page(language, theme, row, _),
+        dashboard.UnreadableDeleteOpen(row.pubkey, reason),
+        status,
       )
-    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
-  }
+    },
+  )
 }
 
-/// ラベルの差し替え。ラベルが規則に反すれば 400 で編集のページを返す。400 と 409 の
-/// 編集のページの欄には送られた値を入れる。
+/// ラベルの差し替え。ラベルが規則に反すれば 400 でラベルの編集のダイアログを開いて返す。400 と 409 の
+/// ダイアログの欄には送られた値を入れる。
 fn update_label(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
   row: dashboard.AccountRow,
+  redraw: fn(Option(String)) -> fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   use form <- wisp.require_form(request)
   let raw_label = form_value(form, dashboard.label_field)
   let echoed_label = Some(without_control_characters(raw_label))
   case parse_label(raw_label) {
-    Error(reason) ->
-      account_pages.account_action_page(
-        language,
-        theme,
-        row,
-        dashboard.EditLabel,
-        echoed_label,
-        Some(i18n.Translated(reason)),
-      )
-      |> wisp.html_response(400)
+    Error(reason) -> redraw(echoed_label)(i18n.Translated(reason), 400)
     Ok(label) ->
       apply_account_change(
         language,
         theme,
         context.update_label(row.signer, label),
-        account_pages.account_action_page(
-          language,
-          theme,
-          row,
-          dashboard.EditLabel,
-          echoed_label,
-          _,
-        ),
+        redraw(echoed_label),
       )
   }
 }
 
 /// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
-/// 失敗なら `change_failure_response` に渡す。`render` は失敗を再描画するページ
-/// （`account_action_page` か `unreadable_delete_page` の部分適用）。
+/// 失敗なら `change_failure_response` に渡す。`redraw` は失敗の理由と状態コードで同じダイアログを
+/// 開き直す。
 fn apply_account_change(
   language: Language,
   theme: view.Theme,
   outcome: Result(Nil, ChangeFailure),
-  render: fn(Option(i18n.Reason)) -> String,
+  redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case outcome {
     Ok(Nil) -> wisp.redirect(to: "/")
-    Error(failure) ->
-      change_failure_response(language, theme, failure, fn(reason) {
-        render(Some(reason))
-      })
+    Error(failure) -> change_failure_response(language, theme, failure, redraw)
   }
 }
 
-/// 変更の失敗の応答。反映されなかったなら `render` で操作の画面を 409 で返し、
-/// 受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
+/// 変更の失敗の応答。反映されなかったなら `redraw` で同じダイアログを開き直して 409 で返し、
+/// 対象が登録されていなければ 404、受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
 /// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が
 /// 同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
 /// 登録済みと未登録の理由、反映されたか分からない原因は、バンカーが型で返すので訳す。
@@ -2235,17 +2187,14 @@ fn change_failure_response(
   language: Language,
   theme: view.Theme,
   failure: ChangeFailure,
-  render: fn(i18n.Reason) -> String,
+  redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case failure {
-    bunker.NotApplied(reason) ->
-      render(i18n.Untranslated(reason)) |> wisp.html_response(409)
+    bunker.NotApplied(reason) -> redraw(i18n.Untranslated(reason), 409)
     bunker.AccountAlreadyRegistered ->
-      render(i18n.Translated(i18n.AccountAlreadyRegistered))
-      |> wisp.html_response(409)
+      redraw(i18n.Translated(i18n.AccountAlreadyRegistered), 409)
     bunker.AccountNotRegistered ->
-      render(i18n.Translated(i18n.AccountNotFound))
-      |> wisp.html_response(409)
+      not_found_notice(language, theme, i18n.Translated(i18n.AccountNotFound))
     bunker.NotReady(reason) ->
       unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)
     bunker.MaybeApplied(cause) ->
@@ -2258,27 +2207,27 @@ fn change_failure_response(
   }
 }
 
-/// 生成した鍵の登録のバンカーの失敗を、確認ページの理由と状態コードに写す。状態コードと
-/// 理由の訳し方は `change_failure_response` と同じ対応にする。
+/// 生成した鍵の登録のバンカーの失敗を、生成した鍵のダイアログの理由と状態コードに写す。状態コードと
+/// 理由の訳し方は `change_failure_response` と同じ対応にする（登録では起きない未登録だけは 409 にする）。
 fn generated_key_problem(
   failure: ChangeFailure,
-) -> #(account_pages.GeneratedKeyProblem, Int) {
+) -> #(dashboard.GeneratedKeyProblem, Int) {
   case failure {
     bunker.NotApplied(reason) -> #(
-      account_pages.NotApplied(i18n.Untranslated(reason)),
+      dashboard.NotApplied(i18n.Untranslated(reason)),
       409,
     )
     bunker.AccountAlreadyRegistered -> #(
-      account_pages.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
+      dashboard.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
       409,
     )
     bunker.AccountNotRegistered -> #(
-      account_pages.NotApplied(i18n.Translated(i18n.AccountNotFound)),
+      dashboard.NotApplied(i18n.Translated(i18n.AccountNotFound)),
       409,
     )
-    bunker.NotReady(reason) -> #(account_pages.NotAccepted(reason), 503)
+    bunker.NotReady(reason) -> #(dashboard.NotAccepted(reason), 503)
     bunker.MaybeApplied(cause) -> #(
-      account_pages.NotConfirmed(not_confirmed_message(cause)),
+      dashboard.NotConfirmed(not_confirmed_message(cause)),
       202,
     )
   }
@@ -2344,10 +2293,10 @@ fn unavailable_reason_notice(
   |> wisp.html_response(503)
 }
 
-/// 管理パスワードの再入力を照合し、一致したときだけ nsec を問い合わせて表示する。
-/// 一致しないときは Basic 認証の失敗と同じく `authentication_delay` を呼んで待ってから
-/// 403 を返し、覚えた資格情報で並列に送る総当たりを遅くする。ログに出すのは一覧の
-/// 行の npub だけで、パスワードも nsec も出さない。
+/// 管理パスワードの再入力を照合し、一致したときだけ nsec を問い合わせ、秘密鍵のダイアログを開いた
+/// ダッシュボードで表示する。一致しないときは Basic 認証の失敗と同じく `authentication_delay` を呼んで
+/// 待ってから、秘密鍵の表示のダイアログを開き直して 403 で返し、覚えた資格情報で並列に送る総当たりを
+/// 遅くする。ログに出すのは一覧の行の npub だけで、パスワードも nsec も出さない。
 fn reveal_private_key(
   context: Context,
   request: Request,
@@ -2372,15 +2321,18 @@ fn reveal_private_key(
           <> incorrect_password,
       )
       context.authentication_delay()
-      account_pages.account_action_page(
+      dialog_response(
+        context,
         language,
         theme,
-        row,
-        dashboard.RevealPrivateKey,
-        None,
-        Some(i18n.Translated(i18n.IncorrectPassword)),
+        dashboard.AccountActionOpen(
+          row.signer,
+          dashboard.RevealPrivateKey,
+          None,
+          i18n.Translated(i18n.IncorrectPassword),
+        ),
+        403,
       )
-      |> wisp.html_response(403)
     }
     True ->
       case context.nsec(row.signer) {
@@ -2390,8 +2342,13 @@ fn reveal_private_key(
             log_prefix,
             "revealed the private key of " <> row.npub,
           )
-          account_pages.private_key_page(language, theme, row, nsec)
-          |> wisp.html_response(200)
+          dialog_response(
+            context,
+            language,
+            theme,
+            dashboard.PrivateKeyOpen(row, nsec),
+            200,
+          )
         }
         Error(reason) ->
           unavailable_notice(language, theme, i18n.AccountsNotAvailable, reason)

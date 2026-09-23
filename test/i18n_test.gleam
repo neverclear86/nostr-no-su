@@ -171,7 +171,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.CopyNpub -> Some(i18n.CopyClient)
     i18n.CopyClient -> Some(i18n.ShowFieldHint)
     i18n.ShowFieldHint -> Some(i18n.Cancel)
-    i18n.Cancel -> Some(i18n.OpenAsPage)
+    i18n.Cancel -> Some(i18n.Close)
+    i18n.Close -> Some(i18n.OpenAsPage)
     i18n.OpenAsPage -> Some(i18n.Dashboard)
     i18n.Dashboard -> Some(i18n.Pending)
     i18n.Pending -> Some(i18n.OverviewLabel)
@@ -261,15 +262,13 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UnreadableNotDeletable -> Some(i18n.NotLoadedPlugins)
     i18n.NotLoadedPlugins -> Some(i18n.NotLoadedPluginsWarning)
     i18n.NotLoadedPluginsWarning -> Some(i18n.PluginLoadFailed)
-    i18n.PluginLoadFailed -> Some(i18n.ReasonLabel)
-    i18n.ReasonLabel -> Some(i18n.ConnectionUri)
+    i18n.PluginLoadFailed -> Some(i18n.ConnectionUri)
     i18n.ConnectionUri -> Some(i18n.SecretUriDescription)
     i18n.SecretUriDescription -> Some(i18n.ConnectionUriForApproval)
     i18n.ConnectionUriForApproval -> Some(i18n.ConnectionUrisAndActions)
     i18n.ConnectionUrisAndActions -> Some(i18n.SessionCount(0))
     i18n.SessionCount(_) -> Some(i18n.ConnectionQr)
-    i18n.ConnectionQr -> Some(i18n.ConnectionQrDescription)
-    i18n.ConnectionQrDescription -> Some(i18n.ConnectionQrSecretWarning)
+    i18n.ConnectionQr -> Some(i18n.ConnectionQrSecretWarning)
     i18n.ConnectionQrSecretWarning -> Some(i18n.CouldNotEncodeQr)
     i18n.CouldNotEncodeQr -> Some(i18n.ScanWithClientScanner)
     i18n.ScanWithClientScanner -> Some(i18n.CameraCopySteps)
@@ -277,9 +276,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.CameraCopyNote -> Some(i18n.BunkerRelaysForUri)
     i18n.BunkerRelaysForUri -> Some(i18n.BunkerRelaysHint)
     i18n.BunkerRelaysHint -> Some(i18n.ApprovalUriNeedsApproval)
-    i18n.ApprovalUriNeedsApproval -> Some(i18n.ConnectWithClientUri)
-    i18n.ConnectWithClientUri -> Some(i18n.ConnectWithClientUriHint)
-    i18n.ConnectWithClientUriHint -> Some(i18n.PublicKeyHex)
+    i18n.ApprovalUriNeedsApproval -> Some(i18n.PublicKeyHex)
     i18n.PublicKeyHex -> Some(i18n.EditLabel)
     i18n.EditLabel -> Some(i18n.ShowPrivateKey)
     i18n.ShowPrivateKey -> Some(i18n.RotateSecret)
@@ -393,17 +390,13 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Register -> Some(i18n.GenerateNewKey)
     i18n.GenerateNewKey -> Some(i18n.GenerateDescription)
     i18n.GenerateDescription -> Some(i18n.Generate)
-    i18n.Generate -> Some(i18n.SkippedRowNote)
-    i18n.SkippedRowNote -> Some(i18n.GeneratedKey)
+    i18n.Generate -> Some(i18n.GeneratedKey)
     i18n.GeneratedKey -> Some(i18n.BackUpNow)
     i18n.BackUpNow -> Some(i18n.GeneratedKeyNotice)
     i18n.GeneratedKeyNotice -> Some(i18n.RegisterThisKey)
     i18n.RegisterThisKey -> Some(i18n.RegistrationNotAccepted)
     i18n.RegistrationNotAccepted -> Some(i18n.RegistrationNotConfirmed)
-    i18n.RegistrationNotConfirmed -> Some(i18n.AccountRegistered)
-    i18n.AccountRegistered -> Some(i18n.BackUpIfNotAlready)
-    i18n.BackUpIfNotAlready -> Some(i18n.RegisteredKeyNotice)
-    i18n.RegisteredKeyNotice -> Some(i18n.Save)
+    i18n.RegistrationNotConfirmed -> Some(i18n.Save)
     i18n.Save -> Some(i18n.RotateSecretSubmit)
     i18n.RotateSecretSubmit -> Some(i18n.DeleteAccountSubmit)
     i18n.DeleteAccountSubmit -> Some(i18n.ShowPrivateKeySubmit)
@@ -417,8 +410,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.DeleteUnreadableRecover -> Some(i18n.ShowPrivateKeyDescription)
     i18n.ShowPrivateKeyDescription -> Some(i18n.AdminPassword)
     i18n.AdminPassword -> Some(i18n.PrivateKey)
-    i18n.PrivateKey -> Some(i18n.CloseTabAfterCopying)
-    i18n.CloseTabAfterCopying -> Some(i18n.ResendNotice)
+    i18n.PrivateKey -> Some(i18n.CopyThenClose)
+    i18n.CopyThenClose -> Some(i18n.ResendNotice)
     i18n.ResendNotice -> Some(i18n.IncorrectPassword)
     i18n.IncorrectPassword -> Some(i18n.LabelEmpty)
     i18n.LabelEmpty -> Some(i18n.LabelTooLong(max: 100))
@@ -448,12 +441,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 265 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 258 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 265
+  assert list.length(messages) == 258
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

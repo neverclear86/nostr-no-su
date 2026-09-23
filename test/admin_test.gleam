@@ -24,13 +24,12 @@ import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/relay_list
 import nostr_no_su/task
 import nostr_no_su/time
-import support/account_actions
 import support/admin_context.{
   AccountsReloaded, Approved, ClientConnectRequested, Denied, PermissionsSaved,
   Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path,
   auth_uri, client, context, declared_client, failing_context, get, header,
-  in_japanese, label, not_answering_context, password, post, post_form,
-  reporting_context, session_not_approved, signer, signer_npub, spec_nsec,
+  in_japanese, label, not_answering_context, opened_dialog, password, post,
+  post_form, reporting_context, session_not_approved, signer, signer_npub,
   test_context, token, unavailable, with_accounts, with_credentials,
 }
 import wisp
@@ -864,12 +863,7 @@ pub fn unknown_paths_are_not_found_test() {
 /// メソッドが違うリクエストは 405 の HTML で、`allow` を持ちメソッドとパスを本文に
 /// 含めない。
 pub fn method_not_allowed_pages_test() {
-  let get_only_paths = [
-    "/",
-    "/accounts/new",
-    "/plugins/console_logger/status",
-    action_path(dashboard.ShowConnectionQr),
-  ]
+  let get_only_paths = ["/", "/plugins/console_logger/status"]
   let post_only_paths = [
     "/language",
     "/theme",
@@ -883,8 +877,9 @@ pub fn method_not_allowed_pages_test() {
     "/relays/new",
     dashboard.relay_action_path(1, dashboard.EditRelayRoles),
     dashboard.relay_action_path(1, dashboard.DeleteRelay),
+    action_path(dashboard.EditLabel),
   ]
-  let both_methods_paths = ["/approve/tok", action_path(dashboard.EditLabel)]
+  let both_methods_paths = ["/approve/tok"]
   let cases =
     list.flatten([
       list.map(post_only_paths, fn(path) { #(get(context(), path), "POST") }),
@@ -1592,10 +1587,10 @@ pub fn theme_switch_saves_the_theme_and_returns_test() {
   ]
   use #(theme, cookie) <- list.each(cases)
   let response =
-    theme_switch_request([#("theme", theme), #("return", "/accounts/new")])
+    theme_switch_request([#("theme", theme), #("return", "/approve/" <> token)])
     |> admin.handle_request(context(), _)
   assert response.status == 303
-  assert header(response, "location") == "/accounts/new"
+  assert header(response, "location") == "/approve/" <> token
   assert header(response, "set-cookie") == cookie
   assert header(response, "cache-control") == "no-store"
 }
@@ -1643,75 +1638,20 @@ pub fn theme_switch_rejects_invalid_requests_test() {
   assert list.key_find(response.headers, "set-cookie") == Error(Nil)
 }
 
-/// 切り替えたテーマは、GET のページにも、秘密鍵を出す `NoSwitch` のページにも保たれる。
+/// 切り替えたテーマは、GET のページにも、生成した鍵のダイアログを開いた POST の応答にも保たれる。
 pub fn switched_theme_carries_across_pages_test() {
   let switch = theme_switch_request([#("theme", "dark"), #("return", "/")])
   let switched = admin.handle_request(context(), switch)
-  let new_account =
-    simulate.browser_request(http.Get, "/accounts/new")
+  let approval =
+    simulate.browser_request(http.Get, "/approve/" <> token)
     |> with_credentials("admin", password)
     |> simulate.session(switch, switched)
     |> admin.handle_request(context(), _)
-  assert page_theme(new_account) == Some("dark")
+  assert page_theme(approval) == Some("dark")
   let generated =
     simulate.browser_request(http.Post, "/accounts/generate")
     |> with_credentials("admin", password)
     |> simulate.session(switch, switched)
     |> admin.handle_request(context(), _)
   assert page_theme(generated) == Some("dark")
-}
-
-/// 秘密鍵を描画するページにはテーマと言語の切り替えを出さず、ほかのページには出す。
-pub fn pages_with_a_private_key_have_no_switches_test() {
-  let hidden = [
-    post(context(), "/accounts/generate"),
-    post_form(context(), "/accounts/import", [
-      #("nsec", spec_nsec),
-      #("label", "work"),
-    ]),
-    post_form(context(), "/accounts/register-generated", [
-      #("nsec", spec_nsec),
-      #("label", "a\tb"),
-    ]),
-    post_form(context(), action_path(dashboard.RevealPrivateKey), [
-      #("password", password),
-    ]),
-  ]
-  list.each(hidden, fn(response) {
-    assert response.status == 200 || response.status == 400
-    let body = simulate.read_body(response)
-    assert string.contains(
-      body,
-      "<div class=\"navbar-end w-auto gap-2\"></div>",
-    )
-    assert !string.contains(body, "action=\"/theme\"")
-    assert !string.contains(body, "action=\"/language\"")
-  })
-  let shown = [
-    get(context(), "/"),
-    get(context(), "/accounts/new"),
-    get(context(), "/approve/" <> token),
-    post(context(), "/approve/" <> token),
-    post_form(
-      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
-      action_path(dashboard.RotateSecret),
-      [],
-    ),
-    ..list.map(account_actions.all, fn(action) {
-      get(context(), action_path(action))
-    })
-  ]
-  list.each(shown, fn(response) {
-    let body = simulate.read_body(response)
-    assert string.contains(body, "action=\"/theme\"")
-    assert string.contains(body, "action=\"/language\"")
-  })
-}
-
-/// `body` の中の、開いた状態で描いたダイアログ `id` の中身。無ければ落ちる。
-fn opened_dialog(body: String, id: String) -> String {
-  let assert Ok(#(_, rest)) =
-    string.split_once(body, "class=\"modal\" id=\"" <> id <> "\" open>")
-  let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
-  inner
 }

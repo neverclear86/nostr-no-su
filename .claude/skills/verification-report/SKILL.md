@@ -53,7 +53,7 @@ compose は worktree の `docker-compose.yml` に、strfry 2 台を足す overri
 compose を env を変えて作り直すと前のコンテナーのログが消えるので、作り直す前に `logs` を保存する。
 
 1. **起動**：healthy、非 root、再起動回数 0、`schema ready` と `loaded N account(s)`。全行が時刻と水準で始まる。マスターキーが無いときと不正なときに、`[main] cannot start: <理由>` の 1 行だけを出して終了コード 1 で終了し、`restart: unless-stopped` により再起動を繰り返すこと
-2. **管理 UI のアカウント管理**：Playwright で実際のブラウザーを操作し、状態コードとヘッダーは curl でも確かめる。nsec 入力による登録、重複（409）と不正な nsec（400、入力値を表示しない）、鍵の生成（確認ページだけに nsec、登録は 303）、生成した鍵のラベル不正（途中に制御文字を置く。同じ nsec の確認ページを再表示）、ラベルの編集（絵文字を含む）と 101 文字のラベル（400）、コピーのボタン、秘密鍵の再表示（誤ったパスワードで 403、正しいパスワードで 200 とログ 1 行）、削除（再送は 404）、secret のローテーション
+2. **管理 UI のアカウント管理**：Playwright で実際のブラウザーを操作し、状態コードとヘッダーは curl でも確かめる。nsec 入力による登録、重複（409）と不正な nsec（400、入力値を表示しない）、鍵の生成（生成した鍵のダイアログだけに nsec、登録は 303）、生成した鍵のラベル不正（途中に制御文字を置く。同じ nsec のダイアログを開き直す）、ラベルの編集（絵文字を含む）と 101 文字のラベル（400）、コピーのボタン、秘密鍵の再表示（誤ったパスワードで 403、正しいパスワードで 200 とログ 1 行）、削除（再送は 404）、secret のローテーション
 3. **NIP-46 とバンカー経由の投稿**：UI からコピーした URI で、connect、get_public_key、sign_event、ping、nip44_encrypt、nip44_decrypt、logout を実行する。connect では perms に `sign_event:1,nip44_encrypt,nip44_decrypt` を宣言する（宣言しないメソッドと kind は `permission denied: <権限>` で拒否される）。kind 1 を署名して 2 台のリレーへ発行し、読み戻して署名を検証する
 4. **再起動なしのアカウント変更**：クライアントを接続したまま UI でアカウントを追加し、すぐ署名できること、削除すると応答しなくなること、既存のセッションが続くことを確かめる
 5. **ローテーション**：古い URI からの新しい connect は承認待ち（`auth_url`）になり、接続済みのセッションは続く。残った承認待ちは拒否して片付ける
@@ -62,11 +62,11 @@ compose を env を変えて作り直すと前のコンテナーのログが消�
 8. **マルチリレーと重複排除**：2 台から同じイベントが届いても `event_logger_events` は 1 行で、kind 24133 は保存されないこと
 9. **auth_url と取り消し**：secret 無しの URI で接続して承認と拒否を行い、承認済みセッションを取り消す。承認済みセッションは本体の再起動をまたいで残る（DB に永続化される）
 10. **管理 UI の保護**：未認証の 401、`/healthz`、未知のパスの 404、誤ったメソッドの 405、別オリジンの POST の 400、アカウントのページの `cache-control: no-store` と枠への埋め込みの禁止
-11. **管理 UI の表示**：CSS（`/static/admin.css`）が認証の後で配信され、worktree の `priv/static/admin.css` と同じであること、ブラウザーの要求先が管理 UI のオリジンだけであることを確かめる。表示の言語が cookie、`Accept-Language`、英語の順に決まること、`POST /language` が 303 と `Secure` の無い `set-cookie` を返し、戻り先が別のオリジンを指さないこと、`Origin` も `Referer` も無い POST では cookie が使われないこと、秘密鍵を表示する 3 ページ（登録の完了、生成した鍵の確認、秘密鍵の表示）に切り替えが無いことを確かめる。幅 1280 と 375 で横にはみ出さないこと（`scrollWidth`）、ダークテーマ、コピーの完了表示、JS を無効にしたときのフォームの送信も確かめる
+11. **管理 UI の表示**：CSS（`/static/admin.css`）が認証の後で配信され、worktree の `priv/static/admin.css` と同じであること、ブラウザーの要求先が管理 UI のオリジンだけであることを確かめる。表示の言語が cookie、`Accept-Language`、英語の順に決まること、`POST /language` が 303 と `Secure` の無い `set-cookie` を返し、戻り先が別のオリジンを指さないこと、`Origin` も `Referer` も無い POST では cookie が使われないこと、秘密鍵を表示する 2 つのダイアログ（生成した鍵、秘密鍵の表示）を開いた応答で切り替えを押すと、ダッシュボードへ戻り秘密鍵が表示されないことを確かめる。幅 1280 と 375 で横にはみ出さないこと（`scrollWidth`）、ダークテーマ、コピーの完了表示、JS を無効にしたときのフォームの送信も確かめる
 12. **リレー**：`docker restart` で片方を再起動して再接続と購読の再開を確かめ、`docker stop` で片方を止めた状態で署名と投稿が成立することを確かめる
 13. **スーパービジョン**：`nns.env`（環境の節）の `REMSH_ENABLED=true` で開いた remsh の口に、`./dc.sh exec -T nostr-no-su /app/start.sh remsh` で式を流し、バンカーのアクター（登録名が `nostr_no_su_bunker$` で始まる）を kill する。コマンド例は reference.md の「アクターの kill（remsh）」を見る。式の出力の `restarted=true`（同じ名前で別の pid）、ログの `error Supervisor: ... Context: child_terminated. Reason: killed.` の 1 行、続く `[bunker] loaded N account(s)`（DB からの読み直し）、`./dc.sh ps` で本体のコンテナーが再起動されていないこと（Up の時間が続く）、接続したままのクライアントで `sign` が続くことを確かめる。Supervisor の `error` の行は kill による期待どおりの出力で、OTP のクラッシュレポートも error の行として同じ形で出る（docs/configuration.md の「docker compose の構成」）ので、項目 1 の「全行が時刻と水準で始まる」も崩さない。remsh には `q().` と `init:stop().` を送らない（本体が止まる）
 14. **署名者 0 件**：アカウントをすべて削除すると購読が閉じ、追加すると戻ることを確かめる。アカウントが無くなるので、撮影をすべて終えてから最後に行う
-15. **秘密の grep**：全ログと `pg_dump` を、秘密鍵（16 進と nsec）、secret、マスターキー、管理パスワード、DB のパスワードで検索し、一致が 0 件であることを確かめる。応答本文は、鍵を表示するページを除き、secret 以外の値で検索する（ダッシュボードは secret 入りの URI を表示する仕様である）。`ERROR` の行が出たとき（grep の失敗、`targets.txt` が読めないか空、行の形の崩れ）は、原因を直して検索し直す
+15. **秘密の grep**：全ログと `pg_dump` を、秘密鍵（16 進と nsec）、secret、マスターキー、管理パスワード、DB のパスワードで検索し、一致が 0 件であることを確かめる。応答本文は、鍵を表示する応答を除き、secret 以外の値で検索する（ダッシュボードは secret 入りの URI を表示する仕様である）。`ERROR` の行が出たとき（grep の失敗、`targets.txt` が読めないか空、行の形の崩れ）は、原因を直して検索し直す
 
 ### 4. スクリーンショットを撮る
 
@@ -85,21 +85,21 @@ playwright-core のスクリプトを headless で動かし（reference.md の�
 | --- | --- |
 | `03-dashboard-empty.png` | アカウント 0 件のダッシュボード |
 | `04-dashboard-accounts.png` | アカウントを登録した後のダッシュボード |
-| `05-new-account.png` | アカウントの登録画面 |
-| `06-registered.png` | nsec 入力による登録の完了ページ |
-| `07-generated.png` | 生成した鍵の確認ページ |
-| `08-generated-invalid-label.png` | ラベルが不正なときの生成鍵の確認ページ |
+| `05-new-account.png` | アカウントの追加のダイアログ |
+| `06-registered.png` | nsec 入力による登録の後のダッシュボード |
+| `07-generated.png` | 生成した鍵のダイアログ |
+| `08-generated-invalid-label.png` | ラベルが不正なときの生成した鍵のダイアログ |
 | `09-duplicate.png` | 登録済みの nsec の 409 |
 | `10-invalid-nsec.png` | 不正な nsec の 400 |
-| `11-edit-label.png` | ラベルの編集ページ |
+| `11-edit-label.png` | ラベルの編集のダイアログ |
 | `12-reveal-form.png` | 秘密鍵の再表示のパスワード入力 |
 | `13-reveal-wrong.png` | パスワードが違うときの 403 |
 | `14-reveal-result.png` | 秘密鍵の再表示 |
-| `15-delete-confirm.png` | 削除の確認ページ |
-| `16-rotate-confirm.png` | secret のローテーションの確認ページ |
+| `15-delete-confirm.png` | 削除の確認のダイアログ |
+| `16-rotate-confirm.png` | secret のローテーションの確認のダイアログ |
 | `17-change-not-confirmed.png` | DB の停止中の変更の 202 |
 | `18-dashboard-db-down.png` | DB の停止中のダッシュボード |
-| `19-accounts-unavailable.png` | DB の停止中の操作ページの 503 |
+| `19-accounts-unavailable.png` | DB の停止中の操作の 503 |
 | `20-pending.png` | 承認待ちのあるダッシュボード |
 | `21-approve-page.png` | 接続の承認ページ |
 | `22-approved.png` | 承認後の画面 |
@@ -110,7 +110,7 @@ playwright-core のスクリプトを headless で動かし（reference.md の�
 | `27-dashboard-w375.png` | 幅 375 のダッシュボード |
 | `28-dashboard-dark.png` | ダークテーマのダッシュボード |
 | `29-dashboard-copied.png` | コピーのボタンを押した直後のアカウントの項目（要素だけを撮る） |
-| `30-new-account-w375.png` | 幅 375 のアカウントの登録画面 |
+| `30-new-account-w375.png` | 幅 375 のアカウントの追加のダイアログ |
 
 UI に画面が増えたときは、この表にも足す。
 

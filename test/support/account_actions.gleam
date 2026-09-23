@@ -4,19 +4,10 @@
 
 import nostr_no_su/admin/dashboard
 
-/// `account_action_page` が描ける操作（POST のフォームを持つ操作）。
-pub const with_form = [
-  dashboard.EditLabel,
-  dashboard.RotateSecret,
-  dashboard.DeleteAccount,
-  dashboard.RevealPrivateKey,
-]
-
-/// アカウント 1 件への操作のすべて。
+/// アカウント 1 件への操作のすべて（どれも POST のフォームを持つ）。
 pub const all = [
   dashboard.EditLabel,
   dashboard.RotateSecret,
   dashboard.DeleteAccount,
   dashboard.RevealPrivateKey,
-  dashboard.ShowConnectionQr,
 ]

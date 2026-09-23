@@ -30,7 +30,7 @@
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
 //// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/account_pages`、`admin/connect_pages`、
+//// `admin/connect_pages`、
 //// `admin/session_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した
 //// 英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま
 //// 出すのは製品名（`Nostr-no-Su`）だけである。
@@ -162,11 +162,9 @@ pub fn language_choice_from_code(value: String) -> Result(LanguageChoice, Nil) {
 pub type NavbarSwitch {
   /// 切り替えを出す。切り替えた後は `return_to`（GET で開けるページのパス）を開く。
   SwitchReturningTo(return_to: String)
-  /// 切り替えを出さない。秘密鍵を出すページは同じ内容を GET で開き直せず、切り替えで
-  /// ページを離れると表示が失われるため。クライアントの接続の確認のページも、GET で開き直せず、
-  /// 切り替えると貼った URI を失うためこれを使う。Origin と Host が一致しない要求への 400 の
-  /// ページも、切り替えの POST が同じ不一致で同じ 400 になり、押しても何も変わらない
-  /// ためこれを使う。
+  /// 切り替えを出さない。クライアントの接続の確認のページは、GET で開き直せず、切り替えると貼った URI を
+  /// 失うためこれを使う。Origin と Host が一致しない要求への 400 のページも、切り替えの POST が同じ
+  /// 不一致で同じ 400 になり、押しても何も変わらないためこれを使う。
   NoSwitch
 }
 
@@ -192,15 +190,15 @@ pub type Placement {
   InRow
   /// 操作のページのように、欄を縦に並べたフォームの末尾に置く。
   InForm
-  /// ダイアログのフォームの末尾の 1 行に、送信の右に `id` のダイアログを閉じる「キャンセル」（語は
-  /// `cancel`、閉じ方は `opening`）を並べる。`dialog` が中身の関数に渡す。
-  InDialog(id: String, cancel: String, opening: DialogOpening)
+  /// ダイアログのフォームの末尾の 1 行に、送信の右に `id` のダイアログを閉じるボタン（語は `dismiss`、
+  /// 閉じ方は `opening`）を並べる。`dialog` が中身の関数に渡す。
+  InDialog(id: String, dismiss: String, opening: DialogOpening)
 }
 
 /// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
 pub type Tone {
-  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コード、クライアントの
-  /// 接続、権限の編集のページで、リレー、アカウント、セッションを得られない）。
+  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コードのダイアログ、
+  /// クライアントの接続と権限の編集のページで、リレー、アカウント、セッションを得られない）。
   Neutral
   /// 求めた操作が反映された結果（接続の承認）。
   Success
@@ -1119,18 +1117,18 @@ fn form_with(
   )
 }
 
-/// ダイアログの操作の行。`placement` が `InDialog` なら、`buttons` の後に同じダイアログを閉じる
-/// 「キャンセル」を足して 1 行に並べる（幅が足りなければ折り返す）。キャンセルは送信せず、開いたときに
-/// フォーカスを受ける。`OpensOnTrigger` では `command="close"` のボタン、`OpenedByResponse` では `/` への
-/// リンクにする。ほかの置き場所では `buttons` をそのまま返す。
+/// ダイアログの操作の行。`placement` が `InDialog` なら、`buttons` の後に同じダイアログを閉じるボタン
+/// （語は `dismiss`）を足して 1 行に並べる（幅が足りなければ折り返す）。閉じるボタンは送信せず、開いたときに
+/// フォーカスを受ける。`OpensOnTrigger` では `command="close"` のボタン、`OpenedByResponse` と
+/// `OpenedByResponsePinned` では `/` へのリンクにする。ほかの置き場所では `buttons` をそのまま返す。
 pub fn dialog_actions(
   placement: Placement,
   buttons: List(Element(msg)),
 ) -> List(Element(msg)) {
   case placement {
-    InDialog(id:, cancel:, opening:) -> {
-      let cancel_class = attribute.class(button_class(GhostButton, placement))
-      let cancel_button = case opening {
+    InDialog(id:, dismiss:, opening:) -> {
+      let dismiss_class = attribute.class(button_class(GhostButton, placement))
+      let dismiss_button = case opening {
         OpensOnTrigger ->
           html.button(
             [
@@ -1138,20 +1136,20 @@ pub fn dialog_actions(
               attribute.autofocus(True),
               attribute.attribute("commandfor", id),
               attribute.attribute("command", "close"),
-              cancel_class,
+              dismiss_class,
             ],
-            [html.text(cancel)],
+            [html.text(dismiss)],
           )
-        OpenedByResponse ->
+        OpenedByResponse | OpenedByResponsePinned ->
           html.a(
-            [attribute.href("/"), attribute.autofocus(True), cancel_class],
-            [html.text(cancel)],
+            [attribute.href("/"), attribute.autofocus(True), dismiss_class],
+            [html.text(dismiss)],
           )
       }
       [
         html.div(
           [attribute.class("flex flex-wrap items-center gap-2")],
-          list.append(buttons, [cancel_button]),
+          list.append(buttons, [dismiss_button]),
         ),
       ]
     }
@@ -1939,12 +1937,15 @@ pub fn truncated_id(
 
 /// ダイアログを開くボタンの見た目。
 pub type DialogTrigger(msg) {
-  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、「はじめに」の帯の段の追加の操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
+  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、「はじめに」の帯の段の追加の操作、アカウントの空の節の操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
   IconTextTrigger(icon: Element(msg), text: String)
   /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
   IconOnlyTrigger(icon: Element(msg), label: String)
   /// 語だけのボタン（`post_form` の `InRow` の送信ボタンと同じ見た目）。セッションの行の承認の取り消しに使う。
   TextTrigger(text: String)
+  /// アイコンと語のボタンで、640px 未満では語を隠す（語は `title` と読み上げに残す）。アカウントの行の
+  /// 「接続 QR コード」に使う。
+  CompactTrigger(icon: Element(msg), text: String)
 }
 
 /// ダイアログの `id`。`dialog-` に `parts` を `-` で繋ぐ。`parts` には節の語、行の DB の id か 16 進の pubkey、操作のセグメントのような決まった形の値だけを渡し、ラベルのような利用者の文字列を渡さない。
@@ -1954,14 +1955,16 @@ pub fn dialog_id(parts: List(String)) -> String {
 
 /// ダイアログの開き方。
 pub type DialogOpening {
-  /// 閉じた状態で描き、`dialog_trigger` のボタンで開く。キャンセルは `command="close"` で閉じる。
+  /// 閉じた状態で描き、`dialog_trigger` のボタンで開く。閉じるボタンは `command="close"` で閉じる。
   OpensOnTrigger
-  /// POST の応答で `open` 属性を付けて描く。キャンセルは `/` へのリンクにし、Esc でも閉じる。
+  /// POST の応答で `open` 属性を付けて描く。閉じるボタンは `/` へのリンクにし、Esc でも閉じる。
   OpenedByResponse
+  /// `OpenedByResponse` に `closedby="none"` を足し、Esc で閉じない。秘密鍵（nsec）を出すダイアログに使う。
+  OpenedByResponsePinned
 }
 
 /// ダイアログを開くボタン（`dialog_trigger`）と、閉じた状態のダイアログ（`dialog` の
-/// `OpensOnTrigger`）の 2 要素。
+/// `OpensOnTrigger`。閉じるボタンの語は「キャンセル」）の 2 要素。
 pub fn dialog_button(
   language: Language,
   id: String,
@@ -1972,7 +1975,7 @@ pub fn dialog_button(
 ) -> List(Element(msg)) {
   [
     dialog_trigger(id, trigger, kind),
-    dialog(language, id, title, content, OpensOnTrigger),
+    dialog(language, id, title, content, i18n.Cancel, OpensOnTrigger),
   ]
 }
 
@@ -2007,37 +2010,51 @@ pub fn dialog_trigger(
       html.button([attribute.class(button_class(kind, InRow)), ..command], [
         html.text(text),
       ])
+    CompactTrigger(icon:, text:) ->
+      html.button(
+        [
+          attribute.title(text),
+          attribute.class(button_class(kind, InRow)),
+          ..command
+        ],
+        [
+          icon,
+          html.span([attribute.class("max-sm:sr-only")], [html.text(text)]),
+        ],
+      )
   }
 }
 
 /// ダイアログ。題（`id` に `-title` を付けた `id` の `h2`。`aria-labelledby` が指す）と、`content` に
-/// `InDialog` を渡した中身を縦に並べる。中身はフォームの `InDialog` か `dialog_actions` で、閉じる
-/// 「キャンセル」の行を末尾に置く。閉じ方は `opening` で決め、`InDialog` でキャンセルに渡す。
+/// `InDialog` を渡した中身を縦に並べる。中身はフォームの `InDialog` か `dialog_actions` で、閉じるボタン
+/// （語は `dismiss`）の行を末尾に置く。閉じ方は `opening` で決め、`InDialog` で閉じるボタンに渡す。
 pub fn dialog(
   language: Language,
   id: String,
   title: String,
   content: fn(Placement) -> List(Element(msg)),
+  dismiss: i18n.Message,
   opening: DialogOpening,
 ) -> Element(msg) {
   let title_id = id <> "-title"
+  let closed_by = case opening {
+    OpenedByResponsePinned -> [attribute.attribute("closedby", "none")]
+    OpensOnTrigger | OpenedByResponse -> []
+  }
   html.dialog(
     [
       attribute.id(id),
       attribute.class("modal"),
       attribute.aria_labelledby(title_id),
-      attribute.open(opening == OpenedByResponse),
+      attribute.open(opening != OpensOnTrigger),
+      ..closed_by
     ],
     [
       html.div([attribute.class("modal-box flex flex-col gap-4")], [
         html.h2([attribute.id(title_id), attribute.class("card-title")], [
           html.text(title),
         ]),
-        ..content(InDialog(
-          id:,
-          cancel: i18n.text(language, i18n.Cancel),
-          opening:,
-        ))
+        ..content(InDialog(id:, dismiss: i18n.text(language, dismiss), opening:))
       ]),
     ],
   )
@@ -2082,7 +2099,7 @@ pub fn radio_tabs(
   )
 }
 
-/// アイコン＋語のボタンのリンク。ダッシュボードの節の主操作、空の節の操作と、アカウントの操作のページの下のほかの操作へのリンクに使う。
+/// アイコン＋語のボタンのリンク。セッションの空の節の操作と、プラグインの行のページへのリンクに使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),
@@ -2093,23 +2110,6 @@ pub fn icon_button_link(
     icon,
     html.text(text),
   ])
-}
-
-/// アイコン＋語のボタンのリンクで、狭い画面（640px 未満）では語を隠してアイコンだけにする。語は `title` にも置き、隠した後も読み上げとマウスを重ねたときの表示に残す。
-pub fn compact_icon_button_link(
-  href: String,
-  icon: Element(msg),
-  text: String,
-  kind: ButtonKind,
-) -> Element(msg) {
-  html.a(
-    [
-      attribute.href(href),
-      attribute.title(text),
-      attribute.class(button_class(kind, InRow)),
-    ],
-    [icon, html.span([attribute.class("max-sm:sr-only")], [html.text(text)])],
-  )
 }
 
 /// アイコンだけのボタンのリンク。語は読み上げのための `aria-label` に置く。
@@ -2224,7 +2224,7 @@ fn globe_icon() -> Element(msg) {
   ])
 }
 
-/// QR のページへのリンクのアイコン（Lucide の qr-code）。
+/// 接続 QR コードのダイアログを開くボタンのアイコン（Lucide の qr-code）。
 pub fn qr_code_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M4 3h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1",

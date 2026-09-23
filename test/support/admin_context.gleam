@@ -1,5 +1,5 @@
 //// admin_*_test が共有する、状態を即値で持つ `admin.Context` と認証済みの
-//// リクエストを組み立てるヘルパー。関数名の注意は `app_tree` と同じ。
+//// リクエストを組み立てるヘルパーと、本文からダイアログを切り出すヘルパー（`dashboard_test` も使う）。関数名の注意は `app_tree` と同じ。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -9,6 +9,7 @@ import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -430,6 +431,29 @@ pub fn header(response: Response(wisp.Body), name: String) -> String {
 /// 登録済みのアカウントへの操作のパス。
 pub fn action_path(action: dashboard.AccountAction) -> String {
   dashboard.account_action_path(signer, action)
+}
+
+/// 登録済みのアカウントへの操作のダイアログの `id`（`dialog-account-<署名者>-<セグメント>`）。
+pub fn action_dialog_id(action: dashboard.AccountAction) -> String {
+  let assert [_, _, _, segment] = string.split(action_path(action), "/")
+  "dialog-account-" <> signer <> "-" <> segment
+}
+
+/// `body` の中の、開いた状態で描いたダイアログ `id` の中身。無ければ落ちる。
+pub fn opened_dialog(body: String, id: String) -> String {
+  dialog_after(body, "id=\"" <> id <> "\" open>")
+}
+
+/// `body` の中の、閉じた状態で描いたダイアログ `id` の中身。無ければ落ちる。
+pub fn closed_dialog(body: String, id: String) -> String {
+  dialog_after(body, "class=\"modal\" id=\"" <> id <> "\">")
+}
+
+/// `body` の中の、`start_tag`（ダイアログの開始タグの末尾）から `</dialog>` までの中身。無ければ落ちる。
+fn dialog_after(body: String, start_tag: String) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(body, start_tag)
+  let assert Ok(#(inner, _)) = string.split_once(rest, "</dialog>")
+  inner
 }
 
 /// 取り消しにバンカーが応答しない Context。
