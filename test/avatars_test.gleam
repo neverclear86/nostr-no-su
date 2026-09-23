@@ -115,6 +115,20 @@ pub fn pictures_keep_the_cached_picture_when_the_fetch_fails_test() {
     == dict.from_list([#("a", avatar_url)])
 }
 
+/// 間に合った取り直しで `picture` が無くなった署名者は、同じ描画から前の URL を返さない。
+pub fn pictures_drop_a_removed_picture_in_the_same_lookup_test() {
+  let name = start(0, 60_000)
+
+  let _found =
+    avatars.pictures_with(name, ["a"], fn(_pubkeys) {
+      Ok([metadata("a", 1, with_picture(avatar_url))])
+    })
+  assert avatars.pictures_with(name, ["a"], fn(_pubkeys) {
+      Ok([metadata("a", 2, "{}")])
+    })
+    == dict.new()
+}
+
 /// `retry_ms` 0 では、失敗の直後の描画で取り直す。
 pub fn pictures_retry_after_a_failed_fetch_test() {
   let name = start(60_000, 0)

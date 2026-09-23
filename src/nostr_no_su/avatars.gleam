@@ -97,7 +97,7 @@ pub fn pictures(
 /// `pictures` の中身。取得を `fetch` で受けるので、テストはリレー無しで叩ける。手順は (1) `Claim` を
 /// 送る（アクターが答えなければ空の辞書）、(2) 古い署名者が無ければ `known` を返す、(3) あれば
 /// `task.start` で `fetch` を走らせ、結果を `Fetched` でアクターへ送る、(4) `wait_ms` までに
-/// 届いた URL を `known` に重ねて返し、届かなければ `known` を返す。
+/// 届いた結果で `stale` の分を置き換えて返し（`picture` を失った署名者は消える）、届かなければ `known` を返す。
 pub fn pictures_with(
   name: Name(Msg),
   pubkeys: List(String),
@@ -117,7 +117,7 @@ pub fn pictures_with(
           found
         })
       case task.await(fetching, task.deadline_in(wait_ms)) {
-        Ok(Ok(found)) -> dict.merge(known, found)
+        Ok(Ok(found)) -> dict.merge(dict.drop(known, stale), found)
         _ -> known
       }
     }
