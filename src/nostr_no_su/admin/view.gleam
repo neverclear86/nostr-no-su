@@ -1,7 +1,7 @@
 //// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
 //// モジュールに依存しない HTML の部品。lustre の要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
 //// components は使わない。部品は `Element` を返し、HTML 文書の文字列にするのは
-//// `page` と `untranslated_page` だけである。
+//// `page` と `page_in_language` だけである。
 ////
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。エスケープでは防げない経路には決まった値だけを渡す。`html.style`、
@@ -321,13 +321,15 @@ pub fn page(
   )
 }
 
-/// 見出しが訳さない文字列（プラグイン由来の英語）のページ枠を HTML 文書の文字列にする。
-/// 見出し（h1）には `title` を `untranslated` の `span` で出す。`<title>` は子の要素を
-/// 持てないので、`title` を `Nostr-no-Su — ` の後に置いた `<title>` 要素そのものに
-/// `lang="en"` を付ける。枠の残りは `document` が出す。
-pub fn untranslated_page(
+/// 見出しが本体の訳文でない文字列（プラグイン由来の文字列）のページ枠を HTML 文書の文字列に
+/// する。`code` は `title` が書かれている言語のコードで、見出し（h1）には `title` を
+/// `in_language` の `span` で出す。`<title>` は子の要素を持てないので、`title` を
+/// `Nostr-no-Su — ` の後に置いた `<title>` 要素そのものに `lang` を付ける。枠の残りは
+/// `document` が出す。
+pub fn page_in_language(
   language: Language,
   theme: Theme,
+  code: String,
   title: String,
   layout: Layout,
   switch: NavbarSwitch,
@@ -337,8 +339,8 @@ pub fn untranslated_page(
   document(
     language,
     theme,
-    html.title([attribute.lang("en")], "Nostr-no-Su — " <> title),
-    [untranslated(title)],
+    html.title([attribute.lang(code)], "Nostr-no-Su — " <> title),
+    [in_language(code, title)],
     layout,
     switch,
     refresh,
@@ -346,7 +348,7 @@ pub fn untranslated_page(
   )
 }
 
-/// `page` と `untranslated_page` が共有するページ枠を HTML 文書の文字列にする。表示の言語を
+/// `page` と `page_in_language` が共有するページ枠を HTML 文書の文字列にする。表示の言語を
 /// `<html lang>` にし、`theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
 /// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。`<head>` に
 /// `title`（`<title>` 要素）を置き、ナビゲーションバーと、`h1_content` を見出し（h1）にした
@@ -892,7 +894,8 @@ pub fn plugin_image(url: String, alt: String) -> Element(msg) {
 }
 
 /// `http` / `https` 以外の URL の画像の代わりに出す破線の枠。理由は表示の言語に訳した文を
-/// 受け取り、代替文はプラグインの英語のまま出す。
+/// 受け取り、その言語の `lang` で出す。代替文はプラグイン由来の文字列なので `lang` を付けず、
+/// 祖先（`plugin_view` の節の包み）の `lang` を引き継ぐ。
 pub fn plugin_image_placeholder(
   language: Language,
   reason: String,
@@ -906,7 +909,7 @@ pub fn plugin_image_placeholder(
     ],
     [
       html.span([attribute.lang(i18n.code(language))], [html.text(reason)]),
-      untranslated(alt),
+      html.span([], [html.text(alt)]),
     ],
   )
 }
@@ -1512,7 +1515,12 @@ pub fn reason_content(
 /// 訳さずに英語のまま出す文字列（`i18n.Untranslated` の中身）。どの言語のページでも
 /// `lang="en"` の `span` で出す。
 pub fn untranslated(text: String) -> Element(msg) {
-  html.span([attribute.lang("en")], [html.text(text)])
+  in_language("en", text)
+}
+
+/// `code` の言語で書かれた文字列を、その `lang` を持つ `span` で出す。
+pub fn in_language(code: String, text: String) -> Element(msg) {
+  html.span([attribute.lang(code)], [html.text(text)])
 }
 
 /// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に

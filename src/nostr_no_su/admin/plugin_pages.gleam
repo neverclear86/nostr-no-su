@@ -21,8 +21,8 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
 
 /// プラグインのページ 1 枚を HTML 文書の文字列にする。見出しと `<title>` は `page_heading` で、
-/// プラグイン由来の英語なので `view.untranslated_page` で出す。`raw_sections` は
-/// `plugin_view.sections` が最上位の記述から取り出した節の記述の並び。
+/// プラグイン由来の文字列なので、`view.page_in_language` で `plugin.text_language` の言語として
+/// 出す。`raw_sections` は `plugin_view.sections` が最上位の記述から取り出した節の記述の並び。
 pub fn plugin_page(
   language: Language,
   theme: view.Theme,
@@ -30,15 +30,17 @@ pub fn plugin_page(
   page: plugin.PluginPage,
   raw_sections: List(Dynamic),
 ) -> String {
-  view.untranslated_page(
+  let code = i18n.code(language)
+  view.page_in_language(
     language,
     theme,
-    page_heading(plugin, page),
+    plugin.text_language(page, code),
+    page_heading(plugin, page, code),
     view.Narrow,
     view.SwitchReturningTo(dashboard.plugin_page_path(plugin.name, page.key)),
     view.NoRefresh,
     list.flatten([
-      [source_row(language, plugin), tabs(plugin, page)],
+      [source_row(language, plugin), tabs(language, plugin, page)],
       disabled_alert(language, plugin),
       sections(language, plugin, page, raw_sections),
       [view.back_link(language)],
@@ -46,12 +48,14 @@ pub fn plugin_page(
   )
 }
 
-/// ページの見出し。プラグイン名とページの表示名を ` — ` でつなぐ（例: `event_logger — Settings`）。
+/// ページの見出し。プラグイン名と、言語のコード `code` で引いたページの表示名
+/// （`plugin.title_in`）を ` — ` でつなぐ（例: `event_logger — Settings`）。
 fn page_heading(
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
+  code: String,
 ) -> String {
-  plugin.name <> " — " <> page.title
+  plugin.name <> " — " <> plugin.title_in(page, code)
 }
 
 /// プラグイン名と現在の状態の行。
@@ -63,9 +67,11 @@ fn source_row(language: Language, plugin: dashboard.PluginRow) -> Element(msg) {
   ])
 }
 
-/// 供給するページが 2 つ以上のときだけ出すタブ。表示名はプラグイン由来の英語なので
-/// `view.untranslated` に包む。
+/// 供給するページが 2 つ以上のときだけ出すタブ。表示名は `plugin.title_in` で表示の
+/// 言語のものを引き、`plugin.text_language` の `lang` を持つ `span`
+/// （`view.in_language`）に包む。
 fn tabs(
+  language: Language,
   plugin: dashboard.PluginRow,
   current: plugin.PluginPage,
 ) -> Element(msg) {
@@ -74,13 +80,14 @@ fn tabs(
     pages ->
       html.nav(
         [attribute.class("tabs tabs-border")],
-        list.map(pages, tab_link(plugin.name, current, _)),
+        list.map(pages, tab_link(language, plugin.name, current, _)),
       )
   }
 }
 
 /// タブ 1 件。現在のページには `tab-active` と `aria-current="page"` を付ける。
 fn tab_link(
+  language: Language,
   plugin_name: String,
   current: plugin.PluginPage,
   page: plugin.PluginPage,
@@ -94,7 +101,13 @@ fn tab_link(
     ]
     False -> [attribute.href(href), attribute.class("tab")]
   }
-  html.a(attrs, [view.untranslated(page.title)])
+  let code = i18n.code(language)
+  html.a(attrs, [
+    view.in_language(
+      plugin.text_language(page, code),
+      plugin.title_in(page, code),
+    ),
+  ])
 }
 
 /// `Disabled` のときだけ、イベントを処理していない旨の注意を 1 要素のリストで返す。
@@ -152,8 +165,9 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
   ])
 }
 
-/// 節の描画に渡す文脈。`link` ブロックはそのプラグインのページ一覧にあるキーだけを
-/// 解決する。`form_action` は今開いているページ自身への宛先である。
+/// 節の描画に渡す文脈。プラグイン由来の文字列の言語は `plugin.text_language` で
+/// 決める。`link` ブロックはそのプラグインのページ一覧にあるキーだけを解決する。
+/// `form_action` は今開いているページ自身への宛先である。
 fn context(
   language: Language,
   plugin: dashboard.PluginRow,
@@ -161,6 +175,7 @@ fn context(
 ) -> plugin_view.Context {
   plugin_view.Context(
     language:,
+    plugin_language: plugin.text_language(page, i18n.code(language)),
     page_href: fn(key) {
       case list.any(plugin.pages, fn(page) { page.key == key }) {
         True -> Ok(dashboard.plugin_page_href(plugin.name, key))

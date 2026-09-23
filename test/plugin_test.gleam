@@ -6,11 +6,13 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import nostr_no_su/admin/i18n
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
 import support/plugin_valid
 import support/plugin_with_config
+import support/plugin_with_localized_pages
 import support/plugin_with_pages
 
 /// 読み込みの検証に使うサンプルイベント。
@@ -308,13 +310,60 @@ pub fn load_with_pages_test() {
         title: plugin_with_pages.page_title,
       ),
     ]
-  let assert Ok(description) = ui.content(plugin_with_pages.page_key, [])
+  let assert Ok(description) = ui.content(plugin_with_pages.page_key, "en", [])
   let assert Ok(sections) =
     decode.run(
       description,
       decode.field("sections", decode.list(decode.dynamic), decode.success),
     )
   assert list.length(sections) == 1
+}
+
+/// `plugin_pages/2` と `plugin_page_content/3` を持つプラグインは、`ui` に言語ごとの
+/// 表示名を持つ `LocalizedPage` が載り、`content` に渡した言語でページの記述が返る。
+pub fn load_with_localized_pages_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("support@plugin_with_localized_pages"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  assert ui.pages
+    == [
+      plugin.LocalizedPage(
+        key: plugin_with_localized_pages.page_key,
+        titles: dict.from_list([#("en", "Status"), #("ja", "状態")]),
+      ),
+    ]
+  let assert Ok(description) =
+    ui.content(plugin_with_localized_pages.page_key, "ja", [])
+  let assert Ok([title]) =
+    decode.run(
+      description,
+      decode.field(
+        "sections",
+        decode.list(decode.field("title", decode.string, decode.success)),
+        decode.success,
+      ),
+    )
+  assert title == "状態"
+}
+
+/// `title_in` は既知の言語ではその表示名を、未知の言語では `key` を返す。
+pub fn localized_page_title_falls_back_to_the_key_test() {
+  let page =
+    plugin.LocalizedPage(
+      key: "status",
+      titles: dict.from_list([#("en", "Status"), #("ja", "状態")]),
+    )
+  assert plugin.title_in(page, "ja") == "状態"
+  assert plugin.title_in(page, "fr") == "status"
+}
+
+/// `plugin_pages/2` を呼ぶ言語は、管理 UI の表示の言語と同じ並びである。
+pub fn page_languages_are_the_admin_languages_test() {
+  assert plugin.page_languages == list.map(i18n.languages, i18n.code)
 }
 
 /// アカウント 1 件の map を読む decoder。

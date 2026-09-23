@@ -11,6 +11,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/nostrconnect
@@ -93,6 +94,7 @@ fn console_logger_status_description() -> Dynamic {
 fn plugin_page_content(
   name: String,
   key: String,
+  _language: i18n.Language,
   _accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   case name, key {

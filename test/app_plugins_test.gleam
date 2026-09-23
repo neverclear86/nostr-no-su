@@ -363,6 +363,30 @@ pub fn reenable_plugin_with_an_unknown_name_is_not_found_test() {
     == Error(admin.PluginNotFound("plugin not found"))
 }
 
+/// 管理 UI のページの中身の取得は、表示の言語のコードをプラグインの `content` に
+/// 渡す。ツリーを起動しない。
+pub fn plugin_page_content_passes_the_language_test() {
+  let spec =
+    app.PluginSpec(
+      name: process.new_name("echo"),
+      plugin: plugin.Plugin(
+        name: "echo",
+        children: [],
+        ui: Some(plugin.PluginUi(
+          pages: [plugin.PluginPage(key: "status", title: "Status")],
+          content: fn(key, language, _accounts) {
+            Ok(dynamic.string(key <> ":" <> language))
+          },
+          action: None,
+        )),
+        handle: fn(_incoming) { Nil },
+      ),
+      limits: plugin_runner.default_limits,
+    )
+  assert app.plugin_page_content([spec], "echo", "status", "ja", [])
+    == Ok(dynamic.string("status:ja"))
+}
+
 /// 決して戻らないプラグインがいても、他のプラグインは待たされない。遅い側は
 /// 自分のランナーの中で打ち切られる。
 ///

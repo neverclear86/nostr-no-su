@@ -20,6 +20,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/vault
@@ -638,6 +639,7 @@ fn id_inline(text: String) -> Dynamic {
 fn plugin_page_content(
   name: String,
   key: String,
+  _language: i18n.Language,
   accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   case name, key {

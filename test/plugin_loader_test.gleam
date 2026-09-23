@@ -1189,7 +1189,10 @@ pub fn pages_without_content_export_test() {
       plugin.default_call_timeout_ms,
     )
   assert plugins == []
-  assert has_note(notes, "plugin_pages/0 but no plugin_page_content/1 or /2")
+  assert has_note(
+    notes,
+    "plugin_pages/0 but no plugin_page_content/1, /2 or /3",
+  )
 }
 
 /// `plugin_page_content` だけを持ち `plugin_pages` を持たないプラグインも、
@@ -1209,7 +1212,10 @@ pub fn page_content_without_pages_export_test() {
       plugin.default_call_timeout_ms,
     )
   assert plugins == []
-  assert has_note(notes, "plugin_page_content/1 but no plugin_pages/0 or /1")
+  assert has_note(
+    notes,
+    "plugin_page_content/1 but no plugin_pages/0, /1 or /2",
+  )
 }
 
 /// `plugin_page_action/3` だけを持ち `plugin_pages` を持たないプラグインは、
@@ -1229,7 +1235,87 @@ pub fn page_action_without_pages_is_not_loaded_test() {
       plugin.default_call_timeout_ms,
     )
   assert plugins == []
-  assert has_note(notes, "plugin_page_action/3 but no plugin_pages/0 or /1")
+  assert has_note(notes, "plugin_page_action/3 but no plugin_pages/0, /1 or /2")
+}
+
+/// `plugin_pages/2` を持ち `plugin_page_content/3` を持たないプラグインは、表示の
+/// 言語を受け取る口の片方だけの宣言として読み込まれない。
+pub fn localized_pages_without_localized_content_test() {
+  let fixture = beam_fixture.new("localized_pages_only")
+  beam_fixture.compile(
+    beam_fixture.ui_source(
+      fixture.module,
+      "localized_pages_only_plugin",
+      2,
+      2,
+      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => Language}]",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_pages/2 but no plugin_page_content/3")
+}
+
+/// `plugin_page_content/3` を持ち `plugin_pages/2` を持たないプラグインも、逆向きに
+/// 読み込まれない。
+pub fn localized_content_without_localized_pages_test() {
+  let fixture = beam_fixture.new("localized_content_only")
+  beam_fixture.compile(
+    beam_fixture.ui_source(
+      fixture.module,
+      "localized_content_only_plugin",
+      1,
+      3,
+      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "plugin_page_content/3 but no plugin_pages/2")
+}
+
+/// `plugin_pages/2` が言語によって違うキーの並びを返すと読み込まれない。
+pub fn localized_page_keys_must_match_test() {
+  let fixture = beam_fixture.new("localized_keys")
+  beam_fixture.compile(
+    beam_fixture.ui_source(
+      fixture.module,
+      "localized_keys_plugin",
+      2,
+      3,
+      "[#{<<\"key\">> => Language, <<\"title\">> => <<\"Status\">>}]",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root),
+      [],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(
+    notes,
+    "plugin_pages/2: page keys for \"ja\" differ from \"en\"",
+  )
 }
 
 /// `plugin_pages/0` が 0 件を返すと読み込まれない。
@@ -1407,7 +1493,7 @@ pub fn page_content_crash_test() {
     )
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status", [])
+  let assert Error(reason) = ui.content("status", "en", [])
   assert string.contains(reason, "plugin_page_content/1 crashed")
 }
 
@@ -1434,7 +1520,7 @@ pub fn page_content_timeout_test() {
     )
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status", [])
+  let assert Error(reason) = ui.content("status", "en", [])
   assert string.contains(reason, timed_out())
 }
 

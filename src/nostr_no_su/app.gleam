@@ -139,6 +139,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/i18n
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -708,8 +709,14 @@ fn admin_child(spec: Spec, config: Admin) -> ChildSpecification(Supervisor) {
       plugins: fn(deadline) { plugin_rows(spec.plugins, deadline) },
       not_loaded_plugins: spec.not_loaded_plugins,
       reenable_plugin: reenable_plugin(spec.plugins, _),
-      plugin_page_content: fn(plugin, key, accounts) {
-        plugin_page_content(spec.plugins, plugin, key, accounts)
+      plugin_page_content: fn(plugin, key, language, accounts) {
+        plugin_page_content(
+          spec.plugins,
+          plugin,
+          key,
+          i18n.code(language),
+          accounts,
+        )
       },
       page_accounts: fn() { page_accounts(spec) },
       plugin_page_action: fn(plugin, key) {
@@ -842,14 +849,16 @@ pub fn reenable_plugin(
   |> option.to_result(admin.PluginNotAnswered("plugin runner did not answer"))
 }
 
-/// 管理 UI のプラグインのページの中身。名前で引いてよい理由は `reenable_plugin` と
-/// 同じ（読み込みが同名のプラグインを 2 つ目以降で捨てる）。UI を持たないプラグイン、
+/// 管理 UI のプラグインのページの中身。`language` は表示の言語のコードで、言語を
+/// 受け取るプラグインにだけ渡る。名前で引いてよい理由は `reenable_plugin` と同じ
+/// （読み込みが同名のプラグインを 2 つ目以降で捨てる）。UI を持たないプラグイン、
 /// または一覧に無い名前は 1 行の理由を返す（`admin.plugin_page` が行の一覧で先に
 /// 404 にするので、名前で引けないことは通常起きない）。
 pub fn plugin_page_content(
   specs: List(PluginSpec),
   plugin: String,
   key: String,
+  language: String,
   accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   use spec <- result.try(
@@ -857,7 +866,7 @@ pub fn plugin_page_content(
     |> result.replace_error("plugin not found"),
   )
   case spec.plugin.ui {
-    Some(ui) -> ui.content(key, accounts)
+    Some(ui) -> ui.content(key, language, accounts)
     None -> Error("plugin has no pages")
   }
 }
