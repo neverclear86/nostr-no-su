@@ -71,8 +71,8 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
   assert string.contains(
     failing,
-    "<div class=\"alert alert-soft text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Neutral))
+    "<div class=\"alert alert-soft alert-error text-base-content\">"
+      <> element.to_string(view.tone_icon(view.Failure))
       <> "<span><span lang=\"en\">"
       <> escaped
       <> "</span></span></div>",
