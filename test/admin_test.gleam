@@ -1,6 +1,6 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
 //// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消しと
-//// 権限の編集、クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの
+//// 権限の編集、クライアントの接続、プラグインの再有効化とページ（フォームの値の改行の正規化を含む）、承認と拒否、リレーの
 //// 追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/dynamic
@@ -532,6 +532,27 @@ pub fn plugin_page_action_receives_an_empty_value_test() {
       #("reject", ""),
     ])
   assert response.status == 503
+}
+
+/// 値の CRLF は LF にそろえてから実行の口に渡る。拒否の理由として返った値で
+/// 確かめる。
+pub fn plugin_page_action_receives_values_with_lf_newlines_test() {
+  let response =
+    post_form(context(), "/plugins/console_logger/settings", [
+      #("reject", "first\r\nsecond"),
+    ])
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(body, "first\nsecond")
+  assert !string.contains(body, "first\r\nsecond")
+}
+
+/// CRLF と単独の CR は LF になり、LF と改行の無い値はそのまま残る。
+pub fn normalize_newlines_test() {
+  assert admin.normalize_newlines("a\r\nb\r\n") == "a\nb\n"
+  assert admin.normalize_newlines("a\rb\r") == "a\nb\n"
+  assert admin.normalize_newlines("a\nb\n") == "a\nb\n"
+  assert admin.normalize_newlines("ab") == "ab"
 }
 
 /// 実行の口を持たないページへの POST は 405 で `allow: GET`。本文が無い POST

@@ -789,8 +789,9 @@ fn show_dashboard(
 /// 3. `context.page_accounts()`（`Error(reason)` は
 ///    `unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)`）。
 /// 4. GET は `context.plugin_page_content(name, key, language, accounts)`。
-/// 5. POST は `wisp.require_form` で値を取り、2 で得た関数に `form.values` と
-///    `accounts` を渡す。`Ok(Nil)` は
+/// 5. POST は `wisp.require_form` で値を取り、値の改行を
+///    `normalize_newlines` で LF にそろえてから、2 で得た関数に `accounts` と
+///    ともに渡す。`Ok(Nil)` は
 ///    `wisp.redirect(to: dashboard.plugin_page_href(name, key))`、`Error(reason)`
 ///    は `unavailable_notice(..., i18n.PluginActionFailed, reason)`。
 ///
@@ -883,8 +884,9 @@ fn plugin_page_get(
   }
 }
 
-/// プラグインのページのフォームの送信を実行する（処理の順序 3・5）。成功は同じ
-/// ページへ 303 で戻し、拒否・呼び出しの失敗は 503 で理由を英語のまま出す。
+/// プラグインのページのフォームの送信を実行する（処理の順序 3・5）。値の改行は
+/// LF にそろえて渡す。成功は同じページへ 303 で戻し、拒否・呼び出しの失敗は 503
+/// で理由を英語のまま出す。
 fn plugin_page_post(
   context: Context,
   request: Request,
@@ -900,13 +902,26 @@ fn plugin_page_post(
       unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)
     Ok(accounts) -> {
       use form <- wisp.require_form(request)
-      case action(form.values, accounts) {
+      let values =
+        list.map(form.values, fn(field) {
+          #(field.0, normalize_newlines(field.1))
+        })
+      case action(values, accounts) {
         Ok(Nil) -> wisp.redirect(to: dashboard.plugin_page_href(name, key))
         Error(reason) ->
           unavailable_notice(language, theme, i18n.PluginActionFailed, reason)
       }
     }
   }
+}
+
+/// フォームの値の改行を LF にそろえる。CRLF と単独の CR を LF に置き換える。
+/// ブラウザーは `textarea` の改行を CRLF で送るので、プラグインが改行の違いを
+/// 扱わずに済むようにする。
+pub fn normalize_newlines(value: String) -> String {
+  value
+  |> string.replace("\r\n", "\n")
+  |> string.replace("\r", "\n")
 }
 
 /// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは
