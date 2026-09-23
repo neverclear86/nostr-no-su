@@ -34,7 +34,7 @@ plugins/file_logger/ebin/file_logger.beam
 
 同梱の `docker-compose.yml` は `./plugins` を `/plugins` に読み取り専用でマウントし、`PLUGIN_DIR=/app/plugins:/plugins` を渡す（同梱の `event_logger`、`profile` と併せて読み込まれる）。コンテナーは非 root（uid 1000）で動くため、ホスト側は誰でも読める権限にしておくこと。
 
-起動ログに次の行が出れば読み込まれている。
+出力先の `PLUGIN_FILE_LOGGER_PATH` を compose の `environment:` に書き足してから起動する（下の「設定」）。起動ログに次の行が出れば読み込まれている。
 
 ```
 [plugin_loader] loaded 1 plugin(s) from /plugins: file_logger
@@ -42,7 +42,7 @@ plugins/file_logger/ebin/file_logger.beam
 
 ## 設定
 
-出力先は **`PLUGIN_FILE_LOGGER_PATH` で必ず指定する**（[プラグイン API v1](../../../docs/plugin-api.md) の第 6 章）。プラグイン側に既定値は持たせず、同梱の `docker-compose.yml` が `/tmp/nostr-no-su-events.log` を渡している。**プラグインディレクトリーは読み取り専用でマウントされるので、そこには書けない。** コンテナーの `/tmp` は実行ユーザー（uid 1000）が書ける。
+出力先は **`PLUGIN_FILE_LOGGER_PATH` で必ず指定する**（[プラグイン API v1](../../../docs/plugin-api.md) の第 6 章）。プラグイン側に既定値は持たせない。同梱の `docker-compose.yml` はこの変数を渡さないので、`environment:` に `PLUGIN_FILE_LOGGER_PATH: /tmp/nostr-no-su-events.log` を書き足す（[設定](../../../docs/configuration.md) の「docker compose の構成」）。**プラグインディレクトリーは読み取り専用でマウントされるので、そこには書けない。** コンテナーの `/tmp` は実行ユーザー（uid 1000）が書ける。
 
 設定が無いとこのプラグインだけが無効になり、理由が 1 行出る。本体の起動と他のプラグインには影響しない。
 

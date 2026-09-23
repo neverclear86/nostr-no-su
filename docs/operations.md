@@ -63,7 +63,7 @@ docker compose exec -T postgres pg_restore -l < <ファイル> | grep 'TABLE DAT
 
 ダンプは暗号文を含むので、ダンプ自体も他人に読めない場所に置く（`chmod 600`）。
 
-`PLUGIN_EVENT_LOGGER_DATABASE_URL` を別のデータベースに向けた構成では、そのデータベースも同じ形で取る。
+同梱の `event_logger` は既定で本体と同じデータベースに保存するので、上のダンプにイベントも含まれる。`PLUGIN_EVENT_LOGGER_DATABASE_URL` で別のデータベースに向けた構成では、そのデータベースも同じ形で取る。
 
 ## 更新
 

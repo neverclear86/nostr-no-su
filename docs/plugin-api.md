@@ -226,19 +226,20 @@ PLUGIN_<NAME>_<KEY>=<値>
 ```
 
 - `<NAME>` は `plugin_name/0` の値を大文字にし、`[A-Z0-9]` 以外の文字を `_` に置き換えたものである。`file_logger` なら `PLUGIN_FILE_LOGGER_` が接頭辞になる。
-- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。管理 UI のページと実行の呼び出し（第 13 章）に渡す map だけは、これに加えて予約キー `<<"Accounts">>` を持つ。キーを小文字にする規則があるため、大文字を含むこのキーが環境変数から作られることはない。この値もアカウントの一覧を JSON にした binary なので、設定 map を binary → binary の辞書として読む書き方はそのまま通る。
+- プラグインが受け取るのは `<KEY>` を**小文字にした binary キー**の map で、**値は環境変数の文字列そのまま**（binary）である。本体はこれに予約キーを加える。どの呼び出しの map にも本体のデータベースの接続先 `<<"DatabaseUrl">>`（第 6.7 節）が入り、管理 UI のページと実行の呼び出し（第 13 章）に渡す map にはさらに `<<"Accounts">>` が入る。キーを小文字にする規則があるため、大文字を含む予約キーが環境変数から作られることはない。予約キーの値も binary なので、設定 map を binary → binary の辞書として読む書き方はそのまま通る。
 
 ```sh
 PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
 ```
 
 ```erlang
-#{<<"path">> => <<"/tmp/nostr-no-su-events.log">>}
+#{<<"path">> => <<"/tmp/nostr-no-su-events.log">>,
+  <<"DatabaseUrl">> => <<"postgres://nostr:nostr@postgres:5432/nostr_no_su">>}
 ```
 
 - **値が空文字列の変数は未設定として落とす。** docker compose は未設定の変数を空文字列として渡すため、この規則が無いと必須チェックが空文字列を通してしまう。
 - **キーは小文字にするので、大文字小文字だけが違う変数は衝突する。** `PLUGIN_X_PATH` と `PLUGIN_X_Path` を両方設定すると、プラグインからはどちらも `<<"path">>` になり、どちらの値が残るかは決まらない。片方だけを設定すること。
-- **一致する変数が 1 つも無ければ空の map を渡す。** 「設定なし」を別の形（`undefined` など）にはしないので、プラグイン側の場合分けは増えない。
+- **一致する変数が 1 つも無ければ、環境変数由来のキーの無い map を渡す**（予約キーだけが入る）。「設定なし」を別の形（`undefined` など）にはしないので、プラグイン側の場合分けは増えない。
 - **型変換は行わない。** 整数として読むべきか URL として読むべきかを本体は知らないため、変換はプラグインの責任である。失敗は次節の `{error, Reason}` で報告できる。
 - **docker compose の `environment:` は明示的な列挙である。** 同梱の `docker-compose.yml` に自分のプラグインの変数を書き足さないと、ホストで設定してもコンテナーには届かない。
 
@@ -254,7 +255,7 @@ PLUGIN_FILE_LOGGER_PATH=/tmp/nostr-no-su-events.log
 
 ### 6.3 受け取り方
 
-設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。表示の言語（第 13.1 節）はさらに 1 つ大きいアリティで受け取る。管理 UI のページと実行の呼び出し（第 13 章）だけは、渡す設定 map に予約キー `Accounts`（値はアカウントの一覧を JSON にした文字列）が加わる。
+設定を受け取る口は「**任意エクスポートのアリティ +1**」という 1 つの規則で足してある。表示の言語（第 13.1 節）はさらに 1 つ大きいアリティで受け取る。どの口の設定 map にも予約キー `DatabaseUrl`（第 6.7 節）が入り、管理 UI のページと実行の呼び出し（第 13 章）だけは、さらに予約キー `Accounts`（値はアカウントの一覧を JSON にした文字列）が加わる。
 
 | エクスポート | 本体の挙動 |
 | --- | --- |
@@ -304,7 +305,15 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 
 ### 6.6 接頭辞は隔離ではない
 
-接頭辞は、何がどのプラグインへ渡るのかをログと文書と `docker-compose.yml` の上で読めるようにするための規約である。**プラグインを他の環境変数から隔離する仕組みではない。** プラグインは本体と同じ VM で動くので `os:getenv/1` を自由に呼べる（第 1 章の信頼モデル）。ただし本体の秘密（`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD`）は起動時に読んだ後で環境から消すので、`os:getenv/1` では読めない。これも隔離ではない（第 1 章）。
+接頭辞は、何がどのプラグインへ渡るのかをログと文書と `docker-compose.yml` の上で読めるようにするための規約である。**プラグインを他の環境変数から隔離する仕組みではない。** プラグインは本体と同じ VM で動くので `os:getenv/1` を自由に呼べる（第 1 章の信頼モデル）。ただし本体の秘密（`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、`ADMIN_PASSWORD`）は起動時に読んだ後で環境から消すので、`os:getenv/1` では読めない。これも隔離ではない（第 1 章）。`DATABASE_URL` の値は予約キー `DatabaseUrl`（第 6.7 節）で全プラグインへ明示的に渡す。
+
+### 6.7 本体のデータベースの接続先（予約キー `DatabaseUrl`）
+
+本体は、自分のアカウントストアの接続先（`DATABASE_URL`。`DATABASE_URL_FILE` から読んだ値を含む）を、どの呼び出しの設定 map にも予約キー `<<"DatabaseUrl">>` で入れる。値は URL の binary である。
+
+- **値はパスワードを含む秘密である。** パスワードを含んだまま、ログ、理由の文字列、管理 UI のページに出さないこと（第 13.4 節）。
+- **本体は query 関数や接続プールを公開しない。** プラグインはこの URL で自分の接続プールを張り、自分のテーブルと移行を持つ（実例は `plugins-src/event_logger/`）。
+- 別のデータベースを使わせたいときは、自分の設定のキーで上書きを受け付けて優先すればよい（`event_logger` の `database_url`）。
 
 ## 7. バージョン方針
 
@@ -623,7 +632,7 @@ plugin_page_content(<<"status">>) ->
 
 Gleam の実装例は `plugins-src/event_logger/src/event_logger/page.gleam` にあり、秘密のマスク（第 13.4 節）の実例でもある。
 
-`plugin_page_content` と `plugin_page_action` に渡す設定 map には、これまでの環境変数由来のキーに加えて予約キー `Accounts` が入る。値はバンカーに登録したアカウントの一覧を JSON にした binary で、要素は `pubkey`（16 進）・`npub`・`label`（すべて文字列）のオブジェクトであり、登録が 0 件なら `[]` である。このキーは `plugin_pages` と `plugin_children` の呼び出しには渡らない。読み方は次のとおり（`json` は OTP 27 以降の標準モジュールで、`gleam_json` も同じものを使う）。
+`plugin_page_content` と `plugin_page_action` に渡す設定 map には、環境変数由来のキーと予約キー `DatabaseUrl`（第 6.7 節）に加えて予約キー `Accounts` が入る。値はバンカーに登録したアカウントの一覧を JSON にした binary で、要素は `pubkey`（16 進）・`npub`・`label`（すべて文字列）のオブジェクトであり、登録が 0 件なら `[]` である。このキーは `plugin_pages` と `plugin_children` の呼び出しには渡らない。読み方は次のとおり（`json` は OTP 27 以降の標準モジュールで、`gleam_json` も同じものを使う）。
 
 ```erlang
 Accounts = json:decode(maps:get(<<"Accounts">>, Config)).
