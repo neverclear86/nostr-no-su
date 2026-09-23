@@ -45,9 +45,9 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
-  if (a.observations !== undefined && !Array.isArray(a.observations)) throw new Error('args.observations は文字列の配列で渡す')
+  if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string'))) throw new Error('args.observations は文字列の配列で渡す')
 }
-const observations = (a.observations || []).map(String)
+const observations = a.observations || []
 const dry = a.dryRun === true
 
 // --- スキーマ -----------------------------------------------------------
@@ -235,7 +235,7 @@ function summaryMarkdown(totals, since) {
 
 - run の選別は journal の mtime による（\`since\` より前に始まって後に終わった run は丸ごと含まれる）
 - tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える
-- 集計に入らなかった events は \`log\` に label が出る。セッションの観察は \`args.observations\` で渡す`
+- 集計に入らなかった events は \`log\` に label が出る`
 }
 
 /** journal のパスから run id（`wf_*` のディレクトリ名）を取る。取れないパスはそのまま返す */
@@ -259,7 +259,7 @@ const P = {
 ${table}
 
 ### 学び
-${lessonList}
+${lessonList || '（無し）'}
 ${observations.length ? `
 ### セッションの観察（実行の外でセッションが観察した学び。ユーザーの指示を含む。学びと同じ基準で分類する）
 ${observations.map((o) => `- ${o}`).join('\n')}
@@ -305,11 +305,12 @@ if (reentry) {
 
 log(`${a.runs.length} 件の journal から集計する${dry ? '（dry run）' : ''}`)
 const agg = aggregate(a.runs, a.events)
-log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished}、学び ${agg.totals.lessonCount} 件`)
+log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished}、学び ${agg.totals.lessonCount} 件、セッションの観察 ${observations.length} 件`)
 
-if (dry || agg.totals.lessonCount === 0) {
-  log(dry ? 'dry run なので集計だけ返す' : '学びが 0 件なので issue を起票しない')
-  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びが 0 件', implementation: null }
+// 学びが 0 件でもセッションの観察があれば、観察だけを材料にふりかえりを立てる（観察を黙って落とさない）
+if (dry || (agg.totals.lessonCount === 0 && observations.length === 0)) {
+  log(dry ? 'dry run なので集計だけ返す' : '学びもセッションの観察も 0 件なので issue を起票しない')
+  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びも観察も 0 件', implementation: null }
 }
 
 const table = summaryMarkdown(agg.totals, a.since)

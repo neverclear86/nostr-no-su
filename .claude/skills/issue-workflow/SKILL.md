@@ -172,7 +172,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 }
 ```
 
-学びが 0 件なら issue は起票されない。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
+学びも `observations` も 0 件なら issue は起票されない（観察だけでも起票に進む）。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
 
 - `implementation.status: pr`：PR ができた。`pr` と `prUrl` をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
 - `rejected`：精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue に「## 精査」（`commentUrl`）を投稿して閉じた。`reason` を報告する
@@ -184,7 +184,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 1 件ごとに、issue 番号、tier、プランのラウンド数、PR 番号、PR レビューのラウンド数と条件の件数、最終確認の結果、マージのコミット、残した nit と後続の issue にした事項を短くまとめる。
 止まった issue は、どの段階で、何が決まらなかったかを書く。
-最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びが 0 件なら起票されない）。
+最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びも `observations` も 0 件なら起票されない）。
 
 ## dry run（スクリプトを変えたとき）
 
