@@ -1082,10 +1082,6 @@ fn role_status(
 /// URI のリレーが応答の発行先に現れたかを確かめる間隔。
 const publisher_poll_interval_ms = 100
 
-/// URI のリレーが応答の発行先に現れるのを待つ上限。超えたら `RelayNotConnected`
-/// を返す。
-const nostrconnect_publisher_timeout_ms = 15_000
-
 /// 解釈済みの `nostrconnect://` のリレーをバンカーの用途で登録し、応答の発行先に
 /// なるのを待ってから、署名者とクライアントのセッションを開いて `connect` の
 /// 応答を発行する。
@@ -1100,7 +1096,11 @@ pub fn connect_nostrconnect(
   )
   use _nil <- result.try(
     case
-      await_publisher(spec, request.relays, nostrconnect_publisher_timeout_ms)
+      await_publisher(
+        spec,
+        request.relays,
+        dashboard.nostrconnect_wait_seconds * 1000,
+      )
     {
       True -> Ok(Nil)
       False -> Error(admin.RelayNotConnected)

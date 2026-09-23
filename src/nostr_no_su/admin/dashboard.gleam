@@ -272,6 +272,9 @@ pub const revoke_segments = [sessions_segment, revoke_segment]
 /// クライアントの接続画面のパスセグメント。
 pub const connect_segments = [sessions_segment, "connect"]
 
+/// クライアントの接続の確認のページから、接続を送るパス。
+pub const connect_confirm_segments = [sessions_segment, "connect", "confirm"]
+
 /// プラグインの再有効化の POST 先のパスセグメント。
 pub const reenable_plugin_segments = [plugins_segment, "reenable"]
 
@@ -322,6 +325,10 @@ pub const plugin_name_field = "name"
 
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
+
+/// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。確認のページの
+/// 案内と `app.connect_nostrconnect` の待ちが同じ値を見る。
+pub const nostrconnect_wait_seconds = 15
 
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
@@ -2064,7 +2071,7 @@ fn relay_action_icon(action: RelayAction) -> Element(msg) {
 
 /// 署名者の表示。アカウント一覧にある署名者はラベルと省略した npub を縦に、無い署名者は
 /// 省略した 16 進の pubkey だけを出す。
-fn signer_value(signer: SignerName) -> Element(msg) {
+pub fn signer_value(signer: SignerName) -> Element(msg) {
   case signer {
     KnownSigner(label:, npub:) ->
       html.div([attribute.class("flex flex-col gap-0.5")], [
@@ -2855,7 +2862,7 @@ pub fn connect_form(
         uri_field(language, uri),
         signing_account_select(language, accounts, signer),
       ],
-      text(i18n.Connect),
+      text(i18n.ReviewConnection),
       view.PrimaryButton,
       view.InForm,
     ),

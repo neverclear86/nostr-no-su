@@ -581,7 +581,8 @@ JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理
 | GET / POST | `/approve/<token>` | 承認ページ / 承認 |
 | POST | `/deny/<token>` | 拒否 |
 | POST | `/sessions/revoke` | セッションの取り消し |
-| GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI での接続。303 でダッシュボードへ戻す |
+| GET / POST | `/sessions/connect` | クライアントの接続のフォーム / `nostrconnect://` URI の解釈と署名者の照合。確認のページを 200 で返し、セッションもリレーの接続も作らない |
+| POST | `/sessions/connect/confirm` | 確認のページからの接続。URI と署名者をもう一度確かめてから接続し、303 でダッシュボードへ戻す |
 | GET / POST | `/sessions/<signer>/<client>/permissions` | 承認済みのセッションの権限の編集フォーム / 保存。303 でダッシュボードへ戻す |
 | POST | `/plugins/reenable` | 無効になったプラグインの再有効化 |
 | GET | `/plugins/<プラグイン名>/<ページ>` | プラグインが供給するページ（プラグイン名は percent-encode する） |
@@ -673,7 +674,7 @@ nostr-no-su/
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
 │       ├── admin/relay_pages.gleam リレーのページの描画
-│       ├── admin/connect_pages.gleam クライアントの接続のページの描画
+│       ├── admin/connect_pages.gleam クライアントの接続のページと確認のページの描画
 │       ├── admin/session_pages.gleam セッションのページの描画
 │       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーのエンジンの定義を使う）
 │       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）

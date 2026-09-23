@@ -48,6 +48,9 @@ const declaredClient = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222
 const undeclaredClient = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
 const signerNsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re";
 const specNsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5";
+// 確認のページの場面に送る URI。クライアントの公開鍵は NIP-19 の仕様の値で、secret はダミー。
+const connectUri =
+  "nostrconnect://7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e?relay=wss%3A%2F%2Frelay.example&secret=preview-secret";
 const account = (action) => `${base}/accounts/${signer}/${action}`;
 const unreadablePubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444";
 const unreadableAccount = (action) => `${base}/accounts/${unreadablePubkey}/${action}`;
@@ -133,6 +136,16 @@ const shots = [
   { name: "62-connect-client-empty", url: `${empty}/sessions/connect` },
   { name: "63-connect-client-accounts-unavailable", url: `${unavailable}/sessions/connect` },
   { name: "64-connect-client-invalid-uri", url: `${base}/sessions/connect`, form: { uri: "not-a-uri", signer }, status: 400 },
+  {
+    name: "64b-connect-review",
+    url: `${base}/sessions/connect`,
+    form: {
+      uri: `${connectUri}&relay=ws%3A%2F%2Frelay.example.net&relay=wss%3A%2F%2Fnos.example&perms=sign_event%3A1%2Cnip44_encrypt&name=Example%20Client`,
+      signer,
+    },
+  },
+  { name: "64c-connect-review-unnamed", url: `${base}/sessions/connect`, form: { uri: connectUri, signer } },
+  { name: "64d-connect-review-not-connected", url: `${base}/sessions/connect/confirm`, form: { uri: connectUri, signer }, status: 503 },
   { name: "65-plugin-page", url: `${base}/plugins/console_logger/status` },
   { name: "66-plugin-page-disabled", url: `${base}/plugins/broken/status` },
   { name: "67-plugin-page-not-found", url: `${base}/plugins/console_logger/nope`, status: 404 },

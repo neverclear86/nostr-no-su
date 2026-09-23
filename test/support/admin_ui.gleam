@@ -335,6 +335,34 @@ pub fn pages(language: i18n.Language) -> List(String) {
         "",
         None,
       ),
+      connect_pages.connect_review_page(
+        language,
+        view.System,
+        [row],
+        connect_pages.ConnectReview(
+          uri: "nostrconnect://4567?relay=wss://a.example&relay=ws://b.example&secret=s",
+          signer: account_hex,
+          client: "4567456745674567456745674567456745674567456745674567456745674567",
+          client_name: Some("example"),
+          perms: "sign_event:1",
+          relays: ["wss://a.example", "ws://b.example"],
+        ),
+        None,
+      ),
+      connect_pages.connect_review_page(
+        language,
+        view.System,
+        [row],
+        connect_pages.ConnectReview(
+          uri: "nostrconnect://4567?relay=wss://a.example&secret=s",
+          signer: account_hex,
+          client: "4567456745674567456745674567456745674567456745674567456745674567",
+          client_name: None,
+          perms: "",
+          relays: ["wss://a.example"],
+        ),
+        Some(reason),
+      ),
       // 無宣言（既定）
       session_pages.session_permissions_page(
         language,
