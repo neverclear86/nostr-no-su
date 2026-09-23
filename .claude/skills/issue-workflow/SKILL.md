@@ -157,13 +157,14 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
    ```sh
    jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
    ```
-3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。
+3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す（`events` に label の形に合わない要素を足しても集計に入らず、`log` に「label が形に合わない」と出るだけである）。
 
 ```json
 {
   "runs": ["/tmp/.../wf_a22397c8-55c/journal.jsonl"],
   "events": { "/tmp/.../wf_a22397c8-55c/journal.jsonl": [ { "label": "Triage #157", "phase": "判定", "status": "plan", "tier": "light" } ] },
   "since": "2026-09-13T00:00:00Z",
+  "observations": ["撮影でユーザーの画面に Chrome の窓が開いた（user スコープの Playwright MCP）"],
   "base": "2f0a2ebff249f5b995a6647a1b0476549ede24d7",
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
   "repoDir": "/path/to/nostr-no-su",
@@ -171,7 +172,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 }
 ```
 
-学びが 0 件なら issue は起票されない。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
+学びも `observations` も 0 件なら issue は起票されない（観察だけでも起票に進む）。起票されると、同じ実行の中で `issue-retro-implementer`（fable）がその issue を精査して実装し、結果が `implementation` に返る。
 
 - `implementation.status: pr`：PR ができた。`pr` と `prUrl` をユーザーに渡す。マージは issue-workflow のレビューとマージには載せず、ユーザーが判断する
 - `rejected`：精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue に「## 精査」（`commentUrl`）を投稿して閉じた。`reason` を報告する
@@ -183,7 +184,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 1 件ごとに、issue 番号、tier、プランのラウンド数、PR 番号、PR レビューのラウンド数と条件の件数、最終確認の結果、マージのコミット、残した nit と後続の issue にした事項を短くまとめる。
 止まった issue は、どの段階で、何が決まらなかったかを書く。
-最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びが 0 件なら起票されない）。
+最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びも `observations` も 0 件なら起票されない）。
 
 ## dry run（スクリプトを変えたとき）
 
