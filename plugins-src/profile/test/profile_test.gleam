@@ -3,8 +3,9 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleeunit
+import profile
 import profile/page
 
 /// テストランナー。`gleam test` はこのモジュールの `main` から始まる。
@@ -517,6 +518,133 @@ pub fn store_takes_the_result_once_test() {
   assert page.submission(store_take("bb")) == None
 }
 
+/// 本体が無い（`fetch_events` が `undef` になる）環境では、全員が
+/// `the plugin API is not installed` の `Failed` になり、空のリストは `[]` を
+/// 返す。
+pub fn fetch_profiles_without_the_host_reports_the_reason_test() {
+  assert list.map(ffi_fetch_profiles(["aa", "bb"]), page.fetched)
+    == [
+      page.Failed("the plugin API is not installed"),
+      page.Failed("the plugin API is not installed"),
+    ]
+  assert ffi_fetch_profiles([]) == []
+}
+
+/// `fetch_events` の `{ok, Results}` の要素 1 件ずつを `NotFound` / `Found` /
+/// `Failed` に変換する。
+pub fn profiles_from_reply_reads_each_result_test() {
+  let reply =
+    dynamic.array([
+      atom("ok"),
+      dynamic.list([
+        dynamic.array([atom("ok"), atom("none")]),
+        dynamic.array([
+          atom("ok"),
+          dynamic.properties([
+            #(dynamic.string("content"), dynamic.string("{}")),
+            #(dynamic.string("created_at"), dynamic.int(7)),
+          ]),
+        ]),
+        dynamic.array([
+          atom("error"),
+          dynamic.string("account is not registered"),
+        ]),
+      ]),
+    ])
+  assert list.map(
+      ffi_profiles_from_reply(["aa", "bb", "cc"], reply),
+      page.fetched,
+    )
+    == [
+      page.NotFound,
+      page.Found("{}", 7),
+      page.Failed("account is not registered"),
+    ]
+}
+
+/// `{error, Reason}` は全員に同じ理由の `Failed` を返す。`{ok, Results}` の
+/// 件数が `Pubkeys` と違うときは全員に `the plugin API returned an unexpected
+/// value` の `Failed` を返す。
+pub fn profiles_from_reply_spreads_a_failure_to_every_pubkey_test() {
+  let failure =
+    dynamic.array([
+      atom("error"),
+      dynamic.string("no monitor relay is connected"),
+    ])
+  assert list.map(ffi_profiles_from_reply(["aa", "bb"], failure), page.fetched)
+    == [
+      page.Failed("no monitor relay is connected"),
+      page.Failed("no monitor relay is connected"),
+    ]
+  let short =
+    dynamic.array([
+      atom("ok"),
+      dynamic.list([dynamic.array([atom("ok"), atom("none")])]),
+    ])
+  assert list.map(ffi_profiles_from_reply(["aa", "bb"], short), page.fetched)
+    == [
+      page.Failed("the plugin API returned an unexpected value"),
+      page.Failed("the plugin API returned an unexpected value"),
+    ]
+}
+
+/// 期限内のキャッシュがあるアカウントはリレーに問い合わせず（本体が無くても
+/// `Found` が出る）、キャッシュに無いアカウントは取り直す。取り直しに失敗した
+/// アカウントはキャッシュされないので、直後の `cache_get` は `none` を返す。
+pub fn page_content_uses_the_cache_within_its_lifetime_test() {
+  let _started = store_start_link()
+  let _put = store_cache_put("c1", page.Found("{}", 1), 60_000)
+  assert profile.plugin_page_content(
+      dynamic.string("profile"),
+      config_with_accounts([
+        #("c1", "npub1c1", "C1"),
+        #("c2", "npub1c2", "C2"),
+      ]),
+    )
+    == page.content(
+      [
+        page.Account(pubkey: "c1", npub: "npub1c1", label: "C1"),
+        page.Account(pubkey: "c2", npub: "npub1c2", label: "C2"),
+      ],
+      [page.Found("{}", 1), page.Failed("the plugin API is not installed")],
+      [None, None],
+    )
+  assert store_cache_get(["c2"]) == [None]
+}
+
+/// 期限の過ぎたキャッシュ（TTL 0）は使われず、ページは取り直しに行く（本体が
+/// 無いので `Failed` になる）。
+pub fn page_content_fetches_again_after_the_lifetime_test() {
+  let _started = store_start_link()
+  let _put = store_cache_put("c3", page.Found("{}", 1), 0)
+  assert profile.plugin_page_content(
+      dynamic.string("profile"),
+      config_with_accounts([#("c3", "npub1c3", "C3")]),
+    )
+    == page.content(
+      [page.Account(pubkey: "c3", npub: "npub1c3", label: "C3")],
+      [page.Failed("the plugin API is not installed")],
+      [None],
+    )
+}
+
+/// 送信に成功すると、送った kind 0 と本体が付けた `created_at` が `Found` と
+/// してキャッシュに入り、結果は `profile_store` に保持される。
+pub fn finish_submission_caches_the_published_profile_test() {
+  let _started = store_start_link()
+  let published =
+    dynamic.properties([
+      #(dynamic.string("status"), dynamic.string("ok")),
+      #(dynamic.string("reason"), dynamic.string("")),
+      #(dynamic.string("created_at"), dynamic.int(123)),
+    ])
+  let _finished =
+    profile.finish_submission("c4", "{\"name\":\"x\"}", [], published)
+  assert store_cache_get(["c4"]) == [Some(page.Found("{\"name\":\"x\"}", 123))]
+  assert page.submission(store_take("c4"))
+    == Some(page.Succeeded("Profile updated."))
+}
+
 /// `profile_store:start_link/0` の `@external`。テストのモジュールに置く
 /// （実装時の条件 2）。
 @external(erlang, "profile_store", "start_link")
@@ -529,6 +657,57 @@ fn store_put(pubkey: String, result: Dynamic) -> Dynamic
 /// `profile_store:take/1` の `@external`。テストのモジュールに置く。
 @external(erlang, "profile_store", "take")
 fn store_take(pubkey: String) -> Dynamic
+
+/// `profile_store:cache_put/3` の `@external`。テストのモジュールに置く。
+@external(erlang, "profile_store", "cache_put")
+fn store_cache_put(
+  pubkey: String,
+  profile: page.Fetched,
+  ttl_ms: Int,
+) -> Dynamic
+
+/// `profile_store:cache_get/1` の `@external`。テストのモジュールに置く。
+@external(erlang, "profile_store", "cache_get")
+fn store_cache_get(pubkeys: List(String)) -> List(Option(page.Fetched))
+
+/// `profile_ffi:fetch_profiles/1` の `@external`。テストのモジュールに置く。
+@external(erlang, "profile_ffi", "fetch_profiles")
+fn ffi_fetch_profiles(pubkeys: List(String)) -> List(Dynamic)
+
+/// `profile_ffi:profiles_from_reply/2` の `@external`。テストのモジュールに
+/// 置く。
+@external(erlang, "profile_ffi", "profiles_from_reply")
+fn ffi_profiles_from_reply(
+  pubkeys: List(String),
+  reply: Dynamic,
+) -> List(Dynamic)
+
+/// `erlang:binary_to_atom/1`。`fetch_events` の戻り値の `{ok, none}` などを
+/// 組むのに使う。
+@external(erlang, "erlang", "binary_to_atom")
+fn atom(name: String) -> Dynamic
+
+/// `plugin_page_content` の `config`（`Accounts` にアカウントの配列の JSON
+/// 文字列を持つ `dynamic.properties`）。アカウントは `#(pubkey, npub, label)`
+/// の組で渡す。
+fn config_with_accounts(accounts: List(#(String, String, String))) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("Accounts"), dynamic.string(accounts_json(accounts))),
+  ])
+}
+
+/// `#(pubkey, npub, label)` の組のリストを `Accounts` の値（JSON 文字列）に
+/// する。
+fn accounts_json(accounts: List(#(String, String, String))) -> String {
+  json.array(accounts, fn(account) {
+    json.object([
+      #("pubkey", json.string(account.0)),
+      #("npub", json.string(account.1)),
+      #("label", json.string(account.2)),
+    ])
+  })
+  |> json.to_string
+}
 
 /// 記述の `sections` を取り出す。
 fn page_sections(description: Dynamic) -> List(Dynamic) {

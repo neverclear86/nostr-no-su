@@ -1,80 +1,56 @@
-%% 公開鍵ごとの取得の並行化と打ち切り、更新の送信（kind 0 の組み立てとイベントの
-%% 送信）、Gleam 側に日時の依存を足さないための時刻の整形。
+%% 本体の取得の口（fetch_events）の呼び出しと戻り値の変換、更新の送信（kind 0 の
+%% 組み立てとイベントの送信）、Gleam 側に日時の依存を足さないための時刻の整形。
 -module(profile_ffi).
--export([fetch_profiles/1, fetch_profiles/2, merge_content/2, publish_profile/2,
-         ok_atom/0, error_tuple/1, format_timestamp/1]).
+-export([fetch_profiles/1, profiles_from_reply/2, merge_content/2,
+         publish_profile/2, ok_atom/0, error_tuple/1, format_timestamp/1]).
 
-%% すべての取得を打ち切る総上限（ミリ秒）。fetch_event 1 回は、リレーへの問い合わせの
-%% 3.2 秒に加えてバンカーとリレーの一覧への問い合わせを含み、それらが応答しないときは
-%% 5 秒・15 秒まで延びる（docs/plugin-api.md 第 14.8 節）。plugin_page_content 1 回の
-%% 期限は既定 5 秒（同文書第 13.1 節）なので、逐次ではアカウント 1 件でもページが
-%% 503 になりうる。並行にし、この上限で打ち切って失敗を alert に落とすことで、
-%% アカウントの件数にもリレーの応答にもよらず 5 秒の内側でページを返す。
-%% 更新の送信の直前に取り直すときは、同じ呼び出しの中で送信も行うため、呼び出し側が
-%% 短い上限を渡す（profile.gleam の定数 action_fetch_timeout_ms）。
--define(FETCH_ALL_TIMEOUT_MS, 4000).
-
-%% 公開鍵の順に並んだ取得の結果のリスト。総上限は ?FETCH_ALL_TIMEOUT_MS。
+%% 公開鍵の順に並んだ kind 0 の取得の結果のリスト。本体の fetch_events を 1 回だけ
+%% 呼ぶので、リレー 1 本につき接続 1 本と REQ 1 件で全員を取る
+%% （docs/plugin-api.md 第 14.10 節）。Pubkeys が空なら呼ばない。本体がこの口を
+%% 持たないとき（古い本体、同文書第 14.5 節）の undef は publish_profile/2 と
+%% 同じく捕まえて理由に変える。
+fetch_profiles([]) ->
+    [];
 fetch_profiles(Pubkeys) ->
-    fetch_profiles(Pubkeys, ?FETCH_ALL_TIMEOUT_MS).
+    Reply =
+        try nostr_no_su@plugin_api:fetch_events(Pubkeys, 0)
+        catch error:undef -> {error, <<"the plugin API is not installed">>}
+        end,
+    profiles_from_reply(Pubkeys, Reply).
 
-%% 公開鍵の順に並んだ取得の結果のリスト。公開鍵ごとに spawn_monitor でワーカーを
-%% 起こし、総上限まで待って集める。上限に達した分は打ち切って失敗として扱う。
-fetch_profiles(Pubkeys, TimeoutMs) ->
-    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
-    Workers = [{spawn_monitor(fun() -> run_worker(P) end), P} || P <- Pubkeys],
-    [collect(Ref, Pid, Deadline) || {{Pid, Ref}, _P} <- Workers].
+%% fetch_events の戻り値を、Pubkeys と同じ順の結果の map（status / content /
+%% created_at / reason。すべて binary キー）のリストにする。{ok, Results} は
+%% 要素ごとに profile_result/1 で変換する。{error, Reason} は全員を同じ理由の
+%% 失敗にする。それ以外（Results の件数が Pubkeys と違うものを含む）は全員を
+%% the plugin API returned an unexpected value の失敗にする。
+profiles_from_reply(Pubkeys, {ok, Results})
+    when is_list(Results), length(Results) =:= length(Pubkeys) ->
+    [profile_result(Result) || Result <- Results];
+profiles_from_reply(Pubkeys, {error, Reason}) when is_binary(Reason) ->
+    [error_result(Reason) || _ <- Pubkeys];
+profiles_from_reply(Pubkeys, _Reply) ->
+    [error_result(<<"the plugin API returned an unexpected value">>)
+     || _ <- Pubkeys].
 
-%% ワーカー本体。fetch_one/1 が例外を投げたら、DOWN の理由をスタックトレース抜きの
-%% Class と Reason だけにして collect/3 に渡す（そのまま届くと ~p で数百文字に
-%% なりうる）。
-run_worker(Pubkey) ->
-    try fetch_one(Pubkey) of
-        Result -> exit({fetched, Result})
-    catch
-        Class:Reason:Stack -> exit({Class, Reason, Stack})
-    end.
-
-%% 公開鍵 1 件の取得。status / content / created_at / reason（すべて binary キー）
-%% の map にする。
-fetch_one(Pubkey) ->
-    case nostr_no_su@plugin_api:fetch_event(Pubkey, 0) of
-        {ok, none} ->
-            #{<<"status">> => <<"not_found">>, <<"content">> => <<>>,
-              <<"created_at">> => 0, <<"reason">> => <<>>};
-        {ok, #{<<"content">> := Content, <<"created_at">> := CreatedAt}} ->
-            #{<<"status">> => <<"found">>, <<"content">> => Content,
-              <<"created_at">> => CreatedAt, <<"reason">> => <<>>};
-        {error, Reason} ->
-            error_result(Reason)
-    end.
+%% fetch_events の要素 1 件（fetch_event の戻り値と同じ形）を結果の map にする。
+%% {ok, none} は not_found、content と created_at を持つ {ok, EventMap} は
+%% found、{error, Reason} は error、それ以外は the plugin API returned an
+%% unexpected value の error。
+profile_result({ok, none}) ->
+    #{<<"status">> => <<"not_found">>, <<"content">> => <<>>,
+      <<"created_at">> => 0, <<"reason">> => <<>>};
+profile_result({ok, #{<<"content">> := Content, <<"created_at">> := CreatedAt}}) ->
+    #{<<"status">> => <<"found">>, <<"content">> => Content,
+      <<"created_at">> => CreatedAt, <<"reason">> => <<>>};
+profile_result({error, Reason}) ->
+    error_result(Reason);
+profile_result(_Result) ->
+    error_result(<<"the plugin API returned an unexpected value">>).
 
 %% 失敗の map。
 error_result(Reason) ->
     #{<<"status">> => <<"error">>, <<"content">> => <<>>,
       <<"created_at">> => 0, <<"reason">> => Reason}.
-
-%% ワーカー 1 件の結果を待つ。残り時間を使い切ったら kill して打ち切りの理由を返す。
-%% demonitor(Ref, [flush]) で、打ち切ったワーカーの遅れて届く DOWN を捨て、以後も
-%% 届かないようにする（呼び出し元は使い捨てのプロセスなので、残っても次の呼び出しの
-%% メールボックスを汚さないが、明示的に片付ける）。ワーカーは spawn_monitor で
-%% 起こすので、このプロセスに DOWN 以外のメッセージは届かない。
-collect(Ref, Pid, Deadline) ->
-    Remaining = max(0, Deadline - erlang:monotonic_time(millisecond)),
-    receive
-        {'DOWN', Ref, process, _Pid, {fetched, Result}} ->
-            Result;
-        {'DOWN', Ref, process, _Pid, {Class, Reason, _Stack}} ->
-            error_result(
-                list_to_binary(io_lib:format("crashed (~0p:~0p)", [Class, Reason]))
-            );
-        {'DOWN', Ref, process, _Pid, Other} ->
-            error_result(list_to_binary(io_lib:format("crashed (~p)", [Other])))
-    after Remaining ->
-        exit(Pid, kill),
-        erlang:demonitor(Ref, [flush]),
-        error_result(<<"the profile fetch did not finish in time">>)
-    end.
 
 %% kind 0 の content（JSON の binary）に Fields の項目を差し替えた JSON の binary を
 %% 返す。未知のキーはそのまま残す。空の値（<<>>）のキーは消す（項目の削除）。
@@ -98,21 +74,26 @@ decode_object(Content) ->
         _:_ -> #{}
     end.
 
-%% 登録アカウントの名義で kind 0 を送る。本体がこの口を持たないとき（古い本体、
-%% docs/plugin-api.md 第 14.5 節）の undef も捕まえて理由に変える。
+%% 登録アカウントの名義で kind 0 を送る。戻り値は status / reason / created_at
+%% （すべて binary キー）の map で、created_at は成功のとき本体が付けた値、失敗の
+%% とき 0。本体がこの口を持たないとき（古い本体、docs/plugin-api.md 第 14.5 節）
+%% の undef も捕まえて理由に変える。
 publish_profile(Pubkey, Content) ->
     try
         case nostr_no_su@plugin_api:publish_event(
             Pubkey, #{<<"kind">> => 0, <<"tags">> => [], <<"content">> => Content}) of
-            {ok, _Event} ->
-                #{<<"status">> => <<"ok">>, <<"reason">> => <<>>};
+            {ok, #{<<"created_at">> := CreatedAt}} ->
+                #{<<"status">> => <<"ok">>, <<"reason">> => <<>>,
+                  <<"created_at">> => CreatedAt};
             {error, Reason} ->
-                #{<<"status">> => <<"error">>, <<"reason">> => Reason}
+                #{<<"status">> => <<"error">>, <<"reason">> => Reason,
+                  <<"created_at">> => 0}
         end
     catch
         error:undef ->
             #{<<"status">> => <<"error">>,
-              <<"reason">> => <<"the plugin API is not installed">>}
+              <<"reason">> => <<"the plugin API is not installed">>,
+              <<"created_at">> => 0}
     end.
 
 %% Gleam の Ok(Nil) に潰す atom。event_logger_ffi:ok_atom/0 と同じ役割。
