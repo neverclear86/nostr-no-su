@@ -395,11 +395,14 @@ fn broken_status_description() -> Dynamic {
 /// `plugins-src/event_logger/src/event_logger/page.gleam` が `event_section/3` で
 /// 組む節を写した固定の 2 件で、あちらを変えたらここも直す。どちらも登録アカウント
 /// `main account` が書いたイベントで、1 件目は本文を `text` ブロックに出し、2 件目
-/// （kind 10002）は本文が空なので本文のブロックを持たない。id と署名は実在の値を
-/// 避けた繰り返しのダミー。
+/// （kind 10002）は本文が空なので本文のブロックを持たない。見出しの時刻は、撮るたびに
+/// 同じ相対時刻（3 分前と 32 分前）になるよう、描く時刻から引いて組む。id と署名は
+/// 実在の値を避けた繰り返しのダミー。
 fn event_logger_timeline_description() -> Dynamic {
+  let now = time.now_seconds()
   let event = fn(
-    title: String,
+    kind: Int,
+    at: Int,
     id: String,
     tags: String,
     content: String,
@@ -409,8 +412,9 @@ fn event_logger_timeline_description() -> Dynamic {
       "" -> []
       _ -> [text_block(content)]
     }
-    section(
-      title,
+    section_with_meta(
+      "",
+      [kind_inline(kind), time_inline(at)],
       list.flatten([
         [
           pairs_block([
@@ -426,14 +430,16 @@ fn event_logger_timeline_description() -> Dynamic {
   }
   page_sections([
     event(
-      "kind 1 · 2026-09-20T09:41:00Z",
+      1,
+      now - 3 * 60,
       "eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555",
       "[[\"e\",\"dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666dddd6666\"]]",
       "hello, nostr!",
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ),
     event(
-      "kind 10002 · 2026-09-20T09:12:07Z",
+      10_002,
+      now - 32 * 60,
       "ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666",
       "[[\"e\",\"cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777cccc7777\"]]",
       "",
@@ -570,6 +576,20 @@ fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("section")),
     #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  ])
+}
+
+/// 見出しの題の後ろに `meta`（インラインのリスト）を並べる節。
+fn section_with_meta(
+  title: String,
+  meta: List(Dynamic),
+  blocks: List(Dynamic),
+) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("title"), dynamic.string(title)),
+    #(dynamic.string("meta"), dynamic.list(meta)),
     #(dynamic.string("blocks"), dynamic.list(blocks)),
   ])
 }
@@ -717,6 +737,22 @@ fn id_inline(text: String) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("id")),
     #(dynamic.string("text"), dynamic.string(text)),
+  ])
+}
+
+/// `kind` インライン。本体が kind の名前（無ければ番号）で出す。
+fn kind_inline(kind: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("kind")),
+    #(dynamic.string("value"), dynamic.int(kind)),
+  ])
+}
+
+/// `time` インライン。本体が相対時刻で出し、UTC の時刻を `title` に持たせる。
+fn time_inline(seconds: Int) -> Dynamic {
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("time")),
+    #(dynamic.string("value"), dynamic.int(seconds)),
   ])
 }
 
