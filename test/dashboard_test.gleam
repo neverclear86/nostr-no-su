@@ -371,9 +371,9 @@ pub fn sessions_show_perms_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    "<dt class=\"text-muted\">Permissions</dt><dd>"
+    "<div class=\"col-span-2\">"
       <> element.to_string(permission_view.chips(i18n.English, "sign_event:7"))
-      <> "</dd>",
+      <> "</div>",
   )
 }
 
@@ -400,12 +400,12 @@ pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
     )
   assert string.contains(
     sessions,
-    "<dt class=\"text-muted\">Permissions</dt><dd>"
+    "<div class=\"col-span-2\">"
       <> element.to_string(view.status_chip(
       view.ToneChip(view.Neutral),
       "No permissions requested",
     ))
-      <> "</dd>",
+      <> "</div>",
   )
 }
 
@@ -1582,6 +1582,91 @@ pub fn pending_card_draws_the_client_fingerprint_test() {
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
     "class=\"size-6 fp",
+  )
+}
+
+/// クライアントの公開鍵が `client` の承認済みセッション 1 件。
+fn session_row(client: String) -> dashboard.SessionRow {
+  dashboard.SessionRow(
+    signer: "abcd",
+    client:,
+    perms: "sign_event:7",
+    created_at: 1_788_253_200,
+    last_used_at: 1_789_276_354,
+  )
+}
+
+/// 英語のダッシュボードのうち、セッションの節（`id="sessions"`）以降の部分。
+fn sessions_part(snapshot: dashboard.Snapshot) -> String {
+  let assert Ok(#(_, part)) =
+    string.split_once(
+      dashboard.render(i18n.English, view.System, snapshot),
+      "id=\"sessions\"",
+    )
+  part
+}
+
+/// セッションの節の見出しは、件数のピルの後に 1 行の説明を出す。一覧を得られないときは件数を出さず、
+/// 説明は出す。
+pub fn sessions_heading_shows_the_count_and_the_description_test() {
+  let description =
+    "<p class=\"text-sm text-muted sm:pl-10\">Clients can request signing and encryption within the permissions shown here.</p>"
+  let listed =
+    sessions_part(
+      dashboard.Snapshot(
+        ..states(),
+        sessions: Ok([session_row("ef01"), session_row("ef02")]),
+      ),
+    )
+  assert string.contains(
+    listed,
+    "Approved sessions</h2><span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span></div>"
+      <> description,
+  )
+
+  let unavailable =
+    sessions_part(
+      dashboard.Snapshot(..states(), sessions: Error(i18n.Untranslated("boom"))),
+    )
+  assert string.contains(
+    unavailable,
+    "Approved sessions</h2></div>" <> description,
+  )
+}
+
+/// セッションの行は、64 桁の 16 進のクライアントの公開鍵なら色付きの指紋を描き、指紋を求められない値なら
+/// 描かない。
+pub fn session_row_draws_the_client_fingerprint_test() {
+  let client = string.repeat("0123456789abcdef", 4)
+  let assert Ok(mark) = fingerprint.from_pubkey(client)
+  assert string.contains(
+    sessions_part(
+      dashboard.Snapshot(..states(), sessions: Ok([session_row(client)])),
+    ),
+    element.to_string(fingerprint.svg(mark, fingerprint.Colored, "size-6")),
+  )
+  assert !string.contains(
+    sessions_part(
+      dashboard.Snapshot(..states(), sessions: Ok([session_row("ef01")])),
+    ),
+    "class=\"size-6 fp",
+  )
+}
+
+/// セッションの行は、幅 720px 以下で 4 段に、721px 以上で 3 列 2 段に組み替える格子とボタンの升の
+/// クラスを持つ。クラスの照合だけで、幅の切り替えそのものはブラウザーで確かめる。
+pub fn session_row_regroups_at_720px_test() {
+  let part =
+    sessions_part(
+      dashboard.Snapshot(..states(), sessions: Ok([session_row("ef01")])),
+    )
+  assert string.contains(
+    part,
+    "class=\"grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 min-[721px]:grid-cols-[auto_minmax(0,1fr)_auto]\"",
+  )
+  assert string.contains(
+    part,
+    "class=\"col-span-2 flex flex-wrap justify-end gap-2 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0\"",
   )
 }
 
