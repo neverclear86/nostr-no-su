@@ -3,6 +3,7 @@
 //// 節の記述 map は `test/plugin_view_test.gleam` と同じ形（`dynamic.properties` /
 //// `dynamic.string` / `dynamic.list`）で組む。
 
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{Some}
@@ -93,6 +94,52 @@ pub fn two_pages_show_tabs_with_the_current_one_active_test() {
     "<a class=\"tab\" href=\"/plugins/example/settings\">"
       <> "<span lang=\"en\">Settings</span></a>",
   )
+}
+
+/// 表示の言語を受け取るプラグインのページ 2 件を持つ行。
+fn localized_row() -> dashboard.PluginRow {
+  dashboard.PluginRow("example", Some(plugin_runner.Running), pages: [
+    localized_status_page(),
+    plugin.LocalizedPage(
+      key: "settings",
+      titles: dict.from_list([#("en", "Settings"), #("ja", "設定")]),
+    ),
+  ])
+}
+
+/// `localized_row` の 1 件目のページ。
+fn localized_status_page() -> plugin.PluginPage {
+  plugin.LocalizedPage(
+    key: "status",
+    titles: dict.from_list([#("en", "Status"), #("ja", "状態")]),
+  )
+}
+
+/// 表示の言語を受け取るプラグインのページは、タブの表示名と節の包みを表示の言語の
+/// `lang` で出す。
+pub fn localized_plugin_page_is_in_the_display_language_test() {
+  let japanese =
+    plugin_pages.plugin_page(
+      i18n.Japanese,
+      view.System,
+      localized_row(),
+      localized_status_page(),
+      [section_("Queue")],
+    )
+  assert string.contains(japanese, "<span lang=\"ja\">状態</span>")
+  assert string.contains(japanese, "<span lang=\"ja\">設定</span>")
+  assert string.contains(japanese, "<div lang=\"ja\">")
+  assert !string.contains(japanese, "<div lang=\"en\">")
+  let english =
+    plugin_pages.plugin_page(
+      i18n.English,
+      view.System,
+      localized_row(),
+      localized_status_page(),
+      [section_("Queue")],
+    )
+  assert string.contains(english, "<span lang=\"en\">Status</span>")
+  assert string.contains(english, "<div lang=\"en\">")
 }
 
 /// 節が 0 件のときは、ページ全体の空の状態の文を出す。

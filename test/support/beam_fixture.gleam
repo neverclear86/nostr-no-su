@@ -18,6 +18,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
+import gleam/list
 import gleam/string
 import support/erl.{unique_integer}
 
@@ -244,6 +245,35 @@ plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_pages() -> " <> pages_body <> ".
 plugin_page_content(_Key) -> " <> content_body <> ".
+handle_event(Event) ->
+    persistent_term:put(?MODULE, Event),
+    ok.
+"
+}
+
+/// `plugin_pages/<pages_arity>` と `plugin_page_content/<content_arity>` を持つ
+/// プラグインの Erlang ソース。`plugin_pages/2` の第 2 引数は変数 `Language` で、
+/// `pages_body`（Erlang の式）から参照できる。`plugin_page_content` は空の
+/// `sections` を返す。表示の言語を受け取るエクスポートの組み合わせとキーの照合の
+/// 検証に使う。
+pub fn ui_source(
+  module: String,
+  name: String,
+  pages_arity: Int,
+  content_arity: Int,
+  pages_body: String,
+) -> String {
+  let pages_params = list.take(["_Config", "Language"], pages_arity)
+  let content_params =
+    list.take(["_Key", "_Config", "_Language"], content_arity)
+  "-module(" <> module <> ").
+-export([plugin_api_version/0, plugin_name/0, plugin_pages/" <> int.to_string(
+    pages_arity,
+  ) <> ", plugin_page_content/" <> int.to_string(content_arity) <> ", handle_event/1]).
+plugin_api_version() -> 1.
+plugin_name() -> <<\"" <> name <> "\">>.
+plugin_pages(" <> string.join(pages_params, ", ") <> ") -> " <> pages_body <> ".
+plugin_page_content(" <> string.join(content_params, ", ") <> ") -> #{<<\"sections\">> => []}.
 handle_event(Event) ->
     persistent_term:put(?MODULE, Event),
     ok.

@@ -3,6 +3,7 @@
 //// 権限の編集、クライアントの接続、プラグインの再有効化とページ、承認と拒否、リレーの
 //// 追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
 
+import gleam/dynamic
 import gleam/erlang/process
 
 import gleam/http
@@ -451,6 +452,42 @@ pub fn plugin_page_for_an_unknown_plugin_or_page_is_not_found_test() {
 
   let unknown_page = get(context(), "/plugins/console_logger/nope")
   assert unknown_page.status == 404
+}
+
+/// ページの記述の取得には表示の言語が渡る。スタブは受け取った言語のコードを節の
+/// 見出しに写す。
+pub fn plugin_page_passes_the_display_language_test() {
+  let echoing =
+    admin.Context(
+      ..context(),
+      plugin_page_content: fn(_name, _key, language, _accounts) {
+        Ok(
+          dynamic.properties([
+            #(
+              dynamic.string("sections"),
+              dynamic.list([
+                dynamic.properties([
+                  #(dynamic.string("type"), dynamic.string("section")),
+                  #(
+                    dynamic.string("title"),
+                    dynamic.string("language:" <> i18n.code(language)),
+                  ),
+                  #(dynamic.string("blocks"), dynamic.list([])),
+                ]),
+              ]),
+            ),
+          ]),
+        )
+      },
+    )
+  let japanese =
+    simulate.request(http.Get, "/plugins/console_logger/status")
+    |> in_japanese
+    |> with_credentials("admin", password)
+    |> admin.handle_request(echoing, _)
+  assert string.contains(simulate.read_body(japanese), "language:ja")
+  let english = get(echoing, "/plugins/console_logger/status")
+  assert string.contains(simulate.read_body(english), "language:en")
 }
 
 /// ページの中身の呼び出しが失敗すれば 503 で、理由を英語のまま出す。

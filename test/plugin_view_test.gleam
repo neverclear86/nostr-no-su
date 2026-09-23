@@ -204,6 +204,7 @@ fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
 fn context() -> plugin_view.Context {
   Context(
     language: i18n.English,
+    plugin_language: "en",
     page_href: fn(key) {
       case key {
         "settings" -> Ok("/plugins/example/settings")
@@ -401,6 +402,7 @@ pub fn empty_pairs_translated_line_has_display_language_test() {
   let japanese_context =
     Context(
       language: i18n.Japanese,
+      plugin_language: "en",
       page_href: fn(_) { Error(Nil) },
       form_action: "/plugins/example/settings",
     )

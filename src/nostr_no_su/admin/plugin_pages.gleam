@@ -38,7 +38,7 @@ pub fn plugin_page(
     view.SwitchReturningTo(dashboard.plugin_page_path(plugin.name, page.key)),
     view.NoRefresh,
     list.flatten([
-      [source_row(language, plugin), tabs(plugin, page)],
+      [source_row(language, plugin), tabs(language, plugin, page)],
       disabled_alert(language, plugin),
       sections(language, plugin, page, raw_sections),
       [view.back_link(language)],
@@ -63,9 +63,11 @@ fn source_row(language: Language, plugin: dashboard.PluginRow) -> Element(msg) {
   ])
 }
 
-/// 供給するページが 2 つ以上のときだけ出すタブ。表示名はプラグイン由来の英語なので
-/// `view.untranslated` に包む。
+/// 供給するページが 2 つ以上のときだけ出すタブ。表示名は `plugin.title_in` で表示の
+/// 言語のものを引き、`plugin.text_language` の `lang` を持つ `span`
+/// （`view.in_language`）に包む。
 fn tabs(
+  language: Language,
   plugin: dashboard.PluginRow,
   current: plugin.PluginPage,
 ) -> Element(msg) {
@@ -74,13 +76,14 @@ fn tabs(
     pages ->
       html.nav(
         [attribute.class("tabs tabs-border")],
-        list.map(pages, tab_link(plugin.name, current, _)),
+        list.map(pages, tab_link(language, plugin.name, current, _)),
       )
   }
 }
 
 /// タブ 1 件。現在のページには `tab-active` と `aria-current="page"` を付ける。
 fn tab_link(
+  language: Language,
   plugin_name: String,
   current: plugin.PluginPage,
   page: plugin.PluginPage,
@@ -94,7 +97,13 @@ fn tab_link(
     ]
     False -> [attribute.href(href), attribute.class("tab")]
   }
-  html.a(attrs, [view.untranslated(page.title)])
+  let code = i18n.code(language)
+  html.a(attrs, [
+    view.in_language(
+      plugin.text_language(page, code),
+      plugin.title_in(page, code),
+    ),
+  ])
 }
 
 /// `Disabled` のときだけ、イベントを処理していない旨の注意を 1 要素のリストで返す。
@@ -152,8 +161,9 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
   ])
 }
 
-/// 節の描画に渡す文脈。`link` ブロックはそのプラグインのページ一覧にあるキーだけを
-/// 解決する。`form_action` は今開いているページ自身への宛先である。
+/// 節の描画に渡す文脈。プラグイン由来の文字列の言語は `plugin.text_language` で
+/// 決める。`link` ブロックはそのプラグインのページ一覧にあるキーだけを解決する。
+/// `form_action` は今開いているページ自身への宛先である。
 fn context(
   language: Language,
   plugin: dashboard.PluginRow,
@@ -161,6 +171,7 @@ fn context(
 ) -> plugin_view.Context {
   plugin_view.Context(
     language:,
+    plugin_language: plugin.text_language(page, i18n.code(language)),
     page_href: fn(key) {
       case list.any(plugin.pages, fn(page) { page.key == key }) {
         True -> Ok(dashboard.plugin_page_href(plugin.name, key))

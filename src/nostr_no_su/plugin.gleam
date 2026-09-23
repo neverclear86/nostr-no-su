@@ -38,12 +38,15 @@
 ////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
 ////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
 ////   プラグインを読み込まない。
-//// - 任意エクスポート `plugin_pages/0` `plugin_pages/1`（ページの一覧）と
-////   `plugin_page_content/1` `plugin_page_content/2`（1 ページの記述）が
-////   あれば、そのプラグインは管理 UI のページを供給できる。どちらも無ければ
-////   UI を持たない。片方だけでは読み込まない（`plugin_children` の不備と
-////   同じ扱い）。`/1` `/2` があればそちらを優先し、設定 map を渡す。
-////   `plugin_pages` は読み込み時に 1 度だけ検証するが、`plugin_page_content`
+//// - 任意エクスポート `plugin_pages/0` `/1` `/2`（ページの一覧）と
+////   `plugin_page_content/1` `/2` `/3`（1 ページの記述）があれば、そのプラグインは
+////   管理 UI のページを供給できる。どちらも無ければ UI を持たない。片方だけでは
+////   読み込まない（`plugin_children` の不備と同じ扱い）。アリティの大きいほうを
+////   優先し、設定 map を渡す。`plugin_pages/2` と `plugin_page_content/3` は最後の
+////   引数に表示の言語のコード（`en` か `ja` の binary）を受け取る口で、片方だけでは
+////   読み込まない。`plugin_pages/2` は読み込み時に `page_languages` の言語ごとに
+////   呼ぶ。
+////   `plugin_pages` は読み込み時にだけ呼んで検証するが、`plugin_page_content`
 ////   はページの表示のたびに期限付きで呼ぶ（起動時のメタデータの呼び出しには
 ////   含まれない）。さらに任意エクスポート `plugin_page_action/2`
 ////   `plugin_page_action/3` があれば、そのページはフォームの送信を受け取れる。
@@ -62,7 +65,7 @@
 //// - モジュールの読み込み（`code:ensure_loaded/1`）とメタデータの呼び出し
 ////   （`plugin_api_version/0`、`plugin_min_host_version/0`、
 ////   `plugin_required_versions/0`、`plugin_name/0`、`plugin_children/0,1`、
-////   `plugin_pages/0,1`）は `main` のプロセスで起動時に
+////   `plugin_pages/0,1,2`）は `main` のプロセスで起動時に
 ////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms`
 ////   で打ち切る。戻らない
 ////   `-on_load` や戻らないメタデータの関数を持つプラグインは理由の 1 行で
@@ -100,6 +103,11 @@ import nostr_no_su/plugin_config
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
 pub const api_version: Int = 1
+
+/// 読み込み時に `plugin_pages/2` を呼ぶ言語のコード。管理 UI の表示の言語
+/// （`admin/i18n` の `languages`）と同じ並びで、先頭の言語の一覧をページのキーの
+/// 基準にする。
+pub const page_languages: List(String) = ["en", "ja"]
 
 /// メタデータ用のエクスポート 1 回の呼び出しを待つ上限（ミリ秒）で、`main` が
 /// 渡す既定値。モジュールの読み込みとメタデータの関数は即座に戻る約束で、これは
@@ -160,21 +168,48 @@ pub type Plugin {
   )
 }
 
-/// プラグインが供給するページ 1 つの識別。`key` は URL の path 片、`title` は
-/// プラグイン由来の英語の表示名。
+/// プラグインが供給するページ 1 つの識別。`key` は URL の path 片で、表示名は
+/// `title_in` で引く。
 pub type PluginPage {
+  /// 表示の言語を受け取らないプラグインのページ。`title` はプラグイン由来の
+  /// 英語の表示名。
   PluginPage(key: String, title: String)
+  /// `plugin_pages/2` と `plugin_page_content/3` を持つプラグインのページ。
+  /// `titles` は `page_languages` の言語のコードから表示名への対応で、ページの
+  /// 記述もその言語で返る。
+  LocalizedPage(key: String, titles: Dict(String, String))
+}
+
+/// `language`（言語のコード）で出すページの表示名。`PluginPage` は言語によらず
+/// `title`、`LocalizedPage` はその言語の表示名で、対応が無ければ `key` を返す。
+pub fn title_in(page: PluginPage, language: String) -> String {
+  case page {
+    PluginPage(title:, ..) -> title
+    LocalizedPage(key:, titles:) ->
+      dict.get(titles, language) |> result.unwrap(key)
+  }
+}
+
+/// 表示の言語が `language` のとき、そのページのプラグイン由来の文字列が
+/// 書かれている言語のコード。`PluginPage` は `"en"`、`LocalizedPage` は
+/// `language`。
+pub fn text_language(page: PluginPage, language: String) -> String {
+  case page {
+    PluginPage(..) -> "en"
+    LocalizedPage(..) -> language
+  }
 }
 
 /// プラグインが供給する管理 UI。`pages` は読み込み時に検証した一覧（1 件以上、
-/// キーは重複しない）。`content` はページのキーと登録アカウントの一覧を受け取り、
-/// そのページの記述を期限付きで取る。失敗は 1 行の理由。`action` は
+/// キーは重複しない）。`content` はページのキーと表示の言語のコードと登録
+/// アカウントの一覧を受け取り、そのページの記述を期限付きで取る。言語のコードは
+/// 言語を受け取るプラグインにだけ渡る。失敗は 1 行の理由。`action` は
 /// `plugin_page_action` を持たなければ `None`。`Ok(Nil)` は `ok`、`Error` は
 /// `{error, Reason}` か呼び出しの失敗の理由。
 pub type PluginUi {
   PluginUi(
     pages: List(PluginPage),
-    content: fn(String, List(plugin_config.PageAccount)) ->
+    content: fn(String, String, List(plugin_config.PageAccount)) ->
       Result(Dynamic, String),
     action: Option(
       fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
@@ -622,12 +657,14 @@ fn children(
   })
 }
 
-/// 任意エクスポート `plugin_pages/0` `/1`、`plugin_page_content/1` `/2`、
+/// 任意エクスポート `plugin_pages/0` `/1` `/2`、`plugin_page_content/1` `/2` `/3`、
 /// `plugin_page_action/2` `/3` の有無を見て、管理 UI の供給を読み込む。一覧も
 /// 中身も無ければ `Ok(None)`。実行だけを持つモジュールは `Error` で読み込まない。
 /// 一覧か中身の片方だけなら `Error`（`read_children` と同じく、症状を真の原因に
-/// 近い場所で報告するため）。両方あれば `plugin_pages` を期限付きで呼んで一覧を
-/// 検証する。`/1` `/2` を優先して設定 map を渡す。実行は任意で、無ければ
+/// 近い場所で報告するため）。表示の言語を受け取る `plugin_pages/2` と
+/// `plugin_page_content/3` も片方だけなら `Error`。両方あれば一覧を期限付きで
+/// 呼んで検証する。アリティの大きいほうを優先して設定 map を渡し、
+/// `plugin_pages/2` は `localized_pages` で言語ごとに呼ぶ。実行は任意で、無ければ
 /// `action: None`。
 fn read_ui(
   module: Atom,
@@ -636,60 +673,69 @@ fn read_ui(
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(Option(PluginUi), String) {
-  let has_pages_0 = has_export(module, pages_export_name, 0)
-  let has_pages_1 = has_export(module, pages_export_name, 1)
-  let has_content_1 = has_export(module, page_content_export_name, 1)
-  let has_content_2 = has_export(module, page_content_export_name, 2)
-  let has_action_2 = has_export(module, page_action_export_name, 2)
-  let has_action_3 = has_export(module, page_action_export_name, 3)
-  case has_pages_0 || has_pages_1, has_content_1 || has_content_2 {
-    False, False ->
-      case has_action_2 || has_action_3 {
-        False -> Ok(None)
-        True ->
+  let pages_arity = highest_arity(module, pages_export_name, [2, 1, 0])
+  let content_arity = highest_arity(module, page_content_export_name, [3, 2, 1])
+  let action_arity = highest_arity(module, page_action_export_name, [3, 2])
+  let no_pages = " but no " <> pages_export_name <> "/0, /1 or /2"
+  case pages_arity, content_arity {
+    None, None ->
+      case action_arity {
+        None -> Ok(None)
+        Some(arity) ->
           Error(prefix(
             name,
-            action_label(has_action_3)
-              <> " but no "
-              <> pages_export_name
-              <> "/0 or /1",
+            export_label(page_action_export_name, arity) <> no_pages,
           ))
       }
-    False, True ->
+    None, Some(arity) ->
       Error(prefix(
         name,
-        content_label(has_content_2)
-          <> " but no "
-          <> pages_export_name
-          <> "/0 or /1",
+        export_label(page_content_export_name, arity) <> no_pages,
       ))
-    True, False ->
+    Some(arity), None ->
       Error(prefix(
         name,
-        pages_label(has_pages_1)
+        export_label(pages_export_name, arity)
           <> " but no "
           <> page_content_export_name
-          <> "/1 or /2",
+          <> "/1, /2 or /3",
       ))
-    True, True -> {
-      let label = pages_label(has_pages_1)
-      let args = case has_pages_1 {
-        True -> [config_map]
-        False -> []
-      }
-      use value <- result.try(call_export(
-        module,
+    Some(2), Some(arity) if arity != 3 ->
+      Error(prefix(
         name,
-        pages_export_name,
-        args,
-        call_timeout_ms,
+        export_label(pages_export_name, 2)
+          <> " but no "
+          <> export_label(page_content_export_name, 3),
       ))
-      use pages <- result.try(decode_pages(value, name, label))
-      let action = case has_action_2 || has_action_3 {
-        False -> None
-        True ->
-          Some(action_of(module, name, config, call_timeout_ms, has_action_3))
-      }
+    Some(arity), Some(3) if arity != 2 ->
+      Error(prefix(
+        name,
+        export_label(page_content_export_name, 3)
+          <> " but no "
+          <> export_label(pages_export_name, 2),
+      ))
+    Some(pages_arity), Some(content_arity) -> {
+      use pages <- result.try(case pages_arity {
+        2 -> localized_pages(module, name, config_map, call_timeout_ms)
+        _ -> {
+          let args = case pages_arity {
+            1 -> [config_map]
+            _ -> []
+          }
+          use value <- result.try(call_export(
+            module,
+            name,
+            pages_export_name,
+            args,
+            call_timeout_ms,
+          ))
+          decode_pages(
+            value,
+            name,
+            export_label(pages_export_name, pages_arity),
+          )
+        }
+      })
       Ok(
         Some(PluginUi(
           pages: pages,
@@ -698,38 +744,96 @@ fn read_ui(
             name,
             config,
             call_timeout_ms,
-            has_content_2,
+            content_arity,
           ),
-          action: action,
+          action: option.map(action_arity, fn(arity) {
+            action_of(module, name, config, call_timeout_ms, arity)
+          }),
         )),
       )
     }
   }
 }
 
-/// `plugin_pages` の理由の文字列に出すラベル。`/1` があればそちらを優先する。
-fn pages_label(has_pages_1: Bool) -> String {
-  case has_pages_1 {
-    True -> pages_export_name <> "/1"
-    False -> pages_export_name <> "/0"
-  }
+/// `arities`（大きい順に並べる）のうち、モジュールがエクスポートする最初の
+/// アリティ。どれも無ければ `None`。
+fn highest_arity(
+  module: Atom,
+  function: String,
+  arities: List(Int),
+) -> Option(Int) {
+  arities
+  |> list.find(fn(arity) { has_export(module, function, arity) })
+  |> option.from_result
 }
 
-/// `plugin_page_content` の理由の文字列に出すラベル。`/2` があればそちらを
-/// 優先する。
-fn content_label(has_content_2: Bool) -> String {
-  case has_content_2 {
-    True -> page_content_export_name <> "/2"
-    False -> page_content_export_name <> "/1"
-  }
+/// 理由の文字列に出す `関数/アリティ`。
+fn export_label(function: String, arity: Int) -> String {
+  function <> "/" <> int.to_string(arity)
 }
 
-/// `plugin_page_action` の理由の文字列に出すラベル。`/3` があればそちらを
-/// 優先する。
-fn action_label(has_action_3: Bool) -> String {
-  case has_action_3 {
-    True -> page_action_export_name <> "/3"
-    False -> page_action_export_name <> "/2"
+/// `plugin_pages/2` を `page_languages` の言語ごとに期限付きで呼んで
+/// `decode_pages` で検証し、キーごとに言語から表示名への対応を持つ
+/// `LocalizedPage` の一覧にまとめる。キーの並びが先頭の言語の一覧と食い違う
+/// 言語があれば `Error`。
+fn localized_pages(
+  module: Atom,
+  name: String,
+  config_map: Dynamic,
+  call_timeout_ms: Int,
+) -> Result(List(PluginPage), String) {
+  let label = export_label(pages_export_name, 2)
+  use lists <- result.try(
+    list.try_map(page_languages, fn(language) {
+      use value <- result.try(call_export(
+        module,
+        name,
+        pages_export_name,
+        [config_map, dynamic.string(language)],
+        call_timeout_ms,
+      ))
+      use pages <- result.map(decode_pages(value, name, label))
+      #(language, pages)
+    }),
+  )
+  case lists {
+    // page_languages は空でないので、この腕は通らない
+    [] -> Ok([])
+    [#(base_language, base), ..rest] -> {
+      let keys = list.map(base, fn(page) { page.key })
+      use _ <- result.try(
+        list.try_each(rest, fn(entry) {
+          case list.map(entry.1, fn(page) { page.key }) == keys {
+            True -> Ok(Nil)
+            False ->
+              Error(prefix(
+                name,
+                label
+                  <> ": page keys for \""
+                  <> entry.0
+                  <> "\" differ from \""
+                  <> base_language
+                  <> "\"",
+              ))
+          }
+        }),
+      )
+      let titles =
+        list.map(base, fn(page) {
+          [#(base_language, title_in(page, base_language))]
+        })
+      let titles =
+        list.fold(rest, titles, fn(acc, entry) {
+          list.map2(acc, entry.1, fn(pairs, page) {
+            [#(entry.0, title_in(page, entry.0)), ..pairs]
+          })
+        })
+      Ok(
+        list.map2(keys, titles, fn(key, pairs) {
+          LocalizedPage(key:, titles: dict.from_list(pairs))
+        }),
+      )
+    }
   }
 }
 
@@ -854,35 +958,43 @@ fn required_page_field(
   }
 }
 
-/// ページの中身を取得するクロージャーを組み立てる。`/2` があれば、呼び出しの
-/// たびに `config` と渡された `accounts` から `plugin_config.page_map` を組んで
-/// 渡す。失敗（例外・期限超過）は `call_export` がそのまま 1 行の理由にする。
+/// ページの中身を取得するクロージャーを組み立てる。`arity` は
+/// `plugin_page_content` のアリティで、`2` と `3` では呼び出しのたびに `config` と
+/// 渡された `accounts` から `plugin_config.page_map` を組んで渡し、`3` ではさらに
+/// 言語のコードを渡す。失敗（例外・期限超過）は `call_export` がそのまま 1 行の
+/// 理由にする。
 fn content_of(
   module: Atom,
   name: String,
   config: plugin_config.Config,
   call_timeout_ms: Int,
-  has_content_2: Bool,
-) -> fn(String, List(plugin_config.PageAccount)) -> Result(Dynamic, String) {
-  fn(key: String, accounts: List(plugin_config.PageAccount)) {
-    let args = case has_content_2 {
-      True -> [dynamic.string(key), plugin_config.page_map(config, accounts)]
-      False -> [dynamic.string(key)]
+  arity: Int,
+) -> fn(String, String, List(plugin_config.PageAccount)) ->
+  Result(Dynamic, String) {
+  fn(key: String, language: String, accounts: List(plugin_config.PageAccount)) {
+    let args = case arity {
+      3 -> [
+        dynamic.string(key),
+        plugin_config.page_map(config, accounts),
+        dynamic.string(language),
+      ]
+      2 -> [dynamic.string(key), plugin_config.page_map(config, accounts)]
+      _ -> [dynamic.string(key)]
     }
     call_export(module, name, page_content_export_name, args, call_timeout_ms)
   }
 }
 
-/// フォームの送信を実行するクロージャーを組み立てる。`/3` があれば、呼び出しの
-/// たびに `config` と渡された `accounts` から `plugin_config.page_map` を組んで
-/// 渡す。送られた値は binary キー・binary 値の map にする。戻り値は
-/// `decode_action_result` で検証する。
+/// フォームの送信を実行するクロージャーを組み立てる。`arity` は
+/// `plugin_page_action` のアリティで、`3` では呼び出しのたびに `config` と渡された
+/// `accounts` から `plugin_config.page_map` を組んで渡す。送られた値は binary
+/// キー・binary 値の map にする。戻り値は `decode_action_result` で検証する。
 fn action_of(
   module: Atom,
   name: String,
   config: plugin_config.Config,
   call_timeout_ms: Int,
-  has_action_3: Bool,
+  arity: Int,
 ) -> fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
   Result(Nil, String) {
   fn(
@@ -894,13 +1006,13 @@ fn action_of(
       values
       |> list.map(fn(pair) { #(dynamic.string(pair.0), dynamic.string(pair.1)) })
       |> dynamic.properties
-    let args = case has_action_3 {
-      True -> [
+    let args = case arity {
+      3 -> [
         dynamic.string(key),
         values_map,
         plugin_config.page_map(config, accounts),
       ]
-      False -> [dynamic.string(key), values_map]
+      _ -> [dynamic.string(key), values_map]
     }
     use value <- result.try(call_export(
       module,
@@ -909,7 +1021,11 @@ fn action_of(
       args,
       call_timeout_ms,
     ))
-    decode_action_result(value, name, action_label(has_action_3))
+    decode_action_result(
+      value,
+      name,
+      export_label(page_action_export_name, arity),
+    )
   }
 }
 

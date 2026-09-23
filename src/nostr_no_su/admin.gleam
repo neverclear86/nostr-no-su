@@ -230,10 +230,14 @@ pub type Context {
     not_loaded_plugins: List(plugin_loader.NotLoaded),
     /// 無効になったプラグインを名前で再有効化する。
     reenable_plugin: fn(String) -> Result(Nil, ReenableFailure),
-    /// プラグイン名とページのキーと登録アカウントの一覧で、そのページの記述を
-    /// 取る。失敗は 1 行の理由で、ページは 503 になる。
-    plugin_page_content: fn(String, String, List(plugin_config.PageAccount)) ->
-      Result(Dynamic, String),
+    /// プラグイン名とページのキーと表示の言語と登録アカウントの一覧で、そのページの
+    /// 記述を取る。失敗は 1 行の理由で、ページは 503 になる。
+    plugin_page_content: fn(
+      String,
+      String,
+      Language,
+      List(plugin_config.PageAccount),
+    ) -> Result(Dynamic, String),
     /// 登録アカウントの一覧。ページの記述とフォームの送信の呼び出しに渡す。
     /// 読めなければ表示する理由を返す。
     page_accounts: fn() -> Result(List(plugin_config.PageAccount), String),
@@ -784,7 +788,7 @@ fn show_dashboard(
 ///    返す。
 /// 3. `context.page_accounts()`（`Error(reason)` は
 ///    `unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)`）。
-/// 4. GET は `context.plugin_page_content(name, key, accounts)`。
+/// 4. GET は `context.plugin_page_content(name, key, language, accounts)`。
 /// 5. POST は `wisp.require_form` で値を取り、2 で得た関数に `form.values` と
 ///    `accounts` を渡す。`Ok(Nil)` は
 ///    `wisp.redirect(to: dashboard.plugin_page_href(name, key))`、`Error(reason)`
@@ -854,7 +858,7 @@ fn plugin_page_get(
     Error(reason) ->
       unavailable_notice(language, theme, i18n.PluginPageUnavailable, reason)
     Ok(accounts) ->
-      case context.plugin_page_content(row.name, page.key, accounts) {
+      case context.plugin_page_content(row.name, page.key, language, accounts) {
         Error(reason) ->
           unavailable_notice(
             language,

@@ -1512,7 +1512,12 @@ pub fn reason_content(
 /// 訳さずに英語のまま出す文字列（`i18n.Untranslated` の中身）。どの言語のページでも
 /// `lang="en"` の `span` で出す。
 pub fn untranslated(text: String) -> Element(msg) {
-  html.span([attribute.lang("en")], [html.text(text)])
+  in_language("en", text)
+}
+
+/// `code` の言語で書かれた文字列を、その `lang` を持つ `span` で出す。
+pub fn in_language(code: String, text: String) -> Element(msg) {
+  html.span([attribute.lang(code)], [html.text(text)])
 }
 
 /// 強調した 1 文と、それに続く文。文の間は表示の言語の区切り（`i18n.sentence_gap`）に

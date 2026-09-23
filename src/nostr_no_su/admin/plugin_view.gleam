@@ -22,12 +22,13 @@
 //// （`Context.form_action`）、プラグインは指定できない。`image` の `url` も
 //// 同じで、`http` / `https` 以外の scheme は描かずに代替文だけを出す。
 ////
-//// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて `lang="en"`
-//// の祖先 1 つで包む。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
+//// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて
+//// `Context.plugin_language` の `lang` を持つ祖先 1 つで包む。表示の言語を
+//// 受け取らないプラグインでは `en` である。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
 //// その外に置き、`pairs` の `items` が 0 件のときの案内と、`pairs` の値の
 //// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、`image` の
 //// `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
-//// `lang="en"` の中で表示の言語の `lang` を持つ要素で上書きする。
+//// その祖先の中で表示の言語の `lang` を持つ要素で上書きする。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -50,6 +51,7 @@ import nostr_no_su/admin/view
 pub type Context {
   Context(
     language: Language,
+    plugin_language: String,
     page_href: fn(String) -> Result(String, Nil),
     form_action: String,
   )
@@ -90,7 +92,9 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     [] ->
       Ok(
         view.card([
-          html.div([attribute.lang("en")], [view.heading(title)]),
+          html.div([attribute.lang(context.plugin_language)], [
+            view.heading(title),
+          ]),
           view.empty_state(
             view.puzzle_icon(),
             i18n.text(context.language, i18n.PluginSectionEmpty),
@@ -111,7 +115,10 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       )
       Ok(
         view.card([
-          html.div([attribute.lang("en")], [view.heading(title), ..elements]),
+          html.div([attribute.lang(context.plugin_language)], [
+            view.heading(title),
+            ..elements
+          ]),
         ]),
       )
     }

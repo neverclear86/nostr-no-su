@@ -6,6 +6,7 @@
 //// `view.gleam` か `admin/fingerprint` に部品を足したら `components` にもその部品を足す。
 
 import gleam/bit_array
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{None, Some}
@@ -553,6 +554,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
           ]),
         ],
       ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_localized(),
+        plugin_localized_status_page(),
+        [plugin_section("キュー", [plugin_text_block("処理済み")])],
+      ),
     ],
   ])
 }
@@ -586,8 +594,28 @@ const plugin_row_disabled = dashboard.PluginRow(
 /// 上の 3 行がいずれも持つ最初のページ。
 const plugin_status_page = plugin.PluginPage(key: "status", title: "Status")
 
-/// 節の記述。タイトルとブロックの文字列は `allowed_words` にある語だけで組む
-/// （`japanese_pages_test` を通すため）。
+/// 表示の言語を受け取るプラグインの行（タブを表示の言語で撮るため）。日本語の
+/// 表示名は `japanese_pages_test` が包み無しで検査する。
+fn plugin_row_localized() -> dashboard.PluginRow {
+  dashboard.PluginRow("plugin-e", Some(plugin_runner.Running), pages: [
+    plugin_localized_status_page(),
+    plugin.LocalizedPage(
+      key: "settings",
+      titles: dict.from_list([#("en", "Settings"), #("ja", "設定")]),
+    ),
+  ])
+}
+
+/// `plugin_row_localized` の最初のページ。
+fn plugin_localized_status_page() -> plugin.PluginPage {
+  plugin.LocalizedPage(
+    key: "status",
+    titles: dict.from_list([#("en", "Status"), #("ja", "状態")]),
+  )
+}
+
+/// 節の記述。タイトルとブロックの文字列は `allowed_words` にある語か、英字を含まない
+/// 語で組む（`japanese_pages_test` を通すため）。
 fn plugin_section(title: String, blocks: List(Dynamic)) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("section")),
