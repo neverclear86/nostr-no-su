@@ -59,6 +59,7 @@ squash コミットの件名は PR のタイトルに ` (#PR番号)` を付け�
 Bash の cwd はユーザーの作業ツリー（このリポジトリの clone）なので、`-C` の無い `git` はそこで動く。`worktree remove` と `fetch` 以外は触らない。
 マージの後、issue が PR の `Closes #N` で閉じたことを `gh issue view <N> -R $R --json state` で確かめ、閉じていなければ `gh issue close <N> -R neverclear86/nostr-no-su` で閉じる。
 `gh issue close` は、`R=…` の代入や他のコマンドと連結せず、リポジトリをリテラルで書いて 1 回の Bash 呼び出しに 1 つだけ置く。許可 `Bash(gh issue close:*)`（`.claude/settings.json`）は呼び出しの全部の部分コマンドが許可に一致するときだけ効き、連結した呼び出しは auto モードの分類器（External System Writes）に回って拒否されることがある。
+`gh issue close` が拒否されたら、`gh api` の `PATCH` や `gh issue edit` など別の経路で閉じ直さない（issue を閉じた結果は `issueClosed`、親は `openParent` と `problem` で返す）。
 
 ### 親 issue の確認
 
@@ -70,7 +71,7 @@ gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86"
 
 `subIssuesSummary` の `completed` は使わない（いま閉じた `<N>` が数えられず、実際より少なく出る）。`nodes` の `state` で数え、いま閉じた `<N>` は `state` に関わらず閉じたものとして数える。
 `parent` が null なら終わり。親が `OPEN` で `<N>` 以外の `nodes` がすべて `CLOSED` なら、`gh issue close <親> -R neverclear86/nostr-no-su -c "サブ issue がすべて閉じたので閉じる。"` を単独の Bash 呼び出しで実行して閉じ、閉じた親を `<N>` にして同じ確認を繰り返す（親も分割で生まれたサブ issue でありうる）。親が `CLOSED` か、まだ開いている兄弟があれば止める。
-閉じる条件を満たしたのに `gh issue close` が拒否されたら、その親の番号を `openParent` に入れ、`problem` に拒否の文を書いて返す（スクリプトが `log` に出し、結果に残す）。拒否されたら、`gh api` の `PATCH` や `gh issue edit` など別の経路で閉じ直さない。
+閉じる条件を満たしたのに `gh issue close` が拒否されたら、その親の番号を `openParent` に入れ、`problem` に拒否の文を書いて返す（スクリプトが `log` に出し、結果に残す）。
 
 ## 文書の長さ
 書く文書（プラン、レビュー、コメント）は、読む相手が次に取る行動を変える情報だけで組む。
