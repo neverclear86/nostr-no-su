@@ -70,7 +70,10 @@ pub fn dashboard_shows_the_current_state_test() {
     body,
     element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),
   )
-  assert string.contains(body, "<td class=\"break-words\">console_logger</td>")
+  assert string.contains(
+    body,
+    "<span class=\"font-semibold break-words\">console_logger</span>",
+  )
   assert string.contains(
     body,
     element.to_string(view.status_chip(view.ActiveChip, "running")),

@@ -1261,6 +1261,36 @@ fn copy_status(language: Language) -> Element(msg) {
   )
 }
 
+/// 節の末尾に置く、読み込めなかった行の error の色の囲み（`alert alert-soft alert-error`）。`icon` と題（`h3`）と
+/// `count` の件数のピルを 1 行に、`description` の 1 文をその下に、`rows` を行の一覧（`row_list`）で続ける。
+pub fn failure_frame(
+  icon: Element(msg),
+  title: String,
+  count: Int,
+  description: String,
+  rows: List(Element(msg)),
+) -> Element(msg) {
+  html.div(
+    [
+      attribute.class(
+        "alert alert-soft alert-error flex flex-col items-stretch gap-3 text-base-content",
+      ),
+    ],
+    [
+      html.h3(
+        [attribute.class("flex items-center gap-2 font-bold text-error")],
+        [
+          icon,
+          html.text(title),
+          count_badge(count),
+        ],
+      ),
+      html.p([attribute.class("text-sm")], [html.text(description)]),
+      row_list(rows),
+    ],
+  )
+}
+
 /// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。読み飛ばされて
 /// は困る注意（秘密鍵の表示、接続 QR コードの secret、secret が一致しない承認待ちのカードと承認ページ）も `Warning` で出す。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {

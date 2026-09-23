@@ -333,7 +333,6 @@ pub type Message {
   Revoke
   Relays
   Role
-  StateColumn
   MonitorRole
   BunkerRole
   RelayRoleUnused
@@ -374,7 +373,8 @@ pub type Message {
   NostrconnectRelayInvalid
   NostrconnectSecretMissing
   Plugins
-  NameColumn
+  /// ダッシュボードのプラグインの節の見出しの下の 1 行の説明。
+  PluginsDescription
   PluginRunning
   PluginOverloaded
   PluginDisabled
@@ -636,7 +636,6 @@ fn english(message: Message) -> String {
     Revoke -> "Revoke"
     Relays -> "Relays"
     Role -> "Role"
-    StateColumn -> "State"
     MonitorRole -> "monitor"
     BunkerRole -> "bunker"
     RelayRoleUnused -> "Unused"
@@ -688,7 +687,8 @@ fn english(message: Message) -> String {
       "the uri must carry at least one relay with a ws:// or wss:// url"
     NostrconnectSecretMissing -> "the uri must carry a secret"
     Plugins -> "Plugins"
-    NameColumn -> "Name"
+    PluginsDescription ->
+      "Receives and processes the events of registered accounts."
     PluginRunning -> "running"
     PluginOverloaded -> "overloaded"
     PluginDisabled -> "disabled"
@@ -941,7 +941,6 @@ fn japanese(message: Message) -> String {
     Revoke -> "承認を取り消す"
     Relays -> "リレー"
     Role -> "用途"
-    StateColumn -> "状態"
     MonitorRole -> "監視"
     BunkerRole -> "バンカー"
     RelayRoleUnused -> "未使用"
@@ -986,7 +985,7 @@ fn japanese(message: Message) -> String {
     NostrconnectRelayInvalid -> "URI に ws:// か wss:// で始まるリレーが 1 件も含まれていません。"
     NostrconnectSecretMissing -> "URI に secret が含まれていません。"
     Plugins -> "プラグイン"
-    NameColumn -> "名前"
+    PluginsDescription -> "登録したアカウントのイベントを受け取って処理します。"
     PluginRunning -> "動作中"
     PluginOverloaded -> "過負荷"
     PluginDisabled -> "無効"

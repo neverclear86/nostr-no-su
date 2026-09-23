@@ -199,3 +199,13 @@ pub fn time_of_day_renders_utc_with_datetime_test() {
   let html = element.to_string(view.time_of_day(language, 1_789_275_724))
   assert html == "<time datetime=\"2026-09-13T05:02:04Z\">" <> text <> "</time>"
 }
+
+/// 表の見出しは列を指す `scope="col"` を持ち、`scope` の無い `th` は出さない。
+pub fn table_headers_scope_their_columns_test() {
+  let body =
+    element.to_string(
+      view.table(["Name"], [[html.td([], [html.text("value")])]]),
+    )
+  assert string.contains(body, "<th scope=\"col\">Name</th>")
+  assert !string.contains(body, "<th>")
+}
