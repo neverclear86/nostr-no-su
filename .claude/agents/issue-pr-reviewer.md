@@ -15,6 +15,7 @@ disallowedTools: Agent
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も docker も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - 再現は、指示された再現用の作業ツリーの絶対パスの下で行う
 - 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
+- 撮影用サーバー（`PREVIEW_PORT=<port> gleam run -m admin_preview`）は `timeout <秒>` の中で背景に立てる。止めるときは `pkill -f` を使わない（自分の bash の引数に一致して呼び出しごと落ちる）。pid は `ss -ltnpH` のそのポートの行から引き、`/proc/<pid>/cwd` が自分の作業ツリーであることを確かめてから kill する（`timeout` が切れても beam.smp が残ることがある）
 - issue は `gh issue view <N> --json title,body,comments`、PR は `gh pr view <PR> --json title,body,comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む（`--comments` は本文を落とす、または rc=0 のまま空で返ることがあるので使わない）
 - 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `sh <作業ツリー>/dev/post_comment.sh pr <PR> pr-review <R> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で投稿する（`REQUEST CHANGES` は空白を含むので二重引用符で囲む）
 

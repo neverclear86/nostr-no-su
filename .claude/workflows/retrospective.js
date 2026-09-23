@@ -13,7 +13,7 @@ export const meta = {
 // args の契約（スキル issue-workflow の「結果の処理」で組み立てる）
 //   runs:       journal の絶対パスの配列（mtime の昇順）。表示と起票する issue の根拠にだけ使う
 //   events:     { "<runs[i] と同じパス>": [<抽出済みの result イベント>...] }。journal の中身はここで渡す
-//               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions? }
+//               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions?, closedParents? }
 //               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   observations: [string]。空でない文字列。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
@@ -112,7 +112,8 @@ const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
 
 /**
  * 1 本の run の抽出済みイベントから issue ごとの記録を Map<issue 番号, 記録> にし、label が形に合わず集計に入らなかった
- * イベントの件数（unknown）と一緒に返す（黙って捨てると、セッションが足した観察が集計から消える）。
+ * イベントの件数（unknown）と、Merge の closedParents に挙がった親 issue の番号の集合（closedParents）と一緒に返す
+ * （unknown を黙って捨てると、セッションが足した観察が集計から消える）。
  * PR 番号しか持たない label は Implement の結果で issue 番号に引き直す（pr → issue の表は
  * 呼び出し側から受け取り、run をまたいで合併できるようにその場で更新する）。
  * どの行も、源になる result がその run に 1 件も無ければ未設定のまま返す（既定は aggregate が全 run の合併の後に埋める）。
@@ -125,7 +126,8 @@ const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
  * | prConditionCount | すべての PR review の verdict: 'APPROVE' の conditions の合計（phase で絞らない） |
  * | implMusts | phase が 'PR レビュー' の PR review で、verdict: 'REQUEST CHANGES' かつ designMust が真でないものの must の合計 |
  * | lessons | 最初の Final gate の verdict: 'APPROVE' の lessons（rebase の差分の再確認の APPROVE は lessons を返さないので、後の APPROVE で上書きしない） |
- * | status | その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
+ * | split | Triage の結果の status が 'split' なら真（分割の親。マージ件数、tier 別、実装者別の件数に数えない） |
+ * | status | split なら 'split'。それ以外は、その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
  * | pr | Implement の結果の pr |
  * | implementedBy | Implement の結果の implementedBy（devin か claude。無ければ claude） |
  *
@@ -136,10 +138,13 @@ function collectRun(events, prToIssue) {
   const seenLabels = new Set()
   const dedup = events.filter((ev) => (seenLabels.has(ev.label) ? false : (seenLabels.add(ev.label), true)))
 
-  // Implement の結果から pr → issue の表を更新する（呼び出し側の Map をそのまま使い、run をまたいで合併する）
+  // Implement の結果から pr → issue の表を更新し（呼び出し側の Map をそのまま使い、run をまたいで合併する）、
+  // Merge の結果から閉じた親を集める（親の記録を作らない。Triage が別の run にある親を未完了の記録にしないため）
+  const closedParents = new Set()
   for (const ev of dedup) {
     const { kind, n } = parseLabel(ev.label)
     if (kind === 'implement' && ev.pr) prToIssue.set(ev.pr, n)
+    if (kind === 'merge') for (const p of ev.closedParents || []) closedParents.add(p)
   }
 
   const issues = new Map()
@@ -156,7 +161,7 @@ function collectRun(events, prToIssue) {
     const issueN = VIA_PR.has(kind) ? prToIssue.get(n) : n
     if (issueN === undefined) { dropped++; continue }
     const rec = get(issueN)
-    if (kind === 'triage') { if (ev.tier) rec.tier = ev.tier }
+    if (kind === 'triage') { if (ev.tier) rec.tier = ev.tier; if (ev.status === 'split') rec.split = true }
     else if (kind === 'implement') { if (ev.pr) rec.pr = ev.pr; if (ev.implementedBy) rec.implementedBy = ev.implementedBy }
     else if (kind === 'planReview') { rec.planRounds = Math.max(rec.planRounds || 0, round) }
     else if (kind === 'prReview') {
@@ -170,20 +175,23 @@ function collectRun(events, prToIssue) {
     }
   }
   if (dropped) log(`collectRun: PR 番号を issue 番号に引けなかったイベントを ${dropped} 件捨てた`)
-  return { issues, unknown }
+  return { issues, unknown, closedParents }
 }
 
 /**
  * 全 run をまとめる。run ごとの記録を 1 つの表にし、tier 別の件数、ラウンド数と条件の平均、
- * 実装起因の must の合計、学びの件数、label が形に合わず集計に入らなかった件数（unknownLabels）を出す。runs は mtime の昇順で渡される前提。
+ * 実装起因の must の合計、学びの件数、label が形に合わず集計に入らなかった件数（unknownLabels）、分割の親の件数（splitParents）を出す。
+ * 分割の親はマージ件数、tier 別、実装者別の件数に数えず、Merge の closedParents に挙がらなかった親は番号を log に出す。runs は mtime の昇順で渡される前提。
  */
 function aggregate(runs, events) {
   const issues = new Map() // issue 番号 → 記録
   const prToIssue = new Map() // pr → issue 番号。collectRun 側で run をまたいで更新される
+  const closedParents = new Set() // Merge の closedParents に挙がった親 issue の番号（全 run の合併）
   let unknownLabels = 0
   for (const path of runs) {
-    const { issues: run, unknown } = collectRun(events[path], prToIssue)
+    const { issues: run, unknown, closedParents: closed } = collectRun(events[path], prToIssue)
     unknownLabels += unknown
+    for (const p of closed) closedParents.add(p)
     for (const [n, rec] of run) {
       // その run で値が定まった項目だけを上書きする（丸ごと置き換えると再開の run で飛ばされた値が潰れる）
       issues.set(n, { ...(issues.get(n) || { n }), ...rec })
@@ -197,10 +205,13 @@ function aggregate(runs, events) {
     rec.prRounds = rec.prRounds || 0
     rec.prConditionCount = rec.prConditionCount || 0
     rec.implMusts = rec.implMusts || 0
-    rec.status = rec.status === 'merged' ? 'merged' : 'unfinished'
+    rec.status = rec.split ? 'split' : rec.status === 'merged' ? 'merged' : 'unfinished'
   }
 
-  const list = [...issues.values()]
+  const all = [...issues.values()]
+  const parents = all.filter((i) => i.split)
+  for (const p of parents) if (!closedParents.has(p.n)) log(`aggregate: 分割の親 #${p.n} が Merge の closedParents に挙がっておらず、閉じていない`)
+  const list = all.filter((i) => !i.split) // 分割の親を除いた、件数と平均の対象
   const merged = list.filter((i) => i.status === 'merged')
   const round2 = (x) => Math.round(x * 100) / 100
   const avg = (key) => (merged.length ? round2(merged.reduce((s, i) => s + (i[key] || 0), 0) / merged.length) : 0)
@@ -217,9 +228,10 @@ function aggregate(runs, events) {
     lessonCount: list.reduce((s, i) => s + (i.lessons || []).length, 0),
     merged: merged.length,
     unfinished: list.length - merged.length,
+    splitParents: parents.length,
     unknownLabels,
   }
-  return { issues: list, totals }
+  return { issues: all, totals }
 }
 
 /** 集計の要約を、起票する issue の冒頭にそのまま貼る Markdown の表にする */
@@ -231,6 +243,7 @@ function summaryMarkdown(totals, since) {
 | 対象期間 | ${since} 以降 |
 | run 数 | ${totals.runCount} |
 | マージ件数 | ${totals.merged}（未完了 ${totals.unfinished}） |
+| 分割の親 | ${totals.splitParents} |
 | tier 別の件数 | ${tierRow} |
 | 実装者別の件数 | ${implRow} |
 | プランと PR レビューのラウンド数の平均 | プラン ${totals.planRoundsAvg} / PR ${totals.prRoundsAvg} |
@@ -241,6 +254,7 @@ function summaryMarkdown(totals, since) {
 
 - run の選別は journal の mtime による（\`since\` より前に始まって後に終わった run は丸ごと含まれる）
 - tier は判定の result からだけ取る。\`args.issues[].tier\` で固定した分とサブ issue は journal に出ないので light として数える
+- 分割の親（判定の result が split）はマージ件数、tier 別、実装者別の件数に入れない
 - 集計に入らなかった events は \`log\` に label が出る`
 }
 
@@ -311,7 +325,7 @@ if (reentry) {
 
 log(`${a.runs.length} 件の journal から集計する${dry ? '（dry run）' : ''}`)
 const agg = aggregate(a.runs, a.events)
-log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished}、学び ${agg.totals.lessonCount} 件、セッションの観察 ${observations.length} 件`)
+log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished} / 分割の親 ${agg.totals.splitParents}、学び ${agg.totals.lessonCount} 件、セッションの観察 ${observations.length} 件`)
 
 // 学びが 0 件でもセッションの観察があれば、観察だけを材料にふりかえりを立てる（観察を黙って落とさない）
 if (dry || (agg.totals.lessonCount === 0 && observations.length === 0)) {
