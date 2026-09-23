@@ -1690,6 +1690,11 @@ pub fn overview_color_rules_test() {
       ]),
     ),
     #(
+      dashboard.Snapshot(..states(), skipped: Error(reason)),
+      accounts,
+      item(dashboard.Count(0), not_available.notes),
+    ),
+    #(
       dashboard.Snapshot(..states(), sessions: Error(reason)),
       sessions,
       not_available,
