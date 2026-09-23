@@ -1,5 +1,5 @@
 //// 管理 UI のダッシュボード、承認ページ、通知ページの描画と、表示する状態の型、パスと
-//// フォームの欄の名前の定義と、ダイアログとページが共用するフォームの中身。描画は状態の
+//// フォームの欄の名前の定義と、ダイアログに出すフォームの中身。描画は状態の
 //// スナップショット（純粋なデータ）から HTML 文字列を組み立てるだけで、プロセスにも IO にも
 //// 触れない。
 ////
@@ -8,14 +8,12 @@
 //// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
 //// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
 ////
-//// パスとフォームの欄の名前は、ルーティング（`admin`）とフォーム（ここと
-//// `admin/connect_pages`、`admin/session_pages`）が同じ定義を見るようここに置く。
-//// ダッシュボードのダイアログにだけ出すリレーとアカウントのフォームの中身（`new_relay_form`、
-//// `relay_action_form`、`import_form`、`generate_form`、`account_action_form`、
-//// `unreadable_delete_form`、`label_fieldset`）と、ダイアログと操作のページの両方に出すフォームの中身（セッションの
-//// `permissions_form`、クライアントの接続の `connect_content`、`connect_form`）もここに置く。
-//// `label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で送信の置き場所を受け、ページは
-//// `view.InForm` を、ダイアログは `view.dialog` が渡す `view.InDialog` を渡す。
+//// パスとフォームの欄の名前は、ルーティング（`admin`）とここのフォームが同じ定義を見るようここに置く。
+//// ダッシュボードのダイアログに出すフォームの中身（リレーの `new_relay_form`、`relay_action_form`、
+//// アカウントの `import_form`、`generate_form`、`account_action_form`、`unreadable_delete_form`、
+//// `label_fieldset`、セッションの `permissions_form`、クライアントの接続の `connect_content`、
+//// `connect_form`）もここに置く。`label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で
+//// 送信の置き場所を受け、ダイアログは `view.dialog` が渡す `view.InDialog` を渡す。
 //// ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
@@ -222,6 +220,34 @@ pub type OpenDialog {
   PrivateKeyOpen(row: AccountRow, nsec: String)
   /// 読み込めなかった行 `pubkey` の削除。
   UnreadableDeleteOpen(pubkey: String, error: i18n.Reason)
+  /// クライアントの接続のダイアログ。`uri` と `signer` は送られた値で欄に戻し、`error` は
+  /// 先頭に出す理由（一覧を得られないときは `None` で、理由はダイアログの中の囲みに出る）。
+  ConnectOpen(uri: String, signer: String, error: Option(i18n.Reason))
+  /// 接続の確認のダイアログ。`review` は解釈した接続の内容で、`error` は接続の段で失敗した
+  /// ときに先頭に出す理由。このダイアログは開くときだけ描く。
+  ConnectReviewOpen(review: ConnectReview, error: Option(i18n.Reason))
+  /// （`signer`, `client`）の行の権限の編集のダイアログ。`form` は送られた欄の状態で、
+  /// `error` は先頭に出す理由。
+  PermissionsOpen(
+    signer: String,
+    client: String,
+    form: PermissionsForm,
+    error: i18n.Reason,
+  )
+}
+
+/// 確認のダイアログに出す接続の内容。`uri` と `signer` は 1 段目で送られた値で、ダイアログの
+/// 隠し欄で送り直す。`client_name` は表示のために整えた名前（無ければ `None`）。`relays` は
+/// URI に現れた順。
+pub type ConnectReview {
+  ConnectReview(
+    uri: String,
+    signer: String,
+    client: String,
+    client_name: Option(String),
+    perms: String,
+    relays: List(String),
+  )
 }
 
 /// 生成した鍵の登録に失敗して生成した鍵のダイアログを開き直す理由。
@@ -314,10 +340,10 @@ const revoke_segment = "revoke"
 /// セッション取り消しの POST 先のパスセグメント。
 pub const revoke_segments = [sessions_segment, revoke_segment]
 
-/// クライアントの接続画面のパスセグメント。
+/// クライアントの接続の 1 段目の送信先のパスセグメント。
 pub const connect_segments = [sessions_segment, "connect"]
 
-/// クライアントの接続の確認のページから、接続を送るパス。
+/// クライアントの接続の確認のダイアログから、接続を送るパス。
 pub const connect_confirm_segments = [sessions_segment, "connect", "confirm"]
 
 /// プラグインの再有効化の POST 先のパスセグメント。
@@ -371,7 +397,7 @@ pub const plugin_name_field = "name"
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
 
-/// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。確認のページの
+/// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。確認のダイアログの
 /// 案内と `app.connect_nostrconnect` の待ちが同じ値を見る。
 pub const nostrconnect_wait_seconds = 15
 
@@ -423,9 +449,10 @@ pub fn render(
 }
 
 /// `render` と同じダッシュボードに `dialog` を開いた状態で描く。自動の読み込み直しはしない。
-/// 追加、生成した鍵、秘密鍵のダイアログは一覧によらず描く。行の操作のダイアログは、その行の一覧（リレー、
-/// アカウント、読み込めなかった行）を得られなければその理由を、操作する行が一覧に無ければ `RelayNotFound` か
-/// `AccountNotFound` を `Error` で返す。
+/// 追加、生成した鍵、秘密鍵、クライアントの接続とその確認のダイアログは一覧によらず描く。権限の編集の
+/// ダイアログは `Error` にせず、そのセッションの行が一覧に無ければ開いたダイアログの無いダッシュボードを描く。
+/// ほかの行の操作のダイアログは、その行の一覧（リレー、アカウント、読み込めなかった行）を得られなければその
+/// 理由を、操作する行が一覧に無ければ `RelayNotFound` か `AccountNotFound` を `Error` で返す。
 pub fn render_open(
   language: Language,
   theme: view.Theme,
@@ -436,7 +463,10 @@ pub fn render_open(
     NewRelayOpen(..)
     | AddAccountOpen(..)
     | GeneratedKeyOpen(..)
-    | PrivateKeyOpen(..) -> Ok(Nil)
+    | PrivateKeyOpen(..)
+    | ConnectOpen(..)
+    | ConnectReviewOpen(..)
+    | PermissionsOpen(..) -> Ok(Nil)
     RelayActionOpen(id:, ..) ->
       listed_row(snapshot.relays, fn(row) { row.id == id }, i18n.RelayNotFound)
     AccountActionOpen(signer:, ..) ->
@@ -522,6 +552,7 @@ fn render_page(
               snapshot.now,
               shared,
               snapshot.sessions,
+              dialog,
             ),
           ]),
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
@@ -2417,10 +2448,10 @@ pub fn parse_relay_action_path(
   }
 }
 
-/// セッションの権限の編集画面のパスの末尾のセグメント。
+/// セッションの権限の保存のパスの末尾のセグメント。
 pub const session_permissions_segment = "permissions"
 
-/// セッションの権限の編集画面のパス（`/sessions/<signer>/<client>/permissions`）。
+/// セッションの権限の保存のパス（`/sessions/<signer>/<client>/permissions`）。
 pub fn session_permissions_path(signer: String, client: String) -> String {
   view.segments_path([
     sessions_segment,
@@ -2430,7 +2461,7 @@ pub fn session_permissions_path(signer: String, client: String) -> String {
   ])
 }
 
-/// パスセグメントから、セッションの権限の編集画面の署名者とクライアントを引く。値は
+/// パスセグメントから、セッションの権限の保存のパスの署名者とクライアントを引く。値は
 /// 検査しない（一覧との照合は呼び出し側が行う）。
 pub fn parse_session_permissions_path(
   segments: List(String),
@@ -2881,17 +2912,26 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   }
 }
 
-/// 承認済みのセッションの節。見出しに説明を開く ⓘ と件数と、接続のダイアログを開く「クライアントを接続」と
-/// 接続のページへの予備のリンクを置き、行を並べる。一覧を得られないときは、一覧とボタンとリンクの代わりに
-/// その理由を出す。
+/// 承認済みのセッションの節。見出しに説明を開く ⓘ と件数と、一覧を得たときだけ接続のダイアログを開く
+/// 「クライアントを接続」を置き、行を並べる。一覧を得られないときは、一覧とボタンの代わりにその理由を出す。
+/// 末尾に接続のダイアログと、開くときだけ確認のダイアログを置く。`dialog` は開いた状態で返すダイアログで、
+/// 行の権限の編集のダイアログにも渡す。
 fn sessions_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
   now: Int,
   shared: Option(String),
   sessions: Result(List(SessionRow), i18n.Reason),
+  dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
+  let connect_trigger = fn(kind) {
+    view.dialog_trigger(
+      connect_dialog_id(),
+      view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
+      kind,
+    )
+  }
   view.section_block(sessions_anchor, [
     listed_section_heading(
       language,
@@ -2901,17 +2941,7 @@ fn sessions_section(
       view.info_hint(language, sessions_anchor <> "-hint", [
         html.text(text(i18n.ApprovedSessionsDescription)),
       ]),
-      list.append(
-        view.dialog_button(
-          language,
-          view.dialog_id(["session", "connect"]),
-          view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
-          view.PrimaryButton,
-          text(i18n.ConnectClient),
-          connect_content(language, accounts, "", "", _),
-        ),
-        [view.fallback_link(language, view.segments_path(connect_segments))],
-      ),
+      [connect_trigger(view.PrimaryButton)],
       [],
     ),
     listed_body(
@@ -2920,27 +2950,159 @@ fn sessions_section(
       sessions,
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions), [
-        view.icon_button_link(
-          view.segments_path(connect_segments),
-          view.plus_icon(),
-          text(i18n.ConnectClient),
-          view.OutlineButton,
-        ),
+        connect_trigger(view.OutlineButton),
       ]),
       fn(rows) {
-        view.row_list(list.map(rows, session_item(language, accounts, now, _)))
+        view.row_list(
+          list.map(rows, session_item(language, accounts, now, dialog, _)),
+        )
       },
     ),
+    connect_dialog(language, accounts, dialog),
+    connect_review_dialog(language, accounts, dialog),
+  ])
+}
+
+/// 接続のダイアログの `id`。見出しと空の状態のボタンが同じ `id` を指す。
+fn connect_dialog_id() -> String {
+  view.dialog_id(["session", "connect"])
+}
+
+/// 接続のダイアログ。セッションの一覧を得られたかどうかに関わらず 1 回だけ描く。`dialog` が
+/// `ConnectOpen` なら開いた状態で、先頭に理由を、欄に送られた値を出す。それ以外は閉じた状態で
+/// 空の欄を出す。
+fn connect_dialog(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
+  let #(opening, uri, signer, error) = case dialog {
+    Some(ConnectOpen(uri:, signer:, error:)) -> #(
+      view.OpenedByResponse,
+      uri,
+      signer,
+      error,
+    )
+    _ -> #(view.OpensOnTrigger, "", "", None)
+  }
+  view.dialog(
+    language,
+    connect_dialog_id(),
+    i18n.text(language, i18n.ConnectClient),
+    fn(placement) {
+      [
+        view.error_message(language, Some(i18n.CouldNotStartConnection), error),
+        ..connect_content(language, accounts, uri, signer, placement)
+      ]
+    },
+    i18n.Cancel,
+    opening,
+  )
+}
+
+/// 接続の確認のダイアログ。`dialog` が `ConnectReviewOpen` のときだけ開いた状態で描き、
+/// それ以外は何も描かない。先頭の理由、説明、URI を解釈した一覧、接続の意味の説明、
+/// `/sessions/connect/confirm` へ送る「接続する」のフォーム、待ちの補足を並べる。
+fn connect_review_dialog(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  case dialog {
+    Some(ConnectReviewOpen(review:, error:)) ->
+      view.dialog(
+        language,
+        view.dialog_id(["session", "connect", "review"]),
+        text(i18n.ConfirmConnection),
+        fn(placement) {
+          [
+            view.error_message(
+              language,
+              Some(i18n.CouldNotStartConnection),
+              error,
+            ),
+            view.form_description(text(i18n.ConnectConfirmDescription)),
+            review_list(language, accounts, review),
+            connect_explanation(language, review.perms),
+            view.post_form(
+              view.segments_path(connect_confirm_segments),
+              [
+                view.hidden_input(nostrconnect_uri_field, review.uri),
+                view.hidden_input(signer_field, review.signer),
+              ],
+              text(i18n.Connect),
+              view.PrimaryButton,
+              placement,
+            ),
+            view.hint(
+              text(i18n.ConnectWaitHint(seconds: nostrconnect_wait_seconds)),
+            ),
+          ]
+        },
+        i18n.Cancel,
+        view.OpenedByResponse,
+      )
+    _ -> element.none()
+  }
+}
+
+/// 確認のダイアログの一覧。名乗る名前（無ければ行ごと省く）、クライアント、署名者、権限、URI の
+/// リレーの順に並べる。
+fn review_list(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  review: ConnectReview,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let name_entry = case review.client_name {
+    Some(name) -> [#(text(i18n.ClientName), view.value_cell(view.Plain(name)))]
+    None -> []
+  }
+  view.detail_list(
+    list.append(name_entry, [
+      #(
+        text(i18n.Client),
+        view.identifier_cell(language, review.client, text(i18n.CopyClient)),
+      ),
+      #(
+        text(i18n.Signer),
+        html.dd([], [signer_value(signer_name(accounts, review.signer))]),
+      ),
+      #(
+        text(i18n.Permissions),
+        html.dd([], [permission_view.chips(language, review.perms)]),
+      ),
+      #(text(i18n.UriRelays), html.dd([], [view.code_list(review.relays)])),
+    ]),
+  )
+}
+
+/// 接続の意味の説明。権限が空のときは、許す操作の一文を続ける。URI のリレーに届く
+/// 情報を末尾に書く。
+fn connect_explanation(language: Language, perms: String) -> Element(msg) {
+  let text = i18n.text(language, _)
+  let permissions = case perms {
+    "" -> [i18n.NoPermissionsRequested]
+    _ -> []
+  }
+  let sentences =
+    [i18n.ConnectExplanation, ..permissions]
+    |> list.append([i18n.ConnectRelaysScope])
+    |> list.map(text)
+  view.alert(view.Info, [
+    html.text(string.join(sentences, i18n.sentence_gap(language))),
   ])
 }
 
 /// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
 /// 1 段目に、権限のチップと操作（`session_actions`）を 2 段目に並べる。幅 720px 以下では、クライアント、
-/// 署名者と最終利用、権限のチップ、ボタンとリンクの 4 段に組み替える。
+/// 署名者と最終利用、権限のチップ、ボタンの 4 段に組み替える。`dialog` は `session_actions` に渡す。
 fn session_item(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
   now: Int,
+  dialog: Option(OpenDialog),
   session: SessionRow,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
@@ -2972,7 +3134,7 @@ fn session_item(
               "col-span-2 grid justify-items-end gap-1 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0",
             ),
           ],
-          session_actions(language, accounts, session),
+          session_actions(language, accounts, dialog, session),
         ),
       ],
     ),
@@ -3014,40 +3176,54 @@ fn last_used_value(
   )
 }
 
-/// 承認済みセッション 1 件の操作。1 行目に権限の編集と承認の取り消しのダイアログを開くボタンとそのダイアログを、
-/// 2 行目に権限の編集のページへの予備のリンクを置き、升の幅をボタンの並びの幅に保つ。権限の編集のダイアログは、
-/// そのセッションの今の権限を入れたフォームを描く。取り消しは確認のダイアログの中のボタンでだけ POST する。
+/// 承認済みセッション 1 件の操作。権限の編集と承認の取り消しのダイアログを開くボタンとそのダイアログを
+/// 1 行に並べる。権限の編集のダイアログは、`dialog` がこの行の `PermissionsOpen` なら送られた欄の状態と
+/// 先頭の理由で開いた状態で描き、それ以外はそのセッションの今の権限を入れて閉じた状態で描く。取り消しは
+/// 確認のダイアログの中のボタンでだけ POST する。
 fn session_actions(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
+  dialog: Option(OpenDialog),
   session: SessionRow,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let summary = session_dialog_summary(language, accounts, session)
   let permissions_id = session_dialog_id(session, session_permissions_segment)
+  let #(opening, form, error) = case dialog {
+    Some(PermissionsOpen(signer:, client:, form:, error:))
+      if signer == session.signer && client == session.client
+    -> #(view.OpenedByResponse, Some(form), Some(error))
+    _ -> #(view.OpensOnTrigger, None, None)
+  }
   [
     html.div(
       [attribute.class("flex flex-wrap justify-end gap-2")],
       list.append(
-        view.dialog_button(
-          language,
-          permissions_id,
-          view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
-          view.GhostButton,
-          text(i18n.EditPermissions),
-          fn(placement) {
-            [
-              summary,
-              ..permissions_form(
-                language,
-                session,
-                None,
-                permissions_id <> "-kinds-hint",
-                placement,
-              )
-            ]
-          },
-        ),
+        [
+          view.dialog_trigger(
+            permissions_id,
+            view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
+            view.GhostButton,
+          ),
+          view.dialog(
+            language,
+            permissions_id,
+            text(i18n.EditPermissions),
+            fn(placement) {
+              [
+                view.error_message(
+                  language,
+                  Some(i18n.CouldNotSavePermissions),
+                  error,
+                ),
+                summary,
+                ..permissions_form(language, session, form, placement)
+              ]
+            },
+            i18n.Cancel,
+            opening,
+          ),
+        ],
         view.dialog_button(
           language,
           session_dialog_id(session, revoke_segment),
@@ -3059,10 +3235,6 @@ fn session_actions(
           },
         ),
       ),
-    ),
-    view.fallback_link(
-      language,
-      session_permissions_path(session.signer, session.client),
     ),
   ]
 }
@@ -3126,18 +3298,18 @@ type ParsedPerms {
 }
 
 /// 権限の編集フォームの中身。説明の 1 行と、セッションの権限のパスへ POST するフォームを
-/// 並べる。ページの枠、要約、入力の誤りは含めない。`form` は描き直すときに送られた欄の状態で、
-/// `None` なら `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。`kinds_hint_id` は
-/// kind の欄の補足の `id` で、ページは固定の値を、ダッシュボードは行ごとのダイアログの `id` から作った
-/// 値を渡し、1 つのページで重ならないようにする。
+/// 並べる。要約と入力の誤りは含めない。`form` は描き直すときに送られた欄の状態で、
+/// `None` なら `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。kind の欄の
+/// 補足の `id` は行のダイアログの `id` から作り、1 つのページで重ならないようにする。
 pub fn permissions_form(
   language: Language,
   session: SessionRow,
   form: Option(PermissionsForm),
-  kinds_hint_id: String,
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let fields = option.unwrap(form, form_of_perms(session.perms))
+  let kinds_hint_id =
+    session_dialog_id(session, session_permissions_segment) <> "-kinds-hint"
   [
     view.form_description(i18n.text(language, i18n.EditPermissionsDescription)),
     view.post_form(
@@ -3281,11 +3453,10 @@ fn reverse_lists(parsed: ParsedPerms) -> ParsedPerms {
   )
 }
 
-/// URI の補足の `id`。URI の欄は接続のページと、ダッシュボードの接続のダイアログに 1 つずつで、
-/// 1 つのページに 2 つ現れないので固定の値にする。
+/// URI の補足の `id`。URI の欄はダッシュボードの接続のダイアログに 1 つだけなので固定の値にする。
 const nostrconnect_uri_hint_id = "nostrconnect-uri-hint"
 
-/// クライアントの接続のページのカードと、ダッシュボードの接続のダイアログの中身。アカウントの一覧が
+/// ダッシュボードの接続のダイアログの中身。アカウントの一覧が
 /// 空なら登録への案内、得られなければ理由の囲みを、得られればフォームの中身（`connect_form`）を出す。
 /// `uri` と `signer` は `connect_form` に渡す値である。
 pub fn connect_content(
@@ -3313,7 +3484,7 @@ pub fn connect_content(
 }
 
 /// 接続のフォームの中身。説明の 1 行と、`/sessions/connect` へ POST するフォーム（URI の欄と
-/// 署名するアカウントの選択欄）を並べる。ページの枠と入力の誤りは含めない。`uri` と `signer` は
+/// 署名するアカウントの選択欄）を並べる。入力の誤りは含めない。`uri` と `signer` は
 /// 描き直すときに送られた値で、`signer` が空文字列なら `accounts` の先頭を選ぶ。
 pub fn connect_form(
   language: Language,

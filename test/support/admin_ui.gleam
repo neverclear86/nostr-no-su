@@ -13,12 +13,10 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
-import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
-import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -255,43 +253,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
         Some(Roles(False, False)),
         i18n.Translated(i18n.RelayRoleRequired),
       )),
-      connect_pages.connect_client_page(
-        language,
-        view.System,
-        Ok([row]),
-        "",
-        "",
-        None,
-      ),
-      connect_pages.connect_client_page(
-        language,
-        view.System,
-        Ok([row]),
-        "nostrconnect://0123",
-        row.signer,
-        Some(i18n.Translated(i18n.NotNostrconnectUri)),
-      ),
-      connect_pages.connect_client_page(
-        language,
-        view.System,
-        Ok([]),
-        "",
-        "",
-        None,
-      ),
-      connect_pages.connect_client_page(
-        language,
-        view.System,
-        Error(reason),
-        "",
-        "",
-        None,
-      ),
-      connect_pages.connect_review_page(
-        language,
-        view.System,
-        [row],
-        connect_pages.ConnectReview(
+      opened(dashboard.ConnectOpen(
+        uri: "nostrconnect://0123",
+        signer: row.signer,
+        error: Some(i18n.Translated(i18n.NotNostrconnectUri)),
+      )),
+      opened(dashboard.ConnectReviewOpen(
+        review: dashboard.ConnectReview(
           uri: "nostrconnect://4567?relay=wss://a.example&relay=ws://b.example&secret=s",
           signer: account_hex,
           client: "4567456745674567456745674567456745674567456745674567456745674567",
@@ -299,13 +267,10 @@ pub fn pages(language: i18n.Language) -> List(String) {
           perms: "sign_event:1",
           relays: ["wss://a.example", "ws://b.example"],
         ),
-        None,
-      ),
-      connect_pages.connect_review_page(
-        language,
-        view.System,
-        [row],
-        connect_pages.ConnectReview(
+        error: None,
+      )),
+      opened(dashboard.ConnectReviewOpen(
+        review: dashboard.ConnectReview(
           uri: "nostrconnect://4567?relay=wss://a.example&secret=s",
           signer: account_hex,
           client: "4567456745674567456745674567456745674567456745674567456745674567",
@@ -313,64 +278,21 @@ pub fn pages(language: i18n.Language) -> List(String) {
           perms: "",
           relays: ["wss://a.example"],
         ),
-        Some(reason),
-      ),
-      // 無宣言（既定）
-      session_pages.session_permissions_page(
-        language,
-        view.System,
-        Ok(dashboard.SessionRow(
-          signer: account_hex,
-          client: "4567",
-          perms: "",
-          created_at: 1000,
-          last_used_at: 1000,
-        )),
-        None,
-        None,
-      ),
-      // 宣言あり、そのほかの宣言も含む
-      session_pages.session_permissions_page(
-        language,
-        view.System,
-        Ok(dashboard.SessionRow(
-          signer: account_hex,
-          client: "4567",
-          perms: "sign_event:1,nip04_encrypt",
-          created_at: 1000,
-          last_used_at: 1000,
-        )),
-        None,
-        None,
-      ),
+        error: Some(reason),
+      )),
       // 保存の失敗（409 の描き直し）
-      session_pages.session_permissions_page(
-        language,
-        view.System,
-        Ok(dashboard.SessionRow(
-          signer: account_hex,
-          client: "4567",
-          perms: "sign_event",
-          created_at: 1000,
-          last_used_at: 1000,
-        )),
-        Some(dashboard.PermissionsForm(
+      opened(dashboard.PermissionsOpen(
+        signer: account_hex,
+        client: "4567",
+        form: dashboard.PermissionsForm(
           sign_event: True,
           nip44_encrypt: False,
           nip44_decrypt: False,
           kinds: "",
           other: "",
-        )),
-        Some(reason),
-      ),
-      // 一覧を得られない
-      session_pages.session_permissions_page(
-        language,
-        view.System,
-        Error(reason),
-        None,
-        None,
-      ),
+        ),
+        error: reason,
+      )),
     ],
     list.map(
       [
@@ -996,7 +918,6 @@ pub fn components(language: i18n.Language) -> List(String) {
       ),
       element.to_string,
     ),
-    [element.to_string(view.fallback_link(language, "/"))],
     [element.to_string(view.radio_tabs("tabs", [#("one", []), #("two", [])]))],
     [
       element.to_string(view.dialog_trigger(

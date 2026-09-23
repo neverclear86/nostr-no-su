@@ -172,8 +172,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.CopyClient -> Some(i18n.ShowFieldHint)
     i18n.ShowFieldHint -> Some(i18n.Cancel)
     i18n.Cancel -> Some(i18n.Close)
-    i18n.Close -> Some(i18n.OpenAsPage)
-    i18n.OpenAsPage -> Some(i18n.Dashboard)
+    i18n.Close -> Some(i18n.Dashboard)
     i18n.Dashboard -> Some(i18n.Pending)
     i18n.Pending -> Some(i18n.OverviewLabel)
     i18n.OverviewLabel -> Some(i18n.AwaitingDecision)
@@ -210,9 +209,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.Permissions -> Some(i18n.NoPermissionsRequested)
     i18n.NoPermissionsRequested -> Some(i18n.EditPermissions)
     i18n.EditPermissions -> Some(i18n.EditPermissionsDescription)
-    i18n.EditPermissionsDescription -> Some(i18n.CurrentPermissions)
-    i18n.CurrentPermissions -> Some(i18n.PermissionsNotDeclared)
-    i18n.PermissionsNotDeclared -> Some(i18n.AllowSignEvent)
+    i18n.EditPermissionsDescription -> Some(i18n.AllowSignEvent)
     i18n.AllowSignEvent -> Some(i18n.SignEventAlwaysRefused)
     i18n.SignEventAlwaysRefused -> Some(i18n.AllowNip44Encrypt)
     i18n.AllowNip44Encrypt -> Some(i18n.AllowNip44Decrypt)
@@ -328,8 +325,7 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.UriRelays -> Some(i18n.ConnectExplanation)
     i18n.ConnectExplanation -> Some(i18n.ConnectRelaysScope)
     i18n.ConnectRelaysScope -> Some(i18n.ConnectWaitHint(15))
-    i18n.ConnectWaitHint(_) -> Some(i18n.PasteAnotherUri)
-    i18n.PasteAnotherUri -> Some(i18n.NoAccountsForConnect)
+    i18n.ConnectWaitHint(_) -> Some(i18n.NoAccountsForConnect)
     i18n.NoAccountsForConnect -> Some(i18n.SigningAccountNotFound)
     i18n.SigningAccountNotFound -> Some(i18n.NostrconnectRelayNotConnected)
     i18n.NostrconnectRelayNotConnected -> Some(i18n.NotNostrconnectUri)
@@ -441,12 +437,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 258 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 254 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 258
+  assert list.length(messages) == 254
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

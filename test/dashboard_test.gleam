@@ -1,18 +1,16 @@
-//// 管理 UI のパスの定義、状態の見せ方、ダイアログとページが共用するフォームの中身（`admin/dashboard`）の単体テスト。
+//// 管理 UI のパスの定義、状態の見せ方、ダイアログに出すフォームの中身（`admin/dashboard`）の単体テスト。
 
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import lustre/element
 import lustre/element/html
-import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
-import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/vault
@@ -23,7 +21,7 @@ import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
 import nostr_no_su/relay_store.{type Relay, Relay}
 import support/account_actions
-import support/admin_context.{closed_dialog, opened_dialog}
+import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 
 /// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作に戻る。
 pub fn account_action_paths_round_trip_test() {
@@ -1089,7 +1087,8 @@ pub fn shared_listing_failure_is_shown_once_test() {
       pending: Error(i18n.Untranslated("account store unavailable: boom")),
       sessions: Error(i18n.Untranslated("account store unavailable: boom")),
     )
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english =
+    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
   assert list.length(string.split(english, "account store unavailable: boom"))
     == 2
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 2
@@ -1128,7 +1127,8 @@ pub fn timed_out_listings_are_not_merged_test() {
       pending: Error(i18n.Translated(i18n.NotAvailable)),
       sessions: Error(i18n.Translated(i18n.NotAvailable)),
     )
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english =
+    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
   assert list.length(string.split(english, "Not available right now.")) == 4
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
   assert !string.contains(english, "Not available for the reason above.")
@@ -1144,7 +1144,8 @@ pub fn different_listing_failures_stay_in_each_section_test() {
       pending: Error(i18n.Untranslated("first reason")),
       sessions: Error(i18n.Untranslated("second reason")),
     )
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english =
+    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
   assert list.length(string.split(english, "first reason")) == 3
   assert list.length(string.split(english, "second reason")) == 2
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
@@ -2109,10 +2110,13 @@ pub fn relays_heading_opens_the_add_dialog_test() {
   assert string.contains(unavailable, "id=\"dialog-relay-new\"")
 }
 
-/// セッションの節の見出しの行は、一覧を得たときだけ接続のダイアログを開くボタンと予備のリンクを出す。
+/// セッションの節の見出しの行は、一覧を得たときだけ接続のダイアログを開くボタンを出す。接続のダイアログは
+/// 一覧を得られないときも描く。
 pub fn sessions_heading_links_to_connect_a_client_test() {
+  let trigger = "command=\"show-modal\" commandfor=\"dialog-session-connect\""
   let ok = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(ok, "href=\"/sessions/connect\"")
+  assert string.contains(ok, trigger)
+  assert string.contains(ok, "id=\"dialog-session-connect\"")
 
   let unavailable =
     dashboard.render(
@@ -2120,7 +2124,8 @@ pub fn sessions_heading_links_to_connect_a_client_test() {
       view.System,
       dashboard.Snapshot(..states(), sessions: Error(i18n.Untranslated("boom"))),
     )
-  assert !string.contains(unavailable, "/sessions/connect")
+  assert !string.contains(unavailable, trigger)
+  assert string.contains(unavailable, "id=\"dialog-session-connect\"")
 }
 
 /// アカウントの節の見出しの行には、追加のダイアログを開くボタンと並んで読み直しのフォームが出る。
@@ -2240,10 +2245,9 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
     body,
     element.to_string(
       view.empty_state(view.clock_icon(), "No approved sessions.", [
-        view.icon_button_link(
-          "/sessions/connect",
-          view.plus_icon(),
-          "Connect a client",
+        view.dialog_trigger(
+          "dialog-session-connect",
+          view.IconTextTrigger(view.plus_icon(), "Connect a client"),
           view.OutlineButton,
         ),
       ]),
@@ -3170,70 +3174,15 @@ pub fn session_dialogs_open_from_matching_triggers_test() {
   )
 }
 
-/// 接続のダイアログのフォームは接続のページのフォームと同じ宛先と属性で POST する。取り消しのダイアログの
-/// フォームは `/sessions/revoke` へ POST し、署名者の隠し欄を持つ。
+/// 取り消しのダイアログのフォームは `/sessions/revoke` へ POST し、署名者の隠し欄を持つ。
 pub fn session_dialog_forms_match_the_page_forms_test() {
   let body = dashboard.render(i18n.English, view.System, session_snapshot())
-  assert form_tag(
-      closed_dialog(body, "dialog-session-connect"),
-      "/sessions/connect",
-    )
-    == form_tag(
-      connect_pages.connect_client_page(
-        i18n.English,
-        view.System,
-        Ok([session_account()]),
-        "",
-        "",
-        None,
-      ),
-      "/sessions/connect",
-    )
   let revoke = closed_dialog(body, "dialog-session-abcd-ef01-revoke")
   assert form_tag(revoke, "/sessions/revoke")
     == "\" class=\"flex flex-col gap-4\" method=\"post\""
   assert string.contains(
     form_html(revoke, "/sessions/revoke"),
     element.to_string(view.hidden_input(dashboard.signer_field, "abcd")),
-  )
-}
-
-/// 権限の編集のダイアログのフォームは、行ごとに、その行の権限の編集のページのフォームと同じ中身を持つ。
-/// kind の補足の `id` だけが、ページの固定の値からダイアログの `id` に基づく値に替わる。
-pub fn session_permission_dialogs_match_each_rows_page_test() {
-  let body = dashboard.render(i18n.English, view.System, session_snapshot())
-  let assert Ok(rows) = session_snapshot().sessions
-  use row <- list.each(rows)
-  let id = "dialog-session-abcd-" <> row.client <> "-permissions"
-  let path = dashboard.session_permissions_path(row.signer, row.client)
-  let page =
-    session_pages.session_permissions_page(
-      i18n.English,
-      view.System,
-      Ok(row),
-      None,
-      None,
-    )
-  // 欄は同じで、送信の後にダイアログだけがキャンセルを並べる
-  let assert Ok(#(dialog_fields, dialog_actions)) =
-    string.split_once(
-      form_html(closed_dialog(body, id), path),
-      "<div class=\"flex flex-wrap items-center gap-2\"><button class=\"btn btn-primary focus-visible:outline-base-content\" type=\"submit\">",
-    )
-  let assert Ok(#(page_fields, _)) =
-    string.split_once(
-      form_html(page, path),
-      "<button class=\"btn btn-primary self-start focus-visible:outline-base-content\" type=\"submit\">",
-    )
-  assert dialog_fields
-    == string.replace(
-      page_fields,
-      "session-permissions-kinds-hint",
-      id <> "-kinds-hint",
-    )
-  assert string.contains(
-    dialog_actions,
-    "command=\"close\" commandfor=\"" <> id <> "\"",
   )
 }
 
@@ -3244,22 +3193,6 @@ pub fn session_rows_revoke_only_from_the_dialog_test() {
   assert string.contains(
     closed_dialog(body, "dialog-session-abcd-ef01-revoke"),
     "btn btn-outline btn-warning",
-  )
-}
-
-/// セッションの行の予備のリンクは権限の編集のページを、見出しの予備のリンクは接続のページを開く。
-pub fn session_rows_link_to_the_permissions_page_as_a_fallback_test() {
-  let body = dashboard.render(i18n.English, view.System, session_snapshot())
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(
-      i18n.English,
-      "/sessions/abcd/ef01/permissions",
-    )),
-  )
-  assert string.contains(
-    body,
-    element.to_string(view.fallback_link(i18n.English, "/sessions/connect")),
   )
 }
 
@@ -3314,13 +3247,7 @@ fn english_permissions_form() -> String {
       created_at: 0,
       last_used_at: 0,
     )
-  dashboard.permissions_form(
-    i18n.English,
-    session,
-    None,
-    "session-permissions-kinds-hint",
-    view.InForm,
-  )
+  dashboard.permissions_form(i18n.English, session, None, view.InForm)
   |> element.fragment
   |> element.to_string
 }
@@ -3335,10 +3262,6 @@ pub fn permissions_form_posts_without_the_page_frame_test() {
   )
   assert string.contains(html, "value=\"1\"")
   assert !string.contains(html, "<header")
-  assert !string.contains(
-    html,
-    i18n.text(i18n.English, i18n.CurrentPermissions),
-  )
 }
 
 /// kind の欄の補足は ⓘ のボタンで開く `popover` の段落で、欄の説明として結び付く。
@@ -3346,15 +3269,15 @@ pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
   let html = english_permissions_form()
   assert string.contains(
     html,
-    "aria-describedby=\"session-permissions-kinds-hint\"",
+    "aria-describedby=\"dialog-session-0123-4567-permissions-kinds-hint\"",
   )
   assert string.contains(
     html,
-    "popovertarget=\"session-permissions-kinds-hint\"",
+    "popovertarget=\"dialog-session-0123-4567-permissions-kinds-hint\"",
   )
   assert string.contains(
     html,
-    "id=\"session-permissions-kinds-hint\" popover=\"hint\"",
+    "id=\"dialog-session-0123-4567-permissions-kinds-hint\" popover=\"hint\"",
   )
 }
 
@@ -3527,4 +3450,161 @@ pub fn account_row_without_a_picture_draws_no_image_test() {
       dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
     ))
   assert !string.contains(before, "<img")
+}
+
+/// 署名者の選択欄には、ラベルと省略した npub を並べて出す。
+pub fn connect_form_lists_accounts_with_the_shortened_npub_test() {
+  let html =
+    dashboard.connect_form(
+      i18n.English,
+      [session_account()],
+      "",
+      "",
+      view.InForm,
+    )
+    |> element.fragment
+    |> element.to_string
+  assert string.contains(
+    html,
+    "main " <> view.shorten(session_account().npub) <> "</option>",
+  )
+}
+
+/// 送られた URI と署名者と理由で開く接続のダイアログは、先頭に理由を出し、URI を欄に戻す。
+pub fn connect_dialog_opens_with_the_submitted_values_test() {
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      session_snapshot(),
+      dashboard.ConnectOpen(
+        uri: "not-a-uri",
+        signer: "abcd",
+        error: Some(i18n.Translated(i18n.NotNostrconnectUri)),
+      ),
+    )
+  let assert [#("dialog-session-connect", dialog)] = opened_dialogs(body)
+  assert string.contains(
+    dialog,
+    i18n.text(i18n.English, i18n.NotNostrconnectUri),
+  )
+  assert string.contains(dialog, ">not-a-uri</textarea>")
+}
+
+/// 確認のダイアログは開くときだけ描き、閉じた状態では描かない。
+pub fn connect_review_dialog_is_drawn_only_when_opened_test() {
+  assert !string.contains(
+    dashboard.render(i18n.English, view.System, session_snapshot()),
+    "dialog-session-connect-review",
+  )
+}
+
+/// 確認のダイアログに渡す内容。名前と権限があり、リレーは 2 件。署名者は `session_account` の `abcd`。
+fn review() -> dashboard.ConnectReview {
+  dashboard.ConnectReview(
+    uri: "nostrconnect://abcd?relay=wss%3A%2F%2Ffirst.example&relay=wss%3A%2F%2Fsecond.example&secret=s",
+    signer: "abcd",
+    client: "1111111111111111111111111111111111111111111111111111111111111111",
+    client_name: Some("example"),
+    perms: "sign_event:1",
+    relays: ["wss://first.example", "wss://second.example"],
+  )
+}
+
+/// `review` と `error` で確認のダイアログを開いた英語のダッシュボードから、唯一の開いたダイアログの
+/// 中身を取り出す。
+fn review_dialog(
+  review: dashboard.ConnectReview,
+  error: Option(i18n.Reason),
+) -> String {
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      session_snapshot(),
+      dashboard.ConnectReviewOpen(review:, error:),
+    )
+  let assert [#("dialog-session-connect-review", dialog)] = opened_dialogs(body)
+  dialog
+}
+
+/// URI のリレーは URI に現れた順に 1 行ずつ並び、URI と署名者は隠し欄で確認のパスへ送り直す。
+pub fn connect_review_dialog_lists_the_relays_in_order_test() {
+  let dialog = review_dialog(review(), None)
+  assert string.contains(
+    dialog,
+    "<li class=\"font-mono text-xs break-all\">wss://first.example</li><li class=\"font-mono text-xs break-all\">wss://second.example</li>",
+  )
+  assert string.contains(dialog, "<form action=\"/sessions/connect/confirm\"")
+  assert string.contains(
+    dialog,
+    "<input name=\"uri\" type=\"hidden\" value=\""
+      <> string.replace(review().uri, "&", "&amp;")
+      <> "\">",
+  )
+  assert string.contains(
+    dialog,
+    "<input name=\"signer\" type=\"hidden\" value=\"abcd\">",
+  )
+}
+
+/// 名乗る名前の行は、名前があるときだけ出す。
+pub fn connect_review_dialog_shows_the_name_only_when_given_test() {
+  let label = i18n.text(i18n.English, i18n.ClientName)
+  let named = review_dialog(review(), None)
+  assert string.contains(named, label)
+  assert string.contains(named, "<dd class=\"break-words\">example</dd>")
+  let unnamed =
+    review_dialog(dashboard.ConnectReview(..review(), client_name: None), None)
+  assert !string.contains(unnamed, label)
+}
+
+/// 権限が空のときだけ、許す操作の一文を説明に続ける。
+pub fn connect_review_dialog_explains_empty_permissions_test() {
+  let sentence = i18n.text(i18n.English, i18n.NoPermissionsRequested)
+  assert !string.contains(review_dialog(review(), None), sentence)
+  assert string.contains(
+    review_dialog(dashboard.ConnectReview(..review(), perms: ""), None),
+    sentence,
+  )
+}
+
+/// 接続の段で失敗したときは、確認のダイアログの先頭に理由を出す。
+pub fn connect_review_dialog_shows_the_failure_test() {
+  let reason = i18n.text(i18n.English, i18n.NostrconnectRelayNotConnected)
+  let failed =
+    review_dialog(
+      review(),
+      Some(i18n.Translated(i18n.NostrconnectRelayNotConnected)),
+    )
+  assert string.contains(failed, reason)
+  assert string.contains(failed, "role=\"alert\"")
+  assert !string.contains(review_dialog(review(), None), reason)
+}
+
+/// 権限の編集のダイアログは、`PermissionsOpen` と一致する行のものだけを、送られた欄の状態と先頭の理由で
+/// 開く。
+pub fn permissions_dialog_opens_for_the_matching_row_test() {
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.English,
+      view.System,
+      session_snapshot(),
+      dashboard.PermissionsOpen(
+        signer: "abcd",
+        client: "ef02",
+        form: dashboard.PermissionsForm(
+          sign_event: True,
+          nip44_encrypt: False,
+          nip44_decrypt: False,
+          kinds: "abc",
+          other: "",
+        ),
+        error: i18n.Translated(i18n.InvalidKindList),
+      ),
+    )
+  let assert [#("dialog-session-abcd-ef02-permissions", dialog)] =
+    opened_dialogs(body)
+  assert string.contains(dialog, "value=\"abc\"")
+  assert string.contains(dialog, i18n.text(i18n.English, i18n.InvalidKindList))
 }

@@ -540,12 +540,6 @@ pub fn dialog_id_joins_the_parts_after_the_prefix_test() {
   assert view.dialog_id(["relay", "7", "edit"]) == "dialog-relay-7-edit"
 }
 
-/// 予備のリンクは今の操作のページを開き、表示の言語で「ページで開く」と書く。
-pub fn fallback_link_opens_the_page_test() {
-  assert element.to_string(view.fallback_link(i18n.Japanese, "/relays/1/edit"))
-    == "<a class=\"link link-hover self-center text-xs text-muted\" href=\"/relays/1/edit\">ページで開く</a>"
-}
-
 /// プラグインのページの画像は、見た目の種類ごとに決まった完全なクラスの文字列で描く。
 pub fn plugin_image_shapes_test() {
   let cases = [

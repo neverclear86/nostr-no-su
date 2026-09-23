@@ -227,7 +227,6 @@ pub type Message {
   ShowFieldHint
   Cancel
   Close
-  OpenAsPage
   // ダッシュボード
   Dashboard
   Pending
@@ -266,8 +265,6 @@ pub type Message {
   NoPermissionsRequested
   EditPermissions
   EditPermissionsDescription
-  CurrentPermissions
-  PermissionsNotDeclared
   AllowSignEvent
   SignEventAlwaysRefused
   AllowNip44Encrypt
@@ -384,7 +381,6 @@ pub type Message {
   ConnectExplanation
   ConnectRelaysScope
   ConnectWaitHint(seconds: Int)
-  PasteAnotherUri
   NoAccountsForConnect
   SigningAccountNotFound
   NostrconnectRelayNotConnected
@@ -515,7 +511,6 @@ fn english(message: Message) -> String {
     ShowFieldHint -> "Show help"
     Cancel -> "Cancel"
     Close -> "Close"
-    OpenAsPage -> "Open as a page"
     Dashboard -> "Dashboard"
     Pending -> "Pending"
     OverviewLabel -> "Overview"
@@ -558,8 +553,6 @@ fn english(message: Message) -> String {
     EditPermissions -> "Edit permissions"
     EditPermissionsDescription ->
       "Choose the operations this client may request."
-    CurrentPermissions -> "Current permissions"
-    PermissionsNotDeclared -> "Not declared (default)"
     AllowSignEvent -> "Allow signing events"
     SignEventAlwaysRefused ->
       "Kind 24133 is always refused, even when this is allowed."
@@ -711,7 +704,6 @@ fn english(message: Message) -> String {
       "For this connection, the bunker sends only this signer's subscription and AUTH and the responses to this client to the relays above that are not registered for the bunker."
     ConnectWaitHint(seconds:) ->
       "Connecting can take up to " <> int.to_string(seconds) <> " seconds."
-    PasteAnotherUri -> "Paste another URI"
     NoAccountsForConnect -> "Register an account before connecting a client."
     SigningAccountNotFound -> "the signing account is not registered"
     NostrconnectRelayNotConnected ->
@@ -856,7 +848,6 @@ fn japanese(message: Message) -> String {
     ShowFieldHint -> "補足を表示"
     Cancel -> "キャンセル"
     Close -> "閉じる"
-    OpenAsPage -> "ページで開く"
     Dashboard -> "ダッシュボード"
     Pending -> "承認待ち"
     OverviewLabel -> "概要"
@@ -894,8 +885,6 @@ fn japanese(message: Message) -> String {
     NoPermissionsRequested -> "要求なし。kind 24133 を除く署名と、NIP-44 の暗号化・復号を許します。"
     EditPermissions -> "権限を編集"
     EditPermissionsDescription -> "このクライアントに許す操作を選んでください。"
-    CurrentPermissions -> "今の権限"
-    PermissionsNotDeclared -> "宣言なし（既定）"
     AllowSignEvent -> "署名を許可する"
     SignEventAlwaysRefused -> "kind 24133 はこれを許可していても常に拒否します。"
     AllowNip44Encrypt -> "NIP-44 の暗号化を許可する"
@@ -1029,7 +1018,6 @@ fn japanese(message: Message) -> String {
       "上のリレーのうちバンカーの用途で登録していないものへは、この接続について、この署名者の購読と AUTH と、このクライアントへの応答だけを出します。"
     ConnectWaitHint(seconds:) ->
       "接続できるまで最大 " <> int.to_string(seconds) <> " 秒待ちます。"
-    PasteAnotherUri -> "URI を貼り直す"
     NoAccountsForConnect -> "クライアントを接続する前に、アカウントを登録してください。"
     SigningAccountNotFound -> "署名するアカウントが登録されていません。"
     NostrconnectRelayNotConnected -> "URI のリレーのどれにも接続できませんでした。時間をおいて試してください。"

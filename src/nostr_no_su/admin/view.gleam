@@ -29,11 +29,9 @@
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
 ////
 //// 文言は `admin/i18n` から表示の言語で引く。見出しや説明のように文字列を受け取る部品には、
-//// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`、
-//// `admin/connect_pages`、
-//// `admin/session_pages`）には文言を文字列リテラルで書かない。型もテストも、書き足した
-//// 英語の文言が日本語のページに出ることを検出しないためである。文字列リテラルのまま
-//// 出すのは製品名（`Nostr-no-Su`）だけである。
+//// 呼び出し側が表示の言語で引いた文字列を渡す。描画のモジュール（ここと `admin/dashboard`）には
+//// 文言を文字列リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
+//// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
 ////
 //// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
 //// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
@@ -162,8 +160,7 @@ pub fn language_choice_from_code(value: String) -> Result(LanguageChoice, Nil) {
 pub type NavbarSwitch {
   /// 切り替えを出す。切り替えた後は `return_to`（GET で開けるページのパス）を開く。
   SwitchReturningTo(return_to: String)
-  /// 切り替えを出さない。クライアントの接続の確認のページは、GET で開き直せず、切り替えると貼った URI を
-  /// 失うためこれを使う。Origin と Host が一致しない要求への 400 のページも、切り替えの POST が同じ
+  /// 切り替えを出さない。Origin と Host が一致しない要求への 400 のページは、切り替えの POST が同じ
   /// 不一致で同じ 400 になり、押しても何も変わらないためこれを使う。
   NoSwitch
 }
@@ -197,8 +194,8 @@ pub type Placement {
 
 /// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
 pub type Tone {
-  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コードのダイアログ、
-  /// クライアントの接続と権限の編集のページで、リレー、アカウント、セッションを得られない）。
+  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コードとクライアントの
+  /// 接続のダイアログで、リレーとアカウントを得られない）。
   Neutral
   /// 求めた操作が反映された結果（接続の承認）。
   Success
@@ -1937,7 +1934,7 @@ pub fn truncated_id(
 
 /// ダイアログを開くボタンの見た目。
 pub type DialogTrigger(msg) {
-  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、「はじめに」の帯の段の追加の操作、アカウントの空の節の操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
+  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、「はじめに」の帯の段の追加の操作、アカウントとセッションの空の節の操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
   IconTextTrigger(icon: Element(msg), text: String)
   /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
   IconOnlyTrigger(icon: Element(msg), label: String)
@@ -2060,17 +2057,6 @@ pub fn dialog(
   )
 }
 
-/// ダイアログを開けないブラウザー（`commandfor` に対応しないもの）のための、今の操作のページへのリンク。操作のページがあるダイアログのボタンの並びごとに 1 つ、並びの末尾か、並びの幅を保つときはその下の行に置く。
-pub fn fallback_link(language: Language, href: String) -> Element(msg) {
-  html.a(
-    [
-      attribute.href(href),
-      attribute.class("link link-hover self-center text-xs text-muted"),
-    ],
-    [html.text(i18n.text(language, i18n.OpenAsPage))],
-  )
-}
-
 /// JS を使わずに切り替えるタブ。`tabs` の語と中身の組ごとに、語を持つ `label` の中のラジオ（`name` は `group`）と中身の枠を交互に並べ、最初のタブを選んだ状態で描く。選んだラジオの `label` の直後の枠だけを daisyUI の `tabs` の CSS が表示する。ラジオが送信されないよう、フォームの中には置かない。`group` はページの中で一意にする。
 pub fn radio_tabs(
   group: String,
@@ -2099,7 +2085,7 @@ pub fn radio_tabs(
   )
 }
 
-/// アイコン＋語のボタンのリンク。セッションの空の節の操作と、プラグインの行のページへのリンクに使う。
+/// アイコン＋語のボタンのリンク。プラグインの行のページへのリンクに使う。
 pub fn icon_button_link(
   href: String,
   icon: Element(msg),

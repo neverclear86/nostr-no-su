@@ -2,7 +2,7 @@
 ////
 //// ハンドラーは状態を自分で取りに行かず、`Context` に注入された関数から受け取る。
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
-//// HTML」の純粋関数（`admin/dashboard`、`admin/connect_pages`、`admin/session_pages`）に閉じ込められる。
+//// HTML」の純粋関数（`admin/dashboard`）に閉じ込められる。
 ////
 //// 認証は HTTP Basic（ユーザー名 `admin`）。平文 HTTP なので、外部へ公開する
 //// ときはリバースプロキシーで TLS を終端すること。資格情報はブラウザーが自動で
@@ -59,12 +59,10 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import mist
-import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/plugin_view
-import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
@@ -1155,12 +1153,12 @@ fn session_failure_response(
   }
 }
 
-/// セッション 1 件の権限の編集ページと、その送信。`request.method` で先に分ける。
-/// GET は編集画面を 200 で返す（一覧を得られないときも 200 でフォームの無いページ
-/// を出す）。POST は一覧を得られないときは 503、検証に落ちれば送られた欄の状態の
-/// まま 400 で描き直し、通れば `context.update_perms` を呼ぶ。書き込まれていない
-/// ことが確定した失敗（`SessionNotApplied`）は 409 でフォームを描き直し、それ以外
-/// の失敗は `session_failure_response` に渡す。
+/// セッション 1 件の権限の保存。POST だけを受け付ける。組が承認済みの一覧に無ければ 404、
+/// 一覧を得られなければ 503 の通知ページを返す。検証に落ちれば 400、書き込まれていない
+/// ことが確定した失敗（`SessionNotApplied`）は 409 で、どちらもその行の権限の編集の
+/// ダイアログを、送られた欄の状態と理由で開いたダッシュボードを返す。通れば
+/// `context.update_perms` を呼んで 303 でダッシュボードへ戻し、それ以外の失敗は
+/// `session_failure_response` に渡す。
 fn session_permissions(
   context: Context,
   request: Request,
@@ -1169,51 +1167,40 @@ fn session_permissions(
   signer: String,
   client: String,
 ) -> Response {
-  case request.method {
-    http.Get -> {
-      use session <- with_session(context, language, theme, signer, client, 200)
-      session_pages.session_permissions_page(
-        language,
-        theme,
-        Ok(session),
-        None,
-        None,
-      )
-      |> wisp.html_response(200)
-    }
-    http.Post -> {
-      use form <- wisp.require_form(request)
-      use session <- with_session(context, language, theme, signer, client, 503)
-      let submitted = submitted_form(form)
-      let redraw = fn(reason) {
-        session_pages.session_permissions_page(
-          language,
-          theme,
-          Ok(session),
-          Some(submitted),
-          reason,
-        )
+  use <- require_method(request, http.Post, language, theme)
+  use form <- wisp.require_form(request)
+  use <- with_session(context, language, theme, signer, client)
+  let submitted = submitted_form(form)
+  let redraw = fn(reason, status) {
+    dialog_response(
+      context,
+      language,
+      theme,
+      dashboard.PermissionsOpen(
+        signer:,
+        client:,
+        form: submitted,
+        error: reason,
+      ),
+      status,
+    )
+  }
+  case assembled_perms(submitted) {
+    Error(message) -> redraw(i18n.Translated(message), 400)
+    Ok(perms) ->
+      case context.update_perms(signer, client, perms) {
+        Ok(Nil) -> {
+          log.write(
+            log.Notice,
+            log_prefix,
+            session_change_line(PermissionsSaved, signer, client),
+          )
+          wisp.redirect(to: "/")
+        }
+        Error(bunker.SessionNotApplied(reason)) ->
+          redraw(i18n.Untranslated(reason), 409)
+        Error(failure) -> session_failure_response(language, theme, failure)
       }
-      case assembled_perms(submitted) {
-        Error(message) ->
-          redraw(Some(i18n.Translated(message))) |> wisp.html_response(400)
-        Ok(perms) ->
-          case context.update_perms(signer, client, perms) {
-            Ok(Nil) -> {
-              log.write(
-                log.Notice,
-                log_prefix,
-                session_change_line(PermissionsSaved, signer, client),
-              )
-              wisp.redirect(to: "/")
-            }
-            Error(bunker.SessionNotApplied(reason)) ->
-              redraw(Some(i18n.Untranslated(reason))) |> wisp.html_response(409)
-            Error(failure) -> session_failure_response(language, theme, failure)
-          }
-      }
-    }
-    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
   }
 }
 
@@ -1304,37 +1291,34 @@ fn perms_string(
   |> string.join(",")
 }
 
-/// クライアントの接続ページと、その送信。GET はフォームを 200 で出す（アカウントの
-/// 一覧を引けなくてもカードの中に理由を出す）。POST は入力を `with_connect_input` で確かめ、
-/// 通れば確認のページを 200 で返す。この時点ではセッションもリレーの接続も作らない。
+/// クライアントの接続の 1 段目の送信。POST だけを受け付け、入力を `with_connect_input` で
+/// 確かめ、通れば確認のダイアログを開いたダッシュボードを 200 で返す。この時点では
+/// セッションもリレーの接続も作らない。
 fn connect_client(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
 ) -> Response {
-  case request.method {
-    http.Get -> {
-      let accounts = result.map_error(context.accounts(), i18n.Untranslated)
-      connect_pages.connect_client_page(language, theme, accounts, "", "", None)
-      |> wisp.html_response(200)
-    }
-    http.Post -> {
-      use rows, review, _connect_request <- with_connect_input(
-        context,
-        request,
-        language,
-        theme,
-      )
-      connect_pages.connect_review_page(language, theme, rows, review, None)
-      |> wisp.html_response(200)
-    }
-    _ -> method_not_allowed(language, theme, [http.Get, http.Post])
-  }
+  use <- require_method(request, http.Post, language, theme)
+  use review, _connect_request <- with_connect_input(
+    context,
+    request,
+    language,
+    theme,
+  )
+  dialog_response(
+    context,
+    language,
+    theme,
+    dashboard.ConnectReviewOpen(review:, error: None),
+    200,
+  )
 }
 
-/// 確認のページの「接続する」。隠し欄で送り直された URI と署名者を `with_connect_input` で
-/// もう一度確かめてからセッションを開く。接続の段の失敗は確認のページを描き直して理由を出す。
+/// 確認のダイアログの「接続する」。隠し欄で送り直された URI と署名者を `with_connect_input`
+/// でもう一度確かめてからセッションを開く。接続の段の失敗は、確認のダイアログを開いた
+/// ダッシュボードで理由を出す。
 fn confirm_connection(
   context: Context,
   request: Request,
@@ -1342,7 +1326,7 @@ fn confirm_connection(
   theme: view.Theme,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
-  use rows, review, connect_request <- with_connect_input(
+  use review, connect_request <- with_connect_input(
     context,
     request,
     language,
@@ -1354,68 +1338,54 @@ fn confirm_connection(
     context.connect_client(connect_request, review.signer),
     review.signer,
     connect_request.client,
-    fn(reason) {
-      connect_pages.connect_review_page(
+    fn(reason, status) {
+      dialog_response(
+        context,
         language,
         theme,
-        rows,
-        review,
-        Some(reason),
+        dashboard.ConnectReviewOpen(review:, error: Some(reason)),
+        status,
       )
     },
   )
 }
 
-/// 接続の 2 つの POST が共有する入力の検査。一覧を引けなければ 1 段目のページを 503 で、URI を
-/// 解釈できないか署名者が一覧に無ければ理由を付けて 400 で返す（送られた URI と署名者を戻す）。
-/// 通れば、一覧と確認のページに出す内容と解釈した接続を `next` に渡す。
+/// 接続の 2 つの POST が共有する入力の検査。URI を解釈できないか署名者が一覧に無ければ、
+/// 送られた URI と署名者を欄に戻し先頭に理由を出した接続のダイアログを開いたダッシュボードを
+/// 400 で返す。一覧を引けなければ、理由の囲みだけを出す接続のダイアログを開いたダッシュボードを
+/// 503 で返す。通れば、確認のダイアログに出す内容と解釈した接続を `next` に渡す。
 fn with_connect_input(
   context: Context,
   request: Request,
   language: Language,
   theme: view.Theme,
-  next: fn(
-    List(dashboard.AccountRow),
-    connect_pages.ConnectReview,
-    nostrconnect.ConnectRequest,
-  ) -> Response,
+  next: fn(dashboard.ConnectReview, nostrconnect.ConnectRequest) -> Response,
 ) -> Response {
   use form <- wisp.require_form(request)
   let raw_uri = form_value(form, dashboard.nostrconnect_uri_field)
   let signer = form_value(form, dashboard.signer_field)
   let echoed_uri = without_control_characters(raw_uri)
+  let redraw = fn(error, status) {
+    dialog_response(
+      context,
+      language,
+      theme,
+      dashboard.ConnectOpen(uri: echoed_uri, signer:, error:),
+      status,
+    )
+  }
   case context.accounts() {
-    Error(reason) ->
-      connect_pages.connect_client_page(
-        language,
-        theme,
-        Error(i18n.Untranslated(reason)),
-        echoed_uri,
-        signer,
-        None,
-      )
-      |> wisp.html_response(503)
+    Error(_) -> redraw(None, 503)
     Ok(rows) -> {
-      let redraw = fn(message) {
-        connect_pages.connect_client_page(
-          language,
-          theme,
-          Ok(rows),
-          echoed_uri,
-          signer,
-          Some(i18n.Translated(message)),
-        )
-        |> wisp.html_response(400)
-      }
       let uri = string.trim(raw_uri)
       case nostrconnect.parse(uri) {
-        Error(error) -> redraw(parse_message(error))
+        Error(error) -> redraw(Some(i18n.Translated(parse_message(error))), 400)
         Ok(connect_request) ->
           case list.any(rows, fn(row) { row.signer == signer }) {
-            False -> redraw(i18n.SigningAccountNotFound)
+            False ->
+              redraw(Some(i18n.Translated(i18n.SigningAccountNotFound)), 400)
             True ->
               next(
-                rows,
                 connect_review(connect_request, uri, signer),
                 connect_request,
               )
@@ -1425,13 +1395,13 @@ fn with_connect_input(
   }
 }
 
-/// 確認のページに出す内容。名乗る名前は `client_display_name` で整える。
+/// 確認のダイアログに出す内容。名乗る名前は `client_display_name` で整える。
 fn connect_review(
   request: nostrconnect.ConnectRequest,
   uri: String,
   signer: String,
-) -> connect_pages.ConnectReview {
-  connect_pages.ConnectReview(
+) -> dashboard.ConnectReview {
+  dashboard.ConnectReview(
     uri:,
     signer:,
     client: request.client,
@@ -1478,15 +1448,15 @@ fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
 }
 
 /// クライアントの接続の結果。成功ならログを 1 行出し、ダッシュボードへ 303 で戻す。
-/// 失敗は状態コードごとに確認のページを描き直すか「変更を確認できませんでした」の
-/// 通知ページにする。
+/// 失敗は状態コードごとに、`redraw` で確認のダイアログを開いたダッシュボードを返すか、
+/// 「変更を確認できませんでした」の通知ページにする。`redraw` は理由と状態コードを受け取る。
 fn connect_failure_response(
   language: Language,
   theme: view.Theme,
   outcome: Result(Nil, NostrconnectFailure),
   signer: String,
   client: String,
-  redraw: fn(i18n.Reason) -> String,
+  redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case outcome {
     Ok(Nil) -> {
@@ -1498,13 +1468,12 @@ fn connect_failure_response(
       wisp.redirect(to: "/")
     }
     Error(RelayNotConnected) ->
-      redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected))
-      |> wisp.html_response(503)
+      redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected), 503)
     Error(SessionNotOpened(bunker.SessionNotFound(reason)))
     | Error(SessionNotOpened(bunker.SessionNotApplied(reason))) ->
-      redraw(i18n.Untranslated(reason)) |> wisp.html_response(409)
+      redraw(i18n.Untranslated(reason), 409)
     Error(SessionNotOpened(bunker.SessionNotReady(reason))) ->
-      redraw(i18n.Untranslated(reason)) |> wisp.html_response(503)
+      redraw(i18n.Untranslated(reason), 503)
     Error(SessionNotOpened(bunker.SessionMaybeApplied(cause))) ->
       not_confirmed_notice(
         language,
@@ -1896,6 +1865,9 @@ fn dialog_unavailable_title(dialog: dashboard.OpenDialog) -> i18n.Message {
     | dashboard.AccountActionOpen(..)
     | dashboard.PrivateKeyOpen(..)
     | dashboard.UnreadableDeleteOpen(..) -> i18n.AccountsNotAvailable
+    dashboard.ConnectOpen(..)
+    | dashboard.ConnectReviewOpen(..)
+    | dashboard.PermissionsOpen(..) -> i18n.BunkerNotAvailable
   }
 }
 
@@ -1919,8 +1891,8 @@ fn with_relay(
   }
 }
 
-/// 承認済みセッションの一覧から（署名者, クライアント）の組を引く。一覧を得られ
-/// なければフォームの無いページを `unavailable_status` で、組が無ければ 404 を
+/// 承認済みセッションの一覧に（署名者, クライアント）の組があるときだけ `next` を呼ぶ。
+/// 一覧を得られなければ 503 の `BunkerNotAvailable` の通知ページを、組が無ければ 404 を
 /// 返す。一覧を得られないことは時間をおけば直るので 404 にしない。
 fn with_session(
   context: Context,
@@ -1928,25 +1900,17 @@ fn with_session(
   theme: view.Theme,
   signer: String,
   client: String,
-  unavailable_status: Int,
-  next: fn(dashboard.SessionRow) -> Response,
+  next: fn() -> Response,
 ) -> Response {
   case context.sessions() {
     Error(reason) ->
-      session_pages.session_permissions_page(
-        language,
-        theme,
-        Error(i18n.Untranslated(reason)),
-        None,
-        None,
-      )
-      |> wisp.html_response(unavailable_status)
+      unavailable_notice(language, theme, i18n.BunkerNotAvailable, reason)
     Ok(rows) ->
       case
-        list.find(rows, fn(row) { row.signer == signer && row.client == client })
+        list.any(rows, fn(row) { row.signer == signer && row.client == client })
       {
-        Ok(row) -> next(row)
-        Error(Nil) ->
+        True -> next()
+        False ->
           not_found_notice(
             language,
             theme,

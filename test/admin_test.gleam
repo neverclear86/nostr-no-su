@@ -27,10 +27,11 @@ import nostr_no_su/time
 import support/admin_context.{
   AccountsReloaded, Approved, ClientConnectRequested, Denied, PermissionsSaved,
   Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path,
-  auth_uri, client, context, declared_client, failing_context, get, header,
-  in_japanese, label, not_answering_context, opened_dialog, password, post,
-  post_form, reporting_context, session_not_approved, signer, signer_npub,
-  test_context, token, unavailable, with_accounts, with_credentials,
+  auth_uri, client, closed_dialog, context, declared_client, failing_context,
+  get, header, in_japanese, label, not_answering_context, opened_dialog,
+  opened_dialogs, password, post, post_form, reporting_context,
+  session_not_approved, signer, signer_npub, test_context, token, unavailable,
+  with_accounts, with_credentials,
 }
 import wisp
 import wisp/simulate
@@ -165,21 +166,9 @@ pub fn revoke_rejects_other_methods_test() {
   assert response.status == 405
 }
 
-/// GET は編集画面を 200 で返し、フォームと今の権限のチップを含む。
-pub fn session_permissions_page_is_shown_test() {
-  let response =
-    get(context(), dashboard.session_permissions_path(signer, declared_client))
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
-  assert string.contains(body, "sign_event:1")
-  assert string.contains(body, "nip04_encrypt")
-}
-
-/// 承認済みの一覧に無い組は GET も POST も 404。
+/// 承認済みの一覧に無い組への POST は 404。
 pub fn unknown_session_permissions_are_not_found_test() {
   let path = dashboard.session_permissions_path(signer, unknown_client)
-  assert get(context(), path).status == 404
   assert post_form(context(), path, [#(dashboard.sign_event_field, "on")]).status
     == 404
 }
@@ -228,8 +217,22 @@ pub fn session_permissions_keep_unknown_declarations_test() {
     ))
 }
 
-/// チェックも kinds も無い POST は 400 で描き直し、送った通り 3 つとも未チェックの
-/// まま返す（送られていない選択を既定の全許可に化けさせない）。
+/// セッション `session_client` の行の権限の編集のダイアログの `id`。
+fn permissions_dialog_id(session_client: String) -> String {
+  "dialog-session-" <> signer <> "-" <> session_client <> "-permissions"
+}
+
+/// 権限の欄 `field` にチェックが入っていることを示す、描画の中の並び。
+fn checked_field(field: String) -> String {
+  "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
+  <> field
+  <> "\""
+}
+
+/// チェックも kinds も無い POST は 400 で、その行の権限の編集のダイアログを開いたダッシュボードを返し、
+/// 送った通り 3 つとも未チェックのまま返す（送られていない選択を既定の全許可に化けさせない）。
+/// 閉じたままの無宣言の行のダイアログには既定のチェックが入り、探す並びが実際のチェックの出力と
+/// 一致することの対照になる。
 pub fn empty_session_permissions_are_rejected_test() {
   let response =
     post_form(
@@ -239,45 +242,27 @@ pub fn empty_session_permissions_are_rejected_test() {
     )
   assert response.status == 400
   let body = simulate.read_body(response)
-  assert string.contains(body, i18n.text(i18n.English, i18n.SelectAtLeastOne))
-  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
-  assert !string.contains(
-    body,
-    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-      <> dashboard.sign_event_field
-      <> "\"",
-  )
-  assert !string.contains(
-    body,
-    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-      <> dashboard.nip44_encrypt_field
-      <> "\"",
-  )
-  assert !string.contains(
-    body,
-    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-      <> dashboard.nip44_decrypt_field
-      <> "\"",
-  )
-}
-
-/// 無宣言（perms 空）の GET は既定で 3 つとも `checked` が入る。上の描き直しの
-/// テストが探す `checked` の並びが、実際にチェック時の出力と一致することの対照。
-pub fn session_permissions_defaults_to_all_permissions_checked_test() {
-  let response =
-    get(context(), dashboard.session_permissions_path(signer, client))
-  assert response.status == 200
-  let body = simulate.read_body(response)
+  let assert [#(id, dialog)] = opened_dialogs(body)
+  assert id == permissions_dialog_id(declared_client)
+  assert string.contains(dialog, i18n.text(i18n.English, i18n.SelectAtLeastOne))
   assert string.contains(
-    body,
-    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-      <> dashboard.sign_event_field
-      <> "\"",
+    dialog,
+    "name=\"" <> dashboard.sign_event_field <> "\"",
+  )
+  use field <- list.each([
+    dashboard.sign_event_field,
+    dashboard.nip44_encrypt_field,
+    dashboard.nip44_decrypt_field,
+  ])
+  assert !string.contains(dialog, checked_field(field))
+  assert string.contains(
+    closed_dialog(body, permissions_dialog_id(client)),
+    checked_field(field),
   )
 }
 
-/// `kinds` に整数でない項目がある POST は 400 で、kind の欄には送った値がそのまま
-/// 残り、「そのほかの宣言」の隠し欄には移らない（不正な値を保存できる形に落とさない）。
+/// `kinds` に整数でない項目がある POST は 400 で、開いた権限の編集のダイアログの kind の欄には
+/// 送った値がそのまま残り、「そのほかの宣言」の隠し欄には移らない（不正な値を保存できる形に落とさない）。
 pub fn invalid_kind_list_is_rejected_test() {
   let response =
     post_form(
@@ -286,12 +271,13 @@ pub fn invalid_kind_list_is_rejected_test() {
       [#(dashboard.perms_kinds_field, "abc")],
     )
   assert response.status == 400
-  let body = simulate.read_body(response)
-  assert string.contains(body, i18n.text(i18n.English, i18n.InvalidKindList))
-  assert string.contains(body, "value=\"abc\"")
-  assert !string.contains(body, "sign_event:abc")
+  let assert [#(id, dialog)] = opened_dialogs(simulate.read_body(response))
+  assert id == permissions_dialog_id(declared_client)
+  assert string.contains(dialog, i18n.text(i18n.English, i18n.InvalidKindList))
+  assert string.contains(dialog, "value=\"abc\"")
+  assert !string.contains(dialog, "sign_event:abc")
   assert !string.contains(
-    body,
+    dialog,
     "name=\"" <> dashboard.perms_other_field <> "\"",
   )
 }
@@ -315,21 +301,8 @@ pub fn padded_kinds_are_saved_in_decimal_test() {
     ))
 }
 
-/// 一覧を得られない GET は 200 で、フォームを出さず理由を出す。
-pub fn session_permissions_show_the_reason_when_sessions_are_unavailable_test() {
-  let response =
-    get(
-      admin.Context(..context(), sessions: fn() { Error(unavailable) }),
-      dashboard.session_permissions_path(signer, declared_client),
-    )
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(body, unavailable)
-  assert !string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
-}
-
-/// 一覧を得られない POST は 503 で、フォームを出さず理由を出す（保存していないのに
-/// 200 を返さない。`connect_pages` の POST と同じ扱い）。
+/// 一覧を得られない POST は 503 の「バンカーを利用できません」の通知ページで、フォームを出さず理由を出す
+/// （保存していないのに 200 を返さない）。
 pub fn session_permissions_are_not_saved_when_sessions_are_unavailable_test() {
   let response =
     post_form(
@@ -339,12 +312,13 @@ pub fn session_permissions_are_not_saved_when_sessions_are_unavailable_test() {
     )
   assert response.status == 503
   let body = simulate.read_body(response)
+  assert string.contains(body, i18n.text(i18n.English, i18n.BunkerNotAvailable))
   assert string.contains(body, unavailable)
   assert !string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
 }
 
-/// 書き込まれていないことが確定した失敗（`SessionNotApplied`）は 409 でフォームを
-/// 描き直す。
+/// 書き込まれていないことが確定した失敗（`SessionNotApplied`）は 409 で、その行の権限の編集の
+/// ダイアログを、先頭の理由と送った欄の状態で開いたダッシュボードを返す。
 pub fn session_permissions_are_not_saved_when_the_bunker_did_not_apply_test() {
   let failing =
     admin.Context(..context(), update_perms: fn(_signer, _client, _perms) {
@@ -357,9 +331,11 @@ pub fn session_permissions_are_not_saved_when_the_bunker_did_not_apply_test() {
       [#(dashboard.sign_event_field, "on")],
     )
   assert response.status == 409
-  let body = simulate.read_body(response)
-  assert string.contains(body, "not applied reason")
-  assert string.contains(body, "name=\"" <> dashboard.sign_event_field <> "\"")
+  let assert [#(id, dialog)] = opened_dialogs(simulate.read_body(response))
+  assert id == permissions_dialog_id(declared_client)
+  assert string.contains(dialog, "not applied reason")
+  assert string.contains(dialog, checked_field(dashboard.sign_event_field))
+  assert !string.contains(dialog, checked_field(dashboard.nip44_encrypt_field))
 }
 
 /// 再有効化フォームは Context の `reenable_plugin` を名前で呼び、ダッシュボードへ
@@ -873,7 +849,9 @@ pub fn method_not_allowed_pages_test() {
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
+    "/sessions/connect",
     "/sessions/connect/confirm",
+    dashboard.session_permissions_path(signer, declared_client),
     "/relays/new",
     dashboard.relay_action_path(1, dashboard.EditRelayRoles),
     dashboard.relay_action_path(1, dashboard.DeleteRelay),
@@ -1228,20 +1206,8 @@ const connect_uri = "nostrconnect://11111111111111111111111111111111111111111111
 /// URI に現れるクライアント公開鍵。
 const connect_client_pubkey = "1111111111111111111111111111111111111111111111111111111111111111"
 
-/// GET は 200 で、署名者の選択欄に登録済みの署名者が選択済みで出る。
-pub fn connect_client_page_lists_accounts_test() {
-  let response = get(context(), "/sessions/connect")
-  assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    "name=\"" <> dashboard.nostrconnect_uri_field <> "\"",
-  )
-  assert string.contains(body, "<option selected value=\"" <> signer <> "\">")
-}
-
-/// `nostrconnect://` で始まらない URI の POST は 400 で、送った URI をフォームに残し、
-/// Context を呼ばない。
+/// `nostrconnect://` で始まらない URI の POST は 400 で、接続のダイアログを開いたダッシュボードを返し、
+/// 先頭に理由を出して送った URI を欄に残し、Context を呼ばない。
 pub fn connect_client_rejects_a_bad_uri_test() {
   let reports = process.new_subject()
   let response =
@@ -1250,9 +1216,13 @@ pub fn connect_client_rejects_a_bad_uri_test() {
       #("signer", signer),
     ])
   assert response.status == 400
-  let body = simulate.read_body(response)
-  assert string.contains(body, i18n.text(i18n.English, i18n.NotNostrconnectUri))
-  assert string.contains(body, ">not-a-uri</textarea>")
+  let assert [#("dialog-session-connect", dialog)] =
+    opened_dialogs(simulate.read_body(response))
+  assert string.contains(
+    dialog,
+    i18n.text(i18n.English, i18n.NotNostrconnectUri),
+  )
+  assert string.contains(dialog, ">not-a-uri</textarea>")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -1304,8 +1274,8 @@ pub fn connect_client_rejects_relays_it_must_not_connect_to_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 正しい URI の `POST /sessions/connect` は確認のページを 200 で返し、URI のリレーを並べて
-/// 確認のパスへ送るフォームを出す。Context の `connect_client` は呼ばない。
+/// 正しい URI の `POST /sessions/connect` は確認のダイアログを開いたダッシュボードを 200 で返し、
+/// URI のリレーを並べて確認のパスへ送るフォームを出す。Context の `connect_client` は呼ばない。
 pub fn connect_client_reviews_before_connecting_test() {
   let reports = process.new_subject()
   let response =
@@ -1314,14 +1284,16 @@ pub fn connect_client_reviews_before_connecting_test() {
       #("signer", signer),
     ])
   assert response.status == 200
-  let body = simulate.read_body(response)
-  assert string.contains(body, "action=\"/sessions/connect/confirm\"")
-  assert string.contains(body, ">wss://relay.example</li>")
+  let assert [#("dialog-session-connect-review", dialog)] =
+    opened_dialogs(simulate.read_body(response))
+  assert string.contains(dialog, "action=\"/sessions/connect/confirm\"")
+  assert string.contains(dialog, ">wss://relay.example</li>")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
 /// 確認のパスでも URI と署名者をもう一度確かめる。解釈できない URI と一覧に無い署名者は
-/// どちらも 400 で、理由と 1 段目のフォームを出し、Context の `connect_client` を呼ばない。
+/// どちらも 400 で、理由と 1 段目のフォームを出した接続のダイアログを開いたダッシュボードを返し、
+/// Context の `connect_client` を呼ばない。
 pub fn connect_confirm_rechecks_the_input_test() {
   let reports = process.new_subject()
   let cases = [
@@ -1335,13 +1307,14 @@ pub fn connect_confirm_rechecks_the_input_test() {
   let response =
     post_form(reporting_context(reports), "/sessions/connect/confirm", fields)
   assert response.status == 400
-  let body = simulate.read_body(response)
-  assert string.contains(body, i18n.text(i18n.English, message))
-  assert string.contains(body, "action=\"/sessions/connect\"")
+  let assert [#("dialog-session-connect", dialog)] =
+    opened_dialogs(simulate.read_body(response))
+  assert string.contains(dialog, i18n.text(i18n.English, message))
+  assert string.contains(dialog, "action=\"/sessions/connect\"")
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 確認のページの名乗る名前は制御文字を除き、ラベルの上限を超えるぶんを切って末尾を `…` に
+/// 確認のダイアログの名乗る名前は制御文字を除き、ラベルの上限を超えるぶんを切って末尾を `…` に
 /// する。除いた後に空なら名前の行を出さない。
 pub fn connect_client_cleans_the_client_name_test() {
   let long_name = "a%07" <> string.repeat("b", 100)
@@ -1365,7 +1338,7 @@ pub fn connect_client_cleans_the_client_name_test() {
   )
 }
 
-/// 確認のページの「接続する」は Context の `connect_client` を呼び、303 でダッシュボードへ
+/// 確認のダイアログの「接続する」は Context の `connect_client` を呼び、303 でダッシュボードへ
 /// 戻る。渡す値は URI のクライアント公開鍵と、フォームで選んだ署名者。
 pub fn connect_confirm_opens_the_session_test() {
   let reports = process.new_subject()
@@ -1382,8 +1355,8 @@ pub fn connect_confirm_opens_the_session_test() {
   assert sent == signer
 }
 
-/// `connect_client` が受け付けなかった、または反映されていない失敗は、確認のページを
-/// 描き直す状態コードになる。
+/// `connect_client` が受け付けなかった、または反映されていない失敗は、その状態コードで確認の
+/// ダイアログを開いたダッシュボードを返し、ダイアログの先頭に理由を出す。
 pub fn connect_client_redraws_on_failure_test() {
   let failures = [
     #(admin.RelayNotConnected, 503),
@@ -1403,10 +1376,25 @@ pub fn connect_client_redraws_on_failure_test() {
       #("signer", signer),
     ])
   assert response.status == status
-  assert string.contains(
-    simulate.read_body(response),
-    "action=\"/sessions/connect/confirm\"",
-  )
+  let assert [#("dialog-session-connect-review", dialog)] =
+    opened_dialogs(simulate.read_body(response))
+  assert string.contains(dialog, "action=\"/sessions/connect/confirm\"")
+  assert string.contains(dialog, "role=\"alert\"")
+}
+
+/// アカウントの一覧を得られない `POST /sessions/connect` は 503 で、接続のダイアログを開いた
+/// ダッシュボードを返し、フォームの代わりに理由を出す。
+pub fn connect_client_keeps_the_dialog_open_when_accounts_are_unavailable_test() {
+  let response =
+    post_form(with_accounts(Error(unavailable)), "/sessions/connect", [
+      #("uri", connect_uri),
+      #("signer", signer),
+    ])
+  assert response.status == 503
+  let assert [#("dialog-session-connect", dialog)] =
+    opened_dialogs(simulate.read_body(response))
+  assert string.contains(dialog, unavailable)
+  assert !string.contains(dialog, "<form")
 }
 
 /// バンカーが反映されたか確かめられなかったときは、202 の「変更を確認できませんでした」の
