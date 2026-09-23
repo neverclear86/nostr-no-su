@@ -14,7 +14,7 @@ issue を立ててから PR を出す。PR は main に squash マージする�
 
 [Semantic Versioning](https://semver.org/lang/ja/) に従う。0.x の間は、破壊的変更（環境変数、compose、DB のスキーマ、プラグイン API の非互換）を含むリリースは minor を、それ以外は patch を上げる。
 
-開発中の `version` は前のリリースの版のまま変えない（最初のリリースまでは `0.0.0`）。版を上げるのはリリースの PR だけで、未リリースの変更は `CHANGELOG.md` の `[Unreleased]` が表す。本体（`gleam.toml`）と `plugins-src/` の各プラグインの `gleam.toml` の版は常に同じ値にする。
+開発中の `version` は前のリリースの版のまま変えない（最初のリリースまでは `0.0.0`）。版を上げるのはリリースの PR だけで、未リリースの変更は `CHANGELOG.md` の `[Unreleased]` が表す。本体（`gleam.toml`）と `plugins-src/` の各プラグインの `gleam.toml` の版は常に同じ値にする（CI が `dev/check_project_versions.sh` で検査する）。
 
 イメージには、本体、`vendor/stratus`、Hex の依存のライセンスが `dev/collect_licenses.sh` で入る。同梱プラグイン `event_logger` と `profile` の依存は本体の依存の部分集合なので、この収集でそのまま覆われる。
 
@@ -44,7 +44,7 @@ sh dev/collect_licenses.sh build/erlang-shipment
 以下はオーナーが行う手順である。
 
 1. リリースに含めると決めた issue がすべて閉じていることを確かめる。
-2. リリースの PR を出す。本体と `plugins-src/` の各プラグインの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
+2. リリースの PR を出す。本体と `plugins-src/` の各プラグインの `gleam.toml` の `version` を出す版にし、`CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` にして、その上に空の `## [Unreleased]` を置く。末尾のリンク定義は、`[Unreleased]` の比較の起点を `vX.Y.Z` にし、その下に `[X.Y.Z]: https://github.com/neverclear86/nostr-no-su/compare/v<前の版>...vX.Y.Z` の行を足す。PR の中で `sh dev/check_release_version.sh vX.Y.Z` が 0 で終わることを確かめる。
 3. PR を squash マージし、main のそのコミットの CI（`ci`。main への push では docker イメージの検査を含む全部のジョブが走る。docs/development.md の「CI」）が成功したことを確かめ、そのコミットの SHA を控える。
 4. 手順 3 で控えたコミットに注釈付きのタグを切って push する。
 
@@ -52,9 +52,9 @@ sh dev/collect_licenses.sh build/erlang-shipment
    git fetch origin && git tag -a vX.Y.Z -m vX.Y.Z <手順 3 のコミットの SHA> && git push origin vX.Y.Z
    ```
 
-5. Actions の `release` が成功し、`ghcr.io/neverclear86/nostr-no-su` に `X.Y.Z`、`X.Y`、`latest` が付いたことを確かめる。あわせて、`docker buildx imagetools inspect ghcr.io/neverclear86/nostr-no-su:X.Y.Z` の出力に `linux/amd64` と `linux/arm64` の 2 つの Platform が並んでいることを確かめる（`release` の `merge` ジョブも同じ検査を行う）。
-6. 最初の公開のときだけ、パッケージの設定（リポジトリの Packages → nostr-no-su → Package settings）で公開範囲を確かめ、公開する場合は Change visibility で public にする。あわせて、Settings → Actions → General の Workflow permissions などで `packages: write` が制限されていないことを確かめる（`release` が権限エラーで失敗したときの確認先）。
+5. Actions の `release` が成功し、`ghcr.io/neverclear86/nostr-no-su` に `X.Y.Z`、`X.Y`、`latest` が付いたことを確かめる。あわせて、`docker buildx imagetools inspect ghcr.io/neverclear86/nostr-no-su:X.Y.Z` の出力に `linux/amd64` と `linux/arm64` の 2 つの Platform が並んでいることを確かめる（`release` の `merge` ジョブも同じ検査を行う）。最後に `github-release` ジョブが成功し、`gh release view vX.Y.Z --json body --jq .body` の出力が `sh dev/release_notes.sh X.Y.Z` の出力と同じであることを確かめる（README の案内する Releases に版が載る）。
+6. 最初の公開のときだけ、パッケージの設定（リポジトリの Packages → nostr-no-su → Package settings）で公開範囲を確かめ、公開する場合は Change visibility で public にする。あわせて、Settings → Actions → General の Workflow permissions などで `packages: write` と `contents: write`（`github-release` ジョブが Release を作るのに使う）が制限されていないことを確かめる（`release` が権限エラーで失敗したときの確認先）。
 
-`release` が失敗したときは、`git push origin :refs/tags/vX.Y.Z` と `git tag -d vX.Y.Z` でタグを消し、手順 2 から直す。`build` ジョブの版の検査で止まった時点ではイメージは公開されていないが、`merge` ジョブの「両方の platform が付いたことを確かめる」で失敗したときは `X.Y.Z`、`X.Y`、`latest` が既に付いているので、パッケージの設定（リポジトリの Packages → nostr-no-su）から該当のタグも消す。
+`release` の `build` か `merge` ジョブが失敗したときは、`git push origin :refs/tags/vX.Y.Z` と `git tag -d vX.Y.Z` でタグを消し、手順 2 から直す。`build` ジョブの版の検査で止まった時点ではイメージは公開されていないが、`merge` ジョブの「両方の platform が付いたことを確かめる」で失敗したときは `X.Y.Z`、`X.Y`、`latest` が既に付いているので、パッケージの設定（リポジトリの Packages → nostr-no-su）から該当のタグも消す。`github-release` ジョブだけが失敗したときはイメージが公開済みなので、タグは消さない。原因（権限など）を直してから Actions でそのジョブを再実行するか、手元で `sh dev/release_notes.sh X.Y.Z` の出力をファイルに書き、`gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <そのファイル>` で作る。
 
 注意: `latest` は版の大小を比べず最後に公開したタグに付くので、`v0.2.0` の後に `v0.1.1` を push すると `latest` が `0.1.1` に戻る。
