@@ -48,6 +48,7 @@ disallowedTools: Agent
 - コミットは `feat:`、`fix:`、`docs:` の接頭辞と日本語の要約（直近の `git log --oneline` の形）。本文の最後に、指示されたトレーラーの行を付ける
 - push は `git -C <作業ツリー> push -u origin <ブランチ>`
 - PR は `gh pr create -R neverclear86/nostr-no-su --base main --head <ブランチ> --title "<コミットと同じ形の 1 行>" --body-file <スクラッチパッドのファイル>`。本文は次の形。末尾に `Closes #<N>` と、指示された生成表記の行を置く
+- 1 つの issue を複数の PR に分けるときは、main に並べず GitHub の stacked PR で積む。依存の下の PR から順にブランチを前のブランチの上に作り、`gh stack init <下のブランチ> ... <上のブランチ>` と `gh stack submit`（PR がすでにあれば `gh stack link <下> ... <上>`）で積む。`Closes #<N>` は 1 本の PR だけに置き、ほかの PR の本文には段の位置（何段目か、下の PR）を書く
 - PR を作ったら `gh pr checks <PR> -R neverclear86/nostr-no-su --watch` で CI を待つ（`.claude/` と `*.md` だけの変更では CI は何も検査しないので、すぐ返る）
 
 ```
