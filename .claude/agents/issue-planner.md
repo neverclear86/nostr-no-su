@@ -18,6 +18,7 @@ disallowedTools: Agent
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --json title,body,comments` で読む（`--comments` は本文を落とす、または rc=0 のまま空で返ることがあるので使わない）。CLAUDE.md、README.md、docs/architecture.md、関係するソースとテストも読む
 - 読む量を絞る。ファイルは必要な範囲だけ読み、同じファイルを何度も読み直さない。長い出力になるコマンドは `head`、`grep`、`--stat` で要る部分だけ取り出す
 - issue 本文の行番号、件数、ファイルの位置は起票時の参考値として扱い、`dev/sweep_refs.sh` と `grep -n` で土台の現在地を引き直してからプランに書く
+- 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
 
 ## 記憶
 - 起動時に読み込まれた `MEMORY.md`（`~/.claude/agent-memory/issue-planner/`）を仕事の最初に 1 回見て、挙がっている箇所と観点を「変更するファイル」の洗い出しに含める。読み直さない
