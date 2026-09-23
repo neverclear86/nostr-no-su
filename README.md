@@ -91,6 +91,7 @@ All variables, passing secrets via files and reverse proxies are in [Configurati
 - **`REMSH_ENABLED` only while in use**: anyone who can exec into the container reaches the decrypted keys
 
 The assumptions, and what is deliberately not mitigated, are in the 「v0.1 のセキュリティの前提」 section of [Design decisions and known limitations](docs/design-decisions.md).
+To report a vulnerability, use the private reporting channel in [SECURITY.md](SECURITY.md) instead of a public issue.
 
 ## 📚 Documentation
 
