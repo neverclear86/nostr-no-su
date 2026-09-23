@@ -15,7 +15,7 @@
 **本体と同じイメージでビルドすること。** 理由は 2 つある。
 
 - **OTP が違う BEAM はローダーが `badfile` で拒否する。**
-- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 515 モジュール。docker ビルドは 126。この数は本体の影に入る前の同梱物の総数である）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
+- **ホスト環境でビルドすると同梱物が別物になる。** `opentelemetry_api` が `build_tools = ["rebar3", "mix"]` を持つため、ホストに elixir があると Gleam が `elixir` / `mix` / `logger` / `eex` を丸ごと vendor する（実測で計 516 モジュール。docker ビルドは 127。この数は本体の影に入る前の同梱物の総数である）。混入した Elixir 一式はコードパスに載るだけで誰も使わず、起動ログの影の行を無意味に膨らませる。
 
 ```sh
 mkdir -p plugins/event_logger
@@ -50,7 +50,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 | --- | --- | --- |
 | `PLUGIN_EVENT_LOGGER_DATABASE_URL` | はい | 保存先の Postgres（`postgres://user:pass@host:5432/db`） |
 
-この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先はこの環境変数だけで決まり、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts` の節から選べ、プラグイン自身の DB に保存される（初期値は全アカウント）。管理 UI にはもう 1 つ `/plugins/event_logger/timeline` があり、保存済みのイベントの直近 20 件を新しい順に出す。
+この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先はこの環境変数だけで決まり、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts`（日本語の管理 UI では「保存するアカウント」）の節から選べ、プラグイン自身の DB に保存される（初期値は全アカウント）。管理 UI にはもう 1 つ `/plugins/event_logger/timeline` があり、保存済みのイベントの直近 20 件を新しい順に出す。
 
 設定が無い、あるいは URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
 
@@ -156,9 +156,10 @@ DB を止めると保存だけが止まり、監視は続く。復帰すると�
 [event_logger] database is back; dropped 12 events while it was unavailable
 ```
 
-管理 UI のページも確認できる。`Monitored accounts`・`Configuration`・`Runtime` の 3 つの見出し、登録アカウントごとのチェックと `Save` のボタン、マスクした URL、プールと保存アクターの `running` のバッジが 2 つ出る。登録が 0 件のときは `Monitored accounts` の節に空の状態の文だけが出る。`Timeline` のタブを開くと、保存済みのイベントが 1 件 1 枚のカードで最大 20 枚出る。見出しは `kind 1 · 2026-09-22T10:00:00Z` の形で、`tags`・`content`・`signature` は畳まれている。0 件のときは空の状態の文だけが出る。
+管理 UI のページも確認できる。ページの文言は管理 UI の表示の言語で出る（本体が `plugin_pages/2` と `plugin_page_content/3` に言語のコードを渡す。[プラグイン API v1](../../docs/plugin-api.md) 第 13.1 節）。英語では `Monitored accounts`・`Configuration`・`Runtime` の 3 つの見出し、登録アカウントごとのチェックと `Save` のボタン、マスクした URL、プールと保存アクターの `running` のバッジが 2 つ出る。日本語では見出しが「保存するアカウント」・「接続先と上限」・「プロセス」、ボタンが「保存する」、バッジが「動作中」になる。登録が 0 件のときは 1 つ目の節に空の状態の文だけが出る。`Timeline`（日本語では「タイムライン」）のタブを開くと、保存済みのイベントが 1 件 1 枚のカードで最大 20 枚出る。見出しは `kind 1 · 2026-09-22T10:00:00Z` の形で、`tags`・`content`・`signature` は畳まれている（NIP-01 のフィールド名なので日本語でも訳さない）。0 件のときは空の状態の文だけが出る。チェックを 1 つも付けずに保存したときの理由（`select at least one account`）は、本体が送信の処理に言語を渡さないので英語のまま出る。
 
 ```sh
 curl -s -u admin:<ADMIN_PASSWORD> http://127.0.0.1:8080/plugins/event_logger/settings
 curl -s -u admin:<ADMIN_PASSWORD> http://127.0.0.1:8080/plugins/event_logger/timeline
+curl -s -u admin:<ADMIN_PASSWORD> -H 'Accept-Language: ja' http://127.0.0.1:8080/plugins/event_logger/settings
 ```

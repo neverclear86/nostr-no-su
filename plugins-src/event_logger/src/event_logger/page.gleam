@@ -1,15 +1,17 @@
 //// 管理 UI のページの記述を組み立て、フォームの送信を正規化する純粋なモジュール。
 //// プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）が観測した値と
-//// 受け取った送信を引数で受け取って、記述の `Dynamic` と選択の結果を組み立てるだけである。
+//// 表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の結果を
+//// 組み立てるだけである。文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
 //// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・真偽値だけで**、
 //// クラス名も `href` も持ち込めない。秘密（接続先 URL のパスワード）は本体に渡す前に
-//// ここでマスクする（`masked_url/2`。同文書第 13.4 節の実例でもある）。
+//// ここでマスクする（`masked_url/3`。同文書第 13.4 節の実例でもある）。
 ////
 //// 値は `gleam/dynamic` の `properties` / `list` / `string` で組む。`properties` は
 //// Erlang では binary キーの map になる。
 
+import event_logger/i18n.{type Language}
 import event_logger/store
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -25,21 +27,15 @@ import pog
 /// 設定ページのキー。URL の path 片にもなる。
 const settings_page_key = "settings"
 
-/// 設定ページの表示名。
-const settings_page_title = "Settings"
-
 /// タイムラインのページのキー。URL の path 片にもなる。
 const timeline_page_key = "timeline"
 
-/// タイムラインのページの表示名。
-const timeline_page_title = "Timeline"
-
-/// プロセス 1 つの観測結果。`label` は表に出す名前（例: `connection pool`）、
+/// プロセス 1 つの観測結果。`label` は表に出す名前の文言（例: `i18n.ConnectionPool`）、
 /// `registered_name` は登録名の文字列、`mailbox` は未処理メッセージ数で、
 /// プロセスが居なければ `Error(Nil)`。
 pub type ProcessStatus {
   ProcessStatus(
-    label: String,
+    label: i18n.Message,
     registered_name: String,
     mailbox: Result(Int, Nil),
   )
@@ -83,17 +79,24 @@ pub fn selected_pubkeys(
   }
 }
 
-/// `plugin_pages/0` が返すページの一覧。`timeline` を先頭に置く（ダッシュボード
-/// のリンクは先頭のページを指す）。
-pub fn pages() -> Dynamic {
+/// `plugin_pages/2` が返すページの一覧。表示名は `language` のもので、キーと並びは
+/// 言語によらない（本体は言語ごとの一覧のキーの並びを照合する）。`timeline` を
+/// 先頭に置く（ダッシュボードのリンクは先頭のページを指す）。
+pub fn pages(language: Language) -> Dynamic {
   dynamic.list([
     dynamic.properties([
       #(dynamic.string("key"), dynamic.string(timeline_page_key)),
-      #(dynamic.string("title"), dynamic.string(timeline_page_title)),
+      #(
+        dynamic.string("title"),
+        dynamic.string(i18n.text(language, i18n.TimelineTitle)),
+      ),
     ]),
     dynamic.properties([
       #(dynamic.string("key"), dynamic.string(settings_page_key)),
-      #(dynamic.string("title"), dynamic.string(settings_page_title)),
+      #(
+        dynamic.string("title"),
+        dynamic.string(i18n.text(language, i18n.SettingsTitle)),
+      ),
     ]),
   ])
 }
@@ -104,48 +107,57 @@ pub fn pages() -> Dynamic {
 /// 節を返す。`plugin_page_content` に `{error, Reason}` を返す約束は無いため
 /// （`docs/plugin-api.md` 第 13.4 節）。
 ///
-/// `database` は `masked_url/2` で組んだ表示用の文字列（未設定なら `Error(Nil)`）、
-/// `pool_size` は接続プールの接続数、`processes` は保存アクターと接続プールの
-/// 観測結果、`accounts` は登録アカウントの一覧、`monitored` は保存アクターへ
-/// 問い合わせた今の監視対象（問い合わせが届かなければ `Error(Nil)`）。`events`
-/// はタイムラインに出す直近のイベント（読めなければ `alert` に出す理由の
-/// 文字列）。
+/// `language` は文言の言語、`database` は `masked_url/3` で組んだ表示用の文字列
+/// （未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、`processes` は
+/// 保存アクターと接続プールの観測結果、`accounts` は登録アカウントの一覧、
+/// `monitored` は保存アクターへ問い合わせた今の監視対象（問い合わせが届かなければ
+/// `Error(Nil)`）。`events` はタイムラインに出す直近のイベント（読めなければ
+/// `alert` に出す文言）。
 pub fn content(
   key: String,
+  language: Language,
   database: Result(String, Nil),
   pool_size: Int,
   processes: List(ProcessStatus),
   accounts: List(Account),
   monitored: Result(store.Monitored, Nil),
-  events: Result(List(store.Row), String),
+  events: Result(List(store.Row), i18n.Message),
 ) -> Dynamic {
   case key {
-    k if k == timeline_page_key -> page_sections(timeline_sections(events))
+    k if k == timeline_page_key ->
+      page_sections(timeline_sections(language, events))
     k if k == settings_page_key ->
       page_sections([
-        monitored_section(accounts, monitored),
-        configuration_section(database, pool_size),
-        runtime_section(processes),
+        monitored_section(language, accounts, monitored),
+        configuration_section(language, database, pool_size),
+        runtime_section(language, processes),
       ])
-    _ -> page_sections([error_section()])
+    _ -> page_sections([error_section(language)])
   }
 }
 
-/// `Timeline` の節。`Error(reason)` なら `alert`（`failure`）1 つだけ、
-/// `Ok([])` なら空の状態の文に任せて `blocks` を空にする、`Ok(rows)` なら
-/// 行ごとに 1 つの節（`event_section/1`）にする。
-fn timeline_sections(events: Result(List(store.Row), String)) -> List(Dynamic) {
+/// `Timeline` の節。`Error(reason)` なら `reason` を `language` の文にした
+/// `alert`（`failure`）1 つだけ、`Ok([])` なら空の状態の文に任せて `blocks` を
+/// 空にする、`Ok(rows)` なら行ごとに 1 つの節（`event_section/2`）にする。
+fn timeline_sections(
+  language: Language,
+  events: Result(List(store.Row), i18n.Message),
+) -> List(Dynamic) {
+  let title = i18n.text(language, i18n.TimelineTitle)
   case events {
-    Error(reason) -> [section("Timeline", [alert_block(reason, "failure")])]
-    Ok([]) -> [section("Timeline", [])]
-    Ok(rows) -> list.map(rows, event_section)
+    Error(reason) -> [
+      section(title, [alert_block(i18n.text(language, reason), "failure")]),
+    ]
+    Ok([]) -> [section(title, [])]
+    Ok(rows) -> list.map(rows, event_section(language, _))
   }
 }
 
 /// イベント 1 件の節。見出しは `kind` と保存された `created_at` の時刻、
 /// `pairs` に `id`・`pubkey`、`details` に `tags`・`content`・`signature` を
-/// 畳んで持つ。
-fn event_section(row: store.Row) -> Dynamic {
+/// 畳んで持つ。NIP-01 のフィールド名は訳さず、`details` の見出しの件数と
+/// バイト数の書き方だけを `language` に従わせる。
+fn event_section(language: Language, row: store.Row) -> Dynamic {
   section(
     "kind "
       <> int.to_string(row.kind)
@@ -157,11 +169,11 @@ fn event_section(row: store.Row) -> Dynamic {
         #("pubkey", id_inline(row.pubkey)),
       ]),
       details_block(
-        "tags (" <> int.to_string(tag_count(row.tags)) <> ")",
+        i18n.text(language, i18n.TagsSummary(tag_count(row.tags))),
         row.tags,
       ),
       details_block(
-        "content (" <> int.to_string(string.byte_size(row.content)) <> " bytes)",
+        i18n.text(language, i18n.ContentSummary(string.byte_size(row.content))),
         row.content,
       ),
       details_block("signature", row.sig),
@@ -181,9 +193,13 @@ fn tag_count(tags: String) -> Int {
 fn format_timestamp(seconds: Int) -> String
 
 /// 接続先だけを残した表示用の文字列。パスワードは含めない。`database_url` が
-/// postgres の URL として解釈できなければ、その旨の 1 文を返す。`pool` は
-/// `pog.url_config/2` の第 1 引数として要るだけで、戻り値には使わない。
-pub fn masked_url(pool: Name(pog.Message), database_url: String) -> String {
+/// postgres の URL として解釈できなければ、その旨の `language` の 1 文を返す。
+/// `pool` は `pog.url_config/2` の第 1 引数として要るだけで、戻り値には使わない。
+pub fn masked_url(
+  pool: Name(pog.Message),
+  database_url: String,
+  language: Language,
+) -> String {
   case pog.url_config(pool, database_url) {
     Ok(config) ->
       "postgres://"
@@ -194,35 +210,34 @@ pub fn masked_url(pool: Name(pog.Message), database_url: String) -> String {
       <> int.to_string(config.port)
       <> "/"
       <> config.database
-    Error(Nil) -> "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL"
+    Error(Nil) -> i18n.text(language, i18n.InvalidDatabaseUrl)
   }
 }
 
 /// `Configuration` の節。マスク済みの URL、プール接続数、保存待ちの上限を
 /// `pairs` で示し、接続先はこの環境変数だけで実行時には変えられない旨を注記する。
 fn configuration_section(
+  language: Language,
   database: Result(String, Nil),
   pool_size: Int,
 ) -> Dynamic {
   let masked = case database {
     Ok(value) -> value
-    Error(Nil) -> "not configured"
+    Error(Nil) -> i18n.text(language, i18n.NotConfigured)
   }
-  section("Configuration", [
+  section(i18n.text(language, i18n.ConfigurationTitle), [
     pairs_block([
       #("PLUGIN_EVENT_LOGGER_DATABASE_URL", code_inline(masked)),
-      #("pool size", text_inline(int.to_string(pool_size))),
       #(
-        "max queue length",
+        i18n.text(language, i18n.PoolSizeTerm),
+        text_inline(int.to_string(pool_size)),
+      ),
+      #(
+        i18n.text(language, i18n.MaxQueueLengthTerm),
         text_inline(int.to_string(store.default_max_queue_len)),
       ),
     ]),
-    note_block(
-      "This plugin strips the password before showing the URL above. "
-      <> "The connection URL comes only from this environment variable and "
-      <> "cannot be changed from this page. Only the accounts to store "
-      <> "events for are chosen above.",
-    ),
+    note_block(i18n.text(language, i18n.ConfigurationNote)),
   ])
 }
 
@@ -232,25 +247,21 @@ fn configuration_section(
 /// 空にする（`docs/plugin-api.md` 第 13.3 節）。それ以外はチェックボックスの
 /// `form` を、登録アカウントごとに 1 行で出す。
 fn monitored_section(
+  language: Language,
   accounts: List(Account),
   monitored: Result(store.Monitored, Nil),
 ) -> Dynamic {
+  let title = i18n.text(language, i18n.MonitoredAccountsTitle)
   case monitored, accounts {
     Error(Nil), _ ->
-      section("Monitored accounts", [
-        alert_block(
-          "monitored accounts are unavailable: the store actor did not answer",
-          "failure",
-        ),
+      section(title, [
+        alert_block(i18n.text(language, i18n.StoreDidNotAnswer), "failure"),
       ])
-    Ok(_), [] -> section("Monitored accounts", [])
+    Ok(_), [] -> section(title, [])
     Ok(current), _ ->
-      section("Monitored accounts", [
-        text_block("Events are stored only for the accounts checked here."),
-        note_block(
-          "All accounts checked means every account, including ones you "
-          <> "register later.",
-        ),
+      section(title, [
+        text_block(i18n.text(language, i18n.StoredOnlyForChecked)),
+        note_block(i18n.text(language, i18n.AllCheckedMeansEveryAccount)),
         form_block(
           list.map(accounts, fn(account) {
             checkbox_field(
@@ -260,7 +271,7 @@ fn monitored_section(
               checked: store.is_monitored(current, account.pubkey),
             )
           }),
-          "Save",
+          i18n.text(language, i18n.Save),
         ),
       ])
   }
@@ -268,44 +279,57 @@ fn monitored_section(
 
 /// `Runtime` の節。プロセスごとに 1 行の表を出し、居ないプロセスが 1 つでも
 /// あれば、子が再起動中か諦められた状態であることを示す注意を末尾に足す。
-fn runtime_section(processes: List(ProcessStatus)) -> Dynamic {
+fn runtime_section(
+  language: Language,
+  processes: List(ProcessStatus),
+) -> Dynamic {
+  let title = i18n.text(language, i18n.RuntimeTitle)
   let table =
     table_block(
-      ["Process", "Registered name", "Status", "Pending messages"],
-      list.map(processes, process_row),
+      list.map(
+        [
+          i18n.ProcessColumn,
+          i18n.RegisteredNameColumn,
+          i18n.StatusColumn,
+          i18n.PendingMessagesColumn,
+        ],
+        i18n.text(language, _),
+      ),
+      list.map(processes, process_row(language, _)),
     )
   case list.any(processes, fn(process) { result.is_error(process.mailbox) }) {
     True ->
-      section("Runtime", [
+      section(title, [
         table,
         alert_block(
-          "A process shown as not running may be restarting or have "
-            <> "been given up on; see plugin-api.md section 5.4.",
+          i18n.text(language, i18n.ProcessNotRunningWarning),
           "warning",
         ),
       ])
-    False -> section("Runtime", [table])
+    False -> section(title, [table])
   }
 }
 
 /// `Runtime` の表の 1 行。`Status` は生存を `badge` で、`Pending messages` は
 /// 未処理メッセージ数か、居なければ `-` で示す。
-fn process_row(process: ProcessStatus) -> List(Dynamic) {
-  let #(status_text, status_tone, pending_text) = case process.mailbox {
-    Ok(count) -> #("running", "success", int.to_string(count))
-    Error(Nil) -> #("not running", "failure", "-")
+fn process_row(language: Language, process: ProcessStatus) -> List(Dynamic) {
+  let #(status, status_tone, pending_text) = case process.mailbox {
+    Ok(count) -> #(i18n.Running, "success", int.to_string(count))
+    Error(Nil) -> #(i18n.NotRunning, "failure", "-")
   }
   [
-    text_inline(process.label),
+    text_inline(i18n.text(language, process.label)),
     code_inline(process.registered_name),
-    badge_inline(status_text, status_tone),
+    badge_inline(i18n.text(language, status), status_tone),
     text_inline(pending_text),
   ]
 }
 
 /// 未知のページキーに対する節。`alert`（`failure`）1 つだけを持つ。
-fn error_section() -> Dynamic {
-  section("Error", [alert_block("unknown page", "failure")])
+fn error_section(language: Language) -> Dynamic {
+  section(i18n.text(language, i18n.ErrorTitle), [
+    alert_block(i18n.text(language, i18n.UnknownPage), "failure"),
+  ])
 }
 
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
