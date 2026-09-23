@@ -1,5 +1,6 @@
-//// `relay_list` の一覧を変える純粋関数のテスト。アクターを介さないので
-//// `process.new_name` で作った名前をそのまま比べられる。
+//// `relay_list` の一覧を変える純粋関数と、セッションのリレーの接続を選ぶ
+//// `session_connections` のテスト。アクターを介さないので `process.new_name` で
+//// 作った名前をそのまま比べられる。
 
 import gleam/erlang/process
 import gleam/list
@@ -210,4 +211,40 @@ pub fn connections_follow_the_entry_order_test() {
     ]
   assert relay_list.connections(entries, relay_list.Bunker) == [b_bunker]
   assert relay_list.urls(entries, relay_list.Monitor) == ["wss://a", "wss://b"]
+}
+
+/// セッションのリレーの接続は、バンカーの用途の URL を除き、監視だけの URL は
+/// 含め、重複した URL は 1 本にする。
+pub fn session_connections_skip_urls_of_the_base_set_test() {
+  let entries = [
+    relay_list.Entry(
+      url: "wss://monitor",
+      monitor: Some(process.new_name("m")),
+      bunker: None,
+    ),
+    relay_list.Entry(
+      url: "wss://bunker",
+      monitor: None,
+      bunker: Some(process.new_name("b")),
+    ),
+  ]
+  let connections =
+    relay_list.session_connections(
+      entries,
+      ["wss://bunker", "wss://monitor", "wss://x", "wss://monitor"],
+      [],
+    )
+  assert list.map(connections, fn(connection) { connection.url })
+    == ["wss://monitor", "wss://x"]
+}
+
+/// 残る URL の接続は名前を保ち、新しい URL の接続は別の名前を持つ。
+pub fn session_connections_keep_the_names_of_kept_urls_test() {
+  let kept =
+    relay_list.Connection(name: process.new_name("s_x"), url: "wss://x")
+  let assert [first, second] =
+    relay_list.session_connections([], ["wss://x", "wss://y"], [kept])
+  assert first == kept
+  assert second.url == "wss://y"
+  assert second.name != kept.name
 }

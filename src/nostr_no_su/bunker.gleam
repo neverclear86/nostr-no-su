@@ -74,8 +74,9 @@
 //// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ、監視が
 //// 作者の照合に読む写し（`is_signer`）を置き直して購読の張り直しを依頼する。追加と
 //// 削除のほか、読み込みの失敗からの復帰でも張り直しが起き、secret やラベルの差し替え
-//// では起きない。メモリはこのアクター経由の変更
-//// だけで変わるので、DB の行を外から直接変えた場合は次の起動まで反映されない。
+//// では起きない。セッションのリレーと署名者の対応が変わったときは、URL の一覧を
+//// `session_relays` へ渡す。メモリはこのアクター経由の変更だけで変わるので、DB の
+//// 行を外から直接変えた場合は次の起動まで反映されない。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/atom.{type Atom}
@@ -275,30 +276,46 @@ pub type Listing {
   Listing(signer: String, npub: String, label: String, secret: String)
 }
 
+/// バンカーの接続が受け持つ範囲。
+pub type RelayScope {
+  /// 基本のバンカーリレー（`relay_list` のバンカーの用途の項目）の接続。全署名者の
+  /// `#p` を購読し、全アカウントで AUTH し、すべての応答を出す。
+  BaseRelay
+  /// 基本のバンカーリレーに無い、セッションのリレーの接続。その URL を持つ
+  /// セッションの署名者だけで購読と AUTH を行い、そのセッションへの応答だけを出す。
+  SessionRelay
+}
+
 /// バンカーアクターが受け取るメッセージ。
 pub type Msg {
   /// バンカー接続のいずれかで受信したイベント。id と署名は接続のプロセスで
   /// 確かめてある。
   Incoming(event: Verified)
-  /// 1 本のリレー接続で応答イベントを送信するための関数を登録する。各接続
-  /// アクターは再接続のたびに `on_connect` からこれを送り直すため、応答は生きた
-  /// ソケットから出ていく。応答はすべてのバンカーリレーへ送信する
-  /// （`rate-limited:` を返したリレーへのセッションの外の応答だけは `publish`
-  /// が止める）。クライアントは URI の `relay=` ヒントすべてを待ち受けており、
-  /// 重複配信の排除はクライアント側の責務（こちら側の重複は `engine` が排除
-  /// する）なので、生きたリレーが 1 つあれば往復は成立する。
-  SetPublisher(relay_url: String, publish: fn(Event) -> Nil)
+  /// 1 本のリレー接続で応答イベントを送信するための関数を、接続の範囲と一緒に
+  /// 登録する。各接続アクターは再接続のたびに `on_connect` からこれを送り直す
+  /// ため、応答は生きたソケットから出ていく。応答は基本の接続と、応答先の
+  /// セッションのリレーの接続へ送信する（`response_relays`。`rate-limited:` を
+  /// 返したリレーへのセッションの外の応答だけは `publish` が止める）。クライアント
+  /// は URI の `relay=` ヒントすべてを待ち受けており、重複配信の排除はクライアント
+  /// 側の責務（こちら側の重複は `engine` が排除する）なので、生きたリレーが 1 つ
+  /// あれば往復は成立する。
+  SetPublisher(relay_url: String, scope: RelayScope, publish: fn(Event) -> Nil)
   /// 1 本のリレー接続の送信手段を取り下げる。接続アクターが `on_disconnect` から
   /// 送るため、死んだソケットへ応答を渡し続けることがない。接続アクター自身が
   /// クラッシュした場合は `on_disconnect` を経ないため、再起動した接続が
-  /// `SetPublisher` で上書きするまでは古い送信手段が残る。
-  RemovePublisher(relay_url: String)
+  /// `SetPublisher` で上書きするまでは古い送信手段が残る。登録済みの送信手段の
+  /// 範囲が `scope` と違えば何もしない（同じ URL の接続が範囲を移ったとき、止めた
+  /// 側の取り下げが新しい側を消さないため）。
+  RemovePublisher(relay_url: String, scope: RelayScope)
   /// バンカーリレーの接続が、発行した応答への OK を知らせる。拒否の理由が
   /// `rate-limited:` なら、そのリレーへのセッションの外の応答をしばらく
   /// 止める（`pause_on_rate_limit`）。
   Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
   GetSessions(reply: Subject(Result(List(Session), String)))
+  /// `relay_url` を持つセッションの署名者を問い合わせる。セッションのリレーの
+  /// 接続の購読が使う。
+  GetSessionSigners(relay_url: String, reply: Subject(List(String)))
   /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
   /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
   /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
@@ -376,10 +393,12 @@ pub type Msg {
   /// 要求は公開鍵と返信先しか持たないので、処理の途中で落ちてもクラッシュレポートに
   /// 秘密は出ない。
   GetNsec(signer: String, reply: Subject(Result(String, String)))
-  /// リレーの AUTH（NIP-42）に返す、登録アカウントごとの署名済みイベントを
-  /// 問い合わせる。バンカーリレーの接続が challenge を受けたときに使う。
+  /// リレーの AUTH（NIP-42）に返す署名済みイベントを問い合わせる。`BaseRelay` の
+  /// 接続は登録アカウントごと、`SessionRelay` の接続はその URL を持つセッションの
+  /// 署名者ごとに署名する。バンカーリレーの接続が challenge を受けたときに使う。
   Authenticate(
     relay_url: String,
+    scope: RelayScope,
     challenge: String,
     reply: Subject(Result(List(Event), String)),
   )
@@ -487,6 +506,16 @@ pub fn signers(name: Name(Msg)) -> Option(List(String)) {
   named.call(name, call_timeout_ms, GetSigners)
 }
 
+/// `relay_url` を持つ承認済みセッションの署名者（昇順）。読み込みの前は空。
+/// アクターが応答しなければ `None` を返し、0 件と区別する（`signers` と同じく、
+/// 購読は応答が無いときに開いている購読を閉じてはならない）。
+pub fn session_signers(
+  name: Name(Msg),
+  relay_url: String,
+) -> Option(List(String)) {
+  named.call(name, call_timeout_ms, GetSessionSigners(relay_url, _))
+}
+
 /// `pubkey` が `name` のアクターの署名者か。アクターへ問い合わせず、署名者の集合が
 /// 変わるたびに `transition` が置き直す写しを読むので、監視のイベント 1 件ごとに
 /// 呼べる。写しは `signers` と同じ集合である。署名者が 1 件以上になるまでは写しが
@@ -575,14 +604,17 @@ pub fn nsec(name: Name(Msg), signer: String) -> Result(String, String) {
   |> option.unwrap(Error(query_not_answered))
 }
 
-/// リレーの AUTH に返す、登録アカウントごとに署名した kind 22242。アクターが
-/// 応答しないときは理由を返す。`relay_client.Authenticator` として接続に渡す。
+/// リレーの AUTH に返す、署名済みの kind 22242。`BaseRelay` の接続は登録アカウント
+/// ごと、`SessionRelay` の接続はその URL を持つセッションの署名者ごとに署名する。
+/// アクターが応答しないときは理由を返す。`relay_client.Authenticator` として接続に
+/// 渡す。
 pub fn authenticate(
   name: Name(Msg),
   relay_url: String,
+  scope: RelayScope,
   challenge: String,
 ) -> Result(List(Event), String) {
-  named.call(name, call_timeout_ms, Authenticate(relay_url, challenge, _))
+  named.call(name, call_timeout_ms, Authenticate(relay_url, scope, challenge, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -842,7 +874,7 @@ pub fn pause_on_rate_limit(
 /// 送るリレー、ログの行。セッションの外の応答（`outside_session` が真）は、
 /// 期限が `now` より後の止めたリレーを飛ばして件数を数え、そのリレーの前の
 /// 報告から `rate_limit.report_interval_seconds` 以上経っていれば件数を報告
-/// して数え直す。セッションの中の応答はすべてのリレーへ送る。
+/// して数え直す。セッションの中の応答は `relay_urls` のすべてへ送る。
 pub fn recipients(
   pauses: Pauses,
   relay_urls: List(String),
@@ -874,6 +906,69 @@ pub fn recipients(
   }
 }
 
+/// （署名者, リレーの一覧）の組から、リレーの URL ごとにその URL を持つセッションの
+/// 署名者を重複なしの昇順で並べた写像を作る。リレーの無いセッションは何も足さない。
+/// URL は文字列のまま比べる。
+pub fn session_relay_signers(
+  sessions: List(#(String, List(String))),
+) -> Dict(String, List(String)) {
+  sessions
+  |> list.fold(dict.new(), fn(acc, session) {
+    let #(signer, relays) = session
+    use acc, relay_url <- list.fold(relays, acc)
+    dict.upsert(acc, relay_url, fn(current) {
+      [signer, ..option.unwrap(current, [])]
+    })
+  })
+  |> dict.map_values(fn(_relay_url, signers) {
+    signers |> list.unique |> list.sort(string.compare)
+  })
+}
+
+/// 応答 1 件を出すリレーの URL を `publishers` の順に選ぶ。`BaseRelay` はすべて、
+/// `SessionRelay` は応答先のセッションのリレー（`session_relays`）にあるものだけを
+/// 選ぶ。
+pub fn response_relays(
+  publishers: List(#(String, RelayScope)),
+  session_relays: List(String),
+) -> List(String) {
+  use #(relay_url, scope) <- list.filter_map(publishers)
+  case scope, list.contains(session_relays, relay_url) {
+    BaseRelay, _ | SessionRelay, True -> Ok(relay_url)
+    SessionRelay, False -> Error(Nil)
+  }
+}
+
+/// エンジンの承認済みセッションの `session_relay_signers`。
+fn relay_map(eng: engine.Engine) -> Dict(String, List(String)) {
+  engine.sessions(eng)
+  |> list.map(fn(session) { #(session.signer, session.relays) })
+  |> session_relay_signers
+}
+
+/// `relay_url` を持つ承認済みセッションの署名者（昇順）。無ければ空。
+fn session_relay_signers_of(state: State, relay_url: String) -> List(String) {
+  dict.get(relay_map(state.engine), relay_url) |> result.unwrap([])
+}
+
+/// 応答の（署名者, 宛先）の組のセッションを `engines` の順に探し、最初に見つかった
+/// もののリレーを返す。どれにも無ければ空。
+fn response_session_relays(
+  engines: List(engine.Engine),
+  response: Event,
+) -> List(String) {
+  let client = recipient(response)
+  engines
+  |> list.find_map(fn(eng) {
+    engine.sessions(eng)
+    |> list.find(fn(session) {
+      session.signer == response.pubkey && session.client == client
+    })
+  })
+  |> result.map(fn(session) { session.relays })
+  |> result.unwrap([])
+}
+
 /// 止めたリレーへ出さなかった応答の件数を報告するログの 1 行。
 pub fn pause_report(relay_url: String, dropped: Int) -> String {
   "dropped "
@@ -884,8 +979,8 @@ pub fn pause_report(relay_url: String, dropped: Int) -> String {
 }
 
 /// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
-/// 署名者ごとのラベルと、生きた接続の送信手段と、自分が起動した時刻と、読み込みの
-/// 進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧と、
+/// 署名者ごとのラベルと、生きた接続の送信手段とその範囲と、自分が起動した時刻と、
+/// 読み込みの進み具合と、直近の読み込みで飛ばされた行と、OK を待っている応答の一覧と、
 /// セッションの外の応答を止めているリレーの一覧だけを持つ。`not_before` は
 /// エンジンではなくここに置き、アクターの起動時刻を刻む。
 type State {
@@ -897,7 +992,7 @@ type State {
     /// NIP-46 のどの判断にも使わないのでエンジンに入れない。2 つを同じ集合に保つ
     /// 責任は `with_account` と `without_account` だけが負う。
     labels: Dict(String, String),
-    publishers: Dict(String, fn(Event) -> Nil),
+    publishers: Dict(String, Publisher),
     not_before: Int,
     settings: Settings,
     /// このアクターのプロセスだけが持つ、読み込み用の名前なしの subject。
@@ -907,6 +1002,9 @@ type State {
     resubscribe: fn() -> Nil,
     /// 読み込みに成功するたびに、登録されたリレーを渡す関数。送るだけで待たない。
     open_relays: fn(List(relay_list.Registered)) -> Nil,
+    /// セッションのリレーの URL の一覧が変わるたびに、昇順の一覧を渡す関数。送る
+    /// だけで待たない。
+    session_relays: fn(List(String)) -> Nil,
     /// OK を待っている応答の一覧。
     deliveries: Deliveries,
     /// セッションの外の応答を止めているリレーの一覧。
@@ -917,16 +1015,25 @@ type State {
   )
 }
 
+/// リレー 1 本の送信手段と、その接続の範囲。
+type Publisher {
+  Publisher(scope: RelayScope, publish: fn(Event) -> Nil)
+}
+
 /// スーパービジョンツリー用の子仕様。`resubscribe` は署名者の集合が変わったときに
-/// 呼ぶ関数、`open_relays` は読み込みに成功するたびに登録されたリレーを渡す関数で、
-/// どちらもツリーを組む側が配線する。
+/// 呼ぶ関数、`open_relays` は読み込みに成功するたびに登録されたリレーを渡す関数、
+/// `session_relays` はセッションのリレーの一覧が変わったときにその一覧を渡す関数で、
+/// どれもツリーを組む側が配線する。
 pub fn supervised(
   name: Name(Msg),
   settings: Settings,
   resubscribe: fn() -> Nil,
   open_relays: fn(List(relay_list.Registered)) -> Nil,
+  session_relays: fn(List(String)) -> Nil,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, settings, resubscribe, open_relays) })
+  supervision.worker(fn() {
+    start(name, settings, resubscribe, open_relays, session_relays)
+  })
 }
 
 /// バンカーアクターを起動する。`name` で登録するため、接続は起動時に生きていた
@@ -942,9 +1049,10 @@ pub fn start(
   settings: Settings,
   resubscribe: fn() -> Nil,
   open_relays: fn(List(relay_list.Registered)) -> Nil,
+  session_relays: fn(List(String)) -> Nil,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(init_timeout_ms, fn(self) {
-    initialise(name, settings, resubscribe, open_relays, self)
+    initialise(name, settings, resubscribe, open_relays, session_relays, self)
   })
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -964,6 +1072,7 @@ fn initialise(
   settings: Settings,
   resubscribe: fn() -> Nil,
   open_relays: fn(List(relay_list.Registered)) -> Nil,
+  session_relays: fn(List(String)) -> Nil,
   self: Subject(Msg),
 ) -> Result(actor.Initialised(State, Msg, Subject(Msg)), String) {
   let retry = process.new_subject()
@@ -985,6 +1094,7 @@ fn initialise(
     accounts: loading(settings),
     resubscribe: resubscribe,
     open_relays: open_relays,
+    session_relays: session_relays,
     deliveries: new_deliveries(),
     pauses: new_pauses(),
     skipped: [],
@@ -995,11 +1105,11 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、署名者・アカウント・
-/// 飛ばされた行・セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と拒否、
-/// 受信イベント 1 件をエンジンに通して生成された応答の送信、発行した応答への
-/// OK の反映と `rate-limited:` を返したリレーの停止、リレーの AUTH に返す認証
-/// イベントの署名を行う。
+/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、署名者・
+/// セッションのリレーの署名者・アカウント・飛ばされた行・セッション・承認待ちの
+/// 照会、セッションの取り消し、承認待ちの承認と拒否、受信イベント 1 件をエンジンに
+/// 通して生成された応答の送信、発行した応答への OK の反映と `rate-limited:` を
+/// 返したリレーの停止、リレーの AUTH に返す認証イベントの署名を行う。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -1031,10 +1141,13 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, private_key_nsec(state, signer))
       actor.continue(state)
     }
-    Authenticate(relay_url:, challenge:, reply:) -> {
+    Authenticate(relay_url:, scope:, challenge:, reply:) -> {
+      let signers = case scope {
+        BaseRelay -> engine.signers(state.engine)
+        SessionRelay -> session_relay_signers_of(state, relay_url)
+      }
       let accounts =
-        engine.signers(state.engine)
-        |> list.filter_map(engine.find_account(state.engine, _))
+        list.filter_map(signers, engine.find_account(state.engine, _))
       process.send(
         reply,
         authentication_events(
@@ -1149,21 +1262,33 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       )
       actor.continue(state)
     }
+    GetSessionSigners(relay_url:, reply:) -> {
+      process.send(reply, session_relay_signers_of(state, relay_url))
+      actor.continue(state)
+    }
     Revoke(signer:, client:, reply:) ->
       revoke_session(state, reply, signer, client)
     UpdatePerms(signer:, client:, perms:, reply:) ->
       update_session_perms(state, reply, signer, client, perms)
-    SetPublisher(relay_url, publish) ->
+    SetPublisher(relay_url, scope, publish) ->
       actor.continue(
         State(
           ..state,
-          publishers: dict.insert(state.publishers, relay_url, publish),
+          publishers: dict.insert(
+            state.publishers,
+            relay_url,
+            Publisher(scope, publish),
+          ),
         ),
       )
-    RemovePublisher(relay_url) ->
-      actor.continue(
-        State(..state, publishers: dict.delete(state.publishers, relay_url)),
-      )
+    RemovePublisher(relay_url, scope) -> {
+      let publishers = case dict.get(state.publishers, relay_url) {
+        Ok(Publisher(scope: current, ..)) if current == scope ->
+          dict.delete(state.publishers, relay_url)
+        _ -> state.publishers
+      }
+      actor.continue(State(..state, publishers: publishers))
+    }
     Incoming(incoming) -> {
       // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
       // することでエンジンは乱数を持たずに済む。
@@ -1181,18 +1306,33 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
       let #(published, next) = case outcome {
         engine.Reply(response) -> #(
-          publish(state, response, outside_session),
+          publish(
+            state,
+            response,
+            outside_session,
+            response_session_relays([accepted], response),
+          ),
           accepted,
         )
         engine.Persist(write:, next:, response:, on_failure:) -> {
           let #(change, target) = incoming_write_change(write)
           case write_session_change(state, change, target, write) {
             #(written, Ok(Nil)) -> #(
-              publish(written, response, outside_session),
+              publish(
+                written,
+                response,
+                outside_session,
+                response_session_relays([next, accepted], response),
+              ),
               next,
             )
             #(written, Error(_failure)) -> #(
-              publish(written, on_failure, outside_session),
+              publish(
+                written,
+                on_failure,
+                outside_session,
+                response_session_relays([accepted], on_failure),
+              ),
               accepted,
             )
           }
@@ -1207,7 +1347,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           #(state, accepted)
         }
       }
-      actor.continue(State(..published, engine: next))
+      actor.continue(transition(state, State(..published, engine: next)))
     }
     Acknowledged(relay_url, ack) -> {
       let #(deliveries, line) = acknowledge(state.deliveries, relay_url, ack)
@@ -1621,7 +1761,8 @@ fn reload(state: State) -> State {
 /// persistent_term に置き直してから、購読の張り直しを依頼する。写しを先に置くので、
 /// 張り直した購読で届くイベントは変更後の署名者で照合される。依頼は接続アクターへ
 /// 送るだけで待たないので、接続が張り直しで送る `GetSigners` はこの処理が返った後に
-/// 処理され、変更後の署名者を読む。
+/// 処理され、変更後の署名者を読む。セッションのリレーと署名者の対応（`relay_map`）が
+/// 変わっていれば、URL の昇順の一覧を `session_relays` へ渡す。
 fn transition(from: State, to: State) -> State {
   case engine.signers(from.engine) == engine.signers(to.engine) {
     True -> Nil
@@ -1632,6 +1773,11 @@ fn transition(from: State, to: State) -> State {
       )
       to.resubscribe()
     }
+  }
+  let relays = relay_map(to.engine)
+  case relay_map(from.engine) == relays {
+    True -> Nil
+    False -> to.session_relays(dict.keys(relays) |> list.sort(string.compare))
   }
   to
 }
@@ -1899,9 +2045,15 @@ fn apply_session_write(
     write_session_change(state, change, target, write)
   case outcome {
     Ok(Nil) -> {
-      let published = publish(written_state, response, False)
+      let published =
+        publish(
+          written_state,
+          response,
+          False,
+          response_session_relays([next], response),
+        )
       process.send(reply, Ok(Nil))
-      actor.continue(State(..published, engine: next))
+      actor.continue(transition(state, State(..published, engine: next)))
     }
     Error(failure) -> {
       process.send(reply, Error(session_write_failure(failure)))
@@ -1939,7 +2091,10 @@ fn revoke_session(
           case outcome {
             Ok(Nil) -> {
               process.send(reply, Ok(Nil))
-              actor.continue(State(..written_state, engine: next))
+              actor.continue(transition(
+                state,
+                State(..written_state, engine: next),
+              ))
             }
             Error(failure) -> {
               process.send(reply, Error(session_write_failure(failure)))
@@ -1981,7 +2136,10 @@ fn update_session_perms(
           case outcome {
             Ok(Nil) -> {
               process.send(reply, Ok(Nil))
-              actor.continue(State(..written_state, engine: next))
+              actor.continue(transition(
+                state,
+                State(..written_state, engine: next),
+              ))
             }
             Error(failure) -> {
               process.send(reply, Error(session_write_failure(failure)))
@@ -1993,15 +2151,29 @@ fn update_session_perms(
   }
 }
 
-/// 応答イベントをバンカーリレーへ発行する。セッションの外の応答
+/// 応答イベントを、基本の接続と、応答先のセッションのリレー（`session_relays`）の
+/// 接続へ発行する（`response_relays`）。セッションの外の応答
 /// （`outside_session` が真）は、`rate-limited:` を返して止めているリレーを
-/// 飛ばし（`recipients`）、飛ばした件数を間引いてログに出す。接続が 1 本も
+/// 飛ばし（`recipients`）、飛ばした件数を間引いてログに出す。出せる接続が 1 本も
 /// 生きていなければ送る先が無いので、応答を落としたことをログに残す
 /// （クライアントは接続が戻ったあとの再送で回復する）。送った先があれば、
 /// 送った先を `deliveries` に記録する。
-fn publish(state: State, response: Event, outside_session: Bool) -> State {
-  case dict.is_empty(state.publishers) {
-    True -> {
+fn publish(
+  state: State,
+  response: Event,
+  outside_session: Bool,
+  session_relays: List(String),
+) -> State {
+  let relay_urls =
+    state.publishers
+    |> dict.to_list
+    |> list.map(fn(entry) {
+      let #(relay_url, Publisher(scope:, ..)) = entry
+      #(relay_url, scope)
+    })
+    |> response_relays(session_relays)
+  case relay_urls {
+    [] -> {
       log.write(
         log.Warning,
         log_prefix,
@@ -2009,18 +2181,13 @@ fn publish(state: State, response: Event, outside_session: Bool) -> State {
       )
       state
     }
-    False -> {
+    _ -> {
       let now = time.now_seconds()
       let #(pauses, sent, lines) =
-        recipients(
-          state.pauses,
-          dict.keys(state.publishers),
-          outside_session,
-          now,
-        )
+        recipients(state.pauses, relay_urls, outside_session, now)
       list.each(lines, log.write(log.Notice, log_prefix, _))
-      dict.each(dict.take(state.publishers, sent), fn(_relay_url, publish) {
-        publish(response)
+      dict.each(dict.take(state.publishers, sent), fn(_relay_url, publisher) {
+        publisher.publish(response)
       })
       let deliveries = case sent {
         [] -> state.deliveries

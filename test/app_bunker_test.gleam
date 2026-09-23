@@ -1,10 +1,12 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
 //// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
-//// 問い合わせ、URI のリレーの用途の決定、セッションの権限の更新もここで確かめる。
+//// 問い合わせ、URI のリレーの用途の決定、セッションの権限の更新、セッションのリレー
+//// だけの接続の購読と取り消しで閉じることもここで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
-import gleam/option.{None, Some}
+import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/admin/dashboard
 import nostr_no_su/app
@@ -14,19 +16,21 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/nostr/event
+import nostr_no_su/nostr/message
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
 import nostr_no_su/time
 import support/app_tree.{
-  type Report, type StoreCall, Inserted, Opened, Published, Wrote,
-  authenticator_recording_open, await_connection, await_signers, bunker_spec,
-  call_counter, client_key, committed_but_timed_out_store, connect_request,
-  connect_request_from, fake_open, fixed_retry_delay, idle_monitor, load_signer,
-  memory_store, named_relay, other_client_key, other_signer_key, request,
-  response_body, secret, signed_request, signer_key, start_database,
-  start_loading_bunker_tree, start_loading_bunker_tree_with_open, start_tree,
-  stop_tree, store_failure, store_with_load, stored_signer, test_relay_url,
+  type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
+  Published, Subscribed, Wrote, authenticator_recording_open, await_connection,
+  await_signers, bunker_spec, call_counter, client_key,
+  committed_but_timed_out_store, connect_request, connect_request_from,
+  fake_open, fixed_retry_delay, idle_monitor, load_signer, memory_store,
+  named_relay, other_client_key, other_signer_key, request, response_body,
+  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
+  start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
+  store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 
@@ -940,4 +944,114 @@ pub fn session_rows_keep_times_and_perms_test() {
         last_used_at: 20,
       ),
     ]
+}
+
+/// セッションのリレーだけの接続の URL。基本の接続（`test_relay_url`）とは別にする。
+const session_relay_url = "ws://session.test"
+
+/// `relay_urls` の接続がそれぞれ最初に送る REQ の `#p` を、`relay_urls` の順に
+/// 待って返す。`seen` はここまでに受けた（URL, `#p`）の組。REQ を含まない報告と
+/// 2 件目以降の REQ は読み捨てる。
+fn await_first_p_tags(
+  subscribed: Subject(SubscriptionReport),
+  relay_urls: List(String),
+  seen: List(#(String, Option(List(String)))),
+) -> List(Option(List(String))) {
+  case list.try_map(relay_urls, list.key_find(seen, _)) {
+    Ok(p_tags) -> p_tags
+    Error(Nil) -> {
+      let assert Ok(report) = process.receive(subscribed, 2000)
+      let request = case report {
+        Subscribed(url, messages) ->
+          list.find_map(messages, fn(sent) {
+            case sent {
+              message.Req(_id, filter) -> Ok(#(url, filter.p_tags))
+              _ -> Error(Nil)
+            }
+          })
+        _ -> Error(Nil)
+      }
+      let seen = case request {
+        Ok(#(url, p_tags)) ->
+          case list.key_find(seen, url) {
+            Ok(_) -> seen
+            Error(Nil) -> [#(url, p_tags), ..seen]
+          }
+        Error(Nil) -> seen
+      }
+      await_first_p_tags(subscribed, relay_urls, seen)
+    }
+  }
+}
+
+/// 応答の発行先が `expected` になるまで待つ。
+fn await_publisher_urls(
+  name: Name(bunker.Msg),
+  expected: List(String),
+  remaining: Int,
+) -> Bool {
+  let urls =
+    option.map(bunker.publisher_urls(name), list.sort(_, string.compare))
+  case urls == Some(expected), remaining <= 0 {
+    True, _ -> True
+    _, True -> False
+    _, False -> {
+      process.sleep(20)
+      await_publisher_urls(name, expected, remaining - 20)
+    }
+  }
+}
+
+/// 基本の組に無いセッションのリレーは、そのセッションの署名者だけの `#p` で購読する
+/// 接続として開き、取り消すと閉じて応答の発行先から外れる（受け入れ条件 2・3）。
+pub fn a_session_only_relay_subscribes_its_signers_and_closes_on_revoke_test() {
+  let reports = process.new_subject()
+  let subscribed = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let first = stored_signer(signer_key)
+  let second = stored_signer(other_signer_key)
+  let first_hex = account.pubkey_hex(first.account)
+  let second_hex = account.pubkey_hex(second.account)
+  let client_hex = account.pubkey_hex(account_for(client_key))
+  let session =
+    engine.Session(
+      signer: first_hex,
+      client: client_hex,
+      perms: "",
+      created_at: time.now_seconds(),
+      last_used_at: time.now_seconds(),
+      relays: [session_relay_url],
+    )
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      Some(subscribed),
+      name,
+      store_with_load(fn() {
+        Ok(
+          bunker.Snapshot(
+            vault.Loaded(accounts: [first, second], skipped: []),
+            [session],
+            [],
+            [],
+          ),
+        )
+      }),
+      fixed_retry_delay,
+    )
+
+  assert await_first_p_tags(subscribed, [session_relay_url, test_relay_url], [])
+    == [
+      Some([first_hex]),
+      Some(list.sort([first_hex, second_hex], string.compare)),
+    ]
+  assert await_publisher_urls(
+    name,
+    list.sort([session_relay_url, test_relay_url], string.compare),
+    3000,
+  )
+
+  let assert Ok(Nil) = bunker.revoke(name, first_hex, client_hex)
+  assert await_publisher_urls(name, [test_relay_url], 3000)
+  stop_tree(tree)
 }

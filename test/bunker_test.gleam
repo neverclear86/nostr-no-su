@@ -5,7 +5,10 @@
 //// どう組み立てるかを確かめる。`bunker.pause_on_rate_limit` / `bunker.recipients`
 //// のテストは、`rate-limited:` を返したリレーへのセッションの外の応答をいつ
 //// 止めて再開し、出さなかった件数をどう報告するかを確かめ、アクターのテストは
-//// `Acknowledged` と `Incoming` から発行までの配線を確かめる。`bunker.sign_event`
+//// `Acknowledged` と `Incoming` から発行までの配線を確かめる。
+//// `bunker.response_relays` / `bunker.session_relay_signers` のテストと、セッションの
+//// リレーのアクターのテストは、応答の発行先、購読と AUTH の署名者、取り消しで閉じる
+//// 一覧を確かめる。`bunker.sign_event`
 //// （`SignEvent`）のテストは、プラグインからの送信の口（`plugin_api`）が使う
 //// 署名の要求を、読み込み前と登録済みの署名者のそれぞれで確かめる。
 //// `bunker.check_account`（`CheckAccount`）のテストは、プラグインからの取得の口が
@@ -13,6 +16,7 @@
 //// `bunker.check_accounts`（`CheckAccounts`）のテストは、複数の公開鍵の取得が使う
 //// 登録の確認を、読み込み前と、登録済みと未登録を混ぜた順のそれぞれで確かめる。
 
+import gleam/dict
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
@@ -21,6 +25,7 @@ import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
 import nostr_no_su/named
@@ -374,6 +379,7 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      fn(_urls) { Nil },
     )
   // 読み込みの完了を待つ。`LoadAccounts` は起動時に名前なしの subject へ積まれて
   // おり、アクターは両方の subject を選択しているので、`GetAccounts` はその後に
@@ -424,6 +430,15 @@ fn start_bunker_with_load(
   name: process.Name(bunker.Msg),
   load: fn() -> Result(bunker.Snapshot, String),
 ) -> Nil {
+  start_bunker_with_session_relays(name, load, fn(_urls) { Nil })
+}
+
+/// `start_bunker_with_load` に、セッションのリレーの一覧を受ける関数を渡す版。
+fn start_bunker_with_session_relays(
+  name: process.Name(bunker.Msg),
+  load: fn() -> Result(bunker.Snapshot, String),
+  session_relays: fn(List(String)) -> Nil,
+) -> Nil {
   let assert Ok(_started) =
     bunker.start(
       name,
@@ -441,6 +456,7 @@ fn start_bunker_with_load(
       ),
       fn() { Nil },
       fn(_relays) { Nil },
+      session_relays,
     )
   Nil
 }
@@ -577,8 +593,14 @@ pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_tes
   // relay_a と relay_b の送信手段として、テストの subject へ送る関数を登録する
   let inbox_a = process.new_subject()
   let inbox_b = process.new_subject()
-  named.send(name, bunker.SetPublisher(relay_a, process.send(inbox_a, _)))
-  named.send(name, bunker.SetPublisher(relay_b, process.send(inbox_b, _)))
+  named.send(
+    name,
+    bunker.SetPublisher(relay_a, bunker.BaseRelay, process.send(inbox_a, _)),
+  )
+  named.send(
+    name,
+    bunker.SetPublisher(relay_b, bunker.BaseRelay, process.send(inbox_b, _)),
+  )
   named.send(
     name,
     bunker.Acknowledged(
@@ -625,4 +647,254 @@ pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_tes
   let assert Ok(pid) = process.named(name)
   process.unlink(pid)
   process.kill(pid)
+}
+
+/// テストで使う、セッションのリレーの 1 本目。
+const relay_x = "wss://x.example"
+
+/// テストで使う、セッションのリレーの 2 本目。
+const relay_y = "wss://y.example"
+
+/// テストで使う、セッションのリレーの 3 本目。
+const relay_z = "wss://z.example"
+
+/// 3 人目のクライアントの秘密鍵（16 進）。
+const third_client_key = "0000000000000000000000000000000000000000000000000000000000000007"
+
+/// 署名者 `signer` とクライアント `client` の、リレー `relays` を持つ承認済み
+/// セッション。
+fn session_with(
+  signer: account.Account,
+  client: account.Account,
+  relays: List(String),
+) -> engine.Session {
+  let now = time.now_seconds()
+  engine.Session(
+    signer: account.pubkey_hex(signer),
+    client: account.pubkey_hex(client),
+    perms: "",
+    created_at: now,
+    last_used_at: now,
+    relays: relays,
+  )
+}
+
+/// `relay_url` の送信手段として、`inbox` へ送る関数を範囲 `scope` で登録する。
+fn set_publisher(
+  name: process.Name(bunker.Msg),
+  relay_url: String,
+  scope: bunker.RelayScope,
+  inbox: process.Subject(Event),
+) -> Nil {
+  named.send(
+    name,
+    bunker.SetPublisher(relay_url, scope, process.send(inbox, _)),
+  )
+}
+
+/// `client` から `signer` への `get_public_key` を受信させる。
+fn send_get_public_key(
+  name: process.Name(bunker.Msg),
+  client: account.Account,
+  signer: account.Account,
+  id: String,
+) -> Nil {
+  named.send(
+    name,
+    bunker.Incoming(
+      signed_event.verified(request_event(
+        client,
+        signer,
+        request_body(id, "get_public_key", "[]"),
+        time.now_seconds(),
+      )),
+    ),
+  )
+}
+
+/// テストで起動したバンカーを止める。
+fn stop_bunker(name: process.Name(bunker.Msg)) -> Nil {
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
+/// 基本のリレーはどの応答にも選び、セッションのリレーは応答先のセッションが持つ
+/// ときだけ選ぶ。
+pub fn response_relays_keep_base_relays_and_the_session_relays_test() {
+  let publishers = [
+    #(relay_a, bunker.BaseRelay),
+    #(relay_x, bunker.SessionRelay),
+    #(relay_y, bunker.SessionRelay),
+  ]
+  assert bunker.response_relays(publishers, [relay_x]) == [relay_a, relay_x]
+  assert bunker.response_relays(publishers, []) == [relay_a]
+}
+
+/// 共有の URL は署名者を昇順・重複なしで持ち、リレーの無いセッションは何も
+/// 足さない。
+pub fn session_relay_signers_map_each_relay_to_its_session_signers_test() {
+  let map =
+    bunker.session_relay_signers([
+      #("s2", [relay_x, relay_y]),
+      #("s1", [relay_x]),
+      #("s2", [relay_x]),
+      #("s3", []),
+    ])
+  assert map == dict.from_list([#(relay_x, ["s1", "s2"]), #(relay_y, ["s2"])])
+}
+
+/// 応答は基本のリレーと応答先のセッションのリレーにだけ届き、別のセッションの
+/// リレーには届かない。セッションの無いクライアントへの応答は基本のリレーだけに
+/// 届く（受け入れ条件 1）。
+pub fn responses_reach_only_the_relays_of_their_session_test() {
+  let stored = one_account()
+  let signer = stored.account
+  let client_a = account_for(client_key)
+  let client_b = account_for(other_client_key)
+  let stranger = account_for(third_client_key)
+  let sessions = [
+    session_with(signer, client_a, [relay_x]),
+    session_with(signer, client_b, [relay_y]),
+  ]
+  let load = fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), sessions, [], []))
+  }
+
+  let name = process.new_name("bunker_session_relay_responses_test")
+  start_bunker_with_load(name, load)
+  let assert Ok([_]) = bunker.accounts(name)
+  let inbox_a = process.new_subject()
+  let inbox_x = process.new_subject()
+  let inbox_y = process.new_subject()
+  set_publisher(name, relay_a, bunker.BaseRelay, inbox_a)
+  set_publisher(name, relay_x, bunker.SessionRelay, inbox_x)
+  set_publisher(name, relay_y, bunker.SessionRelay, inbox_y)
+
+  // A への応答は基本の a と A のリレーの x に届き、B のリレーの y には届かない
+  send_get_public_key(name, client_a, signer, "g1")
+  let assert Ok(_response) = process.receive(inbox_a, 1000)
+  let assert Ok(_response) = process.receive(inbox_x, 1000)
+  assert process.receive(inbox_y, 100) == Error(Nil)
+
+  // セッションの無いクライアントへの応答は基本の a だけに届く
+  send_get_public_key(name, stranger, signer, "g2")
+  let assert Ok(_response) = process.receive(inbox_a, 1000)
+  assert process.receive(inbox_x, 100) == Error(Nil)
+  assert process.receive(inbox_y, 100) == Error(Nil)
+  stop_bunker(name)
+
+  // 基本の送信手段が無ければ、セッションの無いクライアントへの応答はセッションの
+  // リレーのどちらにも届かない
+  let bare = process.new_name("bunker_session_relay_without_base_test")
+  start_bunker_with_load(bare, load)
+  let assert Ok([_]) = bunker.accounts(bare)
+  let bare_x = process.new_subject()
+  let bare_y = process.new_subject()
+  set_publisher(bare, relay_x, bunker.SessionRelay, bare_x)
+  set_publisher(bare, relay_y, bunker.SessionRelay, bare_y)
+  send_get_public_key(bare, stranger, signer, "g3")
+  assert process.receive(bare_x, 200) == Error(Nil)
+  assert process.receive(bare_y, 100) == Error(Nil)
+  stop_bunker(bare)
+}
+
+/// セッションのリレーの一覧は、読み込み、取り消し、`logout`、アカウントの削除の
+/// たびに、使われている URL だけに変わる（受け入れ条件 3）。
+pub fn session_relays_follow_revocation_and_account_removal_test() {
+  let stored = one_account()
+  let signer = stored.account
+  let client_a = account_for(client_key)
+  let client_b = account_for(other_client_key)
+  let client_c = account_for(third_client_key)
+  let sessions = [
+    session_with(signer, client_a, [relay_x]),
+    session_with(signer, client_b, [relay_y]),
+    session_with(signer, client_c, [relay_z]),
+  ]
+  let name = process.new_name("bunker_session_relays_follow_test")
+  let urls = process.new_subject()
+  start_bunker_with_session_relays(
+    name,
+    fn() { Ok(bunker.Snapshot(Loaded([stored], []), sessions, [], [])) },
+    process.send(urls, _),
+  )
+  let assert Ok(loaded) = process.receive(urls, 1000)
+  assert loaded == [relay_x, relay_y, relay_z]
+
+  let signer_hex = account.pubkey_hex(signer)
+  let assert Ok(Nil) =
+    bunker.revoke(name, signer_hex, account.pubkey_hex(client_a))
+  let assert Ok(revoked) = process.receive(urls, 1000)
+  assert revoked == [relay_y, relay_z]
+
+  named.send(
+    name,
+    bunker.Incoming(
+      signed_event.verified(request_event(
+        client_b,
+        signer,
+        request_body("l1", "logout", "[]"),
+        time.now_seconds(),
+      )),
+    ),
+  )
+  let assert Ok(logged_out) = process.receive(urls, 1000)
+  assert logged_out == [relay_z]
+
+  let assert Ok(Nil) = bunker.remove_account(name, signer_hex)
+  let assert Ok(removed) = process.receive(urls, 1000)
+  assert removed == []
+  stop_bunker(name)
+}
+
+/// セッションのリレーの接続の AUTH と署名者の問い合わせは、その URL を持つ
+/// セッションの署名者だけで行い、基本の接続は全アカウントで AUTH する。
+pub fn a_session_relay_is_authenticated_by_its_session_signers_only_test() {
+  let first = one_account()
+  let second =
+    StoredAccount(
+      account: account_for(
+        "0000000000000000000000000000000000000000000000000000000000000077",
+      ),
+      secret: "other",
+      label: "",
+    )
+  let client = account_for(client_key)
+  let name = process.new_name("bunker_session_relay_auth_test")
+  start_bunker_with_load(name, fn() {
+    Ok(
+      bunker.Snapshot(
+        Loaded([first, second], []),
+        [session_with(first.account, client, [relay_x])],
+        [],
+        [],
+      ),
+    )
+  })
+  let assert Ok([_, _]) = bunker.accounts(name)
+  let first_hex = account.pubkey_hex(first.account)
+
+  let assert Ok([only]) =
+    bunker.authenticate(name, relay_x, bunker.SessionRelay, "challenge-1")
+  assert only.pubkey == first_hex
+  let assert Ok([_, _]) =
+    bunker.authenticate(name, relay_x, bunker.BaseRelay, "challenge-1")
+  assert bunker.session_signers(name, relay_x) == Some([first_hex])
+  stop_bunker(name)
+}
+
+/// 範囲の違う取り下げは、登録済みの送信手段を消さない（止めたセッションのリレーの
+/// 接続の `on_disconnect` が、同じ URL の基本の接続を外さない）。
+pub fn a_stale_disconnect_does_not_remove_the_publisher_of_another_scope_test() {
+  let name = process.new_name("bunker_stale_disconnect_test")
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([one_account()], []), [], [], []))
+  })
+  set_publisher(name, relay_x, bunker.BaseRelay, process.new_subject())
+  named.send(name, bunker.RemovePublisher(relay_x, bunker.SessionRelay))
+  assert bunker.publisher_urls(name) == Some([relay_x])
+  named.send(name, bunker.RemovePublisher(relay_x, bunker.BaseRelay))
+  assert bunker.publisher_urls(name) == Some([])
+  stop_bunker(name)
 }

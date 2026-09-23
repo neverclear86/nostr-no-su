@@ -339,7 +339,7 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
 ///
 /// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
 /// 管理 UI には渡らない。ロックのプールの名前もこのクロージャーに捕捉される。購読は
-/// 接続と張り直しのたびに現在の署名者から組み立て直すため、`since` もその時点の
+/// 接続と張り直しのたびに、接続の範囲の現在の署名者から組み立て直すため、`since` もその時点の
 /// 現在時刻から決まる。署名者を問い合わせられなければ定義を得られなかったことにし、
 /// 開いている購読を閉じない。
 fn bunker_spec(loaded: Config) -> Result(app.Bunker, String) {
@@ -360,13 +360,15 @@ fn bunker_spec(loaded: Config) -> Result(app.Bunker, String) {
       retry_delay: bunker.default_retry_delay,
     ),
     relays: [],
-    subscriptions: fn() {
-      bunker.signers(name)
-      |> option.to_result(Nil)
-      |> result.map(config.bunker_subscriptions(
-        _,
-        time.now_seconds() - bunker_since_lookback_seconds,
-      ))
+    subscriptions: fn(signers) {
+      fn() {
+        signers()
+        |> option.to_result(Nil)
+        |> result.map(config.bunker_subscriptions(
+          _,
+          time.now_seconds() - bunker_since_lookback_seconds,
+        ))
+      }
     },
   )
 }

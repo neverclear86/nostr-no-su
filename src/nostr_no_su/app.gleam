@@ -8,14 +8,16 @@
 //// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
 //// |   `-- runner(<plugin>)   (worker  / Permanent)
 //// |-- bunker       (rest_for_one): アカウントストアの接続プール、ロックのプール、
-//// |                                バンカーアクター、次に connections (factory)
+//// |                                バンカーアクター、次に connections (factory) と
+//// |                                session_connections (factory)
 //// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、
 //// |                                connections (factory)、再開点の保存
 //// `-- admin        (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
-//// `connections (factory, 5/10)` は用途（監視・バンカー）ごとの
-//// `factory_supervisor` で、その下にリレーの数だけ `relay_connection` が並ぶ。
+//// `connections (factory, 5/10)` と `session_connections` は用途（監視・バンカー・
+//// セッションのリレー）ごとの `factory_supervisor` で、その下にリレーの数だけ
+//// `relay_connection` が並ぶ。
 //// 静的な `relay_connection × N` ではなく factory にしているのは、`relay_list`
 //// が実行時に子を増減できるようにするためである（下の「実行時のリレーの増減」を
 //// 参照）。
@@ -73,14 +75,16 @@
 //// 購読の評価がバンカーの名前の登録より先に走り、定義を得られずに再試行を待つ。
 ////
 //// **実行時のリレーの増減は `relay_list` が担う。** 用途（監視・バンカー）
-//// ごとの接続の一覧を加えた順に持ち、`open_relay` / `close_relay` /
+//// ごとの接続の一覧を加えた順に持ち、バンカーのセッションのリレーのうち基本の組に
+//// 無い URL の接続（`SessionOnly` の用途）も持ち、`open_relay` / `close_relay` /
 //// `change_relay_roles` による変更と、`connections` の factory の子の
 //// 起動・停止を、自分のハンドラーで直列に行う（同時に届く変更の重なりを
 //// 避けるため）。factory は `rest_for_one` の再起動で動的な子をすべて失うため、
 //// `relay_list` は再起動後に届く `Repopulate` で一覧から起動し直す。止めた
-//// 接続（バンカーの用途）は `on_disconnect` を経て `RemovePublisher` が送られ、
-//// バンカーの送信先から外れる。署名者の変化による張り直しは、`relay_list` の
-//// `ResubscribeAll` が監視とバンカーの両方の用途の現在の全接続へ送り、
+//// 接続（バンカーとセッションのリレーの用途）は `on_disconnect` を経て
+//// `RemovePublisher` が送られ、バンカーの送信先から外れる。署名者の変化による
+//// 張り直しは、`relay_list` の `ResubscribeAll` が監視とバンカーの両方の用途の
+//// 現在の全接続へ送り、
 //// プラグインのランナーの起動・再有効化・取り直しの完了による張り直しは監視の
 //// 用途の接続だけへ送る（バンカーの購読はプラグインに関わらないため）。
 //// **起動時のリレーは `relays` テーブルの行から決まる。** バンカーが読み込みに
@@ -225,7 +229,9 @@ pub type Monitor {
 /// 入れないこと。`lock_pool` は同じ DB に 1 インスタンスだけを許すロック専用の
 /// 1 本のプール。`pool` と同じくパスワードを含みうる。`relays` は `relay_list` の
 /// 起動時の一覧で、本番は空。行はバンカーの読み込みから `OpenRegistered` で届き、
-/// 実行時の増減には `open_relay` などを使う。
+/// 実行時の増減には `open_relay` などを使う。`subscriptions` は署名者の問い合わせ
+/// （応答が無ければ `None`）から購読の定義を作る関数で、基本の接続には全署名者、
+/// セッションのリレーの接続にはその URL を持つセッションの署名者の問い合わせを渡す。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
@@ -233,7 +239,7 @@ pub type Bunker {
     lock_pool: pog.Config,
     settings: bunker.Settings,
     relays: List(relay_list.Connection),
-    subscriptions: Subscriptions,
+    subscriptions: fn(fn() -> Option(List(String))) -> Subscriptions,
   )
 }
 
@@ -286,6 +292,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
     relay_list.Factories(
       monitor: process.new_name("nostr_no_su_relay_connections_monitor"),
       bunker: process.new_name("nostr_no_su_relay_connections_bunker"),
+      session: process.new_name("nostr_no_su_relay_connections_session"),
     )
   supervisor.new(supervisor.OneForOne)
   // サブツリーより意図的に厳しく、期間も長く取る。再起動を諦め続けるサブツリー
@@ -626,15 +633,16 @@ fn send_to_runner(
   }
 }
 
-/// バンカーサブツリー。接続プール、ロックのプール、アクター、それが応答に使う
-/// 接続群の `connections` factory の順に置く。アクターはプールが登録された後に
-/// 起動する必要があり（冒頭の doc を参照）、各接続はアクターに publisher を
-/// 登録するため、アクターと一緒に再起動する必要がある。アクターが署名者の変化で
-/// 依頼する購読の張り直しは、`relay_list` へ送るだけで待たない（`ResubscribeAll`
-/// が監視とバンカーの現在の全接続へ転送する）。`rest_for_one` なので、ロックの
-/// プールが再起動するとアクターと接続も再起動し、アクターの読み込みが
-/// advisory lock を取り直す。接続が受けた AUTH はアクターへの問い合わせで応答
-/// する。
+/// バンカーサブツリー。接続プール、ロックのプール、アクター、基本のバンカーリレーの
+/// 接続の `connections` factory、セッションのリレーの接続の factory の順に置く。
+/// アクターはプールが登録された後に起動する必要があり（冒頭の doc を参照）、各接続は
+/// アクターに publisher を登録するため、アクターと一緒に再起動する必要がある。
+/// アクターが署名者の変化で依頼する購読の張り直しは、`relay_list` へ送るだけで
+/// 待たない（`ResubscribeAll` が監視とバンカーの現在の全接続へ転送する）。
+/// セッションのリレーの変化は `relay_list.sync_session_relays` へ送る。
+/// `rest_for_one` なので、ロックのプールが再起動するとアクターと接続も再起動し、
+/// アクターの読み込みが advisory lock を取り直す。接続が受けた AUTH は、接続の範囲を
+/// 添えたアクターへの問い合わせで応答する。
 fn bunker_tree(
   spec: Spec,
   config: Bunker,
@@ -654,32 +662,73 @@ fn bunker_tree(
         ])
       },
       relay_list.open_registered(spec.relay_list, _),
+      relay_list.sync_session_relays(spec.relay_list, _),
     ),
   )
   |> supervisor.add(
-    relay_connections_child(
+    bunker_connections_child(
       spec,
       factories,
+      config,
       relay_list.Bunker,
-      fn(_relay_url) { config.subscriptions },
-      fn(_relay_url, received) {
-        case received {
-          relay_client.ReceivedEvent(_, verified) ->
-            named.send(config.name, bunker.Incoming(verified))
-          relay_client.ReceivedEose(_) -> Nil
-        }
-      },
-      fn(relay_url, ack) {
-        named.send(config.name, bunker.Acknowledged(relay_url, ack))
-      },
-      fn(relay_url) { Some(bunker.authenticate(config.name, relay_url, _)) },
-      fn(relay_url, socket: Socket) {
-        named.send(config.name, bunker.SetPublisher(relay_url, socket.publish))
-      },
-      fn(relay_url) {
-        named.send(config.name, bunker.RemovePublisher(relay_url))
-      },
+      bunker.BaseRelay,
+      fn(_relay_url) { bunker.signers(config.name) },
     ),
+  )
+  |> supervisor.add(
+    bunker_connections_child(
+      spec,
+      factories,
+      config,
+      relay_list.SessionOnly,
+      bunker.SessionRelay,
+      bunker.session_signers(config.name, _),
+    ),
+  )
+}
+
+/// バンカーの接続の用途 `role` の子。購読は `signers` が返す署名者から、AUTH と
+/// 送信手段の登録と取り下げは `scope` の範囲で行う。
+fn bunker_connections_child(
+  spec: Spec,
+  factories: relay_list.Factories,
+  config: Bunker,
+  role: relay_list.Role,
+  scope: bunker.RelayScope,
+  signers: fn(String) -> Option(List(String)),
+) -> ChildSpecification(
+  factory_supervisor.Supervisor(
+    relay_list.Connection,
+    Subject(relay_connection.Msg),
+  ),
+) {
+  relay_connections_child(
+    spec,
+    factories,
+    role,
+    fn(relay_url) { config.subscriptions(fn() { signers(relay_url) }) },
+    fn(_relay_url, received) {
+      case received {
+        relay_client.ReceivedEvent(_, verified) ->
+          named.send(config.name, bunker.Incoming(verified))
+        relay_client.ReceivedEose(_) -> Nil
+      }
+    },
+    fn(relay_url, ack) {
+      named.send(config.name, bunker.Acknowledged(relay_url, ack))
+    },
+    fn(relay_url) {
+      Some(bunker.authenticate(config.name, relay_url, scope, _))
+    },
+    fn(relay_url, socket: Socket) {
+      named.send(
+        config.name,
+        bunker.SetPublisher(relay_url, scope, socket.publish),
+      )
+    },
+    fn(relay_url) {
+      named.send(config.name, bunker.RemovePublisher(relay_url, scope))
+    },
   )
 }
 

@@ -1,6 +1,6 @@
 //// 実際のリレーと Postgres の上で、本番の仕様のツリーに NIP-46 の
 //// connect → get_public_key → sign_event を往復させ、`nostrconnect://` からの
-//// 接続も試す E2E。
+//// 接続と、登録していないセッションのリレーだけで応答する接続も試す E2E。
 ////
 //// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走る。PR の CI は
 //// どちらも渡さないのでスキップされ、手動のワークフロー（manual.yml の
@@ -9,9 +9,10 @@
 import envoy
 import gleam/dict
 import gleam/erlang/process.{type Pid, type Subject}
+import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/string
 import gleam/uri.{Uri}
 import nostr_no_su
@@ -163,6 +164,95 @@ pub fn nostrconnect_client_initiated_connection_test() {
   process.kill(tree)
 }
 
+/// 登録していないリレーを持つセッションは、そのリレーの接続を開いて応答し、
+/// 取り消すと接続を閉じる。
+pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
+  use relay_url <- with_test_relay_url
+  use database_url <- postgres.with_test_database_url("nip46_relay")
+  use scoped_database_url <- with_database(database_url)
+
+  let signer = account_for(signer_key)
+  let client = account_for(random.hex(32))
+  let signer_hex = account.pubkey_hex(signer)
+  let client_hex = account.pubkey_hex(client)
+  let #(spec, tree, _secret) = start_tree(scoped_database_url, signer)
+  let name = spec.bunker.name
+  let events = process.new_subject()
+  let acks = process.new_subject()
+  let connection = connect_client(relay_url, client, events, acks)
+
+  // `connect` の応答は、接続がまだ無いので送る先が無い。確かめるのは開いた後の往復。
+  let assert Ok(Nil) =
+    bunker.open_client_session(
+      name,
+      signer_hex,
+      client_hex,
+      "sign_event:1",
+      [relay_url],
+      "session-only-secret",
+    )
+  assert await(
+    fn() {
+      case bunker.publisher_urls(name) {
+        Some(urls) -> list.contains(urls, relay_url)
+        None -> False
+      }
+    },
+    5000,
+  )
+  assert bunker.session_signers(name, relay_url) == Some([signer_hex])
+
+  let signed = call_retrying(connection, client, signer, events, acks, 1)
+  assert string.contains(signed, "\\\"sig\\\":\\\"")
+
+  let assert Ok(Nil) = bunker.revoke(name, signer_hex, client_hex)
+  assert await(
+    fn() {
+      case bunker.publisher_urls(name) {
+        Some(urls) -> !list.contains(urls, relay_url)
+        None -> False
+      }
+    },
+    5000,
+  )
+
+  process.unlink(tree)
+  process.kill(tree)
+}
+
+/// `sign_event` を送り、`response_timeout_ms` 内に応答が届かなければ id を変えて
+/// 3 回目まで送り直す。kind 24133 はリレーが保存しないので、接続の REQ が届く前の
+/// リクエストは取りこぼされる。`attempt` は何回目の送信か。
+fn call_retrying(
+  connection: relay_client.Client,
+  client: Account,
+  signer: Account,
+  events: Subject(Event),
+  acks: Subject(relay_client.Acknowledgement),
+  attempt: Int,
+) -> String {
+  let request =
+    nip46_client.request_event(
+      client,
+      signer,
+      nip46_client.request_body(
+        "sign-" <> int.to_string(attempt),
+        "sign_event",
+        "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]",
+      ),
+      time.now_seconds(),
+    )
+  relay_client.publish(connection, request)
+  let assert Ok(ack) = process.receive(acks, ack_timeout_ms)
+  assert ack.accepted
+  case process.receive(events, response_timeout_ms), attempt < 3 {
+    Ok(response), _ -> nip46_client.decrypt_response(client, signer, response)
+    Error(Nil), True ->
+      call_retrying(connection, client, signer, events, acks, attempt + 1)
+    Error(Nil), False -> panic as "no response to sign_event over the relay"
+  }
+}
+
 /// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定ならスキップの 1 行を出す。
 fn with_test_relay_url(run: fn(String) -> Nil) -> Nil {
   case envoy.get("TEST_RELAY_URL") {
@@ -306,7 +396,7 @@ fn call(
 }
 
 /// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
-/// `start_tree` が `bunker.accounts` の `Ok` を待つのに使う。
+/// `start_tree` が `bunker.accounts` の `Ok` を待つのと、発行先の変化を待つのに使う。
 fn await(check: fn() -> Bool, remaining: Int) -> Bool {
   case check(), remaining <= 0 {
     True, _ -> True
