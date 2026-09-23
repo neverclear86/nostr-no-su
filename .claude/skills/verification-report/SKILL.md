@@ -70,7 +70,7 @@ compose を env を変えて作り直すと前のコンテナーのログが消�
 
 ### 4. スクリーンショットを撮る
 
-Playwright で幅 1280、ページ全体を撮る。
+playwright-core のスクリプトを headless で動かし（reference.md の「ブラウザー（Playwright）」）、幅 1280、ページ全体を撮る。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面に窓を開くので使わない。使ったときは終える前に `browser_close` を呼ぶ。
 ブラウザーのコンテキストに `locale: "ja-JP"` を渡し、日本語の画面で撮る（渡さないと Chromium は `Accept-Language` に `en-US` を送り、英語の画面になる）。
 表示の言語は cookie が `Accept-Language` より優先されるので、英語に切り替えたコンテキストで撮り続けると英語の画面になる。
 英語の画面を撮った後は、日本語に切り替え直すか、新しいコンテキストで撮る。

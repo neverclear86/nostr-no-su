@@ -14,6 +14,7 @@ disallowedTools: Agent
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので読むだけで、編集も build も実行しない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
 - issue は `gh issue view <N> -R neverclear86/nostr-no-su --json title,body,comments` で読む（`--comments` は本文を落とすことがあるので使わない）。管理 UI は `src/nostr_no_su/admin/`（lustre の SSR、Tailwind CSS と daisyUI、日英の切り替え、テーマの切り替え）にある。既存の画面の構成と部品を読んでから決める
 - 対象のブラウザーは Chromium 系だけでよい
+- 画面を見るときは headless で行う（スクラッチパッドに置いた HTML は、スクラッチパッドで `bun add playwright-core@<package.json の版>` を実行してから、playwright-core の `chromium.launch({ headless: true })` のスクリプトで開く。既存の画像は Read で見る）。撮影用のサーバー（`gleam run -m admin_preview`）は build を伴うのでユーザーの作業ツリーでは起動せず、`dev/screenshots.mjs` も使わない。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
 
 ## 決めること
 - 画面構成（どのページに何を置くか、既存のナビゲーションとの関係）
