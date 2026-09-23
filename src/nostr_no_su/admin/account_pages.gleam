@@ -2,9 +2,9 @@
 //// 接続 QR コード、秘密鍵の表示）の描画。`admin/dashboard` の型とパスの定義を
 //// `admin/view` の部品で HTML 文字列にするだけで、プロセスにも IO にも触れない。
 //// フォームの中身（説明とフォーム）はページの枠を持たない関数で作り、ページはそれをカードに
-//// 入れる。ダッシュボードのダイアログと共用するもの（操作の `account_action_form`、読み込めない
-//// 行の削除の `unreadable_delete_form`、ラベルの欄の `label_fieldset`）は、このモジュールが
-//// `admin/dashboard` を import するので `admin/dashboard` に置く。
+//// 入れる。ダッシュボードのダイアログと共用するもの（登録と生成の `import_form`、`generate_form`、
+//// 操作の `account_action_form`、読み込めない行の削除の `unreadable_delete_form`、ラベルの欄の
+//// `label_fieldset`）は、このモジュールが `admin/dashboard` を import するので `admin/dashboard` に置く。
 ////
 //// 埋め込む値（ラベル、表示する理由、nsec）はテキストか属性値として lustre に渡し、
 //// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
@@ -25,9 +25,10 @@ import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/account
 
-/// アカウントの登録画面。`import_form` と `generate_form` を見出し付きのカードに 1 つずつ
-/// 入れ、末尾に、ダッシュボードに無いアカウントが登録済みと出るときの案内を 1 行出す。失敗の
-/// 理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で開き直す。
+/// アカウントの登録画面。`dashboard.import_form` と `dashboard.generate_form` を見出し付きの
+/// カードに 1 つずつ入れ、末尾に、ダッシュボードに無いアカウントが登録済みと出るときの案内を
+/// 1 行出す。失敗の理由を出した POST の応答でも、テーマか言語を切り替えた後はこの画面を GET で
+/// 開き直す。
 /// `label` は欄に入れる値。GET では空、入力の誤りか 409 で戻したときは送られた値。
 pub fn new_account_page(
   language: Language,
@@ -54,7 +55,7 @@ pub fn new_account_page(
           None,
           [],
         ),
-        ..import_form(language, label)
+        ..dashboard.import_form(language, label)
       ]),
       view.card([
         view.section_heading(
@@ -64,53 +65,12 @@ pub fn new_account_page(
           None,
           [],
         ),
-        ..generate_form(language)
+        ..dashboard.generate_form(language)
       ]),
       view.hint(text(i18n.SkippedRowNote)),
       view.back_link(language),
     ],
   )
-}
-
-/// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を
-/// 送る。nsec の欄の説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の
-/// `aria-describedby` から指す。`label` はラベルの欄に入れる値。
-pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.secret_post_form(
-      view.segments_path(dashboard.import_account_segments),
-      [
-        view.hinted_input(
-          language,
-          text(i18n.PrivateKeyNsec),
-          nsec_hint_id,
-          view.FoldedHint(text(i18n.ImportDescription)),
-          view.secret_input_attributes(dashboard.nsec_field, "new-password"),
-        ),
-        dashboard.label_fieldset(language, dashboard.label_hint_id, label),
-      ],
-      text(i18n.Register),
-      view.PrimaryButton,
-      view.InForm,
-    ),
-  ]
-}
-
-/// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、
-/// 送信のボタンは枠のボタンにする。
-pub fn generate_form(language: Language) -> List(Element(msg)) {
-  let text = i18n.text(language, _)
-  [
-    view.form_description(text(i18n.GenerateDescription)),
-    view.post_form(
-      view.segments_path(dashboard.generate_account_segments),
-      [],
-      text(i18n.Generate),
-      view.OutlineButton,
-      view.InForm,
-    ),
-  ]
 }
 
 /// 生成した鍵の登録に失敗して確認ページを再描画する理由。
@@ -549,6 +509,3 @@ fn account_summary(
 ) -> Element(msg) {
   view.identity(language, row.label, row.npub)
 }
-
-/// nsec の欄の補足の `id`。nsec の欄は登録のフォームに 1 つだけなので固定の値にする。
-const nsec_hint_id = "nsec-hint"

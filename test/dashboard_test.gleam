@@ -438,7 +438,7 @@ fn split_account_details(body: String) -> #(String, String) {
 }
 
 /// アカウントの節の見出しに 1 行の説明が出て、「DB から読み直す」が「アカウントを追加」の
-/// リンクより前に並ぶ。
+/// ボタンより前に並ぶ。
 pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
   let snapshot =
     dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()]))
@@ -453,12 +453,7 @@ pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
   assert !string.contains(before_reload, "Add account")
   assert string.contains(
     after_reload,
-    element.to_string(view.icon_button_link(
-      "/accounts/new",
-      view.plus_icon(),
-      "Add account",
-      view.PrimaryButton,
-    )),
+    "command=\"show-modal\" commandfor=\"dialog-account-new\"",
   )
 }
 
@@ -1388,6 +1383,64 @@ pub fn relay_dialog_forms_match_the_page_forms_test() {
     == form_tag(page(dashboard.DeleteRelay), "/relays/")
 }
 
+/// アカウントの追加のボタンは `dialog-account-new` のダイアログを開き、ダイアログはキャンセルで閉じ、並びの末尾に登録画面への予備のリンクがある。
+pub fn account_add_dialog_opens_from_the_heading_test() {
+  let body = dashboard.render(i18n.English, view.System, states())
+  let id = "dialog-account-new"
+  assert string.contains(
+    body,
+    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    body,
+    "<dialog aria-labelledby=\""
+      <> id
+      <> "-title\" class=\"modal\" id=\""
+      <> id
+      <> "\">",
+  )
+  assert string.contains(
+    dialog_html(body, id),
+    "command=\"close\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.fallback_link(i18n.English, "/accounts/new")),
+  )
+}
+
+/// アカウントの追加のダイアログの登録と生成のフォームは、登録画面のフォームと同じ宛先と送り方を持つ。
+pub fn account_add_dialog_forms_match_the_page_forms_test() {
+  let dialog =
+    dialog_html(
+      dashboard.render(i18n.English, view.System, states()),
+      "dialog-account-new",
+    )
+  let page = account_pages.new_account_page(i18n.English, view.System, "", None)
+  assert form_tag(dialog, "/accounts/import")
+    == form_tag(page, "/accounts/import")
+  assert form_tag(dialog, "/accounts/generate")
+    == form_tag(page, "/accounts/generate")
+}
+
+/// アカウントの追加のダイアログは、登録、生成の順のタブで 2 つのフォームを出す。
+pub fn account_add_dialog_has_import_and_generate_tabs_test() {
+  let dialog =
+    dialog_html(
+      dashboard.render(i18n.English, view.System, states()),
+      "dialog-account-new",
+    )
+  assert string.contains(
+    dialog,
+    element.to_string(
+      view.radio_tabs("dialog-account-new-tab", [
+        #("Import a private key", dashboard.import_form(i18n.English, "")),
+        #("Generate a new key", dashboard.generate_form(i18n.English)),
+      ]),
+    ),
+  )
+}
+
 /// 用途の編集のダイアログは、行の今の用途にチェックを入れ、用途の接続状態のバッジを付ける。
 pub fn relay_edit_dialogs_check_the_current_roles_test() {
   let body = dashboard.render(i18n.English, view.System, states())
@@ -1889,7 +1942,7 @@ pub fn sessions_heading_links_to_connect_a_client_test() {
   assert !string.contains(unavailable, "/sessions/connect")
 }
 
-/// アカウントの節の見出しの行には、追加のリンクと並んで読み直しのフォームが出る。
+/// アカウントの節の見出しの行には、追加のダイアログを開くボタンと並んで読み直しのフォームが出る。
 pub fn accounts_heading_has_a_reload_form_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
@@ -1899,7 +1952,7 @@ pub fn accounts_heading_has_a_reload_form_test() {
 }
 
 /// 一覧を得られないときも、アカウントの節の見出しの読み直しのフォームは出したままにする
-/// （追加のリンクは一覧を得たときだけ出す）。
+/// （追加のボタンとダイアログと予備のリンクは一覧を得たときだけ出す）。
 pub fn the_reload_form_stays_without_the_account_list_test() {
   let unavailable =
     dashboard.render(

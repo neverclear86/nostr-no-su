@@ -590,12 +590,9 @@ pub fn account_forms_are_the_card_content_test() {
     account_pages.new_account_page(language, view.System, "typed", None)
   assert string.contains(
     new_account,
-    html(account_pages.import_form(language, "typed")),
+    html(dashboard.import_form(language, "typed")),
   )
-  assert string.contains(
-    new_account,
-    html(account_pages.generate_form(language)),
-  )
+  assert string.contains(new_account, html(dashboard.generate_form(language)))
   list.each(account_actions.with_form, fn(action) {
     let page =
       account_pages.account_action_page(

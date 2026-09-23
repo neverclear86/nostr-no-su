@@ -12,9 +12,10 @@
 //// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
 //// `admin/session_pages`）が同じ定義を見るようここに置く。
 //// ダッシュボードのダイアログと操作のページの両方に出すフォームの中身（リレーの
-//// `new_relay_form`、`relay_action_form`、アカウントの `account_action_form`、
-//// `unreadable_delete_form`、`label_fieldset`、セッションの `permissions_form`、クライアントの接続の
-//// `connect_content`、`connect_form`）もここに置く。ページのモジュールがここを
+//// `new_relay_form`、`relay_action_form`、アカウントの追加の `import_form`、`generate_form`、
+//// アカウントの `account_action_form`、`unreadable_delete_form`、`label_fieldset`、セッションの
+//// `permissions_form`、クライアントの接続の `connect_content`、`connect_form`）もここに置く。
+//// ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
@@ -992,9 +993,10 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに件数、1 行の説明、「DB から読み直す」と「アカウントを追加」を置き、行の一覧の後に
-/// 読み込めなかった行の枠を置く。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
-/// 「上の理由で取得できません。」）を出し、追加のリンクも出さない。
+/// アカウントの節。見出しに件数、1 行の説明、「DB から読み直す」と、「アカウントを追加」のダイアログを開くボタンと
+/// 登録画面への予備のリンクを置き、行の一覧の後に読み込めなかった行の枠を置く。一覧を得られないときは、一覧の
+/// 代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンと予備のリンクも
+/// 出さない。
 fn accounts_section(
   language: Language,
   shared: Option(String),
@@ -1010,14 +1012,7 @@ fn accounts_section(
       view.users_icon(),
       i18n.Accounts,
       Some(i18n.AccountsDescription),
-      [
-        view.icon_button_link(
-          view.segments_path(new_account_segments),
-          view.plus_icon(),
-          text(i18n.AddAccount),
-          view.PrimaryButton,
-        ),
-      ],
+      add_account_actions(language),
       [reload_form(language)],
     ),
     listed_body(
@@ -1040,6 +1035,74 @@ fn accounts_section(
     unreadable_accounts(language, skipped),
   ])
 }
+
+/// アカウントの節の見出しの、一覧を得たときに出す操作。「アカウントを追加」のダイアログを開くボタン、そのダイアログ
+/// （「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）、登録画面への予備のリンクの順に並べる。
+fn add_account_actions(language: Language) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let id = view.dialog_id(["account", "new"])
+  list.append(
+    view.dialog_button(
+      language,
+      id,
+      view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
+      view.PrimaryButton,
+      text(i18n.AddAccount),
+      [
+        view.radio_tabs(id <> "-tab", [
+          #(text(i18n.ImportPrivateKey), import_form(language, "")),
+          #(text(i18n.GenerateNewKey), generate_form(language)),
+        ]),
+      ],
+    ),
+    [view.fallback_link(language, view.segments_path(new_account_segments))],
+  )
+}
+
+/// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を送る。nsec の欄の
+/// 説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の `aria-describedby` から指す。`label` は
+/// ラベルの欄に入れる値。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
+pub fn import_form(language: Language, label: String) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.secret_post_form(
+      view.segments_path(import_account_segments),
+      [
+        view.hinted_input(
+          language,
+          text(i18n.PrivateKeyNsec),
+          nsec_hint_id,
+          view.FoldedHint(text(i18n.ImportDescription)),
+          view.secret_input_attributes(nsec_field, "new-password"),
+        ),
+        label_fieldset(language, label_hint_id, label),
+      ],
+      text(i18n.Register),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、送信のボタンは枠の
+/// ボタンにする。登録画面のカードと、ダッシュボードのアカウントの追加のダイアログが使う。
+pub fn generate_form(language: Language) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.GenerateDescription)),
+    view.post_form(
+      view.segments_path(generate_account_segments),
+      [],
+      text(i18n.Generate),
+      view.OutlineButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// nsec の欄の補足の `id`。nsec の欄は登録のフォームに 1 つだけで、登録のフォームは登録画面とダッシュボードの
+/// 追加のダイアログに 1 つずつ（同じページに 2 つ現れない）なので固定の値にする。
+const nsec_hint_id = "nsec-hint"
 
 /// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を
 /// 得られないとき（読み込み中、応答なし、締め切り超過）も描かない。
@@ -1495,8 +1558,9 @@ pub fn unreadable_delete_form(
   ]
 }
 
-/// ページのラベルの欄の補足の `id`。ページにはラベルの欄が 1 つだけなので固定の値にする。ダッシュボードの
-/// 行ごとのラベルの編集のダイアログは、ダイアログの `id` に `-label-hint` を付けた値を使う。
+/// ページとダッシュボードのアカウントの追加のダイアログのラベルの欄の補足の `id`。どちらもラベルの欄が 1 つだけ
+/// なので固定の値にする。ダッシュボードの行ごとのラベルの編集のダイアログは、ダイアログの `id` に `-label-hint`
+/// を付けた値を使う。
 pub const label_hint_id = "label-hint"
 
 /// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。登録画面、生成した鍵の
