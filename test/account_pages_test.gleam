@@ -608,11 +608,12 @@ pub fn account_forms_are_the_card_content_test() {
       )
     assert string.contains(
       page,
-      html(account_pages.account_action_form(
+      html(dashboard.account_action_form(
         language,
         row("main"),
         action,
         Some("typed"),
+        dashboard.label_hint_id,
       )),
     )
   })
@@ -623,6 +624,27 @@ pub fn account_forms_are_the_card_content_test() {
       skipped_row("main"),
       None,
     ),
-    html(account_pages.unreadable_delete_form(language, skipped_row("main"))),
+    html(dashboard.unreadable_delete_form(language, skipped_row("main"))),
   )
+}
+
+/// `account_actions.with_form` の各操作のページが、ほかの 3 つの操作のページへの `href` を持ち、今の操作の
+/// `href` を持たない。
+pub fn account_action_pages_link_to_the_other_actions_test() {
+  list.each(account_actions.with_form, fn(action) {
+    let page =
+      account_pages.account_action_page(
+        i18n.English,
+        view.System,
+        row("main"),
+        action,
+        None,
+        None,
+      )
+    list.each(account_actions.with_form, fn(other) {
+      let href =
+        "href=\"" <> dashboard.account_action_path("abcd", other) <> "\""
+      assert string.contains(page, href) == { other != action }
+    })
+  })
 }

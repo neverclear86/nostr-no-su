@@ -6,6 +6,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
+import nostr_no_su/admin/account_pages
 import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
@@ -327,8 +328,8 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   assert string.contains(after_details, account.signer)
 }
 
-/// アカウントの畳みの 4 つの操作はアイコン付きのボタンで、削除だけ短い語（`Delete`。
-/// `Delete account` は出ない）で `text-error` が付く。
+/// アカウントの行の 4 つの操作のダイアログを開くボタンはアイコン＋語で、削除だけ短い語（`Delete`）で
+/// `text-error` が付く。
 pub fn account_row_actions_are_icons_with_short_delete_test() {
   let account =
     dashboard.AccountRow(
@@ -342,41 +343,59 @@ pub fn account_row_actions_are_icons_with_short_delete_test() {
   let body = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     body,
-    element.to_string(view.icon_button_link(
-      "/accounts/abcd/label",
+    dialog_trigger(
+      "dialog-account-abcd-label",
       view.pencil_icon(),
       "Edit label",
       view.GhostButton,
-    )),
+    ),
   )
   assert string.contains(
     body,
-    element.to_string(view.icon_button_link(
-      "/accounts/abcd/private-key",
+    dialog_trigger(
+      "dialog-account-abcd-private-key",
       view.eye_icon(),
       "Show private key",
       view.GhostButton,
-    )),
+    ),
   )
   assert string.contains(
     body,
-    element.to_string(view.icon_button_link(
-      "/accounts/abcd/rotate",
+    dialog_trigger(
+      "dialog-account-abcd-rotate",
       view.rotate_icon(),
       "Rotate secret",
       view.GhostButton,
-    )),
+    ),
   )
   assert string.contains(
     body,
-    element.to_string(view.icon_button_link(
-      "/accounts/abcd/delete",
+    dialog_trigger(
+      "dialog-account-abcd-delete",
       view.trash_icon(),
       "Delete",
       view.DangerGhostButton,
-    )),
+    ),
   )
-  assert !string.contains(body, "Delete account")
+}
+
+/// `id` のダイアログをアイコン＋語で開くボタン（`view.dialog_button` の 1 要素目）の文字列。
+fn dialog_trigger(
+  id: String,
+  icon: element.Element(Nil),
+  text: String,
+  kind: view.ButtonKind,
+) -> String {
+  let assert [trigger, _] =
+    view.dialog_button(
+      i18n.English,
+      id,
+      view.IconTextTrigger(icon, text),
+      kind,
+      "",
+      [],
+    )
+  element.to_string(trigger)
 }
 
 /// 64 桁の 16 進の署名者を持つアカウント。鍵の指紋を描かせるための行である。
@@ -498,8 +517,9 @@ pub fn account_session_count_follows_the_session_list_test() {
   assert !string.contains(unavailable, ">0 sessions</span>")
 }
 
-/// 畳みの中に 2 つの URI の説明が出て、ラベルの編集・秘密鍵の表示・secret の再生成のリンクの後に、
-/// 右端に離した（`ml-auto` の囲みの）削除のリンクが並ぶ。
+/// 畳みの中に 2 つの URI の説明が出て、ラベルの編集・秘密鍵の表示・secret の再生成のダイアログを開くボタン、
+/// ラベルの編集のページへの予備のリンク、右端に離した（`ml-auto` の囲みの）削除のダイアログを開くボタンの順に
+/// 並ぶ。
 pub fn account_details_hold_the_uris_and_the_actions_test() {
   let account = fingerprinted_account()
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
@@ -513,43 +533,42 @@ pub fn account_details_hold_the_uris_and_the_actions_test() {
     details,
     "A client that connects with this URI cannot sign until you approve it under pending connections on the dashboard.",
   )
-  let link = fn(action, icon, text, kind) {
-    element.to_string(view.icon_button_link(
-      dashboard.account_action_path(account.signer, action),
+  let trigger = fn(segment, icon, text, kind) {
+    dialog_trigger(
+      "dialog-account-" <> account.signer <> "-" <> segment,
       icon,
       text,
       kind,
-    ))
-  }
-  assert string.contains(
-    details,
-    link(
-      dashboard.EditLabel,
-      view.pencil_icon(),
-      "Edit label",
-      view.GhostButton,
     )
-      <> link(
-      dashboard.RevealPrivateKey,
+  }
+  assert contains_in_order(details, [
+    trigger("label", view.pencil_icon(), "Edit label", view.GhostButton),
+    trigger(
+      "private-key",
       view.eye_icon(),
       "Show private key",
       view.GhostButton,
-    )
-      <> link(
-      dashboard.RotateSecret,
-      view.rotate_icon(),
-      "Rotate secret",
-      view.GhostButton,
-    )
+    ),
+    trigger("rotate", view.rotate_icon(), "Rotate secret", view.GhostButton),
+    element.to_string(view.fallback_link(
+      i18n.English,
+      dashboard.account_action_path(account.signer, dashboard.EditLabel),
+    ))
       <> "<div class=\"ml-auto\">"
-      <> link(
-      dashboard.DeleteAccount,
-      view.trash_icon(),
-      "Delete",
-      view.DangerGhostButton,
-    )
-      <> "</div>",
-  )
+      <> trigger("delete", view.trash_icon(), "Delete", view.DangerGhostButton),
+  ])
+}
+
+/// `needles` が `haystack` にこの順に重ならずに現れる。
+fn contains_in_order(haystack: String, needles: List(String)) -> Bool {
+  case needles {
+    [] -> True
+    [needle, ..rest] ->
+      case string.split_once(haystack, needle) {
+        Ok(#(_, after)) -> contains_in_order(after, rest)
+        Error(Nil) -> False
+      }
+  }
 }
 
 /// 読み込めなかった行は、アカウントの節の中で行の一覧の後に error の色の枠として出て、
@@ -1080,8 +1099,8 @@ pub fn relative_time_buckets_test() {
   assert dashboard.relative_time(1000, 2000) == i18n.JustNow
 }
 
-/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・
-/// 削除のリンクが出る。日本語でも見出しが訳される。
+/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・削除のダイアログを
+/// 開くボタンと、削除の確認のページへの予備のリンクが出る。日本語でも見出しが訳される。
 pub fn skipped_rows_are_listed_with_their_reason_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -1114,7 +1133,7 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
   )
 }
 
-/// `pubkey` 列を読めない行は、識別も削除のリンクも出さず、理由の 1 文に削除でき
+/// `pubkey` 列を読めない行は、識別も削除のボタンも予備のリンクも出さず、理由の 1 文に削除でき
 /// ない旨を続けて出す。
 pub fn malformed_pubkey_rows_show_only_the_reason_test() {
   let snapshot =
@@ -1138,8 +1157,8 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
   assert !string.contains(body, "not-a-valid-pubkey-value")
 }
 
-/// 読み込めなかった行にラベルと省略した npub、「削除」が出て、16 進の pubkey は
-/// 削除のリンクの宛先にだけ使われ、識別としては出ない。
+/// 読み込めなかった行にラベルと省略した npub、「削除」が出て、16 進の pubkey は属性値（ダイアログの
+/// `id`、フォームと予備のリンクの宛先）にだけ使われ、識別としては出ない。
 pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
   let pubkey = "deadbeef00112233445566778899aabbccddeeff0011223344"
   let npub = "npub1skippedexamplevalueabcdefghijklmno"
@@ -1160,15 +1179,16 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
   assert string.contains(body, view.shorten(npub))
   assert string.contains(
     body,
-    element.to_string(view.icon_button_link(
-      dashboard.account_action_path(pubkey, dashboard.DeleteAccount),
+    dialog_trigger(
+      "dialog-unreadable-" <> pubkey <> "-delete",
       view.trash_icon(),
       "Delete",
       view.DangerGhostButton,
-    )),
+    ),
   )
-  // pubkey の唯一の出現は削除のリンクの宛先である。
-  assert list.length(string.split(body, pubkey)) == 2
+  // pubkey は属性値（ダイアログの id、フォームと予備のリンクの宛先）にだけ現れ、テキストとしては出ない。
+  assert !string.contains(body, ">" <> pubkey)
+  assert !string.contains(body, pubkey <> "<")
 }
 
 /// 飛ばされた行が 0 件、あるいは一覧を得られないときは枠を描かない。
@@ -1351,18 +1371,21 @@ pub fn relay_dialog_forms_match_the_page_forms_test() {
       None,
     )
   }
-  assert relay_form_tag(dialog_html(body, "dialog-relay-new"))
-    == relay_form_tag(relay_pages.new_relay_page(
-      i18n.English,
-      view.System,
-      "",
-      dashboard.new_relay_roles,
-      None,
-    ))
-  assert relay_form_tag(dialog_html(body, "dialog-relay-1-edit"))
-    == relay_form_tag(page(dashboard.EditRelayRoles))
-  assert relay_form_tag(dialog_html(body, "dialog-relay-1-delete"))
-    == relay_form_tag(page(dashboard.DeleteRelay))
+  assert form_tag(dialog_html(body, "dialog-relay-new"), "/relays/")
+    == form_tag(
+      relay_pages.new_relay_page(
+        i18n.English,
+        view.System,
+        "",
+        dashboard.new_relay_roles,
+        None,
+      ),
+      "/relays/",
+    )
+  assert form_tag(dialog_html(body, "dialog-relay-1-edit"), "/relays/")
+    == form_tag(page(dashboard.EditRelayRoles), "/relays/")
+  assert form_tag(dialog_html(body, "dialog-relay-1-delete"), "/relays/")
+    == form_tag(page(dashboard.DeleteRelay), "/relays/")
 }
 
 /// 用途の編集のダイアログは、行の今の用途にチェックを入れ、用途の接続状態のバッジを付ける。
@@ -1398,11 +1421,177 @@ fn dialog_html(body: String, id: String) -> String {
   inner
 }
 
-/// 最初の `<form action="/relays/` から `>` の前までを取り出す。ページ枠の切り替えのフォームを避けて宛先で探す。
-fn relay_form_tag(html: String) -> String {
-  let assert Ok(#(_, rest)) = string.split_once(html, "<form action=\"/relays/")
+/// 最初の `<form action="<prefix>` から `>` の前までを取り出す。ページ枠の切り替えのフォームを避けて宛先で探す。
+fn form_tag(html: String, prefix: String) -> String {
+  let assert Ok(#(_, rest)) =
+    string.split_once(html, "<form action=\"" <> prefix)
   let assert Ok(#(tag, _)) = string.split_once(rest, ">")
   tag
+}
+
+/// ダイアログのテストのアカウントの署名者（64 桁の 16 進）。
+const dialog_signer = "0123012301230123012301230123012301230123012301230123012301230123"
+
+/// ダイアログのテストの読み込めなかった行の pubkey（64 桁の 16 進）。
+const dialog_skipped = "8901890189018901890189018901890189018901890189018901890189018901"
+
+/// アカウント 1 行と読み込めなかった行 1 行を持つダッシュボードの状態。
+fn dialog_snapshot() -> dashboard.Snapshot {
+  dashboard.Snapshot(
+    ..states(),
+    accounts: Ok([dialog_account(dialog_signer, "main")]),
+    skipped: Ok([
+      dashboard.SkippedRow(
+        pubkey: dialog_skipped,
+        npub: "npub1skippeddialogvalueabcdefghijklmnopq",
+        label: "old wallet",
+        reason: vault.UndecryptablePrivateKey,
+      ),
+    ]),
+  )
+}
+
+/// 署名者 `signer`、ラベル `label` のアカウントの行。
+fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
+  dashboard.AccountRow(
+    signer:,
+    npub: "npub1dialog" <> label <> "valueabcdefghijklmnopqrstuvw",
+    label:,
+    uri: "bunker://x?secret=s",
+    auth_uri: "bunker://x",
+  )
+}
+
+/// 行の 4 つと読み込めなかった行の 1 つの `id` について、`command="show-modal" commandfor="<id>"`、
+/// `<dialog aria-labelledby="<id>-title" class="modal" id="<id>">`、ダイアログの中の
+/// `command="close" commandfor="<id>"`（キャンセル）がある。
+pub fn account_dialogs_open_from_matching_triggers_test() {
+  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
+  use id <- list.each([
+    "dialog-account-" <> dialog_signer <> "-label",
+    "dialog-account-" <> dialog_signer <> "-private-key",
+    "dialog-account-" <> dialog_signer <> "-rotate",
+    "dialog-account-" <> dialog_signer <> "-delete",
+    "dialog-unreadable-" <> dialog_skipped <> "-delete",
+  ])
+  assert string.contains(
+    body,
+    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    body,
+    "<dialog aria-labelledby=\""
+      <> id
+      <> "-title\" class=\"modal\" id=\""
+      <> id
+      <> "\">",
+  )
+  assert string.contains(
+    dialog_html(body, id),
+    "command=\"close\" commandfor=\"" <> id <> "\"",
+  )
+}
+
+/// 4 つの操作と読み込めなかった行のダイアログの `<form action="/accounts/…">` の開始タグ（`method` を
+/// 含む）が、`account_action_page` と `unreadable_delete_page` の同じ操作のものと等しい。
+pub fn account_dialog_forms_match_the_page_forms_test() {
+  let snapshot = dialog_snapshot()
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let account = dialog_account(dialog_signer, "main")
+  list.each(
+    [
+      #(dashboard.EditLabel, "label"),
+      #(dashboard.RevealPrivateKey, "private-key"),
+      #(dashboard.RotateSecret, "rotate"),
+      #(dashboard.DeleteAccount, "delete"),
+    ],
+    fn(pair) {
+      let #(action, segment) = pair
+      assert form_tag(
+          dialog_html(
+            body,
+            "dialog-account-" <> dialog_signer <> "-" <> segment,
+          ),
+          "/accounts/",
+        )
+        == form_tag(
+          account_pages.account_action_page(
+            i18n.English,
+            view.System,
+            account,
+            action,
+            None,
+            None,
+          ),
+          "/accounts/",
+        )
+    },
+  )
+  let assert Ok([skipped]) = snapshot.skipped
+  assert form_tag(
+      dialog_html(body, "dialog-unreadable-" <> dialog_skipped <> "-delete"),
+      "/accounts/",
+    )
+    == form_tag(
+      account_pages.unreadable_delete_page(
+        i18n.English,
+        view.System,
+        skipped,
+        None,
+      ),
+      "/accounts/",
+    )
+}
+
+/// 状態は `dashboard.Snapshot(..dialog_snapshot(), accounts: Ok([dialog_signer の行（ラベル `main`）, "4567" を
+/// 16 回の署名者の行（ラベル `bot`）]))`。ラベルの違う 2 行の、それぞれのラベルの編集のダイアログに、その行のラベルの識別、`value="<ラベル>"`、
+/// `aria-describedby="<id>-label-hint"` と `id="<id>-label-hint"` がある。
+pub fn account_label_dialogs_hold_each_row_label_test() {
+  let second = string.repeat("4567", 16)
+  let snapshot =
+    dashboard.Snapshot(
+      ..dialog_snapshot(),
+      accounts: Ok([
+        dialog_account(dialog_signer, "main"),
+        dialog_account(second, "bot"),
+      ]),
+    )
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  use #(signer, label) <- list.each([#(dialog_signer, "main"), #(second, "bot")])
+  let account = dialog_account(signer, label)
+  let id = "dialog-account-" <> signer <> "-label"
+  let dialog = dialog_html(body, id)
+  assert string.contains(
+    dialog,
+    element.to_string(view.identity(i18n.English, account.label, account.npub)),
+  )
+  assert string.contains(dialog, "value=\"" <> label <> "\"")
+  assert string.contains(dialog, "aria-describedby=\"" <> id <> "-label-hint\"")
+  assert string.contains(dialog, "id=\"" <> id <> "-label-hint\"")
+}
+
+/// `view.fallback_link(English, "/accounts/<signer>/label")` と `view.fallback_link(English, "/accounts/<pubkey>/delete")`
+/// の文字列があり、`href="/accounts/<signer>/delete"` が無い。
+pub fn account_rows_link_to_the_label_page_as_a_fallback_test() {
+  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
+  assert string.contains(
+    body,
+    element.to_string(view.fallback_link(
+      i18n.English,
+      "/accounts/" <> dialog_signer <> "/label",
+    )),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.fallback_link(
+      i18n.English,
+      "/accounts/" <> dialog_skipped <> "/delete",
+    )),
+  )
+  assert !string.contains(
+    body,
+    "href=\"/accounts/" <> dialog_signer <> "/delete\"",
+  )
 }
 
 /// `states()` の `id` のリレーの行。
@@ -2674,14 +2863,6 @@ fn session_snapshot() -> dashboard.Snapshot {
   )
 }
 
-/// 描画から `<form action="<action>"` の直後から開始タグの `>` の手前まで（残りの属性）を取り出す。
-fn form_tag(html: String, action: String) -> String {
-  let assert Ok(#(_, rest)) =
-    string.split_once(html, "<form action=\"" <> action <> "\"")
-  let assert Ok(#(tag, _)) = string.split_once(rest, ">")
-  tag
-}
-
 /// 描画から `<form action="<action>"` の直後から最初の `</form>` の手前まで（開始タグの残りの属性と中身）を
 /// 取り出す。
 fn form_html(html: String, action: String) -> String {
@@ -2744,7 +2925,7 @@ pub fn session_dialog_forms_match_the_page_forms_test() {
     )
   let revoke = dialog_html(body, "dialog-session-abcd-ef01-revoke")
   assert form_tag(revoke, "/sessions/revoke")
-    == " class=\"flex flex-col gap-4\" method=\"post\""
+    == "\" class=\"flex flex-col gap-4\" method=\"post\""
   assert string.contains(
     form_html(revoke, "/sessions/revoke"),
     element.to_string(view.hidden_input(dashboard.signer_field, "abcd")),
