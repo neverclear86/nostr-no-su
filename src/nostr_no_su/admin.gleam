@@ -1196,8 +1196,8 @@ fn session_permissions(
 
 /// 送られたフォームを欄の状態に写す。値は検証せず、描き直しでそのまま欄に戻せる
 /// ようにする。
-fn submitted_form(form: wisp.FormData) -> session_pages.PermissionsForm {
-  session_pages.PermissionsForm(
+fn submitted_form(form: wisp.FormData) -> dashboard.PermissionsForm {
+  dashboard.PermissionsForm(
     sign_event: field_checked(form, dashboard.sign_event_field),
     nip44_encrypt: field_checked(form, dashboard.nip44_encrypt_field),
     nip44_decrypt: field_checked(form, dashboard.nip44_decrypt_field),
@@ -1231,7 +1231,7 @@ fn normalized_kinds(kinds: String) -> Result(List(String), Nil) {
 /// 欄の状態から保存する `perms` を組む。検証に落ちた理由は文言で返し、欄の状態は
 /// 呼び出し側が描き直しに使う。
 fn assembled_perms(
-  form: session_pages.PermissionsForm,
+  form: dashboard.PermissionsForm,
 ) -> Result(String, i18n.Message) {
   case normalized_kinds(form.kinds) {
     Error(Nil) -> Error(i18n.InvalidKindList)
@@ -1253,7 +1253,7 @@ fn assembled_perms(
 /// `sign_event` にチェックが無いときだけ、正規化した `kinds` を重複無しで
 /// `sign_event:<kind>` にしたもの → `other` をカンマで分けたトークン、の順で繋ぐ。
 fn perms_string(
-  form: session_pages.PermissionsForm,
+  form: dashboard.PermissionsForm,
   kinds: List(String),
 ) -> String {
   let checked_tokens =

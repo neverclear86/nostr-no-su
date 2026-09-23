@@ -374,7 +374,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
           created_at: 1000,
           last_used_at: 1000,
         )),
-        Some(session_pages.PermissionsForm(
+        Some(dashboard.PermissionsForm(
           sign_event: True,
           nip44_encrypt: False,
           nip44_decrypt: False,
@@ -894,6 +894,17 @@ pub fn components(language: i18n.Language) -> List(String) {
         "dialog-x",
         view.IconTextTrigger(view.plus_icon(), "text"),
         view.PrimaryButton,
+        "title",
+        [],
+      ),
+      element.to_string,
+    ),
+    list.map(
+      view.dialog_button(
+        language,
+        "dialog-y",
+        view.TextTrigger("text"),
+        view.GhostButton,
         "title",
         [],
       ),

@@ -12,7 +12,8 @@
 //// `admin/account_pages`、`admin/relay_pages`、`admin/connect_pages`、
 //// `admin/session_pages`）が同じ定義を見るようここに置く。
 //// ダッシュボードのダイアログと操作のページの両方に出すフォームの中身（リレーの
-//// `new_relay_form`、`relay_action_form`）もここに置く。ページのモジュールがここを
+//// `new_relay_form`、`relay_action_form`、セッションの `permissions_form`、クライアントの接続の
+//// `connect_content`、`connect_form`）もここに置く。ページのモジュールがここを
 //// import するので、ページのモジュールに置くと import が循環する。
 //// ページ枠が使う定義
 //// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
@@ -22,6 +23,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
@@ -258,8 +260,11 @@ pub const register_generated_segments = [accounts_segment, "register-generated"]
 /// セッションのページの先頭のセグメント。
 pub const sessions_segment = "sessions"
 
+/// セッションの取り消しの操作の語。POST 先のパスの末尾と、取り消しのダイアログの `id` に使う。
+const revoke_segment = "revoke"
+
 /// セッション取り消しの POST 先のパスセグメント。
-pub const revoke_segments = [sessions_segment, "revoke"]
+pub const revoke_segments = [sessions_segment, revoke_segment]
 
 /// クライアントの接続画面のパスセグメント。
 pub const connect_segments = [sessions_segment, "connect"]
@@ -2113,8 +2118,9 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   }
 }
 
-/// 承認済みのセッションの節。見出しに件数と 1 行の説明と「クライアントを接続」を置き、行を並べる。一覧を
-/// 得られないときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出す。
+/// 承認済みのセッションの節。見出しに件数と 1 行の説明と、接続のダイアログを開く「クライアントを接続」と
+/// 接続のページへの予備のリンクを置き、行を並べる。一覧を得られないときは、一覧とボタンとリンクの代わりに
+/// その理由を出す。
 fn sessions_section(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -2130,14 +2136,17 @@ fn sessions_section(
       view.clock_icon(),
       i18n.ApprovedSessions,
       Some(i18n.ApprovedSessionsDescription),
-      [
-        view.icon_button_link(
-          view.segments_path(connect_segments),
-          view.plus_icon(),
-          text(i18n.ConnectClient),
+      list.append(
+        view.dialog_button(
+          language,
+          view.dialog_id(["session", "connect"]),
+          view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
           view.PrimaryButton,
+          text(i18n.ConnectClient),
+          connect_content(language, accounts, "", ""),
         ),
-      ],
+        [view.fallback_link(language, view.segments_path(connect_segments))],
+      ),
       [],
     ),
     listed_body(
@@ -2161,8 +2170,8 @@ fn sessions_section(
 }
 
 /// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
-/// 1 段目に、権限のチップと権限の編集・取り消しのボタンを 2 段目に並べる。幅 720px 以下では、クライアント、
-/// 署名者と最終利用、権限のチップ、ボタンの 4 段に組み替える。
+/// 1 段目に、権限のチップと操作（`session_actions`）を 2 段目に並べる。幅 720px 以下では、クライアント、
+/// 署名者と最終利用、権限のチップ、ボタンとリンクの 4 段に組み替える。
 fn session_item(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -2195,10 +2204,10 @@ fn session_item(
         html.div(
           [
             attribute.class(
-              "col-span-2 flex flex-wrap justify-end gap-2 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0",
+              "col-span-2 grid justify-items-end gap-1 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0",
             ),
           ],
-          [permissions_link(language, session), revoke_form(language, session)],
+          session_actions(language, accounts, session),
         ),
       ],
     ),
@@ -2240,14 +2249,74 @@ fn last_used_value(
   )
 }
 
-/// 権限の編集画面へのリンク。
-fn permissions_link(language: Language, session: SessionRow) -> Element(msg) {
-  view.icon_button_link(
-    session_permissions_path(session.signer, session.client),
-    view.pencil_icon(),
-    i18n.text(language, i18n.EditPermissions),
-    view.GhostButton,
-  )
+/// 承認済みセッション 1 件の操作。1 行目に権限の編集と承認の取り消しのダイアログを開くボタンとそのダイアログを、
+/// 2 行目に権限の編集のページへの予備のリンクを置き、升の幅をボタンの並びの幅に保つ。権限の編集のダイアログは、
+/// そのセッションの今の権限を入れたフォームを描く。取り消しは確認のダイアログの中のボタンでだけ POST する。
+fn session_actions(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  session: SessionRow,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  let summary = session_dialog_summary(language, accounts, session)
+  let permissions_id = session_dialog_id(session, session_permissions_segment)
+  [
+    html.div(
+      [attribute.class("flex flex-wrap justify-end gap-2")],
+      list.append(
+        view.dialog_button(
+          language,
+          permissions_id,
+          view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
+          view.GhostButton,
+          text(i18n.EditPermissions),
+          [
+            summary,
+            ..permissions_form(
+              language,
+              session,
+              None,
+              permissions_id <> "-kinds-hint",
+            )
+          ],
+        ),
+        view.dialog_button(
+          language,
+          session_dialog_id(session, revoke_segment),
+          view.TextTrigger(text(i18n.Revoke)),
+          view.GhostButton,
+          text(i18n.Revoke),
+          [summary, ..revoke_form(language, session)],
+        ),
+      ),
+    ),
+    view.fallback_link(
+      language,
+      session_permissions_path(session.signer, session.client),
+    ),
+  ]
+}
+
+/// セッションの行のダイアログの `id`。署名者とクライアントの 16 進の公開鍵と操作の語から作る。
+fn session_dialog_id(session: SessionRow, action: String) -> String {
+  view.dialog_id(["session", session.signer, session.client, action])
+}
+
+/// セッションのダイアログの題の下に出す要約。クライアントの公開鍵の全文と署名者を並べる。権限のチップは
+/// 行に出ているので繰り返さない。
+fn session_dialog_summary(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  session: SessionRow,
+) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.detail_list([
+    #(text(i18n.Client), view.value_cell(view.Code(session.client))),
+    #(
+      text(i18n.Signer),
+      html.dd([], [signer_value(signer_name(accounts, session.signer))]),
+    ),
+  ])
 }
 
 /// 最終利用の `title` に出す、UTC の全文と作成時刻。
@@ -2271,6 +2340,287 @@ pub fn relative_time(now: Int, at: Int) -> i18n.Message {
     diff if diff < 86_400 -> i18n.HoursAgo(diff / 3600)
     diff -> i18n.DaysAgo(diff / 86_400)
   }
+}
+
+/// 権限の編集フォームの欄の状態。`kinds` と `other` は欄に出す文字列そのままで、
+/// 検証していない値も持つ。
+pub type PermissionsForm {
+  PermissionsForm(
+    sign_event: Bool,
+    nip44_encrypt: Bool,
+    nip44_decrypt: Bool,
+    kinds: String,
+    other: String,
+  )
+}
+
+/// `perms` を 3 つのチェック、kind の一覧、そのほかの宣言に分けたもの。
+/// `form_of_perms` の途中の形で、最後に `PermissionsForm` へまとめる。
+type ParsedPerms {
+  ParsedPerms(
+    sign_event: Bool,
+    nip44_encrypt: Bool,
+    nip44_decrypt: Bool,
+    kinds: List(String),
+    other: List(String),
+  )
+}
+
+/// 権限の編集フォームの中身。説明の 1 行と、セッションの権限のパスへ POST するフォームを
+/// 並べる。ページの枠、要約、入力の誤りは含めない。`form` は描き直すときに送られた欄の状態で、
+/// `None` なら `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。`kinds_hint_id` は
+/// kind の欄の補足の `id` で、ページは固定の値を、ダッシュボードは行ごとのダイアログの `id` から作った
+/// 値を渡し、1 つのページで重ならないようにする。
+pub fn permissions_form(
+  language: Language,
+  session: SessionRow,
+  form: Option(PermissionsForm),
+  kinds_hint_id: String,
+) -> List(Element(msg)) {
+  let fields = option.unwrap(form, form_of_perms(session.perms))
+  [
+    view.form_description(i18n.text(language, i18n.EditPermissionsDescription)),
+    view.post_form(
+      session_permissions_path(session.signer, session.client),
+      permissions_fields(language, fields, kinds_hint_id),
+      i18n.text(language, i18n.Save),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// 権限の編集フォームの欄。3 つのチェック、kind 24133 を拒否する注意の 1 行、ⓘ で補足（`id` は
+/// `kinds_hint_id`）を開く kind の欄、あればそのほかの宣言のチップと隠し欄。
+fn permissions_fields(
+  language: Language,
+  fields: PermissionsForm,
+  kinds_hint_id: String,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    html.fieldset([attribute.class("fieldset")], [
+      view.checkbox_row(
+        sign_event_field,
+        view.pencil_icon(),
+        text(i18n.AllowSignEvent),
+        view.untranslated(sign_event_field),
+        fields.sign_event,
+        [],
+      ),
+      html.p([attribute.class("text-sm text-muted")], [
+        html.text(text(i18n.SignEventAlwaysRefused)),
+      ]),
+      view.checkbox_row(
+        nip44_encrypt_field,
+        view.key_icon(),
+        text(i18n.AllowNip44Encrypt),
+        view.untranslated(nip44_encrypt_field),
+        fields.nip44_encrypt,
+        [],
+      ),
+      view.checkbox_row(
+        nip44_decrypt_field,
+        view.key_icon(),
+        text(i18n.AllowNip44Decrypt),
+        view.untranslated(nip44_decrypt_field),
+        fields.nip44_decrypt,
+        [],
+      ),
+    ]),
+    view.hinted_input(
+      language,
+      text(i18n.AllowedKinds),
+      kinds_hint_id,
+      view.FoldedHint(text(i18n.AllowedKindsHint)),
+      [
+        attribute.name(perms_kinds_field),
+        attribute.inputmode("numeric"),
+        attribute.default_value(fields.kinds),
+        attribute.class("input w-full font-mono border-base-content/60"),
+        attribute.maxlength(512),
+      ],
+    ),
+    ..other_declarations(language, fields.other)
+  ]
+}
+
+/// 「そのほかの宣言」がある場合だけ、読み取り専用のチップと 1 行の補足、送信のための隠し欄を
+/// 出す。無ければ何も出さない。
+fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
+  case other {
+    "" -> []
+    _ -> [
+      html.div([attribute.class("flex flex-col gap-1")], [
+        html.span([], [html.text(i18n.text(language, i18n.OtherPermissions))]),
+        permission_view.chips(language, other),
+        view.hint(i18n.text(language, i18n.OtherPermissionsHint)),
+      ]),
+      view.hidden_input(perms_other_field, other),
+    ]
+  }
+}
+
+/// 保存済みの `perms` を欄の状態に写す。3 つの語はチェック、`sign_event:<n>` は
+/// kind の欄、それ以外は「そのほかの宣言」に落とし、空の `perms` は 3 つのチェック
+/// を入れる。
+fn form_of_perms(perms: String) -> PermissionsForm {
+  let parsed = case perms {
+    "" ->
+      ParsedPerms(
+        sign_event: True,
+        nip44_encrypt: True,
+        nip44_decrypt: True,
+        kinds: [],
+        other: [],
+      )
+    _ ->
+      string.split(perms, ",")
+      |> list.fold(
+        ParsedPerms(
+          sign_event: False,
+          nip44_encrypt: False,
+          nip44_decrypt: False,
+          kinds: [],
+          other: [],
+        ),
+        fold_token,
+      )
+      |> reverse_lists
+  }
+  PermissionsForm(
+    sign_event: parsed.sign_event,
+    nip44_encrypt: parsed.nip44_encrypt,
+    nip44_decrypt: parsed.nip44_decrypt,
+    kinds: string.join(parsed.kinds, ","),
+    other: string.join(parsed.other, ","),
+  )
+}
+
+/// `form_of_perms` の 1 トークンぶんの畳み込み。
+fn fold_token(acc: ParsedPerms, token: String) -> ParsedPerms {
+  case token {
+    "sign_event" -> ParsedPerms(..acc, sign_event: True)
+    "nip44_encrypt" -> ParsedPerms(..acc, nip44_encrypt: True)
+    "nip44_decrypt" -> ParsedPerms(..acc, nip44_decrypt: True)
+    _ ->
+      case permission_view.signed_kind(token) {
+        Ok(kind) ->
+          ParsedPerms(..acc, kinds: [int.to_string(kind), ..acc.kinds])
+        Error(Nil) -> ParsedPerms(..acc, other: [token, ..acc.other])
+      }
+  }
+}
+
+/// `fold_token` が先頭に積んだ `kinds` と `other` を入力の順に戻す。
+fn reverse_lists(parsed: ParsedPerms) -> ParsedPerms {
+  ParsedPerms(
+    ..parsed,
+    kinds: list.reverse(parsed.kinds),
+    other: list.reverse(parsed.other),
+  )
+}
+
+/// URI の補足の `id`。URI の欄は接続のページと、ダッシュボードの接続のダイアログに 1 つずつで、
+/// 1 つのページに 2 つ現れないので固定の値にする。
+const nostrconnect_uri_hint_id = "nostrconnect-uri-hint"
+
+/// クライアントの接続のページのカードと、ダッシュボードの接続のダイアログの中身。アカウントの一覧が
+/// 空なら登録への案内、得られなければ理由の囲みを、得られればフォームの中身（`connect_form`）を出す。
+/// `uri` と `signer` は `connect_form` に渡す値である。
+pub fn connect_content(
+  language: Language,
+  accounts: Result(List(AccountRow), i18n.Reason),
+  uri: String,
+  signer: String,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  case accounts {
+    Ok([]) -> [
+      view.hint(text(i18n.NoAccountsForConnect)),
+      view.button_link(
+        view.segments_path(new_account_segments),
+        text(i18n.AddAccount),
+        view.PrimaryButton,
+      ),
+    ]
+    Ok(rows) -> connect_form(language, rows, uri, signer)
+    Error(reason) -> [
+      view.alert(
+        view.Neutral,
+        view.reason_content(language, Some(i18n.CouldNotListAccounts), reason),
+      ),
+    ]
+  }
+}
+
+/// 接続のフォームの中身。説明の 1 行と、`/sessions/connect` へ POST するフォーム（URI の欄と
+/// 署名するアカウントの選択欄）を並べる。ページの枠と入力の誤りは含めない。`uri` と `signer` は
+/// 描き直すときに送られた値で、`signer` が空文字列なら `accounts` の先頭を選ぶ。
+pub fn connect_form(
+  language: Language,
+  accounts: List(AccountRow),
+  uri: String,
+  signer: String,
+) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.ConnectClientDescription)),
+    view.post_form(
+      view.segments_path(connect_segments),
+      [
+        uri_field(language, uri),
+        signing_account_select(language, accounts, signer),
+      ],
+      text(i18n.Connect),
+      view.PrimaryButton,
+      view.InForm,
+    ),
+  ]
+}
+
+/// URI の欄。
+fn uri_field(language: Language, uri: String) -> Element(msg) {
+  let text = i18n.text(language, _)
+  view.hinted_textarea(
+    language,
+    text(i18n.NostrconnectUri),
+    nostrconnect_uri_hint_id,
+    view.LineHint(text(i18n.NostrconnectUriHint)),
+    uri,
+    [
+      attribute.name(nostrconnect_uri_field),
+      attribute.required(True),
+      attribute.autocomplete("off"),
+      attribute.spellcheck(False),
+      attribute.autocapitalize("off"),
+      attribute.rows(4),
+      attribute.class(
+        "textarea w-full font-mono text-xs border-base-content/60",
+      ),
+    ],
+  )
+}
+
+/// 署名するアカウントの選択欄。`rows` の順に並べ、`selected` が空文字列なら先頭を
+/// 選ぶ。表示はラベルと省略した npub を並べる。
+fn signing_account_select(
+  language: Language,
+  rows: List(AccountRow),
+  selected: String,
+) -> Element(msg) {
+  let selected = case selected, list.first(rows) {
+    "", Ok(first) -> first.signer
+    _, _ -> selected
+  }
+  view.select_field(
+    i18n.text(language, i18n.SigningAccount),
+    signer_field,
+    list.map(rows, fn(row) {
+      #(row.signer, row.label <> " " <> view.shorten(row.npub))
+    }),
+    selected,
+  )
 }
 
 /// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）と 1 行の説明を
@@ -2419,19 +2769,23 @@ fn decision_forms(
   ]
 }
 
-/// セッションを 1 件取り消すフォーム。取り消しは副作用なので POST で送る。確認のページを
-/// 経ずに接続中のクライアントに影響するが、クライアントは接続し直せるので地味なボタンにする。
-fn revoke_form(language: Language, session: SessionRow) -> Element(msg) {
-  view.post_form(
-    view.segments_path(revoke_segments),
-    [
-      view.hidden_input(signer_field, session.signer),
-      view.hidden_input(client_field, session.client),
-    ],
-    i18n.text(language, i18n.Revoke),
-    view.GhostButton,
-    view.InRow,
-  )
+/// セッションを 1 件取り消すフォームの中身。取り消しの結果の説明と、`/sessions/revoke` へ POST するフォームを
+/// 並べ、確認のダイアログの中にだけ置く。取り消しは接続中のクライアントに影響するので warning の枠のボタンにする。
+fn revoke_form(language: Language, session: SessionRow) -> List(Element(msg)) {
+  let text = i18n.text(language, _)
+  [
+    view.form_description(text(i18n.RevokeSessionDescription)),
+    view.post_form(
+      view.segments_path(revoke_segments),
+      [
+        view.hidden_input(signer_field, session.signer),
+        view.hidden_input(client_field, session.client),
+      ],
+      text(i18n.Revoke),
+      view.WarningOutlineButton,
+      view.InForm,
+    ),
+  ]
 }
 
 /// 無効になったプラグイン 1 つの再有効化フォーム。イベント処理を再開させ、失敗が

@@ -6,11 +6,13 @@ import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
+import nostr_no_su/admin/connect_pages
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/relay_pages
+import nostr_no_su/admin/session_pages
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/vault
@@ -1684,7 +1686,7 @@ pub fn relays_heading_links_to_add_a_relay_test() {
   assert !string.contains(unavailable, "/relays/new")
 }
 
-/// セッションの節の見出しの行は、一覧を得たときだけクライアントの接続へのリンクを出す。
+/// セッションの節の見出しの行は、一覧を得たときだけ接続のダイアログを開くボタンと予備のリンクを出す。
 pub fn sessions_heading_links_to_connect_a_client_test() {
   let ok = dashboard.render(i18n.English, view.System, states())
   assert string.contains(ok, "href=\"/sessions/connect\"")
@@ -2237,7 +2239,7 @@ pub fn session_row_regroups_at_720px_test() {
   )
   assert string.contains(
     part,
-    "class=\"col-span-2 flex flex-wrap justify-end gap-2 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0\"",
+    "class=\"col-span-2 grid justify-items-end gap-1 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0\"",
   )
 }
 
@@ -2643,4 +2645,262 @@ fn action_form(action: dashboard.RelayAction) -> String {
   dashboard.relay_action_form(i18n.English, relay, action, None, None)
   |> element.fragment
   |> element.to_string
+}
+
+/// セッションのダイアログのテストが使うアカウント。署名者は `abcd`。
+fn session_account() -> dashboard.AccountRow {
+  dashboard.AccountRow(
+    signer: "abcd",
+    npub: "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+    label: "main",
+    uri: "bunker://abcd?relay=x&secret=s",
+    auth_uri: "bunker://abcd?relay=x",
+  )
+}
+
+/// アカウント 1 件（`session_account`）と、署名者 `abcd` の承認済みセッション `ef01`・`ef02` を持つ
+/// スナップショット。2 行は権限を変え、ダイアログのフォームの行の取り違えを見分けられるようにする。
+fn session_snapshot() -> dashboard.Snapshot {
+  dashboard.Snapshot(
+    ..states(),
+    accounts: Ok([session_account()]),
+    sessions: Ok([
+      dashboard.SessionRow(
+        ..session_of("abcd", "ef01"),
+        perms: "sign_event,nip44_encrypt",
+      ),
+      dashboard.SessionRow(..session_of("abcd", "ef02"), perms: "sign_event:7"),
+    ]),
+  )
+}
+
+/// 描画から `<form action="<action>"` の直後から開始タグの `>` の手前まで（残りの属性）を取り出す。
+fn form_tag(html: String, action: String) -> String {
+  let assert Ok(#(_, rest)) =
+    string.split_once(html, "<form action=\"" <> action <> "\"")
+  let assert Ok(#(tag, _)) = string.split_once(rest, ">")
+  tag
+}
+
+/// 描画から `<form action="<action>"` の直後から最初の `</form>` の手前まで（開始タグの残りの属性と中身）を
+/// 取り出す。
+fn form_html(html: String, action: String) -> String {
+  let assert Ok(#(_, rest)) =
+    string.split_once(html, "<form action=\"" <> action <> "\"")
+  let assert Ok(#(inner, _)) = string.split_once(rest, "</form>")
+  inner
+}
+
+/// 描画から、すべての `<dialog` から `</dialog>` までを除いた残り。
+fn outside_dialogs(body: String) -> String {
+  case string.split_once(body, "<dialog ") {
+    Error(Nil) -> body
+    Ok(#(before, rest)) -> {
+      let assert Ok(#(_, after)) = string.split_once(rest, "</dialog>")
+      before <> outside_dialogs(after)
+    }
+  }
+}
+
+/// `session_snapshot()` の描画で、ダイアログの開閉が組になっている: `dialog-session-connect` と各行の権限の
+/// 編集・取り消しのダイアログはそれぞれ、同じ `id` を `commandfor` で指す開くボタンと、中の閉じるボタンを持つ。
+pub fn session_dialogs_open_from_matching_triggers_test() {
+  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  use id <- list.each([
+    "dialog-session-connect",
+    "dialog-session-abcd-ef01-permissions",
+    "dialog-session-abcd-ef01-revoke",
+    "dialog-session-abcd-ef02-permissions",
+    "dialog-session-abcd-ef02-revoke",
+  ])
+  assert string.contains(
+    body,
+    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    dialog_html(body, id),
+    "command=\"close\" commandfor=\"" <> id <> "\"",
+  )
+}
+
+/// 接続のダイアログのフォームは接続のページのフォームと同じ宛先と属性で POST する。取り消しのダイアログの
+/// フォームは `/sessions/revoke` へ POST し、署名者の隠し欄を持つ。
+pub fn session_dialog_forms_match_the_page_forms_test() {
+  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  assert form_tag(
+      dialog_html(body, "dialog-session-connect"),
+      "/sessions/connect",
+    )
+    == form_tag(
+      connect_pages.connect_client_page(
+        i18n.English,
+        view.System,
+        Ok([session_account()]),
+        "",
+        "",
+        None,
+      ),
+      "/sessions/connect",
+    )
+  let revoke = dialog_html(body, "dialog-session-abcd-ef01-revoke")
+  assert form_tag(revoke, "/sessions/revoke")
+    == " class=\"flex flex-col gap-4\" method=\"post\""
+  assert string.contains(
+    form_html(revoke, "/sessions/revoke"),
+    element.to_string(view.hidden_input(dashboard.signer_field, "abcd")),
+  )
+}
+
+/// 権限の編集のダイアログのフォームは、行ごとに、その行の権限の編集のページのフォームと同じ中身を持つ。
+/// kind の補足の `id` だけが、ページの固定の値からダイアログの `id` に基づく値に替わる。
+pub fn session_permission_dialogs_match_each_rows_page_test() {
+  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  let assert Ok(rows) = session_snapshot().sessions
+  use row <- list.each(rows)
+  let id = "dialog-session-abcd-" <> row.client <> "-permissions"
+  let path = dashboard.session_permissions_path(row.signer, row.client)
+  let page =
+    session_pages.session_permissions_page(
+      i18n.English,
+      view.System,
+      Ok(row),
+      None,
+      None,
+    )
+  assert form_html(dialog_html(body, id), path)
+    == string.replace(
+      form_html(page, path),
+      "session-permissions-kinds-hint",
+      id <> "-kinds-hint",
+    )
+}
+
+/// 承認の取り消しのフォームはダイアログの中にだけあり、送信は warning の枠のボタンである。
+pub fn session_rows_revoke_only_from_the_dialog_test() {
+  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  assert !string.contains(outside_dialogs(body), "action=\"/sessions/revoke\"")
+  assert string.contains(
+    dialog_html(body, "dialog-session-abcd-ef01-revoke"),
+    "btn btn-outline btn-warning",
+  )
+}
+
+/// セッションの行の予備のリンクは権限の編集のページを、見出しの予備のリンクは接続のページを開く。
+pub fn session_rows_link_to_the_permissions_page_as_a_fallback_test() {
+  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  assert string.contains(
+    body,
+    element.to_string(view.fallback_link(
+      i18n.English,
+      "/sessions/abcd/ef01/permissions",
+    )),
+  )
+  assert string.contains(
+    body,
+    element.to_string(view.fallback_link(i18n.English, "/sessions/connect")),
+  )
+}
+
+/// アカウントが 0 件のとき、接続のダイアログはフォームの代わりに登録への案内を出す。
+pub fn connect_dialog_guides_to_add_an_account_test() {
+  let body =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..session_snapshot(), accounts: Ok([])),
+    )
+  let dialog = dialog_html(body, "dialog-session-connect")
+  assert string.contains(dialog, "href=\"/accounts/new\"")
+  assert !string.contains(dialog, "<form")
+}
+
+/// 接続の中身は、アカウントが 0 件なら登録への案内、得られなければ理由、得られればフォームを出す。
+pub fn connect_content_follows_the_accounts_state_test() {
+  let content = fn(accounts) {
+    dashboard.connect_content(i18n.English, accounts, "", "")
+    |> element.fragment
+    |> element.to_string
+  }
+  let empty = content(Ok([]))
+  assert string.contains(empty, "href=\"/accounts/new\"")
+  assert !string.contains(empty, "<form")
+  let failed = content(Error(i18n.Untranslated("boom")))
+  assert string.contains(failed, "<span lang=\"en\">boom</span>")
+  assert !string.contains(failed, "<form")
+  assert string.contains(
+    content(Ok([session_account()])),
+    "<form action=\"/sessions/connect\"",
+  )
+}
+
+/// kind 1 の署名だけを許すセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
+fn english_permissions_form() -> String {
+  let session =
+    dashboard.SessionRow(
+      signer: "0123",
+      client: "4567",
+      perms: "sign_event:1",
+      created_at: 0,
+      last_used_at: 0,
+    )
+  dashboard.permissions_form(
+    i18n.English,
+    session,
+    None,
+    "session-permissions-kinds-hint",
+  )
+  |> element.fragment
+  |> element.to_string
+}
+
+/// フォームの中身はセッションの権限のパスへ POST し、保存済みの kind を欄に出す。ページの枠と
+/// 要約は含めない。
+pub fn permissions_form_posts_without_the_page_frame_test() {
+  let html = english_permissions_form()
+  assert string.contains(
+    html,
+    "<form action=\"/sessions/0123/4567/permissions\" class=\"flex flex-col gap-4\" method=\"post\">",
+  )
+  assert string.contains(html, "value=\"1\"")
+  assert !string.contains(html, "<header")
+  assert !string.contains(
+    html,
+    i18n.text(i18n.English, i18n.CurrentPermissions),
+  )
+}
+
+/// kind の欄の補足は ⓘ のボタンで開く `popover` の段落で、欄の説明として結び付く。
+pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
+  let html = english_permissions_form()
+  assert string.contains(
+    html,
+    "aria-describedby=\"session-permissions-kinds-hint\"",
+  )
+  assert string.contains(
+    html,
+    "popovertarget=\"session-permissions-kinds-hint\"",
+  )
+  assert string.contains(
+    html,
+    "id=\"session-permissions-kinds-hint\" popover=\"auto\"",
+  )
+}
+
+/// 接続のフォームの中身は `/sessions/connect` へ POST し、URI の欄の補足を欄の下の 1 行で
+/// 結び付ける。ページの枠は含めない。
+pub fn connect_form_describes_the_uri_field_test() {
+  let html =
+    dashboard.connect_form(i18n.English, [session_account()], "", "")
+    |> element.fragment
+    |> element.to_string
+  assert string.contains(
+    html,
+    "<form action=\"/sessions/connect\" class=\"flex flex-col gap-4\" method=\"post\">",
+  )
+  assert string.contains(html, "aria-describedby=\"nostrconnect-uri-hint\"")
+  assert string.contains(
+    html,
+    "<p class=\"text-muted\" id=\"nostrconnect-uri-hint\">",
+  )
+  assert !string.contains(html, "<header")
 }

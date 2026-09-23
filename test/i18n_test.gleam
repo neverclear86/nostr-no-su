@@ -275,7 +275,8 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.ApprovedSessions -> Some(i18n.ApprovedSessionsDescription)
     i18n.ApprovedSessionsDescription -> Some(i18n.NoApprovedSessions)
     i18n.NoApprovedSessions -> Some(i18n.Revoke)
-    i18n.Revoke -> Some(i18n.Relays)
+    i18n.Revoke -> Some(i18n.RevokeSessionDescription)
+    i18n.RevokeSessionDescription -> Some(i18n.Relays)
     i18n.Relays -> Some(i18n.Role)
     i18n.Role -> Some(i18n.MonitorRole)
     i18n.MonitorRole -> Some(i18n.BunkerRole)
@@ -422,12 +423,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 255 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 256 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 255
+  assert list.length(messages) == 256
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。
