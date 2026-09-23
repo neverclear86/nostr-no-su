@@ -2,7 +2,7 @@
 
 監視で受信したイベントを Postgres の `event_logger_events` テーブルへ保存する外部プラグイン。NIP-01 の全フィールド（`tags` は jsonb）と取り込み時刻を 1 行として残し、同じイベントを複数のリレーから受け取っても 1 行だけ保存する。
 
-`examples/plugins/` の 2 つが仕様の例示なのに対し、こちらは**第一級の同梱プラグイン**である。状態（保存アクター）を持ち、独自の依存（pog / pgo）を同梱し、独自の設定（`PLUGIN_EVENT_LOGGER_DATABASE_URL`）を受け取る。プラグイン API v1 が実用的なプラグインに足りることの実証でもある。
+`examples/plugins/` の 2 つが仕様の例示なのに対し、こちらは**第一級の同梱プラグイン**である。状態（保存アクター）を持ち、独自の依存（pog / pgo）を同梱し、本体から保存先の接続先（予約キー `DatabaseUrl`）を受け取る。プラグイン API v1 が実用的なプラグインに足りることの実証でもある。
 
 仕様の全文は [プラグイン API v1](../../docs/plugin-api.md) を参照すること。
 
@@ -48,14 +48,14 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 | 環境変数 | 必須 | 意味 |
 | --- | --- | --- |
-| `PLUGIN_EVENT_LOGGER_DATABASE_URL` | はい | 保存先の Postgres（`postgres://user:pass@host:5432/db`） |
+| `PLUGIN_EVENT_LOGGER_DATABASE_URL` | いいえ | 保存先の Postgres（`postgres://user:pass@host:5432/db`）。未設定なら本体の `DATABASE_URL` と同じデータベースに保存する |
 
-この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先はこの環境変数だけで決まり、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts`（日本語の管理 UI では「保存するアカウント」）の節から選べ、プラグイン自身の DB に保存される（初期値は全アカウント）。管理 UI にはもう 1 つ `/plugins/event_logger/timeline` があり、保存済みのイベントの直近 20 件を新しい順に出す。
+この URL は管理 UI の `/plugins/event_logger/settings` に `postgres://<user>@<host>:<port>/<database>` の形で出る。パスワードはプラグインが取り除くので画面には出ない。接続先は本体の `DATABASE_URL`（この変数を設定したときはその値）で、この画面から変えることはできない。保存の対象とするアカウントだけは同じ画面の `Monitored accounts`（日本語の管理 UI では「保存するアカウント」）の節から選べ、このプラグインのテーブルに保存される（初期値は全アカウント）。管理 UI にはもう 1 つ `/plugins/event_logger/timeline` があり、保存済みのイベントの直近 20 件を新しい順に出す。
 
-設定が無い、あるいは URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
+`PLUGIN_EVENT_LOGGER_DATABASE_URL` の値を URL として解釈できないときは `plugin_children/1` が `{error, Reason}` を返し、**このプラグインだけが読み込まれない**（本体の起動は止まらない）。起動ログに出るのは次の 1 行である。
 
 ```
-[plugin_loader] event_logger: plugin_children/1 rejected the configuration (PLUGIN_EVENT_LOGGER_DATABASE_URL is required); configure it with PLUGIN_EVENT_LOGGER_*
+[plugin_loader] event_logger: plugin_children/1 rejected the configuration (database URL is not a valid postgres URL); configure it with PLUGIN_EVENT_LOGGER_*
 ```
 
 ## 保存が追いつかないとき

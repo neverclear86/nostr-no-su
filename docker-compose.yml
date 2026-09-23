@@ -12,8 +12,6 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
-      PLUGIN_EVENT_LOGGER_DATABASE_URL: ${PLUGIN_EVENT_LOGGER_DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
-      PLUGIN_FILE_LOGGER_PATH: ${PLUGIN_FILE_LOGGER_PATH-/tmp/nostr-no-su-events.log}
       ADMIN_PORT: ${ADMIN_PORT-8080}
       ADMIN_BIND: 0.0.0.0
       # クラッシュダンプには管理パスワードと DB のパスワードが載るので、既定では
@@ -53,9 +51,8 @@ services:
     # 理由の 1 行が出る。
     restart: unless-stopped
     # ルートは読み取り専用にし、書き込みは /tmp（メモリ上の tmpfs、再起動で
-    # 消える）だけにする。wisp の一時ファイルと PLUGIN_FILE_LOGGER_PATH の
-    # 既定値、書くように戻したときのクラッシュダンプ（ERL_CRASH_DUMP）が
-    # ここに書く。
+    # 消える）だけにする。wisp の一時ファイルと、書くように戻したときの
+    # クラッシュダンプ（ERL_CRASH_DUMP）がここに書く。
     read_only: true
     tmpfs:
       - /tmp
@@ -77,8 +74,7 @@ services:
     image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     # 値は .env で変える。効くのは postgres-data volume が空の初回だけ
     # （イメージが初期化時にしか資格情報を反映しない）。アプリの
-    # DATABASE_URL と PLUGIN_EVENT_LOGGER_DATABASE_URL の既定値はこの 3 変数
-    # から組み立てる。
+    # DATABASE_URL の既定値はこの 3 変数から組み立てる。
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nostr}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nostr}

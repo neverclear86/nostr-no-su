@@ -3,14 +3,16 @@
 ////
 //// **環境変数を読むのはこのモジュールではない**（`config.gleam` が 1 か所で
 //// 読む）。ここが持つのは、集めた環境変数からプラグイン 1 つぶんの設定を切り
-//// 出す規則と、境界へ渡す map への変換だけである。
+//// 出す規則と、本体の接続先を予約キーに写す規則と、境界へ渡す map への変換
+//// だけである。
 ////
 //// **境界に置くのはキーも値も binary の Erlang map** であって Gleam の Dict や
 //// レコードではない。イベント map（`event.to_map`）と同じ理由で、Erlang /
-//// Elixir で書いたプラグインからそのまま読めることを優先する。管理 UI の
-//// ページと実行の呼び出し（`plugin_page_content` / `plugin_page_action`）に
-//// 渡す map だけは、これに加えて予約キー `Accounts` が加わり、その値はアカウント
-//// の一覧を JSON にした文字列である。
+//// Elixir で書いたプラグインからそのまま読めることを優先する。どの呼び出しの
+//// map にも予約キー `DatabaseUrl`（本体のアカウントストアの接続先）が入る。
+//// 管理 UI のページと実行の呼び出し（`plugin_page_content` / `plugin_page_action`）
+//// に渡す map だけは、これに加えて予約キー `Accounts` が加わり、その値は
+//// アカウントの一覧を JSON にした文字列である。
 ////
 //// 値は変換しない。環境変数はすべて文字列であり、整数として読むべきか URL と
 //// して読むべきかを本体は知らない。**変換はプラグインの責任**で、失敗は
@@ -32,7 +34,8 @@ pub const env_prefix = "PLUGIN_"
 /// プラグイン名の正規化で残す文字。これ以外はすべて `_` にする。
 const name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-/// プラグイン 1 つぶんの設定。キーは小文字、値は環境変数の文字列そのまま。
+/// プラグイン 1 つぶんの設定。環境変数由来のキーは小文字、値は環境変数の文字列
+/// そのまま。本体の接続先があれば予約キー `DatabaseUrl` も持つ。
 pub type Config =
   Dict(String, String)
 
@@ -59,7 +62,9 @@ fn normalize(plugin_name: String) -> String {
 }
 
 /// 集めた `PLUGIN_*` からプラグイン 1 つぶんの設定を切り出す。接頭辞に一致し、
-/// かつ**残りが空でない**ものだけを採り、キーは小文字にする。一致しなければ空。
+/// かつ**残りが空でない**ものだけを採り、キーは小文字にする。`env` に本体の
+/// 接続先（`with_database_url` が足した項）があれば、その値を予約キー
+/// `DatabaseUrl` で足す。どちらも無ければ空。
 ///
 /// 「残りが空でない」条件が弾くのは `PLUGIN_FILE_LOGGER_=x` のような**キーが空の
 /// 変数**である。空のキーは環境変数名としては書けてしまうが、プラグインからは
@@ -81,6 +86,32 @@ pub fn for_plugin(env: Dict(String, String), plugin_name: String) -> Config {
         }
     }
   })
+  |> put_database_url_key(env)
+}
+
+/// 本体の接続先を、プラグインへ渡す環境変数の集合の中で表す名前。環境変数の集合は
+/// `PLUGIN_` で始まる名前しか持たないので、この項は `with_database_url` だけが入れる。
+const host_database_url = "DATABASE_URL"
+
+/// 本体の接続先を渡す予約キー。大文字を含むので環境変数由来のキーと衝突しない。
+const database_url_key = "DatabaseUrl"
+
+/// `env` に本体の接続先があれば、`config` に予約キー `DatabaseUrl` で足す。
+fn put_database_url_key(config: Config, env: Dict(String, String)) -> Config {
+  case dict.get(env, host_database_url) {
+    Ok(url) -> dict.insert(config, database_url_key, url)
+    Error(Nil) -> config
+  }
+}
+
+/// プラグインへ渡す環境変数の集合に、本体のアカウントストアの接続先を足す。
+/// `for_plugin` がこれを各プラグインの設定の予約キー `DatabaseUrl` に写す。
+/// 値はパスワードを含むので、表示やログに入れないこと。
+pub fn with_database_url(
+  env: Dict(String, String),
+  database_url: String,
+) -> Dict(String, String) {
+  dict.insert(env, host_database_url, database_url)
 }
 
 /// プラグイン境界へ渡す map。`event.to_map` と同じく `dynamic.properties/1` で

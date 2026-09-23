@@ -128,3 +128,40 @@ pub fn page_map_keeps_env_accounts_key_test() {
   assert decode.run(plugin_config.page_map(config, []), decoder)
     == Ok(#("3", "[]"))
 }
+
+/// `with_database_url` が足した本体の接続先は、予約キー `DatabaseUrl` として
+/// `to_map` と `page_map` の両方に入る（`plugin_children`・`handle_event` と
+/// 管理 UI のページの両方へ届く）。
+pub fn with_database_url_reaches_both_maps_test() {
+  let url = "postgres://nostr:nostr@postgres:5432/nostr_no_su"
+  let env = plugin_config.with_database_url(env(), url)
+  let config = plugin_config.for_plugin(env, "file_logger")
+  let decoder = {
+    use path <- decode.field("path", decode.string)
+    use database_url <- decode.field("DatabaseUrl", decode.string)
+    decode.success(#(path, database_url))
+  }
+  assert decode.run(plugin_config.to_map(config), decoder)
+    == Ok(#("/tmp/events.log", url))
+  assert decode.run(plugin_config.page_map(config, []), decoder)
+    == Ok(#("/tmp/events.log", url))
+}
+
+/// 環境変数からは `DatabaseUrl` を作れない。`PLUGIN_X_DATABASEURL` と
+/// `PLUGIN_X_DATABASE_URL` は小文字のキーのまま残り、本体の接続先は予約キー
+/// `DatabaseUrl` に入る（`for_plugin` がキーを小文字にするため、大文字を含む
+/// 予約キーは環境変数からは作れない）。
+pub fn env_keys_never_become_the_database_url_key_test() {
+  let env =
+    dict.from_list([
+      #("PLUGIN_X_DATABASEURL", "env-a"),
+      #("PLUGIN_X_DATABASE_URL", "env-b"),
+    ])
+    |> plugin_config.with_database_url("postgres://nostr@postgres:5432/db")
+  assert plugin_config.for_plugin(env, "x")
+    == dict.from_list([
+      #("databaseurl", "env-a"),
+      #("database_url", "env-b"),
+      #("DatabaseUrl", "postgres://nostr@postgres:5432/db"),
+    ])
+}

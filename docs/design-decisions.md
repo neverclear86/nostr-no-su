@@ -167,7 +167,7 @@ DB の停止はプロセスの死にならない（pgo が再接続を内部で�
 
 ### pgo のクラッシュレポートの DB のパスワードは logger の filter で伏せる
 
-pgo のプロセス（`pgo_pool`、`pgo_pool_sup`、`pgo_connection` など）は接続設定を状態や起動引数に持ち、`format_status` を定義していない。渡し方では避けられないので、起動時に OTP logger の primary filter（`log.redact_secrets`）へ `DATABASE_URL` のパスワードと管理パスワードを登録し、ログの本文に現れた値を出力の前に `[redacted]` へ置き換える。本体は `DATABASE_URL` を理由の文字列やログに入れず、解釈も 1 か所（`account_store.pool_config`）に限っている。マスターキーは pgo に渡さないので影響を受けない。filter が触るのはイベントの `msg` だけで `meta` は触らず、pgo のプロセスの状態には平文のまま残るので、同じ VM から `sys:get_state/1` では読める。プラグインが自分で持つ接続情報（`event_logger` の `PLUGIN_EVENT_LOGGER_DATABASE_URL`）は登録しないので、そのパスワードは伏せられない
+pgo のプロセス（`pgo_pool`、`pgo_pool_sup`、`pgo_connection` など）は接続設定を状態や起動引数に持ち、`format_status` を定義していない。渡し方では避けられないので、起動時に OTP logger の primary filter（`log.redact_secrets`）へ `DATABASE_URL` のパスワードと管理パスワードを登録し、ログの本文に現れた値を出力の前に `[redacted]` へ置き換える。本体は `DATABASE_URL` を理由の文字列やログに入れず、解釈も 1 か所（`account_store.pool_config`）に限っている。マスターキーは pgo に渡さないので影響を受けない。filter が触るのはイベントの `msg` だけで `meta` は触らず、pgo のプロセスの状態には平文のまま残るので、同じ VM から `sys:get_state/1` では読める。同梱の `event_logger` は既定で本体と同じ `DATABASE_URL` に接続するので、その pgo のプロセスに載るパスワードも同じ値として伏せられる。プラグインが自分で持つ接続情報（`event_logger` に `PLUGIN_EVENT_LOGGER_DATABASE_URL` で別の URL を渡したときの値など）は登録しないので、そのパスワードは伏せられない
 
 ## プラグイン
 

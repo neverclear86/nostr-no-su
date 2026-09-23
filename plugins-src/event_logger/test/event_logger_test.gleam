@@ -204,11 +204,11 @@ fn rejection(children: Dynamic) -> Result(String, Nil) {
   }
 }
 
-/// 設定が空なら、子仕様を組み立てずに設定を拒否する。本体はこの 1 行を出して
-/// このプラグインだけを読み込まない。
+/// 設定が空なら、子仕様を組み立てずに設定を拒否する。nostr-no-su の本体は常に
+/// `DatabaseUrl` を渡すので、この理由は別の本体でだけ出る。
 pub fn missing_configuration_is_rejected_test() {
   assert rejection(event_logger.plugin_children(dynamic.properties([])))
-    == Ok("PLUGIN_EVENT_LOGGER_DATABASE_URL is required")
+    == Ok("database_url is required when the host passes no DatabaseUrl")
 }
 
 /// Postgres の URL として読めない値も、子を起こす前に拒否する。読み込み時に
@@ -220,7 +220,28 @@ pub fn invalid_urls_are_rejected_test() {
       #(dynamic.string("database_url"), dynamic.string("not a url")),
     ])
   assert rejection(event_logger.plugin_children(config))
-    == Ok("PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL")
+    == Ok("database URL is not a valid postgres URL")
+}
+
+/// `DatabaseUrl` だけならその値を返し、どちらも無ければ `Error(Nil)`。
+/// nostr-no-su の本体は常に `DatabaseUrl` を渡すので、こちらが既定の経路である。
+pub fn database_url_defaults_to_the_host_database_test() {
+  let host = "postgres://nostr:pass@localhost:5432/nostr_no_su"
+  assert event_logger.database_url(dict.from_list([#("DatabaseUrl", host)]))
+    == Ok(host)
+  assert event_logger.database_url(dict.new()) == Error(Nil)
+}
+
+/// `PLUGIN_EVENT_LOGGER_DATABASE_URL`（map ではキー `database_url`）があれば、
+/// 本体の `DatabaseUrl` より優先する。
+pub fn database_url_prefers_the_override_test() {
+  let settings =
+    dict.from_list([
+      #("DatabaseUrl", "postgres://user:pass@localhost:5432/host"),
+      #("database_url", "postgres://user:pass@localhost:5432/override"),
+    ])
+  assert event_logger.database_url(settings)
+    == Ok("postgres://user:pass@localhost:5432/override")
 }
 
 /// map でない設定も、子仕様を組み立てずに拒否する。
@@ -275,6 +296,27 @@ pub fn valid_configuration_declares_a_pool_and_a_store_test() {
     == Ok(#("pool", atom.create("supervisor"), Named(atom.create("infinity"))))
   assert child_shape(store_spec)
     == Ok(#("store", atom.create("worker"), Milliseconds(5000)))
+}
+
+/// 本体が渡す予約キー `DatabaseUrl` だけでも、プールと保存アクターの 2 件を
+/// 申告する（nostr-no-su の本体から届く既定の形）。
+pub fn host_database_url_declares_a_pool_and_a_store_test() {
+  let config =
+    dynamic.properties([
+      #(
+        dynamic.string("DatabaseUrl"),
+        dynamic.string("postgres://user:pass@localhost:5432/db"),
+      ),
+    ])
+  let assert Ok(specs) =
+    decode.run(
+      event_logger.plugin_children(config),
+      decode.list(decode.dynamic),
+    )
+  let assert [pool, ..] = specs
+  assert child_shape(pool)
+    == Ok(#("pool", atom.create("supervisor"), Named(atom.create("infinity"))))
+  assert list.length(specs) == 2
 }
 
 /// 到達できない DB でも保存アクターは落ちない。DB が落ちている間に落ち続ける
@@ -838,7 +880,7 @@ pub fn the_monitored_section_reports_an_unreachable_store_test() {
   assert tone == "failure"
 }
 
-/// `Configuration` 節の `PLUGIN_EVENT_LOGGER_DATABASE_URL` は `code` インラインの
+/// `Configuration` 節の接続先の URL（`database URL`）は `code` インラインの
 /// マスク済みの文字列である。
 pub fn page_content_shows_the_masked_database_url_test() {
   let masked = "postgres://nostr@db.example:5432/nostr_no_su"
@@ -863,9 +905,32 @@ pub fn page_content_shows_the_masked_database_url_test() {
       decode.field("items", decode.list(pair_item_decoder()), decode.success),
     )
   let assert Ok(#(_term, kind, text)) =
-    list.find(items, fn(item) { item.0 == "PLUGIN_EVENT_LOGGER_DATABASE_URL" })
+    list.find(items, fn(item) { item.0 == "database URL" })
   assert kind == "code"
   assert text == masked
+}
+
+/// 本体が渡す予約キー `DatabaseUrl` だけの設定 map でも、設定ページはマスクした
+/// URL を `database URL` の項に出す（パスワードは出さない）。
+pub fn plugin_page_content_shows_the_host_database_url_test() {
+  let config =
+    dynamic.properties([
+      #(
+        dynamic.string("DatabaseUrl"),
+        dynamic.string("postgres://nostr:secret@db.example:5432/nostr_no_su"),
+      ),
+    ])
+  let description =
+    event_logger.plugin_page_content(
+      dynamic.string("settings"),
+      config,
+      dynamic.string("en"),
+    )
+  let assert [_monitored, configuration, ..] = page_sections(description)
+  let assert #(_title, [pairs, ..]) = section_shape(configuration)
+  let assert Ok(#(_term, _kind, text)) =
+    list.find(pair_items(pairs), fn(item) { item.0 == "database URL" })
+  assert text == "postgres://nostr@db.example:5432/nostr_no_su"
 }
 
 /// 居ないプロセスの行は `badge`（`failure`）と `Pending messages` の `-` になり、
@@ -1288,12 +1353,12 @@ pub fn the_settings_page_is_in_japanese_test() {
     )
   assert list.map(items, fn(item) { #(item.0, item.2) })
     == [
-      #("PLUGIN_EVENT_LOGGER_DATABASE_URL", "未設定"),
+      #("接続先の URL", "未設定"),
       #("接続数", "2"),
       #("保存待ちの上限", int.to_string(store.default_max_queue_len)),
     ]
   assert block_text(configuration_note)
-    == "上の URL は、このプラグインがパスワードを取り除いて表示しています。接続先はこの環境変数だけで決まり、このページからは変えられません。このページで選べるのは、イベントを保存するアカウントだけです。"
+    == "上の URL は、このプラグインがパスワードを取り除いて表示しています。接続先は本体の DATABASE_URL で、PLUGIN_EVENT_LOGGER_DATABASE_URL を設定したときはそちらになり、このページからは変えられません。このページで選べるのは、イベントを保存するアカウントだけです。"
   let #(runtime_title, runtime_blocks) = section_shape(runtime)
   assert runtime_title == "プロセス"
   let assert [table, warning] = runtime_blocks
@@ -1388,9 +1453,9 @@ pub fn the_timeline_details_are_in_japanese_test() {
 pub fn invalid_database_urls_are_reported_in_the_language_test() {
   let pool = process.new_name("test_invalid_url_pool")
   assert page.masked_url(pool, "not a url", i18n.Japanese)
-    == "PLUGIN_EVENT_LOGGER_DATABASE_URL を postgres の URL として読めません。"
+    == "接続先の URL を postgres の URL として読めません。"
   assert page.masked_url(pool, "not a url", i18n.English)
-    == "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL"
+    == "database URL is not a valid postgres URL"
 }
 
 /// 記述の `sections` を取り出す。

@@ -6,17 +6,19 @@
 //// 改造版を自分でビルドして `PLUGIN_DIR` の下へ置くこともできる。置き方とビルド
 //// 手順は同ディレクトリーの README を参照すること。
 ////
-//// **接続先の設定は `PLUGIN_EVENT_LOGGER_DATABASE_URL` だけである。** 本体はこの
-//// 接頭辞に一致する環境変数を集め、`database_url` をキーとする map として
-//// `plugin_children/1` と `plugin_page_content/3` に渡す。未設定・不正なら
-//// `{error, Reason}` を返し、このプラグインだけを読み込ませない。保存の対象と
-//// するアカウントは環境変数ではなく設定ページから決め、プラグイン自身の DB に
-//// 持つ。設定 map は `plugin_page_action/3` にも渡る。管理 UI のページと実行の
-//// 呼び出しに渡る map には、本体がこれに加えて予約キー `Accounts`（登録アカウント
-//// の一覧を JSON にした文字列）を入れる（`docs/plugin-api.md` 第 13.5 節）。
-//// ページの 2 つのエクスポート（`plugin_pages/2` と `plugin_page_content/3`）には、
-//// 最後の引数で管理 UI の表示の言語のコード（`en` か `ja` の binary）も渡り、
-//// ページの文言をその言語で返す（`event_logger/i18n`）。
+//// **接続先は、本体が予約キー `DatabaseUrl` で渡す本体のデータベースである。**
+//// `plugin_children/1` と `plugin_page_content/3` が設定 map からこれを読み、
+//// `PLUGIN_EVENT_LOGGER_DATABASE_URL`（map ではキー `database_url`）があれば
+//// そちらを優先する（`database_url/1`）。どちらも無い・不正なら `{error, Reason}`
+//// を返し、このプラグインだけを読み込ませない。接続プールと版つきの移行は本体と
+//// 共有せず、このプラグインが自分で持つ。保存の対象とするアカウントは環境変数では
+//// なく設定ページから決め、このプラグインのテーブルに持つ。設定 map は
+//// `plugin_page_action/3` にも渡る。管理 UI のページと実行の呼び出しに渡る map
+//// には、本体がこれに加えて予約キー `Accounts`（登録アカウントの一覧を JSON に
+//// した文字列）を入れる（`docs/plugin-api.md` 第 13.5 節）。ページの 2 つの
+//// エクスポート（`plugin_pages/2` と `plugin_page_content/3`）には、最後の引数で
+//// 管理 UI の表示の言語のコード（`en` か `ja` の binary）も渡り、ページの文言を
+//// その言語で返す（`event_logger/i18n`）。
 ////
 //// 押さえておくべき点が 4 つある。
 ////
@@ -78,8 +80,20 @@ pub fn plugin_name() -> String {
   "event_logger"
 }
 
-/// 接続プールと保存アクターの子仕様。設定が無い・URL として解釈できないときは
-/// `{error, Reason}` を返してこのプラグインだけを無効にする。
+/// 設定 map から接続先の URL を選ぶ。`PLUGIN_EVENT_LOGGER_DATABASE_URL`（キーは
+/// `database_url`）があればそれを、無ければ本体が予約キー `DatabaseUrl` で渡す本体の
+/// `DATABASE_URL` を返す。どちらも無ければ `Error(Nil)`。
+pub fn database_url(
+  settings: dict.Dict(String, String),
+) -> Result(String, Nil) {
+  dict.get(settings, "database_url")
+  |> result.lazy_or(fn() { dict.get(settings, "DatabaseUrl") })
+}
+
+/// 接続プールと保存アクターの子仕様。接続先（`database_url/1`）が無い・URL として
+/// 解釈できないときは `{error, Reason}` を返してこのプラグインだけを無効にする。
+/// 接続先が無いのは本体が `DatabaseUrl` を渡さないときだけで、nostr-no-su の本体は
+/// 常に渡す。
 ///
 /// **Config はここで 1 度だけ作り、子仕様の MFA 引数に焼き込む。** プール名は
 /// `pool_name/0` の固定の atom なので、再起動でも管理 UI のページからも同じ
@@ -91,10 +105,12 @@ pub fn plugin_children(config: Dynamic) -> Dynamic {
   case decode.run(config, decode.dict(decode.string, decode.string)) {
     Error(_errors) -> error_tuple("configuration must be a map of strings")
     Ok(settings) ->
-      case dict.get(settings, "database_url") {
+      case database_url(settings) {
         Error(Nil) ->
-          error_tuple("PLUGIN_EVENT_LOGGER_DATABASE_URL is required")
-        Ok(database_url) -> pool_children(database_url)
+          error_tuple(
+            "database_url is required when the host passes no DatabaseUrl",
+          )
+        Ok(url) -> pool_children(url)
       }
   }
 }
@@ -102,10 +118,7 @@ pub fn plugin_children(config: Dynamic) -> Dynamic {
 /// 接続プールと保存アクターの子仕様。URL が解釈できなければ設定を拒否する。
 fn pool_children(database_url: String) -> Dynamic {
   case pog.url_config(pool_name(), database_url) {
-    Error(Nil) ->
-      error_tuple(
-        "PLUGIN_EVENT_LOGGER_DATABASE_URL is not a valid postgres URL",
-      )
+    Error(Nil) -> error_tuple("database URL is not a valid postgres URL")
     Ok(pool_config) ->
       child_specs(pog.pool_size(pool_config, pool_size), pool_config.pool_name)
   }
@@ -228,8 +241,9 @@ fn language_of(value: Dynamic) -> i18n.Language {
 }
 
 /// 管理 UI のページの記述。本体はページの表示のたびにこれを呼び、ページの `key`
-/// と、`database_url` と `Accounts` を含む設定 map（`plugin_children/1` と同じ形に
-/// `Accounts` を足したもの）と、表示の言語のコードを渡す。文言はその言語で組む。
+/// と、`DatabaseUrl` と `Accounts` を含む設定 map（`plugin_children/1` と同じ形に
+/// `Accounts` を足したもの）と、表示の言語のコードを渡す。接続先は
+/// `database_url/1` で選ぶ。文言はその言語で組む。
 /// 期限（既定 5 秒）を超えると 503 になるので、`settings` では DB へ問い合わせず、
 /// 登録名の生存と未処理メッセージ数、保存アクターが持つ監視対象の集合だけを
 /// 観測する。`timeline` だけは `store.recent_events/2` で直近 20 件を読み、
@@ -246,7 +260,7 @@ pub fn plugin_page_content(
     decode.run(config, decode.dict(decode.string, decode.string))
     |> result.unwrap(dict.new())
   let database =
-    dict.get(settings, "database_url")
+    database_url(settings)
     |> result.map(page.masked_url(pool_name(), _, language))
   let #(events, monitored) = case page_key {
     "timeline" -> #(recent_events(), Error(Nil))
