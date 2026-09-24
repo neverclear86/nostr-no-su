@@ -19,7 +19,7 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus medium）
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」と、APPROVE のとき「## まとめ」。diff とレビューの経緯だけを読み、再現はしない。マージ担当が rebase の差分にレビューが要ると判断したときは、その差分だけを再確認する（「## まとめ」は投稿しない） |
 | マージ | `issue-merger` | opus / low | 承認・CI・衝突を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
 
-`opus` は 2026-09-23 から Claude Opus 5.5 に解決される。Opus 5.5 のキャッシュ読み取りの単価は Sonnet 5 と同じ（$0.20/MTok）で、実装の費用の約 9 割はキャッシュ読み取りなので、リクエスト数の少ない Opus 5.5 を実装にも使う（09-21〜22 の sonnet high の実装は中央値 193 リクエスト、$10.2）。最終確認は、実装とレビューと別のモデルで見るために fable のままにする。
+`opus` は Claude Opus 5.5 に解決される。Opus 5.5 のキャッシュ読み取りの単価は Sonnet 5 と同じ（$0.20/MTok）で、実装の費用の約 9 割はキャッシュ読み取りなので、リクエスト数の少ない Opus 5.5 を実装にも使う（09-21〜22 の sonnet high の実装は中央値 193 リクエスト、$10.2）。最終確認は、実装とレビューと別のモデルで見るために fable のままにする。
 
 ふりかえり（`retrospective`）は 1 件の issue の段階ではなく、この表の全 issue が終わった実行の後に 1 回だけ回す（「### 2. 結果の処理」の「実行の後: ふりかえり」）。`issue-retrospective`（opus / medium）が学びを分類して改善の issue を 1 本起票し、続けて `issue-retro-implementer`（fable / medium）がその issue の主張を裏取りして実装し、PR を作るところまでを 1 回の実行で行う。マージはユーザーが判断する。
 
