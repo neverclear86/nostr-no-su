@@ -61,7 +61,7 @@ jobs:
           echo "$files"
           # .github/ を変えた PR は、ワークフロー自身の変更を全部の検査で確かめる。
           code=$(echo "$files" | grep -Ev '^(docs/|\.claude/|LICENSE$|.*\.md$)' || true)
-          plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|\.github/)' || true)
+          plugin=$(echo "$code" | grep -E '^(plugins-src/|gleam\.toml$|manifest\.toml$|dev/check_shared_versions\.sh$|dev/check_project_versions\.sh$|\.github/)' || true)
           css=$(echo "$code" | grep -E '^(src/nostr_no_su/admin/|assets/|priv/static/admin\.css$|package(-lock)?\.json$|\.github/)' || true)
           docker=$(echo "$code" | grep -E '^(Dockerfile$|\.dockerignore$|docker/|docker-compose\.yml$|docker-compose\.release\.yml$|plugins-src/|dev/collect_licenses\.sh$|dev/licenses-overrides\.txt$|gleam\.toml$|manifest\.toml$|vendor/|\.github/)' || true)
           # プラグインの README のビルド手順は README の中の sh ブロックを実行するので、
@@ -163,7 +163,9 @@ jobs:
 
   # event_logger プラグイン。影に入る側は本体の版で実行されるため、版がずれると
   # 実行時に undef で壊れる（検査の内容は dev/check_shared_versions.sh。
-  # plugins-src/ の全プラグインを見る）。統合テストと shipment もここで見る。
+  # plugins-src/ の全プラグインを見る）。本体と全プラグインの gleam.toml の
+  # version の一致（dev/check_project_versions.sh。dev/check_release_version.sh
+  # と共有する）もここで見る。統合テストと shipment もここで見る。
   event-logger:
     needs: changes
     if: needs.changes.outputs.plugin == 'true'
@@ -185,6 +187,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: sh dev/check_shared_versions.sh
+      - run: sh dev/check_project_versions.sh
       - uses: erlef/setup-beam@v1
         id: beam
         with:

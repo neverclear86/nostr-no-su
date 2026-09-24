@@ -1,6 +1,7 @@
 name: release
 
-# vX.Y.Z のタグの push で、イメージを ghcr.io/<owner>/<repo> に公開する。
+# vX.Y.Z のタグの push で、イメージを ghcr.io/<owner>/<repo> に公開し、公開が済んだら
+# CHANGELOG.md のその版の節を本文にした GitHub Release を作る（github-release ジョブ）。
 # テストは再実行しないので、ci.yml が通った main のコミットにだけタグを切る（CONTRIBUTING.md の「リリース」）。
 # arm64 は QEMU では BEAM のコンパイルが遅いため、platform ごとに native のランナーで
 # ビルドし（build ジョブの matrix）、ダイジェストだけを push する。タグ（X.Y.Z、X.Y、
@@ -120,3 +121,25 @@ jobs:
           echo "$out"
           echo "$out" | grep -qx linux/amd64
           echo "$out" | grep -qx linux/arm64
+
+  # イメージの公開と merge ジョブの検査が成功した後に、GitHub Release を作る。
+  # 本文は CHANGELOG.md のその版の節（dev/release_notes.sh）。Release を作るのに
+  # contents: write が要るので、このジョブだけに付ける（ジョブの permissions は
+  # ワークフローの値を置き換えるので、このジョブは packages: write を持たない）。
+  github-release:
+    needs: merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: CHANGELOG の節を本文にして Release を作る
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          sh dev/release_notes.sh "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"

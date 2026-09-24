@@ -1,5 +1,5 @@
 name = "profile"
-version = "0.0.0"
+version = "0.1.0"
 description = "Nostr-no-Su profile plugin (shows the current kind 0 profile of each registered account)"
 
 # 本体（nostr_no_su）の VM に読み込まれて動くプラグインなので、Hex には公開しない。

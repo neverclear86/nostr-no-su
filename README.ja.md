@@ -24,6 +24,12 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge"></a>
 </p>
 
+> [!WARNING]
+> **まだ v0（0.x）で、版を上げると破壊的変更が入りうる。** 0.x の間は minor の版上げに、環境変数、compose、DB のスキーマ、プラグイン API の非互換を含めうる（[貢献の手引き](CONTRIBUTING.md) の「版数」）。更新の前に [変更履歴](CHANGELOG.md) を読み、DB のダンプを取る。戻す移行は無い（[運用](docs/operations.md) の「バックアップ」「更新」）。
+>
+> - **秘密鍵は Nostr-no-Su の外にも控える**：登録する nsec は、パスワードマネージャーなど別の場所にも保管。DB かマスターキーのどちらかを失うと、Nostr-no-Su からは取り出せない。生成した鍵も登録の前に控える。登録済みの鍵は管理 UI の「秘密鍵を表示」で確認できる
+> - **プラグインの開発は本体の版への追随が前提**：[プラグイン API v1](docs/plugin-api.md) の版が合わないプラグインは読み込まれない。本体と共有する依存（`gleam_stdlib` など）は本体の版が使われるので、Dockerfile と同じ Gleam / OTP でビルドし、`plugin_required_versions/0` と `plugin_min_host_version/0` で版を宣言する。プラグインは本体と同じ VM と権限で動き、秘密鍵を持つプロセスにも到達できる
+
 ![管理 UI のダッシュボード](docs/images/usage/dashboard-ja.png)
 *アカウント、接続の承認、リレーをまとめて管理する画面。*
 

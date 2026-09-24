@@ -28,7 +28,8 @@ sh dev/check_env_example.sh
 sh dev/check_setup_env.sh
 sh dev/check_release_compose.sh
 gleam export erlang-shipment
-sh dev/check_shared_versions.sh             # 以下 3 行は plugins-src/、gleam.toml、manifest.toml を変えた PR だけ
+sh dev/check_shared_versions.sh             # 以下 4 行は plugins-src/、gleam.toml、manifest.toml を変えた PR だけ
+sh dev/check_project_versions.sh
 cd plugins-src/event_logger && gleam build --warnings-as-errors && TEST_DATABASE_URL=... gleam test && gleam format --check src test && gleam export erlang-shipment
 cd plugins-src/profile && gleam build --warnings-as-errors && gleam test && gleam format --check src test && gleam export erlang-shipment
 npm ci && npm run build:css && git diff --exit-code -- priv/static/admin.css   # 管理 UI の .gleam、assets/、package*.json を変えた PR だけ
