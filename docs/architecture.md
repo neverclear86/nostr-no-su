@@ -782,6 +782,7 @@ nostr-no-su/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.release.yml    利用者向け（公開イメージから取る。docker-compose.yml との差はイメージの 1 行）
+├── install.sh                    利用者向け（公開イメージで動かすディレクトリーを 1 行で作る。README の「インストール」）
 ├── README.md                     英語の README（README.ja.md は同じ内容の日本語版）
 └── .env.example                  docker compose で使う .env の雛形
 ```

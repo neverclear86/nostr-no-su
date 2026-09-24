@@ -47,7 +47,15 @@
 
 Requirements: docker (compose v2), `curl`, `openssl`. The image ships `linux/amd64` and `linux/arm64`.
 
-From the published image:
+From the published image, in one line:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/neverclear86/nostr-no-su/main/install.sh | bash
+```
+
+It asks for the name of the directory to create (press Enter for `nostr-no-su`). [`install.sh`](install.sh) looks up the latest release, downloads the same three files as the block below from that release's tag, runs `setup-env.sh`, and appends to `.env`. It does not run `docker compose`, so run the `cd <directory> && docker compose up -d` it prints at the end. To skip the question, end the command with `| bash -s -- <directory>` instead.
+
+To do the same by hand:
 
 ```sh
 mkdir nostr-no-su && cd nostr-no-su
