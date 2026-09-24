@@ -24,6 +24,12 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge"></a>
 </p>
 
+> [!WARNING]
+> **Still at v0 (0.x): upgrades may contain breaking changes.** While at 0.x, a minor version bump may include incompatible changes to environment variables, compose, the DB schema or the plugin API (the 「版数」 section of [Contributing](CONTRIBUTING.md)). Read the [Changelog](CHANGELOG.md) and take a DB dump before upgrading. There are no down migrations (the 「バックアップ」 and 「更新」 sections of [Operations](docs/operations.md)).
+>
+> - **Keep a copy of your private keys outside Nostr-no-Su**: store every nsec you register somewhere else too, such as a password manager. Losing either the DB or the master key means Nostr-no-Su can no longer give them back. Write down a generated key before registering it. A registered key can be viewed with "Show private key" in the admin UI
+> - **Plugin development means keeping up with the app's version**: plugins whose [Plugin API v1](docs/plugin-api.md) version does not match are not loaded. Dependencies shared with the app (such as `gleam_stdlib`) run at the app's version, so build with the same Gleam / OTP as the Dockerfile and declare versions with `plugin_required_versions/0` and `plugin_min_host_version/0`. Plugins run in the same VM with the same privileges as the app and can reach the processes that hold the private keys
+
 ![The dashboard of the admin UI](docs/images/usage/dashboard-en.png)
 *Accounts, connection approvals and relays, managed from one screen.*
 
