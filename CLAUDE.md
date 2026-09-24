@@ -26,6 +26,7 @@ erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl
 sh dev/check_vendor_stratus.sh
 sh dev/check_env_example.sh
 sh dev/check_setup_env.sh
+sh dev/check_install.sh
 sh dev/check_release_compose.sh
 gleam export erlang-shipment
 sh dev/check_shared_versions.sh             # 以下 4 行は plugins-src/、gleam.toml、manifest.toml を変えた PR だけ
