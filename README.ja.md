@@ -47,7 +47,15 @@
 
 必要なもの: docker（compose v2）、`curl`、`openssl`。イメージは `linux/amd64` と `linux/arm64`。
 
-公開イメージから:
+公開イメージから（1 行で）:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/neverclear86/nostr-no-su/main/install.sh | bash
+```
+
+作るディレクトリーの名前を聞かれる（空のまま Enter で `nostr-no-su`）。[`install.sh`](install.sh) は最新の Release の版を調べ、その版のタグから次のブロックと同じ 3 つのファイルを取り、`setup-env.sh` と `.env` への追記までを行う。`docker compose` は実行しないので、最後に表示される `cd <ディレクトリー> && docker compose up -d` を実行する。名前を聞かずに進めるなら、末尾を `| bash -s -- <ディレクトリー>` にする。
+
+同じことを手で行うなら:
 
 ```sh
 mkdir nostr-no-su && cd nostr-no-su

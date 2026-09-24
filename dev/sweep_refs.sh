@@ -4,8 +4,9 @@
 # 変更する語の追随先（Doc コメント、文書、設定、テスト）の洗い出しに使う。
 #
 # 探す範囲は src、test、dev、docs、examples、README.md、README.ja.md、CLAUDE.md、CONTRIBUTING.md、
-# CHANGELOG.md、NOTICE、LICENSE、.env.example、setup-env.sh、docker-compose.yml、docker-compose.release.yml、
-# .claude、.github、plugins-src、docker の追跡されたファイル（build/ と node_modules は除く）。
+# CHANGELOG.md、NOTICE、LICENSE、.env.example、setup-env.sh、install.sh、docker-compose.yml、
+# docker-compose.release.yml、.claude、.github、plugins-src、docker の追跡されたファイル
+# （build/ と node_modules は除く）。
 # 語は大文字小文字を区別し、単語の境界で一致させる（git grep -w -F）。
 # `Persist` は `Persisted` に一致しないので、部分一致が要るときは語を分けて渡す。
 #
@@ -22,7 +23,7 @@ shift
 git -C "$tree" rev-parse --show-toplevel > /dev/null
 
 # 探す範囲。存在しないパスは git grep が黙って 0 件にする。
-paths='src test dev docs examples README.md README.ja.md CLAUDE.md CONTRIBUTING.md CHANGELOG.md NOTICE LICENSE .env.example setup-env.sh docker-compose.yml docker-compose.release.yml .claude .github plugins-src docker'
+paths='src test dev docs examples README.md README.ja.md CLAUDE.md CONTRIBUTING.md CHANGELOG.md NOTICE LICENSE .env.example setup-env.sh install.sh docker-compose.yml docker-compose.release.yml .claude .github plugins-src docker'
 
 echo "| 語 | ファイル:行 | 種別 | 行の内容 |"
 echo "|--|--|--|--|"
