@@ -870,8 +870,8 @@ pub fn change_relay_roles(
 }
 
 /// プラグインごとの表示行。状態は各ランナーへ並行に問い合わせ、締め切りまでに
-/// 答えなかったランナーは `None`（応答なし）にする。
-fn plugin_rows(
+/// 答えなかったランナーは `None`（応答なし）にする。単体テストが呼べるよう公開する。
+pub fn plugin_rows(
   specs: List(PluginSpec),
   deadline: task.Deadline,
 ) -> List(dashboard.PluginRow) {
@@ -1263,7 +1263,8 @@ fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
 }
 
 /// 承認待ちを管理 UI の行にする。失効までの残り秒は問い合わせた時点で求める。
-fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
+/// 単体テストが呼べるよう公開する。
+pub fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
   let now = time.now_seconds()
   use entry <- list.map(pending)
   dashboard.PendingRow(

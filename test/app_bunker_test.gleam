@@ -1074,6 +1074,36 @@ pub fn session_rows_keep_times_and_perms_test() {
     ]
 }
 
+/// `app.pending_rows` は失効までの残り秒を問い合わせた時点の時刻から求め、他の値は
+/// そのまま写す。
+pub fn pending_rows_count_down_to_the_expiry_test() {
+  let before = time.now_seconds()
+  let pending =
+    engine.Pending(
+      token: "tok",
+      signer: "ab",
+      client: "cd",
+      request_id: "req",
+      perms: "sign_event:1",
+      secret_mismatch: True,
+      created_at: before - 100,
+    )
+  let assert [row] = app.pending_rows([pending])
+  let after = time.now_seconds()
+  assert row.expires_in_seconds <= engine.pending_ttl_seconds - 100
+  assert row.expires_in_seconds
+    >= engine.pending_ttl_seconds - 100 - { after - before }
+  assert row
+    == dashboard.PendingRow(
+      token: "tok",
+      signer: "ab",
+      client: "cd",
+      expires_in_seconds: row.expires_in_seconds,
+      secret_mismatch: True,
+      perms: "sign_event:1",
+    )
+}
+
 /// セッションのリレーだけの接続の URL。基本の接続（`test_relay_url`）とは別にする。
 const session_relay_url = "ws://session.test"
 
