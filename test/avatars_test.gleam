@@ -47,6 +47,15 @@ fn recording(
   }
 }
 
+/// 取得を、テストが開ける門で止める。取得を走らせるプロセスで作った門を `gates`
+/// へ渡し、テストがそこへ `Nil` を送るまで戻らない。subject は所有するプロセスで
+/// しか受信できないので、門はテストではなく呼び出し側で作る。
+fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
+  let gate = process.new_subject()
+  process.send(gates, gate)
+  process.receive_forever(gate)
+}
+
 /// `https:` の URL をそのまま返す。
 pub fn picture_accepts_an_https_url_test() {
   assert avatars.picture(metadata("a", 1, with_picture(avatar_url)))
@@ -153,18 +162,30 @@ pub fn pictures_wait_before_retrying_a_failed_fetch_test() {
   assert process.receive(calls, 100) == Error(Nil)
 }
 
-/// 待ちの上限に間に合わなかった取得は空を返し、その結果は次の描画で出る。
+/// 待ちの上限に間に合わなかった取得は空を返し、その結果は次の描画で出る。取得を
+/// 門で止めて 1 回目が空を返した後に門を開け、取得を走らせたプロセスの終了
+/// （結果を `Fetched` で送った後に来る）を待ってから 2 回目を引く。
 pub fn pictures_keep_a_late_result_for_the_next_lookup_test() {
   let name = start(60_000, 60_000)
-  let slow = fn(_pubkeys) {
-    process.sleep(2000)
+  let gates = process.new_subject()
+  let gated = fn(_pubkeys) {
+    hold_until_released(gates)
     Ok([metadata("a", 1, with_picture(avatar_url))])
   }
 
-  assert avatars.pictures_with(name, ["a"], slow) == dict.new()
-  process.sleep(1500)
-  assert avatars.pictures_with(name, ["a"], slow)
+  assert avatars.pictures_with(name, ["a"], gated) == dict.new()
+  let assert Ok(gate) = process.receive(gates, 2000)
+  let assert Ok(pid) = process.subject_owner(gate)
+  let monitor = process.monitor(pid)
+  process.send(gate, Nil)
+  assert process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(2000)
+    == Ok(process.ProcessDown(monitor, pid, process.Normal))
+
+  assert avatars.pictures_with(name, ["a"], gated)
     == dict.from_list([#("a", avatar_url)])
+  assert process.receive(gates, 0) == Error(Nil)
 }
 
 /// 監視の用途のリレーへ kind 0 を問い合わせ、署名者ごとに `created_at` が最大の 1 件の URL を返す。
