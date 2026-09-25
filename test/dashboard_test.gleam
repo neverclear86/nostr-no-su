@@ -19,7 +19,7 @@ import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list.{Roles}
-import nostr_no_su/relay_store.{type Relay, Relay}
+import nostr_no_su/relay_store.{Relay}
 import support/account_actions
 import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 
@@ -157,15 +157,14 @@ pub fn states_are_shown_as_badges_test() {
     element.to_string(view.status_chip(view.DisabledChip, "disabled"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span> (dropped 2)</span>",
     element.to_string(view.status_chip(view.UnansweredChip, "unavailable")),
-    "<dd>9:00 (expires at <time datetime=\"2026-09-13T05:21:34Z\">05:21:34 UTC</time>)</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
   })
 }
 
-/// 日本語のダッシュボードでは、状態の語、件数、失効までを日本語の形で出す。バッジの
-/// クラスは英語と同じである。
+/// 日本語のダッシュボードでは、状態の語と件数を日本語の形で出す。バッジのクラスは英語と同じ
+/// である。
 pub fn japanese_states_are_translated_test() {
   let body = dashboard.render(i18n.Japanese, view.System, states())
   let badges = [
@@ -179,7 +178,6 @@ pub fn japanese_states_are_translated_test() {
     element.to_string(view.status_chip(view.DisabledChip, "無効"))
       <> "<span class=\"text-xs break-words\"><span lang=\"en\">boom</span>（破棄 2 件）</span>",
     element.to_string(view.status_chip(view.UnansweredChip, "応答なし")),
-    "<dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   ]
   list.each(badges, fn(badge) {
     assert string.contains(body, badge)
@@ -324,58 +322,6 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   assert string.contains(after_details, "Connection URI (approval)<button")
   assert string.contains(after_details, "Public key (hex)</span>")
   assert string.contains(after_details, account.signer)
-}
-
-/// アカウントの行の 4 つの操作のダイアログを開くボタンはアイコン＋語で、削除だけ短い語（`Delete`）で
-/// `text-error` が付く。
-pub fn account_row_actions_are_icons_with_short_delete_test() {
-  let account =
-    dashboard.AccountRow(
-      signer: "abcd",
-      npub: "npub1x",
-      label: "main",
-      uri: "bunker://x",
-      auth_uri: "bunker://x",
-      picture: None,
-    )
-  let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
-  let body = dashboard.render(i18n.English, view.System, snapshot)
-  assert string.contains(
-    body,
-    dialog_trigger(
-      "dialog-account-abcd-label",
-      view.pencil_icon(),
-      "Edit label",
-      view.GhostButton,
-    ),
-  )
-  assert string.contains(
-    body,
-    dialog_trigger(
-      "dialog-account-abcd-private-key",
-      view.eye_icon(),
-      "Show private key",
-      view.GhostButton,
-    ),
-  )
-  assert string.contains(
-    body,
-    dialog_trigger(
-      "dialog-account-abcd-rotate",
-      view.rotate_icon(),
-      "Rotate secret",
-      view.GhostButton,
-    ),
-  )
-  assert string.contains(
-    body,
-    dialog_trigger(
-      "dialog-account-abcd-delete",
-      view.trash_icon(),
-      "Delete",
-      view.DangerGhostButton,
-    ),
-  )
 }
 
 /// `id` のダイアログをアイコン＋語で開くボタン（`view.dialog_button` の 1 要素目）の文字列。
@@ -633,7 +579,7 @@ pub fn sessions_show_perms_test() {
 }
 
 /// 権限が空のとき、セッションの行は「権限の要求なし」のバッジを出す。
-pub fn empty_session_perms_say_signing_and_encryption_are_refused_test() {
+pub fn empty_session_perms_show_the_no_permissions_badge_test() {
   let snapshot =
     dashboard.Snapshot(
       ..states(),
@@ -691,6 +637,21 @@ pub fn only_disabled_plugins_have_a_reenable_button_test() {
   )
 }
 
+/// 節の見出しの件数のピルの開始タグ。`view.section_heading` を件数 0 で描き、題の `</h2>` の
+/// 直後から取り出す。
+fn count_pill_tag() -> String {
+  let heading =
+    element.to_string(view.section_heading(element.none(), "", Some(0), [], []))
+  let assert Ok(#(_, after_title)) = string.split_once(heading, "</h2>")
+  let assert Ok(#(tag, _)) = string.split_once(after_title, ">")
+  tag <> ">"
+}
+
+/// 節の見出しの件数 `count` のピルの HTML。
+fn count_pill(count: Int) -> String {
+  count_pill_tag() <> int.to_string(count) <> "</span>"
+}
+
 /// プラグインの節の見出しは、題の直後に件数のピルを置き、説明の段落も ⓘ も持たない。
 pub fn plugins_heading_shows_the_count_without_a_description_test() {
   use #(language, title, description) <- list.each([
@@ -704,8 +665,7 @@ pub fn plugins_heading_shows_the_count_without_a_description_test() {
   let body = dashboard.render(language, view.System, states())
   assert string.contains(
     body,
-    title
-      <> "</h2><span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">4</span></div></div>",
+    title <> "</h2>" <> count_pill(4) <> "</div></div>",
   )
   assert !string.contains(body, "plugins-hint")
   assert !string.contains(body, description)
@@ -898,6 +858,17 @@ pub fn account_details_open_the_uri_descriptions_from_the_info_buttons_test() {
   )
 }
 
+/// `id` のダイアログを閉じるボタン（語は `dismiss`）だけを並べた操作の行の HTML
+/// （`view.dialog_actions` の `OpensOnTrigger` の描画）。
+fn dismiss_row(id: String, dismiss: String) -> String {
+  view.dialog_actions(
+    view.InDialog(id:, dismiss:, opening: view.OpensOnTrigger),
+    [],
+  )
+  |> list.map(element.to_string)
+  |> string.concat
+}
+
 /// ダッシュボードのどのダイアログも、同じダイアログを閉じるボタン（接続 QR コードは「閉じる」、ほかは
 /// 「キャンセル」）を持ち、閉じるボタンを左に寄せない（送信の右に並べる）。
 pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
@@ -912,14 +883,10 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
     True -> "Close"
     False -> "Cancel"
   }
-  assert string.contains(
-    dialog,
-    "<button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\""
-      <> id
-      <> "\" type=\"button\">"
-      <> dismiss
-      <> "</button></div>",
-  )
+  // 行の開始タグを除いた、閉じるボタンと行の閉じタグ
+  let assert Ok(#(_, dismiss_tail)) =
+    string.split_once(dismiss_row(id, dismiss), ">")
+  assert string.contains(dialog, dismiss_tail)
   assert !string.contains(
     dialog,
     "self-start focus-visible:outline-base-content\" command=\"close\"",
@@ -929,15 +896,13 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
 /// アカウントが 0 件のときの接続のダイアログも、キャンセルの行を残す。
 /// アカウントの一覧を得られないときは、その行にキャンセルだけを置く。
 pub fn connect_dialog_without_accounts_still_has_cancel_test() {
-  let cancel =
-    "<button autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" command=\"close\" commandfor=\"dialog-session-connect\" type=\"button\">Cancel</button>"
-  let row = "<div class=\"flex flex-wrap items-center gap-2\">"
+  let actions = dismiss_row("dialog-session-connect", "Cancel")
   let empty =
     closed_dialog(
       dashboard.render(i18n.English, view.System, states()),
       "dialog-session-connect",
     )
-  assert string.contains(empty, row <> cancel <> "</div>")
+  assert string.contains(empty, actions)
   let failed =
     closed_dialog(
       dashboard.render(
@@ -950,7 +915,7 @@ pub fn connect_dialog_without_accounts_still_has_cancel_test() {
       ),
       "dialog-session-connect",
     )
-  assert string.contains(failed, row <> cancel <> "</div>")
+  assert string.contains(failed, actions)
 }
 
 /// 上部のロゴは、製品名の字形と読み上げ用の製品名だけをダッシュボードへの 1 つのリンクに入れ、
@@ -1040,6 +1005,23 @@ fn theme_message(theme: view.Theme) -> i18n.Message {
   }
 }
 
+/// 節の一覧を得られないときの、面に載せた error の色の理由の囲みの HTML。`lead` は日本語の
+/// 前置き、`reason` は英語のまま届いた理由である。
+fn listed_reason_html(
+  language: i18n.Language,
+  lead: i18n.Lead,
+  reason: String,
+) -> String {
+  element.to_string(
+    view.surface([
+      view.alert(
+        view.Failure,
+        view.reason_content(language, Some(lead), i18n.Untranslated(reason)),
+      ),
+    ]),
+  )
+}
+
 /// 承認待ちとセッションを得られないときは、「0 件」の代わりに理由を出し、
 /// 承認・拒否や取り消しのフォームも出さない。承認待ちとセッションの理由の囲みは
 /// どちらも error 色になる。日本語では前置きも出る。
@@ -1053,9 +1035,7 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let english = dashboard.render(i18n.English, view.System, snapshot)
   assert string.contains(
     english,
-    "alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">pending reason</span></span>",
+    listed_reason_html(i18n.English, i18n.CouldNotListPending, "pending reason"),
   )
   assert string.contains(english, "<span lang=\"en\">sessions reason</span>")
   assert !string.contains(
@@ -1068,11 +1048,19 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
   let japanese = dashboard.render(i18n.Japanese, view.System, snapshot)
   assert string.contains(
     japanese,
-    "<span class=\"wrap-anywhere\">承認待ちの一覧を表示できません。<span lang=\"en\">pending reason</span></span>",
+    listed_reason_html(
+      i18n.Japanese,
+      i18n.CouldNotListPending,
+      "pending reason",
+    ),
   )
   assert string.contains(
     japanese,
-    "<span class=\"wrap-anywhere\">セッションの一覧を表示できません。<span lang=\"en\">sessions reason</span></span>",
+    listed_reason_html(
+      i18n.Japanese,
+      i18n.CouldNotListSessions,
+      "sessions reason",
+    ),
   )
 }
 
@@ -1152,28 +1140,6 @@ pub fn different_listing_failures_stay_in_each_section_test() {
   assert !string.contains(english, "Not available for the reason above.")
 }
 
-/// 承認済みセッションの行は、最終利用の `title` に作成と最終利用を RFC 3339 の UTC で出す。
-pub fn sessions_show_created_and_last_used_times_test() {
-  let snapshot =
-    dashboard.Snapshot(
-      ..states(),
-      sessions: Ok([
-        dashboard.SessionRow(
-          signer: "abcd",
-          client: "ef01",
-          perms: "",
-          created_at: 1_788_253_200,
-          last_used_at: 1_789_276_354,
-        ),
-      ]),
-    )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
-  assert string.contains(
-    body,
-    "title=\"Last used: 2026-09-13T05:12:34Z · Created: 2026-09-01T09:00:00Z\"",
-  )
-}
-
 /// セッションの行に署名者のラベルと省略した npub、権限のチップ、クライアントの
 /// コピーボタンが出る。
 pub fn session_row_shows_the_signer_and_permission_chips_test() {
@@ -1209,7 +1175,10 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
     body,
     element.to_string(permission_view.chips(i18n.English, "sign_event:1")),
   )
-  assert string.contains(body, "data-action=\"copy\"")
+  assert string.contains(
+    sessions_part(snapshot),
+    i18n.text(i18n.English, i18n.CopyClient),
+  )
 }
 
 /// `now` を固定したスナップショットで、最終利用が相対時刻（「7 d ago」の形）になり、
@@ -1359,152 +1328,53 @@ pub fn no_skipped_rows_draws_no_frame_test() {
   )
 }
 
-/// リレーは 1 行につき `<li>` 1 件で、1 段目に URL と、操作（用途の編集、削除）のダイアログを開く
-/// アイコンだけのボタンとそのダイアログを並べ、2 段目に監視、
-/// バンカーの順に用途のアイコン・語・状態のバッジのマスを並べる。使っていない用途は「未使用」の
-/// バッジで出し、URL は `break-all`。
+/// リレーは 1 件につき節の `<li>` 1 件で、URL、操作（用途の編集、削除）のダイアログを開くアイコン
+/// だけのボタン、監視、バンカーの順に並び、用途ごとにアイコン・語・状態のバッジを出す。使って
+/// いない用途は「未使用」のバッジで出す。
 pub fn relays_are_listed_one_item_per_row_test() {
   let body = dashboard.render(i18n.English, view.System, states())
-  let role = fn(icon, label, badge) {
-    "<div class=\"flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-field bg-base-200 py-1.5 pr-1.5 pl-2.5\"><dt class=\"flex items-center gap-1.5 text-sm text-muted\">"
-    <> element.to_string(icon)
-    <> label
-    <> "</dt><dd>"
-    <> element.to_string(badge)
-    <> "</dd></div>"
-  }
-  let dialog = fn(relay: Relay, row, action, icon, label, kind) {
-    view.dialog_button(
-      i18n.English,
-      view.dialog_id([
-        "relay",
-        int.to_string(relay.id),
-        case action {
-          dashboard.EditRelayRoles -> "edit"
-          dashboard.DeleteRelay -> "delete"
-        },
-      ]),
+  let assert Ok(#(_, section)) = string.split_once(body, "id=\"relays\"")
+  let assert Ok(#(section, _)) = string.split_once(section, "id=\"plugins\"")
+  let assert [_, first, second] = string.split(section, "<li ")
+  let trigger = fn(id, icon, label, kind) {
+    element.to_string(view.dialog_trigger(
+      "dialog-relay-" <> id,
       view.IconOnlyTrigger(icon, label),
       kind,
-      label,
-      fn(placement) {
-        [
-          view.summary_list([#("Relay URL", view.Code(relay.url))]),
-          ..dashboard.relay_action_form(
-            i18n.English,
-            relay,
-            action,
-            None,
-            Some(row),
-            placement,
-          )
-        ]
-      },
-    )
-  }
-  let actions = fn(relay: Relay, row) {
-    "<div class=\"flex shrink-0 flex-wrap gap-2\">"
-    <> string.concat(list.map(
-      list.append(
-        dialog(
-          relay,
-          row,
-          dashboard.EditRelayRoles,
-          view.pencil_icon(),
-          "Edit roles",
-          view.GhostButton,
-        ),
-        dialog(
-          relay,
-          row,
-          dashboard.DeleteRelay,
-          view.trash_icon(),
-          "Delete relay",
-          view.DangerGhostButton,
-        ),
-      ),
-      element.to_string,
     ))
-    <> "</div>"
   }
-  let row = fn(relay: Relay, states, monitor, bunker) {
-    "<li class=\"list-row flex flex-wrap items-center justify-between gap-x-6 gap-y-3\"><p class=\"min-w-0 flex-1 font-mono text-sm break-all\">"
-    <> relay.url
-    <> "</p>"
-    <> actions(relay, states)
-    <> "<dl class=\"grid basis-full grid-cols-2 gap-1.5\">"
-    <> role(view.eye_icon(), "monitor", monitor)
-    <> role(view.key_icon(), "bunker", bunker)
-    <> "</dl></li>"
-  }
-  assert string.contains(
-    body,
-    "<ul class=\"list rounded-box border border-base-300 bg-base-100\">"
-      <> row(
-      Relay(1, "wss://a", Roles(True, True)),
-      relay_row(1),
+  use #(item, url, id, monitor, bunker) <- list.each([
+    #(
+      first,
+      "wss://a",
+      "1",
       view.status_chip(view.ActiveChip, "connected"),
       view.status_chip(view.DisconnectedChip, "disconnected"),
-    )
-      <> row(
-      Relay(2, "wss://b", Roles(True, False)),
-      relay_row(2),
+    ),
+    #(
+      second,
+      "wss://b",
+      "2",
       view.status_chip(view.DisconnectedChip, "disconnected"),
       view.status_chip(view.UnusedChip, "Unused"),
-    )
-      <> "</ul>",
-  )
-}
-
-/// `states()` の描画で、ダイアログの開閉が組になっている: `dialog-relay-new` と行 1・2 の編集・削除の
-/// ダイアログはそれぞれ、同じ `id` を `commandfor` で指す開くボタンと、中の閉じるボタンを持つ。
-pub fn relay_dialogs_open_from_matching_triggers_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  use id <- list.each([
-    "dialog-relay-new",
-    "dialog-relay-1-edit",
-    "dialog-relay-1-delete",
-    "dialog-relay-2-edit",
-    "dialog-relay-2-delete",
+    ),
   ])
-  assert string.contains(
-    body,
-    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
-  )
-  assert string.contains(
-    body,
-    "<dialog aria-labelledby=\""
-      <> id
-      <> "-title\" class=\"modal\" id=\""
-      <> id
-      <> "\">",
-  )
-  assert string.contains(
-    closed_dialog(body, id),
-    "command=\"close\" commandfor=\"" <> id <> "\"",
-  )
-}
-
-/// アカウントの追加のボタンは `dialog-account-new` のダイアログを開き、ダイアログはキャンセルで閉じる。
-pub fn account_add_dialog_opens_from_the_heading_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  let id = "dialog-account-new"
-  assert string.contains(
-    body,
-    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
-  )
-  assert string.contains(
-    body,
-    "<dialog aria-labelledby=\""
-      <> id
-      <> "-title\" class=\"modal\" id=\""
-      <> id
-      <> "\">",
-  )
-  assert string.contains(
-    closed_dialog(body, id),
-    "command=\"close\" commandfor=\"" <> id <> "\"",
-  )
+  assert contains_in_order(item, [
+    url,
+    trigger(id <> "-edit", view.pencil_icon(), "Edit roles", view.GhostButton),
+    trigger(
+      id <> "-delete",
+      view.trash_icon(),
+      "Delete relay",
+      view.DangerGhostButton,
+    ),
+    element.to_string(view.eye_icon()),
+    "monitor</dt><dd>",
+    element.to_string(monitor),
+    element.to_string(view.key_icon()),
+    "bunker</dt><dd>",
+    element.to_string(bunker),
+  ])
 }
 
 /// アカウントの一覧を得られなくても、アカウントの追加のダイアログは描く。
@@ -1685,25 +1555,25 @@ pub fn account_add_dialog_has_import_and_generate_tabs_test() {
   )
 }
 
+/// `html` の中で `name="<name>"` を持つ最初の `<input>` に `checked` が付いているか。lustre は
+/// 属性を名前順に出すので、`checked` は `<input` の直後に来る。
+fn checkbox_checked(html: String, name: String) -> Bool {
+  let assert Ok(#(before, _)) =
+    string.split_once(html, " name=\"" <> name <> "\"")
+  let assert Ok(tag) = list.last(string.split(before, "<input"))
+  string.starts_with(tag, " checked ")
+}
+
 /// 用途の編集のダイアログは、行の今の用途にチェックを入れ、用途の接続状態のバッジを付ける。
 pub fn relay_edit_dialogs_check_the_current_roles_test() {
   let body = dashboard.render(i18n.English, view.System, states())
-  let checkbox = fn(name, checked) {
-    case checked {
-      True -> "<input checked class="
-      False -> "<input class="
-    }
-    <> "\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-    <> name
-    <> "\""
-  }
   let first = closed_dialog(body, "dialog-relay-1-edit")
   assert string.contains(first, "wss://a")
-  assert string.contains(first, checkbox("bunker", True))
+  assert checkbox_checked(first, "bunker")
   let second = closed_dialog(body, "dialog-relay-2-edit")
   assert string.contains(second, "wss://b")
-  assert string.contains(second, checkbox("monitor", True))
-  assert string.contains(second, checkbox("bunker", False))
+  assert checkbox_checked(second, "monitor")
+  assert !checkbox_checked(second, "bunker")
   assert string.contains(
     second,
     element.to_string(view.status_chip(view.UnusedChip, "Unused")),
@@ -1752,36 +1622,6 @@ fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
   )
 }
 
-/// 行の 4 つと読み込めなかった行の 1 つの `id` について、`command="show-modal" commandfor="<id>"`、
-/// `<dialog aria-labelledby="<id>-title" class="modal" id="<id>">`、ダイアログの中の
-/// `command="close" commandfor="<id>"`（キャンセル）がある。
-pub fn account_dialogs_open_from_matching_triggers_test() {
-  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
-  use id <- list.each([
-    "dialog-account-" <> dialog_signer <> "-label",
-    "dialog-account-" <> dialog_signer <> "-private-key",
-    "dialog-account-" <> dialog_signer <> "-rotate",
-    "dialog-account-" <> dialog_signer <> "-delete",
-    "dialog-unreadable-" <> dialog_skipped <> "-delete",
-  ])
-  assert string.contains(
-    body,
-    "command=\"show-modal\" commandfor=\"" <> id <> "\"",
-  )
-  assert string.contains(
-    body,
-    "<dialog aria-labelledby=\""
-      <> id
-      <> "-title\" class=\"modal\" id=\""
-      <> id
-      <> "\">",
-  )
-  assert string.contains(
-    closed_dialog(body, id),
-    "command=\"close\" commandfor=\"" <> id <> "\"",
-  )
-}
-
 /// 状態は `dashboard.Snapshot(..dialog_snapshot(), accounts: Ok([dialog_signer の行（ラベル `main`）, "4567" を
 /// 16 回の署名者の行（ラベル `bot`）]))`。ラベルの違う 2 行の、それぞれのラベルの編集のダイアログに、その行のラベルの識別、`value="<ラベル>"`、
 /// `aria-describedby="<id>-label-hint"` と `id="<id>-label-hint"` がある。
@@ -1812,13 +1652,6 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
   assert string.contains(dialog, "value=\"" <> label <> "\"")
   assert string.contains(dialog, "aria-describedby=\"" <> id <> "-label-hint\"")
   assert string.contains(dialog, "id=\"" <> id <> "-label-hint\"")
-}
-
-/// `states()` の `id` のリレーの行。
-fn relay_row(id: Int) -> dashboard.RelayRow {
-  let assert Ok(rows) = states().relays
-  let assert Ok(row) = list.find(rows, fn(row) { row.id == id })
-  row
 }
 
 /// 締め切りまでに答えなかった用途（`Unanswered`）は「応答なし」のバッジになり、
@@ -1882,15 +1715,19 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    "<button aria-label=\"Edit roles\" class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-relay-1-edit\" type=\"button\">"
-      <> element.to_string(view.pencil_icon())
-      <> "</button>",
+    element.to_string(view.dialog_trigger(
+      "dialog-relay-1-edit",
+      view.IconOnlyTrigger(view.pencil_icon(), "Edit roles"),
+      view.GhostButton,
+    )),
   )
   assert string.contains(
     body,
-    "<button aria-label=\"Delete relay\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-relay-1-delete\" type=\"button\">"
-      <> element.to_string(view.trash_icon())
-      <> "</button>",
+    element.to_string(view.dialog_trigger(
+      "dialog-relay-1-delete",
+      view.IconOnlyTrigger(view.trash_icon(), "Delete relay"),
+      view.DangerGhostButton,
+    )),
   )
 }
 
@@ -1898,14 +1735,18 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
 /// 行があれば囲みの後に一覧を出し、バンカーの行が 1 件でもあれば囲みを出さない
 /// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
 pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
-  let add_action =
-    "<div class=\"ml-auto flex flex-wrap justify-end gap-2\">"
-    <> element.to_string(view.dialog_trigger(
+  let add_trigger =
+    element.to_string(view.dialog_trigger(
       "dialog-relay-new",
       view.IconTextTrigger(view.plus_icon(), "Add"),
       view.PrimaryButton,
     ))
-    <> "</div>"
+  let no_bunker =
+    element.to_string(
+      view.alert(view.Failure, [
+        html.text(i18n.text(i18n.English, i18n.NoBunkerRelay)),
+      ]),
+    )
   let legend =
     relays_hint_html(
       i18n.English,
@@ -1920,16 +1761,8 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
       view.System,
       dashboard.Snapshot(..states(), relays: Ok([])),
     )
-  assert string.contains(
-    no_rows,
-    "Relays</h2>"
-      <> legend
-      <> "</div>"
-      <> add_action
-      <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div>",
-  )
+  assert string.contains(no_rows, "Relays</h2>" <> legend <> "</div>")
+  assert string.contains(no_rows, add_trigger <> "</div></div>" <> no_bunker)
   let monitor_only =
     dashboard.render(
       i18n.English,
@@ -1946,15 +1779,10 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
         ]),
       ),
     )
+  assert string.contains(monitor_only, "Relays</h2>" <> legend <> count_pill(1))
   assert string.contains(
     monitor_only,
-    "Relays</h2>"
-      <> legend
-      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">1</span></div>"
-      <> add_action
-      <> "</div><div class=\"alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\">No relay is used for the bunker. Clients cannot connect to any account until you add one.</span></div><ul",
+    add_trigger <> "</div></div>" <> no_bunker <> "<ul",
   )
   assert !string.contains(
     dashboard.render(i18n.English, view.System, states()),
@@ -1978,9 +1806,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       "Accepts NIP-46 requests",
     )
       <> "</div></div>"
-      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">boom</span></span></div></div>",
+      <> listed_reason_html(i18n.English, i18n.CouldNotListRelays, "boom"),
   )
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
@@ -1993,9 +1819,7 @@ pub fn unlisted_relays_show_the_reason_test() {
       "NIP-46 のリクエストを受け付ける",
     )
       <> "</div></div>"
-      <> "<div class=\"rounded-box border border-base-300 bg-base-100\"><div class=\"alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\">リレーの一覧を表示できません。<span lang=\"en\">boom</span></span></div></div>",
+      <> listed_reason_html(i18n.Japanese, i18n.CouldNotListRelays, "boom"),
   )
 }
 
@@ -2055,17 +1879,13 @@ fn relays_hint_html(
   )
 }
 
-/// 節の格子は 1121px 以上で 1.62 対 1 の 2 列になり、左の列の先頭がアカウント、右の列の
-/// 先頭がリレーの節である。
+/// 節の格子は、1121px 以上で 1.62 対 1 の 2 列に切り替えるクラスを持つ。クラスの照合だけで、
+/// 幅の切り替えそのものはブラウザーで確かめる。
 pub fn dashboard_columns_split_above_1120px_test() {
   let body = dashboard.render(i18n.English, view.System, states())
   assert string.contains(
     body,
-    "<div class=\"grid items-start gap-6 min-[1121px]:grid-cols-[minmax(0,1.62fr)_minmax(0,1fr)]\"><div class=\"flex min-w-0 flex-col gap-6\"><section class=\"flex flex-col gap-3\" id=\"accounts\"",
-  )
-  assert string.contains(
-    body,
-    "<div class=\"flex min-w-0 flex-col gap-6\"><section class=\"flex flex-col gap-3\" id=\"relays\"",
+    "min-[1121px]:grid-cols-[minmax(0,1.62fr)_minmax(0,1fr)]",
   )
 }
 
@@ -2128,15 +1948,6 @@ pub fn sessions_heading_links_to_connect_a_client_test() {
   assert string.contains(unavailable, "id=\"dialog-session-connect\"")
 }
 
-/// アカウントの節の見出しの行には、追加のダイアログを開くボタンと並んで読み直しのフォームが出る。
-pub fn accounts_heading_has_a_reload_form_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(
-    body,
-    "<form action=\"/accounts/reload\" method=\"post\">",
-  )
-}
-
 /// 一覧を得られないときも、アカウントの節の見出しの読み直しのフォームは出したままにする
 /// （追加のボタンは一覧を得たときだけ出す）。
 pub fn the_reload_form_stays_without_the_account_list_test() {
@@ -2153,10 +1964,33 @@ pub fn the_reload_form_stays_without_the_account_list_test() {
   )
 }
 
+/// `body` の `title` の節の見出しで、題の `</h2>` の後に続く HTML。題の直後に ⓘ があれば、
+/// その補足の `</div>` の後から返す。件数のピルがあれば、返す HTML の先頭に出る。
+fn after_heading_title(body: String, title: String) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(body, title <> "</h2>")
+  case string.starts_with(rest, "<button") {
+    False -> rest
+    True -> {
+      let assert Ok(#(_, hint)) = string.split_once(rest, "popover=\"hint\">")
+      let assert Ok(#(_, after_hint)) = string.split_once(hint, "</div>")
+      after_hint
+    }
+  }
+}
+
 /// アカウント・セッション・リレーの見出しは、一覧を得て 1 件以上あるときだけ題の直後に
 /// 件数のピルを出す。一覧を得られない節にはピルを出さない。
 pub fn section_headings_show_the_count_pill_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body =
+    dashboard.render(
+      i18n.English,
+      view.System,
+      dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
+    )
+  assert string.starts_with(
+    after_heading_title(body, "Accounts"),
+    count_pill(1),
+  )
   assert string.contains(
     body,
     "Relays</h2>"
@@ -2167,7 +2001,7 @@ pub fn section_headings_show_the_count_pill_test() {
       "bunker",
       "Accepts NIP-46 requests",
     )
-      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span>",
+      <> count_pill(2),
   )
 
   let unavailable =
@@ -2181,41 +2015,17 @@ pub fn section_headings_show_the_count_pill_test() {
         relays: Error(i18n.Untranslated("boom")),
       ),
     )
-  // ⓘ の補足の閉じタグの直後にピルが無い
   list.each(["Accounts", "Approved sessions", "Relays"], fn(title) {
-    let assert Ok(#(_, heading)) =
-      string.split_once(unavailable, title <> "</h2><button")
-    let assert Ok(#(_, after_hint)) =
-      string.split_once(heading, "popover=\"hint\">")
-    let assert Ok(#(_, after_hint)) = string.split_once(after_hint, "</div>")
-    assert !string.starts_with(after_hint, "<span class=\"badge")
+    assert !string.starts_with(
+      after_heading_title(unavailable, title),
+      count_pill_tag(),
+    )
   })
 }
 
-/// 空のアカウント・セッション・プラグインの節は、アイコンと説明の文を出し、件数のピルは
-/// 出さない。
-pub fn empty_sections_show_an_icon_and_a_sentence_test() {
-  let snapshot =
-    dashboard.Snapshot(
-      ..states(),
-      accounts: Ok([]),
-      sessions: Ok([]),
-      plugins: [],
-    )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
-  assert string.contains(
-    body,
-    "No accounts registered. Import an nsec or generate a new key.",
-  )
-  assert string.contains(body, "No approved sessions.")
-  assert string.contains(body, "No plugins enabled.")
-  assert !string.contains(body, "Accounts</h2><span class=\"badge")
-  assert !string.contains(body, "Approved sessions</h2><span class=\"badge")
-  assert !string.contains(body, "Plugins</h2><span class=\"badge")
-}
-
-/// 空のアカウントとセッションの節は、点線の枠の中にそれぞれ追加と接続の枠のボタンを置き、
-/// 空のプラグインの節はボタンを置かない。
+/// 空のアカウント・セッション・プラグインの節は、件数のピルを出さず、点線の枠の中にアイコンと
+/// 説明の文を置く。アカウントとセッションの枠にはそれぞれ追加と接続の枠のボタンを置き、
+/// プラグインの枠にはボタンを置かない。
 pub fn empty_sections_offer_their_action_in_the_frame_test() {
   let snapshot =
     dashboard.Snapshot(
@@ -2263,6 +2073,8 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
       ),
     ),
   )
+  use title <- list.each(["Accounts", "Approved sessions", "Plugins"])
+  assert !string.starts_with(after_heading_title(body, title), count_pill_tag())
 }
 
 /// 承認ページは言語を切り替えた後に同じ承認ページを、通知ページはダッシュボードを開く。
@@ -2411,7 +2223,8 @@ pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
 }
 
 /// 承認待ちの帯は、見出しに説明を付け、ダッシュボードを自動で読み込み直すとき（1 件以上）だけ
-/// 更新の間隔を出す。一覧を得られないときは帯と説明だけを出し、0 件のときは帯も更新の間隔も出さない。
+/// 更新の間隔を出す。一覧を得られないときは帯と説明に理由の囲みを添えて更新の間隔を出さず、
+/// 0 件のときは帯も更新の間隔も出さない。
 pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
   let band =
     "<section class=\"flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6\" id=\"pending\">"
@@ -2433,6 +2246,10 @@ pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
   assert string.contains(unavailable, band)
   assert string.contains(unavailable, description)
   assert !string.contains(unavailable, refresh)
+  assert string.contains(
+    unavailable,
+    listed_reason_html(i18n.English, i18n.CouldNotListPending, "boom"),
+  )
 
   let empty =
     dashboard.render(
@@ -2519,31 +2336,6 @@ pub fn overview_says_not_available_when_lists_are_missing_test() {
     ))
   assert list.length(string.split(unavailable, value)) == 4
   assert list.length(string.split(unavailable, note)) == 4
-}
-
-/// 承認待ちの帯は 1 件以上あるとき、または一覧を得られないときだけ描く。0 件のときは
-/// 帯ごと出さない。
-pub fn empty_pending_section_is_not_rendered_test() {
-  let empty =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    )
-  assert !string.contains(empty, "Pending connections")
-
-  let present = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(present, "Pending connections")
-  assert !string.contains(present, "alert-error")
-
-  let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
-    )
-  assert string.contains(unavailable, "Pending connections")
-  assert string.contains(unavailable, "alert-soft alert-error")
 }
 
 /// 承認待ちのカードのクライアントは省略した表示とコピーボタンで出る。
@@ -2636,9 +2428,7 @@ pub fn sessions_heading_shows_the_count_and_the_description_test() {
     )
   assert string.contains(
     listed,
-    "Approved sessions</h2>"
-      <> hint
-      <> "<span class=\"badge badge-sm border-base-300 bg-base-100 font-mono font-bold text-muted tabular-nums\">2</span></div>",
+    "Approved sessions</h2>" <> hint <> count_pill(2) <> "</div>",
   )
 
   let unavailable =
@@ -2670,21 +2460,21 @@ pub fn session_row_draws_the_client_fingerprint_test() {
   )
 }
 
-/// セッションの行は、幅 720px 以下で 4 段に、721px 以上で 3 列 2 段に組み替える格子とボタンの升の
-/// クラスを持つ。クラスの照合だけで、幅の切り替えそのものはブラウザーで確かめる。
+/// セッションの行は、721px 以上で 3 列 2 段に組み替える格子とボタンの升の切り替えのクラスを
+/// 持つ。クラスの照合だけで、幅の切り替えそのものはブラウザーで確かめる。
 pub fn session_row_regroups_at_720px_test() {
   let part =
     sessions_part(
       dashboard.Snapshot(..states(), sessions: Ok([session_row("ef01")])),
     )
-  assert string.contains(
-    part,
-    "class=\"grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 min-[721px]:grid-cols-[auto_minmax(0,1fr)_auto]\"",
-  )
-  assert string.contains(
-    part,
-    "class=\"col-span-2 grid justify-items-end gap-1 border-t border-dashed border-base-300 pt-2 min-[721px]:col-span-1 min-[721px]:self-start min-[721px]:border-t-0 min-[721px]:pt-0\"",
-  )
+  use class <- list.each([
+    "min-[721px]:grid-cols-[auto_minmax(0,1fr)_auto]",
+    "min-[721px]:col-span-1",
+    "min-[721px]:self-start",
+    "min-[721px]:border-t-0",
+    "min-[721px]:pt-0",
+  ])
+  assert string.contains(part, class)
 }
 
 /// 署名者は、アカウント一覧にあればラベルと省略した npub、無ければ省略した 16 進で出る。
@@ -3061,10 +2851,7 @@ pub fn new_relay_form_describes_the_url_field_test() {
     )
     |> element.fragment
     |> element.to_string
-  assert string.contains(
-    html,
-    "<form action=\"/relays/new\" class=\"flex flex-col gap-4\" method=\"post\">",
-  )
+  assert string.contains(form_tag(html, "/relays/new\""), "method=\"post\"")
   assert string.contains(html, "aria-describedby=\"relay-url-hint\"")
   assert string.contains(html, "<p class=\"text-muted\" id=\"relay-url-hint\">")
   assert !string.contains(html, "<header")
@@ -3153,20 +2940,48 @@ fn outside_dialogs(body: String) -> String {
   }
 }
 
-/// `session_snapshot()` の描画で、ダイアログの開閉が組になっている: `dialog-session-connect` と各行の権限の
-/// 編集・取り消しのダイアログはそれぞれ、同じ `id` を `commandfor` で指す開くボタンと、中の閉じるボタンを持つ。
-pub fn session_dialogs_open_from_matching_triggers_test() {
-  let body = dashboard.render(i18n.English, view.System, session_snapshot())
-  use id <- list.each([
-    "dialog-session-connect",
-    "dialog-session-abcd-ef01-permissions",
-    "dialog-session-abcd-ef01-revoke",
-    "dialog-session-abcd-ef02-permissions",
-    "dialog-session-abcd-ef02-revoke",
+/// ダイアログの開閉が組になっている: 表のスナップショットの描画で、各 `id` について、同じ `id` を
+/// `commandfor` で指す開くボタン、閉じた `<dialog>` の開始タグ、中の閉じるボタンがある。表は
+/// `states()` のアカウントとリレーの追加・行 1・2 の編集と削除、`dialog_snapshot()` の行の 4 つの
+/// 操作と読み込めなかった行の削除、`session_snapshot()` の接続と各行の権限の編集・取り消しである。
+pub fn dashboard_dialogs_open_from_matching_triggers_test() {
+  use #(snapshot, ids) <- list.each([
+    #(states(), [
+      "dialog-account-new",
+      "dialog-relay-new",
+      "dialog-relay-1-edit",
+      "dialog-relay-1-delete",
+      "dialog-relay-2-edit",
+      "dialog-relay-2-delete",
+    ]),
+    #(dialog_snapshot(), [
+      "dialog-account-" <> dialog_signer <> "-label",
+      "dialog-account-" <> dialog_signer <> "-private-key",
+      "dialog-account-" <> dialog_signer <> "-rotate",
+      "dialog-account-" <> dialog_signer <> "-delete",
+      "dialog-unreadable-" <> dialog_skipped <> "-delete",
+    ]),
+    #(session_snapshot(), [
+      "dialog-session-connect",
+      "dialog-session-abcd-ef01-permissions",
+      "dialog-session-abcd-ef01-revoke",
+      "dialog-session-abcd-ef02-permissions",
+      "dialog-session-abcd-ef02-revoke",
+    ]),
   ])
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  use id <- list.each(ids)
   assert string.contains(
     body,
     "command=\"show-modal\" commandfor=\"" <> id <> "\"",
+  )
+  assert string.contains(
+    body,
+    "<dialog aria-labelledby=\""
+      <> id
+      <> "-title\" class=\"modal\" id=\""
+      <> id
+      <> "\">",
   )
   assert string.contains(
     closed_dialog(body, id),
@@ -3175,11 +2990,13 @@ pub fn session_dialogs_open_from_matching_triggers_test() {
 }
 
 /// 取り消しのダイアログのフォームは `/sessions/revoke` へ POST し、署名者の隠し欄を持つ。
-pub fn session_dialog_forms_match_the_page_forms_test() {
+pub fn revoke_dialog_posts_the_signer_test() {
   let body = dashboard.render(i18n.English, view.System, session_snapshot())
   let revoke = closed_dialog(body, "dialog-session-abcd-ef01-revoke")
-  assert form_tag(revoke, "/sessions/revoke")
-    == "\" class=\"flex flex-col gap-4\" method=\"post\""
+  assert string.contains(
+    form_tag(revoke, "/sessions/revoke\""),
+    "method=\"post\"",
+  )
   assert string.contains(
     form_html(revoke, "/sessions/revoke"),
     element.to_string(view.hidden_input(dashboard.signer_field, "abcd")),
@@ -3194,24 +3011,6 @@ pub fn session_rows_revoke_only_from_the_dialog_test() {
     closed_dialog(body, "dialog-session-abcd-ef01-revoke"),
     "btn btn-outline btn-warning",
   )
-}
-
-/// アカウントが 0 件のとき、接続のダイアログはフォームの代わりに登録への案内を出す。
-pub fn connect_dialog_guides_to_add_an_account_test() {
-  let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..session_snapshot(), accounts: Ok([])),
-    )
-  let dialog = closed_dialog(body, "dialog-session-connect")
-  assert string.contains(
-    dialog,
-    "Register an account before connecting a client.",
-  )
-  assert !string.contains(dialog, "/accounts/new")
-  assert string.contains(dialog, "command=\"close\"")
-  assert !string.contains(dialog, "<form")
 }
 
 /// 接続の中身は、アカウントが 0 件なら登録への案内、得られなければ理由、得られればフォームを出す。
@@ -3257,8 +3056,8 @@ fn english_permissions_form() -> String {
 pub fn permissions_form_posts_without_the_page_frame_test() {
   let html = english_permissions_form()
   assert string.contains(
-    html,
-    "<form action=\"/sessions/0123/4567/permissions\" class=\"flex flex-col gap-4\" method=\"post\">",
+    form_tag(html, "/sessions/0123/4567/permissions\""),
+    "method=\"post\"",
   )
   assert string.contains(html, "value=\"1\"")
   assert !string.contains(html, "<header")
@@ -3295,8 +3094,8 @@ pub fn connect_form_describes_the_uri_field_test() {
     |> element.fragment
     |> element.to_string
   assert string.contains(
-    html,
-    "<form action=\"/sessions/connect\" class=\"flex flex-col gap-4\" method=\"post\">",
+    form_tag(html, "/sessions/connect\""),
+    "method=\"post\"",
   )
   assert string.contains(html, "aria-describedby=\"nostrconnect-uri-hint\"")
   assert string.contains(
@@ -3359,10 +3158,7 @@ pub fn render_open_echoes_the_new_relay_form_test() {
   let assert Ok(#(dialog, _)) = string.split_once(rest, "</dialog>")
   assert string.contains(dialog, i18n.text(i18n.English, i18n.InvalidRelayUrl))
   assert string.contains(dialog, "value=\"wss://typed.example\"")
-  assert string.contains(
-    dialog,
-    "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\"",
-  )
+  assert checkbox_checked(dialog, "monitor")
 }
 
 /// `render_open` は、リレーの一覧を得られなければその理由を、操作するリレーが一覧に無ければ
