@@ -91,6 +91,20 @@ pub fn parse_defaults_optional_fields_test() {
     ))
 }
 
+/// `=` の無いクエリーの断片は、値が空文字列のキーとして扱う。
+pub fn parse_treats_bare_query_key_as_empty_value_test() {
+  let uri =
+    "nostrconnect://" <> client <> "?relay=wss://r.example&secret=s&name"
+  assert nostrconnect.parse(uri)
+    == Ok(ConnectRequest(
+      client: client,
+      relays: ["wss://r.example"],
+      secret: "s",
+      perms: "",
+      name: Some(""),
+    ))
+}
+
 /// `bunker://` と URI でない文字列が `NotNostrconnect`。
 pub fn parse_rejects_other_scheme_test() {
   assert nostrconnect.parse(
@@ -100,10 +114,17 @@ pub fn parse_rejects_other_scheme_test() {
   assert nostrconnect.parse("not a uri") == Error(NotNostrconnect)
 }
 
-/// 長さの足りない hex が `MalformedClientPubkey`。
+/// 長さの足りない hex と、64 文字でも 16 進でないホストが
+/// `MalformedClientPubkey`。
 pub fn parse_rejects_malformed_client_pubkey_test() {
   assert nostrconnect.parse(
       "nostrconnect://aabb?relay=wss://r.example&secret=s",
+    )
+    == Error(MalformedClientPubkey)
+  assert nostrconnect.parse(
+      "nostrconnect://"
+      <> string.repeat("z", 64)
+      <> "?relay=wss://r.example&secret=s",
     )
     == Error(MalformedClientPubkey)
 }

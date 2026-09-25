@@ -182,6 +182,13 @@ pub fn verify_signature_rejects_a_signature_that_is_not_64_bytes_test() {
   assert !event.verify_signature(Event(..signed, sig: signed.sig <> "00"))
 }
 
+/// `pubkey` か `sig` が 16 進でないイベントは検証に落ちる。
+pub fn verify_signature_rejects_non_hex_test() {
+  let signed = signed_event.new(1, "verified")
+  assert !event.verify_signature(Event(..signed, pubkey: "zz"))
+  assert !event.verify_signature(Event(..signed, sig: "zz"))
+}
+
 /// 任意のバイト列を pubkey として BIP-340 の challenge に入れて署名する。長さの
 /// 検査を確かめるための、仕様外の pubkey を持つ正しい署名を作る。
 /// `bip340.sign_with_aux` から乱数を除き、固定の nonce `k0 = 1` を使う。
@@ -321,6 +328,12 @@ pub fn from_map_wrong_type_message_test() {
   let assert Error(reason) = event.from_map(wrong_kind)
   assert string.contains(reason, "expected")
   assert string.contains(reason, "kind")
+}
+
+/// 値そのものが map でないときの失敗メッセージは、キー名を付けずに型の
+/// 食い違いだけを書いた 1 行になる。
+pub fn from_map_non_map_message_test() {
+  assert event.from_map(dynamic.list([])) == Error("expected Dict, found List")
 }
 
 /// ephemeral の範囲は 20000 以上 30000 未満で、両端の外は含まない。
