@@ -1,5 +1,5 @@
-//// app_bunker_test、app_plugins_test、app_accounts_test が共有する、偽リレーの
-//// 上でスーパービジョンツリーを動かすヘルパー。gleeunit は test/ 配下の全モジュールを
+//// 偽リレーの上でスーパービジョンツリーを動かすヘルパーと、ツリーを組まずにバンカーと
+//// リレー一覧のアクターを単独で起動するヘルパー。gleeunit は test/ 配下の全モジュールを
 //// eunit に渡すので、関数名を `_test` で終わらせないこと（`beam_fixture.gleam` 冒頭と
 //// 同じ注意）。
 
@@ -336,6 +336,54 @@ pub fn load_signer(key_hex: String) -> Result(bunker.Snapshot, String) {
 /// アカウントだけがあり、セッションと承認待ちが無い読み込みの結果。
 pub fn accounts_only(accounts: List(vault.StoredAccount)) -> bunker.Snapshot {
   bunker.Snapshot(Loaded(accounts: accounts, skipped: []), [], [], [])
+}
+
+/// `signers` を登録した偽のストア（書き込みはすべて成功する）でバンカーを単独で起動し、
+/// 読み込みの完了を待って名前を返す。ツリーを組まないので接続は開かず、承認フローは
+/// 無効にする。
+pub fn start_bunker_signed_in_as(
+  signers: List(account.Account),
+) -> Name(bunker.Msg) {
+  let name = process.new_name("test_standalone_bunker")
+  let stored =
+    list.map(signers, fn(signer) {
+      StoredAccount(account: signer, secret: secret, label: "")
+    })
+  let assert Ok(_started) =
+    bunker.start(
+      name,
+      bunker.Settings(
+        store: store_with_load(fn() { Ok(accounts_only(stored)) }),
+        auth_url: None,
+        retry_delay: fixed_retry_delay,
+      ),
+      fn() { Nil },
+      fn(_relays) { Nil },
+      fn(_urls) { Nil },
+    )
+  // 読み込みの完了を待つ。`bunker_test.gleam` と同じ理由で `accounts` を使う。
+  let assert Ok(loaded) = bunker.accounts(name)
+  assert list.length(loaded) == list.length(signers)
+  name
+}
+
+/// `entries` を持つだけのリレー一覧アクターを起動し、名前を返す。接続を開かないので
+/// factory はダミーの名前を置く。
+pub fn start_relay_list(
+  entries: List(relay_list.Entry),
+) -> Name(relay_list.Msg) {
+  let name = process.new_name("test_standalone_relay_list")
+  let assert Ok(_started) =
+    relay_list.start(
+      name,
+      entries,
+      relay_list.Factories(
+        monitor: process.new_name("test_standalone_factory_monitor"),
+        bunker: process.new_name("test_standalone_factory_bunker"),
+        session: process.new_name("test_standalone_factory_session"),
+      ),
+    )
+  name
 }
 
 /// 何もせず成功する、再開点の保存の操作。
