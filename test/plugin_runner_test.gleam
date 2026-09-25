@@ -495,6 +495,18 @@ pub fn crashing_plugin_reason_is_short_test() {
     == Some(Disabled(reason: "error:badarg", dropped: 0))
 }
 
+/// kill で終わったワーカーは、理由が `killed` の失敗として数えられる。
+pub fn killed_plugin_reason_is_killed_test() {
+  let name =
+    start_runner(
+      fn(_incoming) { process.kill(process.self()) },
+      Limits(..limits, max_failures: 1),
+    )
+  deliver(name, 1)
+  assert plugin_runner.status(name)
+    == Some(Disabled(reason: "killed", dropped: 0))
+}
+
 /// 戻らないプラグインは打ち切られ、失敗として数えられる。ランナーは生き残る。
 pub fn hanging_plugin_is_timed_out_test() {
   let name =

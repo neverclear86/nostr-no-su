@@ -558,10 +558,10 @@ fn check_required_version(
   }
 }
 
-/// `decode` の最初のエラーを `expected X, got Y at a.b` の 1 行にする。エラーの
-/// リストが空になることは `decode.run` の `Error` では起きないが、網羅のために
-/// 節を置く。
-fn describe_decode_error(errors: List(decode.DecodeError)) -> String {
+/// `decode` の最初のエラーを `expected X, got Y at a.b` の 1 行にする。エラーが
+/// 1 件も無ければ `invalid value` を返す（`decode.run` の `Error` は空のリストを
+/// 持たないので、読み込みの経路からは通らない）。
+pub fn describe_decode_error(errors: List(decode.DecodeError)) -> String {
   case errors {
     [] -> "invalid value"
     [error, ..] -> {
@@ -775,9 +775,8 @@ fn export_label(function: String, arity: Int) -> String {
 }
 
 /// `plugin_pages/2` を `page_languages` の言語ごとに期限付きで呼んで
-/// `decode_pages` で検証し、キーごとに言語から表示名への対応を持つ
-/// `LocalizedPage` の一覧にまとめる。キーの並びが先頭の言語の一覧と食い違う
-/// 言語があれば `Error`。
+/// `decode_pages` で検証し、`merge_localized_pages` で `LocalizedPage` の一覧に
+/// まとめる。
 fn localized_pages(
   module: Atom,
   name: String,
@@ -798,8 +797,20 @@ fn localized_pages(
       #(language, pages)
     }),
   )
+  merge_localized_pages(lists, name, label)
+}
+
+/// 言語ごとに検証したページの一覧（`#(言語のコード, 一覧)` の並びで、先頭の言語の
+/// 一覧をキーの基準にする）を、キーごとに言語から表示名への対応を持つ
+/// `LocalizedPage` の一覧にまとめる。キーの並びが先頭の言語の一覧と食い違う言語が
+/// あれば `Error`。言語が 1 つも無ければ空の一覧を返す。`name` は理由の先頭に
+/// 付けるモジュール名、`label` は理由に出す `関数/アリティ`。
+pub fn merge_localized_pages(
+  lists: List(#(String, List(PluginPage))),
+  name: String,
+  label: String,
+) -> Result(List(PluginPage), String) {
   case lists {
-    // page_languages は空でないので、この腕は通らない
     [] -> Ok([])
     [#(base_language, base), ..rest] -> {
       let keys = list.map(base, fn(page) { page.key })

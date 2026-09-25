@@ -3,8 +3,10 @@
 %% （Accounts を含む）が届くことの検証に使う。
 %%
 %% Values に <<"reject">> があればその値を理由に拒否し（{error, Reason}）、
-%% <<"bad-return">> があれば ok でも {error, _} でもない値を返す。それ以外は
-%% 受け取った Key・Values・Config を persistent_term に退避して ok を返す。
+%% <<"bad-return">> があれば ok でも {error, _} でもない値を返す。
+%% <<"error-without-reason">> があれば理由の無い {error} を、<<"non-string-reason">>
+%% があれば理由が binary でない {error, 42} を返す。それ以外は受け取った Key・
+%% Values・Config を persistent_term に退避して ok を返す。
 -module(plugin_with_action).
 -export([plugin_api_version/0, plugin_name/0, handle_event/1]).
 -export([plugin_pages/1, plugin_page_content/2, plugin_page_action/3]).
@@ -27,6 +29,10 @@ plugin_page_action(Key, Values = #{<<"reject">> := Reason}, Config) ->
 plugin_page_action(Key, Values = #{<<"bad-return">> := _}, Config) ->
     persistent_term:put(?MODULE, {Key, Values, Config}),
     nope;
+plugin_page_action(_Key, #{<<"error-without-reason">> := _}, _Config) ->
+    {error};
+plugin_page_action(_Key, #{<<"non-string-reason">> := _}, _Config) ->
+    {error, 42};
 plugin_page_action(Key, Values, Config) ->
     persistent_term:put(?MODULE, {Key, Values, Config}),
     ok.
