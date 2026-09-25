@@ -18,7 +18,7 @@
 // 終了コード 1 で終える。
 // テーマと言語の POST はコンテキストに cookie を残すので、以降の撮影に影響しないよう末尾に置き、
 // 最後に system（cookie を消す）を送る。
-// copy: "manual" は navigator.clipboard を消してから押す。
+// copy: "manual" は navigator.clipboard を消し、document.execCommand を失敗させてから押す。
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
@@ -284,12 +284,14 @@ async function prepare(page, shot) {
 }
 
 // 最初のコピーのボタンを押し、コピーの欄の囲みに data-copied（manual なら data-selected）が
-// 付いたかを返す。manual なら押す前に navigator.clipboard を消し、書けない状態を再現する。
+// 付いたかを返す。manual なら押す前に navigator.clipboard を消し、document.execCommand を
+// 失敗させて、どちらの経路でも書けない状態を再現する。
 // 付いた表示は 2 秒で消える（data-selected は消えない）ので、付いたらすぐに撮る。
 async function copy(page, manual) {
   if (manual) {
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", { value: undefined });
+      document.execCommand = () => false;
     });
   }
   await page.locator('button[data-action="copy"]').first().click();
