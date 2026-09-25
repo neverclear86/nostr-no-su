@@ -86,6 +86,13 @@ pub fn load_missing_export_test() {
   )
 }
 
+/// `plugin_name/0` を欠くモジュールは、欠けている関数を名指しで拒否する。後続の
+/// 呼び出しの失敗の理由と区別するため、完全一致で見る。
+pub fn load_missing_plugin_name_export_test() {
+  assert load_error("support@plugin_missing_name")
+    == "support@plugin_missing_name: missing export plugin_name/0"
+}
+
 /// 本体が対応していない API バージョンは拒否する。
 pub fn load_unsupported_version_test() {
   assert string.contains(
@@ -350,6 +357,12 @@ pub fn load_with_localized_pages_test() {
   assert title == "状態"
 }
 
+/// 言語が 1 つも無ければ、まとめた一覧は空になる。
+pub fn merge_localized_pages_without_languages_is_empty_test() {
+  assert plugin.merge_localized_pages([], "plugin_localized", "plugin_pages/2")
+    == Ok([])
+}
+
 /// `title_in` は既知の言語ではその表示名を、未知の言語では `key` を返す。
 pub fn localized_page_title_falls_back_to_the_key_test() {
   let page =
@@ -467,6 +480,39 @@ pub fn page_action_with_a_bad_return_is_a_reason_test() {
     == "plugin_with_action: plugin_page_action/3 must return ok or {error, Reason}, got Atom"
 }
 
+/// 理由の無い `{error}` は拒否ではなく戻り値の形の誤りになる。要素 0 は `error`
+/// だが、理由の要素が無い。
+pub fn page_action_error_without_a_reason_is_a_bad_return_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let assert Error(reason) =
+    action("settings", [#("error-without-reason", "on")], [])
+  assert reason
+    == "plugin_with_action: plugin_page_action/3 must return ok or {error, Reason}, got Array"
+}
+
+/// `{error, Reason}` の `Reason` が binary でなければ、その型を報告する理由になる。
+pub fn page_action_error_with_a_non_string_reason_is_a_reason_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_action"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  let assert Some(ui) = loaded.ui
+  let assert Some(action) = ui.action
+  let assert Error(reason) =
+    action("settings", [#("non-string-reason", "on")], [])
+  assert reason
+    == "plugin_with_action: plugin_page_action/3: error reason must be a String, got Int"
+}
+
 /// 宣言した下限より本体の版が小さいと読み込まず、要求と実際の版を並べた
 /// 理由になる。`0.1.9` のように patch が違うだけの版でも同じく落ちる。
 pub fn min_host_version_older_host_test() {
@@ -508,6 +554,17 @@ pub fn min_host_version_malformed_host_test() {
     == Error(
       "requires nostr-no-su 0.2.0 or later, but the host version \"dev\" is not MAJOR.MINOR.PATCH",
     )
+}
+
+/// コードパスに無いアプリケーションが複数あると、名前順で先のものを理由に出す。
+pub fn required_versions_report_the_first_missing_app_by_name_test() {
+  assert load_error("plugin_requiring_missing_apps")
+    == "plugin_requiring_missing_apps: requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
+}
+
+/// エラーが 1 件も無いリストは `invalid value` になる。
+pub fn describe_decode_error_without_errors_is_invalid_value_test() {
+  assert plugin.describe_decode_error([]) == "invalid value"
 }
 
 /// fixture が退避した値を読む。キーが無ければ例外になる。
