@@ -6,6 +6,8 @@ import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/bunker/account_store
+import nostr_no_su/task.{type Deadline}
+import nostr_no_su/time
 import pog
 
 /// 接続プールを起動し、クエリーに応答するまで待ってからその名前を返す。
@@ -28,21 +30,36 @@ pub fn start_pool(
 
 /// プールがクエリーに応答するまで待つ。pog のプールは起動と同時には接続を張らず
 /// 非同期で張るので、スーパービジョンツリーの起動直後に書き込むと接続の待ち行列で
-/// 期限を過ごしうる。`remaining` ミリ秒の間 50ms ごとに試し、応答しなければ `False`
+/// 期限を過ごしうる。`timeout_ms` ミリ秒の間 50ms ごとに試し、応答しなければ `False`
 /// を返す。
-pub fn await_pool(db: pog.Connection, remaining: Int) -> Bool {
+pub fn await_pool(db: pog.Connection, timeout_ms: Int) -> Bool {
+  probe_until(db, task.deadline_in(timeout_ms))
+}
+
+/// 期限まで `SELECT 1` を試す。pog の問い合わせの期限は接続の待ち行列の待ちを
+/// 含まないので、各回を別プロセスで走らせて期限までだけ待ち、問い合わせが待たされても
+/// 期限を越えて待たない。
+fn probe_until(db: pog.Connection, deadline: Deadline) -> Bool {
   let probed =
-    pog.query("SELECT 1")
-    |> pog.timeout(int.max(remaining, 1))
-    |> account_store.execute(db)
-  case probed, remaining <= 0 {
-    Ok(_returned), _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(50)
-      await_pool(db, remaining - 50)
+    task.start(fn() {
+      pog.query("SELECT 1")
+      |> pog.timeout(int.max(ms_left(deadline), 1))
+      |> account_store.execute(db)
+    })
+    |> task.await(deadline)
+  case probed, ms_left(deadline) {
+    Ok(Ok(_returned)), _ -> True
+    _, left if left <= 0 -> False
+    _, left -> {
+      process.sleep(int.min(50, left))
+      probe_until(db, deadline)
     }
   }
+}
+
+/// 期限までの残りのミリ秒。過ぎていれば 0 以下。
+fn ms_left(deadline: Deadline) -> Int {
+  deadline.at_ms - time.monotonic_ms()
 }
 
 /// 結果を読まない文を 1 つ実行する。
