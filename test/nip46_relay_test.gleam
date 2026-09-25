@@ -3,9 +3,9 @@
 //// 接続と、セッションを開けなかったときの URI のリレーの取り外しと、登録して
 //// いないセッションのリレーだけで応答する接続も試す E2E。
 ////
-//// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走る。PR の CI は
-//// どちらも渡さないのでスキップされ、手動のワークフロー（manual.yml の
-//// `nip46-e2e`）が両方を渡す。
+//// `TEST_RELAY_URL` と `TEST_DATABASE_URL` の両方があるときだけ走り、どちらかが
+//// 未設定ならスキップして 1 行ログを出す。CI の `test` ジョブは strfry と Postgres
+//// を立てて両方渡す。
 
 import envoy
 import gleam/dict

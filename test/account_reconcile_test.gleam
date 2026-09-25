@@ -8,7 +8,7 @@
 
 import gleam/erlang/process.{type Name, type Pid}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{None}
 import gleam/string
 import nostr_no_su
 import nostr_no_su/backoff
@@ -76,15 +76,14 @@ fn reconcile_with_postgres(
   database_url: String,
   lock_pool: Name(pog.Message),
 ) -> Nil {
-  use schema, admin, pool <- with_schema(database_url)
+  use schema, pool, db <- postgres.with_named_schema(database_url)
   let key = random_master_key()
   let first = random_entry("")
   let first_pubkey = account.pubkey_hex(first.account)
-  let db = pog.named_connection(pool)
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
   let assert Ok(Nil) = account_store.insert(db, key, first, generous)
   list.each(slow_trigger, fn(statement) {
-    postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
+    postgres.run_statement(db, string.replace(statement, "{schema}", schema))
   })
 
   let name = process.new_name("account_reconcile_bunker")
@@ -149,13 +148,12 @@ fn reconcile_sessions_with_postgres(
   database_url: String,
   lock_pool: Name(pog.Message),
 ) -> Nil {
-  use schema, admin, pool <- with_schema(database_url)
+  use schema, pool, db <- postgres.with_named_schema(database_url)
   let key = random_master_key()
   let entry = random_entry("")
   let signer = account.pubkey_hex(entry.account)
   let client =
     "0000000000000000000000000000000000000000000000000000000000000009"
-  let db = pog.named_connection(pool)
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
   let now = time.now_seconds()
@@ -189,7 +187,7 @@ fn reconcile_sessions_with_postgres(
       generous,
     )
   list.each(slow_session_delete, fn(statement) {
-    postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
+    postgres.run_statement(db, string.replace(statement, "{schema}", schema))
   })
 
   let name = process.new_name("account_reconcile_sessions_bunker")
@@ -221,20 +219,6 @@ fn reconcile_sessions_with_postgres(
 
   process.unlink(pid)
   process.kill(pid)
-}
-
-/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。専用の
-/// スキーマ名は `run` にも渡し、そのスキーマ限定のトリガーを作るのに使えるようにする。
-fn with_schema(
-  database_url: String,
-  run: fn(String, pog.Connection, Name(pog.Message)) -> Nil,
-) -> Nil {
-  let schema = "bunker_reconcile_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  run(schema, admin, pool)
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 専用のスキーマに向けた `account_store_operations` でバンカーアクターを起動し、

@@ -6,6 +6,7 @@ import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/bunker/account_store
+import nostr_no_su/random
 import nostr_no_su/task.{type Deadline}
 import nostr_no_su/time
 import pog
@@ -72,8 +73,8 @@ pub fn run_statement(db: pog.Connection, statement: String) -> Nil {
 }
 
 /// `TEST_DATABASE_URL` が空でなければその値で `run` を呼ぶ。未設定または空の
-/// ときはスキップを 1 行ログに出す（PR の CI は渡さず、手動のワークフローと
-/// 手元の実行だけが渡す）。`label` はログの行頭に付ける識別子。
+/// ときは失敗せず、スキップを 1 行ログに出す（CI の `test` ジョブは Postgres を
+/// 立てて渡す）。`label` はログの行頭に付ける識別子。
 pub fn with_test_database_url(label: String, run: fn(String) -> Nil) -> Nil {
   case envoy.get("TEST_DATABASE_URL") {
     Ok(url) if url != "" -> run(url)
@@ -98,4 +99,31 @@ pub fn start_lock_pool(database_url: String) -> Name(pog.Message) {
     account_store.lock_pool_config(name, pool_config) |> pog.start
   assert await_pool(pog.named_connection(name), 10_000)
   name
+}
+
+/// 専用のスキーマを作り、`search_path` をそのスキーマにしたプールとその接続で
+/// `run` を呼んで、終わったらスキーマごと消す。スキーマの名前が要るときは
+/// `with_named_schema` を使う。
+pub fn with_schema(
+  database_url: String,
+  run: fn(Name(pog.Message), pog.Connection) -> Nil,
+) -> Nil {
+  use _schema, pool, db <- with_named_schema(database_url)
+  run(pool, db)
+}
+
+/// 専用のスキーマを作り、その名前と、`search_path` をそのスキーマにしたプールと
+/// その接続で `run` を呼んで、終わったらスキーマごと消す。スキーマの作成と削除も
+/// そのプールで行い、テストが同時に持つ接続を 1 プールぶんにする（`search_path` は
+/// 文の実行時に解決される）。名前は、スキーマで修飾したトリガーを作るのに使う。
+pub fn with_named_schema(
+  database_url: String,
+  run: fn(String, Name(pog.Message), pog.Connection) -> Nil,
+) -> Nil {
+  let schema = "test_schema_" <> random.hex(8)
+  let pool = start_pool(database_url, Some(schema))
+  let db = pog.named_connection(pool)
+  run_statement(db, "CREATE SCHEMA " <> schema)
+  run(schema, pool, db)
+  run_statement(db, "DROP SCHEMA " <> schema <> " CASCADE")
 }

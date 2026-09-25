@@ -52,8 +52,7 @@ pub fn migration_statements_can_be_re_run_test() {
 
 /// `account_store.migrations` の版は 1 から欠番なく昇順に並ぶ。
 pub fn migrations_are_numbered_from_one_without_gaps_test() {
-  let versions =
-    list.map(account_store.migrations, fn(migration) { migration.version })
+  let versions = migration_versions()
   assert versions == list.index_map(versions, fn(_, index) { index + 1 })
 }
 
@@ -308,41 +307,97 @@ pub fn account_changes_without_a_bunker_are_not_answered_test() {
     == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
 }
 
-/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。同じ DB に対して `gleam test`
-/// を並行実行することは想定していない。
+/// 実際の Postgres に対する統合テスト。追加、読み込み、更新、改ざん、削除を
+/// 一巡させ、最後に自分が入れた行を消す。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。同じ DB に対して `gleam test` を並行実行することは想定して
+/// いない。
 pub fn postgres_round_trip_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  round_trip(postgres.start_pool(database_url, None))
+  let pool = postgres.start_pool(database_url, None)
+  let db = pog.named_connection(pool)
+  let key = random_master_key()
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+
+  let first = random_entry("first")
+  let second = random_entry("second")
+  let first_pubkey = account.pubkey_hex(first.account)
+  let second_pubkey = account.pubkey_hex(second.account)
+  let assert Ok(Nil) = account_store.insert(db, key, first, generous)
+  let assert Ok(Nil) = account_store.insert(db, key, second, generous)
+  assert account_store.insert(db, key, first, generous)
+    == Error(account_store.AlreadyRegistered)
+
+  // 入れた行が同じ内容で戻る。
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert_same_entry(loaded, first)
+  assert_same_entry(loaded, second)
+
+  // DB の行に平文は残らない。
+  let #(encrypted_privkey, encrypted_secret) = raw_boxes(db, first_pubkey)
+  assert !contains_bytes(encrypted_privkey, account.privkey(first.account))
+  assert !contains_bytes(encrypted_secret, bit_array.from_string(first.secret))
+
+  // secret とラベルを差し替えると、次の読み込みに反映される。
+  let assert Ok(Nil) =
+    account_store.update_secret(
+      db,
+      key,
+      second_pubkey,
+      "rotated-secret",
+      generous,
+    )
+  let assert Ok(Nil) =
+    account_store.update_label(db, second_pubkey, "renamed", generous)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert_same_entry(
+    loaded,
+    StoredAccount(..second, secret: "rotated-secret", label: "renamed"),
+  )
+  let unknown = account.pubkey_hex(random_entry("unknown").account)
+  assert account_store.update_secret(db, key, unknown, "x", generous)
+    == Error(account_store.NotRegistered)
+  assert account_store.update_secret(db, key, "not-hex", "x", generous)
+    == Error(account_store.NotRegistered)
+  assert account_store.update_label(db, unknown, "x", generous)
+    == Error(account_store.NotRegistered)
+
+  // 別のマスターキーでは、自分が入れた行はすべて飛ばされる。
+  let assert Ok(other) = account_store.load(pool, random_master_key(), generous)
+  assert skipped_reasons(other, [first_pubkey, second_pubkey])
+    == [
+      #(first_pubkey, vault.UndecryptablePrivateKey),
+      #(second_pubkey, vault.UndecryptablePrivateKey),
+    ]
+
+  // 暗号文の 1 バイトを書き換えた行だけが飛ばされ、他の行は読み込まれる。
+  flip_privkey_byte(db, first_pubkey)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert skipped_reasons(loaded, [first_pubkey, second_pubkey])
+    == [#(first_pubkey, vault.UndecryptablePrivateKey)]
+  assert loaded_pubkeys(loaded, [first_pubkey, second_pubkey])
+    == [second_pubkey]
+
+  // 削除した行は現れず、2 回目の削除は `NotRegistered`。
+  let assert Ok(Nil) = account_store.delete(db, second_pubkey, generous)
+  assert account_store.delete(db, second_pubkey, generous)
+    == Error(account_store.NotRegistered)
+  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  assert loaded_pubkeys(loaded, [second_pubkey]) == []
+  assert skipped_reasons(loaded, [second_pubkey]) == []
+
+  let assert Ok(Nil) = account_store.delete(db, first_pubkey, generous)
+  Nil
 }
 
 /// 版の記録より前に作られた DB が版 1 として取り込まれ、版が新しい DB は拒否される。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
+/// 専用のスキーマで行い、ビルドより新しい版の挿入もそのスキーマの接続に流す。
+/// public の `schema_version` にその版が残ると、以後の `postgres_round_trip_test` の
+/// 読み込みが `SchemaTooNew` で落ちるためである。`TEST_DATABASE_URL` があるとき
+/// だけ実行する。
 pub fn postgres_schema_version_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  schema_version_round_trip(database_url)
-}
-
-/// 同じ番号の advisory lock は、同じセッションからは再入で取れ、別のセッションから
-/// は取れない。セッションが解放すると別のセッションが取れる。`TEST_DATABASE_URL`
-/// があるときだけ実行する。同じ DB に対して
-/// `gleam test` を並行実行することは想定していない。
-pub fn postgres_instance_lock_test() {
-  use database_url <- postgres.with_test_database_url("account_store")
-  instance_lock_round_trip(database_url)
-}
-
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
-/// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外は専用スキーマへ
-/// 向けた接続で実行する。ビルドより新しい版の挿入を `search_path` なしの接続に流すと
-/// public の `schema_version` にその版が残り、以後の `round_trip` の `load` が
-/// `SchemaTooNew` で落ちるためである。
-fn schema_version_round_trip(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
 
   // 版の記録より前に作られた DB を再現する。
@@ -356,25 +411,54 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
   // もう一度読んでも、移行を二重に適用しない。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert recorded_versions(db) == migration_versions()
 
   // 記録された版が新しい DB は拒否する。
-  postgres.run_statement(db, "INSERT INTO schema_version (version) VALUES (8)")
+  let assert Ok(latest) = list.last(migration_versions())
+  postgres.run_statement(
+    db,
+    "INSERT INTO schema_version (version) VALUES ("
+      <> int.to_string(latest + 1)
+      <> ")",
+  )
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: 8, supported: 7))
+    == Error(account_store.SchemaTooNew(found: latest + 1, supported: latest))
+}
 
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+/// 同じ番号の advisory lock は、同じセッションからは再入で取れ、別のセッションから
+/// は取れない。セッションが解放すると別のセッションが取れる。セッション A、B は
+/// `postgres.start_lock_pool` で起動した 1 本のプールの接続で、番号は乱数にし、他の
+/// 統合テストが取る本番の番号（`account_store.instance_lock_key`）と衝突しない
+/// ようにする。`TEST_DATABASE_URL` があるときだけ実行する。同じ DB に対して
+/// `gleam test` を並行実行することは想定していない。
+pub fn postgres_instance_lock_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  let key = int.random(1_000_000_000)
+  let a = pog.named_connection(postgres.start_lock_pool(database_url))
+  let b = pog.named_connection(postgres.start_lock_pool(database_url))
+
+  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
+  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
+  assert account_store.acquire_lock(b, key, generous)
+    == Error(account_store.HeldByAnotherInstance(key))
+
+  postgres.run_statement(
+    a,
+    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
+  )
+  assert account_store.acquire_lock(b, key, generous) == Ok(Nil)
+
+  postgres.run_statement(
+    b,
+    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
+  )
 }
 
 /// 監視の購読の再開点は、DB からの読み込みと保存を一巡できる。移行の後に読み書き
 /// できることは、`monitor_resume` が版 2 の移行で作られることの確認を兼ねる。
 pub fn postgres_resume_store_test() {
   use database_url <- postgres.with_test_database_url("resume_store")
-  let schema = "resume_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
 
   // 移行を実行する。
   let assert Ok(_loaded) =
@@ -390,8 +474,6 @@ pub fn postgres_resume_store_test() {
 
   let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 300)])
   assert resume_store.load(db, "wss://a") == Ok(Some(300))
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
@@ -399,11 +481,7 @@ pub fn postgres_resume_store_test() {
 /// 兼ねる。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_plugin_resume_store_test() {
   use database_url <- postgres.with_test_database_url("plugin_resume_store")
-  let schema = "plugin_resume_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
 
   // 移行を実行する。
   let assert Ok(_loaded) =
@@ -419,8 +497,6 @@ pub fn postgres_plugin_resume_store_test() {
 
   let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 300)])
   assert plugin_resume_store.load(db, "logger") == Ok(Some(300))
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
@@ -428,11 +504,7 @@ pub fn postgres_plugin_resume_store_test() {
 /// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migrates_a_version_two_database_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
 
   // 版 2 の DB を再現する。
   postgres.run_statement(db, account_store.create_version_table)
@@ -445,11 +517,9 @@ pub fn postgres_migrates_a_version_two_database_test() {
 
   let assert Ok(loaded) =
     account_store.load(pool, random_master_key(), generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert recorded_versions(db) == migration_versions()
   assert loaded.sessions == []
   assert loaded.pending == []
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// セッションと承認待ちの読み書きを一巡させる。空の DB への版 3 の適用、書いた値を
@@ -458,21 +528,13 @@ pub fn postgres_migrates_a_version_two_database_test() {
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_bunker_state_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  bunker_state_round_trip(database_url)
-}
-
-fn bunker_state_round_trip(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let now = 1_700_000_000
 
-  // 1. 空のスキーマで load が Ok を返し、版が [1, 2, 3, 4, 5, 6, 7] になる。
+  // 1. 空のスキーマで load が Ok を返し、版が移行の版の一覧と同じになる。
   let assert Ok(empty) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert recorded_versions(db) == migration_versions()
   assert empty.sessions == []
   assert empty.pending == []
 
@@ -689,23 +751,6 @@ fn bunker_state_round_trip(database_url: String) -> Nil {
       ),
     ]
   assert after_account_delete.pending == [pb]
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
-}
-
-/// 専用のスキーマを作って `run` を呼び、終わったらスキーマごと消す。スキーマの
-/// 作成と削除も `search_path` をそのスキーマにしたプールで行い、テストが同時に
-/// 持つ接続を 1 プールぶんにする（`search_path` は文の実行時に解決される）。
-fn with_schema(
-  database_url: String,
-  run: fn(Name(pog.Message), pog.Connection) -> Nil,
-) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
-  postgres.run_statement(db, "CREATE SCHEMA " <> schema)
-  run(pool, db)
-  postgres.run_statement(db, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// MAC の合わない行は読み込みに使われず `Stored.rejected` に分けられ、
@@ -714,7 +759,7 @@ fn with_schema(
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let mark = random.hex(8)
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
@@ -836,7 +881,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
 /// ときだけ実行する。
 pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
   let entry = random_entry("approve-mac")
@@ -889,7 +934,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
 /// 残らない。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let old_key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, old_key, generous)
   let entry = random_entry("rekey")
@@ -952,7 +997,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migration_clears_sessions_and_pending_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
 
   // 版 5 の DB を再現する。
@@ -984,7 +1029,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
 
   // 版 6 の移行が既存の行を消してから `mac` 列を足す。
   let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert recorded_versions(db) == migration_versions()
   assert loaded.sessions == []
   assert loaded.pending == []
   assert loaded.rejected == []
@@ -1010,7 +1055,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
 
   // 版 6 の DB を再現する。
@@ -1049,7 +1094,7 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
   )
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert recorded_versions(db) == [1, 2, 3, 4, 5, 6, 7]
+  assert recorded_versions(db) == migration_versions()
   assert loaded.rejected == []
   assert loaded.sessions
     == [
@@ -1068,15 +1113,7 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_transaction_rolls_back_on_error_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  transaction_rolls_back_on_error(database_url)
-}
-
-fn transaction_rolls_back_on_error(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
 
   let entry = random_entry("rollback")
@@ -1106,23 +1143,13 @@ fn transaction_rolls_back_on_error(database_url: String) -> Nil {
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded.sessions == []
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// `relay_store` の一覧・追加・用途の更新・削除。`TEST_DATABASE_URL` があるときだけ
 /// 実行する。
 pub fn postgres_relay_store_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  relay_store_round_trip(database_url)
-}
-
-fn relay_store_round_trip(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
 
   // 移行を実行する。
   let assert Ok(_loaded) =
@@ -1182,8 +1209,6 @@ fn relay_store_round_trip(database_url: String) -> Nil {
   // 削除で消える。
   let assert Ok(Nil) = relay_store.delete(db, a.id, generous)
   assert relay_store.list(db, generous) == Ok([b])
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// `nostr_no_su.load_snapshot` は移行を含む読み込みと同じトランザクションで
@@ -1193,15 +1218,7 @@ fn relay_store_round_trip(database_url: String) -> Nil {
 /// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_load_snapshot_reads_relays_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  load_snapshot_reads_relays(database_url)
-}
-
-fn load_snapshot_reads_relays(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
 
   // 移行を実行してから行を足す。
@@ -1233,8 +1250,6 @@ fn load_snapshot_reads_relays(database_url: String) -> Nil {
         roles: relay_list.Roles(monitor: False, bunker: True),
       ),
     ]
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// テストのクライアントから署名者宛の、本文 `body` のリクエストを検証済みイベント
@@ -1268,14 +1283,7 @@ fn session_tuple(
 /// 実行する。
 pub fn postgres_bunker_session_writes_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  bunker_session_writes(database_url)
-}
-
-fn bunker_session_writes(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
+  use pool, _db <- postgres.with_schema(database_url)
   let key = random_master_key()
   // 移行してから、書き込みが実際のストアの操作を使うアクターを起動する。
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
@@ -1357,7 +1365,6 @@ fn bunker_session_writes(database_url: String) -> Nil {
   assert after_revoke.sessions == []
 
   stop(pid)
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`InsertPending` の写しは、`replaced` の
@@ -1365,15 +1372,7 @@ fn bunker_session_writes(database_url: String) -> Nil {
 /// 実行する。
 pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  replacing_a_pending_request_is_one_transaction(database_url)
-}
-
-fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
@@ -1381,13 +1380,7 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
   let signer_hex = account.pubkey_hex(entry.account)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_replacing_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
 
   let old_pending =
     engine.Pending(
@@ -1444,18 +1437,12 @@ fn replacing_a_pending_request_is_one_transaction(database_url: String) -> Nil {
   let assert Ok(after_failed_replace) = account_store.load(pool, key, generous)
   assert list.map(after_failed_replace.pending, fn(row) { row.token })
     == ["new"]
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// `touch_session` は最終利用を進め、後退させず、行が無くても `Ok`。
 pub fn postgres_touching_a_session_moves_its_last_use_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
@@ -1463,13 +1450,7 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
   let signer_hex = account.pubkey_hex(entry.account)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_touch_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
   let session = fn(client: String, last_used_at: Int) {
     engine.Session(
       signer: signer_hex,
@@ -1497,8 +1478,6 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
       #(session.client, session.created_at, session.last_used_at)
     })
     == [#("client", 1000, 1060)]
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// `nostrconnect://` で開いたセッションの URI のリレーは、`InsertSession` と
@@ -1506,19 +1485,13 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
 /// セッションに同じ順で残る。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_session_relays_survive_a_reload_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  use pool, db <- with_schema(database_url)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
   let entry = random_entry("reload")
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_relays_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
   let session =
     engine.Session(
       signer: account.pubkey_hex(entry.account),
@@ -1539,11 +1512,7 @@ pub fn postgres_session_relays_survive_a_reload_test() {
 /// `update_session_perms` は `perms` を差し替え、行が無くても `Ok`。
 pub fn postgres_updating_session_perms_writes_the_new_value_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
@@ -1551,13 +1520,7 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
   let signer_hex = account.pubkey_hex(entry.account)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_update_perms_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
   let session = fn(client: String, perms: String) {
     engine.Session(
       signer: signer_hex,
@@ -1591,8 +1554,21 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
       #(session.client, session.perms)
     })
     == [#("client", "sign_event:1,sign_event:10002")]
+}
 
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+/// `pool` に向けた `nostr_no_su.account_store_operations` の `write` を、期限
+/// `generous` で返す。`write` はロックのプールを使わないので、ロックには起動して
+/// いないプールの名前を渡す。
+fn store_write(
+  pool: Name(pog.Message),
+  key: vault.MasterKey,
+) -> fn(engine.Write) -> Result(Nil, bunker.WriteFailure) {
+  nostr_no_su.account_store_operations(
+    pool,
+    process.new_name("account_store_test_unreachable_lock"),
+    key,
+    generous,
+  ).write
 }
 
 /// エンジンだけで `count` 件の別々のクライアント鍵からの `connect`（secret は
@@ -1638,28 +1614,14 @@ fn connect_clients(
 /// あるときだけ実行する。
 pub fn postgres_sessions_stay_within_the_capacity_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  sessions_stay_within_the_capacity(database_url)
-}
-
-fn sessions_stay_within_the_capacity(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
   let entry = random_entry("capacity")
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_capacity_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
 
   let final_engine =
     connect_clients(
@@ -1677,39 +1639,22 @@ fn sessions_stay_within_the_capacity(database_url: String) -> Nil {
     == engine.sessions(final_engine)
     |> list.map(fn(session) { session.client })
     |> list.sort(string.compare)
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
 /// secret 無しで順に `connect` すると、DB の承認待ちの行数も `pending_capacity`
 /// で頭打ちになり、最も古い `tok-1` を含まず、行の token の集合はエンジンの
-/// 承認待ちと一致する。`TEST_DATABASE_URL` があるときだけ実行する。CI では
-/// 未設定なら失敗する。
+/// 承認待ちと一致する。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_pending_stays_within_the_capacity_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  pending_stays_within_the_capacity(database_url)
-}
-
-fn pending_stays_within_the_capacity(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use pool, db <- postgres.with_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
   let entry = random_entry("pending-capacity")
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_pending_capacity_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
 
   let final_engine =
     connect_clients(
@@ -1728,8 +1673,6 @@ fn pending_stays_within_the_capacity(database_url: String) -> Nil {
     == engine.pending(final_engine, 1017)
     |> list.map(fn(pending) { pending.token })
     |> list.sort(string.compare)
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// セッションの削除を拒むトリガー。`{schema}` は専用のスキーマの名前に置き換える。
@@ -1745,19 +1688,10 @@ FOR EACH ROW EXECUTE FUNCTION {schema}.reject_session_delete()",
 
 /// 実際の Postgres に対する統合テスト。押し出しの削除が失敗すると、`InsertSession`
 /// と `ApprovePending` はどちらも挿入だけを残さず、行は書き込み前のままになる
-/// （1 トランザクション）。`TEST_DATABASE_URL` があるときだけ実行する。CI では
-/// 未設定なら失敗する。
+/// （1 トランザクション）。`TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
   use database_url <- postgres.with_test_database_url("account_store")
-  a_failed_eviction_leaves_no_inserted_session(database_url)
-}
-
-fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
-  let schema = "account_store_schema_" <> random.hex(8)
-  let admin = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin, "CREATE SCHEMA " <> schema)
-  let pool = postgres.start_pool(database_url, Some(schema))
-  let db = pog.named_connection(pool)
+  use schema, pool, db <- postgres.with_named_schema(database_url)
   let key = random_master_key()
   let assert Ok(_migrated) = account_store.load(pool, key, generous)
 
@@ -1765,13 +1699,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
   let signer_hex = account.pubkey_hex(entry.account)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
-  let write =
-    nostr_no_su.account_store_operations(
-      pool,
-      process.new_name("account_store_test_eviction_unreachable_lock"),
-      key,
-      generous,
-    ).write
+  let write = store_write(pool, key)
 
   let assert Ok(Nil) =
     account_store.insert_session(
@@ -1800,7 +1728,7 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
   let assert Ok(Nil) = account_store.insert_pending(db, key, pending, generous)
 
   list.each(reject_session_delete, fn(statement) {
-    postgres.run_statement(admin, string.replace(statement, "{schema}", schema))
+    postgres.run_statement(db, string.replace(statement, "{schema}", schema))
   })
 
   let assert Error(bunker.NotWritten(_reason)) =
@@ -1838,34 +1766,11 @@ fn a_failed_eviction_leaves_no_inserted_session(database_url: String) -> Nil {
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
   assert list.map(after_approve.sessions, fn(row) { row.client }) == ["old"]
   assert list.map(after_approve.pending, fn(row) { row.token }) == ["tok"]
-
-  postgres.run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
-/// セッション A がロックを取り（再入で 2 回とも成功）、セッション B は取れない。
-/// A がロックを手放すと B が取れる。番号は乱数にし、他の統合テストが取る本番の
-/// 番号（`account_store.instance_lock_key`）と衝突しないようにする。A、B は
-/// `postgres.start_lock_pool` で起動した 1 本のプールの接続である。
-fn instance_lock_round_trip(database_url: String) -> Nil {
-  let key = int.random(1_000_000_000)
-  let a = pog.named_connection(postgres.start_lock_pool(database_url))
-  let b = pog.named_connection(postgres.start_lock_pool(database_url))
-
-  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
-  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
-  assert account_store.acquire_lock(b, key, generous)
-    == Error(account_store.HeldByAnotherInstance(key))
-
-  postgres.run_statement(
-    a,
-    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
-  )
-  assert account_store.acquire_lock(b, key, generous) == Ok(Nil)
-
-  postgres.run_statement(
-    b,
-    "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
-  )
+/// `account_store.migrations` の版の一覧（定義の順）。
+fn migration_versions() -> List(Int) {
+  list.map(account_store.migrations, fn(migration) { migration.version })
 }
 
 /// `schema_version` に記録されている版の一覧（昇順）。
@@ -1875,84 +1780,6 @@ fn recorded_versions(db: pog.Connection) -> List(Int) {
     |> pog.returning(decode.at([0], decode.int))
     |> pog.execute(on: db)
   returned.rows
-}
-
-/// 追加、読み込み、更新、改ざん、削除を一巡させ、最後に自分が入れた行を消す。
-fn round_trip(pool: Name(pog.Message)) -> Nil {
-  let db = pog.named_connection(pool)
-  let key = random_master_key()
-  let assert Ok(_loaded) = account_store.load(pool, key, generous)
-  let assert Ok(_loaded) = account_store.load(pool, key, generous)
-
-  let first = random_entry("first")
-  let second = random_entry("second")
-  let first_pubkey = account.pubkey_hex(first.account)
-  let second_pubkey = account.pubkey_hex(second.account)
-  let assert Ok(Nil) = account_store.insert(db, key, first, generous)
-  let assert Ok(Nil) = account_store.insert(db, key, second, generous)
-  assert account_store.insert(db, key, first, generous)
-    == Error(account_store.AlreadyRegistered)
-
-  // 入れた行が同じ内容で戻る。
-  let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert_same_entry(loaded, first)
-  assert_same_entry(loaded, second)
-
-  // DB の行に平文は残らない。
-  let #(encrypted_privkey, encrypted_secret) = raw_boxes(db, first_pubkey)
-  assert !contains_bytes(encrypted_privkey, account.privkey(first.account))
-  assert !contains_bytes(encrypted_secret, bit_array.from_string(first.secret))
-
-  // secret とラベルを差し替えると、次の読み込みに反映される。
-  let assert Ok(Nil) =
-    account_store.update_secret(
-      db,
-      key,
-      second_pubkey,
-      "rotated-secret",
-      generous,
-    )
-  let assert Ok(Nil) =
-    account_store.update_label(db, second_pubkey, "renamed", generous)
-  let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert_same_entry(
-    loaded,
-    StoredAccount(..second, secret: "rotated-secret", label: "renamed"),
-  )
-  let unknown = account.pubkey_hex(random_entry("unknown").account)
-  assert account_store.update_secret(db, key, unknown, "x", generous)
-    == Error(account_store.NotRegistered)
-  assert account_store.update_secret(db, key, "not-hex", "x", generous)
-    == Error(account_store.NotRegistered)
-  assert account_store.update_label(db, unknown, "x", generous)
-    == Error(account_store.NotRegistered)
-
-  // 別のマスターキーでは、自分が入れた行はすべて飛ばされる。
-  let assert Ok(other) = account_store.load(pool, random_master_key(), generous)
-  assert skipped_reasons(other, [first_pubkey, second_pubkey])
-    == [
-      #(first_pubkey, vault.UndecryptablePrivateKey),
-      #(second_pubkey, vault.UndecryptablePrivateKey),
-    ]
-
-  // 暗号文の 1 バイトを書き換えた行だけが飛ばされ、他の行は読み込まれる。
-  flip_privkey_byte(db, first_pubkey)
-  let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert skipped_reasons(loaded, [first_pubkey, second_pubkey])
-    == [#(first_pubkey, vault.UndecryptablePrivateKey)]
-  assert loaded_pubkeys(loaded, [first_pubkey, second_pubkey])
-    == [second_pubkey]
-
-  // 削除した行は現れず、2 回目の削除は `NotRegistered`。
-  let assert Ok(Nil) = account_store.delete(db, second_pubkey, generous)
-  assert account_store.delete(db, second_pubkey, generous)
-    == Error(account_store.NotRegistered)
-  let assert Ok(loaded) = account_store.load(pool, key, generous)
-  assert loaded_pubkeys(loaded, [second_pubkey]) == []
-  assert skipped_reasons(loaded, [second_pubkey]) == []
-
-  let assert Ok(Nil) = account_store.delete(db, first_pubkey, generous)
-  Nil
 }
 
 /// 統合テストの期限。実際の DB との往復は負荷の高い環境で本番の期限（書き込み
