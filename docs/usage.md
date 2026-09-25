@@ -23,7 +23,7 @@ README の手順で `docker compose up -d` したら、ログに次の行が出�
 
 `[main] cannot start: <理由>` が繰り返し出るときは、`.env` の必須の値が空か形式違い。理由の行に変数名が出る。
 
-`http://127.0.0.1:8080/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD`。
+`http://127.0.0.1:24133/` を開く。ユーザー名は `admin`、パスワードは `.env` の `ADMIN_PASSWORD`。
 
 この文書の `docker compose ...` は `.env` のあるディレクトリーで実行する。公開イメージの構成でも、README の手順で `.env` に書いた `COMPOSE_FILE` があるので `-f` は要らない。
 
@@ -270,7 +270,7 @@ docker compose exec -T postgres pg_dump -U nostr -d nostr_no_su -Fc > nostr-no-s
 | --- | --- | --- |
 | `ACCOUNT_MASTER_KEY` | （必須） | 鍵を暗号化するマスターキー。`setup-env.sh` が生成 |
 | `ADMIN_PASSWORD` | （必須） | 管理画面のパスワード。ユーザー名は `admin` |
-| `ADMIN_PORT` | `8080` | 管理画面のポート。空にすると管理画面と承認フローが無効 |
+| `ADMIN_PORT` | `24133` | 管理画面をホストのループバックに公開するポート。空なら既定 |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページの URL の土台 |
 | `PLUGIN_DIR` | `/app/plugins:/plugins` | プラグインを読むディレクトリー（`:` 区切り）。`/plugins` にすると同梱の `event_logger` と `profile` が外れる。空にすると読み込まない |
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 受信したイベントを 1 件 1 行でログに出す内蔵プラグイン |
