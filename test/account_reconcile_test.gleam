@@ -20,6 +20,7 @@ import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/random
 import nostr_no_su/time
 import pog
+import support/poll
 import support/postgres
 import support/random_account.{random_entry, random_master_key}
 
@@ -88,9 +89,10 @@ fn reconcile_with_postgres(
 
   let name = process.new_name("account_reconcile_bunker")
   let pid = start_store_bunker(name, pool, lock_pool, key)
-  assert await(
+  assert poll.until(
     fn() { bunker.accounts(name) == Ok(database_listings(pool, key)) },
     10_000,
+    50,
   )
 
   let other = random_entry("")
@@ -201,7 +203,7 @@ fn reconcile_sessions_with_postgres(
       last_used_at: now - 60,
       relays: [],
     )
-  assert await(fn() { bunker.sessions(name) == Ok([session]) }, 10_000)
+  assert poll.until(fn() { bunker.sessions(name) == Ok([session]) }, 10_000, 50)
   let assert Ok([pending]) = bunker.pending(name)
   assert pending.created_at == now - 120
   assert pending.request_id == "c2"
@@ -211,7 +213,7 @@ fn reconcile_sessions_with_postgres(
   assert bunker.revoke(name, signer, client)
     == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 
-  assert await(fn() { bunker.sessions(name) == Ok([]) }, 10_000)
+  assert poll.until(fn() { bunker.sessions(name) == Ok([]) }, 10_000, 50)
   assert bunker.pending(name) == Ok([])
   let assert Ok(after) = account_store.load(pool, key, generous)
   assert after.sessions == []
@@ -247,16 +249,4 @@ fn start_store_bunker(
       fn(_urls) { Nil },
     )
   started.pid
-}
-
-/// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
-fn await(check: fn() -> Bool, remaining: Int) -> Bool {
-  case check(), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(50)
-      await(check, remaining - 50)
-    }
-  }
 }

@@ -28,6 +28,7 @@ import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
+import support/poll
 import support/signed_event
 
 /// テスト用の署名者の接続 secret。
@@ -457,16 +458,9 @@ pub fn call_counter() -> fn() -> Int {
 pub fn await_signers(
   name: Name(bunker.Msg),
   expected: List(String),
-  remaining: Int,
+  timeout_ms: Int,
 ) -> Bool {
-  case bunker.signers(name) == Some(expected), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(20)
-      await_signers(name, expected, remaining - 20)
-    }
-  }
+  poll.until(fn() { bunker.signers(name) == Some(expected) }, timeout_ms, 20)
 }
 
 // --- 実行中のアカウントの変更 ---

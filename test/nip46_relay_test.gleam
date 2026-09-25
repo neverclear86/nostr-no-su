@@ -30,6 +30,7 @@ import nostr_no_su/relay_list
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
+import support/poll
 import support/postgres
 import support/random_account.{random_master_key}
 
@@ -185,7 +186,7 @@ pub fn a_failed_nostrconnect_releases_the_uri_relays_test() {
     )
   let assert Error(admin.SessionNotOpened(bunker.SessionNotFound(_))) =
     app.connect_nostrconnect(spec, request, unregistered)
-  assert await(
+  assert poll.until(
     fn() {
       case bunker.publisher_urls(name) {
         Some(urls) -> !list.contains(urls, relay_url)
@@ -193,6 +194,7 @@ pub fn a_failed_nostrconnect_releases_the_uri_relays_test() {
       }
     },
     5000,
+    50,
   )
   assert bunker.session_signers(name, relay_url) == Some([])
 
@@ -227,7 +229,7 @@ pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
       [relay_url],
       "session-only-secret",
     )
-  assert await(
+  assert poll.until(
     fn() {
       case bunker.publisher_urls(name) {
         Some(urls) -> list.contains(urls, relay_url)
@@ -235,6 +237,7 @@ pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
       }
     },
     5000,
+    50,
   )
   assert bunker.session_signers(name, relay_url) == Some([signer_hex])
 
@@ -242,7 +245,7 @@ pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
   assert string.contains(signed, "\\\"sig\\\":\\\"")
 
   let assert Ok(Nil) = bunker.revoke(name, signer_hex, client_hex)
-  assert await(
+  assert poll.until(
     fn() {
       case bunker.publisher_urls(name) {
         Some(urls) -> !list.contains(urls, relay_url)
@@ -250,6 +253,7 @@ pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
       }
     },
     5000,
+    50,
   )
 
   process.unlink(tree)
@@ -327,7 +331,7 @@ fn start_tree(
 ) -> #(app.Spec, Pid, String) {
   let assert Ok(started) = nostr_no_su.startup(test_config(database_url))
   let assert Ok(tree) = app.start(started.spec)
-  assert await(
+  assert poll.until(
     fn() {
       case bunker.accounts(started.spec.bunker.name) {
         Ok(_) -> True
@@ -335,6 +339,7 @@ fn start_tree(
       }
     },
     5000,
+    50,
   )
   let assert Ok(Nil) = app.add_account(started.spec, signer, "e2e")
   let assert Ok([listing]) = bunker.accounts(started.spec.bunker.name)
@@ -429,17 +434,4 @@ fn call(
   assert ack.accepted
   let assert Ok(response) = process.receive(events, response_timeout_ms)
   nip46_client.decrypt_response(client, signer, response)
-}
-
-/// `check` が真になるまで待つ。50ms ごとに `remaining` から引き、尽きたら諦める。
-/// `start_tree` が `bunker.accounts` の `Ok` を待つのと、発行先の変化を待つのに使う。
-fn await(check: fn() -> Bool, remaining: Int) -> Bool {
-  case check(), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(50)
-      await(check, remaining - 50)
-    }
-  }
 }

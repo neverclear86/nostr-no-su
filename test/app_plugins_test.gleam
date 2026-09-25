@@ -45,6 +45,7 @@ import support/app_tree.{
 }
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
+import support/poll
 import support/postgres
 import support/random_account.{random_master_key}
 import support/signed_event
@@ -255,16 +256,18 @@ fn start_plugins_tree(
 fn await_restart(
   name: Name(plugin_runner.Msg),
   previous: Pid,
-  remaining: Int,
-) -> Pid {
-  case process.named(name), remaining {
-    Ok(pid), _ if pid != previous -> pid
-    _, 0 -> panic as "the plugin runner was not restarted"
-    _, _ -> {
-      process.sleep(20)
-      await_restart(name, previous, remaining - 1)
-    }
-  }
+  timeout_ms: Int,
+) -> Bool {
+  poll.until(
+    fn() {
+      case process.named(name) {
+        Ok(pid) -> pid != previous
+        Error(Nil) -> False
+      }
+    },
+    timeout_ms,
+    20,
+  )
 }
 
 /// クラッシュし続けるプラグインは監視を巻き添えにしない。ランナーは死なないので
@@ -430,8 +433,7 @@ pub fn plugin_runner_is_restarted_when_killed_test() {
 
   let assert Ok(killed) = process.named(forwarding)
   process.kill(killed)
-  let restarted = await_restart(forwarding, killed, 100)
-  assert restarted != killed
+  assert await_restart(forwarding, killed, 2000)
   deliver_and_expect(deliver, seen, ["after"], 2000)
   stop_tree(tree)
 }
@@ -481,27 +483,17 @@ fn counting_spec(
 }
 
 /// 登録名が使われる（あるいは解放される）まで待つ。
-fn await_registered(store: Atom, registered: Bool, remaining: Int) -> Bool {
-  case is_registered(store) == registered, remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_registered(store, registered, remaining - 10)
-    }
-  }
+fn await_registered(store: Atom, registered: Bool, timeout_ms: Int) -> Bool {
+  poll.until(fn() { is_registered(store) == registered }, timeout_ms, 10)
 }
 
 /// store が数えた件数が期待どおりになるまで待つ。
-fn await_count(store: Atom, expected: Int, remaining: Int) -> Bool {
-  case is_registered(store) && store_count(store) == expected, remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_count(store, expected, remaining - 10)
-    }
-  }
+fn await_count(store: Atom, expected: Int, timeout_ms: Int) -> Bool {
+  poll.until(
+    fn() { is_registered(store) && store_count(store) == expected },
+    timeout_ms,
+    10,
+  )
 }
 
 /// 子仕様を申告したプラグインの子はツリーに載り、`handle_event/1` から名前で
@@ -663,15 +655,12 @@ pub fn plugin_children_that_fail_to_start_do_not_stop_the_tree_test() {
 }
 
 /// 登録名が別のプロセスに付け替わるまで待つ。
-fn await_restarted(store: Atom, previous: Dynamic, remaining: Int) -> Bool {
-  case is_registered(store) && whereis_name(store) != previous, remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_restarted(store, previous, remaining - 10)
-    }
-  }
+fn await_restarted(store: Atom, previous: Dynamic, timeout_ms: Int) -> Bool {
+  poll.until(
+    fn() { is_registered(store) && whereis_name(store) != previous },
+    timeout_ms,
+    10,
+  )
 }
 
 /// 検証を通る子仕様。
@@ -1093,7 +1082,7 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   let assert Ok(runner_before) = process.named(runner)
   let before_restart = time.now_seconds()
   process.kill(runner_before)
-  let _restarted = await_restart(runner, runner_before, 100)
+  assert await_restart(runner, runner_before, 2000)
   let #(_skipped, second) =
     receive_until(subscribed, requests_a_catchup(_, test_relay_url), 2000)
   let after_restart = time.now_seconds()
@@ -1219,7 +1208,7 @@ pub fn a_restarted_runner_resubscribes_only_the_monitor_relays_test() {
 
   let assert Ok(runner_before) = process.named(runner)
   process.kill(runner_before)
-  let _restarted = await_restart(runner, runner_before, 100)
+  assert await_restart(runner, runner_before, 2000)
   let #(skipped, monitor_synced) =
     receive_until(subscribed, reports_on(_, test_relay_url), 2000)
   let assert Ok(_) = monitor_synced
@@ -1717,16 +1706,9 @@ fn spawn_unanswering_connection(name: Name(relay_connection.Msg)) -> Nil {
   await_named_registration(name, 1000)
 }
 
-/// 名前が登録されるまで待つ。
+/// 名前が登録されるまで待つ。期限までに登録されなければ落ちる。
 fn await_named_registration(name: Name(a), timeout_ms: Int) -> Nil {
-  case process.named(name), timeout_ms <= 0 {
-    Ok(_), _ -> Nil
-    _, True -> Nil
-    _, False -> {
-      process.sleep(10)
-      await_named_registration(name, timeout_ms - 10)
-    }
-  }
+  assert poll.until(fn() { result.is_ok(process.named(name)) }, timeout_ms, 10)
 }
 
 /// 応答しない接続を 4 本、300ms の期限で問い合わせると、全て `None`（応答なし）
