@@ -271,7 +271,7 @@ fn admin_ui_for(
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_ui_port_test() {
   assert admin_ui_for(None, None, Some(test_password))
-    == config.Listen("127.0.0.1", 8080, test_password)
+    == config.Listen("127.0.0.1", 24_133, test_password)
   assert admin_ui_for(None, Some("9000"), Some(test_password))
     == config.Listen("127.0.0.1", 9000, test_password)
   assert admin_ui_for(None, Some(" 9000 "), Some(test_password))
@@ -329,11 +329,11 @@ pub fn admin_password_is_read_from_a_file_test() {
   use <- without_env("ADMIN_PASSWORD")
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_newlines"), fn() {
     assert config.load().admin_ui
-      == config.Listen("127.0.0.1", 8080, " file password")
+      == config.Listen("127.0.0.1", 24_133, " file password")
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_crlf"), fn() {
     assert config.load().admin_ui
-      == config.Listen("127.0.0.1", 8080, "crlf password")
+      == config.Listen("127.0.0.1", 24_133, "crlf password")
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("missing"), fn() {
     assert config.load().admin_ui

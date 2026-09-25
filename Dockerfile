@@ -66,11 +66,11 @@ USER nostr
 # 管理 UI の /healthz は認証なしで応答する。`ADMIN_PORT=` として管理 UI を無効に
 # した構成では待ち受けが無いため、チェック自体を省略して成功扱いにする。空文字列を
 # 無効の指定として扱うのは `config.admin_ui` と同じ意味論で、`-` の既定値展開に
-# しているのは「未設定なら 8080」を再現するため。空白だけの値も `config.admin_ui` と
+# しているのは「未設定なら 24133」を再現するため。空白だけの値も `config.admin_ui` と
 # 同じく無効として扱うため、クォートしない echo の語分割で前後の空白を落としてから
 # 判定する（set -f はこの語分割がパス名展開を起こさないようにする）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD sh -c 'set -f; port=$(echo ${ADMIN_PORT-8080}); [ -z "$port" ] \
+  CMD sh -c 'set -f; port=$(echo ${ADMIN_PORT-24133}); [ -z "$port" ] \
     || wget -q -O /dev/null "http://127.0.0.1:$port/healthz"'
 # start.sh は REMSH_ENABLED を読んでから entrypoint.sh を実行する（docs/configuration.md の
 # 「docker compose の構成」）。

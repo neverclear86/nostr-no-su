@@ -19,7 +19,7 @@
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose の構成」）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
 | `NOSTR_NO_SU_VERSION` | `latest` | `docker-compose.release.yml` 専用（アプリ自身は読まない）。取る公開イメージのタグ。`latest` は版の大小によらず最後に公開したタグに付くので（[貢献の手引き](../CONTRIBUTING.md) の「リリース」）、README の手順が取った版（`X.Y.Z`）を書く。同じ minor の patch も追うなら `X.Y` に書き換える。`docker-compose.yml` は参照しないので `.env.example` にも行が無い |
-| `ADMIN_PORT` | `8080` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
+| `ADMIN_PORT` | `24133` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要。`"localhost"` と IPv4 / IPv6 以外の値は理由をログに出して管理 UI を無効にする |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
