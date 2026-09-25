@@ -374,9 +374,9 @@ fn page_account_decoder() -> decode.Decoder(#(String, String, String)) {
   decode.success(#(pubkey, npub, label))
 }
 
-/// `plugin_page_action/3` があればそちらを優先して呼び、送信したキー・値・
-/// 登録アカウントの一覧（`Accounts`）が届く。成功は `Ok(Nil)`。
-pub fn plugin_with_a_page_action_is_loaded_test() {
+/// `plugin_page_action/3` には送信したキー・値・登録アカウントの一覧
+/// （`Accounts`）が届く。成功は `Ok(Nil)`。
+pub fn page_action_receives_the_key_values_and_accounts_test() {
   let assert Ok(loaded) =
     plugin.load(
       atom.create("plugin_with_action"),
