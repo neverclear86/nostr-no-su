@@ -1,6 +1,7 @@
 //// 偽リレーの上のツリーで、監視の接続とリレーの増減、プラグイン（ランナー、
 //// プラグインの子）の障害の分離を確かめるテスト。管理 UI へ渡すリレーとプラグインの
-//// 行を締め切りまでに組むこともここで確かめる。
+//// 行を締め切りまでに組むことと、ページの送信を受けるプラグインの口を名前で引くことも
+//// ここで確かめる。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -26,6 +27,7 @@ import nostr_no_su/nostr/filter
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
+import nostr_no_su/plugin_config
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
@@ -394,6 +396,107 @@ pub fn plugin_page_content_passes_the_language_test() {
     )
   assert app.plugin_page_content([spec], "echo", "status", "ja", [])
     == Ok(dynamic.string("status:ja"))
+}
+
+/// 名前が `name` で、管理 UI のページの定義が `ui` のプラグインの仕様。ツリーには
+/// 載せず、名前でプラグインを引く関数に一覧として渡す。
+fn page_plugin(name: String, ui: Option(plugin.PluginUi)) -> app.PluginSpec {
+  app.PluginSpec(
+    name: process.new_name(name),
+    plugin: plugin.Plugin(
+      name: name,
+      children: [],
+      ui: ui,
+      handle: fn(_incoming) { Nil },
+    ),
+    limits: plugin_runner.default_limits,
+  )
+}
+
+/// `status` のページを 1 つ持ち、フォームの送信の口が `action` の UI。中身の取得は
+/// 使わないので空の文字列を返す。
+fn page_ui(
+  action: Option(
+    fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
+      Result(Nil, String),
+  ),
+) -> Option(plugin.PluginUi) {
+  Some(plugin.PluginUi(
+    pages: [plugin.PluginPage(key: "status", title: "Status")],
+    content: fn(_key, _language, _accounts) { Ok(dynamic.string("")) },
+    action: action,
+  ))
+}
+
+/// `plugin_page_action` は名前でプラグインを引き、返す関数はそのプラグインの `action`
+/// を、ページのキーと送信の値と `page_accounts` の一覧で呼ぶ。`page_accounts` は
+/// バンカーの登録アカウントを `PageAccount` に写す。一覧の先頭の別名のプラグインは
+/// 呼ばれない。
+pub fn plugin_page_action_calls_the_named_plugin_with_the_key_test() {
+  let received = process.new_subject()
+  let spec =
+    app.Spec(
+      ..base_spec(process.new_subject()),
+      bunker: bunker_spec(
+        process.new_name("test_bunker"),
+        store_with_load(fn() { load_signer(signer_key) }),
+        [],
+        fixed_retry_delay,
+      ),
+    )
+  let tree = start_tree(spec)
+  let plugins = [
+    page_plugin(
+      "other",
+      page_ui(Some(fn(_key, _values, _accounts) { panic as "wrong plugin" })),
+    ),
+    page_plugin(
+      "echo",
+      page_ui(
+        Some(fn(key, values, accounts) {
+          process.send(received, #(key, values, accounts))
+          Ok(Nil)
+        }),
+      ),
+    ),
+  ]
+  let assert Ok(accounts) = app.page_accounts(spec)
+  let signer = account_for(signer_key)
+  assert accounts
+    == [
+      plugin_config.PageAccount(
+        pubkey: account.pubkey_hex(signer),
+        npub: account.npub(signer),
+        label: "",
+      ),
+    ]
+
+  let assert Some(run) = app.plugin_page_action(plugins, "echo", "status")
+  assert run([#("note", "hi")], accounts) == Ok(Nil)
+  assert process.receive(received, 100)
+    == Ok(#("status", [#("note", "hi")], accounts))
+  stop_tree(tree)
+}
+
+/// 名前に一致するプラグインが無ければ `None`。一覧のプラグインには `action` を持たせ、
+/// 名前で引かずに先頭を取る誤りでは `Some` になるようにしてある。
+pub fn plugin_page_action_without_the_plugin_is_none_test() {
+  let plugins = [
+    page_plugin("echo", page_ui(Some(fn(_key, _values, _accounts) { Ok(Nil) }))),
+  ]
+  assert app.plugin_page_action(plugins, "missing", "status") == None
+}
+
+/// 管理 UI のページを持たないプラグインは `None`。
+pub fn plugin_page_action_without_pages_is_none_test() {
+  let plugins = [page_plugin("echo", None)]
+  assert app.plugin_page_action(plugins, "echo", "status") == None
+}
+
+/// ページはあってもフォームの送信の口を持たないプラグインは `None`。
+pub fn plugin_page_action_without_the_action_is_none_test() {
+  let plugins = [page_plugin("echo", page_ui(None))]
+  assert app.plugin_page_action(plugins, "echo", "status") == None
 }
 
 /// 決して戻らないプラグインがいても、他のプラグインは待たされない。遅い側は
@@ -1677,6 +1780,51 @@ pub fn relay_rows_without_the_relay_list_test() {
       task.deadline_in(5000),
     )
     == Error("relay list did not answer")
+}
+
+/// `relay_rows` は DB の行の順に、用途ごとの接続の状態を入れる。両方の用途で開いた
+/// 行は両方 `Connected`、DB にだけある行は使う用途が未接続で使わない用途が `Unused`
+/// になり、`relay_list` にだけある URL は出ない。`TEST_DATABASE_URL` があるとき
+/// だけ実行する。
+pub fn relay_rows_report_each_role_of_the_registered_relays_test() {
+  use spec, db <- with_relay_store_tree()
+
+  let assert Ok(Nil) =
+    app.add_relay(
+      spec,
+      "ws://both.test",
+      relay_list.Roles(monitor: True, bunker: True),
+    )
+  let assert Ok(unopened) =
+    relay_store.insert(
+      db,
+      "ws://unopened.test",
+      relay_list.Roles(monitor: True, bunker: False),
+      account_store.default_timeouts,
+    )
+  let assert Ok(Nil) =
+    app.open_relay(
+      spec,
+      "ws://unregistered.test",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+
+  let assert Ok([both, _unopened]) = app.registered_relays(spec)
+  assert app.relay_rows(spec, task.deadline_in(5000))
+    == Ok([
+      dashboard.RelayRow(
+        id: both.id,
+        url: "ws://both.test",
+        monitor: dashboard.Reported(relay_connection.Connected),
+        bunker: dashboard.Reported(relay_connection.Connected),
+      ),
+      dashboard.RelayRow(
+        id: unopened.id,
+        url: "ws://unopened.test",
+        monitor: dashboard.Reported(relay_connection.Disconnected),
+        bunker: dashboard.Unused,
+      ),
+    ])
 }
 
 /// 名前 `name` を登録して 2 秒眠るだけのプロセスを起動し、登録を待つ。問い合わせを

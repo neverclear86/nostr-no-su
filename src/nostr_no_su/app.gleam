@@ -958,8 +958,8 @@ pub fn plugin_page_action(
 }
 
 /// 管理 UI のページと実行の呼び出しに渡す、登録アカウントの一覧。`bunker.accounts`
-/// の一覧を `plugin_config.PageAccount` に写す。
-fn page_accounts(
+/// の一覧を `plugin_config.PageAccount` に写す。単体テストが呼べるよう公開する。
+pub fn page_accounts(
   spec: Spec,
 ) -> Result(List(plugin_config.PageAccount), String) {
   use listings <- result.try(bunker.accounts(spec.bunker.name))
