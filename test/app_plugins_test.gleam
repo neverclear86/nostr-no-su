@@ -1816,6 +1816,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
     )
   let tree = start_tree(spec)
   let db = pog.named_connection(config.pool_name)
+  assert postgres.await_pool(db, 10_000)
 
   let assert Ok(Nil) =
     app.add_relay(
@@ -1887,6 +1888,7 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
       relay_list: process.new_name("test_app_relay_update"),
     )
   let tree = start_tree(spec)
+  assert postgres.await_pool(pog.named_connection(config.pool_name), 10_000)
 
   let assert Ok(Nil) =
     app.add_relay(
