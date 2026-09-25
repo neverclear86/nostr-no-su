@@ -93,7 +93,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **base**：`origin/main` の先頭。全 issue で同じ
 - **repoDir**：ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` の出力。スクリプトはエージェントへの依頼文の `git -C` と `dev/*.sh` の呼び出しに使う
 - **issues**：issue ごとに `n`、`branch`（`feat/…`、`fix/…`、`docs/…`、`refactor/…` の形で英語）、UI を変えるなら `ui: true`、依存があれば `after: [n]`、issue コメントで決まった事項や補足があれば `note`
-- **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 8080 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
+- **portBase**：issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装用 Postgres は `+0`、アプリ `+1`、strfry `+2`、レビュー用は `+5`〜`+7`）。ユーザーの 24133 と 5432、他セッションの 5433 と 7777 と重ならない範囲を選ぶ
 - **trailers**：このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
 - **window**：同時に進める件数。既定 4。依存先を待つ issue は枠を使わないので、`after` の連鎖があっても window を下げない（分割の子が多い実行は 6 まで）。文書を動かす issue は 1。枠切れは Claude Code の一時停止に任せる（対話セッションから起動したときだけ効く。リセットが 24 時間以内のときだけで、週の枠は解けない）
 - **implementer**：`"devin"` にすると、tier none / light で UI を変えない issue の最初の実装で、コードを書く部分だけを devin CLI（モデル swe-2-max。`~/.claude/scripts/devin-box.sh` の jail で動き、トークンの消費は Claude の枠に入らない）に任せる。検査・コミット・PR・CI の確認と、指摘への対応・条件への対応・rebase は今までどおり `issue-implementer`（opus）が行う。**2026-10-10 まで**（swe-2 の無料期間）は既定を `"devin"` にし、それ以降は省く（既定 `"claude"`）。`issues[].implementer` で issue ごとに上書きできる。効果の比較は結果の `implementedBy`（devin が失敗して Claude が書いたら `claude`）で分け、実装の費用（devin 分は $0）・クリティカルパス・PR ラウンド 1 の判定・実装起因の must・deviation・devin の失敗回数を 09-19 の A/B（none $5.9、light $7.0、PR r1 APPROVE 10/10、実装起因の must 0）と比べる
