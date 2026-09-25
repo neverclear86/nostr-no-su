@@ -1,5 +1,6 @@
 //// 偽リレーの上のツリーで、監視の接続とリレーの増減、プラグイン（ランナー、
-//// プラグインの子）の障害の分離を確かめるテスト。
+//// プラグインの子）の障害の分離を確かめるテスト。管理 UI へ渡すリレーとプラグインの
+//// 行を締め切りまでに組むこともここで確かめる。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -1695,10 +1696,10 @@ pub fn relay_rows_without_the_relay_list_test() {
     == Error("relay list did not answer")
 }
 
-/// `GetStatus` を無視し続けるだけの接続。`relay_connection.status` は
-/// `status_timeout_ms`（5 秒）まで応答を待ち続けるので、締め切りの短い
-/// `relay_statuses` の問い合わせは間に合わない。
-fn spawn_unanswering_connection(name: Name(relay_connection.Msg)) -> Nil {
+/// 名前 `name` を登録して 2 秒眠るだけのプロセスを起動し、登録を待つ。問い合わせを
+/// 無視し続けるので、`relay_connection.status`（5 秒）や `plugin_runner.status`（1 秒）の
+/// 待ちより短い締め切りの問い合わせは間に合わない。
+fn spawn_unanswering(name: Name(a)) -> Nil {
   process.spawn_unlinked(fn() {
     let assert Ok(Nil) = process.register(process.self(), name)
     process.sleep(2000)
@@ -1721,7 +1722,7 @@ pub fn relay_statuses_give_up_on_unanswering_connections_test() {
     process.new_name("test_relay_statuses_unanswering_3"),
     process.new_name("test_relay_statuses_unanswering_4"),
   ]
-  list.each(unanswering, spawn_unanswering_connection)
+  list.each(unanswering, spawn_unanswering)
   let unregistered = process.new_name("test_relay_statuses_unregistered")
   let started_at = time.monotonic_ms()
   let results =
@@ -1732,6 +1733,73 @@ pub fn relay_statuses_give_up_on_unanswering_connections_test() {
   use name <- list.each(unanswering)
   let assert Ok(status) = list.key_find(results, name)
   assert status == None
+}
+
+/// `app.plugin_rows` は答えたランナーの状態と、プラグインの UI が供給するページを
+/// 行に入れる。
+pub fn plugin_rows_carry_the_runner_status_and_pages_test() {
+  let name = process.new_name("test_plugin_rows_runner")
+  let paged =
+    plugin.Plugin(
+      name: "paged",
+      children: [],
+      ui: Some(plugin.PluginUi(
+        pages: [plugin.PluginPage(key: "status", title: "Status")],
+        content: fn(_key, _language, _accounts) { Ok(dynamic.string("")) },
+        action: None,
+      )),
+      handle: fn(_incoming) { Nil },
+    )
+  let assert Ok(_) =
+    plugin_runner.start(name, paged, fn() { Nil }, plugin_runner.default_limits)
+  assert app.plugin_rows(
+      [
+        app.PluginSpec(
+          name: name,
+          plugin: paged,
+          limits: plugin_runner.default_limits,
+        ),
+      ],
+      task.deadline_in(1000),
+    )
+    == [
+      dashboard.PluginRow(
+        name: "paged",
+        status: Some(plugin_runner.Running),
+        pages: [plugin.PluginPage(key: "status", title: "Status")],
+      ),
+    ]
+}
+
+/// 締め切りまでに答えないランナーの行は状態を `None`（応答なし）にし、UI を持たない
+/// プラグインの行のページは空にする。ランナーへは並行に問い合わせるので、2 本とも
+/// 答えなくても経過は `plugin_runner.status` の待ち（1 秒）に収まる。
+pub fn plugin_rows_give_up_on_unanswering_runners_test() {
+  let unanswering = [
+    process.new_name("test_plugin_rows_unanswering_1"),
+    process.new_name("test_plugin_rows_unanswering_2"),
+  ]
+  list.each(unanswering, spawn_unanswering)
+  let silent =
+    plugin.Plugin(name: "silent", children: [], ui: None, handle: fn(_incoming) {
+      Nil
+    })
+  let specs =
+    list.map(unanswering, fn(name) {
+      app.PluginSpec(
+        name: name,
+        plugin: silent,
+        limits: plugin_runner.default_limits,
+      )
+    })
+  let started_at = time.monotonic_ms()
+  let rows = app.plugin_rows(specs, task.deadline_in(300))
+  assert time.monotonic_ms() - started_at < 1000
+  assert rows
+    == [
+      dashboard.PluginRow(name: "silent", status: None, pages: []),
+      dashboard.PluginRow(name: "silent", status: None, pages: []),
+    ]
 }
 
 /// 監視のリレー 0 本の木で `open_relay` を呼ぶと、後から足したリレーで受信した
