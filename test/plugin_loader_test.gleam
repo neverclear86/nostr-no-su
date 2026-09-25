@@ -4,8 +4,9 @@
 //// 一意化する。**BEAM のモジュール名前空間はグローバルで、一度読み込むと
 //// 再読み込みされない**ため、名前を使い回すと後続のテストが嘘をつく。
 ////
-//// 壊れた BEAM を読ませるテストは error_logger の行を出す。これは検証したい
-//// 振る舞いそのものなので、そのまま出している。
+//// 壊れた BEAM を読ませるテストと、コードパスに足せないディレクトリーを読ませる
+//// テストは error_logger の行を出す。これは検証したい振る舞いそのものなので、
+//// そのまま出している。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -192,6 +193,77 @@ pub fn load_all_directory_without_ebin_test() {
   // 完全一致で検査し、報告の文面が静かに変わらないことを確かめる。
   assert list.contains(notes, "[plugin_loader] " <> bundle <> ": " <> reason)
   assert not_loaded == [plugin_loader.NotLoaded(id: bundle, reason:)]
+}
+
+/// 一覧も辿りもできないバンドル（権限 000）は、ebin が無いとは言わずに、読めない
+/// ことを理由にして飛ばす。root では権限による拒否が起きない。
+pub fn load_all_unreadable_bundle_test() {
+  let fixture = beam_fixture.new("unreadable_bundle")
+  let bundle = fixture.module
+  let path = fixture.root <> "/" <> bundle
+  put_plugin(bundle, "unreadable_plugin", ebin_in(fixture, [bundle]))
+  beam_fixture.change_mode(path, 0o000)
+  let plugin_loader.LoadOutcome(plugins:, not_loaded:, ..) =
+    load_dir(fixture.root)
+  beam_fixture.change_mode(path, 0o755)
+  assert plugins == []
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: bundle,
+        reason: "cannot read directory (eacces); skipped",
+      ),
+    ]
+}
+
+/// 辿れるが一覧できないバンドル（権限 111）は、入れ子の ebin の探索だけを諦めて、
+/// 直下の ebin から読み込む。root では権限による拒否が起きない。
+pub fn load_all_traversable_bundle_test() {
+  let fixture = beam_fixture.new("traversable_bundle")
+  let bundle = fixture.module
+  let path = fixture.root <> "/" <> bundle
+  put_plugin(bundle, "traversable_plugin", ebin_in(fixture, [bundle]))
+  beam_fixture.change_mode(path, 0o111)
+  let plugin_loader.LoadOutcome(plugins:, not_loaded:, ..) =
+    load_dir(fixture.root)
+  beam_fixture.change_mode(path, 0o755)
+  assert list.map(plugins, fn(item) { item.name }) == ["traversable_plugin"]
+  assert not_loaded == []
+}
+
+/// コードパスに足せない ebin（パスの途中に `.ez` で終わる名前がある）を持つバンドルは、
+/// 足せなかった ebin を添えて飛ばす。
+pub fn load_all_bundle_rejected_by_code_path_test() {
+  let fixture = beam_fixture.new("bundle_code_path")
+  let bundle = fixture.module
+  put_plugin(bundle, "code_path_plugin", ebin_in(fixture, [bundle, "app.ez"]))
+  let plugin_loader.LoadOutcome(plugins:, notes:, not_loaded:) =
+    load_dir(fixture.root)
+  assert plugins == []
+  assert list.map(not_loaded, fn(item) { item.id }) == [bundle]
+  // not_loaded の reason は絶対パスを含んで切られることがあるため、文面は
+  // 切られない notes の行で見る。
+  assert list.any(notes, fn(note) {
+    string.starts_with(note, "[plugin_loader] " <> bundle <> ": cannot add /")
+    && string.ends_with(
+      note,
+      "/" <> bundle <> "/app.ez/ebin to code path (bad_directory); skipped",
+    )
+  })
+}
+
+/// コードパスに足せないディレクトリー（パスの途中に `.ez` で終わる名前がある）では、
+/// ルート直下の `.beam` をディレクトリーごと飛ばす。
+pub fn load_all_flat_rejected_by_code_path_test() {
+  let fixture = beam_fixture.new("flat_code_path")
+  let dir = fixture.root <> "/flat.ez/plugins"
+  beam_fixture.mkdir(dir)
+  put_plugin(fixture.module, "flat_code_path_plugin", dir)
+  let plugin_loader.LoadOutcome(plugins:, not_loaded:, ..) = load_dir(dir)
+  assert plugins == []
+  let assert [plugin_loader.NotLoaded(id:, reason:)] = not_loaded
+  assert string.ends_with(id, "/flat.ez/plugins")
+  assert reason == "cannot add to code path (bad_directory); skipped"
 }
 
 /// プラグインでないエントリーは黙って無視する。報告行は集計の 1 行だけで、
@@ -752,6 +824,50 @@ pub fn load_all_shadow_dedup_and_mixed_test() {
   )
 }
 
+/// 一覧できない ebin（権限 111）は、影を数えずにコードパスへ足して読み込む。root では
+/// 権限による拒否が起きない。
+pub fn load_all_unlistable_ebin_test() {
+  let fixture = beam_fixture.new("unlistable_ebin")
+  let ebin = ebin_in(fixture, [fixture.module])
+  put_plugin(fixture.module, "unlistable_plugin", ebin)
+  beam_fixture.change_mode(ebin, 0o111)
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
+  beam_fixture.change_mode(ebin, 0o755)
+  assert list.map(plugins, fn(item) { item.name }) == ["unlistable_plugin"]
+  assert !has_note(notes, "already provided")
+}
+
+/// アプリの分からない影のモジュールが `shadow_sample_size`（3）件を超えると、先頭の
+/// 3 件の後を `, ...` で省く。
+pub fn load_all_shadow_sample_is_truncated_test() {
+  let fixture = beam_fixture.new("shadow_sample")
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  let first_ebin = ebin_in(fixture, [first])
+  let second_ebin = ebin_in(fixture, [second])
+  put_plugin(first, "first_plugin", first_ebin)
+  put_plugin(second, "second_plugin", second_ebin)
+  let shared = list.map(["s1", "s2", "s3", "s4"], beam_fixture.name(fixture, _))
+  list.each(shared, fn(module) {
+    beam_fixture.write_garbage(first_ebin <> "/" <> module <> ".beam")
+    beam_fixture.write_garbage(second_ebin <> "/" <> module <> ".beam")
+  })
+  let assert [s1, s2, s3, _] = shared
+  let plugin_loader.LoadOutcome(notes:, ..) = load_dir(fixture.root)
+  assert list.contains(
+    notes,
+    "[plugin_loader] "
+      <> second
+      <> ": 4 module(s) already provided by the host or another plugin are ignored ("
+      <> s1
+      <> ", "
+      <> s2
+      <> ", "
+      <> s3
+      <> ", ...)",
+  )
+}
+
 /// 同梱の例（`examples/plugins/file_logger`）が、設定を与えれば読み込めること
 /// を確かめる。gleam のビルド対象外であること（コードパスを足さなければ読めない
 /// こと）も同時に示している。`handle_event/2` は `/tmp` にファイルを書くため
@@ -1089,6 +1205,16 @@ pub fn load_all_killed_metadata_test() {
     load_dir_within(fixture.root, short_call_timeout_ms)
   assert plugins == []
   assert has_note(notes, fixture.module <> ": plugin_name/0 crashed (killed)")
+}
+
+/// 理由が識別子の接頭辞で始まらなければ、そのまま返す。
+pub fn strip_id_keeps_reason_without_id_test() {
+  assert plugin_loader.strip_id("sample", "other: broken") == "other: broken"
+}
+
+/// 末尾にスラッシュを持つディレクトリーでも、区切りは 1 つにする。
+pub fn join_absorbs_trailing_slash_test() {
+  assert plugin_loader.join("/plugins/", "sample") == "/plugins/sample"
 }
 
 /// 影に入ったモジュールを実際に呼ぶために使う。戻り値の型はモジュール次第なので

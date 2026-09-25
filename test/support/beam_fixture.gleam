@@ -276,6 +276,14 @@ pub fn mkdir(path: String) -> Nil {
   Nil
 }
 
+/// パスの権限を `mode`（`0o755` など）にする。読めないディレクトリーを作るのに使う。
+/// `build/tmp` は消されずに残るので、読めなくしたパスは assert の前に `0o755` へ戻す。
+/// 失敗は後続の読み込みの結果で気付けるので、戻り値を捨てる。
+pub fn change_mode(path: String, mode: Int) -> Nil {
+  let _ = file_change_mode(path, mode)
+  Nil
+}
+
 /// ファイルへ文字列を書き出す。`file:write_file/2` は binary（Gleam の String）を
 /// そのまま受け付ける。
 pub fn write(path: String, content: String) -> Nil {
@@ -315,6 +323,10 @@ fn write_file(path: String, content: String) -> Dynamic
 /// 戻り値は `ok` か `{error, Reason}` なので Dynamic のまま受けて捨てる。
 @external(erlang, "filelib", "ensure_path")
 fn ensure_path(path: String) -> Dynamic
+
+/// `file:change_mode/2` は ok か {error, Reason} を返す。
+@external(erlang, "file", "change_mode")
+fn file_change_mode(path: String, mode: Int) -> Dynamic
 
 /// 退避した値。キーが無ければ `badarg` で落ちるが、それは退避する関数が呼ばれて
 /// いないというテストの失敗そのものである。
