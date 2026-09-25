@@ -16,14 +16,12 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
-import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message
@@ -31,6 +29,7 @@ import nostr_no_su/plugin_api
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import support/app_tree.{start_bunker_signed_in_as, start_relay_list}
 import support/frame_server
 import support/loopback_relay
 import support/nip46_client.{account_for}
@@ -45,9 +44,6 @@ const second_signer_key = "00000000000000000000000000000000000000000000000000000
 /// 登録しない鍵。未登録の公開鍵のテストに使う。
 const other_key = "0000000000000000000000000000000000000000000000000000000000000077"
 
-/// 起動と再試行を待たせないための、読み込みの再試行の待ち時間。
-const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
-
 /// 接続の再接続の待ち時間。テストの間は再接続させないよう長く取る。
 const long_reconnect_delay = Backoff(initial_ms: 60_000, max_ms: 60_000)
 
@@ -57,41 +53,9 @@ type Signal {
   Refused
 }
 
-/// `keys` の署名者を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
-fn start_bunker_signed_in_as(keys: List(String)) -> Name(bunker.Msg) {
-  let name = process.new_name("test_plugin_api_bunker")
-  let stored =
-    list.map(keys, fn(key) {
-      StoredAccount(account: account_for(key), secret: "s3cret", label: "")
-    })
-  let assert Ok(_started) =
-    bunker.start(
-      name,
-      bunker.Settings(
-        store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded(stored, []), [], [], [])) },
-          insert: fn(_account) { Ok(Nil) },
-          delete: fn(_signer) { Ok(Nil) },
-          update_secret: fn(_signer, _secret) { Ok(Nil) },
-          update_label: fn(_signer, _label) { Ok(Nil) },
-          write: fn(_write) { Ok(Nil) },
-        ),
-        auth_url: None,
-        retry_delay: fixed_retry_delay,
-      ),
-      fn() { Nil },
-      fn(_relays) { Nil },
-      fn(_urls) { Nil },
-    )
-  // 読み込みの完了を待つ。`bunker_test.gleam` と同じ理由で `accounts` を使う。
-  let assert Ok(loaded) = bunker.accounts(name)
-  assert list.length(loaded) == list.length(keys)
-  name
-}
-
 /// 署名者 1 名を登録したバンカーを起動し、読み込みの完了を待って名前を返す。
 fn start_signed_in_bunker() -> Name(bunker.Msg) {
-  start_bunker_signed_in_as([signer_key])
+  start_bunker_signed_in_as([account_for(signer_key)])
 }
 
 /// リレーへの接続を開いたことにする偽ソケット。送信されたイベントを
@@ -154,21 +118,9 @@ fn start_connected_monitor(
   name
 }
 
-/// 一覧を持つだけのリレー一覧アクターを起動する。factory は使わないので
-/// ダミーの名前でよい。
-fn start_relay_list(entries: List(relay_list.Entry)) -> Name(relay_list.Msg) {
-  let name = process.new_name("test_plugin_api_relay_list")
-  let assert Ok(_started) =
-    relay_list.start(
-      name,
-      entries,
-      relay_list.Factories(
-        monitor: process.new_name("test_plugin_api_factory_monitor"),
-        bunker: process.new_name("test_plugin_api_factory_bunker"),
-        session: process.new_name("test_plugin_api_factory_session"),
-      ),
-    )
-  name
+/// テスト用の署名者の公開鍵（16 進）を、プラグイン境界の値にしたもの。
+fn signer_pubkey() -> Dynamic {
+  dynamic.string(account_for(signer_key) |> account.pubkey_hex)
 }
 
 /// `kind` / `tags` / `content` を持つ、プラグイン境界の draft の map。
@@ -198,7 +150,7 @@ pub fn publish_event_sends_the_signed_event_to_every_monitor_connection_test() {
     plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       valid_draft(),
     )
   let assert Ok(decoded) = event.from_map(result)
@@ -240,7 +192,7 @@ pub fn publish_event_does_not_send_to_bunker_connections_test() {
     plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       valid_draft(),
     )
 
@@ -287,7 +239,7 @@ pub fn publish_event_rejects_a_malformed_draft_test() {
     plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       bad_draft,
     )
   assert string.contains(reason, "kind")
@@ -315,7 +267,7 @@ pub fn publish_event_rejects_when_the_relay_list_does_not_answer_test() {
   assert plugin_api.publish_with(
       bunker_name,
       unregistered,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       valid_draft(),
     )
     == Error("the relay list is not responding")
@@ -329,7 +281,7 @@ pub fn publish_event_rejects_when_no_monitor_relay_is_registered_test() {
   assert plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       valid_draft(),
     )
     == Error("no monitor relay is registered")
@@ -350,7 +302,7 @@ pub fn publish_event_rejects_when_no_monitor_relay_is_connected_test() {
   assert plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       valid_draft(),
     )
     == Error("no monitor relay is connected")
@@ -480,7 +432,7 @@ pub fn fetch_event_rejects_a_kind_that_is_not_an_int_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       dynamic.string("not-an-int"),
     )
     == Error("kind must be an Int")
@@ -495,7 +447,7 @@ pub fn fetch_event_rejects_when_the_relay_list_does_not_answer_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       unregistered,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       dynamic.int(0),
     )
     == Error("the relay list is not responding")
@@ -509,7 +461,7 @@ pub fn fetch_event_rejects_when_no_monitor_relay_is_registered_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       dynamic.int(0),
     )
     == Error("no monitor relay is registered")
@@ -530,7 +482,7 @@ pub fn fetch_event_rejects_when_no_monitor_relay_is_reachable_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       dynamic.int(0),
     )
     == Error("no monitor relay is connected")
@@ -553,7 +505,7 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
   let pubkey_a = account.pubkey_hex(signer_a)
   let pubkey_b = account.pubkey_hex(signer_b)
   let pubkey_c = account.pubkey_hex(account_for(other_key))
-  let bunker_name = start_bunker_signed_in_as([signer_key, second_signer_key])
+  let bunker_name = start_bunker_signed_in_as([signer_a, signer_b])
   let assert Ok(a_100) = engine.sign_as(signer_a, 0, [], "a", 100)
   let assert Ok(b_50) = engine.sign_as(signer_b, 0, [], "b", 50)
   let assert Ok(b_80) = engine.sign_as(signer_b, 0, [], "b", 80)
@@ -682,7 +634,7 @@ pub fn fetch_events_rejects_a_kind_that_is_not_an_int_test() {
       bunker_name,
       relay_list_name,
       dynamic.list([
-        dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+        signer_pubkey(),
       ]),
       dynamic.string("not-an-int"),
     )
@@ -719,7 +671,7 @@ pub fn fetch_event_closes_the_subscription_and_the_websocket_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(signer_key) |> account.pubkey_hex),
+      signer_pubkey(),
       dynamic.int(0),
     )
     == Ok(atom.to_dynamic(atom.create("none")))

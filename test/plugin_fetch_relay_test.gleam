@@ -9,23 +9,17 @@ import gleam/dynamic
 import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/io
-import gleam/list
 import gleam/option.{None, Some}
-import nostr_no_su/backoff.{Backoff}
-import nostr_no_su/bunker
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_api
 import nostr_no_su/random
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
 import nostr_no_su/time
+import support/app_tree.{start_bunker_signed_in_as, start_relay_list}
 import support/nip46_client.{account_for}
-
-/// 起動と再試行を待たせないための、読み込みの再試行の待ち時間。
-const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
 /// 発行したイベントへの OK を待つ時間。
 const ack_timeout_ms = 5000
@@ -34,8 +28,8 @@ const ack_timeout_ms = 5000
 pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
   use relay_url <- with_test_relay_url
   let signer = account_for(random.hex(32))
-  let bunker_name = start_signed_in_bunker([signer])
-  let relay_list_name = start_relay_list(relay_url)
+  let bunker_name = start_bunker_signed_in_as([signer])
+  let relay_list_name = start_relay_list([monitor_entry(relay_url)])
   let published = seed_profile(relay_url, signer, "{\"name\":\"lina\"}")
 
   let assert Ok(result) =
@@ -54,8 +48,8 @@ pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
 pub fn fetch_event_returns_none_when_the_relay_has_no_event_test() {
   use relay_url <- with_test_relay_url
   let signer = account_for(random.hex(32))
-  let bunker_name = start_signed_in_bunker([signer])
-  let relay_list_name = start_relay_list(relay_url)
+  let bunker_name = start_bunker_signed_in_as([signer])
+  let relay_list_name = start_relay_list([monitor_entry(relay_url)])
 
   assert plugin_api.fetch_with(
       bunker_name,
@@ -73,8 +67,8 @@ pub fn fetch_events_returns_the_latest_event_per_pubkey_from_the_relay_test() {
   let signer_a = account_for(random.hex(32))
   let signer_b = account_for(random.hex(32))
   let signer_c = account_for(random.hex(32))
-  let bunker_name = start_signed_in_bunker([signer_a, signer_b, signer_c])
-  let relay_list_name = start_relay_list(relay_url)
+  let bunker_name = start_bunker_signed_in_as([signer_a, signer_b, signer_c])
+  let relay_list_name = start_relay_list([monitor_entry(relay_url)])
   let published_a = seed_profile(relay_url, signer_a, "{\"name\":\"a\"}")
   let published_b = seed_profile(relay_url, signer_b, "{\"name\":\"b\"}")
 
@@ -99,59 +93,14 @@ pub fn fetch_events_returns_the_latest_event_per_pubkey_from_the_relay_test() {
   assert none_c == atom.to_dynamic(atom.create("none"))
 }
 
-/// 偽のストアで、`signers` を登録したバンカーを起動する。読み込みの完了を
-/// 待って名前を返す。
-fn start_signed_in_bunker(signers: List(Account)) -> process.Name(bunker.Msg) {
-  let name = process.new_name("plugin_fetch_relay_bunker")
-  let stored =
-    list.map(signers, fn(signer) {
-      StoredAccount(account: signer, secret: "s3cret", label: "")
-    })
-  let assert Ok(_started) =
-    bunker.start(
-      name,
-      bunker.Settings(
-        store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded(stored, []), [], [], [])) },
-          insert: fn(_account) { Ok(Nil) },
-          delete: fn(_signer) { Ok(Nil) },
-          update_secret: fn(_signer, _secret) { Ok(Nil) },
-          update_label: fn(_signer, _label) { Ok(Nil) },
-          write: fn(_write) { Ok(Nil) },
-        ),
-        auth_url: None,
-        retry_delay: fixed_retry_delay,
-      ),
-      fn() { Nil },
-      fn(_relays) { Nil },
-      fn(_urls) { Nil },
-    )
-  let assert Ok(loaded) = bunker.accounts(name)
-  assert list.length(loaded) == list.length(signers)
-  name
-}
-
-/// `relay_url` を監視の用途で持つだけの一覧。`fetch_with` は URL しか使わないので
-/// 接続アクターは起動しない（ダミーの名前を置くだけ）。
-fn start_relay_list(relay_url: String) -> process.Name(relay_list.Msg) {
-  let name = process.new_name("plugin_fetch_relay_relay_list")
-  let assert Ok(_started) =
-    relay_list.start(
-      name,
-      [
-        relay_list.Entry(
-          url: relay_url,
-          monitor: Some(process.new_name("plugin_fetch_relay_dummy")),
-          bunker: None,
-        ),
-      ],
-      relay_list.Factories(
-        monitor: process.new_name("plugin_fetch_relay_factory_monitor"),
-        bunker: process.new_name("plugin_fetch_relay_factory_bunker"),
-        session: process.new_name("plugin_fetch_relay_factory_session"),
-      ),
-    )
-  name
+/// `relay_url` を監視の用途で持つ一覧の行。`fetch_with` は URL しか使わないので、
+/// 接続アクターは起動せずダミーの名前を置く。
+fn monitor_entry(relay_url: String) -> relay_list.Entry {
+  relay_list.Entry(
+    url: relay_url,
+    monitor: Some(process.new_name("plugin_fetch_relay_dummy")),
+    bunker: None,
+  )
 }
 
 /// `relay_url` へ直接つなぎ、`signer` の名義で kind 0 を 1 件発行する。OK の受理を
