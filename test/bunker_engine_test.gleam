@@ -394,6 +394,19 @@ pub fn requests_without_a_p_tag_are_ignored_test() {
   assert reason == "no p tag"
 }
 
+/// p タグの pubkey を現れた順に取り出し、p でないタグと pubkey の無い p タグは
+/// 飛ばす。3 要素目（リレーの URL）は pubkey の取り出しに影響しない。
+pub fn p_tag_pubkeys_skips_tags_other_than_p_test() {
+  assert engine.p_tag_pubkeys([
+      ["e", "a"],
+      ["p", "b"],
+      ["p"],
+      ["t", "x"],
+      ["p", "c", "wss://r"],
+    ])
+    == ["b", "c"]
+}
+
 /// JSON-RPC としてデコードできない content は理由を添えて無視する。
 pub fn a_malformed_request_payload_is_ignored_test() {
   let client = account_for(client_key)
@@ -1032,6 +1045,13 @@ pub fn nip04_payload_is_reported_as_unsupported_test() {
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(reason) = outcome
   assert string.contains(reason, "nip-04")
+}
+
+/// ドラフトの無い `sign_event`（`params` が空）は、署名せずにエラー応答を返す。
+pub fn sign_event_without_a_draft_is_rejected_test() {
+  let state = granted_session("sign_event")
+  assert session_reply(state, "sign_event", "[]")
+    == "{\"id\":\"r1\",\"result\":\"\",\"error\":\"sign_event requires an event draft\"}"
 }
 
 /// JSON として読めないドラフトは、クラッシュではなくエラー応答で返す。
@@ -1777,6 +1797,29 @@ pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
     connect_with_perms(auth_engine(), client, signer, "wrong", "", 1000)
   let assert Persist(write: engine.InsertPending(pending:, ..), ..) = outcome
   assert pending.secret_mismatch
+}
+
+/// 署名者の pubkey を持たない古い形（`[secret]` だけ）と `params` が空の
+/// `connect` も承認待ちに載り、空でないシークレットを送ったときだけ食い違いの
+/// 印を付ける。空文字列と `params` が空は、シークレット無しとして扱う。
+pub fn connect_marks_a_mismatch_only_for_a_nonempty_secret_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  use #(params_json, expected) <- list.each([
+    #("[]", False),
+    #("[\"\"]", False),
+    #("[\"wrong\"]", True),
+  ])
+  let body = request_body("c1", "connect", params_json)
+  let #(_state, outcome) =
+    handle_raw(
+      auth_engine(),
+      request_event(client, signer, body, 1000),
+      1000,
+      0,
+    )
+  let assert Persist(write: engine.InsertPending(pending:, ..), ..) = outcome
+  assert pending.secret_mismatch == expected
 }
 
 /// 承認前に同じ組が再 `connect` すると、古い token を `replaced` に載せる。
