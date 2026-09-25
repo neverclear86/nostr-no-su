@@ -16,28 +16,39 @@
 
 const actions = {
   // コピーのボタン。直前の兄弟要素の入力欄を選択してクリップボードへ書き、書けたときだけ
-  // コピーの欄の囲み（ボタンの親の親）に data-copied を 2 秒付ける。書けないときは data-selected を
-  // 付け、欄の下に手動でコピーする案内を出す（2 秒では消さない）。値は DOM から読む。
+  // コピーの欄の囲み（ボタンの親の親）に data-copied を 2 秒付ける。値は DOM から読む。
+  // クリップボードの API が無い（http のページなど安全でない文脈）か書き込みが拒否されたときは、
+  // 選択済みの欄に対する document.execCommand("copy") を試す。それも書けない（false か例外）
+  // ときだけ data-selected を付け、欄の下に手動でコピーする案内を出す（2 秒では消さない）。
   // 直前の data-copied が消える前に書けなかった場合に備え、data-selected を付ける前に
   // data-copied とその予約したタイマーを消す（両方が同時に見える状態を作らない）。
   copy(button) {
     const field = button.previousElementSibling;
     const wrapper = button.parentElement.parentElement;
     field.select();
-    const selected = () => {
-      clearTimeout(wrapper.copiedTimer);
-      delete wrapper.dataset.copied;
-      wrapper.dataset.selected = "1";
-    };
-    if (!navigator.clipboard) return selected();
-    navigator.clipboard.writeText(field.value).then(() => {
+    const copied = () => {
       delete wrapper.dataset.selected;
       wrapper.dataset.copied = "1";
       clearTimeout(wrapper.copiedTimer);
       wrapper.copiedTimer = setTimeout(() => {
         delete wrapper.dataset.copied;
       }, 2000);
-    }, selected);
+    };
+    const selected = () => {
+      clearTimeout(wrapper.copiedTimer);
+      delete wrapper.dataset.copied;
+      wrapper.dataset.selected = "1";
+    };
+    const execCopy = () => {
+      try {
+        if (document.execCommand("copy")) return copied();
+      } catch {
+        // 例外は書けなかったものとして扱い、下の案内に落とす
+      }
+      selected();
+    };
+    if (!navigator.clipboard) return execCopy();
+    navigator.clipboard.writeText(field.value).then(copied, execCopy);
   },
 };
 
