@@ -170,20 +170,6 @@ pub fn healthz_accepts_head_test() {
   assert response.status == 200
 }
 
-/// 別オリジンのフォームから送られた POST は 400 で弾く。Basic 認証の資格情報は
-/// ブラウザーが自動送信するため、認証だけでは CSRF を防げない。
-pub fn cross_origin_revoke_is_rejected_test() {
-  let revoked = process.new_subject()
-  let response =
-    simulate.browser_request(http.Post, "/sessions/revoke")
-    |> request.set_header("origin", "http://evil.example")
-    |> with_credentials("admin", password)
-    |> simulate.form_body([#("signer", signer), #("client", client)])
-    |> admin.handle_request(reporting_context(revoked), _)
-  assert response.status == 400
-  assert process.receive(revoked, 100) == Error(Nil)
-}
-
 /// 同じオリジンからのフォーム送信は通る。ブラウザーからも取り消せること。
 pub fn same_origin_revoke_is_accepted_test() {
   let revoked = process.new_subject()
@@ -197,19 +183,6 @@ pub fn same_origin_revoke_is_accepted_test() {
     == Ok(Revoked(signer: signer, client: client))
 }
 
-/// 別オリジンのフォームから送られた POST は 400 で弾き、`reenable_plugin` を呼ばない。
-pub fn cross_origin_reenable_is_rejected_test() {
-  let reenabled = process.new_subject()
-  let response =
-    simulate.browser_request(http.Post, "/plugins/reenable")
-    |> request.set_header("origin", "http://evil.example")
-    |> with_credentials("admin", password)
-    |> simulate.form_body([#("name", "broken")])
-    |> admin.handle_request(reporting_context(reenabled), _)
-  assert response.status == 400
-  assert process.receive(reenabled, 100) == Error(Nil)
-}
-
 /// 資格情報のない承認は 401 で、Context には届かない。
 pub fn approve_requires_credentials_test() {
   let reports = process.new_subject()
@@ -217,19 +190,6 @@ pub fn approve_requires_credentials_test() {
     simulate.request(http.Post, "/approve/" <> token)
     |> admin.handle_request(reporting_context(reports), _)
   assert response.status == 401
-  assert process.receive(reports, 100) == Error(Nil)
-}
-
-/// 別オリジンのフォームから送られた承認は 400 で弾く。本文を読まずパスだけで
-/// 承認できる設計なので、CSRF 対策はこの経路にも効いている必要がある。
-pub fn cross_origin_approve_is_rejected_test() {
-  let reports = process.new_subject()
-  let response =
-    simulate.browser_request(http.Post, "/approve/" <> token)
-    |> request.set_header("origin", "http://evil.example")
-    |> with_credentials("admin", password)
-    |> admin.handle_request(reporting_context(reports), _)
-  assert response.status == 400
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -246,14 +206,20 @@ pub fn password_containing_a_colon_is_accepted_test() {
 
 // --- 横断 ---
 
-/// 別オリジンから送られた、アカウントを扱う POST はすべて 400 で弾き、何も呼ばない。
-pub fn cross_origin_account_changes_are_rejected_test() {
+/// 別オリジンから送られた、状態を変える POST（アカウントの変更、セッションの取り消しと
+/// 権限の編集、プラグインの再有効化、承認）はすべて 400 で弾き、何も呼ばない。Basic 認証の
+/// 資格情報はブラウザーが自動送信し、承認は本文を読まずパスだけで決まるので、認証だけでは
+/// CSRF を防げない。
+pub fn cross_origin_state_changes_are_rejected_test() {
   let reports = process.new_subject()
   let paths = [
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
     dashboard.session_permissions_path(signer, client),
+    "/sessions/revoke",
+    "/plugins/reenable",
+    "/approve/" <> token,
     ..list.map(account_actions.all, action_path)
   ]
   list.each(paths, fn(path) {
@@ -406,70 +372,107 @@ pub fn authenticated_responses_carry_security_headers_test() {
   let with_password = [#("password", password)]
   let spec = [#("nsec", spec_nsec), #("label", "work")]
   let responses = [
-    get(context, "/"),
-    get(context, "/static/admin.css"),
-    get(context, "/static/admin.js"),
-    post_form(context, "/language", [#("language", "ja"), #("return", "/")]),
-    get(context, "/approve/" <> token),
-    get(context, "/accounts/new"),
-    post(context, "/accounts/generate"),
-    post_form(context, "/accounts/import", spec),
-    post_form(context, "/accounts/import", [#("nsec", "nope")]),
-    post_form(context, "/accounts/import", [
-      #("nsec", signer_nsec),
-      #("label", "work"),
-    ]),
-    post_form(
-      failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
-      "/accounts/import",
-      spec,
+    #("GET /", get(context, "/"), 200),
+    #("GET /static/admin.css", get(context, "/static/admin.css"), 200),
+    #("GET /static/admin.js", get(context, "/static/admin.js"), 200),
+    #(
+      "POST /language",
+      post_form(context, "/language", [#("language", "ja"), #("return", "/")]),
+      303,
     ),
-    post_form(
-      failing_context(bunker.NotReady("accounts are not loaded yet")),
-      "/accounts/import",
-      spec,
+    #("GET /approve/" <> token, get(context, "/approve/" <> token), 200),
+    #("GET /accounts/new", get(context, "/accounts/new"), 404),
+    #("POST /accounts/generate", post(context, "/accounts/generate"), 200),
+    #("import", post_form(context, "/accounts/import", spec), 303),
+    #(
+      "import an invalid nsec",
+      post_form(context, "/accounts/import", [#("nsec", "nope")]),
+      400,
     ),
-    post_form(context, "/accounts/register-generated", spec),
-    get(context, "/accounts/generate"),
-    post_form(context, "/accounts/register-generated", [
-      #("nsec", spec_nsec),
-      #("label", "a\tb"),
-    ]),
+    #(
+      "import a registered nsec",
+      post_form(context, "/accounts/import", [
+        #("nsec", signer_nsec),
+        #("label", "work"),
+      ]),
+      409,
+    ),
+    #(
+      "import not confirmed",
+      post_form(
+        failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
+        "/accounts/import",
+        spec,
+      ),
+      202,
+    ),
+    #(
+      "import before the accounts are loaded",
+      post_form(
+        failing_context(bunker.NotReady("accounts are not loaded yet")),
+        "/accounts/import",
+        spec,
+      ),
+      503,
+    ),
+    #(
+      "register a generated key",
+      post_form(context, "/accounts/register-generated", spec),
+      303,
+    ),
+    #("GET /accounts/generate", get(context, "/accounts/generate"), 405),
+    #(
+      "register a label with a tab",
+      post_form(context, "/accounts/register-generated", [
+        #("nsec", spec_nsec),
+        #("label", "a\tb"),
+      ]),
+      400,
+    ),
     ..list.append(
       list.map(account_actions.all, fn(action) {
-        get(context, action_path(action))
+        let path = action_path(action)
+        #("GET " <> path, get(context, path), 405)
       }),
       [
-        post_form(context, reveal, with_password),
-        post_form(context, reveal, [#("password", "wrong")]),
-        post_form(
-          admin.Context(..context, nsec: fn(_signer) {
-            Error("bunker is not responding")
-          }),
-          reveal,
-          with_password,
+        #("reveal", post_form(context, reveal, with_password), 200),
+        #(
+          "reveal with a wrong password",
+          post_form(context, reveal, [#("password", "wrong")]),
+          403,
         ),
-        post(context, action_path(dashboard.DeleteAccount)),
-        get(context, "/plugins/console_logger/status"),
-        get(context, "/nope"),
+        #(
+          "reveal without an answer",
+          post_form(
+            admin.Context(..context, nsec: fn(_signer) {
+              Error("bunker is not responding")
+            }),
+            reveal,
+            with_password,
+          ),
+          503,
+        ),
+        #("delete", post(context, action_path(dashboard.DeleteAccount)), 303),
+        #("plugin page", get(context, "/plugins/console_logger/status"), 200),
+        #("unknown path", get(context, "/nope"), 404),
       ],
     )
   ]
-  assert list.map(responses, fn(response) { response.status })
-    == [
-      200, 200, 200, 303, 200, 404, 200, 303, 400, 409, 202, 503, 303, 405, 400,
-      405, 405, 405, 405, 200, 403, 503, 303, 200, 404,
-    ]
-  list.each(responses, fn(response) {
-    assert header(response, "cache-control") == "no-store"
-    assert header(response, "x-frame-options") == "DENY"
-    assert string.starts_with(
-      header(response, "content-security-policy"),
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:",
+  use #(name, response, status) <- list.each(responses)
+  assert #(name, response.status) == #(name, status)
+  assert #(name, header(response, "cache-control")) == #(name, "no-store")
+  assert #(name, header(response, "x-frame-options")) == #(name, "DENY")
+  assert #(name, header(response, "x-content-type-options"))
+    == #(name, "nosniff")
+  assert #(name, header(response, "referrer-policy")) == #(name, "same-origin")
+  assert #(
+      name,
+      string.starts_with(
+        header(response, "content-security-policy"),
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:",
+      ),
     )
-    assert header(response, "x-content-type-options") == "nosniff"
-    assert header(response, "referrer-policy") == "same-origin"
-  })
+    == #(name, True)
 }
 
 /// 資格情報の無い登録と再表示の POST は 401 で、何も呼ばない。
