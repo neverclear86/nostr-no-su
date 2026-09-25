@@ -250,9 +250,10 @@ const depPlansNote = (e) => e.depPlans.length && !e.depsMerged
 const depMergedNote = (e) => e.depPlans.length && e.depsMerged
   ? `- このプランは依存先（${e.depPlans.map((d) => `#${d.n}`).join('、')}）のマージの前に、そのプランを前提に書かれた。土台にマージされた依存先の実装がプランの前提と食い違う箇所は、下の逸脱の手順で返す\n`
   : ''
+/** プランの依頼文に共通の土台と資源。検証の手順に書くポートは Postgres も含めて実装の割り当てと同じ値を渡す（プランが自分で番号を選ぶと実装が差し替える） */
 const common = (e) => `- 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${planWtNote(e)}
-${depPlansNote(e)}- docker を使う検証の手順を書くときのプロジェクト名: ${e.project}、ポート: ${e.ports}`
+${depPlansNote(e)}- 検証の手順に書くテスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}`
 /** docker と GitHub への書き込みで、ユーザーの資源と既存のコメントを壊さないための約束 */
 const SAFETY = `- docker の後片付けは、自分が作ったコンテナー名か compose のプロジェクト名（\`--filter label=com.docker.compose.project=<自分のプロジェクト名>\`）で絞ったものだけを消す。\`docker ps -aq | xargs docker rm -f\` のような絞らない削除はしない。ユーザーの compose（プロジェクト nostr-no-su）の資源には触れない
 - issue と PR のコメントは \`dev/post_comment.sh\` で投稿する（マーカーを機械的に付ける）。既存のコメントは編集しない`
@@ -300,10 +301,12 @@ ${common(e)}
 - 書き先: ${PLANS}/${e.n}-v${v || '<版>'}.md（前の版をコピーしてから直す）
 先頭の表は逸脱ごとの対応の表にする。前の版の「決めたこと」は、逸脱が変更を求めている箇所だけ直す。
 返答（構造化出力）: status、プランのファイル、対応の表の要旨。`,
+  // プランレビューにも実装と同じ Postgres・アプリ・strfry のポートを渡す（プランの検証の手順の番号を割り当てと照合し、手順を回すときも同じ資源を使う）
   review1: (e) => `issue #${e.n} の実装プラン（版 1）をレビューしてほしい（ラウンド 1）。
 - プラン: ${PLANS}/${e.n}-v1.md
 - 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${e.planWt}（すでにあるので、実行はこの下で行う）
+- 検証の手順に書くテスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 ${depPlansNote(e)}- レビューの書き先: ${PLANS}/${e.n}-r1.md
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md）。
 返答（構造化出力）: 判定、must と should と nit の件数、各指摘の見出し、投稿したコメントの URL。レビューの全文は返さない。`,
@@ -312,6 +315,7 @@ ${depPlansNote(e)}- レビューの書き先: ${PLANS}/${e.n}-r1.md
 - ${prevReview ? `前のラウンドのレビュー: ${prevReview}` : '前のラウンドのレビューは無い（承認済みの版を、逸脱または PR レビューの must を受けて上げた）'}
 - 土台: origin/main の ${e.base}
 - 調査用の作業ツリー: ${planWtNote(e)}
+- 検証の手順に書くテスト用 Postgres のポート: ${e.pgPort}。docker のプロジェクト名: ${e.project}、ポート: ${e.ports}
 ${depPlansNote(e)}- レビューの書き先: ${PLANS}/${e.n}-r${r}.md
 ${prevReview ? '前のラウンドの指摘ごとに直ったかを照合し、再判定してほしい。新しい指摘は前のラウンドで見落としたものに限る。' : '対応の表の各項目が前の版の決定と矛盾しないか、逸脱の解き方が issue の受け入れ条件を満たすかを見て判定してほしい。'}
 判定が APPROVE なら、承認した版を issue に投稿する（書き先 ${PLANS}/${e.n}-post.md。先頭の「指摘への対応」の表は含めない）。

@@ -74,7 +74,7 @@ removed=$(printf '%s\n' "$cells" | LC_ALL=C awk '
     while (match(cell, /~~[^~]*~~/)) {
       range = substr(cell, RSTART, RLENGTH)
       cell = substr(cell, RSTART + RLENGTH)
-      while (match(range, /`[A-Za-z0-9_]*_test`/)) {
+      while (match(range, /`[A-Za-z0-9_]+_test`/)) {
         print substr(range, RSTART + 1, RLENGTH - 2)
         range = substr(range, RSTART + RLENGTH)
       }
@@ -85,7 +85,7 @@ planned=$(printf '%s\n' "$cells" | LC_ALL=C awk '
   {
     cell = $0
     gsub(/~~[^~]*~~/, "", cell)
-    while (match(cell, /`([A-Za-z0-9_]*_test|dev\/[A-Za-z0-9_]+\.sh)`/)) {
+    while (match(cell, /`([A-Za-z0-9_]+_test|dev\/[A-Za-z0-9_]+\.sh)`/)) {
       print substr(cell, RSTART + 1, RLENGTH - 2)
       cell = substr(cell, RSTART + RLENGTH)
     }
@@ -98,7 +98,7 @@ prose=$(printf '%s\n' "$section" | LC_ALL=C awk '
   /^[ \t]*\|/ { next }
   {
     line = $0
-    while (match(line, /`[A-Za-z0-9_]*_test`/)) {
+    while (match(line, /`[A-Za-z0-9_]+_test`/)) {
       print substr(line, RSTART + 1, RLENGTH - 2)
       line = substr(line, RSTART + RLENGTH)
     }
