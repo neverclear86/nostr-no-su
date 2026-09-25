@@ -79,6 +79,18 @@ pub fn verify_vectors_test() {
   assert #(v.index, verified) == #(v.index, v.valid)
 }
 
+/// `s` が 0 の署名は検証に落ちる（`s*G` が無限遠点になる枝を通る）。
+pub fn verify_rejects_zero_s_signature_test() {
+  let privkey =
+    bytes("0000000000000000000000000000000000000000000000000000000000000042")
+  let assert Ok(pubkey) = secp256k1.xonly_pubkey(privkey)
+  let message =
+    bytes("2d58d8b3bcdf1abadec7829054f90dda9805aab56c77333024b9d0a508b75cff")
+  let assert Ok(sig) = bip340.sign_with_aux(privkey, message, <<0:256>>)
+  let assert <<r:bytes-size(32), _s:bytes-size(32)>> = sig
+  assert !bip340.verify(<<r:bits, 0:256>>, message, pubkey)
+}
+
 /// 秘密鍵を持つ行で、同じ x-only 公開鍵を導き、同じ補助乱数で同じ署名を再現する。
 pub fn sign_vectors_test() {
   use v <- list.each(list.filter(vectors(), signable))
@@ -90,6 +102,20 @@ pub fn sign_vectors_test() {
       bip340.sign_with_aux(secret_key, bytes(v.message), bytes(v.aux_rand)),
     )
     == #(v.index, Ok(bytes(v.signature)))
+}
+
+/// 秘密鍵が 0 か位数 n 以上のとき `InvalidSecretKey`（有効なスカラーは
+/// 1 〜 n-1）。
+pub fn sign_with_aux_rejects_out_of_range_secret_key_test() {
+  let message =
+    bytes("2d58d8b3bcdf1abadec7829054f90dda9805aab56c77333024b9d0a508b75cff")
+  let aux = <<0:256>>
+  use secret_key <- list.each([
+    secp256k1.int_to_bytes32(0),
+    secp256k1.int_to_bytes32(secp256k1.n),
+  ])
+  assert bip340.sign_with_aux(secret_key, message, aux)
+    == Error(bip340.InvalidSecretKey)
 }
 
 /// 0 は有効なスカラーではないため、公開鍵を導けない。
