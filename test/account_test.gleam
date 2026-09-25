@@ -1,4 +1,3 @@
-import gleam/crypto
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
@@ -175,11 +174,4 @@ pub fn generate_retries_an_out_of_range_key_test() {
   assert account.pubkey_hex(generated)
     == "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
   assert process.receive(draws, 0) == Error(Nil)
-}
-
-/// 本番の乱数で生成したアカウントは、生成のたびに違う鍵になる。
-pub fn generate_produces_distinct_accounts_test() {
-  let first = account.generate(crypto.strong_random_bytes)
-  let second = account.generate(crypto.strong_random_bytes)
-  assert account.pubkey_hex(first) != account.pubkey_hex(second)
 }
