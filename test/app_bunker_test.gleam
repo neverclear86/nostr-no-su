@@ -1,7 +1,8 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
 //// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
 //// 問い合わせ、セッションの権限の更新、セッションのリレーだけの接続の購読と
-//// 取り消しで閉じることもここで確かめる。
+//// 取り消しで閉じることもここで確かめる。セッションの変更と最終利用の記録の書き込みが
+//// 失敗したときの応答とログの行も、偽のストアで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -15,14 +16,15 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
+import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_connection
 import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
-  Published, Subscribed, Wrote, authenticator_recording_open, await_connection,
-  await_signers, bunker_spec, call_counter, client_key,
+  Published, Subscribed, Wrote, accounts_only, authenticator_recording_open,
+  await_connection, await_signers, bunker_spec, call_counter, client_key,
   committed_but_timed_out_store, connect_request, connect_request_from,
   fake_open, fixed_retry_delay, idle_monitor, load_signer, memory_store,
   named_relay, other_client_key, other_signer_key, request, response_body,
@@ -30,6 +32,7 @@ import support/app_tree.{
   start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
   store_with_load, stored_signer, test_relay_url,
 }
+import support/log_capture
 import support/nip46_client.{account_for}
 
 /// 接続が切断状態になるまで待つ。切断を観測できた時点で、接続アクターは
@@ -72,6 +75,15 @@ fn first_write_succeeds_store(
       _ -> Error(bunker.NotWritten(store_failure()))
     }
   })
+}
+
+/// 捕まえた行に、`bunker` の接頭辞を付けた `message` で終わる行があるか。行末まで合わせるのは、
+/// 同じ文の後に理由を続けた行（結果が曖昧な書き込みの行）と区別するためである。
+fn has_bunker_line(capture: log_capture.Capture, message: String) -> Bool {
+  list.any(log_capture.lines(capture), string.ends_with(
+    _,
+    log.line(bunker.log_prefix, message) <> "\n",
+  ))
 }
 
 /// 指定した秒より時計が進むまで待つ。バンカーアクターの起点の判定は秒単位なので、
@@ -460,6 +472,142 @@ pub fn a_failed_revocation_keeps_the_session_test() {
   stop_tree(tree)
 }
 
+/// 権限の差し替えの書き込みが失敗したら `SessionNotApplied` で理由を返し、権限を変えずに失敗の
+/// 行を出す。承認済みでない組の差し替えは、書き込まずに `SessionNotFound` になる。
+pub fn a_failed_permissions_update_keeps_the_perms_and_logs_the_failure_test() {
+  let capture = log_capture.install()
+  let reports = process.new_subject()
+  let calls = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store = first_write_succeeds_store(calls, [stored_signer(signer_key)])
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+  let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
+
+  assert bunker.update_perms(name, session.signer, session.client, "ping")
+    == Error(bunker.SessionNotApplied(store_failure()))
+  let assert Ok(Wrote(engine.UpdateSessionPerms(..))) =
+    process.receive(calls, 1000)
+  assert bunker.sessions(name) == Ok([session])
+  assert has_bunker_line(
+    capture,
+    "failed to update the permissions of the session of client "
+      <> session.client
+      <> " to signer "
+      <> session.signer
+      <> ": "
+      <> store_failure(),
+  )
+
+  let assert Error(bunker.SessionNotFound(_reason)) =
+    bunker.update_perms(name, session.signer, other_client_key, "ping")
+  assert process.receive(calls, 100) == Error(Nil)
+  log_capture.remove(capture)
+  stop_tree(tree)
+}
+
+/// 権限の差し替えの書き込みの結果が曖昧なら `SessionMaybeApplied` を返して読み直しに移り、
+/// 読み直しの前に届いた一覧の問い合わせには `accounts are being loaded` を返す。問い合わせを
+/// 書き込みの間に積むため、偽のストアは書き込みの中で `release` が届くまで待ち、テストは
+/// 問い合わせを `release` より先にアクターへ送る。
+pub fn an_unconfirmed_permissions_update_answers_lists_as_being_loaded_test() {
+  let reports = process.new_subject()
+  let gates = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let store =
+    bunker.Store(
+      ..memory_store(process.new_subject(), [stored_signer(signer_key)], False),
+      write: fn(write) {
+        case write {
+          engine.UpdateSessionPerms(..) -> {
+            let release = process.new_subject()
+            process.send(gates, release)
+            let _ = process.receive(release, 2000)
+            Error(bunker.MaybeWritten(store_failure()))
+          }
+          _ -> Ok(Nil)
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(connect_request("c1", secret))
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let assert Ok([session]) = bunker.sessions(name)
+
+  let updated = process.new_subject()
+  let listed = process.new_subject()
+  let inbox = process.named_subject(name)
+  process.send(
+    inbox,
+    bunker.UpdatePerms(session.signer, session.client, "ping", updated),
+  )
+  let assert Ok(release) = process.receive(gates, 2000)
+  process.send(inbox, bunker.GetSessions(listed))
+  process.send(release, Nil)
+
+  assert process.receive(updated, 1000)
+    == Ok(Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm)))
+  assert process.receive(listed, 1000) == Ok(Error("accounts are being loaded"))
+  stop_tree(tree)
+}
+
+/// セッションの最終利用の書き込みが失敗しても応答は返し、失敗の行を出す。書き込みが起きる
+/// よう、最終利用の古いセッションを読み込んでおく。
+pub fn a_failed_session_use_record_still_answers_and_logs_the_failure_test() {
+  let capture = log_capture.install()
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let client = account.pubkey_hex(account_for(client_key))
+  let session =
+    engine.Session(
+      signer: signer,
+      client: client,
+      perms: "",
+      created_at: 0,
+      last_used_at: 0,
+      relays: [],
+    )
+  let store =
+    bunker.Store(
+      ..store_with_load(fn() {
+        Ok(
+          bunker.Snapshot(
+            ..accounts_only([stored_signer(signer_key)]),
+            sessions: [session],
+          ),
+        )
+      }),
+      write: fn(_write) { Error(bunker.NotWritten(store_failure())) },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  deliver(request("p1", "ping", "[]"))
+  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
+  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert has_bunker_line(
+    capture,
+    "failed to record the use of the session of client "
+      <> client
+      <> " to signer "
+      <> signer
+      <> ": "
+      <> store_failure(),
+  )
+  log_capture.remove(capture)
+  stop_tree(tree)
+}
+
 /// `connect` の書き込みがすべて失敗しても、secret の一致した `connect` でも
 /// 承認待ちを作る `connect` でもメモリを変えずに `connection_not_saved` を返し、
 /// ストアの理由をクライアントへ漏らさない。承認待ちを作る `connect` も
@@ -768,9 +916,9 @@ pub fn unconfirmed_denials_and_revocations_are_reported_test() {
   stop_tree(tree)
 }
 
-/// 読み込みが終わっていない間の承認・拒否・取り消しはストアを呼ばずに拒否する
-/// （#202 の方針 3 節）。
-pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
+/// 読み込みが終わっていない間の承認・拒否・取り消し・権限の差し替えと、`nostrconnect://` から
+/// のセッションの開始は、ストアを呼ばずに `SessionNotReady` で拒否する。
+pub fn session_changes_before_loading_do_not_reach_the_store_test() {
   let reports = process.new_subject()
   let calls = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -815,6 +963,17 @@ pub fn decisions_and_revocations_before_loading_do_not_reach_the_store_test() {
   assert bunker.deny(name, pending.token)
     == Error(bunker.SessionNotReady("accounts are not loaded yet"))
   assert bunker.revoke(name, session.signer, session.client)
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert bunker.update_perms(name, session.signer, session.client, "ping")
+    == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert bunker.open_client_session(
+      name,
+      session.signer,
+      other_client_key,
+      "",
+      [],
+      "uri-secret",
+    )
     == Error(bunker.SessionNotReady("accounts are not loaded yet"))
   assert process.receive(calls, 100) == Error(Nil)
   // メモリを変えていないことは、直前の `calls` が空であることで確かめている
