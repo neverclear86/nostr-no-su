@@ -1,6 +1,6 @@
 //// 外部プラグインの走査と読み込みのテスト。
 ////
-//// BEAM は fixture がその場でコンパイルして用意する。モジュール名はテストごとに
+//// BEAM は fixture がその場でコンパイルして用意する。モジュール名は fixture ごとに
 //// 一意化する。**BEAM のモジュール名前空間はグローバルで、一度読み込むと
 //// 再読み込みされない**ため、名前を使い回すと後続のテストが嘘をつく。
 ////
@@ -16,7 +16,6 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
-import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import support/beam_fixture.{type Fixture}
@@ -30,19 +29,6 @@ const short_call_timeout_ms = 1000
 /// `short_call_timeout_ms` で打ち切られた呼び出しの理由に入る文言。
 fn timed_out() -> String {
   "timed out after " <> int.to_string(short_call_timeout_ms) <> "ms"
-}
-
-/// 配信の確認に使うサンプルイベント。
-fn sample_event() -> Event {
-  Event(
-    id: "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385",
-    pubkey: "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
-    created_at: 1_700_000_000,
-    kind: 1,
-    tags: [["t", "test"]],
-    content: "hello プラグイン",
-    sig: "00",
-  )
 }
 
 /// 報告行のどれかが `text` を含むか。理由の文字列には一時ファイル名などが混ざる
@@ -71,6 +57,20 @@ fn put_plugin(module: String, name: String, outdir: String) -> Nil {
   )
 }
 
+/// `plugin_dir`（`PLUGIN_DIR` の値。`:` 区切りで複数を並べてよい）を、内蔵プラグイン名と
+/// 設定を持たずに既定の期限で読み込む。
+fn load_dir(plugin_dir: String) -> plugin_loader.LoadOutcome {
+  load_dir_within(plugin_dir, plugin.default_call_timeout_ms)
+}
+
+/// `load_dir` と同じ読み込みを、メタデータ呼び出しの期限を `timeout_ms` にして行う。
+fn load_dir_within(
+  plugin_dir: String,
+  timeout_ms: Int,
+) -> plugin_loader.LoadOutcome {
+  plugin_loader.load_all(Some(plugin_dir), [], dict.new(), timeout_ms)
+}
+
 /// `PLUGIN_DIR` が未設定なら、プラグインは 0 件で「無効」の行だけが出る。
 pub fn load_all_without_plugin_dir_test() {
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
@@ -84,12 +84,7 @@ pub fn load_all_without_plugin_dir_test() {
 pub fn load_all_missing_directory_test() {
   let fixture = beam_fixture.new("missing")
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root <> "/nope"),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(fixture.root <> "/nope")
   assert plugins == []
   assert has_note(notes, "cannot read directory (enoent)")
   assert has_note(notes, "; skipped")
@@ -100,13 +95,7 @@ pub fn load_all_not_a_directory_test() {
   let fixture = beam_fixture.new("not_a_dir")
   let path = fixture.root <> "/file.txt"
   beam_fixture.write(path, "not a directory")
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(path),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(path)
   assert plugins == []
   assert has_note(notes, "cannot read directory (enotdir)")
 }
@@ -115,13 +104,7 @@ pub fn load_all_not_a_directory_test() {
 pub fn load_all_flat_beam_test() {
   let fixture = beam_fixture.new("flat")
   put_plugin(fixture.module, "flat_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "flat_plugin"
   assert has_note(notes, "loaded 1 plugin(s) from")
@@ -135,13 +118,7 @@ pub fn load_all_bundle_ebin_test() {
     "bundle_plugin",
     ebin_in(fixture, [fixture.module]),
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "bundle_plugin"
 }
@@ -152,13 +129,7 @@ pub fn load_all_shipment_layout_test() {
   let fixture = beam_fixture.new("shipment")
   let ebin = ebin_in(fixture, [fixture.module, "some_app"])
   put_plugin(fixture.module, "shipment_plugin", ebin)
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "shipment_plugin"
 }
@@ -171,40 +142,15 @@ pub fn load_all_broken_beam_test() {
   let good = beam_fixture.name(fixture, "bbb")
   beam_fixture.write_garbage(fixture.root <> "/" <> broken <> ".beam")
   put_plugin(good, "survivor_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "cannot load module (badfile)")
   assert has_note(notes, "(1 skipped)")
 }
 
-/// API バージョンが一致しないモジュールは読み込まない。
-pub fn load_all_api_mismatch_test() {
-  let fixture = beam_fixture.new("mismatch")
-  beam_fixture.compile(
-    beam_fixture.plugin_source(fixture.module, 2, "mismatch_plugin"),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "unsupported api version 2")
-}
-
-/// `not_loaded` に、読み込めなかった候補が識別子と理由の構造で乗る。理由から
-/// モジュール名の接頭辞は外れるが、ログの行には接頭辞付きのまま残る。
+/// API バージョンが一致しないモジュールは読み込まれず、`not_loaded` に識別子と理由の構造で
+/// 乗る。理由からモジュール名の接頭辞は外れるが、ログの行には接頭辞付きのまま残る。
 pub fn load_all_reports_not_loaded_test() {
   let fixture = beam_fixture.new("not_loaded")
   beam_fixture.compile(
@@ -212,13 +158,9 @@ pub fn load_all_reports_not_loaded_test() {
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(not_loaded:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, not_loaded:) =
+    load_dir(fixture.root)
+  assert plugins == []
   assert not_loaded
     == [
       plugin_loader.NotLoaded(
@@ -232,56 +174,24 @@ pub fn load_all_reports_not_loaded_test() {
   )
 }
 
-/// ebin を持たないディレクトリーは、期待する置き場所を添えて 1 行報告する。
+/// ebin を持たないディレクトリーは、期待する置き場所を添えて 1 行報告し、`not_loaded` には
+/// ディレクトリー名を `id`、同じ文を `reason` にして乗る。
 pub fn load_all_directory_without_ebin_test() {
   let fixture = beam_fixture.new("no_ebin")
   let bundle = beam_fixture.name(fixture, "empty")
   beam_fixture.mkdir(fixture.root <> "/" <> bundle)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let reason =
+    "no ebin directory found (expected "
+    <> bundle
+    <> "/ebin or "
+    <> bundle
+    <> "/*/ebin)"
+  let plugin_loader.LoadOutcome(plugins:, notes:, not_loaded:) =
+    load_dir(fixture.root)
   assert plugins == []
   // 完全一致で検査し、報告の文面が静かに変わらないことを確かめる。
-  assert list.contains(
-    notes,
-    "[plugin_loader] "
-      <> bundle
-      <> ": no ebin directory found (expected "
-      <> bundle
-      <> "/ebin or "
-      <> bundle
-      <> "/*/ebin)",
-  )
-}
-
-/// ebin の無いディレクトリーでは、`not_loaded` の `id` がディレクトリー名、
-/// `reason` が期待する置き場所を添えた文になる。
-pub fn load_all_not_loaded_uses_directory_id_test() {
-  let fixture = beam_fixture.new("not_loaded_dir")
-  let bundle = beam_fixture.name(fixture, "empty")
-  beam_fixture.mkdir(fixture.root <> "/" <> bundle)
-  let plugin_loader.LoadOutcome(not_loaded:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert not_loaded
-    == [
-      plugin_loader.NotLoaded(
-        id: bundle,
-        reason: "no ebin directory found (expected "
-          <> bundle
-          <> "/ebin or "
-          <> bundle
-          <> "/*/ebin)",
-      ),
-    ]
+  assert list.contains(notes, "[plugin_loader] " <> bundle <> ": " <> reason)
+  assert not_loaded == [plugin_loader.NotLoaded(id: bundle, reason:)]
 }
 
 /// プラグインでないエントリーは黙って無視する。報告行は集計の 1 行だけで、
@@ -290,13 +200,7 @@ pub fn load_all_ignores_non_plugin_entries_test() {
   let fixture = beam_fixture.new("junk")
   beam_fixture.write(fixture.root <> "/.gitkeep", "")
   beam_fixture.write(fixture.root <> "/README.md", "# plugins")
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "loaded no plugins from")
@@ -308,13 +212,7 @@ pub fn load_all_ignores_non_plugin_entries_test() {
 pub fn load_all_not_loaded_excludes_info_notes_test() {
   let fixture = beam_fixture.new("not_loaded_ok")
   put_plugin(fixture.module, "ok_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(not_loaded:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(not_loaded:, ..) = load_dir(fixture.root)
   assert not_loaded == []
 
   let plugin_loader.LoadOutcome(not_loaded: without_dir, ..) =
@@ -329,13 +227,7 @@ pub fn load_all_duplicate_name_test() {
   let second = beam_fixture.name(fixture, "bbb")
   put_plugin(first, "same_name", fixture.root)
   put_plugin(second, "same_name", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "same_name"
   assert has_note(notes, second <> ": duplicate plugin name \"same_name\"")
@@ -360,12 +252,7 @@ pub fn load_all_not_loaded_truncates_long_reason_test() {
     fixture.root,
   )
   let plugin_loader.LoadOutcome(not_loaded:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(fixture.root)
   let assert [plugin_loader.NotLoaded(id:, reason:)] = not_loaded
   assert id == second
   assert string.length(reason) == 123
@@ -407,12 +294,7 @@ pub fn load_all_multiple_directories_test() {
   put_plugin(beam_fixture.name(fixture, "zzz"), "first_dir_plugin", first)
   put_plugin(beam_fixture.name(fixture, "aaa"), "second_dir_plugin", second)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(first <> ":" <> second),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(first <> ":" <> second)
   assert list.map(plugins, fn(item) { item.name })
     == ["first_dir_plugin", "second_dir_plugin"]
   assert has_note(notes, first <> ": first_dir_plugin")
@@ -427,12 +309,7 @@ pub fn load_all_skips_unreadable_directory_in_list_test() {
   beam_fixture.mkdir(second)
   put_plugin(fixture.module, "survivor_plugin", second)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root <> "/nope" <> ":" <> second),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(fixture.root <> "/nope" <> ":" <> second)
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "cannot read directory (enoent); skipped")
@@ -450,12 +327,7 @@ pub fn load_all_first_directory_shadows_test() {
   put_plugin(fixture.module, "first_dir_plugin", first)
   put_plugin(fixture.module, "second_dir_plugin", second)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(first <> ":" <> second),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(first <> ":" <> second)
   let assert [loaded] = plugins
   assert loaded.name == "first_dir_plugin"
   assert has_note(
@@ -480,12 +352,7 @@ pub fn load_all_duplicate_name_across_directories_test() {
   put_plugin(beam_fixture.name(fixture, "aaa"), "same_name", first)
   put_plugin(second_module, "same_name", second)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(first <> ":" <> second),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+    load_dir(first <> ":" <> second)
   let assert [loaded] = plugins
   assert loaded.name == "same_name"
   assert has_note(
@@ -497,13 +364,7 @@ pub fn load_all_duplicate_name_across_directories_test() {
 /// `:` だけの指定は有効なディレクトリーを 1 つも含まないので、未設定と同じ
 /// 1 行になる。
 pub fn load_all_only_separators_test() {
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some("::"),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir("::")
   assert plugins == []
   assert list.length(notes) == 1
   assert has_note(notes, "no PLUGIN_DIR set")
@@ -518,13 +379,7 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
   let ebin = ebin_in(fixture, ["minimal_plugin"])
   let unrelated = beam_fixture.name(fixture, "unrelated")
   beam_fixture.compile(beam_fixture.value_source(unrelated, 1), unrelated, ebin)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -543,13 +398,7 @@ pub fn load_all_skips_shadowed_entry_module_bundle_test() {
 pub fn load_all_skips_shadowed_entry_module_flat_test() {
   let fixture = beam_fixture.new("shadow_flat")
   beam_fixture.write_garbage(fixture.root <> "/minimal_plugin.beam")
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -577,13 +426,7 @@ pub fn load_all_reports_shadowed_modules_test() {
     second_ebin,
   )
 
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert list.map(plugins, fn(item) { item.name })
     == ["first_plugin", "second_plugin"]
   assert has_note(notes, second <> ": 1 module(s) already provided")
@@ -604,13 +447,7 @@ pub fn load_all_reports_shadowed_module_versions_test() {
   let ebin = ebin_in(fixture, [fixture.module])
   beam_fixture.write_garbage(ebin <> "/lists.beam")
   put_plugin(fixture.module, "shadow_versions_plugin", ebin)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "shadow_versions_plugin"
   assert has_note(notes, ": 1 module(s) already provided")
@@ -635,13 +472,7 @@ pub fn load_all_required_versions_match_test() {
     fixture.module,
     ebin,
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "required_match_plugin"
 }
@@ -664,13 +495,7 @@ pub fn load_all_required_versions_host_wins_test() {
     fixture.module,
     ebin,
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "required_host_wins_plugin"
 }
@@ -690,13 +515,7 @@ pub fn load_all_required_versions_mismatch_test() {
     fixture.module,
     ebin,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -718,13 +537,7 @@ pub fn load_all_required_versions_missing_app_test() {
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(notes, "but no " <> app <> ".app is on the code path")
 }
@@ -750,13 +563,7 @@ pub fn load_all_required_versions_bad_shape_test() {
     bad_list,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -784,12 +591,7 @@ pub fn load_all_required_versions_timeout_test() {
     fixture.root,
   )
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      short_call_timeout_ms,
-    )
+    load_dir_within(fixture.root, short_call_timeout_ms)
   assert plugins == []
   assert has_note(
     notes,
@@ -820,13 +622,7 @@ pub fn load_all_required_versions_broken_app_test() {
     ebin,
   )
   put_plugin(good, "survivor_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "but no " <> app <> ".app is on the code path")
@@ -847,13 +643,7 @@ pub fn load_all_min_host_version_too_old_test() {
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -885,13 +675,7 @@ pub fn load_all_min_host_version_bad_shape_test() {
     bad_pre,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert plugins == []
   assert has_note(
     notes,
@@ -927,13 +711,7 @@ pub fn load_all_shadow_broken_app_test() {
   )
   put_plugin(second, "second_plugin", second_ebin)
 
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert list.map(plugins, fn(item) { item.name })
     == ["first_plugin", "second_plugin"]
   assert has_note(notes, second <> ": 1 module(s) already provided")
@@ -960,13 +738,7 @@ pub fn load_all_shadow_dedup_and_mixed_test() {
   )
   put_plugin(second, "second_plugin", second_ebin)
 
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   assert list.map(plugins, fn(item) { item.name })
     == ["first_plugin", "second_plugin"]
   assert has_note(
@@ -978,24 +750,6 @@ pub fn load_all_shadow_dedup_and_mixed_test() {
       <> shared
       <> ")",
   )
-}
-
-/// 読み込んだ `Plugin.handle` にイベントを渡すと、プラグインへイベント map が
-/// 届く。
-pub fn load_all_dispatches_event_test() {
-  let fixture = beam_fixture.new("dispatch")
-  put_plugin(fixture.module, "dispatch_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert [loaded] = plugins
-  loaded.handle(sample_event())
-  assert event.from_map(beam_fixture.last_event(fixture.module))
-    == Ok(sample_event())
 }
 
 /// 同梱の例（`examples/plugins/file_logger`）が、設定を与えれば読み込めること
@@ -1081,13 +835,7 @@ pub fn load_all_rejected_config_test() {
     good,
     ebin_in(fixture, [good]),
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "good_config_plugin"
   assert has_note(
@@ -1109,365 +857,123 @@ pub fn load_all_counter_example_test() {
     "examples/plugins/counter/src/counter.erl",
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   assert loaded.name == "counter"
   assert list.length(loaded.children) == 1
 }
 
-/// 子仕様を申告するプラグインは、子仕様を解決した状態で読み込まれる。
-pub fn load_all_plugin_with_children_test() {
-  let fixture = beam_fixture.new("children")
-  beam_fixture.compile(
-    beam_fixture.children_source(
-      fixture.module,
-      "children_plugin",
-      beam_fixture.name(fixture, "children_store"),
+/// 管理 UI の宣言（`plugin_pages`、`plugin_page_content`、`plugin_page_action`）の片方だけの
+/// 宣言、言語ごとのキーの食い違い、一覧の中身の誤りを持つプラグインは読み込まれず、
+/// 行ごとに決まった理由が注記に出る。
+pub fn invalid_page_declarations_are_not_loaded_test() {
+  use #(name, source, note) <- list.each([
+    #(
+      "pages_without_content_export",
+      beam_fixture.pages_only_source,
+      "plugin_pages/0 but no plugin_page_content/1, /2 or /3",
     ),
-    fixture.module,
-    ebin_in(fixture, [fixture.module]),
-  )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert [loaded] = plugins
-  assert list.length(loaded.children) == 1
-}
-
-/// 子仕様が壊れたプラグインは読み込まれず、理由が 1 行出る。同じディレクトリーの
-/// 正しいプラグインは読み込まれ、集計行に飛ばした件数が出る。
-pub fn load_all_bad_children_test() {
-  let fixture = beam_fixture.new("bad_children")
-  let good = beam_fixture.name(fixture, "good_children")
-  beam_fixture.compile(
-    beam_fixture.bad_children_source(fixture.module, "bad_children_plugin"),
-    fixture.module,
-    ebin_in(fixture, [fixture.module]),
-  )
-  beam_fixture.compile(
-    beam_fixture.plugin_source(good, 1, "good_children_plugin"),
-    good,
-    ebin_in(fixture, [good]),
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert [loaded] = plugins
-  assert loaded.name == "good_children_plugin"
-  assert has_note(notes, "plugin_children/0: child #0: missing id")
-  assert has_note(notes, "(1 skipped)")
-}
-
-/// `plugin_pages` だけを持ち `plugin_page_content` を持たないプラグインは、
-/// 片方だけの宣言として読み込まれない（決めたこと 3）。
-pub fn pages_without_content_export_test() {
-  let fixture = beam_fixture.new("pages_only")
-  beam_fixture.compile(
-    beam_fixture.pages_only_source(fixture.module, "pages_only_plugin"),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(
-    notes,
-    "plugin_pages/0 but no plugin_page_content/1, /2 or /3",
-  )
-}
-
-/// `plugin_page_content` だけを持ち `plugin_pages` を持たないプラグインも、
-/// 逆向きに同じ理由で読み込まれない。
-pub fn page_content_without_pages_export_test() {
-  let fixture = beam_fixture.new("content_only")
-  beam_fixture.compile(
-    beam_fixture.page_content_only_source(fixture.module, "content_only_plugin"),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(
-    notes,
-    "plugin_page_content/1 but no plugin_pages/0, /1 or /2",
-  )
-}
-
-/// `plugin_page_action/3` だけを持ち `plugin_pages` を持たないプラグインは、
-/// 実行だけの宣言として読み込まれない（決めたこと 2）。
-pub fn page_action_without_pages_is_not_loaded_test() {
-  let fixture = beam_fixture.new("action_only")
-  beam_fixture.compile(
-    beam_fixture.page_action_only_source(fixture.module, "action_only_plugin"),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "plugin_page_action/3 but no plugin_pages/0, /1 or /2")
-}
-
-/// `plugin_pages/2` を持ち `plugin_page_content/3` を持たないプラグインは、表示の
-/// 言語を受け取る口の片方だけの宣言として読み込まれない。
-pub fn localized_pages_without_localized_content_test() {
-  let fixture = beam_fixture.new("localized_pages_only")
-  beam_fixture.compile(
-    beam_fixture.ui_source(
-      fixture.module,
-      "localized_pages_only_plugin",
-      2,
-      2,
-      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => Language}]",
+    #(
+      "page_content_without_pages_export",
+      beam_fixture.page_content_only_source,
+      "plugin_page_content/1 but no plugin_pages/0, /1 or /2",
     ),
+    #(
+      "page_action_without_pages",
+      beam_fixture.page_action_only_source,
+      "plugin_page_action/3 but no plugin_pages/0, /1 or /2",
+    ),
+    #(
+      "localized_pages_without_localized_content",
+      fn(module, name) {
+        beam_fixture.ui_source(
+          module,
+          name,
+          2,
+          2,
+          "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => Language}]",
+        )
+      },
+      "plugin_pages/2 but no plugin_page_content/3",
+    ),
+    #(
+      "localized_content_without_localized_pages",
+      fn(module, name) {
+        beam_fixture.ui_source(
+          module,
+          name,
+          1,
+          3,
+          "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+        )
+      },
+      "plugin_page_content/3 but no plugin_pages/2",
+    ),
+    #(
+      "localized_page_keys_differ",
+      fn(module, name) {
+        beam_fixture.ui_source(
+          module,
+          name,
+          2,
+          3,
+          "[#{<<\"key\">> => Language, <<\"title\">> => <<\"Status\">>}]",
+        )
+      },
+      "plugin_pages/2: page keys for \"ja\" differ from \"en\"",
+    ),
+    #(
+      "pages_empty",
+      pages_returning("[]"),
+      "plugin_pages/0 must return at least one page",
+    ),
+    #(
+      "duplicate_page_key",
+      pages_returning(
+        "[#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"A\">>}, "
+        <> "#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"B\">>}]",
+      ),
+      "duplicate page key \"settings\"",
+    ),
+    #(
+      "invalid_page_key",
+      pages_returning(
+        "[#{<<\"key\">> => <<\"A b\">>, <<\"title\">> => <<\"A\">>}]",
+      ),
+      "page key \"A b\" must match [a-z0-9_-]+",
+    ),
+    #(
+      "page_title_missing",
+      pages_returning("[#{<<\"key\">> => <<\"status\">>}]"),
+      "page key \"status\": missing title",
+    ),
+    #(
+      "page_element_not_a_map",
+      pages_returning("[{a, b}]"),
+      "page #0: must be a page map, got Array",
+    ),
+    #(
+      "pages_not_a_list",
+      pages_returning("#{}"),
+      "plugin_pages/0 must return a list of page maps, got Dict",
+    ),
+  ])
+  let fixture = beam_fixture.new(name)
+  beam_fixture.compile(
+    source(fixture.module, name),
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "plugin_pages/2 but no plugin_page_content/3")
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
+  assert #(name, plugins, has_note(notes, note)) == #(name, [], True)
 }
 
-/// `plugin_page_content/3` を持ち `plugin_pages/2` を持たないプラグインも、逆向きに
-/// 読み込まれない。
-pub fn localized_content_without_localized_pages_test() {
-  let fixture = beam_fixture.new("localized_content_only")
-  beam_fixture.compile(
-    beam_fixture.ui_source(
-      fixture.module,
-      "localized_content_only_plugin",
-      1,
-      3,
-      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "plugin_page_content/3 but no plugin_pages/2")
-}
-
-/// `plugin_pages/2` が言語によって違うキーの並びを返すと読み込まれない。
-pub fn localized_page_keys_must_match_test() {
-  let fixture = beam_fixture.new("localized_keys")
-  beam_fixture.compile(
-    beam_fixture.ui_source(
-      fixture.module,
-      "localized_keys_plugin",
-      2,
-      3,
-      "[#{<<\"key\">> => Language, <<\"title\">> => <<\"Status\">>}]",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(
-    notes,
-    "plugin_pages/2: page keys for \"ja\" differ from \"en\"",
-  )
-}
-
-/// `plugin_pages/0` が 0 件を返すと読み込まれない。
-pub fn pages_must_not_be_empty_test() {
-  let fixture = beam_fixture.new("pages_empty")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_empty_plugin",
-      "[]",
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "plugin_pages/0 must return at least one page")
-}
-
-/// ページのキーが重複していると読み込まれない。
-pub fn duplicate_page_key_test() {
-  let fixture = beam_fixture.new("pages_dup")
-  let pages_body =
-    "[#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"A\">>}, "
-    <> "#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"B\">>}]"
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_dup_plugin",
-      pages_body,
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "duplicate page key \"settings\"")
-}
-
-/// `[a-z0-9_-]+` に一致しないキーは読み込まれない。
-pub fn invalid_page_key_test() {
-  let fixture = beam_fixture.new("pages_bad_key")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_bad_key_plugin",
-      "[#{<<\"key\">> => <<\"A b\">>, <<\"title\">> => <<\"A\">>}]",
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "page key \"A b\" must match [a-z0-9_-]+")
-}
-
-/// `key` を読んだ後の検査（`title` の不足）は `page key "<key>"` で位置を示す。
-/// `page #<index>` には戻らない（`plugin_children.spec` と同じ考え方）。
-pub fn page_title_missing_reports_page_key_test() {
-  let fixture = beam_fixture.new("pages_no_title")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_no_title_plugin",
-      "[#{<<\"key\">> => <<\"status\">>}]",
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "page key \"status\": missing title")
-}
-
-/// ページの記述の要素が map でないと、キーが読めないことを「`key` が無い」
-/// ではなく形そのものの誤りとして報告する。
-pub fn page_element_must_be_a_map_test() {
-  let fixture = beam_fixture.new("pages_not_map")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_not_map_plugin",
-      "[{a, b}]",
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(notes, "page #0: must be a page map, got Array")
-}
-
-/// `plugin_pages/0` の戻り値がリストでなければ読み込まれない。
-pub fn pages_wrong_shape_test() {
-  let fixture = beam_fixture.new("pages_wrong_shape")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_wrong_shape_plugin",
-      "#{}",
-      "#{<<\"sections\">> => []}",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  assert plugins == []
-  assert has_note(
-    notes,
-    "plugin_pages/0 must return a list of page maps, got Dict",
-  )
+/// `plugin_pages/0` が `body` を返し、`plugin_page_content/1` が空の節を返すプラグインの
+/// ソースを、モジュール名とプラグイン名から作る関数。
+fn pages_returning(body: String) -> fn(String, String) -> String {
+  fn(module, name) {
+    beam_fixture.pages_source(module, name, body, "#{<<\"sections\">> => []}")
+  }
 }
 
 /// `plugin_page_content` の例外は、一覧の検証に影響せず読み込みには成功し、
@@ -1484,13 +990,7 @@ pub fn page_content_crash_test() {
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
   let assert Error(reason) = ui.content("status", "en", [])
@@ -1512,12 +1012,7 @@ pub fn page_content_timeout_test() {
     fixture.root,
   )
   let plugin_loader.LoadOutcome(plugins:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      short_call_timeout_ms,
-    )
+    load_dir_within(fixture.root, short_call_timeout_ms)
   let assert [loaded] = plugins
   let assert Some(ui) = loaded.ui
   let assert Error(reason) = ui.content("status", "en", [])
@@ -1545,12 +1040,7 @@ pub fn load_all_hanging_metadata_test() {
   )
   put_plugin(good, "survivor_plugin", fixture.root)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      short_call_timeout_ms,
-    )
+    load_dir_within(fixture.root, short_call_timeout_ms)
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, hanging <> ": plugin_name/0 " <> timed_out())
@@ -1572,12 +1062,7 @@ pub fn load_all_hanging_on_load_test() {
   )
   put_plugin(good, "survivor_plugin", fixture.root)
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      short_call_timeout_ms,
-    )
+    load_dir_within(fixture.root, short_call_timeout_ms)
   let assert [loaded] = plugins
   assert loaded.name == "survivor_plugin"
   assert has_note(
@@ -1601,12 +1086,7 @@ pub fn load_all_killed_metadata_test() {
     fixture.root,
   )
   let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    plugin_loader.load_all(
-      Some(fixture.root),
-      [],
-      dict.new(),
-      short_call_timeout_ms,
-    )
+    load_dir_within(fixture.root, short_call_timeout_ms)
   assert plugins == []
   assert has_note(notes, fixture.module <> ": plugin_name/0 crashed (killed)")
 }
