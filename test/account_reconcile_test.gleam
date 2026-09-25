@@ -3,11 +3,13 @@
 ////
 //// 専用のスキーマのテーブルに、テストの持つ advisory lock を共有で待つ BEFORE
 //// トリガーを付ける。テストは書き込みの前に別の接続でその鍵を排他で取り、バンカーが
-//// 期限で `MaybeApplied` を返した後に離す。離すまで書き込みはコミットされないので、
+//// 期限で `MaybeApplied` を返し、読み直しの `LOCK TABLE` がその書き込みを待ち始めた
+//// のを `pg_locks` で見てから離す。離すまで書き込みはコミットされないので、
 //// 期限で `TimedOut` を返した後のコミットを読み直しが待つことを確かめられる。
-//// 読み直しが実行中の書き込みを待たなければ、一覧は DB と食い違う。
+//// 読み直しが実行中の書き込みを待たなければ、門を離す前の待ちが現れずテストが落ちる。
 //// セッションの削除でも同じ。
 
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Pid}
 import gleam/int
 import gleam/list
@@ -106,7 +108,7 @@ fn reconcile_with_postgres(
 
   let other = random_entry("")
   let other_pubkey = account.pubkey_hex(other.account)
-  assert behind_gate(gate, fn() {
+  assert behind_gate(gate, schema, fn() {
       bunker.add_account(name, other.account, "other")
     })
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
@@ -114,7 +116,9 @@ fn reconcile_with_postgres(
   assert list.length(added) == 2
   assert bunker.accounts(name) == Ok(added)
 
-  assert behind_gate(gate, fn() { bunker.rotate_secret(name, first_pubkey) })
+  assert behind_gate(gate, schema, fn() {
+      bunker.rotate_secret(name, first_pubkey)
+    })
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
   let rotated = database_listings(pool, key)
   let assert Ok(first_listing) =
@@ -137,11 +141,15 @@ fn reconcile_with_postgres(
 /// `write` を、`gate` の接続が門（`gate_lock_key` の排他の advisory lock）を持つ
 /// トランザクションの中で呼び、結果を返す。トリガーは同じ鍵を共有で待つので、
 /// `write` が返ってトランザクションがコミットされるまで書き込みはコミットされない。
-/// `write` が例外で抜けてもロールバックで門は必ず開く。コールバックの中で行うのは
-/// 門を取る文と `write` の呼び出しだけにし、別の接続へのクエリーは投げない。
+/// `write` が返った後、`schema` の表へのロックを待つ読み直しが現れるまで門を
+/// 離さず、2 秒で現れなければロールバックして落ちる。門のトランザクションは pgo の
+/// 接続の貸し出しの期限（5 秒）の内に終える必要があり、`write` が `actor_timeouts`
+/// の書き込みの期限（2 秒）を使うので、待ちは 2 秒で打ち切る。`write` が例外で
+/// 抜けてもロールバックで門は必ず開く。コールバックの中では門のトランザクションの
+/// 接続にだけ問い合わせ、別の接続へのクエリーは投げない。
 /// `gate` はバンカーのプールと別のプールの接続にする（同じ 2 本のプールでは、門を
 /// 持つ接続と門で止まった書き込みが両方を塞ぎ、読み直しが接続を得られない）。
-fn behind_gate(gate: pog.Connection, write: fn() -> a) -> a {
+fn behind_gate(gate: pog.Connection, schema: String, write: fn() -> a) -> a {
   let assert Ok(written) =
     pog.transaction(gate, fn(conn) {
       // pg_advisory_xact_lock は void を返し、pgo はその列を読めないので bool にする。
@@ -151,9 +159,32 @@ fn behind_gate(gate: pog.Connection, write: fn() -> a) -> a {
           <> int.to_string(gate_lock_key)
           <> ") IS NOT NULL",
       )
-      Ok(write())
+      let written = write()
+      case poll.until(fn() { lock_waiter_in(conn, schema) }, 2000, 50) {
+        True -> Ok(written)
+        False -> Error("no reload waited for the gated write")
+      }
     })
   written
+}
+
+/// `schema` の表に SHARE のロックを待っているバックエンドがあるかを返す。読み直しの
+/// `LOCK TABLE` が、門で止まっている書き込みの ROW EXCLUSIVE を待ち始めたことを見る。
+/// `pg_locks` は問い合わせのたびに今のロックを読むので、トランザクションの中で
+/// 繰り返し呼べる。
+fn lock_waiter_in(conn: pog.Connection, schema: String) -> Bool {
+  let assert Ok(pog.Returned(rows: [waiting], ..)) =
+    pog.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_locks l
+JOIN pg_class c ON c.oid = l.relation
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE NOT l.granted AND l.mode = 'ShareLock' AND n.nspname = $1)",
+    )
+    |> pog.parameter(pog.text(schema))
+    |> pog.returning(decode.at([0], decode.bool))
+    |> pog.timeout(30_000)
+    |> pog.execute(on: conn)
+  waiting
 }
 
 /// DB の行を、バンカーの一覧と同じ形（署名者の昇順）で読む。読み込みは実行中の
@@ -242,7 +273,7 @@ fn reconcile_sessions_with_postgres(
 
   let assert Ok(Nil) =
     account_store.delete_pending(db, generous, token: pending.token)
-  assert behind_gate(gate, fn() { bunker.revoke(name, signer, client) })
+  assert behind_gate(gate, schema, fn() { bunker.revoke(name, signer, client) })
     == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 
   assert poll.until(fn() { bunker.sessions(name) == Ok([]) }, 10_000, 50)
