@@ -61,9 +61,7 @@ pub fn hanging_on_load_source(module: String, name: String) -> String {
 -export([plugin_api_version/0, plugin_name/0, handle_event/1]).
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 init() ->
     receive after infinity -> ok end.
 "
@@ -81,9 +79,7 @@ pub fn plugin_name_body_source(
 -export([plugin_api_version/0, plugin_name/0, handle_event/1]).
 plugin_api_version() -> " <> int.to_string(version) <> ".
 plugin_name() -> " <> body <> ".
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -99,9 +95,7 @@ pub fn min_host_version_source(
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_min_host_version() -> " <> body <> ".
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -117,44 +111,13 @@ pub fn required_versions_source(
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_required_versions() -> " <> body <> ".
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
 /// 必須 3 関数をエクスポートする最小プラグインの Erlang ソース。
-/// `handle_event/1` は受け取った map を `persistent_term` へ退避するので、
-/// イベントが実際に届いたことをテストから確認できる。キーはモジュール名の atom
-/// なので、fixture 同士で衝突しない。
 pub fn plugin_source(module: String, version: Int, name: String) -> String {
   plugin_name_body_source(module, version, "<<\"" <> name <> "\">>")
-}
-
-/// 任意エクスポート `plugin_children/0` を持つプラグインの Erlang ソース。
-/// `store` は子プロセスが自分で登録する名前で、**テストごとに一意にすること**
-/// （BEAM の登録名は VM 全体で共有）。`-export` は関数定義より前に置く必要が
-/// あるため、`plugin_source` に継ぎ足さずソース全体をここで組み立てる。
-pub fn children_source(module: String, name: String, store: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_children/0, handle_event/1]).
--export([start_link/0]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_children() ->
-    [#{id => " <> store <> ",
-       start => {?MODULE, start_link, []},
-       restart => permanent,
-       shutdown => 5000,
-       type => worker}].
-start_link() ->
-    Pid = spawn_link(fun() -> receive stop -> ok end end),
-    register(" <> store <> ", Pid),
-    {ok, Pid}.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
-"
 }
 
 /// プラグイン固有の設定を受け取るプラグインの Erlang ソース。`plugin_children/1`
@@ -174,18 +137,6 @@ handle_event(_Event, _Config) -> ok.
 "
 }
 
-/// `plugin_children/0` が API に合わない子仕様（`id` 無し）を返すプラグインの
-/// Erlang ソース。
-pub fn bad_children_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_children/0, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_children() -> [#{start => {?MODULE, handle_event, [ignored]}}].
-handle_event(_Event) -> ok.
-"
-}
-
 /// `plugin_pages/0` だけを持ち、`plugin_page_content` を持たないプラグインの
 /// Erlang ソース。片方だけの宣言の検証に使う。
 pub fn pages_only_source(module: String, name: String) -> String {
@@ -194,9 +145,7 @@ pub fn pages_only_source(module: String, name: String) -> String {
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_pages() -> [#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}].
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -208,9 +157,7 @@ pub fn page_content_only_source(module: String, name: String) -> String {
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_page_content(_Key) -> #{<<\"sections\">> => []}.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -222,9 +169,7 @@ pub fn page_action_only_source(module: String, name: String) -> String {
 plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_page_action(_Key, _Values, _Config) -> ok.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -245,9 +190,7 @@ plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_pages() -> " <> pages_body <> ".
 plugin_page_content(_Key) -> " <> content_body <> ".
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -274,9 +217,7 @@ plugin_api_version() -> 1.
 plugin_name() -> <<\"" <> name <> "\">>.
 plugin_pages(" <> string.join(pages_params, ", ") <> ") -> " <> pages_body <> ".
 plugin_page_content(" <> string.join(content_params, ", ") <> ") -> #{<<\"sections\">> => []}.
-handle_event(Event) ->
-    persistent_term:put(?MODULE, Event),
-    ok.
+handle_event(_Event) -> ok.
 "
 }
 
@@ -287,11 +228,6 @@ pub fn value_source(module: String, value: Int) -> String {
 -export([value/0]).
 value() -> " <> int.to_string(value) <> ".
 "
-}
-
-/// `handle_event/1` が退避したイベント map を読み出す。
-pub fn last_event(module: String) -> Dynamic {
-  saved(module)
 }
 
 /// `plugin_children/1` が退避した設定 map を読み出す。
@@ -380,8 +316,8 @@ fn write_file(path: String, content: String) -> Dynamic
 @external(erlang, "filelib", "ensure_path")
 fn ensure_path(path: String) -> Dynamic
 
-/// 退避したイベント map。キーが無ければ `badarg` で落ちるが、それは
-/// `handle_event/1` が呼ばれていないというテストの失敗そのものである。
+/// 退避した値。キーが無ければ `badarg` で落ちるが、それは退避する関数が呼ばれて
+/// いないというテストの失敗そのものである。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic
 
