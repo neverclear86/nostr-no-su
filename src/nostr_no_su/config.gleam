@@ -16,7 +16,7 @@ import nostr_no_su/plugin_config
 const secret_names = ["DATABASE_URL", "ACCOUNT_MASTER_KEY", "ADMIN_PASSWORD"]
 
 /// 管理 UI が待ち受けるポート。`ADMIN_PORT` で上書きする。
-const default_admin_port = 80
+const default_admin_port = 24_133
 
 /// 管理 UI が bind するアドレス。既定はループバックのみ。ページには secret 入りの
 /// `bunker://` URI が載るため、外部に出すかどうかは明示的な設定にする。
