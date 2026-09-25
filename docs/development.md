@@ -11,7 +11,7 @@ gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バン�
 
 CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
-`gleam test` は test/ 配下のモジュールを 8 本のレーンで同時に走らせる（`test/nostr_no_su_test.gleam` の `lanes`。空いたレーンが次のモジュールを取る。実行器は `test/support/eunit_runner.erl`）。同じモジュールの中のテストは順に走り、同じ DB の advisory lock を取り合う `account_store_test` と `account_reconcile_test` だけは 1 本のレーンでこの順に走る（同じファイルの `ordered_modules`）。gleeunit の main は使っていないが、報告（進捗の点と失敗の一覧）は gleeunit のものをそのまま使う。出力のログの行は別のモジュールのテストのものと入り混じる。壁時間は Postgres と strfry つきで 20 秒ほどで、いちばん長いモジュール（`account_reconcile_test` と `app_accounts_test`）で決まる。
+`gleam test` は test/ 配下のモジュールを 8 本のレーンで同時に走らせる（`test/nostr_no_su_test.gleam` の `lanes`。空いたレーンが次のモジュールを取る。実行器は `test/support/eunit_runner.erl`）。同じモジュールの中のテストは順に走り、同じ DB の advisory lock を取り合う `account_store_test` と `account_reconcile_test` だけは 1 本のレーンでこの順に走る（同じファイルの `ordered_modules`）。gleeunit の main は使っていないが、報告（進捗の点と失敗の一覧）は gleeunit のものをそのまま使う。出力のログの行は別のモジュールのテストのものと入り混じる。壁時間は Postgres と strfry つきで 20 秒ほどで、いちばん長いモジュール（`app_accounts_test`）と、直列に走る `account_store_test` と `account_reconcile_test` のレーンで決まる。
 
 本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。CI の `test` ジョブは Postgres を立てて渡す。CI の失敗で push をやり直さないよう、push の前に手元でも通す:
 
@@ -32,7 +32,7 @@ docker rm -f nns-pg-test
 
 テストのモジュールは並列に走るので、モジュールをまたいで共有する状態を使わない。プロセスの名前は `process.new_name`、DB はテストごとのスキーマか database、BEAM のモジュール名と一時ディレクトリーは `support/beam_fixture` で一意にする。環境変数（`config_test` だけが使う）や同じ DB の advisory lock のように共有せざるを得ない状態を新しいモジュールで使うなら、そのモジュールを `test/nostr_no_su_test.gleam` の `ordered_modules` に足して、干渉する相手と同じレーンで走らせる。
 
-時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
+時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`。DB の書き込みなら、トリガーにテストが持つ advisory lock を待たせる。`account_reconcile_test` の `behind_gate`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
 
 ## カバレッジ
 
