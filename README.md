@@ -80,10 +80,10 @@ sh setup-env.sh
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:8080/`. The username is `admin` and the password is `ADMIN_PASSWORD` in `.env`.
+Open `http://127.0.0.1:24133/`. The username is `admin` and the password is `ADMIN_PASSWORD` in `.env`.
 First steps: register a relay and an account, then paste the connection URI into a client (approval only comes into play when you hand the URI to someone else). Details are in [Usage](docs/usage.md) (Japanese).
 
-Running on a remote host such as a VPS or a home server? The admin UI is published only on that host's loopback, so forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 <host>`) and open `http://127.0.0.1:8080/` in your local browser. No inbound port needs to be opened: the bunker and the monitor only make outbound WebSocket connections to relays. To hand a connection URI without a secret to a client on another device, the browser on that device must reach the approval page, so put a TLS-terminating reverse proxy in front and set `ADMIN_BASE_URL` to the public URL (the 「リバースプロキシーの設定」 section of [Configuration](docs/configuration.md)). Memory and disk estimates are in the 「リソース」 section of [Operations](docs/operations.md).
+Running on a remote host such as a VPS or a home server? The admin UI is published only on that host's loopback, so forward the port over SSH (`ssh -L 24133:127.0.0.1:24133 <host>`) and open `http://127.0.0.1:24133/` in your local browser. No inbound port needs to be opened: the bunker and the monitor only make outbound WebSocket connections to relays. To hand a connection URI without a secret to a client on another device, the browser on that device must reach the approval page, so put a TLS-terminating reverse proxy in front and set `ADMIN_BASE_URL` to the public URL (the 「リバースプロキシーの設定」 section of [Configuration](docs/configuration.md)). Memory and disk estimates are in the 「リソース」 section of [Operations](docs/operations.md).
 
 ## ⚙️ Configuration
 
@@ -91,7 +91,7 @@ Everything is configured by environment variables in `.env`. Only the master key
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ADMIN_PORT` | `8080` | Port of the admin UI. Empty disables it |
+| `ADMIN_PORT` | `24133` | Host port the admin UI is published on (loopback only). Empty means the default |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | Base URL of the approval page. The public URL behind a reverse proxy |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `nostr` / `nostr` / `nostr_no_su` | Credentials of the bundled Postgres. Only take effect on the first start. `setup-env.sh` puts a generated password in the `.env` it creates |
 

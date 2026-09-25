@@ -19,7 +19,7 @@
 | `PLUGIN_CONSOLE_LOGGER_ENABLED` | `true` | 内蔵プラグイン `console_logger`（受信したイベントを 1 件 1 行で出す）の有効・無効。`false` で無効にする。`true` / `false` 以外の値は起動しない |
 | `REMSH_ENABLED` | `false` | docker イメージ専用（起動スクリプト `/app/start.sh` が読み、アプリ自身は読まない）。`true` でリモートシェルの口を開く（「docker compose の構成」）。未設定か空は `false`、`true` / `false` 以外の値は起動しない |
 | `NOSTR_NO_SU_VERSION` | `latest` | `docker-compose.release.yml` 専用（アプリ自身は読まない）。取る公開イメージのタグ。`latest` は版の大小によらず最後に公開したタグに付くので（[貢献の手引き](../CONTRIBUTING.md) の「リリース」）、README の手順が取った版（`X.Y.Z`）を書く。同じ minor の patch も追うなら `X.Y` に書き換える。`docker-compose.yml` は参照しないので `.env.example` にも行が無い |
-| `ADMIN_PORT` | `24133` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする |
+| `ADMIN_PORT` | `24133` | 管理 UI が待ち受けるポート（1〜65535）。空文字列か空白だけの値なら管理 UI を無効にする。範囲外や数値でない値は理由をログに出して無効にする。同梱の compose では `.env` のこの変数はホスト側に公開するポートの意味になり、コンテナーには渡さない（「docker compose の構成」） |
 | `ADMIN_BIND` | `127.0.0.1` | 管理 UI が bind するアドレス。コンテナー外へ公開するには `0.0.0.0` が必要。`"localhost"` と IPv4 / IPv6 以外の値は理由をログに出して管理 UI を無効にする |
 | `ADMIN_PASSWORD` | （空） | 管理 UI の Basic 認証パスワード（ユーザー名は `admin`）。管理 UI が有効なら必須で、空なら起動しない。自動生成はしない。`ADMIN_PASSWORD_FILE` でファイルから読める（「秘密をファイルで渡す」） |
 | `ADMIN_BASE_URL` | `http://localhost:<ADMIN_PORT>` | 承認ページ（`auth_url`）の URL を組み立てる管理 UI の公開 URL。クライアントのブラウザーから開ける値にする |
@@ -91,11 +91,11 @@ secrets:
 
 ## 管理 UI の待ち受けと認証
 
-起動すると `http://127.0.0.1:8080/` で管理 UI にアクセスできる。ダッシュボードで、承認待ちの接続要求の承認と拒否、アカウントの登録と操作、承認済みのセッションの取り消し、リレーの追加・用途の編集・削除を行い、リレーとプラグインの状態を確かめる。画面の構成、操作ごとの結果と状態コード、接続の承認（auth_url フロー）、CSRF の防ぎ方は [管理 UI](admin-ui.md) にある。
+起動すると `http://127.0.0.1:24133/` で管理 UI にアクセスできる。ダッシュボードで、承認待ちの接続要求の承認と拒否、アカウントの登録と操作、承認済みのセッションの取り消し、リレーの追加・用途の編集・削除を行い、リレーとプラグインの状態を確かめる。画面の構成、操作ごとの結果と状態コード、接続の承認（auth_url フロー）、CSRF の防ぎ方は [管理 UI](admin-ui.md) にある。
 
-認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。`ADMIN_PORT=` で管理 UI を無効にした構成では要らない。パスワードは自動生成しない。認証に失敗した要求は `[admin] rejected a request with wrong credentials from 127.0.0.1` のように理由と接続元の IP だけを 1 行ログに出す（資格情報なしの `without credentials`、形式が壊れた `with malformed credentials` もある）。IP は TCP の接続元で、`X-Forwarded-For` は見ない。ブラウザーは最初に資格情報なしで要求するので、`without credentials` の行は正規の利用でも出る。認証に失敗した応答は 1 秒待ってから返す（ブラウザーが資格情報を覚える前の最初の要求も 1 秒待つ）。試行の回数の制限とロックアウトは無いので、推測されにくいパスワードを使い、公開範囲をループバックか VPN の内側に絞ること。
+認証は HTTP Basic で、ユーザー名は `admin` 固定。パスワードは `ADMIN_PASSWORD` で指定する（必須）。未設定か空なら `[main] cannot start: ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)` を 1 行出して終了コード 1 で終了する。管理 UI を無効にした構成（`ADMIN_PORT=`。同梱の compose では「docker compose の構成」の override）では要らない。パスワードは自動生成しない。認証に失敗した要求は `[admin] rejected a request with wrong credentials from 127.0.0.1` のように理由と接続元の IP だけを 1 行ログに出す（資格情報なしの `without credentials`、形式が壊れた `with malformed credentials` もある）。IP は TCP の接続元で、`X-Forwarded-For` は見ない。ブラウザーは最初に資格情報なしで要求するので、`without credentials` の行は正規の利用でも出る。認証に失敗した応答は 1 秒待ってから返す（ブラウザーが資格情報を覚える前の最初の要求も 1 秒待つ）。試行の回数の制限とロックアウトは無いので、推測されにくいパスワードを使い、公開範囲をループバックか VPN の内側に絞ること。
 
-`ADMIN_PORT` で待ち受けポートを変更でき、空文字列や空白だけの値（`ADMIN_PORT=` など）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` か空白だけの値で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。
+`ADMIN_PORT` で待ち受けポートを変更でき、空文字列や空白だけの値（`ADMIN_PORT=` など）にすると管理 UI を無効にできる。`GET /healthz` だけは認証なしで `ok` を返す。イメージにはこれを叩く `HEALTHCHECK` が入っているため、`docker ps` の `STATUS` にコンテナーの状態が出る。`ADMIN_PORT=` か空白だけの値で管理 UI を無効にした構成では待ち受けが無いのでチェック自体を省略し、healthy として扱う。同梱の compose での `ADMIN_PORT` の意味と、管理 UI を無効にする方法は「docker compose の構成」にある。
 
 ページのスタイルとスクリプトは、ビルドした CSS（`/static/admin.css`）と JS（`/static/admin.js`）を管理 UI 自身が配信する。CDN などの外部のファイルは読まないので、外部に到達できない環境でも表示できる。CSS と JS もページと同じく Basic 認証の後にある。
 
@@ -105,7 +105,7 @@ secrets:
 
 ## リバースプロキシーの設定
 
-前段のリバースプロキシーは、`Host` ヘッダーをブラウザーが送った値のまま（公開ホスト名と、既定以外のポートならそのポートを含めて）管理 UI へ渡すこと。状態を変える POST は `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでおり（`X-Forwarded-Host` は見ない）、`Host` が上流のアドレス（`127.0.0.1:8080` など）に書き換わっているか、既定以外のポートで公開していてポートが落ちていると、承認、登録、削除を含むブラウザーからの POST がすべて 400 の「要求を処理できません」（`Bad request`）のページ（本文は Origin が Host と一致しないという案内、ログには `Origin-host mismatch: <Host> <Origin>`）になる。nginx は既定で `Host` を `proxy_pass` の宛先に書き換え、`$host` はポートを含まないので、`$http_host` を渡す:
+前段のリバースプロキシーは、`Host` ヘッダーをブラウザーが送った値のまま（公開ホスト名と、既定以外のポートならそのポートを含めて）管理 UI へ渡すこと。状態を変える POST は `Origin`（無ければ `Referer`）のホストとポートを `Host` と突き合わせて CSRF を防いでおり（`X-Forwarded-Host` は見ない）、`Host` が上流のアドレス（`127.0.0.1:24133` など）に書き換わっているか、既定以外のポートで公開していてポートが落ちていると、承認、登録、削除を含むブラウザーからの POST がすべて 400 の「要求を処理できません」（`Bad request`）のページ（本文は Origin が Host と一致しないという案内、ログには `Origin-host mismatch: <Host> <Origin>`）になる。nginx は既定で `Host` を `proxy_pass` の宛先に書き換え、`$host` はポートを含まないので、`$http_host` を渡す:
 
 ```nginx
 server {
@@ -115,7 +115,7 @@ server {
 
     location / {
         proxy_set_header Host $http_host;
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:24133;
     }
 }
 ```
@@ -130,7 +130,9 @@ server {
 
 compose には Postgres（`postgres:17-alpine` をダイジェストで固定したもの）が同梱されており、アプリは healthcheck が通ってから起動する。同じ Postgres を本体（バンカーのアカウント、`DATABASE_URL`）と同梱の `event_logger`（イベント）の両方が使う。`event_logger` は本体から同じ接続先を受け取るので、設定は要らない。データは `postgres-data` volume に永続化され、`docker compose down -v` で消える（**暗号化したアカウントも消える**。バックアップの取り方は [運用](operations.md) にある）。Postgres のポートはホストに公開しない（アプリは compose ネットワーク経由で到達する）ため、保存されたデータは `docker compose exec postgres psql -U nostr -d nostr_no_su` で確認する。リリースで公開するイメージ（`ghcr.io/neverclear86/nostr-no-su`）は `linux/amd64` と `linux/arm64` の両方を含むマルチアーキテクチャのマニフェストで、x86_64 のホストでも、Raspberry Pi や ARM の VPS、Apple Silicon の docker でも同じタグで動く。
 
-管理 UI のポートはホストのループバック（`127.0.0.1:8080`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。`ADMIN_PORT` を変えると公開ポートも追従する。`ADMIN_PORT=` と空にすると管理 UI は無効になるが、公開は `127.0.0.1:8080` のまま残る。
+管理 UI はホストのループバック（既定は `127.0.0.1:24133`）にだけ公開する。コンテナー内では `ADMIN_BIND=0.0.0.0` を渡して全インターフェースで待ち受けさせ、外部からの到達性はこの公開先で絞っている。compose はコンテナーに `ADMIN_PORT` を渡さないので、コンテナーの内側はイメージの既定の 24133 で待ち受ける。`.env` の `ADMIN_PORT` はホスト側に公開するポートの意味で、変えると公開ポートだけが変わり、空にすると既定の 24133 で公開する。`.env` に `ADMIN_BASE_URL` が無ければ、compose は `http://localhost:<ADMIN_PORT>`（ホスト側の公開ポート）を渡すので、公開ポートを変えても承認ページの URL をホストのブラウザーでそのまま開ける。
+
+compose の構成では `.env` で管理 UI を無効にできない。無効にするときは、`docker-compose.override.yml` の `environment:` で `ADMIN_PORT: ""` を渡す（`COMPOSE_FILE` のある構成では、この節の冒頭のとおり `:` で並べる）。空の `ADMIN_PORT` では healthcheck が待ち受けを叩かずに healthy になる。公開は `127.0.0.1:<ADMIN_PORT>` のまま残るが、待ち受けは無い。
 
 **`PLUGIN_DIR` に置いた BEAM は本体と同じ VM・同じ権限で動く。サンドボックスは無く、秘密鍵を持つプロセスにも到達できる（`sys:get_state/1`）。信頼できるものだけを置くこと。** 第三者から受け取ったプラグインはソースを読んでから置く。
 

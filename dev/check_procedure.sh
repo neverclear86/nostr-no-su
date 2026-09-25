@@ -14,7 +14,8 @@
 #   fd     3 以上の fd のリダイレクト（手順をまたいで開いた fd は残らない）
 #   否定   `!` の検査、終了コードの検査、「出力なし」を期待する検査（土台で陽性になる
 #          ことを確かめる。コマンドが実行できない状態でも通ってしまう）
-#   環境   プロジェクト名 nostr-no-su、127.0.0.1:8080、ホストの 5432、作業ツリーの .env、
+#   環境   プロジェクト名 nostr-no-su、ホストの 24133（kind 24133 と区別するため 127.0.0.1: /
+#          localhost: / PORT= / -p の直後に続くものだけ）、ホストの 5432、作業ツリーの .env、
 #          ユーザーの作業ツリー、-f の無い docker compose（cwd の compose と .env を読む）
 #   引用   psql -c "…" の中の二重引用符（シェルで外れる。ヒアドキュメントで渡す）
 #   資格   接続文字列（postgres://user:pass@）の 6 文字以下のパスワード（伏せ字は登録した値の
@@ -121,7 +122,7 @@ function check(c,  t, i, name, args, k, last) {
   # ユーザーの環境。
   if (c ~ /(-p|--project-name|--name|project)[= ]nostr-no-su([^-A-Za-z0-9_]|$)/) report("環境", code(c), "ユーザーの compose のプロジェクト名。固有の名前（nns-issue<N>）にする")
   if (c ~ /\/home\/lina\/workspace\/projects\/nostr-no-su/) report("環境", code(c), "ユーザーの作業ツリー。読むだけでも " tree " にする")
-  if (c ~ /[^0-9]8080([^0-9]|$)/) report("環境", code(c), "ユーザーの管理 UI のポート。割り当てられたポートにする")
+  if (c ~ /((127\.0\.0\.1|localhost):|PORT=|-p[ \t]+)24133([^0-9]|$)/) report("環境", code(c), "ユーザーの管理 UI のポート。割り当てられたポートにする")
   if (c ~ /(localhost|127\.0\.0\.1):5432([^0-9]|$)/ || c ~ /[ =]5432:[0-9]/) report("環境", code(c), "ホストの 5432 はユーザーの Postgres。割り当てられたポートにする")
   if (c ~ /(^|[^A-Za-z0-9_.\/-])\.env([^A-Za-z0-9_.-]|$)/ || c ~ /\/\.env([^A-Za-z0-9_.-]|$)/) report("環境", code(c), "作業ツリーの .env。--env-file でスクラッチパッドのファイルを渡す")
   if (c ~ /docker([ \t]+|-)compose[ \t]/ && c !~ /docker([ \t]+|-)compose[ \t]+(ls|version)/ && c !~ /[ \t]-f[ \t]/ && c !~ /--file[ \t=]/) report("環境", code(c), "-f が無い docker compose は cwd（ユーザーの作業ツリー）の docker-compose.yml と .env を読む。-f と --env-file を絶対パスで付ける")

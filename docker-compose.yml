@@ -12,7 +12,6 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL-postgres://${POSTGRES_USER:-nostr}:${POSTGRES_PASSWORD:-nostr}@postgres:5432/${POSTGRES_DB:-nostr_no_su}}
       ACCOUNT_MASTER_KEY: ${ACCOUNT_MASTER_KEY:-}
-      ADMIN_PORT: ${ADMIN_PORT-8080}
       ADMIN_BIND: 0.0.0.0
       # クラッシュダンプには管理パスワードと DB のパスワードが載るので、既定では
       # 書かない（ERL_CRASH_DUMP_BYTES が 0）。ルートが読み取り専用なので、書く
@@ -21,7 +20,8 @@ services:
       ERL_CRASH_DUMP: /tmp/erl_crash.dump
       ERL_CRASH_DUMP_BYTES: 0
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-}
+      # 承認ページの URL の土台。既定はホスト側の公開ポート（ports）を指す。
+      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-http://localhost:${ADMIN_PORT:-24133}}
       PLUGIN_DIR: ${PLUGIN_DIR-/app/plugins:/plugins}
       PLUGIN_CONSOLE_LOGGER_ENABLED: ${PLUGIN_CONSOLE_LOGGER_ENABLED-true}
       DEDUP_CAPACITY: ${DEDUP_CAPACITY-4096}
@@ -38,7 +38,9 @@ services:
       # ホストのループバックにだけ公開する。管理 UI は平文 HTTP で、接続
       # シークレットを含む bunker:// URI を表示するため。外部から到達させるときは
       # TLS を終端するリバースプロキシーを前に置くこと。
-      - "127.0.0.1:${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
+      # .env の ADMIN_PORT はホスト側のポートだけを変える。コンテナーには
+      # ADMIN_PORT を渡さず、イメージの既定の 24133 で待ち受ける。
+      - "127.0.0.1:${ADMIN_PORT:-24133}:24133"
     # 本体のバンカーはアカウントとリレーの一覧を Postgres に保存し、同梱の event_logger
     # がイベントも同じ Postgres に保存する。Postgres が落ちていても本体は起動し、
     # バンカーは間隔を 5 秒から 2 分まで延ばしながらアカウントの読み込みを再試行する
