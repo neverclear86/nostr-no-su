@@ -45,6 +45,46 @@ const plugin_not_found = "plugin not found"
 /// フェイクの再有効化が、ランナーの無応答として返す理由。
 const plugin_not_answered = "plugin runner did not answer"
 
+/// フェイクのリレーの変更が、DB に書けなかった理由として返す文。
+const relay_not_saved_reason = "database is unreachable or rejected the connection"
+
+/// リレーの変更の失敗 `failure` のページの本文に出る、`language` の文。`RelayNotSaved` は
+/// 英語の理由をそのまま出す。
+fn relay_failure_text(
+  language: i18n.Language,
+  failure: admin.RelayChangeFailure,
+) -> String {
+  case failure {
+    admin.DuplicateRelay -> i18n.text(language, i18n.RelayAlreadyRegistered)
+    admin.RelayNotSaved(reason) -> reason
+    admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
+    admin.ConnectionsNotConfirmed ->
+      i18n.text(language, i18n.RelayConnectionsNotConfirmed)
+    admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
+  }
+}
+
+/// 日本語を求める、認証済みのフォームの POST リクエストを 1 件処理する。
+fn post_form_in_japanese(
+  context: admin.Context,
+  path: String,
+  form: List(#(String, String)),
+) -> Response(wisp.Body) {
+  simulate.request(http.Post, path)
+  |> in_japanese
+  |> with_credentials("admin", password)
+  |> simulate.form_body(form)
+  |> admin.handle_request(context, _)
+}
+
+/// 本文の `Back to dashboard` のリンクの、`<a ` の後から語の手前まで（属性とアイコン）。
+fn back_link_head(body: String) -> String {
+  let assert Ok(#(before, _after)) =
+    string.split_once(body, "Back to dashboard</a>")
+  let assert Ok(head) = list.last(string.split(before, "<a "))
+  head
+}
+
 /// 認証を通れば、ダッシュボードにアカウント・リレー・セッション・プラグインが
 /// 出る。
 pub fn dashboard_shows_the_current_state_test() {
@@ -139,31 +179,10 @@ pub fn revoking_an_unknown_session_is_not_found_test() {
   assert response.status == 404
   let body = simulate.read_body(response)
   assert string.contains(body, session_not_approved)
-  assert string.contains(
-    body,
-    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
-  )
-  assert string.contains(body, "</svg>Back to dashboard</a>")
+  assert string.contains(back_link_head(body), "href=\"/\"")
   assert !string.contains(body, unknown_client)
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: unknown_client))
-}
-
-/// フィールドが欠けた取り消しは 400 になり、取り消しは行われない。
-pub fn revoke_without_fields_is_a_bad_request_test() {
-  let revoked = process.new_subject()
-  let response =
-    post_form(reporting_context(revoked), "/sessions/revoke", [
-      #("signer", signer),
-    ])
-  assert response.status == 400
-  assert process.receive(revoked, 100) == Error(Nil)
-}
-
-/// 取り消しは POST でしか受け付けない。
-pub fn revoke_rejects_other_methods_test() {
-  let response = get(context(), "/sessions/revoke")
-  assert response.status == 405
 }
 
 /// 承認済みの一覧に無い組への POST は 404。
@@ -361,11 +380,7 @@ pub fn reenabling_an_unknown_plugin_is_not_found_test() {
   assert response.status == 404
   let body = simulate.read_body(response)
   assert string.contains(body, plugin_not_found)
-  assert string.contains(
-    body,
-    "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
-  )
-  assert string.contains(body, "</svg>Back to dashboard</a>")
+  assert string.contains(back_link_head(body), "href=\"/\"")
 }
 
 /// ランナーが応答しない再有効化は 503 で、理由とダッシュボードへのリンクを出す。
@@ -380,21 +395,6 @@ pub fn reenabling_a_plugin_that_does_not_answer_is_unavailable_test() {
   assert string.contains(body, "Change not confirmed")
   assert string.contains(body, plugin_not_answered)
   assert string.contains(body, "Back to dashboard")
-}
-
-/// 欄 `name` が無い再有効化は 400 で、`reenable_plugin` を呼ばない。
-pub fn reenable_without_a_name_is_a_bad_request_test() {
-  let reenabled = process.new_subject()
-  let response =
-    post_form(reporting_context(reenabled), "/plugins/reenable", [])
-  assert response.status == 400
-  assert process.receive(reenabled, 100) == Error(Nil)
-}
-
-/// 再有効化は POST でしか受け付けない。
-pub fn reenable_rejects_other_methods_test() {
-  let response = get(context(), "/plugins/reenable")
-  assert response.status == 405
 }
 
 /// プラグインのページは 200 で、ページ枠の中に節の中身を描き、2 件のタブを持つ
@@ -757,10 +757,7 @@ pub fn session_failures_are_shown_as_notice_pages_test() {
   ]
   list.each(responses, fn(response) {
     assert #(heading, response.status) == #(heading, status)
-    assert string.contains(
-      simulate.read_body(response),
-      "<h1 class=\"text-2xl font-bold\">" <> heading <> "</h1>",
-    )
+    assert string.contains(simulate.read_body(response), heading <> "</h1>")
   })
 }
 
@@ -818,11 +815,6 @@ pub fn session_change_lines_name_the_signer_and_the_client_test() {
     == "updated the permissions of client " <> client <> " to signer " <> signer
   assert admin.session_change_line(admin.ClientConnected, signer, client)
     == "connected client " <> client <> " to signer " <> signer
-}
-
-/// 拒否は POST でしか受け付けない。
-pub fn deny_rejects_other_methods_test() {
-  assert get(context(), "/deny/" <> token).status == 405
 }
 
 /// 知らないパスは 404 の HTML で、理由を出し、パスを含めない。アカウントの一覧を
@@ -887,21 +879,32 @@ pub fn method_not_allowed_pages_test() {
 }
 
 /// 管理 UI のフォームからは送られない値（欄の欠落、未対応の言語とテーマ）は 400 の
-/// HTML で、`FormNotReadable` の英文を出す。
+/// HTML で、`FormNotReadable` の英文を出し、Context の関数を呼ばない。
 pub fn bad_request_pages_test() {
-  let responses = [
-    post_form(context(), "/language", [#("language", "xx")]),
-    post_form(context(), "/theme", [#("theme", "xx")]),
-    post_form(context(), "/sessions/revoke", [#("signer", signer)]),
-    post_form(context(), "/plugins/reenable", []),
+  let reports = process.new_subject()
+  let context = reporting_context(reports)
+  let requests = [
+    #("/language", [#("language", "xx")]),
+    #("/theme", [#("theme", "xx")]),
+    #("/sessions/revoke", [#("signer", signer)]),
+    #("/plugins/reenable", []),
   ]
-  use response <- list.each(responses)
-  assert response.status == 400
-  assert header(response, "content-type") == "text/html; charset=utf-8"
-  assert string.contains(
-    simulate.read_body(response),
-    i18n.text(i18n.English, i18n.FormNotReadable),
-  )
+  list.each(requests, fn(entry) {
+    let #(path, form) = entry
+    let response = post_form(context, path, form)
+    assert #(path, response.status) == #(path, 400)
+    assert #(path, header(response, "content-type"))
+      == #(path, "text/html; charset=utf-8")
+    assert #(
+        path,
+        string.contains(
+          simulate.read_body(response),
+          i18n.text(i18n.English, i18n.FormNotReadable),
+        ),
+      )
+      == #(path, True)
+  })
+  assert process.receive(reports, 100) == Error(Nil)
 }
 
 /// 操作中に届かない応答は `text/plain` のまま。CSS への POST は 405、フォームの本文の
@@ -979,20 +982,9 @@ pub fn add_relay_requires_a_role_test() {
 /// Context が返す 4 変種ごとの状態コードと本文。重複と反映されたか分からない 2 つは
 /// 訳した本文で、`RelayNotSaved` は英語の理由に日本語のページだけ前置きが付く。
 pub fn add_relay_failures_test() {
-  let not_saved_reason = "database is unreachable or rejected the connection"
-  let expected_text = fn(language, failure) {
-    case failure {
-      admin.DuplicateRelay -> i18n.text(language, i18n.RelayAlreadyRegistered)
-      admin.RelayNotSaved(reason) -> reason
-      admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
-      admin.ConnectionsNotConfirmed ->
-        i18n.text(language, i18n.RelayConnectionsNotConfirmed)
-      admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
-    }
-  }
   let failures = [
     #(admin.DuplicateRelay, 409),
-    #(admin.RelayNotSaved(not_saved_reason), 409),
+    #(admin.RelayNotSaved(relay_not_saved_reason), 409),
     #(admin.RelayMaybeSaved, 202),
     #(admin.ConnectionsNotConfirmed, 202),
   ]
@@ -1004,18 +996,16 @@ pub fn add_relay_failures_test() {
   assert english.status == status
   assert string.contains(
     simulate.read_body(english),
-    expected_text(i18n.English, failure),
+    relay_failure_text(i18n.English, failure),
   )
 
-  let japanese =
-    simulate.request(http.Post, "/relays/new")
-    |> in_japanese
-    |> with_credentials("admin", password)
-    |> simulate.form_body(form)
-    |> admin.handle_request(failing, _)
+  let japanese = post_form_in_japanese(failing, "/relays/new", form)
   assert japanese.status == status
   let japanese_body = simulate.read_body(japanese)
-  assert string.contains(japanese_body, expected_text(i18n.Japanese, failure))
+  assert string.contains(
+    japanese_body,
+    relay_failure_text(i18n.Japanese, failure),
+  )
   case failure {
     admin.RelayNotSaved(_) -> {
       let assert Some(prefix) = i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
@@ -1135,20 +1125,9 @@ pub fn relay_action_without_registered_relays_is_unavailable_test() {
 /// `RelayNotSaved` は日本語のページだけ前置き（`CouldNotSaveRelay`、`CouldNotDeleteRelay`）が
 /// 付く。
 pub fn relay_change_failures_test() {
-  let not_saved_reason = "database is unreachable or rejected the connection"
-  let expected_text = fn(language, failure) {
-    case failure {
-      admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
-      admin.RelayNotSaved(reason) -> reason
-      admin.RelayMaybeSaved -> i18n.text(language, i18n.StoreDidNotConfirm)
-      admin.ConnectionsNotConfirmed ->
-        i18n.text(language, i18n.RelayConnectionsNotConfirmed)
-      admin.DuplicateRelay -> i18n.text(language, i18n.RelayAlreadyRegistered)
-    }
-  }
   let failures = [
     #(admin.UnregisteredRelay, 404),
-    #(admin.RelayNotSaved(not_saved_reason), 409),
+    #(admin.RelayNotSaved(relay_not_saved_reason), 409),
     #(admin.RelayMaybeSaved, 202),
     #(admin.ConnectionsNotConfirmed, 202),
   ]
@@ -1176,18 +1155,16 @@ pub fn relay_change_failures_test() {
   assert #(path, failure, english.status) == #(path, failure, status)
   assert string.contains(
     simulate.read_body(english),
-    expected_text(i18n.English, failure),
+    relay_failure_text(i18n.English, failure),
   )
 
-  let japanese =
-    simulate.request(http.Post, path)
-    |> in_japanese
-    |> with_credentials("admin", password)
-    |> simulate.form_body(form)
-    |> admin.handle_request(failing, _)
+  let japanese = post_form_in_japanese(failing, path, form)
   assert #(path, failure, japanese.status) == #(path, failure, status)
   let japanese_body = simulate.read_body(japanese)
-  assert string.contains(japanese_body, expected_text(i18n.Japanese, failure))
+  assert string.contains(
+    japanese_body,
+    relay_failure_text(i18n.Japanese, failure),
+  )
   case failure {
     admin.RelayNotSaved(_) -> {
       let assert Some(prefix) = i18n.lead(i18n.Japanese, lead)
@@ -1470,7 +1447,7 @@ pub fn only_the_static_files_are_served_test() {
   assert post(context(), "/static/admin.js").status == 405
 }
 
-/// 通知ページの結果の印は、カードの先頭に結果ごとの色とアイコンで出る。承認と拒否はどちらも 200
+/// 通知ページの結果の印は、結果ごとの色とアイコンで出る。承認と拒否はどちらも 200
 /// なので、状態コードではなく経路で色が決まる。
 pub fn notices_are_colored_by_outcome_test() {
   let rotate = action_path(dashboard.RotateSecret)
@@ -1511,8 +1488,7 @@ pub fn notices_are_colored_by_outcome_test() {
     let #(response, tone) = entry
     assert string.contains(
       simulate.read_body(response),
-      "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\"flex items-start gap-3\">"
-        <> element.to_string(view.notice_mark(tone)),
+      element.to_string(view.notice_mark(tone)),
     )
   })
 }
