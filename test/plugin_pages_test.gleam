@@ -54,6 +54,33 @@ fn section_with_time(title: String, at: Int) -> Dynamic {
   ])
 }
 
+/// `form` ブロック 1 つ（チェック 1 件）を持つ節。
+fn section_with_form(title: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("section")),
+    #("title", dynamic.string(title)),
+    #(
+      "blocks",
+      dynamic.list([
+        map_([
+          #("type", dynamic.string("form")),
+          #(
+            "fields",
+            dynamic.list([
+              map_([
+                #("type", dynamic.string("checkbox")),
+                #("name", dynamic.string("enabled")),
+                #("label", dynamic.string("Enabled")),
+              ]),
+            ]),
+          ),
+          #("submit", dynamic.string("Save")),
+        ]),
+      ]),
+    ),
+  ])
+}
+
 /// `title` を欠き、変換に失敗する節。
 fn broken_section() -> Dynamic {
   map_([#("type", dynamic.string("section")), #("blocks", dynamic.list([]))])
@@ -276,4 +303,23 @@ pub fn plugin_page_times_are_relative_to_now_test() {
       [section_with_time("Queue", 1000)],
     )
   assert string.contains(html, ">2 h ago</span>")
+}
+
+/// `form` ブロックの宛先は、今開いているページ自身のパス（`dashboard.plugin_page_href`）になる。
+pub fn plugin_page_form_posts_to_the_current_page_test() {
+  let body =
+    plugin_pages.plugin_page(
+      i18n.English,
+      view.System,
+      two_page_row(),
+      plugin.PluginPage(key: "settings", title: "Settings"),
+      0,
+      [section_with_form("Options")],
+    )
+  assert string.contains(
+    body,
+    "<form action=\""
+      <> dashboard.plugin_page_href("example", "settings")
+      <> "\"",
+  )
 }
