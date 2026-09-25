@@ -7,7 +7,9 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
+import lustre/attribute
 import lustre/element
 import lustre/element/html
 import nostr_no_su/admin/i18n
@@ -92,6 +94,15 @@ fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
 /// ブロック（`alert`）。
 fn alert_block(text: String) -> Dynamic {
   map_([#("type", dynamic.string("alert")), #("text", dynamic.string(text))])
+}
+
+/// ブロック（`alert`）に `tone` を持たせたもの。`tone` は形の誤りを試すため `Dynamic` で受ける。
+fn alert_block_with_tone(text: String, tone: Dynamic) -> Dynamic {
+  map_([
+    #("type", dynamic.string("alert")),
+    #("text", dynamic.string(text)),
+    #("tone", tone),
+  ])
 }
 
 /// ブロック（`link`）。
@@ -441,14 +452,6 @@ pub fn empty_section_shows_the_translated_line_test() {
   assert string.contains(body, translated)
 }
 
-/// `pairs` の `items` が 0 件の節には翻訳した空の状態の文が出る。
-pub fn empty_pairs_shows_the_translated_line_test() {
-  let raw = section_("Has Pairs", [pairs_block([])])
-  let assert Ok(el) = plugin_view.section(raw, context())
-  let body = element.to_string(el)
-  assert string.contains(body, i18n.text(i18n.English, i18n.PluginSectionEmpty))
-}
-
 /// `pairs` の `items` が 0 件のときの訳した文は、プラグイン由来の文字列を包む
 /// `lang="en"` の中ではなく、表示の言語を持つ `div` に包まれる。
 pub fn empty_pairs_translated_line_has_display_language_test() {
@@ -692,6 +695,66 @@ pub fn id_is_rejected_in_table_cells_test() {
   let raw = section_("Cells", [table_block(["A"], [[id_inline("abc")]])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "type \"id\" is only allowed in pairs values")
+}
+
+/// `pairs` の値に `badge` を置くと `Error`。`badge` は `table` のセルと節の `meta` だけに置ける。
+pub fn badge_is_rejected_in_pairs_values_test() {
+  let raw =
+    section_("Values", [
+      pairs_block([#("state", badge_inline("ok", "success"))]),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"Values\": block #0: item #0: value: type \"badge\" is only allowed in table cells and section meta"
+}
+
+/// `table` のセルの `code` は、等幅で長い語を折り返す `span` になる。
+pub fn code_cells_are_monospace_test() {
+  let raw = section_("Cells", [table_block(["A"], [[code_inline("abc123")]])])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  assert string.contains(
+    element.to_string(el),
+    "<td><span class=\"font-mono text-xs break-all\">abc123</span></td>",
+  )
+}
+
+/// `tone` は `view.Tone` の 5 値を名前で選び、文字列でない値と未知の値は `Error` になる。
+pub fn tone_selects_one_of_five_values_test() {
+  let cases = [
+    #("neutral", dynamic.string("neutral"), Ok(view.Neutral)),
+    #("success", dynamic.string("success"), Ok(view.Success)),
+    #("warning", dynamic.string("warning"), Ok(view.Warning)),
+    #("failure", dynamic.string("failure"), Ok(view.Failure)),
+    #("info", dynamic.string("info"), Ok(view.Info)),
+    #(
+      "not a string",
+      dynamic.int(1),
+      Error("section \"Tones\": block #0: tone must be a String, got Int"),
+    ),
+    #(
+      "unknown",
+      dynamic.string("loud"),
+      Error("section \"Tones\": block #0: unknown tone \"loud\""),
+    ),
+  ]
+  list.each(cases, fn(row) {
+    let #(name, tone, expected) = row
+    let raw = section_("Tones", [alert_block_with_tone("Heads up.", tone)])
+    let actual =
+      plugin_view.section(raw, context()) |> result.map(element.to_string)
+    let wanted =
+      result.map(expected, fn(tone) {
+        element.to_string(
+          view.card([
+            html.div([attribute.lang("en")], [
+              view.heading("Tones"),
+              view.alert(tone, [html.text("Heads up.")]),
+            ]),
+          ]),
+        )
+      })
+    assert #(name, actual) == #(name, wanted)
+  })
 }
 
 /// `variant` の無い `image` ブロックは、`url` の scheme が `http` / `https` なら
