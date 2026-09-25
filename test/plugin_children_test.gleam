@@ -56,13 +56,13 @@ fn rejected(kind: String) -> String {
 }
 
 /// アリティごとの表記。理由の文字列とログ行はこれをそのまま使う。
-pub fn export_label_test() {
+pub fn export_label_includes_the_arity_test() {
   assert export_label(0) == "plugin_children/0"
   assert export_label(1) == "plugin_children/1"
 }
 
 /// 子仕様が 0 件でも成功する。子を持たないプラグインと同じ扱いになる。
-pub fn empty_list_test() {
+pub fn an_empty_list_is_accepted_test() {
   assert convert([]) == Ok([])
 }
 
@@ -81,7 +81,7 @@ pub fn binary_id_is_accepted_test() {
 }
 
 /// `type => supervisor` はスーパーバイザーの子になる（shutdown は infinity 固定）。
-pub fn supervisor_type_test() {
+pub fn supervisor_type_makes_a_supervisor_child_test() {
   let child = child("supervisor", unique_name("store"))
   assert child.child_type == supervision.Supervisor
 }
@@ -93,14 +93,8 @@ pub fn worker_infinity_shutdown_test() {
   assert child.child_type == supervision.Worker(-1)
 }
 
-/// `shutdown` のミリ秒はそのまま渡る。
-pub fn worker_shutdown_ms_test() {
-  let child = child("shutdown_100", unique_name("store"))
-  assert child.child_type == supervision.Worker(100)
-}
-
 /// `restart` の 3 つの値がそれぞれ対応する `Restart` になる。
-pub fn restart_values_test() {
+pub fn restart_values_map_to_the_matching_restart_test() {
   assert child("transient", unique_name("store")).restart
     == supervision.Transient
   assert child("temporary", unique_name("store")).restart

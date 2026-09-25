@@ -1,5 +1,5 @@
 %% ページとフォームの送信を両方持つ fixture。plugin_pages/1、plugin_page_content/2、
-%% plugin_page_action/3 を持ち、/3 が優先して呼ばれること、送られた値と設定 map
+%% plugin_page_action/3 を持ち、送られた値と設定 map
 %% （Accounts を含む）が届くことの検証に使う。
 %%
 %% Values に <<"reject">> があればその値を理由に拒否し（{error, Reason}）、

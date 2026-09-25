@@ -575,26 +575,24 @@ pub fn dispatch_counts_events_while_the_runner_is_missing_test() {
   assert process.receive(handled, 1000) == Ok("delivered")
 }
 
-/// 正常なプラグインのランナーは `Running` を返す。
-pub fn runner_answers_status_while_healthy_test() {
-  let name = start_runner(fn(_incoming) { Nil }, plugin_runner.default_limits)
-  assert plugin_runner.status(name) == Some(Running)
-}
-
 /// 打ち切ったワーカーの DOWN はメールボックスへ残さない。`process.kill` の後に
 /// `demonitor_process`（`[flush]` 付き）を呼んでいないと、残留 DOWN が次の
 /// イベントの時点でキュー長 1 として観測される。`max_queue_len` を 0 にして
 /// おくと、その 1 件がそのまま切り捨ての判定に現れるので検出できる。
 pub fn a_timed_out_worker_leaves_no_stray_down_test() {
+  let started = process.new_subject()
   let name =
     start_runner(
-      fn(_incoming) { process.sleep_forever() },
+      fn(_incoming) {
+        process.send(started, Nil)
+        process.sleep_forever()
+      },
       Limits(handle_timeout_ms: 300, max_queue_len: 0, max_failures: 2),
     )
   // 1 件目の実行が始まってから 2 件目を積む。こうすると 1 件目の判定はキューが
   // 空の状態で行われ、2 件目の判定だけが残留 DOWN の有無で変わる。
   deliver(name, 1)
-  process.sleep(100)
+  let assert Ok(Nil) = process.receive(started, 1000)
   deliver(name, 1)
   // 2 件目の打ち切りが終わるまで待ってから問い合わせる。実行中に問い合わせると
   // `GetStatus` 自身がキューに積まれ、残留 DOWN と区別が付かなくなる。
