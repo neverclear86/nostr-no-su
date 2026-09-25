@@ -417,6 +417,25 @@ jobs:
             echo "ADMIN_PORT 未設定でも healthcheck が待ち受けを叩かずに成功してしまった"
             exit 1
           fi
+      # 内側の既定の待ち受けポートは 80。docker はコンテナーの
+      # ip_unprivileged_port_start を 0 にして動かすので、CAP を全部落とした
+      # 読み取り専用のコンテナーでも既定のユーザー（uid 1000）のまま bind できる。
+      # 代役として gen_tcp で 80 に待ち受けを立ててそれを確かめ、HEALTHCHECK の
+      # 既定値展開がその 80 を叩くことも確かめる。
+      - name: 非 root のコンテナーで既定の 80 に bind でき、healthcheck がそれを叩けることを確かめる
+        run: |
+          set -eu
+          expr='L = case gen_tcp:listen(80, [binary, {active, false}, {reuseaddr, true}]) of {ok, LSock} -> LSock; {error, R} -> io:format("could not bind port 80: ~p~n", [R]), halt(1) end, Serve = fun Loop() -> {ok, S} = gen_tcp:accept(L), gen_tcp:recv(S, 0, 5000), gen_tcp:send(S, "HTTP/1.0 200 OK\r\n\r\n"), gen_tcp:close(S), Loop() end, Serve().'
+          c=$(docker run -d --read-only --tmpfs /tmp --cap-drop ALL --entrypoint erl nostr-no-su:ci -noshell -eval "$expr")
+          trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$c"; docker rm -f "$c" >/dev/null; exit "$rc"' EXIT
+          [ "$(docker exec "$c" id -u)" = "1000" ]
+          cmd=$(docker image inspect nostr-no-su:ci --format '{{index .Config.Healthcheck.Test 1}}')
+          i=0
+          until docker exec "$c" sh -c "$cmd"; do
+            i=$((i + 1))
+            [ "$i" -lt 30 ] || { echo "healthcheck が既定の 80 を 30 秒待っても叩けなかった"; exit 1; }
+            sleep 1
+          done
       - name: remsh の検査に共通の docker run 引数を用意する
         run: |
           echo "COMMON_ARGS=--read-only --tmpfs /tmp --cap-drop ALL -e DATABASE_URL=postgres://u:p@127.0.0.1:1/db -e ACCOUNT_MASTER_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e ADMIN_PORT= -e PLUGIN_DIR=" >> "$GITHUB_ENV"
