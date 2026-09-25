@@ -7,6 +7,7 @@ import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import nostr_no_su/admin/dashboard
 import nostr_no_su/app
@@ -31,18 +32,16 @@ import support/app_tree.{
   store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
+import support/poll
 
 /// 接続が切断状態になるまで待つ。切断を観測できた時点で、接続アクターは
 /// `on_disconnect` を実行し終えている。
 fn await_disconnect(name: Name(relay_connection.Msg), timeout_ms: Int) -> Bool {
-  case relay_connection.status(name), timeout_ms <= 0 {
-    relay_connection.Disconnected, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_disconnect(name, timeout_ms - 10)
-    }
-  }
+  poll.until(
+    fn() { relay_connection.status(name) == relay_connection.Disconnected },
+    timeout_ms,
+    10,
+  )
 }
 
 /// 偽リレー 1 本の上でバンカーだけを動かすツリー。アカウントの読み込みは
@@ -611,18 +610,8 @@ pub fn unconfirmed_nip46_writes_reload_once_and_not_while_loading_test() {
 }
 
 /// バンカーが読み込み済みか問い合わせ続け、`Ok` になるまで待つ。
-fn await_loaded(name: Name(bunker.Msg), remaining: Int) -> Bool {
-  case bunker.accounts(name) {
-    Ok(_) -> True
-    Error(_) ->
-      case remaining <= 0 {
-        True -> False
-        False -> {
-          process.sleep(20)
-          await_loaded(name, remaining - 20)
-        }
-      }
-  }
+fn await_loaded(name: Name(bunker.Msg), timeout_ms: Int) -> Bool {
+  poll.until(fn() { result.is_ok(bunker.accounts(name)) }, timeout_ms, 20)
 }
 
 /// 承認の書き込みの結果が曖昧だったときは、承認待ちとセッションを変えずに読み
@@ -968,18 +957,16 @@ fn await_first_p_tags(
 fn await_publisher_urls(
   name: Name(bunker.Msg),
   expected: List(String),
-  remaining: Int,
+  timeout_ms: Int,
 ) -> Bool {
-  let urls =
-    option.map(bunker.publisher_urls(name), list.sort(_, string.compare))
-  case urls == Some(expected), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(20)
-      await_publisher_urls(name, expected, remaining - 20)
-    }
-  }
+  poll.until(
+    fn() {
+      option.map(bunker.publisher_urls(name), list.sort(_, string.compare))
+      == Some(expected)
+    },
+    timeout_ms,
+    20,
+  )
 }
 
 /// 基本の組に無いセッションのリレーは、そのセッションの署名者だけの `#p` で購読する

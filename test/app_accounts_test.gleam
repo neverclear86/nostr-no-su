@@ -32,6 +32,7 @@ import support/app_tree.{
   test_relay, test_relay_url,
 }
 import support/nip46_client.{account_for}
+import support/poll
 
 /// 書き込みが遅いストアで、書き込みの途中に積まれる追加の対象になる署名者の鍵。
 const slow_signer_key = "0000000000000000000000000000000000000000000000000000000000000055"
@@ -870,16 +871,16 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
 }
 
 /// アクターのメールボックスにメッセージが積まれるまで待つ。
-fn await_queued(actor: Pid, remaining: Int) -> Bool {
-  let #(_item, queued) = process_info(actor, atom.create("message_queue_len"))
-  case queued > 0, remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_queued(actor, remaining - 10)
-    }
-  }
+fn await_queued(actor: Pid, timeout_ms: Int) -> Bool {
+  poll.until(
+    fn() {
+      let #(_item, queued) =
+        process_info(actor, atom.create("message_queue_len"))
+      queued > 0
+    },
+    timeout_ms,
+    10,
+  )
 }
 
 /// プロセスの情報 1 項目。
@@ -905,16 +906,9 @@ fn database_listings(database: Subject(DatabaseMsg)) -> List(bunker.Listing) {
 fn await_accounts(
   name: Name(bunker.Msg),
   expected: List(bunker.Listing),
-  remaining: Int,
+  timeout_ms: Int,
 ) -> Bool {
-  case bunker.accounts(name) == Ok(expected), remaining <= 0 {
-    True, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(20)
-      await_accounts(name, expected, remaining - 20)
-    }
-  }
+  poll.until(fn() { bunker.accounts(name) == Ok(expected) }, timeout_ms, 20)
 }
 
 /// 結果が曖昧な追加がコミットされていたら、読み直してメモリを DB に合わせる。追加した

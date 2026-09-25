@@ -23,6 +23,7 @@ import nostr_no_su/plugin_children.{
   type Rejection, ConfigRejected, InvalidSpec, export_label, from_dynamic,
 }
 import support/erl.{is_registered, unique_integer}
+import support/poll
 
 /// 子の起動失敗のログ行に出るプラグイン名。
 const plugin_name = "children_test"
@@ -357,15 +358,8 @@ pub fn finite_worker_shutdown_reaches_otp_test() {
 }
 
 /// 登録名が解放されるまで待つ。
-fn await_unregistered(name: Atom, remaining: Int) -> Bool {
-  case is_registered(name), remaining <= 0 {
-    False, _ -> True
-    _, True -> False
-    _, False -> {
-      process.sleep(10)
-      await_unregistered(name, remaining - 10)
-    }
-  }
+fn await_unregistered(name: Atom, timeout_ms: Int) -> Bool {
+  poll.until(fn() { !is_registered(name) }, timeout_ms, 10)
 }
 
 /// OTP に登録された子仕様のフィールドを 1 行の文字列で読む。

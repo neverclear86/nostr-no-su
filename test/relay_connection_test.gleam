@@ -3,6 +3,7 @@ import gleam/option.{None, Some}
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/relay_connection.{type Socket, Socket}
+import support/poll
 
 /// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
 /// 程度には長い遅延。
@@ -109,14 +110,7 @@ fn stop(actor: Pid) -> Nil {
 
 /// 指定したミリ秒以内にプロセスが消えるかどうか。
 fn died_within(pid: Pid, timeout_ms: Int) -> Bool {
-  case process.is_alive(pid), timeout_ms <= 0 {
-    False, _ -> True
-    True, True -> False
-    True, False -> {
-      process.sleep(10)
-      died_within(pid, timeout_ms - 10)
-    }
-  }
+  poll.until(fn() { !process.is_alive(pid) }, timeout_ms, 10)
 }
 
 /// アクターは指示されなくても起動時に接続する。

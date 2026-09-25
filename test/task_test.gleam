@@ -2,6 +2,8 @@ import gleam/erlang/process
 import gleam/list
 import nostr_no_su/task
 import nostr_no_su/time
+import support/erl.{message_queue_len}
+import support/poll
 
 /// 期限内に終わる仕事は `Ok` になる。
 pub fn await_returns_the_value_test() {
@@ -37,11 +39,18 @@ pub fn a_shared_deadline_bounds_the_total_wait_test() {
   assert time.monotonic_ms() - started_at < 1000
 }
 
-/// 期限を過ぎていても、すでに届いた結果は取れる。
+/// 期限を過ぎていても、すでに届いた結果は取れる。結果が届いたことは待ち時間ではなく
+/// メールボックスのメッセージの数で確かめる。テストプロセスのメールボックスには同じ
+/// レーンの前のテストが残したメッセージがあるので、空のメールボックスを持つ別の
+/// プロセスで確かめる。
 pub fn a_result_that_already_arrived_is_taken_after_the_deadline_test() {
-  let job = task.start(fn() { 7 })
-  process.sleep(50)
-  assert task.await(job, task.deadline_in(0)) == Ok(7)
+  let results = process.new_subject()
+  process.spawn(fn() {
+    let job = task.start(fn() { 7 })
+    let arrived = poll.until(fn() { message_queue_len() > 0 }, 1000, 10)
+    process.send(results, #(arrived, task.await(job, task.deadline_in(0))))
+  })
+  assert process.receive(results, 2000) == Ok(#(True, Ok(7)))
 }
 
 /// `panic` する仕事は `Error(Nil)` になり、呼び出し元は道連れにならず後続の

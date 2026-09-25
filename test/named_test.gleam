@@ -1,7 +1,10 @@
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import nostr_no_su/named
 import nostr_no_su/time
+import support/erl.{message_queue_len}
+import support/poll
 
 /// 問い合わせに使うメッセージ。宛先の振る舞いを模す。
 type Msg {
@@ -43,16 +46,9 @@ fn spawn_named(name: process.Name(Msg)) -> Pid {
   pid
 }
 
-/// 名前が登録されるまで待つ。
+/// 名前が登録されるまで待つ。期限までに登録されなければ落ちる。
 fn await_registration(name: process.Name(Msg), timeout_ms: Int) -> Nil {
-  case process.named(name), timeout_ms <= 0 {
-    Ok(_pid), _ -> Nil
-    _, True -> Nil
-    _, False -> {
-      process.sleep(10)
-      await_registration(name, timeout_ms - 10)
-    }
-  }
+  assert poll.until(fn() { result.is_ok(process.named(name)) }, timeout_ms, 10)
 }
 
 /// 呼び出し側を別のプロセスにして `call` を実行し、その結果と、`settle_ms` 待った
@@ -73,10 +69,6 @@ fn call_in_a_fresh_process(
   let assert Ok(outcome) = process.receive(results, settle_ms + 5000)
   outcome
 }
-
-/// 自プロセスの未処理メッセージ数。
-@external(erlang, "nostr_no_su_ffi", "message_queue_len")
-fn message_queue_len() -> Int
 
 /// 応答する宛先には、その応答がそのまま返る。
 ///
