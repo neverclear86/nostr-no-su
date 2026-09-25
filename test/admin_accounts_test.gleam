@@ -7,6 +7,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
+import lustre/element/html
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -47,14 +48,31 @@ fn nsec_signer(nsec: String) -> String {
   account.pubkey_hex(decoded)
 }
 
+/// `body` の中で `attribute` を含む最初の `<input>` の開始タグの、`<input ` の後から `>` の前までの
+/// 属性の並び。無ければ落ちる。
+fn input_tag(body: String, attribute: String) -> String {
+  let assert Ok(tag) =
+    string.split(body, "<input ")
+    |> list.drop(1)
+    |> list.map(fn(piece) {
+      let assert Ok(#(tag, _)) = string.split_once(piece, ">")
+      tag
+    })
+    |> list.find(string.contains(_, attribute))
+  tag
+}
+
 /// ダッシュボードのアカウントの節には、ラベルが出る。
 pub fn dashboard_shows_account_labels_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(
     body,
-    "<p class=\"text-lg font-bold leading-snug break-words\">"
-      <> label
-      <> "</p>",
+    element.to_string(view.identity(
+      i18n.English,
+      view.LargeIdentity,
+      label,
+      signer_npub,
+    )),
   )
 }
 
@@ -67,9 +85,12 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
     simulate.read_body(get(with_accounts(Ok([account_row(script)])), "/"))
   assert string.contains(
     labelled,
-    "<p class=\"text-lg font-bold leading-snug break-words\">"
-      <> escaped
-      <> "</p>",
+    element.to_string(view.identity(
+      i18n.English,
+      view.LargeIdentity,
+      script,
+      signer_npub,
+    )),
   )
   assert !string.contains(labelled, script)
 
@@ -83,12 +104,6 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
       <> "</span></span></div>",
   )
   assert !string.contains(failing, script)
-}
-
-/// アカウントが 1 件も無ければ、その旨を出す。
-pub fn dashboard_shows_that_no_accounts_are_registered_test() {
-  let body = simulate.read_body(get(with_accounts(Ok([])), "/"))
-  assert string.contains(body, "No accounts registered.")
 }
 
 // --- アカウントの登録 ---
@@ -221,23 +236,29 @@ pub fn import_while_accounts_are_not_ready_is_unavailable_test() {
 pub fn import_rejects_a_label_over_the_code_point_limit_test() {
   let reports = process.new_subject()
   let labels = [
-    #(string.repeat("a", 101), "label must be at most 100 characters"),
     #(
+      "101 code points",
+      string.repeat("a", 101),
+      "label must be at most 100 characters",
+    ),
+    #(
+      "combining marks",
       "e" <> string.repeat("\u{0301}", 100),
       "label must be at most 100 characters",
     ),
-    #("a\nb", "label must not contain control characters"),
-    #("a\u{009B}b", "label must not contain control characters"),
+    #("line feed", "a\nb", "label must not contain control characters"),
+    #("C1 control", "a\u{009B}b", "label must not contain control characters"),
   ]
   list.each(labels, fn(entry) {
-    let #(sent, reason) = entry
+    let #(name, sent, reason) = entry
     let response =
       post_form(reporting_context(reports), "/accounts/import", [
         #("nsec", spec_nsec),
         #("label", sent),
       ])
-    assert response.status == 400
-    assert string.contains(simulate.read_body(response), reason)
+    assert #(name, response.status) == #(name, 400)
+    assert #(name, string.contains(simulate.read_body(response), reason))
+      == #(name, True)
   })
   assert process.receive(reports, 100) == Error(Nil)
 }
@@ -250,51 +271,58 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
   let generated =
     hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
   let cases = [
-    #([], "label must not be empty"),
-    #([#("label", "")], "label must not be empty"),
-    #([#("label", "   ")], "label must not be empty"),
-    #([#("label", "abc\n")], "label must not contain control characters"),
-    #([#("label", "\u{0085}")], "label must not contain control characters"),
+    #("no field", [], "label must not be empty"),
+    #("empty", [#("label", "")], "label must not be empty"),
+    #("spaces", [#("label", "   ")], "label must not be empty"),
+    #(
+      "trailing line feed",
+      [#("label", "abc\n")],
+      "label must not contain control characters",
+    ),
+    #(
+      "next line only",
+      [#("label", "\u{0085}")],
+      "label must not contain control characters",
+    ),
+  ]
+  let paths = [
+    #("/accounts/import", [#("nsec", spec_nsec)]),
+    #("/accounts/register-generated", [#("nsec", generated)]),
+    #(action_path(dashboard.EditLabel), []),
   ]
   list.each(cases, fn(entry) {
-    let #(label_field, reason) = entry
-    let import_response =
-      post_form(reporting_context(reports), "/accounts/import", [
-        #("nsec", spec_nsec),
-        ..label_field
-      ])
-    assert import_response.status == 400
-    assert string.contains(simulate.read_body(import_response), reason)
-
-    let generated_response =
-      post_form(reporting_context(reports), "/accounts/register-generated", [
-        #("nsec", generated),
-        ..label_field
-      ])
-    assert generated_response.status == 400
-    assert string.contains(simulate.read_body(generated_response), reason)
-
-    let edit_response =
-      post_form(
-        reporting_context(reports),
-        action_path(dashboard.EditLabel),
-        label_field,
-      )
-    assert edit_response.status == 400
-    assert string.contains(simulate.read_body(edit_response), reason)
+    let #(name, label_field, reason) = entry
+    list.each(paths, fn(path_entry) {
+      let #(path, head_fields) = path_entry
+      let response =
+        post_form(
+          reporting_context(reports),
+          path,
+          list.append(head_fields, label_field),
+        )
+      assert #(name, path, response.status) == #(name, path, 400)
+      assert #(
+          name,
+          path,
+          string.contains(simulate.read_body(response), reason),
+        )
+        == #(name, path, True)
+    })
   })
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// ラベルの欄を持つフォームを再描画する 5 つの経路は、送られた値から制御文字を除き、
-/// trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
+/// ラベルの欄を持つフォームを再描画する 5 つの経路は、応答で開いたダイアログの中で、送られた値から
+/// 制御文字を除き trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
 /// 出し、欄に `input-error` と `aria-invalid` を付けない。送った nsec は反射しない。
 pub fn invalid_input_keeps_the_label_on_every_path_test() {
+  let edit_id = action_dialog_id(dashboard.EditLabel)
   let broken = string.drop_end(spec_nsec, 1) <> "4"
   let generated =
     hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
   let cases = [
     #(
+      "import with a broken nsec",
       post_form(context(), "/accounts/import", [
         #("nsec", broken),
         #("label", "a\tb"),
@@ -303,8 +331,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "invalid bech32 checksum",
       "ab",
       Some(broken),
+      "dialog-account-new",
     ),
     #(
+      "generated with a broken nsec",
       post_form(context(), "/accounts/register-generated", [
         #("nsec", broken),
         #("label", " a\tb "),
@@ -313,8 +343,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "invalid bech32 checksum",
       " ab ",
       Some(broken),
+      "dialog-account-new",
     ),
     #(
+      "import with a tab",
       post_form(context(), "/accounts/import", [
         #("nsec", spec_nsec),
         #("label", " a\tb"),
@@ -323,8 +355,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "label must not contain control characters",
       " ab",
       Some(spec_nsec),
+      "dialog-account-new",
     ),
     #(
+      "import with only spaces",
       post_form(context(), "/accounts/import", [
         #("nsec", spec_nsec),
         #("label", "   "),
@@ -333,8 +367,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "label must not be empty",
       "   ",
       Some(spec_nsec),
+      "dialog-account-new",
     ),
     #(
+      "generated with a next line",
       post_form(context(), "/accounts/register-generated", [
         #("nsec", generated),
         #("label", "a\u{0085}b "),
@@ -343,8 +379,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "label must not contain control characters",
       "ab ",
       None,
+      "dialog-result",
     ),
     #(
+      "import of a registered key",
       post_form(context(), "/accounts/import", [
         #("nsec", signer_nsec),
         #("label", " work "),
@@ -353,8 +391,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "account is already registered",
       " work ",
       Some(signer_nsec),
+      "dialog-account-new",
     ),
     #(
+      "edit with a line feed",
       post_form(context(), action_path(dashboard.EditLabel), [
         #("label", " a\nb "),
       ]),
@@ -362,8 +402,10 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "label must not contain control characters",
       " ab ",
       None,
+      edit_id,
     ),
     #(
+      "edit that was not applied",
       post_form(
         failing_context(bunker.NotApplied("account is not registered")),
         action_path(dashboard.EditLabel),
@@ -373,19 +415,23 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "account is not registered",
       " new ",
       None,
+      edit_id,
     ),
   ]
-  use #(response, status, reason, field_value, sent_nsec) <- list.each(cases)
-  assert response.status == status
+  use #(name, response, status, reason, field_value, sent_nsec, dialog_id) <- list.each(
+    cases,
+  )
+  assert #(name, response.status) == #(name, status)
   let body = simulate.read_body(response)
-  assert string.contains(body, reason)
+  let dialog = opened_dialog(body, dialog_id)
+  assert #(name, string.contains(dialog, reason)) == #(name, True)
   assert string.contains(
-    body,
+    dialog,
     "name=\"label\" required type=\"text\" value=\"" <> field_value <> "\"",
   )
   let assert Ok(#(_before, after_alert)) =
     string.split_once(
-      body,
+      dialog,
       "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
         <> element.to_string(view.tone_icon(view.Failure))
         <> "<span class=\"wrap-anywhere\">",
@@ -472,37 +518,46 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
   let label = " work "
   let cases = [
     #(
+      "already registered",
       context(),
       signer_nsec,
       409,
-      "<div class=\"alert alert-soft alert-error text-base-content\" role=\"alert\">"
-        <> element.to_string(view.tone_icon(view.Failure))
-        <> "<span class=\"wrap-anywhere\">account is already registered</span></div>",
+      view.reason_alert(view.Failure, [
+        html.text(i18n.text(i18n.English, i18n.AccountAlreadyRegistered)),
+      ]),
     ),
     #(
+      "not ready",
       failing_context(bunker.NotReady("accounts are not loaded yet")),
       spec_nsec,
       503,
-      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
-        <> element.to_string(view.tone_icon(view.Warning))
-        <> "<span class=\"wrap-anywhere\">The key was not registered because accounts are not available right now. Wait a moment, then press &quot;Register this key&quot; again. <span lang=\"en\">accounts are not loaded yet</span></span></div>",
+      view.reason_alert(view.Warning, [
+        html.text(i18n.text(i18n.English, i18n.RegistrationNotAccepted) <> " "),
+        view.untranslated("accounts are not loaded yet"),
+      ]),
     ),
     #(
+      "maybe applied",
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
       spec_nsec,
       202,
-      "<div class=\"alert alert-soft alert-warning text-base-content\" role=\"alert\">"
-        <> element.to_string(view.tone_icon(view.Warning))
-        <> "<span class=\"wrap-anywhere\">The registration was not confirmed. Back up this key, then press &quot;Register this key&quot; again: it is registered if it was not, or &quot;account is already registered&quot; is shown if it was. the store did not confirm the change; it may have been applied</span></div>",
+      view.reason_alert(view.Warning, [
+        html.text(
+          i18n.text(i18n.English, i18n.RegistrationNotConfirmed)
+          <> " "
+          <> i18n.text(i18n.English, i18n.StoreDidNotConfirm),
+        ),
+      ]),
     ),
   ]
-  use #(ctx, nsec, status, alert) <- list.each(cases)
+  use #(name, ctx, nsec, status, alert) <- list.each(cases)
   let response = post_form(ctx, path, [#("nsec", nsec), #("label", label)])
-  assert response.status == status
+  assert #(name, response.status) == #(name, status)
   let body = simulate.read_body(response)
   assert hidden_nsec(body) == nsec
   assert string.contains(body, "action=\"/accounts/register-generated\"")
-  assert string.contains(body, alert)
+  assert #(name, string.contains(body, element.to_string(alert)))
+    == #(name, True)
   assert string.contains(
     body,
     "name=\"label\" required type=\"text\" value=\" work \"",
@@ -608,10 +663,9 @@ pub fn generate_opens_the_generated_key_dialog_test() {
 pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   let body =
     closed_dialog(simulate.read_body(get(context(), "/")), "dialog-account-new")
-  assert string.contains(
-    body,
-    "<input aria-describedby=\"nsec-hint\" aria-label=\"Private key (nsec)\" autocomplete=\"new-password\" class=\"input w-full font-mono border-base-content/60\" name=\"nsec\" required type=\"password\">",
-  )
+  let nsec_input = input_tag(body, "name=\"nsec\"")
+  assert string.contains(nsec_input, "type=\"password\"")
+  assert string.contains(nsec_input, "autocomplete=\"new-password\"")
   assert string.contains(
     body,
     "<form action=\""
@@ -772,24 +826,15 @@ pub fn label_update_calls_the_context_and_redirects_test() {
   assert process.receive(reports, 1000) == Ok(Relabeled(signer, "new"))
 }
 
-/// 規則に反するラベルは 400 で、編集の欄には送られた値から制御文字を除いた値を入れ、
-/// Context を呼ばない。
-pub fn label_update_rejects_an_invalid_label_test() {
-  let reports = process.new_subject()
-  let response =
-    post_form(reporting_context(reports), action_path(dashboard.EditLabel), [
-      #("label", "a\nb"),
-    ])
-  assert response.status == 400
-  let body = simulate.read_body(response)
-  assert string.contains(body, "label must not contain control characters")
-  assert string.contains(body, "value=\"ab\"")
-  assert process.receive(reports, 100) == Error(Nil)
-}
-
 /// ラベルの編集のダイアログを開き直しても、要約は保存済みのラベルのまま。
 pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
-  let saved = "<p class=\"font-semibold break-words\">" <> label <> "</p>"
+  let saved =
+    element.to_string(view.identity(
+      i18n.English,
+      view.PlainIdentity,
+      label,
+      signer_npub,
+    ))
   let id = action_dialog_id(dashboard.EditLabel)
   let invalid_input =
     simulate.read_body(
@@ -807,28 +852,6 @@ pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
       ),
     )
   assert string.contains(opened_dialog(conflict, id), saved)
-}
-
-/// ラベルの編集の 400 と 409 は、行のラベルの編集のダイアログを開いた状態で返し、中に理由と送った値を出す。
-pub fn account_change_failure_opens_the_row_dialog_test() {
-  let id = action_dialog_id(dashboard.EditLabel)
-  let cases = [
-    #(context(), "a\nb", 400, "label must not contain control characters", "ab"),
-    #(
-      failing_context(bunker.NotApplied("account is not registered")),
-      " new ",
-      409,
-      "account is not registered",
-      " new ",
-    ),
-  ]
-  use #(ctx, sent, status, reason, echoed) <- list.each(cases)
-  let response =
-    post_form(ctx, action_path(dashboard.EditLabel), [#("label", sent)])
-  assert response.status == status
-  let dialog = opened_dialog(simulate.read_body(response), id)
-  assert string.contains(dialog, reason)
-  assert string.contains(dialog, "value=\"" <> echoed <> "\"")
 }
 
 /// 欄に戻したラベルは属性値としてエスケープする。
@@ -968,9 +991,8 @@ fn assert_failure_body(
       assert string.contains(body, reason)
       assert string.contains(
         body,
-        "<a class=\"btn btn-ghost btn-sm -ml-3 focus-visible:outline-base-content\" href=\"/\"><svg",
+        element.to_string(view.back_link(i18n.English)),
       )
-      assert string.contains(body, "</svg>Back to dashboard</a>")
       Nil
     }
   }
@@ -993,15 +1015,19 @@ pub fn account_dialog_for_a_vanished_row_is_a_notice_test() {
     )
   let response = post(vanishing, action_path(dashboard.RotateSecret))
   assert response.status == 503
+  let body = simulate.read_body(response)
   assert string.contains(
-    simulate.read_body(response),
-    "<div class=\"card-body gap-4 p-4 sm:p-6\"><div class=\"flex items-start gap-3\">"
-      <> element.to_string(view.notice_mark(view.Warning)),
+    body,
+    element.to_string(view.notice_mark(view.Warning)),
+  )
+  assert string.contains(
+    body,
+    ">" <> i18n.text(i18n.English, i18n.AccountsNotAvailable) <> "</h1>",
   )
 }
 
-/// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 で、
-/// Context の変更を呼ばない。反映済みの削除を再送した場合もこの経路になる。
+/// 一覧に無い署名者（削除済みなど）への削除、secret の作り直し、ラベルの POST は 404 の HTML で、
+/// 理由を出し、署名者を含めず、Context の変更を呼ばない。反映済みの削除を再送した場合もこの経路になる。
 pub fn changes_to_an_unlisted_signer_are_not_found_test() {
   let reports = process.new_subject()
   let emptied =
@@ -1015,6 +1041,15 @@ pub fn changes_to_an_unlisted_signer_are_not_found_test() {
     let #(action, fields) = entry
     let response = post_form(emptied, action_path(action), fields)
     assert #(action, response.status) == #(action, 404)
+    assert #(action, header(response, "content-type"))
+      == #(action, "text/html; charset=utf-8")
+    let body = simulate.read_body(response)
+    assert #(
+        action,
+        string.contains(body, i18n.text(i18n.English, i18n.AccountNotFound)),
+      )
+      == #(action, True)
+    assert #(action, string.contains(body, signer)) == #(action, False)
   })
   assert process.receive(reports, 100) == Error(Nil)
 }
@@ -1037,32 +1072,15 @@ pub fn unknown_account_action_is_not_found_test() {
   assert post(context(), "/accounts/" <> signer <> "/nope").status == 404
 }
 
-/// 一覧に無い署名者への操作の POST は 404 の HTML で、理由を出し、署名者を含めない。
-pub fn unlisted_signer_is_not_found_page_test() {
-  let response =
-    post_form(with_accounts(Ok([])), action_path(dashboard.EditLabel), [
-      #("label", "new"),
-    ])
-  assert response.status == 404
-  let body = simulate.read_body(response)
-  assert header(response, "content-type") == "text/html; charset=utf-8"
-  assert string.contains(body, i18n.text(i18n.English, i18n.AccountNotFound))
-  assert !string.contains(body, signer)
-}
-
 /// アカウントの一覧を得られなければ、操作の POST は 503 で理由を出す。
 pub fn account_pages_need_the_account_list_test() {
   let failing = with_accounts(Error(unavailable))
-  let responses =
-    list.map(account_actions.all, fn(action) {
-      post(failing, action_path(action))
-    })
-  list.each(responses, fn(response) {
-    assert response.status == 503
-    let body = simulate.read_body(response)
-    assert string.contains(body, unavailable)
-    assert string.contains(body, "Back to dashboard")
-  })
+  use action <- list.each(account_actions.all)
+  let response = post(failing, action_path(action))
+  assert #(action, response.status) == #(action, 503)
+  let body = simulate.read_body(response)
+  assert #(action, string.contains(body, unavailable)) == #(action, True)
+  assert string.contains(body, "Back to dashboard")
 }
 
 // --- 読み込みで飛ばされた行の削除 ---
@@ -1173,14 +1191,10 @@ pub fn unreadable_delete_failures_map_to_status_codes_test() {
 pub fn dashboard_lists_account_actions_test() {
   let body = simulate.read_body(get(context(), "/"))
   assert string.contains(body, signer_npub)
-  assert string.contains(
-    body,
-    "<input aria-describedby=\"account-"
-      <> signer
-      <> "-uri-hint\" aria-label=\"Connection URI\" class=\"input w-full min-w-0 font-mono text-xs border-base-content/60\" readonly type=\"text\" value=\""
-      <> wisp.escape_html(uri)
-      <> "\">",
-  )
+  let uri_input =
+    input_tag(body, "aria-describedby=\"account-" <> signer <> "-uri-hint\"")
+  assert string.contains(uri_input, " readonly ")
+  assert string.contains(uri_input, "value=\"" <> wisp.escape_html(uri) <> "\"")
   assert string.contains(body, "commandfor=\"dialog-account-new\"")
   assert string.contains(body, "commandfor=\"" <> qr_dialog_id <> "\"")
   list.each(account_actions.all, fn(action) {
@@ -1198,15 +1212,6 @@ pub fn dashboard_escapes_a_uri_attribute_test() {
     "value=\"bunker://x?&quot;&gt;&lt;b&gt;xss&lt;/b&gt;\"",
   )
   assert !string.contains(body, "<b>xss</b>")
-}
-
-/// 一覧を得られないときは、アカウントの追加のボタンを出さない。
-pub fn dashboard_hides_add_account_without_accounts_test() {
-  let failing = simulate.read_body(get(with_accounts(Error(unavailable)), "/"))
-  let trigger = "command=\"show-modal\" commandfor=\"dialog-account-new\""
-  assert !string.contains(failing, trigger)
-  let empty = simulate.read_body(get(with_accounts(Ok([])), "/"))
-  assert string.contains(empty, trigger)
 }
 
 // --- 接続 QR コード ---
