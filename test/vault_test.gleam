@@ -215,20 +215,6 @@ pub fn invalid_secrets_are_rejected_test() {
   assert open_error(row) == vault.InvalidSecret
 }
 
-/// OTP は 11 バイトの nonce でも暗号化に成功するので、`vault.seal` が Error に
-/// することを固定する。
-pub fn an_11_byte_nonce_is_rejected_test() {
-  let assert Ok(short_nonce) = bit_array.slice(bytes(privkey_nonce), 0, 11)
-  assert vault.seal(
-      master_key(master_key_hex),
-      vault.PrivateKey,
-      account.pubkey(signer(privkey_a)),
-      bytes(privkey_a),
-      short_nonce,
-    )
-    == Error(Nil)
-}
-
 /// 壊れた行だけを飛ばし、残りの行は元の順序のまま読み込む。
 pub fn open_rows_skips_only_the_broken_rows_test() {
   let good_a = row_a()

@@ -182,33 +182,23 @@ pub fn connect_wrong_secret_test() {
   assert string.contains(decrypt_response(client, signer, r2), "unauthorized")
 }
 
-/// `connect` より前に送られたリクエストは未認可として拒否される。
-pub fn get_public_key_requires_connect_test() {
+/// `connect` より前に送られたリクエストは、メソッドによらず未認可として拒否される。
+pub fn requests_before_connect_are_unauthorized_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
+  let cases = [
+    #("get_public_key", "{\"id\":\"g1\",\"method\":\"get_public_key\"}"),
+    #("sign_event", "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[]}"),
+  ]
+  use #(method, body) <- list.each(cases)
   let #(_state, outcome) =
     handle(new_engine(), request_event(client, signer, body, 1000), 1000)
-  let assert Reply(response) = outcome
-  assert string.contains(
-    decrypt_response(client, signer, response),
-    "unauthorized",
-  )
-}
-
-/// `get_public_key` に限らず、`connect` より前に送られたリクエストは未認可として
-/// 拒否される。
-pub fn methods_other_than_get_public_key_require_connect_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[]}"
-  let #(_state, outcome) =
-    handle(new_engine(), request_event(client, signer, body, 1000), 1000)
-  let assert Reply(response) = outcome
+  let assert Reply(response) = outcome as method
   assert string.contains(
     decrypt_response(client, signer, response),
     "unauthorized: send connect first",
   )
+    as method
 }
 
 /// 接続後は `get_public_key` が署名者の pubkey を返す。
@@ -430,22 +420,8 @@ pub fn an_oversized_request_is_ignored_test() {
   assert outcome == Ignore(rpc.limit_exceeded)
 }
 
-/// 未知のメソッドはクラッシュではなくエラー応答で返す。
-pub fn unknown_method_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let body = "{\"id\":\"u1\",\"method\":\"do_the_thing\"}"
-  let #(_state, outcome) =
-    handle(state, request_event(client, signer, body, 1001), 1001)
-  let assert Reply(response) = outcome
-  assert string.contains(
-    decrypt_response(client, signer, response),
-    "unsupported method",
-  )
-}
-
-/// 未知の方法への応答に、リクエストの方法名は含まれない。
+/// 未知のメソッドはクラッシュではなくエラー応答で返し、その応答にリクエストの
+/// メソッド名は含めない。
 pub fn an_unknown_method_is_not_echoed_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)

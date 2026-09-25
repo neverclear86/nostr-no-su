@@ -128,8 +128,9 @@ pub fn connects_on_start_test() {
   stop(actor)
 }
 
-/// ソケットが死んでもアクターは道連れにならない。設定した遅延の後に再接続し、
-/// 呼び出し側を新しいソケットへ再配線する。
+/// ソケットが死んでもアクターは道連れにならない。まず `on_disconnect` を実行し
+/// （バンカーはこれを受けて、死んだソケットへ向いた送信手段を取り下げる）、
+/// 設定した遅延の後に再接続して、呼び出し側を新しいソケットへ再配線する。
 pub fn reconnects_after_the_socket_dies_test() {
   let reports = process.new_subject()
   let actor = start(reports, connects(reports))
@@ -143,21 +144,6 @@ pub fn reconnects_after_the_socket_dies_test() {
   let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
   assert process.receive(reports, 1000) == Ok(Rewired)
   assert process.is_alive(actor)
-  stop(actor)
-}
-
-/// ソケットを失ったら `on_disconnect` を実行する。バンカーはこれを受けて、死んだ
-/// ソケットへ向いた送信手段を取り下げる。
-pub fn calls_on_disconnect_when_the_socket_dies_test() {
-  let reports = process.new_subject()
-  let actor = start(reports, connects(reports))
-  let assert Ok(Connected(socket)) = process.receive(reports, 1000)
-  let assert Ok(Rewired) = process.receive(reports, 1000)
-  process.kill(socket)
-  assert process.receive(reports, 2000) == Ok(Unwired)
-  // 再接続すれば、新しいソケットで配線し直される。
-  let assert Ok(Connected(_reconnected)) = process.receive(reports, 2000)
-  assert process.receive(reports, 1000) == Ok(Rewired)
   stop(actor)
 }
 
@@ -435,7 +421,8 @@ fn draft_event() -> event.Event {
   )
 }
 
-/// 接続中は `True` を返し、注入したソケットの `publish` にイベントが渡る。
+/// 接続中は依頼を受け付けて `True` を返し、注入したソケットの `publish` に
+/// イベントが渡ったうえで、応答で `True` を返す。
 pub fn publish_hands_the_event_to_the_live_socket_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_relay")
@@ -451,8 +438,9 @@ pub fn publish_hands_the_event_to_the_live_socket_test() {
   stop(actor)
 }
 
-/// ソケットが無いときは `False`。
-pub fn publish_returns_false_while_disconnected_test() {
+/// ソケットが無いときも依頼は受け付けて `True` を返すが、ソケットには何も渡さず、
+/// 応答で `False` を返す。
+pub fn publish_replies_false_while_disconnected_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_relay")
   let actor = start_named(name, reports, refuses(reports))

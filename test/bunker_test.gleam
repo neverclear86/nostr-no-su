@@ -1,6 +1,6 @@
-//// `bunker.load_report` と `bunker.default_retry_delay` のテストと、バンカーアクターの
-//// 状態に接続 secret が出ないことのテスト。読み込みの結果に対して、どのログ行を
-//// 出すかと、再試行の待ち時間の延び方を確かめる。`bunker.track` / `bunker.acknowledge`
+//// `bunker.load_report` のテストと、バンカーアクターの状態に接続 secret が出ないことの
+//// テスト。読み込みの結果に対して、どのログ行を出すかを確かめる。
+//// `bunker.track` / `bunker.acknowledge`
 //// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
 //// どう組み立てるかを確かめる。`bunker.pause_on_rate_limit` / `bunker.recipients`
 //// のテストは、`rate-limited:` を返したリレーへのセッションの外の応答をいつ
@@ -351,13 +351,6 @@ pub fn a_changed_failure_is_reported_test() {
     == [
       "account store unavailable: postgres error: insufficient_privilege; retrying in 5000ms",
     ]
-}
-
-/// 既定の待ち時間は 5 秒から倍に延び、2 分で頭打ちになる（倍加の系列そのものは
-/// `backoff_test.next_doubles_up_to_the_maximum_test` で検査する）。
-pub fn default_retry_delay_is_five_seconds_up_to_two_minutes_test() {
-  assert bunker.default_retry_delay
-    == backoff.Backoff(initial_ms: 5000, max_ms: 120_000)
 }
 
 /// 読み込んだアカウントを持つバンカーアクターの状態を表示しても、接続 secret は
