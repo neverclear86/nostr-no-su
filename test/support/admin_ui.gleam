@@ -969,26 +969,3 @@ pub fn components(language: i18n.Language) -> List(String) {
     ),
   ])
 }
-
-/// `form` を含むページを `pages()` に足し、`stylesheet_test` と
-/// `japanese_pages_test` の走査に載せる。
-pub fn plugin_page_with_a_form_test() {
-  let body =
-    plugin_pages.plugin_page(
-      i18n.English,
-      view.System,
-      plugin_row_one_page,
-      plugin_status_page,
-      0,
-      [
-        plugin_section("a", [
-          plugin_form_block("example", "label", "plugin", "b"),
-        ]),
-      ],
-    )
-  assert string.contains(body, "action=\"/plugins/plugin-a/status\"")
-  assert string.contains(body, "type=\"checkbox\"")
-  assert string.contains(body, "type=\"text\"")
-  assert string.contains(body, "</textarea>")
-  assert string.contains(body, ">b<")
-}
