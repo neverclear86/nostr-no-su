@@ -26,7 +26,6 @@ import nostr_no_su/nostr/message
 import nostr_no_su/plugin
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_runner
-import nostr_no_su/random
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -37,11 +36,11 @@ import pog
 import support/app_tree.{
   type Report, type SubscriptionReport, Opened, Published, Retrying, Subscribed,
   accounts_only, authenticator_recording_open, await_connection, bunker_spec,
-  call_counter, connect_request, deliver_and_expect, discard_resume_points,
-  drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, named_relay, note,
-  other_signer_key, receive_until, secret, signer_key, start_tree, stop_tree,
-  store_failure, store_with_load, test_relay, test_relay_url,
+  call_counter, connect_request, deliver_and_expect, drain_subscriptions,
+  event_labels, fake_open, fixed_retry_delay, forwarding_spec, idle_monitor,
+  load_signer, memory_store, named_relay, note, other_signer_key, receive_until,
+  secret, signer_key, start_tree, stop_tree, store_failure, store_with_load,
+  test_relay, test_relay_url,
 }
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
@@ -63,6 +62,23 @@ fn idle_bunker() -> app.Bunker {
     store_with_load(fn() { Ok(accounts_only([])) }),
     [],
     fixed_retry_delay,
+  )
+}
+
+/// 監視とプラグインのテストのツリーの既定の仕様。プラグインも監視のリレーも持たず、
+/// バンカーは `idle_bunker`、接続は `reports` へ報告する `fake_open`、再接続の待ちは
+/// 100ms にする。各テストは `app.Spec(..base_spec(reports), …)` で既定と違う
+/// フィールドだけを書く。
+fn base_spec(reports: Subject(Report)) -> app.Spec {
+  app.Spec(
+    plugins: [],
+    not_loaded_plugins: [],
+    monitor: idle_monitor(),
+    bunker: idle_bunker(),
+    admin: None,
+    open: fake_open(reports, None),
+    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+    relay_list: process.new_name("test_relay_list"),
   )
 }
 
@@ -97,25 +113,21 @@ fn start_monitor_tree_with_open(
   excludes_kind: fn(Int) -> Bool,
   open: app.Open,
 ) -> Pid {
-  start_tree(app.Spec(
-    plugins: [forwarding_spec(process.new_name("test_plugin_forwarding"), seen)],
-    not_loaded_plugins: [],
-    monitor: app.Monitor(
-      name: name,
-      dedup_capacity: 8,
-      relays: [test_relay()],
-      subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-      save_resume: discard_resume_points,
-      save_plugin_resume: discard_resume_points,
-      excludes_kind: excludes_kind,
-      accepts_author: fn(_pubkey) { True },
+  start_tree(
+    app.Spec(
+      ..base_spec(process.new_subject()),
+      plugins: [
+        forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+      ],
+      monitor: app.Monitor(
+        ..idle_monitor(),
+        name: name,
+        relays: [test_relay()],
+        excludes_kind: excludes_kind,
+      ),
+      open: open,
     ),
-    bunker: idle_bunker(),
-    admin: None,
-    open: open,
-    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    relay_list: process.new_name("test_relay_list"),
-  ))
+  )
 }
 
 /// ephemeral イベント（kind 20000〜29999。バンカー自身の NIP-46 通信を含む）
@@ -230,25 +242,18 @@ fn start_plugins_tree(
   dedup_name: Name(dedup.Msg),
   plugins: List(app.PluginSpec),
 ) -> Pid {
-  start_tree(app.Spec(
-    plugins: plugins,
-    not_loaded_plugins: [],
-    monitor: app.Monitor(
-      name: dedup_name,
-      dedup_capacity: 64,
-      relays: [test_relay()],
-      subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-      save_resume: discard_resume_points,
-      save_plugin_resume: discard_resume_points,
-      excludes_kind: event.is_ephemeral,
-      accepts_author: fn(_pubkey) { True },
+  start_tree(
+    app.Spec(
+      ..base_spec(reports),
+      plugins: plugins,
+      monitor: app.Monitor(
+        ..idle_monitor(),
+        name: dedup_name,
+        dedup_capacity: 64,
+        relays: [test_relay()],
+      ),
     ),
-    bunker: idle_bunker(),
-    admin: None,
-    open: fake_open(reports, None),
-    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    relay_list: process.new_name("test_relay_list"),
-  ))
+  )
 }
 
 /// 名前が新しいプロセスへ再登録されるのを待つ。`named.send` は名前が未登録の
@@ -710,9 +715,10 @@ fn monitored_accounts_spec(
 ) -> app.Spec {
   let dedup_name = process.new_name("test_dedup")
   app.Spec(
+    ..base_spec(reports),
     plugins: plugins,
-    not_loaded_plugins: [],
     monitor: app.Monitor(
+      ..idle_monitor(),
       name: dedup_name,
       dedup_capacity: 64,
       relays: relays,
@@ -724,16 +730,10 @@ fn monitored_accounts_spec(
         catchups,
         _,
       ),
-      save_resume: discard_resume_points,
-      save_plugin_resume: discard_resume_points,
-      excludes_kind: event.is_ephemeral,
       accepts_author: bunker.is_signer(bunker_name, _),
     ),
     bunker: bunker_spec(bunker_name, store, [], fixed_retry_delay),
-    admin: None,
     open: fake_open(reports, Some(subscribed)),
-    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    relay_list: process.new_name("test_relay_list"),
   )
 }
 
@@ -831,8 +831,8 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
   stop_tree(tree)
 }
 
-/// `monitored_accounts_spec`（本番の配線）に転送するプラグインを載せ、`signer_key`
-/// を読み込んで REQ を待つ。他人と登録アカウントのイベントを流し、後者だけが届く
+/// 本番の配線（`monitored_accounts_spec`）の監視は、登録アカウントのイベントだけを
+/// プラグインへ渡し、他人のイベントは渡さない。
 pub fn the_monitor_delivers_only_events_of_registered_accounts_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
@@ -868,8 +868,8 @@ pub fn the_monitor_delivers_only_events_of_registered_accounts_test() {
   stop_tree(tree)
 }
 
-/// `memory_store` のツリーで `is_signer` が、追加前は偽、`app.add_account` の後は
-/// 真、`bunker.remove_account` の後は偽になる
+/// `bunker.is_signer` は登録アカウントの増減に従い、追加前は偽、`app.add_account` の後は
+/// 真、`bunker.remove_account` の後は偽を返す。
 pub fn the_registered_authors_follow_account_changes_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
@@ -1354,8 +1354,8 @@ pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
   assert plugin_runner.catchup(runner) == Ok(None)
 }
 
-/// 監視の購読 id で、他人の kind 1 はディスパッチャーへ届かず、登録アカウントの
-/// kind 1 だけが届く
+/// 監視ハンドラーは、監視の購読 id で届いた他人のイベントをディスパッチャーの配送に回さず、
+/// その再開点も動かさない。登録アカウントのイベントは配送に回す。
 pub fn a_monitor_event_from_an_unregistered_author_is_dropped_test() {
   let dedup_seen = process.new_subject()
   let dedup_name = forwarding_dedup(dedup_seen)
@@ -1391,8 +1391,9 @@ pub fn a_monitor_event_from_an_unregistered_author_is_dropped_test() {
   assert dedup.since(dedup_name, test_relay_url) == Ok(Some(own.created_at))
 }
 
-/// 違う kind。他人の kind 0 は落ち、登録アカウントの kind 24133 は ephemeral
-/// として落ち、登録アカウントの kind 0 だけが届く
+/// 監視ハンドラーの作者の照合は kind 1 以外のイベントにも掛かる。他人の kind 0 と、
+/// ephemeral の kind 24133 は登録アカウントのものでもディスパッチャーの配送に回らず、
+/// 登録アカウントの kind 0 だけが回る。
 pub fn the_monitor_checks_the_author_whatever_the_kind_test() {
   let dedup_seen = process.new_subject()
   let signer = account.pubkey_hex(account_for(signer_key))
@@ -1434,7 +1435,8 @@ pub fn the_monitor_checks_the_author_whatever_the_kind_test() {
   assert process.receive(dedup_seen, 200) == Error(Nil)
 }
 
-/// 取り直しの購読 id の他人のイベントはランナーへ届かず、登録アカウントのものは届く
+/// 監視ハンドラーは、取り直しの購読 id で届いた他人のイベントをそのプラグインのランナーへ
+/// 渡さず、登録アカウントのイベントだけを渡す。どちらもディスパッチャーの配送には回さない。
 pub fn a_catchup_event_from_an_unregistered_author_is_dropped_test() {
   let seen = process.new_subject()
   let dedup_seen = process.new_subject()
@@ -1469,7 +1471,8 @@ pub fn a_catchup_event_from_an_unregistered_author_is_dropped_test() {
   assert process.receive(dedup_seen, 200) == Error(Nil)
 }
 
-/// id `bunker` のイベントは届かず、監視の購読 id のイベントは届く
+/// 監視ハンドラーは、監視でも取り直しでもない購読 id（`bunker`）で届いたイベントを
+/// ディスパッチャーの配送に回さず、監視の購読 id で届いたイベントは回す。
 pub fn an_event_on_an_unknown_subscription_is_dropped_test() {
   let dedup_seen = process.new_subject()
   let signer = account.pubkey_hex(account_for(signer_key))
@@ -1522,14 +1525,8 @@ pub fn registered_relays_open_after_the_first_load_test() {
     })
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(name, store, [], fixed_retry_delay),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree(spec)
   let assert Opened(opened_url, _connection, _socket, _deliver) =
@@ -1565,19 +1562,13 @@ pub fn registered_relays_open_after_the_store_recovers_test() {
     })
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(
         name,
         store,
         [],
         Backoff(initial_ms: 300, max_ms: 300),
       ),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree(spec)
   // 最初の読み込みが失敗している間は開かない。
@@ -1680,18 +1671,10 @@ pub fn merged_relay_rows_follow_the_store_test() {
 
 /// `relay_list` が応答しなければ、DB を読まずにその理由を返す。
 pub fn relay_rows_without_the_relay_list_test() {
-  let spec =
-    app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
-      bunker: idle_bunker(),
-      admin: None,
-      open: fake_open(process.new_subject(), None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list_unanswered"),
+  assert app.relay_rows(
+      base_spec(process.new_subject()),
+      task.deadline_in(5000),
     )
-  assert app.relay_rows(spec, task.deadline_in(5000))
     == Error("relay list did not answer")
 }
 
@@ -1740,18 +1723,9 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
   let reports = process.new_subject()
   let seen = process.new_subject()
   let spec =
-    app.Spec(
-      plugins: [
-        forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
-      ],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
-      bunker: idle_bunker(),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
-    )
+    app.Spec(..base_spec(reports), plugins: [
+      forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+    ])
   let tree = start_tree(spec)
   let assert Ok(Nil) =
     app.open_relay(
@@ -1765,19 +1739,19 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
   stop_tree(tree)
 }
 
-/// `app.add_relay` は DB に挿入してから接続を開く。同じ URL の 2 回目は
-/// `DuplicateRelay`、`relay_list` にすでにある URL への追加は `ConnectionsNotConfirmed`
-/// になるが、どちらも先に挿入は確かめる。`TEST_DATABASE_URL` があるときだけ実行する。
-pub fn add_relay_saves_the_row_before_opening_test() {
+/// `TEST_DATABASE_URL` があるときだけ、専用のスキーマに移行を当て、バンカーのプールの
+/// `search_path` をそのスキーマにしたツリーを起動する。バンカーのプールが応答してから、
+/// 仕様とそのプールの接続で `run` を呼び、終わったらツリーを止めてスキーマごと消す。
+fn with_relay_store_tree(run: fn(app.Spec, pog.Connection) -> Nil) -> Nil {
   use database_url <- postgres.with_test_database_url("app")
-  let schema = "app_relay_schema_" <> random.hex(8)
-  let admin_db = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin_db, "CREATE SCHEMA " <> schema)
+  use schema, schema_pool, _schema_db <- postgres.with_named_schema(
+    database_url,
+  )
 
   // 移行を実行する。
   let assert Ok(_loaded) =
     account_store.load(
-      postgres.start_pool(database_url, Some(schema)),
+      schema_pool,
       random_master_key(),
       account_store.default_timeouts,
     )
@@ -1787,18 +1761,22 @@ pub fn add_relay_saves_the_row_before_opening_test() {
   let config = pog.connection_parameter(config, "search_path", schema)
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(process.new_subject()),
       bunker: app.Bunker(..idle_bunker(), pool: config),
-      admin: None,
-      open: fake_open(process.new_subject(), None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_app_relay_add"),
     )
   let tree = start_tree(spec)
   let db = pog.named_connection(config.pool_name)
   assert postgres.await_pool(db, 10_000)
+
+  run(spec, db)
+  stop_tree(tree)
+}
+
+/// `app.add_relay` は DB に挿入してから接続を開く。同じ URL の 2 回目は
+/// `DuplicateRelay`、`relay_list` にすでにある URL への追加は `ConnectionsNotConfirmed`
+/// になるが、どちらも先に挿入は確かめる。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn add_relay_saves_the_row_before_opening_test() {
+  use spec, db <- with_relay_store_tree()
 
   let assert Ok(Nil) =
     app.add_relay(
@@ -1833,9 +1811,6 @@ pub fn add_relay_saves_the_row_before_opening_test() {
     relay_store.list(db, account_store.default_timeouts)
   assert list.map(rows_after, fn(row) { row.url })
     == ["ws://added.test", "ws://listed.test"]
-
-  stop_tree(tree)
-  postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// `app.update_relay_roles` と `app.delete_relay` は DB に書いてから接続を変えるので、
@@ -1843,34 +1818,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
 /// 同じ行への変更と削除がどちらも `UnregisteredRelay` になる。`TEST_DATABASE_URL` が
 /// あるときだけ実行する。
 pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
-  use database_url <- postgres.with_test_database_url("app")
-  let schema = "app_relay_update_schema_" <> random.hex(8)
-  let admin_db = pog.named_connection(postgres.start_pool(database_url, None))
-  postgres.run_statement(admin_db, "CREATE SCHEMA " <> schema)
-
-  let assert Ok(_loaded) =
-    account_store.load(
-      postgres.start_pool(database_url, Some(schema)),
-      random_master_key(),
-      account_store.default_timeouts,
-    )
-
-  let assert Ok(config) =
-    pog.url_config(process.new_name("test_app_relay_update_pool"), database_url)
-  let config = pog.connection_parameter(config, "search_path", schema)
-  let spec =
-    app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
-      bunker: app.Bunker(..idle_bunker(), pool: config),
-      admin: None,
-      open: fake_open(process.new_subject(), None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_app_relay_update"),
-    )
-  let tree = start_tree(spec)
-  assert postgres.await_pool(pog.named_connection(config.pool_name), 10_000)
+  use spec, _db <- with_relay_store_tree()
 
   let assert Ok(Nil) =
     app.add_relay(
@@ -1903,9 +1851,25 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
     )
     == Error(admin.UnregisteredRelay)
   assert app.delete_relay(spec, updated) == Error(admin.UnregisteredRelay)
+}
 
-  stop_tree(tree)
-  postgres.run_statement(admin_db, "DROP SCHEMA " <> schema <> " CASCADE")
+/// `signer_key` を読み込むバンカーを載せ、監視のリレーを `monitor_url` の 1 本、
+/// バンカーのリレーを `bunker_url` の 1 本にした仕様。
+fn signer_on_two_relays_spec(
+  reports: Subject(Report),
+  monitor_url: String,
+  bunker_url: String,
+) -> app.Spec {
+  app.Spec(
+    ..base_spec(reports),
+    monitor: app.Monitor(..idle_monitor(), relays: [named_relay(monitor_url)]),
+    bunker: bunker_spec(
+      process.new_name("test_bunker"),
+      store_with_load(fn() { load_signer(signer_key) }),
+      [named_relay(bunker_url)],
+      fixed_retry_delay,
+    ),
+  )
 }
 
 /// `account_rows` は全行の署名者を 1 度 `pictures` へ渡し、引いた URL を行の `picture` に入れる。
@@ -1914,33 +1878,8 @@ pub fn account_rows_carry_the_looked_up_picture_test() {
   let a = "ws://a.test"
   let b = "ws://b.test"
   let signer = account.pubkey_hex(account_for(signer_key))
-  let spec =
-    app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: app.Monitor(
-        name: process.new_name("test_dedup"),
-        dedup_capacity: 8,
-        relays: [named_relay(a)],
-        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-        save_resume: discard_resume_points,
-        save_plugin_resume: discard_resume_points,
-        excludes_kind: event.is_ephemeral,
-        accepts_author: fn(_pubkey) { True },
-      ),
-      bunker: bunker_spec(
-        process.new_name("test_bunker"),
-        store_with_load(fn() { load_signer(signer_key) }),
-        [named_relay(b)],
-        fixed_retry_delay,
-      ),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
-    )
+  let spec = signer_on_two_relays_spec(reports, a, b)
   let tree = start_tree(spec)
-  let _pairs = role_url_pairs(spec)
   let asked = process.new_subject()
   let assert Ok([row]) =
     app.account_rows(spec, fn(signers) {
@@ -1960,31 +1899,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
   let b = "ws://b.test"
   let c = "ws://c.test"
   let signer = account.pubkey_hex(account_for(signer_key))
-  let spec =
-    app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: app.Monitor(
-        name: process.new_name("test_dedup"),
-        dedup_capacity: 8,
-        relays: [named_relay(a)],
-        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-        save_resume: discard_resume_points,
-        save_plugin_resume: discard_resume_points,
-        excludes_kind: event.is_ephemeral,
-        accepts_author: fn(_pubkey) { True },
-      ),
-      bunker: bunker_spec(
-        process.new_name("test_bunker"),
-        store_with_load(fn() { load_signer(signer_key) }),
-        [named_relay(b)],
-        fixed_retry_delay,
-      ),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
-    )
+  let spec = signer_on_two_relays_spec(reports, a, b)
   let tree = start_tree(spec)
   assert role_url_pairs(spec)
     == [
@@ -2037,20 +1952,15 @@ pub fn a_closed_bunker_relay_is_unpublished_and_not_restarted_test() {
   let y = named_relay("ws://y.test")
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
         store_with_load(fn() { load_signer(signer_key) }),
         [x, y],
         fixed_retry_delay,
       ),
-      admin: None,
-      open: fake_open(reports, None),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree(spec)
   let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
@@ -2148,19 +2058,13 @@ pub fn runtime_relays_are_reopened_when_the_bunker_restarts_test() {
   let bunker_name = process.new_name("test_bunker")
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(
         bunker_name,
         store_with_load(fn() { load_signer(signer_key) }),
         [],
         fixed_retry_delay,
       ),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree(spec)
   let assert Ok(Nil) =
