@@ -135,10 +135,9 @@ fn note_line(note: Note) -> String {
 }
 
 /// `reason` が `id <> ": "` で始まればその分だけ落とし、始まらなければそのまま
-/// 返す（`plugin.load` の理由は現状すべて `plugin.gleam:999` の `prefix` を通る
-/// が、接頭辞を落とせないときもそのまま返す形にして、理由の組み立てが変わって
-/// も壊れないようにする）。
-fn strip_id(id: String, reason: String) -> String {
+/// 返す。`plugin.load` の理由は現状すべてこの接頭辞で始まるが、理由の組み立てが
+/// 変わっても壊れないよう、接頭辞を落とせないときもそのまま返す。
+pub fn strip_id(id: String, reason: String) -> String {
   case string.starts_with(reason, id <> ": ") {
     True -> string.drop_start(reason, string.length(id) + 2)
     False -> reason
@@ -306,8 +305,10 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(Note), Note) {
   })
   use ebins <- result.try(ebin_dirs(dir, name))
   // ebin が複数あるバンドルで 2 つめ以降の追加が失敗すると、先に足した ebin は
-  // コードパスに残ったままバンドルだけが捨てられる。`is_directory` で存在を
-  // 確かめた直後に消えるといった競合でしか起きないため、巻き戻しは持たない。
+  // コードパスに残ったままバンドルだけが捨てられる。`is_directory` が真の ebin を
+  // `code:add_pathz/1` が拒むのは、確かめた直後に消える競合や、パスの途中に `.ez` で
+  // 終わる名前がある置き方（アーカイブの中として読まれる）で、どれもまれなので
+  // 巻き戻しは持たない。
   use shadows <- result.map(
     list.try_fold(ebins, [], fn(shadows, ebin) {
       // 影の集計は `add_code_path` の**前に**行う。足した後では自分自身の
@@ -331,8 +332,7 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(Note), Note) {
 ///
 /// `<name>` 自身を読めないとき（`eacces` など）は専用の行を出す。「読めない
 /// ディレクトリー」は `PLUGIN_DIR` 自身とは限らないため、黙って
-/// `no ebin directory found` に丸めない。**この分岐は非 root でしか再現できず、
-/// root で走る CI では `chmod 000` でも読めてしまうため単体テストを持たない。**
+/// `no ebin directory found` に丸めない。
 fn ebin_dirs(dir: String, name: String) -> Result(List(String), Note) {
   let base = join(dir, name)
   let direct = case is_directory(join(base, "ebin")) {
@@ -506,8 +506,10 @@ fn summary(dir: String, plugins: List(Plugin), candidates: Int) -> String {
   head <> tail
 }
 
-/// パスを結合する。`PLUGIN_DIR` の末尾スラッシュはここで吸収する。
-fn join(dir: String, name: String) -> String {
+/// パスを結合する。`dir` の末尾のスラッシュは吸収する。`directories` が
+/// `absolute_path` を通すので、末尾にスラッシュが残るのは `PLUGIN_DIR` が `/` の
+/// ときだけである。
+pub fn join(dir: String, name: String) -> String {
   case string.ends_with(dir, "/") {
     True -> join(string.drop_end(dir, 1), name)
     False -> dir <> "/" <> name
