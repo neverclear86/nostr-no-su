@@ -16,7 +16,7 @@ import gleam/result
 import gleam/uri
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/plugin_api
+import nostr_no_su/relay_fetch
 import nostr_no_su/relay_list
 import nostr_no_su/task
 import nostr_no_su/time
@@ -81,13 +81,14 @@ pub fn start(
   |> actor.start
 }
 
-/// `pubkeys` のうち URL を持つ署名者の辞書。取得は `plugin_api.ask_monitor_relays` で kind 0 を問い合わせる。
+/// `pubkeys` のうち URL を持つ署名者の辞書。取得は `relay_fetch.ask_monitor_relays` で kind 0 を
+/// 問い合わせる。
 pub fn pictures(
   name: Name(Msg),
   relay_list_name: Name(relay_list.Msg),
   pubkeys: List(String),
 ) -> Dict(String, String) {
-  pictures_with(name, pubkeys, plugin_api.ask_monitor_relays(
+  pictures_with(name, pubkeys, relay_fetch.ask_monitor_relays(
     relay_list_name,
     _,
     metadata_kind,
@@ -137,13 +138,13 @@ pub fn picture(metadata: Event) -> Option(String) {
   }
 }
 
-/// 署名者ごとに `plugin_api.newest_by` の 1 件の `picture` を引き、URL のあるものだけの辞書。
+/// 署名者ごとに `relay_fetch.newest_by` の 1 件の `picture` を引き、URL のあるものだけの辞書。
 fn found_pictures(
   pubkeys: List(String),
   events: List(Event),
 ) -> Dict(String, String) {
   list.filter_map(pubkeys, fn(pubkey) {
-    plugin_api.newest_by(events, pubkey)
+    relay_fetch.newest_by(events, pubkey)
     |> option.then(picture)
     |> option.map(fn(url) { #(pubkey, url) })
     |> option.to_result(Nil)

@@ -10,7 +10,7 @@ import gleam/option.{None}
 import gleam/string
 import mist
 import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/plugin_api
+import nostr_no_su/relay_fetch
 
 /// `127.0.0.1` の OS が割り当てたポートで待ち受けるテスト用の WebSocket サーバー。
 pub type Relay {
@@ -88,7 +88,7 @@ pub fn start_fetch_relay(
                 connection,
                 json.preprocessed_array([
                   json.string("EVENT"),
-                  json.string(plugin_api.fetch_subscription_id),
+                  json.string(relay_fetch.fetch_subscription_id),
                   event.to_json(stored),
                 ])
                   |> json.to_string,
@@ -100,7 +100,7 @@ pub fn start_fetch_relay(
               connection,
               json.preprocessed_array([
                 json.string("EOSE"),
-                json.string(plugin_api.fetch_subscription_id),
+                json.string(relay_fetch.fetch_subscription_id),
               ])
                 |> json.to_string,
             )

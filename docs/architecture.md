@@ -55,7 +55,7 @@ flowchart LR
 
 管理 UI は他のどの部分にも依存しない。
 表示する状態は名前付きアクター（リレーの一覧は、加えてバンカーの DB のプール）への問い合わせで取るので、UI が再起動しても問い合わせ先が再起動しても、配線をやり直す必要がない。
-ただし、アカウントのアイコンの URL は、名前付きのキャッシュ（`avatars`）の値が古いときに、管理 UI が走らせる使い捨てのプロセスが、監視の用途のリレーへ直接問い合わせて取る（`plugin_api.ask_monitor_relays`）。
+ただし、アカウントのアイコンの URL は、名前付きのキャッシュ（`avatars`）の値が古いときに、管理 UI が走らせる使い捨てのプロセスが、監視の用途のリレーへ直接問い合わせて取る（`relay_fetch.ask_monitor_relays`）。
 問い合わせが失敗したときはその項目だけを、リレーの接続状態は「未接続」（`disconnected`）、プラグインは「応答なし」（`unavailable`）として描画し、アカウント・承認待ち・セッション・リレーは一覧の代わりにその理由を出す（承認待ち・アカウント・セッションの理由が同じなら、ページの先頭に 1 回だけ出し、各節は「上の理由で取得できません。」の 1 文にする）。ページ全体は失敗させない。
 問い合わせの返信先は OTP の `gen_server:call` と同じく monitor の alias なので、タイムアウトの後に届いた応答（接続 secret を含みうる）はランタイムが捨て、UI のハンドラーのメールボックスにもログにも残らない。
 
@@ -66,7 +66,7 @@ flowchart LR
 リレーの接続だけは例外で、用途（監視・バンカー・セッションのリレー）ごとの `factory_supervisor`（`connections`）の子とし、`relay_list` が実行時にその起動・停止を行う（「実行時のリレーの増減」を参照）。
 
 ツリーの外で動くプロセスが 3 種類ある。
-プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、監視リレーへの取得の問い合わせ（`plugin_api.ask_monitor_relays`。プラグインの取得の口と `avatars` が使う）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
+プラグインのイベント処理を動かす使い捨てワーカーと、`relay_connection` が所有する WebSocket のソケットプロセスと、監視リレーへの取得の問い合わせ（`relay_fetch.ask_monitor_relays`。プラグインの取得の口と `avatars` が使う）がリレー 1 本ごとに開く使い捨ての WebSocket 接続である。
 1 つ目は監視だけを張り、2 つ目はリンクを張ったうえで exit を trap する。3 つ目は問い合わせを集める使い捨てプロセスが、集め終えた時点でリンクを解き、購読の CLOSE と close フレームを送らせて止まるのを短い期限まで待ち、止まらなければ kill する（`relay_client.disconnect`）。
 いずれも所有者が死を検知するので、スーパーバイザーの再起動許容回数を消費しない。
 
@@ -688,7 +688,7 @@ nostr-no-su/
 │       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
 │       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
-│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得。取得は `avatars` も使う）
+│       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
@@ -711,6 +711,7 @@ nostr-no-su/
 │       ├── nostr/nip19.gleam     NIP-19 の npub / nsec の符号化と復号
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
+│       ├── relay_fetch.gleam     監視の用途のリレーへの使い捨ての取得の問い合わせ
 │       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止
 │       ├── relay_store.gleam     リレーの一覧（relays）の SQL
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH

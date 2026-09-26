@@ -1,5 +1,5 @@
 //// `plugin_api.publish_with`・`fetch_with`・`fetch_events_with` のテストに、
-//// 取得で届くイベントを絞る `handle_incoming` のテストと、取得の接続の閉じ方の
+//// 取得で届くイベントを絞る `relay_fetch.handle_incoming` のテストと、取得の接続の閉じ方の
 //// テスト（`support/frame_server` の偽リレー）を加えたもの。経路のテストは
 //// バンカーと監視・バンカー用途の偽リレー接続を直接組み立て、名前を渡す経路を
 //// 叩く。リレーへ実際に REQ を送るテストはループバックの
@@ -28,6 +28,7 @@ import nostr_no_su/nostr/message
 import nostr_no_su/plugin_api
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_fetch
 import nostr_no_su/relay_list
 import support/app_tree.{start_bunker_signed_in_as, start_relay_list}
 import support/frame_server
@@ -334,9 +335,9 @@ pub fn newest_picks_the_greatest_created_at_test() {
   let first_newest = event_with("b", 30)
   let second_newest = event_with("c", 30)
 
-  assert plugin_api.newest([oldest, first_newest, second_newest])
+  assert relay_fetch.newest([oldest, first_newest, second_newest])
     == Some(first_newest)
-  assert plugin_api.newest([]) == None
+  assert relay_fetch.newest([]) == None
 }
 
 /// 問い合わせた `pubkey` と `kind` の両方に一致するイベントは `Found` になる。
@@ -344,14 +345,14 @@ pub fn fetch_event_keeps_an_event_matching_the_query_test() {
   let reply = process.new_subject()
   let matching = signed_event.new(0, "matching")
 
-  plugin_api.handle_incoming(
+  relay_fetch.handle_incoming(
     relay_client.ReceivedEvent("sub", signed_event.verified(matching)),
     [matching.pubkey],
     0,
     reply,
   )
 
-  assert process.receive(reply, 0) == Ok(plugin_api.Found(matching))
+  assert process.receive(reply, 0) == Ok(relay_fetch.Found(matching))
 }
 
 /// 問い合わせたものと違う kind のイベントは、作者が一致しても捨てる。
@@ -359,7 +360,7 @@ pub fn fetch_event_drops_an_event_with_a_different_kind_test() {
   let reply = process.new_subject()
   let other_kind = signed_event.new(1, "other kind")
 
-  plugin_api.handle_incoming(
+  relay_fetch.handle_incoming(
     relay_client.ReceivedEvent("sub", signed_event.verified(other_kind)),
     [other_kind.pubkey],
     0,
@@ -385,14 +386,14 @@ pub fn fetch_event_drops_an_event_from_another_author_test() {
       wanted.created_at + 1,
     )
   let handle = fn(received) {
-    plugin_api.handle_incoming(received, [wanted.pubkey], 0, reply)
+    relay_fetch.handle_incoming(received, [wanted.pubkey], 0, reply)
   }
 
   handle(relay_client.ReceivedEvent("sub", signed_event.verified(attacker)))
   handle(relay_client.ReceivedEvent("sub", signed_event.verified(wanted)))
 
   // `Found` になるのは正しいイベントだけで、他人のイベントは届かない。
-  assert process.receive(reply, 0) == Ok(plugin_api.Found(wanted))
+  assert process.receive(reply, 0) == Ok(relay_fetch.Found(wanted))
   assert process.receive(reply, 0) == Error(Nil)
 }
 
@@ -581,7 +582,7 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
     ])
   let expected_req =
     message.encode_client_message(message.Req(
-      plugin_api.fetch_subscription_id,
+      relay_fetch.fetch_subscription_id,
       Filter(
         ..filter.new(),
         authors: Some([pubkey_a, pubkey_b]),
@@ -591,7 +592,7 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
     ))
   let expected_close =
     message.encode_client_message(message.Close(
-      plugin_api.fetch_subscription_id,
+      relay_fetch.fetch_subscription_id,
     ))
   assert process.receive(connections_a, 2000) == Ok(Nil)
   assert process.receive(frames_a, 2000) == Ok(expected_req)
