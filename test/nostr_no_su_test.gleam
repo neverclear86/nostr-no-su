@@ -104,10 +104,10 @@ pub fn startup_passes_the_database_url_to_plugins_test() {
   let url = "postgres://nostr:nostr@127.0.0.1:5432/nostr_no_su"
   let loaded =
     config.Config(
-      account_store: config.AccountStore(
+      account_store: Ok(config.AccountStore(
         database_url: url,
         master_key: random_master_key(),
-      ),
+      )),
       plugin_dir: Some(fixture.root),
       plugin_env: dict.from_list([
         #("PLUGIN_CONFIG_PLUGIN_PATH", "/tmp/events.log"),

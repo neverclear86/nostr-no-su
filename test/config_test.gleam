@@ -70,7 +70,7 @@ const database_url = "postgres://nostr:pw-marker@db.test:5432/nostr_no_su"
 fn account_store_for(
   url: Option(String),
   master_key: Option(String),
-) -> config.AccountStore {
+) -> Result(config.AccountStore, String) {
   use <- with_optional_env("DATABASE_URL", url)
   use <- with_optional_env("ACCOUNT_MASTER_KEY", master_key)
   config.load().account_store
@@ -79,7 +79,7 @@ fn account_store_for(
 /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃えばストアが有効になり、URL がそのまま
 /// 入る。
 pub fn account_store_is_configured_with_both_variables_test() {
-  let assert config.AccountStore(database_url: url, ..) =
+  let assert Ok(config.AccountStore(database_url: url, ..)) =
     account_store_for(Some(database_url), Some(master_key_hex))
   assert url == database_url
 }
@@ -87,13 +87,11 @@ pub fn account_store_is_configured_with_both_variables_test() {
 /// どちらかが無ければ、何が足りないかを入力値を含めずに報告する。
 pub fn account_store_reports_missing_variables_test() {
   assert account_store_for(None, None)
-    == config.AccountStoreUnavailable(
-      "DATABASE_URL and ACCOUNT_MASTER_KEY are not set",
-    )
+    == Error("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
   assert account_store_for(None, Some(master_key_hex))
-    == config.AccountStoreUnavailable("DATABASE_URL is not set")
+    == Error("DATABASE_URL is not set")
   assert account_store_for(Some(database_url), None)
-    == config.AccountStoreUnavailable(
+    == Error(
       "ACCOUNT_MASTER_KEY is not set (generate one with: openssl rand -hex 32)",
     )
 }
@@ -102,14 +100,12 @@ pub fn account_store_reports_missing_variables_test() {
 /// 渡すため。
 pub fn empty_account_store_variables_are_unset_test() {
   assert account_store_for(Some(""), Some(""))
-    == config.AccountStoreUnavailable(
-      "DATABASE_URL and ACCOUNT_MASTER_KEY are not set",
-    )
+    == Error("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
 }
 
 /// 不正なマスターキーは理由を報告し、理由にマスターキーも URL も含めない。
 pub fn an_invalid_master_key_is_reported_without_its_value_test() {
-  let assert config.AccountStoreUnavailable(reason) =
+  let assert Error(reason) =
     account_store_for(Some(database_url), Some("zz-key-marker"))
   assert reason == "ACCOUNT_MASTER_KEY must be 64 hex characters (32 bytes)"
   assert !string.contains(reason, "key-marker")
@@ -132,7 +128,7 @@ pub fn account_store_reads_the_master_key_from_a_file_test() {
     "ACCOUNT_MASTER_KEY_FILE",
     secret_file("master_key_with_newline"),
   )
-  let assert config.AccountStore(database_url: url, ..) =
+  let assert Ok(config.AccountStore(database_url: url, ..)) =
     config.load().account_store
   assert url == database_url
 }
@@ -144,7 +140,7 @@ pub fn a_secret_and_its_file_cannot_both_be_set_test() {
     with_env("ACCOUNT_MASTER_KEY", master_key_hex, fn() {
       with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("missing"), fn() {
         assert config.load().account_store
-          == config.AccountStoreUnavailable(
+          == Error(
             "ACCOUNT_MASTER_KEY and ACCOUNT_MASTER_KEY_FILE are both set; set only one",
           )
       })
@@ -155,7 +151,7 @@ pub fn a_secret_and_its_file_cannot_both_be_set_test() {
     with_env("DATABASE_URL", database_url, fn() {
       with_env("DATABASE_URL_FILE", secret_file("missing"), fn() {
         assert config.load().account_store
-          == config.AccountStoreUnavailable(
+          == Error(
             "DATABASE_URL and DATABASE_URL_FILE are both set; set only one",
           )
       })
@@ -169,9 +165,7 @@ pub fn an_unreadable_secret_file_is_reported_without_its_path_test() {
   use <- without_env("ACCOUNT_MASTER_KEY")
   use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("missing"))
   assert config.load().account_store
-    == config.AccountStoreUnavailable(
-      "ACCOUNT_MASTER_KEY_FILE could not be read (enoent)",
-    )
+    == Error("ACCOUNT_MASTER_KEY_FILE could not be read (enoent)")
 }
 
 /// 空のファイルは「未設定」ではなく専用の理由で報告する。
@@ -180,7 +174,7 @@ pub fn an_empty_secret_file_is_reported_test() {
   use <- without_env("ACCOUNT_MASTER_KEY")
   use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("empty"))
   assert config.load().account_store
-    == config.AccountStoreUnavailable("ACCOUNT_MASTER_KEY_FILE is empty")
+    == Error("ACCOUNT_MASTER_KEY_FILE is empty")
 }
 
 /// UTF-8 でないファイルは専用の理由で報告する。
@@ -189,9 +183,7 @@ pub fn a_secret_file_that_is_not_utf8_is_reported_test() {
   use <- without_env("ACCOUNT_MASTER_KEY")
   use <- with_env("ACCOUNT_MASTER_KEY_FILE", secret_file("invalid_utf8"))
   assert config.load().account_store
-    == config.AccountStoreUnavailable(
-      "ACCOUNT_MASTER_KEY_FILE could not be read (not valid UTF-8)",
-    )
+    == Error("ACCOUNT_MASTER_KEY_FILE could not be read (not valid UTF-8)")
 }
 
 /// `load` は 3 つの秘密（`DATABASE_URL`、`ACCOUNT_MASTER_KEY`、
@@ -271,14 +263,14 @@ fn admin_ui_for(
 /// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_ui_port_test() {
   assert admin_ui_for(None, None, Some(test_password))
-    == config.Listen("127.0.0.1", 24_133, test_password)
+    == config.Listen(config.AdminListen("127.0.0.1", 24_133, test_password))
   assert admin_ui_for(None, Some("9000"), Some(test_password))
-    == config.Listen("127.0.0.1", 9000, test_password)
+    == config.Listen(config.AdminListen("127.0.0.1", 9000, test_password))
   assert admin_ui_for(None, Some(" 9000 "), Some(test_password))
-    == config.Listen("127.0.0.1", 9000, test_password)
+    == config.Listen(config.AdminListen("127.0.0.1", 9000, test_password))
   // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
   assert admin_ui_for(None, Some("65535"), Some(test_password))
-    == config.Listen("127.0.0.1", 65_535, test_password)
+    == config.Listen(config.AdminListen("127.0.0.1", 65_535, test_password))
   assert admin_ui_for(None, Some(""), Some(test_password)) == config.Disabled
 }
 
@@ -329,11 +321,11 @@ pub fn admin_password_is_read_from_a_file_test() {
   use <- without_env("ADMIN_PASSWORD")
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_newlines"), fn() {
     assert config.load().admin_ui
-      == config.Listen("127.0.0.1", 24_133, " file password")
+      == config.Listen(config.AdminListen("127.0.0.1", 24_133, " file password"))
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("password_with_crlf"), fn() {
     assert config.load().admin_ui
-      == config.Listen("127.0.0.1", 24_133, "crlf password")
+      == config.Listen(config.AdminListen("127.0.0.1", 24_133, "crlf password"))
   })
   with_env("ADMIN_PASSWORD_FILE", secret_file("missing"), fn() {
     assert config.load().admin_ui
@@ -355,19 +347,19 @@ pub fn admin_ui_without_a_listener_needs_no_password_test() {
 /// `ADMIN_BIND` は未設定と空文字列ならループバックのみ。前後の空白は落とす。
 /// ページに secret が載るため、外部へ出すのは明示的な設定にする。
 pub fn admin_bind_test() {
-  let assert config.Listen(bind:, ..) =
+  let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(None, None, Some(test_password))
   assert bind == "127.0.0.1"
-  let assert config.Listen(bind:, ..) =
+  let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(Some(""), None, Some(test_password))
   assert bind == "127.0.0.1"
-  let assert config.Listen(bind:, ..) =
+  let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(Some("0.0.0.0"), None, Some(test_password))
   assert bind == "0.0.0.0"
-  let assert config.Listen(bind:, ..) =
+  let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(Some(" ::1 "), None, Some(test_password))
   assert bind == "::1"
-  let assert config.Listen(bind:, ..) =
+  let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(Some("localhost"), None, Some(test_password))
   assert bind == "localhost"
 }

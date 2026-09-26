@@ -29,10 +29,10 @@ const default_dedup_capacity = 4096
 /// `ADMIN_BIND` / `ADMIN_PORT` / `ADMIN_PASSWORD` の解釈結果。無効化には
 /// 「明示的に空にした」と「bind かポートが不正だった」の 2 通りがあり、後者だけ
 /// 起動時に理由を報告する。待ち受けるのにパスワードが無ければ、無効化ではなく
-/// 起動を中止する。`password` は秘密なので、表示やログに入れないこと。
+/// 起動を中止する。
 pub type AdminUi {
-  /// この bind・ポート・パスワードで管理 UI を待ち受ける。
-  Listen(bind: String, port: Int, password: String)
+  /// `AdminListen` の設定で管理 UI を待ち受ける。
+  Listen(AdminListen)
   /// `ADMIN_PORT` の空文字列で明示的に無効化された。
   Disabled
   /// `ADMIN_PORT` か `ADMIN_BIND` が不正なので無効にし、起動は続ける。理由は
@@ -43,23 +43,27 @@ pub type AdminUi {
   MissingPassword(reason: String)
 }
 
-/// バンカーのアカウントストアの設定。揃っていなければ起動を中止する。
+/// 管理 UI の待ち受けの設定。`password` は秘密なので、表示やログに入れないこと。
+pub type AdminListen {
+  AdminListen(bind: String, port: Int, password: String)
+}
+
+/// バンカーのアカウントストアの接続先とマスターキー。
 ///
 /// マスターキーは読み込みの時点で `MasterKey`（関数に閉じた値）にし、生の 16 進
 /// 文字列を持たない。`database_url` はパスワードを含みうるので、表示やログに
 /// 入れないこと。
 pub type AccountStore {
-  /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃っている。
   AccountStore(database_url: String, master_key: vault.MasterKey)
-  /// どちらかが未設定か不正か、ファイルを読めない。理由は値を含まない。
-  AccountStoreUnavailable(reason: String)
 }
 
 /// 環境変数から読み込んだ設定の全体。秘密（マスターキー、`DATABASE_URL` の
 /// パスワード、管理パスワード）を含むので、表示やログに入れないこと。
 pub type Config {
   Config(
-    account_store: AccountStore,
+    /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` の読み込み結果。`Error` は起動を
+    /// 中止する理由で、値を含まない。
+    account_store: Result(AccountStore, String),
     plugin_dir: Option(String),
     /// プラグインへ渡す候補になる環境変数（`PLUGIN_*`）。プラグインごとの
     /// 切り出しは `plugin_config.for_plugin` が行うので、ここでは接頭辞で
@@ -102,7 +106,7 @@ pub fn load() -> Config {
 pub fn auth_url_base(config: Config) -> Option(String) {
   case config.admin_ui {
     Disabled | Invalid(_) | MissingPassword(_) -> None
-    Listen(port:, ..) ->
+    Listen(AdminListen(port:, ..)) ->
       Some(option.unwrap(
         config.admin_base_url,
         "http://localhost:" <> int.to_string(port),
@@ -194,9 +198,10 @@ fn secret(name: String) -> Result(Option(String), String) {
 }
 
 /// バンカーのアカウントストアの設定。`<名前>_FILE` からも読む（`secret/1`）。
-fn account_store() -> AccountStore {
+/// 揃わないか不正か、ファイルを読めなければ、値を含まない理由を返す。
+fn account_store() -> Result(AccountStore, String) {
   case secret("DATABASE_URL"), secret("ACCOUNT_MASTER_KEY") {
-    Error(reason), _ | _, Error(reason) -> AccountStoreUnavailable(reason)
+    Error(reason), _ | _, Error(reason) -> Error(reason)
     Ok(database_url), Ok(raw_master_key) ->
       account_store_from(database_url, raw_master_key)
   }
@@ -209,19 +214,18 @@ fn account_store() -> AccountStore {
 fn account_store_from(
   database_url: Option(String),
   raw_master_key: Option(String),
-) -> AccountStore {
+) -> Result(AccountStore, String) {
   case database_url, raw_master_key {
-    None, None ->
-      AccountStoreUnavailable("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
-    None, Some(_) -> AccountStoreUnavailable("DATABASE_URL is not set")
+    None, None -> Error("DATABASE_URL and ACCOUNT_MASTER_KEY are not set")
+    None, Some(_) -> Error("DATABASE_URL is not set")
     Some(_), None ->
-      AccountStoreUnavailable(
+      Error(
         "ACCOUNT_MASTER_KEY is not set (generate one with: openssl rand -hex 32)",
       )
     Some(database_url), Some(raw_master_key) ->
       case vault.master_key_from_hex(raw_master_key) {
-        Ok(master_key) -> AccountStore(database_url:, master_key:)
-        Error(reason) -> AccountStoreUnavailable(reason)
+        Ok(master_key) -> Ok(AccountStore(database_url:, master_key:))
+        Error(reason) -> Error(reason)
       }
   }
 }
@@ -269,7 +273,7 @@ fn admin_ui() -> AdminUi {
 fn listening_admin_ui(port: Int) -> AdminUi {
   case admin_bind(), secret("ADMIN_PASSWORD") {
     Error(reason), _ -> Invalid(reason)
-    Ok(bind), Ok(Some(password)) -> Listen(bind:, port:, password:)
+    Ok(bind), Ok(Some(password)) -> Listen(AdminListen(bind:, port:, password:))
     Ok(_), Ok(None) ->
       MissingPassword(
         "ADMIN_PASSWORD is not set (generate one with: openssl rand -base64 24)",

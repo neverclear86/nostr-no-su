@@ -248,12 +248,6 @@ pub type Bunker {
   )
 }
 
-/// 管理 UI。設定から決まるもの（bind アドレス、ポート、パスワード）だけを持ち、
-/// 表示する状態はツリーの他の仕様から導く。
-pub type Admin {
-  Admin(bind: String, port: Int, password: String)
-}
-
 /// 動かすプラグインと、起動時に読み込めなかったプラグインの一覧と、バンカーと
 /// 監視、管理 UI を動かすかどうか、接続をどう開くか、接続の再接続の待ち時間、
 /// 実行時のリレーの一覧を持つ `relay_list` の名前。`not_loaded_plugins` は
@@ -264,7 +258,7 @@ pub type Spec {
     not_loaded_plugins: List(plugin_loader.NotLoaded),
     monitor: Monitor,
     bunker: Bunker,
-    admin: Option(Admin),
+    admin: Option(config.AdminListen),
     open: Open,
     reconnect_delay: backoff.Backoff,
     relay_list: Name(relay_list.Msg),
@@ -746,19 +740,19 @@ fn bunker_connections_child(
   )
 }
 
-/// 管理 UI。表示する状態は、ツリーの他の仕様から名前を引いて問い合わせる関数
-/// として Context に渡す。
+/// 管理 UI。bind アドレス、ポート、パスワードは `listen` から取り、表示する状態は、
+/// ツリーの他の仕様から名前を引いて問い合わせる関数として Context に渡す。
 fn admin_child(
   spec: Spec,
   avatars_name: Name(avatars.Msg),
-  config: Admin,
+  listen: config.AdminListen,
 ) -> ChildSpecification(Supervisor) {
   let bunker_name = spec.bunker.name
   admin.supervised(
-    config.bind,
-    config.port,
+    listen.bind,
+    listen.port,
     admin.Context(
-      password: config.password,
+      password: listen.password,
       client_address: admin.unknown_client_address,
       authentication_delay: fn() {
         process.sleep(admin.authentication_failure_delay)
