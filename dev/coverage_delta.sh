@@ -62,12 +62,12 @@ echo "| --- | --- | --- | --- | --- |"
 # 表の 1 行を出す。引数は時点の名前、measure の出力（空なら計測なし）、指定のコミット。
 row() {
   if [ -z "$2" ]; then
-    echo "| $1 | $(echo "$3" | cut -c1-7) | （30 個さかのぼっても計測の行が無い） | - | - |"
+    echo "| $1 | $(git -C "$root" rev-parse --short=7 "$3") | （30 個さかのぼっても計測の行が無い） | - | - |"
   else
     c=${2%% *}
     lines=${2#* }
     pct=$(echo "$lines" | awk -F/ '{ printf "%.2f", 100 * $1 / $2 }')
-    echo "| $1 | $(echo "$3" | cut -c1-7) | $(echo "$c" | cut -c1-7) | $lines | $pct% |"
+    echo "| $1 | $(git -C "$root" rev-parse --short=7 "$3") | $(echo "$c" | cut -c1-7) | $lines | $pct% |"
   fi
 }
 row 開始 "$start" "$1"
