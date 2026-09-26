@@ -21,13 +21,12 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
-import nostr_no_su/dedup/resume_store
 import nostr_no_su/named
 import nostr_no_su/nostr/event
-import nostr_no_su/plugin_resume_store
 import nostr_no_su/random
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/store
 import nostr_no_su/time
 import pog
 import support/log_capture
@@ -464,16 +463,19 @@ pub fn postgres_resume_store_test() {
   let assert Ok(_loaded) =
     account_store.load(pool, random_master_key(), generous)
 
-  assert resume_store.load(db, "wss://a") == Ok(None)
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 200)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(None)
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 200)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
 
   // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 100)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 100)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
 
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 300)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(300))
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 300)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(300))
 }
 
 /// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
@@ -487,16 +489,37 @@ pub fn postgres_plugin_resume_store_test() {
   let assert Ok(_loaded) =
     account_store.load(pool, random_master_key(), generous)
 
-  assert plugin_resume_store.load(db, "logger") == Ok(None)
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 200)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(None)
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 200)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
 
   // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 100)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 100)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
 
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 300)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(300))
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 300)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(300))
+}
+
+/// 2 つのテーブルの再開点は、同じキーでも互いに影響しない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_resume_store_tables_are_separate_test() {
+  use database_url <- postgres.with_test_database_url("resume_store")
+  use pool, db <- postgres.with_schema(database_url)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  let assert Ok(Nil) = store.save(db, store.Monitor, [#("k", 200)], generous)
+  assert store.load(db, store.Plugin, "k", generous) == Ok(None)
+
+  let assert Ok(Nil) = store.save(db, store.Plugin, [#("k", 100)], generous)
+  assert store.load(db, store.Monitor, "k", generous) == Ok(Some(200))
+  assert store.load(db, store.Plugin, "k", generous) == Ok(Some(100))
 }
 
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの

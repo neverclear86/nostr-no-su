@@ -687,13 +687,12 @@ nostr-no-su/
 │       ├── window.gleam          直近のイベント id のスライディングウィンドウ（純粋）
 │       ├── resume.gleam          監視の購読の再開点の記録（純粋）
 │       ├── resume/saver.gleam    再開点を周期ごとに保存するアクター
-│       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
+│       ├── resume/store.gleam    監視の購読とプラグインごとの再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
 │       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
-│       ├── plugin_resume_store.gleam プラグインごとの再開点の SQL
 │       ├── plugin_runner.gleam   プラグイン 1 つぶんの実行プロセス
 │       ├── plugin_term.gleam     プラグインのエクスポートが返す項の読み取りの部品（純粋）
 │       ├── plugins/
