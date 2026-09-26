@@ -268,7 +268,10 @@ fn plugins_tree(spec: Spec) -> Builder {
   let resubscribe = fn() {
     relay_list.resubscribe_all(spec.relay_list, [relay_list.Monitor])
   }
-  use builder, plugin_spec <- list.fold(spec.plugins, plugins_supervisor())
+  use builder, plugin_spec <- list.fold(
+    spec.plugins,
+    subtree_supervisor(supervisor.OneForOne),
+  )
   builder
   |> add_plugin_children(plugin_spec.plugin)
   |> supervisor.add(plugin_runner.supervised(
@@ -296,16 +299,25 @@ fn plugin_children_tree(
   name: String,
   children: List(ChildSpecification(Pid)),
 ) -> ChildSpecification(Supervisor) {
+  // 子同士は独立なので one_for_one。
   let builder =
-    list.fold(children, plugin_children_supervisor(), supervisor.add)
+    list.fold(
+      children,
+      subtree_supervisor(supervisor.OneForOne),
+      supervisor.add,
+    )
   supervision.supervisor(fn() { start_plugin_children(name, builder) })
   |> supervision.restart(supervision.Temporary)
 }
 
-/// プラグインの子プロセスのスーパーバイザー。子同士は独立なので `one_for_one`。
-fn plugin_children_supervisor() -> Builder {
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.restart_tolerance(intensity: 5, period: 10)
+/// 本体のサブツリーのスーパーバイザー。許容する再起動の頻度は
+/// `relay_list.subtree_restart_tolerance` で共通にし、戦略 `strategy` だけを呼び出し元が選ぶ。
+fn subtree_supervisor(strategy: supervisor.Strategy) -> Builder {
+  supervisor.new(strategy)
+  |> supervisor.restart_tolerance(
+    intensity: relay_list.subtree_restart_tolerance.intensity,
+    period: relay_list.subtree_restart_tolerance.period,
+  )
 }
 
 /// 子の起動に失敗しても本体の起動は止めず、Warning を 1 行出して空のスーパーバイザーで代える。
@@ -324,15 +336,9 @@ fn start_plugin_children(
         "children failed to start; the reason is in the child line above, "
           <> "or in the supervisor report; running without them",
       )
-      supervisor.start(plugin_children_supervisor())
+      supervisor.start(subtree_supervisor(supervisor.OneForOne))
     }
   }
-}
-
-/// プラグインのサブツリーのスーパーバイザー。
-fn plugins_supervisor() -> Builder {
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
 /// ディスパッチャーが送る宛先の初期値。名前はツリーの起動をまたいで変わらない
@@ -408,7 +414,7 @@ fn monitor_tree(
   config: Monitor,
   factories: relay_list.Factories,
 ) -> Builder {
-  subtree()
+  subtree_supervisor(supervisor.RestForOne)
   |> supervisor.add(dedup.supervised(
     config.name,
     plugin_targets(spec.plugins),
@@ -527,7 +533,7 @@ fn bunker_tree(
   config: Bunker,
   factories: relay_list.Factories,
 ) -> Builder {
-  subtree()
+  subtree_supervisor(supervisor.RestForOne)
   |> supervisor.add(pog.supervised(config.pool))
   |> supervisor.add(pog.supervised(config.lock_pool))
   |> supervisor.add(
@@ -765,16 +771,23 @@ fn plugin_ui_pages(ui: Option(plugin.PluginUi)) -> List(plugin.PluginPage) {
   }
 }
 
-/// 管理 UI の再有効化。名前でランナーを引き、応答を待つ。名前で引いてよいのは、
-/// 読み込みが同名のプラグインを 2 つ目以降で捨てるためである
-/// （`plugin_loader.gleam` の重複検査。同梱のプラグイン名も `reserved` として
-/// 同じ検査に入る）。
+/// 名前でプラグインの仕様を引く。名前で引いてよいのは、読み込みが同名のプラグインを
+/// 2 つ目以降で捨てるためである（`plugin_loader.gleam` の重複検査。同梱のプラグイン名も
+/// `reserved` として同じ検査に入る）。
+fn find_plugin(
+  specs: List(PluginSpec),
+  name: String,
+) -> Result(PluginSpec, Nil) {
+  list.find(specs, fn(spec) { spec.plugin.name == name })
+}
+
+/// 管理 UI の再有効化。名前でランナーを引き、応答を待つ。
 pub fn reenable_plugin(
   specs: List(PluginSpec),
   plugin: String,
 ) -> Result(Nil, admin.ReenableFailure) {
   use spec <- result.try(
-    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    find_plugin(specs, plugin)
     |> result.replace_error(admin.PluginNotFound("plugin not found")),
   )
   plugin_runner.request_reenable(spec.name)
@@ -782,10 +795,9 @@ pub fn reenable_plugin(
 }
 
 /// 管理 UI のプラグインのページの中身。`language` は表示の言語のコードで、言語を
-/// 受け取るプラグインにだけ渡る。名前で引いてよい理由は `reenable_plugin` と同じ
-/// （読み込みが同名のプラグインを 2 つ目以降で捨てる）。UI を持たないプラグイン、
-/// または一覧に無い名前は 1 行の理由を返す（`admin.plugin_page` が行の一覧で先に
-/// 404 にするので、名前で引けないことは通常起きない）。
+/// 受け取るプラグインにだけ渡る。UI を持たないプラグイン、または一覧に無い名前は 1 行の
+/// 理由を返す（`admin.plugin_page` が行の一覧で先に 404 にするので、名前で引けないことは
+/// 通常起きない）。
 pub fn plugin_page_content(
   specs: List(PluginSpec),
   plugin: String,
@@ -794,7 +806,7 @@ pub fn plugin_page_content(
   accounts: List(plugin_config.PageAccount),
 ) -> Result(Dynamic, String) {
   use spec <- result.try(
-    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    find_plugin(specs, plugin)
     |> result.replace_error("plugin not found"),
   )
   case spec.plugin.ui {
@@ -812,7 +824,7 @@ pub fn plugin_page_action(
   key: String,
 ) -> Option(plugin_config.PageAction) {
   use spec <- option.then(
-    list.find(specs, fn(spec) { spec.plugin.name == plugin })
+    find_plugin(specs, plugin)
     |> option.from_result,
   )
   use ui <- option.then(spec.plugin.ui)
@@ -837,6 +849,13 @@ pub fn page_accounts(
   )
 }
 
+/// `relay_list` の現在の一覧。応答が無ければ、管理 UI の節に出す理由
+/// `relay list did not answer` を返す。
+fn relay_entries(spec: Spec) -> Result(List(relay_list.Entry), String) {
+  relay_list.entries(spec.relay_list)
+  |> result.replace_error("relay list did not answer")
+}
+
 /// リレーの節の行。`relay_list` が応答しなければその理由を、DB の `relays` を
 /// 読めなければその理由を返す。DB の行の URL に対応する接続の名前を集めて
 /// `relay_statuses` で並行に問い合わせ、締め切りまでに答えなかった接続は
@@ -849,10 +868,7 @@ pub fn relay_rows(
   spec: Spec,
   deadline: task.Deadline,
 ) -> Result(List(dashboard.RelayRow), String) {
-  use entries <- result.try(
-    relay_list.entries(spec.relay_list)
-    |> result.replace_error("relay list did not answer"),
-  )
+  use entries <- result.try(relay_entries(spec))
   use relays <- result.map(registered_relays(spec))
   let relay_urls = list.map(relays, fn(relay) { relay.url })
   let names =
@@ -888,6 +904,22 @@ fn store_connection(spec: Spec) -> pog.Connection {
   pog.named_connection(spec.bunker.pool.pool_name)
 }
 
+/// `write` で DB の `relays` に書いてから、`change` で `relay_list` の一覧を変える。DB に
+/// 書けなければ一覧を変えず、その失敗を `store_failure` で写す。一覧の変更を確かめられ
+/// なければ `ConnectionsNotConfirmed`。
+fn write_then_change(
+  spec: Spec,
+  write: fn(pog.Connection) -> Result(a, db.StoreError),
+  change: fn(Spec) -> Result(Nil, relay_list.ChangeError),
+) -> Result(Nil, admin.RelayChangeFailure) {
+  use _written <- result.try(
+    write(store_connection(spec))
+    |> result.map_error(store_failure),
+  )
+  change(spec)
+  |> result.replace_error(admin.ConnectionsNotConfirmed)
+}
+
 /// リレーを DB に登録してから接続を開く。DB に書けなければ接続を開かない。管理 UI の
 /// Context が使う。
 pub fn add_relay(
@@ -895,12 +927,11 @@ pub fn add_relay(
   url: String,
   roles: relay_list.Roles,
 ) -> Result(Nil, admin.RelayChangeFailure) {
-  use _row <- result.try(
-    relay_store.insert(store_connection(spec), url, roles, db.default_timeouts)
-    |> result.map_error(store_failure),
+  write_then_change(
+    spec,
+    relay_store.insert(_, url, roles, db.default_timeouts),
+    open_relay(_, url, roles),
   )
-  open_relay(spec, url, roles)
-  |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
 /// 用途を DB に書いてから接続の用途を変える。DB に書けなければ接続を変えない。管理 UI の
@@ -910,17 +941,11 @@ pub fn update_relay_roles(
   relay: relay_store.Relay,
   roles: relay_list.Roles,
 ) -> Result(Nil, admin.RelayChangeFailure) {
-  use _nil <- result.try(
-    relay_store.update_roles(
-      store_connection(spec),
-      relay.id,
-      roles,
-      db.default_timeouts,
-    )
-    |> result.map_error(store_failure),
+  write_then_change(
+    spec,
+    relay_store.update_roles(_, relay.id, roles, db.default_timeouts),
+    change_relay_roles(_, relay.url, roles),
   )
-  change_relay_roles(spec, relay.url, roles)
-  |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
 /// 行を DB から消してから接続を閉じる。管理 UI の Context が使う。
@@ -928,12 +953,11 @@ pub fn delete_relay(
   spec: Spec,
   relay: relay_store.Relay,
 ) -> Result(Nil, admin.RelayChangeFailure) {
-  use _nil <- result.try(
-    relay_store.delete(store_connection(spec), relay.id, db.default_timeouts)
-    |> result.map_error(store_failure),
+  write_then_change(
+    spec,
+    relay_store.delete(_, relay.id, db.default_timeouts),
+    close_relay(_, relay.url),
   )
-  close_relay(spec, relay.url)
-  |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
 /// `db.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
@@ -1019,7 +1043,7 @@ pub fn connect_nostrconnect(
     await_publisher(
       spec,
       request.relays,
-      dashboard.nostrconnect_wait_seconds * 1000,
+      nostrconnect.connect_wait_seconds * 1000,
     )
   {
     False -> Error(admin.RelayNotConnected)
@@ -1065,10 +1089,7 @@ pub fn account_rows(
   spec: Spec,
   pictures: fn(List(String)) -> Dict(String, String),
 ) -> Result(List(dashboard.AccountRow), String) {
-  use entries <- result.try(
-    relay_list.entries(spec.relay_list)
-    |> result.replace_error("relay list did not answer"),
-  )
+  use entries <- result.try(relay_entries(spec))
   let relay_urls = relay_list.urls(entries, relay_list.Bunker)
   use listings <- result.map(bunker.accounts(spec.bunker.name))
   let found = pictures(list.map(listings, fn(listing) { listing.signer }))
@@ -1153,14 +1174,6 @@ pub fn session_rows(sessions: List(Session)) -> List(dashboard.SessionRow) {
     created_at: session.created_at,
     last_used_at: session.last_used_at,
   )
-}
-
-/// サブツリーのスーパーバイザー。不正なイベント 1 件で先頭のアクターと後続の
-/// 接続がまとめて落ちうるため、許容する再起動の頻度は多めに取ってある。リレーの
-/// 停止は接続アクター自身が処理するので、そもそも再起動にはならない。
-fn subtree() -> Builder {
-  supervisor.new(supervisor.RestForOne)
-  |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
 /// 接続 1 本ぶんのハンドラー。どれも第 1 引数に接続の URL を受け取る。`handle_event` は

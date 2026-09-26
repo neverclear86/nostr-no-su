@@ -37,6 +37,10 @@
 //// `terminate_dynamic_child` の待ちの最中にサブツリーがさらに factory を止める
 //// ときも同様）の `start_dynamic_child` / `terminate_dynamic_child` も同じく
 //// FFI で値にする。
+////
+//// 本体のサブツリーが共有する再起動の許容 `subtree_restart_tolerance` もここに置く。`app` と
+//// このモジュールの `connections` の factory の両方が読み、`app` がこのモジュールを import
+//// するため（逆向きは循環する）。
 
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/list
@@ -370,6 +374,18 @@ pub fn start(
   |> actor.start
 }
 
+/// スーパーバイザーが許容する再起動の頻度。`period` 秒の間に `intensity` 回まで。
+pub type RestartTolerance {
+  RestartTolerance(intensity: Int, period: Int)
+}
+
+/// 本体のサブツリー（プラグイン、プラグインの子、監視、バンカー）と、用途ごとの
+/// `connections` の factory が共有する再起動の許容。監視とバンカーのサブツリー
+/// （`rest_for_one`）では、不正なイベント 1 件で先頭のアクターと後続の接続がまとめて
+/// 落ちうるため、多めに取ってある。リレーの停止は接続アクター自身が処理するので、
+/// そもそも再起動にはならない。
+pub const subtree_restart_tolerance = RestartTolerance(intensity: 5, period: 10)
+
 /// 用途 `role` の接続を factory の子として起動するスーパーバイザーの子仕様。
 /// `start` は `Connection` を受け取り接続アクターを起動するテンプレート
 /// （`relay_connection.start` を包んだもの）。factory の起動が終わった直後に、
@@ -386,7 +402,10 @@ pub fn connections_child(
     factory_supervisor.worker_child(start)
     |> factory_supervisor.named(factory_for_role(factories, role))
     |> factory_supervisor.restart_strategy(supervision.Permanent)
-    |> factory_supervisor.restart_tolerance(intensity: 5, period: 10)
+    |> factory_supervisor.restart_tolerance(
+      intensity: subtree_restart_tolerance.intensity,
+      period: subtree_restart_tolerance.period,
+    )
     |> factory_supervisor.start
     |> result.map(fn(started) {
       named.send(list, Repopulate(role))
