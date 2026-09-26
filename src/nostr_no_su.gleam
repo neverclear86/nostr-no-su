@@ -276,8 +276,8 @@ fn bunker_spec(
   )
 }
 
-/// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ捕捉される。
-/// 失敗は値を含まない説明に写し（`write_failure`）、削除は行が無いことを成功とする。
+/// アカウントストアの操作。マスターキーはこのクロージャーにだけ捕捉される。
+/// 失敗は値を含まない説明に写し（書き込みは `write_failure`）、削除は行が無いことを成功とする。
 /// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写し、バンカーに読み直させる。
 /// `load` は `lock_pool` で advisory lock を取り直してから `load_snapshot` を読み、結果を
 /// `halt_if_cannot_continue` に通す。`write` は `write_session_state` に写す。
