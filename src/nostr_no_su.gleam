@@ -11,7 +11,6 @@ import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
 import nostr_no_su/db
@@ -342,31 +341,21 @@ fn write_session_state(
       account_store.insert_session_evicting(
         pool,
         key,
-        session: stored_session(session),
+        session: session,
         evicted: evicted,
         timeouts:,
       )
     engine.DeleteSession(signer:, client:) ->
       account_store.delete_session(db, signer:, client:, timeouts:)
     engine.TouchSession(session:) ->
-      account_store.touch_session(
-        db,
-        key,
-        session: stored_session(session),
-        timeouts:,
-      )
+      account_store.touch_session(db, key, session: session, timeouts:)
     engine.UpdateSessionPerms(session:) ->
-      account_store.update_session_perms(
-        db,
-        key,
-        session: stored_session(session),
-        timeouts:,
-      )
+      account_store.update_session_perms(db, key, session: session, timeouts:)
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,
         key,
-        pending: stored_pending(pending),
+        pending: pending,
         replaced: replaced,
         evicted: evicted,
         timeouts:,
@@ -378,7 +367,7 @@ fn write_session_state(
         pool,
         key,
         token: token,
-        session: stored_session(session),
+        session: session,
         evicted: evicted,
         timeouts:,
       )
@@ -409,62 +398,19 @@ pub fn load_snapshot(
   bunker_snapshot(stored, relays)
 }
 
-/// DB から読んだ行を、バンカーの読み込みの結果（`session` の型）にする。
+/// DB から読んだ全体（`account_store.Stored`）と登録されたリレーを、バンカーの読み込みの
+/// 結果にする。
 fn bunker_snapshot(
   stored: account_store.Stored,
   relays: List(relay_store.Relay),
 ) -> bunker.Snapshot {
   bunker.Snapshot(
     accounts: stored.accounts,
-    sessions: list.map(stored.sessions, fn(session) {
-      session.Session(
-        signer: session.signer,
-        client: session.client,
-        perms: session.perms,
-        created_at: session.created_at,
-        last_used_at: session.last_used_at,
-        relays: session.relays,
-      )
-    }),
-    pending: list.map(stored.pending, fn(pending) {
-      session.Pending(
-        token: pending.token,
-        signer: pending.signer,
-        client: pending.client,
-        request_id: pending.request_id,
-        perms: pending.perms,
-        secret_mismatch: pending.secret_mismatch,
-        created_at: pending.created_at,
-      )
-    }),
+    sessions: stored.sessions,
+    pending: stored.pending,
     relays: list.map(relays, fn(relay) {
       relay_list.Registered(url: relay.url, roles: relay.roles)
     }),
-  )
-}
-
-/// セッション（`session.Session`）を DB の行の型にする。
-fn stored_session(session: session.Session) -> account_store.StoredSession {
-  account_store.StoredSession(
-    signer: session.signer,
-    client: session.client,
-    perms: session.perms,
-    created_at: session.created_at,
-    last_used_at: session.last_used_at,
-    relays: session.relays,
-  )
-}
-
-/// 承認待ち（`session.Pending`）を DB の行の型にする。
-fn stored_pending(pending: session.Pending) -> account_store.StoredPending {
-  account_store.StoredPending(
-    token: pending.token,
-    signer: pending.signer,
-    client: pending.client,
-    request_id: pending.request_id,
-    perms: pending.perms,
-    secret_mismatch: pending.secret_mismatch,
-    created_at: pending.created_at,
   )
 }
 

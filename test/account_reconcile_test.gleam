@@ -229,7 +229,7 @@ fn reconcile_sessions_with_postgres(
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer: signer,
         client: client,
         perms: "",
@@ -243,7 +243,7 @@ fn reconcile_sessions_with_postgres(
     account_store.insert_pending(
       db,
       key,
-      account_store.StoredPending(
+      session.Pending(
         token: random.hex(16),
         signer: signer,
         client: client,
