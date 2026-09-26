@@ -160,7 +160,7 @@ pub fn section_renders_every_block_type_test() {
 
   assert string.contains(
     body,
-    element.to_string(view.form_description("A plain paragraph.")),
+    element.to_string(view.paragraph("A plain paragraph.")),
   )
   assert string.contains(body, element.to_string(view.hint("A quieter note.")))
   assert string.contains(

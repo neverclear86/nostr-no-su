@@ -141,7 +141,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   case kind {
     "text" -> {
       use text <- result.try(text_field(raw, "text"))
-      Ok(view.form_description(text))
+      Ok(view.paragraph(text))
     }
     "note" -> {
       use text <- result.try(text_field(raw, "text"))

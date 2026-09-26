@@ -1254,7 +1254,7 @@ pub fn generate_form(
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
-    view.form_description(text(i18n.GenerateDescription)),
+    view.paragraph(text(i18n.GenerateDescription)),
     view.post_form(
       view.segments_path(generate_account_segments),
       [],
@@ -2763,7 +2763,7 @@ pub fn new_relay_form(
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
-    view.form_description(text(i18n.AddRelayDescription)),
+    view.paragraph(text(i18n.AddRelayDescription)),
     view.post_form(
       view.segments_path(new_relay_segments),
       [url_field(language, url), roles_fieldset(language, roles, None)],
@@ -3030,7 +3030,7 @@ fn connect_review_dialog(
               Some(i18n.CouldNotStartConnection),
               error,
             ),
-            view.form_description(text(i18n.ConnectConfirmDescription)),
+            view.paragraph(text(i18n.ConnectConfirmDescription)),
             review_list(language, accounts, review),
             info_sentences(
               language,
@@ -3291,7 +3291,7 @@ pub fn permissions_form(
   let kinds_hint_id =
     session_dialog_id(session, session_permissions_segment) <> "-kinds-hint"
   [
-    view.form_description(i18n.text(language, i18n.EditPermissionsDescription)),
+    view.paragraph(i18n.text(language, i18n.EditPermissionsDescription)),
     view.post_form(
       session_permissions_path(session.signer, session.client),
       permissions_fields(language, fields, kinds_hint_id),
@@ -3454,7 +3454,7 @@ pub fn connect_form(
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
-    view.form_description(text(i18n.ConnectClientDescription)),
+    view.paragraph(text(i18n.ConnectClientDescription)),
     view.post_form(
       view.segments_path(connect_segments),
       [
@@ -3680,7 +3680,7 @@ fn revoke_form(
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   [
-    view.form_description(text(i18n.RevokeSessionDescription)),
+    view.paragraph(text(i18n.RevokeSessionDescription)),
     view.post_form(
       view.segments_path(revoke_segments),
       [
