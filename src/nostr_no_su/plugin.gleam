@@ -77,8 +77,7 @@ const page_content_export = "plugin_page_content"
 /// 管理 UI の 1 ページのフォームの送信を受け取る任意エクスポートの名前。
 const page_action_export = "plugin_page_action"
 
-/// UI のページのキーに許す文字。`plugin_config.gleam` の `normalize` と同じく、
-/// 許す文字を並べた定数と `string.contains` で判定する。
+/// UI のページのキーに許す文字。`plugin_term.consists_of` に渡す。
 const page_key_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_-"
 
 /// プラグインはバンカーに登録したアカウントから受信したすべてのイベントを処理する。
@@ -771,7 +770,7 @@ fn decode_page(
     "a String",
     decode.string,
   ))
-  case page_key_ok(key) {
+  case plugin_term.consists_of(key, page_key_alphabet) {
     False ->
       Error(label <> ": page key \"" <> key <> "\" must match [a-z0-9_-]+")
     True -> {
@@ -787,14 +786,6 @@ fn decode_page(
       Ok(PluginPage(key: key, title: title))
     }
   }
-}
-
-/// `page_key_alphabet` だけからなり、空でないこと。
-fn page_key_ok(key: String) -> Bool {
-  key != ""
-  && key
-  |> string.to_graphemes
-  |> list.all(fn(character) { string.contains(page_key_alphabet, character) })
 }
 
 /// ページの一覧の中で最初に重複したキーを探す。

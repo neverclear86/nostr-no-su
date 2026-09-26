@@ -55,8 +55,8 @@ pub fn lookup_reads_only_the_given_key_type_test() {
   assert decode.run(key, decode.string) == Ok("settings")
 }
 
-/// 欠けたキーは `missing <key>`、decoder で読めない値は
-/// `<key> must be <expected>, got <classify>` の理由になる。
+/// 欠けたキーは `<label>: missing <key>`、decoder で読めない値は
+/// `<label>: <key> must be <expected>, got <classify>` の理由になる。
 pub fn required_reports_missing_and_mismatched_keys_test() {
   let map =
     dynamic.properties([
@@ -90,6 +90,65 @@ pub fn required_reports_missing_and_mismatched_keys_test() {
       decode.string,
     )
     == Ok("Settings")
+}
+
+/// 欠けたキーは `missing <key>`、decoder で読めない値は
+/// `<key> must be <expected>, got <classify>` の理由になり、`<label>: ` の前置は付かない。
+pub fn field_reports_missing_and_mismatched_keys_without_a_label_test() {
+  let map =
+    dynamic.properties([
+      #(dynamic.string("key"), dynamic.int(1)),
+      #(dynamic.string("title"), dynamic.string("Settings")),
+    ])
+  assert plugin_term.field(
+      dynamic.properties([]),
+      BinaryKey,
+      "title",
+      "a String",
+      decode.string,
+    )
+    == Error("missing title")
+  assert plugin_term.field(map, BinaryKey, "key", "a String", decode.string)
+    == Error("key must be a String, got Int")
+  assert plugin_term.field(map, BinaryKey, "key", "an Int", decode.int) == Ok(1)
+}
+
+/// 無ければ（map ですらなければ）`Ok(None)`、decoder で読めない値は
+/// `<key> must be <expected>, got <classify>` の理由になる。
+pub fn optional_field_reads_an_absent_key_as_none_test() {
+  let map =
+    dynamic.properties([#(dynamic.string("checked"), dynamic.string("yes"))])
+  assert plugin_term.optional_field(
+      dynamic.properties([]),
+      BinaryKey,
+      "checked",
+      "a Bool",
+      decode.bool,
+    )
+    == Ok(None)
+  assert plugin_term.optional_field(
+      map,
+      BinaryKey,
+      "checked",
+      "a Bool",
+      decode.bool,
+    )
+    == Error("checked must be a Bool, got String")
+  assert plugin_term.optional_field(
+      map,
+      BinaryKey,
+      "checked",
+      "a String",
+      decode.string,
+    )
+    == Ok(Some("yes"))
+}
+
+/// 空文字と、`alphabet` に無い文字を含む文字列は `False` になる。
+pub fn consists_of_accepts_only_non_empty_text_from_the_alphabet_test() {
+  assert plugin_term.consists_of("ab-1", "ab1-")
+  assert !plugin_term.consists_of("", "ab1-")
+  assert !plugin_term.consists_of("aB", "ab1-")
 }
 
 /// map なら `Ok(Nil)`、map でなければ `dynamic.classify` の型名を添えた

@@ -1,6 +1,6 @@
 //// プラグインのエクスポートが返す Erlang の項を読む部品。理由の文字列の形
-//// （`<label>: missing <key>`、`<label>: <key> must be <expected>, got <classify>` など）を
-//// ここで揃える。
+//// （`missing <key>`、`<key> must be <expected>, got <classify>` と、それに `<label>: ` を
+//// 前置したものなど）をここで揃える。記述のキーに許す文字の検査（`consists_of`）も置く。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -9,6 +9,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 
 /// プラグインが返す map のキーの型。子仕様（OTP の `child_spec()`）は atom、ページの記述は
 /// binary のキーを使う。
@@ -73,17 +74,13 @@ pub fn check_map(
 /// map から `key_type` の型のキー `key` を取り出す。無ければ（map ですらなければ）
 /// `None`。
 pub fn lookup(raw: Dynamic, key_type: KeyType, key: String) -> Option(Dynamic) {
-  case key_type {
-    AtomKey -> lookup_term(raw, atom.create(key))
-    BinaryKey -> lookup_term(raw, key)
+  let key_term = case key_type {
+    AtomKey -> atom.to_dynamic(atom.create(key))
+    BinaryKey -> dynamic.string(key)
   }
-}
-
-/// `key` の項をそのまま map のキーとして引く。`lookup` の実体。
-fn lookup_term(raw: Dynamic, key: k) -> Option(Dynamic) {
   let decoder =
     decode.optional_field(
-      key,
+      key_term,
       None,
       decode.map(decode.dynamic, Some),
       decode.success,
@@ -92,10 +89,7 @@ fn lookup_term(raw: Dynamic, key: k) -> Option(Dynamic) {
   |> result.unwrap(None)
 }
 
-/// 必須のキーを読む。欠けていれば `<label>: missing <key>`、`decoder` で読めなければ
-/// `<label>: <key> must be <expected>, got <classify>`。atom キーの map に対する
-/// `decode.run` のエラーのパスはプラグイン作者の役に立たないので、理由は自前で
-/// 組み立てる。
+/// 必須のキーを読む。理由は `field` のものに `<label>: ` を前置する。
 pub fn required(
   raw: Dynamic,
   key_type: KeyType,
@@ -104,20 +98,49 @@ pub fn required(
   expected: String,
   decoder: decode.Decoder(a),
 ) -> Result(a, String) {
+  field(raw, key_type, key, expected, decoder)
+  |> result.map_error(fn(reason) { label <> ": " <> reason })
+}
+
+/// 必須のキーを読む。欠けていれば `missing <key>`、読めなければ `optional_field` と同じ理由。
+pub fn field(
+  raw: Dynamic,
+  key_type: KeyType,
+  key: String,
+  expected: String,
+  decoder: decode.Decoder(a),
+) -> Result(a, String) {
+  use value <- result.try(optional_field(raw, key_type, key, expected, decoder))
+  option.to_result(value, "missing " <> key)
+}
+
+/// 任意のキーを読む。無ければ（map ですらなければ）`None`、`decoder` で読めなければ
+/// `<key> must be <expected>, got <classify>`。atom キーの map に対する `decode.run` の
+/// エラーのパスはプラグイン作者の役に立たないので、理由は自前で組み立てる。
+pub fn optional_field(
+  raw: Dynamic,
+  key_type: KeyType,
+  key: String,
+  expected: String,
+  decoder: decode.Decoder(a),
+) -> Result(Option(a), String) {
   case lookup(raw, key_type, key) {
-    None -> Error(label <> ": missing " <> key)
+    None -> Ok(None)
     Some(value) ->
       decode.run(value, decoder)
+      |> result.map(Some)
       |> result.replace_error(
-        label
-        <> ": "
-        <> key
-        <> " must be "
-        <> expected
-        <> ", got "
-        <> dynamic.classify(value),
+        key <> " must be " <> expected <> ", got " <> dynamic.classify(value),
       )
   }
+}
+
+/// `text` が空でなく、`alphabet`（許す文字を並べた文字列）の文字だけからなること。
+pub fn consists_of(text: String, alphabet: String) -> Bool {
+  text != ""
+  && text
+  |> string.to_graphemes
+  |> list.all(fn(character) { string.contains(alphabet, character) })
 }
 
 /// 0 起点の添字を付けて要素を 1 つずつ検証し、最初の誤りで止める。

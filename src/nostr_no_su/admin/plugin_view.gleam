@@ -27,14 +27,13 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
 import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/plugin_term
+import nostr_no_su/plugin_term.{BinaryKey}
 
 /// 節の描画に要る文脈。`plugin_language` はプラグイン由来の文字列が書かれている
 /// 言語のコード（`plugin.text_language`）。`page_href` は同じプラグインのページの
@@ -115,11 +114,12 @@ fn meta_heading(
   title: String,
   context: Context,
 ) -> Result(Element(msg), String) {
-  use meta <- result.try(optional_field(
+  use meta <- result.try(plugin_term.optional_field(
     raw,
+    BinaryKey,
     "meta",
-    decode.list(decode.dynamic),
     "a List",
+    decode.list(decode.dynamic),
   ))
   case meta {
     None -> Ok(view.heading(title))
@@ -163,11 +163,12 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       }
     }
     "table" -> {
-      use headers <- result.try(typed_field(
+      use headers <- result.try(plugin_term.field(
         raw,
+        BinaryKey,
         "headers",
-        decode.list(decode.string),
         "a List of strings",
+        decode.list(decode.string),
       ))
       use rows_raw <- result.try(list_field(raw, "rows"))
       use rows <- result.try(
@@ -281,11 +282,12 @@ fn checkbox_input(
   label: String,
   hint: Option(String),
 ) -> Result(Element(msg), String) {
-  use checked <- result.try(optional_field(
+  use checked <- result.try(plugin_term.optional_field(
     raw,
+    BinaryKey,
     "checked",
-    decode.bool,
     "a Bool",
+    decode.bool,
   ))
   Ok(view.plugin_checkbox_row(name, label, hint, option.unwrap(checked, False)))
 }
@@ -305,49 +307,21 @@ fn text_input(
 /// `name "<name>" must match [A-Za-z0-9_-]+`。
 fn field_name(raw: Dynamic) -> Result(String, String) {
   use name <- result.try(text_field(raw, "name"))
-  case field_name_ok(name) {
+  case plugin_term.consists_of(name, field_name_alphabet) {
     True -> Ok(name)
     False -> Error("name \"" <> name <> "\" must match [A-Za-z0-9_-]+")
   }
 }
 
-/// 欄の `name` に許す文字。`plugin_config` の `normalize` と同じ考え方で、許す文字を
-/// 並べた定数と `string.contains` で判定する。
+/// 欄の `name` に許す文字。`plugin_term.consists_of` に渡す。
 const field_name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
-/// `name` が `field_name_alphabet` だけからなり、空でないこと。
-fn field_name_ok(name: String) -> Bool {
-  name != ""
-  && name
-  |> string.to_graphemes
-  |> list.all(fn(character) { string.contains(field_name_alphabet, character) })
-}
-
-/// `key` の任意の値を `decoder` で読む。無ければ（map ですらなければ）`None`、型が合わなければ
-/// `<key> must be <expected>, got <classify>`。この形の文はここでだけ組み立てる。
-fn optional_field(
-  raw: Dynamic,
-  key: String,
-  decoder: decode.Decoder(a),
-  expected: String,
-) -> Result(Option(a), String) {
-  case lookup(raw, key) {
-    None -> Ok(None)
-    Some(value) ->
-      decode.run(value, decoder)
-      |> result.map(Some)
-      |> result.replace_error(
-        key <> " must be " <> expected <> ", got " <> dynamic.classify(value),
-      )
-  }
-}
-
-/// `key` の任意の値を String として読む。規則は `optional_field` と同じ。
+/// `key` の任意の値を String として読む。規則は `plugin_term.optional_field` と同じ。
 fn optional_text_field(
   raw: Dynamic,
   key: String,
 ) -> Result(Option(String), String) {
-  optional_field(raw, key, decode.string, "a String")
+  plugin_term.optional_field(raw, BinaryKey, key, "a String", decode.string)
 }
 
 /// `key` の任意の値を文字列として読み、`parse` で値に写す。無ければ `default`、文字列で
@@ -365,9 +339,9 @@ fn choice_field(
   }
 }
 
-/// `key` の必須の値を、要素の型を問わないリストとして読む。誤りの文は `typed_field` と同じ。
+/// `key` の必須の値を、要素の型を問わないリストとして読む。誤りの文は `plugin_term.field` と同じ。
 fn list_field(raw: Dynamic, key: String) -> Result(List(Dynamic), String) {
-  typed_field(raw, key, decode.list(decode.dynamic), "a List")
+  plugin_term.field(raw, BinaryKey, key, "a List", decode.list(decode.dynamic))
 }
 
 /// 要素を先頭から `f` で検証し、最初の誤りで止める。誤りの理由には `<name> #<添字>: ` を
@@ -403,7 +377,8 @@ fn pair(
 ) -> Result(#(String, Element(msg)), String) {
   use term <- result.try(text_field(raw, "term"))
   use value_raw <- result.try(
-    lookup(raw, "value") |> option.to_result("missing value"),
+    plugin_term.lookup(raw, BinaryKey, "value")
+    |> option.to_result("missing value"),
   )
   use kind <- result.try(text_field(value_raw, "type"))
   case kind {
@@ -517,7 +492,13 @@ fn tone(name: String) -> Result(view.Tone, String) {
 /// `key` の値を 0 以上の整数として読む。欠けていれば `missing <key>`、整数でなければ
 /// `<key> must be an Int, got <classify>`、負なら `<key> must not be negative, got <値>`。
 fn non_negative_int_field(raw: Dynamic, key: String) -> Result(Int, String) {
-  use value <- result.try(typed_field(raw, key, decode.int, "an Int"))
+  use value <- result.try(plugin_term.field(
+    raw,
+    BinaryKey,
+    key,
+    "an Int",
+    decode.int,
+  ))
   case value < 0 {
     True -> Error(key <> " must not be negative, got " <> int.to_string(value))
     False -> Ok(value)
@@ -527,31 +508,5 @@ fn non_negative_int_field(raw: Dynamic, key: String) -> Result(Int, String) {
 /// `key` の値を String として読む。欠けていれば `missing <key>`、型が合わなけ
 /// れば `<key> must be a String, got <classify>`。
 fn text_field(raw: Dynamic, key: String) -> Result(String, String) {
-  typed_field(raw, key, decode.string, "a String")
-}
-
-/// `key` の値を `decoder` で読む。欠けていれば `missing <key>`、型が合わなけ
-/// れば `<key> must be <expected>, got <classify>`。
-fn typed_field(
-  raw: Dynamic,
-  key: String,
-  decoder: decode.Decoder(a),
-  expected: String,
-) -> Result(a, String) {
-  use value <- result.try(optional_field(raw, key, decoder, expected))
-  option.to_result(value, "missing " <> key)
-}
-
-/// binary キーの map から任意のキーを取り出す。無ければ（map ですらなければ）
-/// `None`。
-fn lookup(raw: Dynamic, key: String) -> Option(Dynamic) {
-  let decoder =
-    decode.optional_field(
-      key,
-      None,
-      decode.map(decode.dynamic, Some),
-      decode.success,
-    )
-  decode.run(raw, decoder)
-  |> result.unwrap(None)
+  plugin_term.field(raw, BinaryKey, key, "a String", decode.string)
 }
