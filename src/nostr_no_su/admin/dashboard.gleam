@@ -2673,7 +2673,7 @@ fn no_bunker_relay_alert(
 
 /// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンを並べ、
 /// 2 段目に用途のマス（`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」の
-/// バッジで出す。
+/// バッジで出す。ダイアログは操作ごとに `relay_action_dialog` で `dialog` に合わせて描く。
 fn relay_item(
   language: Language,
   row: RelayRow,
@@ -2684,7 +2684,19 @@ fn relay_item(
       html.text(row.url),
     ]),
     button_row(
-      list.flat_map(relay_actions, relay_action_dialog(language, row, _, dialog)),
+      list.flat_map(relay_actions, fn(action) {
+        [
+          view.dialog_trigger(
+            relay_dialog_id(row.id, action),
+            view.IconOnlyTrigger(
+              relay_action_icon(action),
+              i18n.text(language, relay_action_title(action)),
+            ),
+            relay_action_button_kind(action),
+          ),
+          relay_action_dialog(language, row, action, dialog),
+        ]
+      }),
     ),
     html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
       relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
@@ -2698,47 +2710,38 @@ fn relay_dialog_id(id: Int, action: RelayAction) -> String {
   view.dialog_id(["relay", int.to_string(id), relay_action_segment(action)])
 }
 
-/// リレー `row` への `action` のダイアログを開くアイコンだけのボタンと、そのダイアログ。題は操作の
-/// 見出しで、中に理由、URL の要約、`relay_action_form` の説明とフォームを並べる。`dialog` がこの
-/// 行と操作の `RelayActionOpen` なら開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。
-/// そうでなければ欄の用途は `row_roles(row)`。
+/// リレー `row` への `action` のダイアログ。題は操作の見出しで、中に理由、URL の要約、
+/// `relay_action_form` の説明とフォームを並べる。`dialog` がこの行と操作の `RelayActionOpen` なら
+/// 開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。そうでなければ欄の用途は
+/// `row_roles(row)`。
 fn relay_action_dialog(
   language: Language,
   row: RelayRow,
   action: RelayAction,
   dialog: Option(OpenDialog),
-) -> List(Element(msg)) {
-  let title = i18n.text(language, relay_action_title(action))
-  let id = relay_dialog_id(row.id, action)
+) -> Element(msg) {
   let #(opening, roles, error) = case dialog {
     Some(RelayActionOpen(id: relay_id, action: opened, roles:, error:))
       if relay_id == row.id && opened == action
     -> #(view.OpenedByResponse, roles, Some(error))
     _ -> #(view.OpensOnTrigger, row_roles(row), None)
   }
-  [
-    view.dialog_trigger(
-      id,
-      view.IconOnlyTrigger(relay_action_icon(action), title),
-      relay_action_button_kind(action),
-    ),
-    view.dialog(
-      language,
-      id,
-      title,
-      fn(placement) {
-        [
-          view.error_message(language, Some(relay_action_lead(action)), error),
-          view.summary_list([
-            #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
-          ]),
-          ..relay_action_form(language, row, action, roles, placement)
-        ]
-      },
-      i18n.Cancel,
-      opening,
-    ),
-  ]
+  view.dialog(
+    language,
+    relay_dialog_id(row.id, action),
+    i18n.text(language, relay_action_title(action)),
+    fn(placement) {
+      [
+        view.error_message(language, Some(relay_action_lead(action)), error),
+        view.summary_list([
+          #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+        ]),
+        ..relay_action_form(language, row, action, roles, placement)
+      ]
+    },
+    i18n.Cancel,
+    opening,
+  )
 }
 
 /// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
