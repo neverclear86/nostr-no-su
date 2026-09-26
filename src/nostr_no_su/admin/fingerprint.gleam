@@ -11,13 +11,13 @@
 //// 明るさと彩度はテーマのブロックの変数（`--fp-lightness`、`--fp-chroma`）でライトとダークを
 //// 切り替える。
 
-import gleam/bit_array
 import gleam/list
 import gleam/result
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/svg
 import nostr_no_su/admin/qr
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 
 /// 公開鍵 1 つの指紋。`hue` は色相の番号（0〜11）、`cells` は塗るマスの `#(x, y)`（どちらも 0〜4）である。
@@ -35,12 +35,10 @@ pub type Shade {
 
 /// 16 進の公開鍵（32 バイト。大文字と小文字は区別しない）から指紋を決める。32 バイトの 16 進でなければ `Error(Nil)` を返す。
 pub fn from_pubkey(pubkey: String) -> Result(Fingerprint, Nil) {
-  use bytes <- result.try(hex.decode(pubkey))
-  case bit_array.byte_size(bytes), bytes {
-    32, <<first, pattern:bits-size(15), _:bits>> ->
-      Ok(Fingerprint(hue: first % 12, cells: cells(pattern, 0)))
-    _, _ -> Error(Nil)
-  }
+  use bytes <- result.map(hex.decode_exact(pubkey, secp256k1.xonly_pubkey_bytes))
+  let assert <<first, pattern:bits-size(15), _:bits>> = bytes
+    as "a 32-byte pubkey has at least 16 bits"
+  Fingerprint(hue: first % 12, cells: cells(pattern, 0))
 }
 
 /// 模様のビット列の先頭から順に、立っているビットのマスを左右に写して並べる。`index` は先頭のビットの番号である。

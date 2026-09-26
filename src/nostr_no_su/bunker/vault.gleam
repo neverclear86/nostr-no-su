@@ -24,11 +24,9 @@ import gleam/result
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/crypto/aes_gcm
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/log
-
-/// x-only 公開鍵のバイト数。
-const pubkey_bytes = 32
 
 /// 32 バイトのマスターキー。
 ///
@@ -132,7 +130,7 @@ pub type MacRow {
 /// 64 桁の 16 進からマスターキーを作る。前後の空白は無視し、大文字も受け付ける。
 /// 理由の文字列は入力を含まない。
 pub fn master_key_from_hex(raw: String) -> Result(MasterKey, String) {
-  decode_fixed_hex(string.trim(raw), aes_gcm.key_bytes)
+  hex.decode_exact(string.trim(raw), aes_gcm.key_bytes)
   |> result.map(fn(bytes) { MasterKey(bytes: fn() { bytes }) })
   |> result.replace_error(
     "ACCOUNT_MASTER_KEY must be 64 hex characters (32 bytes)",
@@ -286,17 +284,8 @@ fn describe_row_error(reason: RowError) -> String {
 
 /// `pubkey` 列を 32 バイトの公開鍵として読む。
 fn decode_pubkey(pubkey: String) -> Result(BitArray, RowError) {
-  decode_fixed_hex(pubkey, pubkey_bytes)
+  hex.decode_exact(pubkey, secp256k1.xonly_pubkey_bytes)
   |> result.replace_error(MalformedPubkey)
-}
-
-/// 指定したバイト数ちょうどの 16 進をバイト列にする。
-fn decode_fixed_hex(text: String, byte_count: Int) -> Result(BitArray, Nil) {
-  use bytes <- result.try(hex.decode(text))
-  case bit_array.byte_size(bytes) == byte_count {
-    True -> Ok(bytes)
-    False -> Error(Nil)
-  }
 }
 
 /// 用途ラベル || 0x00 || 公開鍵(32 バイト)。ラベルは NUL を含まず公開鍵は固定長

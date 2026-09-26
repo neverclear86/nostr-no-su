@@ -18,6 +18,9 @@ pub const p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 /// ベースポイント G の位数。
 pub const n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
+/// x-only 公開鍵のバイト数。
+pub const xonly_pubkey_bytes = 32
+
 /// 曲線上の点。無限遠点は加算の単位元として扱う。
 pub type Point {
   Point(x: Int, y: Int)

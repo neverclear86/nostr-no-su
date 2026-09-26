@@ -11,17 +11,14 @@
 //// `.localhost` で終わる名前）を指さないことも確かめる。名前は解決しないので、
 //// 公開の名前が内部のアドレスに解決される場合は通る。
 
-import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, Some}
 import gleam/result
 import gleam/string
 import gleam/uri
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
-
-/// クライアント公開鍵の長さ（バイト）。
-const client_pubkey_bytes = 32
 
 /// `nostrconnect://` URI が持てる `relay` の件数の上限。
 pub const max_relays = 5
@@ -95,14 +92,9 @@ fn check_scheme(scheme: Option(String)) -> Result(Nil, ParseError) {
 /// ホストをクライアント公開鍵として読む。32 バイトちょうどの 16 進でなければ
 /// `MalformedClientPubkey`。
 fn client_pubkey(host: String) -> Result(String, ParseError) {
-  case hex.decode(host) {
-    Ok(bytes) ->
-      case bit_array.byte_size(bytes) == client_pubkey_bytes {
-        True -> Ok(hex.encode(bytes))
-        False -> Error(MalformedClientPubkey)
-      }
-    Error(Nil) -> Error(MalformedClientPubkey)
-  }
+  hex.decode_exact(host, secp256k1.xonly_pubkey_bytes)
+  |> result.map(hex.encode)
+  |> result.replace_error(MalformedClientPubkey)
 }
 
 /// クエリー文字列を `&` で分け、`=` で 1 回だけ分けてキーと値を percent デコード
