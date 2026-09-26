@@ -176,58 +176,47 @@ fn pool_name() -> Name(pog.Message) {
 fn fixed_name(label: String) -> Name(msg)
 
 /// 管理 UI に供給するページの一覧。本体は読み込み時に表示の言語ごとに 1 度ずつ
-/// 呼び、どの言語でもキーの並びが同じことを検証する。`language` は言語のコードの
-/// binary で、表示名をその言語で返す。設定 map は使わない。中身は
-/// `plugin_page_content/3` が返す。
-pub fn plugin_pages(_config: Dynamic, language: Dynamic) -> Dynamic {
-  page.pages(language_of(language))
-}
-
-/// 本体が渡す言語のコードを `i18n.from_code` で言語にする。binary として
-/// 読めなければ英語にする。
-fn language_of(value: Dynamic) -> i18n.Language {
-  decode.run(value, decode.string)
-  |> result.unwrap("")
-  |> i18n.from_code
+/// 呼び、どの言語でもキーの並びが同じことを検証する。`language` は言語のコードで、
+/// 表示名をその言語で返す（`i18n.from_code` は `ja` 以外を英語にする）。設定 map は
+/// 使わない。中身は `plugin_page_content/3` が返す。
+pub fn plugin_pages(_config: Dynamic, language: String) -> Dynamic {
+  page.pages(i18n.from_code(language))
 }
 
 /// 管理 UI のページの記述。本体はページの表示のたびにこれを呼び、ページの `key`
 /// と、`DatabaseUrl` と `Accounts` を含む設定 map（`plugin_children/1` と同じ形に
-/// `Accounts` を足したもの）と、表示の言語のコードを渡す。接続先は
-/// `database_url/1` で選ぶ。文言はその言語で組む。
+/// `Accounts` を足したもの）と、表示の言語のコードを渡す。`key` は `page.page_key/1`
+/// で解釈し、選んだページの入力だけを観測する。接続先は `database_url/1` で選ぶ。
+/// 文言はその言語で組む。
 /// 期限（既定 5 秒）を超えると 503 になるので、DB を読むのは `timeline` の直近 20 件
 /// だけにし、問い合わせに 2 秒の期限を付ける。`{error, Reason}` を返す約束は無い
 /// （`docs/plugin-api.md` 第 13.4 節）。
 pub fn plugin_page_content(
   key: Dynamic,
   config: Dynamic,
-  language: Dynamic,
+  language: String,
 ) -> Dynamic {
-  let page_key = decode.run(key, decode.string) |> result.unwrap("")
-  let language = language_of(language)
-  let settings =
-    decode.run(config, decode.dict(decode.string, decode.string))
-    |> result.unwrap(dict.new())
-  let database =
-    database_url(settings)
-    |> result.map(page.masked_url(pool_name(), _, language))
-  let #(events, monitored) = case page_key {
-    "timeline" -> #(recent_events(), Error(Nil))
-    _ -> #(Ok([]), monitored_state())
+  let language = i18n.from_code(language)
+  let settings = string_map(config)
+  let accounts = accounts_from_config(settings)
+  case page.page_key(key) {
+    page.TimelineKey ->
+      page.timeline_content(language, accounts, recent_events())
+    page.SettingsKey ->
+      page.settings_content(
+        language,
+        accounts,
+        monitored_state(),
+        database_url(settings)
+          |> result.map(page.masked_url(pool_name(), _, language)),
+        pool_size,
+        [
+          process_status(i18n.ConnectionPool, pool_name_label, pool_name()),
+          process_status(i18n.StoreActor, store_name_label, store_name()),
+        ],
+      )
+    page.UnknownKey -> page.unknown_content(language)
   }
-  page.content(
-    page_key,
-    language,
-    database,
-    pool_size,
-    [
-      process_status(i18n.ConnectionPool, pool_name_label, pool_name()),
-      process_status(i18n.StoreActor, store_name_label, store_name()),
-    ],
-    accounts_from_config(settings),
-    monitored,
-    events,
-  )
 }
 
 /// タイムラインに出す直近のイベント。プールが居ない・問い合わせが失敗したときは、
@@ -242,6 +231,13 @@ fn recent_events() -> Result(List(store.Row), i18n.Message) {
         i18n.EventsUnreadable(string.inspect(error))
       })
   }
+}
+
+/// 本体が渡す文字列の map（設定 map、フォームの送信）を読む。文字列から文字列への
+/// map として読めなければ空の map を返す。
+fn string_map(value: Dynamic) -> dict.Dict(String, String) {
+  decode.run(value, decode.dict(decode.string, decode.string))
+  |> result.unwrap(dict.new())
 }
 
 /// 設定 map の予約キー `Accounts`（`docs/plugin-api.md` 第 13.5 節）から登録
@@ -270,10 +266,10 @@ fn monitored_state() -> Result(store.Monitored, Nil) {
   }
 }
 
-/// `settings` ページのフォームの送信を受け取る。`key` が `settings` でなければ
-/// `error_tuple("unknown page")`。戻り値は `ok` か `{error, Reason}` である
-/// （`docs/plugin-api.md` 第 13.6 節）。全アカウントを選んだ送信は行を 0 件に
-/// して保存し（絞らない状態を表す）、0 件の送信は拒否する。
+/// `settings` ページのフォームの送信を受け取る。`key` を `page.page_key/1` で解釈し、
+/// `settings` でなければ `error_tuple("unknown page")`。戻り値は `ok` か
+/// `{error, Reason}` である（`docs/plugin-api.md` 第 13.6 節）。全アカウントを選んだ
+/// 送信は行を 0 件にして保存し（絞らない状態を表す）、0 件の送信は拒否する。
 ///
 /// 保存の問い合わせはこの呼び出しのプロセスで行うので、DB が遅い・落ちている
 /// ときは期限（既定 5 秒）の超過か問い合わせの失敗になり、どちらも 503 になる
@@ -283,22 +279,18 @@ pub fn plugin_page_action(
   values: Dynamic,
   config: Dynamic,
 ) -> Dynamic {
-  let page_key = decode.run(key, decode.string) |> result.unwrap("")
-  case page_key {
-    "settings" -> save_monitored(values, config)
-    _ -> error_tuple("unknown page")
+  case page.page_key(key) {
+    page.SettingsKey -> save_monitored(string_map(values), string_map(config))
+    page.TimelineKey | page.UnknownKey -> error_tuple("unknown page")
   }
 }
 
 /// 送信を正規化し、保存アクターの DB へ書き込む。成功すれば保存アクターへ
 /// `ReloadMonitored` を送って読み直させる。
-fn save_monitored(values: Dynamic, config: Dynamic) -> Dynamic {
-  let values =
-    decode.run(values, decode.dict(decode.string, decode.string))
-    |> result.unwrap(dict.new())
-  let settings =
-    decode.run(config, decode.dict(decode.string, decode.string))
-    |> result.unwrap(dict.new())
+fn save_monitored(
+  values: dict.Dict(String, String),
+  settings: dict.Dict(String, String),
+) -> Dynamic {
   case page.selected_pubkeys(accounts_from_config(settings), values) {
     Error(reason) -> error_tuple(reason)
     Ok(pubkeys) ->

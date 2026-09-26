@@ -1,7 +1,8 @@
-//// 管理 UI のページの記述を組み立て、フォームの送信を正規化する純粋なモジュール。
-//// プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）が観測した値と
-//// 表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の結果を
-//// 組み立てるだけである。文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
+//// 管理 UI のページのキーを解釈し、ページの記述を組み立て、フォームの送信を正規化する
+//// 純粋なモジュール。プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）
+//// が観測した値と表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の
+//// 結果を組み立てるだけである。ページのキーの文字列はここにだけ置く（`page_key/1`）。
+//// 文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
 //// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値・整数（`kind` と `time` の `value`）だけで**、
@@ -65,6 +66,17 @@ pub type ContentView {
   FoldedContent
 }
 
+/// 本体が渡すページのキーを解釈した結果。`page_key/1` が作り、呼び出し元はこれで
+/// 観測する値と記述を組む関数、または送信を受け付けるかを選ぶ。ページの入力は持たない。
+pub type PageKey {
+  /// `timeline`。保存済みイベントの直近の一覧。
+  TimelineKey
+  /// `settings`。監視対象・設定・状態の 3 節と保存のフォーム。
+  SettingsKey
+  /// それ以外のキー、または binary として読めないキー。
+  UnknownKey
+}
+
 /// `Accounts` の値（アカウントの一覧を JSON にした文字列）を読む。JSON として
 /// 読めなければ `[]` を返す。`plugin_page_content` に `{error, Reason}` を返す
 /// 約束が無いため（`docs/plugin-api.md` 第 13.4 節）。
@@ -120,40 +132,57 @@ pub fn pages(language: Language) -> Dynamic {
   ])
 }
 
-/// ページ 1 件の記述。`key` が `timeline` なら保存済みイベントの直近の一覧を、
-/// `settings` なら監視対象・設定・状態を 3 節で示し、それ以外（キー未知、または
-/// binary として読めなかった呼び出し元が渡す仮の文字列）は `alert` 1 つだけの
-/// 節を返す。`plugin_page_content` に `{error, Reason}` を返す約束は無いため
-/// （`docs/plugin-api.md` 第 13.4 節）。
-///
-/// `language` は文言の言語、`database` は `masked_url/3` で組んだ表示用の文字列
-/// （未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、`processes` は
-/// 保存アクターと接続プールの観測結果、`accounts` は登録アカウントの一覧
-/// （`settings` のチェックと、`timeline` の書いたアカウントの引き当てに使う）、
-/// `monitored` は保存アクターへ問い合わせた今の監視対象（問い合わせが届かなければ
-/// `Error(Nil)`）。`events` はタイムラインに出す直近のイベント（読めなければ
-/// `alert` に出す文言）。
-pub fn content(
-  key: String,
+/// 本体が `plugin_page_content/3` と `plugin_page_action/3` の第 1 引数で渡すページの
+/// キーを解釈する。`pages/1` が返すキーのどれでもない binary と、binary として読めない
+/// 値は `UnknownKey` にする。
+pub fn page_key(key: Dynamic) -> PageKey {
+  case decode.run(key, decode.string) {
+    Ok(k) if k == timeline_page_key -> TimelineKey
+    Ok(k) if k == settings_page_key -> SettingsKey
+    _ -> UnknownKey
+  }
+}
+
+/// `timeline` のページの記述。`events` はタイムラインに出す直近のイベント（読めなければ
+/// `alert` に出す文言）、`accounts` は書いたアカウントの引き当てに使う登録アカウントの
+/// 一覧である。
+pub fn timeline_content(
   language: Language,
+  accounts: List(Account),
+  events: Result(List(store.Row), i18n.Message),
+) -> Dynamic {
+  page_sections(timeline_sections(language, accounts, events))
+}
+
+/// `settings` のページの記述。監視対象・設定・状態を 3 節で示す。`accounts` は登録
+/// アカウントの一覧（チェックボックスの行）、`monitored` は保存アクターへ問い合わせた今の
+/// 監視対象（問い合わせが届かなければ `Error(Nil)`）、`database` は `masked_url/3` で
+/// 組んだ表示用の文字列（未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、
+/// `processes` は接続プールと保存アクターの観測結果である。
+pub fn settings_content(
+  language: Language,
+  accounts: List(Account),
+  monitored: Result(store.Monitored, Nil),
   database: Result(String, Nil),
   pool_size: Int,
   processes: List(ProcessStatus),
-  accounts: List(Account),
-  monitored: Result(store.Monitored, Nil),
-  events: Result(List(store.Row), i18n.Message),
 ) -> Dynamic {
-  case key {
-    k if k == timeline_page_key ->
-      page_sections(timeline_sections(language, accounts, events))
-    k if k == settings_page_key ->
-      page_sections([
-        monitored_section(language, accounts, monitored),
-        configuration_section(language, database, pool_size),
-        runtime_section(language, processes),
-      ])
-    _ -> page_sections([error_section(language)])
-  }
+  page_sections([
+    monitored_section(language, accounts, monitored),
+    configuration_section(language, database, pool_size),
+    runtime_section(language, processes),
+  ])
+}
+
+/// 未知のページのキー（`UnknownKey`）の記述。`alert`（`failure`）1 つだけの節を返す。
+/// `plugin_page_content` に `{error, Reason}` を返す約束は無いため
+/// （`docs/plugin-api.md` 第 13.4 節）。
+pub fn unknown_content(language: Language) -> Dynamic {
+  page_sections([
+    section(i18n.text(language, i18n.ErrorTitle), [
+      alert_block(i18n.text(language, i18n.UnknownPage), "failure"),
+    ]),
+  ])
 }
 
 /// `Timeline` の節。`Error(reason)` なら `reason` を `language` の文にした
@@ -394,13 +423,6 @@ fn process_row(language: Language, process: ProcessStatus) -> List(Dynamic) {
     badge_inline(i18n.text(language, status), status_tone),
     text_node(pending_text),
   ]
-}
-
-/// 未知のページキーに対する節。`alert`（`failure`）1 つだけを持つ。
-fn error_section(language: Language) -> Dynamic {
-  section(i18n.text(language, i18n.ErrorTitle), [
-    alert_block(i18n.text(language, i18n.UnknownPage), "failure"),
-  ])
 }
 
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
