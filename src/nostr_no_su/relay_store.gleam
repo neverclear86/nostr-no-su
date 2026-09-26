@@ -1,7 +1,5 @@
-//// `relays` の読み書き。テーブルは本体の移行の版 4（`db.gleam` の
-//// `create_relays_table`）で作る。クエリーはすべて `db.execute` を
-//// 通す。列 `observe`（監視）と `bunker` の組は `relay_list.Roles` に写し、どちらも
-//// false の行は読まない。
+//// `relays` テーブルの読み書き。列 `observe`（監視）と `bunker`（バンカー）の組を
+//// `relay_list.Roles` に写す（`roles_from`）。
 
 import gleam/dynamic/decode
 import gleam/result

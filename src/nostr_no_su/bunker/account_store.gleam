@@ -29,12 +29,7 @@ import pog
 const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 
 /// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。PostgreSQL は列挙の
-/// 順に 1 つずつロックを取るので、書き手の順に合わせる。アカウントの削除
-/// （連鎖を含む）は下の 2 表に触る前に `bunker_accounts` の ROW EXCLUSIVE を持つので
-/// 先頭に置き、`approve` は `bunker_pending` の DELETE の後に `bunker_sessions` へ
-/// INSERT・DELETE するので、その順に並べる。逆にすると、この読み込みが
-/// `bunker_sessions` を持って `bunker_pending` を待ち、`approve` が `bunker_sessions`
-/// を待つデッドロックになる。
+/// 順に 1 つずつロックを取るので、書き手の順に合わせる（docs/architecture.md）。
 const lock_sql = "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
 
 /// 全行の読み込み。表示とテストが安定するよう登録順に並べる。
@@ -152,22 +147,10 @@ pub type Stored {
 /// `relay_store.list` も読むために公開する。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
-/// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の `INSERT` / `UPDATE` /
-/// `DELETE` が持つ ROW EXCLUSIVE と衝突するので、期限を過ぎた後もサーバー側で実行を
-/// 続けている書き込みがあれば、その終了（コミットかロールバック）を待ってから読む。
-/// READ COMMITTED の `SELECT` は文ごとのスナップショットで読むので、待った書き込みの
-/// 結果が見える。起動時の読み込みも同じ読み方にする。前のアクターが書き込みの途中で
-/// 終了した後に再起動したアクターが、その書き込みより先に読むのを防ぐためである。
-/// `relays` はここではロックしない。このロックはバンカー自身の期限切れの書き込みを
-/// 待つためのもので、`relays` の書き手はバンカーではないためである。
-///
-/// **残る窓**：書き込みの文がサーバーに届いてテーブルのロックを取るより先に、この
-/// ロックが取られた場合（クライアントの期限の直前に送った文が、まだ転送中か
-/// サーバーのプロセスの実行待ちである場合）は、書き込みはこの読み込みの後に実行され、
-/// 読み込みには見えない。ローカルの Postgres で期限切れの挿入を起こした測定では、
-/// コミットされた 704 件のうち読み込みに見えなかったものは 0 件だった（ロックを取らない
-/// 読み込みでは 712 件中 77 件）。窓の長さは、期限の時点での転送とサーバーの
-/// スケジューリングの遅れで決まる。
+/// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の書き込みの ROW EXCLUSIVE と
+/// 衝突するので、期限を過ぎてもサーバー側で実行を続ける書き込みがあれば、その終了を
+/// 待ってから読む。残る窓と測定の値は docs/architecture.md の「アカウントの変更」。
+/// `relays` の書き手はバンカーではないので、このロックには含めない。
 pub fn load_within(
   db: pog.Connection,
   key: MasterKey,
