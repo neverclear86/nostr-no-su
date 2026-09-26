@@ -84,6 +84,16 @@ pub fn open_refuses_invalid_duplicate_and_roleless_relays_test() {
   assert added.monitor != added.bunker
 }
 
+/// `open` は `ws://`・`wss://` で始まらない URL を `InvalidUrl` で拒む。
+pub fn open_rejects_a_non_websocket_scheme_test() {
+  assert relay_list.open(
+      [],
+      "https://relay.example",
+      relay_list.Roles(monitor: True, bunker: False),
+    )
+    == Error(relay_list.InvalidUrl)
+}
+
 /// `close` は一覧に無い URL を `NotListed` で拒む。
 pub fn close_refuses_an_unlisted_relay_test() {
   assert relay_list.close([], "wss://missing") == Error(relay_list.NotListed)

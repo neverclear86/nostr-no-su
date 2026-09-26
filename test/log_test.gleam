@@ -1,9 +1,24 @@
-//// `log` のテスト。外部由来の文字列の正規化と、制御文字の判定を確かめる。
+//// `log` のテスト。リレーの接頭辞（`relay_label` と `relay_prefix`）、外部由来の
+//// 文字列の正規化、制御文字の判定を確かめる。
 
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import nostr_no_su/log
+
+/// `relay_label` が取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
+/// スキームの無い値はそのまま返す。
+pub fn relay_label_strips_only_the_scheme_test() {
+  assert log.relay_label("ws://127.0.0.1:7777") == "127.0.0.1:7777"
+  assert log.relay_label("wss://relay.example/wss://x")
+    == "relay.example/wss://x"
+  assert log.relay_label("relay.example") == "relay.example"
+}
+
+/// `relay_prefix` はスキームを落とした名前で接頭辞を作る。
+pub fn relay_prefix_drops_the_scheme_test() {
+  assert log.relay_prefix("wss://relay.example") == "relay relay.example"
+}
 
 /// 改行、ESC、TAB、DEL、C1、行区切りと段落区切りは、それぞれ空白 1 文字に
 /// 置き換わる。

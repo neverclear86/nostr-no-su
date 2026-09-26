@@ -205,28 +205,20 @@ const ping_payload = <<"nostr-no-su">>
 /// 接続の停止が強制 kill で終わる。
 const connect_timeout_ms = 3000
 
-/// リレー URL を stratus が期待する http(s) リクエストに変換する。gleam_http は
-/// http(s) スキームしかパースせず、stratus は Https を wss/TLS に対応付ける。
-/// ホストが空の URL（`wss://` など）は `request.to` が通すので、ここで
-/// `Error(Nil)` にする。
+/// リレー URL を stratus が期待する http(s) リクエストに変換する。受けるのは
+/// `ws://` か `wss://`（小文字）で始まり、ホストが空でない URL だけで、それ以外は
+/// `Error(Nil)`。gleam_http は http(s) スキームしかパースせず、stratus は Https を
+/// wss/TLS に対応付けるので、`wss` を `https`、`ws` を `http` に置き換えてから
+/// `request.to` に渡す。
 pub fn to_request(url: String) -> Result(Request(String), Nil) {
-  let parsed = case string.split_once(url, "://") {
-    Ok(#("wss", rest)) -> request.to("https://" <> rest)
-    Ok(#("ws", rest)) -> request.to("http://" <> rest)
-    _ -> request.to(url)
-  }
-  case parsed {
+  use http_url <- result.try(case url {
+    "wss://" <> rest -> Ok("https://" <> rest)
+    "ws://" <> rest -> Ok("http://" <> rest)
+    _ -> Error(Nil)
+  })
+  case request.to(http_url) {
     Ok(req) if req.host != "" -> Ok(req)
     _ -> Error(Nil)
-  }
-}
-
-/// スキームを取り除いたリレー URL。複数の接続が開いているときに、ログ行がどの
-/// リレーのものか示すために使う。
-pub fn label(url: String) -> String {
-  case string.split_once(url, "://") {
-    Ok(#(_scheme, rest)) -> rest
-    Error(_) -> url
   }
 }
 
@@ -270,7 +262,7 @@ pub fn start(
     to_request(url)
     |> result.replace_error("invalid relay url: " <> url),
   )
-  let prefix = log.relay_prefix(label(url))
+  let prefix = log.relay_prefix(url)
   let builder =
     stratus.new_with_initialiser(req, fn() {
       let inbox = process.new_subject()

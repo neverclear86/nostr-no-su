@@ -259,7 +259,7 @@ fn resume_point_loader(
       let reason = account_store.describe(error)
       log.write(
         log.Warning,
-        log.relay_prefix(relay_client.label(relay_url)),
+        log.relay_prefix(relay_url),
         "could not load resume point: " <> reason,
       )
       reason

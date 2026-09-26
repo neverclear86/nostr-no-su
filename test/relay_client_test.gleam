@@ -39,14 +39,6 @@ import support/loopback_relay.{
 }
 import support/signed_event
 
-/// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
-pub fn label_strips_only_the_scheme_test() {
-  assert relay_client.label("ws://127.0.0.1:7777") == "127.0.0.1:7777"
-  assert relay_client.label("wss://relay.example/wss://x")
-    == "relay.example/wss://x"
-  assert relay_client.label("relay.example") == "relay.example"
-}
-
 /// `wss` は、stratus が TLS ソケットに戻す https リクエストになる。
 pub fn to_request_maps_wss_to_https_test() {
   let assert Ok(req) = relay_client.to_request("wss://relay.example/path")
@@ -63,11 +55,13 @@ pub fn to_request_maps_ws_to_http_test() {
   assert req.port == Some(7777)
 }
 
-/// それ以外のスキームは手を加えずそのまま通す。
-pub fn to_request_leaves_other_schemes_alone_test() {
-  let assert Ok(req) = relay_client.to_request("https://relay.example")
-  assert req.scheme == http.Https
-  assert req.host == "relay.example"
+/// `ws`・`wss` 以外のスキームや、スキームの無い URL は拒否する。スキームの判定は
+/// 生の文字列の接頭辞で行うので、大文字の `WSS:` も拒否する。
+pub fn to_request_rejects_non_websocket_schemes_test() {
+  assert relay_client.to_request("https://relay.example") == Error(Nil)
+  assert relay_client.to_request("http://relay.example") == Error(Nil)
+  assert relay_client.to_request("WSS://relay.example") == Error(Nil)
+  assert relay_client.to_request("relay.example") == Error(Nil)
 }
 
 /// ホストが空の URL は `request.to` を通ってしまうので、`to_request` が拒否する。
@@ -1525,7 +1519,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("receive_limit"),
-      relay: relay_client.label(relay.url),
+      relay: relay.url,
       connect: fn() {
         app.open_websocket(
           relay.url,
@@ -1599,7 +1593,7 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("handshake_body_limit"),
-      relay: relay_client.label(url),
+      relay: url,
       connect: fn() {
         app.open_websocket(
           url,
@@ -1715,7 +1709,7 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("half_open"),
-      relay: relay_client.label(relay.url),
+      relay: relay.url,
       connect: fn() { open_socket(relay.url, 200) },
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { process.send(disconnects, Nil) },

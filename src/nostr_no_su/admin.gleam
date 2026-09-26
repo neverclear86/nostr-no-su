@@ -1763,17 +1763,13 @@ fn new_relay(
   }
 }
 
-/// URL の前後の空白を除き、`ws://` か `wss://` で始まり、`relay_client.to_request` が
-/// 解釈できることを検査する。通れば trim した値を返す。
+/// URL の前後の空白を除き、`relay_client.to_request` がリレー URL として受ける
+/// ことを検査する。通れば trim した値を返す。
 fn parse_relay_url(raw: String) -> Result(String, i18n.Message) {
   let trimmed = string.trim(raw)
-  let has_scheme = case trimmed {
-    "ws://" <> _ | "wss://" <> _ -> True
-    _ -> False
-  }
-  case has_scheme, relay_client.to_request(trimmed) {
-    True, Ok(_) -> Ok(trimmed)
-    _, _ -> Error(i18n.InvalidRelayUrl)
+  case relay_client.to_request(trimmed) {
+    Ok(_) -> Ok(trimmed)
+    Error(Nil) -> Error(i18n.InvalidRelayUrl)
   }
 }
 

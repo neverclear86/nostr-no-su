@@ -1318,7 +1318,7 @@ fn relay_connections_child(
     fn(connection: relay_list.Connection) {
       relay_connection.start(relay_connection.Settings(
         name: connection.name,
-        relay: relay_client.label(connection.url),
+        relay: connection.url,
         connect: fn() {
           spec.open(
             connection.url,

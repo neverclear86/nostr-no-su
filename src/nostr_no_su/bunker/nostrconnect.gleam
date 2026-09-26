@@ -19,6 +19,7 @@ import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
+import nostr_no_su/relay_client
 
 /// `nostrconnect://` URI が持てる `relay` の件数の上限。
 pub const max_relays = 5
@@ -135,24 +136,17 @@ fn relay_urls(
   }
 }
 
-/// 1 件の relay URL が `ws://` / `wss://` で始まり、ホストが空でないかを確かめ、
-/// 外れれば `InvalidRelayUrl`。通った URL のホストが内部のアドレスを指せば
-/// （`internal_host`）`InternalRelayUrl`。`relay_client.to_request` と同じ生の
-/// 文字列でスキームを見るのは、`uri.parse` が RFC 3986 のとおりスキームを小文字に
-/// するため、大文字混じりの URL（例: `WSS://a.example`）を通すと
-/// `relay_client.to_request` が拒む URL を通してしまうことによる。ホストの検査
-/// だけは `to_request` が最後に呼ぶ `request.to` と同じ `uri.parse` に任せるので、
-/// 接続に使うホストと判定するホストは同じ値になる。
+/// 1 件の relay URL を `relay_client.to_request` で確かめ、受けなければ
+/// `InvalidRelayUrl`。受けた URL の接続先のホストが内部のアドレスを指せば
+/// （`internal_host`）`InternalRelayUrl`。
 fn check_relay_url(url: String) -> Result(String, ParseError) {
-  let websocket =
-    string.starts_with(url, "ws://") || string.starts_with(url, "wss://")
-  case websocket, uri.parse(url) {
-    True, Ok(uri.Uri(host: Some(host), ..)) if host != "" ->
-      case internal_host(host) {
+  case relay_client.to_request(url) {
+    Error(Nil) -> Error(InvalidRelayUrl(url))
+    Ok(req) ->
+      case internal_host(req.host) {
         True -> Error(InternalRelayUrl(url))
         False -> Ok(url)
       }
-    _, _ -> Error(InvalidRelayUrl(url))
   }
 }
 

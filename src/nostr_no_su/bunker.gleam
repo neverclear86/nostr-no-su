@@ -833,7 +833,7 @@ fn rejected_line(id: String, delivery: Delivery) -> String {
     |> list.reverse
     |> list.map(fn(rejection) {
       let #(relay_url, reason) = rejection
-      relay_client.label(relay_url) <> ": " <> reason
+      log.relay_label(relay_url) <> ": " <> reason
     })
     |> string.join("; ")
   "response "
@@ -1002,7 +1002,7 @@ pub fn pause_report(relay_url: String, dropped: Int) -> String {
   "dropped "
   <> int.to_string(dropped)
   <> " responses without a session to "
-  <> relay_client.label(relay_url)
+  <> log.relay_label(relay_url)
   <> " while it is rate-limiting"
 }
 
