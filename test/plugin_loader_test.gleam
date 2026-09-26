@@ -388,6 +388,24 @@ pub fn load_all_skips_unreadable_directory_in_list_test() {
   assert !has_note(notes, "external plugins disabled")
 }
 
+/// 読めないディレクトリーの後ろのディレクトリーでも、内蔵プラグインの名前は
+/// 予約されたままである。
+pub fn load_all_reserved_name_survives_unreadable_directory_test() {
+  let fixture = beam_fixture.new("reserved_unreadable")
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(second)
+  put_plugin(fixture.module, "console_logger", second)
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root <> "/nope" <> ":" <> second),
+      ["console_logger"],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "duplicate plugin name \"console_logger\"")
+}
+
 /// 同じエントリーモジュール名を 2 つのディレクトリーに置くと、先の
 /// ディレクトリーのものだけが採用され、後ろは影の理由で飛ぶ（先勝ち）。
 pub fn load_all_first_directory_shadows_test() {
