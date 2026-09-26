@@ -701,13 +701,13 @@ fn context() -> admin.Context {
       Ok([
         dashboard.SkippedRow(
           pubkey: unreadable_pubkey,
-          npub: unreadable_npub,
+          npub: Some(unreadable_npub),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
         dashboard.SkippedRow(
           pubkey: malformed_pubkey,
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),

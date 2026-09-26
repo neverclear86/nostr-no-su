@@ -78,13 +78,13 @@ pub type AccountRow {
   )
 }
 
-/// 読み込みで飛ばされた行 1 件の表示内容。`npub` は `pubkey` から導けたときだけ
-/// 入り、`MalformedPubkey` の行では空文字列になる。この行は識別を描かず、
-/// `reason` の 1 文だけを出す。
+/// 読み込みで飛ばされた行 1 件の表示内容。`npub` は `pubkey` 列から導けたときだけ `Some` で、
+/// `MalformedPubkey` の行では `None` になる。`None` の行は識別を描かず、`reason` の 1 文だけを
+/// 出す。
 pub type SkippedRow {
   SkippedRow(
     pubkey: String,
-    npub: String,
+    npub: Option(String),
     label: String,
     reason: vault.RowError,
   )
@@ -538,15 +538,8 @@ fn render_page(
     [
       overview_rail(language, snapshot),
       shared_failure_alert(language, shared),
-      pending_section(
-        language,
-        snapshot.accounts,
-        snapshot.now,
-        shared,
-        snapshot.pending,
-        refresh,
-      ),
-      getting_started_band(language, snapshot.accounts, snapshot.relays),
+      pending_section(language, snapshot, shared, refresh),
+      getting_started_band(language, snapshot),
       html.div(
         [
           attribute.class(
@@ -555,31 +548,12 @@ fn render_page(
         ],
         [
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            accounts_section(
-              language,
-              shared,
-              snapshot.accounts,
-              snapshot.skipped,
-              snapshot.sessions,
-              snapshot.relays,
-              dialog,
-            ),
-            sessions_section(
-              language,
-              snapshot.accounts,
-              snapshot.now,
-              shared,
-              snapshot.sessions,
-              dialog,
-            ),
+            accounts_section(language, snapshot, shared, dialog),
+            sessions_section(language, snapshot, shared, dialog),
           ]),
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            relays_section(language, snapshot.relays, dialog),
-            plugins_section(
-              language,
-              snapshot.plugins,
-              snapshot.not_loaded_plugins,
-            ),
+            relays_section(language, snapshot, dialog),
+            plugins_section(language, snapshot),
           ]),
         ],
       ),
@@ -604,14 +578,22 @@ pub type OverviewNote {
   OverviewNote(state: Option(view.Chip), text: i18n.Message)
 }
 
-/// 概要の帯の 1 項目の見せ方。`linked` が偽なら節へのリンクにしない（飛び先の節が出ない）。
-/// `highlighted` が真なら項目を `primary` で塗る。
+/// 概要の帯の 1 項目の強調。項目の見せ方のうち、作られる 3 通りだけを表す。
+pub type OverviewEmphasis {
+  /// 節へのリンクにしない（飛び先の節が出ない）。塗らない。
+  Unlinked
+  /// 節へのリンクにする。塗らない。
+  Linked
+  /// 節へのリンクにし、項目を `primary` で塗る。
+  Highlighted
+}
+
+/// 概要の帯の 1 項目の見せ方。リンクにするかと塗るかは `emphasis` で決める。
 pub type Overview {
   Overview(
     value: OverviewValue,
     notes: List(OverviewNote),
-    linked: Bool,
-    highlighted: Bool,
+    emphasis: OverviewEmphasis,
   )
 }
 
@@ -643,8 +625,7 @@ const not_available = Overview(
   notes: [
     OverviewNote(Some(view.ToneChip(view.Failure)), i18n.OverviewNotAvailable),
   ],
-  linked: True,
-  highlighted: False,
+  emphasis: Linked,
 )
 
 /// 色を付けない補足の語。
@@ -679,8 +660,7 @@ fn pending_overview(
             i18n.PendingExpireAfterMinutes(engine.pending_ttl_minutes()),
           ),
         ],
-        linked: False,
-        highlighted: False,
+        emphasis: Unlinked,
       )
     Ok([first, ..] as rows) -> {
       let soonest =
@@ -693,8 +673,7 @@ fn pending_overview(
           plain_note(i18n.AwaitingDecision),
           plain_note(i18n.SoonestExpiry(view.countdown(soonest))),
         ],
-        linked: True,
-        highlighted: True,
+        emphasis: Highlighted,
       )
     }
   }
@@ -720,8 +699,7 @@ fn accounts_overview(
               i18n.UnreadableRowCount,
             )
         },
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
   }
 }
@@ -736,8 +714,7 @@ fn sessions_overview(
       Overview(
         value: Count(list.length(rows)),
         notes: [plain_note(i18n.ApprovedClients)],
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
   }
 }
@@ -778,8 +755,7 @@ fn relays_overview(relays: Result(List(RelayRow), i18n.Reason)) -> Overview {
           [] -> [plain_note(i18n.AllRelaysConnected)]
           _ -> issues
         },
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
     }
   }
@@ -822,8 +798,7 @@ fn plugins_overview(
       [], _ -> [plain_note(i18n.RunningOfTotal)]
       _, _ -> issues
     },
-    linked: True,
-    highlighted: False,
+    emphasis: Linked,
   )
 }
 
@@ -883,10 +858,11 @@ fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
   )
 }
 
-/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.linked` なら同じページの
-/// 節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を占めさせる。塗った項目では
-/// 見出しと補足を補助の文字の色にせず、塗りの上の文字の色を継がせる。リンクにしない項目には、
-/// マウスを重ねたときの色を付けない。
+/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.emphasis` が `Unlinked`
+/// でなければ同じページの節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を
+/// 占めさせる。`Highlighted` の項目は、`wide` のときだけ地を塗り（塗る項目は承認待ちだけで、
+/// 承認待ちは常に `wide` である）、見出しと補足を補助の文字の色にせず、塗りの上の文字の色を
+/// 継がせる。リンクにしない項目には、マウスを重ねたときの色を付けない。
 fn overview_cell(
   language: Language,
   icon: Element(msg),
@@ -895,23 +871,23 @@ fn overview_cell(
   wide: Bool,
   item: Overview,
 ) -> Element(msg) {
-  let class = case wide, item.highlighted, item.linked {
-    True, True, _ ->
+  let class = case wide, item.emphasis {
+    True, Highlighted ->
       "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content hover:bg-primary/90 lg:col-span-1"
-    True, False, True ->
+    True, Linked ->
       "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200 lg:col-span-1"
-    True, False, False ->
+    True, Unlinked ->
       "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
-    False, _, True ->
+    False, Linked | False, Highlighted ->
       "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200"
-    False, _, False -> "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5"
+    False, Unlinked -> "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5"
   }
-  let #(label_class, note_class) = case item.highlighted {
-    True -> #(
+  let #(label_class, note_class) = case item.emphasis {
+    Highlighted -> #(
       "flex items-center gap-1.5 text-sm font-semibold",
       "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs",
     )
-    False -> #(
+    Unlinked | Linked -> #(
       "flex items-center gap-1.5 text-sm font-semibold text-muted",
       "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted",
     )
@@ -927,10 +903,10 @@ fn overview_cell(
       list.map(item.notes, overview_note(language, _)),
     ),
   ]
-  case item.linked {
-    True ->
+  case item.emphasis {
+    Linked | Highlighted ->
       html.a([attribute.href("#" <> anchor), attribute.class(class)], content)
-    False -> html.div([attribute.class(class)], content)
+    Unlinked -> html.div([attribute.class(class)], content)
   }
 }
 
@@ -1002,10 +978,9 @@ pub fn getting_started(
 /// 段 3（接続 URI）は両方が済むまで開けないので、帯が出ている間は常に点線の枠で出す。
 fn getting_started_band(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  relays: Result(List(RelayRow), i18n.Reason),
+  snapshot: Snapshot,
 ) -> Element(msg) {
-  case getting_started(accounts, relays) {
+  case getting_started(snapshot.accounts, snapshot.relays) {
     None -> element.none()
     Some(steps) -> {
       let text = i18n.text(language, _)
@@ -1135,25 +1110,23 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」のダイアログを開く
-/// ボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加のダイアログを置く。一覧を得られない
-/// ときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンも
-/// 出さない。追加のダイアログは一覧の有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。
-/// `relays` は接続 QR コードのダイアログに渡す。
+/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」の
+/// ダイアログを開くボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加の
+/// ダイアログを置く。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
+/// 「上の理由で取得できません。」）を出し、追加のボタンも出さない。追加のダイアログは一覧の
+/// 有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。`snapshot` のセッションの
+/// 一覧は行のセッションの件数に、リレーの一覧は接続 QR コードのダイアログに使う。
 fn accounts_section(
   language: Language,
+  snapshot: Snapshot,
   shared: Option(String),
-  accounts: Result(List(AccountRow), i18n.Reason),
-  skipped: Result(List(SkippedRow), i18n.Reason),
-  sessions: Result(List(SessionRow), i18n.Reason),
-  relays: Result(List(RelayRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(accounts_anchor, [
     listed_section_heading(
       language,
-      accounts,
+      snapshot.accounts,
       view.users_icon(),
       i18n.Accounts,
       view.info_hint(language, accounts_anchor <> "-hint", [
@@ -1171,7 +1144,7 @@ fn accounts_section(
     listed_body(
       language,
       shared,
-      accounts,
+      snapshot.accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts), [
         add_trigger(
@@ -1182,11 +1155,17 @@ fn accounts_section(
       ]),
       fn(rows) {
         view.row_list(
-          list.map(rows, account_item(language, sessions, relays, dialog, _)),
+          list.map(rows, account_item(
+            language,
+            snapshot.sessions,
+            snapshot.relays,
+            dialog,
+            _,
+          )),
         )
       },
     ),
-    unreadable_accounts(language, skipped, dialog),
+    unreadable_accounts(language, snapshot.skipped, dialog),
     add_account_dialog(language, dialog),
   ])
 }
@@ -1304,15 +1283,16 @@ fn unreadable_accounts(
   )
 }
 
-/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを置く。
-/// `pubkey` 列が形式不正の行は指紋も識別も削除のボタンも出さず、理由の 1 文に削除できない旨を続けて出す。
+/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを
+/// 置く。npub の無い行（`pubkey` 列が形式不正の行）は指紋も識別も削除のボタンも出さず、理由の
+/// 1 文に削除できない旨を続けて出す。
 fn skipped_item(
   language: Language,
   row: SkippedRow,
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
-  case row.reason {
-    vault.MalformedPubkey ->
+  case row.npub {
+    None ->
       view.list_row(view.InlineRow, [
         html.p([attribute.class("text-sm")], [
           html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
@@ -1322,18 +1302,18 @@ fn skipped_item(
           ),
         ]),
       ])
-    _ ->
+    Some(npub) ->
       view.list_row(view.InlineRow, [
         html.div([attribute.class("flex min-w-0 items-center gap-3")], [
           fingerprint.pubkey_svg(row.pubkey, fingerprint.Gray, "size-8"),
           html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-            view.identity(language, view.PlainIdentity, row.label, row.npub),
+            view.identity(language, view.PlainIdentity, row.label, npub),
             html.p([attribute.class("text-sm")], [
               html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
             ]),
           ]),
         ]),
-        button_row(unreadable_dialog(language, row, dialog)),
+        button_row(unreadable_dialog(language, row, npub, dialog)),
       ])
   }
 }
@@ -1604,13 +1584,15 @@ fn account_dialog(
   )
 }
 
-/// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の error の
-/// 文字色、題はアカウントの削除の見出しで、中にラベルと省略した npub、`unreadable_delete_form` を並べる。
-/// `id` の節の語をアカウントの行と分け、同じ pubkey の行があってもダイアログが重ならないようにする。
-/// `dialog` がこの行の `UnreadableDeleteOpen` なら開いた状態で描き、要約の後に理由を出す。
+/// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の
+/// error の文字色、題はアカウントの削除の見出しで、中にラベルと省略した `npub`（行の npub）、
+/// `unreadable_delete_form` を並べる。`id` の節の語をアカウントの行と分け、同じ pubkey の行が
+/// あってもダイアログが重ならないようにする。`dialog` がこの行の `UnreadableDeleteOpen` なら
+/// 開いた状態で描き、要約の後に理由を出す。
 fn unreadable_dialog(
   language: Language,
   row: SkippedRow,
+  npub: String,
   dialog: Option(OpenDialog),
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
@@ -1634,7 +1616,7 @@ fn unreadable_dialog(
       text(account_action_title(DeleteAccount)),
       fn(placement) {
         [
-          view.identity(language, view.PlainIdentity, row.label, row.npub),
+          view.identity(language, view.PlainIdentity, row.label, npub),
           view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
           ..unreadable_delete_form(language, row, placement)
         ]
@@ -2035,27 +2017,26 @@ fn label_fieldset(
   )
 }
 
-/// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に、
-/// 説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの右には、`refresh` が自動の読み込み直しのときだけ
-/// 更新の間隔を出す。
-/// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
+/// 承認待ちの接続の帯。`snapshot` の承認待ちが 1 件以上あるとき、または一覧を得られないとき
+/// だけ、全幅の帯（`view.band`）に、説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの
+/// 右には、`refresh` が自動の読み込み直しのときだけ更新の間隔を出す。
+/// 0 件のときは帯ごと出さない。カードの署名者は `snapshot` のアカウントの一覧と突き合わせて
+/// 決め、失効の時刻は `snapshot` の描画の時点の Unix 秒から求める。
 /// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  now: Int,
+  snapshot: Snapshot,
   shared: Option(String),
-  pending: Result(List(PendingRow), i18n.Reason),
   refresh: view.Refresh,
 ) -> Element(msg) {
-  case pending {
+  case snapshot.pending {
     Ok([]) -> element.none()
     _ -> {
       let text = i18n.text(language, _)
       view.band(pending_anchor, [
         listed_section_heading(
           language,
-          pending,
+          snapshot.pending,
           view.door_open_icon(),
           i18n.PendingConnections,
           view.info_hint(language, pending_anchor <> "-hint", [
@@ -2067,7 +2048,7 @@ fn pending_section(
         listed_body(
           language,
           shared,
-          pending,
+          snapshot.pending,
           i18n.CouldNotListPending,
           element.none(),
           fn(rows) {
@@ -2080,8 +2061,8 @@ fn pending_section(
               list.map(rows, fn(entry) {
                 pending_card(
                   language,
-                  signer_name(accounts, entry.signer),
-                  now,
+                  signer_name(snapshot.accounts, entry.signer),
+                  snapshot.now,
                   entry,
                 )
               }),
@@ -2581,7 +2562,7 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 /// 一覧の有無によらず描き、`dialog` が `NewRelayOpen` なら開いた状態で描く。
 fn relays_section(
   language: Language,
-  relays: Result(List(RelayRow), i18n.Reason),
+  snapshot: Snapshot,
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
@@ -2597,18 +2578,18 @@ fn relays_section(
   view.section_block(relays_anchor, [
     listed_section_heading(
       language,
-      relays,
+      snapshot.relays,
       view.plug_icon(),
       i18n.Relays,
       view.info_hint(language, relays_anchor <> "-hint", role_hint(language)),
       [add_trigger(add_relay_dialog_id(), text(i18n.Add), view.PrimaryButton)],
       [],
     ),
-    no_bunker_relay_alert(language, relays),
+    no_bunker_relay_alert(language, snapshot.relays),
     listed_body(
       language,
       None,
-      relays,
+      snapshot.relays,
       i18n.CouldNotListRelays,
       element.none(),
       fn(rows) {
@@ -2937,17 +2918,15 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
 /// 行の権限の編集のダイアログにも渡す。
 fn sessions_section(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  now: Int,
+  snapshot: Snapshot,
   shared: Option(String),
-  sessions: Result(List(SessionRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(sessions_anchor, [
     listed_section_heading(
       language,
-      sessions,
+      snapshot.sessions,
       view.clock_icon(),
       i18n.ApprovedSessions,
       view.info_hint(language, sessions_anchor <> "-hint", [
@@ -2965,7 +2944,7 @@ fn sessions_section(
     listed_body(
       language,
       shared,
-      sessions,
+      snapshot.sessions,
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions), [
         add_trigger(
@@ -2976,12 +2955,18 @@ fn sessions_section(
       ]),
       fn(rows) {
         view.row_list(
-          list.map(rows, session_item(language, accounts, now, dialog, _)),
+          list.map(rows, session_item(
+            language,
+            snapshot.accounts,
+            snapshot.now,
+            dialog,
+            _,
+          )),
         )
       },
     ),
-    connect_dialog(language, accounts, dialog),
-    connect_review_dialog(language, accounts, dialog),
+    connect_dialog(language, snapshot.accounts, dialog),
+    connect_review_dialog(language, snapshot.accounts, dialog),
   ])
 }
 
@@ -3561,16 +3546,12 @@ fn signing_account_select(
 
 /// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）を
 /// 置き、プラグインを行の一覧で並べる。起動時に読み込めなかった候補があれば、節の末尾にエラーの色の枠で出す。
-fn plugins_section(
-  language: Language,
-  plugins: List(PluginRow),
-  not_loaded: List(plugin_loader.NotLoaded),
-) -> Element(msg) {
+fn plugins_section(language: Language, snapshot: Snapshot) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(plugins_anchor, [
     listed_section_heading(
       language,
-      Ok(plugins),
+      Ok(snapshot.plugins),
       view.puzzle_icon(),
       i18n.Plugins,
       [],
@@ -3578,11 +3559,11 @@ fn plugins_section(
       [],
     ),
     section_body(
-      plugins,
+      snapshot.plugins,
       view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins), []),
       fn(rows) { view.row_list(list.map(rows, plugin_item(language, _))) },
     ),
-    not_loaded_panel(language, not_loaded),
+    not_loaded_panel(language, snapshot.not_loaded_plugins),
   ])
 }
 

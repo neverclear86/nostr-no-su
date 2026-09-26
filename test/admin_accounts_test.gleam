@@ -1142,7 +1142,7 @@ pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test()
       Ok([
         dashboard.SkippedRow(
           pubkey: malformed_pubkey,
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),
