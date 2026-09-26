@@ -16,6 +16,7 @@ disallowedTools: Agent
 - 再現は、指示された再現用の作業ツリーの絶対パスの下で行う
 - 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
 - 撮影用サーバー（`PREVIEW_PORT=<port> gleam run -m admin_preview`）は `timeout <秒>` の中で背景に立てる。止めるときは `pkill -f` を使わない（自分の bash の引数に一致して呼び出しごと落ちる）。pid は `ss -ltnpH` のそのポートの行から引き、`/proc/<pid>/cwd` が自分の作業ツリーであることを確かめてから kill する（`timeout` が切れても beam.smp が残ることがある）
+- `/tmp` の ENOSPC は容量ではなく inode の枯渇でありうる（並列の実行の `build/` が inode を食う）。`df -i /tmp` で確かめ、自分の作業ツリーの `build/` と使い終わった clone を消して空ける。再試行で済ませない
 - issue は `gh issue view <N> --json title,body,comments`、PR は `gh pr view <PR> --json title,body,comments` と `gh pr diff <PR>`（いずれも `-R neverclear86/nostr-no-su`）で読む（`--comments` は本文を落とす、または rc=0 のまま空で返ることがあるので使わない）
 - 全エージェントが同じ GitHub アカウントなので `gh pr review` は使えない。レビューは `sh <作業ツリー>/dev/post_comment.sh pr <PR> pr-review <R> "<判定>" <短い head SHA> <スクラッチパッドのファイル>` で投稿する（`REQUEST CHANGES` は空白を含むので二重引用符で囲む）
 
@@ -35,6 +36,7 @@ disallowedTools: Agent
 ## 再現
 - CI（`gh pr checks <PR> -R neverclear86/nostr-no-su`）が head で pass していることを確かめる。CI が行う検査（build、単体テスト、統合テスト、E2E、format、CSS の差分、vendor、プラグイン、.env.example、shipment）は再現しない。再実行するのは差分を読んで疑わしいと思ったときだけ。CI の結果は「確認したこと」の表に 1 行で書く
 - 再現するのは CI にも PR 本文にも無いものだけ: プランの「検証の手順」のうち自動テストで表されていない手順、PR に貼られたスクリーンショットに無い UI の状態、差分を読んで疑わしいと思った箇所の実行。そのために build や test が要るときは作業ツリーで行う（使い捨ての Postgres は指示されたポートに立て、終わったら `docker rm -f` で消す）
+- 定義を別のモジュールに移す PR は、`pub ` と修飾を剥がして正規化した移動前後の diff で逐語を確かめる（差が空、または移動でない行だけ）。移動の途中で変わった語は should にする
 - プランの「検証の手順」を実行する。docker を使うときは指示されたプロジェクト名とポートを使い、始める前にその名前の資源が無いことを確かめる。`nostr-no-su` という名前は使わない。1 回の Bash 呼び出しで完結するスクリプトにし、`.env` は作業ツリーに置かず `--env-file` でスクラッチパッドから渡す。後片付けでイメージはタグで消し、ID では消さない。`prune` は使わない。前後で資源の一覧を比べる
 
 ## 記憶
