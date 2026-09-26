@@ -7,10 +7,7 @@
 //// 挟む文言だけは、要素の前と後ろを別の構築子（`ExpiryBeforeTime`、`ExpiryAfterTime`）にする。
 ////
 //// 言語を足すときは、`Language` に構築子を、`languages` に値を足し、コンパイラーが示す
-//// `case`（`code`、`native_name`、`text`、`lead`、`sentence_gap`、`i18n_test` の
-//// `language_count`）に枝を足す。`languages` への足し忘れは、`i18n_test` が
-//// `language_count` の数と `languages` の長さを比べて見つけるので、`language_count` には
-//// 枝と一緒に数も直す（直さないと足し忘れを見つけられない）。
+//// `case`（`code`、`native_name`、`text`、`lead`、`sentence_gap`）に枝を足す。
 ////
 //// 画面に出す失敗の理由（`Reason`）は、文が管理 UI の外で英語の文字列として作られるもの
 //// （型の構築子が運ぶ文字列を含む）を訳さず、`Untranslated` として英語のまま出す。原因を

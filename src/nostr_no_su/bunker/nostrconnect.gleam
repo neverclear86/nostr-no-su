@@ -25,7 +25,6 @@ import nostr_no_su/relay_client
 pub const max_relays = 5
 
 /// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。
-/// `app.connect_nostrconnect` の待ちと、確認のダイアログの案内が同じ値を見る。
 pub const connect_wait_seconds = 15
 
 /// `nostrconnect://` URI が求める接続。`client` は小文字 16 進の 32 バイト、

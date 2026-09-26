@@ -73,12 +73,12 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
 )"
 
 /// 承認済みのセッションを保存するテーブル。主キーは（signer, client）。`perms` は
-/// `connect` が要求した値をそのまま保存し、空文字列は要求なしを表す。`signer` は
-/// `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で参照するので、アカウントの
-/// 削除でその署名者のセッションも消える。時刻は Unix 秒。新しい組では
-/// `created_at` と `last_used_at` が同じ値で入る（`engine` の `new_session`）。
-/// `last_used_at` は `account_store.touch_session` で進める。行の MAC の列 `mac` は版 6 の移行
-/// （`add_row_macs`）で足す。URI のリレーの列 `relays` は版 7 の移行
+/// セッションの権限のトークンをカンマで区切った値で、空文字列は無宣言（既定の集合で照合する。
+/// `bunker/permission`）を表す。`signer` は `bunker_accounts(pubkey)` を
+/// `ON DELETE CASCADE` で参照するので、アカウントの削除でその署名者のセッションも消える。
+/// 時刻は Unix 秒。新しい組では `created_at` と `last_used_at` が同じ値で入る（`engine` の
+/// `new_session`）。`last_used_at` は `account_store.touch_session` で進める。行の MAC の列
+/// `mac` は版 6 の移行（`add_row_macs`）で足す。URI のリレーの列 `relays` は版 7 の移行
 /// （`add_session_relays`）で足す。
 const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
@@ -148,8 +148,7 @@ pub type Migration {
 ///
 /// 移行の文は何度実行してもよい形（`IF NOT EXISTS` か、表を空にする
 /// `DELETE FROM`）で書く。途中で失敗した移行は版が記録されないので、次の
-/// 読み込みで頭から実行し直される。この 2 つの形で書けない文を足すときは、
-/// `migration_statements_can_be_re_run_test` の条件を見直す。
+/// 読み込みで頭から実行し直される。
 pub const migrations = [
   Migration(version: 1, statements: [create_accounts_table]),
   Migration(version: 2, statements: [create_monitor_resume_table]),
@@ -284,8 +283,8 @@ pub fn acquire_lock(
 }
 
 /// スキーマを `migrations` の最新の版にする。版のテーブルを用意し、記録された版より
-/// 新しい移行の文を順に実行して、移行ごとに版を記録する。`account_store.load_within` から
-/// トランザクションの中で呼ぶので、文の期限は `pool_transaction` の期限が効く。
+/// 新しい移行の文を順に実行して、移行ごとに版を記録する。`transaction` の中で呼ぶ。
+/// 文の期限は `pool_transaction` の期限が効く。
 pub fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
   use _created <- result.try(pog.query(create_version_table) |> execute(db))
   use recorded <- result.try(

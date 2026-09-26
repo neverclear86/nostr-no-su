@@ -166,7 +166,7 @@ pub fn lift_x(xonly: BitArray) -> Result(Point, KeyError) {
 
 /// スカラーが 1 <= value < n の範囲にあるかどうか。`ffi_ec_point_from_priv` は
 /// 範囲外の値でも例外にならず退化した点を返すため、点を導く前に必ず通す。
-pub fn valid_scalar(value: Int) -> Bool {
+fn valid_scalar(value: Int) -> Bool {
   value >= 1 && value < n
 }
 
@@ -185,7 +185,7 @@ pub fn mul_g(scalar: Int) -> Result(#(Int, Int), KeyError) {
 }
 
 /// 秘密鍵に対応する `d*G` のアフィン座標 `#(x, y)`。
-pub fn pubkey_point(privkey: BitArray) -> Result(#(Int, Int), KeyError) {
+fn pubkey_point(privkey: BitArray) -> Result(#(Int, Int), KeyError) {
   mul_g(int_from_bytes(privkey))
 }
 

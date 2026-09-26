@@ -57,36 +57,41 @@ pub fn monitor_subscriptions(
   }
 }
 
-/// 復帰したプラグインの取り直しの購読。購読 id はプラグイン名で分け、それぞれ `until` で
-/// 範囲を閉じる（それより後のイベントは通常の監視の購読が運ぶ）。`monitor_since` はこの
-/// 接続の監視の購読の `since` で、`Some` なら `until` をそれ以下に切り詰め、範囲が残らない
-/// 取り直しは定義しない（切り詰めた範囲は監視の購読が運ぶ。境界の秒は両方が運ぶ）。`None`
-/// なら範囲を変えない（`since` の無い監視の購読はリレーの件数の上限で切られうる）。
+/// 復帰したプラグインの取り直しの購読。署名者がいなければ購読を定義しない。購読 id は
+/// プラグイン名で分け、それぞれ `until` で範囲を閉じる（それより後のイベントは通常の監視の
+/// 購読が運ぶ）。`monitor_since` はこの接続の監視の購読の `since` で、`Some` なら `until` を
+/// それ以下に切り詰め、範囲が残らない取り直しは定義しない（切り詰めた範囲は監視の購読が
+/// 運ぶ。境界の秒は両方が運ぶ）。`None` なら範囲を変えない（`since` の無い監視の購読は
+/// リレーの件数の上限で切られうる）。
 pub fn catchup_subscriptions(
   signer_pubkeys: List(String),
   monitor_since: Option(Int),
   catchups: List(#(String, Int, Int)),
 ) -> List(#(String, Filter)) {
-  list.filter_map(catchups, fn(catchup) {
-    let #(plugin, since, until) = catchup
-    let until = case monitor_since {
-      None -> until
-      Some(monitor) -> int.min(until, monitor)
-    }
-    case since <= until {
-      False -> Error(Nil)
-      True ->
-        Ok(#(
-          catchup_subscription_prefix <> plugin,
-          Filter(
-            ..filter.new(),
-            authors: Some(signer_pubkeys),
-            since: Some(since),
-            until: Some(until),
-          ),
-        ))
-    }
-  })
+  case signer_pubkeys {
+    [] -> []
+    signer_pubkeys ->
+      list.filter_map(catchups, fn(catchup) {
+        let #(plugin, since, until) = catchup
+        let until = case monitor_since {
+          None -> until
+          Some(monitor) -> int.min(until, monitor)
+        }
+        case since <= until {
+          False -> Error(Nil)
+          True ->
+            Ok(#(
+              catchup_subscription_prefix <> plugin,
+              Filter(
+                ..filter.new(),
+                authors: Some(signer_pubkeys),
+                since: Some(since),
+                until: Some(until),
+              ),
+            ))
+        }
+      })
+  }
 }
 
 /// 署名者宛の NIP-46 リクエストの購読。署名者がいなければ購読を定義しない。空の

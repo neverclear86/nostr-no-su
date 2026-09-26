@@ -54,8 +54,8 @@ pub type Fetched {
   Failed(reason: String)
 }
 
-/// プラグイン API の戻り値が約束の形でないときの理由（英語の 1 文）。`fetched/1` と
-/// `profile.gleam` の送信・取得が使う。
+/// プラグイン API の戻り値が約束の形でないときの理由（英語の 1 文）。`profile_ffi.erl` の
+/// `UNEXPECTED_VALUE` と同じ文。
 pub const unexpected_value_reason = "the plugin API returned an unexpected value"
 
 /// `profile_ffi:fetch_profiles/1` が返す map（`status`・`content`・`created_at`・

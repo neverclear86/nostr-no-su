@@ -34,9 +34,10 @@ pub fn monitor_subscriptions_test() {
     == Error(Nil)
 }
 
-/// 要求ごとに、プラグイン名を繋げた id で、`authors` と閉じた範囲 `since`〜`until` を持つ
-/// フィルターを作る。
+/// 署名者が 0 件なら取り直しの購読も定義しない。署名者がいれば、要求ごとにプラグイン名を
+/// 繋げた id で、`authors` と閉じた範囲 `since`〜`until` を持つフィルターを作る。
 pub fn catchup_subscriptions_test() {
+  assert subscriptions.catchup_subscriptions([], None, [#("a", 100, 200)]) == []
   assert subscriptions.catchup_subscriptions(["pk1"], None, [
       #("logger", 100, 200),
       #("echo", 300, 400),

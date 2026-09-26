@@ -99,9 +99,9 @@ pub type PluginSpec {
 /// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。リレーは
 /// バンカーの読み込みから `OpenRegistered` で届き、実行時の増減には `open_relay`
 /// などを使う。`subscriptions` はリレー URL からそのリレーの購読の定義を返す。
-/// `save_resume` は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
-/// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、2 本目の
-/// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
+/// `save_resume` は再開点を小さくせずに保存する操作で、子 `resume_saver` が使う。
+/// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、子
+/// `plugin_resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
 /// プラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
 /// アカウントのものかを返す述語で、偽になるイベントはプラグインへ渡さない。
 pub type Monitor {

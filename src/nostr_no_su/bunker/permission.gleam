@@ -1,8 +1,7 @@
 //// NIP-46 の `perms`（カンマ区切りの権限のトークン）の型と解釈。`perms` の文字列との変換、
 //// 無宣言のセッションに許す既定の集合、許可の判定、バンカーが対応していない方法の判定を
 //// 持つ。保存と通信（DB の `perms` 列、`connect` の `params[2]`）は文字列のままで、型は
-//// メモリの中だけで使う。バンカーのエンジンと、管理 UI の権限のチップ・権限の編集のフォームと
-//// 保存が使う。純粋である。
+//// メモリの中だけで使う。純粋である。
 
 import gleam/int
 import gleam/list
@@ -39,7 +38,7 @@ pub fn parse(perms: String) -> List(Permission) {
 
 /// トークン 1 つを権限にする。`sign_event:` に続く部分は、整数として読めて `int.to_string` で
 /// 同じ綴りに戻るとき（`1`、`-1`）だけ `SignKind` にし、`01`、`+1`、`x`、空は `Other` に
-/// 残す。エンジンは NIP-46 の方法名もこれで読む。
+/// 残す。
 pub fn from_token(token: String) -> Permission {
   case token {
     "sign_event" -> SignAnyKind
@@ -89,8 +88,7 @@ pub fn allows(granted: List(Permission), wanted: Permission) -> Bool {
   covered || list.contains(declared, wanted)
 }
 
-/// バンカーが対応していない方法（NIP-04 の `nip04_encrypt` と `nip04_decrypt`）か。エンジンは
-/// 未対応の理由を返し、管理 UI の権限のチップは未対応の印を付ける。
+/// バンカーが対応していない方法（NIP-04 の `nip04_encrypt` と `nip04_decrypt`）か。
 pub fn is_unsupported(permission: Permission) -> Bool {
   case permission {
     Other("nip04_encrypt") | Other("nip04_decrypt") -> True

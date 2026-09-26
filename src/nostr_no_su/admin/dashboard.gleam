@@ -89,7 +89,7 @@ pub type PluginRow {
   )
 }
 
-/// プラグインの状態の分類。`plugin_state` のチップと語と詳細、概要の帯の件数がこれを使う。
+/// プラグインの状態 1 つの表示（チップ、状態の語、チップの下の詳細）。
 type PluginCondition {
   PluginCondition(
     chip: view.Chip,
