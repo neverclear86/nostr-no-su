@@ -3,7 +3,7 @@
 //// SQL と pog の呼び出しだけを持ち、暗号化と行の検証は `vault` に任せる。nonce の
 //// 乱数はこの層で引く。DB へ送るのは暗号文だけで、平文もマスターキーも DB へは
 //// 出ない。承認済みのセッション（`bunker_sessions`）と承認待ちの接続要求
-//// （`bunker_pending`）も同じ DB に保存し、`load` が同じトランザクションで読む。
+//// （`bunker_pending`）も同じ DB に保存し、`load_within` が同じトランザクションで読む。
 //// この 2 表の行には書き込みのたびに `vault.row_mac` の MAC を付け、読み込みでは
 //// MAC の合わない行を使わずに `Stored.rejected` に分ける。
 ////
@@ -126,7 +126,7 @@ pub type StoredPending {
   )
 }
 
-/// `load` が 1 つのトランザクションで読み込んだ全体。
+/// `load_within` が 1 つのトランザクションで読み込んだ全体。
 pub type Stored {
   Stored(
     /// 復号できたアカウントと、復号できずに飛ばした行。
@@ -145,9 +145,8 @@ pub type Stored {
 /// （`vault.open_rows`）。セッションと承認待ちは行の MAC を `key` で検証し、
 /// 合わない行（列を書き換えた行、別の行の MAC を移した行、空の MAC の行）は
 /// `sessions` と `pending` に入れずに `rejected` に分ける。3 つのうちどれかの
-/// 読み込みが `Error` なら全体を `Error` にする。`db.transaction` の中で呼ぶ
-/// （`load`）。`nostr_no_su.load_snapshot` が同じトランザクションで
-/// `relay_store.list` も読むために公開する。
+/// 読み込みが `Error` なら全体を `Error` にする。`db.transaction` の中で呼ぶ。
+/// `nostr_no_su.load_snapshot` が同じトランザクションで `relay_store.list` も読むために公開する。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
 /// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の書き込みの ROW EXCLUSIVE と
@@ -191,19 +190,6 @@ pub fn load_within(
     pending: pending_list,
     rejected: list.append(rejected_sessions, rejected_pending),
   ))
-}
-
-/// `load_within` を 1 本のトランザクションで行い、`timeouts.load_ms` の期限で
-/// 打ち切る（`db.transaction`）。移行の文とロックの待ちもサーバー側で同じ値に抑える。
-/// トランザクションの中のクエリーで `pog.execute` が例外を投げたら、発生箇所を持つ
-/// `db.Raised` を返す（`db.execute`）。記録された版がこのビルドより新しければ
-/// `db.SchemaTooNew` を返す（`db.ensure_schema`）。
-pub fn load(
-  pool: Name(pog.Message),
-  key: MasterKey,
-  timeouts: Timeouts,
-) -> Result(Stored, StoreError) {
-  db.transaction(pool, timeouts.load_ms, load_within(_, key, timeouts))
 }
 
 /// アカウントを 1 件追加する。同じ公開鍵がすでにあれば `db.Duplicate`（主キーの

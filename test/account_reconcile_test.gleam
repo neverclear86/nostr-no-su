@@ -95,7 +95,7 @@ fn reconcile_with_postgres(
   let key = random_master_key()
   let first = random_entry("")
   let first_pubkey = account.pubkey_hex(first.account)
-  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(_loaded) = postgres.load_stored(pool, key, generous)
   let assert Ok(Nil) = account_store.insert(db, key, first, generous)
   create_triggers(db, schema, gated_write)
 
@@ -194,7 +194,7 @@ fn database_listings(
   pool: Name(pog.Message),
   key: MasterKey,
 ) -> List(bunker.Listing) {
-  let assert Ok(loaded) = account_store.load(pool, key, generous)
+  let assert Ok(loaded) = postgres.load_stored(pool, key, generous)
   loaded.accounts.accounts
   |> list.map(fn(entry) {
     bunker.Listing(
@@ -222,7 +222,7 @@ fn reconcile_sessions_with_postgres(
   let signer = account.pubkey_hex(entry.account)
   let client =
     "0000000000000000000000000000000000000000000000000000000000000009"
-  let assert Ok(_loaded) = account_store.load(pool, key, generous)
+  let assert Ok(_loaded) = postgres.load_stored(pool, key, generous)
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
   let now = time.now_seconds()
   let assert Ok(Nil) =
@@ -279,7 +279,7 @@ fn reconcile_sessions_with_postgres(
 
   assert poll.until(fn() { bunker.sessions(name) == Ok([]) }, 10_000, 50)
   assert bunker.pending(name) == Ok([])
-  let assert Ok(after) = account_store.load(pool, key, generous)
+  let assert Ok(after) = postgres.load_stored(pool, key, generous)
   assert after.sessions == []
   assert after.pending == []
 

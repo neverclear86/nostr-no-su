@@ -18,7 +18,6 @@ import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/connection_uri
 import nostr_no_su/db
 import nostr_no_su/dedup
@@ -1933,7 +1932,7 @@ fn with_relay_store_tree(run: fn(app.Spec, pog.Connection) -> Nil) -> Nil {
 
   // 移行を実行する。
   let assert Ok(_loaded) =
-    account_store.load(schema_pool, random_master_key(), db.default_timeouts)
+    postgres.load_stored(schema_pool, random_master_key(), db.default_timeouts)
 
   let assert Ok(config) =
     pog.url_config(process.new_name("test_app_relay_pool"), database_url)

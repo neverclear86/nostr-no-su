@@ -5,6 +5,8 @@ import gleam/erlang/process.{type Name}
 import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
+import nostr_no_su/bunker/account_store.{type Stored}
+import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/db
 import nostr_no_su/random
 import nostr_no_su/task.{type Deadline}
@@ -119,4 +121,19 @@ pub fn with_named_schema(
   run_statement(db, "CREATE SCHEMA " <> schema)
   run(schema, pool, db)
   run_statement(db, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// スキーマを最新の版に移行してから、アカウント、承認済みのセッション、承認待ちの
+/// 接続要求を 1 本のトランザクションで読む（`account_store.load_within`）。期限は
+/// `timeouts.load_ms` で、打ち切りと失敗の値は `db.transaction` に従う。
+pub fn load_stored(
+  pool: Name(pog.Message),
+  key: MasterKey,
+  timeouts: db.Timeouts,
+) -> Result(Stored, db.StoreError) {
+  db.transaction(pool, timeouts.load_ms, account_store.load_within(
+    _,
+    key,
+    timeouts,
+  ))
 }

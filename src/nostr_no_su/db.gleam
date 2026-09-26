@@ -284,8 +284,8 @@ pub fn acquire_lock(
 }
 
 /// スキーマを `migrations` の最新の版にする。版のテーブルを用意し、記録された版より
-/// 新しい移行の文を順に実行して、移行ごとに版を記録する。`account_store.load` のトランザクションの
-/// 中で呼ぶので、文の期限は `pool_transaction` の期限が効く。
+/// 新しい移行の文を順に実行して、移行ごとに版を記録する。`account_store.load_within` から
+/// トランザクションの中で呼ぶので、文の期限は `pool_transaction` の期限が効く。
 pub fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
   use _created <- result.try(pog.query(create_version_table) |> execute(db))
   use recorded <- result.try(
