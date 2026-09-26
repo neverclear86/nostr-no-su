@@ -464,16 +464,6 @@ pub fn nip04_stubbed_test() {
   )
 }
 
-/// `nip04_encrypt` と `nip04_decrypt` が未対応の権限で、`nip44_encrypt`、`sign_event`、
-/// `sign_event:1` は未対応でない。
-pub fn unsupported_permissions_are_the_nip04_methods_test() {
-  assert engine.is_unsupported_permission("nip04_encrypt")
-  assert engine.is_unsupported_permission("nip04_decrypt")
-  assert !engine.is_unsupported_permission("nip44_encrypt")
-  assert !engine.is_unsupported_permission("sign_event")
-  assert !engine.is_unsupported_permission("sign_event:1")
-}
-
 /// `nip44_encrypt` と `nip44_decrypt` が往復し、第三者は自身の鍵でペイロードを
 /// 復号できる。
 pub fn nip44_roundtrip_via_engine_test() {

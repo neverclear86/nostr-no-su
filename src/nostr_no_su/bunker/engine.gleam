@@ -14,6 +14,7 @@ import gleam/result
 import gleam/string
 import nostr_no_su/bunker/account.{type Account, privkey, pubkey_hex}
 import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
+import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
@@ -132,7 +133,7 @@ pub type Pending {
 /// 経っていれば更新する。`perms` はセッション内の `sign_event` と
 /// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
 /// の値から、管理 UI の `set_perms` でだけ変わる。空のときは既定の集合
-/// （`default_perms`）で照合する。`relays` は `nostrconnect://` で開いたときの
+/// （`bunker/permission` の既定）で照合する。`relays` は `nostrconnect://` で開いたときの
 /// URI のリレー（URI の順）で、`bunker://` の `connect` と承認で開いたセッション
 /// では空である。承認済みの組を `nostrconnect://` で開き直すと、`relays` だけが
 /// 新しい URI の一覧に変わる。
@@ -1058,37 +1059,37 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
   #(updated, InsertPending(pending: entry, replaced:, evicted:))
 }
 
-/// 接続済みクライアントからのリクエストを 1 件実行する。`sign_event` と
-/// `nip44_encrypt` / `nip44_decrypt` は `perms`（空なら既定の集合）が許すとき
-/// だけ実行し、`get_public_key` と `ping` は `perms` に関わらず答える。
-/// `unsupported_methods` の方法には未対応の理由を、ほかの方法には `unsupported_method` を返す。
+/// 接続済みクライアントからのリクエストを 1 件実行する。方法名を `permission.from_token` で
+/// 読み、`sign_event` と `nip44_encrypt` / `nip44_decrypt` は `perms`（空なら既定の集合）が
+/// 許すときだけ実行し、`get_public_key` と `ping` は `perms` に関わらず答える。
+/// 未対応の方法（`permission.is_unsupported`）には未対応の理由を、ほかの方法には
+/// `unsupported_method` を返す。
 fn execute_in_session(
   account: Account,
   perms: String,
   request: rpc.Request,
   now: Int,
 ) -> rpc.Response {
+  let granted = permission.parse(perms)
   case request.method {
     "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
     "ping" -> rpc.ok(request.id, "pong")
-    "sign_event" -> sign_event(account, perms, request, now)
-    "nip44_encrypt" -> nip44_op(account, perms, request, nip44.encrypt)
-    "nip44_decrypt" -> nip44_op(account, perms, request, nip44.decrypt)
-    method ->
-      case list.contains(unsupported_methods, method) {
-        True -> rpc.error(request.id, "nip04 is not supported")
-        False -> rpc.error(request.id, unsupported_method)
+    method -> {
+      let wanted = permission.from_token(method)
+      case wanted {
+        permission.SignAnyKind -> sign_event(account, granted, request, now)
+        permission.Nip44Encrypt ->
+          nip44_op(account, granted, wanted, request, nip44.encrypt)
+        permission.Nip44Decrypt ->
+          nip44_op(account, granted, wanted, request, nip44.decrypt)
+        _ ->
+          case permission.is_unsupported(wanted) {
+            True -> rpc.error(request.id, "nip04 is not supported")
+            False -> rpc.error(request.id, unsupported_method)
+          }
       }
+    }
   }
-}
-
-/// バンカーが対応していない NIP-46 の方法（NIP-04 の暗号化と復号）。セッション内で受けると
-/// 未対応の理由を返す。
-const unsupported_methods = ["nip04_encrypt", "nip04_decrypt"]
-
-/// 権限のトークンが、バンカーが対応していない方法（`unsupported_methods`）と完全に一致するか。
-pub fn is_unsupported_permission(token: String) -> Bool {
-  list.contains(unsupported_methods, token)
 }
 
 /// 指定された pubkey（`connect` の署名者、ドラフトの pubkey）が、`signer` とは
@@ -1150,26 +1151,12 @@ fn bounded_perms(perms: String) -> String {
   kept |> list.reverse |> string.join(",")
 }
 
-/// カンマ区切りの `perms` に `permission` と完全に一致するトークンがあるか。前後
-/// の空白は除かない。`perms` が空（`connect` で宣言しなかった）のセッションは
-/// `default_perms` と照合する。
-fn grants(perms: String, permission: String) -> Bool {
-  case perms {
-    "" -> list.contains(default_perms, permission)
-    _ -> string.split(perms, ",") |> list.contains(permission)
-  }
-}
-
-/// 無宣言のセッションに既定で許す権限。kind 24133 の署名は `sign_event` の検査が
-/// 別に拒否する。
-const default_perms = ["sign_event", "nip44_encrypt", "nip44_decrypt"]
-
-/// `permission` が許されていないことを示すエラーの文言の接頭辞。
+/// 権限が許されていないことを示すエラーの文言の接頭辞。
 const denial_prefix = "permission denied: "
 
-/// `permission` が許されていないことを示すエラーの文言。
-fn denial(permission: String) -> String {
-  denial_prefix <> permission
+/// `wanted` が許されていないことを示すエラーの文言。権限の綴りは `permission.token` で作る。
+fn denial(wanted: Permission) -> String {
+  denial_prefix <> permission.token(wanted)
 }
 
 /// 権限の不足で拒否した実行のログ 1 行。それ以外の結果では `None`。
@@ -1211,14 +1198,14 @@ fn response_of(id: String, outcome: Result(String, String)) -> rpc.Response {
   }
 }
 
-/// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。`perms` が
-/// `sign_event` か `sign_event:<kind>` を含むとき（`perms` が空なら常に）署名
-/// する。別の pubkey を指すドラフトと、NIP-46 の応答と同じ kind（24133）の
-/// ドラフトは、perms で宣言されていても拒否する。空の pubkey は指定無しとして
-/// 扱う。
+/// リクエストに含まれるイベントドラフトをアカウントの鍵で署名する。`granted`（セッションの
+/// `perms` を `permission.parse` で読んだもの）がドラフトの kind を許すとき
+/// （`permission.allows`。空なら常に）署名する。別の pubkey を指すドラフトと、NIP-46 の
+/// 応答と同じ kind（24133）のドラフトは、perms で宣言されていても拒否する。空の pubkey は
+/// 指定無しとして扱う。
 fn sign_event(
   account: Account,
-  perms: String,
+  granted: List(Permission),
   request: rpc.Request,
   now: Int,
 ) -> rpc.Response {
@@ -1231,9 +1218,11 @@ fn sign_event(
       rpc.decode_draft(draft_json)
       |> result.replace_error("invalid event draft"),
     )
-    let permission = "sign_event:" <> int.to_string(draft.kind)
-    let permitted = grants(perms, "sign_event") || grants(perms, permission)
-    use <- bool.guard(!permitted, Error(denial(permission)))
+    let wanted = permission.SignKind(draft.kind)
+    use <- bool.guard(
+      !permission.allows(granted, wanted),
+      Error(denial(wanted)),
+    )
     use <- bool.guard(
       points_elsewhere(draft.pubkey, pubkey_hex(account)),
       Error("event draft pubkey does not match the signer"),
@@ -1255,17 +1244,18 @@ fn sign_event(
 }
 
 /// 第三者宛のテキストに、アカウントの鍵で `operation`（`nip44.encrypt` か `nip44.decrypt`）
-/// をかける。`perms` が方法名（`request.method`）を許さなければ拒否する。
+/// をかける。`granted` が `wanted` を許さなければ拒否する。
 fn nip44_op(
   account: Account,
-  perms: String,
+  granted: List(Permission),
+  wanted: Permission,
   request: rpc.Request,
   operation: fn(String, BitArray) -> Result(String, nip44.Nip44Error),
 ) -> rpc.Response {
   response_of(request.id, {
     use <- bool.guard(
-      !grants(perms, request.method),
-      Error(denial(request.method)),
+      !permission.allows(granted, wanted),
+      Error(denial(wanted)),
     )
     use #(third_party_hex, text) <- result.try(case request.params {
       [third_party_hex, text, ..] -> Ok(#(third_party_hex, text))
