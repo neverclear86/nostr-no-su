@@ -3,8 +3,9 @@
 ////
 //// **環境変数を読むのはこのモジュールではない**（`config.gleam` が 1 か所で
 //// 読む）。ここが持つのは、集めた環境変数からプラグイン 1 つぶんの設定を切り
-//// 出す規則と、本体の接続先を予約キーに写す規則と、境界へ渡す map への変換
-//// だけである。
+//// 出す規則と、本体の接続先を予約キーに写す規則と、境界へ渡す map への変換と、
+//// 管理 UI のページに渡すアカウントの型（`PageAccount`）と、フォームの送信を
+//// 受け取る実行の口の型（`PageAction`）だけである。
 ////
 //// **境界に置くのはキーも値も binary の Erlang map** であって Gleam の Dict や
 //// レコードではない。イベント map（`event.to_map`）と同じ理由で、Erlang /
@@ -128,6 +129,11 @@ fn config_entries(config: Config) -> List(#(Dynamic, Dynamic)) {
 pub type PageAccount {
   PageAccount(pubkey: String, npub: String, label: String)
 }
+
+/// 管理 UI のページのフォームの送信を受け取る実行の口。送られた欄の名前と値の組と、登録
+/// アカウントの一覧を受け、拒否か呼び出しの失敗は表示する理由を返す。
+pub type PageAction =
+  fn(List(#(String, String)), List(PageAccount)) -> Result(Nil, String)
 
 /// プラグイン境界へ渡す map。`to_map` と同じ形に、予約キー `Accounts`（値は
 /// アカウントの一覧を JSON にした文字列）を足して返す。中身はアカウントごとの
