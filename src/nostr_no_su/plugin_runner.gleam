@@ -57,8 +57,7 @@ import nostr_no_su/resume
 import nostr_no_su/time
 import nostr_no_su/window.{type Window}
 
-/// 実行時の歯止め。テストから小さい値を渡せるよう注入する。プラグイン固有の
-/// 設定から与えられるようにする余地もここにある。
+/// 実行時の歯止め。テストから小さい値を渡せるよう注入する。
 pub type Limits {
   Limits(handle_timeout_ms: Int, max_queue_len: Int, max_failures: Int)
 }
@@ -246,9 +245,7 @@ pub fn catchup(name: Name(Msg)) -> Result(Option(Catchup), Nil) {
   |> option.to_result(Nil)
 }
 
-/// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、その
-/// 結果で再開点を前進させ（`advance`）、実行したものは `record` が状態へ
-/// 反映する。
+/// メッセージ 1 件を処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     GetStatus(reply) -> {
@@ -267,10 +264,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let #(status, note) = reenable(state.status)
       report(state.plugin.name, note)
       process.send(reply, Nil)
-      case state.status, status {
+      case state.status {
         // `Disabled` からの復帰は取り直しを要求する。`Running` と `Overloaded`
         // のままの再有効化は状態も要求も変えない。
-        Disabled(..), Running -> {
+        Disabled(..) -> {
           state.resubscribe()
           actor.continue(
             State(
@@ -283,7 +280,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             ),
           )
         }
-        _, _ -> actor.continue(State(..state, status: status))
+        Running | Overloaded(..) -> actor.continue(state)
       }
     }
     Handle(incoming) -> actor.continue(run_incoming(state, incoming, None))
@@ -335,18 +332,10 @@ fn run_incoming(
       let #(status, failures, note) =
         record(status, state.failures, outcome, state.limits)
       report(state.plugin.name, note)
+      let next = State(..state, status:, failures:, resume:)
       case catchup_seen {
-        Some(next) ->
-          State(
-            ..state,
-            status: status,
-            failures: failures,
-            resume: resume,
-            seen: next,
-            caught_up: state.caught_up + 1,
-          )
-        None ->
-          State(..state, status: status, failures: failures, resume: resume)
+        Some(seen) -> State(..next, seen:, caught_up: next.caught_up + 1)
+        None -> next
       }
     }
   }
