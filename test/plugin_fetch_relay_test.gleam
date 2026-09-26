@@ -110,12 +110,13 @@ fn seed_profile(relay_url: String, signer: Account, content: String) -> Event {
   let assert Ok(connection) =
     relay_client.start(
       relay_url,
-      fn() { Ok([]) },
-      fn(_received) { Nil },
-      fn(ack) { process.send(acks, ack) },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([]) },
+        handle_incoming: fn(_received) { Nil },
+        handle_ok: fn(ack) { process.send(acks, ack) },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   let assert Ok(signed) =
     engine.sign_as(signer, 0, [], content, time.now_seconds())

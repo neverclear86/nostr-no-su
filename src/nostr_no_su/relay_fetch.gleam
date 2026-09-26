@@ -128,12 +128,15 @@ fn query(
   use client <- result.try(
     relay_client.start(
       url,
-      fn() { Ok([#(fetch_subscription_id, fetch_filter(authors, kind))]) },
-      handle_incoming(_, authors, kind, reply),
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() {
+          Ok([#(fetch_subscription_id, fetch_filter(authors, kind))])
+        },
+        handle_incoming: handle_incoming(_, authors, kind, reply),
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
     |> result.replace_error(Nil),
   )
