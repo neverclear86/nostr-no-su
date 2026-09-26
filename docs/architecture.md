@@ -667,7 +667,8 @@ flowchart TD
 nostr-no-su/
 ├── src/                          本体
 │   ├── nostr_no_su.gleam         エントリポイント（設定の読み込みとツリー仕様の組み立て）
-│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process / application / ssl / logger / supervisor / QR）
+│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / file / process / ssl / logger / supervisor / QR）
+│   ├── nostr_no_su_plugin_ffi.erl プラグインの読み込み・呼び出し・実行の FFI（code / file / application / process）
 │   ├── nostr_no_su_store_ffi.erl アカウントストアの pgo のトランザクションと、pog の例外を値に写す FFI
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
