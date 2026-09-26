@@ -2,7 +2,7 @@
 
 Nostr-no-Su は、バンカーに登録したアカウントのイベントを受け取るプラグインを BEAM のモジュールとして読み込む。この文書はプラグインを書くために必要な仕様をまとめたもので、対象は API バージョン 1 である。
 
-本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）、`src/nostr_no_su/admin/plugin_pages.gleam`（ページ枠とタブの組み立て）、`src/nostr_no_su/plugin_api.gleam`（プラグインが呼ぶ本体側の口）にある。
+本体側の実装は `src/nostr_no_su/plugin.gleam`（検証と読み込み）、`src/nostr_no_su/plugin_loader.gleam`（走査とコードパスへの追加）、`src/nostr_no_su/plugin_config.gleam`（プラグイン固有の設定の切り出し）、`src/nostr_no_su/nostr/event.gleam`（イベント map の変換）、`src/nostr_no_su/admin/plugin_view.gleam`（ページの記述から管理 UI の部品への変換）、`src/nostr_no_su/admin/plugin_pages.gleam`（ページ枠とタブの組み立て）、`src/nostr_no_su/plugin_api.gleam`（プラグインが呼ぶ本体側の口）、`src/nostr_no_su/relay_fetch.gleam`（取得の口が使う監視の用途のリレーへの問い合わせ）にある。
 
 ## 1. 目的と信頼モデル
 
