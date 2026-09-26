@@ -27,6 +27,7 @@ import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
@@ -386,7 +387,7 @@ fn connect_client(
     Ok([
       #(
         "client",
-        config.bunker_filter(
+        subscriptions.bunker_filter(
           [account.pubkey_hex(client)],
           time.now_seconds() - 60,
         ),

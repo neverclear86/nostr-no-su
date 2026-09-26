@@ -212,7 +212,7 @@ map なら Erlang や Elixir で書いたプラグインも載せられる。
 ## 監視の購読
 
 監視の接続は、接続の直後と張り直しの依頼のたびに購読の定義を評価する。
-定義は、バンカーの現在の署名者（`GetSigners`）と、その接続の再開点から組み立てる（`nostr_no_su.monitor_subscriptions`）。
+定義は、バンカーの現在の署名者（`GetSigners`）と、その接続の再開点から組み立てる（`subscriptions.monitor_relay_subscriptions`）。
 署名者が 0 件なら購読を定義せず、再開点も読まない。
 どれかに応答が無ければ、開いている購読を変えずに再試行する。
 定義を得たら、その接続が開いている購読と最後に送ったフィルターに照らし、差分だけを送る（`relay_client.sync`）。
@@ -671,6 +671,7 @@ nostr-no-su/
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
+│       ├── subscriptions.gleam   監視とバンカーの購読の定義（購読 id、フィルター、再開点からの組み立て）
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）

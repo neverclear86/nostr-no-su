@@ -3,7 +3,6 @@ import gleam/dynamic/decode
 import gleam/option.{None, Some}
 import nostr_no_su
 import nostr_no_su/config
-import nostr_no_su/plugin_runner
 import support/beam_fixture
 import support/random_account.{random_master_key}
 
@@ -60,36 +59,6 @@ pub fn main() -> Nil {
 /// 止める。`ordered` は 1 本のレーンでその順に、残りは `lanes` 本のレーンで同時に走る。
 @external(erlang, "eunit_runner", "run")
 fn run_tests(ordered: List(String), lanes: Int) -> Nil
-
-/// 取り直しの要求の `since` は、ランナーのメモリの再開点を優先し、無ければ
-/// 保存済みの値を使う。保存済みも無い要求は落とし、要求の順は保つ。
-pub fn catchup_since_resolves_each_request_test() {
-  let stored = fn(plugin: String) {
-    case plugin {
-      "logger" -> Ok(Some(100))
-      _ -> Ok(None)
-    }
-  }
-  assert nostr_no_su.catchup_since(
-      [
-        #("logger", plugin_runner.Catchup(since: None, until: 200)),
-        #("echo", plugin_runner.Catchup(since: Some(50), until: 300)),
-        #("unsaved", plugin_runner.Catchup(since: None, until: 400)),
-      ],
-      stored,
-    )
-    == Ok([#("logger", 100, 200), #("echo", 50, 300)])
-}
-
-/// 保存済みの再開点を 1 つでも読めなければ、解決は全体を失敗にする（その評価では
-/// 購読を 1 本も定義しない）。
-pub fn catchup_since_fails_as_a_whole_on_a_read_error_test() {
-  assert nostr_no_su.catchup_since(
-      [#("logger", plugin_runner.Catchup(since: None, until: 200))],
-      fn(_plugin) { Error("unavailable") },
-    )
-    == Error(Nil)
-}
 
 /// `startup` はアカウントストアの接続先（`DATABASE_URL`）を予約キー `DatabaseUrl`
 /// でプラグインへ渡す。`plugin_children/1` が受け取った設定 map に本体の接続先が

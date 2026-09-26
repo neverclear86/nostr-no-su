@@ -10,7 +10,6 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
-import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_store
 import nostr_no_su/log
 import nostr_no_su/nostr/event
@@ -21,10 +20,10 @@ import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 
@@ -153,7 +152,7 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 
 /// 監視サブツリー。起動時のリレーは常に空で、行はバンカーの読み込みから
 /// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
-/// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
+/// 再開点から組み立て（`subscriptions.monitor_relay_subscriptions`）、再開点はアカウントストアと
 /// 同じ DB に保存する。復帰したランナーの要求に応じて、プラグインごとの
 /// 取り直しの購読も足される。除外する kind の既定は ephemeral 全般
 /// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。作者の照合は、購読の
@@ -169,7 +168,7 @@ fn monitor_spec(
     name: name,
     dedup_capacity: dedup_capacity,
     relays: [],
-    subscriptions: monitor_subscriptions(
+    subscriptions: subscriptions.monitor_relay_subscriptions(
       config.name,
       name,
       resume_point_loader(config.pool.pool_name),
@@ -182,71 +181,6 @@ fn monitor_spec(
     excludes_kind: event.is_ephemeral,
     accepts_author: bunker.is_signer(config.name, _),
   )
-}
-
-/// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から
-/// 組み立て、署名者がいれば `since` をディスパッチャーのメモリの再開点から、無ければ
-/// 保存済みの再開点（`load`）から決める。署名者がいれば、各ランナーの取り直しの
-/// 要求（`catchups`）からプラグインごとの取り直しの購読を足す。その `since` は
-/// ランナーのメモリの再開点か保存済みの値（`load_plugin`）から決め、再開点の無い
-/// 要求は落とす。`until` は監視の購読の `since` までに切り詰め、範囲が残らない
-/// 要求はこのリレーでは定義しない（`config.catchup_subscriptions`）。取り直しの
-/// 解決に失敗したら定義全体を得られなかったことにする。どれかに応答が無ければ
-/// 定義を得られなかったことにし、開いている購読を閉じない。テストが本番と同じ
-/// 定義でツリーを動かせるよう公開する。
-pub fn monitor_subscriptions(
-  bunker_name: Name(bunker.Msg),
-  dedup_name: Name(dedup.Msg),
-  load: fn(String) -> Result(Option(Int), String),
-  load_plugin: fn(String) -> Result(Option(Int), String),
-  catchups: fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
-  relay_url: String,
-) -> relay_client.Subscriptions {
-  fn() {
-    use signers <- result.try(
-      bunker.signers(bunker_name) |> option.to_result(Nil),
-    )
-    use <- config.monitor_subscriptions(signers)
-    use in_memory <- result.try(dedup.since(dedup_name, relay_url))
-    use since <- result.try(resume_since(in_memory, fn() { load(relay_url) }))
-    use requests <- result.try(catchups())
-    use resolved <- result.map(catchup_since(requests, load_plugin))
-    #(since, config.catchup_subscriptions(signers, since, resolved))
-  }
-}
-
-/// メモリの再開点があればそれを、無ければ保存済みの値を使う。読めなければ
-/// 定義を得られなかったことにする。監視の購読と取り直しの購読で共用する。
-fn resume_since(
-  in_memory: Option(Int),
-  load: fn() -> Result(Option(Int), String),
-) -> Result(Option(Int), Nil) {
-  case in_memory {
-    Some(_) -> Ok(in_memory)
-    None -> load() |> result.replace_error(Nil)
-  }
-}
-
-/// 取り直しの要求ごとに `since` を解決し、購読を定義する `#(プラグイン名,
-/// since, until)` の一覧にする。`since` はランナーのメモリの再開点があれば
-/// それを、無ければ `load_plugin` で読む保存済みの値を使う。再開点が未保存の
-/// 要求は落とす（取り直す範囲が決まらない）。1 つでも読めなければ全体を
-/// `Error(Nil)` にする。テストが直接呼べるよう公開する。
-pub fn catchup_since(
-  catchups: List(#(String, plugin_runner.Catchup)),
-  load_plugin: fn(String) -> Result(Option(Int), String),
-) -> Result(List(#(String, Int, Int)), Nil) {
-  list.try_fold(catchups, [], fn(acc, request) {
-    let #(plugin, catchup) = request
-    use since <- result.map(
-      resume_since(catchup.since, fn() { load_plugin(plugin) }),
-    )
-    case since {
-      Some(at) -> [#(plugin, at, catchup.until), ..acc]
-      None -> acc
-    }
-  })
-  |> result.map(list.reverse)
 }
 
 /// リレーの保存済みの再開点を読む操作（`resume_store.load`）。購読の評価の再試行の
@@ -375,7 +309,7 @@ fn bunker_spec(
       fn() {
         signers()
         |> option.to_result(Nil)
-        |> result.map(config.bunker_subscriptions(
+        |> result.map(subscriptions.bunker_subscriptions(
           _,
           time.now_seconds() - bunker_since_lookback_seconds,
         ))

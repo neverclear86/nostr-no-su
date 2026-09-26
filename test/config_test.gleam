@@ -4,7 +4,6 @@ import gleam/dict
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/config
-import nostr_no_su/nostr/filter.{Filter}
 
 /// 環境変数を一時的に設定して `run` を実行し、終了後に元の値へ戻す。`run` が
 /// assert の失敗などでクラッシュしても、戻してからそのクラッシュを伝える。設定と
@@ -455,117 +454,6 @@ pub fn dedup_capacity_rejects_invalid_values_test() {
   let assert Error(_) = dedup_capacity_for(Some("0"))
   let assert Error(_) = dedup_capacity_for(Some("-1"))
   let assert Error(_) = dedup_capacity_for(Some("abc"))
-}
-
-/// 署名者が 0 件なら購読を定義せず、継続を評価しない。署名者がいれば継続を呼び、
-/// 監視のフィルターに `authors` と `since` を入れて、足す購読をそのまま後ろに並べる。
-/// 継続が `Error(Nil)` なら定義を得られなかったことにする。
-pub fn monitor_subscriptions_test() {
-  assert config.monitor_subscriptions([], fn() { panic as "must not be called" })
-    == Ok([])
-  assert config.monitor_subscriptions(["pk1", "pk2"], fn() { Ok(#(None, [])) })
-    == Ok([
-      #("nostr-no-su", Filter(..filter.new(), authors: Some(["pk1", "pk2"]))),
-    ])
-  let assert Ok([#(_id, with_since)]) =
-    config.monitor_subscriptions(["pk1"], fn() { Ok(#(Some(1000), [])) })
-  assert with_since.since == Some(1000)
-  assert config.monitor_subscriptions(["pk1"], fn() {
-      Ok(#(Some(1000), [#("nostr-no-su-catchup-a", filter.new())]))
-    })
-    == Ok([
-      #(
-        "nostr-no-su",
-        Filter(..filter.new(), authors: Some(["pk1"]), since: Some(1000)),
-      ),
-      #("nostr-no-su-catchup-a", filter.new()),
-    ])
-  assert config.monitor_subscriptions(["pk1"], fn() { Error(Nil) })
-    == Error(Nil)
-}
-
-/// 署名者が 0 件なら取り直しの購読も定義しない。署名者がいれば、要求ごとに
-/// プラグイン名を繋げた id で、`authors` と閉じた範囲 `since`〜`until` を持つ
-/// フィルターを作る。
-pub fn catchup_subscriptions_test() {
-  assert config.catchup_subscriptions([], None, [#("a", 100, 200)]) == []
-  assert config.catchup_subscriptions(["pk1"], None, [
-      #("logger", 100, 200),
-      #("echo", 300, 400),
-    ])
-    == [
-      #(
-        "nostr-no-su-catchup-logger",
-        Filter(
-          ..filter.new(),
-          authors: Some(["pk1"]),
-          since: Some(100),
-          until: Some(200),
-        ),
-      ),
-      #(
-        "nostr-no-su-catchup-echo",
-        Filter(
-          ..filter.new(),
-          authors: Some(["pk1"]),
-          since: Some(300),
-          until: Some(400),
-        ),
-      ),
-    ]
-}
-
-/// 監視の購読の `since` が `until` より前なら、`until` をそれに切り詰める。
-/// 切り詰めた範囲は監視の購読が運ぶ。
-pub fn catchup_subscriptions_trims_until_to_the_monitor_since_test() {
-  let assert [#(_id, query)] =
-    config.catchup_subscriptions(["pk1"], Some(150), [#("logger", 100, 200)])
-  assert query.since == Some(100)
-  assert query.until == Some(150)
-}
-
-/// 監視の購読の `since` が `until` 以降なら、取り直しの範囲は変えない。
-pub fn catchup_subscriptions_keeps_until_before_the_monitor_since_test() {
-  let assert [#(_id, query)] =
-    config.catchup_subscriptions(["pk1"], Some(250), [#("logger", 100, 200)])
-  assert query.since == Some(100)
-  assert query.until == Some(200)
-}
-
-/// 取り直しの範囲がすべて監視の購読に含まれるときは、その接続では取り直しを
-/// 定義しない。境界は両端を含むので、`since` と監視の `since` が同じなら残る。
-pub fn catchup_subscriptions_drops_a_range_the_monitor_covers_test() {
-  assert config.catchup_subscriptions(["pk1"], Some(90), [#("logger", 100, 200)])
-    == []
-  let assert [#(_id, query)] =
-    config.catchup_subscriptions(["pk1"], Some(100), [#("logger", 100, 200)])
-  assert query.until == Some(100)
-}
-
-/// 取り直しの購読 id からはプラグイン名が戻る。監視の購読 id とそれ以外は
-/// `None` になる。
-pub fn catchup_plugin_test() {
-  assert config.catchup_plugin("nostr-no-su-catchup-a") == Some("a")
-  assert config.catchup_plugin("nostr-no-su") == None
-  assert config.catchup_plugin("other") == None
-}
-
-/// 署名者がいれば `#p` に入れて購読し、いなければ購読そのものを開かない。
-pub fn bunker_subscriptions_test() {
-  assert config.bunker_subscriptions([], 1000) == []
-  assert config.bunker_subscriptions(["pk1"], 1000)
-    == [#("bunker", config.bunker_filter(["pk1"], 1000))]
-}
-
-/// バンカーのフィルターは、署名者宛の直近の kind 24133 イベントを選択する。
-pub fn bunker_filter_test() {
-  assert config.bunker_filter(["pk1", "pk2"], 1000)
-    == Filter(
-      ..filter.new(),
-      kinds: Some([24_133]),
-      p_tags: Some(["pk1", "pk2"]),
-      since: Some(1000),
-    )
 }
 
 /// 復元の検査に使う、他のテストが読まない環境変数の名前。

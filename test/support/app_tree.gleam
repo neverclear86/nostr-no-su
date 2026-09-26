@@ -17,7 +17,6 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
-import nostr_no_su/config
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
@@ -25,6 +24,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
@@ -120,7 +120,7 @@ pub fn fake_open(
       reports,
       Opened(relay_url, process.self(), socket, fn(sent) {
         handle_event(relay_client.ReceivedEvent(
-          config.monitor_subscription_id,
+          subscriptions.monitor_subscription_id,
           signed_event.verified(sent),
         ))
       }),
@@ -248,7 +248,7 @@ pub fn bunker_spec(
       fn() {
         signers()
         |> option.to_result(Nil)
-        |> result.map(config.bunker_subscriptions(_, 0))
+        |> result.map(subscriptions.bunker_subscriptions(_, 0))
       }
     },
   )
