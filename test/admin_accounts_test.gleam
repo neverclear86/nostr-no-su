@@ -708,7 +708,7 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   assert string.contains(
     body,
     "<form action=\""
-      <> view.segments_path(routes.import_account_segments)
+      <> routes.segments_path(routes.import_account_segments)
       <> "\" autocomplete=\"off\"",
   )
 }

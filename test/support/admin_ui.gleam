@@ -34,9 +34,9 @@ import support/account_actions
 fn read_file(path: String) -> Result(BitArray, Dynamic)
 
 /// URL のパスセグメントが指す静的ファイルの中身。ルーティングが `priv` の下の同じパスから
-/// 配信するので、セグメントの定義（`view.stylesheet_segments` など）から読む。
+/// 配信するので、セグメントの定義（`routes.stylesheet_segments` など）から読む。
 pub fn static_file(segments: List(String)) -> String {
-  text_file("priv" <> view.segments_path(segments))
+  text_file("priv" <> routes.segments_path(segments))
 }
 
 /// リポジトリの根からの相対パスのテキストファイルの中身。

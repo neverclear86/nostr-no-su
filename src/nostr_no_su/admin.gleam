@@ -334,8 +334,9 @@ pub fn handle_request(context: Context, request: Request) -> Response {
     ["healthz"] -> healthz(request)
     segments -> {
       use <- require_password(context, request)
-      route(context, request, segments)
-      |> protect(response_content_security_policy(request, segments))
+      let parsed = routes.parse(segments)
+      route(context, request, parsed)
+      |> protect(response_content_security_policy(request, parsed))
     }
   }
 }
@@ -407,12 +408,12 @@ type Handling {
   )
 }
 
-/// 認証済みのルート。表示の言語とテーマを決めて要求ごとの値（`Handling`）を作り、パスで
-/// ハンドラーを選ぶ。
+/// 認証済みのルート。表示の言語とテーマを決めて要求ごとの値（`Handling`）を作り、パスの解析の
+/// 結果（`routes.parse`）の構築子でハンドラーを選ぶ。解析できないパスは 404 の通知ページにする。
 fn route(
   context: Context,
   request: Request,
-  segments: List(String),
+  parsed: Result(routes.Route, Nil),
 ) -> Response {
   let handling =
     Handling(
@@ -421,51 +422,30 @@ fn route(
       language: request_language(request),
       theme: request_theme(request),
     )
-  case segments {
-    [] -> show_dashboard(handling)
-    segments
-      if segments == view.stylesheet_segments
-      || segments == view.script_segments
-    -> static_file(handling)
-    segments if segments == view.language_segments ->
+  case parsed {
+    Ok(routes.ShowDashboard) -> show_dashboard(handling)
+    Ok(routes.Stylesheet) | Ok(routes.Script) -> static_file(handling)
+    Ok(routes.SwitchLanguage) ->
       switch_preference(handling, language_preference)
-    segments if segments == view.theme_segments ->
-      switch_preference(handling, theme_preference)
-    [first, token] if first == routes.approve_segment ->
-      approve_connection(handling, token)
-    [first, token] if first == routes.deny_segment ->
-      deny_connection(handling, token)
-    segments if segments == routes.revoke_segments -> revoke_session(handling)
-    segments if segments == routes.connect_segments -> connect_client(handling)
-    segments if segments == routes.connect_confirm_segments ->
-      confirm_connection(handling)
-    segments if segments == routes.reenable_plugin_segments ->
-      reenable_plugin(handling)
-    segments if segments == routes.reload_accounts_segments ->
-      reload_accounts(handling)
-    segments if segments == routes.new_relay_segments -> new_relay(handling)
-    segments if segments == routes.generate_account_segments ->
-      generate_account(handling)
-    segments if segments == routes.import_account_segments ->
-      import_account(handling)
-    segments if segments == routes.register_generated_segments ->
-      register_generated_account(handling)
-    segments ->
-      case
-        routes.parse_account_action_path(segments),
-        routes.parse_relay_action_path(segments),
-        routes.parse_plugin_page_path(segments),
-        routes.parse_session_permissions_path(segments)
-      {
-        Ok(#(signer, action)), _, _, _ ->
-          account_action(handling, signer, action)
-        _, Ok(#(id, action)), _, _ -> relay_action(handling, id, action)
-        _, _, Ok(#(name, key)), _ -> plugin_page(handling, name, key)
-        _, _, _, Ok(#(signer, client)) ->
-          session_permissions(handling, signer, client)
-        Error(Nil), Error(Nil), Error(Nil), Error(Nil) ->
-          not_found_notice(handling, i18n.Translated(i18n.PageNotFound))
-      }
+    Ok(routes.SwitchTheme) -> switch_preference(handling, theme_preference)
+    Ok(routes.ApproveConnection(token)) -> approve_connection(handling, token)
+    Ok(routes.DenyConnection(token)) -> deny_connection(handling, token)
+    Ok(routes.RevokeSession) -> revoke_session(handling)
+    Ok(routes.ConnectClient) -> connect_client(handling)
+    Ok(routes.ConfirmConnection) -> confirm_connection(handling)
+    Ok(routes.ReenablePlugin) -> reenable_plugin(handling)
+    Ok(routes.ReloadAccounts) -> reload_accounts(handling)
+    Ok(routes.NewRelay) -> new_relay(handling)
+    Ok(routes.GenerateAccount) -> generate_account(handling)
+    Ok(routes.ImportAccount) -> import_account(handling)
+    Ok(routes.RegisterGeneratedAccount) -> register_generated_account(handling)
+    Ok(routes.AccountOperation(signer, action)) ->
+      account_action(handling, signer, action)
+    Ok(routes.RelayOperation(id, action)) -> relay_action(handling, id, action)
+    Ok(routes.ShowPluginPage(name, key)) -> plugin_page(handling, name, key)
+    Ok(routes.SessionPermissions(signer, client)) ->
+      session_permissions(handling, signer, client)
+    Error(Nil) -> not_found_notice(handling, i18n.Translated(i18n.PageNotFound))
   }
 }
 
@@ -486,15 +466,17 @@ fn protect(response: Response, policy: String) -> Response {
   |> wisp.set_header("referrer-policy", "same-origin")
 }
 
-/// 応答に付ける CSP を選ぶ。プラグインのページの GET（`image` ブロックが `http:` の画像を
-/// 指しうる唯一のページ）だけ `img-src` に `http:` も足し、鍵と secret を扱うほかのページは
-/// `image_sources` のままにする。HEAD は `wisp.handle_head` が GET にしてから届く。
+/// 応答に付ける CSP を選ぶ。パスの解析の結果がプラグインのページ（`routes.ShowPluginPage`）で
+/// GET のとき（`image` ブロックが `http:` の画像を指しうる唯一のページ）だけ `img-src` に
+/// `http:` も足し、鍵と secret を扱うほかのページは `image_sources` のままにする。HEAD は
+/// `wisp.handle_head` が GET にしてから届く。
 fn response_content_security_policy(
   request: Request,
-  segments: List(String),
+  parsed: Result(routes.Route, Nil),
 ) -> String {
-  case request.method, routes.parse_plugin_page_path(segments) {
-    http.Get, Ok(_) -> content_security_policy(image_sources <> " http:")
+  case request.method, parsed {
+    http.Get, Ok(routes.ShowPluginPage(..)) ->
+      content_security_policy(image_sources <> " http:")
     _, _ -> content_security_policy(image_sources)
   }
 }
@@ -566,11 +548,10 @@ fn healthz(request: Request) -> Response {
 
 /// 管理 UI の静的ファイル（ビルドした `priv/static/admin.css` と、手で書く
 /// `priv/static/admin.js`）。ページと同じく認証の後に置くので、`protect` のヘッダーが付き、
-/// ブラウザーは保存しない（更新しても古いファイルが残らない）。パスが
-/// `view.stylesheet_segments` か `view.script_segments` に一致したときだけ届き、
-/// `serve_static` は要求のパスを `priv` からの相対パスとしてファイルを引く。無いファイルは
-/// 404 の通知ページ、GET 以外は `text/plain` の 405（CSS と JS への GET 以外は管理 UI
-/// から送られない）にする。
+/// ブラウザーは保存しない（更新しても古いファイルが残らない）。パスが `routes.Stylesheet` か
+/// `routes.Script` に解析されたときだけ届き、`serve_static` は要求のパスを `priv` からの
+/// 相対パスとしてファイルを引く。無いファイルは 404 の通知ページ、GET 以外は `text/plain` の
+/// 405（CSS と JS への GET 以外は管理 UI から送られない）にする。
 fn static_file(handling: Handling) -> Response {
   use <- wisp.require_method(handling.request, http.Get)
   let assert Ok(priv) = wisp.priv_directory("nostr_no_su")

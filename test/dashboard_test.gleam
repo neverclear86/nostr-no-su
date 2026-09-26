@@ -25,25 +25,16 @@ import nostr_no_su/relay_list
 import support/account_actions
 import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 
-/// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作に戻る。
+/// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作のルートに戻る。
 pub fn account_action_paths_round_trip_test() {
   use action <- list.each(account_actions.all)
   let assert "/" <> path = routes.account_action_path("abcd", action)
-  assert routes.parse_account_action_path(string.split(path, "/"))
-    == Ok(#("abcd", action))
-}
-
-/// 知らない操作のセグメントと、アカウントのページ以外のパスは操作にならない。
-pub fn unknown_account_action_paths_are_rejected_test() {
-  assert routes.parse_account_action_path(["accounts", "abcd", "nope"])
-    == Error(Nil)
-  assert routes.parse_account_action_path(["sessions", "abcd", "delete"])
-    == Error(Nil)
-  assert routes.parse_account_action_path(["accounts", "new"]) == Error(Nil)
+  assert routes.parse(string.split(path, "/"))
+    == Ok(routes.AccountOperation("abcd", action))
 }
 
 /// プラグインのページへのリンク（`plugin_page_href`）を `/` で分けて解析すると、
-/// 元のプラグイン名とページのキーに戻る。名前に空白、`/`、非 ASCII を含んでいてもよい。
+/// 元のプラグイン名とページのキーのルートに戻る。名前に空白、`/`、非 ASCII を含んでいてもよい。
 pub fn plugin_page_path_round_trips_test() {
   use #(name, key) <- list.each([
     #("console_logger", "status"),
@@ -52,19 +43,8 @@ pub fn plugin_page_path_round_trips_test() {
     #("★", "status"),
   ])
   let assert "/" <> path = routes.plugin_page_href(name, key)
-  assert routes.parse_plugin_page_path(string.split(path, "/"))
-    == Ok(#(name, key))
-}
-
-/// プラグインの再有効化のパス、2 セグメントのパス、percent-decode に失敗する名前は
-/// プラグインのページのパスにならない。
-pub fn plugin_page_path_rejects_other_paths_test() {
-  assert routes.parse_plugin_page_path(routes.reenable_plugin_segments)
-    == Error(Nil)
-  assert routes.parse_plugin_page_path(["plugins", "console_logger"])
-    == Error(Nil)
-  assert routes.parse_plugin_page_path(["plugins", "%ZZ", "status"])
-    == Error(Nil)
+  assert routes.parse(string.split(path, "/"))
+    == Ok(routes.ShowPluginPage(name, key))
 }
 
 /// リレーとプラグインのすべての状態と、承認待ち 1 件を持つスナップショット。

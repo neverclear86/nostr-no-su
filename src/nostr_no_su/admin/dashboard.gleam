@@ -1115,7 +1115,7 @@ pub fn import_form(
   let text = i18n.text(language, _)
   [
     view.secret_post_form(
-      view.segments_path(routes.import_account_segments),
+      routes.segments_path(routes.import_account_segments),
       [
         view.hinted_input(
           language,
@@ -1143,7 +1143,7 @@ pub fn generate_form(
   [
     view.paragraph(text(i18n.GenerateDescription)),
     view.post_form(
-      view.segments_path(routes.generate_account_segments),
+      routes.segments_path(routes.generate_account_segments),
       [],
       text(i18n.Generate),
       view.OutlineButton,
@@ -1662,7 +1662,7 @@ fn result_dialog(
             ),
             view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
             view.post_form(
-              view.segments_path(routes.register_generated_segments),
+              routes.segments_path(routes.register_generated_segments),
               [
                 view.hidden_input(nsec_field, nsec),
                 label_fieldset(language, id <> "-label-hint", label),
@@ -2525,7 +2525,7 @@ pub fn new_relay_form(
   [
     view.paragraph(text(i18n.AddRelayDescription)),
     view.post_form(
-      view.segments_path(routes.new_relay_segments),
+      routes.segments_path(routes.new_relay_segments),
       [url_field(language, url), roles_fieldset(language, roles, None)],
       text(i18n.Register),
       view.PrimaryButton,
@@ -2801,7 +2801,7 @@ fn connect_review_dialog(
               ]),
             ),
             view.post_form(
-              view.segments_path(routes.connect_confirm_segments),
+              routes.segments_path(routes.connect_confirm_segments),
               [
                 view.hidden_input(nostrconnect_uri_field, review.uri),
                 view.hidden_input(signer_field, review.signer),
@@ -3213,7 +3213,7 @@ pub fn connect_form(
   [
     view.paragraph(text(i18n.ConnectClientDescription)),
     view.post_form(
-      view.segments_path(routes.connect_segments),
+      routes.segments_path(routes.connect_segments),
       [
         uri_field(language, uri),
         signing_account_select(language, accounts, signer),
@@ -3434,7 +3434,7 @@ fn revoke_form(
   [
     view.paragraph(text(i18n.RevokeSessionDescription)),
     view.post_form(
-      view.segments_path(routes.revoke_segments),
+      routes.segments_path(routes.revoke_segments),
       [
         view.hidden_input(signer_field, session.signer),
         view.hidden_input(client_field, session.client),
@@ -3450,7 +3450,7 @@ fn revoke_form(
 /// 続けばまた無効になる。取り返しの付く操作なので地味なボタンにする。
 fn reenable_form(language: Language, name: String) -> Element(msg) {
   view.post_form(
-    view.segments_path(routes.reenable_plugin_segments),
+    routes.segments_path(routes.reenable_plugin_segments),
     [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
     view.GhostButton,
@@ -3462,7 +3462,7 @@ fn reenable_form(language: Language, name: String) -> Element(msg) {
 /// セッションと承認待ちも置き換えるが、DB の内容は変えずやり直せるので地味なボタンにする。
 fn reload_form(language: Language) -> Element(msg) {
   view.post_form(
-    view.segments_path(routes.reload_accounts_segments),
+    routes.segments_path(routes.reload_accounts_segments),
     [],
     i18n.text(language, i18n.ReloadAccounts),
     view.GhostButton,

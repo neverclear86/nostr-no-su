@@ -470,6 +470,13 @@ pub fn plugin_page_allows_remote_images_test() {
     == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 }
 
+/// プラグインのページへの POST の CSP は、ダッシュボードと同じく `img-src` に `http:` を足さない。
+pub fn plugin_page_post_keeps_the_default_image_sources_test() {
+  let response = post(context(), "/plugins/console_logger/status")
+  assert header(response, "content-security-policy")
+    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+}
+
 /// 供給の無いプラグイン名、そのプラグインに無いページのキーはどちらも 404 で、
 /// 名前を本文に含めない。
 pub fn plugin_page_for_an_unknown_plugin_or_page_is_not_found_test() {

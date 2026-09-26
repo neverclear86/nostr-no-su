@@ -1,4 +1,4 @@
-//// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
+//// 管理 UI のページ枠と、`admin/i18n`、`admin/routes`、`admin/wordmark`（生成した字形のパス）以外の本体の
 //// モジュールに依存しない HTML の部品。部品は `Element` を返し、HTML 文書の文字列にするのは
 //// `page` だけである。全体の形は docs/design-decisions.md の
 //// 「管理 UI はサーバー側で描画する」、CSS は同じ文書の「管理 UI の CSS はビルドして
@@ -7,9 +7,8 @@
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。`html.style`、`html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は
 //// 使わず、JS の処理は `priv/static/admin.js` に置いて要素には `data-action` で処理の名前を
-//// 付ける。`href`、`action`、`src` には、`admin/routes` のパスの関数が `/` から組み立てた
-//// 値か、`"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
-//// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
+//// 付ける。`href`、`action`、`src` には、`admin/routes` のパスの関数かパスセグメントの定数から
+//// `/` で組み立てた値か、`"/"` か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
 //// 付けた値だけを渡す（lustre は URL を検査しない）。例外は `<img>` の `src` で、scheme を
 //// 検査した遠隔の画像の URL（アカウントのアイコンは `https`、プラグインの `image` は
 //// `http` / `https`）を渡す。
@@ -42,30 +41,11 @@ import lustre/element.{type Element}
 import lustre/element/html
 import lustre/element/svg
 import nostr_no_su/admin/i18n.{type Language}
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/wordmark
-
-/// ビルドした管理 UI のスタイルシートの URL のパスセグメント。ルーティング（`admin`）と
-/// ページ枠の `link` が同じ定義を見る。配信する `wisp.serve_static` はこの定数ではなく要求の
-/// パスから `priv` の下のファイルを引くので、このセグメントは `priv` の中の配置
-/// （`priv/static/admin.css`）、`package.json` の `build:css` の出力先、`stylesheet_test` が
-/// 読むパスと一致させる。
-pub const stylesheet_segments = ["static", "admin.css"]
-
-/// 管理 UI のスクリプトの URL のパスセグメント。ルーティング（`admin`）とページ枠の `script` が
-/// 同じ定義を見る。`stylesheet_segments` と同じく要求のパスから `priv` の下のファイルを引くので、
-/// `priv` の中の配置（`priv/static/admin.js`）と一致させる。
-pub const script_segments = ["static", "admin.js"]
-
-/// 言語の切り替えの POST 先のパスセグメント。ルーティング（`admin`）とナビゲーション
-/// バーのフォームが同じ定義を見る。
-pub const language_segments = ["language"]
 
 /// 言語の切り替えで、選んだ言語のコードを送る欄の名前。
 pub const language_field = "language"
-
-/// テーマの切り替えの POST 先のパスセグメント。ルーティング（`admin`）とナビゲーション
-/// バーのフォームが同じ定義を見る。
-pub const theme_segments = ["theme"]
 
 /// テーマの切り替えで、選んだテーマのコードを送る欄の名前。
 pub const theme_field = "theme"
@@ -329,13 +309,13 @@ pub fn page(
       favicon_link(),
       html.link([
         attribute.rel("stylesheet"),
-        attribute.href(segments_path(stylesheet_segments)),
+        attribute.href(routes.segments_path(routes.stylesheet_segments)),
       ]),
       element.element(
         "script",
         [
           attribute.type_("module"),
-          attribute.src(segments_path(script_segments)),
+          attribute.src(routes.segments_path(routes.script_segments)),
         ],
         [],
       ),
@@ -361,13 +341,6 @@ fn refresh_meta(refresh: Refresh) -> Element(msg) {
         attribute.content(int.to_string(seconds)),
       ])
   }
-}
-
-/// パスセグメントを `/` から連結したパス。ルーティング（`admin`）が照合するのと同じ
-/// セグメントの定義から、リンク、フォームの宛先、スタイルシートの `href` のパスを
-/// 組み立てる。
-pub fn segments_path(segments: List(String)) -> String {
-  "/" <> string.join(segments, "/")
 }
 
 /// `<html>` に出す属性。`System` はブラウザーの設定に従うので `data-theme` を出さない。
@@ -416,7 +389,7 @@ fn theme_switch(
 ) -> Element(msg) {
   switch_group(
     i18n.text(language, i18n.ThemeSwitchLabel),
-    theme_segments,
+    routes.theme_segments,
     return_to,
     list.map(themes, fn(theme) {
       let label = i18n.text(language, theme_label(theme))
@@ -456,7 +429,7 @@ fn theme_choice_icon(theme: Theme) -> Element(msg) {
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
   switch_group(
     i18n.text(current, i18n.LanguageSwitchLabel),
-    language_segments,
+    routes.language_segments,
     return_to,
     list.map(language_choices(), fn(choice) {
       let #(pressed, extra, content) = case choice {
@@ -494,7 +467,7 @@ fn switch_group(
   buttons: List(Element(msg)),
 ) -> Element(msg) {
   html.form(
-    [attribute.method("post"), attribute.action(segments_path(action))],
+    [attribute.method("post"), attribute.action(routes.segments_path(action))],
     [
       hidden_input(return_field, return_to),
       html.div(
