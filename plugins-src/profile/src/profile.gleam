@@ -71,22 +71,32 @@ pub fn plugin_children() -> Dynamic
 /// 管理 UI のページの記述。`config` の予約キー `Accounts`（`docs/plugin-api.md`
 /// 第 13.5 節）から登録アカウントの一覧を読み、`current_profiles` で公開鍵ごとの
 /// kind 0 を得て、直前の送信の結果（`profile_store:take/1`、取り出しと同時に
-/// 削除）と合わせて、`language`（表示の言語のコード）の文言で `page.content` に
-/// 組ませる。
+/// 削除）とアカウントごとの `page.AccountState` に組み、`language`（表示の言語の
+/// コード）の文言で `page.content` に描かせる。
 pub fn plugin_page_content(
   _key: Dynamic,
   config: Dynamic,
   language: String,
 ) -> Dynamic {
-  let settings =
-    decode.run(config, decode.dict(decode.string, decode.string))
-    |> result.unwrap(dict.new())
-  let accounts = accounts_from_config(settings)
-  let pubkeys = list.map(accounts, fn(account) { account.pubkey })
-  let fetched = current_profiles(pubkeys)
-  let submissions =
-    list.map(pubkeys, fn(pubkey) { page.submission(store_take(pubkey)) })
-  page.content(i18n.from_code(language), accounts, fetched, submissions)
+  let accounts = accounts_from_config(string_map(config))
+  let fetched =
+    current_profiles(list.map(accounts, fn(account) { account.pubkey }))
+  let states =
+    list.map(list.zip(accounts, fetched), fn(pair) {
+      page.AccountState(
+        account: pair.0,
+        fetched: pair.1,
+        submission: page.submission(store_take(pair.0.pubkey)),
+      )
+    })
+  page.content(i18n.from_code(language), states)
+}
+
+/// 設定 map とフォームの送信（binary キーと binary 値の map）を読む。読めなければ
+/// 空の辞書（`Accounts` の無い設定、項目の無い送信として扱われる）。
+fn string_map(value: Dynamic) -> dict.Dict(String, String) {
+  decode.run(value, decode.dict(decode.string, decode.string))
+  |> result.unwrap(dict.new())
 }
 
 /// `config` の予約キー `Accounts` から登録アカウントの一覧を読む。キーが無い・
@@ -115,20 +125,13 @@ pub fn plugin_page_action(
 /// 送信を `page.submitted/1` で検証し、送信元のアカウントが登録アカウントに
 /// あることを確かめてから `submit_profile/1` へ渡す。ここで拒否する 3 つの誤り
 /// （項目の無い送信、複数アカウントの混在、未登録の公開鍵）は管理 UI のフォーム
-/// からは起こらない送信なので `{error, Reason}` を返してよい（親 #448 の
-/// 「常に `ok` を返す」の例外）。
+/// からは起こらない送信なので、`submit_profile/1` と違って `{error, Reason}` を返す。
 fn handle_submit(values: Dynamic, config: Dynamic) -> Dynamic {
-  let values_dict =
-    decode.run(values, decode.dict(decode.string, decode.string))
-    |> result.unwrap(dict.new())
-  case page.submitted(values_dict) {
+  case page.submitted(string_map(values)) {
     Error(reason) -> error_tuple(reason)
     Ok(submitted) -> {
-      let settings =
-        decode.run(config, decode.dict(decode.string, decode.string))
-        |> result.unwrap(dict.new())
       let known =
-        accounts_from_config(settings)
+        accounts_from_config(string_map(config))
         |> list.any(fn(account) { account.pubkey == submitted.pubkey })
       case known {
         False -> error_tuple("unknown account")
@@ -149,11 +152,7 @@ fn submit_profile(submitted: page.Submitted) -> Dynamic {
     |> list.first
   {
     Error(Nil) ->
-      fail_submission(
-        submitted.pubkey,
-        fields,
-        "the plugin API returned an unexpected value",
-      )
+      fail_submission(submitted.pubkey, fields, page.unexpected_value_reason)
     Ok(raw) ->
       case page.fetched(raw) {
         page.Failed(reason:) ->
@@ -179,9 +178,7 @@ fn publish_submission(
 /// 保持し、`ok` を返す。成功なら送った `merged` と本体が付けた `created_at` を
 /// `Found` としてキャッシュに入れる（送信後のリダイレクトで開き直したページが
 /// リレーに問い合わせずに送った内容を出すため）。失敗ならキャッシュは変えず、
-/// `fields` をフォームへ戻す値として保持する。`profile_test` の
-/// `finish_submission_caches_the_published_profile_test` と
-/// `finish_submission_keeps_the_failure_reason_test` が参照するため公開する。
+/// `fields` をフォームへ戻す値として保持する。
 pub fn finish_submission(
   pubkey: String,
   merged: String,
@@ -202,11 +199,7 @@ pub fn finish_submission(
     Ok(#(_status, reason, _created_at)) ->
       fail_submission(pubkey, fields, reason)
     Error(_errors) ->
-      fail_submission(
-        pubkey,
-        fields,
-        "the plugin API returned an unexpected value",
-      )
+      fail_submission(pubkey, fields, page.unexpected_value_reason)
   }
 }
 
@@ -263,16 +256,16 @@ const cache_ttl_ms = 60_000
 /// 取れた `Found` と `NotFound` は `cache_ttl_ms` の間キャッシュし、`Failed` は
 /// キャッシュしない（次の描画で取り直すため）。
 fn current_profiles(pubkeys: List(String)) -> List(page.Fetched) {
-  let cached = cache_get(pubkeys)
+  let cached = list.zip(pubkeys, cache_get(pubkeys))
   let misses =
-    list.filter_map(list.zip(pubkeys, cached), fn(pair) {
+    list.filter_map(cached, fn(pair) {
       case pair.1 {
         Some(_) -> Error(Nil)
         None -> Ok(pair.0)
       }
     })
-  let fresh = fetch_profiles(misses) |> list.map(page.fetched)
-  list.each(list.zip(misses, fresh), fn(pair) {
+  let fresh = list.zip(misses, fetch_profiles(misses) |> list.map(page.fetched))
+  list.each(fresh, fn(pair) {
     case pair.1 {
       page.Failed(_) -> Nil
       fetched -> {
@@ -281,28 +274,15 @@ fn current_profiles(pubkeys: List(String)) -> List(page.Fetched) {
       }
     }
   })
-  fill_misses(cached, fresh)
-}
-
-/// `cached` の `None` の位置に、`fresh` を先頭から順に当てはめる。`fresh` は
-/// `cached` の `None` の公開鍵を同じ順に取った結果である。`fresh` が足りない
-/// 位置は `Failed` にする。
-fn fill_misses(
-  cached: List(Option(page.Fetched)),
-  fresh: List(page.Fetched),
-) -> List(page.Fetched) {
-  let #(_remaining, filled) =
-    list.map_fold(cached, fresh, fn(remaining, entry) {
-      case entry, remaining {
-        Some(fetched), _ -> #(remaining, fetched)
-        None, [first, ..rest] -> #(rest, first)
-        None, [] -> #(
-          [],
-          page.Failed("the plugin API returned an unexpected value"),
-        )
-      }
-    })
-  filled
+  let fresh_by_pubkey = dict.from_list(fresh)
+  list.map(cached, fn(pair) {
+    case pair.1 {
+      Some(fetched) -> fetched
+      None ->
+        dict.get(fresh_by_pubkey, pair.0)
+        |> result.unwrap(page.Failed(page.unexpected_value_reason))
+    }
+  })
 }
 
 /// 公開鍵ごとに最新の kind 0 を、本体の `fetch_events` の 1 回の呼び出しで

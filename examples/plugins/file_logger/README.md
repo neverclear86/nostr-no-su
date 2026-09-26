@@ -61,3 +61,5 @@ docker compose exec nostr-no-su cat /tmp/nostr-no-su-events.log
 ```
 
 1 行は `<id> <kind> <content>` の形になる。
+
+書き込みに失敗すると（出力先のディレクトリーが無い、書く権限が無いなど）、`handle_event/2` は例外で終わり、本体はそのイベントを失敗として数える。連続 5 回失敗すると、このプラグインは無効になる（[プラグイン API v1](../../../docs/plugin-api.md) の第 4 章）。

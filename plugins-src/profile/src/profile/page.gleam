@@ -1,8 +1,10 @@
 //// 管理 UI のページの記述を組み立てる純粋なモジュール。プロセスにもネットワーク
-//// にも触れず、呼び出し元（`profile.gleam`）が読んだ登録アカウント・取得の結果・
-//// 直前の送信の結果を引数で受け取って記述の `Dynamic` を組み立て、送信された欄の
-//// 値の解釈（`submitted/1`）と保持した結果の読み取り（`submission/1`）も担う。
-//// 文言は引数の表示の言語（`profile/i18n` の `Language`）で `i18n.text` から引く。
+//// にも触れず、呼び出し元（`profile.gleam`）が登録アカウントごとに組んだ
+//// `AccountState`（アカウント・取得の結果・直前の送信の結果）を引数で受け取って
+//// 記述の `Dynamic` を組み立て、送信された欄の値の解釈（`submitted/1`）と保持した
+//// 結果の読み取り（`submission/1`）も担う。kind 0 の 8 項目の並びは
+//// `profile_fields` の 1 か所に置く。文言は引数の表示の言語（`profile/i18n` の
+//// `Language`）で `i18n.text` から引く。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
 //// binary キーの map である。値は `gleam/dynamic` の `properties` / `list` /
@@ -52,13 +54,17 @@ pub type Fetched {
   Failed(reason: String)
 }
 
+/// プラグイン API の戻り値が約束の形でないときの理由（英語の 1 文）。`fetched/1` と
+/// `profile.gleam` の送信・取得が使う。
+pub const unexpected_value_reason = "the plugin API returned an unexpected value"
+
 /// `profile_ffi:fetch_profiles/1` が返す map（`status`・`content`・`created_at`・
 /// `reason` を持つ binary キーの map）を読む。`status` が `found` / `not_found` /
 /// `error` のいずれでもない、または map として読めなければ `Failed` にする。
 pub fn fetched(raw: Dynamic) -> Fetched {
   case decode.run(raw, fetched_decoder()) {
     Ok(fetched) -> fetched
-    Error(_errors) -> Failed("the plugin API returned an unexpected value")
+    Error(_errors) -> Failed(unexpected_value_reason)
   }
 }
 
@@ -103,49 +109,24 @@ pub fn profile_of_json(content: String) -> Result(Profile, Nil) {
   |> result.replace_error(Nil)
 }
 
-/// `profile_of_json/1` のデコーダー。項目ごとに、値が文字列でなければ空文字列に
-/// 倒す（`decode.optional_field` だけでは型が合わないときに decoder 全体が失敗し、
-/// 他の項目まで空になってしまうため）。
+/// `profile_of_json/1` のデコーダー。JSON のオブジェクトを `Dict(String, Dynamic)`
+/// として読み（オブジェクトでなければ失敗）、項目ごとに値が文字列でなければ空文字列に
+/// する（1 項目の型の誤りで他の項目まで空にしないため）。
 fn profile_decoder() -> decode.Decoder(Profile) {
-  use name <- decode.optional_field("name", "", string_or_empty())
-  use display_name <- decode.optional_field(
-    "display_name",
-    "",
-    string_or_empty(),
+  use object <- decode.then(decode.dict(decode.string, decode.dynamic))
+  decode.success(
+    profile_from(fn(key) {
+      dict.get(object, key)
+      |> result.try(fn(value) {
+        decode.run(value, decode.string) |> result.replace_error(Nil)
+      })
+      |> result.unwrap("")
+    }),
   )
-  use about <- decode.optional_field("about", "", string_or_empty())
-  use picture <- decode.optional_field("picture", "", string_or_empty())
-  use banner <- decode.optional_field("banner", "", string_or_empty())
-  use nip05 <- decode.optional_field("nip05", "", string_or_empty())
-  use website <- decode.optional_field("website", "", string_or_empty())
-  use lud16 <- decode.optional_field("lud16", "", string_or_empty())
-  decode.success(Profile(
-    name:,
-    display_name:,
-    about:,
-    picture:,
-    banner:,
-    nip05:,
-    website:,
-    lud16:,
-  ))
 }
-
-/// 文字列として読めれば通し、読めなければ空文字列にするデコーダー。
-fn string_or_empty() -> decode.Decoder(String) {
-  decode.one_of(decode.string, [decode.success("")])
-}
-
-/// kind 0 の 8 項目の項目名（`form` の欄の `name` の後半、`submitted/1` が読む
-/// キー）。この並びが `submitted_fields/1` と `profile_form_block/3` の欄の順に
-/// なる。
-const profile_field_names = [
-  "name", "display_name", "about", "picture", "banner", "nip05", "website",
-  "lud16",
-]
 
 /// `plugin_page_action` に届いたフォームの送信から取り出した 1 件。`pubkey` は
-/// 欄の `name` の前半（決めたこと 5 で検証済み）。
+/// 欄の `name` の前半で、`submitted/1` が 1 つに定まることを確かめてある。
 pub type Submitted {
   Submitted(pubkey: String, profile: Profile)
 }
@@ -176,7 +157,7 @@ fn parse_submitted_field(
   let #(name, value) = entry
   case string.split_once(name, "-") {
     Ok(#(pubkey, field)) ->
-      case list.contains(profile_field_names, field) {
+      case list.any(profile_fields, fn(known) { field_key(known) == field }) {
         True -> Ok(#(pubkey, field, value))
         False -> Error(Nil)
       }
@@ -187,44 +168,27 @@ fn parse_submitted_field(
 /// `parse_submitted_field/1` が返した組から `Profile` を組み立てる。届かなかった
 /// 項目は空文字列。
 fn profile_of_fields(fields: List(#(String, String, String))) -> Profile {
-  let value_of = fn(field) {
+  profile_from(fn(key) {
     fields
-    |> list.find(fn(entry) { entry.1 == field })
+    |> list.find(fn(entry) { entry.1 == key })
     |> result.map(fn(entry) { entry.2 })
     |> result.unwrap("")
-  }
-  Profile(
-    name: value_of("name"),
-    display_name: value_of("display_name"),
-    about: value_of("about"),
-    picture: value_of("picture"),
-    banner: value_of("banner"),
-    nip05: value_of("nip05"),
-    website: value_of("website"),
-    lud16: value_of("lud16"),
-  )
+  })
 }
 
-/// `submitted/1` が返した `Submitted` の 8 項目を、項目名と値の対で返す
-/// （`merged_content/2` の `fields` と `profile_store` へ保持する `values` に使う）。
+/// `submitted/1` が返した `Submitted` の 8 項目を、`profile_fields` の順に項目名と
+/// 値の対で返す（`merged_content/2` の `fields` と `profile_store` へ保持する
+/// `values` に使う）。
 pub fn submitted_fields(submitted: Submitted) -> List(#(String, String)) {
   let Submitted(profile:, ..) = submitted
-  [
-    #("name", profile.name),
-    #("display_name", profile.display_name),
-    #("about", profile.about),
-    #("picture", profile.picture),
-    #("banner", profile.banner),
-    #("nip05", profile.nip05),
-    #("website", profile.website),
-    #("lud16", profile.lud16),
-  ]
+  list.map(profile_fields, fn(field) {
+    #(field_key(field), field_value(profile, field))
+  })
 }
 
 /// kind 0 の `content`（JSON 文字列）に `fields` の項目を差し替えた JSON 文字列を
 /// 返す。未知のキーはそのまま残す。空の値の項目はキーごと消す。
-/// `profile_ffi:merge_content/2` の `@external`。純粋なのでこのモジュールに置き、
-/// テストから直接呼べるようにする。
+/// `profile_ffi:merge_content/2` の `@external`。純粋なのでこのモジュールに置く。
 @external(erlang, "profile_ffi", "merge_content")
 pub fn merged_content(
   content: String,
@@ -267,26 +231,14 @@ fn submission_decoder() -> decode.Decoder(Submission) {
   }
 }
 
-/// `profile_store` に保持した `values`（8 項目の binary キーの map）のデコーダー。
+/// `profile_store` に保持した `values`（項目名から値への binary キーの map）の
+/// デコーダー。欠けた項目は空文字列にする（置く側の `profile.gleam` は常に 8 項目を
+/// 書く）。値が文字列でない map は失敗する。
 fn submitted_values_decoder() -> decode.Decoder(Profile) {
-  use name <- decode.field("name", decode.string)
-  use display_name <- decode.field("display_name", decode.string)
-  use about <- decode.field("about", decode.string)
-  use picture <- decode.field("picture", decode.string)
-  use banner <- decode.field("banner", decode.string)
-  use nip05 <- decode.field("nip05", decode.string)
-  use website <- decode.field("website", decode.string)
-  use lud16 <- decode.field("lud16", decode.string)
-  decode.success(Profile(
-    name:,
-    display_name:,
-    about:,
-    picture:,
-    banner:,
-    nip05:,
-    website:,
-    lud16:,
-  ))
+  use values <- decode.then(decode.dict(decode.string, decode.string))
+  decode.success(
+    profile_from(fn(key) { dict.get(values, key) |> result.unwrap("") }),
+  )
 }
 
 /// `plugin_pages/2` が返すページの一覧。プロフィールのページ 1 件だけを持ち、
@@ -303,34 +255,22 @@ pub fn pages(language: Language) -> Dynamic {
   ])
 }
 
-/// ページの記述を `language` の文言で組む。`accounts` が空なら `alert`
-/// （`info`）1 つだけの節を返す。それ以外はアカウント・取得の結果・直前の送信の
-/// 結果を組にし、1 件につき `account_section/4` を返す（`accounts`・`fetched`・
-/// `submissions` は同じ順序・同じ件数である前提。呼び出し元（`profile.gleam`）が
-/// 同じ公開鍵の並びで作る）。
-pub fn content(
-  language: Language,
-  accounts: List(Account),
-  fetched: List(Fetched),
-  submissions: List(Option(Submission)),
-) -> Dynamic {
-  case accounts {
-    [] -> page_sections([no_accounts_section(language)])
-    _ ->
-      page_sections(
-        list.map(zip3(accounts, fetched, submissions), fn(row) {
-          account_section(language, row.0, row.1, row.2)
-        }),
-      )
-  }
+/// ページに出すアカウント 1 件の状態。`profile.gleam` が登録アカウントごとに組む。
+pub type AccountState {
+  AccountState(
+    account: Account,
+    fetched: Fetched,
+    submission: Option(Submission),
+  )
 }
 
-/// 3 つのリストを同じ添字で組にする。`accounts`・`fetched`・`submissions` を
-/// まとめて `content/4` から渡すためだけに使う。
-fn zip3(a: List(a), b: List(b), c: List(c)) -> List(#(a, b, c)) {
-  list.zip(a, b)
-  |> list.zip(c)
-  |> list.map(fn(pair) { #(pair.0.0, pair.0.1, pair.1) })
+/// ページの記述を `language` の文言で組む。`states` が空なら `alert`（`info`）
+/// 1 つだけの節を返し、それ以外は 1 件につき `account_section/2` の節を返す。
+pub fn content(language: Language, states: List(AccountState)) -> Dynamic {
+  case states {
+    [] -> page_sections([no_accounts_section(language)])
+    _ -> page_sections(list.map(states, account_section(language, _)))
+  }
 }
 
 /// 登録アカウントが 0 件のときの節。
@@ -342,31 +282,14 @@ fn no_accounts_section(language: Language) -> Dynamic {
 
 /// アカウント 1 件の節。`title` はアカウントの `label`。ブロックは取得の結果と
 /// 直前の送信の結果に応じて `account_blocks/4` が組む。
-fn account_section(
-  language: Language,
-  account: Account,
-  fetched: Fetched,
-  submission: Option(Submission),
-) -> Dynamic {
-  section(account.label, account_blocks(language, account, fetched, submission))
+fn account_section(language: Language, state: AccountState) -> Dynamic {
+  section(
+    state.account.label,
+    account_blocks(language, state.account, state.fetched, state.submission),
+  )
 }
 
-/// アカウント 1 件のブロックの並び。
-///
-/// 1. `submission` が `Some` なら、`Succeeded` は `i18n.ProfileUpdated`、
-///    `SubmitFailed` は `i18n.UpdateFailed` の文言を `alert`（成功は `success`、
-///    失敗は `failure`）で先頭に出す。
-/// 2. `Failed` は理由の `alert`（`failure`）と `npub` の `pairs` だけで終わり、
-///    `form` は出さない（現在のプロフィールが分からないまま編集させないため）。
-/// 3. `NotFound` は `warning` の `alert` に続けて `npub` だけの `pairs`、そして
-///    `form` を出す（更新の時刻が無いので `updated` の項は出さない）。
-/// 4. `content` が JSON のオブジェクトとして読めないときは、既存の `alert`
-///    （`failure`）に続けて `npub`・`updated` の `pairs` と `form` を出す。
-/// 5. それ以外（`Found` で読めた）は `npub`・`updated` の `pairs`、画像
-///    （`picture` / `banner` が空でなければ）、`form` の順。
-///
-/// `form` の初期値は、直前の送信が `SubmitFailed` ならその `values`、それ以外は
-/// 取得した `Profile`（`NotFound` と読めない `content` は `empty_profile`）。
+/// アカウント 1 件のブロック。`submission_alert/2` の後に `fetched_blocks/4` を続ける。
 fn account_blocks(
   language: Language,
   account: Account,
@@ -395,8 +318,9 @@ fn submission_alert(
   }
 }
 
-/// `submission_alert/2` に続くブロック（取得の結果ごとの並び。`account_blocks/4`
-/// の Doc を参照）。
+/// `submission_alert/2` に続く、取得の結果ごとのブロック。`Failed` は理由の `alert`
+/// と `npub` の `pairs` だけで `form` を出さない。`NotFound` と読めない `content` は
+/// `alert` と `pairs` の後に空の `form`、読めた `Found` は `pairs`・画像・`form` の順。
 fn fetched_blocks(
   language: Language,
   account: Account,
@@ -408,34 +332,33 @@ fn fetched_blocks(
       alert_block(i18n.text(language, i18n.FetchFailed(reason)), "failure"),
       pairs_block([npub_item(account)]),
     ]
-    NotFound ->
-      [
-        alert_block(i18n.text(language, i18n.NoProfileEvent), "warning"),
-        pairs_block([npub_item(account)]),
-      ]
-      |> list.append([
-        profile_form_block(
-          language,
-          account.pubkey,
-          initial_profile(submission, empty_profile),
-        ),
-      ])
+    NotFound -> [
+      alert_block(i18n.text(language, i18n.NoProfileEvent), "warning"),
+      pairs_block([npub_item(account)]),
+      profile_form_block(
+        language,
+        account.pubkey,
+        initial_profile(submission, empty_profile()),
+      ),
+    ]
     Found(content:, created_at:) ->
       case profile_of_json(content) {
         Ok(profile) ->
-          [
-            pairs_block([
-              npub_item(account),
-              updated_item(language, created_at),
-            ]),
-          ]
-          |> list.append(image_blocks(language, account, profile))
-          |> list.append([
-            profile_form_block(
-              language,
-              account.pubkey,
-              initial_profile(submission, profile),
-            ),
+          list.flatten([
+            [
+              pairs_block([
+                npub_item(account),
+                updated_item(language, created_at),
+              ]),
+            ],
+            image_blocks(language, account, profile),
+            [
+              profile_form_block(
+                language,
+                account.pubkey,
+                initial_profile(submission, profile),
+              ),
+            ],
           ])
         Error(Nil) -> [
           alert_block(i18n.text(language, i18n.ContentNotObject), "failure"),
@@ -443,7 +366,7 @@ fn fetched_blocks(
           profile_form_block(
             language,
             account.pubkey,
-            initial_profile(submission, empty_profile),
+            initial_profile(submission, empty_profile()),
           ),
         ]
       }
@@ -464,16 +387,9 @@ fn initial_profile(
 
 /// 8 項目すべてが空文字列の `Profile`。`NotFound` と `content` が読めないときの
 /// `form` の初期値に使う。
-const empty_profile = Profile(
-  name: "",
-  display_name: "",
-  about: "",
-  picture: "",
-  banner: "",
-  nip05: "",
-  website: "",
-  lud16: "",
-)
+fn empty_profile() -> Profile {
+  profile_from(fn(_) { "" })
+}
 
 /// `pairs` の `npub` の項。
 fn npub_item(account: Account) -> #(String, Dynamic) {
@@ -527,42 +443,75 @@ fn image_with_note(
   }
 }
 
-/// プロフィールを編集する `form` ブロック。欄は `name` / `display_name` / `about`
-/// （`textarea`）/ `picture` / `banner` / `nip05` / `website` / `lud16` の順で、
-/// ラベルは `language` の `i18n.FieldLabel` の文言、補足（`hint`）は kind 0 の
-/// キー名（識別子なので訳さない）。送信ボタンは `language` の `i18n.SaveButton`
-/// の文言。欄の `name` は `field_name/2` で組み立てる。
+/// プロフィールを編集する `form` ブロック。欄は `profile_fields` の順で、`about` だけが
+/// `textarea`、他は `text`。ラベルは `language` の `i18n.FieldLabel` の文言、補足
+/// （`hint`）は kind 0 のキー名（識別子なので訳さない）。送信ボタンは `language` の
+/// `i18n.SaveButton` の文言。欄の `name` は `field_name/2` で組み立てる。
 fn profile_form_block(
   language: Language,
   pubkey: String,
   profile: Profile,
 ) -> Dynamic {
-  let field = fn(kind, which, value) {
-    let key = field_key(which)
-    form_field(
-      kind,
-      field_name(pubkey, key),
-      i18n.text(language, i18n.FieldLabel(which)),
-      key,
-      value,
-    )
-  }
   form_block(
-    [
-      field("text", i18n.Name, profile.name),
-      field("text", i18n.DisplayName, profile.display_name),
-      field("textarea", i18n.About, profile.about),
-      field("text", i18n.Picture, profile.picture),
-      field("text", i18n.Banner, profile.banner),
-      field("text", i18n.Nip05, profile.nip05),
-      field("text", i18n.Website, profile.website),
-      field("text", i18n.Lud16, profile.lud16),
-    ],
+    list.map(profile_fields, fn(field) {
+      let key = field_key(field)
+      form_field(
+        case field {
+          i18n.About -> "textarea"
+          _ -> "text"
+        },
+        field_name(pubkey, key),
+        i18n.text(language, i18n.FieldLabel(field)),
+        key,
+        field_value(profile, field),
+      )
+    }),
     i18n.text(language, i18n.SaveButton),
   )
 }
 
-/// 欄の kind 0 のキー名（`profile_field_names` の要素）。
+/// kind 0 の 8 項目の並び。`form` の欄の順、`submitted_fields/1` の順、送信を読む
+/// ときに受け付ける項目名（`field_key/1`）はこの並びから作る。
+const profile_fields = [
+  i18n.Name,
+  i18n.DisplayName,
+  i18n.About,
+  i18n.Picture,
+  i18n.Banner,
+  i18n.Nip05,
+  i18n.Website,
+  i18n.Lud16,
+]
+
+/// `profile` の `field` の値。
+fn field_value(profile: Profile, field: i18n.Field) -> String {
+  case field {
+    i18n.Name -> profile.name
+    i18n.DisplayName -> profile.display_name
+    i18n.About -> profile.about
+    i18n.Picture -> profile.picture
+    i18n.Banner -> profile.banner
+    i18n.Nip05 -> profile.nip05
+    i18n.Website -> profile.website
+    i18n.Lud16 -> profile.lud16
+  }
+}
+
+/// kind 0 のキー名を受けて値を返す `get` で、8 項目の `Profile` を組み立てる。
+fn profile_from(get: fn(String) -> String) -> Profile {
+  Profile(
+    name: get(field_key(i18n.Name)),
+    display_name: get(field_key(i18n.DisplayName)),
+    about: get(field_key(i18n.About)),
+    picture: get(field_key(i18n.Picture)),
+    banner: get(field_key(i18n.Banner)),
+    nip05: get(field_key(i18n.Nip05)),
+    website: get(field_key(i18n.Website)),
+    lud16: get(field_key(i18n.Lud16)),
+  )
+}
+
+/// 欄の kind 0 のキー名（欄の `name` の後半と `hint`、送信と保持する map のキー）。
 fn field_key(field: i18n.Field) -> String {
   case field {
     i18n.Name -> "name"

@@ -4,6 +4,12 @@
 -export([fetch_profiles/1, profiles_from_reply/2, merge_content/2,
          publish_profile/2, ok_atom/0, error_tuple/1, format_timestamp/1]).
 
+%% プラグイン API の戻り値が約束の形でないときの理由。profile/page.gleam の
+%% unexpected_value_reason と同じ文。
+-define(UNEXPECTED_VALUE, <<"the plugin API returned an unexpected value">>).
+%% 本体がプラグイン API の口を持たないとき（undef）の理由。
+-define(NOT_INSTALLED, <<"the plugin API is not installed">>).
+
 %% 公開鍵の順に並んだ kind 0 の取得の結果のリスト。本体の fetch_events を 1 回だけ
 %% 呼ぶので、リレー 1 本につき接続 1 本と REQ 1 件で全員を取る
 %% （docs/plugin-api.md 第 14.10 節）。Pubkeys が空なら呼ばない。本体がこの口を
@@ -14,7 +20,7 @@ fetch_profiles([]) ->
 fetch_profiles(Pubkeys) ->
     Reply =
         try nostr_no_su@plugin_api:fetch_events(Pubkeys, 0)
-        catch error:undef -> {error, <<"the plugin API is not installed">>}
+        catch error:undef -> {error, ?NOT_INSTALLED}
         end,
     profiles_from_reply(Pubkeys, Reply).
 
@@ -22,20 +28,18 @@ fetch_profiles(Pubkeys) ->
 %% created_at / reason。すべて binary キー）のリストにする。{ok, Results} は
 %% 要素ごとに profile_result/1 で変換する。{error, Reason} は全員を同じ理由の
 %% 失敗にする。それ以外（Results の件数が Pubkeys と違うものを含む）は全員を
-%% the plugin API returned an unexpected value の失敗にする。
+%% ?UNEXPECTED_VALUE の失敗にする。
 profiles_from_reply(Pubkeys, {ok, Results})
     when is_list(Results), length(Results) =:= length(Pubkeys) ->
     [profile_result(Result) || Result <- Results];
 profiles_from_reply(Pubkeys, {error, Reason}) when is_binary(Reason) ->
     [error_result(Reason) || _ <- Pubkeys];
 profiles_from_reply(Pubkeys, _Reply) ->
-    [error_result(<<"the plugin API returned an unexpected value">>)
-     || _ <- Pubkeys].
+    [error_result(?UNEXPECTED_VALUE) || _ <- Pubkeys].
 
 %% fetch_events の要素 1 件（fetch_event の戻り値と同じ形）を結果の map にする。
 %% {ok, none} は not_found、content と created_at を持つ {ok, EventMap} は
-%% found、{error, Reason} は error、それ以外は the plugin API returned an
-%% unexpected value の error。
+%% found、{error, Reason} は error、それ以外は ?UNEXPECTED_VALUE の error。
 profile_result({ok, none}) ->
     #{<<"status">> => <<"not_found">>, <<"content">> => <<>>,
       <<"created_at">> => 0, <<"reason">> => <<>>};
@@ -45,7 +49,7 @@ profile_result({ok, #{<<"content">> := Content, <<"created_at">> := CreatedAt}})
 profile_result({error, Reason}) ->
     error_result(Reason);
 profile_result(_Result) ->
-    error_result(<<"the plugin API returned an unexpected value">>).
+    error_result(?UNEXPECTED_VALUE).
 
 %% 失敗の map。
 error_result(Reason) ->
@@ -92,7 +96,7 @@ publish_profile(Pubkey, Content) ->
     catch
         error:undef ->
             #{<<"status">> => <<"error">>,
-              <<"reason">> => <<"the plugin API is not installed">>,
+              <<"reason">> => ?NOT_INSTALLED,
               <<"created_at">> => 0}
     end.
 

@@ -67,7 +67,7 @@ cache_get(Pubkeys) ->
 
 %% 子仕様。event_logger_ffi:child_specs/2 と同じ形。
 child_specs() ->
-    [#{id => <<"result_store">>,
+    [#{id => <<"profile_store">>,
        start => {profile_store, start_link, []},
        restart => permanent,
        shutdown => 5000,

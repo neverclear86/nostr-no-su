@@ -507,7 +507,7 @@ fn event_logger_settings_description(
 }
 
 /// `profile` の `profile` ページの記述。実装の
-/// `plugins-src/profile/src/profile/page.gleam` が `account_section/4` で組む節の
+/// `plugins-src/profile/src/profile/page.gleam` が `account_section/2` で組む節の
 /// うち、kind 0 を取得できて画像の URL が空のとき（`npub` と更新の時刻の `pairs`、
 /// 8 項目の `form`）を写した固定値で、あちらを変えたらここも直す。節は渡された
 /// 登録アカウントごとに 1 つ組み、`display_name` の初期値はアカウントのラベルにする。
