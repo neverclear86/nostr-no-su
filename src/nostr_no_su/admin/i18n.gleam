@@ -396,7 +396,8 @@ pub type Message {
   PluginOverloaded
   PluginDisabled
   ReenablePlugin
-  PluginUnavailable
+  /// リレーの用途とプラグインの状態のチップに共通で使う。
+  NoResponse
   Dropped(count: Int)
   NoPlugins
   /// 節とブロックの空の状態に共通で使う。
@@ -724,7 +725,7 @@ fn english(message: Message) -> String {
     PluginOverloaded -> "overloaded"
     PluginDisabled -> "disabled"
     ReenablePlugin -> "Re-enable"
-    PluginUnavailable -> "unavailable"
+    NoResponse -> "unavailable"
     Dropped(count:) -> "(dropped " <> int.to_string(count) <> ")"
     NoPlugins ->
       "No plugins enabled. Plugins placed in the plugin directory are loaded when the server restarts."
@@ -1035,7 +1036,7 @@ fn japanese(message: Message) -> String {
     PluginOverloaded -> "過負荷"
     PluginDisabled -> "無効"
     ReenablePlugin -> "再有効化"
-    PluginUnavailable -> "応答なし"
+    NoResponse -> "応答なし"
     Dropped(count:) -> "（破棄 " <> int.to_string(count) <> " 件）"
     NoPlugins -> "有効なプラグインはありません。プラグインのディレクトリーに置いたプラグインは、サーバーの再起動で読み込まれます。"
     PluginSectionEmpty -> "表示する内容はありません。"
