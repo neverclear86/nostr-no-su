@@ -2,16 +2,16 @@
 //// `monitor_resume`、プラグインごとの再開点はプラグイン名ごとに `plugin_resume`
 //// に置く。
 ////
-//// テーブルは本体の移行（`account_store.migrations`）で作るので、バンカーの
+//// テーブルは本体の移行（`db.migrations`）で作るので、バンカーの
 //// 読み込みが 1 回成功した後に使う（`docs/architecture.md` の「監視の購読」と
-//// 「アカウントの読み込み」の節）。クエリーは `account_store.execute` を通し、
+//// 「アカウントの読み込み」の節）。クエリーは `db.execute` を通し、
 //// 例外も値で返す。
 
 import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import nostr_no_su/bunker/account_store.{type StoreError, type Timeouts}
+import nostr_no_su/db.{type StoreError, type Timeouts}
 import pog
 
 /// 再開点を置くテーブル。
@@ -69,7 +69,7 @@ pub fn load(
   |> pog.parameter(pog.text(key))
   |> pog.timeout(timeouts.write_ms)
   |> pog.returning(decode.at([0], decode.int))
-  |> account_store.execute(db)
+  |> db.execute(db)
   |> result.map(fn(returned) {
     case returned.rows {
       [since] -> Some(since)
@@ -92,6 +92,6 @@ pub fn save(
   |> pog.parameter(pog.text(key))
   |> pog.parameter(pog.int(since))
   |> pog.timeout(timeouts.write_ms)
-  |> account_store.execute(db)
+  |> db.execute(db)
   |> result.replace(Nil)
 }

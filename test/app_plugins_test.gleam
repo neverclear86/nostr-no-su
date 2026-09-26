@@ -20,6 +20,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/connection_uri
+import nostr_no_su/db
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter
@@ -1773,7 +1774,7 @@ pub fn relay_rows_report_each_role_of_the_registered_relays_test() {
       db,
       "ws://unopened.test",
       relay_list.MonitorOnly,
-      account_store.default_timeouts,
+      db.default_timeouts,
     )
   let assert Ok(Nil) =
     app.open_relay(spec, "ws://unregistered.test", relay_list.MonitorOnly)
@@ -1931,11 +1932,7 @@ fn with_relay_store_tree(run: fn(app.Spec, pog.Connection) -> Nil) -> Nil {
 
   // 移行を実行する。
   let assert Ok(_loaded) =
-    account_store.load(
-      schema_pool,
-      random_master_key(),
-      account_store.default_timeouts,
-    )
+    account_store.load(schema_pool, random_master_key(), db.default_timeouts)
 
   let assert Ok(config) =
     pog.url_config(process.new_name("test_app_relay_pool"), database_url)
@@ -1962,7 +1959,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
   let assert Ok(Nil) =
     app.add_relay(spec, "ws://added.test", relay_list.MonitorOnly)
   assert role_url_pairs(spec) == [#(relay_list.Monitor, "ws://added.test")]
-  let assert Ok(rows) = relay_store.list(db, account_store.default_timeouts)
+  let assert Ok(rows) = relay_store.list(db, db.default_timeouts)
   assert list.map(rows, fn(row) { row.url }) == ["ws://added.test"]
 
   assert app.add_relay(spec, "ws://added.test", relay_list.MonitorOnly)
@@ -1972,8 +1969,7 @@ pub fn add_relay_saves_the_row_before_opening_test() {
     app.open_relay(spec, "ws://listed.test", relay_list.MonitorOnly)
   assert app.add_relay(spec, "ws://listed.test", relay_list.MonitorOnly)
     == Error(admin.ConnectionsNotConfirmed)
-  let assert Ok(rows_after) =
-    relay_store.list(db, account_store.default_timeouts)
+  let assert Ok(rows_after) = relay_store.list(db, db.default_timeouts)
   assert list.map(rows_after, fn(row) { row.url })
     == ["ws://added.test", "ws://listed.test"]
 }

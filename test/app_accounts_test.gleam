@@ -11,9 +11,9 @@ import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded}
+import nostr_no_su/db
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
@@ -1051,9 +1051,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
 
 /// ストアが登録済みを返す追加の失敗。
 fn already_stored() -> Result(Nil, bunker.WriteFailure) {
-  Error(
-    bunker.AlreadyStored(account_store.describe(account_store.AlreadyRegistered)),
-  )
+  Error(bunker.AlreadyStored(db.describe(db.AlreadyRegistered)))
 }
 
 /// DB にだけある行の公開鍵を追加すると、応答の前に読み直してメモリに入れ、登録済み

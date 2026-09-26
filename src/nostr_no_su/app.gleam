@@ -150,13 +150,13 @@ import nostr_no_su/avatars
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/config
+import nostr_no_su/db
 import nostr_no_su/dedup
 import nostr_no_su/hex
 import nostr_no_su/log
@@ -266,7 +266,7 @@ pub type Spec {
 /// ツリーに渡る秘密のうち、他のライブラリーのプロセスの状態や起動引数に生の
 /// 文字列として入りうるもの（pgo に渡す DB のパスワードと、mist と wisp に渡る
 /// 管理パスワード）。`log.redact_secrets` に渡してログから伏せる。空の値は
-/// 含めない。`lock_pool` は別に集めない。`account_store.lock_pool_config` が
+/// 含めない。`lock_pool` は別に集めない。`db.lock_pool_config` が
 /// `pool` から `pog.Config(..pool, ...)` で作るため、パスワードは `pool` と
 /// 同じ値である。
 pub fn redactable_secrets(spec: Spec) -> List(String) {
@@ -1004,8 +1004,8 @@ pub fn relay_statuses(
 pub fn registered_relays(
   spec: Spec,
 ) -> Result(List(relay_store.Relay), String) {
-  relay_store.list(store_connection(spec), account_store.default_timeouts)
-  |> result.map_error(account_store.describe)
+  relay_store.list(store_connection(spec), db.default_timeouts)
+  |> result.map_error(db.describe)
 }
 
 /// バンカーの接続プールへの名前つき接続。リレーの読み書きが共有する。
@@ -1021,12 +1021,7 @@ pub fn add_relay(
   roles: relay_list.Roles,
 ) -> Result(Nil, admin.RelayChangeFailure) {
   use _row <- result.try(
-    relay_store.insert(
-      store_connection(spec),
-      url,
-      roles,
-      account_store.default_timeouts,
-    )
+    relay_store.insert(store_connection(spec), url, roles, db.default_timeouts)
     |> result.map_error(store_failure),
   )
   open_relay(spec, url, roles)
@@ -1045,7 +1040,7 @@ pub fn update_relay_roles(
       store_connection(spec),
       relay.id,
       roles,
-      account_store.default_timeouts,
+      db.default_timeouts,
     )
     |> result.map_error(store_failure),
   )
@@ -1059,26 +1054,22 @@ pub fn delete_relay(
   relay: relay_store.Relay,
 ) -> Result(Nil, admin.RelayChangeFailure) {
   use _nil <- result.try(
-    relay_store.delete(
-      store_connection(spec),
-      relay.id,
-      account_store.default_timeouts,
-    )
+    relay_store.delete(store_connection(spec), relay.id, db.default_timeouts)
     |> result.map_error(store_failure),
   )
   close_relay(spec, relay.url)
   |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
-/// `account_store.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
-fn store_failure(error: account_store.StoreError) -> admin.RelayChangeFailure {
+/// `db.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
+fn store_failure(error: db.StoreError) -> admin.RelayChangeFailure {
   case error {
-    account_store.RelayAlreadyRegistered -> admin.DuplicateRelay
-    account_store.RelayNotRegistered -> admin.UnregisteredRelay
+    db.RelayAlreadyRegistered -> admin.DuplicateRelay
+    db.RelayNotRegistered -> admin.UnregisteredRelay
     _ ->
-      case account_store.may_have_been_written(error) {
+      case db.may_have_been_written(error) {
         True -> admin.RelayMaybeSaved
-        False -> admin.RelayNotSaved(account_store.describe(error))
+        False -> admin.RelayNotSaved(db.describe(error))
       }
   }
 }

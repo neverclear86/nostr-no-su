@@ -10,6 +10,7 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
+import nostr_no_su/db
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
@@ -199,9 +200,9 @@ fn resume_point_loader(
 ) -> fn(String) -> Result(Option(Int), String) {
   fn(key: String) {
     let db = pog.named_connection(pool)
-    store.load(db, table, key, account_store.default_timeouts)
+    store.load(db, table, key, db.default_timeouts)
     |> result.map_error(fn(error) {
-      let reason = account_store.describe(error)
+      let reason = db.describe(error)
       log.write(
         log.Warning,
         prefix(key),
@@ -220,8 +221,8 @@ fn resume_point_saver(
 ) -> fn(List(#(String, Int))) -> Result(Nil, String) {
   fn(points: List(#(String, Int))) {
     let db = pog.named_connection(pool)
-    store.save(db, table, points, account_store.default_timeouts)
-    |> result.map_error(account_store.describe)
+    store.save(db, table, points, db.default_timeouts)
+    |> result.map_error(db.describe)
   }
 }
 
@@ -277,7 +278,7 @@ fn bunker_spec(
         pool.pool_name,
         lock_pool.pool_name,
         master_key,
-        account_store.default_timeouts,
+        db.default_timeouts,
       ),
       auth_url: auth_url(loaded),
       retry_delay: bunker.default_retry_delay,
@@ -304,7 +305,7 @@ fn bunker_spec(
 /// 読み込みで飛ばされた行があることを意味し、バンカーはそれを読み直して確かめる。
 ///
 /// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
-/// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
+/// 渡せるようにするためである。本番は `db.default_timeouts` を渡す。
 ///
 /// 読み込みの前に `lock_pool` のセッションで advisory lock を取り直す。読み込みが
 /// `SchemaTooNew` か `HeldByAnotherInstance` を返したら、どちらも再試行しても変わら
@@ -319,27 +320,22 @@ pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
   master_key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
+  timeouts: db.Timeouts,
 ) -> bunker.Store {
   let db = pog.named_connection(pool)
   let lock_db = pog.named_connection(lock_pool)
   bunker.Store(
     load: fn() {
-      account_store.acquire_lock(
-        lock_db,
-        account_store.instance_lock_key,
-        timeouts,
-      )
+      db.acquire_lock(lock_db, db.instance_lock_key, timeouts)
       |> result.try(fn(_locked) { load_snapshot(pool, master_key, timeouts) })
       |> halt_if_cannot_continue
-      |> result.map_error(account_store.describe)
+      |> result.map_error(db.describe)
     },
     insert: fn(entry) {
       account_store.insert(db, master_key, entry, timeouts)
       |> result.map_error(fn(error) {
         case error {
-          account_store.AlreadyRegistered ->
-            bunker.AlreadyStored(account_store.describe(error))
+          db.AlreadyRegistered -> bunker.AlreadyStored(db.describe(error))
           _ -> write_failure(error)
         }
       })
@@ -371,9 +367,9 @@ fn write_session_state(
   pool: Name(pog.Message),
   db: pog.Connection,
   key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
+  timeouts: db.Timeouts,
   change: engine.Write,
-) -> Result(Nil, account_store.StoreError) {
+) -> Result(Nil, db.StoreError) {
   case change {
     engine.InsertSession(session:, evicted:) ->
       account_store.insert_session_evicting(
@@ -422,7 +418,7 @@ fn write_session_state(
   }
 }
 
-/// 1 つのトランザクション（`account_store.transaction`、期限 `load_ms`）で、
+/// 1 つのトランザクション（`db.transaction`、期限 `load_ms`）で、
 /// 移行を含む `load_within` の後に `relay_store.list` を読み（`relays` は移行で
 /// 作られるので順を変えない）、バンカーの読み込みの結果にする。MAC の合わない行
 /// （`Stored.rejected`）は使わず、トランザクションを抜けた後に 1 行ずつ warning
@@ -431,10 +427,10 @@ fn write_session_state(
 pub fn load_snapshot(
   pool: Name(pog.Message),
   key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
-) -> Result(bunker.Snapshot, account_store.StoreError) {
+  timeouts: db.Timeouts,
+) -> Result(bunker.Snapshot, db.StoreError) {
   use #(stored, relays) <- result.map(
-    account_store.transaction(pool, timeouts.load_ms, fn(db) {
+    db.transaction(pool, timeouts.load_ms, fn(db) {
       use stored <- result.try(account_store.load_within(db, key, timeouts))
       use relays <- result.map(relay_store.list(db, timeouts))
       #(stored, relays)
@@ -510,15 +506,15 @@ fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
 /// を 1 行出して終了コード 1 で VM を止める（`exit_with_failure`）。それ以外の
 /// 結果はそのまま返る。
 fn halt_if_cannot_continue(
-  loaded: Result(a, account_store.StoreError),
-) -> Result(a, account_store.StoreError) {
+  loaded: Result(a, db.StoreError),
+) -> Result(a, db.StoreError) {
   case loaded {
-    Error(account_store.SchemaTooNew(..) as error)
-    | Error(account_store.HeldByAnotherInstance(..) as error) -> {
+    Error(db.SchemaTooNew(..) as error)
+    | Error(db.HeldByAnotherInstance(..) as error) -> {
       log.write(
         log.Error,
         log_prefix,
-        "cannot continue: " <> account_store.describe(error),
+        "cannot continue: " <> db.describe(error),
       )
       exit_with_failure()
       loaded
@@ -529,9 +525,9 @@ fn halt_if_cannot_continue(
 
 /// 書き込みの失敗を、書き込まれていることがあるかどうかの区別つきでバンカーへ渡す形に
 /// 写す。
-fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
-  let reason = account_store.describe(error)
-  case account_store.may_have_been_written(error) {
+fn write_failure(error: db.StoreError) -> bunker.WriteFailure {
+  let reason = db.describe(error)
+  case db.may_have_been_written(error) {
     True -> bunker.MaybeWritten(reason)
     False -> bunker.NotWritten(reason)
   }
@@ -542,13 +538,10 @@ fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
 fn bunker_store(
   database_url: String,
 ) -> Result(#(pog.Config, pog.Config), String) {
-  account_store.pool_config(
-    process.new_name("nostr_no_su_account_pool"),
-    database_url,
-  )
+  db.pool_config(process.new_name("nostr_no_su_account_pool"), database_url)
   |> result.map(fn(pool) {
     let lock_pool =
-      account_store.lock_pool_config(
+      db.lock_pool_config(
         process.new_name("nostr_no_su_account_lock_pool"),
         pool,
       )
