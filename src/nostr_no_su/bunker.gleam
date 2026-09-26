@@ -30,7 +30,10 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/delivery.{type RelayScope, BaseRelay, SessionRelay}
 import nostr_no_su/bunker/engine
-import nostr_no_su/bunker/session.{type Pending, type Session}
+import nostr_no_su/bunker/session.{
+  type Pending, type Session, type SessionKey, SessionKey, pending_key,
+  session_key,
+}
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
@@ -621,7 +624,7 @@ fn relay_map(state: State) -> Dict(String, List(String)) {
   |> list.append(
     dict.to_list(state.reserved)
     |> list.map(fn(reservation) {
-      let #(#(signer, _client), relays) = reservation
+      let #(SessionKey(signer:, ..), relays) = reservation
       #(signer, relays)
     }),
   )
@@ -678,7 +681,7 @@ type State {
     skipped: List(vault.Skipped),
     /// 接続の前に取り置いた（署名者, クライアント）ごとの URI のリレー。セッションの
     /// リレーと合わせて `relay_map` を作る。
-    reserved: Dict(#(String, String), List(String)),
+    reserved: Dict(SessionKey, List(String)),
   )
 }
 
@@ -886,7 +889,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         state,
         reply,
         SessionOpening,
-        Some(#(signer, client)),
+        Some(SessionKey(signer:, client:)),
         fn(eng) {
           engine.open_client_session(
             eng,
@@ -914,13 +917,20 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         state,
         State(
           ..state,
-          reserved: dict.insert(state.reserved, #(signer, client), relays),
+          reserved: dict.insert(
+            state.reserved,
+            SessionKey(signer:, client:),
+            relays,
+          ),
         ),
       ))
     ReleaseSessionRelays(signer:, client:) ->
       actor.continue(transition(
         state,
-        State(..state, reserved: dict.delete(state.reserved, #(signer, client))),
+        State(
+          ..state,
+          reserved: dict.delete(state.reserved, SessionKey(signer:, client:)),
+        ),
       ))
     Revoke(signer:, client:, reply:) ->
       apply_session_change(
@@ -1446,10 +1456,10 @@ fn pending_target(
   eng: engine.Engine,
   token: String,
   now: Int,
-) -> Option(#(String, String)) {
+) -> Option(SessionKey) {
   engine.find_pending(eng, token, now)
   |> option.from_result
-  |> option.map(fn(entry) { #(entry.signer, entry.client) })
+  |> option.map(pending_key)
 }
 
 /// 承認済みのセッションにある組ならその組、無ければ `None`（フォームの値を
@@ -1458,10 +1468,10 @@ fn session_target(
   eng: engine.Engine,
   signer: String,
   client: String,
-) -> Option(#(String, String)) {
+) -> Option(SessionKey) {
   engine.find_session(eng, signer, client)
   |> option.from_result
-  |> option.map(fn(_found) { #(signer, client) })
+  |> option.map(fn(_found) { SessionKey(signer:, client:) })
 }
 
 /// 成功（`Ok`）か失敗（`Error` の理由）1 件のログ行。値は署名者とクライアントの公開鍵と
@@ -1510,11 +1520,11 @@ fn session_change_line(
 /// 呼び出し側はメモリの値か検証済みの値の組だけを `Some` にする。
 fn log_session_change(
   change: SessionChange,
-  target: Option(#(String, String)),
+  target: Option(SessionKey),
   outcome: Result(Nil, String),
 ) -> Nil {
   case target {
-    Some(#(signer, client)) -> {
+    Some(SessionKey(signer:, client:)) -> {
       let level = case outcome {
         Ok(_) -> log.Notice
         Error(_) -> log.Warning
@@ -1537,7 +1547,7 @@ fn log_session_change(
 fn write_session_change(
   state: State,
   change: SessionChange,
-  target: Option(#(String, String)),
+  target: Option(SessionKey),
   write: engine.Write,
 ) -> #(State, Result(Nil, WriteFailure)) {
   let written = state.settings.store.write(write)
@@ -1577,31 +1587,28 @@ fn session_write_failure(failure: WriteFailure) -> SessionFailure {
 /// 管理 UI からの操作の区分に写す。承認待ちの token は返さない。
 fn incoming_write_change(
   write: engine.Write,
-) -> #(SessionChange, Option(#(String, String))) {
+) -> #(SessionChange, Option(SessionKey)) {
   case write {
     engine.InsertSession(session:, ..) -> #(
       SessionOpening,
-      Some(#(session.signer, session.client)),
+      Some(session_key(session)),
     )
-    engine.TouchSession(session:) -> #(
-      SessionUse,
-      Some(#(session.signer, session.client)),
-    )
+    engine.TouchSession(session:) -> #(SessionUse, Some(session_key(session)))
     engine.UpdateSessionPerms(session:) -> #(
       PermissionsUpdate,
-      Some(#(session.signer, session.client)),
+      Some(session_key(session)),
     )
     engine.InsertPending(pending:, ..) -> #(
       PendingRecording,
-      Some(#(pending.signer, pending.client)),
+      Some(pending_key(pending)),
     )
     engine.DeleteSession(signer:, client:) -> #(
       SessionClosing,
-      Some(#(signer, client)),
+      Some(SessionKey(signer:, client:)),
     )
     engine.ApprovePending(session:, ..) -> #(
       Approval,
-      Some(#(session.signer, session.client)),
+      Some(session_key(session)),
     )
     engine.DeletePending(..) -> #(Denial, None)
   }
@@ -1635,7 +1642,7 @@ fn apply_session_change(
   state: State,
   reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
-  target: Option(#(String, String)),
+  target: Option(SessionKey),
   decide: fn(engine.Engine) ->
     Result(#(engine.Engine, Option(Event), engine.Write), String),
 ) -> actor.Next(State, Msg) {

@@ -701,7 +701,7 @@ nostr-no-su/
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
 │       ├── bunker/delivery.gleam 接続の範囲、応答の発行先の選び方、リレーごとのセッションの署名者、OK の追跡、rate-limited のリレーの停止、AUTH のイベントの署名（純粋）
 │       ├── bunker/permission.gleam NIP-46 の perms のトークンの型と解釈、許可と未対応の判定（純粋）
-│       ├── bunker/session.gleam  承認済みセッションと承認待ちの型（import を持たない葉）
+│       ├── bunker/session.gleam  承認済みセッションと承認待ちとその組の型（import を持たない葉）
 │       ├── bunker/connection_secret.gleam 接続 secret（定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）と、捨てた件数の報告の間引き

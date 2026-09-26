@@ -2294,7 +2294,12 @@ pub fn connect_at_the_capacity_evicts_the_least_recently_used_session_test() {
         last_used_at: 2000,
         relays: [],
       ),
-      evicted: [#(account.pubkey_hex(signer), "client-0")],
+      evicted: [
+        session.SessionKey(
+          signer: account.pubkey_hex(signer),
+          client: "client-0",
+        ),
+      ],
     )
   assert list.length(engine.sessions(next)) == engine.session_capacity
 }
@@ -2328,7 +2333,12 @@ pub fn approve_at_the_capacity_evicts_the_least_recently_used_session_test() {
         last_used_at: 2000,
         relays: [],
       ),
-      evicted: [#(account.pubkey_hex(signer), "client-0")],
+      evicted: [
+        session.SessionKey(
+          signer: account.pubkey_hex(signer),
+          client: "client-0",
+        ),
+      ],
     )
   assert list.length(engine.sessions(next)) == engine.session_capacity
 }
