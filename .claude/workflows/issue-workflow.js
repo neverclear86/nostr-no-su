@@ -145,7 +145,7 @@ const S = {
   merger: {
     type: 'object',
     properties: {
-      status: { type: 'string', enum: ['merged', 'conflict', 'not_ready'], description: 'merged: マージした / conflict: main と衝突していて rebase が要る / not_ready: 承認や CI の条件を満たさない' },
+      status: { type: 'string', enum: ['merged', 'conflict', 'not_ready'], description: 'merged: マージした / conflict: main と衝突している、または main とマージした結果がビルドできず、rebase が要る / not_ready: 承認や CI の条件を満たさない' },
       sha: { type: 'string', description: 'マージのコミット' }, issueClosed: { type: 'boolean' }, problem: { type: 'string' },
       closedParents: { type: 'array', items: { type: 'integer' }, description: '兄弟がすべて閉じたので閉じた親 issue の番号。無ければ空' },
       openParent: { type: 'integer', description: '兄弟がすべて閉じたのに gh issue close が拒否されて閉じられなかった親 issue の番号' },
@@ -233,6 +233,7 @@ function env(issue, idx) {
     wt: `${a.scratchpad}/wt-${issue.n}`,
     reviewWt: `${a.scratchpad}/wt-${issue.n}-review`,
     devinWs: `${a.scratchpad}/devin-${issue.n}`,
+    mergeWt: `${a.scratchpad}/wt-${issue.n}-merge`,
     pgPort: p, ports: `${p + 1}（アプリ）、${p + 2}（strfry）`, project: `nns-issue${issue.n}`,
     reviewPgPort: p + 5, reviewPorts: `${p + 6}（アプリ）、${p + 7}（strfry）`, reviewProject: `nns-review${issue.n}`,
     depPlans: [], depsMerged: false,
@@ -441,12 +442,15 @@ ${state.gateUrl ? `「## まとめ」は最初の最終確認の APPROVE（${sta
 ${state.conditionsUrl ? `- 条件への対応コメント: ${state.conditionsUrl}（マーカー kind=fix。その head のコミットは最初の最終確認が見ている）\n` : ''}- マージ担当の判断: ${problem}
 \`git fetch origin main ${e.branch}\` の後、\`git range-diff origin/main ${state.reviewApprovedHead} ${state.head}\` の \`!\` と \`>\` の行のうち、マージ担当の判断が挙げたコミットの差分だけを読み、その変更が受け入れ条件とレビューの経緯に照らして妥当かを判定し、「## 最終確認」を PR コメントに投稿してほしい（マーカーは kind=gate）。「## まとめ」はすでに投稿済みなので投稿しない。
 返答（構造化出力）: 判定、must と should と nit の件数、コメントの URL（lessons は返さない）。`,
-  // rebaseGateHead は最終確認の再確認が見た head。再確認の後にもう一度 rebase が入ることがあるので、head ではなくこの値を再確認の範囲の終点として渡す
+  // rebaseGateHead は最終確認の再確認が見た head。再確認の後にもう一度 rebase が入ることがあるので、head ではなくこの値を再確認の範囲の終点として渡す。
+  // mergeWt は main とマージした結果のビルドの検査に使う使い捨ての作業ツリー、devin の clone とファイルは実装の残骸（/tmp の inode を食うのでマージの前に消させる）
   merge: (e, pr, head, approvedHead, reviewApprovedHead, conditionsUrl, rebaseGateUrl, rebaseGateHead) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}、head ${head}）をマージしてほしい。
 - PR レビューが APPROVE を出した head: ${reviewApprovedHead}
 - 最終確認が APPROVE を出した head: ${approvedHead}${head !== approvedHead ? '（その後に rebase で head が変わった。差分が rebase だけであることを確かめてからマージする）' : ''}
 ${rebaseGateUrl ? `- rebase の差分は最終確認が再確認して APPROVE を出した（${rebaseGateUrl}。再確認が見た head: ${rebaseGateHead}）。${reviewApprovedHead} から ${rebaseGateHead} までの差分は再確認が見たものなので、rebase だけであることの確認と kind=fix との一致の照合は \`git range-diff origin/main ${rebaseGateHead} ${head}\` に置き換え、そこまでの \`!\` と \`>\` の行を not_ready の理由にしない\n` : ''}${conditionsUrl ? `- レビューの APPROVE の後に、条件への対応が入っている（最後の対応コメント: ${conditionsUrl}。マーカー kind=fix）\n` : '- レビューの APPROVE の後に条件への対応は無い\n'}
+- main とマージした結果のビルドの検査に使う作業ツリー: ${e.mergeWt}（build の後に消す）
 - 作業ツリー（マージの前に消す）: ${e.wt}、${e.reviewWt}、${e.planWt}
+- devin の clone とファイル（マージの前に消す。無ければ飛ばす）: ${e.devinWs}、${a.scratchpad}/devin-${e.n}.txt、${a.scratchpad}/devin-${e.n}.out、${a.scratchpad}/devin-${e.n}.exit、${a.scratchpad}/devin-${e.n}.patch
 - squash コミットの本文（トレーラー 2 行）:
   ${a.trailers.coAuthoredBy}
   ${a.trailers.claudeSession}
@@ -456,8 +460,9 @@ ${rebaseGateUrl ? `- rebase の差分は最終確認が再確認して APPROVE �
 \`gh pr list -R ${REPO} --head ${e.branch} --state open --json number,url,headRefOid\` で PR を引く。無ければ found を false にする。
 あれば \`gh pr checks <番号> -R ${REPO} --json bucket\` を見て、全部が pass か skipping なら ciPassed を true、それ以外（fail、pending、cancel）なら false にする。
 返答（構造化出力）: found、PR の番号と URL、head（headRefOid）、ciPassed。`,
-  rebase: (e, pr) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git push --force-with-lease\` してほしい。
-rebase 以外の変更を入れない。
+  // マージ担当が conflict を返すのは、main との衝突と、main とマージした結果のビルドの失敗の 2 つ（定義の「rebase を頼まれたら」）
+  rebase: (e, pr, problem) => `PR #${pr}（issue #${e.n}、ブランチ ${e.branch}）が main と衝突している、または main とマージした結果が \`gleam build --warnings-as-errors\` を通らない（マージ担当の判断: ${problem || '衝突'}）。作業ツリー ${e.wt}（無ければ \`git -C ${REPO_DIR} fetch origin ${e.branch} && git -C ${REPO_DIR} worktree add ${e.wt} ${e.branch}\` で作る）で \`git fetch origin main && git rebase origin/main\` を行い、衝突を解いて \`gleam build --warnings-as-errors\` と \`gleam test\`（Postgres はポート ${e.pgPort}）を通し、\`git -C ${e.wt} push --force-with-lease\` してほしい（定義の「rebase を頼まれたら」。force push は他のコマンドと連結せず単独の Bash 呼び出しで行う）。
+rebase 以外の変更を入れない（衝突が無くても build が落ちるときだけ、main に合わせる最小の直しを rebase のコミットに含め、reason にその箇所を書く）。
 push したら \`gh pr checks ${pr} -R ${REPO} --watch\` で CI の全ジョブが pass するのを待つ。
 ${SAFETY}
 返答（構造化出力）: status は rebased（解けない衝突があれば blocked にして reason に書く）、新しい head のコミット、ciPassed。`,
@@ -723,7 +728,7 @@ async function gateStage(e, issue, state, rebaseProblem = null) {
 }
 
 /**
- * マージ。衝突なら rebase させて再試行。1 件ずつ。閉じられなかった親 issue は log に出して結果に残す。
+ * マージ。衝突（または main とマージした結果のビルドの失敗）なら、マージ担当の problem を添えて rebase させて再試行。1 件ずつ。閉じられなかった親 issue は log に出して結果に残す。
  * マージ担当が rebase の差分にレビューが要ると判断したら（needsReview）、{ review: 理由 } を返して呼び出し側が最終確認に再確認させる。
  * reReviewed は再確認の後のやり直しで、マージ・確かめ直し・rebase の label に re-review を付けて 1 回目と区別する（retrospective は label で集計し、同じ label は先の結果を採る）
  */
@@ -749,8 +754,8 @@ async function mergeStage(e, state, reReviewed = false) {
         continue
       }
       if (t === MAX_REBASES) return { stalled: { stage: 'merge', reason: `rebase を ${t} 回しても衝突が解けない: ${m.problem || ''}` } }
-      log(`#${e.n}: PR #${state.pr} が main と衝突しているので rebase させる`)
-      const rb = await call('rebase', `Rebase PR #${state.pr} (${tag ? `${tag}, ` : ''}${t + 1})`, P.rebase(e, state.pr), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
+      log(`#${e.n}: PR #${state.pr} が main と衝突しているか、main とマージした結果がビルドできないので rebase させる（${m.problem || ''}）`)
+      const rb = await call('rebase', `Rebase PR #${state.pr} (${tag ? `${tag}, ` : ''}${t + 1})`, P.rebase(e, state.pr, m.problem), { agentType: 'issue-implementer', phase: 'マージ', schema: S.implementer })
       if (rb.status !== 'rebased' || !rb.head) return { stalled: { stage: 'merge', reason: `rebase の衝突に設計の判断が要る: ${rb.reason || rb.status}` } }
       if (rb.ciPassed !== true) return { stalled: { stage: 'merge', reason: `rebase 後の CI が通っていない: ${rb.reason || ''}` } }
       state.head = rb.head

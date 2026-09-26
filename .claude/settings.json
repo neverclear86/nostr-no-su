@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh issue close:*)"
+      "Bash(gh issue close:*)",
+      "Bash(git -C * push --force-with-lease*)",
+      "Bash(git push --force-with-lease:*)"
     ]
   }
 }
