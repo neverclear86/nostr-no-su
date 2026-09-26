@@ -1,88 +1,19 @@
-//// プラグイン機構とプラグイン API v1。
+//// プラグイン API v1。モジュール 1 つを読み込んで検証し、`Plugin` にする。
+//// `code:ensure_loaded/1` は検証と不可分なのでここに含めるが、コードパスの
+//// 追加（`code:add_pathz/1`）とプラグインディレクトリの走査は担当外である。
 ////
-//// v1 の要点:
+//// 検証はモジュールの読み込み → 必須エクスポート → `plugin_api_version` →
+//// `plugin_min_host_version` → `plugin_required_versions` → `plugin_name` →
+//// 設定の切り出し → `plugin_children` → `plugin_pages` の順で、最初に
+//// 失敗したところで止まる。設定の切り出しは `plugin_name/0` の後にしか
+//// できない（環境変数の接頭辞がプラグイン名から決まるため）。
 ////
-//// - プラグインは BEAM のモジュールで、`plugin_api_version/0`・`plugin_name/0`
-////   と、`handle_event/1` **または** `handle_event/2` のどちらか一方を必ず
-////   エクスポートする。未知のエクスポートは読み込みに影響しない。本体が使う
-////   任意エクスポート（`plugin_children`、`plugin_min_host_version`、
-////   `plugin_required_versions`、`plugin_pages`、`plugin_page_content`、
-////   `plugin_page_action`）は存在するときだけ呼ばれ、その結果で読み込まれ
-////   ないことがある。
-//// - イベント処理関数が受け取るイベントは **binary キーの Erlang map**
-////   (`nostr_no_su/nostr/event.to_map` の形)。戻り値は無視する。
-//// - **プラグイン固有の設定を受け取る口は「アリティ +1 の任意エクスポート」と
-////   いう 1 つの規則で足す。** 設定は環境変数 `PLUGIN_<NAME>_<KEY>` から
-////   `plugin_config` が切り出した binary キーの map に、本体の接続先の予約キー
-////   `DatabaseUrl` を足したもので、`plugin_children/1` と `handle_event/2` が
-////   第 1・第 2 引数として受け取る。どちらも `/0` `/1` があればそちらでも動くので、
-////   既存のプラグインは無変更で読み込まれる。
-//// - **`handle_event` だけは必須側のアリティが 2 通りになる。** 設定が必須の
-////   プラグインは `handle_event/1` を正しく書けない（設定が無いのだから既定値に
-////   落とすか、落ちるだけの死んだ節を書くしかない）ため、`/1` または `/2` の
-////   どちらか一方があればよいことにしている。**これは破壊的変更にあたらない。**
-////   `handle_event/1` を持つ既存プラグインは 1 つも落ちず、必須エクスポートの
-////   削除でもアリティの変更でもないので、**API バージョンは 1 のまま**である。
-////   両方あれば `/2` を優先する。判定は**読み込み時に 1 度だけ**行い、設定 map
-////   ごとクロージャーに捕捉するので、イベントごとのコストは増えない。
-//// - 任意エクスポート `plugin_children/0` `plugin_children/1` があれば、その
-////   プラグインが自分で起こしたいプロセスの子仕様（OTP の map）を申告できる。
-////   `/1` があればそちらを優先し、設定 map を渡す。検証と変換は
-////   `plugin_children` が行い、結果は `Plugin.children` に載る。子仕様の代わりに
-////   `{error, Reason}` を返すと「設定が足りないので読み込まないでほしい」という
-////   申告になり、そのプラグインだけが無効になる。
-//// - 任意エクスポート `plugin_min_host_version/0` があれば、そのプラグインが
-////   要求する本体の版の下限（`X.Y.Z` の binary）を宣言できる。読み込み時に
-////   本体の版（`nostr_no_su.app` の `vsn`）と `MAJOR.MINOR.PATCH` の数値比較で
-////   照合し、本体のほうが小さければそのプラグインを読み込まない。
-//// - 任意エクスポート `plugin_required_versions/0` があれば、依存する本体側の
-////   アプリケーションと版（binary キー・binary 値の map）を宣言できる。読み込み
-////   時にコードパス上の `.app` の版と完全一致で照合し、1 件でも合わなければその
-////   プラグインを読み込まない。
-//// - 任意エクスポート `plugin_pages/0` `/1` `/2`（ページの一覧）と
-////   `plugin_page_content/1` `/2` `/3`（1 ページの記述）があれば、そのプラグインは
-////   管理 UI のページを供給できる。どちらも無ければ UI を持たない。片方だけでは
-////   読み込まない（`plugin_children` の不備と同じ扱い）。アリティの大きいほうを
-////   優先し、設定 map を渡す。`plugin_pages/2` と `plugin_page_content/3` は最後の
-////   引数に表示の言語のコード（`en` か `ja` の binary）を受け取る口で、片方だけでは
-////   読み込まない。`plugin_pages/2` は読み込み時に `page_languages` の言語ごとに
-////   呼ぶ。
-////   `plugin_pages` は読み込み時にだけ呼んで検証するが、`plugin_page_content`
-////   はページの表示のたびに期限付きで呼ぶ（起動時のメタデータの呼び出しには
-////   含まれない）。さらに任意エクスポート `plugin_page_action/2`
-////   `plugin_page_action/3` があれば、そのページはフォームの送信を受け取れる。
-////   `plugin_pages` / `plugin_page_content` を持たずに `plugin_page_action` だけを
-////   持つプラグインは読み込まない。`plugin_page_content` と `plugin_page_action`
-////   に渡す設定 map には、バンカーに登録したアカウントの一覧を予約キー
-////   `Accounts` で足す（`plugin_children` と `plugin_pages` には足さない）。
-////   `plugin_page_action` もページの表示と同じく起動時のメタデータの呼び出しには
-////   含まれない。仕様の全文は `docs/plugin-api.md` の第 13 章にある。
-//// - 検証の順序はモジュールの読み込み → 必須エクスポート →
-////   `plugin_api_version` → `plugin_min_host_version` →
-////   `plugin_required_versions` → `plugin_name` → 設定の切り出し →
-////   `plugin_children` → `plugin_pages` で、最初に失敗したところで止まる。
-////   **設定の切り出しは `plugin_name/0` の後にしかできない**（環境変数の
-////   接頭辞がプラグイン名から決まるため）。
-//// - モジュールの読み込み（`code:ensure_loaded/1`）とメタデータの呼び出し
-////   （`plugin_api_version/0`、`plugin_min_host_version/0`、
-////   `plugin_required_versions/0`、`plugin_name/0`、`plugin_children/0,1`、
-////   `plugin_pages/0,1,2`）は `main` のプロセスで起動時に
-////   同期に行われるので、1 回ずつ使い捨てのプロセスで動かし `call_timeout_ms`
-////   で打ち切る。戻らない
-////   `-on_load` や戻らないメタデータの関数を持つプラグインは理由の 1 行で
-////   読み込まれず、起動は続く。
-//// - イベント処理関数はイベント 1 件ごとに作られる使い捨てのプロセスで動く
-////   （`plugin_runner`）。このモジュールが組み立てる `handle` クロージャーは
-////   例外を捕まえない。捕捉はワーカープロセスの中で行われ、その目的は隔離では
-////   なく終了理由を短い 1 行に整えることである。隔離そのものはプロセスの境界が
-////   担っており、失敗の観測とその後の方針（連続失敗による無効化など）の判断は
-////   すべてランナーが行う。
+//// モジュールの読み込みとメタデータ用のエクスポートの呼び出しは起動時に
+//// `main` のプロセスで同期に行われるため、1 回ずつ使い捨てのプロセスで
+//// 動かし `call_timeout_ms` で打ち切る。戻らない `-on_load` やメタデータの
+//// 関数を持つプラグインは理由の 1 行で読み込まれず、起動は続く。
 ////
 //// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` にある。
-////
-//// コードパスの追加（`code:add_pathz/1`）とプラグインディレクトリの走査はこの
-//// モジュールの担当ではない。ここが持つのは「モジュール 1 つを検証して `Plugin`
-//// にする」ところまでで、`code:ensure_loaded/1` は検証と不可分なのでここに含める。
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -103,7 +34,7 @@ import nostr_no_su/plugin_config
 
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
-pub const api_version: Int = 1
+const api_version: Int = 1
 
 /// 読み込み時に `plugin_pages/2` を呼ぶ言語のコード。管理 UI の表示の言語
 /// （`admin/i18n` の `languages`）と同じ並びで、先頭の言語の一覧をページのキーの
@@ -115,16 +46,20 @@ pub const page_languages: List(String) = ["en", "ja"]
 /// 戻らないことを検出するための期限である。
 pub const default_call_timeout_ms: Int = 5000
 
+/// プラグインの API の版を返す必須エクスポートの名前。
+const api_version_export = "plugin_api_version"
+
+/// プラグイン名を返す必須エクスポートの名前。
+const name_export = "plugin_name"
+
 /// 本体が呼ぶイベント処理関数の名前。アリティは `/1` と `/2` の 2 通りある。
-const handle_event_name = "handle_event"
+const handle_event_export = "handle_event"
 
-/// 本体が読み込み時に照合する、依存する本体側アプリケーションの版を宣言する
-/// 任意エクスポートの名前。
-const required_versions_name = "plugin_required_versions"
+/// 本体の版の下限を宣言する任意エクスポートの名前。
+const min_host_version_export = "plugin_min_host_version"
 
-/// 本体が読み込み時に照合する、本体の版の下限を宣言する任意エクスポートの
-/// 名前。
-const min_host_version_name = "plugin_min_host_version"
+/// 依存する本体側アプリケーションの版を宣言する任意エクスポートの名前。
+const required_versions_export = "plugin_required_versions"
 
 /// 本体の版を載せた `.app` のアプリケーション名。
 const host_app_name = "nostr_no_su"
@@ -132,14 +67,14 @@ const host_app_name = "nostr_no_su"
 /// 理由の文字列に出す本体の名前。
 const host_display_name = "nostr-no-su"
 
-/// 本体が問い合わせる、管理 UI のページ一覧を返す任意エクスポートの名前。
-const pages_export_name = "plugin_pages"
+/// 管理 UI のページ一覧を返す任意エクスポートの名前。
+const pages_export = "plugin_pages"
 
-/// 本体が問い合わせる、管理 UI の 1 ページの記述を返す任意エクスポートの名前。
-const page_content_export_name = "plugin_page_content"
+/// 管理 UI の 1 ページの記述を返す任意エクスポートの名前。
+const page_content_export = "plugin_page_content"
 
-/// 本体が呼ぶ、管理 UI の 1 ページのフォームの送信を受け取る任意エクスポートの名前。
-const page_action_export_name = "plugin_page_action"
+/// 管理 UI の 1 ページのフォームの送信を受け取る任意エクスポートの名前。
+const page_action_export = "plugin_page_action"
 
 /// UI のページのキーに許す文字。`plugin_config.gleam` の `normalize` と同じく、
 /// 許す文字を並べた定数と `string.contains` で判定する。
@@ -270,7 +205,7 @@ pub fn load(
   )
   // `has_export` はイベントごとではなく読み込み時に 1 度だけ呼ぶ。必須エクスポート
   // の判定と、下のクロージャーが渡す引数の決定の両方でこの値を使う。
-  let takes_config = has_export(module, handle_event_name, 2)
+  let takes_config = has_export(module, handle_event_export, 2)
   use _ <- result.try(require_exports(module, name, takes_config))
   use _ <- result.try(check_api_version(module, name, call_timeout_ms))
   use _ <- result.try(check_min_host_version_export(
@@ -297,7 +232,7 @@ pub fn load(
     call_timeout_ms,
   ))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
-  let handle_event = atom.create(handle_event_name)
+  let handle_event = atom.create(handle_event_export)
   let args = case takes_config {
     True -> fn(event_map) { [event_map, config_map] }
     False -> fn(event_map) { [event_map] }
@@ -320,7 +255,7 @@ fn require_exports(
   name: String,
   takes_config: Bool,
 ) -> Result(Nil, String) {
-  let required = [#("plugin_api_version", 0), #("plugin_name", 0)]
+  let required = [#(api_version_export, 0), #(name_export, 0)]
   use _ <- result.try(
     list.try_each(required, fn(export) {
       let #(function, arity) = export
@@ -334,15 +269,15 @@ fn require_exports(
       }
     }),
   )
-  case takes_config || has_export(module, handle_event_name, 1) {
+  case takes_config || has_export(module, handle_event_export, 1) {
     True -> Ok(Nil)
     False ->
       Error(prefix(
         name,
         "missing export "
-          <> handle_event_name
+          <> handle_event_export
           <> "/1 or "
-          <> handle_event_name
+          <> handle_event_export
           <> "/2",
       ))
   }
@@ -358,7 +293,7 @@ fn check_api_version(
   use value <- result.try(call_export(
     module,
     name,
-    "plugin_api_version",
+    api_version_export,
     [],
     call_timeout_ms,
   ))
@@ -366,7 +301,9 @@ fn check_api_version(
     decode.run(value, decode.int)
     |> result.replace_error(prefix(
       name,
-      "plugin_api_version/0 must return an Int, got " <> dynamic.classify(value),
+      api_version_export
+        <> "/0 must return an Int, got "
+        <> dynamic.classify(value),
     )),
   )
   case version == api_version {
@@ -390,13 +327,13 @@ fn check_min_host_version_export(
   name: String,
   call_timeout_ms: Int,
 ) -> Result(Nil, String) {
-  case has_export(module, min_host_version_name, 0) {
+  case has_export(module, min_host_version_export, 0) {
     False -> Ok(Nil)
     True -> {
       use value <- result.try(call_export(
         module,
         name,
-        min_host_version_name,
+        min_host_version_export,
         [],
         call_timeout_ms,
       ))
@@ -404,7 +341,7 @@ fn check_min_host_version_export(
         decode.run(value, decode.string)
         |> result.replace_error(prefix(
           name,
-          min_host_version_name
+          min_host_version_export
             <> "/0 must return a version string like \"0.1.0\", got "
             <> dynamic.classify(value),
         )),
@@ -444,7 +381,7 @@ pub fn check_min_host_version(
   use wanted <- result.try(
     parse_version(declared)
     |> result.replace_error(
-      min_host_version_name
+      min_host_version_export
       <> "/0 must return a version string like \"0.1.0\", got \""
       <> declared
       <> "\"",
@@ -494,13 +431,13 @@ fn check_required_versions(
   name: String,
   call_timeout_ms: Int,
 ) -> Result(Nil, String) {
-  case has_export(module, required_versions_name, 0) {
+  case has_export(module, required_versions_export, 0) {
     False -> Ok(Nil)
     True -> {
       use value <- result.try(call_export(
         module,
         name,
-        required_versions_name,
+        required_versions_export,
         [],
         call_timeout_ms,
       ))
@@ -509,7 +446,7 @@ fn check_required_versions(
         |> result.map_error(fn(errors) {
           prefix(
             name,
-            required_versions_name
+            required_versions_export
               <> "/0 must return a map of application names to version strings ("
               <> describe_decode_error(errors)
               <> ")",
@@ -583,7 +520,7 @@ fn read_plugin_name(
   use value <- result.try(call_export(
     module,
     name,
-    "plugin_name",
+    name_export,
     [],
     call_timeout_ms,
   ))
@@ -591,11 +528,11 @@ fn read_plugin_name(
     decode.run(value, decode.string)
     |> result.replace_error(prefix(
       name,
-      "plugin_name/0 must return a String, got " <> dynamic.classify(value),
+      name_export <> "/0 must return a String, got " <> dynamic.classify(value),
     )),
   )
   case plugin_name {
-    "" -> Error(prefix(name, "plugin_name/0 must not be empty"))
+    "" -> Error(prefix(name, name_export <> "/0 must not be empty"))
     _ -> Ok(plugin_name)
   }
 }
@@ -675,10 +612,10 @@ fn read_ui(
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(Option(PluginUi), String) {
-  let pages_arity = highest_arity(module, pages_export_name, [2, 1, 0])
-  let content_arity = highest_arity(module, page_content_export_name, [3, 2, 1])
-  let action_arity = highest_arity(module, page_action_export_name, [3, 2])
-  let no_pages = " but no " <> pages_export_name <> "/0, /1 or /2"
+  let pages_arity = highest_arity(module, pages_export, [2, 1, 0])
+  let content_arity = highest_arity(module, page_content_export, [3, 2, 1])
+  let action_arity = highest_arity(module, page_action_export, [3, 2])
+  let no_pages = " but no " <> pages_export <> "/0, /1 or /2"
   case pages_arity, content_arity {
     None, None ->
       case action_arity {
@@ -686,35 +623,32 @@ fn read_ui(
         Some(arity) ->
           Error(prefix(
             name,
-            export_label(page_action_export_name, arity) <> no_pages,
+            export_label(page_action_export, arity) <> no_pages,
           ))
       }
     None, Some(arity) ->
-      Error(prefix(
-        name,
-        export_label(page_content_export_name, arity) <> no_pages,
-      ))
+      Error(prefix(name, export_label(page_content_export, arity) <> no_pages))
     Some(arity), None ->
       Error(prefix(
         name,
-        export_label(pages_export_name, arity)
+        export_label(pages_export, arity)
           <> " but no "
-          <> page_content_export_name
+          <> page_content_export
           <> "/1, /2 or /3",
       ))
     Some(2), Some(arity) if arity != 3 ->
       Error(prefix(
         name,
-        export_label(pages_export_name, 2)
+        export_label(pages_export, 2)
           <> " but no "
-          <> export_label(page_content_export_name, 3),
+          <> export_label(page_content_export, 3),
       ))
     Some(arity), Some(3) if arity != 2 ->
       Error(prefix(
         name,
-        export_label(page_content_export_name, 3)
+        export_label(page_content_export, 3)
           <> " but no "
-          <> export_label(pages_export_name, 2),
+          <> export_label(pages_export, 2),
       ))
     Some(pages_arity), Some(content_arity) -> {
       use pages <- result.try(case pages_arity {
@@ -727,15 +661,11 @@ fn read_ui(
           use value <- result.try(call_export(
             module,
             name,
-            pages_export_name,
+            pages_export,
             args,
             call_timeout_ms,
           ))
-          decode_pages(
-            value,
-            name,
-            export_label(pages_export_name, pages_arity),
-          )
+          decode_pages(value, name, export_label(pages_export, pages_arity))
         }
       })
       Ok(
@@ -783,13 +713,13 @@ fn localized_pages(
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(List(PluginPage), String) {
-  let label = export_label(pages_export_name, 2)
+  let label = export_label(pages_export, 2)
   use lists <- result.try(
     list.try_map(page_languages, fn(language) {
       use value <- result.try(call_export(
         module,
         name,
-        pages_export_name,
+        pages_export,
         [config_map, dynamic.string(language)],
         call_timeout_ms,
       ))
@@ -850,8 +780,8 @@ pub fn merge_localized_pages(
   }
 }
 
-/// `plugin_pages` の戻り値をページの一覧に変換する。決めたこと 3 の検査
-/// （形、0 件、重複、文字集合）を順に当てる。
+/// `plugin_pages` の戻り値をページの一覧に変換する。形、0 件、重複、
+/// 文字集合の順に検査する。
 fn decode_pages(
   value: Dynamic,
   name: String,
@@ -994,7 +924,7 @@ fn content_of(
       2 -> [dynamic.string(key), plugin_config.page_map(config, accounts)]
       _ -> [dynamic.string(key)]
     }
-    call_export(module, name, page_content_export_name, args, call_timeout_ms)
+    call_export(module, name, page_content_export, args, call_timeout_ms)
   }
 }
 
@@ -1030,15 +960,11 @@ fn action_of(
     use value <- result.try(call_export(
       module,
       name,
-      page_action_export_name,
+      page_action_export,
       args,
       call_timeout_ms,
     ))
-    decode_action_result(
-      value,
-      name,
-      export_label(page_action_export_name, arity),
-    )
+    decode_action_result(value, name, export_label(page_action_export, arity))
   }
 }
 
@@ -1129,9 +1055,7 @@ fn prefix(module_name: String, reason: String) -> String {
   module_name <> ": " <> reason
 }
 
-/// 未読み込みのモジュールに対しては常に `False` を返すため、`load` の入口で
-/// `ensure_module_loaded_within` を通してから使う。3 引数すべてが atom でなければ
-/// `badarg` で落ちるので、関数名は `atom.create` を通す。
+/// `has_export` の実体。関数名は atom で渡す（`atom.create`）。
 @external(erlang, "erlang", "function_exported")
 fn function_exported(module: Atom, function: Atom, arity: Int) -> Bool
 
