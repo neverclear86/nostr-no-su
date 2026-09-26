@@ -2,9 +2,9 @@
 //// 人の語と生の値のチップにする。承認待ちのカード、承認済みのセッションの行、権限の編集の
 //// ダイアログ、接続の確認のダイアログが使う。
 ////
-//// 未対応かどうかはバンカーのエンジンの定義（`bunker/engine.is_unsupported_permission`）で
-//// 決め、ここに一覧を持たない。`admin/view` は `admin/i18n` と `admin/wordmark` 以外の本体の
-//// モジュールに依存しないので、エンジンを見るこの部品は別のモジュールに置く。
+//// 未対応かどうかはバンカーの権限の定義（`bunker/permission.is_unsupported`）で決め、ここに
+//// 一覧を持たない。`admin/view` は `admin/i18n` と `admin/wordmark` 以外の本体のモジュールに
+//// 依存しないので、バンカーの定義を見るこの部品は別のモジュールに置く。
 ////
 //// トークンはクライアント由来なので、テキストとして lustre に渡し、エスケープを文字列化に
 //// 任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から表示の言語で引く。
@@ -17,7 +17,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/permission
 
 /// 権限のトークン 1 つのチップの見せ方。
 type Presentation {
@@ -41,7 +41,11 @@ pub fn chips(language: Language, perms: String) -> Element(msg) {
       )
     _ -> {
       let tokens = string.split(perms, ",")
-      let note = case list.any(tokens, engine.is_unsupported_permission) {
+      let note = case
+        list.any(tokens, fn(token) {
+          permission.is_unsupported(permission.from_token(token))
+        })
+      {
         True -> [
           html.p([attribute.class("text-xs text-muted")], [
             html.text(i18n.text(language, i18n.UnsupportedPermissionsNote)),
@@ -93,7 +97,7 @@ fn raw_value(token: String) -> Element(msg) {
 /// トークンの見せ方。未対応の判定を先に行い、`sign_event`、`nip44_encrypt`、`nip44_decrypt`、
 /// `sign_event:<n>` に人の語を当てる。
 fn presentation(token: String) -> Presentation {
-  case engine.is_unsupported_permission(token), token {
+  case permission.is_unsupported(permission.from_token(token)), token {
     True, _ -> Unsupported
     False, "sign_event" -> Named(i18n.PermissionSignAnyKind)
     False, "nip44_encrypt" -> Named(i18n.PermissionNip44Encrypt)

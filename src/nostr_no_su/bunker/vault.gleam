@@ -93,8 +93,8 @@ pub type MacRow {
     signer: String,
     /// クライアントの公開鍵（16 進、小文字）。
     client: String,
-    /// セッション内の要求を照合する権限。空文字列は既定の集合（engine の
-    /// `default_perms`）で照合する。
+    /// セッション内の要求を照合する権限。空文字列は既定の集合（`bunker/permission` の
+    /// 既定）で照合する。
     perms: String,
     /// 作成した Unix 秒。
     created_at: Int,
