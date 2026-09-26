@@ -1658,3 +1658,22 @@ pub fn switched_theme_carries_across_pages_test() {
     |> admin.handle_request(context(), _)
   assert page_theme(generated) == Some("dark")
 }
+
+/// 記述の最上位を読めないページは 503 で、読めない理由を出す。
+pub fn plugin_page_with_an_unreadable_description_is_unavailable_test() {
+  let unreadable =
+    admin.Context(
+      ..context(),
+      plugin_page_content: fn(_name, _key, _language, _accounts) {
+        Ok(dynamic.string("not a map"))
+      },
+    )
+  let response = get(unreadable, "/plugins/console_logger/status")
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    i18n.text(i18n.English, i18n.PluginPageUnavailable),
+  )
+  assert string.contains(body, "top level: must be a map")
+}
