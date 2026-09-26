@@ -22,8 +22,8 @@ pub fn svg(label: String, text: String) -> Result(Element(msg), Nil) {
   let view_box = "0 0 " <> side <> " " <> side
   svg.svg(
     [
-      attribute.attribute("role", "img"),
-      attribute.attribute("aria-label", label),
+      attribute.role("img"),
+      attribute.aria_label(label),
       attribute.attribute("viewBox", view_box),
       attribute.attribute("shape-rendering", "crispEdges"),
       attribute.class(

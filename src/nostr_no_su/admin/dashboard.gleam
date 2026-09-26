@@ -833,7 +833,7 @@ fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
   let rail = overview(snapshot)
   html.nav(
     [
-      attribute.attribute("aria-label", i18n.text(language, i18n.OverviewLabel)),
+      attribute.aria_label(i18n.text(language, i18n.OverviewLabel)),
       attribute.class(
         "grid grid-cols-2 gap-px overflow-hidden rounded-box border border-base-300 bg-base-300 lg:grid-cols-5",
       ),
@@ -1119,11 +1119,7 @@ fn setup_step(
   }
   let action = case step {
     StepOpen(dialog, action) ->
-      view.dialog_trigger(
-        dialog,
-        view.IconTextTrigger(view.plus_icon(), text(action)),
-        view.PrimaryButton,
-      )
+      add_trigger(dialog, text(action), view.PrimaryButton)
     StepDone | StepLocked -> element.none()
   }
   html.li([attribute.class(item_class)], [
@@ -1163,7 +1159,13 @@ fn accounts_section(
       view.info_hint(language, accounts_anchor <> "-hint", [
         html.text(text(i18n.AccountsDescription)),
       ]),
-      [add_account_button(language)],
+      [
+        add_trigger(
+          add_account_dialog_id(),
+          text(i18n.AddAccount),
+          view.PrimaryButton,
+        ),
+      ],
       [reload_form(language)],
     ),
     listed_body(
@@ -1172,9 +1174,9 @@ fn accounts_section(
       accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts), [
-        view.dialog_trigger(
+        add_trigger(
           add_account_dialog_id(),
-          view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
+          text(i18n.AddAccount),
           view.OutlineButton,
         ),
       ]),
@@ -1189,13 +1191,13 @@ fn accounts_section(
   ])
 }
 
-/// アカウントの節の見出しの、一覧を得たときに出す「アカウントを追加」のダイアログを開くボタン。
-fn add_account_button(language: Language) -> Element(msg) {
-  view.dialog_trigger(
-    add_account_dialog_id(),
-    view.IconTextTrigger(view.plus_icon(), i18n.text(language, i18n.AddAccount)),
-    view.PrimaryButton,
-  )
+/// `id` のダイアログを開く、先頭に＋のアイコンと `text` を置いた `kind` のボタン。
+fn add_trigger(
+  id: String,
+  text: String,
+  kind: view.ButtonKind,
+) -> Element(msg) {
+  view.dialog_trigger(id, view.IconTextTrigger(view.plus_icon(), text), kind)
 }
 
 /// 「アカウントを追加」のダイアログ（「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）。`dialog` が
@@ -1286,24 +1288,20 @@ pub fn generate_form(
 /// nsec の欄の補足の `id`。nsec の欄はアカウントの追加のダイアログに 1 つだけなので固定の値にする。
 const nsec_hint_id = "nsec-hint"
 
-/// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を得られないとき
-/// （読み込み中、応答なし、締め切り超過）も描かない。`dialog` は行の削除のダイアログに渡す。
+/// 直近の読み込みで飛ばされた行の枠（`failure_panel`）。一覧を得られないとき（読み込み中、応答なし、
+/// 締め切り超過）は描かない。`dialog` は行の削除のダイアログに渡す。
 fn unreadable_accounts(
   language: Language,
   skipped: Result(List(SkippedRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
-  case skipped {
-    Ok([_, ..] as rows) ->
-      view.failure_frame(
-        view.warning_triangle_icon(),
-        i18n.text(language, i18n.UnreadableAccounts),
-        list.length(rows),
-        i18n.text(language, i18n.UnreadableAccountsWarning),
-        list.map(rows, skipped_item(language, _, dialog)),
-      )
-    Ok([]) | Error(_) -> element.none()
-  }
+  failure_panel(
+    language,
+    i18n.UnreadableAccounts,
+    i18n.UnreadableAccountsWarning,
+    result.unwrap(skipped, []),
+    skipped_item(language, _, dialog),
+  )
 }
 
 /// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを置く。
@@ -2054,18 +2052,16 @@ fn pending_section(
     Ok([]) -> element.none()
     _ -> {
       let text = i18n.text(language, _)
-      let count = case pending {
-        Ok(rows) -> Some(list.length(rows))
-        Error(_) -> None
-      }
       view.band(pending_anchor, [
-        view.section_heading(
+        listed_section_heading(
+          language,
+          pending,
           view.door_open_icon(),
-          text(i18n.PendingConnections),
-          count,
+          i18n.PendingConnections,
           view.info_hint(language, pending_anchor <> "-hint", [
             html.text(text(i18n.PendingConnectionsDescription)),
           ]),
+          [],
           refresh_note(language, refresh),
         ),
         listed_body(
@@ -2307,25 +2303,34 @@ pub fn approval_page(
           now,
           pending,
         ),
-        approval_explanation(language, pending.perms),
+        info_sentences(language, [
+          i18n.ApprovalExplanation,
+          ..no_permissions_sentence(pending.perms)
+        ]),
       ]),
     ],
   )
 }
 
-/// 承認の意味の説明。権限が空のときは、署名と暗号化を拒否する旨の一文を続ける。
-fn approval_explanation(language: Language, perms: String) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let content = case perms {
-    "" -> [
-      html.text(text(i18n.ApprovalExplanation)),
-      html.text(
-        i18n.sentence_gap(language) <> text(i18n.NoPermissionsRequested),
-      ),
-    ]
-    _ -> [html.text(text(i18n.ApprovalExplanation))]
+/// `sentences` を言語の文の区切りで 1 段落につなぎ、Info の囲み（`view.alert`）で出す。
+fn info_sentences(
+  language: Language,
+  sentences: List(i18n.Message),
+) -> Element(msg) {
+  view.alert(view.Info, [
+    html.text(
+      list.map(sentences, i18n.text(language, _))
+      |> string.join(i18n.sentence_gap(language)),
+    ),
+  ])
+}
+
+/// 権限の文字列 `perms` が空のときだけ、要求の無い接続に許す操作を述べる 1 文を返す。
+fn no_permissions_sentence(perms: String) -> List(i18n.Message) {
+  case perms {
+    "" -> [i18n.NoPermissionsRequested]
+    _ -> []
   }
-  view.alert(view.Info, content)
 }
 
 /// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、変更が反映されたか分からないとき、
@@ -2526,6 +2531,14 @@ fn relay_action_icon(action: RelayAction) -> Element(msg) {
   }
 }
 
+/// アカウント一覧 `accounts` と突き合わせた署名者 `signer` の表示（`signer_value`）。
+fn signer_cell(
+  accounts: Result(List(AccountRow), i18n.Reason),
+  signer: String,
+) -> Element(msg) {
+  signer_value(signer_name(accounts, signer))
+}
+
 /// 署名者の表示。アカウント一覧にある署名者はラベルと省略した npub を縦に、無い署名者は
 /// 省略した 16 進の pubkey だけを出す。
 pub fn signer_value(signer: SignerName) -> Element(msg) {
@@ -2588,13 +2601,7 @@ fn relays_section(
       view.plug_icon(),
       i18n.Relays,
       view.info_hint(language, relays_anchor <> "-hint", role_hint(language)),
-      [
-        view.dialog_trigger(
-          add_relay_dialog_id(),
-          view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
-          view.PrimaryButton,
-        ),
-      ],
+      [add_trigger(add_relay_dialog_id(), text(i18n.Add), view.PrimaryButton)],
       [],
     ),
     no_bunker_relay_alert(language, relays),
@@ -2937,13 +2944,6 @@ fn sessions_section(
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let connect_trigger = fn(kind) {
-    view.dialog_trigger(
-      connect_dialog_id(),
-      view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
-      kind,
-    )
-  }
   view.section_block(sessions_anchor, [
     listed_section_heading(
       language,
@@ -2953,7 +2953,13 @@ fn sessions_section(
       view.info_hint(language, sessions_anchor <> "-hint", [
         html.text(text(i18n.ApprovedSessionsDescription)),
       ]),
-      [connect_trigger(view.PrimaryButton)],
+      [
+        add_trigger(
+          connect_dialog_id(),
+          text(i18n.ConnectClient),
+          view.PrimaryButton,
+        ),
+      ],
       [],
     ),
     listed_body(
@@ -2962,7 +2968,11 @@ fn sessions_section(
       sessions,
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions), [
-        connect_trigger(view.OutlineButton),
+        add_trigger(
+          connect_dialog_id(),
+          text(i18n.ConnectClient),
+          view.OutlineButton,
+        ),
       ]),
       fn(rows) {
         view.row_list(
@@ -3036,7 +3046,14 @@ fn connect_review_dialog(
             ),
             view.form_description(text(i18n.ConnectConfirmDescription)),
             review_list(language, accounts, review),
-            connect_explanation(language, review.perms),
+            info_sentences(
+              language,
+              list.flatten([
+                [i18n.ConnectExplanation],
+                no_permissions_sentence(review.perms),
+                [i18n.ConnectRelaysScope],
+              ]),
+            ),
             view.post_form(
               view.segments_path(connect_confirm_segments),
               [
@@ -3077,10 +3094,7 @@ fn review_list(
         text(i18n.Client),
         view.identifier_cell(language, review.client, text(i18n.CopyClient)),
       ),
-      #(
-        text(i18n.Signer),
-        html.dd([], [signer_value(signer_name(accounts, review.signer))]),
-      ),
+      #(text(i18n.Signer), html.dd([], [signer_cell(accounts, review.signer)])),
       #(
         text(i18n.Permissions),
         html.dd([], [permission_view.chips(language, review.perms)]),
@@ -3088,23 +3102,6 @@ fn review_list(
       #(text(i18n.UriRelays), html.dd([], [view.code_list(review.relays)])),
     ]),
   )
-}
-
-/// 接続の意味の説明。権限が空のときは、許す操作の一文を続ける。URI のリレーに届く
-/// 情報を末尾に書く。
-fn connect_explanation(language: Language, perms: String) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let permissions = case perms {
-    "" -> [i18n.NoPermissionsRequested]
-    _ -> []
-  }
-  let sentences =
-    [i18n.ConnectExplanation, ..permissions]
-    |> list.append([i18n.ConnectRelaysScope])
-    |> list.map(text)
-  view.alert(view.Info, [
-    html.text(string.join(sentences, i18n.sentence_gap(language))),
-  ])
 }
 
 /// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
@@ -3134,7 +3131,7 @@ fn session_item(
         ),
         html.div([attribute.class("min-w-0 text-sm")], [
           html.span([attribute.class("sr-only")], [html.text(text(i18n.Signer))]),
-          signer_value(signer_name(accounts, session.signer)),
+          signer_cell(accounts, session.signer),
         ]),
         last_used_value(language, now, session),
         html.div([attribute.class("col-span-2")], [
@@ -3266,10 +3263,7 @@ fn session_dialog_summary(
   let text = i18n.text(language, _)
   view.detail_list([
     #(text(i18n.Client), view.value_cell(view.Code(session.client))),
-    #(
-      text(i18n.Signer),
-      html.dd([], [signer_value(signer_name(accounts, session.signer))]),
-    ),
+    #(text(i18n.Signer), html.dd([], [signer_cell(accounts, session.signer)])),
   ])
 }
 
@@ -3615,22 +3609,39 @@ fn plugin_item(language: Language, plugin: PluginRow) -> Element(msg) {
   ])
 }
 
-/// 起動時に読み込めなかったプラグインの枠。1 件以上あるときだけ、題と警告の 1 文と行の一覧を
-/// エラーの色の枠（`view.failure_frame`）に入れる。`app.Spec` から届く一覧で、起動時に確定するので
-/// 取得できない状態は無い。
+/// 起動時に読み込めなかったプラグインの枠（`failure_panel`）。`app.Spec` から届く一覧で、起動時に
+/// 確定するので取得できない状態は無い。
 fn not_loaded_panel(
   language: Language,
   rows: List(plugin_loader.NotLoaded),
 ) -> Element(msg) {
+  failure_panel(
+    language,
+    i18n.NotLoadedPlugins,
+    i18n.NotLoadedPluginsWarning,
+    rows,
+    not_loaded_item(language, _),
+  )
+}
+
+/// 読み込めなかった行の枠。`rows` が 1 件以上あるときだけ、警告の三角のアイコンと `title` と件数、
+/// `warning` の 1 文、`item` で描いた行を、エラーの色の枠（`view.failure_frame`）に入れる。
+fn failure_panel(
+  language: Language,
+  title: i18n.Message,
+  warning: i18n.Message,
+  rows: List(a),
+  item: fn(a) -> Element(msg),
+) -> Element(msg) {
   case rows {
     [] -> element.none()
-    rows ->
+    _ ->
       view.failure_frame(
         view.warning_triangle_icon(),
-        i18n.text(language, i18n.NotLoadedPlugins),
+        i18n.text(language, title),
         list.length(rows),
-        i18n.text(language, i18n.NotLoadedPluginsWarning),
-        list.map(rows, not_loaded_item(language, _)),
+        i18n.text(language, warning),
+        list.map(rows, item),
       )
   }
 }
