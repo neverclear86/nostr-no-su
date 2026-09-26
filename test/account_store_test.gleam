@@ -1157,51 +1157,26 @@ pub fn postgres_relay_store_test() {
 
   assert relay_store.list(db, generous) == Ok([])
 
-  // 追加は id の順に戻り、`observe` は `roles.monitor` に写る。
+  // 追加は id の順に戻り、`observe` は監視の用途に写る。
   let assert Ok(a) =
-    relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: False),
-      generous,
-    )
+    relay_store.insert(db, "wss://a", relay_list.MonitorOnly, generous)
   let assert Ok(b) =
-    relay_store.insert(
-      db,
-      "wss://b",
-      relay_list.Roles(monitor: False, bunker: True),
-      generous,
-    )
+    relay_store.insert(db, "wss://b", relay_list.BunkerOnly, generous)
   assert relay_store.list(db, generous) == Ok([a, b])
-  assert a.roles == relay_list.Roles(monitor: True, bunker: False)
+  assert a.roles == relay_list.MonitorOnly
 
   // 同じ URL の追加は他の DB の失敗と区別できる値で返る。
-  assert relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
+  assert relay_store.insert(db, "wss://a", relay_list.Both, generous)
     == Error(account_store.RelayAlreadyRegistered)
 
   // 用途の更新が反映される。
   let assert Ok(Nil) =
-    relay_store.update_roles(
-      db,
-      a.id,
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
+    relay_store.update_roles(db, a.id, relay_list.Both, generous)
   let assert Ok([updated_a, _updated_b]) = relay_store.list(db, generous)
-  assert updated_a.roles == relay_list.Roles(monitor: True, bunker: True)
+  assert updated_a.roles == relay_list.Both
 
   // 無い id の更新と削除は区別できる値で返る。
-  assert relay_store.update_roles(
-      db,
-      -1,
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
+  assert relay_store.update_roles(db, -1, relay_list.Both, generous)
     == Error(account_store.RelayNotRegistered)
   assert relay_store.delete(db, -1, generous)
     == Error(account_store.RelayNotRegistered)
@@ -1209,6 +1184,23 @@ pub fn postgres_relay_store_test() {
   // 削除で消える。
   let assert Ok(Nil) = relay_store.delete(db, a.id, generous)
   assert relay_store.list(db, generous) == Ok([b])
+}
+
+/// `observe` と `bunker` がどちらも false の行は `relay_store.list` が読まない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_relay_store_list_skips_roleless_rows_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- postgres.with_schema(database_url)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  postgres.run_statement(
+    db,
+    "INSERT INTO relays (url, observe, bunker) VALUES ('wss://none', false, false)",
+  )
+  assert relay_store.list(db, generous) == Ok([])
 }
 
 /// `nostr_no_su.load_snapshot` は移行を含む読み込みと同じトランザクションで
@@ -1224,31 +1216,15 @@ pub fn postgres_load_snapshot_reads_relays_test() {
   // 移行を実行してから行を足す。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
   let assert Ok(_a) =
-    relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: False),
-      generous,
-    )
+    relay_store.insert(db, "wss://a", relay_list.MonitorOnly, generous)
   let assert Ok(_b) =
-    relay_store.insert(
-      db,
-      "wss://b",
-      relay_list.Roles(monitor: False, bunker: True),
-      generous,
-    )
+    relay_store.insert(db, "wss://b", relay_list.BunkerOnly, generous)
 
   let assert Ok(snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
   assert snapshot.relays
     == [
-      relay_list.Registered(
-        url: "wss://a",
-        roles: relay_list.Roles(monitor: True, bunker: False),
-      ),
-      relay_list.Registered(
-        url: "wss://b",
-        roles: relay_list.Roles(monitor: False, bunker: True),
-      ),
+      relay_list.Registered(url: "wss://a", roles: relay_list.MonitorOnly),
+      relay_list.Registered(url: "wss://b", roles: relay_list.BunkerOnly),
     ]
 }
 

@@ -1743,23 +1743,19 @@ fn new_relay(
       context,
       language,
       theme,
-      dashboard.NewRelayOpen(echoed_url, roles, reason),
+      dashboard.NewRelayOpen(echoed_url, option.from_result(roles), reason),
       status,
     )
   }
-  case parse_relay_url(raw_url) {
-    Error(reason) -> redraw(i18n.Translated(reason), 400)
-    Ok(url) ->
-      case roles.monitor || roles.bunker {
-        False -> redraw(i18n.Translated(i18n.RelayRoleRequired), 400)
-        True ->
-          relay_change_response(
-            language,
-            theme,
-            context.add_relay(url, roles),
-            redraw,
-          )
-      }
+  case parse_relay_url(raw_url), roles {
+    Error(reason), _ | _, Error(reason) -> redraw(i18n.Translated(reason), 400)
+    Ok(url), Ok(roles) ->
+      relay_change_response(
+        language,
+        theme,
+        context.add_relay(url, roles),
+        redraw,
+      )
   }
 }
 
@@ -1773,13 +1769,15 @@ fn parse_relay_url(raw: String) -> Result(String, i18n.Message) {
   }
 }
 
-/// フォームの用途。チェックの無いチェックボックスは送られない。
-fn relay_roles(form: wisp.FormData) -> relay_list.Roles {
+/// フォームの用途。チェックの無いチェックボックスは送られない。どちらのチェックも無ければ
+/// `RelayRoleRequired`。
+fn relay_roles(form: wisp.FormData) -> Result(relay_list.Roles, i18n.Message) {
   let checked = fn(name) { result.is_ok(list.key_find(form.values, name)) }
-  relay_list.Roles(
+  relay_list.roles_from(
     monitor: checked(dashboard.monitor_field),
     bunker: checked(dashboard.bunker_field),
   )
+  |> result.replace_error(i18n.RelayRoleRequired)
 }
 
 /// リレーの変更の失敗の応答。書き込まれていないことが確定していれば、`redraw` で同じダイアログを開き直して
@@ -1941,11 +1939,9 @@ fn relay_action(
   case action {
     dashboard.EditRelayRoles -> {
       use form <- wisp.require_form(request)
-      let roles = relay_roles(form)
-      case roles.monitor || roles.bunker {
-        False ->
-          redraw(Some(roles))(i18n.Translated(i18n.RelayRoleRequired), 400)
-        True ->
+      case relay_roles(form) {
+        Error(reason) -> redraw(None)(i18n.Translated(reason), 400)
+        Ok(roles) ->
           relay_change_response(
             language,
             theme,

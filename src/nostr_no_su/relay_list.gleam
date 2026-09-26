@@ -64,9 +64,37 @@ pub type Entry {
   )
 }
 
-/// 開く・用途を変えるときに指定する、リレー 1 件の用途の組。
+/// 開く・用途を変えるときに指定する、リレー 1 件の用途の組。どちらの用途も使わない組は
+/// 表せない（一覧から外すのは `close` の役目）。
 pub type Roles {
-  Roles(monitor: Bool, bunker: Bool)
+  /// 監視だけに使う。
+  MonitorOnly
+  /// バンカーだけに使う。
+  BunkerOnly
+  /// 監視とバンカーの両方に使う。
+  Both
+}
+
+/// 監視とバンカーの用途を使うかどうかの組を `Roles` にする。どちらも使わないなら `Error(Nil)`。
+pub fn roles_from(
+  monitor monitor: Bool,
+  bunker bunker: Bool,
+) -> Result(Roles, Nil) {
+  case monitor, bunker {
+    True, True -> Ok(Both)
+    True, False -> Ok(MonitorOnly)
+    False, True -> Ok(BunkerOnly)
+    False, False -> Error(Nil)
+  }
+}
+
+/// `roles` が用途 `role` を含むか。`SessionOnly` は `Roles` の用途ではないので常に `False`。
+pub fn has_role(roles: Roles, role: Role) -> Bool {
+  case role, roles {
+    Monitor, MonitorOnly | Monitor, Both -> True
+    Bunker, BunkerOnly | Bunker, Both -> True
+    _, _ -> False
+  }
 }
 
 /// リレーの用途。
@@ -92,8 +120,6 @@ pub type ChangeError {
   AlreadyListed
   /// 指定した URL が一覧に無い。
   NotListed
-  /// 用途が監視・バンカーのどちらも偽。閉じるのは `close` の役目。
-  NoRole
   /// このアクターが応答しなかった。変更が適用されたかどうかは分からない
   /// （既知の窓 3）。
   NotAnswered
@@ -153,7 +179,7 @@ pub fn initial(
       Entry(url: connection.url, monitor: Some(connection.name), bunker: None)
     })
   use entries, connection <- list.fold(bunker, from_monitor)
-  case list.any(entries, fn(entry) { entry.url == connection.url }) {
+  case is_listed(entries, connection.url) {
     True ->
       list.map(entries, fn(entry) {
         case entry.url == connection.url {
@@ -193,14 +219,13 @@ pub fn open(
   roles: Roles,
 ) -> Result(List(Entry), ChangeError) {
   use Nil <- result.try(check_url(url))
-  use Nil <- result.try(check_roles(roles))
   use Nil <- result.try(check_not_listed(entries, url))
   Ok(
     list.append(entries, [
       Entry(
         url: url,
-        monitor: wanted_name(roles.monitor),
-        bunker: wanted_name(roles.bunker),
+        monitor: kept_or_new_name(None, has_role(roles, Monitor)),
+        bunker: kept_or_new_name(None, has_role(roles, Bunker)),
       ),
     ]),
   )
@@ -222,7 +247,6 @@ pub fn change_roles(
   url: String,
   roles: Roles,
 ) -> Result(List(Entry), ChangeError) {
-  use Nil <- result.try(check_roles(roles))
   use Nil <- result.try(check_listed(entries, url))
   Ok(
     list.map(entries, fn(entry) {
@@ -231,8 +255,8 @@ pub fn change_roles(
         True ->
           Entry(
             ..entry,
-            monitor: kept_or_new_name(entry.monitor, roles.monitor),
-            bunker: kept_or_new_name(entry.bunker, roles.bunker),
+            monitor: kept_or_new_name(entry.monitor, has_role(roles, Monitor)),
+            bunker: kept_or_new_name(entry.bunker, has_role(roles, Bunker)),
           )
       }
     }),
@@ -268,8 +292,7 @@ pub fn session_connections(
   |> list.map(fn(url) {
     case list.find(current, fn(connection) { connection.url == url }) {
       Ok(connection) -> connection
-      Error(Nil) ->
-        Connection(name: process.new_name("nostr_no_su_relay"), url: url)
+      Error(Nil) -> Connection(name: new_connection_name(), url: url)
     }
   })
 }
@@ -282,20 +305,12 @@ fn check_url(url: String) -> Result(Nil, ChangeError) {
   }
 }
 
-/// 用途が最低 1 つ立っているか。
-fn check_roles(roles: Roles) -> Result(Nil, ChangeError) {
-  case roles.monitor || roles.bunker {
-    True -> Ok(Nil)
-    False -> Error(NoRole)
-  }
-}
-
 /// `url` がまだ一覧に無いか。
 fn check_not_listed(
   entries: List(Entry),
   url: String,
 ) -> Result(Nil, ChangeError) {
-  case list.any(entries, fn(entry) { entry.url == url }) {
+  case is_listed(entries, url) {
     True -> Error(AlreadyListed)
     False -> Ok(Nil)
   }
@@ -303,17 +318,9 @@ fn check_not_listed(
 
 /// `url` が既に一覧にあるか。
 fn check_listed(entries: List(Entry), url: String) -> Result(Nil, ChangeError) {
-  case list.any(entries, fn(entry) { entry.url == url }) {
+  case is_listed(entries, url) {
     True -> Ok(Nil)
     False -> Error(NotListed)
-  }
-}
-
-/// その用途を望むなら新しい接続名を作り、望まないなら `None`。
-fn wanted_name(wanted: Bool) -> Option(Name(relay_connection.Msg)) {
-  case wanted {
-    True -> Some(process.new_name("nostr_no_su_relay"))
-    False -> None
   }
 }
 
@@ -325,9 +332,19 @@ fn kept_or_new_name(
 ) -> Option(Name(relay_connection.Msg)) {
   case current, wanted {
     Some(name), True -> Some(name)
-    None, True -> Some(process.new_name("nostr_no_su_relay"))
+    None, True -> Some(new_connection_name())
     _, False -> None
   }
+}
+
+/// 接続アクターに付ける新しい名前。
+fn new_connection_name() -> Name(relay_connection.Msg) {
+  process.new_name("nostr_no_su_relay")
+}
+
+/// `url` の項目が一覧にあるか。
+fn is_listed(entries: List(Entry), url: String) -> Bool {
+  list.any(entries, fn(entry) { entry.url == url })
 }
 
 /// 項目のうち、指定した用途で使う名前。
@@ -409,7 +426,7 @@ pub fn connections_child(
 /// `terminate_dynamic_child` で接続の停止のタイムアウト（factory の
 /// `worker_child` の既定 5000ms）まで待つことがあり、1 回の変更で 2 用途を
 /// 止めうるので、それより十分に長く取る。
-pub const call_timeout_ms = 15_000
+const call_timeout_ms = 15_000
 
 /// 一覧を `apply` で変える。応答が無ければ `NotAnswered` にする。`NotAnswered`
 /// は結果が不明で、変更は後で適用されうる（既知の窓 3）。
@@ -545,14 +562,12 @@ fn role_connections(state: State, role: Role) -> List(Connection) {
   }
 }
 
-/// 登録されたリレーを飛ばした理由の説明。`open_all` が返す拒否は `InvalidUrl` か
-/// `NoRole` だけ（`AlreadyListed` は `open_all` の時点で飛ばし、`NotListed` と
-/// `NotAnswered` は `open` が返さない）だが、`ChangeError` を網羅するために残りも
-/// 扱う。
+/// 登録されたリレーを飛ばした理由の説明。`open_all` が返す拒否は `InvalidUrl` だけ
+/// （`AlreadyListed` は `open_all` の時点で飛ばし、`NotListed` と `NotAnswered` は `open` が
+/// 返さない）だが、`ChangeError` を網羅するために残りも扱う。
 fn skipped_reason(error: ChangeError) -> String {
   case error {
     InvalidUrl -> "invalid url (use ws:// or wss://)"
-    NoRole -> "no role"
     AlreadyListed | NotListed | NotAnswered -> "rejected"
   }
 }

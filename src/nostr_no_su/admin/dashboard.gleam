@@ -41,8 +41,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
-import nostr_no_su/relay_list.{type Roles, Roles}
-import nostr_no_su/relay_store.{type Relay}
+import nostr_no_su/relay_list.{type Roles}
 
 /// `relays` の 1 行の表示内容。用途ごとに、使っていなければ `Unused`、状態を得られたら
 /// `Reported`、締め切りまでに接続が答えなければ `Unanswered` を持つ。
@@ -193,9 +192,11 @@ pub type GettingStarted {
 
 /// POST の応答で、ダッシュボードに開いた状態で描くダイアログ。
 pub type OpenDialog {
-  /// リレーの追加。欄に戻す URL と用途と、先頭に出す理由を持つ。
-  NewRelayOpen(url: String, roles: Roles, error: i18n.Reason)
-  /// リレー `id` への操作。`roles` は用途の編集の欄に戻す用途で、削除では `None`。
+  /// リレーの追加。欄に戻す URL と、チェックを入れる用途（`None` ならどちらも外す）と、先頭に
+  /// 出す理由を持つ。
+  NewRelayOpen(url: String, roles: Option(Roles), error: i18n.Reason)
+  /// リレー `id` への操作。`roles` は用途の編集の欄でチェックを入れる用途で、`None` ならどちらも
+  /// 外す。削除では使わない。
   RelayActionOpen(
     id: Int,
     action: RelayAction,
@@ -2579,7 +2580,7 @@ fn relays_section(
       roles,
       Some(error),
     )
-    _ -> #(view.OpensOnTrigger, "", new_relay_roles, None)
+    _ -> #(view.OpensOnTrigger, "", Some(new_relay_roles), None)
   }
   view.section_block(relays_anchor, [
     listed_section_heading(
@@ -2688,7 +2689,7 @@ fn relay_item(
           Some(RelayActionOpen(id:, action: opened, roles:, error:))
             if id == row.id && opened == action
           -> #(view.OpenedByResponse, roles, Some(error))
-          _ -> #(view.OpensOnTrigger, None, None)
+          _ -> #(view.OpensOnTrigger, row_roles(row), None)
         }
         [
           view.dialog_trigger(
@@ -2712,11 +2713,7 @@ fn relay_item(
                 ]),
                 ..relay_action_form(
                   language,
-                  relay_store.Relay(
-                    id: row.id,
-                    url: row.url,
-                    roles: row_roles(row),
-                  ),
+                  row.id,
                   action,
                   roles,
                   Some(row),
@@ -2738,7 +2735,7 @@ fn relay_item(
 }
 
 /// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
-pub const new_relay_roles = Roles(monitor: False, bunker: True)
+pub const new_relay_roles = relay_list.BunkerOnly
 
 /// リレーの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 1 のボタンが開く。
 fn add_relay_dialog_id() -> String {
@@ -2754,19 +2751,23 @@ fn add_account_dialog_id() -> String {
 /// 1 つのページに 2 つ現れないので固定の値にする。
 const relay_url_hint_id = "relay-url-hint"
 
-/// 行の今の用途。`Unused` でない用途を使っているとみなす（`app.merge_relay_rows` は使っていない
-/// 用途だけを `Unused` にする）。
-fn row_roles(row: RelayRow) -> Roles {
-  Roles(monitor: row.monitor != Unused, bunker: row.bunker != Unused)
+/// 行の今の用途。`Unused` でない用途を使っているとみなし（`app.merge_relay_rows` は使って
+/// いない用途だけを `Unused` にする）、どちらも `Unused` なら `None`。
+fn row_roles(row: RelayRow) -> Option(Roles) {
+  relay_list.roles_from(
+    monitor: row.monitor != Unused,
+    bunker: row.bunker != Unused,
+  )
+  |> option.from_result
 }
 
 /// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
-/// 用途のチェック）を並べる。ダイアログの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
-/// 用途の接続状態のバッジは出さない。
+/// 用途のチェック）を並べる。ダイアログの枠と入力の誤りは含めない。`url` は欄に出す値、`roles` は
+/// チェックを入れる用途（`None` ならどちらも外す）で、用途の接続状態のバッジは出さない。
 pub fn new_relay_form(
   language: Language,
   url: String,
-  roles: Roles,
+  roles: Option(Roles),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
@@ -2782,26 +2783,26 @@ pub fn new_relay_form(
   ]
 }
 
-/// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
-/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
-/// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
-/// 使わない。URL の要約と入力の誤りは含めない。
+/// リレー `id` への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
+/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（チェックを入れる用途。`None`
+/// ならどちらも外す）のチェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで
+/// `roles` と `states` を使わない。URL の要約と入力の誤りは含めない。
 pub fn relay_action_form(
   language: Language,
-  relay: Relay,
+  id: Int,
   action: RelayAction,
   roles: Option(Roles),
   states: Option(RelayRow),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = relay_action_path(relay.id, action)
+  let path = relay_action_path(id, action)
   case action {
     EditRelayRoles -> [
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
       view.post_form(
         path,
-        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
+        [roles_fieldset(language, roles, states)],
         text(i18n.Save),
         view.PrimaryButton,
         placement,
@@ -2841,14 +2842,17 @@ fn url_field(language: Language, url: String) -> Element(msg) {
   )
 }
 
-/// 用途（監視・バンカー）のチェックの囲み。`states` はその用途の今の接続状態で、`None`
-/// ならバッジを出さない。
+/// 用途（監視・バンカー）のチェックの囲み。`roles` はチェックを入れる用途で、`None` なら
+/// どちらも外す。`states` はその用途の今の接続状態で、`None` ならバッジを出さない。
 fn roles_fieldset(
   language: Language,
-  roles: Roles,
+  roles: Option(Roles),
   states: Option(RelayRow),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
+  let checked = fn(role) {
+    option.map(roles, relay_list.has_role(_, role)) |> option.unwrap(False)
+  }
   html.fieldset([attribute.class("fieldset")], [
     html.legend([attribute.class("fieldset-legend")], [
       html.text(text(i18n.Role)),
@@ -2858,7 +2862,7 @@ fn roles_fieldset(
       view.eye_icon(),
       text(i18n.UseForMonitoring),
       html.text(text(i18n.MonitorRoleDescription)),
-      roles.monitor,
+      checked(relay_list.Monitor),
       option.values([
         option.map(states, fn(row) { row.monitor })
         |> option.map(role_state_badge(language, _)),
@@ -2869,7 +2873,7 @@ fn roles_fieldset(
       view.key_icon(),
       text(i18n.UseForBunker),
       html.text(text(i18n.BunkerRoleDescription)),
-      roles.bunker,
+      checked(relay_list.Bunker),
       option.values([
         option.map(states, fn(row) { row.bunker })
         |> option.map(role_state_badge(language, _)),

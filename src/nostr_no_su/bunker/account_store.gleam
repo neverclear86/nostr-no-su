@@ -130,8 +130,8 @@ pub const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
   created_at bigint NOT NULL
 )"
 
-/// 監視とバンカーのリレーを保存するテーブル。`observe` は Gleam 側で
-/// `relay_list.Roles.monitor` に写す。順は `id`。
+/// 監視とバンカーのリレーを保存するテーブル。`observe`（監視）と `bunker` の組は Gleam 側で
+/// `relay_list.Roles` に写し、どちらも false の行は `relay_store.list` が読まない。順は `id`。
 pub const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   url text NOT NULL CONSTRAINT relays_url_key UNIQUE,

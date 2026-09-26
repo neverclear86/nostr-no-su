@@ -353,12 +353,7 @@ fn start_tree_with_relay(
   signer: Account,
 ) -> #(app.Spec, Pid, String) {
   let #(spec, tree, secret) = start_tree(database_url, signer)
-  let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      relay_url,
-      relay_list.Roles(monitor: False, bunker: True),
-    )
+  let assert Ok(Nil) = app.open_relay(spec, relay_url, relay_list.BunkerOnly)
   #(spec, tree, secret)
 }
 

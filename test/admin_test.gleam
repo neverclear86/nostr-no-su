@@ -935,10 +935,7 @@ pub fn add_relay_saves_the_trimmed_url_test() {
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000)
-    == Ok(RelayAdded(
-      "wss://new.example",
-      relay_list.Roles(monitor: True, bunker: False),
-    ))
+    == Ok(RelayAdded("wss://new.example", relay_list.MonitorOnly))
 }
 
 /// URL の規則に外れる値は 400 で `InvalidRelayUrl` を出し、送った URL とチェックを
@@ -1029,7 +1026,7 @@ pub fn update_relay_roles_saves_the_roles_test() {
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000)
-    == Ok(RelayRolesUpdated(2, relay_list.Roles(monitor: True, bunker: True)))
+    == Ok(RelayRolesUpdated(2, relay_list.Both))
 }
 
 /// 用途を 1 つも選ばない POST は 400 で `RelayRoleRequired` を出し、チェックは無く、
