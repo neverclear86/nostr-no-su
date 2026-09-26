@@ -13,6 +13,7 @@
 - **破壊的変更**: アプリと docker イメージの既定の待ち受けポート（`ADMIN_PORT` 未設定のときの値）を 8080 から 24133 にした（#701）
 - **破壊的変更**: 同梱の compose で `.env` の `ADMIN_PORT` をホスト側に公開するポート（既定 24133）の意味にし、コンテナーには渡さず内側を 24133 に固定した。`ADMIN_PORT=`（空）は管理 UI を無効にせず既定の 24133 で公開する（無効にするのは override の `ADMIN_PORT: ""`）。`ADMIN_BASE_URL` の既定はホスト側の公開ポートを指す（#702）
 - `relays` テーブルに登録したリレーの URL が `ws://`・`wss://` 以外のスキーム（`http://`、`https://` など）のとき、接続せずに起動時の `skipped registered relay` の Warning で飛ばすようにした（#803）
+- `relays` テーブルの `observe` と `bunker` がどちらも false の行を、起動時の `skipped registered relay: no role` の Warning で飛ばすのをやめ、読み込まずダッシュボードの一覧にも出さないようにした。消し方は [運用](docs/operations.md)（#805）
 
 ### 修正
 
