@@ -712,7 +712,7 @@ nostr-no-su/
 │       ├── bunker/connection_uri.gleam bunker:// URI とカメラ用のコピー用の文字列の組み立て（純粋）
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証、セッションと承認待ちの行の MAC（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ちを Postgres に保存するストア
-│       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）
+│       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈と接続の待ちの上限（純粋）
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
 │       ├── nostr/message.gleam   クライアントとリレーのメッセージ
@@ -720,7 +720,7 @@ nostr-no-su/
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
 │       ├── relay_fetch.gleam     監視の用途のリレーへの使い捨ての取得の問い合わせ
-│       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止
+│       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止、本体のサブツリーが共有する再起動の許容
 │       ├── relay_store.gleam     リレーの一覧（relays）の SQL
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH
 │       ├── crypto/bip340.gleam   BIP-340 Schnorr 署名と検証

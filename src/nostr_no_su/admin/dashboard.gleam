@@ -36,6 +36,7 @@ import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -415,10 +416,6 @@ pub const plugin_name_field = "name"
 
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
-
-/// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。確認のダイアログの
-/// 案内と `app.connect_nostrconnect` の待ちが同じ値を見る。
-pub const nostrconnect_wait_seconds = 15
 
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
@@ -3051,7 +3048,9 @@ fn connect_review_dialog(
               placement,
             ),
             view.hint(
-              text(i18n.ConnectWaitHint(seconds: nostrconnect_wait_seconds)),
+              text(i18n.ConnectWaitHint(
+                seconds: nostrconnect.connect_wait_seconds,
+              )),
             ),
           ]
         },

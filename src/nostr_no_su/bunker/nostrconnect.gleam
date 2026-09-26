@@ -1,4 +1,4 @@
-//// クライアントが出す `nostrconnect://` URI を解釈する純粋なモジュール。
+//// クライアントが出す `nostrconnect://` URI を解釈する純粋なモジュール。その接続の待ちの上限も置く。
 ////
 //// 前後の空白は落とさない（貼り付けの整形は呼び出し側の責務）。クエリーの値は
 //// percent デコードだけを行い、`+` を空白にしない。form 符号化
@@ -23,6 +23,10 @@ import nostr_no_su/relay_client
 
 /// `nostrconnect://` URI が持てる `relay` の件数の上限。
 pub const max_relays = 5
+
+/// `nostrconnect://` の接続で、URI のリレーが応答の発行先になるのを待つ上限（秒）。
+/// `app.connect_nostrconnect` の待ちと、確認のダイアログの案内が同じ値を見る。
+pub const connect_wait_seconds = 15
 
 /// `nostrconnect://` URI が求める接続。`client` は小文字 16 進の 32 バイト、
 /// `relays` は URI に現れた順、`secret` はクライアントが `connect` の応答で受け取る
