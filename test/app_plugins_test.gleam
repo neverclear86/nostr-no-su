@@ -12,7 +12,6 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import nostr_no_su
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/app
@@ -21,7 +20,6 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/connection_uri
-import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter
@@ -34,6 +32,7 @@ import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/subscriptions
 import nostr_no_su/task
 import nostr_no_su/time
 import pog
@@ -800,7 +799,7 @@ fn kill_registered(name: Atom) -> Nil
 // --- 監視の購読 ---
 
 /// バンカーにリレーを持たせず、監視だけがリレー接続を持つツリー。購読は本番と
-/// 同じ `nostr_no_su.monitor_subscriptions` から組み立てる。バンカーにリレーを
+/// 同じ `subscriptions.monitor_relay_subscriptions` から組み立てる。バンカーにリレーを
 /// 持たせないのは、購読の報告（`subscribed`）がすべて監視の接続のものになる
 /// ようにするためである。プラグインを載せると、その取り直しの要求も本番と同じ
 /// `app.plugin_catchups` から購読へ現れる。`load_plugin_resume` はプラグインの
@@ -827,7 +826,7 @@ fn monitored_accounts_spec(
       name: dedup_name,
       dedup_capacity: 64,
       relays: relays,
-      subscriptions: nostr_no_su.monitor_subscriptions(
+      subscriptions: subscriptions.monitor_relay_subscriptions(
         bunker_name,
         dedup_name,
         load_resume,
@@ -1400,7 +1399,7 @@ pub fn a_catchup_event_reaches_only_the_target_plugin_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(normal),
     ),
   )
@@ -1476,7 +1475,7 @@ pub fn a_monitor_event_from_an_unregistered_author_is_dropped_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(note("other")),
     ),
   )
@@ -1487,7 +1486,7 @@ pub fn a_monitor_event_from_an_unregistered_author_is_dropped_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(own),
     ),
   )
@@ -1513,14 +1512,14 @@ pub fn the_monitor_checks_the_author_whatever_the_kind_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(signed_event.new(0, "other")),
     ),
   )
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(signed_event.by(
         signer_key,
         event.nip46_kind,
@@ -1532,7 +1531,7 @@ pub fn the_monitor_checks_the_author_whatever_the_kind_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(own),
     ),
   )
@@ -1600,7 +1599,7 @@ pub fn an_event_on_an_unknown_subscription_is_dropped_test() {
   handle(
     test_relay_url,
     relay_client.ReceivedEvent(
-      config.monitor_subscription_id,
+      subscriptions.monitor_subscription_id,
       signed_event.verified(normal),
     ),
   )

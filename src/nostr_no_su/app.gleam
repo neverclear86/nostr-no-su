@@ -155,7 +155,6 @@ import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
-import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
 import nostr_no_su/hex
@@ -173,6 +172,7 @@ import nostr_no_su/relay_client.{
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/subscriptions
 import nostr_no_su/task
 import nostr_no_su/time
 import pog
@@ -588,9 +588,9 @@ fn monitor_tree(
 /// 作者の順に照合する。`excludes_kind` が真の kind のイベントは数えずに落とす。
 /// 監視とバンカーが同じリレーを使うとバンカーの応答（kind 24133）も監視の購読に
 /// 届くので、呼び出し側はそれを含む述語を渡す。購読 id が監視の購読
-/// （`config.monitor_subscription_id`）でも取り直しの購読（`config.catchup_plugin`）
-/// でもないイベントと、作者が `accepts_author` に通らないイベントは落とし、
-/// ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
+/// （`subscriptions.monitor_subscription_id`）でも取り直しの購読
+/// （`subscriptions.catchup_plugin`）でもないイベントと、作者が `accepts_author` に通らない
+/// イベントは落とし、ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
 /// 取り直しの購読のものならそのプラグインのランナーへ直接送り、監視の購読のもの
 /// ならディスパッチャーへ渡す。終わり（EOSE）は、取り直しの購読のものだけを
 /// ランナーに取り直しの完了として伝える。テストが購読 id ごとの振り分けを直接
@@ -607,8 +607,8 @@ pub fn monitor_handler(
         let incoming = event.verified_event(verified)
         case
           excludes_kind(incoming.kind),
-          subscription_id == config.monitor_subscription_id,
-          config.catchup_plugin(subscription_id),
+          subscription_id == subscriptions.monitor_subscription_id,
+          subscriptions.catchup_plugin(subscription_id),
           accepts_author(incoming.pubkey)
         {
           True, _, _, _ -> Nil
@@ -625,7 +625,7 @@ pub fn monitor_handler(
         }
       }
       relay_client.ReceivedEose(subscription_id) ->
-        case config.catchup_plugin(subscription_id) {
+        case subscriptions.catchup_plugin(subscription_id) {
           Some(plugin) ->
             send_to_runner(runners, plugin, plugin_runner.CatchupEnded)
           None -> Nil

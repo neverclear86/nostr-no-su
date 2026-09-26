@@ -1,13 +1,13 @@
+//// 環境変数から本体の設定（`Config`）を読み込む。環境変数を読むのはこのモジュールだけで、
+//// 秘密の環境変数は読み込みの後にプロセスの環境から消す。
+
 import envoy
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import nostr_no_su/bunker/vault
-import nostr_no_su/nostr/event
-import nostr_no_su/nostr/filter.{type Filter, Filter}
 import nostr_no_su/plugin_config
 
 /// ファイルからも読め、読み込みの後にプロセスの環境から消す秘密の環境変数。
@@ -303,106 +303,3 @@ fn admin_bind() -> Result(String, String) {
 /// `value` が IPv4 か IPv6 のアドレスとして読めるか。
 @external(erlang, "nostr_no_su_ffi", "is_ip_address")
 fn is_ip_address(value: String) -> Bool
-
-/// 監視の購読 id。
-pub const monitor_subscription_id = "nostr-no-su"
-
-/// プラグインの取り直しの購読 id の接頭辞。プラグイン名を繋げて使う。
-const catchup_subscription_prefix = "nostr-no-su-catchup-"
-
-/// 購読 id が取り直しのものなら、そのプラグイン名。`catchup_subscriptions` が
-/// 組み立てる id の逆である。
-pub fn catchup_plugin(subscription_id: String) -> Option(String) {
-  case string.starts_with(subscription_id, catchup_subscription_prefix) {
-    True ->
-      Some(string.drop_start(
-        subscription_id,
-        string.length(catchup_subscription_prefix),
-      ))
-    False -> None
-  }
-}
-
-/// 登録アカウントが書いたイベントの購読。署名者がいなければ購読を定義せず、継続
-/// を評価しない（開いている購読は照合で CLOSE になる、`relay_client.sync`）。継続
-/// は署名者がいるときだけ呼び、`since` と足す購読（プラグインの取り直し、
-/// `catchup_subscriptions`）を返す。`since` が `Ok(None)` なら保存済みのイベントを
-/// すべて求め、`Error(Nil)` なら定義を得られなかったことにする。
-pub fn monitor_subscriptions(
-  signer_pubkeys: List(String),
-  continuation: fn() -> Result(#(Option(Int), List(#(String, Filter))), Nil),
-) -> Result(List(#(String, Filter)), Nil) {
-  case signer_pubkeys {
-    [] -> Ok([])
-    signer_pubkeys -> {
-      use #(since, extra) <- result.map(continuation())
-      [
-        #(
-          monitor_subscription_id,
-          Filter(..filter.new(), authors: Some(signer_pubkeys), since: since),
-        ),
-        ..extra
-      ]
-    }
-  }
-}
-
-/// 復帰したプラグインの取り直しの購読。署名者がいなければ購読を定義しない。
-/// 購読 id はプラグイン名で分け、それぞれ `until` で範囲を閉じる（それより後の
-/// イベントは通常の監視の購読が運ぶ）。`monitor_since` はこの接続の監視の購読の
-/// `since` で、`Some` なら `until` をそれ以下に切り詰め、範囲が残らない取り直しは
-/// 定義しない（切り詰めた範囲は監視の購読が運ぶ。境界の秒は両方が運ぶ）。`None`
-/// なら範囲を変えない（`since` の無い監視の購読はリレーの件数の上限で切られうる）。
-pub fn catchup_subscriptions(
-  signer_pubkeys: List(String),
-  monitor_since: Option(Int),
-  catchups: List(#(String, Int, Int)),
-) -> List(#(String, Filter)) {
-  case signer_pubkeys {
-    [] -> []
-    signer_pubkeys ->
-      list.filter_map(catchups, fn(catchup) {
-        let #(plugin, since, until) = catchup
-        let until = case monitor_since {
-          None -> until
-          Some(monitor) -> int.min(until, monitor)
-        }
-        case since <= until {
-          False -> Error(Nil)
-          True ->
-            Ok(#(
-              catchup_subscription_prefix <> plugin,
-              Filter(
-                ..filter.new(),
-                authors: Some(signer_pubkeys),
-                since: Some(since),
-                until: Some(until),
-              ),
-            ))
-        }
-      })
-  }
-}
-
-/// 署名者宛の NIP-46 リクエストの購読。署名者がいなければ購読を定義しない。空の
-/// `#p` の扱いはリレーによって異なるため REQ を送らず、開いている購読は照合で
-/// CLOSE になる（`relay_client.sync`）。
-pub fn bunker_subscriptions(
-  signer_pubkeys: List(String),
-  since: Int,
-) -> List(#(String, Filter)) {
-  case signer_pubkeys {
-    [] -> []
-    signer_pubkeys -> [#("bunker", bunker_filter(signer_pubkeys, since))]
-  }
-}
-
-/// 指定した署名者 pubkey 宛の NIP-46 リクエストを購読する。
-pub fn bunker_filter(signer_pubkeys: List(String), since: Int) -> Filter {
-  Filter(
-    ..filter.new(),
-    kinds: Some([event.nip46_kind]),
-    p_tags: Some(signer_pubkeys),
-    since: Some(since),
-  )
-}

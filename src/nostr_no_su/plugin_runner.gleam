@@ -105,7 +105,7 @@ pub type Outcome {
 }
 
 /// プラグインの取り直しの要求 1 件。`since` はランナーのメモリの再開点で、
-/// `None` なら保存済みの値を使う（`nostr_no_su.catchup_since`）。`until` は
+/// `None` なら保存済みの値を使う（`subscriptions.catchup_since`）。`until` は
 /// 要求を立てた時刻で、これより後のイベントは通常の監視の購読が運ぶ。
 pub type Catchup {
   Catchup(since: Option(Int), until: Int)
