@@ -14,6 +14,7 @@
 - **破壊的変更**: 同梱の compose で `.env` の `ADMIN_PORT` をホスト側に公開するポート（既定 24133）の意味にし、コンテナーには渡さず内側を 24133 に固定した。`ADMIN_PORT=`（空）は管理 UI を無効にせず既定の 24133 で公開する（無効にするのは override の `ADMIN_PORT: ""`）。`ADMIN_BASE_URL` の既定はホスト側の公開ポートを指す（#702）
 - `relays` テーブルに登録したリレーの URL が `ws://`・`wss://` 以外のスキーム（`http://`、`https://` など）のとき、接続せずに起動時の `skipped registered relay` の Warning で飛ばすようにした（#803）
 - `relays` テーブルの `observe` と `bunker` がどちらも false の行を、起動時の `skipped registered relay: no role` の Warning で飛ばすのをやめ、読み込まずダッシュボードの一覧にも出さないようにした。消し方は [運用](docs/operations.md)（#805）
+- 管理 UI からの承認・拒否・セッションの取り消し・権限の編集・`nostrconnect://` の接続の成功のログ行を、ストアへの書き込みが成功した後にバンカーのアクターが出すようにし、接頭辞を `[admin]` から `[bunker]` にした（本文は同じ）。読み込み前の `nostrconnect://` の接続の失敗も行を出す（#799）
 
 ### 修正
 
