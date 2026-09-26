@@ -1,14 +1,14 @@
 //// 管理 UI のダッシュボード、承認ページ、通知ページの描画と、表示する状態の型、
 //// ダイアログに出すフォームの中身。スナップショット（純粋なデータ）から HTML 文字列を
 //// 組み立てるだけで、プロセスにも IO にも触れない。描画の規則は `admin/view` に置く。
-//// パスとフォームの欄の名前は、ルーティング（`admin`）と共有する定義としてここに置く。
+//// フォームの欄の名前は、ルーティング（`admin`）と共有する定義としてここに置く。ページとフォームの
+//// パスは `admin/routes` に置く。
 
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import gleam/uri
 import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
@@ -17,6 +17,7 @@ import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/qr
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
@@ -184,7 +185,7 @@ pub type OpenDialog {
   /// 外す。削除では使わない。
   RelayActionOpen(
     id: Int,
-    action: RelayAction,
+    action: routes.RelayAction,
     roles: Option(Roles),
     error: i18n.Reason,
   )
@@ -200,7 +201,7 @@ pub type OpenDialog {
   /// アカウント `signer` への操作。`label` はラベルの編集の欄に戻す値で、ほかの操作では `None`。
   AccountActionOpen(
     signer: String,
-    action: AccountAction,
+    action: routes.AccountAction,
     label: Option(String),
     error: i18n.Reason,
   )
@@ -261,81 +262,12 @@ type SetupStep {
   StepLocked
 }
 
-/// アカウント 1 件に対する操作。
-pub type AccountAction {
-  EditLabel
-  RotateSecret
-  DeleteAccount
-  RevealPrivateKey
-}
-
-/// 操作の一覧。セグメントとの対応をここから引く。
-const account_actions = [
-  EditLabel,
-  RevealPrivateKey,
-  RotateSecret,
-  DeleteAccount,
-]
-
 /// アカウントの行の畳みにダイアログで並べる操作。この順に左から並べ、削除だけ右端に離して置く。
-const detail_actions = [EditLabel, RevealPrivateKey, RotateSecret]
-
-/// リレー 1 件に対する操作。
-pub type RelayAction {
-  EditRelayRoles
-  DeleteRelay
-}
-
-/// 操作の一覧。ダッシュボードのボタンとダイアログはこの順に並べ、セグメントとの対応もここから引く。
-const relay_actions = [EditRelayRoles, DeleteRelay]
-
-/// アカウントの POST 先のパスの先頭のセグメント。
-const accounts_segment = "accounts"
-
-/// リレーの POST 先のパスの先頭のセグメント。
-const relays_segment = "relays"
-
-/// プラグインのページのパスの先頭のセグメント。
-const plugins_segment = "plugins"
-
-/// 承認ページのパスの先頭のセグメント。
-pub const approve_segment = "approve"
-
-/// 拒否のパスの先頭のセグメント。
-pub const deny_segment = "deny"
-
-/// アカウントの読み直しの POST 先のパスセグメント。
-pub const reload_accounts_segments = [accounts_segment, "reload"]
-
-/// リレーの追加の POST 先のパスセグメント。
-pub const new_relay_segments = [relays_segment, "new"]
-
-/// 鍵の生成の POST 先のパスセグメント。
-pub const generate_account_segments = [accounts_segment, "generate"]
-
-/// nsec による登録の POST 先のパスセグメント。
-pub const import_account_segments = [accounts_segment, "import"]
-
-/// 生成した鍵の登録の POST 先のパスセグメント。
-pub const register_generated_segments = [accounts_segment, "register-generated"]
-
-/// セッションの POST 先のパスの先頭のセグメント。
-const sessions_segment = "sessions"
-
-/// セッションの取り消しの操作の語。POST 先のパスの末尾と、取り消しのダイアログの `id` に使う。
-const revoke_segment = "revoke"
-
-/// セッション取り消しの POST 先のパスセグメント。
-pub const revoke_segments = [sessions_segment, revoke_segment]
-
-/// クライアントの接続の 1 段目の送信先のパスセグメント。
-pub const connect_segments = [sessions_segment, "connect"]
-
-/// クライアントの接続の確認のダイアログから、接続を送るパス。
-pub const connect_confirm_segments = [sessions_segment, "connect", "confirm"]
-
-/// プラグインの再有効化の POST 先のパスセグメント。
-pub const reenable_plugin_segments = [plugins_segment, "reenable"]
+const detail_actions = [
+  routes.EditLabel,
+  routes.RevealPrivateKey,
+  routes.RotateSecret,
+]
 
 /// 登録のフォームで nsec を送る欄の名前。
 pub const nsec_field = "nsec"
@@ -1183,7 +1115,7 @@ pub fn import_form(
   let text = i18n.text(language, _)
   [
     view.secret_post_form(
-      view.segments_path(import_account_segments),
+      view.segments_path(routes.import_account_segments),
       [
         view.hinted_input(
           language,
@@ -1211,7 +1143,7 @@ pub fn generate_form(
   [
     view.paragraph(text(i18n.GenerateDescription)),
     view.post_form(
-      view.segments_path(generate_account_segments),
+      view.segments_path(routes.generate_account_segments),
       [],
       text(i18n.Generate),
       view.OutlineButton,
@@ -1366,7 +1298,7 @@ fn account_item(
   account: AccountRow,
 ) -> Element(msg) {
   let action_dialogs =
-    list.map(account_actions, fn(action) {
+    list.map(routes.account_actions, fn(action) {
       account_dialog(language, account, action, dialog)
     })
   view.list_row(view.StackedRow, [
@@ -1471,7 +1403,7 @@ fn account_details(language: Language, account: AccountRow) -> Element(msg) {
       html.div(
         [attribute.class("flex flex-wrap items-center gap-2")],
         list.append(list.map(detail_actions, trigger), [
-          html.div([attribute.class("ml-auto")], [trigger(DeleteAccount)]),
+          html.div([attribute.class("ml-auto")], [trigger(routes.DeleteAccount)]),
         ]),
       ),
     ]),
@@ -1479,15 +1411,15 @@ fn account_details(language: Language, account: AccountRow) -> Element(msg) {
 }
 
 /// アカウント 1 件への操作のダイアログの `id`（`dialog-account-<署名者>-<セグメント>`）。
-fn account_dialog_id(signer: String, action: AccountAction) -> String {
-  view.dialog_id(["account", signer, account_action_segment(action)])
+fn account_dialog_id(signer: String, action: routes.AccountAction) -> String {
+  view.dialog_id(["account", signer, routes.account_action_segment(action)])
 }
 
 /// アカウント 1 件への操作のダイアログを開くボタン。語と種類は操作から決める。
 fn account_action_trigger(
   language: Language,
   signer: String,
-  action: AccountAction,
+  action: routes.AccountAction,
 ) -> Element(msg) {
   view.dialog_trigger(
     account_dialog_id(signer, action),
@@ -1506,7 +1438,7 @@ fn account_action_trigger(
 fn account_dialog(
   language: Language,
   account: AccountRow,
-  action: AccountAction,
+  action: routes.AccountAction,
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let id = account_dialog_id(account.signer, action)
@@ -1564,7 +1496,7 @@ fn unreadable_dialog(
     id,
     view.IconTextFace(view.trash_icon(), text(i18n.Delete)),
     view.DangerGhostButton,
-    text(account_action_title(DeleteAccount)),
+    text(account_action_title(routes.DeleteAccount)),
     fn(placement) {
       [
         view.identity(language, view.PlainIdentity, row.label, npub),
@@ -1578,12 +1510,12 @@ fn unreadable_dialog(
 
 /// 操作のダイアログで、バンカーから英語のまま届いた理由の前に置く前置き。秘密鍵の表示の
 /// フォームに出る理由は管理パスワードの誤り（訳す理由）だけなので、前置きを持たない。
-fn action_lead(action: AccountAction) -> Option(i18n.Lead) {
+fn action_lead(action: routes.AccountAction) -> Option(i18n.Lead) {
   case action {
-    EditLabel -> Some(i18n.CouldNotSaveLabel)
-    RotateSecret -> Some(i18n.CouldNotRotateSecret)
-    DeleteAccount -> Some(i18n.CouldNotDeleteAccount)
-    RevealPrivateKey -> None
+    routes.EditLabel -> Some(i18n.CouldNotSaveLabel)
+    routes.RotateSecret -> Some(i18n.CouldNotRotateSecret)
+    routes.DeleteAccount -> Some(i18n.CouldNotDeleteAccount)
+    routes.RevealPrivateKey -> None
   }
 }
 
@@ -1730,7 +1662,7 @@ fn result_dialog(
             ),
             view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
             view.post_form(
-              view.segments_path(register_generated_segments),
+              view.segments_path(routes.register_generated_segments),
               [
                 view.hidden_input(nsec_field, nsec),
                 label_fieldset(language, id <> "-label-hint", label),
@@ -1805,29 +1737,31 @@ fn guided_warning(
 }
 
 /// アカウント 1 件への操作のアイコン。
-fn account_action_icon(action: AccountAction) -> Element(msg) {
+fn account_action_icon(action: routes.AccountAction) -> Element(msg) {
   case action {
-    EditLabel -> view.pencil_icon()
-    RevealPrivateKey -> view.eye_icon()
-    RotateSecret -> view.rotate_icon()
-    DeleteAccount -> view.trash_icon()
+    routes.EditLabel -> view.pencil_icon()
+    routes.RevealPrivateKey -> view.eye_icon()
+    routes.RotateSecret -> view.rotate_icon()
+    routes.DeleteAccount -> view.trash_icon()
   }
 }
 
 /// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。ダイアログの題は
 /// `account_action_title` のまま変えない。
-fn account_action_row_title(action: AccountAction) -> i18n.Message {
+fn account_action_row_title(action: routes.AccountAction) -> i18n.Message {
   case action {
-    DeleteAccount -> i18n.Delete
-    EditLabel | RevealPrivateKey | RotateSecret -> account_action_title(action)
+    routes.DeleteAccount -> i18n.Delete
+    routes.EditLabel | routes.RevealPrivateKey | routes.RotateSecret ->
+      account_action_title(action)
   }
 }
 
 /// アカウント 1 件への操作のボタンの種類。畳みの操作は地味なボタンにし、削除だけ error の文字色にする。
-fn account_action_button_kind(action: AccountAction) -> view.ButtonKind {
+fn account_action_button_kind(action: routes.AccountAction) -> view.ButtonKind {
   case action {
-    EditLabel | RevealPrivateKey | RotateSecret -> view.GhostButton
-    DeleteAccount -> view.DangerGhostButton
+    routes.EditLabel | routes.RevealPrivateKey | routes.RotateSecret ->
+      view.GhostButton
+    routes.DeleteAccount -> view.DangerGhostButton
   }
 }
 
@@ -1836,15 +1770,15 @@ fn account_action_button_kind(action: AccountAction) -> view.ButtonKind {
 fn account_action_form(
   language: Language,
   row: AccountRow,
-  action: AccountAction,
+  action: routes.AccountAction,
   label: Option(String),
   hint_id: String,
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = account_action_path(row.signer, action)
+  let path = routes.account_action_path(row.signer, action)
   case action {
-    EditLabel -> [
+    routes.EditLabel -> [
       view.post_form(
         path,
         [label_fieldset(language, hint_id, option.unwrap(label, row.label))],
@@ -1853,7 +1787,7 @@ fn account_action_form(
         placement,
       ),
     ]
-    RotateSecret -> [
+    routes.RotateSecret -> [
       html.p([], [html.text(text(i18n.RotateSecretDescription))]),
       view.post_form(
         path,
@@ -1863,7 +1797,7 @@ fn account_action_form(
         placement,
       ),
     ]
-    DeleteAccount -> {
+    routes.DeleteAccount -> {
       let gap = i18n.sentence_gap(language)
       [
         html.p([], [
@@ -1880,7 +1814,7 @@ fn account_action_form(
         ),
       ]
     }
-    RevealPrivateKey -> [
+    routes.RevealPrivateKey -> [
       html.p([], [html.text(text(i18n.ShowPrivateKeyDescription))]),
       view.post_form(
         path,
@@ -1919,7 +1853,7 @@ fn unreadable_delete_form(
       ),
     ]),
     view.post_form(
-      account_action_path(row.pubkey, DeleteAccount),
+      routes.account_action_path(row.pubkey, routes.DeleteAccount),
       [],
       text(i18n.DeleteAccountSubmit),
       view.DangerButton,
@@ -2219,7 +2153,7 @@ pub fn approval_page(
     theme,
     view.TranslatedTitle(i18n.ApproveConnection),
     view.Narrow,
-    view.SwitchReturningTo(approve_path(pending.token)),
+    view.SwitchReturningTo(routes.approve_path(pending.token)),
     view.RefreshEverySeconds(refresh_seconds),
     [
       html.section([attribute.class("flex flex-col gap-4")], [
@@ -2298,170 +2232,45 @@ pub fn notice_page(
 
 /// 操作の見出し（ダイアログの題）。削除を除き、ダッシュボードのボタンの語にも使う
 /// （`account_action_row_title`）。
-fn account_action_title(action: AccountAction) -> i18n.Message {
+fn account_action_title(action: routes.AccountAction) -> i18n.Message {
   case action {
-    EditLabel -> i18n.EditLabel
-    RotateSecret -> i18n.RotateSecret
-    DeleteAccount -> i18n.DeleteAccount
-    RevealPrivateKey -> i18n.ShowPrivateKey
-  }
-}
-
-/// 操作のパスセグメント。
-fn account_action_segment(action: AccountAction) -> String {
-  case action {
-    EditLabel -> "label"
-    RotateSecret -> "rotate"
-    DeleteAccount -> "delete"
-    RevealPrivateKey -> "private-key"
-  }
-}
-
-/// 操作のパス（`/accounts/<signer>/<segment>`）。
-pub fn account_action_path(signer: String, action: AccountAction) -> String {
-  view.segments_path([accounts_segment, signer, account_action_segment(action)])
-}
-
-/// パスセグメントから、アカウント 1 件への操作の署名者と操作を引く。操作のパスで
-/// なければ Error。署名者の値は検査しない（一覧との照合は呼び出し側が行う）。
-pub fn parse_account_action_path(
-  segments: List(String),
-) -> Result(#(String, AccountAction), Nil) {
-  case segments {
-    [first, signer, segment] if first == accounts_segment ->
-      action_for_segment(account_actions, account_action_segment, segment)
-      |> result.map(fn(action) { #(signer, action) })
-    _ -> Error(Nil)
+    routes.EditLabel -> i18n.EditLabel
+    routes.RotateSecret -> i18n.RotateSecret
+    routes.DeleteAccount -> i18n.DeleteAccount
+    routes.RevealPrivateKey -> i18n.ShowPrivateKey
   }
 }
 
 /// 操作の見出し（ダイアログの題）と、ダッシュボードのボタンの語。
-fn relay_action_title(action: RelayAction) -> i18n.Message {
+fn relay_action_title(action: routes.RelayAction) -> i18n.Message {
   case action {
-    EditRelayRoles -> i18n.EditRelayRoles
-    DeleteRelay -> i18n.DeleteRelay
+    routes.EditRelayRoles -> i18n.EditRelayRoles
+    routes.DeleteRelay -> i18n.DeleteRelay
   }
 }
 
 /// 操作のダイアログで送信に失敗したときの理由の前置き。
-fn relay_action_lead(action: RelayAction) -> i18n.Lead {
+fn relay_action_lead(action: routes.RelayAction) -> i18n.Lead {
   case action {
-    EditRelayRoles -> i18n.CouldNotSaveRelay
-    DeleteRelay -> i18n.CouldNotDeleteRelay
-  }
-}
-
-/// 操作のパスセグメント。
-fn relay_action_segment(action: RelayAction) -> String {
-  case action {
-    EditRelayRoles -> "edit"
-    DeleteRelay -> "delete"
-  }
-}
-
-/// 操作のパス（`/relays/<id>/<segment>`）。
-pub fn relay_action_path(id: Int, action: RelayAction) -> String {
-  view.segments_path([
-    relays_segment,
-    int.to_string(id),
-    relay_action_segment(action),
-  ])
-}
-
-/// パスセグメントから、リレー 1 件への操作の DB の行の id と操作を引く。id が整数として
-/// 読めなければ Error。行との照合は呼び出し側が行う。
-pub fn parse_relay_action_path(
-  segments: List(String),
-) -> Result(#(Int, RelayAction), Nil) {
-  case segments {
-    [first, id, segment] if first == relays_segment -> {
-      use id <- result.try(int.parse(id))
-      action_for_segment(relay_actions, relay_action_segment, segment)
-      |> result.map(fn(action) { #(id, action) })
-    }
-    _ -> Error(Nil)
-  }
-}
-
-/// 操作の一覧 `actions` から、パスセグメントが `segment` の操作を引く。無ければ Error。
-fn action_for_segment(
-  actions: List(action),
-  to_segment: fn(action) -> String,
-  segment: String,
-) -> Result(action, Nil) {
-  list.find(actions, fn(action) { to_segment(action) == segment })
-}
-
-/// セッションの権限の保存の POST 先のパスの末尾のセグメント。
-const session_permissions_segment = "permissions"
-
-/// セッションの権限の保存のパス（`/sessions/<signer>/<client>/permissions`）。
-pub fn session_permissions_path(signer: String, client: String) -> String {
-  view.segments_path([
-    sessions_segment,
-    signer,
-    client,
-    session_permissions_segment,
-  ])
-}
-
-/// パスセグメントから、セッションの権限の保存のパスの署名者とクライアントを引く。値は
-/// 検査しない（一覧との照合は呼び出し側が行う）。
-pub fn parse_session_permissions_path(
-  segments: List(String),
-) -> Result(#(String, String), Nil) {
-  case segments {
-    [first, signer, client, last]
-      if first == sessions_segment && last == session_permissions_segment
-    -> Ok(#(signer, client))
-    _ -> Error(Nil)
-  }
-}
-
-/// プラグインのページのパス（`/plugins/<プラグイン名>/<ページのキー>`）。符号化しない
-/// 素のパスで、`view.SwitchReturningTo` に渡す値。リンクの `href` には
-/// `plugin_page_href` を使う。
-pub fn plugin_page_path(plugin: String, page: String) -> String {
-  view.segments_path([plugins_segment, plugin, page])
-}
-
-/// プラグインのページへのリンクのパス。`plugin_name/0` は任意の文字列でよく
-/// `wisp.path_segments` は percent-decode しないため、プラグイン名だけを
-/// percent-encode する（ページのキーは `[a-z0-9_-]+` に限られているので符号化
-/// しない）。`return` には `plugin_page_path` を渡すこと。`admin.return_path`
-/// が自分でセグメントを符号化するため、符号化済みの値を渡すと二重になる。
-pub fn plugin_page_href(plugin: String, page: String) -> String {
-  view.segments_path([plugins_segment, uri.percent_encode(plugin), page])
-}
-
-/// パスセグメントから、プラグインのページのプラグイン名とキーを引く。プラグイン名は
-/// percent-decode し、失敗すれば `Error(Nil)`。一覧との照合は呼び出し側が行う。
-pub fn parse_plugin_page_path(
-  segments: List(String),
-) -> Result(#(String, String), Nil) {
-  case segments {
-    [first, name, key] if first == plugins_segment -> {
-      use name <- result.try(uri.percent_decode(name))
-      Ok(#(name, key))
-    }
-    _ -> Error(Nil)
+    routes.EditRelayRoles -> i18n.CouldNotSaveRelay
+    routes.DeleteRelay -> i18n.CouldNotDeleteRelay
   }
 }
 
 /// 操作のダイアログを開くボタンの種類。編集は開くだけなので地味なボタン、削除は接続中のクライアントに
 /// 影響するので error の文字色にする。
-fn relay_action_button_kind(action: RelayAction) -> view.ButtonKind {
+fn relay_action_button_kind(action: routes.RelayAction) -> view.ButtonKind {
   case action {
-    EditRelayRoles -> view.GhostButton
-    DeleteRelay -> view.DangerGhostButton
+    routes.EditRelayRoles -> view.GhostButton
+    routes.DeleteRelay -> view.DangerGhostButton
   }
 }
 
 /// リレー 1 件への操作のアイコン。
-fn relay_action_icon(action: RelayAction) -> Element(msg) {
+fn relay_action_icon(action: routes.RelayAction) -> Element(msg) {
   case action {
-    EditRelayRoles -> view.pencil_icon()
-    DeleteRelay -> view.trash_icon()
+    routes.EditRelayRoles -> view.pencil_icon()
+    routes.DeleteRelay -> view.trash_icon()
   }
 }
 
@@ -2617,7 +2426,7 @@ fn relay_item(
       html.text(row.url),
     ]),
     button_row(
-      list.flat_map(relay_actions, fn(action) {
+      list.flat_map(routes.relay_actions, fn(action) {
         relay_action_dialog(language, row, action, dialog)
       }),
     ),
@@ -2629,8 +2438,12 @@ fn relay_item(
 }
 
 /// リレー 1 件への操作のダイアログの `id`（`dialog-relay-<id>-<セグメント>`）。
-fn relay_dialog_id(id: Int, action: RelayAction) -> String {
-  view.dialog_id(["relay", int.to_string(id), relay_action_segment(action)])
+fn relay_dialog_id(id: Int, action: routes.RelayAction) -> String {
+  view.dialog_id([
+    "relay",
+    int.to_string(id),
+    routes.relay_action_segment(action),
+  ])
 }
 
 /// リレー `row` への `action` のダイアログと、それを開くアイコンだけのボタン。題は操作の見出しで、
@@ -2640,7 +2453,7 @@ fn relay_dialog_id(id: Int, action: RelayAction) -> String {
 fn relay_action_dialog(
   language: Language,
   row: RelayRow,
-  action: RelayAction,
+  action: routes.RelayAction,
   dialog: Option(OpenDialog),
 ) -> List(Element(msg)) {
   let #(opening, roles, error) = case dialog {
@@ -2712,7 +2525,7 @@ pub fn new_relay_form(
   [
     view.paragraph(text(i18n.AddRelayDescription)),
     view.post_form(
-      view.segments_path(new_relay_segments),
+      view.segments_path(routes.new_relay_segments),
       [url_field(language, url), roles_fieldset(language, roles, None)],
       text(i18n.Register),
       view.PrimaryButton,
@@ -2728,14 +2541,14 @@ pub fn new_relay_form(
 pub fn relay_action_form(
   language: Language,
   row: RelayRow,
-  action: RelayAction,
+  action: routes.RelayAction,
   roles: Option(Roles),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = relay_action_path(row.id, action)
+  let path = routes.relay_action_path(row.id, action)
   case action {
-    EditRelayRoles -> [
+    routes.EditRelayRoles -> [
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
       view.post_form(
         path,
@@ -2745,7 +2558,7 @@ pub fn relay_action_form(
         placement,
       ),
     ]
-    DeleteRelay -> [
+    routes.DeleteRelay -> [
       html.p([], [html.text(text(i18n.DeleteRelayDescription))]),
       view.post_form(
         path,
@@ -2988,7 +2801,7 @@ fn connect_review_dialog(
               ]),
             ),
             view.post_form(
-              view.segments_path(connect_confirm_segments),
+              view.segments_path(routes.connect_confirm_segments),
               [
                 view.hidden_input(nostrconnect_uri_field, review.uri),
                 view.hidden_input(signer_field, review.signer),
@@ -3130,7 +2943,8 @@ fn session_actions(
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let summary = session_dialog_summary(language, accounts, session)
-  let permissions_id = session_dialog_id(session, session_permissions_segment)
+  let permissions_id =
+    session_dialog_id(session, routes.session_permissions_segment)
   let #(opening, form, error) = case dialog {
     Some(PermissionsOpen(signer:, client:, form:, error:))
       if signer == session.signer && client == session.client
@@ -3162,7 +2976,7 @@ fn session_actions(
         ),
         view.dialog_button(
           language,
-          session_dialog_id(session, revoke_segment),
+          session_dialog_id(session, routes.revoke_segment),
           view.TextFace(text(i18n.Revoke)),
           view.GhostButton,
           text(i18n.Revoke),
@@ -3231,11 +3045,12 @@ pub fn permissions_form(
 ) -> List(Element(msg)) {
   let fields = option.unwrap(form, form_of_perms(session.perms))
   let kinds_hint_id =
-    session_dialog_id(session, session_permissions_segment) <> "-kinds-hint"
+    session_dialog_id(session, routes.session_permissions_segment)
+    <> "-kinds-hint"
   [
     view.paragraph(i18n.text(language, i18n.EditPermissionsDescription)),
     view.post_form(
-      session_permissions_path(session.signer, session.client),
+      routes.session_permissions_path(session.signer, session.client),
       permissions_fields(language, fields, kinds_hint_id),
       i18n.text(language, i18n.Save),
       view.PrimaryButton,
@@ -3398,7 +3213,7 @@ pub fn connect_form(
   [
     view.paragraph(text(i18n.ConnectClientDescription)),
     view.post_form(
-      view.segments_path(connect_segments),
+      view.segments_path(routes.connect_segments),
       [
         uri_field(language, uri),
         signing_account_select(language, accounts, signer),
@@ -3577,17 +3392,6 @@ fn button_row(buttons: List(Element(msg))) -> Element(msg) {
   html.div([attribute.class("flex shrink-0 flex-wrap gap-2")], buttons)
 }
 
-/// 承認ページのパス。`auth_url` としてクライアントへ渡す URL も、このパスに
-/// 公開 URL を前置して組み立てる。
-pub fn approve_path(token: String) -> String {
-  view.segments_path([approve_segment, token])
-}
-
-/// 拒否のパス。承認ページと違い、POST でしか使わない。
-fn deny_path(token: String) -> String {
-  view.segments_path([deny_segment, token])
-}
-
 /// 承認待ち 1 件への承認・拒否フォーム。どちらも状態を変えるので POST で送り、承認、拒否の順に並べる。
 /// secret が一致しないときは拒否を塗りのボタンにし、承認を warning の枠の「それでも承認する」にする。
 /// 一致しないとき以外は承認が主な操作で、拒否してもクライアントは接続し直せるので拒否を地味なボタンにする。
@@ -3603,13 +3407,19 @@ fn decision_forms(
   }
   [
     view.post_form(
-      approve_path(token),
+      routes.approve_path(token),
       [],
       text(approve),
       approve_kind,
       view.InRow,
     ),
-    view.post_form(deny_path(token), [], text(i18n.Deny), deny_kind, view.InRow),
+    view.post_form(
+      routes.deny_path(token),
+      [],
+      text(i18n.Deny),
+      deny_kind,
+      view.InRow,
+    ),
   ]
 }
 
@@ -3624,7 +3434,7 @@ fn revoke_form(
   [
     view.paragraph(text(i18n.RevokeSessionDescription)),
     view.post_form(
-      view.segments_path(revoke_segments),
+      view.segments_path(routes.revoke_segments),
       [
         view.hidden_input(signer_field, session.signer),
         view.hidden_input(client_field, session.client),
@@ -3640,7 +3450,7 @@ fn revoke_form(
 /// 続けばまた無効になる。取り返しの付く操作なので地味なボタンにする。
 fn reenable_form(language: Language, name: String) -> Element(msg) {
   view.post_form(
-    view.segments_path(reenable_plugin_segments),
+    view.segments_path(routes.reenable_plugin_segments),
     [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
     view.GhostButton,
@@ -3652,7 +3462,7 @@ fn reenable_form(language: Language, name: String) -> Element(msg) {
 /// セッションと承認待ちも置き換えるが、DB の内容は変えずやり直せるので地味なボタンにする。
 fn reload_form(language: Language) -> Element(msg) {
   view.post_form(
-    view.segments_path(reload_accounts_segments),
+    view.segments_path(routes.reload_accounts_segments),
     [],
     i18n.text(language, i18n.ReloadAccounts),
     view.GhostButton,
@@ -3717,7 +3527,7 @@ fn plugin_page_link(
   case plugin.pages {
     [first, ..] -> [
       view.button_link(
-        plugin_page_href(plugin.name, first.key),
+        routes.plugin_page_href(plugin.name, first.key),
         view.IconTextFace(
           view.file_text_icon(),
           i18n.text(language, i18n.OpenPluginPage),

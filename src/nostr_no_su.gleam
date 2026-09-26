@@ -6,7 +6,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import nostr_no_su/admin
-import nostr_no_su/admin/dashboard
+import nostr_no_su/admin/routes
 import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account_store
@@ -231,10 +231,10 @@ fn builtin_plugins(enabled: Bool) -> List(Plugin) {
 
 /// 承認待ちの token から、クライアントへ渡す承認ページの URL を組み立てる関数。
 /// 管理 UI の公開 URL に承認ページのパスを繋ぐだけで、パスの形を知っているのは
-/// 管理 UI 側（`dashboard`）だけになる。管理 UI が無効なら承認フローも無効。
+/// 管理 UI 側（`admin/routes`）だけになる。管理 UI が無効なら承認フローも無効。
 fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   use base <- option.map(config.auth_url_base(loaded))
-  fn(token) { base <> dashboard.approve_path(token) }
+  fn(token) { base <> routes.approve_path(token) }
 }
 
 /// バンカーサブツリーの仕様。`database_url` を解釈できなければ、その理由を返す。

@@ -14,6 +14,7 @@ import gleam/string
 import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/routes
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/nostrconnect
@@ -424,12 +425,12 @@ pub fn header(response: Response(wisp.Body), name: String) -> String {
 }
 
 /// 登録済みのアカウントへの操作のパス。
-pub fn action_path(action: dashboard.AccountAction) -> String {
-  dashboard.account_action_path(signer, action)
+pub fn action_path(action: routes.AccountAction) -> String {
+  routes.account_action_path(signer, action)
 }
 
 /// 登録済みのアカウントへの操作のダイアログの `id`（`dialog-account-<署名者>-<セグメント>`）。
-pub fn action_dialog_id(action: dashboard.AccountAction) -> String {
+pub fn action_dialog_id(action: routes.AccountAction) -> String {
   let assert [_, _, _, segment] = string.split(action_path(action), "/")
   "dialog-account-" <> signer <> "-" <> segment
 }

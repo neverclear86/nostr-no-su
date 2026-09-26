@@ -8,8 +8,8 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/admin
-import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/routes
 import nostr_no_su/bunker
 import support/admin_context.{
   action_path, client, context, failing_context, get, header, in_japanese,
@@ -96,7 +96,7 @@ pub fn language_switch_to_the_browser_setting_clears_the_cookie_test() {
 pub fn language_switch_returns_only_within_the_site_test() {
   let cases = [
     #("/", "/"),
-    #(action_path(dashboard.EditLabel), action_path(dashboard.EditLabel)),
+    #(action_path(routes.EditLabel), action_path(routes.EditLabel)),
     #("/approve/" <> token, "/approve/" <> token),
     #("//evil.example/x", "/evil.example/x"),
     #("/\\evil.example", "/%5Cevil.example"),
@@ -221,7 +221,7 @@ pub fn posts_without_origin_ignore_the_language_cookie_test() {
 /// 出す。フォームの上とアカウントの節では、何ができなかったかを日本語で前に置く。
 pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
   let conflict =
-    simulate.request(http.Post, action_path(dashboard.EditLabel))
+    simulate.request(http.Post, action_path(routes.EditLabel))
     |> with_credentials("admin", password)
     |> in_japanese
     |> simulate.form_body([#("label", "new")])
@@ -281,13 +281,13 @@ pub fn japanese_pages_translate_unconfirmed_changes_test() {
   let cases = [
     #(
       failing_context(bunker.MaybeApplied(bunker.BunkerDidNotRespond)),
-      action_path(dashboard.RotateSecret),
+      action_path(routes.RotateSecret),
       [],
       i18n.BunkerDidNotRespond,
     ),
     #(
       failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
-      action_path(dashboard.RotateSecret),
+      action_path(routes.RotateSecret),
       [],
       i18n.StoreDidNotConfirm,
     ),
@@ -354,7 +354,7 @@ pub fn japanese_pages_translate_account_registration_reasons_test() {
     ),
     #(
       failing_context(bunker.AccountNotRegistered),
-      action_path(dashboard.EditLabel),
+      action_path(routes.EditLabel),
       [#("label", "new")],
       404,
       None,

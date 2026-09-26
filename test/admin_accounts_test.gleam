@@ -12,6 +12,7 @@ import nostr_no_su/admin
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/qr
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
@@ -293,7 +294,7 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
   let paths = [
     #("/accounts/import", [#("nsec", spec_nsec)]),
     #("/accounts/register-generated", [#("nsec", generated)]),
-    #(action_path(dashboard.EditLabel), []),
+    #(action_path(routes.EditLabel), []),
   ]
   list.each(cases, fn(entry) {
     let #(name, label_field, reason) = entry
@@ -321,7 +322,7 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
 /// 制御文字を除き trim しない値を欄に入れる。理由はこれまでどおり欄より前の `role="alert"` の囲みに
 /// 出し、欄に `input-error` と `aria-invalid` を付けない。送った nsec は反射しない。
 pub fn invalid_input_keeps_the_label_on_every_path_test() {
-  let edit_id = action_dialog_id(dashboard.EditLabel)
+  let edit_id = action_dialog_id(routes.EditLabel)
   let broken = string.drop_end(spec_nsec, 1) <> "4"
   let generated =
     hidden_nsec(simulate.read_body(post(context(), "/accounts/generate")))
@@ -400,7 +401,7 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
     ),
     #(
       "edit with a line feed",
-      post_form(context(), action_path(dashboard.EditLabel), [
+      post_form(context(), action_path(routes.EditLabel), [
         #("label", " a\nb "),
       ]),
       400,
@@ -411,7 +412,7 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
     ),
     #(
       "edit with a right-to-left override",
-      post_form(context(), action_path(dashboard.EditLabel), [
+      post_form(context(), action_path(routes.EditLabel), [
         #("label", " a\u{202E}b "),
       ]),
       400,
@@ -424,7 +425,7 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "edit that was not applied",
       post_form(
         failing_context(bunker.NotApplied("account is not registered")),
-        action_path(dashboard.EditLabel),
+        action_path(routes.EditLabel),
         [#("label", " new ")],
       ),
       409,
@@ -707,7 +708,7 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   assert string.contains(
     body,
     "<form action=\""
-      <> view.segments_path(dashboard.import_account_segments)
+      <> view.segments_path(routes.import_account_segments)
       <> "\" autocomplete=\"off\"",
   )
 }
@@ -719,15 +720,13 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
 pub fn reveal_with_a_wrong_password_is_forbidden_test() {
   let reports = process.new_subject()
   let response =
-    post_form(
-      reporting_context(reports),
-      action_path(dashboard.RevealPrivateKey),
-      [#("password", "wrong-guess")],
-    )
+    post_form(reporting_context(reports), action_path(routes.RevealPrivateKey), [
+      #("password", "wrong-guess"),
+    ])
   assert response.status == 403
   let body = simulate.read_body(response)
   assert string.contains(
-    opened_dialog(body, action_dialog_id(dashboard.RevealPrivateKey)),
+    opened_dialog(body, action_dialog_id(routes.RevealPrivateKey)),
     "incorrect password",
   )
   assert !string.contains(body, signer_nsec)
@@ -745,14 +744,14 @@ pub fn reveal_with_a_wrong_password_waits_test() {
       process.send(waited, Nil)
     })
   let wrong =
-    post_form(context, action_path(dashboard.RevealPrivateKey), [
+    post_form(context, action_path(routes.RevealPrivateKey), [
       #("password", "wrong-guess"),
     ])
   assert wrong.status == 403
   assert process.receive(waited, 0) == Ok(Nil)
 
   let correct =
-    post_form(context, action_path(dashboard.RevealPrivateKey), [
+    post_form(context, action_path(routes.RevealPrivateKey), [
       #("password", password),
     ])
   assert correct.status == 200
@@ -764,11 +763,9 @@ pub fn reveal_with_a_wrong_password_waits_test() {
 pub fn reveal_with_the_password_shows_the_nsec_test() {
   let reports = process.new_subject()
   let response =
-    post_form(
-      reporting_context(reports),
-      action_path(dashboard.RevealPrivateKey),
-      [#("password", password)],
-    )
+    post_form(reporting_context(reports), action_path(routes.RevealPrivateKey), [
+      #("password", password),
+    ])
   assert response.status == 200
   let body = simulate.read_body(response)
   assert string.contains(body, "closedby=\"none\" id=\"dialog-result\" open>")
@@ -783,7 +780,7 @@ pub fn reveal_failure_is_unavailable_test() {
       Error("accounts are not loaded yet")
     })
   let response =
-    post_form(failing, action_path(dashboard.RevealPrivateKey), [
+    post_form(failing, action_path(routes.RevealPrivateKey), [
       #("password", password),
     ])
   assert response.status == 503
@@ -811,7 +808,7 @@ pub fn delete_page_warns_about_losing_the_key_test() {
   let body =
     closed_dialog(
       simulate.read_body(get(labelled, "/")),
-      action_dialog_id(dashboard.DeleteAccount),
+      action_dialog_id(routes.DeleteAccount),
     )
   assert string.contains(body, signer_npub)
   assert string.contains(body, "&lt;b&gt;x&lt;/b&gt;")
@@ -823,7 +820,7 @@ pub fn delete_page_warns_about_losing_the_key_test() {
 pub fn delete_calls_the_context_and_redirects_test() {
   let reports = process.new_subject()
   let response =
-    post(reporting_context(reports), action_path(dashboard.DeleteAccount))
+    post(reporting_context(reports), action_path(routes.DeleteAccount))
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000) == Ok(Removed(signer))
@@ -835,7 +832,7 @@ pub fn rotate_page_explains_the_effect_test() {
   let body =
     closed_dialog(
       simulate.read_body(get(context(), "/")),
-      action_dialog_id(dashboard.RotateSecret),
+      action_dialog_id(routes.RotateSecret),
     )
   assert string.contains(
     body,
@@ -848,7 +845,7 @@ pub fn rotate_page_explains_the_effect_test() {
 pub fn rotate_calls_the_context_and_redirects_test() {
   let reports = process.new_subject()
   let response =
-    post(reporting_context(reports), action_path(dashboard.RotateSecret))
+    post(reporting_context(reports), action_path(routes.RotateSecret))
   assert response.status == 303
   assert process.receive(reports, 1000) == Ok(Rotated(signer))
 }
@@ -857,7 +854,7 @@ pub fn rotate_calls_the_context_and_redirects_test() {
 pub fn label_update_calls_the_context_and_redirects_test() {
   let reports = process.new_subject()
   let response =
-    post_form(reporting_context(reports), action_path(dashboard.EditLabel), [
+    post_form(reporting_context(reports), action_path(routes.EditLabel), [
       #("label", "new"),
     ])
   assert response.status == 303
@@ -873,10 +870,10 @@ pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
       label,
       signer_npub,
     ))
-  let id = action_dialog_id(dashboard.EditLabel)
+  let id = action_dialog_id(routes.EditLabel)
   let invalid_input =
     simulate.read_body(
-      post_form(context(), action_path(dashboard.EditLabel), [
+      post_form(context(), action_path(routes.EditLabel), [
         #("label", "a\nb"),
       ]),
     )
@@ -885,7 +882,7 @@ pub fn edit_page_keeps_the_saved_label_in_the_summary_test() {
     simulate.read_body(
       post_form(
         failing_context(bunker.NotApplied("account is not registered")),
-        action_path(dashboard.EditLabel),
+        action_path(routes.EditLabel),
         [#("label", "new")],
       ),
     )
@@ -915,7 +912,7 @@ pub fn label_inputs_describe_the_limit_without_maxlength_test() {
     <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
     <> "</p>"
   }
-  let edit_id = action_dialog_id(dashboard.EditLabel)
+  let edit_id = action_dialog_id(routes.EditLabel)
   let fields = label_dialogs()
   let hint_ids = [
     "label-hint",
@@ -966,7 +963,7 @@ fn label_dialogs() -> List(String) {
       simulate.read_body(post(context(), "/accounts/generate")),
       "dialog-result",
     ),
-    closed_dialog(dashboard_body, action_dialog_id(dashboard.EditLabel)),
+    closed_dialog(dashboard_body, action_dialog_id(routes.EditLabel)),
   ]
 }
 
@@ -975,9 +972,9 @@ fn label_dialogs() -> List(String) {
 /// 409 は開いたダイアログに、ほかは通知ページに理由とダッシュボードへのリンクを出す。
 pub fn account_change_failures_map_to_status_codes_test() {
   let changes = [
-    #(dashboard.DeleteAccount, []),
-    #(dashboard.RotateSecret, []),
-    #(dashboard.EditLabel, [#("label", "new")]),
+    #(routes.DeleteAccount, []),
+    #(routes.RotateSecret, []),
+    #(routes.EditLabel, [#("label", "new")]),
   ]
   use #(failure, status, reason) <- list.each(change_failures())
   use #(action, fields) <- list.each(changes)
@@ -1051,7 +1048,7 @@ pub fn account_dialog_for_a_vanished_row_is_a_notice_test() {
       },
       rotate_secret: fn(_signer) { Error(bunker.NotApplied("not applied")) },
     )
-  let response = post(vanishing, action_path(dashboard.RotateSecret))
+  let response = post(vanishing, action_path(routes.RotateSecret))
   assert response.status == 503
   let body = simulate.read_body(response)
   assert string.contains(
@@ -1071,9 +1068,9 @@ pub fn changes_to_an_unlisted_signer_are_not_found_test() {
   let emptied =
     admin.Context(..reporting_context(reports), accounts: fn() { Ok([]) })
   let changes = [
-    #(dashboard.DeleteAccount, []),
-    #(dashboard.RotateSecret, []),
-    #(dashboard.EditLabel, [#("label", "new")]),
+    #(routes.DeleteAccount, []),
+    #(routes.RotateSecret, []),
+    #(routes.EditLabel, [#("label", "new")]),
   ]
   list.each(changes, fn(entry) {
     let #(action, fields) = entry
@@ -1125,7 +1122,7 @@ pub fn account_pages_need_the_account_list_test() {
 
 /// 飛ばされた行の削除のパス。
 fn skipped_delete_path() -> String {
-  dashboard.account_action_path(skipped_pubkey, dashboard.DeleteAccount)
+  routes.account_action_path(skipped_pubkey, routes.DeleteAccount)
 }
 
 /// 飛ばされた行の削除のダイアログの `id`。
@@ -1187,9 +1184,9 @@ pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test()
       ])
     })
   let unlisted_path =
-    dashboard.account_action_path("unknown-pubkey", dashboard.DeleteAccount)
+    routes.account_action_path("unknown-pubkey", routes.DeleteAccount)
   let malformed_path =
-    dashboard.account_action_path(malformed_pubkey, dashboard.DeleteAccount)
+    routes.account_action_path(malformed_pubkey, routes.DeleteAccount)
   list.each([unlisted_path, malformed_path], fn(path) {
     assert post(with_malformed, path).status == 404
   })

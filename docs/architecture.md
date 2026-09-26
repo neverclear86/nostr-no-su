@@ -561,7 +561,7 @@ sequenceDiagram
 状態を変えるルートはすべて POST で、`Origin` / `Referer` と `Host` を突き合わせる CSRF の検査の下にある。
 `Host`、`Origin`、`Referer` のどれかに制御文字を含む要求は、メソッドによらずその検査の前に text/plain の 400 で弾く（検査が不一致のときにログへ出す生の値に、端末の制御を入れさせないため）。
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
-ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、テーマと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
+ページとフォームのパスの定義は `admin/routes.gleam` に、スタイルシート、スクリプト、テーマと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
 ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする（見出しがプラグイン由来の文字列のプラグインのページは、題を `TaggedTitle` で渡す）。
 見た目は Tailwind CSS と daisyUI のクラスで付け、鍵の指紋の色だけは `assets/admin.css` に手で書いたクラス（`fp`、`h0`〜`h11`、`fp-gray`）とテーマの変数で付けて、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
@@ -672,7 +672,8 @@ nostr-no-su/
 │       ├── db.gleam              DB の基盤（接続プール、インスタンスのロック、期限、全テーブルの移行、トランザクション、クエリーの実行と失敗の値）
 │       ├── subscriptions.gleam   監視とバンカーの購読の定義（購読 id、フィルター、再開点からの組み立て）
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
-│       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
+│       ├── admin/routes.gleam    ページとフォームのパスの定義（パスセグメント、パスの組み立てと解析、アカウントとリレーへの操作の型）
+│       ├── admin/dashboard.gleam 表示する状態の型、フォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
 │       ├── admin/permission_view.gleam 権限のチップの描画（トークンの解釈と未対応の判定はバンカーの権限のモジュールの定義を使う）

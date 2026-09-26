@@ -11,6 +11,7 @@ import gleam/string
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
@@ -305,7 +306,7 @@ pub fn plugin_page_times_are_relative_to_now_test() {
   assert string.contains(html, ">2 h ago</span>")
 }
 
-/// `form` ブロックの宛先は、今開いているページ自身のパス（`dashboard.plugin_page_href`）になる。
+/// `form` ブロックの宛先は、今開いているページ自身のパス（`routes.plugin_page_href`）になる。
 pub fn plugin_page_form_posts_to_the_current_page_test() {
   let body =
     plugin_pages.plugin_page(
@@ -318,8 +319,6 @@ pub fn plugin_page_form_posts_to_the_current_page_test() {
     )
   assert string.contains(
     body,
-    "<form action=\""
-      <> dashboard.plugin_page_href("example", "settings")
-      <> "\"",
+    "<form action=\"" <> routes.plugin_page_href("example", "settings") <> "\"",
   )
 }

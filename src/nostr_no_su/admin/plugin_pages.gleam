@@ -13,6 +13,7 @@ import lustre/element/html
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/plugin_view
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
@@ -38,7 +39,7 @@ pub fn plugin_page(
       text: page_heading(plugin, page, code),
     ),
     view.Narrow,
-    view.SwitchReturningTo(dashboard.plugin_page_path(plugin.name, page.key)),
+    view.SwitchReturningTo(routes.plugin_page_path(plugin.name, page.key)),
     view.NoRefresh,
     list.flatten([
       [source_row(language, plugin), tabs(language, plugin, page)],
@@ -93,7 +94,7 @@ fn tab_link(
   current: plugin.PluginPage,
   page: plugin.PluginPage,
 ) -> Element(msg) {
-  let href = dashboard.plugin_page_href(plugin_name, page.key)
+  let href = routes.plugin_page_href(plugin_name, page.key)
   let attrs = case page.key == current.key {
     True -> [
       attribute.href(href),
@@ -179,11 +180,11 @@ fn context(
     plugin_language: plugin.text_language(page, i18n.code(language)),
     page_href: fn(key) {
       case list.any(plugin.pages, fn(page) { page.key == key }) {
-        True -> Ok(dashboard.plugin_page_href(plugin.name, key))
+        True -> Ok(routes.plugin_page_href(plugin.name, key))
         False -> Error(Nil)
       }
     },
-    form_action: dashboard.plugin_page_href(plugin.name, page.key),
+    form_action: routes.plugin_page_href(plugin.name, page.key),
     now:,
   )
 }
