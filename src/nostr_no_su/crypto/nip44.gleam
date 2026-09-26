@@ -132,8 +132,7 @@ pub fn encrypt_with_nonce(
       }
       let padded = <<prefix:bits, pt:bits, 0:size(pad_bytes)-unit(8)>>
       let ciphertext = ffi_chacha20(chacha_key, chacha_nonce, padded)
-      let mac =
-        crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
+      let mac = mac(hmac_key, nonce, ciphertext)
       Ok(bit_array.base64_encode(
         <<2, nonce:bits, ciphertext:bits, mac:bits>>,
         True,
@@ -194,16 +193,19 @@ fn decrypt_verified(
   conversation_key: BitArray,
   nonce: BitArray,
   ciphertext: BitArray,
-  mac: BitArray,
+  received_mac: BitArray,
 ) -> Result(String, Nip44Error) {
   let MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
     message_keys(conversation_key, nonce)
-  let expected_mac =
-    crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
-  case crypto.secure_compare(mac, expected_mac) {
+  case crypto.secure_compare(received_mac, mac(hmac_key, nonce, ciphertext)) {
     False -> Error(MacVerificationFailed)
     True -> unpad(ffi_chacha20(chacha_key, chacha_nonce, ciphertext))
   }
+}
+
+/// NIP-44 の MAC。`hmac_key` で `nonce || ciphertext` の HMAC-SHA256 を取る。
+fn mac(hmac_key: BitArray, nonce: BitArray, ciphertext: BitArray) -> BitArray {
+  crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
 }
 
 /// 長さプレフィックス付きのパディングを外す。先頭 2 バイトが 0 のものは 6 バイト
