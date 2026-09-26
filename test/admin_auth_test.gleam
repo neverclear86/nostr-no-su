@@ -9,8 +9,8 @@ import gleam/http/request
 import gleam/list
 import gleam/string
 import nostr_no_su/admin
-import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
+import nostr_no_su/admin/routes
 import nostr_no_su/bunker
 import support/account_actions
 import support/admin_context.{
@@ -198,7 +198,7 @@ pub fn password_containing_a_colon_is_accepted_test() {
   let colon = admin.Context(..context(), password: "pa:ss")
   assert get(colon, "/").status == 200
   let response =
-    post_form(colon, action_path(dashboard.RevealPrivateKey), [
+    post_form(colon, action_path(routes.RevealPrivateKey), [
       #("password", "pa:ss"),
     ])
   assert response.status == 200
@@ -216,7 +216,7 @@ pub fn cross_origin_state_changes_are_rejected_test() {
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
-    dashboard.session_permissions_path(signer, client),
+    routes.session_permissions_path(signer, client),
     "/sessions/revoke",
     "/plugins/reenable",
     "/approve/" <> token,
@@ -242,7 +242,7 @@ pub fn cross_origin_state_changes_are_rejected_test() {
 pub fn same_origin_account_change_is_accepted_test() {
   let reports = process.new_subject()
   let response =
-    simulate.browser_request(http.Post, action_path(dashboard.DeleteAccount))
+    simulate.browser_request(http.Post, action_path(routes.DeleteAccount))
     |> with_credentials("admin", password)
     |> simulate.form_body([])
     |> admin.handle_request(reporting_context(reports), _)
@@ -370,7 +370,7 @@ pub fn control_characters_in_origin_headers_are_not_logged_test() {
 /// `Referrer-Policy` のヘッダーを持つ。
 pub fn authenticated_responses_carry_security_headers_test() {
   let context = context()
-  let reveal = action_path(dashboard.RevealPrivateKey)
+  let reveal = action_path(routes.RevealPrivateKey)
   let with_password = [#("password", password)]
   let spec = [#("nsec", spec_nsec), #("label", "work")]
   let responses = [
@@ -454,7 +454,7 @@ pub fn authenticated_responses_carry_security_headers_test() {
           ),
           503,
         ),
-        #("delete", post(context, action_path(dashboard.DeleteAccount)), 303),
+        #("delete", post(context, action_path(routes.DeleteAccount)), 303),
         #("plugin page", get(context, "/plugins/console_logger/status"), 200),
         #("unknown path", get(context, "/nope"), 404),
       ],
@@ -482,7 +482,7 @@ pub fn account_management_requires_credentials_test() {
   let reports = process.new_subject()
   let requests = [
     #("/accounts/import", [#("nsec", spec_nsec)]),
-    #(action_path(dashboard.RevealPrivateKey), [#("password", password)]),
+    #(action_path(routes.RevealPrivateKey), [#("password", password)]),
   ]
   list.each(requests, fn(entry) {
     let #(path, fields) = entry

@@ -1,4 +1,5 @@
-//// 管理 UI のパスの定義、状態の見せ方、ダイアログに出すフォームの中身（`admin/dashboard`）の単体テスト。
+//// 管理 UI のパスの定義（`admin/routes`）、状態の見せ方、ダイアログに出すフォームの中身
+//// （`admin/dashboard`）の単体テスト。
 
 import gleam/int
 import gleam/list
@@ -11,6 +12,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/session
@@ -26,18 +28,18 @@ import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 /// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作に戻る。
 pub fn account_action_paths_round_trip_test() {
   use action <- list.each(account_actions.all)
-  let assert "/" <> path = dashboard.account_action_path("abcd", action)
-  assert dashboard.parse_account_action_path(string.split(path, "/"))
+  let assert "/" <> path = routes.account_action_path("abcd", action)
+  assert routes.parse_account_action_path(string.split(path, "/"))
     == Ok(#("abcd", action))
 }
 
 /// 知らない操作のセグメントと、アカウントのページ以外のパスは操作にならない。
 pub fn unknown_account_action_paths_are_rejected_test() {
-  assert dashboard.parse_account_action_path(["accounts", "abcd", "nope"])
+  assert routes.parse_account_action_path(["accounts", "abcd", "nope"])
     == Error(Nil)
-  assert dashboard.parse_account_action_path(["sessions", "abcd", "delete"])
+  assert routes.parse_account_action_path(["sessions", "abcd", "delete"])
     == Error(Nil)
-  assert dashboard.parse_account_action_path(["accounts", "new"]) == Error(Nil)
+  assert routes.parse_account_action_path(["accounts", "new"]) == Error(Nil)
 }
 
 /// プラグインのページへのリンク（`plugin_page_href`）を `/` で分けて解析すると、
@@ -49,19 +51,19 @@ pub fn plugin_page_path_round_trips_test() {
     #("a/b", "status"),
     #("★", "status"),
   ])
-  let assert "/" <> path = dashboard.plugin_page_href(name, key)
-  assert dashboard.parse_plugin_page_path(string.split(path, "/"))
+  let assert "/" <> path = routes.plugin_page_href(name, key)
+  assert routes.parse_plugin_page_path(string.split(path, "/"))
     == Ok(#(name, key))
 }
 
 /// プラグインの再有効化のパス、2 セグメントのパス、percent-decode に失敗する名前は
 /// プラグインのページのパスにならない。
 pub fn plugin_page_path_rejects_other_paths_test() {
-  assert dashboard.parse_plugin_page_path(dashboard.reenable_plugin_segments)
+  assert routes.parse_plugin_page_path(routes.reenable_plugin_segments)
     == Error(Nil)
-  assert dashboard.parse_plugin_page_path(["plugins", "console_logger"])
+  assert routes.parse_plugin_page_path(["plugins", "console_logger"])
     == Error(Nil)
-  assert dashboard.parse_plugin_page_path(["plugins", "%ZZ", "status"])
+  assert routes.parse_plugin_page_path(["plugins", "%ZZ", "status"])
     == Error(Nil)
 }
 
@@ -621,7 +623,7 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
 /// ページを供給するプラグインの行にだけ、ページを開くリンクが出る。
 pub fn only_plugins_with_a_page_have_a_link_test() {
   let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(body, dashboard.plugin_page_href("a", "status"))
+  assert string.contains(body, routes.plugin_page_href("a", "status"))
   assert !string.contains(body, "/plugins/b/")
   assert !string.contains(body, "/plugins/c/")
   assert !string.contains(body, "/plugins/d/")
@@ -1510,7 +1512,7 @@ pub fn render_open_needs_the_listed_account_test() {
   let row_dialogs = [
     dashboard.AccountActionOpen(
       dialog_signer,
-      dashboard.RotateSecret,
+      routes.RotateSecret,
       None,
       reason,
     ),
@@ -2877,8 +2879,8 @@ pub fn new_relay_form_describes_the_url_field_test() {
 
 /// 用途の編集と削除の中身は、結果の注意の段落を畳まずにフォームの直前に出す。
 pub fn relay_action_form_keeps_the_description_visible_test() {
-  let edit = action_form(dashboard.EditRelayRoles)
-  let delete = action_form(dashboard.DeleteRelay)
+  let edit = action_form(routes.EditRelayRoles)
+  let delete = action_form(routes.DeleteRelay)
   assert string.contains(
     edit,
     "<p>"
@@ -2896,7 +2898,7 @@ pub fn relay_action_form_keeps_the_description_visible_test() {
 }
 
 /// id 7 のリレーへの `action` の英語のフォームの中身を HTML 文字列にする。
-fn action_form(action: dashboard.RelayAction) -> String {
+fn action_form(action: routes.RelayAction) -> String {
   dashboard.relay_action_form(
     i18n.English,
     dashboard.RelayRow(7, "wss://a", dashboard.Unused, dashboard.Unused),
@@ -3162,7 +3164,7 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
       states(),
       dashboard.RelayActionOpen(
         1,
-        dashboard.EditRelayRoles,
+        routes.EditRelayRoles,
         None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),
@@ -3216,7 +3218,7 @@ pub fn render_open_needs_the_relay_list_test() {
   let delete = fn(id) {
     dashboard.RelayActionOpen(
       id,
-      dashboard.DeleteRelay,
+      routes.DeleteRelay,
       None,
       i18n.Translated(i18n.RelayRoleRequired),
     )
@@ -3249,7 +3251,7 @@ pub fn render_open_does_not_announce_the_refresh_test() {
       states(),
       dashboard.RelayActionOpen(
         1,
-        dashboard.EditRelayRoles,
+        routes.EditRelayRoles,
         None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),

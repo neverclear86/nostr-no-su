@@ -35,6 +35,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/plugin_view
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
@@ -430,33 +431,31 @@ fn route(
       switch_preference(handling, language_preference)
     segments if segments == view.theme_segments ->
       switch_preference(handling, theme_preference)
-    [first, token] if first == dashboard.approve_segment ->
+    [first, token] if first == routes.approve_segment ->
       approve_connection(handling, token)
-    [first, token] if first == dashboard.deny_segment ->
+    [first, token] if first == routes.deny_segment ->
       deny_connection(handling, token)
-    segments if segments == dashboard.revoke_segments ->
-      revoke_session(handling)
-    segments if segments == dashboard.connect_segments ->
-      connect_client(handling)
-    segments if segments == dashboard.connect_confirm_segments ->
+    segments if segments == routes.revoke_segments -> revoke_session(handling)
+    segments if segments == routes.connect_segments -> connect_client(handling)
+    segments if segments == routes.connect_confirm_segments ->
       confirm_connection(handling)
-    segments if segments == dashboard.reenable_plugin_segments ->
+    segments if segments == routes.reenable_plugin_segments ->
       reenable_plugin(handling)
-    segments if segments == dashboard.reload_accounts_segments ->
+    segments if segments == routes.reload_accounts_segments ->
       reload_accounts(handling)
-    segments if segments == dashboard.new_relay_segments -> new_relay(handling)
-    segments if segments == dashboard.generate_account_segments ->
+    segments if segments == routes.new_relay_segments -> new_relay(handling)
+    segments if segments == routes.generate_account_segments ->
       generate_account(handling)
-    segments if segments == dashboard.import_account_segments ->
+    segments if segments == routes.import_account_segments ->
       import_account(handling)
-    segments if segments == dashboard.register_generated_segments ->
+    segments if segments == routes.register_generated_segments ->
       register_generated_account(handling)
     segments ->
       case
-        dashboard.parse_account_action_path(segments),
-        dashboard.parse_relay_action_path(segments),
-        dashboard.parse_plugin_page_path(segments),
-        dashboard.parse_session_permissions_path(segments)
+        routes.parse_account_action_path(segments),
+        routes.parse_relay_action_path(segments),
+        routes.parse_plugin_page_path(segments),
+        routes.parse_session_permissions_path(segments)
       {
         Ok(#(signer, action)), _, _, _ ->
           account_action(handling, signer, action)
@@ -494,7 +493,7 @@ fn response_content_security_policy(
   request: Request,
   segments: List(String),
 ) -> String {
-  case request.method, dashboard.parse_plugin_page_path(segments) {
+  case request.method, routes.parse_plugin_page_path(segments) {
     http.Get, Ok(_) -> content_security_policy(image_sources <> " http:")
     _, _ -> content_security_policy(image_sources)
   }
@@ -814,7 +813,7 @@ fn plugin_page_post(
           #(field.0, normalize_newlines(field.1))
         })
       case action(values, accounts) {
-        Ok(Nil) -> wisp.redirect(to: dashboard.plugin_page_href(name, key))
+        Ok(Nil) -> wisp.redirect(to: routes.plugin_page_href(name, key))
         Error(reason) ->
           unavailable_notice(handling, i18n.PluginActionFailed, reason)
       }
@@ -1592,7 +1591,7 @@ fn with_session(
 fn relay_action(
   handling: Handling,
   id: Int,
-  action: dashboard.RelayAction,
+  action: routes.RelayAction,
 ) -> Response {
   use <- require_method(handling, http.Post)
   use relay <- with_relay(handling, id)
@@ -1606,7 +1605,7 @@ fn relay_action(
     }
   }
   case action {
-    dashboard.EditRelayRoles -> {
+    routes.EditRelayRoles -> {
       use form <- wisp.require_form(handling.request)
       case relay_roles(form) {
         Error(reason) -> redraw(None)(i18n.Translated(reason), 400)
@@ -1617,7 +1616,7 @@ fn relay_action(
           )
       }
     }
-    dashboard.DeleteRelay ->
+    routes.DeleteRelay ->
       redirect_home_or(
         handling.context.delete_relay(relay),
         relay_failure_response(handling, _, redraw(None)),
@@ -1631,7 +1630,7 @@ fn relay_action(
 fn account_action(
   handling: Handling,
   signer: String,
-  action: dashboard.AccountAction,
+  action: routes.AccountAction,
 ) -> Response {
   use <- require_method(handling, http.Post)
   use rows <- with_rows(
@@ -1649,7 +1648,7 @@ fn account_action(
 fn registered_account_action(
   handling: Handling,
   row: dashboard.AccountRow,
-  action: dashboard.AccountAction,
+  action: routes.AccountAction,
 ) -> Response {
   let redraw = fn(label) {
     fn(reason, status) {
@@ -1661,18 +1660,18 @@ fn registered_account_action(
     }
   }
   case action {
-    dashboard.EditLabel -> update_label(handling, row, redraw)
-    dashboard.RotateSecret ->
+    routes.EditLabel -> update_label(handling, row, redraw)
+    routes.RotateSecret ->
       redirect_home_or(
         handling.context.rotate_secret(row.signer),
         change_failure_response(handling, _, redraw(None)),
       )
-    dashboard.DeleteAccount ->
+    routes.DeleteAccount ->
       redirect_home_or(
         handling.context.remove_account(row.signer),
         change_failure_response(handling, _, redraw(None)),
       )
-    dashboard.RevealPrivateKey -> reveal_private_key(handling, row)
+    routes.RevealPrivateKey -> reveal_private_key(handling, row)
   }
 }
 
@@ -1682,10 +1681,10 @@ fn registered_account_action(
 fn unregistered_account_action(
   handling: Handling,
   signer: String,
-  action: dashboard.AccountAction,
+  action: routes.AccountAction,
 ) -> Response {
   case action {
-    dashboard.DeleteAccount -> {
+    routes.DeleteAccount -> {
       use rows <- with_rows(
         handling,
         handling.context.skipped(),
@@ -1935,7 +1934,7 @@ fn reveal_private_key(
         handling,
         dashboard.AccountActionOpen(
           row.signer,
-          dashboard.RevealPrivateKey,
+          routes.RevealPrivateKey,
           None,
           i18n.Translated(i18n.IncorrectPassword),
         ),

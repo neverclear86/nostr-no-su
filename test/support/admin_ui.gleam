@@ -17,6 +17,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
+import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
@@ -254,7 +255,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       )),
       opened(dashboard.RelayActionOpen(
         1,
-        dashboard.EditRelayRoles,
+        routes.EditRelayRoles,
         None,
         i18n.Translated(i18n.RelayRoleRequired),
       )),

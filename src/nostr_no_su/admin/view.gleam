@@ -7,7 +7,7 @@
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。`html.style`、`html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は
 //// 使わず、JS の処理は `priv/static/admin.js` に置いて要素には `data-action` で処理の名前を
-//// 付ける。`href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた
+//// 付ける。`href`、`action`、`src` には、`admin/routes` のパスの関数が `/` から組み立てた
 //// 値か、`"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
 //// 付けた値だけを渡す（lustre は URL を検査しない）。例外は `<img>` の `src` で、scheme を
