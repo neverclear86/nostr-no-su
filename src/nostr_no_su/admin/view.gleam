@@ -7,11 +7,10 @@
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
 //// 任せる。`html.style`、`html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は
 //// 使わず、JS の処理は `priv/static/admin.js` に置いて要素には `data-action` で処理の名前を
-//// 付ける。`href`、`action`、`src` には、`admin/routes` のパスの関数かパスセグメントの定数から
-//// `/` で組み立てた値か、`"/"` か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
-//// 付けた値だけを渡す（lustre は URL を検査しない）。例外は `<img>` の `src` で、scheme を
-//// 検査した遠隔の画像の URL（アカウントのアイコンは `https`、プラグインの `image` は
-//// `http` / `https`）を渡す。
+//// 付ける。`href`、`action`、`src` には、`admin/routes` の `href` がルートから組み立てた値か、
+//// `"/"` か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を付けた値だけを渡す（lustre は
+//// URL を検査しない）。例外は `<img>` の `src` で、scheme を検査した遠隔の画像の URL（アカウントの
+//// アイコンは `https`、プラグインの `image` は `http` / `https`）を渡す。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
@@ -309,13 +308,13 @@ pub fn page(
       favicon_link(),
       html.link([
         attribute.rel("stylesheet"),
-        attribute.href(routes.segments_path(routes.stylesheet_segments)),
+        attribute.href(routes.href(routes.Stylesheet)),
       ]),
       element.element(
         "script",
         [
           attribute.type_("module"),
-          attribute.src(routes.segments_path(routes.script_segments)),
+          attribute.src(routes.href(routes.Script)),
         ],
         [],
       ),
@@ -389,7 +388,7 @@ fn theme_switch(
 ) -> Element(msg) {
   switch_group(
     i18n.text(language, i18n.ThemeSwitchLabel),
-    routes.theme_segments,
+    routes.SwitchTheme,
     return_to,
     list.map(themes, fn(theme) {
       let label = i18n.text(language, theme_label(theme))
@@ -429,7 +428,7 @@ fn theme_choice_icon(theme: Theme) -> Element(msg) {
 fn language_switch(current: Language, return_to: String) -> Element(msg) {
   switch_group(
     i18n.text(current, i18n.LanguageSwitchLabel),
-    routes.language_segments,
+    routes.SwitchLanguage,
     return_to,
     list.map(language_choices(), fn(choice) {
       let #(pressed, extra, content) = case choice {
@@ -462,24 +461,21 @@ fn language_switch(current: Language, return_to: String) -> Element(msg) {
 /// 動く。
 fn switch_group(
   label: String,
-  action: List(String),
+  action: routes.Route,
   return_to: String,
   buttons: List(Element(msg)),
 ) -> Element(msg) {
-  html.form(
-    [attribute.method("post"), attribute.action(routes.segments_path(action))],
-    [
-      hidden_input(return_field, return_to),
-      html.div(
-        [
-          attribute.role("group"),
-          attribute.aria_label(label),
-          attribute.class("join"),
-        ],
-        buttons,
-      ),
-    ],
-  )
+  html.form([attribute.method("post"), attribute.action(routes.href(action))], [
+    hidden_input(return_field, return_to),
+    html.div(
+      [
+        attribute.role("group"),
+        attribute.aria_label(label),
+        attribute.class("join"),
+      ],
+      buttons,
+    ),
+  ])
 }
 
 /// 切り替えの送信ボタン 1 つ。押すと `field` に `value` を送る。今の値（`pressed`）は

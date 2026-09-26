@@ -33,10 +33,10 @@ import support/account_actions
 @external(erlang, "file", "read_file")
 fn read_file(path: String) -> Result(BitArray, Dynamic)
 
-/// URL のパスセグメントが指す静的ファイルの中身。ルーティングが `priv` の下の同じパスから
-/// 配信するので、セグメントの定義（`routes.stylesheet_segments` など）から読む。
-pub fn static_file(segments: List(String)) -> String {
-  text_file("priv" <> routes.segments_path(segments))
+/// URL のパスが指す静的ファイルの中身。ルーティングが `priv` の下の同じパスから配信するので、
+/// ルート（`routes.Stylesheet` など）のパスから読む。
+pub fn static_file(route: routes.Route) -> String {
+  text_file("priv" <> routes.path(route))
 }
 
 /// リポジトリの根からの相対パスのテキストファイルの中身。

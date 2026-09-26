@@ -216,7 +216,7 @@ pub fn cross_origin_state_changes_are_rejected_test() {
     "/accounts/generate",
     "/accounts/import",
     "/accounts/register-generated",
-    routes.session_permissions_path(signer, client),
+    routes.href(routes.SessionPermissions(signer, client)),
     "/sessions/revoke",
     "/plugins/reenable",
     "/approve/" <> token,

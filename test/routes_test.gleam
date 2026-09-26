@@ -1,7 +1,9 @@
-//// 管理 UI のパスの解析（`admin/routes` の `parse`）の単体テスト。
+//// 管理 UI のパスの解析と組み立て（`admin/routes` の `parse`、`path`、`href`）の単体テスト。
 
 import gleam/list
+import gleam/uri
 import nostr_no_su/admin/routes
+import support/account_actions
 
 /// 構築子ごとのパスはその構築子になり、引数の検査に落ちるパスと余分なセグメントを持つパスは Error になる。
 pub fn parse_test() {
@@ -85,4 +87,43 @@ pub fn parse_test() {
     #("another static file", ["static", "other.css"], Error(Nil)),
   ])
   assert #(name, routes.parse(segments)) == #(name, expected)
+}
+
+/// どの構築子も、`href` のパスを `/` で分けて解析すると元のルートに戻る。`path` は `href` を
+/// percent-decode した値（プラグイン名を符号化しない形）になる。
+pub fn href_round_trips_through_parse_test() {
+  use #(name, route) <- list.each([
+    #("dashboard", routes.ShowDashboard),
+    #("stylesheet", routes.Stylesheet),
+    #("script", routes.Script),
+    #("switch language", routes.SwitchLanguage),
+    #("switch theme", routes.SwitchTheme),
+    #("approve", routes.ApproveConnection("tok")),
+    #("deny", routes.DenyConnection("tok")),
+    #("revoke session", routes.RevokeSession),
+    #("connect client", routes.ConnectClient),
+    #("confirm connection", routes.ConfirmConnection),
+    #("reenable plugin", routes.ReenablePlugin),
+    #("reload accounts", routes.ReloadAccounts),
+    #("new relay", routes.NewRelay),
+    #("generate account", routes.GenerateAccount),
+    #("import account", routes.ImportAccount),
+    #("register generated account", routes.RegisterGeneratedAccount),
+    #("relay operation edit", routes.RelayOperation(7, routes.EditRelayRoles)),
+    #("relay operation delete", routes.RelayOperation(7, routes.DeleteRelay)),
+    #("plugin page", routes.ShowPluginPage("console_logger", "status")),
+    #("plugin page with a space", routes.ShowPluginPage("a b", "status")),
+    #("plugin page with a slash", routes.ShowPluginPage("a/b", "status")),
+    #("plugin page with a non-ascii name", routes.ShowPluginPage("★", "status")),
+    #("session permissions", routes.SessionPermissions("abcd", "ef01")),
+    ..list.map(account_actions.all, fn(action) {
+      #(
+        "account " <> routes.account_action_segment(action),
+        routes.AccountOperation("abcd", action),
+      )
+    })
+  ])
+  let href = routes.href(route)
+  assert #(name, routes.parse(uri.path_segments(href))) == #(name, Ok(route))
+  assert #(name, uri.percent_decode(href)) == #(name, Ok(routes.path(route)))
 }

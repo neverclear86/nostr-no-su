@@ -1,5 +1,4 @@
-//// 管理 UI のパスの定義（`admin/routes`）、状態の見せ方、ダイアログに出すフォームの中身
-//// （`admin/dashboard`）の単体テスト。
+//// 管理 UI の状態の見せ方とダイアログに出すフォームの中身（`admin/dashboard`）の単体テスト。
 
 import gleam/int
 import gleam/list
@@ -22,30 +21,7 @@ import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
-import support/account_actions
 import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
-
-/// 操作のパスは、どの操作でもパスセグメントから同じ署名者と操作のルートに戻る。
-pub fn account_action_paths_round_trip_test() {
-  use action <- list.each(account_actions.all)
-  let assert "/" <> path = routes.account_action_path("abcd", action)
-  assert routes.parse(string.split(path, "/"))
-    == Ok(routes.AccountOperation("abcd", action))
-}
-
-/// プラグインのページへのリンク（`plugin_page_href`）を `/` で分けて解析すると、
-/// 元のプラグイン名とページのキーのルートに戻る。名前に空白、`/`、非 ASCII を含んでいてもよい。
-pub fn plugin_page_path_round_trips_test() {
-  use #(name, key) <- list.each([
-    #("console_logger", "status"),
-    #("a b", "status"),
-    #("a/b", "status"),
-    #("★", "status"),
-  ])
-  let assert "/" <> path = routes.plugin_page_href(name, key)
-  assert routes.parse(string.split(path, "/"))
-    == Ok(routes.ShowPluginPage(name, key))
-}
 
 /// リレーとプラグインのすべての状態と、承認待ち 1 件を持つスナップショット。
 fn states() -> dashboard.Snapshot {
@@ -603,10 +579,25 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
 /// ページを供給するプラグインの行にだけ、ページを開くリンクが出る。
 pub fn only_plugins_with_a_page_have_a_link_test() {
   let body = dashboard.render(i18n.English, view.System, states())
-  assert string.contains(body, routes.plugin_page_href("a", "status"))
+  assert string.contains(
+    body,
+    routes.href(routes.ShowPluginPage("a", "status")),
+  )
   assert !string.contains(body, "/plugins/b/")
   assert !string.contains(body, "/plugins/c/")
   assert !string.contains(body, "/plugins/d/")
+}
+
+/// プラグインのページを開くリンクは、プラグイン名を percent-encode する。
+pub fn plugin_page_link_encodes_the_plugin_name_test() {
+  let snapshot =
+    dashboard.Snapshot(..states(), plugins: [
+      dashboard.PluginRow("a b", Some(plugin_runner.Running), pages: [
+        plugin.PluginPage(key: "status", title: "Status"),
+      ]),
+    ])
+  let body = dashboard.render(i18n.English, view.System, snapshot)
+  assert string.contains(body, "href=\"/plugins/a%20b/status\"")
 }
 
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を

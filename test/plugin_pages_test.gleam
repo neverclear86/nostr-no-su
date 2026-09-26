@@ -82,6 +82,24 @@ fn section_with_form(title: String) -> Dynamic {
   ])
 }
 
+/// ページ `page` への `link` ブロック 1 つを持つ節。
+fn section_with_link(title: String, page: String) -> Dynamic {
+  map_([
+    #("type", dynamic.string("section")),
+    #("title", dynamic.string(title)),
+    #(
+      "blocks",
+      dynamic.list([
+        map_([
+          #("type", dynamic.string("link")),
+          #("page", dynamic.string(page)),
+          #("text", dynamic.string("Open")),
+        ]),
+      ]),
+    ),
+  ])
+}
+
 /// `title` を欠き、変換に失敗する節。
 fn broken_section() -> Dynamic {
   map_([#("type", dynamic.string("section")), #("blocks", dynamic.list([]))])
@@ -306,7 +324,7 @@ pub fn plugin_page_times_are_relative_to_now_test() {
   assert string.contains(html, ">2 h ago</span>")
 }
 
-/// `form` ブロックの宛先は、今開いているページ自身のパス（`routes.plugin_page_href`）になる。
+/// `form` ブロックの宛先は、今開いているページ自身のパス（`routes.href`）になる。
 pub fn plugin_page_form_posts_to_the_current_page_test() {
   let body =
     plugin_pages.plugin_page(
@@ -319,6 +337,32 @@ pub fn plugin_page_form_posts_to_the_current_page_test() {
     )
   assert string.contains(
     body,
-    "<form action=\"" <> routes.plugin_page_href("example", "settings") <> "\"",
+    "<form action=\""
+      <> routes.href(routes.ShowPluginPage("example", "settings"))
+      <> "\"",
   )
+}
+
+/// タブのリンク、`link` ブロックのリンク、フォームの宛先はプラグイン名を percent-encode し、
+/// テーマと言語の切り替えの戻り先は符号化しないパスにする（受け取る側がセグメントを符号化するため）。
+pub fn plugin_name_is_encoded_in_links_but_not_in_the_return_path_test() {
+  let row =
+    dashboard.PluginRow("a b", Some(plugin_runner.Running), pages: [
+      plugin.PluginPage(key: "status", title: "Status"),
+      plugin.PluginPage(key: "settings", title: "Settings"),
+    ])
+  let body =
+    plugin_pages.plugin_page(
+      i18n.English,
+      view.System,
+      row,
+      plugin.PluginPage(key: "settings", title: "Settings"),
+      0,
+      [section_with_link("See also", "settings"), section_with_form("Options")],
+    )
+  assert string.contains(body, "href=\"/plugins/a%20b/status\"")
+  assert list.length(string.split(body, "href=\"/plugins/a%20b/settings\""))
+    == 3
+  assert string.contains(body, "<form action=\"/plugins/a%20b/settings\"")
+  assert string.contains(body, "value=\"/plugins/a b/settings\"")
 }

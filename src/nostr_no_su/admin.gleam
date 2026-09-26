@@ -794,7 +794,8 @@ fn plugin_page_post(
           #(field.0, normalize_newlines(field.1))
         })
       case action(values, accounts) {
-        Ok(Nil) -> wisp.redirect(to: routes.plugin_page_href(name, key))
+        Ok(Nil) ->
+          wisp.redirect(to: routes.href(routes.ShowPluginPage(name, key)))
         Error(reason) ->
           unavailable_notice(handling, i18n.PluginActionFailed, reason)
       }

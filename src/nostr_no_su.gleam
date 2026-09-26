@@ -234,7 +234,7 @@ fn builtin_plugins(enabled: Bool) -> List(Plugin) {
 /// 管理 UI 側（`admin/routes`）だけになる。管理 UI が無効なら承認フローも無効。
 fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   use base <- option.map(config.auth_url_base(loaded))
-  fn(token) { base <> routes.approve_path(token) }
+  fn(token) { base <> routes.href(routes.ApproveConnection(token)) }
 }
 
 /// バンカーサブツリーの仕様。`database_url` を解釈できなければ、その理由を返す。
