@@ -90,6 +90,20 @@ pub fn a_lock_held_elsewhere_is_described_without_values_test() {
   assert !db.may_have_been_written(error)
 }
 
+/// `db.describe` の `Duplicate` と `NotFound` の説明はテーブルを名指さない。
+pub fn store_errors_describe_without_the_table_test() {
+  assert db.describe(db.Duplicate) == "row already exists"
+  assert db.describe(db.NotFound) == "row does not exist"
+}
+
+/// `account_store.describe` は重複と行が無いことをアカウントの語で言い、他の失敗は
+/// `db.describe` と同じ説明にする。
+pub fn describe_names_the_account_test() {
+  assert account_store.describe(db.Duplicate) == "account is already registered"
+  assert account_store.describe(db.NotFound) == "account is not registered"
+  assert account_store.describe(db.Unavailable) == db.describe(db.Unavailable)
+}
+
 /// Postgres の URL からプールの設定を作り、本数を 2 に絞る。`pog.Config` は
 /// パスワードを持つので、表示も比較もせず本数だけを確かめる。
 pub fn pool_config_accepts_postgres_urls_test() {
@@ -131,8 +145,8 @@ pub fn pool_config_rejects_invalid_urls_without_echoing_them_test() {
   assert !string.contains(reason, "pw-marker")
 }
 
-/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、主キーの制約違反は
-/// `AlreadyRegistered` になる。
+/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、制約違反は制約の
+/// 名前つきの `ConstraintRejected` になる。
 pub fn query_errors_map_to_store_errors_test() {
   assert db.from_query_error(pog.ConnectionUnavailable) == db.Unavailable
   assert db.from_query_error(pog.QueryTimeout) == db.TimedOut
@@ -141,7 +155,7 @@ pub fn query_errors_map_to_store_errors_test() {
       constraint: "bunker_accounts_pkey",
       detail: "Key (pubkey)=(abc) already exists.",
     ))
-    == db.AlreadyRegistered
+    == db.ConstraintRejected("bunker_accounts_pkey")
 }
 
 /// 制約違反の `detail` と `message` は行の値を含みうるので、説明に残さない。
@@ -159,20 +173,36 @@ pub fn constraint_details_are_not_described_test() {
   assert !string.contains(described, "message-marker")
 }
 
+/// `duplicate_on` は渡した名前の制約違反だけを `Duplicate` に写し、他の失敗はそのまま返す。
+pub fn duplicate_on_maps_only_the_named_constraint_test() {
+  assert db.duplicate_on(
+      db.ConstraintRejected("relays_url_key"),
+      "relays_url_key",
+    )
+    == db.Duplicate
+  assert db.duplicate_on(
+      db.ConstraintRejected("bunker_accounts_pkey"),
+      "relays_url_key",
+    )
+    == db.ConstraintRejected("bunker_accounts_pkey")
+  assert db.duplicate_on(db.Unavailable, "relays_url_key") == db.Unavailable
+}
+
 /// 書き込まれていることがある失敗は期限切れと例外だけで、他の失敗は書き込まれていない。
 pub fn only_a_timeout_or_an_exception_may_have_been_written_test() {
   assert db.may_have_been_written(db.TimedOut)
   assert db.may_have_been_written(db.Raised("x"))
   assert !db.may_have_been_written(db.Unavailable)
-  assert !db.may_have_been_written(db.AlreadyRegistered)
-  assert !db.may_have_been_written(db.NotRegistered)
+  assert !db.may_have_been_written(db.Duplicate)
+  assert !db.may_have_been_written(db.NotFound)
   assert !db.may_have_been_written(db.QueryFailed("x"))
+  assert !db.may_have_been_written(db.ConstraintRejected("x"))
   assert !db.may_have_been_written(db.SchemaTooNew(found: 2, supported: 1))
 }
 
 /// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
 pub fn deleted_or_absent_treats_a_missing_row_as_deleted_test() {
-  assert account_store.deleted_or_absent(Error(db.NotRegistered)) == Ok(Nil)
+  assert account_store.deleted_or_absent(Error(db.NotFound)) == Ok(Nil)
   assert account_store.deleted_or_absent(Error(db.Unavailable))
     == Error(db.Unavailable)
   assert account_store.deleted_or_absent(Ok(Nil)) == Ok(Nil)
@@ -305,8 +335,7 @@ pub fn postgres_round_trip_test() {
   let second_pubkey = account.pubkey_hex(second.account)
   let assert Ok(Nil) = account_store.insert(db, key, first, generous)
   let assert Ok(Nil) = account_store.insert(db, key, second, generous)
-  assert account_store.insert(db, key, first, generous)
-    == Error(db.AlreadyRegistered)
+  assert account_store.insert(db, key, first, generous) == Error(db.Duplicate)
 
   // 入れた行が同じ内容で戻る。
   let assert Ok(loaded) = account_store.load(pool, key, generous)
@@ -336,11 +365,11 @@ pub fn postgres_round_trip_test() {
   )
   let unknown = account.pubkey_hex(random_entry("unknown").account)
   assert account_store.update_secret(db, key, unknown, "x", generous)
-    == Error(db.NotRegistered)
+    == Error(db.NotFound)
   assert account_store.update_secret(db, key, "not-hex", "x", generous)
-    == Error(db.NotRegistered)
+    == Error(db.NotFound)
   assert account_store.update_label(db, unknown, "x", generous)
-    == Error(db.NotRegistered)
+    == Error(db.NotFound)
 
   // 別のマスターキーでは、自分が入れた行はすべて飛ばされる。
   let assert Ok(other) = account_store.load(pool, random_master_key(), generous)
@@ -358,10 +387,9 @@ pub fn postgres_round_trip_test() {
   assert loaded_pubkeys(loaded, [first_pubkey, second_pubkey])
     == [second_pubkey]
 
-  // 削除した行は現れず、2 回目の削除は `NotRegistered`。
+  // 削除した行は現れず、2 回目の削除は `NotFound`。
   let assert Ok(Nil) = account_store.delete(db, second_pubkey, generous)
-  assert account_store.delete(db, second_pubkey, generous)
-    == Error(db.NotRegistered)
+  assert account_store.delete(db, second_pubkey, generous) == Error(db.NotFound)
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded_pubkeys(loaded, [second_pubkey]) == []
   assert skipped_reasons(loaded, [second_pubkey]) == []
@@ -1181,7 +1209,7 @@ pub fn postgres_relay_store_test() {
 
   // 同じ URL の追加は他の DB の失敗と区別できる値で返る。
   assert relay_store.insert(db, "wss://a", relay_list.Both, generous)
-    == Error(db.RelayAlreadyRegistered)
+    == Error(db.Duplicate)
 
   // 用途の更新が反映される。
   let assert Ok(Nil) =
@@ -1191,8 +1219,8 @@ pub fn postgres_relay_store_test() {
 
   // 無い id の更新と削除は区別できる値で返る。
   assert relay_store.update_roles(db, -1, relay_list.Both, generous)
-    == Error(db.RelayNotRegistered)
-  assert relay_store.delete(db, -1, generous) == Error(db.RelayNotRegistered)
+    == Error(db.NotFound)
+  assert relay_store.delete(db, -1, generous) == Error(db.NotFound)
 
   // 削除で消える。
   let assert Ok(Nil) = relay_store.delete(db, a.id, generous)
@@ -1545,19 +1573,46 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
     == [#("client", "sign_event:1,sign_event:10002")]
 }
 
-/// `pool` に向けた `nostr_no_su.account_store_operations` の `write` を、期限
-/// `generous` で返す。`write` はロックのプールを使わないので、ロックには起動して
-/// いないプールの名前を渡す。
-fn store_write(
+/// ストアの操作は、登録済みの公開鍵の追加と行の無い更新の理由をアカウントの語で返す
+/// （ログの行の文言）。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn store_operations_keep_the_account_reasons_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, _db <- postgres.with_schema(database_url)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let store = store_operations(pool, key)
+  let entry = random_entry("reasons")
+  let assert Ok(Nil) = store.insert(entry)
+  assert store.insert(entry)
+    == Error(bunker.AlreadyStored("account is already registered"))
+
+  let unknown = account.pubkey_hex(random_entry("unknown-reasons").account)
+  assert store.update_label(unknown, "x")
+    == Error(bunker.NotWritten("account is not registered"))
+}
+
+/// `pool` に向けた `nostr_no_su.account_store_operations` を、期限 `generous` で返す。
+/// ストアの書き込みはロックのプールを使わないので、ロックには起動していないプールの
+/// 名前を渡す。
+fn store_operations(
   pool: Name(pog.Message),
   key: vault.MasterKey,
-) -> fn(engine.Write) -> Result(Nil, bunker.WriteFailure) {
+) -> bunker.Store {
   nostr_no_su.account_store_operations(
     pool,
     process.new_name("account_store_test_unreachable_lock"),
     key,
     generous,
-  ).write
+  )
+}
+
+/// `store_operations` の `write`。
+fn store_write(
+  pool: Name(pog.Message),
+  key: vault.MasterKey,
+) -> fn(engine.Write) -> Result(Nil, bunker.WriteFailure) {
+  store_operations(pool, key).write
 }
 
 /// エンジンだけで `count` 件の別々のクライアント鍵からの `connect`（secret は

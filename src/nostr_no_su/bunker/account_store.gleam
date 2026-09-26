@@ -46,6 +46,9 @@ ORDER BY created_at, pubkey"
 const insert_sql = "INSERT INTO bunker_accounts (pubkey, label, encrypted_privkey, encrypted_secret)
 VALUES ($1, $2, $3, $4)"
 
+/// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
+const primary_key_constraint = "bunker_accounts_pkey"
+
 /// 1 行の削除。
 const delete_sql = "DELETE FROM bunker_accounts WHERE pubkey = $1"
 
@@ -220,7 +223,8 @@ pub fn load(
   db.transaction(pool, timeouts.load_ms, load_within(_, key, timeouts))
 }
 
-/// アカウントを 1 件追加する。
+/// アカウントを 1 件追加する。同じ公開鍵がすでにあれば `db.Duplicate`（主キーの
+/// 制約違反）。
 pub fn insert(
   db: pog.Connection,
   key: MasterKey,
@@ -239,6 +243,7 @@ pub fn insert(
   |> pog.parameter(pog.bytea(row.encrypted_privkey))
   |> pog.parameter(pog.bytea(row.encrypted_secret))
   |> db.execute_write(db, timeouts)
+  |> result.map_error(db.duplicate_on(_, primary_key_constraint))
 }
 
 /// アカウントを 1 件削除する。
@@ -249,11 +254,11 @@ pub fn delete(
 ) -> Result(Nil, StoreError) {
   pog.query(delete_sql)
   |> pog.parameter(pog.text(pubkey))
-  |> db.execute_on_one_row(db, timeouts, db.NotRegistered)
+  |> db.execute_on_one_row(db, timeouts)
 }
 
 /// 接続 secret を差し替える。`pubkey` が 16 進として読めないときは、列の制約上
-/// その行は存在しえないので `db.NotRegistered` にする。
+/// その行は存在しえないので `db.NotFound` にする。
 pub fn update_secret(
   db: pog.Connection,
   key: MasterKey,
@@ -262,7 +267,7 @@ pub fn update_secret(
   timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   use pubkey_bytes <- result.try(
-    hex.decode(pubkey) |> result.replace_error(db.NotRegistered),
+    hex.decode(pubkey) |> result.replace_error(db.NotFound),
   )
   // `insert` と同じ理由で、暗号化は失敗しない。
   let assert Ok(encrypted_secret) =
@@ -277,7 +282,7 @@ pub fn update_secret(
   pog.query(update_secret_sql)
   |> pog.parameter(pog.text(pubkey))
   |> pog.parameter(pog.bytea(encrypted_secret))
-  |> db.execute_on_one_row(db, timeouts, db.NotRegistered)
+  |> db.execute_on_one_row(db, timeouts)
 }
 
 /// ラベルを差し替える。
@@ -290,7 +295,7 @@ pub fn update_label(
   pog.query(update_label_sql)
   |> pog.parameter(pog.text(pubkey))
   |> pog.parameter(pog.text(label))
-  |> db.execute_on_one_row(db, timeouts, db.NotRegistered)
+  |> db.execute_on_one_row(db, timeouts)
 }
 
 /// セッション `session` を 1 件追加する。同じ（signer, client）の組がすでに
@@ -464,15 +469,25 @@ pub fn insert_pending_replacing(
   })
 }
 
-/// 削除の結果で、行が無かったこと（`db.NotRegistered`）を成功に写す。削除は行が無い
+/// 削除の結果で、行が無かったこと（`db.NotFound`）を成功に写す。削除は行が無い
 /// 状態にすることが目的なので、タイムアウトした削除がサーバー側でコミットされて
 /// いた場合や、DB の外で行を消した場合にも、呼び出し側が削除を完了できるようにする。
 pub fn deleted_or_absent(
   result: Result(Nil, StoreError),
 ) -> Result(Nil, StoreError) {
   case result {
-    Error(db.NotRegistered) -> Ok(Nil)
+    Error(db.NotFound) -> Ok(Nil)
     other -> other
+  }
+}
+
+/// アカウントの操作の失敗の説明。行の重複と行が無いことをアカウントの語で言い、
+/// それ以外は `db.describe` に任せる。
+pub fn describe(error: StoreError) -> String {
+  case error {
+    db.Duplicate -> "account is already registered"
+    db.NotFound -> "account is not registered"
+    _ -> db.describe(error)
   }
 }
 
