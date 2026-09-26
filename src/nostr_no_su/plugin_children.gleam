@@ -1,31 +1,9 @@
-//// 任意エクスポート `plugin_children/0` `plugin_children/1` の検証と、
-//// スーパービジョンツリーの子仕様への変換。
-////
-//// **どちらも任意エクスポートであり、API バージョンは上げない。** 持たない
-//// プラグインは従来どおり子を持たないものとして読み込まれる。呼び出しは
-//// `plugin.load` の中で起動時に 1 度だけ行う。返るのは MFA を含む純粋なデータで
-//// あってプロセスではないため、再起動のたびに問い合わせ直す必要がなく、ツリーを
-//// 起動時に組み立てる `static_supervisor` の前提と噛み合う。
-////
-//// **アリティの選び方。** `plugin_children/1` があればそちらを呼び、プラグイン
-//// 固有の設定 map（`plugin_config.to_map` の形）を渡す。無ければ
-//// `plugin_children/0` を呼ぶ。どちらも無ければ問い合わせない。判定と期限付きの
-//// 呼び出しは `plugin.gleam` が行い、このモジュールには戻り値とアリティが
-//// 渡ってくる。
-////
-//// **`{error, Reason}` で設定を拒否できる。** 子仕様のリストの代わりに
-//// `{error, Reason :: binary()}` を返すと、「設定が足りない・不正なのでこの
-//// プラグインを読み込まないでほしい」という申告になる。判別子は**要素 0 が
-//// atom の `error` であること**だけで、要素数は見ない。**この判定はリストの
-//// デコードより先に行う**（Erlang の 2 要素タプルは `decode.list` で長さ 2 の
-//// リストとしてデコードされるため、後に回すと無関係な理由が出る）。
-////
-//// 子プロセスを持たないプラグインも、設定の検査だけのために
-//// `plugin_children/1` をエクスポートし、設定が揃っていれば `[]` を返してよい。
-//// その場合も本体が出す 1 行は
-//// `plugin_children/1 rejected the configuration (...)` になる。関数名が
-//// 「子仕様」と言っているのに設定の検査結果を報告する形になるが、これは設定が
-//// 子仕様を組み立てるために要るという設計判断の裏面である。
+//// 任意エクスポート `plugin_children/0` `plugin_children/1` の戻り値を検証し、
+//// スーパービジョンツリーの子仕様に変換する。呼び出しは `plugin.load` が起動時に
+//// 1 度だけ期限付きで行い、このモジュールには戻り値とアリティが渡ってくる。
+//// 返るのは MFA を含む純粋なデータであってプロセスではないため、再起動のたびに
+//// 問い合わせ直す必要がなく、ツリーを起動時に組み立てる `static_supervisor`
+//// の前提と噛み合う。
 ////
 //// **境界に置くのは OTP の `supervisor:child_spec()` の map であって、Gleam の
 //// レコードではない。** Gleam のレコードはランタイムではタグ付きタプルであり、
@@ -41,29 +19,6 @@
 ////     type     => worker | supervisor                 %% 任意。既定 worker
 //// }
 //// ```
-////
-//// 押さえておくべき点。
-////
-//// - **`id` は OTP へは渡らない。** `static_supervisor` が子の id を自分で採番
-////   するため、ここでの `id` は理由の文字列とログ行にだけ使う。それでも必須に
-////   しているのは、失敗した子を運用者が特定できるようにするためである。
-//// - **`shutdown => infinity` は `supervision.timeout(_, -1)` で表す。**
-////   `static_supervisor` の `make_timeout/1` が負値を `infinity` に変換すること
-////   に依存している。**gleam_otp を更新したら `convert_child` / `make_timeout` を
-////   読み直すこと。** この対応を破ったときに落ちる唯一のテストが
-////   `plugin_children_test.worker_shutdown_reaches_otp_test` である。
-//// - **`type => supervisor` に有限の `shutdown` は書けない。**
-////   `supervision.timeout/2` は Worker にしか効かず、Supervisor の shutdown は
-////   `make_timeout(-1)`（= `infinity`）に固定される。受け取った値が黙って別の
-////   意味になるため、`brutal_kill` と同じく理由を出して拒否する。
-//// - **失敗の理由は自前で組み立て、`decode` のパスに頼らない。** atom キーの map
-////   に対する `decode.run` のエラーはパスが `0.<Atom>` にしかならず、プラグイン
-////   作者の役に立たない。**報告するのは最初の 1 件だけ**にして 1 行に収める。
-//// - **子の起動に失敗したときの 1 行ログはこのモジュールが出す。**
-////   `static_supervisor.start` の戻り値には理由が残らない（`gleam_otp_external`
-////   が `{shutdown, {failed_to_start_child, Id, Reason}}` を
-////   `InitFailed("shutdown")` に潰す）ため、id と生の理由を両方持っている
-////   子ごとの start クロージャーだけが理由を運用者に届けられる。
 ////
 //// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` の第 5 章と第 6 章に
 //// ある。
@@ -85,7 +40,7 @@ pub const export_name = "plugin_children"
 
 /// 子仕様が採れなかった理由。本体はこの 2 つを別々の 1 行に整える。
 pub type Rejection {
-  /// 戻り値の形が API に合わない（従来からの検証失敗）。
+  /// 戻り値の形が API に合わない。
   InvalidSpec(reason: String)
   /// プラグイン自身が設定を受け付けなかった（`{error, Reason}`）。
   ConfigRejected(reason: String)
@@ -101,7 +56,8 @@ pub fn export_label(arity: Int) -> String {
 const default_shutdown_ms = 5000
 
 /// `infinity` を表す shutdown。`static_supervisor` の `make_timeout/1` が負値を
-/// `infinity` にすることに依存する。
+/// `infinity` にすることに依存するので、gleam_otp を更新したら `convert_child` と
+/// `make_timeout` を読み直す。
 const infinity_shutdown_ms = -1
 
 /// 検証済みの子仕様 1 件。
@@ -258,7 +214,9 @@ fn lookup(raw: Dynamic, key: String) -> Option(Dynamic) {
 }
 
 /// 必須のキーを読む。欠けていれば `<label>: missing <key>`、型が合わなければ
-/// `<label>: <key> must be <expected>, got <classify>`。
+/// `<label>: <key> must be <expected>, got <classify>`。atom キーの map に対する
+/// `decode.run` のエラーのパスはプラグイン作者の役に立たないので、理由は自前で
+/// 組み立てる。
 fn required(
   raw: Dynamic,
   key: String,
@@ -283,6 +241,8 @@ fn required(
 }
 
 /// `id` は atom でも binary でもよい。どちらも文字列にして理由とログに使う。
+/// `static_supervisor` が子の id を自分で採番するので OTP へは渡らないが、失敗した
+/// 子を運用者が特定できるよう必須にしている。
 fn id_decoder() -> decode.Decoder(String) {
   decode.one_of(decode.string, [decode.map(atom.decoder(), atom.to_string)])
 }
@@ -395,8 +355,8 @@ fn to_child(spec: Spec, name: String) -> ChildSpecification(Pid) {
   |> supervision.restart(spec.restart)
 }
 
-/// worker の shutdown。`infinity` は負値で表す（`static_supervisor` の
-/// `make_timeout/1` が負値を infinity にする）。既定は OTP と同じ 5000ms。
+/// worker の shutdown。`infinity` は `infinity_shutdown_ms` が表す。既定は
+/// OTP と同じ 5000ms。
 fn shutdown_ms(shutdown: Option(Shutdown)) -> Int {
   case shutdown {
     None -> default_shutdown_ms
