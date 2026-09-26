@@ -698,7 +698,7 @@ nostr-no-su/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
-│       ├── bunker/connection_secret.gleam 接続 secret（閉じ込め、定数時間の比較）
+│       ├── bunker/connection_secret.gleam 接続 secret（定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
 │       ├── bunker/account.gleam  鍵材料と bunker:// URI
@@ -723,6 +723,7 @@ nostr-no-su/
 │       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
 │       ├── random.gleam          推測されては困る値のための乱数
+│       ├── secret.gleam          秘密の値の閉じ込め（`string.inspect` とクラッシュレポートに出さない）
 │       ├── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボード、`plugin_api`、`avatars` が使う）
 │       └── time.gleam            現在時刻（壁時計・単調時計、FFI）
 │
