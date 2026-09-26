@@ -732,104 +732,71 @@ fn show_dashboard(handling: Handling) -> Response {
   |> wisp.html_response(200)
 }
 
-/// プラグインが供給するページ。GET はページの記述を、POST はフォームの送信を
-/// 扱う。処理の順序は次のとおりで、本文の解釈（`wisp.require_form`）は最後に
-/// 置く。
-///
-/// 1. プラグイン名とページのキーの照合（合わなければ 404）。土台では
-///    `require_method(request, http.Get, …)` が本体の先頭にあるので、これを外して
-///    照合を先に置く。非 GET で存在しないプラグイン・ページへの要求は 405 から
-///    404 に変わるが、これを固定する既存のテストは無く、検証の手順 3 が新しい側を
-///    確かめる。
-/// 2. POST なら `context.plugin_page_action(name, key)` を呼び、`None` なら
-///    `require_method(handling, http.Get)` と同じ 405 をここで
-///    返す。
-/// 3. `context.page_accounts()`（`Error(reason)` は
-///    `unavailable_notice(handling, i18n.PluginPageUnavailable, reason)`）。
-/// 4. GET は `context.plugin_page_content(name, key, language, accounts)`。
-/// 5. POST は `wisp.require_form` で値を取り、値の改行を
-///    `normalize_newlines` で LF にそろえてから、2 で得た関数に `accounts` と
-///    ともに渡す。`Ok(Nil)` は
-///    `wisp.redirect(to: dashboard.plugin_page_href(name, key))`、`Error(reason)`
-///    は `unavailable_notice(..., i18n.PluginActionFailed, reason)`。
-///
-/// GET と POST 以外のメソッドは 405 で、`allow` は
-/// `context.plugin_page_action(name, key)` が `Some` なら `GET, POST`、`None`
-/// なら `GET` にする。
-///
-/// プラグインの一覧の問い合わせ（`snapshot_deadline_ms`、既定 5 秒）とページの
-/// 中身・フォームの送信の呼び出し（`call_timeout_ms`、既定 5 秒）が直列なので、
-/// 最悪 10 秒かかる。
+/// プラグインが供給するページ。GET はページの記述を描き、POST はフォームの送信を実行する。
+/// プラグイン名とページのキーを照合できなければメソッドによらず 404、アクションの無い POST と
+/// GET・POST 以外のメソッドは 405 を返す。一覧の問い合わせ（`snapshot_deadline_ms`）とプラグインの
+/// 呼び出し（`call_timeout_ms`）が既定で各 5 秒の直列なので、最悪 10 秒かかる。
 fn plugin_page(handling: Handling, name: String, key: String) -> Response {
-  let rows = handling.context.plugins(task.deadline_in(snapshot_deadline_ms))
-  case list.find(rows, fn(row) { row.name == name }) {
-    Error(Nil) -> not_found_notice(handling, i18n.Translated(i18n.PageNotFound))
-    Ok(row) ->
-      case list.find(row.pages, fn(page) { page.key == key }) {
-        Error(Nil) ->
-          not_found_notice(handling, i18n.Translated(i18n.PageNotFound))
-        Ok(page) -> {
-          let action = handling.context.plugin_page_action(name, key)
-          let allowed = case action {
-            Some(_) -> [http.Get, http.Post]
-            None -> [http.Get]
-          }
-          case handling.request.method {
-            http.Get -> plugin_page_get(handling, row, page)
-            http.Post ->
-              case action {
-                None -> method_not_allowed(handling, allowed)
-                Some(action) -> plugin_page_post(handling, name, key, action)
-              }
-            _ -> method_not_allowed(handling, allowed)
-          }
-        }
-      }
+  use row <- with_row(
+    handling,
+    handling.context.plugins(task.deadline_in(snapshot_deadline_ms)),
+    fn(row) { row.name == name },
+    i18n.PageNotFound,
+  )
+  use page <- with_row(
+    handling,
+    row.pages,
+    fn(page) { page.key == key },
+    i18n.PageNotFound,
+  )
+  let action = handling.context.plugin_page_action(name, key)
+  let allowed = case action {
+    Some(_) -> [http.Get, http.Post]
+    None -> [http.Get]
+  }
+  case handling.request.method, action {
+    http.Get, _ -> plugin_page_get(handling, row, page)
+    http.Post, Some(action) -> plugin_page_post(handling, name, key, action)
+    _, _ -> method_not_allowed(handling, allowed)
   }
 }
 
-/// プラグインのページの記述を取って描く（処理の順序 3・4）。
+/// プラグインのページの記述を取って描く。アカウントの一覧、ページの記述、記述の最上位の読み取りの
+/// どれかが失敗すれば、503 で理由を英語のまま出す。
 fn plugin_page_get(
   handling: Handling,
   row: dashboard.PluginRow,
   page: plugin.PluginPage,
 ) -> Response {
-  case handling.context.page_accounts() {
+  let sections = {
+    use accounts <- result.try(handling.context.page_accounts())
+    use description <- result.try(handling.context.plugin_page_content(
+      row.name,
+      page.key,
+      handling.language,
+      accounts,
+    ))
+    plugin_view.sections(description)
+  }
+  case sections {
     Error(reason) ->
       unavailable_notice(handling, i18n.PluginPageUnavailable, reason)
-    Ok(accounts) ->
-      case
-        handling.context.plugin_page_content(
-          row.name,
-          page.key,
-          handling.language,
-          accounts,
-        )
-      {
-        Error(reason) ->
-          unavailable_notice(handling, i18n.PluginPageUnavailable, reason)
-        Ok(description) ->
-          case plugin_view.sections(description) {
-            Error(reason) ->
-              unavailable_notice(handling, i18n.PluginPageUnavailable, reason)
-            Ok(sections) ->
-              plugin_pages.plugin_page(
-                handling.language,
-                handling.theme,
-                row,
-                page,
-                time.now_seconds(),
-                sections,
-              )
-              |> wisp.html_response(200)
-          }
-      }
+    Ok(sections) ->
+      plugin_pages.plugin_page(
+        handling.language,
+        handling.theme,
+        row,
+        page,
+        time.now_seconds(),
+        sections,
+      )
+      |> wisp.html_response(200)
   }
 }
 
-/// プラグインのページのフォームの送信を実行する（処理の順序 3・5）。値の改行は
-/// LF にそろえて渡す。成功は同じページへ 303 で戻し、拒否・呼び出しの失敗は 503
-/// で理由を英語のまま出す。
+/// プラグインのページのフォームの送信を実行する。本文の解釈（`wisp.require_form`）はアカウントの
+/// 一覧を得た後に置き、値の改行は LF にそろえて渡す。成功は同じページへ 303 で戻し、一覧を得られない
+/// ときと拒否・呼び出しの失敗は 503 で理由を英語のまま出す。
 fn plugin_page_post(
   handling: Handling,
   name: String,
@@ -922,21 +889,18 @@ fn with_pending(
   token: String,
   next: fn(dashboard.PendingRow) -> Response,
 ) -> Response {
-  case handling.context.pending() {
-    Error(reason) ->
-      unavailable_notice(handling, i18n.BunkerNotAvailable, reason)
-    Ok(rows) ->
-      case list.find(rows, fn(entry) { entry.token == token }) {
-        Ok(entry) -> next(entry)
-        Error(Nil) ->
-          not_found_notice(
-            handling,
-            i18n.Translated(
-              i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
-            ),
-          )
-      }
-  }
+  use rows <- with_rows(
+    handling,
+    handling.context.pending(),
+    i18n.BunkerNotAvailable,
+  )
+  with_row(
+    handling,
+    rows,
+    fn(entry) { entry.token == token },
+    i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
+    next,
+  )
 }
 
 /// プラグインの再有効化が失敗する 2 通り。
@@ -1603,16 +1567,12 @@ fn with_relay(
   id: Int,
   next: fn(relay_store.Relay) -> Response,
 ) -> Response {
-  case handling.context.registered_relays() {
-    Error(reason) ->
-      unavailable_notice(handling, i18n.RelaysNotAvailable, reason)
-    Ok(rows) ->
-      case list.find(rows, fn(row) { row.id == id }) {
-        Ok(row) -> next(row)
-        Error(Nil) ->
-          not_found_notice(handling, i18n.Translated(i18n.RelayNotFound))
-      }
-  }
+  use rows <- with_rows(
+    handling,
+    handling.context.registered_relays(),
+    i18n.RelaysNotAvailable,
+  )
+  with_row(handling, rows, fn(row) { row.id == id }, i18n.RelayNotFound, next)
 }
 
 /// 承認済みセッションの一覧に（署名者, クライアント）の組があるときだけ `next` を呼ぶ。
@@ -1624,18 +1584,18 @@ fn with_session(
   client: String,
   next: fn() -> Response,
 ) -> Response {
-  case handling.context.sessions() {
-    Error(reason) ->
-      unavailable_notice(handling, i18n.BunkerNotAvailable, reason)
-    Ok(rows) ->
-      case
-        list.any(rows, fn(row) { row.signer == signer && row.client == client })
-      {
-        True -> next()
-        False ->
-          not_found_notice(handling, i18n.Translated(i18n.SessionNotFound))
-      }
-  }
+  use rows <- with_rows(
+    handling,
+    handling.context.sessions(),
+    i18n.BunkerNotAvailable,
+  )
+  use _ <- with_row(
+    handling,
+    rows,
+    fn(row) { row.signer == signer && row.client == client },
+    i18n.SessionNotFound,
+  )
+  next()
 }
 
 /// リレー 1 件への操作。POST だけを受け、DB の行を引いてから変更を実行する。
@@ -1686,14 +1646,14 @@ fn account_action(
   action: dashboard.AccountAction,
 ) -> Response {
   use <- require_method(handling, http.Post)
-  case handling.context.accounts() {
-    Error(reason) ->
-      unavailable_notice(handling, i18n.AccountsNotAvailable, reason)
-    Ok(rows) ->
-      case list.find(rows, fn(row) { row.signer == signer }) {
-        Ok(row) -> registered_account_action(handling, row, action)
-        Error(Nil) -> unregistered_account_action(handling, signer, action)
-      }
+  use rows <- with_rows(
+    handling,
+    handling.context.accounts(),
+    i18n.AccountsNotAvailable,
+  )
+  case list.find(rows, fn(row) { row.signer == signer }) {
+    Ok(row) -> registered_account_action(handling, row, action)
+    Error(Nil) -> unregistered_account_action(handling, signer, action)
   }
 }
 
@@ -1739,21 +1699,20 @@ fn unregistered_account_action(
   action: dashboard.AccountAction,
 ) -> Response {
   case action {
-    dashboard.DeleteAccount ->
-      case handling.context.skipped() {
-        Error(reason) ->
-          unavailable_notice(handling, i18n.AccountsNotAvailable, reason)
-        Ok(rows) ->
-          case
-            list.find(rows, fn(row) {
-              row.pubkey == signer && row.reason != vault.MalformedPubkey
-            })
-          {
-            Ok(row) -> unreadable_account_action(handling, row)
-            Error(Nil) ->
-              not_found_notice(handling, i18n.Translated(i18n.AccountNotFound))
-          }
-      }
+    dashboard.DeleteAccount -> {
+      use rows <- with_rows(
+        handling,
+        handling.context.skipped(),
+        i18n.AccountsNotAvailable,
+      )
+      use row <- with_row(
+        handling,
+        rows,
+        fn(row) { row.pubkey == signer && row.reason != vault.MalformedPubkey },
+        i18n.AccountNotFound,
+      )
+      unreadable_account_action(handling, row)
+    }
     _ -> not_found_notice(handling, i18n.Translated(i18n.AccountNotFound))
   }
 }
@@ -1921,6 +1880,35 @@ fn unavailable_reason_notice(
     [],
   )
   |> wisp.html_response(503)
+}
+
+/// 一覧を得られれば `next` に渡す。得られなければ `unavailable` を見出しにした 503 の通知ページを
+/// 返し、理由は英語のまま出す。
+fn with_rows(
+  handling: Handling,
+  rows: Result(List(row), String),
+  unavailable: i18n.Message,
+  next: fn(List(row)) -> Response,
+) -> Response {
+  case rows {
+    Error(reason) -> unavailable_notice(handling, unavailable, reason)
+    Ok(rows) -> next(rows)
+  }
+}
+
+/// 一覧から `matches` に合う最初の行を `next` に渡す。合う行が無ければ `missing` を本文にした
+/// 404 の通知ページを返す。
+fn with_row(
+  handling: Handling,
+  rows: List(row),
+  matches: fn(row) -> Bool,
+  missing: i18n.Message,
+  next: fn(row) -> Response,
+) -> Response {
+  case list.find(rows, matches) {
+    Ok(row) -> next(row)
+    Error(Nil) -> not_found_notice(handling, i18n.Translated(missing))
+  }
 }
 
 /// 管理パスワードの再入力を照合し、一致したときだけ nsec を問い合わせ、秘密鍵のダイアログを開いた
