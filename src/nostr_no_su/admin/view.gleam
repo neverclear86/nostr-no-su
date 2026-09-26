@@ -1,29 +1,18 @@
 //// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
-//// モジュールに依存しない HTML の部品。lustre の要素ツリーで組み立てるが、lustre の component（`lustre/component`）や server
-//// components は使わない。部品は `Element` を返し、HTML 文書の文字列にするのは
-//// `page` と `page_in_language` だけである。
+//// モジュールに依存しない HTML の部品。部品は `Element` を返し、HTML 文書の文字列にするのは
+//// `page` と `page_in_language` だけである。全体の形は docs/design-decisions.md の
+//// 「管理 UI はサーバー側で描画する」、CSS は同じ文書の「管理 UI の CSS はビルドして
+//// リポジトリに含め、自前で配信する」に従う。
 ////
 //// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
-//// 任せる。エスケープでは防げない経路には決まった値だけを渡す。`html.style`、
-//// `html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は使わない。JS の処理は
-//// `priv/static/admin.js` に置き、要素には `data-action` で処理の名前を付ける（CSP の
-//// `script-src 'self'` がインラインのスクリプトを実行させない。`script_test` が検査する）。
-//// 時刻は `time_of_day` の `<time datetime>` で UTC のまま描き、`admin.js` が閲覧者のローカルの
-//// 時刻に直す。アカウントのアイコンの `<img data-avatar>` は、読み込めたものにだけ `admin.js` が
-//// `data-loaded` を付けて見せる。ⓘ の補足（`info_hint`）は、`popover="hint"` の段落を、ボタンの
-//// `interestfor`（ホバーとキーボードのフォーカス）と `popovertarget`（クリックとタップ）で開き、位置は
-//// CSS の anchor positioning（`position-area`）で決める。欄、節の見出し、コピー欄の見出しが使う。JS も
-//// `data-action` も使わない。
-//// 確認と小さいフォームのダイアログは `<button commandfor command>` と `<dialog>` で開閉する（`dialog_trigger`、
-//// `dialog`、`dialog_button`）。POST の応答で開いた状態で描いたダイアログは、`admin.js` がモーダルに開き直す。
-//// 送信とキャンセルはフォームの末尾の 1 行に並べる（`InDialog`）。
-//// ダイアログの中のタブはラジオと CSS で切り替え、JS を使わない（`radio_tabs`）。
-//// `href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた値か、
-//// `"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
+//// 任せる。`html.style`、`html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は
+//// 使わず、JS の処理は `priv/static/admin.js` に置いて要素には `data-action` で処理の名前を
+//// 付ける。`href`、`action`、`src` には、`admin/dashboard` のパスの関数が `/` から組み立てた
+//// 値か、`"/"` か、`stylesheet_segments`、`script_segments`、`language_segments`、
 //// `theme_segments` から組み立てた値か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を
 //// 付けた値だけを渡す（lustre は URL を検査しない）。例外は `<img>` の `src` で、scheme を
-//// 検査した遠隔の画像の URL（アカウントのアイコンは `https`、プラグインの `image` は `http` /
-//// `https`）を渡す。
+//// 検査した遠隔の画像の URL（アカウントのアイコンは `https`、プラグインの `image` は
+//// `http` / `https`）を渡す。
 ////
 //// 入力欄の値は `attribute.default_value` で出す。サーバー側で初期値を出すだけで、
 //// `attribute.value("")` は値の無い `value` 属性になるためである。
@@ -33,22 +22,14 @@
 //// 文言を文字列リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
 //// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
 ////
-//// 見た目は Tailwind CSS と daisyUI のクラスで付け、ビルドした `priv/static/admin.css`
-//// を読ませる。Tailwind は `admin/` の `.gleam`（文言だけを持つ `admin/i18n` を除く）の語
-//// （文字列、識別子、コメント）からクラス名の候補を拾う。クラスを変えなくても、語を変えると
-//// CSS が変わることがあるので、これらのファイルを変えたらビルドし直す。クラス名は文字列の
-//// 連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。80 桁を超えても、
-//// クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
+//// 見た目は Tailwind CSS と daisyUI のクラスで付ける。Tailwind は `admin/` の `.gleam`
+//// （`admin/i18n` を除く）の語からクラス名の候補を拾うので、語を変えるだけでも CSS が
+//// 変わることがあり、これらのファイルを変えたら `priv/static/admin.css` をビルドし直す。
+//// クラス名は文字列の連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。
+//// 80 桁を超えても、クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
 //// `focus-visible:outline-base-content`、`input`、`checkbox`、`textarea`、`select` の
-//// 文字列には `border-base-content/60` を付ける（デザイン方針 6 節。`stylesheet_test` が
-//// 検査する）。
-////
-//// アイコンは Lucide（ISC ライセンス）のストロークを写したインライン SVG で、`currentColor`
-//// で色を継ぐ飾りである。製品のロゴだけは固定の色で塗った板つきの SVG で、上部バーと
-//// `<head>` の favicon のどちらにも同じ文書を `data:` の URI にして出す。
-//// 上部バーの製品名は `admin/wordmark` の M PLUS 2 の字形のパスを塗りで描き、「Nostr」と「Su」を
-//// base-content、「-no-」を primary のユーティリティで塗る。字形は読み上げず、同じ語を
-//// `sr-only` の文字で出す。
+//// 文字列には `border-base-content/60` を付ける（docs/design-decisions.md の
+//// 「管理 UI の CSS はビルドしてリポジトリに含め、自前で配信する」）。
 
 import gleam/int
 import gleam/list
@@ -194,17 +175,16 @@ pub type Placement {
 
 /// 通知のページの結果の印、通知や理由の囲み、`ToneChip` のチップの色。
 pub type Tone {
-  /// 良し悪しを伝えない結果（接続の拒否）と、正常な構成でもありうる理由（接続 QR コードとクライアントの
-  /// 接続のダイアログで、リレーとアカウントを得られない）。
+  /// 良し悪しを伝えない結果と、正常な構成でもありうる理由。
   Neutral
-  /// 求めた操作が反映された結果（接続の承認）。
+  /// 求めた操作が反映された結果。
   Success
-  /// 反映されたか分からない変更、今は受け付けられない変更、秘密鍵のバックアップの注意。
+  /// 反映されたか分からない変更、今は受け付けられない変更、読み飛ばされては困る注意。
   Warning
-  /// 処理できなかった操作、フォームの上の失敗の理由、ダッシュボードの節の一覧を得られない理由
-  /// （0 件と読み違えさせない）、バンカーに使うリレーが無いこと（クライアントが接続できない）。
+  /// 処理できなかった操作と失敗の理由。得られなかった一覧の代わりにも出し、0 件と
+  /// 読み違えさせない。
   Failure
-  /// 承認の意味の説明など、危険を伴わない補足。
+  /// 危険を伴わない補足。
   Info
 }
 
@@ -228,8 +208,7 @@ pub type Chip {
   SecretNotOfferedChip
   /// 承認待ちの secret の不一致。warning の色と shield-alert。
   SecretMismatchChip
-  /// 状態の表に無いチップ（プラグインのページの `badge`、権限の宣言なし、概要の帯の「取得できません」とバンカー用リレーなし、「はじめに」の帯の済んだ段）。
-  /// 色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
+  /// 状態の表に無いチップ。色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
   ToneChip(tone: Tone)
 }
 
@@ -1007,8 +986,7 @@ pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
   detail_list(list.map(entries, fn(entry) { #(entry.0, value_cell(entry.1)) }))
 }
 
-/// `Value` 1 つを `dl` の値（`dd`）にする。`summary_list` と `admin/plugin_view` の
-/// `pairs` が使う。
+/// `Value` 1 つを `dl` の値（`dd`）にする。
 pub fn value_cell(value: Value) -> Element(msg) {
   case value {
     Code(text) ->
@@ -1039,8 +1017,8 @@ pub type IdentitySize {
   PlainIdentity
 }
 
-/// アカウントを識別する、ラベルと省略した npub。ラベルの大きさは `size` で決める。アカウントの一覧、
-/// 読み込みで飛ばされた行、アカウントのサブページとダイアログが使う。16 進の公開鍵はここには出さない。
+/// アカウントを識別する、ラベルと省略した npub。ラベルの大きさは `size` で決める。
+/// 16 進の公開鍵はここには出さない。
 pub fn identity(
   language: Language,
   size: IdentitySize,
@@ -1594,8 +1572,8 @@ pub fn failure_frame(
   )
 }
 
-/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。読み飛ばされて
-/// は困る注意（秘密鍵の表示、接続 QR コードの secret、secret が一致しない承認待ちのカードと承認ページ）も `Warning` で出す。
+/// 通知や理由を、薄い塗りの囲みで出す。先頭にトーンのアイコンを置き、文字は本文色にする。
+/// 読み飛ばされては困る注意も `Warning` で出す。
 pub fn alert(tone: Tone, content: List(Element(msg))) -> Element(msg) {
   alert_box([], tone, content)
 }
@@ -1711,10 +1689,7 @@ pub fn tone_icon(tone: Tone) -> Element(msg) {
   }
 }
 
-/// 通知のページの先頭に置く結果の印。トーンの色を薄く混ぜた丸い面に、状態の語彙のアイコンを載せる。`Success` は
-/// success の色の circle-check（接続中と同じ）、`Warning` は warning の色の clock（応答なしと同じ）、`Failure` は
-/// error の色の octagon-alert（読み込み失敗と同じ）、`Neutral` は色を付けない circle-minus（未使用と同じ）、`Info` は
-/// info の色の info である。アイコンは飾りで、結果は見出しと理由の文で伝える。
+/// 通知のページの先頭に置く結果の印。トーンの色を薄く混ぜた丸い面に状態の語彙のアイコンを載せる飾りで、結果は見出しと理由の文で伝える。
 pub fn notice_mark(tone: Tone) -> Element(msg) {
   let #(class, paths) = case tone {
     Success -> #(
