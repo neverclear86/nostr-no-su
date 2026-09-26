@@ -3,6 +3,7 @@
 # 依頼文は自己完結にする（devin はこのセッションの文脈もエージェント定義も読まない）。
 # 実装の基準と検査の手順は .claude/agents/issue-implementer.md と同じ内容を写している。
 # 変えるときは両方を同時に直す。
+# コードのコメントの規則だけは写さず、.claude/rules/code-comments.md の本文（frontmatter を除く）を埋め込む。
 # 検査の手順 2 のカバレッジの文だけは環境の違い（strfry が無い）で issue-implementer.md と文言を変えている（写しではない）。
 #
 # 使い方: sh dev/devin_prompt.sh <issue 番号> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]
@@ -31,6 +32,8 @@ case "$pgport" in
   '' | *[!0-9]*) echo "invalid port: $pgport" >&2; exit 1 ;;
 esac
 [ -s "$spec" ] || { echo "spec file is empty or missing: $spec" >&2; exit 1; }
+rules="$(dirname "$0")/../.claude/rules/code-comments.md"
+[ -s "$rules" ] || { echo "rules file is empty or missing: $rules" >&2; exit 1; }
 [ -z "$conds" ] || [ -s "$conds" ] || { echo "conditions file is empty or missing: $conds" >&2; exit 1; }
 
 cat <<PROMPT
@@ -92,12 +95,16 @@ cat <<PROMPT
 ## 実装の基準
 - DRY、シンプルさ、命名、仕様（issue とプラン）への準拠を厳しめにレビューされる
 - 関数型の書き方（不変データ、Result、パターンマッチ、小さな純粋関数）。既存のモジュールの流儀に合わせる
-- 全関数に簡潔な Doc コメント（\`///\`）を書く。コード内コメントは日本語で書く（ログ文字列、識別子、エラーメッセージは英語）
-- Doc コメントは、この変更がマージされた時点の動作だけを書く。行番号、issue 番号、後続 issue で配線される動作は書かない。プランが文言を指定していればそのまま使う（\`<土台の値 + 1>\` の形の件数は、今の土台の値から計算した数で埋める）
+- コードのコメントは下の「コードのコメントの規則」に従う。プランが文言を指定していればそのまま使う（\`<土台の値 + 1>\` の形の件数は、今の土台の値から計算した数で埋める）
 - README.md と README.ja.md（同じ内容の英語版と日本語版）、docs/architecture.md、.env.example など、変更に関係する文書も同じ変更で直す
 - 手順書や runbook に節を足すときは、依存する既存の節（前提を述べている段落）を読み直し、その前提を引き継ぐ
 - 文書に書く手順の並びと節名は、リンク先の文書の原文と読み合わせてから書く
 - テストを足す、移す、消したときは、そのファイルのモジュール Doc（\`////\`）の列挙も直す
+PROMPT
+
+awk 'n >= 2 { print; next } /^---$/ { n++ }' "$rules"
+
+cat <<PROMPT
 
 ## 終わる前の検査（この順に、機械的に。すべて通るまで直す）
 1. \`gleam build --warnings-as-errors\`
