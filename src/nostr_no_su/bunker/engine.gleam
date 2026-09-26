@@ -321,6 +321,16 @@ pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
   |> result.map(fn(entry) { entry.0 })
 }
 
+/// 署名者とクライアントの組の承認済みセッション。承認されていない組なら
+/// `Error(Nil)`。
+pub fn find_session(
+  engine: Engine,
+  signer: String,
+  client: String,
+) -> Result(Session, Nil) {
+  dict.get(engine.sessions, #(signer, client))
+}
+
 /// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定し、
 /// 使われていない組が末尾に来るよう、最終利用の新しい順、作成の新しい順、
 /// 署名者、クライアントの昇順に並べる。
@@ -378,10 +388,26 @@ pub fn set_perms(
 
 /// 失効していない承認待ちの一覧。表示が安定し、押し出しの対象を決める元の並びに
 /// なるよう、作成の新しい順、token の昇順に並べる。失効した要求は状態からすぐに
-/// 消えるわけではないが、この一覧にも `approve` / `deny` にも現れず、次の登録か
-/// 成功した承認・拒否のときにまとめて捨てられる。
+/// 消えるわけではないが、この一覧にも `find_pending` にも `approve` / `deny` にも
+/// 現れず、次の登録か成功した承認・拒否のときにまとめて捨てられる。
 pub fn pending(engine: Engine, now: Int) -> List(Pending) {
   live_pending(engine, now) |> newest_pending
+}
+
+/// token の失効していない承認待ち。知らない token と失効した要求は `Error(Nil)`。
+pub fn find_pending(
+  engine: Engine,
+  token: String,
+  now: Int,
+) -> Result(Pending, Nil) {
+  case dict.get(engine.pending, token) {
+    Ok(entry) ->
+      case expired(entry, now) {
+        True -> Error(Nil)
+        False -> Ok(entry)
+      }
+    Error(Nil) -> Error(Nil)
+  }
 }
 
 /// 承認待ちの辞書の値を、作成の新しい順、token の昇順に並べる。
