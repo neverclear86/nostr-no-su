@@ -2894,10 +2894,9 @@ pub fn relay_action_form_keeps_the_description_visible_test() {
 fn action_form(action: dashboard.RelayAction) -> String {
   dashboard.relay_action_form(
     i18n.English,
-    7,
+    dashboard.RelayRow(7, "wss://a", dashboard.Unused, dashboard.Unused),
     action,
     Some(relay_list.Both),
-    None,
     view.InForm,
   )
   |> element.fragment
