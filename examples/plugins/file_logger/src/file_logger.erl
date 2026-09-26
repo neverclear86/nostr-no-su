@@ -31,4 +31,5 @@ plugin_children(_Config) -> {error, <<"path is required">>}.
 handle_event(#{<<"id">> := Id, <<"kind">> := Kind, <<"content">> := Content},
              #{<<"path">> := Path}) ->
     Line = io_lib:format("~ts ~p ~ts~n", [Id, Kind, Content]),
-    file:write_file(Path, Line, [append]).
+    %% 失敗を例外にして本体に 1 件の失敗として数えさせる（戻り値は本体に無視される）。
+    ok = file:write_file(Path, Line, [append]).

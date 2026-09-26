@@ -210,8 +210,7 @@ start_link() -> gen_server:start_link({local, ?STORE}, ?MODULE, [], []).
 init([]) -> {ok, 0}.
 handle_call({seen, Id}, _From, Count) ->
     io:format("[counter] ~b events (last ~ts)~n", [Count + 1, Id]),
-    {reply, ok, Count + 1};
-handle_call(count, _From, Count) -> {reply, Count, Count}.
+    {reply, ok, Count + 1}.
 handle_cast(_Msg, Count) -> {noreply, Count}.
 ```
 
