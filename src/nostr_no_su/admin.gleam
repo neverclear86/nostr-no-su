@@ -734,8 +734,8 @@ fn show_dashboard(handling: Handling) -> Response {
 
 /// プラグインが供給するページ。GET はページの記述を描き、POST はフォームの送信を実行する。
 /// プラグイン名とページのキーを照合できなければメソッドによらず 404、アクションの無い POST と
-/// GET・POST 以外のメソッドは 405 を返す。一覧の問い合わせ（`snapshot_deadline_ms`）とプラグインの
-/// 呼び出し（`call_timeout_ms`）が既定で各 5 秒の直列なので、最悪 10 秒かかる。
+/// GET・POST 以外のメソッドは 405 を返す。プラグインの一覧（`snapshot_deadline_ms`）、アカウントの
+/// 一覧（`bunker.accounts`）、ページの呼び出し（`call_timeout_ms`）が既定で各 5 秒の直列で、最悪 15 秒かかる。
 fn plugin_page(handling: Handling, name: String, key: String) -> Response {
   use row <- with_row(
     handling,
