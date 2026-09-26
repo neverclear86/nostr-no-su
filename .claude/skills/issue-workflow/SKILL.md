@@ -159,7 +159,8 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
    ```sh
    jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,implementedBy,verdict,must,should,nit,designMust,lessons,sha,closedParents,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
    ```
-3. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す（`events` に label の形に合わない要素を足しても集計に入らず、`log` に「label が形に合わない」と出るだけである）。
+3. 実行の間の本体のカバレッジを `sh dev/coverage_delta.sh <最初の実行の base> <今の origin/main>` で確かめ、出力の全文を `coverage` に渡す（必須。無いと起動で落ちる）。main の CI の test ジョブのログの計測を README のバッジと並べ、0.2 ポイントを超えて下がったら `drop`、整数に丸めた値がバッジと違えば `badge` を最後の行の `verdict` に出す。`ok` 以外はスクリプトがセッションの観察に足すので、学びが 0 件でも起票される。結果の `coverageVerdict` をユーザーへの報告に載せる
+4. `Workflow` ツールを `name: "retrospective"` と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す（`events` に label の形に合わない要素を足しても集計に入らず、`log` に「label が形に合わない」と出るだけである）。
 
 ```json
 {
@@ -167,6 +168,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
   "events": { "/tmp/.../wf_a22397c8-55c/journal.jsonl": [ { "label": "Triage #157", "phase": "判定", "status": "plan", "tier": "light" } ] },
   "since": "2026-09-13T00:00:00Z",
   "observations": ["撮影でユーザーの画面に Chrome の窓が開いた（user スコープの Playwright MCP）"],
+  "coverage": "### カバレッジ（main の CI の test ジョブの計測）\n…\nverdict: ok",
   "base": "2f0a2ebff249f5b995a6647a1b0476549ede24d7",
   "scratchpad": "/tmp/claude-1000/…/scratchpad",
   "repoDir": "/path/to/nostr-no-su",
@@ -186,7 +188,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 1 件ごとに、issue 番号、tier、プランのラウンド数、PR 番号、PR レビューのラウンド数と条件の件数、最終確認の結果、マージのコミット、残した nit と後続の issue にした事項を短くまとめる。
 止まった issue は、どの段階で、何が決まらなかったかを書く。
-最後に `retrospective` を回し、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びも `observations` も 0 件なら起票されない）。
+最後に `retrospective` を回し、カバレッジの判定（`coverageVerdict` と前後の百分率）、起票された issue の番号とその根拠の表、精査と実装の結果（PR の URL、または閉じた理由か論点）をユーザーに渡す（学びも `observations` も 0 件なら起票されない）。
 
 ## dry run（スクリプトを変えたとき）
 
@@ -198,4 +200,4 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 スクリプトを変えたら、上の `args` の `dryRun` のシナリオ名を 1 つずつ差し替えて全シナリオを回し、`results` の `status` が期待どおりであることを確かめる。`planurl-deviation` は `issues[0]` に `planUrl` を、`prev-plan` は `issues[0]` に `prevPlan` と `prevReview` を、`child-split` はサブ issue の番号（親が `split` のとき `n * 100 + 1`）に付ける。`issues[].tier` を足した `args` も 1 回回し、判定が飛んで tier が固定されることを見る。`implementer: "devin"` と `devin` シナリオの組も 1 回回し、最後の `log` の実装者の内訳に devin が数えられることを見る。依存の待ち方を変えたときは、`after` の連鎖（2 が 1 の後、3 が 2 の後）で、依存する issue のプランが依存先のマージより前に始まり、実装が依存先のマージの後に始まること、依存先がプランで止まると依存する issue がエージェントを立てずに `blocked`（stage `deps`）になること、同時に動くエージェントが `window` を超えないことを見る。分割された依存先（`{ "1": "split", "102": "ci-fail", "2": "happy" }` で 2 が 1 の後）は、子が全部 `merged` なら依存を満たし、子が残れば `依存先の #1 のサブ issue #102（blocked）が merged で終わらなかった` で `blocked` になることを見る。再確認の経路を変えたときは、`not-ready-review` 系の 4 つで呼び出しの並び（`not-ready-review` は `Merge PR #N (retry 1)` → `Final gate PR #N r2` → `Merge PR #N (re-review)`、`not-ready-review-conflict` はその後に `Rebase PR #N (re-review, 1)` → `Merge PR #N (re-review, retry 1)`、`not-ready-review-reject` は `Final gate PR #N r2` → `Fix PR #N gate r2` → `PR review #N r2` → `Final gate PR #N r3` → `Merge PR #N (re-review)`、`not-ready-fix` は `Merge PR #N` → `Final gate PR #N r2` → `Merge PR #N (re-review)`）と、再確認の依頼文の range の起点が PR レビューの head であること、再確認の後のマージの依頼文の range が「再確認が見た head」から head までであることを見る。
 
-`retrospective` は `args.dryRun: true` を渡すとエージェントを立てずに集計だけ返す（精査と実装も立たない）。
+`retrospective` は `args.dryRun: true` を渡すとエージェントを立てずに集計と `coverageVerdict` だけ返す（精査と実装も立たない。`coverage` は dry run でも要る）。
