@@ -22,6 +22,7 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{type MasterKey}
+import nostr_no_su/db
 import nostr_no_su/random
 import nostr_no_su/time
 import pog
@@ -32,13 +33,13 @@ import support/random_account.{random_entry, random_master_key}
 /// バンカーアクターに渡すストアの期限。書き込みはトリガーが門を待つ間に切れるだけの
 /// 短さで、負荷の高い環境でもクエリーがサーバーに届くだけの長さにする。読み込みは
 /// 書き込みの残りを待てるよう長く取る。
-const actor_timeouts = account_store.Timeouts(load_ms: 30_000, write_ms: 2000)
+const actor_timeouts = db.Timeouts(load_ms: 30_000, write_ms: 2000)
 
 /// テストが直接 DB を読み書きするときの期限。
-const generous = account_store.Timeouts(load_ms: 30_000, write_ms: 30_000)
+const generous = db.Timeouts(load_ms: 30_000, write_ms: 30_000)
 
 /// 書き込みを止める門の advisory lock の鍵。ASCII の `gat`（gate）を 16 進にした値。
-/// `account_store.instance_lock_key` と別の値にし、同じ DB のインスタンスのロックと
+/// `db.instance_lock_key` と別の値にし、同じ DB のインスタンスのロックと
 /// 取り合わないようにする。
 const gate_lock_key = 6_775_156
 
@@ -228,7 +229,6 @@ fn reconcile_sessions_with_postgres(
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: signer,
         client: client,
@@ -237,6 +237,7 @@ fn reconcile_sessions_with_postgres(
         last_used_at: now - 60,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_pending(
@@ -272,7 +273,7 @@ fn reconcile_sessions_with_postgres(
   assert pending.request_id == "c2"
 
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pending.token)
+    account_store.delete_pending(db, token: pending.token, timeouts: generous)
   assert behind_gate(gate, schema, fn() { bunker.revoke(name, signer, client) })
     == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 

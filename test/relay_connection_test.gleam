@@ -86,7 +86,7 @@ fn start_with_delay(
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: name,
-      relay: "relay.test",
+      relay: "wss://relay.test",
       connect: connect,
       on_connect: fn(_socket) { process.send(reports, Rewired) },
       on_disconnect: fn() { process.send(reports, Unwired) },
@@ -141,8 +141,8 @@ pub fn reconnects_after_the_socket_dies_test() {
   stop(actor)
 }
 
-/// 親から停止させられたとき（`relay_list` の `close_relay` が `terminate_child`
-/// で止めるとき）も `on_disconnect` を呼ぶ。バンカーはこれで、閉じた接続の
+/// 親から停止させられたとき（`relay_list` が `terminate_dynamic_child` で
+/// 止めるとき）も `on_disconnect` を呼ぶ。バンカーはこれで、閉じた接続の
 /// 送信手段を確実に取り下げられる。
 pub fn calls_on_disconnect_when_stopped_by_the_parent_test() {
   let reports = process.new_subject()

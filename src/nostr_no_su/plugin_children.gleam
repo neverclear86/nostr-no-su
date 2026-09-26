@@ -34,6 +34,7 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import nostr_no_su/log
+import nostr_no_su/plugin_term.{AtomKey}
 
 /// 本体が問い合わせる任意エクスポートの名前。
 pub const export_name = "plugin_children"
@@ -44,12 +45,6 @@ pub type Rejection {
   InvalidSpec(reason: String)
   /// プラグイン自身が設定を受け付けなかった（`{error, Reason}`）。
   ConfigRejected(reason: String)
-}
-
-/// 理由の文字列とログ行に出す `plugin_children/<アリティ>` という表記。本体側も
-/// 同じ表記を組み立てるため、1 か所にまとめて公開している。
-pub fn export_label(arity: Int) -> String {
-  export_name <> "/" <> int.to_string(arity)
 }
 
 /// worker の既定の shutdown（OTP と同じ）。
@@ -102,39 +97,23 @@ pub fn from_dynamic(
   name: String,
   arity: Int,
 ) -> Result(List(ChildSpecification(Pid)), Rejection) {
-  let label = export_label(arity)
-  case is_error_tuple(value) {
+  let label = plugin_term.export_label(export_name, arity)
+  case plugin_term.is_error_tuple(value) {
     True -> Error(config_rejection(value, label))
     False -> children(value, name, label)
-  }
-}
-
-/// 戻り値が設定の拒否（`{error, Reason}`）かどうか。**判別子は要素 0 が atom の
-/// `error` であることだけ**で、要素数は見ない。要素数を条件に入れると
-/// `{error, A, B}` の扱いを別途決めることになる。
-fn is_error_tuple(value: Dynamic) -> Bool {
-  case decode.run(value, decode.at([0], atom.decoder())) {
-    Ok(tag) -> atom.to_string(tag) == "error"
-    Error(_) -> False
   }
 }
 
 /// `{error, Reason}` の理由を取り出す。理由が binary でなければ、設定の拒否では
 /// なく戻り値の形の誤りとして報告する。
 fn config_rejection(value: Dynamic, label: String) -> Rejection {
-  case decode.run(value, decode.at([1], decode.dynamic)) {
-    Error(_) ->
-      InvalidSpec(label <> ": error reason must be a String, got nothing")
-    Ok(reason) ->
-      case decode.run(reason, decode.string) {
-        Ok(text) -> ConfigRejected(text)
-        Error(_) ->
-          InvalidSpec(
-            label
-            <> ": error reason must be a String, got "
-            <> dynamic.classify(reason),
-          )
-      }
+  case plugin_term.error_reason(value) {
+    Ok(text) -> ConfigRejected(text)
+    Error(got) ->
+      InvalidSpec(plugin_term.reason_not_a_string(
+        label,
+        option.unwrap(got, "nothing"),
+      ))
   }
 }
 
@@ -153,29 +132,32 @@ fn children(
     )),
   )
   raw
-  |> list.index_map(fn(child, index) { #(child, index) })
-  |> list.try_map(fn(pair) {
-    spec(pair.0, pair.1)
-    |> result.map_error(fn(reason) { InvalidSpec(label <> ": " <> reason) })
-  })
+  |> plugin_term.try_map_indexed(spec)
+  |> result.map_error(fn(reason) { InvalidSpec(label <> ": " <> reason) })
   |> result.map(list.map(_, to_child(_, name)))
 }
 
 /// 子仕様 1 件を検証する。ラベルは `id` が読めれば `child "store"`、読めなければ
-/// `child #0` になる（`list.index_map` と同じ 0 起点）。理由の先頭に必ず付ける。
+/// `child #0` になる（`plugin_term.try_map_indexed` と同じ 0 起点）。理由の先頭に必ず付ける。
 fn spec(raw: Dynamic, index: Int) -> Result(Spec, String) {
   let unlabelled = "child #" <> int.to_string(index)
-  use _ <- result.try(check_map(raw, unlabelled))
-  use id <- result.try(required(
+  use _ <- result.try(plugin_term.check_map(
     raw,
+    unlabelled,
+    "a child specification map",
+  ))
+  use id <- result.try(plugin_term.required(
+    raw,
+    AtomKey,
     "id",
     unlabelled,
     "an atom or a string",
     id_decoder(),
   ))
   let label = "child \"" <> id <> "\""
-  use start <- result.try(required(
+  use start <- result.try(plugin_term.required(
     raw,
+    AtomKey,
     "start",
     label,
     "a {Module, Function, Args} tuple",
@@ -186,58 +168,6 @@ fn spec(raw: Dynamic, index: Int) -> Result(Spec, String) {
   use kind <- result.try(read_kind(raw, label))
   use _ <- result.try(check_supervisor_shutdown(kind, shutdown, label))
   Ok(Spec(id:, start:, restart:, shutdown:, kind:))
-}
-
-/// 子仕様が map であることを先に確かめる。素の `{Module, Function, Args}` の
-/// 短縮形を渡されたとき、キーが 1 つも読めないことを「`id` が無い」と報告すると
-/// 作者が原因にたどり着けない。形そのものの誤りとして報告する。
-/// `dynamic.classify` は map を `Dict`、タプルを `Array` と呼ぶ。
-fn check_map(raw: Dynamic, label: String) -> Result(Nil, String) {
-  case dynamic.classify(raw) {
-    "Dict" -> Ok(Nil)
-    other ->
-      Error(label <> ": must be a child specification map, got " <> other)
-  }
-}
-
-/// map から任意のキーを取り出す。無ければ（map ですらなければ）`None`。
-fn lookup(raw: Dynamic, key: String) -> Option(Dynamic) {
-  let decoder =
-    decode.optional_field(
-      atom.create(key),
-      None,
-      decode.map(decode.dynamic, Some),
-      decode.success,
-    )
-  decode.run(raw, decoder)
-  |> result.unwrap(None)
-}
-
-/// 必須のキーを読む。欠けていれば `<label>: missing <key>`、型が合わなければ
-/// `<label>: <key> must be <expected>, got <classify>`。atom キーの map に対する
-/// `decode.run` のエラーのパスはプラグイン作者の役に立たないので、理由は自前で
-/// 組み立てる。
-fn required(
-  raw: Dynamic,
-  key: String,
-  label: String,
-  expected: String,
-  decoder: decode.Decoder(a),
-) -> Result(a, String) {
-  case lookup(raw, key) {
-    None -> Error(label <> ": missing " <> key)
-    Some(value) ->
-      decode.run(value, decoder)
-      |> result.replace_error(
-        label
-        <> ": "
-        <> key
-        <> " must be "
-        <> expected
-        <> ", got "
-        <> dynamic.classify(value),
-      )
-  }
 }
 
 /// `id` は atom でも binary でもよい。どちらも文字列にして理由とログに使う。
@@ -261,7 +191,7 @@ fn read_restart(
   raw: Dynamic,
   label: String,
 ) -> Result(supervision.Restart, String) {
-  case lookup(raw, "restart") {
+  case plugin_term.lookup(raw, AtomKey, "restart") {
     None -> Ok(supervision.Permanent)
     Some(value) ->
       case atom_name(value) {
@@ -286,7 +216,7 @@ fn read_shutdown(
   raw: Dynamic,
   label: String,
 ) -> Result(Option(Shutdown), String) {
-  case lookup(raw, "shutdown") {
+  case plugin_term.lookup(raw, AtomKey, "shutdown") {
     None -> Ok(None)
     Some(value) ->
       case decode.run(value, decode.int), atom_name(value) {
@@ -305,7 +235,7 @@ fn read_shutdown(
 
 /// `type`。既定は `worker`。
 fn read_kind(raw: Dynamic, label: String) -> Result(Kind, String) {
-  case lookup(raw, "type") {
+  case plugin_term.lookup(raw, AtomKey, "type") {
     None -> Ok(Worker)
     Some(value) ->
       case atom_name(value) {
@@ -386,7 +316,7 @@ fn start(
 }
 
 /// 子仕様の MFA を呼び、リンクを確かめて Pid を返す。
-@external(erlang, "nostr_no_su_ffi", "start_child")
+@external(erlang, "nostr_no_su_plugin_ffi", "start_child")
 fn start_child(
   module: Atom,
   function: Atom,

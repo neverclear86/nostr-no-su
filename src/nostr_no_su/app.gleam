@@ -132,6 +132,7 @@
 ////   （`start_plugin_children`）。失敗の理由は `plugin_children` が子ごとに出す
 ////   1 行に出る。
 
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -149,14 +150,15 @@ import nostr_no_su/avatars
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/connection_uri
+import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/session.{type Pending, type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/config
+import nostr_no_su/db
 import nostr_no_su/dedup
-import nostr_no_su/dedup/resume_saver
 import nostr_no_su/hex
 import nostr_no_su/log
 import nostr_no_su/named
@@ -172,6 +174,8 @@ import nostr_no_su/relay_client.{
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/saver
+import nostr_no_su/subscriptions
 import nostr_no_su/task
 import nostr_no_su/time
 import pog
@@ -205,11 +209,10 @@ pub type PluginSpec {
 }
 
 /// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
-/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。`relays` は
-/// `relay_list` の起動時の一覧で、本番は空。行はバンカーの読み込みから
-/// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。
-/// `subscriptions` はリレー URL からそのリレーの購読の定義を返す。`save_resume`
-/// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
+/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。リレーは
+/// バンカーの読み込みから `OpenRegistered` で届き、実行時の増減には `open_relay`
+/// などを使う。`subscriptions` はリレー URL からそのリレーの購読の定義を返す。
+/// `save_resume` は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
 /// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、2 本目の
 /// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
 /// プラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
@@ -218,7 +221,6 @@ pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
     dedup_capacity: Int,
-    relays: List(relay_list.Connection),
     subscriptions: fn(String) -> Subscriptions,
     save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
     save_plugin_resume: fn(List(#(String, Int))) -> Result(Nil, String),
@@ -230,27 +232,19 @@ pub type Monitor {
 /// バンカーサブツリー。アカウントストアの接続プールと、NIP-46 アクターと、それが
 /// 待ち受け・応答するリレー群。`pool` はパスワードを含みうるので、表示やログに
 /// 入れないこと。`lock_pool` は同じ DB に 1 インスタンスだけを許すロック専用の
-/// 1 本のプール。`pool` と同じくパスワードを含みうる。`relays` は `relay_list` の
-/// 起動時の一覧で、本番は空。行はバンカーの読み込みから `OpenRegistered` で届き、
-/// 実行時の増減には `open_relay` などを使う。`subscriptions` は署名者の問い合わせ
-/// （応答が無ければ `None`）から購読の定義を作る関数で、基本の接続には全署名者、
-/// セッションのリレーの接続にはその URL を持つセッションと取り置きの署名者の問い合わせ
-/// （`bunker.session_signers`）を渡す。
+/// 1 本のプール。`pool` と同じくパスワードを含みうる。リレーはバンカーの読み込みから
+/// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。`subscriptions`
+/// は署名者の問い合わせ（応答が無ければ `None`）から購読の定義を作る関数で、基本の
+/// 接続には全署名者、セッションのリレーの接続にはその URL を持つセッションと取り置きの
+/// 署名者の問い合わせ（`bunker.session_signers`）を渡す。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
     pool: pog.Config,
     lock_pool: pog.Config,
     settings: bunker.Settings,
-    relays: List(relay_list.Connection),
     subscriptions: fn(fn() -> Option(List(String))) -> Subscriptions,
   )
-}
-
-/// 管理 UI。設定から決まるもの（bind アドレス、ポート、パスワード）だけを持ち、
-/// 表示する状態はツリーの他の仕様から導く。
-pub type Admin {
-  Admin(bind: String, port: Int, password: String)
 }
 
 /// 動かすプラグインと、起動時に読み込めなかったプラグインの一覧と、バンカーと
@@ -263,7 +257,7 @@ pub type Spec {
     not_loaded_plugins: List(plugin_loader.NotLoaded),
     monitor: Monitor,
     bunker: Bunker,
-    admin: Option(Admin),
+    admin: Option(config.AdminListen),
     open: Open,
     reconnect_delay: backoff.Backoff,
     relay_list: Name(relay_list.Msg),
@@ -273,7 +267,7 @@ pub type Spec {
 /// ツリーに渡る秘密のうち、他のライブラリーのプロセスの状態や起動引数に生の
 /// 文字列として入りうるもの（pgo に渡す DB のパスワードと、mist と wisp に渡る
 /// 管理パスワード）。`log.redact_secrets` に渡してログから伏せる。空の値は
-/// 含めない。`lock_pool` は別に集めない。`account_store.lock_pool_config` が
+/// 含めない。`lock_pool` は別に集めない。`db.lock_pool_config` が
 /// `pool` から `pog.Config(..pool, ...)` で作るため、パスワードは `pool` と
 /// 同じ値である。
 pub fn redactable_secrets(spec: Spec) -> List(String) {
@@ -306,11 +300,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
   // relay_list はすべてより先に登録する。逆順だと connections の factory が
   // 起動直後に送る Repopulate が未登録の名前へ送られて捨てられる。
-  |> supervisor.add(relay_list.supervised(
-    spec.relay_list,
-    relay_list.initial(spec.monitor.relays, spec.bunker.relays),
-    factories,
-  ))
+  |> supervisor.add(relay_list.supervised(spec.relay_list, factories))
   // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
   // 未登録の名前へ送られて届かない（件数はディスパッチャーがログに出す）。
   |> add_plugins(spec)
@@ -344,12 +334,13 @@ pub fn open_websocket(
 ) -> Result(Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
-    subscriptions,
-    handle_event,
-    handle_ok,
-    authenticator,
-    relay_client.subscription_retry_delay,
-    relay_client.keepalive_interval_ms,
+    relay_client.Handlers(
+      subscriptions:,
+      handle_incoming: handle_event,
+      handle_ok:,
+      authenticator:,
+    ),
+    relay_client.default_timing,
   ))
   // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)
@@ -550,35 +541,32 @@ fn monitor_tree(
     plugin_runner.dispatch,
     config.dedup_capacity,
   ))
-  |> supervisor.add(
-    relay_connections_child(
-      spec,
-      factories,
-      relay_list.Monitor,
-      config.subscriptions,
-      monitor_handler(
+  |> supervisor.add(relay_connections_child(
+    spec,
+    factories,
+    relay_list.Monitor,
+    config.subscriptions,
+    ConnectionHandlers(
+      ..silent_handlers(),
+      handle_event: monitor_handler(
         config.name,
         config.excludes_kind,
         config.accepts_author,
         plugin_runner_names(spec.plugins),
       ),
-      fn(_relay_url, _ack) { Nil },
-      fn(_relay_url) { None },
-      fn(_relay_url, _socket) { Nil },
-      fn(_relay_url) { Nil },
     ),
-  )
-  |> supervisor.add(resume_saver.supervised(
+  ))
+  |> supervisor.add(saver.supervised(
     fn() { dedup.points(config.name) },
     config.save_resume,
     "resume_saver",
-    resume_saver.default_interval_ms,
+    saver.default_interval_ms,
   ))
-  |> supervisor.add(resume_saver.supervised(
+  |> supervisor.add(saver.supervised(
     plugin_resume_points(spec.plugins),
     config.save_plugin_resume,
     "plugin_resume_saver",
-    resume_saver.default_interval_ms,
+    saver.default_interval_ms,
   ))
 }
 
@@ -586,9 +574,9 @@ fn monitor_tree(
 /// 作者の順に照合する。`excludes_kind` が真の kind のイベントは数えずに落とす。
 /// 監視とバンカーが同じリレーを使うとバンカーの応答（kind 24133）も監視の購読に
 /// 届くので、呼び出し側はそれを含む述語を渡す。購読 id が監視の購読
-/// （`config.monitor_subscription_id`）でも取り直しの購読（`config.catchup_plugin`）
-/// でもないイベントと、作者が `accepts_author` に通らないイベントは落とし、
-/// ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
+/// （`subscriptions.monitor_subscription_id`）でも取り直しの購読
+/// （`subscriptions.catchup_plugin`）でもないイベントと、作者が `accepts_author` に通らない
+/// イベントは落とし、ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
 /// 取り直しの購読のものならそのプラグインのランナーへ直接送り、監視の購読のもの
 /// ならディスパッチャーへ渡す。終わり（EOSE）は、取り直しの購読のものだけを
 /// ランナーに取り直しの完了として伝える。テストが購読 id ごとの振り分けを直接
@@ -603,27 +591,32 @@ pub fn monitor_handler(
     case received {
       relay_client.ReceivedEvent(subscription_id, verified) -> {
         let incoming = event.verified_event(verified)
+        use <- bool.guard(excludes_kind(incoming.kind), Nil)
+        let reject = fn() { named.send(name, dedup.Rejected(relay_url)) }
+        let if_accepted = fn(deliver: fn() -> Nil) {
+          bool.lazy_guard(!accepts_author(incoming.pubkey), reject, deliver)
+        }
         case
-          excludes_kind(incoming.kind),
-          subscription_id == config.monitor_subscription_id,
-          config.catchup_plugin(subscription_id),
-          accepts_author(incoming.pubkey)
+          subscriptions.catchup_plugin(subscription_id),
+          subscription_id == subscriptions.monitor_subscription_id
         {
-          True, _, _, _ -> Nil
-          False, _, _, False | False, False, None, _ ->
-            named.send(name, dedup.Rejected(relay_url))
-          False, _, Some(plugin), True ->
-            send_to_runner(
-              runners,
-              plugin,
-              plugin_runner.HandleCatchup(incoming),
-            )
-          False, True, None, True ->
-            named.send(name, dedup.Incoming(relay_url, incoming))
+          Some(plugin), _ ->
+            if_accepted(fn() {
+              send_to_runner(
+                runners,
+                plugin,
+                plugin_runner.HandleCatchup(incoming),
+              )
+            })
+          None, True ->
+            if_accepted(fn() {
+              named.send(name, dedup.Incoming(relay_url, incoming))
+            })
+          None, False -> reject()
         }
       }
       relay_client.ReceivedEose(subscription_id) ->
-        case config.catchup_plugin(subscription_id) {
+        case subscriptions.catchup_plugin(subscription_id) {
           Some(plugin) ->
             send_to_runner(runners, plugin, plugin_runner.CatchupEnded)
           None -> Nil
@@ -683,7 +676,7 @@ fn bunker_tree(
       factories,
       config,
       relay_list.Bunker,
-      bunker.BaseRelay,
+      delivery.BaseRelay,
       fn(_relay_url) { bunker.signers(config.name) },
     ),
   )
@@ -693,7 +686,7 @@ fn bunker_tree(
       factories,
       config,
       relay_list.SessionOnly,
-      bunker.SessionRelay,
+      delivery.SessionRelay,
       bunker.session_signers(config.name, _),
     ),
   )
@@ -706,7 +699,7 @@ fn bunker_connections_child(
   factories: relay_list.Factories,
   config: Bunker,
   role: relay_list.Role,
-  scope: bunker.RelayScope,
+  scope: delivery.RelayScope,
   signers: fn(String) -> Option(List(String)),
 ) -> ChildSpecification(
   factory_supervisor.Supervisor(
@@ -719,44 +712,46 @@ fn bunker_connections_child(
     factories,
     role,
     fn(relay_url) { config.subscriptions(fn() { signers(relay_url) }) },
-    fn(_relay_url, received) {
-      case received {
-        relay_client.ReceivedEvent(_, verified) ->
-          named.send(config.name, bunker.Incoming(verified))
-        relay_client.ReceivedEose(_) -> Nil
-      }
-    },
-    fn(relay_url, ack) {
-      named.send(config.name, bunker.Acknowledged(relay_url, ack))
-    },
-    fn(relay_url) {
-      Some(bunker.authenticate(config.name, relay_url, scope, _))
-    },
-    fn(relay_url, socket: Socket) {
-      named.send(
-        config.name,
-        bunker.SetPublisher(relay_url, scope, socket.publish),
-      )
-    },
-    fn(relay_url) {
-      named.send(config.name, bunker.RemovePublisher(relay_url, scope))
-    },
+    ConnectionHandlers(
+      handle_event: fn(_relay_url, received) {
+        case received {
+          relay_client.ReceivedEvent(_, verified) ->
+            named.send(config.name, bunker.Incoming(verified))
+          relay_client.ReceivedEose(_) -> Nil
+        }
+      },
+      handle_ok: fn(relay_url, ack) {
+        named.send(config.name, bunker.Acknowledged(relay_url, ack))
+      },
+      authenticator: fn(relay_url) {
+        Some(bunker.authenticate(config.name, relay_url, scope, _))
+      },
+      on_connect: fn(relay_url, socket: Socket) {
+        named.send(
+          config.name,
+          bunker.SetPublisher(relay_url, scope, socket.publish),
+        )
+      },
+      on_disconnect: fn(relay_url) {
+        named.send(config.name, bunker.RemovePublisher(relay_url, scope))
+      },
+    ),
   )
 }
 
-/// 管理 UI。表示する状態は、ツリーの他の仕様から名前を引いて問い合わせる関数
-/// として Context に渡す。
+/// 管理 UI。bind アドレス、ポート、パスワードは `listen` から取り、表示する状態は、
+/// ツリーの他の仕様から名前を引いて問い合わせる関数として Context に渡す。
 fn admin_child(
   spec: Spec,
   avatars_name: Name(avatars.Msg),
-  config: Admin,
+  listen: config.AdminListen,
 ) -> ChildSpecification(Supervisor) {
   let bunker_name = spec.bunker.name
   admin.supervised(
-    config.bind,
-    config.port,
+    listen.bind,
+    listen.port,
     admin.Context(
-      password: config.password,
+      password: listen.password,
       client_address: admin.unknown_client_address,
       authentication_delay: fn() {
         process.sleep(admin.authentication_failure_delay)
@@ -941,10 +936,7 @@ pub fn plugin_page_action(
   specs: List(PluginSpec),
   plugin: String,
   key: String,
-) -> Option(
-  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
-) {
+) -> Option(plugin_config.PageAction) {
   use spec <- option.then(
     list.find(specs, fn(spec) { spec.plugin.name == plugin })
     |> option.from_result,
@@ -1013,8 +1005,8 @@ pub fn relay_statuses(
 pub fn registered_relays(
   spec: Spec,
 ) -> Result(List(relay_store.Relay), String) {
-  relay_store.list(store_connection(spec), account_store.default_timeouts)
-  |> result.map_error(account_store.describe)
+  relay_store.list(store_connection(spec), db.default_timeouts)
+  |> result.map_error(db.describe)
 }
 
 /// バンカーの接続プールへの名前つき接続。リレーの読み書きが共有する。
@@ -1030,12 +1022,7 @@ pub fn add_relay(
   roles: relay_list.Roles,
 ) -> Result(Nil, admin.RelayChangeFailure) {
   use _row <- result.try(
-    relay_store.insert(
-      store_connection(spec),
-      url,
-      roles,
-      account_store.default_timeouts,
-    )
+    relay_store.insert(store_connection(spec), url, roles, db.default_timeouts)
     |> result.map_error(store_failure),
   )
   open_relay(spec, url, roles)
@@ -1054,7 +1041,7 @@ pub fn update_relay_roles(
       store_connection(spec),
       relay.id,
       roles,
-      account_store.default_timeouts,
+      db.default_timeouts,
     )
     |> result.map_error(store_failure),
   )
@@ -1068,26 +1055,22 @@ pub fn delete_relay(
   relay: relay_store.Relay,
 ) -> Result(Nil, admin.RelayChangeFailure) {
   use _nil <- result.try(
-    relay_store.delete(
-      store_connection(spec),
-      relay.id,
-      account_store.default_timeouts,
-    )
+    relay_store.delete(store_connection(spec), relay.id, db.default_timeouts)
     |> result.map_error(store_failure),
   )
   close_relay(spec, relay.url)
   |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
-/// `account_store.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
-fn store_failure(error: account_store.StoreError) -> admin.RelayChangeFailure {
+/// `db.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
+fn store_failure(error: db.StoreError) -> admin.RelayChangeFailure {
   case error {
-    account_store.RelayAlreadyRegistered -> admin.DuplicateRelay
-    account_store.RelayNotRegistered -> admin.UnregisteredRelay
+    db.Duplicate -> admin.DuplicateRelay
+    db.NotFound -> admin.UnregisteredRelay
     _ ->
-      case account_store.may_have_been_written(error) {
+      case db.may_have_been_written(error) {
         True -> admin.RelayMaybeSaved
-        False -> admin.RelayNotSaved(account_store.describe(error))
+        False -> admin.RelayNotSaved(db.describe(error))
       }
   }
 }
@@ -1109,12 +1092,12 @@ pub fn merge_relay_rows(
     id: relay.id,
     url: relay.url,
     monitor: role_status(
-      relay.roles.monitor,
+      relay_list.has_role(relay.roles, relay_list.Monitor),
       option.then(entry, fn(entry) { entry.monitor }),
       status,
     ),
     bunker: role_status(
-      relay.roles.bunker,
+      relay_list.has_role(relay.roles, relay_list.Bunker),
       option.then(entry, fn(entry) { entry.bunker }),
       status,
     ),
@@ -1218,8 +1201,8 @@ pub fn account_rows(
   list.map(listings, account_row(relay_urls, found, _))
 }
 
-/// アカウント 1 件の表示行。接続 URI は、全行に共通のバンカーリレーの URL から
-/// 組み立て、アイコンの URL は `found` から引く。
+/// アカウント 1 件の表示行。接続 URI とカメラ用のコピー用の文字列は、全行に共通の
+/// バンカーリレーの URL から組み立て、アイコンの URL は `found` から引く。
 fn account_row(
   relay_urls: List(String),
   found: Dict(String, String),
@@ -1229,8 +1212,22 @@ fn account_row(
     signer: listing.signer,
     npub: listing.npub,
     label: listing.label,
-    uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
-    auth_uri: account.bunker_uri(listing.signer, relay_urls, None),
+    uri: connection_uri.bunker_uri(
+      listing.signer,
+      relay_urls,
+      Some(listing.secret),
+    ),
+    auth_uri: connection_uri.bunker_uri(listing.signer, relay_urls, None),
+    uri_camera_text: connection_uri.camera_copy_text(
+      listing.signer,
+      relay_urls,
+      Some(listing.secret),
+    ),
+    auth_uri_camera_text: connection_uri.camera_copy_text(
+      listing.signer,
+      relay_urls,
+      None,
+    ),
     picture: dict.get(found, listing.signer) |> option.from_result,
   )
 }
@@ -1241,13 +1238,15 @@ pub fn skipped_rows(spec: Spec) -> Result(List(dashboard.SkippedRow), String) {
   bunker.skipped(spec.bunker.name) |> result.map(list.map(_, skipped_row))
 }
 
-/// 飛ばした行 1 件の表示行。npub は `pubkey` 列から導く。`MalformedPubkey` の
-/// 行だけは導けないので空文字列にし、その行は識別を描かない。
+/// 飛ばした行 1 件の表示行。npub は `pubkey` 列を 32 バイトの 16 進として読めたときだけ導き、
+/// 読めない行（`MalformedPubkey` の行）では `None` にする。その行は識別を描かない。
 fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
-  let npub = case hex.decode(row.pubkey) {
-    Ok(bytes) -> nip19.encode(bytes, nip19.Npub) |> result.unwrap("")
-    Error(Nil) -> ""
-  }
+  let npub =
+    hex.decode(row.pubkey)
+    |> result.try(fn(bytes) {
+      nip19.encode(bytes, nip19.Npub) |> result.replace_error(Nil)
+    })
+    |> option.from_result
   dashboard.SkippedRow(
     pubkey: row.pubkey,
     npub: npub,
@@ -1291,9 +1290,34 @@ fn subtree() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
+/// 接続 1 本ぶんのハンドラー。どれも第 1 引数に接続の URL を受け取る。`handle_event` は
+/// 受信したイベントと保存済みイベントの終わり、`handle_ok` は発行したイベントへの OK、
+/// `authenticator` は AUTH の受け口（応答しない接続は `None`）、`on_connect` と
+/// `on_disconnect` は接続と切断の通知を受ける。
+type ConnectionHandlers {
+  ConnectionHandlers(
+    handle_event: fn(String, Received) -> Nil,
+    handle_ok: fn(String, Acknowledgement) -> Nil,
+    authenticator: fn(String) -> Option(Authenticator),
+    on_connect: fn(String, Socket) -> Nil,
+    on_disconnect: fn(String) -> Nil,
+  )
+}
+
+/// 何もしないハンドラー。AUTH には応答しない。用途ごとに要るものだけを
+/// `ConnectionHandlers(..silent_handlers(), ...)` で差し替える。
+fn silent_handlers() -> ConnectionHandlers {
+  ConnectionHandlers(
+    handle_event: fn(_relay_url, _received) { Nil },
+    handle_ok: fn(_relay_url, _ack) { Nil },
+    authenticator: fn(_relay_url) { None },
+    on_connect: fn(_relay_url, _socket) { Nil },
+    on_disconnect: fn(_relay_url) { Nil },
+  )
+}
+
 /// 用途 `role` の接続を `relay_list` の `connections` factory の子として組む。
-/// 購読の定義、受信のハンドラー、発行した応答への OK のハンドラー、
-/// AUTH の受け口、接続・切断の通知には、その接続の URL を渡す。テンプレートは
+/// 購読の定義と `handlers` の各ハンドラーには、その接続の URL を渡す。テンプレートは
 /// `Connection` を受け取るたびに URL から `Settings` を組み立てる閉包にし、
 /// `relay_list.connections_child` へ渡す。
 fn relay_connections_child(
@@ -1301,11 +1325,7 @@ fn relay_connections_child(
   factories: relay_list.Factories,
   role: relay_list.Role,
   subscriptions: fn(String) -> Subscriptions,
-  handle_event: fn(String, Received) -> Nil,
-  handle_ok: fn(String, Acknowledgement) -> Nil,
-  authenticator: fn(String) -> Option(Authenticator),
-  on_connect: fn(String, Socket) -> Nil,
-  on_disconnect: fn(String) -> Nil,
+  handlers: ConnectionHandlers,
 ) -> ChildSpecification(
   factory_supervisor.Supervisor(
     relay_list.Connection,
@@ -1319,18 +1339,18 @@ fn relay_connections_child(
     fn(connection: relay_list.Connection) {
       relay_connection.start(relay_connection.Settings(
         name: connection.name,
-        relay: relay_client.label(connection.url),
+        relay: connection.url,
         connect: fn() {
           spec.open(
             connection.url,
             subscriptions(connection.url),
-            handle_event(connection.url, _),
-            handle_ok(connection.url, _),
-            authenticator(connection.url),
+            handlers.handle_event(connection.url, _),
+            handlers.handle_ok(connection.url, _),
+            handlers.authenticator(connection.url),
           )
         },
-        on_connect: on_connect(connection.url, _),
-        on_disconnect: fn() { on_disconnect(connection.url) },
+        on_connect: handlers.on_connect(connection.url, _),
+        on_disconnect: fn() { handlers.on_disconnect(connection.url) },
         reconnect_delay: spec.reconnect_delay,
         stable_after_ms: relay_connection.default_stable_after_ms,
       ))

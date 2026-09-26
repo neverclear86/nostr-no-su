@@ -12,8 +12,7 @@
 ////   バイザーの再起動が起きず**、サブツリーの許容回数を消費せず、ルートの
 ////   `restart_tolerance(3, 60)` にも到達しない。
 //// - **ワーカーの生成と監視は不可分でなければならない**（`erlang:spawn_monitor/1`。
-////   `nostr_no_su_ffi:run_isolated/1`）。分けると、ワーカーが監視より先に終わった
-////   ときに `noproc` の DOWN が届き、正常な実行を失敗と誤判定する。
+////   理由は `nostr_no_su_plugin_ffi:run_isolated/1` の Doc）。
 //// - **歯止めは 2 つ。** 1 件あたりの実行時間の上限（超えたらワーカーを kill）と、
 ////   メールボックス長による切り捨て。切り捨ては上限を超えた時点で始め、超過分では
 ////   なく**キューが上限の半分以下に減るまで**続ける。
@@ -28,10 +27,6 @@
 ////   にだけ届く（`HandleCatchup`）。同じ id は `seen` のウィンドウで弾き、リレーが
 ////   保存済みイベントの終わりを告げたら（`CatchupEnded`）件数を出して要求を
 ////   落とす。
-////
-//// ワーカーの中では例外を捕まえるが、目的は隔離ではなく**終了理由を短い 1 行に
-//// 整えること**である。隔離そのものはプロセスの境界が担っており、捕捉を外しても
-//// 隔離は成立する。
 ////
 //// リンクを張らないことの裏面として、ランナーが外部要因（強制終了やスーパー
 //// バイザーによる停止）で死ぬと、そのとき実行中だったワーカーは孤児として残る。
@@ -48,16 +43,15 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
-import gleam/string
-import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/resume
 import nostr_no_su/time
+import nostr_no_su/window.{type Window}
 
-/// 実行時の歯止め。テストから小さい値を渡せるよう注入する。プラグイン固有の
-/// 設定から与えられるようにする余地もここにある。
+/// 実行時の歯止め。テストから小さい値を渡せるよう注入する。
 pub type Limits {
   Limits(handle_timeout_ms: Int, max_queue_len: Int, max_failures: Int)
 }
@@ -68,10 +62,6 @@ pub const default_limits: Limits = Limits(
   max_queue_len: 1000,
   max_failures: 5,
 )
-
-/// 理由として保持する文字列の上限。ダッシュボードのセルとログ 1 行に収める。
-/// `plugin_loader` が読み込めなかった候補の理由を切るのにも使う。
-pub const max_reason_chars = 120
 
 /// ログにだけ出すスタックトレースの上限。状態には持たない。
 const max_detail_chars = 400
@@ -105,7 +95,7 @@ pub type Outcome {
 }
 
 /// プラグインの取り直しの要求 1 件。`since` はランナーのメモリの再開点で、
-/// `None` なら保存済みの値を使う（`nostr_no_su.catchup_since`）。`until` は
+/// `None` なら保存済みの値を使う（`subscriptions.catchup_since`）。`until` は
 /// 要求を立てた時刻で、これより後のイベントは通常の監視の購読が運ぶ。
 pub type Catchup {
   Catchup(since: Option(Int), until: Int)
@@ -245,9 +235,7 @@ pub fn catchup(name: Name(Msg)) -> Result(Option(Catchup), Nil) {
   |> option.to_result(Nil)
 }
 
-/// メッセージ 1 件を処理する。イベントは `admit` が実行の可否を決め、その
-/// 結果で再開点を前進させ（`advance`）、実行したものは `record` が状態へ
-/// 反映する。
+/// メッセージ 1 件を処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     GetStatus(reply) -> {
@@ -266,10 +254,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let #(status, note) = reenable(state.status)
       report(state.plugin.name, note)
       process.send(reply, Nil)
-      case state.status, status {
+      case state.status {
         // `Disabled` からの復帰は取り直しを要求する。`Running` と `Overloaded`
         // のままの再有効化は状態も要求も変えない。
-        Disabled(..), Running -> {
+        Disabled(..) -> {
           state.resubscribe()
           actor.continue(
             State(
@@ -282,7 +270,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             ),
           )
         }
-        _, _ -> actor.continue(State(..state, status: status))
+        Running | Overloaded(..) -> actor.continue(state)
       }
     }
     Handle(incoming) -> actor.continue(run_incoming(state, incoming, None))
@@ -334,18 +322,10 @@ fn run_incoming(
       let #(status, failures, note) =
         record(status, state.failures, outcome, state.limits)
       report(state.plugin.name, note)
+      let next = State(..state, status:, failures:, resume:)
       case catchup_seen {
-        Some(next) ->
-          State(
-            ..state,
-            status: status,
-            failures: failures,
-            resume: resume,
-            seen: next,
-            caught_up: state.caught_up + 1,
-          )
-        None ->
-          State(..state, status: status, failures: failures, resume: resume)
+        Some(seen) -> State(..next, seen:, caught_up: next.caught_up + 1)
+        None -> next
       }
     }
   }
@@ -411,9 +391,8 @@ pub fn admit(
 /// が返した状態を渡す。`Disabled`（無効化の間のイベント）は捨てるだけなので
 /// 前進せず `current` のまま返す。実行した（`Running`）ものも切り捨てた
 /// （`Overloaded`）ものも前進させる。切り捨ては取り直しの対象外であり、失敗した
-/// 実行でもそのイベントはプラグインに届いているためである。`now` より未来の
-/// `created_at` は `now` に切り詰め、値は小さくしない（`dedup/resume.observe`
-/// と同じ規則）。
+/// 実行でもそのイベントはプラグインに届いているためである。前進の規則は
+/// `resume.advance` に従う。
 pub fn advance(
   status: Status,
   current: Option(Int),
@@ -422,13 +401,7 @@ pub fn advance(
 ) -> Option(Int) {
   case status {
     Disabled(..) -> current
-    Running | Overloaded(..) -> {
-      let at = int.min(created_at, now)
-      case current {
-        Some(existing) -> Some(int.max(existing, at))
-        None -> Some(at)
-      }
-    }
+    Running | Overloaded(..) -> Some(resume.advance(current, created_at, now))
   }
 }
 
@@ -534,15 +507,6 @@ fn detail_suffix(detail: Option(String)) -> String {
   }
 }
 
-/// 長い文字列を末尾に省略記号を付けて切る。プラグインが投げた理由やスタック
-/// トレースは数百文字になり、ログ 1 行にもダッシュボードのセルにも収まらない。
-pub fn truncate(text: String, max: Int) -> String {
-  case string.length(text) > max {
-    True -> string.slice(text, 0, max) <> "..."
-    False -> text
-  }
-}
-
 /// プラグインのイベント処理関数を使い捨てのプロセスで 1 件動かし、結果を待つ。プラグインの
 /// 例外も異常終了もこのプロセスの死として観測されるだけで、ランナーには届かない
 /// （リンクを張らないため）。時間内に終わらなければ打ち切る。
@@ -574,8 +538,8 @@ fn failure(down: Down) -> Outcome {
     process.ProcessDown(reason: process.Abnormal(reason), ..) -> {
       let #(text, stack) = describe_exit(reason)
       Failed(
-        reason: truncate(text, max_reason_chars),
-        detail: option.map(stack, truncate(_, max_detail_chars)),
+        reason: log.sanitize(text, log.max_reason_chars),
+        detail: option.map(stack, log.sanitize(_, max_detail_chars)),
       )
     }
     process.ProcessDown(reason: process.Killed, ..) ->
@@ -588,13 +552,13 @@ fn failure(down: Down) -> Outcome {
 
 /// プラグインのイベント処理関数を監視付きの使い捨てプロセスで動かす。生成と監視は不可分で
 /// なければならない（FFI の doc コメントを参照）。
-@external(erlang, "nostr_no_su_ffi", "run_isolated")
+@external(erlang, "nostr_no_su_plugin_ffi", "run_isolated")
 fn run_isolated(run: fn() -> Nil) -> #(Pid, Monitor)
 
 /// 異常終了の理由を、1 行の理由と（あれば）スタックトレースに分ける。
-@external(erlang, "nostr_no_su_ffi", "describe_exit")
+@external(erlang, "nostr_no_su_plugin_ffi", "describe_exit")
 fn describe_exit(reason: Dynamic) -> #(String, Option(String))
 
 /// 自プロセスの未処理メッセージ数。
-@external(erlang, "nostr_no_su_ffi", "message_queue_len")
+@external(erlang, "nostr_no_su_plugin_ffi", "message_queue_len")
 fn message_queue_len() -> Int

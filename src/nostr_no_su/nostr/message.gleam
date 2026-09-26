@@ -52,7 +52,7 @@ pub fn encode_client_message(client_message: ClientMessage) -> String {
 /// リレーメッセージは先頭要素をタグとする異種混在の JSON 配列で、たとえば
 /// `["EVENT", subscription_id, {...}]` の形をとる。整数キーはデコード後の
 /// リストの添字を指す。
-pub fn relay_message_decoder() -> decode.Decoder(RelayMessage) {
+fn relay_message_decoder() -> decode.Decoder(RelayMessage) {
   use tag <- decode.field(0, decode.string)
   case tag {
     "EVENT" -> {

@@ -24,6 +24,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import plugin_page_builder
 import wisp
 import wisp/simulate
 
@@ -68,25 +69,10 @@ pub const plugin_action_reject_field = "reject"
 
 /// `console_logger` の `status` ページの記述。節 1 つ、ブロック 1 つ（`text`）を持つ。
 fn console_logger_status_description() -> Dynamic {
-  dynamic.properties([
-    #(
-      dynamic.string("sections"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Queue")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("text")),
-                #(dynamic.string("text"), dynamic.string("processed 3 events")),
-              ]),
-            ]),
-          ),
-        ]),
-      ]),
-    ),
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Queue", [], [
+      plugin_page_builder.typed_text("text", "processed 3 events"),
+    ]),
   ])
 }
 
@@ -112,10 +98,7 @@ fn plugin_page_content(
 fn plugin_page_action(
   name: String,
   key: String,
-) -> Option(
-  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
-) {
+) -> Option(plugin_config.PageAction) {
   case name, key {
     "console_logger", "settings" ->
       Some(fn(values, _accounts) {
@@ -136,6 +119,12 @@ pub const uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f1
 
 /// 承認を経る接続 URI（secret なし）。
 pub const auth_uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
+
+/// secret 入りの接続 URI のカメラ用のコピー用の文字列（`uri` から `bunker://` を外した形）。
+pub const uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
+
+/// 承認を経る接続 URI のカメラ用のコピー用の文字列。
+pub const auth_uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
 /// アカウントのラベル。
 pub const label = "main account"
@@ -170,6 +159,8 @@ pub fn account_row(row_label: String) -> dashboard.AccountRow {
     label: row_label,
     uri: uri,
     auth_uri: auth_uri,
+    uri_camera_text: uri_camera_text,
+    auth_uri_camera_text: auth_uri_camera_text,
     picture: None,
   )
 }
@@ -243,12 +234,12 @@ pub fn test_context(
         relay_store.Relay(
           id: 1,
           url: monitor_relay_url,
-          roles: relay_list.Roles(monitor: True, bunker: False),
+          roles: relay_list.MonitorOnly,
         ),
         relay_store.Relay(
           id: 2,
           url: "wss://bunker.example",
-          roles: relay_list.Roles(monitor: False, bunker: True),
+          roles: relay_list.BunkerOnly,
         ),
       ])
     },
@@ -505,7 +496,7 @@ pub const skipped_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag
 pub fn skipped_row() -> dashboard.SkippedRow {
   dashboard.SkippedRow(
     pubkey: skipped_pubkey,
-    npub: skipped_npub,
+    npub: Some(skipped_npub),
     label: "old wallet",
     reason: vault.UndecryptablePrivateKey,
   )

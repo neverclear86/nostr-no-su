@@ -266,6 +266,8 @@ pub fn cross_origin_post_is_an_origin_mismatch_page_test() {
   assert string.contains(body, i18n.text(i18n.Japanese, i18n.OriginMismatch))
   assert !string.contains(body, "name=\"return\"")
   assert header(with_host, "x-frame-options") == "DENY"
+  assert header(with_host, "content-security-policy")
+    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
   let without_host =
     request.Request(

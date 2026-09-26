@@ -27,6 +27,7 @@ import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/random
 import nostr_no_su/relay_client
 import nostr_no_su/relay_list
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
@@ -353,12 +354,7 @@ fn start_tree_with_relay(
   signer: Account,
 ) -> #(app.Spec, Pid, String) {
   let #(spec, tree, secret) = start_tree(database_url, signer)
-  let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      relay_url,
-      relay_list.Roles(monitor: False, bunker: True),
-    )
+  let assert Ok(Nil) = app.open_relay(spec, relay_url, relay_list.BunkerOnly)
   #(spec, tree, secret)
 }
 
@@ -366,10 +362,10 @@ fn start_tree_with_relay(
 /// 起動しないことで、このテストが監視するのはバンカーとリレー接続だけになる。
 fn test_config(database_url: String) -> config.Config {
   config.Config(
-    account_store: config.AccountStore(
+    account_store: Ok(config.AccountStore(
       database_url: database_url,
       master_key: random_master_key(),
-    ),
+    )),
     plugin_dir: None,
     plugin_env: dict.new(),
     admin_ui: config.Disabled,
@@ -391,7 +387,7 @@ fn connect_client(
     Ok([
       #(
         "client",
-        config.bunker_filter(
+        subscriptions.bunker_filter(
           [account.pubkey_hex(client)],
           time.now_seconds() - 60,
         ),
@@ -401,18 +397,19 @@ fn connect_client(
   let assert Ok(connection) =
     relay_client.start(
       relay_url,
-      subscriptions,
-      fn(received) {
-        case received {
-          relay_client.ReceivedEvent(_, verified) ->
-            process.send(events, event.verified_event(verified))
-          relay_client.ReceivedEose(_) -> Nil
-        }
-      },
-      fn(ack) { process.send(acks, ack) },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions:,
+        handle_incoming: fn(received) {
+          case received {
+            relay_client.ReceivedEvent(_, verified) ->
+              process.send(events, event.verified_event(verified))
+            relay_client.ReceivedEose(_) -> Nil
+          }
+        },
+        handle_ok: fn(ack) { process.send(acks, ack) },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   connection
 }

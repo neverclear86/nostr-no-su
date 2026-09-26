@@ -1,6 +1,6 @@
 //// `dedup` アクターのテスト。`Incoming` の重複排除と配送、`since` / `points` /
 //// `adding_account` の応答と、落とした件数から出すログ行（`record_rejection`）を
-//// 確かめる。`dedup/window` と `dedup/resume` の純粋なロジック自体はそれぞれの
+//// 確かめる。`window` と `resume` の純粋なロジック自体はそれぞれの
 //// テストで確かめている。
 
 import gleam/dict

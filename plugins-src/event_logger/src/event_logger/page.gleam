@@ -1,7 +1,8 @@
-//// 管理 UI のページの記述を組み立て、フォームの送信を正規化する純粋なモジュール。
-//// プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）が観測した値と
-//// 表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の結果を
-//// 組み立てるだけである。文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
+//// 管理 UI のページのキーを解釈し、ページの記述を組み立て、フォームの送信を正規化する
+//// 純粋なモジュール。プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）
+//// が観測した値と表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の
+//// 結果を組み立てるだけである。ページのキーの文字列はここにだけ置く（`page_key/1`）。
+//// 文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
 //// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値・整数（`kind` と `time` の `value`）だけで**、
@@ -65,6 +66,17 @@ pub type ContentView {
   FoldedContent
 }
 
+/// 本体が渡すページのキーを解釈した結果。`page_key/1` が作り、呼び出し元はこれで
+/// 観測する値と記述を組む関数、または送信を受け付けるかを選ぶ。ページの入力は持たない。
+pub type PageKey {
+  /// `timeline`。保存済みイベントの直近の一覧。
+  TimelineKey
+  /// `settings`。監視対象・設定・状態の 3 節と保存のフォーム。
+  SettingsKey
+  /// それ以外のキー、または binary として読めないキー。
+  UnknownKey
+}
+
 /// `Accounts` の値（アカウントの一覧を JSON にした文字列）を読む。JSON として
 /// 読めなければ `[]` を返す。`plugin_page_content` に `{error, Reason}` を返す
 /// 約束が無いため（`docs/plugin-api.md` 第 13.4 節）。
@@ -120,40 +132,57 @@ pub fn pages(language: Language) -> Dynamic {
   ])
 }
 
-/// ページ 1 件の記述。`key` が `timeline` なら保存済みイベントの直近の一覧を、
-/// `settings` なら監視対象・設定・状態を 3 節で示し、それ以外（キー未知、または
-/// binary として読めなかった呼び出し元が渡す仮の文字列）は `alert` 1 つだけの
-/// 節を返す。`plugin_page_content` に `{error, Reason}` を返す約束は無いため
-/// （`docs/plugin-api.md` 第 13.4 節）。
-///
-/// `language` は文言の言語、`database` は `masked_url/3` で組んだ表示用の文字列
-/// （未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、`processes` は
-/// 保存アクターと接続プールの観測結果、`accounts` は登録アカウントの一覧
-/// （`settings` のチェックと、`timeline` の書いたアカウントの引き当てに使う）、
-/// `monitored` は保存アクターへ問い合わせた今の監視対象（問い合わせが届かなければ
-/// `Error(Nil)`）。`events` はタイムラインに出す直近のイベント（読めなければ
-/// `alert` に出す文言）。
-pub fn content(
-  key: String,
+/// 本体が `plugin_page_content/3` と `plugin_page_action/3` の第 1 引数で渡すページの
+/// キーを解釈する。`pages/1` が返すキーのどれでもない binary と、binary として読めない
+/// 値は `UnknownKey` にする。
+pub fn page_key(key: Dynamic) -> PageKey {
+  case decode.run(key, decode.string) {
+    Ok(k) if k == timeline_page_key -> TimelineKey
+    Ok(k) if k == settings_page_key -> SettingsKey
+    _ -> UnknownKey
+  }
+}
+
+/// `timeline` のページの記述。`events` はタイムラインに出す直近のイベント（読めなければ
+/// `alert` に出す文言）、`accounts` は書いたアカウントの引き当てに使う登録アカウントの
+/// 一覧である。
+pub fn timeline_content(
   language: Language,
+  accounts: List(Account),
+  events: Result(List(store.Row), i18n.Message),
+) -> Dynamic {
+  page_sections(timeline_sections(language, accounts, events))
+}
+
+/// `settings` のページの記述。監視対象・設定・状態を 3 節で示す。`accounts` は登録
+/// アカウントの一覧（チェックボックスの行）、`monitored` は保存アクターへ問い合わせた今の
+/// 監視対象（問い合わせが届かなければ `Error(Nil)`）、`database` は `masked_url/3` で
+/// 組んだ表示用の文字列（未設定なら `Error(Nil)`）、`pool_size` は接続プールの接続数、
+/// `processes` は接続プールと保存アクターの観測結果である。
+pub fn settings_content(
+  language: Language,
+  accounts: List(Account),
+  monitored: Result(store.Monitored, Nil),
   database: Result(String, Nil),
   pool_size: Int,
   processes: List(ProcessStatus),
-  accounts: List(Account),
-  monitored: Result(store.Monitored, Nil),
-  events: Result(List(store.Row), i18n.Message),
 ) -> Dynamic {
-  case key {
-    k if k == timeline_page_key ->
-      page_sections(timeline_sections(language, accounts, events))
-    k if k == settings_page_key ->
-      page_sections([
-        monitored_section(language, accounts, monitored),
-        configuration_section(language, database, pool_size),
-        runtime_section(language, processes),
-      ])
-    _ -> page_sections([error_section(language)])
-  }
+  page_sections([
+    monitored_section(language, accounts, monitored),
+    configuration_section(language, database, pool_size),
+    runtime_section(language, processes),
+  ])
+}
+
+/// 未知のページのキー（`UnknownKey`）の記述。`alert`（`failure`）1 つだけの節を返す。
+/// `plugin_page_content` に `{error, Reason}` を返す約束は無いため
+/// （`docs/plugin-api.md` 第 13.4 節）。
+pub fn unknown_content(language: Language) -> Dynamic {
+  page_sections([
+    section(i18n.text(language, i18n.ErrorTitle), [
+      alert_block(i18n.text(language, i18n.UnknownPage), "failure"),
+    ]),
+  ])
 }
 
 /// `Timeline` の節。`Error(reason)` なら `reason` を `language` の文にした
@@ -195,8 +224,8 @@ fn event_section(
   }
   let body = case content_view(row.kind, row.content) {
     NoContent -> []
-    WholeContent(text) -> [text_block(text)]
-    ContentExcerpt(head) -> [text_block(head), content_details()]
+    WholeContent(text) -> [text_node(text)]
+    ContentExcerpt(head) -> [text_node(head), content_details()]
     FoldedContent -> [content_details()]
   }
   section_with_meta(
@@ -248,7 +277,7 @@ fn author_items(
 ) -> List(#(String, Dynamic)) {
   case list.find(accounts, fn(account) { account.pubkey == pubkey }) {
     Ok(account) -> [
-      #(i18n.text(language, i18n.AccountTerm), text_inline(account.label)),
+      #(i18n.text(language, i18n.AccountTerm), text_node(account.label)),
       #("npub", id_inline(account.npub)),
     ]
     Error(Nil) -> [#("pubkey", id_inline(pubkey))]
@@ -301,11 +330,11 @@ fn configuration_section(
       #(i18n.text(language, i18n.DatabaseUrlTerm), code_inline(masked)),
       #(
         i18n.text(language, i18n.PoolSizeTerm),
-        text_inline(int.to_string(pool_size)),
+        text_node(int.to_string(pool_size)),
       ),
       #(
         i18n.text(language, i18n.MaxQueueLengthTerm),
-        text_inline(int.to_string(store.default_max_queue_len)),
+        text_node(int.to_string(store.default_max_queue_len)),
       ),
     ]),
     note_block(i18n.text(language, i18n.ConfigurationNote)),
@@ -331,7 +360,7 @@ fn monitored_section(
     Ok(_), [] -> section(title, [])
     Ok(current), _ ->
       section(title, [
-        text_block(i18n.text(language, i18n.StoredOnlyForChecked)),
+        text_node(i18n.text(language, i18n.StoredOnlyForChecked)),
         note_block(i18n.text(language, i18n.AllCheckedMeansEveryAccount)),
         form_block(
           list.map(accounts, fn(account) {
@@ -389,111 +418,85 @@ fn process_row(language: Language, process: ProcessStatus) -> List(Dynamic) {
     Error(Nil) -> #(i18n.NotRunning, "failure", "-")
   }
   [
-    text_inline(i18n.text(language, process.label)),
+    text_node(i18n.text(language, process.label)),
     code_inline(process.registered_name),
     badge_inline(i18n.text(language, status), status_tone),
-    text_inline(pending_text),
+    text_node(pending_text),
   ]
-}
-
-/// 未知のページキーに対する節。`alert`（`failure`）1 つだけを持つ。
-fn error_section(language: Language) -> Dynamic {
-  section(i18n.text(language, i18n.ErrorTitle), [
-    alert_block(i18n.text(language, i18n.UnknownPage), "failure"),
-  ])
 }
 
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
 fn page_sections(sections: List(Dynamic)) -> Dynamic {
-  dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
+  properties([#("sections", dynamic.list(sections))])
 }
 
 /// 節（`type` = `"section"`）。
 fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
-  ])
+  node("section", section_fields(title, blocks))
 }
 
 /// 見出しの題の後ろに `meta`（インラインのリスト）を並べる節。
+/// `section` のフィールドに `meta` を足したもの。
 fn section_with_meta(
   title: String,
   meta: List(Dynamic),
   blocks: List(Dynamic),
 ) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("meta"), dynamic.list(meta)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  node("section", [
+    #("meta", dynamic.list(meta)),
+    ..section_fields(title, blocks)
   ])
 }
 
+/// 節の `title` と `blocks` のフィールド。
+fn section_fields(
+  title: String,
+  blocks: List(Dynamic),
+) -> List(#(String, Dynamic)) {
+  [#("title", dynamic.string(title)), #("blocks", dynamic.list(blocks))]
+}
+
 /// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` のインライン
-/// （`text_inline`・`code_inline`・`id_inline`）の対。
+/// （`text_node`・`code_inline`・`id_inline`）の対。
 fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("pairs")),
-    #(
-      dynamic.string("items"),
-      dynamic.list(
-        list.map(items, fn(item) {
-          dynamic.properties([
-            #(dynamic.string("term"), dynamic.string(item.0)),
-            #(dynamic.string("value"), item.1),
-          ])
-        }),
-      ),
-    ),
-  ])
+  let item_node = fn(item: #(String, Dynamic)) {
+    properties([#("term", dynamic.string(item.0)), #("value", item.1)])
+  }
+  node("pairs", [#("items", dynamic.list(list.map(items, item_node)))])
 }
 
 /// `table` ブロック。`rows` の各セルはすでに組み立てたインライン。
 fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("table")),
-    #(
-      dynamic.string("headers"),
-      dynamic.list(list.map(headers, dynamic.string)),
-    ),
-    #(dynamic.string("rows"), dynamic.list(list.map(rows, dynamic.list))),
+  node("table", [
+    #("headers", dynamic.list(list.map(headers, dynamic.string))),
+    #("rows", dynamic.list(list.map(rows, dynamic.list))),
   ])
 }
 
 /// `note` ブロック。
 fn note_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("note")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("note", [#("text", dynamic.string(text))])
 }
 
 /// `details` ブロック。`text` は開いたときに出す整形済みのテキスト。
 fn details_block(summary: String, text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("details")),
-    #(dynamic.string("summary"), dynamic.string(summary)),
-    #(dynamic.string("text"), dynamic.string(text)),
+  node("details", [
+    #("summary", dynamic.string(summary)),
+    #("text", dynamic.string(text)),
   ])
 }
 
-/// `text` ブロック。
-fn text_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+/// `text` ノード。ブロックにもインラインにも使える。
+fn text_node(text: String) -> Dynamic {
+  node("text", [#("text", dynamic.string(text))])
 }
 
 /// `form` ブロック。`fields` は `checkbox_field/4` などで組んだ欄の記述、
 /// `submit` は送信ボタンの文字列。
 fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("form")),
-    #(dynamic.string("fields"), dynamic.list(fields)),
-    #(dynamic.string("submit"), dynamic.string(submit)),
+  node("form", [
+    #("fields", dynamic.list(fields)),
+    #("submit", dynamic.string(submit)),
   ])
 }
 
@@ -505,69 +508,58 @@ fn checkbox_field(
   hint hint: String,
   checked checked: Bool,
 ) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("checkbox")),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("checked"), dynamic.bool(checked)),
+  node("checkbox", [
+    #("name", dynamic.string(name)),
+    #("label", dynamic.string(label)),
+    #("hint", dynamic.string(hint)),
+    #("checked", dynamic.bool(checked)),
   ])
 }
 
 /// `alert` ブロック。
 fn alert_block(text: String, tone: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("alert")),
-    #(dynamic.string("text"), dynamic.string(text)),
-    #(dynamic.string("tone"), dynamic.string(tone)),
-  ])
-}
-
-/// `text` インライン。
-fn text_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
+  node("alert", [
+    #("text", dynamic.string(text)),
+    #("tone", dynamic.string(tone)),
   ])
 }
 
 /// `code` インライン。
 fn code_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("code")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("code", [#("text", dynamic.string(text))])
 }
 
 /// `badge` インライン。`table` のセルと節の `meta` で使える。
 fn badge_inline(text: String, tone: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("badge")),
-    #(dynamic.string("text"), dynamic.string(text)),
-    #(dynamic.string("tone"), dynamic.string(tone)),
+  node("badge", [
+    #("text", dynamic.string(text)),
+    #("tone", dynamic.string(tone)),
   ])
 }
 
 /// `id` インライン。`pairs` の値だけで使える。
 fn id_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("id")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("id", [#("text", dynamic.string(text))])
 }
 
 /// `kind` インライン。本体が kind の名前（無ければ番号）で出す。
 fn kind_inline(kind: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("kind")),
-    #(dynamic.string("value"), dynamic.int(kind)),
-  ])
+  node("kind", [#("value", dynamic.int(kind))])
 }
 
 /// `time` インライン。本体が相対時刻で出し、UTC の時刻を `title` に持たせる。
 fn time_inline(seconds: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("time")),
-    #(dynamic.string("value"), dynamic.int(seconds)),
-  ])
+  node("time", [#("value", dynamic.int(seconds))])
+}
+
+/// `type` と残りのフィールドから記述の 1 ノードを組む。
+fn node(type_: String, fields: List(#(String, Dynamic))) -> Dynamic {
+  properties([#("type", dynamic.string(type_)), ..fields])
+}
+
+/// 文字列キーのフィールドから binary キーの map を組む。
+fn properties(fields: List(#(String, Dynamic))) -> Dynamic {
+  fields
+  |> list.map(fn(field) { #(dynamic.string(field.0), field.1) })
+  |> dynamic.properties
 }

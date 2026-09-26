@@ -1,8 +1,8 @@
 //// 偽リレーの上のツリーで、バンカーの応答、再起動、再接続、セッションと承認待ちの
 //// 読み直しを確かめるテスト。`nostrconnect://` から開くセッションの発行、発行先の
 //// 問い合わせ、セッションの権限の更新、セッションのリレーだけの接続の購読と
-//// 取り消しで閉じることもここで確かめる。セッションの変更と最終利用の記録の書き込みが
-//// 失敗したときの応答とログの行も、偽のストアで確かめる。
+//// 取り消しで閉じることもここで確かめる。セッションの変更と最終利用の記録の書き込みの
+//// 成功と失敗のログの行も、偽のストアで確かめる。
 
 import gleam/erlang/atom
 import gleam/erlang/process.{type Down, type Name, type Pid, type Subject}
@@ -22,17 +22,18 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
 import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
   Published, Subscribed, Wrote, accounts_only, authenticator_recording_open,
   await_connection, await_signers, bunker_spec, call_counter, client_key,
   committed_but_timed_out_store, connect_request, connect_request_from,
-  fake_open, fixed_retry_delay, idle_monitor, load_signer, memory_store,
-  named_relay, other_client_key, other_signer_key, request, response_body,
+  connection_name, fake_open, fixed_retry_delay, idle_monitor, load_signer,
+  memory_store, other_client_key, other_signer_key, request, response_body,
   secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay_url,
+  start_loading_bunker_tree_with_open, start_tree_with_relays, stop_tree,
+  store_failure, store_with_load, stored_signer, test_relay_url,
 }
 import support/log_capture
 import support/nip46_client.{account_for}
@@ -77,13 +78,25 @@ fn first_write_succeeds_store(
   })
 }
 
-/// 捕まえた行に、`bunker` の接頭辞を付けた `message` で終わる行があるか。行末まで合わせるのは、
-/// 同じ文の後に理由を続けた行（結果が曖昧な書き込みの行）と区別するためである。
+/// 捕まえた行に、`bunker` の接頭辞を付けた `message` で終わる行があるか。
 fn has_bunker_line(capture: log_capture.Capture, message: String) -> Bool {
-  list.any(log_capture.lines(capture), string.ends_with(
+  bunker_line_count(capture, message) > 0
+}
+
+/// 捕まえた行のうち、`bunker` の接頭辞を付けた `message` で終わる行の数。行末まで合わせるのは、
+/// 同じ文の後に理由を続けた行（結果が曖昧な書き込みの行）と区別するためである。
+fn bunker_line_count(capture: log_capture.Capture, message: String) -> Int {
+  list.count(log_capture.lines(capture), string.ends_with(
     _,
     log.line(bunker.log_prefix, message) <> "\n",
   ))
+}
+
+/// 他のテストが使わない 64 桁の 16 進の鍵。承認待ちを作るときはクライアントの秘密鍵に、
+/// `open_client_session` ではクライアントの公開鍵に使う。`log_capture` は VM 全体の行を
+/// 捕まえるので、行を数えるテストが、並走する他のモジュールのテストの同じ組の行を数えないために使う。
+fn unshared_client_key(suffix: String) -> String {
+  string.pad_start(suffix, 64, "0")
 }
 
 /// 指定した秒より時計が進むまで待つ。バンカーアクターの起点の判定は秒単位なので、
@@ -907,8 +920,10 @@ pub fn unconfirmed_denials_and_revocations_are_reported_test() {
 }
 
 /// 読み込みが終わっていない間の承認・拒否・取り消し・権限の差し替えと、`nostrconnect://` から
-/// のセッションの開始は、ストアを呼ばずに `SessionNotReady` で拒否する。
+/// のセッションの開始は、ストアを呼ばずに `SessionNotReady` で拒否する。`nostrconnect://` の
+/// 開始は、送られた（署名者, クライアント）で失敗の行を出す。
 pub fn session_changes_before_loading_do_not_reach_the_store_test() {
+  let capture = log_capture.install()
   let reports = process.new_subject()
   let calls = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -965,11 +980,193 @@ pub fn session_changes_before_loading_do_not_reach_the_store_test() {
       "uri-secret",
     )
     == Error(bunker.SessionNotReady("accounts are not loaded yet"))
+  assert has_bunker_line(
+    capture,
+    "failed to open the session of client "
+      <> other_client_key
+      <> " to signer "
+      <> session.signer
+      <> ": accounts are not loaded yet",
+  )
   assert process.receive(calls, 100) == Error(Nil)
   // メモリを変えていないことは、直前の `calls` が空であることで確かめている
   // （読み直しの失敗が続く間、一覧そのものは理由を返す）。
   let assert Error(_) = bunker.pending(name)
   let assert Error(_) = bunker.sessions(name)
+  log_capture.remove(capture)
+  stop_tree(tree)
+}
+
+/// 管理 UI からの承認・拒否・`nostrconnect://` の接続・権限の差し替え・取り消しは、
+/// 書き込みの成功ごとに成功の行を 1 回だけ出す。承認待ちを作った NIP-46 の `connect` の
+/// 書き込みの成功では行を出さない。
+pub fn session_changes_log_one_line_after_a_successful_write_test() {
+  let capture = log_capture.install()
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let tree =
+    start_loading_bunker_tree(
+      reports,
+      None,
+      name,
+      memory_store(process.new_subject(), [stored_signer(signer_key)], False),
+      fixed_retry_delay,
+    )
+  let assert Opened(_relay_url, _connection, _socket, deliver) =
+    await_connection(reports)
+  assert await_loaded(name, 2000)
+  let signer = account.pubkey_hex(account_for(signer_key))
+  let client_b1 = account.pubkey_hex(account_for(unshared_client_key("b1")))
+  let client_b2 = account.pubkey_hex(account_for(unshared_client_key("b2")))
+  let client_b3 = unshared_client_key("b3")
+
+  deliver(connect_request_from(unshared_client_key("b1"), "c1", ""))
+  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  deliver(connect_request_from(unshared_client_key("b2"), "c2", ""))
+  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let assert Ok(pending) = bunker.pending(name)
+  let assert Ok(entry_b1) =
+    list.find(pending, fn(entry) { entry.client == client_b1 })
+  let assert Ok(entry_b2) =
+    list.find(pending, fn(entry) { entry.client == client_b2 })
+
+  assert bunker.approve(name, entry_b1.token) == Ok(Nil)
+  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  assert bunker.deny(name, entry_b2.token) == Ok(Nil)
+  let assert Ok(Published(_socket, _denied)) = process.receive(reports, 2000)
+  assert bunker.open_client_session(
+      name,
+      signer,
+      client_b3,
+      "",
+      [],
+      "uri-secret",
+    )
+    == Ok(Nil)
+  let assert Ok(Published(_socket, _response)) = process.receive(reports, 2000)
+  assert bunker.update_perms(name, signer, client_b3, "ping") == Ok(Nil)
+  assert bunker.revoke(name, signer, client_b3) == Ok(Nil)
+
+  assert bunker_line_count(
+      capture,
+      "approved the connection of client "
+        <> entry_b1.client
+        <> " to signer "
+        <> entry_b1.signer,
+    )
+    == 1
+  assert bunker_line_count(
+      capture,
+      "denied the connection of client "
+        <> entry_b2.client
+        <> " to signer "
+        <> entry_b2.signer,
+    )
+    == 1
+  assert bunker_line_count(
+      capture,
+      "connected client " <> client_b3 <> " to signer " <> signer,
+    )
+    == 1
+  assert bunker_line_count(
+      capture,
+      "updated the permissions of client "
+        <> client_b3
+        <> " to signer "
+        <> signer,
+    )
+    == 1
+  assert bunker_line_count(
+      capture,
+      "revoked the session of client " <> client_b3 <> " to signer " <> signer,
+    )
+    == 1
+  assert bunker_line_count(
+      capture,
+      "recorded the pending connection of client "
+        <> entry_b1.client
+        <> " to signer "
+        <> entry_b1.signer,
+    )
+    == 0
+  assert bunker_line_count(
+      capture,
+      "recorded the pending connection of client "
+        <> entry_b2.client
+        <> " to signer "
+        <> entry_b2.signer,
+    )
+    == 0
+  log_capture.remove(capture)
+  stop_tree(tree)
+}
+
+/// 書き込みが失敗したか結果が曖昧な操作では、成功の行は出ない。
+/// 書き込まれていないことが確定した失敗の行は、送られた（署名者, クライアント）で出る。
+pub fn unapplied_session_changes_log_no_success_line_test() {
+  let capture = log_capture.install()
+  let reports = process.new_subject()
+  let name = process.new_name("test_bunker")
+  let client_b4 = unshared_client_key("b4")
+  let client_b5 = unshared_client_key("b5")
+  let store =
+    bunker.Store(
+      ..memory_store(process.new_subject(), [stored_signer(signer_key)], False),
+      write: fn(write) {
+        case write {
+          engine.InsertSession(session:, ..) if session.client == client_b4 ->
+            Error(bunker.NotWritten(store_failure()))
+          _ -> Error(bunker.MaybeWritten(store_failure()))
+        }
+      },
+    )
+  let tree =
+    start_loading_bunker_tree(reports, None, name, store, fixed_retry_delay)
+  let assert Opened(_relay_url, _connection, _socket, _deliver) =
+    await_connection(reports)
+  assert await_loaded(name, 2000)
+  let signer = account.pubkey_hex(account_for(signer_key))
+
+  assert bunker.open_client_session(
+      name,
+      signer,
+      client_b4,
+      "",
+      [],
+      "uri-secret",
+    )
+    == Error(bunker.SessionNotApplied(store_failure()))
+  assert has_bunker_line(
+    capture,
+    "failed to open the session of client "
+      <> client_b4
+      <> " to signer "
+      <> signer
+      <> ": "
+      <> store_failure(),
+  )
+
+  assert bunker.open_client_session(
+      name,
+      signer,
+      client_b5,
+      "",
+      [],
+      "uri-secret",
+    )
+    == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
+
+  assert bunker_line_count(
+      capture,
+      "connected client " <> client_b4 <> " to signer " <> signer,
+    )
+    == 0
+  assert bunker_line_count(
+      capture,
+      "connected client " <> client_b5 <> " to signer " <> signer,
+    )
+    == 0
+  log_capture.remove(capture)
   stop_tree(tree)
 }
 
@@ -977,17 +1174,16 @@ pub fn session_changes_before_loading_do_not_reach_the_store_test() {
 /// 片方のソケットを kill すると、以降の応答は生きている側からだけ出ていく。
 pub fn a_lost_socket_stops_receiving_responses_test() {
   let reports = process.new_subject()
-  let relay_a = named_relay("ws://relay.one")
-  let relay_b = named_relay("ws://relay.two")
-  let tree =
-    start_tree(app.Spec(
+  let relay_a = "ws://relay.one"
+  let relay_b = "ws://relay.two"
+  let spec =
+    app.Spec(
       plugins: [],
       not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
         store_with_load(fn() { load_signer(signer_key) }),
-        [relay_a, relay_b],
         fixed_retry_delay,
       ),
       admin: None,
@@ -995,14 +1191,15 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
       relay_list: process.new_name("test_relay_list"),
-    ))
+    )
+  let tree = start_tree_with_relays(spec, [], [relay_a, relay_b])
   // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
   // どちらのリレーの報告かを決める。
   let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
     await_connection(reports)
   let assert Opened(_second_url, _connection_2, socket_2, deliver_2) =
     await_connection(reports)
-  let #(socket_a, socket_b, deliver) = case first_url == relay_a.url {
+  let #(socket_a, socket_b, deliver) = case first_url == relay_a {
     True -> #(socket_1, socket_2, deliver_1)
     False -> #(socket_2, socket_1, deliver_2)
   }
@@ -1014,7 +1211,10 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   assert first != second
 
   process.kill(socket_a)
-  assert await_disconnect(relay_a.name, 2000)
+  assert await_disconnect(
+    connection_name(spec, relay_a, relay_list.Bunker),
+    2000,
+  )
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(answered_on, pong)) = process.receive(reports, 2000)
   assert answered_on == socket_b

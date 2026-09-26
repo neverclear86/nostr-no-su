@@ -19,9 +19,9 @@ import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
 import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
 import nostr_no_su/crypto/nip44
-import nostr_no_su/dedup/window
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, type Verified, Event}
+import nostr_no_su/window
 
 /// 時計が遅れたクライアントのずれを許容するため、現在時刻からこの秒数より古い
 /// リクエストまでを受け付ける。
@@ -183,6 +183,15 @@ type Execution {
   )
 }
 
+/// セッション内の実行が失敗した理由。権限の不足による拒否（`Denied`）は、応答の
+/// 文言とログの行（`denial_notice`）の両方がこの値から作られる。
+type Refusal {
+  /// 権限の不足による拒否。拒否した権限を持つ。
+  Denied(Permission)
+  /// 権限の不足以外の失敗。応答に返す理由を持つ。
+  Failed(String)
+}
+
 /// 指定したアカウント群（それぞれの接続シークレット付き）を扱うエンジン。
 /// `auth_url` は承認待ちの token から承認ページの URL を組み立てる関数で、
 /// `None`（管理 UI が無効）なら承認フローも無効になる。URL の形を知っているのは
@@ -281,6 +290,16 @@ pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
   |> result.map(fn(entry) { entry.0 })
 }
 
+/// 署名者とクライアントの組の承認済みセッション。承認されていない組なら
+/// `Error(Nil)`。
+pub fn find_session(
+  engine: Engine,
+  signer: String,
+  client: String,
+) -> Result(Session, Nil) {
+  dict.get(engine.sessions, #(signer, client))
+}
+
 /// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定し、
 /// 使われていない組が末尾に来るよう、最終利用の新しい順、作成の新しい順、
 /// 署名者、クライアントの昇順に並べる。
@@ -338,10 +357,26 @@ pub fn set_perms(
 
 /// 失効していない承認待ちの一覧。表示が安定し、押し出しの対象を決める元の並びに
 /// なるよう、作成の新しい順、token の昇順に並べる。失効した要求は状態からすぐに
-/// 消えるわけではないが、この一覧にも `approve` / `deny` にも現れず、次の登録か
-/// 成功した承認・拒否のときにまとめて捨てられる。
+/// 消えるわけではないが、この一覧にも `find_pending` にも `approve` / `deny` にも
+/// 現れず、次の登録か成功した承認・拒否のときにまとめて捨てられる。
 pub fn pending(engine: Engine, now: Int) -> List(Pending) {
   live_pending(engine, now) |> newest_pending
+}
+
+/// token の失効していない承認待ち。知らない token と失効した要求は `Error(Nil)`。
+pub fn find_pending(
+  engine: Engine,
+  token: String,
+  now: Int,
+) -> Result(Pending, Nil) {
+  case dict.get(engine.pending, token) {
+    Ok(entry) ->
+      case expired(entry, now) {
+        True -> Error(Nil)
+        False -> Ok(entry)
+      }
+    Error(Nil) -> Error(Nil)
+  }
 }
 
 /// 承認待ちの辞書の値を、作成の新しい順、token の昇順に並べる。
@@ -648,7 +683,7 @@ fn handle_request(
             outside_session: outside,
           )
         Ok(engine) -> {
-          let execution =
+          let #(execution, denied) =
             execute(engine, account, secret, client_pk_hex, request, inputs)
           let build = fn(response) {
             build_reply(
@@ -662,7 +697,7 @@ fn handle_request(
           Handled(
             engine: attempted(engine, execution),
             outcome: outcome(execution, build),
-            notice: denial_notice(execution, pubkey_hex(account), client_pk_hex),
+            notice: denial_notice(denied, pubkey_hex(account), client_pk_hex),
             outside_session: outside,
           )
         }
@@ -801,7 +836,8 @@ fn outcome(
 
 /// リクエストを 1 件実行する。`connect` と `logout` 以外は、クライアントが先に
 /// 接続済みであることを条件とする。セッション内のリクエストは `touch` が
-/// 最終利用を書く。
+/// 最終利用を書く。戻り値の第 2 要素は権限の不足で拒否した権限で、拒否して
+/// いない実行では `None`。
 ///
 /// `logout` はセッションの有無によらず ack を返す。NIP-46 は応答を ack と定め、
 /// クライアント（nostr-tools の `BunkerSigner`）は ack 以外の応答で購読の後
@@ -813,32 +849,36 @@ fn execute(
   client_pk_hex: String,
   request: rpc.Request,
   inputs: Inputs,
-) -> Execution {
+) -> #(Execution, Option(Permission)) {
   let signer = pubkey_hex(account)
   case request.method {
-    "connect" -> connect(engine, signer, secret, client_pk_hex, request, inputs)
+    "connect" -> #(
+      connect(engine, signer, secret, client_pk_hex, request, inputs),
+      None,
+    )
     // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
     // 取り消しの後のクライアントを例外にしないため）。
     "logout" -> {
       let ack = rpc.ok(request.id, "ack")
-      case revoke(engine, signer, client_pk_hex) {
+      let execution = case revoke(engine, signer, client_pk_hex) {
         // 書けなくても ack を返す（クライアントの後始末を止めないため）。
         Ok(#(next, write)) ->
           Record(write:, next:, response: ack, on_failure: ack)
         Error(Nil) -> Respond(ack)
       }
+      #(execution, None)
     }
     _ ->
       case dict.get(engine.sessions, #(signer, client_pk_hex)) {
-        Error(Nil) ->
-          Respond(rpc.error(request.id, "unauthorized: send connect first"))
-        Ok(session) ->
-          touch(
-            engine,
-            session,
-            execute_in_session(account, session.perms, request, inputs.now),
-            inputs.now,
-          )
+        Error(Nil) -> #(
+          Respond(rpc.error(request.id, "unauthorized: send connect first")),
+          None,
+        )
+        Ok(session) -> {
+          let #(response, denied) =
+            execute_in_session(account, session.perms, request, inputs.now)
+          #(touch(engine, session, response, inputs.now), denied)
+        }
       }
   }
 }
@@ -1023,17 +1063,18 @@ fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
 /// 読み、`sign_event` と `nip44_encrypt` / `nip44_decrypt` は `perms`（空なら既定の集合）が
 /// 許すときだけ実行し、`get_public_key` と `ping` は `perms` に関わらず答える。
 /// 未対応の方法（`permission.is_unsupported`）には未対応の理由を、ほかの方法には
-/// `unsupported_method` を返す。
+/// `unsupported_method` を返す。戻り値の第 2 要素は権限の不足で拒否した権限で、
+/// それ以外では `None`。
 fn execute_in_session(
   account: Account,
   perms: String,
   request: rpc.Request,
   now: Int,
-) -> rpc.Response {
+) -> #(rpc.Response, Option(Permission)) {
   let granted = permission.parse(perms)
   case request.method {
-    "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
-    "ping" -> rpc.ok(request.id, "pong")
+    "get_public_key" -> #(rpc.ok(request.id, pubkey_hex(account)), None)
+    "ping" -> #(rpc.ok(request.id, "pong"), None)
     method -> {
       let wanted = permission.from_token(method)
       case wanted {
@@ -1044,8 +1085,8 @@ fn execute_in_session(
           nip44_op(account, granted, wanted, request, nip44.decrypt)
         _ ->
           case permission.is_unsupported(wanted) {
-            True -> rpc.error(request.id, "nip04 is not supported")
-            False -> rpc.error(request.id, unsupported_method)
+            True -> #(rpc.error(request.id, "nip04 is not supported"), None)
+            False -> #(rpc.error(request.id, unsupported_method), None)
           }
       }
     }
@@ -1111,50 +1152,36 @@ fn bounded_perms(perms: String) -> String {
   kept |> list.reverse |> string.join(",")
 }
 
-/// 権限が許されていないことを示すエラーの文言の接頭辞。
-const denial_prefix = "permission denied: "
-
-/// `wanted` が許されていないことを示すエラーの文言。権限の綴りは `permission.token` で作る。
-fn denial(wanted: Permission) -> String {
-  denial_prefix <> permission.token(wanted)
-}
-
-/// 権限の不足で拒否した実行のログ 1 行。それ以外の結果では `None`。
+/// 権限の不足で拒否したときのログ 1 行。拒否していない（`denied` が `None`
+/// の）実行では `None`。
 fn denial_notice(
-  execution: Execution,
+  denied: Option(Permission),
   signer: String,
   client: String,
 ) -> Option(String) {
-  let response = case execution {
-    Respond(response:) -> response
-    Record(response:, ..) -> response
-  }
-  case response.error {
-    Some(reason) ->
-      case string.starts_with(reason, denial_prefix) {
-        True -> {
-          let permission =
-            string.drop_start(reason, string.length(denial_prefix))
-          Some(
-            "permission denied for client "
-            <> client
-            <> " on signer "
-            <> signer
-            <> ": "
-            <> permission,
-          )
-        }
-        False -> None
-      }
-    None -> None
-  }
+  use wanted <- option.map(denied)
+  "permission denied for client "
+  <> client
+  <> " on signer "
+  <> signer
+  <> ": "
+  <> permission.token(wanted)
 }
 
-/// 実行の結果を、同じ id の成功応答か失敗応答にする。
-fn response_of(id: String, outcome: Result(String, String)) -> rpc.Response {
+/// 実行の結果を、同じ id の成功応答か失敗応答にし、権限の不足で拒否した
+/// 権限を応答と一緒に返す（それ以外では `None`）。`Denied` の応答の文言を
+/// 組むのはここだけである。
+fn response_of(
+  id: String,
+  outcome: Result(String, Refusal),
+) -> #(rpc.Response, Option(Permission)) {
   case outcome {
-    Ok(value) -> rpc.ok(id, value)
-    Error(reason) -> rpc.error(id, reason)
+    Ok(value) -> #(rpc.ok(id, value), None)
+    Error(Denied(wanted)) -> #(
+      rpc.error(id, "permission denied: " <> permission.token(wanted)),
+      Some(wanted),
+    )
+    Error(Failed(reason)) -> #(rpc.error(id, reason), None)
   }
 }
 
@@ -1162,34 +1189,34 @@ fn response_of(id: String, outcome: Result(String, String)) -> rpc.Response {
 /// `perms` を `permission.parse` で読んだもの）がドラフトの kind を許すとき
 /// （`permission.allows`。空なら常に）署名する。別の pubkey を指すドラフトと、NIP-46 の
 /// 応答と同じ kind（24133）のドラフトは、perms で宣言されていても拒否する。空の pubkey は
-/// 指定無しとして扱う。
+/// 指定無しとして扱う。戻り値は `response_of` の組（応答と拒否した権限）。
 fn sign_event(
   account: Account,
   granted: List(Permission),
   request: rpc.Request,
   now: Int,
-) -> rpc.Response {
+) -> #(rpc.Response, Option(Permission)) {
   response_of(request.id, {
     use draft_json <- result.try(case request.params {
       [draft_json, ..] -> Ok(draft_json)
-      [] -> Error("sign_event requires an event draft")
+      [] -> Error(Failed("sign_event requires an event draft"))
     })
     use draft <- result.try(
       rpc.decode_draft(draft_json)
-      |> result.replace_error("invalid event draft"),
+      |> result.replace_error(Failed("invalid event draft")),
     )
     let wanted = permission.SignKind(draft.kind)
     use <- bool.guard(
       !permission.allows(granted, wanted),
-      Error(denial(wanted)),
+      Error(Denied(wanted)),
     )
     use <- bool.guard(
       points_elsewhere(draft.pubkey, pubkey_hex(account)),
-      Error("event draft pubkey does not match the signer"),
+      Error(Failed("event draft pubkey does not match the signer")),
     )
     use <- bool.guard(
       draft.kind == event.nip46_kind,
-      Error("refusing to sign a kind 24133 event"),
+      Error(Failed("refusing to sign a kind 24133 event")),
     )
     sign_as(
       account,
@@ -1198,39 +1225,40 @@ fn sign_event(
       draft.content,
       option.unwrap(draft.created_at, now),
     )
-    |> result.replace_error("failed to sign event")
+    |> result.replace_error(Failed("failed to sign event"))
     |> result.map(fn(signed) { json.to_string(event.to_json(signed)) })
   })
 }
 
 /// 第三者宛のテキストに、アカウントの鍵で `operation`（`nip44.encrypt` か `nip44.decrypt`）
-/// をかける。`granted` が `wanted` を許さなければ拒否する。
+/// をかける。`granted` が `wanted` を許さなければ拒否する。戻り値は `response_of` の組
+/// （応答と拒否した権限）。
 fn nip44_op(
   account: Account,
   granted: List(Permission),
   wanted: Permission,
   request: rpc.Request,
   operation: fn(String, BitArray) -> Result(String, nip44.Nip44Error),
-) -> rpc.Response {
+) -> #(rpc.Response, Option(Permission)) {
   response_of(request.id, {
     use <- bool.guard(
       !permission.allows(granted, wanted),
-      Error(denial(wanted)),
+      Error(Denied(wanted)),
     )
     use #(third_party_hex, text) <- result.try(case request.params {
       [third_party_hex, text, ..] -> Ok(#(third_party_hex, text))
-      _ -> Error("nip44 requires [pubkey, text]")
+      _ -> Error(Failed("nip44 requires [pubkey, text]"))
     })
     use third_party <- result.try(
       hex.decode(third_party_hex)
-      |> result.replace_error("invalid third-party pubkey"),
+      |> result.replace_error(Failed("invalid third-party pubkey")),
     )
     use key <- result.try(
       nip44.conversation_key(privkey(account), third_party)
-      |> result.replace_error("invalid third-party pubkey"),
+      |> result.replace_error(Failed("invalid third-party pubkey")),
     )
     operation(text, key)
-    |> result.replace_error("nip44 operation failed")
+    |> result.replace_error(Failed("nip44 operation failed"))
   })
 }
 

@@ -18,30 +18,27 @@ pub fn new() -> Resume {
   Resume(points: dict.new())
 }
 
-/// そのリレーの再開点を `at` 以上に引き上げる。`observe` と `adding_account` が
-/// 共用する。
-fn raise(
-  points: Dict(String, Int),
-  relay_url: String,
-  at: Int,
-) -> Dict(String, Int) {
-  dict.upsert(points, relay_url, fn(current) {
-    case current {
-      Some(existing) -> int.max(existing, at)
-      None -> at
-    }
-  })
+/// 再開点を `created_at` まで前進させた値を返す。`now` より未来の
+/// `created_at` は `now` に切り詰め、`current` を下回る値には戻さない。
+pub fn advance(current: Option(Int), created_at: Int, now: Int) -> Int {
+  let at = int.min(created_at, now)
+  case current {
+    Some(existing) -> int.max(existing, at)
+    None -> at
+  }
 }
 
 /// リレー `relay_url` から `created_at` のイベントを時刻 `now` に受け取ったことを
-/// 記録する。`now` より未来の `created_at` は `now` に切り詰める。
+/// 記録する。再開点は `advance` の規則で前進する。
 pub fn observe(
   resume: Resume,
   relay_url: String,
   created_at: Int,
   now: Int,
 ) -> Resume {
-  Resume(points: raise(resume.points, relay_url, int.min(created_at, now)))
+  Resume(
+    points: dict.upsert(resume.points, relay_url, advance(_, created_at, now)),
+  )
 }
 
 /// 時刻 `at` にアカウントを追加することを、`relay_urls` の全リレーの再開点の
@@ -53,7 +50,7 @@ pub fn adding_account(
 ) -> Resume {
   Resume(
     points: list.fold(relay_urls, resume.points, fn(points, relay_url) {
-      raise(points, relay_url, at)
+      dict.upsert(points, relay_url, advance(_, at, at))
     }),
   )
 }

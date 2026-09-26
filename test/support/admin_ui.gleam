@@ -9,7 +9,7 @@ import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{None, Some}
 import gleam/string
 import lustre/element
 import lustre/element/html
@@ -23,7 +23,8 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
-import nostr_no_su/relay_list.{Roles}
+import nostr_no_su/relay_list
+import plugin_page_builder
 import support/account_actions
 
 /// ファイルの中身を読む。
@@ -61,6 +62,8 @@ pub fn pages(language: i18n.Language) -> List(String) {
       label: "label-a",
       uri: "bunker://0123?relay=x&secret=s",
       auth_uri: "bunker://0123?relay=x",
+      uri_camera_text: "0123?relay=x&secret=s",
+      auth_uri_camera_text: "0123?relay=x",
       picture: Some("https://example.invalid/avatar.png"),
     )
   let pending =
@@ -109,13 +112,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: skipped_hex,
-          npub: "npub1example",
+          npub: Some("npub1example"),
           label: "label-b",
           reason: vault.UndecryptablePrivateKey,
         ),
         dashboard.SkippedRow(
           pubkey: "not-a-pubkey",
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),
@@ -244,13 +247,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
       opened(dashboard.UnreadableDeleteOpen(skipped_hex, reason)),
       opened(dashboard.NewRelayOpen(
         "wss://relay-with-a-very-long-host-name-for-layout-checks.example/path/segment/that/keeps/going/without/breaking",
-        Roles(False, True),
+        Some(relay_list.BunkerOnly),
         reason,
       )),
       opened(dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       )),
       opened(dashboard.ConnectOpen(
@@ -375,6 +378,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
         ),
       ),
     ],
+    // 節の題とブロックの文字列は `allowed_words` の語か英字を含まない語で組む
     [
       plugin_pages.plugin_page(
         language,
@@ -382,7 +386,11 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_row_one_page,
         plugin_status_page,
         0,
-        [plugin_section("a", [plugin_text_block("example")])],
+        [
+          plugin_page_builder.section("a", [], [
+            plugin_page_builder.typed_text("text", "example"),
+          ]),
+        ],
       ),
       plugin_pages.plugin_page(
         language,
@@ -390,7 +398,11 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_row_two_pages,
         plugin_status_page,
         0,
-        [plugin_section("b", [plugin_text_block("label")])],
+        [
+          plugin_page_builder.section("b", [], [
+            plugin_page_builder.typed_text("text", "label"),
+          ]),
+        ],
       ),
       plugin_pages.plugin_page(
         language,
@@ -407,7 +419,9 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         0,
         [
-          plugin_section("c", [plugin_text_block("plugin")]),
+          plugin_page_builder.section("c", [], [
+            plugin_page_builder.typed_text("text", "plugin"),
+          ]),
           plugin_missing_title_section(),
         ],
       ),
@@ -417,17 +431,9 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_row_disabled,
         plugin_status_page,
         0,
-        [plugin_section("d", [plugin_text_block("a")])],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
         [
-          plugin_section("a", [
-            plugin_form_block("example", "label", "plugin", "b"),
+          plugin_page_builder.section("d", [], [
+            plugin_page_builder.typed_text("text", "a"),
           ]),
         ],
       ),
@@ -438,10 +444,52 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         0,
         [
-          plugin_section("a", [
-            plugin_details_block("example", "label"),
-            plugin_pairs_block([
-              #("plugin", plugin_id_inline("01234567890123456789")),
+          plugin_page_builder.section("a", [], [
+            // `textarea` の欄の初期値は要素の内容（テキストノード）なので
+            // `allowed_words` の語だけを使う。`text` の欄の初期値は属性なので制約を受けない
+            plugin_page_builder.form_block(
+              [
+                plugin_page_builder.checkbox_field(
+                  name: "example",
+                  label: "label",
+                  hint: Some("plugin"),
+                  checked: False,
+                ),
+                plugin_page_builder.input_field(
+                  kind: "text",
+                  name: "a",
+                  label: "b",
+                  hint: "c",
+                  value: "d",
+                ),
+                plugin_page_builder.input_field(
+                  kind: "textarea",
+                  name: "b",
+                  label: "c",
+                  hint: "d",
+                  value: "a",
+                ),
+              ],
+              "b",
+            ),
+          ]),
+        ],
+      ),
+      plugin_pages.plugin_page(
+        language,
+        view.System,
+        plugin_row_one_page,
+        plugin_status_page,
+        0,
+        [
+          plugin_page_builder.section("a", [], [
+            plugin_page_builder.details_block("example", "label"),
+            plugin_page_builder.pairs_block([
+              // `id` の値は数字だけにする（`allowed_words` は識別子の英字を許さない）
+              #(
+                "plugin",
+                plugin_page_builder.typed_text("id", "01234567890123456789"),
+              ),
             ]),
           ]),
         ],
@@ -453,15 +501,25 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         0,
         [
-          plugin_section("a", [
-            plugin_image_block("http://example.com/a.png", "example", None),
-            plugin_image_block("data:image/png;base64,AAA", "label", None),
-            plugin_image_block(
+          plugin_page_builder.section("a", [], [
+            // `image` の `alt` は節の言語を引き継ぐテキストにも出るので
+            // `allowed_words` の語で組む
+            plugin_page_builder.image_block(
+              "http://example.com/a.png",
+              "example",
+              None,
+            ),
+            plugin_page_builder.image_block(
+              "data:image/png;base64,AAA",
+              "label",
+              None,
+            ),
+            plugin_page_builder.image_block(
               "http://example.com/a.png",
               "example",
               Some("icon"),
             ),
-            plugin_image_block(
+            plugin_page_builder.image_block(
               "http://example.com/b.png",
               "example",
               Some("banner"),
@@ -476,10 +534,18 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_status_page,
         0,
         [
-          plugin_section_with_meta(
+          // 見出しの補足のクラスと、訳した kind の名前と相対時刻をページに載せる節
+          plugin_page_builder.section(
             "a",
-            [plugin_kind_inline(1), plugin_time_inline(0)],
-            [plugin_pairs_block([#("plugin", plugin_time_inline(0))])],
+            [
+              plugin_page_builder.kind_inline(1),
+              plugin_page_builder.time_inline(0),
+            ],
+            [
+              plugin_page_builder.pairs_block([
+                #("plugin", plugin_page_builder.time_inline(0)),
+              ]),
+            ],
           ),
         ],
       ),
@@ -489,7 +555,11 @@ pub fn pages(language: i18n.Language) -> List(String) {
         plugin_row_localized(),
         plugin_localized_status_page(),
         0,
-        [plugin_section("キュー", [plugin_text_block("処理済み")])],
+        [
+          plugin_page_builder.section("キュー", [], [
+            plugin_page_builder.typed_text("text", "処理済み"),
+          ]),
+        ],
       ),
     ],
   ])
@@ -544,157 +614,11 @@ fn plugin_localized_status_page() -> plugin.PluginPage {
   )
 }
 
-/// 節の記述。タイトルとブロックの文字列は `allowed_words` にある語か、英字を含まない
-/// 語で組む（`japanese_pages_test` を通すため）。
-fn plugin_section(title: String, blocks: List(Dynamic)) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
-  ])
-}
-
-/// `meta` を持つ節の記述。見出しの補足のクラスを `stylesheet_test` に、訳した kind の名前と相対時刻を `japanese_pages_test` に載せる。
-fn plugin_section_with_meta(
-  title: String,
-  meta: List(Dynamic),
-  blocks: List(Dynamic),
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("meta"), dynamic.list(meta)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
-  ])
-}
-
-/// インライン（`kind`）。
-fn plugin_kind_inline(kind: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("kind")),
-    #(dynamic.string("value"), dynamic.int(kind)),
-  ])
-}
-
-/// インライン（`time`）。
-fn plugin_time_inline(at: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("time")),
-    #(dynamic.string("value"), dynamic.int(at)),
-  ])
-}
-
-/// ブロック（`text`）。
-fn plugin_text_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
 /// `title` を持たない、変換に失敗する節の記述。
 fn plugin_missing_title_section() -> Dynamic {
   dynamic.properties([
     #(dynamic.string("type"), dynamic.string("section")),
     #(dynamic.string("blocks"), dynamic.list([])),
-  ])
-}
-
-/// ブロック（`details`）。`summary`・`text` は `allowed_words` にある語だけを
-/// 使う。
-fn plugin_details_block(summary: String, text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("details")),
-    #(dynamic.string("summary"), dynamic.string(summary)),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// ブロック（`image`）。`variant` が `Some` なら見た目の種類のキーを足す。`alt` は `<img>` の
-/// 属性値か、節の包みの `lang` を引き継ぐテキストに出る。後者は他のプラグイン由来の文字列と
-/// 同じく `allowed_words` の語で組む。
-fn plugin_image_block(
-  url: String,
-  alt: String,
-  variant: Option(String),
-) -> Dynamic {
-  dynamic.properties(
-    [
-      #(dynamic.string("type"), dynamic.string("image")),
-      #(dynamic.string("url"), dynamic.string(url)),
-      #(dynamic.string("alt"), dynamic.string(alt)),
-    ]
-    |> list.append(case variant {
-      Some(value) -> [#(dynamic.string("variant"), dynamic.string(value))]
-      None -> []
-    }),
-  )
-}
-
-/// ブロック（`pairs`）。`items` は `#(term, value)` の並び。
-fn plugin_pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("pairs")),
-    #(
-      dynamic.string("items"),
-      dynamic.list(
-        list.map(items, fn(item) {
-          dynamic.properties([
-            #(dynamic.string("term"), dynamic.string(item.0)),
-            #(dynamic.string("value"), item.1),
-          ])
-        }),
-      ),
-    ),
-  ])
-}
-
-/// インライン（`id`）。値は数字だけにする（`japanese_pages_test` の
-/// `allowed_words` は識別子の英字を許さないため）。
-fn plugin_id_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("id")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// ブロック（`form`）。チェック 1 件、`text` の欄 1 件、`textarea` の欄 1 件と送信の
-/// ボタンを持つ。`textarea` の初期値は要素の内容＝テキストノードなので `allowed_words`
-/// の語だけを使う。`text` の初期値は属性なので制約を受けない。
-fn plugin_form_block(
-  name: String,
-  label: String,
-  hint: String,
-  submit: String,
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("form")),
-    #(
-      dynamic.string("fields"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("checkbox")),
-          #(dynamic.string("name"), dynamic.string(name)),
-          #(dynamic.string("label"), dynamic.string(label)),
-          #(dynamic.string("hint"), dynamic.string(hint)),
-        ]),
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("text")),
-          #(dynamic.string("name"), dynamic.string("a")),
-          #(dynamic.string("label"), dynamic.string("b")),
-          #(dynamic.string("hint"), dynamic.string("c")),
-          #(dynamic.string("value"), dynamic.string("d")),
-        ]),
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("textarea")),
-          #(dynamic.string("name"), dynamic.string("b")),
-          #(dynamic.string("label"), dynamic.string("c")),
-          #(dynamic.string("hint"), dynamic.string("d")),
-          #(dynamic.string("value"), dynamic.string("a")),
-        ]),
-      ]),
-    ),
-    #(dynamic.string("submit"), dynamic.string(submit)),
   ])
 }
 

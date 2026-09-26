@@ -24,6 +24,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
@@ -33,6 +34,7 @@ import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
 import nostr_no_su/time
+import plugin_page_builder
 
 /// 使い捨ての管理パスワード。
 const password = "preview-password"
@@ -75,21 +77,37 @@ const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222
 /// 写すために使う。
 const unknown_signer = "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
 
-/// 接続 URI の relay= の部分。
-const relay = "relay=ws%3A%2F%2F127.0.0.1%3A7801"
+/// 管理 UI が DB に届かない失敗として出す理由の文。
+const database_unreachable_reason = "database is unreachable or rejected the connection"
 
-/// 固定の行。secret はダミーの値。
+/// 接続 URI に載せるバンカーのリレー。
+const bunker_relay_url = "ws://127.0.0.1:7801"
+
+/// 接続 URI に載せるダミーの secret。
+const dummy_secret = "0123456789abcdef0123456789abcdef"
+
+/// 固定の行。
 fn row(signer: String, npub: String, label: String) -> dashboard.AccountRow {
   dashboard.AccountRow(
     signer:,
     npub:,
     label:,
-    uri: "bunker://"
-      <> signer
-      <> "?"
-      <> relay
-      <> "&secret=0123456789abcdef0123456789abcdef",
-    auth_uri: "bunker://" <> signer <> "?" <> relay,
+    uri: connection_uri.bunker_uri(
+      signer,
+      [bunker_relay_url],
+      Some(dummy_secret),
+    ),
+    auth_uri: connection_uri.bunker_uri(signer, [bunker_relay_url], None),
+    uri_camera_text: connection_uri.camera_copy_text(
+      signer,
+      [bunker_relay_url],
+      Some(dummy_secret),
+    ),
+    auth_uri_camera_text: connection_uri.camera_copy_text(
+      signer,
+      [bunker_relay_url],
+      None,
+    ),
     picture: None,
   )
 }
@@ -121,10 +139,7 @@ fn updating_perms(
   updated_client: String,
 ) -> Result(Nil, bunker.SessionFailure) {
   case updated_client == earlier_client {
-    True ->
-      Error(bunker.SessionNotApplied(
-        "database is unreachable or rejected the connection",
-      ))
+    True -> Error(bunker.SessionNotApplied(database_unreachable_reason))
     False -> Ok(Nil)
   }
 }
@@ -137,9 +152,7 @@ fn adding_relay(
   case url {
     "wss://duplicate.example" -> Error(admin.DuplicateRelay)
     "wss://not-saved.example" ->
-      Error(admin.RelayNotSaved(
-        "database is unreachable or rejected the connection",
-      ))
+      Error(admin.RelayNotSaved(database_unreachable_reason))
     "wss://maybe.example" -> Error(admin.RelayMaybeSaved)
     "wss://unconfirmed.example" -> Error(admin.ConnectionsNotConfirmed)
     _ -> Ok(Nil)
@@ -149,13 +162,9 @@ fn adding_relay(
 /// `relays` と同じ id と URL の DB の行。用途の編集と削除の撮影に使う。
 fn db_relays() -> List(relay_store.Relay) {
   [
-    relay_store.Relay(1, "wss://relay.example", relay_list.Roles(True, True)),
-    relay_store.Relay(
-      2,
-      "ws://evil/\"><b>xss</b>",
-      relay_list.Roles(True, False),
-    ),
-    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.Roles(False, True)),
+    relay_store.Relay(1, "wss://relay.example", relay_list.Both),
+    relay_store.Relay(2, "ws://evil/\"><b>xss</b>", relay_list.MonitorOnly),
+    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.BunkerOnly),
   ]
 }
 
@@ -165,10 +174,7 @@ fn changing_relay(
   relay: relay_store.Relay,
 ) -> Result(Nil, admin.RelayChangeFailure) {
   case relay.id {
-    2 ->
-      Error(admin.RelayNotSaved(
-        "database is unreachable or rejected the connection",
-      ))
+    2 -> Error(admin.RelayNotSaved(database_unreachable_reason))
     3 -> Error(admin.ConnectionsNotConfirmed)
     _ -> Ok(Nil)
   }
@@ -186,129 +192,50 @@ fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
 
 /// `console_logger` の `status` ページの記述。`pairs` の節、`table` と `details` と `id`
 /// インラインの `pairs` を持つ節、`image` のブロックを 4 件（`https:` の URL、scheme が
-/// `http` / `https` でない URL、`variant` が `icon` と `banner` の `https:` の URL）持つ節に加え、変換に失敗する節を 1 つ持つ（失敗した節だけを
-/// 囲みに差し替えて出す画面を撮るため）。
+/// `http` / `https` でない URL、`variant` が `icon` と `banner` の `https:` の URL）持つ節に
+/// 加え、変換に失敗する節を 1 つ持つ（失敗した節だけを囲みに差し替えて出す画面を撮るため）。
 fn console_logger_status_description() -> Dynamic {
-  let text_inline = fn(text: String) {
-    dynamic.properties([
-      #(dynamic.string("type"), dynamic.string("text")),
-      #(dynamic.string("text"), dynamic.string(text)),
-    ])
-  }
-  let id_inline = fn(text: String) {
-    dynamic.properties([
-      #(dynamic.string("type"), dynamic.string("id")),
-      #(dynamic.string("text"), dynamic.string(text)),
-    ])
-  }
-  let image_block = fn(url: String, alt: String, variant: Option(String)) {
-    dynamic.properties(
-      [
-        #(dynamic.string("type"), dynamic.string("image")),
-        #(dynamic.string("url"), dynamic.string(url)),
-        #(dynamic.string("alt"), dynamic.string(alt)),
-      ]
-      |> list.append(case variant {
-        Some(value) -> [#(dynamic.string("variant"), dynamic.string(value))]
-        None -> []
-      }),
-    )
-  }
-  dynamic.properties([
-    #(
-      dynamic.string("sections"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Queue")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("pairs")),
-                #(
-                  dynamic.string("items"),
-                  dynamic.list([
-                    dynamic.properties([
-                      #(dynamic.string("term"), dynamic.string("processed")),
-                      #(dynamic.string("value"), text_inline("42")),
-                    ]),
-                  ]),
-                ),
-              ]),
-            ]),
-          ),
-        ]),
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Recent events")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("table")),
-                #(
-                  dynamic.string("headers"),
-                  dynamic.list([dynamic.string("kind"), dynamic.string("id")]),
-                ),
-                #(
-                  dynamic.string("rows"),
-                  dynamic.list([
-                    dynamic.list([text_inline("1"), text_inline("abcd1234")]),
-                  ]),
-                ),
-              ]),
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("details")),
-                #(dynamic.string("summary"), dynamic.string("tags (1)")),
-                #(
-                  dynamic.string("text"),
-                  dynamic.string("[[\"e\",\"abcd1234\"]]"),
-                ),
-              ]),
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("pairs")),
-                #(
-                  dynamic.string("items"),
-                  dynamic.list([
-                    dynamic.properties([
-                      #(dynamic.string("term"), dynamic.string("id")),
-                      #(dynamic.string("value"), id_inline("abcd1234")),
-                    ]),
-                  ]),
-                ),
-              ]),
-            ]),
-          ),
-        ]),
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Picture")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              image_block(
-                "https://example.invalid/picture.png",
-                "A picture that fails to load.",
-                None,
-              ),
-              image_block("data:image/png;base64,AAA", "A picture.", None),
-              image_block(
-                "https://example.invalid/icon.png",
-                "An icon that fails to load.",
-                Some("icon"),
-              ),
-              image_block(
-                "https://example.invalid/banner.png",
-                "A banner that fails to load.",
-                Some("banner"),
-              ),
-            ]),
-          ),
-        ]),
-        dynamic.properties([#(dynamic.string("type"), dynamic.string("nope"))]),
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Queue", [], [
+      plugin_page_builder.pairs_block([
+        #("processed", plugin_page_builder.typed_text("text", "42")),
       ]),
-    ),
+    ]),
+    plugin_page_builder.section("Recent events", [], [
+      plugin_page_builder.table_block(["kind", "id"], [
+        [
+          plugin_page_builder.typed_text("text", "1"),
+          plugin_page_builder.typed_text("text", "abcd1234"),
+        ],
+      ]),
+      plugin_page_builder.details_block("tags (1)", "[[\"e\",\"abcd1234\"]]"),
+      plugin_page_builder.pairs_block([
+        #("id", plugin_page_builder.typed_text("id", "abcd1234")),
+      ]),
+    ]),
+    plugin_page_builder.section("Picture", [], [
+      plugin_page_builder.image_block(
+        "https://example.invalid/picture.png",
+        "A picture that fails to load.",
+        None,
+      ),
+      plugin_page_builder.image_block(
+        "data:image/png;base64,AAA",
+        "A picture.",
+        None,
+      ),
+      plugin_page_builder.image_block(
+        "https://example.invalid/icon.png",
+        "An icon that fails to load.",
+        Some("icon"),
+      ),
+      plugin_page_builder.image_block(
+        "https://example.invalid/banner.png",
+        "A banner that fails to load.",
+        Some("banner"),
+      ),
+    ]),
+    dynamic.properties([#(dynamic.string("type"), dynamic.string("nope"))]),
   ])
 }
 
@@ -316,79 +243,52 @@ fn console_logger_status_description() -> Dynamic {
 /// 1 行の文字列の欄、複数行の文字列の欄、送信のボタン）にし、フォームの描画と送信の
 /// 経路を撮る。
 fn console_logger_settings_description() -> Dynamic {
-  let checkbox_field = fn(name: String, label: String, checked: Bool) {
-    dynamic.properties([
-      #(dynamic.string("type"), dynamic.string("checkbox")),
-      #(dynamic.string("name"), dynamic.string(name)),
-      #(dynamic.string("label"), dynamic.string(label)),
-      #(dynamic.string("checked"), dynamic.bool(checked)),
-    ])
-  }
-  dynamic.properties([
-    #(
-      dynamic.string("sections"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Monitored accounts")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("form")),
-                #(
-                  dynamic.string("fields"),
-                  dynamic.list([
-                    checkbox_field("main", "main account", True),
-                    checkbox_field("bot", "<b>bot</b> 🙂", False),
-                    text_field(
-                      name: "label",
-                      label: "Label",
-                      hint: "Shown in the dashboard.",
-                      value: "console logger",
-                    ),
-                    textarea_field(
-                      name: "note",
-                      label: "Note",
-                      hint: "Free-form note, kept as-is.",
-                      value: "line one\nline two",
-                    ),
-                  ]),
-                ),
-                #(dynamic.string("submit"), dynamic.string("Save")),
-              ]),
-            ]),
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Monitored accounts", [], [
+      plugin_page_builder.form_block(
+        [
+          plugin_page_builder.checkbox_field(
+            name: "main",
+            label: "main account",
+            hint: None,
+            checked: True,
           ),
-        ]),
-      ]),
-    ),
+          plugin_page_builder.checkbox_field(
+            name: "bot",
+            label: "<b>bot</b> 🙂",
+            hint: None,
+            checked: False,
+          ),
+          plugin_page_builder.input_field(
+            kind: "text",
+            name: "label",
+            label: "Label",
+            hint: "Shown in the dashboard.",
+            value: "console logger",
+          ),
+          plugin_page_builder.input_field(
+            kind: "textarea",
+            name: "note",
+            label: "Note",
+            hint: "Free-form note, kept as-is.",
+            value: "line one\nline two",
+          ),
+        ],
+        "Save",
+      ),
+    ]),
   ])
 }
 
 /// `broken` の `status` ページの記述。`Disabled` の注意の囲みと並べて撮る。
 fn broken_status_description() -> Dynamic {
-  dynamic.properties([
-    #(
-      dynamic.string("sections"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Status")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("text")),
-                #(
-                  dynamic.string("text"),
-                  dynamic.string("last known state before it was disabled"),
-                ),
-              ]),
-            ]),
-          ),
-        ]),
-      ]),
-    ),
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Status", [], [
+      plugin_page_builder.typed_text(
+        "text",
+        "last known state before it was disabled",
+      ),
+    ]),
   ])
 }
 
@@ -411,25 +311,31 @@ fn event_logger_timeline_description() -> Dynamic {
   ) {
     let body = case content {
       "" -> []
-      _ -> [text_block(content)]
+      _ -> [plugin_page_builder.typed_text("text", content)]
     }
-    section_with_meta(
+    plugin_page_builder.section(
       "",
-      [kind_inline(kind), time_inline(at)],
+      [
+        plugin_page_builder.kind_inline(kind),
+        plugin_page_builder.time_inline(at),
+      ],
       list.flatten([
         [
-          pairs_block([
-            #("account", text_inline("main account")),
-            #("npub", id_inline(signer_npub)),
-            #("id", id_inline(id)),
+          plugin_page_builder.pairs_block([
+            #("account", plugin_page_builder.typed_text("text", "main account")),
+            #("npub", plugin_page_builder.typed_text("id", signer_npub)),
+            #("id", plugin_page_builder.typed_text("id", id)),
           ]),
         ],
         body,
-        [details_block("tags (1)", tags), details_block("signature", sig)],
+        [
+          plugin_page_builder.details_block("tags (1)", tags),
+          plugin_page_builder.details_block("signature", sig),
+        ],
       ]),
     )
   }
-  page_sections([
+  plugin_page_builder.page_sections([
     event(
       1,
       now - 3 * 60,
@@ -457,51 +363,62 @@ fn event_logger_settings_description(
   accounts: List(plugin_config.PageAccount),
 ) -> Dynamic {
   let checkbox = fn(account: plugin_config.PageAccount, index: Int) {
-    checkbox_field(
+    plugin_page_builder.checkbox_field(
       name: account.pubkey,
       label: account.label,
-      hint: account.npub,
+      hint: Some(account.npub),
       checked: index == 0,
     )
   }
   let running_row = fn(label: String, registered_name: String) {
     [
-      text_inline(label),
-      code_inline(registered_name),
-      badge_inline("running", "success"),
-      text_inline("0"),
+      plugin_page_builder.typed_text("text", label),
+      plugin_page_builder.typed_text("code", registered_name),
+      plugin_page_builder.badge_inline("running", "success"),
+      plugin_page_builder.typed_text("text", "0"),
     ]
   }
-  page_sections([
-    section("Monitored accounts", [
-      text_block("Events are stored only for the accounts checked here."),
-      note_block(
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Monitored accounts", [], [
+      plugin_page_builder.typed_text(
+        "text",
+        "Events are stored only for the accounts checked here.",
+      ),
+      plugin_page_builder.typed_text(
+        "note",
         "All accounts checked means every account, including ones you register later.",
       ),
-      form_block(list.index_map(accounts, checkbox), "Save"),
+      plugin_page_builder.form_block(list.index_map(accounts, checkbox), "Save"),
     ]),
-    section("Configuration", [
-      pairs_block([
+    plugin_page_builder.section("Configuration", [], [
+      plugin_page_builder.pairs_block([
         #(
           "database URL",
-          code_inline("postgres://nostr@postgres:5432/nostr_no_su"),
+          plugin_page_builder.typed_text(
+            "code",
+            "postgres://nostr@postgres:5432/nostr_no_su",
+          ),
         ),
-        #("pool size", text_inline("2")),
-        #("max queue length", text_inline("1000")),
+        #("pool size", plugin_page_builder.typed_text("text", "2")),
+        #("max queue length", plugin_page_builder.typed_text("text", "1000")),
       ]),
-      note_block(
+      plugin_page_builder.typed_text(
+        "note",
         "This plugin strips the password before showing the URL above. "
-        <> "The database is the host's DATABASE_URL unless "
-        <> "PLUGIN_EVENT_LOGGER_DATABASE_URL is set, and cannot be changed "
-        <> "from this page. Only the accounts to store events for are "
-        <> "chosen above.",
+          <> "The database is the host's DATABASE_URL unless "
+          <> "PLUGIN_EVENT_LOGGER_DATABASE_URL is set, and cannot be changed "
+          <> "from this page. Only the accounts to store events for are "
+          <> "chosen above.",
       ),
     ]),
-    section("Runtime", [
-      table_block(["Process", "Registered name", "Status", "Pending messages"], [
-        running_row("connection pool", "event_logger_pool"),
-        running_row("store actor", "event_logger_store"),
-      ]),
+    plugin_page_builder.section("Runtime", [], [
+      plugin_page_builder.table_block(
+        ["Process", "Registered name", "Status", "Pending messages"],
+        [
+          running_row("connection pool", "event_logger_pool"),
+          running_row("store actor", "event_logger_store"),
+        ],
+      ),
     ]),
   ])
 }
@@ -518,22 +435,26 @@ fn profile_description(
   accounts: List(plugin_config.PageAccount),
 ) -> Dynamic {
   let text = fn(english, japanese) { bilingual(language, english:, japanese:) }
-  page_sections(
+  plugin_page_builder.page_sections(
     list.map(accounts, fn(account) {
       let field = fn(key, english, japanese, value) {
         let name = account.pubkey <> "-" <> key
         let label = text(english, japanese)
-        case key {
-          "about" -> textarea_field(name:, label:, hint: key, value:)
-          _ -> text_field(name:, label:, hint: key, value:)
+        let kind = case key {
+          "about" -> "textarea"
+          _ -> "text"
         }
+        plugin_page_builder.input_field(kind:, name:, label:, hint: key, value:)
       }
-      section(account.label, [
-        pairs_block([
-          #("npub", id_inline(account.npub)),
-          #(text("updated", "更新日時"), code_inline("2026-09-20T09:00:00Z")),
+      plugin_page_builder.section(account.label, [], [
+        plugin_page_builder.pairs_block([
+          #("npub", plugin_page_builder.typed_text("id", account.npub)),
+          #(
+            text("updated", "更新日時"),
+            plugin_page_builder.typed_text("code", "2026-09-20T09:00:00Z"),
+          ),
         ]),
-        form_block(
+        plugin_page_builder.form_block(
           [
             field("name", "Name", "名前", "alice"),
             field("display_name", "Display name", "表示名", account.label),
@@ -568,196 +489,6 @@ fn bilingual(
   }
 }
 
-/// 記述の最上位。`#{"sections" => [節, ...]}`。
-fn page_sections(sections: List(Dynamic)) -> Dynamic {
-  dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
-}
-
-/// 節（`type` = `"section"`）。
-fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
-  ])
-}
-
-/// 見出しの題の後ろに `meta`（インラインのリスト）を並べる節。
-fn section_with_meta(
-  title: String,
-  meta: List(Dynamic),
-  blocks: List(Dynamic),
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("meta"), dynamic.list(meta)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
-  ])
-}
-
-/// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` の
-/// インラインの対。
-fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("pairs")),
-    #(
-      dynamic.string("items"),
-      dynamic.list(
-        list.map(items, fn(item) {
-          dynamic.properties([
-            #(dynamic.string("term"), dynamic.string(item.0)),
-            #(dynamic.string("value"), item.1),
-          ])
-        }),
-      ),
-    ),
-  ])
-}
-
-/// `table` ブロック。`rows` の各セルはすでに組み立てたインライン。
-fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("table")),
-    #(
-      dynamic.string("headers"),
-      dynamic.list(list.map(headers, dynamic.string)),
-    ),
-    #(dynamic.string("rows"), dynamic.list(list.map(rows, dynamic.list))),
-  ])
-}
-
-/// `details` ブロック。`text` は開いたときに出す整形済みのテキスト。
-fn details_block(summary: String, text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("details")),
-    #(dynamic.string("summary"), dynamic.string(summary)),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `text` ブロック。
-fn text_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `note` ブロック。
-fn note_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("note")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `form` ブロック。`fields` は `checkbox_field/4`、`text_field/4`、`textarea_field/4` で組んだ欄の記述、`submit` は送信ボタンの文字列。
-fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("form")),
-    #(dynamic.string("fields"), dynamic.list(fields)),
-    #(dynamic.string("submit"), dynamic.string(submit)),
-  ])
-}
-
-/// `checkbox` の欄。`name` が送信名、`hint` が欄の下の説明。
-fn checkbox_field(
-  name name: String,
-  label label: String,
-  hint hint: String,
-  checked checked: Bool,
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("checkbox")),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("checked"), dynamic.bool(checked)),
-  ])
-}
-
-/// `text` の欄。`name` が送信名、`hint` が欄の下の説明、`value` が初期値。
-fn text_field(
-  name name: String,
-  label label: String,
-  hint hint: String,
-  value value: String,
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("value"), dynamic.string(value)),
-  ])
-}
-
-/// `textarea` の欄。キーの意味は `text_field` と同じ。
-fn textarea_field(
-  name name: String,
-  label label: String,
-  hint hint: String,
-  value value: String,
-) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("textarea")),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("value"), dynamic.string(value)),
-  ])
-}
-
-/// `text` インライン。
-fn text_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("text")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `code` インライン。
-fn code_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("code")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `badge` インライン。`table` のセルと節の `meta` で使える。
-fn badge_inline(text: String, tone: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("badge")),
-    #(dynamic.string("text"), dynamic.string(text)),
-    #(dynamic.string("tone"), dynamic.string(tone)),
-  ])
-}
-
-/// `id` インライン。`pairs` の値だけで使える。
-fn id_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("id")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
-}
-
-/// `kind` インライン。本体が kind の名前（無ければ番号）で出す。
-fn kind_inline(kind: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("kind")),
-    #(dynamic.string("value"), dynamic.int(kind)),
-  ])
-}
-
-/// `time` インライン。本体が相対時刻で出し、UTC の時刻を `title` に持たせる。
-fn time_inline(seconds: Int) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("time")),
-    #(dynamic.string("value"), dynamic.int(seconds)),
-  ])
-}
-
 /// プラグインのページの中身。`slow` は無応答を模して常に理由を返す。登録アカウントの一覧は `event_logger` の `settings` の記述のチェックボックスと、`profile` の記述のアカウントごとの節に使う。`language` は `profile` の記述の文言に使う。
 fn plugin_page_content(
   name: String,
@@ -784,19 +515,18 @@ fn plugin_page_content(
 fn plugin_page_action(
   name: String,
   key: String,
-) -> Option(
-  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
-) {
+) -> Option(plugin_config.PageAction) {
   case name, key {
-    "console_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
-    "event_logger", "settings" -> Some(fn(_values, _accounts) { Ok(Nil) })
-    "profile", "profile" -> Some(fn(_values, _accounts) { Ok(Nil) })
+    "console_logger", "settings"
+    | "event_logger", "settings"
+    | "profile", "profile"
+    -> Some(fn(_values, _accounts) { Ok(Nil) })
     _, _ -> None
   }
 }
 
-/// プラグインのページと実行の呼び出しに渡す、固定の登録アカウントの一覧。
+/// プラグインのページと実行の呼び出しに渡す、固定の登録アカウントの一覧。README の
+/// 状態は先頭の 1 件だけを渡す。
 fn page_accounts() -> Result(List(plugin_config.PageAccount), String) {
   Ok([
     plugin_config.PageAccount(
@@ -833,13 +563,13 @@ fn context() -> admin.Context {
       Ok([
         dashboard.SkippedRow(
           pubkey: unreadable_pubkey,
-          npub: unreadable_npub,
+          npub: Some(unreadable_npub),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
         dashboard.SkippedRow(
           pubkey: malformed_pubkey,
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),
@@ -1006,7 +736,7 @@ fn base_port() -> Int {
 pub fn main() -> Nil {
   let port = base_port()
   let unavailable_reason =
-    "account store unavailable: database is unreachable or rejected the connection"
+    "account store unavailable: " <> database_unreachable_reason
   let unavailable =
     admin.Context(
       ..context(),
@@ -1064,15 +794,7 @@ pub fn main() -> Nil {
         ]
       },
       not_loaded_plugins: [],
-      page_accounts: fn() {
-        Ok([
-          plugin_config.PageAccount(
-            pubkey: signer,
-            npub: signer_npub,
-            label: "main account",
-          ),
-        ])
-      },
+      page_accounts: fn() { page_accounts() |> result.map(list.take(_, 1)) },
     )
   let partly_set_up =
     admin.Context(..empty, relays: fn(_deadline) {

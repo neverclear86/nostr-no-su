@@ -13,6 +13,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import nostr_no_su/app
+import nostr_no_su/config
 import nostr_no_su/log
 import nostr_no_su/time
 import pog
@@ -247,7 +248,7 @@ pub fn redacts_the_database_password_in_a_pgo_crash_report_test() {
 /// `pool` と `admin` だけが変わるテスト用の Spec。他の欄は
 /// `redactable_secrets` が読まないが、仕様の形を本番と同じに保つため既存の
 /// fixture で埋める。
-fn spec(pool: pog.Config, admin: Option(app.Admin)) -> app.Spec {
+fn spec(pool: pog.Config, admin: Option(config.AdminListen)) -> app.Spec {
   app.Spec(
     plugins: [],
     not_loaded_plugins: [],
@@ -256,7 +257,6 @@ fn spec(pool: pog.Config, admin: Option(app.Admin)) -> app.Spec {
       ..app_tree.bunker_spec(
         process.new_name("log_redaction_bunker"),
         app_tree.store_with_load(fn() { Ok(app_tree.accounts_only([])) }),
-        [],
         app_tree.fixed_retry_delay,
       ),
       pool: pool,
@@ -282,7 +282,11 @@ pub fn redactable_secrets_collects_the_database_and_admin_passwords_test() {
   let spec =
     spec(
       pool_with_password(Some("db-secret")),
-      Some(app.Admin(bind: "127.0.0.1", port: 8080, password: "admin-secret")),
+      Some(config.AdminListen(
+        bind: "127.0.0.1",
+        port: 8080,
+        password: "admin-secret",
+      )),
     )
   assert app.redactable_secrets(spec) == ["db-secret", "admin-secret"]
 }

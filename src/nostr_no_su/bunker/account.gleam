@@ -2,10 +2,8 @@
 //// （鍵ペア）の鍵素材。
 
 import gleam/bit_array
-import gleam/list
-import gleam/option.{type Option, None, Some}
-import gleam/string
-import gleam/uri
+import gleam/bool
+import gleam/result
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/nip19
@@ -23,21 +21,29 @@ pub opaque type Account {
   Account(privkey: Secret(BitArray), pubkey: BitArray, pubkey_hex: String)
 }
 
-/// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
-pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
-  case bit_array.byte_size(privkey) {
-    size if size == privkey_bytes ->
-      case secp256k1.xonly_pubkey(privkey) {
-        Ok(pubkey) ->
-          Ok(Account(
-            privkey: secret.new(privkey),
-            pubkey: pubkey,
-            pubkey_hex: hex.encode(pubkey),
-          ))
-        Error(_) -> Error("private key not in valid range")
-      }
-    _ -> Error("private key must be 32 bytes")
-  }
+/// `from_privkey` が秘密鍵を拒否した理由。値は鍵を含まない。
+pub type PrivateKeyError {
+  /// 32 バイトではない。
+  WrongLength
+  /// スカラーが 1 以上で位数 n 未満の範囲にない。
+  OutOfRange
+}
+
+/// 32 バイトの秘密鍵からアカウントを構築する。長さが違えば `WrongLength`、範囲外の
+/// スカラーなら `OutOfRange` で拒否する。
+pub fn from_privkey(privkey: BitArray) -> Result(Account, PrivateKeyError) {
+  use <- bool.guard(
+    bit_array.byte_size(privkey) != privkey_bytes,
+    Error(WrongLength),
+  )
+  use pubkey <- result.map(
+    secp256k1.xonly_pubkey(privkey) |> result.replace_error(OutOfRange),
+  )
+  Account(
+    privkey: secret.new(privkey),
+    pubkey: pubkey,
+    pubkey_hex: hex.encode(pubkey),
+  )
 }
 
 /// 乱数から秘密鍵を作り、アカウントを構築する。範囲外のスカラーを引いたら引き直す。
@@ -81,54 +87,4 @@ pub fn nsec(account: Account) -> String {
   let assert Ok(text) = nip19.encode(secret.reveal(account.privkey), nip19.Nsec)
     as "an Account always holds a 32-byte private key"
   text
-}
-
-/// 署名者 `signer`（x-only 公開鍵の小文字 16 進）へ接続するためにクライアントへ
-/// 貼り付ける `bunker://` URI。URI に入るのは公開鍵だけなので、秘密鍵を持つ
-/// `Account` を受け取らない。NIP-46 は複数の `relay=` ヒントを許容し、クライアント
-/// はそのすべてに接続するため、生きているリレーが 1 つあればバンカーに到達できる。
-/// `secret` が `None` の URI はその場では接続できず、管理 UI での承認（auth_url
-/// フロー）を経る。リレーが 0 件でも URI を返す（クエリー文字列自体を省く）。
-pub fn bunker_uri(
-  signer: String,
-  relay_urls: List(String),
-  secret: Option(String),
-) -> String {
-  let relay_params =
-    list.map(relay_urls, fn(url) { "relay=" <> uri.percent_encode(url) })
-  let secret_param = case secret {
-    None -> []
-    Some(secret) -> ["secret=" <> secret]
-  }
-  case list.append(relay_params, secret_param) {
-    [] -> "bunker://" <> signer
-    params -> "bunker://" <> signer <> "?" <> string.join(params, "&")
-  }
-}
-
-/// `bunker_uri` が返した URI から、端末のカメラがテキストとして扱う形を作る。先頭の
-/// `bunker://` を外し、`relay=` の値のドットを `%2E` に置き換える。クライアントの入力欄で
-/// 先頭に `bunker://` を打ち直せば元の URI として解析でき、`%2E` は `.` に戻る。入力は
-/// `bunker_uri` の出力に限る（`secret=` と公開鍵は触らない）。
-pub fn camera_copy_text(uri: String) -> String {
-  let body = case string.split_once(uri, "bunker://") {
-    Ok(#("", rest)) -> rest
-    _ -> uri
-  }
-  case string.split_once(body, "?") {
-    Error(Nil) -> body
-    Ok(#(signer, query)) ->
-      signer
-      <> "?"
-      <> {
-        string.split(query, "&")
-        |> list.map(fn(param) {
-          case string.starts_with(param, "relay=") {
-            True -> string.replace(param, ".", "%2E")
-            False -> param
-          }
-        })
-        |> string.join("&")
-      }
-  }
 }

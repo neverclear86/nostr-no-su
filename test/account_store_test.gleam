@@ -1,4 +1,4 @@
-//// `bunker/account_store` のテスト。純粋な部分は常に、実際の Postgres に対する
+//// `bunker/account_store` と `db` のテスト。純粋な部分は常に、実際の Postgres に対する
 //// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する。
 ////
 //// 同じテーブルには過去の実行が残した行（別の乱数のマスターキーで暗号化された
@@ -22,13 +22,13 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
-import nostr_no_su/dedup/resume_store
+import nostr_no_su/db
 import nostr_no_su/named
 import nostr_no_su/nostr/event
-import nostr_no_su/plugin_resume_store
 import nostr_no_su/random
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/store
 import nostr_no_su/time
 import pog
 import support/log_capture
@@ -42,16 +42,14 @@ import support/vector.{contains_bytes}
 /// 頭から実行し直してよい。
 pub fn migration_statements_can_be_re_run_test() {
   let statements =
-    list.flat_map(account_store.migrations, fn(migration) {
-      migration.statements
-    })
+    list.flat_map(db.migrations, fn(migration) { migration.statements })
   assert list.all(statements, fn(statement) {
     string.contains(statement, "IF NOT EXISTS")
     || string.starts_with(statement, "DELETE FROM ")
   })
 }
 
-/// `account_store.migrations` の版は 1 から欠番なく昇順に並ぶ。
+/// `db.migrations` の版は 1 から欠番なく昇順に並ぶ。
 pub fn migrations_are_numbered_from_one_without_gaps_test() {
   let versions = migration_versions()
   assert versions == list.index_map(versions, fn(_, index) { index + 1 })
@@ -60,48 +58,58 @@ pub fn migrations_are_numbered_from_one_without_gaps_test() {
 /// 未適用の移行だけを版の順に返す。
 pub fn pending_migrations_skip_recorded_versions_test() {
   let migrations = [
-    account_store.Migration(version: 1, statements: ["one"]),
-    account_store.Migration(version: 2, statements: ["two"]),
+    db.Migration(version: 1, statements: ["one"]),
+    db.Migration(version: 2, statements: ["two"]),
   ]
-  assert account_store.pending_migrations(migrations, 0) == Ok(migrations)
-  assert account_store.pending_migrations(migrations, 1)
-    == Ok([account_store.Migration(version: 2, statements: ["two"])])
-  assert account_store.pending_migrations(migrations, 2) == Ok([])
+  assert db.pending_migrations(migrations, 0) == Ok(migrations)
+  assert db.pending_migrations(migrations, 1)
+    == Ok([db.Migration(version: 2, statements: ["two"])])
+  assert db.pending_migrations(migrations, 2) == Ok([])
 }
 
 /// 記録された版が移行の最新の版より新しい DB は拒否する。
 pub fn a_database_newer_than_the_migrations_is_refused_test() {
   let migrations = [
-    account_store.Migration(version: 1, statements: ["one"]),
-    account_store.Migration(version: 2, statements: ["two"]),
+    db.Migration(version: 1, statements: ["one"]),
+    db.Migration(version: 2, statements: ["two"]),
   ]
-  assert account_store.pending_migrations(migrations, 3)
-    == Error(account_store.SchemaTooNew(found: 3, supported: 2))
+  assert db.pending_migrations(migrations, 3)
+    == Error(db.SchemaTooNew(found: 3, supported: 2))
 }
 
 /// 版が新しい DB の説明は、見つかった版とこのビルドが対応する版の両方を含む。
 pub fn a_newer_schema_is_described_with_both_versions_test() {
-  assert account_store.describe(account_store.SchemaTooNew(
-      found: 2,
-      supported: 1,
-    ))
+  assert db.describe(db.SchemaTooNew(found: 2, supported: 1))
     == "database schema version 2 is newer than this build supports (up to version 1)"
 }
 
 /// 別のセッションが持つロックの説明はロックの番号を含み、書き込みは無かったことに
 /// なる。
 pub fn a_lock_held_elsewhere_is_described_without_values_test() {
-  let error =
-    account_store.HeldByAnotherInstance(account_store.instance_lock_key)
-  assert string.contains(account_store.describe(error), "7237235")
-  assert !account_store.may_have_been_written(error)
+  let error = db.HeldByAnotherInstance(db.instance_lock_key)
+  assert string.contains(db.describe(error), "7237235")
+  assert !db.may_have_been_written(error)
+}
+
+/// `db.describe` の `Duplicate` と `NotFound` の説明はテーブルを名指さない。
+pub fn store_errors_describe_without_the_table_test() {
+  assert db.describe(db.Duplicate) == "row already exists"
+  assert db.describe(db.NotFound) == "row does not exist"
+}
+
+/// `account_store.describe` は重複と行が無いことをアカウントの語で言い、他の失敗は
+/// `db.describe` と同じ説明にする。
+pub fn describe_names_the_account_test() {
+  assert account_store.describe(db.Duplicate) == "account is already registered"
+  assert account_store.describe(db.NotFound) == "account is not registered"
+  assert account_store.describe(db.Unavailable) == db.describe(db.Unavailable)
 }
 
 /// Postgres の URL からプールの設定を作り、本数を 2 に絞る。`pog.Config` は
 /// パスワードを持つので、表示も比較もせず本数だけを確かめる。
 pub fn pool_config_accepts_postgres_urls_test() {
   let assert Ok(config) =
-    account_store.pool_config(
+    db.pool_config(
       process.new_name("account_store_test_pool"),
       "postgres://user:pw-marker@host:5432/db",
     )
@@ -112,12 +120,12 @@ pub fn pool_config_accepts_postgres_urls_test() {
 /// プールと変わらない。
 pub fn lock_pool_config_uses_one_connection_test() {
   let assert Ok(pool) =
-    account_store.pool_config(
+    db.pool_config(
       process.new_name("account_store_test_lock_pool_base"),
       "postgres://user:pw-marker@host:5432/db",
     )
   let name = process.new_name("account_store_test_lock_pool")
-  let lock_pool = account_store.lock_pool_config(name, pool)
+  let lock_pool = db.lock_pool_config(name, pool)
   assert lock_pool.pool_size == 1
   assert lock_pool.pool_name == name
   assert lock_pool.host == pool.host
@@ -133,24 +141,22 @@ pub fn pool_config_rejects_invalid_urls_without_echoing_them_test() {
   ]
   use url <- list.each(urls)
   let assert Error(reason) =
-    account_store.pool_config(process.new_name("account_store_test_pool"), url)
+    db.pool_config(process.new_name("account_store_test_pool"), url)
   assert reason == "DATABASE_URL is not a valid postgres URL"
   assert !string.contains(reason, "pw-marker")
 }
 
-/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、主キーの制約違反は
-/// `AlreadyRegistered` になる。
+/// 接続を得られないエラーは `Unavailable`、期限切れは `TimedOut`、制約違反は制約の
+/// 名前つきの `ConstraintRejected` になる。
 pub fn query_errors_map_to_store_errors_test() {
-  assert account_store.from_query_error(pog.ConnectionUnavailable)
-    == account_store.Unavailable
-  assert account_store.from_query_error(pog.QueryTimeout)
-    == account_store.TimedOut
-  assert account_store.from_query_error(pog.ConstraintViolated(
+  assert db.from_query_error(pog.ConnectionUnavailable) == db.Unavailable
+  assert db.from_query_error(pog.QueryTimeout) == db.TimedOut
+  assert db.from_query_error(pog.ConstraintViolated(
       message: "duplicate key value violates unique constraint",
       constraint: "bunker_accounts_pkey",
       detail: "Key (pubkey)=(abc) already exists.",
     ))
-    == account_store.AlreadyRegistered
+    == db.ConstraintRejected("bunker_accounts_pkey")
 }
 
 /// 制約違反の `detail` と `message` は行の値を含みうるので、説明に残さない。
@@ -161,33 +167,45 @@ pub fn constraint_details_are_not_described_test() {
       constraint: "bunker_accounts_encrypted_secret_check",
       detail: "Failing row contains (detail-marker, main, \\x00)",
     )
-  let described = account_store.describe(account_store.from_query_error(error))
+  let described = db.describe(db.from_query_error(error))
   assert described
     == "constraint violated: bunker_accounts_encrypted_secret_check"
   assert !string.contains(described, "detail-marker")
   assert !string.contains(described, "message-marker")
 }
 
+/// `duplicate_on` は渡した名前の制約違反だけを `Duplicate` に写し、他の失敗はそのまま返す。
+pub fn duplicate_on_maps_only_the_named_constraint_test() {
+  assert db.duplicate_on(
+      db.ConstraintRejected("relays_url_key"),
+      "relays_url_key",
+    )
+    == db.Duplicate
+  assert db.duplicate_on(
+      db.ConstraintRejected("bunker_accounts_pkey"),
+      "relays_url_key",
+    )
+    == db.ConstraintRejected("bunker_accounts_pkey")
+  assert db.duplicate_on(db.Unavailable, "relays_url_key") == db.Unavailable
+}
+
 /// 書き込まれていることがある失敗は期限切れと例外だけで、他の失敗は書き込まれていない。
 pub fn only_a_timeout_or_an_exception_may_have_been_written_test() {
-  assert account_store.may_have_been_written(account_store.TimedOut)
-  assert account_store.may_have_been_written(account_store.Raised("x"))
-  assert !account_store.may_have_been_written(account_store.Unavailable)
-  assert !account_store.may_have_been_written(account_store.AlreadyRegistered)
-  assert !account_store.may_have_been_written(account_store.NotRegistered)
-  assert !account_store.may_have_been_written(account_store.QueryFailed("x"))
-  assert !account_store.may_have_been_written(account_store.SchemaTooNew(
-    found: 2,
-    supported: 1,
-  ))
+  assert db.may_have_been_written(db.TimedOut)
+  assert db.may_have_been_written(db.Raised("x"))
+  assert !db.may_have_been_written(db.Unavailable)
+  assert !db.may_have_been_written(db.Duplicate)
+  assert !db.may_have_been_written(db.NotFound)
+  assert !db.may_have_been_written(db.QueryFailed("x"))
+  assert !db.may_have_been_written(db.ConstraintRejected("x"))
+  assert !db.may_have_been_written(db.SchemaTooNew(found: 2, supported: 1))
 }
 
 /// 削除で行が見つからなかったことは成功に写し、それ以外の失敗はそのまま返す。
 pub fn deleted_or_absent_treats_a_missing_row_as_deleted_test() {
-  assert account_store.deleted_or_absent(Error(account_store.NotRegistered))
-    == Ok(Nil)
-  assert account_store.deleted_or_absent(Error(account_store.Unavailable))
-    == Error(account_store.Unavailable)
+  assert account_store.deleted_or_absent(Error(db.NotFound)) == Ok(Nil)
+  assert account_store.deleted_or_absent(Error(db.Unavailable))
+    == Error(db.Unavailable)
   assert account_store.deleted_or_absent(Ok(Nil)) == Ok(Nil)
 }
 
@@ -208,24 +226,20 @@ fn start_unreachable_pool(label: String) -> Name(pog.Message) {
 /// 到達できないプールへの読み込みは、例外にならず `Unavailable` を返す。
 pub fn loading_from_an_unreachable_database_is_a_value_test() {
   let name = start_unreachable_pool("account_store_test_unreachable")
-  assert account_store.load(
-      name,
-      random_master_key(),
-      account_store.default_timeouts,
-    )
+  assert account_store.load(name, random_master_key(), db.default_timeouts)
     |> result.replace(Nil)
-    == Error(account_store.Unavailable)
+    == Error(db.Unavailable)
 }
 
 /// 到達できないプールでのロックの取得は、例外にならず `Unavailable` を返す。
 pub fn acquiring_a_lock_on_an_unreachable_database_is_a_value_test() {
   let name = start_unreachable_pool("account_store_test_unreachable_lock")
-  assert account_store.acquire_lock(
+  assert db.acquire_lock(
       pog.named_connection(name),
-      account_store.instance_lock_key,
-      account_store.default_timeouts,
+      db.instance_lock_key,
+      db.default_timeouts,
     )
-    == Error(account_store.Unavailable)
+    == Error(db.Unavailable)
 }
 
 /// プールのプロセスが無いときの書き込みは、例外にならず `Unavailable` を返す。
@@ -235,15 +249,13 @@ pub fn writes_on_a_missing_pool_are_unavailable_test() {
   let key = random_master_key()
   let entry = random_entry("missing")
   let pubkey = account.pubkey_hex(entry.account)
-  let timeouts = account_store.default_timeouts
-  assert account_store.insert(db, key, entry, timeouts)
-    == Error(account_store.Unavailable)
-  assert account_store.delete(db, pubkey, timeouts)
-    == Error(account_store.Unavailable)
+  let timeouts = db.default_timeouts
+  assert account_store.insert(db, key, entry, timeouts) == Error(db.Unavailable)
+  assert account_store.delete(db, pubkey, timeouts) == Error(db.Unavailable)
   assert account_store.update_secret(db, key, pubkey, "x", timeouts)
-    == Error(account_store.Unavailable)
+    == Error(db.Unavailable)
   assert account_store.update_label(db, pubkey, "x", timeouts)
-    == Error(account_store.Unavailable)
+    == Error(db.Unavailable)
 }
 
 /// pog が写せないエラーで `pog.execute` が例外を投げた書き込みは、例外にならず、
@@ -253,14 +265,14 @@ pub fn an_unmapped_pog_error_is_reported_with_its_location_test() {
   let key = random_master_key()
   let entry = random_entry("resetting")
   let pubkey = account.pubkey_hex(entry.account)
-  let timeouts = account_store.default_timeouts
-  let raised = account_store.Raised("error in pog_ffi:convert_error/1")
+  let timeouts = db.default_timeouts
+  let raised = db.Raised("error in pog_ffi:convert_error/1")
   assert account_store.insert(db, key, entry, timeouts) == Error(raised)
   assert account_store.delete(db, pubkey, timeouts) == Error(raised)
   assert account_store.update_secret(db, key, pubkey, "x", timeouts)
     == Error(raised)
   assert account_store.update_label(db, pubkey, "x", timeouts) == Error(raised)
-  assert account_store.describe(raised)
+  assert db.describe(raised)
     == "the database client raised an exception: error in pog_ffi:convert_error/1"
 }
 
@@ -274,9 +286,7 @@ pub fn a_write_to_a_missing_pool_is_not_applied_test() {
     )
   let entry = random_entry("missing")
   assert bunker.add_account(name, entry.account, entry.label)
-    == Error(
-      bunker.NotApplied(account_store.describe(account_store.Unavailable)),
-    )
+    == Error(bunker.NotApplied(db.describe(db.Unavailable)))
   assert bunker.accounts(name) == Ok([])
   stop(pid)
 }
@@ -326,8 +336,7 @@ pub fn postgres_round_trip_test() {
   let second_pubkey = account.pubkey_hex(second.account)
   let assert Ok(Nil) = account_store.insert(db, key, first, generous)
   let assert Ok(Nil) = account_store.insert(db, key, second, generous)
-  assert account_store.insert(db, key, first, generous)
-    == Error(account_store.AlreadyRegistered)
+  assert account_store.insert(db, key, first, generous) == Error(db.Duplicate)
 
   // 入れた行が同じ内容で戻る。
   let assert Ok(loaded) = account_store.load(pool, key, generous)
@@ -357,11 +366,11 @@ pub fn postgres_round_trip_test() {
   )
   let unknown = account.pubkey_hex(random_entry("unknown").account)
   assert account_store.update_secret(db, key, unknown, "x", generous)
-    == Error(account_store.NotRegistered)
+    == Error(db.NotFound)
   assert account_store.update_secret(db, key, "not-hex", "x", generous)
-    == Error(account_store.NotRegistered)
+    == Error(db.NotFound)
   assert account_store.update_label(db, unknown, "x", generous)
-    == Error(account_store.NotRegistered)
+    == Error(db.NotFound)
 
   // 別のマスターキーでは、自分が入れた行はすべて飛ばされる。
   let assert Ok(other) = account_store.load(pool, random_master_key(), generous)
@@ -379,10 +388,9 @@ pub fn postgres_round_trip_test() {
   assert loaded_pubkeys(loaded, [first_pubkey, second_pubkey])
     == [second_pubkey]
 
-  // 削除した行は現れず、2 回目の削除は `NotRegistered`。
+  // 削除した行は現れず、2 回目の削除は `NotFound`。
   let assert Ok(Nil) = account_store.delete(db, second_pubkey, generous)
-  assert account_store.delete(db, second_pubkey, generous)
-    == Error(account_store.NotRegistered)
+  assert account_store.delete(db, second_pubkey, generous) == Error(db.NotFound)
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded_pubkeys(loaded, [second_pubkey]) == []
   assert skipped_reasons(loaded, [second_pubkey]) == []
@@ -402,7 +410,7 @@ pub fn postgres_schema_version_test() {
   let key = random_master_key()
 
   // 版の記録より前に作られた DB を再現する。
-  postgres.run_statement(db, account_store.create_accounts_table)
+  postgres.run_statement(db, db.create_accounts_table)
   let entry = random_entry("legacy")
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
@@ -423,13 +431,13 @@ pub fn postgres_schema_version_test() {
       <> ")",
   )
   assert account_store.load(pool, key, generous)
-    == Error(account_store.SchemaTooNew(found: latest + 1, supported: latest))
+    == Error(db.SchemaTooNew(found: latest + 1, supported: latest))
 }
 
 /// 同じ番号の advisory lock は、同じセッションからは再入で取れ、別のセッションから
 /// は取れない。セッションが解放すると別のセッションが取れる。セッション A、B は
 /// `postgres.start_lock_pool` で起動した 1 本のプールの接続で、番号は乱数にし、他の
-/// 統合テストが取る本番の番号（`account_store.instance_lock_key`）と衝突しない
+/// 統合テストが取る本番の番号（`db.instance_lock_key`）と衝突しない
 /// ようにする。`TEST_DATABASE_URL` があるときだけ実行する。同じ DB に対して
 /// `gleam test` を並行実行することは想定していない。
 pub fn postgres_instance_lock_test() {
@@ -438,16 +446,16 @@ pub fn postgres_instance_lock_test() {
   let a = pog.named_connection(postgres.start_lock_pool(database_url))
   let b = pog.named_connection(postgres.start_lock_pool(database_url))
 
-  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
-  assert account_store.acquire_lock(a, key, generous) == Ok(Nil)
-  assert account_store.acquire_lock(b, key, generous)
-    == Error(account_store.HeldByAnotherInstance(key))
+  assert db.acquire_lock(a, key, generous) == Ok(Nil)
+  assert db.acquire_lock(a, key, generous) == Ok(Nil)
+  assert db.acquire_lock(b, key, generous)
+    == Error(db.HeldByAnotherInstance(key))
 
   postgres.run_statement(
     a,
     "DO $$ BEGIN PERFORM pg_advisory_unlock_all(); END $$",
   )
-  assert account_store.acquire_lock(b, key, generous) == Ok(Nil)
+  assert db.acquire_lock(b, key, generous) == Ok(Nil)
 
   postgres.run_statement(
     b,
@@ -465,16 +473,19 @@ pub fn postgres_resume_store_test() {
   let assert Ok(_loaded) =
     account_store.load(pool, random_master_key(), generous)
 
-  assert resume_store.load(db, "wss://a") == Ok(None)
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 200)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(None)
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 200)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
 
   // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 100)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(200))
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 100)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
 
-  let assert Ok(Nil) = resume_store.save(db, [#("wss://a", 300)])
-  assert resume_store.load(db, "wss://a") == Ok(Some(300))
+  let assert Ok(Nil) =
+    store.save(db, store.Monitor, [#("wss://a", 300)], generous)
+  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(300))
 }
 
 /// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
@@ -488,16 +499,37 @@ pub fn postgres_plugin_resume_store_test() {
   let assert Ok(_loaded) =
     account_store.load(pool, random_master_key(), generous)
 
-  assert plugin_resume_store.load(db, "logger") == Ok(None)
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 200)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(None)
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 200)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
 
   // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 100)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(200))
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 100)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
 
-  let assert Ok(Nil) = plugin_resume_store.save(db, [#("logger", 300)])
-  assert plugin_resume_store.load(db, "logger") == Ok(Some(300))
+  let assert Ok(Nil) =
+    store.save(db, store.Plugin, [#("logger", 300)], generous)
+  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(300))
+}
+
+/// 2 つのテーブルの再開点は、同じキーでも互いに影響しない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_resume_store_tables_are_separate_test() {
+  use database_url <- postgres.with_test_database_url("resume_store")
+  use pool, db <- postgres.with_schema(database_url)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  let assert Ok(Nil) = store.save(db, store.Monitor, [#("k", 200)], generous)
+  assert store.load(db, store.Plugin, "k", generous) == Ok(None)
+
+  let assert Ok(Nil) = store.save(db, store.Plugin, [#("k", 100)], generous)
+  assert store.load(db, store.Monitor, "k", generous) == Ok(Some(200))
+  assert store.load(db, store.Plugin, "k", generous) == Ok(Some(100))
 }
 
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
@@ -508,9 +540,9 @@ pub fn postgres_migrates_a_version_two_database_test() {
   use pool, db <- postgres.with_schema(database_url)
 
   // 版 2 の DB を再現する。
-  postgres.run_statement(db, account_store.create_version_table)
-  postgres.run_statement(db, account_store.create_accounts_table)
-  postgres.run_statement(db, account_store.create_monitor_resume_table)
+  postgres.run_statement(db, db.create_version_table)
+  postgres.run_statement(db, db.create_accounts_table)
+  postgres.run_statement(db, db.create_monitor_resume_table)
   postgres.run_statement(
     db,
     "INSERT INTO schema_version (version) VALUES (1), (2)",
@@ -573,7 +605,6 @@ pub fn postgres_bunker_state_test() {
       account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: a_pubkey,
           client: "client-a",
@@ -582,12 +613,12 @@ pub fn postgres_bunker_state_test() {
           last_used_at: now,
           relays: [],
         ),
+        timeouts: generous,
       )
     let assert Ok(Nil) =
       account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: b_pubkey,
           client: "client-b",
@@ -596,6 +627,7 @@ pub fn postgres_bunker_state_test() {
           last_used_at: now + 1,
           relays: [],
         ),
+        timeouts: generous,
       )
     let assert Ok(Nil) = account_store.insert_pending(db, key, pa, generous)
     let assert Ok(Nil) = account_store.insert_pending(db, key, pb, generous)
@@ -634,7 +666,6 @@ pub fn postgres_bunker_state_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: a_pubkey,
         client: "client-a-2",
@@ -643,6 +674,7 @@ pub fn postgres_bunker_state_test() {
         last_used_at: now + 2,
         relays: [],
       ),
+      timeouts: generous,
     )
   let pa2 =
     account_store.StoredPending(
@@ -658,12 +690,12 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(Nil) =
     account_store.delete_session(
       db,
-      generous,
       signer: a_pubkey,
       client: "client-a-2",
+      timeouts: generous,
     )
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pa2.token)
+    account_store.delete_pending(db, token: pa2.token, timeouts: generous)
   let assert Ok(after_row_delete) = account_store.load(pool, key, generous)
   assert after_row_delete.sessions == loaded.sessions
   assert after_row_delete.pending == loaded.pending
@@ -672,12 +704,12 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(Nil) =
     account_store.delete_session(
       db,
-      generous,
       signer: a_pubkey,
       client: "client-a-2",
+      timeouts: generous,
     )
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pa2.token)
+    account_store.delete_pending(db, token: pa2.token, timeouts: generous)
 
   // 6. approve: 承認待ちの行が消え、セッションが増える。
   let pa3 =
@@ -695,7 +727,6 @@ pub fn postgres_bunker_state_test() {
     account_store.approve(
       pool,
       key,
-      generous,
       token: pa3.token,
       session: account_store.StoredSession(
         signer: a_pubkey,
@@ -706,6 +737,7 @@ pub fn postgres_bunker_state_test() {
         relays: [],
       ),
       evicted: [],
+      timeouts: generous,
     )
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
   assert after_approve.pending == [pa, pb]
@@ -779,12 +811,16 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, key, generous, session: ok_session)
+    account_store.insert_session(
+      db,
+      key,
+      session: ok_session,
+      timeouts: generous,
+    )
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client-tampered-" <> mark,
@@ -793,12 +829,12 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         last_used_at: 2,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client-copied-" <> mark,
@@ -807,6 +843,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         last_used_at: 3,
         relays: [],
       ),
+      timeouts: generous,
     )
   // 列の値を書き換えると、残っている MAC と合わなくなる。
   postgres.run_statement(
@@ -892,7 +929,6 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client",
@@ -901,6 +937,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
         last_used_at: 1,
         relays: [],
       ),
+      timeouts: generous,
     )
   postgres.run_statement(
     db,
@@ -919,10 +956,10 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     account_store.approve(
       pool,
       key,
-      generous,
       token: "token",
       session:,
       evicted: [],
+      timeouts: generous,
     )
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded.sessions == [session]
@@ -945,7 +982,6 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
     account_store.insert_session(
       db,
       old_key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "old-client",
@@ -954,6 +990,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
         last_used_at: 1,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_pending(
@@ -985,7 +1022,12 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, new_key, generous, session: session)
+    account_store.insert_session(
+      db,
+      new_key,
+      session: session,
+      timeouts: generous,
+    )
 
   let assert Ok(loaded) = account_store.load(pool, new_key, generous)
   assert loaded.sessions == [session]
@@ -1002,8 +1044,8 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
   let key = random_master_key()
 
   // 版 5 の DB を再現する。
-  postgres.run_statement(db, account_store.create_version_table)
-  account_store.migrations
+  postgres.run_statement(db, db.create_version_table)
+  db.migrations
   |> list.filter(fn(migration) { migration.version <= 5 })
   |> list.each(fn(migration) {
     list.each(migration.statements, postgres.run_statement(db, _))
@@ -1046,7 +1088,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, key, generous, session: session)
+    account_store.insert_session(db, key, session: session, timeouts: generous)
   let assert Ok(after) = account_store.load(pool, key, generous)
   assert after.sessions == [session]
 }
@@ -1060,8 +1102,8 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
   let key = random_master_key()
 
   // 版 6 の DB を再現する。
-  postgres.run_statement(db, account_store.create_version_table)
-  account_store.migrations
+  postgres.run_statement(db, db.create_version_table)
+  db.migrations
   |> list.filter(fn(migration) { migration.version <= 6 })
   |> list.each(fn(migration) {
     list.each(migration.statements, postgres.run_statement(db, _))
@@ -1124,11 +1166,10 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
   let assert Ok(Nil) = account_store.insert(db, key, entry, generous)
 
   let outcome =
-    account_store.transaction(pool, generous.write_ms, fn(db) {
+    db.transaction(pool, generous.write_ms, fn(db) {
       use Nil <- result.try(account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: pubkey,
           client: "client",
@@ -1137,10 +1178,11 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
           last_used_at: 1,
           relays: [],
         ),
+        timeouts: generous,
       ))
-      Error(account_store.QueryFailed("forced"))
+      Error(db.QueryFailed("forced"))
     })
-  assert outcome == Error(account_store.QueryFailed("forced"))
+  assert outcome == Error(db.QueryFailed("forced"))
 
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded.sessions == []
@@ -1158,58 +1200,49 @@ pub fn postgres_relay_store_test() {
 
   assert relay_store.list(db, generous) == Ok([])
 
-  // 追加は id の順に戻り、`observe` は `roles.monitor` に写る。
+  // 追加は id の順に戻り、`observe` は監視の用途に写る。
   let assert Ok(a) =
-    relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: False),
-      generous,
-    )
+    relay_store.insert(db, "wss://a", relay_list.MonitorOnly, generous)
   let assert Ok(b) =
-    relay_store.insert(
-      db,
-      "wss://b",
-      relay_list.Roles(monitor: False, bunker: True),
-      generous,
-    )
+    relay_store.insert(db, "wss://b", relay_list.BunkerOnly, generous)
   assert relay_store.list(db, generous) == Ok([a, b])
-  assert a.roles == relay_list.Roles(monitor: True, bunker: False)
+  assert a.roles == relay_list.MonitorOnly
 
   // 同じ URL の追加は他の DB の失敗と区別できる値で返る。
-  assert relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
-    == Error(account_store.RelayAlreadyRegistered)
+  assert relay_store.insert(db, "wss://a", relay_list.Both, generous)
+    == Error(db.Duplicate)
 
   // 用途の更新が反映される。
   let assert Ok(Nil) =
-    relay_store.update_roles(
-      db,
-      a.id,
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
+    relay_store.update_roles(db, a.id, relay_list.Both, generous)
   let assert Ok([updated_a, _updated_b]) = relay_store.list(db, generous)
-  assert updated_a.roles == relay_list.Roles(monitor: True, bunker: True)
+  assert updated_a.roles == relay_list.Both
 
   // 無い id の更新と削除は区別できる値で返る。
-  assert relay_store.update_roles(
-      db,
-      -1,
-      relay_list.Roles(monitor: True, bunker: True),
-      generous,
-    )
-    == Error(account_store.RelayNotRegistered)
-  assert relay_store.delete(db, -1, generous)
-    == Error(account_store.RelayNotRegistered)
+  assert relay_store.update_roles(db, -1, relay_list.Both, generous)
+    == Error(db.NotFound)
+  assert relay_store.delete(db, -1, generous) == Error(db.NotFound)
 
   // 削除で消える。
   let assert Ok(Nil) = relay_store.delete(db, a.id, generous)
   assert relay_store.list(db, generous) == Ok([b])
+}
+
+/// `observe` と `bunker` がどちらも false の行は `relay_store.list` が読まない。
+/// `TEST_DATABASE_URL` があるときだけ実行する。
+pub fn postgres_relay_store_list_skips_roleless_rows_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, db <- postgres.with_schema(database_url)
+
+  // 移行を実行する。
+  let assert Ok(_loaded) =
+    account_store.load(pool, random_master_key(), generous)
+
+  postgres.run_statement(
+    db,
+    "INSERT INTO relays (url, observe, bunker) VALUES ('wss://none', false, false)",
+  )
+  assert relay_store.list(db, generous) == Ok([])
 }
 
 /// `nostr_no_su.load_snapshot` は移行を含む読み込みと同じトランザクションで
@@ -1225,31 +1258,15 @@ pub fn postgres_load_snapshot_reads_relays_test() {
   // 移行を実行してから行を足す。
   let assert Ok(_loaded) = account_store.load(pool, key, generous)
   let assert Ok(_a) =
-    relay_store.insert(
-      db,
-      "wss://a",
-      relay_list.Roles(monitor: True, bunker: False),
-      generous,
-    )
+    relay_store.insert(db, "wss://a", relay_list.MonitorOnly, generous)
   let assert Ok(_b) =
-    relay_store.insert(
-      db,
-      "wss://b",
-      relay_list.Roles(monitor: False, bunker: True),
-      generous,
-    )
+    relay_store.insert(db, "wss://b", relay_list.BunkerOnly, generous)
 
   let assert Ok(snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
   assert snapshot.relays
     == [
-      relay_list.Registered(
-        url: "wss://a",
-        roles: relay_list.Roles(monitor: True, bunker: False),
-      ),
-      relay_list.Registered(
-        url: "wss://b",
-        roles: relay_list.Roles(monitor: False, bunker: True),
-      ),
+      relay_list.Registered(url: "wss://a", roles: relay_list.MonitorOnly),
+      relay_list.Registered(url: "wss://b", roles: relay_list.BunkerOnly),
     ]
 }
 
@@ -1557,19 +1574,46 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
     == [#("client", "sign_event:1,sign_event:10002")]
 }
 
-/// `pool` に向けた `nostr_no_su.account_store_operations` の `write` を、期限
-/// `generous` で返す。`write` はロックのプールを使わないので、ロックには起動して
-/// いないプールの名前を渡す。
-fn store_write(
+/// ストアの操作は、登録済みの公開鍵の追加と行の無い更新の理由をアカウントの語で返す
+/// （ログの行の文言）。`TEST_DATABASE_URL` があるときだけ実行する。
+pub fn store_operations_keep_the_account_reasons_test() {
+  use database_url <- postgres.with_test_database_url("account_store")
+  use pool, _db <- postgres.with_schema(database_url)
+  let key = random_master_key()
+  let assert Ok(_migrated) = account_store.load(pool, key, generous)
+
+  let store = store_operations(pool, key)
+  let entry = random_entry("reasons")
+  let assert Ok(Nil) = store.insert(entry)
+  assert store.insert(entry)
+    == Error(bunker.AlreadyStored("account is already registered"))
+
+  let unknown = account.pubkey_hex(random_entry("unknown-reasons").account)
+  assert store.update_label(unknown, "x")
+    == Error(bunker.NotWritten("account is not registered"))
+}
+
+/// `pool` に向けた `nostr_no_su.account_store_operations` を、期限 `generous` で返す。
+/// ストアの書き込みはロックのプールを使わないので、ロックには起動していないプールの
+/// 名前を渡す。
+fn store_operations(
   pool: Name(pog.Message),
   key: vault.MasterKey,
-) -> fn(engine.Write) -> Result(Nil, bunker.WriteFailure) {
+) -> bunker.Store {
   nostr_no_su.account_store_operations(
     pool,
     process.new_name("account_store_test_unreachable_lock"),
     key,
     generous,
-  ).write
+  )
+}
+
+/// `store_operations` の `write`。
+fn store_write(
+  pool: Name(pog.Message),
+  key: vault.MasterKey,
+) -> fn(engine.Write) -> Result(Nil, bunker.WriteFailure) {
+  store_operations(pool, key).write
 }
 
 /// エンジンだけで `count` 件の別々のクライアント鍵からの `connect`（secret は
@@ -1706,7 +1750,6 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: signer_hex,
         client: "old",
@@ -1715,6 +1758,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
         last_used_at: 1000,
         relays: [],
       ),
+      timeouts: generous,
     )
   let pending =
     account_store.StoredPending(
@@ -1769,9 +1813,9 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
   assert list.map(after_approve.pending, fn(row) { row.token }) == ["tok"]
 }
 
-/// `account_store.migrations` の版の一覧（定義の順）。
+/// `db.migrations` の版の一覧（定義の順）。
 fn migration_versions() -> List(Int) {
-  list.map(account_store.migrations, fn(migration) { migration.version })
+  list.map(db.migrations, fn(migration) { migration.version })
 }
 
 /// `schema_version` に記録されている版の一覧（昇順）。
@@ -1785,7 +1829,7 @@ fn recorded_versions(db: pog.Connection) -> List(Int) {
 
 /// 統合テストの期限。実際の DB との往復は負荷の高い環境で本番の期限（書き込み
 /// 1000ms）を超えうるので、テストが期限の長さに依存しないよう長く取る。
-const generous = account_store.Timeouts(load_ms: 30_000, write_ms: 30_000)
+const generous = db.Timeouts(load_ms: 30_000, write_ms: 30_000)
 
 /// 読み込みの結果に、期待したアカウントが同じ内容で入っていることを確かめる。
 fn assert_same_entry(
@@ -1867,7 +1911,7 @@ fn start_bunker(
         pool,
         process.new_name("account_store_test_unreachable_lock"),
         key,
-        account_store.default_timeouts,
+        db.default_timeouts,
       ),
       load: fn() {
         Ok(bunker.Snapshot(vault.Loaded(accounts: [], skipped: []), [], [], []))

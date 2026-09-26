@@ -1,10 +1,7 @@
 //// プラグインが供給する管理 UI のページのページ枠（見出し、出どころの行、タブ、節の
 //// 並び、戻るリンク）の組み立て。節 1 つの記述から `admin/view` の部品への変換は
 //// `admin/plugin_view` に委ね、このモジュールは節の並びと `Error` の囲みだけを持つ。
-////
-//// プラグインが持ち込めるのは文字列・種別・`tone`・`variant`・真偽値だけで、クラス名は
-//// `admin/view` とこのモジュールが決める（Tailwind は `src/nostr_no_su/admin` の中に
-//// 完全な文字列で書かれたクラスしか出力しない。`assets/admin.css` の方針）。
+//// プラグインが持ち込める値の規則は `admin/plugin_view` のモジュール Doc にある。
 //// フォームの宛先は今開いているページ自身。
 
 import gleam/dynamic.{type Dynamic}
@@ -168,9 +165,7 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
   ])
 }
 
-/// 節の描画に渡す文脈。プラグイン由来の文字列の言語は `plugin.text_language` で
-/// 決める。`link` ブロックはそのプラグインのページ一覧にあるキーだけを解決する。
-/// `form_action` は今開いているページ自身への宛先である。`now` は描画時点の Unix 秒である。
+/// 表示中のプラグインとページから、節の描画に渡す `plugin_view.Context` を組み立てる。
 fn context(
   language: Language,
   plugin: dashboard.PluginRow,

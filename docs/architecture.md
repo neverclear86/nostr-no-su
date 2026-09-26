@@ -131,8 +131,8 @@ DB の停止や再起動ではプールのプロセスは死なない（pgo が�
 止めたバンカーとセッションのリレーの接続は、`relay_connection` の `on_disconnect` を経て `RemovePublisher` が送られ、バンカーの送信先から外れる。
 監視の再開点の対象（次節）は、`app.add_account` がその時点の監視の一覧から求めて渡すため、閉じたリレーは以後の対象から外れる。
 
-起動時の一覧は `relay_list` の初期値としては空で渡す。
-`relays` テーブルの行は、バンカーが読み込みに成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけを足す（不正な URL と用途の無い行は Warning 1 行を出して飛ばす）。
+`relay_list` は空の一覧で起動する。
+`relays` テーブルの行は、バンカーが読み込みに成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけを足す（不正な URL の行は Warning 1 行を出して飛ばす。用途の無い行は `relay_store.list` が読まない）。
 DB に一度も届いていない間や読み込みが失敗している間は、リレーの接続を新たに開かない（すでに開いている接続は閉じない）。
 
 詳細な決定と既知の窓は `relay_list` のモジュール doc を参照。
@@ -158,7 +158,7 @@ DB に一度も届いていない間や読み込みが失敗している間は�
 
 DB の障害も同じ考え方で、プロセスの死にしない。
 DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
-pog が写せないエラーで `pog.execute` が例外を投げても、`account_store` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
+pog が写せないエラーで `pog.execute` が例外を投げても、`db` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
 したがって DB が落ちていてもルートの許容回数は消費されず、プロセスは落ちず、プラグインは動き続ける。
 監視とバンカーのリレーの接続は、最初の読み込みが成功した後に開き、その後の DB の障害では閉じない。
 例外は DB のスキーマの版がビルドより新しいときで、待っても直らないのでプロセスを終了する（「アカウントの読み込み」の節）。
@@ -212,18 +212,17 @@ map なら Erlang や Elixir で書いたプラグインも載せられる。
 ## 監視の購読
 
 監視の接続は、接続の直後と張り直しの依頼のたびに購読の定義を評価する。
-定義は、バンカーの現在の署名者（`GetSigners`）と、その接続の再開点から組み立てる（`nostr_no_su.monitor_subscriptions`）。
+定義は、バンカーの現在の署名者（`GetSigners`）と、その接続の再開点から組み立てる（`subscriptions.monitor_relay_subscriptions`）。
 署名者が 0 件なら購読を定義せず、再開点も読まない。
 どれかに応答が無ければ、開いている購読を変えずに再試行する。
 定義を得たら、その接続が開いている購読と最後に送ったフィルターに照らし、差分だけを送る（`relay_client.sync`）。
 開いている購読が定義を覆う（`since` 以外が同じで、送った `since` が無いか定義の `since` 以下）なら REQ を送らず、覆わなければ同じ id の REQ で置き換え、定義から消えた購読には CLOSE を送る。
-リレーが購読を CLOSED で閉じたら、その購読を開いていないものとして扱い、理由の NIP-01 の接頭辞で扱いを分ける。
+リレーが購読を CLOSED で閉じたら、その購読を開いていないものとして扱い、理由の NIP-01 の接頭辞で扱いを分ける（待ちの延ばし方と戻し方は `relay_client` のモジュール Doc）。
 `blocked:`、`restricted:`、AUTH の受け口の無い接続（監視の接続）での `auth-required:` は、次の再接続か張り直しの依頼までその購読を張り直さず、ログを 1 行出す。
 それ以外は再試行を予約して張り直す。
-この待ちは定義を得られないときの待ちとは別に数え、閉じられるたびに倍に延び（`rate-limited:` は一度に上限の 2 分まで延ばす）、張り直しの依頼で定義を得ると初期値に戻る。
 接続は開いている購読を持たずに始まるので、切断からの再接続では定義のすべての購読に REQ を送り、CLOSED で外した購読にも張り直しで REQ を送る。
 
-再開点は、ディスパッチャーのメモリ（`dedup/resume`、`GetSince`）にあればそれを、無ければ DB の `monitor_resume` の値を使う。
+再開点は、ディスパッチャーのメモリ（`resume`、`GetSince`）にあればそれを、無ければ DB の `monitor_resume` の値を使う。
 メモリの値は保存済みの値以上である（保存の周期は 5 秒だが、メモリの値は DB の値を `since` にした購読で受け取ったイベントか、追加の時刻から決まるため、常に DB の値以上になる）。
 記録を接続ではなくディスパッチャーに置くのは、接続のプロセスが切断で死ぬためと、監視の購読で届き、監視ハンドラーの照合を通ったイベントがすべてディスパッチャーを通るためである。照合で落としたイベントは再開点を動かさない。
 
@@ -282,6 +281,7 @@ sequenceDiagram
     participant sup as bunker サブツリー
     participant bk as bunker
     participant store as account_store
+    participant base as db.gleam
     participant db as Postgres
     participant conn as relay_connection
     participant sock as ソケット（stratus）
@@ -289,8 +289,8 @@ sequenceDiagram
     sup->>bk: 起動
     Note over bk: initialiser は自分用の<br/>名前なしの subject に<br/>LoadAccounts を積むだけ
     sup->>conn: 起動（アクターの後）
-    bk->>store: acquire_lock（ロック専用のプール）
-    store->>db: SELECT pg_try_advisory_lock
+    bk->>base: acquire_lock（ロック専用のプール）
+    base->>db: SELECT pg_try_advisory_lock
     bk->>store: load
     store->>db: BEGIN / lock_timeout / 版の確認と移行 /<br/>LOCK TABLE IN SHARE MODE / SELECT
     alt 読み込めた
@@ -309,12 +309,13 @@ sequenceDiagram
 ```
 
 `LoadAccounts` は initialiser が積むのでアクターのメールボックスの先頭になり、接続はアクターの後に起動するので、`GetSigners` は必ず読み込みの後に処理される。
+initialiser は `LoadAccounts` を積むだけで DB に触らないので、DB が応答しなくても初期化のタイムアウトに当たらずサブツリーの起動は失敗せず、読み込みに失敗してもアクターは落ちない（理由をログに出して再試行を予約する）。
 DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読する。
 
 読み込みの前に、ロック専用の 1 本のプールでセッション単位の advisory lock を取る。別のセッションが持っていれば、`SchemaTooNew` と同じく起動処理が VM を止める。ロックは再入で取り直すだけなので、読み込みのたびに呼ぶ。
 
 読み込みのトランザクションは、一覧を読む前にスキーマの版を確かめる。
-`schema_version` に記録された版より新しい移行（`account_store.migrations`）を順に実行し、移行ごとに版を記録する。
+`schema_version` に記録された版より新しい移行（`db.migrations`）を順に実行し、移行ごとに版を記録する。
 記録された版がビルドの最新の版より新しいときは、再試行しても変わらないので、起動処理が組み立てたストアの操作（`nostr_no_su.account_store_operations`）が理由を 1 行出して終了コード 1 で VM を止める。
 版 2 は監視の購読の再開点のテーブル（`monitor_resume`）である。監視はバンカーの署名者が 1 件以上のときだけこのテーブルを読むので、読むのは読み込みが 1 回成功した後になる（「監視の購読」の節）。
 版 3 は承認済みのセッション（`bunker_sessions`）と承認待ち（`bunker_pending`）のテーブルで、読み込みは同じトランザクションでこれらも読む。どれかが読めなければ読み込み全体が失敗する。
@@ -380,8 +381,8 @@ sequenceDiagram
 アクターが持つのはセッション状態と、乱数や現在時刻のような外界からの入力だけである。
 リレークライアントは切断のたびに再起動されるため、セッション状態をそこに置けない。
 
-応答はどのリレーから来たリクエストでも、基本のバンカーリレー（`relays` テーブルでバンカーの用途を持つリレー）と、応答先のセッションのリレーへ発行する（`bunker.response_relays`）。セッションの無い応答と、リレーを持たないセッション（`bunker://`）への応答は基本のバンカーリレーだけへ出る。
-ただし、`rate-limited:` の OK を返したリレーへは、セッションの外のリクエストへの応答を 60 秒出さない（`bunker.recipients`。理由は [設計上の判断と既知の制約](design-decisions.md) の「NIP-46 の入力にはサイズと件数の上限がある」）。
+応答はどのリレーから来たリクエストでも、基本のバンカーリレー（`relays` テーブルでバンカーの用途を持つリレー）と、応答先のセッションのリレーへ発行する（`delivery.response_relays`）。セッションの無い応答と、リレーを持たないセッション（`bunker://`）への応答は基本のバンカーリレーだけへ出る。
+ただし、`rate-limited:` の OK を返したリレーへは、セッションの外のリクエストへの応答を 60 秒出さない（`delivery.recipients`。理由は [設計上の判断と既知の制約](design-decisions.md) の「NIP-46 の入力にはサイズと件数の上限がある」）。
 クライアントは `bunker://` URI の `relay=` をすべて聴くので、リレーが 1 つ生きていれば往復が成立する。
 
 ### リレーの AUTH（NIP-42）への応答
@@ -605,7 +606,7 @@ POST の応答で開いた状態で描いたダイアログは、`admin.js` が�
 | POST | `/relays/<id>/delete` | 削除。303 でダッシュボードへ戻す（409 は削除のダイアログを開いたダッシュボードを返す） |
 
 承認ページの GET と、承認と拒否の POST も先に承認待ちの一覧を引き、一覧に無いトークンは承認・拒否を呼ばずに 404、一覧を得られなければ 503 にする。
-承認、拒否、セッションの取り消し、セッションの権限の編集、クライアントの接続は、署名者とクライアントの公開鍵を `[admin]` の 1 行でログに出し、承認ページのトークンと保存した権限の値は出さない。
+承認、拒否、セッションの取り消し、セッションの権限の編集、クライアントの接続は、書き込みが成功した後にバンカーのアクターが署名者とクライアントの公開鍵を `[bunker]` の 1 行でログに出し、承認ページのトークンと保存した権限の値は出さない。
 再有効化のログは管理 UI ではなくランナーが `plugin <名前>` の接頭辞で出す。
 
 `<signer>` は署名者の x-only 公開鍵の小文字 16 進である。
@@ -667,15 +668,19 @@ flowchart TD
 nostr-no-su/
 ├── src/                          本体
 │   ├── nostr_no_su.gleam         エントリポイント（設定の読み込みとツリー仕様の組み立て）
-│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / code / file / process / application / ssl / logger / supervisor / pgo / QR）
+│   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / file / process / ssl / logger / supervisor / QR）
+│   ├── nostr_no_su_plugin_ffi.erl プラグインの読み込み・呼び出し・実行の FFI（code / file / application / process）
+│   ├── nostr_no_su_store_ffi.erl DB の基盤（db.gleam）の pgo のトランザクションと、pog の例外を値に写す FFI
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
+│       ├── db.gleam              DB の基盤（接続プール、インスタンスのロック、期限、全テーブルの移行、トランザクション、クエリーの実行と失敗の値）
+│       ├── subscriptions.gleam   監視とバンカーの購読の定義（購読 id、フィルター、再開点からの組み立て）
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
-│       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーの権限のモジュールの定義を使う）
+│       ├── admin/permission_view.gleam 権限のチップの描画（トークンの解釈と未対応の判定はバンカーの権限のモジュールの定義を使う）
 │       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/wordmark.gleam  上部のロゴの製品名の字形のパス（dev/logo_wordmark.sh が生成）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
@@ -683,29 +688,31 @@ nostr-no-su/
 │       ├── admin/plugin_pages.gleam プラグインのページの描画（ページ枠、タブ、節の並び）
 │       ├── avatars.gleam         アカウントのアイコンの URL（kind 0 の picture）のキャッシュのアクター
 │       ├── dedup.gleam           リレー横断の重複排除ディスパッチャー
-│       ├── dedup/window.gleam    直近のイベント id のスライディングウィンドウ（純粋）
-│       ├── dedup/resume.gleam    監視の購読の再開点の記録（純粋）
-│       ├── dedup/resume_saver.gleam 再開点を周期ごとに保存するアクター
-│       ├── dedup/resume_store.gleam 監視の購読の再開点の SQL
+│       ├── window.gleam          直近のイベント id のスライディングウィンドウ（純粋）
+│       ├── resume.gleam          監視の購読の再開点の記録（純粋）
+│       ├── resume/saver.gleam    再開点を周期ごとに保存するアクター
+│       ├── resume/store.gleam    監視の購読とプラグインごとの再開点の SQL
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
 │       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
-│       ├── plugin_resume_store.gleam プラグインごとの再開点の SQL
 │       ├── plugin_runner.gleam   プラグイン 1 つぶんの実行プロセス
+│       ├── plugin_term.gleam     プラグインのエクスポートが返す項の読み取りの部品（純粋）
 │       ├── plugins/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
+│       ├── bunker/delivery.gleam 接続の範囲、応答の発行先の選び方、リレーごとのセッションの署名者、OK の追跡、rate-limited のリレーの停止、AUTH のイベントの署名（純粋）
 │       ├── bunker/permission.gleam NIP-46 の perms のトークンの型と解釈、許可と未対応の判定（純粋）
 │       ├── bunker/session.gleam  承認済みセッションと承認待ちの型（import を持たない葉）
 │       ├── bunker/connection_secret.gleam 接続 secret（定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
-│       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
-│       ├── bunker/account.gleam  鍵材料と bunker:// URI
+│       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）と、捨てた件数の報告の間引き
+│       ├── bunker/account.gleam  鍵材料
+│       ├── bunker/connection_uri.gleam bunker:// URI とカメラ用のコピー用の文字列の組み立て（純粋）
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証、セッションと承認待ちの行の MAC（純粋）
-│       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
+│       ├── bunker/account_store.gleam アカウント、セッション、承認待ちを Postgres に保存するストア
 │       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター
@@ -737,7 +744,7 @@ nostr-no-su/
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）と、README に載せる製品のロゴ（logo/）
 ├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
-├── dev/                          管理 UI の撮影用のサーバーとスクリプト、ロゴの製品名の字形の生成、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、gleam.toml の版の一致、リリースの版の検査、リリースノートの抜き出し、イメージに入れるライセンスの収集（成果物には入らない）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト、撮影用のサーバーが使い、テストからも import できるプラグインのページの記述の builder、ロゴの製品名の字形の生成、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、gleam.toml の版の一致、リリースの版の検査、リリースノートの抜き出し、イメージに入れるライセンスの収集（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
 │   ├── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）

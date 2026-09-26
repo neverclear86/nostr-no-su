@@ -11,7 +11,7 @@
 
 登録で「このアカウントはすでに登録されています。」（`account is already registered`）と出るのにダッシュボードのアカウントの節にそのアカウントが無いときは、起動時の読み込みで飛ばされた行が `bunker_accounts` に残っている（ダッシュボードの「読み込めなかったアカウント」（`Unreadable accounts`）の枠に出る。ログは `[bunker] skipped account <pubkey>: <理由>`）。別のマスターキーで暗号化された行は、そのマスターキーでなければ復号できない。その鍵を使わないと決めたときは、その行の「削除」（`Delete`）から消してから登録し直す。「pubkey の列を読めない行です。」で始まる行は pubkey を読めないため画面からは消せず、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM bunker_accounts WHERE pubkey = '<pubkey 列の値>'"`）。
 
-空の DB でもリレー 0 件で起動する。不正な URL や、`observe` と `bunker` がどちらも false の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。
+空の DB でもリレー 0 件で起動する。不正な URL の行は起動を止めずに `[relay <URL>] skipped registered relay: <理由>` の Warning を出して飛ばす。`observe` と `bunker` がどちらも false の行は読み込まず、ダッシュボードの一覧にも出ない。その URL を追加すると「このリレーはすでに登録されています。」（`relay is already registered`）になるので、DB から直接消す（docker compose では `docker compose exec postgres psql -U nostr -d nostr_no_su -c "DELETE FROM relays WHERE NOT (observe OR bunker)"`）。
 
 ログは 1 行ずつ `<時刻 UTC> <水準> <本文>` の形で出る（水準と docker のログの打ち切りは [設定](configuration.md) の「docker compose の構成」）。この文書で引用する行はこの先頭を省いて書いている。
 

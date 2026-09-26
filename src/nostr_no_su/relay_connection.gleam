@@ -6,32 +6,29 @@
 //// その結果、ツリー停止時にスーパーバイザーが送る exit シグナルもメッセージとして
 //// 届くようになる。`handle` は pid で両者を区別し、後者は再送出する。
 ////
-//// 再接続の待ちは失敗のたびに延ばし、接続が `stable_after_ms` 以上続いた後に
-//// 切れたときだけ初期値から数え直す。ハンドシェイクが通った時点で戻すと、接続を
-//// 受け入れてすぐに切るリレーを初期値の間隔で叩き続けるので、それより前の切断は
-//// 接続の失敗と同じく失敗として数える。
+//// 再接続の待ちは 5 秒から失敗のたびに倍にして 5 分で頭打ちにし、ジッターを掛けて使う。
+//// 接続が 60 秒以上続いた後に切れたときだけ 5 秒から数え直す。ハンドシェイクが通った
+//// 時点で戻すと、接続を受け入れてすぐに切るリレーを初期値の間隔で叩き続けるので、それより
+//// 前の切断は接続の失敗と同じく失敗として数える。これらの値は本番の既定値
+//// （`default_reconnect_delay`、`default_stable_after_ms`）で、`Settings` で差し替えられる。
 
 import gleam/erlang/process.{type ExitMessage, type Name, type Pid, type Subject}
 import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/otp/supervision.{type ChildSpecification}
 import nostr_no_su/backoff
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/time
 
-/// 接続が切れた、あるいは拒否された後の再接続の待ち時間。5 秒から倍にして 5 分で
-/// 頭打ちにし、接続が `default_stable_after_ms`（60 秒）以上続いた後に切れた
-/// ときだけ 5 秒から数え直す。
+/// 本番の再接続の待ちの延ばし方。
 pub const default_reconnect_delay = backoff.Backoff(
   initial_ms: 5000,
   max_ms: 300_000,
 )
 
-/// 再接続の待ちを初期値に戻すのに要る、接続が続いた時間（60 秒）。これより前に
-/// 切れた接続は失敗として数える。
+/// 本番の、再接続の待ちを初期値に戻すのに要る接続の継続時間（ミリ秒）。
 pub const default_stable_after_ms = 60_000
 
 /// 状態の問い合わせを待つ時間。接続試行はアクターのループをブロックするため、
@@ -45,8 +42,6 @@ pub type Socket {
 }
 
 /// ソケットの開き方。再接続ロジックを WebSocket なしでテストできるよう注入する。
-/// 型の名前を `Msg` のバリアント `Connect` と分けておくと、注釈だけを見たときに
-/// 関数型かメッセージかを迷わない。
 pub type Connector =
   fn() -> Result(Socket, String)
 
@@ -56,19 +51,22 @@ pub type Status {
   Disconnected
 }
 
-/// 接続 1 本に必要なものすべて。状態を問い合わせるためのプロセス名、ログ行に
-/// 付けるラベル、ソケットの開き方、新しいソケットごとに行う処理、ソケットを
-/// 失ったとき（再接続を待つ間、および親（スーパーバイザー）からの停止）に
-/// 行う処理、再接続の待ち時間の延ばし方、待ち時間を初期値に戻すのに要る接続の
-/// 継続時間（ミリ秒）。
+/// 接続 1 本の設定。
 pub type Settings {
   Settings(
+    /// 状態を問い合わせるためのプロセス名。
     name: Name(Msg),
+    /// リレーの URL（ログ行の接頭辞に使う）。
     relay: String,
+    /// ソケットの開き方。
     connect: Connector,
+    /// 新しいソケットごとに行う処理。
     on_connect: fn(Socket) -> Nil,
+    /// ソケットを失ったとき（再接続を待つ間と、親からの停止）に行う処理。
     on_disconnect: fn() -> Nil,
+    /// 再接続の待ち時間の延ばし方。
     reconnect_delay: backoff.Backoff,
+    /// 再接続の待ちを初期値に戻すのに要る、接続の継続時間（ミリ秒）。
     stable_after_ms: Int,
   )
 }
@@ -126,21 +124,12 @@ type State {
     socket: Option(Socket),
     /// 直前の失敗の理由。接続中や未失敗なら `None`。
     failure: Option(String),
-    /// 次に失敗したときの、ジッターを掛ける前の待ち時間。`stable_after_ms` 以上
-    /// 続いた接続が切れたときは使わず、初期値を使う。
+    /// 次に失敗したときの、ジッターを掛ける前の待ち時間。
     delay_ms: Int,
     /// 生きたソケットを開いた時刻（`time.monotonic_ms` の目盛り）。ソケットを
     /// 持たない間は `None`。
     connected_at_ms: Option(Int),
   )
-}
-
-/// スーパービジョンツリー用の子仕様。ワーカーの既定の停止タイムアウト 5000ms が
-/// 適用される。`connect` の実行中はアクターがブロックされるため、それより長く
-/// ブロックしうる `connect` を注入すると、正常に停止できずハンドシェイクの
-/// 途中で kill される。
-pub fn supervised(settings: Settings) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(settings) })
 }
 
 /// 接続アクターを起動する。リレーに到達できなくても起動は成功するため、1 つの
@@ -272,8 +261,7 @@ fn open(state: State) -> actor.Next(State, Msg) {
 /// ソケットが失われた理由をログ出力し、`on_connect` で配った送信手段を撤回して
 /// もらったうえで、次の試行を予約する。接続そのものに失敗した場合も通るが、
 /// 配っていない送信手段の撤回は何も起こさないため区別しない。同じ理由の失敗が
-/// 続く間はログを出さない。待ち時間は `base_delay` の値にジッターを掛けて使い、
-/// 次の失敗に向けてその値を倍にする（上限で頭打ち）。
+/// 続く間はログを出さない。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
   let base_ms = base_delay(state)
@@ -295,9 +283,7 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   )
 }
 
-/// 次の試行までの、ジッターを掛ける前の待ち時間。`stable_after_ms` 以上続いた
-/// ソケットを失ったときは初期値から数え直し、それ以外（接続の失敗と、それより
-/// 早い切断）は失敗が続いているものとして今の待ち時間を使う。
+/// 次の試行までの、ジッターを掛ける前の待ち時間。
 fn base_delay(state: State) -> Int {
   let lasted = case state.connected_at_ms {
     Some(at_ms) -> time.monotonic_ms() - at_ms >= state.settings.stable_after_ms
@@ -327,9 +313,9 @@ pub fn reconnect_report(
 /// exit を通常のメッセージとして扱うため、スーパーバイザーが待っている理由で
 /// 終了するには、trap を解除してシグナルを送り直す必要がある。ソケットはリンクを
 /// 通じて一緒に死ぬ。生きたソケットを持っていれば、`reconnect` と同じく
-/// `on_disconnect` を呼んで送信手段を撤回してもらう。`relay_list` の
-/// `close_relay` はこの終了を待ってから戻るため、戻った時点で撤回は依頼済みに
-/// なる。
+/// `on_disconnect` を呼んで送信手段を撤回してもらう。`relay_list` は
+/// `terminate_dynamic_child` でこの終了を待ってから一覧の変更に応答するため、
+/// `app.close_relay` などが戻った時点で撤回は依頼済みになる。
 fn shutdown(
   state: State,
   reason: process.ExitReason,

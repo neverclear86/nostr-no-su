@@ -11,21 +11,20 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
-import nostr_no_su/dedup
-import nostr_no_su/dedup/resume_store
+import nostr_no_su/db
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_api
 import nostr_no_su/plugin_config
 import nostr_no_su/plugin_loader
-import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
-import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/store
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 
@@ -107,7 +106,9 @@ pub fn main() -> Nil {
 pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use dedup_capacity <- result.try(loaded.dedup_capacity)
-  use #(database_url, master_key) <- result.try(account_store_settings(loaded))
+  use config.AccountStore(database_url:, master_key:) <- result.try(
+    loaded.account_store,
+  )
   use bunker <- result.try(bunker_spec(loaded, database_url, master_key))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
@@ -152,7 +153,7 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 
 /// 監視サブツリー。起動時のリレーは常に空で、行はバンカーの読み込みから
 /// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
-/// 再開点から組み立て（`monitor_subscriptions`）、再開点はアカウントストアと
+/// 再開点から組み立て（`subscriptions.monitor_relay_subscriptions`）、再開点はアカウントストアと
 /// 同じ DB に保存する。復帰したランナーの要求に応じて、プラグインごとの
 /// 取り直しの購読も足される。除外する kind の既定は ephemeral 全般
 /// （`event.is_ephemeral`）。バンカーの NIP-46 の応答を含む。作者の照合は、購読の
@@ -167,100 +168,45 @@ fn monitor_spec(
   app.Monitor(
     name: name,
     dedup_capacity: dedup_capacity,
-    relays: [],
-    subscriptions: monitor_subscriptions(
+    subscriptions: subscriptions.monitor_relay_subscriptions(
       config.name,
       name,
-      resume_point_loader(config.pool.pool_name),
-      plugin_resume_point_loader(config.pool.pool_name),
+      resume_point_loader(
+        config.pool.pool_name,
+        store.Monitor,
+        log.relay_prefix,
+      ),
+      resume_point_loader(
+        config.pool.pool_name,
+        store.Plugin,
+        log.plugin_prefix,
+      ),
       app.plugin_catchups(specs),
       _,
     ),
-    save_resume: resume_point_saver(config.pool.pool_name),
-    save_plugin_resume: plugin_resume_point_saver(config.pool.pool_name),
+    save_resume: resume_point_saver(config.pool.pool_name, store.Monitor),
+    save_plugin_resume: resume_point_saver(config.pool.pool_name, store.Plugin),
     excludes_kind: event.is_ephemeral,
     accepts_author: bunker.is_signer(config.name, _),
   )
 }
 
-/// 監視リレー `relay_url` の購読の定義。評価のたびにバンカーの現在の署名者から
-/// 組み立て、署名者がいれば `since` をディスパッチャーのメモリの再開点から、無ければ
-/// 保存済みの再開点（`load`）から決める。署名者がいれば、各ランナーの取り直しの
-/// 要求（`catchups`）からプラグインごとの取り直しの購読を足す。その `since` は
-/// ランナーのメモリの再開点か保存済みの値（`load_plugin`）から決め、再開点の無い
-/// 要求は落とす。`until` は監視の購読の `since` までに切り詰め、範囲が残らない
-/// 要求はこのリレーでは定義しない（`config.catchup_subscriptions`）。取り直しの
-/// 解決に失敗したら定義全体を得られなかったことにする。どれかに応答が無ければ
-/// 定義を得られなかったことにし、開いている購読を閉じない。テストが本番と同じ
-/// 定義でツリーを動かせるよう公開する。
-pub fn monitor_subscriptions(
-  bunker_name: Name(bunker.Msg),
-  dedup_name: Name(dedup.Msg),
-  load: fn(String) -> Result(Option(Int), String),
-  load_plugin: fn(String) -> Result(Option(Int), String),
-  catchups: fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
-  relay_url: String,
-) -> relay_client.Subscriptions {
-  fn() {
-    use signers <- result.try(
-      bunker.signers(bunker_name) |> option.to_result(Nil),
-    )
-    use <- config.monitor_subscriptions(signers)
-    use in_memory <- result.try(dedup.since(dedup_name, relay_url))
-    use since <- result.try(resume_since(in_memory, fn() { load(relay_url) }))
-    use requests <- result.try(catchups())
-    use resolved <- result.map(catchup_since(requests, load_plugin))
-    #(since, config.catchup_subscriptions(signers, since, resolved))
-  }
-}
-
-/// メモリの再開点があればそれを、無ければ保存済みの値を使う。読めなければ
-/// 定義を得られなかったことにする。監視の購読と取り直しの購読で共用する。
-fn resume_since(
-  in_memory: Option(Int),
-  load: fn() -> Result(Option(Int), String),
-) -> Result(Option(Int), Nil) {
-  case in_memory {
-    Some(_) -> Ok(in_memory)
-    None -> load() |> result.replace_error(Nil)
-  }
-}
-
-/// 取り直しの要求ごとに `since` を解決し、購読を定義する `#(プラグイン名,
-/// since, until)` の一覧にする。`since` はランナーのメモリの再開点があれば
-/// それを、無ければ `load_plugin` で読む保存済みの値を使う。再開点が未保存の
-/// 要求は落とす（取り直す範囲が決まらない）。1 つでも読めなければ全体を
-/// `Error(Nil)` にする。テストが直接呼べるよう公開する。
-pub fn catchup_since(
-  catchups: List(#(String, plugin_runner.Catchup)),
-  load_plugin: fn(String) -> Result(Option(Int), String),
-) -> Result(List(#(String, Int, Int)), Nil) {
-  list.try_fold(catchups, [], fn(acc, request) {
-    let #(plugin, catchup) = request
-    use since <- result.map(
-      resume_since(catchup.since, fn() { load_plugin(plugin) }),
-    )
-    case since {
-      Some(at) -> [#(plugin, at, catchup.until), ..acc]
-      None -> acc
-    }
-  })
-  |> result.map(list.reverse)
-}
-
-/// リレーの保存済みの再開点を読む操作（`resume_store.load`）。購読の評価の再試行の
-/// 行は理由を含まないので、失敗の理由はここで 1 行出してから返す。
+/// 保存済みの再開点を `table` から読む操作（`store.load`）。購読の評価の再試行の
+/// 行は理由を含まないので、失敗の理由は `prefix` がキーから作る接頭辞で 1 行出して
+/// から返す。
 fn resume_point_loader(
   pool: Name(pog.Message),
+  table: store.Table,
+  prefix: fn(String) -> String,
 ) -> fn(String) -> Result(Option(Int), String) {
-  fn(relay_url: String) {
+  fn(key: String) {
     let db = pog.named_connection(pool)
-    resume_store.load(db, relay_url)
+    store.load(db, table, key, db.default_timeouts)
     |> result.map_error(fn(error) {
-      let reason = account_store.describe(error)
+      let reason = db.describe(error)
       log.write(
         log.Warning,
-        log.relay_prefix(relay_client.label(relay_url)),
+        prefix(key),
         "could not load resume point: " <> reason,
       )
       reason
@@ -268,47 +214,16 @@ fn resume_point_loader(
   }
 }
 
-/// 再開点を値を小さくせずに保存する操作（`resume_store.save`）。ログは
-/// `resume_saver` が出す。
+/// 再開点を `table` に値を小さくせずに保存する操作（`store.save`）。ログは保存の
+/// アクターが出す。
 fn resume_point_saver(
   pool: Name(pog.Message),
+  table: store.Table,
 ) -> fn(List(#(String, Int))) -> Result(Nil, String) {
   fn(points: List(#(String, Int))) {
     let db = pog.named_connection(pool)
-    resume_store.save(db, points)
-    |> result.map_error(account_store.describe)
-  }
-}
-
-/// プラグインの保存済みの再開点を読む操作（`plugin_resume_store.load`）。
-/// `resume_point_loader` と同じく、失敗の理由はここで 1 行出してから返す。
-fn plugin_resume_point_loader(
-  pool: Name(pog.Message),
-) -> fn(String) -> Result(Option(Int), String) {
-  fn(plugin: String) {
-    let db = pog.named_connection(pool)
-    plugin_resume_store.load(db, plugin)
-    |> result.map_error(fn(error) {
-      let reason = account_store.describe(error)
-      log.write(
-        log.Warning,
-        log.plugin_prefix(plugin),
-        "could not load resume point: " <> reason,
-      )
-      reason
-    })
-  }
-}
-
-/// プラグインの再開点を値を小さくせずに保存する操作（`plugin_resume_store.save`）。
-/// ログは保存のアクターが出す。
-fn plugin_resume_point_saver(
-  pool: Name(pog.Message),
-) -> fn(List(#(String, Int))) -> Result(Nil, String) {
-  fn(points: List(#(String, Int))) {
-    let db = pog.named_connection(pool)
-    plugin_resume_store.save(db, points)
-    |> result.map_error(account_store.describe)
+    store.save(db, table, points, db.default_timeouts)
+    |> result.map_error(db.describe)
   }
 }
 
@@ -364,17 +279,16 @@ fn bunker_spec(
         pool.pool_name,
         lock_pool.pool_name,
         master_key,
-        account_store.default_timeouts,
+        db.default_timeouts,
       ),
       auth_url: auth_url(loaded),
       retry_delay: bunker.default_retry_delay,
     ),
-    relays: [],
     subscriptions: fn(signers) {
       fn() {
         signers()
         |> option.to_result(Nil)
-        |> result.map(config.bunker_subscriptions(
+        |> result.map(subscriptions.bunker_subscriptions(
           _,
           time.now_seconds() - bunker_since_lookback_seconds,
         ))
@@ -387,12 +301,12 @@ fn bunker_spec(
 /// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
 /// あるかどうかを区別する。削除は行が無いことを成功として扱う。
 ///
-/// 追加の `AlreadyRegistered` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
+/// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
 /// 公開鍵にだけ追加を書き込むので、DB に行があるのは、DB がメモリより先行しているか、
 /// 読み込みで飛ばされた行があることを意味し、バンカーはそれを読み直して確かめる。
 ///
 /// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
-/// 渡せるようにするためである。本番は `account_store.default_timeouts` を渡す。
+/// 渡せるようにするためである。本番は `db.default_timeouts` を渡す。
 ///
 /// 読み込みの前に `lock_pool` のセッションで advisory lock を取り直す。読み込みが
 /// `SchemaTooNew` か `HeldByAnotherInstance` を返したら、どちらも再試行しても変わら
@@ -407,27 +321,22 @@ pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
   master_key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
+  timeouts: db.Timeouts,
 ) -> bunker.Store {
   let db = pog.named_connection(pool)
   let lock_db = pog.named_connection(lock_pool)
   bunker.Store(
     load: fn() {
-      account_store.acquire_lock(
-        lock_db,
-        account_store.instance_lock_key,
-        timeouts,
-      )
+      db.acquire_lock(lock_db, db.instance_lock_key, timeouts)
       |> result.try(fn(_locked) { load_snapshot(pool, master_key, timeouts) })
       |> halt_if_cannot_continue
-      |> result.map_error(account_store.describe)
+      |> result.map_error(db.describe)
     },
     insert: fn(entry) {
       account_store.insert(db, master_key, entry, timeouts)
       |> result.map_error(fn(error) {
         case error {
-          account_store.AlreadyRegistered ->
-            bunker.AlreadyStored(account_store.describe(error))
+          db.Duplicate -> bunker.AlreadyStored(account_store.describe(error))
           _ -> write_failure(error)
         }
       })
@@ -459,58 +368,58 @@ fn write_session_state(
   pool: Name(pog.Message),
   db: pog.Connection,
   key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
+  timeouts: db.Timeouts,
   change: engine.Write,
-) -> Result(Nil, account_store.StoreError) {
+) -> Result(Nil, db.StoreError) {
   case change {
     engine.InsertSession(session:, evicted:) ->
       account_store.insert_session_evicting(
         pool,
         key,
-        timeouts,
         session: stored_session(session),
         evicted: evicted,
+        timeouts:,
       )
     engine.DeleteSession(signer:, client:) ->
-      account_store.delete_session(db, timeouts, signer:, client:)
+      account_store.delete_session(db, signer:, client:, timeouts:)
     engine.TouchSession(session:) ->
       account_store.touch_session(
         db,
         key,
-        timeouts,
         session: stored_session(session),
+        timeouts:,
       )
     engine.UpdateSessionPerms(session:) ->
       account_store.update_session_perms(
         db,
         key,
-        timeouts,
         session: stored_session(session),
+        timeouts:,
       )
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,
         key,
-        timeouts,
         pending: stored_pending(pending),
         replaced: replaced,
         evicted: evicted,
+        timeouts:,
       )
     engine.DeletePending(token:) ->
-      account_store.delete_pending(db, timeouts, token:)
+      account_store.delete_pending(db, token:, timeouts:)
     engine.ApprovePending(token:, session:, evicted:) ->
       account_store.approve(
         pool,
         key,
-        timeouts,
         token: token,
         session: stored_session(session),
         evicted: evicted,
+        timeouts:,
       )
   }
 }
 
-/// 1 つのトランザクション（`account_store.transaction`、期限 `load_ms`）で、
+/// 1 つのトランザクション（`db.transaction`、期限 `load_ms`）で、
 /// 移行を含む `load_within` の後に `relay_store.list` を読み（`relays` は移行で
 /// 作られるので順を変えない）、バンカーの読み込みの結果にする。MAC の合わない行
 /// （`Stored.rejected`）は使わず、トランザクションを抜けた後に 1 行ずつ warning
@@ -519,10 +428,10 @@ fn write_session_state(
 pub fn load_snapshot(
   pool: Name(pog.Message),
   key: vault.MasterKey,
-  timeouts: account_store.Timeouts,
-) -> Result(bunker.Snapshot, account_store.StoreError) {
+  timeouts: db.Timeouts,
+) -> Result(bunker.Snapshot, db.StoreError) {
   use #(stored, relays) <- result.map(
-    account_store.transaction(pool, timeouts.load_ms, fn(db) {
+    db.transaction(pool, timeouts.load_ms, fn(db) {
       use stored <- result.try(account_store.load_within(db, key, timeouts))
       use relays <- result.map(relay_store.list(db, timeouts))
       #(stored, relays)
@@ -598,15 +507,15 @@ fn stored_pending(pending: session.Pending) -> account_store.StoredPending {
 /// を 1 行出して終了コード 1 で VM を止める（`exit_with_failure`）。それ以外の
 /// 結果はそのまま返る。
 fn halt_if_cannot_continue(
-  loaded: Result(a, account_store.StoreError),
-) -> Result(a, account_store.StoreError) {
+  loaded: Result(a, db.StoreError),
+) -> Result(a, db.StoreError) {
   case loaded {
-    Error(account_store.SchemaTooNew(..) as error)
-    | Error(account_store.HeldByAnotherInstance(..) as error) -> {
+    Error(db.SchemaTooNew(..) as error)
+    | Error(db.HeldByAnotherInstance(..) as error) -> {
       log.write(
         log.Error,
         log_prefix,
-        "cannot continue: " <> account_store.describe(error),
+        "cannot continue: " <> db.describe(error),
       )
       exit_with_failure()
       loaded
@@ -616,24 +525,12 @@ fn halt_if_cannot_continue(
 }
 
 /// 書き込みの失敗を、書き込まれていることがあるかどうかの区別つきでバンカーへ渡す形に
-/// 写す。
-fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
+/// 写す。説明はアカウントの語で作る（`account_store.describe`）。
+fn write_failure(error: db.StoreError) -> bunker.WriteFailure {
   let reason = account_store.describe(error)
-  case account_store.may_have_been_written(error) {
+  case db.may_have_been_written(error) {
     True -> bunker.MaybeWritten(reason)
     False -> bunker.NotWritten(reason)
-  }
-}
-
-/// アカウントストアの接続先とマスターキー。設定が揃わなければ理由を返す。理由は
-/// 値を含まない。
-fn account_store_settings(
-  loaded: Config,
-) -> Result(#(String, vault.MasterKey), String) {
-  case loaded.account_store {
-    config.AccountStoreUnavailable(reason) -> Error(reason)
-    config.AccountStore(database_url:, master_key:) ->
-      Ok(#(database_url, master_key))
   }
 }
 
@@ -642,13 +539,10 @@ fn account_store_settings(
 fn bunker_store(
   database_url: String,
 ) -> Result(#(pog.Config, pog.Config), String) {
-  account_store.pool_config(
-    process.new_name("nostr_no_su_account_pool"),
-    database_url,
-  )
+  db.pool_config(process.new_name("nostr_no_su_account_pool"), database_url)
   |> result.map(fn(pool) {
     let lock_pool =
-      account_store.lock_pool_config(
+      db.lock_pool_config(
         process.new_name("nostr_no_su_account_lock_pool"),
         pool,
       )
@@ -656,12 +550,12 @@ fn bunker_store(
   })
 }
 
-/// 管理 UI の仕様と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、値が不正な
-/// ときは理由を報告してから無効にする。待ち受けるのに `ADMIN_PASSWORD` が無ければ、
-/// その理由を返す。
+/// 管理 UI の待ち受けの設定と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、
+/// 値が不正なときは理由を報告してから無効にする。待ち受けるのに `ADMIN_PASSWORD`
+/// が無ければ、その理由を返す。
 fn admin_spec(
   loaded: Config,
-) -> Result(#(Option(app.Admin), List(String)), String) {
+) -> Result(#(Option(config.AdminListen), List(String)), String) {
   case loaded.admin_ui {
     config.MissingPassword(reason) -> Error(reason)
     config.Disabled ->
@@ -672,7 +566,6 @@ fn admin_spec(
       )
     config.Invalid(reason) ->
       Ok(#(None, [log.line(admin.log_prefix, reason <> "; admin UI disabled")]))
-    config.Listen(bind:, port:, password:) ->
-      Ok(#(Some(app.Admin(bind:, port:, password:)), []))
+    config.Listen(listen) -> Ok(#(Some(listen), []))
   }
 }

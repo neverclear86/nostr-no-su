@@ -90,7 +90,7 @@ pub fn load_missing_export_test() {
 /// 呼び出しの失敗の理由と区別するため、完全一致で見る。
 pub fn load_missing_plugin_name_export_test() {
   assert load_error("support@plugin_missing_name")
-    == "support@plugin_missing_name: missing export plugin_name/0"
+    == "missing export plugin_name/0"
 }
 
 /// 本体が対応していない API バージョンは拒否する。
@@ -261,6 +261,18 @@ pub fn handle_receives_config_test() {
     == dict.from_list([#("path", "/tmp/events.log")])
 }
 
+/// `handle_event/1` と `/2` の両方を持つプラグインでは `/2` が呼ばれる。
+/// fixture の `/1` は例外を投げるので、呼ばれればこのテストが落ちる。
+pub fn handle_prefers_arity_two_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_both_handlers"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  loaded.handle(sample_event())
+}
+
 /// `plugin_children/0` と `/1` の両方を持つプラグインでは `/1` が呼ばれる。
 /// fixture の `/0` は例外を投げるので、呼ばれていれば理由が `crashed` になる。
 pub fn children_prefers_arity_one_test() {
@@ -273,7 +285,7 @@ pub fn children_prefers_arity_one_test() {
 /// なる。接頭辞を本体が添えるので、プラグイン作者は理由にキー名だけを書けばよい。
 pub fn children_rejecting_config_test() {
   assert load_error("plugin_rejecting_config")
-    == "plugin_rejecting_config: plugin_children/1 rejected the configuration "
+    == "plugin_children/1 rejected the configuration "
     <> "(path is required); configure it with PLUGIN_PLUGIN_REJECTING_CONFIG_*"
 }
 
@@ -359,8 +371,7 @@ pub fn load_with_localized_pages_test() {
 
 /// 言語が 1 つも無ければ、まとめた一覧は空になる。
 pub fn merge_localized_pages_without_languages_is_empty_test() {
-  assert plugin.merge_localized_pages([], "plugin_localized", "plugin_pages/2")
-    == Ok([])
+  assert plugin.merge_localized_pages([], "plugin_pages/2") == Ok([])
 }
 
 /// `title_in` は既知の言語ではその表示名を、未知の言語では `key` を返す。
@@ -559,7 +570,7 @@ pub fn min_host_version_malformed_host_test() {
 /// コードパスに無いアプリケーションが複数あると、名前順で先のものを理由に出す。
 pub fn required_versions_report_the_first_missing_app_by_name_test() {
   assert load_error("plugin_requiring_missing_apps")
-    == "plugin_requiring_missing_apps: requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
+    == "requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
 }
 
 /// エラーが 1 件も無いリストは `invalid value` になる。
@@ -570,3 +581,44 @@ pub fn describe_decode_error_without_errors_is_invalid_value_test() {
 /// fixture が退避した値を読む。キーが無ければ例外になる。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic
+
+/// UI の任意エクスポートを 1 つも持たない組み合わせは `Ok(None)` になる。
+pub fn ui_arities_without_ui_exports_is_none_test() {
+  assert plugin.ui_arities(None, None, None) == Ok(None)
+}
+
+/// 一覧と中身がそろえば、そのアリティの組の `Ok(Some)` になる。
+pub fn ui_arities_with_pages_and_content_test() {
+  assert plugin.ui_arities(Some(1), Some(2), None) == Ok(Some(#(1, 2)))
+  assert plugin.ui_arities(Some(2), Some(3), Some(3)) == Ok(Some(#(2, 3)))
+}
+
+/// 実行だけを持つ組み合わせは、一覧が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_action_without_pages_test() {
+  assert plugin.ui_arities(None, None, Some(3))
+    == Error("plugin_page_action/3 but no plugin_pages/0, /1 or /2")
+}
+
+/// 一覧を持たずに中身を持つ組み合わせは、一覧が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_content_without_pages_test() {
+  assert plugin.ui_arities(None, Some(1), Some(2))
+    == Error("plugin_page_content/1 but no plugin_pages/0, /1 or /2")
+}
+
+/// 中身を持たずに一覧だけを持つ組み合わせは、中身が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_pages_without_content_test() {
+  assert plugin.ui_arities(Some(0), None, None)
+    == Error("plugin_pages/0 but no plugin_page_content/1, /2 or /3")
+}
+
+/// `plugin_pages/2` に `plugin_page_content/3` が無い組み合わせは `Error` になる。
+pub fn ui_arities_rejects_localized_pages_without_localized_content_test() {
+  assert plugin.ui_arities(Some(2), Some(2), None)
+    == Error("plugin_pages/2 but no plugin_page_content/3")
+}
+
+/// `plugin_page_content/3` に `plugin_pages/2` が無い組み合わせは `Error` になる。
+pub fn ui_arities_rejects_localized_content_without_localized_pages_test() {
+  assert plugin.ui_arities(Some(1), Some(3), None)
+    == Error("plugin_page_content/3 but no plugin_pages/2")
+}

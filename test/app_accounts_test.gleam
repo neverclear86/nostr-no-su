@@ -15,6 +15,7 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded}
+import nostr_no_su/db
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
@@ -26,11 +27,11 @@ import support/app_tree.{
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_from, deliver_and_expect, discard_resume_points,
   drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, named_relay,
-  other_client_key, other_signer_key, receive_until, request, response_body,
-  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_tree, stop_tree, store_failure, store_with_load, stored_signer,
-  test_relay, test_relay_url,
+  forwarding_spec, idle_monitor, load_signer, memory_store, other_client_key,
+  other_signer_key, receive_until, request, response_body, secret,
+  signed_request, signer_key, start_database, start_loading_bunker_tree,
+  start_tree_with_relays, stop_tree, store_failure, store_with_load,
+  stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 import support/poll
@@ -417,47 +418,48 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   let gates = process.new_subject()
   let next_call = call_counter()
   let bunker_name = process.new_name("test_bunker")
-  let monitor_relay = test_relay()
   let tree =
-    start_tree(app.Spec(
-      plugins: [
-        forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
-      ],
-      not_loaded_plugins: [],
-      monitor: app.Monitor(
-        name: process.new_name("test_dedup"),
-        dedup_capacity: 8,
-        relays: [monitor_relay],
-        subscriptions: fn(_relay_url) { fn() { Ok([]) } },
-        save_resume: discard_resume_points,
-        save_plugin_resume: discard_resume_points,
-        excludes_kind: event.is_ephemeral,
-        accepts_author: fn(_pubkey) { True },
+    start_tree_with_relays(
+      app.Spec(
+        plugins: [
+          forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
+        ],
+        not_loaded_plugins: [],
+        monitor: app.Monitor(
+          name: process.new_name("test_dedup"),
+          dedup_capacity: 8,
+          subscriptions: fn(_relay_url) { fn() { Ok([]) } },
+          save_resume: discard_resume_points,
+          save_plugin_resume: discard_resume_points,
+          excludes_kind: event.is_ephemeral,
+          accepts_author: fn(_pubkey) { True },
+        ),
+        bunker: bunker_spec(
+          bunker_name,
+          store_with_load(fn() {
+            // 最初の読み込みは、到達できない DB に対するチェックアウト待ちを模して、
+            // テストが開けるまで戻らない。以後の再試行は待たずに失敗する。
+            case next_call() {
+              0 -> hold_until_released(gates)
+              _ -> Nil
+            }
+            Error("database is unreachable or timed out")
+          }),
+          fixed_retry_delay,
+        ),
+        admin: None,
+        open: fake_open(reports, None),
+        reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+        relay_list: process.new_name("test_relay_list"),
       ),
-      bunker: bunker_spec(
-        bunker_name,
-        store_with_load(fn() {
-          // 最初の読み込みは、到達できない DB に対するチェックアウト待ちを模して、
-          // テストが開けるまで戻らない。以後の再試行は待たずに失敗する。
-          case next_call() {
-            0 -> hold_until_released(gates)
-            _ -> Nil
-          }
-          Error("database is unreachable or timed out")
-        }),
-        [named_relay("ws://bunker.test")],
-        fixed_retry_delay,
-      ),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
-    ))
+      [test_relay_url],
+      ["ws://bunker.test"],
+    )
   let assert Opened(first_url, _connection_1, _socket_1, deliver_1) =
     await_connection(reports)
   let assert Opened(_second_url, _connection_2, _socket_2, deliver_2) =
     await_connection(reports)
-  let deliver = case first_url == monitor_relay.url {
+  let deliver = case first_url == test_relay_url {
     True -> deliver_1
     False -> deliver_2
   }
@@ -1051,9 +1053,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
 
 /// ストアが登録済みを返す追加の失敗。
 fn already_stored() -> Result(Nil, bunker.WriteFailure) {
-  Error(
-    bunker.AlreadyStored(account_store.describe(account_store.AlreadyRegistered)),
-  )
+  Error(bunker.AlreadyStored(account_store.describe(db.Duplicate)))
 }
 
 /// DB にだけある行の公開鍵を追加すると、応答の前に読み直してメモリに入れ、登録済み
@@ -1128,7 +1128,8 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
 }
 
 /// 直近の読み込みで飛ばされた行は `app.skipped_rows` でも取れ、管理 UI の行
-/// （npub とラベルを持つ）になる。
+/// （npub とラベルを持つ）になる。`pubkey` 列を 32 バイトの 16 進として読めない行
+/// （16 進でない値と、長さの違う 16 進）の npub は `None` になる。
 pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -1144,6 +1145,16 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
               label: "old wallet",
               reason: vault.UndecryptablePrivateKey,
             ),
+            vault.Skipped(
+              pubkey: "abcd",
+              label: "",
+              reason: vault.MalformedPubkey,
+            ),
+            vault.Skipped(
+              pubkey: "zz",
+              label: "",
+              reason: vault.MalformedPubkey,
+            ),
           ]),
         ),
       )
@@ -1153,21 +1164,23 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
       plugins: [],
       not_loaded_plugins: [],
       monitor: idle_monitor(),
-      bunker: bunker_spec(name, store, [test_relay()], fixed_retry_delay),
+      bunker: bunker_spec(name, store, fixed_retry_delay),
       admin: None,
       open: fake_open(reports, None),
       reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
       relay_list: process.new_name("test_relay_list"),
     )
-  let tree = start_tree(spec)
+  let tree = start_tree_with_relays(spec, [], [test_relay_url])
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
 
-  let assert Ok([row]) = app.skipped_rows(spec)
+  let assert Ok([row, wrong_length, not_hex]) = app.skipped_rows(spec)
   assert row.pubkey == skipped_pubkey
-  assert row.npub == account.npub(account_for(other_signer_key))
+  assert row.npub == Some(account.npub(account_for(other_signer_key)))
   assert row.label == "old wallet"
   assert row.reason == vault.UndecryptablePrivateKey
+  assert wrong_length.npub == None
+  assert not_hex.npub == None
   stop_tree(tree)
 }
 

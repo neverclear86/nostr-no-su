@@ -1,9 +1,9 @@
-//// `dedup/resume` のテスト。プロセスにも IO にも触れない純粋な値なので、DB も
+//// `resume` のテスト。プロセスにも IO にも触れない純粋な値なので、DB も
 //// アクターも要らない。
 
 import gleam/dict
 import gleam/option.{None, Some}
-import nostr_no_su/dedup/resume
+import nostr_no_su/resume
 
 /// 記録の無いリレーの再開点は `None`。
 pub fn since_is_absent_at_first_test() {
@@ -26,6 +26,23 @@ pub fn since_is_the_latest_created_at_per_relay_test() {
 pub fn a_future_created_at_is_clamped_to_the_receive_time_test() {
   let recorded = resume.observe(resume.new(), "wss://a", 5000, 1000)
   assert resume.since(recorded, "wss://a") == Some(1000)
+}
+
+/// 前の再開点が無ければ、`created_at` がそのまま再開点になる。
+pub fn advance_starts_from_created_at_without_a_point_test() {
+  assert resume.advance(None, 100, 1000) == 100
+}
+
+/// 前の再開点より小さい `created_at` では値を下げず、大きければその値に進む。
+pub fn advance_does_not_lower_the_current_point_test() {
+  assert resume.advance(Some(100), 50, 1000) == 100
+  assert resume.advance(Some(100), 200, 1000) == 200
+}
+
+/// `now` より未来の `created_at` は `now` に切り詰める。
+pub fn advance_clamps_a_future_created_at_to_now_test() {
+  assert resume.advance(None, 5000, 1000) == 1000
+  assert resume.advance(Some(100), 5000, 1000) == 1000
 }
 
 /// アカウントの追加は、渡した全リレーの再開点を追加の時刻以上に引き上げる。

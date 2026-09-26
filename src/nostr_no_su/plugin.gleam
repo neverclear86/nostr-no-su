@@ -31,6 +31,7 @@ import gleam/string
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_config
+import nostr_no_su/plugin_term.{BinaryKey}
 
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
@@ -178,7 +179,8 @@ pub fn has_export(module: Atom, name: String, arity: Int) -> Bool {
 }
 
 /// モジュールを読み込み、プラグイン API v1 を満たすことを検証して `Plugin` に
-/// する。失敗理由は先頭にモジュール名を付けた 1 行で、そのままログに出せる。
+/// する。失敗理由はモジュール名を付けない 1 行で、ログの行では `plugin_loader` が
+/// 識別子を前に付ける。
 ///
 /// `env` は `PLUGIN_*` の環境変数全体（`config.plugin_env`）で、本番では本体の
 /// 接続先を `plugin_config.with_database_url` で足してある。プラグイン名が決まった
@@ -192,51 +194,33 @@ pub fn load(
   env: Dict(String, String),
   call_timeout_ms: Int,
 ) -> Result(Plugin, String) {
-  let name = atom.to_string(module)
   use _ <- result.try(
     ensure_module_loaded_within(module, call_timeout_ms)
     |> result.map_error(fn(failure) {
-      let reason = case failure {
-        Crashed(reason) -> reason
-        TimedOut -> "timed out after " <> int.to_string(call_timeout_ms) <> "ms"
-      }
-      prefix(name, "cannot load module (" <> reason <> ")")
+      "cannot load module ("
+      <> describe_failure(failure, call_timeout_ms)
+      <> ")"
     }),
   )
-  // `has_export` はイベントごとではなく読み込み時に 1 度だけ呼ぶ。必須エクスポート
-  // の判定と、下のクロージャーが渡す引数の決定の両方でこの値を使う。
-  let takes_config = has_export(module, handle_event_export, 2)
-  use _ <- result.try(require_exports(module, name, takes_config))
-  use _ <- result.try(check_api_version(module, name, call_timeout_ms))
-  use _ <- result.try(check_min_host_version_export(
-    module,
-    name,
-    call_timeout_ms,
-  ))
-  use _ <- result.try(check_required_versions(module, name, call_timeout_ms))
-  use plugin_name <- result.try(read_plugin_name(module, name, call_timeout_ms))
+  // イベント処理関数のアリティはイベントごとではなく読み込み時に 1 度だけ決め、
+  // 下のクロージャーが渡す引数の数に使う。
+  use event_arity <- result.try(require_exports(module))
+  use _ <- result.try(check_api_version(module, call_timeout_ms))
+  use _ <- result.try(check_min_host_version_export(module, call_timeout_ms))
+  use _ <- result.try(check_required_versions(module, call_timeout_ms))
+  use plugin_name <- result.try(read_plugin_name(module, call_timeout_ms))
   let config = plugin_config.for_plugin(env, plugin_name)
   let config_map = plugin_config.to_map(config)
   use children <- result.try(read_children(
     module,
-    name,
     plugin_name,
     config_map,
     call_timeout_ms,
   ))
-  use ui <- result.try(read_ui(
-    module,
-    name,
-    config,
-    config_map,
-    call_timeout_ms,
-  ))
+  use ui <- result.try(read_ui(module, config, config_map, call_timeout_ms))
   // atom はイベントごとではなく読み込み時に 1 度だけ作り、クロージャーで捕捉する。
   let handle_event = atom.create(handle_event_export)
-  let args = case takes_config {
-    True -> fn(event_map) { [event_map, config_map] }
-    False -> fn(event_map) { [event_map] }
-  }
+  let args = fn(event_map) { list.take([event_map, config_map], event_arity) }
   Ok(
     Plugin(name: plugin_name, children: children, ui: ui, handle: fn(incoming) {
       // 戻り値はプラグインが自由に決めてよいので捨てる。例外はここで捕まえず、
@@ -249,12 +233,8 @@ pub fn load(
 
 /// 必須エクスポートの存在を宣言順に確かめ、最初に欠けたものを報告する。
 /// イベント処理関数だけは `handle_event/1` **または** `handle_event/2` の
-/// どちらか一方があればよい（`takes_config` は `/2` の有無）。
-fn require_exports(
-  module: Atom,
-  name: String,
-  takes_config: Bool,
-) -> Result(Nil, String) {
+/// どちらか一方があればよく、成功ならそのアリティ（両方あれば `2`）を返す。
+fn require_exports(module: Atom) -> Result(Int, String) {
   let required = [#(api_version_export, 0), #(name_export, 0)]
   use _ <- result.try(
     list.try_each(required, fn(export) {
@@ -262,61 +242,50 @@ fn require_exports(
       case has_export(module, function, arity) {
         True -> Ok(Nil)
         False ->
-          Error(prefix(
-            name,
-            "missing export " <> function <> "/" <> int.to_string(arity),
-          ))
+          Error("missing export " <> plugin_term.export_label(function, arity))
       }
     }),
   )
-  case takes_config || has_export(module, handle_event_export, 1) {
-    True -> Ok(Nil)
-    False ->
-      Error(prefix(
-        name,
-        "missing export "
-          <> handle_event_export
-          <> "/1 or "
-          <> handle_event_export
-          <> "/2",
-      ))
-  }
+  highest_arity(module, handle_event_export, [2, 1])
+  |> option.to_result(
+    "missing export "
+    <> handle_event_export
+    <> "/1 or "
+    <> handle_event_export
+    <> "/2",
+  )
 }
 
 /// `plugin_api_version/0` を呼び、Int であることと `api_version` と一致すること
 /// を確かめる。
 fn check_api_version(
   module: Atom,
-  name: String,
   call_timeout_ms: Int,
 ) -> Result(Nil, String) {
   use value <- result.try(call_export(
     module,
-    name,
     api_version_export,
     [],
     call_timeout_ms,
   ))
   use version <- result.try(
     decode.run(value, decode.int)
-    |> result.replace_error(prefix(
-      name,
+    |> result.replace_error(
       api_version_export
-        <> "/0 must return an Int, got "
-        <> dynamic.classify(value),
-    )),
+      <> "/0 must return an Int, got "
+      <> dynamic.classify(value),
+    ),
   )
   case version == api_version {
     True -> Ok(Nil)
     False ->
-      Error(prefix(
-        name,
+      Error(
         "unsupported api version "
-          <> int.to_string(version)
-          <> " (expected "
-          <> int.to_string(api_version)
-          <> ")",
-      ))
+        <> int.to_string(version)
+        <> " (expected "
+        <> int.to_string(api_version)
+        <> ")",
+      )
   }
 }
 
@@ -324,7 +293,6 @@ fn check_api_version(
 /// された下限と本体の版を比べる。エクスポートが無ければ照合しない。
 fn check_min_host_version_export(
   module: Atom,
-  name: String,
   call_timeout_ms: Int,
 ) -> Result(Nil, String) {
   case has_export(module, min_host_version_export, 0) {
@@ -332,35 +300,31 @@ fn check_min_host_version_export(
     True -> {
       use value <- result.try(call_export(
         module,
-        name,
         min_host_version_export,
         [],
         call_timeout_ms,
       ))
       use declared <- result.try(
         decode.run(value, decode.string)
-        |> result.replace_error(prefix(
-          name,
+        |> result.replace_error(
           min_host_version_export
-            <> "/0 must return a version string like \"0.1.0\", got "
-            <> dynamic.classify(value),
-        )),
+          <> "/0 must return a version string like \"0.1.0\", got "
+          <> dynamic.classify(value),
+        ),
       )
       use host <- result.try(
         application_version(host_app_name)
-        |> result.replace_error(prefix(
-          name,
+        |> result.replace_error(
           "requires "
-            <> host_display_name
-            <> " "
-            <> declared
-            <> " or later, but no "
-            <> host_app_name
-            <> ".app is on the code path",
-        )),
+          <> host_display_name
+          <> " "
+          <> declared
+          <> " or later, but no "
+          <> host_app_name
+          <> ".app is on the code path",
+        ),
       )
       check_min_host_version(declared, host)
-      |> result.map_error(prefix(name, _))
     }
   }
 }
@@ -371,7 +335,7 @@ fn check_min_host_version_export(
 /// `plugin_min_host_version/0 must return …` の理由、`host` が読めなければ
 /// `… but the host version …` の理由、`host` が `declared` より小さければ
 /// `requires … or later, but this is …` の理由、それ以外は `Ok(Nil)` である。
-/// 理由にモジュール名は付かない（呼び出し側が付ける）。
+/// 理由にモジュール名は付かない（`load` の他の理由と同じ）。
 pub fn check_min_host_version(
   declared: String,
   host: String,
@@ -428,7 +392,6 @@ fn compare_versions(a: #(Int, Int, Int), b: #(Int, Int, Int)) -> order.Order {
 /// 確かめる。エクスポートが無ければ照合しない。
 fn check_required_versions(
   module: Atom,
-  name: String,
   call_timeout_ms: Int,
 ) -> Result(Nil, String) {
   case has_export(module, required_versions_export, 0) {
@@ -436,7 +399,6 @@ fn check_required_versions(
     True -> {
       use value <- result.try(call_export(
         module,
-        name,
         required_versions_export,
         [],
         call_timeout_ms,
@@ -444,54 +406,48 @@ fn check_required_versions(
       use required <- result.try(
         decode.run(value, decode.dict(decode.string, decode.string))
         |> result.map_error(fn(errors) {
-          prefix(
-            name,
-            required_versions_export
-              <> "/0 must return a map of application names to version strings ("
-              <> describe_decode_error(errors)
-              <> ")",
-          )
+          required_versions_export
+          <> "/0 must return a map of application names to version strings ("
+          <> describe_decode_error(errors)
+          <> ")"
         }),
       )
       required
       |> dict.to_list
       |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
-      |> list.try_each(fn(pair) { check_required_version(name, pair.0, pair.1) })
+      |> list.try_each(fn(pair) { check_required_version(pair.0, pair.1) })
     }
   }
 }
 
 /// アプリケーション 1 つの要求版を、コードパス上の版と照らし合わせる。
 fn check_required_version(
-  name: String,
   app: String,
   required: String,
 ) -> Result(Nil, String) {
   use found <- result.try(
     application_version(app)
-    |> result.replace_error(prefix(
-      name,
+    |> result.replace_error(
       "requires "
-        <> app
-        <> " "
-        <> required
-        <> ", but no "
-        <> app
-        <> ".app is on the code path",
-    )),
+      <> app
+      <> " "
+      <> required
+      <> ", but no "
+      <> app
+      <> ".app is on the code path",
+    ),
   )
   case found == required {
     True -> Ok(Nil)
     False ->
-      Error(prefix(
-        name,
+      Error(
         "requires "
-          <> app
-          <> " "
-          <> required
-          <> ", but the code path provides "
-          <> found,
-      ))
+        <> app
+        <> " "
+        <> required
+        <> ", but the code path provides "
+        <> found,
+      )
   }
 }
 
@@ -514,25 +470,17 @@ pub fn describe_decode_error(errors: List(decode.DecodeError)) -> String {
 /// `plugin_name/0` を呼び、空でない String であることを確かめる。
 fn read_plugin_name(
   module: Atom,
-  name: String,
   call_timeout_ms: Int,
 ) -> Result(String, String) {
-  use value <- result.try(call_export(
-    module,
-    name,
-    name_export,
-    [],
-    call_timeout_ms,
-  ))
+  use value <- result.try(call_export(module, name_export, [], call_timeout_ms))
   use plugin_name <- result.try(
     decode.run(value, decode.string)
-    |> result.replace_error(prefix(
-      name,
+    |> result.replace_error(
       name_export <> "/0 must return a String, got " <> dynamic.classify(value),
-    )),
+    ),
   )
   case plugin_name {
-    "" -> Error(prefix(name, name_export <> "/0 must not be empty"))
+    "" -> Error(name_export <> "/0 must not be empty")
     _ -> Ok(plugin_name)
   }
 }
@@ -545,19 +493,22 @@ fn read_plugin_name(
 /// `disabled` になり、運用者が見る症状が真の原因から離れる。
 fn read_children(
   module: Atom,
-  name: String,
   plugin_name: String,
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(List(ChildSpecification(Pid)), String) {
   let export = plugin_children.export_name
-  case has_export(module, export, 1), has_export(module, export, 0) {
+  case highest_arity(module, export, [1, 0]) {
     // 任意エクスポートを 1 つも持たないプラグインは子を持たない。ここで
     // 問い合わせると `call_export` が `undef` になる。
-    False, False -> Ok([])
-    True, _ ->
-      children(module, name, plugin_name, [config_map], call_timeout_ms)
-    False, True -> children(module, name, plugin_name, [], call_timeout_ms)
+    None -> Ok([])
+    Some(arity) ->
+      children(
+        module,
+        plugin_name,
+        list.take([config_map], arity),
+        call_timeout_ms,
+      )
   }
 }
 
@@ -566,14 +517,12 @@ fn read_children(
 /// 接頭辞を添える。
 fn children(
   module: Atom,
-  name: String,
   plugin_name: String,
   args: List(Dynamic),
   call_timeout_ms: Int,
 ) -> Result(List(ChildSpecification(Pid)), String) {
   use value <- result.try(call_export(
     module,
-    name,
     plugin_children.export_name,
     args,
     call_timeout_ms,
@@ -581,33 +530,26 @@ fn children(
   plugin_children.from_dynamic(value, plugin_name, list.length(args))
   |> result.map_error(fn(rejection) {
     case rejection {
-      plugin_children.InvalidSpec(reason) -> prefix(name, reason)
+      plugin_children.InvalidSpec(reason) -> reason
       plugin_children.ConfigRejected(reason) ->
-        prefix(
-          name,
-          plugin_children.export_label(list.length(args))
-            <> " rejected the configuration ("
-            <> reason
-            <> "); configure it with "
-            <> plugin_config.prefix(plugin_name)
-            <> "*",
-        )
+        plugin_term.export_label(plugin_children.export_name, list.length(args))
+        <> " rejected the configuration ("
+        <> reason
+        <> "); configure it with "
+        <> plugin_config.prefix(plugin_name)
+        <> "*"
     }
   })
 }
 
 /// 任意エクスポート `plugin_pages/0` `/1` `/2`、`plugin_page_content/1` `/2` `/3`、
-/// `plugin_page_action/2` `/3` の有無を見て、管理 UI の供給を読み込む。一覧も
-/// 中身も無ければ `Ok(None)`。実行だけを持つモジュールは `Error` で読み込まない。
-/// 一覧か中身の片方だけなら `Error`（`read_children` と同じく、症状を真の原因に
-/// 近い場所で報告するため）。表示の言語を受け取る `plugin_pages/2` と
-/// `plugin_page_content/3` も片方だけなら `Error`。両方あれば一覧を期限付きで
-/// 呼んで検証する。アリティの大きいほうを優先して設定 map を渡し、
-/// `plugin_pages/2` は `localized_pages` で言語ごとに呼ぶ。実行は任意で、無ければ
-/// `action: None`。
+/// `plugin_page_action/2` `/3` のうちアリティの大きいものを `highest_arity` で選び、
+/// 組み合わせを `ui_arities` で検査して管理 UI の供給を読み込む。組み合わせの誤りは
+/// `Error` で、`read_children` と同じく症状を真の原因に近い場所で報告するために
+/// そのプラグインを読み込まない。一覧と中身がそろえば一覧を期限付きで呼んで検証する。`plugin_pages/2` は `localized_pages` で言語ごとに呼び、
+/// それ以外は `call_pages` で 1 回呼ぶ。実行は任意で、無ければ `action: None`。
 fn read_ui(
   module: Atom,
-  name: String,
   config: plugin_config.Config,
   config_map: Dynamic,
   call_timeout_ms: Int,
@@ -615,75 +557,73 @@ fn read_ui(
   let pages_arity = highest_arity(module, pages_export, [2, 1, 0])
   let content_arity = highest_arity(module, page_content_export, [3, 2, 1])
   let action_arity = highest_arity(module, page_action_export, [3, 2])
-  let no_pages = " but no " <> pages_export <> "/0, /1 or /2"
-  case pages_arity, content_arity {
-    None, None ->
-      case action_arity {
-        None -> Ok(None)
-        Some(arity) ->
-          Error(prefix(
-            name,
-            export_label(page_action_export, arity) <> no_pages,
-          ))
-      }
-    None, Some(arity) ->
-      Error(prefix(name, export_label(page_content_export, arity) <> no_pages))
-    Some(arity), None ->
-      Error(prefix(
-        name,
-        export_label(pages_export, arity)
-          <> " but no "
-          <> page_content_export
-          <> "/1, /2 or /3",
-      ))
-    Some(2), Some(arity) if arity != 3 ->
-      Error(prefix(
-        name,
-        export_label(pages_export, 2)
-          <> " but no "
-          <> export_label(page_content_export, 3),
-      ))
-    Some(arity), Some(3) if arity != 2 ->
-      Error(prefix(
-        name,
-        export_label(page_content_export, 3)
-          <> " but no "
-          <> export_label(pages_export, 2),
-      ))
-    Some(pages_arity), Some(content_arity) -> {
+  use arities <- result.try(ui_arities(pages_arity, content_arity, action_arity))
+  case arities {
+    None -> Ok(None)
+    Some(#(pages_arity, content_arity)) -> {
       use pages <- result.try(case pages_arity {
-        2 -> localized_pages(module, name, config_map, call_timeout_ms)
-        _ -> {
-          let args = case pages_arity {
-            1 -> [config_map]
-            _ -> []
-          }
-          use value <- result.try(call_export(
+        2 -> localized_pages(module, config_map, call_timeout_ms)
+        _ ->
+          call_pages(
             module,
-            name,
-            pages_export,
-            args,
+            list.take([config_map], pages_arity),
             call_timeout_ms,
-          ))
-          decode_pages(value, name, export_label(pages_export, pages_arity))
-        }
+          )
       })
       Ok(
         Some(PluginUi(
           pages: pages,
-          content: content_of(
-            module,
-            name,
-            config,
-            call_timeout_ms,
-            content_arity,
-          ),
+          content: content_of(module, config, call_timeout_ms, content_arity),
           action: option.map(action_arity, fn(arity) {
-            action_of(module, name, config, call_timeout_ms, arity)
+            action_of(module, config, call_timeout_ms, arity)
           }),
         )),
       )
     }
+  }
+}
+
+/// 管理 UI の任意エクスポートのアリティ（`highest_arity` の結果）の組み合わせを
+/// 検査する。一覧も中身も実行も無ければ `Ok(None)`、一覧と中身がそろえば
+/// `Ok(Some(#(一覧のアリティ, 中身のアリティ)))`。実行だけ、中身だけ、一覧だけ、
+/// `plugin_pages/2` と `plugin_page_content/3` の片方だけのときは、モジュール名を
+/// 付けない 1 行の理由の `Error`。
+pub fn ui_arities(
+  pages: Option(Int),
+  content: Option(Int),
+  action: Option(Int),
+) -> Result(Option(#(Int, Int)), String) {
+  let no_pages = " but no " <> pages_export <> "/0, /1 or /2"
+  case pages, content {
+    None, None ->
+      case action {
+        None -> Ok(None)
+        Some(arity) ->
+          Error(plugin_term.export_label(page_action_export, arity) <> no_pages)
+      }
+    None, Some(arity) ->
+      Error(plugin_term.export_label(page_content_export, arity) <> no_pages)
+    Some(arity), None ->
+      Error(
+        plugin_term.export_label(pages_export, arity)
+        <> " but no "
+        <> page_content_export
+        <> "/1, /2 or /3",
+      )
+    Some(2), Some(arity) if arity != 3 ->
+      Error(
+        plugin_term.export_label(pages_export, 2)
+        <> " but no "
+        <> plugin_term.export_label(page_content_export, 3),
+      )
+    Some(arity), Some(3) if arity != 2 ->
+      Error(
+        plugin_term.export_label(page_content_export, 3)
+        <> " but no "
+        <> plugin_term.export_label(pages_export, 2),
+      )
+    Some(pages_arity), Some(content_arity) ->
+      Ok(Some(#(pages_arity, content_arity)))
   }
 }
 
@@ -699,45 +639,50 @@ fn highest_arity(
   |> option.from_result
 }
 
-/// 理由の文字列に出す `関数/アリティ`。
-fn export_label(function: String, arity: Int) -> String {
-  function <> "/" <> int.to_string(arity)
-}
-
-/// `plugin_pages/2` を `page_languages` の言語ごとに期限付きで呼んで
-/// `decode_pages` で検証し、`merge_localized_pages` で `LocalizedPage` の一覧に
-/// まとめる。
+/// `plugin_pages/2` を `page_languages` の言語ごとに `call_pages` で呼んで検証し、
+/// `merge_localized_pages` で `LocalizedPage` の一覧にまとめる。
 fn localized_pages(
   module: Atom,
-  name: String,
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(List(PluginPage), String) {
-  let label = export_label(pages_export, 2)
   use lists <- result.try(
     list.try_map(page_languages, fn(language) {
-      use value <- result.try(call_export(
+      use pages <- result.map(call_pages(
         module,
-        name,
-        pages_export,
         [config_map, dynamic.string(language)],
         call_timeout_ms,
       ))
-      use pages <- result.map(decode_pages(value, name, label))
       #(language, pages)
     }),
   )
-  merge_localized_pages(lists, name, label)
+  merge_localized_pages(lists, plugin_term.export_label(pages_export, 2))
+}
+
+/// `plugin_pages` を `args` で期限付きで 1 回呼び、`decode_pages` で検証する。
+/// `args` は候補の並び `[設定 map, 言語のコード]` の先頭のアリティ個で、理由に出す
+/// アリティはその長さである。
+fn call_pages(
+  module: Atom,
+  args: List(Dynamic),
+  call_timeout_ms: Int,
+) -> Result(List(PluginPage), String) {
+  use value <- result.try(call_export(
+    module,
+    pages_export,
+    args,
+    call_timeout_ms,
+  ))
+  decode_pages(value, plugin_term.export_label(pages_export, list.length(args)))
 }
 
 /// 言語ごとに検証したページの一覧（`#(言語のコード, 一覧)` の並びで、先頭の言語の
 /// 一覧をキーの基準にする）を、キーごとに言語から表示名への対応を持つ
 /// `LocalizedPage` の一覧にまとめる。キーの並びが先頭の言語の一覧と食い違う言語が
-/// あれば `Error`。言語が 1 つも無ければ空の一覧を返す。`name` は理由の先頭に
-/// 付けるモジュール名、`label` は理由に出す `関数/アリティ`。
+/// あれば `Error`。言語が 1 つも無ければ空の一覧を返す。`label` は理由に出す
+/// `関数/アリティ`。
 pub fn merge_localized_pages(
   lists: List(#(String, List(PluginPage))),
-  name: String,
   label: String,
 ) -> Result(List(PluginPage), String) {
   case lists {
@@ -749,15 +694,14 @@ pub fn merge_localized_pages(
           case list.map(entry.1, fn(page) { page.key }) == keys {
             True -> Ok(Nil)
             False ->
-              Error(prefix(
-                name,
+              Error(
                 label
-                  <> ": page keys for \""
-                  <> entry.0
-                  <> "\" differ from \""
-                  <> base_language
-                  <> "\"",
-              ))
+                <> ": page keys for \""
+                <> entry.0
+                <> "\" differ from \""
+                <> base_language
+                <> "\"",
+              )
           }
         }),
       )
@@ -784,30 +728,27 @@ pub fn merge_localized_pages(
 /// 文字集合の順に検査する。
 fn decode_pages(
   value: Dynamic,
-  name: String,
   label: String,
 ) -> Result(List(PluginPage), String) {
   use raw <- result.try(
     decode.run(value, decode.list(decode.dynamic))
-    |> result.replace_error(prefix(
-      name,
+    |> result.replace_error(
       label
-        <> " must return a list of page maps, got "
-        <> dynamic.classify(value),
-    )),
+      <> " must return a list of page maps, got "
+      <> dynamic.classify(value),
+    ),
   )
   use pages <- result.try(
     raw
-    |> list.index_map(fn(page, index) { #(page, index) })
-    |> list.try_map(fn(pair) { decode_page(pair.0, pair.1, label) })
-    |> result.map_error(fn(reason) { prefix(name, reason) }),
+    |> plugin_term.try_map_indexed(fn(page, index) {
+      decode_page(page, index, label)
+    }),
   )
   case pages {
-    [] -> Error(prefix(name, label <> " must return at least one page"))
+    [] -> Error(label <> " must return at least one page")
     _ ->
       case find_duplicate_page_key(pages) {
-        Some(key) ->
-          Error(prefix(name, label <> ": duplicate page key \"" <> key <> "\""))
+        Some(key) -> Error(label <> ": duplicate page key \"" <> key <> "\"")
         None -> Ok(pages)
       }
   }
@@ -821,27 +762,30 @@ fn decode_page(
   label: String,
 ) -> Result(PluginPage, String) {
   let unlabelled = label <> ": page #" <> int.to_string(index)
-  use _ <- result.try(check_page_map(raw, unlabelled))
-  use key <- result.try(required_page_field(raw, "key", unlabelled))
+  use _ <- result.try(plugin_term.check_map(raw, unlabelled, "a page map"))
+  use key <- result.try(plugin_term.required(
+    raw,
+    BinaryKey,
+    "key",
+    unlabelled,
+    "a String",
+    decode.string,
+  ))
   case page_key_ok(key) {
     False ->
       Error(label <> ": page key \"" <> key <> "\" must match [a-z0-9_-]+")
     True -> {
       let labelled = label <> ": page key \"" <> key <> "\""
-      use title <- result.try(required_page_field(raw, "title", labelled))
+      use title <- result.try(plugin_term.required(
+        raw,
+        BinaryKey,
+        "title",
+        labelled,
+        "a String",
+        decode.string,
+      ))
       Ok(PluginPage(key: key, title: title))
     }
-  }
-}
-
-/// ページの記述が map であることを先に確かめる。map でない要素（例えば
-/// `{key, title}` のタプル）を渡されたとき、キーが 1 つも読めないことを
-/// 「`key` が無い」と報告すると作者が原因にたどり着けない
-/// （`plugin_children.check_map` と同じ考え方）。
-fn check_page_map(raw: Dynamic, label: String) -> Result(Nil, String) {
-  case dynamic.classify(raw) {
-    "Dict" -> Ok(Nil)
-    other -> Error(label <> ": must be a page map, got " <> other)
   }
 }
 
@@ -873,73 +817,48 @@ fn find_duplicate_page_key_loop(
   }
 }
 
-/// ページの記述の必須フィールドを binary キーの map から読む。欠けていれば
-/// `<label>: missing <key>`、String でなければ型の不一致を報告する。
-fn required_page_field(
-  raw: Dynamic,
-  key: String,
-  label: String,
-) -> Result(String, String) {
-  let decoder =
-    decode.optional_field(
-      key,
-      None,
-      decode.map(decode.dynamic, Some),
-      decode.success,
-    )
-  case decode.run(raw, decoder) |> result.unwrap(None) {
-    None -> Error(label <> ": missing " <> key)
-    Some(value) ->
-      decode.run(value, decode.string)
-      |> result.replace_error(
-        label
-        <> ": "
-        <> key
-        <> " must be a String, got "
-        <> dynamic.classify(value),
-      )
-  }
-}
-
 /// ページの中身を取得するクロージャーを組み立てる。`arity` は
-/// `plugin_page_content` のアリティで、`2` と `3` では呼び出しのたびに `config` と
-/// 渡された `accounts` から `plugin_config.page_map` を組んで渡し、`3` ではさらに
-/// 言語のコードを渡す。失敗（例外・期限超過）は `call_export` がそのまま 1 行の
-/// 理由にする。
+/// `plugin_page_content` のアリティで、呼び出しのたびに候補の並び
+/// `[キー, 設定 map, 言語のコード]` の先頭 `arity` 個を渡す。設定 map は `config` と
+/// 渡された `accounts` から `plugin_config.page_map` で組む。失敗（例外・期限超過）は
+/// `call_export` の 1 行の理由の先頭にモジュール名を付けたものにする。
 fn content_of(
   module: Atom,
-  name: String,
   config: plugin_config.Config,
   call_timeout_ms: Int,
   arity: Int,
 ) -> fn(String, String, List(plugin_config.PageAccount)) ->
   Result(Dynamic, String) {
+  let name = atom.to_string(module)
   fn(key: String, language: String, accounts: List(plugin_config.PageAccount)) {
-    let args = case arity {
-      3 -> [
-        dynamic.string(key),
-        plugin_config.page_map(config, accounts),
-        dynamic.string(language),
-      ]
-      2 -> [dynamic.string(key), plugin_config.page_map(config, accounts)]
-      _ -> [dynamic.string(key)]
-    }
-    call_export(module, name, page_content_export, args, call_timeout_ms)
+    let args =
+      list.take(
+        [
+          dynamic.string(key),
+          plugin_config.page_map(config, accounts),
+          dynamic.string(language),
+        ],
+        arity,
+      )
+    call_export(module, page_content_export, args, call_timeout_ms)
+    |> result.map_error(prefix(name, _))
   }
 }
 
 /// フォームの送信を実行するクロージャーを組み立てる。`arity` は
-/// `plugin_page_action` のアリティで、`3` では呼び出しのたびに `config` と渡された
-/// `accounts` から `plugin_config.page_map` を組んで渡す。送られた値は binary
-/// キー・binary 値の map にする。戻り値は `decode_action_result` で検証する。
+/// `plugin_page_action` のアリティで、呼び出しのたびに候補の並び
+/// `[キー, 送られた値, 設定 map]` の先頭 `arity` 個を渡す。送られた値は binary
+/// キー・binary 値の map に、設定 map は `config` と渡された `accounts` から
+/// `plugin_config.page_map` で組む。戻り値は `decode_action_result` で検証し、
+/// 呼び出しの失敗と戻り値の不備の理由の先頭にモジュール名を付ける。
 fn action_of(
   module: Atom,
-  name: String,
   config: plugin_config.Config,
   call_timeout_ms: Int,
   arity: Int,
 ) -> fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
   Result(Nil, String) {
+  let name = atom.to_string(module)
   fn(
     key: String,
     values: List(#(String, String)),
@@ -949,108 +868,88 @@ fn action_of(
       values
       |> list.map(fn(pair) { #(dynamic.string(pair.0), dynamic.string(pair.1)) })
       |> dynamic.properties
-    let args = case arity {
-      3 -> [
-        dynamic.string(key),
-        values_map,
-        plugin_config.page_map(config, accounts),
-      ]
-      _ -> [dynamic.string(key), values_map]
+    let args =
+      list.take(
+        [
+          dynamic.string(key),
+          values_map,
+          plugin_config.page_map(config, accounts),
+        ],
+        arity,
+      )
+    {
+      use value <- result.try(call_export(
+        module,
+        page_action_export,
+        args,
+        call_timeout_ms,
+      ))
+      decode_action_result(
+        value,
+        plugin_term.export_label(page_action_export, arity),
+      )
     }
-    use value <- result.try(call_export(
-      module,
-      name,
-      page_action_export,
-      args,
-      call_timeout_ms,
-    ))
-    decode_action_result(value, name, export_label(page_action_export, arity))
+    |> result.map_error(prefix(name, _))
   }
 }
 
 /// `plugin_page_action` の戻り値を検証する。`ok` の atom なら成功、
 /// `{error, Reason}` で `Reason` が binary ならその理由の拒否、それ以外は
 /// 戻り値の形の誤り。
-fn decode_action_result(
-  value: Dynamic,
-  name: String,
-  label: String,
-) -> Result(Nil, String) {
-  let bad_return = fn() {
-    Error(prefix(
-      name,
+fn decode_action_result(value: Dynamic, label: String) -> Result(Nil, String) {
+  let bad_return =
+    Error(
       label
-        <> " must return ok or {error, Reason}, got "
-        <> dynamic.classify(value),
-    ))
-  }
+      <> " must return ok or {error, Reason}, got "
+      <> dynamic.classify(value),
+    )
   let is_ok = case decode.run(value, atom.decoder()) {
     Ok(tag) -> atom.to_string(tag) == "ok"
     Error(_) -> False
   }
-  case is_ok {
-    True -> Ok(Nil)
-    False ->
-      case is_error_tuple(value) {
-        False -> bad_return()
-        True ->
-          case decode.run(value, decode.at([1], decode.dynamic)) {
-            Error(_) -> bad_return()
-            Ok(reason_value) ->
-              case decode.run(reason_value, decode.string) {
-                Ok(reason) ->
-                  Error(prefix(
-                    name,
-                    label <> " rejected the request (" <> reason <> ")",
-                  ))
-                Error(_) ->
-                  Error(prefix(
-                    name,
-                    label
-                      <> ": error reason must be a String, got "
-                      <> dynamic.classify(reason_value),
-                  ))
-              }
-          }
+  case is_ok, plugin_term.is_error_tuple(value) {
+    True, _ -> Ok(Nil)
+    False, False -> bad_return
+    False, True ->
+      case plugin_term.error_reason(value) {
+        Ok(reason) -> Error(label <> " rejected the request (" <> reason <> ")")
+        Error(Some(got)) -> Error(plugin_term.reason_not_a_string(label, got))
+        Error(None) -> bad_return
       }
   }
 }
 
-/// 戻り値が `{error, Reason}` の形かどうか。**判別子は要素 0 が atom の `error`
-/// であることだけ**で、要素数は見ない（`plugin_children.is_error_tuple` と同じ
-/// 考え方）。
-fn is_error_tuple(value: Dynamic) -> Bool {
-  case decode.run(value, decode.at([0], atom.decoder())) {
-    Ok(tag) -> atom.to_string(tag) == "error"
-    Error(_) -> False
-  }
-}
-
-/// プラグインのエクスポートを使い捨てのプロセスで期限付きで呼ぶ。失敗は
-/// モジュール名と `関数/アリティ` を付けた 1 行（`crashed (...)` か
-/// `timed out after <ms>ms`）にする。アリティは `args` の長さから決まる。
+/// プラグインのエクスポートを使い捨てのプロセスで期限付きで呼ぶ。失敗は `関数/アリティ` を
+/// 先頭に置いた 1 行（`crashed (...)` か `timed out after <ms>ms`）にする。アリティは `args`
+/// の長さから決まる。
 fn call_export(
   module: Atom,
-  name: String,
   function: String,
   args: List(Dynamic),
   call_timeout_ms: Int,
 ) -> Result(Dynamic, String) {
-  let label = function <> "/" <> int.to_string(list.length(args))
+  let label = plugin_term.export_label(function, list.length(args))
   call_export_within(module, atom.create(function), args, call_timeout_ms)
   |> result.map_error(fn(failure) {
+    let detail = describe_failure(failure, call_timeout_ms)
     case failure {
-      Crashed(reason) -> prefix(name, label <> " crashed (" <> reason <> ")")
-      TimedOut ->
-        prefix(
-          name,
-          label <> " timed out after " <> int.to_string(call_timeout_ms) <> "ms",
-        )
+      Crashed(_) -> label <> " crashed (" <> detail <> ")"
+      TimedOut -> label <> " " <> detail
     }
   })
 }
 
-/// 失敗理由にモジュール名を付ける。
+/// 期限付きの呼び出しの失敗の詳細を 1 行にする。`Crashed` は理由そのもの、`TimedOut` は
+/// `timed out after <ms>ms`。前に置く語（`cannot load module` や `crashed`）は呼び出し側が
+/// 決める。
+fn describe_failure(failure: CallFailure, call_timeout_ms: Int) -> String {
+  case failure {
+    Crashed(reason) -> reason
+    TimedOut -> "timed out after " <> int.to_string(call_timeout_ms) <> "ms"
+  }
+}
+
+/// 管理 UI から呼ぶ閉包（`content_of` と `action_of`）の失敗理由にモジュール名を付ける。
 fn prefix(module_name: String, reason: String) -> String {
   module_name <> ": " <> reason
 }
@@ -1066,14 +965,14 @@ fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 
 /// モジュールをコードパスから期限付きで読み込む。`-on_load` が戻らない
 /// モジュールを検出するため、使い捨てのプロセスで動かす。
-@external(erlang, "nostr_no_su_ffi", "ensure_module_loaded_within")
+@external(erlang, "nostr_no_su_plugin_ffi", "ensure_module_loaded_within")
 fn ensure_module_loaded_within(
   module: Atom,
   timeout_ms: Int,
 ) -> Result(Nil, CallFailure)
 
 /// 例外と戻らない呼び出しを `CallFailure` にしてエクスポートを呼ぶ。
-@external(erlang, "nostr_no_su_ffi", "call_export_within")
+@external(erlang, "nostr_no_su_plugin_ffi", "call_export_within")
 fn call_export_within(
   module: Atom,
   function: Atom,
@@ -1082,5 +981,5 @@ fn call_export_within(
 ) -> Result(Dynamic, CallFailure)
 
 /// コードパス上で最初に見つかる `<app>.app` の `vsn`。
-@external(erlang, "nostr_no_su_ffi", "application_version")
+@external(erlang, "nostr_no_su_plugin_ffi", "application_version")
 fn application_version(app: String) -> Result(String, Nil)

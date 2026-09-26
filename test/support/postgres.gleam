@@ -5,7 +5,7 @@ import gleam/erlang/process.{type Name}
 import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
-import nostr_no_su/bunker/account_store
+import nostr_no_su/db
 import nostr_no_su/random
 import nostr_no_su/task.{type Deadline}
 import pog
@@ -44,7 +44,7 @@ fn probe_until(db: pog.Connection, deadline: Deadline) -> Bool {
     task.start(fn() {
       pog.query("SELECT 1")
       |> pog.timeout(int.max(task.remaining_ms(deadline), 1))
-      |> account_store.execute(db)
+      |> db.execute(db)
     })
     |> task.await(deadline)
   case probed, task.remaining_ms(deadline) {
@@ -81,16 +81,15 @@ pub fn with_test_database_url(label: String, run: fn(String) -> Nil) -> Nil {
   }
 }
 
-/// バンカーと同じ設定（`account_store.pool_config` と `lock_pool_config`）でロック
+/// バンカーと同じ設定（`db.pool_config` と `lock_pool_config`）でロック
 /// 専用の 1 本のプールを起動し、クエリーに応答するまで待ってからその名前を返す。
 /// プールはテストプロセスにリンクされる。`start_pool` は `pog.url_config` を直接
 /// 使い本数を 2 に固定するので、ロックの 1 本のプールには流用しない。本番の設定の
 /// 関数を通すことで、テストのロックのプールが本番と同じ本数（1）になる。
 pub fn start_lock_pool(database_url: String) -> Name(pog.Message) {
   let name = process.new_name("test_postgres_lock_pool")
-  let assert Ok(pool_config) = account_store.pool_config(name, database_url)
-  let assert Ok(_started) =
-    account_store.lock_pool_config(name, pool_config) |> pog.start
+  let assert Ok(pool_config) = db.pool_config(name, database_url)
+  let assert Ok(_started) = db.lock_pool_config(name, pool_config) |> pog.start
   assert await_pool(pog.named_connection(name), 10_000)
   name
 }

@@ -39,14 +39,6 @@ import support/loopback_relay.{
 }
 import support/signed_event
 
-/// 取り除くのは先頭のスキームだけで、以降に現れる "://" は残す。
-pub fn label_strips_only_the_scheme_test() {
-  assert relay_client.label("ws://127.0.0.1:7777") == "127.0.0.1:7777"
-  assert relay_client.label("wss://relay.example/wss://x")
-    == "relay.example/wss://x"
-  assert relay_client.label("relay.example") == "relay.example"
-}
-
 /// `wss` は、stratus が TLS ソケットに戻す https リクエストになる。
 pub fn to_request_maps_wss_to_https_test() {
   let assert Ok(req) = relay_client.to_request("wss://relay.example/path")
@@ -63,11 +55,13 @@ pub fn to_request_maps_ws_to_http_test() {
   assert req.port == Some(7777)
 }
 
-/// それ以外のスキームは手を加えずそのまま通す。
-pub fn to_request_leaves_other_schemes_alone_test() {
-  let assert Ok(req) = relay_client.to_request("https://relay.example")
-  assert req.scheme == http.Https
-  assert req.host == "relay.example"
+/// `ws`・`wss` 以外のスキームや、スキームの無い URL は拒否する。スキームの判定は
+/// 生の文字列の接頭辞で行うので、大文字の `WSS:` も拒否する。
+pub fn to_request_rejects_non_websocket_schemes_test() {
+  assert relay_client.to_request("https://relay.example") == Error(Nil)
+  assert relay_client.to_request("http://relay.example") == Error(Nil)
+  assert relay_client.to_request("WSS://relay.example") == Error(Nil)
+  assert relay_client.to_request("relay.example") == Error(Nil)
 }
 
 /// ホストが空の URL は `request.to` を通ってしまうので、`to_request` が拒否する。
@@ -107,12 +101,13 @@ pub fn describe_start_error_reports_a_timeout_test() {
 fn start_unsubscribed(url: String) -> Result(relay_client.Client, String) {
   relay_client.start(
     url,
-    fn() { Ok([]) },
-    fn(_event) { Nil },
-    fn(_ack) { Nil },
-    None,
-    relay_client.subscription_retry_delay,
-    relay_client.keepalive_interval_ms,
+    relay_client.Handlers(
+      subscriptions: fn() { Ok([]) },
+      handle_incoming: fn(_event) { Nil },
+      handle_ok: fn(_ack) { Nil },
+      authenticator: None,
+    ),
+    relay_client.default_timing,
   )
 }
 
@@ -1268,12 +1263,13 @@ fn connect(
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      subscriptions,
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      authenticator,
-      retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions:,
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator:,
+      ),
+      relay_client.Timing(..relay_client.default_timing, retry_delay:),
     )
   client
 }
@@ -1525,7 +1521,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("receive_limit"),
-      relay: relay_client.label(relay.url),
+      relay: relay.url,
       connect: fn() {
         app.open_websocket(
           relay.url,
@@ -1563,18 +1559,19 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(received_msg) {
-        case received_msg {
-          relay_client.ReceivedEvent(_, verified) ->
-            process.send(received, verified)
-          relay_client.ReceivedEose(_) -> Nil
-        }
-      },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(received_msg) {
+          case received_msg {
+            relay_client.ReceivedEvent(_, verified) ->
+              process.send(received, verified)
+            relay_client.ReceivedEose(_) -> Nil
+          }
+        },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
 
   let assert Ok(verified) = process.receive(received, 2000)
@@ -1599,7 +1596,7 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("handshake_body_limit"),
-      relay: relay_client.label(url),
+      relay: url,
       connect: fn() {
         app.open_websocket(
           url,
@@ -1645,12 +1642,13 @@ pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      fn() { Ok([]) },
-      fn(_event) { Nil },
-      process.send(acks, _),
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: process.send(acks, _),
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
 
   relay_client.publish(client, signed_event.new(1, "published"))
@@ -1684,12 +1682,16 @@ fn open_socket(
 ) -> Result(relay_connection.Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
-    fn() { Ok([]) },
-    fn(_event) { Nil },
-    fn(_ack) { Nil },
-    None,
-    relay_client.subscription_retry_delay,
-    interval_ms,
+    relay_client.Handlers(
+      subscriptions: fn() { Ok([]) },
+      handle_incoming: fn(_event) { Nil },
+      handle_ok: fn(_ack) { Nil },
+      authenticator: None,
+    ),
+    relay_client.Timing(
+      ..relay_client.default_timing,
+      keepalive_interval_ms: interval_ms,
+    ),
   ))
   let assert Ok(pid) = process.subject_owner(connection)
   Ok(
@@ -1715,7 +1717,7 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: process.new_name("half_open"),
-      relay: relay_client.label(relay.url),
+      relay: relay.url,
       connect: fn() { open_socket(relay.url, 200) },
       on_connect: fn(_socket) { Nil },
       on_disconnect: fn() { process.send(disconnects, Nil) },
@@ -1751,12 +1753,13 @@ pub fn disconnect_sends_close_and_a_close_frame_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, req)) = process.receive(frames, 2000)
   let assert Ok(req_text) = bit_array.to_string(req)
@@ -1783,12 +1786,13 @@ pub fn disconnect_kills_a_client_that_does_not_stop_in_time_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, _req)) = process.receive(frames, 2000)
 

@@ -236,6 +236,49 @@ pub fn session_permissions_keep_unknown_declarations_test() {
     ))
 }
 
+/// kinds の欄の項目は、欄に書かれた順のまま重複を取り除いて保存される。
+pub fn session_permissions_keep_the_kinds_in_order_once_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.nip44_decrypt_field, "on"),
+        #(dashboard.perms_kinds_field, "7,1,07"),
+        #(dashboard.perms_other_field, "get_public_key"),
+      ],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "nip44_decrypt,sign_event:7,sign_event:1,get_public_key",
+    ))
+}
+
+/// `sign_event` にチェックが入った POST では、kinds の欄の値は保存の値に入らない。
+pub fn session_permissions_drop_the_kinds_when_every_kind_is_signed_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.sign_event_field, "on"),
+        #(dashboard.perms_kinds_field, "7"),
+      ],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "sign_event",
+    ))
+}
+
 /// セッション `session_client` の行の権限の編集のダイアログの `id`。
 fn permissions_dialog_id(session_client: String) -> String {
   "dialog-session-" <> signer <> "-" <> session_client <> "-permissions"
@@ -802,21 +845,6 @@ pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
   assert !string.contains(simulate.read_body(not_found), hint)
 }
 
-/// 承認・拒否・取り消し・クライアントの接続のログ行は、署名者とクライアントの公開鍵を
-/// 含む。
-pub fn session_change_lines_name_the_signer_and_the_client_test() {
-  assert admin.session_change_line(admin.ConnectionApproved, signer, client)
-    == "approved the connection of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.ConnectionDenied, signer, client)
-    == "denied the connection of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.SessionRevoked, signer, client)
-    == "revoked the session of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.PermissionsSaved, signer, client)
-    == "updated the permissions of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.ClientConnected, signer, client)
-    == "connected client " <> client <> " to signer " <> signer
-}
-
 /// 知らないパスは 404 の HTML で、理由を出し、パスを含めない。アカウントの一覧を
 /// 引かない（503 にならない）ことで、`Context` を呼ばずに描画することを表す。
 pub fn unknown_paths_are_not_found_test() {
@@ -935,10 +963,7 @@ pub fn add_relay_saves_the_trimmed_url_test() {
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000)
-    == Ok(RelayAdded(
-      "wss://new.example",
-      relay_list.Roles(monitor: True, bunker: False),
-    ))
+    == Ok(RelayAdded("wss://new.example", relay_list.MonitorOnly))
 }
 
 /// URL の規則に外れる値は 400 で `InvalidRelayUrl` を出し、送った URL とチェックを
@@ -1029,7 +1054,21 @@ pub fn update_relay_roles_saves_the_roles_test() {
   assert response.status == 303
   assert header(response, "location") == "/"
   assert process.receive(reports, 1000)
-    == Ok(RelayRolesUpdated(2, relay_list.Roles(monitor: True, bunker: True)))
+    == Ok(RelayRolesUpdated(2, relay_list.Both))
+}
+
+/// 用途のチェックは値が `on` のときだけ入っているとする。
+pub fn update_relay_roles_counts_only_on_as_checked_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.relay_action_path(2, dashboard.EditRelayRoles),
+      [#("monitor", "on"), #("bunker", "")],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(RelayRolesUpdated(2, relay_list.MonitorOnly))
 }
 
 /// 用途を 1 つも選ばない POST は 400 で `RelayRoleRequired` を出し、チェックは無く、
@@ -1618,4 +1657,23 @@ pub fn switched_theme_carries_across_pages_test() {
     |> simulate.session(switch, switched)
     |> admin.handle_request(context(), _)
   assert page_theme(generated) == Some("dark")
+}
+
+/// 記述の最上位を読めないページは 503 で、読めない理由を出す。
+pub fn plugin_page_with_an_unreadable_description_is_unavailable_test() {
+  let unreadable =
+    admin.Context(
+      ..context(),
+      plugin_page_content: fn(_name, _key, _language, _accounts) {
+        Ok(dynamic.string("not a map"))
+      },
+    )
+  let response = get(unreadable, "/plugins/console_logger/status")
+  assert response.status == 503
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    i18n.text(i18n.English, i18n.PluginPageUnavailable),
+  )
+  assert string.contains(body, "top level: must be a map")
 }

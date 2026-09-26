@@ -35,15 +35,14 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
-import nostr_no_su/relay_list.{type Roles, Roles}
-import nostr_no_su/relay_store.{type Relay}
+import nostr_no_su/relay_list.{type Roles}
 
 /// `relays` の 1 行の表示内容。用途ごとに、使っていなければ `Unused`、状態を得られたら
 /// `Reported`、締め切りまでに接続が答えなければ `Unanswered` を持つ。
@@ -61,10 +60,11 @@ pub type RoleState {
   Unanswered
 }
 
-/// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
-/// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
-/// クライアントは管理 UI での承認を経てから署名を委任できる。`npub` は画面で
-/// アカウントを識別するための表記。
+/// アカウント 1 件の表示内容。`uri` と `uri_camera_text` は secret を含むため、認証済み
+/// ページ以外に出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
+/// クライアントは管理 UI での承認を経てから署名を委任できる。`uri_camera_text` と
+/// `auth_uri_camera_text` は、それぞれの URI の端末のカメラ用のコピー用の文字列
+/// （`connection_uri.camera_copy_text`）。`npub` は画面でアカウントを識別するための表記。
 /// `picture` は kind 0 の `picture` の検査済みの `https:` の URL で、無ければ `None`。
 pub type AccountRow {
   AccountRow(
@@ -73,17 +73,19 @@ pub type AccountRow {
     label: String,
     uri: String,
     auth_uri: String,
+    uri_camera_text: String,
+    auth_uri_camera_text: String,
     picture: Option(String),
   )
 }
 
-/// 読み込みで飛ばされた行 1 件の表示内容。`npub` は `pubkey` から導けたときだけ
-/// 入り、`MalformedPubkey` の行では空文字列になる。この行は識別を描かず、
-/// `reason` の 1 文だけを出す。
+/// 読み込みで飛ばされた行 1 件の表示内容。`npub` は `pubkey` 列から導けたときだけ `Some` で、
+/// `MalformedPubkey` の行では `None` になる。`None` の行は識別を描かず、`reason` の 1 文だけを
+/// 出す。
 pub type SkippedRow {
   SkippedRow(
     pubkey: String,
-    npub: String,
+    npub: Option(String),
     label: String,
     reason: vault.RowError,
   )
@@ -99,6 +101,21 @@ pub type PluginRow {
     status: Option(plugin_runner.Status),
     pages: List(plugin.PluginPage),
   )
+}
+
+/// プラグインの状態の分類。`plugin_state` のチップと語と詳細、概要の帯の件数がこれを使う。
+type PluginCondition {
+  PluginCondition(
+    chip: view.Chip,
+    word: i18n.Message,
+    detail: Option(PluginDetail),
+  )
+}
+
+/// 状態のチップの下に出す詳細。破棄したイベントの件数と、無効のときだけその理由（プラグイン
+/// 由来の英語の文字列）。
+type PluginDetail {
+  PluginDetail(dropped: Int, reason: Option(String))
 }
 
 /// 承認待ちのカードと承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
@@ -191,9 +208,11 @@ pub type GettingStarted {
 
 /// POST の応答で、ダッシュボードに開いた状態で描くダイアログ。
 pub type OpenDialog {
-  /// リレーの追加。欄に戻す URL と用途と、先頭に出す理由を持つ。
-  NewRelayOpen(url: String, roles: Roles, error: i18n.Reason)
-  /// リレー `id` への操作。`roles` は用途の編集の欄に戻す用途で、削除では `None`。
+  /// リレーの追加。欄に戻す URL と、チェックを入れる用途（`None` ならどちらも外す）と、先頭に
+  /// 出す理由を持つ。
+  NewRelayOpen(url: String, roles: Option(Roles), error: i18n.Reason)
+  /// リレー `id` への操作。`roles` は用途の編集の欄でチェックを入れる用途で、`None` ならどちらも
+  /// 外す。削除では使わない。
   RelayActionOpen(
     id: Int,
     action: RelayAction,
@@ -376,13 +395,13 @@ pub const signer_field = "signer"
 /// セッション取り消しのフォームでクライアントを送る欄の名前。
 pub const client_field = "client"
 
-/// 権限の編集のフォームで `sign_event` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `sign_event` の可否を送る欄の名前。
 pub const sign_event_field = "sign_event"
 
-/// 権限の編集のフォームで `nip44_encrypt` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `nip44_encrypt` の可否を送る欄の名前。
 pub const nip44_encrypt_field = "nip44_encrypt"
 
-/// 権限の編集のフォームで `nip44_decrypt` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `nip44_decrypt` の可否を送る欄の名前。
 pub const nip44_decrypt_field = "nip44_decrypt"
 
 /// 権限の編集のフォームで許す kind の一覧を送る欄の名前。
@@ -520,15 +539,8 @@ fn render_page(
     [
       overview_rail(language, snapshot),
       shared_failure_alert(language, shared),
-      pending_section(
-        language,
-        snapshot.accounts,
-        snapshot.now,
-        shared,
-        snapshot.pending,
-        refresh,
-      ),
-      getting_started_band(language, snapshot.accounts, snapshot.relays),
+      pending_section(language, snapshot, shared, refresh),
+      getting_started_band(language, snapshot),
       html.div(
         [
           attribute.class(
@@ -537,31 +549,12 @@ fn render_page(
         ],
         [
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            accounts_section(
-              language,
-              shared,
-              snapshot.accounts,
-              snapshot.skipped,
-              snapshot.sessions,
-              snapshot.relays,
-              dialog,
-            ),
-            sessions_section(
-              language,
-              snapshot.accounts,
-              snapshot.now,
-              shared,
-              snapshot.sessions,
-              dialog,
-            ),
+            accounts_section(language, snapshot, shared, dialog),
+            sessions_section(language, snapshot, shared, dialog),
           ]),
           html.div([attribute.class("flex min-w-0 flex-col gap-6")], [
-            relays_section(language, snapshot.relays, dialog),
-            plugins_section(
-              language,
-              snapshot.plugins,
-              snapshot.not_loaded_plugins,
-            ),
+            relays_section(language, snapshot, dialog),
+            plugins_section(language, snapshot),
           ]),
         ],
       ),
@@ -586,14 +579,22 @@ pub type OverviewNote {
   OverviewNote(state: Option(view.Chip), text: i18n.Message)
 }
 
-/// 概要の帯の 1 項目の見せ方。`linked` が偽なら節へのリンクにしない（飛び先の節が出ない）。
-/// `highlighted` が真なら項目を `primary` で塗る。
+/// 概要の帯の 1 項目の強調。項目の見せ方のうち、作られる 3 通りだけを表す。
+pub type OverviewEmphasis {
+  /// 節へのリンクにしない（飛び先の節が出ない）。塗らない。
+  Unlinked
+  /// 節へのリンクにする。塗らない。
+  Linked
+  /// 節へのリンクにし、項目を `primary` で塗る。
+  Highlighted
+}
+
+/// 概要の帯の 1 項目の見せ方。リンクにするかと塗るかは `emphasis` で決める。
 pub type Overview {
   Overview(
     value: OverviewValue,
     notes: List(OverviewNote),
-    linked: Bool,
-    highlighted: Bool,
+    emphasis: OverviewEmphasis,
   )
 }
 
@@ -625,8 +626,7 @@ const not_available = Overview(
   notes: [
     OverviewNote(Some(view.ToneChip(view.Failure)), i18n.OverviewNotAvailable),
   ],
-  linked: True,
-  highlighted: False,
+  emphasis: Linked,
 )
 
 /// 色を付けない補足の語。
@@ -661,8 +661,7 @@ fn pending_overview(
             i18n.PendingExpireAfterMinutes(engine.pending_ttl_minutes()),
           ),
         ],
-        linked: False,
-        highlighted: False,
+        emphasis: Unlinked,
       )
     Ok([first, ..] as rows) -> {
       let soonest =
@@ -675,8 +674,7 @@ fn pending_overview(
           plain_note(i18n.AwaitingDecision),
           plain_note(i18n.SoonestExpiry(view.countdown(soonest))),
         ],
-        linked: True,
-        highlighted: True,
+        emphasis: Highlighted,
       )
     }
   }
@@ -702,8 +700,7 @@ fn accounts_overview(
               i18n.UnreadableRowCount,
             )
         },
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
   }
 }
@@ -718,8 +715,7 @@ fn sessions_overview(
       Overview(
         value: Count(list.length(rows)),
         notes: [plain_note(i18n.ApprovedClients)],
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
   }
 }
@@ -760,8 +756,7 @@ fn relays_overview(relays: Result(List(RelayRow), i18n.Reason)) -> Overview {
           [] -> [plain_note(i18n.AllRelaysConnected)]
           _ -> issues
         },
-        linked: True,
-        highlighted: False,
+        emphasis: Linked,
       )
     }
   }
@@ -771,43 +766,26 @@ fn relays_overview(relays: Result(List(RelayRow), i18n.Reason)) -> Overview {
 /// （ランナーが無いため）。補足は過負荷・無効・応答なし・読み込み失敗の件数を要対応の語で出し、
 /// どれも無ければ、プラグインが 1 件も無いとき「有効なプラグインなし」、あれば値の読み方
 /// （「動作中 / 全件数」）を出す。
+/// 状態は `plugin_condition` のチップで数え分ける。
 fn plugins_overview(
   plugins: List(PluginRow),
   not_loaded: List(plugin_loader.NotLoaded),
 ) -> Overview {
-  let count = fn(matches: fn(Option(plugin_runner.Status)) -> Bool) {
-    list.count(plugins, fn(plugin) { matches(plugin.status) })
+  let count = fn(chip: view.Chip) {
+    list.count(plugins, fn(plugin) {
+      plugin_condition(plugin.status).chip == chip
+    })
   }
-  let running = count(fn(status) { status == Some(plugin_runner.Running) })
-  let overloaded =
-    count(fn(status) {
-      case status {
-        Some(plugin_runner.Overloaded(..)) -> True
-        _ -> False
-      }
-    })
-  let disabled =
-    count(fn(status) {
-      case status {
-        Some(plugin_runner.Disabled(..)) -> True
-        _ -> False
-      }
-    })
-  let unavailable = count(fn(status) { status == None })
+  let chip_notes = fn(chip: view.Chip, text: fn(Int) -> i18n.Message) {
+    attention_notes(count(chip), chip, text)
+  }
+  let running = count(view.ActiveChip)
   let total = list.length(plugins)
   let issues =
     list.flatten([
-      attention_notes(
-        overloaded,
-        view.OverloadedChip,
-        i18n.OverloadedPluginCount,
-      ),
-      attention_notes(disabled, view.DisabledChip, i18n.DisabledPluginCount),
-      attention_notes(
-        unavailable,
-        view.UnansweredChip,
-        i18n.UnavailablePluginCount,
-      ),
+      chip_notes(view.OverloadedChip, i18n.OverloadedPluginCount),
+      chip_notes(view.DisabledChip, i18n.DisabledPluginCount),
+      chip_notes(view.UnansweredChip, i18n.UnavailablePluginCount),
       attention_notes(
         list.length(not_loaded),
         view.LoadFailedChip,
@@ -821,8 +799,7 @@ fn plugins_overview(
       [], _ -> [plain_note(i18n.RunningOfTotal)]
       _, _ -> issues
     },
-    linked: True,
-    highlighted: False,
+    emphasis: Linked,
   )
 }
 
@@ -832,7 +809,7 @@ fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
   let rail = overview(snapshot)
   html.nav(
     [
-      attribute.attribute("aria-label", i18n.text(language, i18n.OverviewLabel)),
+      attribute.aria_label(i18n.text(language, i18n.OverviewLabel)),
       attribute.class(
         "grid grid-cols-2 gap-px overflow-hidden rounded-box border border-base-300 bg-base-300 lg:grid-cols-5",
       ),
@@ -882,10 +859,11 @@ fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
   )
 }
 
-/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.linked` なら同じページの
-/// 節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を占めさせる。塗った項目では
-/// 見出しと補足を補助の文字の色にせず、塗りの上の文字の色を継がせる。リンクにしない項目には、
-/// マウスを重ねたときの色を付けない。
+/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.emphasis` が `Unlinked`
+/// でなければ同じページの節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を
+/// 占めさせる。`Highlighted` の項目は、`wide` のときだけ地を塗り（塗る項目は承認待ちだけで、
+/// 承認待ちは常に `wide` である）、見出しと補足を補助の文字の色にせず、塗りの上の文字の色を
+/// 継がせる。リンクにしない項目には、マウスを重ねたときの色を付けない。
 fn overview_cell(
   language: Language,
   icon: Element(msg),
@@ -894,23 +872,23 @@ fn overview_cell(
   wide: Bool,
   item: Overview,
 ) -> Element(msg) {
-  let class = case wide, item.highlighted, item.linked {
-    True, True, _ ->
+  let class = case wide, item.emphasis {
+    True, Highlighted ->
       "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content hover:bg-primary/90 lg:col-span-1"
-    True, False, True ->
+    True, Linked ->
       "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200 lg:col-span-1"
-    True, False, False ->
+    True, Unlinked ->
       "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
-    False, _, True ->
+    False, Linked | False, Highlighted ->
       "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 hover:bg-base-200"
-    False, _, False -> "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5"
+    False, Unlinked -> "flex flex-col gap-0.5 bg-base-100 px-4 py-3.5"
   }
-  let #(label_class, note_class) = case item.highlighted {
-    True -> #(
+  let #(label_class, note_class) = case item.emphasis {
+    Highlighted -> #(
       "flex items-center gap-1.5 text-sm font-semibold",
       "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs",
     )
-    False -> #(
+    Unlinked | Linked -> #(
       "flex items-center gap-1.5 text-sm font-semibold text-muted",
       "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted",
     )
@@ -926,10 +904,10 @@ fn overview_cell(
       list.map(item.notes, overview_note(language, _)),
     ),
   ]
-  case item.linked {
-    True ->
+  case item.emphasis {
+    Linked | Highlighted ->
       html.a([attribute.href("#" <> anchor), attribute.class(class)], content)
-    False -> html.div([attribute.class(class)], content)
+    Unlinked -> html.div([attribute.class(class)], content)
   }
 }
 
@@ -1001,10 +979,9 @@ pub fn getting_started(
 /// 段 3（接続 URI）は両方が済むまで開けないので、帯が出ている間は常に点線の枠で出す。
 fn getting_started_band(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  relays: Result(List(RelayRow), i18n.Reason),
+  snapshot: Snapshot,
 ) -> Element(msg) {
-  case getting_started(accounts, relays) {
+  case getting_started(snapshot.accounts, snapshot.relays) {
     None -> element.none()
     Some(steps) -> {
       let text = i18n.text(language, _)
@@ -1118,11 +1095,7 @@ fn setup_step(
   }
   let action = case step {
     StepOpen(dialog, action) ->
-      view.dialog_trigger(
-        dialog,
-        view.IconTextTrigger(view.plus_icon(), text(action)),
-        view.PrimaryButton,
-      )
+      add_trigger(dialog, text(action), view.PrimaryButton)
     StepDone | StepLocked -> element.none()
   }
   html.li([attribute.class(item_class)], [
@@ -1138,63 +1111,73 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」のダイアログを開く
-/// ボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加のダイアログを置く。一覧を得られない
-/// ときは、一覧の代わりにその理由（`shared` が `Some` なら「上の理由で取得できません。」）を出し、追加のボタンも
-/// 出さない。追加のダイアログは一覧の有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。
-/// `relays` は接続 QR コードのダイアログに渡す。
+/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」の
+/// ダイアログを開くボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加の
+/// ダイアログを置く。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
+/// 「上の理由で取得できません。」）を出し、追加のボタンも出さない。追加のダイアログは一覧の
+/// 有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。`snapshot` のセッションの
+/// 一覧は行のセッションの件数に、リレーの一覧は接続 QR コードのダイアログに使う。
 fn accounts_section(
   language: Language,
+  snapshot: Snapshot,
   shared: Option(String),
-  accounts: Result(List(AccountRow), i18n.Reason),
-  skipped: Result(List(SkippedRow), i18n.Reason),
-  sessions: Result(List(SessionRow), i18n.Reason),
-  relays: Result(List(RelayRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(accounts_anchor, [
     listed_section_heading(
       language,
-      accounts,
+      snapshot.accounts,
       view.users_icon(),
       i18n.Accounts,
       view.info_hint(language, accounts_anchor <> "-hint", [
         html.text(text(i18n.AccountsDescription)),
       ]),
-      [add_account_button(language)],
+      [
+        add_trigger(
+          add_account_dialog_id(),
+          text(i18n.AddAccount),
+          view.PrimaryButton,
+        ),
+      ],
       [reload_form(language)],
     ),
     listed_body(
       language,
       shared,
-      accounts,
+      snapshot.accounts,
       i18n.CouldNotListAccounts,
       view.empty_state(view.users_icon(), text(i18n.NoAccounts), [
-        view.dialog_trigger(
+        add_trigger(
           add_account_dialog_id(),
-          view.IconTextTrigger(view.plus_icon(), text(i18n.AddAccount)),
+          text(i18n.AddAccount),
           view.OutlineButton,
         ),
       ]),
       fn(rows) {
         view.row_list(
-          list.map(rows, account_item(language, sessions, relays, dialog, _)),
+          list.map(rows, account_item(
+            language,
+            snapshot.sessions,
+            snapshot.relays,
+            dialog,
+            _,
+          )),
         )
       },
     ),
-    unreadable_accounts(language, skipped, dialog),
+    unreadable_accounts(language, snapshot.skipped, dialog),
     add_account_dialog(language, dialog),
   ])
 }
 
-/// アカウントの節の見出しの、一覧を得たときに出す「アカウントを追加」のダイアログを開くボタン。
-fn add_account_button(language: Language) -> Element(msg) {
-  view.dialog_trigger(
-    add_account_dialog_id(),
-    view.IconTextTrigger(view.plus_icon(), i18n.text(language, i18n.AddAccount)),
-    view.PrimaryButton,
-  )
+/// `id` のダイアログを開く、先頭に＋のアイコンと `text` を置いた `kind` のボタン。
+fn add_trigger(
+  id: String,
+  text: String,
+  kind: view.ButtonKind,
+) -> Element(msg) {
+  view.dialog_trigger(id, view.IconTextTrigger(view.plus_icon(), text), kind)
 }
 
 /// 「アカウントを追加」のダイアログ（「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）。`dialog` が
@@ -1285,35 +1268,32 @@ pub fn generate_form(
 /// nsec の欄の補足の `id`。nsec の欄はアカウントの追加のダイアログに 1 つだけなので固定の値にする。
 const nsec_hint_id = "nsec-hint"
 
-/// 直近の読み込みで飛ばされた行の error の色の枠。1 件以上あるときだけ描く。一覧を得られないとき
-/// （読み込み中、応答なし、締め切り超過）も描かない。`dialog` は行の削除のダイアログに渡す。
+/// 直近の読み込みで飛ばされた行の枠（`failure_panel`）。一覧を得られないとき（読み込み中、応答なし、
+/// 締め切り超過）は描かない。`dialog` は行の削除のダイアログに渡す。
 fn unreadable_accounts(
   language: Language,
   skipped: Result(List(SkippedRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
-  case skipped {
-    Ok([_, ..] as rows) ->
-      view.failure_frame(
-        view.warning_triangle_icon(),
-        i18n.text(language, i18n.UnreadableAccounts),
-        list.length(rows),
-        i18n.text(language, i18n.UnreadableAccountsWarning),
-        list.map(rows, skipped_item(language, _, dialog)),
-      )
-    Ok([]) | Error(_) -> element.none()
-  }
+  failure_panel(
+    language,
+    i18n.UnreadableAccounts,
+    i18n.UnreadableAccountsWarning,
+    result.unwrap(skipped, []),
+    skipped_item(language, _, dialog),
+  )
 }
 
-/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを置く。
-/// `pubkey` 列が形式不正の行は指紋も識別も削除のボタンも出さず、理由の 1 文に削除できない旨を続けて出す。
+/// 飛ばした行 1 件。灰色の鍵の指紋、識別と理由の 1 文を並べ、右に削除のダイアログを開くボタンを
+/// 置く。npub の無い行（`pubkey` 列が形式不正の行）は指紋も識別も削除のボタンも出さず、理由の
+/// 1 文に削除できない旨を続けて出す。
 fn skipped_item(
   language: Language,
   row: SkippedRow,
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
-  case row.reason {
-    vault.MalformedPubkey ->
+  case row.npub {
+    None ->
       view.list_row(view.InlineRow, [
         html.p([attribute.class("text-sm")], [
           html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
@@ -1323,18 +1303,18 @@ fn skipped_item(
           ),
         ]),
       ])
-    _ ->
+    Some(npub) ->
       view.list_row(view.InlineRow, [
         html.div([attribute.class("flex min-w-0 items-center gap-3")], [
           fingerprint.pubkey_svg(row.pubkey, fingerprint.Gray, "size-8"),
           html.div([attribute.class("flex min-w-0 flex-col gap-1")], [
-            view.identity(language, view.PlainIdentity, row.label, row.npub),
+            view.identity(language, view.PlainIdentity, row.label, npub),
             html.p([attribute.class("text-sm")], [
               html.text(i18n.text(language, i18n.UnreadableReason(row.reason))),
             ]),
           ]),
         ]),
-        button_row(unreadable_dialog(language, row, dialog)),
+        button_row(unreadable_dialog(language, row, npub, dialog)),
       ])
   }
 }
@@ -1432,7 +1412,7 @@ fn account_item(
   account: AccountRow,
 ) -> Element(msg) {
   let action_dialogs =
-    list.map(list.append(detail_actions, [DeleteAccount]), fn(action) {
+    list.map(account_actions, fn(action) {
       account_dialog(language, account, action, dialog)
     })
   view.list_row(view.StackedRow, [
@@ -1605,13 +1585,15 @@ fn account_dialog(
   )
 }
 
-/// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の error の
-/// 文字色、題はアカウントの削除の見出しで、中にラベルと省略した npub、`unreadable_delete_form` を並べる。
-/// `id` の節の語をアカウントの行と分け、同じ pubkey の行があってもダイアログが重ならないようにする。
-/// `dialog` がこの行の `UnreadableDeleteOpen` なら開いた状態で描き、要約の後に理由を出す。
+/// 読み込みで飛ばされた行の削除のダイアログを開くボタンと、そのダイアログ。ボタンは「削除」の
+/// error の文字色、題はアカウントの削除の見出しで、中にラベルと省略した `npub`（行の npub）、
+/// `unreadable_delete_form` を並べる。`id` の節の語をアカウントの行と分け、同じ pubkey の行が
+/// あってもダイアログが重ならないようにする。`dialog` がこの行の `UnreadableDeleteOpen` なら
+/// 開いた状態で描き、要約の後に理由を出す。
 fn unreadable_dialog(
   language: Language,
   row: SkippedRow,
+  npub: String,
   dialog: Option(OpenDialog),
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
@@ -1635,7 +1617,7 @@ fn unreadable_dialog(
       text(account_action_title(DeleteAccount)),
       fn(placement) {
         [
-          view.identity(language, view.PlainIdentity, row.label, row.npub),
+          view.identity(language, view.PlainIdentity, row.label, npub),
           view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
           ..unreadable_delete_form(language, row, placement)
         ]
@@ -1686,6 +1668,7 @@ fn connection_qr_dialog(
             language,
             i18n.ConnectionUri,
             account.uri,
+            account.uri_camera_text,
             view.alert(view.Warning, [
               html.text(text(i18n.ConnectionQrSecretWarning)),
             ]),
@@ -1694,7 +1677,8 @@ fn connection_qr_dialog(
             language,
             i18n.ConnectionUriForApproval,
             account.auth_uri,
-            approval_note(language),
+            account.auth_uri_camera_text,
+            html.p([], [html.text(text(i18n.ApprovalUriNeedsApproval))]),
           ),
         ]),
         html.p([], [html.text(text(i18n.CameraCopySteps))]),
@@ -1712,25 +1696,20 @@ fn connection_qr_dialog(
   )
 }
 
-/// 要承認のタブの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
-/// できない旨を伝える。
-fn approval_note(language: Language) -> Element(msg) {
-  html.p([], [html.text(i18n.text(language, i18n.ApprovalUriNeedsApproval))])
-}
-
 /// 接続 URI 1 件のタブの語と中身の組（`view.radio_tabs` に渡す）。中身は `note`、端末の
-/// カメラ用のコピー用 QR、コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR
-/// の畳みの順に並べる。
+/// カメラ用のコピー用の文字列 `camera_text` の QR、`uri` のコピー欄、クライアントの読み取り
+/// 機能が読む完全な `uri` の QR の畳みの順に並べる。
 fn uri_tab(
   language: Language,
   title: i18n.Message,
   uri: String,
+  camera_text: String,
   note: Element(msg),
 ) -> #(String, List(Element(msg))) {
   let text = i18n.text(language, title)
   #(text, [
     note,
-    qr_or_notice(language, text, account.camera_copy_text(uri)),
+    qr_or_notice(language, text, camera_text),
     view.copyable_field(language, text, uri),
     view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
       qr_or_notice(
@@ -2039,41 +2018,38 @@ fn label_fieldset(
   )
 }
 
-/// 承認待ちの接続の帯。1 件以上あるとき、または一覧を得られないときだけ、全幅の帯（`view.band`）に、
-/// 説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの右には、`refresh` が自動の読み込み直しのときだけ
-/// 更新の間隔を出す。
-/// 0 件のときは帯ごと出さない。`now` は描画の時点の Unix 秒で、失効の時刻を求めるのに使う。
+/// 承認待ちの接続の帯。`snapshot` の承認待ちが 1 件以上あるとき、または一覧を得られないとき
+/// だけ、全幅の帯（`view.band`）に、説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの
+/// 右には、`refresh` が自動の読み込み直しのときだけ更新の間隔を出す。
+/// 0 件のときは帯ごと出さない。カードの署名者は `snapshot` のアカウントの一覧と突き合わせて
+/// 決め、失効の時刻は `snapshot` の描画の時点の Unix 秒から求める。
 /// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  now: Int,
+  snapshot: Snapshot,
   shared: Option(String),
-  pending: Result(List(PendingRow), i18n.Reason),
   refresh: view.Refresh,
 ) -> Element(msg) {
-  case pending {
+  case snapshot.pending {
     Ok([]) -> element.none()
     _ -> {
       let text = i18n.text(language, _)
-      let count = case pending {
-        Ok(rows) -> Some(list.length(rows))
-        Error(_) -> None
-      }
       view.band(pending_anchor, [
-        view.section_heading(
+        listed_section_heading(
+          language,
+          snapshot.pending,
           view.door_open_icon(),
-          text(i18n.PendingConnections),
-          count,
+          i18n.PendingConnections,
           view.info_hint(language, pending_anchor <> "-hint", [
             html.text(text(i18n.PendingConnectionsDescription)),
           ]),
+          [],
           refresh_note(language, refresh),
         ),
         listed_body(
           language,
           shared,
-          pending,
+          snapshot.pending,
           i18n.CouldNotListPending,
           element.none(),
           fn(rows) {
@@ -2086,8 +2062,8 @@ fn pending_section(
               list.map(rows, fn(entry) {
                 pending_card(
                   language,
-                  signer_name(accounts, entry.signer),
-                  now,
+                  signer_name(snapshot.accounts, entry.signer),
+                  snapshot.now,
                   entry,
                 )
               }),
@@ -2309,25 +2285,34 @@ pub fn approval_page(
           now,
           pending,
         ),
-        approval_explanation(language, pending.perms),
+        info_sentences(language, [
+          i18n.ApprovalExplanation,
+          ..no_permissions_sentence(pending.perms)
+        ]),
       ]),
     ],
   )
 }
 
-/// 承認の意味の説明。権限が空のときは、署名と暗号化を拒否する旨の一文を続ける。
-fn approval_explanation(language: Language, perms: String) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let content = case perms {
-    "" -> [
-      html.text(text(i18n.ApprovalExplanation)),
-      html.text(
-        i18n.sentence_gap(language) <> text(i18n.NoPermissionsRequested),
-      ),
-    ]
-    _ -> [html.text(text(i18n.ApprovalExplanation))]
+/// `sentences` を言語の文の区切りで 1 段落につなぎ、Info の囲み（`view.alert`）で出す。
+fn info_sentences(
+  language: Language,
+  sentences: List(i18n.Message),
+) -> Element(msg) {
+  view.alert(view.Info, [
+    html.text(
+      list.map(sentences, i18n.text(language, _))
+      |> string.join(i18n.sentence_gap(language)),
+    ),
+  ])
+}
+
+/// 権限の文字列 `perms` が空のときだけ、要求の無い接続に許す操作を述べる 1 文を返す。
+fn no_permissions_sentence(perms: String) -> List(i18n.Message) {
+  case perms {
+    "" -> [i18n.NoPermissionsRequested]
+    _ -> []
   }
-  view.alert(view.Info, content)
 }
 
 /// 見出しと理由だけを伝えるページ。承認・拒否の結果、アカウントを扱えないとき、変更が反映されたか分からないとき、
@@ -2392,8 +2377,7 @@ pub fn parse_account_action_path(
 ) -> Result(#(String, AccountAction), Nil) {
   case segments {
     [first, signer, segment] if first == accounts_segment ->
-      account_actions
-      |> list.find(fn(action) { account_action_segment(action) == segment })
+      action_for_segment(account_actions, account_action_segment, segment)
       |> result.map(fn(action) { #(signer, action) })
     _ -> Error(Nil)
   }
@@ -2440,12 +2424,20 @@ pub fn parse_relay_action_path(
   case segments {
     [first, id, segment] if first == relays_segment -> {
       use id <- result.try(int.parse(id))
-      relay_actions
-      |> list.find(fn(action) { relay_action_segment(action) == segment })
+      action_for_segment(relay_actions, relay_action_segment, segment)
       |> result.map(fn(action) { #(id, action) })
     }
     _ -> Error(Nil)
   }
+}
+
+/// 操作の一覧 `actions` から、パスセグメントが `segment` の操作を引く。無ければ Error。
+fn action_for_segment(
+  actions: List(action),
+  to_segment: fn(action) -> String,
+  segment: String,
+) -> Result(action, Nil) {
+  list.find(actions, fn(action) { to_segment(action) == segment })
 }
 
 /// セッションの権限の保存のパスの末尾のセグメント。
@@ -2521,6 +2513,14 @@ fn relay_action_icon(action: RelayAction) -> Element(msg) {
   }
 }
 
+/// アカウント一覧 `accounts` と突き合わせた署名者 `signer` の表示（`signer_value`）。
+fn signer_cell(
+  accounts: Result(List(AccountRow), i18n.Reason),
+  signer: String,
+) -> Element(msg) {
+  signer_value(signer_name(accounts, signer))
+}
+
 /// 署名者の表示。アカウント一覧にある署名者はラベルと省略した npub を縦に、無い署名者は
 /// 省略した 16 進の pubkey だけを出す。
 pub fn signer_value(signer: SignerName) -> Element(msg) {
@@ -2563,7 +2563,7 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
 /// 一覧の有無によらず描き、`dialog` が `NewRelayOpen` なら開いた状態で描く。
 fn relays_section(
   language: Language,
-  relays: Result(List(RelayRow), i18n.Reason),
+  snapshot: Snapshot,
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
@@ -2574,29 +2574,23 @@ fn relays_section(
       roles,
       Some(error),
     )
-    _ -> #(view.OpensOnTrigger, "", new_relay_roles, None)
+    _ -> #(view.OpensOnTrigger, "", Some(new_relay_roles), None)
   }
   view.section_block(relays_anchor, [
     listed_section_heading(
       language,
-      relays,
+      snapshot.relays,
       view.plug_icon(),
       i18n.Relays,
       view.info_hint(language, relays_anchor <> "-hint", role_hint(language)),
-      [
-        view.dialog_trigger(
-          add_relay_dialog_id(),
-          view.IconTextTrigger(view.plus_icon(), text(i18n.Add)),
-          view.PrimaryButton,
-        ),
-      ],
+      [add_trigger(add_relay_dialog_id(), text(i18n.Add), view.PrimaryButton)],
       [],
     ),
-    no_bunker_relay_alert(language, relays),
+    no_bunker_relay_alert(language, snapshot.relays),
     listed_body(
       language,
       None,
-      relays,
+      snapshot.relays,
       i18n.CouldNotListRelays,
       element.none(),
       fn(rows) {
@@ -2660,7 +2654,7 @@ fn no_bunker_relay_alert(
 
 /// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンを並べ、
 /// 2 段目に用途のマス（`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」の
-/// バッジで出す。`dialog` が同じ行と操作の `RelayActionOpen` なら、そのダイアログを開いた状態で描く。
+/// バッジで出す。ダイアログは操作ごとに `relay_action_dialog` で `dialog` に合わせて描く。
 fn relay_item(
   language: Language,
   row: RelayRow,
@@ -2672,56 +2666,16 @@ fn relay_item(
     ]),
     button_row(
       list.flat_map(relay_actions, fn(action) {
-        let title = i18n.text(language, relay_action_title(action))
-        let id =
-          view.dialog_id([
-            "relay",
-            int.to_string(row.id),
-            relay_action_segment(action),
-          ])
-        let #(opening, roles, error) = case dialog {
-          Some(RelayActionOpen(id:, action: opened, roles:, error:))
-            if id == row.id && opened == action
-          -> #(view.OpenedByResponse, roles, Some(error))
-          _ -> #(view.OpensOnTrigger, None, None)
-        }
         [
           view.dialog_trigger(
-            id,
-            view.IconOnlyTrigger(relay_action_icon(action), title),
+            relay_dialog_id(row.id, action),
+            view.IconOnlyTrigger(
+              relay_action_icon(action),
+              i18n.text(language, relay_action_title(action)),
+            ),
             relay_action_button_kind(action),
           ),
-          view.dialog(
-            language,
-            id,
-            title,
-            fn(placement) {
-              [
-                view.error_message(
-                  language,
-                  Some(relay_action_lead(action)),
-                  error,
-                ),
-                view.summary_list([
-                  #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
-                ]),
-                ..relay_action_form(
-                  language,
-                  relay_store.Relay(
-                    id: row.id,
-                    url: row.url,
-                    roles: row_roles(row),
-                  ),
-                  action,
-                  roles,
-                  Some(row),
-                  placement,
-                )
-              ]
-            },
-            i18n.Cancel,
-            opening,
-          ),
+          relay_action_dialog(language, row, action, dialog),
         ]
       }),
     ),
@@ -2732,8 +2686,47 @@ fn relay_item(
   ])
 }
 
+/// リレー 1 件への操作のダイアログの `id`（`dialog-relay-<id>-<セグメント>`）。
+fn relay_dialog_id(id: Int, action: RelayAction) -> String {
+  view.dialog_id(["relay", int.to_string(id), relay_action_segment(action)])
+}
+
+/// リレー `row` への `action` のダイアログ。題は操作の見出しで、中に理由、URL の要約、
+/// `relay_action_form` の説明とフォームを並べる。`dialog` がこの行と操作の `RelayActionOpen` なら
+/// 開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。そうでなければ欄の用途は
+/// `row_roles(row)`。
+fn relay_action_dialog(
+  language: Language,
+  row: RelayRow,
+  action: RelayAction,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
+  let #(opening, roles, error) = case dialog {
+    Some(RelayActionOpen(id: relay_id, action: opened, roles:, error:))
+      if relay_id == row.id && opened == action
+    -> #(view.OpenedByResponse, roles, Some(error))
+    _ -> #(view.OpensOnTrigger, row_roles(row), None)
+  }
+  view.dialog(
+    language,
+    relay_dialog_id(row.id, action),
+    i18n.text(language, relay_action_title(action)),
+    fn(placement) {
+      [
+        view.error_message(language, Some(relay_action_lead(action)), error),
+        view.summary_list([
+          #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+        ]),
+        ..relay_action_form(language, row, action, roles, placement)
+      ]
+    },
+    i18n.Cancel,
+    opening,
+  )
+}
+
 /// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
-pub const new_relay_roles = Roles(monitor: False, bunker: True)
+pub const new_relay_roles = relay_list.BunkerOnly
 
 /// リレーの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 1 のボタンが開く。
 fn add_relay_dialog_id() -> String {
@@ -2749,19 +2742,23 @@ fn add_account_dialog_id() -> String {
 /// 1 つのページに 2 つ現れないので固定の値にする。
 const relay_url_hint_id = "relay-url-hint"
 
-/// 行の今の用途。`Unused` でない用途を使っているとみなす（`app.merge_relay_rows` は使っていない
-/// 用途だけを `Unused` にする）。
-fn row_roles(row: RelayRow) -> Roles {
-  Roles(monitor: row.monitor != Unused, bunker: row.bunker != Unused)
+/// 行の今の用途。`Unused` でない用途を使っているとみなし（`app.merge_relay_rows` は使って
+/// いない用途だけを `Unused` にする）、どちらも `Unused` なら `None`。
+fn row_roles(row: RelayRow) -> Option(Roles) {
+  relay_list.roles_from(
+    monitor: row.monitor != Unused,
+    bunker: row.bunker != Unused,
+  )
+  |> option.from_result
 }
 
 /// リレーの追加のフォームの中身。説明の 1 行と、`/relays/new` へ POST するフォーム（URL の欄と
-/// 用途のチェック）を並べる。ダイアログの枠と入力の誤りは含めない。`url` と `roles` は欄に出す値で、
-/// 用途の接続状態のバッジは出さない。
+/// 用途のチェック）を並べる。ダイアログの枠と入力の誤りは含めない。`url` は欄に出す値、`roles` は
+/// チェックを入れる用途（`None` ならどちらも外す）で、用途の接続状態のバッジは出さない。
 pub fn new_relay_form(
   language: Language,
   url: String,
-  roles: Roles,
+  roles: Option(Roles),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
@@ -2777,26 +2774,25 @@ pub fn new_relay_form(
   ]
 }
 
-/// リレー 1 件への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
-/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（`None` なら保存済みの用途）の
-/// チェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで `roles` と `states` を
-/// 使わない。URL の要約と入力の誤りは含めない。
+/// リレー `row` への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
+/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（チェックを入れる用途。`None`
+/// ならどちらも外す）のチェックと `row` の接続状態のバッジを出し、削除は危険のボタンだけで
+/// `roles` を使わない。URL の要約と入力の誤りは含めない。
 pub fn relay_action_form(
   language: Language,
-  relay: Relay,
+  row: RelayRow,
   action: RelayAction,
   roles: Option(Roles),
-  states: Option(RelayRow),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = relay_action_path(relay.id, action)
+  let path = relay_action_path(row.id, action)
   case action {
     EditRelayRoles -> [
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
       view.post_form(
         path,
-        [roles_fieldset(language, option.unwrap(roles, relay.roles), states)],
+        [roles_fieldset(language, roles, Some(row))],
         text(i18n.Save),
         view.PrimaryButton,
         placement,
@@ -2836,14 +2832,17 @@ fn url_field(language: Language, url: String) -> Element(msg) {
   )
 }
 
-/// 用途（監視・バンカー）のチェックの囲み。`states` はその用途の今の接続状態で、`None`
-/// ならバッジを出さない。
+/// 用途（監視・バンカー）のチェックの囲み。`roles` はチェックを入れる用途で、`None` なら
+/// どちらも外す。`states` はその用途の今の接続状態で、`None` ならバッジを出さない。
 fn roles_fieldset(
   language: Language,
-  roles: Roles,
+  roles: Option(Roles),
   states: Option(RelayRow),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
+  let checked = fn(role) {
+    option.map(roles, relay_list.has_role(_, role)) |> option.unwrap(False)
+  }
   html.fieldset([attribute.class("fieldset")], [
     html.legend([attribute.class("fieldset-legend")], [
       html.text(text(i18n.Role)),
@@ -2853,7 +2852,7 @@ fn roles_fieldset(
       view.eye_icon(),
       text(i18n.UseForMonitoring),
       html.text(text(i18n.MonitorRoleDescription)),
-      roles.monitor,
+      checked(relay_list.Monitor),
       option.values([
         option.map(states, fn(row) { row.monitor })
         |> option.map(role_state_badge(language, _)),
@@ -2864,7 +2863,7 @@ fn roles_fieldset(
       view.key_icon(),
       text(i18n.UseForBunker),
       html.text(text(i18n.BunkerRoleDescription)),
-      roles.bunker,
+      checked(relay_list.Bunker),
       option.values([
         option.map(states, fn(row) { row.bunker })
         |> option.map(role_state_badge(language, _)),
@@ -2905,9 +2904,11 @@ fn relay_role(
 fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   let text = i18n.text(language, _)
   case state {
-    Reported(status) -> relay_status(language, status)
-    Unanswered ->
-      view.status_chip(view.UnansweredChip, text(i18n.PluginUnavailable))
+    Reported(Connected) ->
+      view.status_chip(view.ActiveChip, text(i18n.RelayConnected))
+    Reported(Disconnected) ->
+      view.status_chip(view.DisconnectedChip, text(i18n.RelayDisconnected))
+    Unanswered -> view.status_chip(view.UnansweredChip, text(i18n.NoResponse))
     Unused -> view.status_chip(view.UnusedChip, text(i18n.RelayRoleUnused))
   }
 }
@@ -2918,48 +2919,55 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
 /// 行の権限の編集のダイアログにも渡す。
 fn sessions_section(
   language: Language,
-  accounts: Result(List(AccountRow), i18n.Reason),
-  now: Int,
+  snapshot: Snapshot,
   shared: Option(String),
-  sessions: Result(List(SessionRow), i18n.Reason),
   dialog: Option(OpenDialog),
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let connect_trigger = fn(kind) {
-    view.dialog_trigger(
-      connect_dialog_id(),
-      view.IconTextTrigger(view.plus_icon(), text(i18n.ConnectClient)),
-      kind,
-    )
-  }
   view.section_block(sessions_anchor, [
     listed_section_heading(
       language,
-      sessions,
+      snapshot.sessions,
       view.clock_icon(),
       i18n.ApprovedSessions,
       view.info_hint(language, sessions_anchor <> "-hint", [
         html.text(text(i18n.ApprovedSessionsDescription)),
       ]),
-      [connect_trigger(view.PrimaryButton)],
+      [
+        add_trigger(
+          connect_dialog_id(),
+          text(i18n.ConnectClient),
+          view.PrimaryButton,
+        ),
+      ],
       [],
     ),
     listed_body(
       language,
       shared,
-      sessions,
+      snapshot.sessions,
       i18n.CouldNotListSessions,
       view.empty_state(view.clock_icon(), text(i18n.NoApprovedSessions), [
-        connect_trigger(view.OutlineButton),
+        add_trigger(
+          connect_dialog_id(),
+          text(i18n.ConnectClient),
+          view.OutlineButton,
+        ),
       ]),
       fn(rows) {
         view.row_list(
-          list.map(rows, session_item(language, accounts, now, dialog, _)),
+          list.map(rows, session_item(
+            language,
+            snapshot.accounts,
+            snapshot.now,
+            dialog,
+            _,
+          )),
         )
       },
     ),
-    connect_dialog(language, accounts, dialog),
-    connect_review_dialog(language, accounts, dialog),
+    connect_dialog(language, snapshot.accounts, dialog),
+    connect_review_dialog(language, snapshot.accounts, dialog),
   ])
 }
 
@@ -3024,7 +3032,14 @@ fn connect_review_dialog(
             ),
             view.form_description(text(i18n.ConnectConfirmDescription)),
             review_list(language, accounts, review),
-            connect_explanation(language, review.perms),
+            info_sentences(
+              language,
+              list.flatten([
+                [i18n.ConnectExplanation],
+                no_permissions_sentence(review.perms),
+                [i18n.ConnectRelaysScope],
+              ]),
+            ),
             view.post_form(
               view.segments_path(connect_confirm_segments),
               [
@@ -3065,10 +3080,7 @@ fn review_list(
         text(i18n.Client),
         view.identifier_cell(language, review.client, text(i18n.CopyClient)),
       ),
-      #(
-        text(i18n.Signer),
-        html.dd([], [signer_value(signer_name(accounts, review.signer))]),
-      ),
+      #(text(i18n.Signer), html.dd([], [signer_cell(accounts, review.signer)])),
       #(
         text(i18n.Permissions),
         html.dd([], [permission_view.chips(language, review.perms)]),
@@ -3076,23 +3088,6 @@ fn review_list(
       #(text(i18n.UriRelays), html.dd([], [view.code_list(review.relays)])),
     ]),
   )
-}
-
-/// 接続の意味の説明。権限が空のときは、許す操作の一文を続ける。URI のリレーに届く
-/// 情報を末尾に書く。
-fn connect_explanation(language: Language, perms: String) -> Element(msg) {
-  let text = i18n.text(language, _)
-  let permissions = case perms {
-    "" -> [i18n.NoPermissionsRequested]
-    _ -> []
-  }
-  let sentences =
-    [i18n.ConnectExplanation, ..permissions]
-    |> list.append([i18n.ConnectRelaysScope])
-    |> list.map(text)
-  view.alert(view.Info, [
-    html.text(string.join(sentences, i18n.sentence_gap(language))),
-  ])
 }
 
 /// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
@@ -3122,7 +3117,7 @@ fn session_item(
         ),
         html.div([attribute.class("min-w-0 text-sm")], [
           html.span([attribute.class("sr-only")], [html.text(text(i18n.Signer))]),
-          signer_value(signer_name(accounts, session.signer)),
+          signer_cell(accounts, session.signer),
         ]),
         last_used_value(language, now, session),
         html.div([attribute.class("col-span-2")], [
@@ -3254,10 +3249,7 @@ fn session_dialog_summary(
   let text = i18n.text(language, _)
   view.detail_list([
     #(text(i18n.Client), view.value_cell(view.Code(session.client))),
-    #(
-      text(i18n.Signer),
-      html.dd([], [signer_value(signer_name(accounts, session.signer))]),
-    ),
+    #(text(i18n.Signer), html.dd([], [signer_cell(accounts, session.signer)])),
   ])
 }
 
@@ -3282,18 +3274,6 @@ pub type PermissionsForm {
     nip44_decrypt: Bool,
     kinds: String,
     other: String,
-  )
-}
-
-/// `perms` を 3 つのチェック、kind の一覧、そのほかの宣言に分けたもの。
-/// `form_of_perms` の途中の形で、最後に `PermissionsForm` へまとめる。
-type ParsedPerms {
-  ParsedPerms(
-    sign_event: Bool,
-    nip44_encrypt: Bool,
-    nip44_decrypt: Bool,
-    kinds: List(String),
-    other: List(String),
   )
 }
 
@@ -3393,64 +3373,43 @@ fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
   }
 }
 
-/// 保存済みの `perms` を欄の状態に写す。3 つの語はチェック、`sign_event:<n>` は
-/// kind の欄、それ以外は「そのほかの宣言」に落とし、空の `perms` は 3 つのチェック
-/// を入れる。
+/// 保存済みの `perms` を `permission.parse` で読み、欄の状態に写す。3 つのチェックは
+/// `permission.allows` で入れる（空の `perms` は既定の集合なので 3 つとも入る）。0 以上の kind の
+/// 署名は kind の欄へ、チェックの 3 つの権限と 0 以上の kind の署名のどれでもない権限は
+/// 「そのほかの宣言」へ、どちらも並びの順と重複のまま写す。
 fn form_of_perms(perms: String) -> PermissionsForm {
-  let parsed = case perms {
-    "" ->
-      ParsedPerms(
-        sign_event: True,
-        nip44_encrypt: True,
-        nip44_decrypt: True,
-        kinds: [],
-        other: [],
-      )
-    _ ->
-      string.split(perms, ",")
-      |> list.fold(
-        ParsedPerms(
-          sign_event: False,
-          nip44_encrypt: False,
-          nip44_decrypt: False,
-          kinds: [],
-          other: [],
-        ),
-        fold_token,
-      )
-      |> reverse_lists
-  }
+  let declared = permission.parse(perms)
   PermissionsForm(
-    sign_event: parsed.sign_event,
-    nip44_encrypt: parsed.nip44_encrypt,
-    nip44_decrypt: parsed.nip44_decrypt,
-    kinds: string.join(parsed.kinds, ","),
-    other: string.join(parsed.other, ","),
+    sign_event: permission.allows(declared, permission.SignAnyKind),
+    nip44_encrypt: permission.allows(declared, permission.Nip44Encrypt),
+    nip44_decrypt: permission.allows(declared, permission.Nip44Decrypt),
+    kinds: declared
+      |> list.filter_map(form_kind)
+      |> list.map(int.to_string)
+      |> string.join(","),
+    other: declared
+      |> list.filter(is_other_declaration)
+      |> permission.to_string,
   )
 }
 
-/// `form_of_perms` の 1 トークンぶんの畳み込み。
-fn fold_token(acc: ParsedPerms, token: String) -> ParsedPerms {
-  case token {
-    "sign_event" -> ParsedPerms(..acc, sign_event: True)
-    "nip44_encrypt" -> ParsedPerms(..acc, nip44_encrypt: True)
-    "nip44_decrypt" -> ParsedPerms(..acc, nip44_decrypt: True)
-    _ ->
-      case permission_view.signed_kind(token) {
-        Ok(kind) ->
-          ParsedPerms(..acc, kinds: [int.to_string(kind), ..acc.kinds])
-        Error(Nil) -> ParsedPerms(..acc, other: [token, ..acc.other])
-      }
+/// kind の欄に写す kind。0 以上の kind の署名だけで、負の kind は「そのほかの宣言」に残す
+/// （kind の欄は保存のときに 0 以上の整数しか受けない）。
+fn form_kind(declared: Permission) -> Result(Int, Nil) {
+  case declared {
+    permission.SignKind(kind) if kind >= 0 -> Ok(kind)
+    _ -> Error(Nil)
   }
 }
 
-/// `fold_token` が先頭に積んだ `kinds` と `other` を入力の順に戻す。
-fn reverse_lists(parsed: ParsedPerms) -> ParsedPerms {
-  ParsedPerms(
-    ..parsed,
-    kinds: list.reverse(parsed.kinds),
-    other: list.reverse(parsed.other),
-  )
+/// 3 つのチェックにも kind の欄にも写らない、「そのほかの宣言」に残す権限か。
+fn is_other_declaration(declared: Permission) -> Bool {
+  case declared {
+    permission.SignAnyKind
+    | permission.Nip44Encrypt
+    | permission.Nip44Decrypt -> False
+    _ -> result.is_error(form_kind(declared))
+  }
 }
 
 /// URI の補足の `id`。URI の欄はダッシュボードの接続のダイアログに 1 つだけなので固定の値にする。
@@ -3555,16 +3514,12 @@ fn signing_account_select(
 
 /// 監視イベントを処理するプラグインと、その現在の状態。見出しに件数（1 件以上のとき）を
 /// 置き、プラグインを行の一覧で並べる。起動時に読み込めなかった候補があれば、節の末尾にエラーの色の枠で出す。
-fn plugins_section(
-  language: Language,
-  plugins: List(PluginRow),
-  not_loaded: List(plugin_loader.NotLoaded),
-) -> Element(msg) {
+fn plugins_section(language: Language, snapshot: Snapshot) -> Element(msg) {
   let text = i18n.text(language, _)
   view.section_block(plugins_anchor, [
     listed_section_heading(
       language,
-      Ok(plugins),
+      Ok(snapshot.plugins),
       view.puzzle_icon(),
       i18n.Plugins,
       [],
@@ -3572,11 +3527,11 @@ fn plugins_section(
       [],
     ),
     section_body(
-      plugins,
+      snapshot.plugins,
       view.empty_state(view.puzzle_icon(), text(i18n.NoPlugins), []),
       fn(rows) { view.row_list(list.map(rows, plugin_item(language, _))) },
     ),
-    not_loaded_panel(language, not_loaded),
+    not_loaded_panel(language, snapshot.not_loaded_plugins),
   ])
 }
 
@@ -3603,22 +3558,39 @@ fn plugin_item(language: Language, plugin: PluginRow) -> Element(msg) {
   ])
 }
 
-/// 起動時に読み込めなかったプラグインの枠。1 件以上あるときだけ、題と警告の 1 文と行の一覧を
-/// エラーの色の枠（`view.failure_frame`）に入れる。`app.Spec` から届く一覧で、起動時に確定するので
-/// 取得できない状態は無い。
+/// 起動時に読み込めなかったプラグインの枠（`failure_panel`）。`app.Spec` から届く一覧で、起動時に
+/// 確定するので取得できない状態は無い。
 fn not_loaded_panel(
   language: Language,
   rows: List(plugin_loader.NotLoaded),
 ) -> Element(msg) {
+  failure_panel(
+    language,
+    i18n.NotLoadedPlugins,
+    i18n.NotLoadedPluginsWarning,
+    rows,
+    not_loaded_item(language, _),
+  )
+}
+
+/// 読み込めなかった行の枠。`rows` が 1 件以上あるときだけ、警告の三角のアイコンと `title` と件数、
+/// `warning` の 1 文、`item` で描いた行を、エラーの色の枠（`view.failure_frame`）に入れる。
+fn failure_panel(
+  language: Language,
+  title: i18n.Message,
+  warning: i18n.Message,
+  rows: List(a),
+  item: fn(a) -> Element(msg),
+) -> Element(msg) {
   case rows {
     [] -> element.none()
-    rows ->
+    _ ->
       view.failure_frame(
         view.warning_triangle_icon(),
-        i18n.text(language, i18n.NotLoadedPlugins),
+        i18n.text(language, title),
         list.length(rows),
-        i18n.text(language, i18n.NotLoadedPluginsWarning),
-        list.map(rows, not_loaded_item(language, _)),
+        i18n.text(language, warning),
+        list.map(rows, item),
       )
   }
 }
@@ -3746,33 +3718,51 @@ fn reload_form(language: Language) -> Element(msg) {
   )
 }
 
-/// リレーの接続状態のバッジ。
-fn relay_status(language: Language, status: Status) -> Element(msg) {
-  let chip = case status {
-    Connected -> view.ActiveChip
-    Disconnected -> view.DisconnectedChip
-  }
-  view.status_chip(chip, i18n.text(language, status_label(status)))
-}
-
-/// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
-/// 一時的な状態だが、イベントを処理できていないので警告の色にする。
+/// プラグインの状態。`plugin_condition` の分類のチップと、あれば詳細を縦に並べる。`Disabled`
+/// の理由はプラグイン由来の英語の文字列なので、訳さずにテキストとして描画する（長さは
+/// `plugin_runner` 側で切ってあるので、ここでは切らない）。
 pub fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
-  let chip = case plugin.status {
-    None -> view.UnansweredChip
-    Some(plugin_runner.Running) -> view.ActiveChip
-    Some(plugin_runner.Overloaded(..)) -> view.OverloadedChip
-    Some(plugin_runner.Disabled(..)) -> view.DisabledChip
-  }
-  let #(word, detail) = plugin_state_label(language, plugin.status)
-  let badge = view.status_chip(chip, word)
+  let PluginCondition(chip:, word:, detail:) = plugin_condition(plugin.status)
+  let badge = view.status_chip(chip, i18n.text(language, word))
   case detail {
     None -> badge
-    Some(detail) ->
+    Some(PluginDetail(dropped:, reason:)) -> {
+      let dropped_text = i18n.text(language, i18n.Dropped(dropped))
+      let detail = case reason {
+        None -> [html.text(dropped_text)]
+        Some(reason) -> [
+          view.untranslated(reason),
+          html.text(i18n.sentence_gap(language) <> dropped_text),
+        ]
+      }
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
       ])
+    }
+  }
+}
+
+/// プラグインの状態をチップ・語・詳細に分類する。応答が無い（`None`）のは再起動中か応答待ちの
+/// 一時的な状態だが、イベントを処理できていないので警告の色のチップにする。詳細は過負荷と無効
+/// だけが持つ。
+fn plugin_condition(status: Option(plugin_runner.Status)) -> PluginCondition {
+  case status {
+    None -> PluginCondition(view.UnansweredChip, i18n.NoResponse, None)
+    Some(plugin_runner.Running) ->
+      PluginCondition(view.ActiveChip, i18n.PluginRunning, None)
+    Some(plugin_runner.Overloaded(dropped:)) ->
+      PluginCondition(
+        view.OverloadedChip,
+        i18n.PluginOverloaded,
+        Some(PluginDetail(dropped:, reason: None)),
+      )
+    Some(plugin_runner.Disabled(reason:, dropped:)) ->
+      PluginCondition(
+        view.DisabledChip,
+        i18n.PluginDisabled,
+        Some(PluginDetail(dropped:, reason: Some(reason))),
+      )
   }
 }
 
@@ -3803,38 +3793,5 @@ fn reenable_form_if_disabled(
   case plugin.status {
     Some(plugin_runner.Disabled(..)) -> [reenable_form(language, plugin.name)]
     _ -> []
-  }
-}
-
-/// プラグインの状態の語と、あれば詳細。`Disabled` の理由はプラグイン由来の英語の文字列
-/// なので、訳さずにテキストとして描画する（長さは `plugin_runner` 側で切ってあるので、
-/// ここでは切らない）。
-fn plugin_state_label(
-  language: Language,
-  status: Option(plugin_runner.Status),
-) -> #(String, Option(List(Element(msg)))) {
-  let text = i18n.text(language, _)
-  case status {
-    None -> #(text(i18n.PluginUnavailable), None)
-    Some(plugin_runner.Running) -> #(text(i18n.PluginRunning), None)
-    Some(plugin_runner.Overloaded(dropped:)) -> #(
-      text(i18n.PluginOverloaded),
-      Some([html.text(text(i18n.Dropped(dropped)))]),
-    )
-    Some(plugin_runner.Disabled(reason:, dropped:)) -> #(
-      text(i18n.PluginDisabled),
-      Some([
-        view.untranslated(reason),
-        html.text(i18n.sentence_gap(language) <> text(i18n.Dropped(dropped))),
-      ]),
-    )
-  }
-}
-
-/// 接続状態の表示名。
-fn status_label(status: Status) -> i18n.Message {
-  case status {
-    Connected -> i18n.RelayConnected
-    Disconnected -> i18n.RelayDisconnected
   }
 }

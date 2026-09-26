@@ -292,7 +292,7 @@ pub fn write(path: String, content: String) -> Nil {
 }
 
 /// `<ebin>/<app>.app` に `{application, <app>, [{vsn, "<vsn>"}]}.` を書く。本体
-/// 側の版の直読み（`nostr_no_su_ffi:read_app_file/1`）が読める最小の `.app`。
+/// 側の版の直読み（`nostr_no_su_plugin_ffi:read_app_file/1`）が読める最小の `.app`。
 pub fn write_app_file(ebin: String, app: String, vsn: String) -> Nil {
   write(
     ebin <> "/" <> app <> ".app",
@@ -339,7 +339,7 @@ fn persistent_term_get(key: Atom) -> Dynamic
 fn persistent_term_get_pid(key: Atom) -> Pid
 
 /// ローダーが使うものと同じ判定。テストからも同じ問い合わせを行う。
-@external(erlang, "nostr_no_su_ffi", "is_on_code_path")
+@external(erlang, "nostr_no_su_plugin_ffi", "is_on_code_path")
 fn is_on_code_path(module: Atom) -> Bool
 
 /// `application:get_key/2` によるロード済みアプリの版。

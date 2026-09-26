@@ -1,8 +1,9 @@
 //// プラグインの記述 map から `admin/view` の部品への変換（`admin/plugin_view`）の
 //// 単体テスト。
 ////
-//// 記述 map は `dynamic.properties` / `dynamic.string` / `dynamic.list` で組む
-//// （`test/event_test.gleam` と同じ形）。
+//// 正しい形の記述 map は撮影用のサーバーと共通の builder（`plugin_page_builder`）で組み、
+//// 変換に失敗する形と、共通の builder に無い形（`alert`・`link` のブロック、キーを省いた
+//// `text`・`textarea` の欄）は、このモジュールの `map_` と builder で組む。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list
@@ -15,80 +16,16 @@ import lustre/element/html
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_view.{Context}
 import nostr_no_su/admin/view
+import plugin_page_builder.{
+  badge_inline, checkbox_field, details_block, form_block, image_block,
+  kind_inline, pairs_block, section, table_block, time_inline, typed_text,
+}
 
 /// binary キーの map をキーと値の組から組み立てる。
 fn map_(entries: List(#(String, Dynamic))) -> Dynamic {
   dynamic.properties(
     entries |> list.map(fn(entry) { #(dynamic.string(entry.0), entry.1) }),
   )
-}
-
-/// インライン（`text`）。
-fn text_inline(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
-}
-
-/// インライン（`code`）。
-fn code_inline(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("code")), #("text", dynamic.string(text))])
-}
-
-/// インライン（`badge`）。
-fn badge_inline(text: String, tone: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("badge")),
-    #("text", dynamic.string(text)),
-    #("tone", dynamic.string(tone)),
-  ])
-}
-
-/// インライン（`id`）。
-fn id_inline(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("id")), #("text", dynamic.string(text))])
-}
-
-/// インライン（`kind`）。`value` は形の誤りを試すため `Dynamic` で受ける。
-fn kind_inline(value: Dynamic) -> Dynamic {
-  map_([#("type", dynamic.string("kind")), #("value", value)])
-}
-
-/// インライン（`time`）。`value` は形の誤りを試すため `Dynamic` で受ける。
-fn time_inline(value: Dynamic) -> Dynamic {
-  map_([#("type", dynamic.string("time")), #("value", value)])
-}
-
-/// ブロック（`text`）。
-fn text_block(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("text")), #("text", dynamic.string(text))])
-}
-
-/// ブロック（`note`）。
-fn note_block(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("note")), #("text", dynamic.string(text))])
-}
-
-/// ブロック（`pairs`）。`items` は `#(term, value)` の並び。
-fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
-  map_([
-    #("type", dynamic.string("pairs")),
-    #(
-      "items",
-      dynamic.list(
-        list.map(items, fn(item) {
-          map_([#("term", dynamic.string(item.0)), #("value", item.1)])
-        }),
-      ),
-    ),
-  ])
-}
-
-/// ブロック（`table`）。
-fn table_block(headers: List(String), rows: List(List(Dynamic))) -> Dynamic {
-  map_([
-    #("type", dynamic.string("table")),
-    #("headers", dynamic.list(list.map(headers, dynamic.string))),
-    #("rows", dynamic.list(list.map(rows, dynamic.list))),
-  ])
 }
 
 /// ブロック（`alert`）。
@@ -114,25 +51,8 @@ fn link_block(page: String, text: String) -> Dynamic {
   ])
 }
 
-/// ブロック（`details`）。
-fn details_block(summary: String, text: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("details")),
-    #("summary", dynamic.string(summary)),
-    #("text", dynamic.string(text)),
-  ])
-}
-
-/// ブロック（`image`）。
-fn image_block(url: String, alt: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("image")),
-    #("url", dynamic.string(url)),
-    #("alt", dynamic.string(alt)),
-  ])
-}
-
-/// ブロック（`image`）に見た目の種類 `variant` を足したもの。
+/// ブロック（`image`）に見た目の種類 `variant` を足したもの。`variant` は形の誤りを試すため
+/// `Dynamic` で受ける。
 fn image_block_with_variant(
   url: String,
   alt: String,
@@ -146,36 +66,8 @@ fn image_block_with_variant(
   ])
 }
 
-/// ブロック（`form`）。`fields` は欄の記述の並び。
-fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("form")),
-    #("fields", dynamic.list(fields)),
-    #("submit", dynamic.string(submit)),
-  ])
-}
-
-/// 欄（`checkbox`）。
-fn checkbox_field(
-  name: String,
-  label: String,
-  hint: Option(String),
-  checked: Bool,
-) -> Dynamic {
-  map_(
-    list.flatten([
-      [
-        #("type", dynamic.string("checkbox")),
-        #("name", dynamic.string(name)),
-        #("label", dynamic.string(label)),
-        #("checked", dynamic.bool(checked)),
-      ],
-      optional_entry("hint", hint),
-    ]),
-  )
-}
-
-/// 欄（`text`）。
+/// 欄（`text`）。`hint` と `value` は `None` ならキーを持たない（共通の builder の
+/// `input_field` は両方のキーを常に持つので、キーを省いた形はこの関数で組む）。
 fn text_field(
   name: String,
   label: String,
@@ -226,29 +118,6 @@ fn optional_entry(
   }
 }
 
-/// 節。
-fn section_(title: String, blocks: List(Dynamic)) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #("blocks", dynamic.list(blocks)),
-  ])
-}
-
-/// 見出しの補足（`meta`）を持つ節。`meta` は形の誤りを試すため `Dynamic` で受ける。
-fn section_with_meta(
-  title: String,
-  meta: Dynamic,
-  blocks: List(Dynamic),
-) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #("meta", meta),
-    #("blocks", dynamic.list(blocks)),
-  ])
-}
-
 /// テストが使う文脈。ページのキー `settings` だけを解決できる。
 fn context() -> plugin_view.Context {
   Context(
@@ -273,15 +142,15 @@ fn at_context(language: i18n.Language) -> plugin_view.Context {
 /// 対応する種別ごとの部品で、対応する文字列とクラスで描かれる。
 pub fn section_renders_every_block_type_test() {
   let raw =
-    section_("Settings", [
-      text_block("A plain paragraph."),
-      note_block("A quieter note."),
+    section("Settings", [], [
+      typed_text("text", "A plain paragraph."),
+      typed_text("note", "A quieter note."),
       pairs_block([
-        #("state", text_inline("running")),
-        #("id", code_inline("abc123")),
+        #("state", typed_text("text", "running")),
+        #("id", typed_text("code", "abc123")),
       ]),
       table_block(["Name", "Status"], [
-        [text_inline("worker"), badge_inline("ok", "success")],
+        [typed_text("text", "worker"), badge_inline("ok", "success")],
       ]),
       alert_block("Something happened."),
       link_block("settings", "Open settings"),
@@ -324,7 +193,8 @@ pub fn section_renders_every_block_type_test() {
 
 /// `text` ブロックは、空白の無い長い語を枠の幅で折り返す段落になる。
 pub fn text_block_breaks_long_words_test() {
-  let raw = section_("Timeline", [text_block("https://example.com/aaaa")])
+  let raw =
+    section("Timeline", [], [typed_text("text", "https://example.com/aaaa")])
   let assert Ok(el) = plugin_view.section(raw, context())
   assert string.contains(
     element.to_string(el),
@@ -334,12 +204,12 @@ pub fn text_block_breaks_long_words_test() {
 
 /// 未知の種別は、節の見出しとブロックの位置を添えた 1 行の `Error` になる。
 pub fn unknown_type_is_an_error_test() {
-  let raw = section_("設定", [map_([#("type", dynamic.string("chart"))])])
+  let raw = section("設定", [], [map_([#("type", dynamic.string("chart"))])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert reason == "section \"設定\": block #0: unknown type \"chart\""
 }
 
-/// 節の `type` が `"section"` でなければ `Error` になる（決めたこと 10）。
+/// 節の `type` が `"section"` でなければ `Error` になる。
 pub fn section_type_mismatch_is_an_error_test() {
   let raw =
     map_([
@@ -355,7 +225,7 @@ pub fn section_type_mismatch_is_an_error_test() {
 pub fn wrong_value_type_is_an_error_test() {
   let bad_value =
     map_([#("type", dynamic.string("text")), #("text", dynamic.int(1))])
-  let raw = section_("Values", [pairs_block([#("state", bad_value)])])
+  let raw = section("Values", [], [pairs_block([#("state", bad_value)])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "text must be a String, got Int")
 }
@@ -363,9 +233,9 @@ pub fn wrong_value_type_is_an_error_test() {
 /// `pairs` の `items` の 2 件目に型の合わない値があると、理由に何件目かが
 /// 付く。
 pub fn wrong_value_type_reports_item_index_test() {
-  let good = text_inline("ok")
+  let good = typed_text("text", "ok")
   let bad = map_([#("type", dynamic.string("text")), #("text", dynamic.int(1))])
-  let raw = section_("Values", [pairs_block([#("a", good), #("b", bad)])])
+  let raw = section("Values", [], [pairs_block([#("a", good), #("b", bad)])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "item #1: text must be a String, got Int")
 }
@@ -373,14 +243,14 @@ pub fn wrong_value_type_reports_item_index_test() {
 /// `table` の `rows` の 2 件目がリストでないと、理由に何件目かが付く。
 pub fn row_not_a_list_reports_row_index_test() {
   let raw =
-    section_("Cells", [
+    section("Cells", [], [
       map_([
         #("type", dynamic.string("table")),
         #("headers", dynamic.list([dynamic.string("A")])),
         #(
           "rows",
           dynamic.list([
-            dynamic.list([text_inline("ok")]),
+            dynamic.list([typed_text("text", "ok")]),
             dynamic.string("nope"),
           ]),
         ),
@@ -399,7 +269,7 @@ pub fn nested_section_is_an_error_test() {
       #("title", dynamic.string("Inner")),
       #("blocks", dynamic.list([])),
     ])
-  let raw = section_("Outer", [nested])
+  let raw = section("Outer", [], [nested])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "unknown type \"section\"")
 }
@@ -407,7 +277,8 @@ pub fn nested_section_is_an_error_test() {
 /// `table` のセルにブロックを置くと、インラインの段に合わないので `Error` に
 /// なる。
 pub fn block_in_a_cell_is_an_error_test() {
-  let raw = section_("Cells", [table_block(["A"], [[table_block(["B"], [])]])])
+  let raw =
+    section("Cells", [], [table_block(["A"], [[table_block(["B"], [])]])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "unknown type \"table\"")
 }
@@ -420,8 +291,8 @@ pub fn other_sections_still_render_test() {
       #(
         "sections",
         dynamic.list([
-          section_("Broken", [map_([#("type", dynamic.string("mystery"))])]),
-          section_("Fine", [text_block("ok")]),
+          section("Broken", [], [map_([#("type", dynamic.string("mystery"))])]),
+          section("Fine", [], [typed_text("text", "ok")]),
         ]),
       ),
     ])
@@ -432,7 +303,8 @@ pub fn other_sections_still_render_test() {
 
 /// 節のカードの中身（見出しとブロック）は `lang="en"` の 1 つの祖先の中にある。
 pub fn plugin_text_is_marked_english_test() {
-  let raw = section_("English Only", [text_block("Some plugin text.")])
+  let raw =
+    section("English Only", [], [typed_text("text", "Some plugin text.")])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   let assert [_, after] = string.split(body, "<div lang=\"en\">")
@@ -443,7 +315,7 @@ pub fn plugin_text_is_marked_english_test() {
 /// `blocks` が空の節には翻訳した空の状態の文が出て、それは `lang="en"` の外に
 /// 置かれる。
 pub fn empty_section_shows_the_translated_line_test() {
-  let raw = section_("Empty", [])
+  let raw = section("Empty", [], [])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   let translated = i18n.text(i18n.English, i18n.PluginSectionEmpty)
@@ -455,7 +327,7 @@ pub fn empty_section_shows_the_translated_line_test() {
 /// `pairs` の `items` が 0 件のときの訳した文は、プラグイン由来の文字列を包む
 /// `lang="en"` の中ではなく、表示の言語を持つ `div` に包まれる。
 pub fn empty_pairs_translated_line_has_display_language_test() {
-  let raw = section_("Has Pairs", [pairs_block([])])
+  let raw = section("Has Pairs", [], [pairs_block([])])
   let japanese_context =
     Context(
       language: i18n.Japanese,
@@ -473,7 +345,7 @@ pub fn empty_pairs_translated_line_has_display_language_test() {
 
 /// `page_href` が `Error(Nil)` を返すキーの `link` は節の `Error` になる。
 pub fn unknown_page_key_is_an_error_test() {
-  let raw = section_("Links", [link_block("missing", "Go")])
+  let raw = section("Links", [], [link_block("missing", "Go")])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "unknown page \"missing\"")
 }
@@ -482,11 +354,21 @@ pub fn unknown_page_key_is_an_error_test() {
 /// `context.form_action`（今開いているページ自身）に固定される。
 pub fn form_block_renders_checkboxes_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block(
         [
-          checkbox_field("main", "Main account", Some("f9308a…"), True),
-          checkbox_field("bot", "Bot account", None, False),
+          checkbox_field(
+            name: "main",
+            label: "Main account",
+            hint: Some("f9308a…"),
+            checked: True,
+          ),
+          checkbox_field(
+            name: "bot",
+            label: "Bot account",
+            hint: None,
+            checked: False,
+          ),
         ],
         "Save",
       ),
@@ -512,7 +394,7 @@ pub fn form_block_renders_checkboxes_test() {
 /// 両方を並べる）。
 pub fn form_block_renders_text_fields_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block(
         [
           text_field("name", "Name", Some("displayed publicly"), Some("Alice")),
@@ -546,7 +428,7 @@ pub fn form_block_renders_text_fields_test() {
 /// `value` を省いた `text` の欄は、初期値 `""` の `view.plugin_text_field` と一致する。
 pub fn form_block_text_field_defaults_to_an_empty_value_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block([text_field("name", "Name", None, None)], "Save"),
     ])
   let assert Ok(el) = plugin_view.section(raw, context())
@@ -560,7 +442,7 @@ pub fn form_block_text_field_defaults_to_an_empty_value_test() {
 /// `textarea` の初期値は `>…</textarea>` の内容に出る（属性ではない）。
 pub fn form_block_textarea_shows_the_value_as_its_content_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block(
         [textarea_field("about", "About", None, Some("Hello."))],
         "Save",
@@ -574,7 +456,7 @@ pub fn form_block_textarea_shows_the_value_as_its_content_test() {
 /// `text` の欄の `name` が `[A-Za-z0-9_-]+` の外なら `Error`。
 pub fn form_block_rejects_a_bad_text_field_name_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block([text_field("bad name", "Label", None, None)], "Save"),
     ])
   let assert Error(reason) = plugin_view.section(raw, context())
@@ -584,7 +466,7 @@ pub fn form_block_rejects_a_bad_text_field_name_test() {
 /// `checkbox` / `text` / `textarea` 以外の欄は節ひとつぶんの `Error` になる。
 pub fn form_block_rejects_an_unknown_field_type_test() {
   let raw =
-    section_("Settings", [
+    section("Settings", [], [
       form_block([map_([#("type", dynamic.string("select"))])], "Save"),
     ])
   let assert Error(reason) = plugin_view.section(raw, context())
@@ -595,8 +477,18 @@ pub fn form_block_rejects_an_unknown_field_type_test() {
 /// `name` が `[A-Za-z0-9_-]+` の外なら `Error`。
 pub fn form_block_rejects_a_bad_field_name_test() {
   let raw =
-    section_("Settings", [
-      form_block([checkbox_field("bad name", "Label", None, False)], "Save"),
+    section("Settings", [], [
+      form_block(
+        [
+          checkbox_field(
+            name: "bad name",
+            label: "Label",
+            hint: None,
+            checked: False,
+          ),
+        ],
+        "Save",
+      ),
     ])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "name \"bad name\" must match [A-Za-z0-9_-]+")
@@ -604,7 +496,7 @@ pub fn form_block_rejects_a_bad_field_name_test() {
 
 /// `fields` が 0 件なら `Error`。
 pub fn form_block_rejects_empty_fields_test() {
-  let raw = section_("Settings", [form_block([], "Save")])
+  let raw = section("Settings", [], [form_block([], "Save")])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "fields must not be empty")
 }
@@ -617,7 +509,7 @@ pub fn form_field_checked_defaults_to_false_test() {
       #("name", dynamic.string("main")),
       #("label", dynamic.string("Main")),
     ])
-  let raw = section_("Settings", [form_block([no_checked], "Save")])
+  let raw = section("Settings", [], [form_block([no_checked], "Save")])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(
@@ -632,7 +524,7 @@ pub fn form_field_checked_defaults_to_false_test() {
       #("label", dynamic.string("Main")),
       #("checked", dynamic.string("yes")),
     ])
-  let raw2 = section_("Settings", [form_block([bad_checked], "Save")])
+  let raw2 = section("Settings", [], [form_block([bad_checked], "Save")])
   let assert Error(reason) = plugin_view.section(raw2, context())
   assert string.contains(reason, "checked must be a Bool, got String")
 }
@@ -641,7 +533,7 @@ pub fn form_field_checked_defaults_to_false_test() {
 /// 渡した出力を含む。
 pub fn details_blocks_are_rendered_test() {
   let raw =
-    section_("Settings", [details_block("tags (1)", "[[\"p\",\"abc\"]]")])
+    section("Settings", [], [details_block("tags (1)", "[[\"p\",\"abc\"]]")])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(
@@ -656,7 +548,7 @@ pub fn details_blocks_are_rendered_test() {
 pub fn details_blocks_require_a_summary_and_text_test() {
   let missing_summary =
     map_([#("type", dynamic.string("details")), #("text", dynamic.string("x"))])
-  let raw_missing_summary = section_("Settings", [missing_summary])
+  let raw_missing_summary = section("Settings", [], [missing_summary])
   let assert Error(reason_summary) =
     plugin_view.section(raw_missing_summary, context())
   assert string.contains(reason_summary, "missing summary")
@@ -666,7 +558,7 @@ pub fn details_blocks_require_a_summary_and_text_test() {
       #("type", dynamic.string("details")),
       #("summary", dynamic.string("s")),
     ])
-  let raw_missing_text = section_("Settings", [missing_text])
+  let raw_missing_text = section("Settings", [], [missing_text])
   let assert Error(reason_text) =
     plugin_view.section(raw_missing_text, context())
   assert string.contains(reason_text, "missing text")
@@ -676,7 +568,8 @@ pub fn details_blocks_require_a_summary_and_text_test() {
 /// ラベル（`i18n.Copy` の訳語）を含む。
 pub fn id_values_are_truncated_test() {
   let value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
-  let raw = section_("Settings", [pairs_block([#("id", id_inline(value))])])
+  let raw =
+    section("Settings", [], [pairs_block([#("id", typed_text("id", value))])])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(
@@ -692,7 +585,8 @@ pub fn id_values_are_truncated_test() {
 
 /// `table` のセルに `id` を置くと `Error`。`id` は `pairs` の値だけに置ける。
 pub fn id_is_rejected_in_table_cells_test() {
-  let raw = section_("Cells", [table_block(["A"], [[id_inline("abc")]])])
+  let raw =
+    section("Cells", [], [table_block(["A"], [[typed_text("id", "abc")]])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert string.contains(reason, "type \"id\" is only allowed in pairs values")
 }
@@ -700,7 +594,7 @@ pub fn id_is_rejected_in_table_cells_test() {
 /// `pairs` の値に `badge` を置くと `Error`。`badge` は `table` のセルと節の `meta` だけに置ける。
 pub fn badge_is_rejected_in_pairs_values_test() {
   let raw =
-    section_("Values", [
+    section("Values", [], [
       pairs_block([#("state", badge_inline("ok", "success"))]),
     ])
   let assert Error(reason) = plugin_view.section(raw, context())
@@ -710,7 +604,8 @@ pub fn badge_is_rejected_in_pairs_values_test() {
 
 /// `table` のセルの `code` は、等幅で長い語を折り返す `span` になる。
 pub fn code_cells_are_monospace_test() {
-  let raw = section_("Cells", [table_block(["A"], [[code_inline("abc123")]])])
+  let raw =
+    section("Cells", [], [table_block(["A"], [[typed_text("code", "abc123")]])])
   let assert Ok(el) = plugin_view.section(raw, context())
   assert string.contains(
     element.to_string(el),
@@ -739,7 +634,7 @@ pub fn tone_selects_one_of_five_values_test() {
   ]
   list.each(cases, fn(row) {
     let #(name, tone, expected) = row
-    let raw = section_("Tones", [alert_block_with_tone("Heads up.", tone)])
+    let raw = section("Tones", [], [alert_block_with_tone("Heads up.", tone)])
     let actual =
       plugin_view.section(raw, context()) |> result.map(element.to_string)
     let wanted =
@@ -765,7 +660,7 @@ pub fn image_block_renders_image_test() {
     #("http://example.com/a.png", "A picture"),
   ]
   use #(url, alt) <- list.each(cases)
-  let raw = section_("Media", [image_block(url, alt)])
+  let raw = section("Media", [], [image_block(url, alt, None)])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(
@@ -781,8 +676,8 @@ pub fn image_block_variants_select_the_shape_test() {
   let cases = [#("icon", view.IconImage), #("banner", view.BannerImage)]
   use #(variant, shape) <- list.each(cases)
   let raw =
-    section_("Media", [
-      image_block_with_variant(url, "A picture", dynamic.string(variant)),
+    section("Media", [], [
+      image_block(url, "A picture", Some(variant)),
     ])
   let assert Ok(el) = plugin_view.section(raw, context())
   assert string.contains(
@@ -800,7 +695,7 @@ pub fn image_block_rejects_an_unknown_variant_test() {
   ]
   use #(variant, expected) <- list.each(cases)
   let raw =
-    section_("Media", [
+    section("Media", [], [
       image_block_with_variant(
         "https://example.com/a.png",
         "A picture",
@@ -820,7 +715,7 @@ pub fn image_block_with_other_scheme_renders_alt_only_test() {
     "not a url at all",
   ]
   use url <- list.each(urls)
-  let raw = section_("Media", [image_block(url, "A picture")])
+  let raw = section("Media", [], [image_block(url, "A picture", None)])
   let assert Ok(el) = plugin_view.section(raw, context())
   let body = element.to_string(el)
   assert string.contains(
@@ -845,7 +740,8 @@ pub fn image_placeholder_alt_inherits_the_plugin_language_test() {
       form_action: "/plugins/example/status",
       now: 0,
     )
-  let raw = section_("キュー", [image_block("data:image/png;base64,AAA", "猫の写真")])
+  let raw =
+    section("キュー", [], [image_block("data:image/png;base64,AAA", "猫の写真", None)])
   let assert Ok(el) = plugin_view.section(raw, japanese_context)
   let body = element.to_string(el)
   let assert [_, inside] = string.split(body, "<div lang=\"ja\">")
@@ -858,7 +754,7 @@ pub fn image_placeholder_alt_inherits_the_plugin_language_test() {
 pub fn image_block_requires_url_and_alt_test() {
   let missing_url =
     map_([#("type", dynamic.string("image")), #("alt", dynamic.string("x"))])
-  let raw_missing_url = section_("Media", [missing_url])
+  let raw_missing_url = section("Media", [], [missing_url])
   let assert Error(reason_url) = plugin_view.section(raw_missing_url, context())
   assert string.contains(reason_url, "missing url")
 
@@ -867,7 +763,7 @@ pub fn image_block_requires_url_and_alt_test() {
       #("type", dynamic.string("image")),
       #("url", dynamic.string("https://example.com/a.png")),
     ])
-  let raw_missing_alt = section_("Media", [missing_alt])
+  let raw_missing_alt = section("Media", [], [missing_alt])
   let assert Error(reason_alt) = plugin_view.section(raw_missing_alt, context())
   assert string.contains(reason_alt, "missing alt")
 
@@ -877,7 +773,7 @@ pub fn image_block_requires_url_and_alt_test() {
       #("url", dynamic.int(1)),
       #("alt", dynamic.string("x")),
     ])
-  let raw_bad_url = section_("Media", [bad_url])
+  let raw_bad_url = section("Media", [], [bad_url])
   let assert Error(reason_bad_url) = plugin_view.section(raw_bad_url, context())
   assert string.contains(reason_bad_url, "url must be a String, got Int")
 }
@@ -886,17 +782,17 @@ pub fn image_block_requires_url_and_alt_test() {
 /// のインラインの decoder が読む種別の一覧に無い `unknown type "image"` になる。
 pub fn image_is_not_an_inline_test() {
   let table_raw =
-    section_("Cells", [
+    section("Cells", [], [
       table_block(["A"], [
-        [image_block("https://example.com/a.png", "x")],
+        [image_block("https://example.com/a.png", "x", None)],
       ]),
     ])
   let assert Error(table_reason) = plugin_view.section(table_raw, context())
   assert string.contains(table_reason, "unknown type \"image\"")
 
   let pairs_raw =
-    section_("Values", [
-      pairs_block([#("a", image_block("https://example.com/a.png", "x"))]),
+    section("Values", [], [
+      pairs_block([#("a", image_block("https://example.com/a.png", "x", None))]),
     ])
   let assert Error(pairs_reason) = plugin_view.section(pairs_raw, context())
   assert string.contains(pairs_reason, "value: unknown type \"image\"")
@@ -905,8 +801,7 @@ pub fn image_is_not_an_inline_test() {
 /// `table` のセルの `kind` は、表にある kind を表示の言語の名前にし、その言語の `lang` を持つ
 /// `span` で出す。
 pub fn kind_inline_shows_the_kind_name_in_the_display_language_test() {
-  let raw =
-    section_("a", [table_block(["Kind"], [[kind_inline(dynamic.int(1))]])])
+  let raw = section("a", [], [table_block(["Kind"], [[kind_inline(1)]])])
   let assert Ok(japanese) = plugin_view.section(raw, at_context(i18n.Japanese))
   assert string.contains(
     element.to_string(japanese),
@@ -922,8 +817,8 @@ pub fn kind_inline_shows_the_kind_name_in_the_display_language_test() {
 /// 表に無い kind は番号（`kind 30023`）で出す。
 pub fn kind_inline_without_a_name_shows_the_number_test() {
   let raw =
-    section_("a", [
-      table_block(["Kind"], [[kind_inline(dynamic.int(30_023))]]),
+    section("a", [], [
+      table_block(["Kind"], [[kind_inline(30_023)]]),
     ])
   let assert Ok(el) = plugin_view.section(raw, at_context(i18n.Japanese))
   assert string.contains(
@@ -935,8 +830,8 @@ pub fn kind_inline_without_a_name_shows_the_number_test() {
 /// `time` は文脈の `now` からの相対時刻を出し、`title` に UTC の時刻を持たせる。
 pub fn time_inline_is_relative_with_a_utc_title_test() {
   let raw =
-    section_("a", [
-      table_block(["At"], [[time_inline(dynamic.int(1_789_276_354))]]),
+    section("a", [], [
+      table_block(["At"], [[time_inline(1_789_276_354)]]),
     ])
   let assert Ok(el) = plugin_view.section(raw, at_context(i18n.English))
   assert string.contains(
@@ -948,7 +843,16 @@ pub fn time_inline_is_relative_with_a_utc_title_test() {
 /// `kind` と `time` の `value` が整数でなければ、その節の `Error` になる。
 pub fn inline_value_must_be_an_int_test() {
   let raw =
-    section_("a", [table_block(["Kind"], [[kind_inline(dynamic.string("1"))]])])
+    section("a", [], [
+      table_block(["Kind"], [
+        [
+          map_([
+            #("type", dynamic.string("kind")),
+            #("value", dynamic.string("1")),
+          ]),
+        ],
+      ]),
+    ])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert reason
     == "section \"a\": block #0: row #0: value must be an Int, got String"
@@ -956,8 +860,7 @@ pub fn inline_value_must_be_an_int_test() {
 
 /// `kind` と `time` の `value` が負なら、その節の `Error` になる。
 pub fn inline_value_must_not_be_negative_test() {
-  let raw =
-    section_("a", [table_block(["At"], [[time_inline(dynamic.int(-1))]])])
+  let raw = section("a", [], [table_block(["At"], [[time_inline(-1)]])])
   let assert Error(reason) = plugin_view.section(raw, context())
   assert reason
     == "section \"a\": block #0: row #0: value must not be negative, got -1"
@@ -965,33 +868,30 @@ pub fn inline_value_must_not_be_negative_test() {
 
 /// 節の `meta` は、`blocks` が 1 件でも 0 件でも、見出しの題の後ろに ` · ` で区切って並ぶ。
 pub fn section_meta_is_placed_in_the_heading_test() {
-  let meta =
-    dynamic.list([
-      kind_inline(dynamic.int(1)),
-      time_inline(dynamic.int(1_789_276_354)),
-    ])
+  let meta = [kind_inline(1), time_inline(1_789_276_354)]
   let heading =
     "<h2 class=\"card-title flex-wrap\">Timeline<span class=\"text-sm font-normal text-muted\"><span lang=\"en\">post</span> · <span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span></span></h2>"
-  let with_block = section_with_meta("Timeline", meta, [text_block("body")])
+  let with_block = section("Timeline", meta, [typed_text("text", "body")])
   let assert Ok(el) = plugin_view.section(with_block, at_context(i18n.English))
   assert string.contains(element.to_string(el), heading)
-  let empty = section_with_meta("Timeline", meta, [])
+  let empty = section("Timeline", meta, [])
   let assert Ok(el) = plugin_view.section(empty, at_context(i18n.English))
   assert string.contains(element.to_string(el), heading)
 }
 
 /// `meta` の項目の誤りは何件目かを付け、`meta` がリストでなければその旨の `Error` になる。
 pub fn section_meta_errors_name_the_item_test() {
-  let bad_item =
-    section_with_meta(
-      "a",
-      dynamic.list([kind_inline(dynamic.int(1)), id_inline("abc")]),
-      [],
-    )
+  let bad_item = section("a", [kind_inline(1), typed_text("id", "abc")], [])
   let assert Error(item_reason) = plugin_view.section(bad_item, context())
   assert item_reason
     == "section \"a\": meta #1: type \"id\" is only allowed in pairs values"
-  let not_a_list = section_with_meta("a", dynamic.string("x"), [])
+  let not_a_list =
+    map_([
+      #("type", dynamic.string("section")),
+      #("title", dynamic.string("a")),
+      #("meta", dynamic.string("x")),
+      #("blocks", dynamic.list([])),
+    ])
   let assert Error(list_reason) = plugin_view.section(not_a_list, context())
   assert list_reason == "section \"a\": meta must be a List, got String"
 }
@@ -999,10 +899,10 @@ pub fn section_meta_errors_name_the_item_test() {
 /// `pairs` の値の `kind` と `time` は `inline` で描いて `dd` で包む。
 pub fn pairs_value_accepts_kind_and_time_test() {
   let raw =
-    section_("a", [
+    section("a", [], [
       pairs_block([
-        #("kind", kind_inline(dynamic.int(1))),
-        #("at", time_inline(dynamic.int(1_789_276_354))),
+        #("kind", kind_inline(1)),
+        #("at", time_inline(1_789_276_354)),
       ]),
     ])
   let assert Ok(el) = plugin_view.section(raw, at_context(i18n.English))
@@ -1011,5 +911,104 @@ pub fn pairs_value_accepts_kind_and_time_test() {
   assert string.contains(
     body,
     "<dd><span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span></dd>",
+  )
+}
+
+/// 欄の任意の `hint` と `value` が文字列でなければ、その欄の
+/// `<key> must be a String, got <型>` の `Error` になる。
+pub fn form_field_optional_values_must_be_strings_test() {
+  let cases = [
+    #("checkbox", "hint"),
+    #("text", "hint"),
+    #("text", "value"),
+    #("textarea", "hint"),
+    #("textarea", "value"),
+  ]
+  use #(kind, key) <- list.each(cases)
+  let field =
+    map_([
+      #("type", dynamic.string(kind)),
+      #("name", dynamic.string("main")),
+      #("label", dynamic.string("Main")),
+      #(key, dynamic.int(1)),
+    ])
+  let raw = section("Settings", [], [form_block([field], "Save")])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"Settings\": block #0: field #0: "
+    <> key
+    <> " must be a String, got Int"
+}
+
+/// `blocks`・`items`・`rows`・`fields` がリストでなければ `<key> must be a List, got <型>` の
+/// `Error` になる。
+pub fn list_fields_must_be_lists_test() {
+  let cases = [
+    #(
+      map_([
+        #("type", dynamic.string("section")),
+        #("title", dynamic.string("a")),
+        #("blocks", dynamic.string("x")),
+      ]),
+      "blocks must be a List, got String",
+    ),
+    #(
+      section("a", [], [
+        map_([
+          #("type", dynamic.string("pairs")),
+          #("items", dynamic.string("x")),
+        ]),
+      ]),
+      "section \"a\": block #0: items must be a List, got String",
+    ),
+    #(
+      section("a", [], [
+        map_([
+          #("type", dynamic.string("table")),
+          #("headers", dynamic.list([dynamic.string("A")])),
+          #("rows", dynamic.string("x")),
+        ]),
+      ]),
+      "section \"a\": block #0: rows must be a List, got String",
+    ),
+    #(
+      section("a", [], [
+        map_([
+          #("type", dynamic.string("form")),
+          #("fields", dynamic.string("x")),
+          #("submit", dynamic.string("Save")),
+        ]),
+      ]),
+      "section \"a\": block #0: fields must be a List, got String",
+    ),
+  ]
+  use #(raw, expected) <- list.each(cases)
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == expected
+}
+
+/// `pairs` の項目に `value` が無ければ `item #<添字>: missing value` の `Error` になる。
+pub fn pairs_item_requires_a_value_test() {
+  let raw =
+    section("a", [], [
+      map_([
+        #("type", dynamic.string("pairs")),
+        #("items", dynamic.list([map_([#("term", dynamic.string("state"))])])),
+      ]),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == "section \"a\": block #0: item #0: missing value"
+}
+
+/// `tone` の無い `badge` は `view.Neutral` の色で出る。
+pub fn badge_without_tone_is_neutral_test() {
+  let meta = [
+    map_([#("type", dynamic.string("badge")), #("text", dynamic.string("on"))]),
+  ]
+  let raw = section("a", meta, [])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  assert string.contains(
+    element.to_string(el),
+    element.to_string(view.status_chip(view.ToneChip(view.Neutral), "on")),
   )
 }

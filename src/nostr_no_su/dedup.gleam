@@ -1,30 +1,9 @@
-//// リレーをまたいだイベントの重複排除ディスパッチャー。
-////
-//// `dedup/window` が新規として受理した id についてだけイベントを `deliver` へ
-//// 渡す薄いアクター。渡した先はプラグインごとの専用プロセス（`plugin_runner`）で、
-//// この呼び出しは送信で終わるため、プラグインの実行時間はここに載らない。
-//// `deliver` は配送先の状態（`plugin_runner` では取りこぼしの件数）を受け取って
-//// 更新したものを返し、アクターがそれを次のイベントへ持ち越す。
-////
-//// リレーは同じイベントを繰り返し配信する（複数のリレーが同じイベントを持つ、
-//// 再接続時に保存済みイベントが再送される）ため、プラグインが同じ id を 2 度
-//// 見てはならない。
-////
-//// 監視の購読で届き、監視のハンドラーの照合を通ったイベントがすべて通る
-//// アクターなので、購読の再開点（`dedup/resume`）もここで記録する。照合で
-//// 落としたイベントは再開点を動かさない。監視の接続は購読を組み立てるたびに
-//// 再開点を問い合わせ、`dedup/resume_saver` は周期ごとに写しを取って DB に
-//// 保存する。再起動したディスパッチャーは記録を失い、次の購読は DB の再開点
-//// から始まる。
-////
-//// プラグインの取り直しの購読のイベントはここを通らず、`app.monitor_handler`
-//// から対象のランナーへ直接渡る（監視の再開点を動かしてはならず、大域の
-//// ウィンドウで弾いてもならないため）。
-////
-//// 監視のハンドラーが落としたイベント（購読していない id のものと、登録していない
-//// 作者のもの）も、リレーごとにここで数える。件数が 1、10、100 と桁を上げるたびに
-//// Warning の行を出し（`record_rejection`）、1 件ごとには出さない。取り直しの
-//// 購読で落としたものも数える。件数はディスパッチャーの再起動で 0 に戻る。
+//// リレーをまたいだイベントの重複排除ディスパッチャー。監視のハンドラーの照合を
+//// 通ったイベントのうち、`window` が新規と判定したものだけを `deliver`
+//// へ渡す。監視の購読の再開点と、照合で落とされたイベント（取り直しの購読の
+//// ものを含む）の件数もリレーごとに記録する。照合を通った取り直しの購読の
+//// イベントはここを通らない（再開点を動かさず、ウィンドウでも弾かないため）。
+//// 詳しくは docs/design-decisions.md の「監視は受信側で作者と購読 id を照合する」。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
@@ -32,13 +11,12 @@ import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
-import nostr_no_su/dedup/resume.{type Resume}
-import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/relay_client
+import nostr_no_su/resume.{type Resume}
 import nostr_no_su/time
+import nostr_no_su/window.{type Window}
 
 /// 再開点の問い合わせを待つ時間。処理は IO を含まないが、積まれた `Incoming` の
 /// 後に処理されるので、起動直後の流入のさなかは超えうる。超えたとき、購読の評価は
@@ -151,12 +129,7 @@ fn handle(state: State(targets), msg: Msg) -> actor.Next(State(targets), Msg) {
     Rejected(relay_url) -> {
       let #(rejected, line) = record_rejection(state.rejected, relay_url)
       case line {
-        Some(text) ->
-          log.write(
-            log.Warning,
-            log.relay_prefix(relay_client.label(relay_url)),
-            text,
-          )
+        Some(text) -> log.write(log.Warning, log.relay_prefix(relay_url), text)
         None -> Nil
       }
       actor.continue(State(..state, rejected: rejected))
@@ -190,10 +163,7 @@ fn receive(
   }
 }
 
-/// リレー `relay_url` の落とした件数を 1 つ増やした一覧と、そのとき出すログ行の
-/// 本文を返す。本文は増やした後の件数が 1、10、100 のような 10 の冪のときだけ
-/// `Some` で、それ以外は `None`（1 件ごとには出さない）。件数はリレーごとに独立に
-/// 数える。テストが直接呼べるよう公開する。
+/// リレー `relay_url` の落とした件数を 1 つ増やした一覧と、そのとき出すログ行の本文を返す。
 pub fn record_rejection(
   rejected: Dict(String, Int),
   relay_url: String,
@@ -205,8 +175,7 @@ pub fn record_rejection(
   #(dict.insert(rejected, relay_url, count), rejection_report(count))
 }
 
-/// 落とした件数が `count` になったときに出すログ行の本文。`count` が 10 の冪の
-/// ときだけ `Some` を返す。
+/// 落とした件数が `count` になったときに出すログ行の本文。出さないときは `None`。
 fn rejection_report(count: Int) -> Option(String) {
   case is_power_of_ten(count) {
     True ->

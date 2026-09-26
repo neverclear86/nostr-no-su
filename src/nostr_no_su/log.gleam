@@ -13,6 +13,9 @@
 ////
 //// リレーやイベントなど外部由来の文字列は、改行や制御文字を含みうるので、
 //// ログ行に入れる前に必ず `sanitize`（または `sanitize_external`）を通す。
+////
+//// 制御文字の集合は `is_control` の 1 か所で定義する。ログの外で同じ判定が要るときも、
+//// 別の集合を足さずにこれを使う。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -23,6 +26,10 @@ import gleam/string
 /// リレーやイベント由来の値をログに入れるときの既定の上限（コードポイントの数）。
 /// id と pubkey（64 文字）は切られない。
 pub const max_external_chars = 200
+
+/// プラグインの実行の失敗と、読み込めなかった候補の理由を `sanitize` するときの上限
+/// （コードポイントの数）。管理 UI のセルに収める。実行の失敗の理由はこの長さでログにも出る。
+pub const max_reason_chars = 120
 
 /// OTP logger の水準。本体は primary level の既定（notice）以上だけを使う。
 /// コンストラクターの名前は OTP の水準の atom（`notice` / `warning` / `error`）と
@@ -77,10 +84,21 @@ pub fn redact_secrets(values: List(String)) -> Nil
 @external(erlang, "logger", "log")
 fn logger_log(level: Level, message: String) -> Dynamic
 
-/// リレー 1 本に関する行の接頭辞。接続そのもの（`relay_connection`）と、その上を
-/// 流れるメッセージ（`relay_client`）が同じ接頭辞を使うため、ここに置く。
-pub fn relay_prefix(relay: String) -> String {
-  "relay " <> relay
+/// リレー 1 本に関する行の接頭辞。リレー URL を受け、スキームを落とした名前
+/// （`relay_label`）を使う。接続そのもの（`relay_connection`）と、その上を流れる
+/// メッセージ（`relay_client`）が同じ接頭辞を使うため、ここに置く。
+pub fn relay_prefix(url: String) -> String {
+  "relay " <> relay_label(url)
+}
+
+/// リレー URL から先頭のスキームだけを取り除いた名前。複数の接続が開いている
+/// ときに、ログ行がどのリレーのものかを示すために使う。スキームの無い値はその
+/// まま返す。
+pub fn relay_label(url: String) -> String {
+  case string.split_once(url, "://") {
+    Ok(#(_scheme, rest)) -> rest
+    _ -> url
+  }
 }
 
 /// プラグインに関するログ行の接頭辞。ランナーも、子プロセスの起動失敗の報告も
@@ -136,7 +154,6 @@ pub fn sanitize_external(text: String) -> String {
 }
 
 /// `sanitize` が空白に置き換えるコードポイント（`is_control`）を 1 つでも含むか。
-/// 値をログに入れずに捨てる側が、`sanitize` と同じ規則で判定するために使う。
 pub fn has_control(text: String) -> Bool {
   string.to_utf_codepoints(text)
   |> list.any(is_control)
@@ -146,7 +163,7 @@ pub fn has_control(text: String) -> Bool {
 /// （U+0000〜U+001F）、DEL と C1（U+007F〜U+009F）、行区切りと段落区切り
 /// （U+2028、U+2029）、双方向テキストの埋め込みと上書き（U+202A〜U+202E）、
 /// 分離（U+2066〜U+2069）が対象である。
-fn is_control(codepoint: UtfCodepoint) -> Bool {
+pub fn is_control(codepoint: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(codepoint)
   code < 0x20
   || { code >= 0x7f && code < 0xa0 }

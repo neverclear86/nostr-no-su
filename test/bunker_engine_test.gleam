@@ -711,6 +711,45 @@ pub fn revoke_of_an_unknown_session_is_an_error_test() {
     == Error(Nil)
 }
 
+/// `find_session` は承認済みの（署名者, クライアント）の組のセッションを、
+/// 一覧に載るのと同じ値で返す。
+pub fn find_session_finds_an_approved_pair_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  let assert [session] = engine.sessions(state)
+  assert engine.find_session(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+    == Ok(session)
+}
+
+/// 承認されていない組は `Error(Nil)`。同じ署名者でも別のクライアントの組や、
+/// 取り消した組は引けない。
+pub fn find_session_of_an_unapproved_pair_is_an_error_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let other = account_for(other_client_key)
+  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
+  assert engine.find_session(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(other),
+    )
+    == Error(Nil)
+
+  let assert Ok(#(state, _write)) =
+    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
+  assert engine.find_session(
+      state,
+      account.pubkey_hex(signer),
+      account.pubkey_hex(client),
+    )
+    == Error(Nil)
+}
+
 /// `set_perms` は承認済みセッションの `perms` を差し替え、`UpdateSessionPerms` を
 /// 書き込みとして返す。
 pub fn set_perms_replaces_the_permissions_test() {
@@ -1002,6 +1041,33 @@ pub fn unknown_token_cannot_be_decided_test() {
   // 同じ token を二度は使えない
   let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
   let assert Error(_) = engine.approve(state, token, 1001)
+}
+
+/// `find_pending` は失効していない承認待ちを token で引き、一覧に載るのと同じ
+/// 値を返す。失効の境目の時刻でも引ける。
+pub fn find_pending_finds_a_live_request_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  let assert [entry] = engine.pending(state, 1000)
+  assert engine.find_pending(state, token, 1000) == Ok(entry)
+  assert engine.find_pending(state, token, 1000 + 600) == Ok(entry)
+}
+
+/// 知らない token の承認待ちは `Error(Nil)`。
+pub fn find_pending_of_an_unknown_token_is_an_error_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  assert engine.find_pending(state, "tok-unknown", 1000) == Error(Nil)
+}
+
+/// 失効した承認待ちは `Error(Nil)`。要求は状態に残っていても引けない。
+pub fn find_pending_skips_an_expired_request_test() {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
+  assert engine.find_pending(state, token, 1000 + 601) == Error(Nil)
 }
 
 /// 古いクライアントが送る `[secret]` だけの params でも接続できる。
@@ -1297,6 +1363,24 @@ fn session_reply(
   decrypt_response(client, signer, response)
 }
 
+/// セッション内のリクエストを 1 件送り、`Handled` の `notice` を返す。
+fn session_notice(
+  state: engine.Engine,
+  method: String,
+  params_json: String,
+) -> option.Option(String) {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body = request_body("r1", method, params_json)
+  let engine.Handled(notice:, ..) =
+    engine.handle_event(
+      state,
+      signed_event.verified(request_event(client, signer, body, 1001)),
+      engine.Inputs(now: 1001, token: token, not_before: 0),
+    )
+  notice
+}
+
 /// content だけのドラフト 1 件の params の JSON。
 fn kind_draft_params(kind: Int) -> String {
   let draft =
@@ -1382,14 +1466,7 @@ pub fn denied_requests_carry_a_notice_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let state = granted_session("sign_event:1")
-  let body = request_body("r1", "sign_event", kind_draft_params(7))
-  let engine.Handled(notice:, ..) =
-    engine.handle_event(
-      state,
-      signed_event.verified(request_event(client, signer, body, 1001)),
-      engine.Inputs(now: 1001, token: token, not_before: 0),
-    )
-  assert notice
+  assert session_notice(state, "sign_event", kind_draft_params(7))
     == Some(
       "permission denied for client "
       <> account.pubkey_hex(client)
@@ -1397,6 +1474,13 @@ pub fn denied_requests_carry_a_notice_test() {
       <> account.pubkey_hex(signer)
       <> ": sign_event:7",
     )
+}
+
+/// 権限の不足ではない失敗（kind 24133 の `sign_event`）は、`Handled.notice`
+/// にログの行を持たない。
+pub fn non_denied_failures_carry_no_notice_test() {
+  let state = granted_session("")
+  assert session_notice(state, "sign_event", kind_draft_params(24_133)) == None
 }
 
 /// 上限を超える perms はトークンの境で切り、上限ちょうどの perms はそのまま

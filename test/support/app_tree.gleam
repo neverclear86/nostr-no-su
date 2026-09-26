@@ -14,11 +14,10 @@ import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
-import nostr_no_su/config
+import nostr_no_su/db
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
@@ -26,6 +25,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
+import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
@@ -49,7 +49,7 @@ pub const other_client_key = "00000000000000000000000000000000000000000000000000
 
 /// 偽のストアの書き込みと読み込みが失敗したときの理由。本物のストアの文言を使う。
 pub fn store_failure() -> String {
-  account_store.describe(account_store.Unavailable)
+  db.describe(db.Unavailable)
 }
 
 /// 偽リレーの URL。`fake_open` が報告に添えるだけで、接続先としては使わない。
@@ -121,7 +121,7 @@ pub fn fake_open(
       reports,
       Opened(relay_url, process.self(), socket, fn(sent) {
         handle_event(relay_client.ReceivedEvent(
-          config.monitor_subscription_id,
+          subscriptions.monitor_subscription_id,
           signed_event.verified(sent),
         ))
       }),
@@ -172,15 +172,38 @@ pub fn start_tree(spec: app.Spec) -> Pid {
   started.pid
 }
 
-/// 偽リレー 1 本ぶんの仕様。URL は `fake_open` が無視するのでラベルでしかない。
-pub fn test_relay() -> relay_list.Connection {
-  named_relay(test_relay_url)
+/// ツリーを起動し、`monitor` の URL を先に、続けて `bunker` の URL のうち未出のものを
+/// `app.open_relay` で開いてから pid を返す。両方にある URL は両方の用途で開く。
+/// 起動できないか開けなければテストを失敗させる。
+pub fn start_tree_with_relays(
+  spec: app.Spec,
+  monitor: List(String),
+  bunker: List(String),
+) -> Pid {
+  let tree = start_tree(spec)
+  list.each(list.unique(list.append(monitor, bunker)), fn(url) {
+    let assert Ok(roles) =
+      relay_list.roles_from(
+        monitor: list.contains(monitor, url),
+        bunker: list.contains(bunker, url),
+      )
+    let assert Ok(Nil) = app.open_relay(spec, url, roles)
+  })
+  tree
 }
 
-/// 指定した URL の偽リレー 1 本ぶんの仕様。バンカーは publisher を URL で
-/// 区別するため、複数本を張るテストは別々の URL を渡す。
-pub fn named_relay(url: String) -> relay_list.Connection {
-  relay_list.Connection(name: process.new_name("test_relay"), url: url)
+/// 一覧から `url` の用途 `role` の接続の名前を引く。無ければテストを失敗させる。
+pub fn connection_name(
+  spec: app.Spec,
+  url: String,
+  role: relay_list.Role,
+) -> Name(relay_connection.Msg) {
+  let assert Ok(entries) = relay_list.entries(spec.relay_list)
+  let assert Ok(connection) =
+    list.find(relay_list.connections(entries, role), fn(connection) {
+      connection.url == url
+    })
+  connection.name
 }
 
 /// 偽リレー 1 本の上で、指定したストアを持つバンカーだけを動かすツリー。
@@ -207,16 +230,20 @@ pub fn start_loading_bunker_tree_with_open(
   retry_delay: backoff.Backoff,
   open: app.Open,
 ) -> Pid {
-  start_tree(app.Spec(
-    plugins: [],
-    not_loaded_plugins: [],
-    monitor: idle_monitor(),
-    bunker: bunker_spec(name, store, [test_relay()], retry_delay),
-    admin: None,
-    open: open,
-    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    relay_list: process.new_name("test_relay_list"),
-  ))
+  start_tree_with_relays(
+    app.Spec(
+      plugins: [],
+      not_loaded_plugins: [],
+      monitor: idle_monitor(),
+      bunker: bunker_spec(name, store, retry_delay),
+      admin: None,
+      open: open,
+      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
+      relay_list: process.new_name("test_relay_list"),
+    ),
+    [],
+    [test_relay_url],
+  )
 }
 
 /// テストの読み込みの再試行の待ち時間。初期値と上限を同じにして延ばさない。既存の
@@ -230,7 +257,6 @@ pub const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 pub fn bunker_spec(
   name: Name(bunker.Msg),
   store: bunker.Store,
-  relays: List(relay_list.Connection),
   retry_delay: backoff.Backoff,
 ) -> app.Bunker {
   app.Bunker(
@@ -244,24 +270,22 @@ pub fn bunker_spec(
       auth_url: Some(fn(token) { auth_base <> "/approve/" <> token }),
       retry_delay: retry_delay,
     ),
-    relays: relays,
     subscriptions: fn(signers) {
       fn() {
         signers()
         |> option.to_result(Nil)
-        |> result.map(config.bunker_subscriptions(_, 0))
+        |> result.map(subscriptions.bunker_subscriptions(_, 0))
       }
     },
   )
 }
 
-/// 監視とバンカーのテストのツリーに載せる、リレーを持たない Monitor。監視の
+/// 監視とバンカーのテストのツリーに載せる、購読が空で作者を問わない Monitor。監視の
 /// ツリーは常に起動するので載せるが、テストが監視を使わないときに使う。
 pub fn idle_monitor() -> app.Monitor {
   app.Monitor(
     name: process.new_name("test_idle_dedup"),
     dedup_capacity: 8,
-    relays: [],
     subscriptions: fn(_relay_url) { fn() { Ok([]) } },
     save_resume: discard_resume_points,
     save_plugin_resume: discard_resume_points,

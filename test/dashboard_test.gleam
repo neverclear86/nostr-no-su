@@ -18,8 +18,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
-import nostr_no_su/relay_list.{Roles}
-import nostr_no_su/relay_store.{Relay}
+import nostr_no_su/relay_list
 import support/account_actions
 import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 
@@ -304,6 +303,8 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
       label: "main account",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
@@ -351,6 +352,8 @@ fn fingerprinted_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    uri_camera_text: "x?secret=s",
+    auth_uri_camera_text: "x",
     picture: None,
   )
 }
@@ -535,7 +538,7 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey:,
-          npub: "npub1unreadable",
+          npub: Some("npub1unreadable"),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1152,6 +1155,8 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      uri_camera_text: "x",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot =
@@ -1218,7 +1223,7 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: "abcd1234",
-          npub: "npub1unreadable",
+          npub: Some("npub1unreadable"),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1255,7 +1260,7 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: "not-a-valid-pubkey-value",
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),
@@ -1281,7 +1286,7 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey:,
-          npub:,
+          npub: Some(npub),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1602,7 +1607,7 @@ fn dialog_snapshot() -> dashboard.Snapshot {
     skipped: Ok([
       dashboard.SkippedRow(
         pubkey: dialog_skipped,
-        npub: "npub1skippeddialogvalueabcdefghijklmnopq",
+        npub: Some("npub1skippeddialogvalueabcdefghijklmnopq"),
         label: "old wallet",
         reason: vault.UndecryptablePrivateKey,
       ),
@@ -1618,6 +1623,8 @@ fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
     label:,
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    uri_camera_text: "x?secret=s",
+    auth_uri_camera_text: "x",
     picture: None,
   )
 }
@@ -2490,6 +2497,8 @@ pub fn signer_is_shown_as_label_and_npub_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      uri_camera_text: "x",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot =
@@ -2603,11 +2612,10 @@ pub fn overview_color_rules_test() {
     dashboard.Overview(
       dashboard.NoValue,
       [dashboard.OverviewNote(failure, i18n.OverviewNotAvailable)],
-      linked: True,
-      highlighted: False,
+      emphasis: dashboard.Linked,
     )
   let item = fn(value, notes) {
-    dashboard.Overview(value, notes, linked: True, highlighted: False)
+    dashboard.Overview(value, notes, emphasis: dashboard.Linked)
   }
   let plain = fn(text) { dashboard.OverviewNote(None, text) }
   let note = fn(chip, text) { dashboard.OverviewNote(Some(chip), text) }
@@ -2636,8 +2644,7 @@ pub fn overview_color_rules_test() {
       dashboard.Overview(
         dashboard.Count(0),
         [plain(i18n.PendingExpireAfterMinutes(10))],
-        linked: False,
-        highlighted: False,
+        emphasis: dashboard.Unlinked,
       ),
     ),
     #(
@@ -2646,8 +2653,7 @@ pub fn overview_color_rules_test() {
       dashboard.Overview(
         dashboard.Count(2),
         [plain(i18n.AwaitingDecision), plain(i18n.SoonestExpiry("0:45"))],
-        linked: True,
-        highlighted: True,
+        emphasis: dashboard.Highlighted,
       ),
     ),
     #(
@@ -2666,7 +2672,7 @@ pub fn overview_color_rules_test() {
         skipped: Ok([
           dashboard.SkippedRow(
             pubkey: "abcd1234",
-            npub: "npub1unreadable",
+            npub: Some("npub1unreadable"),
             label: "old wallet",
             reason: vault.UndecryptablePrivateKey,
           ),
@@ -2757,6 +2763,8 @@ pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let connected = dashboard.Reported(relay_connection.Connected)
@@ -2834,6 +2842,8 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   assert !string.contains(render([account], [bunker_relay]), "Getting started")
@@ -2846,7 +2856,7 @@ pub fn new_relay_form_describes_the_url_field_test() {
     dashboard.new_relay_form(
       i18n.English,
       "",
-      dashboard.new_relay_roles,
+      Some(dashboard.new_relay_roles),
       view.InForm,
     )
     |> element.fragment
@@ -2879,13 +2889,11 @@ pub fn relay_action_form_keeps_the_description_visible_test() {
 
 /// id 7 のリレーへの `action` の英語のフォームの中身を HTML 文字列にする。
 fn action_form(action: dashboard.RelayAction) -> String {
-  let relay = Relay(id: 7, url: "wss://relay.example", roles: Roles(True, True))
   dashboard.relay_action_form(
     i18n.English,
-    relay,
+    dashboard.RelayRow(7, "wss://a", dashboard.Unused, dashboard.Unused),
     action,
-    None,
-    None,
+    Some(relay_list.Both),
     view.InForm,
   )
   |> element.fragment
@@ -2900,6 +2908,8 @@ fn session_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+    uri_camera_text: "abcd?relay=x&secret=s",
+    auth_uri_camera_text: "abcd?relay=x",
     picture: None,
   )
 }
@@ -3036,13 +3046,13 @@ pub fn connect_content_follows_the_accounts_state_test() {
   )
 }
 
-/// kind 1 の署名だけを許すセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
-fn english_permissions_form() -> String {
+/// 権限が `perms` のセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
+fn english_permissions_form(perms: String) -> String {
   let session =
     dashboard.SessionRow(
       signer: "0123",
       client: "4567",
-      perms: "sign_event:1",
+      perms: perms,
       created_at: 0,
       last_used_at: 0,
     )
@@ -3054,7 +3064,7 @@ fn english_permissions_form() -> String {
 /// フォームの中身はセッションの権限のパスへ POST し、保存済みの kind を欄に出す。ページの枠と
 /// 要約は含めない。
 pub fn permissions_form_posts_without_the_page_frame_test() {
-  let html = english_permissions_form()
+  let html = english_permissions_form("sign_event:1")
   assert string.contains(
     form_tag(html, "/sessions/0123/4567/permissions\""),
     "method=\"post\"",
@@ -3065,7 +3075,7 @@ pub fn permissions_form_posts_without_the_page_frame_test() {
 
 /// kind の欄の補足は ⓘ のボタンで開く `popover` の段落で、欄の説明として結び付く。
 pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
-  let html = english_permissions_form()
+  let html = english_permissions_form("sign_event:1")
   assert string.contains(
     html,
     "aria-describedby=\"dialog-session-0123-4567-permissions-kinds-hint\"",
@@ -3078,6 +3088,34 @@ pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
     html,
     "id=\"dialog-session-0123-4567-permissions-kinds-hint\" popover=\"hint\"",
   )
+}
+
+/// 保存済みの `perms` は 3 つのチェック、kind の欄、「そのほかの宣言」に分けて欄に写す。
+/// kind の欄と「そのほかの宣言」は、並びの順と重複を保存済みのまま残す。
+pub fn permissions_form_splits_the_saved_perms_test() {
+  let html =
+    english_permissions_form(
+      "sign_event:-1,nip44_decrypt,sign_event:0,get_public_key,sign_event:7,sign_event:0",
+    )
+  assert !checkbox_checked(html, "sign_event")
+  assert !checkbox_checked(html, "nip44_encrypt")
+  assert checkbox_checked(html, "nip44_decrypt")
+  assert string.contains(html, "name=\"kinds\" value=\"0,7,0\"")
+  assert string.contains(
+    html,
+    "<input name=\"other\" type=\"hidden\" value=\"sign_event:-1,get_public_key\">",
+  )
+}
+
+/// `sign_event:01` のような 0 埋めの kind の署名は kind の欄に移さず、「そのほかの宣言」の
+/// 隠し欄に綴りのまま残す（kind の欄に写して保存し直すと `sign_event:1` になり許可が広がる）。
+pub fn permissions_form_keeps_a_padded_kind_as_another_declaration_test() {
+  let html = english_permissions_form("sign_event:01")
+  assert string.contains(
+    html,
+    "<input name=\"other\" type=\"hidden\" value=\"sign_event:01\">",
+  )
+  assert !string.contains(html, "value=\"1\"")
 }
 
 /// 接続のフォームの中身は `/sessions/connect` へ POST し、URI の欄の補足を欄の下の 1 行で
@@ -3116,7 +3154,7 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
       dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),
     )
@@ -3149,7 +3187,7 @@ pub fn render_open_echoes_the_new_relay_form_test() {
       states(),
       dashboard.NewRelayOpen(
         "wss://typed.example",
-        Roles(True, False),
+        Some(relay_list.MonitorOnly),
         i18n.Translated(i18n.InvalidRelayUrl),
       ),
     )
@@ -3179,7 +3217,7 @@ pub fn render_open_needs_the_relay_list_test() {
       i18n.English,
       view.System,
       unlisted,
-      dashboard.NewRelayOpen("", Roles(False, True), reason),
+      dashboard.NewRelayOpen("", Some(relay_list.BunkerOnly), reason),
     )
   assert string.contains(body, "class=\"modal\" id=\"dialog-relay-new\" open>")
   assert dashboard.render_open(i18n.English, view.System, unlisted, delete(1))
@@ -3203,7 +3241,7 @@ pub fn render_open_does_not_announce_the_refresh_test() {
       dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),
     )

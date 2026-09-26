@@ -151,7 +151,7 @@ pub fn load_all_broken_beam_test() {
 }
 
 /// API バージョンが一致しないモジュールは読み込まれず、`not_loaded` に識別子と理由の構造で
-/// 乗る。理由からモジュール名の接頭辞は外れるが、ログの行には接頭辞付きのまま残る。
+/// 乗る。理由にはモジュール名の接頭辞が付かず、ログの行にだけ付く。
 pub fn load_all_reports_not_loaded_test() {
   let fixture = beam_fixture.new("not_loaded")
   beam_fixture.compile(
@@ -338,6 +338,23 @@ pub fn load_all_not_loaded_truncates_long_reason_test() {
   )
 }
 
+/// 理由に含まれる改行と制御文字は、`not_loaded` の `reason` では空白になる。
+pub fn load_all_not_loaded_sanitizes_control_characters_test() {
+  let fixture = beam_fixture.new("control_reason")
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  put_plugin(first, "bad\\nname\\e", fixture.root)
+  put_plugin(second, "bad\\nname\\e", fixture.root)
+  let plugin_loader.LoadOutcome(not_loaded:, ..) = load_dir(fixture.root)
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: second,
+        reason: "duplicate plugin name \"bad name \"; keeping the first",
+      ),
+    ]
+}
+
 /// 内蔵プラグインと同名の外部プラグインは採用しない。プラグイン名はダッシュ
 /// ボードとログの識別子なので、内蔵・外部を区別せず一意にする。
 pub fn load_all_rejects_reserved_name_test() {
@@ -386,6 +403,24 @@ pub fn load_all_skips_unreadable_directory_in_list_test() {
   assert loaded.name == "survivor_plugin"
   assert has_note(notes, "cannot read directory (enoent); skipped")
   assert !has_note(notes, "external plugins disabled")
+}
+
+/// 読めないディレクトリーの後ろのディレクトリーでも、内蔵プラグインの名前は
+/// 予約されたままである。
+pub fn load_all_reserved_name_survives_unreadable_directory_test() {
+  let fixture = beam_fixture.new("reserved_unreadable")
+  let second = fixture.root <> "/second"
+  beam_fixture.mkdir(second)
+  put_plugin(fixture.module, "console_logger", second)
+  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+    plugin_loader.load_all(
+      Some(fixture.root <> "/nope" <> ":" <> second),
+      ["console_logger"],
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  assert plugins == []
+  assert has_note(notes, "duplicate plugin name \"console_logger\"")
 }
 
 /// 同じエントリーモジュール名を 2 つのディレクトリーに置くと、先の
@@ -1113,6 +1148,26 @@ pub fn page_content_crash_test() {
   assert string.contains(reason, "plugin_page_content/1 crashed")
 }
 
+/// `plugin_page_content` の失敗の理由は、モジュール名の接頭辞を 1 つ付けた 1 行になる。
+pub fn page_content_crash_reason_names_the_module_test() {
+  let fixture = beam_fixture.new("pages_content_crash_reason")
+  beam_fixture.compile(
+    beam_fixture.pages_source(
+      fixture.module,
+      "pages_content_crash_reason_plugin",
+      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+      "erlang:error(boom)",
+    ),
+    fixture.module,
+    fixture.root,
+  )
+  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
+  let assert [loaded] = plugins
+  let assert Some(ui) = loaded.ui
+  assert ui.content("status", "en", [])
+    == Error(fixture.module <> ": plugin_page_content/1 crashed (error:boom)")
+}
+
 /// 戻らない `plugin_page_content` は、読み込みには成功し、`ui.content` の
 /// 呼び出しが期限で打ち切られて `Error` になる。
 pub fn page_content_timeout_test() {
@@ -1205,11 +1260,6 @@ pub fn load_all_killed_metadata_test() {
     load_dir_within(fixture.root, short_call_timeout_ms)
   assert plugins == []
   assert has_note(notes, fixture.module <> ": plugin_name/0 crashed (killed)")
-}
-
-/// 理由が識別子の接頭辞で始まらなければ、そのまま返す。
-pub fn strip_id_keeps_reason_without_id_test() {
-  assert plugin_loader.strip_id("sample", "other: broken") == "other: broken"
 }
 
 /// 末尾にスラッシュを持つディレクトリーでも、区切りは 1 つにする。
