@@ -39,16 +39,18 @@ pub type Timeouts {
   Timeouts(
     /// 読み込み 1 回（スキーマの移行、テーブルのロック、一覧）全体の期限。
     load_ms: Int,
-    /// 書き込み 1 件と、主キーの 1 行の読み込み（`resume/store` の再開点）の期限。
+    /// 書き込み 1 件と、主キーの 1 行の読み込み（`resume/store` の再開点）と
+    /// `acquire_lock` の期限。
     write_ms: Int,
   )
 }
 
-/// 本番の期限。`load_ms` は読み込み 1 回全体、`write_ms` は書き込み 1 件の期限。
+/// 本番の期限。`load_ms` は読み込み 1 回全体、`write_ms` は書き込み 1 件（と主キーの
+/// 1 行の読み込み、`acquire_lock`）の期限。
 /// 期限を過ぎてもサーバー側で文の実行が続きうるので、書き込みの `TimedOut` は
 /// 「書き込まれたかどうか分からない」を意味する（`may_have_been_written`）。
-/// 値の根拠は docs/design-decisions.md の「DB が不調な間は NIP-46 の処理が
-/// 待たされる」にある。
+/// 値の根拠（署名者の問い合わせの 5 秒に収める予算）は docs/design-decisions.md の
+/// 「DB が不調な間は NIP-46 の処理が待たされる」にある。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
