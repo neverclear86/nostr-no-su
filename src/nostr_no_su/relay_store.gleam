@@ -21,6 +21,10 @@ const select_sql = "SELECT id, url, observe, bunker FROM relays WHERE observe OR
 const insert_sql = "INSERT INTO relays (url, observe, bunker) VALUES ($1, $2, $3)
 RETURNING id, url, observe, bunker"
 
+/// `relays.url` の一意制約の名前。これに違反した挿入は、同じ URL の登録済みを
+/// 意味する。
+const relay_url_constraint = "relays_url_key"
+
 /// 用途の差し替え。
 const update_roles_sql = "UPDATE relays SET observe = $2, bunker = $3 WHERE id = $1"
 
@@ -41,7 +45,7 @@ pub fn list(
 }
 
 /// 1 行を追加する。URL の検査は呼び出し側が行う（`relay_list.open` と
-/// 同じ判定を使う）。同じ URL がすでにあれば `RelayAlreadyRegistered`。
+/// 同じ判定を使う）。同じ URL がすでにあれば `db.Duplicate`。
 pub fn insert(
   db: pog.Connection,
   url: String,
@@ -55,7 +59,8 @@ pub fn insert(
     |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
     |> pog.returning(relay_decoder())
     |> pog.timeout(timeouts.write_ms)
-    |> db.execute(db),
+    |> db.execute(db)
+    |> result.map_error(db.duplicate_on(_, relay_url_constraint)),
   )
   case returned.rows {
     [row] -> Ok(row)
@@ -63,7 +68,7 @@ pub fn insert(
   }
 }
 
-/// `id` の行の用途を差し替える。行が無ければ `RelayNotRegistered`。
+/// `id` の行の用途を差し替える。行が無ければ `db.NotFound`。
 pub fn update_roles(
   db: pog.Connection,
   id: Int,
@@ -74,10 +79,10 @@ pub fn update_roles(
   |> pog.parameter(pog.int(id))
   |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
   |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
-  |> db.execute_on_one_row(db, timeouts, db.RelayNotRegistered)
+  |> db.execute_on_one_row(db, timeouts)
 }
 
-/// `id` の行を消す。行が無ければ `RelayNotRegistered`。
+/// `id` の行を消す。行が無ければ `db.NotFound`。
 pub fn delete(
   db: pog.Connection,
   id: Int,
@@ -85,7 +90,7 @@ pub fn delete(
 ) -> Result(Nil, StoreError) {
   pog.query(delete_sql)
   |> pog.parameter(pog.int(id))
-  |> db.execute_on_one_row(db, timeouts, db.RelayNotRegistered)
+  |> db.execute_on_one_row(db, timeouts)
 }
 
 /// `relays` の 1 行を読むデコーダー。列の順序は `select_sql` / `insert_sql` の

@@ -1064,8 +1064,8 @@ pub fn delete_relay(
 /// `db.StoreError` を管理 UI の `admin.RelayChangeFailure` に写す。
 fn store_failure(error: db.StoreError) -> admin.RelayChangeFailure {
   case error {
-    db.RelayAlreadyRegistered -> admin.DuplicateRelay
-    db.RelayNotRegistered -> admin.UnregisteredRelay
+    db.Duplicate -> admin.DuplicateRelay
+    db.NotFound -> admin.UnregisteredRelay
     _ ->
       case db.may_have_been_written(error) {
         True -> admin.RelayMaybeSaved

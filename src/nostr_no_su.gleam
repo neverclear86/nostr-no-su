@@ -300,7 +300,7 @@ fn bunker_spec(
 /// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
 /// あるかどうかを区別する。削除は行が無いことを成功として扱う。
 ///
-/// 追加の `AlreadyRegistered` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
+/// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
 /// 公開鍵にだけ追加を書き込むので、DB に行があるのは、DB がメモリより先行しているか、
 /// 読み込みで飛ばされた行があることを意味し、バンカーはそれを読み直して確かめる。
 ///
@@ -335,7 +335,7 @@ pub fn account_store_operations(
       account_store.insert(db, master_key, entry, timeouts)
       |> result.map_error(fn(error) {
         case error {
-          db.AlreadyRegistered -> bunker.AlreadyStored(db.describe(error))
+          db.Duplicate -> bunker.AlreadyStored(account_store.describe(error))
           _ -> write_failure(error)
         }
       })
@@ -524,9 +524,9 @@ fn halt_if_cannot_continue(
 }
 
 /// 書き込みの失敗を、書き込まれていることがあるかどうかの区別つきでバンカーへ渡す形に
-/// 写す。
+/// 写す。説明はアカウントの語で作る（`account_store.describe`）。
 fn write_failure(error: db.StoreError) -> bunker.WriteFailure {
-  let reason = db.describe(error)
+  let reason = account_store.describe(error)
   case db.may_have_been_written(error) {
     True -> bunker.MaybeWritten(reason)
     False -> bunker.NotWritten(reason)

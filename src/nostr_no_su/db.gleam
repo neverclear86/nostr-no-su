@@ -63,13 +63,6 @@ pub type Timeouts {
 ///   収まる。再開点の 1 行の読み込み（`resume/store` の `load`）もこの値を使う。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
-/// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
-const primary_key_constraint = "bunker_accounts_pkey"
-
-/// `relays.url` の一意制約の名前。これに違反した挿入は、同じ URL の登録済みを
-/// 意味する。
-const relay_url_constraint = "relays_url_key"
-
 /// アカウントを保存するテーブル。`pubkey` は小文字 16 進に固定し、表記の揺れで
 /// 同じ鍵が二重に登録されるのを防ぐ。暗号文の長さの検査は、秘密鍵が
 /// 12 + 32 + 16 = 60 バイト、secret が空でない（12 + 1 以上 + 16）ことを表す。
@@ -209,14 +202,15 @@ pub type StoreError {
   /// だけで、理由の項（値を含みうる）は含まない。クエリーを送った後にも起きうるので、
   /// 書き込みはコミットされていることがある。
   Raised(exception: String)
-  /// 同じ pubkey がすでに登録されている。
-  AlreadyRegistered
-  /// 指定した pubkey が登録されていない。
-  NotRegistered
-  /// 同じ URL のリレーがすでに登録されている。
-  RelayAlreadyRegistered
-  /// 指定した id のリレーが登録されていない。
-  RelayNotRegistered
+  /// 同じキーの行がすでにある。どの一意制約の違反が重複を意味するかは、テーブルを
+  /// 知っている呼び出し側が `duplicate_on` で決める。
+  Duplicate
+  /// 対象の行が無い。
+  NotFound
+  /// 制約に違反した。`constraint` は制約の名前だけで、行の値を含みうる `message` と
+  /// `detail` は持たない。一意制約の違反も、呼び出し側が `duplicate_on` で写すまでは
+  /// この値である。
+  ConstraintRejected(constraint: String)
   /// それ以外のクエリーの失敗。Postgres のエラー名など、値を含まない説明だけを
   /// 持つ。
   QueryFailed(reason: String)
@@ -356,10 +350,9 @@ pub fn may_have_been_written(error: StoreError) -> Bool {
   case error {
     TimedOut | Raised(_) -> True
     Unavailable
-    | AlreadyRegistered
-    | NotRegistered
-    | RelayAlreadyRegistered
-    | RelayNotRegistered
+    | Duplicate
+    | NotFound
+    | ConstraintRejected(_)
     | QueryFailed(_)
     | SchemaTooNew(..)
     | HeldByAnotherInstance(..) -> False
@@ -367,17 +360,18 @@ pub fn may_have_been_written(error: StoreError) -> Bool {
 }
 
 /// ログと画面に出す説明。pgo は認証の失敗や存在しないデータベース名も接続の
-/// 失敗に畳むので、`Unavailable` の説明はそれらも含む言い方にする。
+/// 失敗に畳むので、`Unavailable` の説明はそれらも含む言い方にする。`Duplicate` と
+/// `NotFound` はテーブルを名指さない。テーブルの語を添えた説明は呼び出し側が作る
+/// （`account_store.describe`）。
 pub fn describe(error: StoreError) -> String {
   case error {
     Unavailable -> "database is unreachable or rejected the connection"
     TimedOut -> "database did not answer in time or the connection was lost"
     Raised(exception) ->
       "the database client raised an exception: " <> exception
-    AlreadyRegistered -> "account is already registered"
-    NotRegistered -> "account is not registered"
-    RelayAlreadyRegistered -> "relay is already registered"
-    RelayNotRegistered -> "relay is not registered"
+    Duplicate -> "row already exists"
+    NotFound -> "row does not exist"
+    ConstraintRejected(constraint) -> "constraint violated: " <> constraint
     QueryFailed(reason) -> reason
     SchemaTooNew(found:, supported:) ->
       "database schema version "
@@ -392,20 +386,22 @@ pub fn describe(error: StoreError) -> String {
   }
 }
 
+/// 一意制約 `constraint` の違反（`ConstraintRejected`）を `Duplicate` に写し、それ以外は
+/// そのまま返す。どの制約が重複を意味するかは、テーブルを知っている呼び出し側が渡す。
+pub fn duplicate_on(error: StoreError, constraint: String) -> StoreError {
+  case error {
+    ConstraintRejected(rejected) if rejected == constraint -> Duplicate
+    _ -> error
+  }
+}
+
 /// pog のエラーを `StoreError` に写す。Postgres が返す `message` と `detail` は
 /// 値を含みうるので捨て、制約名やエラー名のような識別子だけを残す。
 pub fn from_query_error(error: pog.QueryError) -> StoreError {
   case error {
     pog.ConnectionUnavailable -> Unavailable
     pog.QueryTimeout -> TimedOut
-    pog.ConstraintViolated(constraint:, ..)
-      if constraint == primary_key_constraint
-    -> AlreadyRegistered
-    pog.ConstraintViolated(constraint:, ..)
-      if constraint == relay_url_constraint
-    -> RelayAlreadyRegistered
-    pog.ConstraintViolated(constraint:, ..) ->
-      QueryFailed("constraint violated: " <> constraint)
+    pog.ConstraintViolated(constraint:, ..) -> ConstraintRejected(constraint)
     pog.PostgresqlError(name:, ..) -> QueryFailed("postgres error: " <> name)
     pog.UnexpectedArgumentCount(..) -> QueryFailed("unexpected argument count")
     pog.UnexpectedArgumentType(..) -> QueryFailed("unexpected argument type")
@@ -459,16 +455,15 @@ fn execute_counting(
   |> result.map(fn(returned) { returned.count })
 }
 
-/// 1 行を対象にする書き込みを実行する。対象の行が無ければ `missing`。
+/// 1 行を対象にする書き込みを実行する。対象の行が無ければ `NotFound`。
 pub fn execute_on_one_row(
   query: pog.Query(Nil),
   db: pog.Connection,
   timeouts: Timeouts,
-  missing: StoreError,
 ) -> Result(Nil, StoreError) {
   use count <- result.try(execute_counting(query, db, timeouts))
   case count {
-    0 -> Error(missing)
+    0 -> Error(NotFound)
     _ -> Ok(Nil)
   }
 }
