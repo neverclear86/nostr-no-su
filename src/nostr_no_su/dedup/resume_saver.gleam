@@ -5,11 +5,14 @@
 //// アクターは前回の写しを持たないので、最初の周期で全件を書く（保存は値を
 //// 小さくしないので害は無い）。
 
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
+import gleam/result
 import nostr_no_su/dedup/resume
 import nostr_no_su/log
 
@@ -88,42 +91,42 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 /// 写しを取り、変わった行だけを保存する。写しを取る操作が失敗すれば状態を
 /// 変えない。保存する対象が無ければ状態を変えない。
 fn save_points(state: State) -> State {
-  case state.points() {
-    Error(Nil) -> state
-    Ok(current) ->
-      case resume.unsaved(state.saved, current) {
-        [] -> state
-        unsaved ->
-          case state.save(unsaved) {
-            Ok(Nil) -> {
-              case state.failing {
-                True ->
-                  log.write(
-                    log.Notice,
-                    state.prefix,
-                    "resume points saved again",
-                  )
-                False -> Nil
-              }
-              State(..state, saved: current, failing: False)
-            }
-            Error(reason) -> {
-              case state.failing {
-                False ->
-                  log.write(
-                    log.Warning,
-                    state.prefix,
-                    "could not save resume points: "
-                      <> reason
-                      <> "; retrying every "
-                      <> int.to_string(state.interval_ms)
-                      <> "ms",
-                  )
-                True -> Nil
-              }
-              State(..state, failing: True)
-            }
-          }
-      }
+  {
+    use current <- result.map(state.points())
+    let unsaved = resume.unsaved(state.saved, current)
+    use <- bool.guard(unsaved == [], state)
+    let outcome = state.save(unsaved)
+    case save_report(state.failing, outcome, state.interval_ms) {
+      Some(#(level, message)) -> log.write(level, state.prefix, message)
+      None -> Nil
+    }
+    case outcome {
+      Ok(Nil) -> State(..state, saved: current, failing: False)
+      Error(_) -> State(..state, failing: True)
+    }
+  }
+  |> result.unwrap(state)
+}
+
+/// 保存の結果に対して出すログ行。`was_failing` は直前の保存が失敗していたか、
+/// `interval_ms` は保存の周期。失敗の始まりと復帰だけを報告し、失敗や成功が
+/// 続く間は `None` を返す。
+pub fn save_report(
+  was_failing: Bool,
+  outcome: Result(Nil, String),
+  interval_ms: Int,
+) -> Option(#(log.Level, String)) {
+  case outcome, was_failing {
+    Ok(Nil), True -> Some(#(log.Notice, "resume points saved again"))
+    Error(reason), False ->
+      Some(#(
+        log.Warning,
+        "could not save resume points: "
+          <> reason
+          <> "; retrying every "
+          <> int.to_string(interval_ms)
+          <> "ms",
+      ))
+    Ok(Nil), False | Error(_), True -> None
   }
 }
