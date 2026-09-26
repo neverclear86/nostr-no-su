@@ -340,6 +340,7 @@ fn dialog_trigger(
       kind,
       "",
       fn(_) { [] },
+      view.OpensOnTrigger,
     )
   element.to_string(trigger)
 }

@@ -435,13 +435,32 @@ pub fn navbar_start_keeps_the_width_of_the_logo_test() {
     view.page(
       i18n.English,
       view.System,
-      i18n.BackToDashboard,
+      view.TranslatedTitle(i18n.BackToDashboard),
       view.Narrow,
       view.SwitchReturningTo("/"),
       view.NoRefresh,
       [],
     )
   assert string.contains(html, "<div class=\"navbar-start w-auto grow\">")
+}
+
+/// 訳文の題は、表示の言語で引いて `<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。
+pub fn translated_title_goes_to_the_title_and_the_heading_test() {
+  let html =
+    view.page(
+      i18n.English,
+      view.System,
+      view.TranslatedTitle(i18n.BackToDashboard),
+      view.Narrow,
+      view.SwitchReturningTo("/"),
+      view.NoRefresh,
+      [],
+    )
+  assert string.contains(html, "<title>Nostr-no-Su — Back to dashboard</title>")
+  assert string.contains(
+    html,
+    "<h1 class=\"text-2xl font-bold\">Back to dashboard</h1>",
+  )
 }
 
 /// 狭い画面で語を隠すダイアログのボタンは、`commandfor` で `id` を指し、語を `title` と `max-sm:sr-only` の `span` に置く。
@@ -493,6 +512,7 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
           )
         [html.p([], [html.text("body")])]
       },
+      view.OpensOnTrigger,
     )
     |> list.map(element.to_string)
     |> string.concat
@@ -501,6 +521,23 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
     <> element.to_string(view.plus_icon())
     <> "Add</button>"
     <> "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\"><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><p>body</p></div></dialog>"
+}
+
+/// ダイアログのボタンの組は、ダイアログを `opening` の開き方で描く（応答で開くなら `open` を付け、
+/// 閉じるボタンをダッシュボード（`/`）へのリンクにする）。
+pub fn dialog_button_draws_the_dialog_with_the_given_opening_test() {
+  let assert [_, dialog] =
+    view.dialog_button(
+      i18n.English,
+      "dialog-x",
+      view.TextTrigger("Revoke"),
+      view.GhostButton,
+      "Title",
+      fn(placement) { view.dialog_actions(placement, []) },
+      view.OpenedByResponse,
+    )
+  assert element.to_string(dialog)
+    == "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\" open><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><div class=\"flex flex-wrap items-center gap-2\"><a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a></div></div></dialog>"
 }
 
 /// アイコンだけのダイアログのボタンは、語を `aria-label` に置き、中身はアイコンだけにする。
@@ -513,6 +550,7 @@ pub fn icon_only_dialog_button_names_itself_by_label_test() {
       view.DangerGhostButton,
       "Title",
       fn(_) { [] },
+      view.OpensOnTrigger,
     )
   assert element.to_string(button)
     == "<button aria-label=\"Delete\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
@@ -530,6 +568,7 @@ pub fn text_dialog_button_shows_only_the_text_test() {
       view.GhostButton,
       "Title",
       fn(_) { [] },
+      view.OpensOnTrigger,
     )
   assert element.to_string(button)
     == "<button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">Revoke</button>"
