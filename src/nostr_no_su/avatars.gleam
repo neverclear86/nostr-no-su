@@ -1,8 +1,8 @@
 //// 管理 UI のアカウントのアイコンに使う、署名者ごとの kind 0 の `picture` の URL のキャッシュ。
-//// 画像は取らず、検査済みの `https:` の URL だけを持つ。描画のたびに、未取得か `ttl_ms` を過ぎた
-//// 署名者を取得中として時刻を押してから、監視の用途のリレーへまとめて問い合わせ、`wait_ms` まで
-//// 待つ。間に合わなかった結果も次の描画のために入れる。取得に失敗した署名者は前の URL を残し、
-//// `retry_ms` の後に取り直す。状態はメモリーだけで、再起動すると空から取り直す。
+//// 画像は取らず、検査済みの `https:` の URL だけを持つ。描画のたびに、未取得か取り直す時刻の来た
+//// 署名者を取得中として次に取り直す時刻を押してから、監視の用途のリレーへまとめて問い合わせ、
+//// `wait_ms` まで待つ。間に合わなかった結果も次の描画のために入れる。取得に失敗した署名者は前の
+//// URL を残し、`retry_ms` の後に取り直す。状態はメモリーだけで、再起動すると空から取り直す。
 
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
@@ -49,10 +49,10 @@ pub type Claimed {
   Claimed(known: Dict(String, String), stale: List(String))
 }
 
-/// 署名者 1 人の記録。`at` は `ttl_ms` の判定の基準にする `time.monotonic_ms` の目盛りで、取得中にした
-/// 時刻か、取得に失敗した後は `retry_ms` の後に古くなる値。
+/// 署名者 1 人の記録。`refresh_at` は次に取り直す `time.monotonic_ms` の目盛りで、取得中にした
+/// ときは `ttl_ms` の後、取得に失敗したときは `retry_ms` の後に置く。
 type Cached {
-  Cached(picture: Option(String), at: Int)
+  Cached(picture: Option(String), refresh_at: Int)
 }
 
 /// アクターの状態。
@@ -94,10 +94,8 @@ pub fn pictures(
   ))
 }
 
-/// `pictures` の中身。取得を `fetch` で受けるので、テストはリレー無しで叩ける。手順は (1) `Claim` を
-/// 送る（アクターが答えなければ空の辞書）、(2) 古い署名者が無ければ `known` を返す、(3) あれば
-/// `task.start` で `fetch` を走らせ、結果を `Fetched` でアクターへ送る、(4) `wait_ms` までに
-/// 届いた結果で `stale` の分を置き換えて返し（`picture` を失った署名者は消える）、届かなければ `known` を返す。
+/// `pictures` の中身。取得を `fetch` で注入し `wait_ms` で打ち切るので、テストはリレー無しで叩ける。
+/// 打ち切られた取得の結果は `Fetched` で届き、次の描画に入る。
 pub fn pictures_with(
   name: Name(Msg),
   pubkeys: List(String),
@@ -153,8 +151,8 @@ fn found_pictures(
   |> dict.from_list
 }
 
-/// `Claim` と `Fetched` を上のモジュール Doc のとおりに処理する。署名者が古いのは、キャッシュに無いか
-/// `now - at >= ttl_ms` のときである（`ttl_ms` 0 では同じミリ秒の呼び出しでも毎回取る）。
+/// `Claim` と `Fetched` を処理する。署名者が古いのは、キャッシュに無いか `now >= refresh_at` のとき
+/// である（`ttl_ms` 0 では同じミリ秒の呼び出しでも毎回取る）。
 fn handle(state: State, message: Msg) -> actor.Next(State, Msg) {
   let now = time.monotonic_ms()
   case message {
@@ -162,7 +160,7 @@ fn handle(state: State, message: Msg) -> actor.Next(State, Msg) {
       let stale =
         list.filter(list.unique(pubkeys), fn(pubkey) {
           case dict.get(state.cache, pubkey) {
-            Ok(Cached(at:, ..)) -> now - at >= state.ttl_ms
+            Ok(Cached(refresh_at:, ..)) -> now >= refresh_at
             Error(Nil) -> True
           }
         })
@@ -176,7 +174,7 @@ fn handle(state: State, message: Msg) -> actor.Next(State, Msg) {
         |> dict.from_list
       process.send(reply, Claimed(known:, stale:))
       update_each(state, stale, fn(_pubkey, entry) {
-        Cached(picture: previous_picture(entry), at: now)
+        Cached(picture: previous_picture(entry), refresh_at: now + state.ttl_ms)
       })
     }
     Fetched(pubkeys:, found: Ok(found)) ->
@@ -184,14 +182,14 @@ fn handle(state: State, message: Msg) -> actor.Next(State, Msg) {
         let picture = dict.get(found, pubkey) |> option.from_result
         case entry {
           Some(cached) -> Cached(..cached, picture:)
-          None -> Cached(picture:, at: now)
+          None -> Cached(picture:, refresh_at: now + state.ttl_ms)
         }
       })
     Fetched(pubkeys:, found: Error(Nil)) ->
       update_each(state, pubkeys, fn(_pubkey, entry) {
         Cached(
           picture: previous_picture(entry),
-          at: now - state.ttl_ms + state.retry_ms,
+          refresh_at: now + state.retry_ms,
         )
       })
   }
