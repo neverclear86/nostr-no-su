@@ -694,6 +694,7 @@ nostr-no-su/
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
 │       ├── plugin_resume_store.gleam プラグインごとの再開点の SQL
 │       ├── plugin_runner.gleam   プラグイン 1 つぶんの実行プロセス
+│       ├── plugin_term.gleam     プラグインのエクスポートが返す項の読み取りの部品（純粋）
 │       ├── plugins/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）

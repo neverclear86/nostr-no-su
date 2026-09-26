@@ -20,9 +20,9 @@ import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/string
 import nostr_no_su/plugin_children.{
-  type Rejection, ConfigRejected, InvalidSpec, export_label, from_dynamic,
+  type Rejection, ConfigRejected, InvalidSpec, from_dynamic,
 }
-import support/erl.{is_registered, unique_integer}
+import support/erl.{is_registered, tuple, unique_integer}
 import support/poll
 
 /// 子の起動失敗のログ行に出るプラグイン名。
@@ -53,12 +53,6 @@ fn child(kind: String, name: Atom) -> ChildSpecification(Pid) {
 fn rejected(kind: String) -> String {
   let assert Error(InvalidSpec(reason)) = convert([bad_spec(atom.create(kind))])
   reason
-}
-
-/// アリティごとの表記。理由の文字列とログ行はこれをそのまま使う。
-pub fn export_label_includes_the_arity_test() {
-  assert export_label(0) == "plugin_children/0"
-  assert export_label(1) == "plugin_children/1"
 }
 
 /// 子仕様が 0 件でも成功する。子を持たないプラグインと同じ扱いになる。
@@ -245,10 +239,6 @@ pub fn child_list_is_not_a_config_rejection_test() {
 fn error_tuple(reason: Dynamic) -> Dynamic {
   tuple([atom.to_dynamic(atom.create("error")), reason])
 }
-
-/// 任意の項からタプルを作る。Gleam にはタプルを動的に組み立てる手段が無い。
-@external(erlang, "erlang", "list_to_tuple")
-fn tuple(elements: List(Dynamic)) -> Dynamic
 
 /// 壊れている箇所が複数あっても、報告するのは最初に検査したキーの 1 件だけ。
 pub fn only_the_first_error_is_reported_test() {

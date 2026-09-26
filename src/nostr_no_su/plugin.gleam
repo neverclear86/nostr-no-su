@@ -31,6 +31,7 @@ import gleam/string
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_config
+import nostr_no_su/plugin_term.{BinaryKey}
 
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
@@ -264,7 +265,7 @@ fn require_exports(
         False ->
           Error(prefix(
             name,
-            "missing export " <> function <> "/" <> int.to_string(arity),
+            "missing export " <> plugin_term.export_label(function, arity),
           ))
       }
     }),
@@ -585,7 +586,10 @@ fn children(
       plugin_children.ConfigRejected(reason) ->
         prefix(
           name,
-          plugin_children.export_label(list.length(args))
+          plugin_term.export_label(
+            plugin_children.export_name,
+            list.length(args),
+          )
             <> " rejected the configuration ("
             <> reason
             <> "); configure it with "
@@ -623,15 +627,18 @@ fn read_ui(
         Some(arity) ->
           Error(prefix(
             name,
-            export_label(page_action_export, arity) <> no_pages,
+            plugin_term.export_label(page_action_export, arity) <> no_pages,
           ))
       }
     None, Some(arity) ->
-      Error(prefix(name, export_label(page_content_export, arity) <> no_pages))
+      Error(prefix(
+        name,
+        plugin_term.export_label(page_content_export, arity) <> no_pages,
+      ))
     Some(arity), None ->
       Error(prefix(
         name,
-        export_label(pages_export, arity)
+        plugin_term.export_label(pages_export, arity)
           <> " but no "
           <> page_content_export
           <> "/1, /2 or /3",
@@ -639,16 +646,16 @@ fn read_ui(
     Some(2), Some(arity) if arity != 3 ->
       Error(prefix(
         name,
-        export_label(pages_export, 2)
+        plugin_term.export_label(pages_export, 2)
           <> " but no "
-          <> export_label(page_content_export, 3),
+          <> plugin_term.export_label(page_content_export, 3),
       ))
     Some(arity), Some(3) if arity != 2 ->
       Error(prefix(
         name,
-        export_label(page_content_export, 3)
+        plugin_term.export_label(page_content_export, 3)
           <> " but no "
-          <> export_label(pages_export, 2),
+          <> plugin_term.export_label(pages_export, 2),
       ))
     Some(pages_arity), Some(content_arity) -> {
       use pages <- result.try(case pages_arity {
@@ -665,7 +672,11 @@ fn read_ui(
             args,
             call_timeout_ms,
           ))
-          decode_pages(value, name, export_label(pages_export, pages_arity))
+          decode_pages(
+            value,
+            name,
+            plugin_term.export_label(pages_export, pages_arity),
+          )
         }
       })
       Ok(
@@ -699,11 +710,6 @@ fn highest_arity(
   |> option.from_result
 }
 
-/// 理由の文字列に出す `関数/アリティ`。
-fn export_label(function: String, arity: Int) -> String {
-  function <> "/" <> int.to_string(arity)
-}
-
 /// `plugin_pages/2` を `page_languages` の言語ごとに期限付きで呼んで
 /// `decode_pages` で検証し、`merge_localized_pages` で `LocalizedPage` の一覧に
 /// まとめる。
@@ -713,7 +719,7 @@ fn localized_pages(
   config_map: Dynamic,
   call_timeout_ms: Int,
 ) -> Result(List(PluginPage), String) {
-  let label = export_label(pages_export, 2)
+  let label = plugin_term.export_label(pages_export, 2)
   use lists <- result.try(
     list.try_map(page_languages, fn(language) {
       use value <- result.try(call_export(
@@ -798,8 +804,9 @@ fn decode_pages(
   )
   use pages <- result.try(
     raw
-    |> list.index_map(fn(page, index) { #(page, index) })
-    |> list.try_map(fn(pair) { decode_page(pair.0, pair.1, label) })
+    |> plugin_term.try_map_indexed(fn(page, index) {
+      decode_page(page, index, label)
+    })
     |> result.map_error(fn(reason) { prefix(name, reason) }),
   )
   case pages {
@@ -821,27 +828,30 @@ fn decode_page(
   label: String,
 ) -> Result(PluginPage, String) {
   let unlabelled = label <> ": page #" <> int.to_string(index)
-  use _ <- result.try(check_page_map(raw, unlabelled))
-  use key <- result.try(required_page_field(raw, "key", unlabelled))
+  use _ <- result.try(plugin_term.check_map(raw, unlabelled, "a page map"))
+  use key <- result.try(plugin_term.required(
+    raw,
+    BinaryKey,
+    "key",
+    unlabelled,
+    "a String",
+    decode.string,
+  ))
   case page_key_ok(key) {
     False ->
       Error(label <> ": page key \"" <> key <> "\" must match [a-z0-9_-]+")
     True -> {
       let labelled = label <> ": page key \"" <> key <> "\""
-      use title <- result.try(required_page_field(raw, "title", labelled))
+      use title <- result.try(plugin_term.required(
+        raw,
+        BinaryKey,
+        "title",
+        labelled,
+        "a String",
+        decode.string,
+      ))
       Ok(PluginPage(key: key, title: title))
     }
-  }
-}
-
-/// ページの記述が map であることを先に確かめる。map でない要素（例えば
-/// `{key, title}` のタプル）を渡されたとき、キーが 1 つも読めないことを
-/// 「`key` が無い」と報告すると作者が原因にたどり着けない
-/// （`plugin_children.check_map` と同じ考え方）。
-fn check_page_map(raw: Dynamic, label: String) -> Result(Nil, String) {
-  case dynamic.classify(raw) {
-    "Dict" -> Ok(Nil)
-    other -> Error(label <> ": must be a page map, got " <> other)
   }
 }
 
@@ -870,34 +880,6 @@ fn find_duplicate_page_key_loop(
         True -> Some(page.key)
         False -> find_duplicate_page_key_loop(rest, set.insert(seen, page.key))
       }
-  }
-}
-
-/// ページの記述の必須フィールドを binary キーの map から読む。欠けていれば
-/// `<label>: missing <key>`、String でなければ型の不一致を報告する。
-fn required_page_field(
-  raw: Dynamic,
-  key: String,
-  label: String,
-) -> Result(String, String) {
-  let decoder =
-    decode.optional_field(
-      key,
-      None,
-      decode.map(decode.dynamic, Some),
-      decode.success,
-    )
-  case decode.run(raw, decoder) |> result.unwrap(None) {
-    None -> Error(label <> ": missing " <> key)
-    Some(value) ->
-      decode.run(value, decode.string)
-      |> result.replace_error(
-        label
-        <> ": "
-        <> key
-        <> " must be a String, got "
-        <> dynamic.classify(value),
-      )
   }
 }
 
@@ -964,7 +946,11 @@ fn action_of(
       args,
       call_timeout_ms,
     ))
-    decode_action_result(value, name, export_label(page_action_export, arity))
+    decode_action_result(
+      value,
+      name,
+      plugin_term.export_label(page_action_export, arity),
+    )
   }
 }
 
@@ -976,53 +962,31 @@ fn decode_action_result(
   name: String,
   label: String,
 ) -> Result(Nil, String) {
-  let bad_return = fn() {
+  let bad_return =
     Error(prefix(
       name,
       label
         <> " must return ok or {error, Reason}, got "
         <> dynamic.classify(value),
     ))
-  }
   let is_ok = case decode.run(value, atom.decoder()) {
     Ok(tag) -> atom.to_string(tag) == "ok"
     Error(_) -> False
   }
-  case is_ok {
-    True -> Ok(Nil)
-    False ->
-      case is_error_tuple(value) {
-        False -> bad_return()
-        True ->
-          case decode.run(value, decode.at([1], decode.dynamic)) {
-            Error(_) -> bad_return()
-            Ok(reason_value) ->
-              case decode.run(reason_value, decode.string) {
-                Ok(reason) ->
-                  Error(prefix(
-                    name,
-                    label <> " rejected the request (" <> reason <> ")",
-                  ))
-                Error(_) ->
-                  Error(prefix(
-                    name,
-                    label
-                      <> ": error reason must be a String, got "
-                      <> dynamic.classify(reason_value),
-                  ))
-              }
-          }
+  case is_ok, plugin_term.is_error_tuple(value) {
+    True, _ -> Ok(Nil)
+    False, False -> bad_return
+    False, True ->
+      case plugin_term.error_reason(value) {
+        Ok(reason) ->
+          Error(prefix(
+            name,
+            label <> " rejected the request (" <> reason <> ")",
+          ))
+        Error(Some(got)) ->
+          Error(prefix(name, plugin_term.reason_not_a_string(label, got)))
+        Error(None) -> bad_return
       }
-  }
-}
-
-/// 戻り値が `{error, Reason}` の形かどうか。**判別子は要素 0 が atom の `error`
-/// であることだけ**で、要素数は見ない（`plugin_children.is_error_tuple` と同じ
-/// 考え方）。
-fn is_error_tuple(value: Dynamic) -> Bool {
-  case decode.run(value, decode.at([0], atom.decoder())) {
-    Ok(tag) -> atom.to_string(tag) == "error"
-    Error(_) -> False
   }
 }
 
@@ -1036,7 +1000,7 @@ fn call_export(
   args: List(Dynamic),
   call_timeout_ms: Int,
 ) -> Result(Dynamic, String) {
-  let label = function <> "/" <> int.to_string(list.length(args))
+  let label = plugin_term.export_label(function, list.length(args))
   call_export_within(module, atom.create(function), args, call_timeout_ms)
   |> result.map_error(fn(failure) {
     case failure {
