@@ -1588,8 +1588,9 @@ fn schema_version_round_trip(database_url: String) -> Nil {
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
 /// ときだけ実行する。`ensure_schema` の後に `event_logger_monitored_accounts` があり、
-/// `replace_monitored` で書いた pubkey が `load_monitored` で読め、
-/// `replace_monitored(db, [])` で 0 件に戻ることを確かめる。
+/// `replace_monitored` で書いた pubkey が `load_monitored` で読め、既存の行と一部が
+/// 重なる一覧への入れ替えも反映され、`replace_monitored(db, [])` で 0 件に戻ることを
+/// 確かめる。
 pub fn postgres_monitored_accounts_test() {
   use database_url <- with_test_database_url
   monitored_accounts_round_trip(database_url)
@@ -1609,8 +1610,38 @@ fn monitored_accounts_round_trip(database_url: String) -> Nil {
   let assert Ok(rows) = store.load_monitored(db)
   assert set.from_list(rows) == set.from_list(["aa", "bb"])
 
+  let assert Ok(Nil) = store.replace_monitored(db, ["bb", "cc"])
+  let assert Ok(rows) = store.load_monitored(db)
+  assert set.from_list(rows) == set.from_list(["bb", "cc"])
+
   let assert Ok(Nil) = store.replace_monitored(db, [])
   assert store.load_monitored(db) == Ok([])
+
+  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
+}
+
+/// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
+/// ときだけ実行する。`replace_monitored` が失敗したとき、監視対象の行が入れ替え前の
+/// まま残ることを確かめる。
+pub fn postgres_monitored_accounts_replacement_is_atomic_test() {
+  use database_url <- with_test_database_url
+  monitored_accounts_atomicity(database_url)
+}
+
+/// 専用のスキーマでテストを行い、最後にスキーマごと消す。NUL を含む pubkey は
+/// Postgres の text には入らないので入れ替えが失敗し、行は入れ替え前のまま残る。
+fn monitored_accounts_atomicity(database_url: String) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  let db = connect(database_url, Some(schema))
+
+  let assert Ok(Nil) = store.ensure_schema(db)
+  let assert Ok(Nil) = store.replace_monitored(db, ["aa", "bb"])
+
+  let assert Error(_) = store.replace_monitored(db, ["cc", "d\u{0}d"])
+  let assert Ok(rows) = store.load_monitored(db)
+  assert set.from_list(rows) == set.from_list(["aa", "bb"])
 
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
@@ -1731,8 +1762,11 @@ fn connect(
   database_url: String,
   search_path: Option(String),
 ) -> pog.Connection {
+  // プールは既定で 10 接続を開くが、テストごとのプールの停止が終わる前に次の
+  // テストのプールが開くので、既定のままでは Postgres の接続数の上限に当たる。
   let assert Ok(config) =
     pog.url_config(process.new_name("test_event_logger_pool"), database_url)
+  let config = pog.pool_size(config, 1)
   let config = case search_path {
     Some(schema) -> pog.connection_parameter(config, "search_path", schema)
     None -> config

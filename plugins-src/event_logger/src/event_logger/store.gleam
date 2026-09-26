@@ -170,11 +170,12 @@ const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, cont
 /// 保存の対象とするアカウントの読み込み。
 const select_monitored_sql = "SELECT pubkey FROM event_logger_monitored_accounts"
 
-/// 保存の対象とするアカウントの入れ替え（`replace_monitored` が使う 1 文目）。
-const delete_monitored_sql = "DELETE FROM event_logger_monitored_accounts"
-
-/// 保存の対象とするアカウントの 1 件の追加（`replace_monitored` が使う 2 文目）。
-const insert_monitored_sql = "INSERT INTO event_logger_monitored_accounts (pubkey) VALUES ($1)"
+/// 保存の対象とするアカウントの入れ替え。`$1` の配列に無い行を消して配列の要素を
+/// 重複を除いて挿入する。消去と挿入は 1 文の中で原子的に行われるので、失敗した
+/// ときは表が元のまま残る。
+const replace_monitored_sql = "WITH removed AS (DELETE FROM event_logger_monitored_accounts WHERE pubkey <> ALL($1::text[]))
+INSERT INTO event_logger_monitored_accounts (pubkey) SELECT unnest($1::text[])
+ON CONFLICT DO NOTHING"
 
 /// `event_logger_events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
 /// テストできる。
@@ -658,20 +659,14 @@ pub fn load_monitored(
   |> result.map(fn(returned) { returned.rows })
 }
 
-/// 保存の対象とするアカウントを `pubkeys` に入れ替える。全部消してから 1 件ずつ
-/// 入れ直すだけで、トランザクションは使わない（`ensure_schema` と同じく、
-/// `pog.transaction` は 5 秒で打ち切られるため）。消してから書き直すので、
-/// 途中で失敗すると行が減ったままになる。次の保存で直る。
+/// 保存の対象とするアカウントを `pubkeys` に入れ替える。消去と挿入を 1 文の SQL で
+/// 原子的に行うので、途中で失敗しても行は元のまま残る。
 pub fn replace_monitored(
   db: pog.Connection,
   pubkeys: List(String),
 ) -> Result(Nil, pog.QueryError) {
-  use _deleted <- result.try(
-    pog.query(delete_monitored_sql) |> pog.execute(on: db),
-  )
-  use pubkey <- list.try_each(pubkeys)
-  pog.query(insert_monitored_sql)
-  |> pog.parameter(pog.text(pubkey))
+  pog.query(replace_monitored_sql)
+  |> pog.parameter(pog.array(pog.text, pubkeys))
   |> pog.execute(on: db)
   |> result.replace(Nil)
 }
