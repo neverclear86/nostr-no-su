@@ -1,3 +1,6 @@
+//// エントリポイント。環境変数から設定を読み、スーパービジョンツリーの仕様を
+//// 組み立てて起動する。
+
 import gleam/erlang/process.{type Name}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -86,22 +89,11 @@ pub fn main() -> Nil {
   }
 }
 
-/// 読み込んだ設定に対して動かすツリーと、その報告行。プロセス名はここで一度だけ
-/// 生成して下へ渡すため、再起動したアクターは接続の送信先となる名前を再登録する。
-/// 出力は行わず、報告する内容は文字列として返す。
-/// バンカーか管理 UI を起動できない設定なら、プラグインの読み込みより前にその理由を
-/// 返す。
-///
-/// 外部プラグインの読み込みは監視のリレーの有無に関わらず行う。読み込んだ
-/// プラグインは監視のリレーが 0 本でも動く。ルート直下の `plugins` サブツリーで
-/// 動き、ダッシュボードにも状態が出る。監視のツリーは常に起動し、リレーが無い間は
-/// 配信されるイベントが無いだけである。読み込めなかった候補は `Spec.not_loaded_plugins`
-/// に載り、ログの 1 行に加えてダッシュボードにも出る。
-///
-/// 外部プラグインには、アカウントストアの接続先（`DATABASE_URL`）を予約キー
-/// `DatabaseUrl` で渡す（`plugin_config.with_database_url`）。
-///
-/// テストが本番と同じ仕様でツリーを動かせるよう公開する。
+/// 読み込んだ設定から、動かすツリーの仕様と報告する行を組み立てる。出力はしない。
+/// プロセス名はここで 1 度だけ作って下へ渡すので、再起動したアクターも同じ名前を再登録する。
+/// バンカーか管理 UI を起動できない設定なら、プラグインの読み込みより前にその理由を返す。
+/// 外部プラグインにはアカウントストアの接続先を予約キー `DatabaseUrl` で渡す
+/// （`plugin_config.with_database_url`）。
 pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use dedup_capacity <- result.try(loaded.dedup_capacity)
@@ -151,7 +143,7 @@ fn plugin_specs(plugins: List(Plugin)) -> List(app.PluginSpec) {
 }
 
 /// 監視サブツリー。起動時のリレーは常に空で、行はバンカーの読み込みから
-/// `OpenRegistered` で届く（`app.gleam` の doc）。購読はバンカーの署名者と
+/// `OpenRegistered` で届く（`docs/architecture.md` の「実行時のリレーの増減」）。購読はバンカーの署名者と
 /// 再開点から組み立て（`subscriptions.monitor_relay_subscriptions`）、再開点はアカウントストアと
 /// 同じ DB に保存する。復帰したランナーの要求に応じて、プラグインごとの
 /// 取り直しの購読も足される。除外する kind の既定は ephemeral 全般
@@ -226,17 +218,10 @@ fn resume_point_saver(
   }
 }
 
-/// 本体に内蔵されたプラグイン。外部プラグインはローダーが返し、このリストの
-/// 後ろに繋がれる。並び順が決めるのは読み込みと表示の順序だけで、実行は
-/// プラグインごとの独立したランナーが行う。内蔵プラグインは子仕様を持たない
-/// （`children: []`）。イベント保存は外部プラグイン `event_logger` の仕事に
-/// なったので、ここには含まれない。
-/// **内蔵プラグインは `plugin.load` を通らないので設定 map を受け取らない。**
-/// 内蔵プラグインの設定は `config.gleam` が読む。`PLUGIN_CONSOLE_LOGGER_ENABLED`
-/// だけがある。
-///
-/// `enabled` が `False` なら空リストを返す。予約名（`console_logger.name`）は
-/// 無効時も外部プラグインに使わせないため、呼び出し側で別に渡す。
+/// 本体に内蔵されたプラグイン。外部プラグインはこの後ろに繋がれる。`enabled` が `False`
+/// なら空。内蔵プラグインは `plugin.load` を通らないので設定 map を受け取らず、設定は
+/// `config` が読む。予約名（`console_logger.name`）は無効時も外部プラグインに使わせない
+/// ため、呼び出し側で別に渡す。
 fn builtin_plugins(enabled: Bool) -> List(Plugin) {
   case enabled {
     True -> [console_logger.new()]
@@ -252,15 +237,10 @@ fn auth_url(loaded: Config) -> Option(fn(String) -> String) {
   fn(token) { base <> dashboard.approve_path(token) }
 }
 
-/// バンカーサブツリー。`database_url` を解釈できなければ、その理由を
-/// 返す。アカウントはアクターが起動後にストアから読むので、ここではアカウントの
-/// 件数を知らず、0 件でも起動する。起動時のリレーは常に空で、行はバンカーの
-/// 読み込みから `OpenRegistered` で届く（`app.gleam` の doc）。
-///
-/// マスターキーはストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と
-/// 管理 UI には渡らない。ロックのプールの名前もこのクロージャーに捕捉される。購読は
-/// 接続と張り直しのたびに、接続の範囲の現在の署名者から組み立て直すため、`since` もその時点の
-/// 現在時刻から決まる。署名者を問い合わせられなければ定義を得られなかったことにし、
+/// バンカーサブツリーの仕様。`database_url` を解釈できなければ、その理由を返す。
+/// アカウントはアクターが起動後にストアから読むので、0 件でも起動する。マスターキーは
+/// ストアの操作のクロージャーにだけ捕捉され、ツリーの仕様の他の部分と管理 UI には渡らない。
+/// 購読は接続と張り直しのたびに現在の署名者から組み立て直し、署名者を問い合わせられなければ
 /// 開いている購読を閉じない。
 fn bunker_spec(
   loaded: Config,
@@ -296,26 +276,12 @@ fn bunker_spec(
   )
 }
 
-/// アカウントストアの操作。プールの名前とマスターキーはこのクロージャーにだけ
-/// 捕捉される。失敗は値を含まない説明に写し、書き込みの失敗は書き込まれていることが
-/// あるかどうかを区別する。削除は行が無いことを成功として扱う。
-///
-/// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写す。バンカーはメモリに無い
-/// 公開鍵にだけ追加を書き込むので、DB に行があるのは、DB がメモリより先行しているか、
-/// 読み込みで飛ばされた行があることを意味し、バンカーはそれを読み直して確かめる。
-///
-/// 期限を受け取るのは、実際の DB を使う統合テストが負荷の高い環境でも収まる期限を
-/// 渡せるようにするためである。本番は `db.default_timeouts` を渡す。
-///
-/// 読み込みの前に `lock_pool` のセッションで advisory lock を取り直す。読み込みが
-/// `SchemaTooNew` か `HeldByAnotherInstance` を返したら、どちらも再試行しても変わら
-/// ないので、理由を 1 行出して VM を止める（`halt_if_cannot_continue`）。バンカー
-/// アクターには戻らない。
-///
-/// `write` はエンジンのセッションと承認待ちの書き込み 1 件を `account_store` の
-/// 関数に写し、行の MAC を `master_key` で付ける（`write_session_state`）。
-/// `load` はアカウントと一緒にセッション、承認待ち、登録されたリレーを返す
-/// （`load_snapshot`）。
+/// アカウントストアの操作。マスターキーはこのクロージャーにだけ捕捉される。
+/// 失敗は値を含まない説明に写し（書き込みは `write_failure`）、削除は行が無いことを成功とする。
+/// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写し、バンカーに読み直させる。
+/// `load` は `lock_pool` で advisory lock を取り直してから `load_snapshot` を読み、結果を
+/// `halt_if_cannot_continue` に通す。`write` は `write_session_state` に写す。
+/// 期限を受け取るのは、統合テストが負荷の高い環境でも収まる期限を渡せるようにするためである。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
