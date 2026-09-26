@@ -48,7 +48,7 @@ pub type Timeouts {
   Timeouts(
     /// 読み込み 1 回（スキーマの移行、テーブルのロック、一覧）全体の期限。
     load_ms: Int,
-    /// 書き込み 1 件の期限。
+    /// 書き込み 1 件と、主キーの 1 行の読み込み（`resume/store` の再開点）の期限。
     write_ms: Int,
   )
 }
@@ -69,7 +69,7 @@ pub type Timeouts {
 ///   そのため書き込みの `TimedOut` は「書き込まれたかどうか分からない」を意味する
 ///   （`may_have_been_written`）。`acquire_lock` の期限もこの値を使う。`load` の前に
 ///   呼ぶので、ロックと読み込み（3000ms）を合わせても署名者の問い合わせの 5000ms に
-///   収まる。
+///   収まる。再開点の 1 行の読み込み（`resume/store` の `load`）もこの値を使う。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
@@ -91,7 +91,7 @@ pub const create_accounts_table = "CREATE TABLE IF NOT EXISTS bunker_accounts (
 )"
 
 /// 監視の購読の再開点を保存するテーブル。`since` は Unix 秒。書き込みは値を
-/// 小さくしない（`dedup/resume_store`）。
+/// 小さくしない（`resume/store`）。
 pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resume (
   relay_url text PRIMARY KEY,
   since bigint NOT NULL,
@@ -141,7 +141,7 @@ pub const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
 
 /// プラグインごとの再開点を保存するテーブル。`since` は Unix 秒。主キーは
 /// プラグイン名（`plugin_name/0` の値）。書き込みは値を小さくしない
-/// （`plugin_resume_store`）。
+/// （`resume/store`）。
 pub const create_plugin_resume_table = "CREATE TABLE IF NOT EXISTS plugin_resume (
   plugin text PRIMARY KEY,
   since bigint NOT NULL,
@@ -887,7 +887,7 @@ pub fn from_query_error(error: pog.QueryError) -> StoreError {
 }
 
 /// クエリーを実行し、失敗を `StoreError` に写す。本体のクエリーはすべてここを
-/// 通す（`dedup/resume_store` を含む）。`pog.execute` が例外を投げたときも値で
+/// 通す（`resume/store` を含む）。`pog.execute` が例外を投げたときも値で
 /// 返す（`execute_catching`）。プールが未登録のとき pgo が呼び出し側を `noproc`
 /// で exit させる問題（`src/nostr_no_su/app.gleam` の doc）も、この経路で
 /// `Unavailable` になる（`execute_catching` の doc）。

@@ -10,19 +10,18 @@ import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
-import nostr_no_su/dedup/resume_store
 import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/plugin_api
 import nostr_no_su/plugin_config
 import nostr_no_su/plugin_loader
-import nostr_no_su/plugin_resume_store
 import nostr_no_su/plugin_runner
 import nostr_no_su/plugins/console_logger
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/store
 import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
@@ -170,31 +169,42 @@ fn monitor_spec(
     subscriptions: subscriptions.monitor_relay_subscriptions(
       config.name,
       name,
-      resume_point_loader(config.pool.pool_name),
-      plugin_resume_point_loader(config.pool.pool_name),
+      resume_point_loader(
+        config.pool.pool_name,
+        store.Monitor,
+        log.relay_prefix,
+      ),
+      resume_point_loader(
+        config.pool.pool_name,
+        store.Plugin,
+        log.plugin_prefix,
+      ),
       app.plugin_catchups(specs),
       _,
     ),
-    save_resume: resume_point_saver(config.pool.pool_name),
-    save_plugin_resume: plugin_resume_point_saver(config.pool.pool_name),
+    save_resume: resume_point_saver(config.pool.pool_name, store.Monitor),
+    save_plugin_resume: resume_point_saver(config.pool.pool_name, store.Plugin),
     excludes_kind: event.is_ephemeral,
     accepts_author: bunker.is_signer(config.name, _),
   )
 }
 
-/// リレーの保存済みの再開点を読む操作（`resume_store.load`）。購読の評価の再試行の
-/// 行は理由を含まないので、失敗の理由はここで 1 行出してから返す。
+/// 保存済みの再開点を `table` から読む操作（`store.load`）。購読の評価の再試行の
+/// 行は理由を含まないので、失敗の理由は `prefix` がキーから作る接頭辞で 1 行出して
+/// から返す。
 fn resume_point_loader(
   pool: Name(pog.Message),
+  table: store.Table,
+  prefix: fn(String) -> String,
 ) -> fn(String) -> Result(Option(Int), String) {
-  fn(relay_url: String) {
+  fn(key: String) {
     let db = pog.named_connection(pool)
-    resume_store.load(db, relay_url)
+    store.load(db, table, key, account_store.default_timeouts)
     |> result.map_error(fn(error) {
       let reason = account_store.describe(error)
       log.write(
         log.Warning,
-        log.relay_prefix(relay_url),
+        prefix(key),
         "could not load resume point: " <> reason,
       )
       reason
@@ -202,46 +212,15 @@ fn resume_point_loader(
   }
 }
 
-/// 再開点を値を小さくせずに保存する操作（`resume_store.save`）。ログは
-/// `resume_saver` が出す。
+/// 再開点を `table` に値を小さくせずに保存する操作（`store.save`）。ログは保存の
+/// アクターが出す。
 fn resume_point_saver(
   pool: Name(pog.Message),
+  table: store.Table,
 ) -> fn(List(#(String, Int))) -> Result(Nil, String) {
   fn(points: List(#(String, Int))) {
     let db = pog.named_connection(pool)
-    resume_store.save(db, points)
-    |> result.map_error(account_store.describe)
-  }
-}
-
-/// プラグインの保存済みの再開点を読む操作（`plugin_resume_store.load`）。
-/// `resume_point_loader` と同じく、失敗の理由はここで 1 行出してから返す。
-fn plugin_resume_point_loader(
-  pool: Name(pog.Message),
-) -> fn(String) -> Result(Option(Int), String) {
-  fn(plugin: String) {
-    let db = pog.named_connection(pool)
-    plugin_resume_store.load(db, plugin)
-    |> result.map_error(fn(error) {
-      let reason = account_store.describe(error)
-      log.write(
-        log.Warning,
-        log.plugin_prefix(plugin),
-        "could not load resume point: " <> reason,
-      )
-      reason
-    })
-  }
-}
-
-/// プラグインの再開点を値を小さくせずに保存する操作（`plugin_resume_store.save`）。
-/// ログは保存のアクターが出す。
-fn plugin_resume_point_saver(
-  pool: Name(pog.Message),
-) -> fn(List(#(String, Int))) -> Result(Nil, String) {
-  fn(points: List(#(String, Int))) {
-    let db = pog.named_connection(pool)
-    plugin_resume_store.save(db, points)
+    store.save(db, table, points, account_store.default_timeouts)
     |> result.map_error(account_store.describe)
   }
 }
