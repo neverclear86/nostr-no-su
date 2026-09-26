@@ -375,45 +375,45 @@ fn write_session_state(
       account_store.insert_session_evicting(
         pool,
         key,
-        timeouts,
         session: stored_session(session),
         evicted: evicted,
+        timeouts:,
       )
     engine.DeleteSession(signer:, client:) ->
-      account_store.delete_session(db, timeouts, signer:, client:)
+      account_store.delete_session(db, signer:, client:, timeouts:)
     engine.TouchSession(session:) ->
       account_store.touch_session(
         db,
         key,
-        timeouts,
         session: stored_session(session),
+        timeouts:,
       )
     engine.UpdateSessionPerms(session:) ->
       account_store.update_session_perms(
         db,
         key,
-        timeouts,
         session: stored_session(session),
+        timeouts:,
       )
     engine.InsertPending(pending:, replaced:, evicted:) ->
       account_store.insert_pending_replacing(
         pool,
         key,
-        timeouts,
         pending: stored_pending(pending),
         replaced: replaced,
         evicted: evicted,
+        timeouts:,
       )
     engine.DeletePending(token:) ->
-      account_store.delete_pending(db, timeouts, token:)
+      account_store.delete_pending(db, token:, timeouts:)
     engine.ApprovePending(token:, session:, evicted:) ->
       account_store.approve(
         pool,
         key,
-        timeouts,
         token: token,
         session: stored_session(session),
         evicted: evicted,
+        timeouts:,
       )
   }
 }

@@ -436,6 +436,29 @@ fn execute_catching(
   db: pog.Connection,
 ) -> Result(Result(pog.Returned(row), pog.QueryError), StoreError)
 
+/// 書き込みを `timeouts.write_ms` の期限で実行する。対象の行の数は見ず、成功なら
+/// `Nil` を返す。
+pub fn execute_write(
+  query: pog.Query(Nil),
+  db: pog.Connection,
+  timeouts: Timeouts,
+) -> Result(Nil, StoreError) {
+  execute_counting(query, db, timeouts)
+  |> result.replace(Nil)
+}
+
+/// 書き込みを `timeouts.write_ms` の期限で実行し、対象になった行の数を返す。
+fn execute_counting(
+  query: pog.Query(Nil),
+  db: pog.Connection,
+  timeouts: Timeouts,
+) -> Result(Int, StoreError) {
+  query
+  |> pog.timeout(timeouts.write_ms)
+  |> execute(db)
+  |> result.map(fn(returned) { returned.count })
+}
+
 /// 1 行を対象にする書き込みを実行する。対象の行が無ければ `missing`。
 pub fn execute_on_one_row(
   query: pog.Query(Nil),
@@ -443,12 +466,8 @@ pub fn execute_on_one_row(
   timeouts: Timeouts,
   missing: StoreError,
 ) -> Result(Nil, StoreError) {
-  use returned <- result.try(
-    query
-    |> pog.timeout(timeouts.write_ms)
-    |> execute(db),
-  )
-  case returned.count {
+  use count <- result.try(execute_counting(query, db, timeouts))
+  case count {
     0 -> Error(missing)
     _ -> Ok(Nil)
   }

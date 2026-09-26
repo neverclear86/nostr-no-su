@@ -91,7 +91,5 @@ pub fn save(
   pog.query(upsert_sql(table))
   |> pog.parameter(pog.text(key))
   |> pog.parameter(pog.int(since))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
