@@ -741,7 +741,7 @@ nostr-no-su/
 │
 ├── assets/                       管理 UI の CSS の入力（Tailwind CSS / daisyUI）と、README に載せる製品のロゴ（logo/）
 ├── priv/static/                  管理 UI の CSS（ビルドした生成物。CI で最新であることを検査する）と JS
-├── dev/                          管理 UI の撮影用のサーバーとスクリプト、ロゴの製品名の字形の生成、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、gleam.toml の版の一致、リリースの版の検査、リリースノートの抜き出し、イメージに入れるライセンスの収集（成果物には入らない）
+├── dev/                          管理 UI の撮影用のサーバーとスクリプト、撮影用のサーバーが使い、テストからも import できるプラグインのページの記述の builder、ロゴの製品名の字形の生成、vendor/stratus、.env.example、2 つの compose の一致、共有パッケージの版、gleam.toml の版の一致、リリースの版の検査、リリースノートの抜き出し、イメージに入れるライセンスの収集（成果物には入らない）
 │
 ├── plugins-src/                  同梱プラグインのソース
 │   ├── event_logger/             Postgres へ保存する（独自の依存と設定を持つ）
