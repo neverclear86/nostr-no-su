@@ -338,6 +338,23 @@ pub fn load_all_not_loaded_truncates_long_reason_test() {
   )
 }
 
+/// 理由に含まれる改行と制御文字は、`not_loaded` の `reason` では空白になる。
+pub fn load_all_not_loaded_sanitizes_control_characters_test() {
+  let fixture = beam_fixture.new("control_reason")
+  let first = beam_fixture.name(fixture, "aaa")
+  let second = beam_fixture.name(fixture, "bbb")
+  put_plugin(first, "bad\\nname\\e", fixture.root)
+  put_plugin(second, "bad\\nname\\e", fixture.root)
+  let plugin_loader.LoadOutcome(not_loaded:, ..) = load_dir(fixture.root)
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: second,
+        reason: "duplicate plugin name \"bad name \"; keeping the first",
+      ),
+    ]
+}
+
 /// 内蔵プラグインと同名の外部プラグインは採用しない。プラグイン名はダッシュ
 /// ボードとログの識別子なので、内蔵・外部を区別せず一意にする。
 pub fn load_all_rejects_reserved_name_test() {

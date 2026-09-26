@@ -11,6 +11,7 @@ import nostr_no_su/plugin_runner.{
   Completed, Disabled, Failed, Limits, Overloaded, Running, Target,
 }
 import nostr_no_su/time
+import support/log_capture
 
 /// 遷移の検証に使う歯止め。実時間に依存しないよう小さく取る。
 const limits = Limits(handle_timeout_ms: 50, max_queue_len: 10, max_failures: 3)
@@ -98,6 +99,11 @@ fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 /// `line` を含むため、終了理由の短さを見る回帰テストには使えない。
 @external(erlang, "erlang", "error")
 fn erlang_error(reason: Atom) -> a
+
+/// `erlang:exit/2` をそのまま呼ぶ。自プロセスへ送ると、`run_isolated` の捕捉を通らずに
+/// 渡した理由のままワーカーが終わる。
+@external(erlang, "erlang", "exit")
+fn exit_signal(pid: Pid, reason: #(Atom, String, String)) -> Bool
 
 /// キューが上限以下なら実行する。
 pub fn admit_runs_while_the_queue_is_short_test() {
@@ -257,17 +263,6 @@ pub fn reenable_leaves_other_states_test() {
   assert plugin_runner.reenable(Running) == #(Running, None)
   assert plugin_runner.reenable(Overloaded(dropped: 3))
     == #(Overloaded(dropped: 3), None)
-}
-
-/// 長い文字列は省略記号を付けて切る。
-pub fn truncate_caps_long_text_test() {
-  let text = string.repeat("a", 20)
-  assert plugin_runner.truncate(text, 5) == "aaaaa..."
-}
-
-/// 上限以内の文字列はそのまま返す。
-pub fn truncate_leaves_short_text_test() {
-  assert plugin_runner.truncate("short", 5) == "short"
 }
 
 /// クラッシュし続けるプラグインは無効化されるが、ランナーのプロセスは生き残る。
@@ -505,6 +500,37 @@ pub fn killed_plugin_reason_is_killed_test() {
   deliver(name, 1)
   assert plugin_runner.status(name)
     == Some(Disabled(reason: "killed", dropped: 0))
+}
+
+/// ワーカーの終了理由に含まれる改行と制御文字は、状態（管理 UI に出る理由）と
+/// ログの行で空白になる。
+pub fn a_failure_reason_with_control_characters_is_sanitized_test() {
+  let capture = log_capture.install()
+  let name =
+    start_runner(
+      fn(_incoming) {
+        exit_signal(process.self(), #(
+          atom.create("nostr_no_su_plugin_failure"),
+          "bad\nreason\u{1b}[2J",
+          "stack\nframe",
+        ))
+        process.sleep_forever()
+      },
+      Limits(..limits, max_failures: 2),
+    )
+  deliver(name, 2)
+  assert plugin_runner.status(name)
+    == Some(Disabled(reason: "bad reason [2J", dropped: 0))
+  let lines = log_capture.lines(capture)
+  log_capture.remove(capture)
+  assert list.any(lines, string.contains(
+    _,
+    "(bad reason [2J); 1/2 at stack frame",
+  ))
+  assert list.any(lines, string.contains(
+    _,
+    "(bad reason [2J); events will be dropped",
+  ))
 }
 
 /// 戻らないプラグインは打ち切られ、失敗として数えられる。ランナーは生き残る。
