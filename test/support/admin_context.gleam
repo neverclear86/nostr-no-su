@@ -137,6 +137,12 @@ pub const uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f1
 /// 承認を経る接続 URI（secret なし）。
 pub const auth_uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
+/// secret 入りの接続 URI のカメラ用のコピー用の文字列（`uri` から `bunker://` を外した形）。
+pub const uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
+
+/// 承認を経る接続 URI のカメラ用のコピー用の文字列。
+pub const auth_uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
+
 /// アカウントのラベル。
 pub const label = "main account"
 
@@ -170,6 +176,8 @@ pub fn account_row(row_label: String) -> dashboard.AccountRow {
     label: row_label,
     uri: uri,
     auth_uri: auth_uri,
+    uri_camera_text: uri_camera_text,
+    auth_uri_camera_text: auth_uri_camera_text,
     picture: None,
   )
 }

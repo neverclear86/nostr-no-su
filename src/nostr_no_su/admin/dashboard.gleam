@@ -35,7 +35,6 @@ import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
-import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -61,10 +60,11 @@ pub type RoleState {
   Unanswered
 }
 
-/// アカウント 1 件の表示内容。`uri` は secret を含むため、認証済みページ以外に
-/// 出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
-/// クライアントは管理 UI での承認を経てから署名を委任できる。`npub` は画面で
-/// アカウントを識別するための表記。
+/// アカウント 1 件の表示内容。`uri` と `uri_camera_text` は secret を含むため、認証済み
+/// ページ以外に出してはならない。`auth_uri` は secret を持たない URI で、これで接続した
+/// クライアントは管理 UI での承認を経てから署名を委任できる。`uri_camera_text` と
+/// `auth_uri_camera_text` は、それぞれの URI の端末のカメラ用のコピー用の文字列
+/// （`connection_uri.camera_copy_text`）。`npub` は画面でアカウントを識別するための表記。
 /// `picture` は kind 0 の `picture` の検査済みの `https:` の URL で、無ければ `None`。
 pub type AccountRow {
   AccountRow(
@@ -73,6 +73,8 @@ pub type AccountRow {
     label: String,
     uri: String,
     auth_uri: String,
+    uri_camera_text: String,
+    auth_uri_camera_text: String,
     picture: Option(String),
   )
 }
@@ -1686,6 +1688,7 @@ fn connection_qr_dialog(
             language,
             i18n.ConnectionUri,
             account.uri,
+            account.uri_camera_text,
             view.alert(view.Warning, [
               html.text(text(i18n.ConnectionQrSecretWarning)),
             ]),
@@ -1694,6 +1697,7 @@ fn connection_qr_dialog(
             language,
             i18n.ConnectionUriForApproval,
             account.auth_uri,
+            account.auth_uri_camera_text,
             approval_note(language),
           ),
         ]),
@@ -1719,18 +1723,19 @@ fn approval_note(language: Language) -> Element(msg) {
 }
 
 /// 接続 URI 1 件のタブの語と中身の組（`view.radio_tabs` に渡す）。中身は `note`、端末の
-/// カメラ用のコピー用 QR、コピー欄、クライアントの読み取り機能が読む完全な `bunker://` の QR
-/// の畳みの順に並べる。
+/// カメラ用のコピー用の文字列 `camera_text` の QR、`uri` のコピー欄、クライアントの読み取り
+/// 機能が読む完全な `uri` の QR の畳みの順に並べる。
 fn uri_tab(
   language: Language,
   title: i18n.Message,
   uri: String,
+  camera_text: String,
   note: Element(msg),
 ) -> #(String, List(Element(msg))) {
   let text = i18n.text(language, title)
   #(text, [
     note,
-    qr_or_notice(language, text, account.camera_copy_text(uri)),
+    qr_or_notice(language, text, camera_text),
     view.copyable_field(language, text, uri),
     view.details_panel(i18n.text(language, i18n.ScanWithClientScanner), [
       qr_or_notice(

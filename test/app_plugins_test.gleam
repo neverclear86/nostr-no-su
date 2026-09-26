@@ -20,6 +20,7 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/connection_uri
 import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/nostr/event.{type Event}
@@ -2156,7 +2157,12 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
 
   let assert Ok(rows) = app.account_rows(spec, fn(_signers) { dict.new() })
   let assert [row] = rows
-  assert row.uri == account.bunker_uri(signer, [a, b], Some(secret))
+  assert row.uri == connection_uri.bunker_uri(signer, [a, b], Some(secret))
+  assert row.auth_uri == connection_uri.bunker_uri(signer, [a, b], None)
+  assert row.uri_camera_text
+    == connection_uri.camera_copy_text(signer, [a, b], Some(secret))
+  assert row.auth_uri_camera_text
+    == connection_uri.camera_copy_text(signer, [a, b], None)
   stop_tree(tree)
 }
 
