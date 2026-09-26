@@ -30,7 +30,6 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/delivery.{type RelayScope, BaseRelay, SessionRelay}
 import nostr_no_su/bunker/engine.{type Pending, type Session}
-import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
@@ -70,11 +69,6 @@ const change_timeout_ms = 10_000
 
 /// 初期化に許す時間。initialiser は DB に触らないので短くてよい。
 const init_timeout_ms = 1000
-
-/// `rate-limited:` の OK を返したリレーへ、セッションの外の応答を止める期間
-/// （秒）。NIP-01 の `rate-limited:` は再開の時刻を持たないので、報告の間隔
-/// （`rate_limit.report_interval_seconds`）と同じ長さにする。
-pub const rate_limited_pause_seconds = 60
 
 /// 承認ページの URL に入るトークンのバイト数。承認・拒否そのものは管理 UI の
 /// 認証が守るが、トークンは保留の識別子なので、認証を通った管理者が別の要求を
@@ -238,7 +232,7 @@ pub type Msg {
   RemovePublisher(relay_url: String, scope: RelayScope)
   /// バンカーリレーの接続が、発行した応答への OK を知らせる。拒否の理由が
   /// `rate-limited:` なら、そのリレーへのセッションの外の応答をしばらく
-  /// 止める（`pause_on_rate_limit`）。
+  /// 止める（`delivery.pause_on_rate_limit`）。
   Acknowledged(relay_url: String, ack: Acknowledgement)
   /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(Result(List(Session), String)))
@@ -619,89 +613,6 @@ type SessionChange {
   SessionUse
 }
 
-/// セッションの外の応答を止めているリレーの一覧。キーはリレーの URL。
-pub opaque type Pauses {
-  Pauses(Dict(String, Pause))
-}
-
-/// リレー 1 本の停止。`until` は止める期限（秒、この時刻から再開する）、
-/// `dropped` は最後の報告の後にこのリレーへ出さなかった応答の件数、
-/// `reported_at` は最後に報告した時刻。
-type Pause {
-  Pause(until: Int, dropped: Int, reported_at: Int)
-}
-
-/// どのリレーも止めていない一覧。
-pub fn new_pauses() -> Pauses {
-  Pauses(dict.new())
-}
-
-/// OK 1 件を反映する。拒否の理由が `rate-limited:` で始まれば、`relay_url` への
-/// セッションの外の応答を `now` から `rate_limited_pause_seconds` 秒止める。
-/// 一覧にあるリレーは期限が過ぎていても期限だけを更新し、件数と報告の時刻を
-/// 引き継ぐ。一覧に無いリレーは、最初に出さなかった 1 件をすぐ報告する状態で
-/// 足す。それ以外の OK では変えない。
-pub fn pause_on_rate_limit(
-  pauses: Pauses,
-  relay_url: String,
-  ack: Acknowledgement,
-  now: Int,
-) -> Pauses {
-  let Pauses(entries) = pauses
-  case ack.accepted, string.starts_with(ack.message, "rate-limited:") {
-    False, True -> {
-      let until = now + rate_limited_pause_seconds
-      let pause = case dict.get(entries, relay_url) {
-        Ok(paused) -> Pause(..paused, until: until)
-        Error(Nil) ->
-          Pause(
-            until: until,
-            dropped: 0,
-            reported_at: now - rate_limit.report_interval_seconds,
-          )
-      }
-      Pauses(dict.insert(entries, relay_url, pause))
-    }
-    _, _ -> pauses
-  }
-}
-
-/// 応答 1 件を送るリレーを `relay_urls` の順に選ぶ。戻り値は数えた後の一覧、
-/// 送るリレー、ログの行。セッションの外の応答（`outside_session` が真）は、
-/// 期限が `now` より後の止めたリレーを飛ばして件数を数え、そのリレーの前の
-/// 報告から `rate_limit.report_interval_seconds` 以上経っていれば件数を報告
-/// して数え直す。セッションの中の応答は `relay_urls` のすべてへ送る。
-pub fn recipients(
-  pauses: Pauses,
-  relay_urls: List(String),
-  outside_session: Bool,
-  now: Int,
-) -> #(Pauses, List(String), List(String)) {
-  use #(Pauses(entries), sent, lines), relay_url <- list.fold(
-    list.reverse(relay_urls),
-    #(pauses, [], []),
-  )
-  case outside_session, dict.get(entries, relay_url) {
-    True, Ok(paused) if paused.until > now -> {
-      let dropped = paused.dropped + 1
-      let #(kept, reported) = case
-        now - paused.reported_at >= rate_limit.report_interval_seconds
-      {
-        True -> #(Pause(..paused, dropped: 0, reported_at: now), [
-          pause_report(relay_url, dropped),
-        ])
-        False -> #(Pause(..paused, dropped: dropped), [])
-      }
-      #(
-        Pauses(dict.insert(entries, relay_url, kept)),
-        sent,
-        list.append(reported, lines),
-      )
-    }
-    _, _ -> #(Pauses(entries), [relay_url, ..sent], lines)
-  }
-}
-
 /// 承認済みのセッションと取り置き（`reserved`）の `delivery.session_relay_signers`。
 fn relay_map(state: State) -> Dict(String, List(String)) {
   engine.sessions(state.engine)
@@ -734,15 +645,6 @@ fn response_session_relays(
   |> result.unwrap([])
 }
 
-/// 止めたリレーへ出さなかった応答の件数を報告するログの 1 行。
-pub fn pause_report(relay_url: String, dropped: Int) -> String {
-  "dropped "
-  <> int.to_string(dropped)
-  <> " responses without a session to "
-  <> log.relay_label(relay_url)
-  <> " while it is rate-limiting"
-}
-
 /// バンカーアクターの状態。判断は `engine` が行い、外界の入力と接続の状態を持つ。
 type State {
   State(
@@ -769,7 +671,7 @@ type State {
     /// OK を待っている応答の一覧。
     deliveries: delivery.Deliveries,
     /// セッションの外の応答を止めているリレーの一覧。
-    pauses: Pauses,
+    pauses: delivery.Pauses,
     /// 直近の読み込みで飛ばされた行。読み込みのたびに入れ替わり、書き込みでは
     /// 変わらない。
     skipped: List(vault.Skipped),
@@ -854,7 +756,7 @@ fn initialise(
     open_relays: open_relays,
     session_relays: session_relays,
     deliveries: delivery.new_deliveries(),
-    pauses: new_pauses(),
+    pauses: delivery.new_pauses(),
     skipped: [],
     reserved: dict.new(),
   )
@@ -1074,7 +976,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         State(
           ..state,
           deliveries: deliveries,
-          pauses: pause_on_rate_limit(
+          pauses: delivery.pause_on_rate_limit(
             state.pauses,
             relay_url,
             ack,
@@ -1790,7 +1692,7 @@ fn without_response(
 /// 応答イベントを、基本の接続と、応答先のセッションのリレー（`session_relays`）の
 /// 接続へ発行する（`delivery.response_relays`）。セッションの外の応答
 /// （`outside_session` が真）は、`rate-limited:` を返して止めているリレーを
-/// 飛ばし（`recipients`）、飛ばした件数を間引いてログに出す。出せる接続が 1 本も
+/// 飛ばし（`delivery.recipients`）、飛ばした件数を間引いてログに出す。出せる接続が 1 本も
 /// 生きていなければ送る先が無いので、応答を落としたことをログに残す
 /// （クライアントは接続が戻ったあとの再送で回復する）。送った先があれば、
 /// 送った先を `deliveries` に記録する。
@@ -1820,7 +1722,7 @@ fn publish(
     _ -> {
       let now = time.now_seconds()
       let #(pauses, sent, lines) =
-        recipients(state.pauses, relay_urls, outside_session, now)
+        delivery.recipients(state.pauses, relay_urls, outside_session, now)
       list.each(lines, log.write(log.Notice, log_prefix, _))
       dict.each(dict.take(state.publishers, sent), fn(_relay_url, publisher) {
         publisher.publish(response)
