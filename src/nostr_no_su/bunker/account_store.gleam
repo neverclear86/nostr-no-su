@@ -238,9 +238,7 @@ pub fn insert(
   |> pog.parameter(pog.text(row.label))
   |> pog.parameter(pog.bytea(row.encrypted_privkey))
   |> pog.parameter(pog.bytea(row.encrypted_secret))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
 
 /// アカウントを 1 件削除する。
@@ -302,10 +300,10 @@ pub fn update_label(
 pub fn insert_session(
   db: pog.Connection,
   key: MasterKey,
-  timeouts: Timeouts,
   session session: StoredSession,
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
-  write_session_row(db, key, timeouts, insert_session_sql, session)
+  write_session_row(db, key, insert_session_sql, session, timeouts)
 }
 
 /// セッションの最終利用を `session.last_used_at` に進め、行の全列と MAC を
@@ -314,10 +312,10 @@ pub fn insert_session(
 pub fn touch_session(
   db: pog.Connection,
   key: MasterKey,
-  timeouts: Timeouts,
   session session: StoredSession,
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
-  write_session_row(db, key, timeouts, touch_session_sql, session)
+  write_session_row(db, key, touch_session_sql, session, timeouts)
 }
 
 /// セッションの権限を `session.perms` に差し替え、行の全列と MAC を `session` の
@@ -325,10 +323,10 @@ pub fn touch_session(
 pub fn update_session_perms(
   db: pog.Connection,
   key: MasterKey,
-  timeouts: Timeouts,
   session session: StoredSession,
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
-  write_session_row(db, key, timeouts, update_session_perms_sql, session)
+  write_session_row(db, key, update_session_perms_sql, session, timeouts)
 }
 
 /// `sql`（`insert_session_sql`、`touch_session_sql`、`update_session_perms_sql`
@@ -336,9 +334,9 @@ pub fn update_session_perms(
 fn write_session_row(
   db: pog.Connection,
   key: MasterKey,
-  timeouts: Timeouts,
   sql: String,
   session: StoredSession,
+  timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   pog.query(sql)
   |> pog.parameter(pog.text(session.signer))
@@ -348,35 +346,31 @@ fn write_session_row(
   |> pog.parameter(pog.int(session.last_used_at))
   |> pog.parameter(pog.bytea(vault.row_mac(key, session_mac_row(session))))
   |> pog.parameter(pog.array(pog.text, session.relays))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
 
 /// セッションを 1 件取り消す。行が無くても `Ok`。
 pub fn delete_session(
   db: pog.Connection,
-  timeouts: Timeouts,
   signer signer: String,
   client client: String,
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   pog.query(delete_session_sql)
   |> pog.parameter(pog.text(signer))
   |> pog.parameter(pog.text(client))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
 
 /// `pairs` の（signer, client）の組をすべて `delete_session` で消す。行が無くても
 /// `Ok`。
 fn delete_sessions(
   db: pog.Connection,
-  timeouts: Timeouts,
   pairs: List(#(String, String)),
+  timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   list.try_each(pairs, fn(pair) {
-    delete_session(db, timeouts, signer: pair.0, client: pair.1)
+    delete_session(db, signer: pair.0, client: pair.1, timeouts:)
   })
 }
 
@@ -386,13 +380,13 @@ fn delete_sessions(
 pub fn insert_session_evicting(
   pool: Name(pog.Message),
   key: MasterKey,
-  timeouts: Timeouts,
   session session: StoredSession,
   evicted evicted: List(#(String, String)),
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   db.transaction(pool, timeouts.write_ms, fn(db) {
-    use Nil <- result.try(insert_session(db, key, timeouts, session: session))
-    delete_sessions(db, timeouts, evicted)
+    use Nil <- result.try(insert_session(db, key, session: session, timeouts:))
+    delete_sessions(db, evicted, timeouts)
   })
 }
 
@@ -413,22 +407,18 @@ pub fn insert_pending(
   |> pog.parameter(pog.bool(pending.secret_mismatch))
   |> pog.parameter(pog.int(pending.created_at))
   |> pog.parameter(pog.bytea(vault.row_mac(key, pending_mac_row(pending))))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
 
 /// 承認待ちの接続要求を 1 件取り除く。行が無くても `Ok`。
 pub fn delete_pending(
   db: pog.Connection,
-  timeouts: Timeouts,
   token token: String,
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   pog.query(delete_pending_sql)
   |> pog.parameter(pog.text(token))
-  |> pog.timeout(timeouts.write_ms)
-  |> db.execute(db)
-  |> result.replace(Nil)
+  |> db.execute_write(db, timeouts)
 }
 
 /// 承認待ちの接続要求 `token` を承認する。1 トランザクションでその行を消し、
@@ -440,15 +430,15 @@ pub fn delete_pending(
 pub fn approve(
   pool: Name(pog.Message),
   key: MasterKey,
-  timeouts: Timeouts,
   token token: String,
   session session: StoredSession,
   evicted evicted: List(#(String, String)),
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   db.transaction(pool, timeouts.write_ms, fn(db) {
-    use Nil <- result.try(delete_pending(db, timeouts, token: token))
-    use Nil <- result.try(insert_session(db, key, timeouts, session: session))
-    delete_sessions(db, timeouts, evicted)
+    use Nil <- result.try(delete_pending(db, token: token, timeouts:))
+    use Nil <- result.try(insert_session(db, key, session: session, timeouts:))
+    delete_sessions(db, evicted, timeouts)
   })
 }
 
@@ -457,17 +447,17 @@ pub fn approve(
 pub fn insert_pending_replacing(
   pool: Name(pog.Message),
   key: MasterKey,
-  timeouts: Timeouts,
   pending pending: StoredPending,
   replaced replaced: List(String),
   evicted evicted: List(String),
+  timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   db.transaction(pool, timeouts.write_ms, fn(db) {
     use Nil <- result.try(
       list.try_each(list.append(replaced, evicted), delete_pending(
         db,
-        timeouts,
         token: _,
+        timeouts:,
       )),
     )
     insert_pending(db, key, pending, timeouts)

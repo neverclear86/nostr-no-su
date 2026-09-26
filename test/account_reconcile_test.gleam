@@ -229,7 +229,6 @@ fn reconcile_sessions_with_postgres(
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: signer,
         client: client,
@@ -238,6 +237,7 @@ fn reconcile_sessions_with_postgres(
         last_used_at: now - 60,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_pending(
@@ -273,7 +273,7 @@ fn reconcile_sessions_with_postgres(
   assert pending.request_id == "c2"
 
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pending.token)
+    account_store.delete_pending(db, token: pending.token, timeouts: generous)
   assert behind_gate(gate, schema, fn() { bunker.revoke(name, signer, client) })
     == Error(bunker.SessionMaybeApplied(bunker.StoreDidNotConfirm))
 

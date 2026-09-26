@@ -576,7 +576,6 @@ pub fn postgres_bunker_state_test() {
       account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: a_pubkey,
           client: "client-a",
@@ -585,12 +584,12 @@ pub fn postgres_bunker_state_test() {
           last_used_at: now,
           relays: [],
         ),
+        timeouts: generous,
       )
     let assert Ok(Nil) =
       account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: b_pubkey,
           client: "client-b",
@@ -599,6 +598,7 @@ pub fn postgres_bunker_state_test() {
           last_used_at: now + 1,
           relays: [],
         ),
+        timeouts: generous,
       )
     let assert Ok(Nil) = account_store.insert_pending(db, key, pa, generous)
     let assert Ok(Nil) = account_store.insert_pending(db, key, pb, generous)
@@ -637,7 +637,6 @@ pub fn postgres_bunker_state_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: a_pubkey,
         client: "client-a-2",
@@ -646,6 +645,7 @@ pub fn postgres_bunker_state_test() {
         last_used_at: now + 2,
         relays: [],
       ),
+      timeouts: generous,
     )
   let pa2 =
     account_store.StoredPending(
@@ -661,12 +661,12 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(Nil) =
     account_store.delete_session(
       db,
-      generous,
       signer: a_pubkey,
       client: "client-a-2",
+      timeouts: generous,
     )
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pa2.token)
+    account_store.delete_pending(db, token: pa2.token, timeouts: generous)
   let assert Ok(after_row_delete) = account_store.load(pool, key, generous)
   assert after_row_delete.sessions == loaded.sessions
   assert after_row_delete.pending == loaded.pending
@@ -675,12 +675,12 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(Nil) =
     account_store.delete_session(
       db,
-      generous,
       signer: a_pubkey,
       client: "client-a-2",
+      timeouts: generous,
     )
   let assert Ok(Nil) =
-    account_store.delete_pending(db, generous, token: pa2.token)
+    account_store.delete_pending(db, token: pa2.token, timeouts: generous)
 
   // 6. approve: 承認待ちの行が消え、セッションが増える。
   let pa3 =
@@ -698,7 +698,6 @@ pub fn postgres_bunker_state_test() {
     account_store.approve(
       pool,
       key,
-      generous,
       token: pa3.token,
       session: account_store.StoredSession(
         signer: a_pubkey,
@@ -709,6 +708,7 @@ pub fn postgres_bunker_state_test() {
         relays: [],
       ),
       evicted: [],
+      timeouts: generous,
     )
   let assert Ok(after_approve) = account_store.load(pool, key, generous)
   assert after_approve.pending == [pa, pb]
@@ -782,12 +782,16 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, key, generous, session: ok_session)
+    account_store.insert_session(
+      db,
+      key,
+      session: ok_session,
+      timeouts: generous,
+    )
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client-tampered-" <> mark,
@@ -796,12 +800,12 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         last_used_at: 2,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client-copied-" <> mark,
@@ -810,6 +814,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         last_used_at: 3,
         relays: [],
       ),
+      timeouts: generous,
     )
   // 列の値を書き換えると、残っている MAC と合わなくなる。
   postgres.run_statement(
@@ -895,7 +900,6 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "client",
@@ -904,6 +908,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
         last_used_at: 1,
         relays: [],
       ),
+      timeouts: generous,
     )
   postgres.run_statement(
     db,
@@ -922,10 +927,10 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     account_store.approve(
       pool,
       key,
-      generous,
       token: "token",
       session:,
       evicted: [],
+      timeouts: generous,
     )
   let assert Ok(loaded) = account_store.load(pool, key, generous)
   assert loaded.sessions == [session]
@@ -948,7 +953,6 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
     account_store.insert_session(
       db,
       old_key,
-      generous,
       session: account_store.StoredSession(
         signer:,
         client: "old-client",
@@ -957,6 +961,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
         last_used_at: 1,
         relays: [],
       ),
+      timeouts: generous,
     )
   let assert Ok(Nil) =
     account_store.insert_pending(
@@ -988,7 +993,12 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, new_key, generous, session: session)
+    account_store.insert_session(
+      db,
+      new_key,
+      session: session,
+      timeouts: generous,
+    )
 
   let assert Ok(loaded) = account_store.load(pool, new_key, generous)
   assert loaded.sessions == [session]
@@ -1049,7 +1059,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
       relays: [],
     )
   let assert Ok(Nil) =
-    account_store.insert_session(db, key, generous, session: session)
+    account_store.insert_session(db, key, session: session, timeouts: generous)
   let assert Ok(after) = account_store.load(pool, key, generous)
   assert after.sessions == [session]
 }
@@ -1131,7 +1141,6 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
       use Nil <- result.try(account_store.insert_session(
         db,
         key,
-        generous,
         session: account_store.StoredSession(
           signer: pubkey,
           client: "client",
@@ -1140,6 +1149,7 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
           last_used_at: 1,
           relays: [],
         ),
+        timeouts: generous,
       ))
       Error(db.QueryFailed("forced"))
     })
@@ -1684,7 +1694,6 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
     account_store.insert_session(
       db,
       key,
-      generous,
       session: account_store.StoredSession(
         signer: signer_hex,
         client: "old",
@@ -1693,6 +1702,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
         last_used_at: 1000,
         relays: [],
       ),
+      timeouts: generous,
     )
   let pending =
     account_store.StoredPending(
