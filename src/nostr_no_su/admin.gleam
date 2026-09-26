@@ -906,10 +906,10 @@ fn with_pending(
 /// プラグインの再有効化が失敗する 2 通り。
 pub type ReenableFailure {
   /// 名前に一致するプラグインが無い。
-  PluginNotFound(reason: String)
+  PluginNotFound
   /// ランナーが居ないか、期限内に応答しなかった。打ち切った後にランナーが
   /// 処理して反映することがある。
-  PluginNotAnswered(reason: String)
+  PluginNotAnswered
 }
 
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
@@ -1265,16 +1265,20 @@ fn reenable_plugin(handling: Handling) -> Response {
 }
 
 /// 再有効化の失敗の応答。名前に一致するプラグインが無ければ取り消しと同じ 404、
-/// ランナーが応答しなければ 503 の通知ページにする。
+/// ランナーが応答しなければ 503 の通知ページにし、本文は表示の言語に訳す。
 fn reenable_failure_response(
   handling: Handling,
   failure: ReenableFailure,
 ) -> Response {
   case failure {
-    PluginNotFound(reason) ->
-      not_found_notice(handling, i18n.Untranslated(reason))
-    PluginNotAnswered(reason) ->
-      not_confirmed_notice(handling, i18n.Untranslated(reason), 503)
+    PluginNotFound ->
+      not_found_notice(handling, i18n.Translated(i18n.PluginNotLoaded))
+    PluginNotAnswered ->
+      not_confirmed_notice(
+        handling,
+        i18n.Translated(i18n.PluginDidNotRespond),
+        503,
+      )
   }
 }
 
@@ -1825,8 +1829,8 @@ fn maybe_applied_notice(
   )
 }
 
-/// 変更が反映されたか確かめられなかったときの通知ページを `status` で返す。本文 `reason` は
-/// 訳すかを決めた値で受ける。理由の下に、ダッシュボードで確かめるよう促す一文を添える。
+/// 変更が反映されたか確かめられなかったときの通知ページを `status` で返す。理由の下に、
+/// ダッシュボードで確かめるよう促す一文を添える。
 fn not_confirmed_notice(
   handling: Handling,
   reason: i18n.Reason,

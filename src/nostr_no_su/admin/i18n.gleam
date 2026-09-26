@@ -8,20 +8,13 @@
 ////
 //// 言語を足すときは、`Language` に構築子を、`languages` に値を足し、コンパイラーが示す
 //// `case`（`code`、`native_name`、`text`、`lead`、`sentence_gap`、`i18n_test` の
-//// `language_count`）に枝を足す。
+//// `language_count`）に枝を足す。`languages` への足し忘れは、`i18n_test` が
+//// `language_count` の数と `languages` の長さを比べて見つけるので、`language_count` には
+//// 枝と一緒に数も直す（直さないと足し忘れを見つけられない）。
 ////
-//// 管理 UI の外（バンカー、アカウントストア、設定、プラグイン）から英語の文字列で届く
-//// 理由は訳さず、`Untranslated` として英語のまま出す。設定、DB、プラグインの理由はログにも
-//// 同じ文が出るが、バンカーのアクターの案内（`accounts are being loaded` など）は出ない。
-//// 例外として、変更を確認できなかったときの本文（アカウントの変更、リレーの変更、
-//// クライアントの接続の 202 と、承認・拒否・取り消しの 503）は、バンカーと管理 UI の
-//// Context が原因を型で返すので訳す。
-//// 承認待ちの一覧に無いトークンの承認ページの 404 の本文も訳す。これは外から届いた文字列
-//// ではなく、管理 UI が一覧との照合で自分で決めている判定だからである。プラグインの
-//// 再有効化の 503 は英語のまま。読み込みで飛ばされた行の理由は `vault.RowError` の型で
-//// 届くので訳す。アカウントの登録済みと未登録の理由も、バンカーが
-//// `bunker.ChangeFailure` の型で返すので訳す（未登録は `AccountNotFound` の文言を
-//// 使う）。
+//// 画面に出す失敗の理由（`Reason`）は、文が管理 UI の外で英語の文字列として作られるもの
+//// （型の構築子が運ぶ文字列を含む）を訳さず、`Untranslated` として英語のまま出す。原因を
+//// 構築子だけで表す型で届くものと、管理 UI が自分で決める判定は、`Message` の文言にして訳す。
 ////
 //// クラス名はここに書かない。`assets/admin.css` がこのモジュールを Tailwind の走査から
 //// 外しているので、書いても CSS に出力されない。
@@ -41,10 +34,7 @@ pub type Language {
   Japanese
 }
 
-/// 対応する言語。言語の切り替えはこの順（言語コードの順）に並べる。言語を足したら
-/// ここにも足す。足し忘れは `i18n_test` が、`Language` の構築子を網羅する `case` の
-/// `language_count` の数とこの一覧の長さを比べて見つけるので、`language_count` に枝を
-/// 足すときは数も直す（直さないと足し忘れを見つけられない）。
+/// 対応する言語。言語の切り替えはこの順（言語コードの順）に並べる。
 pub const languages = [English, Japanese]
 
 /// 利用者が選んでおらず、`Accept-Language` からも決まらないときの言語。
@@ -441,6 +431,8 @@ pub type Message {
   OriginMismatch
   BunkerDidNotRespond
   StoreDidNotConfirm
+  PluginNotLoaded
+  PluginDidNotRespond
   NotAvailable
   NotAvailableForReasonAbove
   // アカウントの追加のダイアログ
@@ -771,6 +763,8 @@ fn english(message: Message) -> String {
     BunkerDidNotRespond -> "the bunker did not respond"
     StoreDidNotConfirm ->
       "the store did not confirm the change; it may have been applied"
+    PluginNotLoaded -> "plugin not found"
+    PluginDidNotRespond -> "plugin runner did not answer"
     NotAvailable -> "Not available right now."
     NotAvailableForReasonAbove -> "Not available for the reason above."
     ImportPrivateKey -> "Import a private key"
@@ -1076,6 +1070,8 @@ fn japanese(message: Message) -> String {
       "要求の Origin が Host と一致しません。リバースプロキシーを前段に置いている場合は、Host ヘッダーを書き換えずに渡してください（docs/configuration.md の「リバースプロキシーの設定」）。"
     BunkerDidNotRespond -> "バンカーが応答しませんでした。"
     StoreDidNotConfirm -> "データベースが変更を確定しませんでした。反映されている可能性があります。"
+    PluginNotLoaded -> "このプラグインは読み込まれていません。"
+    PluginDidNotRespond -> "プラグインが応答しませんでした。"
     NotAvailable -> "今は取得できません。"
     NotAvailableForReasonAbove -> "上の理由で取得できません。"
     ImportPrivateKey -> "既存の秘密鍵を登録"

@@ -183,9 +183,8 @@ fn changing_relay(
 /// プラグイン名の値で、再有効化の結果を選ぶ。
 fn reenabling(plugin: String) -> Result(Nil, admin.ReenableFailure) {
   case plugin {
-    "missing" -> Error(admin.PluginNotFound("plugin not found"))
-    "no-answer" ->
-      Error(admin.PluginNotAnswered("plugin runner did not answer"))
+    "missing" -> Error(admin.PluginNotFound)
+    "no-answer" -> Error(admin.PluginNotAnswered)
     _ -> Ok(Nil)
   }
 }

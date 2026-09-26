@@ -375,7 +375,9 @@ fn next_message(message: i18n.Message) -> Option(i18n.Message) {
     i18n.FormNotReadable -> Some(i18n.OriginMismatch)
     i18n.OriginMismatch -> Some(i18n.BunkerDidNotRespond)
     i18n.BunkerDidNotRespond -> Some(i18n.StoreDidNotConfirm)
-    i18n.StoreDidNotConfirm -> Some(i18n.NotAvailable)
+    i18n.StoreDidNotConfirm -> Some(i18n.PluginNotLoaded)
+    i18n.PluginNotLoaded -> Some(i18n.PluginDidNotRespond)
+    i18n.PluginDidNotRespond -> Some(i18n.NotAvailable)
     i18n.NotAvailable -> Some(i18n.NotAvailableForReasonAbove)
     i18n.NotAvailableForReasonAbove -> Some(i18n.ImportPrivateKey)
     i18n.ImportPrivateKey -> Some(i18n.ImportDescription)
@@ -437,12 +439,12 @@ fn all_messages() -> List(i18n.Message) {
   messages_from(i18n.BackToDashboard, [])
 }
 
-/// 一覧に構築子が重複なく 254 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
+/// 一覧に構築子が重複なく 256 個並ぶ。構築子を足すと `next_message` のビルドが止まり、
 /// 鎖に繋いだ後にこの数を直すことになる。
 pub fn all_messages_include_every_message_test() {
   let messages = all_messages()
   assert list.unique(messages) == messages
-  assert list.length(messages) == 254
+  assert list.length(messages) == 256
 }
 
 /// すべての構築子で英語と日本語の文言が異なる。両言語で同じ文言でよい構築子は無い。

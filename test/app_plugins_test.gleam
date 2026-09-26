@@ -371,8 +371,7 @@ pub fn reenable_plugin_finds_the_runner_by_name_test() {
 
 /// 名前に一致するプラグインが無ければ `PluginNotFound` を返す。
 pub fn reenable_plugin_with_an_unknown_name_is_not_found_test() {
-  assert app.reenable_plugin([], "missing")
-    == Error(admin.PluginNotFound("plugin not found"))
+  assert app.reenable_plugin([], "missing") == Error(admin.PluginNotFound)
 }
 
 /// 管理 UI のページの中身の取得は、表示の言語のコードをプラグインの `content` に
