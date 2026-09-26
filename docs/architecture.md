@@ -286,7 +286,7 @@ sequenceDiagram
     sup->>conn: 起動（アクターの後）
     bk->>base: acquire_lock（ロック専用のプール）
     base->>db: SELECT pg_try_advisory_lock
-    bk->>store: load
+    bk->>store: db.transaction / load_within
     store->>db: BEGIN / lock_timeout / 版の確認と移行 /<br/>LOCK TABLE IN SHARE MODE / SELECT
     alt 読み込めた
         db-->>store: 行
@@ -425,7 +425,7 @@ sequenceDiagram
         store-->>bk: 理由
         Note over bk: 状態を変えずに<br/>LoadAccounts を積む
         bk-->>ui: 反映されたかもしれない旨
-        bk->>store: load（読み直し）
+        bk->>store: db.transaction / load_within（読み直し）
         Note over bk: 読み込んだ内容にメモリを合わせ、<br/>署名者が変わっていれば張り直す
     end
 ```
