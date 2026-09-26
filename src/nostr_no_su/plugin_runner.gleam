@@ -53,6 +53,7 @@ import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
+import nostr_no_su/resume
 import nostr_no_su/time
 import nostr_no_su/window.{type Window}
 
@@ -411,9 +412,8 @@ pub fn admit(
 /// が返した状態を渡す。`Disabled`（無効化の間のイベント）は捨てるだけなので
 /// 前進せず `current` のまま返す。実行した（`Running`）ものも切り捨てた
 /// （`Overloaded`）ものも前進させる。切り捨ては取り直しの対象外であり、失敗した
-/// 実行でもそのイベントはプラグインに届いているためである。`now` より未来の
-/// `created_at` は `now` に切り詰め、値は小さくしない（`resume.observe`
-/// と同じ規則）。
+/// 実行でもそのイベントはプラグインに届いているためである。前進の規則は
+/// `resume.advance` に従う。
 pub fn advance(
   status: Status,
   current: Option(Int),
@@ -422,13 +422,7 @@ pub fn advance(
 ) -> Option(Int) {
   case status {
     Disabled(..) -> current
-    Running | Overloaded(..) -> {
-      let at = int.min(created_at, now)
-      case current {
-        Some(existing) -> Some(int.max(existing, at))
-        None -> Some(at)
-      }
-    }
+    Running | Overloaded(..) -> Some(resume.advance(current, created_at, now))
   }
 }
 

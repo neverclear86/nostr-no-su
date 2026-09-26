@@ -28,6 +28,23 @@ pub fn a_future_created_at_is_clamped_to_the_receive_time_test() {
   assert resume.since(recorded, "wss://a") == Some(1000)
 }
 
+/// 前の再開点が無ければ、`created_at` がそのまま再開点になる。
+pub fn advance_starts_from_created_at_without_a_point_test() {
+  assert resume.advance(None, 100, 1000) == 100
+}
+
+/// 前の再開点より小さい `created_at` では値を下げず、大きければその値に進む。
+pub fn advance_does_not_lower_the_current_point_test() {
+  assert resume.advance(Some(100), 50, 1000) == 100
+  assert resume.advance(Some(100), 200, 1000) == 200
+}
+
+/// `now` より未来の `created_at` は `now` に切り詰める。
+pub fn advance_clamps_a_future_created_at_to_now_test() {
+  assert resume.advance(None, 5000, 1000) == 1000
+  assert resume.advance(Some(100), 5000, 1000) == 1000
+}
+
 /// アカウントの追加は、渡した全リレーの再開点を追加の時刻以上に引き上げる。
 /// すでにそれ以上の再開点があるリレーは変えない。
 pub fn an_account_addition_raises_every_listed_relay_test() {
