@@ -2,8 +2,10 @@
 //// （鍵ペア）の鍵素材。
 
 import gleam/bit_array
+import gleam/bool
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import gleam/uri
 import nostr_no_su/crypto/secp256k1
@@ -23,21 +25,29 @@ pub opaque type Account {
   Account(privkey: Secret(BitArray), pubkey: BitArray, pubkey_hex: String)
 }
 
-/// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
-pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
-  case bit_array.byte_size(privkey) {
-    size if size == privkey_bytes ->
-      case secp256k1.xonly_pubkey(privkey) {
-        Ok(pubkey) ->
-          Ok(Account(
-            privkey: secret.new(privkey),
-            pubkey: pubkey,
-            pubkey_hex: hex.encode(pubkey),
-          ))
-        Error(_) -> Error("private key not in valid range")
-      }
-    _ -> Error("private key must be 32 bytes")
-  }
+/// `from_privkey` が秘密鍵を拒否した理由。値は鍵を含まない。
+pub type PrivateKeyError {
+  /// 32 バイトではない。
+  WrongLength
+  /// スカラーが 1 以上で位数 n 未満の範囲にない。
+  OutOfRange
+}
+
+/// 32 バイトの秘密鍵からアカウントを構築する。長さが違えば `WrongLength`、範囲外の
+/// スカラーなら `OutOfRange` で拒否する。
+pub fn from_privkey(privkey: BitArray) -> Result(Account, PrivateKeyError) {
+  use <- bool.guard(
+    bit_array.byte_size(privkey) != privkey_bytes,
+    Error(WrongLength),
+  )
+  use pubkey <- result.map(
+    secp256k1.xonly_pubkey(privkey) |> result.replace_error(OutOfRange),
+  )
+  Account(
+    privkey: secret.new(privkey),
+    pubkey: pubkey,
+    pubkey_hex: hex.encode(pubkey),
+  )
 }
 
 /// 乱数から秘密鍵を作り、アカウントを構築する。範囲外のスカラーを引いたら引き直す。

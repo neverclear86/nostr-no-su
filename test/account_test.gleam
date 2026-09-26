@@ -125,10 +125,9 @@ pub fn inspecting_an_account_does_not_reveal_the_private_key_test() {
   assert !string.contains(shown, string.inspect(privkey))
 }
 
-/// 32 バイトでない秘密鍵は理由付きで拒否する。
+/// 32 バイトでない秘密鍵は `WrongLength` で拒否する。
 pub fn from_privkey_rejects_wrong_length_test() {
-  let assert Error(reason) = account.from_privkey(<<0, 17, 34, 51>>)
-  assert reason == "private key must be 32 bytes"
+  assert account.from_privkey(<<0, 17, 34, 51>>) == Error(account.WrongLength)
 }
 
 /// 範囲外のスカラー（0 と位数 n）の nsec は NIP-19 としては復号できるが、
@@ -140,8 +139,7 @@ pub fn from_privkey_rejects_out_of_range_nsec_test() {
   ]
   use nsec <- list.each(nsecs)
   let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
-  assert account.from_privkey(privkey)
-    == Error("private key not in valid range")
+  assert account.from_privkey(privkey) == Error(account.OutOfRange)
 }
 
 /// BIP-340 の公式ベクター 0 の鍵から、NIP-19 の nsec と npub を作る。
