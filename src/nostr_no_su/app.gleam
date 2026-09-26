@@ -151,6 +151,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/connection_uri
+import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
@@ -683,7 +684,7 @@ fn bunker_tree(
       factories,
       config,
       relay_list.Bunker,
-      bunker.BaseRelay,
+      delivery.BaseRelay,
       fn(_relay_url) { bunker.signers(config.name) },
     ),
   )
@@ -693,7 +694,7 @@ fn bunker_tree(
       factories,
       config,
       relay_list.SessionOnly,
-      bunker.SessionRelay,
+      delivery.SessionRelay,
       bunker.session_signers(config.name, _),
     ),
   )
@@ -706,7 +707,7 @@ fn bunker_connections_child(
   factories: relay_list.Factories,
   config: Bunker,
   role: relay_list.Role,
-  scope: bunker.RelayScope,
+  scope: delivery.RelayScope,
   signers: fn(String) -> Option(List(String)),
 ) -> ChildSpecification(
   factory_supervisor.Supervisor(

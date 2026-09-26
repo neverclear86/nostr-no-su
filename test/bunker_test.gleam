@@ -1,14 +1,11 @@
 //// `bunker.load_report` のテストと、バンカーアクターの状態に接続 secret が出ないことの
 //// テスト。読み込みの結果に対して、どのログ行を出すかを確かめる。
-//// `bunker.track` / `bunker.acknowledge`
-//// のテストは、発行した応答への OK をどう追跡し、全リレーに拒否されたときの行を
-//// どう組み立てるかを確かめる。`bunker.pause_on_rate_limit` / `bunker.recipients`
+//// `bunker.pause_on_rate_limit` / `bunker.recipients`
 //// のテストは、`rate-limited:` を返したリレーへのセッションの外の応答をいつ
 //// 止めて再開し、出さなかった件数をどう報告するかを確かめ、アクターのテストは
 //// `Acknowledged` と `Incoming` から発行までの配線を確かめる。
-//// `bunker.response_relays` / `bunker.session_relay_signers` のテストと、セッションの
-//// リレーのアクターのテストは、応答の発行先、購読と AUTH の署名者、取り消しで閉じる
-//// 一覧を確かめる。`bunker.sign_event`
+//// セッションのリレーのアクターのテストは、応答の発行先、購読と AUTH の署名者、
+//// 取り消しで閉じる一覧を確かめる。`bunker.sign_event`
 //// （`SignEvent`）のテストは、プラグインからの送信の口（`plugin_api`）が使う
 //// 署名の要求を、読み込み前と登録済みの署名者のそれぞれで確かめる。
 //// `bunker.check_accounts`（`CheckAccounts`）のテストは、プラグインからの取得の口
@@ -18,20 +15,19 @@
 //// 取り置いた署名者で開く接続の購読と AUTH と、セッションを開いた後の取り外しで
 //// 接続が残ることを確かめる。
 
-import gleam/dict
 import gleam/erlang/process
-import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/system
 import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event, Event}
+import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/relay_client.{Acknowledgement}
 import nostr_no_su/time
 import support/nip46_client.{
@@ -50,121 +46,6 @@ const client_key = "000000000000000000000000000000000000000000000000000000000000
 
 /// 2 人目のクライアントの秘密鍵（16 進）。
 const other_client_key = "0000000000000000000000000000000000000000000000000000000000000005"
-
-/// バンカーが発行する応答イベント 1 件。kind と宛先タグは NIP-46 の応答の形。
-fn response(id: String) -> Event {
-  Event(
-    id: id,
-    pubkey: "s1",
-    created_at: 0,
-    kind: 24_133,
-    tags: [["p", "c1"]],
-    content: "",
-    sig: "",
-  )
-}
-
-/// 2 リレーへ発行した直後の追跡。
-fn tracked(id: String, now: Int) -> bunker.Deliveries {
-  bunker.track(bunker.new_deliveries(), response(id), [relay_a, relay_b], now)
-}
-
-/// 全リレーが拒否すると、拒否を届いた順にまとめた 1 行が返り、項目は消える
-/// （受け入れ条件）。
-pub fn every_relay_rejecting_a_response_is_reported_on_one_line_test() {
-  let deliveries = tracked("e1", 0)
-  let #(deliveries, first) =
-    bunker.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert first == None
-  let #(deliveries, second) =
-    bunker.acknowledge(
-      deliveries,
-      relay_b,
-      Acknowledgement("e1", False, "invalid: bad"),
-    )
-  assert second
-    == Some(
-      "response e1 to c1 was rejected by every relay: a.example: rate-limited: slow down; b.example: invalid: bad",
-    )
-  // 項目が消えているので、同じ id の拒否がもう届いても None。
-  let #(_deliveries, third) =
-    bunker.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert third == None
-}
-
-/// 1 つでも受理すれば、残りのリレーが拒否しても報告しない。
-pub fn a_response_accepted_by_one_relay_is_not_reported_test() {
-  let deliveries = tracked("e1", 0)
-  let #(deliveries, accepted) =
-    bunker.acknowledge(deliveries, relay_a, Acknowledgement("e1", True, ""))
-  assert accepted == None
-  let #(_deliveries, rejected) =
-    bunker.acknowledge(
-      deliveries,
-      relay_b,
-      Acknowledgement("e1", False, "invalid: bad"),
-    )
-  assert rejected == None
-}
-
-/// 同じリレーからの 2 度目の拒否は数えず、報告に必要な残り 1 本のまま止まる。
-pub fn a_repeated_rejection_from_the_same_relay_is_not_counted_test() {
-  let deliveries = tracked("e1", 0)
-  let #(deliveries, first) =
-    bunker.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert first == None
-  let #(deliveries, repeated) =
-    bunker.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert repeated == None
-  let #(_deliveries, second) =
-    bunker.acknowledge(
-      deliveries,
-      relay_b,
-      Acknowledgement("e1", False, "invalid: bad"),
-    )
-  assert second
-    == Some(
-      "response e1 to c1 was rejected by every relay: a.example: rate-limited: slow down; b.example: invalid: bad",
-    )
-}
-
-/// 発行から `acknowledgement_timeout_seconds`（60 秒）以上経った項目は、次の
-/// 発行の記録のときに黙って捨てる。捨てた後に届く OK は一覧に無いので無視する。
-pub fn acknowledgements_after_the_timeout_are_ignored_test() {
-  let deliveries = tracked("e1", 0)
-  let deliveries =
-    bunker.track(deliveries, response("e2"), [relay_a, relay_b], 60)
-  let #(deliveries, first) =
-    bunker.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert first == None
-  let #(_deliveries, second) =
-    bunker.acknowledge(
-      deliveries,
-      relay_b,
-      Acknowledgement("e1", False, "invalid: bad"),
-    )
-  assert second == None
-}
 
 /// `rate-limited:` の拒否を反映した時刻から `rate_limited_pause_seconds` 秒の間、
 /// relay_a を止めた一覧。
@@ -388,38 +269,6 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
   process.kill(pid)
 }
 
-/// AUTH に返すイベントは、アカウントごとに 1 件、その鍵で署名した kind 22242 で、
-/// リレー URL と challenge をタグに持つ。
-pub fn authentication_events_are_signed_by_each_account_test() {
-  let first =
-    account_for(
-      "0000000000000000000000000000000000000000000000000000000000000042",
-    )
-  let second =
-    account_for(
-      "0000000000000000000000000000000000000000000000000000000000000077",
-    )
-  let assert Ok(events) =
-    bunker.authentication_events(
-      [first, second],
-      "wss://relay.test",
-      "challenge-1",
-      1_700_000_000,
-    )
-  let assert [a, b] = events
-  assert a.pubkey == account.pubkey_hex(first)
-  assert b.pubkey == account.pubkey_hex(second)
-  list.each(events, fn(e) {
-    assert e.kind == event.auth_kind
-    assert e.created_at == 1_700_000_000
-    assert e.content == ""
-    assert e.tags
-      == [["relay", "wss://relay.test"], ["challenge", "challenge-1"]]
-    let assert Ok(_verified) = event.verify(e)
-    Nil
-  })
-}
-
 /// 偽のストアと再試行の待ち時間で、`Store` を組み立てるだけのバンカーを起動する。
 fn start_bunker_with_load(
   name: process.Name(bunker.Msg),
@@ -542,11 +391,11 @@ pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_tes
   let inbox_b = process.new_subject()
   named.send(
     name,
-    bunker.SetPublisher(relay_a, bunker.BaseRelay, process.send(inbox_a, _)),
+    bunker.SetPublisher(relay_a, delivery.BaseRelay, process.send(inbox_a, _)),
   )
   named.send(
     name,
-    bunker.SetPublisher(relay_b, bunker.BaseRelay, process.send(inbox_b, _)),
+    bunker.SetPublisher(relay_b, delivery.BaseRelay, process.send(inbox_b, _)),
   )
   named.send(
     name,
@@ -630,7 +479,7 @@ fn session_with(
 fn set_publisher(
   name: process.Name(bunker.Msg),
   relay_url: String,
-  scope: bunker.RelayScope,
+  scope: delivery.RelayScope,
   inbox: process.Subject(Event),
 ) -> Nil {
   named.send(
@@ -666,31 +515,6 @@ fn stop_bunker(name: process.Name(bunker.Msg)) -> Nil {
   process.kill(pid)
 }
 
-/// 基本のリレーはどの応答にも選び、セッションのリレーは応答先のセッションが持つ
-/// ときだけ選ぶ。
-pub fn response_relays_keep_base_relays_and_the_session_relays_test() {
-  let publishers = [
-    #(relay_a, bunker.BaseRelay),
-    #(relay_x, bunker.SessionRelay),
-    #(relay_y, bunker.SessionRelay),
-  ]
-  assert bunker.response_relays(publishers, [relay_x]) == [relay_a, relay_x]
-  assert bunker.response_relays(publishers, []) == [relay_a]
-}
-
-/// 共有の URL は署名者を昇順・重複なしで持ち、リレーの無いセッションは何も
-/// 足さない。
-pub fn session_relay_signers_map_each_relay_to_its_session_signers_test() {
-  let map =
-    bunker.session_relay_signers([
-      #("s2", [relay_x, relay_y]),
-      #("s1", [relay_x]),
-      #("s2", [relay_x]),
-      #("s3", []),
-    ])
-  assert map == dict.from_list([#(relay_x, ["s1", "s2"]), #(relay_y, ["s2"])])
-}
-
 /// 応答は基本のリレーと応答先のセッションのリレーにだけ届き、別のセッションの
 /// リレーには届かない。セッションの無いクライアントへの応答は基本のリレーだけに
 /// 届く（受け入れ条件 1）。
@@ -714,9 +538,9 @@ pub fn responses_reach_only_the_relays_of_their_session_test() {
   let inbox_a = process.new_subject()
   let inbox_x = process.new_subject()
   let inbox_y = process.new_subject()
-  set_publisher(name, relay_a, bunker.BaseRelay, inbox_a)
-  set_publisher(name, relay_x, bunker.SessionRelay, inbox_x)
-  set_publisher(name, relay_y, bunker.SessionRelay, inbox_y)
+  set_publisher(name, relay_a, delivery.BaseRelay, inbox_a)
+  set_publisher(name, relay_x, delivery.SessionRelay, inbox_x)
+  set_publisher(name, relay_y, delivery.SessionRelay, inbox_y)
 
   // A への応答は基本の a と A のリレーの x に届き、B のリレーの y には届かない
   send_get_public_key(name, client_a, signer, "g1")
@@ -738,8 +562,8 @@ pub fn responses_reach_only_the_relays_of_their_session_test() {
   let assert Ok([_]) = bunker.accounts(bare)
   let bare_x = process.new_subject()
   let bare_y = process.new_subject()
-  set_publisher(bare, relay_x, bunker.SessionRelay, bare_x)
-  set_publisher(bare, relay_y, bunker.SessionRelay, bare_y)
+  set_publisher(bare, relay_x, delivery.SessionRelay, bare_x)
+  set_publisher(bare, relay_y, delivery.SessionRelay, bare_y)
   send_get_public_key(bare, stranger, signer, "g3")
   assert process.receive(bare_x, 200) == Error(Nil)
   assert process.receive(bare_y, 100) == Error(Nil)
@@ -823,10 +647,10 @@ pub fn a_session_relay_is_authenticated_by_its_session_signers_only_test() {
   let first_hex = account.pubkey_hex(first.account)
 
   let assert Ok([only]) =
-    bunker.authenticate(name, relay_x, bunker.SessionRelay, "challenge-1")
+    bunker.authenticate(name, relay_x, delivery.SessionRelay, "challenge-1")
   assert only.pubkey == first_hex
   let assert Ok([_, _]) =
-    bunker.authenticate(name, relay_x, bunker.BaseRelay, "challenge-1")
+    bunker.authenticate(name, relay_x, delivery.BaseRelay, "challenge-1")
   assert bunker.session_signers(name, relay_x) == Some([first_hex])
   stop_bunker(name)
 }
@@ -851,7 +675,7 @@ pub fn reserved_session_relays_open_with_the_reserving_signer_test() {
   assert reserved == [relay_x]
   assert bunker.session_signers(name, relay_x) == Some([signer_hex])
   let assert Ok([only]) =
-    bunker.authenticate(name, relay_x, bunker.SessionRelay, "c")
+    bunker.authenticate(name, relay_x, delivery.SessionRelay, "c")
   assert only.pubkey == signer_hex
 
   bunker.release_session_relays(name, signer_hex, client_hex)
@@ -900,10 +724,10 @@ pub fn a_stale_disconnect_does_not_remove_the_publisher_of_another_scope_test() 
   start_bunker_with_load(name, fn() {
     Ok(bunker.Snapshot(Loaded([one_account()], []), [], [], []))
   })
-  set_publisher(name, relay_x, bunker.BaseRelay, process.new_subject())
-  named.send(name, bunker.RemovePublisher(relay_x, bunker.SessionRelay))
+  set_publisher(name, relay_x, delivery.BaseRelay, process.new_subject())
+  named.send(name, bunker.RemovePublisher(relay_x, delivery.SessionRelay))
   assert bunker.publisher_urls(name) == Some([relay_x])
-  named.send(name, bunker.RemovePublisher(relay_x, bunker.BaseRelay))
+  named.send(name, bunker.RemovePublisher(relay_x, delivery.BaseRelay))
   assert bunker.publisher_urls(name) == Some([])
   stop_bunker(name)
 }
