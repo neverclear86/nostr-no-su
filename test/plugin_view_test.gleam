@@ -166,9 +166,9 @@ pub fn section_renders_every_block_type_test() {
   assert string.contains(
     body,
     element.to_string(
-      view.summary_list([
-        #("state", view.Plain("running")),
-        #("id", view.Code("abc123")),
+      view.detail_list([
+        #("state", view.value_cell(view.Plain("running"))),
+        #("id", view.value_cell(view.Code("abc123"))),
       ]),
     ),
   )

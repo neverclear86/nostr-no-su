@@ -529,7 +529,7 @@ fn render_page(
   view.page(
     language,
     theme,
-    i18n.Dashboard,
+    view.TranslatedTitle(i18n.Dashboard),
     view.Wide,
     view.SwitchReturningTo("/"),
     refresh,
@@ -1602,27 +1602,21 @@ fn unreadable_dialog(
     )
     _ -> #(view.OpensOnTrigger, None)
   }
-  [
-    view.dialog_trigger(
-      id,
-      view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
-      view.DangerGhostButton,
-    ),
-    view.dialog(
-      language,
-      id,
-      text(account_action_title(DeleteAccount)),
-      fn(placement) {
-        [
-          view.identity(language, view.PlainIdentity, row.label, npub),
-          view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
-          ..unreadable_delete_form(language, row, placement)
-        ]
-      },
-      i18n.Cancel,
-      opening,
-    ),
-  ]
+  view.dialog_button(
+    language,
+    id,
+    view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
+    view.DangerGhostButton,
+    text(account_action_title(DeleteAccount)),
+    fn(placement) {
+      [
+        view.identity(language, view.PlainIdentity, row.label, npub),
+        view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
+        ..unreadable_delete_form(language, row, placement)
+      ]
+    },
+    opening,
+  )
 }
 
 /// 操作のダイアログで、バンカーから英語のまま届いた理由の前に置く前置き。秘密鍵の表示の
@@ -2270,7 +2264,7 @@ pub fn approval_page(
   view.page(
     language,
     theme,
-    i18n.ApproveConnection,
+    view.TranslatedTitle(i18n.ApproveConnection),
     view.Narrow,
     view.SwitchReturningTo(approve_path(pending.token)),
     view.RefreshEverySeconds(refresh_seconds),
@@ -2326,19 +2320,27 @@ pub fn notice_page(
   tone: view.Tone,
   below: List(Element(msg)),
 ) -> String {
-  view.page(language, theme, title, view.Narrow, switch, view.NoRefresh, [
-    view.card([
-      html.div([attribute.class("flex items-start gap-3")], [
-        view.notice_mark(tone),
-        html.p(
-          [attribute.class("min-w-0 self-center")],
-          view.reason_content(language, None, message),
-        ),
+  view.page(
+    language,
+    theme,
+    view.TranslatedTitle(title),
+    view.Narrow,
+    switch,
+    view.NoRefresh,
+    [
+      view.card([
+        html.div([attribute.class("flex items-start gap-3")], [
+          view.notice_mark(tone),
+          html.p(
+            [attribute.class("min-w-0 self-center")],
+            view.reason_content(language, None, message),
+          ),
+        ]),
+        ..below
       ]),
-      ..below
-    ]),
-    view.back_link(language),
-  ])
+      view.back_link(language),
+    ],
+  )
 }
 
 /// 操作の見出し（ダイアログの題）。削除を除き、ダッシュボードのボタンの語にも使う
@@ -2651,7 +2653,7 @@ fn no_bunker_relay_alert(
 
 /// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンを並べ、
 /// 2 段目に用途のマス（`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」の
-/// バッジで出す。ダイアログは操作ごとに `relay_action_dialog` で `dialog` に合わせて描く。
+/// バッジで出す。ボタンとダイアログは操作ごとに `relay_action_dialog` で `dialog` に合わせて描く。
 fn relay_item(
   language: Language,
   row: RelayRow,
@@ -2663,17 +2665,7 @@ fn relay_item(
     ]),
     button_row(
       list.flat_map(relay_actions, fn(action) {
-        [
-          view.dialog_trigger(
-            relay_dialog_id(row.id, action),
-            view.IconOnlyTrigger(
-              relay_action_icon(action),
-              i18n.text(language, relay_action_title(action)),
-            ),
-            relay_action_button_kind(action),
-          ),
-          relay_action_dialog(language, row, action, dialog),
-        ]
+        relay_action_dialog(language, row, action, dialog)
       }),
     ),
     html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
@@ -2688,36 +2680,41 @@ fn relay_dialog_id(id: Int, action: RelayAction) -> String {
   view.dialog_id(["relay", int.to_string(id), relay_action_segment(action)])
 }
 
-/// リレー `row` への `action` のダイアログ。題は操作の見出しで、中に理由、URL の要約、
-/// `relay_action_form` の説明とフォームを並べる。`dialog` がこの行と操作の `RelayActionOpen` なら
-/// 開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。そうでなければ欄の用途は
-/// `row_roles(row)`。
+/// リレー `row` への `action` のダイアログと、それを開くアイコンだけのボタン。題は操作の見出しで、
+/// 中に理由、URL の要約、`relay_action_form` の説明とフォームを並べる。`dialog` がこの行と操作の
+/// `RelayActionOpen` なら開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。そうで
+/// なければ欄の用途は `row_roles(row)`。
 fn relay_action_dialog(
   language: Language,
   row: RelayRow,
   action: RelayAction,
   dialog: Option(OpenDialog),
-) -> Element(msg) {
+) -> List(Element(msg)) {
   let #(opening, roles, error) = case dialog {
     Some(RelayActionOpen(id: relay_id, action: opened, roles:, error:))
       if relay_id == row.id && opened == action
     -> #(view.OpenedByResponse, roles, Some(error))
     _ -> #(view.OpensOnTrigger, row_roles(row), None)
   }
-  view.dialog(
+  let title = i18n.text(language, relay_action_title(action))
+  view.dialog_button(
     language,
     relay_dialog_id(row.id, action),
-    i18n.text(language, relay_action_title(action)),
+    view.IconOnlyTrigger(relay_action_icon(action), title),
+    relay_action_button_kind(action),
+    title,
     fn(placement) {
       [
         view.error_message(language, Some(relay_action_lead(action)), error),
-        view.summary_list([
-          #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+        view.detail_list([
+          #(
+            i18n.text(language, i18n.RelayUrl),
+            view.value_cell(view.Code(row.url)),
+          ),
         ]),
         ..relay_action_form(language, row, action, roles, placement)
       ]
     },
-    i18n.Cancel,
     opening,
   )
 }
@@ -3193,31 +3190,25 @@ fn session_actions(
     html.div(
       [attribute.class("flex flex-wrap justify-end gap-2")],
       list.append(
-        [
-          view.dialog_trigger(
-            permissions_id,
-            view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
-            view.GhostButton,
-          ),
-          view.dialog(
-            language,
-            permissions_id,
-            text(i18n.EditPermissions),
-            fn(placement) {
-              [
-                view.error_message(
-                  language,
-                  Some(i18n.CouldNotSavePermissions),
-                  error,
-                ),
-                summary,
-                ..permissions_form(language, session, form, placement)
-              ]
-            },
-            i18n.Cancel,
-            opening,
-          ),
-        ],
+        view.dialog_button(
+          language,
+          permissions_id,
+          view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
+          view.GhostButton,
+          text(i18n.EditPermissions),
+          fn(placement) {
+            [
+              view.error_message(
+                language,
+                Some(i18n.CouldNotSavePermissions),
+                error,
+              ),
+              summary,
+              ..permissions_form(language, session, form, placement)
+            ]
+          },
+          opening,
+        ),
         view.dialog_button(
           language,
           session_dialog_id(session, revoke_segment),
@@ -3227,6 +3218,7 @@ fn session_actions(
           fn(placement) {
             [summary, ..revoke_form(language, session, placement)]
           },
+          view.OpensOnTrigger,
         ),
       ),
     ),

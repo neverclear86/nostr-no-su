@@ -1,6 +1,6 @@
 //// 管理 UI のページ枠と、`admin/i18n` と `admin/wordmark`（生成した字形のパス）以外の本体の
 //// モジュールに依存しない HTML の部品。部品は `Element` を返し、HTML 文書の文字列にするのは
-//// `page` と `page_in_language` だけである。全体の形は docs/design-decisions.md の
+//// `page` だけである。全体の形は docs/design-decisions.md の
 //// 「管理 UI はサーバー側で描画する」、CSS は同じ文書の「管理 UI の CSS はビルドして
 //// リポジトリに含め、自前で配信する」に従う。
 ////
@@ -283,72 +283,39 @@ fn favicon_link() -> Element(msg) {
   ])
 }
 
-/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。`title` を表示の言語で引き、
-/// `<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。枠の残りは `document` が出す。
+/// ページの題。`<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。
+pub type PageTitle {
+  /// 本体の訳文。`page` が表示の言語で引く。
+  TranslatedTitle(message: i18n.Message)
+  /// 本体の訳文でない文字列（プラグイン由来の文字列）。`code` は `text` が書かれている言語の
+  /// コードで、見出しには `in_language` の `span` で出し、`<title>` には要素そのものに `lang` を
+  /// 付ける（`<title>` は子の要素を持てない）。
+  TaggedTitle(code: String, text: String)
+}
+
+/// 管理 UI 共通のページ枠を HTML 文書の文字列にする。表示の言語を `<html lang>` にし、`theme` が
+/// `Light` か `Dark` なら `data-theme` を出す。`refresh` が `RefreshEverySeconds` なら
+/// `<meta http-equiv="refresh">` を出す。`<head>` に `title` の `<title>` を置き、ナビゲーション
+/// バーと、`title` を見出し（h1）にした本文を出す。
 pub fn page(
   language: Language,
   theme: Theme,
-  title: i18n.Message,
+  title: PageTitle,
   layout: Layout,
   switch: NavbarSwitch,
   refresh: Refresh,
   body: List(Element(msg)),
 ) -> String {
-  let title = i18n.text(language, title)
-  document(
-    language,
-    theme,
-    html.title([], "Nostr-no-Su — " <> title),
-    [html.text(title)],
-    layout,
-    switch,
-    refresh,
-    body,
-  )
-}
-
-/// 見出しが本体の訳文でない文字列（プラグイン由来の文字列）のページ枠を HTML 文書の文字列に
-/// する。`code` は `title` が書かれている言語のコードで、見出し（h1）には `title` を
-/// `in_language` の `span` で出す。`<title>` は子の要素を持てないので、`title` を
-/// `Nostr-no-Su — ` の後に置いた `<title>` 要素そのものに `lang` を付ける。枠の残りは
-/// `document` が出す。
-pub fn page_in_language(
-  language: Language,
-  theme: Theme,
-  code: String,
-  title: String,
-  layout: Layout,
-  switch: NavbarSwitch,
-  refresh: Refresh,
-  body: List(Element(msg)),
-) -> String {
-  document(
-    language,
-    theme,
-    html.title([attribute.lang(code)], "Nostr-no-Su — " <> title),
-    [in_language(code, title)],
-    layout,
-    switch,
-    refresh,
-    body,
-  )
-}
-
-/// `page` と `page_in_language` が共有するページ枠を HTML 文書の文字列にする。表示の言語を
-/// `<html lang>` にし、`theme` が `Light` か `Dark` なら `data-theme` を出す。`refresh` が
-/// `RefreshEverySeconds` なら `<meta http-equiv="refresh">` を出す。`<head>` に
-/// `title`（`<title>` 要素）を置き、ナビゲーションバーと、`h1_content` を見出し（h1）にした
-/// 本文を出す。
-fn document(
-  language: Language,
-  theme: Theme,
-  title: Element(msg),
-  h1_content: List(Element(msg)),
-  layout: Layout,
-  switch: NavbarSwitch,
-  refresh: Refresh,
-  body: List(Element(msg)),
-) -> String {
+  let #(title, heading) = case title {
+    TranslatedTitle(message:) -> {
+      let text = i18n.text(language, message)
+      #(html.title([], "Nostr-no-Su — " <> text), html.text(text))
+    }
+    TaggedTitle(code:, text:) -> #(
+      html.title([attribute.lang(code)], "Nostr-no-Su — " <> text),
+      in_language(code, text),
+    )
+  }
   let attrs = [attribute.lang(i18n.code(language)), ..theme_attributes(theme)]
   html.html(attrs, [
     html.head([], [
@@ -376,7 +343,7 @@ fn document(
     html.body([attribute.class("min-h-screen bg-base-200 text-base-content")], [
       navbar(language, theme, switch),
       html.main([attribute.class(main_class(layout))], [
-        html.h1([attribute.class("text-2xl font-bold")], h1_content),
+        html.h1([attribute.class("text-2xl font-bold")], [heading]),
         ..body
       ]),
     ]),
@@ -975,11 +942,6 @@ pub fn detail_list(entries: List(#(String, Element(msg)))) -> Element(msg) {
       ]
     }),
   )
-}
-
-/// 見出しと値の組の一覧（`dl`）。見出しを値の左に置くので、狭い画面でも横に伸びない。
-pub fn summary_list(entries: List(#(String, Value))) -> Element(msg) {
-  detail_list(list.map(entries, fn(entry) { #(entry.0, value_cell(entry.1)) }))
 }
 
 /// `Value` 1 つを `dl` の値（`dd`）にする。
@@ -1937,8 +1899,8 @@ pub type DialogOpening {
   OpenedByResponsePinned
 }
 
-/// ダイアログを開くボタン（`dialog_trigger`）と、閉じた状態のダイアログ（`dialog` の
-/// `OpensOnTrigger`。閉じるボタンの語は「キャンセル」）の 2 要素。
+/// ダイアログを開くボタン（`dialog_trigger`）と、`opening` の開き方で描いたダイアログ（`dialog`。
+/// 閉じるボタンの語は「キャンセル」）の 2 要素。
 pub fn dialog_button(
   language: Language,
   id: String,
@@ -1946,10 +1908,11 @@ pub fn dialog_button(
   kind: ButtonKind,
   title: String,
   content: fn(Placement) -> List(Element(msg)),
+  opening: DialogOpening,
 ) -> List(Element(msg)) {
   [
     dialog_trigger(id, trigger, kind),
-    dialog(language, id, title, content, i18n.Cancel, OpensOnTrigger),
+    dialog(language, id, title, content, i18n.Cancel, opening),
   ]
 }
 
