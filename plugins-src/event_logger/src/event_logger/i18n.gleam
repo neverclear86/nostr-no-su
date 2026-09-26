@@ -46,7 +46,7 @@ pub type Message {
   EventsUnreadable(detail: String)
 }
 
-/// 言語のコードの言語。`ja` は日本語、それ以外（`en`、知らないコード、binary として読めなかった値の代わりの空文字列）は英語にする。
+/// 言語のコードの言語。`ja` は日本語、それ以外（`en`、知らないコード、binary でない値）は英語にする。
 pub fn from_code(code: String) -> Language {
   case code {
     "ja" -> Japanese

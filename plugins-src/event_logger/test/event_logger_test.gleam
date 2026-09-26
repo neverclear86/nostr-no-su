@@ -747,6 +747,15 @@ pub fn pages_declares_timeline_then_settings_test() {
   assert entries == [#("timeline", "Timeline"), #("settings", "Settings")]
 }
 
+/// `page_key/1` は `pages/1` が供給する 2 つのキーを対応する `PageKey` に解釈し、
+/// それ以外の binary と binary として読めない値は `UnknownKey` にする。
+pub fn page_key_reads_the_page_keys_test() {
+  assert page.page_key(dynamic.string("timeline")) == page.TimelineKey
+  assert page.page_key(dynamic.string("settings")) == page.SettingsKey
+  assert page.page_key(dynamic.string("nope")) == page.UnknownKey
+  assert page.page_key(dynamic.int(1)) == page.UnknownKey
+}
+
 /// `Accounts` の値（JSON 文字列）から `pubkey`・`npub`・`label` を読む。壊れた
 /// JSON なら `[]`。
 pub fn accounts_are_read_from_the_config_json_test() {
@@ -793,16 +802,7 @@ pub fn the_monitored_section_lists_every_account_test() {
   ]
   let monitored = Ok(store.OnlyPubkeys(set.from_list(["aa"])))
   let description =
-    page.content(
-      "settings",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      accounts,
-      monitored,
-      Ok([]),
-    )
+    page.settings_content(i18n.English, accounts, monitored, Error(Nil), 2, [])
   let assert [monitored_section, ..] = page_sections(description)
   let #(title, blocks) = section_shape(monitored_section)
   assert title == "Monitored accounts"
@@ -836,15 +836,13 @@ fn checkbox_field_shape(raw: Dynamic) -> #(String, String, String, Bool) {
 /// 空にする。
 pub fn the_monitored_section_is_empty_without_accounts_test() {
   let description =
-    page.content(
-      "settings",
+    page.settings_content(
       i18n.English,
+      [],
+      Ok(store.AllAccounts),
       Error(Nil),
       2,
       [],
-      [],
-      Ok(store.AllAccounts),
-      Ok([]),
     )
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
@@ -854,16 +852,7 @@ pub fn the_monitored_section_is_empty_without_accounts_test() {
 /// 保存アクターへの問い合わせが届かなければ `alert`（`failure`）1 つだけになる。
 pub fn the_monitored_section_reports_an_unreachable_store_test() {
   let description =
-    page.content(
-      "settings",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([]),
-    )
+    page.settings_content(i18n.English, [], Error(Nil), Error(Nil), 2, [])
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
   let assert [alert] = blocks
@@ -885,15 +874,13 @@ pub fn the_monitored_section_reports_an_unreachable_store_test() {
 pub fn page_content_shows_the_masked_database_url_test() {
   let masked = "postgres://nostr@db.example:5432/nostr_no_su"
   let description =
-    page.content(
-      "settings",
+    page.settings_content(
       i18n.English,
+      [],
+      Ok(store.AllAccounts),
       Ok(masked),
       2,
       [],
-      [],
-      Ok(store.AllAccounts),
-      Ok([]),
     )
   let assert [_monitored, configuration, ..] = page_sections(description)
   let #(title, blocks) = section_shape(configuration)
@@ -921,16 +908,48 @@ pub fn plugin_page_content_shows_the_host_database_url_test() {
       ),
     ])
   let description =
-    event_logger.plugin_page_content(
-      dynamic.string("settings"),
-      config,
-      dynamic.string("en"),
-    )
+    event_logger.plugin_page_content(dynamic.string("settings"), config, "en")
   let assert [_monitored, configuration, ..] = page_sections(description)
   let assert #(_title, [pairs, ..]) = section_shape(configuration)
   let assert Ok(#(_term, _kind, text)) =
     list.find(pair_items(pairs), fn(item) { item.0 == "database URL" })
   assert text == "postgres://nostr@db.example:5432/nostr_no_su"
+}
+
+/// `plugin_page_content/3` は未知のキーに対して `alert`（`failure`）1 つだけの
+/// 節を返す（`{error, Reason}` を返す約束は無い）。
+pub fn plugin_page_content_shows_an_unknown_key_as_an_error_test() {
+  let description =
+    event_logger.plugin_page_content(
+      dynamic.string("nope"),
+      dynamic.nil(),
+      "en",
+    )
+  let assert [only] = page_sections(description)
+  let assert #("Error", [alert]) = section_shape(only)
+  assert block_text(alert) == "unknown page"
+}
+
+/// `settings` 以外のキーは `unknown page` で拒み、`settings` は送信の正規化まで進む。
+pub fn plugin_page_action_accepts_only_the_settings_key_test() {
+  assert rejection(event_logger.plugin_page_action(
+      dynamic.string("timeline"),
+      dynamic.nil(),
+      dynamic.nil(),
+    ))
+    == Ok("unknown page")
+  assert rejection(event_logger.plugin_page_action(
+      dynamic.int(1),
+      dynamic.nil(),
+      dynamic.nil(),
+    ))
+    == Ok("unknown page")
+  assert rejection(event_logger.plugin_page_action(
+      dynamic.string("settings"),
+      dynamic.nil(),
+      dynamic.nil(),
+    ))
+    == Ok("select at least one account")
 }
 
 /// 居ないプロセスの行は `badge`（`failure`）と `Pending messages` の `-` になり、
@@ -950,15 +969,13 @@ pub fn page_content_marks_missing_processes_test() {
     ),
   ]
   let description =
-    page.content(
-      "settings",
+    page.settings_content(
       i18n.English,
+      [],
+      Ok(store.AllAccounts),
       Error(Nil),
       2,
       processes,
-      [],
-      Ok(store.AllAccounts),
-      Ok([]),
     )
   let assert [_monitored, _configuration, runtime] = page_sections(description)
   let #(title, blocks) = section_shape(runtime)
@@ -979,17 +996,7 @@ pub fn page_content_marks_missing_processes_test() {
 
 /// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
 pub fn page_content_of_an_unknown_key_test() {
-  let description =
-    page.content(
-      "nope",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Ok(store.AllAccounts),
-      Ok([]),
-    )
+  let description = page.unknown_content(i18n.English)
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   let assert [alert] = blocks
@@ -1028,17 +1035,7 @@ pub fn the_timeline_lists_stored_events_test() {
       content: "hi",
       sig: "sig2",
     )
-  let description =
-    page.content(
-      "timeline",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([first, second]),
-    )
+  let description = page.timeline_content(i18n.English, [], Ok([first, second]))
   let assert [first_section, second_section] = page_sections(description)
   assert_event_section(first_section, first, [#("text", "hello")], "tags (1)")
   assert_event_section(second_section, second, [#("text", "hi")], "tags (0)")
@@ -1107,16 +1104,7 @@ pub fn the_timeline_folds_long_and_json_bodies_test() {
   let profile = row("id2", 0, "{}")
   let contacts = row("id3", 3, "")
   let description =
-    page.content(
-      "timeline",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([long, profile, contacts]),
-    )
+    page.timeline_content(i18n.English, [], Ok([long, profile, contacts]))
   let assert [long_section, profile_section, contacts_section] =
     page_sections(description)
   assert_event_section(
@@ -1156,16 +1144,7 @@ pub fn the_timeline_names_registered_authors_test() {
   }
   let accounts = [page.Account(pubkey: "aa", npub: "npub1aa", label: "main")]
   let first_pairs = fn(language: i18n.Language) {
-    page.content(
-      "timeline",
-      language,
-      Error(Nil),
-      2,
-      [],
-      accounts,
-      Error(Nil),
-      Ok([row("aa"), row("bb")]),
-    )
+    page.timeline_content(language, accounts, Ok([row("aa"), row("bb")]))
     |> page_sections
     |> list.map(fn(raw) {
       let assert [pairs, ..] = section_shape(raw).1
@@ -1188,17 +1167,7 @@ pub fn the_timeline_names_registered_authors_test() {
 /// 保存済みイベントが 0 件なら、本体が出す空の状態の文に任せて `blocks` を
 /// 空にする。
 pub fn the_timeline_is_empty_without_events_test() {
-  let description =
-    page.content(
-      "timeline",
-      i18n.English,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([]),
-    )
+  let description = page.timeline_content(i18n.English, [], Ok([]))
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   assert blocks == []
@@ -1207,14 +1176,9 @@ pub fn the_timeline_is_empty_without_events_test() {
 /// 直近のイベントの問い合わせが失敗すると `alert`（`failure`）1 つだけになる。
 pub fn the_timeline_reports_a_failed_query_test() {
   let description =
-    page.content(
-      "timeline",
+    page.timeline_content(
       i18n.English,
-      Error(Nil),
-      2,
       [],
-      [],
-      Error(Nil),
       Error(i18n.EventsUnreadable("timeout")),
     )
   let assert [only] = page_sections(description)
@@ -1259,7 +1223,7 @@ pub fn plugin_pages_follow_the_display_language_test() {
   let pages = fn(code) {
     let assert Ok(entries) =
       decode.run(
-        event_logger.plugin_pages(dynamic.nil(), dynamic.string(code)),
+        event_logger.plugin_pages(dynamic.nil(), code),
         decode.list(decoder),
       )
     entries
@@ -1282,11 +1246,7 @@ pub fn plugin_page_content_follows_the_display_language_test() {
     ])
   let timeline = fn(code) {
     let description =
-      event_logger.plugin_page_content(
-        dynamic.string("timeline"),
-        config,
-        dynamic.string(code),
-      )
+      event_logger.plugin_page_content(dynamic.string("timeline"), config, code)
     let assert [only] = page_sections(description)
     let #(title, blocks) = section_shape(only)
     let assert [alert] = blocks
@@ -1295,11 +1255,7 @@ pub fn plugin_page_content_follows_the_display_language_test() {
   assert timeline("ja") == #("タイムライン", "接続プールが動いていません。")
   assert timeline("en") == #("Timeline", "connection pool is not running")
   let description =
-    event_logger.plugin_page_content(
-      dynamic.string("settings"),
-      config,
-      dynamic.string("ja"),
-    )
+    event_logger.plugin_page_content(dynamic.string("settings"), config, "ja")
   let assert [_monitored, _configuration, runtime] = page_sections(description)
   let #(_title, blocks) = section_shape(runtime)
   let assert [table, ..] = blocks
@@ -1323,15 +1279,13 @@ pub fn the_settings_page_is_in_japanese_test() {
     ),
   ]
   let description =
-    page.content(
-      "settings",
+    page.settings_content(
       i18n.Japanese,
+      accounts,
+      Ok(store.AllAccounts),
       Error(Nil),
       2,
       processes,
-      accounts,
-      Ok(store.AllAccounts),
-      Ok([]),
     )
   let assert [monitored, configuration, runtime] = page_sections(description)
   let #(monitored_title, monitored_blocks) = section_shape(monitored)
@@ -1378,42 +1332,18 @@ pub fn the_settings_page_is_in_japanese_test() {
 /// 読み込みの失敗のどれも日本語の文になる。読み込みの失敗の詳細は訳さない。
 pub fn the_alerts_are_in_japanese_test() {
   let settings =
-    page.content(
-      "settings",
-      i18n.Japanese,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([]),
-    )
+    page.settings_content(i18n.Japanese, [], Error(Nil), Error(Nil), 2, [])
   let assert [monitored, ..] = page_sections(settings)
   let assert #(_title, [store_alert]) = section_shape(monitored)
   assert block_text(store_alert) == "保存アクターが応答しないため、保存するアカウントを表示できません。"
-  let unknown =
-    page.content(
-      "nope",
-      i18n.Japanese,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Ok(store.AllAccounts),
-      Ok([]),
-    )
+  let unknown = page.unknown_content(i18n.Japanese)
   let assert [error_section] = page_sections(unknown)
   let assert #("エラー", [unknown_alert]) = section_shape(error_section)
   assert block_text(unknown_alert) == "このページはありません。"
   let timeline =
-    page.content(
-      "timeline",
+    page.timeline_content(
       i18n.Japanese,
-      Error(Nil),
-      2,
       [],
-      [],
-      Error(Nil),
       Error(i18n.EventsUnreadable("timeout")),
     )
   let assert [timeline_section] = page_sections(timeline)
@@ -1434,17 +1364,7 @@ pub fn the_timeline_details_are_in_japanese_test() {
       content: "hello",
       sig: "sig1",
     )
-  let description =
-    page.content(
-      "timeline",
-      i18n.Japanese,
-      Error(Nil),
-      2,
-      [],
-      [],
-      Error(Nil),
-      Ok([row]),
-    )
+  let description = page.timeline_content(i18n.Japanese, [], Ok([row]))
   let assert [only] = page_sections(description)
   assert_event_section(only, row, [#("details", "content（5 バイト）")], "tags（1 件）")
 }
