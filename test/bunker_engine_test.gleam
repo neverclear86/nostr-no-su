@@ -1362,6 +1362,24 @@ fn session_reply(
   decrypt_response(client, signer, response)
 }
 
+/// セッション内のリクエストを 1 件送り、`Handled` の `notice` を返す。
+fn session_notice(
+  state: engine.Engine,
+  method: String,
+  params_json: String,
+) -> option.Option(String) {
+  let signer = account_for(signer_key)
+  let client = account_for(client_key)
+  let body = request_body("r1", method, params_json)
+  let engine.Handled(notice:, ..) =
+    engine.handle_event(
+      state,
+      signed_event.verified(request_event(client, signer, body, 1001)),
+      engine.Inputs(now: 1001, token: token, not_before: 0),
+    )
+  notice
+}
+
 /// content だけのドラフト 1 件の params の JSON。
 fn kind_draft_params(kind: Int) -> String {
   let draft =
@@ -1447,14 +1465,7 @@ pub fn denied_requests_carry_a_notice_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let state = granted_session("sign_event:1")
-  let body = request_body("r1", "sign_event", kind_draft_params(7))
-  let engine.Handled(notice:, ..) =
-    engine.handle_event(
-      state,
-      signed_event.verified(request_event(client, signer, body, 1001)),
-      engine.Inputs(now: 1001, token: token, not_before: 0),
-    )
-  assert notice
+  assert session_notice(state, "sign_event", kind_draft_params(7))
     == Some(
       "permission denied for client "
       <> account.pubkey_hex(client)
@@ -1462,6 +1473,13 @@ pub fn denied_requests_carry_a_notice_test() {
       <> account.pubkey_hex(signer)
       <> ": sign_event:7",
     )
+}
+
+/// 権限の不足ではない失敗（kind 24133 の `sign_event`）は、`Handled.notice`
+/// にログの行を持たない。
+pub fn non_denied_failures_carry_no_notice_test() {
+  let state = granted_session("")
+  assert session_notice(state, "sign_event", kind_draft_params(24_133)) == None
 }
 
 /// 上限を超える perms はトークンの境で切り、上限ちょうどの perms はそのまま
