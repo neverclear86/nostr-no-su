@@ -2398,8 +2398,7 @@ pub fn parse_account_action_path(
 ) -> Result(#(String, AccountAction), Nil) {
   case segments {
     [first, signer, segment] if first == accounts_segment ->
-      account_actions
-      |> list.find(fn(action) { account_action_segment(action) == segment })
+      action_for_segment(account_actions, account_action_segment, segment)
       |> result.map(fn(action) { #(signer, action) })
     _ -> Error(Nil)
   }
@@ -2446,12 +2445,20 @@ pub fn parse_relay_action_path(
   case segments {
     [first, id, segment] if first == relays_segment -> {
       use id <- result.try(int.parse(id))
-      relay_actions
-      |> list.find(fn(action) { relay_action_segment(action) == segment })
+      action_for_segment(relay_actions, relay_action_segment, segment)
       |> result.map(fn(action) { #(id, action) })
     }
     _ -> Error(Nil)
   }
+}
+
+/// 操作の一覧 `actions` から、パスセグメントが `segment` の操作を引く。無ければ Error。
+fn action_for_segment(
+  actions: List(action),
+  to_segment: fn(action) -> String,
+  segment: String,
+) -> Result(action, Nil) {
+  list.find(actions, fn(action) { to_segment(action) == segment })
 }
 
 /// セッションの権限の保存のパスの末尾のセグメント。
@@ -2666,7 +2673,7 @@ fn no_bunker_relay_alert(
 
 /// リレー 1 件。1 段目に URL と、操作（用途の編集、削除）のダイアログを開くアイコンだけのボタンを並べ、
 /// 2 段目に用途のマス（`relay_role`）を監視、バンカーの順に 2 つ並べる。使っていない用途は「未使用」の
-/// バッジで出す。`dialog` が同じ行と操作の `RelayActionOpen` なら、そのダイアログを開いた状態で描く。
+/// バッジで出す。ダイアログは操作ごとに `relay_action_dialog` で `dialog` に合わせて描く。
 fn relay_item(
   language: Language,
   row: RelayRow,
@@ -2678,52 +2685,16 @@ fn relay_item(
     ]),
     button_row(
       list.flat_map(relay_actions, fn(action) {
-        let title = i18n.text(language, relay_action_title(action))
-        let id =
-          view.dialog_id([
-            "relay",
-            int.to_string(row.id),
-            relay_action_segment(action),
-          ])
-        let #(opening, roles, error) = case dialog {
-          Some(RelayActionOpen(id:, action: opened, roles:, error:))
-            if id == row.id && opened == action
-          -> #(view.OpenedByResponse, roles, Some(error))
-          _ -> #(view.OpensOnTrigger, row_roles(row), None)
-        }
         [
           view.dialog_trigger(
-            id,
-            view.IconOnlyTrigger(relay_action_icon(action), title),
+            relay_dialog_id(row.id, action),
+            view.IconOnlyTrigger(
+              relay_action_icon(action),
+              i18n.text(language, relay_action_title(action)),
+            ),
             relay_action_button_kind(action),
           ),
-          view.dialog(
-            language,
-            id,
-            title,
-            fn(placement) {
-              [
-                view.error_message(
-                  language,
-                  Some(relay_action_lead(action)),
-                  error,
-                ),
-                view.summary_list([
-                  #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
-                ]),
-                ..relay_action_form(
-                  language,
-                  row.id,
-                  action,
-                  roles,
-                  Some(row),
-                  placement,
-                )
-              ]
-            },
-            i18n.Cancel,
-            opening,
-          ),
+          relay_action_dialog(language, row, action, dialog),
         ]
       }),
     ),
@@ -2732,6 +2703,45 @@ fn relay_item(
       relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
     ]),
   ])
+}
+
+/// リレー 1 件への操作のダイアログの `id`（`dialog-relay-<id>-<セグメント>`）。
+fn relay_dialog_id(id: Int, action: RelayAction) -> String {
+  view.dialog_id(["relay", int.to_string(id), relay_action_segment(action)])
+}
+
+/// リレー `row` への `action` のダイアログ。題は操作の見出しで、中に理由、URL の要約、
+/// `relay_action_form` の説明とフォームを並べる。`dialog` がこの行と操作の `RelayActionOpen` なら
+/// 開いた状態で描き、理由と、用途の編集の欄に送られた用途を入れる。そうでなければ欄の用途は
+/// `row_roles(row)`。
+fn relay_action_dialog(
+  language: Language,
+  row: RelayRow,
+  action: RelayAction,
+  dialog: Option(OpenDialog),
+) -> Element(msg) {
+  let #(opening, roles, error) = case dialog {
+    Some(RelayActionOpen(id: relay_id, action: opened, roles:, error:))
+      if relay_id == row.id && opened == action
+    -> #(view.OpenedByResponse, roles, Some(error))
+    _ -> #(view.OpensOnTrigger, row_roles(row), None)
+  }
+  view.dialog(
+    language,
+    relay_dialog_id(row.id, action),
+    i18n.text(language, relay_action_title(action)),
+    fn(placement) {
+      [
+        view.error_message(language, Some(relay_action_lead(action)), error),
+        view.summary_list([
+          #(i18n.text(language, i18n.RelayUrl), view.Code(row.url)),
+        ]),
+        ..relay_action_form(language, row, action, roles, placement)
+      ]
+    },
+    i18n.Cancel,
+    opening,
+  )
 }
 
 /// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
@@ -2783,26 +2793,25 @@ pub fn new_relay_form(
   ]
 }
 
-/// リレー `id` への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
+/// リレー `row` への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
 /// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（チェックを入れる用途。`None`
-/// ならどちらも外す）のチェックと `states` の接続状態のバッジを出し、削除は危険のボタンだけで
-/// `roles` と `states` を使わない。URL の要約と入力の誤りは含めない。
+/// ならどちらも外す）のチェックと `row` の接続状態のバッジを出し、削除は危険のボタンだけで
+/// `roles` を使わない。URL の要約と入力の誤りは含めない。
 pub fn relay_action_form(
   language: Language,
-  id: Int,
+  row: RelayRow,
   action: RelayAction,
   roles: Option(Roles),
-  states: Option(RelayRow),
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = relay_action_path(id, action)
+  let path = relay_action_path(row.id, action)
   case action {
     EditRelayRoles -> [
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
       view.post_form(
         path,
-        [roles_fieldset(language, roles, states)],
+        [roles_fieldset(language, roles, Some(row))],
         text(i18n.Save),
         view.PrimaryButton,
         placement,
