@@ -155,6 +155,7 @@ import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
+import nostr_no_su/config
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
 import nostr_no_su/hex
