@@ -47,7 +47,7 @@ fn ffi_ec_point_from_priv(priv: BitArray) -> Result(#(BitArray, BitArray), Nil)
 fn ffi_ecdh_x(compressed_pub: BitArray, priv: BitArray) -> Result(BitArray, Nil)
 
 /// バイト列を符号なしビッグエンディアンの整数として読む。
-@external(erlang, "nostr_no_su_ffi", "int_from_bytes")
+@external(erlang, "binary", "decode_unsigned")
 pub fn int_from_bytes(bytes: BitArray) -> Int
 
 /// 体の元またはスカラーを 32 バイトのビッグエンディアンで表現する。

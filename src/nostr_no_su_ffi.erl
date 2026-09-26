@@ -13,13 +13,10 @@
     chacha20/3,
     aes_256_gcm_seal/4,
     aes_256_gcm_open/5,
-    int_from_bytes/1,
     ensure_module_loaded_within/2,
     call_export_within/4,
     list_dir/1,
     read_file/1,
-    is_directory/1,
-    absolute_path/1,
     add_code_path/1,
     is_on_code_path/1,
     module_application/1,
@@ -34,7 +31,6 @@
     reply_alias/1,
     pool_transaction/3,
     execute_catching/2,
-    is_ip_address/1,
     parse_ip_address/1,
     qr_dark_modules/1
 ]).
@@ -236,10 +232,6 @@ aes_256_gcm_open(Key, Nonce, Cipher, Aad, Tag) when byte_size(Tag) =:= 16 ->
 aes_256_gcm_open(_Key, _Nonce, _Cipher, _Aad, _Tag) ->
     {error, nil}.
 
-%% バイト列を符号なしビッグエンディアンの整数として読む。
-int_from_bytes(Bin) ->
-    binary:decode_unsigned(Bin).
-
 %% モジュールをコードパスから読み込む。`erlang:function_exported/3` は未読み込み
 %% のモジュールに対して常に false を返すため、エクスポートの検証はこれを通した
 %% 後に行う必要がある。失敗理由（nofile / badfile / embedded など）は atom なの
@@ -424,10 +416,6 @@ list_dir(Path) ->
         {error, Reason} -> {error, atom_to_binary(Reason)}
     end.
 
-%% パスがディレクトリーかどうか。binary をそのまま渡せる。
-is_directory(Path) ->
-    filelib:is_dir(Path).
-
 %% ファイルの中身を UTF-8 の binary（Gleam の String）で返す。失敗理由は
 %% enoent などの文字列、UTF-8 でなければ not valid UTF-8。秘密を読むのに
 %% 使うので、内容を理由に入れない。
@@ -443,26 +431,15 @@ read_file(Path) ->
             end
     end.
 
-%% Address が IPv4 か IPv6 のアドレスとして読めるか。glisten の bind は読めない
-%% 値で panic するので、設定の読み込みで同じ規則で弾くために使う。
-is_ip_address(Address) ->
-    element(1, parse_ip_address(Address)) =:= ok.
-
 %% Address を IPv4 か IPv6 のアドレスとして読み、Gleam の nostrconnect.IpAddress の
 %% 形（{ipv4, …} / {ipv6, …}）で返す。inet:parse_address は 127.1 のような省略形も
-%% 読む。読めなければ {error, nil}。
+%% 読む。読めなければ {error, nil}。config は読めたかどうかだけを見る。
 parse_ip_address(Address) ->
     case inet:parse_address(unicode:characters_to_list(Address)) of
         {ok, {A, B, C, D}} -> {ok, {ipv4, A, B, C, D}};
         {ok, {A, B, C, D, E, F, G, H}} -> {ok, {ipv6, A, B, C, D, E, F, G, H}};
         {error, _} -> {error, nil}
     end.
-
-%% 相対パスを絶対パスにする。プラグインディレクトリーを最初に 1 度だけ正規化し、
-%% ログ行とコードパスへ登録する内容が相対・絶対で食い違わないようにするために
-%% 使う。binary を渡せば binary が返るので変換は要らない。
-absolute_path(Path) ->
-    filename:absname(Path).
 
 %% ディレクトリーをコードパスの末尾に足す。末尾に足すのは、本体と先に読み込まれた
 %% プラグインが常に優先されるようにするため。code:add_pathz/1 は charlist しか
