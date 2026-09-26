@@ -903,7 +903,7 @@ pub fn execute(
 /// プロセスが無いなど）は `Unavailable`、それ以外の例外は `Raised` にする。`Raised` には
 /// 送る前に起きた例外（pgo_pool のチェックアウトが返す文字列の理由を pog が写せない
 /// 場合）も含まれ、送った後の例外と区別しない。
-@external(erlang, "nostr_no_su_ffi", "execute_catching")
+@external(erlang, "nostr_no_su_store_ffi", "execute_catching")
 fn execute_catching(
   query: pog.Query(row),
   db: pog.Connection,
@@ -930,7 +930,7 @@ pub fn execute_on_one_row(
 /// プールの接続 1 本で `run` をトランザクションとして実行し、`timeout_ms` の期限で
 /// 打ち切る。`run` の中で同じプールへ送るクエリーはこの接続で実行される。`run` が
 /// `Error` を返したらロールバックする。
-@external(erlang, "nostr_no_su_ffi", "pool_transaction")
+@external(erlang, "nostr_no_su_store_ffi", "pool_transaction")
 fn pool_transaction(
   pool: Name(pog.Message),
   timeout_ms: Int,
