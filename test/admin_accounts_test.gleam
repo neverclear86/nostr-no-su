@@ -581,6 +581,28 @@ pub fn register_generated_bunker_failure_keeps_the_key_test() {
   assert header(response, "cache-control") == "no-store"
 }
 
+/// 生成した鍵の登録でバンカーが反映しなかった失敗は、未登録も含めて 409 で、送られた nsec の
+/// ダイアログを理由付きで開いて返す。
+pub fn register_generated_unapplied_failures_keep_the_key_test() {
+  let cases = [
+    #(bunker.NotApplied("not written"), "not written"),
+    #(
+      bunker.AccountNotRegistered,
+      i18n.text(i18n.English, i18n.AccountNotFound),
+    ),
+  ]
+  use #(failure, reason) <- list.each(cases)
+  let response =
+    post_form(failing_context(failure), "/accounts/register-generated", [
+      #("nsec", spec_nsec),
+      #("label", "work"),
+    ])
+  assert #(reason, response.status) == #(reason, 409)
+  let body = simulate.read_body(response)
+  assert hidden_nsec(body) == spec_nsec
+  assert string.contains(body, reason)
+}
+
 /// 生成した鍵の登録でラベルだけが規則に反すると、生成した鍵を失わないよう、送られた
 /// nsec のダイアログを理由付きで開いて 400 で返す。登録はせず、ラベルの欄には制御文字を除いた
 /// 値を入れる。
