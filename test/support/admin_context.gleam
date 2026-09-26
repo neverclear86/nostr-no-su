@@ -251,12 +251,12 @@ pub fn test_context(
         relay_store.Relay(
           id: 1,
           url: monitor_relay_url,
-          roles: relay_list.Roles(monitor: True, bunker: False),
+          roles: relay_list.MonitorOnly,
         ),
         relay_store.Relay(
           id: 2,
           url: "wss://bunker.example",
-          roles: relay_list.Roles(monitor: False, bunker: True),
+          roles: relay_list.BunkerOnly,
         ),
       ])
     },

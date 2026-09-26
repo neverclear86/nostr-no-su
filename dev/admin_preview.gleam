@@ -163,13 +163,9 @@ fn adding_relay(
 /// `relays` と同じ id と URL の DB の行。用途の編集と削除の撮影に使う。
 fn db_relays() -> List(relay_store.Relay) {
   [
-    relay_store.Relay(1, "wss://relay.example", relay_list.Roles(True, True)),
-    relay_store.Relay(
-      2,
-      "ws://evil/\"><b>xss</b>",
-      relay_list.Roles(True, False),
-    ),
-    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.Roles(False, True)),
+    relay_store.Relay(1, "wss://relay.example", relay_list.Both),
+    relay_store.Relay(2, "ws://evil/\"><b>xss</b>", relay_list.MonitorOnly),
+    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.BunkerOnly),
   ]
 }
 

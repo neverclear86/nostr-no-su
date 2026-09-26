@@ -23,7 +23,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
-import nostr_no_su/relay_list.{Roles}
+import nostr_no_su/relay_list
 import support/account_actions
 
 /// ファイルの中身を読む。
@@ -246,13 +246,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
       opened(dashboard.UnreadableDeleteOpen(skipped_hex, reason)),
       opened(dashboard.NewRelayOpen(
         "wss://relay-with-a-very-long-host-name-for-layout-checks.example/path/segment/that/keeps/going/without/breaking",
-        Roles(False, True),
+        Some(relay_list.BunkerOnly),
         reason,
       )),
       opened(dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       )),
       opened(dashboard.ConnectOpen(

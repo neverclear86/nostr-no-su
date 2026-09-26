@@ -1111,12 +1111,12 @@ pub fn merge_relay_rows(
     id: relay.id,
     url: relay.url,
     monitor: role_status(
-      relay.roles.monitor,
+      relay_list.has_role(relay.roles, relay_list.Monitor),
       option.then(entry, fn(entry) { entry.monitor }),
       status,
     ),
     bunker: role_status(
-      relay.roles.bunker,
+      relay_list.has_role(relay.roles, relay_list.Bunker),
       option.then(entry, fn(entry) { entry.bunker }),
       status,
     ),

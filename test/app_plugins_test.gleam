@@ -1621,10 +1621,7 @@ pub fn registered_relays_open_after_the_first_load_test() {
       use snapshot <- result.try(load_signer(signer_key))
       Ok(
         bunker.Snapshot(..snapshot, relays: [
-          relay_list.Registered(
-            url: url,
-            roles: relay_list.Roles(monitor: False, bunker: True),
-          ),
+          relay_list.Registered(url: url, roles: relay_list.BunkerOnly),
         ]),
       )
     })
@@ -1656,10 +1653,7 @@ pub fn registered_relays_open_after_the_store_recovers_test() {
           use snapshot <- result.try(load_signer(signer_key))
           Ok(
             bunker.Snapshot(..snapshot, relays: [
-              relay_list.Registered(
-                url: url,
-                roles: relay_list.Roles(monitor: False, bunker: True),
-              ),
+              relay_list.Registered(url: url, roles: relay_list.BunkerOnly),
             ]),
           )
         }
@@ -1703,26 +1697,10 @@ pub fn merged_relay_rows_follow_the_store_test() {
   let bunker_a = process.new_name("test_merge_bunker_a")
   let monitor_d = process.new_name("test_merge_monitor_d")
   let relays = [
-    relay_store.Relay(
-      id: 1,
-      url: "wss://a",
-      roles: relay_list.Roles(monitor: True, bunker: True),
-    ),
-    relay_store.Relay(
-      id: 2,
-      url: "wss://b",
-      roles: relay_list.Roles(monitor: True, bunker: False),
-    ),
-    relay_store.Relay(
-      id: 3,
-      url: "wss://c",
-      roles: relay_list.Roles(monitor: False, bunker: True),
-    ),
-    relay_store.Relay(
-      id: 4,
-      url: "wss://d",
-      roles: relay_list.Roles(monitor: True, bunker: False),
-    ),
+    relay_store.Relay(id: 1, url: "wss://a", roles: relay_list.Both),
+    relay_store.Relay(id: 2, url: "wss://b", roles: relay_list.MonitorOnly),
+    relay_store.Relay(id: 3, url: "wss://c", roles: relay_list.BunkerOnly),
+    relay_store.Relay(id: 4, url: "wss://d", roles: relay_list.MonitorOnly),
   ]
   let entries = [
     relay_list.Entry(
@@ -1790,25 +1768,16 @@ pub fn relay_rows_without_the_relay_list_test() {
 pub fn relay_rows_report_each_role_of_the_registered_relays_test() {
   use spec, db <- with_relay_store_tree()
 
-  let assert Ok(Nil) =
-    app.add_relay(
-      spec,
-      "ws://both.test",
-      relay_list.Roles(monitor: True, bunker: True),
-    )
+  let assert Ok(Nil) = app.add_relay(spec, "ws://both.test", relay_list.Both)
   let assert Ok(unopened) =
     relay_store.insert(
       db,
       "ws://unopened.test",
-      relay_list.Roles(monitor: True, bunker: False),
+      relay_list.MonitorOnly,
       account_store.default_timeouts,
     )
   let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      "ws://unregistered.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+    app.open_relay(spec, "ws://unregistered.test", relay_list.MonitorOnly)
 
   let assert Ok([both, _unopened]) = app.registered_relays(spec)
   assert app.relay_rows(spec, task.deadline_in(5000))
@@ -1945,11 +1914,7 @@ pub fn a_monitor_relay_opened_at_runtime_delivers_events_test() {
     ])
   let tree = start_tree(spec)
   let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      test_relay_url,
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+    app.open_relay(spec, test_relay_url, relay_list.MonitorOnly)
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver_and_expect(deliver, seen, event_labels("runtime", 3), 2000)
@@ -1996,33 +1961,17 @@ pub fn add_relay_saves_the_row_before_opening_test() {
   use spec, db <- with_relay_store_tree()
 
   let assert Ok(Nil) =
-    app.add_relay(
-      spec,
-      "ws://added.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+    app.add_relay(spec, "ws://added.test", relay_list.MonitorOnly)
   assert role_url_pairs(spec) == [#(relay_list.Monitor, "ws://added.test")]
   let assert Ok(rows) = relay_store.list(db, account_store.default_timeouts)
   assert list.map(rows, fn(row) { row.url }) == ["ws://added.test"]
 
-  assert app.add_relay(
-      spec,
-      "ws://added.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+  assert app.add_relay(spec, "ws://added.test", relay_list.MonitorOnly)
     == Error(admin.DuplicateRelay)
 
   let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      "ws://listed.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
-  assert app.add_relay(
-      spec,
-      "ws://listed.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+    app.open_relay(spec, "ws://listed.test", relay_list.MonitorOnly)
+  assert app.add_relay(spec, "ws://listed.test", relay_list.MonitorOnly)
     == Error(admin.ConnectionsNotConfirmed)
   let assert Ok(rows_after) =
     relay_store.list(db, account_store.default_timeouts)
@@ -2038,34 +1987,22 @@ pub fn update_and_delete_relay_write_the_row_then_the_connections_test() {
   use spec, _db <- with_relay_store_tree()
 
   let assert Ok(Nil) =
-    app.add_relay(
-      spec,
-      "ws://update.test",
-      relay_list.Roles(monitor: True, bunker: False),
-    )
+    app.add_relay(spec, "ws://update.test", relay_list.MonitorOnly)
   let assert Ok([relay]) = app.registered_relays(spec)
   assert relay.url == "ws://update.test"
-  assert relay.roles == relay_list.Roles(monitor: True, bunker: False)
+  assert relay.roles == relay_list.MonitorOnly
 
   let assert Ok(Nil) =
-    app.update_relay_roles(
-      spec,
-      relay,
-      relay_list.Roles(monitor: False, bunker: True),
-    )
+    app.update_relay_roles(spec, relay, relay_list.BunkerOnly)
   let assert Ok([updated]) = app.registered_relays(spec)
-  assert updated.roles == relay_list.Roles(monitor: False, bunker: True)
+  assert updated.roles == relay_list.BunkerOnly
   assert role_url_pairs(spec) == [#(relay_list.Bunker, "ws://update.test")]
 
   let assert Ok(Nil) = app.delete_relay(spec, updated)
   assert app.registered_relays(spec) == Ok([])
   assert role_url_pairs(spec) == []
 
-  assert app.update_relay_roles(
-      spec,
-      updated,
-      relay_list.Roles(monitor: True, bunker: True),
-    )
+  assert app.update_relay_roles(spec, updated, relay_list.Both)
     == Error(admin.UnregisteredRelay)
   assert app.delete_relay(spec, updated) == Error(admin.UnregisteredRelay)
 }
@@ -2124,8 +2061,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
       #(relay_list.Bunker, b),
     ]
 
-  let assert Ok(Nil) =
-    app.open_relay(spec, c, relay_list.Roles(monitor: True, bunker: True))
+  let assert Ok(Nil) = app.open_relay(spec, c, relay_list.Both)
   assert role_url_pairs(spec)
     == [
       #(relay_list.Monitor, a),
@@ -2134,12 +2070,7 @@ pub fn runtime_relay_changes_are_listed_in_order_test() {
       #(relay_list.Bunker, c),
     ]
 
-  let assert Ok(Nil) =
-    app.change_relay_roles(
-      spec,
-      a,
-      relay_list.Roles(monitor: False, bunker: True),
-    )
+  let assert Ok(Nil) = app.change_relay_roles(spec, a, relay_list.BunkerOnly)
   assert role_url_pairs(spec)
     == [
       #(relay_list.Monitor, c),
@@ -2230,8 +2161,7 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
     )
   let tree = start_tree(spec)
   let r = "ws://runtime-monitor.test"
-  let assert Ok(Nil) =
-    app.open_relay(spec, r, relay_list.Roles(monitor: True, bunker: False))
+  let assert Ok(Nil) = app.open_relay(spec, r, relay_list.MonitorOnly)
   let assert Ok(Subscribed(_relay_url, [message.Req(_id, opened_filter)])) =
     receive_until(subscribed, requests_on(_, r), 2000).1
   assert opened_filter.authors == Some([signer])
@@ -2262,8 +2192,7 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
   assert process.receive(subscribed, 300) == Error(Nil)
 
   let r2 = "ws://runtime-monitor-2.test"
-  let assert Ok(Nil) =
-    app.open_relay(spec, r2, relay_list.Roles(monitor: True, bunker: False))
+  let assert Ok(Nil) = app.open_relay(spec, r2, relay_list.MonitorOnly)
   let assert Ok(Nil) = app.close_relay(spec, r2)
   assert app.add_account(spec, account_for(third_signer_key), "third")
     == Ok(Nil)
@@ -2290,11 +2219,7 @@ pub fn runtime_relays_are_reopened_when_the_bunker_restarts_test() {
     )
   let tree = start_tree(spec)
   let assert Ok(Nil) =
-    app.open_relay(
-      spec,
-      "ws://z.test",
-      relay_list.Roles(monitor: False, bunker: True),
-    )
+    app.open_relay(spec, "ws://z.test", relay_list.BunkerOnly)
   let assert Opened("ws://z.test", _connection, _socket, _deliver) =
     await_connection(reports)
 

@@ -18,8 +18,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
-import nostr_no_su/relay_list.{Roles}
-import nostr_no_su/relay_store.{Relay}
+import nostr_no_su/relay_list
 import support/account_actions
 import support/admin_context.{closed_dialog, opened_dialog, opened_dialogs}
 
@@ -2860,7 +2859,7 @@ pub fn new_relay_form_describes_the_url_field_test() {
     dashboard.new_relay_form(
       i18n.English,
       "",
-      dashboard.new_relay_roles,
+      Some(dashboard.new_relay_roles),
       view.InForm,
     )
     |> element.fragment
@@ -2893,12 +2892,11 @@ pub fn relay_action_form_keeps_the_description_visible_test() {
 
 /// id 7 のリレーへの `action` の英語のフォームの中身を HTML 文字列にする。
 fn action_form(action: dashboard.RelayAction) -> String {
-  let relay = Relay(id: 7, url: "wss://relay.example", roles: Roles(True, True))
   dashboard.relay_action_form(
     i18n.English,
-    relay,
+    7,
     action,
-    None,
+    Some(relay_list.Both),
     None,
     view.InForm,
   )
@@ -3132,7 +3130,7 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
       dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),
     )
@@ -3165,7 +3163,7 @@ pub fn render_open_echoes_the_new_relay_form_test() {
       states(),
       dashboard.NewRelayOpen(
         "wss://typed.example",
-        Roles(True, False),
+        Some(relay_list.MonitorOnly),
         i18n.Translated(i18n.InvalidRelayUrl),
       ),
     )
@@ -3195,7 +3193,7 @@ pub fn render_open_needs_the_relay_list_test() {
       i18n.English,
       view.System,
       unlisted,
-      dashboard.NewRelayOpen("", Roles(False, True), reason),
+      dashboard.NewRelayOpen("", Some(relay_list.BunkerOnly), reason),
     )
   assert string.contains(body, "class=\"modal\" id=\"dialog-relay-new\" open>")
   assert dashboard.render_open(i18n.English, view.System, unlisted, delete(1))
@@ -3219,7 +3217,7 @@ pub fn render_open_does_not_announce_the_refresh_test() {
       dashboard.RelayActionOpen(
         1,
         dashboard.EditRelayRoles,
-        Some(Roles(False, False)),
+        None,
         i18n.Translated(i18n.RelayRoleRequired),
       ),
     )

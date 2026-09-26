@@ -1,6 +1,7 @@
 //// `relays` の読み書き。テーブルは本体の移行の版 4（`account_store.gleam` の
 //// `create_relays_table`）で作る。クエリーはすべて `account_store.execute` を
-//// 通す。列 `observe` は `relay_list.Roles.monitor` に写す（#62 の分割の設計 2）。
+//// 通す。列 `observe`（監視）と `bunker` の組は `relay_list.Roles` に写し、どちらも
+//// false の行は読まない。
 
 import gleam/dynamic/decode
 import gleam/result
@@ -13,8 +14,8 @@ pub type Relay {
   Relay(id: Int, url: String, roles: Roles)
 }
 
-/// 全行の読み込み。
-const select_sql = "SELECT id, url, observe, bunker FROM relays ORDER BY id"
+/// 用途のある行の読み込み。
+const select_sql = "SELECT id, url, observe, bunker FROM relays WHERE observe OR bunker ORDER BY id"
 
 /// 1 行の挿入。
 const insert_sql = "INSERT INTO relays (url, observe, bunker) VALUES ($1, $2, $3)
@@ -26,7 +27,7 @@ const update_roles_sql = "UPDATE relays SET observe = $2, bunker = $3 WHERE id =
 /// 1 行の削除。
 const delete_sql = "DELETE FROM relays WHERE id = $1"
 
-/// 全行を `id` の順に読む。`timeouts.load_ms` を期限にする（`load_snapshot` の
+/// 用途のある行を `id` の順に読む。`timeouts.load_ms` を期限にする（`load_snapshot` の
 /// トランザクションの中では、同じ値が外側の期限としてすでに効いている）。
 pub fn list(
   db: pog.Connection,
@@ -39,7 +40,7 @@ pub fn list(
   |> result.map(fn(returned) { returned.rows })
 }
 
-/// 1 行を追加する。URL と用途の検査は呼び出し側が行う（`relay_list.open` と
+/// 1 行を追加する。URL の検査は呼び出し側が行う（`relay_list.open` と
 /// 同じ判定を使う）。同じ URL がすでにあれば `RelayAlreadyRegistered`。
 pub fn insert(
   db: pog.Connection,
@@ -50,8 +51,8 @@ pub fn insert(
   use returned <- result.try(
     pog.query(insert_sql)
     |> pog.parameter(pog.text(url))
-    |> pog.parameter(pog.bool(roles.monitor))
-    |> pog.parameter(pog.bool(roles.bunker))
+    |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
+    |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
     |> pog.returning(relay_decoder())
     |> pog.timeout(timeouts.write_ms)
     |> account_store.execute(db),
@@ -71,8 +72,8 @@ pub fn update_roles(
 ) -> Result(Nil, StoreError) {
   pog.query(update_roles_sql)
   |> pog.parameter(pog.int(id))
-  |> pog.parameter(pog.bool(roles.monitor))
-  |> pog.parameter(pog.bool(roles.bunker))
+  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
+  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
   |> account_store.execute_on_one_row(
     db,
     timeouts,
@@ -96,15 +97,16 @@ pub fn delete(
 }
 
 /// `relays` の 1 行を読むデコーダー。列の順序は `select_sql` / `insert_sql` の
-/// `RETURNING` と同じ。
+/// `RETURNING` と同じ。`observe` と `bunker` がどちらも false の行は失敗にする
+/// （`select_sql` がその行を除くので、通常は通らない）。
 fn relay_decoder() -> decode.Decoder(Relay) {
   use id <- decode.field(0, decode.int)
   use url <- decode.field(1, decode.string)
   use observe <- decode.field(2, decode.bool)
   use bunker <- decode.field(3, decode.bool)
-  decode.success(Relay(
-    id:,
-    url:,
-    roles: relay_list.Roles(monitor: observe, bunker: bunker),
-  ))
+  case relay_list.roles_from(monitor: observe, bunker: bunker) {
+    Ok(roles) -> decode.success(Relay(id:, url:, roles:))
+    Error(Nil) ->
+      decode.failure(Relay(id:, url:, roles: relay_list.Both), "relay roles")
+  }
 }
