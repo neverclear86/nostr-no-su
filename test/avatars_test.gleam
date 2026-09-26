@@ -12,6 +12,7 @@ import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/relay_list
 import support/loopback_relay
 import support/nip46_client.{account_for}
+import support/poll
 
 const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
 
@@ -189,7 +190,8 @@ pub fn pictures_keep_a_late_result_for_the_next_lookup_test() {
 }
 
 /// 監視の用途のリレーへ kind 0 を問い合わせ、署名者ごとに `created_at` が最大の 1 件の URL を返す。
-/// kind 0 でないイベントは使わない。
+/// kind 0 でないイベントは使わない。取得は `wait_ms` を超えうるので、URL が返るまで引き直す。
+/// `retry_ms` 0 で、期限切れで失敗した取得も次の引き直しで取り直す。
 pub fn pictures_ask_monitor_relays_for_the_newest_metadata_test() {
   let signer = account_for(signer_key)
   let pubkey = account.pubkey_hex(signer)
@@ -223,8 +225,15 @@ pub fn pictures_ask_monitor_relays_for_the_newest_metadata_test() {
       ),
     )
 
-  assert avatars.pictures(start(60_000, 60_000), relay_list_name, [pubkey])
-    == dict.from_list([#(pubkey, "https://x.test/new.png")])
+  let name = start(60_000, 0)
+  assert poll.until(
+    fn() {
+      avatars.pictures(name, relay_list_name, [pubkey])
+      == dict.from_list([#(pubkey, "https://x.test/new.png")])
+    },
+    10_000,
+    50,
+  )
   loopback_relay.stop_relay(relay)
 }
 
