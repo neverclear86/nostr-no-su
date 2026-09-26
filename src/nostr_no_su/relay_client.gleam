@@ -694,7 +694,7 @@ fn record_inbound(session: Session, msg: stratus.Message(Msg)) -> Session {
   case msg {
     stratus.User(_) -> session
     stratus.Text(_) | stratus.Binary(_) | stratus.Pong(_) ->
-      Session(..session, keepalive: keepalive.received(session.keepalive))
+      Session(..session, keepalive: keepalive.received())
   }
 }
 
