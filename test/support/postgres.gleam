@@ -8,7 +8,6 @@ import gleam/option.{type Option, None, Some}
 import nostr_no_su/bunker/account_store
 import nostr_no_su/random
 import nostr_no_su/task.{type Deadline}
-import nostr_no_su/time
 import pog
 
 /// 接続プールを起動し、クエリーに応答するまで待ってからその名前を返す。
@@ -44,11 +43,11 @@ fn probe_until(db: pog.Connection, deadline: Deadline) -> Bool {
   let probed =
     task.start(fn() {
       pog.query("SELECT 1")
-      |> pog.timeout(int.max(ms_left(deadline), 1))
+      |> pog.timeout(int.max(task.remaining_ms(deadline), 1))
       |> account_store.execute(db)
     })
     |> task.await(deadline)
-  case probed, ms_left(deadline) {
+  case probed, task.remaining_ms(deadline) {
     Ok(Ok(_returned)), _ -> True
     _, left if left <= 0 -> False
     _, left -> {
@@ -56,11 +55,6 @@ fn probe_until(db: pog.Connection, deadline: Deadline) -> Bool {
       probe_until(db, deadline)
     }
   }
-}
-
-/// 期限までの残りのミリ秒。過ぎていれば 0 以下。
-fn ms_left(deadline: Deadline) -> Int {
-  deadline.at_ms - time.monotonic_ms()
 }
 
 /// 結果を読まない文を 1 つ実行する。
