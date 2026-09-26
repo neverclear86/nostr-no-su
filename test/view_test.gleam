@@ -133,7 +133,8 @@ pub fn button_kinds_map_to_daisyui_classes_test() {
   ]
   use #(kind, placement, class) <- list.each(cases)
   let html = case placement {
-    view.InRow -> element.to_string(view.button_link("/", "t", kind))
+    view.InRow ->
+      element.to_string(view.button_link("/", view.TextFace("t"), kind))
     view.InForm | view.InDialog(..) ->
       element.to_string(view.post_form("/", [], "t", kind, placement))
   }
@@ -468,7 +469,7 @@ pub fn compact_dialog_trigger_hides_the_text_on_narrow_screens_test() {
   let button =
     element.to_string(view.dialog_trigger(
       "dialog-x",
-      view.CompactTrigger(view.qr_code_icon(), "Connection QR code"),
+      view.CompactFace(view.qr_code_icon(), "Connection QR code"),
       view.PrimaryButton,
     ))
   assert button
@@ -500,7 +501,7 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
     view.dialog_button(
       i18n.English,
       "dialog-x",
-      view.IconTextTrigger(view.plus_icon(), "Add"),
+      view.IconTextFace(view.plus_icon(), "Add"),
       view.PrimaryButton,
       "Title",
       fn(placement) {
@@ -530,7 +531,7 @@ pub fn dialog_button_draws_the_dialog_with_the_given_opening_test() {
     view.dialog_button(
       i18n.English,
       "dialog-x",
-      view.TextTrigger("Revoke"),
+      view.TextFace("Revoke"),
       view.GhostButton,
       "Title",
       fn(placement) { view.dialog_actions(placement, []) },
@@ -546,7 +547,7 @@ pub fn icon_only_dialog_button_names_itself_by_label_test() {
     view.dialog_button(
       i18n.English,
       "dialog-x",
-      view.IconOnlyTrigger(view.trash_icon(), "Delete"),
+      view.IconOnlyFace(view.trash_icon(), "Delete"),
       view.DangerGhostButton,
       "Title",
       fn(_) { [] },
@@ -564,7 +565,7 @@ pub fn text_dialog_button_shows_only_the_text_test() {
     view.dialog_button(
       i18n.English,
       "dialog-x",
-      view.TextTrigger("Revoke"),
+      view.TextFace("Revoke"),
       view.GhostButton,
       "Title",
       fn(_) { [] },
@@ -572,6 +573,47 @@ pub fn text_dialog_button_shows_only_the_text_test() {
     )
   assert element.to_string(button)
     == "<button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">Revoke</button>"
+}
+
+/// ボタンの見た目のリンクは、ダイアログを開くボタンと同じ顔の属性と中身を、`href` と並べて出す。
+pub fn button_link_shows_each_face_test() {
+  let ghost = "btn btn-ghost btn-sm focus-visible:outline-base-content"
+  assert element.to_string(view.button_link(
+      "/",
+      view.IconTextFace(view.plus_icon(), "Add"),
+      view.GhostButton,
+    ))
+    == "<a class=\""
+    <> ghost
+    <> "\" href=\"/\">"
+    <> element.to_string(view.plus_icon())
+    <> "Add</a>"
+  assert element.to_string(view.button_link(
+      "/",
+      view.IconOnlyFace(view.trash_icon(), "Delete"),
+      view.GhostButton,
+    ))
+    == "<a aria-label=\"Delete\" class=\""
+    <> ghost
+    <> "\" href=\"/\">"
+    <> element.to_string(view.trash_icon())
+    <> "</a>"
+  assert element.to_string(view.button_link(
+      "/",
+      view.TextFace("Open"),
+      view.GhostButton,
+    ))
+    == "<a class=\"" <> ghost <> "\" href=\"/\">Open</a>"
+  assert element.to_string(view.button_link(
+      "/",
+      view.CompactFace(view.qr_code_icon(), "QR"),
+      view.GhostButton,
+    ))
+    == "<a class=\""
+    <> ghost
+    <> "\" href=\"/\" title=\"QR\">"
+    <> element.to_string(view.qr_code_icon())
+    <> "<span class=\"max-sm:sr-only\">QR</span></a>"
 }
 
 /// ダイアログの `id` は `dialog-` の後に部品を `-` で繋ぐ。

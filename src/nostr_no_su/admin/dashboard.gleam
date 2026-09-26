@@ -1174,7 +1174,7 @@ fn add_trigger(
   text: String,
   kind: view.ButtonKind,
 ) -> Element(msg) {
-  view.dialog_trigger(id, view.IconTextTrigger(view.plus_icon(), text), kind)
+  view.dialog_trigger(id, view.IconTextFace(view.plus_icon(), text), kind)
 }
 
 /// 「アカウントを追加」のダイアログ（「既存の秘密鍵を登録」と「新しい秘密鍵を生成」のタブ）。`dialog` が
@@ -1430,7 +1430,7 @@ fn account_item(
         session_count(language, sessions, account.signer),
         view.dialog_trigger(
           connection_qr_dialog_id(account.signer),
-          view.CompactTrigger(
+          view.CompactFace(
             view.qr_code_icon(),
             i18n.text(language, i18n.ConnectionQr),
           ),
@@ -1534,7 +1534,7 @@ fn account_action_trigger(
 ) -> Element(msg) {
   view.dialog_trigger(
     account_dialog_id(signer, action),
-    view.IconTextTrigger(
+    view.IconTextFace(
       account_action_icon(action),
       i18n.text(language, account_action_row_title(action)),
     ),
@@ -1605,7 +1605,7 @@ fn unreadable_dialog(
   view.dialog_button(
     language,
     id,
-    view.IconTextTrigger(view.trash_icon(), text(i18n.Delete)),
+    view.IconTextFace(view.trash_icon(), text(i18n.Delete)),
     view.DangerGhostButton,
     text(account_action_title(DeleteAccount)),
     fn(placement) {
@@ -2700,7 +2700,7 @@ fn relay_action_dialog(
   view.dialog_button(
     language,
     relay_dialog_id(row.id, action),
-    view.IconOnlyTrigger(relay_action_icon(action), title),
+    view.IconOnlyFace(relay_action_icon(action), title),
     relay_action_button_kind(action),
     title,
     fn(placement) {
@@ -3193,7 +3193,7 @@ fn session_actions(
         view.dialog_button(
           language,
           permissions_id,
-          view.IconTextTrigger(view.pencil_icon(), text(i18n.EditPermissions)),
+          view.IconTextFace(view.pencil_icon(), text(i18n.EditPermissions)),
           view.GhostButton,
           text(i18n.EditPermissions),
           fn(placement) {
@@ -3212,7 +3212,7 @@ fn session_actions(
         view.dialog_button(
           language,
           session_dialog_id(session, revoke_segment),
-          view.TextTrigger(text(i18n.Revoke)),
+          view.TextFace(text(i18n.Revoke)),
           view.GhostButton,
           text(i18n.Revoke),
           fn(placement) {
@@ -3765,10 +3765,12 @@ fn plugin_page_link(
 ) -> List(Element(msg)) {
   case plugin.pages {
     [first, ..] -> [
-      view.icon_button_link(
+      view.button_link(
         plugin_page_href(plugin.name, first.key),
-        view.file_text_icon(),
-        i18n.text(language, i18n.OpenPluginPage),
+        view.IconTextFace(
+          view.file_text_icon(),
+          i18n.text(language, i18n.OpenPluginPage),
+        ),
         view.GhostButton,
       ),
     ]

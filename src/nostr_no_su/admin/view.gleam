@@ -117,7 +117,7 @@ pub type LanguageChoice {
 }
 
 /// 言語の切り替えに並べるボタンの順。ブラウザーの設定を先頭に置き、続けて `i18n.languages` の順。
-pub fn language_choices() -> List(LanguageChoice) {
+fn language_choices() -> List(LanguageChoice) {
   [BrowserLanguage, ..list.map(i18n.languages, ChosenLanguage)]
 }
 
@@ -572,7 +572,7 @@ fn icon(class: String, path: String) -> Element(msg) {
 
 /// Lucide（ISC）の 24 × 24 のストロークアイコン。`currentColor` で描き、読み上げない飾りに
 /// する。
-pub fn lucide_icon(class: String, paths: List(String)) -> Element(msg) {
+fn lucide_icon(class: String, paths: List(String)) -> Element(msg) {
   icon_svg(
     class,
     "0 0 24 24",
@@ -1098,15 +1098,22 @@ fn form_layout(placement: Placement) -> List(Attribute(msg)) {
   }
 }
 
-/// ボタンの見た目のリンク。ダッシュボードの行で、操作のページへの入口に使う。
+/// ボタンの見た目のリンク。別のページへ移る操作を、ボタンと同じ形で並べるときに使う。中身は
+/// `face` で決める。
 pub fn button_link(
   href: String,
-  text: String,
+  face: ButtonFace(msg),
   kind: ButtonKind,
 ) -> Element(msg) {
-  html.a([attribute.href(href), attribute.class(button_class(kind, InRow))], [
-    html.text(text),
-  ])
+  let #(attributes, content) = face_parts(face)
+  html.a(
+    [
+      attribute.href(href),
+      attribute.class(button_class(kind, InRow)),
+      ..attributes
+    ],
+    content,
+  )
 }
 
 /// ボタンの種類と置き場所の組ごとのクラス。行に置くものは小さく（`btn-sm`）、ページのフォームの末尾に
@@ -1871,17 +1878,35 @@ pub fn truncated_id(
   ])
 }
 
-/// ダイアログを開くボタンの見た目。
-pub type DialogTrigger(msg) {
-  /// アイコンと語のボタン（`icon_button_link` と同じ見た目）。節の見出しの操作、「はじめに」の帯の段の追加の操作、アカウントとセッションの空の節の操作、セッションの行の権限の編集、アカウントの行と読み込めなかった行の操作に使う。
-  IconTextTrigger(icon: Element(msg), text: String)
-  /// アイコンだけのボタン（`icon_only_link` と同じ見た目）。語は読み上げのための `aria-label` に置く。
-  IconOnlyTrigger(icon: Element(msg), label: String)
-  /// 語だけのボタン（`post_form` の `InRow` の送信ボタンと同じ見た目）。セッションの行の承認の取り消しに使う。
-  TextTrigger(text: String)
-  /// アイコンと語のボタンで、640px 未満では語を隠す（語は `title` と読み上げに残す）。アカウントの行の
-  /// 「接続 QR コード」に使う。
-  CompactTrigger(icon: Element(msg), text: String)
+/// ボタンの顔（中身の見せ方）。ダイアログを開くボタン（`dialog_trigger`）とボタンの見た目の
+/// リンク（`button_link`）が受け取る。
+pub type ButtonFace(msg) {
+  /// アイコンと語を並べる。操作の語を常に見せるときに使う。
+  IconTextFace(icon: Element(msg), text: String)
+  /// アイコンだけを見せ、語は読み上げのための `aria-label` に置く。同じ操作が行ごとに並び、
+  /// アイコンだけで操作が伝わるときに使う。
+  IconOnlyFace(icon: Element(msg), label: String)
+  /// 語だけを出す。操作を表すアイコンが無いときに使う。
+  TextFace(text: String)
+  /// アイコンと語を並べ、640px 未満では語を隠す（語は `title` と読み上げに残す）。広い画面では
+  /// 語を見せ、狭い画面では行に収まらないときに使う。
+  CompactFace(icon: Element(msg), text: String)
+}
+
+/// 顔ごとの、ボタンとリンクに足す属性と中身。`IconOnlyFace` は `aria-label`、`CompactFace` は
+/// `title` を足し、ほかの顔は属性を足さない。
+fn face_parts(
+  face: ButtonFace(msg),
+) -> #(List(Attribute(msg)), List(Element(msg))) {
+  case face {
+    IconTextFace(icon:, text:) -> #([], [icon, html.text(text)])
+    IconOnlyFace(icon:, label:) -> #([attribute.aria_label(label)], [icon])
+    TextFace(text:) -> #([], [html.text(text)])
+    CompactFace(icon:, text:) -> #([attribute.title(text)], [
+      icon,
+      html.span([attribute.class("max-sm:sr-only")], [html.text(text)]),
+    ])
+  }
 }
 
 /// ダイアログの `id`。`dialog-` に `parts` を `-` で繋ぐ。`parts` には節の語、行の DB の id か 16 進の pubkey、操作のセグメントのような決まった形の値だけを渡し、ラベルのような利用者の文字列を渡さない。
@@ -1904,62 +1929,37 @@ pub type DialogOpening {
 pub fn dialog_button(
   language: Language,
   id: String,
-  trigger: DialogTrigger(msg),
+  face: ButtonFace(msg),
   kind: ButtonKind,
   title: String,
   content: fn(Placement) -> List(Element(msg)),
   opening: DialogOpening,
 ) -> List(Element(msg)) {
   [
-    dialog_trigger(id, trigger, kind),
+    dialog_trigger(id, face, kind),
     dialog(language, id, title, content, i18n.Cancel, opening),
   ]
 }
 
 /// `id` のダイアログを開くボタン。`commandfor` で `id` を指し、`command="show-modal"` で開く
-/// （`type="button"` で、何も送らない）。同じダイアログを開くボタンは複数あってよい。
+/// （`type="button"` で、何も送らない）。中身は `face` で決める。同じダイアログを開くボタンは
+/// 複数あってよい。
 pub fn dialog_trigger(
   id: String,
-  trigger: DialogTrigger(msg),
+  face: ButtonFace(msg),
   kind: ButtonKind,
 ) -> Element(msg) {
-  let command = [
-    attribute.type_("button"),
-    attribute.attribute("commandfor", id),
-    attribute.attribute("command", "show-modal"),
-  ]
-  case trigger {
-    IconTextTrigger(icon:, text:) ->
-      html.button([attribute.class(button_class(kind, InRow)), ..command], [
-        icon,
-        html.text(text),
-      ])
-    IconOnlyTrigger(icon:, label:) ->
-      html.button(
-        [
-          attribute.aria_label(label),
-          attribute.class(button_class(kind, InRow)),
-          ..command
-        ],
-        [icon],
-      )
-    TextTrigger(text:) ->
-      html.button([attribute.class(button_class(kind, InRow)), ..command], [
-        html.text(text),
-      ])
-    CompactTrigger(icon:, text:) ->
-      html.button(
-        [
-          attribute.title(text),
-          attribute.class(button_class(kind, InRow)),
-          ..command
-        ],
-        [
-          icon,
-          html.span([attribute.class("max-sm:sr-only")], [html.text(text)]),
-        ],
-      )
-  }
+  let #(attributes, content) = face_parts(face)
+  html.button(
+    [
+      attribute.type_("button"),
+      attribute.attribute("commandfor", id),
+      attribute.attribute("command", "show-modal"),
+      attribute.class(button_class(kind, InRow)),
+      ..attributes
+    ],
+    content,
+  )
 }
 
 /// ダイアログ。題（`id` に `-title` を付けた `id` の `h2`。`aria-labelledby` が指す）と、`content` に
@@ -2022,36 +2022,6 @@ pub fn radio_tabs(
       ]
     })
       |> list.flatten,
-  )
-}
-
-/// アイコン＋語のボタンのリンク。プラグインの行のページへのリンクに使う。
-pub fn icon_button_link(
-  href: String,
-  icon: Element(msg),
-  text: String,
-  kind: ButtonKind,
-) -> Element(msg) {
-  html.a([attribute.href(href), attribute.class(button_class(kind, InRow))], [
-    icon,
-    html.text(text),
-  ])
-}
-
-/// アイコンだけのボタンのリンク。語は読み上げのための `aria-label` に置く。
-pub fn icon_only_link(
-  href: String,
-  icon: Element(msg),
-  label: String,
-  kind: ButtonKind,
-) -> Element(msg) {
-  html.a(
-    [
-      attribute.href(href),
-      attribute.aria_label(label),
-      attribute.class(button_class(kind, InRow)),
-    ],
-    [icon],
   )
 }
 
@@ -2174,7 +2144,7 @@ const info_icon_paths = [
 /// `back_link` の左向きの矢印（Lucide の arrow-left）。
 const arrow_left_icon_paths = ["m12 19-7-7 7-7", "M19 12H5"]
 
-/// `check_circle_icon` のストローク（Lucide の circle-check）。
+/// 丸のチェックのストローク（Lucide の circle-check）。
 const check_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
 ]
@@ -2185,7 +2155,7 @@ const warning_triangle_icon_paths = [
   "M12 9v4", "M12 17h.01",
 ]
 
-/// `x_circle_icon` のストローク（Lucide の circle-x）。
+/// 丸の×のストローク（Lucide の circle-x）。
 const x_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
 ]
@@ -2233,19 +2203,9 @@ pub fn info_icon() -> Element(msg) {
   lucide_icon("size-4", info_icon_paths)
 }
 
-/// `Success` のトーンのアイコン（Lucide の circle-check）。
-pub fn check_circle_icon() -> Element(msg) {
-  lucide_icon("size-4", check_circle_icon_paths)
-}
-
 /// `Warning` のトーンのアイコン（Lucide の triangle-alert）。
 pub fn warning_triangle_icon() -> Element(msg) {
   lucide_icon("size-4", warning_triangle_icon_paths)
-}
-
-/// `Failure` のトーンのアイコン（Lucide の circle-x）。
-pub fn x_circle_icon() -> Element(msg) {
-  lucide_icon("size-4", x_circle_icon_paths)
 }
 
 /// コピーのアイコンのストローク（Lucide の copy）。
