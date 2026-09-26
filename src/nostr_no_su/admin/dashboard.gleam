@@ -1,24 +1,7 @@
-//// 管理 UI のダッシュボード、承認ページ、通知ページの描画と、表示する状態の型、パスと
-//// フォームの欄の名前の定義と、ダイアログに出すフォームの中身。描画は状態の
-//// スナップショット（純粋なデータ）から HTML 文字列を組み立てるだけで、プロセスにも IO にも
-//// 触れない。
-////
-//// 埋め込む値はすべてユーザー由来になりうる（リレー URL、クライアント pubkey、
-//// アカウントのラベル、表示する理由）ため、テキストか属性値として lustre に渡し、
-//// エスケープを文字列化に任せる（`admin/view` の規則に従う）。文言は `admin/i18n` から
-//// 表示の言語で引き、文字列リテラルで書かない（同じく `admin/view` の規則）。
-////
-//// パスとフォームの欄の名前は、ルーティング（`admin`）とここのフォームが同じ定義を見るようここに置く。
-//// ダッシュボードのダイアログに出すフォームの中身（リレーの `new_relay_form`、`relay_action_form`、
-//// アカウントの `import_form`、`generate_form`、`account_action_form`、`unreadable_delete_form`、
-//// `label_fieldset`、セッションの `permissions_form`、クライアントの接続の `connect_content`、
-//// `connect_form`）もここに置く。`label_fieldset` を除くこれらのフォームは末尾の引数 `placement` で
-//// 送信の置き場所を受け、ダイアログは `view.dialog` が渡す `view.InDialog` を渡す。
-//// ページのモジュールがここを
-//// import するので、ページのモジュールに置くと import が循環する。
-//// ページ枠が使う定義
-//// （スタイルシートとテーマと言語の切り替えのパスセグメント、切り替えの欄の名前）と、
-//// パスセグメントからパスを組み立てる `segments_path` は `admin/view` に置く。
+//// 管理 UI のダッシュボード、承認ページ、通知ページの描画と、表示する状態の型、
+//// ダイアログに出すフォームの中身。スナップショット（純粋なデータ）から HTML 文字列を
+//// 組み立てるだけで、プロセスにも IO にも触れない。描画の規則は `admin/view` に置く。
+//// パスとフォームの欄の名前は、ルーティング（`admin`）と共有する定義としてここに置く。
 
 import gleam/int
 import gleam/list
@@ -120,7 +103,7 @@ type PluginDetail {
 
 /// 承認待ちのカードと承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
 /// npub、そうでなければ 16 進。
-pub type SignerName {
+type SignerName {
   /// アカウント一覧にある署名者。ラベルと省略した npub で出す。
   KnownSigner(label: String, npub: String)
   /// 一覧に無い署名者、または一覧を得られないとき。省略した 16 進で出す。
@@ -128,7 +111,7 @@ pub type SignerName {
 }
 
 /// アカウント一覧と突き合わせて、署名者の表示を決める。
-pub fn signer_name(
+fn signer_name(
   accounts: Result(List(AccountRow), i18n.Reason),
   signer: String,
 ) -> SignerName {
@@ -169,24 +152,21 @@ pub type SessionRow {
   )
 }
 
-/// ダッシュボードが表示する状態の一式。
+/// ダッシュボードが表示する状態の一式。一覧の欄は `Result` で、読み込み中・応答なし・
+/// 締め切り超過などで得られないときは、その理由を `Error` で持つ。
 pub type Snapshot {
   Snapshot(
-    /// アカウントの一覧。得られないとき（読み込み中、応答なし、締め切り超過）は
-    /// 表示する理由。
+    /// アカウントの一覧。
     accounts: Result(List(AccountRow), i18n.Reason),
-    /// 直近の読み込みで飛ばされた行の一覧。得られないとき（読み込み中、応答なし、
-    /// 締め切り超過）は枠ごと描かない。
+    /// 直近の読み込みで飛ばされた行の一覧。得られないときは枠ごと描かない。
     skipped: Result(List(SkippedRow), i18n.Reason),
-    /// 承認待ちの一覧。得られないとき（読み込み中、応答なし、締め切り超過）は
-    /// 表示する理由。
+    /// 承認待ちの一覧。
     pending: Result(List(PendingRow), i18n.Reason),
-    /// リレーの一覧。得られないとき（`relay_list` の応答なし、DB の障害）は表示する
-    /// 理由。この一覧自体は締め切りの外で得るが、行ごとの用途の状態は締め切りまでに
+    /// リレーの一覧。`relay_list` の応答なしか DB の障害で得られないことがある。
+    /// この一覧自体は締め切りの外で得るが、行ごとの用途の状態は締め切りまでに
     /// 答えなければ `RoleState.Unanswered` になる。
     relays: Result(List(RelayRow), i18n.Reason),
-    /// 承認済みセッションの一覧。得られないとき（読み込み中、応答なし、締め切り
-    /// 超過）は表示する理由。
+    /// 承認済みセッションの一覧。
     sessions: Result(List(SessionRow), i18n.Reason),
     plugins: List(PluginRow),
     /// 起動時に読み込めなかったプラグインの一覧。0 件なら枠ごと描かない。
@@ -320,7 +300,7 @@ pub type RelayAction {
 /// 操作の一覧。ダッシュボードのボタンとダイアログはこの順に並べ、セグメントとの対応もここから引く。
 const relay_actions = [EditRelayRoles, DeleteRelay]
 
-/// アカウントのページのパスの先頭のセグメント。
+/// アカウントの POST 先のパスの先頭のセグメント。
 const accounts_segment = "accounts"
 
 /// リレーの POST 先のパスの先頭のセグメント。
@@ -350,8 +330,8 @@ pub const import_account_segments = [accounts_segment, "import"]
 /// 生成した鍵の登録の POST 先のパスセグメント。
 pub const register_generated_segments = [accounts_segment, "register-generated"]
 
-/// セッションのページの先頭のセグメント。
-pub const sessions_segment = "sessions"
+/// セッションの POST 先のパスの先頭のセグメント。
+const sessions_segment = "sessions"
 
 /// セッションの取り消しの操作の語。POST 先のパスの末尾と、取り消しのダイアログの `id` に使う。
 const revoke_segment = "revoke"
@@ -452,13 +432,8 @@ fn dashboard_refresh(
   }
 }
 
-/// スナップショットをダッシュボードのページに描画する。先頭に概要の帯を置き、承認待ち、アカウント、セッションの
-/// 3 つの一覧が同じ英語の理由で得られないときは、その直下にエラーの色の囲みで理由を 1 回だけ出す。続けて
-/// 承認待ちが 1 件以上あるとき（または一覧を得られないとき）だけ全幅の帯を置き、アカウントか
-/// バンカーに使うリレーが 0 件のときは「はじめに」の帯をその下に置く。その下は
-/// 幅が 1120px を超える画面では、アカウント（末尾に読み込めなかったアカウントの枠）とセッションを左の列に、
-/// リレーとプラグイン（末尾に読み込めなかったプラグインの枠）を右の列に、1.62 対 1 の幅で置く 2 列で、
-/// 1120px 以下ではこの順に 1 列に並ぶ。
+/// スナップショットをダッシュボードのページに描画する。複数の一覧が同じ理由で
+/// 得られないときは、概要の帯の直下に理由を 1 回だけ出す。
 pub fn render(
   language: Language,
   theme: view.Theme,
@@ -859,11 +834,8 @@ fn overview_rail(language: Language, snapshot: Snapshot) -> Element(msg) {
   )
 }
 
-/// 概要の帯の 1 項目。アイコンと見出し、値、補足の語を縦に並べ、`item.emphasis` が `Unlinked`
-/// でなければ同じページの節（`anchor`）へのリンクにする。`wide` が真なら狭い画面で全幅を
-/// 占めさせる。`Highlighted` の項目は、`wide` のときだけ地を塗り（塗る項目は承認待ちだけで、
-/// 承認待ちは常に `wide` である）、見出しと補足を補助の文字の色にせず、塗りの上の文字の色を
-/// 継がせる。リンクにしない項目には、マウスを重ねたときの色を付けない。
+/// 概要の帯の 1 項目。`item.emphasis` が `Unlinked` でなければ同じページの節（`anchor`）への
+/// リンクにし、`wide` が真なら狭い画面で全幅を占めさせる。`Highlighted` の地は `wide` のときだけ塗る。
 fn overview_cell(
   language: Language,
   icon: Element(msg),
@@ -1217,9 +1189,9 @@ fn add_account_dialog(
   )
 }
 
-/// 既存の秘密鍵の登録のフォーム（ページの枠を含まない）。nsec の伏せ字の欄とラベルの欄を送る。nsec の欄の
-/// 説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の `aria-describedby` から指す。`label` は
-/// ラベルの欄に入れる値。アカウントの追加のダイアログが使う。
+/// アカウントの追加のダイアログに出す、既存の秘密鍵の登録のフォーム。nsec の伏せ字の欄とラベルの欄を
+/// 送る。nsec の欄の説明（`ImportDescription`）は見出しの横の ⓘ で開く補足にし、欄の
+/// `aria-describedby` から指す。`label` はラベルの欄に入れる値。
 pub fn import_form(
   language: Language,
   label: String,
@@ -1246,8 +1218,8 @@ pub fn import_form(
   ]
 }
 
-/// 新しい秘密鍵の生成の説明とフォーム（ページの枠を含まない）。フォームは欄を持たず、送信のボタンは枠の
-/// ボタンにする。アカウントの追加のダイアログが使う。
+/// アカウントの追加のダイアログに出す、新しい秘密鍵の生成の説明とフォーム。欄を持たず、
+/// 送信のボタンだけのフォームにする。
 pub fn generate_form(
   language: Language,
   placement: view.Placement,
@@ -1401,9 +1373,8 @@ fn shared_failure_alert(
   }
 }
 
-/// アカウント 1 件。上の段にアイコン（`account_icon`）、識別、セッションの件数、「接続 QR コード」のダイアログを
-/// 開くボタンを並べ、下に「接続 URI と操作」の畳みを置く。幅が足りなければ件数とボタンを次の行へ回す。畳みの
-/// 後に、行の操作と接続 QR コードのダイアログを置く（閉じた畳みの中では開いた状態で描いても見えない）。
+/// アカウント 1 件の行。行の操作と接続 QR コードのダイアログは畳みの外に置く
+/// （畳みの中では開いた状態で描いても見えないため）。
 fn account_item(
   language: Language,
   sessions: Result(List(SessionRow), i18n.Reason),
@@ -1646,7 +1617,7 @@ fn connection_qr_dialog_id(signer: String) -> String {
 
 /// 接続 QR コードのダイアログ。アカウントの識別、バンカーに使うリレーが無いときの警告、secret 入りの URI と
 /// 要承認の URI のタブ（`uri_tab`。タブの `name` はダイアログの `id` に `-tab` を付ける）、カメラ用のコードの
-/// 貼り方、この URI が使うバンカーのリレーの URL の順に並べる。符号化できない URI はその位置に理由を出し、
+/// 貼り方、URI に書かれたバンカーのリレーの URL の順に並べる。符号化できない URI はその位置に理由を出し、
 /// コピー欄は残す。
 fn connection_qr_dialog(
   language: Language,
@@ -1721,7 +1692,7 @@ fn uri_tab(
   ])
 }
 
-/// この URI が使うバンカーのリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに理由を出す。
+/// バンカー用途のリレーの URL の一覧。`relays` が `Error` なら一覧の代わりに理由を出す。
 /// `Unused` でない `bunker` の用途を持つ行だけを出す。
 fn bunker_relay_list(
   language: Language,
@@ -1883,12 +1854,8 @@ fn account_action_button_kind(action: AccountAction) -> view.ButtonKind {
   }
 }
 
-/// アカウント 1 件への操作の説明と、操作を実行する 1 つのフォーム（ページの枠を含まない）。
-/// ダッシュボードの操作のダイアログが使う。ラベルの編集の欄には、`label` が `Some` ならその値（入力の誤りか
-/// 409 で再描画するときに送られた値）を、`None` なら `row` の保存済みのラベルを入れ、欄の補足の `id` を
-/// `hint_id` にする。送信のボタンの種類は操作ごとに決める（ラベルの保存は主、secret の作り直しと秘密鍵の
-/// 表示は warning の枠、削除は危険）。送信のボタンの文言は、見出しとボタンの語（`account_action_title`）
-/// とは別に持つ。削除の説明の警告は畳まずに出す。
+/// アカウントの操作のダイアログに出す、操作の説明と実行のフォーム。`label` はラベルの編集の
+/// 欄に戻す値（`None` なら `row` の保存済みのラベルを入れる）で、`hint_id` は欄の補足の `id`。
 fn account_action_form(
   language: Language,
   row: AccountRow,
@@ -1954,10 +1921,8 @@ fn account_action_form(
   }
 }
 
-/// 読み込みで飛ばされた行の削除の説明とフォーム（ページの枠を含まない）。
-/// ダッシュボードの読み込めなかった行の削除のダイアログが使う。説明は、行を消すこと、nsec を控えて
-/// いなければ失うこと（強調して畳まずに出す）、以前のマスターキーに戻せば控えられること、セッションと
-/// 承認待ちも消えることの順に並べる。送信のボタンは危険のボタンにする。
+/// 読み込めなかった行の削除のダイアログに出す、説明と削除のフォーム。nsec を控えて
+/// いなければ失う警告は強調して畳まずに出す。
 fn unreadable_delete_form(
   language: Language,
   row: SkippedRow,
@@ -1986,9 +1951,8 @@ fn unreadable_delete_form(
   ]
 }
 
-/// アカウントの追加のダイアログのラベルの欄の補足の `id`。ラベルの欄が 1 つだけなので固定の値にする。行ごとの
-/// ラベルの編集のダイアログはダイアログの `id` に `-label-hint` を付けた値を、生成した鍵のダイアログは
-/// `dialog-result-label-hint` を使う。
+/// アカウントの追加のダイアログのラベルの欄の補足の `id`。このダイアログのラベルの欄は
+/// 1 つだけなので固定の値にする。
 const label_hint_id = "label-hint"
 
 /// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。アカウントの追加、生成した鍵、
@@ -2099,9 +2063,8 @@ fn refresh_note(
   }
 }
 
-/// 承認待ち 1 件のカード。ダッシュボードの承認待ちの帯と承認ページが使う。左に残り時間の円、右にクライアントの
-/// 公開鍵（指紋、省略、コピー）と secret の提示の区別、署名者、失効までを置き、下に権限のチップと承認・拒否のボタンを
-/// 並べる。secret が一致しないときは枠を warning の色にし、署名者の上に `WrongSecretNotice` の囲みを置く。
+/// 承認待ち 1 件のカード。secret が一致しないときは枠を warning の色にし、
+/// `WrongSecretNotice` の囲みを出す。
 fn pending_card(
   language: Language,
   signer: SignerName,
@@ -2171,8 +2134,12 @@ fn pending_card(
   ])
 }
 
-/// 残り時間の円。600 秒（承認待ちの寿命）を満たんとし、`pathLength="600"` の円に `stroke-dasharray` で
-/// 残りの秒だけの弧を描き、中央に「分:秒」を出す。60 秒未満は弧と数字を warning の色にする。円は飾りにし、
+/// 失効までの残りがこの秒数を下回る承認待ちを、warning の色に変える境界（秒）。
+const expiry_warning_seconds = 60
+
+/// 残り時間の円。承認待ちの寿命（`engine.pending_ttl_seconds`）を満たんとし、その秒数を
+/// `pathLength` とする円に `stroke-dasharray` で残りの秒だけの弧を描き、中央に「分:秒」を
+/// 出す。残り `expiry_warning_seconds` 秒未満は弧と数字を warning の色にする。円は飾りにし、
 /// 残り時間は囲みの `aria-label` で読み上げる。`rows` は広い画面で円が跨ぐ行のクラスである。
 fn countdown_ring(
   language: Language,
@@ -2181,7 +2148,7 @@ fn countdown_ring(
 ) -> Element(msg) {
   let remaining = int.clamp(seconds, 0, engine.pending_ttl_seconds)
   let clock = view.countdown(remaining)
-  let #(arc_class, clock_class) = case remaining < 60 {
+  let #(arc_class, clock_class) = case remaining < expiry_warning_seconds {
     True -> #(
       "fill-none stroke-6 stroke-warning",
       "absolute inset-0 grid place-items-center font-mono text-sm font-bold tabular-nums text-warning",
@@ -2239,10 +2206,10 @@ fn countdown_ring(
 }
 
 /// 失効までの値。「8:12（12:12:43 に失効）」の形で、残りの「分:秒」に続けて失効の時刻を `view.time_of_day`
-/// で出す。60 秒未満は先頭に warning の色の三角を置く。
+/// で出す。残り `expiry_warning_seconds` 秒未満は先頭に warning の色の三角を置く。
 fn expiry_value(language: Language, now: Int, seconds: Int) -> Element(msg) {
   let text = i18n.text(language, _)
-  let mark = case seconds < 60 {
+  let mark = case seconds < expiry_warning_seconds {
     True ->
       html.span(
         [attribute.class("mr-1 inline-block align-[-3px] text-warning")],
@@ -2440,8 +2407,8 @@ fn action_for_segment(
   list.find(actions, fn(action) { to_segment(action) == segment })
 }
 
-/// セッションの権限の保存のパスの末尾のセグメント。
-pub const session_permissions_segment = "permissions"
+/// セッションの権限の保存の POST 先のパスの末尾のセグメント。
+const session_permissions_segment = "permissions"
 
 /// セッションの権限の保存のパス（`/sessions/<signer>/<client>/permissions`）。
 pub fn session_permissions_path(signer: String, client: String) -> String {
@@ -2523,7 +2490,7 @@ fn signer_cell(
 
 /// 署名者の表示。アカウント一覧にある署名者はラベルと省略した npub を縦に、無い署名者は
 /// 省略した 16 進の pubkey だけを出す。
-pub fn signer_value(signer: SignerName) -> Element(msg) {
+fn signer_value(signer: SignerName) -> Element(msg) {
   case signer {
     KnownSigner(label:, npub:) ->
       html.div([attribute.class("flex flex-col gap-0.5")], [
@@ -2634,7 +2601,7 @@ fn role_hint(language: Language) -> List(Element(msg)) {
 }
 
 /// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
-/// アカウントにも接続できないことを伝える。リレーの節と接続 QR コードのダイアログで使う。
+/// アカウントにも接続できないことを伝える。
 fn no_bunker_relay_alert(
   language: Language,
   relays: Result(List(RelayRow), i18n.Reason),
@@ -2725,7 +2692,7 @@ fn relay_action_dialog(
   )
 }
 
-/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。閉じた状態で描く追加のダイアログが使う。
+/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。
 pub const new_relay_roles = relay_list.BunkerOnly
 
 /// リレーの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 1 のボタンが開く。
@@ -2899,8 +2866,8 @@ fn relay_role(
   )
 }
 
-/// 用途 1 つぶんの接続状態のバッジ。ダッシュボードの行と、用途の編集のフォーム（ダイアログと
-/// ページ）の用途のチェックが使う。
+/// 用途 1 つぶんの接続状態のバッジ。行の用途のマスと、用途の編集のダイアログの
+/// チェックの横に出す。
 fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   let text = i18n.text(language, _)
   case state {
@@ -3090,9 +3057,7 @@ fn review_list(
   )
 }
 
-/// 承認済みセッション 1 件。広い画面では、クライアントの公開鍵（指紋、省略、コピー）、署名者、最終利用を
-/// 1 段目に、権限のチップと操作（`session_actions`）を 2 段目に並べる。幅 720px 以下では、クライアント、
-/// 署名者と最終利用、権限のチップ、ボタンの 4 段に組み替える。`dialog` は `session_actions` に渡す。
+/// 承認済みセッション 1 件の行。`dialog` はこの行の操作のダイアログ（`session_actions`）に渡す。
 fn session_item(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -3136,8 +3101,8 @@ fn session_item(
   ])
 }
 
-/// クライアントの公開鍵。鍵の指紋と、省略した表示とコピーのボタンを並べる。16 進の公開鍵でなければ指紋を
-/// 出さない。承認待ちのカードと承認済みのセッションの行が使う。
+/// クライアントの公開鍵。鍵の指紋と、省略した表示とコピーのボタンを並べる。16 進の公開鍵でなければ
+/// 指紋を出さない。
 fn client_pubkey_line(language: Language, client: String) -> Element(msg) {
   html.div([attribute.class("flex min-w-0 items-center gap-2")], [
     fingerprint.pubkey_svg(client, fingerprint.Colored, "size-6"),
