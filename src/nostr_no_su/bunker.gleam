@@ -605,10 +605,9 @@ type Change {
   LabelUpdated
 }
 
-/// 承認・拒否・取り消し・権限の編集と、NIP-46 の `connect`（セッションを開く、
-/// 承認待ちを登録する）・`logout`・セッション内のリクエストの最終利用の書き込み
-/// の種類。失敗のログ行の言い回しを決める。前の 4 つは `admin.SessionChange` と
-/// 同じ区分だが、`bunker` は管理 UI に依存できないので別に持つ。
+/// セッションと承認待ちの書き込みの種類。管理 UI からの承認・拒否・取り消し・権限の編集・
+/// `nostrconnect://` の接続と、NIP-46 の `connect`（セッションを開く、承認待ちを登録する）・
+/// `logout`・セッション内のリクエストの最終利用を分け、成功と失敗のログ行の言い回しを決める。
 type SessionChange {
   Approval
   Denial
@@ -976,18 +975,28 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         }),
       )
     Approve(token, reply) ->
-      apply_decision(state, reply, Approval, token, engine.approve)
+      decide_pending(state, reply, Approval, token, engine.approve)
     Deny(token, reply) ->
-      apply_decision(state, reply, Denial, token, engine.deny)
+      decide_pending(state, reply, Denial, token, engine.deny)
     OpenClientSession(signer:, client:, perms:, relays:, secret:, reply:) ->
-      open_client_session_for(
+      apply_session_change(
         state,
         reply,
-        signer,
-        client,
-        perms,
-        relays,
-        secret,
+        SessionOpening,
+        Some(#(signer, client)),
+        fn(eng) {
+          engine.open_client_session(
+            eng,
+            signer,
+            client,
+            perms,
+            relays,
+            secret,
+            random.hex(token_bytes),
+            time.now_seconds(),
+          )
+          |> result.map(with_response)
+        },
       )
     GetSessions(reply) ->
       answer(
@@ -1011,9 +1020,29 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         State(..state, reserved: dict.delete(state.reserved, #(signer, client))),
       ))
     Revoke(signer:, client:, reply:) ->
-      revoke_session(state, reply, signer, client)
+      apply_session_change(
+        state,
+        reply,
+        Revocation,
+        session_target(state.engine, signer, client),
+        fn(eng) {
+          engine.revoke(eng, signer, client)
+          |> result.map(without_response)
+          |> result.replace_error(session_not_approved)
+        },
+      )
     UpdatePerms(signer:, client:, perms:, reply:) ->
-      update_session_perms(state, reply, signer, client, perms)
+      apply_session_change(
+        state,
+        reply,
+        PermissionsUpdate,
+        session_target(state.engine, signer, client),
+        fn(eng) {
+          engine.set_perms(eng, signer, client, perms)
+          |> result.map(without_response)
+          |> result.replace_error(session_not_approved)
+        },
+      )
     SetPublisher(relay_url, scope, publish) ->
       actor.continue(
         State(
@@ -1532,48 +1561,67 @@ fn session_target(
   |> option.map(fn(_found) { #(signer, client) })
 }
 
-/// 失敗 1 件のログ行。値は署名者とクライアントの公開鍵と固定の文言の理由だけで、
-/// 承認ページのトークンを含めない。
-fn session_failure_line(
+/// 成功（`Ok`）か失敗（`Error` の理由）1 件のログ行。値は署名者とクライアントの公開鍵と
+/// 固定の文言の理由だけで、承認ページのトークンを含めない。
+fn session_change_line(
   change: SessionChange,
   signer: String,
   client: String,
-  reason: String,
+  outcome: Result(Nil, String),
 ) -> String {
-  let verb = case change {
-    Approval -> "approve the connection of"
-    Denial -> "deny the connection of"
-    Revocation -> "revoke the session of"
-    PermissionsUpdate -> "update the permissions of the session of"
-    SessionOpening -> "open the session of"
-    PendingRecording -> "record the pending connection of"
-    SessionClosing -> "close the session of"
-    SessionUse -> "record the use of the session of"
+  let #(done, attempted) = case change {
+    Approval -> #("approved the connection of", "approve the connection of")
+    Denial -> #("denied the connection of", "deny the connection of")
+    Revocation -> #("revoked the session of", "revoke the session of")
+    PermissionsUpdate -> #(
+      "updated the permissions of",
+      "update the permissions of the session of",
+    )
+    SessionOpening -> #("connected", "open the session of")
+    PendingRecording -> #(
+      "recorded the pending connection of",
+      "record the pending connection of",
+    )
+    SessionClosing -> #("closed the session of", "close the session of")
+    SessionUse -> #(
+      "recorded the use of the session of",
+      "record the use of the session of",
+    )
   }
-  "failed to "
-  <> verb
-  <> " client "
-  <> client
-  <> " to signer "
-  <> signer
-  <> ": "
-  <> reason
+  case outcome {
+    Ok(Nil) -> done <> " client " <> client <> " to signer " <> signer
+    Error(reason) ->
+      "failed to "
+      <> attempted
+      <> " client "
+      <> client
+      <> " to signer "
+      <> signer
+      <> ": "
+      <> reason
+  }
 }
 
-/// 対象がメモリにあるときだけ、失敗 1 件を `log.Warning` で出す。フォームの値を
-/// そのままログに渡さないため、対象が無ければ黙る。
-fn log_session_failure(
+/// 対象の（署名者, クライアント）が `Some` のときだけ、成功 1 件を `log.Notice` で、
+/// 失敗 1 件を `log.Warning` で出す。フォームの値をそのままログに渡さないため、
+/// 呼び出し側はメモリの値か検証済みの値の組だけを `Some` にする。
+fn log_session_change(
   change: SessionChange,
   target: Option(#(String, String)),
-  reason: String,
+  outcome: Result(Nil, String),
 ) -> Nil {
   case target {
-    Some(#(signer, client)) ->
+    Some(#(signer, client)) -> {
+      let level = case outcome {
+        Ok(_) -> log.Notice
+        Error(_) -> log.Warning
+      }
       log.write(
-        log.Warning,
+        level,
         log_prefix,
-        session_failure_line(change, signer, client, reason),
+        session_change_line(change, signer, client, outcome),
       )
+    }
     None -> Nil
   }
 }
@@ -1581,8 +1629,8 @@ fn log_session_failure(
 /// セッションと承認待ちの書き込み 1 件を行い、失敗ならログを出す。`MaybeWritten`
 /// なら、読み込み済みのときは読み直しに移った状態を、読み込めていないときは状態を
 /// そのまま返す（`Loading` で届くのは NIP-46 の書き込みだけで、未処理の読み込みが
-/// 同じ保証を持つ）。成功ではログを出さない（管理 UI の変更の成功の行は管理 UI が
-/// 出し、NIP-46 の書き込みの成功は行を出さない）。
+/// 同じ保証を持つ）。成功ではログを出さない（管理 UI からの操作の成功の行は
+/// `apply_session_change` が出し、NIP-46 の書き込みの成功は行を出さない）。
 fn write_session_change(
   state: State,
   change: SessionChange,
@@ -1594,14 +1642,14 @@ fn write_session_change(
     Ok(Nil) -> #(state, written)
     // セッションと承認待ちの書き込みでは作られないが、書き込まれていない失敗である。
     Error(NotWritten(reason)) | Error(AlreadyStored(reason)) -> {
-      log_session_failure(change, target, reason)
+      log_session_change(change, target, Error(reason))
       #(state, written)
     }
     Error(MaybeWritten(reason)) -> {
-      log_session_failure(
+      log_session_change(
         change,
         target,
-        reason <> reloading_after_unconfirmed_write,
+        Error(reason <> reloading_after_unconfirmed_write),
       )
       case state.accounts {
         Ready -> #(reload(state), written)
@@ -1623,7 +1671,7 @@ fn session_write_failure(failure: WriteFailure) -> SessionFailure {
 /// （署名者, クライアント）。組は `Write` の値から取る（`connect` の書き込みの前は
 /// 組がメモリに無いので `session_target` で引かない）。`handle_event` が載せるのは
 /// `InsertSession`、`InsertPending`、`DeleteSession`、`TouchSession` だけで、残りは
-/// 管理 UI と同じ区分に写す。承認待ちの token は返さない。
+/// 管理 UI からの操作の区分に写す。承認待ちの token は返さない。
 fn incoming_write_change(
   write: engine.Write,
 ) -> #(SessionChange, Option(#(String, String))) {
@@ -1656,13 +1704,9 @@ fn incoming_write_change(
   }
 }
 
-/// 読み込み済みのときだけエンジンで承認・拒否し、書き込みが成功したときだけ応答を
-/// 発行して反映する。読み込み前は状態を変えずに `SessionNotReady` を返す。対象が
-/// 無ければ `SessionNotFound`、書き込みの失敗は `session_write_failure` が
-/// `SessionFailure` に写す（`MaybeWritten` の後は、`write_session_change` が返した
-/// 読み直し後の状態で続ける。承認の `MaybeWritten` の後は、読み直しの後にも `ack` を
-/// 送らない）。
-fn apply_decision(
+/// 承認待ちの token への承認・拒否を `apply_session_change` に渡す。対象の組の照会と
+/// `decide` に同じ時刻を使う。
+fn decide_pending(
   state: State,
   reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
@@ -1671,206 +1715,76 @@ fn apply_decision(
     Result(#(engine.Engine, Event, engine.Write), String),
 ) -> actor.Next(State, Msg) {
   let now = time.now_seconds()
-  let target = pending_target(state.engine, token, now)
-  case state.accounts {
-    Loading(..) -> {
-      log_session_failure(change, target, accounts_not_loaded)
-      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
-      actor.continue(state)
-    }
-    Ready ->
-      case decide(state.engine, token, now) {
-        Error(reason) -> {
-          process.send(reply, Error(SessionNotFound(reason)))
-          actor.continue(state)
-        }
-        Ok(#(next, response, write)) ->
-          apply_session_write(
-            state,
-            reply,
-            change,
-            target,
-            next,
-            response,
-            write,
-          )
-      }
-  }
+  apply_session_change(
+    state,
+    reply,
+    change,
+    pending_target(state.engine, token, now),
+    fn(eng) { result.map(decide(eng, token, now), with_response) },
+  )
 }
 
-/// 読み込み済みのときだけエンジンで（署名者, クライアント）のセッションを開き、
-/// 書き込みが成功したときだけ応答を発行する。読み込み前は `SessionNotReady`、
-/// 署名者が登録されていなければ `SessionNotFound`、書き込みの失敗は
-/// `session_write_failure` が `SessionFailure` に写す。
-fn open_client_session_for(
-  state: State,
-  reply: Subject(Result(Nil, SessionFailure)),
-  signer: String,
-  client: String,
-  perms: String,
-  relays: List(String),
-  secret: String,
-) -> actor.Next(State, Msg) {
-  case state.accounts {
-    Loading(..) -> {
-      log_session_failure(
-        SessionOpening,
-        session_target(state.engine, signer, client),
-        accounts_not_loaded,
-      )
-      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
-      actor.continue(state)
-    }
-    Ready ->
-      case
-        engine.open_client_session(
-          state.engine,
-          signer,
-          client,
-          perms,
-          relays,
-          secret,
-          random.hex(token_bytes),
-          time.now_seconds(),
-        )
-      {
-        Error(reason) -> {
-          process.send(reply, Error(SessionNotFound(reason)))
-          actor.continue(state)
-        }
-        Ok(#(next, response, write)) ->
-          apply_session_write(
-            state,
-            reply,
-            SessionOpening,
-            Some(#(signer, client)),
-            next,
-            response,
-            write,
-          )
-      }
-  }
-}
-
-/// 書き込みが成功したときだけ応答を発行し、成功を返す。失敗は
-/// `session_write_failure` に写す。
-fn apply_session_write(
+/// 管理 UI からのセッションの操作 1 件を行う。読み込み済みのときだけ `decide` でエンジンを
+/// 変えてストアに書き込み、書き込みが成功したときだけ成功の行を出し、応答イベントが
+/// あれば発行して状態に反映する。結果は `reply` に返す。`target` はログに出す
+/// （署名者, クライアント）で、`decide` の `Error` は対象が無い理由である。
+fn apply_session_change(
   state: State,
   reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
   target: Option(#(String, String)),
-  next: engine.Engine,
-  response: Event,
-  write: engine.Write,
+  decide: fn(engine.Engine) ->
+    Result(#(engine.Engine, Option(Event), engine.Write), String),
 ) -> actor.Next(State, Msg) {
-  let #(written_state, outcome) =
-    write_session_change(state, change, target, write)
-  case outcome {
-    Ok(Nil) -> {
-      let published =
-        publish(
-          written_state,
-          response,
-          False,
-          response_session_relays([next], response),
-        )
-      process.send(reply, Ok(Nil))
-      actor.continue(transition(state, State(..published, engine: next)))
-    }
-    Error(failure) -> {
-      process.send(reply, Error(session_write_failure(failure)))
-      actor.continue(written_state)
-    }
-  }
-}
-
-/// 読み込み済みのときだけエンジンで取り消し、書き込みが成功したときだけ状態から
-/// セッションを消す。読み込み前は `SessionNotReady`、読み込み済みで承認済みでない
-/// 組なら `SessionNotFound`、書き込みの失敗は `session_write_failure` が
-/// `SessionFailure` に写す。
-fn revoke_session(
-  state: State,
-  reply: Subject(Result(Nil, SessionFailure)),
-  signer: String,
-  client: String,
-) -> actor.Next(State, Msg) {
-  let target = session_target(state.engine, signer, client)
-  case state.accounts {
+  let #(next, outcome) = case state.accounts {
     Loading(..) -> {
-      log_session_failure(Revocation, target, accounts_not_loaded)
-      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
-      actor.continue(state)
+      log_session_change(change, target, Error(accounts_not_loaded))
+      #(state, Error(SessionNotReady(accounts_not_loaded)))
     }
     Ready ->
-      case engine.revoke(state.engine, signer, client) {
-        Error(Nil) -> {
-          process.send(reply, Error(SessionNotFound(session_not_approved)))
-          actor.continue(state)
-        }
-        Ok(#(next, write)) -> {
-          let #(written_state, outcome) =
-            write_session_change(state, Revocation, target, write)
-          case outcome {
-            Ok(Nil) -> {
-              process.send(reply, Ok(Nil))
-              actor.continue(transition(
-                state,
-                State(..written_state, engine: next),
-              ))
-            }
-            Error(failure) -> {
-              process.send(reply, Error(session_write_failure(failure)))
-              actor.continue(written_state)
+      case decide(state.engine) {
+        Error(reason) -> #(state, Error(SessionNotFound(reason)))
+        Ok(#(decided, response, write)) ->
+          case write_session_change(state, change, target, write) {
+            #(written, Error(failure)) -> #(
+              written,
+              Error(session_write_failure(failure)),
+            )
+            #(written, Ok(Nil)) -> {
+              log_session_change(change, target, Ok(Nil))
+              let published = case response {
+                Some(response) ->
+                  publish(
+                    written,
+                    response,
+                    False,
+                    response_session_relays([decided], response),
+                  )
+                None -> written
+              }
+              #(transition(state, State(..published, engine: decided)), Ok(Nil))
             }
           }
-        }
       }
   }
+  process.send(reply, outcome)
+  actor.continue(next)
 }
 
-/// 読み込み済みのときだけエンジンで権限を差し替え、書き込みが成功したときだけ
-/// 状態に反映する。読み込み前は `SessionNotReady`、読み込み済みで承認済みでない
-/// 組なら `SessionNotFound`、書き込みの失敗は `session_write_failure` が
-/// `SessionFailure` に写す。
-fn update_session_perms(
-  state: State,
-  reply: Subject(Result(Nil, SessionFailure)),
-  signer: String,
-  client: String,
-  perms: String,
-) -> actor.Next(State, Msg) {
-  let target = session_target(state.engine, signer, client)
-  case state.accounts {
-    Loading(..) -> {
-      log_session_failure(PermissionsUpdate, target, accounts_not_loaded)
-      process.send(reply, Error(SessionNotReady(accounts_not_loaded)))
-      actor.continue(state)
-    }
-    Ready ->
-      case engine.set_perms(state.engine, signer, client, perms) {
-        Error(Nil) -> {
-          process.send(reply, Error(SessionNotFound(session_not_approved)))
-          actor.continue(state)
-        }
-        Ok(#(next, write)) -> {
-          let #(written_state, outcome) =
-            write_session_change(state, PermissionsUpdate, target, write)
-          case outcome {
-            Ok(Nil) -> {
-              process.send(reply, Ok(Nil))
-              actor.continue(transition(
-                state,
-                State(..written_state, engine: next),
-              ))
-            }
-            Error(failure) -> {
-              process.send(reply, Error(session_write_failure(failure)))
-              actor.continue(written_state)
-            }
-          }
-        }
-      }
-  }
+/// 応答イベントを送るエンジンの結果を `apply_session_change` の形にする。
+fn with_response(
+  decided: #(engine.Engine, Event, engine.Write),
+) -> #(engine.Engine, Option(Event), engine.Write) {
+  let #(decided, response, write) = decided
+  #(decided, Some(response), write)
+}
+
+/// 応答イベントを送らないエンジンの結果を `apply_session_change` の形にする。
+fn without_response(
+  decided: #(engine.Engine, engine.Write),
+) -> #(engine.Engine, Option(Event), engine.Write) {
+  let #(decided, write) = decided
+  #(decided, None, write)
 }
 
 /// 応答イベントを、基本の接続と、応答先のセッションのリレー（`session_relays`）の

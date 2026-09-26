@@ -955,12 +955,11 @@ fn approve_connection(
       )
     }
     http.Post -> {
-      use entry <- with_pending(context, language, theme, token)
+      use _entry <- with_pending(context, language, theme, token)
       decision_response(
         language,
         theme,
         context.approve(token),
-        session_change_line(ConnectionApproved, entry.signer, entry.client),
         i18n.Approved,
         i18n.ApprovedCloseWindow,
         view.Success,
@@ -979,12 +978,11 @@ fn deny_connection(
   token: String,
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
-  use entry <- with_pending(context, language, theme, token)
+  use _entry <- with_pending(context, language, theme, token)
   decision_response(
     language,
     theme,
     context.deny(token),
-    session_change_line(ConnectionDenied, entry.signer, entry.client),
     i18n.Denied,
     i18n.DeniedCloseWindow,
     view.Neutral,
@@ -994,8 +992,7 @@ fn deny_connection(
 /// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
 /// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
 /// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧に無いので
-/// 404 になる。404 の理由は失効の可能性を含む訳した文。ログに出す署名者とクライアントは、
-/// トークンではなくこの行の値から取る。
+/// 404 になる。404 の理由は失効の可能性を含む訳した文。
 fn with_pending(
   context: Context,
   language: Language,
@@ -1021,15 +1018,6 @@ fn with_pending(
   }
 }
 
-/// 接続とセッションへの操作の種類。ログ行の言い回しを決める。
-pub type SessionChange {
-  ConnectionApproved
-  ConnectionDenied
-  SessionRevoked
-  PermissionsSaved
-  ClientConnected
-}
-
 /// プラグインの再有効化が失敗する 2 通り。
 pub type ReenableFailure {
   /// 名前に一致するプラグインが無い。
@@ -1039,40 +1027,20 @@ pub type ReenableFailure {
   PluginNotAnswered(reason: String)
 }
 
-/// 承認・拒否・取り消し・権限の編集・クライアントの接続 1 件のログ行の本文（接頭辞
-/// を除く）。値は署名者とクライアントの公開鍵だけで、承認ページのトークンを含めない。
-pub fn session_change_line(
-  change: SessionChange,
-  signer: String,
-  client: String,
-) -> String {
-  let done = case change {
-    ConnectionApproved -> "approved the connection of client "
-    ConnectionDenied -> "denied the connection of client "
-    SessionRevoked -> "revoked the session of client "
-    PermissionsSaved -> "updated the permissions of client "
-    ClientConnected -> "connected client "
-  }
-  done <> client <> " to signer " <> signer
-}
-
 /// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
-/// 終わったことだけを伝える。処理できたときは `log_line` を 1 行ログに出す。処理
-/// できなかった要求は `session_failure_response` に渡す。承認と拒否はどちらも 200
-/// なので、処理できたときの見出し（`done`）、文（`message`）、通知の色（`tone`）は
-/// 呼び出し側が渡す。
+/// 終わったことだけを伝える。処理できなかった要求は `session_failure_response` に渡す。
+/// 承認と拒否はどちらも 200 なので、処理できたときの見出し（`done`）、文（`message`）、
+/// 通知の色（`tone`）は呼び出し側が渡す。
 fn decision_response(
   language: Language,
   theme: view.Theme,
   outcome: Result(Nil, SessionFailure),
-  log_line: String,
   done: i18n.Message,
   message: i18n.Message,
   tone: view.Tone,
 ) -> Response {
   case outcome {
-    Ok(Nil) -> {
-      log.write(log.Notice, log_prefix, log_line)
+    Ok(Nil) ->
       dashboard.notice_page(
         language,
         theme,
@@ -1083,7 +1051,6 @@ fn decision_response(
         [],
       )
       |> wisp.html_response(200)
-    }
     Error(failure) -> session_failure_response(language, theme, failure)
   }
 }
@@ -1105,14 +1072,7 @@ fn revoke_session(
   {
     Ok(signer), Ok(client) ->
       case context.revoke(signer, client) {
-        Ok(Nil) -> {
-          log.write(
-            log.Notice,
-            log_prefix,
-            session_change_line(SessionRevoked, signer, client),
-          )
-          wisp.redirect(to: "/")
-        }
+        Ok(Nil) -> wisp.redirect(to: "/")
         Error(failure) -> session_failure_response(language, theme, failure)
       }
     _, _ -> bad_request(language, theme)
@@ -1189,14 +1149,7 @@ fn session_permissions(
     Error(message) -> redraw(i18n.Translated(message), 400)
     Ok(perms) ->
       case context.update_perms(signer, client, perms) {
-        Ok(Nil) -> {
-          log.write(
-            log.Notice,
-            log_prefix,
-            session_change_line(PermissionsSaved, signer, client),
-          )
-          wisp.redirect(to: "/")
-        }
+        Ok(Nil) -> wisp.redirect(to: "/")
         Error(bunker.SessionNotApplied(reason)) ->
           redraw(i18n.Untranslated(reason), 409)
         Error(failure) -> session_failure_response(language, theme, failure)
@@ -1336,8 +1289,6 @@ fn confirm_connection(
     language,
     theme,
     context.connect_client(connect_request, review.signer),
-    review.signer,
-    connect_request.client,
     fn(reason, status) {
       dialog_response(
         context,
@@ -1447,26 +1398,17 @@ fn parse_message(error: nostrconnect.ParseError) -> i18n.Message {
   }
 }
 
-/// クライアントの接続の結果。成功ならログを 1 行出し、ダッシュボードへ 303 で戻す。
+/// クライアントの接続の結果。成功ならダッシュボードへ 303 で戻す。
 /// 失敗は状態コードごとに、`redraw` で確認のダイアログを開いたダッシュボードを返すか、
 /// 「変更を確認できませんでした」の通知ページにする。`redraw` は理由と状態コードを受け取る。
 fn connect_failure_response(
   language: Language,
   theme: view.Theme,
   outcome: Result(Nil, NostrconnectFailure),
-  signer: String,
-  client: String,
   redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
   case outcome {
-    Ok(Nil) -> {
-      log.write(
-        log.Notice,
-        log_prefix,
-        session_change_line(ClientConnected, signer, client),
-      )
-      wisp.redirect(to: "/")
-    }
+    Ok(Nil) -> wisp.redirect(to: "/")
     Error(RelayNotConnected) ->
       redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected), 503)
     Error(SessionNotOpened(bunker.SessionNotFound(reason)))
