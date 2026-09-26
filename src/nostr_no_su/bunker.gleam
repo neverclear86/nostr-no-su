@@ -2,81 +2,18 @@
 //// 保持する（リレークライアントは切断のたびに再起動されるため、そこにセッション
 //// 状態を置けない）。判断ロジックはすべて `engine` 側に残す。
 ////
-//// アカウントは起動時にストアから読み込む。読み込みは initialiser が自分宛に
-//// 積むメッセージ（`LoadAccounts`）で行い、initialiser 自身は DB に触らない。DB が
-//// 応答しなくても初期化のタイムアウトに当たらず、サブツリーの起動は失敗しない。
-//// 読み込みに失敗したら理由をログに出して再試行を予約するだけで、アクターは
-//// 落ちない。再試行の待ち時間は失敗のたびに倍にし、上限で頭打ちにする
-//// （`backoff.Backoff`）。待ち時間は読み込めていない状態（`Loading`）だけが持つので、
-//// 読み込みに成功した後の失敗は初期値から数え直す。
+//// このモジュールを変える人が守る不変条件は次の 2 つである。
+//// - `LoadAccounts` の最初の送信を initialiser 以外へ移さない。initialiser が積むので
+////   メールボックスの先頭になり、後から起動する接続の `GetSigners` と `Authenticate` は
+////   必ず最初の読み込みの後に処理される。
+//// - 状態の遷移はすべて `transition` を通す。署名者の集合が変わったときの `is_signer`
+////   の写しの置き直しと購読の張り直しの依頼、セッションのリレーの一覧の受け渡しは
+////   `transition` だけが行う。
 ////
-//// **読み込みの順序に関する不変条件**：`LoadAccounts` は initialiser が送るので、
-//// アクターのメールボックスで必ず最初のメッセージになる。接続は `rest_for_one` で
-//// アクターの後に起動するので、接続が購読のために送る `GetSigners` は必ずその後に
-//// 処理される。DB が起動時に到達可能なら、どの接続も読み込み済みの署名者で購読
-//// する。**`LoadAccounts` の最初の送信を initialiser 以外へ移さないこと。**
-////
-//// 読み込んだアカウントは、メモリの署名者と突き合わせて合わせる（`reconcile`）。
-//// ストアに無い署名者を取り除き、読み込んだアカウントを足すか置き換える。その後、
-//// 読み込んだセッションと承認待ちでエンジンのものを置き換える。起動時の読み込みでは
-//// メモリが空なので、読み込んだアカウントをそのまま足すことになる。
-////
-//// **アカウントの変更**（追加、削除、secret の作り直し、ラベルの差し替え）は、
-//// アクターの中でストアへ書き込み、書き込みが成功したときだけメモリの状態を変える。
-//// 書き込まれていないことが確定した失敗では、メモリを変えずに理由を返す。書き込みが
-//// 期限を過ぎたときや途中で接続が切れたときは、サーバー側でまだ実行中か、すでに
-//// コミットされていることがあるので、メモリを変えずにストアから読み直して合わせ、
-//// 呼び出し側には反映されたかもしれない旨を返す（`MaybeApplied(StoreDidNotConfirm)`）。
-//// ストアの読み込みは、実行中の書き込みの終了をテーブルのロックで待ってから読む
-//// （`account_store.load`）。読み直しは起動時の読み込みと同じ `LoadAccounts` の経路で
-//// 行い（契機は結果が曖昧な書き込みの後と管理 UI からの要求）、失敗すれば同じく
-//// 名前なしの subject へ再試行を予約する。読み直しが成功する
-//// までの間はメモリが DB と食い違っていることがあり、その間の変更は起動時の読み込みの
-//// 前と同じく `accounts are not loaded yet` で拒否し、一覧は理由を返す。NIP-46 の処理は
-//// その間もメモリのアカウントで続け、`connect`、`logout`、セッション内のリクエストの
-//// 最終利用の書き込みも行う（読み直しは積み増さない）。
-////
-//// 保証するのは次のことである。メモリは、成功した書き込みと成功した読み込みの結果
-//// だけで変わる。結果が曖昧な書き込みの後は、読み直しに成功した時点で、その書き込みの
-//// 結果を含めて DB と一致する。例外は、書き込みの文がサーバーに届いてテーブルのロックを
-//// 取るより先に読み直しがロックを取った場合（`account_store.load` の「残る窓」）で、その
-//// 書き込みは読み直しに見えず、メモリは次の読み込みまで DB より遅れる。この場合も、
-//// 追加はもう一度追加すれば、ストアが登録済みを返したときに応答の前に読み直すので
-//// 一致し、secret の作り直しはもう一度作り直せば一致する。読み込みで飛ばされる行
-//// （別のマスターキーで暗号化されているなど）の公開鍵の追加は、読み直してもメモリに
-//// 入らず、登録済みとして拒否される。その行は管理 UI のダッシュボードの
-//// 「読み込めなかったアカウント」の枠から削除できる。`pubkey` の列を読めない
-//// 行（`MalformedPubkey`）は画面からは消せず、DB から直接消す。
-////
-//// **待ち**：書き込みと読み込みの間は NIP-46 の処理が待たされる（届いたリクエストは
-//// メールボックスに積まれて捨てられない）。書き込み 1 件は最長で約 3 秒（DB に到達
-//// できないときのチェックアウトの失敗）、読み込み 1 回は読み込みの期限の 3 秒で打ち
-//// 切る。DB を一時停止した測定では、読み込みは 3000ms、2950ms、2000ms で失敗して返った。
-//// 結果が曖昧な書き込みの後に読み直しが失敗し続けると、再試行のたびに最長 3 秒ずつ
-//// 待ちが生じ、読み直しが成功するまで続く。読み直しが失敗し続けても、承認済み
-//// セッションは失われない。
-////
-//// **承認・拒否・取り消し**も同じく、エンジンで判断した後にストアへ書き込み、
-//// 書き込みが成功したときだけ状態に反映し、応答イベントを発行する（取り消しは
-//// 発行しない）。結果が曖昧な書き込みの後は、アカウントの変更と同じ `LoadAccounts`
-//// の読み直しに移り、読み直しで承認待ちとセッションも DB の内容に置き換わる。
-//// 書けていなければ行が残るので、利用者はダッシュボードからやり直せる。承認の
-//// `MaybeWritten` の後は、この読み直しの後にも `ack` を発行しない（書けていれば
-//// 承認待ちは消え、クライアントは接続し直す）。NIP-46 の `connect`、`logout`、セッション
-//// 内のリクエストの最終利用（組ごとに `last_used_granularity_seconds` に 1 回まで）も、
-//// 書き込みが成功したときだけ状態に反映する。書き込みが失敗したときはメモリの
-//// セッションと承認待ちを変えず、`connect` には `connection_not_saved` のエラーを返し、
-//// `logout` にはクライアントの後始末を止めないため `ack` を返し、セッション内の
-//// リクエストには成功時と同じ応答を返す（試行の時刻はエンジンの `touch_attempts` に
-//// 残し、次の書き込みまでの間隔に数える）。結果が曖昧な書き込みの後は同じ読み直しに
-//// 移る。
-////
-//// 状態の遷移はすべて `transition` を通し、署名者の集合が変わったときだけ、監視が
-//// 作者の照合に読む写し（`is_signer`）を置き直して購読の張り直しを依頼する。追加と
-//// 削除のほか、読み込みの失敗からの復帰でも張り直しが起き、secret やラベルの差し替え
-//// では起きない。セッションのリレーと署名者の対応が変わったときは、URL の一覧を
-//// `session_relays` へ渡す。メモリはこのアクター経由の変更だけで変わるので、DB の
-//// 行を外から直接変えた場合は次の起動まで反映されない。
+//// 読み込みと変更の保証と待ちは、docs/design-decisions.md の「アカウントの変更は DB
+//// への書き込みが成功してからメモリに反映する」「DB が不調な間は NIP-46 の処理が
+//// 待たされる」と、docs/architecture.md の「アカウントの読み込み」「アカウントの変更」
+//// にある。
 
 import gleam/dict.{type Dict}
 import gleam/erlang/atom.{type Atom}
@@ -197,10 +134,14 @@ pub type NotConfirmed {
   StoreDidNotConfirm
 }
 
-/// 承認・拒否・取り消しが成功しなかった理由。理由の文字列は値（pubkey、token）を含まない
+/// 承認・拒否・取り消し・権限の編集・`nostrconnect://` のセッションの開始が成功
+/// しなかった理由。どの操作も、読み込みか読み直しの前は対象の有無によらず
+/// `SessionNotReady`、対象が無ければ `SessionNotFound`、書き込まれていないことが
+/// 確定したら `SessionNotApplied`、書き込みの結果が曖昧なときとアクターが応答しない
+/// ときは `SessionMaybeApplied` を返す。理由の文字列は値（pubkey、token）を含まない
 /// 固定の英文。管理 UI は型で応答を分け、理由は本文に出すだけにする。
 pub type SessionFailure {
-  /// 対象が無い（不明、失効、処理済み、承認済みでない組）。
+  /// 対象が無い（不明、失効、処理済み、承認済みでない組、登録されていない署名者）。
   SessionNotFound(reason: String)
   /// 書き込まれていないことが確定した（`NotWritten`、`AlreadyStored`）。
   SessionNotApplied(reason: String)
@@ -299,10 +240,9 @@ pub type Msg {
   /// `rate-limited:` なら、そのリレーへのセッションの外の応答をしばらく
   /// 止める（`pause_on_rate_limit`）。
   Acknowledged(relay_url: String, ack: Acknowledgement)
-  /// 承認済みセッションの一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
+  /// 承認済みセッションの一覧を問い合わせる。
   GetSessions(reply: Subject(Result(List(Session), String)))
-  /// `relay_url` を持つセッションと取り置きの署名者を問い合わせる。セッションの
-  /// リレーの接続の購読が使う。
+  /// `relay_url` を持つセッションと取り置きの署名者を問い合わせる。
   GetSessionSigners(relay_url: String, reply: Subject(List(String)))
   /// `nostrconnect://` の接続の前に、（署名者, クライアント）の組に URI のリレーを
   /// 取り置く。取り置いたリレーはセッションのリレーと同じく `relay_map` に入り、
@@ -312,40 +252,26 @@ pub type Msg {
   /// 組の取り置きを外す。取り置きが無ければ何もしない。同じリレーを持つセッションが
   /// あれば、そのリレーの接続は残る。
   ReleaseSessionRelays(signer: String, client: String)
-  /// セッションを 1 件取り消す（`logout` 相当）。書き込みが成功したときだけ状態から
-  /// 消し、取り消し後の画面が古い一覧を読まないよう完了を待てるように応答する。
-  /// 読み込み前は `SessionNotReady`、読み込み済みで承認済みでない組なら
-  /// `SessionNotFound`、書き込みの結果が曖昧なときは `SessionMaybeApplied`、
-  /// 書き込まれていないことが確定したら `SessionNotApplied` を返す。
+  /// セッションを 1 件取り消す（`logout` 相当）。
   Revoke(
     signer: String,
     client: String,
     reply: Subject(Result(Nil, SessionFailure)),
   )
-  /// 承認済みセッションの権限を差し替える。書き込みが成功したときだけ状態に
-  /// 反映して応答する。読み込み前は `SessionNotReady`、読み込み済みで承認済みで
-  /// ない組なら `SessionNotFound`、書き込みの結果が曖昧なときは
-  /// `SessionMaybeApplied`、書き込まれていないことが確定したら
-  /// `SessionNotApplied` を返す。
+  /// 承認済みセッションの権限を差し替える。
   UpdatePerms(
     signer: String,
     client: String,
     perms: String,
     reply: Subject(Result(Nil, SessionFailure)),
   )
-  /// 承認待ちの接続要求の一覧を問い合わせる。読み込み前、読み直しの前は理由を返す。
+  /// 承認待ちの接続要求の一覧を問い合わせる。
   GetPending(reply: Subject(Result(List(Pending), String)))
-  /// 承認待ちの接続要求を承認する。書き込みが成功したときだけ状態に反映し、
-  /// 登録済みの接続へ応答イベントを送る。要求が見つからない、読み込み前、あるいは
-  /// 書き込みが成功しなかったときは `SessionFailure` で理由を返す。
+  /// 承認待ちの接続要求を承認し、応答イベントを送る。
   Approve(token: String, reply: Subject(Result(Nil, SessionFailure)))
-  /// 承認待ちの接続要求を拒否する。書き込みが成功したときだけ状態に反映するほかは
-  /// `Approve` と同じ。
+  /// 承認待ちの接続要求を拒否し、応答イベントを送る。
   Deny(token: String, reply: Subject(Result(Nil, SessionFailure)))
-  /// 解釈済みの `nostrconnect://` の情報から（署名者, クライアント）のセッションを
-  /// 開く。書き込みが成功したときだけ状態に反映し、登録済みの接続へ応答イベントを
-  /// 送る。読み込み前、署名者が未登録、あるいは書き込みが成功しなかったときは
-  /// `SessionFailure` で理由を返す。
+  /// `nostrconnect://` の情報から（署名者, クライアント）のセッションを開き、応答を送る。
   OpenClientSession(
     signer: String,
     client: String,
@@ -360,7 +286,7 @@ pub type Msg {
   /// 管理 UI からの読み直しの要求。読み込み済みなら読み直しを積み、読み込めていなければ
   /// 何もしない。どちらも `Nil` で応答する。
   ReloadAccounts(reply: Subject(Nil))
-  /// 現在の署名者 pubkey の一覧を問い合わせる。バンカーリレーの購読が使う。
+  /// 現在の署名者 pubkey の一覧を問い合わせる。
   GetSigners(reply: Subject(List(String)))
   /// 応答の発行先として配られているリレーの URL を問い合わせる。
   GetPublishers(reply: Subject(List(String)))
@@ -382,8 +308,7 @@ pub type Msg {
   )
   /// 管理 UI に出すアカウントの一覧を問い合わせる。
   GetAccounts(reply: Subject(Result(List(Listing), String)))
-  /// 読み込みで飛ばされた行の一覧を問い合わせる。読み込み前、読み直しの前は理由を
-  /// 返す。
+  /// 読み込みで飛ばされた行の一覧を問い合わせる。
   GetSkipped(reply: Subject(Result(List(vault.Skipped), String)))
   /// 署名者の秘密鍵を nsec の文字列で問い合わせる。管理 UI の再表示だけが使う。
   /// 要求は公開鍵と返信先しか持たないので、処理の途中で落ちてもクラッシュレポートに
@@ -391,24 +316,21 @@ pub type Msg {
   GetNsec(signer: String, reply: Subject(Result(String, String)))
   /// リレーの AUTH（NIP-42）に返す署名済みイベントを問い合わせる。`BaseRelay` の
   /// 接続は登録アカウントごと、`SessionRelay` の接続はその URL を持つセッションと
-  /// 取り置きの署名者ごとに署名する。バンカーリレーの接続が challenge を受けたときに
-  /// 使う。
+  /// 取り置きの署名者ごとに署名する。
   Authenticate(
     relay_url: String,
     scope: RelayScope,
     challenge: String,
     reply: Subject(Result(List(Event), String)),
   )
-  /// プラグインからの取得の口（`plugin_api`）が使う、公開鍵ごとの登録の確認。読み込み前は
-  /// 全体の理由を返す。
+  /// 公開鍵ごとの登録を問い合わせる。読み込み前は全体の理由を返す。
   CheckAccounts(
     signers: List(String),
     reply: Subject(Result(List(Result(Nil, String)), String)),
   )
-  /// プラグインからの送信の口（`plugin_api`）が使う、登録アカウントの鍵で署名した
-  /// イベントの要求。NIP-46 の `sign_event` と違い、セッションの `perms` は見ない
-  /// （要求元はクライアントではなく同じ VM のプラグインである）。アカウントの
-  /// 読み込み前は理由を返す。
+  /// 登録アカウントの鍵で署名したイベントを問い合わせる。NIP-46 の `sign_event` と
+  /// 違い、セッションの `perms` は見ない（要求元はクライアントではなく同じ VM の
+  /// プラグインである）。アカウントの読み込み前は理由を返す。
   SignEvent(
     signer: String,
     kind: Int,
@@ -418,16 +340,12 @@ pub type Msg {
   )
 }
 
-/// バンカーが保持する承認済みセッションの一覧。読み込み前、読み直しの前、
-/// アクターが応答しないときは理由を返す。
+/// バンカーが保持する承認済みセッションの一覧。
 pub fn sessions(name: Name(Msg)) -> Result(List(Session), String) {
   call_query(name, GetSessions)
 }
 
-/// セッションを 1 件取り消し、反映されるまで待つ。読み込み前は `SessionNotReady`、
-/// 読み込み済みで承認済みでない組なら `SessionNotFound`、書き込まれていないことが
-/// 確定したら `SessionNotApplied`、書き込みの結果が曖昧なときとアクターが応答
-/// しないときは `SessionMaybeApplied` を返す。
+/// セッションを 1 件取り消し、反映されるまで待つ。
 pub fn revoke(
   name: Name(Msg),
   signer: String,
@@ -436,10 +354,7 @@ pub fn revoke(
   call_session_change(name, Revoke(signer, client, _))
 }
 
-/// 承認済みセッションの権限を差し替え、反映されるまで待つ。読み込み前は
-/// `SessionNotReady`、読み込み済みで承認済みでない組なら `SessionNotFound`、
-/// 書き込まれていないことが確定したら `SessionNotApplied`、書き込みの結果が
-/// 曖昧なときとアクターが応答しないときは `SessionMaybeApplied` を返す。
+/// 承認済みセッションの権限を差し替え、反映されるまで待つ。
 pub fn update_perms(
   name: Name(Msg),
   signer: String,
@@ -449,30 +364,22 @@ pub fn update_perms(
   call_session_change(name, UpdatePerms(signer, client, perms, _))
 }
 
-/// 承認待ちの接続要求の一覧。読み込み前、読み直しの前、アクターが応答しないときは
-/// 理由を返す。
+/// 承認待ちの接続要求の一覧。
 pub fn pending(name: Name(Msg)) -> Result(List(Pending), String) {
   call_query(name, GetPending)
 }
 
-/// 接続要求を 1 件承認し、書き込みが成功したときだけ応答イベントを送り出すまで
-/// 待つ。読み込み前は `SessionNotReady`、要求が見つからなければ `SessionNotFound`、
-/// 書き込まれていないことが確定したら `SessionNotApplied`、書き込みの結果が
-/// 曖昧なときとアクターが応答しないときは `SessionMaybeApplied` を返す。
+/// 接続要求を 1 件承認し、応答イベントを送り出すまで待つ。
 pub fn approve(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
   call_session_change(name, Approve(token, _))
 }
 
-/// 接続要求を 1 件拒否し、書き込みが成功したときだけ応答イベントを送り出すまで
-/// 待つ。ほかは `approve` と同じ。
+/// 接続要求を 1 件拒否し、応答イベントを送り出すまで待つ。
 pub fn deny(name: Name(Msg), token: String) -> Result(Nil, SessionFailure) {
   call_session_change(name, Deny(token, _))
 }
 
-/// 解釈済みの `nostrconnect://` の情報からセッションを開き、書き込みが成功した
-/// ときだけ応答イベントを送り出すまで待つ。`relays` は URI のリレーで、
-/// セッションに保存する。読み込み前は `SessionNotReady`、署名者が登録されて
-/// いなければ `SessionNotFound`、書き込みの失敗は `approve` と同じ。
+/// `nostrconnect://` の情報からセッションを開き、応答を送り出すまで待つ。
 pub fn open_client_session(
   name: Name(Msg),
   signer: String,
@@ -583,8 +490,7 @@ pub fn update_label(
   call_change(name, UpdateLabel(signer, label, _))
 }
 
-/// アカウントの一覧。読み込めていない、あるいはアクターが応答しないときは理由を
-/// 返す。
+/// アカウントの一覧。
 pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
   call_query(name, GetAccounts)
 }
@@ -596,8 +502,7 @@ pub fn reload_accounts(name: Name(Msg)) -> Result(Nil, String) {
   |> option.to_result(query_not_answered)
 }
 
-/// 直近の読み込みで飛ばされた行の一覧。読み込めていない、あるいはアクターが
-/// 応答しないときは理由を返す。
+/// 直近の読み込みで飛ばされた行の一覧。
 pub fn skipped(name: Name(Msg)) -> Result(List(vault.Skipped), String) {
   call_query(name, GetSkipped)
 }
@@ -626,9 +531,8 @@ pub fn authenticate(
   call_query(name, Authenticate(relay_url, scope, challenge, _))
 }
 
-/// 登録アカウントの鍵で署名したイベント。プラグインからの送信の口（`plugin_api`）
-/// が使う。アカウントの読み込み前、署名者が未登録、署名に失敗、あるいはアクターが
-/// 応答しないときは理由を返す。
+/// 登録アカウントの鍵で署名したイベント。アカウントの読み込み前、署名者が未登録、
+/// 署名に失敗、あるいはアクターが応答しないときは理由を返す。
 pub fn sign_event(
   name: Name(Msg),
   signer: String,
@@ -650,7 +554,7 @@ pub fn check_accounts(
   call_query(name, CheckAccounts(signers, _))
 }
 
-/// 承認・拒否・取り消しをアクターへ送って結果を待つ。応答が無ければ、打ち切った
+/// セッションの操作をアクターへ送って結果を待つ。応答が無ければ、打ち切った
 /// 後にアクターが処理しうるので `SessionMaybeApplied(BunkerDidNotRespond)` を
 /// 返す。承認したつもりのまま待たせ続けるより、UI に失敗として出す方がよい。
 fn call_session_change(
@@ -840,15 +744,10 @@ pub fn pause_report(relay_url: String, dropped: Int) -> String {
   <> " while it is rate-limiting"
 }
 
-/// バンカーアクターが保持する状態。判断は `engine` が行い、アクターはその状態と、
-/// 署名者ごとのラベルと、生きた接続の送信手段とその範囲と、接続の前に取り置いた
-/// セッションのリレーと、自分が起動した時刻と、読み込みの進み具合と、直近の読み込みで
-/// 飛ばされた行と、OK を待っている応答の一覧と、セッションの外の応答を止めている
-/// リレーの一覧だけを持つ。`not_before` はエンジンではなくここに置き、アクターの
-/// 起動時刻を刻む。
+/// バンカーアクターの状態。判断は `engine` が行い、外界の入力と接続の状態を持つ。
 type State {
   State(
-    /// このアクターの登録名。署名者の集合の写し（`is_signer`）のキーに使う。
+    /// このアクターの登録名。
     name: Name(Msg),
     engine: engine.Engine,
     /// 署名者ごとのラベル。鍵はエンジンのアカウントと同じ集合に保つ。ラベルは
@@ -886,10 +785,7 @@ type Publisher {
   Publisher(scope: RelayScope, publish: fn(Event) -> Nil)
 }
 
-/// スーパービジョンツリー用の子仕様。`resubscribe` は署名者の集合が変わったときに
-/// 呼ぶ関数、`open_relays` は読み込みに成功するたびに登録されたリレーを渡す関数、
-/// `session_relays` はセッションのリレーの一覧が変わったときにその一覧を渡す関数で、
-/// どれもツリーを組む側が配線する。
+/// スーパービジョンツリー用の子仕様。関数の引数は `State` の同名のフィールドに入る。
 pub fn supervised(
   name: Name(Msg),
   settings: Settings,
@@ -969,12 +865,7 @@ fn initialise(
   |> Ok
 }
 
-/// アカウントの読み込みと変更、読み直しの要求、publisher の登録、セッションの
-/// リレーの取り置きと取り外し、署名者・セッションのリレーの署名者・アカウント・
-/// 飛ばされた行・セッション・承認待ちの照会、セッションの取り消し、承認待ちの承認と
-/// 拒否、受信イベント 1 件をエンジンに通して生成された応答の送信、発行した
-/// 応答への OK の反映と `rate-limited:` を返したリレーの停止、リレーの AUTH に返す
-/// 認証イベントの署名を行う。
+/// 受け取ったメッセージを 1 件処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     LoadAccounts -> actor.continue(load_accounts(state))
@@ -1351,8 +1242,7 @@ fn listings(state: State) -> Result(List(Listing), String) {
   })
 }
 
-/// 読み込み済みなら `read` の値を、読み込みか読み直しが終わっていなければ一覧の
-/// 代わりの理由を返す。アカウント、飛ばされた行、承認待ち、セッションの一覧が使う。
+/// 読み込み済みなら `read` の値を、読み込みか読み直しの前なら一覧の代わりの理由を返す。
 fn when_loaded(state: State, read: fn() -> a) -> Result(a, String) {
   case state.accounts {
     Ready -> Ok(read())
@@ -1588,8 +1478,7 @@ fn change_line(
 
 /// 読み直しの `LoadAccounts` を積み、読み込めていない状態に移る。読み込み済みの
 /// 状態からだけ呼ぶ（`write_session_change` は `Loading` の間は呼ばない）。
-/// 読み込みの系列は 1 本のままになる。`apply_change` の `MaybeWritten` の枝と
-/// `ReloadAccounts` の枝もこれを使う。
+/// 読み込みの系列は 1 本のままになる。
 fn reload(state: State) -> State {
   process.send(state.retry, LoadAccounts)
   State(..state, accounts: loading(state.settings))
@@ -1722,9 +1611,7 @@ fn write_session_change(
   }
 }
 
-/// セッションと承認待ちの書き込みの失敗を、管理 UI が応答に使う `SessionFailure`
-/// の区分に写す。`NotWritten`、`AlreadyStored` は書き込まれていないことが確定した
-/// 失敗、`MaybeWritten` は結果が曖昧な失敗である。
+/// セッションと承認待ちの書き込みの失敗を `SessionFailure` の区分に写す。
 fn session_write_failure(failure: WriteFailure) -> SessionFailure {
   case failure {
     NotWritten(reason) | AlreadyStored(reason) -> SessionNotApplied(reason)
