@@ -3,9 +3,8 @@
 //// 1 件ずつ取って通す。捨てたリクエストはどちらのトークンも使わない。時刻は
 //// 呼び出し側が Unix 秒で渡す。
 ////
-//// pubkey ごとのバケットは、通すたびに満ちたものを消す。残るのは直近
-//// `client_limit` が満ちるまでの 60 秒に通した pubkey だけで、その件数は同じ間に
-//// 全体が出せるトークン（40 件）を超えない。
+//// 上限の値の理由と、記憶する pubkey の件数が有界である理由は docs/design-decisions.md の
+//// 「NIP-46 の入力にはサイズと件数の上限がある」にある。
 
 import gleam/dict.{type Dict}
 import gleam/int
@@ -18,12 +17,10 @@ pub type Limit {
   Limit(capacity: Int, refill_seconds: Int)
 }
 
-/// クライアントの pubkey ごとの上限。承認待ちの間の再読み込みによる `connect`
-/// の送り直しを数回通す大きさにする。
+/// クライアントの pubkey ごとの上限。
 pub const client_limit = Limit(capacity: 4, refill_seconds: 15)
 
-/// 全体の上限。承認待ちの上限（`engine.pending_capacity`）を 1 回で埋められる
-/// 大きさにする。
+/// 全体の上限。
 pub const global_limit = Limit(capacity: 20, refill_seconds: 3)
 
 /// 捨てた件数を報告する最小の間隔（秒）。
@@ -31,14 +28,14 @@ pub const report_interval_seconds = 60
 
 /// トークンバケット 1 つ。`updated_at` は補充を数え始めた時刻で、満ちている間は
 /// 最後に補充した時刻にする。
-pub type Bucket {
+type Bucket {
   Bucket(tokens: Int, updated_at: Int)
 }
 
 /// 上限の状態。`clients` はクライアントの pubkey hex → バケットで、無い pubkey
 /// は満ちたバケットと同じに扱う。`dropped` は最後の報告の後に捨てた件数、
 /// `reported_at` は最後に報告した時刻。
-pub type Limiter {
+pub opaque type Limiter {
   Limiter(
     global: Bucket,
     clients: Dict(String, Bucket),
@@ -94,6 +91,11 @@ pub fn admit(limiter: Limiter, client: String, now: Int) -> Admission {
       )
     }
   }
+}
+
+/// 記憶しているクライアントの pubkey の件数。
+pub fn remembered_clients(limiter: Limiter) -> Int {
+  dict.size(limiter.clients)
 }
 
 /// 捨てた件数を報告するログの 1 行。
