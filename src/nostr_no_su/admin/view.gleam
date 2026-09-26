@@ -767,9 +767,9 @@ pub fn hint(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm text-muted")], [html.text(text)])
 }
 
-/// カードの中でフォームの前に置く、フォームの説明。プラグインの `text` ブロックも
-/// この部品で描く。空白の無い長い語（URL など）は枠の幅で折り返す。
-pub fn form_description(text: String) -> Element(msg) {
+/// 本文の大きさの段落。空白の無い長い語（URL など）は枠の幅で折り返す。控えめな一言には
+/// `hint` を使う。
+pub fn paragraph(text: String) -> Element(msg) {
   html.p([attribute.class("text-sm break-words")], [html.text(text)])
 }
 
@@ -782,14 +782,6 @@ pub fn plugin_checkbox_row(
   hint: Option(String),
   checked: Bool,
 ) -> Element(msg) {
-  let description = case hint {
-    Some(hint) -> [
-      html.span([attribute.class("text-sm text-muted break-all")], [
-        html.text(hint),
-      ]),
-    ]
-    None -> []
-  }
   html.label([attribute.class("flex items-center gap-3 text-sm")], [
     html.input([
       attribute.type_("checkbox"),
@@ -800,7 +792,7 @@ pub fn plugin_checkbox_row(
     ]),
     html.div([attribute.class("flex min-w-0 flex-col")], [
       html.span([], [html.text(label)]),
-      ..description
+      ..plugin_hint(hint)
     ]),
   ])
 }
@@ -811,19 +803,23 @@ fn plugin_field(
   hint: Option(String),
   input: Element(msg),
 ) -> Element(msg) {
-  let description = case hint {
-    Some(hint) -> [
+  html.label([attribute.class("fieldset")], [
+    legend(label),
+    input,
+    ..plugin_hint(hint)
+  ])
+}
+
+/// プラグインの欄の補足。`hint` があればその文を控えめな 1 要素にし、無ければ空にする。
+fn plugin_hint(hint: Option(String)) -> List(Element(msg)) {
+  case hint {
+    Some(text) -> [
       html.span([attribute.class("text-sm text-muted break-all")], [
-        html.text(hint),
+        html.text(text),
       ]),
     ]
     None -> []
   }
-  html.label([attribute.class("fieldset")], [
-    html.span([attribute.class("fieldset-legend")], [html.text(label)]),
-    input,
-    ..description
-  ])
 }
 
 /// プラグインのフォームが宣言する 1 行の文字列の欄。`hinted_input` と違って補足の `id`
@@ -1197,8 +1193,26 @@ fn button_class(kind: ButtonKind, placement: Placement) -> String {
 /// 見出しを付けた入力欄。`label` が入力欄 1 つだけを包む。
 pub fn labelled(caption: String, input: Element(msg)) -> Element(msg) {
   html.label([attribute.class("fieldset")], [
-    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+    legend(caption),
     input,
+  ])
+}
+
+/// 欄の見出し。
+fn legend(caption: String) -> Element(msg) {
+  html.span([attribute.class("fieldset-legend")], [html.text(caption)])
+}
+
+/// 見出しと、その横の `info_hint` の ⓘ。ⓘ は `id` の補足 `text` を開く。
+fn hinted_legend(
+  language: Language,
+  caption: String,
+  id: String,
+  text: String,
+) -> Element(msg) {
+  html.div([attribute.class("fieldset-legend w-fit justify-start")], [
+    html.text(caption),
+    ..info_hint(language, id, [html.text(text)])
   ])
 }
 
@@ -1302,7 +1316,7 @@ fn hinted_field(
   case hint {
     LineHint(text:) ->
       html.div([attribute.class("fieldset")], [
-        html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
+        legend(caption),
         control,
         html.p([attribute.id(hint_id), attribute.class("text-muted")], [
           html.text(text),
@@ -1310,10 +1324,7 @@ fn hinted_field(
       ])
     FoldedHint(text:) ->
       html.div([attribute.class("fieldset")], [
-        html.div([attribute.class("fieldset-legend w-fit justify-start")], [
-          html.text(caption),
-          ..info_hint(language, hint_id, [html.text(text)])
-        ]),
+        hinted_legend(language, caption, hint_id, text),
         control,
       ])
   }
@@ -1436,13 +1447,7 @@ pub fn copyable_field(
   caption: String,
   value: String,
 ) -> Element(msg) {
-  copyable_field_with(
-    language,
-    html.span([attribute.class("fieldset-legend")], [html.text(caption)]),
-    caption,
-    value,
-    [],
-  )
+  copyable_field_with(language, legend(caption), caption, value, [])
 }
 
 /// 見出しの横の ⓘ で補足を開く `copyable_field`。欄は `aria-describedby` で `hint_id` の補足を指す。
@@ -1455,10 +1460,7 @@ pub fn hinted_copyable_field(
 ) -> Element(msg) {
   copyable_field_with(
     language,
-    html.div([attribute.class("fieldset-legend w-fit justify-start")], [
-      html.text(caption),
-      ..info_hint(language, hint_id, [html.text(hint)])
-    ]),
+    hinted_legend(language, caption, hint_id, hint),
     caption,
     value,
     [attribute.aria_describedby(hint_id)],
@@ -1516,7 +1518,7 @@ pub fn copy_button(label: String) -> Element(msg) {
         ),
         lucide_icon(
           "invisible col-start-1 row-start-1 size-4 group-data-copied:visible",
-          copied_icon_paths,
+          check_icon_paths,
         ),
       ]),
     ],
@@ -2094,8 +2096,12 @@ pub fn icon_only_link(
 /// なるよう、同じ中心（627, 536）で広げたもの。
 const logo_view_box = "97.5882 6.5882 1058.8235 1058.8235"
 
-/// ビーバーの体の輪郭。目と歯を副パスに持ち、`fill-rule="evenodd"` で穴にする。
-const logo_body_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C 297.2193 784.2514 445 774 552 716  C 619 680 659 629 680 569  C 709 498 762 453 816 430  C 827 432 839 431 847 425  C 867 429 883 414 883 395  L 883 342  C 911 319 921 280 872 262  C 818 175 733 145 620 162  C 614 138 592 120 566 120  C 535 120 510 140 513.0000 164.5029 Z M 762 266 A 24 24 0 1 0 714 266 A 24 24 0 1 0 762 266 Z M 818 354 Q 813 354 813 360 L 813 414 Q 813 422 827 422 Q 841 422 841 414 L 841 351 Z M 850 350 L 875 346 L 875 395 Q 875 416 858 418 L 850 418 Z"
+/// ビーバーの体の外側の輪郭。
+const logo_outline_path = "M 513.0000 164.5029 A 402 402 0 0 0 275.4029 744.8935  C 297.2193 784.2514 445 774 552 716  C 619 680 659 629 680 569  C 709 498 762 453 816 430  C 827 432 839 431 847 425  C 867 429 883 414 883 395  L 883 342  C 911 319 921 280 872 262  C 818 175 733 145 620 162  C 614 138 592 120 566 120  C 535 120 510 140 513.0000 164.5029 Z"
+
+/// ビーバーの体。輪郭（`logo_outline_path`）に目と歯（`logo_face_path`）を副パスとして足し、
+/// `fill-rule="evenodd"` で穴にする。
+const logo_body_path = logo_outline_path <> " " <> logo_face_path
 
 /// ビーバーの尻尾。
 const logo_tail_path = "M 293.7269 774.7955 A 402 402 0 0 0 1028.4491 571.0391  C 1034 499 985 454 908 454  C 826 454 747 506 713 586  C 684 664 632 717 562 750  C 471 794 366 805 293.7269 774.7955 Z"
@@ -2286,7 +2292,7 @@ const copy_icon_paths = [
 ]
 
 /// コピーの完了と、「はじめに」の帯の済んだ段の印（`check_icon`）のアイコンのストローク（Lucide の check）。
-const copied_icon_paths = ["M20 6 9 17l-5-5"]
+const check_icon_paths = ["M20 6 9 17l-5-5"]
 
 /// 追加のボタンのアイコン（Lucide の plus）。
 pub fn plus_icon() -> Element(msg) {
@@ -2377,7 +2383,7 @@ pub fn sparkle_icon() -> Element(msg) {
 
 /// 済んだ段の印のアイコン（Lucide の check）。
 pub fn check_icon() -> Element(msg) {
-  lucide_icon("size-4", copied_icon_paths)
+  lucide_icon("size-4", check_icon_paths)
 }
 
 /// プラグインの節のアイコン（Lucide の puzzle）。

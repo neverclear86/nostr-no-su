@@ -1418,7 +1418,7 @@ pub fn add_account_dialog_folds_the_nsec_description_test() {
   )
   assert !string.contains(
     dialog,
-    element.to_string(view.form_description(text(i18n.ImportDescription))),
+    element.to_string(view.paragraph(text(i18n.ImportDescription))),
   )
 }
 
