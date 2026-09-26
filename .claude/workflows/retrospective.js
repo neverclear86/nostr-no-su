@@ -18,6 +18,8 @@ export const meta = {
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   observations: [string]。空でない文字列。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
 //               合わないものは集計に入らないので、ここで自由形式のまま渡し、ふりかえりの依頼文に「セッションの観察」として添える
+//   coverage:   dev/coverage_delta.sh <最初の実行の base> <今の origin/main> の出力（文字列）。集計と起票では必須。
+//               起票する issue に「## カバレッジ」として貼らせ、最後の行の verdict が ok 以外ならセッションの観察に足す
 //   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る
@@ -25,7 +27,7 @@ export const meta = {
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
 //   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
 //               集計と起票は飛ばし、精査と実装だけを回す（runs / events / since は要らない）
-// 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
+// 返り値: 集計と、カバレッジの判定（coverageVerdict）と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
 //         複数の PR に分けたときは pr / prUrl / head が一番上の段で、prs に下の段から順の全部が入る）
 // ---------------------------------------------------------------------------
 
@@ -46,9 +48,15 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+  if (typeof a.coverage !== 'string' || !/^verdict: /m.test(a.coverage)) throw new Error('args.coverage が無い（スキル issue-workflow の「実行の後: ふりかえり」の dev/coverage_delta.sh の出力を渡す）')
   if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string' && o.trim() !== ''))) throw new Error('args.observations は空でない文字列の配列で渡す')
 }
-const observations = a.observations || []
+// カバレッジの判定（dev/coverage_delta.sh の最後の行）。ok 以外は学びと同じ扱いにするため、セッションの観察に足す
+const coverageVerdict = reentry ? null : (a.coverage.match(/^verdict: (\S+)/m) || [])[1]
+const observations = [
+  ...(a.observations || []),
+  ...(coverageVerdict && coverageVerdict !== 'ok' ? [`カバレッジの判定が ${coverageVerdict} だった（依頼文の「カバレッジ」の表）。下がったならどの PR で下がったかを main の CI の計測でたどり、原因を学びとして分類する`] : []),
+]
 const dry = a.dryRun === true
 
 // --- スキーマ -----------------------------------------------------------
@@ -280,6 +288,9 @@ ${table}
 
 ### 学び
 ${lessonList || '（無し）'}
+
+### カバレッジ（dev/coverage_delta.sh の出力。起票する issue の実測の直後に「## カバレッジ」としてそのまま貼る）
+${a.coverage}
 ${observations.length ? `
 ### セッションの観察（実行の外でセッションが観察した学び。ユーザーの指示を含む。学びと同じ基準で分類する）
 ${observations.map((o) => `- ${o}`).join('\n')}
@@ -330,7 +341,7 @@ log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished $
 // 学びが 0 件でもセッションの観察があれば、観察だけを材料にふりかえりを立てる（観察を黙って落とさない）
 if (dry || (agg.totals.lessonCount === 0 && observations.length === 0)) {
   log(dry ? 'dry run なので集計だけ返す' : '学びもセッションの観察も 0 件なので issue を起票しない')
-  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びも観察も 0 件', implementation: null }
+  return { ...agg, coverageVerdict, issueNumber: null, reason: dry ? 'dry run' : '学びも観察も 0 件', implementation: null }
 }
 
 const table = summaryMarkdown(agg.totals, a.since)
@@ -338,7 +349,7 @@ const retro = await agent(P.retro(agg, table, a.runs), { label: 'Retrospective',
 if (!retro) throw new Error('Retrospective が結果を返さなかった')
 if (!retro.issueNumber) {
   log(`issue を起票しなかった: ${retro.reason || '理由なし'}`)
-  return { ...agg, ...retro, implementation: null }
+  return { ...agg, coverageVerdict, ...retro, implementation: null }
 }
 
-return { ...agg, ...retro, implementation: await implement(retro.issueNumber, retro.issueUrl, []) }
+return { ...agg, coverageVerdict, ...retro, implementation: await implement(retro.issueNumber, retro.issueUrl, []) }
