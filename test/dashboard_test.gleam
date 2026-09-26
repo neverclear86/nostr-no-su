@@ -336,7 +336,7 @@ fn dialog_trigger(
     view.dialog_button(
       i18n.English,
       id,
-      view.IconTextTrigger(icon, text),
+      view.IconTextFace(icon, text),
       kind,
       "",
       fn(_) { [] },
@@ -436,7 +436,7 @@ pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
     before_details,
     element.to_string(view.dialog_trigger(
       "dialog-account-" <> account.signer <> "-qr",
-      view.CompactTrigger(view.qr_code_icon(), "Connection QR code"),
+      view.CompactFace(view.qr_code_icon(), "Connection QR code"),
       view.PrimaryButton,
     )),
   )
@@ -1345,7 +1345,7 @@ pub fn relays_are_listed_one_item_per_row_test() {
   let trigger = fn(id, icon, label, kind) {
     element.to_string(view.dialog_trigger(
       "dialog-relay-" <> id,
-      view.IconOnlyTrigger(icon, label),
+      view.IconOnlyFace(icon, label),
       kind,
     ))
   }
@@ -1725,7 +1725,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
     body,
     element.to_string(view.dialog_trigger(
       "dialog-relay-1-edit",
-      view.IconOnlyTrigger(view.pencil_icon(), "Edit roles"),
+      view.IconOnlyFace(view.pencil_icon(), "Edit roles"),
       view.GhostButton,
     )),
   )
@@ -1733,7 +1733,7 @@ pub fn relay_actions_are_icon_only_with_labels_test() {
     body,
     element.to_string(view.dialog_trigger(
       "dialog-relay-1-delete",
-      view.IconOnlyTrigger(view.trash_icon(), "Delete relay"),
+      view.IconOnlyFace(view.trash_icon(), "Delete relay"),
       view.DangerGhostButton,
     )),
   )
@@ -1746,7 +1746,7 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
   let add_trigger =
     element.to_string(view.dialog_trigger(
       "dialog-relay-new",
-      view.IconTextTrigger(view.plus_icon(), "Add"),
+      view.IconTextFace(view.plus_icon(), "Add"),
       view.PrimaryButton,
     ))
   let no_bunker =
@@ -2052,7 +2052,7 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
         [
           view.dialog_trigger(
             "dialog-account-new",
-            view.IconTextTrigger(view.plus_icon(), "Add account"),
+            view.IconTextFace(view.plus_icon(), "Add account"),
             view.OutlineButton,
           ),
         ],
@@ -2065,7 +2065,7 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
       view.empty_state(view.clock_icon(), "No approved sessions.", [
         view.dialog_trigger(
           "dialog-session-connect",
-          view.IconTextTrigger(view.plus_icon(), "Connect a client"),
+          view.IconTextFace(view.plus_icon(), "Connect a client"),
           view.OutlineButton,
         ),
       ]),
@@ -2800,7 +2800,7 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
   let opener = fn(id, label) {
     element.to_string(view.dialog_trigger(
       id,
-      view.IconTextTrigger(view.plus_icon(), label),
+      view.IconTextFace(view.plus_icon(), label),
       view.PrimaryButton,
     ))
   }

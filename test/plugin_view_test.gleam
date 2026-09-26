@@ -185,7 +185,7 @@ pub fn section_renders_every_block_type_test() {
     body,
     element.to_string(view.button_link(
       "/plugins/example/settings",
-      "Open settings",
+      view.TextFace("Open settings"),
       view.GhostButton,
     )),
   )

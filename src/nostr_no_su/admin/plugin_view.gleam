@@ -193,7 +193,8 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       use page_key <- result.try(text_field(raw, "page"))
       use text <- result.try(text_field(raw, "text"))
       case context.page_href(page_key) {
-        Ok(href) -> Ok(view.button_link(href, text, view.GhostButton))
+        Ok(href) ->
+          Ok(view.button_link(href, view.TextFace(text), view.GhostButton))
         Error(Nil) -> Error("unknown page \"" <> page_key <> "\"")
       }
     }

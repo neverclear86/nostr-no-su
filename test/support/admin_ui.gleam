@@ -756,18 +756,9 @@ pub fn components(language: i18n.Language) -> List(String) {
       ),
     ],
     list.map(button_kinds, fn(kind) {
-      element.to_string(view.icon_button_link(
+      element.to_string(view.button_link(
         "/",
-        view.plus_icon(),
-        "text",
-        kind,
-      ))
-    }),
-    list.map(button_kinds, fn(kind) {
-      element.to_string(view.icon_only_link(
-        "/",
-        view.trash_icon(),
-        "label",
+        view.IconTextFace(view.plus_icon(), "text"),
         kind,
       ))
     }),
@@ -824,7 +815,7 @@ pub fn components(language: i18n.Language) -> List(String) {
       view.dialog_button(
         language,
         "dialog-x",
-        view.IconTextTrigger(view.plus_icon(), "text"),
+        view.IconTextFace(view.plus_icon(), "text"),
         view.PrimaryButton,
         "title",
         fn(_) { [] },
@@ -836,7 +827,7 @@ pub fn components(language: i18n.Language) -> List(String) {
       view.dialog_button(
         language,
         "dialog-y",
-        view.TextTrigger("text"),
+        view.TextFace("text"),
         view.GhostButton,
         "title",
         fn(_) { [] },
@@ -848,7 +839,7 @@ pub fn components(language: i18n.Language) -> List(String) {
     [
       element.to_string(view.dialog_trigger(
         "dialog-x",
-        view.CompactTrigger(view.qr_code_icon(), "text"),
+        view.CompactFace(view.qr_code_icon(), "text"),
         view.PrimaryButton,
       )),
       element.to_string(
@@ -873,9 +864,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.logo_icon(),
         view.qr_code_icon(),
         view.info_icon(),
-        view.check_circle_icon(),
         view.warning_triangle_icon(),
-        view.x_circle_icon(),
         view.plus_icon(),
         view.trash_icon(),
         view.pencil_icon(),
