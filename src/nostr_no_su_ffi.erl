@@ -233,9 +233,9 @@ start_dynamic_child(Sup, Arg) ->
     try supervisor:start_child(Sup, [Arg]) of
         {ok, _Pid, _Data} -> {ok, nil};
         {ok, _Pid} -> {ok, nil};
-        {error, Reason} -> {error, format_line("~0p", [Reason])}
+        {error, Reason} -> {error, describe_term(Reason)}
     catch
-        exit:Reason -> {error, format_line("~0p", [Reason])}
+        exit:Reason -> {error, describe_term(Reason)}
     end.
 
 %% factory_supervisor の子を Pid で止める。simple_one_for_one の
@@ -246,14 +246,13 @@ start_dynamic_child(Sup, Arg) ->
 terminate_dynamic_child(Sup, Pid) ->
     try supervisor:terminate_child(Sup, Pid) of
         ok -> {ok, nil};
-        {error, Reason} -> {error, format_line("~0p", [Reason])}
+        {error, Reason} -> {error, describe_term(Reason)}
     catch
-        exit:Reason -> {error, format_line("~0p", [Reason])}
+        exit:Reason -> {error, describe_term(Reason)}
     end.
 
-%% 任意の項を 1 行の文字列にする。子仕様の理由の文字列で、受け取った値をそのまま
-%% 見せるために使う（dynamic.classify では brutal_kill と permanent の区別が
-%% 付かず、作者の役に立たない）。
+%% 任意の項を改行の無い 1 行の文字列（~0p）にする。失敗の理由や受け取った値を、
+%% ログの 1 行や理由の文字列にそのまま見せるために使う。
 describe_term(Term) ->
     format_line("~0p", [Term]).
 
@@ -285,7 +284,7 @@ parse_ip_address(Address) ->
 %% スタックトレースの第 3 要素はアリティとは限らず、例外が呼び出しそのもので
 %% 起きたとき（undef / function_clause / BIF の badarg）は引数リストになる。
 %% handle_event/1 は erlang:apply/3 で呼ぶため、そのままだと最上位フレームに
-%% イベント map が丸ごと入る（実測 594 バイト。アリティに落とせば 88 バイト）。
+%% イベント map が丸ごと入る。
 %% 非 ASCII の content は生のバイト列に展開されるのでさらに膨らむ。
 %% nostr_no_su_store_ffi と nostr_no_su_plugin_ffi からも呼ぶので export する。
 arity(A) when is_list(A) -> length(A);

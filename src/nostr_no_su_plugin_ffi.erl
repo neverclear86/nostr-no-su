@@ -28,23 +28,17 @@ ensure_module_loaded(Module) ->
 %% `-on_load` が戻らないモジュールは code:ensure_loaded/1 が戻らないので、
 %% メタデータの呼び出しと同じ期限で打ち切る。
 %%
-%% 打ち切っても `-on_load` を走らせているプロセスは生き続けるが、その後の他の
-%% モジュールの読み込みは戻る（erl 上の実験で確認した。code:ensure_loaded/1 の
-%% 呼び出し側を kill した後もプロセス数は 1 増えたままで、当該プロセスは
-%% timer:sleep/1 に留まる。同じ VM で別のモジュールを読むと {ok,{module,okmod}}
-%% が返り、同じモジュールを読み直すと再び timed_out になる）。
+%% 打ち切っても `-on_load` を走らせているプロセスは生き続けるが、他のモジュールの
+%% 読み込みは妨げない。同じモジュールを読み直すと再び timed_out になる。
 %% -> {ok, nil} | {error, {crashed, ReasonBinary}} | {error, timed_out}
 ensure_module_loaded_within(Module, TimeoutMs) ->
     run_within(fun() -> ensure_module_loaded(Module) end, TimeoutMs).
 
-%% 子仕様の start（plugin_children/0 が申告した MFA）と call_export_within/4 の
-%% 中で、例外を 1 行の理由にするために使う。壊れたモジュールが本体の起動を
-%% 止めないよう、例外を捕捉して文字列にする。
-%% 子仕様の start は起動時（plugin_children/0 の解決時）とスーパーバイザーに
-%% よる再起動時に呼ばれる。どちらの場合も例外を捕まえるのは隔離のためではなく、
-%% 理由を 1 行に整えるためである。
-%% イベントの配送（handle_event/1）には使わない。障害の隔離は専用プロセスの
-%% 導入で行う方針で、ここで握り潰すとクラッシュが黙って消えるため。
+%% エクスポートを呼び、例外を「クラス:理由」の 1 行の文字列にして値で返す。
+%% 呼び出し元は call_export_within/4 と start_child/3 である。start_child/3 は
+%% スーパーバイザーの起動時と再起動時に、子仕様の start（plugin_children/0,1 が
+%% 申告した MFA）をスーパーバイザーのプロセスで呼ぶ。
+%% イベント処理関数は run_isolated/1 で動かし、ここは通さない。
 %% 理由はログの 1 行に収めたいので、改行を入れない ~0p で整形する。
 %% -> {ok, Value} | {error, ReasonBinary}
 call_export(Module, Function, Args) ->
@@ -55,10 +49,12 @@ call_export(Module, Function, Args) ->
             {error, nostr_no_su_ffi:format_line("~0p:~0p", [Class, Reason])}
     end.
 
-%% プラグインのメタデータ用のエクスポート（plugin_api_version/0、plugin_name/0、
-%% plugin_children/0,1）を使い捨てのプロセスで呼び、TimeoutMs で打ち切る。本体の
-%% main プロセスが起動時に同期に呼ぶので、戻らないプラグインが起動を止めないように
-%% する。
+%% プラグインのエクスポートを使い捨てのプロセスで呼び、TimeoutMs で打ち切る。
+%% 読み込み時のメタデータ（plugin_api_version/0、plugin_min_host_version/0、
+%% plugin_required_versions/0、plugin_name/0、plugin_children/0,1、
+%% plugin_pages/0,1,2）は本体の main プロセスが起動時に同期に呼び、管理 UI の
+%% ページ（plugin_page_content/1,2,3、plugin_page_action/2,3）は要求を処理する
+%% プロセスが実行時に呼ぶ。どちらも、戻らないプラグインに呼び出し側を止めさせない。
 %%
 %% 子仕様の start には使わない。start はスーパーバイザーのプロセスで呼び、子と
 %% リンクさせる必要がある（check_linked/1）。
@@ -89,7 +85,7 @@ run_within(Fun, TimeoutMs) ->
         {'DOWN', Ref, process, Pid, {nostr_no_su_export_result, {error, Reason}}} ->
             {error, {crashed, Reason}};
         {'DOWN', Ref, process, Pid, Reason} ->
-            {error, {crashed, nostr_no_su_ffi:format_line("~0p", [Reason])}}
+            {error, {crashed, nostr_no_su_ffi:describe_term(Reason)}}
     after TimeoutMs ->
         exit(Pid, kill),
         erlang:demonitor(Ref, [flush]),
@@ -112,7 +108,7 @@ start_child(Module, Function, Args) ->
     case call_export(Module, Function, Args) of
         {ok, {ok, Pid}} when is_pid(Pid) -> check_linked(Pid);
         {ok, {ok, Pid, _Info}} when is_pid(Pid) -> check_linked(Pid);
-        {ok, {error, Reason}} -> {error, nostr_no_su_ffi:format_line("~0p", [Reason])};
+        {ok, {error, Reason}} -> {error, nostr_no_su_ffi:describe_term(Reason)};
         {ok, Other} -> {error, nostr_no_su_ffi:format_line("unexpected start return ~0p", [Other])};
         {error, Reason} -> {error, Reason}
     end.
@@ -225,12 +221,8 @@ application_version(App) ->
 %% たまたま踏んだ他バンドルのものもここへ来る。形が崩れていても本体の起動を
 %% 止めてはならないため、例外は投げず、読めない・形が違う・vsn が無い（または
 %% 文字として整形できない）ときはすべて Error にする。
-%% `App` が atom で `Props` が list であることをガードで確かめたうえで
-%% `proplists:get_value/2` を呼ぶ（`function_clause` を避ける）。`atom_to_binary/1`
-%% は atom であれば必ず成功するが、`vsn` の値は不正な整数（コードポイントの範囲外
-%% や負値）を含むリストでも `is_list/1` は真になるため、`unicode:characters_to_binary/1`
-%% の戻り値が binary であることまで確かめる（不正な入力は `{error, Bin, Rest}` を
-%% 返す場合と `badarg` の例外を投げる場合があり、`try` はその両方を一度に塞ぐ）。
+%% 不正な vsn では unicode:characters_to_binary/1 が {error, _, _} を返すことも
+%% badarg を投げることもあるので、戻り値の検査と try の両方で塞ぐ。
 %% -> {ok, {AppBinary, VsnBinary}} | {error, nil}
 read_app_file(Path) ->
     try
@@ -262,8 +254,7 @@ message_queue_len() ->
 %% プラグインの handle_event/1 を使い捨てのプロセスで動かし、{Pid, MonitorRef}
 %% を返す。spawn と monitor を分けてはならない。ワーカーが monitor の前に終わる
 %% と erlang:monitor/2 が即座に理由 noproc の DOWN を送り、正常な実行を失敗と
-%% 誤判定する（10,000 回に 1 回程度発生する）。spawn_monitor/1 はこれを不可分に
-%% 行う。
+%% 誤判定する。spawn_monitor/1 はこれを不可分に行う。
 %%
 %% ワーカーの中で例外を捕まえるのは、隔離のためではなく終了理由を短くするため
 %% である。DOWN の理由は既定では {Reason, Stacktrace} で、そのまま文字列にすると
@@ -288,8 +279,8 @@ run_isolated(Fun) ->
                 exit(
                     {nostr_no_su_plugin_failure,
                         nostr_no_su_ffi:format_line("~0p:~0p", [Class, Reason]),
-                        nostr_no_su_ffi:format_line(
-                            "~0p", [[{M, F, nostr_no_su_ffi:arity(A)} || {M, F, A, _} <- Stack]]
+                        nostr_no_su_ffi:describe_term(
+                            [{M, F, nostr_no_su_ffi:arity(A)} || {M, F, A, _} <- Stack]
                         )}
                 )
         end
@@ -299,4 +290,4 @@ run_isolated(Fun) ->
 %% run_isolated/1 が付けた形だけを特別扱いし、それ以外（外部からの exit など）は
 %% そのまま 1 行にする。戻り値は Gleam の #(String, Option(String))。
 describe_exit({nostr_no_su_plugin_failure, Reason, Stack}) -> {Reason, {some, Stack}};
-describe_exit(Reason) -> {nostr_no_su_ffi:format_line("~0p", [Reason]), none}.
+describe_exit(Reason) -> {nostr_no_su_ffi:describe_term(Reason), none}.
