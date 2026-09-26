@@ -13,6 +13,9 @@
 ////
 //// リレーやイベントなど外部由来の文字列は、改行や制御文字を含みうるので、
 //// ログ行に入れる前に必ず `sanitize`（または `sanitize_external`）を通す。
+////
+//// 制御文字の集合は `is_control` の 1 か所で定義する。ログの外で同じ判定が要るときも、
+//// 別の集合を足さずにこれを使う。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -147,7 +150,6 @@ pub fn sanitize_external(text: String) -> String {
 }
 
 /// `sanitize` が空白に置き換えるコードポイント（`is_control`）を 1 つでも含むか。
-/// 値をログに入れずに捨てる側が、`sanitize` と同じ規則で判定するために使う。
 pub fn has_control(text: String) -> Bool {
   string.to_utf_codepoints(text)
   |> list.any(is_control)
@@ -157,7 +159,7 @@ pub fn has_control(text: String) -> Bool {
 /// （U+0000〜U+001F）、DEL と C1（U+007F〜U+009F）、行区切りと段落区切り
 /// （U+2028、U+2029）、双方向テキストの埋め込みと上書き（U+202A〜U+202E）、
 /// 分離（U+2066〜U+2069）が対象である。
-fn is_control(codepoint: UtfCodepoint) -> Bool {
+pub fn is_control(codepoint: UtfCodepoint) -> Bool {
   let code = string.utf_codepoint_to_int(codepoint)
   code < 0x20
   || { code >= 0x7f && code < 0xa0 }

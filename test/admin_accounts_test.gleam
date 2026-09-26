@@ -264,8 +264,8 @@ pub fn import_rejects_a_label_over_the_code_point_limit_test() {
 }
 
 /// 空のラベル（欄が無い、空文字列、空白だけ）と、trim の前にだけある制御文字
-/// （末尾の "\n"、U+0085 だけ）は、登録、生成した鍵の登録、ラベルの編集のどの経路
-/// でも 400 になり、登録も更新もしない。
+/// （末尾の "\n"、U+0085 だけ）と、双方向テキストの上書き（U+202E）を含むラベルは、
+/// 登録、生成した鍵の登録、ラベルの編集のどの経路でも 400 になり、登録も更新もしない。
 pub fn invalid_label_is_rejected_on_every_path_test() {
   let reports = process.new_subject()
   let generated =
@@ -282,6 +282,11 @@ pub fn invalid_label_is_rejected_on_every_path_test() {
     #(
       "next line only",
       [#("label", "\u{0085}")],
+      "label must not contain control characters",
+    ),
+    #(
+      "right-to-left override",
+      [#("label", "a\u{202E}b")],
       "label must not contain control characters",
     ),
   ]
@@ -397,6 +402,17 @@ pub fn invalid_input_keeps_the_label_on_every_path_test() {
       "edit with a line feed",
       post_form(context(), action_path(dashboard.EditLabel), [
         #("label", " a\nb "),
+      ]),
+      400,
+      "label must not contain control characters",
+      " ab ",
+      None,
+      edit_id,
+    ),
+    #(
+      "edit with a right-to-left override",
+      post_form(context(), action_path(dashboard.EditLabel), [
+        #("label", " a\u{202E}b "),
       ]),
       400,
       "label must not contain control characters",
