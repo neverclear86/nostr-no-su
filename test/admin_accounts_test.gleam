@@ -1298,6 +1298,17 @@ pub fn connection_qr_dialog_shows_the_camera_steps_once_test() {
   assert list.length(string.split(qr_dialog(context()), steps)) == 2
 }
 
+/// 要承認の URI のタブは、承認するまで署名できない旨の説明を中身に持つ。
+pub fn connection_qr_dialog_explains_the_approval_uri_test() {
+  let body = qr_dialog(context())
+  let assert Ok(#(_before, approval_tab)) =
+    string.split_once(body, "Connection URI (approval)</label>")
+  assert string.contains(
+    approval_tab,
+    wisp.escape_html(i18n.text(i18n.English, i18n.ApprovalUriNeedsApproval)),
+  )
+}
+
 /// バンカー用途のリレーがある Context では、その URL と一覧の見出しがダイアログに出る。
 pub fn connection_qr_dialog_lists_the_bunker_relays_test() {
   let body = qr_dialog(context())

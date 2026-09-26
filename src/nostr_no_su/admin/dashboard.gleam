@@ -102,6 +102,21 @@ pub type PluginRow {
   )
 }
 
+/// プラグインの状態の分類。`plugin_state` のチップと語と詳細、概要の帯の件数がこれを使う。
+type PluginCondition {
+  PluginCondition(
+    chip: view.Chip,
+    word: i18n.Message,
+    detail: Option(PluginDetail),
+  )
+}
+
+/// 状態のチップの下に出す詳細。破棄したイベントの件数と、無効のときだけその理由（プラグイン
+/// 由来の英語の文字列）。
+type PluginDetail {
+  PluginDetail(dropped: Int, reason: Option(String))
+}
+
 /// 承認待ちのカードと承認ページに出す署名者の表示。アカウント一覧と突き合わせられればラベルと
 /// npub、そうでなければ 16 進。
 pub type SignerName {
@@ -774,43 +789,26 @@ fn relays_overview(relays: Result(List(RelayRow), i18n.Reason)) -> Overview {
 /// （ランナーが無いため）。補足は過負荷・無効・応答なし・読み込み失敗の件数を要対応の語で出し、
 /// どれも無ければ、プラグインが 1 件も無いとき「有効なプラグインなし」、あれば値の読み方
 /// （「動作中 / 全件数」）を出す。
+/// 状態は `plugin_condition` のチップで数え分ける。
 fn plugins_overview(
   plugins: List(PluginRow),
   not_loaded: List(plugin_loader.NotLoaded),
 ) -> Overview {
-  let count = fn(matches: fn(Option(plugin_runner.Status)) -> Bool) {
-    list.count(plugins, fn(plugin) { matches(plugin.status) })
+  let count = fn(chip: view.Chip) {
+    list.count(plugins, fn(plugin) {
+      plugin_condition(plugin.status).chip == chip
+    })
   }
-  let running = count(fn(status) { status == Some(plugin_runner.Running) })
-  let overloaded =
-    count(fn(status) {
-      case status {
-        Some(plugin_runner.Overloaded(..)) -> True
-        _ -> False
-      }
-    })
-  let disabled =
-    count(fn(status) {
-      case status {
-        Some(plugin_runner.Disabled(..)) -> True
-        _ -> False
-      }
-    })
-  let unavailable = count(fn(status) { status == None })
+  let chip_notes = fn(chip: view.Chip, text: fn(Int) -> i18n.Message) {
+    attention_notes(count(chip), chip, text)
+  }
+  let running = count(view.ActiveChip)
   let total = list.length(plugins)
   let issues =
     list.flatten([
-      attention_notes(
-        overloaded,
-        view.OverloadedChip,
-        i18n.OverloadedPluginCount,
-      ),
-      attention_notes(disabled, view.DisabledChip, i18n.DisabledPluginCount),
-      attention_notes(
-        unavailable,
-        view.UnansweredChip,
-        i18n.UnavailablePluginCount,
-      ),
+      chip_notes(view.OverloadedChip, i18n.OverloadedPluginCount),
+      chip_notes(view.DisabledChip, i18n.DisabledPluginCount),
+      chip_notes(view.UnansweredChip, i18n.UnavailablePluginCount),
       attention_notes(
         list.length(not_loaded),
         view.LoadFailedChip,
@@ -1435,7 +1433,7 @@ fn account_item(
   account: AccountRow,
 ) -> Element(msg) {
   let action_dialogs =
-    list.map(list.append(detail_actions, [DeleteAccount]), fn(action) {
+    list.map(account_actions, fn(action) {
       account_dialog(language, account, action, dialog)
     })
   view.list_row(view.StackedRow, [
@@ -1699,7 +1697,7 @@ fn connection_qr_dialog(
             i18n.ConnectionUriForApproval,
             account.auth_uri,
             account.auth_uri_camera_text,
-            approval_note(language),
+            html.p([], [html.text(text(i18n.ApprovalUriNeedsApproval))]),
           ),
         ]),
         html.p([], [html.text(text(i18n.CameraCopySteps))]),
@@ -1715,12 +1713,6 @@ fn connection_qr_dialog(
     i18n.Close,
     view.OpensOnTrigger,
   )
-}
-
-/// 要承認のタブの `note`。この URI で接続したクライアントは承認待ちで承認するまで署名
-/// できない旨を伝える。
-fn approval_note(language: Language) -> Element(msg) {
-  html.p([], [html.text(i18n.text(language, i18n.ApprovalUriNeedsApproval))])
 }
 
 /// 接続 URI 1 件のタブの語と中身の組（`view.radio_tabs` に渡す）。中身は `note`、端末の
@@ -2914,9 +2906,11 @@ fn relay_role(
 fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   let text = i18n.text(language, _)
   case state {
-    Reported(status) -> relay_status(language, status)
-    Unanswered ->
-      view.status_chip(view.UnansweredChip, text(i18n.PluginUnavailable))
+    Reported(Connected) ->
+      view.status_chip(view.ActiveChip, text(i18n.RelayConnected))
+    Reported(Disconnected) ->
+      view.status_chip(view.DisconnectedChip, text(i18n.RelayDisconnected))
+    Unanswered -> view.status_chip(view.UnansweredChip, text(i18n.NoResponse))
     Unused -> view.status_chip(view.UnusedChip, text(i18n.RelayRoleUnused))
   }
 }
@@ -3755,33 +3749,51 @@ fn reload_form(language: Language) -> Element(msg) {
   )
 }
 
-/// リレーの接続状態のバッジ。
-fn relay_status(language: Language, status: Status) -> Element(msg) {
-  let chip = case status {
-    Connected -> view.ActiveChip
-    Disconnected -> view.DisconnectedChip
-  }
-  view.status_chip(chip, i18n.text(language, status_label(status)))
-}
-
-/// プラグインの状態。バッジと、あれば詳細を縦に並べる。応答が無いのは再起動中か応答待ちの
-/// 一時的な状態だが、イベントを処理できていないので警告の色にする。
+/// プラグインの状態。`plugin_condition` の分類のチップと、あれば詳細を縦に並べる。`Disabled`
+/// の理由はプラグイン由来の英語の文字列なので、訳さずにテキストとして描画する（長さは
+/// `plugin_runner` 側で切ってあるので、ここでは切らない）。
 pub fn plugin_state(language: Language, plugin: PluginRow) -> Element(msg) {
-  let chip = case plugin.status {
-    None -> view.UnansweredChip
-    Some(plugin_runner.Running) -> view.ActiveChip
-    Some(plugin_runner.Overloaded(..)) -> view.OverloadedChip
-    Some(plugin_runner.Disabled(..)) -> view.DisabledChip
-  }
-  let #(word, detail) = plugin_state_label(language, plugin.status)
-  let badge = view.status_chip(chip, word)
+  let PluginCondition(chip:, word:, detail:) = plugin_condition(plugin.status)
+  let badge = view.status_chip(chip, i18n.text(language, word))
   case detail {
     None -> badge
-    Some(detail) ->
+    Some(PluginDetail(dropped:, reason:)) -> {
+      let dropped_text = i18n.text(language, i18n.Dropped(dropped))
+      let detail = case reason {
+        None -> [html.text(dropped_text)]
+        Some(reason) -> [
+          view.untranslated(reason),
+          html.text(i18n.sentence_gap(language) <> dropped_text),
+        ]
+      }
       html.div([attribute.class("flex flex-col items-start gap-1")], [
         badge,
         html.span([attribute.class("text-xs break-words")], detail),
       ])
+    }
+  }
+}
+
+/// プラグインの状態をチップ・語・詳細に分類する。応答が無い（`None`）のは再起動中か応答待ちの
+/// 一時的な状態だが、イベントを処理できていないので警告の色のチップにする。詳細は過負荷と無効
+/// だけが持つ。
+fn plugin_condition(status: Option(plugin_runner.Status)) -> PluginCondition {
+  case status {
+    None -> PluginCondition(view.UnansweredChip, i18n.NoResponse, None)
+    Some(plugin_runner.Running) ->
+      PluginCondition(view.ActiveChip, i18n.PluginRunning, None)
+    Some(plugin_runner.Overloaded(dropped:)) ->
+      PluginCondition(
+        view.OverloadedChip,
+        i18n.PluginOverloaded,
+        Some(PluginDetail(dropped:, reason: None)),
+      )
+    Some(plugin_runner.Disabled(reason:, dropped:)) ->
+      PluginCondition(
+        view.DisabledChip,
+        i18n.PluginDisabled,
+        Some(PluginDetail(dropped:, reason: Some(reason))),
+      )
   }
 }
 
@@ -3812,38 +3824,5 @@ fn reenable_form_if_disabled(
   case plugin.status {
     Some(plugin_runner.Disabled(..)) -> [reenable_form(language, plugin.name)]
     _ -> []
-  }
-}
-
-/// プラグインの状態の語と、あれば詳細。`Disabled` の理由はプラグイン由来の英語の文字列
-/// なので、訳さずにテキストとして描画する（長さは `plugin_runner` 側で切ってあるので、
-/// ここでは切らない）。
-fn plugin_state_label(
-  language: Language,
-  status: Option(plugin_runner.Status),
-) -> #(String, Option(List(Element(msg)))) {
-  let text = i18n.text(language, _)
-  case status {
-    None -> #(text(i18n.PluginUnavailable), None)
-    Some(plugin_runner.Running) -> #(text(i18n.PluginRunning), None)
-    Some(plugin_runner.Overloaded(dropped:)) -> #(
-      text(i18n.PluginOverloaded),
-      Some([html.text(text(i18n.Dropped(dropped)))]),
-    )
-    Some(plugin_runner.Disabled(reason:, dropped:)) -> #(
-      text(i18n.PluginDisabled),
-      Some([
-        view.untranslated(reason),
-        html.text(i18n.sentence_gap(language) <> text(i18n.Dropped(dropped))),
-      ]),
-    )
-  }
-}
-
-/// 接続状態の表示名。
-fn status_label(status: Status) -> i18n.Message {
-  case status {
-    Connected -> i18n.RelayConnected
-    Disconnected -> i18n.RelayDisconnected
   }
 }
