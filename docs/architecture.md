@@ -693,7 +693,7 @@ nostr-no-su/
 │       ├── plugin_config.gleam   プラグイン固有の設定の切り出し
 │       ├── plugin_loader.gleam   PLUGIN_DIR の走査とコードパスへの追加
 │       ├── plugin_runner.gleam   プラグイン 1 つぶんの実行プロセス
-│       ├── plugin_term.gleam     プラグインのエクスポートが返す項の読み取りの部品（純粋）
+│       ├── plugin_term.gleam     プラグインのエクスポートが返す項の読み取りと検査の部品（純粋）
 │       ├── plugins/
 │       │   └── console_logger.gleam  内蔵プラグイン（受信を 1 行出す）
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
