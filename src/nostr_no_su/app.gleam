@@ -41,7 +41,7 @@ import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/delivery
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
-import nostr_no_su/bunker/session.{type Pending, type Session}
+import nostr_no_su/bunker/session.{type Pending}
 import nostr_no_su/bunker/vault
 import nostr_no_su/config
 import nostr_no_su/db
@@ -674,7 +674,7 @@ fn admin_child(
       connect_client: fn(request, signer) {
         connect_nostrconnect(spec, request, signer)
       },
-      sessions: fn() { result.map(bunker.sessions(bunker_name), session_rows) },
+      sessions: fn() { bunker.sessions(bunker_name) },
       revoke: fn(signer, client) { bunker.revoke(bunker_name, signer, client) },
       update_perms: fn(signer, client, perms) {
         bunker.update_perms(bunker_name, signer, client, perms)
@@ -1161,18 +1161,6 @@ pub fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
     expires_in_seconds: entry.created_at + engine.pending_ttl_seconds - now,
     secret_mismatch: entry.secret_mismatch,
     perms: entry.perms,
-  )
-}
-
-/// 承認済みセッションを管理 UI の行にする。
-pub fn session_rows(sessions: List(Session)) -> List(dashboard.SessionRow) {
-  use session <- list.map(sessions)
-  dashboard.SessionRow(
-    signer: session.signer,
-    client: session.client,
-    perms: session.perms,
-    created_at: session.created_at,
-    last_used_at: session.last_used_at,
   )
 }
 

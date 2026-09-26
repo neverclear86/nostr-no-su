@@ -17,6 +17,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/nostrconnect
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
@@ -287,19 +288,21 @@ pub fn test_context(
     plugin_page_action: plugin_page_action,
     sessions: fn() {
       Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: signer,
           client: client,
           perms: "",
           created_at: 1000,
           last_used_at: 1000,
+          relays: [],
         ),
-        dashboard.SessionRow(
+        session.Session(
           signer: signer,
           client: declared_client,
           perms: "sign_event:1,nip04_encrypt",
           created_at: 1000,
           last_used_at: 900,
+          relays: [],
         ),
       ])
     },

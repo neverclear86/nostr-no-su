@@ -18,6 +18,7 @@ import nostr_no_su/admin/fingerprint
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_pages
 import nostr_no_su/admin/view
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
@@ -139,12 +140,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
         ),
       ]),
       sessions: Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: account_hex,
           client: "4567",
           perms: "",
           created_at: 1000,
           last_used_at: 1000,
+          relays: [],
         ),
       ]),
       plugins: [

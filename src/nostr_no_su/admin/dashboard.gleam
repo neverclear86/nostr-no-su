@@ -21,6 +21,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/permission.{type Permission}
+import nostr_no_su/bunker/session.{type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
@@ -140,19 +141,6 @@ pub type PendingRow {
   )
 }
 
-/// 承認済みセッション 1 件の表示内容。時刻は Unix 秒。`perms` は承認したときに要求
-/// されていた権限（無ければ空文字列）で、`connect` し直しても変わらず、管理 UI の
-/// 「権限を編集」でだけ変わる。
-pub type SessionRow {
-  SessionRow(
-    signer: String,
-    client: String,
-    perms: String,
-    created_at: Int,
-    last_used_at: Int,
-  )
-}
-
 /// ダッシュボードが表示する状態の一式。`Result` の欄（アカウント、飛ばされた行、承認待ち、リレー、
 /// セッション）は、読み込み中・応答なし・締め切り超過などで得られないときは、その理由を `Error` で持つ。
 pub type Snapshot {
@@ -168,7 +156,7 @@ pub type Snapshot {
     /// 答えなければ `RoleState.Unanswered` になる。
     relays: Result(List(RelayRow), i18n.Reason),
     /// 承認済みセッションの一覧。
-    sessions: Result(List(SessionRow), i18n.Reason),
+    sessions: Result(List(Session), i18n.Reason),
     plugins: List(PluginRow),
     /// 起動時に読み込めなかったプラグインの一覧。0 件なら枠ごと描かない。
     not_loaded_plugins: List(plugin_loader.NotLoaded),
@@ -678,9 +666,7 @@ fn accounts_overview(
 }
 
 /// セッションの項目。承認済みのクライアントの件数を出す。
-fn sessions_overview(
-  sessions: Result(List(SessionRow), i18n.Reason),
-) -> Overview {
+fn sessions_overview(sessions: Result(List(Session), i18n.Reason)) -> Overview {
   case sessions {
     Error(_) -> not_available
     Ok(rows) ->
@@ -1374,7 +1360,7 @@ fn shared_failure_alert(
 /// （畳みの中では開いた状態で描いても見えないため）。
 fn account_item(
   language: Language,
-  sessions: Result(List(SessionRow), i18n.Reason),
+  sessions: Result(List(Session), i18n.Reason),
   relays: Result(List(RelayRow), i18n.Reason),
   dialog: Option(OpenDialog),
   account: AccountRow,
@@ -1444,7 +1430,7 @@ fn account_icon(account: AccountRow) -> Element(msg) {
 /// 何も出さない。
 fn session_count(
   language: Language,
-  sessions: Result(List(SessionRow), i18n.Reason),
+  sessions: Result(List(Session), i18n.Reason),
   signer: String,
 ) -> Element(msg) {
   case sessions {
@@ -3059,7 +3045,7 @@ fn session_item(
   accounts: Result(List(AccountRow), i18n.Reason),
   now: Int,
   dialog: Option(OpenDialog),
-  session: SessionRow,
+  session: Session,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.list_row(view.StackedRow, [
@@ -3111,7 +3097,7 @@ fn client_pubkey_line(language: Language, client: String) -> Element(msg) {
 fn last_used_value(
   language: Language,
   now: Int,
-  session: SessionRow,
+  session: Session,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   html.span(
@@ -3140,7 +3126,7 @@ fn session_actions(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
   dialog: Option(OpenDialog),
-  session: SessionRow,
+  session: Session,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
   let summary = session_dialog_summary(language, accounts, session)
@@ -3191,7 +3177,7 @@ fn session_actions(
 }
 
 /// セッションの行のダイアログの `id`。署名者とクライアントの 16 進の公開鍵と操作の語から作る。
-fn session_dialog_id(session: SessionRow, action: String) -> String {
+fn session_dialog_id(session: Session, action: String) -> String {
   view.dialog_id(["session", session.signer, session.client, action])
 }
 
@@ -3200,7 +3186,7 @@ fn session_dialog_id(session: SessionRow, action: String) -> String {
 fn session_dialog_summary(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
-  session: SessionRow,
+  session: Session,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
   view.detail_list([
@@ -3210,7 +3196,7 @@ fn session_dialog_summary(
 }
 
 /// 最終利用の `title` に出す、UTC の全文と作成時刻。
-fn session_time_title(language: Language, session: SessionRow) -> String {
+fn session_time_title(language: Language, session: Session) -> String {
   let text = i18n.text(language, _)
   text(i18n.LastUsed)
   <> ": "
@@ -3239,7 +3225,7 @@ pub type PermissionsForm {
 /// 補足の `id` は行のダイアログの `id` から作り、1 つのページで重ならないようにする。
 pub fn permissions_form(
   language: Language,
-  session: SessionRow,
+  session: Session,
   form: Option(PermissionsForm),
   placement: view.Placement,
 ) -> List(Element(msg)) {
@@ -3631,7 +3617,7 @@ fn decision_forms(
 /// 並べ、確認のダイアログの中にだけ置く。取り消しは接続中のクライアントに影響するので warning の枠のボタンにする。
 fn revoke_form(
   language: Language,
-  session: SessionRow,
+  session: Session,
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)

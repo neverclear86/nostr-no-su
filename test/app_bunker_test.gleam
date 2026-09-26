@@ -1251,30 +1251,6 @@ pub fn bunker_connections_answer_authentication_test() {
   stop_tree(tree)
 }
 
-/// `app.session_rows` は時刻と perms をそのまま写す。
-pub fn session_rows_keep_times_and_perms_test() {
-  let sessions = [
-    session.Session(
-      signer: "ab",
-      client: "cd",
-      perms: "sign_event:1",
-      created_at: 10,
-      last_used_at: 20,
-      relays: [],
-    ),
-  ]
-  assert app.session_rows(sessions)
-    == [
-      dashboard.SessionRow(
-        signer: "ab",
-        client: "cd",
-        perms: "sign_event:1",
-        created_at: 10,
-        last_used_at: 20,
-      ),
-    ]
-}
-
 /// `app.pending_rows` は失効までの残り秒を問い合わせた時点の時刻から求め、他の値は
 /// そのまま写す。
 pub fn pending_rows_count_down_to_the_expiry_test() {

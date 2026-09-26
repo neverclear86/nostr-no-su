@@ -13,6 +13,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/view
 import nostr_no_su/admin/wordmark
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
@@ -360,13 +361,14 @@ fn fingerprinted_account() -> dashboard.AccountRow {
 }
 
 /// 署名者 `signer` の承認済みセッション 1 件。`client` で行を区別する。
-fn session_of(signer: String, client: String) -> dashboard.SessionRow {
-  dashboard.SessionRow(
+fn session_of(signer: String, client: String) -> session.Session {
+  session.Session(
     signer:,
     client:,
     perms: "",
     created_at: 1_788_253_200,
     last_used_at: 1_789_276_354,
+    relays: [],
   )
 }
 
@@ -564,12 +566,13 @@ pub fn sessions_show_perms_test() {
     dashboard.Snapshot(
       ..states(),
       sessions: Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: "abcd",
           client: "ef01",
           perms: "sign_event:7",
           created_at: 1_788_253_200,
           last_used_at: 1_789_276_354,
+          relays: [],
         ),
       ]),
     )
@@ -588,12 +591,13 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
     dashboard.Snapshot(
       ..states(),
       sessions: Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: "abcd",
           client: "ef01",
           perms: "",
           created_at: 1_788_253_200,
           last_used_at: 1_789_276_354,
+          relays: [],
         ),
       ]),
     )
@@ -1165,12 +1169,13 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
       ..states(),
       accounts: Ok([account]),
       sessions: Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: known_signer,
           client: "ef01",
           perms: "sign_event:1",
           created_at: 1000,
           last_used_at: 1000,
+          relays: [],
         ),
       ]),
     )
@@ -1198,12 +1203,13 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
       ..states(),
       now:,
       sessions: Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer: "abcd",
           client: "ef01",
           perms: "",
           created_at:,
           last_used_at:,
+          relays: [],
         ),
       ]),
     )
@@ -2398,13 +2404,14 @@ pub fn pending_card_draws_the_client_fingerprint_test() {
 }
 
 /// クライアントの公開鍵が `client` の承認済みセッション 1 件。
-fn session_row(client: String) -> dashboard.SessionRow {
-  dashboard.SessionRow(
+fn session_row(client: String) -> session.Session {
+  session.Session(
     signer: "abcd",
     client:,
     perms: "sign_event:7",
     created_at: 1_788_253_200,
     last_used_at: 1_789_276_354,
+    relays: [],
   )
 }
 
@@ -2922,11 +2929,11 @@ fn session_snapshot() -> dashboard.Snapshot {
     ..states(),
     accounts: Ok([session_account()]),
     sessions: Ok([
-      dashboard.SessionRow(
+      session.Session(
         ..session_of("abcd", "ef01"),
         perms: "sign_event,nip44_encrypt",
       ),
-      dashboard.SessionRow(..session_of("abcd", "ef02"), perms: "sign_event:7"),
+      session.Session(..session_of("abcd", "ef02"), perms: "sign_event:7"),
     ]),
   )
 }
@@ -3050,12 +3057,13 @@ pub fn connect_content_follows_the_accounts_state_test() {
 /// 権限が `perms` のセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
 fn english_permissions_form(perms: String) -> String {
   let session =
-    dashboard.SessionRow(
+    session.Session(
       signer: "0123",
       client: "4567",
       perms: perms,
       created_at: 0,
       last_used_at: 0,
+      relays: [],
     )
   dashboard.permissions_form(i18n.English, session, None, view.InForm)
   |> element.fragment
