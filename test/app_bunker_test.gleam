@@ -21,17 +21,18 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event
 import nostr_no_su/nostr/message
 import nostr_no_su/relay_connection
+import nostr_no_su/relay_list
 import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
   Published, Subscribed, Wrote, accounts_only, authenticator_recording_open,
   await_connection, await_signers, bunker_spec, call_counter, client_key,
   committed_but_timed_out_store, connect_request, connect_request_from,
-  fake_open, fixed_retry_delay, idle_monitor, load_signer, memory_store,
-  named_relay, other_client_key, other_signer_key, request, response_body,
+  connection_name, fake_open, fixed_retry_delay, idle_monitor, load_signer,
+  memory_store, other_client_key, other_signer_key, request, response_body,
   secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_loading_bunker_tree_with_open, start_tree, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay_url,
+  start_loading_bunker_tree_with_open, start_tree_with_relays, stop_tree,
+  store_failure, store_with_load, stored_signer, test_relay_url,
 }
 import support/log_capture
 import support/nip46_client.{account_for}
@@ -1172,17 +1173,16 @@ pub fn unapplied_session_changes_log_no_success_line_test() {
 /// 片方のソケットを kill すると、以降の応答は生きている側からだけ出ていく。
 pub fn a_lost_socket_stops_receiving_responses_test() {
   let reports = process.new_subject()
-  let relay_a = named_relay("ws://relay.one")
-  let relay_b = named_relay("ws://relay.two")
-  let tree =
-    start_tree(app.Spec(
+  let relay_a = "ws://relay.one"
+  let relay_b = "ws://relay.two"
+  let spec =
+    app.Spec(
       plugins: [],
       not_loaded_plugins: [],
       monitor: idle_monitor(),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
         store_with_load(fn() { load_signer(signer_key) }),
-        [relay_a, relay_b],
         fixed_retry_delay,
       ),
       admin: None,
@@ -1190,14 +1190,15 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
       relay_list: process.new_name("test_relay_list"),
-    ))
+    )
+  let tree = start_tree_with_relays(spec, [], [relay_a, relay_b])
   // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
   // どちらのリレーの報告かを決める。
   let assert Opened(first_url, _connection_1, socket_1, deliver_1) =
     await_connection(reports)
   let assert Opened(_second_url, _connection_2, socket_2, deliver_2) =
     await_connection(reports)
-  let #(socket_a, socket_b, deliver) = case first_url == relay_a.url {
+  let #(socket_a, socket_b, deliver) = case first_url == relay_a {
     True -> #(socket_1, socket_2, deliver_1)
     False -> #(socket_2, socket_1, deliver_2)
   }
@@ -1209,7 +1210,10 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   assert first != second
 
   process.kill(socket_a)
-  assert await_disconnect(relay_a.name, 2000)
+  assert await_disconnect(
+    connection_name(spec, relay_a, relay_list.Bunker),
+    2000,
+  )
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(answered_on, pong)) = process.receive(reports, 2000)
   assert answered_on == socket_b

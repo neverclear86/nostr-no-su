@@ -19,7 +19,7 @@
 //// `process.named` が `Error` なので止められず、再起動した接続が一覧から消えた
 //// まま残る。落ちる経路はバグに限られるので容認する。
 ////
-//// **既知の窓 2**: このアクター自身が落ちると一覧は起動時の値（本番は空）に戻り、
+//// **既知の窓 2**: このアクター自身が落ちると一覧は空に戻り、
 //// 動いている接続とずれる。次にバンカーが読み込みに成功するまで、行は
 //// `OpenRegistered` で戻らない。ハンドラーが呼ぶ FFI は落ちる経路（`exit`）を
 //// 値にしているため、落ちるのはバグに限られる。セッションのリレーの接続も、次に
@@ -166,32 +166,6 @@ type State {
     session_urls: List(String),
     sessions: List(Connection),
   )
-}
-
-/// 起動時の一覧を、監視の一覧を先に、その後にバンカーの一覧のうち未出の URL を
-/// 並べて作る。両方にある URL は 1 項目にまとめ、バンカーの名前を足す。
-pub fn initial(
-  monitor: List(Connection),
-  bunker: List(Connection),
-) -> List(Entry) {
-  let from_monitor =
-    list.map(monitor, fn(connection) {
-      Entry(url: connection.url, monitor: Some(connection.name), bunker: None)
-    })
-  use entries, connection <- list.fold(bunker, from_monitor)
-  case is_listed(entries, connection.url) {
-    True ->
-      list.map(entries, fn(entry) {
-        case entry.url == connection.url {
-          True -> Entry(..entry, bunker: Some(connection.name))
-          False -> entry
-        }
-      })
-    False ->
-      list.append(entries, [
-        Entry(url: connection.url, monitor: None, bunker: Some(connection.name)),
-      ])
-  }
 }
 
 /// `registered` を順に `open` で一覧の末尾へ足す。すでに一覧にある URL
@@ -368,17 +342,16 @@ fn factory_for_role(factories: Factories, role: Role) -> FactoryName {
   }
 }
 
-/// スーパービジョンツリー用の子仕様。
+/// スーパービジョンツリー用の子仕様。一覧は空で起動する。
 pub fn supervised(
   name: Name(Msg),
-  initial: List(Entry),
   factories: Factories,
 ) -> ChildSpecification(Subject(Msg)) {
-  supervision.worker(fn() { start(name, initial, factories) })
+  supervision.worker(fn() { start(name, [], factories) })
 }
 
 /// このアクターを起動する。`name` で登録するため、`open_relay` などの呼び出しは
-/// 再起動をまたいで同じ宛先に届く。
+/// 再起動をまたいで同じ宛先に届く。`initial` は起動時の一覧で、`supervised` は空を渡す。
 pub fn start(
   name: Name(Msg),
   initial: List(Entry),

@@ -257,7 +257,6 @@ fn spec(pool: pog.Config, admin: Option(config.AdminListen)) -> app.Spec {
       ..app_tree.bunker_spec(
         process.new_name("log_redaction_bunker"),
         app_tree.store_with_load(fn() { Ok(app_tree.accounts_only([])) }),
-        [],
         app_tree.fixed_retry_delay,
       ),
       pool: pool,

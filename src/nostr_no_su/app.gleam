@@ -207,11 +207,10 @@ pub type PluginSpec {
 }
 
 /// 監視サブツリー。受信したイベントをプラグインのランナーへ配る重複排除
-/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。`relays` は
-/// `relay_list` の起動時の一覧で、本番は空。行はバンカーの読み込みから
-/// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。
-/// `subscriptions` はリレー URL からそのリレーの購読の定義を返す。`save_resume`
-/// は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
+/// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。リレーは
+/// バンカーの読み込みから `OpenRegistered` で届き、実行時の増減には `open_relay`
+/// などを使う。`subscriptions` はリレー URL からそのリレーの購読の定義を返す。
+/// `save_resume` は再開点を小さくせずに保存する操作で、`resume_saver` が使う。
 /// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、2 本目の
 /// `resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
 /// プラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
@@ -220,7 +219,6 @@ pub type Monitor {
   Monitor(
     name: Name(dedup.Msg),
     dedup_capacity: Int,
-    relays: List(relay_list.Connection),
     subscriptions: fn(String) -> Subscriptions,
     save_resume: fn(List(#(String, Int))) -> Result(Nil, String),
     save_plugin_resume: fn(List(#(String, Int))) -> Result(Nil, String),
@@ -232,19 +230,17 @@ pub type Monitor {
 /// バンカーサブツリー。アカウントストアの接続プールと、NIP-46 アクターと、それが
 /// 待ち受け・応答するリレー群。`pool` はパスワードを含みうるので、表示やログに
 /// 入れないこと。`lock_pool` は同じ DB に 1 インスタンスだけを許すロック専用の
-/// 1 本のプール。`pool` と同じくパスワードを含みうる。`relays` は `relay_list` の
-/// 起動時の一覧で、本番は空。行はバンカーの読み込みから `OpenRegistered` で届き、
-/// 実行時の増減には `open_relay` などを使う。`subscriptions` は署名者の問い合わせ
-/// （応答が無ければ `None`）から購読の定義を作る関数で、基本の接続には全署名者、
-/// セッションのリレーの接続にはその URL を持つセッションと取り置きの署名者の問い合わせ
-/// （`bunker.session_signers`）を渡す。
+/// 1 本のプール。`pool` と同じくパスワードを含みうる。リレーはバンカーの読み込みから
+/// `OpenRegistered` で届き、実行時の増減には `open_relay` などを使う。`subscriptions`
+/// は署名者の問い合わせ（応答が無ければ `None`）から購読の定義を作る関数で、基本の
+/// 接続には全署名者、セッションのリレーの接続にはその URL を持つセッションと取り置きの
+/// 署名者の問い合わせ（`bunker.session_signers`）を渡す。
 pub type Bunker {
   Bunker(
     name: Name(bunker.Msg),
     pool: pog.Config,
     lock_pool: pog.Config,
     settings: bunker.Settings,
-    relays: List(relay_list.Connection),
     subscriptions: fn(fn() -> Option(List(String))) -> Subscriptions,
   )
 }
@@ -302,11 +298,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> supervisor.restart_tolerance(intensity: 3, period: 60)
   // relay_list はすべてより先に登録する。逆順だと connections の factory が
   // 起動直後に送る Repopulate が未登録の名前へ送られて捨てられる。
-  |> supervisor.add(relay_list.supervised(
-    spec.relay_list,
-    relay_list.initial(spec.monitor.relays, spec.bunker.relays),
-    factories,
-  ))
+  |> supervisor.add(relay_list.supervised(spec.relay_list, factories))
   // ランナーはディスパッチャーより先に登録しておく。逆順だと起動直後のイベントが
   // 未登録の名前へ送られて届かない（件数はディスパッチャーがログに出す）。
   |> add_plugins(spec)
