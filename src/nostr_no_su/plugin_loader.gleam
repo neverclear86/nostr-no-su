@@ -69,9 +69,8 @@ pub type NotLoaded {
   NotLoaded(id: String, reason: String)
 }
 
-/// `load_all` の戻り値。`plugins` は読み込めたプラグイン。`notes` は今までどおり
-/// `log.line` 済みの 1 行で、`not_loaded` は `notes` のうち失敗の行と同じ内容を
-/// 構造にしたものである。
+/// `load_all` の戻り値。`plugins` は読み込めたプラグイン。`notes` は `log.line` 済みの 1 行で、
+/// `not_loaded` は `notes` のうち失敗の行と同じ内容を構造にしたものである。
 pub type LoadOutcome {
   LoadOutcome(
     plugins: List(Plugin),
@@ -95,13 +94,8 @@ pub type LoadOutcome {
 /// `call_timeout_ms` は `plugin.load` へそのまま渡す、モジュールの読み込みと
 /// メタデータ用のエクスポート 1 回ごとの期限。
 ///
-/// `Plugin` は任意エクスポート `plugin_children/0` `plugin_children/1` から
-/// 解決した子仕様（`children`）と、`plugin_pages` から解決した管理 UI の一覧
-/// （実行の口 `plugin_page_action` の有無も同時に解決する）（`ui`）を持って
-/// 返る。モジュール atom は `Plugin` に載せない（任意
-/// エクスポートの問い合わせは、atom がまだ手元にある `plugin.load` の中で
-/// 済ませる）。子仕様が API に合わないモジュールは `plugin.load` が弾くので、
-/// ここでの扱いは他の検証失敗と同じ 1 行の報告になる。
+/// `Plugin` の子仕様（`children`）と管理 UI の一覧（`ui`）は `plugin.load` が解決し、それらが
+/// API に合わないモジュールは他の検証失敗と同じ 1 行の報告になる。
 pub fn load_all(
   plugin_dir: Option(String),
   reserved: List(String),
@@ -154,43 +148,40 @@ fn directories(raw: String) -> List(String) {
   |> list.map(absolute_path)
 }
 
-/// ディレクトリーを左から順に `scan` へ渡し、読み込めたプラグインと報告行を
-/// 連結して返す。**順番に処理することが重要で**、`reserved` にはその時点で
-/// 読み込めたプラグインの名前を足して渡す。これがないと 2 つ目以降の
-/// ディレクトリーの同名プラグインが採用され、先勝ちが破れる。
+/// ディレクトリーを左から順に `scan` へ渡し、読み込めたプラグインと報告行を連結して返す。
+/// **順番に処理することが重要で**、`scan` が返した予約済みの名前を次の `scan` へ渡す。
+/// これがないと 2 つ目以降のディレクトリーの同名プラグインが採用され、先勝ちが破れる。
 fn scan_all(
   dirs: List(String),
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
 ) -> #(List(Plugin), List(Note)) {
-  let #(plugins, notes) =
-    list.fold(dirs, #([], []), fn(acc: #(List(Plugin), List(Note)), dir) {
-      let #(plugins, notes) = acc
-      let taken =
-        list.append(reserved, list.map(plugins, fn(item) { item.name }))
-      let #(found, dir_notes) = scan(dir, taken, plugin_env, call_timeout_ms)
-      #(
-        list.append(list.reverse(found), plugins),
-        list.append(list.reverse(dir_notes), notes),
-      )
+  let #(_, results) =
+    list.map_fold(dirs, reserved, fn(taken, dir) {
+      let #(found, notes, taken) = scan(dir, taken, plugin_env, call_timeout_ms)
+      #(taken, #(found, notes))
     })
-  #(list.reverse(plugins), list.reverse(notes))
+  let #(plugins, notes) = list.unzip(results)
+  #(list.flatten(plugins), list.flatten(notes))
 }
 
-/// 正規化済みのディレクトリーを走査して読み込む。ディレクトリーそのものが読め
-/// なければ、理由を 1 行報告してこのディレクトリーだけを飛ばす（起動と他の
-/// ディレクトリーの走査は続く）。
+/// 正規化済みのディレクトリーを走査して読み込む。ディレクトリーそのものが読めなければ、
+/// 理由を 1 行報告してこのディレクトリーだけを飛ばす（起動と他のディレクトリーの走査は続く）。
+/// 3 つ目の要素は `reserved` にこのディレクトリーで読み込めたプラグインの名前を足したもので、
+/// 飛ばしたときは `reserved` のままである。
 fn scan(
   dir: String,
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(Note)) {
+) -> #(List(Plugin), List(Note), List(String)) {
   case list_dir(dir) {
-    Error(reason) -> #([], [
-      Failure(dir, "cannot read directory (" <> reason <> "); skipped"),
-    ])
+    Error(reason) -> #(
+      [],
+      [Failure(dir, "cannot read directory (" <> reason <> "); skipped")],
+      reserved,
+    )
     Ok(names) -> {
       let #(bundles, beams) = entries(dir, list.sort(names, string.compare))
       let candidate_count = list.length(bundles) + list.length(beams)
@@ -200,7 +191,7 @@ fn scan(
         list.append(flat_modules, bundle_modules)
         |> list.sort(string.compare)
         |> list.unique
-      let #(plugins, load_notes) =
+      let #(plugins, load_notes, taken) =
         load_candidates(modules, reserved, plugin_env, call_timeout_ms)
       #(
         plugins,
@@ -210,6 +201,7 @@ fn scan(
           load_notes,
           [Info(summary(dir, plugins, candidate_count))],
         ]),
+        taken,
       )
     }
   }
@@ -220,15 +212,9 @@ fn scan(
 /// `entrypoint.sh` など）は黙って無視する。ここで行を出すと、標準構成の起動ログが
 /// ゴミ行だらけになる。
 fn entries(dir: String, names: List(String)) -> #(List(String), List(String)) {
-  let #(bundles, beams) =
-    list.fold(names, #([], []), fn(acc, name) {
-      case is_directory(join(dir, name)), string.ends_with(name, ".beam") {
-        True, _ -> #([name, ..acc.0], acc.1)
-        False, True -> #(acc.0, [name, ..acc.1])
-        False, False -> acc
-      }
-    })
-  #(list.reverse(bundles), list.reverse(beams))
+  let #(bundles, files) =
+    list.partition(names, fn(name) { is_directory(join(dir, name)) })
+  #(bundles, list.filter(files, string.ends_with(_, ".beam")))
 }
 
 /// ルート直下の `.beam` から候補モジュールを決める。エントリーが影のものは飛ばし、
@@ -239,16 +225,9 @@ fn flat_candidates(
   dir: String,
   beams: List(String),
 ) -> #(List(String), List(Note)) {
-  let #(modules, notes) =
-    list.fold(beams, #([], []), fn(acc, file) {
-      let module = beam_module_name(file)
-      case entry_available(module) {
-        True -> #([module, ..acc.0], acc.1)
-        False -> #(acc.0, [shadowed_entry_note(module), ..acc.1])
-      }
-    })
-  let modules = list.reverse(modules)
-  let notes = list.reverse(notes)
+  let #(modules, shadowed) =
+    list.map(beams, beam_module_name) |> list.partition(entry_available)
+  let notes = list.map(shadowed, shadowed_entry_note)
   case modules {
     [] -> #([], notes)
     _ ->
@@ -435,39 +414,44 @@ fn entry_available(module: String) -> Bool {
   !is_on_code_path(atom.create(module))
 }
 
-/// 候補モジュールを名前順に読み込む。失敗理由は `plugin.load` が組み立てた
-/// 1 行をそのまま出す。名前が内蔵プラグインや既出の外部プラグインと重なるものは
-/// 採用せず、先に読み込んだ方を残す。
+/// 候補モジュールを名前順に読み込む。失敗理由は `plugin.load` が組み立てた 1 行をそのまま出す。
+/// 名前が `reserved`（内蔵プラグインと既出の外部プラグインの名前）と重なるものは採用せず、
+/// 先に読み込んだ方を残す。3 つ目の要素は `reserved` に読み込めたプラグインの名前を足したもの。
 fn load_candidates(
   modules: List(String),
   reserved: List(String),
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
-) -> #(List(Plugin), List(Note)) {
-  let #(plugins, notes) =
-    list.fold(modules, #([], []), fn(acc: #(List(Plugin), List(Note)), module) {
-      let #(plugins, notes) = acc
-      case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
-        Error(reason) -> #(plugins, [Failure(module, reason), ..notes])
-        Ok(loaded) -> {
-          let taken =
-            list.append(reserved, list.map(plugins, fn(item) { item.name }))
-          case list.contains(taken, loaded.name) {
-            True -> #(plugins, [
-              Failure(
-                module,
-                "duplicate plugin name \""
-                  <> loaded.name
-                  <> "\"; keeping the first",
-              ),
-              ..notes
-            ])
-            False -> #([loaded, ..plugins], notes)
-          }
+) -> #(List(Plugin), List(Note), List(String)) {
+  let #(plugins, notes, taken) =
+    list.fold(
+      modules,
+      #([], [], reserved),
+      fn(acc: #(List(Plugin), List(Note), List(String)), module) {
+        let #(plugins, notes, taken) = acc
+        case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
+          Error(reason) -> #(plugins, [Failure(module, reason), ..notes], taken)
+          Ok(loaded) ->
+            case list.contains(taken, loaded.name) {
+              True -> #(
+                plugins,
+                [
+                  Failure(
+                    module,
+                    "duplicate plugin name \""
+                      <> loaded.name
+                      <> "\"; keeping the first",
+                  ),
+                  ..notes
+                ],
+                taken,
+              )
+              False -> #([loaded, ..plugins], notes, [loaded.name, ..taken])
+            }
         }
-      }
-    })
-  #(list.reverse(plugins), list.reverse(notes))
+      },
+    )
+  #(list.reverse(plugins), list.reverse(notes), taken)
 }
 
 /// 走査の結果をまとめる 1 行。`skipped` に数えるのは「プラグイン候補だったが
