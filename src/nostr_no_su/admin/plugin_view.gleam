@@ -1,19 +1,8 @@
 //// プラグインが返す管理 UI のページの記述を `admin/view` の部品に変換する、純粋な
 //// 変換モジュール。
 ////
-//// 記述は **段ごとに種別を閉じた 3 段の binary キーの Erlang map** である
-//// （`docs/plugin-api.md` の第 13 章）。
-////
-//// - 最上位: `#{<<"sections">> => [節, ...]}`
-//// - 節（`section`）: `title`（binary）、`blocks`（ブロックのリスト）、任意の `meta`（インラインのリスト）
-//// - ブロック: `text` / `note` / `pairs` / `table` / `alert` / `link` / `form` /
-////   `details` / `image` のいずれか
-//// - インライン（`pairs` の値、`table` のセル、節の `meta`）: `text` / `code` / `badge` / `id` / `kind` / `time`
-////   のいずれか（`badge` は `table` のセルと `meta` だけ、`id` は `pairs` の値だけ）
-//// - `form` の欄: `checkbox` / `text` / `textarea` のいずれか
-//// - `image` の見た目（`variant`）: `icon` / `banner` のいずれか（無ければ既定の見た目）
-////
-//// 深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
+//// 記述の型（段ごとに閉じた種別と、各種別の必須・任意のキー）は `docs/plugin-api.md` の
+//// 13.3 節にある。深さのカウンターは持たない。ある段に合わない種別を置くと、その段を読む
 //// decoder が失敗するため、深すぎる入れ子は構造的に `Error` になる。
 ////
 //// **プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値だけである。** クラス名も
@@ -45,6 +34,7 @@ import lustre/element.{type Element}
 import lustre/element/html
 import nostr_no_su/admin/i18n.{type Language}
 import nostr_no_su/admin/view
+import nostr_no_su/plugin_term
 
 /// 節の描画に要る文脈。`plugin_language` はプラグイン由来の文字列が書かれている
 /// 言語のコード（`plugin.text_language`）。`page_href` は同じプラグインのページの
@@ -74,11 +64,10 @@ pub fn sections(description: Dynamic) -> Result(List(Dynamic), String) {
   )
 }
 
-/// 節 1 つを `view.card` の要素にする。`type` は `"section"` でなければならない
-/// （決めたこと 10）。任意の `meta` はインラインのリストで、見出しの題の後ろに並べる
-/// （`meta_heading`）。`blocks` が空なら空の状態の文を出す。未知の種別、型の合わ
-/// ない値、深すぎる入れ子はこの節ひとつぶんの `Error` になり、他の節の描画は
-/// 止めない。
+/// 節 1 つを `view.card` の要素にする。`type` は `"section"` でなければならない。任意の
+/// `meta` はインラインのリストで、見出しの題の後ろに並べる（`meta_heading`）。`blocks` が
+/// 空なら空の状態の文を出す。未知の種別、型の合わない値、深すぎる入れ子はこの節ひとつ
+/// ぶんの `Error` になり、他の節の描画は止めない。
 pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   use _ <- result.try(case kind {
@@ -91,12 +80,7 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     meta_heading(raw, title, context)
     |> result.map_error(fn(reason) { label <> ": " <> reason }),
   )
-  use blocks_raw <- result.try(typed_field(
-    raw,
-    "blocks",
-    decode.list(decode.dynamic),
-    "a List",
-  ))
+  use blocks_raw <- result.try(list_field(raw, "blocks"))
   case blocks_raw {
     [] ->
       Ok(
@@ -104,23 +88,12 @@ pub fn section(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
           html.div([attribute.lang(context.plugin_language)], [
             heading,
           ]),
-          view.empty_state(
-            view.puzzle_icon(),
-            i18n.text(context.language, i18n.PluginSectionEmpty),
-            [],
-          ),
+          section_empty_state(context.language),
         ]),
       )
     blocks -> {
       use elements <- result.try(
-        blocks
-        |> list.index_map(fn(raw_block, index) { #(raw_block, index) })
-        |> list.try_map(fn(pair) {
-          block(pair.0, context)
-          |> result.map_error(fn(reason) {
-            label <> ": block #" <> int.to_string(pair.1) <> ": " <> reason
-          })
-        }),
+        try_map_numbered(blocks, label <> ": block", block(_, context)),
       )
       Ok(
         view.card([
@@ -142,24 +115,17 @@ fn meta_heading(
   title: String,
   context: Context,
 ) -> Result(Element(msg), String) {
-  case lookup(raw, "meta") {
+  use meta <- result.try(optional_field(
+    raw,
+    "meta",
+    decode.list(decode.dynamic),
+    "a List",
+  ))
+  case meta {
     None -> Ok(view.heading(title))
-    Some(_) -> {
-      use meta_raw <- result.try(typed_field(
-        raw,
-        "meta",
-        decode.list(decode.dynamic),
-        "a List",
-      ))
+    Some(meta_raw) -> {
       use items <- result.try(
-        meta_raw
-        |> list.index_map(fn(raw_item, index) { #(raw_item, index) })
-        |> list.try_map(fn(indexed) {
-          inline(indexed.0, context)
-          |> result.map_error(fn(reason) {
-            "meta #" <> int.to_string(indexed.1) <> ": " <> reason
-          })
-        }),
+        try_map_numbered(meta_raw, "meta", inline(_, context)),
       )
       Ok(view.heading_with_meta(title, items))
     }
@@ -182,31 +148,15 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       Ok(view.hint(text))
     }
     "pairs" -> {
-      use items_raw <- result.try(typed_field(
-        raw,
-        "items",
-        decode.list(decode.dynamic),
-        "a List",
-      ))
+      use items_raw <- result.try(list_field(raw, "items"))
       use items <- result.try(
-        items_raw
-        |> list.index_map(fn(raw_item, index) { #(raw_item, index) })
-        |> list.try_map(fn(indexed) {
-          pair(indexed.0, context)
-          |> result.map_error(fn(reason) {
-            "item #" <> int.to_string(indexed.1) <> ": " <> reason
-          })
-        }),
+        try_map_numbered(items_raw, "item", pair(_, context)),
       )
       case items {
         [] ->
           Ok(
             html.div([attribute.lang(i18n.code(context.language))], [
-              view.empty_state(
-                view.puzzle_icon(),
-                i18n.text(context.language, i18n.PluginSectionEmpty),
-                [],
-              ),
+              section_empty_state(context.language),
             ]),
           )
         _ -> Ok(view.detail_list(items))
@@ -219,29 +169,16 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
         decode.list(decode.string),
         "a List of strings",
       ))
-      use rows_raw <- result.try(typed_field(
-        raw,
-        "rows",
-        decode.list(decode.dynamic),
-        "a List",
-      ))
+      use rows_raw <- result.try(list_field(raw, "rows"))
       use rows <- result.try(
-        rows_raw
-        |> list.index_map(fn(row_raw, index) { #(row_raw, index) })
-        |> list.try_map(fn(indexed) {
-          let #(row_raw, index) = indexed
-          {
-            use cells_raw <- result.try(
-              decode.run(row_raw, decode.list(decode.dynamic))
-              |> result.replace_error("must be a List"),
-            )
-            list.try_map(cells_raw, fn(cell) {
-              use element <- result.try(inline(cell, context))
-              Ok(html.td([], [element]))
-            })
-          }
-          |> result.map_error(fn(reason) {
-            "row #" <> int.to_string(index) <> ": " <> reason
+        try_map_numbered(rows_raw, "row", fn(row_raw) {
+          use cells_raw <- result.try(
+            decode.run(row_raw, decode.list(decode.dynamic))
+            |> result.replace_error("must be a List"),
+          )
+          list.try_map(cells_raw, fn(cell) {
+            use element <- result.try(inline(cell, context))
+            Ok(html.td([], [element]))
           })
         }),
       )
@@ -249,7 +186,7 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     }
     "alert" -> {
       use text <- result.try(text_field(raw, "text"))
-      use alert_tone <- result.try(tone(raw, view.Info))
+      use alert_tone <- result.try(choice_field(raw, "tone", view.Info, tone))
       Ok(view.alert(alert_tone, [html.text(text)]))
     }
     "link" -> {
@@ -261,26 +198,16 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
       }
     }
     "form" -> {
-      use fields_raw <- result.try(typed_field(
-        raw,
-        "fields",
-        decode.list(decode.dynamic),
-        "a List",
-      ))
+      use fields_raw <- result.try(list_field(raw, "fields"))
       use submit <- result.try(text_field(raw, "submit"))
       case fields_raw {
         [] -> Error("fields must not be empty")
         _ -> {
-          use fields <- result.try(
-            fields_raw
-            |> list.index_map(fn(raw_field, index) { #(raw_field, index) })
-            |> list.try_map(fn(indexed) {
-              form_field(indexed.0)
-              |> result.map_error(fn(reason) {
-                "field #" <> int.to_string(indexed.1) <> ": " <> reason
-              })
-            }),
-          )
+          use fields <- result.try(try_map_numbered(
+            fields_raw,
+            "field",
+            form_field,
+          ))
           Ok(view.post_form(
             context.form_action,
             fields,
@@ -299,7 +226,12 @@ fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     "image" -> {
       use url <- result.try(text_field(raw, "url"))
       use alt <- result.try(text_field(raw, "alt"))
-      use shape <- result.try(image_shape(raw))
+      use shape <- result.try(choice_field(
+        raw,
+        "variant",
+        view.ContainedImage,
+        image_shape,
+      ))
       case image_source_allowed(url) {
         True -> Ok(view.plugin_image(url, alt, shape))
         False ->
@@ -325,32 +257,46 @@ fn image_source_allowed(url: String) -> Bool {
 }
 
 /// `form` の欄 1 つ。`checkbox` は真偽値、`text` は 1 行、`textarea` は複数行の文字列の欄
-/// にする。ほかの種別はその節ひとつぶんの `Error` にする。
+/// にする。種別を共通の欄（`name`・`label`・`hint`）より先に照合するので、未知の種別は
+/// ほかの欄の誤りより先に `unknown type "<種別>"` の `Error` になる。
 fn form_field(raw: Dynamic) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
-  case kind {
-    "checkbox" -> {
-      use name <- result.try(field_name(raw))
-      use label <- result.try(text_field(raw, "label"))
-      use hint <- result.try(optional_text_field(raw, "hint"))
-      use checked <- result.try(bool_field(raw, "checked", False))
-      Ok(view.plugin_checkbox_row(name, label, hint, checked))
-    }
-    "text" -> {
-      use name <- result.try(field_name(raw))
-      use label <- result.try(text_field(raw, "label"))
-      use hint <- result.try(optional_text_field(raw, "hint"))
-      use value <- result.try(optional_text_field(raw, "value"))
-      Ok(view.plugin_text_field(name, label, hint, option.unwrap(value, "")))
-    }
-    "textarea" -> {
-      use name <- result.try(field_name(raw))
-      use label <- result.try(text_field(raw, "label"))
-      use hint <- result.try(optional_text_field(raw, "hint"))
-      use value <- result.try(optional_text_field(raw, "value"))
-      Ok(view.plugin_textarea_field(name, label, hint, option.unwrap(value, "")))
-    }
+  use finish <- result.try(case kind {
+    "checkbox" -> Ok(checkbox_input)
+    "text" -> Ok(text_input(view.plugin_text_field))
+    "textarea" -> Ok(text_input(view.plugin_textarea_field))
     other -> Error("unknown type \"" <> other <> "\"")
+  })
+  use name <- result.try(field_name(raw))
+  use label <- result.try(text_field(raw, "label"))
+  use hint <- result.try(optional_text_field(raw, "hint"))
+  finish(raw, name, label, hint)
+}
+
+/// `checkbox` の欄の、共通の欄より後ろ。任意の `checked` を読み、無ければ未チェックにする。
+fn checkbox_input(
+  raw: Dynamic,
+  name: String,
+  label: String,
+  hint: Option(String),
+) -> Result(Element(msg), String) {
+  use checked <- result.try(optional_field(
+    raw,
+    "checked",
+    decode.bool,
+    "a Bool",
+  ))
+  Ok(view.plugin_checkbox_row(name, label, hint, option.unwrap(checked, False)))
+}
+
+/// `text` と `textarea` の欄の、共通の欄より後ろを `draw` で描く関数を返す。任意の `value` を
+/// 読み、無ければ空文字列を初期値にする。
+fn text_input(
+  draw: fn(String, String, Option(String), String) -> Element(msg),
+) -> fn(Dynamic, String, String, Option(String)) -> Result(Element(msg), String) {
+  fn(raw, name, label, hint) {
+    use value <- result.try(optional_text_field(raw, "value"))
+    Ok(draw(name, label, hint, option.unwrap(value, "")))
   }
 }
 
@@ -376,38 +322,75 @@ fn field_name_ok(name: String) -> Bool {
   |> list.all(fn(character) { string.contains(field_name_alphabet, character) })
 }
 
-/// `key` の値。無ければ `default`、真偽値でなければ
-/// `<key> must be a Bool, got <classify>`。
-fn bool_field(
+/// `key` の任意の値を `decoder` で読む。無ければ（map ですらなければ）`None`、型が合わなければ
+/// `<key> must be <expected>, got <classify>`。この形の文はここでだけ組み立てる。
+fn optional_field(
   raw: Dynamic,
   key: String,
-  default: Bool,
-) -> Result(Bool, String) {
+  decoder: decode.Decoder(a),
+  expected: String,
+) -> Result(Option(a), String) {
   case lookup(raw, key) {
-    None -> Ok(default)
+    None -> Ok(None)
     Some(value) ->
-      decode.run(value, decode.bool)
+      decode.run(value, decoder)
+      |> result.map(Some)
       |> result.replace_error(
-        key <> " must be a Bool, got " <> dynamic.classify(value),
+        key <> " must be " <> expected <> ", got " <> dynamic.classify(value),
       )
   }
 }
 
-/// `key` の任意の値を String として読む。無ければ `None`、型が合わなければ
-/// `<key> must be a String, got <classify>`。
+/// `key` の任意の値を String として読む。規則は `optional_field` と同じ。
 fn optional_text_field(
   raw: Dynamic,
   key: String,
 ) -> Result(Option(String), String) {
-  case lookup(raw, key) {
-    None -> Ok(None)
-    Some(value) ->
-      decode.run(value, decode.string)
-      |> result.map(Some)
-      |> result.replace_error(
-        key <> " must be a String, got " <> dynamic.classify(value),
-      )
+  optional_field(raw, key, decode.string, "a String")
+}
+
+/// `key` の任意の値を文字列として読み、`parse` で値に写す。無ければ `default`、文字列で
+/// なければ `<key> must be a String, got <classify>`、写せなければ `parse` の `Error`。
+fn choice_field(
+  raw: Dynamic,
+  key: String,
+  default: a,
+  parse: fn(String) -> Result(a, String),
+) -> Result(a, String) {
+  use name <- result.try(optional_text_field(raw, key))
+  case name {
+    None -> Ok(default)
+    Some(name) -> parse(name)
   }
+}
+
+/// `key` の必須の値を、要素の型を問わないリストとして読む。誤りの文は `typed_field` と同じ。
+fn list_field(raw: Dynamic, key: String) -> Result(List(Dynamic), String) {
+  typed_field(raw, key, decode.list(decode.dynamic), "a List")
+}
+
+/// 要素を先頭から `f` で検証し、最初の誤りで止める。誤りの理由には `<name> #<添字>: ` を
+/// 前置する（添字は 0 起点）。
+fn try_map_numbered(
+  items: List(a),
+  name: String,
+  f: fn(a) -> Result(b, String),
+) -> Result(List(b), String) {
+  plugin_term.try_map_indexed(items, fn(item, index) {
+    f(item)
+    |> result.map_error(fn(reason) {
+      name <> " #" <> int.to_string(index) <> ": " <> reason
+    })
+  })
+}
+
+/// 節や `pairs` に表示する中身が無いときの空の状態の文（`i18n.PluginSectionEmpty`）。
+fn section_empty_state(language: Language) -> Element(msg) {
+  view.empty_state(
+    view.puzzle_icon(),
+    i18n.text(language, i18n.PluginSectionEmpty),
+    [],
+  )
 }
 
 /// `pairs` の 1 件。値は `text`・`code`・`id`・`kind`・`time` のインラインだけを許す
@@ -418,7 +401,9 @@ fn pair(
   context: Context,
 ) -> Result(#(String, Element(msg)), String) {
   use term <- result.try(text_field(raw, "term"))
-  use value_raw <- result.try(field(raw, "value", "missing value"))
+  use value_raw <- result.try(
+    lookup(raw, "value") |> option.to_result("missing value"),
+  )
   use kind <- result.try(text_field(value_raw, "type"))
   case kind {
     "text" -> {
@@ -474,7 +459,7 @@ fn inline(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
     }
     "badge" -> {
       use text <- result.try(text_field(raw, "text"))
-      use badge_tone <- result.try(tone(raw, view.Neutral))
+      use badge_tone <- result.try(choice_field(raw, "tone", view.Neutral, tone))
       Ok(view.status_chip(view.ToneChip(badge_tone), text))
     }
     "kind" -> {
@@ -506,37 +491,25 @@ fn inline(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   }
 }
 
-/// `image` の `variant` フィールド。無ければ `view.ContainedImage`。`icon` と
-/// `banner` 以外は `Error`。
-fn image_shape(raw: Dynamic) -> Result(view.ImageShape, String) {
-  case lookup(raw, "variant") {
-    None -> Ok(view.ContainedImage)
-    Some(value) ->
-      case decode.run(value, decode.string) {
-        Error(_) ->
-          Error("variant must be a String, got " <> dynamic.classify(value))
-        Ok("icon") -> Ok(view.IconImage)
-        Ok("banner") -> Ok(view.BannerImage)
-        Ok(other) -> Error("unknown variant \"" <> other <> "\"")
-      }
+/// `image` の `variant` の文字列を見た目に写す。`icon` と `banner` 以外は
+/// `unknown variant "<値>"`。
+fn image_shape(name: String) -> Result(view.ImageShape, String) {
+  case name {
+    "icon" -> Ok(view.IconImage)
+    "banner" -> Ok(view.BannerImage)
+    other -> Error("unknown variant \"" <> other <> "\"")
   }
 }
 
-/// `tone` フィールド。無ければ `default`。`view.Tone` の 5 値以外は `Error`。
-fn tone(raw: Dynamic, default: view.Tone) -> Result(view.Tone, String) {
-  case lookup(raw, "tone") {
-    None -> Ok(default)
-    Some(value) ->
-      case decode.run(value, decode.string) {
-        Error(_) ->
-          Error("tone must be a String, got " <> dynamic.classify(value))
-        Ok("neutral") -> Ok(view.Neutral)
-        Ok("success") -> Ok(view.Success)
-        Ok("warning") -> Ok(view.Warning)
-        Ok("failure") -> Ok(view.Failure)
-        Ok("info") -> Ok(view.Info)
-        Ok(other) -> Error("unknown tone \"" <> other <> "\"")
-      }
+/// `tone` の文字列を `view.Tone` の 5 値に写す。それ以外は `unknown tone "<値>"`。
+fn tone(name: String) -> Result(view.Tone, String) {
+  case name {
+    "neutral" -> Ok(view.Neutral)
+    "success" -> Ok(view.Success)
+    "warning" -> Ok(view.Warning)
+    "failure" -> Ok(view.Failure)
+    "info" -> Ok(view.Info)
+    other -> Error("unknown tone \"" <> other <> "\"")
   }
 }
 
@@ -564,23 +537,8 @@ fn typed_field(
   decoder: decode.Decoder(a),
   expected: String,
 ) -> Result(a, String) {
-  use value <- result.try(field(raw, key, "missing " <> key))
-  decode.run(value, decoder)
-  |> result.replace_error(
-    key <> " must be " <> expected <> ", got " <> dynamic.classify(value),
-  )
-}
-
-/// binary キーの map から `key` の生の値を読む。無ければ `missing_error`。
-fn field(
-  raw: Dynamic,
-  key: String,
-  missing_error: String,
-) -> Result(Dynamic, String) {
-  case lookup(raw, key) {
-    Some(value) -> Ok(value)
-    None -> Error(missing_error)
-  }
+  use value <- result.try(optional_field(raw, key, decoder, expected))
+  option.to_result(value, "missing " <> key)
 }
 
 /// binary キーの map から任意のキーを取り出す。無ければ（map ですらなければ）

@@ -339,7 +339,7 @@ pub fn unknown_type_is_an_error_test() {
   assert reason == "section \"設定\": block #0: unknown type \"chart\""
 }
 
-/// 節の `type` が `"section"` でなければ `Error` になる（決めたこと 10）。
+/// 節の `type` が `"section"` でなければ `Error` になる。
 pub fn section_type_mismatch_is_an_error_test() {
   let raw =
     map_([
@@ -1011,5 +1011,108 @@ pub fn pairs_value_accepts_kind_and_time_test() {
   assert string.contains(
     body,
     "<dd><span lang=\"en\" title=\"2026-09-13T05:12:34Z\">3 min ago</span></dd>",
+  )
+}
+
+/// 欄の任意の `hint` と `value` が文字列でなければ、その欄の
+/// `<key> must be a String, got <型>` の `Error` になる。
+pub fn form_field_optional_values_must_be_strings_test() {
+  let cases = [
+    #("checkbox", "hint"),
+    #("text", "hint"),
+    #("text", "value"),
+    #("textarea", "hint"),
+    #("textarea", "value"),
+  ]
+  use #(kind, key) <- list.each(cases)
+  let field =
+    map_([
+      #("type", dynamic.string(kind)),
+      #("name", dynamic.string("main")),
+      #("label", dynamic.string("Main")),
+      #(key, dynamic.int(1)),
+    ])
+  let raw = section_("Settings", [form_block([field], "Save")])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason
+    == "section \"Settings\": block #0: field #0: "
+    <> key
+    <> " must be a String, got Int"
+}
+
+/// `blocks`・`items`・`rows`・`fields` がリストでなければ `<key> must be a List, got <型>` の
+/// `Error` になる。
+pub fn list_fields_must_be_lists_test() {
+  let cases = [
+    #(
+      map_([
+        #("type", dynamic.string("section")),
+        #("title", dynamic.string("a")),
+        #("blocks", dynamic.string("x")),
+      ]),
+      "blocks must be a List, got String",
+    ),
+    #(
+      section_("a", [
+        map_([
+          #("type", dynamic.string("pairs")),
+          #("items", dynamic.string("x")),
+        ]),
+      ]),
+      "section \"a\": block #0: items must be a List, got String",
+    ),
+    #(
+      section_("a", [
+        map_([
+          #("type", dynamic.string("table")),
+          #("headers", dynamic.list([dynamic.string("A")])),
+          #("rows", dynamic.string("x")),
+        ]),
+      ]),
+      "section \"a\": block #0: rows must be a List, got String",
+    ),
+    #(
+      section_("a", [
+        map_([
+          #("type", dynamic.string("form")),
+          #("fields", dynamic.string("x")),
+          #("submit", dynamic.string("Save")),
+        ]),
+      ]),
+      "section \"a\": block #0: fields must be a List, got String",
+    ),
+  ]
+  use #(raw, expected) <- list.each(cases)
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == expected
+}
+
+/// `pairs` の項目に `value` が無ければ `item #<添字>: missing value` の `Error` になる。
+pub fn pairs_item_requires_a_value_test() {
+  let raw =
+    section_("a", [
+      map_([
+        #("type", dynamic.string("pairs")),
+        #("items", dynamic.list([map_([#("term", dynamic.string("state"))])])),
+      ]),
+    ])
+  let assert Error(reason) = plugin_view.section(raw, context())
+  assert reason == "section \"a\": block #0: item #0: missing value"
+}
+
+/// `tone` の無い `badge` は `view.Neutral` の色で出る。
+pub fn badge_without_tone_is_neutral_test() {
+  let meta =
+    dynamic.list([
+      map_([
+        #("type", dynamic.string("badge")),
+        #("text", dynamic.string("on")),
+      ]),
+    ])
+  let raw = section_with_meta("a", meta, [])
+  let assert Ok(el) = plugin_view.section(raw, context())
+  assert string.contains(
+    element.to_string(el),
+    element.to_string(view.status_chip(view.ToneChip(view.Neutral), "on")),
   )
 }
