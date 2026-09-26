@@ -12,8 +12,13 @@ const point_mul_test_count = 100
 
 /// ベースポイント G。
 fn base_point() -> secp256k1.Point {
-  let assert Ok(point) = secp256k1.mul_g(1)
-  point
+  mul_g_point(1)
+}
+
+/// OpenSSL で計算した `scalar*G` を、アフィン座標の演算に渡せる `Point` にする。
+fn mul_g_point(scalar: Int) -> secp256k1.Point {
+  let assert Ok(#(x, y)) = secp256k1.mul_g(scalar)
+  Point(x, y)
 }
 
 /// 1 以上 n 未満のスカラーを生成する。
@@ -66,11 +71,11 @@ pub fn point_mul_by_order_test() {
 /// P + (-P) == 無限遠点が成り立つ。
 pub fn point_add_matches_mul_g_property_test() {
   use #(k, l) <- qcheck.given(qcheck.tuple2(scalar(), scalar()))
-  let assert Ok(p) = secp256k1.mul_g(k)
-  let assert Ok(q) = secp256k1.mul_g(l)
+  let p = mul_g_point(k)
+  let q = mul_g_point(l)
   // k + l が n の倍数になる（和が無限遠点になる）確率は無視できる。
-  let assert Ok(sum) = secp256k1.mul_g({ k + l } % secp256k1.n)
-  let assert Ok(double) = secp256k1.mul_g({ 2 * k } % secp256k1.n)
+  let sum = mul_g_point({ k + l } % secp256k1.n)
+  let double = mul_g_point({ 2 * k } % secp256k1.n)
   assert secp256k1.point_add(p, q) == sum
   assert secp256k1.point_double(p) == double
   assert secp256k1.point_add(p, p) == double
@@ -82,7 +87,7 @@ pub fn point_add_matches_mul_g_property_test() {
 pub fn point_mul_property_test() {
   let g = base_point()
   use k <- run_with_point_mul(scalar())
-  let assert Ok(p) = secp256k1.mul_g(k)
+  let p = mul_g_point(k)
   assert secp256k1.point_mul(g, k) == p
   assert secp256k1.point_mul(p, secp256k1.n) == Infinity
 }
@@ -91,7 +96,8 @@ pub fn point_mul_property_test() {
 /// 反転が返る。
 pub fn lift_x_property_test() {
   use k <- qcheck.given(scalar())
-  let assert Ok(Point(x, y) as p) = secp256k1.mul_g(k)
+  let assert Ok(#(x, y)) = secp256k1.mul_g(k)
+  let p = Point(x, y)
   let expected = case y % 2 == 0 {
     True -> p
     False -> secp256k1.point_negate(p)
@@ -113,7 +119,7 @@ pub fn lift_x_rejects_invalid_x_test() {
 
 /// 32 バイトでない入力は、整数としては有効な x でも拒否する。
 pub fn lift_x_rejects_input_that_is_not_32_bytes_test() {
-  let assert Ok(Point(x, _y)) = secp256k1.mul_g(1)
+  let assert Ok(#(x, _y)) = secp256k1.mul_g(1)
   let too_long = <<0:size(8), secp256k1.int_to_bytes32(x):bits>>
   assert secp256k1.lift_x(too_long) == Error(secp256k1.InvalidPublicKey)
 }

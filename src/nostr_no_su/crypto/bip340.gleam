@@ -6,6 +6,7 @@
 
 import gleam/crypto
 import gleam/int
+import gleam/result
 import nostr_no_su/crypto/secp256k1.{Point}
 
 /// 署名できなかった理由。
@@ -37,66 +38,59 @@ pub fn sign_with_aux(
   aux: BitArray,
 ) -> Result(BitArray, SignError) {
   let d0 = secp256k1.int_from_bytes(privkey)
-  case secp256k1.valid_scalar(d0) {
-    False -> Error(InvalidSecretKey)
-    True ->
-      case secp256k1.pubkey_point(privkey) {
-        Error(_) -> Error(SigningFailed)
-        Ok(secp256k1.Infinity) -> Error(SigningFailed)
-        Ok(Point(px, py)) -> {
-          let px_bytes = secp256k1.int_to_bytes32(px)
-          // BIP-340 は y が偶数となる側の鍵を使うため、必要なら d を反転する。
-          let d = case py % 2 == 0 {
-            True -> d0
-            False -> secp256k1.n - d0
-          }
-          let aux_hash = tagged_hash("BIP0340/aux", aux)
-          let t =
-            int.bitwise_exclusive_or(d, secp256k1.int_from_bytes(aux_hash))
-          let t_bytes = secp256k1.int_to_bytes32(t)
-          let k0 =
-            secp256k1.int_from_bytes(
-              tagged_hash("BIP0340/nonce", <<
-                t_bytes:bits,
-                px_bytes:bits,
-                message:bits,
-              >>),
-            )
-            % secp256k1.n
-          case k0 == 0 {
-            True -> Error(SigningFailed)
-            False ->
-              case secp256k1.mul_g(k0) {
-                Error(_) -> Error(SigningFailed)
-                Ok(secp256k1.Infinity) -> Error(SigningFailed)
-                Ok(Point(rx, ry)) -> {
-                  let k = case ry % 2 == 0 {
-                    True -> k0
-                    False -> secp256k1.n - k0
-                  }
-                  let rx_bytes = secp256k1.int_to_bytes32(rx)
-                  let e =
-                    secp256k1.int_from_bytes(
-                      tagged_hash("BIP0340/challenge", <<
-                        rx_bytes:bits,
-                        px_bytes:bits,
-                        message:bits,
-                      >>),
-                    )
-                    % secp256k1.n
-                  let s = { k + e * d } % secp256k1.n
-                  let sig = <<rx_bytes:bits, secp256k1.int_to_bytes32(s):bits>>
-                  // BIP-340 は返す前に検証することを推奨している。
-                  case verify(sig, message, px_bytes) {
-                    True -> Ok(sig)
-                    False -> Error(SigningFailed)
-                  }
-                }
-              }
-          }
-        }
-      }
+  use #(px, py) <- result.try(
+    secp256k1.mul_g(d0) |> result.replace_error(InvalidSecretKey),
+  )
+  let px_bytes = secp256k1.int_to_bytes32(px)
+  let d = with_even_y(d0, py)
+  let aux_hash = tagged_hash("BIP0340/aux", aux)
+  let t = int.bitwise_exclusive_or(d, secp256k1.int_from_bytes(aux_hash))
+  let t_bytes = secp256k1.int_to_bytes32(t)
+  let k0 =
+    secp256k1.int_from_bytes(
+      tagged_hash("BIP0340/nonce", <<
+        t_bytes:bits,
+        px_bytes:bits,
+        message:bits,
+      >>),
+    )
+    % secp256k1.n
+  // k0 が 0 のときは mul_g が誤りを返す。
+  use #(rx, ry) <- result.try(
+    secp256k1.mul_g(k0) |> result.replace_error(SigningFailed),
+  )
+  let k = with_even_y(k0, ry)
+  let rx_bytes = secp256k1.int_to_bytes32(rx)
+  let e = challenge(rx_bytes, px_bytes, message)
+  let s = { k + e * d } % secp256k1.n
+  let sig = <<rx_bytes:bits, secp256k1.int_to_bytes32(s):bits>>
+  // BIP-340 は返す前に検証することを推奨している。
+  case verify(sig, message, px_bytes) {
+    True -> Ok(sig)
+    False -> Error(SigningFailed)
   }
+}
+
+/// BIP-340 は y が偶数となる側の点を使う。点 `scalar*G` の y 座標 `y` が奇数なら
+/// スカラーを `n - scalar` に反転する。
+fn with_even_y(scalar: Int, y: Int) -> Int {
+  case y % 2 == 0 {
+    True -> scalar
+    False -> secp256k1.n - scalar
+  }
+}
+
+/// BIP-340 の challenge `e`。R の x 座標、x-only 公開鍵、メッセージの tagged hash を
+/// 位数 n で還元した値で、署名と検証で共用する。
+fn challenge(rx_bytes: BitArray, px_bytes: BitArray, message: BitArray) -> Int {
+  secp256k1.int_from_bytes(
+    tagged_hash("BIP0340/challenge", <<
+      rx_bytes:bits,
+      px_bytes:bits,
+      message:bits,
+    >>),
+  )
+  % secp256k1.n
 }
 
 /// 64 バイトの BIP-340 署名を、任意の長さのメッセージと x-only 鍵で検証する。
@@ -111,23 +105,11 @@ pub fn verify(sig: BitArray, message: BitArray, pubkey: BitArray) -> Bool {
           case rx >= secp256k1.p || s >= secp256k1.n {
             True -> False
             False -> {
-              let e =
-                secp256k1.int_from_bytes(
-                  tagged_hash("BIP0340/challenge", <<
-                    rx_bytes:bits,
-                    pubkey:bits,
-                    message:bits,
-                  >>),
-                )
-                % secp256k1.n
-              // R = s*G - e*P
-              let sg = case s {
-                0 -> secp256k1.Infinity
-                _ ->
-                  case secp256k1.mul_g(s) {
-                    Ok(point) -> point
-                    Error(_) -> secp256k1.Infinity
-                  }
+              let e = challenge(rx_bytes, pubkey, message)
+              // R = s*G - e*P。s は n 未満と確かめたので、mul_g の誤りは s == 0 のときだけ。
+              let sg = case secp256k1.mul_g(s) {
+                Ok(#(x, y)) -> Point(x, y)
+                Error(_) -> secp256k1.Infinity
               }
               let ep = secp256k1.point_mul(secp256k1.point_negate(point), e)
               case secp256k1.point_add(sg, ep) {

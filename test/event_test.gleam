@@ -7,7 +7,7 @@ import gleam/list
 import gleam/result
 import gleam/string
 import nostr_no_su/crypto/bip340
-import nostr_no_su/crypto/secp256k1.{Point}
+import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/nostr/message
@@ -154,7 +154,7 @@ pub fn verify_rejects_a_pubkey_that_is_not_32_bytes_test() {
   let key = "0000000000000000000000000000000000000000000000000000000000000003"
   let assert Ok(privkey_bytes) = hex.decode(key)
   let privkey = secp256k1.int_from_bytes(privkey_bytes)
-  let assert Ok(Point(px, _py)) = secp256k1.mul_g(privkey)
+  let assert Ok(#(px, _py)) = secp256k1.mul_g(privkey)
   // 32 バイトの x-only pubkey の前に 00 を足した、33 バイトの pubkey。
   let pubkey_33 = <<0:size(8), secp256k1.int_to_bytes32(px):bits>>
   let draft =
@@ -197,13 +197,13 @@ fn sign_over_pubkey_bytes(
   pubkey: BitArray,
   message: BitArray,
 ) -> BitArray {
-  let assert Ok(Point(_px, py)) = secp256k1.mul_g(privkey)
+  let assert Ok(#(_px, py)) = secp256k1.mul_g(privkey)
   let d = case py % 2 == 0 {
     True -> privkey
     False -> secp256k1.n - privkey
   }
   let k0 = 1
-  let assert Ok(Point(rx, ry)) = secp256k1.mul_g(k0)
+  let assert Ok(#(rx, ry)) = secp256k1.mul_g(k0)
   let k = case ry % 2 == 0 {
     True -> k0
     False -> secp256k1.n - k0
