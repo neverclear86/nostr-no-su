@@ -1,6 +1,6 @@
 # 開発
 
-この文書は、本体とプラグインをローカルで実行、テストする手順、テストの流儀、カバレッジの計測、管理 UI の CSS のビルドと画面の撮影の手順をまとめる。
+この文書は、本体とプラグインをローカルで実行、テストする手順、コードのコメントの規則の置き場所、テストの流儀、カバレッジの計測、管理 UI の CSS のビルドと画面の撮影の手順をまとめる。
 
 ## 実行とテスト
 
@@ -23,6 +23,10 @@ docker rm -f nns-pg-test
 ```
 
 本体も `pog` 経由で `opentelemetry_api`（`build_tools = ["rebar3", "mix"]`）に依存するため、ホストに elixir があると、ホストで作った erlang-shipment には Elixir 一式が混ざる。配布する成果物は Dockerfile の中で作ること。
+
+## コードのコメント
+
+コードのコメント（Doc コメントを含む）の規則は `.claude/rules/code-comments.md` にある。
 
 ## テストの流儀
 
@@ -134,6 +138,7 @@ sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（cod
 sh dev/pr_facts.sh <PR 番号>                     # head と base の SHA、差分の行数、閉じる issue、CI のジョブを 1 枚の表にする
 sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付きの手順を「1 つずつ別の Bash で実行される」前提で静的に検査する
 sh dev/check_plan_tests.sh <プランのファイル> <作業ツリー>  # プランの「テスト」の表の 1 列目のテスト名と実装の `pub fn ..._test()`（`dev/名前.sh` はファイルの実在）を突き合わせ、足す名前が無いか、取り消し線で消すとした名前が残っていれば表にして 1 で終わる（実装エージェントが使う）
+sh dev/check_comments.sh <作業ツリー> [ファイル...]  # src/ と plugins-src/*/src のコメントの issue 番号、テスト名、「従来」を「path:行:内容」で一覧にし、あれば 1 で終わる。ファイルを渡すとそれだけを見る
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
 sh dev/devin_prompt.sh <issue> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]  # 実装を devin CLI に任せるときの自己完結な依頼文を組む（実装エージェントが使う）
 sh dev/devin_wait.sh <clone> [最大秒数]                                              # devin CLI の完了を前景で待ち、終了コード 0（報告あり）/ 1（報告なしで終了）/ 2（まだ実行中。呼び直す）で返す（実装エージェントが使う）
