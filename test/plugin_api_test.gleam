@@ -424,6 +424,36 @@ pub fn fetch_event_rejects_a_pubkey_that_is_not_a_string_test() {
     == Error("pubkey must be a String")
 }
 
+/// アカウントの読み込み前は、読み込み前の理由を返す。
+pub fn fetch_event_rejects_before_accounts_are_loaded_test() {
+  let bunker_name = process.new_name("test_plugin_api_fetch_loading_bunker")
+  let assert Ok(_started) =
+    bunker.start(
+      bunker_name,
+      bunker.Settings(
+        store: app_tree.store_with_load(fn() { Error("boom") }),
+        auth_url: None,
+        retry_delay: app_tree.fixed_retry_delay,
+      ),
+      fn() { Nil },
+      fn(_relays) { Nil },
+      fn(_urls) { Nil },
+    )
+  let relay_list_name = start_relay_list([])
+
+  assert plugin_api.fetch_with(
+      bunker_name,
+      relay_list_name,
+      signer_pubkey(),
+      dynamic.int(0),
+    )
+    == Error("accounts are not loaded yet")
+
+  let assert Ok(pid) = process.named(bunker_name)
+  process.unlink(pid)
+  process.kill(pid)
+}
+
 /// `kind` が整数でないときは専用の理由を返す。
 pub fn fetch_event_rejects_a_kind_that_is_not_an_int_test() {
   let bunker_name = start_signed_in_bunker()
