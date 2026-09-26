@@ -21,7 +21,7 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/delivery
-import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded, Skipped, StoredAccount}
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -354,9 +354,9 @@ fn session_with(
   signer: account.Account,
   client: account.Account,
   relays: List(String),
-) -> engine.Session {
+) -> session.Session {
   let now = time.now_seconds()
-  engine.Session(
+  session.Session(
     signer: account.pubkey_hex(signer),
     client: account.pubkey_hex(client),
     perms: "",

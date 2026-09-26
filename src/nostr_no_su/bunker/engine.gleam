@@ -17,6 +17,7 @@ import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
 import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
+import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, type Verified, Event}
@@ -105,47 +106,6 @@ pub type Engine {
 /// 処理しない」にある。
 pub type Inputs {
   Inputs(now: Int, token: String, not_before: Int)
-}
-
-/// 承認待ちの接続要求 1 件。`token` は承認ページの URL に入る値で、辞書の鍵と
-/// 同じものを持つ（一覧に出すときに鍵を持ち回らずに済む）。`request_id` は承認後
-/// の応答を元の `connect` と同じ id で返すために覚えておく。`perms` は
-/// `params[2]` を `max_perms_bytes` で切った値（無ければ空文字列）、
-/// `secret_mismatch` は空でない secret が一致しなかったかどうかを表す。
-/// `pending_capacity` を超えると、その Doc の規則で押し出される。
-pub type Pending {
-  Pending(
-    token: String,
-    signer: String,
-    client: String,
-    request_id: String,
-    perms: String,
-    secret_mismatch: Bool,
-    created_at: Int,
-  )
-}
-
-/// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
-/// クライアント）の組で、取り消し、アカウントの削除、`session_capacity` による
-/// 押し出しまで署名を代理できる。時刻は Unix 秒。
-/// `last_used_at` は作成時に `created_at` と同じ値を入れ、セッション内の
-/// リクエストを処理したとき、前回から `last_used_granularity_seconds` 以上
-/// 経っていれば更新する。`perms` はセッション内の `sign_event` と
-/// `nip44_encrypt` / `nip44_decrypt` を照合する権限で、組を最初に承認したとき
-/// の値から、管理 UI の `set_perms` でだけ変わる。空のときは既定の集合
-/// （`bunker/permission` の既定）で照合する。`relays` は `nostrconnect://` で開いたときの
-/// URI のリレー（URI の順）で、`bunker://` の `connect` と承認で開いたセッション
-/// では空である。承認済みの組を `nostrconnect://` で開き直すと、`relays` だけが
-/// 新しい URI の一覧に変わる。
-pub type Session {
-  Session(
-    signer: String,
-    client: String,
-    perms: String,
-    created_at: Int,
-    last_used_at: Int,
-    relays: List(String),
-  )
 }
 
 /// 状態の変更に伴う DB への書き込み 1 件。変種は `account_store` の書き込みの
@@ -430,7 +390,7 @@ fn newest_pending(entries: Dict(String, Pending)) -> List(Pending) {
 }
 
 /// DB から読んだセッションと承認待ちで `sessions` と `pending` を置き換える。
-/// DB の型に依存しないよう、値はエンジンの型（`Session`・`Pending`）で受け取る。
+/// DB の型に依存しないよう、値は `session` の型（`Session`・`Pending`）で受け取る。
 /// `accounts`、`seen`、`auth_url`、`limiter` は変えない。DB が正なので既存の値には足さず
 /// 置き換える。署名者が登録されていないセッションと承認待ちは、
 /// `remove_account` と揃えて読み飛ばす。失効した承認待ち（`expired`）も同じく

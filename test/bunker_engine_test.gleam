@@ -9,6 +9,7 @@ import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine.{Duplicate, Ignore, Persist, Reply, Throttled}
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
+import nostr_no_su/bunker/session
 import nostr_no_su/crypto/nip44
 import nostr_no_su/nostr/event.{type Event, Event}
 import support/nip46_client.{
@@ -568,7 +569,7 @@ pub fn sessions_lists_connected_clients_test() {
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "",
@@ -596,7 +597,7 @@ pub fn requests_in_a_session_write_the_last_use_test() {
     handle_raw(state, request_event(client, signer, ping, 1060), 1060, 0)
   let assert Persist(write:, next:, ..) = outcome2
   let touched =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "",
@@ -620,7 +621,7 @@ pub fn sessions_are_sorted_test() {
     client_keys
     |> list.reverse
     |> list.map(fn(client) {
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: client,
         perms: "",
@@ -634,7 +635,7 @@ pub fn sessions_are_sorted_test() {
     client_keys
     |> list.sort(string.compare)
     |> list.map(fn(client) {
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: client,
         perms: "",
@@ -651,7 +652,7 @@ pub fn sessions_are_sorted_test() {
 pub fn sessions_are_sorted_by_the_last_use_test() {
   let signer = account_for(signer_key)
   let session = fn(client: String, created_at: Int, last_used_at: Int) {
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: client,
       perms: "",
@@ -763,7 +764,7 @@ pub fn set_perms_replaces_the_permissions_test() {
       "sign_event:1,sign_event:10002",
     )
   let updated =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "sign_event:1,sign_event:10002",
@@ -803,7 +804,7 @@ pub fn set_perms_bounds_the_permissions_test() {
       over_limit,
     )
   let updated =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: long_prefix,
@@ -840,7 +841,7 @@ pub fn logout_without_a_session_is_acknowledged_test() {
   )
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "",
@@ -864,7 +865,7 @@ pub fn connect_without_secret_asks_for_approval_test() {
     <> "\"}"
   assert engine.pending(state, 1000)
     == [
-      engine.Pending(
+      session.Pending(
         token: token,
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
@@ -931,7 +932,7 @@ pub fn approve_answers_the_original_request_test() {
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "sign_event:1",
@@ -1240,7 +1241,7 @@ pub fn connect_with_an_empty_signer_param_test() {
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "",
@@ -1265,7 +1266,7 @@ pub fn connect_ignores_params_after_the_perms_test() {
   let assert Reply(_response) = outcome
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "nip44_encrypt",
@@ -1647,7 +1648,7 @@ pub fn remove_account_drops_only_its_sessions_and_pending_test() {
   let state = engine.remove_account(state, account.pubkey_hex(signer_a))
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer_b),
         client: account.pubkey_hex(client),
         perms: "",
@@ -1748,7 +1749,7 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
   assert secrets_by_signer(state) == [#(account.pubkey_hex(signer), "replaced")]
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "",
@@ -1827,7 +1828,7 @@ pub fn connect_with_the_secret_writes_the_session_test() {
   let assert Persist(write:, ..) = outcome
   assert write
     == engine.InsertSession(
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "sign_event:1",
@@ -1848,7 +1849,7 @@ pub fn connect_for_approval_writes_the_pending_test() {
   let assert Persist(write:, ..) = outcome
   assert write
     == engine.InsertPending(
-      pending: engine.Pending(
+      pending: session.Pending(
         token: token,
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
@@ -1935,7 +1936,7 @@ pub fn reconnecting_an_approved_client_writes_nothing_test() {
   let assert Reply(_) = outcome3
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "",
@@ -1999,7 +2000,7 @@ pub fn approving_an_approved_client_keeps_the_session_test() {
   let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
   assert engine.sessions(state)
     == [
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "a",
@@ -2016,7 +2017,7 @@ pub fn approving_an_approved_client_writes_the_kept_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let kept =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "a",
@@ -2025,7 +2026,7 @@ pub fn approving_an_approved_client_writes_the_kept_session_test() {
       relays: [],
     )
   let pending =
-    engine.Pending(
+    session.Pending(
       token: token,
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
@@ -2052,7 +2053,7 @@ pub fn approve_writes_the_approval_test() {
   assert write
     == engine.ApprovePending(
       token: token,
-      session: engine.Session(
+      session: session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "sign_event:1",
@@ -2107,7 +2108,7 @@ pub fn open_client_session_opens_an_approved_session_test() {
       1000,
     )
   let session =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "sign_event:1",
@@ -2203,7 +2204,7 @@ pub fn open_client_session_on_an_approved_pair_replaces_the_relays_test() {
       2000,
     )
   let session =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "sign_event:1",
@@ -2260,10 +2261,10 @@ pub fn open_client_session_rejects_an_unknown_signer_test() {
 /// 上限ちょうどの 32 件のセッション。`client-0` は最終利用が最も古く、作成は
 /// 最も新しい（押し出しの対象であることをこの 1 件で示す）。上限のテスト 3 件が
 /// 共有する。
-fn full_sessions(signer: Account) -> List(engine.Session) {
+fn full_sessions(signer: Account) -> List(session.Session) {
   list.repeat(Nil, engine.session_capacity)
   |> list.index_map(fn(_, index) {
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: "client-" <> int.to_string(index),
       perms: "",
@@ -2285,7 +2286,7 @@ pub fn connect_at_the_capacity_evicts_the_least_recently_used_session_test() {
   let assert Persist(write:, next:, ..) = outcome
   assert write
     == engine.InsertSession(
-      engine.Session(
+      session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "sign_event:1",
@@ -2304,7 +2305,7 @@ pub fn approve_at_the_capacity_evicts_the_least_recently_used_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let pending =
-    engine.Pending(
+    session.Pending(
       token: token,
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
@@ -2319,7 +2320,7 @@ pub fn approve_at_the_capacity_evicts_the_least_recently_used_session_test() {
   assert write
     == engine.ApprovePending(
       token: token,
-      session: engine.Session(
+      session: session.Session(
         signer: account.pubkey_hex(signer),
         client: account.pubkey_hex(client),
         perms: "sign_event:1",
@@ -2343,12 +2344,12 @@ pub fn approving_an_open_session_at_the_capacity_evicts_nothing_test() {
     |> list.map(fn(session) {
       case session.client {
         "client-0" ->
-          engine.Session(..session, client: account.pubkey_hex(client))
+          session.Session(..session, client: account.pubkey_hex(client))
         _ -> session
       }
     })
   let pending =
-    engine.Pending(
+    session.Pending(
       token: token,
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
@@ -2370,7 +2371,7 @@ pub fn pending_lists_the_newest_first_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let entry = fn(token: String, created_at: Int) {
-    engine.Pending(
+    session.Pending(
       token: token,
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
@@ -2614,7 +2615,7 @@ pub fn restored_session_can_sign_without_connect_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let session =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
       perms: "sign_event:1",
@@ -2639,7 +2640,7 @@ pub fn restored_pending_can_be_approved_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let pending =
-    engine.Pending(
+    session.Pending(
       token: "restored-token",
       signer: account.pubkey_hex(signer),
       client: account.pubkey_hex(client),
@@ -2659,7 +2660,7 @@ pub fn restored_pending_can_be_approved_test() {
 pub fn approving_a_pending_with_a_non_hex_client_fails_test() {
   let signer = account_for(signer_key)
   let pending =
-    engine.Pending(
+    session.Pending(
       token: "restored-token",
       signer: account.pubkey_hex(signer),
       client: "zz",
@@ -2677,7 +2678,7 @@ pub fn approving_a_pending_with_a_non_hex_client_fails_test() {
 pub fn approving_a_pending_with_an_off_curve_client_fails_test() {
   let signer = account_for(signer_key)
   let pending =
-    engine.Pending(
+    session.Pending(
       token: "restored-token",
       signer: account.pubkey_hex(signer),
       client: string.repeat("f", 64),
@@ -2696,7 +2697,7 @@ pub fn restore_skips_expired_pending_test() {
   let signer = account_for(signer_key)
   let client = account.pubkey_hex(account_for(client_key))
   let kept =
-    engine.Pending(
+    session.Pending(
       token: "kept",
       signer: account.pubkey_hex(signer),
       client: client,
@@ -2705,7 +2706,7 @@ pub fn restore_skips_expired_pending_test() {
       secret_mismatch: False,
       created_at: 1400,
     )
-  let dropped = engine.Pending(..kept, token: "dropped", created_at: 1399)
+  let dropped = session.Pending(..kept, token: "dropped", created_at: 1399)
   let state = engine.restore(new_engine(), [], [kept, dropped], 2000)
   assert dict.keys(state.pending) == ["kept"]
 }
@@ -2715,7 +2716,7 @@ pub fn restore_skips_unregistered_signers_test() {
   let stranger = account.pubkey_hex(account_for(other_signer_key))
   let client = account.pubkey_hex(account_for(client_key))
   let session =
-    engine.Session(
+    session.Session(
       signer: stranger,
       client: client,
       perms: "",
@@ -2724,7 +2725,7 @@ pub fn restore_skips_unregistered_signers_test() {
       relays: [],
     )
   let pending =
-    engine.Pending(
+    session.Pending(
       token: "t",
       signer: stranger,
       client: client,

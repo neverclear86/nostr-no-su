@@ -29,7 +29,8 @@ import gleam/string
 import nostr_no_su/backoff
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/delivery.{type RelayScope, BaseRelay, SessionRelay}
-import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session.{type Pending, type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
@@ -158,7 +159,7 @@ pub type WriteFailure {
   MaybeWritten(reason: String)
 }
 
-/// ストアから読み込んだバンカーの状態。セッションと承認待ちはエンジンの型で持つ。
+/// ストアから読み込んだバンカーの状態。セッションと承認待ちは `session` の型で持つ。
 pub type Snapshot {
   Snapshot(
     accounts: vault.Loaded,

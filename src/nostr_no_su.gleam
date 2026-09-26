@@ -11,6 +11,7 @@ import nostr_no_su/app
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/config.{type Config}
 import nostr_no_su/db
@@ -408,7 +409,7 @@ pub fn load_snapshot(
   bunker_snapshot(stored, relays)
 }
 
-/// DB から読んだ行を、バンカーの読み込みの結果（エンジンの型）にする。
+/// DB から読んだ行を、バンカーの読み込みの結果（`session` の型）にする。
 fn bunker_snapshot(
   stored: account_store.Stored,
   relays: List(relay_store.Relay),
@@ -416,7 +417,7 @@ fn bunker_snapshot(
   bunker.Snapshot(
     accounts: stored.accounts,
     sessions: list.map(stored.sessions, fn(session) {
-      engine.Session(
+      session.Session(
         signer: session.signer,
         client: session.client,
         perms: session.perms,
@@ -426,7 +427,7 @@ fn bunker_snapshot(
       )
     }),
     pending: list.map(stored.pending, fn(pending) {
-      engine.Pending(
+      session.Pending(
         token: pending.token,
         signer: pending.signer,
         client: pending.client,
@@ -442,8 +443,8 @@ fn bunker_snapshot(
   )
 }
 
-/// エンジンのセッションを DB の行の型にする。
-fn stored_session(session: engine.Session) -> account_store.StoredSession {
+/// セッション（`session.Session`）を DB の行の型にする。
+fn stored_session(session: session.Session) -> account_store.StoredSession {
   account_store.StoredSession(
     signer: session.signer,
     client: session.client,
@@ -454,8 +455,8 @@ fn stored_session(session: engine.Session) -> account_store.StoredSession {
   )
 }
 
-/// エンジンの承認待ちを DB の行の型にする。
-fn stored_pending(pending: engine.Pending) -> account_store.StoredPending {
+/// 承認待ち（`session.Pending`）を DB の行の型にする。
+fn stored_pending(pending: session.Pending) -> account_store.StoredPending {
   account_store.StoredPending(
     token: pending.token,
     signer: pending.signer,

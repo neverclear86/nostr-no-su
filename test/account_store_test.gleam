@@ -20,6 +20,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
 import nostr_no_su/db
 import nostr_no_su/named
@@ -1400,7 +1401,7 @@ pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
   let write = store_write(pool, key)
 
   let old_pending =
-    engine.Pending(
+    session.Pending(
       token: "old",
       signer: signer_hex,
       client: "client",
@@ -1414,7 +1415,7 @@ pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
     )
     == Ok(Nil)
   let new_pending =
-    engine.Pending(
+    session.Pending(
       token: "new",
       signer: signer_hex,
       client: "client",
@@ -1433,7 +1434,7 @@ pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
   // 未登録の署名者への差し替えは外部キー違反で失敗し、削除だけが残らない
   // （1 トランザクション）。
   let unregistered_pending =
-    engine.Pending(
+    session.Pending(
       token: "unregistered",
       signer: account.pubkey_hex(random_entry("unregistered").account),
       client: "client",
@@ -1469,7 +1470,7 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
 
   let write = store_write(pool, key)
   let session = fn(client: String, last_used_at: Int) {
-    engine.Session(
+    session.Session(
       signer: signer_hex,
       client: client,
       perms: "",
@@ -1510,7 +1511,7 @@ pub fn postgres_session_relays_survive_a_reload_test() {
 
   let write = store_write(pool, key)
   let session =
-    engine.Session(
+    session.Session(
       signer: account.pubkey_hex(entry.account),
       client: "client",
       perms: "",
@@ -1519,7 +1520,7 @@ pub fn postgres_session_relays_survive_a_reload_test() {
       relays: ["wss://b.example", "wss://a.example"],
     )
   assert write(engine.InsertSession(session: session, evicted: [])) == Ok(Nil)
-  let touched = engine.Session(..session, last_used_at: 1060)
+  let touched = session.Session(..session, last_used_at: 1060)
   assert write(engine.TouchSession(session: touched)) == Ok(Nil)
 
   let assert Ok(snapshot) = nostr_no_su.load_snapshot(pool, key, generous)
@@ -1539,7 +1540,7 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
 
   let write = store_write(pool, key)
   let session = fn(client: String, perms: String) {
-    engine.Session(
+    session.Session(
       signer: signer_hex,
       client: client,
       perms: perms,
@@ -1778,7 +1779,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
   let assert Error(bunker.NotWritten(_reason)) =
     write(
       engine.InsertSession(
-        session: engine.Session(
+        session: session.Session(
           signer: signer_hex,
           client: "another",
           perms: "",
@@ -1796,7 +1797,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
     write(
       engine.ApprovePending(
         token: "tok",
-        session: engine.Session(
+        session: session.Session(
           signer: signer_hex,
           client: "new",
           perms: "",

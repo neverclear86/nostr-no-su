@@ -15,6 +15,7 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
 import nostr_no_su/db
 import nostr_no_su/nostr/event.{type Event}
@@ -615,8 +616,8 @@ pub type DatabaseMsg {
 type Database {
   Database(
     rows: List(vault.StoredAccount),
-    sessions: List(engine.Session),
-    pending: List(engine.Pending),
+    sessions: List(session.Session),
+    pending: List(session.Pending),
     failing_reads: Bool,
   )
 }
@@ -743,9 +744,9 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
 /// `ON CONFLICT (signer, client) DO UPDATE` と同じ規則でセッションを足す（同じ
 /// 組の行は置き換える）。
 fn insert_session(
-  sessions: List(engine.Session),
-  session: engine.Session,
-) -> List(engine.Session) {
+  sessions: List(session.Session),
+  session: session.Session,
+) -> List(session.Session) {
   let pair = #(session.signer, session.client)
   case
     list.any(sessions, fn(existing) {
@@ -765,9 +766,9 @@ fn insert_session(
 
 /// `pairs` に載る（signer, client）の組の行を除く。
 fn evict(
-  sessions: List(engine.Session),
+  sessions: List(session.Session),
   pairs: List(#(String, String)),
-) -> List(engine.Session) {
+) -> List(session.Session) {
   list.filter(sessions, fn(session) {
     !list.contains(pairs, #(session.signer, session.client))
   })

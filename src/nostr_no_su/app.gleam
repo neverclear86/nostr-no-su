@@ -39,8 +39,9 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/delivery
-import nostr_no_su/bunker/engine.{type Pending, type Session}
+import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
+import nostr_no_su/bunker/session.{type Pending, type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/config
 import nostr_no_su/db
