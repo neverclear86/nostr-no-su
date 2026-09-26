@@ -40,6 +40,7 @@ import nostr_no_su/bunker.{type ChangeFailure, type SessionFailure}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
+import nostr_no_su/bunker/permission
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
@@ -1077,17 +1078,17 @@ fn field_checked(form: wisp.FormData, name: String) -> Bool {
   form_value(form, name) == "on"
 }
 
-/// `kinds` の欄をカンマで分け、10 進の整数として正規化する（`01` は `1`）。
-/// `docs/design-decisions.md` の完全一致の照合に揃えるためで、0 以上の整数でない
-/// 項目が 1 つでもあれば `Error(Nil)`。
-fn normalized_kinds(kinds: String) -> Result(List(String), Nil) {
+/// `kinds` の欄をカンマで分け、項目ごとに整数として読む（`01` は `1`）。保存の値では
+/// `permission.token` の 10 進表記になり、`docs/design-decisions.md` の完全一致の照合に揃う。
+/// 0 以上の整数でない項目が 1 つでもあれば `Error(Nil)`。
+fn normalized_kinds(kinds: String) -> Result(List(Int), Nil) {
   case string.trim(kinds) {
     "" -> Ok([])
     trimmed ->
       string.split(trimmed, ",")
       |> list.try_map(fn(item) {
         case int.parse(item) {
-          Ok(value) if value >= 0 -> Ok(int.to_string(value))
+          Ok(value) if value >= 0 -> Ok(value)
           _ -> Error(Nil)
         }
       })
@@ -1115,18 +1116,15 @@ fn assembled_perms(
   }
 }
 
-/// 欄の状態から保存する perms の文字列を組む。チェックの入った 3 つ →
-/// `sign_event` にチェックが無いときだけ、正規化した `kinds` を重複無しで
-/// `sign_event:<kind>` にしたもの → `other` をカンマで分けたトークン、の順で繋ぐ。
-fn perms_string(
-  form: dashboard.PermissionsForm,
-  kinds: List(String),
-) -> String {
-  let checked_tokens =
+/// 欄の状態から保存する perms の文字列を組む。チェックの入った 3 つ → `sign_event` に
+/// チェックが無いときだけ、`kinds` を重複無しで kind の署名にしたもの → `other` を
+/// `permission.parse` で読んだもの、の順に並べ、`permission.to_string` で文字列にする。
+fn perms_string(form: dashboard.PermissionsForm, kinds: List(Int)) -> String {
+  let checked =
     [
-      #(form.sign_event, dashboard.sign_event_field),
-      #(form.nip44_encrypt, dashboard.nip44_encrypt_field),
-      #(form.nip44_decrypt, dashboard.nip44_decrypt_field),
+      #(form.sign_event, permission.SignAnyKind),
+      #(form.nip44_encrypt, permission.Nip44Encrypt),
+      #(form.nip44_decrypt, permission.Nip44Decrypt),
     ]
     |> list.filter_map(fn(pair) {
       case pair.0 {
@@ -1134,17 +1132,14 @@ fn perms_string(
         False -> Error(Nil)
       }
     })
-  let kind_tokens = case form.sign_event {
+  let kind_decls = case form.sign_event {
     True -> []
-    False ->
-      kinds |> list.unique |> list.map(fn(item) { "sign_event:" <> item })
+    False -> kinds |> list.unique |> list.map(permission.SignKind)
   }
-  let other_tokens = case string.trim(form.other) {
-    "" -> []
-    trimmed -> string.split(trimmed, ",")
-  }
-  list.flatten([checked_tokens, kind_tokens, other_tokens])
-  |> string.join(",")
+  let other_decls = permission.parse(string.trim(form.other))
+  [checked, kind_decls, other_decls]
+  |> list.flatten
+  |> permission.to_string
 }
 
 /// クライアントの接続の 1 段目の送信。POST だけを受け付け、入力を `with_connect_input` で

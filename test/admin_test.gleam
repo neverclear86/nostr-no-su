@@ -236,6 +236,49 @@ pub fn session_permissions_keep_unknown_declarations_test() {
     ))
 }
 
+/// kinds の欄の項目は、欄に書かれた順のまま重複を取り除いて保存される。
+pub fn session_permissions_keep_the_kinds_in_order_once_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.nip44_decrypt_field, "on"),
+        #(dashboard.perms_kinds_field, "7,1,07"),
+        #(dashboard.perms_other_field, "get_public_key"),
+      ],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "nip44_decrypt,sign_event:7,sign_event:1,get_public_key",
+    ))
+}
+
+/// `sign_event` にチェックが入った POST では、kinds の欄の値は保存の値に入らない。
+pub fn session_permissions_drop_the_kinds_when_every_kind_is_signed_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.session_permissions_path(signer, declared_client),
+      [
+        #(dashboard.sign_event_field, "on"),
+        #(dashboard.perms_kinds_field, "7"),
+      ],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(PermissionsSaved(
+      signer: signer,
+      client: declared_client,
+      perms: "sign_event",
+    ))
+}
+
 /// セッション `session_client` の行の権限の編集のダイアログの `id`。
 fn permissions_dialog_id(session_client: String) -> String {
   "dialog-session-" <> signer <> "-" <> session_client <> "-permissions"

@@ -36,6 +36,7 @@ import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/qr
 import nostr_no_su/admin/view
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
@@ -394,13 +395,13 @@ pub const signer_field = "signer"
 /// セッション取り消しのフォームでクライアントを送る欄の名前。
 pub const client_field = "client"
 
-/// 権限の編集のフォームで `sign_event` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `sign_event` の可否を送る欄の名前。
 pub const sign_event_field = "sign_event"
 
-/// 権限の編集のフォームで `nip44_encrypt` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `nip44_encrypt` の可否を送る欄の名前。
 pub const nip44_encrypt_field = "nip44_encrypt"
 
-/// 権限の編集のフォームで `nip44_decrypt` の可否を送る欄の名前。トークンそのもの。
+/// 権限の編集のフォームで `nip44_decrypt` の可否を送る欄の名前。
 pub const nip44_decrypt_field = "nip44_decrypt"
 
 /// 権限の編集のフォームで許す kind の一覧を送る欄の名前。
@@ -3276,18 +3277,6 @@ pub type PermissionsForm {
   )
 }
 
-/// `perms` を 3 つのチェック、kind の一覧、そのほかの宣言に分けたもの。
-/// `form_of_perms` の途中の形で、最後に `PermissionsForm` へまとめる。
-type ParsedPerms {
-  ParsedPerms(
-    sign_event: Bool,
-    nip44_encrypt: Bool,
-    nip44_decrypt: Bool,
-    kinds: List(String),
-    other: List(String),
-  )
-}
-
 /// 権限の編集フォームの中身。説明の 1 行と、セッションの権限のパスへ POST するフォームを
 /// 並べる。要約と入力の誤りは含めない。`form` は描き直すときに送られた欄の状態で、
 /// `None` なら `session` の保存済みの値（`form_of_perms(session.perms)`）を使う。kind の欄の
@@ -3384,64 +3373,43 @@ fn other_declarations(language: Language, other: String) -> List(Element(msg)) {
   }
 }
 
-/// 保存済みの `perms` を欄の状態に写す。3 つの語はチェック、`sign_event:<n>` は
-/// kind の欄、それ以外は「そのほかの宣言」に落とし、空の `perms` は 3 つのチェック
-/// を入れる。
+/// 保存済みの `perms` を `permission.parse` で読み、欄の状態に写す。3 つのチェックは
+/// `permission.allows` で入れる（空の `perms` は既定の集合なので 3 つとも入る）。0 以上の kind の
+/// 署名は kind の欄へ、チェックの 3 つの権限と 0 以上の kind の署名のどれでもない権限は
+/// 「そのほかの宣言」へ、どちらも並びの順と重複のまま写す。
 fn form_of_perms(perms: String) -> PermissionsForm {
-  let parsed = case perms {
-    "" ->
-      ParsedPerms(
-        sign_event: True,
-        nip44_encrypt: True,
-        nip44_decrypt: True,
-        kinds: [],
-        other: [],
-      )
-    _ ->
-      string.split(perms, ",")
-      |> list.fold(
-        ParsedPerms(
-          sign_event: False,
-          nip44_encrypt: False,
-          nip44_decrypt: False,
-          kinds: [],
-          other: [],
-        ),
-        fold_token,
-      )
-      |> reverse_lists
-  }
+  let declared = permission.parse(perms)
   PermissionsForm(
-    sign_event: parsed.sign_event,
-    nip44_encrypt: parsed.nip44_encrypt,
-    nip44_decrypt: parsed.nip44_decrypt,
-    kinds: string.join(parsed.kinds, ","),
-    other: string.join(parsed.other, ","),
+    sign_event: permission.allows(declared, permission.SignAnyKind),
+    nip44_encrypt: permission.allows(declared, permission.Nip44Encrypt),
+    nip44_decrypt: permission.allows(declared, permission.Nip44Decrypt),
+    kinds: declared
+      |> list.filter_map(form_kind)
+      |> list.map(int.to_string)
+      |> string.join(","),
+    other: declared
+      |> list.filter(is_other_declaration)
+      |> permission.to_string,
   )
 }
 
-/// `form_of_perms` の 1 トークンぶんの畳み込み。
-fn fold_token(acc: ParsedPerms, token: String) -> ParsedPerms {
-  case token {
-    "sign_event" -> ParsedPerms(..acc, sign_event: True)
-    "nip44_encrypt" -> ParsedPerms(..acc, nip44_encrypt: True)
-    "nip44_decrypt" -> ParsedPerms(..acc, nip44_decrypt: True)
-    _ ->
-      case permission_view.signed_kind(token) {
-        Ok(kind) ->
-          ParsedPerms(..acc, kinds: [int.to_string(kind), ..acc.kinds])
-        Error(Nil) -> ParsedPerms(..acc, other: [token, ..acc.other])
-      }
+/// kind の欄に写す kind。0 以上の kind の署名だけで、負の kind は「そのほかの宣言」に残す
+/// （kind の欄は保存のときに 0 以上の整数しか受けない）。
+fn form_kind(declared: Permission) -> Result(Int, Nil) {
+  case declared {
+    permission.SignKind(kind) if kind >= 0 -> Ok(kind)
+    _ -> Error(Nil)
   }
 }
 
-/// `fold_token` が先頭に積んだ `kinds` と `other` を入力の順に戻す。
-fn reverse_lists(parsed: ParsedPerms) -> ParsedPerms {
-  ParsedPerms(
-    ..parsed,
-    kinds: list.reverse(parsed.kinds),
-    other: list.reverse(parsed.other),
-  )
+/// 3 つのチェックにも kind の欄にも写らない、「そのほかの宣言」に残す権限か。
+fn is_other_declaration(declared: Permission) -> Bool {
+  case declared {
+    permission.SignAnyKind
+    | permission.Nip44Encrypt
+    | permission.Nip44Decrypt -> False
+    _ -> result.is_error(form_kind(declared))
+  }
 }
 
 /// URI の補足の `id`。URI の欄はダッシュボードの接続のダイアログに 1 つだけなので固定の値にする。

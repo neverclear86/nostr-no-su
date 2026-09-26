@@ -678,7 +678,7 @@ nostr-no-su/
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
 │       ├── admin/qr.gleam       QR コードの符号化とインライン SVG への変換（純粋）
 │       ├── admin/fingerprint.gleam 公開鍵の指紋（5 × 5 の左右対称の模様と 12 通りの色相）の決定とインライン SVG への変換（純粋）
-│       ├── admin/permission_view.gleam 権限のチップの描画（未対応の判定はバンカーの権限のモジュールの定義を使う）
+│       ├── admin/permission_view.gleam 権限のチップの描画（トークンの解釈と未対応の判定はバンカーの権限のモジュールの定義を使う）
 │       ├── admin/view.gleam      ページ枠と、admin/i18n と admin/wordmark 以外の本体のモジュールに依存しない部品（lustre）
 │       ├── admin/wordmark.gleam  上部のロゴの製品名の字形のパス（dev/logo_wordmark.sh が生成）
 │       ├── admin/i18n.gleam      表示の言語の型と選び方、日本語と英語の文言
