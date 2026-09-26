@@ -132,6 +132,7 @@
 ////   （`start_plugin_children`）。失敗の理由は `plugin_children` が子ごとに出す
 ////   1 行に出る。
 
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -539,24 +540,21 @@ fn monitor_tree(
     plugin_runner.dispatch,
     config.dedup_capacity,
   ))
-  |> supervisor.add(
-    relay_connections_child(
-      spec,
-      factories,
-      relay_list.Monitor,
-      config.subscriptions,
-      monitor_handler(
+  |> supervisor.add(relay_connections_child(
+    spec,
+    factories,
+    relay_list.Monitor,
+    config.subscriptions,
+    ConnectionHandlers(
+      ..silent_handlers(),
+      handle_event: monitor_handler(
         config.name,
         config.excludes_kind,
         config.accepts_author,
         plugin_runner_names(spec.plugins),
       ),
-      fn(_relay_url, _ack) { Nil },
-      fn(_relay_url) { None },
-      fn(_relay_url, _socket) { Nil },
-      fn(_relay_url) { Nil },
     ),
-  )
+  ))
   |> supervisor.add(resume_saver.supervised(
     fn() { dedup.points(config.name) },
     config.save_resume,
@@ -592,23 +590,28 @@ pub fn monitor_handler(
     case received {
       relay_client.ReceivedEvent(subscription_id, verified) -> {
         let incoming = event.verified_event(verified)
+        use <- bool.guard(excludes_kind(incoming.kind), Nil)
+        let reject = fn() { named.send(name, dedup.Rejected(relay_url)) }
+        let if_accepted = fn(deliver: fn() -> Nil) {
+          bool.lazy_guard(!accepts_author(incoming.pubkey), reject, deliver)
+        }
         case
-          excludes_kind(incoming.kind),
-          subscription_id == subscriptions.monitor_subscription_id,
           subscriptions.catchup_plugin(subscription_id),
-          accepts_author(incoming.pubkey)
+          subscription_id == subscriptions.monitor_subscription_id
         {
-          True, _, _, _ -> Nil
-          False, _, _, False | False, False, None, _ ->
-            named.send(name, dedup.Rejected(relay_url))
-          False, _, Some(plugin), True ->
-            send_to_runner(
-              runners,
-              plugin,
-              plugin_runner.HandleCatchup(incoming),
-            )
-          False, True, None, True ->
-            named.send(name, dedup.Incoming(relay_url, incoming))
+          Some(plugin), _ ->
+            if_accepted(fn() {
+              send_to_runner(
+                runners,
+                plugin,
+                plugin_runner.HandleCatchup(incoming),
+              )
+            })
+          None, True ->
+            if_accepted(fn() {
+              named.send(name, dedup.Incoming(relay_url, incoming))
+            })
+          None, False -> reject()
         }
       }
       relay_client.ReceivedEose(subscription_id) ->
@@ -708,28 +711,30 @@ fn bunker_connections_child(
     factories,
     role,
     fn(relay_url) { config.subscriptions(fn() { signers(relay_url) }) },
-    fn(_relay_url, received) {
-      case received {
-        relay_client.ReceivedEvent(_, verified) ->
-          named.send(config.name, bunker.Incoming(verified))
-        relay_client.ReceivedEose(_) -> Nil
-      }
-    },
-    fn(relay_url, ack) {
-      named.send(config.name, bunker.Acknowledged(relay_url, ack))
-    },
-    fn(relay_url) {
-      Some(bunker.authenticate(config.name, relay_url, scope, _))
-    },
-    fn(relay_url, socket: Socket) {
-      named.send(
-        config.name,
-        bunker.SetPublisher(relay_url, scope, socket.publish),
-      )
-    },
-    fn(relay_url) {
-      named.send(config.name, bunker.RemovePublisher(relay_url, scope))
-    },
+    ConnectionHandlers(
+      handle_event: fn(_relay_url, received) {
+        case received {
+          relay_client.ReceivedEvent(_, verified) ->
+            named.send(config.name, bunker.Incoming(verified))
+          relay_client.ReceivedEose(_) -> Nil
+        }
+      },
+      handle_ok: fn(relay_url, ack) {
+        named.send(config.name, bunker.Acknowledged(relay_url, ack))
+      },
+      authenticator: fn(relay_url) {
+        Some(bunker.authenticate(config.name, relay_url, scope, _))
+      },
+      on_connect: fn(relay_url, socket: Socket) {
+        named.send(
+          config.name,
+          bunker.SetPublisher(relay_url, scope, socket.publish),
+        )
+      },
+      on_disconnect: fn(relay_url) {
+        named.send(config.name, bunker.RemovePublisher(relay_url, scope))
+      },
+    ),
   )
 }
 
@@ -1294,9 +1299,34 @@ fn subtree() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
+/// 接続 1 本ぶんのハンドラー。どれも第 1 引数に接続の URL を受け取る。`handle_event` は
+/// 受信したイベントと保存済みイベントの終わり、`handle_ok` は発行したイベントへの OK、
+/// `authenticator` は AUTH の受け口（応答しない接続は `None`）、`on_connect` と
+/// `on_disconnect` は接続と切断の通知を受ける。
+type ConnectionHandlers {
+  ConnectionHandlers(
+    handle_event: fn(String, Received) -> Nil,
+    handle_ok: fn(String, Acknowledgement) -> Nil,
+    authenticator: fn(String) -> Option(Authenticator),
+    on_connect: fn(String, Socket) -> Nil,
+    on_disconnect: fn(String) -> Nil,
+  )
+}
+
+/// 何もしないハンドラー。AUTH には応答しない。用途ごとに要るものだけを
+/// `ConnectionHandlers(..silent_handlers(), ...)` で差し替える。
+fn silent_handlers() -> ConnectionHandlers {
+  ConnectionHandlers(
+    handle_event: fn(_relay_url, _received) { Nil },
+    handle_ok: fn(_relay_url, _ack) { Nil },
+    authenticator: fn(_relay_url) { None },
+    on_connect: fn(_relay_url, _socket) { Nil },
+    on_disconnect: fn(_relay_url) { Nil },
+  )
+}
+
 /// 用途 `role` の接続を `relay_list` の `connections` factory の子として組む。
-/// 購読の定義、受信のハンドラー、発行した応答への OK のハンドラー、
-/// AUTH の受け口、接続・切断の通知には、その接続の URL を渡す。テンプレートは
+/// 購読の定義と `handlers` の各ハンドラーには、その接続の URL を渡す。テンプレートは
 /// `Connection` を受け取るたびに URL から `Settings` を組み立てる閉包にし、
 /// `relay_list.connections_child` へ渡す。
 fn relay_connections_child(
@@ -1304,11 +1334,7 @@ fn relay_connections_child(
   factories: relay_list.Factories,
   role: relay_list.Role,
   subscriptions: fn(String) -> Subscriptions,
-  handle_event: fn(String, Received) -> Nil,
-  handle_ok: fn(String, Acknowledgement) -> Nil,
-  authenticator: fn(String) -> Option(Authenticator),
-  on_connect: fn(String, Socket) -> Nil,
-  on_disconnect: fn(String) -> Nil,
+  handlers: ConnectionHandlers,
 ) -> ChildSpecification(
   factory_supervisor.Supervisor(
     relay_list.Connection,
@@ -1327,13 +1353,13 @@ fn relay_connections_child(
           spec.open(
             connection.url,
             subscriptions(connection.url),
-            handle_event(connection.url, _),
-            handle_ok(connection.url, _),
-            authenticator(connection.url),
+            handlers.handle_event(connection.url, _),
+            handlers.handle_ok(connection.url, _),
+            handlers.authenticator(connection.url),
           )
         },
-        on_connect: on_connect(connection.url, _),
-        on_disconnect: fn() { on_disconnect(connection.url) },
+        on_connect: handlers.on_connect(connection.url, _),
+        on_disconnect: fn() { handlers.on_disconnect(connection.url) },
         reconnect_delay: spec.reconnect_delay,
         stable_after_ms: relay_connection.default_stable_after_ms,
       ))
