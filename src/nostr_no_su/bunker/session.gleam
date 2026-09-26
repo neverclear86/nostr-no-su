@@ -1,5 +1,6 @@
-//// バンカーの承認済みセッションと承認待ちの接続要求の型。フィールドの意味をここにだけ
-//// 書く。どのモジュールも import しない葉に置き、使う側の依存の向きを変えない。
+//// バンカーの承認済みセッションと承認待ちの接続要求の型と、その（署名者, クライアント）の組の
+//// 型。フィールドの意味をここにだけ書く。どのモジュールも import しない葉に置き、使う側の依存の
+//// 向きを変えない。
 
 /// 承認済みのクライアントセッション 1 件。`connect` が成功した（署名者,
 /// クライアント）の組で、管理 UI の取り消しかクライアントの `logout`、アカウントの
@@ -50,4 +51,24 @@ pub type Pending {
     /// 作成した Unix 秒。失効（engine の `pending_ttl_seconds`）の起点になる。
     created_at: Int,
   )
+}
+
+/// （署名者, クライアント）の組。承認済みセッションは組ごとに 1 件である。
+pub type SessionKey {
+  SessionKey(
+    /// 署名者の公開鍵（16 進、小文字）。
+    signer: String,
+    /// クライアントの公開鍵（16 進、小文字）。
+    client: String,
+  )
+}
+
+/// セッション `session` の組。
+pub fn session_key(session: Session) -> SessionKey {
+  SessionKey(signer: session.signer, client: session.client)
+}
+
+/// 承認待ち `pending` の組。
+pub fn pending_key(pending: Pending) -> SessionKey {
+  SessionKey(signer: pending.signer, client: pending.client)
 }

@@ -17,7 +17,10 @@ import nostr_no_su/bunker/connection_secret.{type ConnectionSecret}
 import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
-import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
+import nostr_no_su/bunker/session.{
+  type Pending, type Session, type SessionKey, Pending, Session, SessionKey,
+  session_key,
+}
 import nostr_no_su/crypto/nip44
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, type Verified, Event}
@@ -83,17 +86,17 @@ pub type Engine {
   Engine(
     /// 署名者 pubkey hex -> #(account, 閉じ込めた接続 secret)
     accounts: Dict(String, #(Account, ConnectionSecret)),
-    /// #(署名者, クライアント) -> Session
-    sessions: Dict(#(String, String), Session),
+    /// （署名者, クライアント）の組 -> Session
+    sessions: Dict(SessionKey, Session),
     /// リプレイ防止用: 処理済みのリクエストイベント id
     seen: window.Window,
     /// 承認待ちの接続要求: token -> Pending
     pending: Dict(String, Pending),
     /// token から承認ページの URL を組み立てる関数。None なら承認フローを使わない。
     auth_url: Option(fn(String) -> String),
-    /// #(署名者, クライアント) -> 最終利用の書き込みを最後に試みた時刻。書けなかった
+    /// （署名者, クライアント）の組 -> 最終利用の書き込みを最後に試みた時刻。書けなかった
     /// 間も `touch` の間引きに使う。
-    touch_attempts: Dict(#(String, String), Int),
+    touch_attempts: Dict(SessionKey, Int),
     /// セッションの外のリクエストを数える上限の状態（`rate_limit`）。
     limiter: rate_limit.Limiter,
   )
@@ -112,7 +115,7 @@ pub type Inputs {
 /// 関数に 1 対 1 で対応する。
 pub type Write {
   /// `insert_session_evicting`。`evicted` は押し出す（署名者, クライアント）の組。
-  InsertSession(session: Session, evicted: List(#(String, String)))
+  InsertSession(session: Session, evicted: List(SessionKey))
   /// `delete_session`。
   DeleteSession(signer: String, client: String)
   /// `touch_session`。`session` は最終利用を進めた後の行の全列。
@@ -129,11 +132,7 @@ pub type Write {
   /// トランザクションで）。組がすでに承認済みなら `session` はメモリに残した
   /// 最初のセッションで、`insert_session` が行を上書きしても DB の値はメモリと
   /// 揃う（`open_session` 参照）。`evicted` は `InsertSession` と同じ、押し出す組。
-  ApprovePending(
-    token: String,
-    session: Session,
-    evicted: List(#(String, String)),
-  )
+  ApprovePending(token: String, session: Session, evicted: List(SessionKey))
 }
 
 /// `handle_event` の結果。`notice` はログに出す 1 行で、出すものが無ければ
@@ -241,7 +240,9 @@ pub fn remove_account(engine: Engine, signer: String) -> Engine {
   Engine(
     ..engine,
     accounts: dict.delete(engine.accounts, signer),
-    sessions: dict.filter(engine.sessions, fn(key, _session) { key.0 != signer }),
+    sessions: dict.filter(engine.sessions, fn(key, _session) {
+      key.signer != signer
+    }),
     pending: dict.filter(engine.pending, fn(_token, entry) {
       entry.signer != signer
     }),
@@ -297,7 +298,7 @@ pub fn find_session(
   signer: String,
   client: String,
 ) -> Result(Session, Nil) {
-  dict.get(engine.sessions, #(signer, client))
+  dict.get(engine.sessions, SessionKey(signer:, client:))
 }
 
 /// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定し、
@@ -322,11 +323,11 @@ pub fn revoke(
   signer: String,
   client: String,
 ) -> Result(#(Engine, Write), Nil) {
-  let pair = #(signer, client)
-  case dict.has_key(engine.sessions, pair) {
+  let key = SessionKey(signer:, client:)
+  case dict.has_key(engine.sessions, key) {
     True ->
       Ok(#(
-        Engine(..engine, sessions: dict.delete(engine.sessions, pair)),
+        Engine(..engine, sessions: dict.delete(engine.sessions, key)),
         DeleteSession(signer: signer, client: client),
       ))
     False -> Error(Nil)
@@ -341,13 +342,13 @@ pub fn set_perms(
   client: String,
   perms: String,
 ) -> Result(#(Engine, Write), Nil) {
-  let pair = #(signer, client)
-  case dict.get(engine.sessions, pair) {
+  let key = SessionKey(signer:, client:)
+  case dict.get(engine.sessions, key) {
     Ok(session) -> {
       let bounded = bounded_perms(perms)
       let updated = Session(..session, perms: bounded)
       Ok(#(
-        Engine(..engine, sessions: dict.insert(engine.sessions, pair, updated)),
+        Engine(..engine, sessions: dict.insert(engine.sessions, key, updated)),
         UpdateSessionPerms(session: updated),
       ))
     }
@@ -409,7 +410,7 @@ pub fn restore(
   let sessions =
     sessions
     |> list.filter(fn(session) { registered(session.signer) })
-    |> list.map(fn(session) { #(#(session.signer, session.client), session) })
+    |> list.map(fn(session) { #(session_key(session), session) })
     |> dict.from_list
   let pending =
     pending
@@ -419,8 +420,8 @@ pub fn restore(
     |> list.map(fn(entry) { #(entry.token, entry) })
     |> dict.from_list
   let touch_attempts =
-    dict.filter(engine.touch_attempts, fn(pair, _attempted_at) {
-      dict.has_key(sessions, pair)
+    dict.filter(engine.touch_attempts, fn(key, _attempted_at) {
+      dict.has_key(sessions, key)
     })
   Engine(
     ..engine,
@@ -480,7 +481,7 @@ pub fn open_client_session(
   let engine =
     Engine(
       ..engine,
-      sessions: dict.insert(engine.sessions, #(signer, client), kept),
+      sessions: dict.insert(engine.sessions, SessionKey(signer:, client:), kept),
     )
   use reply <- result.map(respond(
     engine,
@@ -656,7 +657,7 @@ fn handle_request(
   incoming: Event,
   inputs: Inputs,
 ) -> Handled {
-  let client_pk_hex = incoming.pubkey
+  let client = incoming.pubkey
   case decode_request(account, incoming) {
     Error(reason) ->
       Handled(
@@ -667,14 +668,8 @@ fn handle_request(
       )
     Ok(#(conversation_key, request)) -> {
       let outside =
-        outside_session(
-          engine,
-          pubkey_hex(account),
-          secret,
-          client_pk_hex,
-          request,
-        )
-      case admit(engine, outside, client_pk_hex, inputs.now) {
+        outside_session(engine, pubkey_hex(account), secret, client, request)
+      case admit(engine, outside, client, inputs.now) {
         Error(#(limited, report)) ->
           Handled(
             engine: limited,
@@ -684,20 +679,14 @@ fn handle_request(
           )
         Ok(engine) -> {
           let #(execution, denied) =
-            execute(engine, account, secret, client_pk_hex, request, inputs)
+            execute(engine, account, secret, client, request, inputs)
           let build = fn(response) {
-            build_reply(
-              account,
-              conversation_key,
-              client_pk_hex,
-              response,
-              inputs.now,
-            )
+            build_reply(account, conversation_key, client, response, inputs.now)
           }
           Handled(
             engine: attempted(engine, execution),
             outcome: outcome(execution, build),
-            notice: denial_notice(denied, pubkey_hex(account), client_pk_hex),
+            notice: denial_notice(denied, pubkey_hex(account), client),
             outside_session: outside,
           )
         }
@@ -737,7 +726,7 @@ fn outside_session(
   client: String,
   request: rpc.Request,
 ) -> Bool {
-  case dict.has_key(engine.sessions, #(signer, client)) {
+  case dict.has_key(engine.sessions, SessionKey(signer:, client:)) {
     True -> False
     False ->
       case request.method {
@@ -766,7 +755,7 @@ fn attempted(engine: Engine, execution: Execution) -> Engine {
         ..engine,
         touch_attempts: dict.insert(
           engine.touch_attempts,
-          #(session.signer, session.client),
+          session_key(session),
           session.last_used_at,
         ),
       )
@@ -805,10 +794,10 @@ fn undecryptable(content: String) -> String {
 /// クライアントとの会話鍵。署名者の秘密鍵とクライアント pubkey から導出する。
 fn client_conversation_key(
   account: Account,
-  client_pk_hex: String,
+  client: String,
 ) -> Result(BitArray, String) {
   use client_pk <- result.try(
-    hex.decode(client_pk_hex) |> result.replace_error("invalid client pubkey"),
+    hex.decode(client) |> result.replace_error("invalid client pubkey"),
   )
   nip44.conversation_key(privkey(account), client_pk)
   |> result.replace_error("cannot derive conversation key")
@@ -846,21 +835,21 @@ fn execute(
   engine: Engine,
   account: Account,
   secret: ConnectionSecret,
-  client_pk_hex: String,
+  client: String,
   request: rpc.Request,
   inputs: Inputs,
 ) -> #(Execution, Option(Permission)) {
   let signer = pubkey_hex(account)
   case request.method {
     "connect" -> #(
-      connect(engine, signer, secret, client_pk_hex, request, inputs),
+      connect(engine, signer, secret, client, request, inputs),
       None,
     )
     // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
     // 取り消しの後のクライアントを例外にしないため）。
     "logout" -> {
       let ack = rpc.ok(request.id, "ack")
-      let execution = case revoke(engine, signer, client_pk_hex) {
+      let execution = case revoke(engine, signer, client) {
         // 書けなくても ack を返す（クライアントの後始末を止めないため）。
         Ok(#(next, write)) ->
           Record(write:, next:, response: ack, on_failure: ack)
@@ -869,7 +858,7 @@ fn execute(
       #(execution, None)
     }
     _ ->
-      case dict.get(engine.sessions, #(signer, client_pk_hex)) {
+      case dict.get(engine.sessions, SessionKey(signer:, client:)) {
         Error(Nil) -> #(
           Respond(rpc.error(request.id, "unauthorized: send connect first")),
           None,
@@ -894,8 +883,8 @@ fn touch(
   response: rpc.Response,
   now: Int,
 ) -> Execution {
-  let pair = #(session.signer, session.client)
-  let last_attempt = dict.get(engine.touch_attempts, pair) |> result.unwrap(0)
+  let key = session_key(session)
+  let last_attempt = dict.get(engine.touch_attempts, key) |> result.unwrap(0)
   case
     now - int.max(session.last_used_at, last_attempt)
     < last_used_granularity_seconds
@@ -906,8 +895,8 @@ fn touch(
       let next =
         Engine(
           ..engine,
-          sessions: dict.insert(engine.sessions, pair, updated),
-          touch_attempts: dict.delete(engine.touch_attempts, pair),
+          sessions: dict.insert(engine.sessions, key, updated),
+          touch_attempts: dict.delete(engine.touch_attempts, key),
         )
       Record(
         write: TouchSession(session: updated),
@@ -928,7 +917,7 @@ fn connect(
   engine: Engine,
   signer: String,
   secret: ConnectionSecret,
-  client_pk_hex: String,
+  client: String,
   request: rpc.Request,
   inputs: Inputs,
 ) -> Execution {
@@ -937,14 +926,14 @@ fn connect(
     Respond(rpc.error(request.id, "connect is addressed to another signer")),
   )
   use <- bool.guard(
-    dict.has_key(engine.sessions, #(signer, client_pk_hex)),
+    dict.has_key(engine.sessions, SessionKey(signer:, client:)),
     Respond(rpc.ok(request.id, "ack")),
   )
   let offered = connect_secret(request.params)
   let perms = connect_perms(request.params)
   case offers_secret(secret, offered), engine.auth_url {
     True, _ -> {
-      let session = new_session(signer, client_pk_hex, perms, [], inputs.now)
+      let session = new_session(signer, client, perms, [], inputs.now)
       let #(next, kept, evicted) = open_session(engine, session)
       Record(
         write: InsertSession(session: kept, evicted:),
@@ -960,7 +949,7 @@ fn connect(
         Pending(
           token: inputs.token,
           signer: signer,
-          client: client_pk_hex,
+          client:,
           request_id: request.id,
           perms: perms,
           secret_mismatch: option.is_some(offered),
@@ -992,15 +981,15 @@ fn pend(engine: Engine, entry: Pending, url: String) -> Execution {
 fn open_session(
   engine: Engine,
   session: Session,
-) -> #(Engine, Session, List(#(String, String))) {
-  let key = #(session.signer, session.client)
+) -> #(Engine, Session, List(SessionKey)) {
+  let key = session_key(session)
   case dict.get(engine.sessions, key) {
     Ok(existing) -> #(engine, existing, [])
     Error(Nil) -> {
       let evicted =
         sessions(engine)
         |> list.drop(session_capacity - 1)
-        |> list.map(fn(evictee) { #(evictee.signer, evictee.client) })
+        |> list.map(session_key)
       let remaining = list.fold(evicted, engine.sessions, dict.delete)
       #(
         Engine(..engine, sessions: dict.insert(remaining, key, session)),
@@ -1286,7 +1275,7 @@ pub fn sign_as(
 fn build_reply(
   account: Account,
   conversation_key: BitArray,
-  client_pk_hex: String,
+  client: String,
   response: rpc.Response,
   now: Int,
 ) -> Result(Event, String) {
@@ -1294,6 +1283,6 @@ fn build_reply(
     nip44.encrypt(rpc.encode_response(response), conversation_key)
     |> result.replace_error("failed to encrypt response"),
   )
-  sign_as(account, event.nip46_kind, [["p", client_pk_hex]], content, now)
+  sign_as(account, event.nip46_kind, [["p", client]], content, now)
   |> result.replace_error("failed to sign response")
 }

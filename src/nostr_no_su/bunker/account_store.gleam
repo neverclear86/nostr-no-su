@@ -18,7 +18,9 @@ import gleam/erlang/process.{type Name}
 import gleam/int
 import gleam/list
 import gleam/result
-import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
+import nostr_no_su/bunker/session.{
+  type Pending, type Session, type SessionKey, Pending, Session,
+}
 import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/db.{type StoreError, type Timeouts}
@@ -298,15 +300,14 @@ pub fn delete_session(
   |> db.execute_write(db, timeouts)
 }
 
-/// `pairs` の（signer, client）の組をすべて `delete_session` で消す。行が無くても
-/// `Ok`。
+/// `keys` の組をすべて `delete_session` で消す。行が無くても `Ok`。
 fn delete_sessions(
   db: pog.Connection,
-  pairs: List(#(String, String)),
+  keys: List(SessionKey),
   timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
-  list.try_each(pairs, fn(pair) {
-    delete_session(db, signer: pair.0, client: pair.1, timeouts:)
+  list.try_each(keys, fn(key) {
+    delete_session(db, signer: key.signer, client: key.client, timeouts:)
   })
 }
 
@@ -317,7 +318,7 @@ pub fn insert_session_evicting(
   pool: Name(pog.Message),
   key: MasterKey,
   session session: Session,
-  evicted evicted: List(#(String, String)),
+  evicted evicted: List(SessionKey),
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   db.transaction(pool, timeouts.write_ms, fn(db) {
@@ -368,7 +369,7 @@ pub fn approve(
   key: MasterKey,
   token token: String,
   session session: Session,
-  evicted evicted: List(#(String, String)),
+  evicted evicted: List(SessionKey),
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   db.transaction(pool, timeouts.write_ms, fn(db) {

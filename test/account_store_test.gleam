@@ -1794,7 +1794,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
           last_used_at: 1001,
           relays: [],
         ),
-        evicted: [#(signer_hex, "old")],
+        evicted: [session.SessionKey(signer: signer_hex, client: "old")],
       ),
     )
   let assert Ok(after_insert) = postgres.load_stored(pool, key, generous)
@@ -1812,7 +1812,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
           last_used_at: 1002,
           relays: [],
         ),
-        evicted: [#(signer_hex, "old")],
+        evicted: [session.SessionKey(signer: signer_hex, client: "old")],
       ),
     )
   let assert Ok(after_approve) = postgres.load_stored(pool, key, generous)

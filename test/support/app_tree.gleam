@@ -764,13 +764,13 @@ fn insert_session(
   }
 }
 
-/// `pairs` に載る（signer, client）の組の行を除く。
+/// `keys` に載る組の行を除く。
 fn evict(
   sessions: List(session.Session),
-  pairs: List(#(String, String)),
+  keys: List(session.SessionKey),
 ) -> List(session.Session) {
   list.filter(sessions, fn(session) {
-    !list.contains(pairs, #(session.signer, session.client))
+    !list.contains(keys, session.session_key(session))
   })
 }
 
