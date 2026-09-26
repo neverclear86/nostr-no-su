@@ -110,16 +110,13 @@ fn within_limits(request: Request) -> Bool {
 /// 応答をエンコードする。成功時は `error` キー自体を出力しない。`error` キーが
 /// 存在するだけで失敗とみなすクライアント実装があるため。
 pub fn encode_response(response: Response) -> String {
+  let fields = [
+    #("id", json.string(response.id)),
+    #("result", json.string(response.result)),
+  ]
   let fields = case response.error {
-    Some(message) -> [
-      #("id", json.string(response.id)),
-      #("result", json.string(response.result)),
-      #("error", json.string(message)),
-    ]
-    None -> [
-      #("id", json.string(response.id)),
-      #("result", json.string(response.result)),
-    ]
+    Some(message) -> list.append(fields, [#("error", json.string(message))])
+    None -> fields
   }
   json.object(fields) |> json.to_string
 }

@@ -34,7 +34,7 @@ const future_window_seconds = 60
 /// 無かったものとして扱う。
 pub const pending_ttl_seconds = 600
 
-/// 承認待ちの有効期間を分で表した値。管理 UI の文言が使う。
+/// 承認待ちの有効期間を分で表した値。
 pub fn pending_ttl_minutes() -> Int {
   pending_ttl_seconds / 60
 }
@@ -56,21 +56,9 @@ pub const connection_not_saved = "could not save the connection; try connecting 
 /// ためである。
 pub const unsupported_method = "unsupported method"
 
-/// リプレイ防止のために記憶するリクエスト id の件数。
-///
-/// `accept` は復号も認可も済ませる前に id を記録するため、自分宛の p タグを付けて
-/// 署名しただけの kind 24133 であれば、未認可のクライアントからでも 1 件を占める。
-/// つまり流入量は運用者の負荷ではなく送信者が決められるもので、署名検証 1 件が
-/// ミリ秒単位である以上、受付ウィンドウ（`past_window_seconds` と
-/// `future_window_seconds`）の間に容量を超える件数を送り込むことは攻撃者にとって
-/// 現実的である。
-///
-/// 押し出された id のリプレイが通ったときに起こりうることは限られる。応答は元の
-/// クライアント宛に NIP-44 で暗号化されるため攻撃者は読めず、`logout` の再送で
-/// セッションが切れる、secret 無しの `connect` の再送で承認待ちが再登録される
-/// （承認しても認可されるのは元のクライアント）といった範囲にとどまり、鍵や署名が
-/// 漏れる経路は無い。この範囲を受容したうえで、記憶領域を確実に有界にすることを
-/// 優先して件数のみで区切っている。
+/// リプレイ防止のために少なくとも記憶するリクエスト id の件数。件数だけで区切る理由と、
+/// 押し出された id のリプレイが通ったときに起こりうることは docs/design-decisions.md の
+/// 「NIP-46 の入力にはサイズと件数の上限がある」にある。
 const seen_capacity = 16_384
 
 /// 承認済みセッションの件数の上限（全署名者で 1 つ）。新しいセッションを開くと、
@@ -109,27 +97,11 @@ pub type Engine {
   )
 }
 
-/// 受信イベント 1 件を処理する間に、外から注入する値。時刻も乱数もエンジンの外で
-/// 決めることで、エンジンは純粋なまま保たれる。`token` は承認待ちを作るときだけ
-/// 使う。
-///
-/// `not_before` はこのバンカーを動かしているアクターが起動した時刻で、これより
-/// 古いリクエストは受け付けない。リプレイ防止の `seen` はアクターの寿命に閉じて
-/// いるため、アクターが再起動すると、それ以前に処理したリクエストを新規として
-/// 実行してしまう（kind 24133 を保存するリレーは再購読で再配送する）。起点を
-/// 設けることで、記憶していないリクエストは実行せずに捨てる。
-///
-/// `created_at` は秒までしか持たないため、判定は起動した秒より前かどうかで行い、
-/// 起動と同じ秒のリクエストは通す。起動直後に届いた正当なリクエストを落とすと、
-/// クライアントは応答を待ったまま失敗する。再起動が同じ秒に収まった場合は、その秒
-/// のリクエストが再実行されうる。これは判定の粒度による残りである。
-///
-/// 判定に使うのはクライアントが自己申告する `created_at` なので、時計が進んでいる
-/// クライアントには保護が効かない。ずれが D 秒あると、リレーがそのリクエストを
-/// 再配送しうるのは送信から「D + 購読の猶予」の間で、そのうち最初の D 秒に入った
-/// 再起動では、アクターの起点がリクエストの `created_at` に届かず落とせない（D の
-/// 上限は受付ウィンドウの未来側 `future_window_seconds`）。逆に時計が遅れている
-/// クライアントのリクエストは、アクターの起動直後、そのずれの秒数ぶんだけ弾かれうる。
+/// 受信イベント 1 件を処理する間に、外から注入する値。`now` は現在時刻（Unix 秒）、
+/// `token` は承認待ちを作るときだけ使う承認トークン、`not_before` はアクターが起動した
+/// 時刻で、`created_at` がこれより前の秒のリクエストは受け付けない。起点を置く理由と
+/// 残る隙は docs/design-decisions.md の「バンカー actor は起動時刻より古いリクエストを
+/// 処理しない」にある。
 pub type Inputs {
   Inputs(now: Int, token: String, not_before: Int)
 }
@@ -320,19 +292,19 @@ pub fn replace_secret(
   }
 }
 
-/// 署名者として登録されているか。変更の前の所属の検査に使う。
+/// 署名者として登録されているか。
 pub fn has_account(engine: Engine, signer: String) -> Bool {
   dict.has_key(engine.accounts, signer)
 }
 
-/// 署名者の公開鍵の一覧（昇順）。購読の #p と、署名者の集合の比較に使う。
+/// 署名者の公開鍵の一覧（昇順）。
 pub fn signers(engine: Engine) -> List(String) {
   dict.keys(engine.accounts)
   |> list.sort(string.compare)
 }
 
-/// 登録済みのアカウントと接続 secret（署名者の昇順）。閉じ込めた secret を
-/// 開くのはここだけで、管理 UI への一覧に使う。
+/// 登録済みのアカウントと接続 secret（署名者の昇順）。閉じ込めた secret を開くのは
+/// ここだけである。
 pub fn registered_accounts(engine: Engine) -> List(#(Account, String)) {
   dict.to_list(engine.accounts)
   |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
@@ -474,7 +446,7 @@ pub fn approve(
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
   let session = new_session(entry.signer, entry.client, entry.perms, [], now)
   let #(engine, kept, evicted) = open_session(engine, session)
-  use #(engine, reply) <- result.map(respond(
+  use reply <- result.map(respond(
     engine,
     entry.signer,
     entry.client,
@@ -514,7 +486,7 @@ pub fn open_client_session(
       ..engine,
       sessions: dict.insert(engine.sessions, #(signer, client), kept),
     )
-  use #(engine, reply) <- result.map(respond(
+  use reply <- result.map(respond(
     engine,
     signer,
     client,
@@ -533,7 +505,7 @@ pub fn deny(
   now: Int,
 ) -> Result(#(Engine, Event, Write), String) {
   use #(engine, entry) <- result.try(take_pending(engine, token, now))
-  use #(engine, reply) <- result.map(respond(
+  use reply <- result.map(respond(
     engine,
     entry.signer,
     entry.client,
@@ -578,20 +550,13 @@ fn respond(
   client: String,
   response: rpc.Response,
   now: Int,
-) -> Result(#(Engine, Event), String) {
+) -> Result(Event, String) {
   use #(account, _secret) <- result.try(
     dict.get(engine.accounts, signer)
     |> result.replace_error("no matching account for " <> signer),
   )
   use conversation_key <- result.try(client_conversation_key(account, client))
-  use reply <- result.map(build_reply(
-    account,
-    conversation_key,
-    client,
-    response,
-    now,
-  ))
-  #(engine, reply)
+  build_reply(account, conversation_key, client, response, now)
 }
 
 /// 受信イベント 1 件を処理する。受理の判定・重複排除・ルーティングを行い、送信
@@ -780,15 +745,16 @@ fn outside_session(
     True -> False
     False ->
       case request.method {
-        "connect" -> !offers_secret(secret, request.params)
+        "connect" -> !offers_secret(secret, connect_secret(request.params))
         _ -> True
       }
   }
 }
 
-/// `connect` の `params[1]` が接続 secret と一致するか。secret が無ければ偽。
-fn offers_secret(secret: ConnectionSecret, params: List(String)) -> Bool {
-  case connect_secret(params) {
+/// `connect` が提示した secret（`connect_secret` の値）が接続 secret と一致するか。提示が
+/// 無ければ偽。
+fn offers_secret(secret: ConnectionSecret, offered: Option(String)) -> Bool {
+  case offered {
     Some(value) -> connection_secret.matches(secret, value)
     None -> False
   }
@@ -956,8 +922,7 @@ fn touch(
 /// 変えずに拒否する。組がすでに承認済みなら、シークレットの一致を問わず状態を
 /// 変えずに ack だけ返す（クライアントの再読み込みのたびに承認を求めないため）。
 /// 組が無くシークレットが一致すればその場で承認する。どちらでもないときは、
-/// 管理 UI が有効なら承認待ちを作って `auth_url` を返し、無効なら従来どおり
-/// 拒否する。
+/// 管理 UI が有効なら承認待ちを作って `auth_url` を返し（`pend`）、無効なら拒否する。
 fn connect(
   engine: Engine,
   signer: String,
@@ -970,54 +935,50 @@ fn connect(
     points_elsewhere(connect_signer(request.params), signer),
     Respond(rpc.error(request.id, "connect is addressed to another signer")),
   )
-  let pair = #(signer, client_pk_hex)
-  case dict.has_key(engine.sessions, pair) {
-    True -> Respond(rpc.ok(request.id, "ack"))
-    False -> {
-      let offered = connect_secret(request.params)
-      let perms = connect_perms(request.params)
-      let offered_matches = offers_secret(secret, request.params)
-      let not_saved = rpc.error(request.id, connection_not_saved)
-      case offered_matches {
-        True -> {
-          let session =
-            new_session(signer, client_pk_hex, perms, [], inputs.now)
-          let #(next, kept, evicted) = open_session(engine, session)
-          Record(
-            write: InsertSession(session: kept, evicted:),
-            next:,
-            response: rpc.ok(request.id, "ack"),
-            on_failure: not_saved,
-          )
-        }
-        False ->
-          case engine.auth_url {
-            None -> Respond(rpc.error(request.id, "invalid secret"))
-            Some(auth_url) -> {
-              let #(next, write) =
-                record_pending(
-                  engine,
-                  Pending(
-                    token: inputs.token,
-                    signer: signer,
-                    client: client_pk_hex,
-                    request_id: request.id,
-                    perms: perms,
-                    secret_mismatch: option.is_some(offered),
-                    created_at: inputs.now,
-                  ),
-                )
-              Record(
-                write:,
-                next:,
-                response: rpc.auth_url(request.id, auth_url(inputs.token)),
-                on_failure: not_saved,
-              )
-            }
-          }
-      }
+  use <- bool.guard(
+    dict.has_key(engine.sessions, #(signer, client_pk_hex)),
+    Respond(rpc.ok(request.id, "ack")),
+  )
+  let offered = connect_secret(request.params)
+  let perms = connect_perms(request.params)
+  case offers_secret(secret, offered), engine.auth_url {
+    True, _ -> {
+      let session = new_session(signer, client_pk_hex, perms, [], inputs.now)
+      let #(next, kept, evicted) = open_session(engine, session)
+      Record(
+        write: InsertSession(session: kept, evicted:),
+        next:,
+        response: rpc.ok(request.id, "ack"),
+        on_failure: rpc.error(request.id, connection_not_saved),
+      )
     }
+    False, None -> Respond(rpc.error(request.id, "invalid secret"))
+    False, Some(auth_url) ->
+      pend(
+        engine,
+        Pending(
+          token: inputs.token,
+          signer: signer,
+          client: client_pk_hex,
+          request_id: request.id,
+          perms: perms,
+          secret_mismatch: option.is_some(offered),
+          created_at: inputs.now,
+        ),
+        auth_url(inputs.token),
+      )
   }
+}
+
+/// 承認待ち `entry` を登録し、承認ページの `url` を載せた `auth_url` 応答を返す実行。
+fn pend(engine: Engine, entry: Pending, url: String) -> Execution {
+  let #(next, write) = record_pending(engine, entry)
+  Record(
+    write:,
+    next:,
+    response: rpc.auth_url(entry.request_id, url),
+    on_failure: rpc.error(entry.request_id, connection_not_saved),
+  )
 }
 
 /// （署名者, クライアント）の組を承認済みにする。組がすでにあれば、値（作成時刻
@@ -1069,18 +1030,9 @@ fn new_session(
   )
 }
 
-/// 承認待ちを 1 件登録する。同じ（署名者, クライアント）の古い要求と、失効した
-/// 要求は同時に捨てる。承認前にクライアントが再読み込みすると `connect` が届き
-/// 直すため、最新の要求だけを残さないと、承認の応答が誰も待っていないリクエスト
-/// id で送られてしまう。失効の基準になる現在時刻は、いま作った要求の作成時刻が
-/// そのまま使える。書き込みの `replaced` には、消える同じ組の失効していない
-/// token だけを載せる（失効した要求の削除は書き込みに出さない。DB に残った
-/// 失効行は `restore` が読み飛ばす）。同じ組と失効した要求を除いた後の一覧
-/// （作成の新しい順）で、新しい要求と同じクライアントの要求（署名者は問わない）
-/// を末尾に回した並びの `pending_capacity - 1` 件より後ろを押し出し、その
-/// token を `evicted` に載せる。つまり上限を超えると同じクライアントの最も古い
-/// 要求が先に押し出され、同じクライアントの要求が無いときだけ全体で最も古い
-/// ものが押し出される。
+/// 承認待ち `entry` を登録する。同じ（署名者, クライアント）の要求と失効した要求を捨て、
+/// `pending_capacity` の規則で押し出してから入れる。書き込みの `replaced` は捨てた同じ組の
+/// 失効していない token だけで、失効した行は DB に残し `restore` が読み飛ばす。
 fn record_pending(engine: Engine, entry: Pending) -> #(Engine, Write) {
   let live = live_pending(engine, entry.created_at)
   let replaced =
@@ -1120,11 +1072,8 @@ fn execute_in_session(
     "get_public_key" -> rpc.ok(request.id, pubkey_hex(account))
     "ping" -> rpc.ok(request.id, "pong")
     "sign_event" -> sign_event(account, perms, request, now)
-    "nip44_encrypt" | "nip44_decrypt" ->
-      case grants(perms, request.method) {
-        True -> nip44_op(account, request, request.method == "nip44_encrypt")
-        False -> rpc.error(request.id, denial(request.method))
-      }
+    "nip44_encrypt" -> nip44_op(account, perms, request, nip44.encrypt)
+    "nip44_decrypt" -> nip44_op(account, perms, request, nip44.decrypt)
     method ->
       case list.contains(unsupported_methods, method) {
         True -> rpc.error(request.id, "nip04 is not supported")
@@ -1134,12 +1083,10 @@ fn execute_in_session(
 }
 
 /// バンカーが対応していない NIP-46 の方法（NIP-04 の暗号化と復号）。セッション内で受けると
-/// 未対応の理由を返し、管理 UI の権限のチップは `is_unsupported_permission` を通して
-/// これで未対応の印を付ける。
+/// 未対応の理由を返す。
 const unsupported_methods = ["nip04_encrypt", "nip04_decrypt"]
 
 /// 権限のトークンが、バンカーが対応していない方法（`unsupported_methods`）と完全に一致するか。
-/// 管理 UI の権限のチップが使う。
 pub fn is_unsupported_permission(token: String) -> Bool {
   list.contains(unsupported_methods, token)
 }
@@ -1307,13 +1254,19 @@ fn sign_event(
   })
 }
 
-/// 第三者宛のテキストをアカウントの鍵で暗号化または復号する。
+/// 第三者宛のテキストに、アカウントの鍵で `operation`（`nip44.encrypt` か `nip44.decrypt`）
+/// をかける。`perms` が方法名（`request.method`）を許さなければ拒否する。
 fn nip44_op(
   account: Account,
+  perms: String,
   request: rpc.Request,
-  encrypting: Bool,
+  operation: fn(String, BitArray) -> Result(String, nip44.Nip44Error),
 ) -> rpc.Response {
   response_of(request.id, {
+    use <- bool.guard(
+      !grants(perms, request.method),
+      Error(denial(request.method)),
+    )
     use #(third_party_hex, text) <- result.try(case request.params {
       [third_party_hex, text, ..] -> Ok(#(third_party_hex, text))
       _ -> Error("nip44 requires [pubkey, text]")
@@ -1326,10 +1279,7 @@ fn nip44_op(
       nip44.conversation_key(privkey(account), third_party)
       |> result.replace_error("invalid third-party pubkey"),
     )
-    case encrypting {
-      True -> nip44.encrypt(text, key)
-      False -> nip44.decrypt(text, key)
-    }
+    operation(text, key)
     |> result.replace_error("nip44 operation failed")
   })
 }

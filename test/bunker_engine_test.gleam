@@ -414,7 +414,7 @@ pub fn a_malformed_request_payload_is_ignored_test() {
   let request = request_event(client, signer, "not json", 1000)
   let #(_state, outcome) = handle(new_engine(), request, 1000)
   let assert Ignore(reason) = outcome
-  assert reason == "malformed request payload"
+  assert reason == rpc.malformed_request
 }
 
 /// 上限を超えるリクエストは、応答を組まずに理由を添えて無視する。
@@ -444,7 +444,7 @@ pub fn an_unknown_method_is_not_echoed_test() {
     handle(state, request_event(client, signer, body, 1001), 1001)
   let assert Reply(response) = outcome
   let decrypted = decrypt_response(client, signer, response)
-  assert string.contains(decrypted, "unsupported method")
+  assert string.contains(decrypted, engine.unsupported_method)
   assert !string.contains(decrypted, "do_the_thing")
 }
 

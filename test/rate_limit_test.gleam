@@ -1,4 +1,3 @@
-import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -125,7 +124,7 @@ pub fn remembered_clients_stay_bounded_test() {
   list.fold(up_to(200), rate_limit.new(), fn(limiter, n) {
     let now = 1000 + n * rate_limit.global_limit.refill_seconds
     let limiter = admitted_nth(limiter, n, now)
-    assert dict.size(limiter.clients) <= bound
+    assert rate_limit.remembered_clients(limiter) <= bound
     limiter
   })
 }
