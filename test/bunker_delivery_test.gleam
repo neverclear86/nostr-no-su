@@ -4,12 +4,16 @@
 //// 発行先と、リレーの URL ごとのセッションの署名者を確かめる。
 //// `delivery.authentication_events` のテストは、AUTH に返すイベントがアカウントごとに
 //// その鍵で署名されることを確かめる。
+//// `delivery.pause_on_rate_limit` / `delivery.recipients` のテストは、`rate-limited:` を
+//// 返したリレーへのセッションの外の応答をいつ止めて再開し、出さなかった件数をどう
+//// 報告するかを確かめる。
 
 import gleam/dict
 import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/delivery
+import nostr_no_su/bunker/rate_limit
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/relay_client.{Acknowledgement}
 import support/nip46_client.{account_for}
@@ -201,4 +205,110 @@ pub fn session_relay_signers_list_the_signers_of_each_relay_test() {
       #("s3", []),
     ])
   assert map == dict.from_list([#(relay_x, ["s1", "s2"]), #(relay_y, ["s2"])])
+}
+
+/// `rate-limited:` の拒否を反映した時刻から `rate_limited_pause_seconds` 秒の間、
+/// relay_a を止めた一覧。
+fn pausing_relay_a(at: Int) -> delivery.Pauses {
+  delivery.pause_on_rate_limit(
+    delivery.new_pauses(),
+    relay_a,
+    Acknowledgement("e1", False, "rate-limited: slow down"),
+    at,
+  )
+}
+
+/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない
+/// （受け入れ条件）。飛ばした 1 件はすぐ報告する。
+pub fn recipients_skip_a_rate_limited_relay_outside_a_session_test() {
+  let #(_pauses, sent, lines) =
+    delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
+  assert sent == [relay_b]
+  assert lines == [delivery.pause_report(relay_a, 1)]
+}
+
+/// セッションのあるクライアントへの応答は、止めたリレーにも届く（受け入れ条件）。
+pub fn recipients_keep_a_rate_limited_relay_inside_a_session_test() {
+  let #(_pauses, sent, lines) =
+    delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], False, 1001)
+  assert sent == [relay_a, relay_b]
+  assert lines == []
+}
+
+/// 止める期限が過ぎると、そのリレーへの発行が再開する（受け入れ条件）。
+pub fn recipients_resume_a_relay_after_the_pause_test() {
+  let pauses = pausing_relay_a(1000)
+  let #(pauses, sent, _lines) =
+    delivery.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1000 + delivery.rate_limited_pause_seconds - 1,
+    )
+  assert sent == [relay_b]
+  let #(_pauses, sent, _lines) =
+    delivery.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1000 + delivery.rate_limited_pause_seconds,
+    )
+  assert sent == [relay_a, relay_b]
+}
+
+/// `rate-limited:` 以外の理由の拒否と、受理の OK はリレーを止めない。
+pub fn pause_on_rate_limit_ignores_other_acknowledgements_test() {
+  let pauses =
+    delivery.pause_on_rate_limit(
+      delivery.new_pauses(),
+      relay_a,
+      Acknowledgement("e1", False, "invalid: bad"),
+      1000,
+    )
+  let pauses =
+    delivery.pause_on_rate_limit(
+      pauses,
+      relay_a,
+      Acknowledgement("e2", True, "rate-limited: slow down"),
+      1000,
+    )
+  let #(_pauses, sent, _lines) =
+    delivery.recipients(pauses, [relay_a], True, 1001)
+  assert sent == [relay_a]
+}
+
+/// 出さなかった件数はリレーごとに `report_interval_seconds` に 1 回まで報告する。
+/// 新しく止めたリレーの最初の 1 件はすぐ出し、期限が過ぎた後に残った件数は、
+/// 次にそのリレーを止めて出さなかったときに残りと合わせて出す。
+pub fn recipients_report_dropped_responses_once_per_interval_test() {
+  // 最初に出さなかった 1 件はすぐ報告する
+  let #(pauses, sent, lines) =
+    delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
+  assert sent == [relay_b]
+  assert lines == [delivery.pause_report(relay_a, 1)]
+
+  // 報告の間隔の内側では件数を数えるだけで報告しない
+  let #(pauses, _sent, lines) =
+    delivery.recipients(pauses, [relay_a, relay_b], True, 1002)
+  assert lines == []
+  let #(pauses, _sent, lines) =
+    delivery.recipients(pauses, [relay_a, relay_b], True, 1003)
+  assert lines == []
+
+  // 止め直してから出さなかった最初の 1 件で、残った 2 件と合わせて 3 件を出す
+  let pauses =
+    delivery.pause_on_rate_limit(
+      pauses,
+      relay_a,
+      Acknowledgement("e3", False, "rate-limited: slow down"),
+      1001 + rate_limit.report_interval_seconds,
+    )
+  let #(_pauses, _sent, lines) =
+    delivery.recipients(
+      pauses,
+      [relay_a, relay_b],
+      True,
+      1001 + rate_limit.report_interval_seconds,
+    )
+  assert lines == [delivery.pause_report(relay_a, 3)]
 }

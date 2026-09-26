@@ -1,7 +1,8 @@
 //// セッションの外の NIP-46 リクエストに応答する回数の上限（純粋）。クライアントの
 //// pubkey ごとと全体の 2 つのトークンバケットで数え、両方に残りがあるときだけ
 //// 1 件ずつ取って通す。捨てたリクエストはどちらのトークンも使わない。時刻は
-//// 呼び出し側が Unix 秒で渡す。
+//// 呼び出し側が Unix 秒で渡す。捨てた件数を間引いて報告する数え方（`Tally`）も
+//// 持つ。
 ////
 //// 上限の値の理由と、記憶する pubkey の件数が有界である理由は docs/design-decisions.md の
 //// 「NIP-46 の入力にはサイズと件数の上限がある」にある。
@@ -32,16 +33,16 @@ type Bucket {
   Bucket(tokens: Int, updated_at: Int)
 }
 
+/// 捨てた件数と報告の時刻。`dropped` は最後の報告の後に捨てた件数、`reported_at` は
+/// 最後に報告した時刻。
+pub opaque type Tally {
+  Tally(dropped: Int, reported_at: Int)
+}
+
 /// 上限の状態。`clients` はクライアントの pubkey hex → バケットで、無い pubkey
-/// は満ちたバケットと同じに扱う。`dropped` は最後の報告の後に捨てた件数、
-/// `reported_at` は最後に報告した時刻。
+/// は満ちたバケットと同じに扱う。`tally` は捨てたリクエストの件数と報告の時刻。
 pub opaque type Limiter {
-  Limiter(
-    global: Bucket,
-    clients: Dict(String, Bucket),
-    dropped: Int,
-    reported_at: Int,
-  )
+  Limiter(global: Bucket, clients: Dict(String, Bucket), tally: Tally)
 }
 
 /// `admit` の結果。
@@ -59,8 +60,7 @@ pub fn new() -> Limiter {
   Limiter(
     global: Bucket(global_limit.capacity, 0),
     clients: dict.new(),
-    dropped: 0,
-    reported_at: 0,
+    tally: Tally(dropped: 0, reported_at: 0),
   )
 }
 
@@ -131,13 +131,22 @@ fn is_full(bucket: Bucket, limit: Limit, now: Int) -> Bool {
 
 /// 1 件捨てる。報告の間隔が過ぎていれば件数を報告して数え直す。
 fn refuse(limiter: Limiter, now: Int) -> Admission {
-  let dropped = limiter.dropped + 1
-  case now - limiter.reported_at >= report_interval_seconds {
-    True ->
-      Refused(
-        Limiter(..limiter, dropped: 0, reported_at: now),
-        Some(report(dropped)),
-      )
-    False -> Refused(Limiter(..limiter, dropped: dropped), None)
+  let #(tally, reported) = count(limiter.tally, now)
+  Refused(Limiter(..limiter, tally: tally), option.map(reported, report))
+}
+
+/// 何も数えていない状態。`now` 以降に最初に数えた 1 件をすぐ報告する。
+pub fn new_tally(now: Int) -> Tally {
+  Tally(dropped: 0, reported_at: now - report_interval_seconds)
+}
+
+/// 捨てた 1 件を数える。最後の報告から `report_interval_seconds` 以上経っていれば、
+/// 最後の報告の後に捨てた件数（この 1 件を含む）を返して数え直し、そうでなければ
+/// 件数を 1 増やして `None` を返す。
+pub fn count(tally: Tally, now: Int) -> #(Tally, Option(Int)) {
+  let dropped = tally.dropped + 1
+  case now - tally.reported_at >= report_interval_seconds {
+    True -> #(Tally(dropped: 0, reported_at: now), Some(dropped))
+    False -> #(Tally(..tally, dropped: dropped), None)
   }
 }
