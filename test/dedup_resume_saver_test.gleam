@@ -1,10 +1,16 @@
-//// `dedup/resume_saver` のテスト。ディスパッチャーは本物を起動し、DB の代わりに
-//// メモリ上の保存の操作を渡す。
+//// `dedup/resume_saver` のテスト。アクターを試すものはディスパッチャーを本物で起動するか
+//// 写しの操作を直接渡し、DB の代わりにメモリ上の保存の操作を渡す。
 
+import gleam/dict
 import gleam/erlang/process
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
 import nostr_no_su/dedup
 import nostr_no_su/dedup/resume_saver
+import nostr_no_su/log
 import nostr_no_su/named
+import support/log_capture
 import support/signed_event
 
 /// テスト用の保存の操作。受け取った一覧を `saves` へ送るだけで、`fail` なら常に
@@ -63,4 +69,56 @@ pub fn a_failed_save_is_retried_on_the_next_interval_test() {
 
   assert process.receive(saves, 500) == Ok([#("wss://a", event.created_at)])
   assert process.receive(saves, 200) == Ok([#("wss://a", event.created_at)])
+}
+
+/// 失敗し始めた保存は、その旨と保存の周期を Warning で報告する。
+pub fn save_report_warns_when_saving_starts_to_fail_test() {
+  assert resume_saver.save_report(False, Error("save failed"), 5000)
+    == Some(#(
+      log.Warning,
+      "could not save resume points: save failed; retrying every 5000ms",
+    ))
+}
+
+/// 失敗が続く間はログを出さない。
+pub fn save_report_is_silent_while_saving_keeps_failing_test() {
+  assert resume_saver.save_report(True, Error("save failed"), 5000) == None
+}
+
+/// 失敗から復帰した保存は、その旨を Notice で報告する。
+pub fn save_report_notes_when_saving_recovers_test() {
+  assert resume_saver.save_report(True, Ok(Nil), 5000)
+    == Some(#(log.Notice, "resume points saved again"))
+}
+
+/// 成功が続く間はログを出さない。
+pub fn save_report_is_silent_while_saving_succeeds_test() {
+  assert resume_saver.save_report(False, Ok(Nil), 5000) == None
+}
+
+/// 失敗し続ける保存は、失敗の始まりの 1 行だけを出す。
+pub fn a_failing_save_is_reported_once_test() {
+  let capture = log_capture.install()
+  let saves = process.new_subject()
+  let assert Ok(_saver) =
+    resume_saver.start(
+      fn() { Ok(dict.from_list([#("wss://a", 1)])) },
+      recording_save(saves, True),
+      "resume_saver_reported_once",
+      50,
+    )
+
+  assert process.receive(saves, 500) == Ok([#("wss://a", 1)])
+  assert process.receive(saves, 500) == Ok([#("wss://a", 1)])
+  assert process.receive(saves, 500) == Ok([#("wss://a", 1)])
+
+  let reported =
+    list.count(log_capture.lines(capture), fn(line) {
+      string.contains(
+        line,
+        "[resume_saver_reported_once] could not save resume points",
+      )
+    })
+  assert reported == 1
+  log_capture.remove(capture)
 }
