@@ -1630,15 +1630,15 @@ fn form_value(form: wisp.FormData, name: String) -> String {
   list.key_find(form.values, name) |> result.unwrap("")
 }
 
-/// ラベルを検査する。送られた値のまま制御文字（Unicode の Cc）を含むものを拒否し、
+/// ラベルを検査する。送られた値のまま制御文字（`log.is_control`）を含むものを拒否し、
 /// 前後の空白を除いてから、空のものと符号位置が多すぎるものを拒否する。制御文字を
-/// trim の前に検査するのは、前後の制御文字が trim で黙って消えないようにするため
-/// である。長さを書記素クラスターで数えないのは、結合文字を続けた文字列が長さ 1 の
-/// まま任意のバイト数になり、上限にならないからである。
+/// trim の前に検査するのは、前後の制御文字（U+0085 や末尾の `\n` など）が trim で黙って
+/// 消えないようにするためである。長さを書記素クラスターで数えないのは、結合文字を続けた
+/// 文字列が長さ 1 のまま任意のバイト数になり、上限にならないからである。
 fn parse_label(raw: String) -> Result(String, i18n.Message) {
   let label = string.trim(raw)
   case
-    list.any(string.to_utf_codepoints(raw), is_control_character),
+    log.has_control(raw),
     label,
     list.length(string.to_utf_codepoints(label))
     > dashboard.max_label_code_points
@@ -1651,21 +1651,14 @@ fn parse_label(raw: String) -> Result(String, i18n.Message) {
   }
 }
 
-/// 入力の誤りで戻したフォームの欄に入れる値を作る。制御文字は欄で見えず、残すと同じに
-/// 見える欄を送り直して同じ 400 を繰り返すので除く。前後の空白は利用者が打った値として
-/// 残す（サーバーが trim するので変える必要が無い）。`client_display_name` も、クライアントの
-/// 名乗る名前から見えない文字を除くのに使う。
+/// 入力の誤りで戻したフォームの欄に入れる値を作る。ラベルの検査（`parse_label`）と同じ
+/// 制御文字（`log.is_control`）は欄で見えず、残すと同じに見える欄を送り直して同じ 400 を
+/// 繰り返すので除く。前後の空白は利用者が打った値として残す（サーバーが trim するので
+/// 変える必要が無い）。
 fn without_control_characters(raw: String) -> String {
   string.to_utf_codepoints(raw)
-  |> list.filter(fn(code_point) { !is_control_character(code_point) })
+  |> list.filter(fn(code_point) { !log.is_control(code_point) })
   |> string.from_utf_codepoints
-}
-
-/// Unicode の Cc（C0、DEL、C1）の符号位置かどうか。`string.trim` は U+0085 や
-/// 末尾の `\n` を黙って消すので、`parse_label` は trim の前の値をこれで検査する。
-fn is_control_character(code_point: UtfCodepoint) -> Bool {
-  let code = string.utf_codepoint_to_int(code_point)
-  code <= 0x1f || { code >= 0x7f && code <= 0x9f }
 }
 
 /// リレーの追加。POST だけを受ける。URL は前後の空白を除いて保存する。検査の順は URL、用途。
