@@ -1,5 +1,5 @@
 //// リレーをまたいだイベントの重複排除ディスパッチャー。監視のハンドラーの照合を
-//// 通ったイベントのうち、`dedup/window` が新規と判定したものだけを `deliver`
+//// 通ったイベントのうち、`window` が新規と判定したものだけを `deliver`
 //// へ渡す。監視の購読の再開点と、照合で落とされたイベント（取り直しの購読の
 //// ものを含む）の件数もリレーごとに記録する。照合を通った取り直しの購読の
 //// イベントはここを通らない（再開点を動かさず、ウィンドウでも弾かないため）。
@@ -11,12 +11,12 @@ import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
-import nostr_no_su/dedup/resume.{type Resume}
-import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/resume.{type Resume}
 import nostr_no_su/time
+import nostr_no_su/window.{type Window}
 
 /// 再開点の問い合わせを待つ時間。処理は IO を含まないが、積まれた `Incoming` の
 /// 後に処理されるので、起動直後の流入のさなかは超えうる。超えたとき、購読の評価は

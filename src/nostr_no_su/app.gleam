@@ -158,7 +158,6 @@ import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
 import nostr_no_su/config
 import nostr_no_su/dedup
-import nostr_no_su/dedup/resume_saver
 import nostr_no_su/hex
 import nostr_no_su/log
 import nostr_no_su/named
@@ -174,6 +173,7 @@ import nostr_no_su/relay_client.{
 import nostr_no_su/relay_connection.{type Socket, Socket}
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import nostr_no_su/resume/saver
 import nostr_no_su/subscriptions
 import nostr_no_su/task
 import nostr_no_su/time
@@ -555,17 +555,17 @@ fn monitor_tree(
       ),
     ),
   ))
-  |> supervisor.add(resume_saver.supervised(
+  |> supervisor.add(saver.supervised(
     fn() { dedup.points(config.name) },
     config.save_resume,
     "resume_saver",
-    resume_saver.default_interval_ms,
+    saver.default_interval_ms,
   ))
-  |> supervisor.add(resume_saver.supervised(
+  |> supervisor.add(saver.supervised(
     plugin_resume_points(spec.plugins),
     config.save_plugin_resume,
     "plugin_resume_saver",
-    resume_saver.default_interval_ms,
+    saver.default_interval_ms,
   ))
 }
 

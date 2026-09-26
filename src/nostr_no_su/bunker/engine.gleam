@@ -18,9 +18,9 @@ import nostr_no_su/bunker/permission.{type Permission}
 import nostr_no_su/bunker/rate_limit
 import nostr_no_su/bunker/rpc
 import nostr_no_su/crypto/nip44
-import nostr_no_su/dedup/window
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{type Event, type Verified, Event}
+import nostr_no_su/window
 
 /// 時計が遅れたクライアントのずれを許容するため、現在時刻からこの秒数より古い
 /// リクエストまでを受け付ける。

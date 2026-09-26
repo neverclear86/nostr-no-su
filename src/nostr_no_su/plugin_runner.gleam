@@ -49,12 +49,12 @@ import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
-import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin}
 import nostr_no_su/time
+import nostr_no_su/window.{type Window}
 
 /// 実行時の歯止め。テストから小さい値を渡せるよう注入する。プラグイン固有の
 /// 設定から与えられるようにする余地もここにある。
@@ -412,7 +412,7 @@ pub fn admit(
 /// 前進せず `current` のまま返す。実行した（`Running`）ものも切り捨てた
 /// （`Overloaded`）ものも前進させる。切り捨ては取り直しの対象外であり、失敗した
 /// 実行でもそのイベントはプラグインに届いているためである。`now` より未来の
-/// `created_at` は `now` に切り詰め、値は小さくしない（`dedup/resume.observe`
+/// `created_at` は `now` に切り詰め、値は小さくしない（`resume.observe`
 /// と同じ規則）。
 pub fn advance(
   status: Status,

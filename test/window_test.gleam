@@ -1,5 +1,5 @@
 import gleam/list
-import nostr_no_su/dedup/window.{type Window}
+import nostr_no_su/window.{type Window}
 
 /// ウィンドウが新規として受理した id を、渡した順に並べたもの。
 fn accepted(initial: Window, ids: List(String)) -> List(String) {

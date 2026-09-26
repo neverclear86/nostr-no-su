@@ -25,7 +25,7 @@ const default_admin_port = 24_133
 const default_admin_bind = "127.0.0.1"
 
 /// `DEDUP_CAPACITY` の既定値。監視の重複排除が記憶する直近のイベント id の件数
-/// （実際に記憶するのはこの 1〜2 倍。`dedup/window`）。
+/// （実際に記憶するのはこの 1〜2 倍。`window`）。
 const default_dedup_capacity = 4096
 
 /// `ADMIN_BIND` / `ADMIN_PORT` / `ADMIN_PASSWORD` の解釈結果。無効化には
