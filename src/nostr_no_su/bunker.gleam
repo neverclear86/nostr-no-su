@@ -54,7 +54,7 @@ pub const default_retry_delay = backoff.Backoff(
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。アカウントの読み込みは最長で
-/// 3 秒ループを止めうる（`account_store.default_timeouts`）が、この値に収まる。
+/// 3 秒ループを止めうる（`db.default_timeouts`）が、この値に収まる。
 const call_timeout_ms = 5000
 
 /// アカウントの変更の応答を待つ時間。書き込み 1 件がループを止めるのは最長で約

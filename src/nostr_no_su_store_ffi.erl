@@ -1,4 +1,4 @@
-%% アカウントストア（bunker/account_store.gleam）が使う pgo と pog の呼び出しを包む FFI。
+%% DB の基盤（db.gleam）が使う pgo と pog の呼び出しを包む FFI。
 %% どちらも例外を値に写し、クエリーの引数が載りうる理由の項は捨てる。
 -module(nostr_no_su_store_ffi).
 -export([pool_transaction/3, execute_catching/2]).

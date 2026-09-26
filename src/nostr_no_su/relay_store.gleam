@@ -1,11 +1,11 @@
-//// `relays` の読み書き。テーブルは本体の移行の版 4（`account_store.gleam` の
-//// `create_relays_table`）で作る。クエリーはすべて `account_store.execute` を
+//// `relays` の読み書き。テーブルは本体の移行の版 4（`db.gleam` の
+//// `create_relays_table`）で作る。クエリーはすべて `db.execute` を
 //// 通す。列 `observe`（監視）と `bunker` の組は `relay_list.Roles` に写し、どちらも
 //// false の行は読まない。
 
 import gleam/dynamic/decode
 import gleam/result
-import nostr_no_su/bunker/account_store.{type StoreError, type Timeouts}
+import nostr_no_su/db.{type StoreError, type Timeouts}
 import nostr_no_su/relay_list.{type Roles}
 import pog
 
@@ -36,7 +36,7 @@ pub fn list(
   pog.query(select_sql)
   |> pog.returning(relay_decoder())
   |> pog.timeout(timeouts.load_ms)
-  |> account_store.execute(db)
+  |> db.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -55,11 +55,11 @@ pub fn insert(
     |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
     |> pog.returning(relay_decoder())
     |> pog.timeout(timeouts.write_ms)
-    |> account_store.execute(db),
+    |> db.execute(db),
   )
   case returned.rows {
     [row] -> Ok(row)
-    _ -> Error(account_store.QueryFailed("unexpected insert result"))
+    _ -> Error(db.QueryFailed("unexpected insert result"))
   }
 }
 
@@ -74,11 +74,7 @@ pub fn update_roles(
   |> pog.parameter(pog.int(id))
   |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
   |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
-  |> account_store.execute_on_one_row(
-    db,
-    timeouts,
-    account_store.RelayNotRegistered,
-  )
+  |> db.execute_on_one_row(db, timeouts, db.RelayNotRegistered)
 }
 
 /// `id` の行を消す。行が無ければ `RelayNotRegistered`。
@@ -89,11 +85,7 @@ pub fn delete(
 ) -> Result(Nil, StoreError) {
   pog.query(delete_sql)
   |> pog.parameter(pog.int(id))
-  |> account_store.execute_on_one_row(
-    db,
-    timeouts,
-    account_store.RelayNotRegistered,
-  )
+  |> db.execute_on_one_row(db, timeouts, db.RelayNotRegistered)
 }
 
 /// `relays` の 1 行を読むデコーダー。列の順序は `select_sql` / `insert_sql` の

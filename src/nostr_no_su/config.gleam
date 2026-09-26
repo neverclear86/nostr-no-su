@@ -211,7 +211,7 @@ fn account_store() -> Result(AccountStore, String) {
 
 /// `database_url` と `raw_master_key` が揃っていればアカウントストアを組み立てる。
 /// 理由の文字列は固定の文言にし、入力値を含めない。`DATABASE_URL` の URL として
-/// の妥当性は、プール名が要るため起動処理（`account_store.pool_config`）で検査
+/// の妥当性は、プール名が要るため起動処理（`db.pool_config`）で検査
 /// する。マスターキーは自動生成しない。
 fn account_store_from(
   database_url: Option(String),

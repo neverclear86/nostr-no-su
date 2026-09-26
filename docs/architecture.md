@@ -158,7 +158,7 @@ DB に一度も届いていない間や読み込みが失敗している間は�
 
 DB の障害も同じ考え方で、プロセスの死にしない。
 DB の停止はプールのプロセスを殺さず、バンカーアクターはストアの失敗で落ちずに再試行を予約するだけで、起動時にも DB を待たない（次節）。
-pog が写せないエラーで `pog.execute` が例外を投げても、`account_store` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
+pog が写せないエラーで `pog.execute` が例外を投げても、`db` がクエリーの実行の入口で例外のクラスと発生箇所だけを持つ値（`Raised`）に写すので、ストアの失敗として扱われ、書き込みなら期限切れと同じく読み直す。
 したがって DB が落ちていてもルートの許容回数は消費されず、プロセスは落ちず、プラグインは動き続ける。
 監視とバンカーのリレーの接続は、最初の読み込みが成功した後に開き、その後の DB の障害では閉じない。
 例外は DB のスキーマの版がビルドより新しいときで、待っても直らないのでプロセスを終了する（「アカウントの読み込み」の節）。
@@ -281,6 +281,7 @@ sequenceDiagram
     participant sup as bunker サブツリー
     participant bk as bunker
     participant store as account_store
+    participant base as db.gleam
     participant db as Postgres
     participant conn as relay_connection
     participant sock as ソケット（stratus）
@@ -288,8 +289,8 @@ sequenceDiagram
     sup->>bk: 起動
     Note over bk: initialiser は自分用の<br/>名前なしの subject に<br/>LoadAccounts を積むだけ
     sup->>conn: 起動（アクターの後）
-    bk->>store: acquire_lock（ロック専用のプール）
-    store->>db: SELECT pg_try_advisory_lock
+    bk->>base: acquire_lock（ロック専用のプール）
+    base->>db: SELECT pg_try_advisory_lock
     bk->>store: load
     store->>db: BEGIN / lock_timeout / 版の確認と移行 /<br/>LOCK TABLE IN SHARE MODE / SELECT
     alt 読み込めた
@@ -314,7 +315,7 @@ DB が起動時に到達可能なら、どの接続も読み込み済みの署�
 読み込みの前に、ロック専用の 1 本のプールでセッション単位の advisory lock を取る。別のセッションが持っていれば、`SchemaTooNew` と同じく起動処理が VM を止める。ロックは再入で取り直すだけなので、読み込みのたびに呼ぶ。
 
 読み込みのトランザクションは、一覧を読む前にスキーマの版を確かめる。
-`schema_version` に記録された版より新しい移行（`account_store.migrations`）を順に実行し、移行ごとに版を記録する。
+`schema_version` に記録された版より新しい移行（`db.migrations`）を順に実行し、移行ごとに版を記録する。
 記録された版がビルドの最新の版より新しいときは、再試行しても変わらないので、起動処理が組み立てたストアの操作（`nostr_no_su.account_store_operations`）が理由を 1 行出して終了コード 1 で VM を止める。
 版 2 は監視の購読の再開点のテーブル（`monitor_resume`）である。監視はバンカーの署名者が 1 件以上のときだけこのテーブルを読むので、読むのは読み込みが 1 回成功した後になる（「監視の購読」の節）。
 版 3 は承認済みのセッション（`bunker_sessions`）と承認待ち（`bunker_pending`）のテーブルで、読み込みは同じトランザクションでこれらも読む。どれかが読めなければ読み込み全体が失敗する。
@@ -669,10 +670,11 @@ nostr-no-su/
 │   ├── nostr_no_su.gleam         エントリポイント（設定の読み込みとツリー仕様の組み立て）
 │   ├── nostr_no_su_ffi.erl       OTP への FFI（crypto / file / process / ssl / logger / supervisor / QR）
 │   ├── nostr_no_su_plugin_ffi.erl プラグインの読み込み・呼び出し・実行の FFI（code / file / application / process）
-│   ├── nostr_no_su_store_ffi.erl アカウントストアの pgo のトランザクションと、pog の例外を値に写す FFI
+│   ├── nostr_no_su_store_ffi.erl DB の基盤（db.gleam）の pgo のトランザクションと、pog の例外を値に写す FFI
 │   └── nostr_no_su/
 │       ├── app.gleam             スーパービジョンツリーの構成
 │       ├── config.gleam          環境変数からの設定読み込み
+│       ├── db.gleam              DB の基盤（接続プール、インスタンスのロック、期限、全テーブルの移行、トランザクション、クエリーの実行と失敗の値）
 │       ├── subscriptions.gleam   監視とバンカーの購読の定義（購読 id、フィルター、再開点からの組み立て）
 │       ├── admin.gleam           管理 UI の HTTP サーバーとルーティング
 │       ├── admin/dashboard.gleam 表示する状態の型、パスとフォームの欄の名前の定義、ダイアログに出すフォームの中身、ダッシュボードと承認と通知のページの描画
@@ -709,7 +711,7 @@ nostr-no-su/
 │       ├── bunker/account.gleam  鍵材料
 │       ├── bunker/connection_uri.gleam bunker:// URI とカメラ用のコピー用の文字列の組み立て（純粋）
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証、セッションと承認待ちの行の MAC（純粋）
-│       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
+│       ├── bunker/account_store.gleam アカウント、セッション、承認待ちを Postgres に保存するストア
 │       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）
 │       ├── nostr/event.gleam     Event 型・コーデック・ID 計算・署名
 │       ├── nostr/filter.gleam    購読フィルター

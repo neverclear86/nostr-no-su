@@ -14,9 +14,9 @@ import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
-import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/vault.{Loaded, StoredAccount}
+import nostr_no_su/db
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/message
 import nostr_no_su/plugin
@@ -48,7 +48,7 @@ pub const other_client_key = "00000000000000000000000000000000000000000000000000
 
 /// 偽のストアの書き込みと読み込みが失敗したときの理由。本物のストアの文言を使う。
 pub fn store_failure() -> String {
-  account_store.describe(account_store.Unavailable)
+  db.describe(db.Unavailable)
 }
 
 /// 偽リレーの URL。`fake_open` が報告に添えるだけで、接続先としては使わない。
