@@ -110,7 +110,6 @@ pub type Stored {
 /// 合わない行（列を書き換えた行、別の行の MAC を移した行、空の MAC の行）は
 /// `sessions` と `pending` に入れずに `rejected` に分ける。3 つのうちどれかの
 /// 読み込みが `Error` なら全体を `Error` にする。`db.transaction` の中で呼ぶ。
-/// `nostr_no_su.load_snapshot` が同じトランザクションで `relay_store.list` も読むために公開する。
 ///
 /// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
 /// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の書き込みの ROW EXCLUSIVE と
