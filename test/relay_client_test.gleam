@@ -101,12 +101,13 @@ pub fn describe_start_error_reports_a_timeout_test() {
 fn start_unsubscribed(url: String) -> Result(relay_client.Client, String) {
   relay_client.start(
     url,
-    fn() { Ok([]) },
-    fn(_event) { Nil },
-    fn(_ack) { Nil },
-    None,
-    relay_client.subscription_retry_delay,
-    relay_client.keepalive_interval_ms,
+    relay_client.Handlers(
+      subscriptions: fn() { Ok([]) },
+      handle_incoming: fn(_event) { Nil },
+      handle_ok: fn(_ack) { Nil },
+      authenticator: None,
+    ),
+    relay_client.default_timing,
   )
 }
 
@@ -1262,12 +1263,13 @@ fn connect(
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      subscriptions,
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      authenticator,
-      retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions:,
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator:,
+      ),
+      relay_client.Timing(..relay_client.default_timing, retry_delay:),
     )
   client
 }
@@ -1557,18 +1559,19 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(received_msg) {
-        case received_msg {
-          relay_client.ReceivedEvent(_, verified) ->
-            process.send(received, verified)
-          relay_client.ReceivedEose(_) -> Nil
-        }
-      },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(received_msg) {
+          case received_msg {
+            relay_client.ReceivedEvent(_, verified) ->
+              process.send(received, verified)
+            relay_client.ReceivedEose(_) -> Nil
+          }
+        },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
 
   let assert Ok(verified) = process.receive(received, 2000)
@@ -1639,12 +1642,13 @@ pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      fn() { Ok([]) },
-      fn(_event) { Nil },
-      process.send(acks, _),
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: process.send(acks, _),
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
 
   relay_client.publish(client, signed_event.new(1, "published"))
@@ -1678,12 +1682,16 @@ fn open_socket(
 ) -> Result(relay_connection.Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
-    fn() { Ok([]) },
-    fn(_event) { Nil },
-    fn(_ack) { Nil },
-    None,
-    relay_client.subscription_retry_delay,
-    interval_ms,
+    relay_client.Handlers(
+      subscriptions: fn() { Ok([]) },
+      handle_incoming: fn(_event) { Nil },
+      handle_ok: fn(_ack) { Nil },
+      authenticator: None,
+    ),
+    relay_client.Timing(
+      ..relay_client.default_timing,
+      keepalive_interval_ms: interval_ms,
+    ),
   ))
   let assert Ok(pid) = process.subject_owner(connection)
   Ok(
@@ -1745,12 +1753,13 @@ pub fn disconnect_sends_close_and_a_close_frame_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, req)) = process.receive(frames, 2000)
   let assert Ok(req_text) = bit_array.to_string(req)
@@ -1777,12 +1786,13 @@ pub fn disconnect_kills_a_client_that_does_not_stop_in_time_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      fn() { Ok([#(bunker, filter.new())]) },
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
+        handle_incoming: fn(_event) { Nil },
+        handle_ok: fn(_ack) { Nil },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, _req)) = process.receive(frames, 2000)
 

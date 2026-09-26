@@ -344,12 +344,13 @@ pub fn open_websocket(
 ) -> Result(Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
-    subscriptions,
-    handle_event,
-    handle_ok,
-    authenticator,
-    relay_client.subscription_retry_delay,
-    relay_client.keepalive_interval_ms,
+    relay_client.Handlers(
+      subscriptions:,
+      handle_incoming: handle_event,
+      handle_ok:,
+      authenticator:,
+    ),
+    relay_client.default_timing,
   ))
   // 接続の subject は名前付きではないため、必ず所有プロセスが存在する。
   let assert Ok(pid) = process.subject_owner(connection)

@@ -6,13 +6,22 @@
 //// 覆わない定義の購読には REQ（同じ id は NIP-01 で置き換え）を、開いていて定義から
 //// 消えた購読には CLOSE を送る。覆うのは `since` 以外が同じで、送った `since` が
 //// 無いか定義の `since` 以下のときで、評価のたびに後ろへ動く `since` では送り直さない。
-//// 定義を得られなかったときは開いている購読を変えずに再試行を 1 つだけ予約する。
-//// CLOSED を受けたら、その id を開いている購読から外し、
-//// 理由の NIP-01 の接頭辞で扱いを分ける。`blocked:`、`restricted:`、AUTH の受け口の
-//// 無い接続での `auth-required:` は、次の再接続（この接続の状態ごと作り直す）か
-//// 張り直しの依頼まで張り直さない。`rate-limited:` は CLOSED の待ちを上限に上げてから、
-//// それ以外はその時点の CLOSED の待ちで、再試行を予約して張り直す。判断は純粋関数
-//// `sync` にあり、stratus のループはその結果を送信と予約とログに移すだけである。
+//// 定義を得られなかったときは開いている購読を変えずに再試行を予約し、その待ちを
+//// 延ばす。定義を得るたびにこの待ちを初期値に戻す。
+////
+//// CLOSED の扱いは次のとおりである。
+//// - 受けた id を開いている購読から外す。開いていない id の CLOSED は無視する。
+//// - `blocked:`、`restricted:`、AUTH の受け口の無い接続での `auth-required:` は、
+////   その購読を止め、次の再接続（この接続の状態ごと作り直す）か張り直しの依頼まで
+////   張り直さない。
+//// - `rate-limited:` は CLOSED の待ちを上限に上げてから、それ以外の理由はその時点の
+////   CLOSED の待ちで、再試行を予約して張り直し、予約のたびに CLOSED の待ちを延ばす。
+//// - CLOSED の待ちは定義を得られないときの待ちとは別に数え、張り直しの依頼で定義を
+////   得たときだけ初期値に戻す。
+////
+//// 予約は常に 1 つだけで、予約が残っていれば新たに予約せず、世代の合わない再試行の
+//// タイマーは定義を評価せずに捨てる。判断は純粋関数 `sync` にあり、stratus のループは
+//// その結果を送信と予約とログに移すだけである。
 //// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 //// AUTH（NIP-42）は受け口があれば応答し、無ければ応答せずログに出す。
@@ -118,25 +127,18 @@ pub type SubscriptionState {
     retry: Option(Int),
     /// 次に予約するときに使う世代。予約するたびに 1 つ進める。
     next_generation: Int,
-    /// 定義を得られなかったときに予約する、ジッターを掛ける前の待ち時間。定義を
-    /// 得るたびに初期値に戻す。
+    /// 定義を得られなかったときに次に予約する、ジッターを掛ける前の待ち時間。
     delay_ms: Int,
-    /// リレーが購読を閉じたときに予約する、ジッターを掛ける前の待ち時間。
-    /// `rate-limited:` の CLOSED で上限に上げる。張り直しの依頼で定義を得た
-    /// ときだけ初期値に戻す。
+    /// リレーが購読を閉じたときに次に予約する、ジッターを掛ける前の待ち時間。
     closed_delay_ms: Int,
-    /// リレーが断ったので張り直さない購読 id。張り直しの依頼で空にする。
-    /// 再接続では状態ごと作り直すので空から始まる。
+    /// リレーが断ったので張り直さない購読 id。
     suspended: Set(String),
-    /// AUTH の受け口を持つ接続か。`auth-required:` の CLOSED で購読を止めるかを
-    /// 決める。接続の間は変わらない。
+    /// AUTH の受け口を持つ接続か。接続の間は変わらない。
     answers_auth: Bool,
   )
 }
 
 /// 新たに予約する再試行の世代と、ジッターを掛ける前の待ち時間。
-/// `SubscriptionState.retry`（予約中の世代だけ）と区別するため `Retry` という
-/// 名前にしない。
 pub type Reservation {
   Reservation(generation: Int, delay_ms: Int)
 }
@@ -165,25 +167,10 @@ type Session {
   )
 }
 
-/// 購読の定義を得られなかったとき、およびリレーが購読を閉じたときの本番の
-/// 再試行の待ち時間。2 つの原因は待ちを別々に数える。
-///
-/// 待ちは評価が終わってから数える（`synchronise` が `sync` の後に
-/// `process.send_after` で予約する）。評価 1 回の待ちは、監視の購読ではバンカーの
-/// 署名者の問い合わせ（5000ms、`bunker.gleam` の `call_timeout_ms`）、
-/// ディスパッチャーの再開点（`dedup.call_timeout_ms`）、DB の再開点
-/// （`resume_store` の期限）の和まで延びうるが、初期値より長くても再試行は重ならない
-/// （予約は常に 1 つだけで、世代を付けて古いタイマーを捨てる）。
-///
-/// 初期値はバンカーの署名者の問い合わせの期限と同じにする。
-/// 上限の 2 分はバンカーの読み込みの再試行の上限と同じにする。定義を得られない主な
-/// 原因は、バンカーのアクターが DB で止まることと、DB の再開点を読めないことで、
-/// どちらも DB の復帰を待つので、復帰の後に購読が追いつくまでの時間をそろえる。
-/// CLOSED にも同じ初期値と上限を使う。恒久的に断る理由（`blocked:`、
-/// `restricted:`、受け口の無い接続での `auth-required:`）の購読は再試行せず、
-/// `rate-limited:` は最初から上限で待つ。それ以外の理由は一時か恒久かを区別
-/// できないので、上限まで延ばして断り続けるリレーへの REQ を抑える。
-pub const subscription_retry_delay = backoff.Backoff(
+/// 本番の購読の再試行の待ち時間。定義を得られなかったときと CLOSED で共用する。
+/// 初期値はバンカーの署名者の問い合わせの期限に、上限はバンカーの読み込みの再試行の上限に
+/// そろえる（どちらも DB の復帰を待つため）。
+const subscription_retry_delay = backoff.Backoff(
   initial_ms: 5000,
   max_ms: 120_000,
 )
@@ -191,7 +178,48 @@ pub const subscription_retry_delay = backoff.Backoff(
 /// 本番の生存確認の刻みの間隔（30 秒）。ping は無受信がこの 1 倍を超えて 2 倍
 /// 以内に送り、切断は 2 倍を超えて 3 倍以内に起きる（`nostr_no_su/keepalive` を
 /// 参照）。
-pub const keepalive_interval_ms = 30_000
+const keepalive_interval_ms = 30_000
+
+/// 接続が開く購読の定義と、受信・OK・AUTH の受け口。
+pub type Handlers {
+  Handlers(
+    /// 開くべき購読。接続直後、張り直しの依頼、予約した再試行のたびに評価する。
+    subscriptions: Subscriptions,
+    /// id と署名を確かめたイベントと、保存済みイベントの終わり（EOSE）の受け口。
+    handle_incoming: fn(Received) -> Nil,
+    /// 発行したイベントへの OK の受け口。受理・拒否のどちらも渡す。
+    handle_ok: fn(Acknowledgement) -> Nil,
+    /// AUTH（NIP-42）の受け口。None の接続は AUTH に応答しない。
+    authenticator: Option(Authenticator),
+  )
+}
+
+/// 接続の待ちの設定。
+pub type Timing {
+  Timing(
+    /// 購読の再試行の待ち時間の初期値と上限。
+    retry_delay: backoff.Backoff,
+    /// 生存確認の刻みの間隔。
+    keepalive_interval_ms: Int,
+  )
+}
+
+/// 本番の待ちの設定。
+pub const default_timing = Timing(
+  retry_delay: subscription_retry_delay,
+  keepalive_interval_ms: keepalive_interval_ms,
+)
+
+/// 1 本の接続の間変わらない値。`conn` は stratus がメッセージごとに渡すので、
+/// `start` の受信ループがメッセージごとに組む。
+type Link {
+  Link(
+    conn: stratus.Connection,
+    prefix: String,
+    handlers: Handlers,
+    timing: Timing,
+  )
+}
 
 /// 生存確認の ping に送るペイロード。空にすると、上流の stratus の `send_ping`
 /// がマスクを 4 ビットの値で組み立てて `let assert` に失敗する。
@@ -239,24 +267,15 @@ pub fn new_subscription_state(
   )
 }
 
-/// 指定のリレーに接続し、指定の購読を開き、id と署名を確かめたイベントと、
-/// 保存済みイベントの終わり（EOSE）を `handle_incoming` へ渡す。発行した
-/// イベントへの OK は受理・拒否とも `handle_ok` へ渡す。検証はこの接続の
-/// プロセスの中で行う。`retry_delay` は購読の定義を得られなかったとき、
-/// およびリレーが購読を閉じたときの再試行の待ち時間。
-/// `interval_ms` は生存確認の刻みの間隔で、本番は `keepalive_interval_ms` を
-/// 渡す。接続アクターは呼び出し元にリンクされるため呼び出し元と一緒に死に、
-/// exit を trap している呼び出し元にはその死がメッセージとして届く。
-/// リレーの AUTH には `authenticator` があれば応答し、無ければ応答せずログに出し、
-/// `auth-required:` の CLOSED の購読を次の再接続か張り直しの依頼まで張り直さない。
+/// `url` のリレーに接続し、`handlers.subscriptions` の購読を開き、受信を `handlers` の
+/// 受け口へ渡す。イベントの id と署名の検証はこの接続のプロセスの中で行う。接続アクターは
+/// 呼び出し元にリンクされるため呼び出し元と一緒に死に、exit を trap している呼び出し元には
+/// その死がメッセージとして届く。URL を読めないときとハンドシェイクに失敗したときは、
+/// 理由を `Error` で返す。
 pub fn start(
   url: String,
-  subscriptions: Subscriptions,
-  handle_incoming: fn(Received) -> Nil,
-  handle_ok: fn(Acknowledgement) -> Nil,
-  authenticator: Option(Authenticator),
-  retry_delay: backoff.Backoff,
-  interval_ms: Int,
+  handlers: Handlers,
+  timing: Timing,
 ) -> Result(Client, String) {
   use req <- result.try(
     to_request(url)
@@ -266,11 +285,12 @@ pub fn start(
   let builder =
     stratus.new_with_initialiser(req, fn() {
       let inbox = process.new_subject()
-      let _ = process.send_after(inbox, interval_ms, KeepaliveTick)
+      let _ =
+        process.send_after(inbox, timing.keepalive_interval_ms, KeepaliveTick)
       Session(
         subscriptions: new_subscription_state(
-          retry_delay,
-          option.is_some(authenticator),
+          timing.retry_delay,
+          option.is_some(handlers.authenticator),
         ),
         inbox: inbox,
         keepalive: keepalive.new(),
@@ -281,60 +301,17 @@ pub fn start(
     })
     |> stratus.with_connect_timeout(connect_timeout_ms)
     |> stratus.on_message(fn(session, msg, conn) {
+      let link = Link(conn:, prefix:, handlers:, timing:)
       let session = record_inbound(session, msg)
       case msg {
-        stratus.User(Subscribe) ->
-          synchronise(
-            session,
-            Requested,
-            subscriptions,
-            conn,
-            prefix,
-            retry_delay,
-          )
-          |> stratus.continue
-        stratus.User(RetrySubscribe(generation)) ->
-          synchronise(
-            session,
-            Retried(generation),
-            subscriptions,
-            conn,
-            prefix,
-            retry_delay,
-          )
-          |> stratus.continue
-        stratus.User(Publish(published)) -> {
-          send_message(conn, prefix, message.Publish(published))
-          stratus.continue(session)
-        }
-        stratus.User(KeepaliveTick) ->
-          check_keepalive(session, conn, prefix, interval_ms)
-        stratus.User(Disconnect) -> close_gracefully(session, conn, prefix)
-        stratus.Text(text) ->
-          case
-            handle_text(
-              prefix,
-              text,
-              handle_incoming,
-              handle_ok,
-              authenticator,
-              send_message(conn, prefix, _),
-            )
-          {
-            Some(trigger) ->
-              synchronise(
-                session,
-                trigger,
-                subscriptions,
-                conn,
-                prefix,
-                retry_delay,
-              )
-              |> stratus.continue
-            None -> stratus.continue(session)
+        stratus.User(KeepaliveTick) -> check_keepalive(session, link)
+        stratus.User(Disconnect) -> close_gracefully(session, link)
+        _ ->
+          case handle_message(link, msg) {
+            Some(trigger) -> synchronise(session, trigger, link)
+            None -> session
           }
-        stratus.Binary(_) -> stratus.continue(session)
-        stratus.Pong(_) -> stratus.continue(session)
+          |> stratus.continue
       }
     })
     |> stratus.on_close(fn(_session, reason) {
@@ -410,17 +387,8 @@ type Cause {
   ClosedByRelay
 }
 
-/// 照合 1 回ぶんの判断。現在の予約と世代が一致しない再試行は定義を評価せずに
-/// 捨てる。CLOSED は定義を評価せず、開いている id だけ外して理由の接頭辞で
-/// 扱いを決める（`forget_closed`）。それ以外は定義を評価し、得られれば止めた
-/// 購読を除き、開いている購読が覆わない購読の REQ と定義から消えた購読の CLOSE を
-/// 作って（`reconcile`）予約を解き、得られなければ何も送らず、予約が無ければ新しい
-/// 世代で予約する。張り直しの依頼は評価の前に止めた購読を空にする。定義を得られたら
-/// 定義失敗の待ち時間を初期値に戻し、張り直しの依頼で得たときは CLOSED の待ち時間も
-/// 戻し、新しく予約するたびにその原因の待ち時間を延ばす。
-///
-/// 定義をサンクで受け取るのは、捨てる再試行で定義を評価しない（バンカーへの
-/// 問い合わせを送らない）ためである。
+/// 照合 1 回ぶんの判断（規則はモジュール Doc）。定義は、捨てる再試行で評価しない
+/// （バンカーへ問い合わせない）ようサンクで受け取る。
 pub fn sync(
   state: SubscriptionState,
   trigger: Trigger,
@@ -519,13 +487,8 @@ fn reserve(
   }
 }
 
-/// リレーが閉じた購読を開いている購読から外し、理由の接頭辞で扱いを決める。
-/// CLOSE は送らない。`blocked:`、`restricted:`、受け口の無い接続での
-/// `auth-required:` は止めた購読に入れて予約しない（予約が残っていればそのまま
-/// 残す）。`rate-limited:` は CLOSED の待ちを上限に上げてから、それ以外は
-/// その時点の CLOSED の待ちで、再照合を予約する。予約が残っていればそれに
-/// 任せる。開いていない id（こちらが CLOSE した購読や止めた購読への応答など）は
-/// 無視する。
+/// リレーが閉じた購読を開いている購読から外し、理由の接頭辞で止めるか再試行を予約する
+/// （規則はモジュール Doc）。CLOSE は送らない。
 fn forget_closed(
   state: SubscriptionState,
   subscription_id: String,
@@ -563,10 +526,9 @@ fn forget_closed(
   }
 }
 
-/// 定義にある購読のうち開いている購読が覆わないものの REQ と、開いていて定義
-/// から消えた購読の CLOSE と、照合の後に開いている購読。覆う購読は最後に送った
-/// フィルターを残す。REQ は定義の順に、CLOSE は表示とテストが安定するよう id の
-/// 順に並べる。
+/// 定義にある購読のうち開いている購読が覆わないものの REQ と、開いていて定義から消えた
+/// 購読の CLOSE（`close_messages`）と、照合の後に開いている購読。覆う購読は最後に送った
+/// フィルターを残す。REQ は定義の順に並べる。
 fn reconcile(
   open: Dict(String, Filter),
   wanted: List(#(String, Filter)),
@@ -574,12 +536,13 @@ fn reconcile(
   let decided = list.map(wanted, reconcile_one(open, _))
   let next = dict.from_list(list.map(decided, fn(d) { d.0 }))
   let requests = list.filter_map(decided, fn(d) { option.to_result(d.1, Nil) })
-  let closes =
-    dict.drop(open, dict.keys(next))
-    |> dict.keys
-    |> list.sort(string.compare)
-    |> list.map(message.Close)
+  let closes = close_messages(dict.keys(dict.drop(open, dict.keys(next))))
   #(next, list.append(requests, closes))
+}
+
+/// 購読 id ごとの CLOSE。送る順が毎回同じになるよう id の順に並べる。
+fn close_messages(ids: List(String)) -> List(message.ClientMessage) {
+  ids |> list.sort(string.compare) |> list.map(message.Close)
 }
 
 /// 定義の購読 1 件の照合。開いている購読が覆えば、送ったフィルターを残して
@@ -613,25 +576,50 @@ fn covers(sent: Filter, wanted: Filter) -> Bool {
   since_covered && Filter(..sent, since: wanted.since) == wanted
 }
 
+/// 生存確認の刻みと切断の依頼を除くメッセージ 1 件を処理し、照合の契機があれば返す。
+/// 刻みと切断の依頼は `start` の受信ループが先に扱うので、ここでは何もしない。
+fn handle_message(link: Link, msg: stratus.Message(Msg)) -> Option(Trigger) {
+  case msg {
+    stratus.User(Subscribe) -> Some(Requested)
+    stratus.User(RetrySubscribe(generation)) -> Some(Retried(generation))
+    stratus.User(Publish(published)) -> {
+      send_message(link.conn, link.prefix, message.Publish(published))
+      None
+    }
+    stratus.Text(text) ->
+      handle_text(
+        link.prefix,
+        text,
+        link.handlers.handle_incoming,
+        link.handlers.handle_ok,
+        link.handlers.authenticator,
+        send_message(link.conn, link.prefix, _),
+      )
+    stratus.User(KeepaliveTick)
+    | stratus.User(Disconnect)
+    | stratus.Binary(_)
+    | stratus.Pong(_) -> None
+  }
+}
+
 /// 照合を 1 回行い、その結果を送信と再試行の予約に移す。照合で新しく止めた
 /// 購読は 1 件ごとに Warning を 1 行出す。判断は `sync` にある。
-fn synchronise(
-  session: Session,
-  trigger: Trigger,
-  subscriptions: Subscriptions,
-  conn: stratus.Connection,
-  prefix: String,
-  retry_delay: backoff.Backoff,
-) -> Session {
-  let synced = sync(session.subscriptions, trigger, subscriptions, retry_delay)
-  list.each(synced.messages, send_message(conn, prefix, _))
+fn synchronise(session: Session, trigger: Trigger, link: Link) -> Session {
+  let synced =
+    sync(
+      session.subscriptions,
+      trigger,
+      link.handlers.subscriptions,
+      link.timing.retry_delay,
+    )
+  list.each(synced.messages, send_message(link.conn, link.prefix, _))
   case synced.schedule_retry {
     None -> Nil
     Some(reservation) -> {
       let delay = backoff.jittered(reservation.delay_ms)
       log.write(
         reservation_log_level(trigger),
-        prefix,
+        link.prefix,
         describe_reservation(trigger, delay),
       )
       let _ =
@@ -651,7 +639,7 @@ fn synchronise(
     fn(subscription_id) {
       log.write(
         log.Warning,
-        prefix,
+        link.prefix,
         "subscription "
           <> log.sanitize_external(subscription_id)
           <> " was refused by the relay; not resubscribing until the next connection or a change of subscriptions",
@@ -700,22 +688,18 @@ fn record_inbound(session: Session, msg: stratus.Message(Msg)) -> Session {
 
 /// 生存確認の刻み 1 回。判定は `keepalive.tick` にあり、ここは ping の送信、
 /// 次の刻みの予約、停止に移すだけである。
-fn check_keepalive(
-  session: Session,
-  conn: stratus.Connection,
-  prefix: String,
-  interval_ms: Int,
-) -> stratus.Next(Session, Msg) {
+fn check_keepalive(session: Session, link: Link) -> stratus.Next(Session, Msg) {
   let #(next, verdict) = keepalive.tick(session.keepalive)
+  let interval_ms = link.timing.keepalive_interval_ms
   case verdict {
     keepalive.Healthy -> continue_after_tick(session, next, interval_ms)
     keepalive.SendPing -> {
-      case stratus.send_ping(conn, ping_payload) {
+      case stratus.send_ping(link.conn, ping_payload) {
         Ok(Nil) -> Nil
         Error(reason) ->
           log.write(
             log.Warning,
-            prefix,
+            link.prefix,
             "failed to send ping: " <> string.inspect(reason),
           )
       }
@@ -724,7 +708,7 @@ fn check_keepalive(
     keepalive.Unresponsive -> {
       log.write(
         log.Warning,
-        prefix,
+        link.prefix,
         "no data or pong within "
           <> int.to_string(interval_ms)
           <> "ms after a ping; closing the connection",
@@ -734,26 +718,23 @@ fn check_keepalive(
   }
 }
 
-/// `Disconnect` の処理。開いている購読の CLOSE を `reconcile` と同じく id の順に
-/// 送り、close フレーム（状態コード 1000）を送って止まる。close フレームを
-/// 書けなかったときは理由をログに残して止まる。リレーの close フレームを待た
-/// ないのは、待つと `on_close` の Notice のログが問い合わせのたびに出るため
-/// である（ループが返した停止では `on_close` は呼ばれない）。
+/// `Disconnect` の処理。開いている購読の CLOSE（`close_messages`）と close フレーム
+/// （状態コード 1000）を送って止まる。close フレームを書けなかったときは理由をログに残して
+/// 止まる。リレーの close フレームを待たないのは、待つと `on_close` の Notice のログが
+/// 問い合わせのたびに出るためである（ループが返した停止では `on_close` は呼ばれない）。
 fn close_gracefully(
   session: Session,
-  conn: stratus.Connection,
-  prefix: String,
+  link: Link,
 ) -> stratus.Next(Session, Msg) {
-  session.subscriptions.open
-  |> dict.keys
-  |> list.sort(string.compare)
-  |> list.each(fn(id) { send_message(conn, prefix, message.Close(id)) })
-  case stratus.close(conn, stratus.Normal(<<>>)) {
+  list.each(close_messages(dict.keys(session.subscriptions.open)), fn(outgoing) {
+    send_message(link.conn, link.prefix, outgoing)
+  })
+  case stratus.close(link.conn, stratus.Normal(<<>>)) {
     Ok(Nil) -> Nil
     Error(reason) ->
       log.write(
         log.Warning,
-        prefix,
+        link.prefix,
         "failed to send a close frame: " <> string.inspect(reason),
       )
   }
@@ -819,20 +800,19 @@ pub type Acknowledgement {
   Acknowledgement(event_id: String, accepted: Bool, message: String)
 }
 
-/// リレーメッセージ 1 件の解釈の結果。`Deliver` は検証を通ったイベントと、
-/// それが届いた購読の id、`Ended` は保存済みイベントの終わり（EOSE）を告げた
-/// 購読の id とログ行の本文で、どちらの id も振り分けに使うため正規化しない。
-/// `Report` は出力するログ行の本文（外部由来の値は正規化済み）、`Acknowledge` は
-/// 発行したイベントへの OK（受理・拒否とも）、`Synchronise` は購読の状態を変える
-/// 応答（CLOSED）で、ログ行の本文と照合の契機を持つ。契機の id は照合に使うため
-/// 正規化しない。ログ行の本文は正規化済み。`Authenticate` は AUTH の challenge で、
-/// 署名に使うため正規化しない。
+/// リレーメッセージ 1 件の解釈の結果。
 pub type Interpretation {
+  /// 検証を通ったイベント。購読 id は振り分けに使うので正規化しない。
   Deliver(subscription_id: String, event: event.Verified)
+  /// 保存済みイベントの終わり（EOSE）。id は振り分けに使うので正規化せず、line は正規化済み。
   Ended(subscription_id: String, line: String)
+  /// 出力するログ行の本文。外部由来の値は正規化済み。
   Report(String)
+  /// 発行したイベントへの OK（受理・拒否とも）。値は正規化済み。
   Acknowledge(Acknowledgement)
+  /// 購読の状態を変える応答（CLOSED）。契機の id は照合に使うので正規化せず、line は正規化済み。
   Synchronise(trigger: Trigger, line: String)
+  /// AUTH の challenge。署名に使うので正規化しない。
   Authenticate(challenge: String)
 }
 
@@ -894,13 +874,7 @@ fn classify_closed(reason: String) -> ClosedReason {
   }
 }
 
-/// リレーメッセージを 1 件処理する。解釈は `interpret` にあり、ここはその
-/// 結果を配送とログ出力、`handle_ok` への通知に移すだけである。id と署名を
-/// 確かめたイベントと、保存済みイベントの終わり（EOSE）を `handle_incoming`
-/// へ渡す。`start` の受信ループが呼ぶほか、テストが直接呼ぶ。OK は受理・拒否
-/// とも `handle_ok` に渡し、拒否だけそのリレーのログ行も出す。購読の状態を
-/// 変える応答は契機を返し、ループが照合に渡す。AUTH は受け口があれば得た
-/// イベントを `send` で送り、結果をログに出す。
+/// `interpret` の結果を受け口とログと `send` に移し、照合の契機があれば返す。
 pub fn handle_text(
   prefix: String,
   text: String,

@@ -401,18 +401,19 @@ fn connect_client(
   let assert Ok(connection) =
     relay_client.start(
       relay_url,
-      subscriptions,
-      fn(received) {
-        case received {
-          relay_client.ReceivedEvent(_, verified) ->
-            process.send(events, event.verified_event(verified))
-          relay_client.ReceivedEose(_) -> Nil
-        }
-      },
-      fn(ack) { process.send(acks, ack) },
-      None,
-      relay_client.subscription_retry_delay,
-      relay_client.keepalive_interval_ms,
+      relay_client.Handlers(
+        subscriptions:,
+        handle_incoming: fn(received) {
+          case received {
+            relay_client.ReceivedEvent(_, verified) ->
+              process.send(events, event.verified_event(verified))
+            relay_client.ReceivedEose(_) -> Nil
+          }
+        },
+        handle_ok: fn(ack) { process.send(acks, ack) },
+        authenticator: None,
+      ),
+      relay_client.default_timing,
     )
   connection
 }
