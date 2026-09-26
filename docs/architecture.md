@@ -725,7 +725,7 @@ nostr-no-su/
 │       ├── persistent_term.gleam persistent_term への型付きの読み書き（FFI）
 │       ├── random.gleam          推測されては困る値のための乱数
 │       ├── secret.gleam          秘密の値の閉じ込め（`string.inspect` とクラッシュレポートに出さない）
-│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボード、`plugin_api`、`avatars` が使う）
+│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（締め切りと残り時間、締め切りまでの受信、項目ごとの並行な実行）
 │       └── time.gleam            現在時刻（壁時計・単調時計、FFI）
 │
 ├── test/                         本体のテスト（gleeunit と qcheck）

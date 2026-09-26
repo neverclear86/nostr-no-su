@@ -7,7 +7,6 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Subject}
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -19,7 +18,6 @@ import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/task
-import nostr_no_su/time
 
 /// リレーへ送信を依頼してから応答を集める時間の上限（ミリ秒）。送信は全接続へ
 /// 同時に依頼するので、リレーの本数には比例しない。
@@ -238,7 +236,7 @@ fn fetch_latest(
   )
 }
 
-/// 監視の用途のリレー 1 本ごとに `query` を 1 回、`task.start` で並行に行い、
+/// 監視の用途のリレー 1 本ごとに `query` を 1 回、`task.map_within` で並行に行い、
 /// 共通の期限まで待つ。一覧が引けなければ `relay_list_not_responding`、監視の
 /// 用途のリレーが無ければ `no_monitor_relay_registered`、1 本も応答しなかった
 /// （`relay_client.start` が失敗した本と、期限までに EOSE が届かなかった本を
@@ -261,10 +259,7 @@ pub fn ask_monitor_relays(
       let await_deadline =
         task.deadline_in(fetch_timeout_ms + close_timeout_ms + gather_margin_ms)
       let outcomes =
-        list.map(urls, fn(url) {
-          task.start(fn() { query(url, authors, kind, deadline) })
-        })
-        |> list.map(task.await(_, await_deadline))
+        task.map_within(urls, await_deadline, query(_, authors, kind, deadline))
         |> list.map(result.flatten)
       case result.values(outcomes) {
         [] -> Error(no_monitor_relay_connected)
@@ -392,8 +387,7 @@ fn collect(
   deadline: task.Deadline,
   found: List(Event),
 ) -> Result(List(Event), Nil) {
-  let task.Deadline(at_ms:) = deadline
-  case process.receive(reply, int.max(0, at_ms - time.monotonic_ms())) {
+  case task.receive(reply, deadline) {
     Ok(Found(found_event)) -> collect(reply, deadline, [found_event, ..found])
     Ok(Ended) -> Ok(list.reverse(found))
     Error(Nil) -> Error(Nil)
@@ -435,8 +429,7 @@ fn gather(
   case remaining <= 0 {
     True -> 0
     False -> {
-      let task.Deadline(at_ms:) = deadline
-      case process.receive(reply, int.max(0, at_ms - time.monotonic_ms())) {
+      case task.receive(reply, deadline) {
         Ok(True) -> 1 + gather(reply, remaining - 1, deadline)
         Ok(False) -> gather(reply, remaining - 1, deadline)
         Error(Nil) -> 0

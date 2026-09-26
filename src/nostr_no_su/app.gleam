@@ -875,19 +875,15 @@ pub fn plugin_rows(
   specs: List(PluginSpec),
   deadline: task.Deadline,
 ) -> List(dashboard.PluginRow) {
-  let tasks =
-    list.map(specs, fn(spec) {
-      #(
-        spec.plugin.name,
-        plugin_ui_pages(spec.plugin.ui),
-        task.start(fn() { plugin_runner.status(spec.name) }),
-      )
+  let statuses =
+    task.map_within(specs, deadline, fn(spec) {
+      plugin_runner.status(spec.name)
     })
-  use #(name, pages, status) <- list.map(tasks)
+  use spec, status <- list.map2(specs, statuses)
   dashboard.PluginRow(
-    name:,
-    status: task.await(status, deadline) |> result.unwrap(None),
-    pages:,
+    name: spec.plugin.name,
+    status: result.unwrap(status, None),
+    pages: plugin_ui_pages(spec.plugin.ui),
   )
 }
 
@@ -1007,12 +1003,9 @@ pub fn relay_statuses(
   names: List(Name(relay_connection.Msg)),
   deadline: task.Deadline,
 ) -> List(#(Name(relay_connection.Msg), Option(relay_connection.Status))) {
-  let tasks =
-    list.map(names, fn(name) {
-      #(name, task.start(fn() { relay_connection.status(name) }))
-    })
-  use #(name, status) <- list.map(tasks)
-  #(name, task.await(status, deadline) |> option.from_result)
+  let statuses = task.map_within(names, deadline, relay_connection.status)
+  use name, status <- list.map2(names, statuses)
+  #(name, option.from_result(status))
 }
 
 /// DB の `relays` の全行。読めなければ英語の理由を返す。管理 UI の Context が使う。
