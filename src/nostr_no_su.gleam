@@ -106,7 +106,9 @@ pub fn main() -> Nil {
 pub fn startup(loaded: Config) -> Result(Startup, String) {
   use console_logger_enabled <- result.try(loaded.console_logger_enabled)
   use dedup_capacity <- result.try(loaded.dedup_capacity)
-  use #(database_url, master_key) <- result.try(account_store_settings(loaded))
+  use config.AccountStore(database_url:, master_key:) <- result.try(
+    loaded.account_store,
+  )
   use bunker <- result.try(bunker_spec(loaded, database_url, master_key))
   use #(admin, admin_notes) <- result.map(admin_spec(loaded))
   let builtin = builtin_plugins(console_logger_enabled)
@@ -624,18 +626,6 @@ fn write_failure(error: account_store.StoreError) -> bunker.WriteFailure {
   }
 }
 
-/// アカウントストアの接続先とマスターキー。設定が揃わなければ理由を返す。理由は
-/// 値を含まない。
-fn account_store_settings(
-  loaded: Config,
-) -> Result(#(String, vault.MasterKey), String) {
-  case loaded.account_store {
-    config.AccountStoreUnavailable(reason) -> Error(reason)
-    config.AccountStore(database_url:, master_key:) ->
-      Ok(#(database_url, master_key))
-  }
-}
-
 /// アカウントストアの接続プールの設定と、ロック専用のプールの設定。`database_url` を
 /// 解釈できなければ理由を返す。理由は値を含まない。
 fn bunker_store(
@@ -655,12 +645,12 @@ fn bunker_store(
   })
 }
 
-/// 管理 UI の仕様と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、値が不正な
-/// ときは理由を報告してから無効にする。待ち受けるのに `ADMIN_PASSWORD` が無ければ、
-/// その理由を返す。
+/// 管理 UI の待ち受けの設定と、その報告行。`ADMIN_PORT` が空なら黙って無効にし、
+/// 値が不正なときは理由を報告してから無効にする。待ち受けるのに `ADMIN_PASSWORD`
+/// が無ければ、その理由を返す。
 fn admin_spec(
   loaded: Config,
-) -> Result(#(Option(app.Admin), List(String)), String) {
+) -> Result(#(Option(config.AdminListen), List(String)), String) {
   case loaded.admin_ui {
     config.MissingPassword(reason) -> Error(reason)
     config.Disabled ->
@@ -671,7 +661,6 @@ fn admin_spec(
       )
     config.Invalid(reason) ->
       Ok(#(None, [log.line(admin.log_prefix, reason <> "; admin UI disabled")]))
-    config.Listen(bind:, port:, password:) ->
-      Ok(#(Some(app.Admin(bind:, port:, password:)), []))
+    config.Listen(listen) -> Ok(#(Some(listen), []))
   }
 }

@@ -366,10 +366,10 @@ fn start_tree_with_relay(
 /// 起動しないことで、このテストが監視するのはバンカーとリレー接続だけになる。
 fn test_config(database_url: String) -> config.Config {
   config.Config(
-    account_store: config.AccountStore(
+    account_store: Ok(config.AccountStore(
       database_url: database_url,
       master_key: random_master_key(),
-    ),
+    )),
     plugin_dir: None,
     plugin_env: dict.new(),
     admin_ui: config.Disabled,
