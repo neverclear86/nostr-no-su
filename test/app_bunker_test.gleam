@@ -16,6 +16,7 @@ import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/event
@@ -567,7 +568,7 @@ pub fn a_failed_session_use_record_still_answers_and_logs_the_failure_test() {
   let signer = account.pubkey_hex(account_for(signer_key))
   let client = account.pubkey_hex(account_for(client_key))
   let session =
-    engine.Session(
+    session.Session(
       signer: signer,
       client: client,
       perms: "",
@@ -1053,7 +1054,7 @@ pub fn bunker_connections_answer_authentication_test() {
 /// `app.session_rows` は時刻と perms をそのまま写す。
 pub fn session_rows_keep_times_and_perms_test() {
   let sessions = [
-    engine.Session(
+    session.Session(
       signer: "ab",
       client: "cd",
       perms: "sign_event:1",
@@ -1079,7 +1080,7 @@ pub fn session_rows_keep_times_and_perms_test() {
 pub fn pending_rows_count_down_to_the_expiry_test() {
   let before = time.now_seconds()
   let pending =
-    engine.Pending(
+    session.Pending(
       token: "tok",
       signer: "ab",
       client: "cd",
@@ -1170,7 +1171,7 @@ pub fn a_session_only_relay_subscribes_its_signers_and_closes_on_revoke_test() {
   let second_hex = account.pubkey_hex(second.account)
   let client_hex = account.pubkey_hex(account_for(client_key))
   let session =
-    engine.Session(
+    session.Session(
       signer: first_hex,
       client: client_hex,
       perms: "",

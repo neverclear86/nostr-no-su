@@ -20,7 +20,7 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
-import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/random
 import nostr_no_su/time
@@ -258,7 +258,7 @@ fn reconcile_sessions_with_postgres(
   let name = process.new_name("account_reconcile_sessions_bunker")
   let pid = start_store_bunker(name, pool, lock_pool, key)
   let session =
-    engine.Session(
+    session.Session(
       signer: signer,
       client: client,
       perms: "",

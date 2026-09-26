@@ -13,6 +13,7 @@ import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
 import nostr_no_su/bunker/engine
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded}
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -373,7 +374,7 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
   let assert Ok([entry]) = bunker.pending(name)
 
   // DB の作成時刻だけをずらし、メモリではなく DB から読み込んだことを見分ける。
-  let shifted = engine.Pending(..entry, created_at: entry.created_at - 300)
+  let shifted = session.Pending(..entry, created_at: entry.created_at - 300)
   process.call(database, 1000, ApplyWrite(
     engine.InsertPending(pending: shifted, replaced: [entry.token], evicted: []),
     _,

@@ -699,6 +699,7 @@ nostr-no-su/
 │       ├── bunker.gleam          バンカーのアクター（セッション状態を保持）
 │       ├── bunker/engine.gleam   NIP-46 リクエスト処理の純粋コア
 │       ├── bunker/permission.gleam NIP-46 の perms のトークンの型と解釈、許可と未対応の判定（純粋）
+│       ├── bunker/session.gleam  承認済みセッションと承認待ちの型（import を持たない葉）
 │       ├── bunker/connection_secret.gleam 接続 secret（定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
