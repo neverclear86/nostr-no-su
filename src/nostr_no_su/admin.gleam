@@ -1013,11 +1013,7 @@ fn session_failure_response(
     bunker.SessionNotReady(reason) ->
       unavailable_notice(handling, i18n.BunkerNotAvailable, reason)
     bunker.SessionMaybeApplied(cause) ->
-      not_confirmed_notice(
-        handling,
-        i18n.Translated(not_confirmed_message(cause)),
-        503,
-      )
+      maybe_applied_notice(handling, cause, 503)
   }
 }
 
@@ -1284,11 +1280,7 @@ fn connect_failure_response(
     Error(SessionNotOpened(bunker.SessionNotReady(reason))) ->
       redraw(i18n.Untranslated(reason), 503)
     Error(SessionNotOpened(bunker.SessionMaybeApplied(cause))) ->
-      not_confirmed_notice(
-        handling,
-        i18n.Translated(not_confirmed_message(cause)),
-        202,
-      )
+      maybe_applied_notice(handling, cause, 202)
   }
 }
 
@@ -1339,15 +1331,21 @@ fn reload_accounts(handling: Handling) -> Response {
 fn generate_account(handling: Handling) -> Response {
   use <- require_method(handling, http.Post)
   let generated = account.generate(crypto.strong_random_bytes)
-  dialog_response(
-    handling,
-    dashboard.GeneratedKeyOpen(
-      account.npub(generated),
-      account.nsec(generated),
-      "",
-      None,
-    ),
-    200,
+  dialog_response(handling, generated_key_dialog(generated, "", None), 200)
+}
+
+/// 生成した鍵のダイアログ。鍵の npub と nsec を出し、ラベルの欄に `label` を入れ、`problem` が
+/// あれば先頭にその理由を出す。
+fn generated_key_dialog(
+  generated: Account,
+  label: String,
+  problem: Option(dashboard.GeneratedKeyProblem),
+) -> dashboard.OpenDialog {
+  dashboard.GeneratedKeyOpen(
+    account.npub(generated),
+    account.nsec(generated),
+    label,
+    problem,
   )
 }
 
@@ -1361,8 +1359,7 @@ fn import_account(handling: Handling) -> Response {
       dialog_response(handling, dashboard.AddAccountOpen(label, reason), status)
     })
   }
-  use _account, _label <- register(handling, reject_label, on_failure)
-  wisp.redirect(to: "/")
+  register(handling, reject_label, on_failure)
 }
 
 /// 生成した鍵のダイアログから送られた鍵の登録。nsec はそこで表示済みなので描画せず、
@@ -1370,38 +1367,28 @@ fn import_account(handling: Handling) -> Response {
 /// 生成した鍵を失わないよう、送られた nsec のダイアログを理由付きで開いて返す（状態コードは
 /// nsec 入力による登録と同じ。この POST の応答の本文だけに出る）。
 fn register_generated_account(handling: Handling) -> Response {
-  let generated_key_open = fn(generated, label, problem) {
-    dashboard.GeneratedKeyOpen(
-      account.npub(generated),
-      account.nsec(generated),
-      label,
-      Some(problem),
-    )
-  }
   let reject_label = fn(generated, label, reason) {
-    generated_key_open(generated, label, dashboard.InvalidLabel(reason))
+    generated_key_dialog(generated, label, Some(dashboard.InvalidLabel(reason)))
   }
   let on_failure = fn(generated, label, failure) {
     let #(problem, status) = generated_key_problem(failure)
     dialog_response(
       handling,
-      generated_key_open(generated, label, problem),
+      generated_key_dialog(generated, label, Some(problem)),
       status,
     )
   }
-  use _account, _label <- register(handling, reject_label, on_failure)
-  wisp.redirect(to: "/")
+  register(handling, reject_label, on_failure)
 }
 
-/// 登録の 2 つのルートが共有する検査と失敗の経路。nsec が不正なら 400 でアカウントの追加のダイアログを、
-/// ラベルだけが不正なら 400 で `reject_label` が選ぶダイアログを開いて返す。バンカーの失敗は
-/// `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた値から制御文字を除いた値を入れる。
-/// nsec のフォームの値はそのまま反射しない。
+/// 登録の 2 つのルートが共有する検査と登録。nsec が不正なら 400 でアカウントの追加のダイアログを、
+/// ラベルだけが不正なら 400 で `reject_label` が選ぶダイアログを開いて返す。登録できればダッシュ
+/// ボードへ 303 で戻し、バンカーの失敗は `on_failure` に渡す。どの失敗でも、ラベルの欄には送られた
+/// 値から制御文字を除いた値を入れる。nsec のフォームの値はそのまま反射しない。
 fn register(
   handling: Handling,
   reject_label: fn(Account, String, i18n.Message) -> dashboard.OpenDialog,
   on_failure: fn(Account, String, ChangeFailure) -> Response,
-  on_success: fn(Account, String) -> Response,
 ) -> Response {
   use <- require_method(handling, http.Post)
   use form <- wisp.require_form(handling.request)
@@ -1415,10 +1402,10 @@ fn register(
       case parse_label(raw_label) {
         Error(reason) -> reject(reject_label(account, echoed_label, reason))
         Ok(label) ->
-          case handling.context.add_account(account, label) {
-            Ok(Nil) -> on_success(account, label)
-            Error(failure) -> on_failure(account, echoed_label, failure)
-          }
+          redirect_home_or(
+            handling.context.add_account(account, label),
+            on_failure(account, echoed_label, _),
+          )
       }
   }
 }
@@ -1489,10 +1476,9 @@ fn new_relay(handling: Handling) -> Response {
   case parse_relay_url(raw_url), roles {
     Error(reason), _ | _, Error(reason) -> redraw(i18n.Translated(reason), 400)
     Ok(url), Ok(roles) ->
-      relay_change_response(
-        handling,
+      redirect_home_or(
         handling.context.add_relay(url, roles),
-        redraw,
+        relay_failure_response(handling, _, redraw),
       )
   }
 }
@@ -1516,10 +1502,10 @@ fn relay_roles(form: wisp.FormData) -> Result(relay_list.Roles, i18n.Message) {
   |> result.replace_error(i18n.RelayRoleRequired)
 }
 
-/// リレーの変更の失敗の応答。書き込まれていないことが確定していれば、`redraw` で同じダイアログを開き直して
-/// 409、DB には書けたが確かめられなければ 202 の通知ページにする。対象の行が DB に無ければ 404。
-/// 202 にする理由は `change_failure_response` と同じで、確かめられない変更を「拒否された」と
-/// 見せると利用者がやり直してしまうからである。
+/// リレーの変更の失敗の応答。書き込まれていないことが確定していれば、`redraw` で同じダイアログを
+/// 開き直して 409、DB には書けたが確かめられなければ 202 の通知ページにする。対象の行が DB に
+/// 無ければ 404。確かめられない変更を 202 にするのは、「拒否された」と見せると利用者が同じ変更を
+/// やり直してしまうからである。
 fn relay_failure_response(
   handling: Handling,
   failure: RelayChangeFailure,
@@ -1545,16 +1531,15 @@ fn relay_failure_response(
   }
 }
 
-/// リレーの変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させ
-/// ない）、失敗なら `relay_failure_response` に渡す。追加、用途の変更、削除が使う。
-fn relay_change_response(
-  handling: Handling,
-  outcome: Result(Nil, RelayChangeFailure),
-  redraw: fn(i18n.Reason, Int) -> Response,
+/// 変更の結果の応答。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
+/// 失敗なら `on_error` の応答にする。
+fn redirect_home_or(
+  outcome: Result(Nil, failure),
+  on_error: fn(failure) -> Response,
 ) -> Response {
   case outcome {
     Ok(Nil) -> wisp.redirect(to: "/")
-    Error(failure) -> relay_failure_response(handling, failure, redraw)
+    Error(failure) -> on_error(failure)
   }
 }
 
@@ -1661,18 +1646,16 @@ fn relay_action(
       case relay_roles(form) {
         Error(reason) -> redraw(None)(i18n.Translated(reason), 400)
         Ok(roles) ->
-          relay_change_response(
-            handling,
+          redirect_home_or(
             handling.context.update_relay_roles(relay, roles),
-            redraw(Some(roles)),
+            relay_failure_response(handling, _, redraw(Some(roles))),
           )
       }
     }
     dashboard.DeleteRelay ->
-      relay_change_response(
-        handling,
+      redirect_home_or(
         handling.context.delete_relay(relay),
-        redraw(None),
+        relay_failure_response(handling, _, redraw(None)),
       )
   }
 }
@@ -1715,16 +1698,14 @@ fn registered_account_action(
   case action {
     dashboard.EditLabel -> update_label(handling, row, redraw)
     dashboard.RotateSecret ->
-      apply_account_change(
-        handling,
+      redirect_home_or(
         handling.context.rotate_secret(row.signer),
-        redraw(None),
+        change_failure_response(handling, _, redraw(None)),
       )
     dashboard.DeleteAccount ->
-      apply_account_change(
-        handling,
+      redirect_home_or(
         handling.context.remove_account(row.signer),
-        redraw(None),
+        change_failure_response(handling, _, redraw(None)),
       )
     dashboard.RevealPrivateKey -> reveal_private_key(handling, row)
   }
@@ -1763,16 +1744,16 @@ fn unreadable_account_action(
   handling: Handling,
   row: dashboard.SkippedRow,
 ) -> Response {
-  apply_account_change(
-    handling,
+  let redraw = fn(reason, status) {
+    dialog_response(
+      handling,
+      dashboard.UnreadableDeleteOpen(row.pubkey, reason),
+      status,
+    )
+  }
+  redirect_home_or(
     handling.context.remove_account(row.pubkey),
-    fn(reason, status) {
-      dialog_response(
-        handling,
-        dashboard.UnreadableDeleteOpen(row.pubkey, reason),
-        status,
-      )
-    },
+    change_failure_response(handling, _, redraw),
   )
 }
 
@@ -1789,79 +1770,76 @@ fn update_label(
   case parse_label(raw_label) {
     Error(reason) -> redraw(echoed_label)(i18n.Translated(reason), 400)
     Ok(label) ->
-      apply_account_change(
-        handling,
+      redirect_home_or(
         handling.context.update_label(row.signer, label),
-        redraw(echoed_label),
+        change_failure_response(handling, _, redraw(echoed_label)),
       )
   }
 }
 
-/// 変更の結果。成功ならダッシュボードへ 303 で戻し（再読み込みで変更を再送させない）、
-/// 失敗なら `change_failure_response` に渡す。`redraw` は失敗の理由と状態コードで同じダイアログを
-/// 開き直す。
-fn apply_account_change(
-  handling: Handling,
-  outcome: Result(Nil, ChangeFailure),
-  redraw: fn(i18n.Reason, Int) -> Response,
-) -> Response {
-  case outcome {
-    Ok(Nil) -> wisp.redirect(to: "/")
-    Error(failure) -> change_failure_response(handling, failure, redraw)
+/// 利用者に見せるアカウントの変更の失敗の種類。
+type ChangeProblem {
+  /// 変更は反映されていない。登録済みは訳した文言、ストアの失敗は英語のまま届いた理由を持つ。
+  Unapplied(i18n.Reason)
+  /// 変更の対象のアカウントが登録されていない。
+  AccountMissing
+  /// バンカーが今は変更を受け付けられない。英語のまま届いた理由を持つ。
+  Unaccepted(String)
+  /// 変更が反映されたか分からない。確かめられなかった原因を持つ。
+  Unconfirmed(bunker.NotConfirmed)
+}
+
+/// バンカーの変更の失敗を、種類と画面に出す理由と、ダイアログで返すときの状態コードに分ける。
+/// 通知ページにする失敗は通知ページの補助が状態コードを決める。反映されたか分からない失敗を
+/// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が同じ変更を
+/// やり直し、secret の作り直しならもう一度作り直してしまうからである。
+fn change_problem(failure: ChangeFailure) -> #(ChangeProblem, Int) {
+  case failure {
+    bunker.NotApplied(reason) -> #(Unapplied(i18n.Untranslated(reason)), 409)
+    bunker.AccountAlreadyRegistered -> #(
+      Unapplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
+      409,
+    )
+    bunker.AccountNotRegistered -> #(AccountMissing, 409)
+    bunker.NotReady(reason) -> #(Unaccepted(reason), 503)
+    bunker.MaybeApplied(cause) -> #(Unconfirmed(cause), 202)
   }
 }
 
-/// 変更の失敗の応答。反映されなかったなら `redraw` で同じダイアログを開き直して 409 で返し、
-/// 対象が登録されていなければ 404、受け付けられなかったなら 503、反映されたか分からないなら 202 の通知ページにする。
-/// 202 にするのは、反映されたかもしれない変更を「拒否された」と見せると、利用者が
-/// 同じ変更をやり直し、secret の作り直しならもう一度作り直してしまうからである。
-/// 登録済みと未登録の理由、反映されたか分からない原因は、バンカーが型で返すので訳す。
-/// 未登録は一覧に無い署名者の 404 と同じ文言にする。ほかの理由は英語の文字列で届く
-/// ので、訳さずに出す。
+/// アカウントの変更の失敗の応答。反映されなかった変更は `redraw` で同じダイアログを開き直し、
+/// ほかは通知ページにする。未登録は一覧に無い署名者の 404 と同じ文言にする。
 fn change_failure_response(
   handling: Handling,
   failure: ChangeFailure,
   redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
-  case failure {
-    bunker.NotApplied(reason) -> redraw(i18n.Untranslated(reason), 409)
-    bunker.AccountAlreadyRegistered ->
-      redraw(i18n.Translated(i18n.AccountAlreadyRegistered), 409)
-    bunker.AccountNotRegistered ->
+  let #(problem, status) = change_problem(failure)
+  case problem {
+    Unapplied(reason) -> redraw(reason, status)
+    AccountMissing ->
       not_found_notice(handling, i18n.Translated(i18n.AccountNotFound))
-    bunker.NotReady(reason) ->
+    Unaccepted(reason) ->
       unavailable_notice(handling, i18n.AccountsNotAvailable, reason)
-    bunker.MaybeApplied(cause) ->
-      not_confirmed_notice(
-        handling,
-        i18n.Translated(not_confirmed_message(cause)),
-        202,
-      )
+    Unconfirmed(cause) -> maybe_applied_notice(handling, cause, status)
   }
 }
 
-/// 生成した鍵の登録のバンカーの失敗を、生成した鍵のダイアログの理由と状態コードに写す。状態コードと
-/// 理由の訳し方は `change_failure_response` と同じ対応にする（登録では起きない未登録だけは 409 にする）。
+/// 生成した鍵の登録の失敗を、生成した鍵のダイアログの理由と状態コードに写す。どの失敗も生成した
+/// 鍵を失わないようダイアログで返す。
 fn generated_key_problem(
   failure: ChangeFailure,
 ) -> #(dashboard.GeneratedKeyProblem, Int) {
-  case failure {
-    bunker.NotApplied(reason) -> #(
-      dashboard.NotApplied(i18n.Untranslated(reason)),
-      409,
-    )
-    bunker.AccountAlreadyRegistered -> #(
-      dashboard.NotApplied(i18n.Translated(i18n.AccountAlreadyRegistered)),
-      409,
-    )
-    bunker.AccountNotRegistered -> #(
+  let #(problem, status) = change_problem(failure)
+  case problem {
+    Unapplied(reason) -> #(dashboard.NotApplied(reason), status)
+    AccountMissing -> #(
       dashboard.NotApplied(i18n.Translated(i18n.AccountNotFound)),
-      409,
+      status,
     )
-    bunker.NotReady(reason) -> #(dashboard.NotAccepted(reason), 503)
-    bunker.MaybeApplied(cause) -> #(
+    Unaccepted(reason) -> #(dashboard.NotAccepted(reason), status)
+    Unconfirmed(cause) -> #(
       dashboard.NotConfirmed(not_confirmed_message(cause)),
-      202,
+      status,
     )
   }
 }
@@ -1874,10 +1852,22 @@ fn not_confirmed_message(cause: bunker.NotConfirmed) -> i18n.Message {
   }
 }
 
-/// 変更が反映されたか確かめられなかったときの通知ページ。状態コードは呼び出し側が
-/// 決める（アカウントの変更、リレーの変更、クライアントの接続は 202、承認・拒否・取り消しと
-/// 再有効化は 503）。本文は呼び出し側が訳すかを決める。理由の下に、ダッシュボードで確かめる
-/// よう促す一文を添える。
+/// 反映されたか分からない変更の通知ページ。確かめられなかった原因を表示の言語の文言にして
+/// `status` で返す。
+fn maybe_applied_notice(
+  handling: Handling,
+  cause: bunker.NotConfirmed,
+  status: Int,
+) -> Response {
+  not_confirmed_notice(
+    handling,
+    i18n.Translated(not_confirmed_message(cause)),
+    status,
+  )
+}
+
+/// 変更が反映されたか確かめられなかったときの通知ページを `status` で返す。本文 `reason` は
+/// 訳すかを決めた値で受ける。理由の下に、ダッシュボードで確かめるよう促す一文を添える。
 fn not_confirmed_notice(
   handling: Handling,
   reason: i18n.Reason,
