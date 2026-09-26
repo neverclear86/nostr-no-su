@@ -1685,8 +1685,7 @@ pub fn adding_a_registered_signer_replaces_its_secret_test() {
     ]
 }
 
-/// 登録済みのアカウントを、比べられる形（署名者の公開鍵と secret の組）にする。
-/// `Account` は同じ鍵から作った値同士でも `==` が成り立たないため。
+/// 登録済みのアカウントを、署名者の公開鍵と secret の組にする。
 fn secrets_by_signer(state: engine.Engine) -> List(#(String, String)) {
   engine.registered_accounts(state)
   |> list.map(fn(entry) { #(account.pubkey_hex(entry.0), entry.1) })

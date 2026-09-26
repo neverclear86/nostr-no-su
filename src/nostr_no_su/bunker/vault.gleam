@@ -27,15 +27,11 @@ import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/log
+import nostr_no_su/secret.{type Secret}
 
-/// 32 バイトのマスターキー。
-///
-/// 値は関数に閉じ込めて持つ。opaque 型も実行時にはただのタプルなので、バイト列を
-/// 直接持たせると `string.inspect`、`sys:get_state/1`、`let assert` の失敗値、
-/// クラッシュレポートのどれにもそのまま出てしまうためである。代償として、
-/// **同じ値から作ったマスターキー同士でも `==` は `False` になる。**
+/// 32 バイトのマスターキー。値は `Secret` に閉じ込めて持つ。
 pub opaque type MasterKey {
-  MasterKey(bytes: fn() -> BitArray)
+  MasterKey(bytes: Secret(BitArray))
 }
 
 /// 暗号文の用途。AAD のラベルを決める。
@@ -56,7 +52,7 @@ pub type Row {
   )
 }
 
-/// 復号済みのアカウント 1 件。`Account` を含むので `==` では比べられない。
+/// 復号済みのアカウント 1 件。
 pub type StoredAccount {
   StoredAccount(account: Account, secret: String, label: String)
 }
@@ -131,7 +127,7 @@ pub type MacRow {
 /// 理由の文字列は入力を含まない。
 pub fn master_key_from_hex(raw: String) -> Result(MasterKey, String) {
   hex.decode_exact(string.trim(raw), aes_gcm.key_bytes)
-  |> result.map(fn(bytes) { MasterKey(bytes: fn() { bytes }) })
+  |> result.map(fn(bytes) { MasterKey(bytes: secret.new(bytes)) })
   |> result.replace_error(
     "ACCOUNT_MASTER_KEY must be 64 hex characters (32 bytes)",
   )
@@ -146,7 +142,7 @@ pub fn seal(
   plaintext: BitArray,
   nonce: BitArray,
 ) -> Result(BitArray, Nil) {
-  aes_gcm.seal(key.bytes(), nonce, plaintext, aad(purpose, pubkey))
+  aes_gcm.seal(secret.reveal(key.bytes), nonce, plaintext, aad(purpose, pubkey))
 }
 
 /// 1 行を暗号化する。`seal` を秘密鍵と secret に 1 回ずつ使う。nonce は別々に
@@ -190,7 +186,11 @@ pub fn open_row(key: MasterKey, row: Row) -> Result(StoredAccount, RowError) {
     Error(UndecryptablePrivateKey),
   )
   use privkey <- result.try(
-    aes_gcm.open(key.bytes(), row.encrypted_privkey, aad(PrivateKey, pubkey))
+    aes_gcm.open(
+      secret.reveal(key.bytes),
+      row.encrypted_privkey,
+      aad(PrivateKey, pubkey),
+    )
     |> result.replace_error(UndecryptablePrivateKey),
   )
   use signer <- result.try(
@@ -202,7 +202,7 @@ pub fn open_row(key: MasterKey, row: Row) -> Result(StoredAccount, RowError) {
   )
   use secret <- result.try(
     aes_gcm.open(
-      key.bytes(),
+      secret.reveal(key.bytes),
       row.encrypted_secret,
       aad(ConnectionSecret, pubkey),
     )
@@ -308,7 +308,7 @@ fn mac_key(key: MasterKey) -> BitArray {
   crypto.hmac(
     <<"nostr-no-su:bunker-row-mac:v1":utf8>>,
     crypto.Sha256,
-    key.bytes(),
+    secret.reveal(key.bytes),
   )
 }
 

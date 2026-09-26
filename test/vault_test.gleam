@@ -1,6 +1,4 @@
-//// `bunker/vault` のテスト。`Account` と `MasterKey` は関数を捕捉しているので
-//// `==` で比べず、`pubkey_hex`、`secret`、`label` のような比べられる値を取り出して
-//// 比べる。
+//// `bunker/vault` のテスト。
 
 import gleam/bit_array
 import gleam/list

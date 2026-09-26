@@ -76,8 +76,8 @@ fn account_store_for(
   config.load().account_store
 }
 
-/// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃えばストアが有効になる。マスター
-/// キーは `==` で比べられないので、パターンで取り出して URL だけを比べる。
+/// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃えばストアが有効になり、URL がそのまま
+/// 入る。
 pub fn account_store_is_configured_with_both_variables_test() {
   let assert config.AccountStore(database_url: url, ..) =
     account_store_for(Some(database_url), Some(master_key_hex))

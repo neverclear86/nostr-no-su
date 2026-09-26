@@ -46,8 +46,8 @@ pub type AdminUi {
 /// バンカーのアカウントストアの設定。揃っていなければ起動を中止する。
 ///
 /// マスターキーは読み込みの時点で `MasterKey`（関数に閉じた値）にし、生の 16 進
-/// 文字列を持たない。`MasterKey` を含むので `==` では比べられない。
-/// `database_url` はパスワードを含みうるので、表示やログに入れないこと。
+/// 文字列を持たない。`database_url` はパスワードを含みうるので、表示やログに
+/// 入れないこと。
 pub type AccountStore {
   /// `DATABASE_URL` と `ACCOUNT_MASTER_KEY` が揃っている。
   AccountStore(database_url: String, master_key: vault.MasterKey)

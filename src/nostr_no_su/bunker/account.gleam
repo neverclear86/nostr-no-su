@@ -9,6 +9,7 @@ import gleam/uri
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/nip19
+import nostr_no_su/secret.{type Secret}
 
 /// 秘密鍵のバイト数。
 pub const privkey_bytes = 32
@@ -17,12 +18,9 @@ pub const privkey_bytes = 32
 /// ルーティングにも使うため、バイト列と 16 進表現の両方を持つ。
 ///
 /// 構築の経路は `from_privkey` だけなので、秘密鍵と公開鍵が食い違う値は作れない。
-/// 秘密鍵は関数に閉じ込めて持つ。opaque 型も実行時にはただのタプルなので、
-/// バイト列を直接持たせると `string.inspect`、`sys:get_state/1`、クラッシュ
-/// レポートにそのまま出てしまうためである。代償として、**同じ秘密鍵から作った
-/// 値同士でも `==` は `False` になる。** 比べるときは `pubkey_hex` を比べること。
+/// 秘密鍵は `Secret` に閉じ込めて持つ。
 pub opaque type Account {
-  Account(privkey: fn() -> BitArray, pubkey: BitArray, pubkey_hex: String)
+  Account(privkey: Secret(BitArray), pubkey: BitArray, pubkey_hex: String)
 }
 
 /// 32 バイトの秘密鍵からアカウントを構築する。範囲外のスカラーは拒否する。
@@ -32,7 +30,7 @@ pub fn from_privkey(privkey: BitArray) -> Result(Account, String) {
       case secp256k1.xonly_pubkey(privkey) {
         Ok(pubkey) ->
           Ok(Account(
-            privkey: fn() { privkey },
+            privkey: secret.new(privkey),
             pubkey: pubkey,
             pubkey_hex: hex.encode(pubkey),
           ))
@@ -54,7 +52,7 @@ pub fn generate(random_bytes: fn(Int) -> BitArray) -> Account {
 
 /// 署名と会話鍵の導出に使う 32 バイトの秘密鍵。
 pub fn privkey(account: Account) -> BitArray {
-  account.privkey()
+  secret.reveal(account.privkey)
 }
 
 /// x-only 公開鍵の 32 バイト。
@@ -80,7 +78,7 @@ pub fn npub(account: Account) -> String {
 /// 再表示にだけ使う。
 pub fn nsec(account: Account) -> String {
   // `from_privkey` が 32 バイトであることを検査しているので失敗しない。
-  let assert Ok(text) = nip19.encode(account.privkey(), nip19.Nsec)
+  let assert Ok(text) = nip19.encode(secret.reveal(account.privkey), nip19.Nsec)
     as "an Account always holds a 32-byte private key"
   text
 }
