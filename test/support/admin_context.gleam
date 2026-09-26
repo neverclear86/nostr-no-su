@@ -24,6 +24,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
 import nostr_no_su/relay_store
+import plugin_page_builder
 import wisp
 import wisp/simulate
 
@@ -68,25 +69,10 @@ pub const plugin_action_reject_field = "reject"
 
 /// `console_logger` の `status` ページの記述。節 1 つ、ブロック 1 つ（`text`）を持つ。
 fn console_logger_status_description() -> Dynamic {
-  dynamic.properties([
-    #(
-      dynamic.string("sections"),
-      dynamic.list([
-        dynamic.properties([
-          #(dynamic.string("type"), dynamic.string("section")),
-          #(dynamic.string("title"), dynamic.string("Queue")),
-          #(
-            dynamic.string("blocks"),
-            dynamic.list([
-              dynamic.properties([
-                #(dynamic.string("type"), dynamic.string("text")),
-                #(dynamic.string("text"), dynamic.string("processed 3 events")),
-              ]),
-            ]),
-          ),
-        ]),
-      ]),
-    ),
+  plugin_page_builder.page_sections([
+    plugin_page_builder.section("Queue", [], [
+      plugin_page_builder.typed_text("text", "processed 3 events"),
+    ]),
   ])
 }
 
