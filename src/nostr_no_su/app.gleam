@@ -788,10 +788,10 @@ pub fn reenable_plugin(
 ) -> Result(Nil, admin.ReenableFailure) {
   use spec <- result.try(
     find_plugin(specs, plugin)
-    |> result.replace_error(admin.PluginNotFound("plugin not found")),
+    |> result.replace_error(admin.PluginNotFound),
   )
   plugin_runner.request_reenable(spec.name)
-  |> option.to_result(admin.PluginNotAnswered("plugin runner did not answer"))
+  |> option.to_result(admin.PluginNotAnswered)
 }
 
 /// 管理 UI のプラグインのページの中身。`language` は表示の言語のコードで、言語を

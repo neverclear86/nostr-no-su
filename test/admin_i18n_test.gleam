@@ -247,6 +247,34 @@ pub fn japanese_pages_keep_reasons_from_the_bunker_in_english_test() {
   )
 }
 
+/// 日本語のページで、プラグインの再有効化の失敗の本文が日本語になる（`lang="en"` の `span` が
+/// 無い）。名前に一致するプラグインが無ければ 404、ランナーが応答しなければ 503。
+pub fn japanese_pages_translate_reenable_failures_test() {
+  let cases = [
+    #(admin.PluginNotFound, 404, i18n.PluginNotLoaded),
+    #(admin.PluginNotAnswered, 503, i18n.PluginDidNotRespond),
+  ]
+  use #(failure, status, message) <- list.each(cases)
+  let response =
+    simulate.request(http.Post, "/plugins/reenable")
+    |> with_credentials("admin", password)
+    |> in_japanese
+    |> simulate.form_body([#("name", "broken")])
+    |> admin.handle_request(
+      admin.Context(..context(), reenable_plugin: fn(_name) { Error(failure) }),
+      _,
+    )
+  assert response.status == status
+  let body = simulate.read_body(response)
+  assert string.contains(
+    body,
+    "<p class=\"min-w-0 self-center\">"
+      <> i18n.text(i18n.Japanese, message)
+      <> "</p>",
+  )
+  assert !string.contains(body, "<span lang=\"en\">")
+}
+
 /// 日本語のページで、変更を確認できなかった通知ページの本文が日本語になる（`lang="en"` の
 /// `span` が無い）。アカウントの変更の 202 と承認・拒否・取り消しの 503 のどれも対象。
 pub fn japanese_pages_translate_unconfirmed_changes_test() {

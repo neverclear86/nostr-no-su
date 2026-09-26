@@ -39,10 +39,10 @@ import wisp/simulate
 /// 承認済みのセッションを持たないクライアント。
 const unknown_client = "cccc3333"
 
-/// フェイクの再有効化が、名前に一致するプラグインが無いときに返す理由。
+/// 再有効化で名前に一致するプラグインが無いときの、英語の画面の本文。
 const plugin_not_found = "plugin not found"
 
-/// フェイクの再有効化が、ランナーの無応答として返す理由。
+/// 再有効化でランナーが応答しないときの、英語の画面の本文。
 const plugin_not_answered = "plugin runner did not answer"
 
 /// フェイクのリレーの変更が、DB に書けなかった理由として返す文。
@@ -417,12 +417,15 @@ pub fn reenable_calls_the_context_and_redirects_test() {
 pub fn reenabling_an_unknown_plugin_is_not_found_test() {
   let context =
     admin.Context(..context(), reenable_plugin: fn(_name) {
-      Error(admin.PluginNotFound(plugin_not_found))
+      Error(admin.PluginNotFound)
     })
   let response = post_form(context, "/plugins/reenable", [#("name", "missing")])
   assert response.status == 404
   let body = simulate.read_body(response)
-  assert string.contains(body, plugin_not_found)
+  assert string.contains(
+    body,
+    "<p class=\"min-w-0 self-center\">" <> plugin_not_found <> "</p>",
+  )
   assert string.contains(back_link_head(body), "href=\"/\"")
 }
 
@@ -430,13 +433,16 @@ pub fn reenabling_an_unknown_plugin_is_not_found_test() {
 pub fn reenabling_a_plugin_that_does_not_answer_is_unavailable_test() {
   let context =
     admin.Context(..context(), reenable_plugin: fn(_name) {
-      Error(admin.PluginNotAnswered(plugin_not_answered))
+      Error(admin.PluginNotAnswered)
     })
   let response = post_form(context, "/plugins/reenable", [#("name", "broken")])
   assert response.status == 503
   let body = simulate.read_body(response)
   assert string.contains(body, "Change not confirmed")
-  assert string.contains(body, plugin_not_answered)
+  assert string.contains(
+    body,
+    "<p class=\"min-w-0 self-center\">" <> plugin_not_answered <> "</p>",
+  )
   assert string.contains(body, "Back to dashboard")
 }
 
@@ -817,7 +823,7 @@ pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
     ),
     post_form(
       admin.Context(..context(), reenable_plugin: fn(_name) {
-        Error(admin.PluginNotAnswered(plugin_not_answered))
+        Error(admin.PluginNotAnswered)
       }),
       "/plugins/reenable",
       [#("name", "broken")],
