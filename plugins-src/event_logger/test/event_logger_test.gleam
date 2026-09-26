@@ -376,7 +376,7 @@ const drop_timeout_ms = 1000
 /// メールボックスが空になるまで待つ。プロセスが死んだら即座に `False` を返す
 /// （落ちない性質を見るテストなので、待ち続けても意味がない）。
 fn await_drained(pid: Pid, remaining: Int) -> Bool {
-  case event_logger.pending_messages(pid) {
+  case store.pending_messages(pid) {
     Error(Nil) -> False
     Ok(0) -> True
     Ok(_pending) ->
@@ -467,7 +467,7 @@ pub fn a_slow_database_keeps_the_mailbox_bounded_test() {
         started.data,
         store.Store(store.Row(..row, id: int.to_string(n))),
       )
-      let assert Ok(queued) = event_logger.pending_messages(started.pid)
+      let assert Ok(queued) = store.pending_messages(started.pid)
       process.sleep(flood_interval_ms)
       int.max(longest, queued)
     })

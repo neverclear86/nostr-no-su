@@ -34,7 +34,8 @@
 import event_logger/log
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/erlang/process.{type Name, type Subject}
+import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -92,7 +93,7 @@ pub const create_received_at_index = "CREATE INDEX IF NOT EXISTS events_received
 /// 版 2 で保存の対象とするアカウントのテーブルを `monitored_accounts` の名前で作る。行が
 /// 1 件も無ければ絞らず、全アカウントを保存する。名前は版 4 の `prefix_table_names` で
 /// `event_logger_monitored_accounts` に変わる。
-pub const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
+const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
   pubkey text PRIMARY KEY
 )"
 
@@ -107,8 +108,6 @@ pub type Migration {
 ///
 /// 移行の文は何度実行してもよい形（作る文は `IF NOT EXISTS`、改名する文は `IF EXISTS`）で
 /// 書く。途中で失敗した移行は版が記録されないので、次の読み込みで頭から実行し直される。
-/// どちらでも書けない文を足すときは、`migration_statements_can_be_re_run_test` の条件を
-/// 見直す。
 ///
 /// 適用済みの版の文は書き換えない。版 1〜3 は接頭辞の無い名前（`events`、
 /// `monitored_accounts`）で作り、版 4 で改名するので、新しい DB も版 3 までの DB も同じ
@@ -166,7 +165,7 @@ VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
 
 /// 保存順の直近のイベント。`tags` は jsonb なので text にキャストして読む。
-pub const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM event_logger_events ORDER BY received_at DESC, id DESC LIMIT $1"
+const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM event_logger_events ORDER BY received_at DESC, id DESC LIMIT $1"
 
 /// 保存の対象とするアカウントの読み込み。
 const select_monitored_sql = "SELECT pubkey FROM event_logger_monitored_accounts"
@@ -325,7 +324,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
     Store(row:) ->
       actor.continue(
-        State(..state, availability: persist(state, row, message_queue_len())),
+        State(
+          ..state,
+          availability: persist(
+            state,
+            row,
+            pending_messages(process.self()) |> result.unwrap(0),
+          ),
+        ),
       )
     ReloadMonitored ->
       case state.database.load_monitored() {
@@ -609,8 +615,7 @@ pub fn insert(db: pog.Connection, row: Row) -> Result(Int, pog.QueryError) {
   |> result.map(fn(returned) { returned.count })
 }
 
-/// 保存順の直近のイベントを `limit` 件まで読む。タイムラインのページの組み立て
-/// から直接呼ばれ、ページの期限より短い `recent_timeout_ms` で打ち切る。
+/// 保存順の直近のイベントを `limit` 件まで読み、`recent_timeout_ms` で打ち切る。
 pub fn recent_events(
   db: pog.Connection,
   limit: Int,
@@ -700,6 +705,15 @@ fn row_decoder() -> decode.Decoder(Row) {
   ))
 }
 
-/// 自プロセスの未処理メッセージ数。
-@external(erlang, "event_logger_ffi", "message_queue_len")
-fn message_queue_len() -> Int
+/// 指定したプロセスの未処理メッセージ数。プロセスが居なければ `Error(Nil)`。
+pub fn pending_messages(pid: Pid) -> Result(Int, Nil) {
+  decode.run(process_info(pid, atom.create("message_queue_len")), {
+    use length <- decode.field(1, decode.int)
+    decode.success(length)
+  })
+  |> result.replace_error(Nil)
+}
+
+/// プロセスの情報を 1 項目だけ問い合わせる。
+@external(erlang, "erlang", "process_info")
+fn process_info(pid: Pid, key: Atom) -> Dynamic

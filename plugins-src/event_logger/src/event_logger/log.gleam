@@ -1,9 +1,8 @@
 //// `event_logger` のログ 1 行を OTP logger に出す。
 ////
-//// 本体（`nostr_no_su/log`）は別プロジェクトなので import できず
-//// （`event_logger_test.gleam` の `with_test_database_url` の注釈と同じ事情）、
-//// 同じ形をここに持つ。行の形（`<時刻 UTC> <水準> <本文>`）は本体が起動時に
-//// 設定する formatter が決めるので、ここでは接頭辞を付けて水準を渡すだけである。
+//// 本体（`nostr_no_su/log`）は別プロジェクトなので import できず、同じ形をここに持つ。
+//// 行の形（`<時刻 UTC> <水準> <本文>`）は本体が起動時に設定する formatter が決めるので、
+//// ここでは接頭辞を付けて水準を渡すだけである。
 
 import gleam/dynamic.{type Dynamic}
 
