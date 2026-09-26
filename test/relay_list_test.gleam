@@ -35,51 +35,16 @@ pub fn has_role_follows_each_variant_test() {
     == [monitor, bunker, session]
 }
 
-/// 起動時の一覧は監視の一覧を先に並べ、その後にバンカーの一覧のうち未出の
-/// URL を並べる。両方にある URL は 1 項目にまとまり、バンカーの名前が足される。
-pub fn initial_lists_monitor_relays_first_and_merges_roles_test() {
-  let monitor_a =
-    relay_list.Connection(name: process.new_name("m_a"), url: "wss://a")
-  let monitor_b =
-    relay_list.Connection(name: process.new_name("m_b"), url: "wss://b")
-  let bunker_b =
-    relay_list.Connection(name: process.new_name("b_b"), url: "wss://b")
-  let bunker_c =
-    relay_list.Connection(name: process.new_name("b_c"), url: "wss://c")
-  let entries = relay_list.initial([monitor_a, monitor_b], [bunker_b, bunker_c])
-  assert entries
-    == [
-      relay_list.Entry(
-        url: "wss://a",
-        monitor: Some(monitor_a.name),
-        bunker: None,
-      ),
-      relay_list.Entry(
-        url: "wss://b",
-        monitor: Some(monitor_b.name),
-        bunker: Some(bunker_b.name),
-      ),
-      relay_list.Entry(
-        url: "wss://c",
-        monitor: None,
-        bunker: Some(bunker_c.name),
-      ),
-    ]
-}
-
 /// `open` は URL の形と重複の 2 つを検査し、通れば末尾に足して用途ごとに
 /// 新しい名前を作る。
 pub fn open_refuses_invalid_and_duplicate_relays_test() {
-  let existing =
-    relay_list.initial(
-      [
-        relay_list.Connection(
-          name: process.new_name("m"),
-          url: "wss://existing",
-        ),
-      ],
-      [],
-    )
+  let existing = [
+    relay_list.Entry(
+      url: "wss://existing",
+      monitor: Some(process.new_name("m")),
+      bunker: None,
+    ),
+  ]
   assert relay_list.open(existing, "relay.damus.io", relay_list.MonitorOnly)
     == Error(relay_list.InvalidUrl)
   assert relay_list.open(existing, "wss://existing", relay_list.MonitorOnly)
@@ -108,9 +73,15 @@ pub fn close_refuses_an_unlisted_relay_test() {
 /// `change_roles` は項目の位置を保ち、残る用途の名前を保ち、外した用途は
 /// `None` にする。URL が無ければ `NotListed`。
 pub fn change_roles_keeps_the_position_and_kept_names_test() {
-  let a = relay_list.Connection(name: process.new_name("a"), url: "wss://a")
-  let b = relay_list.Connection(name: process.new_name("b"), url: "wss://b")
-  let entries = relay_list.initial([a, b], [])
+  let b_name = process.new_name("b")
+  let entries = [
+    relay_list.Entry(
+      url: "wss://a",
+      monitor: Some(process.new_name("a")),
+      bunker: None,
+    ),
+    relay_list.Entry(url: "wss://b", monitor: Some(b_name), bunker: None),
+  ]
 
   assert relay_list.change_roles(
       entries,
@@ -127,13 +98,13 @@ pub fn change_roles_keeps_the_position_and_kept_names_test() {
   assert option.is_some(first.bunker)
   // 動かさなかった項目は名前も位置もそのまま。
   assert second
-    == relay_list.Entry(url: "wss://b", monitor: Some(b.name), bunker: None)
+    == relay_list.Entry(url: "wss://b", monitor: Some(b_name), bunker: None)
 
   let assert Ok(kept) =
     relay_list.change_roles(entries, "wss://b", relay_list.Both)
   let assert [_, kept_b] = kept
   // 残した用途（監視）は名前を保つ。
-  assert kept_b.monitor == Some(b.name)
+  assert kept_b.monitor == Some(b_name)
   assert option.is_some(kept_b.bunker)
 }
 
@@ -155,11 +126,13 @@ pub fn open_all_keeps_the_registered_order_test() {
 /// `open_all` は一覧にある URL を黙って飛ばし、位置も一覧も変えない。不正な URL は、
 /// URL つきの拒否として返り一覧に入らない。
 pub fn open_all_skips_listed_and_invalid_relays_test() {
-  let existing =
-    relay_list.initial(
-      [relay_list.Connection(name: process.new_name("m"), url: "wss://a")],
-      [],
-    )
+  let existing = [
+    relay_list.Entry(
+      url: "wss://a",
+      monitor: Some(process.new_name("m")),
+      bunker: None,
+    ),
+  ]
   let registered = [
     relay_list.Registered(url: "wss://a", roles: relay_list.MonitorOnly),
     relay_list.Registered(url: "relay.damus.io", roles: relay_list.MonitorOnly),
@@ -181,7 +154,14 @@ pub fn connections_follow_the_entry_order_test() {
     relay_list.Connection(name: process.new_name("m_b"), url: "wss://b")
   let b_bunker =
     relay_list.Connection(name: process.new_name("bk_b"), url: "wss://b")
-  let entries = relay_list.initial([a, b_monitor], [b_bunker])
+  let entries = [
+    relay_list.Entry(url: "wss://a", monitor: Some(a.name), bunker: None),
+    relay_list.Entry(
+      url: "wss://b",
+      monitor: Some(b_monitor.name),
+      bunker: Some(b_bunker.name),
+    ),
+  ]
 
   assert relay_list.connections(entries, relay_list.Monitor)
     == [

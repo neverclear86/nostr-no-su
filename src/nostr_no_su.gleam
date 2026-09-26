@@ -167,7 +167,6 @@ fn monitor_spec(
   app.Monitor(
     name: name,
     dedup_capacity: dedup_capacity,
-    relays: [],
     subscriptions: subscriptions.monitor_relay_subscriptions(
       config.name,
       name,
@@ -304,7 +303,6 @@ fn bunker_spec(
       auth_url: auth_url(loaded),
       retry_delay: bunker.default_retry_delay,
     ),
-    relays: [],
     subscriptions: fn(signers) {
       fn() {
         signers()
