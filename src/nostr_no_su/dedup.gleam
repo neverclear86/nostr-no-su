@@ -37,7 +37,6 @@ import nostr_no_su/dedup/window.{type Window}
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
-import nostr_no_su/relay_client
 import nostr_no_su/time
 
 /// 再開点の問い合わせを待つ時間。処理は IO を含まないが、積まれた `Incoming` の
@@ -151,12 +150,7 @@ fn handle(state: State(targets), msg: Msg) -> actor.Next(State(targets), Msg) {
     Rejected(relay_url) -> {
       let #(rejected, line) = record_rejection(state.rejected, relay_url)
       case line {
-        Some(text) ->
-          log.write(
-            log.Warning,
-            log.relay_prefix(relay_client.label(relay_url)),
-            text,
-          )
+        Some(text) -> log.write(log.Warning, log.relay_prefix(relay_url), text)
         None -> Nil
       }
       actor.continue(State(..state, rejected: rejected))

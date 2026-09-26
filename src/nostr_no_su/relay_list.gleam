@@ -85,7 +85,8 @@ pub type Registered {
 
 /// 一覧の変更を拒む理由。
 pub type ChangeError {
-  /// `relay_client.to_request` で解釈できない URL。
+  /// `relay_client.to_request` が受けない URL（`ws://` か `wss://` で始まらない、
+  /// ホストが空、または URL として読めない）。
   InvalidUrl
   /// 同じ URL が既に一覧にある。
   AlreadyListed
@@ -273,7 +274,7 @@ pub fn session_connections(
   })
 }
 
-/// URL の形を `relay_client.to_request` と同じ判定で確かめる。
+/// URL が `relay_client.to_request` の受けるリレー URL かを確かめる。
 fn check_url(url: String) -> Result(Nil, ChangeError) {
   case relay_client.to_request(url) {
     Ok(_) -> Ok(Nil)
@@ -459,7 +460,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         let #(url, error) = rejection
         log.write(
           log.Warning,
-          log.relay_prefix(relay_client.label(url)),
+          log.relay_prefix(url),
           "skipped registered relay: " <> skipped_reason(error),
         )
       })
@@ -583,7 +584,7 @@ fn start_connection(state: State, role: Role, connection: Connection) -> Nil {
     Error(reason) ->
       log.write(
         log.Warning,
-        log.relay_prefix(relay_client.label(connection.url)),
+        log.relay_prefix(connection.url),
         "could not open connection: " <> reason,
       )
   }
@@ -602,7 +603,7 @@ fn stop_connection(state: State, role: Role, connection: Connection) -> Nil {
         Error(reason) ->
           log.write(
             log.Warning,
-            log.relay_prefix(relay_client.label(connection.url)),
+            log.relay_prefix(connection.url),
             "could not close connection: " <> reason,
           )
       }

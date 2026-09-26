@@ -77,10 +77,21 @@ pub fn redact_secrets(values: List(String)) -> Nil
 @external(erlang, "logger", "log")
 fn logger_log(level: Level, message: String) -> Dynamic
 
-/// リレー 1 本に関する行の接頭辞。接続そのもの（`relay_connection`）と、その上を
-/// 流れるメッセージ（`relay_client`）が同じ接頭辞を使うため、ここに置く。
-pub fn relay_prefix(relay: String) -> String {
-  "relay " <> relay
+/// リレー 1 本に関する行の接頭辞。リレー URL を受け、スキームを落とした名前
+/// （`relay_label`）を使う。接続そのもの（`relay_connection`）と、その上を流れる
+/// メッセージ（`relay_client`）が同じ接頭辞を使うため、ここに置く。
+pub fn relay_prefix(url: String) -> String {
+  "relay " <> relay_label(url)
+}
+
+/// リレー URL から先頭のスキームだけを取り除いた名前。複数の接続が開いている
+/// ときに、ログ行がどのリレーのものかを示すために使う。スキームの無い値はその
+/// まま返す。
+pub fn relay_label(url: String) -> String {
+  case string.split_once(url, "://") {
+    Ok(#(_scheme, rest)) -> rest
+    _ -> url
+  }
 }
 
 /// プラグインに関するログ行の接頭辞。ランナーも、子プロセスの起動失敗の報告も

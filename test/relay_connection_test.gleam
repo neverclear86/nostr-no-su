@@ -86,7 +86,7 @@ fn start_with_delay(
   let assert Ok(started) =
     relay_connection.start(relay_connection.Settings(
       name: name,
-      relay: "relay.test",
+      relay: "wss://relay.test",
       connect: connect,
       on_connect: fn(_socket) { process.send(reports, Rewired) },
       on_disconnect: fn() { process.send(reports, Unwired) },
