@@ -1,3 +1,5 @@
+//// 内蔵プラグイン。受信したイベントの概要を 1 件 1 行で標準出力に書く。
+
 import gleam/int
 import gleam/option.{None}
 import gleam/string

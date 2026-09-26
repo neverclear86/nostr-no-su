@@ -1,136 +1,23 @@
-//// スーパービジョンツリー。
+//// スーパービジョンツリーの組み立て。ルートの子と、その下のサブツリーの形は次のとおり。
 ////
 //// ```
 //// root (one_for_one)
-//// |-- relay_list   (worker)      : 実行時のリレーの一覧と、用途ごとの
-//// |                                connections (factory) の子の起動・停止
-//// |-- plugins      (one_for_one): プラグインごとのランナー
-//// |   |-- children(<plugin>) (one_for_one / Temporary): 子仕様を持つプラグインだけ
-//// |   `-- runner(<plugin>)   (worker  / Permanent)
-//// |-- bunker       (rest_for_one): アカウントストアの接続プール、ロックのプール、
-//// |                                バンカーアクター、次に connections (factory) と
-//// |                                session_connections (factory)
-//// |-- monitor      (rest_for_one): 重複排除ディスパッチャー、
-//// |                                connections (factory)、再開点の保存
-//// |-- avatars      (worker)      : アカウントのアイコンの URL のキャッシュ
-//// `-- admin        (mist)        : 管理 UI の HTTP サーバー
+//// |-- relay_list (worker)      : リレーの一覧と connections (factory) の子の起動・停止
+//// |-- plugins    (one_for_one) : children(<plugin>) (Temporary) と runner(<plugin>)
+//// |-- bunker     (rest_for_one): 接続プール、ロックのプール、アクター、connections、
+//// |                              session_connections
+//// |-- monitor    (rest_for_one): dedup、connections、再開点の保存
+//// |-- avatars    (worker)      : アカウントのアイコンの URL のキャッシュ
+//// `-- admin      (mist)        : 管理 UI の HTTP サーバー
 //// ```
 ////
-//// `connections (factory, 5/10)` と `session_connections` は用途（監視・バンカー・
-//// セッションのリレー）ごとの `factory_supervisor` で、その下にリレーの数だけ
-//// `relay_connection` が並ぶ。
-//// 静的な `relay_connection × N` ではなく factory にしているのは、`relay_list`
-//// が実行時に子を増減できるようにするためである（下の「実行時のリレーの増減」を
-//// 参照）。
+//// **ルートの子は `relay_list` をすべてより先に、`plugins` と `bunker` を `monitor` より
+//// 先に追加すること。** 逆順で壊れる配線は `start` の行内コメントにある。
 ////
-//// 各サブツリーを `rest_for_one` にしているのは、先頭のアクターが再起動した際に
-//// 後続の接続もまとめて落とすため。接続は復帰の過程で購読を張り直し publisher を
-//// 登録し直すので、再起動したバンカーが再び生きたソケットに配線される。アクター
-//// には名前が付いているため、接続は名前で宛先を指定でき、死んだプロセスの
-//// subject を握り続けることがない。
-////
-//// **アカウントの変更はバンカーアクターを再起動しない。** 再起動すると
-//// `rest_for_one` で接続も落ち、インメモリのセッションが消えるためである。署名者の
-//// 集合が変わったら、アクターは `relay_list` に `ResubscribeAll` を送り、
-//// `relay_list` が監視とバンカーの両方の用途の現在の全接続へ購読の張り直しを
-//// 依頼し、各接続アクターが生きたソケットへ転送する。接続アクターを経由する
-//// ので、接続の途中や再接続を待っている間の依頼も、変更後の署名者で購読する
-//// ことになる。
-////
-//// **アカウントストアの接続プールはバンカーのサブツリーの先頭に置く。** pgo は
-//// チェックアウト先のプール名が未登録だと、呼び出し側のプロセスを `noproc` で
-//// exit させる。プールを先頭に置けば、バンカーアクターはプールが登録された後に
-//// しか起動せず、プールが落ちればアクターも止められてから起動し直すので、未登録の
-//// プールを叩く状況が構造上生じない。代償はプールの再起動がバンカーアクターの
-//// 再起動（インメモリのセッションの消失）を伴うことだが、DB の停止や再起動では
-//// プールのプロセスは死なない（pgo が再接続を内部に閉じ込め、クエリーは値で
-//// 失敗する）ので、これが起きるのはプール自体のバグか外部からの kill に限られる。
-////
-//// DB の障害がルートの `restart_tolerance(3, 60)` を消費しないのは、DB の停止が
-//// プロセスの死にならず、バンカーアクターがストアの失敗で落ちず（再試行を予約して
-//// ログを 1 行出すだけ）、起動時に DB を待たない（読み込みは initialiser が積む
-//// メッセージで行う）からである。監視とプラグインはバンカーのサブツリーと兄弟
-//// なので、DB の障害に巻き込まれない。
-////
-//// 監視の購読の評価はバンカーと DB（再開点）への問い合わせに依るが、応答が無ければ
-//// 開いている購読を変えない（`relay_client.sync`）。再開点の保存はディスパッチャー
-//// とは別のアクターが行う。
-////
-//// **イベント保存はこのツリーには無い。** 外部プラグイン `event_logger` が
-//// `plugin_children/1` で申告する子として `plugins` サブツリーの下で動く。
-////
-//// 管理 UI は他のどれにも依存しないのでルート直下に置く。状態は名前付きアクター
-//// への問い合わせで読むため、UI が再起動しても、問い合わせ先が再起動しても、
-//// 互いの配線をやり直す必要がない。
-////
-//// プラグインのランナーは監視サブツリーの中ではなくルート直下に置く。監視と
-//// 独立に、読み込んだプラグインをツリーに載せて管理 UI に状態を見せられるように
-//// するためで、ディスパッチャーが再起動してもランナーは巻き添えにならない。
-//// プラグイン同士は独立なのでこのサブツリーは `one_for_one` にする。
-//// **ルートの子は `relay_list` をすべてより先に、`plugins` を `monitor` より
-//// 先に追加すること。** `relay_list` が後だと、起動直後に `connections` の
-//// factory が送る `Repopulate` が未登録の名前へ送られて捨てられ、初期のリレーが
-//// 起動されない。`plugins` が後だとディスパッチャーが未登録のランナー名へ送り、
-//// 起動直後のイベントを取りこぼす。
-//// **`bunker` も `monitor` より先に追加すること。** 逆順だと、監視の接続の最初の
-//// 購読の評価がバンカーの名前の登録より先に走り、定義を得られずに再試行を待つ。
-////
-//// **実行時のリレーの増減は `relay_list` が担う。** 用途（監視・バンカー）
-//// ごとの接続の一覧を加えた順に持ち、バンカーのセッションのリレーのうち基本の組に
-//// 無い URL の接続（`SessionOnly` の用途）も持ち、`open_relay` / `close_relay` /
-//// `change_relay_roles` による変更と、`connections` の factory の子の
-//// 起動・停止を、自分のハンドラーで直列に行う（同時に届く変更の重なりを
-//// 避けるため）。factory は `rest_for_one` の再起動で動的な子をすべて失うため、
-//// `relay_list` は再起動後に届く `Repopulate` で一覧から起動し直す。止めた
-//// 接続（バンカーとセッションのリレーの用途）は `on_disconnect` を経て
-//// `RemovePublisher` が送られ、バンカーの送信先から外れる。署名者の変化による
-//// 張り直しは、`relay_list` の `ResubscribeAll` が監視とバンカーの両方の用途の
-//// 現在の全接続へ送り、
-//// プラグインのランナーの起動・再有効化・取り直しの完了による張り直しは監視の
-//// 用途の接続だけへ送る（バンカーの購読はプラグインに関わらないため）。
-//// **起動時のリレーは `relays` テーブルの行から決まる。** バンカーが読み込みに
-//// 成功するたびに `OpenRegistered` で `relay_list` へ渡り、一覧に無い URL だけが
-//// 足される。詳細と既知の窓は `relay_list` のモジュール doc を参照。
-////
-//// このサブツリーの `restart_tolerance` は安全網であって、設計の拠りどころでは
-//// ない。プラグインの例外・異常終了・ハングはランナーの中で完結して**プロセスの
-//// 死にならない**（`plugin_runner` を参照）ため、プラグインの不調では再起動が
-//// 起きず、ルートの `restart_tolerance(3, 60)` に到達しようがない。毎イベントで
-//// クラッシュするプラグインに対して有限の再起動許容回数は原理的に成立しないため、
-//// この構造で保証している。
-////
-//// **プラグインが申告した子プロセス**（任意エクスポート `plugin_children/0`）は
-//// 普通にクラッシュループしうるため、ランナーと同じ扱いでは上の主張が崩れる。
-//// 歯止めは段を増やすことではなく**再起動の型**で作る。プラグイン 1 つぶんの子を
-//// 専用のスーパーバイザーにまとめ、その子仕様を **`Temporary`** にする。
-////
-//// - **段を挟むだけでは足りない。** クラッシュループはどの階層の有限な
-////   `intensity` も必ず超えるので、段を増やしても親に到達するまでの時間が
-////   延びるだけである。
-//// - 子スーパーバイザーが自分の許容回数を超えると、**理由 `shutdown`** で終了
-////   する。親でこれが当たるのは理由ベースの `do_restart(shutdown, ...)`
-////   （stdlib-8.0.1 / OTP 29.0.2、`supervisor.erl:1432-1434`）で、この節は
-////   `del_child/2` を呼んで終わり **`add_restart/1`（:2260-2281）を通らない**。
-////   ゆえに親の許容回数は消費されない。**これは Temporary でも Transient でも
-////   同じ**である。
-//// - **Temporary を選ぶ理由は 2 つ。** (a) `del_child/2`（:1825-1836）が子の仕様
-////   ごと削除するのは `temporary` のときだけで、Transient は `pid = undefined` の
-////   まま `which_children` に残り続ける。(b) 許容回数超過**以外**の理由（外からの
-////   `exit(Pid, kill)` など）で子スーパーバイザーが落ちたとき、Transient は再起動
-////   され、その再起動が `add_restart/1` を通って親の許容回数を消費する。ループ
-////   すれば親を道連れにする。**Temporary にはこの経路が無い。**
-//// - **捨てたもの**: Transient なら仕様が `pid=undefined` で残るため、将来
-////   `supervisor:restart_child/2` の FFI を足せば実行時に子を復帰させる道が残る。
-////   Temporary はその道を捨てて (b) の耐性を買っている。
-//// - **代償**: 一度あきらめた子は仕様ごと消えるため、**ランナーを kill しても子は
-////   戻らない**。復帰は本体の再起動のみである（`static_supervisor` には
-////   `start_child` 相当の公開 API が無く、`Supervisor` も opaque）。子を失った
-////   プラグインはランナーが生き続け、イベント処理関数の連続失敗で
-////   `disabled: <理由>` になってダッシュボードに残る。**素直に劣化する。**
-//// - **起動時の失敗はアプリを止めない。** `Temporary` が効くのは再起動のときだけ
-////   なので、初回起動の失敗は空のスーパーバイザーで吸収する
-////   （`start_plugin_children`）。失敗の理由は `plugin_children` が子ごとに出す
-////   1 行に出る。
+//// 戦略と許容回数、プールの置き場所、再起動の許容回数に頼らない設計は
+//// `docs/architecture.md` の「スーパービジョンツリー」に、判断の理由は
+//// `docs/design-decisions.md` の「スーパービジョンツリー」と「プラグインが申告した
+//// 子プロセスは Temporary で載せる」にある。
 
 import gleam/bool
 import gleam/dict.{type Dict}
@@ -305,6 +192,7 @@ pub fn start(spec: Spec) -> actor.StartResult(Supervisor) {
   |> add_plugins(spec)
   // バンカーは監視より先に起動する。監視の接続が購読を組み立てるために送る
   // `GetSigners` を、バンカーの名前の登録と最初の読み込みの後に処理させるため。
+  // 逆順だと最初の購読の評価が定義を得られず、再試行を待つ。
   |> supervisor.add(
     supervisor.supervised(bunker_tree(spec, spec.bunker, factories)),
   )
@@ -373,15 +261,8 @@ fn add_plugins(builder: Builder, spec: Spec) -> Builder {
   }
 }
 
-/// プラグインのサブツリー。プラグイン同士は独立なので `one_for_one`。ここの
-/// 許容回数は安全網であって、設計の拠りどころではない。プラグインの例外・異常
-/// 終了・ハングはランナーの中で完結して**プロセスの死にならない**ため、この
-/// 回数はプラグインの不調では消費されない。消費されるのは外部からの強制終了の
-/// ような、イベントストリームでは誘発できない事象だけである（冒頭の doc も
-/// 参照）。ランナーには、起動・再有効化・取り直しの完了のたびに監視の購読を
-/// 評価し直させる張り直しの操作を渡す。この張り直しは監視の用途の接続だけへ
-/// 送り、バンカーの接続には送らない（バンカーの購読はプラグインに関わらない
-/// ため）。
+/// プラグインのサブツリー。プラグイン同士は独立なので `one_for_one`。ランナーに渡す
+/// 張り直しは監視の用途の接続だけへ送る（バンカーの購読はプラグインに関わらない）。
 fn plugins_tree(spec: Spec) -> Builder {
   let resubscribe = fn() {
     relay_list.resubscribe_all(spec.relay_list, [relay_list.Monitor])
@@ -408,10 +289,8 @@ fn add_plugin_children(builder: Builder, plugin: Plugin) -> Builder {
   }
 }
 
-/// プラグイン 1 つぶんの子プロセス。**`Temporary` にすることが歯止めそのもの**
-/// で、子がクラッシュループしてこのスーパーバイザーが諦めても、親は再起動せず
-/// 許容回数も消費しない。外から kill されたときに再起動されないことも Temporary
-/// が担っている（冒頭の doc を参照）。
+/// プラグイン 1 つぶんの子プロセスのスーパーバイザーを、`Temporary` の子仕様にする。
+/// 理由は `docs/design-decisions.md` の「プラグインが申告した子プロセスは Temporary で載せる」。
 fn plugin_children_tree(
   name: String,
   children: List(ChildSpecification(Pid)),
@@ -428,14 +307,9 @@ fn plugin_children_supervisor() -> Builder {
   |> supervisor.restart_tolerance(intensity: 5, period: 10)
 }
 
-/// 子の起動に失敗しても本体の起動は止めない。理由を 1 行出し、空のスーパー
-/// バイザーで代替する。ここで Error を返すと `plugins` の起動が失敗し、ルート
-/// まで伝播してアプリが起動しなくなる（Temporary は初回起動には効かない）。
-///
-/// **`StartError` は整形しない。** `gleam_otp_external` が
-/// `{shutdown, {failed_to_start_child, Id, Reason}}` を `InitFailed("shutdown")`
-/// に潰すため、ここには理由が届かない。真の理由は `plugin_children` が子ごとに
-/// 出す 1 行と、BEAM の supervisor report にある。
+/// 子の起動に失敗しても本体の起動は止めず、Warning を 1 行出して空のスーパーバイザーで代える。
+/// `StartError` は `gleam_otp_external` が `InitFailed("shutdown")` に潰して理由を持たないので
+/// 整形しない。理由は `plugin_children` が子ごとに出す 1 行と supervisor report にある。
 fn start_plugin_children(
   name: String,
   builder: Builder,
@@ -578,8 +452,7 @@ fn monitor_tree(
 /// イベントは落とし、ディスパッチャーに `dedup.Rejected` で数えさせる。照合を通ったイベントは、
 /// 取り直しの購読のものならそのプラグインのランナーへ直接送り、監視の購読のもの
 /// ならディスパッチャーへ渡す。終わり（EOSE）は、取り直しの購読のものだけを
-/// ランナーに取り直しの完了として伝える。テストが購読 id ごとの振り分けを直接
-/// 確かめられるよう公開する。
+/// ランナーに取り直しの完了として伝える。
 pub fn monitor_handler(
   name: Name(dedup.Msg),
   excludes_kind: fn(Int) -> Bool,
@@ -639,8 +512,9 @@ fn send_to_runner(
 
 /// バンカーサブツリー。接続プール、ロックのプール、アクター、基本のバンカーリレーの
 /// 接続の `connections` factory、セッションのリレーの接続の factory の順に置く。
-/// アクターはプールが登録された後に起動する必要があり（冒頭の doc を参照）、各接続は
-/// アクターに publisher を登録するため、アクターと一緒に再起動する必要がある。
+/// アクターはプールが登録された後に起動する必要があり（`docs/architecture.md` の
+/// 「スーパービジョンツリー」を参照）、各接続はアクターに publisher を登録するため、
+/// アクターと一緒に再起動する必要がある。
 /// アクターが署名者の変化で依頼する購読の張り直しは、`relay_list` へ送るだけで
 /// 待たない（`ResubscribeAll` が監視とバンカーの現在の全接続へ転送する）。
 /// セッションのリレーの変化は `relay_list.sync_session_relays` へ送る。
@@ -865,7 +739,7 @@ pub fn change_relay_roles(
 }
 
 /// プラグインごとの表示行。状態は各ランナーへ並行に問い合わせ、締め切りまでに
-/// 答えなかったランナーは `None`（応答なし）にする。単体テストが呼べるよう公開する。
+/// 答えなかったランナーは `None`（応答なし）にする。
 pub fn plugin_rows(
   specs: List(PluginSpec),
   deadline: task.Deadline,
@@ -946,7 +820,7 @@ pub fn plugin_page_action(
 }
 
 /// 管理 UI のページと実行の呼び出しに渡す、登録アカウントの一覧。`bunker.accounts`
-/// の一覧を `plugin_config.PageAccount` に写す。単体テストが呼べるよう公開する。
+/// の一覧を `plugin_config.PageAccount` に写す。
 pub fn page_accounts(
   spec: Spec,
 ) -> Result(List(plugin_config.PageAccount), String) {
@@ -990,7 +864,7 @@ pub fn relay_rows(
 }
 
 /// 名前ごとの接続の状態を並行に問い合わせる。締め切りまでに答えなかった接続は
-/// `None`。単体テストが呼べるよう公開する。
+/// `None`。
 pub fn relay_statuses(
   names: List(Name(relay_connection.Msg)),
   deadline: task.Deadline,
@@ -1077,7 +951,7 @@ fn store_failure(error: db.StoreError) -> admin.RelayChangeFailure {
 /// DB の行ごとに、用途の状態を `relay_list` の項目から求める。行の順は `relays`
 /// のままで、`entries` にだけある URL は出さない。使う用途は、その用途の接続が
 /// あれば `status` の結果（締め切りまでに答えなければ `Unanswered`）、無ければ
-/// 未接続にする。単体テストが呼べるよう公開する。
+/// 未接続にする。
 pub fn merge_relay_rows(
   relays: List(relay_store.Relay),
   entries: List(relay_list.Entry),
@@ -1255,7 +1129,6 @@ fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
 }
 
 /// 承認待ちを管理 UI の行にする。失効までの残り秒は問い合わせた時点で求める。
-/// 単体テストが呼べるよう公開する。
 pub fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
   let now = time.now_seconds()
   use entry <- list.map(pending)

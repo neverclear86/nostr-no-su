@@ -697,8 +697,9 @@ pub fn crash_looping_plugin_child_does_not_take_down_the_app_test() {
 }
 
 /// プラグイン専用のスーパーバイザーを外から繰り返し強制終了しても、親は再起動を
-/// 消費しない。**`Temporary` を選んだ根拠 (b) の回帰テスト**（`app.gleam` 冒頭の
-/// doc を参照）。
+/// 消費しない。**`Temporary` を選んだ根拠（許容回数の超過以外の理由で落ちても
+/// 再起動されない）の回帰テスト**（`docs/design-decisions.md` の「プラグインが申告した
+/// 子プロセスは Temporary で載せる」を参照）。
 ///
 /// Temporary の子は決して再起動されないので、1 度目の kill でその子仕様ごと消え、
 /// 以後は kill する対象すら残らない。`Transient` にすると kill のたびに再起動が
