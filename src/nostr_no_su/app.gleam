@@ -1249,13 +1249,15 @@ pub fn skipped_rows(spec: Spec) -> Result(List(dashboard.SkippedRow), String) {
   bunker.skipped(spec.bunker.name) |> result.map(list.map(_, skipped_row))
 }
 
-/// 飛ばした行 1 件の表示行。npub は `pubkey` 列から導く。`MalformedPubkey` の
-/// 行だけは導けないので空文字列にし、その行は識別を描かない。
+/// 飛ばした行 1 件の表示行。npub は `pubkey` 列を 32 バイトの 16 進として読めたときだけ導き、
+/// 読めない行（`MalformedPubkey` の行）では `None` にする。その行は識別を描かない。
 fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
-  let npub = case hex.decode(row.pubkey) {
-    Ok(bytes) -> nip19.encode(bytes, nip19.Npub) |> result.unwrap("")
-    Error(Nil) -> ""
-  }
+  let npub =
+    hex.decode(row.pubkey)
+    |> result.try(fn(bytes) {
+      nip19.encode(bytes, nip19.Npub) |> result.replace_error(Nil)
+    })
+    |> option.from_result
   dashboard.SkippedRow(
     pubkey: row.pubkey,
     npub: npub,

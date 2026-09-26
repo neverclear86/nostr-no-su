@@ -538,7 +538,7 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey:,
-          npub: "npub1unreadable",
+          npub: Some("npub1unreadable"),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1223,7 +1223,7 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: "abcd1234",
-          npub: "npub1unreadable",
+          npub: Some("npub1unreadable"),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1260,7 +1260,7 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: "not-a-valid-pubkey-value",
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),
@@ -1286,7 +1286,7 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey:,
-          npub:,
+          npub: Some(npub),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1607,7 +1607,7 @@ fn dialog_snapshot() -> dashboard.Snapshot {
     skipped: Ok([
       dashboard.SkippedRow(
         pubkey: dialog_skipped,
-        npub: "npub1skippeddialogvalueabcdefghijklmnopq",
+        npub: Some("npub1skippeddialogvalueabcdefghijklmnopq"),
         label: "old wallet",
         reason: vault.UndecryptablePrivateKey,
       ),
@@ -2612,11 +2612,10 @@ pub fn overview_color_rules_test() {
     dashboard.Overview(
       dashboard.NoValue,
       [dashboard.OverviewNote(failure, i18n.OverviewNotAvailable)],
-      linked: True,
-      highlighted: False,
+      emphasis: dashboard.Linked,
     )
   let item = fn(value, notes) {
-    dashboard.Overview(value, notes, linked: True, highlighted: False)
+    dashboard.Overview(value, notes, emphasis: dashboard.Linked)
   }
   let plain = fn(text) { dashboard.OverviewNote(None, text) }
   let note = fn(chip, text) { dashboard.OverviewNote(Some(chip), text) }
@@ -2645,8 +2644,7 @@ pub fn overview_color_rules_test() {
       dashboard.Overview(
         dashboard.Count(0),
         [plain(i18n.PendingExpireAfterMinutes(10))],
-        linked: False,
-        highlighted: False,
+        emphasis: dashboard.Unlinked,
       ),
     ),
     #(
@@ -2655,8 +2653,7 @@ pub fn overview_color_rules_test() {
       dashboard.Overview(
         dashboard.Count(2),
         [plain(i18n.AwaitingDecision), plain(i18n.SoonestExpiry("0:45"))],
-        linked: True,
-        highlighted: True,
+        emphasis: dashboard.Highlighted,
       ),
     ),
     #(
@@ -2675,7 +2672,7 @@ pub fn overview_color_rules_test() {
         skipped: Ok([
           dashboard.SkippedRow(
             pubkey: "abcd1234",
-            npub: "npub1unreadable",
+            npub: Some("npub1unreadable"),
             label: "old wallet",
             reason: vault.UndecryptablePrivateKey,
           ),

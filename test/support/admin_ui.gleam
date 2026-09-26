@@ -111,13 +111,13 @@ pub fn pages(language: i18n.Language) -> List(String) {
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey: skipped_hex,
-          npub: "npub1example",
+          npub: Some("npub1example"),
           label: "label-b",
           reason: vault.UndecryptablePrivateKey,
         ),
         dashboard.SkippedRow(
           pubkey: "not-a-pubkey",
-          npub: "",
+          npub: None,
           label: "",
           reason: vault.MalformedPubkey,
         ),

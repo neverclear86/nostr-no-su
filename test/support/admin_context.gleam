@@ -513,7 +513,7 @@ pub const skipped_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag
 pub fn skipped_row() -> dashboard.SkippedRow {
   dashboard.SkippedRow(
     pubkey: skipped_pubkey,
-    npub: skipped_npub,
+    npub: Some(skipped_npub),
     label: "old wallet",
     reason: vault.UndecryptablePrivateKey,
   )

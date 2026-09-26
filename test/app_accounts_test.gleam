@@ -1128,7 +1128,8 @@ pub fn adding_a_skipped_row_is_rejected_as_registered_test() {
 }
 
 /// 直近の読み込みで飛ばされた行は `app.skipped_rows` でも取れ、管理 UI の行
-/// （npub とラベルを持つ）になる。
+/// （npub とラベルを持つ）になる。`pubkey` 列を 32 バイトの 16 進として読めない行
+/// （16 進でない値と、長さの違う 16 進）の npub は `None` になる。
 pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -1143,6 +1144,16 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
               pubkey: skipped_pubkey,
               label: "old wallet",
               reason: vault.UndecryptablePrivateKey,
+            ),
+            vault.Skipped(
+              pubkey: "abcd",
+              label: "",
+              reason: vault.MalformedPubkey,
+            ),
+            vault.Skipped(
+              pubkey: "zz",
+              label: "",
+              reason: vault.MalformedPubkey,
             ),
           ]),
         ),
@@ -1163,11 +1174,13 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
 
-  let assert Ok([row]) = app.skipped_rows(spec)
+  let assert Ok([row, wrong_length, not_hex]) = app.skipped_rows(spec)
   assert row.pubkey == skipped_pubkey
-  assert row.npub == account.npub(account_for(other_signer_key))
+  assert row.npub == Some(account.npub(account_for(other_signer_key)))
   assert row.label == "old wallet"
   assert row.reason == vault.UndecryptablePrivateKey
+  assert wrong_length.npub == None
+  assert not_hex.npub == None
   stop_tree(tree)
 }
 
