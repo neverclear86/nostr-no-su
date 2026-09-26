@@ -48,7 +48,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
-import gleam/string
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
@@ -68,10 +67,6 @@ pub const default_limits: Limits = Limits(
   max_queue_len: 1000,
   max_failures: 5,
 )
-
-/// 理由として保持する文字列の上限。ダッシュボードのセルとログ 1 行に収める。
-/// `plugin_loader` が読み込めなかった候補の理由を切るのにも使う。
-pub const max_reason_chars = 120
 
 /// ログにだけ出すスタックトレースの上限。状態には持たない。
 const max_detail_chars = 400
@@ -517,15 +512,6 @@ fn detail_suffix(detail: Option(String)) -> String {
   }
 }
 
-/// 長い文字列を末尾に省略記号を付けて切る。プラグインが投げた理由やスタック
-/// トレースは数百文字になり、ログ 1 行にもダッシュボードのセルにも収まらない。
-pub fn truncate(text: String, max: Int) -> String {
-  case string.length(text) > max {
-    True -> string.slice(text, 0, max) <> "..."
-    False -> text
-  }
-}
-
 /// プラグインのイベント処理関数を使い捨てのプロセスで 1 件動かし、結果を待つ。プラグインの
 /// 例外も異常終了もこのプロセスの死として観測されるだけで、ランナーには届かない
 /// （リンクを張らないため）。時間内に終わらなければ打ち切る。
@@ -557,8 +543,8 @@ fn failure(down: Down) -> Outcome {
     process.ProcessDown(reason: process.Abnormal(reason), ..) -> {
       let #(text, stack) = describe_exit(reason)
       Failed(
-        reason: truncate(text, max_reason_chars),
-        detail: option.map(stack, truncate(_, max_detail_chars)),
+        reason: log.sanitize(text, log.max_reason_chars),
+        detail: option.map(stack, log.sanitize(_, max_detail_chars)),
       )
     }
     process.ProcessDown(reason: process.Killed, ..) ->

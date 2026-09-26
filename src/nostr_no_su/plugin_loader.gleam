@@ -46,7 +46,6 @@ import gleam/result
 import gleam/string
 import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
-import nostr_no_su/plugin_runner
 
 /// このモジュールが出すログ行の接頭辞。
 pub const log_prefix = "plugin_loader"
@@ -56,15 +55,17 @@ pub const log_prefix = "plugin_loader"
 const shadow_sample_size = 3
 
 /// 走査の報告 1 件。`Info` はログにだけ出す行（集計、影の報告、`PLUGIN_DIR`
-/// 未設定）、`Failure` は候補 1 つを読み込めなかったこと。識別子と理由を分けて
+/// 未設定）、`Failed` は候補 1 つを読み込めなかったこと。識別子と理由を分けて
 /// 持つのは、管理 UI に理由だけを出すためである。
 type Note {
   Info(text: String)
-  Failure(id: String, reason: String)
+  Failed(NotLoaded)
 }
 
 /// 読み込めなかった候補 1 件。`id` はモジュール名かディレクトリー名で切らない。
-/// `reason` はログの行で `<id>: ` に続く理由を `plugin_runner.max_reason_chars` に切ったもの。
+/// 走査の途中（`Note` の `Failed`）の `reason` はログの行で `<id>: ` に続く理由そのもので、
+/// `load_all` が返す `not_loaded` では、それを `log.sanitize` で `log.max_reason_chars` に
+/// 収めたものである。
 pub type NotLoaded {
   NotLoaded(id: String, reason: String)
 }
@@ -114,7 +115,16 @@ pub fn load_all(
     plugins: plugins,
     notes: list.map(notes, note_line),
     not_loaded: list.filter_map(notes, fn(note) {
-      option.to_result(to_not_loaded(note), Nil)
+      case note {
+        Info(_) -> Error(Nil)
+        Failed(item) ->
+          Ok(
+            NotLoaded(
+              ..item,
+              reason: log.sanitize(item.reason, log.max_reason_chars),
+            ),
+          )
+      }
     }),
   )
 }
@@ -123,20 +133,8 @@ pub fn load_all(
 fn note_line(note: Note) -> String {
   case note {
     Info(text) -> log.line(log_prefix, text)
-    Failure(id, reason) -> log.line(log_prefix, id <> ": " <> reason)
-  }
-}
-
-/// `Failure` を `NotLoaded` にする。`Info` は候補ではないので `None`。理由は
-/// `plugin_runner.max_reason_chars` に切る。
-fn to_not_loaded(note: Note) -> Option(NotLoaded) {
-  case note {
-    Info(_) -> None
-    Failure(id, reason) ->
-      Some(NotLoaded(
-        id: id,
-        reason: plugin_runner.truncate(reason, plugin_runner.max_reason_chars),
-      ))
+    Failed(NotLoaded(id:, reason:)) ->
+      log.line(log_prefix, id <> ": " <> reason)
   }
 }
 
@@ -179,7 +177,12 @@ fn scan(
   case list_dir(dir) {
     Error(reason) -> #(
       [],
-      [Failure(dir, "cannot read directory (" <> reason <> "); skipped")],
+      [
+        Failed(NotLoaded(
+          dir,
+          "cannot read directory (" <> reason <> "); skipped",
+        )),
+      ],
       reserved,
     )
     Ok(names) -> {
@@ -236,7 +239,10 @@ fn flat_candidates(
         Error(reason) -> #(
           [],
           list.append(notes, [
-            Failure(dir, "cannot add to code path (" <> reason <> "); skipped"),
+            Failed(NotLoaded(
+              dir,
+              "cannot add to code path (" <> reason <> "); skipped",
+            )),
           ]),
         )
       }
@@ -285,10 +291,16 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(Note), Note) {
       case add_code_path(ebin) {
         Ok(Nil) -> Ok(list.append(shadows, found))
         Error(reason) ->
-          Error(Failure(
-            name,
-            "cannot add " <> ebin <> " to code path (" <> reason <> "); skipped",
-          ))
+          Error(
+            Failed(NotLoaded(
+              name,
+              "cannot add "
+                <> ebin
+                <> " to code path ("
+                <> reason
+                <> "); skipped",
+            )),
+          )
       }
     }),
   )
@@ -315,18 +327,25 @@ fn ebin_dirs(dir: String, name: String) -> Result(List(String), Note) {
     // `filelib:is_dir/1` は真を返す。
     Error(_), [_, ..] -> Ok([])
     Error(reason), [] ->
-      Error(Failure(name, "cannot read directory (" <> reason <> "); skipped"))
+      Error(
+        Failed(NotLoaded(
+          name,
+          "cannot read directory (" <> reason <> "); skipped",
+        )),
+      )
   })
   case list.append(direct, nested) {
     [] ->
-      Error(Failure(
-        name,
-        "no ebin directory found (expected "
-          <> name
-          <> "/ebin or "
-          <> name
-          <> "/*/ebin)",
-      ))
+      Error(
+        Failed(NotLoaded(
+          name,
+          "no ebin directory found (expected "
+            <> name
+            <> "/ebin or "
+            <> name
+            <> "/*/ebin)",
+        )),
+      )
     found -> Ok(found)
   }
 }
@@ -395,12 +414,12 @@ fn shadow_sources(modules: List(String)) -> String {
 
 /// エントリーモジュールが影に入っている候補の報告。
 fn shadowed_entry_note(name: String) -> Note {
-  Failure(
+  Failed(NotLoaded(
     name,
     "module "
       <> name
       <> " is already provided by the host or another plugin; skipped",
-  )
+  ))
 }
 
 /// エントリーモジュール名として使えるか。コードパスに何かを足す**前に**問い合わ
@@ -430,18 +449,22 @@ fn load_candidates(
       fn(acc: #(List(Plugin), List(Note), List(String)), module) {
         let #(plugins, notes, taken) = acc
         case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
-          Error(reason) -> #(plugins, [Failure(module, reason), ..notes], taken)
+          Error(reason) -> #(
+            plugins,
+            [Failed(NotLoaded(module, reason)), ..notes],
+            taken,
+          )
           Ok(loaded) ->
             case list.contains(taken, loaded.name) {
               True -> #(
                 plugins,
                 [
-                  Failure(
+                  Failed(NotLoaded(
                     module,
                     "duplicate plugin name \""
                       <> loaded.name
                       <> "\"; keeping the first",
-                  ),
+                  )),
                   ..notes
                 ],
                 taken,

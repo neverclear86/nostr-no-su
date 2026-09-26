@@ -27,6 +27,10 @@ import gleam/string
 /// id と pubkey（64 文字）は切られない。
 pub const max_external_chars = 200
 
+/// プラグインの実行の失敗と、読み込めなかった候補の理由を `sanitize` するときの上限
+/// （コードポイントの数）。管理 UI のセルに収める。実行の失敗の理由はこの長さでログにも出る。
+pub const max_reason_chars = 120
+
 /// OTP logger の水準。本体は primary level の既定（notice）以上だけを使う。
 /// コンストラクターの名前は OTP の水準の atom（`notice` / `warning` / `error`）と
 /// 一致させ、FFI で変換しない。
