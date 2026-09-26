@@ -26,7 +26,7 @@ description: nostr-no-su の GitHub issue を、分割の判定（opus medium）
 tier は判定が決める。`none`（追加 100 行未満・3 ファイル以下・決めたこと 0〜1 件）はデザインとプランを飛ばし、`light`（300 行以下）と `full`（300 行超か決めたこと 2 件以上。まず分割する）は同じ流れでプランを書く。
 
 役割ごとの基準、出力の書式、安全策は `.claude/agents/issue-*.md` のエージェント定義に書いてあり、モデルと effort もそこで固定している。各段階の依頼文はスクリプトの `P` にある。返答は構造化出力（`schema`）で判定や URL だけを返し、プランやレビューの全文はファイルと GitHub のコメントで受け渡す。
-`issue-planner`、`issue-plan-reviewer`、`issue-pr-reviewer` は `memory: user` で run をまたぐ記憶を持ち、`~/.claude/agent-memory/<agentType>/MEMORY.md` に繰り返し見落とす箇所と環境の癖だけを書く。`issue-retrospective` はこれを読んで、重複や古い記述を定義に足す候補にする（記憶は編集しない）。
+`issue-planner`、`issue-plan-reviewer`、`issue-pr-reviewer` は `memory: user` で run をまたぐ記憶を持ち、`~/.claude/agent-memory/<agentType>/MEMORY.md` に繰り返し見落とす箇所と環境の癖だけを書く。記憶と定義が食い違うときは定義が正であり、定義に書いてあることは記憶に書かない。`issue-retrospective` はこれを読んで、重複や古い記述を定義に足す候補にする（記憶は編集しない）。
 書式は [references/formats.md](references/formats.md)。
 
 ## なぜスクリプトで進めるか（2026-09-13 の実測）
