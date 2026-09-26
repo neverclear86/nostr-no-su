@@ -64,8 +64,7 @@ type Note {
 }
 
 /// 読み込めなかった候補 1 件。`id` はモジュール名かディレクトリー名で切らない。
-/// `reason` はログに出す理由から `id` の接頭辞を外し、`plugin_runner.max_reason_chars`
-/// に切ったもの。
+/// `reason` はログの行で `<id>: ` に続く理由を `plugin_runner.max_reason_chars` に切ったもの。
 pub type NotLoaded {
   NotLoaded(id: String, reason: String)
 }
@@ -131,16 +130,6 @@ fn note_line(note: Note) -> String {
   case note {
     Info(text) -> log.line(log_prefix, text)
     Failure(id, reason) -> log.line(log_prefix, id <> ": " <> reason)
-  }
-}
-
-/// `reason` が `id <> ": "` で始まればその分だけ落とし、始まらなければそのまま
-/// 返す。`plugin.load` の理由は現状すべてこの接頭辞で始まるが、理由の組み立てが
-/// 変わっても壊れないよう、接頭辞を落とせないときもそのまま返す。
-pub fn strip_id(id: String, reason: String) -> String {
-  case string.starts_with(reason, id <> ": ") {
-    True -> string.drop_start(reason, string.length(id) + 2)
-    False -> reason
   }
 }
 
@@ -459,10 +448,7 @@ fn load_candidates(
     list.fold(modules, #([], []), fn(acc: #(List(Plugin), List(Note)), module) {
       let #(plugins, notes) = acc
       case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
-        Error(reason) -> #(plugins, [
-          Failure(module, strip_id(module, reason)),
-          ..notes
-        ])
+        Error(reason) -> #(plugins, [Failure(module, reason), ..notes])
         Ok(loaded) -> {
           let taken =
             list.append(reserved, list.map(plugins, fn(item) { item.name }))

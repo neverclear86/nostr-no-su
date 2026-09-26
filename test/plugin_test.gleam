@@ -90,7 +90,7 @@ pub fn load_missing_export_test() {
 /// 呼び出しの失敗の理由と区別するため、完全一致で見る。
 pub fn load_missing_plugin_name_export_test() {
   assert load_error("support@plugin_missing_name")
-    == "support@plugin_missing_name: missing export plugin_name/0"
+    == "missing export plugin_name/0"
 }
 
 /// 本体が対応していない API バージョンは拒否する。
@@ -273,7 +273,7 @@ pub fn children_prefers_arity_one_test() {
 /// なる。接頭辞を本体が添えるので、プラグイン作者は理由にキー名だけを書けばよい。
 pub fn children_rejecting_config_test() {
   assert load_error("plugin_rejecting_config")
-    == "plugin_rejecting_config: plugin_children/1 rejected the configuration "
+    == "plugin_children/1 rejected the configuration "
     <> "(path is required); configure it with PLUGIN_PLUGIN_REJECTING_CONFIG_*"
 }
 
@@ -359,8 +359,7 @@ pub fn load_with_localized_pages_test() {
 
 /// 言語が 1 つも無ければ、まとめた一覧は空になる。
 pub fn merge_localized_pages_without_languages_is_empty_test() {
-  assert plugin.merge_localized_pages([], "plugin_localized", "plugin_pages/2")
-    == Ok([])
+  assert plugin.merge_localized_pages([], "plugin_pages/2") == Ok([])
 }
 
 /// `title_in` は既知の言語ではその表示名を、未知の言語では `key` を返す。
@@ -559,7 +558,7 @@ pub fn min_host_version_malformed_host_test() {
 /// コードパスに無いアプリケーションが複数あると、名前順で先のものを理由に出す。
 pub fn required_versions_report_the_first_missing_app_by_name_test() {
   assert load_error("plugin_requiring_missing_apps")
-    == "plugin_requiring_missing_apps: requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
+    == "requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
 }
 
 /// エラーが 1 件も無いリストは `invalid value` になる。
