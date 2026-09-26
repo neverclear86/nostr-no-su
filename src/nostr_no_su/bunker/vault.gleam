@@ -23,6 +23,7 @@ import gleam/list
 import gleam/result
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
+import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
 import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
@@ -88,39 +89,9 @@ pub type Skipped {
 /// 持ち、変種がテーブルの区別になる。
 pub type MacRow {
   /// `bunker_sessions` の 1 行（承認済みのセッション）。
-  SessionMacRow(
-    /// 署名者の公開鍵（16 進、小文字）。
-    signer: String,
-    /// クライアントの公開鍵（16 進、小文字）。
-    client: String,
-    /// セッション内の要求を照合する権限。空文字列は既定の集合（`bunker/permission` の
-    /// 既定）で照合する。
-    perms: String,
-    /// 作成した Unix 秒。
-    created_at: Int,
-    /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
-    last_used_at: Int,
-    /// `nostrconnect://` の URI に現れたリレー（URI の順）。`bunker://` の
-    /// `connect` と承認で開いたセッションは空。
-    relays: List(String),
-  )
+  SessionMacRow(Session)
   /// `bunker_pending` の 1 行（承認待ちの接続要求）。
-  PendingMacRow(
-    /// 承認ページの URL に入るトークン。
-    token: String,
-    /// 署名者の公開鍵（16 進、小文字）。
-    signer: String,
-    /// クライアントの公開鍵（16 進、小文字）。
-    client: String,
-    /// 元の `connect` リクエストの id。
-    request_id: String,
-    /// 要求された権限。空文字列は要求なし。
-    perms: String,
-    /// secret が一致しなかったか。
-    secret_mismatch: Bool,
-    /// 作成した Unix 秒。
-    created_at: Int,
-  )
+  PendingMacRow(Pending)
 }
 
 /// 64 桁の 16 進からマスターキーを作る。前後の空白は無視し、大文字も受け付ける。
@@ -243,8 +214,16 @@ pub fn describe_skipped(skipped: Skipped) -> String {
 /// 出す。
 pub fn describe_rejected(row: MacRow) -> String {
   let #(table, signer, client) = case row {
-    SessionMacRow(signer:, client:, ..) -> #("bunker_sessions", signer, client)
-    PendingMacRow(signer:, client:, ..) -> #("bunker_pending", signer, client)
+    SessionMacRow(Session(signer:, client:, ..)) -> #(
+      "bunker_sessions",
+      signer,
+      client,
+    )
+    PendingMacRow(Pending(signer:, client:, ..)) -> #(
+      "bunker_pending",
+      signer,
+      client,
+    )
   }
   "skipped a "
   <> table
@@ -318,7 +297,14 @@ fn mac_key(key: MasterKey) -> BitArray {
 /// `last_used_at` の後に置き、空の一覧のときは列ごと入れない（`relays_field`）。
 fn mac_input(row: MacRow) -> BitArray {
   case row {
-    SessionMacRow(signer:, client:, perms:, created_at:, last_used_at:, relays:) ->
+    SessionMacRow(Session(
+      signer:,
+      client:,
+      perms:,
+      created_at:,
+      last_used_at:,
+      relays:,
+    )) ->
       length_prefixed(list.append(
         [
           <<"bunker_sessions":utf8>>,
@@ -330,7 +316,7 @@ fn mac_input(row: MacRow) -> BitArray {
         ],
         relays_field(relays),
       ))
-    PendingMacRow(
+    PendingMacRow(Pending(
       token:,
       signer:,
       client:,
@@ -338,7 +324,7 @@ fn mac_input(row: MacRow) -> BitArray {
       perms:,
       secret_mismatch:,
       created_at:,
-    ) ->
+    )) ->
       length_prefixed([
         <<"bunker_pending":utf8>>,
         <<token:utf8>>,

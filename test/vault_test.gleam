@@ -4,6 +4,7 @@ import gleam/bit_array
 import gleam/list
 import gleam/string
 import nostr_no_su/bunker/account.{type Account}
+import nostr_no_su/bunker/session.{Pending, Session}
 import nostr_no_su/bunker/vault.{
   type MasterKey, Loaded, PendingMacRow, Row, SessionMacRow, Skipped,
   StoredAccount,
@@ -246,20 +247,22 @@ pub fn skipped_rows_are_described_by_pubkey_and_reason_test() {
 }
 
 /// MAC を計算するセッションの行。
-fn session_mac_row() -> vault.MacRow {
+fn session_row() -> vault.MacRow {
   SessionMacRow(
-    signer: "signer-a",
-    client: "client-a",
-    perms: "sign_event",
-    created_at: 1_700_000_000,
-    last_used_at: 1_700_000_100,
-    relays: [],
+    Session(
+      signer: "signer-a",
+      client: "client-a",
+      perms: "sign_event",
+      created_at: 1_700_000_000,
+      last_used_at: 1_700_000_100,
+      relays: [],
+    ),
   )
 }
 
-/// MAC を計算する承認待ちの行。共通の列は `session_mac_row` と同じ値にしてある。
-fn pending_mac_row() -> vault.MacRow {
-  PendingMacRow(
+/// MAC を計算する承認待ちの行。共通の列は `session_row` と同じ値にしてある。
+fn pending_row() -> vault.MacRow {
+  PendingMacRow(Pending(
     token: "token-a",
     signer: "signer-a",
     client: "client-a",
@@ -267,13 +270,13 @@ fn pending_mac_row() -> vault.MacRow {
     perms: "sign_event",
     secret_mismatch: False,
     created_at: 1_700_000_000,
-  )
+  ))
 }
 
 /// 同じ行と同じ鍵では検証が通り、MAC は 32 バイトである。
 pub fn the_same_row_and_key_verify_test() {
   let key = master_key(master_key_hex)
-  use row <- list.each([session_mac_row(), pending_mac_row()])
+  use row <- list.each([session_row(), pending_row()])
   let mac = vault.row_mac(key, row)
   assert bit_array.byte_size(mac) == 32
   assert vault.verify_row_mac(key, row, mac)
@@ -283,30 +286,38 @@ pub fn the_same_row_and_key_verify_test() {
 /// 全列について確かめるために使う。
 fn tampered_mac_rows(row: vault.MacRow) -> List(vault.MacRow) {
   case row {
-    SessionMacRow(..) -> [
-      SessionMacRow(..row, signer: "tampered"),
-      SessionMacRow(..row, client: "tampered"),
-      SessionMacRow(..row, perms: "tampered"),
-      SessionMacRow(..row, created_at: row.created_at + 1),
-      SessionMacRow(..row, last_used_at: row.last_used_at + 1),
-      SessionMacRow(..row, relays: ["wss://tampered.example"]),
-    ]
-    PendingMacRow(..) -> [
-      PendingMacRow(..row, token: "tampered"),
-      PendingMacRow(..row, signer: "tampered"),
-      PendingMacRow(..row, client: "tampered"),
-      PendingMacRow(..row, request_id: "tampered"),
-      PendingMacRow(..row, perms: "tampered"),
-      PendingMacRow(..row, secret_mismatch: !row.secret_mismatch),
-      PendingMacRow(..row, created_at: row.created_at + 1),
-    ]
+    SessionMacRow(session) ->
+      list.map(
+        [
+          Session(..session, signer: "tampered"),
+          Session(..session, client: "tampered"),
+          Session(..session, perms: "tampered"),
+          Session(..session, created_at: session.created_at + 1),
+          Session(..session, last_used_at: session.last_used_at + 1),
+          Session(..session, relays: ["wss://tampered.example"]),
+        ],
+        SessionMacRow,
+      )
+    PendingMacRow(pending) ->
+      list.map(
+        [
+          Pending(..pending, token: "tampered"),
+          Pending(..pending, signer: "tampered"),
+          Pending(..pending, client: "tampered"),
+          Pending(..pending, request_id: "tampered"),
+          Pending(..pending, perms: "tampered"),
+          Pending(..pending, secret_mismatch: !pending.secret_mismatch),
+          Pending(..pending, created_at: pending.created_at + 1),
+        ],
+        PendingMacRow,
+      )
   }
 }
 
 /// どの列を 1 つ変えても検証は通らない。
 pub fn changing_one_column_fails_verification_test() {
   let key = master_key(master_key_hex)
-  use row <- list.each([session_mac_row(), pending_mac_row()])
+  use row <- list.each([session_row(), pending_row()])
   let mac = vault.row_mac(key, row)
   use tampered <- list.each(tampered_mac_rows(row))
   assert !vault.verify_row_mac(key, tampered, mac)
@@ -315,13 +326,13 @@ pub fn changing_one_column_fails_verification_test() {
 /// 共通の列が同じ値でも、セッションの MAC は承認待ちの行として検証できない。
 pub fn a_session_mac_does_not_verify_as_a_pending_row_test() {
   let key = master_key(master_key_hex)
-  let mac = vault.row_mac(key, session_mac_row())
-  assert !vault.verify_row_mac(key, pending_mac_row(), mac)
+  let mac = vault.row_mac(key, session_row())
+  assert !vault.verify_row_mac(key, pending_row(), mac)
 }
 
 /// 別のマスターキーでは検証が通らない。
 pub fn a_different_master_key_does_not_verify_a_row_test() {
-  use row <- list.each([session_mac_row(), pending_mac_row()])
+  use row <- list.each([session_row(), pending_row()])
   let mac = vault.row_mac(master_key(master_key_hex), row)
   assert !vault.verify_row_mac(master_key(other_master_key_hex), row, mac)
 }
@@ -329,9 +340,9 @@ pub fn a_different_master_key_does_not_verify_a_row_test() {
 /// 固定の行の MAC は、鍵の導出と入力の形から独立に計算した既知の値に一致する。
 pub fn row_macs_match_the_known_answers_test() {
   let key = master_key(master_key_hex)
-  assert vault.row_mac(key, session_mac_row())
+  assert vault.row_mac(key, session_row())
     == bytes("02738cc4cc3b744edc8073364047ca8b7c5ff7e91ebc07e669b172d70263ffdc")
-  assert vault.row_mac(key, pending_mac_row())
+  assert vault.row_mac(key, pending_row())
     == bytes("21c41e6ab89127133b42af4ae99d8569bce978aa7c7964eec8b688c929af8100")
 }
 
@@ -339,12 +350,14 @@ pub fn row_macs_match_the_known_answers_test() {
 /// 末尾に足した入力から独立に計算した既知の値に一致する。
 pub fn a_session_row_mac_with_relays_matches_the_known_answer_test() {
   let key = master_key(master_key_hex)
-  let assert SessionMacRow(..) as row = session_mac_row()
+  let assert SessionMacRow(session) = session_row()
   let row =
-    SessionMacRow(..row, relays: [
-      "wss://relay.example",
-      "ws://relay.example:7777",
-    ])
+    SessionMacRow(
+      Session(..session, relays: [
+        "wss://relay.example",
+        "ws://relay.example:7777",
+      ]),
+    )
   assert vault.row_mac(key, row)
     == bytes("fc0cdc5eae537b4aad240ad88584f0ebd4655a86ba3f891f2e378c68ae5b96af")
 }
@@ -354,15 +367,17 @@ pub fn a_session_row_mac_with_relays_matches_the_known_answer_test() {
 pub fn rejected_rows_are_described_without_perms_or_token_test() {
   let forged =
     SessionMacRow(
-      signer: "signer-a",
-      client: "client\nforged: line",
-      perms: "sign_event",
-      created_at: 1_700_000_000,
-      last_used_at: 1_700_000_100,
-      relays: [],
+      Session(
+        signer: "signer-a",
+        client: "client\nforged: line",
+        perms: "sign_event",
+        created_at: 1_700_000_000,
+        last_used_at: 1_700_000_100,
+        relays: [],
+      ),
     )
   assert vault.describe_rejected(forged)
     == "skipped a bunker_sessions row with a mismatched MAC: signer signer-a, client client forged: line"
-  assert vault.describe_rejected(pending_mac_row())
+  assert vault.describe_rejected(pending_row())
     == "skipped a bunker_pending row with a mismatched MAC: signer signer-a, client client-a"
 }

@@ -582,7 +582,7 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(Nil) = account_store.insert(db, key, b, generous)
 
   let pa =
-    account_store.StoredPending(
+    session.Pending(
       token: "token-a",
       signer: a_pubkey,
       client: "pending-client-a",
@@ -592,7 +592,7 @@ pub fn postgres_bunker_state_test() {
       created_at: now,
     )
   let pb =
-    account_store.StoredPending(
+    session.Pending(
       token: "token-b",
       signer: b_pubkey,
       client: "pending-client-b",
@@ -606,7 +606,7 @@ pub fn postgres_bunker_state_test() {
       account_store.insert_session(
         db,
         key,
-        session: account_store.StoredSession(
+        session: session.Session(
           signer: a_pubkey,
           client: "client-a",
           perms: "",
@@ -620,7 +620,7 @@ pub fn postgres_bunker_state_test() {
       account_store.insert_session(
         db,
         key,
-        session: account_store.StoredSession(
+        session: session.Session(
           signer: b_pubkey,
           client: "client-b",
           perms: "sign_event:1",
@@ -642,7 +642,7 @@ pub fn postgres_bunker_state_test() {
   let assert Ok(loaded) = postgres.load_stored(pool, key, generous)
   assert loaded.sessions
     == [
-      account_store.StoredSession(
+      session.Session(
         signer: a_pubkey,
         client: "client-a",
         perms: "",
@@ -650,7 +650,7 @@ pub fn postgres_bunker_state_test() {
         last_used_at: now,
         relays: [],
       ),
-      account_store.StoredSession(
+      session.Session(
         signer: b_pubkey,
         client: "client-b",
         perms: "sign_event:1",
@@ -667,7 +667,7 @@ pub fn postgres_bunker_state_test() {
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer: a_pubkey,
         client: "client-a-2",
         perms: "",
@@ -678,7 +678,7 @@ pub fn postgres_bunker_state_test() {
       timeouts: generous,
     )
   let pa2 =
-    account_store.StoredPending(
+    session.Pending(
       token: "token-a2",
       signer: a_pubkey,
       client: "pending-client-a2",
@@ -714,7 +714,7 @@ pub fn postgres_bunker_state_test() {
 
   // 6. approve: 承認待ちの行が消え、セッションが増える。
   let pa3 =
-    account_store.StoredPending(
+    session.Pending(
       token: "token-a3",
       signer: a_pubkey,
       client: "client-a3",
@@ -729,7 +729,7 @@ pub fn postgres_bunker_state_test() {
       pool,
       key,
       token: pa3.token,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer: a_pubkey,
         client: pa3.client,
         perms: pa3.perms,
@@ -744,7 +744,7 @@ pub fn postgres_bunker_state_test() {
   assert after_approve.pending == [pa, pb]
   assert after_approve.sessions
     == [
-      account_store.StoredSession(
+      session.Session(
         signer: a_pubkey,
         client: "client-a",
         perms: "",
@@ -752,7 +752,7 @@ pub fn postgres_bunker_state_test() {
         last_used_at: now,
         relays: [],
       ),
-      account_store.StoredSession(
+      session.Session(
         signer: b_pubkey,
         client: "client-b",
         perms: "sign_event:1",
@@ -760,7 +760,7 @@ pub fn postgres_bunker_state_test() {
         last_used_at: now + 1,
         relays: [],
       ),
-      account_store.StoredSession(
+      session.Session(
         signer: a_pubkey,
         client: pa3.client,
         perms: pa3.perms,
@@ -776,7 +776,7 @@ pub fn postgres_bunker_state_test() {
     postgres.load_stored(pool, key, generous)
   assert after_account_delete.sessions
     == [
-      account_store.StoredSession(
+      session.Session(
         signer: b_pubkey,
         client: "client-b",
         perms: "sign_event:1",
@@ -804,7 +804,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
 
   // 正しい MAC の行と、あとで MAC が合わなくなる行 2 件を入れる。
   let ok_session =
-    account_store.StoredSession(
+    session.Session(
       signer:,
       client: "client-ok-" <> mark,
       perms: "",
@@ -823,7 +823,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer:,
         client: "client-tampered-" <> mark,
         perms: "",
@@ -837,7 +837,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer:,
         client: "client-copied-" <> mark,
         perms: "",
@@ -889,22 +889,26 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
   assert loaded.rejected
     == [
       vault.SessionMacRow(
-        signer:,
-        client: "client-tampered-" <> mark,
-        perms: "forged",
-        created_at: 2,
-        last_used_at: 2,
-        relays: [],
+        session.Session(
+          signer:,
+          client: "client-tampered-" <> mark,
+          perms: "forged",
+          created_at: 2,
+          last_used_at: 2,
+          relays: [],
+        ),
       ),
       vault.SessionMacRow(
-        signer:,
-        client: "client-copied-" <> mark,
-        perms: "",
-        created_at: 3,
-        last_used_at: 3,
-        relays: [],
+        session.Session(
+          signer:,
+          client: "client-copied-" <> mark,
+          perms: "",
+          created_at: 3,
+          last_used_at: 3,
+          relays: [],
+        ),
       ),
-      vault.PendingMacRow(
+      vault.PendingMacRow(session.Pending(
         token: "token-" <> mark,
         signer:,
         client: "client-pending-" <> mark,
@@ -912,7 +916,7 @@ pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
         perms: "",
         secret_mismatch: False,
         created_at: 4,
-      ),
+      )),
     ]
 }
 
@@ -931,7 +935,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer:,
         client: "client",
         perms: "a",
@@ -946,7 +950,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
     "UPDATE bunker_sessions SET perms = 'forged' WHERE client = 'client'",
   )
   let session =
-    account_store.StoredSession(
+    session.Session(
       signer:,
       client: "client",
       perms: "b",
@@ -984,7 +988,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
     account_store.insert_session(
       db,
       old_key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer:,
         client: "old-client",
         perms: "",
@@ -998,7 +1002,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
     account_store.insert_pending(
       db,
       old_key,
-      account_store.StoredPending(
+      session.Pending(
         token: "old-token",
         signer:,
         client: "old-client",
@@ -1015,7 +1019,7 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
   let new_key = random_master_key()
   let assert Ok(Nil) = account_store.insert(db, new_key, entry, generous)
   let session =
-    account_store.StoredSession(
+    session.Session(
       signer:,
       client: "client",
       perms: "sign_event:1",
@@ -1081,7 +1085,7 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
 
   // 移行の後は MAC つきで書き込みと読み込みができる。
   let session =
-    account_store.StoredSession(
+    session.Session(
       signer:,
       client: "client",
       perms: "",
@@ -1121,12 +1125,14 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
     vault.row_mac(
       key,
       vault.SessionMacRow(
-        signer:,
-        client: "client",
-        perms: "sign_event",
-        created_at: 1,
-        last_used_at: 2,
-        relays: [],
+        session.Session(
+          signer:,
+          client: "client",
+          perms: "sign_event",
+          created_at: 1,
+          last_used_at: 2,
+          relays: [],
+        ),
       ),
     )
   postgres.run_statement(
@@ -1143,7 +1149,7 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
   assert loaded.rejected == []
   assert loaded.sessions
     == [
-      account_store.StoredSession(
+      session.Session(
         signer:,
         client: "client",
         perms: "sign_event",
@@ -1172,7 +1178,7 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
       use Nil <- result.try(account_store.insert_session(
         db,
         key,
-        session: account_store.StoredSession(
+        session: session.Session(
           signer: pubkey,
           client: "client",
           perms: "",
@@ -1289,11 +1295,9 @@ fn client_request(
   verified
 }
 
-/// `StoredSession` から作成・最終利用時刻とリレーを除いた組。行の内容だけを
+/// `Session` から作成・最終利用時刻とリレーを除いた組。行の内容だけを
 /// 比べるために使う。
-fn session_tuple(
-  session: account_store.StoredSession,
-) -> #(String, String, String) {
+fn session_tuple(session: session.Session) -> #(String, String, String) {
   #(session.signer, session.client, session.perms)
 }
 
@@ -1753,7 +1757,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
     account_store.insert_session(
       db,
       key,
-      session: account_store.StoredSession(
+      session: session.Session(
         signer: signer_hex,
         client: "old",
         perms: "",
@@ -1764,7 +1768,7 @@ pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
       timeouts: generous,
     )
   let pending =
-    account_store.StoredPending(
+    session.Pending(
       token: "tok",
       signer: signer_hex,
       client: "new",

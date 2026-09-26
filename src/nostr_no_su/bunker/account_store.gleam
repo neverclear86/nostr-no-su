@@ -18,6 +18,7 @@ import gleam/erlang/process.{type Name}
 import gleam/int
 import gleam/list
 import gleam/result
+import nostr_no_su/bunker/session.{type Pending, type Session, Pending, Session}
 import nostr_no_su/bunker/vault.{type MasterKey}
 import nostr_no_su/crypto/aes_gcm
 import nostr_no_su/db.{type StoreError, type Timeouts}
@@ -87,54 +88,15 @@ ON CONFLICT (token) DO NOTHING"
 /// 承認待ちの削除。
 const delete_pending_sql = "DELETE FROM bunker_pending WHERE token = $1"
 
-/// 承認済みのセッション 1 件。
-pub type StoredSession {
-  StoredSession(
-    /// 署名者の公開鍵（16 進、小文字）。
-    signer: String,
-    /// クライアントの公開鍵（16 進、小文字）。
-    client: String,
-    /// 要求された権限。空文字列は要求なし。
-    perms: String,
-    /// 作成した Unix 秒。
-    created_at: Int,
-    /// 最後に使った Unix 秒。新しい組では `created_at` と同じ値。
-    last_used_at: Int,
-    /// `nostrconnect://` の URI に現れたリレー（URI の順）。`bunker://` の
-    /// `connect` と承認で開いたセッションは空。
-    relays: List(String),
-  )
-}
-
-/// 承認待ちの接続要求 1 件。
-pub type StoredPending {
-  StoredPending(
-    /// 承認ページの URL に入るトークン。
-    token: String,
-    /// 署名者の公開鍵（16 進、小文字）。
-    signer: String,
-    /// クライアントの公開鍵（16 進、小文字）。
-    client: String,
-    /// 元の `connect` リクエストの id。
-    request_id: String,
-    /// 要求された権限。空文字列は要求なし。
-    perms: String,
-    /// secret が一致しなかったか。
-    secret_mismatch: Bool,
-    /// 作成した Unix 秒。
-    created_at: Int,
-  )
-}
-
 /// `load_within` が 1 つのトランザクションで読み込んだ全体。
 pub type Stored {
   Stored(
     /// 復号できたアカウントと、復号できずに飛ばした行。
     accounts: vault.Loaded,
     /// 承認済みのセッション（`created_at`、`signer`、`client` の順）。
-    sessions: List(StoredSession),
+    sessions: List(Session),
     /// 承認待ちの接続要求（`created_at`、`token` の順）。
-    pending: List(StoredPending),
+    pending: List(Pending),
     /// MAC の合わない行（セッション、承認待ちの順）。どちらも元の行の順序を保つ。
     rejected: List(vault.MacRow),
   )
@@ -181,9 +143,9 @@ pub fn load_within(
     |> db.execute(db),
   )
   let #(sessions_list, rejected_sessions) =
-    split_by_mac(key, sessions.rows, session_mac_row)
+    split_by_mac(key, sessions.rows, vault.SessionMacRow)
   let #(pending_list, rejected_pending) =
-    split_by_mac(key, pending.rows, pending_mac_row)
+    split_by_mac(key, pending.rows, vault.PendingMacRow)
   Ok(Stored(
     accounts: vault.open_rows(key, accounts.rows),
     sessions: sessions_list,
@@ -274,7 +236,7 @@ pub fn update_label(
 pub fn insert_session(
   db: pog.Connection,
   key: MasterKey,
-  session session: StoredSession,
+  session session: Session,
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   write_session_row(db, key, insert_session_sql, session, timeouts)
@@ -286,7 +248,7 @@ pub fn insert_session(
 pub fn touch_session(
   db: pog.Connection,
   key: MasterKey,
-  session session: StoredSession,
+  session session: Session,
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   write_session_row(db, key, touch_session_sql, session, timeouts)
@@ -297,7 +259,7 @@ pub fn touch_session(
 pub fn update_session_perms(
   db: pog.Connection,
   key: MasterKey,
-  session session: StoredSession,
+  session session: Session,
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   write_session_row(db, key, update_session_perms_sql, session, timeouts)
@@ -309,7 +271,7 @@ fn write_session_row(
   db: pog.Connection,
   key: MasterKey,
   sql: String,
-  session: StoredSession,
+  session: Session,
   timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   pog.query(sql)
@@ -318,7 +280,7 @@ fn write_session_row(
   |> pog.parameter(pog.text(session.perms))
   |> pog.parameter(pog.int(session.created_at))
   |> pog.parameter(pog.int(session.last_used_at))
-  |> pog.parameter(pog.bytea(vault.row_mac(key, session_mac_row(session))))
+  |> pog.parameter(pog.bytea(vault.row_mac(key, vault.SessionMacRow(session))))
   |> pog.parameter(pog.array(pog.text, session.relays))
   |> db.execute_write(db, timeouts)
 }
@@ -354,7 +316,7 @@ fn delete_sessions(
 pub fn insert_session_evicting(
   pool: Name(pog.Message),
   key: MasterKey,
-  session session: StoredSession,
+  session session: Session,
   evicted evicted: List(#(String, String)),
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
@@ -369,7 +331,7 @@ pub fn insert_session_evicting(
 pub fn insert_pending(
   db: pog.Connection,
   key: MasterKey,
-  pending: StoredPending,
+  pending: Pending,
   timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
   pog.query(insert_pending_sql)
@@ -380,7 +342,7 @@ pub fn insert_pending(
   |> pog.parameter(pog.text(pending.perms))
   |> pog.parameter(pog.bool(pending.secret_mismatch))
   |> pog.parameter(pog.int(pending.created_at))
-  |> pog.parameter(pog.bytea(vault.row_mac(key, pending_mac_row(pending))))
+  |> pog.parameter(pog.bytea(vault.row_mac(key, vault.PendingMacRow(pending))))
   |> db.execute_write(db, timeouts)
 }
 
@@ -405,7 +367,7 @@ pub fn approve(
   pool: Name(pog.Message),
   key: MasterKey,
   token token: String,
-  session session: StoredSession,
+  session session: Session,
   evicted evicted: List(#(String, String)),
   timeouts timeouts: Timeouts,
 ) -> Result(Nil, StoreError) {
@@ -421,7 +383,7 @@ pub fn approve(
 pub fn insert_pending_replacing(
   pool: Name(pog.Message),
   key: MasterKey,
-  pending pending: StoredPending,
+  pending pending: Pending,
   replaced replaced: List(String),
   evicted evicted: List(String),
   timeouts timeouts: Timeouts,
@@ -481,7 +443,7 @@ fn row_decoder() -> decode.Decoder(vault.Row) {
 
 /// `bunker_sessions` の 1 行を、値と MAC の組にして読むデコーダー。列の順序は
 /// `select_sessions_sql` と同じ。
-fn session_decoder() -> decode.Decoder(#(StoredSession, BitArray)) {
+fn session_decoder() -> decode.Decoder(#(Session, BitArray)) {
   use signer <- decode.field(0, decode.string)
   use client <- decode.field(1, decode.string)
   use perms <- decode.field(2, decode.string)
@@ -490,14 +452,14 @@ fn session_decoder() -> decode.Decoder(#(StoredSession, BitArray)) {
   use mac <- decode.field(5, decode.bit_array)
   use relays <- decode.field(6, decode.list(decode.string))
   decode.success(#(
-    StoredSession(signer:, client:, perms:, created_at:, last_used_at:, relays:),
+    Session(signer:, client:, perms:, created_at:, last_used_at:, relays:),
     mac,
   ))
 }
 
 /// `bunker_pending` の 1 行を、値と MAC の組にして読むデコーダー。列の順序は
 /// `select_pending_sql` と同じ。
-fn pending_decoder() -> decode.Decoder(#(StoredPending, BitArray)) {
+fn pending_decoder() -> decode.Decoder(#(Pending, BitArray)) {
   use token <- decode.field(0, decode.string)
   use signer <- decode.field(1, decode.string)
   use client <- decode.field(2, decode.string)
@@ -507,7 +469,7 @@ fn pending_decoder() -> decode.Decoder(#(StoredPending, BitArray)) {
   use created_at <- decode.field(6, decode.int)
   use mac <- decode.field(7, decode.bit_array)
   decode.success(#(
-    StoredPending(
+    Pending(
       token:,
       signer:,
       client:,
@@ -534,30 +496,5 @@ fn split_by_mac(
   #(
     list.map(matching, fn(pair) { pair.0 }),
     list.map(rejected, fn(pair) { mac_row(pair.0) }),
-  )
-}
-
-/// セッションの行の MAC の対象。
-fn session_mac_row(session: StoredSession) -> vault.MacRow {
-  vault.SessionMacRow(
-    signer: session.signer,
-    client: session.client,
-    perms: session.perms,
-    created_at: session.created_at,
-    last_used_at: session.last_used_at,
-    relays: session.relays,
-  )
-}
-
-/// 承認待ちの行の MAC の対象。
-fn pending_mac_row(pending: StoredPending) -> vault.MacRow {
-  vault.PendingMacRow(
-    token: pending.token,
-    signer: pending.signer,
-    client: pending.client,
-    request_id: pending.request_id,
-    perms: pending.perms,
-    secret_mismatch: pending.secret_mismatch,
-    created_at: pending.created_at,
   )
 }
