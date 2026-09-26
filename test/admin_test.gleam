@@ -1014,6 +1014,20 @@ pub fn update_relay_roles_saves_the_roles_test() {
     == Ok(RelayRolesUpdated(2, relay_list.Both))
 }
 
+/// 用途のチェックは値が `on` のときだけ入っているとする。
+pub fn update_relay_roles_counts_only_on_as_checked_test() {
+  let reports = process.new_subject()
+  let response =
+    post_form(
+      reporting_context(reports),
+      dashboard.relay_action_path(2, dashboard.EditRelayRoles),
+      [#("monitor", "on"), #("bunker", "")],
+    )
+  assert response.status == 303
+  assert process.receive(reports, 1000)
+    == Ok(RelayRolesUpdated(2, relay_list.MonitorOnly))
+}
+
 /// 用途を 1 つも選ばない POST は 400 で `RelayRoleRequired` を出し、チェックは無く、
 /// Context を呼ばない。
 pub fn update_relay_roles_requires_a_role_test() {

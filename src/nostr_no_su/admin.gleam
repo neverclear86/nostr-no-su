@@ -104,20 +104,22 @@ pub const authentication_failure_delay = 1000
 /// 401 応答で提示する認証領域。
 const realm = "nostr-no-su"
 
-/// 認証済みの応答に付ける CSP。スクリプトは管理 UI のオリジンのファイル（`/static/admin.js`）だけを
-/// 実行させ、インラインのスクリプトとイベント属性を実行させない。`img-src data:` は、daisyUI の CSS が
+/// 認証済みの応答の CSP の `img-src` に入れる画像の出どころ。`data:` は、daisyUI の CSS が
 /// ボタンなどの背景に指定する data: の SVG（`--fx-noise`）と、上部バーのロゴと `<head>` の
 /// favicon に埋め込むロゴの data: の SVG を読ませるためである（`--fx-noise` はテーマの `--noise`
 /// が 0 なので描画には出ないが、禁じると読み込みのたびに CSP の違反が報告される）。
 /// `https:` は、アカウントの行のアイコン（kind 0 の `picture`）を管理者のブラウザーが画像のホストから
-/// 直接読ませるためである。プラグインのページの GET だけは `plugin_page_content_security_policy` で
-/// `http:` も許す。
-const content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+/// 直接読ませるためである。
+const image_sources = "data: https:"
 
-/// プラグインのページの GET の応答に付ける CSP。`content_security_policy` の `img-src` に
-/// `http:` を足したもので、プラグインの記述の `image` ブロックが指す遠隔の画像を
-/// 読ませる。鍵と secret を扱う他のページは `content_security_policy` のままにする。
-const plugin_page_content_security_policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https: http:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+/// 認証済みの応答に付ける CSP。`img-src` を `images` にし、ほかの指令はどの応答でも同じにする。
+/// スクリプトは管理 UI のオリジンのファイル（`/static/admin.js`）だけを実行させ、インラインの
+/// スクリプトとイベント属性を実行させない。
+fn content_security_policy(images: String) -> String {
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src "
+  <> images
+  <> "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+}
 
 /// 秘密鍵の再表示で、再入力したパスワードが違うときにログに出す理由。画面の文言は
 /// `i18n.IncorrectPassword` で、ログは英語のままにする。
@@ -148,6 +150,40 @@ const preference_cookie_attributes = cookie.Attributes(
   secure: False,
   http_only: True,
   same_site: Some(cookie.Lax),
+)
+
+/// 切り替えのフォームで選ぶ表示の設定（言語かテーマ）1 つぶんの読み書きの規則。
+type Preference(a) {
+  Preference(
+    /// 選んだ値を送るフォームの欄。
+    field: String,
+    /// 欄の値を解釈する。対応していない値は `Error(Nil)`。
+    parse: fn(String) -> Result(a, Nil),
+    /// ブラウザーの設定に従う値。選ぶと cookie を消す。
+    browser: a,
+    /// cookie に保存する値のコード。
+    code: fn(a) -> String,
+    /// 保存する cookie の名前。
+    cookie: String,
+  )
+}
+
+/// 言語の切り替えの欄、解釈、cookie。
+const language_preference = Preference(
+  field: view.language_field,
+  parse: view.language_choice_from_code,
+  browser: view.BrowserLanguage,
+  code: view.language_choice_code,
+  cookie: language_cookie,
+)
+
+/// テーマの切り替えの欄、解釈、cookie。
+const theme_preference = Preference(
+  field: view.theme_field,
+  parse: view.theme_from_code,
+  browser: view.System,
+  code: view.theme_code,
+  cookie: theme_cookie,
 )
 
 /// リレーの追加、用途の変更、削除が反映されなかった理由。
@@ -238,11 +274,7 @@ pub type Context {
     page_accounts: fn() -> Result(List(plugin_config.PageAccount), String),
     /// プラグイン名とページのキーで、フォームの送信を受け取る実行の口を探す。
     /// 無ければ `None`（`plugin_page` はこれで 405 にする）。
-    plugin_page_action: fn(String, String) ->
-      Option(
-        fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-          Result(Nil, String),
-      ),
+    plugin_page_action: fn(String, String) -> Option(plugin_config.PageAction),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
     sessions: fn() -> Result(List(dashboard.SessionRow), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
@@ -362,7 +394,7 @@ fn require_same_origin(
         [],
       )
       |> wisp.html_response(400)
-      |> protect(content_security_policy)
+      |> protect(content_security_policy(image_sources))
     _ -> wisp.csrf_known_header_protection(request, next)
   }
 }
@@ -404,9 +436,9 @@ fn route(
       || segments == view.script_segments
     -> static_file(request, language, theme)
     segments if segments == view.language_segments ->
-      switch_language(request, language, theme)
+      switch_preference(request, language, theme, language_preference)
     segments if segments == view.theme_segments ->
-      switch_theme(request, language, theme)
+      switch_preference(request, language, theme, theme_preference)
     [first, token] if first == dashboard.approve_segment ->
       approve_connection(context, request, language, theme, token)
     [first, token] if first == dashboard.deny_segment ->
@@ -453,8 +485,8 @@ fn route(
 /// 認証済みの応答すべてに付けるヘッダー。どのページも secret か秘密鍵を含みうるので
 /// 保存させず、状態を変えるボタンを他のサイトの枠に埋め込ませない。枠の中の POST は
 /// 管理 UI と同じオリジンから送られるので、CSRF の検査では防げない。実行するスクリプトを
-/// CSP（呼び出し側が渡す `content_security_policy` か `plugin_page_content_security_policy`）で
-/// 管理 UI のファイルに限り、`content-type` を推測させない。
+/// CSP（呼び出し側が `content_security_policy` で組んだもの）で管理 UI のファイルに限り、
+/// `content-type` を推測させない。
 /// URL（承認の token、署名者の公開鍵）を `Referer` で別のオリジンへ渡さない。`no-referrer` に
 /// しないのは、ブラウザーが同じオリジンへの POST の `Origin` を `null` にし、CSRF の検査
 /// （`wisp.csrf_known_header_protection`）がすべての POST を拒否するからである。
@@ -468,15 +500,15 @@ fn protect(response: Response, policy: String) -> Response {
 }
 
 /// 応答に付ける CSP を選ぶ。プラグインのページの GET（`image` ブロックが `http:` の画像を
-/// 指しうる唯一のページ）だけ `plugin_page_content_security_policy` で、ほかは
-/// `content_security_policy`。HEAD は `wisp.handle_head` が GET にしてから届く。
+/// 指しうる唯一のページ）だけ `img-src` に `http:` も足し、鍵と secret を扱うほかのページは
+/// `image_sources` のままにする。HEAD は `wisp.handle_head` が GET にしてから届く。
 fn response_content_security_policy(
   request: Request,
   segments: List(String),
 ) -> String {
   case request.method, dashboard.parse_plugin_page_path(segments) {
-    http.Get, Ok(_) -> plugin_page_content_security_policy
-    _, _ -> content_security_policy
+    http.Get, Ok(_) -> content_security_policy(image_sources <> " http:")
+    _, _ -> content_security_policy(image_sources)
   }
 }
 
@@ -601,56 +633,37 @@ fn request_theme(request: Request) -> view.Theme {
   |> result.unwrap(view.System)
 }
 
-/// 言語の切り替え。選んだ言語を cookie に保存し（ブラウザーの設定では cookie を消す）、
+/// 言語かテーマの切り替え。選んだ値を cookie に保存し（ブラウザーの設定では cookie を消す）、
 /// フォームが送った戻り先へ 303 で戻す。cookie を変えるので POST だけを受け付け、ほかの
-/// POST と同じく CSRF の検査の下に置く。フォームが送るのは言語と戻り先のパスだけで、
+/// POST と同じく CSRF の検査の下に置く。フォームが送るのは選んだ値と戻り先のパスだけで、
 /// 秘密鍵を運ばない。
-fn switch_language(
+fn switch_preference(
   request: Request,
   language: Language,
   theme: view.Theme,
+  preference: Preference(a),
 ) -> Response {
   use <- require_method(request, http.Post, language, theme)
   use form <- wisp.require_form(request)
-  case view.language_choice_from_code(form_value(form, view.language_field)) {
-    Error(Nil) -> bad_request(language, theme)
-    Ok(choice) ->
-      wisp.redirect(to: return_path(form_value(form, view.return_field)))
-      |> set_preference_cookie(language_cookie, language_cookie_value(choice))
-  }
-}
-
-/// テーマの切り替え。選んだテーマを cookie に保存し（ブラウザーの設定では cookie を
-/// 消す）、フォームが送った戻り先へ 303 で戻す。cookie を変えるので POST だけを受け付け、
-/// ほかの POST と同じく CSRF の検査の下に置く。
-fn switch_theme(
-  request: Request,
-  language: Language,
-  theme: view.Theme,
-) -> Response {
-  use <- require_method(request, http.Post, language, theme)
-  use form <- wisp.require_form(request)
-  case view.theme_from_code(form_value(form, view.theme_field)) {
+  case preference.parse(form_value(form, preference.field)) {
     Error(Nil) -> bad_request(language, theme)
     Ok(chosen) ->
       wisp.redirect(to: return_path(form_value(form, view.return_field)))
-      |> set_preference_cookie(theme_cookie, theme_cookie_value(chosen))
+      |> set_preference_cookie(
+        preference.cookie,
+        preference_cookie_value(preference, chosen),
+      )
   }
 }
 
-/// cookie に保存する値。ブラウザーの設定は保存しない。
-fn theme_cookie_value(theme: view.Theme) -> Option(String) {
-  case theme {
-    view.System -> None
-    view.Light | view.Dark -> Some(view.theme_code(theme))
-  }
-}
-
-/// cookie に保存する値。ブラウザーの設定は保存しない。
-fn language_cookie_value(choice: view.LanguageChoice) -> Option(String) {
-  case choice {
-    view.BrowserLanguage -> None
-    view.ChosenLanguage(_) -> Some(view.language_choice_code(choice))
+/// 選んだ値を cookie に保存する値にする。ブラウザーの設定は保存しない（`None`）。
+fn preference_cookie_value(
+  preference: Preference(a),
+  chosen: a,
+) -> Option(String) {
+  case chosen == preference.browser {
+    True -> None
+    False -> Some(preference.code(chosen))
   }
 }
 
@@ -896,8 +909,7 @@ fn plugin_page_post(
   theme: view.Theme,
   name: String,
   key: String,
-  action: fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
+  action: plugin_config.PageAction,
 ) -> Response {
   case context.page_accounts() {
     Error(reason) ->
@@ -1169,7 +1181,8 @@ fn submitted_form(form: wisp.FormData) -> dashboard.PermissionsForm {
   )
 }
 
-/// チェックの欄が `on` で送られているか。
+/// チェックボックスの欄が入っているか。管理 UI のチェックボックス（`view.checkbox_row`）は
+/// 送信値を `on` に固定し、チェックの無いものは送られないので、値が `on` のときだけ入っているとする。
 fn field_checked(form: wisp.FormData, name: String) -> Bool {
   form_value(form, name) == "on"
 }
@@ -1711,13 +1724,11 @@ fn parse_relay_url(raw: String) -> Result(String, i18n.Message) {
   }
 }
 
-/// フォームの用途。チェックの無いチェックボックスは送られない。どちらのチェックも無ければ
-/// `RelayRoleRequired`。
+/// フォームのチェックから用途を読む。どちらのチェックも無ければ `RelayRoleRequired`。
 fn relay_roles(form: wisp.FormData) -> Result(relay_list.Roles, i18n.Message) {
-  let checked = fn(name) { result.is_ok(list.key_find(form.values, name)) }
   relay_list.roles_from(
-    monitor: checked(dashboard.monitor_field),
-    bunker: checked(dashboard.bunker_field),
+    monitor: field_checked(form, dashboard.monitor_field),
+    bunker: field_checked(form, dashboard.bunker_field),
   )
   |> result.replace_error(i18n.RelayRoleRequired)
 }

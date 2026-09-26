@@ -112,10 +112,7 @@ fn plugin_page_content(
 fn plugin_page_action(
   name: String,
   key: String,
-) -> Option(
-  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
-) {
+) -> Option(plugin_config.PageAction) {
   case name, key {
     "console_logger", "settings" ->
       Some(fn(values, _accounts) {

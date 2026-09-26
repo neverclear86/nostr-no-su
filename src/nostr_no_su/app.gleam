@@ -935,10 +935,7 @@ pub fn plugin_page_action(
   specs: List(PluginSpec),
   plugin: String,
   key: String,
-) -> Option(
-  fn(List(#(String, String)), List(plugin_config.PageAccount)) ->
-    Result(Nil, String),
-) {
+) -> Option(plugin_config.PageAction) {
   use spec <- option.then(
     list.find(specs, fn(spec) { spec.plugin.name == plugin })
     |> option.from_result,
