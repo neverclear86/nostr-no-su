@@ -25,6 +25,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/connection_uri
+import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
@@ -665,19 +666,21 @@ fn context() -> admin.Context {
     sessions: fn() {
       let now = time.now_seconds()
       Ok([
-        dashboard.SessionRow(
+        session.Session(
           signer:,
           client:,
           perms: "sign_event:1,sign_event:7,nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt",
           created_at: now - 30 * 86_400,
           last_used_at: now - 7 * 86_400,
+          relays: [],
         ),
-        dashboard.SessionRow(
+        session.Session(
           signer:,
           client: earlier_client,
           perms: "",
           created_at: now - 14 * 86_400,
           last_used_at: now - 14 * 86_400,
+          relays: [],
         ),
       ])
     },

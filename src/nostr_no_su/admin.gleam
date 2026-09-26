@@ -41,6 +41,7 @@ import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/permission
+import nostr_no_su/bunker/session.{type Session}
 import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/nostr/nip19
@@ -249,7 +250,7 @@ pub type Context {
     /// 無ければ `None`（`plugin_page` はこれで 405 にする）。
     plugin_page_action: fn(String, String) -> Option(plugin_config.PageAction),
     /// 承認済みセッションの一覧。読み込み中、応答なしのときは表示する理由を返す。
-    sessions: fn() -> Result(List(dashboard.SessionRow), String),
+    sessions: fn() -> Result(List(Session), String),
     /// セッション（署名者, クライアント）を 1 件取り消す。
     revoke: fn(String, String) -> Result(Nil, SessionFailure),
     /// セッション（署名者, クライアント）の権限を差し替える。
