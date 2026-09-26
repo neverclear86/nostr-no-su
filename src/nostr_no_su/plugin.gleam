@@ -965,14 +965,14 @@ fn apply(module: Atom, function: Atom, args: List(Dynamic)) -> Dynamic
 
 /// モジュールをコードパスから期限付きで読み込む。`-on_load` が戻らない
 /// モジュールを検出するため、使い捨てのプロセスで動かす。
-@external(erlang, "nostr_no_su_ffi", "ensure_module_loaded_within")
+@external(erlang, "nostr_no_su_plugin_ffi", "ensure_module_loaded_within")
 fn ensure_module_loaded_within(
   module: Atom,
   timeout_ms: Int,
 ) -> Result(Nil, CallFailure)
 
 /// 例外と戻らない呼び出しを `CallFailure` にしてエクスポートを呼ぶ。
-@external(erlang, "nostr_no_su_ffi", "call_export_within")
+@external(erlang, "nostr_no_su_plugin_ffi", "call_export_within")
 fn call_export_within(
   module: Atom,
   function: Atom,
@@ -981,5 +981,5 @@ fn call_export_within(
 ) -> Result(Dynamic, CallFailure)
 
 /// コードパス上で最初に見つかる `<app>.app` の `vsn`。
-@external(erlang, "nostr_no_su_ffi", "application_version")
+@external(erlang, "nostr_no_su_plugin_ffi", "application_version")
 fn application_version(app: String) -> Result(String, Nil)

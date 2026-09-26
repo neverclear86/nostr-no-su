@@ -1,5 +1,5 @@
 //// 複数のテストが使う外部関数の宣言。Erlang の BIF と、`test/support/child_fixture.erl`
-//// の登録名の問い合わせと、本体の FFI（`nostr_no_su_ffi`）の自プロセスの未処理メッセージ数
+//// の登録名の問い合わせと、本体の FFI（`nostr_no_su_plugin_ffi`）の自プロセスの未処理メッセージ数
 //// を置く。
 
 import gleam/dynamic.{type Dynamic}
@@ -18,5 +18,5 @@ pub fn tuple(elements: List(Dynamic)) -> Dynamic
 pub fn is_registered(name: Atom) -> Bool
 
 /// 自プロセスの未処理メッセージ数。
-@external(erlang, "nostr_no_su_ffi", "message_queue_len")
+@external(erlang, "nostr_no_su_plugin_ffi", "message_queue_len")
 pub fn message_queue_len() -> Int

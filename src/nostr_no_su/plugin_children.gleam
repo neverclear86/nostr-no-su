@@ -316,7 +316,7 @@ fn start(
 }
 
 /// 子仕様の MFA を呼び、リンクを確かめて Pid を返す。
-@external(erlang, "nostr_no_su_ffi", "start_child")
+@external(erlang, "nostr_no_su_plugin_ffi", "start_child")
 fn start_child(
   module: Atom,
   function: Atom,
