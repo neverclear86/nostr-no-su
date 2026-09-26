@@ -3,9 +3,11 @@
 
 import envoy
 import gleam/dict.{type Dict}
+import gleam/dynamic.{type Dynamic}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin_config
@@ -291,7 +293,7 @@ fn admin_bind() -> Result(String, String) {
     None -> Ok(default_admin_bind)
     Some(value) -> {
       let raw = string.trim(value)
-      case raw == "localhost" || is_ip_address(raw) {
+      case raw == "localhost" || result.is_ok(parse_ip_address(raw)) {
         True -> Ok(raw)
         False ->
           Error(
@@ -304,6 +306,7 @@ fn admin_bind() -> Result(String, String) {
   }
 }
 
-/// `value` が IPv4 か IPv6 のアドレスとして読めるか。
-@external(erlang, "nostr_no_su_ffi", "is_ip_address")
-fn is_ip_address(value: String) -> Bool
+/// `value` を IPv4 か IPv6 のアドレスとして読む。読めなければ `Error(Nil)`。
+/// `admin_bind` は成否だけを見るので、読めた値は `Dynamic` のまま受け取る。
+@external(erlang, "nostr_no_su_ffi", "parse_ip_address")
+fn parse_ip_address(value: String) -> Result(Dynamic, Nil)

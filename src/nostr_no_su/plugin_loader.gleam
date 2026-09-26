@@ -512,12 +512,12 @@ fn beam_module_name(file: String) -> String {
 fn list_dir(path: String) -> Result(List(String), String)
 
 /// パスがディレクトリーかどうか。
-@external(erlang, "nostr_no_su_ffi", "is_directory")
+@external(erlang, "filelib", "is_dir")
 fn is_directory(path: String) -> Bool
 
 /// 相対パスを絶対パスにする。ログ行とコードパスの内容を食い違わせないため、
 /// `PLUGIN_DIR` の各ディレクトリーは `directories` で 1 度だけこれを通す。
-@external(erlang, "nostr_no_su_ffi", "absolute_path")
+@external(erlang, "filename", "absname")
 fn absolute_path(path: String) -> String
 
 /// ディレクトリーをコードパスの末尾に足す。
