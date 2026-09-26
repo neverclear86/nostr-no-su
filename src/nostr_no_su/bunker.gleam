@@ -421,8 +421,7 @@ pub type Msg {
 /// バンカーが保持する承認済みセッションの一覧。読み込み前、読み直しの前、
 /// アクターが応答しないときは理由を返す。
 pub fn sessions(name: Name(Msg)) -> Result(List(Session), String) {
-  named.call(name, call_timeout_ms, GetSessions)
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, GetSessions)
 }
 
 /// セッションを 1 件取り消し、反映されるまで待つ。読み込み前は `SessionNotReady`、
@@ -453,8 +452,7 @@ pub fn update_perms(
 /// 承認待ちの接続要求の一覧。読み込み前、読み直しの前、アクターが応答しないときは
 /// 理由を返す。
 pub fn pending(name: Name(Msg)) -> Result(List(Pending), String) {
-  named.call(name, call_timeout_ms, GetPending)
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, GetPending)
 }
 
 /// 接続要求を 1 件承認し、書き込みが成功したときだけ応答イベントを送り出すまで
@@ -588,8 +586,7 @@ pub fn update_label(
 /// アカウントの一覧。読み込めていない、あるいはアクターが応答しないときは理由を
 /// 返す。
 pub fn accounts(name: Name(Msg)) -> Result(List(Listing), String) {
-  named.call(name, call_timeout_ms, GetAccounts)
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, GetAccounts)
 }
 
 /// DB からの読み直しを要求する。読み込めていない間は既に読み直しが進んでいるので
@@ -602,8 +599,7 @@ pub fn reload_accounts(name: Name(Msg)) -> Result(Nil, String) {
 /// 直近の読み込みで飛ばされた行の一覧。読み込めていない、あるいはアクターが
 /// 応答しないときは理由を返す。
 pub fn skipped(name: Name(Msg)) -> Result(List(vault.Skipped), String) {
-  named.call(name, call_timeout_ms, GetSkipped)
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, GetSkipped)
 }
 
 /// 署名者の秘密鍵の nsec。読み込み前、読み直しの前、未登録、アクターが応答しない
@@ -614,8 +610,7 @@ pub fn skipped(name: Name(Msg)) -> Result(List(vault.Skipped), String) {
 /// 分けてから使うこと。応答は alias の `named.call` で受けるので、タイムアウトの後に
 /// 届いた nsec はランタイムが捨てる。
 pub fn nsec(name: Name(Msg), signer: String) -> Result(String, String) {
-  named.call(name, call_timeout_ms, GetNsec(signer, _))
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, GetNsec(signer, _))
 }
 
 /// リレーの AUTH に返す、署名済みの kind 22242。`BaseRelay` の接続は登録アカウント
@@ -628,8 +623,7 @@ pub fn authenticate(
   scope: RelayScope,
   challenge: String,
 ) -> Result(List(Event), String) {
-  named.call(name, call_timeout_ms, Authenticate(relay_url, scope, challenge, _))
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, Authenticate(relay_url, scope, challenge, _))
 }
 
 /// 登録アカウントの鍵で署名したイベント。プラグインからの送信の口（`plugin_api`）
@@ -642,8 +636,7 @@ pub fn sign_event(
   tags: List(List(String)),
   content: String,
 ) -> Result(Event, String) {
-  named.call(name, call_timeout_ms, SignEvent(signer, kind, tags, content, _))
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, SignEvent(signer, kind, tags, content, _))
 }
 
 /// `signers` のそれぞれが登録アカウントか。結果は `signers` と同じ順で、未登録の
@@ -654,8 +647,7 @@ pub fn check_accounts(
   name: Name(Msg),
   signers: List(String),
 ) -> Result(List(Result(Nil, String)), String) {
-  named.call(name, call_timeout_ms, CheckAccounts(signers, _))
-  |> option.unwrap(Error(query_not_answered))
+  call_query(name, CheckAccounts(signers, _))
 }
 
 /// 承認・拒否・取り消しをアクターへ送って結果を待つ。応答が無ければ、打ち切った
@@ -667,6 +659,16 @@ fn call_session_change(
 ) -> Result(Nil, SessionFailure) {
   named.call(name, call_timeout_ms, request)
   |> option.unwrap(Error(SessionMaybeApplied(BunkerDidNotRespond)))
+}
+
+/// 問い合わせをアクターへ送って結果を待つ。応答が無ければ `query_not_answered`
+/// を返す。
+fn call_query(
+  name: Name(Msg),
+  request: fn(Subject(Result(a, String))) -> Msg,
+) -> Result(a, String) {
+  named.call(name, call_timeout_ms, request)
+  |> option.unwrap(Error(query_not_answered))
 }
 
 /// アカウントの変更をアクターへ送って結果を待つ。
@@ -824,12 +826,7 @@ fn response_session_relays(
 ) -> List(String) {
   let client = delivery.recipient(response)
   engines
-  |> list.find_map(fn(eng) {
-    engine.sessions(eng)
-    |> list.find(fn(session) {
-      session.signer == response.pubkey && session.client == client
-    })
-  })
+  |> list.find_map(engine.find_session(_, response.pubkey, client))
   |> result.map(fn(session) { session.relays })
   |> result.unwrap([])
 }
@@ -986,29 +983,15 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Ready -> reload(state)
         Loading(..) -> state
       }
-      process.send(reply, Nil)
-      actor.continue(next)
+      answer(next, reply, Nil)
     }
-    GetSigners(reply) -> {
-      process.send(reply, engine.signers(state.engine))
-      actor.continue(state)
-    }
-    GetPublishers(reply) -> {
-      process.send(reply, dict.keys(state.publishers))
-      actor.continue(state)
-    }
-    GetAccounts(reply) -> {
-      process.send(reply, listings(state))
-      actor.continue(state)
-    }
-    GetSkipped(reply) -> {
-      process.send(reply, when_loaded(state, fn() { state.skipped }))
-      actor.continue(state)
-    }
-    GetNsec(signer:, reply:) -> {
-      process.send(reply, private_key_nsec(state, signer))
-      actor.continue(state)
-    }
+    GetSigners(reply) -> answer(state, reply, engine.signers(state.engine))
+    GetPublishers(reply) -> answer(state, reply, dict.keys(state.publishers))
+    GetAccounts(reply) -> answer(state, reply, listings(state))
+    GetSkipped(reply) ->
+      answer(state, reply, when_loaded(state, fn() { state.skipped }))
+    GetNsec(signer:, reply:) ->
+      answer(state, reply, private_key_nsec(state, signer))
     Authenticate(relay_url:, scope:, challenge:, reply:) -> {
       let signers = case scope {
         BaseRelay -> engine.signers(state.engine)
@@ -1016,7 +999,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
       let accounts =
         list.filter_map(signers, engine.find_account(state.engine, _))
-      process.send(
+      answer(
+        state,
         reply,
         delivery.authentication_events(
           accounts,
@@ -1025,20 +1009,16 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           time.now_seconds(),
         ),
       )
-      actor.continue(state)
     }
-    CheckAccounts(signers:, reply:) -> {
-      let answer = case state.accounts {
-        Loading(..) -> Error(accounts_not_loaded)
-        Ready -> Ok(list.map(signers, registered(state, _)))
-      }
-      process.send(reply, answer)
-      actor.continue(state)
-    }
-    SignEvent(signer:, kind:, tags:, content:, reply:) -> {
-      process.send(reply, sign_for(state, signer, kind, tags, content))
-      actor.continue(state)
-    }
+    CheckAccounts(signers:, reply:) ->
+      answer(
+        state,
+        reply,
+        accounts_ready(state)
+          |> result.map(fn(_) { list.map(signers, registered(state, _)) }),
+      )
+    SignEvent(signer:, kind:, tags:, content:, reply:) ->
+      answer(state, reply, sign_for(state, signer, kind, tags, content))
     AddAccount(account: added, label:, reply:) -> {
       let signer = account.pubkey_hex(added)
       let stored =
@@ -1096,15 +1076,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           State(..current, labels: dict.insert(current.labels, signer, label))
         },
       )
-    GetPending(reply) -> {
-      process.send(
+    GetPending(reply) ->
+      answer(
+        state,
         reply,
         when_loaded(state, fn() {
           engine.pending(state.engine, time.now_seconds())
         }),
       )
-      actor.continue(state)
-    }
     Approve(token, reply) ->
       apply_decision(state, reply, Approval, token, engine.approve)
     Deny(token, reply) ->
@@ -1119,17 +1098,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         relays,
         secret,
       )
-    GetSessions(reply) -> {
-      process.send(
+    GetSessions(reply) ->
+      answer(
+        state,
         reply,
         when_loaded(state, fn() { engine.sessions(state.engine) }),
       )
-      actor.continue(state)
-    }
-    GetSessionSigners(relay_url:, reply:) -> {
-      process.send(reply, session_relay_signers_of(state, relay_url))
-      actor.continue(state)
-    }
+    GetSessionSigners(relay_url:, reply:) ->
+      answer(state, reply, session_relay_signers_of(state, relay_url))
     ReserveSessionRelays(signer:, client:, relays:) ->
       actor.continue(transition(
         state,
@@ -1166,66 +1142,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
       actor.continue(State(..state, publishers: publishers))
     }
-    Incoming(incoming) -> {
-      // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
-      // することでエンジンは乱数を持たずに済む。
-      let inputs =
-        engine.Inputs(
-          now: time.now_seconds(),
-          token: random.hex(token_bytes),
-          not_before: state.not_before,
-        )
-      let engine.Handled(engine: accepted, outcome:, notice:, outside_session:) =
-        engine.handle_event(state.engine, incoming, inputs)
-      case notice {
-        Some(line) -> log.write(log.Notice, log_prefix, line)
-        None -> Nil
-      }
-      let #(published, next) = case outcome {
-        engine.Reply(response) -> #(
-          publish(
-            state,
-            response,
-            outside_session,
-            response_session_relays([accepted], response),
-          ),
-          accepted,
-        )
-        engine.Persist(write:, next:, response:, on_failure:) -> {
-          let #(change, target) = incoming_write_change(write)
-          case write_session_change(state, change, target, write) {
-            #(written, Ok(Nil)) -> #(
-              publish(
-                written,
-                response,
-                outside_session,
-                response_session_relays([next, accepted], response),
-              ),
-              next,
-            )
-            #(written, Error(_failure)) -> #(
-              publish(
-                written,
-                on_failure,
-                outside_session,
-                response_session_relays([accepted], on_failure),
-              ),
-              accepted,
-            )
-          }
-        }
-        engine.Duplicate | engine.Throttled -> #(state, accepted)
-        engine.Ignore(reason) -> {
-          log.write(
-            log.Notice,
-            log_prefix,
-            "ignored: " <> log.sanitize_external(reason),
-          )
-          #(state, accepted)
-        }
-      }
-      actor.continue(transition(state, State(..published, engine: next)))
-    }
+    Incoming(incoming) -> handle_incoming(state, incoming)
     Acknowledged(relay_url, ack) -> {
       let #(deliveries, line) =
         delivery.acknowledge(state.deliveries, relay_url, ack)
@@ -1247,6 +1164,72 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       )
     }
   }
+}
+
+/// 問い合わせに `value` で応答し、`state` で続ける。
+fn answer(state: State, reply: Subject(a), value: a) -> actor.Next(State, Msg) {
+  process.send(reply, value)
+  actor.continue(state)
+}
+
+/// 受信イベント 1 件をエンジンに通す。エンジンの注意があればログに出し、結果に
+/// 応じて送る応答とセッションを探すエンジンの並び、次のエンジンを決める。
+/// `Persist` は書き込みが成功すれば `response` と書き込み後のエンジン、失敗すれば
+/// `on_failure` と受信を記録しただけのエンジンを選ぶ。応答があれば `publish` を
+/// 1 回呼び、最後に `transition` で次のエンジンへ移る。
+fn handle_incoming(state: State, incoming: Verified) -> actor.Next(State, Msg) {
+  // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
+  // することでエンジンは乱数を持たずに済む。
+  let inputs =
+    engine.Inputs(
+      now: time.now_seconds(),
+      token: random.hex(token_bytes),
+      not_before: state.not_before,
+    )
+  let engine.Handled(engine: accepted, outcome:, notice:, outside_session:) =
+    engine.handle_event(state.engine, incoming, inputs)
+  case notice {
+    Some(line) -> log.write(log.Notice, log_prefix, line)
+    None -> Nil
+  }
+  let #(written, reply, next) = case outcome {
+    engine.Reply(response) -> #(state, Some(#(response, [accepted])), accepted)
+    engine.Persist(write:, next:, response:, on_failure:) -> {
+      let #(change, target) = incoming_write_change(write)
+      case write_session_change(state, change, target, write) {
+        #(written, Ok(Nil)) -> #(
+          written,
+          Some(#(response, [next, accepted])),
+          next,
+        )
+        #(written, Error(_failure)) -> #(
+          written,
+          Some(#(on_failure, [accepted])),
+          accepted,
+        )
+      }
+    }
+    engine.Duplicate | engine.Throttled -> #(state, None, accepted)
+    engine.Ignore(reason) -> {
+      log.write(
+        log.Notice,
+        log_prefix,
+        "ignored: " <> log.sanitize_external(reason),
+      )
+      #(state, None, accepted)
+    }
+  }
+  let published = case reply {
+    Some(#(response, engines)) ->
+      publish(
+        written,
+        response,
+        outside_session,
+        response_session_relays(engines, response),
+      )
+    None -> written
+  }
+  actor.continue(transition(state, State(..published, engine: next)))
 }
 
 /// ストアからアカウント、セッション、承認待ちを読み込む。成功したらメモリを
@@ -1379,29 +1362,36 @@ fn when_loaded(state: State, read: fn() -> a) -> Result(a, String) {
   }
 }
 
+/// 読み込み済みなら `Ok(Nil)`、読み込みか読み直しが終わっていなければ
+/// `accounts_not_loaded` を返す。
+fn accounts_ready(state: State) -> Result(Nil, String) {
+  case state.accounts {
+    Ready -> Ok(Nil)
+    Loading(..) -> Error(accounts_not_loaded)
+  }
+}
+
+/// 読み込み済みの登録アカウント。読み込み前は `accounts_not_loaded`、未登録なら
+/// `account_not_registered` を返す。
+fn ready_account(state: State, signer: String) -> Result(Account, String) {
+  use Nil <- result.try(accounts_ready(state))
+  engine.find_account(state.engine, signer)
+  |> result.replace_error(account_not_registered)
+}
+
 /// 秘密鍵の再表示の問い合わせへの応答。状態を変えず、ストアもログも使わない。読み直しの
 /// 前も拒否するのは、その間メモリが DB と食い違っていることがあるからで、変更と一覧の
 /// 扱いに合わせる。
 fn private_key_nsec(state: State, signer: String) -> Result(String, String) {
-  case state.accounts {
-    Loading(..) -> Error(accounts_not_loaded)
-    Ready ->
-      engine.find_account(state.engine, signer)
-      |> result.map(account.nsec)
-      |> result.replace_error(account_not_registered)
-  }
+  ready_account(state, signer)
+  |> result.map(account.nsec)
 }
 
 /// `signer` が登録アカウントか。読み込み前は `accounts_not_loaded`、未登録なら
 /// `account_not_registered` を返す。
 fn registered(state: State, signer: String) -> Result(Nil, String) {
-  case state.accounts {
-    Loading(..) -> Error(accounts_not_loaded)
-    Ready ->
-      engine.find_account(state.engine, signer)
-      |> result.replace_error(account_not_registered)
-      |> result.replace(Nil)
-  }
+  ready_account(state, signer)
+  |> result.replace(Nil)
 }
 
 /// `signer` の鍵で署名したイベント。読み込み前は `accounts_not_loaded`、署名者が
@@ -1413,17 +1403,9 @@ fn sign_for(
   tags: List(List(String)),
   content: String,
 ) -> Result(Event, String) {
-  case state.accounts {
-    Loading(..) -> Error(accounts_not_loaded)
-    Ready -> {
-      use account <- result.try(
-        engine.find_account(state.engine, signer)
-        |> result.replace_error(account_not_registered),
-      )
-      engine.sign_as(account, kind, tags, content, time.now_seconds())
-      |> result.replace_error(sign_failed)
-    }
-  }
+  use account <- result.try(ready_account(state, signer))
+  engine.sign_as(account, kind, tags, content, time.now_seconds())
+  |> result.replace_error(sign_failed)
 }
 
 /// ストアから読み込んだアカウントにメモリを合わせる（ストアに無い署名者を取り除き、
@@ -1644,8 +1626,7 @@ fn pending_target(
   token: String,
   now: Int,
 ) -> Option(#(String, String)) {
-  engine.pending(eng, now)
-  |> list.find(fn(entry) { entry.token == token })
+  engine.find_pending(eng, token, now)
   |> option.from_result
   |> option.map(fn(entry) { #(entry.signer, entry.client) })
 }
@@ -1657,9 +1638,7 @@ fn session_target(
   signer: String,
   client: String,
 ) -> Option(#(String, String)) {
-  list.find(engine.sessions(eng), fn(session) {
-    session.signer == signer && session.client == client
-  })
+  engine.find_session(eng, signer, client)
   |> option.from_result
   |> option.map(fn(_found) { #(signer, client) })
 }
