@@ -21,6 +21,24 @@ pub fn decode_rejects_invalid_text_test() {
   assert hex.decode("zz") == Error(Nil)
 }
 
+/// 指定したバイト数ちょうどの 16 進を読む。大文字と小文字が混ざっていても読む。
+pub fn decode_exact_reads_the_given_byte_count_test() {
+  assert hex.decode_exact("01AbfF", 3) == Ok(<<0x01, 0xab, 0xff>>)
+  assert hex.decode_exact("", 0) == Ok(<<>>)
+}
+
+/// バイト数が違う 16 進は読まない。
+pub fn decode_exact_rejects_other_byte_counts_test() {
+  assert hex.decode_exact("01abff", 2) == Error(Nil)
+  assert hex.decode_exact("01abff", 4) == Error(Nil)
+}
+
+/// 16 進として読めない文字列は読まない。
+pub fn decode_exact_rejects_invalid_text_test() {
+  assert hex.decode_exact("abc", 1) == Error(Nil)
+  assert hex.decode_exact("zz", 1) == Error(Nil)
+}
+
 /// 任意のバイト列は小文字だけの文字列になり、その文字列も、大文字にした文字列も、
 /// 読むと元のバイト列に戻る。
 pub fn round_trip_property_test() {

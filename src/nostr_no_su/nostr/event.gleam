@@ -97,9 +97,8 @@ fn tags_dynamic(event: Event) -> Dynamic {
 
 /// プラグイン境界の map（`to_map` の形）を `Event` に戻す。
 ///
-/// 失敗側を `String` にしているのは、プラグインローダーがこの文字列をそのまま
-/// ログの 1 行に出せるようにするため。JSON のデコードを扱う他の 3 か所は
-/// `json.DecodeError` を型のまま伝播しているが、ここだけ方針が違う。
+/// 失敗側を `String` にしているのは、プラグインが `@external` で呼び、理由を 1 行で
+/// 受け取るため。
 pub fn from_map(value: Dynamic) -> Result(Event, String) {
   decode.run(value, decoder())
   |> result.map_error(describe_decode_errors)
