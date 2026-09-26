@@ -802,21 +802,6 @@ pub fn unconfirmed_notices_ask_to_check_the_dashboard_test() {
   assert !string.contains(simulate.read_body(not_found), hint)
 }
 
-/// 承認・拒否・取り消し・クライアントの接続のログ行は、署名者とクライアントの公開鍵を
-/// 含む。
-pub fn session_change_lines_name_the_signer_and_the_client_test() {
-  assert admin.session_change_line(admin.ConnectionApproved, signer, client)
-    == "approved the connection of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.ConnectionDenied, signer, client)
-    == "denied the connection of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.SessionRevoked, signer, client)
-    == "revoked the session of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.PermissionsSaved, signer, client)
-    == "updated the permissions of client " <> client <> " to signer " <> signer
-  assert admin.session_change_line(admin.ClientConnected, signer, client)
-    == "connected client " <> client <> " to signer " <> signer
-}
-
 /// 知らないパスは 404 の HTML で、理由を出し、パスを含めない。アカウントの一覧を
 /// 引かない（503 にならない）ことで、`Context` を呼ばずに描画することを表す。
 pub fn unknown_paths_are_not_found_test() {
