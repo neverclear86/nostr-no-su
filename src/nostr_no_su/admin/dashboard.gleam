@@ -1115,7 +1115,7 @@ pub fn import_form(
   let text = i18n.text(language, _)
   [
     view.secret_post_form(
-      routes.segments_path(routes.import_account_segments),
+      routes.href(routes.ImportAccount),
       [
         view.hinted_input(
           language,
@@ -1143,7 +1143,7 @@ pub fn generate_form(
   [
     view.paragraph(text(i18n.GenerateDescription)),
     view.post_form(
-      routes.segments_path(routes.generate_account_segments),
+      routes.href(routes.GenerateAccount),
       [],
       text(i18n.Generate),
       view.OutlineButton,
@@ -1662,7 +1662,7 @@ fn result_dialog(
             ),
             view.copyable_field(language, text(i18n.PrivateKeyNsec), nsec),
             view.post_form(
-              routes.segments_path(routes.register_generated_segments),
+              routes.href(routes.RegisterGeneratedAccount),
               [
                 view.hidden_input(nsec_field, nsec),
                 label_fieldset(language, id <> "-label-hint", label),
@@ -1776,7 +1776,7 @@ fn account_action_form(
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = routes.account_action_path(row.signer, action)
+  let path = routes.href(routes.AccountOperation(row.signer, action))
   case action {
     routes.EditLabel -> [
       view.post_form(
@@ -1853,7 +1853,7 @@ fn unreadable_delete_form(
       ),
     ]),
     view.post_form(
-      routes.account_action_path(row.pubkey, routes.DeleteAccount),
+      routes.href(routes.AccountOperation(row.pubkey, routes.DeleteAccount)),
       [],
       text(i18n.DeleteAccountSubmit),
       view.DangerButton,
@@ -2153,7 +2153,7 @@ pub fn approval_page(
     theme,
     view.TranslatedTitle(i18n.ApproveConnection),
     view.Narrow,
-    view.SwitchReturningTo(routes.approve_path(pending.token)),
+    view.SwitchReturningTo(routes.path(routes.ApproveConnection(pending.token))),
     view.RefreshEverySeconds(refresh_seconds),
     [
       html.section([attribute.class("flex flex-col gap-4")], [
@@ -2525,7 +2525,7 @@ pub fn new_relay_form(
   [
     view.paragraph(text(i18n.AddRelayDescription)),
     view.post_form(
-      routes.segments_path(routes.new_relay_segments),
+      routes.href(routes.NewRelay),
       [url_field(language, url), roles_fieldset(language, roles, None)],
       text(i18n.Register),
       view.PrimaryButton,
@@ -2546,7 +2546,7 @@ pub fn relay_action_form(
   placement: view.Placement,
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let path = routes.relay_action_path(row.id, action)
+  let path = routes.href(routes.RelayOperation(row.id, action))
   case action {
     routes.EditRelayRoles -> [
       html.p([], [html.text(text(i18n.EditRelayRolesDescription))]),
@@ -2801,7 +2801,7 @@ fn connect_review_dialog(
               ]),
             ),
             view.post_form(
-              routes.segments_path(routes.connect_confirm_segments),
+              routes.href(routes.ConfirmConnection),
               [
                 view.hidden_input(nostrconnect_uri_field, review.uri),
                 view.hidden_input(signer_field, review.signer),
@@ -3050,7 +3050,7 @@ pub fn permissions_form(
   [
     view.paragraph(i18n.text(language, i18n.EditPermissionsDescription)),
     view.post_form(
-      routes.session_permissions_path(session.signer, session.client),
+      routes.href(routes.SessionPermissions(session.signer, session.client)),
       permissions_fields(language, fields, kinds_hint_id),
       i18n.text(language, i18n.Save),
       view.PrimaryButton,
@@ -3213,7 +3213,7 @@ pub fn connect_form(
   [
     view.paragraph(text(i18n.ConnectClientDescription)),
     view.post_form(
-      routes.segments_path(routes.connect_segments),
+      routes.href(routes.ConnectClient),
       [
         uri_field(language, uri),
         signing_account_select(language, accounts, signer),
@@ -3407,14 +3407,14 @@ fn decision_forms(
   }
   [
     view.post_form(
-      routes.approve_path(token),
+      routes.href(routes.ApproveConnection(token)),
       [],
       text(approve),
       approve_kind,
       view.InRow,
     ),
     view.post_form(
-      routes.deny_path(token),
+      routes.href(routes.DenyConnection(token)),
       [],
       text(i18n.Deny),
       deny_kind,
@@ -3434,7 +3434,7 @@ fn revoke_form(
   [
     view.paragraph(text(i18n.RevokeSessionDescription)),
     view.post_form(
-      routes.segments_path(routes.revoke_segments),
+      routes.href(routes.RevokeSession),
       [
         view.hidden_input(signer_field, session.signer),
         view.hidden_input(client_field, session.client),
@@ -3450,7 +3450,7 @@ fn revoke_form(
 /// 続けばまた無効になる。取り返しの付く操作なので地味なボタンにする。
 fn reenable_form(language: Language, name: String) -> Element(msg) {
   view.post_form(
-    routes.segments_path(routes.reenable_plugin_segments),
+    routes.href(routes.ReenablePlugin),
     [view.hidden_input(plugin_name_field, name)],
     i18n.text(language, i18n.ReenablePlugin),
     view.GhostButton,
@@ -3462,7 +3462,7 @@ fn reenable_form(language: Language, name: String) -> Element(msg) {
 /// セッションと承認待ちも置き換えるが、DB の内容は変えずやり直せるので地味なボタンにする。
 fn reload_form(language: Language) -> Element(msg) {
   view.post_form(
-    routes.segments_path(routes.reload_accounts_segments),
+    routes.href(routes.ReloadAccounts),
     [],
     i18n.text(language, i18n.ReloadAccounts),
     view.GhostButton,
@@ -3527,7 +3527,7 @@ fn plugin_page_link(
   case plugin.pages {
     [first, ..] -> [
       view.button_link(
-        routes.plugin_page_href(plugin.name, first.key),
+        routes.href(routes.ShowPluginPage(plugin.name, first.key)),
         view.IconTextFace(
           view.file_text_icon(),
           i18n.text(language, i18n.OpenPluginPage),

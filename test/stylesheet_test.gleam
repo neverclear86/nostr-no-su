@@ -20,7 +20,7 @@ fn pages() -> List(String) {
 /// 文字列で書かれたクラスしか出力しないので、連結で組み立てたクラス、綴りの誤り、CSS の
 /// ビルドし直し忘れは、ここで定義の無いクラスとして見つかる。
 pub fn stylesheet_defines_every_rendered_class_test() {
-  let css = admin_ui.static_file(routes.stylesheet_segments)
+  let css = admin_ui.static_file(routes.Stylesheet)
   let undefined =
     pages()
     |> list.flat_map(classes)
@@ -35,7 +35,7 @@ pub fn stylesheet_defines_every_rendered_class_test() {
 /// （`field`）は面とページの地に対して 3 である。`accent` は飾りだけに使うので文字の色としては
 /// 数えず、`base-300` は文字を載せない区切りの線なので数えない。
 pub fn the_themes_meet_the_contrast_minimums_test() {
-  let css = admin_ui.static_file(routes.stylesheet_segments)
+  let css = admin_ui.static_file(routes.Stylesheet)
   let surfaces = ["base-100", "base-200"]
   let text_on_surfaces =
     list.flat_map(
@@ -78,7 +78,7 @@ pub fn the_themes_meet_the_contrast_minimums_test() {
 /// 面の影（`shadow-lift` の 2 層）を運び、本文と等幅の文字が OS のフォントの並びである。
 /// Web フォントは同梱しないので、`@font-face` は無い。
 pub fn the_themes_carry_the_radii_shadow_and_fonts_test() {
-  let css = admin_ui.static_file(routes.stylesheet_segments)
+  let css = admin_ui.static_file(routes.Stylesheet)
   let shadows = [
     #("light", "0 1px 2px #0e213b0f", "0 12px 28px -14px #0e213b47"),
     #("dark", "0 0 0 1px #ffffff05", "0 16px 34px -16px #000000bf"),
@@ -145,7 +145,7 @@ pub fn pages_have_no_inline_styles_test() {
 
 /// 鍵の指紋の色は、テーマのブロックの明るさと彩度と、`fp` の色相の変数を oklch で合成する。ブロックの値を消すか色の式を変えると、テーマで明るさが切り替わらなくなる。
 pub fn the_themes_carry_the_fingerprint_colors_test() {
-  let css = admin_ui.static_file(routes.stylesheet_segments)
+  let css = admin_ui.static_file(routes.Stylesheet)
   let light = theme_variables(css, "light")
   let dark = theme_variables(css, "dark")
   assert dict.get(light, "--fp-lightness") == Ok(".57")

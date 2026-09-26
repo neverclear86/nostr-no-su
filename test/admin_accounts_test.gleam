@@ -708,7 +708,7 @@ pub fn new_account_form_does_not_save_the_nsec_as_a_password_test() {
   assert string.contains(
     body,
     "<form action=\""
-      <> routes.segments_path(routes.import_account_segments)
+      <> routes.href(routes.ImportAccount)
       <> "\" autocomplete=\"off\"",
   )
 }
@@ -1122,7 +1122,7 @@ pub fn account_pages_need_the_account_list_test() {
 
 /// 飛ばされた行の削除のパス。
 fn skipped_delete_path() -> String {
-  routes.account_action_path(skipped_pubkey, routes.DeleteAccount)
+  routes.href(routes.AccountOperation(skipped_pubkey, routes.DeleteAccount))
 }
 
 /// 飛ばされた行の削除のダイアログの `id`。
@@ -1184,9 +1184,9 @@ pub fn unreadable_delete_for_an_unlisted_or_malformed_pubkey_is_not_found_test()
       ])
     })
   let unlisted_path =
-    routes.account_action_path("unknown-pubkey", routes.DeleteAccount)
+    routes.href(routes.AccountOperation("unknown-pubkey", routes.DeleteAccount))
   let malformed_path =
-    routes.account_action_path(malformed_pubkey, routes.DeleteAccount)
+    routes.href(routes.AccountOperation(malformed_pubkey, routes.DeleteAccount))
   list.each([unlisted_path, malformed_path], fn(path) {
     assert post(with_malformed, path).status == 404
   })

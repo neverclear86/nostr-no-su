@@ -22,6 +22,7 @@ import nostr_no_su/admin/view
 import nostr_no_su/bunker
 import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/nostrconnect
+import nostr_no_su/plugin
 import nostr_no_su/relay_list
 import nostr_no_su/task
 import nostr_no_su/time
@@ -188,7 +189,7 @@ pub fn revoking_an_unknown_session_is_not_found_test() {
 
 /// 承認済みの一覧に無い組への POST は 404。
 pub fn unknown_session_permissions_are_not_found_test() {
-  let path = routes.session_permissions_path(signer, unknown_client)
+  let path = routes.href(routes.SessionPermissions(signer, unknown_client))
   assert post_form(context(), path, [#(dashboard.sign_event_field, "on")]).status
     == 404
 }
@@ -200,7 +201,7 @@ pub fn session_permissions_are_saved_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [
         #(dashboard.sign_event_field, "on"),
         #(dashboard.nip44_encrypt_field, "on"),
@@ -222,7 +223,7 @@ pub fn session_permissions_keep_unknown_declarations_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [
         #(dashboard.sign_event_field, "on"),
         #(dashboard.perms_other_field, "nip04_encrypt"),
@@ -243,7 +244,7 @@ pub fn session_permissions_keep_the_kinds_in_order_once_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [
         #(dashboard.nip44_decrypt_field, "on"),
         #(dashboard.perms_kinds_field, "7,1,07"),
@@ -265,7 +266,7 @@ pub fn session_permissions_drop_the_kinds_when_every_kind_is_signed_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [
         #(dashboard.sign_event_field, "on"),
         #(dashboard.perms_kinds_field, "7"),
@@ -300,7 +301,7 @@ pub fn empty_session_permissions_are_rejected_test() {
   let response =
     post_form(
       context(),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [],
     )
   assert response.status == 400
@@ -330,7 +331,7 @@ pub fn invalid_kind_list_is_rejected_test() {
   let response =
     post_form(
       context(),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [#(dashboard.perms_kinds_field, "abc")],
     )
   assert response.status == 400
@@ -352,7 +353,7 @@ pub fn padded_kinds_are_saved_in_decimal_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [#(dashboard.perms_kinds_field, "01")],
     )
   assert response.status == 303
@@ -370,7 +371,7 @@ pub fn session_permissions_are_not_saved_when_sessions_are_unavailable_test() {
   let response =
     post_form(
       admin.Context(..context(), sessions: fn() { Error(unavailable) }),
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [#(dashboard.sign_event_field, "on")],
     )
   assert response.status == 503
@@ -390,7 +391,7 @@ pub fn session_permissions_are_not_saved_when_the_bunker_did_not_apply_test() {
   let response =
     post_form(
       failing,
-      routes.session_permissions_path(signer, declared_client),
+      routes.href(routes.SessionPermissions(signer, declared_client)),
       [#(dashboard.sign_event_field, "on")],
     )
   assert response.status == 409
@@ -582,6 +583,28 @@ pub fn plugin_page_action_redirects_to_the_page_test() {
     ])
   assert response.status == 303
   assert header(response, "location") == "/plugins/console_logger/settings"
+}
+
+/// 名前に percent-encode の要るプラグインのページへの POST は、名前を符号化した同じページへ戻る。
+pub fn plugin_page_action_redirects_to_the_encoded_page_test() {
+  let context =
+    admin.Context(
+      ..context(),
+      plugins: fn(_deadline) {
+        [
+          dashboard.PluginRow("a b", None, pages: [
+            plugin.PluginPage(key: "settings", title: "Settings"),
+          ]),
+        ]
+      },
+      plugin_page_action: fn(_name, _key) {
+        Some(fn(_values, _accounts) { Ok(Nil) })
+      },
+    )
+  let response =
+    post_form(context, "/plugins/a%20b/settings", [#("main", "on")])
+  assert response.status == 303
+  assert header(response, "location") == "/plugins/a%20b/settings"
 }
 
 /// 拒否の理由は 503 の本文に英語のまま出る。
@@ -885,10 +908,10 @@ pub fn method_not_allowed_pages_test() {
     "/accounts/register-generated",
     "/sessions/connect",
     "/sessions/connect/confirm",
-    routes.session_permissions_path(signer, declared_client),
+    routes.href(routes.SessionPermissions(signer, declared_client)),
     "/relays/new",
-    routes.relay_action_path(1, routes.EditRelayRoles),
-    routes.relay_action_path(1, routes.DeleteRelay),
+    routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
+    routes.href(routes.RelayOperation(1, routes.DeleteRelay)),
     action_path(routes.EditLabel),
   ]
   let both_methods_paths = ["/approve/tok"]
@@ -1062,7 +1085,7 @@ pub fn update_relay_roles_saves_the_roles_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.relay_action_path(2, routes.EditRelayRoles),
+      routes.href(routes.RelayOperation(2, routes.EditRelayRoles)),
       [#("monitor", "on"), #("bunker", "on")],
     )
   assert response.status == 303
@@ -1077,7 +1100,7 @@ pub fn update_relay_roles_counts_only_on_as_checked_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.relay_action_path(2, routes.EditRelayRoles),
+      routes.href(routes.RelayOperation(2, routes.EditRelayRoles)),
       [#("monitor", "on"), #("bunker", "")],
     )
   assert response.status == 303
@@ -1092,7 +1115,7 @@ pub fn update_relay_roles_requires_a_role_test() {
   let response =
     post_form(
       reporting_context(reports),
-      routes.relay_action_path(1, routes.EditRelayRoles),
+      routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
       [],
     )
   assert response.status == 400
@@ -1104,7 +1127,7 @@ pub fn update_relay_roles_requires_a_role_test() {
 
 /// 削除の POST は id を Context に渡し、ダッシュボードへ 303 で戻す。
 pub fn delete_relay_submits_the_id_test() {
-  let path = routes.relay_action_path(2, routes.DeleteRelay)
+  let path = routes.href(routes.RelayOperation(2, routes.DeleteRelay))
   let reports = process.new_subject()
   let response = post(reporting_context(reports), path)
   assert response.status == 303
@@ -1116,8 +1139,8 @@ pub fn delete_relay_submits_the_id_test() {
 pub fn relay_action_for_an_unknown_id_is_not_found_test() {
   let reports = process.new_subject()
   let paths = [
-    routes.relay_action_path(99, routes.EditRelayRoles),
-    routes.relay_action_path(99, routes.DeleteRelay),
+    routes.href(routes.RelayOperation(99, routes.EditRelayRoles)),
+    routes.href(routes.RelayOperation(99, routes.DeleteRelay)),
   ]
   use path <- list.each(paths)
   let post_response = post(reporting_context(reports), path)
@@ -1162,8 +1185,8 @@ pub fn relay_action_without_registered_relays_is_unavailable_test() {
   let failing =
     admin.Context(..context(), registered_relays: fn() { Error("boom") })
   let paths = [
-    routes.relay_action_path(1, routes.EditRelayRoles),
-    routes.relay_action_path(1, routes.DeleteRelay),
+    routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
+    routes.href(routes.RelayOperation(1, routes.DeleteRelay)),
   ]
   use path <- list.each(paths)
   let response = post(failing, path)
@@ -1186,12 +1209,12 @@ pub fn relay_change_failures_test() {
   ]
   let cases = [
     #(
-      routes.relay_action_path(1, routes.EditRelayRoles),
+      routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
       [#("monitor", "on")],
       i18n.CouldNotSaveRelay,
     ),
     #(
-      routes.relay_action_path(1, routes.DeleteRelay),
+      routes.href(routes.RelayOperation(1, routes.DeleteRelay)),
       [],
       i18n.CouldNotDeleteRelay,
     ),

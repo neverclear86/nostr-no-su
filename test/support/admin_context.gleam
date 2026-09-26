@@ -426,7 +426,7 @@ pub fn header(response: Response(wisp.Body), name: String) -> String {
 
 /// 登録済みのアカウントへの操作のパス。
 pub fn action_path(action: routes.AccountAction) -> String {
-  routes.account_action_path(signer, action)
+  routes.href(routes.AccountOperation(signer, action))
 }
 
 /// 登録済みのアカウントへの操作のダイアログの `id`（`dialog-account-<署名者>-<セグメント>`）。

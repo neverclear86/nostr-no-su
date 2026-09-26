@@ -22,7 +22,7 @@ pub fn pages_have_no_inline_scripts_test() {
 /// 描画しうる `data-action` の名前は、どれもスクリプトの `actions` に関数がある。名前を綴り
 /// 違えるか関数を足し忘れると、ボタンを押しても何も起きず、ほかの検査では見つからない。
 pub fn script_handles_every_rendered_action_test() {
-  let script = admin_ui.static_file(routes.script_segments)
+  let script = admin_ui.static_file(routes.Script)
   let rendered =
     admin_ui.all_pages()
     |> list.flat_map(actions)
