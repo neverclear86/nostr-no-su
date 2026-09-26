@@ -56,13 +56,24 @@ pub fn unnamed_declarations_show_only_the_raw_value_test() {
   assert !string.contains(html, "Sign ")
 }
 
-/// `sign_event:10002` と `sign_event:0` は kind を返し、負の数、数でない値、kind の無い
-/// `sign_event`、ほかの方法は `Error(Nil)` を返す。
-pub fn signed_kind_reads_only_non_negative_kinds_test() {
-  assert permission_view.signed_kind("sign_event:10002") == Ok(10_002)
-  assert permission_view.signed_kind("sign_event:0") == Ok(0)
-  assert permission_view.signed_kind("sign_event:-1") == Error(Nil)
-  assert permission_view.signed_kind("sign_event:x") == Error(Nil)
-  assert permission_view.signed_kind("sign_event") == Error(Nil)
-  assert permission_view.signed_kind("nip44_encrypt") == Error(Nil)
+/// 英語で `sign_event:0` のチップは人の語と生の値を出す（0 は人の語を当てる kind の境界）。
+pub fn kind_zero_is_named_test() {
+  let html =
+    element.to_string(permission_view.chips(i18n.English, "sign_event:0"))
+  assert string.contains(
+    html,
+    "<span class=\"badge badge-outline badge-sm gap-1\">Sign ",
+  )
+}
+
+/// 英語で `sign_event:01` のような 0 埋めの kind の署名は、人の語を当てず生の値だけの
+/// チップになる。
+pub fn padded_kind_is_an_unnamed_declaration_test() {
+  let html =
+    element.to_string(permission_view.chips(i18n.English, "sign_event:01"))
+  assert string.contains(
+    html,
+    "<span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:01</span></span>",
+  )
+  assert !string.contains(html, "Sign ")
 }

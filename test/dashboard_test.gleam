@@ -3046,13 +3046,13 @@ pub fn connect_content_follows_the_accounts_state_test() {
   )
 }
 
-/// kind 1 の署名だけを許すセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
-fn english_permissions_form() -> String {
+/// 権限が `perms` のセッションで、英語の権限の編集フォームの中身を HTML 文字列にする。
+fn english_permissions_form(perms: String) -> String {
   let session =
     dashboard.SessionRow(
       signer: "0123",
       client: "4567",
-      perms: "sign_event:1",
+      perms: perms,
       created_at: 0,
       last_used_at: 0,
     )
@@ -3064,7 +3064,7 @@ fn english_permissions_form() -> String {
 /// フォームの中身はセッションの権限のパスへ POST し、保存済みの kind を欄に出す。ページの枠と
 /// 要約は含めない。
 pub fn permissions_form_posts_without_the_page_frame_test() {
-  let html = english_permissions_form()
+  let html = english_permissions_form("sign_event:1")
   assert string.contains(
     form_tag(html, "/sessions/0123/4567/permissions\""),
     "method=\"post\"",
@@ -3075,7 +3075,7 @@ pub fn permissions_form_posts_without_the_page_frame_test() {
 
 /// kind の欄の補足は ⓘ のボタンで開く `popover` の段落で、欄の説明として結び付く。
 pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
-  let html = english_permissions_form()
+  let html = english_permissions_form("sign_event:1")
   assert string.contains(
     html,
     "aria-describedby=\"dialog-session-0123-4567-permissions-kinds-hint\"",
@@ -3088,6 +3088,34 @@ pub fn permissions_form_opens_the_kinds_hint_from_the_info_button_test() {
     html,
     "id=\"dialog-session-0123-4567-permissions-kinds-hint\" popover=\"hint\"",
   )
+}
+
+/// 保存済みの `perms` は 3 つのチェック、kind の欄、「そのほかの宣言」に分けて欄に写す。
+/// kind の欄と「そのほかの宣言」は、並びの順と重複を保存済みのまま残す。
+pub fn permissions_form_splits_the_saved_perms_test() {
+  let html =
+    english_permissions_form(
+      "sign_event:-1,nip44_decrypt,sign_event:0,get_public_key,sign_event:7,sign_event:0",
+    )
+  assert !checkbox_checked(html, "sign_event")
+  assert !checkbox_checked(html, "nip44_encrypt")
+  assert checkbox_checked(html, "nip44_decrypt")
+  assert string.contains(html, "name=\"kinds\" value=\"0,7,0\"")
+  assert string.contains(
+    html,
+    "<input name=\"other\" type=\"hidden\" value=\"sign_event:-1,get_public_key\">",
+  )
+}
+
+/// `sign_event:01` のような 0 埋めの kind の署名は kind の欄に移さず、「そのほかの宣言」の
+/// 隠し欄に綴りのまま残す（kind の欄に写して保存し直すと `sign_event:1` になり許可が広がる）。
+pub fn permissions_form_keeps_a_padded_kind_as_another_declaration_test() {
+  let html = english_permissions_form("sign_event:01")
+  assert string.contains(
+    html,
+    "<input name=\"other\" type=\"hidden\" value=\"sign_event:01\">",
+  )
+  assert !string.contains(html, "value=\"1\"")
 }
 
 /// 接続のフォームの中身は `/sessions/connect` へ POST し、URI の欄の補足を欄の下の 1 行で
