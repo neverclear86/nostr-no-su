@@ -11,6 +11,7 @@
 //// 導出され、検証は公開データのみを扱うため。
 
 import gleam/int
+import gleam/result
 
 /// 有限体の法となる素数。
 pub const p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
@@ -166,32 +167,29 @@ pub fn valid_scalar(value: Int) -> Bool {
   value >= 1 && value < n
 }
 
-/// `scalar*G` をネイティブに計算する。秘密鍵から公開鍵を導く経路はすべてこれを
-/// 通るため、スカラーの範囲検査もここ 1 か所で行う。
-pub fn mul_g(scalar: Int) -> Result(Point, KeyError) {
+/// `scalar*G` をネイティブに計算し、アフィン座標 `#(x, y)` を返す。範囲内のスカラーから
+/// 無限遠点は出ないので、戻り値は無限遠点を持たない。秘密鍵から公開鍵を導く経路は
+/// すべてこれを通るため、スカラーの範囲検査もここ 1 か所で行う。
+pub fn mul_g(scalar: Int) -> Result(#(Int, Int), KeyError) {
   case valid_scalar(scalar) {
     False -> Error(InvalidPrivateKey)
     True ->
       case ffi_ec_point_from_priv(int_to_bytes32(scalar)) {
-        Ok(#(x, y)) -> Ok(Point(int_from_bytes(x), int_from_bytes(y)))
+        Ok(#(x, y)) -> Ok(#(int_from_bytes(x), int_from_bytes(y)))
         Error(_) -> Error(InvalidPrivateKey)
       }
   }
 }
 
-/// 秘密鍵に対応する `d*G` の完全な点（y 座標を含む）。
-pub fn pubkey_point(privkey: BitArray) -> Result(Point, KeyError) {
+/// 秘密鍵に対応する `d*G` のアフィン座標 `#(x, y)`。
+pub fn pubkey_point(privkey: BitArray) -> Result(#(Int, Int), KeyError) {
   mul_g(int_from_bytes(privkey))
 }
 
 /// 秘密鍵に対応する x-only 公開鍵（32 バイト）。
 pub fn xonly_pubkey(privkey: BitArray) -> Result(BitArray, KeyError) {
-  case pubkey_point(privkey) {
-    Ok(Point(x, _y)) -> Ok(int_to_bytes32(x))
-    // 範囲内のスカラーから無限遠点は出ないが、`Point` 型の上では起こりうる。
-    Ok(Infinity) -> Error(InvalidPrivateKey)
-    Error(error) -> Error(error)
-  }
+  use #(x, _y) <- result.map(pubkey_point(privkey))
+  int_to_bytes32(x)
 }
 
 /// `privkey * lift_x(pubkey)` の x 座標。NIP-44 の ECDH 共有秘密にあたる。
