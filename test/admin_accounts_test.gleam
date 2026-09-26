@@ -20,11 +20,11 @@ import nostr_no_su/nostr/nip19
 import support/account_actions
 import support/admin_context.{
   Added, NsecRequested, Relabeled, Removed, Rotated, account_row,
-  action_dialog_id, action_path, auth_uri, closed_dialog, context,
-  failing_context, get, header, in_japanese, label, opened_dialog, password,
-  post, post_form, reporting_context, signer, signer_npub, signer_nsec,
+  action_dialog_id, action_path, auth_uri, auth_uri_camera_text, closed_dialog,
+  context, failing_context, get, header, in_japanese, label, opened_dialog,
+  password, post, post_form, reporting_context, signer, signer_npub, signer_nsec,
   skipped_npub, skipped_pubkey, skipped_row, spec_nsec, unavailable, uri,
-  with_accounts, with_credentials, with_skipped,
+  uri_camera_text, with_accounts, with_credentials, with_skipped,
 }
 import support/nip46_client.{account_for}
 import wisp
@@ -1238,16 +1238,19 @@ pub fn connection_qr_dialog_shows_both_uris_test() {
   assert string.contains(body, "value=\"" <> wisp.escape_html(auth_uri) <> "\"")
 }
 
-/// 各タブの QR は、カメラ用に `account.camera_copy_text` で作ったコピー用の文字列を、
+/// 各タブの QR は、カメラ用に行の `uri_camera_text` と `auth_uri_camera_text` のコピー用の文字列を、
 /// 畳みの中に完全な URI を載せる。クライアントの読み取り機能で読む語も本文に出る。
 pub fn connection_qr_dialog_shows_a_camera_code_and_a_scanner_code_test() {
   let body = qr_dialog(context())
   let scanner = i18n.text(i18n.English, i18n.ScanWithClientScanner)
   list.each(
-    [#("Connection URI", uri), #("Connection URI (approval)", auth_uri)],
+    [
+      #("Connection URI", uri, uri_camera_text),
+      #("Connection URI (approval)", auth_uri, auth_uri_camera_text),
+    ],
     fn(pair) {
-      let #(title, full) = pair
-      let assert Ok(camera_svg) = qr.svg(title, account.camera_copy_text(full))
+      let #(title, full, camera_text) = pair
+      let assert Ok(camera_svg) = qr.svg(title, camera_text)
       let assert Ok(scanner_svg) = qr.svg(title <> " / " <> scanner, full)
       assert string.contains(body, element.to_string(camera_svg))
       assert string.contains(body, element.to_string(scanner_svg))

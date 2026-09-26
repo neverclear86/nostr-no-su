@@ -61,6 +61,8 @@ pub fn pages(language: i18n.Language) -> List(String) {
       label: "label-a",
       uri: "bunker://0123?relay=x&secret=s",
       auth_uri: "bunker://0123?relay=x",
+      uri_camera_text: "0123?relay=x&secret=s",
+      auth_uri_camera_text: "0123?relay=x",
       picture: Some("https://example.invalid/avatar.png"),
     )
   let pending =

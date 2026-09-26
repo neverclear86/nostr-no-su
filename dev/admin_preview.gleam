@@ -24,6 +24,7 @@ import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
+import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
@@ -75,21 +76,34 @@ const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222
 /// 写すために使う。
 const unknown_signer = "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
 
-/// 接続 URI の relay= の部分。
-const relay = "relay=ws%3A%2F%2F127.0.0.1%3A7801"
+/// 接続 URI に載せるバンカーのリレー。
+const bunker_relay_url = "ws://127.0.0.1:7801"
 
-/// 固定の行。secret はダミーの値。
+/// 接続 URI に載せるダミーの secret。
+const dummy_secret = "0123456789abcdef0123456789abcdef"
+
+/// 固定の行。
 fn row(signer: String, npub: String, label: String) -> dashboard.AccountRow {
   dashboard.AccountRow(
     signer:,
     npub:,
     label:,
-    uri: "bunker://"
-      <> signer
-      <> "?"
-      <> relay
-      <> "&secret=0123456789abcdef0123456789abcdef",
-    auth_uri: "bunker://" <> signer <> "?" <> relay,
+    uri: connection_uri.bunker_uri(
+      signer,
+      [bunker_relay_url],
+      Some(dummy_secret),
+    ),
+    auth_uri: connection_uri.bunker_uri(signer, [bunker_relay_url], None),
+    uri_camera_text: connection_uri.camera_copy_text(
+      signer,
+      [bunker_relay_url],
+      Some(dummy_secret),
+    ),
+    auth_uri_camera_text: connection_uri.camera_copy_text(
+      signer,
+      [bunker_relay_url],
+      None,
+    ),
     picture: None,
   )
 }

@@ -3,11 +3,7 @@
 
 import gleam/bit_array
 import gleam/bool
-import gleam/list
-import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
-import gleam/uri
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/nip19
@@ -91,54 +87,4 @@ pub fn nsec(account: Account) -> String {
   let assert Ok(text) = nip19.encode(secret.reveal(account.privkey), nip19.Nsec)
     as "an Account always holds a 32-byte private key"
   text
-}
-
-/// 署名者 `signer`（x-only 公開鍵の小文字 16 進）へ接続するためにクライアントへ
-/// 貼り付ける `bunker://` URI。URI に入るのは公開鍵だけなので、秘密鍵を持つ
-/// `Account` を受け取らない。NIP-46 は複数の `relay=` ヒントを許容し、クライアント
-/// はそのすべてに接続するため、生きているリレーが 1 つあればバンカーに到達できる。
-/// `secret` が `None` の URI はその場では接続できず、管理 UI での承認（auth_url
-/// フロー）を経る。リレーが 0 件でも URI を返す（クエリー文字列自体を省く）。
-pub fn bunker_uri(
-  signer: String,
-  relay_urls: List(String),
-  secret: Option(String),
-) -> String {
-  let relay_params =
-    list.map(relay_urls, fn(url) { "relay=" <> uri.percent_encode(url) })
-  let secret_param = case secret {
-    None -> []
-    Some(secret) -> ["secret=" <> secret]
-  }
-  case list.append(relay_params, secret_param) {
-    [] -> "bunker://" <> signer
-    params -> "bunker://" <> signer <> "?" <> string.join(params, "&")
-  }
-}
-
-/// `bunker_uri` が返した URI から、端末のカメラがテキストとして扱う形を作る。先頭の
-/// `bunker://` を外し、`relay=` の値のドットを `%2E` に置き換える。クライアントの入力欄で
-/// 先頭に `bunker://` を打ち直せば元の URI として解析でき、`%2E` は `.` に戻る。入力は
-/// `bunker_uri` の出力に限る（`secret=` と公開鍵は触らない）。
-pub fn camera_copy_text(uri: String) -> String {
-  let body = case string.split_once(uri, "bunker://") {
-    Ok(#("", rest)) -> rest
-    _ -> uri
-  }
-  case string.split_once(body, "?") {
-    Error(Nil) -> body
-    Ok(#(signer, query)) ->
-      signer
-      <> "?"
-      <> {
-        string.split(query, "&")
-        |> list.map(fn(param) {
-          case string.starts_with(param, "relay=") {
-            True -> string.replace(param, ".", "%2E")
-            False -> param
-          }
-        })
-        |> string.join("&")
-      }
-  }
 }

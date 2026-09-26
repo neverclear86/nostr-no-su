@@ -702,7 +702,8 @@ nostr-no-su/
 │       ├── bunker/connection_secret.gleam 接続 secret（定数時間の比較）
 │       ├── bunker/rpc.gleam      JSON-RPC コーデックと入力の上限
 │       ├── bunker/rate_limit.gleam セッションの外のリクエストの上限（トークンバケット、純粋）
-│       ├── bunker/account.gleam  鍵材料と bunker:// URI
+│       ├── bunker/account.gleam  鍵材料
+│       ├── bunker/connection_uri.gleam bunker:// URI とカメラ用のコピー用の文字列の組み立て（純粋）
 │       ├── bunker/vault.gleam    マスターキーと、アカウントの暗号化形式・行の検証、セッションと承認待ちの行の MAC（純粋）
 │       ├── bunker/account_store.gleam アカウント、セッション、承認待ち、リレーの一覧を Postgres に保存するストア
 │       ├── bunker/nostrconnect.gleam nostrconnect:// URI の解釈（純粋）

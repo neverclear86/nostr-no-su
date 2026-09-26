@@ -304,6 +304,8 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
       label: "main account",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
@@ -351,6 +353,8 @@ fn fingerprinted_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    uri_camera_text: "x?secret=s",
+    auth_uri_camera_text: "x",
     picture: None,
   )
 }
@@ -1152,6 +1156,8 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      uri_camera_text: "x",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot =
@@ -1618,6 +1624,8 @@ fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
     label:,
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
+    uri_camera_text: "x?secret=s",
+    auth_uri_camera_text: "x",
     picture: None,
   )
 }
@@ -2490,6 +2498,8 @@ pub fn signer_is_shown_as_label_and_npub_test() {
       label: "main",
       uri: "bunker://x",
       auth_uri: "bunker://x",
+      uri_camera_text: "x",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let snapshot =
@@ -2757,6 +2767,8 @@ pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   let connected = dashboard.Reported(relay_connection.Connected)
@@ -2834,6 +2846,8 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
       label: "",
       uri: "bunker://x?secret=s",
       auth_uri: "bunker://x",
+      uri_camera_text: "x?secret=s",
+      auth_uri_camera_text: "x",
       picture: None,
     )
   assert !string.contains(render([account], [bunker_relay]), "Getting started")
@@ -2900,6 +2914,8 @@ fn session_account() -> dashboard.AccountRow {
     label: "main",
     uri: "bunker://abcd?relay=x&secret=s",
     auth_uri: "bunker://abcd?relay=x",
+    uri_camera_text: "abcd?relay=x&secret=s",
+    auth_uri_camera_text: "abcd?relay=x",
     picture: None,
   )
 }

@@ -150,6 +150,7 @@ import nostr_no_su/backoff
 import nostr_no_su/bunker
 import nostr_no_su/bunker/account
 import nostr_no_su/bunker/account_store
+import nostr_no_su/bunker/connection_uri
 import nostr_no_su/bunker/engine.{type Pending, type Session}
 import nostr_no_su/bunker/nostrconnect
 import nostr_no_su/bunker/vault
@@ -1217,8 +1218,8 @@ pub fn account_rows(
   list.map(listings, account_row(relay_urls, found, _))
 }
 
-/// アカウント 1 件の表示行。接続 URI は、全行に共通のバンカーリレーの URL から
-/// 組み立て、アイコンの URL は `found` から引く。
+/// アカウント 1 件の表示行。接続 URI とカメラ用のコピー用の文字列は、全行に共通の
+/// バンカーリレーの URL から組み立て、アイコンの URL は `found` から引く。
 fn account_row(
   relay_urls: List(String),
   found: Dict(String, String),
@@ -1228,8 +1229,22 @@ fn account_row(
     signer: listing.signer,
     npub: listing.npub,
     label: listing.label,
-    uri: account.bunker_uri(listing.signer, relay_urls, Some(listing.secret)),
-    auth_uri: account.bunker_uri(listing.signer, relay_urls, None),
+    uri: connection_uri.bunker_uri(
+      listing.signer,
+      relay_urls,
+      Some(listing.secret),
+    ),
+    auth_uri: connection_uri.bunker_uri(listing.signer, relay_urls, None),
+    uri_camera_text: connection_uri.camera_copy_text(
+      listing.signer,
+      relay_urls,
+      Some(listing.secret),
+    ),
+    auth_uri_camera_text: connection_uri.camera_copy_text(
+      listing.signer,
+      relay_urls,
+      None,
+    ),
     picture: dict.get(found, listing.signer) |> option.from_result,
   )
 }
