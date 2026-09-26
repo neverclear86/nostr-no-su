@@ -1,6 +1,7 @@
 //// 管理 UI のプラグインのページの記述（`Dynamic` の入れ子）を組む builder。組むのは
 //// 本体の `nostr_no_su/admin/plugin_view` が読める正しい形だけで、変換に失敗する形は
-//// 使う側が手で組む。撮影用のサーバー（`admin_preview`）が使う。
+//// 使う側が手で組む。撮影用のサーバー（`admin_preview`）と、管理 UI の検査の
+//// `support/admin_ui`・`support/admin_context` が使う。
 ////
 //// `test/` のモジュールは `dev/` のモジュールを import できるが、逆はできないので、
 //// テストからも使えるよう `dev/` に置く。`gleam export erlang-shipment` の成果物には
