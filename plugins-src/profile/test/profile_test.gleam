@@ -40,9 +40,9 @@ pub fn plugin_pages_titles_the_page_in_each_language_test() {
 pub fn plugin_page_content_follows_the_display_language_test() {
   let config = config_with_accounts([])
   assert profile.plugin_page_content(dynamic.string("profile"), config, "ja")
-    == page.content(i18n.Japanese, [], [], [])
+    == page.content(i18n.Japanese, [])
   assert profile.plugin_page_content(dynamic.string("profile"), config, "fr")
-    == page.content(i18n.English, [], [], [])
+    == page.content(i18n.English, [])
 }
 
 /// 全状態の文言を英語で描くと、今までどおりの英語の全文が出る順に並ぶ。
@@ -110,7 +110,7 @@ pub fn content_texts_in_japanese_test() {
 
 /// 登録アカウントが 0 件のときは、節 1 つに `alert`（`info`）1 つだけを出す。
 pub fn content_without_accounts_shows_one_info_alert_test() {
-  let description = page.content(i18n.English, [], [], [])
+  let description = page.content(i18n.English, [])
   let assert [only] = page_sections(description)
   let #(title, blocks) = section_shape(only)
   assert title == "Profile"
@@ -135,12 +135,13 @@ fn sample_account() -> page.Account {
 /// プロフィールと一致する。
 pub fn content_shows_the_edit_form_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(sample_content, 1_700_000_000)],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(sample_content, 1_700_000_000),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(title, blocks) = section_shape(section)
   assert title == "Alice"
@@ -180,12 +181,13 @@ pub fn content_shows_the_edit_form_test() {
 /// `about` の欄だけ `type` が `textarea` で、他の 7 欄は `text`。
 pub fn content_uses_textarea_for_about_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(sample_content, 1_700_000_000)],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(sample_content, 1_700_000_000),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [_, _, _, _, _, form] = blocks
@@ -197,7 +199,9 @@ pub fn content_uses_textarea_for_about_test() {
 pub fn content_labels_form_fields_in_each_language_test() {
   let labels = fn(language) {
     let description =
-      page.content(language, [sample_account()], [page.NotFound], [None])
+      page.content(language, [
+        page.AccountState(sample_account(), page.NotFound, None),
+      ])
     let assert [section] = page_sections(description)
     let #(_title, blocks) = section_shape(section)
     let assert [_alert, _pairs, form] = blocks
@@ -245,12 +249,13 @@ pub fn content_labels_form_fields_in_each_language_test() {
 /// `variant` が `banner`。
 pub fn content_shows_picture_as_icon_and_banner_as_banner_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(sample_content, 1_700_000_000)],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(sample_content, 1_700_000_000),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [_, _, picture_image, _, banner_image, _] = blocks
@@ -269,7 +274,9 @@ pub fn content_shows_picture_as_icon_and_banner_as_banner_test() {
 /// 項は出ない）と、値がすべて空の `form` が出る。
 pub fn content_shows_empty_form_when_not_found_test() {
   let description =
-    page.content(i18n.English, [sample_account()], [page.NotFound], [None])
+    page.content(i18n.English, [
+      page.AccountState(sample_account(), page.NotFound, None),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [alert, pairs, form] = blocks
@@ -292,12 +299,13 @@ pub fn content_shows_empty_form_when_not_found_test() {
 /// する（理由の後で次の文がつながらない）。
 pub fn content_omits_the_form_when_fetch_failed_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Failed("no monitor relay is connected")],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Failed("no monitor relay is connected"),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [alert, pairs] = blocks
@@ -316,15 +324,19 @@ pub fn content_omits_the_form_when_fetch_failed_test() {
 
 /// 2 件中 1 件が `Failed` でも、他方の form は出る。
 pub fn content_keeps_other_accounts_when_one_failed_test() {
-  let accounts = [
-    sample_account(),
-    page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+  let states = [
+    page.AccountState(
+      sample_account(),
+      page.Failed("no monitor relay is connected"),
+      None,
+    ),
+    page.AccountState(
+      page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+      page.Found(sample_content, 1_700_000_000),
+      None,
+    ),
   ]
-  let fetched = [
-    page.Failed("no monitor relay is connected"),
-    page.Found(sample_content, 1_700_000_000),
-  ]
-  let description = page.content(i18n.English, accounts, fetched, [None, None])
+  let description = page.content(i18n.English, states)
   let assert [alice_section, bob_section] = page_sections(description)
   let #(alice_title, alice_blocks) = section_shape(alice_section)
   assert alice_title == "Alice"
@@ -338,12 +350,13 @@ pub fn content_keeps_other_accounts_when_one_failed_test() {
 /// を出し、`form` は空の値で出す。
 pub fn content_shows_alert_when_content_is_not_json_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found("[1,2,3]", 1_700_000_000)],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found("[1,2,3]", 1_700_000_000),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [alert, _pairs, form] = blocks
@@ -360,12 +373,13 @@ pub fn content_shows_alert_when_content_is_not_json_test() {
 /// 1 つ出る。
 pub fn content_shows_success_alert_after_submit_test() {
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(sample_content, 1_700_000_000)],
-      [Some(page.Succeeded)],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(sample_content, 1_700_000_000),
+        Some(page.Succeeded),
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [alert, ..] = blocks
@@ -390,14 +404,13 @@ pub fn content_refills_the_form_after_a_failed_submit_test() {
       lud16: "",
     )
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(sample_content, 1_700_000_000)],
-      [
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(sample_content, 1_700_000_000),
         Some(page.SubmitFailed("timeout", submitted_values)),
-      ],
-    )
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [
@@ -421,12 +434,13 @@ pub fn content_omits_image_when_url_is_empty_test() {
   let content =
     "{\"name\":\"a\",\"display_name\":\"\",\"about\":\"\",\"picture\":\"\",\"banner\":\"https://example.com/b.png\",\"nip05\":\"\",\"website\":\"\",\"lud16\":\"\"}"
   let description =
-    page.content(
-      i18n.English,
-      [sample_account()],
-      [page.Found(content, 1_700_000_000)],
-      [None],
-    )
+    page.content(i18n.English, [
+      page.AccountState(
+        sample_account(),
+        page.Found(content, 1_700_000_000),
+        None,
+      ),
+    ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
   let assert [_pairs, note, image, _form] = blocks
@@ -484,6 +498,14 @@ pub fn profile_of_json_treats_missing_and_non_string_as_empty_test() {
 /// 壊れた JSON は `Error(Nil)`。
 pub fn profile_of_json_rejects_broken_json_test() {
   assert page.profile_of_json("not json") == Error(Nil)
+}
+
+/// JSON のオブジェクト以外（配列・数・`null`・文字列）は `Error(Nil)`。
+pub fn profile_of_json_rejects_non_objects_test() {
+  assert page.profile_of_json("[1,2,3]") == Error(Nil)
+  assert page.profile_of_json("1") == Error(Nil)
+  assert page.profile_of_json("null") == Error(Nil)
+  assert page.profile_of_json("\"x\"") == Error(Nil)
 }
 
 /// `Accounts` の値（JSON 文字列）から `pubkey`・`npub`・`label` を読む。壊れた
@@ -616,6 +638,36 @@ pub fn submission_reads_the_stored_result_test() {
   // `none`（本来は profile_store:take/1 が返す atom）に相当する、map として
   // 読めない Dynamic。
   assert page.submission(dynamic.string("none")) == None
+}
+
+/// `values` に欠けた項目がある `error` の結果でも、欠けた項目は空文字列で
+/// `SubmitFailed` に読む。
+pub fn submission_reads_missing_values_as_empty_test() {
+  let failure =
+    dynamic.properties([
+      #(dynamic.string("status"), dynamic.string("error")),
+      #(dynamic.string("reason"), dynamic.string("timeout")),
+      #(
+        dynamic.string("values"),
+        dynamic.properties([
+          #(dynamic.string("name"), dynamic.string("bob")),
+        ]),
+      ),
+    ])
+  assert page.submission(failure)
+    == Some(page.SubmitFailed(
+      reason: "timeout",
+      values: page.Profile(
+        name: "bob",
+        display_name: "",
+        about: "",
+        picture: "",
+        banner: "",
+        nip05: "",
+        website: "",
+        lud16: "",
+      ),
+    ))
 }
 
 /// 未知のキーが残り、指定した項目だけが差し替わる。
@@ -763,15 +815,18 @@ pub fn page_content_uses_the_cache_within_its_lifetime_test() {
       ]),
       "en",
     )
-    == page.content(
-      i18n.English,
-      [
+    == page.content(i18n.English, [
+      page.AccountState(
         page.Account(pubkey: "c1", npub: "npub1c1", label: "C1"),
+        page.Found("{}", 1),
+        None,
+      ),
+      page.AccountState(
         page.Account(pubkey: "c2", npub: "npub1c2", label: "C2"),
-      ],
-      [page.Found("{}", 1), page.Failed("the plugin API is not installed")],
-      [None, None],
-    )
+        page.Failed("the plugin API is not installed"),
+        None,
+      ),
+    ])
   assert store_cache_get(["c2"]) == [None]
 }
 
@@ -785,12 +840,13 @@ pub fn page_content_fetches_again_after_the_lifetime_test() {
       config_with_accounts([#("c3", "npub1c3", "C3")]),
       "en",
     )
-    == page.content(
-      i18n.English,
-      [page.Account(pubkey: "c3", npub: "npub1c3", label: "C3")],
-      [page.Failed("the plugin API is not installed")],
-      [None],
-    )
+    == page.content(i18n.English, [
+      page.AccountState(
+        page.Account(pubkey: "c3", npub: "npub1c3", label: "C3"),
+        page.Failed("the plugin API is not installed"),
+        None,
+      ),
+    ])
 }
 
 /// 送信に成功すると、送った kind 0 と本体が付けた `created_at` が `Found` と
@@ -919,27 +975,31 @@ fn all_states_texts(language: i18n.Language) -> List(String) {
       website: "",
       lud16: "",
     )
-  let accounts = [
-    sample_account(),
-    page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
-    page.Account(pubkey: "cc", npub: "npub1cc", label: "Carol"),
-    page.Account(pubkey: "dd", npub: "npub1dd", label: "Dave"),
-  ]
-  let fetched = [
-    page.Found(sample_content, 1_700_000_000),
-    page.NotFound,
-    page.Failed("timeout"),
-    page.Found("[1,2,3]", 1_700_000_000),
-  ]
-  let submissions = [
-    Some(page.Succeeded),
-    Some(page.SubmitFailed("timeout", empty_values)),
-    None,
-    None,
+  let states = [
+    page.AccountState(
+      sample_account(),
+      page.Found(sample_content, 1_700_000_000),
+      Some(page.Succeeded),
+    ),
+    page.AccountState(
+      page.Account(pubkey: "bb", npub: "npub1bb", label: "Bob"),
+      page.NotFound,
+      Some(page.SubmitFailed("timeout", empty_values)),
+    ),
+    page.AccountState(
+      page.Account(pubkey: "cc", npub: "npub1cc", label: "Carol"),
+      page.Failed("timeout"),
+      None,
+    ),
+    page.AccountState(
+      page.Account(pubkey: "dd", npub: "npub1dd", label: "Dave"),
+      page.Found("[1,2,3]", 1_700_000_000),
+      None,
+    ),
   ]
   list.append(
-    page_texts(page.content(language, [], [], [])),
-    page_texts(page.content(language, accounts, fetched, submissions)),
+    page_texts(page.content(language, [])),
+    page_texts(page.content(language, states)),
   )
 }
 

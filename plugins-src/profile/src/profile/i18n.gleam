@@ -24,7 +24,8 @@ pub fn from_code(code: String) -> Language {
   }
 }
 
-/// フォームの欄（kind 0 の 8 項目）。欄のラベルの文言を選ぶ。
+/// フォームの欄（kind 0 の 8 項目）。欄のラベルの文言を選び、`profile/page` では
+/// キー名と値を引く軸にもなる。
 pub type Field {
   Name
   DisplayName
