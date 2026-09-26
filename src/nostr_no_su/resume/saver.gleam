@@ -13,8 +13,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
-import nostr_no_su/dedup/resume
 import nostr_no_su/log
+import nostr_no_su/resume
 
 /// 保存の周期（ミリ秒）。再接続の間隔（`relay_connection.default_reconnect_delay`）
 /// と同じ桁で、異常終了で失う再開点を数秒に抑えつつ、書き込みを「この間隔に高々

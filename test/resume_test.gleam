@@ -1,9 +1,9 @@
-//// `dedup/resume` のテスト。プロセスにも IO にも触れない純粋な値なので、DB も
+//// `resume` のテスト。プロセスにも IO にも触れない純粋な値なので、DB も
 //// アクターも要らない。
 
 import gleam/dict
 import gleam/option.{None, Some}
-import nostr_no_su/dedup/resume
+import nostr_no_su/resume
 
 /// 記録の無いリレーの再開点は `None`。
 pub fn since_is_absent_at_first_test() {
