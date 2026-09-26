@@ -562,7 +562,7 @@ sequenceDiagram
 `Host`、`Origin`、`Referer` のどれかに制御文字を含む要求は、メソッドによらずその検査の前に text/plain の 400 で弾く（検査が不一致のときにログへ出す生の値に、端末の制御を入れさせないため）。
 認証済みの応答にはすべて `cache-control: no-store`、枠への埋め込みを禁じるヘッダー、実行するスクリプトを管理 UI のファイルに限る CSP、`x-content-type-options: nosniff`、`referrer-policy: same-origin` を付ける。
 ページとフォームのパスの定義は `admin/dashboard.gleam` に、スタイルシート、スクリプト、テーマと言語の切り替えのパスの定義は `admin/view.gleam` に置き、ルーティングと、フォームの `action` とページ枠の `link` と `script` が同じ定義を見る。
-ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page`（見出しがプラグイン由来の文字列のプラグインのページは `page_in_language`）で HTML 文書の文字列にする。
+ページは lustre の要素ツリーで組み立て、`admin/view.gleam` の `page` で HTML 文書の文字列にする（見出しがプラグイン由来の文字列のプラグインのページは、題を `TaggedTitle` で渡す）。
 見た目は Tailwind CSS と daisyUI のクラスで付け、鍵の指紋の色だけは `assets/admin.css` に手で書いたクラス（`fp`、`h0`〜`h11`、`fp-gray`）とテーマの変数で付けて、ビルドした CSS を `/static/admin.css` から読ませる。
 JS は `/static/admin.js` に置き、要素の `data-action` の名前で処理を選ぶ（インラインのスクリプトとイベント属性は書かない）。
 時刻はサーバーが `<time datetime>` に UTC で描き（JS が無いときは「05:12:34 UTC」のように UTC と分かる表記）、`admin.js` が読み込み時に閲覧者のローカルの時刻に直す。
