@@ -39,28 +39,18 @@ pub type Timeouts {
   Timeouts(
     /// 読み込み 1 回（スキーマの移行、テーブルのロック、一覧）全体の期限。
     load_ms: Int,
-    /// 書き込み 1 件と、主キーの 1 行の読み込み（`resume/store` の再開点）の期限。
+    /// 書き込み 1 件と、主キーの 1 行の読み込み（`resume/store` の再開点）と
+    /// `acquire_lock` の期限。
     write_ms: Int,
   )
 }
 
-/// 本番の期限。
-///
-/// 読み込みも書き込みもバンカーアクターの中で行うので、その間は NIP-46 の処理が
-/// 待たされる。DB に到達できないときの失敗はどちらもこの値を上限に 2〜3 秒で返る
-/// （pgo の待ち行列の設定で決まる）。
-///
-/// - 読み込み 3000ms：DB が応答しなくなっても、読み込み 1 回の待ちはこの値に収まる
-///   （`account_store.load` を参照）。署名者の問い合わせの 5000ms に収まり、期限を過ぎた書き込みの
-///   残りの実行をロックで待つ余裕を取った値。
-/// - 書き込み 1000ms：主キーで 1 行を書く操作は通常ミリ秒の単位で終わる。DB に到達
-///   できて遅いときの待ちをこの値で打ち切り、書き込みが積まれても後ろの署名者の
-///   問い合わせが収まるようにする。期限を過ぎたとき、クエリーがすでにサーバーに届いて
-///   いれば、サーバーはクライアントの切断を検出せずに文を実行し終えてコミットしうる。
-///   そのため書き込みの `TimedOut` は「書き込まれたかどうか分からない」を意味する
-///   （`may_have_been_written`）。`acquire_lock` の期限もこの値を使う。`account_store.load` の前に
-///   呼ぶので、ロックと読み込み（3000ms）を合わせても署名者の問い合わせの 5000ms に
-///   収まる。再開点の 1 行の読み込み（`resume/store` の `load`）もこの値を使う。
+/// 本番の期限。`load_ms` は読み込み 1 回全体、`write_ms` は書き込み 1 件（と主キーの
+/// 1 行の読み込み、`acquire_lock`）の期限。
+/// 期限を過ぎてもサーバー側で文の実行が続きうるので、書き込みの `TimedOut` は
+/// 「書き込まれたかどうか分からない」を意味する（`may_have_been_written`）。
+/// 値の根拠（署名者の問い合わせの 5 秒に収める予算）は docs/design-decisions.md の
+/// 「DB が不調な間は NIP-46 の処理が待たされる」にある。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
 /// アカウントを保存するテーブル。`pubkey` は小文字 16 進に固定し、表記の揺れで
@@ -318,11 +308,8 @@ pub fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
   |> execute(db)
 }
 
-/// プールの接続 1 本で `run` をトランザクションとして実行し、`timeout_ms` の期限で
-/// 打ち切る（期限は pgo のプールが接続を閉じることで効くので、DB が応答しなくなっても
-/// 待ちはこの値に収まる）。`run` の中で同じプールへ送るクエリーはこの接続で実行
-/// される。`run` が `Error` を返したらロールバックし、その値をそのまま返す
-/// （`pool_transaction`）。期限で打ち切られたら `TimedOut`、接続を得られなければ
+/// `pool_transaction` の `TransactionFailure` を `StoreError` に写す。`run` の
+/// `Error` はそのまま返り、期限で打ち切られたら `TimedOut`、接続を得られなければ
 /// `Unavailable`、それ以外の例外（プールが無い、`run` の中の panic など）は
 /// `QueryFailed("the transaction failed")` を返す。`pool` を名前で受け取るのは、
 /// 期限つきのトランザクションをプールの名前で開くためである。
@@ -410,10 +397,9 @@ pub fn from_query_error(error: pog.QueryError) -> StoreError {
 }
 
 /// クエリーを実行し、失敗を `StoreError` に写す。本体のクエリーはすべてここを
-/// 通す（`resume/store` を含む）。`pog.execute` が例外を投げたときも値で
-/// 返す（`execute_catching`）。プールが未登録のとき pgo が呼び出し側を `noproc`
-/// で exit させる問題（`src/nostr_no_su/app.gleam` の doc）も、この経路で
-/// `Unavailable` になる（`execute_catching` の doc）。
+/// 通す（`resume/store` を含む）。`execute_catching` が `pog.execute` の例外も値に
+/// 写すので、プールが未登録のとき pgo が呼び出し側を `noproc` で exit させる問題も
+/// この経路で `Unavailable` になる。
 pub fn execute(
   query: pog.Query(row),
   db: pog.Connection,
@@ -468,9 +454,7 @@ pub fn execute_on_one_row(
   }
 }
 
-/// プールの接続 1 本で `run` をトランザクションとして実行し、`timeout_ms` の期限で
-/// 打ち切る。`run` の中で同じプールへ送るクエリーはこの接続で実行される。`run` が
-/// `Error` を返したらロールバックする。
+/// `pool` の接続 1 本で `run` を `timeout_ms` の期限つきトランザクションとして実行する FFI。
 @external(erlang, "nostr_no_su_store_ffi", "pool_transaction")
 fn pool_transaction(
   pool: Name(pog.Message),
