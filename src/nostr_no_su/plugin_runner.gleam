@@ -12,7 +12,7 @@
 ////   バイザーの再起動が起きず**、サブツリーの許容回数を消費せず、ルートの
 ////   `restart_tolerance(3, 60)` にも到達しない。
 //// - **ワーカーの生成と監視は不可分でなければならない**（`erlang:spawn_monitor/1`。
-////   `nostr_no_su_ffi:run_isolated/1`）。分けると、ワーカーが監視より先に終わった
+////   `nostr_no_su_plugin_ffi:run_isolated/1`）。分けると、ワーカーが監視より先に終わった
 ////   ときに `noproc` の DOWN が届き、正常な実行を失敗と誤判定する。
 //// - **歯止めは 2 つ。** 1 件あたりの実行時間の上限（超えたらワーカーを kill）と、
 ////   メールボックス長による切り捨て。切り捨ては上限を超えた時点で始め、超過分では
@@ -582,13 +582,13 @@ fn failure(down: Down) -> Outcome {
 
 /// プラグインのイベント処理関数を監視付きの使い捨てプロセスで動かす。生成と監視は不可分で
 /// なければならない（FFI の doc コメントを参照）。
-@external(erlang, "nostr_no_su_ffi", "run_isolated")
+@external(erlang, "nostr_no_su_plugin_ffi", "run_isolated")
 fn run_isolated(run: fn() -> Nil) -> #(Pid, Monitor)
 
 /// 異常終了の理由を、1 行の理由と（あれば）スタックトレースに分ける。
-@external(erlang, "nostr_no_su_ffi", "describe_exit")
+@external(erlang, "nostr_no_su_plugin_ffi", "describe_exit")
 fn describe_exit(reason: Dynamic) -> #(String, Option(String))
 
 /// 自プロセスの未処理メッセージ数。
-@external(erlang, "nostr_no_su_ffi", "message_queue_len")
+@external(erlang, "nostr_no_su_plugin_ffi", "message_queue_len")
 fn message_queue_len() -> Int

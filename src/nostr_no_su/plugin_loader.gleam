@@ -508,7 +508,7 @@ fn beam_module_name(file: String) -> String {
 }
 
 /// ディレクトリーの中身（名前のみ）。失敗理由は `enoent` などの文字列。
-@external(erlang, "nostr_no_su_ffi", "list_dir")
+@external(erlang, "nostr_no_su_plugin_ffi", "list_dir")
 fn list_dir(path: String) -> Result(List(String), String)
 
 /// パスがディレクトリーかどうか。
@@ -521,14 +521,14 @@ fn is_directory(path: String) -> Bool
 fn absolute_path(path: String) -> String
 
 /// ディレクトリーをコードパスの末尾に足す。
-@external(erlang, "nostr_no_su_ffi", "add_code_path")
+@external(erlang, "nostr_no_su_plugin_ffi", "add_code_path")
 fn add_code_path(path: String) -> Result(Nil, String)
 
 /// モジュールが既にコードパス上にあるか。
-@external(erlang, "nostr_no_su_ffi", "is_on_code_path")
+@external(erlang, "nostr_no_su_plugin_ffi", "is_on_code_path")
 fn is_on_code_path(module: Atom) -> Bool
 
 /// モジュールとして使われる BEAM が属するアプリケーションの名前と版。ebin の
 /// `.app` が 1 つに決まらなければ Error。
-@external(erlang, "nostr_no_su_ffi", "module_application")
+@external(erlang, "nostr_no_su_plugin_ffi", "module_application")
 fn module_application(module: Atom) -> Result(#(String, String), Nil)

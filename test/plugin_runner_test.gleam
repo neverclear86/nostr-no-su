@@ -82,11 +82,11 @@ fn count_until(handled: Subject(String), last: String, count: Int) -> Int {
 
 /// `handle_event/1` を監視付きの使い捨てプロセスで動かす FFI。`plugin_runner` の
 /// 内部と同じものを、スタックトレースの整形を直接見るために呼ぶ。
-@external(erlang, "nostr_no_su_ffi", "run_isolated")
+@external(erlang, "nostr_no_su_plugin_ffi", "run_isolated")
 fn run_isolated(run: fn() -> Nil) -> #(Pid, Monitor)
 
 /// 異常終了の理由を、1 行の理由と（あれば）スタックトレースに分ける FFI。
-@external(erlang, "nostr_no_su_ffi", "describe_exit")
+@external(erlang, "nostr_no_su_plugin_ffi", "describe_exit")
 fn describe_exit(reason: Dynamic) -> #(String, Option(String))
 
 /// 存在しないモジュールへの `erlang:apply/3`。本体が `handle_event/1` を呼ぶのと
