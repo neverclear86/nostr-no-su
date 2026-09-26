@@ -43,12 +43,14 @@ APPROVE を出した head の時刻は `git show -s --format=%cI` で得る（re
 - 依頼文に「rebase の差分は最終確認が再確認して APPROVE を出した」の行があるときは、上の 2 つの range-diff の照合（rebase だけであること、`kind=fix` との一致）を、その行の「再確認が見た head」から head までの `git -C <リポジトリ> range-diff origin/main <再確認が見た head> <head>` の各行が `=` か衝突の解消に限られる `!` であることの確認に置き換える。再確認が見た head までの `!` と `>` の行は再確認が見たものなので、not_ready の理由にしない（再確認の後にもう一度 rebase が入ったときだけ、その分に `needsReview` を立てうる）
 - CI の全ジョブが pass か skipped である（pending なら `gh pr checks <PR> -R $R --watch` で待つ。変えたファイルに応じて省略されたジョブは skipped になる）
 - `mergeable` が `MERGEABLE` である。`CONFLICTING` なら status を conflict にして返す（rebase は実装エージェントが行う）。force-push の直後は GitHub が再計算中で `UNKNOWN` を返すので、10 秒待って引き直すことを最大 6 回まで繰り返す
-- main とマージした結果が `gleam build --warnings-as-errors` を通る（`mergeable` は字面の衝突しか見ず、兄弟のマージで型や import が変わった PR は `MERGEABLE` のまま main を壊す）。上の条件をすべて満たしたら最後に、指示されたビルド検査の作業ツリーで次を行い、build の結果に関わらず作業ツリーを消す。merge が衝突するか build が落ちたら status を conflict にし、problem に落ちたモジュールと出力の要点を書く（main に合わせる直しは実装エージェントが rebase で行う）
+- main とマージした結果が `gleam build --warnings-as-errors` を通る（`mergeable` は字面の衝突しか見ず、兄弟のマージで型や import が変わった PR は `MERGEABLE` のまま main を壊す）。上の条件をすべて満たしたら最後に、指示されたビルド検査の作業ツリーで次を行い、build の結果に関わらず作業ツリーを消す（前の merger が途中で打ち切られた跡があれば先に消す）。merge が衝突するか build の `rc` が 0 でなければ status を conflict にし、problem に落ちたモジュールと出力の要点を書く（main に合わせる直しは実装エージェントが rebase で行う）
 
 ```sh
+git -C <リポジトリ> worktree remove --force <ビルド検査の作業ツリー> 2>/dev/null || true
 git -C <リポジトリ> worktree add --detach <ビルド検査の作業ツリー> origin/main
 git -C <ビルド検査の作業ツリー> merge --no-commit --no-ff <head>
-env -C <ビルド検査の作業ツリー> gleam build --warnings-as-errors 2>&1 | tail -n 20
+env -C <ビルド検査の作業ツリー> gleam build --warnings-as-errors > <ビルド検査の作業ツリー>/build.log 2>&1; echo "rc=$?"
+tail -n 20 <ビルド検査の作業ツリー>/build.log
 git -C <リポジトリ> worktree remove --force <ビルド検査の作業ツリー>
 ```
 
