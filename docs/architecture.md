@@ -722,6 +722,7 @@ nostr-no-su/
 │       ├── keepalive.gleam       WebSocket 接続の生存確認の判定（ping を送る時機と切る時機。純粋）
 │       ├── log.gleam             ログ 1 行の組み立てと OTP logger への出力、外部由来の文字列の正規化
 │       ├── named.gleam           名前付きアクターへの安全な送信と問い合わせ
+│       ├── persistent_term.gleam persistent_term への型付きの読み書き（FFI）
 │       ├── random.gleam          推測されては困る値のための乱数
 │       ├── secret.gleam          秘密の値の閉じ込め（`string.inspect` とクラッシュレポートに出さない）
 │       ├── task.gleam            締め切り付きで並行に走らせる小さな口（管理 UI のダッシュボード、`plugin_api`、`avatars` が使う）

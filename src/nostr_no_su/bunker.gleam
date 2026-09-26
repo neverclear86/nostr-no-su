@@ -97,6 +97,7 @@ import nostr_no_su/bunker/vault
 import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, type Verified}
+import nostr_no_su/persistent_term
 import nostr_no_su/random
 import nostr_no_su/relay_client.{type Acknowledgement}
 import nostr_no_su/relay_list
@@ -412,11 +413,8 @@ pub type Msg {
     challenge: String,
     reply: Subject(Result(List(Event), String)),
   )
-  /// プラグインからの取得の口（`plugin_api`）が使う、公開鍵が登録アカウントかどうか
-  /// の確認。読み込み前は理由を返す。
-  CheckAccount(signer: String, reply: Subject(Result(Nil, String)))
-  /// プラグインからの複数の公開鍵の取得（`plugin_api`）が使う、公開鍵ごとの登録の
-  /// 確認。読み込み前は全体の理由を返す。
+  /// プラグインからの取得の口（`plugin_api`）が使う、公開鍵ごとの登録の確認。読み込み前は
+  /// 全体の理由を返す。
   CheckAccounts(
     signers: List(String),
     reply: Subject(Result(List(Result(Nil, String)), String)),
@@ -552,7 +550,7 @@ pub fn release_session_relays(
 /// 無く、偽を返す。アクターが再起動しても写しは残り、読み込みで集合が変わったときに
 /// 置き直される。
 pub fn is_signer(name: Name(Msg), pubkey: String) -> Bool {
-  set.contains(persistent_term_get(signers_key(name), set.new()), pubkey)
+  set.contains(persistent_term.get(signers_key(name), set.new()), pubkey)
 }
 
 /// `name` のアクターの署名者の集合の写しを置く persistent_term のキー。テストは
@@ -659,13 +657,6 @@ pub fn sign_event(
   content: String,
 ) -> Result(Event, String) {
   named.call(name, call_timeout_ms, SignEvent(signer, kind, tags, content, _))
-  |> option.unwrap(Error(query_not_answered))
-}
-
-/// `signer` が登録アカウントか。プラグインからの取得の口（`plugin_api`）が使う。
-/// 読み込み前、未登録、あるいはアクターが応答しないときは理由を返す。
-pub fn check_account(name: Name(Msg), signer: String) -> Result(Nil, String) {
-  named.call(name, call_timeout_ms, CheckAccount(signer, _))
   |> option.unwrap(Error(query_not_answered))
 }
 
@@ -1200,10 +1191,6 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           time.now_seconds(),
         ),
       )
-      actor.continue(state)
-    }
-    CheckAccount(signer:, reply:) -> {
-      process.send(reply, registered(state, signer))
       actor.continue(state)
     }
     CheckAccounts(signers:, reply:) -> {
@@ -1823,7 +1810,7 @@ fn transition(from: State, to: State) -> State {
   case engine.signers(from.engine) == engine.signers(to.engine) {
     True -> Nil
     False -> {
-      persistent_term_put(
+      persistent_term.put(
         signers_key(to.name),
         set.from_list(engine.signers(to.engine)),
       )
@@ -2253,15 +2240,3 @@ fn publish(
     }
   }
 }
-
-/// `persistent_term:put/2` の型を付けた薄いラッパー。
-@external(erlang, "persistent_term", "put")
-fn persistent_term_put(key: #(Atom, Name(Msg)), value: Set(String)) -> Atom
-
-/// `persistent_term:get/2` の型を付けた薄いラッパー。既定値の版を使うので、
-/// キーが無いときも `badarg` で落ちない。
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get(
-  key: #(Atom, Name(Msg)),
-  default: Set(String),
-) -> Set(String)

@@ -14,6 +14,7 @@ import gleam/result
 import nostr_no_su/bunker
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/nostr/filter.{type Filter, Filter}
+import nostr_no_su/persistent_term
 import nostr_no_su/relay_client
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_list
@@ -81,14 +82,14 @@ pub fn install(
   bunker: Name(bunker.Msg),
   relay_list: Name(relay_list.Msg),
 ) -> Nil {
-  persistent_term_put(installed_key(), Ok(Installed(bunker:, relay_list:)))
+  persistent_term.put(installed_key(), Ok(Installed(bunker:, relay_list:)))
   Nil
 }
 
-/// `install` が置いた名前。置いていなければ `Error(Nil)`。既定値を渡すので
+/// `install` が置いた名前。置いていなければ `not_installed` を理由に返す。既定値を渡すので
 /// キーが無いときに `badarg` で落ちない。
-fn installed() -> Result(Installed, Nil) {
-  persistent_term_get(installed_key(), Error(Nil))
+fn installed() -> Result(Installed, String) {
+  persistent_term.get(installed_key(), Error(not_installed))
 }
 
 /// `pubkey` の名義で `draft`（`kind` / `tags` / `content` を持つ binary キーの
@@ -99,11 +100,8 @@ pub fn publish_event(
   pubkey: Dynamic,
   draft: Dynamic,
 ) -> Result(Dynamic, String) {
-  case installed() {
-    Error(Nil) -> Error(not_installed)
-    Ok(Installed(bunker:, relay_list:)) ->
-      publish_with(bunker, relay_list, pubkey, draft)
-  }
+  use Installed(bunker:, relay_list:) <- result.try(installed())
+  publish_with(bunker, relay_list, pubkey, draft)
 }
 
 /// `pubkey` の名義で書かれた `kind` のイベントのうち `created_at` が最新の 1 件を、
@@ -112,11 +110,8 @@ pub fn publish_event(
 /// の形）、1 件も無ければ `{ok, none}`、失敗は `{error, Reason}`。詳細は
 /// `docs/plugin-api.md` 第 14 章。
 pub fn fetch_event(pubkey: Dynamic, kind: Dynamic) -> Result(Dynamic, String) {
-  case installed() {
-    Error(Nil) -> Error(not_installed)
-    Ok(Installed(bunker:, relay_list:)) ->
-      fetch_with(bunker, relay_list, pubkey, kind)
-  }
+  use Installed(bunker:, relay_list:) <- result.try(installed())
+  fetch_with(bunker, relay_list, pubkey, kind)
 }
 
 /// `pubkeys` の各公開鍵の名義で書かれた `kind` のイベントのうち `created_at` が
@@ -128,18 +123,11 @@ pub fn fetch_events(
   pubkeys: Dynamic,
   kind: Dynamic,
 ) -> Result(List(Result(Dynamic, String)), String) {
-  case installed() {
-    Error(Nil) -> Error(not_installed)
-    Ok(Installed(bunker:, relay_list:)) ->
-      fetch_events_with(bunker, relay_list, pubkeys, kind)
-  }
+  use Installed(bunker:, relay_list:) <- result.try(installed())
+  fetch_events_with(bunker, relay_list, pubkeys, kind)
 }
 
-/// `publish_event` の中身。名前を引数で受けるのでテストは `install` を経ずに
-/// 直接叩ける。手順は (1) `pubkey` を文字列として読む、(2) `draft` を
-/// デコードする、(3) バンカーに署名させる、(4) リレーの一覧を引く、(5) 監視の
-/// 用途の接続が無ければ理由を返す、(6) 全接続へ同時に送って渡せた本数を数える、
-/// (7) 0 本なら理由を返し、1 本以上なら署名済みイベントの map を返す。
+/// `publish_event` の中身で、`install` が置いた名前の代わりにバンカーと一覧の名前を引数で受ける。
 pub fn publish_with(
   bunker_name: Name(bunker.Msg),
   relay_list_name: Name(relay_list.Msg),
@@ -175,11 +163,7 @@ pub fn publish_with(
   }
 }
 
-/// `fetch_event` の中身。名前を引数で受けるのでテストは `install` を経ずに直接
-/// 叩ける。手順は (1) `pubkey` を文字列として読む（失敗は `pubkey_not_a_string`）、
-/// (2) `kind` を整数として読む（失敗は `kind_not_an_int`）、(3) `bunker.check_account`
-/// で登録を確かめる、(4) `ask_monitor_relays` で `pubkey` だけを作者に問い合わせる、
-/// (5) 集めたイベントを `newest` に渡し、`fetched` の形で `Ok` にする。
+/// `fetch_event` の中身で、`install` が置いた名前の代わりにバンカーと一覧の名前を引数で受ける。
 pub fn fetch_with(
   bunker_name: Name(bunker.Msg),
   relay_list_name: Name(relay_list.Msg),
@@ -190,24 +174,18 @@ pub fn fetch_with(
     decode.run(pubkey, decode.string)
     |> result.replace_error(pubkey_not_a_string),
   )
-  use kind <- result.try(
-    decode.run(kind, decode.int)
-    |> result.replace_error(kind_not_an_int),
-  )
-  use _ <- result.try(bunker.check_account(bunker_name, pubkey))
-  use found <- result.try(ask_monitor_relays(relay_list_name, [pubkey], kind))
-  Ok(fetched(newest(found)))
+  use results <- result.try(fetch_latest(
+    bunker_name,
+    relay_list_name,
+    [pubkey],
+    kind,
+  ))
+  // fetch_latest は pubkeys 1 件につき結果を 1 件返す
+  let assert [found] = results
+  found
 }
 
-/// `fetch_events` の中身。名前を引数で受けるのでテストは `install` を経ずに直接
-/// 叩ける。手順は (1) `pubkeys` を文字列のリストとして読む（失敗は
-/// `pubkeys_not_a_list`）、(2) `kind` を整数として読む（失敗は
-/// `kind_not_an_int`）、(3) `bunker.check_accounts` で登録を確かめる（読み込み前と
-/// バンカーの無応答は全体の失敗）、(4) 登録済みの公開鍵を重複を除いて `pubkeys`
-/// の順に並べ、1 件も無ければ問い合わせない、(5) 1 件以上なら
-/// `ask_monitor_relays` でまとめて問い合わせる、(6) 公開鍵ごとに、未登録なら
-/// 確認の理由を `Error` に、登録済みなら `newest_by` で選んだ 1 件を
-/// `fetched` の形で `Ok` にし、`pubkeys` の順に並べる。
+/// `fetch_events` の中身で、`install` が置いた名前の代わりにバンカーと一覧の名前を引数で受ける。
 pub fn fetch_events_with(
   bunker_name: Name(bunker.Msg),
   relay_list_name: Name(relay_list.Msg),
@@ -218,6 +196,19 @@ pub fn fetch_events_with(
     decode.run(pubkeys, decode.list(decode.string))
     |> result.replace_error(pubkeys_not_a_list),
   )
+  fetch_latest(bunker_name, relay_list_name, pubkeys, kind)
+}
+
+/// `fetch_with` と `fetch_events_with` の共通の中身。`kind` を整数として読み（失敗は
+/// `kind_not_an_int`）、`pubkeys` の登録を確かめ、登録済みの公開鍵だけを重複を除いて
+/// まとめて問い合わせる。結果は `pubkeys` と同じ順・同じ件数で、未登録の公開鍵は確認の
+/// 理由、登録済みの公開鍵は最新の 1 件を `fetched` の形で持つ。
+fn fetch_latest(
+  bunker_name: Name(bunker.Msg),
+  relay_list_name: Name(relay_list.Msg),
+  pubkeys: List(String),
+  kind: Dynamic,
+) -> Result(List(Result(Dynamic, String)), String) {
   use kind <- result.try(
     decode.run(kind, decode.int)
     |> result.replace_error(kind_not_an_int),
@@ -307,7 +298,7 @@ pub fn newest(events: List(Event)) -> Option(Event) {
   })
 }
 
-/// `events` のうち作者が `author` のものの `newest`。`fetch_events_with` と `avatars` が使う。
+/// `events` のうち作者が `author` のものの `newest`。
 pub fn newest_by(events: List(Event), author: String) -> Option(Event) {
   newest(list.filter(events, fn(candidate) { candidate.pubkey == author }))
 }
@@ -453,12 +444,3 @@ fn gather(
     }
   }
 }
-
-/// `persistent_term:put/2` の型を付けた薄いラッパー。
-@external(erlang, "persistent_term", "put")
-fn persistent_term_put(key: Atom, value: a) -> Atom
-
-/// `persistent_term:get/2` の型を付けた薄いラッパー。既定値の版を使うので、
-/// キーが無いときも `badarg` で落ちない。
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get(key: Atom, default: a) -> a
