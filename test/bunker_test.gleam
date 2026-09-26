@@ -570,6 +570,46 @@ pub fn responses_reach_only_the_relays_of_their_session_test() {
   stop_bunker(bare)
 }
 
+/// `logout` の応答は、閉じたセッションのリレーにも届く。応答の宛先を探す時点では
+/// 書き込み後のエンジンにセッションは無いので、書き込み前のエンジンからも引く。
+pub fn a_logout_response_reaches_the_relays_of_the_closed_session_test() {
+  let stored = one_account()
+  let signer = stored.account
+  let client = account_for(client_key)
+  let name = process.new_name("bunker_logout_response_relays_test")
+  start_bunker_with_load(name, fn() {
+    Ok(
+      bunker.Snapshot(
+        Loaded([stored], []),
+        [session_with(signer, client, [relay_x])],
+        [],
+        [],
+      ),
+    )
+  })
+  let assert Ok([_]) = bunker.accounts(name)
+  let inbox_a = process.new_subject()
+  let inbox_x = process.new_subject()
+  set_publisher(name, relay_a, delivery.BaseRelay, inbox_a)
+  set_publisher(name, relay_x, delivery.SessionRelay, inbox_x)
+
+  named.send(
+    name,
+    bunker.Incoming(
+      signed_event.verified(request_event(
+        client,
+        signer,
+        request_body("l1", "logout", "[]"),
+        time.now_seconds(),
+      )),
+    ),
+  )
+  let assert Ok(_response) = process.receive(inbox_a, 1000)
+  let assert Ok(_response) = process.receive(inbox_x, 1000)
+  assert bunker.sessions(name) == Ok([])
+  stop_bunker(name)
+}
+
 /// セッションのリレーの一覧は、読み込み、取り消し、`logout`、アカウントの削除の
 /// たびに、使われている URL だけに変わる（受け入れ条件 3）。
 pub fn session_relays_follow_revocation_and_account_removal_test() {
