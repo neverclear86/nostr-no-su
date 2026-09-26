@@ -261,6 +261,18 @@ pub fn handle_receives_config_test() {
     == dict.from_list([#("path", "/tmp/events.log")])
 }
 
+/// `handle_event/1` と `/2` の両方を持つプラグインでは `/2` が呼ばれる。
+/// fixture の `/1` は例外を投げるので、呼ばれればこのテストが落ちる。
+pub fn handle_prefers_arity_two_test() {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create("plugin_with_both_handlers"),
+      dict.new(),
+      plugin.default_call_timeout_ms,
+    )
+  loaded.handle(sample_event())
+}
+
 /// `plugin_children/0` と `/1` の両方を持つプラグインでは `/1` が呼ばれる。
 /// fixture の `/0` は例外を投げるので、呼ばれていれば理由が `crashed` になる。
 pub fn children_prefers_arity_one_test() {
@@ -569,3 +581,44 @@ pub fn describe_decode_error_without_errors_is_invalid_value_test() {
 /// fixture が退避した値を読む。キーが無ければ例外になる。
 @external(erlang, "persistent_term", "get")
 fn persistent_term_get(key: Atom) -> Dynamic
+
+/// UI の任意エクスポートを 1 つも持たない組み合わせは `Ok(None)` になる。
+pub fn ui_arities_without_ui_exports_is_none_test() {
+  assert plugin.ui_arities(None, None, None) == Ok(None)
+}
+
+/// 一覧と中身がそろえば、そのアリティの組の `Ok(Some)` になる。
+pub fn ui_arities_with_pages_and_content_test() {
+  assert plugin.ui_arities(Some(1), Some(2), None) == Ok(Some(#(1, 2)))
+  assert plugin.ui_arities(Some(2), Some(3), Some(3)) == Ok(Some(#(2, 3)))
+}
+
+/// 実行だけを持つ組み合わせは、一覧が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_action_without_pages_test() {
+  assert plugin.ui_arities(None, None, Some(3))
+    == Error("plugin_page_action/3 but no plugin_pages/0, /1 or /2")
+}
+
+/// 一覧を持たずに中身を持つ組み合わせは、一覧が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_content_without_pages_test() {
+  assert plugin.ui_arities(None, Some(1), Some(2))
+    == Error("plugin_page_content/1 but no plugin_pages/0, /1 or /2")
+}
+
+/// 中身を持たずに一覧だけを持つ組み合わせは、中身が無いことを報告する `Error` になる。
+pub fn ui_arities_rejects_pages_without_content_test() {
+  assert plugin.ui_arities(Some(0), None, None)
+    == Error("plugin_pages/0 but no plugin_page_content/1, /2 or /3")
+}
+
+/// `plugin_pages/2` に `plugin_page_content/3` が無い組み合わせは `Error` になる。
+pub fn ui_arities_rejects_localized_pages_without_localized_content_test() {
+  assert plugin.ui_arities(Some(2), Some(2), None)
+    == Error("plugin_pages/2 but no plugin_page_content/3")
+}
+
+/// `plugin_page_content/3` に `plugin_pages/2` が無い組み合わせは `Error` になる。
+pub fn ui_arities_rejects_localized_content_without_localized_pages_test() {
+  assert plugin.ui_arities(Some(1), Some(3), None)
+    == Error("plugin_page_content/3 but no plugin_pages/2")
+}
