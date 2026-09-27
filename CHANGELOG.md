@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-28
+
 ### 追加
 
 - 公開イメージで動かすディレクトリーを 1 行のコマンドで作る `install.sh`。最新の Release の版を調べ、`.env` の `NOSTR_NO_SU_VERSION` をその版に固定する（#693）
@@ -52,5 +54,6 @@
 - docker compose（Postgres 同梱、読み取り専用のルート、非 root、healthcheck、remsh の口、秘密のファイルからの読み込み）、公開イメージ `ghcr.io/neverclear86/nostr-no-su`（`linux/amd64` と `linux/arm64`）、公開イメージから起動する `docker-compose.release.yml`、`.env` を用意する `setup-env.sh`（#162 #203 #219 #390 #402 #408 #561）
 - 文書: 使い方、設定、運用（バックアップ、更新、復旧、マスターキーの交換）、管理 UI、プラグイン API v1、設計上の判断と既知の制約、システム構成、開発、貢献の手引き、脆弱性の報告の窓口（#413 #446 #664）
 
-[Unreleased]: https://github.com/neverclear86/nostr-no-su/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/neverclear86/nostr-no-su/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/neverclear86/nostr-no-su/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/neverclear86/nostr-no-su/releases/tag/v0.1.0
