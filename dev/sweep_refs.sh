@@ -5,13 +5,13 @@
 #
 # 探す範囲は src、test、dev、docs、examples、README.md、README.ja.md、CLAUDE.md、CONTRIBUTING.md、
 # CHANGELOG.md、NOTICE、LICENSE、.env.example、setup-env.sh、install.sh、docker-compose.yml、
-# docker-compose.release.yml、.claude、.github、plugins-src、docker の追跡されたファイル
+# docker-compose.release.yml、Dockerfile、.claude、.github、plugins-src、docker の追跡されたファイル
 # （build/ と node_modules は除く）。
 # 語は大文字小文字を区別し、単語の境界で一致させる（git grep -w -F）。
 # `Persist` は `Persisted` に一致しないので、部分一致が要るときは語を分けて渡す。
 #
 # 種別は次のとおり。doc-comment: `///` の行（test/ の下でも）、test: test/ の下、docs: docs/ と *.md と NOTICE と LICENSE、
-# config: .env.example、.claude、docker、*.toml、*.yml、code: それ以外。
+# config: .env.example、Dockerfile、.claude、docker、*.toml、*.yml、code: それ以外。
 # 0 件の語も「0 件」と出す（確かめたことの証拠になる）。作業ツリーには書き込まない。
 #
 # 使い方: sh dev/sweep_refs.sh <作業ツリー> <語>...
@@ -23,7 +23,7 @@ shift
 git -C "$tree" rev-parse --show-toplevel > /dev/null
 
 # 探す範囲。存在しないパスは git grep が黙って 0 件にする。
-paths='src test dev docs examples README.md README.ja.md CLAUDE.md CONTRIBUTING.md CHANGELOG.md NOTICE LICENSE .env.example setup-env.sh install.sh docker-compose.yml docker-compose.release.yml .claude .github plugins-src docker'
+paths='src test dev docs examples README.md README.ja.md CLAUDE.md CONTRIBUTING.md CHANGELOG.md NOTICE LICENSE .env.example setup-env.sh install.sh docker-compose.yml docker-compose.release.yml Dockerfile .claude .github plugins-src docker'
 
 echo "| 語 | ファイル:行 | 種別 | 行の内容 |"
 echo "|--|--|--|--|"
@@ -49,7 +49,7 @@ for word in "$@"; do
         if (text ~ /^\/\/\//) kind = "doc-comment"
         else if (file ~ /^test\//) kind = "test"
         else if (file ~ /^docs\// || file ~ /\.md$/ || file ~ /^(NOTICE|LICENSE)$/) kind = "docs"
-        else if (file ~ /^(\.env\.example|\.claude\/|docker\/)/ || file ~ /\.(toml|yml|yaml)$/) kind = "config"
+        else if (file ~ /^(\.env\.example|Dockerfile|\.claude\/|docker\/)/ || file ~ /\.(toml|yml|yaml)$/) kind = "config"
         if (length(text) > 80) text = substr(text, 1, 77) "..."
         gsub(/\|/, "\\|", text); gsub(/`/, "\047", text)
         printf "| `%s` | %s:%s | %s | `%s` |\n", word, file, line, kind, text

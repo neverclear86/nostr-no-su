@@ -145,10 +145,11 @@ sh dev/devin_wait.sh <clone> [最大秒数]                                     
 python3 dev/wfstats.py [--base <dir>] [--runs <run id>,...] [--brief]              # Workflow の実行ログから費用・速度・品質の実測を出す。--brief の要約を retrospective が issue に貼る
 ```
 
-実装エージェントの定義（`.claude/agents/issue-implementer.md`）の frontmatter の `hooks` は、定義の「PR を作る前の検査」の一部（format と PR 本文の書式）を機械的に行う。エージェントが直接呼ぶものではなく、stdin に hook の JSON を受け取る:
+実装エージェントの定義（`.claude/agents/issue-implementer.md`）の frontmatter の `hooks` は、定義の「PR を作る前の検査」の一部（format と PR 本文の書式）を機械的に行う。エージェントが直接呼ぶものではなく、stdin に hook の JSON を受け取る。format の 2 本は `dev/ci_gleam.sh` で、その作業ツリーの `ci.yml` の `gleam-version` と同じ版の gleam（ホストの版が違えば mise に入っている版）を使い、版の合う gleam が無ければ何もしない（CI が検査する）:
 
 ```sh
-sh dev/hook_gleam_format.sh       # PostToolUse（Edit|Write）: 編集した .gleam をその作業ツリーで gleam format する
+sh dev/hook_gleam_format.sh       # PostToolUse（Edit|Write）: 編集した .gleam をその作業ツリーで CI と同じ版の gleam format にかける
 sh dev/hook_pr_body_gate.sh       # PreToolUse（Bash）: gh pr create の --body-file に必須の節（概要、変更点、テストと検証、掃き出した語、Closes #、設計メモの表）が無ければ deny する
-sh dev/hook_push_format_check.sh  # PreToolUse（Bash）: git -C <作業ツリー> push の前に gleam format --check src test dev を回し、通らなければ deny する
+sh dev/hook_push_format_check.sh  # PreToolUse（Bash）: git -C <作業ツリー> push の前に CI と同じ版の gleam format --check src test dev を回し、通らなければ deny する
+sh dev/ci_gleam.sh <作業ツリー> <gleam の引数>...  # 上の 2 本が使う。作業ツリーの ci.yml と同じ版の gleam で実行し、版の合う gleam が無ければ 127 で終わる
 ```
