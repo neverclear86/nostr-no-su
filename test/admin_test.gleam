@@ -736,21 +736,21 @@ pub fn approval_page_for_an_unknown_token_is_not_found_test() {
   assert !string.contains(body, "other-token")
 }
 
-/// 承認は Context の `approve` を呼び、閉じてよいことを伝える。
+/// 承認は Context の `approve` を呼び、ダッシュボードへ 303 で戻す。
 pub fn approve_calls_the_context_test() {
   let reports = process.new_subject()
   let response = post(reporting_context(reports), "/approve/" <> token)
-  assert response.status == 200
-  assert string.contains(simulate.read_body(response), "Approved")
+  assert response.status == 303
+  assert header(response, "location") == "/"
   assert process.receive(reports, 1000) == Ok(Approved(token))
 }
 
-/// 拒否は Context の `deny` を呼ぶ。
+/// 拒否は Context の `deny` を呼び、ダッシュボードへ 303 で戻す。
 pub fn deny_calls_the_context_test() {
   let reports = process.new_subject()
   let response = post(reporting_context(reports), "/deny/" <> token)
-  assert response.status == 200
-  assert string.contains(simulate.read_body(response), "Denied")
+  assert response.status == 303
+  assert header(response, "location") == "/"
   assert process.receive(reports, 1000) == Ok(Denied(token))
 }
 
@@ -1523,13 +1523,10 @@ pub fn only_the_static_files_are_served_test() {
   assert post(context(), "/static/admin.js").status == 405
 }
 
-/// 通知ページの結果の印は、結果ごとの色とアイコンで出る。承認と拒否はどちらも 200
-/// なので、状態コードではなく経路で色が決まる。
+/// 通知ページの結果の印は、結果ごとの色とアイコンで出る。
 pub fn notices_are_colored_by_outcome_test() {
   let rotate = action_path(routes.RotateSecret)
   let notices = [
-    #(post(context(), "/approve/" <> token), view.Success),
-    #(post(context(), "/deny/" <> token), view.Neutral),
     #(post(context(), "/approve/other-token"), view.Failure),
     #(
       post(
