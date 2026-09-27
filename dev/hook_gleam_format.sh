@@ -2,9 +2,11 @@
 # 実装エージェント（.claude/agents/issue-implementer.md）の PostToolUse hook。
 # Edit / Write の後に、編集したファイルが .gleam なら、そのファイルが属する作業ツリーで
 # `gleam format <file>` をかける（定義の「PR を作る前の検査」の手順 4 の保険）。
+# gleam は dev/ci_gleam.sh でその作業ツリーの CI（ci.yml の gleam-version）と同じ版を選ぶ。
 #
 # stdin に hook の JSON を受け取り、tool_input.file_path を読む。
 #   .gleam 以外、file_path が無い、jq が読めない  何もせず 0 で終わる
+#   CI と同じ版の gleam が無い（dev/ci_gleam.sh が 127）  何もせず 0 で終わる（CI が検査する）
 #   ユーザーの作業ツリーの下                         何もせず 0 で終わる（定義はユーザーの
 #                                                    作業ツリーを編集しないと定めているので、
 #                                                    ここで整形が走るのは異常であり、黙って直さない）
@@ -28,10 +30,9 @@ case "$file" in
 esac
 [ -f "$file" ] || exit 0
 tree=$(git -C "$(dirname "$file")" rev-parse --show-toplevel 2> /dev/null) || exit 0
-command -v gleam > /dev/null 2>&1 || exit 0
 
-if ! out=$(cd "$tree" && gleam format "$file" 2>&1); then
-  printf 'hook_gleam_format: gleam format %s failed\n%s\n' "$file" "$out" >&2
-  exit 2
-fi
-exit 0
+out=$(sh "$(dirname "$0")/ci_gleam.sh" "$tree" format "$file" 2>&1)
+status=$?
+case $status in 0 | 127) exit 0 ;; esac
+printf 'hook_gleam_format: gleam format %s failed\n%s\n' "$file" "$out" >&2
+exit 2
