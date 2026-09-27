@@ -109,7 +109,7 @@ jobs:
         id: beam
         with:
           otp-version: "29"
-          gleam-version: "1.17.0"
+          gleam-version: "1.18.1"
           rebar3-version: "3"
       # 依存のソースとコンパイル済みの依存を戻す。鍵が src/ と test/ を含まないので
       # 本体の成果物は除く（path は子を列挙しないと ! が効かないので erlang/* と書く）。
@@ -194,7 +194,7 @@ jobs:
         id: beam
         with:
           otp-version: "29"
-          gleam-version: "1.17.0"
+          gleam-version: "1.18.1"
           rebar3-version: "3"
       # uses: のステップには working-directory が効かないので、path はリポジトリの
       # ルートからのパスで書く。
@@ -230,7 +230,7 @@ jobs:
         id: beam
         with:
           otp-version: "29"
-          gleam-version: "1.17.0"
+          gleam-version: "1.18.1"
           rebar3-version: "3"
       # uses: のステップには working-directory が効かないので、path はリポジトリの
       # ルートからのパスで書く。
