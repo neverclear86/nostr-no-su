@@ -22,7 +22,7 @@ mkdir -p plugins/event_logger
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD/plugins-src/event_logger:/src:ro" \
   -v "$PWD/plugins/event_logger:/out" \
-  ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
+  ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine \
   sh -c 'cp -r /src /tmp/work && rm -rf /tmp/work/build && cd /tmp/work && gleam deps download \
          && gleam export erlang-shipment && cp -r build/erlang-shipment/. /out/'
 chmod -R a+rX plugins

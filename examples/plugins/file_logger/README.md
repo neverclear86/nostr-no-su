@@ -17,7 +17,7 @@ mkdir -p plugins/file_logger/ebin
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/examples/plugins/file_logger:/src:ro" \
   -v "$PWD/plugins/file_logger/ebin:/out" \
-  ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
+  ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine \
   erlc -o /out /src/src/file_logger.erl
 chmod -R a+rX plugins
 ```

@@ -129,9 +129,8 @@ pub fn picture(metadata: Event) -> Option(String) {
   case json.parse(metadata.content, decode.at(["picture"], decode.string)) {
     Ok(value) ->
       case uri.parse(value) {
-        Ok(uri.Uri(scheme: Some("https"), host: Some(host), ..))
-          if host != ""
-        -> Some(value)
+        Ok(uri.Uri(scheme: Some("https"), host: Some(host), ..)) if host != "" ->
+          Some(value)
         _ -> None
       }
     Error(_) -> None

@@ -1,4 +1,14 @@
-FROM ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine@sha256:e0b22aa9dc1c38ae564106e1d6c97c11caf592b25736f53a62900eccd79827cd AS toolchain
+FROM ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine@sha256:7c82e4a284b7c05c26eac34db497ea0e63ce7cb04bd019d966d70338eb172b68 AS gleam
+
+# gleam のイメージは erlang の公式イメージに静的リンクの /bin/gleam を足したものだが、基底の
+# OTP の版が platform ごとに揃っていないことがある。BEAM ファイルをコンパイルする OTP と実行する
+# OTP をどの platform でも一致させるため、gleam のイメージからは /bin/gleam だけを写し、ビルドと
+# 実行の基底にはこの otp ステージを共通に使う（一致は CI の docker-image ジョブが確かめる）。
+# gleam の版は上の FROM で、OTP の版はこの FROM で、それぞれタグとダイジェストを一緒に変える。
+FROM erlang:29.0.2-alpine@sha256:a725e9993586dcd8da0e42c7f0aa48dfa881dc2ff7f32b63716355b580a963eb AS otp
+
+FROM otp AS toolchain
+COPY --from=gleam /bin/gleam /bin/gleam
 
 FROM toolchain AS build
 WORKDIR /build
@@ -40,12 +50,8 @@ RUN for i in 1 2 3; do gleam deps download && break; [ "$i" = 3 ] && exit 1; sle
 COPY plugins-src/profile/src src
 RUN gleam export erlang-shipment
 
-# gleam のビルドイメージは erlang:29.0.1-alpine の上に /bin/gleam を足したものなので、
-# BEAM ファイルをコンパイルした OTP と実行する OTP を一致させるため、実行ステージには
-# その基底イメージを使う（一致は CI の docker-image ジョブが確かめる）。
-# gleam の版を上げるときは、toolchain の FROM のタグとダイジェストに合わせて、下のタグと
-# ダイジェストも一緒に変える（取り違えは docker-image ジョブの OTP の検査で落ちる）。
-FROM erlang:29.0.1-alpine@sha256:3ab831e65c5d398281e00d24bae3901b4cfdc1b49f79fadfd2562a1a9a17aabd
+# 実行ステージは toolchain と同じ otp ステージから始める（理由は otp ステージのコメント）。
+FROM otp
 # 実行に rebar3 は要らないので消す。利用者を adduser で作ると /etc/shadow に
 # ビルド日を書いてしまい再現性を壊すので、adduser と同じ内容の行を直接足す。
 # wss:// のときにリレーの TLS 証明書を検証する CA 証明書と healthcheck の wget は

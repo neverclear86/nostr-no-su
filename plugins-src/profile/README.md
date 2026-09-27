@@ -22,7 +22,7 @@ mkdir -p plugins/profile
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD/plugins-src/profile:/src:ro" \
   -v "$PWD/plugins/profile:/out" \
-  ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
+  ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine \
   sh -c 'cp -r /src /tmp/work && rm -rf /tmp/work/build && cd /tmp/work && gleam deps download \
          && gleam export erlang-shipment && cp -r build/erlang-shipment/. /out/'
 chmod -R a+rX plugins
