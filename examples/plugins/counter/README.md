@@ -27,7 +27,7 @@ mkdir -p plugins/counter/ebin
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/examples/plugins/counter:/src:ro" \
   -v "$PWD/plugins/counter/ebin:/out" \
-  ghcr.io/gleam-lang/gleam:v1.17.0-erlang-alpine \
+  ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine \
   erlc -o /out /src/src/counter.erl
 chmod -R a+rX plugins
 ```

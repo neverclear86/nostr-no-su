@@ -9,7 +9,7 @@ gleam run   # 実行
 gleam test  # テスト（BIP-340 / NIP-44 / NIP-19 公式ベクター + バンカーのループバック）
 ```
 
-CI と Docker イメージはどちらも Gleam 1.17.0 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
+CI と Docker イメージはどちらも Gleam 1.18.1 / OTP 29 で、検証しているのはこの組み合わせだけ。より古い OTP でも動く可能性はあるが確認していない。
 
 `gleam test` は test/ 配下のモジュールを 8 本のレーンで同時に走らせる（`test/nostr_no_su_test.gleam` の `lanes`。空いたレーンが次のモジュールを取る。実行器は `test/support/eunit_runner.erl`）。同じモジュールの中のテストは順に走り、同じ DB の advisory lock を取り合う `account_store_test` と `account_reconcile_test` だけは 1 本のレーンでこの順に走る（同じファイルの `ordered_modules`）。gleeunit の main は使っていないが、報告（進捗の点と失敗の一覧）は gleeunit のものをそのまま使う。出力のログの行は別のモジュールのテストのものと入り混じる。壁時間は Postgres と strfry つきで 20 秒ほどで、いちばん長いモジュール（`app_accounts_test`）と、直列に走る `account_store_test` と `account_reconcile_test` のレーンで決まる。
 
