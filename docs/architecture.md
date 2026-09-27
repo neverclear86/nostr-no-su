@@ -579,8 +579,8 @@ POST の応答で開いた状態で描いたダイアログは、`admin.js` が�
 | GET | `/static/admin.js` | 管理 UI の JS（`priv/static/admin.js`） |
 | POST | `/language` | 表示の言語を cookie に保存し（ブラウザーの設定では消し）、フォームが送った戻り先へ 303 で戻す |
 | POST | `/theme` | 表示のテーマを cookie に保存し（`system` では cookie を消す）、フォームが送った戻り先へ 303 で戻す |
-| GET / POST | `/approve/<token>` | 承認ページ / 承認 |
-| POST | `/deny/<token>` | 拒否 |
+| GET / POST | `/approve/<token>` | 承認ページ / 承認。承認は 303 でダッシュボードへ戻す |
+| POST | `/deny/<token>` | 拒否。303 でダッシュボードへ戻す |
 | POST | `/sessions/revoke` | セッションの取り消し |
 | POST | `/sessions/connect` | `nostrconnect://` URI の解釈と署名者の照合。確認のダイアログを開いたダッシュボードを 200 で返し、セッションもリレーの接続も作らない |
 | POST | `/sessions/connect/confirm` | 確認のダイアログからの接続。URI と署名者をもう一度確かめてから接続し、303 でダッシュボードへ戻す |

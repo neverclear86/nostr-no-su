@@ -77,8 +77,6 @@ const shots = [
   { name: "02-dashboard-empty", url: `${empty}/` },
   { name: "03-dashboard-accounts-unavailable", url: `${unavailable}/` },
   { name: "04-approve-page", url: `${base}/approve/tok-1` },
-  { name: "05-approved", url: `${base}/approve/tok-1`, form: {} },
-  { name: "06-denied", url: `${base}/deny/tok-1`, form: {} },
   { name: "07-decision-not-found", url: `${base}/approve/unknown`, form: {}, status: 404 },
   { name: "09-import-invalid-nsec", url: `${base}/accounts/import`, form: { nsec: "nsec1invalid", label: "x" }, status: 400 },
   { name: "10-import-duplicate", url: `${base}/accounts/import`, form: { nsec: signerNsec, label: "dup" }, status: 409 },

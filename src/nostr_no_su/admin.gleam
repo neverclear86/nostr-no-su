@@ -816,8 +816,9 @@ pub fn normalize_newlines(value: String) -> String {
   |> string.join("\n")
 }
 
-/// 承認ページ。GET は接続要求の内容を出し、POST は承認する。クライアントは
-/// `auth_url` として渡されたこの URL を開く。
+/// 承認ページ。GET は接続要求の内容を出し、POST は承認してダッシュボードへ 303 で戻す
+/// （処理済みの承認ページは 404 になるので開き直さない）。承認できなかったときは
+/// `session_failure_response` に渡す。クライアントは `auth_url` として渡されたこの URL を開く。
 fn approve_connection(handling: Handling, token: String) -> Response {
   case handling.request.method {
     http.Get -> {
@@ -837,29 +838,24 @@ fn approve_connection(handling: Handling, token: String) -> Response {
     }
     http.Post -> {
       use _entry <- with_pending(handling, token)
-      decision_response(
-        handling,
+      redirect_home_or(
         handling.context.approve(token),
-        i18n.Approved,
-        i18n.ApprovedCloseWindow,
-        view.Success,
+        session_failure_response(handling, _),
       )
     }
     _ -> method_not_allowed(handling, [http.Get, http.Post])
   }
 }
 
-/// 接続要求を 1 件拒否する。
+/// 接続要求を 1 件拒否してダッシュボードへ 303 で戻す。拒否できなかったときは
+/// `session_failure_response` に渡す。
 fn deny_connection(handling: Handling, token: String) -> Response {
   use <- require_method(handling, http.Post)
   use _entry <- with_pending(handling, token)
-  decision_response(
+  redirect_home_or(handling.context.deny(token), session_failure_response(
     handling,
-    handling.context.deny(token),
-    i18n.Denied,
-    i18n.DeniedCloseWindow,
-    view.Neutral,
-  )
+    _,
+  ))
 }
 
 /// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
@@ -892,33 +888,6 @@ pub type ReenableFailure {
   /// ランナーが居ないか、期限内に応答しなかった。打ち切った後にランナーが
   /// 処理して反映することがある。
   PluginNotAnswered
-}
-
-/// 承認・拒否の結果。クライアントは応答イベントを待っているので、ここでは人間に
-/// 終わったことだけを伝える。処理できなかった要求は `session_failure_response` に渡す。
-/// 承認と拒否はどちらも 200 なので、処理できたときの見出し（`done`）、文（`message`）、
-/// 通知の色（`tone`）は呼び出し側が渡す。
-fn decision_response(
-  handling: Handling,
-  outcome: Result(Nil, SessionFailure),
-  done: i18n.Message,
-  message: i18n.Message,
-  tone: view.Tone,
-) -> Response {
-  case outcome {
-    Ok(Nil) ->
-      dashboard.notice_page(
-        handling.language,
-        handling.theme,
-        return_to_dashboard,
-        done,
-        i18n.Translated(message),
-        tone,
-        [],
-      )
-      |> wisp.html_response(200)
-    Error(failure) -> session_failure_response(handling, failure)
-  }
 }
 
 /// セッションを 1 件取り消してダッシュボードへ戻す。再読み込みで取り消しが

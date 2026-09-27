@@ -407,10 +407,6 @@ pub type Message {
   // 承認ページと通知ページ
   ApproveConnection
   WrongSecretNotice
-  Approved
-  Denied
-  ApprovedCloseWindow
-  DeniedCloseWindow
   NotFound
   ChangeNotConfirmed
   ChangeNotApplied
@@ -730,10 +726,6 @@ fn english(message: Message) -> String {
     ApproveConnection -> "Approve connection"
     WrongSecretNotice ->
       "This happens when a client still uses the connection URI from before the secret was rotated, or when someone is guessing the secret. If you do not recognize this client, deny the request."
-    Approved -> "Approved"
-    Denied -> "Denied"
-    ApprovedCloseWindow -> "Approved. You can close this window."
-    DeniedCloseWindow -> "Denied. You can close this window."
     NotFound -> "Not found"
     ChangeNotConfirmed -> "Change not confirmed"
     ChangeNotApplied -> "Change not applied"
@@ -1041,10 +1033,6 @@ fn japanese(message: Message) -> String {
     ApproveConnection -> "接続を承認"
     WrongSecretNotice ->
       "secret を再生成する前の接続 URI を使い続けているクライアントか、secret を推測する試みです。心当たりの無いクライアントなら拒否してください。"
-    Approved -> "承認しました"
-    Denied -> "拒否しました"
-    ApprovedCloseWindow -> "承認しました。このウィンドウは閉じてかまいません。"
-    DeniedCloseWindow -> "拒否しました。このウィンドウは閉じてかまいません。"
     NotFound -> "見つかりません"
     ChangeNotConfirmed -> "変更を確認できませんでした"
     ChangeNotApplied -> "変更を反映できませんでした"
