@@ -106,8 +106,9 @@ test -f ~/.claude/skills/issue-workflow-kit/scripts/render.py && python3 ~/.clau
 ```
 
 - 終了コード 0: 最新だったか、テンプレートと学びの表の変化を取り込んで、kit が管理するファイルだけを専用のコミット（`chore: issue-workflow を issue-workflow-kit <SHA> に更新する`）にした。出力に取り込んだコミットの一覧が出るので、ユーザーへの報告に 1 行で添える。push はしない
-- 終了コード 20: 導入の記録が無い。そのまま進める
+- 終了コード 20: 導入の記録が無いか、このマシンの kit の履歴が導入の記録と合わない（kit のファイルだけを写したなど）。更新せずに、コミット済みの定義のまま進める。出力の理由をユーザーへの報告に 1 行で添える
 - 終了コード 30: 人の判断が要る（kit が管理するファイルに未コミットの変更がある、kit 自身に未コミットの変更がある（kit をコミットしてから回す）、3-way merge が衝突した、書き換えていない ADAPT がある、テンプレートが ADAPT を外して書いた本文が消える、更新の後の検査が通らない）。作業ツリーは元に戻っている。出力の理由をユーザーに伝え、スキル issue-workflow-kit の「更新」で進めるか、今回は更新せずに回すかを聞く
+- それ以外の終了コード（1 など）: refresh そのものが失敗した。`git status --short` で kit が管理するファイル（`.claude/` と `dev/` の描画したもの、`.claude/issue-workflow-kit.json`）に変更が残っていれば `git checkout --` で戻し、コミット済みの定義のまま進める。出力の要点をユーザーに伝える
 - 補助スクリプト（`dev/`）の変化は、issue ごとの作業ツリーが base から取り出されるので、この更新が base にマージされてから効く（出力に注意が出る）。定義・スキル・ワークフローの変化は、この直後の起動から効く
 
 続けて、対象の issue（1 件でも複数でも）について、次を集めて `args` を組み立てる。
@@ -224,7 +225,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 `args.dryRun` に issue 番号ごとのシナリオを渡すと、エージェントを立てずに制御の流れだけを確かめられる。シナリオの一覧はスクリプトの `fake` にある。全シナリオは次の 1 行で回せる（期待する結果との突き合わせまで行い、NG が 0 件なら終了コード 0）。
 
 ```sh
-python3 ~/.claude/skills/issue-workflow-kit/scripts/verify_workflow.py .claude/workflows/issue-workflow.js
+python3 dev/verify_workflow.py .claude/workflows/issue-workflow.js
 ```
 
 `Workflow` ツールで個別に回すときは、次の形の `args` の `dryRun` のシナリオ名を差し替える（`dryRunPrompts: true` を足すと、`trace` に依頼文の全文が入る）。

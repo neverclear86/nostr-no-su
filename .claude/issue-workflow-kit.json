@@ -1,6 +1,6 @@
 {
   "kit": "issue-workflow-kit",
-  "kitCommit": "58678340c05c1bbba780e988179e60f37e5ce98a",
+  "kitCommit": "153daf65b42f7a7b59ccdcd30238b099f8304daf",
   "config": {
     "values": {
       "REPO": "neverclear86/nostr-no-su",
@@ -68,12 +68,14 @@
     ".claude/workflows/retrospective.js",
     "dev/check_plan_tests.sh",
     "dev/check_procedure.sh",
+    "dev/dryrun.mjs",
     "dev/hook_format.sh",
     "dev/hook_pr_body_gate.sh",
     "dev/hook_push_check.sh",
     "dev/post_comment.sh",
     "dev/pr_facts.sh",
     "dev/sweep_refs.sh",
+    "dev/verify_workflow.py",
     "dev/wfstats.py"
   ]
 }

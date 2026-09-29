@@ -36,7 +36,7 @@ disallowedTools: Agent, Skill
 
 ## PR を作る前の検査（作業ツリーで実行し、結果を PR 本文に書く）
 1. `git fetch origin main && git rebase origin/main`
-2. `.claude/workflows/*.js` を変えたら `node --check` を通し、`python3 ~/.claude/skills/issue-workflow-kit/scripts/verify_workflow.py <作業ツリー>/.claude/workflows/issue-workflow.js` で dry run の全シナリオを回して NG が 0 件であることを確かめ、結果の表を PR 本文に貼る
+2. `.claude/workflows/*.js` を変えたら `node --check` を通し、`python3 <作業ツリー>/dev/verify_workflow.py <作業ツリー>/.claude/workflows/issue-workflow.js` で dry run の全シナリオを回して NG が 0 件であることを確かめ、結果の表を PR 本文に貼る
 3. `dev/` のスクリプトを変えたら `sh -n` と、仮のファイルでの実行
 4. コードを変えたときだけ、issue-implementer の定義の「PR を作る前の検査」を通す
 5. 変えた語ごとに `sh <作業ツリー>/dev/sweep_refs.sh <作業ツリー> <語>...` を回し、文書と `.claude/` に古い記述が残っていないことを確かめる
