@@ -312,7 +312,7 @@ ${observations.map((o) => `- ${o}`).join('\n')}
 - 土台: origin/${BASE} の ${a.base}
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
 - 起票する issue の本文の書き先: ${a.scratchpad}/retro-issue.md
-- 汎用の学び: 学びと観察のうち、このリポジトリに固有でなく、同じワークフローを入れた他のリポジトリにも効くものは、起票するかどうかとは別に portable で返す（定義の「汎用の学び」）。無ければ空の配列
+- 汎用の学び: 学びと観察のうち、このリポジトリに固有でなく、同じワークフローを入れた他のリポジトリにも効くものは、起票するかどうかとは別に portable で返す（定義の「汎用の学び」）。起票するときは、同じものを本文の「## 汎用の学び」の節にも書く（定義の「起票」）。無ければ空の配列
 返答（構造化出力）: issueNumber、issueUrl、adopted、scriptChanges、rejected、portable。起票しなかったときは issueNumber を省いて reason に理由を書く。`
   },
   // 起票された issue の精査と実装。作業ツリーとブランチは issue 番号で決める（issue-workflow の実装エージェントと同じ流儀）。

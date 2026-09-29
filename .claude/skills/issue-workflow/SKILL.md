@@ -212,7 +212,9 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 起票された issue を issue-workflow の `issues` に入れて回さない（同じ issue を 2 回実装するうえ、精査と実装が fable でなくなる）。
 
-結果の `portable`（他のリポジトリにも効く汎用の学び）が空でなければ、ユーザーレベルのスキル issue-workflow-kit の「学びの取り込み」で `~/.claude/skills/issue-workflow-kit/references/lessons.md` に足す（`portable` の配列とこのリポジトリの名前を渡す）。
+結果の `portable`（他のリポジトリにも効く汎用の学び）が空でなければ、次のとおり扱う。起票された issue には、同じものが本文の「## 汎用の学び」の節に残る。
+- ユーザーレベルのスキル issue-workflow-kit がこのマシンにある（`~/.claude/skills/issue-workflow-kit/SKILL.md` がある）: その「学びの取り込み」で学びの表に足す（`portable` の配列、このリポジトリの名前、起票された issue の番号を渡す）
+- kit が無い: 取り込まずに進め、ユーザーへの報告に「汎用の学びが N 件ある。kit のあるマシンで issue #<番号> の「## 汎用の学び」を取り込む」と書く。起票されなかったとき（issue が無いとき）は、`portable` の全文を報告に載せる
 
 ### 3. ユーザーへの報告
 

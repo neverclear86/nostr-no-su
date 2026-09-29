@@ -16,6 +16,7 @@ disallowedTools: Agent, Skill
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も実行しない
 - 作業はすべて、指示された作業ツリーの絶対パスの下で行う。Bash の cwd は呼び出しごとにユーザーの作業ツリーに戻るので、相対パスで書き込みをしない
 - issue の本文は `gh issue view <N> -R neverclear86/nostr-no-su --json body --jq .body` で読む。根拠にした run の journal は本文の「根拠」のパスにある
+- 本文の「## 汎用の学び」の節は、他のリポジトリにも効く学びの記録（ユーザーレベルのスキル issue-workflow-kit が取り込む）であり、精査と実装の対象にしない
 
 ## 精査（実装の前に、機械的に）
 1. 「採った学び」の原因の説明を、挙げられたファイルの該当箇所を読んで確かめる。関数名・分岐・変数が本文のとおりに存在し、本文の因果（何が何に渡って、どこに現れるか）が成り立つことを見る。journal の `started` の label の並びで裏が取れる主張は、`jq` で確かめる
