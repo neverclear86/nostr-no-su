@@ -131,7 +131,7 @@ docker rm -f nns-pg-test
 
 ## レビューの前の機械的な検査
 
-プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りの検査と、コメントの投稿を機械化するスクリプトを置いている。このうちワークフローが使うもの（`sweep_refs.sh`、`pr_facts.sh`、`check_procedure.sh`、`check_plan_tests.sh`、`post_comment.sh`、`wfstats.py`、`hook_*.sh`）は、`.claude/` の定義と同じくユーザーレベルのスキル issue-workflow-kit から描画したもので、導入の記録は `.claude/issue-workflow-kit.json` にある。CI では実行しない。検査はエージェント（プラン、実装、レビュー）が手元で回して出力をプランや PR 本文に貼り、`post_comment.sh` だけが GitHub にコメントを投稿する:
+プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りの検査と、コメントの投稿を機械化するスクリプトを置いている。このうちワークフローが使うもの（`sweep_refs.sh`、`pr_facts.sh`、`check_procedure.sh`、`check_plan_tests.sh`、`post_comment.sh`、`wfstats.py`、`hook_*.sh`、`verify_workflow.py`、`dryrun.mjs`）は、`.claude/` の定義と同じくユーザーレベルのスキル issue-workflow-kit から描画したもので、導入の記録は `.claude/issue-workflow-kit.json` にある。CI では実行しない。検査はエージェント（プラン、実装、レビュー）が手元で回して出力をプランや PR 本文に貼り、`post_comment.sh` だけが GitHub にコメントを投稿する:
 
 ```sh
 sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（code / doc-comment / test / docs / config）を表にする。0 件も出す
@@ -140,6 +140,7 @@ sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付き
 sh dev/check_plan_tests.sh <プランのファイル> <作業ツリー>  # プランの「テスト」の表の 1 列目のテスト名と実装の `pub fn ..._test()`（`dev/名前.sh` はファイルの実在）を突き合わせ、足す名前が無いか、取り消し線で消すとした名前が残っていれば表にして 1 で終わる（実装エージェントが使う）
 sh dev/check_comments.sh <作業ツリー> [ファイル...]  # src/ と plugins-src/*/src のコメントの issue 番号、テスト名、「従来」を「path:行:内容」で一覧にし、あれば 1 で終わる。ファイルを渡すとそれだけを見る
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
+python3 dev/verify_workflow.py .claude/workflows/issue-workflow.js                   # ワークフローのスクリプトを、エージェントを立てずに dry run の全シナリオで回し、期待する結果と突き合わせる（dev/dryrun.mjs を使う）
 python3 dev/wfstats.py [--base <dir>] [--runs <run id>,...] [--brief]              # Workflow の実行ログから費用・速度・品質の実測を出す。--brief の要約を retrospective が issue に貼る
 ```
 
