@@ -14,8 +14,8 @@
 #   fd     3 以上の fd のリダイレクト（手順をまたいで開いた fd は残らない）
 #   否定   `!` の検査、終了コードの検査、「出力なし」を期待する検査（土台で陽性になる
 #          ことを確かめる。コマンドが実行できない状態でも通ってしまう）
-#   環境   プロジェクト名 nostr-no-su、ホストの 24133（kind 24133 と区別するため 127.0.0.1: /
-#          localhost: / PORT= / -p の直後に続くものだけ）、ホストの 5432、作業ツリーの .env、
+#   環境   ユーザーの compose のプロジェクト名とホストのポート（下の「設定」。localhost:<port>、PORT=<port>、
+#          -p <port> の形だけ）、作業ツリーの .env、
 #          ユーザーの作業ツリー、-f の無い docker compose（cwd の compose と .env を読む）
 #   引用   psql -c "…" の中の二重引用符（シェルで外れる。ヒアドキュメントで渡す）
 #   資格   接続文字列（postgres://user:pass@）の 6 文字以下のパスワード（伏せ字は登録した値の
@@ -26,13 +26,28 @@
 # 使い方: sh dev/check_procedure.sh <手順ファイル> <作業ツリー>
 set -eu
 
-[ $# -eq 2 ] || { echo "usage: sh dev/check_procedure.sh <procedure.md> <worktree>" >&2; exit 1; }
+# --- 設定（issue-workflow-kit が導入時に埋める） ---
+# 直し方の案に出す、issue ごとの固有のプロジェクト名の例
+project_example='nns-issue<N>'
+
+[ $# -eq 2 ] || { echo "usage: sh check_procedure.sh <procedure.md> <worktree>" >&2; exit 1; }
 file="$1"
 tree="$2"
 [ -f "$file" ] || { echo "$file does not exist" >&2; exit 1; }
+# ユーザーの作業ツリーは、作業ツリーの共通の git ディレクトリの親（git worktree add で作った作業ツリーならユーザーの clone）
+user_tree=$(cd "$tree" 2> /dev/null && git rev-parse --path-format=absolute --git-common-dir 2> /dev/null | sed 's|/\.git$||') || user_tree=""
+# ユーザーが動かしている docker compose のプロジェクト名と、ホストで使っているポート（空白区切り）。
+# マシンごとの事情なので git に載らない .claude/issue-workflow.local.env から読む（source はしない）。無ければ空で、その検査を飛ばす
+local_env="$user_tree/.claude/issue-workflow.local.env"
+user_project=""
+user_ports=""
+if [ -n "$user_tree" ] && [ -f "$local_env" ]; then
+  user_project=$(sed -n 's/^USER_COMPOSE_PROJECT=//p' "$local_env" | tail -n 1)
+  user_ports=$(sed -n 's/^USER_PORTS=//p' "$local_env" | tail -n 1)
+fi
 
 # バイト単位で扱う（切り詰めをしないので UTF-8 を壊さない）。
-LC_ALL=C awk -v tree="$tree" '
+LC_ALL=C awk -v tree="$tree" -v user_project="$user_project" -v user_ports="$user_ports" -v user_tree="$user_tree" -v project_example="$project_example" '
 # 同じ手順の同じ指摘は 1 回だけ出す。
 function report(kind, what, fix) {
   if (reported[step, kind, what]++) return
@@ -120,10 +135,12 @@ function check(c,  t, i, name, args, k, last) {
   if (match(c, /postgres(ql)?:\/\/[^:\/@ \t]+:[^@\/ \t]*@/)) { args = substr(c, RSTART, RLENGTH); name = args; sub(/^[^:]*:\/\/[^:]*:/, "", name); sub(/@$/, "", name)
     if (name !~ /^[<$]/ && length(name) <= 6) report("資格", code(args), "接続文字列のパスワードが 6 文字以下。伏せ字は登録した値の全出現を [redacted] に置き換えるので、短い値はログの無関係な語まで壊し、grep が 0 行になる。7 文字以上のランダムな値にする") }
   # ユーザーの環境。
-  if (c ~ /(-p|--project-name|--name|project)[= ]nostr-no-su([^-A-Za-z0-9_]|$)/) report("環境", code(c), "ユーザーの compose のプロジェクト名。固有の名前（nns-issue<N>）にする")
-  if (c ~ /\/home\/lina\/workspace\/projects\/nostr-no-su/) report("環境", code(c), "ユーザーの作業ツリー。読むだけでも " tree " にする")
-  if (c ~ /((127\.0\.0\.1|localhost):|PORT=|-p[ \t]+)24133([^0-9]|$)/) report("環境", code(c), "ユーザーの管理 UI のポート。割り当てられたポートにする")
-  if (c ~ /(localhost|127\.0\.0\.1):5432([^0-9]|$)/ || c ~ /[ =]5432:[0-9]/) report("環境", code(c), "ホストの 5432 はユーザーの Postgres。割り当てられたポートにする")
+  if (user_project != "" && c ~ ("(-p|--project-name|--name|project)[= ]" user_project "([^-A-Za-z0-9_]|$)")) report("環境", code(c), "ユーザーの compose のプロジェクト名。固有の名前（" project_example "）にする")
+  if (user_tree != "" && user_tree != tree && index(c, user_tree "/") + index(c, user_tree " ") > 0) report("環境", code(c), "ユーザーの作業ツリー。読むだけでも " tree " にする")
+  np = split(user_ports, ports, /[ \t]+/)
+  # ホスト側で使う形だけを見る（localhost:<port> への接続、PORT=<port> の環境変数、-p <port> と -p <port>:… の公開）。
+  # コンテナー側の :<port> と、同じ数字の別の値（イベントの種別の番号など）は見ない
+  for (i = 1; i <= np; i++) if (ports[i] != "" && (c ~ ("((localhost|127[.]0[.]0[.]1|0[.]0[.]0[.]0):|PORT=|-p[ \t]+)" ports[i] "([^0-9]|$)") || c ~ ("[ =]" ports[i] ":[0-9]"))) report("環境", code(c), "ホストの " ports[i] " はユーザーが使っているポート。割り当てられたポートにする")
   if (c ~ /(^|[^A-Za-z0-9_.\/-])\.env([^A-Za-z0-9_.-]|$)/ || c ~ /\/\.env([^A-Za-z0-9_.-]|$)/) report("環境", code(c), "作業ツリーの .env。--env-file でスクラッチパッドのファイルを渡す")
   if (c ~ /docker([ \t]+|-)compose[ \t]/ && c !~ /docker([ \t]+|-)compose[ \t]+(ls|version)/ && c !~ /[ \t]-f[ \t]/ && c !~ /--file[ \t=]/) report("環境", code(c), "-f が無い docker compose は cwd（ユーザーの作業ツリー）の docker-compose.yml と .env を読む。-f と --env-file を絶対パスで付ける")
 }

@@ -2,7 +2,7 @@
 # issue/PR にワークフローのマーカー付きコメントを投稿する。マーカー行は引数から
 # 機械的に作って本文ファイルの前に置き、`gh issue comment` / `gh pr comment` を
 # `--body-file` で実行する。本文ファイルにはマーカーを書かせない（付け忘れと
-# 二重付けを防ぐ）ので、1 行目が `<!-- nns ` で始まるファイルは拒否する。
+# 二重付けを防ぐ）ので、1 行目が `<!-- <marker> ` で始まるファイルは拒否する（marker は下の「設定」）。
 #
 # マーカーの書式と kind の意味は .claude/skills/issue-workflow/references/formats.md
 # の「マーカー」を参照。本文の最初の空でない行は kind に対応する見出し（同じ文書の各節の
@@ -24,7 +24,9 @@ round="$4"
 verdict="$5"
 sha="$6"
 body="$7"
-repo=neverclear86/nostr-no-su
+# --- 設定（issue-workflow-kit が導入時に埋める。マーカーの接頭辞は merger の定義と formats.md と同じ値にする） ---
+repo='neverclear86/nostr-no-su'
+marker='nns'
 
 case "$target" in
   issue | pr) ;;
@@ -59,7 +61,7 @@ case "$sha" in
 esac
 
 [ -s "$body" ] || { echo "body file does not exist or is empty: $body" >&2; exit 1; }
-head -n 1 "$body" | grep -q '^<!-- nns ' && { echo "body file must not start with a marker: $body" >&2; exit 1; }
+head -n 1 "$body" | grep -q "^<!-- $marker " && { echo "body file must not start with a marker: $body" >&2; exit 1; }
 
 # kind ごとの見出しの形（formats.md の各節）。本文の最初の空でない行に掛ける。
 case "$kind" in
@@ -78,7 +80,7 @@ printf '%s\n' "$first" | grep -Eq "^$heading" || { echo "body file must start wi
 
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-printf '<!-- nns kind=%s round=%s verdict=%s head=%s -->\n\n' "$kind" "$round" "$verdict" "$sha" > "$tmp"
+printf '<!-- %s kind=%s round=%s verdict=%s head=%s -->\n\n' "$marker" "$kind" "$round" "$verdict" "$sha" > "$tmp"
 cat "$body" >> "$tmp"
 
 gh "$target" comment "$number" -R "$repo" --body-file "$tmp"

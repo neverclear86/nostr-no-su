@@ -41,3 +41,9 @@ npm ci && npm run build:css && git diff --exit-code -- priv/static/admin.css   #
 - 描画のモジュール（`src/nostr_no_su/admin/` の `.gleam`。`admin/i18n.gleam` を除く）か `assets/admin.css` を変えたら、`npm ci && npm run build:css` をやり直して `priv/static/admin.css` を一緒にコミットする（古い `node_modules` のままでは違う CSS ができる）。クラスを変えなくても CSS が変わることがある。
 - `plugins-src/` の各プラグインの `manifest.toml` の共有パッケージ（`gleam_stdlib`、`pog` など）の版は本体と同時に上げる。ずれると CI の版の検査で落ちる。
 - `plugins/` に置く成果物はホストでビルドしない。ホストに elixir があると Elixir 一式が混ざるので、各プラグインの README の「ビルド」の docker の手順で作る。
+
+## issue-workflow
+
+- issue を番号で頼まれたら、スキル `issue-workflow`（`.claude/skills/issue-workflow/`）で進める。
+- PR を作る前の検査は `.claude/agents/issue-implementer.md` の「PR を作る前の検査」にあり、上の CI のコマンドと同じである。
+- `.claude/issue-workflow-kit.json` が導入の記録で、ワークフローの定義と補助スクリプトの更新はユーザーレベルのスキル issue-workflow-kit の「更新」で行う（起動の前の `render.py refresh` でも取り込まれる）。

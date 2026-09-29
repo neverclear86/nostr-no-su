@@ -2,16 +2,8 @@
 
 下の「マーカー」以降がこの文書の定める今の書式である。迷ったらそちらに従う。
 下の各節のブロックは本文ファイルの中身で、投稿されたコメントの 1 行目には `dev/post_comment.sh` が付けるマーカーが入る。
-改修前の形の手本として issue #56 のコメント（プラン 4 版とプランレビュー 4 ラウンド）と PR #61 のコメント（レビュー 2 ラウンドと対応 2 件）がある。
-これらはマーカーも畳み込みも往復の上限 2 も無い時期のものなので、節の構成だけを参考にし、書式は写さない。
-改修後の手本は、最初の実行の PR を後で足す。
-
-```sh
-gh api repos/neverclear86/nostr-no-su/issues/56/comments --jq '.[-2].body'   # 承認された版のプラン
-gh api repos/neverclear86/nostr-no-su/issues/61/comments --jq '.[0].body'    # PR レビュー（ラウンド 1）
-gh api repos/neverclear86/nostr-no-su/issues/61/comments --jq '.[1].body'    # 指摘への対応
-gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR 本文
-```
+手本は、このリポジトリで最初の実行が投稿したコメントである（導入の直後は無い。最初の実行の後に、承認されたプラン、PR レビュー、指摘への対応のコメントの URL をここに足す）。
+書式はユーザーレベルのスキル issue-workflow-kit のテンプレートから導入した。
 
 ## マーカー
 
@@ -32,7 +24,7 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 | `pr-review` | PR レビュー（PR） | ラウンド | 判定 | レビューした head |
 | `fix` | 指摘または条件への対応（PR） | 対応したラウンド | `-` | push した head |
 | `gate` | 最終確認（PR） | 何回目か | 判定 | 見た head |
-| `summary` | まとめ（PR） | 最終確認の回 | `-` | 見た head |
+| `summary` | まとめ（PR） | 最終確認の回（最終確認が無ければ PR レビューのラウンド） | `-` | 見た head |
 | `retro` | ふりかえりの issue の精査（issue） | `1` | `-` | `-` |
 
 マージ担当は承認の検出をこのマーカーで行う（`kind=pr-review` と `kind=gate` の最後の 1 件の `verdict`）。見出しの完全一致は使わない。
@@ -81,7 +73,6 @@ gh pr view 61 -R neverclear86/nostr-no-su --json body --jq .body            # PR
 
 ```
 ## 概要
-（devin にコードを書かせたときは「実装: devin（swe-2-max）、検査と PR: Claude」の 1 行を置く）
 ## 設計メモ
 （プランが無いとき（tier none）だけ。「### 決めたこと」と「### 受け入れ条件」の表）
 ## 変更点
@@ -199,12 +190,12 @@ nit は 5 件まで本文を書き、残りは「ほかに N 件」と件数だ�
 
 PR レビューの must だけは「直し方の案」を書かず、該当・問題・根拠で終える（説明と修正案を同時に求めると誤判定が増える）。プランレビューの must と、どちらの should・nit も上の形のままである。
 
-## squash コミット（issue-merger）
+## マージのコミット（issue-merger）
 
-件名は PR タイトルに ` (#PR)` を付けたもの。本文はトレーラー 2 行だけ。
+形は issue-merger の定義の「マージ」に従う（リポジトリの履歴に合わせてある）。既定の形は、件名が PR タイトルに ` (#PR)` を付けたもの、本文がトレーラー 2 行だけである。
 
 ```
-docs: .env.example を追加し、docker compose で試すときの設定を分かるようにする (#61)
+<PR タイトル> (#<PR>)
 
 Co-Authored-By: Claude … <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_…

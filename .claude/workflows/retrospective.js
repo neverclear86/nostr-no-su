@@ -18,20 +18,26 @@ export const meta = {
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   observations: [string]。空でない文字列。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
 //               合わないものは集計に入らないので、ここで自由形式のまま渡し、ふりかえりの依頼文に「セッションの観察」として添える
-//   coverage:   dev/coverage_delta.sh <最初の実行の base> <今の origin/main> の出力（文字列）。集計と起票では必須。
-//               起票する issue に「## カバレッジ」として貼らせ、最後の行の verdict が ok 以外ならセッションの観察に足す
-//   base:       起票する issue に書く、この実行の土台にした origin/main の SHA
+//   base:       起票する issue に書く、この実行の土台にした origin/<CONFIG.baseBranch> の SHA
 //   scratchpad: このセッションのスクラッチパッドの絶対パス
 //   repoDir:    ユーザーの作業ツリー（このリポジトリの clone）の絶対パス。`git rev-parse --show-toplevel` で取る
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
 //   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
 //               集計と起票は飛ばし、精査と実装だけを回す（runs / events / since は要らない）
-// 返り値: 集計と、カバレッジの判定（coverageVerdict）と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
+// 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
 //         複数の PR に分けたときは pr / prUrl / head が一番上の段で、prs に下の段から順の全部が入る）
 // ---------------------------------------------------------------------------
 
-const REPO = 'neverclear86/nostr-no-su'
+// --- リポジトリごとの設定（issue-workflow-kit が導入時に埋める。issue-workflow.js の CONFIG と同じ値にする） ---
+const CONFIG = {
+  repo: 'neverclear86/nostr-no-su',
+  baseBranch: 'main',
+  helpers: 'dev',
+}
+const REPO = CONFIG.repo
+const BASE = CONFIG.baseBranch
+const HELPERS = CONFIG.helpers
 const TIERS = ['none', 'light', 'full']
 
 const a = args || {}
@@ -48,15 +54,9 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
-  if (typeof a.coverage !== 'string' || !/^verdict: /m.test(a.coverage)) throw new Error('args.coverage が無い（スキル issue-workflow の「実行の後: ふりかえり」の dev/coverage_delta.sh の出力を渡す）')
   if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string' && o.trim() !== ''))) throw new Error('args.observations は空でない文字列の配列で渡す')
 }
-// カバレッジの判定（dev/coverage_delta.sh の最後の行）。ok 以外は学びと同じ扱いにするため、セッションの観察に足す
-const coverageVerdict = reentry ? null : (a.coverage.match(/^verdict: (\S+)/m) || [])[1]
-const observations = [
-  ...(a.observations || []),
-  ...(coverageVerdict && coverageVerdict !== 'ok' ? [`カバレッジの判定が ${coverageVerdict} だった（依頼文の「カバレッジ」の表）。下がったならどの PR で下がったかを main の CI の計測でたどり、原因を学びとして分類する`] : []),
-]
+const observations = a.observations || []
 const dry = a.dryRun === true
 
 // --- スキーマ -----------------------------------------------------------
@@ -67,11 +67,25 @@ const S = {
       issueNumber: { type: 'integer' },
       issueUrl: { type: 'string' },
       adopted: { type: 'integer', description: '定義に足す 1〜3 行にした件数' },
-      scriptChanges: { type: 'integer', description: 'dev/ のスクリプトの変更にした件数' },
+      scriptChanges: { type: 'integer', description: '補助スクリプト（CONFIG.helpers）の変更にした件数' },
       rejected: { type: 'integer', description: '採らなかった件数' },
       reason: { type: 'string', description: '起票しなかったときの理由' },
+      portable: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            rule: { type: 'string', description: '定義や手順に書く形の 1〜2 文（このリポジトリの固有名詞を含めない）' },
+            why: { type: 'string', description: '根拠（この実行で起きたこと。issue / PR の番号と件数）' },
+            stage: { type: 'string', description: '効く段階か定義（triage / plan / plan-review / implement / pr-review / gate / merge / script / skill）' },
+            applies: { type: 'string', description: '当てはまるリポジトリの条件（「docker を使う」「UI がある」「全部」など）' },
+          },
+          required: ['rule', 'why', 'stage', 'applies'],
+        },
+        description: '学びのうち、このリポジトリに固有でなく、同じワークフローを入れた他のリポジトリにも効くもの（ユーザーレベルのスキル issue-workflow-kit の学びの表の候補）。無ければ空',
+      },
     },
-    required: ['adopted', 'scriptChanges', 'rejected'],
+    required: ['adopted', 'scriptChanges', 'rejected', 'portable'],
   },
   impl: {
     type: 'object',
@@ -137,7 +151,7 @@ const DIRECT = new Set(['triage', 'plan', 'planReview', 'implement'])
  * | split | Triage の結果の status が 'split' なら真（分割の親。マージ件数、tier 別、実装者別の件数に数えない） |
  * | status | split なら 'split'。それ以外は、その PR の Merge の result のいずれかに status: 'merged' があれば 'merged'、無ければ 'unfinished' |
  * | pr | Implement の結果の pr |
- * | implementedBy | Implement の結果の implementedBy（devin か claude。無ければ claude） |
+ * | implementedBy | Implement の結果の implementedBy（実装を担ったツールの名前。無ければ claude） |
  *
  * 同じ label が 2 回以上あれば先のものを採る（後のものを採ると、再開で走り直した結果に上書きされる）。
  * Merge だけは retry で label が変わるので、複数の label の「いずれか」が merged なら merged とする。
@@ -224,7 +238,8 @@ function aggregate(runs, events) {
   const round2 = (x) => Math.round(x * 100) / 100
   const avg = (key) => (merged.length ? round2(merged.reduce((s, i) => s + (i[key] || 0), 0) / merged.length) : 0)
   const byTier = TIERS.reduce((acc, t) => { acc[t] = list.filter((i) => i.tier === t).length; return acc }, {})
-  const byImplementer = ['claude', 'devin'].reduce((acc, t) => { acc[t] = list.filter((i) => i.implementedBy === t).length; return acc }, {})
+  const implementers = ['claude', ...[...new Set(list.map((i) => i.implementedBy))].filter((t) => t && t !== 'claude').sort()]
+  const byImplementer = implementers.reduce((acc, t) => { acc[t] = list.filter((i) => i.implementedBy === t).length; return acc }, {})
   const totals = {
     runCount: runs.length,
     byTier,
@@ -245,7 +260,7 @@ function aggregate(runs, events) {
 /** 集計の要約を、起票する issue の冒頭にそのまま貼る Markdown の表にする */
 function summaryMarkdown(totals, since) {
   const tierRow = TIERS.map((t) => `${t} ${totals.byTier[t]}`).join(' / ')
-  const implRow = ['claude', 'devin'].map((t) => `${t} ${totals.byImplementer[t]}`).join(' / ')
+  const implRow = Object.entries(totals.byImplementer).map(([t, k]) => `${t} ${k}`).join(' / ')
   return `| 項目 | 値 |
 | --- | --- |
 | 対象期間 | ${since} 以降 |
@@ -274,33 +289,31 @@ function runId(path) {
 
 // --- 依頼文 -----------------------------------------------------------------
 const P = {
-  // 集計の表と学びの一覧に、dev/wfstats.py の実測（--brief）を issue に貼る指示を添える。run id は runs のパスから取る。
+  // 集計の表と学びの一覧に、補助スクリプトの wfstats.py の実測（--brief）を issue に貼る指示を添える。run id は runs のパスから取る。
   // セッションの観察（args.observations）は学びと同じ扱いで分類させる
   retro: (agg, table, runs) => {
     const lessonList = agg.issues
       .filter((i) => (i.lessons || []).length)
       .map((i) => `#${i.n}\n${i.lessons.map((l) => `- ${l}`).join('\n')}`)
       .join('\n\n')
-    const stats = `python3 ${REPO_DIR}/dev/wfstats.py --runs ${runs.map(runId).join(',')} --brief`
+    const stats = `python3 ${REPO_DIR}/${HELPERS}/wfstats.py --runs ${runs.map(runId).join(',')} --brief`
     return `実行の「まとめ」で集まった学びを分類し、改善の issue を 1 本起票してほしい。対象のリポジトリは ${REPO}。
 
 ${table}
 
 ### 学び
 ${lessonList || '（無し）'}
-
-### カバレッジ（dev/coverage_delta.sh の出力。起票する issue の実測の直後に「## カバレッジ」としてそのまま貼る）
-${a.coverage}
 ${observations.length ? `
 ### セッションの観察（実行の外でセッションが観察した学び。ユーザーの指示を含む。学びと同じ基準で分類する）
 ${observations.map((o) => `- ${o}`).join('\n')}
 ` : ''}
 - 実測: \`${stats}\` を実行し、その出力を起票する issue の集計の表の直後に「## 実測（wfstats）」として貼る
 - 根拠にした run: ${runs.map((r) => `\`${r}\``).join('、')}
-- 土台: origin/main の ${a.base}
+- 土台: origin/${BASE} の ${a.base}
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
 - 起票する issue の本文の書き先: ${a.scratchpad}/retro-issue.md
-返答（構造化出力）: issueNumber、issueUrl、adopted、scriptChanges、rejected。起票しなかったときは issueNumber を省いて reason に理由を書く。`
+- 汎用の学び: 学びと観察のうち、このリポジトリに固有でなく、同じワークフローを入れた他のリポジトリにも効くものは、起票するかどうかとは別に portable で返す（定義の「汎用の学び」）。無ければ空の配列
+返答（構造化出力）: issueNumber、issueUrl、adopted、scriptChanges、rejected、portable。起票しなかったときは issueNumber を省いて reason に理由を書く。`
   },
   // 起票された issue の精査と実装。作業ツリーとブランチは issue 番号で決める（issue-workflow の実装エージェントと同じ流儀）。
   // decisions は blocked の再開でユーザーが決めた論点の答え
@@ -308,8 +321,8 @@ ${observations.map((o) => `- ${o}`).join('\n')}
     const wt = `${a.scratchpad}/wt-retro-${n}`
     const branch = `retro/${n}`
     return `ふりかえりで起票された issue #${n}（${url}）を精査し、直すべきものなら実装して PR を作ってほしい。対象のリポジトリは ${REPO}。
-- 土台: origin/main の ${a.base}
-- 作業ツリー: ${wt}、ブランチ: ${branch}（無ければ \`git -C ${REPO_DIR} fetch origin main && git -C ${REPO_DIR} worktree add -b ${branch} ${wt} origin/main\` で作る。ブランチがすでに origin にあれば、それを取り出して続きから進める）。複数の PR に分けるときは 2 段目以降を \`${branch}-<部分の短い英語>\` で下の段のブランチの上に作り、定義の「コミットと PR」の stacked PR の手順で積む
+- 土台: origin/${BASE} の ${a.base}
+- 作業ツリー: ${wt}、ブランチ: ${branch}（無ければ \`git -C ${REPO_DIR} fetch origin ${BASE} && git -C ${REPO_DIR} worktree add -b ${branch} ${wt} origin/${BASE}\` で作る。ブランチがすでに origin にあれば、それを取り出して続きから進める）。複数の PR に分けるときは 2 段目以降を \`${branch}-<部分の短い英語>\` で下の段のブランチの上に作り、定義の「コミットと PR」の stacked PR の手順で積む
 - コミットのトレーラー: ${a.trailers.coAuthoredBy} / ${a.trailers.claudeSession}
 - PR 本文の末尾の生成表記: 🤖 Generated with [Claude Code](https://claude.com/claude-code) と、その次の行に ${a.trailers.sessionUrl}
 - PR 本文と issue のコメントの下書きの置き場: ${a.scratchpad}/retro-${n}-*.md
@@ -341,15 +354,17 @@ log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished $
 // 学びが 0 件でもセッションの観察があれば、観察だけを材料にふりかえりを立てる（観察を黙って落とさない）
 if (dry || (agg.totals.lessonCount === 0 && observations.length === 0)) {
   log(dry ? 'dry run なので集計だけ返す' : '学びもセッションの観察も 0 件なので issue を起票しない')
-  return { ...agg, coverageVerdict, issueNumber: null, reason: dry ? 'dry run' : '学びも観察も 0 件', implementation: null }
+  return { ...agg, issueNumber: null, reason: dry ? 'dry run' : '学びも観察も 0 件', implementation: null }
 }
 
 const table = summaryMarkdown(agg.totals, a.since)
 const retro = await agent(P.retro(agg, table, a.runs), { label: 'Retrospective', agentType: 'issue-retrospective', phase: 'ふりかえり', schema: S.retro })
 if (!retro) throw new Error('Retrospective が結果を返さなかった')
+// 汎用の学びは、このセッションがスキル issue-workflow-kit の「学びの取り込み」でユーザーレベルの表に足す
+if ((retro.portable || []).length) log(`汎用の学び ${retro.portable.length} 件（スキル issue-workflow-kit の「学びの取り込み」に渡す）`)
 if (!retro.issueNumber) {
   log(`issue を起票しなかった: ${retro.reason || '理由なし'}`)
-  return { ...agg, coverageVerdict, ...retro, implementation: null }
+  return { ...agg, ...retro, implementation: null }
 }
 
-return { ...agg, coverageVerdict, ...retro, implementation: await implement(retro.issueNumber, retro.issueUrl, []) }
+return { ...agg, ...retro, implementation: await implement(retro.issueNumber, retro.issueUrl, []) }
