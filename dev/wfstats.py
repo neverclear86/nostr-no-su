@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nostr-no-su の Claude Code Workflow 実行ログ（journal.jsonl + agent-*.jsonl/meta.json）から
+issue-workflow（issue-workflow-kit）の Claude Code Workflow 実行ログ（journal.jsonl + agent-*.jsonl/meta.json）から
 コスト・品質・速度の統計を作るスクリプト。標準ライブラリーだけで動く。
 
 対象: <base>/*/subagents/workflows/wf_*/（<base> は Claude Code のプロジェクトのディレクトリ）。
@@ -41,8 +41,14 @@ PRICE = {
     'claude-opus-5-5': (4, 5, 0.2, 20),
     'claude-opus-5-5[1m]': (4, 5, 0.2, 20),
     'claude-sonnet-5': (2, 2.5, 0.2, 10),
+    'claude-sonnet-5-5': (2, 2.5, 0.2, 10),
+    'claude-sonnet-5-5[1m]': (2, 2.5, 0.2, 10),
 }
 DEFAULT_PRICE = (5, 6.25, 0.5, 25)
+# transcript の output_tokens が実際より少ないモデルがある（Opus 5.5 は書いた文字 1 字あたり 0.04 トークンしか記録されない。
+# Opus 5 と Sonnet 5 は約 1.0）。見えている出力（ツールの入力と本文）の文字数にこの係数を掛けた値を下限にして補う。
+# 思考のトークンは transcript に残らないので補えない
+VISIBLE_TOKENS_PER_CHAR = 0.5
 
 PHASE_CATS = ['Final gate PR', 'Review plan', 'Rebase PR', 'Merge PR', 'PR review',
               'Fix PR', 'Implement', 'Design', 'Triage', 'Plan']
@@ -66,8 +72,10 @@ def load_agent_jsonl(path):
     戻り値: (requests: [{model,inp,cw,cr,out,ts}], t_min, t_max)
     t_min/t_max は全行（assistant 以外も含む）のタイムスタンプの範囲＝エージェントの実際の稼働時間。
     requests は assistant メッセージの usage を requestId で重複排除したもの（wfcost.py と同じロジック）。
+    out は記録された output_tokens と、見えている出力の文字数 × VISIBLE_TOKENS_PER_CHAR の大きいほう。
     """
     reqs = {}
+    chars = collections.Counter()
     t_min = t_max = None
     with open(path) as f:
         for line in f:
@@ -89,6 +97,11 @@ def load_agent_jsonl(path):
             if not u:
                 continue
             rid = d.get('requestId') or m.get('id')
+            for c in m.get('content') or []:
+                if isinstance(c, dict) and c.get('type') == 'tool_use':
+                    chars[rid] += len(json.dumps(c.get('input'), ensure_ascii=False))
+                elif isinstance(c, dict) and c.get('type') == 'text':
+                    chars[rid] += len(c.get('text') or '')
             model = m.get('model')
             if model == '<synthetic>':
                 continue
@@ -99,6 +112,8 @@ def load_agent_jsonl(path):
             cur = reqs.get(rid)
             if cur is None or rec['out'] >= cur['out']:
                 reqs[rid] = rec
+    for rid, rec in reqs.items():
+        rec['out'] = max(rec['out'], round(chars[rid] * VISIBLE_TOKENS_PER_CHAR))
     return list(reqs.values()), t_min, t_max
 
 
@@ -730,8 +745,9 @@ def section_brief(runs_data):
 
 
 def print_models_by_type(runs_data):
-    """agentType ごとのモデル別リクエスト数を出す。1 つの agentType に 2 つ以上のモデルがあれば印を付ける
-    （安全策のフォールバックで古いモデルが答えたか、別名の解決先が実行の途中で変わった）。"""
+    """agentType ごとのモデル別リクエスト数を出す。同じ系統（opus / sonnet / fable / haiku）の中に 2 つ以上のモデルがあれば印を付ける
+    （安全策のフォールバックで古いモデルが答えたか、別名の解決先が実行の途中で変わった）。系統をまたぐ併用は、
+    スクリプトが段階ごとに model を振り分けた結果なので印を付けない。"""
     models = collections.defaultdict(collections.Counter)
     for run in runs_data:
         for a in run['agents'].values():
@@ -740,7 +756,11 @@ def print_models_by_type(runs_data):
     print("agentType 別のモデル（リクエスト数）")
     for t in sorted(models):
         c = models[t]
-        mark = "  ⚠ モデルが混在" if len(c) > 1 else ""
+        families = collections.defaultdict(set)
+        for m in c:
+            base = (m or '').replace('[1m]', '')
+            families[next((f for f in ('opus', 'sonnet', 'fable', 'haiku') if f in base), base)].add(base)
+        mark = "  ⚠ モデルが混在" if any(len(v) > 1 for v in families.values()) else ""
         print(f"    {t:22} " + ", ".join(f"{m} {n}" for m, n in c.most_common()) + mark)
 
 
@@ -768,7 +788,7 @@ def main():
         return
 
     print("=" * 100)
-    print(f"nostr-no-su Claude Code Workflow 実行ログ分析")
+    print(f"issue-workflow の Claude Code Workflow 実行ログ分析")
     print(f"対象run数: {len(runs_meta)}  (ドライラン=1行journalのみのものは除外)")
     print("=" * 100)
     print()

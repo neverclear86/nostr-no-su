@@ -13,7 +13,7 @@ set -eu
 
 [ $# -eq 1 ] || { echo "usage: sh dev/pr_facts.sh <pr-number>" >&2; exit 1; }
 pr="$1"
-repo=neverclear86/nostr-no-su
+repo='neverclear86/nostr-no-su'
 
 view=$(gh pr view "$pr" -R "$repo" --json \
   number,title,url,state,headRefName,headRefOid,baseRefName,baseRefOid,closingIssuesReferences,additions,deletions,changedFiles)

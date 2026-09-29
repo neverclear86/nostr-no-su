@@ -131,7 +131,7 @@ docker rm -f nns-pg-test
 
 ## レビューの前の機械的な検査
 
-プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りの検査と、コメントの投稿を機械化するスクリプトを置いている。CI では実行しない。検査はエージェント（プラン、実装、レビュー）が手元で回して出力をプランや PR 本文に貼り、`post_comment.sh` だけが GitHub にコメントを投稿する:
+プランと PR のレビューで「網羅」の指摘（追随先の漏れ、数値の転記、手順の再現性）を減らすために、`dev/` に読み取りの検査と、コメントの投稿を機械化するスクリプトを置いている。このうちワークフローが使うもの（`sweep_refs.sh`、`pr_facts.sh`、`check_procedure.sh`、`check_plan_tests.sh`、`post_comment.sh`、`wfstats.py`、`hook_*.sh`、`verify_workflow.py`、`dryrun.mjs`）は、`.claude/` の定義と同じくユーザーレベルのスキル issue-workflow-kit から描画したもので、導入の記録は `.claude/issue-workflow-kit.json` にある。CI では実行しない。検査はエージェント（プラン、実装、レビュー）が手元で回して出力をプランや PR 本文に貼り、`post_comment.sh` だけが GitHub にコメントを投稿する:
 
 ```sh
 sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（code / doc-comment / test / docs / config）を表にする。0 件も出す
@@ -140,16 +140,15 @@ sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付き
 sh dev/check_plan_tests.sh <プランのファイル> <作業ツリー>  # プランの「テスト」の表の 1 列目のテスト名と実装の `pub fn ..._test()`（`dev/名前.sh` はファイルの実在）を突き合わせ、足す名前が無いか、取り消し線で消すとした名前が残っていれば表にして 1 で終わる（実装エージェントが使う）
 sh dev/check_comments.sh <作業ツリー> [ファイル...]  # src/ と plugins-src/*/src のコメントの issue 番号、テスト名、「従来」を「path:行:内容」で一覧にし、あれば 1 で終わる。ファイルを渡すとそれだけを見る
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
-sh dev/devin_prompt.sh <issue> <none|light> <仕様のファイル> <Postgres のポート> [条件のファイル]  # 実装を devin CLI に任せるときの自己完結な依頼文を組む（実装エージェントが使う）
-sh dev/devin_wait.sh <clone> [最大秒数]                                              # devin CLI の完了を前景で待ち、終了コード 0（報告あり）/ 1（報告なしで終了）/ 2（まだ実行中。呼び直す）で返す（実装エージェントが使う）
+python3 dev/verify_workflow.py .claude/workflows/issue-workflow.js                   # ワークフローのスクリプトを、エージェントを立てずに dry run の全シナリオで回し、期待する結果と突き合わせる（dev/dryrun.mjs を使う）
 python3 dev/wfstats.py [--base <dir>] [--runs <run id>,...] [--brief]              # Workflow の実行ログから費用・速度・品質の実測を出す。--brief の要約を retrospective が issue に貼る
 ```
 
-実装エージェントの定義（`.claude/agents/issue-implementer.md`）の frontmatter の `hooks` は、定義の「PR を作る前の検査」の一部（format と PR 本文の書式）を機械的に行う。エージェントが直接呼ぶものではなく、stdin に hook の JSON を受け取る。format の 2 本は `dev/ci_gleam.sh` で、その作業ツリーの `ci.yml` の `gleam-version` と同じ版の gleam（ホストの版が違えば mise に入っている版）を使い、版の合う gleam が無ければ何もしない（CI が検査する）:
+実装エージェントの定義（`.claude/agents/issue-implementer.md`）の frontmatter の `hooks` は、定義の「PR を作る前の検査」の一部（format と PR 本文の書式）を機械的に行う。エージェントが直接呼ぶものではなく、stdin に hook の JSON を受け取る。format の 2 本（`hook_format.sh` と `hook_push_check.sh`）は `dev/ci_gleam.sh` で、その作業ツリーの `ci.yml` の `gleam-version` と同じ版の gleam（ホストの版が違えば mise に入っている版）を使い、版の合う gleam が無ければ何もしない（CI が検査する）:
 
 ```sh
-sh dev/hook_gleam_format.sh       # PostToolUse（Edit|Write）: 編集した .gleam をその作業ツリーで CI と同じ版の gleam format にかける
+sh dev/hook_format.sh             # PostToolUse（Edit|Write）: 編集した .gleam をその作業ツリーで CI と同じ版の gleam format にかける
 sh dev/hook_pr_body_gate.sh       # PreToolUse（Bash）: gh pr create の --body-file に必須の節（概要、変更点、テストと検証、掃き出した語、Closes #、設計メモの表）が無ければ deny する
-sh dev/hook_push_format_check.sh  # PreToolUse（Bash）: git -C <作業ツリー> push の前に CI と同じ版の gleam format --check src test dev を回し、通らなければ deny する
+sh dev/hook_push_check.sh         # PreToolUse（Bash）: git -C <作業ツリー> push の前に CI と同じ版の gleam format --check src test dev を回し、通らなければ deny する
 sh dev/ci_gleam.sh <作業ツリー> <gleam の引数>...  # 上の 2 本が使う。作業ツリーの ci.yml と同じ版の gleam で実行し、版の合う gleam が無ければ 127 で終わる
 ```

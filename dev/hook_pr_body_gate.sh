@@ -10,13 +10,18 @@
 #   --body-file のパスに $ や ` がある            deny（hook はエージェントのシェルの変数を展開できない。絶対パスで書かせる）
 #   次のどれかが欠けている                      deny（理由に欠けている節と定義の該当箇所）
 #     `## 概要`、`## 変更点`、`## テストと検証` の見出し
-#     「掃き出した語」を含む行（sweep_refs.sh を回した証拠。0 件でも書く決まり）
-#     `Closes #` の行
+#     「掃き出した語」を含む行（sweep_refs.sh を回した証拠。0 件でも書く決まり。require_sweep が 1 のとき）
+#     `<close_keyword> #` の行
 #     `## 設計メモ` があるとき（tier none）は `### 決めたこと` と `| 受け入れ条件 |` で始まる表の見出し行
 # --body-file の相対パスは JSON の cwd（無ければ hook の cwd）から解く。
 #
 # 使い方: echo '{"tool_input":{"command":"gh pr create ... --body-file /path/body.md"}}' | sh dev/hook_pr_body_gate.sh
 set -u
+
+# --- 設定（issue-workflow-kit が導入時に埋める） ---
+# PR 本文で issue に触れる語（Closes か Refs）と、「掃き出した語」の行を求めるか（sweep_refs.sh を入れたとき 1）
+close_keyword='Closes'
+require_sweep=1
 
 where='.claude/agents/issue-implementer.md の「コミットと PR」の本文の書式'
 
@@ -49,10 +54,10 @@ esac
 # 欠けている節の名前を missing に、掃き出した語が無ければ hint に集める。
 missing=""
 hint=""
-for pat in '^## 概要' '^## 変更点' '^## テストと検証' '^Closes #'; do
+for pat in '^## 概要' '^## 変更点' '^## テストと検証' "^$close_keyword #"; do
   grep -q -e "$pat" "$body" || missing="$missing、「${pat#^}」"
 done
-if ! grep -q '掃き出した語' "$body"; then
+if [ "$require_sweep" = 1 ] && ! grep -q '掃き出した語' "$body"; then
   missing="$missing、「掃き出した語」の行"
   hint="。掃き出した語は sweep_refs.sh を回した証拠で、0 件でも書く"
 fi
