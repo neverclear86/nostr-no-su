@@ -11,9 +11,25 @@ import gleam/dynamic.{type Dynamic}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
+/// 記述 map の 1 組。
+fn entry(key: String, value: Dynamic) -> #(Dynamic, Dynamic) {
+  #(dynamic.string(key), value)
+}
+
+/// `value` が `Some` のときだけ `key` の組を持つリスト。
+fn optional_entry(
+  key: String,
+  value: Option(Dynamic),
+) -> List(#(Dynamic, Dynamic)) {
+  case value {
+    Some(value) -> [entry(key, value)]
+    None -> []
+  }
+}
+
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
 pub fn page_sections(sections: List(Dynamic)) -> Dynamic {
-  dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
+  dynamic.properties([entry("sections", dynamic.list(sections))])
 }
 
 /// 節（`type` = `"section"`）。`meta` は見出しの題の後ろに並べるインラインのリストで、
@@ -24,15 +40,17 @@ pub fn section(
   blocks: List(Dynamic),
 ) -> Dynamic {
   dynamic.properties(
-    [
-      #(dynamic.string("type"), dynamic.string("section")),
-      #(dynamic.string("title"), dynamic.string(title)),
-      #(dynamic.string("blocks"), dynamic.list(blocks)),
-    ]
-    |> list.append(case meta {
-      [] -> []
-      _ -> [#(dynamic.string("meta"), dynamic.list(meta))]
-    }),
+    list.flatten([
+      [
+        entry("type", dynamic.string("section")),
+        entry("title", dynamic.string(title)),
+        entry("blocks", dynamic.list(blocks)),
+      ],
+      optional_entry("meta", case meta {
+        [] -> None
+        _ -> Some(dynamic.list(meta))
+      }),
+    ]),
   )
 }
 
@@ -40,14 +58,14 @@ pub fn section(
 /// インラインの対。
 pub fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("pairs")),
-    #(
-      dynamic.string("items"),
+    entry("type", dynamic.string("pairs")),
+    entry(
+      "items",
       dynamic.list(
         list.map(items, fn(item) {
           dynamic.properties([
-            #(dynamic.string("term"), dynamic.string(item.0)),
-            #(dynamic.string("value"), item.1),
+            entry("term", dynamic.string(item.0)),
+            entry("value", item.1),
           ])
         }),
       ),
@@ -61,21 +79,18 @@ pub fn table_block(
   rows: List(List(Dynamic)),
 ) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("table")),
-    #(
-      dynamic.string("headers"),
-      dynamic.list(list.map(headers, dynamic.string)),
-    ),
-    #(dynamic.string("rows"), dynamic.list(list.map(rows, dynamic.list))),
+    entry("type", dynamic.string("table")),
+    entry("headers", dynamic.list(list.map(headers, dynamic.string))),
+    entry("rows", dynamic.list(list.map(rows, dynamic.list))),
   ])
 }
 
 /// `details` ブロック。`text` は開いたときに出す整形済みのテキスト。
 pub fn details_block(summary: String, text: String) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("details")),
-    #(dynamic.string("summary"), dynamic.string(summary)),
-    #(dynamic.string("text"), dynamic.string(text)),
+    entry("type", dynamic.string("details")),
+    entry("summary", dynamic.string(summary)),
+    entry("text", dynamic.string(text)),
   ])
 }
 
@@ -84,9 +99,23 @@ pub fn details_block(summary: String, text: String) -> Dynamic {
 /// インラインは `pairs` の値だけで使える。
 pub fn typed_text(kind: String, text: String) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string(kind)),
-    #(dynamic.string("text"), dynamic.string(text)),
+    entry("type", dynamic.string(kind)),
+    entry("text", dynamic.string(text)),
   ])
+}
+
+/// `link` ブロック。`page` は遷移先のページのキー、`text` はリンクの文字列。
+pub fn link_block(page: String, text: String) -> Dynamic {
+  dynamic.properties([
+    entry("type", dynamic.string("link")),
+    entry("page", dynamic.string(page)),
+    entry("text", dynamic.string(text)),
+  ])
+}
+
+/// `alert` ブロック。`tone` のキーを持たない。
+pub fn alert_block(text: String) -> Dynamic {
+  typed_text("alert", text)
 }
 
 /// `image` ブロック。`variant` が `None` なら `variant` のキーを持たない。
@@ -96,15 +125,14 @@ pub fn image_block(
   variant: Option(String),
 ) -> Dynamic {
   dynamic.properties(
-    [
-      #(dynamic.string("type"), dynamic.string("image")),
-      #(dynamic.string("url"), dynamic.string(url)),
-      #(dynamic.string("alt"), dynamic.string(alt)),
-    ]
-    |> list.append(case variant {
-      Some(value) -> [#(dynamic.string("variant"), dynamic.string(value))]
-      None -> []
-    }),
+    list.flatten([
+      [
+        entry("type", dynamic.string("image")),
+        entry("url", dynamic.string(url)),
+        entry("alt", dynamic.string(alt)),
+      ],
+      optional_entry("variant", option.map(variant, dynamic.string)),
+    ]),
   )
 }
 
@@ -112,9 +140,9 @@ pub fn image_block(
 /// `submit` は送信ボタンの文字列。
 pub fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("form")),
-    #(dynamic.string("fields"), dynamic.list(fields)),
-    #(dynamic.string("submit"), dynamic.string(submit)),
+    entry("type", dynamic.string("form")),
+    entry("fields", dynamic.list(fields)),
+    entry("submit", dynamic.string(submit)),
   ])
 }
 
@@ -127,16 +155,15 @@ pub fn checkbox_field(
   checked checked: Bool,
 ) -> Dynamic {
   dynamic.properties(
-    [
-      #(dynamic.string("type"), dynamic.string("checkbox")),
-      #(dynamic.string("name"), dynamic.string(name)),
-      #(dynamic.string("label"), dynamic.string(label)),
-      #(dynamic.string("checked"), dynamic.bool(checked)),
-    ]
-    |> list.append(case hint {
-      Some(text) -> [#(dynamic.string("hint"), dynamic.string(text))]
-      None -> []
-    }),
+    list.flatten([
+      [
+        entry("type", dynamic.string("checkbox")),
+        entry("name", dynamic.string(name)),
+        entry("label", dynamic.string(label)),
+        entry("checked", dynamic.bool(checked)),
+      ],
+      optional_entry("hint", option.map(hint, dynamic.string)),
+    ]),
   )
 }
 
@@ -150,35 +177,35 @@ pub fn input_field(
   value value: String,
 ) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string(kind)),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("value"), dynamic.string(value)),
+    entry("type", dynamic.string(kind)),
+    entry("name", dynamic.string(name)),
+    entry("label", dynamic.string(label)),
+    entry("hint", dynamic.string(hint)),
+    entry("value", dynamic.string(value)),
   ])
 }
 
 /// `badge` インライン。`table` のセルと節の `meta` で使える。
 pub fn badge_inline(text: String, tone: String) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("badge")),
-    #(dynamic.string("text"), dynamic.string(text)),
-    #(dynamic.string("tone"), dynamic.string(tone)),
+    entry("type", dynamic.string("badge")),
+    entry("text", dynamic.string(text)),
+    entry("tone", dynamic.string(tone)),
   ])
 }
 
 /// `kind` インライン。本体が kind の名前（無ければ番号）で出す。
 pub fn kind_inline(kind: Int) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("kind")),
-    #(dynamic.string("value"), dynamic.int(kind)),
+    entry("type", dynamic.string("kind")),
+    entry("value", dynamic.int(kind)),
   ])
 }
 
 /// `time` インライン。本体が相対時刻で出し、UTC の時刻を `title` に持たせる。
 pub fn time_inline(seconds: Int) -> Dynamic {
   dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("time")),
-    #(dynamic.string("value"), dynamic.int(seconds)),
+    entry("type", dynamic.string("time")),
+    entry("value", dynamic.int(seconds)),
   ])
 }

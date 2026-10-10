@@ -2,8 +2,9 @@
 //// 単体テスト。
 ////
 //// 正しい形の記述 map は撮影用のサーバーと共通の builder（`plugin_page_builder`）で組み、
-//// 変換に失敗する形と、共通の builder に無い形（`alert`・`link` のブロック、キーを省いた
-//// `text`・`textarea` の欄）は、このモジュールの `map_` と builder で組む。
+//// 変換に失敗する形と、共通の builder に無い形（`tone` と `variant` を `Dynamic` で受ける
+//// `alert`・`image` のブロック、キーを省いた `text`・`textarea` の欄）は、このモジュールの
+//// `map_` と builder で組む。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list
@@ -17,8 +18,9 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/plugin_view.{Context}
 import nostr_no_su/admin/view
 import plugin_page_builder.{
-  badge_inline, checkbox_field, details_block, form_block, image_block,
-  kind_inline, pairs_block, section, table_block, time_inline, typed_text,
+  alert_block, badge_inline, checkbox_field, details_block, form_block,
+  image_block, kind_inline, link_block, pairs_block, section, table_block,
+  time_inline, typed_text,
 }
 
 /// binary キーの map をキーと値の組から組み立てる。
@@ -28,26 +30,12 @@ fn map_(entries: List(#(String, Dynamic))) -> Dynamic {
   )
 }
 
-/// ブロック（`alert`）。
-fn alert_block(text: String) -> Dynamic {
-  map_([#("type", dynamic.string("alert")), #("text", dynamic.string(text))])
-}
-
 /// ブロック（`alert`）に `tone` を持たせたもの。`tone` は形の誤りを試すため `Dynamic` で受ける。
 fn alert_block_with_tone(text: String, tone: Dynamic) -> Dynamic {
   map_([
     #("type", dynamic.string("alert")),
     #("text", dynamic.string(text)),
     #("tone", tone),
-  ])
-}
-
-/// ブロック（`link`）。
-fn link_block(page: String, text: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("link")),
-    #("page", dynamic.string(page)),
-    #("text", dynamic.string(text)),
   ])
 }
 
