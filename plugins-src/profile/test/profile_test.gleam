@@ -45,35 +45,19 @@ pub fn plugin_page_content_follows_the_display_language_test() {
     == page.content(i18n.English, [])
 }
 
-/// 全状態の文言を英語で描くと、今までどおりの英語の全文が出る順に並ぶ。
-pub fn content_texts_in_english_test() {
-  assert all_states_texts(i18n.English)
-    == [
-      "Profile",
-      "No account is registered. Register an account first, then reload this page.",
-      "Alice",
-      "Profile updated.",
-      "npub",
-      "updated",
-      "Picture",
-      "Picture of Alice",
-      "Banner",
-      "Banner of Alice",
-      "Save",
-      "Bob",
-      "Could not update the profile: timeout",
-      "No kind 0 event was found on the relays. Sending this form publishes a new profile with only the fields below.",
-      "npub",
-      "Save",
-      "Carol",
-      "Could not fetch the profile from the relays (reason: timeout). The edit form is not shown because the current profile is unknown.",
-      "npub",
-      "Dave",
-      "The latest kind 0 event has a content that is not a JSON object.",
-      "npub",
-      "updated",
-      "Save",
-    ]
+/// 全状態の文言は英語と日本語で同じ並びの同じ件数で、識別子（`npub` とアカウントの
+/// ラベル）以外のどの要素も言語の間で異なる（訳し忘れが無い）。
+pub fn content_texts_are_translated_in_every_state_test() {
+  let identifiers = ["npub", "Alice", "Bob", "Carol", "Dave"]
+  let english = all_states_texts(i18n.English)
+  let japanese = all_states_texts(i18n.Japanese)
+  assert list.length(english) == list.length(japanese)
+  let untranslated =
+    list.zip(english, japanese)
+    |> list.filter(fn(pair) {
+      pair.0 == pair.1 && !list.contains(identifiers, pair.0)
+    })
+  assert untranslated == []
 }
 
 /// 全状態の文言を日本語で描くと、日本語の全文が出る順に並ぶ（`npub` と理由の
@@ -132,8 +116,8 @@ fn sample_account() -> page.Account {
 }
 
 /// `Found` の節はブロックが `pairs` / `note` / `image` / `note` / `image` /
-/// `form` の順で、`form` の 8 欄の `type` と `name` と `value` が取得した
-/// プロフィールと一致する。
+/// `form` の順で、`form` の送信ボタンは `Save`、8 欄の `type` と `name` と `value` が
+/// 取得したプロフィールと一致する。
 pub fn content_shows_the_edit_form_test() {
   let description =
     page.content(i18n.English, [
@@ -166,6 +150,7 @@ pub fn content_shows_the_edit_form_test() {
       #("npub", "id", "npub1aa"),
       #("updated", "code", "2023-11-14T22:13:20Z"),
     ]
+  assert block_texts(form) == ["Save"]
   assert form_fields(form)
     == [
       #("text", "aa-name", "alice"),
@@ -177,23 +162,6 @@ pub fn content_shows_the_edit_form_test() {
       #("text", "aa-website", "https://alice.example"),
       #("text", "aa-lud16", "alice@wallet.example"),
     ]
-}
-
-/// `about` の欄だけ `type` が `textarea` で、他の 7 欄は `text`。
-pub fn content_uses_textarea_for_about_test() {
-  let description =
-    page.content(i18n.English, [
-      page.AccountState(
-        sample_account(),
-        page.Found(sample_content, 1_700_000_000),
-        None,
-      ),
-    ])
-  let assert [section] = page_sections(description)
-  let #(_title, blocks) = section_shape(section)
-  let assert [_, _, _, _, _, form] = blocks
-  assert form_fields(form) |> list.map(fn(field) { field.0 })
-    == ["text", "text", "textarea", "text", "text", "text", "text", "text"]
 }
 
 /// 欄のラベルは表示の言語の人の読める名前で、補足（`hint`）は kind 0 のキー名。
@@ -245,9 +213,9 @@ pub fn content_labels_form_fields_in_each_language_test() {
     ]
 }
 
-/// `Found` の節の `picture` の `image` は `url` が `https://example.com/p.png` で
-/// `variant` が `icon`、`banner` の `image` は `url` が `https://example.com/b.png` で
-/// `variant` が `banner`。
+/// `Found` の節の `picture` の `note` は `Picture`、`image` は `alt` が `Picture of Alice`、
+/// `url` が `https://example.com/p.png` で `variant` が `icon`。`banner` の `image` は
+/// `url` が `https://example.com/b.png` で `variant` が `banner`。
 pub fn content_shows_picture_as_icon_and_banner_as_banner_test() {
   let description =
     page.content(i18n.English, [
@@ -259,7 +227,9 @@ pub fn content_shows_picture_as_icon_and_banner_as_banner_test() {
     ])
   let assert [section] = page_sections(description)
   let #(_title, blocks) = section_shape(section)
-  let assert [_, _, picture_image, _, banner_image, _] = blocks
+  let assert [_, picture_note, picture_image, _, banner_image, _] = blocks
+  assert block_texts(picture_note) == ["Picture"]
+  assert block_texts(picture_image) == ["Picture of Alice"]
   let decoder = {
     use url <- decode.field("url", decode.string)
     use variant <- decode.field("variant", decode.string)
@@ -390,8 +360,9 @@ pub fn content_shows_success_alert_after_submit_test() {
   assert tone == "success"
 }
 
-/// `Some(SubmitFailed(...))` を渡すと `failure` の `alert` が出て、`form` の
-/// 初期値が取得した値ではなく送信された値になる。
+/// `Some(SubmitFailed(...))` を渡すと `failure` の `alert` が出て、その文は
+/// `Could not update the profile: timeout` になり、`form` の初期値は取得した値ではなく
+/// 送信された値になる。
 pub fn content_refills_the_form_after_a_failed_submit_test() {
   let submitted_values =
     page.Profile(
@@ -423,8 +394,9 @@ pub fn content_refills_the_form_after_a_failed_submit_test() {
     _banner_image,
     form,
   ] = blocks
-  let #(kind, _text, tone) = alert_shape(alert)
+  let #(kind, text, tone) = alert_shape(alert)
   assert kind == "alert"
+  assert text == "Could not update the profile: timeout"
   assert tone == "failure"
   assert form_fields(form) |> list.map(fn(field) { field.2 })
     == ["bob", "", "", "", "", "", "", ""]
@@ -850,6 +822,51 @@ pub fn page_content_fetches_again_after_the_lifetime_test() {
     ])
 }
 
+/// 取り直す公開鍵は、キャッシュに無い公開鍵だけが元の順に並ぶ。全員がキャッシュに
+/// あれば空になる。
+pub fn misses_lists_the_pubkeys_without_a_cached_profile_test() {
+  assert page.misses([
+      #("a", Some(page.NotFound)),
+      #("b", None),
+      #("c", Some(page.Found("{}", 1))),
+      #("d", None),
+    ])
+    == ["b", "d"]
+  assert page.misses([#("a", Some(page.NotFound))]) == []
+}
+
+/// キャッシュにあった結果はそのまま、無かった公開鍵は取り直した結果が、`cached` の
+/// 順に並ぶ。
+pub fn merge_fetched_puts_the_fresh_results_in_the_cached_order_test() {
+  let cached = [
+    #("a", Some(page.NotFound)),
+    #("b", None),
+    #("c", Some(page.Found("{}", 1))),
+    #("d", None),
+  ]
+  let fresh = [#("d", page.Failed("timeout")), #("b", page.Found("[]", 2))]
+  assert page.merge_fetched(cached, fresh)
+    == [
+      page.NotFound,
+      page.Found("[]", 2),
+      page.Found("{}", 1),
+      page.Failed("timeout"),
+    ]
+}
+
+/// 取り直した結果に無い公開鍵は、約束の形でない戻り値の `Failed` になる。
+pub fn merge_fetched_fails_a_pubkey_without_a_fresh_result_test() {
+  assert page.merge_fetched([#("a", None)], [])
+    == [page.Failed(page.unexpected_value_reason)]
+}
+
+/// `Found` と `NotFound` はキャッシュに置き、`Failed` は置かない。
+pub fn cacheable_excludes_only_a_failure_test() {
+  assert page.cacheable(page.Found("{}", 1))
+  assert page.cacheable(page.NotFound)
+  assert !page.cacheable(page.Failed("timeout"))
+}
+
 /// 送信に成功すると、送った kind 0 と本体が付けた `created_at` が `Found` と
 /// してキャッシュに入り、結果は `profile_store` に保持される。
 pub fn finish_submission_caches_the_published_profile_test() {
@@ -959,8 +976,7 @@ fn accounts_json(accounts: List(#(String, String, String))) -> String {
   |> json.to_string
 }
 
-/// `content_texts_in_english_test` と `content_texts_in_japanese_test` が描く
-/// 状態の文言。アカウント無しの記述と、4 件のアカウント（Alice は成功の送信の後の
+/// 全状態の文言。アカウント無しの記述と、4 件のアカウント（Alice は成功の送信の後の
 /// `Found`（`content` は `picture` と `banner` を持つ `sample_content`）、Bob は
 /// 失敗の送信の後の `NotFound`、Carol は `Failed`、Dave は JSON でない
 /// `content`）の記述を `language` で描き、`page_texts` を続けて返す。

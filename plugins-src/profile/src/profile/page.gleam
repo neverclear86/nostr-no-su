@@ -2,13 +2,16 @@
 //// にも触れず、呼び出し元（`profile.gleam`）が登録アカウントごとに組んだ
 //// `AccountState`（アカウント・取得の結果・直前の送信の結果）を引数で受け取って
 //// 記述の `Dynamic` を組み立て、送信された欄の値の解釈（`submitted/1`）と保持した
-//// 結果の読み取り（`submission/1`）も担う。kind 0 の 8 項目の並びは
-//// `profile_fields` の 1 か所に置く。文言は引数の表示の言語（`profile/i18n` の
-//// `Language`）で `i18n.text` から引く。
+//// 結果の読み取り（`submission/1`）も担う。取得の結果のキャッシュについては、取り直す
+//// 公開鍵の選び方（`misses/1`）、取り直した結果を元の順に戻す組み立て
+//// （`merge_fetched/2`）、キャッシュに置く結果の判定（`cacheable/1`）を決める。kind 0 の
+//// 8 項目の並びは `profile_fields` の 1 か所に置く。文言は引数の表示の言語
+//// （`profile/i18n` の `Language`）で `i18n.text` から引く。
 ////
 //// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
-//// binary キーの map である。値は `gleam/dynamic` の `properties` / `list` /
-//// `string` で組む。`properties` は Erlang では binary キーの map になる。
+//// binary キーの map である。値は `gleam/dynamic` の `list` / `string` と、文字列キーの
+//// フィールドから binary キーの map を組む `properties/1` で組む。`dynamic.properties` は
+//// Erlang では binary キーの map になる。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -83,6 +86,44 @@ fn fetched_decoder() -> decode.Decoder(Fetched) {
       decode.success(Failed(reason: reason))
     }
     _ -> decode.failure(Failed(""), "Fetched")
+  }
+}
+
+/// 公開鍵と、キャッシュにあった取得の結果（無ければ `None`）の対のうち、キャッシュに
+/// 無い公開鍵を元の順に返す。
+pub fn misses(cached: List(#(String, Option(Fetched)))) -> List(String) {
+  list.filter_map(cached, fn(pair) {
+    case pair.1 {
+      Some(_) -> Error(Nil)
+      None -> Ok(pair.0)
+    }
+  })
+}
+
+/// `cached` の順のまま、キャッシュにあった結果はそれを、無かった公開鍵は `fresh`
+/// （取り直した結果）の同じ公開鍵の結果を返す。`fresh` に無い公開鍵は
+/// `Failed(unexpected_value_reason)` にする。
+pub fn merge_fetched(
+  cached: List(#(String, Option(Fetched))),
+  fresh: List(#(String, Fetched)),
+) -> List(Fetched) {
+  let fresh_by_pubkey = dict.from_list(fresh)
+  list.map(cached, fn(pair) {
+    case pair.1 {
+      Some(fetched) -> fetched
+      None ->
+        dict.get(fresh_by_pubkey, pair.0)
+        |> result.unwrap(Failed(unexpected_value_reason))
+    }
+  })
+}
+
+/// キャッシュに置いてよい結果か。`Found` と `NotFound` は置き、`Failed` は置かない
+/// （次の描画で取り直すため）。
+pub fn cacheable(fetched: Fetched) -> Bool {
+  case fetched {
+    Failed(_) -> False
+    Found(..) | NotFound -> True
   }
 }
 
@@ -245,12 +286,9 @@ fn submitted_values_decoder() -> decode.Decoder(Profile) {
 /// 表示名は `language` の文言。
 pub fn pages(language: Language) -> Dynamic {
   dynamic.list([
-    dynamic.properties([
-      #(dynamic.string("key"), dynamic.string(profile_page_key)),
-      #(
-        dynamic.string("title"),
-        dynamic.string(i18n.text(language, i18n.PageTitle)),
-      ),
+    properties([
+      #("key", dynamic.string(profile_page_key)),
+      #("title", dynamic.string(i18n.text(language, i18n.PageTitle))),
     ]),
   ])
 }
@@ -538,21 +576,19 @@ fn form_field(
   hint: String,
   value: String,
 ) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string(kind)),
-    #(dynamic.string("name"), dynamic.string(name)),
-    #(dynamic.string("label"), dynamic.string(label)),
-    #(dynamic.string("hint"), dynamic.string(hint)),
-    #(dynamic.string("value"), dynamic.string(value)),
+  node(kind, [
+    #("name", dynamic.string(name)),
+    #("label", dynamic.string(label)),
+    #("hint", dynamic.string(hint)),
+    #("value", dynamic.string(value)),
   ])
 }
 
 /// `form` ブロック。
 fn form_block(fields: List(Dynamic), submit: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("form")),
-    #(dynamic.string("fields"), dynamic.list(fields)),
-    #(dynamic.string("submit"), dynamic.string(submit)),
+  node("form", [
+    #("fields", dynamic.list(fields)),
+    #("submit", dynamic.string(submit)),
   ])
 }
 
@@ -562,76 +598,66 @@ fn format_timestamp(seconds: Int) -> String
 
 /// 記述の最上位。`#{"sections" => [節, ...]}`。
 fn page_sections(sections: List(Dynamic)) -> Dynamic {
-  dynamic.properties([#(dynamic.string("sections"), dynamic.list(sections))])
+  properties([#("sections", dynamic.list(sections))])
 }
 
 /// 節（`type` = `"section"`）。
 fn section(title: String, blocks: List(Dynamic)) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("section")),
-    #(dynamic.string("title"), dynamic.string(title)),
-    #(dynamic.string("blocks"), dynamic.list(blocks)),
+  node("section", [
+    #("title", dynamic.string(title)),
+    #("blocks", dynamic.list(blocks)),
   ])
 }
 
 /// `pairs` ブロック。`items` は `term` と、すでに組み立てた `value` のインライン
 /// （`code_inline`・`id_inline`）の対。
 fn pairs_block(items: List(#(String, Dynamic))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("pairs")),
-    #(
-      dynamic.string("items"),
-      dynamic.list(
-        list.map(items, fn(item) {
-          dynamic.properties([
-            #(dynamic.string("term"), dynamic.string(item.0)),
-            #(dynamic.string("value"), item.1),
-          ])
-        }),
-      ),
-    ),
-  ])
+  let item_node = fn(item: #(String, Dynamic)) {
+    properties([#("term", dynamic.string(item.0)), #("value", item.1)])
+  }
+  node("pairs", [#("items", dynamic.list(list.map(items, item_node)))])
 }
 
 /// `note` ブロック。
 fn note_block(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("note")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("note", [#("text", dynamic.string(text))])
 }
 
 /// `image` ブロック。`variant` は見た目の種類（`icon` か `banner`）。
 fn image_block(url: String, alt: String, variant: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("image")),
-    #(dynamic.string("url"), dynamic.string(url)),
-    #(dynamic.string("alt"), dynamic.string(alt)),
-    #(dynamic.string("variant"), dynamic.string(variant)),
+  node("image", [
+    #("url", dynamic.string(url)),
+    #("alt", dynamic.string(alt)),
+    #("variant", dynamic.string(variant)),
   ])
 }
 
 /// `alert` ブロック。
 fn alert_block(text: String, tone: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("alert")),
-    #(dynamic.string("text"), dynamic.string(text)),
-    #(dynamic.string("tone"), dynamic.string(tone)),
+  node("alert", [
+    #("text", dynamic.string(text)),
+    #("tone", dynamic.string(tone)),
   ])
 }
 
 /// `code` インライン。
 fn code_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("code")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("code", [#("text", dynamic.string(text))])
 }
 
 /// `id` インライン。`pairs` の値だけで使える。
 fn id_inline(text: String) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("type"), dynamic.string("id")),
-    #(dynamic.string("text"), dynamic.string(text)),
-  ])
+  node("id", [#("text", dynamic.string(text))])
+}
+
+/// `type` と残りのフィールドから記述の 1 ノードを組む。
+fn node(type_: String, fields: List(#(String, Dynamic))) -> Dynamic {
+  properties([#("type", dynamic.string(type_)), ..fields])
+}
+
+/// 文字列キーのフィールドから binary キーの map を組む。
+pub fn properties(fields: List(#(String, Dynamic))) -> Dynamic {
+  fields
+  |> list.map(fn(field) { #(dynamic.string(field.0), field.1) })
+  |> dynamic.properties
 }
