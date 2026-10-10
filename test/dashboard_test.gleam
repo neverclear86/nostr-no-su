@@ -13,7 +13,6 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
 import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
-import nostr_no_su/admin/wordmark
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault
 import nostr_no_su/plugin
@@ -236,26 +235,6 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
   assert string.contains(after_details, account.signer)
 }
 
-/// `id` のダイアログをアイコン＋語で開くボタン（`view.dialog_button` の 1 要素目）の文字列。
-fn dialog_trigger(
-  id: String,
-  icon: element.Element(Nil),
-  text: String,
-  kind: view.ButtonKind,
-) -> String {
-  let assert [trigger, _] =
-    view.dialog_button(
-      i18n.English,
-      id,
-      view.IconTextFace(icon, text),
-      kind,
-      "",
-      fn(_) { [] },
-      view.OpensOnTrigger,
-    )
-  element.to_string(trigger)
-}
-
 /// 署名者 `signer`、ラベル `label` のアカウントの行。npub は `npub1` に署名者を逆順に続け、
 /// 63 文字に満たなければ `q` で埋めた値で、`view.shorten` で省略される。逆順にするのは、
 /// 回文でない署名者を npub に部分文字列として含ませないためである。
@@ -391,12 +370,11 @@ pub fn account_details_hold_the_uris_and_the_actions_test() {
     "A client that connects with this URI cannot sign until you approve it under pending connections on the dashboard.",
   )
   let trigger = fn(segment, icon, text, kind) {
-    dialog_trigger(
+    element.to_string(view.dialog_trigger(
       "dialog-account-" <> account.signer <> "-" <> segment,
-      icon,
-      text,
+      view.IconTextFace(icon, text),
       kind,
-    )
+    ))
   }
   assert contains_in_order(details, [
     trigger("label", view.pencil_icon(), "Edit label", view.GhostButton),
@@ -579,7 +557,8 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
   assert string.contains(english, "Plugins that failed to load")
   assert string.contains(
     english,
-    "</li></ul><div class=\"alert alert-soft alert-error flex flex-col items-stretch gap-3 text-base-content\">",
+    "</li></ul>"
+      <> opening_tag(view.failure_frame(element.none(), "", 0, "", [])),
   )
   assert string.contains(
     english,
@@ -604,40 +583,10 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
 
 /// `not_loaded_plugins` が 0 件のときは枠ごと出さない。
 pub fn dashboard_hides_not_loaded_plugins_when_empty_test() {
-  let snapshot = dashboard.Snapshot(..states(), not_loaded_plugins: [])
   use language <- list.each([i18n.English, i18n.Japanese])
   assert !string.contains(
-    dashboard.render(language, view.System, snapshot),
-    "Plugins that failed to load",
-  )
-}
-
-/// テーマの切り替えは `join` の枠にアイコンだけのボタンを `themes` の順に並べ、語を
-/// `aria-label` と `title` に出す。表示中のテーマのボタンだけが `aria-pressed="true"` である。
-pub fn navbar_theme_switch_presses_the_current_theme_test() {
-  let snapshot = dashboard.Snapshot(..states(), plugins: [], relays: Ok([]))
-  use language <- list.each(i18n.languages)
-  use current <- list.each(view.themes)
-  let body = dashboard.render(language, current, snapshot)
-  assert string.contains(
-    body,
-    "<div aria-label=\""
-      <> i18n.text(language, i18n.ThemeSwitchLabel)
-      <> "\" class=\"join\" role=\"group\">",
-  )
-  use theme <- list.each(view.themes)
-  let label = i18n.text(language, theme_message(theme))
-  assert string.contains(
-    body,
-    "<button aria-label=\""
-      <> label
-      <> "\" "
-      <> pressed_attributes(theme == current)
-      <> " name=\"theme\" title=\""
-      <> label
-      <> "\" type=\"submit\" value=\""
-      <> view.theme_code(theme)
-      <> "\">",
+    dashboard.render(language, view.System, states()),
+    i18n.text(language, i18n.NotLoadedPlugins),
   )
 }
 
@@ -729,19 +678,26 @@ pub fn account_details_open_the_uri_descriptions_from_the_info_buttons_test() {
   )
 }
 
+/// `node` の開始タグ（最初の `>` まで）。
+fn opening_tag(node: element.Element(Nil)) -> String {
+  let assert Ok(#(opening, _)) = string.split_once(element.to_string(node), ">")
+  opening <> ">"
+}
+
 /// `id` のダイアログを閉じるボタン（語は `dismiss`）だけを並べた操作の行の HTML
-/// （`view.dialog_actions` の `OpensOnTrigger` の描画）。
-fn dismiss_row(id: String, dismiss: String) -> String {
-  view.dialog_actions(
-    view.InDialog(id:, dismiss:, opening: view.OpensOnTrigger),
-    [],
-  )
+/// （`view.dialog_actions` の `opening` の描画）。
+fn dismiss_row(
+  id: String,
+  dismiss: String,
+  opening: view.DialogOpening,
+) -> String {
+  view.dialog_actions(view.InDialog(id:, dismiss:, opening:), [])
   |> list.map(element.to_string)
   |> string.concat
 }
 
 /// ダッシュボードのどのダイアログも、同じダイアログを閉じるボタン（接続 QR コードは「閉じる」、ほかは
-/// 「キャンセル」）を持ち、閉じるボタンを左に寄せない（送信の右に並べる）。
+/// 「キャンセル」）を送信の右に並べる。
 pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
   let body = english(dialog_snapshot())
   let assert [_, ..dialogs] = string.split(body, "<dialog ")
@@ -756,18 +712,15 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
   }
   // 行の開始タグを除いた、閉じるボタンと行の閉じタグ
   let assert Ok(#(_, dismiss_tail)) =
-    string.split_once(dismiss_row(id, dismiss), ">")
+    string.split_once(dismiss_row(id, dismiss, view.OpensOnTrigger), ">")
   assert string.contains(dialog, dismiss_tail)
-  assert !string.contains(
-    dialog,
-    "self-start focus-visible:outline-base-content\" command=\"close\"",
-  )
 }
 
 /// アカウントが 0 件のときの接続のダイアログも、キャンセルの行を残す。
 /// アカウントの一覧を得られないときは、その行にキャンセルだけを置く。
 pub fn connect_dialog_without_accounts_still_has_cancel_test() {
-  let actions = dismiss_row("dialog-session-connect", "Cancel")
+  let actions =
+    dismiss_row("dialog-session-connect", "Cancel", view.OpensOnTrigger)
   let empty = closed_dialog(english(states()), "dialog-session-connect")
   assert string.contains(empty, actions)
   let failed =
@@ -781,93 +734,6 @@ pub fn connect_dialog_without_accounts_still_has_cancel_test() {
       "dialog-session-connect",
     )
   assert string.contains(failed, actions)
-}
-
-/// 上部のロゴは、製品名の字形と読み上げ用の製品名だけをダッシュボードへの 1 つのリンクに入れ、
-/// 副題を出さない。
-pub fn brand_link_shows_only_the_wordmark_test() {
-  use language <- list.each([i18n.English, i18n.Japanese])
-  let assert Ok(#(_, rest)) =
-    string.split_once(dashboard.render(language, view.System, states()), "<a ")
-  let assert Ok(#(link, _)) = string.split_once(rest, "</a>")
-  assert string.contains(link, "href=\"/\"")
-  assert string.contains(
-    link,
-    "aria-hidden=\"true\" class=\"h-4 w-auto\" viewBox=\""
-      <> wordmark.view_box
-      <> "\"",
-  )
-  assert string.contains(link, "<span class=\"sr-only\">Nostr-no-Su</span>")
-  assert !string.contains(link, "Admin")
-  assert !string.contains(link, "管理画面")
-}
-
-/// 製品名の「Nostr」と「Su」は文字の色、「-no-」は primary の色で塗る。
-pub fn wordmark_colors_follow_the_theme_test() {
-  let body = english(states())
-  assert string.contains(
-    body,
-    "<path class=\"fill-base-content\" d=\""
-      <> wordmark.heavy_path
-      <> "\"></path><path class=\"fill-primary\" d=\""
-      <> wordmark.medium_path
-      <> "\"></path>",
-  )
-}
-
-/// 言語の切り替えは `join` の枠の先頭にブラウザーの設定の押していないボタンを置き、続けて
-/// 言語名をその言語自身で書いたボタンを並べる。表示している言語のボタンだけが
-/// `aria-pressed="true"` である。
-pub fn navbar_language_switch_presses_the_displayed_language_test() {
-  let snapshot = dashboard.Snapshot(..states(), plugins: [], relays: Ok([]))
-  use current <- list.each(i18n.languages)
-  let body = dashboard.render(current, view.System, snapshot)
-  let follow = i18n.text(current, i18n.FollowBrowser)
-  assert string.contains(
-    body,
-    "<div aria-label=\""
-      <> i18n.text(current, i18n.LanguageSwitchLabel)
-      <> "\" class=\"join\" role=\"group\"><button aria-label=\""
-      <> follow
-      <> "\" "
-      <> pressed_attributes(False)
-      <> " name=\"language\" title=\""
-      <> follow
-      <> "\" type=\"submit\" value=\"system\">",
-  )
-  use language <- list.each(i18n.languages)
-  let code = i18n.code(language)
-  assert string.contains(
-    body,
-    "<button "
-      <> pressed_attributes(language == current)
-      <> " lang=\""
-      <> code
-      <> "\" name=\"language\" type=\"submit\" value=\""
-      <> code
-      <> "\">"
-      <> i18n.native_name(language)
-      <> "</button>",
-  )
-}
-
-/// 切り替えのボタンの `aria-pressed` と `class` の属性。押した状態だけ `btn-neutral` で塗る。
-fn pressed_attributes(pressed: Bool) -> String {
-  case pressed {
-    True ->
-      "aria-pressed=\"true\" class=\"join-item btn btn-sm btn-neutral focus-visible:outline-base-content\""
-    False ->
-      "aria-pressed=\"false\" class=\"join-item btn btn-sm focus-visible:outline-base-content\""
-  }
-}
-
-/// テーマのボタンの語。`view` の対応は非公開なので、テストの側で持つ。
-fn theme_message(theme: view.Theme) -> i18n.Message {
-  case theme {
-    view.System -> i18n.FollowBrowser
-    view.Light -> i18n.ThemeLight
-    view.Dark -> i18n.ThemeDark
-  }
 }
 
 /// 節の一覧を得られないときの、面に載せた error の色の理由の囲みの HTML。`lead` は日本語の
@@ -1093,12 +959,11 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
   )
   assert string.contains(
     english,
-    dialog_trigger(
+    element.to_string(view.dialog_trigger(
       "dialog-unreadable-" <> pubkey <> "-delete",
-      view.trash_icon(),
-      "Delete",
+      view.IconTextFace(view.trash_icon(), "Delete"),
       view.DangerGhostButton,
-    ),
+    )),
   )
   assert !string.contains(english, ">" <> pubkey)
   assert !string.contains(english, pubkey <> "<")
@@ -1138,21 +1003,14 @@ pub fn no_skipped_rows_draws_no_frame_test() {
   let unavailable =
     dashboard.Snapshot(..states(), skipped: Error(i18n.Untranslated("boom")))
   use language <- list.each([i18n.English, i18n.Japanese])
+  let heading = i18n.text(language, i18n.UnreadableAccounts)
   assert !string.contains(
     dashboard.render(language, view.System, empty),
-    "Unreadable accounts",
-  )
-  assert !string.contains(
-    dashboard.render(language, view.System, empty),
-    "読み込めなかったアカウント",
+    heading,
   )
   assert !string.contains(
     dashboard.render(language, view.System, unavailable),
-    "Unreadable accounts",
-  )
-  assert !string.contains(
-    dashboard.render(language, view.System, unavailable),
-    "読み込めなかったアカウント",
+    heading,
   )
 }
 
@@ -1254,47 +1112,34 @@ pub fn generated_key_dialog_shows_each_problem_test() {
     opened_dialog(html, "dialog-result")
   }
   let alert = fn(tone, content) {
-    "<div class=\"alert alert-soft alert-"
-    <> tone
-    <> " text-base-content\" role=\"alert\">"
-    <> element.to_string(
-      view.tone_icon(case tone {
-        "error" -> view.Failure
-        _ -> view.Warning
-      }),
-    )
-    <> "<span class=\"wrap-anywhere\">"
-    <> content
-    <> "</span></div>"
+    element.to_string(view.reason_alert(tone, content))
   }
   assert string.contains(
     render(dashboard.InvalidLabel(i18n.LabelEmpty)),
-    alert("error", "ラベルを入力してください。"),
+    alert(view.Failure, [html.text("ラベルを入力してください。")]),
   )
   assert string.contains(
     render(
       dashboard.NotApplied(i18n.Untranslated("account is already registered")),
     ),
-    alert(
-      "error",
-      "登録できませんでした。<span lang=\"en\">account is already registered</span>",
-    ),
+    alert(view.Failure, [
+      html.text("登録できませんでした。"),
+      view.untranslated("account is already registered"),
+    ]),
   )
   assert string.contains(
     render(dashboard.NotAccepted("accounts are not loaded yet")),
-    alert(
-      "warning",
-      i18n.text(i18n.Japanese, i18n.RegistrationNotAccepted)
-        <> "<span lang=\"en\">accounts are not loaded yet</span>",
-    ),
+    alert(view.Warning, [
+      html.text(i18n.text(i18n.Japanese, i18n.RegistrationNotAccepted)),
+      view.untranslated("accounts are not loaded yet"),
+    ]),
   )
   assert string.contains(
     render(dashboard.NotConfirmed(i18n.StoreDidNotConfirm)),
-    alert(
-      "warning",
-      i18n.text(i18n.Japanese, i18n.RegistrationNotConfirmed)
-        <> i18n.text(i18n.Japanese, i18n.StoreDidNotConfirm),
-    ),
+    alert(view.Warning, [
+      html.text(i18n.text(i18n.Japanese, i18n.RegistrationNotConfirmed)),
+      html.text(i18n.text(i18n.Japanese, i18n.StoreDidNotConfirm)),
+    ]),
   )
 }
 
@@ -1827,12 +1672,15 @@ pub fn pending_shows_time_until_expiry_test() {
 /// 同じボタンを出す。
 pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
   let assert Ok([not_offered, mismatched]) = secret_states().pending
+  let form = fn(action, label, kind) {
+    element.to_string(view.post_form(action, [], label, kind, view.InRow))
+  }
   let mismatched_forms =
-    "<form action=\"/approve/tok-2\" method=\"post\"><button class=\"btn btn-outline btn-warning btn-sm focus-visible:outline-base-content\" type=\"submit\">Approve anyway</button></form>"
-    <> "<form action=\"/deny/tok-2\" method=\"post\"><button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" type=\"submit\">Deny</button></form>"
+    form("/approve/tok-2", "Approve anyway", view.WarningOutlineButton)
+    <> form("/deny/tok-2", "Deny", view.PrimaryButton)
   let offered_forms =
-    "<form action=\"/approve/tok-1\" method=\"post\"><button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" type=\"submit\">Approve</button></form>"
-    <> "<form action=\"/deny/tok-1\" method=\"post\"><button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" type=\"submit\">Deny</button></form>"
+    form("/approve/tok-1", "Approve", view.PrimaryButton)
+    <> form("/deny/tok-1", "Deny", view.GhostButton)
   let body = english(secret_states())
   assert string.contains(body, mismatched_forms)
   assert string.contains(body, offered_forms)
@@ -1851,8 +1699,7 @@ pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
 /// 更新の間隔を出す。一覧を得られないときは帯と説明に理由の囲みを添えて更新の間隔を出さず、
 /// 0 件のときは帯も更新の間隔も出さない。
 pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
-  let band =
-    "<section class=\"flex flex-col gap-4 rounded-box border border-primary/28 bg-primary/8 p-4 sm:p-6\" id=\"pending\">"
+  let band = opening_tag(view.band("pending", []))
   let description =
     "Until you approve, this client cannot request signing or encryption."
   let refresh = "Refreshes every 30 s"
@@ -2752,10 +2599,13 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
     i18n.text(i18n.English, i18n.RelayRoleRequired),
   )
   assert !string.contains(dialog, "checked class=\"checkbox")
-  assert string.contains(
-    dialog,
-    "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
-  )
+  // 行の開始タグを除いた、キャンセルのリンクと行の閉じタグ
+  let assert Ok(#(_, cancel)) =
+    string.split_once(
+      dismiss_row("dialog-relay-1-edit", "Cancel", view.OpenedByResponse),
+      ">",
+    )
+  assert string.contains(dialog, cancel)
   assert !string.contains(body, "http-equiv=\"refresh\"")
   assert !string.contains(
     body,

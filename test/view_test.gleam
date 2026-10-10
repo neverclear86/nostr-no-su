@@ -8,6 +8,7 @@ import lustre/element
 import lustre/element/html
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/view
+import nostr_no_su/admin/wordmark
 
 /// 64 桁の 16 進のように長い値は、先頭 10 桁と末尾 6 桁を `…` でつなぐ。
 pub fn shorten_keeps_the_head_and_tail_test() {
@@ -461,38 +462,148 @@ pub fn warning_alert_is_not_folded_test() {
   )
 }
 
+/// ナビゲーションバーの切り替えを出す、題が `i18n.BackToDashboard` で本文の無い `view.page` の
+/// HTML。切り替えの戻り先は `/` である。
+fn navbar_page(language: i18n.Language, theme: view.Theme) -> String {
+  view.page(
+    language,
+    theme,
+    view.TranslatedTitle(i18n.BackToDashboard),
+    view.Narrow,
+    view.SwitchReturningTo("/"),
+    view.NoRefresh,
+    [],
+  )
+}
+
 /// 上部のロゴの枠は内容の幅を基準に伸びる（`flex-1` のように基準の幅を 0 にしない）。
 pub fn navbar_start_keeps_the_width_of_the_logo_test() {
-  let html =
-    view.page(
-      i18n.English,
-      view.System,
-      view.TranslatedTitle(i18n.BackToDashboard),
-      view.Narrow,
-      view.SwitchReturningTo("/"),
-      view.NoRefresh,
-      [],
-    )
+  let html = navbar_page(i18n.English, view.System)
   assert string.contains(html, "<div class=\"navbar-start w-auto grow\">")
 }
 
 /// 訳文の題は、表示の言語で引いて `<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。
 pub fn translated_title_goes_to_the_title_and_the_heading_test() {
-  let html =
-    view.page(
-      i18n.English,
-      view.System,
-      view.TranslatedTitle(i18n.BackToDashboard),
-      view.Narrow,
-      view.SwitchReturningTo("/"),
-      view.NoRefresh,
-      [],
-    )
+  let html = navbar_page(i18n.English, view.System)
   assert string.contains(html, "<title>Nostr-no-Su — Back to dashboard</title>")
   assert string.contains(
     html,
     "<h1 class=\"text-2xl font-bold\">Back to dashboard</h1>",
   )
+}
+
+/// テーマの切り替えは `join` の枠にアイコンだけのボタンを `themes` の順に並べ、語を
+/// `aria-label` と `title` に出す。表示中のテーマのボタンだけが `aria-pressed="true"` である。
+pub fn navbar_theme_switch_presses_the_current_theme_test() {
+  use language <- list.each(i18n.languages)
+  use current <- list.each(view.themes)
+  let body = navbar_page(language, current)
+  assert string.contains(
+    body,
+    "<div aria-label=\""
+      <> i18n.text(language, i18n.ThemeSwitchLabel)
+      <> "\" class=\"join\" role=\"group\">",
+  )
+  use theme <- list.each(view.themes)
+  let label = i18n.text(language, theme_message(theme))
+  assert string.contains(
+    body,
+    "<button aria-label=\""
+      <> label
+      <> "\" "
+      <> pressed_attributes(theme == current)
+      <> " name=\"theme\" title=\""
+      <> label
+      <> "\" type=\"submit\" value=\""
+      <> view.theme_code(theme)
+      <> "\">",
+  )
+}
+
+/// 上部のロゴは、製品名の字形と読み上げ用の製品名だけをダッシュボードへの 1 つのリンクに入れ、
+/// 副題を出さない。
+pub fn brand_link_shows_only_the_wordmark_test() {
+  use language <- list.each([i18n.English, i18n.Japanese])
+  let assert Ok(#(_, rest)) =
+    string.split_once(navbar_page(language, view.System), "<a ")
+  let assert Ok(#(link, _)) = string.split_once(rest, "</a>")
+  assert string.contains(link, "href=\"/\"")
+  assert string.contains(
+    link,
+    "aria-hidden=\"true\" class=\"h-4 w-auto\" viewBox=\""
+      <> wordmark.view_box
+      <> "\"",
+  )
+  assert string.contains(link, "<span class=\"sr-only\">Nostr-no-Su</span>")
+  assert !string.contains(link, "Admin")
+  assert !string.contains(link, "管理画面")
+}
+
+/// 製品名の「Nostr」と「Su」は文字の色、「-no-」は primary の色で塗る。
+pub fn wordmark_colors_follow_the_theme_test() {
+  let body = navbar_page(i18n.English, view.System)
+  assert string.contains(
+    body,
+    "<path class=\"fill-base-content\" d=\""
+      <> wordmark.heavy_path
+      <> "\"></path><path class=\"fill-primary\" d=\""
+      <> wordmark.medium_path
+      <> "\"></path>",
+  )
+}
+
+/// 言語の切り替えは `join` の枠の先頭にブラウザーの設定の押していないボタンを置き、続けて
+/// 言語名をその言語自身で書いたボタンを並べる。表示している言語のボタンだけが
+/// `aria-pressed="true"` である。
+pub fn navbar_language_switch_presses_the_displayed_language_test() {
+  use current <- list.each(i18n.languages)
+  let body = navbar_page(current, view.System)
+  let follow = i18n.text(current, i18n.FollowBrowser)
+  assert string.contains(
+    body,
+    "<div aria-label=\""
+      <> i18n.text(current, i18n.LanguageSwitchLabel)
+      <> "\" class=\"join\" role=\"group\"><button aria-label=\""
+      <> follow
+      <> "\" "
+      <> pressed_attributes(False)
+      <> " name=\"language\" title=\""
+      <> follow
+      <> "\" type=\"submit\" value=\"system\">",
+  )
+  use language <- list.each(i18n.languages)
+  let code = i18n.code(language)
+  assert string.contains(
+    body,
+    "<button "
+      <> pressed_attributes(language == current)
+      <> " lang=\""
+      <> code
+      <> "\" name=\"language\" type=\"submit\" value=\""
+      <> code
+      <> "\">"
+      <> i18n.native_name(language)
+      <> "</button>",
+  )
+}
+
+/// 切り替えのボタンの `aria-pressed` と `class` の属性。押した状態だけ `btn-neutral` で塗る。
+fn pressed_attributes(pressed: Bool) -> String {
+  case pressed {
+    True ->
+      "aria-pressed=\"true\" class=\"join-item btn btn-sm btn-neutral focus-visible:outline-base-content\""
+    False ->
+      "aria-pressed=\"false\" class=\"join-item btn btn-sm focus-visible:outline-base-content\""
+  }
+}
+
+/// テーマのボタンの語。`view` の対応は非公開なので、テストの側で持つ。
+fn theme_message(theme: view.Theme) -> i18n.Message {
+  case theme {
+    view.System -> i18n.FollowBrowser
+    view.Light -> i18n.ThemeLight
+    view.Dark -> i18n.ThemeDark
+  }
 }
 
 /// 応答で開き Esc で閉じないダイアログは、`open` と `closedby="none"` を付けて描き、閉じるボタン（語は
