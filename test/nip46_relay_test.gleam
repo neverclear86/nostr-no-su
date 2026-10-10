@@ -7,11 +7,9 @@
 //// 未設定ならスキップして 1 行ログを出す。CI の `test` ジョブは strfry と Postgres
 //// を立てて両方渡す。
 
-import envoy
 import gleam/dict
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int
-import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -34,6 +32,7 @@ import support/nip46_client.{account_for}
 import support/poll
 import support/postgres
 import support/random_account.{random_master_key}
+import support/strfry
 
 /// テスト用の署名者の 16 進秘密鍵。他のテストと同じ固定値。
 const signer_key =
@@ -48,7 +47,7 @@ const response_timeout_ms = 20_000
 /// 実リレー越しに connect が `ack`、get_public_key が署名者の公開鍵、sign_event が
 /// `sig` を持つイベントを返す。
 pub fn nip46_round_trip_over_a_relay_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("nip46_relay")
   use database_url <- postgres.with_test_database_url("nip46_relay")
   use scoped_database_url <- with_database(database_url)
 
@@ -112,7 +111,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
 /// リレーとして接続してから開き、応答の `result` に URI の secret を入れて返す。
 /// 開いたセッションは URI のリレーを持ち、以降のリクエストを処理できる。
 pub fn nostrconnect_client_initiated_connection_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("nip46_relay")
   use database_url <- postgres.with_test_database_url("nip46_relay")
   use scoped_database_url <- with_database(database_url)
 
@@ -170,7 +169,7 @@ pub fn nostrconnect_client_initiated_connection_test() {
 /// セッションを開けなかった `nostrconnect://` の接続は、取り置いた URI のリレーを
 /// 外し、そのリレーの接続を閉じる。
 pub fn a_failed_nostrconnect_releases_the_uri_relays_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("nip46_relay")
   use database_url <- postgres.with_test_database_url("nip46_relay")
   use scoped_database_url <- with_database(database_url)
 
@@ -207,7 +206,7 @@ pub fn a_failed_nostrconnect_releases_the_uri_relays_test() {
 /// 登録していないリレーを持つセッションは、そのリレーの接続を開いて応答し、
 /// 取り消すと接続を閉じる。
 pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("nip46_relay")
   use database_url <- postgres.with_test_database_url("nip46_relay")
   use scoped_database_url <- with_database(database_url)
 
@@ -292,17 +291,6 @@ fn call_retrying(
     Error(Nil), True ->
       call_retrying(connection, client, signer, events, acks, attempt + 1)
     Error(Nil), False -> panic as "no response to sign_event over the relay"
-  }
-}
-
-/// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定ならスキップの 1 行を出す。
-fn with_test_relay_url(run: fn(String) -> Nil) -> Nil {
-  case envoy.get("TEST_RELAY_URL") {
-    Ok(url) if url != "" -> run(url)
-    _ ->
-      io.println(
-        "[nip46_relay] TEST_RELAY_URL is not set; skipping the integration test",
-      )
   }
 }
 

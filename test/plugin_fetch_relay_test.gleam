@@ -4,11 +4,9 @@
 //// `TEST_RELAY_URL` があるときだけ走る。PR の CI は渡すので走り、手元では未設定
 //// ならスキップする。Postgres は使わない（バンカーは偽ストアで起動する）。
 
-import envoy
 import gleam/dynamic
 import gleam/erlang/atom
 import gleam/erlang/process
-import gleam/io
 import gleam/option.{None, Some}
 import nostr_no_su/bunker/account.{type Account}
 import nostr_no_su/bunker/engine
@@ -20,13 +18,14 @@ import nostr_no_su/relay_list
 import nostr_no_su/time
 import support/app_tree.{start_bunker_signed_in_as, start_relay_list}
 import support/nip46_client.{account_for}
+import support/strfry
 
 /// 発行したイベントへの OK を待つ時間。
 const ack_timeout_ms = 5000
 
 /// リレーに書いたイベントが `fetch_with` で読み返せる。
 pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("plugin_fetch_relay")
   let signer = account_for(random.hex(32))
   let bunker_name = start_bunker_signed_in_as([signer])
   let relay_list_name = start_relay_list([monitor_entry(relay_url)])
@@ -46,7 +45,7 @@ pub fn fetch_event_returns_the_latest_event_from_the_relay_test() {
 
 /// 書いていない kind を問い合わせると `{ok, none}`。
 pub fn fetch_event_returns_none_when_the_relay_has_no_event_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("plugin_fetch_relay")
   let signer = account_for(random.hex(32))
   let bunker_name = start_bunker_signed_in_as([signer])
   let relay_list_name = start_relay_list([monitor_entry(relay_url)])
@@ -63,7 +62,7 @@ pub fn fetch_event_returns_none_when_the_relay_has_no_event_test() {
 /// 複数の公開鍵の取得は、リレーにある作者ごとの最新の 1 件を、問い合わせた
 /// 公開鍵の順に返す。イベントを書いていない登録アカウントは `{ok, none}`。
 pub fn fetch_events_returns_the_latest_event_per_pubkey_from_the_relay_test() {
-  use relay_url <- with_test_relay_url
+  use relay_url <- strfry.with_test_relay_url("plugin_fetch_relay")
   let signer_a = account_for(random.hex(32))
   let signer_b = account_for(random.hex(32))
   let signer_c = account_for(random.hex(32))
@@ -128,15 +127,4 @@ fn seed_profile(relay_url: String, signer: Account, content: String) -> Event {
   process.unlink(pid)
   process.kill(pid)
   signed
-}
-
-/// 空でない `TEST_RELAY_URL` で `run` を呼ぶ。未設定ならスキップの 1 行を出す。
-fn with_test_relay_url(run: fn(String) -> Nil) -> Nil {
-  case envoy.get("TEST_RELAY_URL") {
-    Ok(url) if url != "" -> run(url)
-    _ ->
-      io.println(
-        "[plugin_fetch_relay] TEST_RELAY_URL is not set; skipping the integration test",
-      )
-  }
 }

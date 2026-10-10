@@ -33,6 +33,7 @@ import support/app_tree.{
   start_loading_bunker_tree, start_tree_with_relays, stop_tree, store_failure,
   store_with_load, stored_signer, test_relay_url,
 }
+import support/hold
 import support/nip46_client.{account_for}
 import support/poll
 
@@ -46,17 +47,6 @@ const counted_retry_delay = Backoff(initial_ms: 20, max_ms: 20)
 
 /// 読み込みの再試行の回数を数える窓。
 const counted_retries_window_ms = 300
-
-/// ストアの遅い読み書きを、実時間を待たずに模す。呼び出し側（バンカーアクター）の
-/// プロセスで作った門の subject を `gates` へ渡し、テストがそこへ `Nil` を送るまで
-/// 呼び出し側を止める。subject は所有するプロセスでしか受信できないので、門は
-/// テストのプロセスではなく呼び出し側で作る。テストが途中で落ちれば、止まっている
-/// アクターはツリーごと終了する。
-fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
-  let gate = process.new_subject()
-  process.send(gates, gate)
-  process.receive_forever(gate)
-}
 
 /// `duration_ms` の間に届いたメッセージの件数。
 fn count_within(subject: Subject(Nil), duration_ms: Int) -> Int {
@@ -412,7 +402,7 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
             // 最初の読み込みは、到達できない DB に対するチェックアウト待ちを模して、
             // テストが開けるまで戻らない。以後の再試行は待たずに失敗する。
             case next_call() {
-              0 -> hold_until_released(gates)
+              0 -> hold.until_released(gates)
               _ -> Nil
             }
             Error("database is unreachable or timed out")
@@ -673,7 +663,7 @@ pub fn requests_during_a_slow_write_are_not_dropped_test() {
     bunker.Store(..store, insert: fn(entry) {
       let written = store.insert(entry)
       // 書き込みの応答を、テストが開けるまで遅らせる。
-      hold_until_released(gates)
+      hold.until_released(gates)
       written
     })
   let tree =

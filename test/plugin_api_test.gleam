@@ -18,22 +18,16 @@ import nostr_no_su/plugin_api
 import nostr_no_su/relay_connection
 import nostr_no_su/relay_fetch
 import nostr_no_su/relay_list
-import support/app_tree.{start_bunker_signed_in_as, start_relay_list}
+import support/app_tree.{
+  other_signer_key, signer_key, start_bunker_signed_in_as, start_relay_list,
+}
 import support/frame_server
 import support/loopback_relay
 import support/nip46_client.{account_for}
 
-/// テスト用の署名者の秘密鍵（16 進）。
-const signer_key =
-  "0000000000000000000000000000000000000000000000000000000000000042"
-
 /// 2 人目の署名者の秘密鍵（16 進）。複数の公開鍵の取得のテストに使う。
 const second_signer_key =
   "0000000000000000000000000000000000000000000000000000000000000043"
-
-/// 登録しない鍵。未登録の公開鍵のテストに使う。
-const other_key =
-  "0000000000000000000000000000000000000000000000000000000000000077"
 
 /// 接続の再接続の待ち時間。テストの間は再接続させないよう長く取る。
 const long_reconnect_delay = Backoff(initial_ms: 60_000, max_ms: 60_000)
@@ -208,7 +202,7 @@ pub fn publish_event_rejects_an_unregistered_pubkey_test() {
   assert plugin_api.publish_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(other_key) |> account.pubkey_hex),
+      dynamic.string(account_for(other_signer_key) |> account.pubkey_hex),
       valid_draft(),
     )
     == Error("account is not registered")
@@ -313,7 +307,7 @@ pub fn fetch_event_rejects_an_unregistered_pubkey_test() {
   assert plugin_api.fetch_with(
       bunker_name,
       relay_list_name,
-      dynamic.string(account_for(other_key) |> account.pubkey_hex),
+      dynamic.string(account_for(other_signer_key) |> account.pubkey_hex),
       dynamic.int(0),
     )
     == Error("account is not registered")
@@ -443,7 +437,7 @@ pub fn fetch_events_sends_one_req_per_relay_test() {
   let signer_b = account_for(second_signer_key)
   let pubkey_a = account.pubkey_hex(signer_a)
   let pubkey_b = account.pubkey_hex(signer_b)
-  let pubkey_c = account.pubkey_hex(account_for(other_key))
+  let pubkey_c = account.pubkey_hex(account_for(other_signer_key))
   let bunker_name = start_bunker_signed_in_as([signer_a, signer_b])
   let assert Ok(a_100) = engine.sign_as(signer_a, 0, [], "a", 100)
   let assert Ok(b_50) = engine.sign_as(signer_b, 0, [], "b", 50)
@@ -529,7 +523,7 @@ pub fn fetch_events_answers_unregistered_pubkeys_without_asking_relays_test() {
       bunker_name,
       unregistered,
       dynamic.list([
-        dynamic.string(account_for(other_key) |> account.pubkey_hex),
+        dynamic.string(account_for(other_signer_key) |> account.pubkey_hex),
       ]),
       dynamic.int(0),
     )
