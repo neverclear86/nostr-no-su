@@ -29,11 +29,12 @@ import support/app_tree.{
   Published, Subscribed, Wrote, accounts_only, authenticator_recording_open,
   await_connection, await_signers, bunker_spec, call_counter, client_key,
   committed_but_timed_out_store, connect_request, connect_request_from,
-  connection_name, fake_open, fixed_retry_delay, idle_monitor, load_signer,
-  memory_store, other_client_key, other_signer_key, request, response_body,
-  secret, signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_loading_bunker_tree_with_open, start_tree_with_relays, stop_tree,
-  store_failure, store_with_load, stored_signer, test_relay_url,
+  connection_name, expect_published, fake_open, fixed_retry_delay, idle_monitor,
+  load_signer, memory_store, other_client_key, other_signer_key, request,
+  response_body, response_result, secret, signed_request, signer_key,
+  start_database, start_loading_bunker_tree, start_loading_bunker_tree_with_open,
+  start_tree_with_relays, stop_tree, store_failure, store_with_load,
+  stored_signer, test_relay_url,
 }
 import support/log_capture
 import support/nip46_client.{account_for}
@@ -128,7 +129,7 @@ pub fn bunker_replies_on_its_connection_test() {
   let assert Ok(Published(answered_on, response)) =
     process.receive(reports, 2000)
   assert answered_on == socket
-  assert string.contains(response_body(response), "\"result\":\"ack\"")
+  assert response_result(response) == "ack"
   stop_tree(tree)
 }
 
@@ -152,7 +153,7 @@ pub fn bunker_survives_being_killed_test() {
   let assert Ok(Published(answered_on, response)) =
     process.receive(reports, 2000)
   assert answered_on == socket
-  assert string.contains(response_body(response), "\"result\":\"ack\"")
+  assert response_result(response) == "ack"
   stop_tree(tree)
 }
 
@@ -191,7 +192,7 @@ pub fn restarted_bunker_ignores_requests_from_before_it_started_test() {
   deliver(request)
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
   // 同じアクターが生きている間は、再配送を `seen` が落とす。
   deliver(request)
   let assert Error(Nil) = process.receive(reports, 200)
@@ -227,7 +228,7 @@ pub fn reconnected_bunker_handles_requests_from_the_outage_test() {
   deliver(request)
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == reconnected
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
   stop_tree(tree)
 }
 
@@ -241,7 +242,7 @@ pub fn session_survives_a_reconnect_test() {
   deliver(connect_request("c1", secret))
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
 
   process.kill(socket)
   let assert Opened(_relay_url, _connection, reconnected, deliver) =
@@ -252,7 +253,7 @@ pub fn session_survives_a_reconnect_test() {
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(pong_on, pong)) = process.receive(reports, 2000)
   assert pong_on == reconnected
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(pong) == "pong"
   stop_tree(tree)
 }
 
@@ -282,8 +283,7 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   assert bunker.sessions(name) == Ok([])
 
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let assert Ok([session]) = bunker.sessions(name)
@@ -301,7 +301,7 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   let assert Error(bunker.SessionNotFound(_)) =
     bunker.revoke(name, account.pubkey_hex(signer), account.pubkey_hex(client))
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
+  let denied = expect_published(reports, 2000)
   assert string.contains(response_body(denied), "unauthorized")
   stop_tree(tree)
 }
@@ -324,11 +324,11 @@ pub fn session_permissions_can_be_updated_test() {
       "c1",
     )),
   )
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
 
   let draft_10002 = "{\\\"kind\\\":10002,\\\"content\\\":\\\"\\\"}"
   deliver(request("r1", "sign_event", "[\"" <> draft_10002 <> "\"]"))
-  let assert Ok(Published(_socket, denied)) = process.receive(reports, 2000)
+  let denied = expect_published(reports, 2000)
   assert string.contains(response_body(denied), "permission denied")
 
   assert bunker.update_perms(
@@ -340,7 +340,7 @@ pub fn session_permissions_can_be_updated_test() {
     == Ok(Nil)
 
   deliver(request("r2", "sign_event", "[\"" <> draft_10002 <> "\"]"))
-  let assert Ok(Published(_socket, signed)) = process.receive(reports, 2000)
+  let signed = expect_published(reports, 2000)
   assert string.contains(response_body(signed), "\\\"sig\\\"")
   stop_tree(tree)
 }
@@ -364,8 +364,7 @@ pub fn a_nostrconnect_session_is_published_to_the_bunker_relay_test() {
       "uri-secret",
     )
     == Ok(Nil)
-  let assert Ok(Published(_socket, response)) = process.receive(reports, 2000)
-  assert string.contains(response_body(response), "\"result\":\"uri-secret\"")
+  assert response_result(expect_published(reports, 2000)) == "uri-secret"
   let assert Ok([session]) = bunker.sessions(name)
   assert session.signer == account.pubkey_hex(signer)
   assert session.client == account.pubkey_hex(client)
@@ -392,8 +391,7 @@ pub fn pending_connections_can_be_approved_test() {
   let assert Opened(_relay_url, _connection, socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
-  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  assert response_result(expect_published(reports, 2000)) == "auth_url"
 
   let client = account_for(client_key)
   let assert Ok([entry]) = bunker.pending(name)
@@ -405,7 +403,7 @@ pub fn pending_connections_can_be_approved_test() {
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
   assert string.contains(response_body(ack), "\"id\":\"c1\"")
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
   assert bunker.pending(name) == Ok([])
   let signer = account_for(signer_key)
   let assert Ok([session]) = bunker.sessions(name)
@@ -427,8 +425,7 @@ pub fn failed_decisions_keep_the_pending_request_and_publish_nothing_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
-  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  assert response_result(expect_published(reports, 2000)) == "auth_url"
   let assert Ok([entry]) = bunker.pending(name)
   let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
 
@@ -467,7 +464,7 @@ pub fn a_failed_revocation_keeps_the_session_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
@@ -497,7 +494,7 @@ pub fn a_failed_permissions_update_keeps_the_perms_and_logs_the_failure_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
@@ -551,7 +548,7 @@ pub fn an_unconfirmed_permissions_update_answers_lists_as_being_loaded_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
 
   let updated = process.new_subject()
@@ -605,8 +602,7 @@ pub fn a_failed_session_use_record_still_answers_and_logs_the_failure_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
   assert has_bunker_line(
     capture,
     "failed to record the use of the session of client "
@@ -634,7 +630,7 @@ pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let refused = expect_published(reports, 2000)
   let body = response_body(refused)
   assert string.contains(body, "\"id\":\"c1\"")
   assert string.contains(body, engine.connection_not_saved)
@@ -642,7 +638,7 @@ pub fn failed_connects_keep_the_memory_and_hide_the_reason_test() {
   assert bunker.sessions(name) == Ok([])
 
   deliver(connect_request("c2", ""))
-  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let refused = expect_published(reports, 2000)
   let body = response_body(refused)
   assert string.contains(body, "\"id\":\"c2\"")
   assert string.contains(body, engine.connection_not_saved)
@@ -673,14 +669,14 @@ pub fn a_failed_logout_acknowledges_and_keeps_the_session_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
 
   deliver(request("l1", "logout", "[]"))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let ack = expect_published(reports, 2000)
   let body = response_body(ack)
   assert string.contains(body, "\"id\":\"l1\"")
-  assert string.contains(body, "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
   assert !string.contains(body, store_failure())
   assert bunker.sessions(name) == Ok([session])
   stop_tree(tree)
@@ -708,7 +704,7 @@ pub fn a_redelivered_failed_connect_is_not_answered_again_test() {
     await_connection(reports)
   let connect = connect_request("c1", "")
   deliver(connect)
-  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let refused = expect_published(reports, 2000)
   assert string.contains(response_body(refused), engine.connection_not_saved)
 
   deliver(connect)
@@ -751,14 +747,14 @@ pub fn unconfirmed_nip46_writes_reload_once_and_not_while_loading_test() {
   let assert Ok(Nil) = process.receive(loads, 2000)
 
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let refused = expect_published(reports, 2000)
   assert string.contains(response_body(refused), engine.connection_not_saved)
   let assert Ok(Nil) = process.receive(loads, 1000)
   assert bunker.accounts(name)
     == Error("account store unavailable: " <> store_failure())
 
   deliver(connect_request("c2", ""))
-  let assert Ok(Published(_socket, refused)) = process.receive(reports, 2000)
+  let refused = expect_published(reports, 2000)
   assert string.contains(response_body(refused), engine.connection_not_saved)
   assert process.receive(loads, 300) == Error(Nil)
   assert bunker.accounts(name)
@@ -806,8 +802,7 @@ pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   let assert Ok(Nil) = process.receive(loads, 2000)
 
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
-  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  assert response_result(expect_published(reports, 2000)) == "auth_url"
   let assert Ok([entry]) = bunker.pending(name)
 
   assert bunker.approve(name, entry.token)
@@ -823,7 +818,7 @@ pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   let assert Ok(Published(answered_on, ack)) = process.receive(reports, 2000)
   assert answered_on == socket
   assert string.contains(response_body(ack), "\"id\":\"c1\"")
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(ack) == "ack"
   assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
 }
@@ -850,8 +845,7 @@ pub fn a_committed_but_unconfirmed_approval_is_reloaded_without_an_ack_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
-  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  assert response_result(expect_published(reports, 2000)) == "auth_url"
   let assert Ok([entry]) = bunker.pending(name)
 
   assert bunker.approve(name, entry.token)
@@ -895,8 +889,7 @@ pub fn unconfirmed_denials_and_revocations_are_reported_test() {
   let assert Ok(Nil) = process.receive(loads, 2000)
 
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
-  assert string.contains(response_body(asked), "\"result\":\"auth_url\"")
+  assert response_result(expect_published(reports, 2000)) == "auth_url"
   let assert Ok([pending]) = bunker.pending(name)
 
   assert bunker.deny(name, pending.token)
@@ -907,7 +900,7 @@ pub fn unconfirmed_denials_and_revocations_are_reported_test() {
 
   assert await_loaded(name, 2000)
   deliver(connect_request_from(other_client_key, "c2", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
 
   assert bunker.revoke(name, session.signer, session.client)
@@ -949,11 +942,11 @@ pub fn session_changes_before_loading_do_not_reach_the_store_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", ""))
-  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let _asked = expect_published(reports, 2000)
   let assert Ok([pending]) = bunker.pending(name)
   let assert Ok(Wrote(engine.InsertPending(..))) = process.receive(calls, 1000)
   deliver(connect_request_from(other_client_key, "c2", secret))
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
@@ -1020,9 +1013,9 @@ pub fn session_changes_log_one_line_after_a_successful_write_test() {
   let client_b3 = unshared_client_key("b3")
 
   deliver(connect_request_from(unshared_client_key("b1"), "c1", ""))
-  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let _asked = expect_published(reports, 2000)
   deliver(connect_request_from(unshared_client_key("b2"), "c2", ""))
-  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let _asked = expect_published(reports, 2000)
   let assert Ok(pending) = bunker.pending(name)
   let assert Ok(entry_b1) =
     list.find(pending, fn(entry) { entry.client == client_b1 })
@@ -1030,9 +1023,9 @@ pub fn session_changes_log_one_line_after_a_successful_write_test() {
     list.find(pending, fn(entry) { entry.client == client_b2 })
 
   assert bunker.approve(name, entry_b1.token) == Ok(Nil)
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   assert bunker.deny(name, entry_b2.token) == Ok(Nil)
-  let assert Ok(Published(_socket, _denied)) = process.receive(reports, 2000)
+  let _denied = expect_published(reports, 2000)
   assert bunker.open_client_session(
       name,
       signer,
@@ -1042,7 +1035,7 @@ pub fn session_changes_log_one_line_after_a_successful_write_test() {
       "uri-secret",
     )
     == Ok(Nil)
-  let assert Ok(Published(_socket, _response)) = process.receive(reports, 2000)
+  let _response = expect_published(reports, 2000)
   assert bunker.update_perms(name, signer, client_b3, "ping") == Ok(Nil)
   assert bunker.revoke(name, signer, client_b3) == Ok(Nil)
 
@@ -1217,7 +1210,7 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   deliver(request("p1", "ping", "[]"))
   let assert Ok(Published(answered_on, pong)) = process.receive(reports, 2000)
   assert answered_on == socket_b
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(pong) == "pong"
   // 死んだソケットには送られない。生きているのは 1 本だけになっている。
   assert process.receive(reports, 300) == Error(Nil)
   stop_tree(tree)
