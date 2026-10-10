@@ -5,6 +5,7 @@ import gleam/string
 import lustre/element
 import nostr_no_su/admin/i18n
 import nostr_no_su/admin/permission_view
+import nostr_no_su/admin/view
 
 /// 日本語の権限のチップの HTML。
 fn japanese_chips(perms: String) -> String {
@@ -70,4 +71,13 @@ pub fn kind_zero_is_named_test() {
     html,
     "<span class=\"badge badge-outline badge-sm gap-1\">Sign ",
   )
+}
+
+/// 権限が空なら、チップの代わりに「権限の要求なし」のバッジを 1 つだけ出す。
+pub fn empty_permissions_show_the_no_permissions_badge_test() {
+  assert element.to_string(permission_view.chips(i18n.English, ""))
+    == element.to_string(view.status_chip(
+      view.ToneChip(view.Neutral),
+      "No permissions requested",
+    ))
 }
