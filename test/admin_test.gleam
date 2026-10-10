@@ -1,5 +1,5 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
-//// 応答を確かめる。ダッシュボードの状態（承認待ちの一覧に渡す時刻を含む）、アカウントの
+//// 応答を確かめる。ダッシュボードの状態（承認待ちの一覧に渡す要求の時刻を含む）、アカウントの
 //// 読み直し、セッションの取り消しと権限の編集、クライアントの接続、プラグインの再有効化と
 //// ページ（フォームの値の改行の正規化と、インライン `time` の基準の時刻を含む）、承認と拒否、
 //// リレーの追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
@@ -161,7 +161,7 @@ pub fn the_dashboard_gives_up_on_slow_sections_at_the_deadline_test() {
       Ok([])
     })
   let started_at = time.monotonic_ms()
-  let snapshot = admin.snapshot(slow_context, task.deadline_in(100))
+  let snapshot = admin.snapshot(slow_context, task.deadline_in(100), 0)
   assert snapshot.accounts == Error(i18n.Translated(i18n.NotAvailable))
   let assert Ok(_) = snapshot.skipped
   let assert Ok(_) = snapshot.pending
@@ -169,15 +169,46 @@ pub fn the_dashboard_gives_up_on_slow_sections_at_the_deadline_test() {
   assert time.monotonic_ms() - started_at < 1000
 }
 
-/// ダッシュボードは時刻を 1 度だけ読み、承認待ちの一覧に渡す `now` とスナップショットの
-/// `now` を同じ値にする。
-pub fn the_dashboard_asks_pending_with_its_own_now_test() {
-  let asking =
+/// スナップショットの `now` は、呼び出し側が渡した時刻のままにし、承認待ちの一覧にも同じ時刻を渡す。
+pub fn the_snapshot_carries_the_now_it_is_given_test() {
+  let asked = process.new_subject()
+  let recording =
     admin.Context(..context(), pending: fn(now) {
+      process.send(asked, now)
       Ok([pending_row(expires_in_seconds: now)])
     })
-  let snapshot = admin.snapshot(asking, task.deadline_in(1000))
-  assert snapshot.pending == Ok([pending_row(expires_in_seconds: snapshot.now)])
+  let snapshot = admin.snapshot(recording, task.deadline_in(1000), 12_345)
+  assert snapshot.now == 12_345
+  assert process.receive(asked, 1000) == Ok(12_345)
+  assert snapshot.pending == Ok([pending_row(expires_in_seconds: 12_345)])
+}
+
+/// 承認待ちの失効の時刻は、ダッシュボードも承認ページも要求を受けた時点（実際の現在時刻）から
+/// 求める。時刻が Unix 秒 0 のままなら 1970 年の日時が出る。
+pub fn pending_expiry_times_are_based_on_the_request_time_test() {
+  let paths = ["/", "/approve/" <> token]
+  use path <- list.each(paths)
+  let body = simulate.read_body(get(context(), path))
+  assert string.contains(body, "9:00 (expires at <time datetime=\"")
+  assert !string.contains(body, "datetime=\"1970-")
+}
+
+/// 承認待ちの一覧は、ダッシュボードでも承認ページでも要求を受けた時点（実際の現在時刻）で引く。
+pub fn pending_is_listed_at_the_request_time_test() {
+  let asked = process.new_subject()
+  let recording =
+    admin.Context(..context(), pending: fn(now) {
+      process.send(asked, now)
+      context().pending(now)
+    })
+  let before = time.now_seconds()
+  let _ = get(recording, "/")
+  let _ = get(recording, "/approve/" <> token)
+  let after = time.now_seconds()
+  let assert Ok(dashboard_now) = process.receive(asked, 0)
+  let assert Ok(approval_now) = process.receive(asked, 0)
+  assert before <= dashboard_now && dashboard_now <= after
+  assert before <= approval_now && approval_now <= after
 }
 
 /// 取り消しフォームは Context の `revoke` を呼び、ダッシュボードへ 303 で戻す。
@@ -1255,6 +1286,25 @@ pub fn relay_action_without_registered_relays_is_unavailable_test() {
   assert string.contains(body, "boom")
 }
 
+/// 用途の編集が反映されなかったときは、ダイアログの欄に保存済みの用途ではなく送られた用途を戻す。
+pub fn relay_edit_failure_keeps_the_submitted_roles_test() {
+  let failing =
+    admin.Context(..context(), update_relay_roles: fn(_relay, _roles) {
+      Error(admin.RelayNotSaved(relay_not_saved_reason))
+    })
+  let response =
+    post_form(
+      failing,
+      routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
+      [#("bunker", "on")],
+    )
+  assert response.status == 409
+  let dialog =
+    opened_dialog(simulate.read_body(response), "dialog-relay-1-edit")
+  assert field_is_checked(dialog, dashboard.bunker_field)
+  assert !field_is_checked(dialog, dashboard.monitor_field)
+}
+
 /// Context が返す変種ごとの状態コードと本文。編集と削除のどちらでも、対象の行が無い
 /// （`UnregisteredRelay`）は 404、反映されたか分からない 2 つは訳した本文で 202、
 /// `RelayNotSaved` は日本語のページだけ前置き（`CouldNotSaveRelay`、`CouldNotDeleteRelay`）が
@@ -1497,6 +1547,16 @@ pub fn connect_client_redraws_on_failure_test() {
       "session not opened",
       admin.SessionNotOpened(bunker.SessionNotFound("signer is not registered")),
       409,
+    ),
+    #(
+      "session not applied",
+      admin.SessionNotOpened(bunker.SessionNotApplied("the store rejected it")),
+      409,
+    ),
+    #(
+      "session not ready",
+      admin.SessionNotOpened(bunker.SessionNotReady("accounts are not loaded")),
+      503,
     ),
   ]
   use #(name, failure, status) <- list.each(failures)

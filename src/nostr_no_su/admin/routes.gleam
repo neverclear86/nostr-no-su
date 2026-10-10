@@ -1,10 +1,8 @@
-//// 管理 UI のパスの定義。ページとフォームとページ枠（スタイルシート、スクリプト、テーマと
-//// 言語の切り替え）のルートの型（`Route`）、パスセグメントからの解析（`parse`）、ルートからの
-//// パスの組み立て（`path`、`href`）と、パスの引数になるアカウントとリレーへの操作の型を置く。
-//// 解析と組み立ては同じセグメントの定義（`route_segments`）を見る。ルーティング（`admin`）は
-//// `parse` の結果でハンドラーを選び、リンクとフォームの宛先は `href` で組み立てる。描画の
-//// モジュール（`admin/view`、`admin/dashboard`）がここを import するので、ここは描画の
-//// モジュールを import しない。
+//// 管理 UI のパスの定義。ルートの型（`Route`）、パスセグメントからの解析（`parse`）、ルートからの
+//// パスの組み立て（`path`、`href`）を置く。解析と組み立ては同じセグメントの定義
+//// （`route_segments`）を見る。描画のモジュール（`admin/view`、`admin/dashboard`）がここを
+//// import するので、ここは描画のモジュールを import しない。詳しくは docs/architecture.md の
+//// 「管理 UI のルート」。
 
 import gleam/int
 import gleam/list
@@ -47,8 +45,8 @@ pub type Route {
   /// `priv` の下のファイルを引くので、このパスは `priv` の中の配置（`priv/static/admin.css`）と
   /// `package.json` の `build:css` の出力先に一致させる。
   Stylesheet
-  /// 管理 UI のスクリプト（`/static/admin.js`）。`Stylesheet` と同じく要求のパスから `priv` の下の
-  /// ファイルを引くので、`priv` の中の配置（`priv/static/admin.js`）に一致させる。
+  /// 管理 UI のスクリプト（`/static/admin.js`）。`Stylesheet` と同じ規則で `priv/static/admin.js`
+  /// に置く。
   Script
   /// 言語の切り替え（`/language`）。
   SwitchLanguage
@@ -216,13 +214,8 @@ pub fn href(route: Route) -> String {
   }
 }
 
-/// パスセグメント（`wisp.path_segments` の値）からルートを引く。引数を持たないルートは
-/// `fixed_routes` のうち `route_segments` が完全に一致するものを選ぶ。承認と拒否は 2 つ目の
-/// セグメントを token にし、
-/// アカウントの操作は操作のセグメントが `account_actions` にあるとき、リレーの操作は id が
-/// 整数として読めて操作のセグメントが `relay_actions` にあるとき、プラグインのページは
-/// プラグイン名が percent-decode できるとき、セッションの権限は末尾が
-/// `session_permissions_segment` のときに選ぶ。署名者、token、クライアント、ページのキーの
+/// パスセグメント（`wisp.path_segments` の値）からルートを引く。`fixed_routes` の完全一致を先に
+/// 試し、引数を持つルートは先頭のセグメントで選ぶ。署名者、token、クライアント、ページのキーの
 /// 値は検査しない（一覧との照合は呼び出し側が行う）。どれにも当たらなければ Error。
 pub fn parse(segments: List(String)) -> Result(Route, Nil) {
   use <- result.lazy_or(
