@@ -211,8 +211,8 @@ pub fn plugin_page_content(
           |> result.map(page.masked_url(pool_name(), _, language)),
         pool_size,
         [
-          process_status(i18n.ConnectionPool, pool_name_label, pool_name()),
-          process_status(i18n.StoreActor, store_name_label, store_name()),
+          process_status(i18n.ConnectionPool, pool_name_label),
+          process_status(i18n.StoreActor, store_name_label),
         ],
       )
     page.UnknownKey -> page.unknown_content(language)
@@ -316,13 +316,13 @@ fn reload_monitored() -> Nil {
   }
 }
 
-/// 登録名 1 つの観測結果。生きていれば未処理メッセージ数も添える。
+/// 登録名 1 つの観測結果。`registered_name` の atom の名前でプロセスが登録されて
+/// いれば、未処理メッセージ数も添える。
 fn process_status(
   label: i18n.Message,
   registered_name: String,
-  name: Name(message),
 ) -> page.ProcessStatus {
-  let mailbox = case process.named(name) {
+  let mailbox = case process.named(fixed_name(registered_name)) {
     Ok(pid) -> store.pending_messages(pid)
     Error(Nil) -> Error(Nil)
   }
