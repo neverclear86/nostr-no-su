@@ -286,7 +286,6 @@ parse_ip_address(Address) ->
 %% handle_event/1 は erlang:apply/3 で呼ぶため、そのままだと最上位フレームに
 %% イベント map が丸ごと入る。
 %% 非 ASCII の content は生のバイト列に展開されるのでさらに膨らむ。
-%% nostr_no_su_store_ffi と nostr_no_su_plugin_ffi からも呼ぶので export する。
 arity(A) when is_list(A) -> length(A);
 arity(A) -> A.
 
@@ -302,7 +301,6 @@ reply_alias(Pid) ->
 
 %% 改行を入れずに 1 行へ整形する。characters_to_binary/1 は 255 を超える
 %% コードポイントを含む整形結果でも落ちない。
-%% nostr_no_su_store_ffi と nostr_no_su_plugin_ffi からも呼ぶので export する。
 format_line(Format, Args) ->
     unicode:characters_to_binary(io_lib:format(Format, Args)).
 

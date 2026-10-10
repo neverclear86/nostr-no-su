@@ -13,10 +13,8 @@
     start_child/3
 ]).
 
-%% モジュールをコードパスから読み込む。`erlang:function_exported/3` は未読み込み
-%% のモジュールに対して常に false を返すため、エクスポートの検証はこれを通した
-%% 後に行う必要がある。失敗理由（nofile / badfile / embedded など）は atom なの
-%% で、そのまま人が読める文字列にする。
+%% モジュールをコードパスから読み込む。失敗理由（nofile / badfile / embedded など）
+%% は atom なので、そのまま人が読める文字列にする。
 %% -> {ok, nil} | {error, ReasonBinary}
 ensure_module_loaded(Module) ->
     case code:ensure_loaded(Module) of
@@ -35,10 +33,6 @@ ensure_module_loaded_within(Module, TimeoutMs) ->
     run_within(fun() -> ensure_module_loaded(Module) end, TimeoutMs).
 
 %% エクスポートを呼び、例外を「クラス:理由」の 1 行の文字列にして値で返す。
-%% 呼び出し元は call_export_within/4 と start_child/3 である。start_child/3 は
-%% スーパーバイザーの起動時と再起動時に、子仕様の start（plugin_children/0,1 が
-%% 申告した MFA）をスーパーバイザーのプロセスで呼ぶ。
-%% イベント処理関数は run_isolated/1 で動かし、ここは通さない。
 %% 理由はログの 1 行に収めたいので、改行を入れない ~0p で整形する。
 %% -> {ok, Value} | {error, ReasonBinary}
 call_export(Module, Function, Args) ->
@@ -50,14 +44,7 @@ call_export(Module, Function, Args) ->
     end.
 
 %% プラグインのエクスポートを使い捨てのプロセスで呼び、TimeoutMs で打ち切る。
-%% 読み込み時のメタデータ（plugin_api_version/0、plugin_min_host_version/0、
-%% plugin_required_versions/0、plugin_name/0、plugin_children/0,1、
-%% plugin_pages/0,1,2）は本体の main プロセスが起動時に同期に呼び、管理 UI の
-%% ページ（plugin_page_content/1,2,3、plugin_page_action/2,3）は要求を処理する
-%% プロセスが実行時に呼ぶ。どちらも、戻らないプラグインに呼び出し側を止めさせない。
-%%
-%% 子仕様の start には使わない。start はスーパーバイザーのプロセスで呼び、子と
-%% リンクさせる必要がある（check_linked/1）。
+%% 戻らないプラグインに呼び出し側を止めさせない。
 %% -> {ok, Value} | {error, {crashed, ReasonBinary}} | {error, timed_out}
 call_export_within(Module, Function, Args, TimeoutMs) ->
     run_within(fun() -> call_export(Module, Function, Args) end, TimeoutMs).
@@ -113,22 +100,11 @@ start_child(Module, Function, Args) ->
         {error, Reason} -> {error, Reason}
     end.
 
-%% 起動した子が自分（スーパーバイザー）にリンクしているか。していなければ孤児に
-%% なるので kill してから失敗を返す。
-%%
-%% **「リンクに居ない」だけで失敗にしてはならない。** 子が死ぬとリンクは解除され
-%% るので、init は通ったが直後に落ちた子（handle_continue で DB へ繋げず落ちる、
-%% など）は、正しく *_start_link を使っていてもリンク集合から消えている。そう
-%% 扱うと (1) 理由の文字列が嘘になり、(2) 本来は再起動される普通のクラッシュが
-%% 起動失敗に化けて、そのプラグインの子が丸ごと諦められる（本体の再起動まで
-%% 戻らない）。一時的な起動順の問題が恒久的な劣化に変わってしまう。
-%%
-%% そこで **生きていて、かつリンクに居ない**ときだけ失敗にする。既に死んでいる
-%% 子は EXIT がスーパーバイザーのメールボックスに届いているので、通常の再起動
-%% 経路に任せる。
-%%
-%% 残る穴: リンクを張らずに既に死んでいる子は素通りする。OTP が死んだ Pid を
-%% 握ったままになるが、EXIT が来ないだけで害は限定的であり、稀である。
+%% 起動した子が自分（スーパーバイザー）にリンクしているかを確かめる。
+%% **生きていて、かつリンクに居ない**ときだけ子を kill して失敗にし、既に死んだ子は
+%% 再起動を OTP に任せて通す。理由は docs/design-decisions.md の
+%% 「プラグインが申告した子プロセスは Temporary で載せる」。
+%% -> {ok, Pid} | {error, ReasonBinary}
 check_linked(Pid) ->
     {links, Links} = erlang:process_info(self(), links),
     case lists:member(Pid, Links) of
@@ -251,25 +227,11 @@ message_queue_len() ->
     {message_queue_len, Len} = erlang:process_info(self(), message_queue_len),
     Len.
 
-%% プラグインの handle_event/1 を使い捨てのプロセスで動かし、{Pid, MonitorRef}
-%% を返す。spawn と monitor を分けてはならない。ワーカーが monitor の前に終わる
-%% と erlang:monitor/2 が即座に理由 noproc の DOWN を送り、正常な実行を失敗と
-%% 誤判定する。spawn_monitor/1 はこれを不可分に行う。
-%%
-%% ワーカーの中で例外を捕まえるのは、隔離のためではなく終了理由を短くするため
-%% である。DOWN の理由は既定では {Reason, Stacktrace} で、そのまま文字列にすると
-%% 数百文字になり、ログ 1 行にもダッシュボードのセルにも収まらない。さらに DOWN
-%% の理由からは例外クラスが失われる（error と exit を区別できない）。ここで
-%% クラスと理由を call_export/3 と同じ ~0p の 1 行にし、スタックトレースは別枠で
-%% 渡す。捕捉を外しても隔離は成立する（プロセスが分かれていることが隔離の本体）。
-%%
-%% 捕捉するので BEAM の標準 error report は出ない。スタックトレースは本体側が
-%% 長さを切って 1 行ログに出す。
-%%
-%% スタックトレースは MFA だけに落とす。フレームには {file, 絶対パス} が付いて
-%% おり、1 フレームで 200 文字近くを食うため、そのまま整形すると上限のほとんどが
-%% パスで埋まる。失敗箇所の特定には MFA で足りる。第 3 要素は arity/1 でアリティ
-%% に正規化する（nostr_no_su_ffi:arity/1 を参照）。
+%% プラグインの handle_event/1 を使い捨てのプロセスで動かす。spawn と monitor は
+%% spawn_monitor/1 で不可分に行い、分けない。例外はワーカーの中で捕まえ、
+%% {nostr_no_su_plugin_failure, 1 行の理由, MFA だけのスタックトレース} で終える。
+%% 理由は docs/design-decisions.md の「プラグインは専用プロセスで動かす」。
+%% -> {Pid, MonitorRef}
 run_isolated(Fun) ->
     erlang:spawn_monitor(fun() ->
         try Fun() of
