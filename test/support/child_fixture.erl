@@ -43,13 +43,6 @@ spec(flaky, Name) ->
     #{id => Name, start => {?MODULE, start_link_flaky, []}};
 spec(supervisor, Name) ->
     #{id => Name, start => {?MODULE, start_link_store, [Name]}, type => supervisor};
-spec(supervisor_infinity, Name) ->
-    #{
-        id => Name,
-        start => {?MODULE, start_link_store, [Name]},
-        type => supervisor,
-        shutdown => infinity
-    };
 spec(infinity, Name) ->
     #{id => Name, start => {?MODULE, start_link_store, [Name]}, shutdown => infinity};
 spec(shutdown_100, Name) ->

@@ -1,5 +1,4 @@
 import gleam/dict
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
 import gleam/json
@@ -9,6 +8,7 @@ import gleam/string
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
+import support/beam_fixture.{type Fixture, Exported}
 import support/plugin_valid
 import support/plugin_with_config
 import support/plugin_with_localized_pages
@@ -52,11 +52,18 @@ fn load_error_with(
   reason
 }
 
+/// `source` を `fixture` のモジュールとして compile して読み込み、失敗した理由の
+/// 文字列を取り出す。設定は空。
+fn compiled_error(fixture: Fixture, source: String) -> String {
+  beam_fixture.compile_loadable(fixture, source)
+  load_error(fixture.module)
+}
+
 /// 退避された設定 map を binary キー・binary 値の Dict として読む。
 fn saved_config(key: Atom) -> dict.Dict(String, String) {
   let assert Ok(config) =
     decode.run(
-      persistent_term_get(key),
+      beam_fixture.saved(key),
       decode.dict(decode.string, decode.string),
     )
   config
@@ -78,7 +85,15 @@ pub fn load_valid_test() {
 /// **`handle_event` はどちらのアリティも無いことを名指しする。** 部分一致を
 /// `handle_event/1` だけにすると、緩和が壊れていても通ってしまう。
 pub fn load_missing_export_test() {
-  let reason = load_error("support@plugin_missing_handle")
+  let fixture = beam_fixture.new("missing_handle")
+  let reason =
+    compiled_error(
+      fixture,
+      beam_fixture.module_source(fixture.module, [
+        beam_fixture.api_version_part("1"),
+        beam_fixture.name_part(beam_fixture.binary_literal("missing_handle")),
+      ]),
+    )
   assert string.contains(
     reason,
     "missing export handle_event/1 or handle_event/2",
@@ -88,38 +103,63 @@ pub fn load_missing_export_test() {
 /// `plugin_name/0` を欠くモジュールは、欠けている関数を名指しで拒否する。後続の
 /// 呼び出しの失敗の理由と区別するため、完全一致で見る。
 pub fn load_missing_plugin_name_export_test() {
-  assert load_error("support@plugin_missing_name")
+  let fixture = beam_fixture.new("missing_name")
+  assert compiled_error(
+      fixture,
+      beam_fixture.module_source(fixture.module, [
+        beam_fixture.api_version_part("1"),
+        Exported("handle_event/1", "handle_event(_Event) -> ok."),
+      ]),
+    )
     == "missing export plugin_name/0"
 }
 
 /// 本体が対応していない API バージョンは拒否する。
 pub fn load_unsupported_version_test() {
+  let fixture = beam_fixture.new("bad_version")
   assert string.contains(
-    load_error("support@plugin_bad_version"),
+    compiled_error(
+      fixture,
+      beam_fixture.plugin_source(fixture.module, 2, "bad_version"),
+    ),
     "unsupported api version",
   )
 }
 
 /// `plugin_name/0` が String を返さないモジュールは拒否する。
 pub fn load_bad_name_type_test() {
+  let fixture = beam_fixture.new("bad_name")
   assert string.contains(
-    load_error("support@plugin_bad_name"),
+    compiled_error(
+      fixture,
+      beam_fixture.plugin_name_body_source(fixture.module, 1, "42"),
+    ),
     "must return a String",
   )
 }
 
 /// 空の名前は拒否する。名前はダッシュボードとログの識別子になるため。
 pub fn load_empty_name_test() {
+  let fixture = beam_fixture.new("empty_name")
   assert string.contains(
-    load_error("support@plugin_empty_name"),
+    compiled_error(fixture, beam_fixture.plugin_source(fixture.module, 1, "")),
     "must not be empty",
   )
 }
 
 /// メタデータ取得の例外は本体の起動を止めず、理由の文字列になる。
 pub fn load_crashing_version_test() {
+  let fixture = beam_fixture.new("crashing_version")
   assert string.contains(
-    load_error("support@plugin_crashing_version"),
+    compiled_error(
+      fixture,
+      beam_fixture.plugin_module(
+        fixture.module,
+        "error(broken)",
+        beam_fixture.binary_literal("crashing_version"),
+        [],
+      ),
+    ),
     "plugin_api_version/0 crashed (error:",
   )
 }
@@ -144,7 +184,7 @@ pub fn handle_passes_event_map_test() {
   let original = sample_event()
   loaded.handle(original)
   let assert Ok(received) =
-    event.from_map(persistent_term_get(plugin_valid.last_event_key()))
+    event.from_map(beam_fixture.saved(plugin_valid.last_event_key()))
   assert received == original
 }
 
@@ -161,8 +201,17 @@ pub fn has_export_test() {
 
 /// `plugin_api_version/0` が整数以外を返すモジュールは拒否する。
 pub fn load_non_integer_version_test() {
+  let fixture = beam_fixture.new("float_version")
   assert string.contains(
-    load_error("float_version"),
+    compiled_error(
+      fixture,
+      beam_fixture.plugin_module(
+        fixture.module,
+        "1.0",
+        beam_fixture.binary_literal("float_version"),
+        [],
+      ),
+    ),
     "must return an Int, got Float",
   )
 }
@@ -415,7 +464,7 @@ pub fn page_action_receives_the_key_values_and_accounts_test() {
   }
   let assert Ok(#(key, values, config)) =
     decode.run(
-      persistent_term_get(atom.create("plugin_with_action")),
+      beam_fixture.saved(atom.create("plugin_with_action")),
       stored_decoder,
     )
   assert key == "settings"
@@ -447,7 +496,7 @@ pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
   }
   let assert Ok(#(key, values)) =
     decode.run(
-      persistent_term_get(atom.create("plugin_with_action_arity_two")),
+      beam_fixture.saved(atom.create("plugin_with_action_arity_two")),
       stored_decoder,
     )
   assert key == "settings"
@@ -563,7 +612,16 @@ pub fn min_host_version_malformed_host_test() {
 
 /// コードパスに無いアプリケーションが複数あると、名前順で先のものを理由に出す。
 pub fn required_versions_report_the_first_missing_app_by_name_test() {
-  assert load_error("plugin_requiring_missing_apps")
+  let fixture = beam_fixture.new("requiring_missing_apps")
+  assert compiled_error(
+      fixture,
+      beam_fixture.required_versions_source(
+        fixture.module,
+        "requiring_missing_apps",
+        "#{<<\"nns_missing_app_b\">> => <<\"1.0.0\">>, "
+          <> "<<\"nns_missing_app_a\">> => <<\"2.0.0\">>}",
+      ),
+    )
     == "requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
 }
 
@@ -571,10 +629,6 @@ pub fn required_versions_report_the_first_missing_app_by_name_test() {
 pub fn describe_decode_error_without_errors_is_invalid_value_test() {
   assert plugin.describe_decode_error([]) == "invalid value"
 }
-
-/// fixture が退避した値を読む。キーが無ければ例外になる。
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get(key: Atom) -> Dynamic
 
 /// UI の任意エクスポートを 1 つも持たない組み合わせは `Ok(None)` になる。
 pub fn ui_arities_without_ui_exports_is_none_test() {

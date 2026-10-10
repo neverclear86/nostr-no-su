@@ -3,6 +3,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
+import nostr_no_su/persistent_term
 
 /// 受け取ったイベント map を退避する persistent_term のキー。
 pub fn last_event_key() -> Atom {
@@ -21,11 +22,6 @@ pub fn plugin_name() -> String {
 
 /// 受け取ったイベント map をテストから読めるように退避する。
 pub fn handle_event(event: Dynamic) -> Nil {
-  // persistent_term:put/2 は atom の ok を返すので、型を偽らず捨てる。
-  let _ = put(last_event_key(), event)
+  let _ = persistent_term.put(last_event_key(), event)
   Nil
 }
-
-/// 値を persistent_term に退避する。戻り値は atom の ok。
-@external(erlang, "persistent_term", "put")
-fn put(key: Atom, value: Dynamic) -> Dynamic
