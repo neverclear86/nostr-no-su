@@ -2,18 +2,10 @@
 //// `code:ensure_loaded/1` は検証と不可分なのでここに含めるが、コードパスの
 //// 追加（`code:add_pathz/1`）とプラグインディレクトリの走査は担当外である。
 ////
-//// 検証はモジュールの読み込み → 必須エクスポート → `plugin_api_version` →
-//// `plugin_min_host_version` → `plugin_required_versions` → `plugin_name` →
-//// 設定の切り出し → `plugin_children` → `plugin_pages` の順で、最初に
-//// 失敗したところで止まる。設定の切り出しは `plugin_name/0` の後にしか
-//// できない（環境変数の接頭辞がプラグイン名から決まるため）。
-////
-//// モジュールの読み込みとメタデータ用のエクスポートの呼び出しは起動時に
-//// `main` のプロセスで同期に行われるため、1 回ずつ使い捨てのプロセスで
-//// 動かし `call_timeout_ms` で打ち切る。戻らない `-on_load` やメタデータの
-//// 関数を持つプラグインは理由の 1 行で読み込まれず、起動は続く。
-////
-//// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` にある。
+//// 検証は最初に失敗したところで止まり、設定の切り出しは `plugin_name/0` の後にしか
+//// できない。モジュールの読み込みとメタデータ用のエクスポートの呼び出しは、戻らない
+//// プラグインが起動を止めないよう、使い捨てのプロセスで期限付きに行う。検証の順序と
+//// 仕様の全文は `docs/plugin-api.md` の第 6.3 節と第 9 章にある。
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -85,9 +77,7 @@ const page_key_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_-"
 ///
 /// `Plugin` は本体内蔵のプラグイン（`plugins/console_logger` など）と外部
 /// プラグイン（`load` が組み立てるもの）の両方を表す。外部プラグインの `handle`
-/// は `erlang:apply/3` を包んだクロージャーである。なお「API バージョンを上げ
-/// ない」という約束はプラグインモジュールのエクスポート仕様に対するもので、
-/// 本体内部のこのレコードは自由に拡張してよい。
+/// は `erlang:apply/3` を包んだクロージャーである。
 pub type Plugin {
   Plugin(
     name: String,
@@ -177,13 +167,10 @@ pub fn has_export(module: Atom, name: String, arity: Int) -> Bool {
 /// する。失敗理由はモジュール名を付けない 1 行で、ログの行では `plugin_loader` が
 /// 識別子を前に付ける。
 ///
-/// `env` は `PLUGIN_*` の環境変数全体（`config.plugin_env`）で、本番では本体の
-/// 接続先を `plugin_config.with_database_url` で足してある。プラグイン名が決まった
-/// 時点でそのプラグインぶんだけを切り出す。切り出し済みの map を渡せないのは、
-/// 接頭辞の元になるプラグイン名がこの関数の中でしか分からないためである。
-///
-/// `call_timeout_ms` はモジュールの読み込みとメタデータ用のエクスポート 1 回
-/// ごとの期限で、本番は `default_call_timeout_ms`。
+/// `env` は `PLUGIN_*` の環境変数全体で、プラグイン名が決まった時点でそのプラグイン
+/// ぶんだけを切り出す。切り出し済みの map を渡せないのは、接頭辞の元になる
+/// プラグイン名がこの関数の中でしか分からないためである。`call_timeout_ms` は
+/// モジュールの読み込みとメタデータ用のエクスポート 1 回ごとの期限。
 pub fn load(
   module: Atom,
   env: Dict(String, String),
@@ -310,11 +297,9 @@ fn check_min_host_version_export(
 
 /// 宣言された本体の版の下限 `declared` を、本体の版 `host` と比べる。どちらも
 /// `MAJOR.MINOR.PATCH` の 3 つの十進整数で、`MAJOR` → `MINOR` → `PATCH` の
-/// 順の数値比較で順序を決める。戻りは 4 通りで、`declared` が読めなければ
-/// `plugin_min_host_version/0 must return …` の理由、`host` が読めなければ
-/// `… but the host version …` の理由、`host` が `declared` より小さければ
-/// `requires … or later, but this is …` の理由、それ以外は `Ok(Nil)` である。
-/// 理由にモジュール名は付かない（`load` の他の理由と同じ）。
+/// 順の数値比較で順序を決める。`host` が `declared` 以上なら `Ok(Nil)`。どちらかが
+/// 読めないとき、または `host` が小さいときは、モジュール名を付けない 1 行の理由の
+/// `Error` である。
 pub fn check_min_host_version(
   declared: String,
   host: String,
@@ -517,12 +502,10 @@ fn children(
   })
 }
 
-/// 任意エクスポート `plugin_pages/0` `/1` `/2`、`plugin_page_content/1` `/2` `/3`、
-/// `plugin_page_action/2` `/3` のうちアリティの大きいものを `highest_arity` で選び、
-/// 組み合わせを `ui_arities` で検査して管理 UI の供給を読み込む。組み合わせの誤りは
-/// `Error` で、`read_children` と同じく症状を真の原因に近い場所で報告するために
-/// そのプラグインを読み込まない。一覧と中身がそろえば一覧を期限付きで呼んで検証する。`plugin_pages/2` は `localized_pages` で言語ごとに呼び、
-/// それ以外は `call_pages` で 1 回呼ぶ。実行は任意で、無ければ `action: None`。
+/// 管理 UI の任意エクスポートを読んで `PluginUi` にする。一覧も中身も実行も無ければ
+/// `Ok(None)`。実行は任意で、無ければ `action: None`。アリティの組み合わせの誤りは、
+/// `read_children` と同じく症状を真の原因に近い場所で報告するために、そのプラグインを
+/// 読み込まない `Error` にする。一覧の呼び出しと検証の失敗も `Error` である。
 fn read_ui(
   module: Atom,
   config: plugin_config.Config,

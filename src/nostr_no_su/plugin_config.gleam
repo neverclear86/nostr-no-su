@@ -1,24 +1,10 @@
-//// プラグイン固有の設定。環境変数 `PLUGIN_<NAME>_<KEY>` を集めて、プラグイン
-//// ごとの binary キーの map にする。
+//// プラグイン固有の設定。環境変数 `PLUGIN_<NAME>_<KEY>` を集めて、プラグインごとの
+//// binary キーの map にする。
 ////
-//// **環境変数を読むのはこのモジュールではない**（`config.gleam` が 1 か所で
-//// 読む）。ここが持つのは、集めた環境変数からプラグイン 1 つぶんの設定を切り
-//// 出す規則と、本体の接続先を予約キーに写す規則と、境界へ渡す map への変換と、
-//// 管理 UI のページに渡すアカウントの型（`PageAccount`）と、フォームの送信を
-//// 受け取る実行の口の型（`PageAction`）だけである。
-////
-//// **境界に置くのはキーも値も binary の Erlang map** であって Gleam の Dict や
-//// レコードではない。イベント map（`event.to_map`）と同じ理由で、Erlang /
-//// Elixir で書いたプラグインからそのまま読めることを優先する。どの呼び出しの
-//// map にも予約キー `DatabaseUrl`（本体のアカウントストアの接続先）が入る。
-////
-//// 値は変換しない。環境変数はすべて文字列であり、整数として読むべきか URL と
-//// して読むべきかを本体は知らない。**変換はプラグインの責任**で、失敗は
-//// `plugin_children/1` の `{error, Reason}` として報告できる。
-////
-//// **接頭辞は隔離ではない。** 名前で整理して何が渡るかを読めるようにするための
-//// 規約であって、プラグインは `os:getenv/1` を自由に呼べる（`docs/plugin-api.md`
-//// 第 1 章の信頼モデル）。
+//// **環境変数を読むのはこのモジュールではない**（`config.gleam` が 1 か所で読む）。
+//// ここが持つのは、設定の切り出し、本体の接続先の予約キーへの写し、境界へ渡す map への
+//// 変換、管理 UI のページの型（`PageAccount`、`PageAction`）だけである。map はキーも値も
+//// binary で、値は変換しない。仕様は `docs/plugin-api.md` の第 6 章にある。
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -62,7 +48,8 @@ fn normalize(plugin_name: String) -> String {
 /// 集めた `PLUGIN_*` からプラグイン 1 つぶんの設定を切り出す。接頭辞に一致し、
 /// かつ**残りが空でない**ものだけを採り、キーは小文字にする。`env` に本体の
 /// 接続先（`with_database_url` が足した項）があれば、その値を予約キー
-/// `DatabaseUrl` で足す。どちらも無ければ空。
+/// `DatabaseUrl` で足す（環境変数由来のキーと衝突しない理由は `database_url_key`）。
+/// どちらも無ければ空。
 ///
 /// 「残りが空でない」条件が弾くのは `PLUGIN_FILE_LOGGER_=x` のような**キーが空の
 /// 変数**である。空のキーは環境変数名としては書けてしまうが、プラグインからは
@@ -91,7 +78,8 @@ pub fn for_plugin(env: Dict(String, String), plugin_name: String) -> Config {
 /// `PLUGIN_` で始まる名前しか持たないので、この項は `with_database_url` だけが入れる。
 const host_database_url = "DATABASE_URL"
 
-/// 本体の接続先を渡す予約キー。大文字を含むので環境変数由来のキーと衝突しない。
+/// 本体の接続先を渡す予約キー。大文字を含む予約キー（`page_map` の `Accounts` も同じ）は、
+/// `for_plugin` が環境変数由来のキーを小文字にするので、それらのキーと衝突しない。
 const database_url_key = "DatabaseUrl"
 
 /// `env` に本体の接続先があれば、`config` に予約キー `DatabaseUrl` で足す。
@@ -139,9 +127,8 @@ pub type PageAction =
 /// アカウントの一覧を JSON にした文字列）を足して返す。中身はアカウントごとの
 /// オブジェクト（`pubkey`・`npub`・`label`、すべて文字列）の配列で、0 件なら
 /// `[]` である。値は JSON の文字列なので、map は `to_map` と同じく binary
-/// キー・binary 値である。このキーは環境変数由来のキーと衝突しない
-/// （`for_plugin` がキーを小文字にするため、大文字を含むこのキーは環境変数
-/// からは作れない）。
+/// キー・binary 値である。このキーが環境変数由来のキーと衝突しない理由は
+/// `database_url_key` を参照。
 pub fn page_map(config: Config, accounts: List(PageAccount)) -> Dynamic {
   let accounts_json =
     json.array(accounts, fn(account) {
