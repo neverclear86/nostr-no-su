@@ -461,8 +461,7 @@ pub fn await_connection(reports: Subject(Report)) -> Report {
 /// `secret_arg` が空文字列なら、シークレット無しで接続するクライアントと同じ形に
 /// なる（nostr-tools はそのように送る）。
 pub fn connect_request(id: String, secret_arg: String) -> Event {
-  let signer = account_for(signer_key)
-  signed_request(nip46_client.connect_body(signer, secret_arg, id))
+  connect_request_between(client_key, signer_key, id, secret_arg)
 }
 
 /// 指定した params を持つ JSON-RPC リクエスト。
@@ -566,7 +565,18 @@ pub fn connect_request_from(
   id: String,
   secret_arg: String,
 ) -> Event {
-  let signer = account_for(signer_key)
+  connect_request_between(client_key_hex, signer_key, id, secret_arg)
+}
+
+/// 指定したクライアントから指定した署名者宛に送る `connect`。作成時刻は
+/// `signed_request` と同じく現在時刻にする。
+pub fn connect_request_between(
+  client_key_hex: String,
+  signer_key_hex: String,
+  id: String,
+  secret_arg: String,
+) -> Event {
+  let signer = account_for(signer_key_hex)
   nip46_client.request_event(
     account_for(client_key_hex),
     signer,
@@ -575,43 +585,38 @@ pub fn connect_request_from(
   )
 }
 
-/// `wanted` を満たす購読の報告が届くまで待ち、それまでに読み飛ばした報告と、届いた
-/// 報告（期限までに届かなければ `Error`）を返す。
+/// `wanted` を満たすメッセージが届くまで待ち、それまでに読み飛ばしたメッセージと、
+/// 届いたメッセージ（期限までに届かなければ `Error`）を返す。
 pub fn receive_until(
-  subscribed: Subject(SubscriptionReport),
-  wanted: fn(SubscriptionReport) -> Bool,
+  subject: Subject(a),
+  wanted: fn(a) -> Bool,
   timeout_ms: Int,
-) -> #(List(SubscriptionReport), Result(SubscriptionReport, Nil)) {
-  collect_until(subscribed, wanted, time.monotonic_ms() + timeout_ms, [])
+) -> #(List(a), Result(a, Nil)) {
+  collect_until(subject, wanted, time.monotonic_ms() + timeout_ms, [])
 }
 
-/// `receive_until` の本体。読み飛ばした報告を逆順に積む。
+/// `receive_until` の本体。読み飛ばしたメッセージを逆順に積む。
 fn collect_until(
-  subscribed: Subject(SubscriptionReport),
-  wanted: fn(SubscriptionReport) -> Bool,
+  subject: Subject(a),
+  wanted: fn(a) -> Bool,
   deadline: Int,
-  skipped: List(SubscriptionReport),
-) -> #(List(SubscriptionReport), Result(SubscriptionReport, Nil)) {
-  case process.receive(subscribed, int.max(deadline - time.monotonic_ms(), 0)) {
+  skipped: List(a),
+) -> #(List(a), Result(a, Nil)) {
+  case process.receive(subject, int.max(deadline - time.monotonic_ms(), 0)) {
     Error(Nil) -> #(list.reverse(skipped), Error(Nil))
-    Ok(report) ->
-      case wanted(report) {
-        True -> #(list.reverse(skipped), Ok(report))
-        False ->
-          collect_until(subscribed, wanted, deadline, [report, ..skipped])
+    Ok(message) ->
+      case wanted(message) {
+        True -> #(list.reverse(skipped), Ok(message))
+        False -> collect_until(subject, wanted, deadline, [message, ..skipped])
       }
   }
 }
 
-/// 購読の報告が `quiet_ms` の間途切れるまで読み捨てる。起動時の読み込みが 1 件
-/// 以上だと、接続直後の照合に続いて張り直しの報告が 1 回届きうるので、変更の
-/// 前にそれを片付ける。
-pub fn drain_subscriptions(
-  subscribed: Subject(SubscriptionReport),
-  quiet_ms: Int,
-) -> Nil {
-  case process.receive(subscribed, quiet_ms) {
-    Ok(_report) -> drain_subscriptions(subscribed, quiet_ms)
+/// メッセージが `quiet_ms` の間途切れるまで読み捨てる。`quiet_ms` が 0 なら、
+/// すでに届いているものだけを捨てる。
+pub fn drain_until_quiet(subject: Subject(a), quiet_ms: Int) -> Nil {
+  case process.receive(subject, quiet_ms) {
+    Ok(_message) -> drain_until_quiet(subject, quiet_ms)
     Error(Nil) -> Nil
   }
 }

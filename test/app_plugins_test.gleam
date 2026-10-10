@@ -40,11 +40,10 @@ import support/app_tree.{
   type Report, type SubscriptionReport, Opened, Published, Retrying, Subscribed,
   accounts_only, authenticator_recording_open, await_connection, bunker_spec,
   call_counter, connect_request, connection_name, deliver_and_expect,
-  drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, note,
-  other_signer_key, receive_until, secret, signer_key, start_tree,
-  start_tree_with_relays, stop_tree, store_failure, store_with_load,
-  test_relay_url,
+  drain_until_quiet, event_labels, fake_open, fixed_retry_delay, forwarding_spec,
+  idle_monitor, load_signer, memory_store, note, other_signer_key, receive_until,
+  secret, signer_key, start_tree, start_tree_with_relays, stop_tree,
+  store_failure, store_with_load, test_relay_url,
 }
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
@@ -1039,7 +1038,7 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
   }
   // 接続直後の評価と起動時の読み込みによる張り直しの報告を
   // 読み捨ててから、切断後の張り直しだけを見る。
-  drain_subscriptions(subscribed, 300)
+  drain_until_quiet(subscribed, 300)
 
   let received = signed_event.by(signer_key, 1, "received")
   deliver_first(received)
@@ -1191,7 +1190,7 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   // 起動時の読み込みによる張り直しの報告を読み捨て、`until`（秒）が最初の
   // 要求より進むまで待ってから落とす。同じ秒に落とすと復帰後の要求が
   // 開いている取り直しと同じ範囲になり、REQ が出ない。
-  drain_subscriptions(subscribed, 300)
+  drain_until_quiet(subscribed, 300)
   process.sleep(1000)
   let assert Ok(runner_before) = process.named(runner)
   let before_restart = time.now_seconds()
@@ -1314,7 +1313,7 @@ pub fn a_restarted_runner_resubscribes_only_the_monitor_relays_test() {
   let #(_started_skipped, bunker_started) =
     receive_until(subscribed, reports_on(_, bunker_relay_url), 2000)
   let assert Ok(_) = bunker_started
-  drain_subscriptions(subscribed, 300)
+  drain_until_quiet(subscribed, 300)
 
   let assert Ok(runner_before) = process.named(runner)
   process.kill(runner_before)
