@@ -266,7 +266,9 @@ fn add_plugins(builder: Builder, spec: Spec) -> Builder {
 /// 張り直しは監視の用途の接続だけへ送る（バンカーの購読はプラグインに関わらない）。
 fn plugins_tree(spec: Spec) -> Builder {
   let resubscribe = fn() {
-    relay_list.resubscribe_all(spec.relay_list, [relay_list.Monitor])
+    relay_list.resubscribe_all(spec.relay_list, [
+      relay_list.Listed(relay_list.Monitor),
+    ])
   }
   use builder, plugin_spec <- list.fold(
     spec.plugins,
@@ -424,7 +426,7 @@ fn monitor_tree(
   |> supervisor.add(relay_connections_child(
     spec,
     factories,
-    relay_list.Monitor,
+    relay_list.Listed(relay_list.Monitor),
     config.subscriptions,
     ConnectionHandlers(
       ..silent_handlers(),
@@ -542,8 +544,8 @@ fn bunker_tree(
       config.settings,
       fn() {
         relay_list.resubscribe_all(spec.relay_list, [
-          relay_list.Monitor,
-          relay_list.Bunker,
+          relay_list.Listed(relay_list.Monitor),
+          relay_list.Listed(relay_list.Bunker),
         ])
       },
       relay_list.open_registered(spec.relay_list, _),
@@ -555,7 +557,7 @@ fn bunker_tree(
       spec,
       factories,
       config,
-      relay_list.Bunker,
+      relay_list.Listed(relay_list.Bunker),
       delivery.BaseRelay,
       fn(_relay_url) { bunker.signers(config.name) },
     ),
@@ -565,20 +567,20 @@ fn bunker_tree(
       spec,
       factories,
       config,
-      relay_list.SessionOnly,
+      relay_list.Session,
       delivery.SessionRelay,
       bunker.session_signers(config.name, _),
     ),
   )
 }
 
-/// バンカーの接続の用途 `role` の子。購読は `signers` が返す署名者から、AUTH と
+/// バンカーの接続の `lane` の子。購読は `signers` が返す署名者から、AUTH と
 /// 送信手段の登録と取り下げは `scope` の範囲で行う。
 fn bunker_connections_child(
   spec: Spec,
   factories: relay_list.Factories,
   config: Bunker,
-  role: relay_list.Role,
+  lane: relay_list.Lane,
   scope: delivery.RelayScope,
   signers: fn(String) -> Option(List(String)),
 ) -> ChildSpecification(
@@ -590,7 +592,7 @@ fn bunker_connections_child(
   relay_connections_child(
     spec,
     factories,
-    role,
+    lane,
     fn(relay_url) { config.subscriptions(fn() { signers(relay_url) }) },
     ConnectionHandlers(
       handle_event: fn(_relay_url, received) {
@@ -1190,14 +1192,14 @@ fn silent_handlers() -> ConnectionHandlers {
   )
 }
 
-/// 用途 `role` の接続を `relay_list` の `connections` factory の子として組む。
+/// `lane` の接続を `relay_list` の `connections` factory の子として組む。
 /// 購読の定義と `handlers` の各ハンドラーには、その接続の URL を渡す。テンプレートは
 /// `Connection` を受け取るたびに URL から `Settings` を組み立てる閉包にし、
 /// `relay_list.connections_child` へ渡す。
 fn relay_connections_child(
   spec: Spec,
   factories: relay_list.Factories,
-  role: relay_list.Role,
+  lane: relay_list.Lane,
   subscriptions: fn(String) -> Subscriptions,
   handlers: ConnectionHandlers,
 ) -> ChildSpecification(
@@ -1209,7 +1211,7 @@ fn relay_connections_child(
   relay_list.connections_child(
     spec.relay_list,
     factories,
-    role,
+    lane,
     fn(connection: relay_list.Connection) {
       relay_connection.start(relay_connection.Settings(
         name: connection.name,

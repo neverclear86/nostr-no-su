@@ -92,7 +92,7 @@ pub fn roles_from(
   }
 }
 
-/// `roles` が用途 `role` を含むか。`SessionOnly` は `Roles` の用途ではないので常に `False`。
+/// `roles` が用途 `role` を含むか。
 pub fn has_role(roles: Roles, role: Role) -> Bool {
   case role, roles {
     Monitor, MonitorOnly | Monitor, Both -> True
@@ -101,13 +101,19 @@ pub fn has_role(roles: Roles, role: Role) -> Bool {
   }
 }
 
-/// リレーの用途。
+/// 一覧の項目の用途。
 pub type Role {
   Monitor
   Bunker
+}
+
+/// 接続を起動する factory の単位。
+pub type Lane {
+  /// 一覧の項目の用途 `role` で使う接続。
+  Listed(role: Role)
   /// セッションのリレーのうち、バンカーの用途の項目に無い URL の接続。項目
-  /// （`Entry`）には載らないので、`connections` と `urls` はこの用途では空を返す。
-  SessionOnly
+  /// （`Entry`）には載らない。
+  Session
 }
 
 /// ストアに登録されたリレー 1 件。DB に依存しないための形。
@@ -148,21 +154,21 @@ pub type Msg {
   )
   /// 現在の一覧を問い合わせる。
   GetEntries(reply: Subject(List(Entry)))
-  /// 用途 `role` の factory が（再）起動した。まだ登録されていない接続を
+  /// `lane` の factory が（再）起動した。まだ登録されていない接続を
   /// 一覧から起動し直す。
-  Repopulate(role: Role)
+  Repopulate(lane: Lane)
   /// ストアに登録されたリレーを、一覧に無い URL だけ足す（`open_all`）。バンカーが
   /// 読み込みに成功するたびに送る。
   OpenRegistered(relays: List(Registered))
-  /// 用途 `roles` の現在の全接続へ購読の張り直しを依頼する。
-  ResubscribeAll(roles: List(Role))
-  /// バンカーのセッションのリレーの URL を差し替え、`SessionOnly` の接続を開閉し、
+  /// `lanes` の現在の全接続へ購読の張り直しを依頼する。
+  ResubscribeAll(lanes: List(Lane))
+  /// バンカーのセッションのリレーの URL を差し替え、`Session` の接続を開閉し、
   /// 残った接続の購読を張り直す。バンカーがセッションのリレーの変化のたびに送る。
   SyncSessionRelays(urls: List(String))
 }
 
 /// アクターが保持する状態。`session_urls` はバンカーから届いたセッションのリレーの
-/// URL、`sessions` はそのうち `SessionOnly` の用途で開いている接続。
+/// URL、`sessions` はそのうち `Session` で開いている接続。
 type State {
   State(
     entries: List(Entry),
@@ -333,16 +339,15 @@ fn name_for_role(
   case role {
     Monitor -> entry.monitor
     Bunker -> entry.bunker
-    SessionOnly -> None
   }
 }
 
-/// 用途に対応する factory の名前。
-fn factory_for_role(factories: Factories, role: Role) -> FactoryName {
-  case role {
-    Monitor -> factories.monitor
-    Bunker -> factories.bunker
-    SessionOnly -> factories.session
+/// `lane` に対応する factory の名前。
+fn factory_for_lane(factories: Factories, lane: Lane) -> FactoryName {
+  case lane {
+    Listed(Monitor) -> factories.monitor
+    Listed(Bunker) -> factories.bunker
+    Session -> factories.session
   }
 }
 
@@ -390,14 +395,14 @@ pub const subtree_restart_tolerance = RestartTolerance(intensity: 5, period: 10)
 /// 強制 kill される。
 const connection_shutdown_ms = 5000
 
-/// 用途 `role` の接続を factory の子として起動するスーパーバイザーの子仕様。
+/// `lane` の接続を factory の子として起動するスーパーバイザーの子仕様。
 /// `start` は `Connection` を受け取り接続アクターを起動するテンプレート
 /// （`relay_connection.start` を包んだもの）。factory の起動が終わった直後に、
-/// `list` へ `Repopulate(role)` を送って現在の一覧から補充させる。
+/// `list` へ `Repopulate(lane)` を送って現在の一覧から補充させる。
 pub fn connections_child(
   list: Name(Msg),
   factories: Factories,
-  role: Role,
+  lane: Lane,
   start: fn(Connection) -> actor.StartResult(Subject(relay_connection.Msg)),
 ) -> ChildSpecification(
   factory_supervisor.Supervisor(Connection, Subject(relay_connection.Msg)),
@@ -405,7 +410,7 @@ pub fn connections_child(
   supervision.supervisor(fn() {
     factory_supervisor.worker_child(start)
     |> factory_supervisor.timeout(connection_shutdown_ms)
-    |> factory_supervisor.named(factory_for_role(factories, role))
+    |> factory_supervisor.named(factory_for_lane(factories, lane))
     |> factory_supervisor.restart_strategy(supervision.Permanent)
     |> factory_supervisor.restart_tolerance(
       intensity: subtree_restart_tolerance.intensity,
@@ -413,7 +418,7 @@ pub fn connections_child(
     )
     |> factory_supervisor.start
     |> result.map(fn(started) {
-      named.send(list, Repopulate(role))
+      named.send(list, Repopulate(lane))
       started
     })
   })
@@ -440,9 +445,9 @@ pub fn entries(name: Name(Msg)) -> Result(List(Entry), Nil) {
   |> option.to_result(Nil)
 }
 
-/// 用途 `roles` の現在の全接続へ購読の張り直しを依頼する。送るだけで待たない。
-pub fn resubscribe_all(name: Name(Msg), roles: List(Role)) -> Nil {
-  named.send(name, ResubscribeAll(roles))
+/// `lanes` の現在の全接続へ購読の張り直しを依頼する。送るだけで待たない。
+pub fn resubscribe_all(name: Name(Msg), lanes: List(Lane)) -> Nil {
+  named.send(name, ResubscribeAll(lanes))
 }
 
 /// ストアに登録されたリレーを一覧へ足す。送るだけで待たない。
@@ -463,8 +468,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, state.entries)
       actor.continue(state)
     }
-    Repopulate(role) -> {
-      repopulate(state, role)
+    Repopulate(lane) -> {
+      repopulate(state, lane)
       actor.continue(state)
     }
     OpenRegistered(relays) -> {
@@ -478,9 +483,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       })
       actor.continue(apply(state, next, state.session_urls))
     }
-    ResubscribeAll(roles) -> {
-      list.each(roles, fn(role) {
-        list.each(role_connections(state, role), fn(connection) {
+    ResubscribeAll(lanes) -> {
+      list.each(lanes, fn(lane) {
+        list.each(lane_connections(state, lane), fn(connection) {
           relay_connection.resubscribe(connection.name)
         })
       })
@@ -502,7 +507,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// `compute` を現在の一覧に適用し、用途ごとに名前の差分を取って先に止めてから
+/// `compute` を現在の一覧に適用し、`Lane` ごとに名前の差分を取って先に止めてから
 /// 起動する。同じメールボックスで直列に行うため、最後に処理した変更と一覧が
 /// 一致する。
 fn handle_change(
@@ -523,9 +528,9 @@ fn handle_change(
   }
 }
 
-/// 一覧を `next`、セッションのリレーを `session_urls` に差し替える。3 つの用途の
-/// 名前の差分を取り、止める接続をすべて止めてから起動する（URL が `SessionOnly` と
-/// `Bunker` の間を移るとき、先に古い側を止めるため）。
+/// 一覧を `next`、セッションのリレーを `session_urls` に差し替える。3 つの `Lane` の
+/// 名前の差分を取り、止める接続をすべて止めてから起動する（URL が `Session` と
+/// `Listed(Bunker)` の間を移るとき、先に古い側を止めるため）。
 fn apply(state: State, next: List(Entry), session_urls: List(String)) -> State {
   let updated =
     State(
@@ -535,10 +540,10 @@ fn apply(state: State, next: List(Entry), session_urls: List(String)) -> State {
       sessions: session_connections(next, session_urls, state.sessions),
     )
   let changes =
-    list.map([Monitor, Bunker, SessionOnly], fn(role) {
-      let before = role_connections(state, role)
-      let after = role_connections(updated, role)
-      #(role, missing_from(before, after), missing_from(after, before))
+    list.map([Listed(Monitor), Listed(Bunker), Session], fn(lane) {
+      let before = lane_connections(state, lane)
+      let after = lane_connections(updated, lane)
+      #(lane, missing_from(before, after), missing_from(after, before))
     })
   list.each(changes, fn(change) {
     list.each(change.1, stop_connection(state, change.0, _))
@@ -549,11 +554,11 @@ fn apply(state: State, next: List(Entry), session_urls: List(String)) -> State {
   updated
 }
 
-/// 用途の現在の接続。`SessionOnly` は `state.sessions`、それ以外は項目から。
-fn role_connections(state: State, role: Role) -> List(Connection) {
-  case role {
-    SessionOnly -> state.sessions
-    Monitor | Bunker -> connections(state.entries, role)
+/// `lane` の現在の接続。`Session` は `state.sessions`、`Listed` は項目から。
+fn lane_connections(state: State, lane: Lane) -> List(Connection) {
+  case lane {
+    Listed(role) -> connections(state.entries, role)
+    Session -> state.sessions
   }
 }
 
@@ -565,20 +570,20 @@ fn missing_from(
   list.filter(xs, fn(x) { !list.any(ys, fn(y) { y.name == x.name }) })
 }
 
-/// 用途 `role` の接続のうち、まだ登録されていないものを起動する。factory が
+/// `lane` の接続のうち、まだ登録されていないものを起動する。factory が
 /// `rest_for_one` の再起動で子を失ったときの補充と、起動直後の初期一覧の反映を
 /// 兼ねる。
-fn repopulate(state: State, role: Role) -> Nil {
-  role_connections(state, role)
+fn repopulate(state: State, lane: Lane) -> Nil {
+  lane_connections(state, lane)
   |> list.filter(fn(connection) { process.named(connection.name) == Error(Nil) })
-  |> list.each(start_connection(state, role, _))
+  |> list.each(start_connection(state, lane, _))
 }
 
-/// `connection` を用途 `role` の factory の子として起動する。失敗はログに
+/// `connection` を `lane` の factory の子として起動する。失敗はログに
 /// 出すだけで、呼び出し側には返さない（`Change` はすでに一覧を確定させている）。
-fn start_connection(state: State, role: Role, connection: Connection) -> Nil {
+fn start_connection(state: State, lane: Lane, connection: Connection) -> Nil {
   case
-    start_dynamic_child(factory_for_role(state.factories, role), connection)
+    start_dynamic_child(factory_for_lane(state.factories, lane), connection)
   {
     Ok(Nil) -> Nil
     Error(reason) ->
@@ -590,14 +595,14 @@ fn start_connection(state: State, role: Role, connection: Connection) -> Nil {
   }
 }
 
-/// `connection` を用途 `role` の factory から止める。登録されていなければ何も
+/// `connection` を `lane` の factory から止める。登録されていなければ何も
 /// しない（既知の窓 1）。
-fn stop_connection(state: State, role: Role, connection: Connection) -> Nil {
+fn stop_connection(state: State, lane: Lane, connection: Connection) -> Nil {
   case process.named(connection.name) {
     Error(Nil) -> Nil
     Ok(pid) ->
       case
-        terminate_dynamic_child(factory_for_role(state.factories, role), pid)
+        terminate_dynamic_child(factory_for_lane(state.factories, lane), pid)
       {
         Ok(Nil) -> Nil
         Error(reason) ->
