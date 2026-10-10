@@ -49,9 +49,9 @@ pub type Claimed {
   Claimed(known: Dict(String, String), stale: List(String))
 }
 
-/// 署名者 1 人の記録。`refresh_at` は次に取り直す `time.monotonic_ms` の目盛りで、取得中にした
-/// ときは `ttl_ms` の後、取得に失敗したときは `retry_ms` の後に置く。
-type Cached {
+/// 署名者 1 人の記録。`refresh_at` は次に取り直す `time.monotonic_ms` の目盛りで、置き方は
+/// `claim` と `record` の Doc にある。
+pub type Cached {
   Cached(picture: Option(String), refresh_at: Int)
 }
 
@@ -151,61 +151,101 @@ fn found_pictures(
   |> dict.from_list
 }
 
-/// `Claim` と `Fetched` を処理する。署名者が古いのは、キャッシュに無いか `now >= refresh_at` のとき
-/// である（`ttl_ms` 0 では同じミリ秒の呼び出しでも毎回取る）。
+/// `Claim` と `Fetched` を `claim` と `record` に時刻を渡して処理する。
 fn handle(state: State, message: Msg) -> actor.Next(State, Msg) {
   let now = time.monotonic_ms()
   case message {
     Claim(pubkeys:, reply:) -> {
-      let stale =
-        list.filter(list.unique(pubkeys), fn(pubkey) {
-          case dict.get(state.cache, pubkey) {
-            Ok(Cached(refresh_at:, ..)) -> now >= refresh_at
-            Error(Nil) -> True
-          }
-        })
-      let known =
-        list.filter_map(pubkeys, fn(pubkey) {
-          case dict.get(state.cache, pubkey) {
-            Ok(Cached(picture: Some(url), ..)) -> Ok(#(pubkey, url))
-            _ -> Error(Nil)
-          }
-        })
-        |> dict.from_list
-      process.send(reply, Claimed(known:, stale:))
-      update_each(state, stale, fn(_pubkey, entry) {
-        Cached(picture: previous_picture(entry), refresh_at: now + state.ttl_ms)
-      })
+      let #(claimed, cache) = claim(state.cache, pubkeys, now, state.ttl_ms)
+      process.send(reply, claimed)
+      actor.continue(State(..state, cache:))
     }
-    Fetched(pubkeys:, found: Ok(found)) ->
-      update_each(state, pubkeys, fn(pubkey, entry) {
+    Fetched(pubkeys:, found:) ->
+      actor.continue(
+        State(
+          ..state,
+          cache: record(
+            state.cache,
+            pubkeys,
+            found,
+            now,
+            state.ttl_ms,
+            state.retry_ms,
+          ),
+        ),
+      )
+  }
+}
+
+/// `pubkeys` のうち `now` に取り直す署名者（`stale`）と、持っている URL（`known`）を返し、
+/// `stale` を取得中にした `cache` も返す。署名者が古いのは、`cache` に無いか `now >= refresh_at`
+/// のときである（`ttl_ms` 0 では同じミリ秒の呼び出しでも毎回古い）。取得中にした署名者は、前の
+/// URL を残して `refresh_at` を `now + ttl_ms` に押す。
+pub fn claim(
+  cache: Dict(String, Cached),
+  pubkeys: List(String),
+  now: Int,
+  ttl_ms: Int,
+) -> #(Claimed, Dict(String, Cached)) {
+  let stale =
+    list.filter(list.unique(pubkeys), fn(pubkey) {
+      case dict.get(cache, pubkey) {
+        Ok(Cached(refresh_at:, ..)) -> now >= refresh_at
+        Error(Nil) -> True
+      }
+    })
+  let known =
+    list.filter_map(pubkeys, fn(pubkey) {
+      case dict.get(cache, pubkey) {
+        Ok(Cached(picture: Some(url), ..)) -> Ok(#(pubkey, url))
+        _ -> Error(Nil)
+      }
+    })
+    |> dict.from_list
+  #(
+    Claimed(known:, stale:),
+    update_each(cache, stale, fn(_pubkey, entry) {
+      Cached(picture: previous_picture(entry), refresh_at: now + ttl_ms)
+    }),
+  )
+}
+
+/// `pubkeys` の取得の結果を `cache` に入れる。`Ok` では `picture` を結果の URL（辞書に無ければ
+/// `None`）に置き換え、`refresh_at` は取得中にしたときのまま残す（記録が無ければ `now + ttl_ms`）。
+/// `Error` では前の URL を残し、`refresh_at` を `now + retry_ms` に置く。
+pub fn record(
+  cache: Dict(String, Cached),
+  pubkeys: List(String),
+  found: Result(Dict(String, String), Nil),
+  now: Int,
+  ttl_ms: Int,
+  retry_ms: Int,
+) -> Dict(String, Cached) {
+  case found {
+    Ok(found) ->
+      update_each(cache, pubkeys, fn(pubkey, entry) {
         let picture = dict.get(found, pubkey) |> option.from_result
         case entry {
           Some(cached) -> Cached(..cached, picture:)
-          None -> Cached(picture:, refresh_at: now + state.ttl_ms)
+          None -> Cached(picture:, refresh_at: now + ttl_ms)
         }
       })
-    Fetched(pubkeys:, found: Error(Nil)) ->
-      update_each(state, pubkeys, fn(_pubkey, entry) {
-        Cached(
-          picture: previous_picture(entry),
-          refresh_at: now + state.retry_ms,
-        )
+    Error(Nil) ->
+      update_each(cache, pubkeys, fn(_pubkey, entry) {
+        Cached(picture: previous_picture(entry), refresh_at: now + retry_ms)
       })
   }
 }
 
 /// `pubkeys` の各記録を、署名者と前の記録（無ければ `None`）から `update` で作ったものに置き換える。
 fn update_each(
-  state: State,
+  cache: Dict(String, Cached),
   pubkeys: List(String),
   update: fn(String, Option(Cached)) -> Cached,
-) -> actor.Next(State, Msg) {
-  let cache =
-    list.fold(pubkeys, state.cache, fn(cache, pubkey) {
-      dict.upsert(cache, pubkey, update(pubkey, _))
-    })
-  actor.continue(State(..state, cache:))
+) -> Dict(String, Cached) {
+  list.fold(pubkeys, cache, fn(cache, pubkey) {
+    dict.upsert(cache, pubkey, update(pubkey, _))
+  })
 }
 
 /// 前の記録の URL。記録が無ければ `None`。
