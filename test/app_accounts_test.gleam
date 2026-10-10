@@ -23,15 +23,15 @@ import nostr_no_su/time
 import support/app_tree.{
   type DatabaseMsg, type SubscriptionReport, ApplyWrite, Deleted, FailReads,
   Inserted, LabelUpdated, Opened, ReadRows, Retrying, Subscribed, WriteRows,
-  Wrote, accounts_only, await_connection, await_signers, bunker_spec,
+  Wrote, accounts_only, await_connection, await_signers, base_spec, bunker_spec,
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_between, connect_request_from, deliver_and_expect,
   discard_resume_points, drain_until_quiet, event_labels, expect_published,
-  fake_open, fixed_retry_delay, forwarding_spec, idle_monitor, load_signer,
-  memory_store, other_client_key, other_signer_key, receive_until, request,
-  response_body, response_result, secret, signed_request, signer_key,
-  start_database, start_loading_bunker_tree, start_tree_with_relays, stop_tree,
-  store_failure, store_with_load, stored_signer, test_relay_url,
+  fixed_retry_delay, forwarding_spec, load_signer, memory_store,
+  other_client_key, other_signer_key, receive_until, request, response_body,
+  response_result, secret, signed_request, signer_key, start_database,
+  start_loading_bunker_tree, start_tree_with_relays, stop_tree, store_failure,
+  store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 import support/poll
@@ -393,10 +393,10 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
   let tree =
     start_tree_with_relays(
       app.Spec(
+        ..base_spec(reports),
         plugins: [
           forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
         ],
-        not_loaded_plugins: [],
         monitor: app.Monitor(
           name: process.new_name("test_dedup"),
           dedup_capacity: 8,
@@ -419,10 +419,6 @@ pub fn a_failing_account_store_does_not_affect_the_monitor_test() {
           }),
           fixed_retry_delay,
         ),
-        admin: None,
-        open: fake_open(reports, None),
-        reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-        relay_list: process.new_name("test_relay_list"),
       ),
       [test_relay_url],
       ["ws://bunker.test"],
@@ -1120,14 +1116,8 @@ pub fn skipped_rows_are_kept_for_the_admin_ui_test() {
     })
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(name, store, fixed_retry_delay),
-      admin: None,
-      open: fake_open(reports, None),
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree_with_relays(spec, [], [test_relay_url])
   let assert Opened(_relay_url, _connection, _socket, _deliver) =

@@ -38,12 +38,12 @@ import nostr_no_su/time
 import pog
 import support/app_tree.{
   type Report, type SubscriptionReport, Opened, Published, Retrying, Subscribed,
-  accounts_only, authenticator_recording_open, await_connection, bunker_spec,
+  authenticator_recording_open, await_connection, base_spec, bunker_spec,
   call_counter, connect_request, connection_name, deliver_and_expect,
   drain_until_quiet, event_labels, fake_open, fixed_retry_delay, forwarding_spec,
-  idle_monitor, load_signer, memory_store, note, other_signer_key, receive_until,
-  secret, signer_key, start_tree, start_tree_with_relays, stop_tree,
-  store_failure, store_with_load, test_relay_url,
+  idle_bunker, idle_monitor, load_signer, memory_store, note, other_signer_key,
+  receive_until, secret, signer_key, start_tree, start_tree_with_relays,
+  stop_tree, store_failure, store_with_load, test_relay_url,
 }
 import support/erl.{is_registered, unique_integer}
 import support/nip46_client.{account_for}
@@ -55,33 +55,6 @@ import support/signed_event
 /// 実行時のリレーの増減のテストで、3 人目として追加する署名者の鍵。
 const third_signer_key =
   "0000000000000000000000000000000000000000000000000000000000000099"
-
-/// 監視とプラグインのテストのツリーに載せる、アカウントを持たないバンカー。ツリーは常に
-/// バンカーを含むので載せるが、テストはバンカーを使わない。
-fn idle_bunker() -> app.Bunker {
-  bunker_spec(
-    process.new_name("test_bunker"),
-    store_with_load(fn() { Ok(accounts_only([])) }),
-    fixed_retry_delay,
-  )
-}
-
-/// 監視とプラグインのテストのツリーの既定の仕様。プラグインも監視のリレーも持たず、
-/// バンカーは `idle_bunker`、接続は `reports` へ報告する `fake_open`、再接続の待ちは
-/// 100ms にする。各テストは `app.Spec(..base_spec(reports), …)` で既定と違う
-/// フィールドだけを書く。
-fn base_spec(reports: Subject(Report)) -> app.Spec {
-  app.Spec(
-    plugins: [],
-    not_loaded_plugins: [],
-    monitor: idle_monitor(),
-    bunker: idle_bunker(),
-    admin: None,
-    open: fake_open(reports, None),
-    reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-    relay_list: process.new_name("test_relay_list"),
-  )
-}
 
 /// どのリレーにも `stored` を返す、再開点の読み込みの操作。
 fn fixed_resume_point(
