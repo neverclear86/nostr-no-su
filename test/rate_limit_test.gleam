@@ -2,11 +2,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import nostr_no_su/bunker/rate_limit.{type Limiter, Admitted, Refused}
-
-/// 1 から `count` までの整数の一覧。別々のクライアントを並べるために使う。
-fn up_to(count: Int) -> List(Int) {
-  list.repeat(Nil, count) |> list.index_map(fn(_, index) { index + 1 })
-}
+import support/numbers
 
 /// 時刻 `now` に `client` のリクエストを 1 件数え、通した状態を返す。捨てられた
 /// のはテスト自体の誤りとして扱う。
@@ -23,7 +19,7 @@ fn admitted_nth(limiter: Limiter, n: Int, now: Int) -> Limiter {
 /// `now` に `capacity` 件を別々のクライアントが通して、全体のバケットを
 /// 使い切った状態。
 fn global_exhausted(capacity: Int, now: Int) -> Limiter {
-  list.fold(up_to(capacity), rate_limit.new(), fn(limiter, n) {
+  list.fold(numbers.up_to(capacity), rate_limit.new(), fn(limiter, n) {
     admitted_nth(limiter, n, now)
   })
 }
@@ -32,7 +28,7 @@ fn global_exhausted(capacity: Int, now: Int) -> Limiter {
 /// 使い切った状態。
 fn client_exhausted(client: String, now: Int) -> Limiter {
   list.fold(
-    up_to(rate_limit.client_limit.capacity),
+    numbers.up_to(rate_limit.client_limit.capacity),
     rate_limit.new(),
     fn(limiter, _) { admitted(limiter, client, now) },
   )
@@ -70,16 +66,20 @@ pub fn refused_requests_spend_no_tokens_test() {
   let limiter = client_exhausted("client-a", 1000)
   // 全体の容量ぶん捨てられても、使った全体のトークンは 4 件のまま
   let limiter =
-    list.fold(up_to(rate_limit.global_limit.capacity), limiter, fn(limiter, _) {
-      let assert Refused(limiter:, ..) =
-        rate_limit.admit(limiter, "client-a", 1000)
-      limiter
-    })
+    list.fold(
+      numbers.up_to(rate_limit.global_limit.capacity),
+      limiter,
+      fn(limiter, _) {
+        let assert Refused(limiter:, ..) =
+          rate_limit.admit(limiter, "client-a", 1000)
+        limiter
+      },
+    )
   // 残りの全体トークン（20 - 4 = 16 件）は他のクライアントがそのまま使える
   let remaining =
     rate_limit.global_limit.capacity - rate_limit.client_limit.capacity
   let limiter =
-    list.fold(up_to(remaining), limiter, fn(limiter, n) {
+    list.fold(numbers.up_to(remaining), limiter, fn(limiter, n) {
       admitted_nth(limiter, n, 1000)
     })
   let assert Refused(..) = rate_limit.admit(limiter, "client-new", 1000)
@@ -101,9 +101,11 @@ pub fn refusals_are_reported_once_per_interval_test() {
   // 報告の間隔が過ぎてから再び使い切ると、間に捨てた 2 件と合わせて 3 件を報告する
   let later = 1000 + rate_limit.report_interval_seconds
   let limiter =
-    list.fold(up_to(rate_limit.global_limit.capacity), limiter, fn(limiter, n) {
-      admitted_nth(limiter, 100 + n, later)
-    })
+    list.fold(
+      numbers.up_to(rate_limit.global_limit.capacity),
+      limiter,
+      fn(limiter, n) { admitted_nth(limiter, 100 + n, later) },
+    )
   let assert Refused(report:, ..) = rate_limit.admit(limiter, "client-y", later)
   assert report == Some(rate_limit.report(3))
 }
@@ -115,7 +117,7 @@ pub fn remembered_clients_stay_bounded_test() {
     rate_limit.client_limit.refill_seconds
     / rate_limit.global_limit.refill_seconds
     + 1
-  list.fold(up_to(200), rate_limit.new(), fn(limiter, n) {
+  list.fold(numbers.up_to(200), rate_limit.new(), fn(limiter, n) {
     let now = 1000 + n * rate_limit.global_limit.refill_seconds
     let limiter = admitted_nth(limiter, n, now)
     assert rate_limit.remembered_clients(limiter) <= bound

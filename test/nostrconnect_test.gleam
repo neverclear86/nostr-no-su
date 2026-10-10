@@ -10,6 +10,7 @@ import nostr_no_su/bunker/nostrconnect.{
   ConnectRequest, InternalRelayUrl, InvalidRelayUrl, MalformedClientPubkey,
   MalformedQuery, NoRelay, NoSecret, NotNostrconnect, TooManyRelays,
 }
+import support/numbers
 
 /// クライアント公開鍵（32 バイトの hex、小文字）。
 const client = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
@@ -236,6 +237,6 @@ fn uri_with_relays(relays: List(String)) -> String {
 
 /// `wss://r0.example` から始まる、番号の違う `count` 件の relay URL。
 fn numbered_relays(count: Int) -> List(String) {
-  list.repeat(Nil, count)
-  |> list.index_map(fn(_, n) { "wss://r" <> int.to_string(n) <> ".example" })
+  numbers.below(count)
+  |> list.map(fn(n) { "wss://r" <> int.to_string(n) <> ".example" })
 }
