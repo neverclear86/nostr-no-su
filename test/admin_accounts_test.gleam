@@ -25,8 +25,9 @@ import support/admin_context.{
   action_dialog_id, action_path, auth_uri, auth_uri_camera_text, closed_dialog,
   context, failing_context, get, header, in_japanese, label, opened_dialog,
   password, post, post_form, reporting_context, signer, signer_npub, signer_nsec,
-  skipped_npub, skipped_pubkey, skipped_row, spec_nsec, unavailable, uri,
-  uri_camera_text, with_accounts, with_credentials, with_skipped,
+  skipped_delete_path, skipped_npub, skipped_pubkey, skipped_row, spec_nsec,
+  unavailable, uri, uri_camera_text, with_accounts, with_credentials,
+  with_skipped,
 }
 import support/nip46_client.{account_for}
 import wisp
@@ -514,13 +515,16 @@ pub fn import_accepts_a_label_at_the_code_point_limit_test() {
     == Ok(Added(nsec_signer(spec_nsec), limit))
 }
 
-/// 欄の無いフォームは 400、フォームの本文が無い POST は 415 で、どちらも登録しない。
+/// 欄の無いフォームは 400、フォームの本文が無い POST は `text/plain` の 415 で、どちらも
+/// 登録しない。
 pub fn import_without_fields_is_rejected_test() {
   let reports = process.new_subject()
   let empty = post_form(reporting_context(reports), "/accounts/import", [])
   assert empty.status == 400
   assert string.contains(simulate.read_body(empty), "missing bech32 separator")
-  assert post(reporting_context(reports), "/accounts/import").status == 415
+  let unsupported = post(reporting_context(reports), "/accounts/import")
+  assert unsupported.status == 415
+  assert header(unsupported, "content-type") == "text/plain"
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -653,21 +657,6 @@ pub fn register_generated_with_an_invalid_nsec_returns_to_the_registration_page_
     "action=\"/accounts/import\"",
   )
   assert !string.contains(body, "action=\"/accounts/register-generated\"")
-}
-
-/// 登録の POST のルートは GET を受け付けない。
-pub fn registration_routes_reject_other_methods_test() {
-  let paths = [
-    "/accounts/import", "/accounts/generate", "/accounts/register-generated",
-  ]
-  list.each(paths, fn(path) {
-    assert get(context(), path).status == 405
-  })
-}
-
-/// `/accounts/new` の GET は 404 になる（アカウントの追加はダッシュボードのダイアログで行う）。
-pub fn new_account_page_is_not_found_test() {
-  assert get(context(), "/accounts/new").status == 404
 }
 
 /// 鍵の生成は、Esc で閉じない生成した鍵のダイアログ（`dialog-result`）を開いたダッシュボードを返す。
@@ -1093,18 +1082,6 @@ pub fn changes_to_an_unlisted_signer_are_not_found_test() {
   assert process.receive(reports, 100) == Error(Nil)
 }
 
-/// 登録済みの行の操作と読み込めなかった行の削除は POST だけを受け、GET は `Allow: POST` の 405 にする。
-pub fn account_actions_accept_only_post_test() {
-  let paths =
-    list.append(list.map(account_actions.all, action_path), [
-      skipped_delete_path(),
-    ])
-  use path <- list.each(paths)
-  let response = get(with_skipped(Ok([skipped_row()])), path)
-  assert #(path, response.status) == #(path, 405)
-  assert header(response, "allow") == "POST"
-}
-
 /// 知らない操作のセグメントは 404。
 pub fn unknown_account_action_is_not_found_test() {
   assert get(context(), "/accounts/" <> signer <> "/nope").status == 404
@@ -1123,11 +1100,6 @@ pub fn account_pages_need_the_account_list_test() {
 }
 
 // --- 読み込みで飛ばされた行の削除 ---
-
-/// 飛ばされた行の削除のパス。
-fn skipped_delete_path() -> String {
-  routes.href(routes.AccountOperation(skipped_pubkey, routes.DeleteAccount))
-}
 
 /// 飛ばされた行の削除のダイアログの `id`。
 fn skipped_dialog_id() -> String {
@@ -1261,11 +1233,6 @@ const qr_dialog_id = "dialog-account-" <> signer <> "-qr"
 /// `context` のダッシュボードの、接続 QR コードのダイアログの中身。
 fn qr_dialog(context: admin.Context) -> String {
   closed_dialog(simulate.read_body(get(context, "/")), qr_dialog_id)
-}
-
-/// 接続 QR コードの操作のパスは無く、GET は 404 になる。
-pub fn connection_qr_path_is_not_found_test() {
-  assert get(context(), "/accounts/" <> signer <> "/qr").status == 404
 }
 
 /// 接続 QR コードのダイアログは、secret 入りの URI と要承認の URI を、それぞれカメラ用と

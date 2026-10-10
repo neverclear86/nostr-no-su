@@ -532,6 +532,11 @@ pub fn skipped_row() -> dashboard.SkippedRow {
   )
 }
 
+/// 飛ばされた行の削除のパス。
+pub fn skipped_delete_path() -> String {
+  routes.href(routes.AccountOperation(skipped_pubkey, routes.DeleteAccount))
+}
+
 /// 指定した、読み込みで飛ばされた行の一覧を返す Context。
 pub fn with_skipped(
   skipped: Result(List(dashboard.SkippedRow), String),
