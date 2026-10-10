@@ -1,12 +1,12 @@
 //// プラグインが供給するページのページ枠（`admin/plugin_pages`）の単体テスト。
 ////
-//// 節の記述 map は `test/plugin_view_test.gleam` と同じ形（`dynamic.properties` /
-//// `dynamic.string` / `dynamic.list`）で組む。
+//// 正しい形の節の記述 map は撮影用のサーバーと共通の builder（`plugin_page_builder`）で組み、
+//// 変換に失敗する形（`title` を欠く節）はこのモジュールで手で組む。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/string
 import nostr_no_su/admin/dashboard
 import nostr_no_su/admin/i18n
@@ -15,94 +15,31 @@ import nostr_no_su/admin/routes
 import nostr_no_su/admin/view
 import nostr_no_su/plugin
 import nostr_no_su/plugin_runner
-
-/// binary キーの map をキーと値の組から組み立てる。
-fn map_(entries: List(#(String, Dynamic))) -> Dynamic {
-  dynamic.properties(
-    entries |> list.map(fn(entry) { #(dynamic.string(entry.0), entry.1) }),
-  )
-}
-
-/// 節。ブロック 1 つ（`text`）を持つ。
-fn section_(title: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #(
-      "blocks",
-      dynamic.list([
-        map_([
-          #("type", dynamic.string("text")),
-          #("text", dynamic.string("content")),
-        ]),
-      ]),
-    ),
-  ])
-}
-
-/// 見出しの補足（`meta`）に Unix 秒 `at` の `time` を 1 件置いた、ブロックの無い節。
-fn section_with_time(title: String, at: Int) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #(
-      "meta",
-      dynamic.list([
-        map_([#("type", dynamic.string("time")), #("value", dynamic.int(at))]),
-      ]),
-    ),
-    #("blocks", dynamic.list([])),
-  ])
-}
-
-/// `form` ブロック 1 つ（チェック 1 件）を持つ節。
-fn section_with_form(title: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #(
-      "blocks",
-      dynamic.list([
-        map_([
-          #("type", dynamic.string("form")),
-          #(
-            "fields",
-            dynamic.list([
-              map_([
-                #("type", dynamic.string("checkbox")),
-                #("name", dynamic.string("enabled")),
-                #("label", dynamic.string("Enabled")),
-              ]),
-            ]),
-          ),
-          #("submit", dynamic.string("Save")),
-        ]),
-      ]),
-    ),
-  ])
-}
-
-/// ページ `page` への `link` ブロック 1 つを持つ節。
-fn section_with_link(title: String, page: String) -> Dynamic {
-  map_([
-    #("type", dynamic.string("section")),
-    #("title", dynamic.string(title)),
-    #(
-      "blocks",
-      dynamic.list([
-        map_([
-          #("type", dynamic.string("link")),
-          #("page", dynamic.string(page)),
-          #("text", dynamic.string("Open")),
-        ]),
-      ]),
-    ),
-  ])
+import plugin_page_builder.{
+  checkbox_field, form_block, link_block, section, time_inline, typed_text,
 }
 
 /// `title` を欠き、変換に失敗する節。
 fn broken_section() -> Dynamic {
-  map_([#("type", dynamic.string("section")), #("blocks", dynamic.list([]))])
+  dynamic.properties([
+    #(dynamic.string("type"), dynamic.string("section")),
+    #(dynamic.string("blocks"), dynamic.list([])),
+  ])
+}
+
+/// チェック 1 件（`enabled`）だけを持つ `form` ブロック。
+fn options_form() -> Dynamic {
+  form_block(
+    [
+      checkbox_field(
+        name: "enabled",
+        label: "Enabled",
+        hint: None,
+        checked: False,
+      ),
+    ],
+    "Save",
+  )
 }
 
 /// ページ 1 件だけを持つプラグインの行。
@@ -129,7 +66,7 @@ pub fn single_page_has_no_tabs_test() {
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert !string.contains(body, "tabs tabs-border")
 }
@@ -145,7 +82,7 @@ pub fn two_pages_show_tabs_with_the_current_one_active_test() {
       two_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert string.contains(
     body,
@@ -188,7 +125,7 @@ pub fn localized_plugin_page_is_in_the_display_language_test() {
       localized_row(),
       localized_status_page(),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert string.contains(japanese, "<span lang=\"ja\">状態</span>")
   assert string.contains(japanese, "<span lang=\"ja\">設定</span>")
@@ -201,7 +138,7 @@ pub fn localized_plugin_page_is_in_the_display_language_test() {
       localized_row(),
       localized_status_page(),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert string.contains(english, "<span lang=\"en\">Status</span>")
   assert string.contains(english, "<div lang=\"en\">")
@@ -217,7 +154,7 @@ pub fn localized_heading_is_in_the_display_language_test() {
       localized_row(),
       localized_status_page(),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert string.contains(
     body,
@@ -253,7 +190,7 @@ pub fn a_failed_section_does_not_stop_the_others_test() {
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
       0,
-      [section_("Queue"), broken_section()],
+      [section("Queue", [], [typed_text("text", "content")]), broken_section()],
     )
   assert string.contains(body, "Queue")
   assert string.contains(
@@ -278,7 +215,7 @@ pub fn disabled_plugin_shows_a_warning_test() {
       row,
       plugin.PluginPage(key: "status", title: "Status"),
       0,
-      [section_("Queue")],
+      [section("Queue", [], [typed_text("text", "content")])],
     )
   assert string.contains(
     body,
@@ -297,7 +234,7 @@ pub fn heading_shows_the_plugin_and_page_names_test() {
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
       0,
-      [section_("Summary")],
+      [section("Summary", [], [typed_text("text", "content")])],
     )
   assert string.contains(
     body,
@@ -319,7 +256,7 @@ pub fn plugin_page_times_are_relative_to_now_test() {
       one_page_row(),
       plugin.PluginPage(key: "status", title: "Status"),
       1000 + 7200,
-      [section_with_time("Queue", 1000)],
+      [section("Queue", [time_inline(1000)], [])],
     )
   assert string.contains(html, ">2 h ago</span>")
 }
@@ -333,7 +270,7 @@ pub fn plugin_page_form_posts_to_the_current_page_test() {
       two_page_row(),
       plugin.PluginPage(key: "settings", title: "Settings"),
       0,
-      [section_with_form("Options")],
+      [section("Options", [], [options_form()])],
     )
   assert string.contains(
     body,
@@ -358,7 +295,10 @@ pub fn plugin_name_is_encoded_in_links_but_not_in_the_return_path_test() {
       row,
       plugin.PluginPage(key: "settings", title: "Settings"),
       0,
-      [section_with_link("See also", "settings"), section_with_form("Options")],
+      [
+        section("See also", [], [link_block("settings", "Open")]),
+        section("Options", [], [options_form()]),
+      ],
     )
   assert string.contains(body, "href=\"/plugins/a%20b/status\"")
   assert list.length(string.split(body, "href=\"/plugins/a%20b/settings\""))
