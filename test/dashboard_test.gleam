@@ -29,14 +29,7 @@ fn states() -> dashboard.Snapshot {
     accounts: Ok([]),
     skipped: Ok([]),
     pending: Ok([
-      dashboard.PendingRow(
-        token: "tok",
-        signer: "abcd",
-        client: "ef01",
-        expires_in_seconds: 540,
-        secret_mismatch: False,
-        perms: "",
-      ),
+      pending("tok"),
     ]),
     sessions: Ok([]),
     relays: Ok([
@@ -85,6 +78,18 @@ fn approval(language: i18n.Language, pending: dashboard.PendingRow) -> String {
   dashboard.approval_page(language, view.System, Ok([]), states().now, pending)
 }
 
+/// トークン `token` の承認待ちの行。他の欄は固定の値で、違う欄は `..pending(token)` の上書きで変える。
+fn pending(token: String) -> dashboard.PendingRow {
+  dashboard.PendingRow(
+    token:,
+    signer: "abcd",
+    client: "ef01",
+    expires_in_seconds: 540,
+    secret_mismatch: False,
+    perms: "",
+  )
+}
+
 /// 提示なしと不一致の承認待ちを、失効までが長い順（作成の新しい順）に持つスナップショット。
 /// 提示なしの方(`tok-1`) は権限を要求し、不一致の方（`tok-2`）は権限を要求しない。`tok-2`
 /// は残り 60 秒未満で、警告のバッジを見るためのものである。
@@ -93,20 +98,13 @@ fn secret_states() -> dashboard.Snapshot {
     ..states(),
     pending: Ok([
       dashboard.PendingRow(
-        token: "tok-1",
-        signer: "abcd",
-        client: "ef01",
-        expires_in_seconds: 540,
-        secret_mismatch: False,
+        ..pending("tok-1"),
         perms: "sign_event:1,nip44_encrypt",
       ),
       dashboard.PendingRow(
-        token: "tok-2",
-        signer: "abcd",
-        client: "ef01",
+        ..pending("tok-2"),
         expires_in_seconds: 45,
         secret_mismatch: True,
-        perms: "",
       ),
     ]),
   )
@@ -227,17 +225,7 @@ pub fn permissions_are_shown_as_chips_test() {
 /// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者は
 /// `<details>` の外（畳みを開く前に見える範囲）では「接続 QR コード」のボタンが開くダイアログの `id` にだけ使われる。
 pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
-  let account =
-    dashboard.AccountRow(
-      signer: "abcdhex1234567890abcdef1234567890",
-      npub: "npub1examplenpubvalueabcdefghijklmno",
-      label: "main account",
-      uri: "bunker://x?secret=s",
-      auth_uri: "bunker://x",
-      uri_camera_text: "x?secret=s",
-      auth_uri_camera_text: "x",
-      picture: None,
-    )
+  let account = account("abcdhex1234567890abcdef1234567890", "main account")
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let body = english(snapshot)
   let assert Ok(#(_, after_accounts)) =
@@ -276,12 +264,14 @@ fn dialog_trigger(
   element.to_string(trigger)
 }
 
-/// 64 桁の 16 進の署名者を持つアカウント。鍵の指紋を描かせるための行である。
-fn fingerprinted_account() -> dashboard.AccountRow {
+/// 署名者 `signer`、ラベル `label` のアカウントの行。npub は `npub1` に署名者を逆順に続け、
+/// 63 文字に満たなければ `q` で埋めた値で、`view.shorten` で省略される。逆順にするのは、
+/// 回文でない署名者を npub に部分文字列として含ませないためである。
+fn account(signer: String, label: String) -> dashboard.AccountRow {
   dashboard.AccountRow(
-    signer: string.repeat("0123", 16),
-    npub: "npub1fingerprintedaccountvalueabcdefghij",
-    label: "main",
+    signer:,
+    npub: string.pad_end("npub1" <> string.reverse(signer), 63, "q"),
+    label:,
     uri: "bunker://x?secret=s",
     auth_uri: "bunker://x",
     uri_camera_text: "x?secret=s",
@@ -323,7 +313,10 @@ fn split_account_details(body: String) -> #(String, String) {
 /// ボタンより前に並ぶ。
 pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
   let snapshot =
-    dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()]))
+    dashboard.Snapshot(
+      ..states(),
+      accounts: Ok([account(dialog_signer, "main")]),
+    )
   let accounts = accounts_part(english(snapshot))
   assert string.contains(
     accounts,
@@ -341,7 +334,7 @@ pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
 /// アカウントの行の畳みの前に、色つきの鍵の指紋、その署名者のセッションの件数（他の署名者の
 /// セッションは数えない）、「接続 QR コード」のダイアログを開く主のボタンが出て、畳みの中に QR のボタンは無い。
 pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
-  let account = fingerprinted_account()
+  let account = account(dialog_signer, "main")
   let snapshot =
     dashboard.Snapshot(
       ..states(),
@@ -375,7 +368,7 @@ pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
 
 /// セッションの件数は、一覧を得たら 0 件でも出し、一覧を得られないときは出さない。
 pub fn account_session_count_follows_the_session_list_test() {
-  let account = fingerprinted_account()
+  let account = account(dialog_signer, "main")
   let render = fn(sessions) {
     let snapshot =
       dashboard.Snapshot(..states(), accounts: Ok([account]), sessions:)
@@ -394,7 +387,7 @@ pub fn account_session_count_follows_the_session_list_test() {
 /// 畳みの中に 2 つの URI の説明が出て、ラベルの編集・秘密鍵の表示・secret の再生成のダイアログを開くボタン、
 /// 右端に離した（`ml-auto` の囲みの）削除のダイアログを開くボタンの順に並ぶ。
 pub fn account_details_hold_the_uris_and_the_actions_test() {
-  let account = fingerprinted_account()
+  let account = account(dialog_signer, "main")
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let #(_, details) = split_account_details(english(snapshot))
   assert string.contains(
@@ -429,7 +422,7 @@ pub fn account_details_hold_the_uris_and_the_actions_test() {
 
 /// 行の 4 つの操作と接続 QR コードのダイアログは、畳み（`<details>`）の中ではなく `</details>` の後に置く。
 pub fn account_row_dialogs_sit_outside_the_details_test() {
-  let account = fingerprinted_account()
+  let account = account(dialog_signer, "main")
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let assert Ok(#(_, after_details)) =
     string.split_once(accounts_part(english(snapshot)), "</details>")
@@ -461,7 +454,7 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
   let snapshot =
     dashboard.Snapshot(
       ..states(),
-      accounts: Ok([fingerprinted_account()]),
+      accounts: Ok([account(dialog_signer, "main")]),
       skipped: Ok([
         dashboard.SkippedRow(
           pubkey:,
@@ -489,14 +482,7 @@ pub fn sessions_show_perms_test() {
     dashboard.Snapshot(
       ..states(),
       sessions: Ok([
-        session.Session(
-          signer: "abcd",
-          client: "ef01",
-          perms: "sign_event:7",
-          created_at: 1_788_253_200,
-          last_used_at: 1_789_276_354,
-          relays: [],
-        ),
+        session.Session(..session_of("abcd", "ef01"), perms: "sign_event:7"),
       ]),
     )
   let body = english(snapshot)
@@ -514,14 +500,7 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
     dashboard.Snapshot(
       ..states(),
       sessions: Ok([
-        session.Session(
-          signer: "abcd",
-          client: "ef01",
-          perms: "",
-          created_at: 1_788_253_200,
-          last_used_at: 1_789_276_354,
-          relays: [],
-        ),
+        session_of("abcd", "ef01"),
       ]),
     )
 
@@ -764,8 +743,8 @@ pub fn account_details_open_the_uri_descriptions_from_the_info_buttons_test() {
       dashboard.Snapshot(
         ..dialog_snapshot(),
         accounts: Ok([
-          dialog_account(dialog_signer, "main"),
-          dialog_account(second, "bot"),
+          account(dialog_signer, "main"),
+          account(second, "bot"),
         ]),
       ),
     )
@@ -1076,36 +1055,23 @@ pub fn different_listing_failures_stay_in_each_section_test() {
 /// コピーボタンが出る。
 pub fn session_row_shows_the_signer_and_permission_chips_test() {
   let known_signer = "abcd-known-signer-0123456789"
-  let known_npub = "npub1sessionexampleabcdefghijklmno"
-  let account =
-    dashboard.AccountRow(
-      signer: known_signer,
-      npub: known_npub,
-      label: "main",
-      uri: "bunker://x",
-      auth_uri: "bunker://x",
-      uri_camera_text: "x",
-      auth_uri_camera_text: "x",
-      picture: None,
-    )
+  let account = account(known_signer, "main")
   let snapshot =
     dashboard.Snapshot(
       ..states(),
       accounts: Ok([account]),
       sessions: Ok([
         session.Session(
-          signer: known_signer,
-          client: "ef01",
+          ..session_of(known_signer, "ef01"),
           perms: "sign_event:1",
           created_at: 1000,
           last_used_at: 1000,
-          relays: [],
         ),
       ]),
     )
   let body = english(snapshot)
   assert string.contains(body, "<span>main</span>")
-  assert string.contains(body, view.shorten(known_npub))
+  assert string.contains(body, view.shorten(account.npub))
   assert string.contains(
     body,
     element.to_string(permission_view.chips(i18n.English, "sign_event:1")),
@@ -1128,12 +1094,9 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
       now:,
       sessions: Ok([
         session.Session(
-          signer: "abcd",
-          client: "ef01",
-          perms: "",
+          ..session_of("abcd", "ef01"),
           created_at:,
           last_used_at:,
-          relays: [],
         ),
       ]),
     )
@@ -1448,10 +1411,7 @@ pub fn render_open_needs_the_listed_account_test() {
     [
       dashboard.AddAccountOpen("", reason),
       dashboard.GeneratedKeyOpen("npub1example", "nsec1example", "", None),
-      dashboard.PrivateKeyOpen(
-        dialog_account(dialog_signer, "main"),
-        "nsec1example",
-      ),
+      dashboard.PrivateKeyOpen(account(dialog_signer, "main"), "nsec1example"),
     ],
     fn(dialog) {
       assert open(failed, dialog) == Ok(Nil)
@@ -1518,7 +1478,7 @@ fn form_tag(html: String, prefix: String) -> String {
   tag
 }
 
-/// ダイアログのテストのアカウントの署名者（64 桁の 16 進）。
+/// テストのアカウントの署名者（64 桁の 16 進）。鍵の指紋を描ける値である。
 const dialog_signer =
   "0123012301230123012301230123012301230123012301230123012301230123"
 
@@ -1530,7 +1490,7 @@ const dialog_skipped =
 fn dialog_snapshot() -> dashboard.Snapshot {
   dashboard.Snapshot(
     ..states(),
-    accounts: Ok([dialog_account(dialog_signer, "main")]),
+    accounts: Ok([account(dialog_signer, "main")]),
     skipped: Ok([
       dashboard.SkippedRow(
         pubkey: dialog_skipped,
@@ -1542,20 +1502,6 @@ fn dialog_snapshot() -> dashboard.Snapshot {
   )
 }
 
-/// 署名者 `signer`、ラベル `label` のアカウントの行。
-fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
-  dashboard.AccountRow(
-    signer:,
-    npub: "npub1dialog" <> label <> "valueabcdefghijklmnopqrstuvw",
-    label:,
-    uri: "bunker://x?secret=s",
-    auth_uri: "bunker://x",
-    uri_camera_text: "x?secret=s",
-    auth_uri_camera_text: "x",
-    picture: None,
-  )
-}
-
 /// ラベルの違う 2 行の、それぞれの編集のダイアログに、その行のラベルの識別と欄の値と
 /// 補足の `id` がある。
 pub fn account_label_dialogs_hold_each_row_label_test() {
@@ -1564,13 +1510,13 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
     dashboard.Snapshot(
       ..dialog_snapshot(),
       accounts: Ok([
-        dialog_account(dialog_signer, "main"),
-        dialog_account(second, "bot"),
+        account(dialog_signer, "main"),
+        account(second, "bot"),
       ]),
     )
   let body = english(snapshot)
   use #(signer, label) <- list.each([#(dialog_signer, "main"), #(second, "bot")])
-  let account = dialog_account(signer, label)
+  let account = account(signer, label)
   let id = "dialog-account-" <> signer <> "-label"
   let dialog = closed_dialog(body, id)
   assert string.contains(
@@ -1880,7 +1826,10 @@ fn after_heading_title(body: String, title: String) -> String {
 pub fn section_headings_show_the_count_pill_test() {
   let body =
     english(
-      dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
+      dashboard.Snapshot(
+        ..states(),
+        accounts: Ok([account(dialog_signer, "main")]),
+      ),
     )
   assert string.starts_with(
     after_heading_title(body, "Accounts"),
@@ -2184,14 +2133,7 @@ pub fn pending_row_shows_the_client_shortened_with_a_copy_button_test() {
     dashboard.Snapshot(
       ..states(),
       pending: Ok([
-        dashboard.PendingRow(
-          token: "tok",
-          signer: "abcd",
-          client: long_client,
-          expires_in_seconds: 540,
-          secret_mismatch: False,
-          perms: "",
-        ),
+        dashboard.PendingRow(..pending("tok"), client: long_client),
       ]),
     )
   let body = english(snapshot)
@@ -2208,14 +2150,7 @@ pub fn pending_card_draws_the_client_fingerprint_test() {
     dashboard.Snapshot(
       ..states(),
       pending: Ok([
-        dashboard.PendingRow(
-          token: "tok",
-          signer: "abcd",
-          client:,
-          expires_in_seconds: 540,
-          secret_mismatch: False,
-          perms: "",
-        ),
+        dashboard.PendingRow(..pending("tok"), client:),
       ]),
     )
   assert string.contains(
@@ -2227,14 +2162,7 @@ pub fn pending_card_draws_the_client_fingerprint_test() {
 
 /// クライアントの公開鍵が `client` の承認済みセッション 1 件。
 fn session_row(client: String) -> session.Session {
-  session.Session(
-    signer: "abcd",
-    client:,
-    perms: "sign_event:7",
-    created_at: 1_788_253_200,
-    last_used_at: 1_789_276_354,
-    relays: [],
-  )
+  session.Session(..session_of("abcd", client), perms: "sign_event:7")
 }
 
 /// 英語のダッシュボードのうち、セッションの節（`id="sessions"`）以降の部分。
@@ -2316,44 +2244,23 @@ pub fn session_row_regroups_at_720px_test() {
 pub fn signer_is_shown_as_label_and_npub_test() {
   let known_signer = "abcd-known-signer-0123456789"
   let unknown_signer = "unknown-signer-0123456789abcd"
-  let known_npub = "npub1exampleexampleexampleexampleexampleexampleexamplex"
-  let known_account =
-    dashboard.AccountRow(
-      signer: known_signer,
-      npub: known_npub,
-      label: "main",
-      uri: "bunker://x",
-      auth_uri: "bunker://x",
-      uri_camera_text: "x",
-      auth_uri_camera_text: "x",
-      picture: None,
-    )
+  let known_account = account(known_signer, "main")
   let snapshot =
     dashboard.Snapshot(
       ..states(),
       accounts: Ok([known_account]),
       pending: Ok([
+        dashboard.PendingRow(..pending("tok-known"), signer: known_signer),
         dashboard.PendingRow(
-          token: "tok-known",
-          signer: known_signer,
-          client: "ef01",
-          expires_in_seconds: 540,
-          secret_mismatch: False,
-          perms: "",
-        ),
-        dashboard.PendingRow(
-          token: "tok-unknown",
+          ..pending("tok-unknown"),
           signer: unknown_signer,
           client: "ef02",
-          expires_in_seconds: 540,
-          secret_mismatch: False,
-          perms: "",
         ),
       ]),
     )
   let body = english(snapshot)
   assert string.contains(body, "<span>main</span>")
-  assert string.contains(body, view.shorten(known_npub))
+  assert string.contains(body, view.shorten(known_account.npub))
   assert string.contains(body, view.shorten(unknown_signer))
 
   let unavailable =
@@ -2562,17 +2469,7 @@ pub fn overview_color_rules_test() {
 /// 「はじめに」の帯の段の状態は、バンカーに使うリレーと読み込めたアカウントの有無から決まり、
 /// 両方がそろうか、どちらかの一覧を得られないときは帯を出さない。
 pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
-  let account =
-    dashboard.AccountRow(
-      signer: "abcd",
-      npub: "npub1x",
-      label: "",
-      uri: "bunker://x?secret=s",
-      auth_uri: "bunker://x",
-      uri_camera_text: "x?secret=s",
-      auth_uri_camera_text: "x",
-      picture: None,
-    )
+  let account = account("abcd", "")
   let connected = dashboard.Reported(relay_connection.Connected)
   let bunker_relay =
     dashboard.RelayRow(1, "wss://a", dashboard.Unused, connected)
@@ -2639,17 +2536,7 @@ pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
   assert string.contains(relay_only, add_account)
   assert locked_count(relay_only) == 1
 
-  let account =
-    dashboard.AccountRow(
-      signer: "abcd",
-      npub: "npub1x",
-      label: "",
-      uri: "bunker://x?secret=s",
-      auth_uri: "bunker://x",
-      uri_camera_text: "x?secret=s",
-      auth_uri_camera_text: "x",
-      picture: None,
-    )
+  let account = account("abcd", "")
   assert !string.contains(render([account], [bunker_relay]), "Getting started")
 }
 
@@ -2782,33 +2669,26 @@ fn action_form(action: routes.RelayAction) -> String {
   |> element.to_string
 }
 
-/// `session_account()` だけを署名者の候補にし、URI と署名者が空の英語の接続のフォームの中身の HTML。
+/// `account("abcd", "main")` だけを署名者の候補にし、URI と署名者が空の英語の接続のフォームの中身の HTML。
 fn connect_form_html() -> String {
-  dashboard.connect_form(i18n.English, [session_account()], "", "", view.InForm)
+  dashboard.connect_form(
+    i18n.English,
+    [account("abcd", "main")],
+    "",
+    "",
+    view.InForm,
+  )
   |> element.fragment
   |> element.to_string
 }
 
-/// セッションのダイアログのテストが使うアカウント。署名者は `abcd`。
-fn session_account() -> dashboard.AccountRow {
-  dashboard.AccountRow(
-    signer: "abcd",
-    npub: "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
-    label: "main",
-    uri: "bunker://abcd?relay=x&secret=s",
-    auth_uri: "bunker://abcd?relay=x",
-    uri_camera_text: "abcd?relay=x&secret=s",
-    auth_uri_camera_text: "abcd?relay=x",
-    picture: None,
-  )
-}
-
-/// アカウント 1 件（`session_account`）と、署名者 `abcd` の承認済みセッション `ef01`・`ef02` を持つ
-/// スナップショット。2 行は権限を変え、ダイアログのフォームの行の取り違えを見分けられるようにする。
+/// アカウント 1 件（署名者 `abcd`、ラベル `main`）と、署名者 `abcd` の承認済みセッション
+/// `ef01`・`ef02` を持つスナップショット。2 行は権限を変え、ダイアログのフォームの行の取り違えを
+/// 見分けられるようにする。
 fn session_snapshot() -> dashboard.Snapshot {
   dashboard.Snapshot(
     ..states(),
-    accounts: Ok([session_account()]),
+    accounts: Ok([account("abcd", "main")]),
     sessions: Ok([
       session.Session(
         ..session_of("abcd", "ef01"),
@@ -2930,7 +2810,7 @@ pub fn connect_content_follows_the_accounts_state_test() {
   assert string.contains(failed, "<span lang=\"en\">boom</span>")
   assert !string.contains(failed, "<form")
   assert string.contains(
-    content(Ok([session_account()])),
+    content(Ok([account("abcd", "main")])),
     "<form action=\"/sessions/connect\"",
   )
 }
@@ -2939,12 +2819,10 @@ pub fn connect_content_follows_the_accounts_state_test() {
 fn english_permissions_form(perms: String) -> String {
   let session =
     session.Session(
-      signer: "0123",
-      client: "4567",
-      perms: perms,
+      ..session_of("0123", "4567"),
+      perms:,
       created_at: 0,
       last_used_at: 0,
-      relays: [],
     )
   dashboard.permissions_form(i18n.English, session, None, view.InForm)
   |> element.fragment
@@ -3198,7 +3076,7 @@ pub fn render_open_does_not_announce_the_refresh_test() {
 pub fn account_row_overlays_the_picture_on_the_fingerprint_test() {
   let account =
     dashboard.AccountRow(
-      ..fingerprinted_account(),
+      ..account(dialog_signer, "main"),
       picture: Some("https://example.com/a.png"),
     )
   let #(before, _details) =
@@ -3223,7 +3101,10 @@ pub fn account_row_overlays_the_picture_on_the_fingerprint_test() {
 pub fn account_row_without_a_picture_draws_no_image_test() {
   let #(before, _details) =
     split_account_details(english(
-      dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
+      dashboard.Snapshot(
+        ..states(),
+        accounts: Ok([account(dialog_signer, "main")]),
+      ),
     ))
   assert !string.contains(before, "<img")
 }
@@ -3233,7 +3114,7 @@ pub fn connect_form_lists_accounts_with_the_shortened_npub_test() {
   let html = connect_form_html()
   assert string.contains(
     html,
-    "main " <> view.shorten(session_account().npub) <> "</option>",
+    "main " <> view.shorten(account("abcd", "main").npub) <> "</option>",
   )
 }
 
@@ -3266,7 +3147,8 @@ pub fn connect_review_dialog_is_drawn_only_when_opened_test() {
   )
 }
 
-/// 確認のダイアログに渡す内容。名前と権限があり、リレーは 2 件。署名者は `session_account` の `abcd`。
+/// 確認のダイアログに渡す内容。名前と権限があり、リレーは 2 件。署名者は `session_snapshot` の
+/// アカウントと同じ `abcd`。
 fn review() -> dashboard.ConnectReview {
   dashboard.ConnectReview(
     uri: "nostrconnect://abcd?relay=wss%3A%2F%2Ffirst.example&relay=wss%3A%2F%2Fsecond.example&secret=s",
