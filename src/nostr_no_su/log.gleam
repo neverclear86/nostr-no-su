@@ -85,8 +85,7 @@ pub fn redact_secrets(values: List(String)) -> Nil
 fn logger_log(level: Level, message: String) -> Dynamic
 
 /// リレー 1 本に関する行の接頭辞。リレー URL を受け、スキームを落とした名前
-/// （`relay_label`）を使う。接続そのもの（`relay_connection`）と、その上を流れる
-/// メッセージ（`relay_client`）が同じ接頭辞を使うため、ここに置く。
+/// （`relay_label`）を使う。
 pub fn relay_prefix(url: String) -> String {
   "relay " <> relay_label(url)
 }
@@ -101,8 +100,7 @@ pub fn relay_label(url: String) -> String {
   }
 }
 
-/// プラグインに関するログ行の接頭辞。ランナーも、子プロセスの起動失敗の報告も
-/// これを使う。プラグインごとに分かれるので関数にする。
+/// プラグイン `name` に関するログ行の接頭辞。
 pub fn plugin_prefix(name: String) -> String {
   "plugin " <> name
 }
@@ -124,9 +122,8 @@ pub fn sanitize(text: String, max: Int) -> String {
 
 /// UTF-8 のビット列 `rest` の先頭から最大 `remaining` 個のコードポイントを読み、
 /// 制御文字を空白 1 文字に置き換えた本文と、まだ残りがあるか（切ったか）を
-/// 返す。末尾再帰で、読むのは先頭の `remaining` 個だけである。UTF-8 として
-/// 読めない残りに対する分岐はパターンの網羅のために必要なだけで、`String` から
-/// 作ったビット列では到達せず、到達しても切っていないものとして本文を返す。
+/// 返す。末尾再帰で、読むのは先頭の `remaining` 個だけである。UTF-8 として読めない
+/// 残りは（`String` 由来では現れない）切っていないものとして扱う。
 fn sanitize_prefix(
   rest: BitArray,
   remaining: Int,

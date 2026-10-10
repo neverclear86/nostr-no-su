@@ -3,25 +3,16 @@
 import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
 
-/// 名前付きアクターへ送信する。名前を保持するプロセスがなければメッセージを
-/// 捨てる。その状況での名前付き subject への送信は送信側を panic させるため、
-/// 名前を引いて保持するプロセスがあるときだけ送る。
-///
-/// 名前の確認から送信までの間に宛先が終了する窓は残る。これを閉じるには
-/// `erlang:send/2` を FFI で呼んで `badarg` を握り潰すしかなく、gleam_erlang が
-/// 名前付き subject に使う封筒の形（`#(name, message)`）へ依存することになる。
-/// 窓に当たって失われるのはその瞬間のメッセージ 1 件だけなので、内部表現への
-/// 依存を増やさないこの実装を選んでいる。
+/// 名前付きアクターへ送信する。名前を保持するプロセスがなければメッセージを捨てる。
+/// 名前の確認から送信までの間に宛先が終了したときの扱いは docs/design-decisions.md の
+/// 「名前付きアクターへの送信は、名前を保持するプロセスがあるときだけ行う」にある。
 pub fn send(name: Name(msg), message: msg) -> Nil {
   let _ = try_send(name, message)
   Nil
 }
 
 /// `send` と同じく送信し、名前を保持するプロセスが無くて捨てたときは `Error(Nil)`
-/// を返す。捨てたかどうかで分岐する呼び出し側のため。名前の確認から送信までの窓は
-/// `send` と同じで、そこで宛先が消えると送信側が panic するか、消えた pid へ
-/// 黙って送られて `Ok(Nil)` になる。どちらの 1 件も数えない（`send` の doc を
-/// 参照）。
+/// を返す。
 pub fn try_send(name: Name(msg), message: msg) -> Result(Nil, Nil) {
   case process.named(name) {
     Ok(_pid) -> Ok(process.send(process.named_subject(name), message))
@@ -32,12 +23,12 @@ pub fn try_send(name: Name(msg), message: msg) -> Result(Nil, Nil) {
 /// 名前付きアクターへ問い合わせて応答を待つ。名前を保持するプロセスがない、
 /// 宛先が応答する前に終了した（タイムアウトを待たずに返る）、`timeout_ms` 以内に
 /// 応答が来なかった、のいずれでも `None` を返す。呼び出し側を巻き込まないため
-/// `process.call` は使わない。あちらはどの失敗も panic にする。
+/// `process.call` は使わない。あちらはどの失敗も panic にする。名前の確認から
+/// 送信までの窓で宛先が終了したときの扱いは `send` と同じである。
 ///
-/// 返信先は OTP の `gen:do_call` と同じく、宛先を監視する monitor の alias で
-/// ある。タイムアウトの後に届いた応答はランタイムが捨てるので、呼び出し側の
-/// メールボックスにも警告ログにも出ず、応答が秘密（接続 secret など）を含んでも
-/// 遅延応答から漏れることはない。
+/// 返信先は宛先を監視する monitor の alias なので、タイムアウトの後に届いた応答
+/// （接続 secret など）はランタイムが捨て、呼び出し側のメールボックスにも警告ログにも
+/// 残らない。詳しくは docs/architecture.md の「全体像」。
 ///
 /// `request` で宛先へ渡す返信用の subject は `process.send` にだけ使う。owner は
 /// pid ではなく alias の参照なので、`process.subject_owner` や `process.receive`
@@ -51,8 +42,8 @@ pub fn call(
     Error(Nil) -> None
     Ok(pid) -> {
       let #(monitor, reply) = reply_alias(pid)
-      // 名前の確認から送信までの間に宛先が終了することがあるため、panic しない
-      // `send` を使う。その場合は監視が `DOWN` を届けるので `None` になる。
+      // 宛先が無いときに panic しない `send` を使う。宛先が応答の前に終了したときは、
+      // 監視が `DOWN` を届けるので `None` になる。
       send(name, request(reply))
       process.new_selector()
       |> process.select_map(reply, Some)
