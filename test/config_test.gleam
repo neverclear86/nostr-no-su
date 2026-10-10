@@ -260,44 +260,42 @@ fn admin_ui_for(
   config.load().admin_ui
 }
 
-/// `ADMIN_PORT` は未設定なら既定ポート、明示的な空文字列なら無効。
+/// `load` は `ADMIN_PORT` を読む。未設定なら既定ポート、明示的な空文字列なら無効。
 pub fn admin_ui_port_test() {
   assert admin_ui_for(None, None, Some(test_password))
     == config.Listen(config.AdminListen("127.0.0.1", 24_133, test_password))
+  assert admin_ui_for(None, Some(""), Some(test_password)) == config.Disabled
   assert admin_ui_for(None, Some("9000"), Some(test_password))
     == config.Listen(config.AdminListen("127.0.0.1", 9000, test_password))
-  assert admin_ui_for(None, Some(" 9000 "), Some(test_password))
-    == config.Listen(config.AdminListen("127.0.0.1", 9000, test_password))
-  // 上限の境界。1 つ上の 65536 は `Invalid` になる（下のテストを参照）。
-  assert admin_ui_for(None, Some("65535"), Some(test_password))
-    == config.Listen(config.AdminListen("127.0.0.1", 65_535, test_password))
-  assert admin_ui_for(None, Some(""), Some(test_password)) == config.Disabled
 }
 
-/// 範囲外や数値でない `ADMIN_PORT` は、理由付きで無効として報告する。範囲を
-/// 検証しないと待ち受け開始時に badarg でクラッシュする。
-pub fn admin_ui_rejects_invalid_ports_test() {
-  let assert config.Invalid(_) =
-    admin_ui_for(None, Some("not-a-port"), Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(None, Some("0"), Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(None, Some("-1"), Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(None, Some("65536"), Some(test_password))
+/// `ADMIN_PORT` は未設定なら既定ポート、前後の空白を落として空なら無効、整数なら
+/// そのポート。上限の 65535 と下限の 1 も受け取る。
+pub fn parse_port_test() {
+  assert config.parse_port(None) == Ok(Some(24_133))
+  assert config.parse_port(Some("")) == Ok(None)
+  assert config.parse_port(Some("   ")) == Ok(None)
+  assert config.parse_port(Some("9000")) == Ok(Some(9000))
+  assert config.parse_port(Some(" 9000 ")) == Ok(Some(9000))
+  assert config.parse_port(Some("1")) == Ok(Some(1))
+  assert config.parse_port(Some("65535")) == Ok(Some(65_535))
 }
 
-/// `"localhost"` と IPv4 / IPv6 のアドレス以外の `ADMIN_BIND` は、理由付きで
-/// 無効として報告する。検証しないと待ち受け開始時に panic する。
-pub fn admin_ui_rejects_invalid_binds_test() {
-  let assert config.Invalid(_) =
-    admin_ui_for(Some("not-an-address"), None, Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(Some("256.0.0.1"), None, Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(Some("127.0.0.1:8080"), None, Some(test_password))
-  let assert config.Invalid(_) =
-    admin_ui_for(Some("   "), None, Some(test_password))
+/// 範囲外や数値でない `ADMIN_PORT` は、値を含む理由で拒否する。範囲を検証しないと
+/// 待ち受け開始時に badarg でクラッシュする。
+pub fn parse_port_rejects_invalid_values_test() {
+  assert config.parse_port(Some("not-a-port"))
+    == Error(
+      "ADMIN_PORT must be an integer between 1 and 65535, got \"not-a-port\"",
+    )
+  assert config.parse_port(Some("0"))
+    == Error("ADMIN_PORT must be an integer between 1 and 65535, got \"0\"")
+  assert config.parse_port(Some("-1"))
+    == Error("ADMIN_PORT must be an integer between 1 and 65535, got \"-1\"")
+  assert config.parse_port(Some("65536"))
+    == Error("ADMIN_PORT must be an integer between 1 and 65535, got \"65536\"")
+  assert config.parse_port(Some(" abc "))
+    == Error("ADMIN_PORT must be an integer between 1 and 65535, got \"abc\"")
 }
 
 /// 管理 UI を待ち受けるのに `ADMIN_PASSWORD` が未設定か空なら、起動を中止する
@@ -336,15 +334,19 @@ pub fn admin_password_is_read_from_a_file_test() {
 }
 
 /// 管理 UI を待ち受けない構成（空の `ADMIN_PORT`、不正な `ADMIN_PORT`、不正な
-/// `ADMIN_BIND`）では `ADMIN_PASSWORD` を求めない。
+/// `ADMIN_BIND`）では `ADMIN_PASSWORD` を求めず、不正な設定は `parse_port` と
+/// `parse_bind` の理由で報告する。
 pub fn admin_ui_without_a_listener_needs_no_password_test() {
   assert admin_ui_for(None, Some(""), None) == config.Disabled
-  let assert config.Invalid(_) = admin_ui_for(None, Some("not-a-port"), None)
-  let assert config.Invalid(_) =
-    admin_ui_for(Some("not-an-address"), None, None)
+  let assert Error(port_reason) = config.parse_port(Some("not-a-port"))
+  assert admin_ui_for(None, Some("not-a-port"), None)
+    == config.Invalid(port_reason)
+  let assert Error(bind_reason) = config.parse_bind(Some("not-an-address"))
+  assert admin_ui_for(Some("not-an-address"), None, None)
+    == config.Invalid(bind_reason)
 }
 
-/// `ADMIN_BIND` は未設定と空文字列ならループバックのみ。前後の空白は落とす。
+/// `load` は `ADMIN_BIND` を読む。未設定と空文字列ならループバックのみ。
 /// ページに secret が載るため、外部へ出すのは明示的な設定にする。
 pub fn admin_bind_test() {
   let assert config.Listen(config.AdminListen(bind:, ..)) =
@@ -356,12 +358,36 @@ pub fn admin_bind_test() {
   let assert config.Listen(config.AdminListen(bind:, ..)) =
     admin_ui_for(Some("0.0.0.0"), None, Some(test_password))
   assert bind == "0.0.0.0"
-  let assert config.Listen(config.AdminListen(bind:, ..)) =
-    admin_ui_for(Some(" ::1 "), None, Some(test_password))
-  assert bind == "::1"
-  let assert config.Listen(config.AdminListen(bind:, ..)) =
-    admin_ui_for(Some("localhost"), None, Some(test_password))
-  assert bind == "localhost"
+}
+
+/// `ADMIN_BIND` は未設定ならループバックのみ。`"localhost"` と IPv4 / IPv6 の
+/// アドレスは前後の空白を落とした値になる。
+pub fn parse_bind_test() {
+  assert config.parse_bind(None) == Ok("127.0.0.1")
+  assert config.parse_bind(Some("0.0.0.0")) == Ok("0.0.0.0")
+  assert config.parse_bind(Some(" ::1 ")) == Ok("::1")
+  assert config.parse_bind(Some("localhost")) == Ok("localhost")
+}
+
+/// `"localhost"` と IPv4 / IPv6 のアドレス以外の `ADMIN_BIND` は、値を含む理由で
+/// 拒否する。検証しないと待ち受け開始時に panic する。
+pub fn parse_bind_rejects_invalid_values_test() {
+  assert config.parse_bind(Some("not-an-address"))
+    == Error(
+      "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \"not-an-address\"",
+    )
+  assert config.parse_bind(Some("256.0.0.1"))
+    == Error(
+      "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \"256.0.0.1\"",
+    )
+  assert config.parse_bind(Some("127.0.0.1:8080"))
+    == Error(
+      "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \"127.0.0.1:8080\"",
+    )
+  assert config.parse_bind(Some("   "))
+    == Error(
+      "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \"\"",
+    )
 }
 
 /// `ADMIN_BASE_URL` は未設定なら None。末尾のスラッシュは、承認ページのパスと
@@ -439,22 +465,32 @@ fn dedup_capacity_for(raw: Option(String)) -> Result(Int, String) {
   config.load().dedup_capacity
 }
 
-/// `DEDUP_CAPACITY` は未設定と空文字列なら既定の 4096、整数なら前後の空白を
-/// 落とした値。下限の 1 も受け取る。
+/// `load` は `DEDUP_CAPACITY` を読む。未設定と空文字列なら既定の 4096。
 pub fn dedup_capacity_test() {
   assert dedup_capacity_for(None) == Ok(4096)
   assert dedup_capacity_for(Some("")) == Ok(4096)
   assert dedup_capacity_for(Some("100")) == Ok(100)
-  assert dedup_capacity_for(Some(" 100 ")) == Ok(100)
-  assert dedup_capacity_for(Some("1")) == Ok(1)
 }
 
-/// 0 以下や数値でない `DEDUP_CAPACITY` は起動を中止する理由にする。容量が 1
-/// 未満だとウィンドウが毎回の挿入で世代を切り替え、重複排除が効かなくなるため。
-pub fn dedup_capacity_rejects_invalid_values_test() {
-  let assert Error(_) = dedup_capacity_for(Some("0"))
-  let assert Error(_) = dedup_capacity_for(Some("-1"))
-  let assert Error(_) = dedup_capacity_for(Some("abc"))
+/// `DEDUP_CAPACITY` は未設定なら既定の 4096、整数なら前後の空白を落とした値。
+/// 下限の 1 も受け取る。
+pub fn parse_capacity_test() {
+  assert config.parse_capacity(None) == Ok(4096)
+  assert config.parse_capacity(Some("100")) == Ok(100)
+  assert config.parse_capacity(Some(" 100 ")) == Ok(100)
+  assert config.parse_capacity(Some("1")) == Ok(1)
+}
+
+/// 1 未満や数値でない `DEDUP_CAPACITY` は、値を含む理由で拒否する。
+pub fn parse_capacity_rejects_invalid_values_test() {
+  assert config.parse_capacity(Some("0"))
+    == Error("DEDUP_CAPACITY must be an integer of at least 1, got \"0\"")
+  assert config.parse_capacity(Some("-1"))
+    == Error("DEDUP_CAPACITY must be an integer of at least 1, got \"-1\"")
+  assert config.parse_capacity(Some("abc"))
+    == Error("DEDUP_CAPACITY must be an integer of at least 1, got \"abc\"")
+  assert config.parse_capacity(Some("  "))
+    == Error("DEDUP_CAPACITY must be an integer of at least 1, got \"\"")
 }
 
 /// 復元の検査に使う、他のテストが読まない環境変数の名前。

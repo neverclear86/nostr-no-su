@@ -96,7 +96,7 @@ pub fn load() -> Config {
         "PLUGIN_CONSOLE_LOGGER_ENABLED",
         optional("PLUGIN_CONSOLE_LOGGER_ENABLED"),
       ),
-      dedup_capacity: dedup_capacity(),
+      dedup_capacity: parse_capacity(optional("DEDUP_CAPACITY")),
     )
   list.each(secret_names, envoy.unset)
   loaded
@@ -151,13 +151,16 @@ pub fn parse_enabled(
   }
 }
 
-/// 監視の重複排除が記憶する直近のイベント id の件数。未設定と空文字列は既定値。
-/// 0 以下と数値でない値は、起動を中止する理由にする。
-fn dedup_capacity() -> Result(Int, String) {
-  case optional("DEDUP_CAPACITY") {
+/// 監視の重複排除が記憶する直近のイベント id の件数を読む。`None`（未設定か空。
+/// `optional/1` が空文字列も `None` にする）は既定値、整数は前後の空白を落とした
+/// 値にする。1 未満と数値でない値は、起動を中止する理由にする（`window` は
+/// `capacity` が 1 以上であることを前提とする）。値は秘密ではないので理由に
+/// 含めてよい。
+pub fn parse_capacity(raw: Option(String)) -> Result(Int, String) {
+  case raw {
     None -> Ok(default_dedup_capacity)
-    Some(raw) -> {
-      let trimmed = string.trim(raw)
+    Some(value) -> {
+      let trimmed = string.trim(value)
       case int.parse(trimmed) {
         Ok(capacity) if capacity >= 1 -> Ok(capacity)
         _ ->
@@ -243,27 +246,35 @@ fn plugin_env() -> Dict(String, String) {
   })
 }
 
-/// 管理 UI の設定。`ADMIN_PORT` が未設定なら既定ポートを使う。他の任意設定と違い
-/// 未設定と空文字列で意味が分かれるのは、既定で有効な設定を明示的に切れるように
-/// するため。範囲外の値をそのまま渡すと待ち受け開始時に badarg でクラッシュする
-/// ので、ここで弾く。待ち受けるときの bind とパスワードは `listening_admin_ui`
-/// が読む。
+/// 管理 UI の設定。`ADMIN_PORT` を `parse_port` で読む。待ち受けるときの bind と
+/// パスワードは `listening_admin_ui` が読む。
 fn admin_ui() -> AdminUi {
-  case envoy.get("ADMIN_PORT") {
-    Error(Nil) -> listening_admin_ui(default_admin_port)
-    Ok(raw) ->
-      case string.trim(raw) {
-        "" -> Disabled
-        trimmed ->
-          case int.parse(trimmed) {
-            Ok(port) if port >= 1 && port <= 65_535 -> listening_admin_ui(port)
-            _ ->
-              Invalid(
-                "ADMIN_PORT must be an integer between 1 and 65535, got \""
-                <> trimmed
-                <> "\"",
-              )
-          }
+  case parse_port(option.from_result(envoy.get("ADMIN_PORT"))) {
+    Ok(Some(port)) -> listening_admin_ui(port)
+    Ok(None) -> Disabled
+    Error(reason) -> Invalid(reason)
+  }
+}
+
+/// 管理 UI の待ち受けポートを読む。`raw` は `ADMIN_PORT` の値で、他の任意設定と違い
+/// 空文字列を未設定にしない。`None`（未設定）は既定のポート、前後の空白を落として
+/// 空になる値は `Ok(None)`（明示的な無効化）、1〜65535 の整数はそのポートにする。
+/// それ以外は理由にする。未設定と空文字列で意味を分けるのは、既定で有効な設定を
+/// 明示的に切れるようにするため。範囲外の値をそのまま渡すと待ち受け開始時に
+/// badarg でクラッシュするので、ここで弾く。値は秘密ではないので理由に含めてよい。
+pub fn parse_port(raw: Option(String)) -> Result(Option(Int), String) {
+  case option.map(raw, string.trim) {
+    None -> Ok(Some(default_admin_port))
+    Some("") -> Ok(None)
+    Some(trimmed) ->
+      case int.parse(trimmed) {
+        Ok(port) if port >= 1 && port <= 65_535 -> Ok(Some(port))
+        _ ->
+          Error(
+            "ADMIN_PORT must be an integer between 1 and 65535, got \""
+            <> trimmed
+            <> "\"",
+          )
       }
   }
 }
@@ -273,7 +284,7 @@ fn admin_ui() -> AdminUi {
 /// 空、または `ADMIN_PASSWORD_FILE` を読めなければ、起動を中止する理由を返す。
 /// パスワードは自動生成しない。
 fn listening_admin_ui(port: Int) -> AdminUi {
-  case admin_bind(), secret("ADMIN_PASSWORD") {
+  case parse_bind(optional("ADMIN_BIND")), secret("ADMIN_PASSWORD") {
     Error(reason), _ -> Invalid(reason)
     Ok(bind), Ok(Some(password)) -> Listen(AdminListen(bind:, port:, password:))
     Ok(_), Ok(None) ->
@@ -284,21 +295,21 @@ fn listening_admin_ui(port: Int) -> AdminUi {
   }
 }
 
-/// 管理 UI が bind するアドレス。未設定と空文字列（`optional/1` が `None` に
-/// する）は既定のループバックにする。前後の空白は落とす。空白だけの値を含め、
-/// `"localhost"` と IPv4 / IPv6 のアドレス以外は待ち受け開始時に panic するので、
-/// ここで理由にして弾く。値は秘密ではないので理由に含めてよい。
-fn admin_bind() -> Result(String, String) {
-  case optional("ADMIN_BIND") {
+/// 管理 UI が bind するアドレスを読む。`None`（未設定か空。`optional/1` が空文字列も
+/// `None` にする）は既定のループバックにする。前後の空白は落とす。空白だけの値を
+/// 含め、`"localhost"` と IPv4 / IPv6 のアドレス以外は待ち受け開始時に panic する
+/// ので、理由にして弾く。値は秘密ではないので理由に含めてよい。
+pub fn parse_bind(raw: Option(String)) -> Result(String, String) {
+  case raw {
     None -> Ok(default_admin_bind)
     Some(value) -> {
-      let raw = string.trim(value)
-      case raw == "localhost" || result.is_ok(parse_ip_address(raw)) {
-        True -> Ok(raw)
+      let address = string.trim(value)
+      case address == "localhost" || result.is_ok(parse_ip_address(address)) {
+        True -> Ok(address)
         False ->
           Error(
             "ADMIN_BIND must be \"localhost\" or an IPv4/IPv6 address, got \""
-            <> raw
+            <> address
             <> "\"",
           )
       }
@@ -307,6 +318,6 @@ fn admin_bind() -> Result(String, String) {
 }
 
 /// `value` を IPv4 か IPv6 のアドレスとして読む。読めなければ `Error(Nil)`。
-/// `admin_bind` は成否だけを見るので、読めた値は `Dynamic` のまま受け取る。
+/// `parse_bind` は成否だけを見るので、読めた値は `Dynamic` のまま受け取る。
 @external(erlang, "nostr_no_su_ffi", "parse_ip_address")
 fn parse_ip_address(value: String) -> Result(Dynamic, Nil)
