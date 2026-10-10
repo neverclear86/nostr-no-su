@@ -393,9 +393,9 @@ pub fn render(
 }
 
 /// `render` と同じダッシュボードに `dialog` を開いた状態で描く。自動の読み込み直しはしない。
-/// 操作する行の一覧を得られなければその理由を、得られて行が無ければ `RelayNotFound` か
-/// `AccountNotFound` を `Error` で返す。権限の編集のダイアログだけは、行が一覧に無くても
-/// `Error` にせず、開いたダイアログの無いダッシュボードを描く。
+/// 行の操作のダイアログ（リレー、アカウント、読み込めなかった行）は、その行の一覧を得られなければ
+/// その理由を、得られて行が無ければ `RelayNotFound` か `AccountNotFound` を `Error` で返す。ほかの
+/// ダイアログは `Error` にせず、権限の編集はセッションの行が無ければ開いたダイアログの無いダッシュボードを描く。
 pub fn render_open(
   language: Language,
   theme: view.Theme,
