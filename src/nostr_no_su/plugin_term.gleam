@@ -29,10 +29,17 @@ pub fn export_label(function: String, arity: Int) -> String {
 /// であることだけ**で、要素数は見ない。要素数を条件に入れると
 /// `{error, A, B}` の扱いを別途決めることになる。
 pub fn is_error_tuple(value: Dynamic) -> Bool {
-  case decode.run(value, decode.at([0], atom.decoder())) {
-    Ok(tag) -> atom.to_string(tag) == "error"
+  case decode.run(value, decode.at([0], decode.dynamic)) {
+    Ok(tag) -> atom_name(tag) == Ok("error")
     Error(_) -> False
   }
+}
+
+/// atom の名前。atom でなければ `Error(Nil)`。
+pub fn atom_name(value: Dynamic) -> Result(String, Nil) {
+  decode.run(value, atom.decoder())
+  |> result.map(atom.to_string)
+  |> result.replace_error(Nil)
 }
 
 /// `{error, Reason}` の `Reason` を binary として読む。要素 1 が無ければ `Error(None)`、

@@ -191,22 +191,18 @@ fn read_restart(
   raw: Dynamic,
   label: String,
 ) -> Result(supervision.Restart, String) {
-  case plugin_term.lookup(raw, AtomKey, "restart") {
-    None -> Ok(supervision.Permanent)
-    Some(value) ->
-      case atom_name(value) {
-        Ok("permanent") -> Ok(supervision.Permanent)
-        Ok("transient") -> Ok(supervision.Transient)
-        Ok("temporary") -> Ok(supervision.Temporary)
-        _ ->
-          Error(
-            label
-            <> ": unsupported restart ("
-            <> describe_term(value)
-            <> "); use permanent, transient or temporary",
-          )
-      }
-  }
+  read_choice(
+    raw,
+    "restart",
+    label,
+    supervision.Permanent,
+    [
+      #("permanent", supervision.Permanent),
+      #("transient", supervision.Transient),
+      #("temporary", supervision.Temporary),
+    ],
+    "permanent, transient or temporary",
+  )
 }
 
 /// `shutdown`。`brutal_kill` は `ChildSpecification` が表現できないので拒否する
@@ -219,7 +215,7 @@ fn read_shutdown(
   case plugin_term.lookup(raw, AtomKey, "shutdown") {
     None -> Ok(None)
     Some(value) ->
-      case decode.run(value, decode.int), atom_name(value) {
+      case decode.run(value, decode.int), plugin_term.atom_name(value) {
         Ok(ms), _ if ms >= 0 -> Ok(Some(After(ms)))
         _, Ok("infinity") -> Ok(Some(Infinity))
         _, _ ->
@@ -235,20 +231,41 @@ fn read_shutdown(
 
 /// `type`。既定は `worker`。
 fn read_kind(raw: Dynamic, label: String) -> Result(Kind, String) {
-  case plugin_term.lookup(raw, AtomKey, "type") {
-    None -> Ok(Worker)
+  read_choice(
+    raw,
+    "type",
+    label,
+    Worker,
+    [#("worker", Worker), #("supervisor", Supervisor)],
+    "worker or supervisor",
+  )
+}
+
+/// atom の値を名前で選ぶ任意のキー `key` を読む。キーが無ければ `default`、atom の名前が
+/// `choices` にあればその値、それ以外は `<label>: unsupported <key> (<値>); use <hint>`
+/// の理由。
+fn read_choice(
+  raw: Dynamic,
+  key: String,
+  label: String,
+  default: a,
+  choices: List(#(String, a)),
+  hint: String,
+) -> Result(a, String) {
+  case plugin_term.lookup(raw, AtomKey, key) {
+    None -> Ok(default)
     Some(value) ->
-      case atom_name(value) {
-        Ok("worker") -> Ok(Worker)
-        Ok("supervisor") -> Ok(Supervisor)
-        _ ->
-          Error(
-            label
-            <> ": unsupported type ("
-            <> describe_term(value)
-            <> "); use worker or supervisor",
-          )
-      }
+      plugin_term.atom_name(value)
+      |> result.try(list.key_find(choices, _))
+      |> result.replace_error(
+        label
+        <> ": unsupported "
+        <> key
+        <> " ("
+        <> describe_term(value)
+        <> "); use "
+        <> hint,
+      )
   }
 }
 
@@ -264,13 +281,6 @@ fn check_supervisor_shutdown(
       Error(label <> ": supervisor children must use shutdown => infinity")
     _, _ -> Ok(Nil)
   }
-}
-
-/// atom を文字列として読む。atom でなければ `Error`。
-fn atom_name(value: Dynamic) -> Result(String, Nil) {
-  decode.run(value, atom.decoder())
-  |> result.replace_error(Nil)
-  |> result.map(atom.to_string)
 }
 
 /// 検証済みの子仕様をスーパービジョンツリーの子仕様にする。
