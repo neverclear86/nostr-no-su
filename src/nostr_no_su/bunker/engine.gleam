@@ -118,7 +118,7 @@ pub type Write {
   /// `insert_session_evicting`。`evicted` は押し出す（署名者, クライアント）の組。
   InsertSession(session: Session, evicted: List(SessionKey))
   /// `delete_session`。
-  DeleteSession(signer: String, client: String)
+  DeleteSession(key: SessionKey)
   /// `touch_session`。`session` は最終利用を進めた後の行の全列。
   TouchSession(session: Session)
   /// `update_session_perms`。`session` は `perms` を差し替えた後の行の全列。
@@ -292,14 +292,10 @@ pub fn find_account(engine: Engine, signer: String) -> Result(Account, Nil) {
   |> result.map(fn(entry) { entry.0 })
 }
 
-/// 署名者とクライアントの組の承認済みセッション。承認されていない組なら
+/// 署名者とクライアントの組 `key` の承認済みセッション。承認されていない組なら
 /// `Error(Nil)`。
-pub fn find_session(
-  engine: Engine,
-  signer: String,
-  client: String,
-) -> Result(Session, Nil) {
-  dict.get(engine.sessions, SessionKey(signer:, client:))
+pub fn find_session(engine: Engine, key: SessionKey) -> Result(Session, Nil) {
+  dict.get(engine.sessions, key)
 }
 
 /// 承認済みセッションの一覧。辞書の走査順は未定義なので、表示とテストが安定し、
@@ -321,15 +317,13 @@ pub fn sessions(engine: Engine) -> List(Session) {
 /// なら `Error(Nil)` を返す。
 pub fn revoke(
   engine: Engine,
-  signer: String,
-  client: String,
+  key: SessionKey,
 ) -> Result(#(Engine, Write), Nil) {
-  let key = SessionKey(signer:, client:)
   case dict.has_key(engine.sessions, key) {
     True ->
       Ok(#(
         Engine(..engine, sessions: dict.delete(engine.sessions, key)),
-        DeleteSession(signer: signer, client: client),
+        DeleteSession(key:),
       ))
     False -> Error(Nil)
   }
@@ -339,11 +333,9 @@ pub fn revoke(
 /// `max_perms_bytes` に収める。承認されていない組なら `Error(Nil)` を返す。
 pub fn set_perms(
   engine: Engine,
-  signer: String,
-  client: String,
+  key: SessionKey,
   perms: String,
 ) -> Result(#(Engine, Write), Nil) {
-  let key = SessionKey(signer:, client:)
   case dict.get(engine.sessions, key) {
     Ok(session) -> {
       let bounded = bounded_perms(perms)
@@ -829,9 +821,9 @@ fn outcome(
 /// 最終利用を書く。戻り値の第 2 要素は権限の不足で拒否した権限で、拒否して
 /// いない実行では `None`。
 ///
-/// `logout` はセッションの有無によらず ack を返す。NIP-46 は応答を ack と定め、
-/// クライアント（nostr-tools の `BunkerSigner`）は ack 以外の応答で購読の後
-/// 始末を止めるためである。セッションが無い組では状態を変えない。
+/// `logout` はセッションの有無によらず、書き込みに失敗したときも ack を返す。NIP-46 は
+/// 応答を ack と定め、クライアント（nostr-tools の `BunkerSigner`）は ack 以外の応答で
+/// 購読の後始末を止めるためである。セッションが無い組では状態を変えない。
 fn execute(
   engine: Engine,
   account: Account,
@@ -841,17 +833,15 @@ fn execute(
   inputs: Inputs,
 ) -> #(Execution, Option(Permission)) {
   let signer = pubkey_hex(account)
+  let key = SessionKey(signer:, client:)
   case request.method {
     "connect" -> #(
       connect(engine, signer, secret, client, request, inputs),
       None,
     )
-    // 承認されていない組の `logout` も、状態を変えずに ack を返す（再起動や
-    // 取り消しの後のクライアントを例外にしないため）。
     "logout" -> {
       let ack = rpc.ok(request.id, "ack")
-      let execution = case revoke(engine, signer, client) {
-        // 書けなくても ack を返す（クライアントの後始末を止めないため）。
+      let execution = case revoke(engine, key) {
         Ok(#(next, write)) ->
           Record(write:, next:, response: ack, on_failure: ack)
         Error(Nil) -> Respond(ack)
@@ -859,7 +849,7 @@ fn execute(
       #(execution, None)
     }
     _ ->
-      case dict.get(engine.sessions, SessionKey(signer:, client:)) {
+      case dict.get(engine.sessions, key) {
         Error(Nil) -> #(
           Respond(rpc.error(request.id, "unauthorized: send connect first")),
           None,

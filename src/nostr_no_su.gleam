@@ -345,8 +345,13 @@ fn write_session_state(
         evicted: evicted,
         timeouts:,
       )
-    engine.DeleteSession(signer:, client:) ->
-      account_store.delete_session(db, signer:, client:, timeouts:)
+    engine.DeleteSession(key: pair) ->
+      account_store.delete_session(
+        db,
+        signer: pair.signer,
+        client: pair.client,
+        timeouts:,
+      )
     engine.TouchSession(session:) ->
       account_store.touch_session(db, key, session: session, timeouts:)
     engine.UpdateSessionPerms(session:) ->

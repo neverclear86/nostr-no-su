@@ -637,9 +637,10 @@ fn response_session_relays(
   engines: List(engine.Engine),
   response: Event,
 ) -> List(String) {
-  let client = delivery.recipient(response)
+  let key =
+    SessionKey(signer: response.pubkey, client: delivery.recipient(response))
   engines
-  |> list.find_map(engine.find_session(_, response.pubkey, client))
+  |> list.find_map(engine.find_session(_, key))
   |> result.map(fn(session) { session.relays })
   |> result.unwrap([])
 }
@@ -910,32 +911,36 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       ))
     ReleaseSessionRelays(signer:, client:) ->
       update_reserved(state, dict.delete(_, SessionKey(signer:, client:)))
-    Revoke(signer:, client:, reply:) ->
+    Revoke(signer:, client:, reply:) -> {
+      let key = SessionKey(signer:, client:)
       apply_session_change(
         state,
         reply,
         Revocation,
-        session_target(state.engine, signer, client),
+        session_target(state.engine, key),
         now,
         fn(eng) {
-          engine.revoke(eng, signer, client)
+          engine.revoke(eng, key)
           |> result.map(without_response)
           |> result.replace_error(session_not_approved)
         },
       )
-    UpdatePerms(signer:, client:, perms:, reply:) ->
+    }
+    UpdatePerms(signer:, client:, perms:, reply:) -> {
+      let key = SessionKey(signer:, client:)
       apply_session_change(
         state,
         reply,
         PermissionsUpdate,
-        session_target(state.engine, signer, client),
+        session_target(state.engine, key),
         now,
         fn(eng) {
-          engine.set_perms(eng, signer, client, perms)
+          engine.set_perms(eng, key, perms)
           |> result.map(without_response)
           |> result.replace_error(session_not_approved)
         },
       )
+    }
     SetPublisher(relay_url, scope, publish) ->
       actor.continue(
         State(
@@ -1458,14 +1463,10 @@ fn pending_target(
 
 /// 承認済みのセッションにある組ならその組、無ければ `None`（フォームの値を
 /// ログに出さないため）。
-fn session_target(
-  eng: engine.Engine,
-  signer: String,
-  client: String,
-) -> Option(SessionKey) {
-  engine.find_session(eng, signer, client)
+fn session_target(eng: engine.Engine, key: SessionKey) -> Option(SessionKey) {
+  engine.find_session(eng, key)
   |> option.from_result
-  |> option.map(fn(_found) { SessionKey(signer:, client:) })
+  |> option.map(fn(_found) { key })
 }
 
 /// 成功（`Ok`）か失敗（`Error` の理由）1 件のログ行。値は署名者とクライアントの公開鍵と
@@ -1592,10 +1593,7 @@ fn incoming_write_change(
       PendingRecording,
       Some(pending_key(pending)),
     )
-    engine.DeleteSession(signer:, client:) -> #(
-      SessionClosing,
-      Some(SessionKey(signer:, client:)),
-    )
+    engine.DeleteSession(key:) -> #(SessionClosing, Some(key))
     engine.ApprovePending(session:, ..) -> #(
       Approval,
       Some(session_key(session)),
