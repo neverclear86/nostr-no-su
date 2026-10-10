@@ -163,7 +163,7 @@ fn resume_since(
 /// since, until)` の一覧にする。`since` はランナーのメモリの再開点があれば
 /// それを、無ければ `load_plugin` で読む保存済みの値を使う。再開点が未保存の
 /// 要求は落とす（取り直す範囲が決まらない）。1 つでも読めなければ全体を
-/// `Error(Nil)` にする。テストが直接呼べるよう公開する。
+/// `Error(Nil)` にする。
 pub fn catchup_since(
   catchups: List(#(String, plugin_runner.Catchup)),
   load_plugin: fn(String) -> Result(Option(Int), String),

@@ -281,7 +281,6 @@ fn bunker_spec(
 /// 追加の `db.Duplicate` は `bunker.AlreadyStored` に写し、バンカーに読み直させる。
 /// `load` は `lock_pool` で advisory lock を取り直してから `load_snapshot` を読み、結果を
 /// `halt_if_cannot_continue` に通す。`write` は `write_session_state` に写す。
-/// 期限を受け取るのは、統合テストが負荷の高い環境でも収まる期限を渡せるようにするためである。
 pub fn account_store_operations(
   pool: Name(pog.Message),
   lock_pool: Name(pog.Message),
@@ -383,8 +382,7 @@ fn write_session_state(
 /// 移行を含む `load_within` の後に `relay_store.list` を読み（`relays` は移行で
 /// 作られるので順を変えない）、バンカーの読み込みの結果にする。MAC の合わない行
 /// （`Stored.rejected`）は使わず、トランザクションを抜けた後に 1 行ずつ warning
-/// で出す（`vault.describe_rejected`）。統合テストがロックを通さずに呼べるよう
-/// 公開する。
+/// で出す（`vault.describe_rejected`）。
 pub fn load_snapshot(
   pool: Name(pog.Message),
   key: vault.MasterKey,
