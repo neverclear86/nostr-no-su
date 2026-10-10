@@ -694,7 +694,7 @@ fn context() -> admin.Context {
     update_perms: fn(_signer, updated_client, _perms) {
       updating_perms(updated_client)
     },
-    pending: fn() {
+    pending: fn(_now) {
       Ok([
         dashboard.PendingRow(
           token: "tok-1",
@@ -750,7 +750,7 @@ pub fn main() -> Nil {
       ..context(),
       accounts: fn() { Error(unavailable_reason) },
       skipped: fn() { Error(unavailable_reason) },
-      pending: fn() { Error(unavailable_reason) },
+      pending: fn(_now) { Error(unavailable_reason) },
       sessions: fn() { Error(unavailable_reason) },
     )
   let empty =
@@ -762,14 +762,14 @@ pub fn main() -> Nil {
       plugins: fn(_deadline) { [] },
       not_loaded_plugins: [],
       sessions: fn() { Ok([]) },
-      pending: fn() { Ok([]) },
+      pending: fn(_now) { Ok([]) },
     )
   let readme =
     admin.Context(
       ..context(),
       accounts: fn() { Ok([row(signer, signer_npub, "main account")]) },
       skipped: fn() { Ok([]) },
-      pending: fn() { Ok([]) },
+      pending: fn(_now) { Ok([]) },
       relays: fn(_deadline) {
         Ok(
           preview_relay_rows([
