@@ -158,29 +158,22 @@ pub fn the_themes_carry_the_fingerprint_colors_test() {
   )
 }
 
-/// ページの `class` 属性に現れるクラス名。値はエスケープされて `"` を含まないので、次の `"` までが
-/// 属性値である。
+/// ページの `class` 属性に現れるクラス名。
 fn classes(page: String) -> List(String) {
   page
-  |> string.split(" class=\"")
-  |> list.drop(1)
-  |> list.flat_map(fn(rest) {
-    let assert Ok(#(value, _)) = string.split_once(rest, "\"")
-    string.split(value, " ")
-  })
+  |> tagged_classes
+  |> list.flat_map(fn(tagged) { tagged.1 })
 }
 
-/// ページの開始タグごとの、要素名と `class` 属性のクラス名。`class` 属性の無い要素は含めない。
-/// テキストと属性値はエスケープされて `<` と `>` を含まないので、`<` から次の `>` までが
-/// 開始タグである。
+/// ページのタグごとの、要素名と `class` 属性のクラス名。`class` 属性の無い要素は含めない。
 fn tagged_classes(page: String) -> List(#(String, List(String))) {
   page
-  |> string.split("<")
-  |> list.filter_map(fn(chunk) {
-    use #(tag, _) <- result.try(string.split_once(chunk, ">"))
-    use #(name, attributes) <- result.try(string.split_once(tag, " "))
-    use #(_, rest) <- result.try(string.split_once(attributes, "class=\""))
-    use #(value, _) <- result.map(string.split_once(rest, "\""))
+  |> admin_ui.html_tags
+  |> list.filter_map(fn(tag) {
+    use #(name, _) <- result.try(string.split_once(tag.0, " "))
+    use value <- result.map(
+      list.first(admin_ui.attribute_values(tag.0, "class")),
+    )
     #(name, string.split(value, " "))
   })
 }
