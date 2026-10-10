@@ -4,15 +4,12 @@
 //// これによりルートはアクターを起動せずにテストでき、描画は「スナップショット →
 //// HTML」の純粋関数（`admin/dashboard`）に閉じ込められる。
 ////
-//// 認証は HTTP Basic（ユーザー名 `admin`）で、`/healthz` 以外のルートに掛ける。資格情報は
-//// ブラウザーが自動で送るため、GET と HEAD 以外の要求は認証の前に `Origin`（無ければ
-//// `Referer`）と `Host` を突き合わせて CSRF から守り（`require_same_origin`）、認証済みの
-//// 応答には `protect` のヘッダーを付ける。
-//// 認証の失敗の扱い（ログ、遅延、ロックアウト）は docs/architecture.md の「管理 UI のルート」にある。
-////
-//// 表示の言語とテーマは認証の後に決める（`request_language`、`request_theme`）。それより前の
-//// 応答（401 など）と HTML を返す相手がいない応答（`/healthz` など）は text/plain の英語で返し、
-//// CSRF の検査で弾いた 400 だけは cookie と `Accept-Language` から決めた通知ページにする。
+//// 認証は HTTP Basic で、`/healthz` 以外のルートに掛ける。要求は `reject_control_headers`、
+//// `require_same_origin`、`require_password` の順に通す（`/healthz` は最後の 1 つを通らない）。
+//// この順序は変えない（`reject_control_headers` の Doc に理由がある）。認証の前の応答と
+//// `/healthz` は text/plain の英語で返し、通知ページにするのは `require_same_origin` の 400
+//// だけである。認証の失敗の扱い（ログ、遅延、ロックアウト）は docs/architecture.md の
+//// 「管理 UI のルート」にある。
 
 import gleam/bit_array
 import gleam/bool
@@ -63,17 +60,17 @@ pub const log_prefix = "admin"
 /// 通知ページから切り替えた後に開くパス。404 / 405 / フォームの値の 400 と、承認・拒否や
 /// 変更の結果の通知ページはすべてここへ戻す（Origin の不一致の 400 は `view.NoSwitch` で
 /// 切り替えを出さない）。
-const return_to_dashboard = view.SwitchReturningTo("/")
+fn return_to_dashboard() -> view.NavbarSwitch {
+  view.SwitchReturningTo(routes.path(routes.ShowDashboard))
+}
 
 /// Basic 認証のユーザー名。設定するのはパスワードだけにする。
 const username = "admin"
 
-/// 接続元の IP が分からないときにログ行に入れる表示。ツリーに渡す `Context` の初期値
-/// にも使う。
+/// 接続元の IP が分からないときにログ行に入れる表示。
 pub const unknown_client_address = "an unknown address"
 
-/// 本番で管理パスワードの照合に失敗した応答の前に挟む遅延（ミリ秒）。`app` が
-/// `Context` の `authentication_delay` でこの長さだけ眠る。
+/// 本番で管理パスワードの照合に失敗した応答の前に挟む遅延（ミリ秒）。
 pub const authentication_failure_delay = 1000
 
 /// 401 応答で提示する認証領域。
@@ -325,11 +322,8 @@ fn listening_url(address: mist.IpAddress, port: Int) -> String {
   "http://" <> host <> ":" <> int.to_string(port)
 }
 
-/// リクエストを 1 件処理する。`Host`、`Origin`、`Referer` に制御文字を含む要求は
-/// 最初に text/plain の 400 で弾く（`reject_control_headers`）。`/healthz` だけ認証
-/// なしで通し、それ以外は Basic 認証を通ってから、表示の言語を決めてルーティングする。
-/// Basic 認証の資格情報はブラウザーが自動送信するため、別オリジンのフォームからの
-/// POST は通知ページの 400 で弾く（`require_same_origin`）。
+/// リクエストを 1 件処理する。`/healthz` だけ認証なしで通し、それ以外は認証を通ってから、
+/// 表示の言語を決めてルーティングする。認証の前の検査の順序はモジュール Doc にある。
 pub fn handle_request(context: Context, request: Request) -> Response {
   use <- wisp.rescue_crashes
   use request <- wisp.handle_head(request)
@@ -346,8 +340,9 @@ pub fn handle_request(context: Context, request: Request) -> Response {
   }
 }
 
-/// 別オリジンのフォームから送られた POST を通知ページの 400 で弾く。`Origin` も
-/// `Referer` も無いリクエスト（curl 等）は通る。
+/// 別オリジンのフォームから送られた POST を通知ページの 400 で弾く。Basic 認証の資格情報は
+/// ブラウザーが自動で送るので、GET と HEAD 以外の要求は認証の前に `Origin`（無ければ
+/// `Referer`）と `Host` を突き合わせる。`Origin` も `Referer` も無いリクエスト（curl 等）は通る。
 ///
 /// `wisp.csrf_known_header_protection` を 2 回使う。1 回目は `next` を素通りの応答に
 /// して検査の結果だけを得て、400 なら通知ページを返す。400 でなければ 2 回目に本物の
@@ -410,11 +405,15 @@ type Handling {
     language: Language,
     /// 表示のテーマ（`request_theme` で決めた値）。
     theme: view.Theme,
+    /// 要求を受けた時点の時刻（Unix 秒）。1 つの要求の中で時刻をそろえるため、`route` が 1 回だけ
+    /// 読む。
+    now: Int,
   )
 }
 
-/// 認証済みのルート。表示の言語とテーマを決めて要求ごとの値（`Handling`）を作り、パスの解析の
-/// 結果（`routes.parse`）の構築子でハンドラーを選ぶ。解析できないパスは 404 の通知ページにする。
+/// 認証済みのルート。表示の言語とテーマを決め、時刻を読んで要求ごとの値（`Handling`）を作り、
+/// パスの解析の結果（`routes.parse`）の構築子でハンドラーを選ぶ。解析できないパスは 404 の通知
+/// ページにする。
 fn route(
   context: Context,
   request: Request,
@@ -426,6 +425,7 @@ fn route(
       request:,
       language: request_language(request),
       theme: request_theme(request),
+      now: time.now_seconds(),
     )
   case parsed {
     Ok(routes.ShowDashboard) -> show_dashboard(handling)
@@ -497,7 +497,7 @@ fn failure_page(
   dashboard.notice_page(
     handling.language,
     handling.theme,
-    return_to_dashboard,
+    return_to_dashboard(),
     title,
     message,
     view.Failure,
@@ -551,11 +551,10 @@ fn healthz(request: Request) -> Response {
   wisp.ok() |> wisp.string_body("ok")
 }
 
-/// 管理 UI の静的ファイル（ビルドした `priv/static/admin.css` と、手で書く
-/// `priv/static/admin.js`）。ページと同じく認証の後に置くので、`protect` のヘッダーが付き、
-/// ブラウザーは保存しない（更新しても古いファイルが残らない）。パスが `routes.Stylesheet` か
-/// `routes.Script` に解析されたときだけ届き、`serve_static` は要求のパスを `priv` からの
-/// 相対パスとしてファイルを引く。無いファイルは 404 の通知ページ、GET 以外は `text/plain` の
+/// 管理 UI の静的ファイル（スタイルシートとスクリプト）。ページと同じく認証の後に置くので、
+/// `protect` のヘッダーが付き、ブラウザーは保存しない（更新しても古いファイルが残らない）。
+/// パスが `routes.Stylesheet` か `routes.Script` に解析されたときだけ届き、ファイルの配置は
+/// `routes.Stylesheet` の規則に従う。無いファイルは 404 の通知ページ、GET 以外は `text/plain` の
 /// 405（CSS と JS への GET 以外は管理 UI から送られない）にする。
 fn static_file(handling: Handling) -> Response {
   use <- wisp.require_method(handling.request, http.Get)
@@ -644,7 +643,7 @@ fn return_path(raw: String) -> String {
         string.split_once(rest, "?") |> result.unwrap(#(rest, ""))
       return_segments(path) <> return_query(query)
     }
-    _ -> "/"
+    _ -> routes.path(routes.ShowDashboard)
   }
 }
 
@@ -670,20 +669,20 @@ fn return_query(query: String) -> String {
   }
 }
 
-/// ダッシュボードの 6 つの節に共通の締め切り。plugins と relays は内側の問い合わせを
-/// この締め切りで直に待つので、`snapshot` はこの 2 つを呼び出し元のプロセスで走らせる。
+/// ダッシュボードの 6 つの節に共通の締め切り。
 const snapshot_deadline_ms = 5000
 
-/// ダッシュボードが表示する状態を共通の締め切りの下で集める。plugins と relays を別プロセスの
-/// `await` で包むと、内側の問い合わせと外側の `await` の締め切りが同時に切れ、間に合った行
-/// だけを出す動きが観測できなくなるので、この 2 つは呼び出し元のプロセスで走らせる。
+/// ダッシュボードが表示する状態を共通の締め切りの下で集める。`now` は要求の時点の Unix 秒で、
+/// スナップショットの `now` と承認待ちの一覧の問い合わせに渡す。plugins と relays を別プロセスの
+/// `await` で包むと、内側の問い合わせと外側の `await` の締め切りが同時に切れ、間に合った行だけを
+/// 出す動きが観測できなくなるので、この 2 つは呼び出し元のプロセスで走らせる。
 pub fn snapshot(
   context: Context,
   deadline: task.Deadline,
+  now: Int,
 ) -> dashboard.Snapshot {
   let accounts = task.start(context.accounts)
   let skipped = task.start(context.skipped)
-  let now = time.now_seconds()
   let pending = task.start(fn() { context.pending(now) })
   let sessions = task.start(context.sessions)
   let plugins = context.plugins(deadline)
@@ -697,6 +696,15 @@ pub fn snapshot(
     plugins:,
     not_loaded_plugins: context.not_loaded_plugins,
     now:,
+  )
+}
+
+/// 要求の時刻と共通の締め切りで集めたスナップショット。
+fn current_snapshot(handling: Handling) -> dashboard.Snapshot {
+  snapshot(
+    handling.context,
+    task.deadline_in(snapshot_deadline_ms),
+    handling.now,
   )
 }
 
@@ -714,15 +722,15 @@ fn within(awaited: Result(Result(a, String), Nil)) -> Result(a, i18n.Reason) {
 /// ダッシュボード。表示に必要な状態をここで集め、描画は純粋関数へ渡す。
 fn show_dashboard(handling: Handling) -> Response {
   use <- require_method(handling, http.Get)
-  snapshot(handling.context, task.deadline_in(snapshot_deadline_ms))
+  current_snapshot(handling)
   |> dashboard.render(handling.language, handling.theme, _)
   |> wisp.html_response(200)
 }
 
 /// プラグインが供給するページ。GET はページの記述を描き、POST はフォームの送信を実行する。
 /// プラグイン名とページのキーを照合できなければメソッドによらず 404、アクションの無い POST と
-/// GET・POST 以外のメソッドは 405 を返す。プラグインの一覧（`snapshot_deadline_ms`）、アカウントの
-/// 一覧（`bunker.accounts`）、ページの呼び出し（`call_timeout_ms`）が既定で各 5 秒の直列で、最悪 15 秒かかる。
+/// GET・POST 以外のメソッドは 405 を返す。プラグインの一覧、アカウントの一覧、ページの呼び出しは
+/// 直列に待ち、それぞれ自分の期限で打ち切る。全体の期限は付けない。
 fn plugin_page(handling: Handling, name: String, key: String) -> Response {
   use row <- with_row(
     handling,
@@ -774,7 +782,7 @@ fn plugin_page_get(
         handling.theme,
         row,
         page,
-        time.now_seconds(),
+        handling.now,
         sections,
       )
       |> wisp.html_response(200)
@@ -828,7 +836,7 @@ pub fn normalize_newlines(value: String) -> String {
 fn approve_connection(handling: Handling, token: String) -> Response {
   case handling.request.method {
     http.Get -> {
-      use entry, now <- with_pending(handling, token)
+      use entry <- with_pending(handling, token)
       let accounts =
         result.map_error(handling.context.accounts(), i18n.Untranslated)
       wisp.html_response(
@@ -836,14 +844,14 @@ fn approve_connection(handling: Handling, token: String) -> Response {
           handling.language,
           handling.theme,
           accounts,
-          now,
+          handling.now,
           entry,
         ),
         200,
       )
     }
     http.Post -> {
-      use _entry, _now <- with_pending(handling, token)
+      use _entry <- with_pending(handling, token)
       redirect_home_or(
         handling.context.approve(token),
         session_failure_response(handling, _),
@@ -857,7 +865,7 @@ fn approve_connection(handling: Handling, token: String) -> Response {
 /// `session_failure_response` に渡す。
 fn deny_connection(handling: Handling, token: String) -> Response {
   use <- require_method(handling, http.Post)
-  use _entry, _now <- with_pending(handling, token)
+  use _entry <- with_pending(handling, token)
   redirect_home_or(handling.context.deny(token), session_failure_response(
     handling,
     _,
@@ -867,17 +875,15 @@ fn deny_connection(handling: Handling, token: String) -> Response {
 /// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
 /// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
 /// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧に無いので
-/// 404 になる。404 の理由は失効の可能性を含む訳した文。`next` には行と、一覧の問い合わせに
-/// 渡した時刻（`Context.pending` の引数）を渡す。
+/// 404 になる。404 の理由は失効の可能性を含む訳した文。一覧は要求の時刻（`Handling.now`）で引く。
 fn with_pending(
   handling: Handling,
   token: String,
-  next: fn(dashboard.PendingRow, Int) -> Response,
+  next: fn(dashboard.PendingRow) -> Response,
 ) -> Response {
-  let now = time.now_seconds()
   use rows <- with_rows(
     handling,
-    handling.context.pending(now),
+    handling.context.pending(handling.now),
     i18n.BunkerNotAvailable,
   )
   with_row(
@@ -885,7 +891,7 @@ fn with_pending(
     rows,
     fn(entry) { entry.token == token },
     i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
-    next(_, now),
+    next,
   )
 }
 
@@ -909,10 +915,10 @@ fn revoke_session(handling: Handling) -> Response {
     list.key_find(form.values, dashboard.client_field)
   {
     Ok(signer), Ok(client) ->
-      case handling.context.revoke(signer, client) {
-        Ok(Nil) -> wisp.redirect(to: "/")
-        Error(failure) -> session_failure_response(handling, failure)
-      }
+      redirect_home_or(
+        handling.context.revoke(signer, client),
+        session_failure_response(handling, _),
+      )
     _, _ -> bad_request(handling)
   }
 }
@@ -970,12 +976,16 @@ fn session_permissions(
   case assembled_perms(submitted) {
     Error(message) -> redraw(i18n.Translated(message), 400)
     Ok(perms) ->
-      case handling.context.update_perms(signer, client, perms) {
-        Ok(Nil) -> wisp.redirect(to: "/")
-        Error(bunker.SessionNotApplied(reason)) ->
-          redraw(i18n.Untranslated(reason), 409)
-        Error(failure) -> session_failure_response(handling, failure)
-      }
+      redirect_home_or(
+        handling.context.update_perms(signer, client, perms),
+        fn(failure) {
+          case failure {
+            bunker.SessionNotApplied(reason) ->
+              redraw(i18n.Untranslated(reason), 409)
+            _ -> session_failure_response(handling, failure)
+          }
+        },
+      )
   }
 }
 
@@ -1026,7 +1036,7 @@ fn assembled_perms(
         form.sign_event
         || form.nip44_encrypt
         || form.nip44_decrypt
-        || { !form.sign_event && !list.is_empty(kinds) }
+        || !list.is_empty(kinds)
       case meaningful {
         False -> Error(i18n.SelectAtLeastOne)
         True -> Ok(perms_string(form, kinds))
@@ -1193,16 +1203,16 @@ fn connect_failure_response(
   outcome: Result(Nil, NostrconnectFailure),
   redraw: fn(i18n.Reason, Int) -> Response,
 ) -> Response {
-  case outcome {
-    Ok(Nil) -> wisp.redirect(to: "/")
-    Error(RelayNotConnected) ->
+  use failure <- redirect_home_or(outcome)
+  case failure {
+    RelayNotConnected ->
       redraw(i18n.Translated(i18n.NostrconnectRelayNotConnected), 503)
-    Error(SessionNotOpened(bunker.SessionNotFound(reason)))
-    | Error(SessionNotOpened(bunker.SessionNotApplied(reason))) ->
+    SessionNotOpened(bunker.SessionNotFound(reason))
+    | SessionNotOpened(bunker.SessionNotApplied(reason)) ->
       redraw(i18n.Untranslated(reason), 409)
-    Error(SessionNotOpened(bunker.SessionNotReady(reason))) ->
+    SessionNotOpened(bunker.SessionNotReady(reason)) ->
       redraw(i18n.Untranslated(reason), 503)
-    Error(SessionNotOpened(bunker.SessionMaybeApplied(cause))) ->
+    SessionNotOpened(bunker.SessionMaybeApplied(cause)) ->
       maybe_applied_notice(handling, cause, 202)
   }
 }
@@ -1215,10 +1225,10 @@ fn reenable_plugin(handling: Handling) -> Response {
   use form <- wisp.require_form(handling.request)
   case list.key_find(form.values, dashboard.plugin_name_field) {
     Ok(plugin) ->
-      case handling.context.reenable_plugin(plugin) {
-        Ok(Nil) -> wisp.redirect(to: "/")
-        Error(failure) -> reenable_failure_response(handling, failure)
-      }
+      redirect_home_or(
+        handling.context.reenable_plugin(plugin),
+        reenable_failure_response(handling, _),
+      )
     Error(Nil) -> bad_request(handling)
   }
 }
@@ -1245,11 +1255,11 @@ fn reenable_failure_response(
 /// 303。バンカーが応答しないときは 503 の「バンカーを利用できません」。
 fn reload_accounts(handling: Handling) -> Response {
   use <- require_method(handling, http.Post)
-  case handling.context.reload_accounts() {
-    Ok(Nil) -> wisp.redirect(to: "/")
-    Error(reason) ->
-      unavailable_notice(handling, i18n.BunkerNotAvailable, reason)
-  }
+  redirect_home_or(handling.context.reload_accounts(), unavailable_notice(
+    handling,
+    i18n.BunkerNotAvailable,
+    _,
+  ))
 }
 
 /// 鍵を生成し、生成した鍵のダイアログを開いたダッシュボードで nsec を 1 回だけ表示する。ここでは
@@ -1465,7 +1475,7 @@ fn redirect_home_or(
   on_error: fn(failure) -> Response,
 ) -> Response {
   case outcome {
-    Ok(Nil) -> wisp.redirect(to: "/")
+    Ok(Nil) -> wisp.redirect(to: routes.path(routes.ShowDashboard))
     Error(failure) -> on_error(failure)
   }
 }
@@ -1477,10 +1487,13 @@ fn dialog_response(
   dialog: dashboard.OpenDialog,
   status: Int,
 ) -> Response {
-  let snapshot =
-    snapshot(handling.context, task.deadline_in(snapshot_deadline_ms))
   case
-    dashboard.render_open(handling.language, handling.theme, snapshot, dialog)
+    dashboard.render_open(
+      handling.language,
+      handling.theme,
+      current_snapshot(handling),
+      dialog,
+    )
   {
     Ok(html) -> wisp.html_response(html, status)
     Error(reason) ->
@@ -1554,31 +1567,33 @@ fn relay_action(
 ) -> Response {
   use <- require_method(handling, http.Post)
   use relay <- with_relay(handling, id)
-  let redraw = fn(roles) {
-    fn(reason, status) {
-      dialog_response(
-        handling,
-        dashboard.RelayActionOpen(id, action, roles, reason),
-        status,
-      )
-    }
+  let redraw = fn(roles, reason, status) {
+    dialog_response(
+      handling,
+      dashboard.RelayActionOpen(id, action, roles, reason),
+      status,
+    )
   }
   case action {
     routes.EditRelayRoles -> {
       use form <- wisp.require_form(handling.request)
       case relay_roles(form) {
-        Error(reason) -> redraw(None)(i18n.Translated(reason), 400)
+        Error(reason) -> redraw(None, i18n.Translated(reason), 400)
         Ok(roles) ->
           redirect_home_or(
             handling.context.update_relay_roles(relay, roles),
-            relay_failure_response(handling, _, redraw(Some(roles))),
+            relay_failure_response(handling, _, fn(reason, status) {
+              redraw(Some(roles), reason, status)
+            }),
           )
       }
     }
     routes.DeleteRelay ->
       redirect_home_or(
         handling.context.delete_relay(relay),
-        relay_failure_response(handling, _, redraw(None)),
+        relay_failure_response(handling, _, fn(reason, status) {
+          redraw(None, reason, status)
+        }),
       )
   }
 }
@@ -1609,26 +1624,24 @@ fn registered_account_action(
   row: dashboard.AccountRow,
   action: routes.AccountAction,
 ) -> Response {
-  let redraw = fn(label) {
-    fn(reason, status) {
-      dialog_response(
-        handling,
-        dashboard.AccountActionOpen(row.signer, action, label, reason),
-        status,
-      )
-    }
+  let redraw = fn(reason, status) {
+    dialog_response(
+      handling,
+      dashboard.AccountActionOpen(row.signer, action, None, reason),
+      status,
+    )
   }
   case action {
-    routes.EditLabel -> update_label(handling, row, redraw)
+    routes.EditLabel -> update_label(handling, row)
     routes.RotateSecret ->
       redirect_home_or(
         handling.context.rotate_secret(row.signer),
-        change_failure_response(handling, _, redraw(None)),
+        change_failure_response(handling, _, redraw),
       )
     routes.DeleteAccount ->
       redirect_home_or(
         handling.context.remove_account(row.signer),
-        change_failure_response(handling, _, redraw(None)),
+        change_failure_response(handling, _, redraw),
       )
     routes.RevealPrivateKey -> reveal_private_key(handling, row)
   }
@@ -1681,20 +1694,28 @@ fn unreadable_account_action(
 
 /// ラベルの差し替え。ラベルが規則に反すれば 400 でラベルの編集のダイアログを開いて返す。400 と 409 の
 /// ダイアログの欄には送られた値を入れる。
-fn update_label(
-  handling: Handling,
-  row: dashboard.AccountRow,
-  redraw: fn(Option(String)) -> fn(i18n.Reason, Int) -> Response,
-) -> Response {
+fn update_label(handling: Handling, row: dashboard.AccountRow) -> Response {
   use form <- wisp.require_form(handling.request)
   let raw_label = form_value(form, dashboard.label_field)
   let echoed_label = Some(without_control_characters(raw_label))
+  let redraw = fn(reason, status) {
+    dialog_response(
+      handling,
+      dashboard.AccountActionOpen(
+        row.signer,
+        routes.EditLabel,
+        echoed_label,
+        reason,
+      ),
+      status,
+    )
+  }
   case parse_label(raw_label) {
-    Error(reason) -> redraw(echoed_label)(i18n.Translated(reason), 400)
+    Error(reason) -> redraw(i18n.Translated(reason), 400)
     Ok(label) ->
       redirect_home_or(
         handling.context.update_label(row.signer, label),
-        change_failure_response(handling, _, redraw(echoed_label)),
+        change_failure_response(handling, _, redraw),
       )
   }
 }
@@ -1798,7 +1819,7 @@ fn not_confirmed_notice(
   dashboard.notice_page(
     handling.language,
     handling.theme,
-    return_to_dashboard,
+    return_to_dashboard(),
     i18n.ChangeNotConfirmed,
     reason,
     view.Warning,
@@ -1826,7 +1847,7 @@ fn unavailable_reason_notice(
   dashboard.notice_page(
     handling.language,
     handling.theme,
-    return_to_dashboard,
+    return_to_dashboard(),
     title,
     reason,
     view.Warning,
@@ -1979,7 +2000,7 @@ fn basic_credentials(header: String) -> Result(#(String, String), Nil) {
 }
 
 /// 入力されたパスワードが管理パスワードと一致するか。一致した文字数が応答時間に
-/// 現れないよう定数時間で比べる。Basic 認証と秘密鍵の再表示の両方が使う。
+/// 現れないよう定数時間で比べる。
 fn is_admin_password(offered: String, password: String) -> Bool {
   crypto.secure_compare(
     bit_array.from_string(offered),
