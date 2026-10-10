@@ -17,7 +17,7 @@ import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{Loaded}
 import nostr_no_su/db
 import nostr_no_su/named
-import nostr_no_su/nostr/event.{type Event}
+import nostr_no_su/nostr/event
 import nostr_no_su/nostr/message
 import nostr_no_su/time
 import support/app_tree.{
@@ -25,13 +25,13 @@ import support/app_tree.{
   Inserted, LabelUpdated, Opened, ReadRows, Retrying, Subscribed, WriteRows,
   Wrote, accounts_only, await_connection, await_signers, bunker_spec,
   call_counter, client_key, committed_but_timed_out_store, connect_request,
-  connect_request_from, deliver_and_expect, discard_resume_points,
-  drain_subscriptions, event_labels, expect_published, fake_open,
-  fixed_retry_delay, forwarding_spec, idle_monitor, load_signer, memory_store,
-  other_client_key, other_signer_key, receive_until, request, response_body,
-  response_result, secret, signed_request, signer_key, start_database,
-  start_loading_bunker_tree, start_tree_with_relays, stop_tree, store_failure,
-  store_with_load, stored_signer, test_relay_url,
+  connect_request_between, connect_request_from, deliver_and_expect,
+  discard_resume_points, drain_until_quiet, event_labels, expect_published,
+  fake_open, fixed_retry_delay, forwarding_spec, idle_monitor, load_signer,
+  memory_store, other_client_key, other_signer_key, receive_until, request,
+  response_body, response_result, secret, signed_request, signer_key,
+  start_database, start_loading_bunker_tree, start_tree_with_relays, stop_tree,
+  store_failure, store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 import support/poll
@@ -60,35 +60,7 @@ fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
 
 /// `duration_ms` の間に届いたメッセージの件数。
 fn count_within(subject: Subject(Nil), duration_ms: Int) -> Int {
-  count_until(subject, time.monotonic_ms() + duration_ms, 0)
-}
-
-/// 期限までに届いたメッセージを数える。
-fn count_until(subject: Subject(Nil), deadline: Int, count: Int) -> Int {
-  let remaining = deadline - time.monotonic_ms()
-  case remaining > 0 && process.receive(subject, remaining) == Ok(Nil) {
-    True -> count_until(subject, deadline, count + 1)
-    False -> count
-  }
-}
-
-/// すでに届いているメッセージを捨てる。
-fn drain(subject: Subject(Nil)) -> Nil {
-  case process.receive(subject, 0) {
-    Ok(Nil) -> drain(subject)
-    Error(Nil) -> Nil
-  }
-}
-
-/// テスト用のクライアントから、指定した署名者宛に secret 付きで送る `connect`。
-fn connect_request_to(signer_key_hex: String, id: String) -> Event {
-  let signer = account_for(signer_key_hex)
-  nip46_client.request_event(
-    account_for(client_key),
-    signer,
-    nip46_client.connect_body(signer, secret, id),
-    time.now_seconds(),
-  )
+  list.length(receive_until(subject, fn(_) { False }, duration_ms).0)
 }
 
 /// 読み込みが遅くても、接続が最初に開く購読には読み込んだ署名者が入る。
@@ -180,7 +152,7 @@ pub fn retries_do_not_multiply_across_restarts_test() {
   process.kill(killed)
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
-  drain(calls)
+  drain_until_quiet(calls, 0)
   let after = count_within(calls, counted_retries_window_ms)
   assert after * 2 <= before * 3
   stop_tree(tree)
@@ -210,7 +182,7 @@ pub fn a_reload_during_loading_adds_no_series_test() {
 
   assert bunker.reload_accounts(name) == Ok(Nil)
   assert bunker.reload_accounts(name) == Ok(Nil)
-  drain(calls)
+  drain_until_quiet(calls, 0)
   let after = count_within(calls, counted_retries_window_ms)
   assert after * 2 <= before * 3
   stop_tree(tree)
@@ -331,7 +303,7 @@ pub fn a_restarted_bunker_reloads_the_accounts_test() {
     await_connection(reports)
   assert bunker.signers(name)
     == Some([account.pubkey_hex(account_for(other_signer_key))])
-  deliver(connect_request_to(other_signer_key, "c1"))
+  deliver(connect_request_between(client_key, other_signer_key, "c1", secret))
   let ack = expect_published(reports, 2000)
   let body =
     nip46_client.decrypt_response(
@@ -646,7 +618,7 @@ pub fn a_failed_write_changes_nothing_test() {
     await_connection(reports)
   let assert Ok(Subscribed(_relay_url, [message.Req(..)])) =
     process.receive(subscribed, 2000)
-  drain_subscriptions(subscribed, 200)
+  drain_until_quiet(subscribed, 200)
   let listed =
     Ok([
       bunker.Listing(
@@ -817,7 +789,7 @@ pub fn a_timed_out_signer_query_does_not_close_live_subscriptions_test() {
     await_connection(reports)
   let assert Ok(Subscribed(_relay_url, [message.Req(..)])) =
     process.receive(subscribed, 2000)
-  drain_subscriptions(subscribed, 200)
+  drain_until_quiet(subscribed, 200)
   let assert Ok(actor) = process.named(name)
 
   process.spawn(fn() {
@@ -1211,7 +1183,7 @@ pub fn removing_a_skipped_row_deletes_it_test() {
     )
   let assert Opened(_relay_url, _connection, _socket, _deliver) =
     await_connection(reports)
-  drain_subscriptions(subscribed, 200)
+  drain_until_quiet(subscribed, 200)
   let assert Ok([skipped_row]) = bunker.skipped(name)
   assert skipped_row.pubkey == skipped_pubkey
 
