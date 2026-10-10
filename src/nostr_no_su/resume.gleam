@@ -65,8 +65,7 @@ pub fn points(resume: Resume) -> Dict(String, Int) {
   resume.points
 }
 
-/// `current` のうち、`saved` と値が違うリレーの再開点。表示とテストが安定するよう
-/// URL の順に並べる。
+/// `current` のうち、`saved` と値が違うリレーの再開点。URL の順に並べる。
 pub fn unsaved(
   saved: Dict(String, Int),
   current: Dict(String, Int),

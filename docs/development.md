@@ -13,6 +13,16 @@ CI と Docker イメージはどちらも Gleam 1.19.1 / OTP 29 で、検証し�
 
 `gleam test` は test/ 配下のモジュールを 8 本のレーンで同時に走らせる（`test/nostr_no_su_test.gleam` の `lanes`。空いたレーンが次のモジュールを取る。実行器は `test/support/eunit_runner.erl`）。同じモジュールの中のテストは順に走り、同じ DB の advisory lock を取り合う `account_store_test` と `account_reconcile_test` だけは 1 本のレーンでこの順に走る（同じファイルの `ordered_modules`）。gleeunit の main は使っていないが、報告（進捗の点と失敗の一覧）は gleeunit のものをそのまま使う。出力のログの行は別のモジュールのテストのものと入り混じる。壁時間は Postgres と strfry つきで 20 秒ほどで、いちばん長いモジュール（`app_accounts_test`）と、直列に走る `account_store_test` と `account_reconcile_test` のレーンで決まる。
 
+テストの出力には次の行が混ざる。どれも検証したい振る舞いそのものなので、logger の水準を下げず、標準出力も抑えずにそのまま出している。
+
+- `=SUPERVISOR REPORT=`: スーパービジョンツリーの復帰を確かめるテストがアクターやプラグインの子を kill するためと、到達できない DB を使うテストでプール（`pgo_pool_sup`）が接続に失敗するため
+- `=ERROR REPORT=` の `beam_load` の行: プラグインローダーが壊れた BEAM を拒否することを確かめているため
+- `=NOTICE REPORT=`: バンカーの読み込み完了や管理 UI の操作など、アプリ自身が通常運転として出す 1 行ログが OTP logger の notice 水準で出るため
+- `=WARNING REPORT=`: wisp の `csrf_known_header_protection` が出す `Origin-host mismatch`（別オリジンや `Host` の食い違う POST を拒否する管理 UI のテスト）と、バンカー・管理 UI・プラグインが障害や無効化を報告する 1 行ログ
+- アプリの 1 行ログ（`[bunker]`、`[admin]`、`[relay <中継名>]`、`[plugin <プラグイン名>]`、`relay_client_test` の中継名の `[test]`、保存の再試行を報告する `[resume_saver]`）: 障害や変更を起こすテストが本番と同じログの経路を通るため
+- `[account_store]`、`[account_reconcile]`、`[app]`、`[resume_store]`、`[plugin_resume_store]` の skip の行: `TEST_DATABASE_URL` が無いときに統合テストを飛ばしたことを知らせる
+- `coverage:` の行: `COVERAGE` を設定して走らせたときだけ、実行の最後に `src/` のカバレッジの合計を 1 行出すため（この文書の「カバレッジ」）
+
 本体のアカウントストアの統合テストも `TEST_DATABASE_URL` が設定されているときだけ走る（未設定ならスキップして 1 行ログを出す）。CI の `test` ジョブは Postgres を立てて渡す。CI の失敗で push をやり直さないよう、push の前に手元でも通す:
 
 ```sh

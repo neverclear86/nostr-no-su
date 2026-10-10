@@ -67,11 +67,9 @@ import nostr_no_su/task
 import nostr_no_su/time
 import pog
 
-/// リレー接続の開き方。本番では `open_websocket`、テストでは偽ソケットを使い、
-/// ネットワークなしでもツリー全体を動かせるようにする。ハンドラーが受け取るのは
-/// 接続のプロセスで id と署名を確かめたイベントか保存済みイベントの終わり
-/// （`relay_client.Received`）と、発行したイベントへの OK（受理・拒否とも）
-/// である。AUTH の受け口（応答しない接続は `None`）も渡す。
+/// リレー接続の開き方。ハンドラーが受け取るのは接続のプロセスで id と署名を確かめた
+/// イベントか保存済みイベントの終わり（`relay_client.Received`）と、発行したイベントへの
+/// OK（受理・拒否とも）である。AUTH の受け口（応答しない接続は `None`）も渡す。
 pub type Open =
   fn(
     String,
@@ -83,10 +81,8 @@ pub type Open =
 
 /// プラグイン 1 つぶんの仕様。ランナープロセスの名前、プラグイン本体、実行時の
 /// 歯止め。名前は起動時に 1 度だけ作り、ディスパッチャーの宛先と管理 UI の
-/// 問い合わせ先の両方になる。`limits` を仕様に持たせているのは、テストが短い
-/// タイムアウトと小さい失敗上限でツリーごと動かせるようにするためで、プラグイン
-/// 固有の設定から与えるときの受け口にもなる。子プロセスの仕様はここには持たせず、
-/// プラグイン自身（`plugin.children`）が持つ。
+/// 問い合わせ先の両方になる。子プロセスの仕様はここには持たせず、プラグイン自身
+/// （`plugin.children`）が持つ。
 pub type PluginSpec {
   PluginSpec(
     name: Name(plugin_runner.Msg),
@@ -99,10 +95,9 @@ pub type PluginSpec {
 /// ディスパッチャーと、そこへイベントを流し込むリレー群からなる。リレーは
 /// バンカーの読み込みから `OpenRegistered` で届き、実行時の増減には `open_relay`
 /// などを使う。`subscriptions` はリレー URL からそのリレーの購読の定義を返す。
-/// `save_resume` は再開点を小さくせずに保存する操作で、子 `resume_saver` が使う。
-/// `save_plugin_resume` はプラグインごとの再開点を保存する操作で、子
-/// `plugin_resume_saver` が使う。`excludes_kind` が真を返す kind のイベントは
-/// プラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
+/// `save_resume` は再開点を小さくせずに保存する操作、`save_plugin_resume` は
+/// プラグインごとの再開点を保存する操作である。`excludes_kind` が真を返す kind の
+/// イベントはプラグインへ渡さない。`accepts_author` はイベントの作者の pubkey が登録
 /// アカウントのものかを返す述語で、偽になるイベントはプラグインへ渡さない。
 pub type Monitor {
   Monitor(
@@ -134,16 +129,14 @@ pub type Bunker {
   )
 }
 
-/// 動かすプラグインと、起動時に読み込めなかったプラグインの一覧と、バンカーと
-/// 監視、管理 UI を動かすかどうか、接続をどう開くか、接続の再接続の待ち時間、
-/// 実行時のリレーの一覧を持つ `relay_list` の名前。`not_loaded_plugins` は
-/// 起動時に確定し、管理 UI がそのまま出す。
+/// ツリー全体の仕様。`not_loaded_plugins` は起動時に確定する。
 pub type Spec {
   Spec(
     plugins: List(PluginSpec),
     not_loaded_plugins: List(plugin_loader.NotLoaded),
     monitor: Monitor,
     bunker: Bunker,
+    /// `None` なら管理 UI を動かさない。
     admin: Option(config.AdminListen),
     open: Open,
     reconnect_delay: backoff.Backoff,
@@ -693,7 +686,7 @@ fn admin_child(
 /// ャーへ届くので、張り直した購読の `since` はこの時刻を下回らない。バンカーが
 /// 読み込めていなければ知らせずに `NotReady` を返す。時刻が保存済みの再開点を
 /// 追い越し、読み込みの後の購読が停止中のイベントを求めなくなるためである。
-/// アカウントを追加する経路はすべてこの関数を通すこと。管理 UI の Context が使う。
+/// アカウントを追加する経路はすべてこの関数を通すこと。
 ///
 /// `relay_list` が応答しなければ URL を `[]` で知らせる。再開点は引き上がらず、
 /// 張り直した購読は保存済みの再開点から求めるので、起こるのは取りこぼしでは
@@ -892,7 +885,7 @@ pub fn relay_statuses(
   #(name, option.from_result(status))
 }
 
-/// DB の `relays` の全行。読めなければ英語の理由を返す。管理 UI の Context が使う。
+/// DB の `relays` の全行。読めなければ英語の理由を返す。
 pub fn registered_relays(
   spec: Spec,
 ) -> Result(List(relay_store.Relay), String) {
@@ -921,8 +914,7 @@ fn write_then_change(
   |> result.replace_error(admin.ConnectionsNotConfirmed)
 }
 
-/// リレーを DB に登録してから接続を開く。DB に書けなければ接続を開かない。管理 UI の
-/// Context が使う。
+/// リレーを DB に登録してから接続を開く。DB に書けなければ接続を開かない。
 pub fn add_relay(
   spec: Spec,
   url: String,
@@ -935,8 +927,7 @@ pub fn add_relay(
   )
 }
 
-/// 用途を DB に書いてから接続の用途を変える。DB に書けなければ接続を変えない。管理 UI の
-/// Context が使う。
+/// 用途を DB に書いてから接続の用途を変える。DB に書けなければ接続を変えない。
 pub fn update_relay_roles(
   spec: Spec,
   relay: relay_store.Relay,
@@ -949,7 +940,7 @@ pub fn update_relay_roles(
   )
 }
 
-/// 行を DB から消してから接続を閉じる。管理 UI の Context が使う。
+/// 行を DB から消してから接続を閉じる。
 pub fn delete_relay(
   spec: Spec,
   relay: relay_store.Relay,
@@ -1165,14 +1156,12 @@ pub fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
   )
 }
 
-/// 接続 1 本ぶんのハンドラー。どれも第 1 引数に接続の URL を受け取る。`handle_event` は
-/// 受信したイベントと保存済みイベントの終わり、`handle_ok` は発行したイベントへの OK、
-/// `authenticator` は AUTH の受け口（応答しない接続は `None`）、`on_connect` と
-/// `on_disconnect` は接続と切断の通知を受ける。
+/// 接続 1 本ぶんのハンドラー。どれも第 1 引数に接続の URL を受け取る。
 type ConnectionHandlers {
   ConnectionHandlers(
     handle_event: fn(String, Received) -> Nil,
     handle_ok: fn(String, Acknowledgement) -> Nil,
+    /// AUTH の受け口。応答しない接続は `None` を返す。
     authenticator: fn(String) -> Option(Authenticator),
     on_connect: fn(String, Socket) -> Nil,
     on_disconnect: fn(String) -> Nil,
