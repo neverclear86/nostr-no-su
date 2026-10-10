@@ -1,27 +1,15 @@
 //// リレーへの WebSocket 接続 1 本（stratus）。
 ////
 //// 購読は「現在の定義に合わせる」照合で開く。契機は接続直後、張り直しの依頼、
-//// 予約した再試行、リレーの CLOSED である。接続は開いている購読ごとに最後に送った
-//// フィルターを覚える。接続直後と張り直しの依頼では定義を評価し、開いている購読が
-//// 覆わない定義の購読には REQ（同じ id は NIP-01 で置き換え）を、開いていて定義から
-//// 消えた購読には CLOSE を送る。覆うのは `since` 以外が同じで、送った `since` が
-//// 無いか定義の `since` 以下のときで、評価のたびに後ろへ動く `since` では送り直さない。
-//// 定義を得られなかったときは開いている購読を変えずに再試行を予約し、その待ちを
-//// 延ばす。定義を得るたびにこの待ちを初期値に戻す。
+//// 予約した再試行、リレーの CLOSED である。判断は純粋関数 `sync` にあり、stratus の
+//// ループはその結果を送信と予約とログに移すだけである。覆いの規則は `covers`、CLOSED の
+//// 理由ごとの扱いは `forget_closed` にある。詳しくは docs/architecture.md の「監視の購読」。
 ////
-//// CLOSED の扱いは次のとおりである。
-//// - 受けた id を開いている購読から外す。開いていない id の CLOSED は無視する。
-//// - `blocked:`、`restricted:`、AUTH の受け口の無い接続での `auth-required:` は、
-////   その購読を止め、次の再接続（この接続の状態ごと作り直す）か張り直しの依頼まで
-////   張り直さない。
-//// - `rate-limited:` は CLOSED の待ちを上限に上げてから、それ以外の理由はその時点の
-////   CLOSED の待ちで、再試行を予約して張り直し、予約のたびに CLOSED の待ちを延ばす。
-//// - CLOSED の待ちは定義を得られないときの待ちとは別に数え、張り直しの依頼で定義を
-////   得たときだけ初期値に戻す。
+//// 再試行の待ちは、定義を得られないときと CLOSED で別に数え、予約のたびに延ばす。
+//// 定義を得られないときの待ちは定義を得るたびに、CLOSED の待ちは張り直しの依頼で定義を
+//// 得たときだけ初期値に戻す。予約は常に 1 つだけで、予約が残っていれば新たに予約せず、
+//// 世代の合わない再試行のタイマーは定義を評価せずに捨てる。
 ////
-//// 予約は常に 1 つだけで、予約が残っていれば新たに予約せず、世代の合わない再試行の
-//// タイマーは定義を評価せずに捨てる。判断は純粋関数 `sync` にあり、stratus のループは
-//// その結果を送信と予約とログに移すだけである。
 //// 生存確認は一定間隔で受信の有無を確かめ、無ければ ping を送り、それでも受信が
 //// 無ければ自ら接続を止めて `relay_connection` に張り直させる。
 //// AUTH（NIP-42）は受け口があれば応答し、無ければ応答せずログに出す。
@@ -49,9 +37,8 @@ import stratus
 
 /// リレー接続に対する指示。stratus のユーザーメッセージとして送る。
 pub type Msg {
-  /// 購読を現在の定義に合わせる。開いている購読が覆わない定義の購読には REQ を
-  /// 送り（同じ id は置き換えになる）、開いていて定義から消えた購読には CLOSE
-  /// を送る。接続直後と、張り直しの依頼で送る。
+  /// 購読を現在の定義に合わせる（覆いの規則は `covers`）。接続直後と、張り直しの
+  /// 依頼で送る。
   Subscribe
   /// 定義を得られなかった照合か、リレーが閉じた購読の張り直しをやり直す。
   /// relay_client が自分宛てに予約する。generation は予約の世代。
@@ -70,11 +57,10 @@ pub type Msg {
 pub type Client =
   Subject(stratus.InternalMessage(Msg))
 
-/// 開くべき購読を生成するサンク。接続と張り直しのたびに評価するので、時刻に
-/// 依存するフィルター（`since` など）は評価のたびに新しい値になるが、開いて
-/// いる購読が覆う間は REQ を送り直さない（`sync`）。定義を得られないとき
-/// （署名者の問い合わせの失敗など）は `Error`。`Ok([])` は「購読しない」を意味し、
-/// 開いている購読を閉じる。
+/// 開くべき購読を生成するサンク。接続と張り直しのたびに評価するので、時刻に依存する
+/// フィルター（`since` など）は評価のたびに新しい値になる。REQ を送り直すかは `covers`
+/// が決める。定義を得られないとき（署名者の問い合わせの失敗など）は `Error`。
+/// `Ok([])` は「購読しない」を意味し、開いている購読を閉じる。
 pub type Subscriptions =
   fn() -> Result(List(#(String, Filter)), Nil)
 
@@ -301,17 +287,7 @@ pub fn start(
     |> stratus.with_connect_timeout(connect_timeout_ms)
     |> stratus.on_message(fn(session, msg, conn) {
       let link = Link(conn:, prefix:, handlers:, timing:)
-      let session = record_inbound(session, msg)
-      case msg {
-        stratus.User(KeepaliveTick) -> check_keepalive(session, link)
-        stratus.User(Disconnect) -> close_gracefully(session, link)
-        _ ->
-          case handle_message(link, msg) {
-            Some(trigger) -> synchronise(session, trigger, link)
-            None -> session
-          }
-          |> stratus.continue
-      }
+      handle_message(record_inbound(session, msg), msg, link)
     })
     |> stratus.on_close(fn(_session, reason) {
       log.write(
@@ -386,8 +362,8 @@ type Cause {
   ClosedByRelay
 }
 
-/// 照合 1 回ぶんの判断（規則はモジュール Doc）。定義は、捨てる再試行で評価しない
-/// （バンカーへ問い合わせない）ようサンクで受け取る。
+/// 照合 1 回ぶんの判断。定義は、捨てる再試行で評価しない（バンカーへ問い合わせない）
+/// ようサンクで受け取る。
 pub fn sync(
   state: SubscriptionState,
   trigger: Trigger,
@@ -417,9 +393,9 @@ pub fn sync(
   }
 }
 
-/// 定義を評価して照合する。止めた購読（`suspended`）は定義にあっても REQ を
-/// 送らず、開いている購読にも入れない。得られなかったとき、予約が残っていれば
-/// それに任せ、無ければ新しい世代で予約する。定義を得られたときの CLOSED の
+/// 定義を評価し、開いている購読に `covers` の規則で照合する。止めた購読（`suspended`）は
+/// 定義にあっても REQ を送らず、開いている購読にも入れない。得られなかったとき、予約が
+/// 残っていればそれに任せ、無ければ新しい世代で予約する。定義を得られたときの CLOSED の
 /// 次の待ちは `closed_delay_after_success`。
 fn evaluate(
   state: SubscriptionState,
@@ -486,8 +462,12 @@ fn reserve(
   }
 }
 
-/// リレーが閉じた購読を開いている購読から外し、理由の接頭辞で止めるか再試行を予約する
-/// （規則はモジュール Doc）。CLOSE は送らない。
+/// リレーが閉じた購読を開いている購読から外し、理由の接頭辞で止めるか再試行を予約する。
+/// CLOSE は送らない。開いていない id の CLOSED は無視する。
+/// - `blocked:`、`restricted:`、AUTH の受け口の無い接続での `auth-required:` は、その購読を
+///   止め、次の再接続（この接続の状態ごと作り直す）か張り直しの依頼まで張り直さない。
+/// - `rate-limited:` は CLOSED の待ちを上限に上げてから、それ以外の理由はその時点の
+///   CLOSED の待ちで、再試行を予約して張り直す。
 fn forget_closed(
   state: SubscriptionState,
   subscription_id: String,
@@ -525,9 +505,9 @@ fn forget_closed(
   }
 }
 
-/// 定義にある購読のうち開いている購読が覆わないものの REQ と、開いていて定義から消えた
-/// 購読の CLOSE（`close_messages`）と、照合の後に開いている購読。覆う購読は最後に送った
-/// フィルターを残す。REQ は定義の順に並べる。
+/// 定義の購読ごとに覆いの規則（`covers`）で REQ の要否を決め、REQ（定義の順）と、
+/// 開いていて定義から消えた購読の CLOSE（`close_messages`）と、照合の後に開いている
+/// 購読を返す。覆う購読は最後に送ったフィルターを残す。
 fn reconcile(
   open: Dict(String, Filter),
   wanted: List(#(String, Filter)),
@@ -575,29 +555,32 @@ fn covers(sent: Filter, wanted: Filter) -> Bool {
   since_covered && Filter(..sent, since: wanted.since) == wanted
 }
 
-/// 生存確認の刻みと切断の依頼を除くメッセージ 1 件を処理し、照合の契機があれば返す。
-/// 刻みと切断の依頼は `start` の受信ループが先に扱うので、ここでは何もしない。
-fn handle_message(link: Link, msg: stratus.Message(Msg)) -> Option(Trigger) {
+/// stratus が受けたメッセージ 1 件を処理し、プロセスの次の状態を返す。
+fn handle_message(
+  session: Session,
+  msg: stratus.Message(Msg),
+  link: Link,
+) -> stratus.Next(Session, Msg) {
   case msg {
-    stratus.User(Subscribe) -> Some(Requested)
-    stratus.User(RetrySubscribe(generation)) -> Some(Retried(generation))
+    stratus.User(KeepaliveTick) -> check_keepalive(session, link)
+    stratus.User(Disconnect) -> close_gracefully(session, link)
+    stratus.User(Subscribe) ->
+      synchronise(session, Requested, link) |> stratus.continue
+    stratus.User(RetrySubscribe(generation)) ->
+      synchronise(session, Retried(generation), link) |> stratus.continue
     stratus.User(Publish(published)) -> {
       send_message(link.conn, link.prefix, message.Publish(published))
-      None
+      stratus.continue(session)
     }
-    stratus.Text(text) ->
-      handle_text(
-        link.prefix,
-        text,
-        link.handlers.handle_incoming,
-        link.handlers.handle_ok,
-        link.handlers.authenticator,
-        send_message(link.conn, link.prefix, _),
-      )
-    stratus.User(KeepaliveTick)
-    | stratus.User(Disconnect)
-    | stratus.Binary(_)
-    | stratus.Pong(_) -> None
+    stratus.Text(text) -> {
+      let send = send_message(link.conn, link.prefix, _)
+      case handle_text(link.prefix, text, link.handlers, send) {
+        Some(trigger) -> synchronise(session, trigger, link)
+        None -> session
+      }
+      |> stratus.continue
+    }
+    stratus.Binary(_) | stratus.Pong(_) -> stratus.continue(session)
   }
 }
 
@@ -877,19 +860,17 @@ fn classify_closed(reason: String) -> ClosedReason {
 pub fn handle_text(
   prefix: String,
   text: String,
-  handle_incoming: fn(Received) -> Nil,
-  handle_ok: fn(Acknowledgement) -> Nil,
-  authenticator: Option(Authenticator),
+  handlers: Handlers,
   send: fn(message.ClientMessage) -> Nil,
 ) -> Option(Trigger) {
   case interpret(text) {
     Deliver(subscription_id, verified) -> {
-      handle_incoming(ReceivedEvent(subscription_id, verified))
+      handlers.handle_incoming(ReceivedEvent(subscription_id, verified))
       None
     }
     Ended(subscription_id, line) -> {
       log.write(log.Notice, prefix, line)
-      handle_incoming(ReceivedEose(subscription_id))
+      handlers.handle_incoming(ReceivedEose(subscription_id))
       None
     }
     Report(line) -> {
@@ -907,7 +888,7 @@ pub fn handle_text(
         // 受理は発行 1 件につき 1 行増えるだけで何も伝えないため、出力しない。
         True -> Nil
       }
-      handle_ok(ack)
+      handlers.handle_ok(ack)
       None
     }
     Synchronise(trigger, line) -> {
@@ -916,7 +897,7 @@ pub fn handle_text(
     }
     Authenticate(challenge) -> {
       let #(level, line) =
-        describe_auth(answer_auth(authenticator, challenge, send))
+        describe_auth(answer_auth(handlers.authenticator, challenge, send))
       log.write(level, prefix, line)
       None
     }
