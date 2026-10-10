@@ -120,14 +120,16 @@ pub fn supervisor_with_finite_shutdown_is_rejected_test() {
   )
 }
 
-/// 未知の `restart` は、受け取った値をそのまま見せて拒否する。
+/// 未知の `restart` は、受け取った値をそのまま見せ、使える値を並べて拒否する。
 pub fn unknown_restart_is_rejected_test() {
-  assert string.contains(rejected("bad_restart"), "whenever")
+  assert rejected("bad_restart")
+    == "plugin_children/0: child \"store\": unsupported restart (whenever); use permanent, transient or temporary"
 }
 
 /// 未知の `type` も同じ形で拒否する。
 pub fn unknown_type_is_rejected_test() {
-  assert string.contains(rejected("bad_type"), "daemon")
+  assert rejected("bad_type")
+    == "plugin_children/0: child \"store\": unsupported type (daemon); use worker or supervisor"
 }
 
 /// `id` が無ければ、0 起点の連番でどの子かを示す。
