@@ -96,19 +96,21 @@ pub fn describe_start_error_reports_a_timeout_test() {
     == "WebSocket handshake timed out"
 }
 
+/// 購読を持たず、受信もログも何もしない受け口。`Handlers(..silent_handlers(), ...)` で
+/// 差し替えて使う。
+fn silent_handlers() -> relay_client.Handlers {
+  relay_client.Handlers(
+    subscriptions: fn() { Ok([]) },
+    handle_incoming: fn(_event) { Nil },
+    handle_ok: fn(_ack) { Nil },
+    authenticator: None,
+  )
+}
+
 /// 購読の無い `relay_client` を既定の再試行と生存確認の間隔で `url` へ
 /// 起動する。接続の失敗を見るテストが使う。
 fn start_unsubscribed(url: String) -> Result(relay_client.Client, String) {
-  relay_client.start(
-    url,
-    relay_client.Handlers(
-      subscriptions: fn() { Ok([]) },
-      handle_incoming: fn(_event) { Nil },
-      handle_ok: fn(_ack) { Nil },
-      authenticator: None,
-    ),
-    relay_client.default_timing,
-  )
+  relay_client.start(url, silent_handlers(), relay_client.default_timing)
 }
 
 /// `Content-Length` に `length` を宣言し、本文を送らない 400 の応答。
@@ -189,9 +191,7 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   assert relay_client.handle_text(
       "test",
       event_frame(forged),
-      deliver,
-      fn(_ack) { Nil },
-      None,
+      relay_client.Handlers(..silent_handlers(), handle_incoming: deliver),
       fn(_sent) { Nil },
     )
     == None
@@ -200,9 +200,7 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   assert relay_client.handle_text(
       "test",
       event_frame(genuine),
-      deliver,
-      fn(_ack) { Nil },
-      None,
+      relay_client.Handlers(..silent_handlers(), handle_incoming: deliver),
       fn(_sent) { Nil },
     )
     == None
@@ -215,22 +213,21 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
 pub fn handle_text_passes_events_and_eose_with_the_subscription_id_test() {
   let received = process.new_subject()
   let sent = signed_event.new(1, "delivered")
+  let deliver = process.send(received, _)
+  let handlers =
+    relay_client.Handlers(..silent_handlers(), handle_incoming: deliver)
 
   assert relay_client.handle_text(
       "test",
       event_frame(sent),
-      process.send(received, _),
-      fn(_ack) { Nil },
-      None,
+      handlers,
       fn(_sent) { Nil },
     )
     == None
   assert relay_client.handle_text(
       "test",
       eose_frame("sub"),
-      process.send(received, _),
-      fn(_ack) { Nil },
-      None,
+      handlers,
       fn(_sent) { Nil },
     )
     == None
@@ -344,22 +341,15 @@ pub fn interpret_classifies_the_prefix_of_a_closed_test() {
 /// 返さない。
 pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
   let closed = closed_frame("bunker", "rate-limited: slow down")
-  assert relay_client.handle_text(
-      "test",
-      closed,
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
-      fn(_sent) { Nil },
-    )
+  assert relay_client.handle_text("test", closed, silent_handlers(), fn(_sent) {
+      Nil
+    })
     == Some(Closed("bunker", RateLimited))
 
   assert relay_client.handle_text(
       "test",
       notice_frame("x"),
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
+      silent_handlers(),
       fn(_sent) { Nil },
     )
     == None
@@ -428,12 +418,13 @@ pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
   assert relay_client.handle_text(
       "test",
       auth_frame("c1"),
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      Some(fn(received) {
-        process.send(challenges, received)
-        Ok([signed])
-      }),
+      relay_client.Handlers(
+        ..silent_handlers(),
+        authenticator: Some(fn(received) {
+          process.send(challenges, received)
+          Ok([signed])
+        }),
+      ),
       send,
     )
     == None
@@ -444,9 +435,7 @@ pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
   assert relay_client.handle_text(
       "test",
       auth_frame("c1"),
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      None,
+      silent_handlers(),
       send,
     )
     == None
@@ -455,9 +444,10 @@ pub fn handle_text_answers_an_auth_only_with_an_authenticator_test() {
   assert relay_client.handle_text(
       "test",
       auth_frame("c1"),
-      fn(_event) { Nil },
-      fn(_ack) { Nil },
-      Some(fn(_challenge) { Error("no signer") }),
+      relay_client.Handlers(
+        ..silent_handlers(),
+        authenticator: Some(fn(_challenge) { Error("no signer") }),
+      ),
       send,
     )
     == None
