@@ -100,12 +100,9 @@ pub fn dashboard_escapes_account_labels_and_reasons_test() {
   let failing = simulate.read_body(get(with_accounts(Error(script)), "/"))
   assert string.contains(
     failing,
-    "<div class=\"alert alert-soft alert-error text-base-content\">"
-      <> element.to_string(view.tone_icon(view.Failure))
-      <> "<span class=\"wrap-anywhere\"><span lang=\"en\">"
-      <> escaped
-      <> "</span></span></div>",
+    element.to_string(view.alert(view.Failure, [view.untranslated(script)])),
   )
+  assert string.contains(failing, escaped)
   assert !string.contains(failing, script)
 }
 
@@ -189,7 +186,7 @@ pub fn import_rejects_a_registered_account_test() {
   assert string.contains(dialog, "account is already registered")
   assert string.contains(
     dialog,
-    "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
+    "href=\"/\">" <> i18n.text(i18n.English, i18n.Cancel) <> "</a>",
   )
   assert !string.contains(body, signer_nsec)
 }
@@ -900,7 +897,7 @@ pub fn reflected_label_is_escaped_test() {
 /// ダイアログごとに違う。
 pub fn label_inputs_describe_the_limit_without_maxlength_test() {
   let hint = fn(language, hint_id) {
-    "<p class=\"text-muted\" id=\""
+    "id=\""
     <> hint_id
     <> "\">"
     <> i18n.text(language, i18n.LabelHint(max: dashboard.max_label_code_points))
@@ -1304,22 +1301,22 @@ pub fn connection_qr_dialog_shows_a_camera_code_and_a_scanner_code_test() {
 }
 
 /// 2 つの接続 URI は、同じ名前（ダイアログの `id` に `-tab` を付けた値）のラジオボタンを入れた
-/// `tab` のラベルと、その直後の `tab-content` の組で切り替える。CSS の `:checked` で切り替わるので
-/// JS は要らない。既定で選ぶのは secret 入りの URI である。
+/// ラベルで切り替える。ラベルと中身の枠の並びは `view.radio_tabs` のテストが固定する。既定で
+/// 選ぶのは secret 入りの URI である。
 pub fn connection_qr_dialog_switches_the_uris_with_radio_tabs_test() {
   let body = qr_dialog(context())
   let name = qr_dialog_id <> "-tab"
   assert string.contains(
     body,
-    "<label class=\"tab\"><input checked name=\""
+    "<input checked name=\""
       <> name
-      <> "\" type=\"radio\">Connection URI</label><div class=\"tab-content",
+      <> "\" type=\"radio\">Connection URI</label>",
   )
   assert string.contains(
     body,
-    "<label class=\"tab\"><input name=\""
+    "<input name=\""
       <> name
-      <> "\" type=\"radio\">Connection URI (approval)</label><div class=\"tab-content",
+      <> "\" type=\"radio\">Connection URI (approval)</label>",
   )
   assert list.length(string.split(body, "type=\"radio\"")) == 3
 }
