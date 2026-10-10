@@ -73,8 +73,6 @@ pub fn pubkey_hex(account: Account) -> String {
 
 /// 表示用の npub 文字列。
 pub fn npub(account: Account) -> String {
-  // 構築の経路は `from_privkey` だけで、公開鍵は常に 32 バイトなので失敗しない。
-  // 失敗の値は `Error(InvalidLength)` で、鍵を含まない。
   let assert Ok(text) = nip19.encode(account.pubkey, nip19.Npub)
     as "an Account always holds a 32-byte public key"
   text
@@ -83,7 +81,6 @@ pub fn npub(account: Account) -> String {
 /// 秘密鍵を表示するための nsec 文字列。登録の手続きと、管理パスワードを再入力した
 /// 再表示にだけ使う。
 pub fn nsec(account: Account) -> String {
-  // `from_privkey` が 32 バイトであることを検査しているので失敗しない。
   let assert Ok(text) = nip19.encode(secret.reveal(account.privkey), nip19.Nsec)
     as "an Account always holds a 32-byte private key"
   text
