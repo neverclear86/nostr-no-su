@@ -306,9 +306,8 @@ pub fn sessions_can_be_listed_and_revoked_test() {
   stop_tree(tree)
 }
 
-/// #418 の症状。`sign_event:1` のセッションで kind 10002 が `permission denied` に
-/// なり、`bunker.update_perms` で `sign_event:1,sign_event:10002` にすると署名が
-/// 返る。
+/// `sign_event:1` のセッションでは kind 10002 が `permission denied` になり、
+/// `bunker.update_perms` で `sign_event:1,sign_event:10002` にすると署名が返る。
 pub fn session_permissions_can_be_updated_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
@@ -417,7 +416,7 @@ pub fn pending_connections_can_be_approved_test() {
 }
 
 /// 書き込めなかった承認・拒否は、メモリの承認待ちを変えず、応答イベントを発行
-/// しない（#126 の完了条件）。
+/// しない。
 pub fn failed_decisions_keep_the_pending_request_and_publish_nothing_test() {
   let reports = process.new_subject()
   let calls = process.new_subject()
@@ -778,7 +777,7 @@ fn await_loaded(name: Name(bunker.Msg), timeout_ms: Int) -> Bool {
 
 /// 承認の書き込みの結果が曖昧だったときは、承認待ちとセッションを変えずに読み
 /// 直しへ移り、`ack` を発行しない。読み直しが成功した後、同じトークンで承認し
-/// 直すと `Ok` になり、`ack` が 1 回発行される（#220 の方針 1 節）。
+/// 直すと `Ok` になり、`ack` が 1 回発行される。
 pub fn an_unconfirmed_approval_reloads_once_and_can_be_approved_again_test() {
   let reports = process.new_subject()
   let loads = process.new_subject()
@@ -1336,7 +1335,7 @@ fn await_publisher_urls(
 }
 
 /// 基本の組に無いセッションのリレーは、そのセッションの署名者だけの `#p` で購読する
-/// 接続として開き、取り消すと閉じて応答の発行先から外れる（受け入れ条件 2・3）。
+/// 接続として開き、取り消すと閉じて応答の発行先から外れる。
 pub fn a_session_only_relay_subscribes_its_signers_and_closes_on_revoke_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()

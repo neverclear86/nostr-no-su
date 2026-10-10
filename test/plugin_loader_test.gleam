@@ -135,8 +135,7 @@ pub fn load_all_shipment_layout_test() {
   assert loaded.name == "shipment_plugin"
 }
 
-/// 壊れた BEAM は理由付きで飛ばし、同じディレクトリーの他のプラグインは
-/// 従来どおり読み込む。
+/// 壊れた BEAM は理由付きで飛ばし、同じディレクトリーの他のプラグインは読み込む。
 pub fn load_all_broken_beam_test() {
   let fixture = beam_fixture.new("broken")
   let broken = beam_fixture.name(fixture, "aaa")
@@ -546,9 +545,8 @@ pub fn load_all_reports_shadowed_modules_test() {
     decode.run(apply(atom.create(shared), atom.create("value"), []), decode.int)
 }
 
-/// 影に入ったモジュールの報告には、提供元のアプリと版が添えられる（#92 の
-/// 受け入れ条件）。版をハードコードせず、被検コードとは別の経路
-/// （`application:get_key/2`）で得た値と比べる。
+/// 影に入ったモジュールの報告には、提供元のアプリと版が添えられる。版をハードコード
+/// せず、被検コードとは別の経路（`application:get_key/2`）で得た値と比べる。
 pub fn load_all_reports_shadowed_module_versions_test() {
   let fixture = beam_fixture.new("shadow_versions")
   let ebin = ebin_in(fixture, [fixture.module])
@@ -998,7 +996,8 @@ pub fn load_all_rejected_config_test() {
 }
 
 /// 同梱の例（`examples/plugins/counter`）が読み込め、申告した子仕様が解決される
-/// ことを確かめる。文書 §5 が引用している実物がそのまま通ることの裏付けになる。
+/// ことを確かめる。`docs/plugin-api.md` の 5 節が引用している実物がそのまま通ること
+/// の裏付けになる。
 /// `plugin_children/0` は評価するだけで子は起こさないので、`counter_store` は
 /// 登録されない。`file_logger` と同じくモジュール名は固定なので、テスト実行中に
 /// 1 度しか読み込めない。
@@ -1128,7 +1127,7 @@ fn pages_returning(body: String) -> fn(String, String) -> String {
 }
 
 /// `plugin_page_content` の例外は、一覧の検証に影響せず読み込みには成功し、
-/// `ui.content` の呼び出しの `Error` として現れる（決めたこと 8）。
+/// `ui.content` の呼び出しの `Error` として現れる。
 pub fn page_content_crash_test() {
   let fixture = beam_fixture.new("pages_content_crash")
   beam_fixture.compile(
@@ -1191,7 +1190,7 @@ pub fn page_content_timeout_test() {
 }
 
 /// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
-/// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる（受け入れ条件）。
+/// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる。
 /// 打ち切られた呼び出しのプロセスも残らない。
 ///
 /// 期限（`short_call_timeout_ms`）は、使い捨てのプロセスが `plugin_name/0` の先頭で
@@ -1220,8 +1219,7 @@ pub fn load_all_hanging_metadata_test() {
 }
 
 /// 戻らない `-on_load` を持つプラグインは、モジュールの読み込みの時点で理由付き
-/// で読み込まれず、起動は続いて同じディレクトリーの他のプラグインが読み込まれる
-/// （受け入れ条件）。
+/// で読み込まれず、起動は続いて同じディレクトリーの他のプラグインが読み込まれる。
 pub fn load_all_hanging_on_load_test() {
   let fixture = beam_fixture.new("hanging_on_load")
   let hanging = beam_fixture.name(fixture, "aaa")

@@ -1,6 +1,5 @@
-//// `127.0.0.1` の OS が割り当てたポートで待ち受ける、テスト用の WebSocket の
-//// リレー。`relay_client_test`、`plugin_api_test`、`avatars_test` が、クライアントが送った
-//// フレームを見るのに使う。
+//// `127.0.0.1` の OS が割り当てたポートで待ち受け、クライアントが送ったフレームを見る
+//// ための、テスト用の WebSocket のリレー。
 
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int

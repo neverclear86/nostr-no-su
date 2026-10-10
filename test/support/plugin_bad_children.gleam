@@ -1,8 +1,5 @@
 //// `plugin_children/0` が API に合わない子仕様を返す fixture。読み込みが拒否
 //// されることの確認に使う。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}

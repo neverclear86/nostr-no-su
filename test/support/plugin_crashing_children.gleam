@@ -1,8 +1,5 @@
 //// `plugin_children/0` が例外を投げる fixture。壊れたモジュールが本体の起動を
 //// 止めないことの確認に使う。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 

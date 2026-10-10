@@ -1,9 +1,6 @@
 //// `bunker/account_store` と `db` のテスト。純粋な部分は常に、実際の Postgres に対する
 //// 統合テストは `TEST_DATABASE_URL` があるときだけ実行する。
 ////
-//// 同じテーブルには過去の実行が残した行（別の乱数のマスターキーで暗号化された
-//// もの）がありうるので、読み込みの結果はどれも自分が入れた pubkey に絞ってから
-//// 比べる。
 
 import gleam/bit_array
 import gleam/crypto
@@ -318,10 +315,10 @@ pub fn account_changes_without_a_bunker_are_not_answered_test() {
     == Error(bunker.MaybeApplied(bunker.BunkerDidNotRespond))
 }
 
-/// 実際の Postgres に対する統合テスト。追加、読み込み、更新、改ざん、削除を
-/// 一巡させ、最後に自分が入れた行を消す。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。同じ DB に対して `gleam test` を並行実行することは想定して
-/// いない。
+/// 実際の Postgres に対する統合テスト。追加、読み込み、更新、改ざん、削除を一巡させ、
+/// 最後に自分が入れた行を消す。同じテーブルには過去の実行が残した行（別の乱数の
+/// マスターキーで暗号化されたもの）がありうるので、読み込みの結果は自分が入れた pubkey
+/// に絞ってから比べる。同じ DB に対して `gleam test` を並行実行することは想定していない。
 pub fn postgres_round_trip_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   let pool = postgres.start_pool(database_url, None)
@@ -403,8 +400,7 @@ pub fn postgres_round_trip_test() {
 /// 版の記録より前に作られた DB が版 1 として取り込まれ、版が新しい DB は拒否される。
 /// 専用のスキーマで行い、ビルドより新しい版の挿入もそのスキーマの接続に流す。
 /// public の `schema_version` にその版が残ると、以後の `postgres_round_trip_test` の
-/// 読み込みが `SchemaTooNew` で落ちるためである。`TEST_DATABASE_URL` があるとき
-/// だけ実行する。
+/// 読み込みが `SchemaTooNew` で落ちるためである。
 pub fn postgres_schema_version_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -439,8 +435,7 @@ pub fn postgres_schema_version_test() {
 /// は取れない。セッションが解放すると別のセッションが取れる。セッション A、B は
 /// `postgres.start_lock_pool` で起動した 1 本のプールの接続で、番号は乱数にし、他の
 /// 統合テストが取る本番の番号（`db.instance_lock_key`）と衝突しない
-/// ようにする。`TEST_DATABASE_URL` があるときだけ実行する。同じ DB に対して
-/// `gleam test` を並行実行することは想定していない。
+/// ようにする。同じ DB に対して `gleam test` を並行実行することは想定していない。
 pub fn postgres_instance_lock_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   let key = int.random(1_000_000_000)
@@ -491,7 +486,7 @@ pub fn postgres_resume_store_test() {
 
 /// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
 /// 読み書きできることは、`plugin_resume` が版 5 の移行で作られることの確認を
-/// 兼ねる。`TEST_DATABASE_URL` があるときだけ実行する。
+/// 兼ねる。
 pub fn postgres_plugin_resume_store_test() {
   use database_url <- postgres.with_test_database_url("plugin_resume_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -516,7 +511,6 @@ pub fn postgres_plugin_resume_store_test() {
 }
 
 /// 2 つのテーブルの再開点は、同じキーでも互いに影響しない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_resume_store_tables_are_separate_test() {
   use database_url <- postgres.with_test_database_url("resume_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -535,7 +529,7 @@ pub fn postgres_resume_store_tables_are_separate_test() {
 
 /// 版 2 の DB（`bunker_accounts` と `monitor_resume` はあるがセッションと承認待ちの
 /// テーブルは無い）に版 3 の移行が適用でき、読み込んだ `sessions` と `pending` は
-/// 空になる。`TEST_DATABASE_URL` があるときだけ実行する。
+/// 空になる。
 pub fn postgres_migrates_a_version_two_database_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -559,7 +553,6 @@ pub fn postgres_migrates_a_version_two_database_test() {
 /// セッションと承認待ちの読み書きを一巡させる。空の DB への版 3 の適用、書いた値を
 /// 読み直すと同じ内容で戻ること、同じ主キーの 2 回の挿入がエラーにならないこと、
 /// `approve`、アカウントの削除でその署名者の行が消えることを確かめる。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_bunker_state_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -791,7 +784,6 @@ pub fn postgres_bunker_state_test() {
 /// MAC の合わない行は読み込みに使われず `Stored.rejected` に分けられ、
 /// `load_snapshot` が 1 行ずつ warning で出す。列の改ざん、別の行の MAC の移植、
 /// MAC の無い行（移行前の行が残ったときの形）はどれも使われない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_rows_with_a_mismatched_mac_are_not_loaded_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -975,7 +967,7 @@ pub fn postgres_an_approval_replaces_a_row_with_a_mismatched_mac_test() {
 
 /// アカウントを消すとその署名者のセッションと承認待ちも消える（ON DELETE
 /// CASCADE）ので、マスターキーを変えて登録し直しても、別の鍵で書かれた行は
-/// 残らない。`TEST_DATABASE_URL` があるときだけ実行する。
+/// 残らない。
 pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1043,7 +1035,6 @@ pub fn postgres_sessions_are_read_after_the_master_key_is_changed_test() {
 
 /// 版 6 の移行は、MAC を持たない既存のセッションと承認待ちの行を消してから
 /// `mac` 列を足す。移行の後は MAC つきの行を書き込み、読み込める。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migration_clears_sessions_and_pending_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1101,7 +1092,6 @@ pub fn postgres_migration_clears_sessions_and_pending_test() {
 
 /// 版 7 の移行は既存のセッションの行を消さずに `relays` 列を足し、版 6 で MAC を
 /// 付けた行は空の一覧のまま、同じ MAC で読める。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1161,7 +1151,6 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
 }
 
 /// トランザクションの中の `run` が `Error` を返すと、先に行った書き込みが残らない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_transaction_rolls_back_on_error_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1196,8 +1185,7 @@ pub fn postgres_transaction_rolls_back_on_error_test() {
   assert loaded.sessions == []
 }
 
-/// `relay_store` の一覧・追加・用途の更新・削除。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。
+/// `relay_store` の一覧・追加・用途の更新・削除。
 pub fn postgres_relay_store_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1237,7 +1225,6 @@ pub fn postgres_relay_store_test() {
 }
 
 /// `observe` と `bunker` がどちらも false の行は `relay_store.list` が読まない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_relay_store_list_skips_roleless_rows_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1257,7 +1244,6 @@ pub fn postgres_relay_store_list_skips_roleless_rows_test() {
 /// `relays` を読み、登録の順に並べる。advisory lock を通す
 /// `account_store_operations` の `load` はロックが取れなければ VM を止めるので
 /// （`nostr_no_su.gleam` の `halt_if_cannot_continue`）ここでは使わない。
-/// `TEST_DATABASE_URL` があるときだけ実行する。
 pub fn postgres_load_snapshot_reads_relays_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1303,8 +1289,7 @@ fn session_tuple(session: session.Session) -> #(String, String, String) {
 
 /// 実際の Postgres に対する統合テスト。`connect`（セッションと承認待ち、
 /// 再登録）、`logout`、承認・拒否・取り消しが成功したときだけ `account_store` の
-/// 行が書かれる（`start_bunker` の経路）。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。
+/// 行が書かれる（`start_bunker` の経路）。
 pub fn postgres_bunker_session_writes_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, _db <- postgres.with_schema(database_url)
@@ -1392,8 +1377,7 @@ pub fn postgres_bunker_session_writes_test() {
 }
 
 /// 実際の Postgres に対する統合テスト。`InsertPending` の写しは、`replaced` の
-/// 削除と挿入を 1 トランザクションで行う。`TEST_DATABASE_URL` があるときだけ
-/// 実行する。
+/// 削除と挿入を 1 トランザクションで行う。
 pub fn postgres_replacing_a_pending_request_is_one_transaction_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1507,7 +1491,7 @@ pub fn postgres_touching_a_session_moves_its_last_use_test() {
 
 /// `nostrconnect://` で開いたセッションの URI のリレーは、`InsertSession` と
 /// `TouchSession` の書き込みの後も、`nostr_no_su.load_snapshot` で読み直した
-/// セッションに同じ順で残る。`TEST_DATABASE_URL` があるときだけ実行する。
+/// セッションに同じ順で残る。
 pub fn postgres_session_relays_survive_a_reload_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1582,7 +1566,7 @@ pub fn postgres_updating_session_perms_writes_the_new_value_test() {
 }
 
 /// ストアの操作は、登録済みの公開鍵の追加と行の無い更新の理由をアカウントの語で返す
-/// （ログの行の文言）。`TEST_DATABASE_URL` があるときだけ実行する。
+/// （ログの行の文言）。
 pub fn store_operations_keep_the_account_reasons_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, _db <- postgres.with_schema(database_url)
@@ -1696,7 +1680,7 @@ pub fn postgres_sessions_stay_within_the_capacity_test() {
 /// 実際の Postgres に対する統合テスト。上限ちょうどより 1 件多いクライアントが
 /// secret 無しで順に `connect` すると、DB の承認待ちの行数も `pending_capacity`
 /// で頭打ちになり、最も古い `tok-1` を含まず、行の token の集合はエンジンの
-/// 承認待ちと一致する。`TEST_DATABASE_URL` があるときだけ実行する。
+/// 承認待ちと一致する。
 pub fn postgres_pending_stays_within_the_capacity_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -1740,7 +1724,7 @@ FOR EACH ROW EXECUTE FUNCTION {schema}.reject_session_delete()",
 
 /// 実際の Postgres に対する統合テスト。押し出しの削除が失敗すると、`InsertSession`
 /// と `ApprovePending` はどちらも挿入だけを残さず、行は書き込み前のままになる
-/// （1 トランザクション）。`TEST_DATABASE_URL` があるときだけ実行する。
+/// （1 トランザクション）。
 pub fn postgres_a_failed_eviction_leaves_no_inserted_session_test() {
   use database_url <- postgres.with_test_database_url("account_store")
   use schema, pool, db <- postgres.with_named_schema(database_url)

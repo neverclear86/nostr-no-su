@@ -300,8 +300,8 @@ pub fn children_rejecting_config_with_bad_reason_test() {
   )
 }
 
-/// `plugin_pages` と `plugin_page_content` のどちらも無いプラグインは今までどおり
-/// 読み込まれ、`ui` は `None`。
+/// `plugin_pages` と `plugin_page_content` のどちらも無いプラグインは読み込まれ、
+/// `ui` は `None`。
 pub fn load_without_ui_test() {
   let assert Ok(loaded) =
     plugin.load(

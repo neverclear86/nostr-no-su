@@ -1,4 +1,4 @@
-%% `gleam test` のエントリー（nostr_no_su_test:main/0）が呼ぶテストの実行器。
+%% `gleam test` のエントリーが呼ぶテストの実行器。
 %%
 %% gleeunit の main と同じく test/ 配下の全モジュールを eunit に渡し、同じ報告
 %% （gleeunit_progress）と同じオプションを使うが、モジュールを複数のレーンで同時に
@@ -104,7 +104,7 @@ module_name(Path) ->
 %% 環境変数 COVERAGE が設定されているときだけ、src/ のモジュールを cover で
 %% instrument してその一覧を返す。テストの実行の前に instrument しなければ計測が
 %% 始まらないので、eunit:test/2 の直前に呼ぶ。COVERAGE が無いときは false を返し、
-%% instrument も集計も行わない（実行は今までどおり）。instrument に失敗した
+%% instrument も集計も行わない。instrument に失敗した
 %% モジュールがあれば error/1 で落とす（黙って対象が欠けないように）。
 start_cover() ->
     case os:getenv("COVERAGE") of

@@ -1,16 +1,6 @@
-//// `plugin_api.publish_with`・`fetch_with`・`fetch_events_with` のテストに、
-//// 取得で届くイベントを絞る `relay_fetch.handle_incoming` のテストと、取得の接続の閉じ方の
-//// テスト（`support/frame_server` の偽リレー）を加えたもの。経路のテストは
-//// バンカーと監視・バンカー用途の偽リレー接続を直接組み立て、名前を渡す経路を
-//// 叩く。リレーへ実際に REQ を送るテストはループバックの
-//// WebSocket のリレー（`support/loopback_relay`）で REQ を数える。
-//// `handle_incoming` のテストは `Received` の値を直接渡して `reply` の合図を
-//// 見る（`install` はこのモジュールの対象外で、
-//// `publish_event_without_install_returns_the_reason_test`・
-//// `fetch_event_without_install_returns_the_reason_test`・
-//// `fetch_events_without_install_returns_the_reason_test` の 3 件だけが
-//// persistent_term を読む経路を確かめる。どのテストも `install` を呼ばないため、
-//// 実行順によらず「置いていない」状態が保たれる）。
+//// `plugin_api` の入口（`publish_event`・`fetch_event`・`fetch_events` と、名前を渡す
+//// `*_with`）のテストと、取得で届くイベントを絞る `relay_fetch` の判断のテスト。
+//// `install` は呼ばない。
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}

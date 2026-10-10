@@ -328,14 +328,7 @@ pub fn empty_section_shows_the_translated_line_test() {
 /// `lang="en"` の中ではなく、表示の言語を持つ `div` に包まれる。
 pub fn empty_pairs_translated_line_has_display_language_test() {
   let raw = section("Has Pairs", [], [pairs_block([])])
-  let japanese_context =
-    Context(
-      language: i18n.Japanese,
-      plugin_language: "en",
-      page_href: fn(_) { Error(Nil) },
-      form_action: "/plugins/example/settings",
-      now: 0,
-    )
+  let japanese_context = Context(..context(), language: i18n.Japanese)
   let assert Ok(el) = plugin_view.section(raw, japanese_context)
   let body = element.to_string(el)
   let translated = i18n.text(i18n.Japanese, i18n.PluginSectionEmpty)
@@ -566,7 +559,7 @@ pub fn details_blocks_require_a_summary_and_text_test() {
 
 /// `pairs` の `id` の値は `view.identifier_cell` の出力になり、コピーボタンの
 /// ラベル（`i18n.Copy` の訳語）を含む。
-pub fn id_values_are_truncated_test() {
+pub fn id_values_use_the_identifier_cell_test() {
   let value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
   let raw =
     section("Settings", [], [pairs_block([#("id", typed_text("id", value))])])
@@ -653,7 +646,7 @@ pub fn tone_selects_one_of_five_values_test() {
 }
 
 /// `variant` の無い `image` ブロックは、`url` の scheme が `http` / `https` なら
-/// `view.ContainedImage` の `view.plugin_image` の出力（今までの見た目）を含む。
+/// `view.ContainedImage` の `view.plugin_image` の出力を含む。
 pub fn image_block_renders_image_test() {
   let cases = [
     #("https://example.com/a.png", "A picture"),
@@ -733,13 +726,7 @@ pub fn image_block_with_other_scheme_renders_alt_only_test() {
 /// `en` で上書きせず、節の包みの表示の言語の `lang` を引き継ぐ。
 pub fn image_placeholder_alt_inherits_the_plugin_language_test() {
   let japanese_context =
-    Context(
-      language: i18n.Japanese,
-      plugin_language: "ja",
-      page_href: fn(_) { Error(Nil) },
-      form_action: "/plugins/example/status",
-      now: 0,
-    )
+    Context(..context(), language: i18n.Japanese, plugin_language: "ja")
   let raw =
     section("キュー", [], [image_block("data:image/png;base64,AAA", "猫の写真", None)])
   let assert Ok(el) = plugin_view.section(raw, japanese_context)

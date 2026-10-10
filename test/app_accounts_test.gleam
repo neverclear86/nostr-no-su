@@ -345,7 +345,7 @@ pub fn a_restarted_bunker_reloads_the_accounts_test() {
 }
 
 /// 再起動しても、接続済みのクライアントは再 `connect` なしで署名でき、承認待ちは
-/// DB に保存した経過時間のまま残って承認できる（#215 の受け入れ条件）。
+/// DB に保存した経過時間のまま残って承認できる。
 pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")

@@ -1,17 +1,6 @@
-//// `bunker.load_report` のテストと、バンカーアクターの状態に接続 secret が出ないことの
-//// テスト。読み込みの結果に対して、どのログ行を出すかを確かめる。
-//// `rate-limited:` を返したリレーのアクターのテストは、`Acknowledged` と `Incoming`
-//// から発行までの配線を確かめる。
-//// セッションのリレーのアクターのテストは、応答の発行先、購読と AUTH の署名者、
-//// 取り消しで閉じる一覧を確かめる。`bunker.sign_event`
-//// （`SignEvent`）のテストは、プラグインからの送信の口（`plugin_api`）が使う
-//// 署名の要求を、読み込み前と登録済みの署名者のそれぞれで確かめる。
-//// `bunker.check_accounts`（`CheckAccounts`）のテストは、プラグインからの取得の口
-//// （`plugin_api`）が使う登録の確認を、読み込み前と、登録済みと未登録を混ぜた順の
-//// それぞれで確かめる。
-//// `bunker.reserve_session_relays` / `bunker.release_session_relays` のテストは、
-//// 取り置いた署名者で開く接続の購読と AUTH と、セッションを開いた後の取り外しで
-//// 接続が残ることを確かめる。
+//// `bunker` のアクターと、読み込みの結果から出すログ行（`bunker.load_report`）のテスト。
+//// 純粋な判断（`bunker/engine`）と配送の判断（`bunker/delivery`）は、それぞれの単体
+//// テストで見る。
 
 import gleam/erlang/process
 import gleam/option.{None, Some}
@@ -268,9 +257,8 @@ pub fn check_accounts_reports_each_signer_in_order_test() {
   process.kill(pid)
 }
 
-/// `rate-limited:` を返したリレーには、セッションの外の応答が届かなくなる
-/// （受け入れ条件）。接続 secret の一致する `connect` の応答は止めたリレーにも
-/// 届く。
+/// `rate-limited:` を返したリレーには、セッションの外の応答が届かなくなる。接続 secret
+/// の一致する `connect` の応答は止めたリレーにも届く。
 pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_test() {
   let name = process.new_name("bunker_rate_limited_relay_test")
   let stored = one_account()
@@ -411,7 +399,7 @@ fn stop_bunker(name: process.Name(bunker.Msg)) -> Nil {
 
 /// 応答は基本のリレーと応答先のセッションのリレーにだけ届き、別のセッションの
 /// リレーには届かない。セッションの無いクライアントへの応答は基本のリレーだけに
-/// 届く（受け入れ条件 1）。
+/// 届く。
 pub fn responses_reach_only_the_relays_of_their_session_test() {
   let stored = one_account()
   let signer = stored.account
@@ -505,7 +493,7 @@ pub fn a_logout_response_reaches_the_relays_of_the_closed_session_test() {
 }
 
 /// セッションのリレーの一覧は、読み込み、取り消し、`logout`、アカウントの削除の
-/// たびに、使われている URL だけに変わる（受け入れ条件 3）。
+/// たびに、使われている URL だけに変わる。
 pub fn session_relays_follow_revocation_and_account_removal_test() {
   let stored = one_account()
   let signer = stored.account

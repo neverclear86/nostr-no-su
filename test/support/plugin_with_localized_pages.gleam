@@ -1,9 +1,6 @@
 //// `plugin_pages/2` と `plugin_page_content/3` を持つ fixture。
 //// `support/plugin_with_pages` と同じ形で、本体が表示の言語のコードを最後の引数に
 //// 渡すことを確かめるのに使う。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 

@@ -36,7 +36,7 @@ fn unique_name(label: String) -> Atom {
 }
 
 /// fixture の子仕様 1 件を本番と同じ経路で変換する。アリティ 0 で呼ばれた
-/// ことにするので、理由の文字列は従来どおり `plugin_children/0: ...` になる。
+/// ことにするので、理由の文字列は `plugin_children/0: ...` になる。
 fn convert(
   specs: List(Dynamic),
 ) -> Result(List(ChildSpecification(Pid)), Rejection) {

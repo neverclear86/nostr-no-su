@@ -1,8 +1,7 @@
-%% relay_client_test と plugin_api_test が、接続の閉じ方を確かめるための
-%% fixture。WebSocket のハンドシェイクを済ませ、受けたフレームの opcode と
-%% マスクを外した中身を OnFrame へ渡す。テキストのフレーム（opcode 1）には
-%% Reply が返す各テキストを送り返す。mist の偽リレーは close フレームと
-%% TCP の切断を区別できないので、こちらでフレームをそのまま見る。
+%% 接続の閉じ方を確かめるための fixture。WebSocket のハンドシェイクを済ませ、
+%% 受けたフレームの opcode とマスクを外した中身を OnFrame へ渡す。テキストの
+%% フレーム（opcode 1）には Reply が返す各テキストを送り返す。mist の偽リレーは
+%% close フレームと TCP の切断を区別できないので、こちらでフレームをそのまま見る。
 -module(websocket_frame_server).
 -export([listen/2]).
 
