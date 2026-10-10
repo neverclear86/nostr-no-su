@@ -688,6 +688,7 @@ nostr-no-su/
 │       ├── resume.gleam          監視の購読の再開点の記録（純粋）
 │       ├── resume/saver.gleam    再開点を周期ごとに保存するアクター
 │       ├── resume/store.gleam    監視の購読とプラグインごとの再開点の SQL
+│       ├── language_code.gleam   対応する言語のコード（BCP 47 の最初のサブタグ）の定数と一覧
 │       ├── plugin.gleam          プラグイン API v1 の検証と読み込み
 │       ├── plugin_api.gleam      プラグインが呼ぶ本体側の口（監視リレーへの送信と取得）
 │       ├── plugin_children.gleam 子仕様の検証と ChildSpecification への変換

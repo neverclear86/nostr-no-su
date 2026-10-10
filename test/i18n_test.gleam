@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import nostr_no_su/admin/i18n
 import nostr_no_su/bunker/vault
+import nostr_no_su/language_code
 import nostr_no_su/nostr/nip19
 
 /// `Accept-Language` から、対応する言語のうち最も優先される言語を選ぶ。優先度が同じなら
@@ -49,6 +50,11 @@ pub fn language_codes_round_trip_test() {
   assert i18n.from_code("fr") == Error(Nil)
   assert list.map(i18n.languages, i18n.code) == ["en", "ja"]
   assert list.map(i18n.languages, i18n.native_name) == ["English", "日本語"]
+}
+
+/// 言語コードの一覧は、管理 UI の言語の一覧と同じ並びである。
+pub fn language_codes_are_the_admin_languages_test() {
+  assert language_code.all == list.map(i18n.languages, i18n.code)
 }
 
 /// 対応する言語の一覧には、`i18n.Language` のすべての構築子が 1 回ずつ並ぶ。構築子を足して

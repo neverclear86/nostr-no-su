@@ -6,8 +6,9 @@
 //// 上限）は値を持つ構築子にし、語順と記号を含めて言語ごとに文全体を返す。文の中に要素（`<time>`）を
 //// 挟む文言だけは、要素の前と後ろを別の構築子（`ExpiryBeforeTime`、`ExpiryAfterTime`）にする。
 ////
-//// 言語を足すときは、`Language` に構築子を、`languages` に値を足し、コンパイラーが示す
-//// `case`（`code`、`native_name`、`text`、`lead`、`sentence_gap`）に枝を足す。
+//// 言語を足すときは、`language_code` にコードの定数を足して `all` に並べ、`Language` に
+//// 構築子を、`languages` に値を足し、コンパイラーが示す `case`（`code`、`native_name`、
+//// `text`、`lead`、`sentence_gap`）に枝を足す。
 ////
 //// 画面に出す失敗の理由（`Reason`）は、文が管理 UI の外で英語の文字列として作られるもの
 //// （型の構築子が運ぶ文字列を含む）を訳さず、`Untranslated` として英語のまま出す。原因を
@@ -23,6 +24,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import nostr_no_su/bunker/vault
+import nostr_no_su/language_code
 import nostr_no_su/nostr/nip19
 
 /// 管理 UI を表示する言語。
@@ -31,7 +33,8 @@ pub type Language {
   Japanese
 }
 
-/// 対応する言語。言語の切り替えはこの順（言語コードの順）に並べる。
+/// 対応する言語。言語の切り替えはこの順（言語コードの順）に並べる。`language_code.all` と
+/// 同じ並びにする。
 pub const languages = [English, Japanese]
 
 /// 利用者が選んでおらず、`Accept-Language` からも決まらないときの言語。
@@ -41,8 +44,8 @@ pub const default_language = English
 /// 使う。
 pub fn code(language: Language) -> String {
   case language {
-    English -> "en"
-    Japanese -> "ja"
+    English -> language_code.english
+    Japanese -> language_code.japanese
   }
 }
 
