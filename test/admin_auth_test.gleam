@@ -66,6 +66,7 @@ pub fn failed_authentication_is_unauthorized_test() {
     )
     == #(name, True)
   assert #(name, header(response, "content-type")) == #(name, "text/plain")
+  assert #(name, simulate.read_body(response)) == #(name, "Unauthorized")
   assert #(name, process.receive(reports, 0)) == #(name, Error(Nil))
 }
 
