@@ -15,11 +15,11 @@ import gleam/string
 import nostr_no_su/app
 import nostr_no_su/config
 import nostr_no_su/log
-import nostr_no_su/time
 import pog
 import support/app_tree
 import support/erl.{unique_integer}
-import support/log_capture.{type Capture}
+import support/log_capture
+import support/poll
 
 /// `pool` のプールの接続プロセスを見つけて、未処理の cast を送って落とす。
 /// 見つからなければ `Error`。
@@ -62,35 +62,6 @@ fn probe_filter_count() -> Int
 /// 値にする。
 fn unique_secret(label: String) -> String {
   label <> "-" <> int.to_string(unique_integer([atom.create("positive")]))
-}
-
-/// `wanted` を満たす行が捕まるまで待つ。捕まれば `True`、期限までに無ければ
-/// `False`。
-fn await_line(
-  capture: Capture,
-  wanted: fn(String) -> Bool,
-  timeout_ms: Int,
-) -> Bool {
-  poll_lines(capture, wanted, time.monotonic_ms() + timeout_ms)
-}
-
-/// `await_line` の本体。期限までは短い間隔で表を読み直す。
-fn poll_lines(
-  capture: Capture,
-  wanted: fn(String) -> Bool,
-  deadline: Int,
-) -> Bool {
-  case list.any(log_capture.lines(capture), wanted) {
-    True -> True
-    False ->
-      case time.monotonic_ms() < deadline {
-        True -> {
-          process.sleep(10)
-          poll_lines(capture, wanted, deadline)
-        }
-        False -> False
-      }
-  }
 }
 
 /// binary の中に埋め込まれた登録値は、部分列として `[redacted]` に置き換わる。
@@ -230,13 +201,15 @@ pub fn redacts_the_database_password_in_a_pgo_crash_report_test() {
   // レーンで同時に落ちたプロセスの行で門を通り抜けてしまうので、`[redacted]`
   // を含むことまで条件にする。
   let arrived =
-    await_line(
-      capture,
-      fn(line) {
-        string.contains(line, "terminating")
-        && string.contains(line, "[redacted]")
+    poll.until(
+      fn() {
+        list.any(log_capture.lines(capture), fn(line) {
+          string.contains(line, "terminating")
+          && string.contains(line, "[redacted]")
+        })
       },
       2000,
+      10,
     )
   assert arrived
   assert !list.any(log_capture.lines(capture), string.contains(_, secret))
