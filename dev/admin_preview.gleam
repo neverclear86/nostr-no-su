@@ -47,39 +47,47 @@ const default_port = 18_461
 const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 
 /// `signer` の npub。
-const signer_npub = "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+const signer_npub =
+  "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
 
 /// BIP-340 の公式ベクター 0 の秘密鍵の nsec。
-const signer_nsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
+const signer_nsec =
+  "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
 
 /// NIP-19 の仕様の公開鍵。
 const second = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
 
 /// `second` の npub。
-const second_npub = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+const second_npub =
+  "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
 
 /// 読み込みで飛ばされた行（秘密鍵を復号できない）の pubkey（ダミー）。
-const unreadable_pubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+const unreadable_pubkey =
+  "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
 
 /// `unreadable_pubkey` の npub。
-const unreadable_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
+const unreadable_npub =
+  "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
 
 /// 読み込みで飛ばされた行（`pubkey` 列が形式不正）の値。32 バイトの 16 進として
 /// 読めない。
 const malformed_pubkey = "not-a-valid-pubkey"
 
 /// 辞書順で `client` より前に来る、2 件目のセッションのクライアントの公開鍵（ダミー）。
-const earlier_client = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+const earlier_client =
+  "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
 
 /// 接続してきたクライアントの公開鍵（ダミー）。
 const client = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
 
 /// アカウント一覧に無い署名者（ダミー）。承認待ちの行に省略した 16 進の署名者を
 /// 写すために使う。
-const unknown_signer = "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
+const unknown_signer =
+  "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
 
 /// 管理 UI が DB に届かない失敗として出す理由の文。
-const database_unreachable_reason = "database is unreachable or rejected the connection"
+const database_unreachable_reason =
+  "database is unreachable or rejected the connection"
 
 /// 接続 URI に載せるバンカーのリレー。
 const bunker_relay_url = "ws://127.0.0.1:7801"

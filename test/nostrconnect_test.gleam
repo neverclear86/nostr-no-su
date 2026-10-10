@@ -15,7 +15,8 @@ import nostr_no_su/bunker/nostrconnect.{
 const client = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
 
 /// クライアント公開鍵を大文字にした表記。
-const client_upper = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
+const client_upper =
+  "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
 
 /// 正常な URI から `client` / `relays` / `secret` / `perms` / `name` を取り出す
 /// （percent デコードを含む）。

@@ -13,10 +13,12 @@ pub type Relay {
 }
 
 /// 用途のある行の読み込み。
-const select_sql = "SELECT id, url, observe, bunker FROM relays WHERE observe OR bunker ORDER BY id"
+const select_sql =
+  "SELECT id, url, observe, bunker FROM relays WHERE observe OR bunker ORDER BY id"
 
 /// 1 行の挿入。
-const insert_sql = "INSERT INTO relays (url, observe, bunker) VALUES ($1, $2, $3)
+const insert_sql =
+  "INSERT INTO relays (url, observe, bunker) VALUES ($1, $2, $3)
 RETURNING id, url, observe, bunker"
 
 /// `relays.url` の一意制約の名前。これに違反した挿入は、同じ URL の登録済みを
@@ -24,7 +26,8 @@ RETURNING id, url, observe, bunker"
 const relay_url_constraint = "relays_url_key"
 
 /// 用途の差し替え。
-const update_roles_sql = "UPDATE relays SET observe = $2, bunker = $3 WHERE id = $1"
+const update_roles_sql =
+  "UPDATE relays SET observe = $2, bunker = $3 WHERE id = $1"
 
 /// 1 行の削除。
 const delete_sql = "DELETE FROM relays WHERE id = $1"

@@ -14,7 +14,8 @@ import support/loopback_relay
 import support/nip46_client.{account_for}
 import support/poll
 
-const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
+const signer_key =
+  "0000000000000000000000000000000000000000000000000000000000000042"
 
 const avatar_url = "https://x.test/a.png"
 

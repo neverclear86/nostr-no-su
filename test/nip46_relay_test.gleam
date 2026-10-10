@@ -36,7 +36,8 @@ import support/postgres
 import support/random_account.{random_master_key}
 
 /// テスト用の署名者の 16 進秘密鍵。他のテストと同じ固定値。
-const signer_key = "0000000000000000000000000000000000000000000000000000000000000042"
+const signer_key =
+  "0000000000000000000000000000000000000000000000000000000000000042"
 
 /// 発行したリクエストへの OK を待つ時間。
 const ack_timeout_ms = 5000

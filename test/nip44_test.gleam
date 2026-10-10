@@ -19,7 +19,8 @@ import qcheck
 import support/vector.{bytes}
 
 /// 取得元のファイルの SHA-256。NIP-44 の本文に載っている値と同じ。
-const vectors_sha256 = "269ed0f69e4c192512cc779e78c555090cebc7c785b609e338a62afc3ce25040"
+const vectors_sha256 =
+  "269ed0f69e4c192512cc779e78c555090cebc7c785b609e338a62afc3ce25040"
 
 /// ベクターのファイルから、`v2` の下の 1 区分を読む。
 fn section(path: List(String), decoder: decode.Decoder(a)) -> a {

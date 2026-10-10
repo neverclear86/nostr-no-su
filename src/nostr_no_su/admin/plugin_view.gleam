@@ -314,7 +314,8 @@ fn field_name(raw: Dynamic) -> Result(String, String) {
 }
 
 /// 欄の `name` に許す文字。`plugin_term.consists_of` に渡す。
-const field_name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+const field_name_alphabet =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
 /// `key` の任意の値を String として読む。規則は `plugin_term.optional_field` と同じ。
 fn optional_text_field(

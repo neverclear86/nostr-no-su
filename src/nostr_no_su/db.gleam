@@ -56,7 +56,8 @@ pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 /// アカウントを保存するテーブル。`pubkey` は小文字 16 進に固定し、表記の揺れで
 /// 同じ鍵が二重に登録されるのを防ぐ。暗号文の長さの検査は、秘密鍵が
 /// 12 + 32 + 16 = 60 バイト、secret が空でない（12 + 1 以上 + 16）ことを表す。
-pub const create_accounts_table = "CREATE TABLE IF NOT EXISTS bunker_accounts (
+pub const create_accounts_table =
+  "CREATE TABLE IF NOT EXISTS bunker_accounts (
   pubkey text PRIMARY KEY CHECK (pubkey ~ '^[0-9a-f]{64}$'),
   label text NOT NULL DEFAULT '',
   encrypted_privkey bytea NOT NULL CHECK (octet_length(encrypted_privkey) = 60),
@@ -66,7 +67,8 @@ pub const create_accounts_table = "CREATE TABLE IF NOT EXISTS bunker_accounts (
 
 /// 監視の購読の再開点を保存するテーブル。`since` は Unix 秒。書き込みは値を
 /// 小さくしない（`resume/store`）。
-pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resume (
+pub const create_monitor_resume_table =
+  "CREATE TABLE IF NOT EXISTS monitor_resume (
   relay_url text PRIMARY KEY,
   since bigint NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -80,7 +82,8 @@ pub const create_monitor_resume_table = "CREATE TABLE IF NOT EXISTS monitor_resu
 /// `new_session`）。`last_used_at` は `account_store.touch_session` で進める。行の MAC の列
 /// `mac` は版 6 の移行（`add_row_macs`）で足す。URI のリレーの列 `relays` は版 7 の移行
 /// （`add_session_relays`）で足す。
-const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
+const create_sessions_table =
+  "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
   client text NOT NULL,
   perms text NOT NULL,
@@ -94,7 +97,8 @@ const create_sessions_table = "CREATE TABLE IF NOT EXISTS bunker_sessions (
 /// 参照するので、アカウントの削除でその署名者の承認待ちも消える。時刻は
 /// Unix 秒。長さの `CHECK` は置かない。行の MAC の列 `mac` は版 6 の移行
 /// （`add_row_macs`）で足す。
-const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
+const create_pending_table =
+  "CREATE TABLE IF NOT EXISTS bunker_pending (
   token text PRIMARY KEY,
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
   client text NOT NULL,
@@ -106,7 +110,8 @@ const create_pending_table = "CREATE TABLE IF NOT EXISTS bunker_pending (
 
 /// 監視とバンカーのリレーを保存するテーブル。`observe`（監視）と `bunker` の組は Gleam 側で
 /// `relay_list.Roles` に写し、どちらも false の行は `relay_store.list` が読まない。順は `id`。
-const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
+const create_relays_table =
+  "CREATE TABLE IF NOT EXISTS relays (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   url text NOT NULL CONSTRAINT relays_url_key UNIQUE,
   observe boolean NOT NULL,
@@ -116,7 +121,8 @@ const create_relays_table = "CREATE TABLE IF NOT EXISTS relays (
 /// プラグインごとの再開点を保存するテーブル。`since` は Unix 秒。主キーは
 /// プラグイン名（`plugin_name/0` の値）。書き込みは値を小さくしない
 /// （`resume/store`）。
-const create_plugin_resume_table = "CREATE TABLE IF NOT EXISTS plugin_resume (
+const create_plugin_resume_table =
+  "CREATE TABLE IF NOT EXISTS plugin_resume (
   plugin text PRIMARY KEY,
   since bigint NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -136,7 +142,8 @@ const add_row_macs = [
 /// 版 7 の移行。セッションの行に、`nostrconnect://` の URI に現れたリレーの
 /// 一覧の列を足す。既存の行は空の一覧になり、空の一覧は MAC の入力に含めない
 /// （`vault.mac_input`）ので、版 6 で付けた MAC のまま読める。
-const add_session_relays = "ALTER TABLE bunker_sessions ADD COLUMN IF NOT EXISTS relays text[] NOT NULL DEFAULT '{}'"
+const add_session_relays =
+  "ALTER TABLE bunker_sessions ADD COLUMN IF NOT EXISTS relays text[] NOT NULL DEFAULT '{}'"
 
 /// スキーマの版 1 つぶんの移行。`statements` を順に実行した後に `version` を
 /// `schema_version` に記録する。
@@ -163,7 +170,8 @@ pub const migrations = [
 ]
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
-pub const create_version_table = "CREATE TABLE IF NOT EXISTS schema_version (
+pub const create_version_table =
+  "CREATE TABLE IF NOT EXISTS schema_version (
   version integer PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
 )"

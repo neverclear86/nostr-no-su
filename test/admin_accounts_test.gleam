@@ -32,7 +32,8 @@ import wisp
 import wisp/simulate
 
 /// `spec_nsec` の秘密鍵の 16 進。
-const spec_key = "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa"
+const spec_key =
+  "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa"
 
 /// 生成した鍵のダイアログの隠しフィールドの nsec。
 fn hidden_nsec(body: String) -> String {

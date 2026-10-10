@@ -513,13 +513,14 @@ pub fn overview(snapshot: Snapshot) -> OverviewRail {
 }
 
 /// 一覧を得られない項目。値は「—」、補足は error の色の「取得できません」。
-const not_available = Overview(
-  value: NoValue,
-  notes: [
-    OverviewNote(Some(view.ToneChip(view.Failure)), i18n.OverviewNotAvailable),
-  ],
-  emphasis: Linked,
-)
+const not_available =
+  Overview(
+    value: NoValue,
+    notes: [
+      OverviewNote(Some(view.ToneChip(view.Failure)), i18n.OverviewNotAvailable),
+    ],
+    emphasis: Linked,
+  )
 
 /// 色を付けない補足の語。
 fn plain_note(text: i18n.Message) -> OverviewNote {
