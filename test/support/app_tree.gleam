@@ -613,8 +613,7 @@ fn collect_until(
 }
 
 /// メッセージが `quiet_ms` の間途切れるまで読み捨てる。`quiet_ms` が 0 なら、
-/// すでに届いているものだけを捨てる。起動時の読み込みが 1 件以上だと、接続直後の
-/// 照合に続いて張り直しの購読の報告が 1 回届きうるので、変更の前にそれを片付ける。
+/// すでに届いているものだけを捨てる。
 pub fn drain_until_quiet(subject: Subject(a), quiet_ms: Int) -> Nil {
   case process.receive(subject, quiet_ms) {
     Ok(_message) -> drain_until_quiet(subject, quiet_ms)
