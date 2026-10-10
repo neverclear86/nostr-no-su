@@ -1,6 +1,7 @@
 import envoy
 import event_logger
 import event_logger/i18n
+import event_logger/log
 import event_logger/page
 import event_logger/store
 import gleam/dict
@@ -187,6 +188,222 @@ pub fn other_schema_failures_are_reported_every_time_test() {
     == Some(reason <> " (dropped 7 events so far)")
 }
 
+/// 遷移の関数のテストで渡す、メールボックスの上限。
+const transition_limit = 10
+
+/// 遷移の関数のテストで渡す行。
+fn transition_row() -> store.Row {
+  store.Row(
+    id: "t1",
+    pubkey: "0f1e2d",
+    created_at: 1_700_000_000,
+    kind: 1,
+    tags: "[]",
+    content: "hello",
+    sig: "beef",
+  )
+}
+
+/// 呼ばれたら落ちる `insert`。挿入しない遷移が `insert` に触れないことを確かめる。
+fn never_insert(_row: store.Row) -> Result(Int, pog.QueryError) {
+  panic as "insert must not be called"
+}
+
+/// ログ行も再試行も伴わない遷移の期待値。
+fn quiet(availability: store.Availability) -> store.Transition {
+  store.Transition(availability:, lines: [], retry: False)
+}
+
+/// 保存を止めている間に届いたイベントは、挿入せずに件数だけを増やす。
+pub fn persist_counts_events_while_unavailable_test() {
+  assert store.persist(
+      store.Unavailable(dropped: 2, reported: True),
+      transition_row(),
+      0,
+      transition_limit,
+      never_insert,
+    )
+    == quiet(store.Unavailable(dropped: 3, reported: True))
+}
+
+/// 残りが上限ちょうどなら保存し、上限を 1 件でも超えたら過負荷に入って挿入しない。
+pub fn persist_overloads_only_above_the_limit_test() {
+  assert store.persist(
+      store.Ready,
+      transition_row(),
+      transition_limit,
+      transition_limit,
+      fn(_row) { Ok(1) },
+    )
+    == quiet(store.Ready)
+  assert store.persist(
+      store.Ready,
+      transition_row(),
+      transition_limit + 1,
+      transition_limit,
+      never_insert,
+    )
+    == store.Transition(
+      availability: store.Overloaded(dropped: 1),
+      lines: [
+        #(
+          log.Warning,
+          "too slow: 11 events queued (limit 10); dropping until it catches up",
+        ),
+      ],
+      retry: False,
+    )
+}
+
+/// 過負荷からは上限の半分まで減ると再開する。半分ちょうどで保存して報告し、
+/// それより多い間は捨て続ける。
+pub fn persist_resumes_at_half_the_limit_test() {
+  assert store.persist(
+      store.Overloaded(dropped: 3),
+      transition_row(),
+      transition_limit / 2 + 1,
+      transition_limit,
+      never_insert,
+    )
+    == quiet(store.Overloaded(dropped: 4))
+  assert store.persist(
+      store.Overloaded(dropped: 3),
+      transition_row(),
+      transition_limit / 2,
+      transition_limit,
+      fn(_row) { Ok(1) },
+    )
+    == store.Transition(
+      availability: store.Ready,
+      lines: [
+        #(log.Notice, "caught up; dropped 3 events while overloaded"),
+      ],
+      retry: False,
+    )
+}
+
+/// 到達できない挿入は、その行を捨てた 1 件目として保存を止め、再試行を予約する。
+/// 過負荷から再開した直後の失敗は、再開の報告を理由の行より先に出す。
+pub fn persist_suspends_on_an_unreachable_insert_test() {
+  let unavailable_line = #(
+    log.Warning,
+    "database unavailable: ConnectionUnavailable; retrying every 5000ms",
+  )
+  let insert = fn(_row) { Error(pog.ConnectionUnavailable) }
+  assert store.persist(
+      store.Ready,
+      transition_row(),
+      0,
+      transition_limit,
+      insert,
+    )
+    == store.Transition(
+      availability: store.Unavailable(dropped: 1, reported: True),
+      lines: [unavailable_line],
+      retry: True,
+    )
+  assert store.persist(
+      store.Overloaded(dropped: 3),
+      transition_row(),
+      0,
+      transition_limit,
+      insert,
+    )
+    == store.Transition(
+      availability: store.Unavailable(dropped: 1, reported: True),
+      lines: [
+        #(log.Notice, "caught up; dropped 3 events while overloaded"),
+        unavailable_line,
+      ],
+      retry: True,
+    )
+}
+
+/// 到達性と無関係な挿入の失敗は、その行だけの問題として警告を出し、保存を続ける。
+pub fn persist_keeps_storing_after_an_unrelated_insert_failure_test() {
+  assert store.persist(
+      store.Ready,
+      transition_row(),
+      0,
+      transition_limit,
+      fn(_row) { Error(insufficient_privilege()) },
+    )
+    == store.Transition(
+      availability: store.Ready,
+      lines: [
+        #(
+          log.Warning,
+          "insert failed for event t1: "
+            <> string.inspect(insufficient_privilege()),
+        ),
+      ],
+      retry: False,
+    )
+}
+
+/// 再開の報告は、止まっている間に捨てた件数があるときだけ件数を添える。1 件は
+/// 件数のある境界で、0 件は件数の無い「schema ready」になる。
+pub fn resume_reports_the_dropped_count_test() {
+  assert store.resume(store.Unavailable(dropped: 12, reported: True))
+    == store.Transition(
+      availability: store.Ready,
+      lines: [
+        #(
+          log.Notice,
+          "database is back; dropped 12 events while it was unavailable",
+        ),
+      ],
+      retry: False,
+    )
+  assert store.resume(store.Unavailable(dropped: 1, reported: False))
+    == store.Transition(
+      availability: store.Ready,
+      lines: [
+        #(
+          log.Notice,
+          "database is back; dropped 1 events while it was unavailable",
+        ),
+      ],
+      retry: False,
+    )
+  assert store.resume(store.Unavailable(dropped: 0, reported: False))
+    == store.Transition(
+      availability: store.Ready,
+      lines: [#(log.Notice, "schema ready")],
+      retry: False,
+    )
+}
+
+/// 止まっている間の再試行の失敗は、捨てた件数を持ち越す。到達できないことによる
+/// 失敗は報告済みを保って黙り、権限不足のような失敗は理由を件数つきで出す。
+pub fn suspend_carries_over_the_dropped_count_test() {
+  assert store.suspend(
+      store.Unavailable(dropped: 4, reported: True),
+      pog.QueryTimeout,
+    )
+    == store.Transition(
+      availability: store.Unavailable(dropped: 4, reported: True),
+      lines: [],
+      retry: True,
+    )
+  assert store.suspend(
+      store.Unavailable(dropped: 4, reported: True),
+      insufficient_privilege(),
+    )
+    == store.Transition(
+      availability: store.Unavailable(dropped: 4, reported: False),
+      lines: [
+        #(
+          log.Warning,
+          "schema setup failed: "
+            <> string.inspect(insufficient_privilege())
+            <> "; retrying in 5000ms (dropped 4 events so far)",
+        ),
+      ],
+      retry: True,
+    )
+}
+
 /// `{error, Reason}` として返された理由。子仕様のリストなら `Error(Nil)`。
 fn rejection(children: Dynamic) -> Result(String, Nil) {
   let decoder = {
@@ -332,7 +549,7 @@ pub fn host_database_url_declares_a_pool_and_a_store_test() {
 ///
 /// そこで**メールボックスが空になるまで待って**遷移を確認し、**そのうえで
 /// さらに `Store` を送る。** 2 度目の送信は必ず `Unavailable` の「数えて捨てる」
-/// 分岐（`store.persist/3`）を通るので、そこで落ちる実装ならこのテストが落ちる。
+/// 分岐（`store.persist/5`）を通るので、そこで落ちる実装ならこのテストが落ちる。
 pub fn the_store_survives_an_unreachable_database_test() {
   // 待ち受けの無いポートを指すプール。プロセスとしては生きているので、
   // クエリーは ConnectionUnavailable として値で返る。
@@ -425,6 +642,56 @@ pub fn a_newer_schema_stops_the_store_test() {
     "database schema version 2 is newer than this plugin supports (up to version 1)",
   )
 }
+
+/// 監視対象の読み込みが失敗する間は、スキーマが用意できていても保存を止めたままに
+/// する。保存を再開する実装なら、`Store` が挿入に届く。`GetMonitored` の答えは
+/// その前の `Store` の処理が済んだ後に返るので、答えのあとで挿入が無いことを見る。
+pub fn a_failing_monitored_load_keeps_the_store_suspended_test() {
+  let inserted = process.new_subject()
+  let assert Ok(started) =
+    store.start(
+      process.new_name("test_failing_load_store"),
+      store.Database(
+        ensure_schema: fn() { Ok(Nil) },
+        insert: fn(row: store.Row) {
+          process.send(inserted, row.id)
+          Ok(1)
+        },
+        load_monitored: fn() { Error(pog.ConnectionUnavailable) },
+      ),
+      store.default_max_queue_len,
+    )
+  let assert Ok(row) = store.to_row(sample_event("held"))
+  process.send(started.data, store.Store(row))
+  let answer = process.new_subject()
+  process.send(started.data, store.GetMonitored(reply_to: answer))
+  assert process.receive(answer, insert_timeout_ms) == Ok(store.AllAccounts)
+  assert process.receive(inserted, 0) == Error(Nil)
+}
+
+/// 保存を止めると、`schema_retry_delay_ms` の後にスキーマの用意をやり直す。
+/// 失敗し続ける DB で `ensure_schema` が 2 度呼ばれるまで待つので、約 5 秒かかる。
+pub fn a_suspended_store_retries_the_schema_test() {
+  let attempts = process.new_subject()
+  let assert Ok(_started) =
+    store.start(
+      process.new_name("test_retrying_store"),
+      store.Database(
+        ensure_schema: fn() {
+          process.send(attempts, Nil)
+          Error(store.SchemaQueryFailed(pog.ConnectionUnavailable))
+        },
+        insert: fn(_row) { Ok(1) },
+        load_monitored: fn() { Ok([]) },
+      ),
+      store.default_max_queue_len,
+    )
+  assert process.receive(attempts, insert_timeout_ms) == Ok(Nil)
+  assert process.receive(attempts, retry_timeout_ms) == Ok(Nil)
+}
+
+/// 再試行の予約が届くまで待つ上限。待ち時間は 5 秒なので、揺らぎを見込んで倍にする。
+const retry_timeout_ms = 10_000
 
 /// 到達性と無関係な挿入エラーは、そのイベントだけの問題として保存を続ける。
 /// 保存を止める実装なら、2 件目は捨てられて挿入が試みられない。

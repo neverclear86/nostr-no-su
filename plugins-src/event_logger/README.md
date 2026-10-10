@@ -91,7 +91,7 @@ plugins/event_logger/entrypoint.sh                          -- ローダーは�
 
 `events` とインデックス（版 1）、監視対象の `monitored_accounts`（版 2）、タイムラインが読む `events_received_at` のインデックス（版 3）は版つきの移行で作り、版 4 でテーブルとインデックスの名前にプラグイン名の接頭辞を付けて `event_logger_events`、`event_logger_monitored_accounts`、`event_logger_events_received_at` などに改める（`docs/plugin-api.md` 第 5.3 節）。適用した版を `event_logger_schema_version` に記録する。保存アクターは起動時と保存を止めた後の再試行のたびに、記録された版より新しい移行を適用する。
 
-記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある（取り方と戻し方は [バックアップと復旧](../../docs/operations.md) にある）。
+記録された版がプラグインより新しい DB では、次の行を出して保存アクターが止まる。待っても直らず、生かしたまま捨て続けると止まっていることが管理 UI から見えないためである。専用のスーパーバイザーが再起動するたびに同じ行が出て、子が諦められ、イベントが届くと `disabled` になる（`docs/plugin-api.md` 第 5.4 節）。戻す移行は無いので、古いプラグインに戻すには移行の前に取ったバックアップから戻す必要がある（取り方と戻し方は [バックアップと復旧](../../docs/operations.md) にある）。
 
 ```
 [event_logger] database schema version 5 is newer than this plugin supports (up to version 4); stopping the store
@@ -149,7 +149,7 @@ docker compose exec postgres psql -U nostr -d nostr_no_su \
   -c "select id, kind, tags->0->>0 from event_logger_events order by received_at desc limit 3"
 ```
 
-DB を止めると保存だけが止まり、監視は続く。復帰すると捨てた件数がまとめて報告される。
+DB を止めると保存だけが止まり、監視は続く。止まっている間に届いたイベントは、挿入を試みずに数えて捨てる。挿入を試み続けると 1 件ごとに接続のチェックアウトを待ち、メールボックスが際限なく伸びるためである。復帰すると捨てた件数がまとめて報告される。
 
 ```
 [event_logger] database unavailable: ConnectionUnavailable; retrying every 5000ms

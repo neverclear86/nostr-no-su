@@ -1,35 +1,11 @@
 //// 受信したイベントを Postgres の `event_logger_events` テーブルへ保存するアクター。
+//// 使い捨てのプロセスは `Store` を送るだけにし、DB の仕事と失敗はこのアクターに閉じる。
 ////
-//// プラグインのイベント処理関数はイベントごとの使い捨てプロセスで動くため、
-//// そこからは DB を触らず、このアクターへ `Store` を送るだけにする。使い捨て
-//// プロセスから DB を触ると、接続のチェックアウト待ちが 1 件あたりの実行時間の
-//// 上限に当たり、DB が落ちている間にこのプラグインが無効化されてしまう。送る
-//// だけなら実行は即座に終わり、保存の遅れも失敗もアクター側に閉じる。
+//// 守ること。使い捨てのプロセスから DB を触らない（チェックアウト待ちが実行時間の上限に
+//// 当たり、DB が落ちている間にプラグインが無効化される）。移行の文は何度実行してもよい
+//// 形にする。`AllAccounts` は行 0 件の状態で、絞らずに全アカウントを保存する。
 ////
-//// DB に到達できない間は保存を止め、届いたイベントは数えて捨てる。リレー監視を
-//// 巻き込んで落とさないためであり、接続の復旧は pog のプールに任せる。挿入を
-//// 試み続けると 1 件ごとにチェックアウト待ちでアクターがブロックし、メール
-//// ボックスが際限なく伸びてしまう。落ちずに数えて捨てる形は、諦められた子が
-//// 本体の再起動まで戻らないプラグインの失敗モデル（`docs/plugin-api.md`
-//// 第 5.4 節）に対する正しい振る舞いでもある。
-////
-//// DB に到達できても 1 件の挿入が遅いと、未処理の `Store` がメールボックスに
-//// 積まれ続ける。そこで `Store` を取り出すたびに残りの件数を見て、上限を超えたら
-//// 上限の半分に減るまで数えて捨てる。取り出すときに見るので、1 件の挿入の間に
-//// 届いた分だけは上限を超えうる。
-////
-//// 保存の対象とするアカウントの集合はこのアクターが状態として持つ。移行の後に
-//// DB から読み込み、設定の保存の後は `ReloadMonitored` で読み直す。`persist` は
-//// 保存の前にこの集合で `pubkey` を弾き、集合が空なら絞らずに全アカウントを
-//// 保存する。
-////
-//// テーブルとインデックスは版つきの移行として持ち、`event_logger_schema_version` に
-//// 記録する。記録された版がこのプラグインより新しければ、理由を 1 行出してアクターを
-//// 異常終了させる。待っても直らず、生かしたまま捨て続けると管理 UI に止まっている
-//// ことが見えないため（`docs/plugin-api.md` 第 5.4 節）。
-////
-//// タイムラインのページはこのアクターを通さず `recent_events/2` で直接読み出す
-//// （読み出しは保存の順序に影響しないため）。
+//// 詳しくは README の「保存が追いつかないとき」「スキーマの版」「確認」。
 
 import event_logger/log
 import gleam/dynamic.{type Dynamic}
@@ -187,8 +163,7 @@ const replace_monitored_sql =
 INSERT INTO event_logger_monitored_accounts (pubkey) SELECT unnest($1::text[])
 ON CONFLICT DO NOTHING"
 
-/// `event_logger_events` テーブルの 1 行。イベント map から純粋に導出できるため、DB なしで
-/// テストできる。
+/// `event_logger_events` テーブルの 1 行。イベント map から純粋に導出できる。
 pub type Row {
   Row(
     id: String,
@@ -238,8 +213,7 @@ pub type Msg {
   GetMonitored(reply_to: Subject(Monitored))
 }
 
-/// 保存アクターが DB に対して行う 3 つの操作。本番は `postgres/1` が pog の
-/// プールから作り、テストは遅い DB や失敗する DB を模した関数を渡す。
+/// 保存アクターが DB に対して行う 3 つの操作。`postgres/1` が pog のプールから作る。
 pub type Database {
   Database(
     ensure_schema: fn() -> Result(Nil, SchemaError),
@@ -249,7 +223,7 @@ pub type Database {
 }
 
 /// 保存できる状態かどうか。
-type Availability {
+pub type Availability {
   /// 保存できる。
   Ready
   /// 保存が追いつかず、未処理のメッセージが上限を超えた。`dropped` はこの間に
@@ -326,24 +300,30 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     EnsureSchema ->
       case prepare(state) {
-        Ok(#(availability, monitored)) ->
-          actor.continue(State(..state, availability:, monitored:))
+        Ok(#(transition, monitored)) ->
+          actor.continue(
+            State(..apply_transition(state, transition), monitored:),
+          )
         Error(reason) -> {
           log.write(log.Error, reason)
           actor.stop_abnormal(reason)
         }
       }
     Store(row:) ->
-      actor.continue(
-        State(
-          ..state,
-          availability: persist(
-            state,
+      case is_monitored(state.monitored, row.pubkey) {
+        // 対象外のイベントは保存もせず、破棄の件数にも数えない。
+        False -> actor.continue(state)
+        True ->
+          persist(
+            state.availability,
             row,
             pending_messages(process.self()) |> result.unwrap(0),
-          ),
-        ),
-      )
+            state.max_queue_len,
+            state.database.insert,
+          )
+          |> apply_transition(state, _)
+          |> actor.continue
+      }
     ReloadMonitored ->
       case state.database.load_monitored() {
         Ok(rows) ->
@@ -364,24 +344,34 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-/// スキーマを最新の版に移行し、次の可用性と監視対象を返す。監視対象の読み込みが
-/// 失敗したときもスキーマの失敗と同じく保存を止めて再試行する。クエリーの失敗では
-/// クラッシュせず、保存を止めたまま再試行を予約する（DB がアプリより後に立ち上がる、
-/// あるいは一時的に落ちている状況が普通にあるため）。版がこのプラグインより新しければ、
-/// 待っても直らないので止める理由を返す。
-fn prepare(state: State) -> Result(#(Availability, Monitored), String) {
-  case state.database.ensure_schema() {
-    Ok(Nil) ->
-      case state.database.load_monitored() {
-        Ok(rows) -> Ok(#(resume(state.availability), monitored_from_rows(rows)))
-        Error(error) ->
-          Ok(#(
-            suspend(state, error, dropped(state.availability)),
-            state.monitored,
-          ))
-      }
+/// `transition` のログ行を順に出し、`retry` なら `schema_retry_delay_ms` の後に
+/// `EnsureSchema` を送る予約をして、次の可用性を持つ状態を返す。
+fn apply_transition(state: State, transition: Transition) -> State {
+  list.each(transition.lines, fn(line) { log.write(line.0, line.1) })
+  case transition.retry {
+    True -> {
+      let _ =
+        process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
+      Nil
+    }
+    False -> Nil
+  }
+  State(..state, availability: transition.availability)
+}
+
+/// スキーマを最新の版に移行して監視対象を読み、次の遷移と監視対象を返す。どちらの
+/// クエリーが失敗しても保存を止めて再試行する（DB がアプリより後に立ち上がる、あるいは
+/// 一時的に落ちている状況が普通にあるため）。版がこのプラグインより新しければ、待っても
+/// 直らないので止める理由を返す。
+fn prepare(state: State) -> Result(#(Transition, Monitored), String) {
+  let loaded = {
+    use Nil <- result.try(state.database.ensure_schema())
+    state.database.load_monitored() |> result.map_error(SchemaQueryFailed)
+  }
+  case loaded {
+    Ok(rows) -> Ok(#(resume(state.availability), monitored_from_rows(rows)))
     Error(SchemaQueryFailed(error)) ->
-      Ok(#(suspend(state, error, dropped(state.availability)), state.monitored))
+      Ok(#(suspend(state.availability, error), state.monitored))
     Error(SchemaTooNew(found:, supported:)) ->
       Error(
         "database schema version "
@@ -393,94 +383,133 @@ fn prepare(state: State) -> Result(#(Availability, Monitored), String) {
   }
 }
 
-/// 1 行を保存する。`queue_len` はこの行を取り出したあとに残っている未処理の
-/// メッセージ数である。保存を止めている間と、積まれすぎている間は数えて捨てる
-/// だけにして、DB を待たずにメールボックスを減らす。対象外のイベントは保存も
-/// せず、破棄の件数にも数えない。
-fn persist(state: State, row: Row, queue_len: Int) -> Availability {
-  case is_monitored(state.monitored, row.pubkey) {
-    False -> state.availability
-    True ->
-      case state.availability {
-        Unavailable(dropped:, reported:) ->
-          Unavailable(dropped: dropped + 1, reported:)
-        // 上限の半分まで減るまで捨て続ける。上限そのものを復帰条件にすると、
-        // 境界で捨て始めと再開のログが 1 件ごとに交互に出る。
-        Overloaded(dropped:) if queue_len > state.max_queue_len / 2 ->
-          Overloaded(dropped: dropped + 1)
-        Overloaded(dropped:) -> {
-          log.write(
-            log.Notice,
-            "caught up; dropped "
-              <> int.to_string(dropped)
-              <> " events while overloaded",
-          )
-          write(state, row)
-        }
-        Ready if queue_len > state.max_queue_len -> {
-          log.write(
+/// 可用性の遷移の結果。`availability` は次の可用性、`lines` は出すログ行を出す順に
+/// 並べたもの、`retry` は `schema_retry_delay_ms` の後に `EnsureSchema` を送るか。
+/// 遷移の関数はログも再試行の予約も行わず、この値に載せて返す。
+pub type Transition {
+  Transition(
+    availability: Availability,
+    lines: List(#(log.Level, String)),
+    retry: Bool,
+  )
+}
+
+/// ログ行も再試行も伴わない遷移。
+fn quiet(availability: Availability) -> Transition {
+  Transition(availability:, lines: [], retry: False)
+}
+
+/// 1 行を保存するか数えて捨てるかを決める。`queue_len` はこの行を取り出したあとに
+/// 残っている未処理のメッセージ数、`max_queue_len` はその上限である。保存を止めている
+/// 間と、積まれすぎている間は挿入せずに数えて捨てるだけにして、DB を待たずに
+/// メールボックスを減らす。`insert` を呼ぶのは保存するときだけである。
+pub fn persist(
+  availability: Availability,
+  row: Row,
+  queue_len: Int,
+  max_queue_len: Int,
+  insert: fn(Row) -> Result(Int, pog.QueryError),
+) -> Transition {
+  case availability {
+    Unavailable(dropped:, reported:) ->
+      quiet(Unavailable(dropped: dropped + 1, reported:))
+    // 上限の半分まで減るまで捨て続ける。上限そのものを復帰条件にすると、
+    // 境界で捨て始めと再開のログが 1 件ごとに交互に出る。
+    Overloaded(dropped:) if queue_len > max_queue_len / 2 ->
+      quiet(Overloaded(dropped: dropped + 1))
+    Overloaded(dropped:) -> {
+      let stored = write(availability, row, insert)
+      let caught_up = #(
+        log.Notice,
+        "caught up; dropped "
+          <> int.to_string(dropped)
+          <> " events while overloaded",
+      )
+      Transition(..stored, lines: [caught_up, ..stored.lines])
+    }
+    Ready if queue_len > max_queue_len ->
+      Transition(
+        availability: Overloaded(dropped: 1),
+        lines: [
+          #(
             log.Warning,
             "too slow: "
               <> int.to_string(queue_len)
               <> " events queued (limit "
-              <> int.to_string(state.max_queue_len)
+              <> int.to_string(max_queue_len)
               <> "); dropping until it catches up",
-          )
-          Overloaded(dropped: 1)
-        }
-        Ready -> write(state, row)
-      }
+          ),
+        ],
+        retry: False,
+      )
+    Ready -> write(availability, row, insert)
   }
 }
 
-/// 1 行を挿入し、結果から次の可用性を決める。
-fn write(state: State, row: Row) -> Availability {
-  case state.database.insert(row) {
-    Ok(_inserted) -> Ready
+/// 1 行を `insert` で挿入し、結果から次の遷移を決める。
+fn write(
+  availability: Availability,
+  row: Row,
+  insert: fn(Row) -> Result(Int, pog.QueryError),
+) -> Transition {
+  case insert(row) {
+    Ok(_inserted) -> quiet(Ready)
     Error(error) ->
       case unreachable(error) {
         // 到達できないなら、このイベントを 1 件目として保存を止める。
-        True -> suspend(state, error, 1)
+        True -> suspend(availability, error)
         // それ以外はこのイベント固有の問題なので、保存は続ける。
-        False -> {
-          log.write(
-            log.Warning,
-            "insert failed for event "
-              <> row.id
-              <> ": "
-              <> string.inspect(error),
+        False ->
+          Transition(
+            availability: Ready,
+            lines: [
+              #(
+                log.Warning,
+                "insert failed for event "
+                  <> row.id
+                  <> ": "
+                  <> string.inspect(error),
+              ),
+            ],
+            retry: False,
           )
-          Ready
-        }
       }
   }
 }
 
 /// 保存を再開する。止まっている間に捨てた件数があれば、まとめて報告する。
-fn resume(availability: Availability) -> Availability {
-  case availability {
+pub fn resume(availability: Availability) -> Transition {
+  let line = case availability {
     Unavailable(dropped:, ..) if dropped > 0 ->
-      log.write(
-        log.Notice,
-        "database is back; dropped "
-          <> int.to_string(dropped)
-          <> " events while it was unavailable",
-      )
-    _ -> log.write(log.Notice, "schema ready")
+      "database is back; dropped "
+      <> int.to_string(dropped)
+      <> " events while it was unavailable"
+    _ -> "schema ready"
   }
-  Ready
+  Transition(availability: Ready, lines: [#(log.Notice, line)], retry: False)
 }
 
-/// 保存を止めて再試行を予約する。出すべきログ行は `suspension_message` が
-/// 決める。理由の抑止が効くのは到達できないことによる停止だけなので、次に
-/// 持ち越す「報告済み」もそこから導ける。
-fn suspend(state: State, error: pog.QueryError, dropped: Int) -> Availability {
-  let _ = process.send_after(state.self, schema_retry_delay_ms, EnsureSchema)
-  case suspension_message(error, was_reported(state.availability), dropped) {
-    Some(line) -> log.write(log.Warning, line)
-    None -> Nil
+/// 保存を止めて再試行を予約する。出すべきログ行は `suspension_message` が決める。
+/// 理由の抑止が効くのは到達できないことによる停止だけなので、次に持ち越す「報告済み」
+/// もそこから導ける。止まっていない状態から止めるときは、止める契機になった 1 件を
+/// 捨てた 1 件目に数え、理由はまだ報告していないものとする。
+pub fn suspend(
+  availability: Availability,
+  error: pog.QueryError,
+) -> Transition {
+  let #(dropped, reported) = case availability {
+    Unavailable(dropped:, reported:) -> #(dropped, reported)
+    Ready | Overloaded(..) -> #(1, False)
   }
-  Unavailable(dropped: dropped, reported: unreachable(error))
+  let lines = case suspension_message(error, reported, dropped) {
+    Some(line) -> [#(log.Warning, line)]
+    None -> []
+  }
+  Transition(
+    availability: Unavailable(dropped:, reported: unreachable(error)),
+    lines:,
+    retry: True,
+  )
 }
 
 /// 停止の理由として出すログ行。`None` なら黙る。DB に到達できないことによる
@@ -525,27 +554,6 @@ fn unreachable(error: pog.QueryError) -> Bool {
   }
 }
 
-/// 保存を止めてから捨てたイベント数。
-fn dropped(availability: Availability) -> Int {
-  case availability {
-    // 呼び出し元の prepare は EnsureSchema を受けたときだけ動き、EnsureSchema は
-    // Unavailable の間しか届かないので、この枝は網羅のためにある。Overloaded の
-    // 件数は保存を止めて捨てた数ではなく、再開するときに persist が報告する。
-    Ready | Overloaded(..) -> 0
-    Unavailable(dropped:, ..) -> dropped
-  }
-}
-
-/// 停止の理由をすでに報告しているか。
-fn was_reported(availability: Availability) -> Bool {
-  case availability {
-    // 保存している間に挿入が到達できずに失敗すると、write から suspend を経て
-    // ここを通る。まだ停止していないので、停止の理由も報告していない。
-    Ready | Overloaded(..) -> False
-    Unavailable(reported:, ..) -> reported
-  }
-}
-
 /// 版 `current` の DB に適用する移行を、`migrations` の並びのまま返す。`current` が
 /// `migrations` の最新の版より新しければ `SchemaTooNew` を返す。
 pub fn pending_migrations(
@@ -571,7 +579,7 @@ pub fn ensure_schema(db: pog.Connection) -> Result(Nil, SchemaError) {
 /// 版の記録のテーブルを用意し、記録された版より新しい移行を `migrations` の並びの順に適用
 /// して、移行ごとに版を記録する。トランザクションは使わない（`pog.transaction` は 5 秒で
 /// 打ち切られるため）。記録された版が `migrations` の最新の版より新しければ
-/// `SchemaTooNew`。テストは `migrations` の先頭の一部を渡して古い版の DB を作る。
+/// `SchemaTooNew`。
 pub fn apply_migrations(
   db: pog.Connection,
   migrations: List(Migration),
