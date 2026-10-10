@@ -63,6 +63,11 @@ fn fixed_resume_point(
   fn(_relay_url) { stored }
 }
 
+/// `signer_key` を読み込む偽のストア。
+fn signer_store() -> bunker.Store {
+  store_with_load(fn() { load_signer(signer_key) })
+}
+
 /// 偽リレー 1 本の上で監視だけを動かすツリー。受信したイベントは `seen` に
 /// 転送するプラグインへ渡る。
 fn start_monitor_tree(
@@ -176,20 +181,33 @@ pub fn monitor_dispatcher_survives_being_killed_test() {
   stop_tree(tree)
 }
 
-/// 常にクラッシュするプラグインの仕様。
-fn crashing_spec(
+/// 子仕様も管理 UI のページも持たず、何もしないプラグイン。各テストは
+/// `plugin.Plugin(..idle_plugin(name), …)` で違うフィールドだけを書く。
+fn idle_plugin(name: String) -> plugin.Plugin {
+  plugin.Plugin(name: name, children: [], ui: None, handle: fn(_incoming) {
+    Nil
+  })
+}
+
+/// 歯止めが既定のプラグインの仕様。
+fn plugin_spec(
   name: Name(plugin_runner.Msg),
-  limits: plugin_runner.Limits,
+  definition: plugin.Plugin,
 ) -> app.PluginSpec {
   app.PluginSpec(
     name: name,
-    plugin: plugin.Plugin(
-      name: "crashing",
-      children: [],
-      ui: None,
-      handle: fn(_incoming) { panic as "boom" },
-    ),
-    limits: limits,
+    plugin: definition,
+    limits: plugin_runner.default_limits,
+  )
+}
+
+/// 常にクラッシュするプラグインの仕様。
+fn crashing_spec(name: Name(plugin_runner.Msg)) -> app.PluginSpec {
+  plugin_spec(
+    name,
+    plugin.Plugin(..idle_plugin("crashing"), handle: fn(_incoming) {
+      panic as "boom"
+    }),
   )
 }
 
@@ -200,12 +218,11 @@ fn hanging_spec(
   limits: plugin_runner.Limits,
 ) -> app.PluginSpec {
   app.PluginSpec(
-    name: name,
-    plugin: plugin.Plugin(
-      name: "hanging",
-      children: [],
-      ui: None,
-      handle: fn(_incoming) { process.sleep_forever() },
+    ..plugin_spec(
+      name,
+      plugin.Plugin(..idle_plugin("hanging"), handle: fn(_incoming) {
+        process.sleep_forever()
+      }),
     ),
     limits: limits,
   )
@@ -265,7 +282,7 @@ pub fn crashing_plugin_does_not_take_down_the_monitor_test() {
   let dedup_name = process.new_name("test_dedup")
   let tree =
     start_plugins_tree(reports, dedup_name, [
-      crashing_spec(crashing, plugin_runner.default_limits),
+      crashing_spec(crashing),
       forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
     ])
   let assert Opened(_relay_url, connection, _socket, deliver) =
@@ -305,7 +322,7 @@ fn start_tree_with_a_disabled_plugin() -> #(
   let seen = process.new_subject()
   let crashing = process.new_name("test_plugin_crashing")
   let specs = [
-    crashing_spec(crashing, plugin_runner.default_limits),
+    crashing_spec(crashing),
     forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
   ]
   let tree = start_plugins_tree(reports, process.new_name("test_dedup"), specs)
@@ -350,11 +367,10 @@ pub fn reenable_plugin_with_an_unknown_name_is_not_found_test() {
 /// 渡す。ツリーを起動しない。
 pub fn plugin_page_content_passes_the_language_test() {
   let spec =
-    app.PluginSpec(
-      name: process.new_name("echo"),
-      plugin: plugin.Plugin(
-        name: "echo",
-        children: [],
+    plugin_spec(
+      process.new_name("echo"),
+      plugin.Plugin(
+        ..idle_plugin("echo"),
         ui: Some(plugin.PluginUi(
           pages: [plugin.PluginPage(key: "status", title: "Status")],
           content: fn(key, language, _accounts) {
@@ -362,9 +378,7 @@ pub fn plugin_page_content_passes_the_language_test() {
           },
           action: None,
         )),
-        handle: fn(_incoming) { Nil },
       ),
-      limits: plugin_runner.default_limits,
     )
   assert app.plugin_page_content([spec], "echo", "status", "ja", [])
     == Ok(dynamic.string("status:ja"))
@@ -373,15 +387,9 @@ pub fn plugin_page_content_passes_the_language_test() {
 /// 名前が `name` で、管理 UI のページの定義が `ui` のプラグインの仕様。ツリーには
 /// 載せず、名前でプラグインを引く関数に一覧として渡す。
 fn page_plugin(name: String, ui: Option(plugin.PluginUi)) -> app.PluginSpec {
-  app.PluginSpec(
-    name: process.new_name(name),
-    plugin: plugin.Plugin(
-      name: name,
-      children: [],
-      ui: ui,
-      handle: fn(_incoming) { Nil },
-    ),
-    limits: plugin_runner.default_limits,
+  plugin_spec(
+    process.new_name(name),
+    plugin.Plugin(..idle_plugin(name), ui: ui),
   )
 }
 
@@ -406,15 +414,7 @@ fn page_ui(
 /// 呼ばれない。
 pub fn plugin_page_action_calls_the_named_plugin_with_the_key_test() {
   let received = process.new_subject()
-  let spec =
-    app.Spec(
-      ..base_spec(process.new_subject()),
-      bunker: bunker_spec(
-        process.new_name("test_bunker"),
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_retry_delay,
-      ),
-    )
+  let spec = signer_spec(process.new_subject())
   let tree = start_tree(spec)
   let plugins = [
     page_plugin(
@@ -547,18 +547,16 @@ fn counting_spec(
       "counting",
       0,
     )
-  app.PluginSpec(
-    name: name,
-    plugin: plugin.Plugin(
-      name: "counting",
+  plugin_spec(
+    name,
+    plugin.Plugin(
+      ..idle_plugin("counting"),
       children: children,
-      ui: None,
       handle: fn(_incoming) {
         store_bump(store)
         Nil
       },
     ),
-    limits: plugin_runner.default_limits,
   )
 }
 
@@ -770,28 +768,49 @@ fn kill_registered(name: Atom) -> Nil
 
 // --- 監視の購読 ---
 
+/// `monitored_accounts_spec` の入力。`load_resume` は監視の再開点、
+/// `load_plugin_resume` はプラグインの保存済みの再開点を読む操作。`catchups` は
+/// プラグインの一覧から取り直しの要求を問い合わせる操作を作る。
+type Monitored {
+  Monitored(
+    store: bunker.Store,
+    load_resume: fn(String) -> Result(Option(Int), String),
+    plugins: List(app.PluginSpec),
+    load_plugin_resume: fn(String) -> Result(Option(Int), String),
+    catchups: fn(List(app.PluginSpec)) ->
+      fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
+  )
+}
+
+/// `signer_key` を登録済みとし、再開点が無く、プラグインを載せず、取り直しの要求は
+/// 本番と同じ `app.plugin_catchups` で問い合わせる入力。各テストは
+/// `Monitored(..monitored_defaults(), …)` で違うフィールドだけを書く。
+fn monitored_defaults() -> Monitored {
+  Monitored(
+    store: signer_store(),
+    load_resume: fixed_resume_point(Ok(None)),
+    plugins: [],
+    load_plugin_resume: fixed_resume_point(Ok(None)),
+    catchups: app.plugin_catchups,
+  )
+}
+
 /// 監視のリレーを起動後に開くツリーの仕様。購読は本番と同じ
 /// `subscriptions.monitor_relay_subscriptions` から組み立てる。リレーは呼び出し側が
 /// `start_tree_with_relays` で開き、バンカーの用途で開いたリレーの購読も
-/// `subscribed` へ報告される。プラグインを載せると、その取り直しの要求も本番と同じ
-/// `app.plugin_catchups` から購読へ現れる。`load_plugin_resume` はプラグインの
-/// 保存済みの再開点を読む操作。`catchups` は取り直しの要求を問い合わせる操作で、
-/// 呼び出し側は通常 `app.plugin_catchups(plugins)` を渡す。作者の照合も本番と同じ
+/// `subscribed` へ報告される。プラグインを載せると、その取り直しの要求も
+/// `monitored.catchups` から購読へ現れる。作者の照合も本番と同じ
 /// `bunker.is_signer` で行う。
 fn monitored_accounts_spec(
   reports: Subject(Report),
   subscribed: Subject(SubscriptionReport),
-  bunker_name: Name(bunker.Msg),
-  store: bunker.Store,
-  load_resume: fn(String) -> Result(Option(Int), String),
-  plugins: List(app.PluginSpec),
-  load_plugin_resume: fn(String) -> Result(Option(Int), String),
-  catchups: fn() -> Result(List(#(String, plugin_runner.Catchup)), Nil),
+  monitored: Monitored,
 ) -> app.Spec {
+  let bunker_name = process.new_name("test_bunker")
   let dedup_name = process.new_name("test_dedup")
   app.Spec(
     ..base_spec(reports),
-    plugins: plugins,
+    plugins: monitored.plugins,
     monitor: app.Monitor(
       ..idle_monitor(),
       name: dedup_name,
@@ -799,14 +818,14 @@ fn monitored_accounts_spec(
       subscriptions: subscriptions.monitor_relay_subscriptions(
         bunker_name,
         dedup_name,
-        load_resume,
-        load_plugin_resume,
-        catchups,
+        monitored.load_resume,
+        monitored.load_plugin_resume,
+        monitored.catchups(monitored.plugins),
         _,
       ),
       accepts_author: bunker.is_signer(bunker_name, _),
     ),
-    bunker: bunker_spec(bunker_name, store, fixed_retry_delay),
+    bunker: bunker_spec(bunker_name, monitored.store, fixed_retry_delay),
     open: fake_open(reports, Some(subscribed)),
   )
 }
@@ -824,23 +843,21 @@ fn requests_on(report: SubscriptionReport, relay_url: String) -> Bool {
 pub fn the_first_monitor_subscription_includes_the_loaded_signers_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() {
-          // 読み込みが接続の最初の評価より遅れて終わることを模す。
-          process.sleep(300)
-          load_signer(signer_key)
-        }),
-        fixed_resume_point(Ok(Some(1234))),
-        [],
-        fixed_resume_point(Ok(None)),
-        app.plugin_catchups([]),
+        Monitored(
+          ..monitored_defaults(),
+          store: store_with_load(fn() {
+            // 読み込みが接続の最初の評価より遅れて終わることを模す。
+            process.sleep(300)
+            load_signer(signer_key)
+          }),
+          load_resume: fixed_resume_point(Ok(Some(1234))),
+        ),
       ),
       [test_relay_url],
       [],
@@ -860,19 +877,13 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
   let calls = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let other_signer = account.pubkey_hex(account_for(other_signer_key))
   let spec =
     monitored_accounts_spec(
       reports,
       subscribed,
-      bunker_name,
-      memory_store(calls, [], False),
-      fixed_resume_point(Ok(None)),
-      [],
-      fixed_resume_point(Ok(None)),
-      app.plugin_catchups([]),
+      Monitored(..monitored_defaults(), store: memory_store(calls, [], False)),
     )
   let tree = start_tree_with_relays(spec, [test_relay_url], [])
   assert process.receive(subscribed, 2000) == Ok(Subscribed(test_relay_url, []))
@@ -895,13 +906,13 @@ pub fn the_monitor_subscription_follows_account_changes_test() {
   let assert Some(since_after_second_add) = second_filter.since
   assert since_after_second_add >= since_after_first_add
 
-  assert bunker.remove_account(bunker_name, other_signer) == Ok(Nil)
+  assert bunker.remove_account(spec.bunker.name, other_signer) == Ok(Nil)
   let assert Ok(Subscribed(_relay_url, [message.Req(_id, third_filter)])) =
     process.receive(subscribed, 2000)
   assert third_filter.authors == Some([signer])
   assert third_filter.since == Some(since_after_second_add)
 
-  assert bunker.remove_account(bunker_name, signer) == Ok(Nil)
+  assert bunker.remove_account(spec.bunker.name, signer) == Ok(Nil)
   assert process.receive(subscribed, 2000)
     == Ok(Subscribed(test_relay_url, [message.Close("nostr-no-su")]))
   stop_tree(tree)
@@ -913,7 +924,6 @@ pub fn the_monitor_delivers_only_events_of_registered_accounts_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
   let seen = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let plugins = [
     forwarding_spec(process.new_name("test_plugin_forwarding"), seen),
   ]
@@ -922,12 +932,7 @@ pub fn the_monitor_delivers_only_events_of_registered_accounts_test() {
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(None)),
-        plugins,
-        fixed_resume_point(Ok(None)),
-        app.plugin_catchups(plugins),
+        Monitored(..monitored_defaults(), plugins: plugins),
       ),
       [test_relay_url],
       [],
@@ -953,19 +958,14 @@ pub fn the_registered_authors_follow_account_changes_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
   let calls = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let spec =
     monitored_accounts_spec(
       reports,
       subscribed,
-      bunker_name,
-      memory_store(calls, [], False),
-      fixed_resume_point(Ok(None)),
-      [],
-      fixed_resume_point(Ok(None)),
-      app.plugin_catchups([]),
+      Monitored(..monitored_defaults(), store: memory_store(calls, [], False)),
     )
+  let bunker_name = spec.bunker.name
   let tree = start_tree_with_relays(spec, [test_relay_url], [])
   assert bunker.is_signer(bunker_name, signer) == False
 
@@ -983,21 +983,11 @@ pub fn the_registered_authors_follow_account_changes_test() {
 pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let first = "ws://first.test"
   let second = "ws://second.test"
   let tree =
     start_tree_with_relays(
-      monitored_accounts_spec(
-        reports,
-        subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(None)),
-        [],
-        fixed_resume_point(Ok(None)),
-        app.plugin_catchups([]),
-      ),
+      monitored_accounts_spec(reports, subscribed, monitored_defaults()),
       [first, second],
       [],
     )
@@ -1037,18 +1027,15 @@ pub fn a_reconnected_monitor_relay_resumes_from_its_latest_event_test() {
 pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Error("unavailable")),
-        [],
-        fixed_resume_point(Ok(None)),
-        app.plugin_catchups([]),
+        Monitored(
+          ..monitored_defaults(),
+          load_resume: fixed_resume_point(Error("unavailable")),
+        ),
       ),
       [test_relay_url],
       [],
@@ -1064,18 +1051,14 @@ pub fn an_unreadable_resume_point_keeps_the_monitor_relay_unsubscribed_test() {
 pub fn catchups_that_fail_keep_the_definition_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(None)),
-        [],
-        fixed_resume_point(Ok(None)),
-        fn() { Error(Nil) },
+        Monitored(..monitored_defaults(), catchups: fn(_plugins) {
+          fn() { Error(Nil) }
+        }),
       ),
       [test_relay_url],
       [],
@@ -1130,22 +1113,19 @@ fn catchup_filters(
 pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let runner = process.new_name("test_plugin_forwarding")
   let signer = account.pubkey_hex(account_for(signer_key))
-  let plugins = [forwarding_spec(runner, process.new_subject())]
   let before_start = time.now_seconds()
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(None)),
-        plugins,
-        fixed_resume_point(Ok(Some(1234))),
-        app.plugin_catchups(plugins),
+        Monitored(
+          ..monitored_defaults(),
+          plugins: [forwarding_spec(runner, process.new_subject())],
+          load_plugin_resume: fixed_resume_point(Ok(Some(1234))),
+        ),
       ),
       [test_relay_url],
       [],
@@ -1186,24 +1166,22 @@ pub fn a_catchup_subscription_follows_the_runner_resume_point_test() {
 pub fn a_catchup_subscription_ends_at_the_monitor_resume_point_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
-  let plugins = [
-    forwarding_spec(
-      process.new_name("test_plugin_forwarding"),
-      process.new_subject(),
-    ),
-  ]
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(Some(1500))),
-        plugins,
-        fixed_resume_point(Ok(Some(1234))),
-        app.plugin_catchups(plugins),
+        Monitored(
+          ..monitored_defaults(),
+          load_resume: fixed_resume_point(Ok(Some(1500))),
+          plugins: [
+            forwarding_spec(
+              process.new_name("test_plugin_forwarding"),
+              process.new_subject(),
+            ),
+          ],
+          load_plugin_resume: fixed_resume_point(Ok(Some(1234))),
+        ),
       ),
       [test_relay_url],
       [],
@@ -1222,24 +1200,17 @@ pub fn a_catchup_subscription_ends_at_the_monitor_resume_point_test() {
 pub fn a_runner_without_a_saved_resume_point_requests_no_catchup_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
-  let plugins = [
-    forwarding_spec(
-      process.new_name("test_plugin_forwarding"),
-      process.new_subject(),
-    ),
-  ]
   let tree =
     start_tree_with_relays(
       monitored_accounts_spec(
         reports,
         subscribed,
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_resume_point(Ok(None)),
-        plugins,
-        fixed_resume_point(Ok(None)),
-        app.plugin_catchups(plugins),
+        Monitored(..monitored_defaults(), plugins: [
+          forwarding_spec(
+            process.new_name("test_plugin_forwarding"),
+            process.new_subject(),
+          ),
+        ]),
       ),
       [test_relay_url],
       [],
@@ -1264,24 +1235,16 @@ fn reports_on(report: SubscriptionReport, relay_url: String) -> Bool {
 pub fn a_restarted_runner_resubscribes_only_the_monitor_relays_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let runner = process.new_name("test_plugin_forwarding")
   let bunker_relay_url = "ws://bunker.test"
-  let store = store_with_load(fn() { load_signer(signer_key) })
-  let plugins = [forwarding_spec(runner, process.new_subject())]
   let spec =
     monitored_accounts_spec(
       reports,
       subscribed,
-      bunker_name,
-      store,
-      fixed_resume_point(Ok(None)),
-      plugins,
-      fixed_resume_point(Ok(None)),
-      app.plugin_catchups(plugins),
+      Monitored(..monitored_defaults(), plugins: [
+        forwarding_spec(runner, process.new_subject()),
+      ]),
     )
-  let spec =
-    app.Spec(..spec, bunker: bunker_spec(bunker_name, store, fixed_retry_delay))
   let tree = start_tree_with_relays(spec, [test_relay_url], [bunker_relay_url])
   let #(_started_skipped, bunker_started) =
     receive_until(subscribed, reports_on(_, bunker_relay_url), 2000)
@@ -1312,12 +1275,7 @@ fn start_bare_runner(
   let assert Ok(_started) =
     plugin_runner.start(
       runner_name,
-      plugin.Plugin(
-        name: plugin_name,
-        children: [],
-        ui: None,
-        handle: process.send(seen, _),
-      ),
+      plugin.Plugin(..idle_plugin(plugin_name), handle: process.send(seen, _)),
       fn() { process.send(resubscribed, Nil) },
       plugin_runner.default_limits,
     )
@@ -1587,21 +1545,23 @@ pub fn an_event_on_an_unknown_subscription_is_dropped_test() {
 
 // --- 登録されたリレー ---
 
+/// `signer_key` のアカウントと、`url` の `BunkerOnly` のリレーを持つ読み込みの結果。
+fn load_signer_with_relay(url: String) -> Result(bunker.Snapshot, String) {
+  use snapshot <- result.try(load_signer(signer_key))
+  Ok(
+    bunker.Snapshot(..snapshot, relays: [
+      relay_list.Registered(url: url, roles: relay_list.BunkerOnly),
+    ]),
+  )
+}
+
 /// リレーを開かずに起動したツリーでも、最初の読み込みで届いた `Snapshot.relays`
 /// から接続が開く。
 pub fn registered_relays_open_after_the_first_load_test() {
   let reports = process.new_subject()
   let name = process.new_name("test_bunker")
   let url = "ws://registered.test"
-  let store =
-    store_with_load(fn() {
-      use snapshot <- result.try(load_signer(signer_key))
-      Ok(
-        bunker.Snapshot(..snapshot, relays: [
-          relay_list.Registered(url: url, roles: relay_list.BunkerOnly),
-        ]),
-      )
-    })
+  let store = store_with_load(fn() { load_signer_with_relay(url) })
   let spec =
     app.Spec(
       ..base_spec(reports),
@@ -1626,14 +1586,7 @@ pub fn registered_relays_open_after_the_store_recovers_test() {
     store_with_load(fn() {
       case next_load() {
         0 -> Error(store_failure())
-        _ -> {
-          use snapshot <- result.try(load_signer(signer_key))
-          Ok(
-            bunker.Snapshot(..snapshot, relays: [
-              relay_list.Registered(url: url, roles: relay_list.BunkerOnly),
-            ]),
-          )
-        }
+        _ -> load_signer_with_relay(url)
       }
     })
   let spec =
@@ -1814,27 +1767,16 @@ pub fn plugin_rows_carry_the_runner_status_and_pages_test() {
   let name = process.new_name("test_plugin_rows_runner")
   let paged =
     plugin.Plugin(
-      name: "paged",
-      children: [],
+      ..idle_plugin("paged"),
       ui: Some(plugin.PluginUi(
         pages: [plugin.PluginPage(key: "status", title: "Status")],
         content: fn(_key, _language, _accounts) { Ok(dynamic.string("")) },
         action: None,
       )),
-      handle: fn(_incoming) { Nil },
     )
   let assert Ok(_) =
     plugin_runner.start(name, paged, fn() { Nil }, plugin_runner.default_limits)
-  assert app.plugin_rows(
-      [
-        app.PluginSpec(
-          name: name,
-          plugin: paged,
-          limits: plugin_runner.default_limits,
-        ),
-      ],
-      task.deadline_in(1000),
-    )
+  assert app.plugin_rows([plugin_spec(name, paged)], task.deadline_in(1000))
     == [
       dashboard.PluginRow(
         name: "paged",
@@ -1853,18 +1795,7 @@ pub fn plugin_rows_give_up_on_unanswering_runners_test() {
     process.new_name("test_plugin_rows_unanswering_2"),
   ]
   list.each(unanswering, spawn_unanswering)
-  let silent =
-    plugin.Plugin(name: "silent", children: [], ui: None, handle: fn(_incoming) {
-      Nil
-    })
-  let specs =
-    list.map(unanswering, fn(name) {
-      app.PluginSpec(
-        name: name,
-        plugin: silent,
-        limits: plugin_runner.default_limits,
-      )
-    })
+  let specs = list.map(unanswering, plugin_spec(_, idle_plugin("silent")))
   let started_at = time.monotonic_ms()
   let rows = app.plugin_rows(specs, task.deadline_in(300))
   assert time.monotonic_ms() - started_at < 1000
@@ -1980,7 +1911,7 @@ fn signer_spec(reports: Subject(Report)) -> app.Spec {
     ..base_spec(reports),
     bunker: bunker_spec(
       process.new_name("test_bunker"),
-      store_with_load(fn() { load_signer(signer_key) }),
+      signer_store(),
       fixed_retry_delay,
     ),
   )
@@ -2065,12 +1996,7 @@ pub fn a_closed_bunker_relay_is_unpublished_and_not_restarted_test() {
   let y = "ws://y.test"
   let spec =
     app.Spec(
-      ..base_spec(reports),
-      bunker: bunker_spec(
-        process.new_name("test_bunker"),
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_retry_delay,
-      ),
+      ..signer_spec(reports),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
     )
@@ -2104,20 +2030,9 @@ pub fn a_closed_bunker_relay_is_unpublished_and_not_restarted_test() {
 pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
   let reports = process.new_subject()
   let subscribed = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
   let signer = account.pubkey_hex(account_for(signer_key))
   let other_signer = account.pubkey_hex(account_for(other_signer_key))
-  let spec =
-    monitored_accounts_spec(
-      reports,
-      subscribed,
-      bunker_name,
-      store_with_load(fn() { load_signer(signer_key) }),
-      fixed_resume_point(Ok(None)),
-      [],
-      fixed_resume_point(Ok(None)),
-      app.plugin_catchups([]),
-    )
+  let spec = monitored_accounts_spec(reports, subscribed, monitored_defaults())
   let tree = start_tree(spec)
   let r = "ws://runtime-monitor.test"
   let assert Ok(Nil) = app.open_relay(spec, r, relay_list.MonitorOnly)
@@ -2146,7 +2061,7 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
   let assert Ok(Some(_)) = dedup.since(spec.monitor.name, r)
 
   let assert Ok(Nil) = app.close_relay(spec, r)
-  assert bunker.remove_account(bunker_name, other_signer) == Ok(Nil)
+  assert bunker.remove_account(spec.bunker.name, other_signer) == Ok(Nil)
   // r は閉じられているので、以降のアカウントの変更で REQ は届かない。
   assert process.receive(subscribed, 300) == Error(Nil)
 
@@ -2165,23 +2080,14 @@ pub fn a_runtime_monitor_relay_follows_account_changes_and_resume_test() {
 /// `relay_list` へ送られる `Repopulate` が未登録の接続を起動し直す。
 pub fn runtime_relays_are_reopened_when_the_bunker_restarts_test() {
   let reports = process.new_subject()
-  let bunker_name = process.new_name("test_bunker")
-  let spec =
-    app.Spec(
-      ..base_spec(reports),
-      bunker: bunker_spec(
-        bunker_name,
-        store_with_load(fn() { load_signer(signer_key) }),
-        fixed_retry_delay,
-      ),
-    )
+  let spec = signer_spec(reports)
   let tree = start_tree(spec)
   let assert Ok(Nil) =
     app.open_relay(spec, "ws://z.test", relay_list.BunkerOnly)
   let assert Opened("ws://z.test", _connection, _socket, _deliver) =
     await_connection(reports)
 
-  let assert Ok(bunker_pid) = process.named(bunker_name)
+  let assert Ok(bunker_pid) = process.named(spec.bunker.name)
   process.kill(bunker_pid)
   let assert Opened("ws://z.test", _connection_2, _socket_2, _deliver_2) =
     await_connection(reports)
