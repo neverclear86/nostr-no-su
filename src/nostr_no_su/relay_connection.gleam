@@ -30,7 +30,7 @@ pub const default_reconnect_delay =
 pub const default_stable_after_ms = 60_000
 
 /// 状態の問い合わせを待つ時間。接続試行はアクターのループをブロックするため、
-/// `relay_client` の connect タイムアウト（3 秒）より長く取る。
+/// その試行がブロックしうる時間（`relay_client` がハンドシェイクに許す時間）より長く取る。
 const status_timeout_ms = 5000
 
 /// 生きている接続。切断検知のために監視するプロセスと、そこからイベントを

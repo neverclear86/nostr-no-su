@@ -26,7 +26,7 @@
 //// バンカーのセッションのリレーが変わるまで戻らない。
 ////
 //// **既知の窓 3**: ハンドラーは `terminate_dynamic_child` で、接続の停止のタイム
-//// アウト（`factory_supervisor.worker_child` の既定 5000ms）まで待ちうる。変更が
+//// アウト（`connection_shutdown_ms`）まで待ちうる。変更が
 //// 続けて届くと、後ろの問い合わせは `call_timeout_ms` を超えて `NotAnswered` を
 //// 返しうるが、`Change` メッセージ自体はメールボックスに残り、後で適用されうる
 //// （結果は呼び出し側からは不明）。
@@ -173,21 +173,21 @@ type State {
 }
 
 /// `registered` を順に `open` で一覧の末尾へ足す。すでに一覧にある URL
-/// （`AlreadyListed`）は黙って飛ばし、それ以外の拒否は URL と理由の組にして
-/// 返す。
+/// （`AlreadyListed`）は黙って飛ばし、不正な URL（`open` のもう 1 つの拒否の
+/// `InvalidUrl`）は登録の順に集めて返す。
 pub fn open_all(
   entries: List(Entry),
   registered: List(Registered),
-) -> #(List(Entry), List(#(String, ChangeError))) {
-  let #(entries, rejections) = {
-    use #(entries, rejections), item <- list.fold(registered, #(entries, []))
+) -> #(List(Entry), List(String)) {
+  let #(entries, invalid_urls) = {
+    use #(entries, invalid_urls), item <- list.fold(registered, #(entries, []))
     case open(entries, item.url, item.roles) {
-      Ok(next) -> #(next, rejections)
-      Error(AlreadyListed) -> #(entries, rejections)
-      Error(error) -> #(entries, [#(item.url, error), ..rejections])
+      Ok(next) -> #(next, invalid_urls)
+      Error(AlreadyListed) -> #(entries, invalid_urls)
+      Error(_) -> #(entries, [item.url, ..invalid_urls])
     }
   }
-  #(entries, list.reverse(rejections))
+  #(entries, list.reverse(invalid_urls))
 }
 
 /// `url` を一覧の末尾に足す。用途ごとに新しい名前を作る。
@@ -386,6 +386,10 @@ pub type RestartTolerance {
 /// そもそも再起動にはならない。
 pub const subtree_restart_tolerance = RestartTolerance(intensity: 5, period: 10)
 
+/// factory の子（接続アクター）の停止要求への応答を待つ時間（ミリ秒）。超えた子は
+/// 強制 kill される。
+const connection_shutdown_ms = 5000
+
 /// 用途 `role` の接続を factory の子として起動するスーパーバイザーの子仕様。
 /// `start` は `Connection` を受け取り接続アクターを起動するテンプレート
 /// （`relay_connection.start` を包んだもの）。factory の起動が終わった直後に、
@@ -400,6 +404,7 @@ pub fn connections_child(
 ) {
   supervision.supervisor(fn() {
     factory_supervisor.worker_child(start)
+    |> factory_supervisor.timeout(connection_shutdown_ms)
     |> factory_supervisor.named(factory_for_role(factories, role))
     |> factory_supervisor.restart_strategy(supervision.Permanent)
     |> factory_supervisor.restart_tolerance(
@@ -415,9 +420,8 @@ pub fn connections_child(
 }
 
 /// このアクターが `Change` に応答するまで待つ時間の上限。ハンドラーは用途ごとに
-/// `terminate_dynamic_child` で接続の停止のタイムアウト（factory の
-/// `worker_child` の既定 5000ms）まで待つことがあり、1 回の変更で 2 用途を
-/// 止めうるので、それより十分に長く取る。
+/// `terminate_dynamic_child` で `connection_shutdown_ms` まで待つことがあり、
+/// 1 回の変更で 2 用途を止めうるので、その 2 回分より十分に長く取る。
 const call_timeout_ms = 15_000
 
 /// 一覧を `apply` で変える。応答が無ければ `NotAnswered` にする。`NotAnswered`
@@ -464,13 +468,12 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     OpenRegistered(relays) -> {
-      let #(next, rejections) = open_all(state.entries, relays)
-      list.each(rejections, fn(rejection) {
-        let #(url, error) = rejection
+      let #(next, invalid_urls) = open_all(state.entries, relays)
+      list.each(invalid_urls, fn(url) {
         log.write(
           log.Warning,
           log.relay_prefix(url),
-          "skipped registered relay: " <> skipped_reason(error),
+          "skipped registered relay: invalid url (use ws:// or wss://)",
         )
       })
       actor.continue(apply(state, next, state.session_urls))
@@ -551,16 +554,6 @@ fn role_connections(state: State, role: Role) -> List(Connection) {
   case role {
     SessionOnly -> state.sessions
     Monitor | Bunker -> connections(state.entries, role)
-  }
-}
-
-/// 登録されたリレーを飛ばした理由の説明。`open_all` が返す拒否は `InvalidUrl` だけ
-/// （`AlreadyListed` は `open_all` の時点で飛ばし、`NotListed` と `NotAnswered` は `open` が
-/// 返さない）だが、`ChangeError` を網羅するために残りも扱う。
-fn skipped_reason(error: ChangeError) -> String {
-  case error {
-    InvalidUrl -> "invalid url (use ws:// or wss://)"
-    AlreadyListed | NotListed | NotAnswered -> "rejected"
   }
 }
 
