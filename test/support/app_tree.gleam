@@ -89,9 +89,6 @@ pub type SubscriptionReport {
   Retrying(relay_url: String)
 }
 
-/// 偽ソケットが自分宛てに予約する再試行の待ち時間の延ばし方。
-const fake_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
-
 /// 偽リレー。接続をすべて報告し、WebSocket の代わりに監視用の待機プロセスを
 /// ツリーへ渡し、送信されたイベントをテストへ転送する。`subscribed` があれば、
 /// 本番の `relay_client` と同じく接続アクターとは別のプロセス（ソケット）の中で、
@@ -114,7 +111,7 @@ pub fn fake_open(
               relay_url,
               subscriptions,
               triggers,
-              relay_client.new_subscription_state(fake_retry_delay, False),
+              relay_client.new_subscription_state(fixed_retry_delay, False),
             )
           }
           None -> process.sleep_forever()
@@ -153,7 +150,7 @@ fn fake_socket_loop(
 ) -> Nil {
   let trigger = process.receive_forever(triggers)
   let synced =
-    relay_client.sync(state, trigger, subscriptions, fake_retry_delay)
+    relay_client.sync(state, trigger, subscriptions, fixed_retry_delay)
   case synced.schedule_retry {
     Some(reservation) -> {
       process.send(target, Retrying(relay_url))
@@ -236,22 +233,44 @@ pub fn start_loading_bunker_tree_with_open(
 ) -> Pid {
   start_tree_with_relays(
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(process.new_subject()),
       bunker: bunker_spec(name, store, retry_delay),
-      admin: None,
       open: open,
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      relay_list: process.new_name("test_relay_list"),
     ),
     [],
     [test_relay_url],
   )
 }
 
-/// テストの読み込みの再試行の待ち時間。初期値と上限を同じにして延ばさない。既存の
-/// テストは一定の間隔を前提に、読み込みの回数と待ち時間を数える。
+/// アカウントを持たないバンカー。ツリーは常にバンカーを含むので、バンカーを使わない
+/// テストのツリーにもこれを載せる。
+pub fn idle_bunker() -> app.Bunker {
+  bunker_spec(
+    process.new_name("test_bunker"),
+    store_with_load(fn() { Ok(accounts_only([])) }),
+    fixed_retry_delay,
+  )
+}
+
+/// テストのツリーの既定の仕様。プラグインも監視のリレーも持たず、バンカーは
+/// `idle_bunker`、接続は `reports` へ報告する `fake_open`、再接続の待ちは
+/// `fixed_retry_delay` にする。各テストは `app.Spec(..base_spec(reports), …)` で
+/// 既定と違うフィールドだけを書く。
+pub fn base_spec(reports: Subject(Report)) -> app.Spec {
+  app.Spec(
+    plugins: [],
+    not_loaded_plugins: [],
+    monitor: idle_monitor(),
+    bunker: idle_bunker(),
+    admin: None,
+    open: fake_open(reports, None),
+    reconnect_delay: fixed_retry_delay,
+    relay_list: process.new_name("test_relay_list"),
+  )
+}
+
+/// テストの再試行の待ち時間。初期値と上限を同じにして延ばさない。既存のテストは
+/// 一定の間隔を前提に、再試行の回数と待ち時間を数える。
 pub const fixed_retry_delay = Backoff(initial_ms: 100, max_ms: 100)
 
 /// バンカーサブツリーの仕様。接続プールとロックのプールは到達できないポートを指し、

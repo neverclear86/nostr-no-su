@@ -218,29 +218,11 @@ pub fn redacts_the_database_password_in_a_pgo_crash_report_test() {
   app_tree.stop_tree(started.pid)
 }
 
-/// `pool` と `admin` だけが変わるテスト用の Spec。他の欄は
-/// `redactable_secrets` が読まないが、仕様の形を本番と同じに保つため既存の
-/// fixture で埋める。
+/// `pool` と `admin` だけが `app_tree.base_spec` と違うテスト用の Spec。他の欄は
+/// `redactable_secrets` が読まない。
 fn spec(pool: pog.Config, admin: Option(config.AdminListen)) -> app.Spec {
-  app.Spec(
-    plugins: [],
-    not_loaded_plugins: [],
-    monitor: app_tree.idle_monitor(),
-    bunker: app.Bunker(
-      ..app_tree.bunker_spec(
-        process.new_name("log_redaction_bunker"),
-        app_tree.store_with_load(fn() { Ok(app_tree.accounts_only([])) }),
-        app_tree.fixed_retry_delay,
-      ),
-      pool: pool,
-    ),
-    admin:,
-    open: fn(_url, _subscriptions, _on_event, _on_ok, _authenticator) {
-      Error("unused")
-    },
-    reconnect_delay: app_tree.fixed_retry_delay,
-    relay_list: process.new_name("log_redaction_relay_list"),
-  )
+  let base = app_tree.base_spec(process.new_subject())
+  app.Spec(..base, bunker: app.Bunker(..base.bunker, pool: pool), admin:)
 }
 
 /// 指定したパスワードを持つプールの設定。他は到達不能な既定値のまま。

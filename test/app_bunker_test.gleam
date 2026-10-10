@@ -27,9 +27,9 @@ import nostr_no_su/time
 import support/app_tree.{
   type Report, type StoreCall, type SubscriptionReport, Inserted, Opened,
   Published, Subscribed, Wrote, accounts_only, authenticator_recording_open,
-  await_connection, await_signers, bunker_spec, call_counter, client_key,
-  committed_but_timed_out_store, connect_request, connect_request_from,
-  connection_name, expect_published, fake_open, fixed_retry_delay, idle_monitor,
+  await_connection, await_signers, base_spec, bunker_spec, call_counter,
+  client_key, committed_but_timed_out_store, connect_request,
+  connect_request_from, connection_name, expect_published, fixed_retry_delay,
   load_signer, memory_store, other_client_key, other_signer_key, request,
   response_body, response_result, secret, signed_request, signer_key,
   start_database, start_loading_bunker_tree, start_loading_bunker_tree_with_open,
@@ -1165,19 +1165,14 @@ pub fn a_lost_socket_stops_receiving_responses_test() {
   let relay_b = "ws://relay.two"
   let spec =
     app.Spec(
-      plugins: [],
-      not_loaded_plugins: [],
-      monitor: idle_monitor(),
+      ..base_spec(reports),
       bunker: bunker_spec(
         process.new_name("test_bunker"),
         store_with_load(fn() { load_signer(signer_key) }),
         fixed_retry_delay,
       ),
-      admin: None,
-      open: fake_open(reports, None),
       // 再接続で送信手段が戻ってこないよう、テストより十分に長く取る。
       reconnect_delay: Backoff(initial_ms: 60_000, max_ms: 60_000),
-      relay_list: process.new_name("test_relay_list"),
     )
   let tree = start_tree_with_relays(spec, [], [relay_a, relay_b])
   // `Opened` は接続アクターごとに独立して届くため、到着順ではなく URL で
