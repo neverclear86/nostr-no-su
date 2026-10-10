@@ -5,7 +5,7 @@ FROM ghcr.io/gleam-lang/gleam:v1.19.1-erlang-alpine@sha256:1d704be72240b08a4f100
 # OTP をどの platform でも一致させるため、gleam のイメージからは /bin/gleam だけを写し、ビルドと
 # 実行の基底にはこの otp ステージを共通に使う（一致は CI の docker-image ジョブが確かめる）。
 # gleam の版は上の FROM で、OTP の版はこの FROM で、それぞれタグとダイジェストを一緒に変える。
-FROM erlang:29.0.2-alpine@sha256:a725e9993586dcd8da0e42c7f0aa48dfa881dc2ff7f32b63716355b580a963eb AS otp
+FROM erlang:29.1.1-alpine@sha256:e7a27e743d17abf139518a69ba3861b43a88ad8396296f0a859d7f37031dbde0 AS otp
 
 FROM otp AS toolchain
 COPY --from=gleam /bin/gleam /bin/gleam
