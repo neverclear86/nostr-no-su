@@ -168,13 +168,21 @@ fn adding_relay(
   }
 }
 
-/// `relays` と同じ id と URL の DB の行。用途の編集と削除の撮影に使う。
-fn db_relays() -> List(relay_store.Relay) {
-  [
-    relay_store.Relay(1, "wss://relay.example", relay_list.Both),
-    relay_store.Relay(2, "ws://evil/\"><b>xss</b>", relay_list.MonitorOnly),
-    relay_store.Relay(3, "ws://127.0.0.1:7801", relay_list.BunkerOnly),
-  ]
+/// 撮影用のリレーの DB の行。
+const preview_relays = [
+  relay_store.Relay(1, "wss://relay.example", relay_list.Both),
+  relay_store.Relay(2, "ws://evil/\"><b>xss</b>", relay_list.MonitorOnly),
+  relay_store.Relay(3, bunker_relay_url, relay_list.BunkerOnly),
+]
+
+/// `preview_relays` の先頭から `states`（モニター用、バンカー用の順）の件数だけを、同じ id と
+/// URL のダッシュボードの行にする。
+fn preview_relay_rows(
+  states: List(#(dashboard.RoleState, dashboard.RoleState)),
+) -> List(dashboard.RelayRow) {
+  list.map2(preview_relays, states, fn(relay, state) {
+    dashboard.RelayRow(relay.id, relay.url, state.0, state.1)
+  })
 }
 
 /// id の値で、用途の編集と削除の結果を選ぶ。id 2 は書き込まれていないことが確定した DB の
@@ -600,26 +608,16 @@ fn context() -> admin.Context {
     nsec: fn(_) { Ok(signer_nsec) },
     reload_accounts: fn() { Ok(Nil) },
     relays: fn(_deadline) {
-      Ok([
-        dashboard.RelayRow(
-          1,
-          "wss://relay.example",
-          dashboard.Reported(relay_connection.Connected),
-          dashboard.Reported(relay_connection.Disconnected),
-        ),
-        dashboard.RelayRow(
-          2,
-          "ws://evil/\"><b>xss</b>",
-          dashboard.Unanswered,
-          dashboard.Unused,
-        ),
-        dashboard.RelayRow(
-          3,
-          "ws://127.0.0.1:7801",
-          dashboard.Unused,
-          dashboard.Reported(relay_connection.Connected),
-        ),
-      ])
+      Ok(
+        preview_relay_rows([
+          #(
+            dashboard.Reported(relay_connection.Connected),
+            dashboard.Reported(relay_connection.Disconnected),
+          ),
+          #(dashboard.Unanswered, dashboard.Unused),
+          #(dashboard.Unused, dashboard.Reported(relay_connection.Connected)),
+        ]),
+      )
     },
     plugins: fn(_deadline) {
       [
@@ -663,7 +661,7 @@ fn context() -> admin.Context {
       ),
     ],
     add_relay: adding_relay,
-    registered_relays: fn() { Ok(db_relays()) },
+    registered_relays: fn() { Ok(preview_relays) },
     update_relay_roles: fn(relay, _roles) { changing_relay(relay) },
     delete_relay: changing_relay,
     connect_client: fn(_request, _signer) { Error(admin.RelayNotConnected) },
@@ -773,14 +771,14 @@ pub fn main() -> Nil {
       skipped: fn() { Ok([]) },
       pending: fn() { Ok([]) },
       relays: fn(_deadline) {
-        Ok([
-          dashboard.RelayRow(
-            1,
-            "wss://relay.example",
-            dashboard.Reported(relay_connection.Connected),
-            dashboard.Reported(relay_connection.Connected),
-          ),
-        ])
+        Ok(
+          preview_relay_rows([
+            #(
+              dashboard.Reported(relay_connection.Connected),
+              dashboard.Reported(relay_connection.Connected),
+            ),
+          ]),
+        )
       },
       plugins: fn(_deadline) {
         [
@@ -808,30 +806,23 @@ pub fn main() -> Nil {
     )
   let partly_set_up =
     admin.Context(..empty, relays: fn(_deadline) {
-      Ok([
-        dashboard.RelayRow(
-          1,
-          "wss://relay.example",
-          dashboard.Unused,
-          dashboard.Reported(relay_connection.Connected),
-        ),
-      ])
+      Ok(
+        preview_relay_rows([
+          #(dashboard.Unused, dashboard.Reported(relay_connection.Connected)),
+        ]),
+      )
     })
   let assert Ok(_) =
-    static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(admin.supervised("127.0.0.1", port, context()))
-    |> static_supervisor.add(admin.supervised(
-      "127.0.0.1",
-      port + 1,
-      unavailable,
-    ))
-    |> static_supervisor.add(admin.supervised("127.0.0.1", port + 2, empty))
-    |> static_supervisor.add(admin.supervised("127.0.0.1", port + 3, readme))
-    |> static_supervisor.add(admin.supervised(
-      "127.0.0.1",
-      port + 4,
-      partly_set_up,
-    ))
+    [context(), unavailable, empty, readme, partly_set_up]
+    |> list.index_fold(
+      static_supervisor.new(static_supervisor.OneForOne),
+      fn(supervisor, state, offset) {
+        static_supervisor.add(
+          supervisor,
+          admin.supervised("127.0.0.1", port + offset, state),
+        )
+      },
+    )
     |> static_supervisor.start
   process.sleep_forever()
 }
