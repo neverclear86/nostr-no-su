@@ -1,6 +1,8 @@
-//// `avatars` のキャッシュと URL の検査のテスト。取得はほとんどを注入の `fetch` で、1 件だけループバックのリレーで確かめる。
+//// `avatars` のキャッシュの判定（`claim` と `record`）、URL の検査、アクターの配線のテスト。
+//// 判定は `now` を渡して純粋に確かめ、アクターは注入の `fetch` で、1 件だけループバックの
+//// リレーで確かめる。
 
-import gleam/dict
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/json
 import gleam/list
@@ -58,6 +60,21 @@ fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
   process.receive_forever(gate)
 }
 
+/// URL の無い、`refresh_at` に取り直す時刻を置いた記録。
+fn claimed_at(refresh_at: Int) -> avatars.Cached {
+  avatars.Cached(picture: None, refresh_at:)
+}
+
+/// `cache` に対して `now` に `claim` したときの、署名者 "a" の `stale`。
+fn stale_at(
+  cache: Dict(String, avatars.Cached),
+  now: Int,
+  ttl_ms: Int,
+) -> List(String) {
+  let #(claimed, _cache) = avatars.claim(cache, ["a"], now, ttl_ms)
+  claimed.stale
+}
+
 /// `https:` の URL をそのまま返す。
 pub fn picture_accepts_an_https_url_test() {
   assert avatars.picture(metadata("a", 1, with_picture(avatar_url)))
@@ -87,43 +104,121 @@ pub fn picture_ignores_content_without_a_picture_test() {
   })
 }
 
-/// 1 回目は全署名者をまとめて取り、期限内の 2 回目は取らずに同じ辞書を返す。
-pub fn pictures_fetch_each_pubkey_once_within_the_ttl_test() {
-  let name = start(60_000, 60_000)
-  let calls = process.new_subject()
-  let fetch = recording(calls, Ok([metadata("a", 1, with_picture(avatar_url))]))
-  let expected = dict.from_list([#("a", avatar_url)])
+/// 記録の無い署名者は古く、取得中にした記録は `ttl_ms` の後に取り直す時刻が来る。
+pub fn claim_marks_an_unknown_pubkey_stale_and_pushes_its_refresh_time_test() {
+  let #(claimed, cache) = avatars.claim(dict.new(), ["a", "b"], 1000, 500)
 
-  assert avatars.pictures_with(name, ["a", "b"], fetch) == expected
-  assert process.receive(calls, 100) == Ok(["a", "b"])
-  assert avatars.pictures_with(name, ["a", "b"], fetch) == expected
-  assert process.receive(calls, 100) == Error(Nil)
+  assert claimed == avatars.Claimed(known: dict.new(), stale: ["a", "b"])
+  assert cache
+    == dict.from_list([#("a", claimed_at(1500)), #("b", claimed_at(1500))])
 }
 
-/// `ttl_ms` 0 では毎回取る。
-pub fn pictures_fetch_again_after_the_ttl_test() {
-  let name = start(0, 60_000)
+/// 取り直す時刻（`refresh_at`）の 1ms 前は古くなく、その時刻から古い。`ttl_ms` 0 は毎回古い。
+pub fn claim_goes_stale_from_the_refresh_time_test() {
+  let cache = dict.from_list([#("a", claimed_at(1500))])
+
+  list.each([#(1499, []), #(1500, ["a"]), #(1501, ["a"])], fn(row) {
+    let #(now, stale) = row
+    assert stale_at(cache, now, 500) == stale
+  })
+  let #(_claimed, claimed_cache) = avatars.claim(dict.new(), ["a"], 1000, 0)
+  assert stale_at(claimed_cache, 1000, 0) == ["a"]
+}
+
+/// 古い署名者にも前の URL を `known` に返し、取得中にした記録にも残す。古くない署名者の記録は変えない。
+/// 同じ署名者を何度渡しても `stale` は 1 回。
+pub fn claim_keeps_the_previous_picture_of_a_stale_pubkey_test() {
+  let cache =
+    dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 100)),
+      #("b", avatars.Cached(picture: Some(avatar_url), refresh_at: 9000)),
+    ])
+
+  let #(claimed, claimed_cache) =
+    avatars.claim(cache, ["a", "a", "b", "c"], 200, 500)
+
+  assert claimed
+    == avatars.Claimed(
+      known: dict.from_list([#("a", avatar_url), #("b", avatar_url)]),
+      stale: ["a", "c"],
+    )
+  assert claimed_cache
+    == dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 700)),
+      #("b", avatars.Cached(picture: Some(avatar_url), refresh_at: 9000)),
+      #("c", claimed_at(700)),
+    ])
+}
+
+/// 取得に成功すると、URL の無い署名者の URL を捨て、`refresh_at` は取得中にしたときのまま残す。
+/// 取得の対象でない署名者は変えない。
+pub fn record_a_fetch_replaces_the_pictures_and_keeps_the_refresh_time_test() {
+  let old =
+    avatars.Cached(picture: Some("https://x.test/old.png"), refresh_at: 1500)
+  let cache = dict.from_list([#("a", old), #("b", old), #("c", old)])
+
+  assert avatars.record(
+      cache,
+      ["a", "b"],
+      Ok(dict.from_list([#("a", avatar_url)])),
+      1100,
+      500,
+      300,
+    )
+    == dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 1500)),
+      #("b", claimed_at(1500)),
+      #("c", old),
+    ])
+}
+
+/// 取得に失敗すると、前の URL を残し、`retry_ms` の後に取り直す。記録の無い署名者も同じ。
+pub fn record_a_failed_fetch_keeps_the_picture_and_retries_after_retry_ms_test() {
+  let cache =
+    dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 1500)),
+    ])
+
+  assert avatars.record(cache, ["a", "b"], Error(Nil), 1100, 500, 300)
+    == dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 1400)),
+      #("b", claimed_at(1400)),
+    ])
+}
+
+/// 取得中にした記録が無い署名者の結果（アクターの再起動の後に届いた結果）は、`ttl_ms` の後に
+/// 取り直す記録として入れる。
+pub fn record_a_result_without_a_claim_expires_after_ttl_ms_test() {
+  assert avatars.record(
+      dict.new(),
+      ["a"],
+      Ok(dict.from_list([#("a", avatar_url)])),
+      1100,
+      500,
+      300,
+    )
+    == dict.from_list([
+      #("a", avatars.Cached(picture: Some(avatar_url), refresh_at: 1600)),
+    ])
+}
+
+/// 時計の上で `ttl_ms` が過ぎると、同じ署名者をまた取る。時計を読んで渡す配線を確かめるので、
+/// 取り直しが起きるまで引き直す。
+pub fn pictures_fetch_again_once_the_ttl_has_elapsed_test() {
+  let name = start(20, 60_000)
   let calls = process.new_subject()
   let fetch = recording(calls, Ok([]))
 
   let _found = avatars.pictures_with(name, ["a"], fetch)
-  let _found = avatars.pictures_with(name, ["a"], fetch)
   assert process.receive(calls, 100) == Ok(["a"])
-  assert process.receive(calls, 100) == Ok(["a"])
-}
-
-/// 取得に失敗しても、前に取った URL を返し続ける。
-pub fn pictures_keep_the_cached_picture_when_the_fetch_fails_test() {
-  let name = start(0, 0)
-  let failing = fn(_pubkeys) { Error(fetch_failure) }
-
-  let _found =
-    avatars.pictures_with(name, ["a"], fn(_pubkeys) {
-      Ok([metadata("a", 1, with_picture(avatar_url))])
-    })
-  let _found = avatars.pictures_with(name, ["a"], failing)
-  assert avatars.pictures_with(name, ["a"], failing)
-    == dict.from_list([#("a", avatar_url)])
+  assert poll.until(
+    fn() {
+      let _found = avatars.pictures_with(name, ["a"], fetch)
+      process.receive(calls, 0) == Ok(["a"])
+    },
+    2000,
+    20,
+  )
 }
 
 /// 間に合った取り直しで `picture` が無くなった署名者は、同じ描画から前の URL を返さない。
@@ -140,19 +235,7 @@ pub fn pictures_drop_a_removed_picture_in_the_same_lookup_test() {
     == dict.new()
 }
 
-/// `retry_ms` 0 では、失敗の直後の描画で取り直す。
-pub fn pictures_retry_after_a_failed_fetch_test() {
-  let name = start(60_000, 0)
-  let calls = process.new_subject()
-  let fetch = recording(calls, Error(fetch_failure))
-
-  let _found = avatars.pictures_with(name, ["a"], fetch)
-  let _found = avatars.pictures_with(name, ["a"], fetch)
-  assert process.receive(calls, 100) == Ok(["a"])
-  assert process.receive(calls, 100) == Ok(["a"])
-}
-
-/// `retry_ms` が残っていれば、`ttl_ms` 0 でも失敗の直後の描画では取らない。
+/// 失敗した取得は `retry_ms` の後に取り直し、`ttl_ms` 0 でも失敗の直後の描画では取らない。
 pub fn pictures_wait_before_retrying_a_failed_fetch_test() {
   let name = start(0, 60_000)
   let calls = process.new_subject()
@@ -162,6 +245,26 @@ pub fn pictures_wait_before_retrying_a_failed_fetch_test() {
   let _found = avatars.pictures_with(name, ["a"], fetch)
   assert process.receive(calls, 100) == Ok(["a"])
   assert process.receive(calls, 100) == Error(Nil)
+}
+
+/// 取得中の署名者は、取得が終わる前の別の描画では取らない。取得を門で止めて 1 回目が空を返した後に
+/// 2 回目を引く。
+pub fn pictures_do_not_fetch_a_pubkey_already_being_fetched_test() {
+  let name = start(60_000, 60_000)
+  let gates = process.new_subject()
+  let calls = process.new_subject()
+  let gated = fn(_pubkeys) {
+    hold_until_released(gates)
+    Ok([])
+  }
+
+  assert avatars.pictures_with(name, ["a"], gated) == dict.new()
+  assert avatars.pictures_with(name, ["a"], recording(calls, Ok([])))
+    == dict.new()
+  assert process.receive(calls, 100) == Error(Nil)
+
+  let assert Ok(gate) = process.receive(gates, 2000)
+  process.send(gate, Nil)
 }
 
 /// 待ちの上限に間に合わなかった取得は空を返し、その結果は次の描画で出る。取得を
