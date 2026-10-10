@@ -751,6 +751,168 @@ pub fn required_versions_report_the_first_missing_app_by_name_test() {
     == "requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
 }
 
+/// 要求した版がコードパス上の版と完全一致すれば読み込まれる。
+pub fn load_required_versions_match_test() {
+  let fixture = beam_fixture.new("required_match")
+  let app = beam_fixture.name(fixture, "req_app")
+  beam_fixture.write_app_file(fixture.root, app, "1.2.0")
+  beam_fixture.compile_loadable(
+    fixture,
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "required_match_plugin",
+      "#{<<\"" <> app <> "\">> => <<\"1.2.0\">>}",
+    ),
+  )
+  assert load_ok(fixture.module).name == "required_match_plugin"
+}
+
+/// 要求した版がコードパス上の版と食い違うと読み込まれず、理由に両方の版が出る。
+pub fn load_required_versions_mismatch_test() {
+  let fixture = beam_fixture.new("required_mismatch")
+  let app = beam_fixture.name(fixture, "req_app")
+  beam_fixture.write_app_file(fixture.root, app, "1.2.0")
+  assert compiled_error(
+      fixture,
+      beam_fixture.required_versions_source(
+        fixture.module,
+        "mismatch_plugin",
+        "#{<<\"" <> app <> "\">> => <<\"1.3.0\">>}",
+      ),
+    )
+    == "requires " <> app <> " 1.3.0, but the code path provides 1.2.0"
+}
+
+/// コードパスのどこにも無いアプリケーションを要求すると読み込まれない。
+pub fn load_required_versions_missing_app_test() {
+  let fixture = beam_fixture.new("required_missing_app")
+  let app = beam_fixture.name(fixture, "missing_app")
+  assert compiled_error(
+      fixture,
+      beam_fixture.required_versions_source(
+        fixture.module,
+        "missing_app_plugin",
+        "#{<<\"" <> app <> "\">> => <<\"1.0.0\">>}",
+      ),
+    )
+    == "requires "
+    <> app
+    <> " 1.0.0, but no "
+    <> app
+    <> ".app is on the code path"
+}
+
+/// `plugin_required_versions/0` の戻り値の形が合わないと、`decode` のエラーを
+/// 整えた 1 行になる。値が悪い場合とキーの集合自体が悪い（map でない）場合の
+/// 両方を確かめる。
+pub fn load_required_versions_bad_shape_test() {
+  let bad_value = beam_fixture.new("required_bad_value")
+  let bad_list = beam_fixture.new("required_bad_list")
+  assert compiled_error(
+      bad_value,
+      beam_fixture.required_versions_source(
+        bad_value.module,
+        "bad_value_plugin",
+        "#{<<\"app\">> => 1}",
+      ),
+    )
+    == "plugin_required_versions/0 must return a map of application names to version strings (expected String, got Int at app)"
+  assert compiled_error(
+      bad_list,
+      beam_fixture.required_versions_source(
+        bad_list.module,
+        "bad_list_plugin",
+        "[]",
+      ),
+    )
+    == "plugin_required_versions/0 must return a map of application names to version strings (expected Dict, got List)"
+}
+
+/// 戻らない `plugin_required_versions/0` は他のメタデータ関数と同じ形で
+/// タイムアウトになる。
+pub fn load_required_versions_timeout_test() {
+  let fixture = beam_fixture.new("required_timeout")
+  beam_fixture.compile_loadable(
+    fixture,
+    beam_fixture.required_versions_source(
+      fixture.module,
+      "required_timeout_plugin",
+      "receive after infinity -> ok end",
+    ),
+  )
+  let assert Error(reason) =
+    plugin.load(atom.create(fixture.module), dict.new(), short_call_timeout_ms)
+  assert reason == "plugin_required_versions/0 " <> timed_out()
+}
+
+/// 要求したアプリケーションの `.app` が形の崩れたものでも、例外にはならず
+/// 「見つからない」と同じ理由で読み込みを拒否する。`.app` の直読み
+/// （`read_app_file/1`）が例外を投げないことの検証を兼ねる。
+pub fn load_required_versions_broken_app_test() {
+  let fixture = beam_fixture.new("required_broken_app")
+  let app = beam_fixture.name(fixture, "broken_req_app")
+  beam_fixture.write(
+    fixture.root <> "/" <> app <> ".app",
+    "{application, " <> app <> ", [{vsn, [foo]}]}.\n",
+  )
+  assert compiled_error(
+      fixture,
+      beam_fixture.required_versions_source(
+        fixture.module,
+        "broken_req_plugin",
+        "#{<<\"" <> app <> "\">> => <<\"1.0.0\">>}",
+      ),
+    )
+    == "requires "
+    <> app
+    <> " 1.0.0, but no "
+    <> app
+    <> ".app is on the code path"
+}
+
+/// 宣言した本体の版の下限より本体が古いと、そのプラグインは読み込まれない。
+/// 本体の版はテストの中で読むので、リリースで `gleam.toml` の版が上がっても
+/// 固定値がずれない。
+pub fn load_min_host_version_too_old_test() {
+  let fixture = beam_fixture.new("min_host_old")
+  assert compiled_error(
+      fixture,
+      beam_fixture.min_host_version_source(
+        fixture.module,
+        "min_host_old_plugin",
+        "<<\"99.0.0\">>",
+      ),
+    )
+    == "requires nostr-no-su 99.0.0 or later, but this is "
+    <> beam_fixture.loaded_app_version("nostr_no_su")
+}
+
+/// `plugin_min_host_version/0` の戻り値の形が合わないと読み込まれない。
+/// binary でない値は分類名が、`X.Y.Z` に読めない binary は値そのものが理由に
+/// 出る。
+pub fn load_min_host_version_bad_shape_test() {
+  let bad_int = beam_fixture.new("min_host_bad_int")
+  let bad_pre = beam_fixture.new("min_host_bad_pre")
+  assert compiled_error(
+      bad_int,
+      beam_fixture.min_host_version_source(
+        bad_int.module,
+        "bad_int_plugin",
+        "1",
+      ),
+    )
+    == "plugin_min_host_version/0 must return a version string like \"0.1.0\", got Int"
+  assert compiled_error(
+      bad_pre,
+      beam_fixture.min_host_version_source(
+        bad_pre.module,
+        "bad_pre_plugin",
+        "<<\"0.2.0-rc.1\">>",
+      ),
+    )
+    == "plugin_min_host_version/0 must return a version string like \"0.1.0\", got \"0.2.0-rc.1\""
+}
+
 /// UI の任意エクスポートを 1 つも持たない組み合わせは `Ok(None)` になる。
 pub fn ui_arities_without_ui_exports_is_none_test() {
   assert plugin.ui_arities(None, None, None) == Ok(None)
