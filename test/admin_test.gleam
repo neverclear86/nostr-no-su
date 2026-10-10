@@ -29,9 +29,10 @@ import nostr_no_su/time
 import support/admin_context.{
   AccountsReloaded, Approved, ClientConnectRequested, Denied, PermissionsSaved,
   Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path,
-  auth_uri, client, closed_dialog, context, declared_client, failing_context,
-  get, header, in_japanese, label, not_answering_context, opened_dialog,
-  opened_dialogs, password, post, post_form, reporting_context,
+  auth_uri, client, closed_dialog, content_security_policy, context,
+  declared_client, failing_context, get, header, in_japanese, label,
+  not_answering_context, opened_dialog, opened_dialogs, password,
+  plugin_page_content_security_policy, post, post_form, reporting_context,
   session_not_approved, signer, signer_npub, test_context, token, unavailable,
   with_accounts, with_credentials,
 }
@@ -124,10 +125,7 @@ pub fn dashboard_shows_the_current_state_test() {
     body,
     element.to_string(view.status_chip(view.DisconnectedChip, "disconnected")),
   )
-  assert string.contains(
-    body,
-    "<span class=\"font-semibold break-words\">console_logger</span>",
-  )
+  assert string.contains(body, "console_logger</span>")
   assert string.contains(
     body,
     element.to_string(view.status_chip(view.ActiveChip, "running")),
@@ -312,17 +310,22 @@ fn permissions_dialog_id(session_client: String) -> String {
   "dialog-session-" <> signer <> "-" <> session_client <> "-permissions"
 }
 
-/// 権限の欄 `field` にチェックが入っていることを示す、描画の中の並び。
-fn checked_field(field: String) -> String {
-  "checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\""
-  <> field
-  <> "\""
+/// `html` の中で、`name` が `field` の `<input>` に `checked` の属性があるか。その `<input>` が
+/// ちょうど 1 つでなければ落ちる。
+fn field_is_checked(html: String, field: String) -> Bool {
+  let assert [attributes] =
+    string.split(html, "<input ")
+    |> list.drop(1)
+    |> list.filter_map(string.split_once(_, ">"))
+    |> list.map(fn(split) { " " <> split.0 })
+    |> list.filter(string.contains(_, " name=\"" <> field <> "\""))
+  list.contains(string.split(attributes, " "), "checked")
 }
 
 /// チェックも kinds も無い POST は 400 で、その行の権限の編集のダイアログを開いたダッシュボードを返し、
 /// 送った通り 3 つとも未チェックのまま返す（送られていない選択を既定の全許可に化けさせない）。
-/// 閉じたままの無宣言の行のダイアログには既定のチェックが入り、探す並びが実際のチェックの出力と
-/// 一致することの対照になる。
+/// 閉じたままの無宣言の行のダイアログには既定のチェックが入り、チェックを読む `field_is_checked` が
+/// 実際の描画の出力と合うことの対照になる。
 pub fn empty_session_permissions_are_rejected_test() {
   let response =
     post_form(
@@ -344,10 +347,10 @@ pub fn empty_session_permissions_are_rejected_test() {
     dashboard.nip44_encrypt_field,
     dashboard.nip44_decrypt_field,
   ])
-  assert !string.contains(dialog, checked_field(field))
-  assert string.contains(
+  assert !field_is_checked(dialog, field)
+  assert field_is_checked(
     closed_dialog(body, permissions_dialog_id(client)),
-    checked_field(field),
+    field,
   )
 }
 
@@ -424,8 +427,8 @@ pub fn session_permissions_are_not_saved_when_the_bunker_did_not_apply_test() {
   let assert [#(id, dialog)] = opened_dialogs(simulate.read_body(response))
   assert id == permissions_dialog_id(declared_client)
   assert string.contains(dialog, "not applied reason")
-  assert string.contains(dialog, checked_field(dashboard.sign_event_field))
-  assert !string.contains(dialog, checked_field(dashboard.nip44_encrypt_field))
+  assert field_is_checked(dialog, dashboard.sign_event_field)
+  assert !field_is_checked(dialog, dashboard.nip44_encrypt_field)
 }
 
 /// 再有効化フォームは Context の `reenable_plugin` を名前で呼び、ダッシュボードへ
@@ -450,10 +453,7 @@ pub fn reenabling_an_unknown_plugin_is_not_found_test() {
   let response = post_form(context, "/plugins/reenable", [#("name", "missing")])
   assert response.status == 404
   let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    "<p class=\"min-w-0 self-center\">" <> plugin_not_found <> "</p>",
-  )
+  assert string.contains(body, plugin_not_found <> "</p>")
   assert string.contains(back_link_head(body), "href=\"/\"")
 }
 
@@ -467,10 +467,7 @@ pub fn reenabling_a_plugin_that_does_not_answer_is_unavailable_test() {
   assert response.status == 503
   let body = simulate.read_body(response)
   assert string.contains(body, "Change not confirmed")
-  assert string.contains(
-    body,
-    "<p class=\"min-w-0 self-center\">" <> plugin_not_answered <> "</p>",
-  )
+  assert string.contains(body, plugin_not_answered <> "</p>")
   assert string.contains(body, "Back to dashboard")
 }
 
@@ -480,8 +477,13 @@ pub fn plugin_page_renders_test() {
   let body =
     simulate.read_body(get(context(), "/plugins/console_logger/status"))
   assert string.contains(body, "processed 3 events")
-  assert string.contains(body, "class=\"tabs tabs-border\"")
-  assert string.contains(body, "tab-active")
+  assert string.contains(body, "aria-current=\"page\"")
+  assert string.contains(
+    body,
+    "href=\""
+      <> routes.href(routes.ShowPluginPage("console_logger", "settings"))
+      <> "\"",
+  )
   assert string.contains(body, "<span lang=\"en\">console_logger</span>")
 }
 
@@ -490,18 +492,17 @@ pub fn plugin_page_renders_test() {
 pub fn plugin_page_allows_remote_images_test() {
   let plugin_response = get(context(), "/plugins/console_logger/status")
   assert header(plugin_response, "content-security-policy")
-    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https: http:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    == plugin_page_content_security_policy()
 
   let dashboard_response = get(context(), "/")
   assert header(dashboard_response, "content-security-policy")
-    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    == content_security_policy
 }
 
 /// プラグインのページへの POST の CSP は、ダッシュボードと同じく `img-src` に `http:` を足さない。
 pub fn plugin_page_post_keeps_the_default_image_sources_test() {
   let response = post(context(), "/plugins/console_logger/status")
-  assert header(response, "content-security-policy")
-    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+  assert header(response, "content-security-policy") == content_security_policy
 }
 
 /// 供給の無いプラグイン名、そのプラグインに無いページのキーはどちらも 404 で、
@@ -1058,15 +1059,22 @@ pub fn add_relay_rejects_an_invalid_url_test() {
       #("url", invalid_url),
       #("monitor", "on"),
     ])
-  assert response.status == 400
+  assert #(invalid_url, response.status) == #(invalid_url, 400)
   let body = opened_dialog(simulate.read_body(response), "dialog-relay-new")
-  assert string.contains(body, i18n.text(i18n.English, i18n.InvalidRelayUrl))
-  assert string.contains(body, "value=\"" <> invalid_url <> "\"")
-  assert string.contains(
-    body,
-    "<input checked class=\"checkbox checkbox-sm mt-0.5 shrink-0 border-base-content/60\" name=\"monitor\" type=\"checkbox\" value=\"on\">",
-  )
-  assert process.receive(reports, 100) == Error(Nil)
+  assert #(
+      invalid_url,
+      string.contains(body, i18n.text(i18n.English, i18n.InvalidRelayUrl)),
+    )
+    == #(invalid_url, True)
+  assert #(
+      invalid_url,
+      string.contains(body, "value=\"" <> invalid_url <> "\""),
+    )
+    == #(invalid_url, True)
+  assert #(invalid_url, field_is_checked(body, dashboard.monitor_field))
+    == #(invalid_url, True)
+  assert #(invalid_url, process.receive(reports, 100))
+    == #(invalid_url, Error(Nil))
 }
 
 /// 用途を 1 つも選ばないと 400 で `RelayRoleRequired` を出し、URL を保ちつつ
@@ -1081,7 +1089,8 @@ pub fn add_relay_requires_a_role_test() {
   let body = opened_dialog(simulate.read_body(response), "dialog-relay-new")
   assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
   assert string.contains(body, "value=\"wss://relay.example\"")
-  assert !string.contains(body, "checked class=\"checkbox")
+  assert !field_is_checked(body, dashboard.monitor_field)
+  assert !field_is_checked(body, dashboard.bunker_field)
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -1089,33 +1098,41 @@ pub fn add_relay_requires_a_role_test() {
 /// 訳した本文で、`RelayNotSaved` は英語の理由に日本語のページだけ前置きが付く。
 pub fn add_relay_failures_test() {
   let failures = [
-    #(admin.DuplicateRelay, 409),
-    #(admin.RelayNotSaved(relay_not_saved_reason), 409),
-    #(admin.RelayMaybeSaved, 202),
-    #(admin.ConnectionsNotConfirmed, 202),
+    #("duplicate", admin.DuplicateRelay, 409),
+    #("not saved", admin.RelayNotSaved(relay_not_saved_reason), 409),
+    #("maybe saved", admin.RelayMaybeSaved, 202),
+    #("connections not confirmed", admin.ConnectionsNotConfirmed, 202),
   ]
   let form = [#("url", "wss://relay.example"), #("monitor", "on")]
-  use #(failure, status) <- list.each(failures)
+  use #(name, failure, status) <- list.each(failures)
   let failing =
     admin.Context(..context(), add_relay: fn(_url, _roles) { Error(failure) })
+  let in_english = name <> " in English"
   let english = post_form(failing, "/relays/new", form)
-  assert english.status == status
-  assert string.contains(
-    simulate.read_body(english),
-    relay_failure_text(i18n.English, failure),
-  )
+  assert #(in_english, english.status) == #(in_english, status)
+  assert #(
+      in_english,
+      string.contains(
+        simulate.read_body(english),
+        relay_failure_text(i18n.English, failure),
+      ),
+    )
+    == #(in_english, True)
 
+  let in_japanese = name <> " in Japanese"
   let japanese = post_form_in_japanese(failing, "/relays/new", form)
-  assert japanese.status == status
+  assert #(in_japanese, japanese.status) == #(in_japanese, status)
   let japanese_body = simulate.read_body(japanese)
-  assert string.contains(
-    japanese_body,
-    relay_failure_text(i18n.Japanese, failure),
-  )
+  assert #(
+      in_japanese,
+      string.contains(japanese_body, relay_failure_text(i18n.Japanese, failure)),
+    )
+    == #(in_japanese, True)
   case failure {
     admin.RelayNotSaved(_) -> {
       let assert Some(prefix) = i18n.lead(i18n.Japanese, i18n.CouldNotAddRelay)
-      assert string.contains(japanese_body, prefix)
+      assert #(in_japanese, string.contains(japanese_body, prefix))
+        == #(in_japanese, True)
     }
     _ -> Nil
   }
@@ -1165,7 +1182,8 @@ pub fn update_relay_roles_requires_a_role_test() {
   assert response.status == 400
   let body = opened_dialog(simulate.read_body(response), "dialog-relay-1-edit")
   assert string.contains(body, i18n.text(i18n.English, i18n.RelayRoleRequired))
-  assert !string.contains(body, "checked class=\"checkbox")
+  assert !field_is_checked(body, dashboard.monitor_field)
+  assert !field_is_checked(body, dashboard.bunker_field)
   assert process.receive(reports, 100) == Error(Nil)
 }
 
@@ -1356,21 +1374,33 @@ pub fn connect_client_rejects_relays_it_must_not_connect_to_test() {
     <> connect_client_pubkey
     <> "?relay=ws://postgres:5432&secret=abcdef"
   let cases = [
-    #(too_many, i18n.NostrconnectTooManyRelays(limit: nostrconnect.max_relays)),
-    #(internal, i18n.NostrconnectRelayInternal(url: "ws://postgres:5432")),
+    #(
+      "too many relays",
+      too_many,
+      i18n.NostrconnectTooManyRelays(limit: nostrconnect.max_relays),
+    ),
+    #(
+      "internal relay",
+      internal,
+      i18n.NostrconnectRelayInternal(url: "ws://postgres:5432"),
+    ),
   ]
-  use #(uri, message) <- list.each(cases)
+  use #(name, uri, message) <- list.each(cases)
   let response =
     post_form(reporting_context(reports), "/sessions/connect", [
       #("uri", uri),
       #("signer", signer),
     ])
-  assert response.status == 400
-  assert string.contains(
-    simulate.read_body(response),
-    i18n.text(i18n.English, message),
-  )
-  assert process.receive(reports, 100) == Error(Nil)
+  assert #(name, response.status) == #(name, 400)
+  assert #(
+      name,
+      string.contains(
+        simulate.read_body(response),
+        i18n.text(i18n.English, message),
+      ),
+    )
+    == #(name, True)
+  assert #(name, process.receive(reports, 100)) == #(name, Error(Nil))
 }
 
 /// 正しい URI の `POST /sessions/connect` は確認のダイアログを開いたダッシュボードを 200 で返し、
@@ -1396,21 +1426,28 @@ pub fn connect_client_reviews_before_connecting_test() {
 pub fn connect_confirm_rechecks_the_input_test() {
   let reports = process.new_subject()
   let cases = [
-    #([#("uri", "not-a-uri"), #("signer", signer)], i18n.NotNostrconnectUri),
     #(
+      "unparsable uri",
+      [#("uri", "not-a-uri"), #("signer", signer)],
+      i18n.NotNostrconnectUri,
+    ),
+    #(
+      "unknown signer",
       [#("uri", connect_uri), #("signer", unknown_client)],
       i18n.SigningAccountNotFound,
     ),
   ]
-  use #(fields, message) <- list.each(cases)
+  use #(name, fields, message) <- list.each(cases)
   let response =
     post_form(reporting_context(reports), "/sessions/connect/confirm", fields)
-  assert response.status == 400
-  let assert [#("dialog-session-connect", dialog)] =
-    opened_dialogs(simulate.read_body(response))
-  assert string.contains(dialog, i18n.text(i18n.English, message))
-  assert string.contains(dialog, "action=\"/sessions/connect\"")
-  assert process.receive(reports, 100) == Error(Nil)
+  assert #(name, response.status) == #(name, 400)
+  let assert [#(id, dialog)] = opened_dialogs(simulate.read_body(response))
+  assert #(name, id) == #(name, "dialog-session-connect")
+  assert #(name, string.contains(dialog, i18n.text(i18n.English, message)))
+    == #(name, True)
+  assert #(name, string.contains(dialog, "action=\"/sessions/connect\""))
+    == #(name, True)
+  assert #(name, process.receive(reports, 100)) == #(name, Error(Nil))
 }
 
 /// 確認のダイアログの名乗る名前は制御文字を除き、ラベルの上限を超えるぶんを切って末尾を `…` に
@@ -1424,7 +1461,7 @@ pub fn connect_client_cleans_the_client_name_test() {
     ])
   assert string.contains(
     simulate.read_body(response),
-    "<dd class=\"break-words\">a" <> string.repeat("b", 99) <> "…</dd>",
+    "a" <> string.repeat("b", 99) <> "…</dd>",
   )
   let response =
     post_form(context(), "/sessions/connect", [
@@ -1458,13 +1495,14 @@ pub fn connect_confirm_opens_the_session_test() {
 /// ダイアログを開いたダッシュボードを返し、ダイアログの先頭に理由を出す。
 pub fn connect_client_redraws_on_failure_test() {
   let failures = [
-    #(admin.RelayNotConnected, 503),
+    #("relay not connected", admin.RelayNotConnected, 503),
     #(
+      "session not opened",
       admin.SessionNotOpened(bunker.SessionNotFound("signer is not registered")),
       409,
     ),
   ]
-  use #(failure, status) <- list.each(failures)
+  use #(name, failure, status) <- list.each(failures)
   let failing =
     admin.Context(..context(), connect_client: fn(_request, _signer) {
       Error(failure)
@@ -1474,11 +1512,15 @@ pub fn connect_client_redraws_on_failure_test() {
       #("uri", connect_uri),
       #("signer", signer),
     ])
-  assert response.status == status
-  let assert [#("dialog-session-connect-review", dialog)] =
-    opened_dialogs(simulate.read_body(response))
-  assert string.contains(dialog, "action=\"/sessions/connect/confirm\"")
-  assert string.contains(dialog, "role=\"alert\"")
+  assert #(name, response.status) == #(name, status)
+  let assert [#(id, dialog)] = opened_dialogs(simulate.read_body(response))
+  assert #(name, id) == #(name, "dialog-session-connect-review")
+  assert #(
+      name,
+      string.contains(dialog, "action=\"/sessions/connect/confirm\""),
+    )
+    == #(name, True)
+  assert #(name, string.contains(dialog, "role=\"alert\"")) == #(name, True)
 }
 
 /// アカウントの一覧を得られない `POST /sessions/connect` は 503 で、接続のダイアログを開いた
@@ -1534,13 +1576,14 @@ pub fn static_files_are_served_behind_authentication_test() {
   ]
   use #(path, content_type, excerpt) <- list.each(files)
   let response = get(context(), path)
-  assert response.status == 200
-  assert header(response, "content-type") == content_type
-  assert string.contains(simulate.read_body(response), excerpt)
+  assert #(path, response.status) == #(path, 200)
+  assert #(path, header(response, "content-type")) == #(path, content_type)
+  assert #(path, string.contains(simulate.read_body(response), excerpt))
+    == #(path, True)
   let anonymous =
     simulate.request(http.Get, path)
     |> admin.handle_request(context(), _)
-  assert anonymous.status == 401
+  assert #(path, anonymous.status) == #(path, 401)
 }
 
 /// `<head>` の favicon と上部バーのロゴは、同じ板つきのロゴを `data:` の SVG にして出し、
@@ -1573,8 +1616,13 @@ pub fn only_the_static_files_are_served_test() {
 pub fn notices_are_colored_by_outcome_test() {
   let rotate = action_path(routes.RotateSecret)
   let notices = [
-    #(post(context(), "/approve/other-token"), view.Failure),
     #(
+      "approve with an unknown token",
+      post(context(), "/approve/other-token"),
+      view.Failure,
+    ),
+    #(
+      "rotate secret maybe applied",
       post(
         failing_context(bunker.MaybeApplied(bunker.StoreDidNotConfirm)),
         rotate,
@@ -1582,6 +1630,7 @@ pub fn notices_are_colored_by_outcome_test() {
       view.Warning,
     ),
     #(
+      "rotate secret not ready",
       post(
         failing_context(bunker.NotReady("accounts are not loaded yet")),
         rotate,
@@ -1589,6 +1638,7 @@ pub fn notices_are_colored_by_outcome_test() {
       view.Warning,
     ),
     #(
+      "revoke an unknown client",
       post_form(context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", unknown_client),
@@ -1596,6 +1646,7 @@ pub fn notices_are_colored_by_outcome_test() {
       view.Failure,
     ),
     #(
+      "revoke while the bunker does not answer",
       post_form(not_answering_context(), "/sessions/revoke", [
         #("signer", signer),
         #("client", client),
@@ -1604,11 +1655,15 @@ pub fn notices_are_colored_by_outcome_test() {
     ),
   ]
   list.each(notices, fn(entry) {
-    let #(response, tone) = entry
-    assert string.contains(
-      simulate.read_body(response),
-      element.to_string(view.notice_mark(tone)),
-    )
+    let #(name, response, tone) = entry
+    assert #(
+        name,
+        string.contains(
+          simulate.read_body(response),
+          element.to_string(view.notice_mark(tone)),
+        ),
+      )
+      == #(name, True)
   })
 }
 

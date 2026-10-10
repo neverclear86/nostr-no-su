@@ -14,8 +14,8 @@ import nostr_no_su/admin/routes
 import nostr_no_su/bunker
 import support/account_actions
 import support/admin_context.{
-  Removed, Revoked, action_path, client, client_address, context,
-  failing_context, get, header, in_japanese, password, post, post_form,
+  Removed, Revoked, action_path, client, client_address, content_security_policy,
+  context, failing_context, get, header, in_japanese, password, post, post_form,
   reporting_context, signer, signer_nsec, spec_nsec, token, with_credentials,
 }
 import support/log_capture
@@ -266,8 +266,7 @@ pub fn cross_origin_post_is_an_origin_mismatch_page_test() {
   assert string.contains(body, i18n.text(i18n.Japanese, i18n.OriginMismatch))
   assert !string.contains(body, "name=\"return\"")
   assert header(with_host, "x-frame-options") == "DENY"
-  assert header(with_host, "content-security-policy")
-    == "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+  assert header(with_host, "content-security-policy") == content_security_policy
 
   let without_host =
     request.Request(
@@ -347,11 +346,15 @@ pub fn posts_need_a_host_that_matches_the_origin_test() {
 pub fn control_characters_in_origin_headers_are_not_logged_test() {
   let capture = log_capture.install()
   let cases = [
-    [#("origin", "http://evil.example\u{1b}[2J")],
-    [#("referer", "http://evil.example\u{1b}[2J")],
-    [#("host", "evil.example\u{1b}[2J"), #("origin", "http://localhost")],
+    #("origin", [#("origin", "http://evil.example\u{1b}[2J")]),
+    #("referer", [#("referer", "http://evil.example\u{1b}[2J")]),
+    #("host", [
+      #("host", "evil.example\u{1b}[2J"),
+      #("origin", "http://localhost"),
+    ]),
   ]
-  list.each(cases, fn(headers) {
+  list.each(cases, fn(row) {
+    let #(name, headers) = row
     let response =
       list.fold(
         headers,
@@ -359,8 +362,8 @@ pub fn control_characters_in_origin_headers_are_not_logged_test() {
         fn(request, header) { request.set_header(request, header.0, header.1) },
       )
       |> admin.handle_request(context(), _)
-    assert response.status == 400
-    assert header(response, "content-type") == "text/plain"
+    assert #(name, response.status) == #(name, 400)
+    assert #(name, header(response, "content-type")) == #(name, "text/plain")
   })
   assert !list.any(log_capture.lines(capture), string.contains(_, "\u{1b}[2J"))
   log_capture.remove(capture)

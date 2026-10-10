@@ -1,5 +1,5 @@
 //// 状態を即値で持つ `admin.Context` と認証済みのリクエストを組み立てるヘルパーと、
-//// 本文からダイアログを切り出すヘルパー。
+//// 本文からダイアログを切り出すヘルパー、応答の CSP の期待値。
 
 import gleam/bit_array
 import gleam/bool
@@ -32,6 +32,21 @@ import wisp/simulate
 
 /// 管理 UI のパスワード。`Context` に入り、Basic 認証と再表示の入力に使う。
 pub const password = "s3cr3t-password"
+
+/// 管理 UI の応答の既定の `content-security-policy` の全文。`img-src` は `data:` と `https:`
+/// だけを許す。
+pub const content_security_policy =
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+/// プラグインのページの GET の `content-security-policy` の全文。`content_security_policy` の
+/// `img-src` に `http:` を足し、遠隔の画像を許す。
+pub fn plugin_page_content_security_policy() -> String {
+  string.replace(
+    content_security_policy,
+    "img-src data: https:",
+    "img-src data: https: http:",
+  )
+}
 
 /// 認証の失敗のログ行に入る接続元。本物のサーバーは mist の接続情報から入れる。
 pub const client_address = "203.0.113.5"
