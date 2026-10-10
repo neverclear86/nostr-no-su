@@ -1,6 +1,8 @@
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -51,6 +53,49 @@ fn load_error_with(
 fn compiled_error(fixture: Fixture, source: String) -> String {
   beam_fixture.compile_loadable(fixture, source)
   load_error(fixture.module)
+}
+
+/// 戻らない・異常終了する呼び出しのテストに使う短い期限。実時間に依存しないよう小さく取るが、
+/// 打ち切りの前に使い捨てのプロセスが Pid を退避できる長さにする。
+const short_call_timeout_ms = 1000
+
+/// `short_call_timeout_ms` で打ち切られた呼び出しの理由に入る文言。
+fn timed_out() -> String {
+  "timed out after " <> int.to_string(short_call_timeout_ms) <> "ms"
+}
+
+/// 1 ページ（キー `status`）だけを返す `plugin_pages/0` の本体（Erlang の式）。
+const status_pages_body =
+  "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]"
+
+/// `source` を `fixture` のモジュールとして compile し、設定を空にして
+/// `call_timeout_ms` の期限で読み込む。
+fn load_compiled(
+  fixture: Fixture,
+  source: String,
+  call_timeout_ms: Int,
+) -> Result(plugin.Plugin, String) {
+  beam_fixture.compile_loadable(fixture, source)
+  plugin.load(atom.create(fixture.module), dict.new(), call_timeout_ms)
+}
+
+/// `plugin_page_content/1` の本体が `content_body`（Erlang の式）の 1 ページのプラグインを
+/// `load_compiled` で読み込み、管理 UI の供給を取り出す。
+fn load_ui_with_content(
+  fixture: Fixture,
+  content_body: String,
+  call_timeout_ms: Int,
+) -> plugin.PluginUi {
+  let source =
+    beam_fixture.pages_source(
+      fixture.module,
+      "page_content_plugin",
+      status_pages_body,
+      content_body,
+    )
+  let assert Ok(loaded) = load_compiled(fixture, source, call_timeout_ms)
+  let assert Some(ui) = loaded.ui
+  ui
 }
 
 /// 設定を与えて読み込み、成功した `Plugin` を取り出す。
@@ -472,6 +517,182 @@ pub fn page_action_error_with_a_non_string_reason_is_a_reason_test() {
     == "plugin_with_action: plugin_page_action/3: error reason must be a String, got Int"
 }
 
+/// 管理 UI の宣言（`plugin_pages`、`plugin_page_content`、`plugin_page_action`）の片方だけの
+/// 宣言、言語ごとのキーの食い違い、一覧の中身の誤りを持つプラグインは読み込まれず、
+/// 行ごとに決まった理由の `Error` になる。
+pub fn invalid_page_declarations_are_not_loaded_test() {
+  use #(name, source, expected) <- list.each([
+    #(
+      "pages_without_content_export",
+      beam_fixture.pages_only_source,
+      "plugin_pages/0 but no plugin_page_content/1, /2 or /3",
+    ),
+    #(
+      "page_content_without_pages_export",
+      beam_fixture.page_content_only_source,
+      "plugin_page_content/1 but no plugin_pages/0, /1 or /2",
+    ),
+    #(
+      "page_action_without_pages",
+      beam_fixture.page_action_only_source,
+      "plugin_page_action/3 but no plugin_pages/0, /1 or /2",
+    ),
+    #(
+      "localized_pages_without_localized_content",
+      fn(module, name) {
+        beam_fixture.ui_source(
+          module,
+          name,
+          2,
+          2,
+          "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => Language}]",
+        )
+      },
+      "plugin_pages/2 but no plugin_page_content/3",
+    ),
+    #(
+      "localized_content_without_localized_pages",
+      fn(module, name) {
+        beam_fixture.ui_source(module, name, 1, 3, status_pages_body)
+      },
+      "plugin_page_content/3 but no plugin_pages/2",
+    ),
+    #(
+      "localized_page_keys_differ",
+      fn(module, name) {
+        beam_fixture.ui_source(
+          module,
+          name,
+          2,
+          3,
+          "[#{<<\"key\">> => Language, <<\"title\">> => <<\"Status\">>}]",
+        )
+      },
+      "plugin_pages/2: page keys for \"ja\" differ from \"en\"",
+    ),
+    #(
+      "pages_empty",
+      pages_returning("[]"),
+      "plugin_pages/0 must return at least one page",
+    ),
+    #(
+      "duplicate_page_key",
+      pages_returning(
+        "[#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"A\">>}, "
+        <> "#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"B\">>}]",
+      ),
+      "duplicate page key \"settings\"",
+    ),
+    #(
+      "invalid_page_key",
+      pages_returning(
+        "[#{<<\"key\">> => <<\"A b\">>, <<\"title\">> => <<\"A\">>}]",
+      ),
+      "page key \"A b\" must match [a-z0-9_-]+",
+    ),
+    #(
+      "page_title_missing",
+      pages_returning("[#{<<\"key\">> => <<\"status\">>}]"),
+      "page key \"status\": missing title",
+    ),
+    #(
+      "page_element_not_a_map",
+      pages_returning("[{a, b}]"),
+      "page #0: must be a page map, got Array",
+    ),
+    #(
+      "pages_not_a_list",
+      pages_returning("#{}"),
+      "plugin_pages/0 must return a list of page maps, got Dict",
+    ),
+  ])
+  let fixture = beam_fixture.new(name)
+  let reason = compiled_error(fixture, source(fixture.module, name))
+  assert #(name, string.contains(reason, expected)) == #(name, True)
+}
+
+/// `plugin_pages/0` が `body` を返し、`plugin_page_content/1` が空の節を返すプラグインの
+/// ソースを、モジュール名とプラグイン名から作る関数。
+fn pages_returning(body: String) -> fn(String, String) -> String {
+  fn(module, name) {
+    beam_fixture.pages_source(module, name, body, "#{<<\"sections\">> => []}")
+  }
+}
+
+/// `plugin_page_content` の例外は、一覧の検証に影響せず読み込みには成功し、
+/// `ui.content` の呼び出しの `Error` として現れる。理由は、モジュール名の接頭辞を 1 つ
+/// 付けた 1 行になる。
+pub fn page_content_crash_reason_names_the_module_test() {
+  let fixture = beam_fixture.new("pages_content_crash_reason")
+  let ui =
+    load_ui_with_content(
+      fixture,
+      "erlang:error(boom)",
+      plugin.default_call_timeout_ms,
+    )
+  assert ui.content("status", "en", [])
+    == Error(fixture.module <> ": plugin_page_content/1 crashed (error:boom)")
+}
+
+/// 戻らない `plugin_page_content` は、読み込みには成功し、`ui.content` の
+/// 呼び出しが期限で打ち切られて `Error` になる。
+pub fn page_content_timeout_test() {
+  let fixture = beam_fixture.new("pages_content_timeout")
+  let ui =
+    load_ui_with_content(
+      fixture,
+      "receive after infinity -> ok end",
+      short_call_timeout_ms,
+    )
+  let assert Error(reason) = ui.content("status", "en", [])
+  assert string.contains(reason, timed_out())
+}
+
+/// 戻らない `plugin_name/0` を持つプラグインは、期限切れの理由で読み込まれない。
+/// 打ち切られた呼び出しのプロセスも残らない。
+///
+/// 期限（`short_call_timeout_ms`）は、使い捨てのプロセスが `plugin_name/0` の先頭で
+/// Pid を退避するより十分長い（退避の前に打ち切ると `last_pid` が落ちる）。
+pub fn load_hanging_plugin_name_test() {
+  let fixture = beam_fixture.new("hanging_metadata")
+  let source =
+    beam_fixture.plugin_name_body_source(
+      fixture.module,
+      1,
+      "persistent_term:put(?MODULE, self()), receive after infinity -> ok end",
+    )
+  let assert Error(reason) =
+    load_compiled(fixture, source, short_call_timeout_ms)
+  assert reason == "plugin_name/0 " <> timed_out()
+  assert !process.is_alive(beam_fixture.last_pid(fixture.module))
+}
+
+/// 戻らない `-on_load` を持つプラグインは、モジュールの読み込みの時点で期限切れの理由で
+/// 読み込まれない。
+pub fn load_hanging_on_load_test() {
+  let fixture = beam_fixture.new("hanging_on_load")
+  let source =
+    beam_fixture.hanging_on_load_source(fixture.module, fixture.module)
+  let assert Error(reason) =
+    load_compiled(fixture, source, short_call_timeout_ms)
+  assert reason == "cannot load module (" <> timed_out() <> ")"
+}
+
+/// `plugin_name/0` が自プロセスを kill するプラグインは、印の無い DOWN として
+/// `crashed` の理由になる（`killed`）。
+pub fn load_killed_plugin_name_test() {
+  let fixture = beam_fixture.new("killed_metadata")
+  let source =
+    beam_fixture.plugin_name_body_source(
+      fixture.module,
+      1,
+      "exit(self(), kill)",
+    )
+  let assert Error(reason) =
+    load_compiled(fixture, source, short_call_timeout_ms)
+  assert reason == "plugin_name/0 crashed (killed)"
+}
+
 /// 宣言した下限より本体の版が小さいと読み込まず、要求と実際の版を並べた
 /// 理由になる。`0.1.9` のように patch が違うだけの版でも同じく落ちる。
 pub fn min_host_version_older_host_test() {
@@ -539,34 +760,4 @@ pub fn ui_arities_without_ui_exports_is_none_test() {
 pub fn ui_arities_with_pages_and_content_test() {
   assert plugin.ui_arities(Some(1), Some(2), None) == Ok(Some(#(1, 2)))
   assert plugin.ui_arities(Some(2), Some(3), Some(3)) == Ok(Some(#(2, 3)))
-}
-
-/// 実行だけを持つ組み合わせは、一覧が無いことを報告する `Error` になる。
-pub fn ui_arities_rejects_action_without_pages_test() {
-  assert plugin.ui_arities(None, None, Some(3))
-    == Error("plugin_page_action/3 but no plugin_pages/0, /1 or /2")
-}
-
-/// 一覧を持たずに中身を持つ組み合わせは、一覧が無いことを報告する `Error` になる。
-pub fn ui_arities_rejects_content_without_pages_test() {
-  assert plugin.ui_arities(None, Some(1), Some(2))
-    == Error("plugin_page_content/1 but no plugin_pages/0, /1 or /2")
-}
-
-/// 中身を持たずに一覧だけを持つ組み合わせは、中身が無いことを報告する `Error` になる。
-pub fn ui_arities_rejects_pages_without_content_test() {
-  assert plugin.ui_arities(Some(0), None, None)
-    == Error("plugin_pages/0 but no plugin_page_content/1, /2 or /3")
-}
-
-/// `plugin_pages/2` に `plugin_page_content/3` が無い組み合わせは `Error` になる。
-pub fn ui_arities_rejects_localized_pages_without_localized_content_test() {
-  assert plugin.ui_arities(Some(2), Some(2), None)
-    == Error("plugin_pages/2 but no plugin_page_content/3")
-}
-
-/// `plugin_page_content/3` に `plugin_pages/2` が無い組み合わせは `Error` になる。
-pub fn ui_arities_rejects_localized_content_without_localized_pages_test() {
-  assert plugin.ui_arities(Some(1), Some(3), None)
-    == Error("plugin_page_content/3 but no plugin_pages/2")
 }
