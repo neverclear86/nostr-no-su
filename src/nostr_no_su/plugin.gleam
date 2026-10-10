@@ -282,8 +282,8 @@ fn check_api_version(
   }
 }
 
-/// 任意エクスポート `plugin_min_host_version/0` があれば期限付きで呼び、宣言
-/// された下限と本体の版を比べる。エクスポートが無ければ照合しない。
+/// 任意エクスポート `plugin_min_host_version/0` を `optional_export` で期限付きで呼び、
+/// 宣言された下限と本体の版を比べる。
 fn check_min_host_version_export(
   module: Atom,
   call_timeout_ms: Int,
@@ -370,9 +370,9 @@ fn compare_versions(a: #(Int, Int, Int), b: #(Int, Int, Int)) -> order.Order {
   |> order.break_tie(int.compare(a.2, b.2))
 }
 
-/// 任意エクスポート `plugin_required_versions/0` があれば期限付きで呼び、宣言
-/// されたアプリケーションの版がコードパス上の `.app` の版と完全一致することを
-/// 確かめる。エクスポートが無ければ照合しない。
+/// 任意エクスポート `plugin_required_versions/0` を `optional_export` で期限付きで呼び、
+/// 宣言されたアプリケーションの版がコードパス上の `.app` の版と完全一致することを
+/// 確かめる。
 fn check_required_versions(
   module: Atom,
   call_timeout_ms: Int,
@@ -927,7 +927,8 @@ fn call_export(
   |> result.map_error(fn(failure) {
     case failure {
       Crashed(reason) -> label <> " crashed (" <> reason <> ")"
-      TimedOut -> label <> " " <> describe_failure(failure, call_timeout_ms)
+      TimedOut ->
+        label <> " timed out after " <> int.to_string(call_timeout_ms) <> "ms"
     }
   })
 }
