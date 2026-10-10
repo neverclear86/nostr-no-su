@@ -74,6 +74,17 @@ fn states() -> dashboard.Snapshot {
   )
 }
 
+/// `snapshot` を英語・システムのテーマのダッシュボードのページに描く。
+fn english(snapshot: dashboard.Snapshot) -> String {
+  dashboard.render(i18n.English, view.System, snapshot)
+}
+
+/// `pending` の承認ページを `language` とシステムのテーマで、アカウントの一覧を空にして
+/// `states().now` の時刻に描く。
+fn approval(language: i18n.Language, pending: dashboard.PendingRow) -> String {
+  dashboard.approval_page(language, view.System, Ok([]), states().now, pending)
+}
+
 /// 提示なしと不一致の承認待ちを、失効までが長い順（作成の新しい順）に持つスナップショット。
 /// 提示なしの方(`tok-1`) は権限を要求し、不一致の方（`tok-2`）は権限を要求しない。`tok-2`
 /// は残り 60 秒未満で、警告のバッジを見るためのものである。
@@ -104,7 +115,7 @@ fn secret_states() -> dashboard.Snapshot {
 /// リレーとプラグインの状態は、状態ごとの色のバッジで出し、状態の語と詳細を文字で残す。
 /// プラグイン由来の理由は英語のまま `lang="en"` を付けて出す。
 pub fn states_are_shown_as_badges_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   let badges = [
     "monitor</dt>",
     element.to_string(view.status_chip(view.ActiveChip, "connected")),
@@ -146,7 +157,7 @@ pub fn japanese_states_are_translated_test() {
 /// 「Secret mismatch」になる。日本語ではそれぞれ「secret 提示なし」「secret 不一致」に
 /// なる。
 pub fn secret_state_is_shown_as_a_badge_test() {
-  let english = dashboard.render(i18n.English, view.System, secret_states())
+  let english = english(secret_states())
   assert string.contains(
     english,
     element.to_string(view.status_chip(
@@ -171,15 +182,6 @@ pub fn secret_state_is_shown_as_a_badge_test() {
 /// 承認待ちの承認ページには警告の囲みが出ない。
 pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   let assert Ok([not_offered, mismatched]) = secret_states().pending
-  let page = fn(language, pending) {
-    dashboard.approval_page(
-      language,
-      view.System,
-      Ok([]),
-      states().now,
-      pending,
-    )
-  }
   list.each([i18n.English, i18n.Japanese], fn(language) {
     let notice =
       element.to_string(
@@ -187,22 +189,16 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
           html.text(i18n.text(language, i18n.WrongSecretNotice)),
         ]),
       )
-    assert list.length(string.split(page(language, mismatched), notice)) == 2
-    assert !string.contains(page(language, not_offered), "alert-warning")
+    assert list.length(string.split(approval(language, mismatched), notice))
+      == 2
+    assert !string.contains(approval(language, not_offered), "alert-warning")
   })
 }
 
 /// 承認ページは、ダッシュボードと同じ承認待ちのカードを出し、残り時間を円で描く。
 pub fn approval_page_draws_the_pending_card_test() {
   let assert Ok([pending]) = states().pending
-  let page =
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      pending,
-    )
+  let page = approval(i18n.English, pending)
   assert string.contains(page, "pathLength=\"600\"")
   assert string.contains(page, "aria-label=\"Expires in 9:00\"")
 }
@@ -216,40 +212,16 @@ pub fn permissions_are_shown_as_chips_test() {
       i18n.English,
       "sign_event:1,nip44_encrypt",
     ))
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, secret_states()),
-    chips,
-  )
-  assert string.contains(
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      offered,
-    ),
-    chips,
-  )
+  assert string.contains(english(secret_states()), chips)
+  assert string.contains(approval(i18n.English, offered), chips)
 
   let no_perms_badge =
     element.to_string(view.status_chip(
       view.ToneChip(view.Neutral),
       "No permissions requested",
     ))
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, secret_states()),
-    no_perms_badge,
-  )
-  assert string.contains(
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      not_requested,
-    ),
-    no_perms_badge,
-  )
+  assert string.contains(english(secret_states()), no_perms_badge)
+  assert string.contains(approval(i18n.English, not_requested), no_perms_badge)
 }
 
 /// アカウントの行の畳みには、接続 URI と公開鍵の 3 つの欄が出て、16 進の署名者は
@@ -267,7 +239,7 @@ pub fn account_row_hides_the_hex_pubkey_in_the_details_test() {
       picture: None,
     )
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   let assert Ok(#(_, after_accounts)) =
     string.split_once(body, "id=\"accounts\"")
   let assert Ok(#(before_details, after_details)) =
@@ -352,8 +324,7 @@ fn split_account_details(body: String) -> #(String, String) {
 pub fn accounts_heading_has_the_description_and_reload_before_add_test() {
   let snapshot =
     dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()]))
-  let accounts =
-    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+  let accounts = accounts_part(english(snapshot))
   assert string.contains(
     accounts,
     "Your registered private keys. Paste a connection URI into a client to sign with that key.",
@@ -381,8 +352,7 @@ pub fn account_row_shows_the_fingerprint_session_count_and_qr_test() {
         session_of(string.repeat("4567", 16), "ef03"),
       ]),
     )
-  let #(before_details, details) =
-    split_account_details(dashboard.render(i18n.English, view.System, snapshot))
+  let #(before_details, details) = split_account_details(english(snapshot))
   assert string.contains(
     before_details,
     element.to_string(fingerprint.pubkey_svg(
@@ -409,7 +379,7 @@ pub fn account_session_count_follows_the_session_list_test() {
   let render = fn(sessions) {
     let snapshot =
       dashboard.Snapshot(..states(), accounts: Ok([account]), sessions:)
-    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+    accounts_part(english(snapshot))
   }
   assert string.contains(
     render(Ok([session_of(account.signer, "ef01")])),
@@ -426,8 +396,7 @@ pub fn account_session_count_follows_the_session_list_test() {
 pub fn account_details_hold_the_uris_and_the_actions_test() {
   let account = fingerprinted_account()
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
-  let #(_, details) =
-    split_account_details(dashboard.render(i18n.English, view.System, snapshot))
+  let #(_, details) = split_account_details(english(snapshot))
   assert string.contains(
     details,
     "Connects without approval. Paste it into your own client.",
@@ -463,10 +432,7 @@ pub fn account_row_dialogs_sit_outside_the_details_test() {
   let account = fingerprinted_account()
   let snapshot = dashboard.Snapshot(..states(), accounts: Ok([account]))
   let assert Ok(#(_, after_details)) =
-    string.split_once(
-      accounts_part(dashboard.render(i18n.English, view.System, snapshot)),
-      "</details>",
-    )
+    string.split_once(accounts_part(english(snapshot)), "</details>")
   use segment <- list.each(["label", "private-key", "rotate", "delete", "qr"])
   let id = "dialog-account-" <> account.signer <> "-" <> segment
   assert #(
@@ -505,8 +471,7 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
         ),
       ]),
     )
-  let accounts =
-    accounts_part(dashboard.render(i18n.English, view.System, snapshot))
+  let accounts = accounts_part(english(snapshot))
   let assert Ok(#(before_frame, frame)) =
     string.split_once(accounts, "alert alert-soft alert-error")
   assert string.contains(before_frame, "Your registered private keys.")
@@ -534,7 +499,7 @@ pub fn sessions_show_perms_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(
     body,
     "<div class=\"col-span-2\">"
@@ -561,10 +526,7 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
     )
 
   let assert Ok(#(_, sessions)) =
-    string.split_once(
-      dashboard.render(i18n.English, view.System, snapshot),
-      "Approved sessions",
-    )
+    string.split_once(english(snapshot), "Approved sessions")
   assert string.contains(
     sessions,
     "<div class=\"col-span-2\">"
@@ -578,7 +540,7 @@ pub fn empty_session_perms_show_the_no_permissions_badge_test() {
 
 /// ページを供給するプラグインの行にだけ、ページを開くリンクが出る。
 pub fn only_plugins_with_a_page_have_a_link_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   assert string.contains(
     body,
     routes.href(routes.ShowPluginPage("a", "status")),
@@ -596,14 +558,14 @@ pub fn plugin_page_link_encodes_the_plugin_name_test() {
         plugin.PluginPage(key: "status", title: "Status"),
       ]),
     ])
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "href=\"/plugins/a%20b/status\"")
 }
 
 /// 無効になったプラグインの行にだけ再有効化のフォームが付き、プラグイン名を
 /// hidden 欄で送る。
 pub fn only_disabled_plugins_have_a_reenable_button_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   let forms =
     string.split(body, "action=\"/plugins/reenable\"")
     |> list.length
@@ -655,7 +617,7 @@ pub fn plugins_heading_shows_the_count_without_a_description_test() {
 /// プラグインは表ではなく行の一覧に並び、各行に名前と状態のチップが入る。応答の無いプラグインは
 /// 「応答なし」のチップで出る。
 pub fn plugin_rows_show_the_name_and_state_chip_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   assert !string.contains(body, "<table")
   let rows = string.split(body, "<li class=\"list-row ")
   use #(name, chip, word) <- list.each([
@@ -683,7 +645,7 @@ pub fn dashboard_shows_not_loaded_plugins_test() {
         reason: "no ebin directory found (expected broken-bundle/ebin or broken-bundle/*/ebin)",
       ),
     ])
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english = english(snapshot)
   assert string.contains(english, "Plugins that failed to load")
   assert string.contains(
     english,
@@ -766,7 +728,7 @@ pub fn getting_started_band_has_no_description_test() {
 
 /// アカウントの節の見出しは、題の直後の ⓘ で説明を `accounts-hint` の補足に開く。
 pub fn accounts_heading_opens_the_description_from_the_info_button_test() {
-  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
+  let body = english(dialog_snapshot())
   assert string.contains(
     body,
     "Accounts</h2>"
@@ -798,9 +760,7 @@ pub fn pending_band_opens_the_description_from_the_info_button_test() {
 pub fn account_details_open_the_uri_descriptions_from_the_info_buttons_test() {
   let second = string.repeat("4567", 16)
   let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..dialog_snapshot(),
         accounts: Ok([
@@ -853,7 +813,7 @@ fn dismiss_row(id: String, dismiss: String) -> String {
 /// ダッシュボードのどのダイアログも、同じダイアログを閉じるボタン（接続 QR コードは「閉じる」、ほかは
 /// 「キャンセル」）を持ち、閉じるボタンを左に寄せない（送信の右に並べる）。
 pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
-  let body = dashboard.render(i18n.English, view.System, dialog_snapshot())
+  let body = english(dialog_snapshot())
   let assert [_, ..dialogs] = string.split(body, "<dialog ")
   assert dialogs != []
   use dialog <- list.each(dialogs)
@@ -878,17 +838,11 @@ pub fn every_dashboard_dialog_puts_cancel_beside_submit_test() {
 /// アカウントの一覧を得られないときは、その行にキャンセルだけを置く。
 pub fn connect_dialog_without_accounts_still_has_cancel_test() {
   let actions = dismiss_row("dialog-session-connect", "Cancel")
-  let empty =
-    closed_dialog(
-      dashboard.render(i18n.English, view.System, states()),
-      "dialog-session-connect",
-    )
+  let empty = closed_dialog(english(states()), "dialog-session-connect")
   assert string.contains(empty, actions)
   let failed =
     closed_dialog(
-      dashboard.render(
-        i18n.English,
-        view.System,
+      english(
         dashboard.Snapshot(
           ..states(),
           accounts: Error(i18n.Untranslated("boom")),
@@ -920,7 +874,7 @@ pub fn brand_link_shows_only_the_wordmark_test() {
 
 /// 製品名の「Nostr」と「Su」は文字の色、「-no-」は primary の色で塗る。
 pub fn wordmark_colors_follow_the_theme_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   assert string.contains(
     body,
     "<path class=\"fill-base-content\" d=\""
@@ -1013,7 +967,7 @@ pub fn unlisted_pending_and_sessions_show_the_reason_test() {
       pending: Error(i18n.Untranslated("pending reason")),
       sessions: Error(i18n.Untranslated("sessions reason")),
     )
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english = english(snapshot)
   assert string.contains(
     english,
     listed_reason_html(i18n.English, i18n.CouldNotListPending, "pending reason"),
@@ -1056,8 +1010,7 @@ pub fn shared_listing_failure_is_shown_once_test() {
       pending: Error(i18n.Untranslated("account store unavailable: boom")),
       sessions: Error(i18n.Untranslated("account store unavailable: boom")),
     )
-  let english =
-    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
+  let english = outside_dialogs(english(snapshot))
   assert list.length(string.split(english, "account store unavailable: boom"))
     == 2
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 2
@@ -1096,8 +1049,7 @@ pub fn timed_out_listings_are_not_merged_test() {
       pending: Error(i18n.Translated(i18n.NotAvailable)),
       sessions: Error(i18n.Translated(i18n.NotAvailable)),
     )
-  let english =
-    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
+  let english = outside_dialogs(english(snapshot))
   assert list.length(string.split(english, "Not available right now.")) == 4
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
   assert !string.contains(english, "Not available for the reason above.")
@@ -1113,8 +1065,7 @@ pub fn different_listing_failures_stay_in_each_section_test() {
       pending: Error(i18n.Untranslated("first reason")),
       sessions: Error(i18n.Untranslated("second reason")),
     )
-  let english =
-    outside_dialogs(dashboard.render(i18n.English, view.System, snapshot))
+  let english = outside_dialogs(english(snapshot))
   assert list.length(string.split(english, "first reason")) == 3
   assert list.length(string.split(english, "second reason")) == 2
   assert list.length(string.split(english, "alert alert-soft alert-error")) == 4
@@ -1152,7 +1103,7 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "<span>main</span>")
   assert string.contains(body, view.shorten(known_npub))
   assert string.contains(
@@ -1186,7 +1137,7 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "7 d ago")
   assert string.contains(
     body,
@@ -1209,7 +1160,7 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
         ),
       ]),
     )
-  let english = dashboard.render(i18n.English, view.System, snapshot)
+  let english = english(snapshot)
   assert string.contains(english, "Unreadable accounts")
   assert string.contains(
     english,
@@ -1246,7 +1197,7 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "The pubkey column cannot be read.")
   assert string.contains(
     body,
@@ -1272,7 +1223,7 @@ pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "old wallet")
   assert string.contains(body, view.shorten(npub))
   assert string.contains(
@@ -1317,7 +1268,7 @@ pub fn no_skipped_rows_draws_no_frame_test() {
 /// だけのボタン、監視、バンカーの順に並び、用途ごとにアイコン・語・状態のバッジを出す。使って
 /// いない用途は「未使用」のバッジで出す。
 pub fn relays_are_listed_one_item_per_row_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   let assert Ok(#(_, section)) = string.split_once(body, "id=\"relays\"")
   let assert Ok(#(section, _)) = string.split_once(section, "id=\"plugins\"")
   let assert [_, first, second] = string.split(section, "<li ")
@@ -1365,9 +1316,7 @@ pub fn relays_are_listed_one_item_per_row_test() {
 /// アカウントの一覧を得られなくても、アカウントの追加のダイアログは描く。
 pub fn add_account_dialog_is_drawn_without_the_account_list_test() {
   let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
     )
   assert string.contains(body, "class=\"modal\" id=\"dialog-account-new\">")
@@ -1512,11 +1461,7 @@ pub fn render_open_needs_the_listed_account_test() {
 
 /// アカウントの追加のダイアログは、登録、生成の順のタブで 2 つのフォームを出す。
 pub fn account_add_dialog_has_import_and_generate_tabs_test() {
-  let dialog =
-    closed_dialog(
-      dashboard.render(i18n.English, view.System, states()),
-      "dialog-account-new",
-    )
+  let dialog = closed_dialog(english(states()), "dialog-account-new")
   let in_dialog =
     view.InDialog(
       id: "dialog-account-new",
@@ -1551,7 +1496,7 @@ fn checkbox_checked(html: String, name: String) -> Bool {
 
 /// 用途の編集のダイアログは、行の今の用途にチェックを入れ、用途の接続状態のバッジを付ける。
 pub fn relay_edit_dialogs_check_the_current_roles_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   let first = closed_dialog(body, "dialog-relay-1-edit")
   assert string.contains(first, "wss://a")
   assert checkbox_checked(first, "bunker")
@@ -1623,7 +1568,7 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
         dialog_account(second, "bot"),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   use #(signer, label) <- list.each([#(dialog_signer, "main"), #(second, "bot")])
   let account = dialog_account(signer, label)
   let id = "dialog-account-" <> signer <> "-label"
@@ -1646,9 +1591,7 @@ pub fn account_label_dialogs_hold_each_row_label_test() {
 /// URL と操作のボタン（用途の編集、削除）は残る。
 pub fn a_relay_role_without_a_status_shows_unavailable_test() {
   let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..states(),
         relays: Ok([
@@ -1674,9 +1617,7 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
 /// 用途 2 つ（監視、バンカー）は必ず並び、使っていない側は「未使用」のバッジで出す。
 pub fn unused_relay_roles_are_shown_as_unused_test() {
   let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..states(),
         relays: Ok([
@@ -1700,7 +1641,7 @@ pub fn unused_relay_roles_are_shown_as_unused_test() {
 /// リレーの行の用途の編集と削除のダイアログを開くボタンは、アイコンだけで `aria-label` を持ち、
 /// 語はボタンの中身には出ない。
 pub fn relay_actions_are_icon_only_with_labels_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   assert string.contains(
     body,
     element.to_string(view.dialog_trigger(
@@ -1735,26 +1676,12 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
         html.text(i18n.text(i18n.English, i18n.NoBunkerRelay)),
       ]),
     )
-  let legend =
-    relays_hint_html(
-      i18n.English,
-      "monitor",
-      "Subscribes to registered accounts&#39; events and passes them to plugins",
-      "bunker",
-      "Accepts NIP-46 requests",
-    )
-  let no_rows =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), relays: Ok([])),
-    )
+  let legend = english_relays_hint_html()
+  let no_rows = english(dashboard.Snapshot(..states(), relays: Ok([])))
   assert string.contains(no_rows, "Relays</h2>" <> legend <> "</div>")
   assert string.contains(no_rows, add_trigger <> "</div></div>" <> no_bunker)
   let monitor_only =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..states(),
         relays: Ok([
@@ -1772,10 +1699,7 @@ pub fn no_bunker_relay_is_shown_in_an_error_alert_test() {
     monitor_only,
     add_trigger <> "</div></div>" <> no_bunker <> "<ul",
   )
-  assert !string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    "No relay is used for the bunker.",
-  )
+  assert !string.contains(english(states()), "No relay is used for the bunker.")
 }
 
 /// リレーの一覧を得られないときは、一覧の代わりに理由を出し、警告は出さない。日本語では
@@ -1784,15 +1708,9 @@ pub fn unlisted_relays_show_the_reason_test() {
   let snapshot =
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom")))
   assert string.contains(
-    dashboard.render(i18n.English, view.System, snapshot),
+    english(snapshot),
     "Relays</h2>"
-      <> relays_hint_html(
-      i18n.English,
-      "monitor",
-      "Subscribes to registered accounts&#39; events and passes them to plugins",
-      "bunker",
-      "Accepts NIP-46 requests",
-    )
+      <> english_relays_hint_html()
       <> "</div></div>"
       <> listed_reason_html(i18n.English, i18n.CouldNotListRelays, "boom"),
   )
@@ -1814,25 +1732,14 @@ pub fn unlisted_relays_show_the_reason_test() {
 /// リレーの節の見出しの ⓘ は、一覧の行があるとき・0 件のとき・一覧を得られないときのどれでも、
 /// 監視とバンカーの語と説明を並べた凡例を `relays-hint` の補足で開く。
 pub fn relays_heading_opens_the_role_legend_from_the_info_button_test() {
-  let legend =
-    "Relays</h2>"
-    <> relays_hint_html(
-      i18n.English,
-      "monitor",
-      "Subscribes to registered accounts&#39; events and passes them to plugins",
-      "bunker",
-      "Accepts NIP-46 requests",
-    )
+  let legend = "Relays</h2>" <> english_relays_hint_html()
   let snapshots = [
     states(),
     dashboard.Snapshot(..states(), relays: Ok([])),
     dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
   ]
   list.each(snapshots, fn(snapshot) {
-    assert string.contains(
-      dashboard.render(i18n.English, view.System, snapshot),
-      legend,
-    )
+    assert string.contains(english(snapshot), legend)
   })
 }
 
@@ -1867,10 +1774,21 @@ fn relays_hint_html(
   )
 }
 
+/// 英語のリレーの節の、監視とバンカーの説明を並べた凡例の補足の HTML。
+fn english_relays_hint_html() -> String {
+  relays_hint_html(
+    i18n.English,
+    "monitor",
+    "Subscribes to registered accounts&#39; events and passes them to plugins",
+    "bunker",
+    "Accepts NIP-46 requests",
+  )
+}
+
 /// 節の格子は、1121px 以上で 1.62 対 1 の 2 列に切り替えるクラスを持つ。クラスの照合だけで、
 /// 幅の切り替えそのものはブラウザーで確かめる。
 pub fn dashboard_columns_split_above_1120px_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   assert string.contains(
     body,
     "min-[1121px]:grid-cols-[minmax(0,1.62fr)_minmax(0,1fr)]",
@@ -1885,10 +1803,7 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
       ..states(),
       relays: Error(i18n.Translated(i18n.NotAvailable)),
     )
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, snapshot),
-    "Not available right now.",
-  )
+  assert string.contains(english(snapshot), "Not available right now.")
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "今は取得できません。",
@@ -1898,7 +1813,7 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
 /// リレーの節の見出しの行は、一覧を得たときだけ追加のダイアログを開くボタンを出す。追加のダイアログは
 /// 一覧の有無によらず描く。
 pub fn relays_heading_opens_the_add_dialog_test() {
-  let ok = dashboard.render(i18n.English, view.System, states())
+  let ok = english(states())
   assert string.contains(
     ok,
     "command=\"show-modal\" commandfor=\"dialog-relay-new\"",
@@ -1906,9 +1821,7 @@ pub fn relays_heading_opens_the_add_dialog_test() {
   assert string.contains(ok, "id=\"dialog-relay-new\"")
 
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
     )
   assert !string.contains(
@@ -1922,14 +1835,12 @@ pub fn relays_heading_opens_the_add_dialog_test() {
 /// 一覧を得られないときも描く。
 pub fn sessions_heading_links_to_connect_a_client_test() {
   let trigger = "command=\"show-modal\" commandfor=\"dialog-session-connect\""
-  let ok = dashboard.render(i18n.English, view.System, states())
+  let ok = english(states())
   assert string.contains(ok, trigger)
   assert string.contains(ok, "id=\"dialog-session-connect\"")
 
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), sessions: Error(i18n.Untranslated("boom"))),
     )
   assert !string.contains(unavailable, trigger)
@@ -1940,9 +1851,7 @@ pub fn sessions_heading_links_to_connect_a_client_test() {
 /// （追加のボタンは一覧を得たときだけ出す）。
 pub fn the_reload_form_stays_without_the_account_list_test() {
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
     )
   assert string.contains(unavailable, "/accounts/reload")
@@ -1970,9 +1879,7 @@ fn after_heading_title(body: String, title: String) -> String {
 /// 件数のピルを出す。一覧を得られない節にはピルを出さない。
 pub fn section_headings_show_the_count_pill_test() {
   let body =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
     )
   assert string.starts_with(
@@ -1981,21 +1888,11 @@ pub fn section_headings_show_the_count_pill_test() {
   )
   assert string.contains(
     body,
-    "Relays</h2>"
-      <> relays_hint_html(
-      i18n.English,
-      "monitor",
-      "Subscribes to registered accounts&#39; events and passes them to plugins",
-      "bunker",
-      "Accepts NIP-46 requests",
-    )
-      <> count_pill(2),
+    "Relays</h2>" <> english_relays_hint_html() <> count_pill(2),
   )
 
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..states(),
         accounts: Error(i18n.Untranslated("boom")),
@@ -2022,7 +1919,7 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
       sessions: Ok([]),
       plugins: [],
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(
     body,
     element.to_string(
@@ -2069,13 +1966,7 @@ pub fn empty_sections_offer_their_action_in_the_frame_test() {
 pub fn language_switch_return_paths_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
-    dashboard.approval_page(
-      i18n.Japanese,
-      view.System,
-      Ok([]),
-      states().now,
-      pending,
-    ),
+    approval(i18n.Japanese, pending),
     "<input name=\"return\" type=\"hidden\" value=\"/approve/tok\">",
   )
   assert string.contains(
@@ -2095,21 +1986,15 @@ pub fn language_switch_return_paths_test() {
 /// ダッシュボードは承認待ちを 1 件以上得たときだけ 30 秒ごとに自動で読み込み直す。
 /// 空のときと一覧を得られないときは自動更新しない。
 pub fn dashboard_refreshes_only_when_pending_exists_test() {
-  let with_pending = dashboard.render(i18n.English, view.System, states())
+  let with_pending = english(states())
   assert string.contains(with_pending, "http-equiv=\"refresh\"")
   assert string.contains(with_pending, "content=\"30\"")
   assert !string.contains(
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    ),
+    english(dashboard.Snapshot(..states(), pending: Ok([]))),
     "http-equiv=\"refresh\"",
   )
   assert !string.contains(
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
     ),
     "http-equiv=\"refresh\"",
@@ -2120,14 +2005,7 @@ pub fn dashboard_refreshes_only_when_pending_exists_test() {
 /// 読み込みを繰り返さない。
 pub fn approval_page_refreshes_automatically_test() {
   let assert Ok([pending]) = states().pending
-  let approval =
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      pending,
-    )
+  let approval = approval(i18n.English, pending)
   assert string.contains(approval, "http-equiv=\"refresh\"")
   assert string.contains(approval, "content=\"30\"")
   assert !string.contains(
@@ -2148,7 +2026,7 @@ pub fn approval_page_refreshes_automatically_test() {
 pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
-    dashboard.render(i18n.English, view.System, states()),
+    english(states()),
     "<dt class=\"text-muted\">Expires in</dt><dd>9:00 (expires at <time datetime=\"2026-09-13T05:21:34Z\">05:21:34 UTC</time>)</dd>",
   )
   assert string.contains(
@@ -2156,13 +2034,7 @@ pub fn pending_shows_time_until_expiry_test() {
     "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
   assert string.contains(
-    dashboard.approval_page(
-      i18n.Japanese,
-      view.System,
-      Ok([]),
-      states().now,
-      pending,
-    ),
+    approval(i18n.Japanese, pending),
     "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
 }
@@ -2178,7 +2050,7 @@ pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
   let offered_forms =
     "<form action=\"/approve/tok-1\" method=\"post\"><button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" type=\"submit\">Approve</button></form>"
     <> "<form action=\"/deny/tok-1\" method=\"post\"><button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" type=\"submit\">Deny</button></form>"
-  let body = dashboard.render(i18n.English, view.System, secret_states())
+  let body = english(secret_states())
   assert string.contains(body, mismatched_forms)
   assert string.contains(body, offered_forms)
   assert list.length(string.split(body, "border-warning/55")) == 2
@@ -2188,26 +2060,8 @@ pub fn mismatched_pending_swaps_the_emphasis_but_not_the_order_test() {
     ))
     == 2
 
-  assert string.contains(
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      mismatched,
-    ),
-    mismatched_forms,
-  )
-  assert string.contains(
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      not_offered,
-    ),
-    offered_forms,
-  )
+  assert string.contains(approval(i18n.English, mismatched), mismatched_forms)
+  assert string.contains(approval(i18n.English, not_offered), offered_forms)
 }
 
 /// 承認待ちの帯は、見出しに説明を付け、ダッシュボードを自動で読み込み直すとき（1 件以上）だけ
@@ -2220,15 +2074,13 @@ pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
     "Until you approve, this client cannot request signing or encryption."
   let refresh = "Refreshes every 30 s"
 
-  let present = dashboard.render(i18n.English, view.System, states())
+  let present = english(states())
   assert string.contains(present, band)
   assert string.contains(present, description)
   assert string.contains(present, refresh)
 
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
     )
   assert string.contains(unavailable, band)
@@ -2239,12 +2091,7 @@ pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
     listed_reason_html(i18n.English, i18n.CouldNotListPending, "boom"),
   )
 
-  let empty =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    )
+  let empty = english(dashboard.Snapshot(..states(), pending: Ok([])))
   assert !string.contains(empty, band)
   assert !string.contains(empty, refresh)
 }
@@ -2252,7 +2099,7 @@ pub fn pending_band_shows_the_refresh_only_while_refreshing_test() {
 /// 残り時間の円は、600 を満たんとする弧を残りの秒の長さで描き、60 秒未満は弧と数字を warning の
 /// 色にする。残り時間は囲みの `aria-label` で読み上げる。
 pub fn pending_ring_follows_the_remaining_seconds_test() {
-  let body = dashboard.render(i18n.English, view.System, secret_states())
+  let body = english(secret_states())
   assert string.contains(
     body,
     "<circle class=\"fill-none stroke-6 stroke-primary\" cx=\"32\" cy=\"32\" pathLength=\"600\" r=\"28\" stroke-dasharray=\"540 600\" stroke-linecap=\"round\"></circle>",
@@ -2268,7 +2115,7 @@ pub fn pending_ring_follows_the_remaining_seconds_test() {
 /// 承認待ちの円は、広い画面で跨ぐ行が、secret の不一致の警告の囲みがあるカードでは 3、
 /// ないカードでは 2 である。
 pub fn pending_ring_spans_the_rows_of_its_card_test() {
-  let body = dashboard.render(i18n.English, view.System, secret_states())
+  let body = english(secret_states())
   let cards = list.drop(string.split(body, "<article "), 1)
   let assert Ok(mismatch) =
     list.find(cards, string.contains(_, "border-warning/55"))
@@ -2283,7 +2130,7 @@ pub fn pending_ring_spans_the_rows_of_its_card_test() {
 /// 概要の帯の項目は、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
 /// `id` を持つ。
 pub fn overview_rail_links_to_each_section_test() {
-  let body = dashboard.render(i18n.English, view.System, states())
+  let body = english(states())
   let anchors = ["pending", "accounts", "sessions", "relays", "plugins"]
   use anchor <- list.each(anchors)
   assert string.contains(body, "href=\"#" <> anchor <> "\"")
@@ -2294,22 +2141,13 @@ pub fn overview_rail_links_to_each_section_test() {
 /// 一覧を得られないときはリンクにする。
 pub fn overview_pending_is_not_a_link_when_no_pending_test() {
   let anchor = "href=\"#pending\""
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    anchor,
-  )
+  assert string.contains(english(states()), anchor)
   assert !string.contains(
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    ),
+    english(dashboard.Snapshot(..states(), pending: Ok([]))),
     anchor,
   )
   assert string.contains(
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
     ),
     anchor,
@@ -2320,9 +2158,7 @@ pub fn overview_pending_is_not_a_link_when_no_pending_test() {
 /// 「—」、補足は error の色の「取得できません」になる。
 pub fn overview_says_not_available_when_lists_are_missing_test() {
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(
         ..states(),
         accounts: Error(i18n.Untranslated("boom")),
@@ -2358,7 +2194,7 @@ pub fn pending_row_shows_the_client_shortened_with_a_copy_button_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, view.shorten(long_client))
   assert string.contains(body, "data-action=\"copy\"")
 }
@@ -2383,13 +2219,10 @@ pub fn pending_card_draws_the_client_fingerprint_test() {
       ]),
     )
   assert string.contains(
-    dashboard.render(i18n.English, view.System, snapshot),
+    english(snapshot),
     element.to_string(fingerprint.svg(mark, fingerprint.Colored, "size-6")),
   )
-  assert !string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    "class=\"size-6 fp",
-  )
+  assert !string.contains(english(states()), "class=\"size-6 fp")
 }
 
 /// クライアントの公開鍵が `client` の承認済みセッション 1 件。
@@ -2407,10 +2240,7 @@ fn session_row(client: String) -> session.Session {
 /// 英語のダッシュボードのうち、セッションの節（`id="sessions"`）以降の部分。
 fn sessions_part(snapshot: dashboard.Snapshot) -> String {
   let assert Ok(#(_, part)) =
-    string.split_once(
-      dashboard.render(i18n.English, view.System, snapshot),
-      "id=\"sessions\"",
-    )
+    string.split_once(english(snapshot), "id=\"sessions\"")
   part
 }
 
@@ -2521,15 +2351,13 @@ pub fn signer_is_shown_as_label_and_npub_test() {
         ),
       ]),
     )
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   assert string.contains(body, "<span>main</span>")
   assert string.contains(body, view.shorten(known_npub))
   assert string.contains(body, view.shorten(unknown_signer))
 
   let unavailable =
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..snapshot, accounts: Error(i18n.Untranslated("boom"))),
     )
   assert string.contains(unavailable, view.shorten(known_signer))
@@ -2540,14 +2368,7 @@ pub fn signer_is_shown_as_label_and_npub_test() {
 /// 許す範囲を述べる一文が続く。
 pub fn approval_page_explains_what_approval_means_test() {
   let assert Ok([with_perms, without_perms]) = secret_states().pending
-  let with_perms_page =
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      with_perms,
-    )
+  let with_perms_page = approval(i18n.English, with_perms)
   assert string.contains(with_perms_page, "alert-info")
   assert string.contains(
     with_perms_page,
@@ -2568,14 +2389,7 @@ pub fn approval_page_explains_what_approval_means_test() {
     "None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
 
-  let without_perms_page =
-    dashboard.approval_page(
-      i18n.English,
-      view.System,
-      Ok([]),
-      states().now,
-      without_perms,
-    )
+  let without_perms_page = approval(i18n.English, without_perms)
   assert string.contains(
     without_perms_page,
     "You can change them later from the approved session. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
@@ -2589,14 +2403,9 @@ pub fn overview_highlights_pending_only_when_pending_exists_test() {
     "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content"
   let plain =
     "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
-  let with_pending = dashboard.render(i18n.English, view.System, states())
+  let with_pending = english(states())
   assert string.contains(with_pending, highlighted)
-  let empty =
-    dashboard.render(
-      i18n.English,
-      view.System,
-      dashboard.Snapshot(..states(), pending: Ok([])),
-    )
+  let empty = english(dashboard.Snapshot(..states(), pending: Ok([])))
   assert !string.contains(empty, highlighted)
   assert string.contains(empty, plain)
 }
@@ -2787,9 +2596,7 @@ pub fn getting_started_follows_the_bunker_relays_and_accounts_test() {
 /// 段 3 を点線の枠で出す。リレーとアカウントがそろうと帯ごと出さない。
 pub fn getting_started_band_shows_done_open_and_locked_steps_test() {
   let render = fn(accounts, relays) {
-    dashboard.render(
-      i18n.English,
-      view.System,
+    english(
       dashboard.Snapshot(..states(), accounts: Ok(accounts), relays: Ok(relays)),
     )
   }
@@ -2975,6 +2782,13 @@ fn action_form(action: routes.RelayAction) -> String {
   |> element.to_string
 }
 
+/// `session_account()` だけを署名者の候補にし、URI と署名者が空の英語の接続のフォームの中身の HTML。
+fn connect_form_html() -> String {
+  dashboard.connect_form(i18n.English, [session_account()], "", "", view.InForm)
+  |> element.fragment
+  |> element.to_string
+}
+
 /// セッションのダイアログのテストが使うアカウント。署名者は `abcd`。
 fn session_account() -> dashboard.AccountRow {
   dashboard.AccountRow(
@@ -3054,7 +2868,7 @@ pub fn dashboard_dialogs_open_from_matching_triggers_test() {
       "dialog-session-abcd-ef02-revoke",
     ]),
   ])
-  let body = dashboard.render(i18n.English, view.System, snapshot)
+  let body = english(snapshot)
   use id <- list.each(ids)
   assert string.contains(
     body,
@@ -3076,7 +2890,7 @@ pub fn dashboard_dialogs_open_from_matching_triggers_test() {
 
 /// 取り消しのダイアログのフォームは `/sessions/revoke` へ POST し、署名者の隠し欄を持つ。
 pub fn revoke_dialog_posts_the_signer_test() {
-  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  let body = english(session_snapshot())
   let revoke = closed_dialog(body, "dialog-session-abcd-ef01-revoke")
   assert string.contains(
     form_tag(revoke, "/sessions/revoke\""),
@@ -3090,7 +2904,7 @@ pub fn revoke_dialog_posts_the_signer_test() {
 
 /// 承認の取り消しのフォームはダイアログの中にだけあり、送信は warning の枠のボタンである。
 pub fn session_rows_revoke_only_from_the_dialog_test() {
-  let body = dashboard.render(i18n.English, view.System, session_snapshot())
+  let body = english(session_snapshot())
   assert !string.contains(outside_dialogs(body), "action=\"/sessions/revoke\"")
   assert string.contains(
     closed_dialog(body, "dialog-session-abcd-ef01-revoke"),
@@ -3197,16 +3011,7 @@ pub fn permissions_form_keeps_a_padded_kind_as_another_declaration_test() {
 /// 接続のフォームの中身は `/sessions/connect` へ POST し、URI の欄の補足を欄の下の 1 行で
 /// 結び付ける。ページの枠は含めない。
 pub fn connect_form_describes_the_uri_field_test() {
-  let html =
-    dashboard.connect_form(
-      i18n.English,
-      [session_account()],
-      "",
-      "",
-      view.InForm,
-    )
-    |> element.fragment
-    |> element.to_string
+  let html = connect_form_html()
   assert string.contains(
     form_tag(html, "/sessions/connect\""),
     "method=\"post\"",
@@ -3248,10 +3053,7 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
     "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
   )
   assert !string.contains(body, "http-equiv=\"refresh\"")
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    "http-equiv=\"refresh\"",
-  )
+  assert string.contains(english(states()), "http-equiv=\"refresh\"")
 }
 
 /// アカウントへの操作のダイアログは、操作ごとの題と、失敗の理由の前置きを持つ。前置きの無い
@@ -3376,10 +3178,7 @@ pub fn render_open_needs_the_relay_list_test() {
 /// 開いて返すダッシュボードは自動で読み込み直さないので、承認待ちの帯に更新の間隔を出さない。
 pub fn render_open_does_not_announce_the_refresh_test() {
   let note = i18n.text(i18n.English, i18n.RefreshesEverySeconds(30))
-  assert string.contains(
-    dashboard.render(i18n.English, view.System, states()),
-    note,
-  )
+  assert string.contains(english(states()), note)
   let assert Ok(body) =
     dashboard.render_open(
       i18n.English,
@@ -3403,9 +3202,7 @@ pub fn account_row_overlays_the_picture_on_the_fingerprint_test() {
       picture: Some("https://example.com/a.png"),
     )
   let #(before, _details) =
-    split_account_details(dashboard.render(
-      i18n.English,
-      view.System,
+    split_account_details(english(
       dashboard.Snapshot(..states(), accounts: Ok([account])),
     ))
   assert string.contains(
@@ -3425,9 +3222,7 @@ pub fn account_row_overlays_the_picture_on_the_fingerprint_test() {
 /// `picture` の無い行は `<img>` を描かず、鍵の指紋だけになる。
 pub fn account_row_without_a_picture_draws_no_image_test() {
   let #(before, _details) =
-    split_account_details(dashboard.render(
-      i18n.English,
-      view.System,
+    split_account_details(english(
       dashboard.Snapshot(..states(), accounts: Ok([fingerprinted_account()])),
     ))
   assert !string.contains(before, "<img")
@@ -3435,16 +3230,7 @@ pub fn account_row_without_a_picture_draws_no_image_test() {
 
 /// 署名者の選択欄には、ラベルと省略した npub を並べて出す。
 pub fn connect_form_lists_accounts_with_the_shortened_npub_test() {
-  let html =
-    dashboard.connect_form(
-      i18n.English,
-      [session_account()],
-      "",
-      "",
-      view.InForm,
-    )
-    |> element.fragment
-    |> element.to_string
+  let html = connect_form_html()
   assert string.contains(
     html,
     "main " <> view.shorten(session_account().npub) <> "</option>",
@@ -3475,7 +3261,7 @@ pub fn connect_dialog_opens_with_the_submitted_values_test() {
 /// 確認のダイアログは開くときだけ描き、閉じた状態では描かない。
 pub fn connect_review_dialog_is_drawn_only_when_opened_test() {
   assert !string.contains(
-    dashboard.render(i18n.English, view.System, session_snapshot()),
+    english(session_snapshot()),
     "dialog-session-connect-review",
   )
 }
