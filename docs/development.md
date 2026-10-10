@@ -46,7 +46,7 @@ docker rm -f nns-pg-test
 
 テストのモジュールは並列に走るので、モジュールをまたいで共有する状態を使わない。プロセスの名前は `process.new_name`、DB はテストごとのスキーマか database、BEAM のモジュール名と一時ディレクトリーは `support/beam_fixture` で一意にする。環境変数（`config_test` だけが使う）や同じ DB の advisory lock のように共有せざるを得ない状態を新しいモジュールで使うなら、そのモジュールを `test/nostr_no_su_test.gleam` の `ordered_modules` に足して、干渉する相手と同じレーンで走らせる。
 
-時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`。DB の書き込みなら、トリガーにテストが持つ advisory lock を待たせる。`account_reconcile_test` の `behind_gate`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
+時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`support/hold` の `until_released`。DB の書き込みなら、トリガーにテストが持つ advisory lock を待たせる。`account_reconcile_test` の `behind_gate`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
 
 テストの実行器（`support/eunit_runner`）は `test/` 配下の全モジュールを eunit に渡し、eunit は `_test` で終わる関数をテストとして走らせる。`test/support/` のヘルパーと fixture の関数名は `_test` で終わらせない。
 

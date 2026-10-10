@@ -12,12 +12,11 @@ import nostr_no_su/bunker/account
 import nostr_no_su/bunker/engine
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/relay_list
+import support/app_tree.{signer_key, start_relay_list}
+import support/hold
 import support/loopback_relay
 import support/nip46_client.{account_for}
 import support/poll
-
-const signer_key =
-  "0000000000000000000000000000000000000000000000000000000000000042"
 
 const avatar_url = "https://x.test/a.png"
 
@@ -49,15 +48,6 @@ fn recording(
     process.send(calls, pubkeys)
     outcome
   }
-}
-
-/// 取得を、テストが開ける門で止める。取得を走らせるプロセスで作った門を `gates`
-/// へ渡し、テストがそこへ `Nil` を送るまで戻らない。subject は所有するプロセスで
-/// しか受信できないので、門はテストではなく呼び出し側で作る。
-fn hold_until_released(gates: Subject(Subject(Nil))) -> Nil {
-  let gate = process.new_subject()
-  process.send(gates, gate)
-  process.receive_forever(gate)
 }
 
 /// URL の無い、`refresh_at` に取り直す時刻を置いた記録。
@@ -254,7 +244,7 @@ pub fn pictures_do_not_fetch_a_pubkey_already_being_fetched_test() {
   let gates = process.new_subject()
   let calls = process.new_subject()
   let gated = fn(_pubkeys) {
-    hold_until_released(gates)
+    hold.until_released(gates)
     Ok([])
   }
 
@@ -274,7 +264,7 @@ pub fn pictures_keep_a_late_result_for_the_next_lookup_test() {
   let name = start(60_000, 60_000)
   let gates = process.new_subject()
   let gated = fn(_pubkeys) {
-    hold_until_released(gates)
+    hold.until_released(gates)
     Ok([metadata("a", 1, with_picture(avatar_url))])
   }
 
@@ -311,23 +301,14 @@ pub fn pictures_ask_monitor_relays_for_the_newest_metadata_test() {
       process.new_subject(),
       [older, newer, note],
     )
-  let relay_list_name = process.new_name("test_avatars_relay_list")
-  let assert Ok(_started) =
-    relay_list.start(
-      relay_list_name,
-      [
-        relay_list.Entry(
-          url: relay.url,
-          monitor: Some(process.new_name("test_avatars_monitor")),
-          bunker: None,
-        ),
-      ],
-      relay_list.Factories(
-        monitor: process.new_name("test_avatars_factory_monitor"),
-        bunker: process.new_name("test_avatars_factory_bunker"),
-        session: process.new_name("test_avatars_factory_session"),
+  let relay_list_name =
+    start_relay_list([
+      relay_list.Entry(
+        url: relay.url,
+        monitor: Some(process.new_name("test_avatars_monitor")),
+        bunker: None,
       ),
-    )
+    ])
 
   let name = start(60_000, 0)
   assert poll.until(
