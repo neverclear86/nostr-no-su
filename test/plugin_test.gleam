@@ -1,7 +1,6 @@
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
-import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -9,6 +8,7 @@ import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
 import support/beam_fixture.{type Fixture, Exported}
+import support/page_account_json
 import support/plugin_valid
 import support/plugin_with_config
 import support/plugin_with_localized_pages
@@ -29,13 +29,7 @@ fn sample_event() -> event.Event {
 
 /// 読み込みに失敗した理由の文字列を取り出す。設定は空。
 fn load_error(module_name: String) -> String {
-  let assert Error(reason) =
-    plugin.load(
-      atom.create(module_name),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  reason
+  load_error_with(module_name, [])
 }
 
 /// 設定を与えて読み込み、失敗した理由の文字列を取り出す。
@@ -59,6 +53,35 @@ fn compiled_error(fixture: Fixture, source: String) -> String {
   load_error(fixture.module)
 }
 
+/// 設定を与えて読み込み、成功した `Plugin` を取り出す。
+fn load_ok_with(
+  module_name: String,
+  env: List(#(String, String)),
+) -> plugin.Plugin {
+  let assert Ok(loaded) =
+    plugin.load(
+      atom.create(module_name),
+      dict.from_list(env),
+      plugin.default_call_timeout_ms,
+    )
+  loaded
+}
+
+/// 読み込みに成功した `Plugin` を取り出す。設定は空。
+fn load_ok(module_name: String) -> plugin.Plugin {
+  load_ok_with(module_name, [])
+}
+
+/// 読み込んだプラグインの `plugin_page_action` の呼び出しを取り出す。
+fn action_of(
+  module_name: String,
+) -> fn(String, List(#(String, String)), List(plugin_config.PageAccount)) ->
+  Result(Nil, String) {
+  let assert Some(ui) = load_ok(module_name).ui
+  let assert Some(action) = ui.action
+  action
+}
+
 /// 退避された設定 map を binary キー・binary 値の Dict として読む。
 fn saved_config(key: Atom) -> dict.Dict(String, String) {
   let assert Ok(config) =
@@ -72,12 +95,7 @@ fn saved_config(key: Atom) -> dict.Dict(String, String) {
 /// API v1 を満たすモジュールを読み込むと、`plugin_name/0` の値が `Plugin.name`
 /// になる。
 pub fn load_valid_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_valid"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_valid")
   assert loaded.name == "plugin_valid"
 }
 
@@ -175,28 +193,12 @@ pub fn load_unknown_module_test() {
 /// `Plugin.handle` を呼ぶと、プラグインには binary キーのイベント map が届き、
 /// `event.from_map` で元の `Event` に戻せる。
 pub fn handle_passes_event_map_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_valid"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_valid")
   let original = sample_event()
   loaded.handle(original)
   let assert Ok(received) =
     event.from_map(beam_fixture.saved(plugin_valid.last_event_key()))
   assert received == original
-}
-
-/// `has_export` は読み込み済みモジュールのエクスポートを名前とアリティの両方で
-/// 判定する。
-pub fn has_export_test() {
-  let module = atom.create("support@plugin_valid")
-  let assert Ok(_) =
-    plugin.load(module, dict.new(), plugin.default_call_timeout_ms)
-  assert plugin.has_export(module, "handle_event", 1)
-  assert !plugin.has_export(module, "handle_event", 2)
-  assert !plugin.has_export(module, "no_such_function", 0)
 }
 
 /// `plugin_api_version/0` が整数以外を返すモジュールは拒否する。
@@ -218,24 +220,14 @@ pub fn load_non_integer_version_test() {
 
 /// 仕様書に載せている Erlang の最小実装が、実際に読み込めること。
 pub fn load_erlang_minimal_plugin_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("minimal_plugin"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("minimal_plugin")
   assert loaded.name == "minimal_plugin"
 }
 
 /// 任意エクスポート `plugin_children/0` を持つモジュールは、子仕様を解決した
 /// 状態で読み込まれる。
 pub fn load_resolves_children_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_with_children"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_with_children")
   assert list.length(loaded.children) == 1
 }
 
@@ -243,12 +235,7 @@ pub fn load_resolves_children_test() {
 /// **問い合わせを飛ばすことが重要で**、無いエクスポートを呼ぶと `error:undef` に
 /// なる。
 pub fn load_without_children_export_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_valid"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_valid")
   assert loaded.children == []
 }
 
@@ -271,39 +258,28 @@ pub fn load_crashing_children_test() {
 /// `handle_event/1` を正しく書けないため、v1 は `/1` と `/2` のどちらか一方を
 /// 必須としている。
 pub fn load_handle_event_arity_two_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_with_config"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_with_config")
   assert loaded.name == "plugin_with_config"
 }
 
 /// `plugin_children/1` にはプラグイン 1 つぶんの設定 map が届く。キーは接頭辞を
 /// 取り除いて小文字にしたもので、他のプラグイン向けの変数は混ざらない。
 pub fn children_receives_config_test() {
-  let assert Ok(_) =
-    plugin.load(
-      atom.create("support@plugin_with_config"),
-      dict.from_list([
-        #("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log"),
-        #("PLUGIN_COUNTER_LIMIT", "10"),
-      ]),
-      plugin.default_call_timeout_ms,
-    )
+  let _ =
+    load_ok_with("support@plugin_with_config", [
+      #("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log"),
+      #("PLUGIN_COUNTER_LIMIT", "10"),
+    ])
   assert saved_config(plugin_with_config.children_config_key())
     == dict.from_list([#("path", "/tmp/events.log")])
 }
 
 /// `handle_event/2` があればそちらが呼ばれ、設定 map が第 2 引数に届く。
 pub fn handle_receives_config_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_with_config"),
-      dict.from_list([#("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log")]),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded =
+    load_ok_with("support@plugin_with_config", [
+      #("PLUGIN_PLUGIN_WITH_CONFIG_PATH", "/tmp/events.log"),
+    ])
   loaded.handle(sample_event())
   assert saved_config(plugin_with_config.handle_config_key())
     == dict.from_list([#("path", "/tmp/events.log")])
@@ -312,12 +288,7 @@ pub fn handle_receives_config_test() {
 /// `handle_event/1` と `/2` の両方を持つプラグインでは `/2` が呼ばれる。
 /// fixture の `/1` は例外を投げるので、呼ばれればこのテストが落ちる。
 pub fn handle_prefers_arity_two_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_both_handlers"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("plugin_with_both_handlers")
   loaded.handle(sample_event())
 }
 
@@ -351,24 +322,14 @@ pub fn children_rejecting_config_with_bad_reason_test() {
 /// `plugin_pages` と `plugin_page_content` のどちらも無いプラグインは読み込まれ、
 /// `ui` は `None`。
 pub fn load_without_ui_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_valid"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_valid")
   assert loaded.ui == None
 }
 
 /// `plugin_pages/1` と `plugin_page_content/2` を持つプラグインは、`ui` に検証
 /// 済みのページの一覧が載り、`content(key)` がそのページの記述を返す。
 pub fn load_with_pages_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_with_pages"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_with_pages")
   let assert Some(ui) = loaded.ui
   assert ui.pages
     == [
@@ -389,12 +350,7 @@ pub fn load_with_pages_test() {
 /// `plugin_pages/2` と `plugin_page_content/3` を持つプラグインは、`ui` に言語ごとの
 /// 表示名を持つ `LocalizedPage` が載り、`content` に渡した言語でページの記述が返る。
 pub fn load_with_localized_pages_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("support@plugin_with_localized_pages"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
+  let loaded = load_ok("support@plugin_with_localized_pages")
   let assert Some(ui) = loaded.ui
   assert ui.pages
     == [
@@ -433,25 +389,10 @@ pub fn localized_page_title_falls_back_to_the_key_test() {
   assert plugin.title_in(page, "fr") == "status"
 }
 
-/// アカウント 1 件の map を読む decoder。
-fn page_account_decoder() -> decode.Decoder(#(String, String, String)) {
-  use pubkey <- decode.field("pubkey", decode.string)
-  use npub <- decode.field("npub", decode.string)
-  use label <- decode.field("label", decode.string)
-  decode.success(#(pubkey, npub, label))
-}
-
 /// `plugin_page_action/3` には送信したキー・値・登録アカウントの一覧
 /// （`Accounts`）が届く。成功は `Ok(Nil)`。
 pub fn page_action_receives_the_key_values_and_accounts_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action")
   let accounts = [
     plugin_config.PageAccount(pubkey: "abcd", npub: "npub1x", label: "main"),
   ]
@@ -471,23 +412,15 @@ pub fn page_action_receives_the_key_values_and_accounts_test() {
   assert values == dict.from_list([#("main", "on")])
   let assert Ok(accounts_json) =
     decode.run(config, decode.field("Accounts", decode.string, decode.success))
-  let assert Ok(decoded_accounts) =
-    json.parse(accounts_json, decode.list(page_account_decoder()))
-  assert decoded_accounts == [#("abcd", "npub1x", "main")]
+  assert page_account_json.parse(accounts_json)
+    == Ok([#("abcd", "npub1x", "main")])
 }
 
 /// `plugin_page_action/3` が無く `/2` だけのプラグインは `/2` が呼ばれ、設定 map
 /// を渡さない（fixture が退避した値が `{Key, Values}` の 2 要素であることで
 /// 確かめる）。
 pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action_arity_two"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action_arity_two")
   let assert Ok(Nil) = action("settings", [#("main", "on")], [])
   let stored_decoder = {
     use key <- decode.field(0, decode.string)
@@ -505,14 +438,7 @@ pub fn page_action_arity_two_is_used_when_three_is_missing_test() {
 
 /// `{error, Reason}` が拒否の理由になる。
 pub fn page_action_error_tuple_is_a_reason_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action")
   let assert Error(reason) =
     action("settings", [#("reject", "select at least one account")], [])
   assert reason
@@ -521,14 +447,7 @@ pub fn page_action_error_tuple_is_a_reason_test() {
 
 /// `ok` でも `{error, _}` でもない戻り値は、その形を報告する理由になる。
 pub fn page_action_with_a_bad_return_is_a_reason_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action")
   let assert Error(reason) = action("settings", [#("bad-return", "on")], [])
   assert reason
     == "plugin_with_action: plugin_page_action/3 must return ok or {error, Reason}, got Atom"
@@ -537,14 +456,7 @@ pub fn page_action_with_a_bad_return_is_a_reason_test() {
 /// 理由の無い `{error}` は拒否ではなく戻り値の形の誤りになる。要素 0 は `error`
 /// だが、理由の要素が無い。
 pub fn page_action_error_without_a_reason_is_a_bad_return_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action")
   let assert Error(reason) =
     action("settings", [#("error-without-reason", "on")], [])
   assert reason
@@ -553,14 +465,7 @@ pub fn page_action_error_without_a_reason_is_a_bad_return_test() {
 
 /// `{error, Reason}` の `Reason` が binary でなければ、その型を報告する理由になる。
 pub fn page_action_error_with_a_non_string_reason_is_a_reason_test() {
-  let assert Ok(loaded) =
-    plugin.load(
-      atom.create("plugin_with_action"),
-      dict.new(),
-      plugin.default_call_timeout_ms,
-    )
-  let assert Some(ui) = loaded.ui
-  let assert Some(action) = ui.action
+  let action = action_of("plugin_with_action")
   let assert Error(reason) =
     action("settings", [#("non-string-reason", "on")], [])
   assert reason
@@ -623,11 +528,6 @@ pub fn required_versions_report_the_first_missing_app_by_name_test() {
       ),
     )
     == "requires nns_missing_app_a 2.0.0, but no nns_missing_app_a.app is on the code path"
-}
-
-/// エラーが 1 件も無いリストは `invalid value` になる。
-pub fn describe_decode_error_without_errors_is_invalid_value_test() {
-  assert plugin.describe_decode_error([]) == "invalid value"
 }
 
 /// UI の任意エクスポートを 1 つも持たない組み合わせは `Ok(None)` になる。

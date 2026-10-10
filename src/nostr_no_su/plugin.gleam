@@ -410,20 +410,15 @@ fn check_required_version(
   }
 }
 
-/// `decode` の最初のエラーを `expected X, got Y at a.b` の 1 行にする。エラーが
-/// 1 件も無ければ `invalid value` を返す（`decode.run` の `Error` は空のリストを
-/// 持たないので、読み込みの経路からは通らない）。
+/// `decode.run` の `Error` が持つ最初のエラーを `expected X, got Y at a.b` の 1 行にする。
+/// 空のリストを渡すと失敗する（`decode.run` の `Error` は空のリストを持たない）。
 pub fn describe_decode_error(errors: List(decode.DecodeError)) -> String {
-  case errors {
-    [] -> "invalid value"
-    [error, ..] -> {
-      let location = case error.path {
-        [] -> ""
-        path -> " at " <> string.join(path, ".")
-      }
-      "expected " <> error.expected <> ", got " <> error.found <> location
-    }
+  let assert [error, ..] = errors
+  let location = case error.path {
+    [] -> ""
+    path -> " at " <> string.join(path, ".")
   }
+  "expected " <> error.expected <> ", got " <> error.found <> location
 }
 
 /// `plugin_name/0` を呼び、空でない String であることを確かめる。

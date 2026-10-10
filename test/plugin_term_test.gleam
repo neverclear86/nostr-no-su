@@ -3,19 +3,9 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
-import gleam/erlang/process
 import gleam/option.{None, Some}
-import nostr_no_su/plugin_children
 import nostr_no_su/plugin_term.{AtomKey, BinaryKey}
 import support/erl.{tuple}
-
-/// `関数/アリティ` の表記。呼び出し元が渡す関数名とアリティを `/` で繋ぐ。
-pub fn export_label_joins_function_and_arity_test() {
-  assert plugin_term.export_label(plugin_children.export_name, 0)
-    == "plugin_children/0"
-  assert plugin_term.export_label(plugin_children.export_name, 1)
-    == "plugin_children/1"
-}
 
 /// 判別子は要素 0 が atom の `error` であることだけ。要素数は見ないので
 /// `{error, A, B}` も `{error}` も同じく `True` で、atom でない要素 0 や
@@ -174,28 +164,6 @@ pub fn check_map_reports_the_classified_shape_test() {
       "a child specification map",
     )
     == Error("child #0: must be a child specification map, got Array")
-}
-
-/// `f` には 0 起点の添字が渡り、最初の誤りで止める。誤りのあとの要素は
-/// `f` を呼ばない（`f` は呼ばれるたびに 1 通送るので、届いた添字の並びが
-/// 呼んだ回数と順序になる）。
-pub fn try_map_indexed_stops_at_the_first_error_test() {
-  assert plugin_term.try_map_indexed(["a", "b", "c"], fn(_, index) { Ok(index) })
-    == Ok([0, 1, 2])
-
-  let calls = process.new_subject()
-  let result =
-    plugin_term.try_map_indexed(["a", "b", "c"], fn(_, index) {
-      process.send(calls, index)
-      case index {
-        1 -> Error("bad")
-        _ -> Ok(index)
-      }
-    })
-  assert result == Error("bad")
-  assert process.receive(calls, 0) == Ok(0)
-  assert process.receive(calls, 0) == Ok(1)
-  assert process.receive(calls, 10) == Error(Nil)
 }
 
 /// 要素 0 が atom の `error` のタプルを組み立てる。

@@ -60,7 +60,8 @@ pub fn an_empty_list_is_accepted_test() {
   assert convert([]) == Ok([])
 }
 
-/// `id` と `start` だけの最小の子仕様は、OTP と同じ既定値になる。
+/// `id` と `start` だけの最小の子仕様は、設定の拒否と誤判定されずに変換でき、
+/// OTP と同じ既定値になる。
 pub fn minimal_spec_uses_otp_defaults_test() {
   let child = child("minimal", unique_name("store"))
   assert child.restart == supervision.Permanent
@@ -229,12 +230,6 @@ pub fn ok_tuple_is_not_a_config_rejection_test() {
     reason,
     "child #0: must be a child specification map, got Atom",
   )
-}
-
-/// 正しい子仕様のリストも設定の拒否と誤判定されない。
-pub fn child_list_is_not_a_config_rejection_test() {
-  let assert Ok([_]) =
-    convert([spec(atom.create("minimal"), unique_name("store"))])
 }
 
 /// `{error, Reason}` を組み立てる。
