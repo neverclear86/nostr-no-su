@@ -138,24 +138,6 @@ pub fn monitored_rows_limit_storing_test() {
   assert !store.is_monitored(monitored, "cc")
 }
 
-/// 挿入する列とプレースホルダーが、`insert` がパラメーターを積む順序と対応して
-/// いる。`tags` だけが jsonb へのキャストを伴う。
-pub fn the_insert_lists_columns_in_parameter_order_test() {
-  assert string.contains(
-    store.insert_sql,
-    "(id, pubkey, created_at, kind, tags, content, sig)",
-  )
-  assert string.contains(
-    store.insert_sql,
-    "VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)",
-  )
-}
-
-/// 挿入は重複した id を黙って読み飛ばす。
-pub fn inserts_ignore_duplicate_ids_test() {
-  assert string.contains(store.insert_sql, "ON CONFLICT (id) DO NOTHING")
-}
-
 /// 権限不足のような自然に直らないエラーの例。
 fn insufficient_privilege() -> pog.QueryError {
   pog.PostgresqlError(
@@ -275,14 +257,16 @@ fn shutdown_decoder() -> decode.Decoder(Shutdown) {
   ])
 }
 
-/// 設定が揃っていれば、プールと保存アクターの 2 件を申告する。プールは
+/// 設定が揃っていれば、プールと保存アクターの 2 件を申告する。接続先のキーは
+/// `database_url` でも、本体が渡す予約キー `DatabaseUrl` でもよい。プールは
 /// `pog.supervised/1` に合わせて `supervisor` で、本体が有限の shutdown を
 /// 拒否するため `infinity` である。
 pub fn valid_configuration_declares_a_pool_and_a_store_test() {
+  use key <- list.each(["database_url", "DatabaseUrl"])
   let config =
     dynamic.properties([
       #(
-        dynamic.string("database_url"),
+        dynamic.string(key),
         dynamic.string("postgres://user:pass@localhost:5432/db"),
       ),
     ])
@@ -298,37 +282,15 @@ pub fn valid_configuration_declares_a_pool_and_a_store_test() {
     == Ok(#("store", atom.create("worker"), Milliseconds(5000)))
 }
 
-/// 本体が渡す予約キー `DatabaseUrl` だけでも、プールと保存アクターの 2 件を
-/// 申告する（nostr-no-su の本体から届く既定の形）。
-pub fn host_database_url_declares_a_pool_and_a_store_test() {
-  let config =
-    dynamic.properties([
-      #(
-        dynamic.string("DatabaseUrl"),
-        dynamic.string("postgres://user:pass@localhost:5432/db"),
-      ),
-    ])
-  let assert Ok(specs) =
-    decode.run(
-      event_logger.plugin_children(config),
-      decode.list(decode.dynamic),
-    )
-  let assert [pool, ..] = specs
-  assert child_shape(pool)
-    == Ok(#("pool", atom.create("supervisor"), Named(atom.create("infinity"))))
-  assert list.length(specs) == 2
-}
-
 /// 到達できない DB でも保存アクターは落ちない。DB が落ちている間に落ち続ける
 /// 子は、専用スーパーバイザーの歯止めを使い切って本体の再起動まで戻らなくなる
 /// （`docs/plugin-api.md` 第 5.4 節）。イベントは数えて捨てるだけにする。
 ///
-/// **数百 ms 待つだけでは足りない。** 初期化で送る `EnsureSchema` が接続の
-/// チェックアウト待ちでブロックするため、`Unavailable` へ遷移するまでアクターは
-/// メッセージを 1 件も処理しない。到達できないポートに対する実測では、500ms と
-/// 1500ms の時点でメールボックスに `Store` が残ったままで、遷移が済んで空になる
-/// のは 5.5 秒あたりである。ブロック中のプロセスも生きてはいるので、その時点の
-/// `is_alive` は `Unavailable` の分岐が正しいことを何も示さない。
+/// **遷移が済むまで待たずに `is_alive` を見ても足りない。** 初期化で送る
+/// `EnsureSchema` が接続のチェックアウト待ちでブロックするため、`Unavailable` へ
+/// 遷移するまでアクターはメッセージを 1 件も処理せず、メールボックスに `Store` が
+/// 残る。ブロック中のプロセスも生きてはいるので、その時点の `is_alive` は
+/// `Unavailable` の分岐が正しいことを何も示さない。
 ///
 /// そこで**メールボックスが空になるまで待って**遷移を確認し、**そのうえで
 /// さらに `Store` を送る。** 2 度目の送信は必ず `Unavailable` の「数えて捨てる」
@@ -365,8 +327,8 @@ pub fn the_store_survives_an_unreachable_database_test() {
   assert process.is_alive(started.pid)
 }
 
-/// `Unavailable` への遷移を待つ上限。実測では 5.5 秒あたりで遷移するので、
-/// 揺らぎを見込んで少し多く取る。
+/// `Unavailable` への遷移を待つ上限。遷移は接続のチェックアウト待ちが終わるまで
+/// 起きないので、その待ちと揺らぎを見込んで長く取る。
 const unavailable_transition_timeout_ms = 10_000
 
 /// 遷移後に送ったイベントが捨てられるのを待つ上限。DB を触らないので即座に
@@ -446,10 +408,9 @@ pub fn insert_failures_unrelated_to_reachability_keep_storing_test() {
 
 /// 挿入が遅い DB でも、保存アクターのメールボックスは上限の近くで頭打ちになる。
 ///
-/// 上限 20 のときの最大は実測で 23 か 24（上限に、1 件の挿入の間に届く数件を
-/// 足した数）で、上限の判定を外すと 245 になる。閾値を上限の 3 倍にするのは、
-/// CI の共有ランナーでアクターが数十 ms 止まり、その間に送信側だけが進んで最大値が
-/// 跳ねる揺れを見込むためである。3 倍でも、判定の無い実装は検出できる。
+/// 閾値を上限の 3 倍にするのは、上限に 1 件の挿入の間に届く数件が加わるうえ、CI の
+/// 共有ランナーでアクターが数十 ms 止まると、その間に送信側だけが進んで最大値が跳ねる
+/// ためである。送信は挿入より速いので、上限の判定が無い実装は 3 倍でも大きく超える。
 ///
 /// 最後に送ったイベントは、取り出した時点で残りが 0 件なので必ず保存される。
 pub fn a_slow_database_keeps_the_mailbox_bounded_test() {
@@ -624,11 +585,12 @@ pub fn events_are_forwarded_to_the_store_test() {
 }
 
 /// 保存アクターの再起動の間に届いたイベントは、登録名が戻るのを待って転送する。
-/// 即座に失敗させると、再起動の間の数件でプラグインごと無効になる。
+/// 即座に失敗させると、再起動の間の数件でプラグインごと無効になる。登録名が無い間も、
+/// `handle_event/1` が諦める 1 秒より前には、転送する使い捨てのプロセスは終わらない。
 pub fn events_wait_for_a_restarting_store_test() {
   assert process.named(event_logger.store_name()) == Error(Nil)
   let monitor = spawn_handle_event(sample_event("f2"))
-  process.sleep(100)
+  assert await_exit(monitor, waiting_check_ms) == Error(Nil)
   let #(exit, forwarded) =
     as_store(fn() { await_forwarded(monitor, exit_timeout_ms) })
   assert exit == Ok(process.Normal)
@@ -662,6 +624,10 @@ pub fn values_that_are_not_event_maps_fail_test() {
     "event is not a valid event map",
   )
 }
+
+/// 保存アクターの登録名が無い間、転送する使い捨てのプロセスが終わらないことを確かめる
+/// 時間。`handle_event/1` が諦める 1 秒より十分短い。
+const waiting_check_ms = 100
 
 /// 使い捨てのプロセスの終了を待つ上限。`handle_event/1` が保存アクターを待つ
 /// 1 秒より十分長く取る。
@@ -733,18 +699,6 @@ pub fn masked_url_hides_the_password_test() {
       i18n.English,
     )
     == "postgres://nostr@db.example:5432/nostr_no_su"
-}
-
-/// 英語の `page.pages` は `timeline`、`settings` の順に 2 件を供給する。
-pub fn pages_declares_timeline_then_settings_test() {
-  let decoder = {
-    use key <- decode.field("key", decode.string)
-    use title <- decode.field("title", decode.string)
-    decode.success(#(key, title))
-  }
-  let assert Ok(entries) =
-    decode.run(page.pages(i18n.English), decode.list(decoder))
-  assert entries == [#("timeline", "Timeline"), #("settings", "Settings")]
 }
 
 /// `page_key/1` は `pages/1` が供給する 2 つのキーを対応する `PageKey` に解釈し、
@@ -856,13 +810,7 @@ pub fn the_monitored_section_reports_an_unreachable_store_test() {
   let assert [monitored_section, ..] = page_sections(description)
   let #(_title, blocks) = section_shape(monitored_section)
   let assert [alert] = blocks
-  let assert Ok(#(kind, text, tone)) =
-    decode.run(alert, {
-      use kind <- decode.field("type", decode.string)
-      use text <- decode.field("text", decode.string)
-      use tone <- decode.field("tone", decode.string)
-      decode.success(#(kind, text, tone))
-    })
+  let #(kind, text, tone) = alert_shape(alert)
   assert kind == "alert"
   assert text
     == "monitored accounts are unavailable: the store actor did not answer"
@@ -927,7 +875,7 @@ pub fn plugin_page_content_shows_an_unknown_key_as_an_error_test() {
     )
   let assert [only] = page_sections(description)
   let assert #("Error", [alert]) = section_shape(only)
-  assert block_text(alert) == "unknown page"
+  assert alert_shape(alert) == #("alert", "unknown page", "failure")
 }
 
 /// `settings` 以外のキーは `unknown page` で拒み、`settings` は送信の正規化まで進む。
@@ -984,30 +932,9 @@ pub fn page_content_marks_missing_processes_test() {
   let assert [pool_row, store_row] = table_rows(table)
   assert row_status(pool_row) == #("running", "success", "3")
   assert row_status(store_row) == #("not running", "failure", "-")
-  let assert Ok(#(kind, tone)) =
-    decode.run(alert, {
-      use kind <- decode.field("type", decode.string)
-      use tone <- decode.field("tone", decode.string)
-      decode.success(#(kind, tone))
-    })
+  let #(kind, _text, tone) = alert_shape(alert)
   assert kind == "alert"
   assert tone == "warning"
-}
-
-/// 未知のキーは `alert`（`failure`）1 つだけの節を返す。
-pub fn page_content_of_an_unknown_key_test() {
-  let description = page.unknown_content(i18n.English)
-  let assert [only] = page_sections(description)
-  let #(_title, blocks) = section_shape(only)
-  let assert [alert] = blocks
-  let assert Ok(#(kind, tone)) =
-    decode.run(alert, {
-      use kind <- decode.field("type", decode.string)
-      use tone <- decode.field("tone", decode.string)
-      decode.success(#(kind, tone))
-    })
-  assert kind == "alert"
-  assert tone == "failure"
 }
 
 /// `timeline` は行ごとに 1 つの節にする。見出しは題が空で、`meta` に `kind`（行の kind）と
@@ -1184,25 +1111,10 @@ pub fn the_timeline_reports_a_failed_query_test() {
   let assert [only] = page_sections(description)
   let #(_title, blocks) = section_shape(only)
   let assert [alert] = blocks
-  let assert Ok(#(kind, text, tone)) =
-    decode.run(alert, {
-      use kind <- decode.field("type", decode.string)
-      use text <- decode.field("text", decode.string)
-      use tone <- decode.field("tone", decode.string)
-      decode.success(#(kind, text, tone))
-    })
+  let #(kind, text, tone) = alert_shape(alert)
   assert kind == "alert"
   assert text == "could not read stored events: timeout"
   assert tone == "failure"
-}
-
-/// `store.migrations` に版 3 があり、その文は `create_received_at_index` の
-/// 1 件だけで、`events_received_at` を含む。
-pub fn the_received_at_index_is_created_test() {
-  let assert Ok(migration) =
-    list.find(store.migrations, fn(migration) { migration.version == 3 })
-  assert migration.statements == [store.create_received_at_index]
-  assert string.contains(store.create_received_at_index, "events_received_at")
 }
 
 /// 言語のコードは `ja` だけが日本語で、`en` と知らないコードは英語になる。
@@ -1479,6 +1391,18 @@ fn table_rows(table: Dynamic) -> List(List(Dynamic)) {
   rows
 }
 
+/// `alert` ブロックの `type` / `text` / `tone`。
+fn alert_shape(raw: Dynamic) -> #(String, String, String) {
+  let assert Ok(shape) =
+    decode.run(raw, {
+      use kind <- decode.field("type", decode.string)
+      use text <- decode.field("text", decode.string)
+      use tone <- decode.field("tone", decode.string)
+      decode.success(#(kind, text, tone))
+    })
+  shape
+}
+
 /// ブロックかインラインの `text`。
 fn block_text(raw: Dynamic) -> String {
   let assert Ok(text) =
@@ -1493,13 +1417,12 @@ fn first_cell_text(row: List(Dynamic)) -> String {
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
-/// ときだけ実行する。スキーマの移行・挿入・重複無視・jsonb としての読み戻し・
+/// ときだけ実行する。スキーマの移行・挿入・重複無視・列ごとの値と jsonb としての読み戻し・
 /// インデックスの作成（接頭辞の付いた名前で、接頭辞の無い `events` は残らない）・NUL を
 /// 含む行の拒否を一巡して確かめる。
 ///
-/// 同じ DB に対して `gleam test` を並行実行することは想定していない
-/// （版の記録の挿入やテーブルの作成が競合しうる）。CI は専用の service を
-/// 使い、ローカルでも使い捨てのコンテナーを使うこと。
+/// 統合テストはどれも実行ごとに名前の違う専用のスキーマで走り、`public` には何も
+/// 作らない。CI は専用の service を使い、ローカルでも使い捨てのコンテナーを使うこと。
 pub fn postgres_round_trip_test() {
   use database_url <- with_test_database_url
   round_trip(database_url)
@@ -1507,15 +1430,11 @@ pub fn postgres_round_trip_test() {
 
 /// スキーマの移行・挿入・重複挿入・後片付け・NUL を含む行の拒否を一巡させる。
 fn round_trip(database_url: String) -> Nil {
-  let db = connect(database_url, None)
+  use db <- in_schema(database_url)
   // 2 回続けて実行しても失敗しない。
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
-  assert index_names(db, "event_logger_events")
-    == [
-      "event_logger_events_kind", "event_logger_events_pkey",
-      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
-    ]
+  assert index_names(db, "event_logger_events") == events_index_names
   assert index_names(db, "events") == []
 
   let assert Ok(stored) = store.to_row(sample_event(random_id()))
@@ -1523,6 +1442,9 @@ fn round_trip(database_url: String) -> Nil {
   assert count_rows(db, stored.id) == 1
   // タグが jsonb として保存されていれば、Postgres 側から要素を取り出せる。
   assert first_tag_name(db, stored.id) == Ok("p")
+  // 列の並びと値の並びが対応していれば、読み戻した行は入れた行と同じになる。
+  let assert Ok([read_back]) = store.recent_events(db, 1)
+  assert read_back == store.Row(..stored, tags: read_back.tags)
 
   // 同じイベントを別のリレーから受け直しても行は増えない。
   assert store.insert(db, stored) == Ok(0)
@@ -1549,15 +1471,9 @@ pub fn postgres_schema_version_test() {
   schema_version_round_trip(database_url)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。`CREATE SCHEMA` と
-/// `DROP SCHEMA … CASCADE` は `search_path` の無い接続で、それ以外（テーブルと
-/// インデックスの直接実行、`ensure_schema`、版 5 の挿入、版の読み込み）は専用
-/// スキーマへ向けた接続で実行する。
+/// `in_schema` の専用のスキーマでテストを行う。
 fn schema_version_round_trip(database_url: String) -> Nil {
-  let schema = "event_logger_schema_" <> random_id()
-  let admin = connect(database_url, None)
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let db = connect(database_url, Some(schema))
+  use db <- in_schema(database_url)
 
   // 版の記録より前に作られた DB を再現する。
   run_statement(db, store.create_events_table)
@@ -1568,11 +1484,7 @@ fn schema_version_round_trip(database_url: String) -> Nil {
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.ensure_schema(db)
   assert recorded_versions(db) == [1, 2, 3, 4]
-  assert index_names(db, "event_logger_events")
-    == [
-      "event_logger_events_kind", "event_logger_events_pkey",
-      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
-    ]
+  assert index_names(db, "event_logger_events") == events_index_names
   assert index_names(db, "events") == []
 
   // 記録された版が新しい DB は拒否する。
@@ -1582,8 +1494,6 @@ fn schema_version_round_trip(database_url: String) -> Nil {
   )
   assert store.ensure_schema(db)
     == Error(store.SchemaTooNew(found: 5, supported: 4))
-
-  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
@@ -1596,12 +1506,9 @@ pub fn postgres_monitored_accounts_test() {
   monitored_accounts_round_trip(database_url)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。
+/// `in_schema` の専用のスキーマでテストを行う。
 fn monitored_accounts_round_trip(database_url: String) -> Nil {
-  let schema = "event_logger_schema_" <> random_id()
-  let admin = connect(database_url, None)
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let db = connect(database_url, Some(schema))
+  use db <- in_schema(database_url)
 
   let assert Ok(Nil) = store.ensure_schema(db)
   assert store.load_monitored(db) == Ok([])
@@ -1616,8 +1523,6 @@ fn monitored_accounts_round_trip(database_url: String) -> Nil {
 
   let assert Ok(Nil) = store.replace_monitored(db, [])
   assert store.load_monitored(db) == Ok([])
-
-  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
@@ -1628,13 +1533,10 @@ pub fn postgres_monitored_accounts_replacement_is_atomic_test() {
   monitored_accounts_atomicity(database_url)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。NUL を含む pubkey は
+/// `in_schema` の専用のスキーマでテストを行う。NUL を含む pubkey は
 /// Postgres の text には入らないので入れ替えが失敗し、行は入れ替え前のまま残る。
 fn monitored_accounts_atomicity(database_url: String) -> Nil {
-  let schema = "event_logger_schema_" <> random_id()
-  let admin = connect(database_url, None)
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let db = connect(database_url, Some(schema))
+  use db <- in_schema(database_url)
 
   let assert Ok(Nil) = store.ensure_schema(db)
   let assert Ok(Nil) = store.replace_monitored(db, ["aa", "bb"])
@@ -1642,8 +1544,6 @@ fn monitored_accounts_atomicity(database_url: String) -> Nil {
   let assert Error(_) = store.replace_monitored(db, ["cc", "d\u{0}d"])
   let assert Ok(rows) = store.load_monitored(db)
   assert set.from_list(rows) == set.from_list(["aa", "bb"])
-
-  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
@@ -1654,13 +1554,10 @@ pub fn postgres_recent_events_test() {
   recent_events_round_trip(database_url)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。21 行の id は挿入順に
+/// `in_schema` の専用のスキーマでテストを行う。21 行の id は挿入順に
 /// 昇順の文字列（`"00"`〜`"20"`）にする。
 fn recent_events_round_trip(database_url: String) -> Nil {
-  let schema = "event_logger_schema_" <> random_id()
-  let admin = connect(database_url, None)
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let db = connect(database_url, Some(schema))
+  use db <- in_schema(database_url)
   let assert Ok(Nil) = store.ensure_schema(db)
 
   let ids =
@@ -1681,8 +1578,6 @@ fn recent_events_round_trip(database_url: String) -> Nil {
   assert !list.contains(returned_ids, "00")
   let assert [_first, ..rest] = ids
   assert list.all(rest, list.contains(returned_ids, _))
-
-  run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
 /// 実際の Postgres に対する統合テスト。`TEST_DATABASE_URL` が設定されている
@@ -1694,14 +1589,11 @@ pub fn postgres_version_3_rows_survive_the_prefixing_test() {
   prefixing_round_trip(database_url)
 }
 
-/// 専用のスキーマでテストを行い、最後にスキーマごと消す。版 3 の DB は
+/// `in_schema` の専用のスキーマでテストを行う。版 3 の DB は
 /// `store.apply_migrations` に `store.migrations` の先頭 3 件を渡して作り、行は
 /// 接頭辞の無い名前のテーブルへ SQL で直接入れる。
 fn prefixing_round_trip(database_url: String) -> Nil {
-  let schema = "event_logger_schema_" <> random_id()
-  let admin = connect(database_url, None)
-  run_statement(admin, "CREATE SCHEMA " <> schema)
-  let db = connect(database_url, Some(schema))
+  use db <- in_schema(database_url)
 
   let assert Ok(Nil) =
     store.apply_migrations(db, list.take(store.migrations, 3))
@@ -1722,16 +1614,23 @@ VALUES ('old1', 'pk1', 1700000000, 1, '[]', 'kept', 'sig1')",
     == [#("old1", "kept")]
   assert store.load_monitored(db) == Ok(["pk1"])
 
-  assert index_names(db, "event_logger_events")
-    == [
-      "event_logger_events_kind", "event_logger_events_pkey",
-      "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
-    ]
+  assert index_names(db, "event_logger_events") == events_index_names
   assert index_names(db, "event_logger_monitored_accounts")
     == ["event_logger_monitored_accounts_pkey"]
   assert index_names(db, "events") == []
   assert index_names(db, "monitored_accounts") == []
+}
 
+/// 専用のスキーマを作り、`search_path` をそのスキーマだけにした接続を渡して `run` を
+/// 呼ぶ。`run` が返ったらスキーマごと消す。`CREATE SCHEMA` と `DROP SCHEMA … CASCADE` は
+/// `search_path` の無い接続で実行する。`run` の中の `let assert` が落ちるとスキーマは
+/// 残るが、名前は実行ごとに違い、`index_names` は現在の `search_path` のスキーマに絞るので、
+/// 次の実行には影響しない。
+fn in_schema(database_url: String, run: fn(pog.Connection) -> Nil) -> Nil {
+  let schema = "event_logger_schema_" <> random_id()
+  let admin = connect(database_url, None)
+  run_statement(admin, "CREATE SCHEMA " <> schema)
+  run(connect(database_url, Some(schema)))
   run_statement(admin, "DROP SCHEMA " <> schema <> " CASCADE")
 }
 
@@ -1779,6 +1678,13 @@ fn connect(
 fn random_id() -> String {
   int.to_base16(int.random(1_000_000_000))
 }
+
+/// 全移行を終えた `event_logger_events` に張られているインデックスの名前（昇順、
+/// 主キーを含む）。
+const events_index_names = [
+  "event_logger_events_kind", "event_logger_events_pkey",
+  "event_logger_events_pubkey_created_at", "event_logger_events_received_at",
+]
 
 /// `table` に張られているインデックスの名前（主キーを含む）。現在の
 /// `search_path` が解決するスキーマに絞る。専用のスキーマが後片付けの失敗で
