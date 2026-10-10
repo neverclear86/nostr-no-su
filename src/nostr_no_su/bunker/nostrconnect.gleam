@@ -1,15 +1,7 @@
 //// クライアントが出す `nostrconnect://` URI を解釈する純粋なモジュール。その接続の待ちの上限も置く。
 ////
-//// 前後の空白は落とさない（貼り付けの整形は呼び出し側の責務）。クエリーの値は
-//// percent デコードだけを行い、`+` を空白にしない。form 符号化
-//// （`application/x-www-form-urlencoded`）で URI を組んだクライアントが `name`
-//// に入れた空白は `+` のまま残るが、これは `secret` を 1 バイトも変えないための
-//// 選択である。`relay` / `secret` / `perms` / `name` 以外のクエリーのキーは無視する。
-////
-//// `relay` は件数（`max_relays` まで）と、ホストが内部のアドレス（ループバック、
-//// リンクローカル、プライベート、未指定のアドレス、ドットを含まない名前、
-//// `.localhost` で終わる名前）を指さないことも確かめる。名前は解決しないので、
-//// 公開の名前が内部のアドレスに解決される場合は通る。
+//// 前後の空白は落とさない（貼り付けの整形は呼び出し側の責務）。クエリーの値の復号は
+//// `query_params`、`relay` の検査は `relay_urls` と `internal_host` の Doc にある。
 
 import gleam/int
 import gleam/list
@@ -64,6 +56,7 @@ type IpAddress {
 }
 
 /// `nostrconnect://<client-pubkey>?relay=…&secret=…&perms=…&name=…` を解釈する。
+/// `relay` / `secret` / `perms` / `name` 以外のクエリーのキーは無視する。
 pub fn parse(text: String) -> Result(ConnectRequest, ParseError) {
   use parsed <- result.try(
     uri.parse(text) |> result.replace_error(NotNostrconnect),
@@ -103,7 +96,9 @@ fn client_pubkey(host: String) -> Result(String, ParseError) {
 
 /// クエリー文字列を `&` で分け、`=` で 1 回だけ分けてキーと値を percent デコード
 /// する。`application/x-www-form-urlencoded` の `+` を空白にする変換は行わない。
-/// 1 つでもデコードに失敗したら `MalformedQuery`。
+/// form 符号化で URI を組んだクライアントが `name` に入れた空白は `+` のまま残るが、
+/// `secret` を 1 バイトも変えないための選択である。1 つでもデコードに失敗したら
+/// `MalformedQuery`。
 fn query_params(query: String) -> Result(List(#(String, String)), ParseError) {
   query
   |> string.split("&")
@@ -158,6 +153,7 @@ fn check_relay_url(url: String) -> Result(String, ParseError) {
 /// 読めなければドットを含まない名前（`localhost`、`postgres` など）と
 /// `.localhost` で終わる名前を内部とする。IP アドレスは `inet:parse_address` で
 /// 読むので、`127.1` や `2130706433` のような省略形も同じアドレスとして扱う。
+/// 名前は解決しないので、公開の名前が内部のアドレスに解決される場合は通る。
 fn internal_host(host: String) -> Bool {
   let lowered = string.lowercase(host)
   let name = case string.ends_with(lowered, ".") {

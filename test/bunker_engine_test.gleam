@@ -76,6 +76,22 @@ fn tupled(handled: engine.Handled) -> #(engine.Engine, engine.Outcome) {
   #(handled.engine, handled.outcome)
 }
 
+/// 承認 token と起点 `not_before` を指定して受信イベントを 1 件処理し、`Handled` を
+/// そのまま返す。
+fn handle_with(
+  state: engine.Engine,
+  incoming: Event,
+  now: Int,
+  approval_token: String,
+  not_before: Int,
+) -> engine.Handled {
+  engine.handle_event(
+    state,
+    signed_event.verified(incoming),
+    engine.Inputs(now: now, token: approval_token, not_before: not_before),
+  )
+}
+
 /// 指定した起点のアクターが受信イベントを 1 件処理する。`Persist` はそのまま
 /// 返すので、書き込みの値や `on_failure` を見るテストが使う。
 fn handle_raw(
@@ -84,12 +100,21 @@ fn handle_raw(
   now: Int,
   not_before: Int,
 ) -> #(engine.Engine, engine.Outcome) {
-  engine.handle_event(
-    state,
-    signed_event.verified(incoming),
-    engine.Inputs(now: now, token: token, not_before: not_before),
+  handle_with(state, incoming, now, token, not_before) |> tupled
+}
+
+/// 署名者 `signer` とクライアント `client` の組。
+fn pair_key(signer: Account, client: Account) -> session.SessionKey {
+  session.SessionKey(
+    signer: account.pubkey_hex(signer),
+    client: account.pubkey_hex(client),
   )
-  |> tupled
+}
+
+/// `max_perms_bytes` を 1 トークン分だけ超える perms と、トークンの境で切った結果。
+fn over_limit_perms() -> #(String, String) {
+  let bounded = string.repeat("a", engine.max_perms_bytes - 13)
+  #(bounded <> ",sign_event:12", bounded)
 }
 
 /// `Persist` を、書き込みが成功したものとして畳み込む。アクターの `Incoming`
@@ -537,13 +562,14 @@ pub fn multi_account_isolation_test() {
   )
 }
 
-/// `logout` は認可を破棄するため、以降のリクエストは拒否される。
+/// `logout` は認可を破棄するため、以降のリクエストは拒否される。書き込みの値は削除する
+/// セッションを表す `DeleteSession` になる。
 pub fn logout_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(state, _) =
-    handle(
+  let assert #(_, Persist(write:, next: state, ..)) =
+    handle_raw(
       state,
       request_event(
         client,
@@ -552,7 +578,9 @@ pub fn logout_test() {
         1001,
       ),
       1001,
+      0,
     )
+  assert write == engine.DeleteSession(pair_key(signer, client))
   let body = "{\"id\":\"g1\",\"method\":\"get_public_key\"}"
   let #(_state, outcome) =
     handle(state, request_event(client, signer, body, 1002), 1002)
@@ -673,13 +701,15 @@ pub fn sessions_are_sorted_by_the_last_use_test() {
   assert engine.sessions(state) == [d, b, c, a]
 }
 
-/// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。
+/// 取り消されたクライアントは一覧から消え、以降のリクエストは拒否される。書き込みの値は
+/// 削除するセッションを表す `DeleteSession` になる。
 pub fn revoke_removes_the_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let assert Ok(#(state, _write)) =
-    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
+  let assert Ok(#(state, write)) =
+    engine.revoke(state, pair_key(signer, client))
+  assert write == engine.DeleteSession(pair_key(signer, client))
   assert engine.sessions(state) == []
 
   let body = "{\"id\":\"s1\",\"method\":\"sign_event\",\"params\":[\"{}\"]}"
@@ -698,21 +728,11 @@ pub fn revoke_of_an_unknown_session_is_an_error_test() {
   let client = account_for(client_key)
   let other = account_for(other_client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  assert engine.revoke(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(other),
-    )
-    == Error(Nil)
+  assert engine.revoke(state, pair_key(signer, other)) == Error(Nil)
 
   let assert Ok(#(state, _write)) =
-    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
-  assert engine.revoke(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-    )
-    == Error(Nil)
+    engine.revoke(state, pair_key(signer, client))
+  assert engine.revoke(state, pair_key(signer, client)) == Error(Nil)
 }
 
 /// `find_session` は承認済みの（署名者, クライアント）の組のセッションを、
@@ -722,12 +742,7 @@ pub fn find_session_finds_an_approved_pair_test() {
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let assert [session] = engine.sessions(state)
-  assert engine.find_session(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-    )
-    == Ok(session)
+  assert engine.find_session(state, pair_key(signer, client)) == Ok(session)
 }
 
 /// 承認されていない組は `Error(Nil)`。同じ署名者でも別のクライアントの組や、
@@ -737,21 +752,11 @@ pub fn find_session_of_an_unapproved_pair_is_an_error_test() {
   let client = account_for(client_key)
   let other = account_for(other_client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  assert engine.find_session(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(other),
-    )
-    == Error(Nil)
+  assert engine.find_session(state, pair_key(signer, other)) == Error(Nil)
 
   let assert Ok(#(state, _write)) =
-    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
-  assert engine.find_session(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-    )
-    == Error(Nil)
+    engine.revoke(state, pair_key(signer, client))
+  assert engine.find_session(state, pair_key(signer, client)) == Error(Nil)
 }
 
 /// `set_perms` は承認済みセッションの `perms` を差し替え、`UpdateSessionPerms` を
@@ -763,8 +768,7 @@ pub fn set_perms_replaces_the_permissions_test() {
   let assert Ok(#(state, write)) =
     engine.set_perms(
       state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
+      pair_key(signer, client),
       "sign_event:1,sign_event:10002",
     )
   let updated =
@@ -784,12 +788,7 @@ pub fn set_perms_replaces_the_permissions_test() {
 pub fn set_perms_of_an_unapproved_pair_is_an_error_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  assert engine.set_perms(
-      new_engine(),
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-      "sign_event",
-    )
+  assert engine.set_perms(new_engine(), pair_key(signer, client), "sign_event")
     == Error(Nil)
 }
 
@@ -798,37 +797,24 @@ pub fn set_perms_bounds_the_permissions_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
-  let over_limit = long_prefix <> ",sign_event:12"
+  let #(over_limit, bounded) = over_limit_perms()
   let assert Ok(#(state, write)) =
-    engine.set_perms(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-      over_limit,
-    )
-  let updated =
-    session.Session(
-      signer: account.pubkey_hex(signer),
-      client: account.pubkey_hex(client),
-      perms: long_prefix,
-      created_at: 1000,
-      last_used_at: 1000,
-      relays: [],
-    )
+    engine.set_perms(state, pair_key(signer, client), over_limit)
+  let assert [updated] = engine.sessions(state)
+  assert updated.perms == bounded
   assert write == engine.UpdateSessionPerms(session: updated)
-  assert engine.sessions(state) == [updated]
 }
 
-/// 承認されていないクライアントの `logout` も ack を返し、他のセッションを残す。
-/// NIP-46 との相互運用のための挙動を固定する（`execute` の Doc コメントを参照）。
+/// 承認されていないクライアントの `logout` も、書き込みを返さずに ack を返し、他の
+/// セッションを残す。NIP-46 との相互運用のための挙動を固定する（`execute` の Doc コメント
+/// を参照）。
 pub fn logout_without_a_session_is_acknowledged_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let other = account_for(other_client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let #(state, outcome) =
-    handle(
+    handle_raw(
       state,
       request_event(
         other,
@@ -837,6 +823,7 @@ pub fn logout_without_a_session_is_acknowledged_test() {
         1001,
       ),
       1001,
+      0,
     )
   let assert Reply(response) = outcome
   assert string.contains(
@@ -857,28 +844,29 @@ pub fn logout_without_a_session_is_acknowledged_test() {
 }
 
 /// シークレット無しの `connect`（nostr-tools は空文字列を送る）には、承認ページ
-/// の URL を載せた auth_url 応答を返し、承認待ちを 1 件作る。
+/// の URL を載せた auth_url 応答を返し、承認待ちを 1 件作る。書き込みの値は登録する
+/// 承認待ちで、置き換える token も押し出す token も無い。
 pub fn connect_without_secret_asks_for_approval_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let #(state, outcome) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Reply(response) = outcome
+  let assert #(_, Persist(write:, next: state, response:, ..)) =
+    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
   assert decrypt_response(client, signer, response)
     == "{\"id\":\"c1\",\"result\":\"auth_url\",\"error\":\""
     <> approval_url(token)
     <> "\"}"
-  assert engine.pending(state, 1000)
-    == [
-      session.Pending(
-        token: token,
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        request_id: "c1",
-        perms: "",
-        secret_mismatch: False,
-        created_at: 1000,
-      ),
-    ]
+  let pending =
+    session.Pending(
+      token: token,
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      request_id: "c1",
+      perms: "sign_event:1",
+      secret_mismatch: False,
+      created_at: 1000,
+    )
+  assert write == engine.InsertPending(pending:, replaced: [], evicted: [])
+  assert engine.pending(state, 1000) == [pending]
   // 承認するまでは認可されない
   assert engine.sessions(state) == []
 }
@@ -919,14 +907,15 @@ pub fn connect_with_the_secret_skips_approval_test() {
   assert engine.pending(state, 1000) == []
 }
 
-/// 承認すると、元の `connect` と同じ id で ack を返し、以降は署名を代理できる。
+/// 承認すると、元の `connect` と同じ id で ack を返し、以降は署名を代理できる。書き込みの
+/// 値は開いたセッションを持つ `ApprovePending` になる。
 pub fn approve_answers_the_original_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) =
     connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
     |> written
-  let assert Ok(#(state, ack, _write)) = engine.approve(state, token, 1001)
+  let assert Ok(#(state, ack, write)) = engine.approve(state, token, 1001)
   // 応答は通常の応答と同じくクライアント宛の署名済みイベント
   assert ack.kind == event.nip46_kind
   assert ack.tags == [["p", account.pubkey_hex(client)]]
@@ -934,17 +923,18 @@ pub fn approve_answers_the_original_request_test() {
   assert event.verify_signature(ack)
   assert decrypt_response(client, signer, ack)
     == "{\"id\":\"c1\",\"result\":\"ack\"}"
-  assert engine.sessions(state)
-    == [
-      session.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        perms: "sign_event:1",
-        created_at: 1001,
-        last_used_at: 1001,
-        relays: [],
-      ),
-    ]
+  let approved =
+    session.Session(
+      signer: account.pubkey_hex(signer),
+      client: account.pubkey_hex(client),
+      perms: "sign_event:1",
+      created_at: 1001,
+      last_used_at: 1001,
+      relays: [],
+    )
+  assert write
+    == engine.ApprovePending(token: token, session: approved, evicted: [])
+  assert engine.sessions(state) == [approved]
   assert engine.pending(state, 1001) == []
 
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
@@ -958,12 +948,14 @@ pub fn approve_answers_the_original_request_test() {
   assert signed.pubkey == account.pubkey_hex(signer)
 }
 
-/// 拒否すると、元の `connect` と同じ id でエラーを返し、認可はされない。
+/// 拒否すると、元の `connect` と同じ id でエラーを返し、認可はされない。書き込みの値は
+/// 削除する承認待ちの token になる。
 pub fn deny_answers_the_original_request_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Ok(#(state, denied, _write)) = engine.deny(state, token, 1001)
+  let assert Ok(#(state, denied, write)) = engine.deny(state, token, 1001)
+  assert write == engine.DeletePending(token)
   assert decrypt_response(client, signer, denied)
     == "{\"id\":\"c1\",\"result\":\"\",\"error\":\"connection denied\"}"
   assert engine.sessions(state) == []
@@ -1001,15 +993,12 @@ pub fn reconnecting_before_approval_replaces_the_request_test() {
   let client = account_for(client_key)
   let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
   let #(state, outcome) =
-    engine.handle_event(
+    handle_with(
       state,
-      signed_event.verified(request_event(
-        client,
-        signer,
-        connect_body(signer, "", "c2"),
-        1001,
-      )),
-      engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
+      request_event(client, signer, connect_body(signer, "", "c2"), 1001),
+      1001,
+      "tok-2",
+      0,
     )
     |> tupled
     |> written
@@ -1377,10 +1366,12 @@ fn session_notice(
   let client = account_for(client_key)
   let body = request_body("r1", method, params_json)
   let engine.Handled(notice:, ..) =
-    engine.handle_event(
+    handle_with(
       state,
-      signed_event.verified(request_event(client, signer, body, 1001)),
-      engine.Inputs(now: 1001, token: token, not_before: 0),
+      request_event(client, signer, body, 1001),
+      1001,
+      token,
+      0,
     )
   notice
 }
@@ -1487,26 +1478,25 @@ pub fn non_denied_failures_carry_no_notice_test() {
   assert session_notice(state, "sign_event", kind_draft_params(24_133)) == None
 }
 
-/// 上限を超える perms はトークンの境で切り、上限ちょうどの perms はそのまま
-/// 残す。
+/// perms は上限を超えるとトークンの境で切り、上限ちょうどならそのまま残す。先頭の
+/// トークンだけで上限を超えるときは空になる。
 pub fn perms_over_the_limit_are_cut_at_a_comma_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
-  let over_limit = long_prefix <> ",sign_event:12"
-  let at_limit = long_prefix <> ",sign_event:1"
-
+  let #(over_limit, bounded) = over_limit_perms()
+  let at_limit = bounded <> ",sign_event:1"
+  let first_token_over = string.repeat("a", engine.max_perms_bytes + 1)
+  let cases = [
+    #("over the limit", over_limit, bounded),
+    #("at the limit", at_limit, at_limit),
+    #("first token alone over the limit", first_token_over <> ",x", ""),
+  ]
+  use #(name, perms, expected) <- list.each(cases)
   let #(state, _) =
-    connect_with_perms(auth_engine(), client, signer, "", over_limit, 1000)
+    connect_with_perms(auth_engine(), client, signer, "", perms, 1000)
     |> written
-  let assert [pending] = engine.pending(state, 1000)
-  assert pending.perms == long_prefix
-
-  let #(state, _) =
-    connect_with_perms(auth_engine(), client, signer, "", at_limit, 1001)
-    |> written
-  let assert [pending] = engine.pending(state, 1001)
-  assert pending.perms == at_limit
+  let assert [pending] = engine.pending(state, 1000) as name
+  assert pending.perms == expected as name
 }
 
 // --- ヘルパー ---
@@ -1604,10 +1594,12 @@ fn connect_for_approval(
   now: Int,
 ) -> engine.Engine {
   let #(state, outcome) =
-    engine.handle_event(
+    handle_with(
       state,
-      signed_event.verified(connect_event(client, signer, "", now)),
-      engine.Inputs(now: now, token: approval_token, not_before: 0),
+      connect_event(client, signer, "", now),
+      now,
+      approval_token,
+      0,
     )
     |> tupled
     |> written
@@ -1844,29 +1836,6 @@ pub fn connect_with_the_secret_writes_the_session_test() {
     )
 }
 
-/// secret 無しの `connect` は、登録する承認待ちを書き込みの値として返す。
-pub fn connect_for_approval_writes_the_pending_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(_state, outcome) =
-    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
-  let assert Persist(write:, ..) = outcome
-  assert write
-    == engine.InsertPending(
-      pending: session.Pending(
-        token: token,
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        request_id: "c1",
-        perms: "sign_event:1",
-        secret_mismatch: False,
-        created_at: 1000,
-      ),
-      replaced: [],
-      evicted: [],
-    )
-}
-
 /// secret が一致しない `connect` の承認待ちは `secret_mismatch: True` を持つ。
 pub fn connect_with_a_wrong_secret_marks_the_mismatch_test() {
   let signer = account_for(signer_key)
@@ -1897,7 +1866,8 @@ pub fn connect_marks_a_mismatch_only_for_a_nonempty_secret_test() {
       0,
     )
   let assert Persist(write: engine.InsertPending(pending:, ..), ..) = outcome
-  assert pending.secret_mismatch == expected
+    as params_json
+  assert pending.secret_mismatch == expected as params_json
 }
 
 /// 承認前に同じ組が再 `connect` すると、古い token を `replaced` に載せる。
@@ -1907,15 +1877,12 @@ pub fn reconnecting_before_approval_writes_the_replaced_token_test() {
   let #(state, _) =
     connect_with_perms(auth_engine(), client, signer, "", "", 1000) |> written
   let engine.Handled(engine: _state, outcome:, ..) =
-    engine.handle_event(
+    handle_with(
       state,
-      signed_event.verified(request_event(
-        client,
-        signer,
-        connect_body(signer, "", "c2"),
-        1001,
-      )),
-      engine.Inputs(now: 1001, token: "tok-2", not_before: 0),
+      request_event(client, signer, connect_body(signer, "", "c2"), 1001),
+      1001,
+      "tok-2",
+      0,
     )
   let assert Persist(write: engine.InsertPending(replaced:, ..), ..) = outcome
   assert replaced == [token]
@@ -1951,72 +1918,9 @@ pub fn reconnecting_an_approved_client_writes_nothing_test() {
     ]
 }
 
-/// `logout` は削除するセッションを書き込みの値として返す。セッションが無い
-/// 組の `logout` は書き込みを返さない。
-pub fn logout_writes_the_session_deletion_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let #(_state, outcome) =
-    handle_raw(
-      state,
-      request_event(
-        client,
-        signer,
-        "{\"id\":\"l1\",\"method\":\"logout\"}",
-        1001,
-      ),
-      1001,
-      0,
-    )
-  let assert Persist(write:, ..) = outcome
-  assert write
-    == engine.DeleteSession(
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-    )
-
-  let #(_state, outcome2) =
-    handle_raw(
-      new_engine(),
-      request_event(
-        client,
-        signer,
-        "{\"id\":\"l1\",\"method\":\"logout\"}",
-        1000,
-      ),
-      1000,
-      0,
-    )
-  // セッションが無い組は状態を変えないので、書き込みを持たない `Reply` になる
-  let assert Reply(_) = outcome2
-}
-
-/// すでに承認済みの組を、その組の承認待ちが残ったまま承認しても、メモリの
-/// `Session` は最初に開いたときの値のままになる。
-pub fn approving_an_approved_client_keeps_the_session_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) =
-    connect_with_perms(auth_engine(), client, signer, "", "b", 1000) |> written
-  let #(state, _) =
-    connect_with_perms(state, client, signer, secret, "a", 1000) |> written
-  let assert Ok(#(state, _ack, _write)) = engine.approve(state, token, 1001)
-  assert engine.sessions(state)
-    == [
-      session.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        perms: "a",
-        created_at: 1000,
-        last_used_at: 1000,
-        relays: [],
-      ),
-    ]
-}
-
-/// すでに承認済みの組を承認したとき、書き込みの値はメモリに残した最初の
-/// セッションになる（DB の行をその値で上書きするため）。
+/// すでに承認済みの組を、その組の承認待ちが残ったまま承認しても、メモリの `Session`
+/// は最初に開いたときの値のままで、書き込みの値もそのセッションになる（DB の行を
+/// その値で上書きするため）。
 pub fn approving_an_approved_client_writes_the_kept_session_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -2040,33 +1944,10 @@ pub fn approving_an_approved_client_writes_the_kept_session_test() {
       created_at: 1900,
     )
   let state = engine.restore(auth_engine(), [kept], [pending], 2000)
-  let assert Ok(#(_state, _ack, write)) = engine.approve(state, token, 2000)
+  let assert Ok(#(state, _ack, write)) = engine.approve(state, token, 2000)
   assert write
     == engine.ApprovePending(token: token, session: kept, evicted: [])
-}
-
-/// `approve` は、承認の時刻と承認待ちの `perms` を持つセッションを書き込みの
-/// 値として返す。
-pub fn approve_writes_the_approval_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) =
-    connect_with_perms(auth_engine(), client, signer, "", "sign_event:1", 1000)
-    |> written
-  let assert Ok(#(_state, _ack, write)) = engine.approve(state, token, 1001)
-  assert write
-    == engine.ApprovePending(
-      token: token,
-      session: session.Session(
-        signer: account.pubkey_hex(signer),
-        client: account.pubkey_hex(client),
-        perms: "sign_event:1",
-        created_at: 1001,
-        last_used_at: 1001,
-        relays: [],
-      ),
-      evicted: [],
-    )
+  assert engine.sessions(state) == [kept]
 }
 
 // --- nostrconnect:// のセッション ---
@@ -2122,39 +2003,6 @@ pub fn open_client_session_opens_an_approved_session_test() {
     )
   assert write == engine.InsertSession(session: session, evicted: [])
   assert engine.sessions(state) == [session]
-}
-
-/// すでに承認済みの組に同じリレーの `nostrconnect://` で開き直しても、書き込みの
-/// 値はメモリに残した最初のセッションになり（DB の行をその値で上書きするため）、
-/// `engine.sessions` の値も変わらない。
-pub fn open_client_session_on_an_approved_pair_writes_the_kept_session_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let assert Ok(#(state, _response, first)) =
-    engine.open_client_session(
-      new_engine(),
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-      "sign_event:1",
-      [],
-      "uri-secret",
-      "req-1",
-      1000,
-    )
-  let assert Ok(#(state, _response, second)) =
-    engine.open_client_session(
-      state,
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-      "nip44_encrypt",
-      [],
-      "uri-secret",
-      "req-2",
-      2000,
-    )
-  let assert engine.InsertSession(session: kept, ..) = first
-  assert second == first
-  assert engine.sessions(state) == [kept]
 }
 
 /// URI のリレーは、開いたセッションと `InsertSession` の書き込みの値に URI の順の
@@ -2224,8 +2072,7 @@ pub fn open_client_session_on_an_approved_pair_replaces_the_relays_test() {
 pub fn open_client_session_bounds_the_perms_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
-  let long_prefix = string.repeat("a", engine.max_perms_bytes - 13)
-  let over_limit = long_prefix <> ",sign_event:12"
+  let #(over_limit, bounded) = over_limit_perms()
   let assert Ok(#(state, _response, write)) =
     engine.open_client_session(
       new_engine(),
@@ -2238,9 +2085,9 @@ pub fn open_client_session_bounds_the_perms_test() {
       1000,
     )
   let assert engine.InsertSession(session:, ..) = write
-  assert session.perms == long_prefix
+  assert session.perms == bounded
   let assert [session] = engine.sessions(state)
-  assert session.perms == long_prefix
+  assert session.perms == bounded
 }
 
 /// 登録されていない署名者とのセッションは開けない。
@@ -2419,15 +2266,7 @@ pub fn pending_stays_within_the_capacity_test() {
       let incoming =
         request_event(client, signer, connect_body(signer, "", "c1"), 1000 + n)
       let engine.Handled(engine: _seen, outcome:, ..) =
-        engine.handle_event(
-          state,
-          signed_event.verified(incoming),
-          engine.Inputs(
-            now: 1000 + n,
-            token: "tok-" <> int.to_string(n),
-            not_before: 0,
-          ),
-        )
+        handle_with(state, incoming, 1000 + n, "tok-" <> int.to_string(n), 0)
       let assert Persist(write:, next:, ..) = outcome
       #(next, Some(write))
     })
@@ -2482,29 +2321,6 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
   let last = 1000 + { engine.pending_capacity + 2 } * interval
   assert list.map(engine.pending(final, last), fn(pending) { pending.token })
     == list.append(expected_tokens, ["tok-b"])
-}
-
-/// `deny` は、削除する承認待ちの token を書き込みの値として返す。
-pub fn deny_writes_the_pending_deletion_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) = connect(auth_engine(), client, signer, "", 1000)
-  let assert Ok(#(_state, _denied, write)) = engine.deny(state, token, 1001)
-  assert write == engine.DeletePending(token)
-}
-
-/// `revoke` は、削除するセッションを書き込みの値として返す。
-pub fn revoke_writes_the_session_deletion_test() {
-  let signer = account_for(signer_key)
-  let client = account_for(client_key)
-  let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
-  let assert Ok(#(_state, write)) =
-    engine.revoke(state, account.pubkey_hex(signer), account.pubkey_hex(client))
-  assert write
-    == engine.DeleteSession(
-      account.pubkey_hex(signer),
-      account.pubkey_hex(client),
-    )
 }
 
 // --- 書き込みに失敗したときの応答 ---
@@ -2843,10 +2659,12 @@ pub fn requests_without_a_session_over_the_client_limit_get_no_reply_test() {
       },
     )
   let handled =
-    engine.handle_event(
+    handle_with(
       state,
-      signed_event.verified(get_public_key_event(client, signer, "g-over", 1000)),
-      engine.Inputs(now: 1000, token: token, not_before: 0),
+      get_public_key_event(client, signer, "g-over", 1000),
+      1000,
+      token,
+      0,
     )
   assert handled.outcome == Throttled
   assert handled.notice == Some(rate_limit.report(1))
@@ -2920,11 +2738,7 @@ pub fn only_requests_outside_a_session_are_marked_test() {
   let other = account_for(other_client_key)
   let state = granted_session("")
   let marked = fn(incoming: Event) -> Bool {
-    engine.handle_event(
-      state,
-      signed_event.verified(incoming),
-      engine.Inputs(now: 1001, token: token, not_before: 0),
-    ).outside_session
+    handle_with(state, incoming, 1001, token, 0).outside_session
   }
 
   assert marked(request_event(

@@ -684,11 +684,11 @@ fn apply_write(database: Database, write: engine.Write) -> Database {
         ..database,
         sessions: evict(insert_session(database.sessions, session), evicted),
       )
-    engine.DeleteSession(signer:, client:) ->
+    engine.DeleteSession(key:) ->
       Database(
         ..database,
         sessions: list.filter(database.sessions, fn(session) {
-          #(session.signer, session.client) != #(signer, client)
+          #(session.signer, session.client) != #(key.signer, key.client)
         }),
       )
     engine.TouchSession(session: touched) ->

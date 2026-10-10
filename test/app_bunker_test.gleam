@@ -473,9 +473,9 @@ pub fn a_failed_revocation_keeps_the_session_test() {
 
   assert bunker.revoke(name, session.signer, session.client)
     == Error(bunker.SessionNotApplied(store_failure()))
-  let assert Ok(Wrote(engine.DeleteSession(signer:, client:))) =
+  let assert Ok(Wrote(engine.DeleteSession(key:))) =
     process.receive(calls, 1000)
-  assert #(signer, client) == #(session.signer, session.client)
+  assert #(key.signer, key.client) == #(session.signer, session.client)
   assert bunker.sessions(name) == Ok([session])
 
   let assert Error(bunker.SessionNotFound(_reason)) =

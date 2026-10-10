@@ -45,8 +45,8 @@ pub fn from_privkey_rejects_out_of_range_nsec_test() {
     "nsec1lllllllllllllllllllllllll6a2ah8x4ay2qwal6f0ge5pkg9qstu3zum",
   ]
   use nsec <- list.each(nsecs)
-  let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec)
-  assert account.from_privkey(privkey) == Error(account.OutOfRange)
+  let assert Ok(privkey) = nip19.decode(nsec, nip19.Nsec) as nsec
+  assert account.from_privkey(privkey) == Error(account.OutOfRange) as nsec
 }
 
 /// BIP-340 の公式ベクター 0 の鍵から、NIP-19 の nsec と npub を作る。

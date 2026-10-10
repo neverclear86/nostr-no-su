@@ -28,15 +28,20 @@ fn global_exhausted(capacity: Int, now: Int) -> Limiter {
   })
 }
 
+/// 時刻 `now` に `client` が `client_limit` の容量ぶんを通して、自分のバケットを
+/// 使い切った状態。
+fn client_exhausted(client: String, now: Int) -> Limiter {
+  list.fold(
+    up_to(rate_limit.client_limit.capacity),
+    rate_limit.new(),
+    fn(limiter, _) { admitted(limiter, client, now) },
+  )
+}
+
 /// 同じ時刻に `client_limit` 件を通したクライアントの次の 1 件は捨てる。別の
 /// クライアントは自分のバケットを持つので影響を受けない。
 pub fn a_client_over_its_limit_is_refused_test() {
-  let limiter =
-    list.fold(
-      up_to(rate_limit.client_limit.capacity),
-      rate_limit.new(),
-      fn(limiter, _) { admitted(limiter, "client-a", 1000) },
-    )
+  let limiter = client_exhausted("client-a", 1000)
   let assert Refused(..) = rate_limit.admit(limiter, "client-a", 1000)
   let assert Admitted(..) = rate_limit.admit(limiter, "client-b", 1000)
 }
@@ -51,12 +56,7 @@ pub fn the_global_limit_refuses_new_clients_test() {
 /// 使い切ったバケットは `refill_seconds` 秒ごとに 1 件だけ補充され、その間は
 /// 捨てる。
 pub fn a_bucket_refills_over_time_test() {
-  let limiter =
-    list.fold(
-      up_to(rate_limit.client_limit.capacity),
-      rate_limit.new(),
-      fn(limiter, _) { admitted(limiter, "client-a", 1000) },
-    )
+  let limiter = client_exhausted("client-a", 1000)
   let soon = 1000 + rate_limit.client_limit.refill_seconds - 1
   let assert Refused(limiter:, ..) = rate_limit.admit(limiter, "client-a", soon)
   let after = 1000 + rate_limit.client_limit.refill_seconds
@@ -67,13 +67,7 @@ pub fn a_bucket_refills_over_time_test() {
 /// 捨てたリクエストはどちらのトークンも使わない。自分の上限を超えて送り続ける
 /// クライアントだけでは、全体のバケットを使い切れない。
 pub fn refused_requests_spend_no_tokens_test() {
-  // client-a が自分の上限（4 件）を使い切った状態にする
-  let limiter =
-    list.fold(
-      up_to(rate_limit.client_limit.capacity),
-      rate_limit.new(),
-      fn(limiter, _) { admitted(limiter, "client-a", 1000) },
-    )
+  let limiter = client_exhausted("client-a", 1000)
   // 全体の容量ぶん捨てられても、使った全体のトークンは 4 件のまま
   let limiter =
     list.fold(up_to(rate_limit.global_limit.capacity), limiter, fn(limiter, _) {
