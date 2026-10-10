@@ -12,6 +12,10 @@ import nostr_no_su/random
 import nostr_no_su/task.{type Deadline}
 import pog
 
+/// 統合テストの期限。実際の DB との往復は負荷の高い環境で本番の期限（書き込み
+/// 1000ms）を超えうるので、テストが期限の長さに依存しないよう長く取る。
+pub const generous = db.Timeouts(load_ms: 30_000, write_ms: 30_000)
+
 /// 接続プールを起動し、クエリーに応答するまで待ってからその名前を返す。
 /// `search_path` を指定すると、テーブル名をそのスキーマで解決する。プールはテスト
 /// プロセスにリンクされる。

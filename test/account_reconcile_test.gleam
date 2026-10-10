@@ -27,16 +27,13 @@ import nostr_no_su/random
 import nostr_no_su/time
 import pog
 import support/poll
-import support/postgres
+import support/postgres.{generous}
 import support/random_account.{random_entry, random_master_key}
 
 /// バンカーアクターに渡すストアの期限。書き込みはトリガーが門を待つ間に切れるだけの
 /// 短さで、負荷の高い環境でもクエリーがサーバーに届くだけの長さにする。読み込みは
 /// 書き込みの残りを待てるよう長く取る。
 const actor_timeouts = db.Timeouts(load_ms: 30_000, write_ms: 2000)
-
-/// テストが直接 DB を読み書きするときの期限。
-const generous = db.Timeouts(load_ms: 30_000, write_ms: 30_000)
 
 /// 書き込みを止める門の advisory lock の鍵。ASCII の `gat`（gate）を 16 進にした値。
 /// `db.instance_lock_key` と別の値にし、同じ DB のインスタンスのロックと
