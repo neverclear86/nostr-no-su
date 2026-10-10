@@ -2265,6 +2265,21 @@ pub fn pending_ring_follows_the_remaining_seconds_test() {
   assert string.contains(body, "text-warning\">0:45</span>")
 }
 
+/// 承認待ちの円は、広い画面で跨ぐ行が、secret の不一致の警告の囲みがあるカードでは 3、
+/// ないカードでは 2 である。
+pub fn pending_ring_spans_the_rows_of_its_card_test() {
+  let body = dashboard.render(i18n.English, view.System, secret_states())
+  let cards = list.drop(string.split(body, "<article "), 1)
+  let assert Ok(mismatch) =
+    list.find(cards, string.contains(_, "border-warning/55"))
+  let assert Ok(matching) =
+    list.find(cards, fn(card) { !string.contains(card, "border-warning/55") })
+  assert string.contains(mismatch, "sm:size-17 sm:row-span-3\"")
+  assert !string.contains(mismatch, "row-span-2")
+  assert string.contains(matching, "sm:size-17 sm:row-span-2\"")
+  assert !string.contains(matching, "row-span-3")
+}
+
 /// 概要の帯の項目は、5 つの節へのリンク（`href="#…"`）になっており、各節は同じアンカーの
 /// `id` を持つ。
 pub fn overview_rail_links_to_each_section_test() {
@@ -2849,6 +2864,84 @@ pub fn new_relay_form_describes_the_url_field_test() {
   assert !string.contains(html, "<header")
 }
 
+/// 用途のチェックは、監視、バンカーの順に、用途ごとの欄の名前、アイコン、語、説明を持つ。
+/// 用途の編集は接続状態のバッジをチェックの横に添え、追加のフォームは添えない。
+pub fn relay_role_checkboxes_follow_the_role_order_test() {
+  let text = i18n.text(i18n.English, _)
+  let row = fn(name, icon, caption, description, checked, badge) {
+    element.to_string(view.checkbox_row(
+      name,
+      icon,
+      caption,
+      html.text(text(description)),
+      checked,
+      badge,
+    ))
+  }
+  let edit =
+    dashboard.relay_action_form(
+      i18n.English,
+      dashboard.RelayRow(
+        7,
+        "wss://a",
+        dashboard.Reported(relay_connection.Connected),
+        dashboard.Unanswered,
+      ),
+      routes.EditRelayRoles,
+      Some(relay_list.MonitorOnly),
+      view.InForm,
+    )
+    |> element.fragment
+    |> element.to_string
+  assert string.contains(
+    edit,
+    row(
+      "monitor",
+      view.eye_icon(),
+      "Use for monitoring",
+      i18n.MonitorRoleDescription,
+      True,
+      [view.status_chip(view.ActiveChip, "connected")],
+    )
+      <> row(
+      "bunker",
+      view.key_icon(),
+      "Use for the bunker",
+      i18n.BunkerRoleDescription,
+      False,
+      [view.status_chip(view.UnansweredChip, "unavailable")],
+    ),
+  )
+  let new =
+    dashboard.new_relay_form(
+      i18n.English,
+      "",
+      Some(relay_list.BunkerOnly),
+      view.InForm,
+    )
+    |> element.fragment
+    |> element.to_string
+  assert string.contains(
+    new,
+    row(
+      "monitor",
+      view.eye_icon(),
+      "Use for monitoring",
+      i18n.MonitorRoleDescription,
+      False,
+      [],
+    )
+      <> row(
+      "bunker",
+      view.key_icon(),
+      "Use for the bunker",
+      i18n.BunkerRoleDescription,
+      True,
+      [],
+    ),
+  )
+}
+
 /// 用途の編集と削除の中身は、結果の注意の段落を畳まずにフォームの直前に出す。
 pub fn relay_action_form_keeps_the_description_visible_test() {
   let edit = action_form(routes.EditRelayRoles)
@@ -3159,6 +3252,77 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
     dashboard.render(i18n.English, view.System, states()),
     "http-equiv=\"refresh\"",
   )
+}
+
+/// アカウントへの操作のダイアログは、操作ごとの題と、失敗の理由の前置きを持つ。前置きの無い
+/// 秘密鍵の表示は理由だけを出す。読み込めなかった行の削除のダイアログの題は、アカウントの削除と
+/// 同じである。
+pub fn account_action_dialogs_carry_their_title_and_failure_lead_test() {
+  let reason = i18n.Untranslated("boom")
+  let boom = "<span lang=\"en\">boom</span>"
+  let open = fn(dialog) {
+    let assert Ok(body) =
+      dashboard.render_open(
+        i18n.Japanese,
+        view.System,
+        dialog_snapshot(),
+        dialog,
+      )
+    body
+  }
+  use #(action, segment, title, lead) <- list.each([
+    #(routes.EditLabel, "label", "ラベルを編集", "ラベルを保存できませんでした。"),
+    #(routes.RevealPrivateKey, "private-key", "秘密鍵を表示", ""),
+    #(routes.RotateSecret, "rotate", "secret を再生成", "secret を再生成できませんでした。"),
+    #(routes.DeleteAccount, "delete", "アカウントを削除", "アカウントを削除できませんでした。"),
+  ])
+  let id = "dialog-account-" <> dialog_signer <> "-" <> segment
+  let dialog =
+    opened_dialog(
+      open(dashboard.AccountActionOpen(dialog_signer, action, None, reason)),
+      id,
+    )
+  assert string.contains(
+    dialog,
+    "id=\"" <> id <> "-title\">" <> title <> "</h2>",
+  )
+  assert string.contains(dialog, lead <> boom)
+  assert lead != "" || !string.contains(dialog, "できませんでした。" <> boom)
+
+  let unreadable_id = "dialog-unreadable-" <> dialog_skipped <> "-delete"
+  let unreadable =
+    opened_dialog(
+      open(dashboard.UnreadableDeleteOpen(dialog_skipped, reason)),
+      unreadable_id,
+    )
+  assert string.contains(
+    unreadable,
+    "id=\"" <> unreadable_id <> "-title\">アカウントを削除</h2>",
+  )
+  assert string.contains(unreadable, "アカウントを削除できませんでした。" <> boom)
+}
+
+/// リレーへの操作のダイアログは、操作ごとの題と、失敗の理由の前置きを持つ。
+pub fn relay_action_dialogs_carry_their_title_and_failure_lead_test() {
+  let boom = "<span lang=\"en\">boom</span>"
+  use #(action, segment, title, lead) <- list.each([
+    #(routes.EditRelayRoles, "edit", "用途を編集", "用途を保存できませんでした。"),
+    #(routes.DeleteRelay, "delete", "リレーを削除", "リレーを削除できませんでした。"),
+  ])
+  let id = "dialog-relay-1-" <> segment
+  let assert Ok(body) =
+    dashboard.render_open(
+      i18n.Japanese,
+      view.System,
+      states(),
+      dashboard.RelayActionOpen(1, action, None, i18n.Untranslated("boom")),
+    )
+  let dialog = opened_dialog(body, id)
+  assert string.contains(
+    dialog,
+    "id=\"" <> id <> "-title\">" <> title <> "</h2>",
+  )
+  assert string.contains(dialog, lead <> boom)
 }
 
 /// 追加のダイアログを開いて描くときは、送られた URL と用途を欄に出す。
