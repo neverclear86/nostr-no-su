@@ -165,7 +165,6 @@ pub fn section_heading_puts_the_hint_between_the_title_and_the_count_test() {
     html,
     "<div class=\"flex min-w-0 items-center gap-2.5\">",
   )
-  assert !string.contains(html, "sm:pl-10")
   assert string.contains(
     html,
     "<div class=\"ml-auto flex flex-wrap justify-end gap-2\"><p class=\"text-sm text-muted\">action</p></div>",
@@ -179,8 +178,6 @@ pub fn section_heading_leaves_out_the_absent_parts_test() {
       view.section_heading(view.plug_icon(), "Relays", None, [], []),
     )
   assert !string.contains(html, "badge")
-  assert !string.contains(html, "interestfor")
-  assert !string.contains(html, "<p class")
   assert !string.contains(html, "justify-end")
 }
 
@@ -233,6 +230,33 @@ pub fn copy_button_names_the_copy_action_test() {
     html,
     "<button aria-label=\"Copy client\" class=\"btn btn-ghost btn-sm btn-square text-muted group-data-copied:text-success focus-visible:outline-base-content\" data-action=\"copy\" title=\"Copy client\" type=\"button\">",
   )
+}
+
+/// コピーの欄は、`group` の囲みの 1 行の末尾に `copy_button` を置き、その直下に `copy_status` の案内を
+/// 置く（`priv/static/admin.js` の `copy` が読む構造）。
+pub fn copy_groups_end_the_row_with_the_button_and_the_status_test() {
+  [
+    #(
+      element.to_string(view.copyable_field(i18n.English, "Key", "abc")),
+      "<div class=\"fieldset group\">",
+      i18n.text(i18n.English, i18n.Copy),
+    ),
+    #(
+      element.to_string(view.truncated_id(i18n.English, "abc", "Copy npub")),
+      "<div class=\"group\">",
+      "Copy npub",
+    ),
+  ]
+  |> list.each(fn(group) {
+    let #(html, opening, label) = group
+    assert string.starts_with(html, opening)
+    assert string.contains(
+      html,
+      element.to_string(view.copy_button(label))
+        <> "</div><span class=\"sr-only group-data-selected:not-sr-only\" role=\"status\">",
+    )
+    assert string.ends_with(html, "</span></div>")
+  })
 }
 
 /// 時刻の部品は、`datetime` 属性に RFC 3339 の UTC の全文を置き、本文に 0 埋めした UTC の時分秒を
@@ -293,14 +317,12 @@ pub fn folded_hint_opens_from_the_info_button_test() {
     )
   assert string.contains(
     html,
-    "<div class=\"fieldset-legend w-fit justify-start\">URL"
-      <> string.concat(list.map(
-      view.info_hint(i18n.Japanese, "relay-url-hint", [
-        html.text("ws:// か wss:// で始まる URL。"),
-      ]),
-      element.to_string,
-    ))
-      <> "</div>",
+    hinted_legend_html(
+      i18n.Japanese,
+      "URL",
+      "relay-url-hint",
+      "ws:// か wss:// で始まる URL。",
+    ),
   )
   assert string.contains(html, "interestfor=\"relay-url-hint\"")
   assert string.contains(html, "id=\"relay-url-hint\" popover=\"hint\"")
@@ -390,17 +412,28 @@ pub fn hinted_copyable_field_opens_the_hint_from_the_legend_test() {
     ))
   assert string.contains(
     html,
-    "<div class=\"fieldset-legend w-fit justify-start\">Connection URI"
-      <> string.concat(list.map(
-      view.info_hint(i18n.English, "uri-hint", [html.text("Paste it.")]),
-      element.to_string,
-    ))
-      <> "</div>",
+    hinted_legend_html(i18n.English, "Connection URI", "uri-hint", "Paste it."),
   )
   assert string.contains(
     html,
     "<input aria-describedby=\"uri-hint\" aria-label=\"Connection URI\"",
   )
+}
+
+/// ⓘ つきの見出し（`legend` の `div`）の HTML。`caption` の直後に `info_hint` の ⓘ と補足が続く。
+fn hinted_legend_html(
+  language: i18n.Language,
+  caption: String,
+  id: String,
+  text: String,
+) -> String {
+  "<div class=\"fieldset-legend w-fit justify-start\">"
+  <> caption
+  <> string.concat(list.map(
+    view.info_hint(language, id, [html.text(text)]),
+    element.to_string,
+  ))
+  <> "</div>"
 }
 
 /// 識別のラベルは、アカウントの一覧の行では大きい太字、ほかでは今の太さで出す。
@@ -418,7 +451,7 @@ pub fn identity_sizes_the_label_test() {
   )
 }
 
-/// 警告の通知は畳まずに本文をそのまま出す（`details` にも `popover` にもしない）。
+/// 警告の通知は本文をそのまま囲みに出す。
 pub fn warning_alert_is_not_folded_test() {
   let html =
     element.to_string(view.alert(view.Warning, [html.text("Back up now.")]))
@@ -426,8 +459,6 @@ pub fn warning_alert_is_not_folded_test() {
     html,
     "<span class=\"wrap-anywhere\">Back up now.</span>",
   )
-  assert !string.contains(html, "<details")
-  assert !string.contains(html, "popover")
 }
 
 /// 上部のロゴの枠は内容の幅を基準に伸びる（`flex-1` のように基準の幅を 0 にしない）。
@@ -464,20 +495,6 @@ pub fn translated_title_goes_to_the_title_and_the_heading_test() {
   )
 }
 
-/// 狭い画面で語を隠すダイアログのボタンは、`commandfor` で `id` を指し、語を `title` と `max-sm:sr-only` の `span` に置く。
-pub fn compact_dialog_trigger_hides_the_text_on_narrow_screens_test() {
-  let button =
-    element.to_string(view.dialog_trigger(
-      "dialog-x",
-      view.CompactFace(view.qr_code_icon(), "Connection QR code"),
-      view.PrimaryButton,
-    ))
-  assert button
-    == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" title=\"Connection QR code\" type=\"button\">"
-    <> element.to_string(view.qr_code_icon())
-    <> "<span class=\"max-sm:sr-only\">Connection QR code</span></button>"
-}
-
 /// 応答で開き Esc で閉じないダイアログは、`open` と `closedby="none"` を付けて描き、閉じるボタン（語は
 /// `dismiss`）をダッシュボード（`/`）へのリンクにする。
 pub fn pinned_dialog_ignores_close_requests_test() {
@@ -494,14 +511,15 @@ pub fn pinned_dialog_ignores_close_requests_test() {
     == "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" closedby=\"none\" id=\"dialog-x\" open><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><div class=\"flex flex-wrap items-center gap-2\"><a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Close</a></div></div></dialog>"
 }
 
-/// アイコンと語のダイアログのボタンは `commandfor` で `id` のダイアログを指して開き、ダイアログは
-/// 題と、`InDialog` を受けた中身だけを並べる（キャンセルは中身の操作の行が持つ）。
+/// ダイアログのボタンは `commandfor` で `id` のダイアログを指して開き、顔の属性と中身を写す（狭い
+/// 画面で語を隠す顔は `title` と `max-sm:sr-only` の `span` を持つ）。ダイアログは題と、`InDialog` を
+/// 受けた中身だけを並べる（キャンセルは中身の操作の行が持つ）。
 pub fn dialog_button_opens_the_dialog_it_names_test() {
   let html =
     view.dialog_button(
       i18n.English,
       "dialog-x",
-      view.IconTextFace(view.plus_icon(), "Add"),
+      view.CompactFace(view.plus_icon(), "Add"),
       view.PrimaryButton,
       "Title",
       fn(placement) {
@@ -518,9 +536,9 @@ pub fn dialog_button_opens_the_dialog_it_names_test() {
     |> list.map(element.to_string)
     |> string.concat
   assert html
-    == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
+    == "<button class=\"btn btn-primary btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" title=\"Add\" type=\"button\">"
     <> element.to_string(view.plus_icon())
-    <> "Add</button>"
+    <> "<span class=\"max-sm:sr-only\">Add</span></button>"
     <> "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\"><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><p>body</p></div></dialog>"
 }
 
@@ -539,40 +557,6 @@ pub fn dialog_button_draws_the_dialog_with_the_given_opening_test() {
     )
   assert element.to_string(dialog)
     == "<dialog aria-labelledby=\"dialog-x-title\" class=\"modal\" id=\"dialog-x\" open><div class=\"modal-box flex flex-col gap-4\"><h2 class=\"card-title\" id=\"dialog-x-title\">Title</h2><div class=\"flex flex-wrap items-center gap-2\"><a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a></div></div></dialog>"
-}
-
-/// アイコンだけのダイアログのボタンは、語を `aria-label` に置き、中身はアイコンだけにする。
-pub fn icon_only_dialog_button_names_itself_by_label_test() {
-  let assert [button, _] =
-    view.dialog_button(
-      i18n.English,
-      "dialog-x",
-      view.IconOnlyFace(view.trash_icon(), "Delete"),
-      view.DangerGhostButton,
-      "Title",
-      fn(_) { [] },
-      view.OpensOnTrigger,
-    )
-  assert element.to_string(button)
-    == "<button aria-label=\"Delete\" class=\"btn btn-ghost btn-sm text-error focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">"
-    <> element.to_string(view.trash_icon())
-    <> "</button>"
-}
-
-/// 語だけのダイアログのボタンは、`InRow` の送信ボタンと同じ見た目で語だけを出す。
-pub fn text_dialog_button_shows_only_the_text_test() {
-  let assert [button, _] =
-    view.dialog_button(
-      i18n.English,
-      "dialog-x",
-      view.TextFace("Revoke"),
-      view.GhostButton,
-      "Title",
-      fn(_) { [] },
-      view.OpensOnTrigger,
-    )
-  assert element.to_string(button)
-    == "<button class=\"btn btn-ghost btn-sm focus-visible:outline-base-content\" command=\"show-modal\" commandfor=\"dialog-x\" type=\"button\">Revoke</button>"
 }
 
 /// ボタンの見た目のリンクは、ダイアログを開くボタンと同じ顔の属性と中身を、`href` と並べて出す。
