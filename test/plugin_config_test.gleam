@@ -98,7 +98,7 @@ pub fn page_map_adds_the_accounts_key_test() {
 /// `page_map` が返す map は `to_map` と同じく binary → binary の辞書として
 /// 読める（`Accounts` の値も binary の JSON 文字列であるため）。既存のページが
 /// `decode.dict(decode.string, decode.string)` で設定を読んでも壊れないことを
-/// 確かめる（PR #427 のレビューの再発防止）。
+/// 確かめる。
 pub fn page_map_is_a_binary_to_binary_map_test() {
   let config = plugin_config.for_plugin(env(), "counter")
   let account =

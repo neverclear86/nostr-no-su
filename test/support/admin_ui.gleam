@@ -1,7 +1,5 @@
-//// 描画した管理 UI のページを使う検査が共有する、ページと静的ファイルの読み出し。配信する
-//// 静的ファイル（`priv/static/`）と突き合わせる `stylesheet_test` と `script_test`、日本語の
-//// ページの英文を見る `japanese_pages_test`、板つきのロゴのファイルと README を読む
-//// `logo_test` が使う。
+//// 描画した管理 UI のページと、配信する静的ファイル（`priv/static/`）、板つきのロゴの
+//// ファイルと README を読み出す、検査の共有の部品。
 ////
 //// `view.gleam` か `admin/fingerprint` に部品を足したら `components` にもその部品を足す。
 
@@ -47,7 +45,7 @@ pub fn text_file(path: String) -> String {
 }
 
 /// `pages()` のアカウントの 64 桁の 16 進の公開鍵。鍵の指紋を描かせるため 32 バイトにし、
-/// `japanese_pages_have_no_english_words_test` が短縮した値の英字を拾わないよう数字だけにする。
+/// 日本語のページの英文の検査が短縮した値の英字を拾わないよう数字だけにする。
 const account_hex =
   "0123012301230123012301230123012301230123012301230123012301230123"
 
@@ -99,7 +97,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
       secret_mismatch: True,
       perms: "",
     )
-  // アカウント一覧に無い署名者。`japanese_pages_have_no_english_words_test` が
+  // アカウント一覧に無い署名者。日本語のページの英文の検査が
   // 短縮した 16 進の英字を未知語として拾うので、数字だけの値にする。
   let pending_unknown_signer =
     dashboard.PendingRow(
@@ -571,7 +569,7 @@ pub fn pages(language: i18n.Language) -> List(String) {
 }
 
 /// ページを 1 件だけ供給するプラグインの行（タブ無しを撮るため）。表示名は
-/// `allowed_words`（`test/japanese_pages_test.gleam`）に無い語にし、`view.untranslated`
+/// 日本語のページの英文の検査の `allowed_words` に無い語にし、`view.untranslated`
 /// の包み忘れを検査できるようにする。
 const plugin_row_one_page =
   dashboard.PluginRow(
@@ -603,7 +601,7 @@ const plugin_row_disabled =
 const plugin_status_page = plugin.PluginPage(key: "status", title: "Status")
 
 /// 表示の言語を受け取るプラグインの行（タブを表示の言語で撮るため）。日本語の
-/// 表示名は `japanese_pages_test` が包み無しで検査する。
+/// 表示名は日本語のページの英文の検査が包み無しで見る。
 fn plugin_row_localized() -> dashboard.PluginRow {
   dashboard.PluginRow("plugin-e", Some(plugin_runner.Running), pages: [
     plugin_localized_status_page(),

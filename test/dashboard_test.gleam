@@ -1611,9 +1611,8 @@ fn dialog_account(signer: String, label: String) -> dashboard.AccountRow {
   )
 }
 
-/// 状態は `dashboard.Snapshot(..dialog_snapshot(), accounts: Ok([dialog_signer の行（ラベル `main`）, "4567" を
-/// 16 回の署名者の行（ラベル `bot`）]))`。ラベルの違う 2 行の、それぞれのラベルの編集のダイアログに、その行のラベルの識別、`value="<ラベル>"`、
-/// `aria-describedby="<id>-label-hint"` と `id="<id>-label-hint"` がある。
+/// ラベルの違う 2 行の、それぞれの編集のダイアログに、その行のラベルの識別と欄の値と
+/// 補足の `id` がある。
 pub fn account_label_dialogs_hold_each_row_label_test() {
   let second = string.repeat("4567", 16)
   let snapshot =

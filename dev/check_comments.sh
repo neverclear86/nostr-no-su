@@ -4,7 +4,11 @@
 # 一致が無ければ 0、あれば 1、引数の誤りと無いファイルは 2 で終わる。CI では実行しない。
 #
 # 使い方: sh dev/check_comments.sh <作業ツリー> [ファイル...]
-#   ファイル: 作業ツリーからの相対パス。省くと src/ と plugins-src/*/src の追跡中の .gleam と .erl を全部見る
+#   ファイル: 作業ツリーからの相対パス。省くと、追跡中の src/、plugins-src/*/src、test/、
+#     plugins-src/*/test の .gleam と .erl、dev/ の .gleam を全部見る
+#
+# test/ ではテスト同士が名前で互いを指すので、`_test` を含む行は候補である。読み手の判断を
+# 変えるものは残す。
 set -eu
 
 [ $# -ge 1 ] || { echo "usage: sh dev/check_comments.sh <worktree> [file...]" >&2; exit 2; }
@@ -14,7 +18,8 @@ git -C "$tree" rev-parse --show-toplevel > /dev/null 2>&1 || { echo "not a git w
 
 if [ $# -eq 0 ]; then
   # shellcheck disable=SC2046
-  set -- $(git -C "$tree" ls-files 'src/*.gleam' 'src/*.erl' 'plugins-src/*/src/*.gleam' 'plugins-src/*/src/*.erl')
+  set -- $(git -C "$tree" ls-files 'src/*.gleam' 'src/*.erl' 'plugins-src/*/src/*.gleam' 'plugins-src/*/src/*.erl' \
+    'test/*.gleam' 'test/*.erl' 'plugins-src/*/test/*.gleam' 'plugins-src/*/test/*.erl' 'dev/*.gleam')
 fi
 
 out=$(

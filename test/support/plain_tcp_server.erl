@@ -1,5 +1,5 @@
-%% relay_client_test が、WebSocket でない応答を返すリレーを再現するための
-%% fixture。決まったバイト列を返すだけの TCP の待ち受けを立てる。
+%% WebSocket でない応答を返すリレーを再現するための fixture。決まったバイト列を
+%% 返すだけの TCP の待ち受けを立てる。
 -module(plain_tcp_server).
 -export([listen/2]).
 

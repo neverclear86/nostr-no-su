@@ -561,8 +561,7 @@ pub fn fast_plugin_never_reports_a_failure_test() {
 /// 1 件目の実行を止めている間に上限 + 2 件（1002 件）を積む。ランナーがキュー長
 /// を見るのはメッセージを 1 件取り出した後なので、止めを外した直後の判定は
 /// 1001 件で、上限を超えて捨て始める。キュー長 1001 から 501 までの 501 件を
-/// 捨て、500 件になった 1 件から再開し、残りを全部実行する。復帰条件が
-/// `queue_len == 0` だった版では、実行されるのは最後の 1 件だけだった。
+/// 捨て、500 件になった 1 件から再開し、残りを全部実行する。
 pub fn a_burst_just_over_the_limit_loses_half_test() {
   let gates = process.new_subject()
   let handled = process.new_subject()

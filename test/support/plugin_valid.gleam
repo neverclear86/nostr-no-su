@@ -1,8 +1,5 @@
 //// プラグイン API v1 を満たす fixture。`plugin.load` の正常系と、`Plugin.handle`
 //// がイベント map をプラグインへ届けることの確認に使う。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}

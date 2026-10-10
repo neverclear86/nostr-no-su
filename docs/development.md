@@ -38,6 +38,8 @@ docker rm -f nns-pg-test
 
 時間に関わる検査は、待ち時間で順序を作らず、テストが開ける門（アクターのプロセスで作った subject を受信で止め、テストが送って進める。`app_accounts_test` の `hold_until_released`。DB の書き込みなら、トリガーにテストが持つ advisory lock を待たせる。`account_reconcile_test` の `behind_gate`）か、締め切りの注入で作る。「N ms の間に何も届かない」ことを確かめる待ちはモジュールの慣習（100〜300ms）に合わせ、「N ms 以内に応答する」の上限は、他のレーンと CPU を取り合っても収まるよう締め切りの数倍を取る。眠る仕事で締め切りの検証をするときは、仕事の眠りではなく締め切りがテストの時間になるので、締め切りを短くする。
 
+テストの実行器（`support/eunit_runner`）は `test/` 配下の全モジュールを eunit に渡し、eunit は `_test` で終わる関数をテストとして走らせる。`test/support/` のヘルパーと fixture の関数名は `_test` で終わらせない。
+
 ## カバレッジ
 
 `gleam test` に `COVERAGE=1` を付けると、本体の `src/` のモジュールのカバレッジを Erlang の `cover` で計測する。結果は実行の最後に標準出力へ 1 行（`coverage: <実行された行>/<行の合計> lines (<百分率>%)`）出るほか、モジュールごとの内訳と合計を `build/coverage.txt` に書く。手元で測るときは Postgres と strfry を上げた状態（この文書の「実行とテスト」と「NIP-46 の E2E（strfry）」）で行う。E2E が走るかどうかで数値が動くので、両方を立てる CI と同じ条件でないとずれが溜まる。`COVERAGE` を付けない `gleam test` は今までどおり計測しない:
@@ -138,7 +140,7 @@ sh dev/sweep_refs.sh <作業ツリー> <語>...       # 語ごとの参照（cod
 sh dev/pr_facts.sh <PR 番号>                     # head と base の SHA、差分の行数、閉じる issue、CI のジョブを 1 枚の表にする
 sh dev/check_procedure.sh <手順ファイル> <作業ツリー>  # 番号付きの手順を「1 つずつ別の Bash で実行される」前提で静的に検査する
 sh dev/check_plan_tests.sh <プランのファイル> <作業ツリー>  # プランの「テスト」の表の 1 列目のテスト名と実装の `pub fn ..._test()`（`dev/名前.sh` はファイルの実在）を突き合わせ、足す名前が無いか、取り消し線で消すとした名前が残っていれば表にして 1 で終わる（実装エージェントが使う）
-sh dev/check_comments.sh <作業ツリー> [ファイル...]  # src/ と plugins-src/*/src のコメントの issue 番号、テスト名、「従来」を「path:行:内容」で一覧にし、あれば 1 で終わる。ファイルを渡すとそれだけを見る
+sh dev/check_comments.sh <作業ツリー> [ファイル...]  # src/、plugins-src/*/src、test/、plugins-src/*/test、dev/*.gleam のコメントの issue 番号、テスト名（test/ では候補）、「従来」を「path:行:内容」で一覧にし、あれば 1 で終わる。ファイルを渡すとそれだけを見る
 sh dev/post_comment.sh <issue|pr> <番号> <kind> <round> <verdict> <head> <本文ファイル>  # マーカー行を付けて issue/PR にコメントを投稿する
 python3 dev/verify_workflow.py .claude/workflows/issue-workflow.js                   # ワークフローのスクリプトを、エージェントを立てずに dry run の全シナリオで回し、期待する結果と突き合わせる（dev/dryrun.mjs を使う）
 python3 dev/wfstats.py [--base <dir>] [--runs <run id>,...] [--brief]              # Workflow の実行ログから費用・速度・品質の実測を出す。--brief の要約を retrospective が issue に貼る

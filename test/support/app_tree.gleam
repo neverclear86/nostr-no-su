@@ -1,7 +1,5 @@
 //// 偽リレーの上でスーパービジョンツリーを動かすヘルパーと、ツリーを組まずにバンカーと
-//// リレー一覧のアクターを単独で起動するヘルパー。gleeunit は test/ 配下の全モジュールを
-//// eunit に渡すので、関数名を `_test` で終わらせないこと（`beam_fixture.gleam` 冒頭と
-//// 同じ注意）。
+//// リレー一覧のアクターを単独で起動するヘルパー。
 
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
@@ -390,7 +388,8 @@ pub fn start_bunker_signed_in_as(
       fn(_relays) { Nil },
       fn(_urls) { Nil },
     )
-  // 読み込みの完了を待つ。`bunker_test.gleam` と同じ理由で `accounts` を使う。
+  // 読み込みの完了を待つ。`LoadAccounts` は起動時に名前なしの subject へ積まれ、
+  // `GetAccounts` はその後に処理されるので `accounts` を使う。
   let assert Ok(loaded) = bunker.accounts(name)
   assert list.length(loaded) == list.length(signers)
   name

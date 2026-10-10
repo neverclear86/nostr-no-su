@@ -1,6 +1,6 @@
-%% `log_redaction_test` が `nostr_no_su_ffi:redact_event/2` を項レベルで試す
-%% ための支援。Gleam からは作れない Erlang の項（charlist、improper list、
-%% map）をここで組み立て、filter の入出力を Gleam が比較できる形にして返す。
+%% `nostr_no_su_ffi:redact_event/2` を項レベルで試すための支援。Gleam からは作れない
+%% Erlang の項（charlist、improper list、map）をここで組み立て、filter の入出力を
+%% Gleam が比較できる形にして返す。
 -module(redact_probe).
 -export([redact/2, charlist/1, nested/1, improper/1, meta_intact/1,
          crashing/1, filter_count/0]).

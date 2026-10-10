@@ -1,4 +1,4 @@
-%% account_store_test が `pog.execute` に例外を投げさせるための偽の接続プール。
+%% `pog.execute` に例外を投げさせるための偽の接続プール。
 %% pgo_pool:checkout/2 が送るチェックアウトの要求に {error, econnreset} で答える。
 %% pog 4.1 の convert_error はこの項を写す節を持たないので、pog.execute は
 %% function_clause を投げる。pgo_handler は gen_tcp の {error, Reason} をそのまま

@@ -1,5 +1,5 @@
-//// admin_*_test が共有する、状態を即値で持つ `admin.Context` と認証済みの
-//// リクエストを組み立てるヘルパーと、本文からダイアログを切り出すヘルパー（`dashboard_test` も使う）。関数名の注意は `app_tree` と同じ。
+//// 状態を即値で持つ `admin.Context` と認証済みのリクエストを組み立てるヘルパーと、
+//// 本文からダイアログを切り出すヘルパー。
 
 import gleam/bit_array
 import gleam/bool
@@ -30,7 +30,7 @@ import plugin_page_builder
 import wisp
 import wisp/simulate
 
-/// 管理 UI のパスワード。`test_context` が Context に入れ、Basic 認証と再表示の入力に使う。
+/// 管理 UI のパスワード。`Context` に入り、Basic 認証と再表示の入力に使う。
 pub const password = "s3cr3t-password"
 
 /// 認証の失敗のログ行に入る接続元。本物のサーバーは mist の接続情報から入れる。

@@ -1,4 +1,4 @@
-%% `log_redaction_test` が pgo の接続プロセスを実際に落とすためのシム。
+%% pgo の接続プロセスを実際に落とすためのシム。
 %% PoolName を '$ancestors' に含む pgo_connection を短い期限で poll して 1 件に
 %% 絞り、未処理の cast を送ってクラッシュレポートを起こす。'$ancestors' で絞る
 %% のは、並列に走る他のテストの本物のプールの接続プロセスが同時に居るためで、

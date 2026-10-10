@@ -4,9 +4,6 @@
 ////
 //// 受け取った設定 map を `persistent_term` へ退避するので、設定が実際に届いた
 //// ことをテストから確認できる。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}

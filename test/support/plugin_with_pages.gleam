@@ -1,9 +1,6 @@
 //// `plugin_pages/1` と `plugin_page_content/2` を持つ fixture。
 //// `support/plugin_with_config` と同じくアリティ +1 の設定を受け取る形で、本体が
 //// `/1` `/2` を優先して呼ぶことを確かめるのに使う。
-////
-//// gleeunit は `test/` 配下の全ファイルを eunit に渡すため、関数名を `_test` で
-//// 終わらせてはならない。
 
 import gleam/dynamic.{type Dynamic}
 

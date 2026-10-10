@@ -895,7 +895,7 @@ pub fn connect_with_a_wrong_secret_asks_for_approval_test() {
   )
 }
 
-/// 管理 UI が無効なら、シークレット無しの `connect` は従来どおり拒否する。
+/// 管理 UI が無効なら、シークレット無しの `connect` は拒否する。
 pub fn connect_without_secret_is_rejected_without_the_admin_ui_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)
@@ -1455,7 +1455,7 @@ pub fn empty_perms_allow_signing_and_encryption_test() {
 }
 
 /// perms が空のセッションでも、kind 24133（NIP-46 の応答と同じ kind）の
-/// `sign_event` は今までどおり拒否される。
+/// `sign_event` は拒否される。
 pub fn empty_perms_still_refuse_kind_24133_test() {
   let state = granted_session("")
   assert string.contains(
@@ -1581,7 +1581,7 @@ pub fn the_future_side_of_the_window_ends_after_a_minute_test() {
   assert rejected == Ignore("stale or future event")
 }
 
-/// 過去側の受付幅は 600 秒のまま。
+/// 過去側の受付幅は 600 秒。
 pub fn the_past_side_of_the_window_ends_after_ten_minutes_test() {
   let signer = account_for(signer_key)
   let client = account_for(client_key)

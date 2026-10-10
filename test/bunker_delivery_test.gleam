@@ -1,12 +1,5 @@
-//// `delivery.track` / `delivery.acknowledge` のテストは、発行した応答への OK をどう
-//// 追跡し、全リレーに拒否されたときの行をどう組み立てるかを確かめる。
-//// `delivery.response_relays` / `delivery.session_relay_signers` のテストは、応答の
-//// 発行先と、リレーの URL ごとのセッションの署名者を確かめる。
-//// `delivery.authentication_events` のテストは、AUTH に返すイベントがアカウントごとに
-//// その鍵で署名されることを確かめる。
-//// `delivery.pause_on_rate_limit` / `delivery.recipients` のテストは、`rate-limited:` を
-//// 返したリレーへのセッションの外の応答をいつ止めて再開し、出さなかった件数をどう
-//// 報告するかを確かめる。
+//// `bunker/delivery` の純粋な判断のテスト。アクターを通す配線は `bunker` のアクターの
+//// テストで見る。
 
 import gleam/dict
 import gleam/list
@@ -47,8 +40,7 @@ fn tracked(id: String, now: Int) -> delivery.Deliveries {
   )
 }
 
-/// 全リレーが拒否すると、拒否を届いた順にまとめた 1 行が返り、項目は消える
-/// （受け入れ条件）。
+/// 全リレーが拒否すると、拒否を届いた順にまとめた 1 行が返り、項目は消える。
 pub fn acknowledge_reports_a_response_rejected_by_every_relay_on_one_line_test() {
   let deliveries = tracked("e1", 0)
   let #(deliveries, first) =
@@ -218,8 +210,8 @@ fn pausing_relay_a(at: Int) -> delivery.Pauses {
   )
 }
 
-/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない
-/// （受け入れ条件）。飛ばした 1 件はすぐ報告する。
+/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない。
+/// 飛ばした 1 件はすぐ報告する。
 pub fn recipients_skip_a_rate_limited_relay_outside_a_session_test() {
   let #(_pauses, sent, lines) =
     delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
@@ -227,7 +219,7 @@ pub fn recipients_skip_a_rate_limited_relay_outside_a_session_test() {
   assert lines == [delivery.pause_report(relay_a, 1)]
 }
 
-/// セッションのあるクライアントへの応答は、止めたリレーにも届く（受け入れ条件）。
+/// セッションのあるクライアントへの応答は、止めたリレーにも届く。
 pub fn recipients_keep_a_rate_limited_relay_inside_a_session_test() {
   let #(_pauses, sent, lines) =
     delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], False, 1001)
@@ -235,7 +227,7 @@ pub fn recipients_keep_a_rate_limited_relay_inside_a_session_test() {
   assert lines == []
 }
 
-/// 止める期限が過ぎると、そのリレーへの発行が再開する（受け入れ条件）。
+/// 止める期限が過ぎると、そのリレーへの発行が再開する。
 pub fn recipients_resume_a_relay_after_the_pause_test() {
   let pauses = pausing_relay_a(1000)
   let #(pauses, sent, _lines) =

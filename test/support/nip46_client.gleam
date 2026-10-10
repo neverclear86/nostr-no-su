@@ -1,9 +1,7 @@
 //// テストから見た NIP-46 クライアント。
 ////
 //// 実際のクライアントと同じ手順で、JSON-RPC の本文を署名者宛に NIP-44 で暗号化し
-//// kind 24133 イベントとして署名する。応答も同じ会話鍵で復号して読む。エンジンを
-//// 直接叩くテスト（`bunker_engine_test`）と、スーパービジョンツリー越しに叩く
-//// テスト（`app_bunker_test` など）が同じ手順を共有するために置く。
+//// kind 24133 イベントとして署名する。応答も同じ会話鍵で復号して読む。
 
 import gleam/int
 import gleam/list
@@ -39,8 +37,8 @@ pub fn request_body(id: String, method: String, params_json: String) -> String {
   <> "}"
 }
 
-/// params を並びのまま載せた `connect` リクエストの本文。要素数が本題になる
-/// テストが使う。値に `"` や `\` は含めない前提である。
+/// params を並びのまま載せた `connect` リクエストの本文。値に `"` や `\` は含めない
+/// 前提である。
 pub fn connect_body_of(params: List(String), id: String) -> String {
   let params_json =
     params
@@ -83,8 +81,7 @@ pub fn request_event(
   )
 }
 
-/// タグを指定してリクエストイベントを組み立てる。p タグの並びやルーティング先と
-/// 暗号化の宛先のずれが本題になるテストが使う。`encrypt_to` は content の暗号化に
+/// タグを指定してリクエストイベントを組み立てる。`encrypt_to` は content の暗号化に
 /// 使う相手で、タグが示すルーティング先とは独立に指定できる。
 pub fn request_event_with_tags(
   client: Account,
