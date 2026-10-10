@@ -4,6 +4,7 @@ import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
@@ -279,7 +280,8 @@ pub fn crashing_plugin_is_disabled_and_stays_alive_test() {
   let assert Ok(runner) = process.named(name)
   deliver(name, 10)
   let assert Some(Disabled(reason:, dropped:)) = plugin_runner.status(name)
-  assert string.length(reason) <= 123
+  // 3 は `log.sanitize` が切り詰めたときに足す `...` の長さ。
+  assert string.length(reason) <= log.max_reason_chars + 3
   assert dropped == 7
   assert process.is_alive(runner)
 }
@@ -323,20 +325,20 @@ pub fn request_reenable_without_a_runner_is_none_test() {
 /// 再開点を持たない。
 pub fn a_handled_event_advances_the_runner_resume_point_test() {
   let name = start_runner(fn(_incoming) { Nil }, limits)
-  assert plugin_runner.resume(name) == Ok(None)
+  assert plugin_runner.resume(name) == Some(None)
   let targets = [plugin_runner.target("runner_test", name)]
   plugin_runner.dispatch(
     targets,
     Event(..test_event("e1"), created_at: 1_700_000_000),
   )
-  assert plugin_runner.resume(name) == Ok(Some(1_700_000_000))
+  assert plugin_runner.resume(name) == Some(Some(1_700_000_000))
 }
 
 /// 名前にランナーが居なければ再開点の問い合わせも応答が無い。再起動中の
 /// ランナーがその周期の保存の対象にならないことの根拠である。
 pub fn a_missing_runner_has_no_resume_point_test() {
   let name = process.new_name("test_plugin_runner")
-  assert plugin_runner.resume(name) == Error(Nil)
+  assert plugin_runner.resume(name) == None
 }
 
 /// 起動したランナーは張り直しを呼び、メモリの再開点を持たない取り直しの要求を
@@ -353,7 +355,7 @@ pub fn a_started_runner_requests_a_catchup_test() {
   )
   let after = time.now_seconds()
   assert process.receive(resubscribed, 1000) == Ok(Nil)
-  let assert Ok(Some(plugin_runner.Catchup(since: None, until: until))) =
+  let assert Some(Some(plugin_runner.Catchup(since: None, until: until))) =
     plugin_runner.catchup(name)
   assert until >= before && until <= after
 }
@@ -380,12 +382,12 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
     targets,
     Event(..test_event("e1"), created_at: 1_700_000_000),
   )
-  assert plugin_runner.resume(name) == Ok(Some(1_700_000_000))
+  assert plugin_runner.resume(name) == Some(Some(1_700_000_000))
 
   // `Running` のままの再有効化は張り直しも要求の更新も起こさない。
   assert plugin_runner.request_reenable(name) == Some(Nil)
   assert process.receive(resubscribed, 200) == Error(Nil)
-  let assert Ok(Some(plugin_runner.Catchup(since: None, ..))) =
+  let assert Some(Some(plugin_runner.Catchup(since: None, ..))) =
     plugin_runner.catchup(name)
 
   list.each(list.repeat(Nil, 3), fn(_unit) {
@@ -397,7 +399,7 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
   assert plugin_runner.request_reenable(name) == Some(Nil)
   let after = time.now_seconds()
   assert process.receive(resubscribed, 1000) == Ok(Nil)
-  let assert Ok(Some(plugin_runner.Catchup(
+  let assert Some(Some(plugin_runner.Catchup(
     since: Some(1_700_000_000),
     until: until,
   ))) = plugin_runner.catchup(name)
@@ -408,7 +410,7 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
 /// 失敗に回ることの根拠である。
 pub fn a_missing_runner_has_no_catchup_test() {
   let name = process.new_name("test_plugin_runner")
-  assert plugin_runner.catchup(name) == Error(Nil)
+  assert plugin_runner.catchup(name) == None
 }
 
 /// 無効化の間に届いた取り直しのイベントは捨てるだけで、重複排除の `seen` にも
@@ -464,7 +466,7 @@ pub fn catching_up_from_overload_does_not_request_a_catchup_test() {
     limits,
   )
   let assert Ok(Nil) = process.receive(resubscribed, 1000)
-  let assert Ok(before) = plugin_runner.catchup(name)
+  let assert Some(before) = plugin_runner.catchup(name)
   let targets = [plugin_runner.target("runner_test", name)]
   plugin_runner.dispatch(targets, test_event("gate"))
   let assert Ok(release) = process.receive(gates, 1000)
@@ -473,7 +475,7 @@ pub fn catching_up_from_overload_does_not_request_a_catchup_test() {
   plugin_runner.dispatch(targets, test_event("last"))
   process.send(release, Nil)
   let _consumed = count_until(handled, "last", 0)
-  assert plugin_runner.catchup(name) == Ok(before)
+  assert plugin_runner.catchup(name) == Some(before)
   assert process.receive(resubscribed, 200) == Error(Nil)
 }
 

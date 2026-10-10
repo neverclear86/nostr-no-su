@@ -368,10 +368,10 @@ fn plugin_resume_points(
   fn() {
     specs
     |> list.filter_map(fn(spec) {
-      case plugin_runner.resume(spec.name) {
-        Ok(Some(since)) -> Ok(#(spec.plugin.name, since))
-        _ -> Error(Nil)
-      }
+      plugin_runner.resume(spec.name)
+      |> option.flatten
+      |> option.map(fn(since) { #(spec.plugin.name, since) })
+      |> option.to_result(Nil)
     })
     |> dict.from_list
     |> Ok
@@ -391,8 +391,9 @@ pub fn plugin_catchups(
   fn() {
     use answered <- result.try(
       list.try_map(specs, fn(spec) {
-        use catchup <- result.map(plugin_runner.catchup(spec.name))
-        #(spec.plugin.name, catchup)
+        plugin_runner.catchup(spec.name)
+        |> option.to_result(Nil)
+        |> result.map(fn(catchup) { #(spec.plugin.name, catchup) })
       }),
     )
     list.filter_map(answered, fn(pair) {
