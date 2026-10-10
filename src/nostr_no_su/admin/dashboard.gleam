@@ -30,8 +30,7 @@ import nostr_no_su/plugin_runner
 import nostr_no_su/relay_connection.{type Status, Connected, Disconnected}
 import nostr_no_su/relay_list.{type Roles}
 
-/// `relays` の 1 行の表示内容。用途ごとに、使っていなければ `Unused`、状態を得られたら
-/// `Reported`、締め切りまでに接続が答えなければ `Unanswered` を持つ。
+/// `relays` の 1 行の表示内容。`monitor` と `bunker` が用途ごとの状態（`RoleState`）である。
 pub type RelayRow {
   RelayRow(id: Int, url: String, monitor: RoleState, bunker: RoleState)
 }
@@ -44,6 +43,21 @@ pub type RoleState {
   Reported(Status)
   /// 締め切りまでに接続が答えなかった。
   Unanswered
+}
+
+/// リレーの用途 1 つの見せ方。用途の語（`name`）と説明、チェックの語（`use_label`）、
+/// チェックを送る欄の名前（`field`）は、用途ごとにここだけで決める。`state` は行から
+/// その用途の状態を取り出す。
+type RoleFace(msg) {
+  RoleFace(
+    role: relay_list.Role,
+    icon: Element(msg),
+    name: i18n.Message,
+    description: i18n.Message,
+    use_label: i18n.Message,
+    field: String,
+    state: fn(RelayRow) -> RoleState,
+  )
 }
 
 /// アカウント 1 件の表示内容。`uri` と `uri_camera_text` は secret を含むため、認証済み
@@ -317,6 +331,9 @@ pub const plugin_name_field = "name"
 /// ラベルの符号位置の最大数。UTF-8 では 400 バイト以下になる。
 pub const max_label_code_points = 100
 
+/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。
+pub const new_relay_roles = relay_list.BunkerOnly
+
 /// 承認待ちがあるダッシュボードと承認ページを自動で読み込み直す間隔（秒）。
 const refresh_seconds = 30
 
@@ -337,6 +354,22 @@ const relays_anchor = "relays"
 
 /// プラグインの節のアンカー。
 const plugins_anchor = "plugins"
+
+/// 失効までの残りがこの秒数を下回る承認待ちを、warning の色に変える境界（秒）。
+const expiry_warning_seconds = 60
+
+/// nsec の欄の補足の `id`。ページに 1 つしか現れない欄の補足の `id`（以下の `label_hint_id`、
+/// `relay_url_hint_id`、`nostrconnect_uri_hint_id` も）は固定の値にする。
+const nsec_hint_id = "nsec-hint"
+
+/// アカウントの追加のダイアログのラベルの欄の補足の `id`。
+const label_hint_id = "label-hint"
+
+/// リレーの追加のフォームの URL の欄の補足の `id`。
+const relay_url_hint_id = "relay-url-hint"
+
+/// 接続のダイアログの URI の欄の補足の `id`。
+const nostrconnect_uri_hint_id = "nostrconnect-uri-hint"
 
 /// ダッシュボードを自動で読み込み直すかどうか。承認待ちを 1 件以上得たときだけ更新し、
 /// 空のときと一覧を得られないときは、コピー中の選択を壊さないために更新しない。
@@ -360,10 +393,9 @@ pub fn render(
 }
 
 /// `render` と同じダッシュボードに `dialog` を開いた状態で描く。自動の読み込み直しはしない。
-/// 追加、生成した鍵、秘密鍵、クライアントの接続とその確認のダイアログは一覧によらず描く。権限の編集の
-/// ダイアログは `Error` にせず、そのセッションの行が一覧に無ければ開いたダイアログの無いダッシュボードを描く。
-/// ほかの行の操作のダイアログは、その行の一覧（リレー、アカウント、読み込めなかった行）を得られなければその
-/// 理由を、操作する行が一覧に無ければ `RelayNotFound` か `AccountNotFound` を `Error` で返す。
+/// 行の操作のダイアログ（リレー、アカウント、読み込めなかった行）は、その行の一覧を得られなければ
+/// その理由を、得られて行が無ければ `RelayNotFound` か `AccountNotFound` を `Error` で返す。ほかの
+/// ダイアログは `Error` にせず、権限の編集はセッションの行が無ければ開いたダイアログの無いダッシュボードを描く。
 pub fn render_open(
   language: Language,
   theme: view.Theme,
@@ -839,9 +871,45 @@ fn row_has_role_state(row: RelayRow, state: RoleState) -> Bool {
   row.monitor == state || row.bunker == state
 }
 
+/// 監視の用途の見せ方。
+fn monitor_face() -> RoleFace(msg) {
+  RoleFace(
+    role: relay_list.Monitor,
+    icon: view.eye_icon(),
+    name: i18n.MonitorRole,
+    description: i18n.MonitorRoleDescription,
+    use_label: i18n.UseForMonitoring,
+    field: monitor_field,
+    state: fn(row) { row.monitor },
+  )
+}
+
+/// バンカーの用途の見せ方。
+fn bunker_face() -> RoleFace(msg) {
+  RoleFace(
+    role: relay_list.Bunker,
+    icon: view.key_icon(),
+    name: i18n.BunkerRole,
+    description: i18n.BunkerRoleDescription,
+    use_label: i18n.UseForBunker,
+    field: bunker_field,
+    state: fn(row) { row.bunker },
+  )
+}
+
+/// 用途の見せ方を、監視、バンカーの順に並べる。画面に出る用途の順はこの並びで決まる。
+fn role_faces() -> List(RoleFace(msg)) {
+  [monitor_face(), bunker_face()]
+}
+
+/// 行が `face` の用途を使っているか。
+fn uses(row: RelayRow, face: RoleFace(msg)) -> Bool {
+  face.state(row) != Unused
+}
+
 /// 一覧にバンカーに使う行があるか。
 fn has_bunker_relay(rows: List(RelayRow)) -> Bool {
-  list.any(rows, fn(row) { row.bunker != Unused })
+  list.any(rows, uses(_, bunker_face()))
 }
 
 /// アカウントとリレーの一覧から「はじめに」の帯の段の状態を決める。どちらの一覧も得られ、
@@ -999,12 +1067,9 @@ fn setup_step(
   ])
 }
 
-/// アカウントの節。見出しに説明を開く ⓘ、件数、「DB から読み直す」と、「アカウントを追加」の
-/// ダイアログを開くボタンを置き、行の一覧の後に読み込めなかった行の枠と、アカウントの追加の
-/// ダイアログを置く。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
+/// アカウントの節。一覧を得られないときは、一覧の代わりにその理由（`shared` が `Some` なら
 /// 「上の理由で取得できません。」）を出し、追加のボタンも出さない。追加のダイアログは一覧の
-/// 有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。`snapshot` のセッションの
-/// 一覧は行のセッションの件数に、リレーの一覧は接続 QR コードのダイアログに使う。
+/// 有無によらず描き、`dialog` が `AddAccountOpen` なら開いた状態で描く。
 fn accounts_section(
   language: Language,
   snapshot: Snapshot,
@@ -1153,9 +1218,6 @@ pub fn generate_form(
   ]
 }
 
-/// nsec の欄の補足の `id`。nsec の欄はアカウントの追加のダイアログに 1 つだけなので固定の値にする。
-const nsec_hint_id = "nsec-hint"
-
 /// 直近の読み込みで飛ばされた行の枠（`failure_panel`）。一覧を得られないとき（読み込み中、応答なし、
 /// 締め切り超過）は描かない。`dialog` は行の削除のダイアログに渡す。
 fn unreadable_accounts(
@@ -1232,8 +1294,7 @@ fn listed_section_heading(
 
 /// 一覧を得たときの節の本文。得られれば `render` の内容を出す。得られず、3 つの一覧に共通の理由（`shared`）が
 /// ページの先頭に出ているときは「上の理由で取得できません。」の 1 文だけを出し、そうでなければ `lead` を前置きに
-/// したエラーの色の理由の囲みを面（`view.surface`）に載せて出す。承認待ち、アカウント、セッション、リレーの節が
-/// 使い、リレーの節は `shared` に `None` を渡す。
+/// したエラーの色の理由の囲みを面（`view.surface`）に載せて出す。
 fn listed_body(
   language: Language,
   shared: Option(String),
@@ -1378,9 +1439,8 @@ fn session_count(
   }
 }
 
-/// 「接続 URI と操作」の畳み。secret 入りの URI と要承認の URI を、説明を見出しの横の ⓘ で開くコピー欄で、
-/// 16 進の公開鍵を説明なしでコピー欄に並べ、その下に、`detail_actions` の操作のダイアログを開くボタンと、
-/// 右端に離した削除のダイアログを開くボタンを置く。ダイアログは畳みの外（`account_item`）に置く。
+/// 「接続 URI と操作」の畳み。URI と公開鍵のコピー欄と、操作のダイアログを開くボタンを持ち、
+/// ダイアログは畳みの外（`account_item`）に置く。
 fn account_details(language: Language, account: AccountRow) -> Element(msg) {
   let text = i18n.text(language, _)
   let trigger = account_action_trigger(language, account.signer, _)
@@ -1422,20 +1482,17 @@ fn account_action_trigger(
   signer: String,
   action: routes.AccountAction,
 ) -> Element(msg) {
+  let face = account_action_face(action)
   view.dialog_trigger(
     account_dialog_id(signer, action),
-    view.IconTextFace(
-      account_action_icon(action),
-      i18n.text(language, account_action_row_title(action)),
-    ),
-    account_action_button_kind(action),
+    view.IconTextFace(face.icon, i18n.text(language, face.button)),
+    face.kind,
   )
 }
 
-/// アカウント 1 件への操作のダイアログ。題は操作の見出しで、中にラベルと省略した npub、`account_action_form`
-/// の説明とフォームを並べる。ラベルの欄の補足の `id` は、ダイアログの `id` に `-label-hint` を付けて行ごとに
-/// 変える。`dialog` がこの行と操作の `AccountActionOpen` なら開いた状態で描き、要約の後に理由を出して、
-/// ラベルの欄に送られた値を入れる。
+/// アカウント 1 件への操作のダイアログ。ラベルの欄の補足の `id` は、ダイアログの `id` に
+/// `-label-hint` を付けて行ごとに変える。`dialog` がこの行と操作の `AccountActionOpen` なら
+/// 開いた状態で描き、理由と、ラベルの欄に送られた値を入れる。
 fn account_dialog(
   language: Language,
   account: AccountRow,
@@ -1449,14 +1506,15 @@ fn account_dialog(
     -> #(view.OpenedByResponse, label, Some(error))
     _ -> #(view.OpensOnTrigger, None, None)
   }
+  let face = account_action_face(action)
   view.dialog(
     language,
     id,
-    i18n.text(language, account_action_title(action)),
+    i18n.text(language, face.title),
     fn(placement) {
       [
         view.identity(language, view.PlainIdentity, account.label, account.npub),
-        view.error_message(language, action_lead(action), error),
+        view.error_message(language, face.lead, error),
         ..account_action_form(
           language,
           account,
@@ -1484,6 +1542,7 @@ fn unreadable_dialog(
   dialog: Option(OpenDialog),
 ) -> List(Element(msg)) {
   let text = i18n.text(language, _)
+  let face = account_action_face(routes.DeleteAccount)
   let id = view.dialog_id(["unreadable", row.pubkey, "delete"])
   let #(opening, error) = case dialog {
     Some(UnreadableDeleteOpen(pubkey:, error:)) if pubkey == row.pubkey -> #(
@@ -1495,13 +1554,13 @@ fn unreadable_dialog(
   view.dialog_button(
     language,
     id,
-    view.IconTextFace(view.trash_icon(), text(i18n.Delete)),
-    view.DangerGhostButton,
-    text(account_action_title(routes.DeleteAccount)),
+    view.IconTextFace(face.icon, text(face.button)),
+    face.kind,
+    text(face.title),
     fn(placement) {
       [
         view.identity(language, view.PlainIdentity, row.label, npub),
-        view.error_message(language, Some(i18n.CouldNotDeleteAccount), error),
+        view.error_message(language, face.lead, error),
         ..unreadable_delete_form(language, row, placement)
       ]
     },
@@ -1509,25 +1568,13 @@ fn unreadable_dialog(
   )
 }
 
-/// 操作のダイアログで、バンカーから英語のまま届いた理由の前に置く前置き。秘密鍵の表示の
-/// フォームに出る理由は管理パスワードの誤り（訳す理由）だけなので、前置きを持たない。
-fn action_lead(action: routes.AccountAction) -> Option(i18n.Lead) {
-  case action {
-    routes.EditLabel -> Some(i18n.CouldNotSaveLabel)
-    routes.RotateSecret -> Some(i18n.CouldNotRotateSecret)
-    routes.DeleteAccount -> Some(i18n.CouldNotDeleteAccount)
-    routes.RevealPrivateKey -> None
-  }
-}
-
 /// 接続 QR コードのダイアログの `id`（`dialog-account-<署名者>-qr`）。
 fn connection_qr_dialog_id(signer: String) -> String {
   view.dialog_id(["account", signer, "qr"])
 }
 
-/// 接続 QR コードのダイアログ。アカウントの識別、バンカーに使うリレーが無いときの警告、secret 入りの URI と
-/// 要承認の URI のタブ（`uri_tab`。タブの `name` はダイアログの `id` に `-tab` を付ける）、カメラ用のコードの
-/// 貼り方、URI に書かれたバンカーのリレーの URL の順に並べる。符号化できない URI はその位置に理由を出し、
+/// 接続 QR コードのダイアログ。タブの `name` は、ページに行ごとのダイアログが並ぶので、
+/// ダイアログの `id` に `-tab` を付けて行ごとに変える。符号化できない URI はその位置に理由を出し、
 /// コピー欄は残す。
 fn connection_qr_dialog(
   language: Language,
@@ -1610,7 +1657,7 @@ fn bunker_relay_list(
 ) -> Element(msg) {
   case relays {
     Ok(rows) ->
-      case list.filter(rows, fn(row) { row.bunker != Unused }) {
+      case list.filter(rows, uses(_, bunker_face())) {
         [] -> element.none()
         bunker_rows ->
           view.code_list(list.map(bunker_rows, fn(row) { row.url }))
@@ -1737,35 +1784,6 @@ fn guided_warning(
   ])
 }
 
-/// アカウント 1 件への操作のアイコン。
-fn account_action_icon(action: routes.AccountAction) -> Element(msg) {
-  case action {
-    routes.EditLabel -> view.pencil_icon()
-    routes.RevealPrivateKey -> view.eye_icon()
-    routes.RotateSecret -> view.rotate_icon()
-    routes.DeleteAccount -> view.trash_icon()
-  }
-}
-
-/// 行の操作のボタンの語。削除だけ短い語（`i18n.Delete`）にする。ダイアログの題は
-/// `account_action_title` のまま変えない。
-fn account_action_row_title(action: routes.AccountAction) -> i18n.Message {
-  case action {
-    routes.DeleteAccount -> i18n.Delete
-    routes.EditLabel | routes.RevealPrivateKey | routes.RotateSecret ->
-      account_action_title(action)
-  }
-}
-
-/// アカウント 1 件への操作のボタンの種類。畳みの操作は地味なボタンにし、削除だけ error の文字色にする。
-fn account_action_button_kind(action: routes.AccountAction) -> view.ButtonKind {
-  case action {
-    routes.EditLabel | routes.RevealPrivateKey | routes.RotateSecret ->
-      view.GhostButton
-    routes.DeleteAccount -> view.DangerGhostButton
-  }
-}
-
 /// アカウントの操作のダイアログに出す、操作の説明と実行のフォーム。`label` はラベルの編集の
 /// 欄に戻す値（`None` なら `row` の保存済みのラベルを入れる）で、`hint_id` は欄の補足の `id`。
 fn account_action_form(
@@ -1863,10 +1881,6 @@ fn unreadable_delete_form(
   ]
 }
 
-/// アカウントの追加のダイアログのラベルの欄の補足の `id`。このダイアログのラベルの欄は
-/// 1 つだけなので固定の値にする。
-const label_hint_id = "label-hint"
-
 /// ラベルの見出し、入力欄、上限の補足をまとめた囲み。補足の `id` は `hint_id`。アカウントの追加、生成した鍵、
 /// ラベルの編集のダイアログのどのフォームでも必須にする。
 fn label_fieldset(
@@ -1894,12 +1908,9 @@ fn label_fieldset(
   )
 }
 
-/// 承認待ちの接続の帯。`snapshot` の承認待ちが 1 件以上あるとき、または一覧を得られないとき
-/// だけ、全幅の帯（`view.band`）に、説明を ⓘ で開く見出しと承認待ちのカードを置く。見出しの
-/// 右には、`refresh` が自動の読み込み直しのときだけ更新の間隔を出す。
-/// 0 件のときは帯ごと出さない。カードの署名者は `snapshot` のアカウントの一覧と突き合わせて
-/// 決め、失効の時刻は `snapshot` の描画の時点の Unix 秒から求める。
-/// `shared` が `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
+/// 承認待ちの接続の帯。承認待ちが 1 件以上あるとき、または一覧を得られないときだけ描き、0 件の
+/// ときは帯ごと出さない。更新の間隔は `refresh` が自動の読み込み直しのときだけ出す。`shared` が
+/// `Some` なら、理由の代わりに「上の理由で取得できません。」を出す。
 fn pending_section(
   language: Language,
   snapshot: Snapshot,
@@ -1984,15 +1995,11 @@ fn pending_card(
   pending: PendingRow,
 ) -> Element(msg) {
   let text = i18n.text(language, _)
-  let #(card_class, ring_rows) = case pending.secret_mismatch {
-    True -> #(
-      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-warning/55",
-      "sm:row-span-3",
-    )
-    False -> #(
-      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-primary/22",
-      "sm:row-span-2",
-    )
+  let card_class = case pending.secret_mismatch {
+    True ->
+      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-warning/55"
+    False ->
+      "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-box border bg-base-100 p-4 shadow-sm border-primary/22"
   }
   let notice = case pending.secret_mismatch {
     True ->
@@ -2002,7 +2009,11 @@ fn pending_card(
     False -> element.none()
   }
   html.article([attribute.class(card_class)], [
-    countdown_ring(language, pending.expires_in_seconds, ring_rows),
+    countdown_ring(
+      language,
+      pending.expires_in_seconds,
+      pending.secret_mismatch,
+    ),
     html.div(
       [
         attribute.class("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5"),
@@ -2046,17 +2057,15 @@ fn pending_card(
   ])
 }
 
-/// 失効までの残りがこの秒数を下回る承認待ちを、warning の色に変える境界（秒）。
-const expiry_warning_seconds = 60
-
 /// 残り時間の円。承認待ちの寿命（`engine.pending_ttl_seconds`）を満たんとし、その秒数を
 /// `pathLength` とする円に `stroke-dasharray` で残りの秒だけの弧を描き、中央に「分:秒」を
 /// 出す。残り `expiry_warning_seconds` 秒未満は弧と数字を warning の色にする。円は飾りにし、
-/// 残り時間は囲みの `aria-label` で読み上げる。`rows` は広い画面で円が跨ぐ行のクラスである。
+/// 残り時間は囲みの `aria-label` で読み上げる。`secret_mismatch` のカードは警告の囲みの行が
+/// 増えるので、広い画面で円が跨ぐ行を 3 に、そうでなければ 2 にする。
 fn countdown_ring(
   language: Language,
   seconds: Int,
-  rows: String,
+  secret_mismatch: Bool,
 ) -> Element(msg) {
   let remaining = int.clamp(seconds, 0, engine.pending_ttl_seconds)
   let clock = view.countdown(remaining)
@@ -2082,8 +2091,10 @@ fn countdown_ring(
     [
       attribute.role("img"),
       attribute.aria_label(i18n.text(language, i18n.ExpiresIn) <> " " <> clock),
-      attribute.class("relative size-14 sm:size-17"),
-      attribute.class(rows),
+      attribute.class(case secret_mismatch {
+        True -> "relative size-14 sm:size-17 sm:row-span-3"
+        False -> "relative size-14 sm:size-17 sm:row-span-2"
+      }),
     ],
     [
       svg.svg(
@@ -2194,11 +2205,9 @@ fn no_permissions_sentence(perms: String) -> List(i18n.Message) {
   }
 }
 
-/// 見出しと理由だけを伝えるページ。アカウントを扱えないとき、変更が反映されたか分からないとき、
-/// 404 / 405 / 400 の通知に使う。カードの先頭に `tone` の結果の印（`view.notice_mark`）と理由を横に並べる。
-/// `tone` は呼び出し側が結果に応じて決める。`below` は印と理由の直後にカードの中へ並べる要素で、
-/// 無ければ空リストを渡す。ダッシュボードで状態を確かめられるようリンクを置く。切り替えを出すか、
-/// 切り替えた後にどこを開くかは呼び出し側が `switch` で決める。
+/// 見出しと理由だけを伝えるページ。`tone` は結果の印の種類で、`below` は印と理由の直後に
+/// カードの中へ並べる要素（無ければ空リスト）。切り替えを出すか、切り替えた後にどこを開くかは
+/// 呼び出し側が `switch` で決める。
 pub fn notice_page(
   language: Language,
   theme: view.Theme,
@@ -2231,47 +2240,78 @@ pub fn notice_page(
   )
 }
 
-/// 操作の見出し（ダイアログの題）。削除を除き、ダッシュボードのボタンの語にも使う
-/// （`account_action_row_title`）。
-fn account_action_title(action: routes.AccountAction) -> i18n.Message {
+/// 操作 1 つの見せ方。`title` はダイアログの題、`button` はそれを開くボタンの語、`lead` は
+/// バンカーから英語のまま届いた失敗の理由の前に置く前置きで、置かない操作は `None`。
+type ActionFace(msg) {
+  ActionFace(
+    title: i18n.Message,
+    button: i18n.Message,
+    icon: Element(msg),
+    kind: view.ButtonKind,
+    lead: Option(i18n.Lead),
+  )
+}
+
+/// アカウント 1 件への操作の見せ方。畳みの操作は地味なボタンにし、削除だけ error の文字色にして
+/// ボタンの語を短い `i18n.Delete` にする（ダイアログの題は `i18n.DeleteAccount`）。秘密鍵の
+/// 表示のフォームに出る理由は管理パスワードの誤り（訳す理由）だけなので、前置きを持たない。
+fn account_action_face(action: routes.AccountAction) -> ActionFace(msg) {
   case action {
-    routes.EditLabel -> i18n.EditLabel
-    routes.RotateSecret -> i18n.RotateSecret
-    routes.DeleteAccount -> i18n.DeleteAccount
-    routes.RevealPrivateKey -> i18n.ShowPrivateKey
+    routes.EditLabel ->
+      ActionFace(
+        title: i18n.EditLabel,
+        button: i18n.EditLabel,
+        icon: view.pencil_icon(),
+        kind: view.GhostButton,
+        lead: Some(i18n.CouldNotSaveLabel),
+      )
+    routes.RevealPrivateKey ->
+      ActionFace(
+        title: i18n.ShowPrivateKey,
+        button: i18n.ShowPrivateKey,
+        icon: view.eye_icon(),
+        kind: view.GhostButton,
+        lead: None,
+      )
+    routes.RotateSecret ->
+      ActionFace(
+        title: i18n.RotateSecret,
+        button: i18n.RotateSecret,
+        icon: view.rotate_icon(),
+        kind: view.GhostButton,
+        lead: Some(i18n.CouldNotRotateSecret),
+      )
+    routes.DeleteAccount ->
+      ActionFace(
+        title: i18n.DeleteAccount,
+        button: i18n.Delete,
+        icon: view.trash_icon(),
+        kind: view.DangerGhostButton,
+        lead: Some(i18n.CouldNotDeleteAccount),
+      )
   }
 }
 
-/// 操作の見出し（ダイアログの題）と、ダッシュボードのボタンの語。
-fn relay_action_title(action: routes.RelayAction) -> i18n.Message {
+/// リレー 1 件への操作の見せ方。編集は開くだけなので地味なボタンにし、削除は接続中のクライアントに
+/// 影響するので error の文字色にする。ボタンの語は題と同じである。
+fn relay_action_face(action: routes.RelayAction) -> ActionFace(msg) {
   case action {
-    routes.EditRelayRoles -> i18n.EditRelayRoles
-    routes.DeleteRelay -> i18n.DeleteRelay
-  }
-}
-
-/// 操作のダイアログで送信に失敗したときの理由の前置き。
-fn relay_action_lead(action: routes.RelayAction) -> i18n.Lead {
-  case action {
-    routes.EditRelayRoles -> i18n.CouldNotSaveRelay
-    routes.DeleteRelay -> i18n.CouldNotDeleteRelay
-  }
-}
-
-/// 操作のダイアログを開くボタンの種類。編集は開くだけなので地味なボタン、削除は接続中のクライアントに
-/// 影響するので error の文字色にする。
-fn relay_action_button_kind(action: routes.RelayAction) -> view.ButtonKind {
-  case action {
-    routes.EditRelayRoles -> view.GhostButton
-    routes.DeleteRelay -> view.DangerGhostButton
-  }
-}
-
-/// リレー 1 件への操作のアイコン。
-fn relay_action_icon(action: routes.RelayAction) -> Element(msg) {
-  case action {
-    routes.EditRelayRoles -> view.pencil_icon()
-    routes.DeleteRelay -> view.trash_icon()
+    routes.EditRelayRoles ->
+      ActionFace(
+        title: i18n.EditRelayRoles,
+        button: i18n.EditRelayRoles,
+        icon: view.pencil_icon(),
+        kind: view.GhostButton,
+        lead: Some(i18n.CouldNotSaveRelay),
+      )
+    routes.DeleteRelay ->
+      ActionFace(
+        title: i18n.DeleteRelay,
+        button: i18n.DeleteRelay,
+        icon: view.trash_icon(),
+        kind: view.DangerGhostButton,
+        lead: Some(i18n.CouldNotDeleteRelay),
+      )
   }
 }
 
@@ -2319,10 +2359,9 @@ fn secret_badge(language: Language, mismatch: Bool) -> Element(msg) {
   }
 }
 
-/// リレーの一覧。見出しの ⓘ で、監視とバンカーの語と説明の凡例（`role_hint`）を開く。
-/// 1 件は `relays` の 1 行である。一覧を得たときは見出しの行に追加のダイアログを開くボタンを出す。バンカー
-/// に使う行が無ければエラーの色の囲みを、一覧を得られないときは理由を出す。節の末尾には追加のダイアログを
-/// 一覧の有無によらず描き、`dialog` が `NewRelayOpen` なら開いた状態で描く。
+/// リレーの一覧。一覧を得たときだけ追加のボタンを出し、バンカーに使う行が無ければエラーの色の
+/// 囲みを、一覧を得られないときは理由を出す。追加のダイアログは一覧の有無によらず描き、
+/// `dialog` が `NewRelayOpen` なら開いた状態で描く。
 fn relays_section(
   language: Language,
   snapshot: Snapshot,
@@ -2378,21 +2417,19 @@ fn relays_section(
 /// リレーの節の ⓘ で開く凡例。監視、バンカーの順に、太字の用途の語と説明を 1 段落ずつ並べる。
 fn role_hint(language: Language) -> List(Element(msg)) {
   let text = i18n.text(language, _)
-  let paragraph = fn(attributes, role, description) {
-    html.p(attributes, [
-      html.b([attribute.class("font-semibold")], [html.text(text(role))]),
-      html.text(" "),
-      html.text(text(description)),
-    ])
-  }
-  [
-    paragraph([], i18n.MonitorRole, i18n.MonitorRoleDescription),
-    paragraph(
-      [attribute.class("mt-1")],
-      i18n.BunkerRole,
-      i18n.BunkerRoleDescription,
-    ),
-  ]
+  list.index_map(role_faces(), fn(face, index) {
+    html.p(
+      case index {
+        0 -> []
+        _ -> [attribute.class("mt-1")]
+      },
+      [
+        html.b([attribute.class("font-semibold")], [html.text(text(face.name))]),
+        html.text(" "),
+        html.text(text(face.description)),
+      ],
+    )
+  })
 }
 
 /// 一覧を得て、バンカーに使う行が 1 件も無いときのエラーの色の囲み。クライアントがどの
@@ -2431,10 +2468,12 @@ fn relay_item(
         relay_action_dialog(language, row, action, dialog)
       }),
     ),
-    html.dl([attribute.class("grid basis-full grid-cols-2 gap-1.5")], [
-      relay_role(language, view.eye_icon(), i18n.MonitorRole, row.monitor),
-      relay_role(language, view.key_icon(), i18n.BunkerRole, row.bunker),
-    ]),
+    html.dl(
+      [attribute.class("grid basis-full grid-cols-2 gap-1.5")],
+      list.map(role_faces(), fn(face) {
+        relay_role(language, face, face.state(row))
+      }),
+    ),
   ])
 }
 
@@ -2463,16 +2502,17 @@ fn relay_action_dialog(
     -> #(view.OpenedByResponse, roles, Some(error))
     _ -> #(view.OpensOnTrigger, row_roles(row), None)
   }
-  let title = i18n.text(language, relay_action_title(action))
+  let face = relay_action_face(action)
+  let title = i18n.text(language, face.title)
   view.dialog_button(
     language,
     relay_dialog_id(row.id, action),
-    view.IconOnlyFace(relay_action_icon(action), title),
-    relay_action_button_kind(action),
+    view.IconOnlyFace(face.icon, i18n.text(language, face.button)),
+    face.kind,
     title,
     fn(placement) {
       [
-        view.error_message(language, Some(relay_action_lead(action)), error),
+        view.error_message(language, face.lead, error),
         view.detail_list([
           #(
             i18n.text(language, i18n.RelayUrl),
@@ -2486,9 +2526,6 @@ fn relay_action_dialog(
   )
 }
 
-/// リレーの追加のフォームの既定の用途。バンカーだけにチェックを入れる。
-pub const new_relay_roles = relay_list.BunkerOnly
-
 /// リレーの追加のダイアログの `id`。節の見出しのボタンと「はじめに」の段 1 のボタンが開く。
 fn add_relay_dialog_id() -> String {
   view.dialog_id(["relay", "new"])
@@ -2499,16 +2536,12 @@ fn add_account_dialog_id() -> String {
   view.dialog_id(["account", "new"])
 }
 
-/// URL の補足の `id`。URL の欄はダッシュボードの追加のダイアログにだけあり、
-/// 1 つのページに 2 つ現れないので固定の値にする。
-const relay_url_hint_id = "relay-url-hint"
-
 /// 行の今の用途。`Unused` でない用途を使っているとみなし（`app.merge_relay_rows` は使って
 /// いない用途だけを `Unused` にする）、どちらも `Unused` なら `None`。
 fn row_roles(row: RelayRow) -> Option(Roles) {
   relay_list.roles_from(
-    monitor: row.monitor != Unused,
-    bunker: row.bunker != Unused,
+    monitor: uses(row, monitor_face()),
+    bunker: uses(row, bunker_face()),
   )
   |> option.from_result
 }
@@ -2535,10 +2568,9 @@ pub fn new_relay_form(
   ]
 }
 
-/// リレー `row` への操作のフォームの中身。操作の説明の段落と、操作のパスへ POST するフォームを
-/// 並べる。説明は結果の注意なので畳まない。用途の編集は `roles`（チェックを入れる用途。`None`
-/// ならどちらも外す）のチェックと `row` の接続状態のバッジを出し、削除は危険のボタンだけで
-/// `roles` を使わない。URL の要約と入力の誤りは含めない。
+/// リレー `row` への操作のフォームの中身。説明は結果の注意なので畳まない。`roles` は用途の編集で
+/// チェックを入れる用途（`None` ならどちらも外す）で、削除は使わない。用途の編集は `row` の
+/// 接続状態のバッジをチェックの横に添える。URL の要約と入力の誤りは含めない。
 pub fn relay_action_form(
   language: Language,
   row: RelayRow,
@@ -2608,28 +2640,20 @@ fn roles_fieldset(
     html.legend([attribute.class("fieldset-legend")], [
       html.text(text(i18n.Role)),
     ]),
-    view.checkbox_row(
-      monitor_field,
-      view.eye_icon(),
-      text(i18n.UseForMonitoring),
-      html.text(text(i18n.MonitorRoleDescription)),
-      checked(relay_list.Monitor),
-      option.values([
-        option.map(states, fn(row) { row.monitor })
-        |> option.map(role_state_badge(language, _)),
-      ]),
-    ),
-    view.checkbox_row(
-      bunker_field,
-      view.key_icon(),
-      text(i18n.UseForBunker),
-      html.text(text(i18n.BunkerRoleDescription)),
-      checked(relay_list.Bunker),
-      option.values([
-        option.map(states, fn(row) { row.bunker })
-        |> option.map(role_state_badge(language, _)),
-      ]),
-    ),
+    ..list.map(role_faces(), fn(face) {
+      view.checkbox_row(
+        face.field,
+        face.icon,
+        text(face.use_label),
+        html.text(text(face.description)),
+        checked(face.role),
+        option.values([
+          option.map(states, fn(row) {
+            role_state_badge(language, face.state(row))
+          }),
+        ]),
+      )
+    })
   ])
 }
 
@@ -2637,8 +2661,7 @@ fn roles_fieldset(
 /// バッジを下へ回す。
 fn relay_role(
   language: Language,
-  icon: Element(msg),
-  role: i18n.Message,
+  face: RoleFace(msg),
   state: RoleState,
 ) -> Element(msg) {
   html.div(
@@ -2651,8 +2674,8 @@ fn relay_role(
       html.dt(
         [attribute.class("flex items-center gap-1.5 text-sm text-muted")],
         [
-          icon,
-          html.text(i18n.text(language, role)),
+          face.icon,
+          html.text(i18n.text(language, face.name)),
         ],
       ),
       html.dd([], [role_state_badge(language, state)]),
@@ -2674,10 +2697,9 @@ fn role_state_badge(language: Language, state: RoleState) -> Element(msg) {
   }
 }
 
-/// 承認済みのセッションの節。見出しに説明を開く ⓘ と件数と、一覧を得たときだけ接続のダイアログを開く
-/// 「クライアントを接続」を置き、行を並べる。一覧を得られないときは、一覧とボタンの代わりにその理由を出す。
-/// 末尾に接続のダイアログと、開くときだけ確認のダイアログを置く。`dialog` は開いた状態で返すダイアログで、
-/// 行の権限の編集のダイアログにも渡す。
+/// 承認済みのセッションの節。一覧を得たときだけ「クライアントを接続」のボタンを出し、得られない
+/// ときは一覧とボタンの代わりにその理由を出す。接続の確認のダイアログは `dialog` が
+/// `ConnectReviewOpen` のときだけ描く。`dialog` は行の権限の編集のダイアログにも渡す。
 fn sessions_section(
   language: Language,
   snapshot: Snapshot,
@@ -2770,8 +2792,7 @@ fn connect_dialog(
 }
 
 /// 接続の確認のダイアログ。`dialog` が `ConnectReviewOpen` のときだけ開いた状態で描き、
-/// それ以外は何も描かない。先頭の理由、説明、URI を解釈した一覧、接続の意味の説明、
-/// `/sessions/connect/confirm` へ送る「接続する」のフォーム、待ちの補足を並べる。
+/// それ以外は何も描かない。
 fn connect_review_dialog(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -2932,10 +2953,10 @@ fn last_used_value(
   )
 }
 
-/// 承認済みセッション 1 件の操作。権限の編集と承認の取り消しのダイアログを開くボタンとそのダイアログを
-/// 1 行に並べる。権限の編集のダイアログは、`dialog` がこの行の `PermissionsOpen` なら送られた欄の状態と
-/// 先頭の理由で開いた状態で描き、それ以外はそのセッションの今の権限を入れて閉じた状態で描く。取り消しは
-/// 確認のダイアログの中のボタンでだけ POST する。
+/// 承認済みセッション 1 件の操作のボタンとダイアログ。権限の編集のダイアログは、`dialog` が
+/// この行の `PermissionsOpen` なら送られた欄の状態と理由で開いた状態で描き、そうでなければ
+/// そのセッションの今の権限を入れて閉じた状態で描く。取り消しは確認のダイアログの中のボタンで
+/// だけ POST する。
 fn session_actions(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
@@ -3170,12 +3191,8 @@ fn is_other_declaration(declared: Permission) -> Bool {
   }
 }
 
-/// URI の補足の `id`。URI の欄はダッシュボードの接続のダイアログに 1 つだけなので固定の値にする。
-const nostrconnect_uri_hint_id = "nostrconnect-uri-hint"
-
-/// ダッシュボードの接続のダイアログの中身。アカウントの一覧が
-/// 空なら登録への案内、得られなければ理由の囲みを、得られればフォームの中身（`connect_form`）を出す。
-/// `uri` と `signer` は `connect_form` に渡す値である。
+/// ダッシュボードの接続のダイアログの中身。アカウントの一覧が空なら登録への案内を、得られなければ
+/// 理由の囲みを出す。`uri` と `signer` はフォームの欄に入れる値である。
 pub fn connect_content(
   language: Language,
   accounts: Result(List(AccountRow), i18n.Reason),
