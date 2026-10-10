@@ -32,8 +32,7 @@ const update_roles_sql =
 /// 1 行の削除。
 const delete_sql = "DELETE FROM relays WHERE id = $1"
 
-/// 用途のある行を `id` の順に読む。`timeouts.load_ms` を期限にする（`load_snapshot` の
-/// トランザクションの中では、同じ値が外側の期限としてすでに効いている）。
+/// 用途のある行を `id` の順に読む。`timeouts.load_ms` を期限にする。
 pub fn list(
   db: pog.Connection,
   timeouts: Timeouts,
@@ -56,8 +55,7 @@ pub fn insert(
   use returned <- result.try(
     pog.query(insert_sql)
     |> pog.parameter(pog.text(url))
-    |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
-    |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
+    |> with_roles(roles)
     |> pog.returning(relay_decoder())
     |> pog.timeout(timeouts.write_ms)
     |> db.execute(db)
@@ -78,8 +76,7 @@ pub fn update_roles(
 ) -> Result(Nil, StoreError) {
   pog.query(update_roles_sql)
   |> pog.parameter(pog.int(id))
-  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
-  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
+  |> with_roles(roles)
   |> db.execute_on_one_row(db, timeouts)
 }
 
@@ -92,6 +89,14 @@ pub fn delete(
   pog.query(delete_sql)
   |> pog.parameter(pog.int(id))
   |> db.execute_on_one_row(db, timeouts)
+}
+
+/// `roles` を列の順（`observe`、`bunker`）の 2 つの bool の引数として `query` に足す。
+/// `relay_decoder` の `roles_from` と対になる。
+fn with_roles(query: pog.Query(a), roles: Roles) -> pog.Query(a) {
+  query
+  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Monitor)))
+  |> pog.parameter(pog.bool(relay_list.has_role(roles, relay_list.Bunker)))
 }
 
 /// `relays` の 1 行を読むデコーダー。列の順序は `select_sql` / `insert_sql` の

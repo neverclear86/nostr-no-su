@@ -8,15 +8,7 @@
 //// `detail` は `Failing row contains (...)` の形で行の全列を含むので、写すときに
 //// 捨てる。
 ////
-//// テーブルの DDL は版つきの移行（`migrations`）として持ち、`ensure_schema` が
-//// `schema_version` に記録された版より新しい移行を適用する。記録された版がこの
-//// ビルドより新しければ `SchemaTooNew` を返す。移行はバンカーのアカウント
-//// （`bunker_accounts`）、セッションと承認待ちのテーブル、監視の再開点のテーブル
-//// （`monitor_resume`）、リレーの一覧（`relays`）、プラグインの再開点
-//// （`plugin_resume`）を作る。
-////
-//// 同じ DB に対して動けるインスタンスは 1 つに限る。`acquire_lock` で advisory lock
-//// を確かめ、別のセッションが持っていれば `HeldByAnotherInstance` を返す。
+//// 移行と advisory lock の動作は docs/architecture.md の「アカウントの読み込み」にある。
 
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Name}
@@ -45,12 +37,9 @@ pub type Timeouts {
   )
 }
 
-/// 本番の期限。`load_ms` は読み込み 1 回全体、`write_ms` は書き込み 1 件（と主キーの
-/// 1 行の読み込み、`acquire_lock`）の期限。
-/// 期限を過ぎてもサーバー側で文の実行が続きうるので、書き込みの `TimedOut` は
-/// 「書き込まれたかどうか分からない」を意味する（`may_have_been_written`）。
-/// 値の根拠（署名者の問い合わせの 5 秒に収める予算）は docs/design-decisions.md の
-/// 「DB が不調な間は NIP-46 の処理が待たされる」にある。
+/// 本番の期限。書き込みの `TimedOut` は書き込まれたかどうかが分からない
+/// （`may_have_been_written`）。値の根拠（署名者の問い合わせの 5 秒に収める予算）は
+/// docs/design-decisions.md の「DB が不調な間は NIP-46 の処理が待たされる」にある。
 pub const default_timeouts = Timeouts(load_ms: 3000, write_ms: 1000)
 
 /// アカウントを保存するテーブル。`pubkey` は小文字 16 進に固定し、表記の揺れで
@@ -78,10 +67,7 @@ pub const create_monitor_resume_table =
 /// セッションの権限のトークンをカンマで区切った値で、空文字列は無宣言（既定の集合で照合する。
 /// `bunker/permission`）を表す。`signer` は `bunker_accounts(pubkey)` を
 /// `ON DELETE CASCADE` で参照するので、アカウントの削除でその署名者のセッションも消える。
-/// 時刻は Unix 秒。新しい組では `created_at` と `last_used_at` が同じ値で入る（`engine` の
-/// `new_session`）。`last_used_at` は `account_store.touch_session` で進める。行の MAC の列
-/// `mac` は版 6 の移行（`add_row_macs`）で足す。URI のリレーの列 `relays` は版 7 の移行
-/// （`add_session_relays`）で足す。
+/// 時刻は Unix 秒。新しい組では `created_at` と `last_used_at` が同じ値で入る。
 const create_sessions_table =
   "CREATE TABLE IF NOT EXISTS bunker_sessions (
   signer text NOT NULL REFERENCES bunker_accounts (pubkey) ON DELETE CASCADE,
@@ -95,8 +81,7 @@ const create_sessions_table =
 /// 承認待ちの接続要求を保存するテーブル。`token` が主キーで、承認ページの URL に
 /// 入る値である。`signer` は `bunker_accounts(pubkey)` を `ON DELETE CASCADE` で
 /// 参照するので、アカウントの削除でその署名者の承認待ちも消える。時刻は
-/// Unix 秒。長さの `CHECK` は置かない。行の MAC の列 `mac` は版 6 の移行
-/// （`add_row_macs`）で足す。
+/// Unix 秒。長さの `CHECK` は置かない。
 const create_pending_table =
   "CREATE TABLE IF NOT EXISTS bunker_pending (
   token text PRIMARY KEY,
@@ -316,10 +301,8 @@ pub fn ensure_schema(db: pog.Connection) -> Result(Nil, StoreError) {
 }
 
 /// `pool_transaction` の `TransactionFailure` を `StoreError` に写す。`run` の
-/// `Error` はそのまま返り、期限で打ち切られたら `TimedOut`、接続を得られなければ
-/// `Unavailable`、それ以外の例外（プールが無い、`run` の中の panic など）は
-/// `QueryFailed("the transaction failed")` を返す。`pool` を名前で受け取るのは、
-/// 期限つきのトランザクションをプールの名前で開くためである。
+/// `Error` はそのまま返す。`pool` を名前で受け取るのは、期限つきのトランザクションを
+/// プールの名前で開くためである。
 pub fn transaction(
   pool: Name(pog.Message),
   timeout_ms: Int,
@@ -337,9 +320,8 @@ pub fn transaction(
   |> result.flatten
 }
 
-/// 書き込みの失敗のうち、実際には書き込まれていることがあるものか。期限切れと途中の
-/// 切断（`TimedOut`）と例外（`Raised`）が該当し、それ以外（接続を得られない、制約違反、
-/// クエリーの失敗）は書き込まれていないことが確定している。
+/// 書き込みの失敗が、実際には書き込まれていることがあるものか。`False` なら書き込ま
+/// れていないことが確定している。
 pub fn may_have_been_written(error: StoreError) -> Bool {
   case error {
     TimedOut | Raised(_) -> True

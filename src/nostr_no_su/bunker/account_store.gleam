@@ -1,15 +1,12 @@
-//// バンカーアカウントを Postgres の `bunker_accounts` テーブルに保存する。
+//// バンカーのアカウント（`bunker_accounts`）、承認済みのセッション（`bunker_sessions`）、
+//// 承認待ちの接続要求（`bunker_pending`）を Postgres に保存する。
 ////
 //// SQL と pog の呼び出しだけを持ち、暗号化と行の検証は `vault` に任せる。nonce の
 //// 乱数はこの層で引く。DB へ送るのは暗号文だけで、平文もマスターキーも DB へは
-//// 出ない。承認済みのセッション（`bunker_sessions`）と承認待ちの接続要求
-//// （`bunker_pending`）も同じ DB に保存し、`load_within` が同じトランザクションで読む。
-//// この 2 表の行には書き込みのたびに `vault.row_mac` の MAC を付け、読み込みでは
-//// MAC の合わない行を使わずに `Stored.rejected` に分ける。
-////
-//// テーブルの作成、期限、トランザクション、クエリーの実行と失敗の値（`StoreError`）は
-//// `db` のものを使う。読み込みは一覧を読む前に `db.ensure_schema` でスキーマを
-//// 最新の版にする。
+//// 出ない。セッションと承認待ちの行には書き込みのたびに `vault.row_mac` の MAC を付け、
+//// 読み込みでは MAC の合わない行を使わずに `Stored.rejected` に分ける。テーブルの
+//// 作成、期限、トランザクション、失敗の値は `db` のものを使う。詳しくは
+//// docs/architecture.md の「アカウントの読み込み」。
 
 import gleam/bit_array
 import gleam/crypto
@@ -32,11 +29,13 @@ import pog
 const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 
 /// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。PostgreSQL は列挙の
-/// 順に 1 つずつロックを取るので、書き手の順に合わせる（docs/architecture.md）。
+/// 順に 1 つずつロックを取るので、書き手の順に合わせる。`relays` の書き手は
+/// バンカーではないので含めない。理由と残る窓は docs/architecture.md の
+/// 「アカウントの変更」。
 const lock_sql =
   "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
 
-/// 全行の読み込み。表示とテストが安定するよう登録順に並べる。
+/// 全行の読み込み。登録順（`created_at`、`pubkey`）に並べる。
 const select_sql =
   "SELECT pubkey, label, encrypted_privkey, encrypted_secret
 FROM bunker_accounts
@@ -61,13 +60,13 @@ const update_secret_sql =
 const update_label_sql =
   "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
 
-/// セッションの一覧。テストの安定のための順。
+/// セッションの一覧。`Stored.sessions` の順に並べる。
 const select_sessions_sql =
   "SELECT signer, client, perms, created_at, last_used_at, mac, relays
 FROM bunker_sessions
 ORDER BY created_at, signer, client"
 
-/// 承認待ちの一覧。テストの安定のための順。
+/// 承認待ちの一覧。`Stored.pending` の順に並べる。
 const select_pending_sql =
   "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at, mac
 FROM bunker_pending
@@ -123,11 +122,7 @@ pub type Stored {
 /// `sessions` と `pending` に入れずに `rejected` に分ける。3 つのうちどれかの
 /// 読み込みが `Error` なら全体を `Error` にする。`db.transaction` の中で呼ぶ。
 ///
-/// 一覧を読む前に `LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions
-/// IN SHARE MODE` を取る（`lock_sql`）。SHARE は実行中の書き込みの ROW EXCLUSIVE と
-/// 衝突するので、期限を過ぎてもサーバー側で実行を続ける書き込みがあれば、その終了を
-/// 待ってから読む。残る窓と測定の値は docs/architecture.md の「アカウントの変更」。
-/// `relays` の書き手はバンカーではないので、このロックには含めない。
+/// 一覧を読む前に `lock_sql` のロックを取る。
 pub fn load_within(
   db: pog.Connection,
   key: MasterKey,
