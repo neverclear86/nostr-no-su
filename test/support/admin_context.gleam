@@ -340,7 +340,7 @@ pub fn test_context(
         False -> Error(bunker.SessionNotFound(session_not_approved))
       }
     },
-    pending: fn() {
+    pending: fn(_now) {
       Ok([
         dashboard.PendingRow(
           token: token,

@@ -263,16 +263,9 @@ fn bunker_spec(
       auth_url: auth_url(loaded),
       retry_delay: bunker.default_retry_delay,
     ),
-    subscriptions: fn(signers) {
-      fn() {
-        signers()
-        |> option.to_result(Nil)
-        |> result.map(subscriptions.bunker_subscriptions(
-          _,
-          time.now_seconds() - bunker_since_lookback_seconds,
-        ))
-      }
-    },
+    subscriptions: subscriptions.bunker_relay_subscriptions(_, fn() {
+      time.now_seconds() - bunker_since_lookback_seconds
+    }),
   )
 }
 

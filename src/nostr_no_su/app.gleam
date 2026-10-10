@@ -64,7 +64,6 @@ import nostr_no_su/relay_store
 import nostr_no_su/resume/saver
 import nostr_no_su/subscriptions
 import nostr_no_su/task
-import nostr_no_su/time
 import pog
 
 /// リレー接続の開き方。ハンドラーが受け取るのは接続のプロセスで id と署名を確かめた
@@ -675,7 +674,9 @@ fn admin_child(
       update_perms: fn(signer, client, perms) {
         bunker.update_perms(bunker_name, signer, client, perms)
       },
-      pending: fn() { result.map(bunker.pending(bunker_name), pending_rows) },
+      pending: fn(now) {
+        result.map(bunker.pending(bunker_name), pending_rows(_, now))
+      },
       approve: bunker.approve(bunker_name, _),
       deny: bunker.deny(bunker_name, _),
     ),
@@ -1144,9 +1145,11 @@ fn skipped_row(row: vault.Skipped) -> dashboard.SkippedRow {
   )
 }
 
-/// 承認待ちを管理 UI の行にする。失効までの残り秒は問い合わせた時点で求める。
-pub fn pending_rows(pending: List(Pending)) -> List(dashboard.PendingRow) {
-  let now = time.now_seconds()
+/// 承認待ちを管理 UI の行にする。失効までの残り秒は `now`（Unix 秒）から求める。
+pub fn pending_rows(
+  pending: List(Pending),
+  now: Int,
+) -> List(dashboard.PendingRow) {
   use entry <- list.map(pending)
   dashboard.PendingRow(
     token: entry.token,

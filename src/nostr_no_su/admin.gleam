@@ -259,8 +259,10 @@ pub type Context {
     revoke: fn(String, String) -> Result(Nil, SessionFailure),
     /// セッション（署名者, クライアント）の権限を差し替える。
     update_perms: fn(String, String, String) -> Result(Nil, SessionFailure),
-    /// 承認待ちの一覧。読み込み中、応答なしのときは表示する理由を返す。
-    pending: fn() -> Result(List(dashboard.PendingRow), String),
+    /// 承認待ちの一覧。引数の Unix 秒から失効までの残り秒を求める。1 つの要求の中では
+    /// ページに渡す描画時点の時刻と同じ値を渡す。読み込み中、応答なしのときは表示する
+    /// 理由を返す。
+    pending: fn(Int) -> Result(List(dashboard.PendingRow), String),
     /// 承認待ちの 1 件を token で承認する。
     approve: fn(String) -> Result(Nil, SessionFailure),
     /// 承認待ちの 1 件を token で拒否する。
@@ -681,7 +683,8 @@ pub fn snapshot(
 ) -> dashboard.Snapshot {
   let accounts = task.start(context.accounts)
   let skipped = task.start(context.skipped)
-  let pending = task.start(context.pending)
+  let now = time.now_seconds()
+  let pending = task.start(fn() { context.pending(now) })
   let sessions = task.start(context.sessions)
   let plugins = context.plugins(deadline)
   let relays = context.relays(deadline)
@@ -693,7 +696,7 @@ pub fn snapshot(
     sessions: within(task.await(sessions, deadline)),
     plugins:,
     not_loaded_plugins: context.not_loaded_plugins,
-    now: time.now_seconds(),
+    now:,
   )
 }
 
@@ -825,7 +828,7 @@ pub fn normalize_newlines(value: String) -> String {
 fn approve_connection(handling: Handling, token: String) -> Response {
   case handling.request.method {
     http.Get -> {
-      use entry <- with_pending(handling, token)
+      use entry, now <- with_pending(handling, token)
       let accounts =
         result.map_error(handling.context.accounts(), i18n.Untranslated)
       wisp.html_response(
@@ -833,14 +836,14 @@ fn approve_connection(handling: Handling, token: String) -> Response {
           handling.language,
           handling.theme,
           accounts,
-          time.now_seconds(),
+          now,
           entry,
         ),
         200,
       )
     }
     http.Post -> {
-      use _entry <- with_pending(handling, token)
+      use _entry, _now <- with_pending(handling, token)
       redirect_home_or(
         handling.context.approve(token),
         session_failure_response(handling, _),
@@ -854,7 +857,7 @@ fn approve_connection(handling: Handling, token: String) -> Response {
 /// `session_failure_response` に渡す。
 fn deny_connection(handling: Handling, token: String) -> Response {
   use <- require_method(handling, http.Post)
-  use _entry <- with_pending(handling, token)
+  use _entry, _now <- with_pending(handling, token)
   redirect_home_or(handling.context.deny(token), session_failure_response(
     handling,
     _,
@@ -864,15 +867,17 @@ fn deny_connection(handling: Handling, token: String) -> Response {
 /// 承認ページの表示と承認・拒否の前に、承認待ちの一覧からトークンの行を引く。
 /// 一覧を得られなければ 503 の通知ページ、無ければ 404 の通知ページを返し、
 /// 表示や承認・拒否を呼ばない。不明、失効、処理済みのトークンは一覧に無いので
-/// 404 になる。404 の理由は失効の可能性を含む訳した文。
+/// 404 になる。404 の理由は失効の可能性を含む訳した文。`next` には行と、一覧の問い合わせに
+/// 渡した時刻（`Context.pending` の引数）を渡す。
 fn with_pending(
   handling: Handling,
   token: String,
-  next: fn(dashboard.PendingRow) -> Response,
+  next: fn(dashboard.PendingRow, Int) -> Response,
 ) -> Response {
+  let now = time.now_seconds()
   use rows <- with_rows(
     handling,
-    handling.context.pending(),
+    handling.context.pending(now),
     i18n.BunkerNotAvailable,
   )
   with_row(
@@ -880,7 +885,7 @@ fn with_pending(
     rows,
     fn(entry) { entry.token == token },
     i18n.ApprovalRequestGone(engine.pending_ttl_minutes()),
-    next,
+    next(_, now),
   )
 }
 

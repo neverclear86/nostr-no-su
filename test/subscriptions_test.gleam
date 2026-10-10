@@ -1,3 +1,4 @@
+import gleam/erlang/process
 import gleam/option.{None, Some}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/plugin_runner
@@ -112,6 +113,27 @@ pub fn bunker_subscriptions_test() {
   assert subscriptions.bunker_subscriptions([], 1000) == []
   assert subscriptions.bunker_subscriptions(["pk1"], 1000)
     == [#("bunker", subscriptions.bunker_filter(["pk1"], 1000))]
+}
+
+/// 署名者を得られなければ定義を得られなかったことにし、署名者がいれば評価のたびに
+/// `since` を呼んで `bunker_subscriptions` と同じ購読を組み立てる。
+pub fn bunker_relay_subscriptions_test() {
+  let fixed = fn() { 1000 }
+  assert subscriptions.bunker_relay_subscriptions(fn() { None }, fixed)()
+    == Error(Nil)
+  assert subscriptions.bunker_relay_subscriptions(fn() { Some([]) }, fixed)()
+    == Ok([])
+  let asked = process.new_subject()
+  let defined =
+    subscriptions.bunker_relay_subscriptions(fn() { Some(["pk1"]) }, fn() {
+      process.send(asked, Nil)
+      1000
+    })
+  let expected = Ok(subscriptions.bunker_subscriptions(["pk1"], 1000))
+  assert defined() == expected
+  assert defined() == expected
+  assert process.receive(asked, 0) == Ok(Nil)
+  assert process.receive(asked, 0) == Ok(Nil)
 }
 
 /// バンカーのフィルターは、署名者宛の直近の kind 24133 イベントを選択する。

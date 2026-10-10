@@ -1,8 +1,8 @@
 //// 管理 UI のルートのテスト。`Context` に偽の関数を注入し、アクターを起動せずに
-//// 応答を確かめる。ダッシュボードの状態、アカウントの読み直し、セッションの取り消しと
-//// 権限の編集、クライアントの接続、プラグインの再有効化とページ（フォームの値の
-//// 改行の正規化と、インライン `time` の基準の時刻を含む）、承認と拒否、リレーの追加・編集・削除、静的ファイルと
-//// favicon と通知の色、表示のテーマを対象にする。
+//// 応答を確かめる。ダッシュボードの状態（承認待ちの一覧に渡す時刻を含む）、アカウントの
+//// 読み直し、セッションの取り消しと権限の編集、クライアントの接続、プラグインの再有効化と
+//// ページ（フォームの値の改行の正規化と、インライン `time` の基準の時刻を含む）、承認と拒否、
+//// リレーの追加・編集・削除、静的ファイルと favicon と通知の色、表示のテーマを対象にする。
 
 import gleam/dynamic
 import gleam/erlang/process
@@ -65,6 +65,20 @@ fn relay_failure_text(
       i18n.text(language, i18n.RelayConnectionsNotConfirmed)
     admin.UnregisteredRelay -> i18n.text(language, i18n.RelayNotFound)
   }
+}
+
+/// 失効までの残りが `expires_in_seconds` 秒の承認待ちの行。
+fn pending_row(
+  expires_in_seconds expires_in_seconds: Int,
+) -> dashboard.PendingRow {
+  dashboard.PendingRow(
+    token:,
+    signer:,
+    client:,
+    expires_in_seconds:,
+    secret_mismatch: False,
+    perms: "",
+  )
 }
 
 /// 日本語を求める、認証済みのフォームの POST リクエストを 1 件処理する。
@@ -154,6 +168,17 @@ pub fn the_dashboard_gives_up_on_slow_sections_at_the_deadline_test() {
   let assert Ok(_) = snapshot.pending
   let assert Ok(_) = snapshot.sessions
   assert time.monotonic_ms() - started_at < 1000
+}
+
+/// ダッシュボードは時刻を 1 度だけ読み、承認待ちの一覧に渡す `now` とスナップショットの
+/// `now` を同じ値にする。
+pub fn the_dashboard_asks_pending_with_its_own_now_test() {
+  let asking =
+    admin.Context(..context(), pending: fn(now) {
+      Ok([pending_row(expires_in_seconds: now)])
+    })
+  let snapshot = admin.snapshot(asking, task.deadline_in(1000))
+  assert snapshot.pending == Ok([pending_row(expires_in_seconds: snapshot.now)])
 }
 
 /// 取り消しフォームは Context の `revoke` を呼び、ダッシュボードへ 303 で戻す。
@@ -726,6 +751,22 @@ pub fn approval_page_shows_the_request_test() {
   assert string.contains(body, "9:00 (expires at <time datetime=\"")
 }
 
+/// 承認ページは、承認待ちの一覧に渡した `now` から失効の時刻を出す。
+pub fn approval_page_dates_the_expiry_from_the_now_it_asked_with_test() {
+  let readings = process.new_subject()
+  let asking =
+    admin.Context(..context(), pending: fn(now) {
+      process.send(readings, now)
+      Ok([pending_row(expires_in_seconds: 0)])
+    })
+  let body = simulate.read_body(get(asking, "/approve/" <> token))
+  let assert Ok(now) = process.receive(readings, 0)
+  assert string.contains(
+    body,
+    element.to_string(view.time_of_day(i18n.English, now)),
+  )
+}
+
 /// 知らない、あるいは失効したトークンの承認ページは 404 の HTML で、理由を出し
 /// token を含めない。
 pub fn approval_page_for_an_unknown_token_is_not_found_test() {
@@ -783,7 +824,9 @@ pub fn pending_that_cannot_be_listed_is_unavailable_test() {
   let reports = process.new_subject()
   let reason = "account store unavailable: database is unreachable"
   let failing =
-    admin.Context(..reporting_context(reports), pending: fn() { Error(reason) })
+    admin.Context(..reporting_context(reports), pending: fn(_now) {
+      Error(reason)
+    })
 
   let get_response = get(failing, "/approve/" <> token)
   assert get_response.status == 503
