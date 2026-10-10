@@ -74,6 +74,7 @@ disallowedTools: Agent, Skill
    - プランの差し替え本文のうち `docs/` と README.md の文が実装後に食い違うものは must、Doc コメントの文が食い違うものは should にする
    - Doc コメントとコメントの 100 文字の折り返しは `grep -E '^(> )?[[:space:]]*//' <プラン> | sed 's/^> //' | LC_ALL=C.UTF-8 awk 'length > 100'` で、`///` と `//` の行だけを引用の印を外して測る
    - 第三者 action（`uses: …@<SHA>`）の output の形（環境変数の名前、JSON の構造）の主張は、固定した SHA のソースを読んで照合する
+   - ツールチェーンの版上げ（`ci.yml` の `gleam-version`、`Dockerfile` の `FROM`）のプランは、検証の手順の冒頭に `gleam --version` が上げ先の版であることの確認（違えば `mise install gleam@<版>`）があるかを見る。無ければ should に挙げる（素の `gleam` は PATH の版で走り、版上げの最中は CI と違う版になりうる）
 <!-- /ADAPT:review-focus -->
 
 ## 指摘の重さ

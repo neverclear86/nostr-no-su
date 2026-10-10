@@ -25,6 +25,7 @@ disallowedTools: Agent, Skill
 - 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
 - 撮影用サーバー（`PREVIEW_PORT=<port> gleam run -m admin_preview`）は `timeout <秒>` の中で背景に立てる。止めるときは `pkill -f` を使わない（自分の bash の引数に一致して呼び出しごと落ちる）。pid は `ss -ltnpH` のそのポートの行から引き、`/proc/<pid>/cwd` が自分の作業ツリーであることを確かめてから kill する（`timeout` が切れても beam.smp が残ることがある）
 - `/tmp` の ENOSPC は容量ではなく inode の枯渇でありうる（並列の実行の `build/` が inode を食う）。`df -i /tmp` で確かめ、自分の作業ツリーの `build/` と使い終わった clone を消して空ける。再試行で済ませない
+- 開発機の docker には buildx も qemu も無い（`docker build -q` は legacy builder の警告つきで通る。arm64 のイメージは実行できない）。イメージの platform と digest は `docker manifest inspect` で、arm64 の OTP の版は CI の docker-image ジョブのログ（`gh run view --job <id> --log`）で確かめる
 <!-- /ADAPT:env -->
 
 ## 記憶
@@ -79,6 +80,7 @@ disallowedTools: Agent, Skill
   - 要素を別の要素の中へ移す・ダイアログを行ごとに置くプランは、`dev/screenshots.mjs` と検証の手順のセレクターが移した後も 1 件だけに一致するかを確かめ、開いたダイアログは `id` で限定する（入れ子の `<details>` や行ごとの `.modal-box` は要素名やクラスだけのセレクターに複数一致し、strict で落ちる）
   - strfry を使う手順の起動行は `.github/workflows/ci.yml` の `test` ジョブの `services.strfry.command` をそのまま写す（`relay.numThreads.*` を 1 に固定する理由は同じ節のコメントにある）
   - テストの走査器（`test/japanese_pages_test.gleam` の `words()` など）が何を見て何を見ないかを断定するときは、その関数のコードをプランの段階で読んでから書く
+  - ツールチェーンの版上げ（`ci.yml` の `gleam-version`、`Dockerfile` の `FROM`）のプランは、検証の手順の冒頭に `gleam --version` の出力が上げ先の版（`gleam <版>`）であることを確かめる手順を置き、違えば `mise install gleam@<版>` して回し直すと書く（手元は mise で複数の版が入っており、素の `gleam` は PATH の版で走る。素の `gleam` と `dev/ci_gleam.sh` を混ぜた手順は、どの版が走るかが手順ごとに違う）
 <!-- /ADAPT:procedure -->
 - Doc コメントは、この PR がマージされた時点の動作だけを書く。行番号、issue 番号、後続 issue で配線される動作は書かない
 - プランの主張（「この関数はこう動く」「この設定は効かない」）は、コードを読むか実行して確かめたものだけを、根拠（`ファイル:行`、または実行したコマンドと出力）を付けて書く。根拠を付けられない主張は書かない
