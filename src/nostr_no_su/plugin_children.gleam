@@ -1,27 +1,9 @@
-//// 任意エクスポート `plugin_children/0` `plugin_children/1` の戻り値を検証し、
-//// スーパービジョンツリーの子仕様に変換する。呼び出しは `plugin.load` が起動時に
-//// 1 度だけ期限付きで行い、このモジュールには戻り値とアリティが渡ってくる。
-//// 返るのは MFA を含む純粋なデータであってプロセスではないため、再起動のたびに
-//// 問い合わせ直す必要がなく、ツリーを起動時に組み立てる `static_supervisor`
-//// の前提と噛み合う。
-////
-//// **境界に置くのは OTP の `supervisor:child_spec()` の map であって、Gleam の
-//// レコードではない。** Gleam のレコードはランタイムではタグ付きタプルであり、
-//// Erlang や Elixir で書いたプラグインからは組み立てられない。イベントを map に
-//// したのと同じ理由である。
-////
-//// ```erlang
-//// #{
-////     id       => atom() | binary(),                  %% 必須
-////     start    => {module(), atom(), [term()]},       %% 必須。必ずリンクを張る関数
-////     restart  => permanent | transient | temporary,  %% 任意。既定 permanent
-////     shutdown => non_neg_integer() | infinity,       %% 任意。既定 5000（worker）
-////     type     => worker | supervisor                 %% 任意。既定 worker
-//// }
-//// ```
-////
-//// 仕様の全文（プラグイン作者向け）は `docs/plugin-api.md` の第 5 章と第 6 章に
-//// ある。
+//// 任意エクスポート `plugin_children/0` `/1` の戻り値を検証し、スーパービジョン
+//// ツリーの子仕様に変換する。呼び出しはここでは行わず、戻り値とアリティだけが渡って
+//// くる。返るのは MFA を含む純粋なデータでプロセスではないので、起動時に 1 度呼べば
+//// 足りる。境界に置くのは OTP の `supervisor:child_spec()` の map であって Gleam の
+//// レコードではない。`{error, Reason}` を先に判定する順序は `from_dynamic` を参照。
+//// 仕様の全文は `docs/plugin-api.md` の第 5 章と第 6 章にある。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -86,8 +68,7 @@ type Kind {
 }
 
 /// 子仕様のリスト（Dynamic）を検証して変換する。最初に失敗したところで止め、
-/// その 1 行を返す。本体では `plugin.load` が期限付きで呼んだ戻り値を渡す。
-/// 単体テストとツリー全体のテストも同じ経路を通る。
+/// その 1 行を返す。
 ///
 /// **`{error, Reason}` の判定はリストのデコードより先に行う。** Erlang の
 /// 2 要素タプルは `decode.list` で長さ 2 のリストとしてデコードされるため、

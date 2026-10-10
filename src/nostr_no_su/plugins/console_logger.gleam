@@ -7,8 +7,8 @@ import nostr_no_su/log
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin.{type Plugin, Plugin}
 
-/// プラグインの名前。`new` とログの接頭辞のほか、予約名としても使う
-/// （`nostr_no_su.builtin_plugins` が無効時にも `plugin_loader.load_all` へ渡す）。
+/// プラグインの名前。`new` とログの接頭辞のほか、外部プラグインの名前と衝突させない
+/// 予約名としても使う。
 pub const name = "console_logger"
 
 /// 受信したイベントの概要を標準出力に書くプラグイン。
