@@ -1,5 +1,5 @@
-//// 描画した管理 UI のページと、配信する静的ファイル（`priv/static/`）、板つきのロゴの
-//// ファイルと README を読み出す、検査の共有の部品。
+//// 描画した管理 UI のページ、配信する静的ファイル（`priv/static/`）と文書のファイルの読み出しと、
+//// HTML の走査の部品。
 ////
 //// `view.gleam` か `admin/fingerprint` に部品を足したら `components` にもその部品を足す。
 
@@ -42,6 +42,32 @@ pub fn text_file(path: String) -> String {
   let assert Ok(bytes) = read_file(path)
   let assert Ok(content) = bit_array.to_string(bytes)
   content
+}
+
+/// ページのタグごとの、`<` と `>` の間の文字列（要素名と属性）と、その直後から次の `<` までの
+/// テキスト。テキストと属性値はエスケープされて `<` と `>` を含まないので、`<` から次の `>`
+/// までがタグである。`>` の無い `<` があれば描画が壊れているので、失敗させる。
+pub fn html_tags(page: String) -> List(#(String, String)) {
+  page
+  |> string.split("<")
+  |> list.drop(1)
+  |> list.map(fn(chunk) {
+    let assert Ok(#(tag, text)) = string.split_once(chunk, ">")
+    #(tag, text)
+  })
+}
+
+/// HTML の文字列に現れる、属性 `name` の値のすべて。値はエスケープされて `"` を含まないので、
+/// ` name="` から次の `"` までが値である。空白の直後の名前だけを探すので、`data-` などの
+/// 接頭辞が付いた別の属性の値は拾わない。
+pub fn attribute_values(html: String, name: String) -> List(String) {
+  html
+  |> string.split(" " <> name <> "=\"")
+  |> list.drop(1)
+  |> list.map(fn(rest) {
+    let assert Ok(#(value, _)) = string.split_once(rest, "\"")
+    value
+  })
 }
 
 /// `pages()` のアカウントの 64 桁の 16 進の公開鍵。鍵の指紋を描かせるため 32 バイトにし、
@@ -383,181 +409,116 @@ pub fn pages(language: i18n.Language) -> List(String) {
     ],
     // 節の題とブロックの文字列は `allowed_words` の語か英字を含まない語で組む
     [
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("a", [], [
-            plugin_page_builder.typed_text("text", "example"),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_two_pages,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("b", [], [
-            plugin_page_builder.typed_text("text", "label"),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("c", [], [
-            plugin_page_builder.typed_text("text", "plugin"),
-          ]),
-          plugin_missing_title_section(),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_disabled,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("d", [], [
-            plugin_page_builder.typed_text("text", "a"),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("a", [], [
-            // `textarea` の欄の初期値は要素の内容（テキストノード）なので
-            // `allowed_words` の語だけを使う。`text` の欄の初期値は属性なので制約を受けない
-            plugin_page_builder.form_block(
-              [
-                plugin_page_builder.checkbox_field(
-                  name: "example",
-                  label: "label",
-                  hint: Some("plugin"),
-                  checked: False,
-                ),
-                plugin_page_builder.input_field(
-                  kind: "text",
-                  name: "a",
-                  label: "b",
-                  hint: "c",
-                  value: "d",
-                ),
-                plugin_page_builder.input_field(
-                  kind: "textarea",
-                  name: "b",
-                  label: "c",
-                  hint: "d",
-                  value: "a",
-                ),
-              ],
-              "b",
-            ),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("a", [], [
-            plugin_page_builder.details_block("example", "label"),
-            plugin_page_builder.pairs_block([
-              // `id` の値は数字だけにする（`allowed_words` は識別子の英字を許さない）
-              #(
-                "plugin",
-                plugin_page_builder.typed_text("id", "01234567890123456789"),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        plugin_page_builder.section("a", [], [
+          plugin_page_builder.typed_text("text", "example"),
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_two_pages, plugin_status_page, [
+        plugin_page_builder.section("b", [], [
+          plugin_page_builder.typed_text("text", "label"),
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, []),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        plugin_page_builder.section("c", [], [
+          plugin_page_builder.typed_text("text", "plugin"),
+        ]),
+        plugin_missing_title_section(),
+      ]),
+      plugin_page_with(language, plugin_row_disabled, plugin_status_page, [
+        plugin_page_builder.section("d", [], [
+          plugin_page_builder.typed_text("text", "a"),
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        plugin_page_builder.section("a", [], [
+          // `textarea` の欄の初期値は要素の内容（テキストノード）なので
+          // `allowed_words` の語だけを使う。`text` の欄の初期値は属性なので制約を受けない
+          plugin_page_builder.form_block(
+            [
+              plugin_page_builder.checkbox_field(
+                name: "example",
+                label: "label",
+                hint: Some("plugin"),
+                checked: False,
               ),
-            ]),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          plugin_page_builder.section("a", [], [
-            // `image` の `alt` は節の言語を引き継ぐテキストにも出るので
-            // `allowed_words` の語で組む
-            plugin_page_builder.image_block(
-              "http://example.com/a.png",
-              "example",
-              None,
-            ),
-            plugin_page_builder.image_block(
-              "data:image/png;base64,AAA",
-              "label",
-              None,
-            ),
-            plugin_page_builder.image_block(
-              "http://example.com/a.png",
-              "example",
-              Some("icon"),
-            ),
-            plugin_page_builder.image_block(
-              "http://example.com/b.png",
-              "example",
-              Some("banner"),
-            ),
-          ]),
-        ],
-      ),
-      plugin_pages.plugin_page(
-        language,
-        view.System,
-        plugin_row_one_page,
-        plugin_status_page,
-        0,
-        [
-          // 見出しの補足のクラスと、訳した kind の名前と相対時刻をページに載せる節
-          plugin_page_builder.section(
-            "a",
-            [
-              plugin_page_builder.kind_inline(1),
-              plugin_page_builder.time_inline(0),
+              plugin_page_builder.input_field(
+                kind: "text",
+                name: "a",
+                label: "b",
+                hint: "c",
+                value: "d",
+              ),
+              plugin_page_builder.input_field(
+                kind: "textarea",
+                name: "b",
+                label: "c",
+                hint: "d",
+                value: "a",
+              ),
             ],
-            [
-              plugin_page_builder.pairs_block([
-                #("plugin", plugin_page_builder.time_inline(0)),
-              ]),
-            ],
+            "b",
           ),
-        ],
-      ),
-      plugin_pages.plugin_page(
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        plugin_page_builder.section("a", [], [
+          plugin_page_builder.details_block("example", "label"),
+          plugin_page_builder.pairs_block([
+            // `id` の値は数字だけにする（`allowed_words` は識別子の英字を許さない）
+            #(
+              "plugin",
+              plugin_page_builder.typed_text("id", "01234567890123456789"),
+            ),
+          ]),
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        plugin_page_builder.section("a", [], [
+          // `image` の `alt` は節の言語を引き継ぐテキストにも出るので
+          // `allowed_words` の語で組む
+          plugin_page_builder.image_block(
+            "http://example.com/a.png",
+            "example",
+            None,
+          ),
+          plugin_page_builder.image_block(
+            "data:image/png;base64,AAA",
+            "label",
+            None,
+          ),
+          plugin_page_builder.image_block(
+            "http://example.com/a.png",
+            "example",
+            Some("icon"),
+          ),
+          plugin_page_builder.image_block(
+            "http://example.com/b.png",
+            "example",
+            Some("banner"),
+          ),
+        ]),
+      ]),
+      plugin_page_with(language, plugin_row_one_page, plugin_status_page, [
+        // 見出しの補足のクラスと、訳した kind の名前と相対時刻をページに載せる節
+        plugin_page_builder.section(
+          "a",
+          [
+            plugin_page_builder.kind_inline(1),
+            plugin_page_builder.time_inline(0),
+          ],
+          [
+            plugin_page_builder.pairs_block([
+              #("plugin", plugin_page_builder.time_inline(0)),
+            ]),
+          ],
+        ),
+      ]),
+      plugin_page_with(
         language,
-        view.System,
         plugin_row_localized(),
         plugin_localized_status_page(),
-        0,
         [
           plugin_page_builder.section("キュー", [], [
             plugin_page_builder.typed_text("text", "処理済み"),
@@ -575,7 +536,7 @@ const plugin_row_one_page =
   dashboard.PluginRow(
     "plugin-a",
     Some(plugin_runner.Running),
-    pages: [plugin.PluginPage(key: "status", title: "Status")],
+    pages: [plugin_status_page],
   )
 
 /// ページを 2 件供給するプラグインの行（タブを撮るため）。
@@ -584,7 +545,7 @@ const plugin_row_two_pages =
     "plugin-b",
     Some(plugin_runner.Running),
     pages: [
-      plugin.PluginPage(key: "status", title: "Status"),
+      plugin_status_page,
       plugin.PluginPage(key: "settings", title: "Settings"),
     ],
   )
@@ -594,7 +555,7 @@ const plugin_row_disabled =
   dashboard.PluginRow(
     "plugin-c",
     Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
-    pages: [plugin.PluginPage(key: "status", title: "Status")],
+    pages: [plugin_status_page],
   )
 
 /// 上の 3 行がいずれも持つ最初のページ。
@@ -628,10 +589,23 @@ fn plugin_missing_title_section() -> Dynamic {
   ])
 }
 
+/// プラグインのページを、システムのテーマ（`view.System`）と描画時刻 0 で描画する。
+fn plugin_page_with(
+  language: i18n.Language,
+  row: dashboard.PluginRow,
+  page: plugin.PluginPage,
+  sections: List(Dynamic),
+) -> String {
+  plugin_pages.plugin_page(language, view.System, row, page, 0, sections)
+}
+
 /// すべての言語のページ。言語に依らない検査（CSS、スクリプト）が使う。
 pub fn all_pages() -> List(String) {
   list.flat_map(i18n.languages, pages)
 }
+
+/// `view.Tone` の変種のすべて。
+const tones = [view.Neutral, view.Success, view.Warning, view.Failure, view.Info]
 
 /// ボタンの種類のすべて。`components` がどの置き場所でも全種類を描くのに使う。
 const button_kinds = [
@@ -658,10 +632,7 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.LoadFailedChip,
         view.SecretNotOfferedChip,
         view.SecretMismatchChip,
-        ..list.map(
-          [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
-          view.ToneChip,
-        )
+        ..list.map(tones, view.ToneChip)
       ],
       fn(chip) { element.to_string(view.status_chip(chip, "text")) },
     ),
@@ -808,14 +779,8 @@ pub fn components(language: i18n.Language) -> List(String) {
     list.map([view.LargeIdentity, view.PlainIdentity], fn(size) {
       element.to_string(view.identity(language, size, "label", "npub1value"))
     }),
-    list.map(
-      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
-      fn(tone) { element.to_string(view.tone_icon(tone)) },
-    ),
-    list.map(
-      [view.Neutral, view.Success, view.Warning, view.Failure, view.Info],
-      fn(tone) { element.to_string(view.notice_mark(tone)) },
-    ),
+    list.map(tones, fn(tone) { element.to_string(view.tone_icon(tone)) }),
+    list.map(tones, fn(tone) { element.to_string(view.notice_mark(tone)) }),
     [element.to_string(view.band("anchor", [view.hint("content")]))],
     list.map(
       view.dialog_button(
@@ -848,17 +813,6 @@ pub fn components(language: i18n.Language) -> List(String) {
         view.CompactFace(view.qr_code_icon(), "text"),
         view.PrimaryButton,
       )),
-      element.to_string(
-        view.failure_frame(
-          view.warning_triangle_icon(),
-          "title",
-          1,
-          "description",
-          [
-            view.list_row(view.InlineRow, [html.text("row")]),
-          ],
-        ),
-      ),
       element.to_string(fingerprint.pubkey_svg(
         string.repeat("ab", 32),
         fingerprint.Gray,

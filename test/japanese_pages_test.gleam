@@ -37,10 +37,9 @@ const allowed_words = [
 /// `<title>` が `lang="en"` の開始タグで出す決まりなので、そのテキストは対象から外す。
 fn words(page: String) -> List(String) {
   page
-  |> string.split("<")
-  |> list.drop(1)
-  |> list.flat_map(fn(chunk) {
-    let assert Ok(#(tag, text)) = string.split_once(chunk, ">")
+  |> admin_ui.html_tags
+  |> list.flat_map(fn(tagged) {
+    let #(tag, text) = tagged
     case string.contains(tag, "lang=\"en\"") {
       True -> []
       False -> latin_runs(text)

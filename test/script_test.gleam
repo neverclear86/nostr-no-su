@@ -41,14 +41,7 @@ fn is_event_attribute(word: String) -> Bool {
   string.starts_with(word, "on") && string.contains(word, "=\"")
 }
 
-/// ページの `data-action` 属性に現れる処理の名前。値はエスケープされて `"` を含まないので、
-/// 次の `"` までが属性値である。
+/// ページの `data-action` 属性に現れる処理の名前。
 fn actions(page: String) -> List(String) {
-  page
-  |> string.split(" data-action=\"")
-  |> list.drop(1)
-  |> list.map(fn(rest) {
-    let assert Ok(#(action, _)) = string.split_once(rest, "\"")
-    action
-  })
+  admin_ui.attribute_values(page, "data-action")
 }
