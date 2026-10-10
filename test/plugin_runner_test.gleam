@@ -4,6 +4,7 @@ import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import nostr_no_su/log
 import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/plugin
@@ -279,7 +280,8 @@ pub fn crashing_plugin_is_disabled_and_stays_alive_test() {
   let assert Ok(runner) = process.named(name)
   deliver(name, 10)
   let assert Some(Disabled(reason:, dropped:)) = plugin_runner.status(name)
-  assert string.length(reason) <= 123
+  // 3 は `log.sanitize` が切り詰めたときに足す `...` の長さ。
+  assert string.length(reason) <= log.max_reason_chars + 3
   assert dropped == 7
   assert process.is_alive(runner)
 }
