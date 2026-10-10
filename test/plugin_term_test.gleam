@@ -31,6 +31,14 @@ pub fn is_error_tuple_looks_only_at_element_zero_test() {
   assert !plugin_term.is_error_tuple(dynamic.string("error"))
 }
 
+/// atom ならその名前を返し、同じ綴りの binary や atom でない値は `Error(Nil)`。
+pub fn atom_name_reads_only_atoms_test() {
+  assert plugin_term.atom_name(atom.to_dynamic(atom.create("permanent")))
+    == Ok("permanent")
+  assert plugin_term.atom_name(dynamic.string("permanent")) == Error(Nil)
+  assert plugin_term.atom_name(dynamic.int(1)) == Error(Nil)
+}
+
 /// `Reason` が binary なら `Ok`、要素 1 が無ければ `Error(None)`、binary でなければ
 /// その型の名前を `Error(Some(..))` で返す。
 pub fn error_reason_tells_a_missing_reason_from_a_non_binary_test() {
