@@ -23,6 +23,7 @@ disallowedTools: Agent, Skill
 - 画面の確認と撮影は headless で行う（`dev/screenshots.mjs`、または playwright-core の `chromium.launch({ headless: true })` のスクリプト）。user スコープの Playwright MCP（`mcp__playwright__*`）は headed でユーザーの画面にブラウザーの窓を開き、作業ツリーに `.playwright-mcp/` を残すので使わない。使ったときは返す前に `browser_close` を呼ぶ
 - 撮影用サーバー（`PREVIEW_PORT=<port> gleam run -m admin_preview`）は `timeout <秒>` の中で背景に立てる。止めるときは `pkill -f` を使わない（自分の bash の引数に一致して呼び出しごと落ちる）。pid は `ss -ltnpH` のそのポートの行から引き、`/proc/<pid>/cwd` が自分の作業ツリーであることを確かめてから kill する（`timeout` が切れても beam.smp が残ることがある）
 - `/tmp` の ENOSPC は容量ではなく inode の枯渇でありうる（並列の実行の `build/` が inode を食う）。`df -i /tmp` で確かめ、自分の作業ツリーの `build/` と使い終わった clone を消して空ける。再試行で済ませない
+- 開発機の docker には buildx も qemu も無い（`docker build -q` は legacy builder の警告つきで通る。arm64 のイメージは実行できない）。イメージの platform と digest は `docker manifest inspect` で、arm64 の OTP の版は CI の docker-image ジョブのログ（`gh run view --job <id> --log`）で確かめる
 <!-- /ADAPT:env -->
 
 ## レビューの基準
