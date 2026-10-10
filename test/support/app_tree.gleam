@@ -376,6 +376,11 @@ pub fn load_signer(key_hex: String) -> Result(bunker.Snapshot, String) {
   Ok(accounts_only([stored_signer(key_hex)]))
 }
 
+/// `signer_key` を読み込む偽のストア。
+pub fn signer_store() -> bunker.Store {
+  store_with_load(fn() { load_signer(signer_key) })
+}
+
 /// アカウントだけがあり、セッションと承認待ちが無い読み込みの結果。
 pub fn accounts_only(accounts: List(vault.StoredAccount)) -> bunker.Snapshot {
   bunker.Snapshot(Loaded(accounts: accounts, skipped: []), [], [], [])
@@ -437,6 +442,26 @@ pub fn discard_resume_points(
   Ok(Nil)
 }
 
+/// 子仕様も管理 UI のページも持たず、何もしないプラグイン。各テストは
+/// `plugin.Plugin(..idle_plugin(name), …)` で違うフィールドだけを書く。
+pub fn idle_plugin(name: String) -> plugin.Plugin {
+  plugin.Plugin(name: name, children: [], ui: None, handle: fn(_incoming) {
+    Nil
+  })
+}
+
+/// 歯止めが既定のプラグインの仕様。
+pub fn plugin_spec(
+  name: Name(plugin_runner.Msg),
+  definition: plugin.Plugin,
+) -> app.PluginSpec {
+  app.PluginSpec(
+    name: name,
+    plugin: definition,
+    limits: plugin_runner.default_limits,
+  )
+}
+
 /// 受け取ったイベントをテストへ転送するプラグインの仕様。歯止めは既定のまま。
 pub fn forwarding_spec(
   name: Name(plugin_runner.Msg),
@@ -469,6 +494,25 @@ pub fn await_connection(reports: Subject(Report)) -> Report {
     process.receive(reports, 2000)
   let _state = system.get_state(connection)
   Opened(relay_url, connection, socket, deliver)
+}
+
+/// 名前が新しいプロセスへ再登録されるのを待つ。`named.send` は名前が未登録の
+/// あいだメッセージを捨てるため、再登録を待たずに配信すると取りこぼす。
+pub fn await_restart(
+  name: Name(plugin_runner.Msg),
+  previous: Pid,
+  timeout_ms: Int,
+) -> Bool {
+  poll.until(
+    fn() {
+      case process.named(name) {
+        Ok(pid) -> pid != previous
+        Error(Nil) -> False
+      }
+    },
+    timeout_ms,
+    20,
+  )
 }
 
 /// テスト用の署名者とクライアントで組み立てた `connect` リクエスト。
