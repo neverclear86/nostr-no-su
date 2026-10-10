@@ -8,9 +8,11 @@ import nostr_no_su/nostr/event.{type Event, type Verified, Event}
 /// 署名に使うテスト用の秘密鍵。
 const key = "0000000000000000000000000000000000000000000000000000000000000003"
 
+/// 署名の補助乱数。固定にして、同じ引数なら同じ署名にする。
+const aux = <<0:256>>
+
 /// 秘密鍵 `private_key`（16 進）で署名した、指定した kind と content のイベント。
-/// 登録アカウントと登録していないアカウントのイベントを作り分けるのに使う。署名は
-/// 補助乱数を引くので、同じ引数でも呼ぶたびに `sig` が変わる。
+/// 補助乱数は固定なので、同じ引数なら同じイベントになる。
 pub fn by(private_key: String, kind: Int, content: String) -> Event {
   let assert Ok(privkey) = hex.decode(private_key)
   let assert Ok(pubkey) = secp256k1.xonly_pubkey(privkey)
@@ -24,13 +26,12 @@ pub fn by(private_key: String, kind: Int, content: String) -> Event {
       content: content,
       sig: "",
     )
-  let assert Ok(signed) = event.finalize(draft, privkey)
+  let assert Ok(signed) = event.finalize_with_aux(draft, privkey, aux)
   signed
 }
 
-/// テスト用の鍵で署名した、指定した kind と content のイベント。署名は補助乱数を
-/// 引くので、同じ引数でも呼ぶたびに `sig` が変わる。比べるときは 1 度作った値を
-/// 使い回す。
+/// テスト用の鍵で署名した、指定した kind と content のイベント。同じ引数なら同じ
+/// イベントになる。
 pub fn new(kind: Int, content: String) -> Event {
   by(key, kind, content)
 }

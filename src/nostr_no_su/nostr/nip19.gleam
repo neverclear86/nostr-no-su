@@ -119,7 +119,7 @@ pub fn describe(error: Nip19Error) -> String {
   }
 }
 
-/// 接頭辞を bech32 の HRP の文字列にする。管理 UI が理由を訳すときにも使う。
+/// 接頭辞を bech32 の HRP の文字列にする。
 pub fn prefix_text(prefix: Prefix) -> String {
   case prefix {
     Npub -> "npub"

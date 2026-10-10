@@ -1,5 +1,5 @@
 import gleam/option.{Some}
-import nostr_no_su/nostr/event.{Event}
+import nostr_no_su/nostr/event.{type Event, Event}
 import nostr_no_su/nostr/filter.{Filter}
 import nostr_no_su/nostr/message.{RelayClosed, RelayEose, RelayNotice, RelayOk}
 
@@ -69,36 +69,30 @@ pub fn encode_close_test() {
     == "[\"CLOSE\",\"sub1\"]"
 }
 
+/// 符号化の確認に使うイベント。欄の値に意味はない。
+fn sample_event() -> Event {
+  Event(
+    id: "abc",
+    pubkey: "def",
+    created_at: 1_700_000_000,
+    kind: 1,
+    tags: [],
+    content: "hi",
+    sig: "00",
+  )
+}
+
 /// EVENT はイベントをそのまま載せた配列になる。
 pub fn encode_publish_test() {
-  let event =
-    Event(
-      id: "abc",
-      pubkey: "def",
-      created_at: 1_700_000_000,
-      kind: 1,
-      tags: [],
-      content: "hi",
-      sig: "00",
-    )
-  assert message.encode_client_message(message.Publish(event))
+  assert message.encode_client_message(message.Publish(sample_event()))
     == "[\"EVENT\",{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
     <> "\"kind\":1,\"tags\":[],\"content\":\"hi\",\"sig\":\"00\"}]"
 }
 
 /// AUTH はイベントをそのまま載せた配列になる。
 pub fn encode_auth_test() {
-  let event =
-    Event(
-      id: "abc",
-      pubkey: "def",
-      created_at: 1_700_000_000,
-      kind: 22_242,
-      tags: [],
-      content: "",
-      sig: "00",
-    )
-  assert message.encode_client_message(message.Auth(event))
+  let auth = Event(..sample_event(), kind: 22_242, content: "")
+  assert message.encode_client_message(message.Auth(auth))
     == "[\"AUTH\",{\"id\":\"abc\",\"pubkey\":\"def\",\"created_at\":1700000000,"
     <> "\"kind\":22242,\"tags\":[],\"content\":\"\",\"sig\":\"00\"}]"
 }

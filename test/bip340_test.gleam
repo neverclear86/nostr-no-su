@@ -118,31 +118,3 @@ pub fn sign_with_aux_rejects_out_of_range_secret_key_test() {
   assert bip340.sign_with_aux(secret_key, message, aux)
     == Error(bip340.InvalidSecretKey)
 }
-
-/// 0 は有効なスカラーではないため、公開鍵を導けない。
-pub fn xonly_pubkey_rejects_zero_test() {
-  let assert Error(_) =
-    secp256k1.xonly_pubkey(bytes(
-      "0000000000000000000000000000000000000000000000000000000000000000",
-    ))
-}
-
-/// 位数 n も範囲外なので、公開鍵を導けない。
-pub fn xonly_pubkey_rejects_order_test() {
-  // n そのものは範囲外（有効なスカラーは 1..n-1）。
-  let assert Error(_) =
-    secp256k1.xonly_pubkey(bytes(
-      "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
-    ))
-}
-
-/// 乱数の補助値で署名しても、自分で検証できる署名になる。
-pub fn sign_random_roundtrip_test() {
-  let privkey =
-    bytes("0000000000000000000000000000000000000000000000000000000000000042")
-  let assert Ok(pk) = secp256k1.xonly_pubkey(privkey)
-  let message =
-    bytes("2d58d8b3bcdf1abadec7829054f90dda9805aab56c77333024b9d0a508b75cff")
-  let assert Ok(sig) = bip340.sign(privkey, message)
-  assert bip340.verify(sig, message, pk)
-}

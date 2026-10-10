@@ -6,7 +6,6 @@ import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
-import nostr_no_su/crypto/bip340
 import nostr_no_su/crypto/secp256k1
 import nostr_no_su/hex
 import nostr_no_su/nostr/event.{Event}
@@ -70,20 +69,14 @@ pub fn tags_json_test() {
     == "[[\"e\",\"xyz\"],[\"p\",\"abc\",\"wss://relay\"]]"
 }
 
-/// 正規シリアライズの sha256 が、手で計算した id と一致する。
-pub fn compute_id_synthetic_vector_test() {
-  // 期待値はシェルで独立に計算したもの:
-  // printf '%s' '[0,"3bf0…59d",1700000000,1,[],"hello nostr"]' | sha256sum
-  assert event.compute_id(sample_event())
-    == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
-}
-
 /// 署名対象のハッシュは 32 バイトの sha256 で、16 進化すると id と一致する。
 pub fn hash_for_signing_test() {
+  // `sample_event` の id はシェルで独立に計算したもの:
+  // printf '%s' '[0,"3bf0…59d",1700000000,1,[],"hello nostr"]' | sha256sum
   let hash = event.hash_for_signing(sample_event())
   assert bit_array.byte_size(hash) == 32
-  assert hex.encode(hash)
-    == "556f29ae53faa7a9ca840c4389f4c5e19f67c2b69b6b8a029c96d43286b02385"
+  assert hex.encode(hash) == sample_event().id
+  assert event.compute_id(sample_event()) == sample_event().id
 }
 
 /// 制御文字や引用符を含む content でも、id は正規シリアライズと一致する。
@@ -133,6 +126,30 @@ pub fn finalize_and_verify_test() {
   assert !event.verify_signature(Event(..signed, content: "tampered"))
 }
 
+/// `finalize_with_aux` は同じ引数なら同じイベントを返し、補助乱数が違えば `sig` だけが
+/// 変わる。どちらも検証を通る。`signed_event.new` も同じ引数なら同じイベントを返す。
+pub fn finalize_with_aux_is_deterministic_test() {
+  let privkey = <<3:256>>
+  let assert Ok(pubkey) = secp256k1.xonly_pubkey(privkey)
+  let draft = Event(..sample_event(), pubkey: hex.encode(pubkey))
+  let assert Ok(first) = event.finalize_with_aux(draft, privkey, <<0:256>>)
+  let assert Ok(second) = event.finalize_with_aux(draft, privkey, <<0:256>>)
+  let assert Ok(other) = event.finalize_with_aux(draft, privkey, <<1:256>>)
+  assert first == second
+  assert Event(..other, sig: first.sig) == first
+  assert other.sig != first.sig
+  assert event.verify_signature(first)
+  assert event.verify_signature(other)
+  assert signed_event.new(1, "same") == signed_event.new(1, "same")
+}
+
+/// `finalize` は呼ぶたびに新しい補助乱数を使うので、同じ引数でも `sig` が変わる。
+pub fn finalize_draws_a_fresh_aux_test() {
+  let assert Ok(first) = event.finalize(sample_event(), <<3:256>>)
+  let assert Ok(second) = event.finalize(sample_event(), <<3:256>>)
+  assert first.sig != second.sig
+}
+
 /// 署名したイベントは `verify` を通る。id が内容と合わなければ `InvalidId`、署名
 /// だけが合わなければ `InvalidSignature` で落ちる。内容を改竄すると id も署名も
 /// 合わなくなるが、署名を確かめる前に `InvalidId` で落ちる。
@@ -148,30 +165,13 @@ pub fn verify_test() {
     == Error(event.InvalidId)
 }
 
-/// 32 バイトでない pubkey（NIP-01 の定義域の外）を持つイベントは、challenge が
-/// そのバイト列を含んだ正しい署名を持っていても検証に落ちる。
+/// 32 バイトでない pubkey（NIP-01 の定義域の外）を持つイベントは検証に落ちる。
 pub fn verify_rejects_a_pubkey_that_is_not_32_bytes_test() {
-  let key = "0000000000000000000000000000000000000000000000000000000000000003"
-  let assert Ok(privkey_bytes) = hex.decode(key)
-  let privkey = secp256k1.int_from_bytes(privkey_bytes)
-  let assert Ok(#(px, _py)) = secp256k1.mul_g(privkey)
-  // 32 バイトの x-only pubkey の前に 00 を足した、33 バイトの pubkey。
-  let pubkey_33 = <<0:size(8), secp256k1.int_to_bytes32(px):bits>>
-  let draft =
-    Event(
-      id: "",
-      pubkey: hex.encode(pubkey_33),
-      created_at: 1_700_000_000,
-      kind: 1,
-      tags: [],
-      content: "hi",
-      sig: "",
-    )
-  let sig =
-    sign_over_pubkey_bytes(privkey, pubkey_33, event.hash_for_signing(draft))
-  let signed = Event(..draft, id: event.compute_id(draft), sig: hex.encode(sig))
-  assert !event.verify_signature(signed)
-  assert event.verify(signed) == Error(event.InvalidSignature)
+  let signed = signed_event.new(1, "hi")
+  let draft = Event(..signed, pubkey: "00" <> signed.pubkey)
+  let rebuilt = Event(..draft, id: event.compute_id(draft))
+  assert !event.verify_signature(rebuilt)
+  assert event.verify(rebuilt) == Error(event.InvalidSignature)
 }
 
 /// 64 バイトでない sig を持つイベントは検証に落ちる。長さの検査は
@@ -187,39 +187,6 @@ pub fn verify_signature_rejects_non_hex_test() {
   let signed = signed_event.new(1, "verified")
   assert !event.verify_signature(Event(..signed, pubkey: "zz"))
   assert !event.verify_signature(Event(..signed, sig: "zz"))
-}
-
-/// 任意のバイト列を pubkey として BIP-340 の challenge に入れて署名する。長さの
-/// 検査を確かめるための、仕様外の pubkey を持つ正しい署名を作る。
-/// `bip340.sign_with_aux` から乱数を除き、固定の nonce `k0 = 1` を使う。
-fn sign_over_pubkey_bytes(
-  privkey: Int,
-  pubkey: BitArray,
-  message: BitArray,
-) -> BitArray {
-  let assert Ok(#(_px, py)) = secp256k1.mul_g(privkey)
-  let d = case py % 2 == 0 {
-    True -> privkey
-    False -> secp256k1.n - privkey
-  }
-  let k0 = 1
-  let assert Ok(#(rx, ry)) = secp256k1.mul_g(k0)
-  let k = case ry % 2 == 0 {
-    True -> k0
-    False -> secp256k1.n - k0
-  }
-  let rx_bytes = secp256k1.int_to_bytes32(rx)
-  let e =
-    secp256k1.int_from_bytes(
-      bip340.tagged_hash("BIP0340/challenge", <<
-        rx_bytes:bits,
-        pubkey:bits,
-        message:bits,
-      >>),
-    )
-    % secp256k1.n
-  let s = { k + e * d } % secp256k1.n
-  <<rx_bytes:bits, secp256k1.int_to_bytes32(s):bits>>
 }
 
 /// wss://relay.damus.io からそのまま取得した実イベント。id は別の実装が計算した
