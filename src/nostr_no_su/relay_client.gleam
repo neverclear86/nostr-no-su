@@ -227,9 +227,8 @@ const ping_payload = <<"nostr-no-su">>
 /// ハンドシェイクに許す時間。`start` は呼び出し元を最大でこの時間（さらに
 /// stratus が上乗せする 100ms）ブロックする。接続アクター（`relay_list.connections_child`
 /// の factory の子）はブロック中に factory の停止要求に応答できないため、この値は
-/// factory の子の停止タイムアウト（`factory_supervisor.worker_child` の既定 5000ms）
-/// より小さくしておく必要がある。さもないと、応答しないリレーを待っている接続の停止が
-/// 強制 kill で終わる。
+/// `relay_list.connection_shutdown_ms` より小さくしておく必要がある。さもないと、
+/// 応答しないリレーを待っている接続の停止が強制 kill で終わる。
 const connect_timeout_ms = 3000
 
 /// リレー URL を stratus が期待する http(s) リクエストに変換する。受けるのは

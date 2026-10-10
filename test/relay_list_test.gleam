@@ -115,8 +115,8 @@ pub fn open_all_keeps_the_registered_order_test() {
     relay_list.Registered(url: "wss://b", roles: relay_list.BunkerOnly),
     relay_list.Registered(url: "wss://c", roles: relay_list.Both),
   ]
-  let #(entries, rejections) = relay_list.open_all([], registered)
-  assert rejections == []
+  let #(entries, invalid_urls) = relay_list.open_all([], registered)
+  assert invalid_urls == []
   assert list.map(entries, fn(entry) { entry.url })
     == ["wss://a", "wss://b", "wss://c"]
   assert relay_list.urls(entries, relay_list.Monitor) == ["wss://a", "wss://c"]
@@ -124,7 +124,7 @@ pub fn open_all_keeps_the_registered_order_test() {
 }
 
 /// `open_all` は一覧にある URL を黙って飛ばし、位置も一覧も変えない。不正な URL は、
-/// URL つきの拒否として返り一覧に入らない。
+/// 登録の順の URL の一覧として返り、一覧に入らない。
 pub fn open_all_skips_listed_and_invalid_relays_test() {
   let existing = [
     relay_list.Entry(
@@ -138,13 +138,9 @@ pub fn open_all_skips_listed_and_invalid_relays_test() {
     relay_list.Registered(url: "relay.damus.io", roles: relay_list.MonitorOnly),
     relay_list.Registered(url: "wss://", roles: relay_list.MonitorOnly),
   ]
-  let #(entries, rejections) = relay_list.open_all(existing, registered)
+  let #(entries, invalid_urls) = relay_list.open_all(existing, registered)
   assert entries == existing
-  assert rejections
-    == [
-      #("relay.damus.io", relay_list.InvalidUrl),
-      #("wss://", relay_list.InvalidUrl),
-    ]
+  assert invalid_urls == ["relay.damus.io", "wss://"]
 }
 
 /// `connections` と `urls` は、その用途で使う項目だけを一覧の順に並べる。
