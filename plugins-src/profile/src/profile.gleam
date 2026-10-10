@@ -32,7 +32,7 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{type Option}
 import gleam/result
 import profile/i18n
 import profile/page
@@ -226,21 +226,19 @@ fn fail_submission(
 
 /// 成功を `profile_store` に保持する形の Dynamic（`status` だけを持つ）。
 fn ok_result() -> Dynamic {
-  dynamic.properties([#(dynamic.string("status"), dynamic.string("ok"))])
+  page.properties([#("status", dynamic.string("ok"))])
 }
 
 /// 失敗を `profile_store` に保持する形の Dynamic。`reason` は失敗の理由の英語の
 /// 1 文、`values` は再送信のためにフォームへ戻す 8 項目。
 fn error_result(reason: String, values: List(#(String, String))) -> Dynamic {
-  dynamic.properties([
-    #(dynamic.string("status"), dynamic.string("error")),
-    #(dynamic.string("reason"), dynamic.string(reason)),
+  page.properties([
+    #("status", dynamic.string("error")),
+    #("reason", dynamic.string(reason)),
     #(
-      dynamic.string("values"),
-      dynamic.properties(
-        list.map(values, fn(field) {
-          #(dynamic.string(field.0), dynamic.string(field.1))
-        }),
+      "values",
+      page.properties(
+        list.map(values, fn(field) { #(field.0, dynamic.string(field.1)) }),
       ),
     ),
   ])
@@ -253,36 +251,18 @@ const cache_ttl_ms = 60_000
 /// `pubkeys` の各アカウントの kind 0 を `pubkeys` の順に返す。`profile_store`
 /// に期限内のキャッシュがある公開鍵はそれを使い、無い公開鍵だけを
 /// `fetch_profiles` の 1 回の呼び出しで取る（全員がキャッシュにあれば呼ばない）。
-/// 取れた `Found` と `NotFound` は `cache_ttl_ms` の間キャッシュし、`Failed` は
-/// キャッシュしない（次の描画で取り直すため）。
+/// 取れた結果のうち `page.cacheable` が通るものを `cache_ttl_ms` の間キャッシュする。
 fn current_profiles(pubkeys: List(String)) -> List(page.Fetched) {
   let cached = list.zip(pubkeys, cache_get(pubkeys))
-  let misses =
-    list.filter_map(cached, fn(pair) {
-      case pair.1 {
-        Some(_) -> Error(Nil)
-        None -> Ok(pair.0)
-      }
-    })
-  let fresh = list.zip(misses, fetch_profiles(misses) |> list.map(page.fetched))
-  list.each(fresh, fn(pair) {
-    case pair.1 {
-      page.Failed(_) -> Nil
-      fetched -> {
-        let _ = cache_put(pair.0, fetched, cache_ttl_ms)
-        Nil
-      }
-    }
+  let missed = page.misses(cached)
+  let fresh = list.zip(missed, fetch_profiles(missed) |> list.map(page.fetched))
+  fresh
+  |> list.filter(fn(pair) { page.cacheable(pair.1) })
+  |> list.each(fn(pair) {
+    let _ = cache_put(pair.0, pair.1, cache_ttl_ms)
+    Nil
   })
-  let fresh_by_pubkey = dict.from_list(fresh)
-  list.map(cached, fn(pair) {
-    case pair.1 {
-      Some(fetched) -> fetched
-      None ->
-        dict.get(fresh_by_pubkey, pair.0)
-        |> result.unwrap(page.Failed(page.unexpected_value_reason))
-    }
-  })
+  page.merge_fetched(cached, fresh)
 }
 
 /// 公開鍵ごとに最新の kind 0 を、本体の `fetch_events` の 1 回の呼び出しで
