@@ -30,6 +30,7 @@ import nostr_no_su/time
 import pog
 import support/log_capture
 import support/nip46_client
+import support/numbers
 import support/postgres.{generous}
 import support/random_account.{random_entry, random_master_key}
 import support/signed_event
@@ -1330,8 +1331,7 @@ fn connect_clients(
   secret_arg: String,
   count: Int,
 ) -> engine.Engine {
-  list.repeat(Nil, count)
-  |> list.index_map(fn(_, index) { index + 1 })
+  numbers.up_to(count)
   |> list.fold(state, fn(state, n) {
     let client = nip46_client.account_for(nip46_client.padded_hex(n))
     let incoming =

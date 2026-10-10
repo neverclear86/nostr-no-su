@@ -16,6 +16,7 @@ import support/nip46_client.{
   account_for, connect_body, connect_body_with_perms, decrypt_response,
   padded_hex, request_body, request_event,
 }
+import support/numbers
 import support/signed_event
 
 /// テスト用の署名者の接続 secret。
@@ -647,8 +648,8 @@ pub fn requests_in_a_session_write_the_last_use_test() {
 pub fn sessions_are_sorted_test() {
   let signer = account_for(signer_key)
   let client_keys =
-    list.repeat(Nil, 40)
-    |> list.index_map(fn(_, index) { "client-" <> int.to_string(index) })
+    numbers.below(40)
+    |> list.map(fn(index) { "client-" <> int.to_string(index) })
   let sessions =
     client_keys
     |> list.reverse
@@ -2113,8 +2114,8 @@ pub fn open_client_session_rejects_an_unknown_signer_test() {
 /// 最も新しい（押し出しの対象であることをこの 1 件で示す）。上限のテスト 3 件が
 /// 共有する。
 fn full_sessions(signer: Account) -> List(session.Session) {
-  list.repeat(Nil, engine.session_capacity)
-  |> list.index_map(fn(_, index) {
+  numbers.below(engine.session_capacity)
+  |> list.map(fn(index) {
     session.Session(
       signer: account.pubkey_hex(signer),
       client: "client-" <> int.to_string(index),
@@ -2258,8 +2259,7 @@ pub fn pending_lists_the_newest_first_test() {
 pub fn pending_stays_within_the_capacity_test() {
   let signer = account_for(signer_key)
   let #(final, last_write) =
-    list.repeat(Nil, engine.pending_capacity + 1)
-    |> list.index_map(fn(_, index) { index + 1 })
+    numbers.up_to(engine.pending_capacity + 1)
     |> list.fold(#(auth_engine(), None), fn(acc, n) {
       let #(state, _) = acc
       let client = account_for(padded_hex(n))
@@ -2273,8 +2273,8 @@ pub fn pending_stays_within_the_capacity_test() {
   let assert Some(engine.InsertPending(evicted:, ..)) = last_write
   assert evicted == ["tok-1"]
   let expected_tokens =
-    list.repeat(Nil, engine.pending_capacity)
-    |> list.index_map(fn(_, index) {
+    numbers.below(engine.pending_capacity)
+    |> list.map(fn(index) {
       "tok-" <> int.to_string(engine.pending_capacity + 1 - index)
     })
   assert list.map(engine.pending(final, 1017), fn(pending) { pending.token })
@@ -2289,8 +2289,8 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
   let client_b = account_for(other_client_key)
   // 署名者を変えた `connect` で上限を超えられるよう、件数ぶんの署名者を登録する
   let signers =
-    list.repeat(Nil, engine.pending_capacity + 2)
-    |> list.index_map(fn(_, index) { account_for(padded_hex(100 + index)) })
+    numbers.below(engine.pending_capacity + 2)
+    |> list.map(fn(index) { account_for(padded_hex(100 + index)) })
   let assert [first_signer, ..] = signers
   let state =
     engine.new(
@@ -2314,8 +2314,8 @@ pub fn repeated_connects_evict_the_same_clients_oldest_pending_test() {
       )
     })
   let expected_tokens =
-    list.repeat(Nil, engine.pending_capacity - 1)
-    |> list.index_map(fn(_, index) {
+    numbers.below(engine.pending_capacity - 1)
+    |> list.map(fn(index) {
       "tok-a" <> int.to_string(engine.pending_capacity + 2 - index)
     })
   let last = 1000 + { engine.pending_capacity + 2 } * interval
@@ -2599,12 +2599,6 @@ pub fn restore_replaces_sessions_and_pending_test() {
 
 // --- セッションの外のリクエストの上限 ---
 
-/// 1 から `count` までの整数の一覧。別々のクライアント鍵やリクエスト id を
-/// 並べるために使う。
-fn up_to(count: Int) -> List(Int) {
-  list.repeat(Nil, count) |> list.index_map(fn(_, index) { index + 1 })
-}
-
 /// セッションの無いクライアントからの `get_public_key` リクエストイベント。id を
 /// 変えて、同じクライアントや同じ時刻から何件も送れるようにする。
 fn get_public_key_event(
@@ -2625,7 +2619,7 @@ fn exhaust_global_limit(
   count: Int,
   now: Int,
 ) -> engine.Engine {
-  list.fold(up_to(count), state, fn(state, n) {
+  list.fold(numbers.up_to(count), state, fn(state, n) {
     let client = account_for(padded_hex(200 + n))
     let #(state, outcome) =
       handle(
@@ -2645,7 +2639,7 @@ pub fn requests_without_a_session_over_the_client_limit_get_no_reply_test() {
   let client = account_for(client_key)
   let state =
     list.fold(
-      up_to(rate_limit.client_limit.capacity),
+      numbers.up_to(rate_limit.client_limit.capacity),
       new_engine(),
       fn(state, n) {
         let #(state, outcome) =
@@ -2700,16 +2694,20 @@ pub fn requests_in_a_session_are_not_limited_test() {
   let state =
     exhaust_global_limit(state, signer, rate_limit.global_limit.capacity, 1000)
   // 全体が空でも、セッション内のリクエストは上限を超える件数でも応答する
-  list.fold(up_to(rate_limit.global_limit.capacity + 1), state, fn(state, n) {
-    let #(state, outcome) =
-      handle(
-        state,
-        get_public_key_event(client, signer, "g" <> int.to_string(n), 1000),
-        1000,
-      )
-    let assert Reply(_) = outcome
-    state
-  })
+  list.fold(
+    numbers.up_to(rate_limit.global_limit.capacity + 1),
+    state,
+    fn(state, n) {
+      let #(state, outcome) =
+        handle(
+          state,
+          get_public_key_event(client, signer, "g" <> int.to_string(n), 1000),
+          1000,
+        )
+      let assert Reply(_) = outcome
+      state
+    },
+  )
 }
 
 /// 全体の上限を使い切られていても、接続 secret の一致する `connect` は上限に

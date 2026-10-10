@@ -29,6 +29,7 @@ import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
 import support/nip46_client.{account_for}
+import support/numbers
 import support/poll
 import support/signed_event
 
@@ -511,7 +512,7 @@ pub fn note(label: String) -> Event {
 
 /// 連番のイベントの label。
 pub fn event_labels(prefix: String, count: Int) -> List(String) {
-  use _unit, index <- list.index_map(list.repeat(Nil, count))
+  use index <- list.map(numbers.below(count))
   prefix <> int.to_string(index)
 }
 
