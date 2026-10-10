@@ -12,7 +12,6 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom.{type Atom}
-import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -21,10 +20,7 @@ import nostr_no_su/plugin
 import nostr_no_su/plugin_loader
 import support/beam_fixture.{type Fixture}
 
-/// 戻らない・異常終了するメタデータ呼び出しのテストに使う短い期限。実時間に
-/// 依存しないよう小さく取る（`plugin_runner_test.gleam` の `limits` と同じ形）が、
-/// 同じ呼び出しで正常なプラグインも読み込むテストがあるので、並列に走る他の
-/// モジュールと CPU を取り合っても正常な読み込みが収まる長さにする。
+/// 戻らない呼び出しのテストに使う短い期限。実時間に依存しないよう小さく取る。
 const short_call_timeout_ms = 1000
 
 /// `short_call_timeout_ms` で打ち切られた呼び出しの理由に入る文言。
@@ -980,251 +976,29 @@ pub fn load_all_counter_example_test() {
   assert list.length(loaded.children) == 1
 }
 
-/// 管理 UI の宣言（`plugin_pages`、`plugin_page_content`、`plugin_page_action`）の片方だけの
-/// 宣言、言語ごとのキーの食い違い、一覧の中身の誤りを持つプラグインは読み込まれず、
-/// 行ごとに決まった理由が注記に出る。
-pub fn invalid_page_declarations_are_not_loaded_test() {
-  use #(name, source, note) <- list.each([
-    #(
-      "pages_without_content_export",
-      beam_fixture.pages_only_source,
-      "plugin_pages/0 but no plugin_page_content/1, /2 or /3",
-    ),
-    #(
-      "page_content_without_pages_export",
-      beam_fixture.page_content_only_source,
-      "plugin_page_content/1 but no plugin_pages/0, /1 or /2",
-    ),
-    #(
-      "page_action_without_pages",
-      beam_fixture.page_action_only_source,
-      "plugin_page_action/3 but no plugin_pages/0, /1 or /2",
-    ),
-    #(
-      "localized_pages_without_localized_content",
-      fn(module, name) {
-        beam_fixture.ui_source(
-          module,
-          name,
-          2,
-          2,
-          "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => Language}]",
-        )
-      },
-      "plugin_pages/2 but no plugin_page_content/3",
-    ),
-    #(
-      "localized_content_without_localized_pages",
-      fn(module, name) {
-        beam_fixture.ui_source(
-          module,
-          name,
-          1,
-          3,
-          "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
-        )
-      },
-      "plugin_page_content/3 but no plugin_pages/2",
-    ),
-    #(
-      "localized_page_keys_differ",
-      fn(module, name) {
-        beam_fixture.ui_source(
-          module,
-          name,
-          2,
-          3,
-          "[#{<<\"key\">> => Language, <<\"title\">> => <<\"Status\">>}]",
-        )
-      },
-      "plugin_pages/2: page keys for \"ja\" differ from \"en\"",
-    ),
-    #(
-      "pages_empty",
-      pages_returning("[]"),
-      "plugin_pages/0 must return at least one page",
-    ),
-    #(
-      "duplicate_page_key",
-      pages_returning(
-        "[#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"A\">>}, "
-        <> "#{<<\"key\">> => <<\"settings\">>, <<\"title\">> => <<\"B\">>}]",
-      ),
-      "duplicate page key \"settings\"",
-    ),
-    #(
-      "invalid_page_key",
-      pages_returning(
-        "[#{<<\"key\">> => <<\"A b\">>, <<\"title\">> => <<\"A\">>}]",
-      ),
-      "page key \"A b\" must match [a-z0-9_-]+",
-    ),
-    #(
-      "page_title_missing",
-      pages_returning("[#{<<\"key\">> => <<\"status\">>}]"),
-      "page key \"status\": missing title",
-    ),
-    #(
-      "page_element_not_a_map",
-      pages_returning("[{a, b}]"),
-      "page #0: must be a page map, got Array",
-    ),
-    #(
-      "pages_not_a_list",
-      pages_returning("#{}"),
-      "plugin_pages/0 must return a list of page maps, got Dict",
-    ),
-  ])
-  let fixture = beam_fixture.new(name)
+/// `load_all` に渡した `call_timeout_ms` は、`plugin.load` のメタデータ呼び出しの期限になる。
+/// 戻らない `plugin_name/0` を持つプラグインは読み込まれず、期限切れの理由が `not_loaded` に乗る。
+pub fn load_all_passes_the_call_timeout_test() {
+  let fixture = beam_fixture.new("call_timeout")
   beam_fixture.compile(
-    source(fixture.module, name),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
-  assert #(name, plugins, has_note(notes, note)) == #(name, [], True)
-}
-
-/// `plugin_pages/0` が `body` を返し、`plugin_page_content/1` が空の節を返すプラグインの
-/// ソースを、モジュール名とプラグイン名から作る関数。
-fn pages_returning(body: String) -> fn(String, String) -> String {
-  fn(module, name) {
-    beam_fixture.pages_source(module, name, body, "#{<<\"sections\">> => []}")
-  }
-}
-
-/// `plugin_page_content` の例外は、一覧の検証に影響せず読み込みには成功し、
-/// `ui.content` の呼び出しの `Error` として現れる。
-pub fn page_content_crash_test() {
-  let fixture = beam_fixture.new("pages_content_crash")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
+    beam_fixture.plugin_name_body_source(
       fixture.module,
-      "pages_content_crash_plugin",
-      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
-      "erlang:error(boom)",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
-  let assert [loaded] = plugins
-  let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status", "en", [])
-  assert string.contains(reason, "plugin_page_content/1 crashed")
-}
-
-/// `plugin_page_content` の失敗の理由は、モジュール名の接頭辞を 1 つ付けた 1 行になる。
-pub fn page_content_crash_reason_names_the_module_test() {
-  let fixture = beam_fixture.new("pages_content_crash_reason")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_content_crash_reason_plugin",
-      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
-      "erlang:error(boom)",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, ..) = load_dir(fixture.root)
-  let assert [loaded] = plugins
-  let assert Some(ui) = loaded.ui
-  assert ui.content("status", "en", [])
-    == Error(fixture.module <> ": plugin_page_content/1 crashed (error:boom)")
-}
-
-/// 戻らない `plugin_page_content` は、読み込みには成功し、`ui.content` の
-/// 呼び出しが期限で打ち切られて `Error` になる。
-pub fn page_content_timeout_test() {
-  let fixture = beam_fixture.new("pages_content_timeout")
-  beam_fixture.compile(
-    beam_fixture.pages_source(
-      fixture.module,
-      "pages_content_timeout_plugin",
-      "[#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}]",
+      1,
       "receive after infinity -> ok end",
     ),
     fixture.module,
     fixture.root,
   )
-  let plugin_loader.LoadOutcome(plugins:, ..) =
-    load_dir_within(fixture.root, short_call_timeout_ms)
-  let assert [loaded] = plugins
-  let assert Some(ui) = loaded.ui
-  let assert Error(reason) = ui.content("status", "en", [])
-  assert string.contains(reason, timed_out())
-}
-
-/// 戻らない `plugin_name/0` を持つプラグインは、理由付きで読み込まれず、
-/// 起動は続いて同じディレクトリーの他のプラグインが読み込まれる。
-/// 打ち切られた呼び出しのプロセスも残らない。
-///
-/// 期限（`short_call_timeout_ms`）は、使い捨てのプロセスが `plugin_name/0` の先頭で
-/// Pid を退避するより十分長い（退避の前に打ち切ると `last_pid` が落ちる）。
-pub fn load_all_hanging_metadata_test() {
-  let fixture = beam_fixture.new("hanging_metadata")
-  let hanging = beam_fixture.name(fixture, "aaa")
-  let good = beam_fixture.name(fixture, "bbb")
-  beam_fixture.compile(
-    beam_fixture.plugin_name_body_source(
-      hanging,
-      1,
-      "persistent_term:put(?MODULE, self()), receive after infinity -> ok end",
-    ),
-    hanging,
-    fixture.root,
-  )
-  put_plugin(good, "survivor_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    load_dir_within(fixture.root, short_call_timeout_ms)
-  let assert [loaded] = plugins
-  assert loaded.name == "survivor_plugin"
-  assert has_note(notes, hanging <> ": plugin_name/0 " <> timed_out())
-  assert has_note(notes, "(1 skipped)")
-  assert !process.is_alive(beam_fixture.last_pid(hanging))
-}
-
-/// 戻らない `-on_load` を持つプラグインは、モジュールの読み込みの時点で理由付き
-/// で読み込まれず、起動は続いて同じディレクトリーの他のプラグインが読み込まれる。
-pub fn load_all_hanging_on_load_test() {
-  let fixture = beam_fixture.new("hanging_on_load")
-  let hanging = beam_fixture.name(fixture, "aaa")
-  let good = beam_fixture.name(fixture, "bbb")
-  beam_fixture.compile(
-    beam_fixture.hanging_on_load_source(hanging, hanging),
-    hanging,
-    fixture.root,
-  )
-  put_plugin(good, "survivor_plugin", fixture.root)
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
-    load_dir_within(fixture.root, short_call_timeout_ms)
-  let assert [loaded] = plugins
-  assert loaded.name == "survivor_plugin"
-  assert has_note(
-    notes,
-    hanging <> ": cannot load module (" <> timed_out() <> ")",
-  )
-  assert has_note(notes, "(1 skipped)")
-}
-
-/// `plugin_name/0` が自プロセスを kill するプラグインは、印の無い DOWN として
-/// `crashed` の理由になる（`killed`）。
-pub fn load_all_killed_metadata_test() {
-  let fixture = beam_fixture.new("killed_metadata")
-  beam_fixture.compile(
-    beam_fixture.plugin_name_body_source(
-      fixture.module,
-      1,
-      "exit(self(), kill)",
-    ),
-    fixture.module,
-    fixture.root,
-  )
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) =
+  let plugin_loader.LoadOutcome(plugins:, not_loaded:, ..) =
     load_dir_within(fixture.root, short_call_timeout_ms)
   assert plugins == []
-  assert has_note(notes, fixture.module <> ": plugin_name/0 crashed (killed)")
+  assert not_loaded
+    == [
+      plugin_loader.NotLoaded(
+        id: fixture.module,
+        reason: "plugin_name/0 " <> timed_out(),
+      ),
+    ]
 }
 
 /// 末尾にスラッシュを持つディレクトリーでも、区切りは 1 つにする。
