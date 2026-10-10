@@ -3,6 +3,7 @@
 //// テストで見る。
 
 import gleam/erlang/process
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/system
 import gleam/string
@@ -16,6 +17,7 @@ import nostr_no_su/named
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/relay_client.{Acknowledgement}
 import nostr_no_su/time
+import support/log_capture
 import support/nip46_client.{
   account_for, connect_body, request_body, request_event,
 }
@@ -55,6 +57,49 @@ fn one_skipped() -> vault.Skipped {
     label: "",
     reason: vault.UndecryptablePrivateKey,
   )
+}
+
+/// 偽のストアと再試行の待ち時間で、`Store` を組み立てるだけのバンカーを起動する。
+fn start_bunker_with_load(
+  name: process.Name(bunker.Msg),
+  load: fn() -> Result(bunker.Snapshot, String),
+) -> Nil {
+  start_bunker_with_session_relays(name, load, fn(_urls) { Nil })
+}
+
+/// `start_bunker_with_load` に、セッションのリレーの一覧を受ける関数を渡す版。
+fn start_bunker_with_session_relays(
+  name: process.Name(bunker.Msg),
+  load: fn() -> Result(bunker.Snapshot, String),
+  session_relays: fn(List(String)) -> Nil,
+) -> Nil {
+  let assert Ok(_started) =
+    bunker.start(
+      name,
+      bunker.Settings(
+        store: bunker.Store(
+          load: load,
+          insert: fn(_account) { Ok(Nil) },
+          delete: fn(_signer) { Ok(Nil) },
+          update_secret: fn(_signer, _secret) { Ok(Nil) },
+          update_label: fn(_signer, _label) { Ok(Nil) },
+          write: fn(_write) { Ok(Nil) },
+        ),
+        auth_url: None,
+        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
+      ),
+      fn() { Nil },
+      fn(_relays) { Nil },
+      session_relays,
+    )
+  Nil
+}
+
+/// テストで起動したバンカーを止める。
+fn stop_bunker(name: process.Name(bunker.Msg)) -> Nil {
+  let assert Ok(pid) = process.named(name)
+  process.unlink(pid)
+  process.kill(pid)
 }
 
 /// 初回の成功は件数だけを出す。
@@ -120,25 +165,9 @@ pub fn a_changed_failure_is_reported_test() {
 pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
   let name = process.new_name("bunker_state_test")
   let stored = one_account()
-  let assert Ok(_started) =
-    bunker.start(
-      name,
-      bunker.Settings(
-        store: bunker.Store(
-          load: fn() { Ok(bunker.Snapshot(Loaded([stored], []), [], [], [])) },
-          insert: fn(_account) { Ok(Nil) },
-          delete: fn(_signer) { Ok(Nil) },
-          update_secret: fn(_signer, _secret) { Ok(Nil) },
-          update_label: fn(_signer, _label) { Ok(Nil) },
-          write: fn(_write) { Ok(Nil) },
-        ),
-        auth_url: None,
-        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
-      ),
-      fn() { Nil },
-      fn(_relays) { Nil },
-      fn(_urls) { Nil },
-    )
+  start_bunker_with_load(name, fn() {
+    Ok(bunker.Snapshot(Loaded([stored], []), [], [], []))
+  })
   // 読み込みの完了を待つ。`LoadAccounts` は起動時に名前なしの subject へ積まれて
   // おり、アクターは両方の subject を選択しているので、`GetAccounts` はその後に
   // 処理される。
@@ -147,44 +176,33 @@ pub fn inspecting_the_bunker_state_does_not_reveal_the_secret_test() {
   let shown = string.inspect(system.get_state(pid))
   assert string.contains(shown, account.pubkey_hex(stored.account))
   assert !string.contains(shown, stored.secret)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
-/// 偽のストアと再試行の待ち時間で、`Store` を組み立てるだけのバンカーを起動する。
-fn start_bunker_with_load(
-  name: process.Name(bunker.Msg),
-  load: fn() -> Result(bunker.Snapshot, String),
-) -> Nil {
-  start_bunker_with_session_relays(name, load, fn(_urls) { Nil })
-}
+/// アカウントの読み込みの結果は、失敗を `warning`、成功を `notice` の水準で出す。
+pub fn the_bunker_logs_a_failed_load_as_a_warning_and_a_loaded_one_as_a_notice_test() {
+  let capture = log_capture.install()
+  let failing = process.new_name("bunker_load_failure_level_test")
+  start_bunker_with_load(failing, fn() { Error("level probe: store down") })
+  let assert Error(_reason) = bunker.accounts(failing)
+  let loaded = process.new_name("bunker_load_success_level_test")
+  start_bunker_with_load(loaded, fn() {
+    Ok(bunker.Snapshot(Loaded([one_account()], []), [], [], []))
+  })
+  let assert Ok([_]) = bunker.accounts(loaded)
+  let lines = log_capture.lines(capture)
+  log_capture.remove(capture)
+  stop_bunker(failing)
+  stop_bunker(loaded)
 
-/// `start_bunker_with_load` に、セッションのリレーの一覧を受ける関数を渡す版。
-fn start_bunker_with_session_relays(
-  name: process.Name(bunker.Msg),
-  load: fn() -> Result(bunker.Snapshot, String),
-  session_relays: fn(List(String)) -> Nil,
-) -> Nil {
-  let assert Ok(_started) =
-    bunker.start(
-      name,
-      bunker.Settings(
-        store: bunker.Store(
-          load: load,
-          insert: fn(_account) { Ok(Nil) },
-          delete: fn(_signer) { Ok(Nil) },
-          update_secret: fn(_signer, _secret) { Ok(Nil) },
-          update_label: fn(_signer, _label) { Ok(Nil) },
-          write: fn(_write) { Ok(Nil) },
-        ),
-        auth_url: None,
-        retry_delay: backoff.Backoff(initial_ms: 100, max_ms: 100),
-      ),
-      fn() { Nil },
-      fn(_relays) { Nil },
-      session_relays,
-    )
-  Nil
+  assert list.any(lines, string.contains(
+    _,
+    " warning [bunker] account store unavailable: level probe: store down;",
+  ))
+  assert list.any(lines, string.contains(
+    _,
+    " notice [bunker] loaded 1 account(s)",
+  ))
 }
 
 /// 読み込みが常に失敗する（＝いつまでも `Loading` のままの）バンカーは、
@@ -196,9 +214,7 @@ pub fn sign_event_returns_the_reason_before_accounts_are_loaded_test() {
   assert bunker.sign_event(name, "s1", 1, [], "hello")
     == Error("accounts are not loaded yet")
 
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
 /// 登録済みの署名者の鍵で署名し、検証を通るイベントを返す。
@@ -218,9 +234,7 @@ pub fn sign_event_signs_with_the_registered_account_test() {
   assert signed.content == "hi"
   let assert Ok(_verified) = event.verify(signed)
 
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
 /// 読み込みが常に失敗する（＝いつまでも `Loading` のままの）バンカーは、
@@ -232,9 +246,7 @@ pub fn check_accounts_returns_the_reason_before_accounts_are_loaded_test() {
   assert bunker.check_accounts(name, ["s1"])
     == Error("accounts are not loaded yet")
 
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
 /// 登録済みと未登録を混ぜた問い合わせは、署名者ごとの結果を問い合わせた順に返す。
@@ -252,9 +264,7 @@ pub fn check_accounts_reports_each_signer_in_order_test() {
     ])
     == Ok([Error("account is not registered"), Ok(Nil)])
 
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
 /// `rate-limited:` を返したリレーには、セッションの外の応答が届かなくなる。接続 secret
@@ -321,9 +331,7 @@ pub fn the_bunker_skips_a_rate_limited_relay_for_responses_without_a_session_tes
   let assert Ok(_response) = process.receive(inbox_a, 1000)
   let assert Ok(_response) = process.receive(inbox_b, 1000)
 
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
+  stop_bunker(name)
 }
 
 /// テストで使う、セッションのリレーの 1 本目。
@@ -388,13 +396,6 @@ fn send_get_public_key(
       )),
     ),
   )
-}
-
-/// テストで起動したバンカーを止める。
-fn stop_bunker(name: process.Name(bunker.Msg)) -> Nil {
-  let assert Ok(pid) = process.named(name)
-  process.unlink(pid)
-  process.kill(pid)
 }
 
 /// 応答は基本のリレーと応答先のセッションのリレーにだけ届き、別のセッションの

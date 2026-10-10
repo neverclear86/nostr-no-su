@@ -2,13 +2,15 @@
 //// 保持する（リレークライアントは切断のたびに再起動されるため、そこにセッション
 //// 状態を置けない）。判断ロジックはすべて `engine` 側に残す。
 ////
-//// このモジュールを変える人が守る不変条件は次の 2 つである。
+//// このモジュールを変える人が守る不変条件は次の 3 つである。
 //// - `LoadAccounts` の最初の送信を initialiser 以外へ移さない。initialiser が積むので
 ////   メールボックスの先頭になり、後から起動する接続の `GetSigners` と `Authenticate` は
 ////   必ず最初の読み込みの後に処理される。
 //// - 状態の遷移はすべて `transition` を通す。署名者の集合が変わったときの `is_signer`
 ////   の写しの置き直しと購読の張り直しの依頼、セッションのリレーの一覧の受け渡しは
 ////   `transition` だけが行う。
+//// - 現在時刻は `handle` の入口で 1 メッセージに 1 回だけ読み、時刻を使う枝と下請けには
+////   引数の `now` で渡す。処理の途中で `time.now_seconds` を読み直さない。
 ////
 //// 読み込みと変更の保証と待ちは、docs/design-decisions.md の「アカウントの変更は DB
 //// への書き込みが成功してからメモリに反映する」「DB が不調な間は NIP-46 の処理が
@@ -761,8 +763,9 @@ fn initialise(
 
 /// 受け取ったメッセージを 1 件処理する。
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
+  let now = time.now_seconds()
   case msg {
-    LoadAccounts -> actor.continue(load_accounts(state))
+    LoadAccounts -> actor.continue(load_accounts(state, now))
     ReloadAccounts(reply) -> {
       let next = case state.accounts {
         Ready -> reload(state)
@@ -787,12 +790,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       answer(
         state,
         reply,
-        delivery.authentication_events(
-          accounts,
-          relay_url,
-          challenge,
-          time.now_seconds(),
-        ),
+        delivery.authentication_events(accounts, relay_url, challenge, now),
       )
     }
     CheckAccounts(signers:, reply:) ->
@@ -803,7 +801,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           |> result.map(fn(_) { list.map(signers, registered(state, _)) }),
       )
     SignEvent(signer:, kind:, tags:, content:, reply:) ->
-      answer(state, reply, sign_for(state, signer, kind, tags, content))
+      answer(state, reply, sign_for(state, signer, kind, tags, content, now))
     AddAccount(account: added, label:, reply:) -> {
       let signer = account.pubkey_hex(added)
       let stored =
@@ -818,6 +816,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Added,
         signer,
         require_unregistered(state, signer),
+        now,
         fn() { state.settings.store.insert(stored) },
         with_account(_, stored),
       )
@@ -829,6 +828,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Removed,
         signer,
         require_registered_or_skipped(state, signer),
+        now,
         fn() { state.settings.store.delete(signer) },
         fn(current) { without_account(current, signer) |> drop_skipped(signer) },
       )
@@ -840,6 +840,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         SecretRotated,
         signer,
         require_registered(state, signer),
+        now,
         fn() { state.settings.store.update_secret(signer, secret) },
         fn(current) {
           State(
@@ -856,6 +857,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         LabelUpdated,
         signer,
         require_registered(state, signer),
+        now,
         fn() { state.settings.store.update_label(signer, label) },
         fn(current) {
           State(..current, labels: dict.insert(current.labels, signer, label))
@@ -865,20 +867,19 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       answer(
         state,
         reply,
-        when_loaded(state, fn() {
-          engine.pending(state.engine, time.now_seconds())
-        }),
+        when_loaded(state, fn() { engine.pending(state.engine, now) }),
       )
     Approve(token, reply) ->
-      decide_pending(state, reply, Approval, token, engine.approve)
+      decide_pending(state, reply, Approval, token, now, engine.approve)
     Deny(token, reply) ->
-      decide_pending(state, reply, Denial, token, engine.deny)
+      decide_pending(state, reply, Denial, token, now, engine.deny)
     OpenClientSession(signer:, client:, perms:, relays:, secret:, reply:) ->
       apply_session_change(
         state,
         reply,
         SessionOpening,
         Some(SessionKey(signer:, client:)),
+        now,
         fn(eng) {
           engine.open_client_session(
             eng,
@@ -888,7 +889,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             relays,
             secret,
             random.hex(token_bytes),
-            time.now_seconds(),
+            now,
           )
           |> result.map(with_response)
         },
@@ -902,31 +903,20 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     GetSessionSigners(relay_url:, reply:) ->
       answer(state, reply, session_relay_signers_of(state, relay_url))
     ReserveSessionRelays(signer:, client:, relays:) ->
-      actor.continue(transition(
-        state,
-        State(
-          ..state,
-          reserved: dict.insert(
-            state.reserved,
-            SessionKey(signer:, client:),
-            relays,
-          ),
-        ),
+      update_reserved(state, dict.insert(
+        _,
+        SessionKey(signer:, client:),
+        relays,
       ))
     ReleaseSessionRelays(signer:, client:) ->
-      actor.continue(transition(
-        state,
-        State(
-          ..state,
-          reserved: dict.delete(state.reserved, SessionKey(signer:, client:)),
-        ),
-      ))
+      update_reserved(state, dict.delete(_, SessionKey(signer:, client:)))
     Revoke(signer:, client:, reply:) ->
       apply_session_change(
         state,
         reply,
         Revocation,
         session_target(state.engine, signer, client),
+        now,
         fn(eng) {
           engine.revoke(eng, signer, client)
           |> result.map(without_response)
@@ -939,6 +929,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         reply,
         PermissionsUpdate,
         session_target(state.engine, signer, client),
+        now,
         fn(eng) {
           engine.set_perms(eng, signer, client, perms)
           |> result.map(without_response)
@@ -964,7 +955,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
       actor.continue(State(..state, publishers: publishers))
     }
-    Incoming(incoming) -> handle_incoming(state, incoming)
+    Incoming(incoming) -> handle_incoming(state, incoming, now)
     Acknowledged(relay_url, ack) -> {
       let #(deliveries, line) =
         delivery.acknowledge(state.deliveries, relay_url, ack)
@@ -980,11 +971,19 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             state.pauses,
             relay_url,
             ack,
-            time.now_seconds(),
+            now,
           ),
         ),
       )
     }
+  }
+}
+
+/// 結果に応じたログの重要度。成功は `log.Notice`、失敗は `log.Warning`。
+fn outcome_level(outcome: Result(a, e)) -> log.Level {
+  case outcome {
+    Ok(_) -> log.Notice
+    Error(_) -> log.Warning
   }
 }
 
@@ -994,17 +993,32 @@ fn answer(state: State, reply: Subject(a), value: a) -> actor.Next(State, Msg) {
   actor.continue(state)
 }
 
+/// 取り置き（`reserved`）を `update` で書き換えた状態へ移り、続ける。
+fn update_reserved(
+  state: State,
+  update: fn(Dict(SessionKey, List(String))) -> Dict(SessionKey, List(String)),
+) -> actor.Next(State, Msg) {
+  actor.continue(transition(
+    state,
+    State(..state, reserved: update(state.reserved)),
+  ))
+}
+
 /// 受信イベント 1 件をエンジンに通す。エンジンの注意があればログに出し、結果に
 /// 応じて送る応答とセッションを探すエンジンの並び、次のエンジンを決める。
 /// `Persist` は書き込みが成功すれば `response` と書き込み後のエンジン、失敗すれば
 /// `on_failure` と受信を記録しただけのエンジンを選ぶ。応答があれば `publish` を
 /// 1 回呼び、最後に `transition` で次のエンジンへ移る。
-fn handle_incoming(state: State, incoming: Verified) -> actor.Next(State, Msg) {
+fn handle_incoming(
+  state: State,
+  incoming: Verified,
+  now: Int,
+) -> actor.Next(State, Msg) {
   // トークンは受信のたびに引く。使うのは承認待ちを作るときだけだが、そう
   // することでエンジンは乱数を持たずに済む。
   let inputs =
     engine.Inputs(
-      now: time.now_seconds(),
+      now: now,
       token: random.hex(token_bytes),
       not_before: state.not_before,
     )
@@ -1048,6 +1062,7 @@ fn handle_incoming(state: State, incoming: Verified) -> actor.Next(State, Msg) {
         response,
         outside_session,
         response_session_relays(engines, response),
+        now,
       )
     None -> written
   }
@@ -1059,29 +1074,21 @@ fn handle_incoming(state: State, incoming: Verified) -> actor.Next(State, Msg) {
 /// 待ち時間を延ばす。読み込み済みなら何もしない（`LoadAccounts` を積むのは
 /// 読み込めていない状態に移るときだけで、読み込み用の subject はこのプロセスの
 /// 外に出ないので、通常は起きない）。
-fn load_accounts(state: State) -> State {
+fn load_accounts(state: State, now: Int) -> State {
   case state.accounts {
     Ready -> state
     Loading(failure:, retry_delay_ms:) -> {
       let outcome = state.settings.store.load()
-      let level = case outcome {
-        Ok(_) -> log.Notice
-        Error(_) -> log.Warning
-      }
       load_report(
         failure,
         result.map(outcome, fn(snapshot) { snapshot.accounts }),
         retry_delay_ms,
       )
-      |> list.each(log.write(level, log_prefix, _))
+      |> list.each(log.write(outcome_level(outcome), log_prefix, _))
       case outcome {
         Ok(snapshot) -> {
           state.open_relays(snapshot.relays)
-          reconcile(
-            State(..state, accounts: Ready),
-            snapshot,
-            time.now_seconds(),
-          )
+          reconcile(State(..state, accounts: Ready), snapshot, now)
           |> transition(state, _)
         }
         Error(reason) -> {
@@ -1223,9 +1230,10 @@ fn sign_for(
   kind: Int,
   tags: List(List(String)),
   content: String,
+  now: Int,
 ) -> Result(Event, String) {
   use account <- result.try(ready_account(state, signer))
-  engine.sign_as(account, kind, tags, content, time.now_seconds())
+  engine.sign_as(account, kind, tags, content, now)
   |> result.replace_error(sign_failed)
 }
 
@@ -1315,13 +1323,9 @@ fn require_registered_or_skipped(
   state: State,
   signer: String,
 ) -> Result(Nil, ChangeFailure) {
-  case engine.has_account(state.engine, signer) {
+  case list.any(state.skipped, fn(row) { row.pubkey == signer }) {
     True -> Ok(Nil)
-    False ->
-      case list.any(state.skipped, fn(row) { row.pubkey == signer }) {
-        True -> Ok(Nil)
-        False -> Error(AccountNotRegistered)
-      }
+    False -> require_registered(state, signer)
   }
 }
 
@@ -1345,6 +1349,7 @@ fn apply_change(
   change: Change,
   signer: String,
   check: Result(Nil, ChangeFailure),
+  now: Int,
   write: fn() -> Result(Nil, WriteFailure),
   update: fn(State) -> State,
 ) -> actor.Next(State, Msg) {
@@ -1353,11 +1358,11 @@ fn apply_change(
     Ready, Error(failure) -> #(state, Error(failure))
     Ready, Ok(Nil) -> {
       let written = write()
-      let level = case written {
-        Ok(_) -> log.Notice
-        Error(_) -> log.Warning
-      }
-      log.write(level, log_prefix, change_line(change, signer, written))
+      log.write(
+        outcome_level(written),
+        log_prefix,
+        change_line(change, signer, written),
+      )
       case written {
         Ok(Nil) -> #(transition(state, update(state)), Ok(Nil))
         Error(NotWritten(reason)) -> #(state, Error(NotApplied(reason)))
@@ -1366,7 +1371,7 @@ fn apply_change(
         // 登録済みとして応答する。読み直しを応答の前に済ませるので、応答を受けた
         // 管理 UI は読み直した後の一覧を読む。
         Error(AlreadyStored(_reason)) -> #(
-          load_accounts(State(..state, accounts: loading(state.settings))),
+          load_accounts(State(..state, accounts: loading(state.settings)), now),
           Error(AccountAlreadyRegistered),
         )
         Error(MaybeWritten(_reason)) -> #(
@@ -1514,12 +1519,8 @@ fn log_session_change(
 ) -> Nil {
   case target {
     Some(SessionKey(signer:, client:)) -> {
-      let level = case outcome {
-        Ok(_) -> log.Notice
-        Error(_) -> log.Warning
-      }
       log.write(
-        level,
+        outcome_level(outcome),
         log_prefix,
         session_change_line(change, signer, client, outcome),
       )
@@ -1610,15 +1611,16 @@ fn decide_pending(
   reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
   token: String,
+  now: Int,
   decide: fn(engine.Engine, String, Int) ->
     Result(#(engine.Engine, Event, engine.Write), String),
 ) -> actor.Next(State, Msg) {
-  let now = time.now_seconds()
   apply_session_change(
     state,
     reply,
     change,
     pending_target(state.engine, token, now),
+    now,
     fn(eng) { result.map(decide(eng, token, now), with_response) },
   )
 }
@@ -1632,6 +1634,7 @@ fn apply_session_change(
   reply: Subject(Result(Nil, SessionFailure)),
   change: SessionChange,
   target: Option(SessionKey),
+  now: Int,
   decide: fn(engine.Engine) ->
     Result(#(engine.Engine, Option(Event), engine.Write), String),
 ) -> actor.Next(State, Msg) {
@@ -1658,6 +1661,7 @@ fn apply_session_change(
                     response,
                     False,
                     response_session_relays([decided], response),
+                    now,
                   )
                 None -> written
               }
@@ -1698,6 +1702,7 @@ fn publish(
   response: Event,
   outside_session: Bool,
   session_relays: List(String),
+  now: Int,
 ) -> State {
   let relay_urls =
     state.publishers
@@ -1717,7 +1722,6 @@ fn publish(
       state
     }
     _ -> {
-      let now = time.now_seconds()
       let #(pauses, sent, lines) =
         delivery.recipients(state.pauses, relay_urls, outside_session, now)
       list.each(lines, log.write(log.Notice, log_prefix, _))
