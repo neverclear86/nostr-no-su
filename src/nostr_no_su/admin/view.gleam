@@ -4,10 +4,10 @@
 //// 「管理 UI はサーバー側で描画する」、CSS は同じ文書の「管理 UI の CSS はビルドして
 //// リポジトリに含め、自前で配信する」に従う。
 ////
-//// 値はテキストか属性値として lustre に渡し、HTML のエスケープは lustre の文字列化に
-//// 任せる。`html.style`、`html.script`、`element.unsafe_raw_html`、イベント属性（`on*`）は
-//// 使わず、JS の処理は `priv/static/admin.js` に置いて要素には `data-action` で処理の名前を
-//// 付ける。`href`、`action`、`src` には、`admin/routes` の `href` がルートから組み立てた値か、
+//// 値のエスケープと JS の置き場所は、上の「管理 UI はサーバー側で描画する」と
+//// docs/architecture.md の「管理 UI のルート」のとおりである。`html.style`、`html.script`、
+//// `element.unsafe_raw_html`、イベント属性（`on*`）は使わない。
+//// `href`、`action`、`src` には、`admin/routes` の `href` がルートから組み立てた値か、
 //// `"/"` か、`admin/dashboard` の節のアンカーの定数の先頭に `#` を付けた値だけを渡す（lustre は
 //// URL を検査しない）。例外は `<img>` の `src` で、scheme を検査した遠隔の画像の URL（アカウントの
 //// アイコンは `https`、プラグインの `image` は `http` / `https`）を渡す。
@@ -20,9 +20,8 @@
 //// 文言を文字列リテラルで書かない。型もテストも、書き足した英語の文言が日本語のページに出ることを
 //// 検出しないためである。文字列リテラルのまま出すのは製品名（`Nostr-no-Su`）だけである。
 ////
-//// 見た目は Tailwind CSS と daisyUI のクラスで付ける。Tailwind は `admin/` の `.gleam`
-//// （`admin/i18n` を除く）の語からクラス名の候補を拾うので、語を変えるだけでも CSS が
-//// 変わることがあり、これらのファイルを変えたら `priv/static/admin.css` をビルドし直す。
+//// 見た目は Tailwind CSS と daisyUI のクラスで付ける。CSS のビルドは docs/development.md の
+//// 「管理 UI の CSS と画面の撮影」のとおりである。
 //// クラス名は文字列の連結で組み立てず、状態ごとに違うものは `case` で完全な文字列を列挙する。
 //// 80 桁を超えても、クラス名の文字列は分けない。フォーカスできる `btn` の文字列には
 //// `focus-visible:outline-base-content`、`input`、`checkbox`、`textarea`、`select` の
@@ -125,19 +124,20 @@ pub type NavbarSwitch {
   NoSwitch
 }
 
-/// ボタンの種類。daisyUI のボタンのクラスを決める。
+/// ボタンの種類。クラスは `button_class` が置き場所との組で決める。
 pub type ButtonKind {
-  /// 主の操作（登録、保存、承認、追加、接続）と、secret が一致しない承認待ちの拒否。塗りの primary。
+  /// 主の操作（登録、保存、承認、追加、接続）と、secret が一致しない承認待ちの拒否。
   PrimaryButton
-  /// 枠だけのボタン。フォームの末尾の、主ではない送信と、空の節の操作に使う。
+  /// フォームの末尾の、主ではない送信と、空の節の操作。
   OutlineButton
-  /// 地味なボタン。主でも危険でもない操作の入口と、取り消しのきく操作の送信に使う。
+  /// 主でも危険でもない操作の入口と、取り消しのきく操作の送信。
   GhostButton
-  /// 取り返しのつかない操作の送信。塗りの error。
+  /// 取り返しのつかない操作の送信。
   DangerButton
-  /// 取り返しのつかない操作への入口。地味なボタンに error の文字色。
+  /// 取り返しのつかない操作への入口。
   DangerGhostButton
-  /// 秘密を画面に出す、または接続中のクライアントに影響する操作の送信と、secret が一致しない承認待ちの承認。warning の枠。
+  /// 秘密を画面に出す、または接続中のクライアントに影響する操作の送信と、secret が一致しない
+  /// 承認待ちの承認。
   WarningOutlineButton
 }
 
@@ -148,7 +148,7 @@ pub type Placement {
   /// 操作のページのように、欄を縦に並べたフォームの末尾に置く。
   InForm
   /// ダイアログのフォームの末尾の 1 行に、送信の右に `id` のダイアログを閉じるボタン（語は `dismiss`、
-  /// 閉じ方は `opening`）を並べる。`dialog` が中身の関数に渡す。
+  /// 閉じ方は `opening`）を並べる。
   InDialog(id: String, dismiss: String, opening: DialogOpening)
 }
 
@@ -167,27 +167,28 @@ pub type Tone {
   Info
 }
 
-/// 状態のチップと状態の注記（`status_note`）の種類。色とアイコンを決め、語は呼び出し側が渡す。
+/// 状態のチップと状態の注記（`status_note`）の種類。色は `chip_tone`、アイコンは `chip_icon` で
+/// 決まり、語は呼び出し側が渡す。
 pub type Chip {
-  /// 接続中、動作中。success の色と circle-check。
+  /// 接続中、動作中。
   ActiveChip
-  /// リレーの未接続。warning の色と unplug。
+  /// リレーの未接続。
   DisconnectedChip
-  /// 締め切りまでに状態が返らない（リレーの用途、プラグイン）。warning の色と clock。
+  /// 締め切りまでに状態が返らない（リレーの用途、プラグイン）。
   UnansweredChip
-  /// 使っていないリレーの用途。点線の枠で塗らず、circle-minus。
+  /// 使っていないリレーの用途。
   UnusedChip
-  /// プラグインの過負荷。warning の色と gauge。
+  /// プラグインの過負荷。
   OverloadedChip
-  /// プラグインの無効。error の色と ban。
+  /// プラグインの無効。
   DisabledChip
-  /// 起動時に読み込めなかったプラグインと、読み込みで飛ばされたアカウントの行。error の色と octagon-alert。
+  /// 起動時に読み込めなかったプラグインと、読み込みで飛ばされたアカウントの行。
   LoadFailedChip
-  /// 承認待ちの secret の提示なし。色を付けず shield。
+  /// 承認待ちの secret の提示なし。
   SecretNotOfferedChip
-  /// 承認待ちの secret の不一致。warning の色と shield-alert。
+  /// 承認待ちの secret の不一致。
   SecretMismatchChip
-  /// 状態の表に無いチップ。色は `tone_chip_class`、アイコンは `tone_icon` でトーンから決まる。
+  /// 状態の表に無いチップ。色とアイコンは `tone` で決まる。
   ToneChip(tone: Tone)
 }
 
@@ -222,7 +223,7 @@ pub fn logo_svg() -> String {
   <> "\" /></svg>"
 }
 
-/// `logo_svg` を `data:` の URI にしたもの。上部バーのロゴと favicon で共有する。
+/// `logo_svg` を `data:` の URI にしたもの。
 fn logo_data_uri() -> String {
   "data:image/svg+xml," <> percent_encode_svg(logo_svg())
 }
@@ -264,7 +265,7 @@ fn favicon_link() -> Element(msg) {
 
 /// ページの題。`<title>` の `Nostr-no-Su — ` の後と見出し（h1）に出す。
 pub type PageTitle {
-  /// 本体の訳文。`page` が表示の言語で引く。
+  /// 本体の訳文。表示の言語で引く。
   TranslatedTitle(message: i18n.Message)
   /// 本体の訳文でない文字列（プラグイン由来の文字列）。`code` は `text` が書かれている言語の
   /// コードで、見出しには `in_language` の `span` で出し、`<title>` には要素そのものに `lang` を
@@ -800,15 +801,14 @@ pub fn plugin_textarea_field(
   )
 }
 
-/// プラグインのページの画像の見た目。プラグインが `image` ブロックの `variant` で選ぶ。
+/// プラグインのページの画像の見た目。プラグインが `image` ブロックの `variant` で選ぶ。大きさと
+/// 切り抜きは `plugin_image` が決める。
 pub type ImageShape {
-  /// `variant` が無いときの見た目。縦横とも実寸のまま高さ 192px と枠の幅の 2 つの
-  /// 上限に収め、比の違う画像は切らずに余白を枠の中に入れる。
+  /// `variant` が無いときの見た目。実寸のまま枠に収め、比の違う画像も切らない。
   ContainedImage
-  /// `icon`。64px の正方形の丸に切り抜く（プロフィールのアイコン）。
+  /// `icon`。正方形の丸に切り抜く（プロフィールのアイコン）。
   IconImage
-  /// `banner`。枠の幅いっぱいの 3:1 の帯に切り抜き、高さは 192px までにする
-  /// （プロフィールのバナー）。
+  /// `banner`。枠の幅いっぱいの横長の帯に切り抜く（プロフィールのバナー）。
   BannerImage
 }
 
@@ -1378,8 +1378,7 @@ pub fn hidden_input(name: String, value: String) -> Element(msg) {
 }
 
 /// 見出しを付けた読み取り専用の欄と、その値をコピーする `copy_button`。欄に name を付けない（送信にも
-/// 入力履歴にも含めないため）。ボタンは欄の直後の兄弟に、囲みはボタンの親の親に置き、完了と
-/// クリップボードに書けないときの案内は囲みの直下の `copy_status` で伝える。
+/// 入力履歴にも含めないため）。囲みの構造は `copy_group` のとおりにする。
 pub fn copyable_field(
   language: Language,
   caption: String,
@@ -1414,9 +1413,11 @@ fn copyable_field_with(
   value: String,
   attributes: List(Attribute(msg)),
 ) -> Element(msg) {
-  html.div([attribute.class("fieldset group")], [
-    legend,
-    html.div([attribute.class("flex items-center gap-1")], [
+  copy_group(
+    language,
+    "fieldset group",
+    [legend],
+    [
       html.input([
         attribute.type_("text"),
         attribute.readonly(True),
@@ -1427,16 +1428,38 @@ fn copyable_field_with(
         ),
         ..attributes
       ]),
-      copy_button(i18n.text(language, i18n.Copy)),
+    ],
+    i18n.text(language, i18n.Copy),
+  )
+}
+
+/// コピーの欄の囲み。`priv/static/admin.js` の `copy` が読む構造をここで組む。`class`（`group` を
+/// 含める）の `div` に、`heading`、`field` の末尾に `copy_button` を並べた 1 行（`flex` の `div`）、
+/// `copy_status` の順に置く。`field` の最後の要素は値を持つ欄にする（`copy` がボタンの直前の兄弟
+/// から値を読むため）。囲みはボタンの親の親になり、完了と、クリップボードに書けないときの案内は
+/// 囲みの直下の `copy_status` が出す。`copy_label` はボタンの `aria-label` と `title` の語である。
+fn copy_group(
+  language: Language,
+  class: String,
+  heading: List(Element(msg)),
+  field: List(Element(msg)),
+  copy_label: String,
+) -> Element(msg) {
+  html.div(
+    [attribute.class(class)],
+    list.append(heading, [
+      html.div(
+        [attribute.class("flex items-center gap-1")],
+        list.append(field, [copy_button(copy_label)]),
+      ),
+      copy_status(language),
     ]),
-    copy_status(language),
-  ])
+  )
 }
 
 /// コピーのボタン。語は `aria-label` と `title` に置き、アイコンだけを見せる。`data-action` で
-/// `priv/static/admin.js` の `copy` の処理を指し、その処理が読む構造（欄はボタンの直前の兄弟、囲みは
-/// ボタンの親の親）に置いて使う。コピーできると、囲みの `data-copied` でアイコンがチェックに替わり
-/// success の色になる。
+/// `priv/static/admin.js` の `copy` の処理を指し、`copy_group` が組む構造に置いて使う。コピーできると、
+/// 囲みの `data-copied` でアイコンがチェックに替わり success の色になる。
 pub fn copy_button(label: String) -> Element(msg) {
   html.button(
     [
@@ -1618,7 +1641,7 @@ fn alert_class(tone: Tone) -> String {
 }
 
 /// トーンごとのアイコン。`Neutral` と `Info` は情報、ほかはトーンの色（`text-success` など）を
-/// 付けた丸のチェック・三角・丸の×。`alert_box`（`alert` と `reason_alert`）と状態のチップが共有する。
+/// 付けた丸のチェック・三角・丸の×。
 pub fn tone_icon(tone: Tone) -> Element(msg) {
   case tone {
     Neutral -> lucide_icon("size-4", info_icon_paths)
@@ -1823,15 +1846,18 @@ pub fn utc_time(seconds: Int) -> String {
   |> timestamp.to_rfc3339(calendar.utc_offset)
 }
 
-/// 省略した識別子。`shorten` した表示（`title` に全文）、コピー用の読み取り専用の全文の `input`、
-/// `copy_button` を並べ、`copy_status` の案内を添える。欄はボタンの直前の兄弟、囲みはボタンの親の親に置く。
+/// 省略した識別子。`shorten` した表示（`title` に全文）と、コピー用の読み取り専用の全文の `input` に、
+/// `copy_label` の `copy_button` を添える。囲みの構造は `copy_group` のとおりにする。
 pub fn truncated_id(
   language: Language,
   value: String,
   copy_label: String,
 ) -> Element(msg) {
-  html.div([attribute.class("group")], [
-    html.div([attribute.class("flex items-center gap-1")], [
+  copy_group(
+    language,
+    "group",
+    [],
+    [
       html.span([attribute.class("font-mono text-xs"), attribute.title(value)], [
         html.text(shorten(value)),
       ]),
@@ -1841,10 +1867,9 @@ pub fn truncated_id(
         attribute.default_value(value),
         attribute.class("sr-only"),
       ]),
-      copy_button(copy_label),
-    ]),
-    copy_status(language),
-  ])
+    ],
+    copy_label,
+  )
 }
 
 /// ボタンの顔（中身の見せ方）。ダイアログを開くボタン（`dialog_trigger`）とボタンの見た目の
@@ -2066,7 +2091,7 @@ pub fn logo_icon() -> Element(msg) {
   ])
 }
 
-/// テーマの切り替えのブラウザーの設定のアイコン（Lucide の monitor）。
+/// Lucide の monitor。
 fn monitor_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2",
@@ -2074,7 +2099,7 @@ fn monitor_icon() -> Element(msg) {
   ])
 }
 
-/// テーマの切り替えのライトのアイコン（Lucide の sun）。
+/// Lucide の sun。
 fn sun_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M12 2v2", "M12 20v2",
@@ -2083,12 +2108,12 @@ fn sun_icon() -> Element(msg) {
   ])
 }
 
-/// テーマの切り替えのダークのアイコン（Lucide の moon）。
+/// Lucide の moon。
 fn moon_icon() -> Element(msg) {
   lucide_icon("size-4", ["M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"])
 }
 
-/// 言語の切り替えのブラウザーの設定のアイコン（Lucide の globe）。
+/// Lucide の globe。
 fn globe_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
@@ -2096,7 +2121,7 @@ fn globe_icon() -> Element(msg) {
   ])
 }
 
-/// 接続 QR コードのダイアログを開くボタンのアイコン（Lucide の qr-code）。
+/// Lucide の qr-code。
 pub fn qr_code_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M4 3h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1",
@@ -2108,31 +2133,31 @@ pub fn qr_code_icon() -> Element(msg) {
   ])
 }
 
-/// `info_icon` のストローク（Lucide の info）。
+/// Lucide の info のストローク。
 const info_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 16v-4", "M12 8h.01",
 ]
 
-/// `back_link` の左向きの矢印（Lucide の arrow-left）。
+/// Lucide の arrow-left のストローク。
 const arrow_left_icon_paths = ["m12 19-7-7 7-7", "M19 12H5"]
 
-/// 丸のチェックのストローク（Lucide の circle-check）。
+/// Lucide の circle-check のストローク。
 const check_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m9 12 2 2 4-4",
 ]
 
-/// `warning_triangle_icon` のストローク（Lucide の triangle-alert）。
+/// Lucide の triangle-alert のストローク。
 const warning_triangle_icon_paths = [
   "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
   "M12 9v4", "M12 17h.01",
 ]
 
-/// 丸の×のストローク（Lucide の circle-x）。
+/// Lucide の circle-x のストローク。
 const x_circle_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "m15 9-6 6", "m9 9 6 6",
 ]
 
-/// `DisconnectedChip` のストローク（Lucide の unplug）。
+/// Lucide の unplug のストローク。
 const unplug_icon_paths = [
   "m19 5 3-3", "m2 22 3-3",
   "M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z",
@@ -2140,61 +2165,61 @@ const unplug_icon_paths = [
   "m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z",
 ]
 
-/// `UnusedChip` と通知のページの `Neutral` の印のストローク（Lucide の circle-minus）。
+/// Lucide の circle-minus のストローク。
 const circle_minus_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M8 12h8",
 ]
 
-/// `OverloadedChip` のストローク（Lucide の gauge）。
+/// Lucide の gauge のストローク。
 const gauge_icon_paths = ["m12 14 4-4", "M3.34 19a10 10 0 1 1 17.32 0"]
 
-/// `DisabledChip` のストローク（Lucide の ban）。
+/// Lucide の ban のストローク。
 const ban_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M4.929 4.929 19.07 19.071",
 ]
 
-/// `LoadFailedChip` と通知のページの `Failure` の印のストローク（Lucide の octagon-alert）。
+/// Lucide の octagon-alert のストローク。
 const octagon_alert_icon_paths = [
   "M12 16h.01", "M12 8v4",
   "M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z",
 ]
 
-/// `SecretNotOfferedChip` のストローク（Lucide の shield）。
+/// Lucide の shield のストローク。
 const shield_icon_paths = [
   "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
 ]
 
-/// `SecretMismatchChip` のストローク（Lucide の shield-alert）。
+/// Lucide の shield-alert のストローク。
 const shield_alert_icon_paths = [
   "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
   "M12 8v4", "M12 16h.01",
 ]
 
-/// 情報のアイコン（Lucide の info）。ⓘ のボタン（`info_hint`）に使う。
+/// Lucide の info。
 pub fn info_icon() -> Element(msg) {
   lucide_icon("size-4", info_icon_paths)
 }
 
-/// `Warning` のトーンのアイコン（Lucide の triangle-alert）。
+/// Lucide の triangle-alert。
 pub fn warning_triangle_icon() -> Element(msg) {
   lucide_icon("size-4", warning_triangle_icon_paths)
 }
 
-/// コピーのアイコンのストローク（Lucide の copy）。
+/// Lucide の copy のストローク。
 const copy_icon_paths = [
   "M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
   "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2",
 ]
 
-/// コピーの完了と、「はじめに」の帯の済んだ段の印（`check_icon`）のアイコンのストローク（Lucide の check）。
+/// Lucide の check のストローク。
 const check_icon_paths = ["M20 6 9 17l-5-5"]
 
-/// 追加のボタンのアイコン（Lucide の plus）。
+/// Lucide の plus。
 pub fn plus_icon() -> Element(msg) {
   lucide_icon("size-4", ["M5 12h14", "M12 5v14"])
 }
 
-/// 削除のボタンのアイコン（Lucide の trash-2）。
+/// Lucide の trash-2。
 pub fn trash_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M3 6h18", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
@@ -2202,7 +2227,7 @@ pub fn trash_icon() -> Element(msg) {
   ])
 }
 
-/// 編集のボタンのアイコン（Lucide の pencil）。
+/// Lucide の pencil。
 pub fn pencil_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
@@ -2210,7 +2235,7 @@ pub fn pencil_icon() -> Element(msg) {
   ])
 }
 
-/// 接続のボタンのアイコン（Lucide の plug）。
+/// Lucide の plug。
 pub fn plug_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M12 22v-5", "M9 8V2", "M15 8V2",
@@ -2218,7 +2243,7 @@ pub fn plug_icon() -> Element(msg) {
   ])
 }
 
-/// 監視の用途と、秘密鍵の表示のアイコン（Lucide の eye）。
+/// Lucide の eye。
 pub fn eye_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0",
@@ -2226,7 +2251,7 @@ pub fn eye_icon() -> Element(msg) {
   ])
 }
 
-/// 秘密鍵の節と、バンカーの用途のアイコン（Lucide の key）。
+/// Lucide の key。
 pub fn key_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4",
@@ -2234,7 +2259,7 @@ pub fn key_icon() -> Element(msg) {
   ])
 }
 
-/// secret の再生成のアイコン（Lucide の refresh-cw）。
+/// Lucide の refresh-cw。
 pub fn rotate_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5",
@@ -2242,7 +2267,7 @@ pub fn rotate_icon() -> Element(msg) {
   ])
 }
 
-/// アカウントの節のアイコン（Lucide の users）。
+/// Lucide の users。
 pub fn users_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
@@ -2251,17 +2276,17 @@ pub fn users_icon() -> Element(msg) {
   ])
 }
 
-/// `clock_icon` のストローク（Lucide の clock）。
+/// Lucide の clock のストローク。
 const clock_icon_paths = [
   "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0", "M12 6v6l4 2",
 ]
 
-/// セッションの節と、承認待ちの帯の更新の間隔のアイコン（Lucide の clock）。
+/// Lucide の clock。
 pub fn clock_icon() -> Element(msg) {
   lucide_icon("size-4", clock_icon_paths)
 }
 
-/// 承認待ちの接続の節のアイコン（Lucide の door-open）。
+/// Lucide の door-open。
 pub fn door_open_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M13 4h3a2 2 0 0 1 2 2v14", "M2 20h3", "M13 20h9", "M10 12v.01",
@@ -2269,26 +2294,26 @@ pub fn door_open_icon() -> Element(msg) {
   ])
 }
 
-/// 「はじめに」の帯の見出しのアイコン（Lucide の sparkle）。
+/// Lucide の sparkle。
 pub fn sparkle_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
   ])
 }
 
-/// 済んだ段の印のアイコン（Lucide の check）。
+/// Lucide の check。
 pub fn check_icon() -> Element(msg) {
   lucide_icon("size-4", check_icon_paths)
 }
 
-/// プラグインの節のアイコン（Lucide の puzzle）。
+/// Lucide の puzzle。
 pub fn puzzle_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.5 2.5 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 2 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z",
   ])
 }
 
-/// プラグインのページへのリンクのアイコン（Lucide の file-text）。
+/// Lucide の file-text。
 pub fn file_text_icon() -> Element(msg) {
   lucide_icon("size-4", [
     "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z",
