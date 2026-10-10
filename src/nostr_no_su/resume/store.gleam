@@ -24,10 +24,12 @@ pub type Table {
 }
 
 /// リレー 1 本の再開点の読み込み。
-const monitor_select_sql = "SELECT since FROM monitor_resume WHERE relay_url = $1"
+const monitor_select_sql =
+  "SELECT since FROM monitor_resume WHERE relay_url = $1"
 
 /// リレー 1 本の再開点の保存。値を小さくしない（`GREATEST`）。
-const monitor_upsert_sql = "INSERT INTO monitor_resume (relay_url, since)
+const monitor_upsert_sql =
+  "INSERT INTO monitor_resume (relay_url, since)
 VALUES ($1, $2)
 ON CONFLICT (relay_url) DO UPDATE
 SET since = GREATEST(monitor_resume.since, EXCLUDED.since), updated_at = now()"
@@ -36,7 +38,8 @@ SET since = GREATEST(monitor_resume.since, EXCLUDED.since), updated_at = now()"
 const plugin_select_sql = "SELECT since FROM plugin_resume WHERE plugin = $1"
 
 /// プラグイン 1 つの再開点の保存。値を小さくしない（`GREATEST`）。
-const plugin_upsert_sql = "INSERT INTO plugin_resume (plugin, since)
+const plugin_upsert_sql =
+  "INSERT INTO plugin_resume (plugin, since)
 VALUES ($1, $2)
 ON CONFLICT (plugin) DO UPDATE
 SET since = GREATEST(plugin_resume.since, EXCLUDED.since), updated_at = now()"

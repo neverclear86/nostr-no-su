@@ -7,7 +7,8 @@ import lustre/element
 import nostr_no_su/admin/fingerprint.{Fingerprint}
 
 /// 期待値を独立に計算した既知の公開鍵。
-const known_key = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
+const known_key =
+  "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
 
 /// 既知の鍵が決まった色相とマスの並びになり、同じ鍵の大文字も同じ指紋になる。
 pub fn fingerprint_matches_a_known_key_test() {

@@ -37,16 +37,20 @@ pub const password = "s3cr3t-password"
 pub const client_address = "203.0.113.5"
 
 /// 登録済みのアカウントの署名者。BIP-340 の公式ベクター 0 の公開鍵。
-pub const signer = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+pub const signer =
+  "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 
 /// 登録済みのアカウントの npub。
-pub const signer_npub = "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+pub const signer_npub =
+  "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
 
 /// 登録済みのアカウントの nsec（BIP-340 の公式ベクター 0 の秘密鍵）。
-pub const signer_nsec = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
+pub const signer_nsec =
+  "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqps52s3re"
 
 /// 未登録のアカウントとして登録に使う、NIP-19 の仕様の nsec。
-pub const spec_nsec = "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
+pub const spec_nsec =
+  "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
 
 /// セッション一覧に出るクライアント。公開鍵の代わりに短い値を使う。
 pub const client = "bbbb2222"
@@ -117,22 +121,27 @@ fn plugin_page_action(
 pub const token = "tok-1"
 
 /// secret 入りの接続 URI。
-pub const uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
+pub const uri =
+  "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
 
 /// 承認を経る接続 URI（secret なし）。
-pub const auth_uri = "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
+pub const auth_uri =
+  "bunker://f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
 /// secret 入りの接続 URI のカメラ用のコピー用の文字列（`uri` から `bunker://` を外した形）。
-pub const uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
+pub const uri_camera_text =
+  "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x&secret=s"
 
 /// 承認を経る接続 URI のカメラ用のコピー用の文字列。
-pub const auth_uri_camera_text = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
+pub const auth_uri_camera_text =
+  "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9?relay=x"
 
 /// アカウントのラベル。
 pub const label = "main account"
 
 /// DB の障害でアカウントの一覧を得られないときの理由。本物の一覧の文言に合わせる。
-pub const unavailable = "account store unavailable: database is unreachable or rejected the connection"
+pub const unavailable =
+  "account store unavailable: database is unreachable or rejected the connection"
 
 /// フェイクのハンドラーがテストへ報告する内容。
 pub type Report {
@@ -491,10 +500,12 @@ pub fn with_page_accounts(
 }
 
 /// 読み込みで飛ばされた行の公開鍵。登録済みの `signer` とは違う値。
-pub const skipped_pubkey = "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+pub const skipped_pubkey =
+  "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
 
 /// `skipped_pubkey` の npub。
-pub const skipped_npub = "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
+pub const skipped_npub =
+  "npub1mhw5g3xam4zyfhwag3zdmh2ygnwa63zymhw5g3xam4zyfhwag3zqqkw2rx"
 
 /// 読み込みで飛ばされた行 1 件（`MalformedPubkey` 以外）。
 pub fn skipped_row() -> dashboard.SkippedRow {

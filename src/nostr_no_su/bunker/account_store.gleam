@@ -33,15 +33,18 @@ const lock_timeout_sql = "SELECT set_config('lock_timeout', $1, true)"
 
 /// 実行中の書き込み（ROW EXCLUSIVE）の終了を待つためのロック。PostgreSQL は列挙の
 /// 順に 1 つずつロックを取るので、書き手の順に合わせる（docs/architecture.md）。
-const lock_sql = "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
+const lock_sql =
+  "LOCK TABLE bunker_accounts, bunker_pending, bunker_sessions IN SHARE MODE"
 
 /// 全行の読み込み。表示とテストが安定するよう登録順に並べる。
-const select_sql = "SELECT pubkey, label, encrypted_privkey, encrypted_secret
+const select_sql =
+  "SELECT pubkey, label, encrypted_privkey, encrypted_secret
 FROM bunker_accounts
 ORDER BY created_at, pubkey"
 
 /// 1 行の挿入。
-const insert_sql = "INSERT INTO bunker_accounts (pubkey, label, encrypted_privkey, encrypted_secret)
+const insert_sql =
+  "INSERT INTO bunker_accounts (pubkey, label, encrypted_privkey, encrypted_secret)
 VALUES ($1, $2, $3, $4)"
 
 /// 主キーの制約名。これに違反した挿入は、同じ公開鍵の登録済みを意味する。
@@ -51,39 +54,48 @@ const primary_key_constraint = "bunker_accounts_pkey"
 const delete_sql = "DELETE FROM bunker_accounts WHERE pubkey = $1"
 
 /// 接続 secret の差し替え。
-const update_secret_sql = "UPDATE bunker_accounts SET encrypted_secret = $2 WHERE pubkey = $1"
+const update_secret_sql =
+  "UPDATE bunker_accounts SET encrypted_secret = $2 WHERE pubkey = $1"
 
 /// ラベルの差し替え。
-const update_label_sql = "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
+const update_label_sql =
+  "UPDATE bunker_accounts SET label = $2 WHERE pubkey = $1"
 
 /// セッションの一覧。テストの安定のための順。
-const select_sessions_sql = "SELECT signer, client, perms, created_at, last_used_at, mac, relays
+const select_sessions_sql =
+  "SELECT signer, client, perms, created_at, last_used_at, mac, relays
 FROM bunker_sessions
 ORDER BY created_at, signer, client"
 
 /// 承認待ちの一覧。テストの安定のための順。
-const select_pending_sql = "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at, mac
+const select_pending_sql =
+  "SELECT token, signer, client, request_id, perms, secret_mismatch, created_at, mac
 FROM bunker_pending
 ORDER BY created_at, token"
 
 /// セッションの挿入。同じ（signer, client）があれば全列と MAC をこの値で
 /// 上書きする。
-const insert_session_sql = "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac, relays)
+const insert_session_sql =
+  "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac, relays)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (signer, client) DO UPDATE
 SET perms = EXCLUDED.perms, created_at = EXCLUDED.created_at, last_used_at = EXCLUDED.last_used_at, mac = EXCLUDED.mac, relays = EXCLUDED.relays"
 
 /// 最終利用の更新。時刻が進むときだけ、全列と MAC を書き換える。
-const touch_session_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2 AND last_used_at < $5"
+const touch_session_sql =
+  "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2 AND last_used_at < $5"
 
 /// 権限の更新。全列と MAC を書き換える。
-const update_session_perms_sql = "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2"
+const update_session_perms_sql =
+  "UPDATE bunker_sessions SET perms = $3, created_at = $4, last_used_at = $5, mac = $6, relays = $7 WHERE signer = $1 AND client = $2"
 
 /// セッションの削除。
-const delete_session_sql = "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
+const delete_session_sql =
+  "DELETE FROM bunker_sessions WHERE signer = $1 AND client = $2"
 
 /// 承認待ちの挿入。同じ token があれば何もしない。
-const insert_pending_sql = "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at, mac)
+const insert_pending_sql =
+  "INSERT INTO bunker_pending (token, signer, client, request_id, perms, secret_mismatch, created_at, mac)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (token) DO NOTHING"
 

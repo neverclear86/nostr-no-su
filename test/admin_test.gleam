@@ -48,7 +48,8 @@ const plugin_not_found = "plugin not found"
 const plugin_not_answered = "plugin runner did not answer"
 
 /// フェイクのリレーの変更が、DB に書けなかった理由として返す文。
-const relay_not_saved_reason = "database is unreachable or rejected the connection"
+const relay_not_saved_reason =
+  "database is unreachable or rejected the connection"
 
 /// リレーの変更の失敗 `failure` のページの本文に出る、`language` の文。`RelayNotSaved` は
 /// 英語の理由をそのまま出す。
@@ -1254,10 +1255,12 @@ pub fn relay_change_failures_test() {
 
 /// 有効な `nostrconnect://` の URI。クライアント公開鍵は 32 バイトの 16 進、`relay` と
 /// `secret` を 1 つずつ持つ。
-const connect_uri = "nostrconnect://1111111111111111111111111111111111111111111111111111111111111111?relay=wss://relay.example&secret=abcdef"
+const connect_uri =
+  "nostrconnect://1111111111111111111111111111111111111111111111111111111111111111?relay=wss://relay.example&secret=abcdef"
 
 /// URI に現れるクライアント公開鍵。
-const connect_client_pubkey = "1111111111111111111111111111111111111111111111111111111111111111"
+const connect_client_pubkey =
+  "1111111111111111111111111111111111111111111111111111111111111111"
 
 /// `nostrconnect://` で始まらない URI の POST は 400 で、接続のダイアログを開いたダッシュボードを返し、
 /// 先頭に理由を出して送った URI を欄に残し、Context を呼ばない。

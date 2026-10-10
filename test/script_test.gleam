@@ -6,7 +6,8 @@ import nostr_no_su/admin/routes
 import support/admin_ui
 
 /// ページ枠がスクリプトを読む要素。ページに現れてよい `script` 要素はこれだけである。
-const script_element = "<script src=\"/static/admin.js\" type=\"module\"></script>"
+const script_element =
+  "<script src=\"/static/admin.js\" type=\"module\"></script>"
 
 /// どのページもスクリプトをファイルから読み、インラインのスクリプトとイベント属性（`on*`）を
 /// 持たない。CSP（`script-src 'self'`）はそれらを実行させないので、書き足すと処理が黙って

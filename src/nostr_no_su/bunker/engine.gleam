@@ -54,7 +54,8 @@ pub const approval_request_not_found = "unknown or expired approval request"
 /// `connect` で開くセッションか承認待ちを DB に書けなかったときに、同じ id で
 /// クライアントへ返すエラーの理由。書き込みの結果によらず同じ文にし、ストアの
 /// 理由は含めない。
-pub const connection_not_saved = "could not save the connection; try connecting again"
+pub const connection_not_saved =
+  "could not save the connection; try connecting again"
 
 /// 未知の方法へ返すエラーの理由。リクエストの方法名は含めない。応答は署名して
 /// kind 24133 としてリレーへ載せるので、その内容をクライアントに決めさせない

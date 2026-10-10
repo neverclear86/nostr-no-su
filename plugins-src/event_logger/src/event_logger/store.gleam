@@ -69,7 +69,8 @@ const recent_timeout_ms = 2000
 /// 版 1 でイベントを保存するテーブルを `events` の名前で作る。`received_at` は取り込んだ
 /// 時刻で、イベント自身の `created_at`（リレーが配送する Unix 秒）とは別に持つ。名前は
 /// 版 4 の `prefix_table_names` で `event_logger_events` に変わる。
-pub const create_events_table = "CREATE TABLE IF NOT EXISTS events (
+pub const create_events_table =
+  "CREATE TABLE IF NOT EXISTS events (
   id text PRIMARY KEY,
   pubkey text NOT NULL,
   created_at bigint NOT NULL,
@@ -81,19 +82,23 @@ pub const create_events_table = "CREATE TABLE IF NOT EXISTS events (
 )"
 
 /// アカウントごとの時系列を引くためのインデックス。
-pub const create_pubkey_index = "CREATE INDEX IF NOT EXISTS events_pubkey_created_at ON events (pubkey, created_at)"
+pub const create_pubkey_index =
+  "CREATE INDEX IF NOT EXISTS events_pubkey_created_at ON events (pubkey, created_at)"
 
 /// kind で絞り込むためのインデックス。
-pub const create_kind_index = "CREATE INDEX IF NOT EXISTS events_kind ON events (kind)"
+pub const create_kind_index =
+  "CREATE INDEX IF NOT EXISTS events_kind ON events (kind)"
 
 /// タイムラインが読む保存順のインデックス。`select_recent_sql` の並びと同じ
 /// 向きにする。
-pub const create_received_at_index = "CREATE INDEX IF NOT EXISTS events_received_at ON events (received_at DESC, id DESC)"
+pub const create_received_at_index =
+  "CREATE INDEX IF NOT EXISTS events_received_at ON events (received_at DESC, id DESC)"
 
 /// 版 2 で保存の対象とするアカウントのテーブルを `monitored_accounts` の名前で作る。行が
 /// 1 件も無ければ絞らず、全アカウントを保存する。名前は版 4 の `prefix_table_names` で
 /// `event_logger_monitored_accounts` に変わる。
-const create_monitored_accounts_table = "CREATE TABLE IF NOT EXISTS monitored_accounts (
+const create_monitored_accounts_table =
+  "CREATE TABLE IF NOT EXISTS monitored_accounts (
   pubkey text PRIMARY KEY
 )"
 
@@ -138,7 +143,8 @@ const prefix_table_names = [
 
 /// 適用した移行の版を 1 行ずつ記録するテーブル。最大の `version` を現在の版とする。
 /// 本体の `schema_version` と名前が衝突しないよう、プラグイン名を付ける。
-const create_version_table = "CREATE TABLE IF NOT EXISTS event_logger_schema_version (
+const create_version_table =
+  "CREATE TABLE IF NOT EXISTS event_logger_schema_version (
   version integer PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
 )"
@@ -147,7 +153,8 @@ const create_version_table = "CREATE TABLE IF NOT EXISTS event_logger_schema_ver
 const select_versions_sql = "SELECT version FROM event_logger_schema_version"
 
 /// 版の記録。
-const insert_version_sql = "INSERT INTO event_logger_schema_version (version) VALUES ($1)"
+const insert_version_sql =
+  "INSERT INTO event_logger_schema_version (version) VALUES ($1)"
 
 /// スキーマの用意の失敗。
 pub type SchemaError {
@@ -160,12 +167,14 @@ pub type SchemaError {
 
 /// イベント 1 件の挿入。同じ id を別のリレーから受け直しても既存行は変更しない。
 /// `tags` は JSON 文字列として渡し、Postgres 側で jsonb にする。
-pub const insert_sql = "INSERT INTO event_logger_events (id, pubkey, created_at, kind, tags, content, sig)
+pub const insert_sql =
+  "INSERT INTO event_logger_events (id, pubkey, created_at, kind, tags, content, sig)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 ON CONFLICT (id) DO NOTHING"
 
 /// 保存順の直近のイベント。`tags` は jsonb なので text にキャストして読む。
-const select_recent_sql = "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM event_logger_events ORDER BY received_at DESC, id DESC LIMIT $1"
+const select_recent_sql =
+  "SELECT id, pubkey, created_at, kind, tags::text, content, sig FROM event_logger_events ORDER BY received_at DESC, id DESC LIMIT $1"
 
 /// 保存の対象とするアカウントの読み込み。
 const select_monitored_sql = "SELECT pubkey FROM event_logger_monitored_accounts"
@@ -173,7 +182,8 @@ const select_monitored_sql = "SELECT pubkey FROM event_logger_monitored_accounts
 /// 保存の対象とするアカウントの入れ替え。`$1` の配列に無い行を消して配列の要素を
 /// 重複を除いて挿入する。消去と挿入は 1 文の中で原子的に行われるので、失敗した
 /// ときは表が元のまま残る。
-const replace_monitored_sql = "WITH removed AS (DELETE FROM event_logger_monitored_accounts WHERE pubkey <> ALL($1::text[]))
+const replace_monitored_sql =
+  "WITH removed AS (DELETE FROM event_logger_monitored_accounts WHERE pubkey <> ALL($1::text[]))
 INSERT INTO event_logger_monitored_accounts (pubkey) SELECT unnest($1::text[])
 ON CONFLICT DO NOTHING"
 

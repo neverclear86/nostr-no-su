@@ -123,7 +123,8 @@ pub fn content_without_accounts_shows_one_info_alert_test() {
 }
 
 /// サンプルの JSON（8 項目すべてを持つ）。
-const sample_content = "{\"name\":\"alice\",\"display_name\":\"Alice\",\"about\":\"hello\",\"picture\":\"https://example.com/p.png\",\"banner\":\"https://example.com/b.png\",\"nip05\":\"alice@example.com\",\"website\":\"https://alice.example\",\"lud16\":\"alice@wallet.example\"}"
+const sample_content =
+  "{\"name\":\"alice\",\"display_name\":\"Alice\",\"about\":\"hello\",\"picture\":\"https://example.com/p.png\",\"banner\":\"https://example.com/b.png\",\"nip05\":\"alice@example.com\",\"website\":\"https://alice.example\",\"lud16\":\"alice@wallet.example\"}"
 
 /// アカウント 1 件を返す。
 fn sample_account() -> page.Account {

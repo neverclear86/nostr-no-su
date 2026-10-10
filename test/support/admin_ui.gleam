@@ -48,10 +48,12 @@ pub fn text_file(path: String) -> String {
 
 /// `pages()` のアカウントの 64 桁の 16 進の公開鍵。鍵の指紋を描かせるため 32 バイトにし、
 /// `japanese_pages_have_no_english_words_test` が短縮した値の英字を拾わないよう数字だけにする。
-const account_hex = "0123012301230123012301230123012301230123012301230123012301230123"
+const account_hex =
+  "0123012301230123012301230123012301230123012301230123012301230123"
 
 /// `pages()` の読み込めなかった行の 64 桁の 16 進の公開鍵。`account_hex` と同じ理由で数字だけにする。
-const skipped_hex = "8901890189018901890189018901890189018901890189018901890189018901"
+const skipped_hex =
+  "8901890189018901890189018901890189018901890189018901890189018901"
 
 /// 状態ごとに違うクラスと属性がすべて現れるよう、描画のどの分岐も通したページ。渡された言語で
 /// 描画し、言語の切り替えのボタン（押した状態の表示している言語とそれ以外）と、切り替えを出さないページを通す。テーマの切り替えのボタン（`view.themes` ごとに押した状態のボタンが違う 3 通り）は、ダッシュボードをテーマごとに描画して通す。ほかのページは `view.System` で描画する。描画に
@@ -571,28 +573,31 @@ pub fn pages(language: i18n.Language) -> List(String) {
 /// ページを 1 件だけ供給するプラグインの行（タブ無しを撮るため）。表示名は
 /// `allowed_words`（`test/japanese_pages_test.gleam`）に無い語にし、`view.untranslated`
 /// の包み忘れを検査できるようにする。
-const plugin_row_one_page = dashboard.PluginRow(
-  "plugin-a",
-  Some(plugin_runner.Running),
-  pages: [plugin.PluginPage(key: "status", title: "Status")],
-)
+const plugin_row_one_page =
+  dashboard.PluginRow(
+    "plugin-a",
+    Some(plugin_runner.Running),
+    pages: [plugin.PluginPage(key: "status", title: "Status")],
+  )
 
 /// ページを 2 件供給するプラグインの行（タブを撮るため）。
-const plugin_row_two_pages = dashboard.PluginRow(
-  "plugin-b",
-  Some(plugin_runner.Running),
-  pages: [
-    plugin.PluginPage(key: "status", title: "Status"),
-    plugin.PluginPage(key: "settings", title: "Settings"),
-  ],
-)
+const plugin_row_two_pages =
+  dashboard.PluginRow(
+    "plugin-b",
+    Some(plugin_runner.Running),
+    pages: [
+      plugin.PluginPage(key: "status", title: "Status"),
+      plugin.PluginPage(key: "settings", title: "Settings"),
+    ],
+  )
 
 /// 無効になったプラグインの行（ページの注意の囲みを撮るため）。
-const plugin_row_disabled = dashboard.PluginRow(
-  "plugin-c",
-  Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
-  pages: [plugin.PluginPage(key: "status", title: "Status")],
-)
+const plugin_row_disabled =
+  dashboard.PluginRow(
+    "plugin-c",
+    Some(plugin_runner.Disabled(reason: "boom", dropped: 1)),
+    pages: [plugin.PluginPage(key: "status", title: "Status")],
+  )
 
 /// 上の 3 行がいずれも持つ最初のページ。
 const plugin_status_page = plugin.PluginPage(key: "status", title: "Status")

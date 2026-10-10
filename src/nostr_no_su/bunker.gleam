@@ -51,10 +51,8 @@ pub const log_prefix = "bunker"
 /// 到達できないとき、読み込み 1 回は最長 3 秒かかり、その間アクターは次のメッセージを
 /// 処理しない。間隔を延ばすのは、DB が長く止まっている間にこの待ちが起きる回数を
 /// 抑えるためである。
-pub const default_retry_delay = backoff.Backoff(
-  initial_ms: 5000,
-  max_ms: 120_000,
-)
+pub const default_retry_delay =
+  backoff.Backoff(initial_ms: 5000, max_ms: 120_000)
 
 /// 問い合わせの応答を待つ時間。アクターの処理はどれも数ミリ秒で終わるため、
 /// これを超えるのはアクターが詰まっているときだけ。アカウントの読み込みは最長で
@@ -100,7 +98,8 @@ const session_not_approved = "session is not approved"
 
 /// 結果が曖昧な書き込みの後のログ行に添える文言。`change_line` の `MaybeWritten`
 /// の枝もこれを使い、同じ文言を 2 か所に持たない。
-const reloading_after_unconfirmed_write = "; the change may have been applied, reloading the accounts from the store"
+const reloading_after_unconfirmed_write =
+  "; the change may have been applied, reloading the accounts from the store"
 
 /// アカウントの変更が成功しなかった理由。`NotApplied` と `NotReady` の理由は値
 /// （鍵、secret、ラベル）を含まない固定の英文、`MaybeApplied` は原因を

@@ -118,14 +118,15 @@ const theme_cookie = "nostr_no_su_theme"
 ///   付けるので使わない
 /// - 365 日保つ。値は言語コードのままで、署名しない（`secret_key_base` は起動ごとの乱数で、
 ///   署名すると再起動で読めなくなる。改ざんされても表示の言語かテーマが変わるだけである）
-const preference_cookie_attributes = cookie.Attributes(
-  max_age: Some(31_536_000),
-  domain: None,
-  path: Some("/"),
-  secure: False,
-  http_only: True,
-  same_site: Some(cookie.Lax),
-)
+const preference_cookie_attributes =
+  cookie.Attributes(
+    max_age: Some(31_536_000),
+    domain: None,
+    path: Some("/"),
+    secure: False,
+    http_only: True,
+    same_site: Some(cookie.Lax),
+  )
 
 /// 切り替えのフォームで選ぶ表示の設定（言語かテーマ）1 つぶんの読み書きの規則。
 type Preference(a) {
@@ -144,22 +145,24 @@ type Preference(a) {
 }
 
 /// 言語の切り替えの欄、解釈、cookie。
-const language_preference = Preference(
-  field: view.language_field,
-  parse: view.language_choice_from_code,
-  browser: view.BrowserLanguage,
-  code: view.language_choice_code,
-  cookie: language_cookie,
-)
+const language_preference =
+  Preference(
+    field: view.language_field,
+    parse: view.language_choice_from_code,
+    browser: view.BrowserLanguage,
+    code: view.language_choice_code,
+    cookie: language_cookie,
+  )
 
 /// テーマの切り替えの欄、解釈、cookie。
-const theme_preference = Preference(
-  field: view.theme_field,
-  parse: view.theme_from_code,
-  browser: view.System,
-  code: view.theme_code,
-  cookie: theme_cookie,
-)
+const theme_preference =
+  Preference(
+    field: view.theme_field,
+    parse: view.theme_from_code,
+    browser: view.System,
+    code: view.theme_code,
+    cookie: theme_cookie,
+  )
 
 /// リレーの追加、用途の変更、削除が反映されなかった理由。
 pub type RelayChangeFailure {

@@ -12,7 +12,8 @@ import nostr_no_su/crypto/secp256k1
 import support/vector.{bytes}
 
 /// 取得元のファイルの SHA-256。
-const vectors_sha256 = "34c9d1d9c3a88d524bc80778540dc43f8306ec249a7485293063c376db851c2d"
+const vectors_sha256 =
+  "34c9d1d9c3a88d524bc80778540dc43f8306ec249a7485293063c376db851c2d"
 
 /// 公式ベクターの 1 行。検証だけの行では、秘密鍵と補助乱数が空文字列になる。
 type Vector {

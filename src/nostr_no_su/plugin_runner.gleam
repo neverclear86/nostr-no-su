@@ -57,11 +57,8 @@ pub type Limits {
 }
 
 /// 本番で使う既定の歯止め。
-pub const default_limits: Limits = Limits(
-  handle_timeout_ms: 30_000,
-  max_queue_len: 1000,
-  max_failures: 5,
-)
+pub const default_limits: Limits =
+  Limits(handle_timeout_ms: 30_000, max_queue_len: 1000, max_failures: 5)
 
 /// ログにだけ出すスタックトレースの上限。状態には持たない。
 const max_detail_chars = 400

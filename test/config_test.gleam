@@ -58,7 +58,8 @@ fn with_optional_env(name: String, value: Option(String), run: fn() -> a) -> a {
 }
 
 /// テスト用のマスターキー（16 進）。
-const master_key_hex = "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
+const master_key_hex =
+  "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
 
 /// テスト用の `DATABASE_URL`。パスワードに目印を入れ、理由の文字列に URL が
 /// 混ざらないことを確かめられるようにする。

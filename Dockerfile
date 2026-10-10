@@ -1,4 +1,4 @@
-FROM ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine@sha256:7c82e4a284b7c05c26eac34db497ea0e63ce7cb04bd019d966d70338eb172b68 AS gleam
+FROM ghcr.io/gleam-lang/gleam:v1.19.1-erlang-alpine@sha256:1d704be72240b08a4f100b12fd17dc154dbbdf332a492174b37f8f096e3b7b84 AS gleam
 
 # gleam のイメージは erlang の公式イメージに静的リンクの /bin/gleam を足したものだが、基底の
 # OTP の版が platform ごとに揃っていないことがある。BEAM ファイルをコンパイルする OTP と実行する

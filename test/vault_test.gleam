@@ -13,16 +13,20 @@ import nostr_no_su/hex
 import support/vector.{bytes, contains_bytes}
 
 /// テスト用のマスターキー（16 進）。
-const master_key_hex = "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
+const master_key_hex =
+  "8c1d4e7f2a5b3c6d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
 
 /// 別のマスターキー（16 進）。
-const other_master_key_hex = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+const other_master_key_hex =
+  "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 /// 行 A の秘密鍵。
-const privkey_a = "0000000000000000000000000000000000000000000000000000000000000042"
+const privkey_a =
+  "0000000000000000000000000000000000000000000000000000000000000042"
 
 /// 行 B の秘密鍵。
-const privkey_b = "0000000000000000000000000000000000000000000000000000000000000009"
+const privkey_b =
+  "0000000000000000000000000000000000000000000000000000000000000009"
 
 /// 行 A の接続 secret。
 const secret_a = "5ecre7-a"

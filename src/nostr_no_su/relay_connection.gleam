@@ -23,10 +23,8 @@ import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/time
 
 /// 本番の再接続の待ちの延ばし方。
-pub const default_reconnect_delay = backoff.Backoff(
-  initial_ms: 5000,
-  max_ms: 300_000,
-)
+pub const default_reconnect_delay =
+  backoff.Backoff(initial_ms: 5000, max_ms: 300_000)
 
 /// 本番の、再接続の待ちを初期値に戻すのに要る接続の継続時間（ミリ秒）。
 pub const default_stable_after_ms = 60_000

@@ -170,10 +170,8 @@ type Session {
 /// 本番の購読の再試行の待ち時間。定義を得られなかったときと CLOSED で共用する。
 /// 初期値はバンカーの署名者の問い合わせの期限に、上限はバンカーの読み込みの再試行の上限に
 /// そろえる（どちらも DB の復帰を待つため）。
-const subscription_retry_delay = backoff.Backoff(
-  initial_ms: 5000,
-  max_ms: 120_000,
-)
+const subscription_retry_delay =
+  backoff.Backoff(initial_ms: 5000, max_ms: 120_000)
 
 /// 本番の生存確認の刻みの間隔（30 秒）。ping は無受信がこの 1 倍を超えて 2 倍
 /// 以内に送り、切断は 2 倍を超えて 3 倍以内に起きる（`nostr_no_su/keepalive` を
@@ -205,10 +203,11 @@ pub type Timing {
 }
 
 /// 本番の待ちの設定。
-pub const default_timing = Timing(
-  retry_delay: subscription_retry_delay,
-  keepalive_interval_ms: keepalive_interval_ms,
-)
+pub const default_timing =
+  Timing(
+    retry_delay: subscription_retry_delay,
+    keepalive_interval_ms: keepalive_interval_ms,
+  )
 
 /// 1 本の接続の間変わらない値。`conn` は stratus がメッセージごとに渡すので、
 /// `start` の受信ループがメッセージごとに組む。
