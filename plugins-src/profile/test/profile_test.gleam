@@ -912,8 +912,7 @@ pub fn finish_submission_keeps_the_failure_reason_test() {
     == Some(page.SubmitFailed(reason: "timeout", values: submitted))
 }
 
-/// `profile_store:start_link/0` の `@external`。テストのモジュールに置く
-/// （実装時の条件 2）。
+/// `profile_store:start_link/0` の `@external`。テストのモジュールに置く。
 @external(erlang, "profile_store", "start_link")
 fn store_start_link() -> Dynamic
 
@@ -1022,8 +1021,7 @@ fn all_states_texts(language: i18n.Language) -> List(String) {
 
 /// 記述の中の、表示の言語で出る文言を出る順に並べる。節ごとに見出し、続けて
 /// ブロックごとに `alert` と `note` の `text`、`image` の `alt`、`pairs` の各項の
-/// `term`、`form` の `submit` を並べる（欄のラベルは
-/// `content_labels_form_fields_in_each_language_test` で見る）。
+/// `term`、`form` の `submit` を並べる（欄のラベルは並べない）。
 fn page_texts(description: Dynamic) -> List(String) {
   list.flat_map(page_sections(description), fn(raw) {
     let #(title, blocks) = section_shape(raw)

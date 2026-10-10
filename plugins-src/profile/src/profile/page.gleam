@@ -1,17 +1,9 @@
-//// 管理 UI のページの記述を組み立てる純粋なモジュール。プロセスにもネットワーク
-//// にも触れず、呼び出し元（`profile.gleam`）が登録アカウントごとに組んだ
-//// `AccountState`（アカウント・取得の結果・直前の送信の結果）を引数で受け取って
-//// 記述の `Dynamic` を組み立て、送信された欄の値の解釈（`submitted/1`）と保持した
-//// 結果の読み取り（`submission/1`）も担う。取得の結果のキャッシュについては、取り直す
-//// 公開鍵の選び方（`misses/1`）、取り直した結果を元の順に戻す組み立て
-//// （`merge_fetched/2`）、キャッシュに置く結果の判定（`cacheable/1`）を決める。kind 0 の
-//// 8 項目の並びは `profile_fields` の 1 か所に置く。文言は引数の表示の言語
-//// （`profile/i18n` の `Language`）で `i18n.text` から引く。
-////
-//// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
-//// binary キーの map である。値は `gleam/dynamic` の `list` / `string` と、文字列キーの
-//// フィールドから binary キーの map を組む `properties/1` で組む。`dynamic.properties` は
-//// Erlang では binary キーの map になる。
+//// 管理 UI のページの記述を組み立てる純粋なモジュール。プロセスにもネットワークにも
+//// 触れず、`AccountState`（アカウント・取得の結果・直前の送信の結果）と表示の言語を
+//// 引数で受け取る。送信された欄の値の解釈（`submitted/1`）、保持した結果の読み取り
+//// （`submission/1`）、取得のキャッシュの判断（`misses/1`、`merge_fetched/2`、
+//// `cacheable/1`）も担う。kind 0 の 8 項目の並びは `profile_fields` の 1 か所に置く。
+//// 記述の形式は `docs/plugin-api.md` 第 13 章にある。
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -236,8 +228,7 @@ pub fn merged_content(
   fields: List(#(String, String)),
 ) -> String
 
-/// 直前の更新の送信の結果。`profile_store` が 1 回の描画まで保持する
-/// （`profile.gleam` の `plugin_children/0` を参照）。
+/// 直前の更新の送信の結果。`profile_store` が 1 回の描画まで保持する。
 pub type Submission {
   /// 送信に成功した。
   Succeeded
@@ -293,7 +284,7 @@ pub fn pages(language: Language) -> Dynamic {
   ])
 }
 
-/// ページに出すアカウント 1 件の状態。`profile.gleam` が登録アカウントごとに組む。
+/// ページに出すアカウント 1 件の状態。
 pub type AccountState {
   AccountState(
     account: Account,

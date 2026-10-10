@@ -1,16 +1,10 @@
-//// 管理 UI のページのキーを解釈し、ページの記述を組み立て、フォームの送信を正規化する
-//// 純粋なモジュール。プロセスにもネットワークにも触れず、呼び出し元（`event_logger.gleam`）
-//// が観測した値と表示の言語と受け取った送信を引数で受け取って、記述の `Dynamic` と選択の
-//// 結果を組み立てるだけである。ページのキーの文字列はここにだけ置く（`page_key/1`）。
-//// 文言は `event_logger/i18n` の `Message` を表示の言語で引いて組む。
+//// 管理 UI のページのキーを解釈し、ページの記述（`Dynamic`）を組み立て、フォームの
+//// 送信を正規化する純粋なモジュール。プロセスにもネットワークにも触れず、観測した値と
+//// 表示の言語は引数で受け取る。
 ////
-//// 記述の形式は `docs/plugin-api.md` 第 13 章のとおり、段ごとに種別を閉じた 3 段の
-//// binary キーの map である。**プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値・整数（`kind` と `time` の `value`）だけで**、
-//// クラス名も `href` も持ち込めない。秘密（接続先 URL のパスワード）は本体に渡す前に
-//// ここでマスクする（`masked_url/3`。同文書第 13.4 節の実例でもある）。
-////
-//// 値は `gleam/dynamic` の `properties` / `list` / `string` / `bool` / `int` で組む。`properties` は
-//// Erlang では binary キーの map になる。
+//// 変える人が守ること。ページのキーの文字列はここにだけ置く（`page_key/1`）。接続先
+//// URL のパスワードは本体に渡す前に `masked_url/3` でマスクする。記述の形式と、
+//// プラグインが記述に持ち込めるものの制約は `docs/plugin-api.md` 第 13 章にある。
 
 import event_logger/i18n.{type Language}
 import event_logger/store
@@ -66,8 +60,7 @@ pub type ContentView {
   FoldedContent
 }
 
-/// 本体が渡すページのキーを解釈した結果。`page_key/1` が作り、呼び出し元はこれで
-/// 観測する値と記述を組む関数、または送信を受け付けるかを選ぶ。ページの入力は持たない。
+/// 本体が渡すページのキーを解釈した結果。`page_key/1` が作る。ページの入力は持たない。
 pub type PageKey {
   /// `timeline`。保存済みイベントの直近の一覧。
   TimelineKey
@@ -115,19 +108,13 @@ pub fn selected_pubkeys(
 /// 先頭に置く（ダッシュボードのリンクは先頭のページを指す）。
 pub fn pages(language: Language) -> Dynamic {
   dynamic.list([
-    dynamic.properties([
-      #(dynamic.string("key"), dynamic.string(timeline_page_key)),
-      #(
-        dynamic.string("title"),
-        dynamic.string(i18n.text(language, i18n.TimelineTitle)),
-      ),
+    properties([
+      #("key", dynamic.string(timeline_page_key)),
+      #("title", dynamic.string(i18n.text(language, i18n.TimelineTitle))),
     ]),
-    dynamic.properties([
-      #(dynamic.string("key"), dynamic.string(settings_page_key)),
-      #(
-        dynamic.string("title"),
-        dynamic.string(i18n.text(language, i18n.SettingsTitle)),
-      ),
+    properties([
+      #("key", dynamic.string(settings_page_key)),
+      #("title", dynamic.string(i18n.text(language, i18n.SettingsTitle))),
     ]),
   ])
 }
