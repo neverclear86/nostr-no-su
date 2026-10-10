@@ -3,6 +3,7 @@
 //// アフィン座標の演算（`point_add` / `point_double` / `point_mul`）は、群の恒等式と、
 //// OpenSSL で計算する `mul_g` との一致で確かめる。
 
+import gleam/list
 import nostr_no_su/crypto/secp256k1.{Infinity, Point}
 import qcheck
 
@@ -122,4 +123,11 @@ pub fn lift_x_rejects_input_that_is_not_32_bytes_test() {
   let assert Ok(#(x, _y)) = secp256k1.mul_g(1)
   let too_long = <<0:size(8), secp256k1.int_to_bytes32(x):bits>>
   assert secp256k1.lift_x(too_long) == Error(secp256k1.InvalidPublicKey)
+}
+
+/// 0 と位数 n は有効なスカラー（1 〜 n-1）ではないので、公開鍵を導けない。
+pub fn xonly_pubkey_rejects_out_of_range_scalar_test() {
+  use scalar <- list.each([0, secp256k1.n])
+  assert #(scalar, secp256k1.xonly_pubkey(secp256k1.int_to_bytes32(scalar)))
+    == #(scalar, Error(secp256k1.InvalidPrivateKey))
 }

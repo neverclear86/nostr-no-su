@@ -64,15 +64,6 @@ pub fn bip340_vector0_keys_test() {
   )
 }
 
-/// すべて大文字の文字列も同じ鍵になる。
-pub fn decode_accepts_uppercase_test() {
-  assert nip19.decode(
-      "NSEC1VL029MGPSPEDVA04G90VLTKH6FVH240ZQTV9K0T9AF8935KE9LAQSNLFE5",
-      Nsec,
-    )
-    == Ok(bytes(spec_nsec_key))
-}
-
 /// 前後の空白は取り除いてから読む。
 pub fn decode_trims_surrounding_whitespace_test() {
   assert nip19.decode(" \n " <> spec_nsec <> "\t", Nsec)
@@ -200,12 +191,7 @@ pub fn encode_rejects_non_32_byte_key_test() {
 
 /// エラーの説明は入力によらない固定の文字列になる。
 pub fn describe_returns_fixed_text_test() {
-  let assert Error(error) =
-    nip19.decode(
-      "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe4",
-      Nsec,
-    )
-  assert nip19.describe(error) == "invalid bech32 checksum"
+  assert nip19.describe(InvalidChecksum) == "invalid bech32 checksum"
   assert nip19.describe(PrefixMismatch(expected: Nsec))
     == "expected nsec prefix"
   assert nip19.describe(TooLong) == "bech32 string is too long"

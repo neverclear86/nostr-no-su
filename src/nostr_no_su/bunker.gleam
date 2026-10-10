@@ -87,7 +87,7 @@ const account_not_registered = "account is not registered"
 /// 問い合わせに応答が無いときの理由。
 const query_not_answered = "bunker is not responding"
 
-/// `engine.sign_as` が失敗した（`bip340.sign` が失敗した）ときの理由。
+/// `engine.sign_as` が失敗した（`event.finalize` が `Error` を返した）ときの理由。
 const sign_failed = "failed to sign the event"
 
 /// 取り消す（署名者, クライアント）が承認済みのセッションに無いときの理由。

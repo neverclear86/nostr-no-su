@@ -212,13 +212,23 @@ pub fn extended_length_prefix_vectors_test() {
   assert #(length, nip44.decrypt(payload, key)) == #(length, Ok(plaintext))
 }
 
-/// 65536 未満の長さを 6 バイトの拡張プレフィックスで表した非正規のペイロードは、
-/// 全長が calc_padded_len と合っていても復号しない。
-pub fn decrypt_rejects_non_canonical_extended_prefix_test() {
+/// 与えたパディング済みの平文を、`<<1:256>>` の conversation key と nonce で暗号化し、
+/// 正しい MAC を付けたペイロード。`nip44.encrypt_with_nonce` が作らない形の平文を
+/// 復号に渡すために使う。
+fn payload_of_padded(padded: BitArray) -> String {
   let key = <<1:256>>
   let nonce = <<1:256>>
   let nip44.MessageKeys(chacha_key:, chacha_nonce:, hmac_key:) =
     nip44.message_keys(key, nonce)
+  let ciphertext = chacha20(chacha_key, chacha_nonce, padded)
+  let mac =
+    crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
+  bit_array.base64_encode(<<2, nonce:bits, ciphertext:bits, mac:bits>>, True)
+}
+
+/// 65536 未満の長さを 6 バイトの拡張プレフィックスで表した非正規のペイロードは、
+/// 全長が calc_padded_len と合っていても復号しない。
+pub fn decrypt_rejects_non_canonical_extended_prefix_test() {
   let padded_len = nip44.calc_padded_len(100)
   let pad_bytes = padded_len - 100
   let padded = <<
@@ -227,12 +237,16 @@ pub fn decrypt_rejects_non_canonical_extended_prefix_test() {
     string.repeat("a", 100):utf8,
     0:size(pad_bytes)-unit(8),
   >>
-  let ciphertext = chacha20(chacha_key, chacha_nonce, padded)
-  let mac =
-    crypto.hmac(<<nonce:bits, ciphertext:bits>>, crypto.Sha256, hmac_key)
-  let payload =
-    bit_array.base64_encode(<<2, nonce:bits, ciphertext:bits, mac:bits>>, True)
-  assert nip44.decrypt(payload, key) == Error(nip44.InvalidPayload)
+  assert nip44.decrypt(payload_of_padded(padded), <<1:256>>)
+    == Error(nip44.InvalidPayload)
+}
+
+/// MAC とパディングが正しくても、UTF-8 として読めない平文は復号しない。
+pub fn decrypt_rejects_plaintext_that_is_not_utf8_test() {
+  let pad_bytes = nip44.calc_padded_len(1) - 1
+  let padded = <<1:size(16), 0xff, 0:size(pad_bytes)-unit(8)>>
+  assert nip44.decrypt(payload_of_padded(padded), <<1:256>>)
+    == Error(nip44.InvalidPayload)
 }
 
 /// invalid.get_conversation_key: 範囲外の秘密鍵や、曲線上に無い公開鍵からは

@@ -6,8 +6,10 @@
 //// だけ。
 
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/int
+import gleam/result
 import gleam/string
 import nostr_no_su/crypto/secp256k1
 
@@ -77,8 +79,7 @@ fn bit_length(x: Int) -> Int {
 }
 
 /// HKDF-expand で `MessageKeys`（chacha_key 32 バイト、chacha_nonce 12 バイト、
-/// hmac_key 32 バイト）を導出する。テストが公式ベクターの
-/// `valid.get_message_keys` と照合するため公開する。
+/// hmac_key 32 バイト）を導出する。
 pub fn message_keys(
   conversation_key: BitArray,
   nonce: BitArray,
@@ -111,8 +112,7 @@ pub fn encrypt(
   )
 }
 
-/// 決定的に暗号化するための差し込み口。`nonce` は 32 バイトの nonce。テスト
-/// ベクターは nonce を固定するため、テストはこちらを直接呼ぶ。
+/// `nonce`（32 バイト）を与えて暗号化する。同じ引数なら同じペイロードになる。
 pub fn encrypt_with_nonce(
   plaintext: String,
   conversation_key: BitArray,
@@ -147,14 +147,11 @@ pub fn decrypt(
   payload: String,
   conversation_key: BitArray,
 ) -> Result(String, Nip44Error) {
-  case string.starts_with(payload, "#") {
-    True -> Error(UnsupportedVersion)
-    False ->
-      case bit_array.base64_decode(payload) {
-        Error(_) -> Error(InvalidPayload)
-        Ok(decoded) -> decrypt_bytes(decoded, conversation_key)
-      }
-  }
+  use <- bool.guard(string.starts_with(payload, "#"), Error(UnsupportedVersion))
+  use decoded <- result.try(
+    bit_array.base64_decode(payload) |> result.replace_error(InvalidPayload),
+  )
+  decrypt_bytes(decoded, conversation_key)
 }
 
 /// 復号したバイト列を `version || nonce || ciphertext || mac` として読む。
@@ -164,27 +161,20 @@ fn decrypt_bytes(
   conversation_key: BitArray,
 ) -> Result(String, Nip44Error) {
   let total = bit_array.byte_size(decoded)
-  case total >= min_payload_bytes && total <= max_payload_bytes {
-    False -> Error(InvalidPayload)
-    True ->
-      case decoded {
-        <<version, nonce:bytes-size(32), ct_and_mac:bits>> ->
-          case version == 2 {
-            False -> Error(UnsupportedVersion)
-            True -> {
-              let ct_len = bit_array.byte_size(ct_and_mac) - 32
-              case
-                bit_array.slice(ct_and_mac, 0, ct_len),
-                bit_array.slice(ct_and_mac, ct_len, 32)
-              {
-                Ok(ciphertext), Ok(mac) ->
-                  decrypt_verified(conversation_key, nonce, ciphertext, mac)
-                _, _ -> Error(InvalidPayload)
-              }
-            }
-          }
-        _ -> Error(InvalidPayload)
-      }
+  use <- bool.guard(
+    total < min_payload_bytes || total > max_payload_bytes,
+    Error(InvalidPayload),
+  )
+  let ciphertext_bytes = total - 1 - 32 - 32
+  case decoded {
+    <<
+      2,
+      nonce:bytes-size(32),
+      ciphertext:bytes-size(ciphertext_bytes),
+      mac:bytes-size(32),
+    >> -> decrypt_verified(conversation_key, nonce, ciphertext, mac)
+    // 長さは上で確かめたので、合わないのは先頭のバイトが 2 でないときだけである。
+    _ -> Error(UnsupportedVersion)
   }
 }
 
@@ -236,16 +226,8 @@ fn unpad_body(
     && unpadded_len <= rest_len
     && bit_array.byte_size(padded)
     == prefix_bytes + calc_padded_len(unpadded_len)
-  case valid {
-    False -> Error(InvalidPayload)
-    True ->
-      case bit_array.slice(rest, 0, unpadded_len) {
-        Ok(message) ->
-          case bit_array.to_string(message) {
-            Ok(text) -> Ok(text)
-            Error(_) -> Error(InvalidPayload)
-          }
-        Error(_) -> Error(InvalidPayload)
-      }
-  }
+  use <- bool.guard(!valid, Error(InvalidPayload))
+  bit_array.slice(rest, 0, unpadded_len)
+  |> result.try(bit_array.to_string)
+  |> result.replace_error(InvalidPayload)
 }

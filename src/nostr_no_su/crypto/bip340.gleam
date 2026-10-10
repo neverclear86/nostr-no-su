@@ -21,17 +21,8 @@ pub fn tagged_hash(tag: String, data: BitArray) -> BitArray {
   crypto.hash(crypto.Sha256, <<tag_hash:bits, tag_hash:bits, data:bits>>)
 }
 
-/// メッセージを、新たに生成した補助乱数で署名する。BIP-340 はメッセージの長さを
-/// 問わない（Nostr が署名するのは 32 バイトのイベント id）。
-pub fn sign(
-  privkey: BitArray,
-  message: BitArray,
-) -> Result(BitArray, SignError) {
-  sign_with_aux(privkey, message, crypto.strong_random_bytes(32))
-}
-
-/// 決定的に署名するための差し込み口。`aux` は 32 バイトの補助乱数。BIP-340 の
-/// 公式テストベクターは `aux` を固定するため、テストはこちらを直接呼ぶ。
+/// 補助乱数 `aux`（32 バイト）を与えて署名する。同じ引数なら同じ署名になる。BIP-340 は
+/// メッセージの長さを問わない（Nostr が署名するのは 32 バイトのイベント id）。
 pub fn sign_with_aux(
   privkey: BitArray,
   message: BitArray,

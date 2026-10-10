@@ -73,9 +73,8 @@ pub fn to_json(event: Event) -> Json {
 /// `Dynamic` として返す。`Dict` ではなく、キーは atom でもないことに注意。
 ///
 /// この map の形はプラグイン API v1 の一部であり、キーの変更は破壊的変更に
-/// あたる（`nostr_no_su/plugin` を参照）。`to_json` とフィールド一覧が重複する
-/// が、`from_map` が `decoder()` を再利用するため、片方だけ直すとラウンド
-/// トリップテストが落ちる。
+/// あたる（`nostr_no_su/plugin` を参照）。キーは `from_map` が再利用する
+/// `decoder()` が読むキーと同じに保つ。
 pub fn to_map(event: Event) -> Dynamic {
   dynamic.properties([
     #(dynamic.string("id"), dynamic.string(event.id)),
@@ -105,19 +104,13 @@ pub fn from_map(value: Dynamic) -> Result(Event, String) {
 }
 
 /// デコードエラーの一覧を 1 行にする。値そのものが map でないときは全フィールドで
-/// 同じ行になるので、重複を落とす。`from_map` と `plugin_api` の記述のデコードが
-/// 共有する。
+/// 同じ行になる（`describe_error` がキー名を書かない）ので、重複を落とす。
 pub fn describe_decode_errors(errors: List(decode.DecodeError)) -> String {
   list.map(errors, describe_error) |> list.unique |> string.join("; ")
 }
 
-/// デコードエラー 1 件を人が読める 1 行にする。欠損キーは
-/// `DecodeError("Field", "Nothing", ["kind"])` になるため、`expected` と `found`
-/// をそのまま差し込むと意味の通らない行になる。専用の分岐で振り分ける。
-///
-/// `path` が空になるのは値そのものが map でないときで、この場合はキー名を書かない
-/// （同じ行がフィールドの数だけ繰り返されるのを避けるため、
-/// `describe_decode_errors` が重複を落とす）。
+/// デコードエラー 1 件を人が読める 1 行にする。欠損キーは `missing field "k"`、型違いは
+/// `field "k": expected …, found …`、値が map でないとき（`path` が空）はキー名を付けない。
 fn describe_error(error: decode.DecodeError) -> String {
   let decode.DecodeError(expected:, found:, path:) = error
   let mismatch = "expected " <> expected <> ", found " <> found
@@ -167,12 +160,21 @@ pub fn compute_id(event: Event) -> String {
   |> hex.encode
 }
 
-/// 他のフィールドが設定済みのドラフトに `id` と `sig` を埋める。`privkey` は
-/// `event.pubkey` に対応している必要がある。
+/// 他のフィールドが設定済みのドラフトに `id` と `sig` を埋める。署名の補助乱数は
+/// 呼ぶたびに新しく生成する。`privkey` は `event.pubkey` に対応している必要がある。
 pub fn finalize(event: Event, privkey: BitArray) -> Result(Event, Nil) {
+  finalize_with_aux(event, privkey, crypto.strong_random_bytes(32))
+}
+
+/// 補助乱数 `aux`（32 バイト）を与えて `finalize` する。同じ引数なら同じ `sig` になる。
+pub fn finalize_with_aux(
+  event: Event,
+  privkey: BitArray,
+  aux: BitArray,
+) -> Result(Event, Nil) {
   let hash = hash_for_signing(event)
   use signature <- result.try(
-    bip340.sign(privkey, hash) |> result.replace_error(Nil),
+    bip340.sign_with_aux(privkey, hash, aux) |> result.replace_error(Nil),
   )
   Ok(Event(..event, id: hex.encode(hash), sig: hex.encode(signature)))
 }
