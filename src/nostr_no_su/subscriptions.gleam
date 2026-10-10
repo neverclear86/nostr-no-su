@@ -1,5 +1,6 @@
-//// 監視とバンカーの購読の定義。購読 id とフィルターの組み立て（純粋）と、監視リレーごとに
-//// バンカーの署名者と再開点から定義を評価する閉包の組み立てを持つ。
+//// 監視とバンカーの購読の定義。購読 id とフィルターの組み立て（純粋）と、バンカーのリレー
+//// ごとに署名者から、監視リレーごとにバンカーの署名者と再開点から、定義を評価する閉包の
+//// 組み立てを持つ。
 
 import gleam/erlang/process.{type Name}
 import gleam/int
@@ -104,6 +105,20 @@ pub fn bunker_subscriptions(
   case signer_pubkeys {
     [] -> []
     signer_pubkeys -> [#("bunker", bunker_filter(signer_pubkeys, since))]
+  }
+}
+
+/// バンカーのリレーの購読の定義。評価のたびに署名者の問い合わせ（応答が無ければ
+/// `None`）と `since` を呼んで `bunker_subscriptions` を組み立てる。署名者を得られ
+/// なければ定義を得られなかったことにし、開いている購読を閉じない。
+pub fn bunker_relay_subscriptions(
+  signers: fn() -> Option(List(String)),
+  since: fn() -> Int,
+) -> relay_client.Subscriptions {
+  fn() {
+    signers()
+    |> option.to_result(Nil)
+    |> result.map(bunker_subscriptions(_, since()))
   }
 }
 

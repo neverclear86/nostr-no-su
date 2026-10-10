@@ -272,13 +272,7 @@ pub fn bunker_spec(
       auth_url: Some(fn(token) { auth_base <> "/approve/" <> token }),
       retry_delay: retry_delay,
     ),
-    subscriptions: fn(signers) {
-      fn() {
-        signers()
-        |> option.to_result(Nil)
-        |> result.map(subscriptions.bunker_subscriptions(_, 0))
-      }
-    },
+    subscriptions: subscriptions.bunker_relay_subscriptions(_, fn() { 0 }),
   )
 }
 
