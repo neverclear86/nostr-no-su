@@ -22,16 +22,16 @@ import nostr_no_su/nostr/message
 import nostr_no_su/time
 import support/app_tree.{
   type DatabaseMsg, type SubscriptionReport, ApplyWrite, Deleted, FailReads,
-  Inserted, LabelUpdated, Opened, Published, ReadRows, Retrying, Subscribed,
-  WriteRows, Wrote, accounts_only, await_connection, await_signers, bunker_spec,
+  Inserted, LabelUpdated, Opened, ReadRows, Retrying, Subscribed, WriteRows,
+  Wrote, accounts_only, await_connection, await_signers, bunker_spec,
   call_counter, client_key, committed_but_timed_out_store, connect_request,
   connect_request_from, deliver_and_expect, discard_resume_points,
-  drain_subscriptions, event_labels, fake_open, fixed_retry_delay,
-  forwarding_spec, idle_monitor, load_signer, memory_store, other_client_key,
-  other_signer_key, receive_until, request, response_body, secret,
-  signed_request, signer_key, start_database, start_loading_bunker_tree,
-  start_tree_with_relays, stop_tree, store_failure, store_with_load,
-  stored_signer, test_relay_url,
+  drain_subscriptions, event_labels, expect_published, fake_open,
+  fixed_retry_delay, forwarding_spec, idle_monitor, load_signer, memory_store,
+  other_client_key, other_signer_key, receive_until, request, response_body,
+  response_result, secret, signed_request, signer_key, start_database,
+  start_loading_bunker_tree, start_tree_with_relays, stop_tree, store_failure,
+  store_with_load, stored_signer, test_relay_url,
 }
 import support/nip46_client.{account_for}
 import support/poll
@@ -149,8 +149,7 @@ pub fn a_bunker_recovers_when_the_account_store_comes_back_test() {
   assert filter.p_tags == Some([signer])
   deliver(connect_request("c2", secret))
   // 次の報告が応答であることが、接続が開き直されていないことを示す。
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   stop_tree(tree)
 }
 
@@ -333,7 +332,7 @@ pub fn a_restarted_bunker_reloads_the_accounts_test() {
   assert bunker.signers(name)
     == Some([account.pubkey_hex(account_for(other_signer_key))])
   deliver(connect_request_to(other_signer_key, "c1"))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let ack = expect_published(reports, 2000)
   let body =
     nip46_client.decrypt_response(
       account_for(client_key),
@@ -368,11 +367,11 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
       "c1",
     )),
   )
-  let assert Ok(Published(_socket, _ack)) = process.receive(reports, 2000)
+  let _ack = expect_published(reports, 2000)
   let assert Ok([session]) = bunker.sessions(name)
 
   deliver(connect_request_from(other_client_key, "c2", ""))
-  let assert Ok(Published(_socket, _asked)) = process.receive(reports, 2000)
+  let _asked = expect_published(reports, 2000)
   let assert Ok([entry]) = bunker.pending(name)
 
   // DB の作成時刻だけをずらし、メモリではなく DB から読み込んだことを見分ける。
@@ -391,13 +390,13 @@ pub fn a_restarted_bunker_restores_sessions_and_pending_requests_test() {
 
   let draft = "{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}"
   deliver(request("s1", "sign_event", "[\"" <> draft <> "\"]"))
-  let assert Ok(Published(_socket, signed)) = process.receive(reports, 2000)
+  let signed = expect_published(reports, 2000)
   let signed_body = response_body(signed)
   assert string.contains(signed_body, "\"id\":\"s1\"")
   assert string.contains(signed_body, "\\\"sig\\\"")
 
   assert bunker.approve(name, entry.token) == Ok(Nil)
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
+  let ack = expect_published(reports, 2000)
   let ack_body =
     nip46_client.decrypt_response(
       account_for(other_client_key),
@@ -539,8 +538,7 @@ pub fn an_account_added_at_runtime_answers_test() {
 
   deliver(connect_request("c1", inserted_secret))
   // 次の報告が応答であることが、接続が開き直されていないことを示す。
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   stop_tree(tree)
 }
 
@@ -563,8 +561,7 @@ pub fn a_removed_account_stops_answering_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
   assert bunker.remove_account(name, signer) == Ok(Nil)
@@ -597,8 +594,7 @@ pub fn account_changes_keep_the_bunker_and_its_sessions_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   let assert Ok(before) = process.named(name)
 
   assert bunker.add_account(name, account_for(other_signer_key), "other")
@@ -614,10 +610,9 @@ pub fn account_changes_keep_the_bunker_and_its_sessions_test() {
   assert rotated != secret
 
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
   deliver(connect_request_from(other_client_key, "c2", secret))
-  let assert Ok(Published(_socket, asked)) = process.receive(reports, 2000)
+  let asked = expect_published(reports, 2000)
   let body =
     nip46_client.decrypt_response(
       account_for(other_client_key),
@@ -671,8 +666,7 @@ pub fn a_failed_write_changes_nothing_test() {
   assert bunker.remove_account(name, signer)
     == Error(bunker.NotApplied(store_failure()))
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   stop_tree(tree)
 }
 
@@ -719,8 +713,7 @@ pub fn requests_during_a_slow_write_are_not_dropped_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   let assert Ok(Wrote(engine.InsertSession(..))) = process.receive(calls, 1000)
 
   // `add_account` は応答まで呼び出し側を止めるので、別のプロセスから呼ぶ。
@@ -736,8 +729,7 @@ pub fn requests_during_a_slow_write_are_not_dropped_test() {
   assert process.receive(reports, 300) == Error(Nil)
   process.send(gate, Nil)
   assert process.receive(results, 2000) == Ok(Ok(Nil))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
   stop_tree(tree)
 }
 
@@ -936,8 +928,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   let assert Ok(before) = process.named(name)
 
   assert bunker.add_account(name, account_for(other_signer_key), "other")
@@ -954,8 +945,7 @@ pub fn an_ambiguous_add_is_reconciled_with_the_store_test() {
     )
   let assert Ok(_request) = resubscribed
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
 
   assert bunker.add_account(name, account_for(other_signer_key), "again")
     == Error(bunker.AccountAlreadyRegistered)
@@ -990,8 +980,7 @@ pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
 
   assert bunker.rotate_secret(name, signer)
     == Error(bunker.MaybeApplied(bunker.StoreDidNotConfirm))
@@ -1000,10 +989,9 @@ pub fn an_ambiguous_secret_rotation_is_reconciled_with_the_store_test() {
   assert bunker.accounts(name) == Ok(database_listings(database))
 
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
   deliver(connect_request_from(other_client_key, "c2", rotated))
-  let assert Ok(Published(_socket, joined)) = process.receive(reports, 2000)
+  let joined = expect_published(reports, 2000)
   let body =
     nip46_client.decrypt_response(
       account_for(other_client_key),
@@ -1031,8 +1019,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
   let assert Opened(_relay_url, _connection, _socket, deliver) =
     await_connection(reports)
   deliver(connect_request("c1", secret))
-  let assert Ok(Published(_socket, ack)) = process.receive(reports, 2000)
-  assert string.contains(response_body(ack), "\"result\":\"ack\"")
+  assert response_result(expect_published(reports, 2000)) == "ack"
   assert bunker.accounts(name) == Ok(database_listings(database))
 
   process.send(database, FailReads(True))
@@ -1043,8 +1030,7 @@ pub fn a_failed_reload_keeps_the_accounts_and_retries_test() {
   assert bunker.add_account(name, account_for(slow_signer_key), "")
     == Error(bunker.NotReady("accounts are not loaded yet"))
   deliver(request("p1", "ping", "[]"))
-  let assert Ok(Published(_socket, pong)) = process.receive(reports, 2000)
-  assert string.contains(response_body(pong), "\"result\":\"pong\"")
+  assert response_result(expect_published(reports, 2000)) == "pong"
 
   process.send(database, FailReads(False))
   assert await_accounts(name, database_listings(database), 2000)

@@ -1,8 +1,10 @@
 //// 偽リレーの上でスーパービジョンツリーを動かすヘルパーと、ツリーを組まずにバンカーと
 //// リレー一覧のアクターを単独で起動するヘルパー。
 
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -486,6 +488,23 @@ pub fn response_body(response: Event) -> String {
     account_for(signer_key),
     response,
   )
+}
+
+/// 応答イベントの JSON-RPC 本文の `result`。失敗の応答では空文字列になる。
+pub fn response_result(response: Event) -> String {
+  let decoder = {
+    use result <- decode.field("result", decode.string)
+    decode.success(result)
+  }
+  let assert Ok(result) = json.parse(response_body(response), decoder)
+  result
+}
+
+/// ツリーが次に送信するイベントを待って返す。送信に使われたソケットは見ない。
+pub fn expect_published(reports: Subject(Report), timeout_ms: Int) -> Event {
+  let assert Ok(Published(_socket, event)) =
+    process.receive(reports, timeout_ms)
+  event
 }
 
 /// 監視に流す kind 1 の署名済みイベント。`label` を content に入れるので、label が
