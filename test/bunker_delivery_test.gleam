@@ -41,6 +41,7 @@ fn tracked(id: String, now: Int) -> delivery.Deliveries {
 }
 
 /// 全リレーが拒否すると、拒否を届いた順にまとめた 1 行が返り、項目は消える。
+/// 同じリレーからの 2 度目の拒否は数えず、報告に必要な残り 1 本のまま止まる。
 pub fn acknowledge_reports_a_response_rejected_by_every_relay_on_one_line_test() {
   let deliveries = tracked("e1", 0)
   let #(deliveries, first) =
@@ -50,6 +51,13 @@ pub fn acknowledge_reports_a_response_rejected_by_every_relay_on_one_line_test()
       Acknowledgement("e1", False, "rate-limited: slow down"),
     )
   assert first == None
+  let #(deliveries, repeated) =
+    delivery.acknowledge(
+      deliveries,
+      relay_a,
+      Acknowledgement("e1", False, "rate-limited: slow down"),
+    )
+  assert repeated == None
   let #(deliveries, second) =
     delivery.acknowledge(
       deliveries,
@@ -83,35 +91,6 @@ pub fn acknowledge_does_not_report_a_response_accepted_by_one_relay_test() {
       Acknowledgement("e1", False, "invalid: bad"),
     )
   assert rejected == None
-}
-
-/// 同じリレーからの 2 度目の拒否は数えず、報告に必要な残り 1 本のまま止まる。
-pub fn acknowledge_does_not_count_a_repeated_rejection_from_the_same_relay_test() {
-  let deliveries = tracked("e1", 0)
-  let #(deliveries, first) =
-    delivery.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert first == None
-  let #(deliveries, repeated) =
-    delivery.acknowledge(
-      deliveries,
-      relay_a,
-      Acknowledgement("e1", False, "rate-limited: slow down"),
-    )
-  assert repeated == None
-  let #(_deliveries, second) =
-    delivery.acknowledge(
-      deliveries,
-      relay_b,
-      Acknowledgement("e1", False, "invalid: bad"),
-    )
-  assert second
-    == Some(
-      "response e1 to c1 was rejected by every relay: a.example: rate-limited: slow down; b.example: invalid: bad",
-    )
 }
 
 /// 発行から `acknowledgement_timeout_seconds`（60 秒）以上経った項目は、次の
@@ -210,15 +189,6 @@ fn pausing_relay_a(at: Int) -> delivery.Pauses {
   )
 }
 
-/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない。
-/// 飛ばした 1 件はすぐ報告する。
-pub fn recipients_skip_a_rate_limited_relay_outside_a_session_test() {
-  let #(_pauses, sent, lines) =
-    delivery.recipients(pausing_relay_a(1000), [relay_a, relay_b], True, 1001)
-  assert sent == [relay_b]
-  assert lines == [delivery.pause_report(relay_a, 1)]
-}
-
 /// セッションのあるクライアントへの応答は、止めたリレーにも届く。
 pub fn recipients_keep_a_rate_limited_relay_inside_a_session_test() {
   let #(_pauses, sent, lines) =
@@ -269,6 +239,7 @@ pub fn pause_on_rate_limit_ignores_other_acknowledgements_test() {
   assert sent == [relay_a]
 }
 
+/// `rate-limited:` の拒否を返したリレーには、セッションの外の応答を出さない。
 /// 出さなかった件数はリレーごとに `report_interval_seconds` に 1 回まで報告する。
 /// 新しく止めたリレーの最初の 1 件はすぐ出し、期限が過ぎた後に残った件数は、
 /// 次にそのリレーを止めて出さなかったときに残りと合わせて出す。

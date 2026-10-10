@@ -459,8 +459,9 @@ pub fn postgres_instance_lock_test() {
   )
 }
 
-/// 監視の購読の再開点は、DB からの読み込みと保存を一巡できる。移行の後に読み書き
-/// できることは、`monitor_resume` が版 2 の移行で作られることの確認を兼ねる。
+/// 監視の購読とプラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の
+/// 後に読み書きできることは、`monitor_resume` が版 2、`plugin_resume` が版 5 の移行で
+/// 作られることの確認を兼ねる。
 pub fn postgres_resume_store_test() {
   use database_url <- postgres.with_test_database_url("resume_store")
   use pool, db <- postgres.with_schema(database_url)
@@ -469,45 +470,19 @@ pub fn postgres_resume_store_test() {
   let assert Ok(_loaded) =
     postgres.load_stored(pool, random_master_key(), generous)
 
-  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(None)
-  let assert Ok(Nil) =
-    store.save(db, store.Monitor, [#("wss://a", 200)], generous)
-  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
+  list.each([#(store.Monitor, "wss://a"), #(store.Plugin, "logger")], fn(entry) {
+    let #(kind, key) = entry
+    assert store.load(db, kind, key, generous) == Ok(None)
+    let assert Ok(Nil) = store.save(db, kind, [#(key, 200)], generous)
+    assert store.load(db, kind, key, generous) == Ok(Some(200))
 
-  // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) =
-    store.save(db, store.Monitor, [#("wss://a", 100)], generous)
-  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(200))
+    // 値を小さくする保存は無視する（GREATEST）。
+    let assert Ok(Nil) = store.save(db, kind, [#(key, 100)], generous)
+    assert store.load(db, kind, key, generous) == Ok(Some(200))
 
-  let assert Ok(Nil) =
-    store.save(db, store.Monitor, [#("wss://a", 300)], generous)
-  assert store.load(db, store.Monitor, "wss://a", generous) == Ok(Some(300))
-}
-
-/// プラグインごとの再開点は、DB からの読み込みと保存を一巡できる。移行の後に
-/// 読み書きできることは、`plugin_resume` が版 5 の移行で作られることの確認を
-/// 兼ねる。
-pub fn postgres_plugin_resume_store_test() {
-  use database_url <- postgres.with_test_database_url("plugin_resume_store")
-  use pool, db <- postgres.with_schema(database_url)
-
-  // 移行を実行する。
-  let assert Ok(_loaded) =
-    postgres.load_stored(pool, random_master_key(), generous)
-
-  assert store.load(db, store.Plugin, "logger", generous) == Ok(None)
-  let assert Ok(Nil) =
-    store.save(db, store.Plugin, [#("logger", 200)], generous)
-  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
-
-  // 値を小さくする保存は無視する（GREATEST）。
-  let assert Ok(Nil) =
-    store.save(db, store.Plugin, [#("logger", 100)], generous)
-  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(200))
-
-  let assert Ok(Nil) =
-    store.save(db, store.Plugin, [#("logger", 300)], generous)
-  assert store.load(db, store.Plugin, "logger", generous) == Ok(Some(300))
+    let assert Ok(Nil) = store.save(db, kind, [#(key, 300)], generous)
+    assert store.load(db, kind, key, generous) == Ok(Some(300))
+  })
 }
 
 /// 2 つのテーブルの再開点は、同じキーでも互いに影響しない。
