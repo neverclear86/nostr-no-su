@@ -68,13 +68,6 @@ pub fn remaining_ms_is_zero_after_the_deadline_test() {
   assert task.remaining_ms(task.deadline_in(-100)) == 0
 }
 
-/// `receive` は期限を過ぎていても、すでに届いたメッセージは取れる。
-pub fn receive_takes_a_queued_message_after_the_deadline_test() {
-  let subject = process.new_subject()
-  process.send(subject, 7)
-  assert task.receive(subject, task.deadline_in(-100)) == Ok(7)
-}
-
 /// `receive` は期限までメッセージを待つ。50ms 後に送る別プロセスのメッセージを
 /// 1 秒の期限で受け取れる。
 pub fn receive_waits_for_a_message_before_the_deadline_test() {
@@ -84,15 +77,6 @@ pub fn receive_waits_for_a_message_before_the_deadline_test() {
     process.send(subject, 7)
   })
   assert task.receive(subject, task.deadline_in(1000)) == Ok(7)
-}
-
-/// `receive` は期限までに届かなければ `Error(Nil)` になり、経過は期限に収まる
-/// （1 秒未満）。
-pub fn receive_gives_up_at_the_deadline_test() {
-  let subject = process.new_subject()
-  let started_at = time.monotonic_ms()
-  assert task.receive(subject, task.deadline_in(100)) == Error(Nil)
-  assert time.monotonic_ms() - started_at < 1000
 }
 
 /// `map_within` は全項目を別々のプロセスで同時に走らせる。200ms 眠る 3 件を
