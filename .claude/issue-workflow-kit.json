@@ -1,6 +1,6 @@
 {
   "kit": "issue-workflow-kit",
-  "kitCommit": "c706463d196f48850fa07ddc728f6ecbed8993c4",
+  "kitCommit": "8c6d44f4998909e6e287b844abb487fb1746dde0",
   "config": {
     "values": {
       "REPO": "neverclear86/nostr-no-su",
