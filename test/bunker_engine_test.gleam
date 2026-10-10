@@ -798,10 +798,11 @@ pub fn set_perms_bounds_the_permissions_test() {
   let client = account_for(client_key)
   let #(state, _) = connect(new_engine(), client, signer, secret, 1000)
   let #(over_limit, bounded) = over_limit_perms()
-  let assert Ok(#(state, _write)) =
+  let assert Ok(#(state, write)) =
     engine.set_perms(state, pair_key(signer, client), over_limit)
   let assert [updated] = engine.sessions(state)
   assert updated.perms == bounded
+  assert write == engine.UpdateSessionPerms(session: updated)
 }
 
 /// 承認されていないクライアントの `logout` も、書き込みを返さずに ack を返し、他の
