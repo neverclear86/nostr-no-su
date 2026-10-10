@@ -1447,7 +1447,7 @@ pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
   start_bare_runner(runner, "plugin_a", process.new_subject(), resubscribed)
   // 起動時の張り直しの呼び出しを読み捨てる。
   assert process.receive(resubscribed, 1000) == Ok(Nil)
-  let assert Ok(Some(_catchup)) = plugin_runner.catchup(runner)
+  let assert Some(Some(_catchup)) = plugin_runner.catchup(runner)
   let handle =
     app.monitor_handler(
       process.new_name("test_dedup"),
@@ -1461,7 +1461,7 @@ pub fn a_catchup_eose_drops_the_request_and_resubscribes_test() {
     relay_client.ReceivedEose("nostr-no-su-catchup-plugin_a"),
   )
   assert process.receive(resubscribed, 1000) == Ok(Nil)
-  assert plugin_runner.catchup(runner) == Ok(None)
+  assert plugin_runner.catchup(runner) == Some(None)
 }
 
 /// 監視ハンドラーは、監視の購読 id で届いた他人のイベントをディスパッチャーの配送に回さず、

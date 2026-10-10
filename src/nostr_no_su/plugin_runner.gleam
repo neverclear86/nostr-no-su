@@ -219,17 +219,15 @@ pub fn request_reenable(name: Name(Msg)) -> Option(Nil) {
 }
 
 /// このプラグインの再開点。`status` と同じく、再起動中や遅い実行の最中は応答が
-/// 無く `Error(Nil)` を返す。その周期の保存にはこのプラグインを入れない。
-pub fn resume(name: Name(Msg)) -> Result(Option(Int), Nil) {
+/// 無く `None` を返す。その周期の保存にはこのプラグインを入れない。
+pub fn resume(name: Name(Msg)) -> Option(Option(Int)) {
   named.call(name, status_timeout_ms, GetResume)
-  |> option.to_result(Nil)
 }
 
 /// このプラグインの取り直しの要求。`resume` と同じく、再起動中や遅い実行の
-/// 最中は応答が無く `Error(Nil)` を返す。
-pub fn catchup(name: Name(Msg)) -> Result(Option(Catchup), Nil) {
+/// 最中は応答が無く `None` を返す。
+pub fn catchup(name: Name(Msg)) -> Option(Option(Catchup)) {
   named.call(name, status_timeout_ms, GetCatchup)
-  |> option.to_result(Nil)
 }
 
 /// メッセージ 1 件を処理する。
