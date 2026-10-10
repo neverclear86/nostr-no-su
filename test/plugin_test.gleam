@@ -6,7 +6,6 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
-import nostr_no_su/admin/i18n
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/plugin
 import nostr_no_su/plugin_config
@@ -383,11 +382,6 @@ pub fn localized_page_title_falls_back_to_the_key_test() {
     )
   assert plugin.title_in(page, "ja") == "状態"
   assert plugin.title_in(page, "fr") == "status"
-}
-
-/// `plugin_pages/2` を呼ぶ言語は、管理 UI の表示の言語と同じ並びである。
-pub fn page_languages_are_the_admin_languages_test() {
-  assert plugin.page_languages == list.map(i18n.languages, i18n.code)
 }
 
 /// アカウント 1 件の map を読む decoder。

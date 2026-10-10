@@ -28,6 +28,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/set
 import gleam/string
+import nostr_no_su/language_code
 import nostr_no_su/nostr/event.{type Event}
 import nostr_no_su/plugin_children
 import nostr_no_su/plugin_config
@@ -36,11 +37,6 @@ import nostr_no_su/plugin_term.{BinaryKey}
 /// プラグイン API のバージョン。プラグインの `plugin_api_version/0` はこの値と
 /// 完全に一致しなければならない。
 const api_version: Int = 1
-
-/// 読み込み時に `plugin_pages/2` を呼ぶ言語のコード。管理 UI の表示の言語
-/// （`admin/i18n` の `languages`）と同じ並びで、先頭の言語の一覧をページのキーの
-/// 基準にする。
-pub const page_languages: List(String) = ["en", "ja"]
 
 /// メタデータ用のエクスポート 1 回の呼び出しを待つ上限（ミリ秒）で、`main` が
 /// 渡す既定値。モジュールの読み込みとメタデータの関数は即座に戻る約束で、これは
@@ -111,7 +107,7 @@ pub type PluginPage {
   /// 英語の表示名。
   PluginPage(key: String, title: String)
   /// `plugin_pages/2` と `plugin_page_content/3` を持つプラグインのページ。
-  /// `titles` は `page_languages` の言語のコードから表示名への対応で、ページの
+  /// `titles` は `language_code.all` の言語のコードから表示名への対応で、ページの
   /// 記述もその言語で返る。
   LocalizedPage(key: String, titles: Dict(String, String))
 }
@@ -131,7 +127,7 @@ pub fn title_in(page: PluginPage, language: String) -> String {
 /// `language`。
 pub fn text_language(page: PluginPage, language: String) -> String {
   case page {
-    PluginPage(..) -> "en"
+    PluginPage(..) -> language_code.english
     LocalizedPage(..) -> language
   }
 }
@@ -618,7 +614,7 @@ fn highest_arity(
   |> option.from_result
 }
 
-/// `plugin_pages/2` を `page_languages` の言語ごとに `call_pages` で呼んで検証し、
+/// `plugin_pages/2` を `language_code.all` の言語ごとに `call_pages` で呼んで検証し、
 /// `merge_localized_pages` で `LocalizedPage` の一覧にまとめる。
 fn localized_pages(
   module: Atom,
@@ -626,7 +622,7 @@ fn localized_pages(
   call_timeout_ms: Int,
 ) -> Result(List(PluginPage), String) {
   use lists <- result.try(
-    list.try_map(page_languages, fn(language) {
+    list.try_map(language_code.all, fn(language) {
       use pages <- result.map(call_pages(
         module,
         [config_map, dynamic.string(language)],
