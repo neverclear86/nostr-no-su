@@ -1,4 +1,4 @@
-//// ローダーのテストが使う一時ディレクトリーと BEAM を用意するヘルパー。
+//// 一時ディレクトリーと、Erlang ソースを組み立てて compile した BEAM を用意するテストのヘルパー。
 ////
 //// 使ううえでの注意が 3 点ある。
 ////
@@ -17,6 +17,7 @@ import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
 import gleam/string
+import nostr_no_su/persistent_term
 import support/erl.{unique_integer}
 
 /// 1 回のテストが使う一時ディレクトリーと、そこに置くモジュールの名前。
@@ -50,18 +51,91 @@ pub fn name(fixture: Fixture, label: String) -> String {
   label <> "_" <> fixture.token
 }
 
+/// ソースを組み立てる部品。
+pub type Part {
+  /// エクスポートする関数。`name_arity` は `plugin_name/0` の形、`clauses` は
+  /// その関数の節（末尾のピリオドまで）。
+  Exported(name_arity: String, clauses: String)
+  /// エクスポートしない定義。`-on_load` の属性と、それが指す関数に使う。
+  Local(source: String)
+}
+
+/// `-module` と、`parts` の `Exported` を並べた `-export` に続けて、`parts` の
+/// 定義を順に置いた Erlang ソース。
+pub fn module_source(module: String, parts: List(Part)) -> String {
+  let exports =
+    list.filter_map(parts, fn(part) {
+      case part {
+        Exported(name_arity:, ..) -> Ok(name_arity)
+        Local(..) -> Error(Nil)
+      }
+    })
+  let definitions =
+    list.map(parts, fn(part) {
+      case part {
+        Exported(clauses:, ..) -> clauses
+        Local(source:) -> source
+      }
+    })
+  "-module("
+  <> module
+  <> ").\n-export(["
+  <> string.join(exports, ", ")
+  <> "]).\n"
+  <> string.join(definitions, "\n")
+  <> "\n"
+}
+
+/// `plugin_api_version/0` の部品。`body` は Erlang の式。
+pub fn api_version_part(body: String) -> Part {
+  Exported("plugin_api_version/0", "plugin_api_version() -> " <> body <> ".")
+}
+
+/// `plugin_name/0` の部品。`body` は Erlang の式。
+pub fn name_part(body: String) -> Part {
+  Exported("plugin_name/0", "plugin_name() -> " <> body <> ".")
+}
+
+/// 何もせず `ok` を返す `handle_event` の部品。引数の数は `arity`（1 か 2）。
+fn handle_event_part(arity: Int) -> Part {
+  let params = list.take(["_Event", "_Config"], arity)
+  Exported(
+    "handle_event/" <> int.to_string(arity),
+    "handle_event(" <> string.join(params, ", ") <> ") -> ok.",
+  )
+}
+
+/// 文字列を Erlang の binary のリテラルにする。
+pub fn binary_literal(text: String) -> String {
+  "<<\"" <> text <> "\">>"
+}
+
+/// 必須 3 関数（`plugin_api_version/0`、`plugin_name/0`、`handle_event/1`）に
+/// `extras` を足したプラグインの Erlang ソース。`version` と `name` は Erlang の式。
+/// `-on_load` などの属性は関数の定義より前に要るので、`extras` を必須 3 関数の前に置く。
+pub fn plugin_module(
+  module: String,
+  version: String,
+  name: String,
+  extras: List(Part),
+) -> String {
+  module_source(
+    module,
+    list.append(extras, [
+      api_version_part(version),
+      name_part(name),
+      handle_event_part(1),
+    ]),
+  )
+}
+
 /// 戻らない `-on_load` を持つプラグインのソース。モジュールの読み込みが戻らない
 /// 形の検証に使う。
 pub fn hanging_on_load_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--on_load(init/0).
--export([plugin_api_version/0, plugin_name/0, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-handle_event(_Event) -> ok.
-init() ->
-    receive after infinity -> ok end.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Local("-on_load(init/0)."),
+    Local("init() ->\n    receive after infinity -> ok end."),
+  ])
 }
 
 /// 必須 3 関数を持ち、`plugin_name/0` の本体を `body`（Erlang の式）にした
@@ -72,12 +146,7 @@ pub fn plugin_name_body_source(
   version: Int,
   body: String,
 ) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, handle_event/1]).
-plugin_api_version() -> " <> int.to_string(version) <> ".
-plugin_name() -> " <> body <> ".
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, int.to_string(version), body, [])
 }
 
 /// 必須 3 関数と `plugin_min_host_version/0` を持ち、その本体を `body`
@@ -87,13 +156,12 @@ pub fn min_host_version_source(
   name: String,
   body: String,
 ) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_min_host_version/0, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_min_host_version() -> " <> body <> ".
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_min_host_version/0",
+      "plugin_min_host_version() -> " <> body <> ".",
+    ),
+  ])
 }
 
 /// 必須 3 関数と `plugin_required_versions/0` を持ち、その本体を `body`
@@ -103,18 +171,17 @@ pub fn required_versions_source(
   name: String,
   body: String,
 ) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_required_versions/0, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_required_versions() -> " <> body <> ".
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_required_versions/0",
+      "plugin_required_versions() -> " <> body <> ".",
+    ),
+  ])
 }
 
 /// 必須 3 関数をエクスポートする最小プラグインの Erlang ソース。
 pub fn plugin_source(module: String, version: Int, name: String) -> String {
-  plugin_name_body_source(module, version, "<<\"" <> name <> "\">>")
+  plugin_name_body_source(module, version, binary_literal(name))
 }
 
 /// プラグイン固有の設定を受け取るプラグインの Erlang ソース。`plugin_children/1`
@@ -122,52 +189,51 @@ pub fn plugin_source(module: String, version: Int, name: String) -> String {
 /// 設定 map を `persistent_term` へ退避して空のリストを返す。**`handle_event/1`
 /// はエクスポートしない**（`examples/plugins/file_logger` と同じ形）。
 pub fn config_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_children/1, handle_event/2]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_children(Config = #{<<\"path\">> := _}) ->
+  module_source(module, [
+    api_version_part("1"),
+    name_part(binary_literal(name)),
+    Exported(
+      "plugin_children/1",
+      "plugin_children(Config = #{<<\"path\">> := _}) ->
     persistent_term:put(?MODULE, Config),
     [];
-plugin_children(_Config) -> {error, <<\"path is required\">>}.
-handle_event(_Event, _Config) -> ok.
-"
+plugin_children(_Config) -> {error, <<\"path is required\">>}.",
+    ),
+    handle_event_part(2),
+  ])
 }
 
 /// `plugin_pages/0` だけを持ち、`plugin_page_content` を持たないプラグインの
 /// Erlang ソース。片方だけの宣言の検証に使う。
 pub fn pages_only_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_pages/0, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_pages() -> [#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}].
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_pages/0",
+      "plugin_pages() -> [#{<<\"key\">> => <<\"status\">>, <<\"title\">> => <<\"Status\">>}].",
+    ),
+  ])
 }
 
 /// `plugin_page_content/1` だけを持ち、`plugin_pages` を持たないプラグインの
 /// Erlang ソース。片方だけの宣言の検証に使う。
 pub fn page_content_only_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_page_content/1, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_page_content(_Key) -> #{<<\"sections\">> => []}.
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_page_content/1",
+      "plugin_page_content(_Key) -> #{<<\"sections\">> => []}.",
+    ),
+  ])
 }
 
 /// `plugin_page_action/3` だけを持ち、`plugin_pages` を持たないプラグインの
 /// Erlang ソース。実行だけの宣言の検証に使う。
 pub fn page_action_only_source(module: String, name: String) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_page_action/3, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_page_action(_Key, _Values, _Config) -> ok.
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_page_action/3",
+      "plugin_page_action(_Key, _Values, _Config) -> ok.",
+    ),
+  ])
 }
 
 /// `plugin_pages/0` と `plugin_page_content/1` を持つプラグインの Erlang
@@ -181,14 +247,13 @@ pub fn pages_source(
   pages_body: String,
   content_body: String,
 ) -> String {
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_pages/0, plugin_page_content/1, handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_pages() -> " <> pages_body <> ".
-plugin_page_content(_Key) -> " <> content_body <> ".
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported("plugin_pages/0", "plugin_pages() -> " <> pages_body <> "."),
+    Exported(
+      "plugin_page_content/1",
+      "plugin_page_content(_Key) -> " <> content_body <> ".",
+    ),
+  ])
 }
 
 /// `plugin_pages/<pages_arity>` と `plugin_page_content/<content_arity>` を持つ
@@ -206,40 +271,52 @@ pub fn ui_source(
   let pages_params = list.take(["_Config", "Language"], pages_arity)
   let content_params =
     list.take(["_Key", "_Config", "_Language"], content_arity)
-  "-module(" <> module <> ").
--export([plugin_api_version/0, plugin_name/0, plugin_pages/" <> int.to_string(
-    pages_arity,
-  ) <> ", plugin_page_content/" <> int.to_string(content_arity) <> ", handle_event/1]).
-plugin_api_version() -> 1.
-plugin_name() -> <<\"" <> name <> "\">>.
-plugin_pages(" <> string.join(pages_params, ", ") <> ") -> " <> pages_body <> ".
-plugin_page_content(" <> string.join(content_params, ", ") <> ") -> #{<<\"sections\">> => []}.
-handle_event(_Event) -> ok.
-"
+  plugin_module(module, "1", binary_literal(name), [
+    Exported(
+      "plugin_pages/" <> int.to_string(pages_arity),
+      "plugin_pages("
+        <> string.join(pages_params, ", ")
+        <> ") -> "
+        <> pages_body
+        <> ".",
+    ),
+    Exported(
+      "plugin_page_content/" <> int.to_string(content_arity),
+      "plugin_page_content("
+        <> string.join(content_params, ", ")
+        <> ") -> #{<<\"sections\">> => []}.",
+    ),
+  ])
 }
 
 /// 定数を返す関数 1 つだけを持つモジュールの Erlang ソース。プラグインが同梱する
 /// 依存を模したもので、影（モジュール名前空間の衝突）の検証に使う。
 pub fn value_source(module: String, value: Int) -> String {
-  "-module(" <> module <> ").
--export([value/0]).
-value() -> " <> int.to_string(value) <> ".
-"
+  module_source(module, [
+    Exported("value/0", "value() -> " <> int.to_string(value) <> "."),
+  ])
 }
 
 /// `plugin_children/1` が退避した設定 map を読み出す。
 pub fn last_config(module: String) -> Dynamic {
-  saved(module)
+  saved(atom.create(module))
 }
 
-/// fixture がモジュール名の atom をキーに退避した値。
-fn saved(module: String) -> Dynamic {
-  persistent_term_get(atom.create(module))
+/// fixture やプラグインが `key` に退避した値。キーが無ければ、退避する関数が呼ばれて
+/// いないというテストの失敗として落ちる。
+pub fn saved(key: Atom) -> Dynamic {
+  let value = persistent_term.get(key, dynamic.nil())
+  assert value != dynamic.nil()
+  value
 }
 
-/// fixture がモジュール名の atom をキーに退避した Pid を読み出す。
+/// fixture がモジュール名の atom をキーに退避した Pid を読み出す。キーが無ければ
+/// `saved` と同じく落ちる。
 pub fn last_pid(module: String) -> Pid {
-  persistent_term_get_pid(atom.create(module))
+  let absent = process.self()
+  let pid = persistent_term.get(atom.create(module), absent)
+  assert pid != absent
+  pid
 }
 
 /// Erlang のソース文字列を `<outdir>/<module>.erl` へ書き出してコンパイルする。
@@ -249,6 +326,15 @@ pub fn compile(source: String, module: String, outdir: String) -> Nil {
   let path = outdir <> "/" <> module <> ".erl"
   write(path, source)
   compile_file(path, outdir)
+}
+
+/// `source` を `fixture.module` として `fixture.root` に compile し、`fixture.root` を
+/// コードパスに足す。`plugin.load(atom.create(fixture.module), ..)` が読み込める。
+pub fn compile_loadable(fixture: Fixture, source: String) -> Nil {
+  compile(source, fixture.module, fixture.root)
+  let assert Ok(Nil) = add_code_path(fixture.root)
+    as { "failed to add to the code path: " <> fixture.root }
+  Nil
 }
 
 /// 既存の `.erl` ファイルを指定ディレクトリーへコンパイルする。同梱の例
@@ -297,11 +383,10 @@ pub fn write_app_file(ebin: String, app: String, vsn: String) -> Nil {
   )
 }
 
-/// ロード済みアプリの版。被検コード（`.app` の直読み）と別の経路で期待値を
-/// 得るために使う。
-pub fn loaded_app_version(app: String) -> String {
-  loaded_app_version_ffi(app)
-}
+/// ロード済みアプリの版。被検コード（`.app` の直読み）と別の経路
+/// （`application:get_key/2`）で期待値を得るために使う。
+@external(erlang, "beam_fixture", "loaded_app_version")
+pub fn loaded_app_version(app: String) -> String
 
 /// モジュールがコードパス上にあるか。エントリーモジュール規則の検証で、飛ばした
 /// バンドルの ebin がコードパスへ入っていないことを確かめるのに使う。
@@ -325,20 +410,10 @@ fn ensure_path(path: String) -> Dynamic
 @external(erlang, "file", "change_mode")
 fn file_change_mode(path: String, mode: Int) -> Dynamic
 
-/// 退避した値。キーが無ければ `badarg` で落ちるが、それは退避する関数が呼ばれて
-/// いないというテストの失敗そのものである。
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get(key: Atom) -> Dynamic
-
-/// 退避した Pid。`persistent_term_get` とは戻り値の型だけが異なるため別に
-/// 宣言する。
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get_pid(key: Atom) -> Pid
-
 /// ローダーが使うものと同じ判定。テストからも同じ問い合わせを行う。
 @external(erlang, "nostr_no_su_plugin_ffi", "is_on_code_path")
 fn is_on_code_path(module: Atom) -> Bool
 
-/// `application:get_key/2` によるロード済みアプリの版。
-@external(erlang, "beam_fixture", "loaded_app_version")
-fn loaded_app_version_ffi(app: String) -> String
+/// ディレクトリーをコードパスの末尾に足す。
+@external(erlang, "nostr_no_su_plugin_ffi", "add_code_path")
+fn add_code_path(path: String) -> Result(Nil, String)

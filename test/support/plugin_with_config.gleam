@@ -7,6 +7,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
+import nostr_no_su/persistent_term
 
 /// `plugin_children/1` が受け取った設定 map を退避する persistent_term のキー。
 pub fn children_config_key() -> Atom {
@@ -30,16 +31,12 @@ pub fn plugin_name() -> String {
 
 /// 子プロセスは持たない。設定を受け取ったことだけを記録して空のリストを返す。
 pub fn plugin_children(config: Dynamic) -> List(Dynamic) {
-  let _ = put(children_config_key(), config)
+  let _ = persistent_term.put(children_config_key(), config)
   []
 }
 
 /// 受け取った設定 map をテストから読めるように退避する。
 pub fn handle_event(_event: Dynamic, config: Dynamic) -> Nil {
-  let _ = put(handle_config_key(), config)
+  let _ = persistent_term.put(handle_config_key(), config)
   Nil
 }
-
-/// 値を persistent_term に退避する。戻り値は atom の ok。
-@external(erlang, "persistent_term", "put")
-fn put(key: Atom, value: Dynamic) -> Dynamic

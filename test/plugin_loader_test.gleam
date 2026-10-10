@@ -1161,7 +1161,7 @@ pub fn page_content_timeout_test() {
 /// 打ち切られた呼び出しのプロセスも残らない。
 ///
 /// 期限（`short_call_timeout_ms`）は、使い捨てのプロセスが `plugin_name/0` の先頭で
-/// Pid を退避するより十分長い（退避の前に打ち切ると `last_pid` が `badarg` で落ちる）。
+/// Pid を退避するより十分長い（退避の前に打ち切ると `last_pid` が落ちる）。
 pub fn load_all_hanging_metadata_test() {
   let fixture = beam_fixture.new("hanging_metadata")
   let hanging = beam_fixture.name(fixture, "aaa")
