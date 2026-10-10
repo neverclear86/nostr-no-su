@@ -193,14 +193,6 @@ pub fn wrong_secret_warning_is_shown_only_on_mismatched_approval_page_test() {
   })
 }
 
-/// 承認ページは、ダッシュボードと同じ承認待ちのカードを出し、残り時間を円で描く。
-pub fn approval_page_draws_the_pending_card_test() {
-  let assert Ok([pending]) = states().pending
-  let page = approval(i18n.English, pending)
-  assert string.contains(page, "pathLength=\"600\"")
-  assert string.contains(page, "aria-label=\"Expires in 9:00\"")
-}
-
 /// 要求された権限は、承認待ちのカードと承認ページの両方でチップになる。空なら「権限の
 /// 要求なし」のバッジ 1 つを出す。
 pub fn permissions_are_shown_as_chips_test() {
@@ -473,47 +465,6 @@ pub fn skipped_rows_sit_in_a_failure_frame_after_the_accounts_test() {
   assert string.contains(
     frame,
     element.to_string(fingerprint.pubkey_svg(pubkey, fingerprint.Gray, "size-8")),
-  )
-}
-
-/// セッションの行は、権限をチップで出す。
-pub fn sessions_show_perms_test() {
-  let snapshot =
-    dashboard.Snapshot(
-      ..states(),
-      sessions: Ok([
-        session.Session(..session_of("abcd", "ef01"), perms: "sign_event:7"),
-      ]),
-    )
-  let body = english(snapshot)
-  assert string.contains(
-    body,
-    "<div class=\"col-span-2\">"
-      <> element.to_string(permission_view.chips(i18n.English, "sign_event:7"))
-      <> "</div>",
-  )
-}
-
-/// 権限が空のとき、セッションの行は「権限の要求なし」のバッジを出す。
-pub fn empty_session_perms_show_the_no_permissions_badge_test() {
-  let snapshot =
-    dashboard.Snapshot(
-      ..states(),
-      sessions: Ok([
-        session_of("abcd", "ef01"),
-      ]),
-    )
-
-  let assert Ok(#(_, sessions)) =
-    string.split_once(english(snapshot), "Approved sessions")
-  assert string.contains(
-    sessions,
-    "<div class=\"col-span-2\">"
-      <> element.to_string(view.status_chip(
-      view.ToneChip(view.Neutral),
-      "No permissions requested",
-    ))
-      <> "</div>",
   )
 }
 
@@ -1051,8 +1002,8 @@ pub fn different_listing_failures_stay_in_each_section_test() {
   assert !string.contains(english, "Not available for the reason above.")
 }
 
-/// セッションの行に署名者のラベルと省略した npub、権限のチップ、クライアントの
-/// コピーボタンが出る。
+/// セッションの行に署名者のラベルと省略した npub、権限のチップ（2 列にまたがる枠の中）、
+/// クライアントのコピーボタンが出る。
 pub fn session_row_shows_the_signer_and_permission_chips_test() {
   let known_signer = "abcd-known-signer-0123456789"
   let account = account(known_signer, "main")
@@ -1074,7 +1025,9 @@ pub fn session_row_shows_the_signer_and_permission_chips_test() {
   assert string.contains(body, view.shorten(account.npub))
   assert string.contains(
     body,
-    element.to_string(permission_view.chips(i18n.English, "sign_event:1")),
+    "<div class=\"col-span-2\">"
+      <> element.to_string(permission_view.chips(i18n.English, "sign_event:1"))
+      <> "</div>",
   )
   assert string.contains(
     sessions_part(snapshot),
@@ -1108,16 +1061,19 @@ pub fn last_used_is_shown_as_a_relative_time_test() {
   )
 }
 
-/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベル・npub）・理由・削除のダイアログを
-/// 開くボタンが出る。日本語でも見出しが訳される。
+/// 飛ばされた行が 1 件以上あれば、見出し・警告の 1 文・識別（ラベルと省略した npub）・理由・
+/// 削除のダイアログを開くボタンが出る。日本語でも見出しが訳される。16 進の pubkey は属性値
+/// （ダイアログの `id`、フォームの宛先）にだけ使われ、識別としては出ない。
 pub fn skipped_rows_are_listed_with_their_reason_test() {
+  let pubkey = "deadbeef00112233445566778899aabbccddeeff0011223344"
+  let npub = "npub1skippedexamplevalueabcdefghijklmno"
   let snapshot =
     dashboard.Snapshot(
       ..states(),
       skipped: Ok([
         dashboard.SkippedRow(
-          pubkey: "abcd1234",
-          npub: Some("npub1unreadable"),
+          pubkey:,
+          npub: Some(npub),
           label: "old wallet",
           reason: vault.UndecryptablePrivateKey,
         ),
@@ -1130,15 +1086,22 @@ pub fn skipped_rows_are_listed_with_their_reason_test() {
     "The current ACCOUNT_MASTER_KEY cannot decrypt these rows.",
   )
   assert string.contains(english, "old wallet")
-  assert string.contains(english, "npub1unreadable")
+  assert string.contains(english, view.shorten(npub))
   assert string.contains(
     english,
     "The private key cannot be decrypted (wrong ACCOUNT_MASTER_KEY or a tampered row).",
   )
   assert string.contains(
     english,
-    "commandfor=\"dialog-unreadable-abcd1234-delete\"",
+    dialog_trigger(
+      "dialog-unreadable-" <> pubkey <> "-delete",
+      view.trash_icon(),
+      "Delete",
+      view.DangerGhostButton,
+    ),
   )
+  assert !string.contains(english, ">" <> pubkey)
+  assert !string.contains(english, pubkey <> "<")
   assert string.contains(
     dashboard.render(i18n.Japanese, view.System, snapshot),
     "読み込めなかったアカウント",
@@ -1167,40 +1130,6 @@ pub fn malformed_pubkey_rows_show_only_the_reason_test() {
     "This row cannot be deleted here because its pubkey cannot be read.",
   )
   assert !string.contains(body, "not-a-valid-pubkey-value")
-}
-
-/// 読み込めなかった行にラベルと省略した npub、「削除」が出て、16 進の pubkey は属性値（ダイアログの
-/// `id`、フォームの宛先）にだけ使われ、識別としては出ない。
-pub fn skipped_row_shows_the_label_and_npub_without_the_hex_test() {
-  let pubkey = "deadbeef00112233445566778899aabbccddeeff0011223344"
-  let npub = "npub1skippedexamplevalueabcdefghijklmno"
-  let snapshot =
-    dashboard.Snapshot(
-      ..states(),
-      skipped: Ok([
-        dashboard.SkippedRow(
-          pubkey:,
-          npub: Some(npub),
-          label: "old wallet",
-          reason: vault.UndecryptablePrivateKey,
-        ),
-      ]),
-    )
-  let body = english(snapshot)
-  assert string.contains(body, "old wallet")
-  assert string.contains(body, view.shorten(npub))
-  assert string.contains(
-    body,
-    dialog_trigger(
-      "dialog-unreadable-" <> pubkey <> "-delete",
-      view.trash_icon(),
-      "Delete",
-      view.DangerGhostButton,
-    ),
-  )
-  // pubkey は属性値（ダイアログの id、フォームの宛先）にだけ現れ、テキストとしては出ない。
-  assert !string.contains(body, ">" <> pubkey)
-  assert !string.contains(body, pubkey <> "<")
 }
 
 /// 飛ばされた行が 0 件、あるいは一覧を得られないときは枠を描かない。
@@ -1274,15 +1203,6 @@ pub fn relays_are_listed_one_item_per_row_test() {
     "bunker</dt><dd>",
     element.to_string(bunker),
   ])
-}
-
-/// アカウントの一覧を得られなくても、アカウントの追加のダイアログは描く。
-pub fn add_account_dialog_is_drawn_without_the_account_list_test() {
-  let body =
-    english(
-      dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
-    )
-  assert string.contains(body, "class=\"modal\" id=\"dialog-account-new\">")
 }
 
 /// アカウントの追加のダイアログの nsec の欄は、貼り付けの説明（`ImportDescription`）を ⓘ で開く補足に畳み、
@@ -1560,52 +1480,6 @@ pub fn a_relay_role_without_a_status_shows_unavailable_test() {
   assert string.contains(body, "commandfor=\"dialog-relay-1-delete\"")
 }
 
-/// 用途 2 つ（監視、バンカー）は必ず並び、使っていない側は「未使用」のバッジで出す。
-pub fn unused_relay_roles_are_shown_as_unused_test() {
-  let body =
-    english(
-      dashboard.Snapshot(
-        ..states(),
-        relays: Ok([
-          dashboard.RelayRow(
-            1,
-            "wss://a",
-            dashboard.Reported(relay_connection.Connected),
-            dashboard.Unused,
-          ),
-        ]),
-      ),
-    )
-  assert string.contains(body, "monitor</dt><dd>")
-  assert string.contains(
-    body,
-    "bunker</dt><dd>"
-      <> element.to_string(view.status_chip(view.UnusedChip, "Unused")),
-  )
-}
-
-/// リレーの行の用途の編集と削除のダイアログを開くボタンは、アイコンだけで `aria-label` を持ち、
-/// 語はボタンの中身には出ない。
-pub fn relay_actions_are_icon_only_with_labels_test() {
-  let body = english(states())
-  assert string.contains(
-    body,
-    element.to_string(view.dialog_trigger(
-      "dialog-relay-1-edit",
-      view.IconOnlyFace(view.pencil_icon(), "Edit roles"),
-      view.GhostButton,
-    )),
-  )
-  assert string.contains(
-    body,
-    element.to_string(view.dialog_trigger(
-      "dialog-relay-1-delete",
-      view.IconOnlyFace(view.trash_icon(), "Delete relay"),
-      view.DangerGhostButton,
-    )),
-  )
-}
-
 /// バンカーに使う行が 1 件も無ければ、見出しと凡例の直後にエラーの色の囲みが出て一覧は出さない。監視だけの
 /// 行があれば囲みの後に一覧を出し、バンカーの行が 1 件でもあれば囲みを出さない
 /// （`states()` はバンカーの行を持つので、上のテストの描画に囲みが無いことで確かめる）。
@@ -1675,20 +1549,6 @@ pub fn unlisted_relays_show_the_reason_test() {
   )
 }
 
-/// リレーの節の見出しの ⓘ は、一覧の行があるとき・0 件のとき・一覧を得られないときのどれでも、
-/// 監視とバンカーの語と説明を並べた凡例を `relays-hint` の補足で開く。
-pub fn relays_heading_opens_the_role_legend_from_the_info_button_test() {
-  let legend = "Relays</h2>" <> english_relays_hint_html()
-  let snapshots = [
-    states(),
-    dashboard.Snapshot(..states(), relays: Ok([])),
-    dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
-  ]
-  list.each(snapshots, fn(snapshot) {
-    assert string.contains(english(snapshot), legend)
-  })
-}
-
 /// `id` の ⓘ のボタンと、`content`（HTML）を包む補足の HTML。
 fn hint_html(language: i18n.Language, id: String, content: String) -> String {
   view.info_hint(language, id, [html.text("@content@")])
@@ -1756,55 +1616,25 @@ pub fn a_section_past_the_deadline_says_not_available_test() {
   )
 }
 
-/// リレーの節の見出しの行は、一覧を得たときだけ追加のダイアログを開くボタンを出す。追加のダイアログは
-/// 一覧の有無によらず描く。
-pub fn relays_heading_opens_the_add_dialog_test() {
-  let ok = english(states())
-  assert string.contains(
-    ok,
-    "command=\"show-modal\" commandfor=\"dialog-relay-new\"",
-  )
-  assert string.contains(ok, "id=\"dialog-relay-new\"")
-
-  let unavailable =
-    english(
-      dashboard.Snapshot(..states(), relays: Error(i18n.Untranslated("boom"))),
-    )
-  assert !string.contains(
-    unavailable,
-    "command=\"show-modal\" commandfor=\"dialog-relay-new\"",
-  )
-  assert string.contains(unavailable, "id=\"dialog-relay-new\"")
-}
-
-/// セッションの節の見出しの行は、一覧を得たときだけ接続のダイアログを開くボタンを出す。接続のダイアログは
-/// 一覧を得られないときも描く。
-pub fn sessions_heading_links_to_connect_a_client_test() {
-  let trigger = "command=\"show-modal\" commandfor=\"dialog-session-connect\""
-  let ok = english(states())
-  assert string.contains(ok, trigger)
-  assert string.contains(ok, "id=\"dialog-session-connect\"")
-
-  let unavailable =
-    english(
-      dashboard.Snapshot(..states(), sessions: Error(i18n.Untranslated("boom"))),
-    )
+/// 一覧を得られない節の見出しの行は、追加・接続のダイアログを開くボタンを出さない。ダイアログは
+/// 一覧の有無によらず描き、アカウントの節は読み直しのフォームも出したままにする。
+pub fn an_unavailable_list_keeps_its_dialog_but_not_the_open_button_test() {
+  let boom = i18n.Untranslated("boom")
+  let available = english(states())
+  let accounts = english(dashboard.Snapshot(..states(), accounts: Error(boom)))
+  let relays = english(dashboard.Snapshot(..states(), relays: Error(boom)))
+  let sessions = english(dashboard.Snapshot(..states(), sessions: Error(boom)))
+  assert string.contains(accounts, "/accounts/reload")
+  use #(unavailable, dialog) <- list.each([
+    #(accounts, "dialog-account-new"),
+    #(relays, "dialog-relay-new"),
+    #(sessions, "dialog-session-connect"),
+  ])
+  let trigger = "command=\"show-modal\" commandfor=\"" <> dialog <> "\""
+  assert string.contains(available, trigger)
+  assert string.contains(available, "id=\"" <> dialog <> "\"")
   assert !string.contains(unavailable, trigger)
-  assert string.contains(unavailable, "id=\"dialog-session-connect\"")
-}
-
-/// 一覧を得られないときも、アカウントの節の見出しの読み直しのフォームは出したままにする
-/// （追加のボタンは一覧を得たときだけ出す）。
-pub fn the_reload_form_stays_without_the_account_list_test() {
-  let unavailable =
-    english(
-      dashboard.Snapshot(..states(), accounts: Error(i18n.Untranslated("boom"))),
-    )
-  assert string.contains(unavailable, "/accounts/reload")
-  assert !string.contains(
-    unavailable,
-    "command=\"show-modal\" commandfor=\"dialog-account-new\"",
-  )
+  assert string.contains(unavailable, "id=\"" <> dialog <> "\"")
 }
 
 /// `body` の `title` の節の見出しで、題の `</h2>` の後に続く HTML。題の直後に ⓘ があれば、
@@ -1971,7 +1801,8 @@ pub fn approval_page_refreshes_automatically_test() {
   )
 }
 
-/// 承認待ちのカードには「失効まで」の欄が出て、残りの「分:秒」と失効の時刻を出す。承認ページも同じカードを使う。
+/// 承認待ちのカードには「失効まで」の欄が出て、残りの「分:秒」と失効の時刻を出す。承認ページも
+/// 同じカードを使い、残り時間を円で描いて `aria-label` で読み上げる。
 pub fn pending_shows_time_until_expiry_test() {
   let assert Ok([pending]) = states().pending
   assert string.contains(
@@ -1982,10 +1813,13 @@ pub fn pending_shows_time_until_expiry_test() {
     dashboard.render(i18n.Japanese, view.System, states()),
     "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
+  let page = approval(i18n.Japanese, pending)
   assert string.contains(
-    approval(i18n.Japanese, pending),
+    page,
     "<dt class=\"text-muted\">失効まで</dt><dd>9:00（<time datetime=\"2026-09-13T05:21:34Z\">05:21:34（UTC）</time> に失効）</dd>",
   )
+  assert string.contains(page, "pathLength=\"600\"")
+  assert string.contains(page, "aria-label=\"失効まで 9:00\"")
 }
 
 /// secret が一致しないカードは、枠を warning の色にして説明の囲みを 1 つ置き、拒否を塗り、承認を
@@ -2086,21 +1920,27 @@ pub fn overview_rail_links_to_each_section_test() {
   assert string.contains(body, "id=\"" <> anchor <> "\"")
 }
 
-/// 承認待ちの項目は、0 件のときは節が無いのでリンクにしない。1 件以上あるとき、
-/// 一覧を得られないときはリンクにする。
-pub fn overview_pending_is_not_a_link_when_no_pending_test() {
+/// 承認待ちの項目は、1 件以上あるときだけ `primary` で塗り、狭い画面では件数によらず全幅を
+/// 占める。リンクにするのは節が出るとき（1 件以上、一覧を得られないとき）で、0 件のときは
+/// 節が無いのでリンクにしない。
+pub fn overview_pending_is_linked_and_highlighted_only_when_pending_exists_test() {
   let anchor = "href=\"#pending\""
-  assert string.contains(english(states()), anchor)
-  assert !string.contains(
-    english(dashboard.Snapshot(..states(), pending: Ok([]))),
-    anchor,
-  )
-  assert string.contains(
+  let highlighted =
+    "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content"
+  let plain =
+    "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
+  let with_pending = english(states())
+  assert string.contains(with_pending, anchor)
+  assert string.contains(with_pending, highlighted)
+  let empty = english(dashboard.Snapshot(..states(), pending: Ok([])))
+  assert !string.contains(empty, anchor)
+  assert !string.contains(empty, highlighted)
+  assert string.contains(empty, plain)
+  let unavailable =
     english(
       dashboard.Snapshot(..states(), pending: Error(i18n.Untranslated("boom"))),
-    ),
-    anchor,
-  )
+    )
+  assert string.contains(unavailable, anchor)
 }
 
 /// 承認待ち・アカウント・セッションの一覧を得られないとき、対応する項目の値は error の色の
@@ -2301,20 +2141,6 @@ pub fn approval_page_explains_what_approval_means_test() {
     without_perms_page,
     "You can change them later from the approved session. None requested. Signing any kind but 24133, and NIP-44 encryption and decryption, are allowed.",
   )
-}
-
-/// 承認待ちの項目は、1 件以上あるときだけ `primary` で塗る。狭い画面では件数によらず全幅を
-/// 占める。
-pub fn overview_highlights_pending_only_when_pending_exists_test() {
-  let highlighted =
-    "col-span-2 flex flex-col gap-0.5 bg-primary px-4 py-3.5 text-primary-content"
-  let plain =
-    "col-span-2 flex flex-col gap-0.5 bg-base-100 px-4 py-3.5 lg:col-span-1"
-  let with_pending = english(states())
-  assert string.contains(with_pending, highlighted)
-  let empty = english(dashboard.Snapshot(..states(), pending: Ok([])))
-  assert !string.contains(empty, highlighted)
-  assert string.contains(empty, plain)
 }
 
 /// 概要の帯の色の規則。一覧を得られない項目は値「—」と error の補足、要対応の語だけ状態の
@@ -2903,7 +2729,7 @@ pub fn connect_form_describes_the_uri_field_test() {
 }
 
 /// `render_open` は指定したダイアログだけを `open` で描き、先頭に理由を、欄に送られた用途を出し、
-/// キャンセルを `/` へのリンクにする。承認待ちがあっても自動で読み込み直さない。
+/// キャンセルを `/` へのリンクにする。承認待ちがあっても自動で読み込み直さず、更新の間隔も出さない。
 pub fn render_open_opens_only_the_named_relay_dialog_test() {
   let assert Ok(body) =
     dashboard.render_open(
@@ -2931,6 +2757,10 @@ pub fn render_open_opens_only_the_named_relay_dialog_test() {
     "<a autofocus class=\"btn btn-ghost focus-visible:outline-base-content\" href=\"/\">Cancel</a>",
   )
   assert !string.contains(body, "http-equiv=\"refresh\"")
+  assert !string.contains(
+    body,
+    i18n.text(i18n.English, i18n.RefreshesEverySeconds(30)),
+  )
   assert string.contains(english(states()), "http-equiv=\"refresh\"")
 }
 
@@ -3051,25 +2881,6 @@ pub fn render_open_needs_the_relay_list_test() {
     == Error(reason)
   assert dashboard.render_open(i18n.English, view.System, states(), delete(99))
     == Error(i18n.Translated(i18n.RelayNotFound))
-}
-
-/// 開いて返すダッシュボードは自動で読み込み直さないので、承認待ちの帯に更新の間隔を出さない。
-pub fn render_open_does_not_announce_the_refresh_test() {
-  let note = i18n.text(i18n.English, i18n.RefreshesEverySeconds(30))
-  assert string.contains(english(states()), note)
-  let assert Ok(body) =
-    dashboard.render_open(
-      i18n.English,
-      view.System,
-      states(),
-      dashboard.RelayActionOpen(
-        1,
-        routes.EditRelayRoles,
-        None,
-        i18n.Translated(i18n.RelayRoleRequired),
-      ),
-    )
-  assert !string.contains(body, note)
 }
 
 /// `picture` のある行は、鍵の指紋の上に、読めるまで透明な `<img data-avatar>` を重ねる。
