@@ -252,7 +252,7 @@ sequenceDiagram
     ui->>dedup: AddingAccount(現在時刻, 監視リレーの URL)（送るだけ）
     ui->>bk: AddAccount
     Note over bk: 書き込みに成功し、<br/>署名者の集合が変わる
-    bk->>list: ResubscribeAll([Monitor, Bunker])（送るだけ）
+    bk->>list: ResubscribeAll([Listed(Monitor), Listed(Bunker)])（送るだけ）
     bk-->>ui: Ok
     list->>conn: Resubscribe
     conn->>sock: resubscribe
@@ -410,7 +410,7 @@ sequenceDiagram
         store-->>bk: Ok
         Note over bk: 状態を変える
         opt 署名者の集合が変わった
-            bk->>list: ResubscribeAll([Monitor, Bunker])（送るだけ）
+            bk->>list: ResubscribeAll([Listed(Monitor), Listed(Bunker)])（送るだけ）
             list->>conn: Resubscribe
         end
         bk-->>ui: Ok

@@ -18,21 +18,19 @@ pub fn roles_from_refuses_no_role_test() {
     == Ok(relay_list.Both)
 }
 
-/// `has_role` は `Roles` の各変種が含む用途にだけ `True` を返す。`SessionOnly` は
-/// `Roles` の用途ではないので、どの変種にも含まれない。
+/// `has_role` は `Roles` の各変種が含む用途にだけ `True` を返す。
 pub fn has_role_follows_each_variant_test() {
   let cases = [
-    #(relay_list.MonitorOnly, True, False, False),
-    #(relay_list.BunkerOnly, False, True, False),
-    #(relay_list.Both, True, True, False),
+    #(relay_list.MonitorOnly, True, False),
+    #(relay_list.BunkerOnly, False, True),
+    #(relay_list.Both, True, True),
   ]
-  use #(roles, monitor, bunker, session) <- list.each(cases)
+  use #(roles, monitor, bunker) <- list.each(cases)
   assert [
       relay_list.has_role(roles, relay_list.Monitor),
       relay_list.has_role(roles, relay_list.Bunker),
-      relay_list.has_role(roles, relay_list.SessionOnly),
     ]
-    == [monitor, bunker, session]
+    == [monitor, bunker]
 }
 
 /// `open` は URL の形と重複の 2 つを検査し、通れば末尾に足して用途ごとに
