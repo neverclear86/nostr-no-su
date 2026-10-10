@@ -23,14 +23,40 @@ import argparse, json, glob, os, re, subprocess, sys, statistics, collections
 from datetime import datetime, timezone
 
 
+def repo_root():
+    """cwd が属するリポジトリの最上位。git の外で呼ばれたら cwd で代用する。"""
+    try:
+        return subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getcwd()
+
+
+def defined_agent_types(root=None):
+    """issue-workflow のスクリプト（.claude/workflows/issue-workflow.js）が `agentType: '…'` で立てる段階のうち、
+    定義（.claude/agents/<名前>.md）があるものの集合。フォールバックの経路でだけ立つ段階（PR の検索など）は、
+    run で 1 度も立たないとリクエストの集計に現れないので、モデル別の表に 0 件の行として出すために使う。"""
+    if not root:
+        # 補助スクリプトはリポジトリの中に置かれるので、cwd に依らず自分の置き場からリポジトリを導く
+        try:
+            root = subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse', '--show-toplevel'],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            root = repo_root()
+    names = set()
+    # ふりかえり（retrospective.js）は別の run なので含めない（issue-workflow の run の表に 0 件の行が並ぶだけになる）
+    for js in glob.glob(os.path.join(root, '.claude', 'workflows', 'issue-workflow.js')):
+        try:
+            text = open(js, encoding='utf-8').read()
+        except OSError:
+            continue
+        names |= set(re.findall(r"agentType:\s*'([A-Za-z0-9_-]+)'", text))
+    return {n for n in names if os.path.exists(os.path.join(root, '.claude', 'agents', f'{n}.md'))}
+
+
 def default_base():
     """Claude Code のプロジェクトのディレクトリ（~/.claude/projects/<cwd の / を - にした名前>）を、
     cwd が属するリポジトリの最上位から導く。git の外で呼ばれたら cwd で代用する。"""
-    try:
-        root = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        root = os.getcwd()
-    return os.path.join(os.path.expanduser('~'), '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', root))
+    return os.path.join(os.path.expanduser('~'), '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', repo_root()))
 
 
 # model -> (input $/Mtok, cache_creation $/Mtok, cache_read $/Mtok, output $/Mtok)
@@ -747,15 +773,24 @@ def section_brief(runs_data):
 def print_models_by_type(runs_data):
     """agentType ごとのモデル別リクエスト数を出す。同じ系統（opus / sonnet / fable / haiku）の中に 2 つ以上のモデルがあれば印を付ける
     （安全策のフォールバックで古いモデルが答えたか、別名の解決先が実行の途中で変わった）。系統をまたぐ併用は、
-    スクリプトが段階ごとに model を振り分けた結果なので印を付けない。"""
+    スクリプトが段階ごとに model を振り分けた結果なので印を付けない。
+    ワークフローのスクリプトが立てる段階（defined_agent_types）は、run で 1 度も立たなくても 0 件の行として出す
+    （特定のモデルに振る段階がフォールバックの経路だけだと、立たなかったことが表から見えないため）。"""
     models = collections.defaultdict(collections.Counter)
     for run in runs_data:
         for a in run['agents'].values():
             for r in a.requests:
                 models[a.agent_type][r['model']] += 1
+    defined = defined_agent_types()
+    # ふりかえりだけの run には issue-workflow の段階を並べない
+    if not set(models) & defined:
+        defined = set()
     print("agentType 別のモデル（リクエスト数）")
-    for t in sorted(models):
+    for t in sorted(set(models) | defined):
         c = models[t]
+        if not c:
+            print(f"    {t:22} 0 件（この run では立たなかった）")
+            continue
         families = collections.defaultdict(set)
         for m in c:
             base = (m or '').replace('[1m]', '')
@@ -779,6 +814,9 @@ def main():
     if run_ids:
         for r in set(run_ids) - {m[0] for m in runs_meta}:
             print(f"warning: run {r} が {opts.base} に見つからない（またはドライラン）", file=sys.stderr)
+        if not runs_meta:
+            print("error: 指定した run が 1 件も見つからない。run id（`wf_*`）を渡す。journal の複写のパスは渡せない", file=sys.stderr)
+            sys.exit(2)
     runs_data = [load_run(run_id, session_id, wf_dir) for run_id, session_id, wf_dir in runs_meta]
     # runを開始時刻順に
     runs_data.sort(key=lambda r: r['run_t_min'] or datetime.min.replace(tzinfo=timezone.utc))

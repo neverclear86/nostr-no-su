@@ -14,7 +14,7 @@ description: nostr-no-su の GitHub issue を、判定 → デザイン → プ�
 | デザイン（UI を変える issue で tier が light 以上） | `issue-designer` | opus / medium | issue コメント（デザインの方針） |
 | プラン作成（tier が light 以上） | `issue-planner` | opus / medium。tier light の版 1 は sonnet / high | `<scratchpad>/plans/<N>-v<V>.md` |
 | プランレビュー（tier が light 以上） | `issue-plan-reviewer` | opus / medium | `<scratchpad>/plans/<N>-r<R>.md` と判定。APPROVE なら issue コメント「## 実装プラン（版 N）」を投稿。最大 2 ラウンド |
-| 実装 | `issue-implementer` | opus / medium。tier light の最初の実装、PR ごとに最初の指摘への対応と条件の取り込み、最初の rebase は sonnet / high | ブランチ、コミット、PR。tier none では PR 本文の「## 設計メモ」がプランの代わり。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる。PR の番号か head を返さなかったときは `issue-pr-lookup`（sonnet / low）が gh で引いて補う |
+| 実装 | `issue-implementer` | opus / medium。tier light の最初の実装、PR ごとに最初の指摘への対応と条件の取り込み、最初の rebase は sonnet / high | ブランチ、コミット、PR。tier none では PR 本文の「## 設計メモ」がプランの代わり。レビューの指摘への対応と rebase も同じ定義で新しいエージェントを立てる。PR の番号か head を返さなかったときは `issue-pr-lookup`（haiku / medium）が gh で引いて補う |
 | PR レビュー | `issue-pr-reviewer` | opus / medium | PR コメント「## レビュー（ラウンド N）」。最大 2 ラウンド。must 0 なら条件付きで APPROVE |
 | 最終確認 | `issue-final-gate` | fable / low | PR コメント「## 最終確認」と、APPROVE のとき「## まとめ」。diff とレビューの経緯だけを読み、再現はしない |
 | マージ | `issue-merger` | sonnet / high | 承認・CI・衝突と、main とマージした結果の build（使い捨ての作業ツリー）を確かめて `gh pr merge --squash --delete-branch`。1 件ずつ |
@@ -94,6 +94,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 
 - L055: 依存先を待つ issue は `window` の枠を使わないので、`after` の連鎖があっても `window` を下げない。分割の子が多い実行は 8 まで上げてよい
 - L035: 他の文書が参照する文書の置き場所を変える issue は、並行させずに 1 件だけの実行でマージしてから次を始める
+- L067: 比較・試作用の作業ツリーも、掃除の対象になる名前で作って段階の終わりに消す。名前が掃除の対象外だと残り、inode の枯渇で実行が止まる
 
 ## 手順
 
@@ -130,7 +131,8 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 - **portBase**: issue ごとに 10 個ずつ使う空きポートの先頭。`portBase + i*10` から `+9` までが issue i の分（実装が +0〜+4、レビューが +5〜+9。用途は issue-implementer の定義の「環境」）。ユーザーが使っているポート（`.claude/issue-workflow.local.env` の `USER_PORTS` と、上の `ss` で見た使用中のポート）と重ならない範囲を選ぶ
 - **trailers**: このセッションの system-reminder にある `Co-Authored-By` 行、`Claude-Session` 行、Claude-Session の URL
 - **window**: 同時に進める件数。既定 4
-- **sonnet**: `false` にすると、Sonnet に振る段階（tier light のプランの版 1 と最初の実装、PR ごとに最初の指摘への対応、最初の rebase、PR の検索、マージ）も定義のモデル（opus）で立てる。ふりかえりの起票は別のワークフローなので、このスイッチでは変わらない。モデルを比べるときと切り戻すときに使う。既定は省略（Sonnet に振る）
+- **sonnet**: `false` にすると、Sonnet に振る段階（tier light のプランの版 1 と最初の実装、PR ごとに最初の指摘への対応、最初の rebase、マージ）も定義のモデル（opus）で立てる。ふりかえりの起票は別のワークフローなので、このスイッチでは変わらない。モデルを比べるときと切り戻すときに使う。既定は省略（Sonnet に振る）
+- **haiku**: `false` にすると、Haiku に振る段階（PR の検索）を Haiku の導入前の振り分け（`sonnet` に従い、sonnet / low か定義の opus / low）に戻す。モデルを比べるときと切り戻すときに使う。既定は省略（Haiku に振る）
 - **tier の固定**: 判定をやり直したくない再開のときは `issues[].tier` に `none` / `light` / `full` を書く。判定の段階が飛ぶ
 - **マージをユーザーに残す issue**: `issues[].noMerge: true` にする。最終確認の APPROVE の後にマージの段階が飛び、`stalled`（reason が `noMerge:`）で返る。これは失敗ではないので、ユーザーに PR のマージを頼む
 - **既存のプラン**: issue に承認済みの「## 実装プラン（版 N）」があれば、そのコメントの URL を `planUrl` に書く。判定とプランを飛ばして実装から始める

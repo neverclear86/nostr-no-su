@@ -103,11 +103,12 @@ def cases(mods):
 
 
 S = ('sonnet', 'high')
+H = ('haiku', 'medium')
 O = (None, None)
 
 
 def model_cases(mods):
-    """Sonnet の振り分け（学びの表の L044）の期待値。(名前, dryRun, issues, 追加の args, {label: (model, effort)}, 必ず立つ label)。
+    """Sonnet と Haiku の振り分け（学びの表の L044、L060）の期待値。(名前, dryRun, issues, 追加の args, {label: (model, effort)}, 必ず立つ label)。
     期待値の無い label は O（定義の frontmatter のまま）を期待する。"""
     one = lambda **kw: [{'n': 1, 'branch': 'x', 'ui': True, **kw}]
     gate_fix = ['Fix PR #1001 gate r1'] if mods['gate'] else []
@@ -126,10 +127,14 @@ def model_cases(mods):
         ('models-conditions', {'1': 'pr-conditions'}, one(), {}, {'Plan #1 v1': S, 'Implement #1': S, 'Fix conditions PR #1001': S, 'Merge PR #1001': S}, ['Fix conditions PR #1001']),
         # 最初の rebase は Sonnet
         ('models-rebase', {'1': 'conflict'}, one(), {}, {'Plan #1 v1': S, 'Implement #1': S, 'Rebase PR #1001 (1)': S, 'Merge PR #1001': S, 'Merge PR #1001 (retry 1)': S}, ['Rebase PR #1001 (1)']),
-        # PR の検索は Sonnet / low
-        ('models-lookup', {'1': 'status-only'}, one(), {}, {'Plan #1 v1': S, 'Implement #1': S, 'Lookup #1': ('sonnet', 'low'), 'Merge PR #1001': S}, ['Lookup #1']),
-        # sonnet: false なら上書きは PR の検索の effort だけ
-        ('models-off', {'1': 'status-only'}, one(), {'sonnet': False}, {'Lookup #1': (None, 'low')}, ['Plan #1 v1', 'Implement #1', 'Lookup #1']),
+        # PR の検索は Haiku / medium
+        ('models-lookup', {'1': 'status-only'}, one(), {}, {'Plan #1 v1': S, 'Implement #1': S, 'Lookup #1': H, 'Merge PR #1001': S}, ['Lookup #1']),
+        # sonnet: false でも PR の検索は Haiku のまま
+        ('models-off', {'1': 'status-only'}, one(), {'sonnet': False}, {'Lookup #1': H}, ['Plan #1 v1', 'Implement #1', 'Lookup #1']),
+        # haiku: false なら PR の検索は Haiku の導入前の Sonnet / low に戻る
+        ('models-haiku-off', {'1': 'status-only'}, one(), {'haiku': False}, {'Plan #1 v1': S, 'Implement #1': S, 'Lookup #1': ('sonnet', 'low'), 'Merge PR #1001': S}, ['Lookup #1']),
+        # 両方 false なら上書きは PR の検索の effort だけ
+        ('models-all-off', {'1': 'status-only'}, one(), {'sonnet': False, 'haiku': False}, {'Lookup #1': (None, 'low')}, ['Plan #1 v1', 'Implement #1', 'Lookup #1']),
     ]
 
 

@@ -54,6 +54,7 @@ if (reentry) {
   if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
   if (a.since === undefined) throw new Error('args.since が無い')
   for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
+  for (const p of a.runs) runId(p) // wfstats.py に渡す run id が取れないパス（journal の複写など）はここで止める
   if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string' && o.trim() !== ''))) throw new Error('args.observations は空でない文字列の配列で渡す')
 }
 const observations = a.observations || []
@@ -281,10 +282,11 @@ function summaryMarkdown(totals, since) {
 - 集計に入らなかった events は \`log\` に label が出る`
 }
 
-/** journal のパスから run id（`wf_*` のディレクトリ名）を取る。取れないパスはそのまま返す */
+/** journal のパスから run id（`wf_*` のディレクトリ名）を取る。取れないパス（scratchpad への複写など）はエラーを投げる（wfstats.py が run を見つけられず空の表を出す） */
 function runId(path) {
   const m = path.match(/wf_[^/]+/)
-  return m ? m[0] : path
+  if (!m) throw new Error(`args.runs の ${path} に run id（wf_*）が無い。セッションの subagents/workflows/wf_*/journal.jsonl のパスを渡す（複写のパスは渡せない）`)
+  return m[0]
 }
 
 // --- 依頼文 -----------------------------------------------------------------
