@@ -102,14 +102,9 @@ fn unshared_client_key(suffix: String) -> String {
 
 /// 指定した秒より時計が進むまで待つ。バンカーアクターの起点の判定は秒単位なので、
 /// 秒をまたいでおかないと、再起動の前に作られたリクエストと起動時刻が並んでしまう。
+/// 2 秒以内に進まなければテストを失敗させる。
 fn await_next_second(from: Int) -> Nil {
-  case time.now_seconds() > from {
-    True -> Nil
-    False -> {
-      process.sleep(50)
-      await_next_second(from)
-    }
-  }
+  assert poll.until(fn() { time.now_seconds() > from }, 2000, 50)
 }
 
 /// 監視中のプロセスが停止するのを待つ。

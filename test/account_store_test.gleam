@@ -19,6 +19,7 @@ import nostr_no_su/bunker/engine
 import nostr_no_su/bunker/session
 import nostr_no_su/bunker/vault.{type StoredAccount, StoredAccount}
 import nostr_no_su/db
+import nostr_no_su/hex
 import nostr_no_su/named
 import nostr_no_su/nostr/event
 import nostr_no_su/random
@@ -905,7 +906,7 @@ pub fn postgres_migration_keeps_sessions_with_empty_relays_test() {
     "INSERT INTO bunker_sessions (signer, client, perms, created_at, last_used_at, mac) VALUES ('"
       <> signer
       <> "', 'client', 'sign_event', 1, 2, decode('"
-      <> bit_array.base16_encode(mac)
+      <> hex.encode(mac)
       <> "', 'hex'))",
   )
 
