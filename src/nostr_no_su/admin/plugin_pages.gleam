@@ -31,11 +31,12 @@ pub fn plugin_page(
   raw_sections: List(Dynamic),
 ) -> String {
   let code = i18n.code(language)
+  let plugin_language = plugin.text_language(page, code)
   view.page(
     language,
     theme,
     view.TaggedTitle(
-      code: plugin.text_language(page, code),
+      code: plugin_language,
       text: page_heading(plugin, page, code),
     ),
     view.Narrow,
@@ -44,9 +45,9 @@ pub fn plugin_page(
     ),
     view.NoRefresh,
     list.flatten([
-      [source_row(language, plugin), tabs(language, plugin, page)],
+      [source_row(language, plugin), tabs(code, plugin, page)],
       disabled_alert(language, plugin),
-      sections(language, plugin, page, now, raw_sections),
+      sections(language, plugin_language, plugin, page, now, raw_sections),
       [view.back_link(language)],
     ]),
   )
@@ -71,11 +72,10 @@ fn source_row(language: Language, plugin: dashboard.PluginRow) -> Element(msg) {
   ])
 }
 
-/// 供給するページが 2 つ以上のときだけ出すタブ。表示名は `plugin.title_in` で表示の
-/// 言語のものを引き、`plugin.text_language` の `lang` を持つ `span`
-/// （`view.in_language`）に包む。
+/// 供給するページが 2 つ以上のときだけ出すタブ。`code` は表示の言語のコードで、タブごとに
+/// 表示名（`plugin.title_in`）と、包む `span` の `lang`（`plugin.text_language`）を引く。
 fn tabs(
-  language: Language,
+  code: String,
   plugin: dashboard.PluginRow,
   current: plugin.PluginPage,
 ) -> Element(msg) {
@@ -84,14 +84,14 @@ fn tabs(
     pages ->
       html.nav(
         [attribute.class("tabs tabs-border")],
-        list.map(pages, tab_link(language, plugin.name, current, _)),
+        list.map(pages, tab_link(code, plugin.name, current, _)),
       )
   }
 }
 
 /// タブ 1 件。現在のページには `tab-active` と `aria-current="page"` を付ける。
 fn tab_link(
-  language: Language,
+  code: String,
   plugin_name: String,
   current: plugin.PluginPage,
   page: plugin.PluginPage,
@@ -105,7 +105,6 @@ fn tab_link(
     ]
     False -> [attribute.href(href), attribute.class("tab")]
   }
-  let code = i18n.code(language)
   html.a(attrs, [
     view.in_language(
       plugin.text_language(page, code),
@@ -134,6 +133,7 @@ fn disabled_alert(
 /// 理由の囲みに差し替える（他の節の描画は止めない）。
 fn sections(
   language: Language,
+  plugin_language: String,
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
   now: Int,
@@ -148,7 +148,7 @@ fn sections(
       ),
     ]
     raw_sections -> {
-      let context = context(language, plugin, page, now)
+      let context = context(language, plugin_language, plugin, page, now)
       list.map(raw_sections, fn(raw_section) {
         case plugin_view.section(raw_section, context) {
           Ok(element) -> element
@@ -173,13 +173,14 @@ fn section_failure(language: Language, reason: String) -> Element(msg) {
 /// 表示中のプラグインとページから、節の描画に渡す `plugin_view.Context` を組み立てる。
 fn context(
   language: Language,
+  plugin_language: String,
   plugin: dashboard.PluginRow,
   page: plugin.PluginPage,
   now: Int,
 ) -> plugin_view.Context {
   plugin_view.Context(
     language:,
-    plugin_language: plugin.text_language(page, i18n.code(language)),
+    plugin_language:,
     page_href: fn(key) {
       case list.any(plugin.pages, fn(page) { page.key == key }) {
         True -> Ok(routes.href(routes.ShowPluginPage(plugin.name, key)))

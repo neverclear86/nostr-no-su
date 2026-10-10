@@ -63,23 +63,11 @@ pub fn from_code(value: String) -> Result(Language, Nil) {
 /// 最初のサブタグ（`ja-JP` の `ja`）で照合し、優先度が同じなら先に書かれたものを選ぶ。
 /// `*`、`q=0`、形式に合わない項目は無視する。対応する言語が無ければ Error。
 pub fn from_accept_language(header: String) -> Result(Language, Nil) {
-  let weighted =
-    header
-    |> string.split(",")
-    |> list.filter_map(weighted_language)
-  case weighted {
-    [] -> Error(Nil)
-    [first, ..rest] -> {
-      let #(_quality, language) =
-        list.fold(rest, first, fn(best, next) {
-          case next.0 > best.0 {
-            True -> next
-            False -> best
-          }
-        })
-      Ok(language)
-    }
-  }
+  header
+  |> string.split(",")
+  |> list.filter_map(weighted_language)
+  |> list.max(fn(a, b) { int.compare(a.0, b.0) })
+  |> result.map(fn(best) { best.1 })
 }
 
 /// `Accept-Language` の項目 1 つを、優先度（1000 分の 1 単位）と言語の組にする。対応
@@ -383,15 +371,13 @@ pub type Message {
   PluginOverloaded
   PluginDisabled
   ReenablePlugin
-  /// リレーの用途とプラグインの状態のチップに共通で使う。
   NoResponse
   Dropped(count: Int)
   NoPlugins
-  /// 節とブロックの空の状態に共通で使う。
   PluginSectionEmpty
   /// `image` ブロックの `url` の scheme が `http` / `https` でないときの理由。
   PluginImageNotShown
-  /// ダッシュボードのプラグインの節から、ページを供給するプラグインへのリンクの文言。
+  /// プラグインが供給するページを開くリンクの文言。
   OpenPluginPage
   /// プラグインのページの `sections` が 0 件のときの案内。
   PluginPageEmpty
@@ -1163,7 +1149,7 @@ fn kind_label(language: Language, kind: Int) -> String {
   }
 }
 
-/// 権限のチップとプラグインのページのインライン `kind` に出す、よく使う kind の名前。表に無い kind は `None` で、`kind_label` と日本語の `PermissionSignKind` が番号を出す。
+/// よく使う kind の名前。表に無い kind は `None` を返す。
 fn kind_name(language: Language, kind: Int) -> Option(String) {
   case language, kind {
     English, 0 -> Some("profile")

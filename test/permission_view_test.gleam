@@ -43,9 +43,15 @@ pub fn named_permissions_keep_the_raw_value_test() {
   assert !string.contains(html, "badge-dash")
 }
 
-/// `get_public_key`、`sign_event:-1`、`sign_event:x` は生の値だけのチップで、`Sign ` が出ない。
+/// `get_public_key`、`sign_event:-1`、`sign_event:x`、`sign_event:01` は生の値だけのチップで、
+/// `Sign ` が出ない。0 埋めの kind は `permission.parse` が `SignKind` にしない。
 pub fn unnamed_declarations_show_only_the_raw_value_test() {
-  use token <- list.each(["get_public_key", "sign_event:-1", "sign_event:x"])
+  use token <- list.each([
+    "get_public_key",
+    "sign_event:-1",
+    "sign_event:x",
+    "sign_event:01",
+  ])
   let html = element.to_string(permission_view.chips(i18n.English, token))
   assert string.contains(
     html,
@@ -64,16 +70,4 @@ pub fn kind_zero_is_named_test() {
     html,
     "<span class=\"badge badge-outline badge-sm gap-1\">Sign ",
   )
-}
-
-/// 英語で `sign_event:01` のような 0 埋めの kind の署名は、人の語を当てず生の値だけの
-/// チップになる。
-pub fn padded_kind_is_an_unnamed_declaration_test() {
-  let html =
-    element.to_string(permission_view.chips(i18n.English, "sign_event:01"))
-  assert string.contains(
-    html,
-    "<span class=\"badge badge-outline badge-sm font-mono\"><span lang=\"en\">sign_event:01</span></span>",
-  )
-  assert !string.contains(html, "Sign ")
 }

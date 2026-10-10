@@ -1,6 +1,6 @@
 //// 公開鍵の指紋。16 進の公開鍵から 5 × 5 の左右対称の模様と 12 通りの色相を決め、
 //// インライン SVG に描く。模様は識別の補助で、公開鍵の省略の表示とコピーの代わりにはしない。
-//// 純粋で、`admin/i18n` にも `admin/dashboard` にも依存しない。
+//// 純粋である。
 ////
 //// 色相は公開鍵の先頭のバイトを 12 で割った余り、模様は続く 15 ビットで決める。15 ビットを
 //// 上位から順に、左の 3 列（x = 0〜2）へ列ごとに上から（y = 0〜4）割り当て、立っている
@@ -60,7 +60,8 @@ fn mirrored(index: Int) -> List(#(Int, Int)) {
   }
 }
 
-/// 指紋を `viewBox` が `-1 -1 7 7` のインライン SVG に描く。マス（0〜4）の外周に 1 マス分の余白を取り、地の角丸の四角を不透明度 15% で、塗るマスを 1 本の `path` で、どちらも `currentColor` で塗る。`class` は大きさのクラスで、`admin/` の `.gleam` に完全な文字列で書いたものだけが CSS に出力される。飾りなので読み上げない。
+/// 指紋を `viewBox` が `-1 -1 7 7` のインライン SVG に描く。地と塗るマスを `currentColor` で
+/// 塗る。`class` は大きさのクラスである。飾りなので読み上げない。
 pub fn svg(
   fingerprint: Fingerprint,
   shade: Shade,
@@ -98,7 +99,7 @@ pub fn pubkey_svg(pubkey: String, shade: Shade, class: String) -> Element(msg) {
   }
 }
 
-/// 塗り方と色相の番号に当たるクラス。`hue` は `from_pubkey` が 0〜11 にするので、最後の腕は 11 に当たる（`Int` を網羅するための腕である）。
+/// 塗り方と色相の番号に当たるクラス。`hue` は `from_pubkey` が決める 0〜11 である。
 fn shade_class(hue: Int, shade: Shade) -> String {
   case shade, hue {
     Gray, _ -> "fp fp-gray"

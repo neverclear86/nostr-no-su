@@ -8,18 +8,15 @@
 //// **プラグインが選べるのは文字列・種別・`tone`・`variant`・真偽値だけである。** クラス名も
 //// `href` も `id` も持ち込めない（`assets/admin.css` の方針）。描画は必ず
 //// `admin/view` の部品を経由し、このモジュール自身が持つ生のクラス文字列は
-//// `table` のセルの `code` インラインだけである。`form` の宛先は本体が決め
+//// `code` インライン（`table` のセルと節の `meta`）だけである。`form` の宛先は本体が決め
 //// （`Context.form_action`）、プラグインは指定できない。`image` の `url` も
 //// 同じで、`http` / `https` 以外の scheme は描かずに代替文だけを出す。
 ////
-//// プラグイン由来の文字列（節の見出しとブロックの中身）はすべて
-//// `Context.plugin_language` の `lang` を持つ祖先 1 つで包む。表示の言語を
-//// 受け取らないプラグインでは `en` である。翻訳した文のうち、節の `blocks` が 0 件のときの案内は
-//// その外に置き、`pairs` の `items` が 0 件のときの案内と、`pairs` の値の
-//// `id` が出すコピーのラベルと案内（`view.identifier_cell`）と、インライン `kind` の名前と
-//// `time` の相対時刻と、`image` の `url` を描かないときの理由（`view.plugin_image_placeholder`）は、
-//// その祖先の中で表示の言語の `lang` を持つ要素で上書きする。`image` の代替文は
-//// プラグイン由来の文字列なので上書きせず、祖先の `lang` を引き継ぐ。
+//// プラグイン由来の文字列（節の見出しとブロックの中身）は `Context.plugin_language` の
+//// `lang` を持つ祖先 1 つで包む。表示の言語を受け取らないプラグインでは `en` である。本体が
+//// 訳した文はその祖先の中で表示の言語の `lang` で上書きし、節の `blocks` が 0 件のときの案内
+//// だけは祖先の外に置く。`image` の代替文はプラグイン由来なので上書きせず、祖先の `lang` を
+//// 引き継ぐ。
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -132,10 +129,9 @@ fn meta_heading(
   }
 }
 
-/// ブロック 1 つを対応する部品にする。`pairs` の `items` が 0 件のときは空の
-/// 状態の文にする。`image` の見た目は `variant` で選ぶ（`image_shape`）。`image` の
-/// `url` の scheme が `http` / `https` でなければ、見た目に関係なく、画像の代わりに
-/// 代替文だけの枠にする。
+/// ブロック 1 つを対応する部品にする。種別は `text`・`note`・`pairs`・`table`・`alert`・
+/// `link`・`form`・`details`・`image` で、それ以外と必須キーの誤りは `Error` になる。`image` の
+/// `url` の scheme が `http` / `https` でなければ、画像の代わりに代替文だけの枠にする。
 fn block(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
@@ -369,9 +365,8 @@ fn section_empty_state(language: Language) -> Element(msg) {
   )
 }
 
-/// `pairs` の 1 件。値は `text`・`code`・`id`・`kind`・`time` のインラインだけを許す
-/// （`badge` は `table` のセルと節の `meta` だけに置ける）。`kind` と `time` は `inline` で描き、
-/// `dd` で包む。
+/// `pairs` の 1 件。値は `text`・`code`・`id`・`kind`・`time` のインラインだけを許し、`badge` を
+/// 含む別の種別は `Error` になる。
 fn pair(
   raw: Dynamic,
   context: Context,
@@ -414,11 +409,9 @@ fn pair(
   }
 }
 
-/// `table` のセルと節の `meta` の 1 件。`text`・`code`・`badge`・`kind`・`time` のいずれかで、
-/// `id` はここでは使えない。`kind` は `i18n.EventKind` の名前、`time` は `view.relative_time` の
-/// 相対時刻を、UTC の時刻（`view.utc_time`）を `title` に持たせて出し、どちらも表示の言語の
-/// `lang` を持つ `span` にする。`value` は 0 以上の整数である。`pairs` の値の `kind` と `time` も
-/// ここで描く。
+/// インラインの記述 1 件。`text`・`code`・`badge`・`kind`・`time` のいずれかで、`id` は使えない。
+/// `kind` と `time` の `value` は 0 以上の整数で、表示の言語の `lang` を持つ `span` に出す。
+/// `time` は `title` に UTC の時刻を持つ。
 fn inline(raw: Dynamic, context: Context) -> Result(Element(msg), String) {
   use kind <- result.try(text_field(raw, "type"))
   case kind {
