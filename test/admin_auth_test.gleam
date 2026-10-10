@@ -22,14 +22,52 @@ import support/log_capture
 import wisp
 import wisp/simulate
 
-/// 資格情報のないリクエストは 401 になり、ブラウザーに入力を促すヘッダーが付く。
-pub fn dashboard_requires_credentials_test() {
-  let response =
-    simulate.request(http.Get, "/")
-    |> admin.handle_request(context(), _)
-  assert response.status == 401
-  assert string.starts_with(header(response, "www-authenticate"), "Basic ")
-  assert header(response, "content-type") == "text/plain"
+/// 認証に失敗した要求は、パスと失敗の種類によらず 401 になり、ブラウザーに入力を促す
+/// `www-authenticate` を付け、Context の操作を呼ばない。
+pub fn failed_authentication_is_unauthorized_test() {
+  let requests = [
+    #("GET /", http.Get, "/", []),
+    #("POST /approve", http.Post, "/approve/" <> token, []),
+    #("POST /accounts/import", http.Post, "/accounts/import", [
+      #("nsec", spec_nsec),
+    ]),
+    #("POST reveal", http.Post, action_path(routes.RevealPrivateKey), [
+      #("password", password),
+    ]),
+  ]
+  let failures = [
+    #("no credentials", fn(request) { request }),
+    #("wrong password", with_credentials(_, "admin", "wrong")),
+    #("wrong user", with_credentials(_, "root", password)),
+    #("malformed header", request.set_header(
+      _,
+      "authorization",
+      "Basic not-base64!",
+    )),
+  ]
+  let cases =
+    list.flat_map(requests, fn(entry) {
+      let #(request_name, method, path, fields) = entry
+      list.map(failures, fn(failure) {
+        let #(failure_name, fail) = failure
+        #(
+          request_name <> " with " <> failure_name,
+          simulate.request(method, path) |> simulate.form_body(fields) |> fail,
+        )
+      })
+    })
+  use #(name, request) <- list.each(cases)
+  let reports = process.new_subject()
+  let response = admin.handle_request(reporting_context(reports), request)
+  assert #(name, response.status) == #(name, 401)
+  assert #(
+      name,
+      string.starts_with(header(response, "www-authenticate"), "Basic "),
+    )
+    == #(name, True)
+  assert #(name, header(response, "content-type")) == #(name, "text/plain")
+  assert #(name, simulate.read_body(response)) == #(name, "Unauthorized")
+  assert #(name, process.receive(reports, 0)) == #(name, Error(Nil))
 }
 
 /// 認証スキームの大文字小文字は区別しない（RFC 7235）。
@@ -49,30 +87,6 @@ fn lowercase_scheme(request: wisp.Request) -> wisp.Request {
   request.set_header(request, "authorization", "basic " <> credentials)
 }
 
-/// パスワードが違えば 401。ユーザー名が違う場合も同じ。
-pub fn wrong_credentials_are_rejected_test() {
-  let wrong_password =
-    simulate.request(http.Get, "/")
-    |> with_credentials("admin", "wrong")
-    |> admin.handle_request(context(), _)
-  assert wrong_password.status == 401
-
-  let wrong_user =
-    simulate.request(http.Get, "/")
-    |> with_credentials("root", password)
-    |> admin.handle_request(context(), _)
-  assert wrong_user.status == 401
-}
-
-/// 壊れた `Authorization` ヘッダーでもクラッシュせず 401 を返す。
-pub fn malformed_credentials_are_rejected_test() {
-  let response =
-    simulate.request(http.Get, "/")
-    |> request.set_header("authorization", "Basic not-base64!")
-    |> admin.handle_request(context(), _)
-  assert response.status == 401
-}
-
 /// Basic 認証の失敗は、資格情報なし、形式の誤り、資格情報の不一致に分類される。
 pub fn authentication_failures_are_classified_test() {
   let bare = simulate.request(http.Get, "/")
@@ -87,18 +101,18 @@ pub fn authentication_failures_are_classified_test() {
     "Bearer " <> encode("admin:" <> password),
     "Basic " <> encode("no-colon"),
   ]
-  list.each(malformed, fn(header) {
-    let request = bare |> request.set_header("authorization", header)
-    assert admin.authenticate(password, request)
-      == Error(admin.MalformedCredentials)
+  list.each(malformed, fn(authorization) {
+    let request = bare |> request.set_header("authorization", authorization)
+    assert #(authorization, admin.authenticate(password, request))
+      == #(authorization, Error(admin.MalformedCredentials))
   })
 
   let wrong = [#("admin", "wrong"), #("root", password)]
   list.each(wrong, fn(pair) {
     let #(user, offered) = pair
     let request = bare |> with_credentials(user, offered)
-    assert admin.authenticate(password, request)
-      == Error(admin.WrongCredentials)
+    assert #(pair, admin.authenticate(password, request))
+      == #(pair, Error(admin.WrongCredentials))
   })
 
   let correct = bare |> with_credentials("admin", password)
@@ -181,16 +195,6 @@ pub fn same_origin_revoke_is_accepted_test() {
   assert response.status == 303
   assert process.receive(revoked, 1000)
     == Ok(Revoked(signer: signer, client: client))
-}
-
-/// 資格情報のない承認は 401 で、Context には届かない。
-pub fn approve_requires_credentials_test() {
-  let reports = process.new_subject()
-  let response =
-    simulate.request(http.Post, "/approve/" <> token)
-    |> admin.handle_request(reporting_context(reports), _)
-  assert response.status == 401
-  assert process.receive(reports, 100) == Error(Nil)
 }
 
 /// `:` を含む管理パスワードでも、Basic 認証と再表示のどちらも通る。
@@ -478,22 +482,4 @@ pub fn authenticated_responses_carry_security_headers_test() {
       ),
     )
     == #(name, True)
-}
-
-/// 資格情報の無い登録と再表示の POST は 401 で、何も呼ばない。
-pub fn account_management_requires_credentials_test() {
-  let reports = process.new_subject()
-  let requests = [
-    #("/accounts/import", [#("nsec", spec_nsec)]),
-    #(action_path(routes.RevealPrivateKey), [#("password", password)]),
-  ]
-  list.each(requests, fn(entry) {
-    let #(path, fields) = entry
-    let response =
-      simulate.request(http.Post, path)
-      |> simulate.form_body(fields)
-      |> admin.handle_request(reporting_context(reports), _)
-    assert response.status == 401
-  })
-  assert process.receive(reports, 100) == Error(Nil)
 }

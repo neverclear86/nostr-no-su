@@ -12,7 +12,7 @@ import nostr_no_su/admin/i18n
 import nostr_no_su/admin/routes
 import nostr_no_su/bunker
 import support/admin_context.{
-  action_path, client, context, failing_context, get, header, in_japanese,
+  action_path, client, context, failing_context, header, in_japanese,
   not_answering_context, opened_dialog, password, post, signer, signer_nsec,
   spec_nsec, token, unavailable, with_accounts, with_credentials,
 }
@@ -130,48 +130,25 @@ pub fn language_switch_returns_only_within_the_site_test() {
   assert #(sent, header(response, "location")) == #(sent, location)
 }
 
-/// 対応していない言語、GET、別のオリジンからの切り替え、資格情報の無い切り替えは受け付けず、
-/// cookie を保存せず、それぞれの理由の本文を返す。
+/// `language` の欄が無いか、対応していない言語の切り替えは 400 で受け付けず、cookie を
+/// 保存せず、読めないフォームの理由を返す。
 pub fn language_switch_rejects_invalid_requests_test() {
   let form_not_readable = i18n.text(i18n.English, i18n.FormNotReadable)
   let rejected = [
-    #(
-      language_switch_request([#("language", "fr"), #("return", "/")])
-        |> admin.handle_request(context(), _),
-      400,
-      form_not_readable,
-    ),
-    #(
-      language_switch_request([#("return", "/")])
-        |> admin.handle_request(context(), _),
-      400,
-      form_not_readable,
-    ),
-    #(
-      get(context(), "/language"),
-      405,
-      i18n.text(i18n.English, i18n.MethodNotAllowedDetail),
-    ),
-    #(
-      language_switch_request([#("language", "ja"), #("return", "/")])
-        |> request.set_header("origin", "http://evil.example")
-        |> admin.handle_request(context(), _),
-      400,
-      i18n.text(i18n.English, i18n.OriginMismatch),
-    ),
-    #(
-      simulate.browser_request(http.Post, "/language")
-        |> simulate.form_body([#("language", "ja"), #("return", "/")])
-        |> admin.handle_request(context(), _),
-      401,
-      "Unauthorized",
-    ),
+    #("unsupported language", [#("language", "fr"), #("return", "/")]),
+    #("missing language", [#("return", "/")]),
   ]
-  use #(response, status, expected) <- list.each(rejected)
-  assert response.status == status
-  assert list.key_find(response.headers, "set-cookie") == Error(Nil)
-  assert #(expected, string.contains(simulate.read_body(response), expected))
-    == #(expected, True)
+  use #(name, fields) <- list.each(rejected)
+  let response =
+    language_switch_request(fields) |> admin.handle_request(context(), _)
+  assert #(name, response.status) == #(name, 400)
+  assert #(name, list.key_find(response.headers, "set-cookie"))
+    == #(name, Error(Nil))
+  assert #(
+      name,
+      string.contains(simulate.read_body(response), form_not_readable),
+    )
+    == #(name, True)
 }
 
 /// 切り替えた言語は、GET のページにも、ブラウザーから送った POST の応答のページにも保たれる。

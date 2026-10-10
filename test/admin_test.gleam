@@ -26,6 +26,7 @@ import nostr_no_su/plugin
 import nostr_no_su/relay_list
 import nostr_no_su/task
 import nostr_no_su/time
+import support/account_actions
 import support/admin_context.{
   AccountsReloaded, Approved, ClientConnectRequested, Denied, PermissionsSaved,
   Reenabled, RelayAdded, RelayDeleted, RelayRolesUpdated, Revoked, action_path,
@@ -638,7 +639,7 @@ pub fn plugin_page_action_redirects_to_the_encoded_page_test() {
 pub fn plugin_page_action_rejection_is_unavailable_test() {
   let response =
     post_form(context(), "/plugins/console_logger/settings", [
-      #("reject", "select at least one account"),
+      #(admin_context.plugin_action_reject_field, "select at least one account"),
     ])
   assert response.status == 503
   let body = simulate.read_body(response)
@@ -649,7 +650,7 @@ pub fn plugin_page_action_rejection_is_unavailable_test() {
 pub fn plugin_page_action_receives_an_empty_value_test() {
   let response =
     post_form(context(), "/plugins/console_logger/settings", [
-      #("reject", ""),
+      #(admin_context.plugin_action_reject_field, ""),
     ])
   assert response.status == 503
 }
@@ -659,7 +660,7 @@ pub fn plugin_page_action_receives_an_empty_value_test() {
 pub fn plugin_page_action_receives_values_with_lf_newlines_test() {
   let response =
     post_form(context(), "/plugins/console_logger/settings", [
-      #("reject", "first\r\nsecond"),
+      #(admin_context.plugin_action_reject_field, "first\r\nsecond"),
     ])
   assert response.status == 503
   let body = simulate.read_body(response)
@@ -676,14 +677,6 @@ pub fn normalize_newlines_test() {
   assert admin.normalize_newlines("x\r\r\r\ny") == "x\n\n\ny"
   assert admin.normalize_newlines("a\nb\n") == "a\nb\n"
   assert admin.normalize_newlines("ab") == "ab"
-}
-
-/// 実行の口を持たないページへの POST は 405 で `allow: GET`。本文が無い POST
-/// でも 415 にならない（`require_form` より先に判定するため）。
-pub fn plugin_page_action_without_the_export_is_method_not_allowed_test() {
-  let response = post(context(), "/plugins/console_logger/status")
-  assert response.status == 405
-  assert header(response, "allow") == "GET"
 }
 
 /// 実行の口を持つページへの PUT は 405 で `allow: GET, POST`。
@@ -939,33 +932,43 @@ pub fn unknown_paths_are_not_found_test() {
 }
 
 /// メソッドが違うリクエストは 405 の HTML で、`allow` を持ちメソッドとパスを本文に
-/// 含めない。
+/// 含めない。実行の口を持たないプラグインのページへの POST は、本文が無くても 415 に
+/// ならない（`require_form` より先に判定する）。
 pub fn method_not_allowed_pages_test() {
   let get_only_paths = ["/", "/plugins/console_logger/status"]
-  let post_only_paths = [
-    "/language",
-    "/theme",
-    "/deny/tok",
-    "/sessions/revoke",
-    "/plugins/reenable",
-    "/accounts/generate",
-    "/accounts/import",
-    "/accounts/register-generated",
-    "/sessions/connect",
-    "/sessions/connect/confirm",
-    routes.href(routes.SessionPermissions(signer, declared_client)),
-    "/relays/new",
-    routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
-    routes.href(routes.RelayOperation(1, routes.DeleteRelay)),
-    action_path(routes.EditLabel),
-  ]
+  let post_only_paths =
+    list.flatten([
+      [
+        "/language",
+        "/theme",
+        "/deny/tok",
+        "/sessions/revoke",
+        "/plugins/reenable",
+        "/accounts/generate",
+        "/accounts/import",
+        "/accounts/register-generated",
+        "/sessions/connect",
+        "/sessions/connect/confirm",
+        routes.href(routes.SessionPermissions(signer, declared_client)),
+        "/relays/new",
+        routes.href(routes.RelayOperation(1, routes.EditRelayRoles)),
+        routes.href(routes.RelayOperation(1, routes.DeleteRelay)),
+      ],
+      list.map(account_actions.all, action_path),
+      [admin_context.skipped_delete_path()],
+    ])
   let both_methods_paths = ["/approve/tok"]
   let cases =
     list.flatten([
-      list.map(post_only_paths, fn(path) { #(get(context(), path), "POST") }),
-      list.map(get_only_paths, fn(path) { #(post(context(), path), "GET") }),
+      list.map(post_only_paths, fn(path) {
+        #("GET " <> path, get(context(), path), "POST")
+      }),
+      list.map(get_only_paths, fn(path) {
+        #("POST " <> path, post(context(), path), "GET")
+      }),
       list.map(both_methods_paths, fn(path) {
         #(
+          "PUT " <> path,
           simulate.request(http.Put, path)
             |> with_credentials("admin", password)
             |> admin.handle_request(context(), _),
@@ -973,19 +976,28 @@ pub fn method_not_allowed_pages_test() {
         )
       }),
     ])
-  use #(response, allowed) <- list.each(cases)
-  assert response.status == 405
-  assert header(response, "allow") == allowed
-  assert header(response, "content-type") == "text/html; charset=utf-8"
+  use #(name, response, allowed) <- list.each(cases)
+  assert #(name, response.status) == #(name, 405)
+  assert #(name, header(response, "allow")) == #(name, allowed)
+  assert #(name, header(response, "content-type"))
+    == #(name, "text/html; charset=utf-8")
   let body = simulate.read_body(response)
-  assert string.contains(
-    body,
-    i18n.text(i18n.English, i18n.MethodNotAllowedDetail),
-  )
-  assert string.contains(
-    body,
-    "<input name=\"return\" type=\"hidden\" value=\"/\">",
-  )
+  assert #(
+      name,
+      string.contains(
+        body,
+        i18n.text(i18n.English, i18n.MethodNotAllowedDetail),
+      ),
+    )
+    == #(name, True)
+  assert #(
+      name,
+      string.contains(
+        body,
+        "<input name=\"return\" type=\"hidden\" value=\"/\">",
+      ),
+    )
+    == #(name, True)
 }
 
 /// 管理 UI のフォームからは送られない値（欄の欠落、未対応の言語とテーマ）は 400 の
@@ -1015,21 +1027,6 @@ pub fn bad_request_pages_test() {
       == #(path, True)
   })
   assert process.receive(reports, 100) == Error(Nil)
-}
-
-/// 操作中に届かない応答は `text/plain` のまま。CSS への POST は 405、フォームの本文の
-/// 無い登録は 415。401 と `/healthz` は他のテストが確かめる。
-pub fn kept_plain_text_responses_test() {
-  let method = post(context(), "/static/admin.css")
-  assert method.status == 405
-  assert simulate.read_body(method) == "Method not allowed"
-
-  let unsupported_media =
-    simulate.request(http.Post, "/accounts/import")
-    |> with_credentials("admin", password)
-    |> admin.handle_request(context(), _)
-  assert unsupported_media.status == 415
-  assert header(unsupported_media, "content-type") == "text/plain"
 }
 
 // --- リレーの追加 ---
@@ -1603,12 +1600,15 @@ pub fn pages_declare_an_svg_favicon_test() {
   assert !string.contains(favicon, "#")
 }
 
-/// 配信するのはスタイルシートとスクリプトだけで、GET 以外は受け付けない。
+/// 配信するのはスタイルシートとスクリプトだけで、GET 以外は受け付けない。GET 以外の
+/// 405 は通知ページではなく、本文が `Method not allowed` の応答のまま返る。
 pub fn only_the_static_files_are_served_test() {
   assert get(context(), "/static/other.css").status == 404
   assert get(context(), "/static/other.js").status == 404
   assert get(context(), "/static").status == 404
-  assert post(context(), "/static/admin.css").status == 405
+  let stylesheet = post(context(), "/static/admin.css")
+  assert stylesheet.status == 405
+  assert simulate.read_body(stylesheet) == "Method not allowed"
   assert post(context(), "/static/admin.js").status == 405
 }
 
@@ -1743,37 +1743,41 @@ pub fn theme_switch_to_the_browser_setting_clears_the_cookie_test() {
     == "nostr_no_su_theme=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"
 }
 
-/// 対応していないテーマ、GET、別のオリジンからの切り替え、資格情報の無い切り替えは
-/// 受け付けず、cookie を保存しない。
+/// 対応していないテーマ、別のオリジンからの切り替え、資格情報の無い切り替えは受け付けず、
+/// cookie を保存しない。
 pub fn theme_switch_rejects_invalid_requests_test() {
   let rejected = [
     #(
+      "unsupported theme",
       theme_switch_request([#("theme", "blue"), #("return", "/")])
         |> admin.handle_request(context(), _),
       400,
     ),
     #(
+      "missing theme",
       theme_switch_request([#("return", "/")])
         |> admin.handle_request(context(), _),
       400,
     ),
-    #(get(context(), "/theme"), 405),
     #(
+      "cross-origin",
       theme_switch_request([#("theme", "dark"), #("return", "/")])
         |> request.set_header("origin", "http://evil.example")
         |> admin.handle_request(context(), _),
       400,
     ),
     #(
+      "no credentials",
       simulate.browser_request(http.Post, "/theme")
         |> simulate.form_body([#("theme", "dark"), #("return", "/")])
         |> admin.handle_request(context(), _),
       401,
     ),
   ]
-  use #(response, status) <- list.each(rejected)
-  assert response.status == status
-  assert list.key_find(response.headers, "set-cookie") == Error(Nil)
+  use #(name, response, status) <- list.each(rejected)
+  assert #(name, response.status) == #(name, status)
+  assert #(name, list.key_find(response.headers, "set-cookie"))
+    == #(name, Error(Nil))
 }
 
 /// 切り替えたテーマは、GET のページにも、生成した鍵のダイアログを開いた POST の応答にも保たれる。
