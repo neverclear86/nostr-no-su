@@ -82,6 +82,63 @@ fn count_until(handled: Subject(String), last: String, count: Int) -> Int {
   }
 }
 
+/// `"bad"` の id では panic し、それ以外の id を `handled` へ転送する手続き。
+fn crash_on_bad(handled: Subject(String)) -> fn(Event) -> Nil {
+  fn(incoming: Event) {
+    case incoming.id {
+      "bad" -> panic as "boom"
+      id -> process.send(handled, id)
+    }
+  }
+}
+
+/// `crash_on_bad` を持ち `max_failures: 3` のランナーへ `"bad"` を 3 件送り、
+/// `Disabled` になったことを確かめる。
+fn disable_with_bad_events(name: Name(plugin_runner.Msg)) -> Nil {
+  let targets = [plugin_runner.target("runner_test", name)]
+  list.each(list.repeat(Nil, 3), fn(_unit) {
+    plugin_runner.dispatch(targets, test_event("bad"))
+  })
+  let assert Some(Disabled(..)) = plugin_runner.status(name)
+  Nil
+}
+
+/// `"gate"` の id では、門を開ける `Subject` を `gates` へ送って開くまで止まり、
+/// それ以外の id を `handled` へ転送する手続き。
+fn hold_at_gate(
+  gates: Subject(Subject(Nil)),
+  handled: Subject(String),
+) -> fn(Event) -> Nil {
+  fn(incoming: Event) {
+    case incoming.id {
+      "gate" -> {
+        let release = process.new_subject()
+        process.send(gates, release)
+        let _ = process.receive(release, 5000)
+        Nil
+      }
+      id -> process.send(handled, id)
+    }
+  }
+}
+
+/// `hold_at_gate` を持つランナーの実行を `"gate"` で止めている間に、最後が
+/// `"last"` の `burst` 件を積み、門を開けて `"last"` までに実行された件数を返す。
+fn overload_burst(
+  name: Name(plugin_runner.Msg),
+  gates: Subject(Subject(Nil)),
+  handled: Subject(String),
+  burst: Int,
+) -> Int {
+  let targets = [plugin_runner.target("runner_test", name)]
+  plugin_runner.dispatch(targets, test_event("gate"))
+  let assert Ok(release) = process.receive(gates, 1000)
+  deliver(name, burst - 1)
+  plugin_runner.dispatch(targets, test_event("last"))
+  process.send(release, Nil)
+  count_until(handled, "last", 0)
+}
+
 /// `handle_event/1` を監視付きの使い捨てプロセスで動かす FFI。`plugin_runner` の
 /// 内部と同じものを、スタックトレースの整形を直接見るために呼ぶ。
 @external(erlang, "nostr_no_su_plugin_ffi", "run_isolated")
@@ -291,26 +348,15 @@ pub fn crashing_plugin_is_disabled_and_stays_alive_test() {
 pub fn a_reenabled_runner_handles_events_again_test() {
   let handled = process.new_subject()
   let name =
-    start_runner(
-      fn(incoming: Event) {
-        case incoming.id {
-          "bad" -> panic as "boom"
-          id -> process.send(handled, id)
-        }
-      },
-      Limits(..limits, max_failures: 3),
-    )
+    start_runner(crash_on_bad(handled), Limits(..limits, max_failures: 3))
   let assert Ok(runner_before) = process.named(name)
-  let targets = [plugin_runner.target("runner_test", name)]
-  list.each(list.repeat(Nil, 3), fn(_unit) {
-    plugin_runner.dispatch(targets, test_event("bad"))
-  })
-  let assert Some(Disabled(..)) = plugin_runner.status(name)
+  disable_with_bad_events(name)
 
   assert plugin_runner.request_reenable(name) == Some(Nil)
   assert plugin_runner.status(name) == Some(Running)
   assert process.named(name) == Ok(runner_before)
 
+  let targets = [plugin_runner.target("runner_test", name)]
   plugin_runner.dispatch(targets, test_event("ok"))
   assert process.receive(handled, 1000) == Ok("ok")
 }
@@ -367,12 +413,7 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
   let name = process.new_name("test_plugin_runner")
   start_named_runner(
     name,
-    fn(incoming: Event) {
-      case incoming.id {
-        "bad" -> panic as "boom"
-        _id -> Nil
-      }
-    },
+    crash_on_bad(process.new_subject()),
     fn() { process.send(resubscribed, Nil) },
     Limits(..limits, max_failures: 3),
   )
@@ -390,10 +431,7 @@ pub fn a_reenabled_runner_requests_a_catchup_test() {
   let assert Some(Some(plugin_runner.Catchup(since: None, ..))) =
     plugin_runner.catchup(name)
 
-  list.each(list.repeat(Nil, 3), fn(_unit) {
-    plugin_runner.dispatch(targets, test_event("bad"))
-  })
-  let assert Some(Disabled(..)) = plugin_runner.status(name)
+  disable_with_bad_events(name)
 
   let before = time.now_seconds()
   assert plugin_runner.request_reenable(name) == Some(Nil)
@@ -419,20 +457,8 @@ pub fn a_missing_runner_has_no_catchup_test() {
 pub fn a_catchup_event_dropped_while_disabled_is_not_marked_as_seen_test() {
   let handled = process.new_subject()
   let name =
-    start_runner(
-      fn(incoming: Event) {
-        case incoming.id {
-          "bad" -> panic as "boom"
-          id -> process.send(handled, id)
-        }
-      },
-      Limits(..limits, max_failures: 3),
-    )
-  let targets = [plugin_runner.target("runner_test", name)]
-  list.each(list.repeat(Nil, 3), fn(_unit) {
-    plugin_runner.dispatch(targets, test_event("bad"))
-  })
-  let assert Some(Disabled(..)) = plugin_runner.status(name)
+    start_runner(crash_on_bad(handled), Limits(..limits, max_failures: 3))
+  disable_with_bad_events(name)
 
   named.send(name, plugin_runner.HandleCatchup(test_event("missed")))
   assert plugin_runner.request_reenable(name) == Some(Nil)
@@ -451,30 +477,13 @@ pub fn catching_up_from_overload_does_not_request_a_catchup_test() {
   let name = process.new_name("test_plugin_runner")
   start_named_runner(
     name,
-    fn(incoming: Event) {
-      case incoming.id {
-        "gate" -> {
-          let release = process.new_subject()
-          process.send(gates, release)
-          let _ = process.receive(release, 5000)
-          Nil
-        }
-        id -> process.send(handled, id)
-      }
-    },
+    hold_at_gate(gates, handled),
     fn() { process.send(resubscribed, Nil) },
     limits,
   )
   let assert Ok(Nil) = process.receive(resubscribed, 1000)
   let assert Some(before) = plugin_runner.catchup(name)
-  let targets = [plugin_runner.target("runner_test", name)]
-  plugin_runner.dispatch(targets, test_event("gate"))
-  let assert Ok(release) = process.receive(gates, 1000)
-  let burst = limits.max_queue_len + 2
-  deliver(name, burst - 1)
-  plugin_runner.dispatch(targets, test_event("last"))
-  process.send(release, Nil)
-  let _consumed = count_until(handled, "last", 0)
+  let _consumed = overload_burst(name, gates, handled, limits.max_queue_len + 2)
   assert plugin_runner.catchup(name) == Some(before)
   assert process.receive(resubscribed, 200) == Error(Nil)
 }
@@ -568,28 +577,9 @@ pub fn a_burst_just_over_the_limit_loses_half_test() {
   let gates = process.new_subject()
   let handled = process.new_subject()
   let name =
-    start_runner(
-      fn(incoming: Event) {
-        case incoming.id {
-          "gate" -> {
-            let release = process.new_subject()
-            process.send(gates, release)
-            let _ = process.receive(release, 5000)
-            Nil
-          }
-          id -> process.send(handled, id)
-        }
-      },
-      plugin_runner.default_limits,
-    )
-  let targets = [plugin_runner.target("runner_test", name)]
-  plugin_runner.dispatch(targets, test_event("gate"))
-  let assert Ok(release) = process.receive(gates, 1000)
+    start_runner(hold_at_gate(gates, handled), plugin_runner.default_limits)
   let burst = plugin_runner.default_limits.max_queue_len + 2
-  deliver(name, burst - 1)
-  plugin_runner.dispatch(targets, test_event("last"))
-  process.send(release, Nil)
-  let lost = burst - count_until(handled, "last", 0)
+  let lost = burst - overload_burst(name, gates, handled, burst)
   assert lost == burst / 2
 }
 
