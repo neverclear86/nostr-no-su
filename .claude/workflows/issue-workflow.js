@@ -37,6 +37,7 @@ export const meta = {
 //   dryRunPrompts: true なら dry run の trace に label と依頼文の全文を入れる（導入の後に依頼文を読んで確かめるため）
 //   modules:    dry run のときだけ CONFIG.modules を上書きする（モジュールを切った流れを確かめるため。実行では無視する）
 //   sonnet:     false なら Sonnet に振る段階（定数 SONNET の説明）も定義の frontmatter のモデル（opus）で立てる（比較と切り戻しのため。既定は true）
+//   haiku:      false なら Haiku に振る段階（定数 HAIKU の説明）を Haiku 導入前の振り分け（sonnet に従う）に戻す（比較と切り戻しのため。既定は true）
 //   dryRunModels: true なら dry run の trace に label と、上書きした model / effort を入れる（振り分けと昇格を確かめるため）
 // ---------------------------------------------------------------------------
 
@@ -95,9 +96,13 @@ const dry = a.dryRun || null
 const MODULES = dry && a.modules ? { ...CONFIG.modules, ...a.modules } : CONFIG.modules
 // 書く側の最初の 1 回を Sonnet / high で立て、差し戻されたら定義の frontmatter のモデル（opus / medium）に昇格する。
 // Sonnet にするのは、tier light のプランの版 1、tier light の最初の実装（引き継いだプランを含む）、PR ごとに最初の指摘への対応と
-// 条件の取り込み、最初の rebase、PR の検索、マージ。判定、tier full のプラン、tier none の実装、レビューは opus のまま。
+// 条件の取り込み、最初の rebase、マージ（PR の検索は定数 HAIKU）。判定、tier full のプラン、tier none の実装、レビューは opus のまま。
 // Sonnet の medium はコードの作業で high より大きく落ちるので使わない。agent() の model と effort は frontmatter より優先される
 const SONNET = a.sonnet === false ? {} : { model: 'sonnet', effort: 'high' }
+// 読み取りだけで短く、構造化出力で返す段階を Haiku / medium で立てる。今は PR の検索だけ。
+// Haiku は抜き出しと構造化の作業で Sonnet の medium 以上を安く出すが、コマンドを何往復も回す作業では同じ費用の Sonnet に負ける。
+// low は長い依頼文で検索や確認を飛ばしやすいので使わない。プロンプトが 100K トークンを超えると単価が 5 倍になるので、長く読む段階には振らない
+const HAIKU = a.haiku === false ? { ...SONNET, effort: 'low' } : { model: 'haiku', effort: 'medium' }
 
 // --- スキーマ（エージェントの型ごとに 1 つ。型・モデル・effort・スキーマが同じ agent はキャッシュの接頭辞を共有する） ---
 const VERDICT = { type: 'string', enum: ['APPROVE', 'REQUEST CHANGES', 'NEEDS_USER'] }
@@ -658,7 +663,7 @@ async function implementStage(e, issue, state) {
 /** 実装が PR の番号か head を返さなかったとき、ブランチの PR を gh で引いて補う（無ければ空。PR が完成しているのに実装を走り直すのを避ける） */
 async function lookupPr(e) {
   log(`#${e.n}: 実装が PR の番号か head を返さなかった。ブランチ ${e.branch} の PR を gh で引いて補う`)
-  const found = await call('implement', `Lookup #${e.n}`, P.lookupPr(e), { agentType: 'issue-pr-lookup', phase: '実装', schema: S.prLookup, ...SONNET, effort: 'low' })
+  const found = await call('implement', `Lookup #${e.n}`, P.lookupPr(e), { agentType: 'issue-pr-lookup', phase: '実装', schema: S.prLookup, ...HAIKU })
   if (!found.found) return {}
   return { pr: found.pr, prUrl: found.prUrl, head: found.head, ciPassed: found.ciPassed }
 }

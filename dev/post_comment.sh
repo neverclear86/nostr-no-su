@@ -38,7 +38,7 @@ case "$number" in
 esac
 
 case "$kind" in
-  design | split | plan | plan-review | pr-review | fix | gate | summary | retro) ;;
+  design | split | plan | plan-review | pr-review | fix | gate | summary | retro | decision) ;;
   *) echo "invalid kind: $kind" >&2; exit 1 ;;
 esac
 
@@ -74,6 +74,7 @@ case "$kind" in
   gate) heading='## 最終確認$' ;;
   summary) heading='## まとめ$' ;;
   retro) heading='## 精査$' ;;
+  decision) heading='## 事前の決定$' ;;
 esac
 first=$(grep -m 1 -v '^[[:space:]]*$' "$body" || true)
 printf '%s\n' "$first" | grep -Eq "^$heading" || { echo "body file must start with the heading for kind=$kind (got: $first)" >&2; exit 1; }
