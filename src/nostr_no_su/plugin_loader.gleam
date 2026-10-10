@@ -48,7 +48,7 @@ import nostr_no_su/log
 import nostr_no_su/plugin.{type Plugin}
 
 /// このモジュールが出すログ行の接頭辞。
-pub const log_prefix = "plugin_loader"
+const log_prefix = "plugin_loader"
 
 /// アプリの分からないモジュールについて名前を挙げる件数。アプリが分かるものは
 /// `shadow_sources` がすべて挙げる。
@@ -251,23 +251,21 @@ fn flat_candidates(
 
 /// バンドル候補を順に処理して候補モジュールを決める。**順番に処理することが
 /// 重要で**、先のバンドルがコードパスへ入った後に次のバンドルのエントリーを
-/// 判定するため、プラグイン同士の影も名前順で「先勝ち」になる。
+/// 判定するため、プラグイン同士の影も名前順で「先勝ち」になる。この順序は
+/// `list.map` が先頭から 1 件ずつ `adopt_bundle` を呼ぶことに依る。
 fn bundle_candidates(
   dir: String,
   bundles: List(String),
 ) -> #(List(String), List(Note)) {
   let #(modules, notes) =
-    list.fold(bundles, #([], []), fn(acc, name) {
-      let #(modules, notes) = acc
+    list.map(bundles, fn(name) {
       case adopt_bundle(dir, name) {
-        Ok(bundle_notes) -> #(
-          [name, ..modules],
-          list.append(list.reverse(bundle_notes), notes),
-        )
-        Error(note) -> #(modules, [note, ..notes])
+        Ok(bundle_notes) -> #([name], bundle_notes)
+        Error(note) -> #([], [note])
       }
     })
-  #(list.reverse(modules), list.reverse(notes))
+    |> list.unzip
+  #(list.flatten(modules), list.flatten(notes))
 }
 
 /// バンドル 1 つをコードパスへ迎え入れる。採用できたら影の報告行（0 行か 1 行）
@@ -304,7 +302,12 @@ fn adopt_bundle(dir: String, name: String) -> Result(List(Note), Note) {
       }
     }),
   )
-  shadow_note(name, list.unique(shadows))
+  shadow_note(
+    name,
+    list.map(list.unique(shadows), fn(module) {
+      #(module, module_application(atom.create(module)))
+    }),
+  )
 }
 
 /// バンドルが持つ ebin ディレクトリー。`<name>/ebin` と `<name>/<app>/ebin` の
@@ -371,10 +374,13 @@ fn shadowed(ebin: String) -> List(String) {
   }
 }
 
-/// 影に入ったモジュールの報告。バンドルにつき 1 行に集約し、提供元のアプリと
-/// 版をすべて、アプリの分からないモジュールは先頭数件の名前を挙げる。1 つも
-/// 無ければ行を出さない。
-fn shadow_note(name: String, modules: List(String)) -> List(Note) {
+/// 影に入ったモジュールの報告。バンドルにつき 1 行に集約し、件数と、`shadow_sources` が
+/// 整形した提供元を括弧内に添える。1 つも無ければ行を出さない。`modules` は影に入った
+/// モジュールの名前と、その提供元（`module_application` の結果）の組である。
+fn shadow_note(
+  name: String,
+  modules: List(#(String, Result(#(String, String), Nil))),
+) -> List(Note) {
   case modules {
     [] -> []
     _ -> [
@@ -392,16 +398,20 @@ fn shadow_note(name: String, modules: List(String)) -> List(Note) {
 
 /// 影に入ったモジュールの提供元を括弧内の 1 行にする。アプリの分かるものは
 /// `app vsn` を重複なしですべて、分からないものはモジュール名を
-/// `shadow_sample_size` 件まで挙げる。
-fn shadow_sources(modules: List(String)) -> String {
+/// `shadow_sample_size` 件まで挙げて、超えたら `, ...` を続ける。アプリを先に、
+/// モジュール名を後に並べ、それぞれ `modules` の順を保つ。
+pub fn shadow_sources(
+  modules: List(#(String, Result(#(String, String), Nil))),
+) -> String {
   let #(apps, unknowns) =
-    list.fold(modules, #([], []), fn(acc, module) {
-      let #(apps, unknowns) = acc
-      case module_application(atom.create(module)) {
-        Ok(#(app, vsn)) -> #([app <> " " <> vsn, ..apps], unknowns)
-        Error(Nil) -> #(apps, [module, ..unknowns])
+    list.map(modules, fn(entry) {
+      case entry.1 {
+        Ok(#(app, vsn)) -> Ok(app <> " " <> vsn)
+        Error(Nil) -> Error(entry.0)
       }
     })
+    |> result.partition
+  // `result.partition` は元の順序を逆にして返す。
   let apps = list.reverse(apps) |> list.unique
   let unknowns = list.reverse(unknowns)
   let sample = list.take(unknowns, shadow_sample_size)
@@ -442,38 +452,29 @@ fn load_candidates(
   plugin_env: Dict(String, String),
   call_timeout_ms: Int,
 ) -> #(List(Plugin), List(Note), List(String)) {
-  let #(plugins, notes, taken) =
-    list.fold(
-      modules,
-      #([], [], reserved),
-      fn(acc: #(List(Plugin), List(Note), List(String)), module) {
-        let #(plugins, notes, taken) = acc
-        case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
-          Error(reason) -> #(
-            plugins,
-            [Failed(NotLoaded(module, reason)), ..notes],
-            taken,
-          )
-          Ok(loaded) ->
-            case list.contains(taken, loaded.name) {
-              True -> #(
-                plugins,
-                [
-                  Failed(NotLoaded(
-                    module,
-                    "duplicate plugin name \""
-                      <> loaded.name
-                      <> "\"; keeping the first",
-                  )),
-                  ..notes
-                ],
-                taken,
-              )
-              False -> #([loaded, ..plugins], notes, [loaded.name, ..taken])
-            }
-        }
-      },
-    )
+  let #(taken, results) =
+    list.map_fold(modules, reserved, fn(taken, module) {
+      case plugin.load(atom.create(module), plugin_env, call_timeout_ms) {
+        Error(reason) -> #(taken, Error(Failed(NotLoaded(module, reason))))
+        Ok(loaded) ->
+          case list.contains(taken, loaded.name) {
+            True -> #(
+              taken,
+              Error(
+                Failed(NotLoaded(
+                  module,
+                  "duplicate plugin name \""
+                    <> loaded.name
+                    <> "\"; keeping the first",
+                )),
+              ),
+            )
+            False -> #([loaded.name, ..taken], Ok(loaded))
+          }
+      }
+    })
+  let #(plugins, notes) = result.partition(results)
+  // `result.partition` は元の順序を逆にして返す。
   #(list.reverse(plugins), list.reverse(notes), taken)
 }
 

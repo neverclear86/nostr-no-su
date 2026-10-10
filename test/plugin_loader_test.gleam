@@ -794,67 +794,65 @@ pub fn load_all_min_host_version_bad_shape_test() {
   )
 }
 
-/// 影の提供元の ebin にある `.app` が形の崩れたものでも、影の行はアプリ不明の
-/// 分岐（モジュール名）に落ち、両方のプラグインの読み込みは続く。
-pub fn load_all_shadow_broken_app_test() {
-  let fixture = beam_fixture.new("shadow_broken_app")
-  let first = beam_fixture.name(fixture, "aaa")
-  let second = beam_fixture.name(fixture, "bbb")
-  let shared = beam_fixture.name(fixture, "shared")
-  let first_ebin = ebin_in(fixture, [first])
-  let second_ebin = ebin_in(fixture, [second])
-  put_plugin(first, "first_plugin", first_ebin)
-  beam_fixture.write(
-    first_ebin <> "/" <> shared <> "_app.app",
-    "{application, " <> shared <> "_app, [{vsn, [foo]}]}.\n",
-  )
-  beam_fixture.compile(beam_fixture.value_source(shared, 1), shared, first_ebin)
-  beam_fixture.compile(
-    beam_fixture.value_source(shared, 2),
-    shared,
-    second_ebin,
-  )
-  put_plugin(second, "second_plugin", second_ebin)
-
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
-  assert list.map(plugins, fn(item) { item.name })
-    == ["first_plugin", "second_plugin"]
-  assert has_note(notes, second <> ": 1 module(s) already provided")
-  assert has_note(notes, "(" <> shared <> ")")
+/// 影の提供元の整形は入力だけで決まる。アプリの分かるものは `app vsn` を重複なしで
+/// 先に、分からないものはモジュール名を 3 件まで続け、超えたら `, ...` を付ける。
+pub fn shadow_sources_test() {
+  let known = fn(module, app, vsn) { #(module, Ok(#(app, vsn))) }
+  let unknown = fn(module) { #(module, Error(Nil)) }
+  use #(modules, expected) <- list.each([
+    // 同じアプリと版は 1 件に畳む。版が違えば別の件。
+    #(
+      [
+        known("lists", "stdlib", "1.0"),
+        known("maps", "stdlib", "1.0"),
+        known("io", "stdlib", "2.0"),
+        known("a", "kernel", "9.0"),
+      ],
+      "stdlib 1.0, stdlib 2.0, kernel 9.0",
+    ),
+    // アプリが分からないものは、3 件までなら省かずに並べる。
+    #([unknown("a"), unknown("b"), unknown("c")], "a, b, c"),
+    // 4 件目からは `, ...` で省く。
+    #([unknown("a"), unknown("b"), unknown("c"), unknown("d")], "a, b, c, ..."),
+    // アプリは入力で後に出ても先に並び、省く件数はアプリの数に影響されない。
+    #(
+      [
+        unknown("a"),
+        known("lists", "stdlib", "1.0"),
+        unknown("b"),
+        unknown("c"),
+        unknown("d"),
+      ],
+      "stdlib 1.0, a, b, c, ...",
+    ),
+  ])
+  assert plugin_loader.shadow_sources(modules) == expected
 }
 
-/// 影に入ったモジュールが複数でも、同じアプリは 1 件に畳まれ、アプリ不明のもの
-/// はアプリ分の後にモジュール名で続く。
-pub fn load_all_shadow_dedup_and_mixed_test() {
-  let fixture = beam_fixture.new("shadow_mixed")
-  let first = beam_fixture.name(fixture, "aaa")
-  let second = beam_fixture.name(fixture, "bbb")
-  let shared = beam_fixture.name(fixture, "shared")
-  let first_ebin = ebin_in(fixture, [first])
-  let second_ebin = ebin_in(fixture, [second])
-  put_plugin(first, "first_plugin", first_ebin)
-  beam_fixture.compile(beam_fixture.value_source(shared, 1), shared, first_ebin)
-  beam_fixture.write_garbage(second_ebin <> "/lists.beam")
-  beam_fixture.write_garbage(second_ebin <> "/maps.beam")
-  beam_fixture.compile(
-    beam_fixture.value_source(shared, 2),
-    shared,
-    second_ebin,
-  )
-  put_plugin(second, "second_plugin", second_ebin)
+/// 報告行は候補の処理の順に並ぶ。バンドルは名前の昇順で、飛ばした理由と影の報告が
+/// バンドルの並びのまま交互に出る。読み込みの失敗はその後にモジュール名の昇順で続き、
+/// `not_loaded` は同じ順で失敗だけを挙げる。
+pub fn load_all_keeps_report_order_test() {
+  let fixture = beam_fixture.new("report_order")
+  let names =
+    list.map(["aaa", "bbb", "ccc", "ddd", "eee"], beam_fixture.name(fixture, _))
+  let assert [aaa, bbb, ccc, ddd, eee] = names
+  beam_fixture.mkdir(fixture.root <> "/" <> aaa)
+  beam_fixture.mkdir(fixture.root <> "/" <> ccc)
+  let ebin = ebin_in(fixture, [bbb])
+  beam_fixture.write_garbage(ebin <> "/lists.beam")
+  put_plugin(bbb, "shadowing_plugin", ebin)
+  beam_fixture.write_garbage(fixture.root <> "/" <> ddd <> ".beam")
+  beam_fixture.write_garbage(fixture.root <> "/" <> eee <> ".beam")
 
-  let plugin_loader.LoadOutcome(plugins:, notes:, ..) = load_dir(fixture.root)
-  assert list.map(plugins, fn(item) { item.name })
-    == ["first_plugin", "second_plugin"]
-  assert has_note(
-    notes,
-    second
-      <> ": 3 module(s) already provided by the host or another plugin are ignored (stdlib "
-      <> beam_fixture.loaded_app_version("stdlib")
-      <> ", "
-      <> shared
-      <> ")",
-  )
+  let plugin_loader.LoadOutcome(notes:, not_loaded:, ..) =
+    load_dir(fixture.root)
+  let reported =
+    list.filter_map(notes, fn(note) {
+      list.find(names, fn(name) { string.contains(note, "] " <> name <> ": ") })
+    })
+  assert reported == names
+  assert list.map(not_loaded, fn(item) { item.id }) == [aaa, ccc, ddd, eee]
 }
 
 /// 一覧できない ebin（権限 111）は、影を数えずにコードパスへ足して読み込む。root では
@@ -868,37 +866,6 @@ pub fn load_all_unlistable_ebin_test() {
   beam_fixture.change_mode(ebin, 0o755)
   assert list.map(plugins, fn(item) { item.name }) == ["unlistable_plugin"]
   assert !has_note(notes, "already provided")
-}
-
-/// アプリの分からない影のモジュールが `shadow_sample_size`（3）件を超えると、先頭の
-/// 3 件の後を `, ...` で省く。
-pub fn load_all_shadow_sample_is_truncated_test() {
-  let fixture = beam_fixture.new("shadow_sample")
-  let first = beam_fixture.name(fixture, "aaa")
-  let second = beam_fixture.name(fixture, "bbb")
-  let first_ebin = ebin_in(fixture, [first])
-  let second_ebin = ebin_in(fixture, [second])
-  put_plugin(first, "first_plugin", first_ebin)
-  put_plugin(second, "second_plugin", second_ebin)
-  let shared = list.map(["s1", "s2", "s3", "s4"], beam_fixture.name(fixture, _))
-  list.each(shared, fn(module) {
-    beam_fixture.write_garbage(first_ebin <> "/" <> module <> ".beam")
-    beam_fixture.write_garbage(second_ebin <> "/" <> module <> ".beam")
-  })
-  let assert [s1, s2, s3, _] = shared
-  let plugin_loader.LoadOutcome(notes:, ..) = load_dir(fixture.root)
-  assert list.contains(
-    notes,
-    "[plugin_loader] "
-      <> second
-      <> ": 4 module(s) already provided by the host or another plugin are ignored ("
-      <> s1
-      <> ", "
-      <> s2
-      <> ", "
-      <> s3
-      <> ", ...)",
-  )
 }
 
 /// 同梱の例（`examples/plugins/file_logger`）が、設定を与えれば読み込めること
