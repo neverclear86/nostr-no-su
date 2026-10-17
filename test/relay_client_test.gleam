@@ -17,7 +17,6 @@ import gleam/otp/actor
 import gleam/result
 import gleam/set
 import gleam/string
-import mist
 import nostr_no_su/app
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/log
@@ -36,7 +35,8 @@ import support/connection_settings
 import support/frame_server
 import support/log_capture
 import support/loopback_relay.{
-  type Relay, start_relay, start_relay_with, stop_relay,
+  type Relay, SendBinary, SendText, replies_to, start_relay,
+  start_relay_replying, stop_relay,
 }
 import support/signed_event
 
@@ -1276,14 +1276,13 @@ pub fn a_retry_after_a_successful_resubscribe_is_not_evaluated_test() {
 /// 閉じるリレー。理由は接頭辞の決まっていない `error:` で、張り直しの対象にする。
 fn start_relay_closing_subscriptions(frames: Subject(String)) -> Relay {
   let closed = closed_frame("bunker", "error: shutting down")
-  start_relay_with(fn() { Nil }, fn(connection, text) {
+  start_relay_replying(fn() { Nil }, fn(text) {
     case string.starts_with(text, "[\"REQ\"") {
       True -> {
         process.send(frames, text)
-        let _ = mist.send_text_frame(connection, closed)
-        Nil
+        [SendText(closed)]
       }
-      False -> Nil
+      False -> []
     }
   })
 }
@@ -1317,14 +1316,13 @@ pub fn a_closed_subscription_is_resubscribed_test() {
 /// 購読を `blocked:` の CLOSED で閉じるリレー。
 fn start_relay_blocking(frames: Subject(String)) -> Relay {
   let closed = closed_frame("refused-once", "blocked: not allowed")
-  start_relay_with(fn() { Nil }, fn(connection, text) {
+  start_relay_replying(fn() { Nil }, fn(text) {
     case string.starts_with(text, "[\"REQ\"") {
       True -> {
         process.send(frames, text)
-        let _ = mist.send_text_frame(connection, closed)
-        Nil
+        [SendText(closed)]
       }
-      False -> Nil
+      False -> []
     }
   })
 }
@@ -1365,16 +1363,10 @@ pub fn a_refused_subscription_is_requested_again_on_a_new_connection_test() {
 fn start_relay_requiring_auth(frames: Subject(String)) -> Relay {
   let auth = auth_frame("c1")
   let closed = closed_frame("bunker", "auth-required: sign in")
-  start_relay_with(fn() { Nil }, fn(connection, text) {
+  let answer = replies_to("[\"REQ\"", [SendText(auth), SendText(closed)])
+  start_relay_replying(fn() { Nil }, fn(text) {
     process.send(frames, text)
-    case string.starts_with(text, "[\"REQ\"") {
-      True -> {
-        let _ = mist.send_text_frame(connection, auth)
-        let _ = mist.send_text_frame(connection, closed)
-        Nil
-      }
-      False -> Nil
-    }
+    answer(text)
   })
 }
 
@@ -1440,21 +1432,12 @@ fn start_sending_relay(
   bytes: Int,
   after: String,
 ) -> Relay {
-  start_relay_with(
+  start_relay_replying(
     fn() { process.send(connections, Nil) },
-    fn(connection, text) {
-      case string.starts_with(text, "[\"REQ\"") {
-        True -> {
-          // クライアントが上限を超えたフレームを受け取った直後に切ることがあり、
-          // 続く送信は失敗しうる。`let assert` にするとハンドラーが落ちて、テスト
-          // の出力にエラーが混ざる。
-          let _ = mist.send_binary_frame(connection, <<0:size(bytes)-unit(8)>>)
-          let _ = mist.send_text_frame(connection, after)
-          Nil
-        }
-        False -> Nil
-      }
-    },
+    replies_to("[\"REQ\"", [
+      SendBinary(<<0:size(bytes)-unit(8)>>),
+      SendText(after),
+    ]),
   )
 }
 
@@ -1560,23 +1543,11 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
 
 // --- 発行結果の通知 ---
 
-/// `EVENT` で始まるテキストを受けたら指定の OK を返すリレー。
-fn start_relay_replying_ok(ok: String) -> Relay {
-  start_relay_with(fn() { Nil }, fn(connection, text) {
-    case string.starts_with(text, "[\"EVENT\"") {
-      True -> {
-        let _ = mist.send_text_frame(connection, ok)
-        Nil
-      }
-      False -> Nil
-    }
-  })
-}
-
 /// リレーが発行したイベントに返した OK は `handle_ok` に届く。
 pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
   let ok = ok_frame("e1", False, "rate-limited: slow down")
-  let relay = start_relay_replying_ok(ok)
+  let relay =
+    start_relay_replying(fn() { Nil }, replies_to("[\"EVENT\"", [SendText(ok)]))
   let acks = process.new_subject()
   let assert Ok(client) =
     relay_client.start(
@@ -1640,9 +1611,9 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
   let connection_pids = process.new_subject()
   let disconnects = process.new_subject()
   let relay =
-    start_relay_with(
+    start_relay_replying(
       fn() { process.send(connection_pids, process.self()) },
-      fn(_connection, _text) { Nil },
+      fn(_text) { [] },
     )
 
   let assert Ok(started) =
