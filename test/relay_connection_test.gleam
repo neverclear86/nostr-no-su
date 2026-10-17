@@ -3,6 +3,7 @@ import gleam/option.{None, Some}
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/nostr/event.{Event}
 import nostr_no_su/relay_connection.{type Socket, Socket}
+import support/connection_settings
 import support/poll
 
 /// 再接続テストを短時間で終わらせつつ、「予約された」と「即時」を区別できる
@@ -103,12 +104,14 @@ fn settings(
   stable_after_ms: Int,
 ) -> relay_connection.Settings {
   relay_connection.Settings(
-    name: name,
-    relay: "wss://relay.test",
-    connect: connect,
+    ..connection_settings.new(
+      name,
+      "wss://relay.test",
+      connect,
+      reconnect_delay,
+    ),
     on_connect: fn(_socket) { process.send(reports, Rewired) },
     on_disconnect: fn() { process.send(reports, Unwired) },
-    reconnect_delay: reconnect_delay,
     stable_after_ms: stable_after_ms,
   )
 }

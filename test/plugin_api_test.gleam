@@ -23,6 +23,7 @@ import nostr_no_su/relay_list
 import support/app_tree.{
   other_signer_key, signer_key, start_bunker_signed_in_as, start_relay_list,
 }
+import support/connection_settings
 import support/frame_server
 import support/loopback_relay
 import support/nip46_client.{account_for}
@@ -82,14 +83,11 @@ fn start_connection(
   connect: relay_connection.Connector,
 ) -> Pid {
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Settings(
-      name: name,
-      relay: "wss://relay.test",
-      connect: connect,
-      on_connect: fn(_socket) { Nil },
-      on_disconnect: fn() { Nil },
-      reconnect_delay: long_reconnect_delay,
-      stable_after_ms: relay_connection.default_stable_after_ms,
+    relay_connection.start(connection_settings.new(
+      name,
+      "wss://relay.test",
+      connect,
+      long_reconnect_delay,
     ))
   started.pid
 }
