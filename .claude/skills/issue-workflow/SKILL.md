@@ -85,7 +85,7 @@ tier は判定が決める。`none`（追加 100 行未満・3 ファイル以�
 - **ポートの用途**: `portBase + i*10` からの各 issue の分は、実装が +0 Postgres、+1 アプリ、+2 strfry、レビューが +5〜+7 を同じ順に使う
 - **CI と手元の検査**: CI（`.github/workflows/ci.yml`）は build、単体テスト、Postgres の統合テスト、strfry の E2E、カバレッジのバッジ、format、CSS、vendor、プラグイン、.env.example、shipment を検査し、docker イメージは docker に関わるファイルを変えた PR と main への push で検査する。実装エージェントは CI の失敗で push をやり直さないよう、push の前に統合テストまで手元で通す
 - **UI を変える issue**: 管理 UI の `.gleam` を変えたら `npm ci && npm run build:css` の結果をコミットする（CI が差分を検査する）。スクリーンショットは変えた画面だけを日本語で貼り、英語は英語画面の修正が主題の issue のときだけ貼る
-- **ふりかえりの前のカバレッジ**: `retrospective` を回す前に、実行の間の本体のカバレッジを `sh dev/coverage_delta.sh <最初の実行の base> <今の origin/main>` で確かめる（main の CI の test ジョブのログの計測を README のバッジと並べ、0.2 ポイントを超えて下がったら `drop`、整数に丸めた値がバッジと違えば `badge` を最後の行の `verdict` に出す）。`verdict` が `ok` 以外なら、ユーザーの指示として「カバレッジの判定が <verdict> だった（前後の百分率）。drop なら下がった PR を main の CI の計測（`gh run view --job <test のジョブ> --log` の `coverage:` の行）でたどって原因を学びにし、badge なら `sh dev/check_coverage_badge.sh --update` を受け入れ条件に入れる」を `observations` に足す（学びが 0 件でも起票される）。判定と前後の百分率をユーザーへの報告に載せる
+- **ふりかえりの前のカバレッジ**: `retrospective` を回す前に、実行の間の本体のカバレッジを `sh dev/coverage_delta.sh <最初の実行の base> <今の origin/main>` で確かめる（main の CI の test ジョブのログの計測を README のバッジと並べ、0.2 ポイントを超えて下がったら `drop`、整数に丸めた値がバッジと違えば `badge` を最後の行の `verdict` に出す）。`verdict` が `ok` 以外なら、ユーザーの指示として「カバレッジの判定が <verdict> だった（前後の百分率）。drop なら下がった PR を main の CI の計測（`gh run view --job <test のジョブ> --log` の `coverage:` の行）でたどって原因を学びにし、badge なら `sh dev/check_coverage_badge.sh --update` を受け入れ条件に入れる」を `observations` に足す（学びが 0 件でも起票される）。判定と前後の百分率をユーザーへの報告に載せる。`coverage_delta.sh` はこのふりかえり用であり、PR の受け入れ条件や `issues[].note` にマージ前の確認として書かない（マージ前の PR では「後」が出ず、プランと実装が置き換えて断ることになる）
 <!-- /ADAPT:rules -->
 
 ## 学びの表の候補

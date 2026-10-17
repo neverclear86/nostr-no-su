@@ -69,11 +69,14 @@ git worktree remove --force <ビルド検査の作業ツリー>
 
 ```sh
 git worktree remove --force <作業ツリー>
-gh pr merge <PR> -R $R --squash --delete-branch --subject "<PR タイトル> (#<PR>)" --body "$(printf '%s\n' "<Co-Authored-By 行>" "<Claude-Session 行>")"
+gh pr view <PR> -R neverclear86/nostr-no-su --json title --jq .title
+gh pr merge <PR> -R neverclear86/nostr-no-su --squash --delete-branch --subject "<PR タイトル> (#<PR>)" --body "<Co-Authored-By 行>
+<Claude-Session 行>"
 git fetch --prune origin
 ```
 
 マージのコミットの件名は PR のタイトルに ` (#PR番号)` を付けたもの、本文は指示されたトレーラー 2 行だけにする。
+題は先に `gh pr view` で読み、`--subject` と `--body` はリテラルの引数で書く（`$(...)` のコマンド置換を含む形は auto モードの分類器が Auto-Mode Bypass の疑いで拒否する）。`gh pr merge` が拒否されたら、言い換えて再実行せず、status を not_ready にして problem に拒否の文を書いて返す（下の `gh issue close` の拒否の扱いと同じ）。
 <!-- ADAPT:merge-style -->
 直近の main の履歴と同じ形である。
 <!-- /ADAPT:merge-style -->

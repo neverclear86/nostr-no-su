@@ -60,6 +60,7 @@ hooks:
 - 変更に関係する文書（README、docs、設定の例など）も同じ PR で直す
 - 手順書や runbook に節を足すときは、依存する既存の節（前提を述べている段落）を読み直し、その前提を引き継ぐ
 - 文書に書く手順の並びと節名は、リンク先の文書の原文と読み合わせてから書く（tier none ではプランが無く、この照合を担う段階が他に無い）
+- issue や既存コメントの Doc の文言は案として扱い、出典のコード（`case` の枝ごと、型、呼び出し元）と照らしてから書く。関数を一般化・改名・移動するときは、元の関数の Doc に残る呼び出し元の事情を読み直す（`dev/check_comments.sh` は検出しない）
 
 ## PR を作る前の検査（上から順に、機械的に。作業ツリーで実行し、結果を PR 本文に書く。手順は太字の名前で呼ぶ）
 push のたびに CI が走り、CI の失敗や衝突で push をやり直すと実行が増えるので、push の前に手元で CI と同じ検査を通し、origin/main に rebase しておく。
@@ -68,6 +69,7 @@ push のたびに CI が走り、CI の失敗や衝突で push をやり直す�
 - **build**: `gleam build --warnings-as-errors`
 - **テスト**: `gleam test`。CI も Postgres と strfry つきで走らせるが、CI の失敗で push をやり直さないよう、ここでも Postgres を `TEST_DATABASE_URL` に渡して統合テストまで通す。指示されたポート +0 で `docker run --rm -d --name pg-<名前> -p 127.0.0.1:<ポート>:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=nostr_no_su_test postgres:17-alpine` を立て、終わったら `docker rm -f` で消す
 - **カバレッジ**: テストは `COVERAGE=1` も付けて回し、そのあと `sh dev/check_coverage_badge.sh` を通す。計測値は環境で変わるので、`--update` でバッジを書き換えるときは、Postgres だけでなく strfry も立てて `TEST_RELAY_URL` を渡した状態（`docs/development.md` の「NIP-46 の E2E（strfry）」）で測り直してから行う（CI は両方を立てて測るので、E2E 抜きの値を書くとずれが溜まる）
+- **カバレッジの根拠**: 受け入れ条件がカバレッジの前後を求めるときは、根拠にする計測を 1 つ（対象モジュールの `COVERAGE=1 gleam test` の土台と作業ツリーの実測）に決めて PR 本文に書く。`dev/coverage_delta.sh` は main の CI のログを読むのでマージ前の PR では「後」が出ず、その値を手元の値と並べて読み手に選ばせない
 - **整形**: `sh dev/ci_gleam.sh <作業ツリー> format src test dev`（作業ツリーの `ci.yml` の `gleam-version` と同じ版の gleam で回す。差分をコミットに含める）と `sh dev/ci_gleam.sh <作業ツリー> format --check src test dev`。素の `gleam format` で回すのは、`gleam --version` が `.github/workflows/ci.yml` の `gleam-version` と同じときだけにする（PATH の gleam は mise の `latest` で CI と違う版になることがあり、違う版で全体を整形すると大量の差分ができて push 前の検査で止まる）。`ci_gleam.sh` が 127 で終わる（版の合う gleam が無い）ときは、PATH の版で整形せず、`mise install gleam@<版>` してから回し直す。入れられないときは status を blocked にして reason に書く。frontmatter の hook が同じ検査を機械的に行う（Edit / Write した `.gleam` は `dev/hook_format.sh` が整形し、`git -C <作業ツリー> push` の前に `dev/hook_push_check.sh` が `--check` を回して通らなければ止める。どちらも `dev/ci_gleam.sh` を使い、版の合う gleam が無ければ何もしない）。hook は保険であり、この手順は省かない
 - **例と設定**: `examples/` を変えたら `erlc -Wall -Werror -o "$(mktemp -d)" examples/plugins/*/src/*.erl`。`vendor/` を変えたら `sh dev/check_vendor_stratus.sh`。`docker-compose.yml`、`docker-compose.release.yml`、`.env.example` のどれかを変えたら `sh dev/check_env_example.sh` と `sh dev/check_release_compose.sh`。`setup-env.sh` を変えたら `sh dev/check_setup_env.sh`、`install.sh` を変えたら `sh dev/check_install.sh`
 - **プラグイン**: `plugins-src/`、`gleam.toml`、`manifest.toml` を変えたら `sh dev/check_shared_versions.sh` と `sh dev/check_project_versions.sh` と、`plugins-src/event_logger` で `gleam build --warnings-as-errors`、`gleam test`（Postgres つき）、`gleam format --check src test`、`plugins-src/profile` で `gleam build --warnings-as-errors`、`gleam test`、`gleam format --check src test`。各プラグインの `manifest.toml` の共有パッケージ（`gleam_stdlib`、`pog` など）の版は本体と同時に上げる。`plugins/` に置く成果物はホストでビルドせず、各プラグインの README の「ビルド」の docker の手順で作る
