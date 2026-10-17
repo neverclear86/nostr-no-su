@@ -5,7 +5,9 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process.{type Name, type Pid, type Subject}
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import nostr_no_su/backoff.{Backoff}
 import nostr_no_su/bunker
@@ -244,34 +246,6 @@ pub fn publish_event_rejects_a_pubkey_that_is_not_a_string_test() {
     == Error("pubkey must be a String")
 }
 
-/// 登録されていない `Name` を渡すと理由を返す。
-pub fn publish_event_rejects_when_the_relay_list_does_not_answer_test() {
-  let bunker_name = start_signed_in_bunker()
-  let unregistered = process.new_name("test_plugin_api_missing_relay_list")
-
-  assert plugin_api.publish_with(
-      bunker_name,
-      unregistered,
-      signer_pubkey(),
-      valid_draft(),
-    )
-    == Error("the relay list is not responding")
-}
-
-/// 監視の用途のリレーが一覧に無いときは理由を返す。
-pub fn publish_event_rejects_when_no_monitor_relay_is_registered_test() {
-  let bunker_name = start_signed_in_bunker()
-  let relay_list_name = start_relay_list([])
-
-  assert plugin_api.publish_with(
-      bunker_name,
-      relay_list_name,
-      signer_pubkey(),
-      valid_draft(),
-    )
-    == Error("no monitor relay is registered")
-}
-
 /// 監視の用途のリレーはあるが、生きたソケットに渡せないときは理由を返す。
 pub fn publish_event_rejects_when_no_monitor_relay_is_connected_test() {
   let bunker_name = start_signed_in_bunker()
@@ -291,12 +265,6 @@ pub fn publish_event_rejects_when_no_monitor_relay_is_connected_test() {
       valid_draft(),
     )
     == Error("no monitor relay is connected")
-}
-
-/// `install` を呼ぶ前は、置いていない理由を返す。
-pub fn publish_event_without_install_returns_the_reason_test() {
-  assert plugin_api.publish_event(dynamic.string("x"), valid_draft())
-    == Error("the plugin API is not installed")
 }
 
 /// 未登録の公開鍵は理由を返す。
@@ -357,49 +325,6 @@ pub fn fetch_event_rejects_before_accounts_are_loaded_test() {
   process.kill(pid)
 }
 
-/// `kind` が整数でないときは専用の理由を返す。
-pub fn fetch_event_rejects_a_kind_that_is_not_an_int_test() {
-  let bunker_name = start_signed_in_bunker()
-  let relay_list_name = start_relay_list([])
-
-  assert plugin_api.fetch_with(
-      bunker_name,
-      relay_list_name,
-      signer_pubkey(),
-      dynamic.string("not-an-int"),
-    )
-    == Error("kind must be an Int")
-}
-
-/// 登録されていない `Name` を渡すと理由を返す。
-pub fn fetch_event_rejects_when_the_relay_list_does_not_answer_test() {
-  let bunker_name = start_signed_in_bunker()
-  let unregistered =
-    process.new_name("test_plugin_api_fetch_missing_relay_list")
-
-  assert plugin_api.fetch_with(
-      bunker_name,
-      unregistered,
-      signer_pubkey(),
-      dynamic.int(0),
-    )
-    == Error("the relay list is not responding")
-}
-
-/// 監視の用途のリレーが一覧に無いときは理由を返す。
-pub fn fetch_event_rejects_when_no_monitor_relay_is_registered_test() {
-  let bunker_name = start_signed_in_bunker()
-  let relay_list_name = start_relay_list([])
-
-  assert plugin_api.fetch_with(
-      bunker_name,
-      relay_list_name,
-      signer_pubkey(),
-      dynamic.int(0),
-    )
-    == Error("no monitor relay is registered")
-}
-
 /// 監視の用途のリレーはあるが、どの 1 本とも接続できないときは理由を返す。
 pub fn fetch_event_rejects_when_no_monitor_relay_is_reachable_test() {
   let bunker_name = start_signed_in_bunker()
@@ -419,12 +344,6 @@ pub fn fetch_event_rejects_when_no_monitor_relay_is_reachable_test() {
       dynamic.int(0),
     )
     == Error("no monitor relay is connected")
-}
-
-/// `install` を呼ぶ前は、置いていない理由を返す。
-pub fn fetch_event_without_install_returns_the_reason_test() {
-  assert plugin_api.fetch_event(dynamic.string("x"), dynamic.int(0))
-    == Error("the plugin API is not installed")
 }
 
 /// 複数の公開鍵の取得は、リレー 1 本につき接続 1 本・REQ 1 件にまとめる（REQ の
@@ -558,26 +477,92 @@ pub fn fetch_events_rejects_pubkeys_that_are_not_a_list_of_strings_test() {
     == Error("pubkeys must be a List of Strings")
 }
 
-/// `kind` が整数でないときは専用の理由を返す。
-pub fn fetch_events_rejects_a_kind_that_is_not_an_int_test() {
+/// 入口（送信、1 件の取得、複数の取得）が、使えない状態と読めない入力に同じ理由を返す。
+/// `install` が無い、`kind` が整数でない、リレーの一覧が応答しない、監視の用途のリレーが
+/// 一覧に無いの 4 つの守りを入口ごとの行で試し、落ちた行を名前で見分ける。
+pub fn entry_points_return_the_reason_for_an_unusable_state_test() {
   let bunker_name = start_signed_in_bunker()
-  let relay_list_name = start_relay_list([])
+  let unregistered = process.new_name("test_plugin_api_missing_relay_list")
+  let empty_list = start_relay_list([])
+  let pubkey = signer_pubkey()
+  let pubkeys = dynamic.list([pubkey])
+  let kind = dynamic.int(0)
+  let not_an_int = dynamic.string("not-an-int")
+  let not_installed = "the plugin API is not installed"
+  let kind_not_an_int = "kind must be an Int"
+  let list_silent = "the relay list is not responding"
+  let none_registered = "no monitor relay is registered"
+  let rows = [
+    rejection(
+      "publish_event: not installed",
+      not_installed,
+      plugin_api.publish_event(pubkey, valid_draft()),
+    ),
+    rejection(
+      "fetch_event: not installed",
+      not_installed,
+      plugin_api.fetch_event(pubkey, kind),
+    ),
+    rejection(
+      "fetch_events: not installed",
+      not_installed,
+      plugin_api.fetch_events(pubkeys, kind),
+    ),
+    rejection(
+      "fetch_with: kind not an int",
+      kind_not_an_int,
+      plugin_api.fetch_with(bunker_name, empty_list, pubkey, not_an_int),
+    ),
+    rejection(
+      "fetch_events_with: kind not an int",
+      kind_not_an_int,
+      plugin_api.fetch_events_with(bunker_name, empty_list, pubkeys, not_an_int),
+    ),
+    rejection(
+      "publish_with: relay list silent",
+      list_silent,
+      plugin_api.publish_with(bunker_name, unregistered, pubkey, valid_draft()),
+    ),
+    rejection(
+      "fetch_with: relay list silent",
+      list_silent,
+      plugin_api.fetch_with(bunker_name, unregistered, pubkey, kind),
+    ),
+    rejection(
+      "fetch_events_with: relay list silent",
+      list_silent,
+      plugin_api.fetch_events_with(bunker_name, unregistered, pubkeys, kind),
+    ),
+    rejection(
+      "publish_with: no monitor relay registered",
+      none_registered,
+      plugin_api.publish_with(bunker_name, empty_list, pubkey, valid_draft()),
+    ),
+    rejection(
+      "fetch_with: no monitor relay registered",
+      none_registered,
+      plugin_api.fetch_with(bunker_name, empty_list, pubkey, kind),
+    ),
+    rejection(
+      "fetch_events_with: no monitor relay registered",
+      none_registered,
+      plugin_api.fetch_events_with(bunker_name, empty_list, pubkeys, kind),
+    ),
+  ]
 
-  assert plugin_api.fetch_events_with(
-      bunker_name,
-      relay_list_name,
-      dynamic.list([
-        signer_pubkey(),
-      ]),
-      dynamic.string("not-an-int"),
-    )
-    == Error("kind must be an Int")
+  assert list.map(rows, fn(row) { #(row.0, row.2) })
+    == list.map(rows, fn(row) { #(row.0, row.1) })
 }
 
-/// `install` を呼ぶ前は、置いていない理由を返す。
-pub fn fetch_events_without_install_returns_the_reason_test() {
-  assert plugin_api.fetch_events(dynamic.list([]), dynamic.int(0))
-    == Error("the plugin API is not installed")
+/// 入口ごとの守りの表の 1 行。入口の名前、期待する理由、結果の理由を組にする。
+/// 成功の値は入口ごとに型が違うので比べず、成功したときは理由の代わりに
+/// `"succeeded"` を入れる。
+fn rejection(
+  entry: String,
+  expected: String,
+  outcome: Result(a, String),
+) -> #(String, String, String) {
+  #(entry, expected, result.unwrap_error(outcome, "succeeded"))
 }
 
 /// `fetch_with` の使い捨ての接続は、集め終えた後に購読の CLOSE と WebSocket の

@@ -717,7 +717,7 @@ nostr-no-su/
 │       ├── nostr/nip19.gleam     NIP-19 の npub / nsec の符号化と復号
 │       ├── relay_client.gleam    WebSocket クライアント（stratus）
 │       ├── relay_connection.gleam リレー 1 本ぶんの接続を保つアクター
-│       ├── relay_fetch.gleam     監視の用途のリレーへの使い捨ての取得の問い合わせ
+│       ├── relay_fetch.gleam     監視の用途のリレーの一覧の取得と、そのリレーへの使い捨ての取得の問い合わせ
 │       ├── relay_list.gleam      実行時のリレーの一覧と connections の子の起動・停止、本体のサブツリーが共有する再起動の許容
 │       ├── relay_store.gleam     リレーの一覧（relays）の SQL
 │       ├── crypto/secp256k1.gleam 点演算・鍵導出・ECDH
@@ -732,7 +732,7 @@ nostr-no-su/
 │       ├── persistent_term.gleam persistent_term への型付きの読み書き（FFI）
 │       ├── random.gleam          推測されては困る値のための乱数
 │       ├── secret.gleam          秘密の値の閉じ込め（`string.inspect` とクラッシュレポートに出さない）
-│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（締め切りと残り時間、締め切りまでの受信、項目ごとの並行な実行）
+│       ├── task.gleam            締め切り付きで並行に走らせる小さな口（締め切りと残り時間、締め切りまでの受信、項目ごとの並行な実行、待つ側の期限に足す余裕）
 │       └── time.gleam            現在時刻（壁時計・単調時計、FFI）
 │
 ├── test/                         本体のテスト（gleeunit と qcheck）

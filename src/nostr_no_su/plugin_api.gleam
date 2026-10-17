@@ -21,20 +21,14 @@ import nostr_no_su/task
 /// 同時に依頼するので、リレーの本数には比例しない。
 const publish_timeout_ms = 1000
 
-/// `publish_timeout_ms` に足す余裕。集計を行う使い捨てプロセスの結果を取りこぼさない
-/// ためのもの。
-const gather_margin_ms = 200
-
-/// `install` が置いていないときの理由。
+// プラグインへ `{error, Reason}` の `Reason` として返す、`install` が無いときと入力が
+// 読めないときの理由。文字列は `docs/plugin-api.md` の理由の表と一致させる。
 const not_installed = "the plugin API is not installed"
 
-/// `pubkey` が文字列でないときの理由。
 const pubkey_not_a_string = "pubkey must be a String"
 
-/// `kind` が整数でないときの理由。
 const kind_not_an_int = "kind must be an Int"
 
-/// `pubkeys` が文字列のリストでないときの理由。
 const pubkeys_not_a_list = "pubkeys must be a List of Strings"
 
 /// `install` が persistent_term に置く固定キー。
@@ -105,10 +99,7 @@ pub fn publish_with(
   pubkey: Dynamic,
   draft: Dynamic,
 ) -> Result(Dynamic, String) {
-  use pubkey <- result.try(
-    decode.run(pubkey, decode.string)
-    |> result.replace_error(pubkey_not_a_string),
-  )
+  use pubkey <- result.try(read_pubkey(pubkey))
   use #(kind, tags, content) <- result.try(
     decode.run(draft, draft_decoder())
     |> result.map_error(event.describe_decode_errors),
@@ -120,17 +111,10 @@ pub fn publish_with(
     tags,
     content,
   ))
-  use entries <- result.try(
-    relay_list.entries(relay_list_name)
-    |> result.replace_error(relay_fetch.relay_list_not_responding),
-  )
-  case relay_list.connections(entries, relay_list.Monitor) {
-    [] -> Error(relay_fetch.no_monitor_relay_registered)
-    connections ->
-      case broadcast(connections, signed) {
-        0 -> Error(relay_fetch.no_monitor_relay_connected)
-        _ -> Ok(event.to_map(signed))
-      }
+  use connections <- result.try(relay_fetch.monitor_connections(relay_list_name))
+  case broadcast(connections, signed) {
+    0 -> Error(relay_fetch.no_monitor_relay_connected)
+    _ -> Ok(event.to_map(signed))
   }
 }
 
@@ -141,10 +125,7 @@ pub fn fetch_with(
   pubkey: Dynamic,
   kind: Dynamic,
 ) -> Result(Dynamic, String) {
-  use pubkey <- result.try(
-    decode.run(pubkey, decode.string)
-    |> result.replace_error(pubkey_not_a_string),
-  )
+  use pubkey <- result.try(read_pubkey(pubkey))
   use results <- result.try(fetch_latest(
     bunker_name,
     relay_list_name,
@@ -218,6 +199,12 @@ fn fetched(found: Option(Event)) -> Dynamic {
   }
 }
 
+/// `pubkey` を文字列として読む。文字列でなければ `pubkey_not_a_string` を返す。
+fn read_pubkey(pubkey: Dynamic) -> Result(String, String) {
+  decode.run(pubkey, decode.string)
+  |> result.replace_error(pubkey_not_a_string)
+}
+
 /// `kind` / `tags` / `content` を読む。失敗は `event.describe_decode_errors` で
 /// 1 行にする（呼び出し側が行う）。
 fn draft_decoder() -> decode.Decoder(#(Int, List(List(String)), String)) {
@@ -239,7 +226,7 @@ fn broadcast(connections: List(relay_list.Connection), signed: Event) -> Int {
       })
     gather(reply, asked, task.deadline_in(publish_timeout_ms))
   })
-  |> task.await(task.deadline_in(publish_timeout_ms + gather_margin_ms))
+  |> task.await(task.deadline_in(publish_timeout_ms + task.gather_margin_ms))
   |> result.unwrap(0)
 }
 
