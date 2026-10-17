@@ -12,9 +12,13 @@ export const meta = {
 // ---------------------------------------------------------------------------
 // args の契約（スキル issue-workflow の「結果の処理」で組み立てる）
 //   runs:       journal の絶対パスの配列（mtime の昇順）。表示と起票する issue の根拠にだけ使う
-//   events:     { "<runs[i] と同じパス>": [<抽出済みの result イベント>...] }。journal の中身はここで渡す
+//   eventsScript: CONFIG.helpers の retro_events.sh が書いた JS ファイルの絶対パス（`return { events }` だけのスクリプト）。
+//               workflow({ scriptPath }) で読み、その events を使う。journal の中身はここで渡す（Workflow のスクリプトはファイルを読めず、
+//               数十 KB の events は args にインラインで載らない）。workflow() の入れ子は 1 段までなので、retrospective.js 自身を
+//               workflow() の子として回すことはできない
+//   events:     { "<runs[i] と同じパス>": [<抽出済みの result イベント>...] }。eventsScript の代わりに、小さいときに直接渡す
 //               各要素は { label, phase, status?, tier?, pr?, implementedBy?, verdict?, must?, should?, nit?, designMust?, lessons?, sha?, conditions?, closedParents? }
-//               作り方はスキル issue-workflow の「実行の後: ふりかえり」の jq（started と result を key で突き合わせ、result だけを抽出する）
+//               （retro_events.sh の jq と同じ形。started と result を key で突き合わせ、result だけを抽出する）
 //   since:      集計の対象期間の起点（表示にだけ使う。run の選別はスキル側が journal の mtime で行う）
 //   observations: [string]。空でない文字列。セッションが実行の外で観察した学び（ユーザーの指示を含む）。events の label の形に
 //               合わないものは集計に入らないので、ここで自由形式のまま渡し、ふりかえりの依頼文に「セッションの観察」として添える
@@ -24,7 +28,7 @@ export const meta = {
 //   trailers:   { coAuthoredBy, claudeSession, sessionUrl }
 //   dryRun:     true を渡すとエージェントを立てずに集計だけ返す
 //   retroIssue: { number, url, decisions?: [string] }。blocked で返った精査と実装を、ユーザーの決定を添えて再開する。
-//               集計と起票は飛ばし、精査と実装だけを回す（runs / events / since は要らない）
+//               集計と起票は飛ばし、精査と実装だけを回す（runs / eventsScript / events / since は要らない）
 // 返り値: 集計と、起票した issue（issueNumber など）と、implementation（精査と実装の結果。status は pr / rejected / blocked。
 //         複数の PR に分けたときは pr / prUrl / head が一番上の段で、prs に下の段から順の全部が入る）
 // ---------------------------------------------------------------------------
@@ -51,14 +55,31 @@ if (reentry) {
   if (!Number.isInteger(reentry.number) || typeof reentry.url !== 'string') throw new Error('args.retroIssue は { number, url, decisions? } で渡す')
 } else {
   if (!Array.isArray(a.runs) || a.runs.length === 0) throw new Error('args.runs が空である')
-  if (typeof a.events !== 'object' || a.events === null) throw new Error('args.events がオブジェクトでない')
+  if (a.eventsScript !== undefined && (typeof a.eventsScript !== 'string' || !a.eventsScript.startsWith('/'))) throw new Error(`args.eventsScript は ${HELPERS}/retro_events.sh が書いた JS ファイルの絶対パスで渡す`)
+  if (a.eventsScript === undefined && (typeof a.events !== 'object' || a.events === null)) throw new Error('args.eventsScript も args.events も無い')
   if (a.since === undefined) throw new Error('args.since が無い')
-  for (const p of a.runs) if (!Array.isArray(a.events[p])) throw new Error(`args.events に ${p} の抽出結果が無い（スキル issue-workflow の「実行の後: ふりかえり」の jq で作る）`)
   for (const p of a.runs) runId(p) // wfstats.py に渡す run id が取れないパス（journal の複写など）はここで止める
   if (a.observations !== undefined && (!Array.isArray(a.observations) || !a.observations.every((o) => typeof o === 'string' && o.trim() !== ''))) throw new Error('args.observations は空でない文字列の配列で渡す')
 }
 const observations = a.observations || []
 const dry = a.dryRun === true
+
+/**
+ * events を args から取る。args.eventsScript があれば、そのスクリプト（CONFIG.helpers の retro_events.sh が書いた
+ * `return { events }` だけの JS）を workflow({ scriptPath }) で回して events を受け取り、無ければ args.events をそのまま使う。
+ * どちらの経路でも、runs の各パスに抽出結果の配列があることを確かめる。
+ */
+async function loadEvents() {
+  let events = a.events
+  if (a.eventsScript !== undefined) {
+    log(`events を ${a.eventsScript} から読む`)
+    const child = await workflow({ scriptPath: a.eventsScript })
+    if (!child || typeof child.events !== 'object' || child.events === null) throw new Error(`${a.eventsScript} が { events } を返さなかった（${HELPERS}/retro_events.sh で作る）`)
+    events = child.events
+  }
+  for (const p of a.runs) if (!Array.isArray(events[p])) throw new Error(`events に ${p} の抽出結果が無い（${HELPERS}/retro_events.sh に同じパスの journal を渡す）`)
+  return events
+}
 
 // --- スキーマ -----------------------------------------------------------
 const S = {
@@ -350,7 +371,7 @@ if (reentry) {
 }
 
 log(`${a.runs.length} 件の journal から集計する${dry ? '（dry run）' : ''}`)
-const agg = aggregate(a.runs, a.events)
+const agg = aggregate(a.runs, await loadEvents())
 log(`issue ${agg.issues.length} 件、merged ${agg.totals.merged} / unfinished ${agg.totals.unfinished} / 分割の親 ${agg.totals.splitParents}、学び ${agg.totals.lessonCount} 件、セッションの観察 ${observations.length} 件`)
 
 // 学びが 0 件でもセッションの観察があれば、観察だけを材料にふりかえりを立てる（観察を黙って落とさない）

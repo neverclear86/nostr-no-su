@@ -188,16 +188,13 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 この実行に含めた issue が全部終わったら（`blocked` や `stalled` が残っていてもよい）、`retrospective` を 1 回回す。起票から PR までが 1 回の実行で進む。
 
 1. このセッションの journal のパスを `ls -tr <セッションの subagents/workflows>/wf_*/journal.jsonl` で mtime の昇順に集める。mtime が `since` より前のものと、`result` イベントが 1 件も無いものは `runs` に入れない
-2. journal ごとに次の jq を通し、`events` を組み立てる。
-   ```sh
-   jq -s '(map(select(.type=="started"))|INDEX(.key)) as $s | map(select(.type=="result") | {label:$s[.key].label, phase:$s[.key].phase} + (.result|{status,tier,pr,verdict,must,should,nit,designMust,lessons,sha,closedParents,conditions:(.conditions|length)}|with_entries(select(.value!=null))))' <journal>
-   ```
-3. `Workflow` ツールを `scriptPath: ".claude/workflows/retrospective.js"`（`name: "retrospective"`）と `args` で呼ぶ。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す。
+2. `runs` に入れる journal を全部渡して `sh dev/retro_events.sh <スクラッチパッド>/retro-events.js <journal>...` を回す。journal ごとに result イベントを抽出し、`return { events }` だけの Workflow のスクリプトに書く（Workflow のスクリプトはファイルを読めず、長い実行の events は数十 KB になって `args` にインラインで載らない）。出力先はセッションのスクラッチパッドにする（`workflow({ scriptPath })` が読めるのはセッションが読める場所だけ）
+3. `Workflow` ツールを `scriptPath: ".claude/workflows/retrospective.js"`（`name: "retrospective"`）と `args` で呼ぶ。`eventsScript` に 2 の出力の絶対パスを渡す（`retrospective.js` が `workflow({ scriptPath })` で読む。小さいときは `eventsScript` の代わりに `events` に抽出結果を直接渡してもよい）。実行の外で観察した学び（ユーザーの指示、`log` に出た事象）は `observations` に自由形式の文で渡す。
 
 ```json
 {
   "runs": ["/tmp/.../wf_a22397c8-55c/journal.jsonl"],
-  "events": { "/tmp/.../wf_a22397c8-55c/journal.jsonl": [ { "label": "Triage #157", "phase": "判定", "status": "plan", "tier": "light" } ] },
+  "eventsScript": "<このセッションのスクラッチパッド>/retro-events.js",
   "since": "2026-09-13T00:00:00Z",
   "observations": ["ユーザーが「PR 本文は短く」と指示した"],
   "base": "2f0a2eb…",
@@ -211,7 +208,7 @@ mkdir -p <scratchpad>/plans <scratchpad>/runs
 
 - `implementation.status: pr`: PR ができた。`pr` と `prUrl`（stacked PR に分けたときは `prs` の全部）をユーザーに渡す。マージはユーザーが判断する
 - `rejected`: 精査で原因の説明が成り立たない、または直す価値が無いと分かり、issue を閉じた。`reason` を報告する
-- `blocked`: 直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを `retroIssue: { "number": <N>, "url": "<issue の URL>", "decisions": ["<答え>"] }` に入れて `retrospective` をもう一度回す（`runs` と `events` は要らない）
+- `blocked`: 直し方が定義の方針に関わる。`questions` をユーザーに聞き、答えを `retroIssue: { "number": <N>, "url": "<issue の URL>", "decisions": ["<答え>"] }` に入れて `retrospective` をもう一度回す（`runs` と `eventsScript` は要らない）
 
 `pr` と `rejected` のときは、実装に使った `<scratchpad>/wt-retro-<N>` で始まる作業ツリーを「### 2. 結果の処理」の末尾と同じ手順で消す（ブランチは残るので、PR を直すときは `git worktree add` で取り出し直す）。`blocked` のときは再開で使うので残す。
 
