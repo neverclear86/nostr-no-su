@@ -924,7 +924,7 @@ fn answer_auth(
 }
 
 /// AUTH を受けたときのログの水準と本文。
-pub fn describe_auth(outcome: AuthOutcome) -> #(log.Level, String) {
+fn describe_auth(outcome: AuthOutcome) -> #(log.Level, String) {
   case outcome {
     NotAnswered -> #(
       log.Notice,
