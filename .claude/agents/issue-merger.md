@@ -102,3 +102,9 @@ gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86"
 ## 返すもの
 status（merged / conflict / not_ready。conflict は main との衝突とマージした結果の build の失敗）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、閉じた親 issue の番号（`closedParents`。無ければ空）、閉じる条件を満たしたのに閉じられなかった親 issue の番号（`openParent`。無ければ省く）、not_ready のうち差分にレビューが要るとき `needsReview`、問題があればその内容。
 
+## 学びの表の候補
+
+ユーザーレベルの学びの表（issue-workflow-kit）にあり、まだ本文に入っていない学びである。条件の付いたものは、当てはまるときだけ守る。
+
+- L095（当てはまるのは: auto モードでワークフローを回す）: マージのコマンドは `$(...)` などのコマンド置換を含めず、リテラルの引数で書く。題や本文は先に別の呼び出しで読む。auto モードの分類器が拒否したら、言い換えて再実行せず blocked で返す（L093）
+
