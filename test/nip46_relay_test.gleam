@@ -8,10 +8,11 @@
 //// を立てて両方渡す。
 
 import gleam/dict
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import gleam/uri.{Uri}
 import nostr_no_su
@@ -28,6 +29,7 @@ import nostr_no_su/relay_list
 import nostr_no_su/subscriptions
 import nostr_no_su/time
 import pog
+import support/app_tree.{stop_tree}
 import support/nip46_client.{account_for}
 import support/poll
 import support/postgres
@@ -43,6 +45,9 @@ const ack_timeout_ms = 5000
 
 /// 応答イベントを待つ時間。実リレーの往復を含むため OK より長く取る。
 const response_timeout_ms = 20_000
+
+/// `sign_event` の params。kind 1、本文 `hi` の未署名イベントを JSON 文字列で包む。
+const sign_note_params = "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]"
 
 /// 実リレー越しに connect が `ack`、get_public_key が署名者の公開鍵、sign_event が
 /// `sig` を持つイベントを返す。
@@ -91,11 +96,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
       connection,
       client,
       signer,
-      nip46_client.request_body(
-        "sign-1",
-        "sign_event",
-        "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]",
-      ),
+      nip46_client.request_body("sign-1", "sign_event", sign_note_params),
       events,
       acks,
     )
@@ -103,8 +104,7 @@ pub fn nip46_round_trip_over_a_relay_test() {
   // 引用符はエスケープされている。
   assert string.contains(signed, "\\\"sig\\\":\\\"")
 
-  process.unlink(tree)
-  process.kill(tree)
+  stop_tree(tree)
 }
 
 /// `nostrconnect://` の接続は、URI のリレーを `relays` テーブルに登録せず、セッションの
@@ -149,11 +149,7 @@ pub fn nostrconnect_client_initiated_connection_test() {
       connection,
       client,
       signer,
-      nip46_client.request_body(
-        "sign-1",
-        "sign_event",
-        "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]",
-      ),
+      nip46_client.request_body("sign-1", "sign_event", sign_note_params),
       events,
       acks,
     )
@@ -162,8 +158,7 @@ pub fn nostrconnect_client_initiated_connection_test() {
   // URI のリレーは `relays` テーブルに登録されない。
   assert app.registered_relays(spec) == Ok([])
 
-  process.unlink(tree)
-  process.kill(tree)
+  stop_tree(tree)
 }
 
 /// セッションを開けなかった `nostrconnect://` の接続は、取り置いた URI のリレーを
@@ -187,20 +182,10 @@ pub fn a_failed_nostrconnect_releases_the_uri_relays_test() {
     )
   let assert Error(admin.SessionNotOpened(bunker.SessionNotFound(_))) =
     app.connect_nostrconnect(spec, request, unregistered)
-  assert poll.until(
-    fn() {
-      case bunker.publisher_urls(name) {
-        Some(urls) -> !list.contains(urls, relay_url)
-        None -> False
-      }
-    },
-    5000,
-    50,
-  )
+  await_publisher(name, relay_url, present: False)
   assert bunker.session_signers(name, relay_url) == Some([])
 
-  process.unlink(tree)
-  process.kill(tree)
+  stop_tree(tree)
 }
 
 /// 登録していないリレーを持つセッションは、そのリレーの接続を開いて応答し、
@@ -230,35 +215,16 @@ pub fn a_session_only_relay_serves_its_session_over_a_relay_test() {
       [relay_url],
       "session-only-secret",
     )
-  assert poll.until(
-    fn() {
-      case bunker.publisher_urls(name) {
-        Some(urls) -> list.contains(urls, relay_url)
-        None -> False
-      }
-    },
-    5000,
-    50,
-  )
+  await_publisher(name, relay_url, present: True)
   assert bunker.session_signers(name, relay_url) == Some([signer_hex])
 
   let signed = call_retrying(connection, client, signer, events, acks, 1)
   assert string.contains(signed, "\\\"sig\\\":\\\"")
 
   let assert Ok(Nil) = bunker.revoke(name, signer_hex, client_hex)
-  assert poll.until(
-    fn() {
-      case bunker.publisher_urls(name) {
-        Some(urls) -> !list.contains(urls, relay_url)
-        None -> False
-      }
-    },
-    5000,
-    50,
-  )
+  await_publisher(name, relay_url, present: False)
 
-  process.unlink(tree)
-  process.kill(tree)
+  stop_tree(tree)
 }
 
 /// `sign_event` を送り、`response_timeout_ms` 内に応答が届かなければ id を変えて
@@ -272,22 +238,17 @@ fn call_retrying(
   acks: Subject(relay_client.Acknowledgement),
   attempt: Int,
 ) -> String {
-  let request =
-    nip46_client.request_event(
-      client,
-      signer,
-      nip46_client.request_body(
-        "sign-" <> int.to_string(attempt),
-        "sign_event",
-        "[\"{\\\"kind\\\":1,\\\"content\\\":\\\"hi\\\"}\"]",
-      ),
-      time.now_seconds(),
+  let body =
+    nip46_client.request_body(
+      "sign-" <> int.to_string(attempt),
+      "sign_event",
+      sign_note_params,
     )
-  relay_client.publish(connection, request)
-  let assert Ok(ack) = process.receive(acks, ack_timeout_ms)
-  assert ack.accepted
-  case process.receive(events, response_timeout_ms), attempt < 3 {
-    Ok(response), _ -> nip46_client.decrypt_response(client, signer, response)
+  case
+    publish_and_await(connection, client, signer, body, events, acks),
+    attempt < 3
+  {
+    Ok(response), _ -> response
     Error(Nil), True ->
       call_retrying(connection, client, signer, events, acks, attempt + 1)
     Error(Nil), False -> panic as "no response to sign_event over the relay"
@@ -403,8 +364,7 @@ fn connect_client(
   connection
 }
 
-/// `client` から `signer` 宛てに `body` を要求として送り、OK の受理を確かめてから
-/// 応答を復号した本文を返す。
+/// `publish_and_await` の応答の本文を返す。応答が届かなければ失敗する。
 fn call(
   connection: relay_client.Client,
   client: Account,
@@ -413,11 +373,46 @@ fn call(
   events: Subject(Event),
   acks: Subject(relay_client.Acknowledgement),
 ) -> String {
+  let assert Ok(response) =
+    publish_and_await(connection, client, signer, body, events, acks)
+  response
+}
+
+/// `client` から `signer` 宛てに `body` を要求として送り、OK の受理を確かめてから
+/// 応答を待つ。`response_timeout_ms` 内に届けば復号した本文を、届かなければ
+/// `Error(Nil)` を返す。
+fn publish_and_await(
+  connection: relay_client.Client,
+  client: Account,
+  signer: Account,
+  body: String,
+  events: Subject(Event),
+  acks: Subject(relay_client.Acknowledgement),
+) -> Result(String, Nil) {
   let request =
     nip46_client.request_event(client, signer, body, time.now_seconds())
   relay_client.publish(connection, request)
   let assert Ok(ack) = process.receive(acks, ack_timeout_ms)
   assert ack.accepted
-  let assert Ok(response) = process.receive(events, response_timeout_ms)
-  nip46_client.decrypt_response(client, signer, response)
+  process.receive(events, response_timeout_ms)
+  |> result.map(nip46_client.decrypt_response(client, signer, _))
+}
+
+/// `name` のバンカーの発行先に `relay_url` があるかどうかが `present` になるまで
+/// 5 秒待ち、揃わなければ失敗する。
+fn await_publisher(
+  name: Name(bunker.Msg),
+  relay_url: String,
+  present present: Bool,
+) -> Nil {
+  assert poll.until(
+    fn() {
+      case bunker.publisher_urls(name) {
+        Some(urls) -> list.contains(urls, relay_url) == present
+        None -> False
+      }
+    },
+    5000,
+    50,
+  )
 }
