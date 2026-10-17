@@ -1,6 +1,6 @@
-//// 監視の用途のリレーへの使い捨ての取得の問い合わせ。リレー 1 本ごとに接続を開いて REQ を 1 件
-//// 送り、EOSE か期限まで集めて閉じる。集めたイベントから作者ごとの最新の 1 件も選ぶ。
-//// 失敗の理由の文字列は、監視の用途のリレーへの送信の失敗にも同じものを使うので公開する。
+//// 監視の用途のリレーの一覧の取得と、そのリレーへの使い捨ての取得の問い合わせ。リレー 1 本ごとに
+//// 接続を開いて REQ を 1 件送り、EOSE か期限まで集めて閉じる。集めたイベントから作者ごとの最新の
+//// 1 件も選ぶ。
 
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/list
@@ -13,9 +13,10 @@ import nostr_no_su/relay_list
 import nostr_no_su/task
 
 /// 接続を開いてから応答を集め終えるまでの時間の上限（ミリ秒）。`relay_client` の
-/// `connect_timeout_ms`（3000ms）を含む。リレー 1 本ごとに並行に開くので本数には
-/// 比例しない。`plugin_page_content` の 1 回の期限（5 秒）に収まるよう、
-/// `close_timeout_ms` と `gather_margin_ms` を足しても 5 秒を割る値にする。
+/// `connect_timeout_ms`（3000ms）を含む。リレー 1 本ごとに並行に開くので、リレーの
+/// 本数には比例しない。`plugin_page_content` の 1 回の呼び出しの期限
+/// （`plugin.default_call_timeout_ms`）に収まるよう、`close_timeout_ms` と
+/// `task.gather_margin_ms` を足してもその期限を割る値にする。
 const fetch_timeout_ms = 3000
 
 /// 集め終えた使い捨ての接続に購読の CLOSE と close フレームを送らせてから、
@@ -23,52 +24,58 @@ const fetch_timeout_ms = 3000
 /// （`relay_client.disconnect`）。取得の期限にはこの時間を足す。
 const close_timeout_ms = 100
 
-/// `fetch_timeout_ms` と `close_timeout_ms` に足す余裕。問い合わせを行う使い捨て
-/// プロセスの結果を取りこぼさないためのもの。
-const gather_margin_ms = 200
-
 /// 監視の用途のリレーが一覧に無いときの理由。
-pub const no_monitor_relay_registered = "no monitor relay is registered"
+const no_monitor_relay_registered = "no monitor relay is registered"
 
 /// 監視の用途のリレーはあるが、送信では生きたソケットに 1 本も渡せず、取得では
 /// 1 本とも接続できず、または期限までに応答しなかったときの理由。
 pub const no_monitor_relay_connected = "no monitor relay is connected"
 
 /// リレーの一覧を持つアクターが応答しないときの理由。
-pub const relay_list_not_responding = "the relay list is not responding"
+const relay_list_not_responding = "the relay list is not responding"
 
 /// 使い捨ての接続の上だけで使う購読 id。
 pub const fetch_subscription_id = "nostr-no-su-plugin-fetch"
 
-/// 監視の用途のリレー 1 本ごとに `query` を 1 回、`task.map_within` で並行に行い、
-/// 共通の期限まで待つ。一覧が引けなければ `relay_list_not_responding`、監視の
-/// 用途のリレーが無ければ `no_monitor_relay_registered`、1 本も応答しなかった
-/// （`relay_client.start` が失敗した本と、期限までに EOSE が届かなかった本を
-/// 数える）なら `no_monitor_relay_connected` を返す。成功のときは、応答した本の
-/// イベントをリレーの一覧の順に、同じリレーの中では届いた順に並べて返す。
+/// 監視の用途のリレーの接続を、一覧の順に返す。一覧が引けなければ
+/// `relay_list_not_responding`、監視の用途のリレーが無ければ
+/// `no_monitor_relay_registered` を返す。
+pub fn monitor_connections(
+  relay_list_name: Name(relay_list.Msg),
+) -> Result(List(relay_list.Connection), String) {
+  use entries <- result.try(
+    relay_list.entries(relay_list_name)
+    |> result.replace_error(relay_list_not_responding),
+  )
+  case relay_list.connections(entries, relay_list.Monitor) {
+    [] -> Error(no_monitor_relay_registered)
+    connections -> Ok(connections)
+  }
+}
+
+/// 監視の用途のリレーすべてに、`authors` の名義の `kind` のイベントを並行に
+/// 問い合わせる。成功のときは、応答した本のイベントをリレーの一覧の順に、同じ
+/// リレーの中では届いた順に並べて返す。`monitor_connections` の理由のほか、1 本も
+/// 応答しなかった（`relay_client.start` が失敗した本と、期限までに EOSE が届かなかった
+/// 本を数える）ときは `no_monitor_relay_connected` を返す。
 pub fn ask_monitor_relays(
   relay_list_name: Name(relay_list.Msg),
   authors: List(String),
   kind: Int,
 ) -> Result(List(Event), String) {
-  use entries <- result.try(
-    relay_list.entries(relay_list_name)
-    |> result.replace_error(relay_list_not_responding),
-  )
-  case relay_list.urls(entries, relay_list.Monitor) {
-    [] -> Error(no_monitor_relay_registered)
-    urls -> {
-      let deadline = task.deadline_in(fetch_timeout_ms)
-      let await_deadline =
-        task.deadline_in(fetch_timeout_ms + close_timeout_ms + gather_margin_ms)
-      let outcomes =
-        task.map_within(urls, await_deadline, query(_, authors, kind, deadline))
-        |> list.map(result.flatten)
-      case result.values(outcomes) {
-        [] -> Error(no_monitor_relay_connected)
-        found -> Ok(list.flatten(found))
-      }
-    }
+  use connections <- result.try(monitor_connections(relay_list_name))
+  let urls = list.map(connections, fn(connection) { connection.url })
+  let deadline = task.deadline_in(fetch_timeout_ms)
+  let await_deadline =
+    task.deadline_in(
+      fetch_timeout_ms + close_timeout_ms + task.gather_margin_ms,
+    )
+  let outcomes =
+    task.map_within(urls, await_deadline, query(_, authors, kind, deadline))
+    |> list.map(result.flatten)
+  case result.values(outcomes) {
+    [] -> Error(no_monitor_relay_connected)
+    found -> Ok(list.flatten(found))
   }
 }
 
@@ -103,16 +110,10 @@ fn fetch_filter(authors: List(String), kind: Int) -> Filter {
   )
 }
 
-/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。接続を開き、`authors` の
-/// 名義の `kind` のイベントを求める REQ（`fetch_filter`）を 1 件送り、`Ended`
-/// （EOSE）を受けるか期限に達するまで集め、`relay_client.disconnect` で購読の
-/// CLOSE と close フレームを送って接続を閉じる（`close_timeout_ms` までに止まら
-/// なければ kill する）。届くイベントは `handle_incoming` が作者が `authors` に
-/// あり `kind` が一致するものだけを `Found` にする。`collect` が `Ended` を受けずに
-/// 期限に達したときは、集めたイベントを捨てて `Error(Nil)` を返す（保存済みの
-/// イベントの直後に EOSE が届くので、期限までに EOSE が無い本は応答しなかった本
-/// として数える）。
-/// `relay_client.start` が失敗したときも `Error(Nil)`。
+/// 監視の用途のリレー 1 本への使い捨ての問い合わせ。`Ended`（EOSE）を受けたときだけ
+/// 集めたイベントを `Ok` で返し、期限に達したときと `relay_client.start` が失敗した
+/// ときは `Error(Nil)` を返す。保存済みのイベントの直後に EOSE が届くので、期限までに
+/// EOSE が無い本は応答しなかった本として数える。
 fn query(
   url: String,
   authors: List(String),

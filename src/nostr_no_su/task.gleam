@@ -1,10 +1,15 @@
 //// 仕事を別プロセスで走らせ、共通の締め切りまで待つ。締め切り（`Deadline`）と
-//// その残り時間、締め切りまでの subject からの受信、項目ごとの並行な実行を持つ。
+//// その残り時間、締め切りまでの subject からの受信、項目ごとの並行な実行、待つ側の期限に
+//// 足す余裕（`gather_margin_ms`）を持つ。
 
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/list
 import nostr_no_su/time
+
+/// 別プロセスの仕事の期限に足して、待つ側の期限にする余裕（ミリ秒）。仕事が期限の
+/// 直前に返した結果を、待つ側が取りこぼさないためのもの。
+pub const gather_margin_ms = 200
 
 /// `monotonic_ms` の目盛りでの期限。
 pub opaque type Deadline {
