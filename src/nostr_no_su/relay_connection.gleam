@@ -262,7 +262,13 @@ fn open(state: State) -> actor.Next(State, Msg) {
 /// 続く間はログを出さない。
 fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   state.settings.on_disconnect()
-  let base_ms = base_delay(state)
+  let base_ms =
+    next_base_delay(
+      state.connected_at_ms,
+      time.monotonic_ms(),
+      state.delay_ms,
+      state.settings,
+    )
   let delay = backoff.jittered(base_ms)
   case reconnect_report(state.failure, reason, delay) {
     Some(line) ->
@@ -281,15 +287,21 @@ fn reconnect(state: State, reason: String) -> actor.Next(State, Msg) {
   )
 }
 
-/// 次の試行までの、ジッターを掛ける前の待ち時間。
-fn base_delay(state: State) -> Int {
-  let lasted = case state.connected_at_ms {
-    Some(at_ms) -> time.monotonic_ms() - at_ms >= state.settings.stable_after_ms
+/// 次の試行までの、ジッターを掛ける前の待ち時間。`delay_ms` は今の待ち、
+/// `connected_at_ms` と `now_ms` は `time.monotonic_ms` の目盛りの時刻。
+pub fn next_base_delay(
+  connected_at_ms: Option(Int),
+  now_ms: Int,
+  delay_ms: Int,
+  settings: Settings,
+) -> Int {
+  let lasted = case connected_at_ms {
+    Some(at_ms) -> now_ms - at_ms >= settings.stable_after_ms
     None -> False
   }
   case lasted {
-    True -> state.settings.reconnect_delay.initial_ms
-    False -> state.delay_ms
+    True -> settings.reconnect_delay.initial_ms
+    False -> delay_ms
   }
 }
 

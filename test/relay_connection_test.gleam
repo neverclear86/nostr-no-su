@@ -84,22 +84,34 @@ fn start_with_delay(
   stable_after_ms: Int,
 ) -> Pid {
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Settings(
-      name: name,
-      relay: "wss://relay.test",
-      connect: connect,
-      on_connect: fn(_socket) { process.send(reports, Rewired) },
-      on_disconnect: fn() { process.send(reports, Unwired) },
-      reconnect_delay: reconnect_delay,
-      stable_after_ms: stable_after_ms,
+    relay_connection.start(settings(
+      name,
+      reports,
+      connect,
+      reconnect_delay,
+      stable_after_ms,
     ))
   started.pid
 }
 
-/// 接続の試行の回数を 0 から数え、呼ぶ前の値を返す。接続関数は接続アクターの
-/// プロセスで呼ばれる。
-@external(erlang, "subscription_counter", "next")
-fn next_attempt() -> Int
+/// 再配線のたびに報告する接続の設定。
+fn settings(
+  name: Name(relay_connection.Msg),
+  reports: Subject(Report),
+  connect: relay_connection.Connector,
+  reconnect_delay: backoff.Backoff,
+  stable_after_ms: Int,
+) -> relay_connection.Settings {
+  relay_connection.Settings(
+    name: name,
+    relay: "wss://relay.test",
+    connect: connect,
+    on_connect: fn(_socket) { process.send(reports, Rewired) },
+    on_disconnect: fn() { process.send(reports, Unwired) },
+    reconnect_delay: reconnect_delay,
+    stable_after_ms: stable_after_ms,
+  )
+}
 
 /// 接続アクターを停止する。テストプロセスにリンクしているため、先にリンクを
 /// 解除しないとアクターと一緒にテストも落ちる。
@@ -341,46 +353,22 @@ pub fn the_reconnect_delay_grows_while_connections_drop_right_away_test() {
   stop(actor)
 }
 
-/// 接続が一定の時間続いた後に切れると、再接続までの待ち時間は初期値に戻る。
-pub fn a_lasting_connection_resets_the_reconnect_delay_test() {
-  let reports = process.new_subject()
-  let connect = fn() {
-    case next_attempt() {
-      0 | 1 | 2 -> {
-        process.send(reports, Refused)
-        Error("connection refused")
-      }
-      _ -> {
-        let socket = spawn_socket(reports)
-        process.send(reports, Connected(socket.pid))
-        Ok(socket)
-      }
-    }
-  }
-  let actor =
-    start_with_delay(
+/// 接続が `stable_after_ms` 以上続いた後に切れたときだけ、待ちを初期値に戻す。
+/// ソケットを持たなかった（接続に失敗した）ときは今の待ちのまま。
+pub fn next_base_delay_resets_only_after_a_lasting_connection_test() {
+  let settings =
+    settings(
       process.new_name("test_relay"),
-      reports,
-      connect,
+      process.new_subject(),
+      refuses(process.new_subject()),
       Backoff(initial_ms: 100, max_ms: 3200),
       200,
     )
-  assert process.receive(reports, 1000) == Ok(Refused)
-  let assert Ok(Unwired) = process.receive(reports, 1000)
-  assert process.receive(reports, 1000) == Ok(Refused)
-  let assert Ok(Unwired) = process.receive(reports, 1000)
-  assert process.receive(reports, 1000) == Ok(Refused)
-  let assert Ok(Unwired) = process.receive(reports, 1000)
-  let assert Ok(Connected(socket)) = process.receive(reports, 2000)
-  let assert Ok(Rewired) = process.receive(reports, 1000)
-
-  process.sleep(400)
-  process.kill(socket)
-  let assert Ok(Unwired) = process.receive(reports, 1000)
-  // 待ち時間が初期値に戻っていれば 400ms 以内に再接続する
-  // （戻さなければ基準値 800ms、下限 640ms）。
-  let assert Ok(Connected(_reconnected)) = process.receive(reports, 400)
-  stop(actor)
+  assert relay_connection.next_base_delay(Some(1000), 1200, 800, settings)
+    == 100
+  assert relay_connection.next_base_delay(Some(1000), 1199, 800, settings)
+    == 800
+  assert relay_connection.next_base_delay(None, 1200, 800, settings) == 800
 }
 
 /// 再接続の失敗ログは、直前の失敗と理由が同じなら間引き、理由が変わったときと
