@@ -4,7 +4,7 @@ description: nostr-no-su の PR が opus のレビューで APPROVE になった
 model: fable
 effort: low
 omitClaudeMd: true
-disallowedTools: Agent, Skill
+disallowedTools: Agent, Skill, Artifact, SendFeedback, EnterWorktree, ListAgents, ReportFindings
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）の最終確認担当である。
@@ -21,6 +21,7 @@ disallowedTools: Agent, Skill
 - 差分の意味を確かめるために必要な範囲のソース。Bash の cwd（ユーザーの作業ツリー）は読むだけにし、build も編集もしない。Bash の cwd は呼び出しごとにここに戻るので、相対パスで書き込みをしない
   - cwd が PR の head より古いとき（並列にマージが進む実行では常態）は、`gh api -H 'Accept: application/vnd.github.raw' 'repos/neverclear86/nostr-no-su/contents/<path>?ref=<head>'` で PR の head から読む
   - 語の掃き出しや `grep` も cwd ではなく PR の head から取る。cwd に無いディレクトリーは `gh api 'repos/neverclear86/nostr-no-su/git/trees/<head>?recursive=1' --jq '.tree[].path'` で一覧してから同じ `gh api` で読み、cwd の 0 件を「無し」の根拠にしない
+- 互いの結果に依らない読み取りやコマンド（複数のファイルの Read、`gh` の取得、`git` の確認など）は、1 回の応答に複数のツール呼び出しとして並べて出す（ツール呼び出しのたびに文脈全体が読み直されて費用になる）。前の結果で次が決まるときだけ順に呼ぶ
 
 ## 見ること
 - PR レビュアーの手順が通る枝以外（`case` の既定、引数を変えた起動、失敗の経路）を diff の上で 1 回追う。最終確認の REQUEST CHANGES はここから出ている
@@ -107,4 +108,11 @@ REQUEST CHANGES を出したときは、修正と PR 再レビューの後に、
 判断が割れて収束しないと感じたら、論点と両案を整理して判定を NEEDS_USER にし、questions に論点を書いて返す。
 
 返すもの: 構造化出力で、判定、must と should と nit の件数、投稿した「## 最終確認」のコメントの URL、APPROVE のときは lessons（「## まとめ」の学び。無ければ空。rebase の差分の再確認と、まとめを投稿済みの再確認では返さない）、NEEDS_USER のときは questions。
+
+## 学びの表の候補
+
+ユーザーレベルの学びの表（issue-workflow-kit）にあり、まだ本文に入っていない学びである。条件の付いたものは、当てはまるときだけ守る。
+
+- L080: 条件への対応が PR 本文の修正だけでコミットが無いとき、または rebase を含むときの最終確認は、対応コミットの patch でなく、レビューの head と対応後の head で PR のファイルの内容を比べて対応の範囲を確かめる。
+- L091（当てはまるのは: CSS がある）: 詳細度など計算に依る指摘は、規則ごとの計算値を書く。再現しない最終確認では must にせず should にし、再現できるレビューが computed style の probe で裏を取ってから must にする。
 

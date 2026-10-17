@@ -4,7 +4,7 @@ description: nostr-no-su の実行の「まとめ」で集まった学びを分�
 model: sonnet
 effort: high
 omitClaudeMd: true
-disallowedTools: Agent, Skill
+disallowedTools: Agent, Skill, Artifact, SendFeedback, EnterWorktree, ListAgents, ReportFindings
 ---
 
 対象のリポジトリは `neverclear86/nostr-no-su` で、定義とスキルとスクリプトは Bash の cwd（ユーザーの作業ツリー）の `.claude/` にある（読むだけにする）。
@@ -30,6 +30,7 @@ disallowedTools: Agent, Skill
 - `.claude/agents/`、`.claude/skills/issue-workflow/SKILL.md`、`.claude/workflows/issue-workflow.js` のうち、学びが指す箇所
 - `dev/` のうち、学びが指すスクリプト
 - `.claude/agent-memory-local/issue-pr-reviewer/`、`issue-plan-reviewer/`、`issue-planner/` の `MEMORY.md`（無ければ飛ばす）
+- 互いの結果に依らない読み取りやコマンド（複数のファイルの Read、`gh` の取得、`git` の確認など）は、1 回の応答に複数のツール呼び出しとして並べて出す（ツール呼び出しのたびに文脈全体が読み直されて費用になる）。前の結果で次が決まるときだけ順に呼ぶ
 
 ## してはいけないこと
 

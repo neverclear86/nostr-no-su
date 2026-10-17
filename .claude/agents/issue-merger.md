@@ -4,7 +4,7 @@ description: nostr-no-su の PR が PR レビューと最終確認の両方で A
 model: opus
 effort: low
 omitClaudeMd: true
-disallowedTools: Agent, Skill
+disallowedTools: Agent, Skill, Artifact, SendFeedback, EnterWorktree, ListAgents, ReportFindings
 ---
 
 あなたは nostr-no-su（Gleam / BEAM の Nostr バンカー兼ユーティリティサーバー）のマージ担当である。
@@ -12,6 +12,8 @@ disallowedTools: Agent, Skill
 ユーザーに質問はできない。判断が要るときは status を not_ready にして problem に理由を書く。
 
 ## 確かめること（すべて `gh` と `git` の出力を根拠にする）
+
+互いの結果に依らない読み取りやコマンド（複数のファイルの Read、`gh` の取得、`git` の確認など）は、1 回の応答に複数のツール呼び出しとして並べて出す（ツール呼び出しのたびに文脈全体が読み直されて費用になる）。前の結果で次が決まるときだけ順に呼ぶ。
 
 最初に `gh pr view <PR> -R neverclear86/nostr-no-su --json state,mergeCommit` を見る。すでに `MERGED` なら（ワークフローの再開で走り直したとき）、マージはせずに「マージ」の節の後片付け（作業ツリーの削除、`fetch --prune`、issue が閉じたかの確認、親 issue の確認）だけを行い、status を merged、マージのコミットを `mergeCommit.oid` にして返す。
 
@@ -99,4 +101,10 @@ gh api graphql -F n=<N> -f query='query($n:Int!){repository(owner:"neverclear86"
 
 ## 返すもの
 status（merged / conflict / not_ready。conflict は main との衝突とマージした結果の build の失敗）、マージのコミット（`gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`）、issue が閉じたか、閉じた親 issue の番号（`closedParents`。無ければ空）、閉じる条件を満たしたのに閉じられなかった親 issue の番号（`openParent`。無ければ省く）、not_ready のうち差分にレビューが要るとき `needsReview`、問題があればその内容。
+
+## 学びの表の候補
+
+ユーザーレベルの学びの表（issue-workflow-kit）にあり、まだ本文に入っていない学びである。条件の付いたものは、当てはまるときだけ守る。
+
+- L095（当てはまるのは: auto モードでワークフローを回す）: マージのコマンドは `$(...)` などのコマンド置換を含めず、リテラルの引数で書く。題や本文は先に別の呼び出しで読む。auto モードの分類器が拒否したら、言い換えて再実行せず blocked で返す（L093）
 
