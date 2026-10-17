@@ -775,13 +775,9 @@ pub fn sync_a_failed_retry_reserves_a_new_generation_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: dict.from_list([#(bunker, bunker_filter())]),
-        retry: Some(5),
+        ..state_with([bunker], Some(5)),
         next_generation: 6,
         delay_ms: 200,
-        closed_delay_ms: 100,
-        suspended: set.new(),
-        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -816,13 +812,9 @@ pub fn sync_a_failed_request_keeps_the_open_subscriptions_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: dict.from_list([#(bunker, bunker_filter())]),
-        retry: Some(5),
+        ..state_with([bunker], Some(5)),
         next_generation: 6,
         delay_ms: 200,
-        closed_delay_ms: 100,
-        suspended: set.new(),
-        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -896,13 +888,9 @@ pub fn sync_a_successful_evaluation_resets_the_delay_test() {
   let calls = process.new_subject()
   let state =
     SubscriptionState(
-      open: dict.new(),
-      retry: None,
-      next_generation: 5,
+      ..state_with([], None),
       delay_ms: 400,
       closed_delay_ms: 400,
-      suspended: set.new(),
-      answers_auth: False,
     )
   let synced =
     relay_client.sync(state, Requested, reporting(calls, Ok([])), retry)
@@ -924,13 +912,9 @@ pub fn sync_a_closed_subscription_is_removed_and_reserved_test() {
   assert synced
     == Sync(
       state: SubscriptionState(
-        open: dict.new(),
-        retry: Some(5),
+        ..state_with([], Some(5)),
         next_generation: 6,
-        delay_ms: 100,
         closed_delay_ms: 200,
-        suspended: set.new(),
-        answers_auth: False,
       ),
       messages: [],
       schedule_retry: Some(Reservation(generation: 5, delay_ms: 100)),
@@ -949,19 +933,7 @@ pub fn sync_a_closed_subscription_keeps_the_current_reservation_test() {
       retry,
     )
   assert synced
-    == Sync(
-      state: SubscriptionState(
-        open: dict.new(),
-        retry: Some(1),
-        next_generation: 5,
-        delay_ms: 100,
-        closed_delay_ms: 100,
-        suspended: set.new(),
-        answers_auth: False,
-      ),
-      messages: [],
-      schedule_retry: None,
-    )
+    == Sync(state: state_with([], Some(1)), messages: [], schedule_retry: None)
   assert !evaluated(calls)
 }
 
@@ -1022,13 +994,9 @@ pub fn sync_a_successful_retry_keeps_the_closed_delay_test() {
   let synced =
     relay_client.sync(
       SubscriptionState(
-        open: dict.new(),
-        retry: Some(1),
-        next_generation: 5,
+        ..state_with([], Some(1)),
         delay_ms: 400,
         closed_delay_ms: 400,
-        suspended: set.new(),
-        answers_auth: False,
       ),
       Retried(1),
       reporting(calls, Ok([#(bunker, bunker_filter())])),
@@ -1045,15 +1013,7 @@ pub fn sync_a_failed_definition_after_closes_uses_its_own_delay_test() {
   let calls = process.new_subject()
   let synced =
     relay_client.sync(
-      SubscriptionState(
-        open: dict.new(),
-        retry: Some(1),
-        next_generation: 5,
-        delay_ms: 100,
-        closed_delay_ms: 400,
-        suspended: set.new(),
-        answers_auth: False,
-      ),
+      SubscriptionState(..state_with([], Some(1)), closed_delay_ms: 400),
       Retried(1),
       reporting(calls, Error(Nil)),
       retry,
@@ -1253,12 +1213,7 @@ fn connect(
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      relay_client.Handlers(
-        subscriptions:,
-        handle_incoming: fn(_event) { Nil },
-        handle_ok: fn(_ack) { Nil },
-        authenticator:,
-      ),
+      relay_client.Handlers(..silent_handlers(), subscriptions:, authenticator:),
       relay_client.Timing(..relay_client.default_timing, retry_delay:),
     )
   client
@@ -1550,6 +1505,7 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
     relay_client.start(
       relay.url,
       relay_client.Handlers(
+        ..silent_handlers(),
         subscriptions: fn() { Ok([#(bunker, filter.new())]) },
         handle_incoming: fn(received_msg) {
           case received_msg {
@@ -1558,8 +1514,6 @@ pub fn a_frame_under_the_receive_limit_is_received_test() {
             relay_client.ReceivedEose(_) -> Nil
           }
         },
-        handle_ok: fn(_ack) { Nil },
-        authenticator: None,
       ),
       relay_client.default_timing,
     )
@@ -1632,12 +1586,9 @@ pub fn start_passes_an_ok_from_the_relay_to_handle_ok_test() {
   let assert Ok(client) =
     relay_client.start(
       relay.url,
-      relay_client.Handlers(
-        subscriptions: fn() { Ok([]) },
-        handle_incoming: fn(_event) { Nil },
-        handle_ok: process.send(acks, _),
-        authenticator: None,
-      ),
+      relay_client.Handlers(..silent_handlers(), handle_ok: fn(ack) {
+        process.send(acks, ack)
+      }),
       relay_client.default_timing,
     )
 
@@ -1672,12 +1623,7 @@ fn open_socket(
 ) -> Result(relay_connection.Socket, String) {
   use connection <- result.try(relay_client.start(
     url,
-    relay_client.Handlers(
-      subscriptions: fn() { Ok([]) },
-      handle_incoming: fn(_event) { Nil },
-      handle_ok: fn(_ack) { Nil },
-      authenticator: None,
-    ),
+    silent_handlers(),
     relay_client.Timing(
       ..relay_client.default_timing,
       keepalive_interval_ms: interval_ms,
@@ -1743,12 +1689,9 @@ pub fn disconnect_sends_close_and_a_close_frame_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      relay_client.Handlers(
-        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
-        handle_incoming: fn(_event) { Nil },
-        handle_ok: fn(_ack) { Nil },
-        authenticator: None,
-      ),
+      relay_client.Handlers(..silent_handlers(), subscriptions: fn() {
+        Ok([#(bunker, filter.new())])
+      }),
       relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, req)) = process.receive(frames, 2000)
@@ -1776,12 +1719,9 @@ pub fn disconnect_kills_a_client_that_does_not_stop_in_time_test() {
   let assert Ok(client) =
     relay_client.start(
       url,
-      relay_client.Handlers(
-        subscriptions: fn() { Ok([#(bunker, filter.new())]) },
-        handle_incoming: fn(_event) { Nil },
-        handle_ok: fn(_ack) { Nil },
-        authenticator: None,
-      ),
+      relay_client.Handlers(..silent_handlers(), subscriptions: fn() {
+        Ok([#(bunker, filter.new())])
+      }),
       relay_client.default_timing,
     )
   let assert Ok(frame_server.Frame(1, _req)) = process.receive(frames, 2000)
