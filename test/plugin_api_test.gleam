@@ -586,12 +586,12 @@ pub fn fetch_event_closes_the_subscription_and_the_websocket_test() {
   let bunker_name = start_signed_in_bunker()
   let frames = process.new_subject()
   let url =
-    frame_server.start(frames, fn(text) {
-      case string.starts_with(text, "[\"REQ\"") {
-        True -> ["[\"EOSE\",\"nostr-no-su-plugin-fetch\"]"]
-        False -> []
-      }
-    })
+    frame_server.start(
+      frames,
+      loopback_relay.replies_to("[\"REQ\"", [
+        "[\"EOSE\",\"nostr-no-su-plugin-fetch\"]",
+      ]),
+    )
   let relay_list_name =
     start_relay_list([
       relay_list.Entry(
