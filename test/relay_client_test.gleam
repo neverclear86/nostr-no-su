@@ -32,6 +32,7 @@ import nostr_no_su/relay_client.{
 }
 import nostr_no_su/relay_connection
 import stratus
+import support/connection_settings
 import support/frame_server
 import support/log_capture
 import support/loopback_relay.{
@@ -1509,10 +1510,10 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
   let relay =
     start_sending_relay(connections, stratus.max_buffer_bytes + 1, "[]")
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Settings(
-      name: process.new_name("receive_limit"),
-      relay: relay.url,
-      connect: fn() {
+    relay_connection.start(connection_settings.new(
+      process.new_name("receive_limit"),
+      relay.url,
+      fn() {
         app.open_websocket(
           relay.url,
           fn() { Ok([#(bunker, filter.new())]) },
@@ -1521,10 +1522,7 @@ pub fn a_frame_over_the_receive_limit_reconnects_test() {
           None,
         )
       },
-      on_connect: fn(_socket) { Nil },
-      on_disconnect: fn() { Nil },
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      stable_after_ms: relay_connection.default_stable_after_ms,
+      Backoff(initial_ms: 100, max_ms: 100),
     ))
 
   assert process.receive(connections, 2000) == Ok(Nil)
@@ -1584,10 +1582,10 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
     )
   let url = "ws://127.0.0.1:" <> int.to_string(port)
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Settings(
-      name: process.new_name("handshake_body_limit"),
-      relay: url,
-      connect: fn() {
+    relay_connection.start(connection_settings.new(
+      process.new_name("handshake_body_limit"),
+      url,
+      fn() {
         app.open_websocket(
           url,
           fn() { Ok([#(bunker, filter.new())]) },
@@ -1596,10 +1594,7 @@ pub fn a_handshake_body_over_the_receive_limit_reconnects_test() {
           None,
         )
       },
-      on_connect: fn(_socket) { Nil },
-      on_disconnect: fn() { Nil },
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      stable_after_ms: relay_connection.default_stable_after_ms,
+      Backoff(initial_ms: 100, max_ms: 100),
     ))
 
   assert process.receive(connections, 2000) == Ok(Nil)
@@ -1705,15 +1700,17 @@ pub fn a_silent_relay_is_closed_and_reconnected_test() {
     )
 
   let assert Ok(started) =
-    relay_connection.start(relay_connection.Settings(
-      name: process.new_name("half_open"),
-      relay: relay.url,
-      connect: fn() { open_socket(relay.url, 200) },
-      on_connect: fn(_socket) { Nil },
-      on_disconnect: fn() { process.send(disconnects, Nil) },
-      reconnect_delay: Backoff(initial_ms: 100, max_ms: 100),
-      stable_after_ms: relay_connection.default_stable_after_ms,
-    ))
+    relay_connection.start(
+      relay_connection.Settings(
+        ..connection_settings.new(
+          process.new_name("half_open"),
+          relay.url,
+          fn() { open_socket(relay.url, 200) },
+          Backoff(initial_ms: 100, max_ms: 100),
+        ),
+        on_disconnect: fn() { process.send(disconnects, Nil) },
+      ),
+    )
 
   let assert Ok(first_pid) = process.receive(connection_pids, 2000)
 
