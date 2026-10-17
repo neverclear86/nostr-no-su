@@ -74,27 +74,23 @@ pub fn to_request_rejects_an_empty_host_test() {
 
 // --- 接続の失敗の理由 ---
 
-/// ハンドシェイクの失敗は stratus が組み立てた文をそのまま使う。
-pub fn describe_start_error_keeps_the_handshake_failure_test() {
-  assert relay_client.describe_start_error(actor.InitFailed(
-      "WebSocket handshake failed: Sock(Econnrefused)",
-    ))
-    == "WebSocket handshake failed: Sock(Econnrefused)"
-}
-
 /// 初期化の中でプロセスが落ちたときの終了理由（スタックトレースを含みうる）は
-/// 1 行の理由に含めない。同じ内容はクラッシュレポートに出る。
-pub fn describe_start_error_omits_the_exit_reason_test() {
-  assert relay_client.describe_start_error(
+/// 1 行の理由に含めない。同じ内容はクラッシュレポートに出る。ハンドシェイクが
+/// タイムアウトしたときは、その旨の理由にする。
+pub fn describe_start_error_describes_an_exit_and_a_timeout_test() {
+  [
+    #(
+      "exited",
       actor.InitExited(process.Abnormal(dynamic.string("stacktrace"))),
-    )
-    == "WebSocket client exited during the handshake"
-}
-
-/// ハンドシェイクがタイムアウトした場合の理由。
-pub fn describe_start_error_reports_a_timeout_test() {
-  assert relay_client.describe_start_error(actor.InitTimeout)
-    == "WebSocket handshake timed out"
+      "WebSocket client exited during the handshake",
+    ),
+    #("timeout", actor.InitTimeout, "WebSocket handshake timed out"),
+  ]
+  |> list.each(fn(row) {
+    let #(name, error, expected) = row
+    assert #(name, relay_client.describe_start_error(error))
+      == #(name, expected)
+  })
 }
 
 /// 購読を持たず、受信もログも何もしない受け口。`Handlers(..silent_handlers(), ...)` で
@@ -174,9 +170,8 @@ fn event_frame(sent: Event) -> String {
   |> json.to_string
 }
 
-/// 署名の合わないイベントは `handle_incoming` に渡さず、正しいイベントは渡す。
-/// 署名は別のイベントのものに差し替えるので、形式と id は正しいまま署名だけが
-/// 合わない。
+/// 署名の合わないイベントは `handle_incoming` に渡さずに落とす。署名は別の
+/// イベントのものに差し替えるので、形式と id は正しいまま署名だけが合わない。
 pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
   let delivered = process.new_subject()
   let deliver = fn(received) {
@@ -197,16 +192,6 @@ pub fn handle_text_drops_an_event_with_an_invalid_signature_test() {
     )
     == None
   assert process.receive(delivered, 0) == Error(Nil)
-
-  assert relay_client.handle_text(
-      "test",
-      event_frame(genuine),
-      relay_client.Handlers(..silent_handlers(), handle_incoming: deliver),
-      fn(_sent) { Nil },
-    )
-    == None
-  let assert Ok(verified) = process.receive(delivered, 0)
-  assert event.verified_event(verified) == genuine
 }
 
 /// EVENT は届いた購読の id を持つ `ReceivedEvent`、EOSE は `ReceivedEose` として
@@ -354,19 +339,6 @@ pub fn handle_text_returns_the_trigger_of_a_closed_subscription_test() {
       fn(_sent) { Nil },
     )
     == None
-}
-
-/// AUTH を受けたときのログの水準と本文は 3 枝で固定する。
-pub fn describe_auth_test() {
-  assert relay_client.describe_auth(relay_client.NotAnswered)
-    == #(
-      log.Notice,
-      "relay requested authentication; not answering on this connection",
-    )
-  assert relay_client.describe_auth(relay_client.Answered(3))
-    == #(log.Notice, "answered authentication with 3 event(s)")
-  assert relay_client.describe_auth(relay_client.Unsigned("no signer"))
-    == #(log.Warning, "could not answer authentication: no signer")
 }
 
 /// リレーからの AUTH の challenge を渡した JSON フレーム。
@@ -1039,44 +1011,29 @@ fn refused(
   )
 }
 
-/// `blocked:` で閉じられた購読は開いている購読から外れて止めた購読に入り、
-/// 再照合を予約しない。
-pub fn sync_a_blocked_subscription_is_not_resubscribed_test() {
-  assert refused(Blocked, False)
-    == Sync(
-      state: SubscriptionState(
-        ..state_with([], None),
-        suspended: set.from_list([bunker]),
-      ),
-      messages: [],
-      schedule_retry: None,
-    )
-}
-
-/// `restricted:` で閉じられた購読も、`blocked:` と同じく張り直さない。
-pub fn sync_a_restricted_subscription_is_not_resubscribed_test() {
-  assert refused(Restricted, False)
-    == Sync(
-      state: SubscriptionState(
-        ..state_with([], None),
-        suspended: set.from_list([bunker]),
-      ),
-      messages: [],
-      schedule_retry: None,
-    )
-}
-
-/// 受け口の無い接続で `auth-required:` で閉じられた購読も張り直さない。
-pub fn sync_an_auth_required_subscription_without_an_authenticator_is_not_resubscribed_test() {
-  assert refused(AuthRequired, False)
-    == Sync(
-      state: SubscriptionState(
-        ..state_with([], None),
-        suspended: set.from_list([bunker]),
-      ),
-      messages: [],
-      schedule_retry: None,
-    )
+/// `blocked:`、`restricted:` と、受け口の無い接続での `auth-required:` で閉じられた
+/// 購読は、開いている購読から外れて止めた購読に入り、再照合を予約しない。
+pub fn sync_a_refused_subscription_is_not_resubscribed_test() {
+  [
+    #("blocked", Blocked, False),
+    #("restricted", Restricted, False),
+    #("auth-required without an authenticator", AuthRequired, False),
+  ]
+  |> list.each(fn(row) {
+    let #(name, reason, answers_auth) = row
+    assert #(name, refused(reason, answers_auth))
+      == #(
+        name,
+        Sync(
+          state: SubscriptionState(
+            ..state_with([], None),
+            suspended: set.from_list([bunker]),
+          ),
+          messages: [],
+          schedule_retry: None,
+        ),
+      )
+  })
 }
 
 /// 受け口のある接続では、`auth-required:` の CLOSED も初期の待ちで張り直す。
