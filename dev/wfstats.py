@@ -95,13 +95,16 @@ def req_cost(r):
 
 def load_agent_jsonl(path):
     """1エージェントの transcript を読む。
-    戻り値: (requests: [{model,inp,cw,cr,out,ts}], t_min, t_max)
+    戻り値: (requests: [{model,inp,cw,cr,out,ts,tools}], t_min, t_max)
+    tools はそのリクエストの tool_use ブロックの数（1 つの応答は content ブロックごとに複数の行に分かれ、同じ id を共有するので、
+    ブロックの id で重複排除する。transcript では requestId と message.id が 1 対 1 なので、リクエストの数え方は変わらない）。
     t_min/t_max は全行（assistant 以外も含む）のタイムスタンプの範囲＝エージェントの実際の稼働時間。
     requests は assistant メッセージの usage を requestId で重複排除したもの（wfcost.py と同じロジック）。
     out は記録された output_tokens と、見えている出力の文字数 × VISIBLE_TOKENS_PER_CHAR の大きいほう。
     """
     reqs = {}
     chars = collections.Counter()
+    tool_ids = collections.defaultdict(set)
     t_min = t_max = None
     with open(path) as f:
         for line in f:
@@ -125,6 +128,7 @@ def load_agent_jsonl(path):
             rid = d.get('requestId') or m.get('id')
             for c in m.get('content') or []:
                 if isinstance(c, dict) and c.get('type') == 'tool_use':
+                    tool_ids[rid].add(c.get('id') or len(tool_ids[rid]))
                     chars[rid] += len(json.dumps(c.get('input'), ensure_ascii=False))
                 elif isinstance(c, dict) and c.get('type') == 'text':
                     chars[rid] += len(c.get('text') or '')
@@ -140,6 +144,7 @@ def load_agent_jsonl(path):
                 reqs[rid] = rec
     for rid, rec in reqs.items():
         rec['out'] = max(rec['out'], round(chars[rid] * VISIBLE_TOKENS_PER_CHAR))
+        rec['tools'] = len(tool_ids[rid])
     return list(reqs.values()), t_min, t_max
 
 
@@ -159,6 +164,19 @@ class Agent:
 
     def out_tokens(self):
         return sum(r['out'] for r in self.requests)
+
+    def tools_per_req(self):
+        """1 リクエストあたりのツール呼び出しの数。1 を大きく超えるほど、独立した呼び出しを 1 回の応答にまとめている。"""
+        if not self.requests:
+            return None
+        return sum(r.get('tools', 0) for r in self.requests) / len(self.requests)
+
+    def start_context(self):
+        """最初のリクエストが読んだ文脈（input + cache_creation + cache_read）。"""
+        if not self.requests:
+            return None
+        r = self.requests[0]
+        return r['inp'] + r['cw'] + r['cr']
 
     def duration_min(self):
         if self.t_min and self.t_max:
@@ -571,17 +589,36 @@ def section_cache(all_agents):
 # セクション6: 出力トークン
 # ---------------------------------------------------------------------------
 
+def agent_shape_medians(agents):
+    """agentType ごとに、1 体ごとの tools/req と開始時の文脈の中央値を {type: (tools/req, 開始時の文脈)} で返す。"""
+    tpr = collections.defaultdict(list)
+    ctx = collections.defaultdict(list)
+    for a in agents:
+        if a.tools_per_req() is not None:
+            tpr[a.agent_type].append(a.tools_per_req())
+            ctx[a.agent_type].append(a.start_context())
+    return {k: (statistics.median(tpr[k]), statistics.median(ctx[k])) for k in tpr}
+
+
+def fmt_shape(tools_per_req, start_context):
+    if tools_per_req is None:
+        return f"{'-':>10} {'-':>14}"
+    return f"{tools_per_req:10.2f} {start_context:14,.0f}"
+
+
 def section_output_tokens(all_agents):
     by_type = collections.defaultdict(list)
     for a in all_agents:
         by_type[a.agent_type].append(a.out_tokens())
 
     print("### agentType別: エージェントあたり出力トークン数（中央値）  [全run合算]")
-    print(f"  {'agentType':22} {'n':>6} {'中央値':>10} {'p90':>10} {'最大':>10}")
+    print(f"  {'agentType':22} {'n':>6} {'中央値':>10} {'p90':>10} {'最大':>10} {'tools/req':>10} {'開始時の文脈':>14}")
+    shape = agent_shape_medians(all_agents)
     for k in sorted(by_type, key=lambda k: -statistics.median(by_type[k])):
         vals = by_type[k]
+        tpr, ctx = shape.get(k, (None, None))
         print(f"  {k:22} {len(vals):6d} {statistics.median(vals):10.0f} "
-              f"{pct(vals,0.9):10.0f} {max(vals):10.0f}")
+              f"{pct(vals,0.9):10.0f} {max(vals):10.0f} {fmt_shape(tpr, ctx)}")
     print()
 
 
@@ -767,7 +804,21 @@ def section_brief(runs_data):
     print()
     print_models_by_type(runs_data)
     print()
+    print_shape_by_type(runs_data)
+    print()
     print("金額は API の公開価格による見積もり（dev/wfstats.py の PRICE）")
+
+
+def print_shape_by_type(runs_data):
+    """agentType 別に、1 体ごとの tools/req（ツール呼び出しの数 ÷ リクエスト数）と開始時の文脈（最初のリクエストの
+    input + cache_creation + cache_read）の中央値を出す。"""
+    agents = [a for run in runs_data for a in run['agents'].values()]
+    shape = agent_shape_medians(agents)
+    count = collections.Counter(a.agent_type for a in agents)
+    print("agentType 別のツール呼び出し数 / リクエストと開始時の文脈（1 体ごとの中央値）")
+    print(f"    {'agentType':22} {'n':>5} {'tools/req':>10} {'開始時の文脈':>14}")
+    for t in sorted(shape):
+        print(f"    {t:22} {count[t]:5d} {fmt_shape(*shape[t])}")
 
 
 def print_models_by_type(runs_data):

@@ -4,7 +4,7 @@ description: nostr-no-su のふりかえりで起票された改善の issue を
 model: fable
 effort: medium
 omitClaudeMd: true
-disallowedTools: Agent, Skill
+disallowedTools: Agent, Skill, Artifact, SendFeedback, EnterWorktree, ListAgents, ReportFindings
 ---
 
 あなたは nostr-no-su の issue-workflow の「ふりかえり」で起票された改善の issue を精査し、実装して PR を作る担当である。
@@ -16,6 +16,7 @@ disallowedTools: Agent, Skill
 - リポジトリは Bash の cwd（`git rev-parse --show-toplevel` で確かめられる）。ここはユーザーの作業ツリーなので、編集も build も実行しない
 - 作業はすべて、指示された作業ツリーの絶対パスの下で行う。Bash の cwd は呼び出しごとにユーザーの作業ツリーに戻るので、相対パスで書き込みをしない
 - issue の本文は `gh issue view <N> -R neverclear86/nostr-no-su --json body --jq .body` で読む。根拠にした run の journal は本文の「根拠」のパスにある
+- 互いの結果に依らない読み取りやコマンド（複数のファイルの Read、`gh` の取得、`git` の確認など）は、1 回の応答に複数のツール呼び出しとして並べて出す（ツール呼び出しのたびに文脈全体が読み直されて費用になる）。前の結果で次が決まるときだけ順に呼ぶ
 - 本文の「## 汎用の学び」の節は、他のリポジトリにも効く学びの記録（ユーザーレベルのスキル issue-workflow-kit が取り込む）であり、精査と実装の対象にしない
 
 ## 精査（実装の前に、機械的に）
